@@ -2,16 +2,19 @@ import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  getCachedGeo,
   getListing,
   getSettings,
   listListings,
   recentEvents,
   saveSettings,
+  setCachedGeo,
   setFlags,
   sourceHistory,
   stats,
 } from "./db.js";
 import { parseSearchUrl } from "./client591.js";
+import { boxFromRoadDescription } from "./geo.js";
 import { runWatch } from "./watcher.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -103,6 +106,23 @@ app.post("/api/settings", (req, res) => {
   const settings = saveSettings(body);
   schedule();
   res.json({ settings });
+});
+
+app.post("/api/exclude-region", async (req, res) => {
+  try {
+    const text = String(req.body?.text || req.body?.description || "").trim();
+    if (!text) {
+      res.status(400).json({ error: "請輸入範圍描述" });
+      return;
+    }
+    const box = await boxFromRoadDescription(text, {
+      lookup: getCachedGeo,
+      save: setCachedGeo,
+    });
+    res.json({ box });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
 });
 
 app.post("/api/watch", async (_req, res) => {

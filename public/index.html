@@ -98,10 +98,63 @@
     .tag.viewed { background: #e5e7eb; color: #4b5563; }
     .primary { background: var(--accent); color: #fff; }
     .hint { font-size: 12px; color: var(--muted); margin: 4px 0 8px; line-height: 1.5; }
-    #excludeMap { height: 220px; border-radius: 12px; border: 1px solid var(--line); margin: 8px 0; }
-    .box-list { display: grid; gap: 6px; margin: 8px 0; }
-    .box-row { display: flex; gap: 6px; align-items: center; font-size: 13px; }
-    .box-row input { flex: 1; margin: 0; padding: 6px 8px; }
+    #excludeMapWrap { margin: 8px 0; }
+    #excludeMap { height: 220px; border-radius: 12px; border: 1px solid var(--line); }
+    .box-list { display: grid; gap: 8px; margin: 8px 0; }
+    .box-row { display: flex; gap: 6px; align-items: center; font-size: 13px; flex-wrap: wrap; }
+    .box-row input[type="text"] { flex: 1; margin: 0; padding: 6px 8px; min-width: 72px; }
+    .box-enable { margin: 0; color: var(--ink); display: flex; gap: 4px; align-items: center; font-size: 13px; white-space: nowrap; }
+    .box-enable input { width: auto; }
+    .box-edit {
+      background: #f7f1e8;
+      border-radius: 10px;
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+    }
+    .box-bounds { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .box-bounds label { margin: 0; font-size: 12px; }
+    .box-card.off { opacity: 0.72; }
+    #regionText { min-height: 72px; }
+    #mapOverlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(31, 26, 22, 0.55);
+      z-index: 200;
+      padding: 20px;
+    }
+    #mapOverlay.open { display: flex; }
+    #mapOverlay .map-stage {
+      flex: 1;
+      min-height: 0;
+      width: 100%;
+      background: var(--paper);
+      border-radius: 18px;
+      box-shadow: 0 18px 50px rgba(40, 20, 8, 0.22);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    #mapOverlay .map-overlay-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--line);
+    }
+    #mapOverlay .map-overlay-bar h2 { margin: 0; font-size: 16px; }
+    #mapOverlayHost { flex: 1; min-height: 0; position: relative; }
+    body.map-expanded { overflow: hidden; }
+    body.map-expanded #mapOverlayHost #excludeMap {
+      position: absolute;
+      inset: 0;
+      height: auto;
+      border: 0;
+      border-radius: 0;
+      margin: 0;
+    }
     #alertDock {
       position: fixed;
       right: 18px;
@@ -167,18 +220,21 @@
         <label><input type="checkbox" id="windowsToast" /> Windows 桌面通知</label>
       </div>
       <label>排除路名／關鍵字（一行一個）</label>
-      <p class="hint">地址或標題含這些字就不列入、也不通知。社子島可用「加入社子島」一次設好。</p>
-      <textarea id="excludeKeywords" placeholder="社子島&#10;延平北路八段"></textarea>
+      <p class="hint">地址或標題含這些字就不列入、也不通知。例如路名、路段。</p>
+      <textarea id="excludeKeywords" placeholder="延平北路八段&#10;承德路"></textarea>
+      <label>用地圖或文字排除範圍（最多 10 組）</label>
+      <p class="hint">可手拉矩形，或用「路名A以東、路名B以西、路名C以南、路名D以北」產生大致範圍。關閉的範圍仍會保存，但不會套用。沒有門牌號碼的地址不會用地圖框排除。</p>
+      <textarea id="regionText" placeholder="例如：承德路以東、文林路以西、士東路以南、基河路以北"></textarea>
       <div class="row">
-        <button type="button" class="ghost" id="shezidaoBtn">加入社子島排除</button>
+        <button type="button" class="ghost" id="regionTextBtn">產生範圍</button>
       </div>
-      <label>地圖框選排除（最多 10 組）</label>
-      <p class="hint">在地圖拖曳出矩形。沒有門牌號碼的地址不會用地圖框排除，以免整片行政區被誤殺。路名關鍵字仍會先套用。</p>
+      <p class="hint" id="regionTextMsg"></p>
       <div class="row">
         <button type="button" class="ghost" id="drawBoxBtn">開始框選</button>
-        <button type="button" class="ghost" id="cancelDrawBtn">清除範圍</button>
+        <button type="button" class="ghost" id="expandMapBtn">展開地圖</button>
+        <button type="button" class="ghost" id="cancelDrawBtn">清除全部範圍</button>
       </div>
-      <div id="excludeMap"></div>
+      <div id="excludeMapWrap"><div id="excludeMap"></div></div>
       <div class="box-list" id="boxList"></div>
       <label>Discord Webhook（選填）</label>
       <input type="url" id="discordWebhook" placeholder="https://discord.com/api/webhooks/..." />
@@ -214,6 +270,18 @@
     </header>
     <div id="dockList"></div>
   </aside>
+  <div id="mapOverlay" aria-hidden="true">
+    <div class="map-stage">
+      <div class="map-overlay-bar">
+        <h2>框選排除範圍</h2>
+        <div class="row">
+          <button type="button" class="ghost" id="overlayDrawBtn">開始框選</button>
+          <button type="button" class="primary" id="closeMapBtn">關閉</button>
+        </div>
+      </div>
+      <div id="mapOverlayHost"></div>
+    </div>
+  </div>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
     const $ = (id) => document.getElementById(id);
@@ -222,9 +290,18 @@
     let settings = {};
     let excludeBoxes = [];
     let map, drawing = false, startLatLng = null, previewRect = null, boxLayers = [];
+    let editingIdx = null;
+    let mapExpanded = false;
     const MAX_BOXES = 10;
-    const SHEZIDAO_BOX = { id: "shezidao", name: "社子島", south: 25.102, west: 121.457, north: 25.123, east: 121.488 };
     const DOCK_KEY = "591-alert-dock-v1";
+
+    function esc(value) {
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
 
     const eventText = {
       new: "全新物件",
@@ -247,7 +324,14 @@
       $("excludeLowFloors").checked = s.excludeLowFloors !== false;
       $("excludeKeywords").value = (s.excludeKeywords || []).join("\n");
       $("discordWebhook").value = s.discordWebhook || "";
-      excludeBoxes = Array.isArray(s.excludeBoxes) ? s.excludeBoxes.slice(0, MAX_BOXES) : [];
+      excludeBoxes = Array.isArray(s.excludeBoxes)
+        ? s.excludeBoxes.slice(0, MAX_BOXES).map((box) => ({
+            ...box,
+            enabled: box.enabled !== false,
+            description: box.description || "",
+            source: box.source === "text" ? "text" : "draw",
+          }))
+        : [];
       renderBoxes();
     }
 
@@ -516,23 +600,108 @@
     }
 
     function renderBoxes() {
-      $("boxList").innerHTML = excludeBoxes.map((box, idx) => `
-        <div class="box-row">
-          <input data-box-name="${idx}" value="${box.name || ("範圍 " + (idx + 1))}" />
-          <button class="ghost" data-box-del="${idx}">刪除</button>
-        </div>
-      `).join("") || '<p class="hint">尚未框選範圍</p>';
+      $("boxList").innerHTML = excludeBoxes.map((box, idx) => {
+        const on = box.enabled !== false;
+        const editing = editingIdx === idx;
+        return `
+        <div class="box-card ${on ? "" : "off"}">
+          <div class="box-row">
+            <label class="box-enable"><input type="checkbox" data-box-on="${idx}" ${on ? "checked" : ""} /> 啟用</label>
+            <input type="text" data-box-name="${idx}" maxlength="20" value="${esc(box.name || ("範圍 " + (idx + 1)))}" />
+            <button type="button" class="ghost" data-box-edit="${idx}">${editing ? "收合" : "編輯"}</button>
+            <button type="button" class="ghost" data-box-del="${idx}">刪除</button>
+          </div>
+          ${editing ? `
+          <div class="box-edit">
+            <label>文字描述（可再產生範圍）</label>
+            <textarea data-box-desc="${idx}" placeholder="例如：承德路以東、文林路以西、士東路以南、基河路以北">${esc(box.description || "")}</textarea>
+            <div class="box-bounds">
+              <label>南<input type="number" step="0.0001" data-box-south="${idx}" value="${box.south}" /></label>
+              <label>西<input type="number" step="0.0001" data-box-west="${idx}" value="${box.west}" /></label>
+              <label>北<input type="number" step="0.0001" data-box-north="${idx}" value="${box.north}" /></label>
+              <label>東<input type="number" step="0.0001" data-box-east="${idx}" value="${box.east}" /></label>
+            </div>
+            <div class="row">
+              <button type="button" class="ghost" data-box-regen="${idx}">依文字重算範圍</button>
+              <button type="button" class="primary" data-box-done="${idx}">完成</button>
+            </div>
+          </div>` : (box.description ? `<p class="hint">${esc(box.description)}</p>` : "")}
+        </div>`;
+      }).join("") || '<p class="hint">尚未設定範圍。空列表不會套用任何地圖排除。</p>';
       drawBoxLayers();
     }
     function drawBoxLayers() {
       if (!map) return;
       boxLayers.forEach((layer) => map.removeLayer(layer));
-      boxLayers = excludeBoxes.map((box) => L.rectangle([[box.south, box.west], [box.north, box.east]], {
-        color: "#c45c26", weight: 1, fillOpacity: 0.18,
-      }).bindTooltip(box.name || "排除範圍").addTo(map));
+      boxLayers = excludeBoxes.map((box) => {
+        const on = box.enabled !== false;
+        return L.rectangle([[box.south, box.west], [box.north, box.east]], {
+          color: on ? "#c45c26" : "#9a8f84",
+          weight: 1,
+          dashArray: on ? null : "6 4",
+          fillOpacity: on ? 0.18 : 0.06,
+        }).bindTooltip(`${box.name || "排除範圍"}${on ? "" : "（已關閉）"}`).addTo(map);
+      });
+    }
+    function setDrawing(on) {
+      drawing = on;
+      document.body.classList.toggle("drawing", drawing);
+      const label = drawing ? "框選中…（再按一次取消）" : "開始框選";
+      $("drawBoxBtn").textContent = label;
+      $("overlayDrawBtn").textContent = label;
+      if (!drawing) {
+        startLatLng = null;
+        map?.dragging.enable();
+        if (previewRect) { map.removeLayer(previewRect); previewRect = null; }
+      }
+    }
+    function setMapExpanded(open) {
+      const overlay = $("mapOverlay");
+      const host = $("mapOverlayHost");
+      const wrap = $("excludeMapWrap");
+      const el = $("excludeMap");
+      mapExpanded = open;
+      if (open) {
+        overlay.classList.add("open");
+        overlay.setAttribute("aria-hidden", "false");
+        host.appendChild(el);
+        document.body.classList.add("map-expanded");
+      } else {
+        wrap.appendChild(el);
+        overlay.classList.remove("open");
+        overlay.setAttribute("aria-hidden", "true");
+        document.body.classList.remove("map-expanded");
+      }
+      setTimeout(() => map?.invalidateSize(), 80);
+    }
+    function readBoxBounds(idx) {
+      const south = Number(document.querySelector(`[data-box-south="${idx}"]`)?.value);
+      const west = Number(document.querySelector(`[data-box-west="${idx}"]`)?.value);
+      const north = Number(document.querySelector(`[data-box-north="${idx}"]`)?.value);
+      const east = Number(document.querySelector(`[data-box-east="${idx}"]`)?.value);
+      if (![south, west, north, east].every(Number.isFinite)) {
+        throw new Error("邊界必須是數字");
+      }
+      const south2 = Math.min(south, north);
+      const north2 = Math.max(south, north);
+      const west2 = Math.min(west, east);
+      const east2 = Math.max(west, east);
+      if (north2 - south2 < 0.0003 || east2 - west2 < 0.0003) throw new Error("範圍太小");
+      if (north2 - south2 > 0.5 || east2 - west2 > 0.5) throw new Error("範圍太大了（跨度不可超過 0.5 度）");
+      return { south: south2, west: west2, north: north2, east: east2 };
+    }
+    async function requestRegionBox(text) {
+      const res = await fetch("/api/exclude-region", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "產生範圍失敗");
+      return data.box;
     }
     function initMap() {
-      map = L.map("excludeMap").setView([25.112, 121.472], 13);
+      map = L.map("excludeMap").setView([25.093, 121.525], 13);
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         maxZoom: 19,
         attribution: "&copy; OpenStreetMap",
@@ -573,10 +742,11 @@
           west: bounds.getWest(),
           north: bounds.getNorth(),
           east: bounds.getEast(),
+          enabled: true,
+          description: "",
+          source: "draw",
         });
-        drawing = false;
-        document.body.classList.remove("drawing");
-        $("drawBoxBtn").textContent = "開始框選";
+        setDrawing(false);
         renderBoxes();
         persistExclusions("已新增排除範圍");
       }
@@ -596,54 +766,126 @@
       }
     }
 
-    $("drawBoxBtn").onclick = () => {
-      drawing = !drawing;
-      document.body.classList.toggle("drawing", drawing);
-      $("drawBoxBtn").textContent = drawing ? "框選中…（再按一次取消繪製）" : "開始框選";
-      if (!drawing) {
-        startLatLng = null;
-        map.dragging.enable();
-        if (previewRect) { map.removeLayer(previewRect); previewRect = null; }
-      }
-    };
+    $("drawBoxBtn").onclick = () => setDrawing(!drawing);
+    $("overlayDrawBtn").onclick = () => setDrawing(!drawing);
+    $("expandMapBtn").onclick = () => setMapExpanded(true);
+    $("closeMapBtn").onclick = () => setMapExpanded(false);
+    $("mapOverlay").addEventListener("click", (ev) => {
+      if (ev.target === $("mapOverlay")) setMapExpanded(false);
+    });
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape" && mapExpanded) setMapExpanded(false);
+    });
     $("cancelDrawBtn").onclick = () => {
-      drawing = false;
-      startLatLng = null;
-      document.body.classList.remove("drawing");
-      $("drawBoxBtn").textContent = "開始框選";
-      map.dragging.enable();
-      if (previewRect) { map.removeLayer(previewRect); previewRect = null; }
+      setDrawing(false);
       if (!excludeBoxes.length) {
         $("saveMsg").textContent = "目前沒有地圖排除範圍";
         return;
       }
+      editingIdx = null;
       excludeBoxes = [];
       renderBoxes();
       persistExclusions("已清除地圖排除範圍");
     };
-    $("shezidaoBtn").onclick = () => {
-      const extra = ["社子島", "延平北路八段", "延平北路8段", "富洲"];
-      const current = $("excludeKeywords").value.split(/[\n,，]/).map((s) => s.trim()).filter(Boolean);
-      const merged = [...current];
-      extra.forEach((term) => { if (!merged.includes(term)) merged.push(term); });
-      $("excludeKeywords").value = merged.join("\n");
-      if (!excludeBoxes.some((box) => box.id === "shezidao") && excludeBoxes.length < MAX_BOXES) {
-        excludeBoxes.push({ ...SHEZIDAO_BOX });
+    $("regionTextBtn").onclick = async () => {
+      const text = $("regionText").value.trim();
+      if (!text) {
+        $("regionTextMsg").textContent = "請輸入範圍描述，例如：承德路以東、文林路以西、士東路以南、基河路以北";
+        return;
       }
-      renderBoxes();
-      $("saveMsg").textContent = "已加入社子島排除，請按儲存設定";
+      if (excludeBoxes.length >= MAX_BOXES) {
+        $("regionTextMsg").textContent = "排除範圍最多 10 組";
+        return;
+      }
+      $("regionTextBtn").disabled = true;
+      $("regionTextMsg").textContent = "正在查詢路名座標…（路名較多時會稍等）";
+      try {
+        const box = await requestRegionBox(text);
+        excludeBoxes.push(box);
+        renderBoxes();
+        persistExclusions("已依文字產生排除範圍");
+        $("regionTextMsg").textContent = "已產生範圍，可在列表開關、改名或編輯";
+        $("regionText").value = "";
+      } catch (error) {
+        $("regionTextMsg").textContent = error.message;
+      } finally {
+        $("regionTextBtn").disabled = false;
+      }
     };
     $("boxList").addEventListener("input", (ev) => {
-      const idx = ev.target.dataset.boxName;
-      if (idx == null) return;
-      excludeBoxes[Number(idx)].name = ev.target.value.slice(0, 20);
+      const nameIdx = ev.target.dataset.boxName;
+      if (nameIdx != null && excludeBoxes[Number(nameIdx)]) {
+        excludeBoxes[Number(nameIdx)].name = ev.target.value.slice(0, 20);
+      }
+      const descIdx = ev.target.dataset.boxDesc;
+      if (descIdx != null && excludeBoxes[Number(descIdx)]) {
+        excludeBoxes[Number(descIdx)].description = ev.target.value.slice(0, 200);
+      }
     });
-    $("boxList").addEventListener("click", (ev) => {
-      const idx = ev.target.dataset.boxDel;
-      if (idx == null) return;
-      excludeBoxes.splice(Number(idx), 1);
+    $("boxList").addEventListener("change", async (ev) => {
+      const onIdx = ev.target.dataset.boxOn;
+      if (onIdx == null || !excludeBoxes[Number(onIdx)]) return;
+      excludeBoxes[Number(onIdx)].enabled = ev.target.checked;
       renderBoxes();
-      persistExclusions("已刪除排除範圍");
+      persistExclusions(ev.target.checked ? "已開啟排除範圍" : "已關閉排除範圍（設定仍保留）");
+    });
+    $("boxList").addEventListener("click", async (ev) => {
+      const del = ev.target.dataset.boxDel;
+      if (del != null) {
+        const idx = Number(del);
+        excludeBoxes.splice(idx, 1);
+        if (editingIdx === idx) editingIdx = null;
+        else if (editingIdx > idx) editingIdx -= 1;
+        renderBoxes();
+        persistExclusions("已刪除排除範圍");
+        return;
+      }
+      const edit = ev.target.dataset.boxEdit;
+      if (edit != null) {
+        const idx = Number(edit);
+        editingIdx = editingIdx === idx ? null : idx;
+        renderBoxes();
+        return;
+      }
+      const done = ev.target.dataset.boxDone;
+      if (done != null) {
+        const idx = Number(done);
+        try {
+          Object.assign(excludeBoxes[idx], readBoxBounds(idx));
+          editingIdx = null;
+          renderBoxes();
+          persistExclusions("已更新排除範圍");
+        } catch (error) {
+          $("saveMsg").textContent = error.message;
+        }
+        return;
+      }
+      const regen = ev.target.dataset.boxRegen;
+      if (regen == null) return;
+      const idx = Number(regen);
+      const text = (document.querySelector(`[data-box-desc="${idx}"]`)?.value || excludeBoxes[idx].description || "").trim();
+      if (!text) {
+        $("saveMsg").textContent = "請先填寫文字描述再重算";
+        return;
+      }
+      ev.target.disabled = true;
+      $("saveMsg").textContent = "正在依文字重算範圍…";
+      try {
+        const box = await requestRegionBox(text);
+        const old = excludeBoxes[idx];
+        excludeBoxes[idx] = {
+          ...box,
+          id: old.id,
+          name: old.name,
+          enabled: old.enabled !== false,
+        };
+        renderBoxes();
+        persistExclusions("已依文字重算排除範圍");
+      } catch (error) {
+        $("saveMsg").textContent = error.message;
+      } finally {
+        ev.target.disabled = false;
+      }
     });
     $("dockHideBtn").onclick = () => $("alertDock").classList.remove("open");
     $("dockClearBtn").onclick = () => { saveDock([]); renderDock(); };
