@@ -37,24 +37,37 @@ SQLite 與設定會寫進 `DATA_DIR`（容器內預設 `/data`）。CasaOS 請�
 
 Linux 容器沒有 Windows 氣泡通知，請在畫面填 Discord Webhook。
 
-### 方式一：clone 後自動更新（目前 NAS 在用）
+### 方式一：CasaOS 匯入 Compose（建議，拉 GitHub 映像）
 
-推到 `master` 後，updater 約每 2 分鐘檢查 GitHub，有新 commit 就自動 rebuild。資料在 `/DATA/AppData/591-tracker`，`.env` 不會被蓋掉。
+1. 等 GitHub Actions 把映像推到 `ghcr.io/fyun48/5151:latest`
+2. CasaOS → 應用 → 安裝自訂應用 → 匯入 `casaos-compose.yml`
+3. 若 repo 是 private，先在 CasaOS 終端登入：
+
+```bash
+echo YOUR_GITHUB_TOKEN | docker login ghcr.io -u YOUR_GITHUB_USER --password-stdin
+```
+
+Token 需要 `read:packages`。公開 repo 通常不必登入。
+
+資料目錄：`/DATA/AppData/591-tracker`（會出現 `591.db`）。
+
+瀏覽器開 `http://<CasaOS IP>:5151`。
+
+推到 `master` 後，GitHub Actions 會建 `ghcr.io/fyun48/5151:latest`。CasaOS 上的 Watchtower 約每 2 分鐘檢查一次，有新映像就自動換上，SQLite 資料仍在 `/DATA/AppData/591-tracker`。
+
+### 方式二：在 CasaOS 上 clone 後拉映像
 
 ```bash
 cd /mnt/Storage1/apps/5151
 git pull
-docker compose --profile tunnel --profile autoupdate up -d --build
+docker compose --profile tunnel up -d
 ```
 
-公開網址：`https://a5151.reversalplay.me`（Tunnel → `127.0.0.1:5151`）。
-
-### 方式二：CasaOS 匯入 Compose（拉 GitHub 映像）
-
-1. 等 GitHub Actions 把映像推到 `ghcr.io/fyun48/5151:latest`
-2. CasaOS → 應用 → 安裝自訂應用 → 匯入 `casaos-compose.yml`
-3. GHCR 套件若仍是 private，需先 `docker login ghcr.io`（token 要有 `read:packages`）
+第一次請用映像 `ghcr.io/fyun48/5151:latest`，不要再 `--build`。之後推 GitHub 即可，Watchtower 會自己更新容器。
 
 ### 從本機帶走已標記資料
 
 若要把 Windows 上的「已瀏覽 / 特別關注 / 隱藏」一起帶走，把本機 `data/591.db` 複製到 CasaOS 的 `/DATA/AppData/591-tracker/591.db`（容器停止時再複製較保險）。
+
+公開網址為 `https://a5151.reversalplay.me`（獨立 Cloudflare Tunnel → CasaOS `http://127.0.0.1:5151`）。
+CasaOS 本機埠只綁 `127.0.0.1:5151`。

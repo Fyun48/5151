@@ -3,8 +3,8 @@ name: 591-tracker
 services:
   591-tracker:
     container_name: 591-tracker
-    build: .
-    image: 591-tracker:latest
+    image: ghcr.io/fyun48/5151:latest
+    pull_policy: always
     restart: unless-stopped
     ports:
       - "127.0.0.1:5151:5151"
@@ -15,39 +15,20 @@ services:
       TZ: Asia/Taipei
     volumes:
       - ${DATA_ROOT:-/DATA}/AppData/591-tracker:/data
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
 
-  updater:
-    profiles: ["autoupdate"]
-    image: alpine:3.20
-    container_name: 591-tracker-updater
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: 591-tracker-watchtower
     restart: unless-stopped
-    working_dir: /repo
-    environment:
-      TZ: Asia/Taipei
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - .:/repo
-    command:
-      - /bin/sh
-      - -lc
-      - |
-        apk add --no-cache git docker-cli docker-cli-compose
-        git config --global --add safe.directory /repo
-        echo "591 updater started"
-        while true; do
-          BRANCH=$$(git rev-parse --abbrev-ref HEAD)
-          if [ "$$BRANCH" = "HEAD" ]; then BRANCH=master; fi
-          if git fetch origin "$$BRANCH"; then
-            LOCAL=$$(git rev-parse HEAD)
-            REMOTE=$$(git rev-parse "origin/$$BRANCH")
-            if [ "$$LOCAL" != "$$REMOTE" ]; then
-              echo "updating $$BRANCH $$LOCAL -> $$REMOTE"
-              git reset --hard "origin/$$BRANCH"
-              docker compose --profile tunnel --profile autoupdate up -d --build
-            fi
-          fi
-          sleep 120
-        done
+    environment:
+      TZ: Asia/Taipei
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_INCLUDE_RESTARTING: "true"
+    command: --interval 120 --label-enable 591-tracker
 
   cloudflared:
     profiles: ["tunnel"]
