@@ -1,4 +1,5 @@
 import { shouldKeepListing } from "./floors.js";
+import { coordsFromListing, geocodeAddress, isExcludedByKeyword } from "./geo.js";
 
 const LIST_URL = "https://bff-house.591.com.tw/v3/web/rent/list";
 const USER_AGENT =
@@ -13,6 +14,29 @@ const DROP_PARAMS = new Set([
   "is_new_list",
   "type",
 ]);
+
+export function searchParts(raw) {
+  try {
+    const url = new URL(String(raw || "").trim());
+    const price = url.searchParams.get("price") || url.searchParams.get("rentprice") || "";
+    return {
+      region: url.searchParams.get("regionid") || url.searchParams.get("region") || "",
+      section: url.searchParams.get("section") || "",
+      price: price.replaceAll("$", ""),
+      notice: url.searchParams.get("notice") || "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function sameSearch(a, b) {
+  if (String(a || "").trim() === String(b || "").trim()) return true;
+  const pa = searchParts(a);
+  const pb = searchParts(b);
+  if (!pa || !pb) return false;
+  return pa.region === pb.region && pa.section === pb.section && pa.price === pb.price && pa.notice === pb.notice;
+}
 
 export function parseSearchUrl(raw) {
   const text = String(raw || "").trim();
@@ -110,6 +134,7 @@ function priceNum(price) {
 }
 
 export function normalizeListing(item) {
+  const coords = coordsFromListing(item);
   return {
     post_id: Number(item.id),
     source_key: sourceKey(item),
@@ -126,6 +151,8 @@ export function normalizeListing(item) {
     cover: item.cover || (item.photoList && item.photoList[0]) || "",
     tags: JSON.stringify(item.tags || []),
     refresh_time: item.refresh_time || "",
+    lat: coords.lat,
+    lng: coords.lng,
   };
 }
 
@@ -164,9 +191,7 @@ export async function fetchListings(searchUrl, pages = 2, options = {}) {
     const { total: t, items } = await fetchPage(parsed.query, page * 30);
     total = t;
     listings.push(
-      ...items
-        .map(normalizeListing)
-        .filter((row) => row.post_id && shouldKeepListing(row, options)),
+      ...(await mapKeptListings(items, options)),
     );
     if (items.length < 30) break;
     if (page + 1 < maxPages) {
@@ -174,4 +199,31 @@ export async function fetchListings(searchUrl, pages = 2, options = {}) {
     }
   }
   return { searchUrl, parsed, total, listings };
+}
+
+async function mapKeptListings(items, options) {
+  const out = [];
+  const boxes = Array.isArray(options.excludeBoxes) ? options.excludeBoxes : [];
+  for (const item of items) {
+    const row = normalizeListing(item);
+    if (!row.post_id) continue;
+    if (isExcludedByKeyword(row, options.excludeKeywords)) continue;
+    if (boxes.length && (row.lat == null || row.lng == null) && /\d/.test(row.address || "")) {
+      const cached = options.lookupGeo?.(row.address);
+      if (cached) {
+        row.lat = cached.lat;
+        row.lng = cached.lng;
+      } else {
+        const geo = await geocodeAddress(row.address, options.lookupGeo);
+        if (geo) {
+          row.lat = geo.lat;
+          row.lng = geo.lng;
+          options.saveGeo?.(row.address, geo.lat, geo.lng);
+          await new Promise((resolve) => setTimeout(resolve, 1100));
+        }
+      }
+    }
+    if (shouldKeepListing(row, options)) out.push(row);
+  }
+  return out;
 }

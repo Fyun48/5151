@@ -53,17 +53,21 @@ Token 需要 `read:packages`。公開 repo 通常不必登入。
 
 瀏覽器開 `http://<CasaOS IP>:5151`。
 
-### 方式二：在 CasaOS 上 clone 後自行 build
+推到 `master` 後，GitHub Actions 會建 `ghcr.io/fyun48/5151:latest`。CasaOS 上的 Watchtower 約每 2 分鐘檢查一次，有新映像就自動換上，SQLite 資料仍在 `/DATA/AppData/591-tracker`。
+
+### 方式二：在 CasaOS 上 clone 後拉映像
 
 ```bash
-cd /DATA
-git clone https://github.com/Fyun48/5151.git
-cd 5151
-docker compose up -d --build
+cd /mnt/Storage1/apps/5151
+git pull
+docker compose --profile tunnel up -d
 ```
 
-同樣把資料掛到 `/DATA/AppData/591-tracker`。
+第一次請用映像 `ghcr.io/fyun48/5151:latest`，不要再 `--build`。之後推 GitHub 即可，Watchtower 會自己更新容器。
 
 ### 從本機帶走已標記資料
 
 若要把 Windows 上的「已瀏覽 / 特別關注 / 隱藏」一起帶走，把本機 `data/591.db` 複製到 CasaOS 的 `/DATA/AppData/591-tracker/591.db`（容器停止時再複製較保險）。
+
+公開網址為 `https://a5151.reversalplay.me`（獨立 Cloudflare Tunnel → CasaOS `http://127.0.0.1:5151`）。
+CasaOS 本機埠只綁 `127.0.0.1:5151`。

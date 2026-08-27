@@ -3,11 +3,11 @@ name: 591-tracker
 services:
   591-tracker:
     container_name: 591-tracker
-    build: .
-    image: 591-tracker:latest
+    image: ghcr.io/fyun48/5151:latest
+    pull_policy: always
     restart: unless-stopped
     ports:
-      - "5151:5151"
+      - "127.0.0.1:5151:5151"
     environment:
       HOST: "0.0.0.0"
       PORT: "5151"
@@ -15,3 +15,27 @@ services:
       TZ: Asia/Taipei
     volumes:
       - ${DATA_ROOT:-/DATA}/AppData/591-tracker:/data
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: 591-tracker-watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      TZ: Asia/Taipei
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_INCLUDE_RESTARTING: "true"
+    command: --interval 120 --label-enable 591-tracker
+
+  cloudflared:
+    profiles: ["tunnel"]
+    image: cloudflare/cloudflared:latest
+    container_name: 591-tracker-tunnel
+    restart: unless-stopped
+    network_mode: host
+    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
+    depends_on:
+      - 591-tracker

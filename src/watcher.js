@@ -7,6 +7,8 @@ import {
   listingCountForSearch,
   markEventNotified,
   saveSettings,
+  setCachedGeo,
+  getCachedGeo,
   upsertListing,
 } from "./db.js";
 import { fetchListings } from "./client591.js";
@@ -65,8 +67,15 @@ export async function runWatch(options = {}) {
         excludeLowFloors: settings.excludeLowFloors !== false,
         wholeFloorOnly: settings.wholeFloorOnly !== false,
         minBuildingFloors: settings.minBuildingFloors || 4,
+        excludeKeywords: settings.excludeKeywords,
+        excludeBoxes: settings.excludeBoxes,
+        lookupGeo: getCachedGeo,
+        saveGeo: setCachedGeo,
       });
       collected.push(result);
+      if (result.total > 0 && result.listings.length === 0) {
+        errors.push(`${result.parsed.label}：591 有 ${result.total} 筆，但都被目前篩選排除了`);
+      }
     } catch (error) {
       errors.push(`${url} → ${error.message}`);
     }
@@ -117,6 +126,11 @@ export async function runWatch(options = {}) {
         notified: 0,
         url: listing.url,
         price: listing.price,
+        address: listing.address,
+        layout: listing.layout,
+        floor_name: listing.floor_name,
+        kind_name: listing.kind_name,
+        cover: listing.cover,
       };
       const id = addEvent(event);
       event.id = id;

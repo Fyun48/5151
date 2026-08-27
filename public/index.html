@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <title>591 物件追蹤</title>
   <style>
     :root {
@@ -95,6 +96,35 @@
     .tag.same { background: #ede9fe; color: var(--same); }
     .tag.watch { background: #ffedd5; color: var(--watch); }
     .tag.viewed { background: #e5e7eb; color: #4b5563; }
+    .primary { background: var(--accent); color: #fff; }
+    .hint { font-size: 12px; color: var(--muted); margin: 4px 0 8px; line-height: 1.5; }
+    #excludeMap { height: 220px; border-radius: 12px; border: 1px solid var(--line); margin: 8px 0; }
+    .box-list { display: grid; gap: 6px; margin: 8px 0; }
+    .box-row { display: flex; gap: 6px; align-items: center; font-size: 13px; }
+    .box-row input { flex: 1; margin: 0; padding: 6px 8px; }
+    #alertDock {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      width: min(380px, calc(100vw - 24px));
+      max-height: 72vh;
+      overflow: auto;
+      z-index: 80;
+      display: none;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: var(--paper);
+      box-shadow: 0 18px 50px rgba(40, 20, 8, 0.18);
+    }
+    #alertDock.open { display: block; }
+    #alertDock header {
+      padding: 14px 16px 8px;
+      align-items: center;
+    }
+    #alertDock header h2 { margin: 0; font-size: 16px; letter-spacing: 0.04em; }
+    .dock-item { padding: 10px 16px 14px; border-top: 1px solid var(--line); }
+    .dock-item a { color: var(--ink); }
+    .drawing .leaflet-container { cursor: crosshair; }
     .actions { display: flex; flex-direction: column; gap: 8px; min-width: 132px; }
     .hide-box { font-size: 13px; color: var(--muted); display: flex; gap: 6px; align-items: center; cursor: pointer; }
     .status { font-size: 12px; color: var(--muted); padding: 0 16px 12px; }
@@ -136,6 +166,20 @@
         <label><input type="checkbox" id="notifyWatchedAlways" /> 特別關注一律通知</label>
         <label><input type="checkbox" id="windowsToast" /> Windows 桌面通知</label>
       </div>
+      <label>排除路名／關鍵字（一行一個）</label>
+      <p class="hint">地址或標題含這些字就不列入、也不通知。社子島可用「加入社子島」一次設好。</p>
+      <textarea id="excludeKeywords" placeholder="社子島&#10;延平北路八段"></textarea>
+      <div class="row">
+        <button type="button" class="ghost" id="shezidaoBtn">加入社子島排除</button>
+      </div>
+      <label>地圖框選排除（最多 10 組）</label>
+      <p class="hint">在地圖拖曳出矩形。沒有門牌號碼的地址不會用地圖框排除，以免整片行政區被誤殺。路名關鍵字仍會先套用。</p>
+      <div class="row">
+        <button type="button" class="ghost" id="drawBoxBtn">開始框選</button>
+        <button type="button" class="ghost" id="cancelDrawBtn">清除範圍</button>
+      </div>
+      <div id="excludeMap"></div>
+      <div class="box-list" id="boxList"></div>
       <label>Discord Webhook（選填）</label>
       <input type="url" id="discordWebhook" placeholder="https://discord.com/api/webhooks/..." />
       <div class="row" style="margin-top:14px">
@@ -160,11 +204,27 @@
       <div class="list" id="list"><div class="empty">載入中…</div></div>
     </main>
   </div>
+  <aside id="alertDock" aria-live="polite">
+    <header>
+      <h2>待看更新</h2>
+      <div class="row">
+        <button class="ghost" id="dockClearBtn">全部關閉</button>
+        <button class="primary" id="dockHideBtn">收合</button>
+      </div>
+    </header>
+    <div id="dockList"></div>
+  </aside>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
     const $ = (id) => document.getElementById(id);
     let filter = "all";
     let sort = "price_asc";
     let settings = {};
+    let excludeBoxes = [];
+    let map, drawing = false, startLatLng = null, previewRect = null, boxLayers = [];
+    const MAX_BOXES = 10;
+    const SHEZIDAO_BOX = { id: "shezidao", name: "社子島", south: 25.102, west: 121.457, north: 25.123, east: 121.488 };
+    const DOCK_KEY = "591-alert-dock-v1";
 
     const eventText = {
       new: "全新物件",
@@ -185,7 +245,10 @@
       $("notifyWatchedAlways").checked = !!s.notifyWatchedAlways;
       $("windowsToast").checked = s.windowsToast !== false;
       $("excludeLowFloors").checked = s.excludeLowFloors !== false;
+      $("excludeKeywords").value = (s.excludeKeywords || []).join("\n");
       $("discordWebhook").value = s.discordWebhook || "";
+      excludeBoxes = Array.isArray(s.excludeBoxes) ? s.excludeBoxes.slice(0, MAX_BOXES) : [];
+      renderBoxes();
     }
 
     function renderStats(st) {
@@ -207,9 +270,17 @@
       return bits.join("");
     }
 
-    function renderList(items) {
+    function renderList(items, st = {}) {
       if (!items.length) {
-        $("list").innerHTML = '<div class="empty">目前沒有符合條件的物件。先貼上 591 搜尋網址並按立即檢查。</div>';
+        const q = $("q").value.trim();
+        let msg = "目前沒有符合條件的物件。先貼上 591 搜尋網址並按立即檢查。";
+        if (q) msg = `沒有符合「${q}」的物件。`;
+        else if (st.filteredOut > 0) {
+          msg = `資料庫有 ${st.stored} 筆，但都被樓層／路名／地圖框排除了。請清空排除條件並按儲存設定。`;
+        } else if (st.dbTotal > 0) {
+          msg = "這個搜尋網址還沒對到已存的物件。請按「立即檢查」重新抓取。";
+        }
+        $("list").innerHTML = `<div class="empty">${msg}</div>`;
         return;
       }
       $("list").innerHTML = items.map((item) => `
@@ -242,7 +313,7 @@
       const res = await fetch(`/api/listings?filter=${encodeURIComponent(filter)}&sort=${encodeURIComponent(sort)}&q=${encodeURIComponent(q)}`);
       const data = await res.json();
       renderStats(data.stats);
-      renderList(data.listings);
+      renderList(data.listings, data.stats);
     }
 
     async function loadState() {
@@ -250,7 +321,7 @@
       const data = await res.json();
       fillSettings(data.settings);
       renderStats(data.stats);
-      renderList(data.listings);
+      renderList(data.listings, data.stats);
       if (data.lastRun?.checked_at) {
         const extra = data.lastRun.baseline ? "（第一次只建立基準，不推播）" : "";
         $("status").textContent = `上次檢查 ${new Date(data.lastRun.checked_at).toLocaleString()}，抓到 ${data.lastRun.fetched || 0} 筆${extra}`;
@@ -270,6 +341,8 @@
         notifyWatchedAlways: $("notifyWatchedAlways").checked,
         windowsToast: $("windowsToast").checked,
         excludeLowFloors: $("excludeLowFloors").checked,
+        excludeKeywords: $("excludeKeywords").value.split(/[\n,，]/).map((s) => s.trim()).filter(Boolean),
+        excludeBoxes,
         discordWebhook: $("discordWebhook").value.trim(),
       };
     }
@@ -318,6 +391,7 @@
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "檢查失敗");
         $("status").textContent = statusFromResult(data.result);
+        pushDock(data.result.events || []);
         await loadList();
       } catch (error) {
         $("status").textContent = error.message;
@@ -390,11 +464,212 @@
       if (data.type === "watch") {
         const n = data.result.events?.length || 0;
         $("status").textContent = `自動檢查完成，通知 ${n} 則 · ${new Date(data.result.checked_at).toLocaleString()}`;
+        pushDock(data.result.events || []);
         loadList();
       }
     };
 
-    loadState();
+    function loadDock() {
+      try { return JSON.parse(localStorage.getItem(DOCK_KEY) || "[]"); } catch { return []; }
+    }
+    function saveDock(items) {
+      localStorage.setItem(DOCK_KEY, JSON.stringify(items.slice(0, 30)));
+    }
+    function pushDock(events) {
+      if (!events?.length) return;
+      const current = loadDock();
+      const seen = new Set(current.map((item) => `${item.post_id}:${item.type}:${item.created_at || ""}`));
+      for (const event of events) {
+        const key = `${event.post_id}:${event.type}:${event.created_at || ""}`;
+        if (seen.has(key)) continue;
+        current.unshift(event);
+      }
+      saveDock(current);
+      renderDock();
+    }
+    function renderDock() {
+      const items = loadDock();
+      const dock = $("alertDock");
+      if (!items.length) {
+        dock.classList.remove("open");
+        $("dockList").innerHTML = "";
+        return;
+      }
+      dock.classList.add("open");
+      $("dockList").innerHTML = items.map((item) => `
+        <div class="dock-item">
+          <div class="tags"><span class="tag ${item.type === "new" ? "new" : "same"}">${eventText[item.type] || item.type_label || item.type}</span></div>
+          <h3 style="margin:6px 0 4px;font-size:16px">
+            <a href="${item.url || ("https://rent.591.com.tw/" + item.post_id)}" target="_blank" rel="noreferrer" data-dock-open="${item.post_id}">${item.title || "591 物件"}</a>
+          </h3>
+          <div class="meta">${item.price || ""} ${item.address || ""} ${item.detail || ""}</div>
+          <div class="row" style="margin-top:8px">
+            <button class="primary" data-dock-open="${item.post_id}">打開 591</button>
+            <button class="ghost" data-dock-dismiss="${item.post_id}">關閉</button>
+          </div>
+        </div>
+      `).join("");
+    }
+    function dismissDock(postId) {
+      saveDock(loadDock().filter((item) => String(item.post_id) !== String(postId)));
+      renderDock();
+    }
+
+    function renderBoxes() {
+      $("boxList").innerHTML = excludeBoxes.map((box, idx) => `
+        <div class="box-row">
+          <input data-box-name="${idx}" value="${box.name || ("範圍 " + (idx + 1))}" />
+          <button class="ghost" data-box-del="${idx}">刪除</button>
+        </div>
+      `).join("") || '<p class="hint">尚未框選範圍</p>';
+      drawBoxLayers();
+    }
+    function drawBoxLayers() {
+      if (!map) return;
+      boxLayers.forEach((layer) => map.removeLayer(layer));
+      boxLayers = excludeBoxes.map((box) => L.rectangle([[box.south, box.west], [box.north, box.east]], {
+        color: "#c45c26", weight: 1, fillOpacity: 0.18,
+      }).bindTooltip(box.name || "排除範圍").addTo(map));
+    }
+    function initMap() {
+      map = L.map("excludeMap").setView([25.112, 121.472], 13);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution: "&copy; OpenStreetMap",
+      }).addTo(map);
+      drawBoxLayers();
+      map.on("mousedown", (ev) => {
+        if (!drawing) return;
+        map.dragging.disable();
+        startLatLng = ev.latlng;
+        if (previewRect) map.removeLayer(previewRect);
+        previewRect = L.rectangle([startLatLng, startLatLng], { color: "#2f6f5e", weight: 1, dashArray: "4 3" }).addTo(map);
+      });
+      map.on("mousemove", (ev) => {
+        if (!drawing || !startLatLng || !previewRect) return;
+        previewRect.setBounds(L.latLngBounds(startLatLng, ev.latlng));
+      });
+      function finishDraw(ev) {
+        if (!drawing || !startLatLng) return;
+        const end = ev.latlng || startLatLng;
+        const bounds = L.latLngBounds(startLatLng, end);
+        startLatLng = null;
+        map.dragging.enable();
+        if (previewRect) { map.removeLayer(previewRect); previewRect = null; }
+        if (Math.abs(bounds.getNorth() - bounds.getSouth()) < 0.0004) return;
+        if (Math.abs(bounds.getEast() - bounds.getWest()) < 0.0004) return;
+        if (Math.abs(bounds.getNorth() - bounds.getSouth()) > 0.5 || Math.abs(bounds.getEast() - bounds.getWest()) > 0.5) {
+          $("saveMsg").textContent = "範圍太大了，請縮小後再框一次";
+          return;
+        }
+        if (excludeBoxes.length >= MAX_BOXES) {
+          $("saveMsg").textContent = "排除範圍最多 10 組";
+          return;
+        }
+        excludeBoxes.push({
+          id: `box-${Date.now()}`,
+          name: `範圍 ${excludeBoxes.length + 1}`,
+          south: bounds.getSouth(),
+          west: bounds.getWest(),
+          north: bounds.getNorth(),
+          east: bounds.getEast(),
+        });
+        drawing = false;
+        document.body.classList.remove("drawing");
+        $("drawBoxBtn").textContent = "開始框選";
+        renderBoxes();
+        persistExclusions("已新增排除範圍");
+      }
+      map.on("mouseup", finishDraw);
+      map.on("mouseout", () => {
+        if (drawing) map.dragging.enable();
+      });
+    }
+
+    async function persistExclusions(msg) {
+      try {
+        await saveSettings(collectSettings());
+        $("saveMsg").textContent = msg;
+        await loadList();
+      } catch (error) {
+        $("saveMsg").textContent = error.message;
+      }
+    }
+
+    $("drawBoxBtn").onclick = () => {
+      drawing = !drawing;
+      document.body.classList.toggle("drawing", drawing);
+      $("drawBoxBtn").textContent = drawing ? "框選中…（再按一次取消繪製）" : "開始框選";
+      if (!drawing) {
+        startLatLng = null;
+        map.dragging.enable();
+        if (previewRect) { map.removeLayer(previewRect); previewRect = null; }
+      }
+    };
+    $("cancelDrawBtn").onclick = () => {
+      drawing = false;
+      startLatLng = null;
+      document.body.classList.remove("drawing");
+      $("drawBoxBtn").textContent = "開始框選";
+      map.dragging.enable();
+      if (previewRect) { map.removeLayer(previewRect); previewRect = null; }
+      if (!excludeBoxes.length) {
+        $("saveMsg").textContent = "目前沒有地圖排除範圍";
+        return;
+      }
+      excludeBoxes = [];
+      renderBoxes();
+      persistExclusions("已清除地圖排除範圍");
+    };
+    $("shezidaoBtn").onclick = () => {
+      const extra = ["社子島", "延平北路八段", "延平北路8段", "富洲"];
+      const current = $("excludeKeywords").value.split(/[\n,，]/).map((s) => s.trim()).filter(Boolean);
+      const merged = [...current];
+      extra.forEach((term) => { if (!merged.includes(term)) merged.push(term); });
+      $("excludeKeywords").value = merged.join("\n");
+      if (!excludeBoxes.some((box) => box.id === "shezidao") && excludeBoxes.length < MAX_BOXES) {
+        excludeBoxes.push({ ...SHEZIDAO_BOX });
+      }
+      renderBoxes();
+      $("saveMsg").textContent = "已加入社子島排除，請按儲存設定";
+    };
+    $("boxList").addEventListener("input", (ev) => {
+      const idx = ev.target.dataset.boxName;
+      if (idx == null) return;
+      excludeBoxes[Number(idx)].name = ev.target.value.slice(0, 20);
+    });
+    $("boxList").addEventListener("click", (ev) => {
+      const idx = ev.target.dataset.boxDel;
+      if (idx == null) return;
+      excludeBoxes.splice(Number(idx), 1);
+      renderBoxes();
+      persistExclusions("已刪除排除範圍");
+    });
+    $("dockHideBtn").onclick = () => $("alertDock").classList.remove("open");
+    $("dockClearBtn").onclick = () => { saveDock([]); renderDock(); };
+    $("dockList").addEventListener("click", async (ev) => {
+      const open = ev.target.closest("[data-dock-open]")?.dataset.dockOpen;
+      const dismiss = ev.target.dataset.dockDismiss;
+      if (open) {
+        const item = loadDock().find((row) => String(row.post_id) === String(open));
+        if (item?.url) window.open(item.url, "_blank", "noreferrer");
+        fetch(`/api/listings/${open}/flags`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ viewed: true }),
+        }).then(loadList);
+        dismissDock(open);
+        return;
+      }
+      if (dismiss) dismissDock(dismiss);
+    });
+
+    loadState().then(() => {
+      initMap();
+      renderBoxes();
+      renderDock();
+      setTimeout(() => map?.invalidateSize(), 250);
+    });
   </script>
 </body>
 </html>

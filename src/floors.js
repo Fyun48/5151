@@ -1,3 +1,5 @@
+import { isExcludedByBox, isExcludedByKeyword } from "./geo.js";
+
 export function isAtOrBelowFirstFloor(floorName) {
   const text = String(floorName || "").replace(/\s+/g, "");
   if (!text) return false;
@@ -34,7 +36,14 @@ export function shouldKeepListing(listing, settings = {}) {
   }
   const minFloors = Number(settings.minBuildingFloors);
   const min = Number.isFinite(minFloors) && minFloors > 0 ? minFloors : 4;
-  if (buildingTotalFloors(listing.floor_name) < min) {
+  const totalFloors = buildingTotalFloors(listing.floor_name);
+  if (totalFloors > 0 && totalFloors < min) {
+    return false;
+  }
+  if (isExcludedByKeyword(listing, settings.excludeKeywords)) {
+    return false;
+  }
+  if (isExcludedByBox(listing.lat, listing.lng, settings.excludeBoxes)) {
     return false;
   }
   return true;

@@ -2,6 +2,8 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { shouldKeepListing } from "./floors.js";
+import { normalizeBoxes, normalizeKeywords } from "./geo.js";
+import { sameSearch } from "./client591.js";
 
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data");
 mkdirSync(DATA_DIR, { recursive: true });
@@ -74,6 +76,24 @@ try {
 } catch {
   // already migrated
 }
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN lat REAL");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN lng REAL");
+} catch {
+  // already migrated
+}
+db.exec(`
+  CREATE TABLE IF NOT EXISTS geo_cache (
+    address TEXT PRIMARY KEY,
+    lat REAL NOT NULL,
+    lng REAL NOT NULL,
+    updated_at TEXT NOT NULL
+  )
+`);
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_search ON listings(search_key)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_hidden ON listings(hidden)");
 
@@ -93,6 +113,8 @@ const DEFAULTS = {
   excludeLowFloors: true,
   wholeFloorOnly: true,
   minBuildingFloors: 4,
+  excludeKeywords: [],
+  excludeBoxes: [],
 };
 
 export function getSettings() {
@@ -104,6 +126,8 @@ export function getSettings() {
 export function saveSettings(partial) {
   const current = getSettings();
   const next = { ...current, ...partial };
+  next.excludeKeywords = normalizeKeywords(next.excludeKeywords);
+  next.excludeBoxes = normalizeBoxes(next.excludeBoxes);
   const upsert = db.prepare(
     "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
   );
@@ -136,8 +160,22 @@ export function currentSearchKeys() {
   return (getSettings().searchUrls || []).map((url) => String(url).trim()).filter(Boolean);
 }
 
+function expandSearchKeys(keys) {
+  if (!keys?.length) return keys;
+  const stored = db
+    .prepare("SELECT DISTINCT search_key FROM listings")
+    .all()
+    .map((row) => row.search_key)
+    .filter(Boolean);
+  const out = new Set(keys);
+  for (const key of stored) {
+    if (keys.some((url) => sameSearch(url, key))) out.add(key);
+  }
+  return [...out];
+}
+
 function searchWhere(searchKeys, clauses, params) {
-  const keys = searchKeys === undefined ? currentSearchKeys() : searchKeys;
+  const keys = expandSearchKeys(searchKeys === undefined ? currentSearchKeys() : searchKeys);
   if (keys?.length) {
     clauses.push(`search_key IN (${keys.map(() => "?").join(",")})`);
     params.push(...keys);
@@ -149,8 +187,8 @@ export function upsertListing(listing) {
     INSERT INTO listings (
       post_id, source_key, search_key, title, url, price, price_num, address, area_name,
       layout, floor_name, kind_name, role_name, cover, tags, refresh_time,
-      first_seen_at, last_seen_at, last_event, viewed, watched
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
+      first_seen_at, last_seen_at, last_event, viewed, watched, lat, lng
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
     ON CONFLICT(post_id) DO UPDATE SET
       source_key = excluded.source_key,
       search_key = excluded.search_key,
@@ -168,7 +206,9 @@ export function upsertListing(listing) {
       tags = excluded.tags,
       refresh_time = excluded.refresh_time,
       last_seen_at = excluded.last_seen_at,
-      last_event = excluded.last_event
+      last_event = excluded.last_event,
+      lat = excluded.lat,
+      lng = excluded.lng
   `).run(
     listing.post_id,
     listing.source_key,
@@ -189,6 +229,8 @@ export function upsertListing(listing) {
     listing.first_seen_at,
     listing.last_seen_at,
     listing.last_event,
+    listing.lat ?? null,
+    listing.lng ?? null,
   );
 }
 
@@ -281,16 +323,19 @@ export function stats(searchKeys) {
   const params = [];
   searchWhere(searchKeys, clauses, params);
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-  const rows = applyListingFilter(
-    db.prepare(`SELECT viewed, watched, hidden, last_event, floor_name, kind_name FROM listings ${where}`).all(...params),
-  );
+  const raw = db.prepare(`SELECT viewed, watched, hidden, last_event, floor_name, kind_name, title, address, lat, lng FROM listings ${where}`).all(...params);
+  const rows = applyListingFilter(raw);
   const visible = rows.filter((row) => !row.hidden);
+  const storedVisible = raw.filter((row) => !row.hidden);
   return {
     total: visible.length,
     unseen: visible.filter((row) => !row.viewed).length,
     watched: visible.filter((row) => row.watched).length,
     same_source: visible.filter((row) => row.last_event === "same_source" || row.last_event === "update").length,
     hidden: rows.filter((row) => row.hidden).length,
+    stored: storedVisible.length,
+    filteredOut: Math.max(0, storedVisible.length - visible.length),
+    dbTotal: listingCount(),
   };
 }
 
@@ -299,9 +344,27 @@ export function listingCount() {
 }
 
 export function listingCountForSearch(searchKey) {
+  const keys = expandSearchKeys([searchKey].filter(Boolean));
+  if (!keys.length) return 0;
   return Number(
-    db.prepare("SELECT COUNT(*) AS n FROM listings WHERE search_key = ?").get(searchKey).n || 0,
+    db
+      .prepare(`SELECT COUNT(*) AS n FROM listings WHERE search_key IN (${keys.map(() => "?").join(",")})`)
+      .get(...keys).n || 0,
   );
+}
+
+export function getCachedGeo(address) {
+  const key = String(address || "").replace(/\s+/g, "").replace(/-/g, "");
+  if (!key) return null;
+  return db.prepare("SELECT lat, lng FROM geo_cache WHERE address = ?").get(key) || null;
+}
+
+export function setCachedGeo(address, lat, lng) {
+  const key = String(address || "").replace(/\s+/g, "").replace(/-/g, "");
+  if (!key || !Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return;
+  db.prepare(
+    "INSERT INTO geo_cache(address, lat, lng, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(address) DO UPDATE SET lat = excluded.lat, lng = excluded.lng, updated_at = excluded.updated_at",
+  ).run(key, Number(lat), Number(lng), new Date().toISOString());
 }
 
 export { db };
