@@ -1,0 +1,29 @@
+name: 591-tracker
+
+services:
+  591-tracker:
+    image: ghcr.io/fyun48/5151:latest
+    container_name: 591-tracker
+    restart: unless-stopped
+    ports:
+      - "5151:5151"
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "5151"
+      DATA_DIR: /data
+      TZ: Asia/Taipei
+    volumes:
+      - /DATA/AppData/591-tracker:/data
+x-casaos:
+  architectures:
+    - amd64
+    - arm64
+  main: 591-tracker
+  title:
+    en_us: 591 Tracker
+    zh_tw: 591 物件追蹤
+  description:
+    en_us: Track 591 rental listings with viewed, watched, and hidden flags.
+    zh_tw: 591 租屋新物件追蹤，資料存在 CasaOS /DATA/AppData/591-tracker。
+  category: Utility
+  port_map: "5151"

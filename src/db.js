@@ -1,0 +1,307 @@
+import { mkdirSync } from "node:fs";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { shouldKeepListing } from "./floors.js";
+
+const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data");
+mkdirSync(DATA_DIR, { recursive: true });
+
+const db = new DatabaseSync(path.join(DATA_DIR, "591.db"));
+db.exec("PRAGMA journal_mode = WAL");
+db.exec("PRAGMA foreign_keys = ON");
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS listings (
+    post_id INTEGER PRIMARY KEY,
+    source_key TEXT NOT NULL,
+    title TEXT NOT NULL,
+    url TEXT NOT NULL,
+    price TEXT,
+    price_num INTEGER,
+    address TEXT,
+    area_name TEXT,
+    layout TEXT,
+    floor_name TEXT,
+    kind_name TEXT,
+    role_name TEXT,
+    cover TEXT,
+    tags TEXT,
+    refresh_time TEXT,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    last_event TEXT NOT NULL DEFAULT 'new',
+    viewed INTEGER NOT NULL DEFAULT 0,
+    watched INTEGER NOT NULL DEFAULT 0,
+    viewed_at TEXT,
+    watched_at TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id INTEGER NOT NULL,
+    source_key TEXT NOT NULL,
+    type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    detail TEXT,
+    created_at TEXT NOT NULL,
+    notified INTEGER NOT NULL DEFAULT 0
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_listings_source ON listings(source_key);
+  CREATE INDEX IF NOT EXISTS idx_listings_watched ON listings(watched);
+  CREATE INDEX IF NOT EXISTS idx_listings_viewed ON listings(viewed);
+  CREATE INDEX IF NOT EXISTS idx_listings_last_seen ON listings(last_seen_at);
+  CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
+`);
+
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN search_key TEXT NOT NULL DEFAULT ''");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN hidden_at TEXT");
+} catch {
+  // already migrated
+}
+db.exec("CREATE INDEX IF NOT EXISTS idx_listings_search ON listings(search_key)");
+db.exec("CREATE INDEX IF NOT EXISTS idx_listings_hidden ON listings(hidden)");
+
+const DEFAULTS = {
+  searchUrls: [
+    "https://rent.591.com.tw/list?region=1&section=5&kind=1&order=posttime&orderType=desc",
+  ],
+  intervalMinutes: 5,
+  pagesPerWatch: 2,
+  notifyNew: true,
+  notifySameSource: true,
+  notifyViewed: false,
+  notifyWatchedAlways: true,
+  discordWebhook: "",
+  windowsToast: true,
+  hasBaseline: false,
+  excludeLowFloors: true,
+  wholeFloorOnly: true,
+  minBuildingFloors: 4,
+};
+
+export function getSettings() {
+  const rows = db.prepare("SELECT key, value FROM settings").all();
+  const stored = Object.fromEntries(rows.map((row) => [row.key, JSON.parse(row.value)]));
+  return { ...DEFAULTS, ...stored };
+}
+
+export function saveSettings(partial) {
+  const current = getSettings();
+  const next = { ...current, ...partial };
+  const upsert = db.prepare(
+    "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+  );
+  db.exec("BEGIN");
+  try {
+    for (const [key, value] of Object.entries(next)) {
+      upsert.run(key, JSON.stringify(value));
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  return next;
+}
+
+export function getListing(postId) {
+  return db.prepare("SELECT * FROM listings WHERE post_id = ?").get(postId);
+}
+
+export function findBySourceKey(sourceKey, excludePostId) {
+  return db
+    .prepare(
+      "SELECT * FROM listings WHERE source_key = ? AND post_id != ? ORDER BY last_seen_at DESC",
+    )
+    .all(sourceKey, excludePostId);
+}
+
+export function currentSearchKeys() {
+  return (getSettings().searchUrls || []).map((url) => String(url).trim()).filter(Boolean);
+}
+
+function searchWhere(searchKeys, clauses, params) {
+  const keys = searchKeys === undefined ? currentSearchKeys() : searchKeys;
+  if (keys?.length) {
+    clauses.push(`search_key IN (${keys.map(() => "?").join(",")})`);
+    params.push(...keys);
+  }
+}
+
+export function upsertListing(listing) {
+  db.prepare(`
+    INSERT INTO listings (
+      post_id, source_key, search_key, title, url, price, price_num, address, area_name,
+      layout, floor_name, kind_name, role_name, cover, tags, refresh_time,
+      first_seen_at, last_seen_at, last_event, viewed, watched
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
+    ON CONFLICT(post_id) DO UPDATE SET
+      source_key = excluded.source_key,
+      search_key = excluded.search_key,
+      title = excluded.title,
+      url = excluded.url,
+      price = excluded.price,
+      price_num = excluded.price_num,
+      address = excluded.address,
+      area_name = excluded.area_name,
+      layout = excluded.layout,
+      floor_name = excluded.floor_name,
+      kind_name = excluded.kind_name,
+      role_name = excluded.role_name,
+      cover = excluded.cover,
+      tags = excluded.tags,
+      refresh_time = excluded.refresh_time,
+      last_seen_at = excluded.last_seen_at,
+      last_event = excluded.last_event
+  `).run(
+    listing.post_id,
+    listing.source_key,
+    listing.search_key || "",
+    listing.title,
+    listing.url,
+    listing.price,
+    listing.price_num,
+    listing.address,
+    listing.area_name,
+    listing.layout,
+    listing.floor_name,
+    listing.kind_name,
+    listing.role_name,
+    listing.cover,
+    listing.tags,
+    listing.refresh_time,
+    listing.first_seen_at,
+    listing.last_seen_at,
+    listing.last_event,
+  );
+}
+
+export function addEvent(event) {
+  const result = db.prepare(`
+    INSERT INTO events (post_id, source_key, type, title, detail, created_at, notified)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    event.post_id,
+    event.source_key,
+    event.type,
+    event.title,
+    event.detail,
+    event.created_at,
+    event.notified,
+  );
+  return Number(result.lastInsertRowid);
+}
+
+export function markEventNotified(id) {
+  db.prepare("UPDATE events SET notified = 1 WHERE id = ?").run(id);
+}
+
+export function setFlags(postId, flags) {
+  const listing = getListing(postId);
+  if (!listing) return null;
+  const viewed = flags.viewed === undefined ? listing.viewed : Number(Boolean(flags.viewed));
+  const watched = flags.watched === undefined ? listing.watched : Number(Boolean(flags.watched));
+  const hidden = flags.hidden === undefined ? listing.hidden : Number(Boolean(flags.hidden));
+  const now = new Date().toISOString();
+  db.prepare(`
+    UPDATE listings
+    SET viewed = ?, watched = ?, hidden = ?,
+        viewed_at = CASE WHEN ? = 1 THEN COALESCE(viewed_at, ?) ELSE viewed_at END,
+        watched_at = CASE WHEN ? = 1 THEN COALESCE(watched_at, ?) ELSE watched_at END,
+        hidden_at = CASE WHEN ? = 1 THEN COALESCE(hidden_at, ?) ELSE hidden_at END
+    WHERE post_id = ?
+  `).run(viewed, watched, hidden, viewed, now, watched, now, hidden, now, postId);
+  return getListing(postId);
+}
+
+function applyListingFilter(rows) {
+  const settings = getSettings();
+  return rows.filter((row) => shouldKeepListing(row, settings));
+}
+
+export function listListings({ filter = "all", q = "", sort = "price_asc", limit = 80, searchKeys } = {}) {
+  const clauses = [];
+  const params = [];
+  searchWhere(searchKeys, clauses, params);
+  if (filter === "hidden") clauses.push("hidden = 1");
+  else clauses.push("IFNULL(hidden, 0) = 0");
+  if (filter === "unseen") clauses.push("viewed = 0");
+  if (filter === "viewed") clauses.push("viewed = 1");
+  if (filter === "watched") clauses.push("watched = 1");
+  if (filter === "same_source") clauses.push("last_event IN ('same_source', 'update')");
+  if (q) {
+    clauses.push("(title LIKE ? OR address LIKE ? OR CAST(post_id AS TEXT) LIKE ?)");
+    const like = `%${q}%`;
+    params.push(like, like, like);
+  }
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  const order =
+    sort === "price_desc"
+      ? "price_num DESC, last_seen_at DESC"
+      : sort === "newest"
+        ? "last_seen_at DESC, post_id DESC"
+        : "price_num ASC, last_seen_at DESC";
+  const rows = db
+    .prepare(`SELECT * FROM listings ${where} ORDER BY ${order}`)
+    .all(...params);
+  return applyListingFilter(rows).slice(0, limit);
+}
+
+export function sourceHistory(sourceKey) {
+  return db
+    .prepare(
+      `SELECT post_id, title, price, url, first_seen_at, last_seen_at, last_event, viewed, watched
+       FROM listings WHERE source_key = ? ORDER BY last_seen_at DESC`,
+    )
+    .all(sourceKey);
+}
+
+export function recentEvents(limit = 40) {
+  return db.prepare("SELECT * FROM events ORDER BY id DESC LIMIT ?").all(limit);
+}
+
+export function stats(searchKeys) {
+  const clauses = [];
+  const params = [];
+  searchWhere(searchKeys, clauses, params);
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  const rows = applyListingFilter(
+    db.prepare(`SELECT viewed, watched, hidden, last_event, floor_name, kind_name FROM listings ${where}`).all(...params),
+  );
+  const visible = rows.filter((row) => !row.hidden);
+  return {
+    total: visible.length,
+    unseen: visible.filter((row) => !row.viewed).length,
+    watched: visible.filter((row) => row.watched).length,
+    same_source: visible.filter((row) => row.last_event === "same_source" || row.last_event === "update").length,
+    hidden: rows.filter((row) => row.hidden).length,
+  };
+}
+
+export function listingCount() {
+  return Number(db.prepare("SELECT COUNT(*) AS n FROM listings").get().n || 0);
+}
+
+export function listingCountForSearch(searchKey) {
+  return Number(
+    db.prepare("SELECT COUNT(*) AS n FROM listings WHERE search_key = ?").get(searchKey).n || 0,
+  );
+}
+
+export { db };

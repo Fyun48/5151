@@ -1,0 +1,17 @@
+{
+  "name": "5151",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "591 新物件追蹤：已瀏覽、特別關注、同屋源更新通知",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "express": "^5.1.0"
+  }
+}
