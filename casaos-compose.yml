@@ -3,7 +3,6 @@ name: 591-tracker
 services:
   591-tracker:
     image: ghcr.io/fyun48/5151:latest
-    pull_policy: always
     container_name: 591-tracker
     restart: unless-stopped
     ports:
@@ -18,6 +17,8 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:-}
     volumes:
       - /DATA/AppData/591-tracker:/data
+      - /mnt/Storage1/apps/5151/src:/app/src:ro
+      - /mnt/Storage1/apps/5151/public:/app/public:ro
 
 x-casaos:
   architectures:

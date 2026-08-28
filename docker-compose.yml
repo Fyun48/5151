@@ -4,7 +4,6 @@ services:
   591-tracker:
     container_name: 591-tracker
     image: ghcr.io/fyun48/5151:latest
-    pull_policy: always
     restart: unless-stopped
     ports:
       - "127.0.0.1:5151:5151"
@@ -19,6 +18,8 @@ services:
       COOKIE_SECURE: ${COOKIE_SECURE:-}
     volumes:
       - ${DATA_ROOT:-/DATA}/AppData/591-tracker:/data
+      - ./src:/app/src:ro
+      - ./public:/app/public:ro
 
   cloudflared:
     profiles: ["tunnel"]

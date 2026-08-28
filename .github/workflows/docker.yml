@@ -1,8 +1,13 @@
-name: Docker
+name: Docker image
 
 on:
   push:
     branches: [master, main]
+    paths:
+      - Dockerfile
+      - package.json
+      - package-lock.json
+      - .github/workflows/docker.yml
   workflow_dispatch:
 
 permissions:
@@ -41,25 +46,17 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             "/user/packages/container/5151/visibility" \
             -f visibility=public
-
-  deploy-nas:
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Pull image and recreate app on CasaOS
+      - name: Pull runtime image on CasaOS
         uses: appleboy/ssh-action@v1.2.0
+        continue-on-error: true
         with:
           host: ${{ secrets.NAS_HOST }}
           port: ${{ secrets.NAS_PORT }}
           username: ${{ secrets.NAS_USER }}
           key: ${{ secrets.NAS_SSH_KEY }}
           script_stop: true
-          command_timeout: 10m
           script: |
             set -euo pipefail
             cd /mnt/Storage1/apps/5151
-            docker pull ghcr.io/fyun48/5151:latest
+            docker compose pull 591-tracker
             docker compose up -d --no-build --no-deps 591-tracker
-            docker stop 591-tracker-watchtower >/dev/null 2>&1 || true
-            docker rm 591-tracker-watchtower >/dev/null 2>&1 || true
