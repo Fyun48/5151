@@ -325,6 +325,7 @@ async function nominatimSearch(params) {
       "User-Agent": "591-tracker/1.0 (personal rental watcher)",
       Accept: "application/json",
     },
+    signal: AbortSignal.timeout(8000),
   });
   return res;
 }
@@ -345,23 +346,22 @@ export async function geocodeAddress(address, lookup, options = {}) {
     });
   }
   for (const query of queries) attempts.push({ q: query });
+  const maxAttempts = Math.max(1, Math.min(Number(options.maxAttempts) || attempts.length, attempts.length));
 
   let lastStatus = 200;
-  for (let i = 0; i < attempts.length; i += 1) {
-    const res = await nominatimSearch(attempts[i]);
+  for (let i = 0; i < maxAttempts; i += 1) {
+    let res;
+    try {
+      res = await nominatimSearch(attempts[i]);
+    } catch (error) {
+      if (options.strict) throw new Error("地圖定位逾時，請稍後再試");
+      lastStatus = 0;
+      continue;
+    }
     lastStatus = res.status;
     if (res.status === 429) {
-      await sleep(2500);
-      const retry = await nominatimSearch(attempts[i]);
-      lastStatus = retry.status;
-      if (retry.ok) {
-        const rows = await retry.json();
-        const hit = rows?.[0];
-        if (hit) return { lat: Number(hit.lat), lng: Number(hit.lon) };
-      } else if (options.strict && retry.status === 429) {
-        throw new Error("地圖定位服務暫時忙碌，請稍後再試");
-      }
-      continue;
+      if (options.strict) throw new Error("地圖定位服務暫時忙碌，請稍後再試");
+      return null;
     }
     if (!res.ok) continue;
     const rows = await res.json();

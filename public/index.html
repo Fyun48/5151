@@ -817,13 +817,26 @@
       };
     }
 
+    async function readApi(res) {
+      const text = await res.text();
+      try {
+        return JSON.parse(text);
+      } catch {
+        if (res.status === 502 || res.status === 504 || res.status === 524) {
+          throw new Error("伺服器回應逾時。請稍候再按一次，不要連續猛按");
+        }
+        throw new Error("伺服器沒有正確回應，請重新整理後再試");
+      }
+    }
+
     async function saveSettings(body) {
       const res = await fetch("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
+        signal: AbortSignal.timeout(20000),
       });
-      const data = await res.json();
+      const data = await readApi(res);
       if (!res.ok) throw new Error(data.error || "儲存失敗");
       fillSettings(data.settings);
       return data.settings;
@@ -854,7 +867,10 @@
         flash("設定已儲存");
         await loadList();
       } catch (error) {
-        flash(error.message);
+        const msg = error.name === "TimeoutError" || error.name === "AbortError"
+          ? "儲存逾時，請再試一次"
+          : error.message;
+        flash(msg);
       } finally {
         $("saveBtn").disabled = false;
       }
@@ -927,14 +943,17 @@
       $("status").textContent = "正在儲存篩選並檢查…";
       try {
         await saveSettings(collectSettings());
-        const res = await fetch("/api/watch", { method: "POST" });
-        const data = await res.json();
+        const res = await fetch("/api/watch", { method: "POST", signal: AbortSignal.timeout(55000) });
+        const data = await readApi(res);
         if (!res.ok) throw new Error(data.error || "檢查失敗");
         $("status").textContent = statusFromResult(data.result);
         pushDock(data.result.events || []);
         await loadList();
       } catch (error) {
-        $("status").textContent = error.message;
+        const msg = error.name === "TimeoutError" || error.name === "AbortError"
+          ? "檢查逾時。請稍候再按一次立即檢查"
+          : error.message;
+        $("status").textContent = msg;
       } finally {
         $("watchBtn").disabled = false;
       }
@@ -1075,6 +1094,9 @@
         const n = data.result.events?.length || 0;
         $("status").textContent = `自動檢查完成，通知 ${n} 則 · ${new Date(data.result.checked_at).toLocaleString()}`;
         pushDock(data.result.events || []);
+        loadList();
+      }
+      if (data.type === "geo") {
         loadList();
       }
     };
@@ -1311,7 +1333,7 @@
 
     async function persistExclusions(msg) {
       try {
-        $("saveMsg").textContent = "正在儲存範圍並定位已存物件地址…";
+        $("saveMsg").textContent = "正在儲存範圍…";
         await saveSettings(collectSettings());
         $("saveMsg").textContent = msg;
         await loadList();

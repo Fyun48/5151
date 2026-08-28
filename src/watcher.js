@@ -88,7 +88,7 @@ export async function runWatch(options = {}) {
     workLng: settings.workLng,
     lookupGeo: getCachedGeo,
     saveGeo: (address, lat, lng) => updateListingsGeoByAddress(address, lat, lng),
-    geoLeft: 60,
+    geoLeft: options.skipHeavyGeo ? 0 : 8,
   };
 
   for (const url of urls) {
@@ -201,7 +201,6 @@ export async function runWatch(options = {}) {
   if (!options.silent && events.length) {
     await notify(settings, events);
   }
-  const geoBackfill = await backfillListingCoords(settings, { limit: 20 });
   if (settings.hasBaseline !== true) {
     saveSettings({ hasBaseline: true });
   }
@@ -215,7 +214,6 @@ export async function runWatch(options = {}) {
       type_label: eventLabel(event.type),
     })),
     errors,
-    geoBackfill,
     checked_at: nowIso(),
   };
 }
