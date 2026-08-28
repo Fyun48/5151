@@ -1,4 +1,24 @@
-import { isExcludedByAgent, isExcludedByBox, isExcludedByKeyword } from "./geo.js";
+import { distanceKm, isExcludedByAgent, isExcludedByBox, isExcludedByKeyword } from "./geo.js";
+
+function tagText(listing) {
+  let tags = listing.tags;
+  if (typeof tags === "string") {
+    try {
+      tags = JSON.parse(tags);
+    } catch {
+      tags = [];
+    }
+  }
+  return (Array.isArray(tags) ? tags : [])
+    .map((item) => (typeof item === "string" ? item : item?.name || item?.value || ""))
+    .join(" ");
+}
+
+export function listingHasElevator(listing) {
+  const hay = `${listing.title || ""} ${listing.kind_name || ""} ${listing.address || ""} ${tagText(listing)}`;
+  if (/無電梯/.test(hay)) return false;
+  return /有電梯|電梯大樓|電梯公寓/.test(hay);
+}
 
 export function isAtOrBelowFirstFloor(floorName) {
   const text = String(floorName || "").replace(/\s+/g, "");
@@ -27,7 +47,7 @@ export function isWholeFloorHome(kindName) {
   return String(kindName || "").includes("整層住家");
 }
 
-export function shouldKeepListing(listing, settings = {}) {
+export function passesAttributeFilters(listing, settings = {}) {
   if (settings.wholeFloorOnly !== false && !isWholeFloorHome(listing.kind_name)) {
     return false;
   }
@@ -46,8 +66,25 @@ export function shouldKeepListing(listing, settings = {}) {
   if (isExcludedByAgent(listing, settings)) {
     return false;
   }
+  return true;
+}
+
+export function passesGeoFilters(listing, settings = {}) {
   if (isExcludedByBox(listing.lat, listing.lng, settings.excludeBoxes)) {
     return false;
   }
+  const km = Number(settings.commuteKm);
+  const workLat = Number(settings.workLat);
+  const workLng = Number(settings.workLng);
+  if (Number.isFinite(km) && km > 0 && Number.isFinite(workLat) && Number.isFinite(workLng)) {
+    if (listing.lat != null && listing.lng != null && listing.lat !== "") {
+      const dist = distanceKm(workLat, workLng, listing.lat, listing.lng);
+      if (dist != null && dist > km) return false;
+    }
+  }
   return true;
+}
+
+export function shouldKeepListing(listing, settings = {}) {
+  return passesAttributeFilters(listing, settings) && passesGeoFilters(listing, settings);
 }

@@ -1,6 +1,46 @@
+import { allDistricts } from "./regions.js";
+
 const MAX_BOXES = 10;
 const MAX_SPAN = 0.5;
 const FALLBACK_PAD = 0.025;
+
+const CN_NUM = {
+  一: "1",
+  二: "2",
+  三: "3",
+  四: "4",
+  五: "5",
+  六: "6",
+  七: "7",
+  八: "8",
+  九: "9",
+  十: "10",
+};
+
+const DISTRICT_CENTERS = {
+  士林區: [25.093, 121.525],
+  北投區: [25.132, 121.502],
+  大同區: [25.063, 121.515],
+  中山區: [25.068, 121.533],
+  松山區: [25.063, 121.557],
+  大安區: [25.026, 121.543],
+  信義區: [25.033, 121.565],
+  內湖區: [25.083, 121.59],
+  南港區: [25.055, 121.607],
+  中正區: [25.032, 121.518],
+  萬華區: [25.035, 121.499],
+  文山區: [24.989, 121.57],
+  五股區: [25.083, 121.438],
+  蘆洲區: [25.089, 121.474],
+  八里區: [25.146, 121.399],
+  淡水區: [25.169, 121.443],
+  板橋區: [25.011, 121.462],
+  三重區: [25.062, 121.487],
+  中和區: [24.999, 121.509],
+  永和區: [25.008, 121.513],
+  新莊區: [25.036, 121.45],
+  新店區: [24.967, 121.542],
+};
 
 const DIR_PATTERN =
   "以東側|以西側|以南側|以北側|以東|以西|以南|以北|之東|之西|之南|之北|東側|西側|南側|北側|東邊|西邊|南邊|北邊";
@@ -102,6 +142,53 @@ export function isExcludedByAgent(listing, settings = {}) {
   return terms.some((term) => hay.includes(term.toLowerCase()));
 }
 
+export function hasActiveBoxes(boxes) {
+  return normalizeBoxes(boxes).some((box) => box.enabled !== false);
+}
+
+export function needsListingGeo(settings = {}) {
+  const commuteOn =
+    Number(settings.commuteKm) > 0 &&
+    Number.isFinite(Number(settings.workLat)) &&
+    Number.isFinite(Number(settings.workLng));
+  return commuteOn || hasActiveBoxes(settings.excludeBoxes);
+}
+
+export function districtsNearBoxes(boxes) {
+  const active = normalizeBoxes(boxes).filter((box) => box.enabled !== false);
+  if (!active.length) return [];
+  const pad = 0.06;
+  const names = [];
+  for (const [name, pair] of Object.entries(DISTRICT_CENTERS)) {
+    const [lat, lng] = pair;
+    if (
+      active.some(
+        (box) =>
+          lat >= box.south - pad &&
+          lat <= box.north + pad &&
+          lng >= box.west - pad &&
+          lng <= box.east + pad,
+      )
+    ) {
+      names.push(name);
+    }
+  }
+  return names;
+}
+
+export function addressGeoScore(address, nearDistricts = []) {
+  const text = String(address || "");
+  let score = 0;
+  if (/\d+(?:之\d+)?號/.test(text)) score += 4;
+  if (/巷/.test(text)) score += 2;
+  if (/段/.test(text)) score += 1;
+  for (const name of nearDistricts) {
+    const shortName = String(name || "").replace(/區$/, "");
+    if (shortName && (text.includes(name) || text.includes(shortName))) score += 8;
+  }
+  return score;
+}
+
 export function isExcludedByBox(lat, lng, boxes) {
   if (lat == null || lng == null || lat === "" || lng === "") return false;
   const nlat = Number(lat);
@@ -129,29 +216,162 @@ export function coordsFromListing(item) {
   return { lat: null, lng: null };
 }
 
-export async function geocodeAddress(address, lookup, options = {}) {
-  const text = geoKey(address);
-  if (!text) return null;
-  const cached = lookup?.(text);
-  if (cached) return cached;
-  const query = encodeURIComponent(`台北市${text}`);
-  const res = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=tw&q=${query}`, {
+export function distanceKm(lat1, lng1, lat2, lng2) {
+  const a = Number(lat1);
+  const b = Number(lng1);
+  const c = Number(lat2);
+  const d = Number(lng2);
+  if (![a, b, c, d].every(Number.isFinite)) return null;
+  const toRad = (n) => (n * Math.PI) / 180;
+  const dLat = toRad(c - a);
+  const dLng = toRad(d - b);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(a)) * Math.cos(toRad(c)) * Math.sin(dLng / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
+const DISTRICT_CITY = new Map();
+
+function cityForDistrict(district) {
+  if (!DISTRICT_CITY.size) {
+    for (const item of allDistricts()) {
+      DISTRICT_CITY.set(item.name, item.city === "台北市" ? "臺北市" : item.city);
+    }
+  }
+  return DISTRICT_CITY.get(district) || "";
+}
+
+function withArabicSections(text) {
+  return String(text || "").replace(/[一二三四五六七八九十]+段/g, (chunk) => {
+    const body = chunk.slice(0, -1);
+    if (body === "十") return "10段";
+    if (body.length === 1 && CN_NUM[body]) return `${CN_NUM[body]}段`;
+    if (body.startsWith("十") && body.length === 2) {
+      return `${10 + Number(CN_NUM[body[1]] || 0)}段`;
+    }
+    return `${[...body].map((ch) => CN_NUM[ch] || "").join("")}段`;
+  });
+}
+
+function parseTaiwanAddress(address) {
+  let raw = String(address || "")
+    .replace(/\s+/g, "")
+    .replace(/[-－—]/g, "")
+    .replace(/台北/g, "臺北");
+  const cityMatch = raw.match(/^(臺北市|新北市|桃園市|基隆市|新竹市)/);
+  let city = cityMatch?.[1] || "";
+  const districtMatch = raw.match(/(.{2,3}區)/);
+  const district = districtMatch?.[1] || "";
+  if (!city && district) city = cityForDistrict(district);
+  let rest = raw;
+  if (city && rest.startsWith(city)) rest = rest.slice(city.length);
+  if (district && rest.startsWith(district)) rest = rest.slice(district.length);
+  const numberMatch = rest.match(/(\d+(?:之\d+)?號)$/);
+  const number = numberMatch?.[1] || "";
+  if (number) rest = rest.slice(0, -number.length);
+  return {
+    raw,
+    city,
+    district,
+    road: withArabicSections(rest) || raw,
+    number,
+  };
+}
+
+function geocodeQueries(address, cityHint = "") {
+  const parsed = parseTaiwanAddress(address);
+  if (!parsed.city && cityHint) {
+    parsed.city = String(cityHint).replace(/台北/g, "臺北");
+  }
+  const out = [];
+  const push = (value) => {
+    const text = String(value || "").replace(/\s+/g, " ").trim();
+    if (text && !out.includes(text)) out.push(text);
+  };
+  const compact = (road) => [parsed.city, parsed.district, road, parsed.number].filter(Boolean).join("");
+  push(compact(parsed.road));
+  if (!parsed.number && /\d+弄/.test(parsed.road)) {
+    push(compact(parsed.road.replace(/\d+弄.*$/, "")));
+  }
+  if (!parsed.number && /\d+巷/.test(parsed.road)) {
+    push(compact(parsed.road.replace(/\d+(?:巷|弄).*$/, "")));
+  }
+  push([parsed.road, parsed.number, parsed.district, parsed.city].filter(Boolean).join(", ").replace(/, ,/g, ","));
+  if (parsed.road && parsed.city) push(`${parsed.road}${parsed.number}, ${parsed.district}, ${parsed.city}`.replace(/, ,/g, ","));
+  if (parsed.road && !parsed.city) {
+    push(`${parsed.road}, 臺北市`);
+    push(`${parsed.road}, 新北市`);
+  }
+  return { parsed, queries: out.filter(Boolean).slice(0, 4) };
+}
+
+let lastNominatimAt = 0;
+
+async function nominatimSearch(params) {
+  const wait = 1100 - (Date.now() - lastNominatimAt);
+  if (wait > 0) await sleep(wait);
+  const url = new URL("https://nominatim.openstreetmap.org/search");
+  url.searchParams.set("format", "jsonv2");
+  url.searchParams.set("limit", "1");
+  url.searchParams.set("countrycodes", "tw");
+  url.searchParams.set("addressdetails", "0");
+  for (const [key, value] of Object.entries(params)) {
+    if (value) url.searchParams.set(key, value);
+  }
+  lastNominatimAt = Date.now();
+  const res = await fetch(url, {
     headers: {
       "User-Agent": "591-tracker/1.0 (personal rental watcher)",
       Accept: "application/json",
     },
   });
-  if (!res.ok) {
-    if (options.strict) {
-      if (res.status === 429) throw new Error("地圖定位服務暫時忙碌，請稍後再試");
-      throw new Error(`地圖定位失敗（HTTP ${res.status}）`);
-    }
-    return null;
+  return res;
+}
+
+export async function geocodeAddress(address, lookup, options = {}) {
+  const text = geoKey(address);
+  if (!text) return null;
+  const cached = lookup?.(address) || lookup?.(text);
+  if (cached) return cached;
+  const { parsed, queries } = geocodeQueries(address, options.cityHint);
+  const attempts = [];
+  if (parsed.road && parsed.number && !/[巷弄]/.test(parsed.road)) {
+    attempts.push({
+      street: `${parsed.road} ${parsed.number}`.trim(),
+      city: parsed.district,
+      county: parsed.city || "臺灣",
+      country: "Taiwan",
+    });
   }
-  const rows = await res.json();
-  const hit = rows?.[0];
-  if (!hit) return null;
-  return { lat: Number(hit.lat), lng: Number(hit.lon) };
+  for (const query of queries) attempts.push({ q: query });
+
+  let lastStatus = 200;
+  for (let i = 0; i < attempts.length; i += 1) {
+    const res = await nominatimSearch(attempts[i]);
+    lastStatus = res.status;
+    if (res.status === 429) {
+      await sleep(2500);
+      const retry = await nominatimSearch(attempts[i]);
+      lastStatus = retry.status;
+      if (retry.ok) {
+        const rows = await retry.json();
+        const hit = rows?.[0];
+        if (hit) return { lat: Number(hit.lat), lng: Number(hit.lon) };
+      } else if (options.strict && retry.status === 429) {
+        throw new Error("地圖定位服務暫時忙碌，請稍後再試");
+      }
+      continue;
+    }
+    if (!res.ok) continue;
+    const rows = await res.json();
+    const hit = rows?.[0];
+    if (hit) return { lat: Number(hit.lat), lng: Number(hit.lon) };
+  }
+  if (options.strict && lastStatus !== 200) {
+    throw new Error(`地圖定位失敗（HTTP ${lastStatus}）`);
+  }
+  return null;
 }
 
 function cleanRoadName(value) {
@@ -229,16 +449,19 @@ export async function boxFromRoadDescription(text, options = {}) {
   }
   const uniqueRoads = [...new Set(parts.map((part) => part.road))];
   const coords = {};
-  let fetched = 0;
   for (const road of uniqueRoads) {
-    const cached = options.lookup?.(geoKey(road));
-    if (!cached && fetched > 0) await sleep(1100);
-    const geo = cached || (await geocodeAddress(road, options.lookup, { strict: true }));
+    const cached = options.lookup?.(road) || options.lookup?.(geoKey(road));
+    let geo = cached;
+    if (!geo) {
+      geo = await geocodeAddress(road, options.lookup, { cityHint: "臺北市" });
+    }
+    if (!geo) {
+      geo = await geocodeAddress(road, options.lookup, { cityHint: "新北市", strict: true });
+    }
     if (!geo || !Number.isFinite(geo.lat) || !Number.isFinite(geo.lng)) {
-      throw new Error(`找不到路名「${road}」，請改成較完整的路名（例如加上路／街／段）再試`);
+      throw new Error(`找不到路名「${road}」，請改成較完整的路名（例如加上路／街／段，或寫士林區承德路）再試`);
     }
     if (!cached) {
-      fetched += 1;
       options.save?.(road, geo.lat, geo.lng);
     }
     coords[road] = geo;

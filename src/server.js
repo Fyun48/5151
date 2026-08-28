@@ -3,14 +3,17 @@ import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  deleteProfile,
   getCachedGeo,
   getListing,
   getSettings,
   hideMany,
   listListings,
+  loadProfile,
   recentEvents,
   rejectSuspectedMatch,
   resetListings,
+  saveAsProfile,
   saveSettings,
   setCachedGeo,
   setFlags,
@@ -18,9 +21,9 @@ import {
   stats,
 } from "./db.js";
 import { adminEmail, authConfigured, clearSessionCookie, readSession, requireAuth, sessionCookie, verifyLogin } from "./auth.js";
-import { parseSearchUrl } from "./client591.js";
-import { boxFromRoadDescription } from "./geo.js";
-import { runWatch } from "./watcher.js";
+import { boxFromRoadDescription, geocodeAddress, hasActiveBoxes } from "./geo.js";
+import { CITIES } from "./regions.js";
+import { backfillListingCoords, runWatch } from "./watcher.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -35,6 +38,7 @@ app.get("/api/me", (req, res) => {
     ok: Boolean(session),
     email: session?.email || "",
     configured: authConfigured(),
+    hint: authConfigured() ? adminEmail() : "",
   });
 });
 
@@ -94,6 +98,7 @@ app.get("/api/state", (_req, res) => {
     lastRun,
     listings: listListings({ filter: "all", sort: "price_asc", limit: 500 }),
     events: recentEvents(30),
+    cities: CITIES,
   });
 });
 
@@ -155,16 +160,65 @@ app.post("/api/listings/:id/reject-match", (req, res) => {
   res.json({ listing: updated, stats: stats() });
 });
 
-app.post("/api/settings", (req, res) => {
-  const body = req.body || {};
-  if (Array.isArray(body.searchUrls)) {
-    for (const url of body.searchUrls) {
-      if (String(url).trim()) parseSearchUrl(url);
+app.post("/api/settings", async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (Array.isArray(body.watchDistricts) && body.watchDistricts.length === 0) {
+      throw new Error("請至少選一個行政區");
     }
+    const workAddress = String(body.workAddress || "").trim();
+    if (Number(body.commuteKm) > 0) {
+      if (!workAddress) throw new Error("請先填上班地址，才能篩通勤距離");
+      const geo = await geocodeAddress(workAddress, getCachedGeo, { strict: true });
+      if (!geo) throw new Error("找不到這個上班地址，請再寫詳細一點");
+      body.workAddress = workAddress;
+      body.workLat = geo.lat;
+      body.workLng = geo.lng;
+      setCachedGeo(workAddress, geo.lat, geo.lng);
+    } else if (body.workAddress !== undefined) {
+      body.workAddress = workAddress;
+      if (!workAddress) {
+        body.workLat = null;
+        body.workLng = null;
+      }
+    }
+    const settings = saveSettings(body);
+    if (hasActiveBoxes(settings.excludeBoxes)) {
+      await backfillListingCoords(settings, { limit: 20 });
+    }
+    schedule();
+    res.json({ settings, stats: stats() });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
   }
-  const settings = saveSettings(body);
-  schedule();
-  res.json({ settings });
+});
+
+app.post("/api/profiles", (req, res) => {
+  try {
+    const settings = saveAsProfile(req.body?.name);
+    res.json({ settings });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/profiles/:id/load", (req, res) => {
+  try {
+    const settings = loadProfile(req.params.id);
+    schedule();
+    res.json({ settings });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.delete("/api/profiles/:id", (req, res) => {
+  try {
+    const settings = deleteProfile(req.params.id);
+    res.json({ settings });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
 });
 
 app.post("/api/exclude-region", async (req, res) => {

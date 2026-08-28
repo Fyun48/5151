@@ -1,9 +1,10 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { shouldKeepListing } from "./floors.js";
-import { normalizeBoxes, normalizeKeywords } from "./geo.js";
+import { shouldKeepListing, listingHasElevator } from "./floors.js";
+import { distanceKm, normalizeBoxes, normalizeKeywords } from "./geo.js";
 import { sameSearch } from "./client591.js";
+import { buildSearchUrls, districtNameFromListing, districtsFromSearchUrls, normalizeWatchDistricts, priceFromSearchUrls } from "./regions.js";
 
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data");
 mkdirSync(DATA_DIR, { recursive: true });
@@ -193,7 +194,7 @@ const DEFAULTS = {
     "https://rent.591.com.tw/list?region=1&section=5&kind=1&order=posttime&orderType=desc",
   ],
   intervalMinutes: 5,
-  pagesPerWatch: 20,
+  pagesPerWatch: 40,
   notifyNew: true,
   notifySameSource: true,
   notifyViewed: false,
@@ -208,13 +209,35 @@ const DEFAULTS = {
   excludeAgents: [],
   excludeAgentIds: [],
   excludeBoxes: [],
+  workAddress: "",
+  commuteKm: 0,
+  workLat: null,
+  workLng: null,
+  settingProfiles: [],
+  activeProfileId: "",
+  watchDistricts: [],
+  priceMin: 0,
+  priceMax: 36000,
+  excludeRooftop: true,
 };
 
 export function getSettings() {
   const rows = db.prepare("SELECT key, value FROM settings").all();
   const stored = Object.fromEntries(rows.map((row) => [row.key, JSON.parse(row.value)]));
   const next = { ...DEFAULTS, ...stored };
-  if (Number(next.pagesPerWatch) <= 5) next.pagesPerWatch = 20;
+  if (Number(next.pagesPerWatch) <= 5) next.pagesPerWatch = 40;
+  if (!Array.isArray(stored.watchDistricts) || !stored.watchDistricts.length) {
+    next.watchDistricts = districtsFromSearchUrls(next.searchUrls);
+  } else {
+    next.watchDistricts = normalizeWatchDistricts(next.watchDistricts);
+  }
+  if (stored.priceMax == null && stored.priceMin == null) {
+    const parsed = priceFromSearchUrls(next.searchUrls);
+    if (parsed.max || parsed.min) {
+      next.priceMin = parsed.min;
+      next.priceMax = parsed.max;
+    }
+  }
   return next;
 }
 
@@ -225,7 +248,35 @@ export function saveSettings(partial) {
   next.excludeAgents = normalizeKeywords(next.excludeAgents);
   next.excludeAgentIds = [...new Set((next.excludeAgentIds || []).map(Number).filter((id) => id > 0))].slice(0, 80);
   next.excludeBoxes = normalizeBoxes(next.excludeBoxes);
-  next.pagesPerWatch = Math.max(1, Math.min(Number(next.pagesPerWatch) || 20, 20));
+  next.pagesPerWatch = Math.max(1, Math.min(Number(next.pagesPerWatch) || 40, 40));
+  next.commuteKm = Math.max(0, Math.min(Number(next.commuteKm) || 0, 80));
+  next.workAddress = String(next.workAddress || "").trim().slice(0, 120);
+  const workLat = Number(next.workLat);
+  const workLng = Number(next.workLng);
+  next.workLat = Number.isFinite(workLat) ? workLat : null;
+  next.workLng = Number.isFinite(workLng) ? workLng : null;
+  next.watchDistricts = normalizeWatchDistricts(next.watchDistricts);
+  next.priceMin = Math.max(0, Number(next.priceMin) || 0);
+  next.priceMax = Math.max(0, Number(next.priceMax) || 0);
+  next.excludeRooftop = next.excludeRooftop !== false;
+  if (next.watchDistricts.length) {
+    next.searchUrls = buildSearchUrls({
+      districts: next.watchDistricts,
+      priceMin: next.priceMin,
+      priceMax: next.priceMax,
+      excludeRooftop: next.excludeRooftop,
+      wholeFloorOnly: next.wholeFloorOnly !== false,
+    });
+  }
+  next.settingProfiles = normalizeProfiles(next.settingProfiles);
+  next.activeProfileId = String(next.activeProfileId || "");
+  if (next.activeProfileId) {
+    next.settingProfiles = next.settingProfiles.map((profile) =>
+      profile.id === next.activeProfileId
+        ? { ...profile, saved_at: new Date().toISOString(), data: snapshotSettings(next) }
+        : profile,
+    );
+  }
   const upsert = db.prepare(
     "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
   );
@@ -242,6 +293,97 @@ export function saveSettings(partial) {
   return next;
 }
 
+const PROFILE_FIELDS = [
+  "searchUrls",
+  "intervalMinutes",
+  "pagesPerWatch",
+  "minBuildingFloors",
+  "wholeFloorOnly",
+  "excludeLowFloors",
+  "notifyNew",
+  "notifySameSource",
+  "notifyViewed",
+  "notifyWatchedAlways",
+  "windowsToast",
+  "excludeKeywords",
+  "excludeAgents",
+  "excludeAgentIds",
+  "excludeBoxes",
+  "discordWebhook",
+  "workAddress",
+  "commuteKm",
+  "workLat",
+  "workLng",
+  "watchDistricts",
+  "priceMin",
+  "priceMax",
+  "excludeRooftop",
+];
+
+function normalizeProfiles(value) {
+  const list = Array.isArray(value) ? value : [];
+  const out = [];
+  for (const raw of list) {
+    if (!raw || typeof raw !== "object") continue;
+    const id = String(raw.id || "").trim();
+    const name = String(raw.name || "").trim().slice(0, 40);
+    if (!id || !name) continue;
+    out.push({
+      id,
+      name,
+      saved_at: String(raw.saved_at || new Date().toISOString()),
+      data: raw.data && typeof raw.data === "object" ? raw.data : {},
+    });
+    if (out.length >= 12) break;
+  }
+  return out;
+}
+
+function snapshotSettings(settings) {
+  const out = {};
+  for (const key of PROFILE_FIELDS) out[key] = settings[key];
+  return out;
+}
+
+export function saveAsProfile(name) {
+  const current = getSettings();
+  const profiles = [...(current.settingProfiles || [])];
+  const id = `p-${Date.now()}`;
+  const label = String(name || "").trim().slice(0, 40) || `設定 ${profiles.length + 1}`;
+  profiles.push({
+    id,
+    name: label,
+    saved_at: new Date().toISOString(),
+    data: snapshotSettings(current),
+  });
+  return saveSettings({
+    settingProfiles: profiles,
+    activeProfileId: id,
+  });
+}
+
+export function loadProfile(id) {
+  const current = getSettings();
+  const profile = (current.settingProfiles || []).find((item) => item.id === id);
+  if (!profile) {
+    const err = new Error("找不到這個設定檔");
+    err.status = 404;
+    throw err;
+  }
+  return saveSettings({
+    ...snapshotSettings({ ...DEFAULTS, ...profile.data }),
+    settingProfiles: current.settingProfiles,
+    activeProfileId: profile.id,
+  });
+}
+
+export function deleteProfile(id) {
+  const current = getSettings();
+  const profiles = (current.settingProfiles || []).filter((item) => item.id !== id);
+  const active = current.activeProfileId === id ? (profiles[0]?.id || "") : current.activeProfileId;
+  return saveSettings({ settingProfiles: profiles, activeProfileId: active });
+}
+
 function parseJson(value, fallback) {
   try {
     const parsed = JSON.parse(value || "");
@@ -251,11 +393,23 @@ function parseJson(value, fallback) {
   }
 }
 
-function decorateListing(row) {
+function decorateListing(row, settings = getSettings()) {
   if (!row) return row;
+  row = applyCachedCoords(row);
+  const commute =
+    Number(settings.commuteKm) > 0 &&
+    Number.isFinite(Number(settings.workLat)) &&
+    Number.isFinite(Number(settings.workLng)) &&
+    row.lat != null &&
+    row.lng != null
+      ? distanceKm(settings.workLat, settings.workLng, row.lat, row.lng)
+      : null;
   return {
     ...row,
     extra_fees: Array.isArray(row.extra_fees) ? row.extra_fees : parseJson(row.extra_fees, []),
+    has_elevator: listingHasElevator(row),
+    commute_km: commute == null ? null : Math.round(commute * 10) / 10,
+    district: districtNameFromListing(row),
   };
 }
 
@@ -367,8 +521,8 @@ export function upsertListing(listing) {
       refresh_time = excluded.refresh_time,
       last_seen_at = excluded.last_seen_at,
       last_event = excluded.last_event,
-      lat = excluded.lat,
-      lng = excluded.lng
+      lat = COALESCE(excluded.lat, listings.lat),
+      lng = COALESCE(excluded.lng, listings.lng)
   `).run(
     listing.post_id,
     listing.source_key,
@@ -515,9 +669,43 @@ export function setFlags(postId, flags) {
   return getListing(postId);
 }
 
+export function applyCachedCoords(row) {
+  if (!row) return row;
+  if (Number.isFinite(Number(row.lat)) && Number.isFinite(Number(row.lng)) && Number(row.lat) !== 0) {
+    return row;
+  }
+  const cached = getCachedGeo(row.address);
+  if (!cached) return row;
+  return { ...row, lat: cached.lat, lng: cached.lng };
+}
+
 function applyListingFilter(rows) {
   const settings = getSettings();
-  return rows.filter((row) => shouldKeepListing(row, settings));
+  return rows.map(applyCachedCoords).filter((row) => shouldKeepListing(row, settings));
+}
+
+export function addressesMissingGeo() {
+  return db
+    .prepare(
+      `SELECT address, COUNT(*) AS n
+       FROM listings
+       WHERE (lat IS NULL OR lng IS NULL)
+         AND IFNULL(hidden, 0) = 0
+         AND IFNULL(address, '') != ''
+       GROUP BY address`,
+    )
+    .all();
+}
+
+export function updateListingsGeoByAddress(address, lat, lng) {
+  setCachedGeo(address, lat, lng);
+  const key = String(address || "").replace(/\s+/g, "").replace(/-/g, "");
+  if (!key || !Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return;
+  db.prepare(
+    `UPDATE listings
+     SET lat = ?, lng = ?
+     WHERE replace(replace(IFNULL(address, ''), ' ', ''), '-', '') = ?`,
+  ).run(Number(lat), Number(lng), key);
 }
 
 export function listListings({ filter = "all", q = "", sort = "price_asc", limit = 500, searchKeys } = {}) {
@@ -548,10 +736,13 @@ export function listListings({ filter = "all", q = "", sort = "price_asc", limit
       : sort === "newest"
         ? "last_seen_at DESC, post_id DESC"
         : "price_num ASC, last_seen_at DESC";
-  const rows = db
+  const raw = db
     .prepare(`SELECT * FROM listings ${where} ORDER BY ${order}`)
     .all(...params);
-  return applyListingFilter(rows).slice(0, limit).map(decorateListing);
+  const settings = getSettings();
+  let rows = applyListingFilter(raw);
+  if (filter === "elevator") rows = rows.filter((row) => listingHasElevator(row));
+  return rows.slice(0, limit).map((row) => decorateListing(row, settings));
 }
 
 export function sourceHistory(sourceKey) {
@@ -572,7 +763,7 @@ export function stats(searchKeys) {
   const params = [];
   searchWhere(searchKeys, clauses, params);
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-  const raw = db.prepare(`SELECT viewed, watched, hidden, last_event, floor_name, kind_name, title, address, lat, lng, match_level, match_rejected FROM listings ${where}`).all(...params);
+  const raw = db.prepare(`SELECT viewed, watched, hidden, last_event, floor_name, kind_name, title, address, lat, lng, tags, match_level, match_rejected FROM listings ${where}`).all(...params);
   const rows = applyListingFilter(raw);
   const visible = rows.filter((row) => !row.hidden);
   const storedVisible = raw.filter((row) => !row.hidden);
@@ -583,8 +774,13 @@ export function stats(searchKeys) {
     same_source: visible.filter((row) => row.last_event === "same_source" || row.last_event === "update").length,
     hidden: rows.filter((row) => row.hidden).length,
     suspected: rows.filter((row) => row.match_level && !row.match_rejected).length,
+    elevator: visible.filter((row) => listingHasElevator(row)).length,
     stored: storedVisible.length,
     filteredOut: Math.max(0, storedVisible.length - visible.length),
+    missingGeo: storedVisible.filter((row) => {
+      const geo = applyCachedCoords(row);
+      return geo.lat == null || geo.lng == null;
+    }).length,
     dbTotal: listingCount(),
   };
 }

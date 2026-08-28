@@ -72,7 +72,8 @@ function cookieHeader(req, token, clear = false) {
     "SameSite=Lax",
     clear ? "Max-Age=0" : `Max-Age=${Math.floor(MAX_AGE_MS / 1000)}`,
   ];
-  if (req.get?.("x-forwarded-proto") === "https" || process.env.COOKIE_SECURE === "1") {
+  const proto = String(req.get?.("x-forwarded-proto") || "").split(",")[0].trim();
+  if (proto === "https" || req.secure === true) {
     parts.push("Secure");
   }
   return parts.join("; ");
@@ -96,16 +97,17 @@ export function verifyLogin(email, password) {
     throw err;
   }
   if (Date.now() < fails.until) {
-    const err = new Error("嘗試太多次，請稍後再試");
+    const wait = Math.ceil((fails.until - Date.now()) / 1000);
+    const err = new Error(`嘗試太多次，請 ${wait} 秒後再試`);
     err.status = 429;
     throw err;
   }
   const okEmail = safeEqual(String(email || "").trim().toLowerCase(), adminEmail());
-  const okPass = safeEqual(String(password || ""), adminPassword());
+  const okPass = safeEqual(String(password || "").trim(), adminPassword().trim());
   if (!okEmail || !okPass) {
     fails.n += 1;
-    if (fails.n >= 8) {
-      fails.until = Date.now() + 15 * 60 * 1000;
+    if (fails.n >= 10) {
+      fails.until = Date.now() + 2 * 60 * 1000;
       fails.n = 0;
     }
     const err = new Error("帳號或密碼不正確");

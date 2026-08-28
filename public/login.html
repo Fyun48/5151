@@ -62,7 +62,7 @@
 <body>
   <form class="card" id="form">
     <h1>591 物件追蹤</h1>
-    <p class="sub">個人使用，不開放註冊。請用已設定的帳號登入。</p>
+    <p class="sub" id="sub">個人使用，不開放註冊。請用已設定的帳號登入。</p>
     <label for="email">Email</label>
     <input id="email" name="email" type="email" autocomplete="username" required />
     <label for="password">密碼</label>
@@ -74,6 +74,12 @@
     const $ = (id) => document.getElementById(id);
     fetch("/api/me").then((r) => r.json()).then((data) => {
       if (data.ok) location.replace("/");
+      if (data.hint) {
+        $("email").value = data.hint;
+        $("sub").textContent = `請用 ${data.hint} 登入。本機請開 http://127.0.0.1:5151`;
+      } else if (data.configured === false) {
+        $("err").textContent = "尚未設定 AUTH_EMAIL / AUTH_PASSWORD。";
+      }
     }).catch(() => {});
     $("form").onsubmit = async (ev) => {
       ev.preventDefault();

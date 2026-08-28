@@ -1,6 +1,8 @@
 import {
   addEvent,
+  addressesMissingGeo,
   findBySourceKey,
+  getCachedGeo,
   getListing,
   getSettings,
   listingCount,
@@ -9,14 +11,14 @@ import {
   listingsNeedingFeeDetail,
   markEventNotified,
   saveSettings,
-  setCachedGeo,
-  getCachedGeo,
   setFlags,
   setListingDetail,
   setListingMatch,
+  updateListingsGeoByAddress,
   upsertListing,
 } from "./db.js";
 import { fetchListingDetail, fetchListings, mergeFeeRows } from "./client591.js";
+import { addressGeoScore, districtsNearBoxes, geocodeAddress, needsListingGeo } from "./geo.js";
 import { bestMatch } from "./match.js";
 import { eventLabel, notify } from "./notify.js";
 
@@ -70,21 +72,28 @@ export async function runWatch(options = {}) {
 
   const isBaseline = settings.hasBaseline !== true && listingCount() === 0;
   const requested = Number(settings.pagesPerWatch);
-  const pages = Math.min(20, requested > 5 ? requested : 20);
+  const pages = Math.min(40, requested > 5 ? requested : 40);
   const collected = [];
   const errors = [];
+  const fetchOptions = {
+    excludeLowFloors: settings.excludeLowFloors !== false,
+    wholeFloorOnly: settings.wholeFloorOnly !== false,
+    minBuildingFloors: settings.minBuildingFloors || 4,
+    excludeKeywords: settings.excludeKeywords,
+    excludeBoxes: settings.excludeBoxes,
+    excludeAgents: settings.excludeAgents,
+    excludeAgentIds: settings.excludeAgentIds,
+    commuteKm: settings.commuteKm,
+    workLat: settings.workLat,
+    workLng: settings.workLng,
+    lookupGeo: getCachedGeo,
+    saveGeo: (address, lat, lng) => updateListingsGeoByAddress(address, lat, lng),
+    geoLeft: 60,
+  };
 
   for (const url of urls) {
     try {
-      const result = await fetchListings(url, pages, {
-        excludeLowFloors: settings.excludeLowFloors !== false,
-        wholeFloorOnly: settings.wholeFloorOnly !== false,
-        minBuildingFloors: settings.minBuildingFloors || 4,
-        excludeKeywords: settings.excludeKeywords,
-        excludeBoxes: settings.excludeBoxes,
-        lookupGeo: getCachedGeo,
-        saveGeo: setCachedGeo,
-      });
+      const result = await fetchListings(url, pages, fetchOptions);
       collected.push(result);
       if (result.total > 0 && result.listings.length === 0) {
         errors.push(`${result.parsed.label}：591 有 ${result.total} 筆，但都被目前篩選排除了`);
@@ -192,6 +201,7 @@ export async function runWatch(options = {}) {
   if (!options.silent && events.length) {
     await notify(settings, events);
   }
+  const geoBackfill = await backfillListingCoords(settings, { limit: 20 });
   if (settings.hasBaseline !== true) {
     saveSettings({ hasBaseline: true });
   }
@@ -205,6 +215,35 @@ export async function runWatch(options = {}) {
       type_label: eventLabel(event.type),
     })),
     errors,
+    geoBackfill,
     checked_at: nowIso(),
   };
+}
+
+export async function backfillListingCoords(settings = getSettings(), { limit = 30 } = {}) {
+  if (!needsListingGeo(settings) || limit <= 0) return { attempted: 0, located: 0 };
+  const near = districtsNearBoxes(settings.excludeBoxes);
+  const rows = addressesMissingGeo().sort((a, b) => {
+    const score = addressGeoScore(b.address, near) - addressGeoScore(a.address, near);
+    if (score) return score;
+    return b.n - a.n;
+  });
+  let attempted = 0;
+  let located = 0;
+  for (const row of rows) {
+    const cached = getCachedGeo(row.address);
+    if (cached) {
+      updateListingsGeoByAddress(row.address, cached.lat, cached.lng);
+      located += 1;
+      continue;
+    }
+    if (attempted >= limit) break;
+    const geo = await geocodeAddress(row.address, getCachedGeo);
+    attempted += 1;
+    if (geo) {
+      updateListingsGeoByAddress(row.address, geo.lat, geo.lng);
+      located += 1;
+    }
+  }
+  return { attempted, located };
 }

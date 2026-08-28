@@ -1,5 +1,6 @@
-import { shouldKeepListing } from "./floors.js";
-import { coordsFromListing, geocodeAddress, isExcludedByKeyword } from "./geo.js";
+import { passesAttributeFilters, passesGeoFilters } from "./floors.js";
+import { allDistricts } from "./regions.js";
+import { coordsFromListing, geocodeAddress, isExcludedByKeyword, needsListingGeo } from "./geo.js";
 
 const LIST_URL = "https://bff-house.591.com.tw/v3/web/rent/list";
 const USER_AGENT =
@@ -16,7 +17,7 @@ const DROP_PARAMS = new Set([
   "sort",
 ]);
 
-const MAX_LIST_PAGES = 20;
+const MAX_LIST_PAGES = 40;
 
 export function mapWebsiteSort(sort) {
   const text = String(sort || "").trim().toLowerCase();
@@ -101,10 +102,11 @@ export function parseSearchUrl(raw) {
 
 function summarize(url, region) {
   const parts = ["租屋"];
+  // 591 租屋網址：1 台北、3 新北（舊文件曾把新北寫成 2）
   const names = {
     1: "台北市",
     2: "新北市",
-    3: "桃園市",
+    3: "新北市",
     4: "台中市",
     5: "台南市",
     6: "高雄市",
@@ -132,7 +134,7 @@ function summarize(url, region) {
   if (kind && kinds[kind]) parts.push(kinds[kind]);
   const section = url.searchParams.get("section");
   if (section) {
-    const sectionNames = { 8: "士林區", 9: "北投區", 5: "大安區", 7: "信義區", 4: "松山區", 3: "中山區", 1: "中正區", 2: "大同區", 6: "萬華區", 10: "內湖區", 11: "南港區", 12: "文山區" };
+    const sectionNames = Object.fromEntries(allDistricts().map((item) => [item.id, item.name]));
     const labels = section.split(",").map((id) => sectionNames[id] || `行政區 ${id}`);
     parts.push(labels.join("、"));
   }
@@ -289,7 +291,7 @@ async function fetchPage(query, firstRow) {
   };
 }
 
-export async function fetchListings(searchUrl, pages = 20, options = {}) {
+export async function fetchListings(searchUrl, pages = 40, options = {}) {
   const parsed = parseSearchUrl(searchUrl);
   if (options.wholeFloorOnly !== false) {
     parsed.query.set("kind", "1");
@@ -314,27 +316,29 @@ export async function fetchListings(searchUrl, pages = 20, options = {}) {
 
 async function mapKeptListings(items, options) {
   const out = [];
-  const boxes = Array.isArray(options.excludeBoxes) ? options.excludeBoxes : [];
+  const needGeo = needsListingGeo(options);
+  if (options.geoLeft == null) options.geoLeft = 60;
   for (const item of items) {
     const row = normalizeListing(item);
     if (!row.post_id) continue;
     if (isExcludedByKeyword(row, options.excludeKeywords)) continue;
-    if (boxes.length && (row.lat == null || row.lng == null) && /\d/.test(row.address || "")) {
+    if (!passesAttributeFilters(row, options)) continue;
+    if (needGeo && (row.lat == null || row.lng == null)) {
       const cached = options.lookupGeo?.(row.address);
       if (cached) {
         row.lat = cached.lat;
         row.lng = cached.lng;
-      } else {
+      } else if (options.geoLeft > 0) {
+        options.geoLeft -= 1;
         const geo = await geocodeAddress(row.address, options.lookupGeo);
         if (geo) {
           row.lat = geo.lat;
           row.lng = geo.lng;
           options.saveGeo?.(row.address, geo.lat, geo.lng);
-          await new Promise((resolve) => setTimeout(resolve, 1100));
         }
       }
     }
-    if (shouldKeepListing(row, options)) out.push(row);
+    if (passesGeoFilters(row, options)) out.push(row);
   }
   return out;
 }
