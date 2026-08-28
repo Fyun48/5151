@@ -18,7 +18,9 @@ function parseEnvFile(file) {
     ) {
       value = value.slice(1, -1);
     }
-    if (process.env[key] === undefined) process.env[key] = value;
+    if (process.env[key] === undefined || String(process.env[key]).trim() === "") {
+      process.env[key] = value;
+    }
   }
 }
 
