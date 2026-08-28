@@ -1,8 +1,11 @@
-name: Deploy source to CasaOS
+name: Copy source to CasaOS
 
 on:
   push:
     branches: [master, main]
+    paths:
+      - "src/**"
+      - "public/**"
   workflow_dispatch:
 
 permissions:
@@ -11,31 +14,16 @@ permissions:
 jobs:
   sync-nas:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: Copy src and public
+      - name: Copy src and public only
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.NAS_HOST }}
           port: ${{ secrets.NAS_PORT }}
           username: ${{ secrets.NAS_USER }}
           key: ${{ secrets.NAS_SSH_KEY }}
-          source: "src,public,docker-compose.yml"
+          source: "src,public"
           target: /mnt/Storage1/apps/5151
           overwrite: true
-      - name: Restart Node with mounted files
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.NAS_HOST }}
-          port: ${{ secrets.NAS_PORT }}
-          username: ${{ secrets.NAS_USER }}
-          key: ${{ secrets.NAS_SSH_KEY }}
-          script_stop: true
-          script: |
-            set -euo pipefail
-            cd /mnt/Storage1/apps/5151
-            docker stop 591-tracker-watchtower >/dev/null 2>&1 || true
-            docker rm 591-tracker-watchtower >/dev/null 2>&1 || true
-            docker compose up -d --no-build --no-deps 591-tracker
-            docker restart 591-tracker

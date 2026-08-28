@@ -19,6 +19,7 @@ services:
       - /DATA/AppData/591-tracker:/data
       - /mnt/Storage1/apps/5151/src:/app/src:ro
       - /mnt/Storage1/apps/5151/public:/app/public:ro
+    command: ["node", "--watch-path=src", "--watch-path=public", "src/server.js"]
 
 x-casaos:
   architectures:

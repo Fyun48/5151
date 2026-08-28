@@ -20,6 +20,7 @@ services:
       - ${DATA_ROOT:-/DATA}/AppData/591-tracker:/data
       - ./src:/app/src:ro
       - ./public:/app/public:ro
+    command: ["node", "--watch-path=src", "--watch-path=public", "src/server.js"]
 
   cloudflared:
     profiles: ["tunnel"]
