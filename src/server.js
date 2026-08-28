@@ -23,7 +23,7 @@ import {
 import { adminEmail, authConfigured, clearSessionCookie, readSession, requireAuth, sessionCookie, verifyLogin } from "./auth.js";
 import { boxFromRoadDescription, geocodeAddress, needsListingGeo } from "./geo.js";
 import { CITIES } from "./regions.js";
-import { backfillListingCoords, runWatch } from "./watcher.js";
+import { backfillListingCoords, backfillListingRoutes, runWatch } from "./watcher.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -76,14 +76,26 @@ function queueGeoBackfill(settings = getSettings()) {
   geoBackfillBusy = true;
   (async () => {
     for (let round = 0; round < 6; round += 1) {
-      const geo = await backfillListingCoords(settings, { limit: 40, skipNominatim: true });
-      broadcast({ type: "geo", stats: stats(), geoBackfill: geo });
-      if (!geo.attempted && !geo.located) break;
+      try {
+        const geo = await backfillListingCoords(settings, { limit: 40, skipNominatim: true });
+        broadcast({ type: "geo", stats: stats(), geoBackfill: geo });
+        if (!geo.attempted && !geo.located) break;
+      } catch (error) {
+        console.warn("補定位失敗：", error.message);
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
+    }
+    for (let round = 0; round < 20; round += 1) {
+      try {
+        const routes = await backfillListingRoutes(settings, { limit: 15 });
+        if (routes.attempted) broadcast({ type: "geo", stats: stats(), routeBackfill: routes });
+        if (!routes.attempted) break;
+      } catch (error) {
+        console.warn("補路線失敗：", error.message);
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
     }
   })()
-    .catch((error) => {
-      console.warn("補定位失敗：", error.message);
-    })
     .finally(() => {
       geoBackfillBusy = false;
     });
@@ -289,6 +301,7 @@ app.get("/api/events/stream", (req, res) => {
 
 app.listen(PORT, HOST, () => {
   schedule();
+  queueGeoBackfill();
   console.log(`591 追蹤已啟動：http://${HOST}:${PORT}`);
   if (!authConfigured()) {
     console.warn("尚未設定 AUTH_EMAIL / AUTH_PASSWORD，網站會要求登入但無法登入。請寫入 .env 或 data/auth.env。");

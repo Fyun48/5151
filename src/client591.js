@@ -339,7 +339,7 @@ async function mapKeptListings(items, options) {
         }
       }
     }
-    if (passesGeoFilters(row, options)) out.push(row);
+    if (passesGeoFilters(row, options, { strict: false })) out.push(row);
   }
   return out;
 }

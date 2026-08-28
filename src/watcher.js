@@ -9,8 +9,10 @@ import {
   listingCountForSearch,
   listMatchCandidates,
   listingsNeedingFeeDetail,
+  listingsNeedingRoute,
   markEventNotified,
   saveSettings,
+  setCachedRoute,
   setFlags,
   setListingDetail,
   setListingMatch,
@@ -19,6 +21,7 @@ import {
 } from "./db.js";
 import { fetchListingDetail, fetchListings, mergeFeeRows } from "./client591.js";
 import { addressGeoScore, districtsNearBoxes, geocodeAddress, needsListingGeo } from "./geo.js";
+import { fetchRoadRoutes } from "./route.js";
 import { bestMatch } from "./match.js";
 import { eventLabel, notify } from "./notify.js";
 
@@ -243,6 +246,34 @@ export async function backfillListingCoords(settings = getSettings(), { limit = 
     if (geo) {
       updateListingsGeoByAddress(row.address, geo.lat, geo.lng);
       located += 1;
+    }
+  }
+  return { attempted, located };
+}
+
+export async function backfillListingRoutes(settings = getSettings(), { limit = 20 } = {}) {
+  const workLat = Number(settings.workLat);
+  const workLng = Number(settings.workLng);
+  if (!(Number(settings.commuteKm) > 0) || !Number.isFinite(workLat) || !Number.isFinite(workLng) || limit <= 0) {
+    return { attempted: 0, located: 0 };
+  }
+  const rows = listingsNeedingRoute(limit);
+  let attempted = 0;
+  let located = 0;
+  for (const row of rows) {
+    attempted += 1;
+    const distances = await fetchRoadRoutes(row.lat, row.lng, workLat, workLng);
+    if (distances?.length) {
+      for (let tryNo = 0; tryNo < 4; tryNo += 1) {
+        try {
+          setCachedRoute(row.lat, row.lng, workLat, workLng, distances);
+          located += 1;
+          break;
+        } catch (error) {
+          if (!String(error.message || "").includes("locked") || tryNo === 3) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 400 * (tryNo + 1)));
+        }
+      }
     }
   }
   return { attempted, located };

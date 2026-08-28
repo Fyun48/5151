@@ -352,10 +352,10 @@
       <label>建物總樓層至少</label>
       <input type="number" id="minBuildingFloors" min="1" max="50" />
       <label>上班地址（選填）</label>
-      <input type="text" id="workAddress" placeholder="例如：台北市中山區南京東路" />
-      <label>通勤距離上限（公里，0 表示不篩）</label>
+      <input type="text" id="workAddress" placeholder="例如：台北市士林區德行西路7號" />
+      <label>機車路線上限（公里，0 表示不篩）</label>
       <input type="number" id="commuteKm" min="0" max="80" step="0.5" />
-      <p class="hint">依直線距離篩選（不是開車路程）。開啟通勤或地圖框後，還沒定位到的物件會先不顯示；定位完成後列表會自動更新。</p>
+      <p class="hint">用可騎車的道路路徑計算（不是直線）。每個地址會抓至少兩條替代路線；兩條都超過上限才不顯示，有一條在範圍內就會出現。開啟後可依離公司近／遠排序。還沒定位或還沒算完路線的物件會先不顯示，完成後列表會自動更新。</p>
       <div class="checks">
         <label><input type="checkbox" id="wholeFloorOnly" /> 只看整層住家</label>
         <label><input type="checkbox" id="excludeLowFloors" /> 排除 1F 及以下（含地下室、整棟、頂加）</label>
@@ -402,6 +402,8 @@
         <button class="chip" data-sort="newest">最新</button>
         <button class="chip on" data-sort="price_asc">金額低→高</button>
         <button class="chip" data-sort="price_desc">金額高→低</button>
+        <button class="chip commute-sort" data-sort="commute_asc" hidden>離公司近→遠</button>
+        <button class="chip commute-sort" data-sort="commute_desc" hidden>離公司遠→近</button>
         <input type="text" id="q" placeholder="搜尋標題 / 地址 / 編號" style="max-width:240px;margin-left:auto" />
         <div class="bulk-bar" id="bulkBar">
           <span id="selectedCount">已選 0 筆</span>
@@ -465,6 +467,30 @@
     let mapExpanded = false;
     const MAX_BOXES = 10;
     const DOCK_KEY = "591-alert-dock-v1";
+
+    function commuteText(item) {
+      if (item.commute_km == null) return "";
+      const routes = Array.isArray(item.commute_routes) ? item.commute_routes.filter((n) => Number.isFinite(Number(n))) : [];
+      const extra = routes.length > 1 ? `（${routes.map((n) => `${n}`).join(" / ")} 公里）` : "";
+      return ` · 機車路線約 ${item.commute_km} 公里${extra}`;
+    }
+
+    function commuteOn(s = settings) {
+      return Number(s.commuteKm) > 0 && String(s.workAddress || "").trim() !== "";
+    }
+
+    function syncCommuteSort() {
+      const on = commuteOn();
+      document.querySelectorAll(".commute-sort").forEach((el) => {
+        el.hidden = !on;
+      });
+      if (!on && (sort === "commute_asc" || sort === "commute_desc")) {
+        sort = "price_asc";
+        document.querySelectorAll("[data-sort]").forEach((btn) => {
+          btn.classList.toggle("on", btn.dataset.sort === "price_asc");
+        });
+      }
+    }
 
     function listingUrl(item) {
       const id = item?.post_id || item;
@@ -602,6 +628,7 @@
       $("minBuildingFloors").value = s.minBuildingFloors || 4;
       $("workAddress").value = s.workAddress || "";
       $("commuteKm").value = s.commuteKm || 0;
+      syncCommuteSort();
       $("wholeFloorOnly").checked = s.wholeFloorOnly !== false;
       $("notifyNew").checked = !!s.notifyNew;
       $("notifySameSource").checked = !!s.notifySameSource;
@@ -634,6 +661,7 @@
         ["特別關注", st.watched],
         ["已隱藏", st.hidden],
         ["疑似", st.suspected],
+        ...(st.filteredOut ? [["路線篩選中", st.filteredOut]] : []),
       ].map(([k, v]) => `<div class="stat"><b>${v || 0}</b><span>${k}</span></div>`).join("");
     }
 
@@ -708,8 +736,10 @@
           msg = "目前沒有被判成同一屋源的重刊。隱藏或已瀏覽的舊屋若再上架，會出現在這裡。";
         } else if (filter === "elevator") {
           msg = "目前沒有標到有電梯的物件。請先檢查，或改看「全部」。";
-        }         else if (st.filteredOut > 0) {
-          msg = `資料庫有 ${st.stored} 筆，但都被樓層／路名／地圖框／房仲排除了。請清空排除條件並按儲存設定。`;
+        else if (st.missingRoute > 0) {
+          msg = `已有 ${st.missingRoute} 筆定位完成，正在背景計算機車可走路線。兩條替代路線都超過上限的不會顯示；算完後列表會自動更新。`;
+        } else if (st.filteredOut > 0) {
+          msg = `資料庫有 ${st.stored} 筆，目前都被機車路線距離或樓層／路名／地圖框／房仲排除了。`;
         } else if (st.missingGeo > 0 && (excludeBoxes || []).some((box) => box.enabled !== false)) {
           msg = `目前有 ${st.missingGeo} 筆還沒定位到，地圖框暫時不會排除它們。請再按一次「立即檢查」。`;
         } else if (st.dbTotal > 0) {
@@ -738,7 +768,7 @@
             </h3>
             <div class="meta">
               租金 ${item.price || ""} ${item.price_unit || "元/月"} · ${item.kind_name || ""} · ${item.layout || ""} · ${item.area_name || ""} · ${item.floor_name || ""}
-              <br>${esc(item.address || "")} · ${esc(item.refresh_time || "")}${item.commute_km != null ? ` · 距上班約 ${item.commute_km} 公里` : ""}
+              <br>${esc(item.address || "")} · ${esc(item.refresh_time || "")}${commuteText(item)}
               ${item.match_detail ? `<br>比對：${esc(item.match_detail)}${item.match_post_id ? ` · <a href="${listingUrl(item.match_post_id)}" target="_blank" rel="noopener noreferrer">舊刊登 #${item.match_post_id}</a>` : ""}` : ""}
             </div>
             ${(() => {
@@ -850,13 +880,17 @@
       const geoBit = geo?.attempted
         ? `｜已為 ${geo.located}/${geo.attempted} 個地址補定位`
         : "";
+      const route = result.routeBackfill;
+      const routeBit = route?.attempted
+        ? `｜已計算 ${route.located}/${route.attempted} 筆機車路線`
+        : "";
       if (result.errors?.length) {
-        return `部分失敗：${result.errors.join("；")}${search ? "｜" + search : ""}${geoBit}`;
+        return `部分失敗：${result.errors.join("；")}${search ? "｜" + search : ""}${geoBit}${routeBit}`;
       }
       if (result.baseline || result.searches?.some((item) => item.baseline)) {
-        return `已套用篩選並建立基準，抓到 ${result.fetched} 筆。之後的新物件才會通知。${search ? "｜" + search : ""}${geoBit}`;
+        return `已套用篩選並建立基準，抓到 ${result.fetched} 筆。之後的新物件才會通知。${search ? "｜" + search : ""}${geoBit}${routeBit}`;
       }
-      return `檢查完成，本次通知 ${result.events?.length || 0} 則。${search ? "｜" + search : ""}${geoBit}`;
+      return `檢查完成，本次通知 ${result.events?.length || 0} 則。${search ? "｜" + search : ""}${geoBit}${routeBit}`;
     }
 
     $("saveBtn").onclick = async () => {
@@ -1083,25 +1117,6 @@
       });
       loadList();
     });
-
-    const es = new EventSource("/api/events/stream");
-    es.onmessage = (msg) => {
-      const data = JSON.parse(msg.data);
-      if (data.type === "watch") {
-        const n = data.result.events?.length || 0;
-        $("status").textContent = `自動檢查完成，通知 ${n} 則 · ${new Date(data.result.checked_at).toLocaleString()}`;
-        pushDock(data.result.events || []);
-        loadList();
-      }
-      if (data.type === "geo") {
-        loadList();
-      }
-    };
-    es.onerror = () => {
-      fetch("/api/me").then((r) => r.json()).then((data) => {
-        if (!data.ok) location.replace("/login.html");
-      }).catch(() => {});
-    };
 
     $("logoutBtn").onclick = async () => {
       await fetch("/api/logout", { method: "POST" });
@@ -1479,12 +1494,38 @@
       if (dismiss) dismissDock(dismiss);
     });
 
-    loadState().then(() => {
+    loadState().catch((error) => {
+      $("status").textContent = error.message || "載入失敗，請再按重新整理";
+    }).then(() => {
       initMap();
       renderBoxes();
       renderDock();
       setTimeout(() => map?.invalidateSize(), 250);
     });
+
+    const es = new EventSource("/api/events/stream");
+    es.onmessage = (msg) => {
+      const data = JSON.parse(msg.data);
+      if (data.type === "watch") {
+        const n = data.result.events?.length || 0;
+        $("status").textContent = `自動檢查完成，通知 ${n} 則 · ${new Date(data.result.checked_at).toLocaleString()}`;
+        pushDock(data.result.events || []);
+        loadList();
+      }
+      if (data.type === "geo") {
+        if (data.routeBackfill?.located) {
+          $("status").textContent = `已計算 ${data.routeBackfill.located} 筆機車路線，列表已更新`;
+        } else if (data.geoBackfill?.located || data.geoBackfill?.attempted) {
+          $("status").textContent = `已為 ${data.geoBackfill.located || 0} 個地址補定位，列表已更新`;
+        }
+        loadList();
+      }
+    };
+    es.onerror = () => {
+      fetch("/api/me").then((r) => r.json()).then((data) => {
+        if (!data.ok) location.replace("/login.html");
+      }).catch(() => {});
+    };
   </script>
 </body>
 </html>

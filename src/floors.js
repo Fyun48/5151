@@ -1,4 +1,4 @@
-import { distanceKm, isExcludedByAgent, isExcludedByBox, isExcludedByKeyword, needsListingGeo } from "./geo.js";
+import { hasActiveBoxes, isExcludedByAgent, isExcludedByBox, isExcludedByKeyword } from "./geo.js";
 
 function tagText(listing) {
   let tags = listing.tags;
@@ -69,28 +69,31 @@ export function passesAttributeFilters(listing, settings = {}) {
   return true;
 }
 
-export function passesGeoFilters(listing, settings = {}) {
-  const needGeo = needsListingGeo(settings);
+export function passesGeoFilters(listing, settings = {}, { strict = true } = {}) {
   const hasCoords =
     listing.lat != null &&
     listing.lng != null &&
     listing.lat !== "" &&
     Number.isFinite(Number(listing.lat)) &&
     Number.isFinite(Number(listing.lng));
-  if (needGeo && !hasCoords) return false;
   if (isExcludedByBox(listing.lat, listing.lng, settings.excludeBoxes)) {
     return false;
   }
   const km = Number(settings.commuteKm);
   const workLat = Number(settings.workLat);
   const workLng = Number(settings.workLng);
-  if (Number.isFinite(km) && km > 0 && Number.isFinite(workLat) && Number.isFinite(workLng) && hasCoords) {
-    const dist = distanceKm(workLat, workLng, listing.lat, listing.lng);
-    if (dist != null && dist > km) return false;
+  const commuteOn = Number.isFinite(km) && km > 0 && Number.isFinite(workLat) && Number.isFinite(workLng);
+  const boxesOn = hasActiveBoxes(settings.excludeBoxes);
+  if (strict && boxesOn && !hasCoords) return false;
+  if (commuteOn) {
+    if (strict && !hasCoords) return false;
+    const routes = Array.isArray(listing.route_kms) ? listing.route_kms.map(Number).filter(Number.isFinite) : [];
+    if (strict && !routes.length) return false;
+    if (routes.length && routes.every((dist) => dist > km)) return false;
   }
   return true;
 }
 
-export function shouldKeepListing(listing, settings = {}) {
-  return passesAttributeFilters(listing, settings) && passesGeoFilters(listing, settings);
+export function shouldKeepListing(listing, settings = {}, options = {}) {
+  return passesAttributeFilters(listing, settings) && passesGeoFilters(listing, settings, options);
 }

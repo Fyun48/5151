@@ -2,7 +2,8 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { shouldKeepListing, listingHasElevator } from "./floors.js";
-import { distanceKm, normalizeBoxes, normalizeKeywords } from "./geo.js";
+import { normalizeBoxes, normalizeKeywords } from "./geo.js";
+import { makeRouteKey } from "./route.js";
 import { sameSearch } from "./client591.js";
 import { buildSearchUrls, districtNameFromListing, districtsFromSearchUrls, normalizeWatchDistricts, priceFromSearchUrls } from "./regions.js";
 
@@ -11,6 +12,7 @@ mkdirSync(DATA_DIR, { recursive: true });
 
 const db = new DatabaseSync(path.join(DATA_DIR, "591.db"));
 db.exec("PRAGMA journal_mode = WAL");
+db.exec("PRAGMA busy_timeout = 8000");
 db.exec("PRAGMA foreign_keys = ON");
 
 db.exec(`
@@ -93,7 +95,13 @@ db.exec(`
     lat REAL NOT NULL,
     lng REAL NOT NULL,
     updated_at TEXT NOT NULL
-  )
+  );
+  CREATE TABLE IF NOT EXISTS route_cache (
+    route_key TEXT PRIMARY KEY,
+    distances TEXT NOT NULL,
+    min_km REAL NOT NULL,
+    updated_at TEXT NOT NULL
+  );
 `);
 try {
   db.exec("ALTER TABLE listings ADD COLUMN match_post_id INTEGER");
@@ -395,20 +403,14 @@ function parseJson(value, fallback) {
 
 function decorateListing(row, settings = getSettings()) {
   if (!row) return row;
-  row = applyCachedCoords(row);
-  const commute =
-    Number(settings.commuteKm) > 0 &&
-    Number.isFinite(Number(settings.workLat)) &&
-    Number.isFinite(Number(settings.workLng)) &&
-    row.lat != null &&
-    row.lng != null
-      ? distanceKm(settings.workLat, settings.workLng, row.lat, row.lng)
-      : null;
+  row = applyCachedCoords(row, settings);
+  const commute = Number.isFinite(Number(row.route_km)) ? Number(row.route_km) : null;
   return {
     ...row,
     extra_fees: Array.isArray(row.extra_fees) ? row.extra_fees : parseJson(row.extra_fees, []),
     has_elevator: listingHasElevator(row),
     commute_km: commute == null ? null : Math.round(commute * 10) / 10,
+    commute_routes: Array.isArray(row.route_kms) ? row.route_kms : [],
     district: districtNameFromListing(row),
   };
 }
@@ -675,19 +677,80 @@ export function setFlags(postId, flags) {
   return getListing(postId);
 }
 
-export function applyCachedCoords(row) {
+export function applyCachedCoords(row, settings) {
   if (!row) return row;
-  if (Number.isFinite(Number(row.lat)) && Number.isFinite(Number(row.lng)) && Number(row.lat) !== 0) {
-    return row;
+  let next = row;
+  if (!(Number.isFinite(Number(row.lat)) && Number.isFinite(Number(row.lng)) && Number(row.lat) !== 0)) {
+    const cached = getCachedGeo(row.address);
+    if (cached) next = { ...row, lat: cached.lat, lng: cached.lng };
   }
-  const cached = getCachedGeo(row.address);
-  if (!cached) return row;
-  return { ...row, lat: cached.lat, lng: cached.lng };
+  const conf = settings || getSettings();
+  const workLat = Number(conf.workLat);
+  const workLng = Number(conf.workLng);
+  if (
+    Number(conf.commuteKm) > 0 &&
+    Number.isFinite(workLat) &&
+    Number.isFinite(workLng) &&
+    Number.isFinite(Number(next.lat)) &&
+    Number.isFinite(Number(next.lng))
+  ) {
+    const route = getCachedRoute(next.lat, next.lng, workLat, workLng);
+    if (route) {
+      next = { ...next, route_kms: route.distances, route_km: route.min_km };
+    }
+  }
+  return next;
+}
+
+export function getCachedRoute(fromLat, fromLng, toLat, toLng) {
+  const key = makeRouteKey(fromLat, fromLng, toLat, toLng);
+  const row = db.prepare("SELECT distances, min_km FROM route_cache WHERE route_key = ?").get(key);
+  if (!row) return null;
+  const distances = parseJson(row.distances, []);
+  if (!Array.isArray(distances) || !distances.length) return null;
+  return { distances: distances.map(Number).filter(Number.isFinite), min_km: Number(row.min_km) };
+}
+
+export function setCachedRoute(fromLat, fromLng, toLat, toLng, distances) {
+  const list = (Array.isArray(distances) ? distances : []).map(Number).filter((n) => Number.isFinite(n) && n > 0);
+  if (!list.length) return;
+  const key = makeRouteKey(fromLat, fromLng, toLat, toLng);
+  const minKm = Math.min(...list);
+  db.prepare(
+    `INSERT INTO route_cache(route_key, distances, min_km, updated_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(route_key) DO UPDATE SET
+       distances = excluded.distances,
+       min_km = excluded.min_km,
+       updated_at = excluded.updated_at`,
+  ).run(key, JSON.stringify(list), minKm, new Date().toISOString());
+}
+
+export function listingsNeedingRoute(limit = 40) {
+  const settings = getSettings();
+  const workLat = Number(settings.workLat);
+  const workLng = Number(settings.workLng);
+  if (!(Number(settings.commuteKm) > 0) || !Number.isFinite(workLat) || !Number.isFinite(workLng)) return [];
+  const rows = db
+    .prepare(
+      `SELECT post_id, lat, lng FROM listings
+       WHERE lat IS NOT NULL AND lng IS NOT NULL AND IFNULL(hidden, 0) = 0
+       ORDER BY last_seen_at DESC
+       LIMIT 2000`,
+    )
+    .all();
+  const out = [];
+  for (const row of rows) {
+    if (getCachedRoute(row.lat, row.lng, workLat, workLng)) continue;
+    out.push(row);
+    if (out.length >= limit) break;
+  }
+  return out;
 }
 
 function applyListingFilter(rows) {
   const settings = getSettings();
-  return rows.map(applyCachedCoords).filter((row) => shouldKeepListing(row, settings));
+  return rows.map((row) => applyCachedCoords(row, settings)).filter((row) => shouldKeepListing(row, settings));
 }
 
 export function addressesMissingGeo() {
@@ -746,9 +809,14 @@ export function listListings({ filter = "all", q = "", sort = "price_asc", limit
     .prepare(`SELECT * FROM listings ${where} ORDER BY ${order}`)
     .all(...params);
   const settings = getSettings();
-  let rows = applyListingFilter(raw);
+  let rows = applyListingFilter(raw).map((row) => decorateListing(row, settings));
   if (filter === "elevator") rows = rows.filter((row) => listingHasElevator(row));
-  return rows.slice(0, limit).map((row) => decorateListing(row, settings));
+  if (sort === "commute_asc") {
+    rows.sort((a, b) => (Number(a.commute_km) || 9999) - (Number(b.commute_km) || 9999));
+  } else if (sort === "commute_desc") {
+    rows.sort((a, b) => (Number(b.commute_km) || 0) - (Number(a.commute_km) || 0));
+  }
+  return rows.slice(0, limit);
 }
 
 export function sourceHistory(sourceKey) {
@@ -765,6 +833,7 @@ export function recentEvents(limit = 40) {
 }
 
 export function stats(searchKeys) {
+  const settings = getSettings();
   const clauses = [];
   const params = [];
   searchWhere(searchKeys, clauses, params);
@@ -784,8 +853,17 @@ export function stats(searchKeys) {
     stored: storedVisible.length,
     filteredOut: Math.max(0, storedVisible.length - visible.length),
     missingGeo: storedVisible.filter((row) => {
-      const geo = applyCachedCoords(row);
+      const geo = applyCachedCoords(row, settings);
       return geo.lat == null || geo.lng == null;
+    }).length,
+    missingRoute: storedVisible.filter((row) => {
+      const geo = applyCachedCoords(row, settings);
+      return (
+        Number(settings.commuteKm) > 0 &&
+        Number.isFinite(Number(geo.lat)) &&
+        Number.isFinite(Number(geo.lng)) &&
+        !(Array.isArray(geo.route_kms) && geo.route_kms.length)
+      );
     }).length,
     dbTotal: listingCount(),
   };
