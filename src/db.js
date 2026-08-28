@@ -114,6 +114,31 @@ try {
 } catch {
   // already migrated
 }
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN extra_fee INTEGER NOT NULL DEFAULT 0");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN extra_fee_text TEXT");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN price_contain_text TEXT");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN extra_fees TEXT");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN extra_fees_fetched INTEGER NOT NULL DEFAULT 0");
+} catch {
+  // already migrated
+}
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_search ON listings(search_key)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_hidden ON listings(hidden)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_match ON listings(match_level)");
@@ -165,8 +190,25 @@ export function saveSettings(partial) {
   return next;
 }
 
+function parseJson(value, fallback) {
+  try {
+    const parsed = JSON.parse(value || "");
+    return parsed ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function decorateListing(row) {
+  if (!row) return row;
+  return {
+    ...row,
+    extra_fees: Array.isArray(row.extra_fees) ? row.extra_fees : parseJson(row.extra_fees, []),
+  };
+}
+
 export function getListing(postId) {
-  return db.prepare("SELECT * FROM listings WHERE post_id = ?").get(postId);
+  return decorateListing(db.prepare("SELECT * FROM listings WHERE post_id = ?").get(postId));
 }
 
 export function findBySourceKey(sourceKey, excludePostId) {
@@ -174,7 +216,8 @@ export function findBySourceKey(sourceKey, excludePostId) {
     .prepare(
       "SELECT * FROM listings WHERE source_key = ? AND post_id != ? ORDER BY last_seen_at DESC",
     )
-    .all(sourceKey, excludePostId);
+    .all(sourceKey, excludePostId)
+    .map(decorateListing);
 }
 
 export function listMatchCandidates(excludePostId) {
@@ -184,7 +227,8 @@ export function listMatchCandidates(excludePostId) {
        WHERE post_id != ?
        ORDER BY hidden DESC, viewed DESC, last_seen_at DESC`,
     )
-    .all(excludePostId);
+    .all(excludePostId)
+    .map(decorateListing);
 }
 
 export function setListingMatch(postId, match) {
@@ -234,12 +278,17 @@ function searchWhere(searchKeys, clauses, params) {
 }
 
 export function upsertListing(listing) {
+  const extraFees =
+    typeof listing.extra_fees === "string"
+      ? listing.extra_fees
+      : JSON.stringify(listing.extra_fees || []);
   db.prepare(`
     INSERT INTO listings (
-      post_id, source_key, search_key, title, url, price, price_num, address, area_name,
+      post_id, source_key, search_key, title, url, price, price_num, extra_fee, extra_fee_text,
+      price_contain_text, extra_fees, extra_fees_fetched, address, area_name,
       layout, floor_name, kind_name, role_name, cover, tags, refresh_time,
       first_seen_at, last_seen_at, last_event, viewed, watched, lat, lng
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
     ON CONFLICT(post_id) DO UPDATE SET
       source_key = excluded.source_key,
       search_key = excluded.search_key,
@@ -247,6 +296,14 @@ export function upsertListing(listing) {
       url = excluded.url,
       price = excluded.price,
       price_num = excluded.price_num,
+      extra_fee = excluded.extra_fee,
+      extra_fee_text = excluded.extra_fee_text,
+      price_contain_text = excluded.price_contain_text,
+      extra_fees = CASE
+        WHEN listings.extra_fees_fetched = 1 AND IFNULL(listings.extra_fees, '') NOT IN ('', '[]')
+        THEN listings.extra_fees
+        ELSE excluded.extra_fees
+      END,
       address = excluded.address,
       area_name = excluded.area_name,
       layout = excluded.layout,
@@ -268,6 +325,11 @@ export function upsertListing(listing) {
     listing.url,
     listing.price,
     listing.price_num,
+    Number(listing.extra_fee) || 0,
+    listing.extra_fee_text || "",
+    listing.price_contain_text || "",
+    extraFees,
+    Number(listing.extra_fees_fetched) || 0,
     listing.address,
     listing.area_name,
     listing.layout,
@@ -283,6 +345,24 @@ export function upsertListing(listing) {
     listing.lat ?? null,
     listing.lng ?? null,
   );
+}
+
+export function setListingFees(postId, extraFees, fetched = 1) {
+  db.prepare(
+    `UPDATE listings SET extra_fees = ?, extra_fees_fetched = ? WHERE post_id = ?`,
+  ).run(JSON.stringify(extraFees || []), Number(Boolean(fetched)), postId);
+  return getListing(postId);
+}
+
+export function listingsNeedingFeeDetail(limit = 12) {
+  return db
+    .prepare(
+      `SELECT post_id FROM listings
+       WHERE IFNULL(extra_fees_fetched, 0) = 0
+       ORDER BY last_seen_at DESC
+       LIMIT ?`,
+    )
+    .all(Math.max(1, Number(limit) || 12));
 }
 
 export function addEvent(event) {
@@ -359,7 +439,7 @@ export function listListings({ filter = "all", q = "", sort = "price_asc", limit
   const rows = db
     .prepare(`SELECT * FROM listings ${where} ORDER BY ${order}`)
     .all(...params);
-  return applyListingFilter(rows).slice(0, limit);
+  return applyListingFilter(rows).slice(0, limit).map(decorateListing);
 }
 
 export function sourceHistory(sourceKey) {

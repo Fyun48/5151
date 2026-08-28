@@ -133,8 +133,50 @@ function priceNum(price) {
   return Number.isFinite(n) ? n : 0;
 }
 
+function stripParen(text) {
+  return String(text || "").replace(/[()（）]/g, "").trim();
+}
+
+export function feesFromListItem(item) {
+  const rows = [];
+  const contain = stripParen(item.price_contain_text);
+  if (contain) rows.push({ name: "租金含", value: contain, key: "contain" });
+  const extraAmt = Number(item.extra_fee) || 0;
+  const extraText = stripParen(item.extra_fee_text);
+  if (extraText || extraAmt > 0) {
+    rows.push({
+      name: "額外費用",
+      value: extraText || `${extraAmt.toLocaleString("zh-TW")}元/月`,
+      key: "extra",
+      amount: extraAmt,
+    });
+  }
+  return rows;
+}
+
+export function feesFromDetail(costRows, listFees = []) {
+  const skip = new Set(["rentPrice"]);
+  const rows = [];
+  for (const row of costRows || []) {
+    if (!row?.name || skip.has(row.key)) continue;
+    const value = String(row.value || "").trim();
+    if (!value || value === "--") continue;
+    rows.push({ name: row.name, value, key: row.key || "" });
+  }
+  const contain = (listFees || []).find((row) => row.key === "contain");
+  if (contain && !rows.some((row) => row.key === "contain" || /含水|含網路|含瓦斯/.test(row.value))) {
+    rows.unshift(contain);
+  }
+  return rows;
+}
+
+export function mergeFeeRows(listFees, detailFees) {
+  return feesFromDetail(detailFees || [], listFees);
+}
+
 export function normalizeListing(item) {
   const coords = coordsFromListing(item);
+  const extraFee = Number(item.extra_fee) || 0;
   return {
     post_id: Number(item.id),
     source_key: sourceKey(item),
@@ -142,6 +184,11 @@ export function normalizeListing(item) {
     url: item.url || `https://rent.591.com.tw/${item.id}`,
     price: item.price || "",
     price_num: priceNum(item.price),
+    extra_fee: extraFee,
+    extra_fee_text: item.extra_fee_text || "",
+    price_contain_text: item.price_contain_text || "",
+    extra_fees: JSON.stringify(feesFromListItem(item)),
+    extra_fees_fetched: 0,
     address: item.address || "",
     area_name: item.area_name || "",
     layout: item.layoutStr || "",
@@ -155,6 +202,22 @@ export function normalizeListing(item) {
     lat: coords.lat,
     lng: coords.lng,
   };
+}
+
+export async function fetchCostDetails(postId) {
+  const res = await fetch(`https://bff-house.591.com.tw/v2/web/rent/detail?id=${postId}`, {
+    headers: {
+      "User-Agent": USER_AGENT,
+      Accept: "application/json, text/plain, */*",
+      Referer: "https://rent.591.com.tw/",
+    },
+  });
+  if (!res.ok) throw new Error(`591 詳情 ${res.status}`);
+  const body = await res.json();
+  if (body.status !== 1 && body.status !== true && !body.data) {
+    throw new Error(body.msg || "591 詳情失敗");
+  }
+  return feesFromDetail(body.data?.cost?.data || []);
 }
 
 async function fetchPage(query, firstRow) {

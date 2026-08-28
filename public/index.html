@@ -90,6 +90,8 @@
     }
     .item img { width: 132px; height: 96px; object-fit: cover; border-radius: 10px; background: #eee; }
     .meta { color: var(--muted); font-size: 13px; margin: 6px 0; }
+    .fees { color: var(--accent); font-size: 13px; margin-top: 4px; line-height: 1.55; }
+    .who { color: var(--muted); font-size: 13px; }
     .tags { display: flex; gap: 6px; flex-wrap: wrap; }
     .tag { font-size: 11px; padding: 3px 8px; border-radius: 999px; background: #f3eee6; }
     .tag.new { background: #dbeafe; color: var(--new); }
@@ -203,6 +205,8 @@
       <div class="sub">新物件通知 · 已瀏覽標記 · 特別關注 · 同屋源更新</div>
     </div>
     <div class="row">
+      <span class="who" id="who"></span>
+      <button class="ghost" id="logoutBtn">登出</button>
       <button class="ghost" id="reloadBtn">重新整理</button>
       <button class="primary" id="watchBtn">立即檢查</button>
     </div>
@@ -293,6 +297,15 @@
   </div>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
+    const origFetch = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const res = await origFetch(input, { credentials: "same-origin", ...init });
+      const url = String(input);
+      if (url.startsWith("/api/") && res.status === 401 && !url.includes("/api/login") && !url.includes("/api/me")) {
+        location.replace("/login.html");
+      }
+      return res;
+    };
     const $ = (id) => document.getElementById(id);
     let filter = "all";
     let sort = "price_asc";
@@ -354,6 +367,24 @@
       ].map(([k, v]) => `<div class="stat"><b>${v || 0}</b><span>${k}</span></div>`).join("");
     }
 
+    function feeLines(item) {
+      let rows = item.extra_fees;
+      if (typeof rows === "string") {
+        try { rows = JSON.parse(rows); } catch { rows = []; }
+      }
+      const bits = (Array.isArray(rows) ? rows : [])
+        .filter((row) => row?.value && row.value !== "--")
+        .map((row) => `${row.name} ${row.value}`.replace(/\s+/g, " ").trim());
+      if (!bits.length && item.extra_fee_text) bits.push(String(item.extra_fee_text).replace(/[()（）]/g, ""));
+      if (!bits.length && item.price_contain_text) bits.push(String(item.price_contain_text).replace(/[()（）]/g, ""));
+      const extraAmt = Number(item.extra_fee) || 0;
+      const rent = Number(item.price_num) || 0;
+      const total = rent && extraAmt
+        ? `含額外費用約 ${(rent + extraAmt).toLocaleString("zh-TW")} 元/月`
+        : "";
+      return { bits, total };
+    }
+
     function tags(item) {
       const bits = [];
       if (item.last_event === "new") bits.push('<span class="tag new">全新物件</span>');
@@ -390,10 +421,15 @@
               <a href="${item.url}" target="_blank" rel="noreferrer" data-open="${item.post_id}">${item.title}</a>
             </h3>
             <div class="meta">
-              ${item.price || ""} ${item.price_unit || "元/月"} · ${item.kind_name || ""} · ${item.layout || ""} · ${item.area_name || ""} · ${item.floor_name || ""}
+              租金 ${item.price || ""} ${item.price_unit || "元/月"} · ${item.kind_name || ""} · ${item.layout || ""} · ${item.area_name || ""} · ${item.floor_name || ""}
               <br>${item.address || ""} · ${item.role_name || ""} · ${item.refresh_time || ""}
               ${item.match_detail ? `<br>比對：${esc(item.match_detail)}${item.match_post_id ? ` · <a href="https://rent.591.com.tw/${item.match_post_id}" target="_blank" rel="noreferrer">舊刊登 #${item.match_post_id}</a>` : ""}` : ""}
             </div>
+            ${(() => {
+              const fees = feeLines(item);
+              if (!fees.bits.length && !fees.total) return "";
+              return `<div class="fees">${fees.bits.map(esc).join(" · ")}${fees.total ? `<br>${esc(fees.total)}` : ""}</div>`;
+            })()}
           </div>
           <div class="actions">
             <button class="ghost" data-viewed="${item.post_id}">${item.viewed ? "取消已瀏覽" : "標記已瀏覽"}</button>
@@ -417,6 +453,12 @@
     }
 
     async function loadState() {
+      const me = await fetch("/api/me").then((r) => r.json()).catch(() => ({ ok: false }));
+      if (!me.ok) {
+        location.replace("/login.html");
+        return;
+      }
+      $("who").textContent = me.email || "";
       const res = await fetch("/api/state");
       const data = await res.json();
       fillSettings(data.settings);
@@ -574,6 +616,16 @@
         loadList();
       }
     };
+    es.onerror = () => {
+      fetch("/api/me").then((r) => r.json()).then((data) => {
+        if (!data.ok) location.replace("/login.html");
+      }).catch(() => {});
+    };
+
+    $("logoutBtn").onclick = async () => {
+      await fetch("/api/logout", { method: "POST" });
+      location.replace("/login.html");
+    };
 
     function loadDock() {
       try { return JSON.parse(localStorage.getItem(DOCK_KEY) || "[]"); } catch { return []; }
@@ -608,7 +660,7 @@
           <h3 style="margin:6px 0 4px;font-size:16px">
             <a href="${item.url || ("https://rent.591.com.tw/" + item.post_id)}" target="_blank" rel="noreferrer" data-dock-open="${item.post_id}">${item.title || "591 物件"}</a>
           </h3>
-          <div class="meta">${item.price || ""} ${item.address || ""} ${item.detail || ""}</div>
+          <div class="meta">${item.price || ""} ${item.address || ""} ${item.detail || ""} ${item.extra_fee_text || ""}</div>
           <div class="row" style="margin-top:8px">
             <button class="primary" data-dock-open="${item.post_id}">打開 591</button>
             <button class="ghost" data-dock-dismiss="${item.post_id}">關閉</button>

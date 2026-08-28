@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>登入 · 591 物件追蹤</title>
+  <style>
+    :root {
+      --bg: #f4f1ea;
+      --paper: #fffdf8;
+      --ink: #1f1a16;
+      --muted: #6d645c;
+      --line: #e6ddd2;
+      --accent: #c45c26;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      font-family: "IwanMincho", "Source Han Serif TC", "Noto Serif TC", "PMingLiU", serif;
+      background:
+        radial-gradient(1200px 500px at 10% -10%, #f8e7d4 0%, transparent 55%),
+        var(--bg);
+      color: var(--ink);
+    }
+    .card {
+      width: min(420px, calc(100vw - 32px));
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: 0 10px 30px rgba(80, 50, 20, 0.05);
+      padding: 28px 26px 24px;
+    }
+    h1 { margin: 0; font-size: 24px; letter-spacing: 0.08em; }
+    .sub { color: var(--muted); font-size: 14px; margin: 8px 0 20px; }
+    label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 6px; }
+    input {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font: 14px/1.5 "Noto Sans TC", sans-serif;
+      background: #fff;
+    }
+    button {
+      margin-top: 18px;
+      width: 100%;
+      border: 0;
+      border-radius: 999px;
+      padding: 11px 14px;
+      cursor: pointer;
+      background: var(--accent);
+      color: #fff;
+      font: 15px/1 "Noto Sans TC", sans-serif;
+    }
+    button:disabled { opacity: 0.5; cursor: wait; }
+    .err { min-height: 1.4em; color: #9a3412; font-size: 13px; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <form class="card" id="form">
+    <h1>591 物件追蹤</h1>
+    <p class="sub">個人使用，不開放註冊。請用已設定的帳號登入。</p>
+    <label for="email">Email</label>
+    <input id="email" name="email" type="email" autocomplete="username" required />
+    <label for="password">密碼</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required />
+    <button type="submit" id="btn">登入</button>
+    <p class="err" id="err"></p>
+  </form>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    fetch("/api/me").then((r) => r.json()).then((data) => {
+      if (data.ok) location.replace("/");
+    }).catch(() => {});
+    $("form").onsubmit = async (ev) => {
+      ev.preventDefault();
+      $("btn").disabled = true;
+      $("err").textContent = "";
+      try {
+        const res = await fetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({
+            email: $("email").value.trim(),
+            password: $("password").value,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "登入失敗");
+        location.replace("/");
+      } catch (error) {
+        $("err").textContent = error.message;
+      } finally {
+        $("btn").disabled = false;
+      }
+    };
+  </script>
+</body>
+</html>

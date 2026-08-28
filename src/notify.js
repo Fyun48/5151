@@ -34,6 +34,22 @@ function embedColor(type) {
   return 0xb45309;
 }
 
+function formatFeeLine(event) {
+  let rows = event.extra_fees;
+  if (typeof rows === "string") {
+    try {
+      rows = JSON.parse(rows);
+    } catch {
+      rows = [];
+    }
+  }
+  const bits = (Array.isArray(rows) ? rows : [])
+    .filter((row) => row?.value && row.value !== "--")
+    .map((row) => `${row.name} ${row.value}`.trim());
+  if (bits.length) return bits.join(" · ");
+  return String(event.extra_fee_text || "").replace(/[()（）]/g, "").trim();
+}
+
 async function postDiscord(webhook, title, events) {
   if (!webhook) return;
   const embeds = events.slice(0, 8).map((event) => ({
@@ -43,6 +59,7 @@ async function postDiscord(webhook, title, events) {
     description: [
       `**${eventLabel(event.type)}**${event.detail ? ` · ${event.detail}` : ""}`,
       event.price ? `${event.price} 元/月` : "",
+      formatFeeLine(event),
       [event.address, event.layout, event.floor_name, event.kind_name].filter(Boolean).join(" · "),
     ]
       .filter(Boolean)

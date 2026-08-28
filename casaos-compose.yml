@@ -13,6 +13,9 @@ services:
       PORT: "5151"
       DATA_DIR: /data
       TZ: Asia/Taipei
+      AUTH_EMAIL: ${AUTH_EMAIL:-}
+      AUTH_PASSWORD: ${AUTH_PASSWORD:-}
+      SESSION_SECRET: ${SESSION_SECRET:-}
     volumes:
       - /DATA/AppData/591-tracker:/data
     labels:

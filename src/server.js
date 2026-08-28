@@ -1,3 +1,4 @@
+import "./env.js";
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +15,7 @@ import {
   sourceHistory,
   stats,
 } from "./db.js";
+import { adminEmail, authConfigured, clearSessionCookie, readSession, requireAuth, sessionCookie, verifyLogin } from "./auth.js";
 import { parseSearchUrl } from "./client591.js";
 import { boxFromRoadDescription } from "./geo.js";
 import { runWatch } from "./watcher.js";
@@ -24,6 +26,32 @@ const PORT = Number(process.env.PORT || 5151);
 const HOST = process.env.HOST || "0.0.0.0";
 
 app.use(express.json({ limit: "1mb" }));
+
+app.get("/api/me", (req, res) => {
+  const session = readSession(req);
+  res.json({
+    ok: Boolean(session),
+    email: session?.email || "",
+    configured: authConfigured(),
+  });
+});
+
+app.post("/api/login", (req, res) => {
+  try {
+    const user = verifyLogin(req.body?.email, req.body?.password);
+    res.setHeader("Set-Cookie", sessionCookie(req));
+    res.json({ ok: true, email: user.email });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/logout", (req, res) => {
+  res.setHeader("Set-Cookie", clearSessionCookie(req));
+  res.json({ ok: true });
+});
+
+app.use(requireAuth);
 app.use(express.static(path.join(__dirname, "../public")));
 
 let timer = null;
@@ -157,6 +185,11 @@ app.get("/api/events/stream", (req, res) => {
 app.listen(PORT, HOST, () => {
   schedule();
   console.log(`591 追蹤已啟動：http://${HOST}:${PORT}`);
+  if (!authConfigured()) {
+    console.warn("尚未設定 AUTH_EMAIL / AUTH_PASSWORD，網站會要求登入但無法登入。請寫入 .env 或 data/auth.env。");
+  } else {
+    console.log(`登入帳號：${adminEmail()}`);
+  }
   tick("startup").catch((error) => {
     console.warn("第一次檢查失敗：", error.message);
   });

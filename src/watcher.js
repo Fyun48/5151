@@ -6,15 +6,17 @@ import {
   listingCount,
   listingCountForSearch,
   listMatchCandidates,
+  listingsNeedingFeeDetail,
   markEventNotified,
   saveSettings,
   setCachedGeo,
   getCachedGeo,
   setFlags,
+  setListingFees,
   setListingMatch,
   upsertListing,
 } from "./db.js";
-import { fetchListings } from "./client591.js";
+import { fetchCostDetails, fetchListings, mergeFeeRows } from "./client591.js";
 import { bestMatch } from "./match.js";
 import { eventLabel, notify } from "./notify.js";
 
@@ -151,6 +153,9 @@ export async function runWatch(options = {}) {
         notified: 0,
         url: listing.url,
         price: listing.price,
+        extra_fee: listing.extra_fee,
+        extra_fee_text: listing.extra_fee_text,
+        extra_fees: listing.extra_fees,
         address: listing.address,
         layout: listing.layout,
         floor_name: listing.floor_name,
@@ -164,6 +169,19 @@ export async function runWatch(options = {}) {
         markEventNotified(id);
       }
     }
+  }
+
+  const pendingFees = listingsNeedingFeeDetail(12);
+  for (const row of pendingFees) {
+    try {
+      const listing = getListing(row.post_id);
+      if (!listing) continue;
+      const detail = await fetchCostDetails(row.post_id);
+      setListingFees(row.post_id, mergeFeeRows(listing.extra_fees, detail), 1);
+    } catch {
+      // 詳情失敗下次再試，不中斷本輪追蹤
+    }
+    await new Promise((resolve) => setTimeout(resolve, 400));
   }
 
   if (!options.silent && events.length) {
