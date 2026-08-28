@@ -69,7 +69,8 @@ export async function runWatch(options = {}) {
   }
 
   const isBaseline = settings.hasBaseline !== true && listingCount() === 0;
-  const pages = settings.pagesPerWatch || 2;
+  const requested = Number(settings.pagesPerWatch);
+  const pages = Math.min(20, requested > 5 ? requested : 20);
   const collected = [];
   const errors = [];
 

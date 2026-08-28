@@ -13,7 +13,20 @@ const DROP_PARAMS = new Set([
   "is_format_data",
   "is_new_list",
   "type",
+  "sort",
 ]);
+
+const MAX_LIST_PAGES = 20;
+
+export function mapWebsiteSort(sort) {
+  const text = String(sort || "").trim().toLowerCase();
+  const matched = text.match(/^(money|posttime|area|id)_(asc|desc)$/);
+  if (!matched) return null;
+  return {
+    order: matched[1] === "id" ? "posttime" : matched[1],
+    orderType: matched[2],
+  };
+}
 
 export function searchParts(raw) {
   try {
@@ -60,11 +73,22 @@ export function parseSearchUrl(raw) {
 
   for (const [key, value] of url.searchParams.entries()) {
     if (DROP_PARAMS.has(key) || !value) continue;
+    if (key === "price" || key === "rentprice") {
+      params.set(key, value.replaceAll("$", ""));
+      continue;
+    }
     params.append(key, value);
   }
 
-  if (!params.get("order") && !params.get("sort")) {
+  const fromSort = mapWebsiteSort(url.searchParams.get("sort"));
+  if (fromSort) {
+    params.set("order", fromSort.order);
+    params.set("orderType", fromSort.orderType);
+  } else if (!params.get("order")) {
     params.set("order", "posttime");
+    params.set("orderType", "desc");
+  }
+  if (params.get("order") && !params.get("orderType")) {
     params.set("orderType", "desc");
   }
 
@@ -265,23 +289,24 @@ async function fetchPage(query, firstRow) {
   };
 }
 
-export async function fetchListings(searchUrl, pages = 2, options = {}) {
+export async function fetchListings(searchUrl, pages = 20, options = {}) {
   const parsed = parseSearchUrl(searchUrl);
   if (options.wholeFloorOnly !== false) {
     parsed.query.set("kind", "1");
   }
   const listings = [];
   let total = 0;
-  const maxPages = Math.max(1, Math.min(Number(pages) || 1, 5));
+  const maxPages = Math.max(1, Math.min(Number(pages) || MAX_LIST_PAGES, MAX_LIST_PAGES));
   for (let page = 0; page < maxPages; page += 1) {
     const { total: t, items } = await fetchPage(parsed.query, page * 30);
     total = t;
     listings.push(
       ...(await mapKeptListings(items, options)),
     );
-    if (items.length < 30) break;
+    const fetched = (page + 1) * 30;
+    if (items.length < 30 || fetched >= total) break;
     if (page + 1 < maxPages) {
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await new Promise((resolve) => setTimeout(resolve, 1200));
     }
   }
   return { searchUrl, parsed, total, listings };

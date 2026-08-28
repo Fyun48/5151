@@ -270,8 +270,8 @@
       <textarea id="searchUrls" placeholder="從 591 複製搜尋結果網址，可多組條件"></textarea>
       <label>檢查間隔（分鐘）</label>
       <input type="number" id="intervalMinutes" min="2" max="120" />
-      <label>每次抓取頁數（每頁約 30 筆，最多 5）</label>
-      <input type="number" id="pagesPerWatch" min="1" max="5" />
+      <label>每次最多抓取頁數（每頁約 30 筆，最多 20；會抓到搜尋結果結束為止）</label>
+      <input type="number" id="pagesPerWatch" min="1" max="20" />
       <label>建物總樓層至少</label>
       <input type="number" id="minBuildingFloors" min="1" max="50" />
       <div class="checks">
@@ -510,7 +510,10 @@
         updateBulkBar();
         return;
       }
-      $("list").innerHTML = items.map((item) => {
+      const truncated = st.total > items.length
+        ? `<div class="empty">目前顯示 ${items.length} / ${st.total} 筆。請用搜尋或篩選縮小範圍。</div>`
+        : "";
+      $("list").innerHTML = truncated + items.map((item) => {
         const id = String(item.post_id);
         const on = selected.has(id);
         return `
@@ -552,7 +555,7 @@
 
     async function loadList() {
       const q = $("q").value.trim();
-      const res = await fetch(`/api/listings?filter=${encodeURIComponent(filter)}&sort=${encodeURIComponent(sort)}&q=${encodeURIComponent(q)}`);
+      const res = await fetch(`/api/listings?filter=${encodeURIComponent(filter)}&sort=${encodeURIComponent(sort)}&q=${encodeURIComponent(q)}&limit=500`);
       const data = await res.json();
       renderStats(data.stats);
       renderList(data.listings, data.stats);

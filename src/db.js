@@ -193,7 +193,7 @@ const DEFAULTS = {
     "https://rent.591.com.tw/list?region=1&section=5&kind=1&order=posttime&orderType=desc",
   ],
   intervalMinutes: 5,
-  pagesPerWatch: 2,
+  pagesPerWatch: 20,
   notifyNew: true,
   notifySameSource: true,
   notifyViewed: false,
@@ -213,7 +213,9 @@ const DEFAULTS = {
 export function getSettings() {
   const rows = db.prepare("SELECT key, value FROM settings").all();
   const stored = Object.fromEntries(rows.map((row) => [row.key, JSON.parse(row.value)]));
-  return { ...DEFAULTS, ...stored };
+  const next = { ...DEFAULTS, ...stored };
+  if (Number(next.pagesPerWatch) <= 5) next.pagesPerWatch = 20;
+  return next;
 }
 
 export function saveSettings(partial) {
@@ -223,6 +225,7 @@ export function saveSettings(partial) {
   next.excludeAgents = normalizeKeywords(next.excludeAgents);
   next.excludeAgentIds = [...new Set((next.excludeAgentIds || []).map(Number).filter((id) => id > 0))].slice(0, 80);
   next.excludeBoxes = normalizeBoxes(next.excludeBoxes);
+  next.pagesPerWatch = Math.max(1, Math.min(Number(next.pagesPerWatch) || 20, 20));
   const upsert = db.prepare(
     "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
   );
@@ -517,7 +520,7 @@ function applyListingFilter(rows) {
   return rows.filter((row) => shouldKeepListing(row, settings));
 }
 
-export function listListings({ filter = "all", q = "", sort = "price_asc", limit = 80, searchKeys } = {}) {
+export function listListings({ filter = "all", q = "", sort = "price_asc", limit = 500, searchKeys } = {}) {
   const clauses = [];
   const params = [];
   searchWhere(searchKeys, clauses, params);

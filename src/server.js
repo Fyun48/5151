@@ -92,7 +92,7 @@ app.get("/api/state", (_req, res) => {
     settings,
     stats: stats(),
     lastRun,
-    listings: listListings({ filter: "all", sort: "price_asc", limit: 80 }),
+    listings: listListings({ filter: "all", sort: "price_asc", limit: 500 }),
     events: recentEvents(30),
   });
 });
@@ -104,7 +104,7 @@ app.get("/api/listings", (req, res) => {
       filter: req.query.filter || "all",
       q: req.query.q || "",
       sort: req.query.sort || "price_asc",
-      limit: Number(req.query.limit) || 80,
+      limit: Number(req.query.limit) || 500,
     }),
   });
 });
