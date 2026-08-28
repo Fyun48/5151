@@ -89,6 +89,11 @@ try {
 } catch {
   // already migrated
 }
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN geo_source TEXT");
+} catch {
+  // already migrated
+}
 db.exec(`
   CREATE TABLE IF NOT EXISTS geo_cache (
     address TEXT PRIMARY KEY,
@@ -576,12 +581,17 @@ export function setListingDetail(postId, { extraFees, contact, fetched = 1, lat,
     avatar: contact?.avatar ?? listing.avatar ?? "",
     contact_uid: contact?.contact_uid ?? listing.contact_uid ?? null,
   };
+  const latNum = Number(lat);
+  const lngNum = Number(lng);
+  const has591 = Number.isFinite(latNum) && Number.isFinite(lngNum) && latNum !== 0 && lngNum !== 0;
   db.prepare(
     `UPDATE listings SET
       extra_fees = ?, extra_fees_fetched = ?,
       contact_name = ?, contact_role = ?, agency = ?, mobile = ?, phone = ?,
       line_url = ?, avatar = ?, contact_uid = ?, contact_fetched = ?,
-      lat = COALESCE(?, lat), lng = COALESCE(?, lng)
+      lat = CASE WHEN ? IS NOT NULL THEN ? ELSE lat END,
+      lng = CASE WHEN ? IS NOT NULL THEN ? ELSE lng END,
+      geo_source = CASE WHEN ? IS NOT NULL THEN '591' ELSE geo_source END
      WHERE post_id = ?`,
   ).run(
     fees,
@@ -595,13 +605,13 @@ export function setListingDetail(postId, { extraFees, contact, fetched = 1, lat,
     next.avatar,
     next.contact_uid,
     Number(Boolean(fetched)),
-    Number.isFinite(Number(lat)) ? Number(lat) : null,
-    Number.isFinite(Number(lng)) ? Number(lng) : null,
+    has591 ? latNum : null,
+    has591 ? latNum : null,
+    has591 ? lngNum : null,
+    has591 ? lngNum : null,
+    has591 ? 1 : null,
     postId,
   );
-  if (Number.isFinite(Number(lat)) && Number.isFinite(Number(lng)) && listing.address) {
-    setCachedGeo(listing.address, lat, lng);
-  }
   return getListing(postId);
 }
 
@@ -609,11 +619,27 @@ export function listingsNeedingFeeDetail(limit = 12) {
   return db
     .prepare(
       `SELECT post_id FROM listings
-       WHERE IFNULL(contact_fetched, 0) = 0 OR IFNULL(extra_fees_fetched, 0) = 0
+       WHERE IFNULL(hidden, 0) = 0 AND (
+         IFNULL(contact_fetched, 0) = 0
+         OR IFNULL(extra_fees_fetched, 0) = 0
+         OR lat IS NULL OR lng IS NULL
+       )
        ORDER BY CASE WHEN lat IS NULL OR lng IS NULL THEN 0 ELSE 1 END, last_seen_at DESC
        LIMIT ?`,
     )
     .all(Math.max(1, Number(limit) || 12));
+}
+
+export function listingsNeeding591Geo(limit = 20) {
+  return db
+    .prepare(
+      `SELECT post_id FROM listings
+       WHERE IFNULL(hidden, 0) = 0
+         AND (lat IS NULL OR lng IS NULL OR IFNULL(geo_source, '') != '591')
+       ORDER BY last_seen_at DESC
+       LIMIT ?`,
+    )
+    .all(Math.max(1, Number(limit) || 20));
 }
 
 export function hideMany(ids) {
@@ -679,11 +705,7 @@ export function setFlags(postId, flags) {
 
 export function applyCachedCoords(row, settings) {
   if (!row) return row;
-  let next = row;
-  if (!(Number.isFinite(Number(row.lat)) && Number.isFinite(Number(row.lng)) && Number(row.lat) !== 0)) {
-    const cached = getCachedGeo(row.address);
-    if (cached) next = { ...row, lat: cached.lat, lng: cached.lng };
-  }
+  if (row.geo_source !== "591") return row;
   const conf = settings || getSettings();
   const workLat = Number(conf.workLat);
   const workLng = Number(conf.workLng);
@@ -691,15 +713,15 @@ export function applyCachedCoords(row, settings) {
     Number(conf.commuteKm) > 0 &&
     Number.isFinite(workLat) &&
     Number.isFinite(workLng) &&
-    Number.isFinite(Number(next.lat)) &&
-    Number.isFinite(Number(next.lng))
+    Number.isFinite(Number(row.lat)) &&
+    Number.isFinite(Number(row.lng))
   ) {
-    const route = getCachedRoute(next.lat, next.lng, workLat, workLng);
+    const route = getCachedRoute(row.lat, row.lng, workLat, workLng);
     if (route) {
-      next = { ...next, route_kms: route.distances, route_km: route.min_km };
+      return { ...row, route_kms: route.distances, route_km: route.min_km };
     }
   }
-  return next;
+  return row;
 }
 
 export function getCachedRoute(fromLat, fromLng, toLat, toLng) {
@@ -734,7 +756,9 @@ export function listingsNeedingRoute(limit = 40) {
   const rows = db
     .prepare(
       `SELECT post_id, lat, lng FROM listings
-       WHERE lat IS NOT NULL AND lng IS NOT NULL AND IFNULL(hidden, 0) = 0
+       WHERE lat IS NOT NULL AND lng IS NOT NULL
+         AND IFNULL(geo_source, '') = '591'
+         AND IFNULL(hidden, 0) = 0
        ORDER BY last_seen_at DESC
        LIMIT 2000`,
     )
@@ -838,7 +862,7 @@ export function stats(searchKeys) {
   const params = [];
   searchWhere(searchKeys, clauses, params);
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-  const raw = db.prepare(`SELECT viewed, watched, hidden, last_event, floor_name, kind_name, title, address, lat, lng, tags, match_level, match_rejected FROM listings ${where}`).all(...params);
+  const raw = db.prepare(`SELECT viewed, watched, hidden, last_event, floor_name, kind_name, title, address, lat, lng, geo_source, tags, match_level, match_rejected FROM listings ${where}`).all(...params);
   const rows = applyListingFilter(raw);
   const visible = rows.filter((row) => !row.hidden);
   const storedVisible = raw.filter((row) => !row.hidden);
@@ -852,14 +876,12 @@ export function stats(searchKeys) {
     elevator: visible.filter((row) => listingHasElevator(row)).length,
     stored: storedVisible.length,
     filteredOut: Math.max(0, storedVisible.length - visible.length),
-    missingGeo: storedVisible.filter((row) => {
-      const geo = applyCachedCoords(row, settings);
-      return geo.lat == null || geo.lng == null;
-    }).length,
+    missingGeo: storedVisible.filter((row) => row.geo_source !== "591" || row.lat == null || row.lng == null).length,
     missingRoute: storedVisible.filter((row) => {
       const geo = applyCachedCoords(row, settings);
       return (
         Number(settings.commuteKm) > 0 &&
+        geo.geo_source === "591" &&
         Number.isFinite(Number(geo.lat)) &&
         Number.isFinite(Number(geo.lng)) &&
         !(Array.isArray(geo.route_kms) && geo.route_kms.length)

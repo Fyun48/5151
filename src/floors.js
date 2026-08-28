@@ -69,14 +69,16 @@ export function passesAttributeFilters(listing, settings = {}) {
   return true;
 }
 
+export function hasTrustedCoords(listing) {
+  const lat = Number(listing.lat);
+  const lng = Number(listing.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat === 0 || lng === 0) return false;
+  return listing.geo_source === "591";
+}
+
 export function passesGeoFilters(listing, settings = {}, { strict = true } = {}) {
-  const hasCoords =
-    listing.lat != null &&
-    listing.lng != null &&
-    listing.lat !== "" &&
-    Number.isFinite(Number(listing.lat)) &&
-    Number.isFinite(Number(listing.lng));
-  if (isExcludedByBox(listing.lat, listing.lng, settings.excludeBoxes)) {
+  const hasCoords = hasTrustedCoords(listing);
+  if (hasCoords && isExcludedByBox(listing.lat, listing.lng, settings.excludeBoxes)) {
     return false;
   }
   const km = Number(settings.commuteKm);

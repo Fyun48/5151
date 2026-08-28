@@ -1,13 +1,12 @@
 import {
   addEvent,
-  addressesMissingGeo,
   findBySourceKey,
-  getCachedGeo,
   getListing,
   getSettings,
   listingCount,
   listingCountForSearch,
   listMatchCandidates,
+  listingsNeeding591Geo,
   listingsNeedingFeeDetail,
   listingsNeedingRoute,
   markEventNotified,
@@ -16,11 +15,10 @@ import {
   setFlags,
   setListingDetail,
   setListingMatch,
-  updateListingsGeoByAddress,
   upsertListing,
 } from "./db.js";
 import { fetchListingDetail, fetchListings, mergeFeeRows } from "./client591.js";
-import { addressGeoScore, districtsNearBoxes, geocodeAddress, needsListingGeo } from "./geo.js";
+import { needsListingGeo } from "./geo.js";
 import { fetchRoadRoutes } from "./route.js";
 import { bestMatch } from "./match.js";
 import { eventLabel, notify } from "./notify.js";
@@ -89,9 +87,6 @@ export async function runWatch(options = {}) {
     commuteKm: settings.commuteKm,
     workLat: settings.workLat,
     workLng: settings.workLng,
-    lookupGeo: getCachedGeo,
-    saveGeo: (address, lat, lng) => updateListingsGeoByAddress(address, lat, lng),
-    geoLeft: options.skipHeavyGeo ? 0 : 12,
   };
 
   for (const url of urls) {
@@ -184,7 +179,7 @@ export async function runWatch(options = {}) {
     }
   }
 
-  const pendingFees = listingsNeedingFeeDetail(20);
+  const pendingFees = listingsNeedingFeeDetail(needsListingGeo(settings) ? 30 : 20);
   for (const row of pendingFees) {
     try {
       const listing = getListing(row.post_id);
@@ -223,30 +218,29 @@ export async function runWatch(options = {}) {
   };
 }
 
-export async function backfillListingCoords(settings = getSettings(), { limit = 30, skipNominatim = true } = {}) {
+export async function backfillListingCoords(settings = getSettings(), { limit = 12 } = {}) {
   if (!needsListingGeo(settings) || limit <= 0) return { attempted: 0, located: 0 };
-  const near = districtsNearBoxes(settings.excludeBoxes);
-  const rows = addressesMissingGeo().sort((a, b) => {
-    const score = addressGeoScore(b.address, near) - addressGeoScore(a.address, near);
-    if (score) return score;
-    return b.n - a.n;
-  });
+  const rows = listingsNeeding591Geo(limit);
   let attempted = 0;
   let located = 0;
   for (const row of rows) {
-    const cached = getCachedGeo(row.address);
-    if (cached) {
-      updateListingsGeoByAddress(row.address, cached.lat, cached.lng);
-      located += 1;
-      continue;
-    }
-    if (attempted >= limit) break;
-    const geo = await geocodeAddress(row.address, getCachedGeo, { skipNominatim });
     attempted += 1;
-    if (geo) {
-      updateListingsGeoByAddress(row.address, geo.lat, geo.lng);
-      located += 1;
+    try {
+      const listing = getListing(row.post_id);
+      if (!listing) continue;
+      const detail = await fetchListingDetail(row.post_id);
+      setListingDetail(row.post_id, {
+        extraFees: mergeFeeRows(listing.extra_fees, detail.fees),
+        contact: detail.contact,
+        fetched: 1,
+        lat: detail.lat,
+        lng: detail.lng,
+      });
+      if (detail.lat != null && detail.lng != null) located += 1;
+    } catch {
+      // 591 詳情失敗下次再試
     }
+    await new Promise((resolve) => setTimeout(resolve, 500));
   }
   return { attempted, located };
 }

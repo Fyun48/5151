@@ -1,6 +1,6 @@
 import { passesAttributeFilters, passesGeoFilters } from "./floors.js";
 import { allDistricts } from "./regions.js";
-import { coordsFrom591Detail, coordsFromListing, geocodeAddress, isExcludedByKeyword, needsListingGeo } from "./geo.js";
+import { coordsFrom591Detail, coordsFromListing, isExcludedByKeyword } from "./geo.js";
 
 const LIST_URL = "https://bff-house.591.com.tw/v3/web/rent/list";
 const USER_AGENT =
@@ -317,28 +317,11 @@ export async function fetchListings(searchUrl, pages = 40, options = {}) {
 
 async function mapKeptListings(items, options) {
   const out = [];
-  const needGeo = needsListingGeo(options);
-  if (options.geoLeft == null) options.geoLeft = 60;
   for (const item of items) {
     const row = normalizeListing(item);
     if (!row.post_id) continue;
     if (isExcludedByKeyword(row, options.excludeKeywords)) continue;
     if (!passesAttributeFilters(row, options)) continue;
-    if (needGeo && (row.lat == null || row.lng == null)) {
-      const cached = options.lookupGeo?.(row.address);
-      if (cached) {
-        row.lat = cached.lat;
-        row.lng = cached.lng;
-      } else if (options.geoLeft > 0) {
-        options.geoLeft -= 1;
-        const geo = await geocodeAddress(row.address, options.lookupGeo, { skipNominatim: true });
-        if (geo) {
-          row.lat = geo.lat;
-          row.lng = geo.lng;
-          options.saveGeo?.(row.address, geo.lat, geo.lng);
-        }
-      }
-    }
     if (passesGeoFilters(row, options, { strict: false })) out.push(row);
   }
   return out;

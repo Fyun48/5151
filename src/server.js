@@ -75,9 +75,9 @@ function queueGeoBackfill(settings = getSettings()) {
   if (geoBackfillBusy || !needsListingGeo(settings)) return;
   geoBackfillBusy = true;
   (async () => {
-    for (let round = 0; round < 6; round += 1) {
+    for (let round = 0; round < 12; round += 1) {
       try {
-        const geo = await backfillListingCoords(settings, { limit: 40, skipNominatim: true });
+        const geo = await backfillListingCoords(settings, { limit: 12 });
         broadcast({ type: "geo", stats: stats(), geoBackfill: geo });
         if (!geo.attempted && !geo.located) break;
       } catch (error) {

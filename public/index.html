@@ -355,7 +355,7 @@
       <input type="text" id="workAddress" placeholder="例如：台北市士林區德行西路7號" />
       <label>機車路線上限（公里，0 表示不篩）</label>
       <input type="number" id="commuteKm" min="0" max="80" step="0.5" />
-      <p class="hint">用可騎車的道路路徑計算（不是直線）。每個地址會抓至少兩條替代路線；兩條都超過上限才不顯示，有一條在範圍內就會出現。開啟後可依離公司近／遠排序。還沒定位或還沒算完路線的物件會先不顯示，完成後列表會自動更新。</p>
+      <p class="hint">路徑用 591 物件頁「點地址」那個地圖座標，不是門牌文字去猜。每個物件會抓至少兩條可騎道路線；兩條都超過上限才不顯示。開啟後可依離公司近／遠排序。還沒從 591 拿到座標或還沒算完路線的會先不顯示，完成後列表會自動更新。</p>
       <div class="checks">
         <label><input type="checkbox" id="wholeFloorOnly" /> 只看整層住家</label>
         <label><input type="checkbox" id="excludeLowFloors" /> 排除 1F 及以下（含地下室、整棟、頂加）</label>
@@ -372,7 +372,7 @@
       <p class="hint">可填公司名、姓氏，或直接點列表右側頭像排除該人。之後也能用這個名單過濾特定名牌。</p>
       <textarea id="excludeAgents" placeholder="美樂房屋&#10;黃小姐"></textarea>
       <label>用地圖或文字排除範圍（最多 10 組）</label>
-      <p class="hint">手拉矩形或用「路名A以東、路名B以西、路名C以南、路名D以北」產生大致範圍。關閉的範圍仍會保存，但不會套用。框選後會在背景為物件定位，落在框內的才會排除。大範圍請先按「展開地圖」再框。</p>
+      <p class="hint">手拉矩形或用「路名A以東、路名B以西、路名C以南、路名D以北」產生大致範圍。關閉的範圍仍會保存，但不會套用。框選後會在背景抓 591 地圖座標，落在框內的才會排除。大範圍請先按「展開地圖」再框。</p>
       <textarea id="regionText" placeholder="例如：承德路以東、文林路以西、士東路以南、基河路以北"></textarea>
       <p class="hint">路名請盡量寫完整（含「路／街／段」）。系統會先當臺北市查，找不到再查新北市。</p>
       <div class="row">
@@ -736,12 +736,12 @@
           msg = "目前沒有被判成同一屋源的重刊。隱藏或已瀏覽的舊屋若再上架，會出現在這裡。";
         } else if (filter === "elevator") {
           msg = "目前沒有標到有電梯的物件。請先檢查，或改看「全部」。";
-        else if (st.missingRoute > 0) {
-          msg = `已有 ${st.missingRoute} 筆定位完成，正在背景計算機車可走路線。兩條替代路線都超過上限的不會顯示；算完後列表會自動更新。`;
+        } else if (st.missingGeo > 0) {
+          msg = `正在從 591 物件地圖補 ${st.missingGeo} 筆座標（就是網頁上點地址看到的那個），完成後會自動計算機車路線。`;
+        } else if (st.missingRoute > 0) {
+          msg = `已有 ${st.missingRoute} 筆 591 地圖座標，正在背景計算機車可走路線。兩條替代路線都超過上限的不會顯示；算完後列表會自動更新。`;
         } else if (st.filteredOut > 0) {
           msg = `資料庫有 ${st.stored} 筆，目前都被機車路線距離或樓層／路名／地圖框／房仲排除了。`;
-        } else if (st.missingGeo > 0 && (excludeBoxes || []).some((box) => box.enabled !== false)) {
-          msg = `目前有 ${st.missingGeo} 筆還沒定位到，地圖框暫時不會排除它們。請再按一次「立即檢查」。`;
         } else if (st.dbTotal > 0) {
           msg = "這個搜尋網址還沒對到已存的物件。請按「立即檢查」重新抓取。";
         }
@@ -1516,7 +1516,7 @@
         if (data.routeBackfill?.located) {
           $("status").textContent = `已計算 ${data.routeBackfill.located} 筆機車路線，列表已更新`;
         } else if (data.geoBackfill?.located || data.geoBackfill?.attempted) {
-          $("status").textContent = `已為 ${data.geoBackfill.located || 0} 個地址補定位，列表已更新`;
+          $("status").textContent = `已從 591 地圖補 ${data.geoBackfill.located || 0} 筆座標，列表已更新`;
         }
         loadList();
       }

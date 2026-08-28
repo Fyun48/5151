@@ -218,10 +218,11 @@ export function coordsFromListing(item) {
 
 export function coordsFrom591Detail(data) {
   const addr = data?.address || {};
+  const surround = data?.surround || {};
   const pos = data?.positionRound || {};
   return coordsFromListing({
-    lat: addr.lat ?? pos.lat,
-    lng: addr.lng ?? pos.lng ?? addr.lon ?? pos.lon,
+    lat: addr.lat ?? surround.lat ?? pos.lat,
+    lng: addr.lng ?? surround.lng ?? pos.lng ?? addr.lon ?? pos.lon,
   });
 }
 
