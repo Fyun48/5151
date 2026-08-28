@@ -94,6 +94,11 @@ try {
 } catch {
   // already migrated
 }
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN watch_note TEXT NOT NULL DEFAULT ''");
+} catch {
+  // already migrated
+}
 db.exec(`
   CREATE TABLE IF NOT EXISTS geo_cache (
     address TEXT PRIMARY KEY,
@@ -691,15 +696,19 @@ export function setFlags(postId, flags) {
   const viewed = flags.viewed === undefined ? listing.viewed : Number(Boolean(flags.viewed));
   const watched = flags.watched === undefined ? listing.watched : Number(Boolean(flags.watched));
   const hidden = flags.hidden === undefined ? listing.hidden : Number(Boolean(flags.hidden));
+  const watchNote =
+    flags.watch_note === undefined
+      ? listing.watch_note || ""
+      : String(flags.watch_note || "").replace(/\r/g, "").trim().slice(0, 300);
   const now = new Date().toISOString();
   db.prepare(`
     UPDATE listings
-    SET viewed = ?, watched = ?, hidden = ?,
+    SET viewed = ?, watched = ?, hidden = ?, watch_note = ?,
         viewed_at = CASE WHEN ? = 1 THEN COALESCE(viewed_at, ?) ELSE viewed_at END,
         watched_at = CASE WHEN ? = 1 THEN COALESCE(watched_at, ?) ELSE watched_at END,
         hidden_at = CASE WHEN ? = 1 THEN COALESCE(hidden_at, ?) ELSE hidden_at END
     WHERE post_id = ?
-  `).run(viewed, watched, hidden, viewed, now, watched, now, hidden, now, postId);
+  `).run(viewed, watched, hidden, watchNote, viewed, now, watched, now, hidden, now, postId);
   return getListing(postId);
 }
 
@@ -818,9 +827,9 @@ export function listListings({ filter = "all", q = "", sort = "price_asc", limit
   if (filter === "watched") clauses.push("watched = 1");
   if (filter === "same_source") clauses.push("last_event IN ('same_source', 'update')");
   if (q) {
-    clauses.push("(title LIKE ? OR address LIKE ? OR CAST(post_id AS TEXT) LIKE ?)");
+    clauses.push("(title LIKE ? OR address LIKE ? OR CAST(post_id AS TEXT) LIKE ? OR IFNULL(watch_note, '') LIKE ?)");
     const like = `%${q}%`;
-    params.push(like, like, like);
+    params.push(like, like, like, like);
   }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const order =

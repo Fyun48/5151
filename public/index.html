@@ -145,6 +145,17 @@
     .tag.new { background: #dbeafe; color: var(--new); }
     .tag.same { background: #ede9fe; color: var(--same); }
     .tag.watch { background: #ffedd5; color: var(--watch); }
+    .watch-note-label { margin: 8px 0 4px; font-size: 12px; color: #c2410c; font-weight: 700; }
+    .watch-note {
+      margin: 0;
+      width: 100%;
+      min-height: 56px;
+      resize: vertical;
+      font-size: 13px;
+      line-height: 1.45;
+      background: #fff7ed;
+      border-color: #fdba74;
+    }
     .tag.lift { background: #dcfce7; color: #166534; }
     #floatDock {
       position: fixed;
@@ -404,7 +415,7 @@
         <button class="chip" data-sort="price_desc">金額高→低</button>
         <button class="chip commute-sort" data-sort="commute_asc" hidden>離公司近→遠</button>
         <button class="chip commute-sort" data-sort="commute_desc" hidden>離公司遠→近</button>
-        <input type="text" id="q" placeholder="搜尋標題 / 地址 / 編號" style="max-width:240px;margin-left:auto" />
+        <input type="text" id="q" placeholder="搜尋標題 / 地址 / 編號 / 備註" style="max-width:240px;margin-left:auto" />
         <div class="bulk-bar" id="bulkBar">
           <span id="selectedCount">已選 0 筆</span>
           <button type="button" class="ghost" id="selectPageBtn">全選本頁</button>
@@ -465,6 +476,8 @@
     let map, drawing = false, startLatLng = null, previewRect = null, boxLayers = [];
     let editingIdx = null;
     let mapExpanded = false;
+    let pendingNoteFocus = "";
+    const noteTimers = {};
     const MAX_BOXES = 10;
     const DOCK_KEY = "591-alert-dock-v1";
 
@@ -776,6 +789,8 @@
               if (!fees.bits.length && !fees.total) return "";
               return `<div class="fees">${fees.bits.map(esc).join(" · ")}${fees.total ? `<br>${esc(fees.total)}` : ""}</div>`;
             })()}
+            ${item.watched ? `<label class="watch-note-label" for="watch-note-${id}">關注備註</label>
+            <textarea class="watch-note" id="watch-note-${id}" data-watch-note="${id}" maxlength="300" rows="2" placeholder="為什麼關注？例如：採光好、可養貓、格局方正">${esc(item.watch_note || "")}</textarea>` : ""}
           </div>
           ${contactBlock(item)}
           <div class="actions">
@@ -790,6 +805,11 @@
         </article>`;
       }).join("");
       updateBulkBar();
+      if (pendingNoteFocus) {
+        const el = document.querySelector(`[data-watch-note="${pendingNoteFocus}"]`);
+        pendingNoteFocus = "";
+        el?.focus();
+      }
     }
 
     async function loadList() {
@@ -1051,6 +1071,29 @@
       };
     });
 
+    $("list").addEventListener("input", (ev) => {
+      const id = ev.target.dataset.watchNote;
+      if (!id) return;
+      clearTimeout(noteTimers[id]);
+      noteTimers[id] = setTimeout(() => {
+        fetch(`/api/listings/${id}/flags`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ watch_note: ev.target.value }),
+        }).catch(() => {});
+      }, 400);
+    });
+    $("list").addEventListener("focusout", (ev) => {
+      const id = ev.target.dataset.watchNote;
+      if (!id) return;
+      clearTimeout(noteTimers[id]);
+      fetch(`/api/listings/${id}/flags`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ watch_note: ev.target.value }),
+      }).catch(() => {});
+    });
+
     $("list").addEventListener("change", async (ev) => {
       const pick = ev.target.dataset.pick;
       if (pick) {
@@ -1107,9 +1150,20 @@
         }).then(loadList);
         return;
       }
-      if (!viewed && !watched) return;
-      const id = viewed || watched;
-      const body = viewed ? { viewed: ev.target.textContent.includes("標記") } : { watched: ev.target.textContent.includes("特別") };
+      if (watched) {
+        const turningOn = ev.target.textContent.includes("特別");
+        pendingNoteFocus = turningOn ? watched : "";
+        await fetch(`/api/listings/${watched}/flags`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ watched: turningOn }),
+        });
+        await loadList();
+        return;
+      }
+      if (!viewed) return;
+      const id = viewed;
+      const body = { viewed: ev.target.textContent.includes("標記") };
       await fetch(`/api/listings/${id}/flags`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

@@ -143,9 +143,10 @@ export async function runWatch(options = {}) {
           hidden: true,
           viewed: true,
           watched: Boolean(prev.watched),
+          watch_note: prev.watch_note || "",
         });
       } else if (!existing && prev?.watched) {
-        setFlags(listing.post_id, { watched: true });
+        setFlags(listing.post_id, { watched: true, watch_note: prev.watch_note || "" });
       }
 
       if (type === "seen" || isBaseline || isSearchBaseline) continue;
