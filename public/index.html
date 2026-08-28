@@ -66,7 +66,7 @@
     button:disabled { opacity: 0.5; cursor: wait; }
     .ghost { background: #efe8de; color: var(--ink); }
     .row { display: flex; gap: 8px; flex-wrap: wrap; }
-    .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px; }
+    .stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-bottom: 12px; }
     .stat { background: #f7f1e8; border-radius: 12px; padding: 10px; }
     .stat b { display: block; font-size: 20px; }
     .stat span { color: var(--muted); font-size: 12px; }
@@ -257,6 +257,7 @@
         <button class="chip" data-filter="unseen">未瀏覽</button>
         <button class="chip" data-filter="watched">特別關注</button>
         <button class="chip" data-filter="same_source">同屋源更新</button>
+        <button class="chip" data-filter="suspected">疑似同屋源</button>
         <button class="chip" data-filter="hidden">已隱藏</button>
         <span style="width:1px;height:22px;background:var(--line);margin:0 4px"></span>
         <button class="chip" data-sort="newest">最新</button>
@@ -349,13 +350,16 @@
         ["未瀏覽", st.unseen],
         ["特別關注", st.watched],
         ["已隱藏", st.hidden],
+        ["疑似", st.suspected],
       ].map(([k, v]) => `<div class="stat"><b>${v || 0}</b><span>${k}</span></div>`).join("");
     }
 
     function tags(item) {
       const bits = [];
       if (item.last_event === "new") bits.push('<span class="tag new">全新物件</span>');
-      if (item.last_event === "same_source") bits.push('<span class="tag same">同屋源更新</span>');
+      if (item.last_event === "same_source" && !item.match_level) bits.push('<span class="tag same">同屋源更新</span>');
+      if (item.match_level === "high") bits.push('<span class="tag same">高信心同屋源</span>');
+      if (item.match_level === "medium") bits.push('<span class="tag watch">需確認同屋源</span>');
       if (item.last_event === "update") bits.push('<span class="tag same">內容更新</span>');
       if (item.watched) bits.push('<span class="tag watch">特別關注</span>');
       if (item.viewed) bits.push('<span class="tag viewed">已瀏覽</span>');
@@ -367,7 +371,9 @@
         const q = $("q").value.trim();
         let msg = "目前沒有符合條件的物件。先貼上 591 搜尋網址並按立即檢查。";
         if (q) msg = `沒有符合「${q}」的物件。`;
-        else if (st.filteredOut > 0) {
+        else if (filter === "suspected") {
+          msg = "目前沒有被判成同一屋源的重刊。隱藏或已瀏覽的舊屋若再上架，會出現在這裡。";
+        } else if (st.filteredOut > 0) {
           msg = `資料庫有 ${st.stored} 筆，但都被樓層／路名／地圖框排除了。請清空排除條件並按儲存設定。`;
         } else if (st.dbTotal > 0) {
           msg = "這個搜尋網址還沒對到已存的物件。請按「立即檢查」重新抓取。";
@@ -386,11 +392,13 @@
             <div class="meta">
               ${item.price || ""} ${item.price_unit || "元/月"} · ${item.kind_name || ""} · ${item.layout || ""} · ${item.area_name || ""} · ${item.floor_name || ""}
               <br>${item.address || ""} · ${item.role_name || ""} · ${item.refresh_time || ""}
+              ${item.match_detail ? `<br>比對：${esc(item.match_detail)}${item.match_post_id ? ` · <a href="https://rent.591.com.tw/${item.match_post_id}" target="_blank" rel="noreferrer">舊刊登 #${item.match_post_id}</a>` : ""}` : ""}
             </div>
           </div>
           <div class="actions">
             <button class="ghost" data-viewed="${item.post_id}">${item.viewed ? "取消已瀏覽" : "標記已瀏覽"}</button>
             <button class="${item.watched ? "primary" : "ghost"}" data-watched="${item.post_id}">${item.watched ? "取消關注" : "特別關注"}</button>
+            ${item.match_level && !item.match_rejected ? `<button class="ghost" data-reject-match="${item.post_id}">這不是同一間</button>` : ""}
             <label class="hide-box">
               <input type="checkbox" data-hidden="${item.post_id}" ${item.hidden ? "checked" : ""} />
               不再顯示此物件
@@ -528,6 +536,12 @@
     });
 
     $("list").addEventListener("click", async (ev) => {
+      const rejectMatch = ev.target.dataset.rejectMatch;
+      if (rejectMatch) {
+        await fetch(`/api/listings/${rejectMatch}/reject-match`, { method: "POST" });
+        loadList();
+        return;
+      }
       const viewed = ev.target.dataset.viewed;
       const watched = ev.target.dataset.watched;
       const open = ev.target.closest("[data-open]")?.dataset.open;

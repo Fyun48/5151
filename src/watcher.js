@@ -5,13 +5,17 @@ import {
   getSettings,
   listingCount,
   listingCountForSearch,
+  listMatchCandidates,
   markEventNotified,
   saveSettings,
   setCachedGeo,
   getCachedGeo,
+  setFlags,
+  setListingMatch,
   upsertListing,
 } from "./db.js";
 import { fetchListings } from "./client591.js";
+import { bestMatch } from "./match.js";
 import { eventLabel, notify } from "./notify.js";
 
 function nowIso() {
@@ -33,9 +37,15 @@ function classify(incoming, existing) {
     if (siblings.length) {
       const prev = siblings[0];
       const detail = prev.price && prev.price !== incoming.price
-        ? `先前刊登 #${prev.post_id}，${prev.price} → ${incoming.price}`
-        : `先前刊登 #${prev.post_id}`;
-      return { type: "same_source", detail };
+        ? `指紋相同，先前 #${prev.post_id}，${prev.price} → ${incoming.price}`
+        : `指紋相同，先前 #${prev.post_id}`;
+      return { type: "same_source", detail, prev, level: "high" };
+    }
+    const hit = bestMatch(incoming, listMatchCandidates(incoming.post_id));
+    if (hit?.listing) {
+      const prev = hit.listing;
+      const priceBit = prev.price && prev.price !== incoming.price ? `，${prev.price} → ${incoming.price}` : "";
+      return { type: "same_source", detail: `${hit.detail}${priceBit}`, prev, level: hit.level };
     }
     return { type: "new", detail: incoming.price || "" };
   }
@@ -103,7 +113,7 @@ export async function runWatch(options = {}) {
       seen.add(listing.post_id);
 
       const existing = getListing(listing.post_id);
-      const { type, detail } = classify(listing, existing);
+      const { type, detail, prev, level } = classify(listing, existing);
       const stamp = nowIso();
       upsertListing({
         ...listing,
@@ -112,6 +122,21 @@ export async function runWatch(options = {}) {
         last_seen_at: stamp,
         last_event: type === "seen" ? existing?.last_event || "new" : type,
       });
+
+      if (!existing && prev && (prev.hidden || prev.viewed)) {
+        setListingMatch(listing.post_id, {
+          match_post_id: prev.post_id,
+          match_level: level || "high",
+          match_detail: detail,
+        });
+        setFlags(listing.post_id, {
+          hidden: true,
+          viewed: true,
+          watched: Boolean(prev.watched),
+        });
+      } else if (!existing && prev?.watched) {
+        setFlags(listing.post_id, { watched: true });
+      }
 
       if (type === "seen" || isBaseline || isSearchBaseline) continue;
 

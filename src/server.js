@@ -7,6 +7,7 @@ import {
   getSettings,
   listListings,
   recentEvents,
+  rejectSuspectedMatch,
   saveSettings,
   setCachedGeo,
   setFlags,
@@ -89,6 +90,15 @@ app.get("/api/listings/:id/history", (req, res) => {
 
 app.post("/api/listings/:id/flags", (req, res) => {
   const updated = setFlags(Number(req.params.id), req.body || {});
+  if (!updated) {
+    res.status(404).json({ error: "找不到這筆物件" });
+    return;
+  }
+  res.json({ listing: updated, stats: stats() });
+});
+
+app.post("/api/listings/:id/reject-match", (req, res) => {
+  const updated = rejectSuspectedMatch(Number(req.params.id));
   if (!updated) {
     res.status(404).json({ error: "找不到這筆物件" });
     return;

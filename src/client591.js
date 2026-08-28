@@ -149,6 +149,7 @@ export function normalizeListing(item) {
     kind_name: item.kind_name || "",
     role_name: item.role_name || item.linkman || "",
     cover: item.cover || (item.photoList && item.photoList[0]) || "",
+    community_id: item.community_id && Number(item.community_id) !== 0 ? Number(item.community_id) : 0,
     tags: JSON.stringify(item.tags || []),
     refresh_time: item.refresh_time || "",
     lat: coords.lat,

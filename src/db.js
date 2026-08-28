@@ -94,8 +94,29 @@ db.exec(`
     updated_at TEXT NOT NULL
   )
 `);
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN match_post_id INTEGER");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN match_level TEXT");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN match_detail TEXT");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN match_rejected INTEGER NOT NULL DEFAULT 0");
+} catch {
+  // already migrated
+}
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_search ON listings(search_key)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_hidden ON listings(hidden)");
+db.exec("CREATE INDEX IF NOT EXISTS idx_listings_match ON listings(match_level)");
 
 const DEFAULTS = {
   searchUrls: [
@@ -154,6 +175,36 @@ export function findBySourceKey(sourceKey, excludePostId) {
       "SELECT * FROM listings WHERE source_key = ? AND post_id != ? ORDER BY last_seen_at DESC",
     )
     .all(sourceKey, excludePostId);
+}
+
+export function listMatchCandidates(excludePostId) {
+  return db
+    .prepare(
+      `SELECT * FROM listings
+       WHERE post_id != ?
+       ORDER BY hidden DESC, viewed DESC, last_seen_at DESC`,
+    )
+    .all(excludePostId);
+}
+
+export function setListingMatch(postId, match) {
+  db.prepare(
+    `UPDATE listings
+     SET match_post_id = ?, match_level = ?, match_detail = ?, match_rejected = 0
+     WHERE post_id = ?`,
+  ).run(match.match_post_id || null, match.match_level || null, match.match_detail || "", postId);
+  return getListing(postId);
+}
+
+export function rejectSuspectedMatch(postId) {
+  const listing = getListing(postId);
+  if (!listing) return null;
+  db.prepare(
+    `UPDATE listings
+     SET match_rejected = 1, hidden = 0, viewed = 0
+     WHERE post_id = ?`,
+  ).run(postId);
+  return getListing(postId);
 }
 
 export function currentSearchKeys() {
@@ -281,8 +332,14 @@ export function listListings({ filter = "all", q = "", sort = "price_asc", limit
   const clauses = [];
   const params = [];
   searchWhere(searchKeys, clauses, params);
-  if (filter === "hidden") clauses.push("hidden = 1");
-  else clauses.push("IFNULL(hidden, 0) = 0");
+  if (filter === "suspected") {
+    clauses.push("IFNULL(match_rejected, 0) = 0");
+    clauses.push("match_level IN ('high', 'medium')");
+  } else if (filter === "hidden") {
+    clauses.push("hidden = 1");
+  } else {
+    clauses.push("IFNULL(hidden, 0) = 0");
+  }
   if (filter === "unseen") clauses.push("viewed = 0");
   if (filter === "viewed") clauses.push("viewed = 1");
   if (filter === "watched") clauses.push("watched = 1");
@@ -323,7 +380,7 @@ export function stats(searchKeys) {
   const params = [];
   searchWhere(searchKeys, clauses, params);
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-  const raw = db.prepare(`SELECT viewed, watched, hidden, last_event, floor_name, kind_name, title, address, lat, lng FROM listings ${where}`).all(...params);
+  const raw = db.prepare(`SELECT viewed, watched, hidden, last_event, floor_name, kind_name, title, address, lat, lng, match_level, match_rejected FROM listings ${where}`).all(...params);
   const rows = applyListingFilter(raw);
   const visible = rows.filter((row) => !row.hidden);
   const storedVisible = raw.filter((row) => !row.hidden);
@@ -333,6 +390,7 @@ export function stats(searchKeys) {
     watched: visible.filter((row) => row.watched).length,
     same_source: visible.filter((row) => row.last_event === "same_source" || row.last_event === "update").length,
     hidden: rows.filter((row) => row.hidden).length,
+    suspected: rows.filter((row) => row.match_level && !row.match_rejected).length,
     stored: storedVisible.length,
     filteredOut: Math.max(0, storedVisible.length - visible.length),
     dbTotal: listingCount(),
