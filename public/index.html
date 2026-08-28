@@ -317,6 +317,11 @@
     const MAX_BOXES = 10;
     const DOCK_KEY = "591-alert-dock-v1";
 
+    function listingUrl(item) {
+      const id = item?.post_id || item;
+      return `https://rent.591.com.tw/${id}`;
+    }
+
     function esc(value) {
       return String(value ?? "")
         .replace(/&/g, "&amp;")
@@ -414,16 +419,18 @@
       }
       $("list").innerHTML = items.map((item) => `
         <article class="item">
-          <img src="${item.cover || ""}" alt="" />
+          <a href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-open="${item.post_id}">
+            <img src="${esc(item.cover || "")}" alt="" />
+          </a>
           <div>
             <div class="tags">${tags(item)}</div>
             <h3 style="margin:8px 0 0;font-size:18px">
-              <a href="${item.url}" target="_blank" rel="noreferrer" data-open="${item.post_id}">${item.title}</a>
+              <a href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-open="${item.post_id}">${esc(item.title)}</a>
             </h3>
             <div class="meta">
               租金 ${item.price || ""} ${item.price_unit || "元/月"} · ${item.kind_name || ""} · ${item.layout || ""} · ${item.area_name || ""} · ${item.floor_name || ""}
               <br>${item.address || ""} · ${item.role_name || ""} · ${item.refresh_time || ""}
-              ${item.match_detail ? `<br>比對：${esc(item.match_detail)}${item.match_post_id ? ` · <a href="https://rent.591.com.tw/${item.match_post_id}" target="_blank" rel="noreferrer">舊刊登 #${item.match_post_id}</a>` : ""}` : ""}
+              ${item.match_detail ? `<br>比對：${esc(item.match_detail)}${item.match_post_id ? ` · <a href="${listingUrl(item.match_post_id)}" target="_blank" rel="noopener noreferrer">舊刊登 #${item.match_post_id}</a>` : ""}` : ""}
             </div>
             ${(() => {
               const fees = feeLines(item);
@@ -588,6 +595,8 @@
       const watched = ev.target.dataset.watched;
       const open = ev.target.closest("[data-open]")?.dataset.open;
       if (open) {
+        ev.preventDefault();
+        window.open(listingUrl(open), "_blank", "noopener,noreferrer");
         fetch(`/api/listings/${open}/flags`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -658,7 +667,7 @@
         <div class="dock-item">
           <div class="tags"><span class="tag ${item.type === "new" ? "new" : "same"}">${eventText[item.type] || item.type_label || item.type}</span></div>
           <h3 style="margin:6px 0 4px;font-size:16px">
-            <a href="${item.url || ("https://rent.591.com.tw/" + item.post_id)}" target="_blank" rel="noreferrer" data-dock-open="${item.post_id}">${item.title || "591 物件"}</a>
+            <a href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-dock-open="${item.post_id}">${esc(item.title || "591 物件")}</a>
           </h3>
           <div class="meta">${item.price || ""} ${item.address || ""} ${item.detail || ""} ${item.extra_fee_text || ""}</div>
           <div class="row" style="margin-top:8px">
@@ -977,8 +986,8 @@
       const open = ev.target.closest("[data-dock-open]")?.dataset.dockOpen;
       const dismiss = ev.target.dataset.dockDismiss;
       if (open) {
-        const item = loadDock().find((row) => String(row.post_id) === String(open));
-        if (item?.url) window.open(item.url, "_blank", "noreferrer");
+        ev.preventDefault();
+        window.open(listingUrl(open), "_blank", "noopener,noreferrer");
         fetch(`/api/listings/${open}/flags`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
