@@ -1,4 +1,4 @@
-import { isExcludedByBox, isExcludedByKeyword } from "./geo.js";
+import { isExcludedByAgent, isExcludedByBox, isExcludedByKeyword } from "./geo.js";
 
 export function isAtOrBelowFirstFloor(floorName) {
   const text = String(floorName || "").replace(/\s+/g, "");
@@ -41,6 +41,9 @@ export function shouldKeepListing(listing, settings = {}) {
     return false;
   }
   if (isExcludedByKeyword(listing, settings.excludeKeywords)) {
+    return false;
+  }
+  if (isExcludedByAgent(listing, settings)) {
     return false;
   }
   if (isExcludedByBox(listing.lat, listing.lng, settings.excludeBoxes)) {

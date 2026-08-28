@@ -139,6 +139,51 @@ try {
 } catch {
   // already migrated
 }
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN contact_name TEXT");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN contact_role TEXT");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN agency TEXT");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN mobile TEXT");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN phone TEXT");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN line_url TEXT");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN avatar TEXT");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN contact_uid INTEGER");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN contact_fetched INTEGER NOT NULL DEFAULT 0");
+} catch {
+  // already migrated
+}
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_search ON listings(search_key)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_hidden ON listings(hidden)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_match ON listings(match_level)");
@@ -160,6 +205,8 @@ const DEFAULTS = {
   wholeFloorOnly: true,
   minBuildingFloors: 4,
   excludeKeywords: [],
+  excludeAgents: [],
+  excludeAgentIds: [],
   excludeBoxes: [],
 };
 
@@ -173,6 +220,8 @@ export function saveSettings(partial) {
   const current = getSettings();
   const next = { ...current, ...partial };
   next.excludeKeywords = normalizeKeywords(next.excludeKeywords);
+  next.excludeAgents = normalizeKeywords(next.excludeAgents);
+  next.excludeAgentIds = [...new Set((next.excludeAgentIds || []).map(Number).filter((id) => id > 0))].slice(0, 80);
   next.excludeBoxes = normalizeBoxes(next.excludeBoxes);
   const upsert = db.prepare(
     "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -348,9 +397,46 @@ export function upsertListing(listing) {
 }
 
 export function setListingFees(postId, extraFees, fetched = 1) {
+  return setListingDetail(postId, { extraFees, fetched });
+}
+
+export function setListingDetail(postId, { extraFees, contact, fetched = 1 } = {}) {
+  const listing = getListing(postId);
+  if (!listing) return null;
+  const fees =
+    extraFees === undefined
+      ? JSON.stringify(listing.extra_fees || [])
+      : JSON.stringify(extraFees || []);
+  const next = {
+    contact_name: contact?.contact_name ?? listing.contact_name ?? "",
+    contact_role: contact?.contact_role ?? listing.contact_role ?? "",
+    agency: contact?.agency ?? listing.agency ?? "",
+    mobile: contact?.mobile ?? listing.mobile ?? "",
+    phone: contact?.phone ?? listing.phone ?? "",
+    line_url: contact?.line_url ?? listing.line_url ?? "",
+    avatar: contact?.avatar ?? listing.avatar ?? "",
+    contact_uid: contact?.contact_uid ?? listing.contact_uid ?? null,
+  };
   db.prepare(
-    `UPDATE listings SET extra_fees = ?, extra_fees_fetched = ? WHERE post_id = ?`,
-  ).run(JSON.stringify(extraFees || []), Number(Boolean(fetched)), postId);
+    `UPDATE listings SET
+      extra_fees = ?, extra_fees_fetched = ?,
+      contact_name = ?, contact_role = ?, agency = ?, mobile = ?, phone = ?,
+      line_url = ?, avatar = ?, contact_uid = ?, contact_fetched = ?
+     WHERE post_id = ?`,
+  ).run(
+    fees,
+    Number(Boolean(fetched)),
+    next.contact_name,
+    next.contact_role,
+    next.agency,
+    next.mobile,
+    next.phone,
+    next.line_url,
+    next.avatar,
+    next.contact_uid,
+    Number(Boolean(fetched)),
+    postId,
+  );
   return getListing(postId);
 }
 
@@ -358,11 +444,34 @@ export function listingsNeedingFeeDetail(limit = 12) {
   return db
     .prepare(
       `SELECT post_id FROM listings
-       WHERE IFNULL(extra_fees_fetched, 0) = 0
+       WHERE IFNULL(contact_fetched, 0) = 0 OR IFNULL(extra_fees_fetched, 0) = 0
        ORDER BY last_seen_at DESC
        LIMIT ?`,
     )
     .all(Math.max(1, Number(limit) || 12));
+}
+
+export function hideMany(ids) {
+  const list = [...new Set((ids || []).map(Number).filter((id) => id > 0))];
+  const now = new Date().toISOString();
+  const stmt = db.prepare(
+    `UPDATE listings SET hidden = 1, hidden_at = COALESCE(hidden_at, ?) WHERE post_id = ?`,
+  );
+  db.exec("BEGIN");
+  try {
+    for (const id of list) stmt.run(now, id);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  return { count: list.length, stats: stats() };
+}
+
+export function resetListings() {
+  db.exec("DELETE FROM events");
+  db.exec("DELETE FROM listings");
+  return saveSettings({ hasBaseline: false });
 }
 
 export function addEvent(event) {

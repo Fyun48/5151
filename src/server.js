@@ -6,9 +6,11 @@ import {
   getCachedGeo,
   getListing,
   getSettings,
+  hideMany,
   listListings,
   recentEvents,
   rejectSuspectedMatch,
+  resetListings,
   saveSettings,
   setCachedGeo,
   setFlags,
@@ -105,6 +107,25 @@ app.get("/api/listings", (req, res) => {
       limit: Number(req.query.limit) || 80,
     }),
   });
+});
+
+app.post("/api/listings/hide-many", (req, res) => {
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+  if (!ids.length) {
+    res.status(400).json({ error: "請先勾選物件" });
+    return;
+  }
+  res.json(hideMany(ids));
+});
+
+app.post("/api/reset-listings", (req, res) => {
+  if (req.body?.confirm !== true) {
+    res.status(400).json({ error: "需要確認才會清除紀錄" });
+    return;
+  }
+  const settings = resetListings();
+  lastRun = null;
+  res.json({ ok: true, settings, stats: stats() });
 });
 
 app.get("/api/listings/:id/history", (req, res) => {

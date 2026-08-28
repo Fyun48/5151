@@ -93,6 +93,15 @@ export function isExcludedByKeyword(listing, keywords) {
   return terms.some((term) => hay.includes(term.toLowerCase()));
 }
 
+export function isExcludedByAgent(listing, settings = {}) {
+  const ids = (settings.excludeAgentIds || []).map(Number).filter((id) => id > 0);
+  if (listing.contact_uid && ids.includes(Number(listing.contact_uid))) return true;
+  const terms = normalizeKeywords(settings.excludeAgents).filter((term) => term.length >= 2);
+  if (!terms.length) return false;
+  const hay = `${listing.contact_name || ""} ${listing.agency || ""} ${listing.role_name || ""} ${listing.contact_role || ""}`.toLowerCase();
+  return terms.some((term) => hay.includes(term.toLowerCase()));
+}
+
 export function isExcludedByBox(lat, lng, boxes) {
   if (lat == null || lng == null || lat === "" || lng === "") return false;
   const nlat = Number(lat);

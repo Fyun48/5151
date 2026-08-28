@@ -70,7 +70,7 @@
     .stat { background: #f7f1e8; border-radius: 12px; padding: 10px; }
     .stat b { display: block; font-size: 20px; }
     .stat span { color: var(--muted); font-size: 12px; }
-    .toolbar { display: flex; gap: 8px; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+    .toolbar { display: flex; gap: 8px; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
     .chip {
       border: 1px solid var(--line);
       background: white;
@@ -78,19 +78,67 @@
       padding: 7px 12px;
     }
     .chip.on { background: var(--ink); color: white; }
-    .list { display: grid; gap: 12px; padding: 16px; }
+    .bulk-bar {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      padding: 8px 0 0;
+    }
+    .bulk-bar.on { display: flex; }
+    .list { display: grid; gap: 14px; padding: 16px; }
     .item {
       display: grid;
-      grid-template-columns: 132px 1fr auto;
+      grid-template-columns: 28px 132px minmax(0, 1fr) 120px 148px;
       gap: 14px;
-      padding: 12px;
+      padding: 14px;
       border: 1px solid var(--line);
-      border-radius: 14px;
+      border-radius: 16px;
       background: #fff;
+      align-items: start;
     }
-    .item img { width: 132px; height: 96px; object-fit: cover; border-radius: 10px; background: #eee; }
-    .meta { color: var(--muted); font-size: 13px; margin: 6px 0; }
+    .item.picked { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(196, 92, 38, 0.12); }
+    .pick { margin-top: 8px; width: 18px; height: 18px; accent-color: var(--accent); }
+    .item-cover img, .item-cover {
+      width: 132px;
+      height: 100px;
+      object-fit: cover;
+      border-radius: 12px;
+      background: #eee;
+      display: block;
+    }
+    .meta { color: var(--muted); font-size: 13px; margin: 6px 0; line-height: 1.55; }
     .fees { color: var(--accent); font-size: 13px; margin-top: 4px; line-height: 1.55; }
+    .contact {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 5px;
+      text-align: center;
+      font-size: 12px;
+      color: var(--ink);
+      min-width: 0;
+    }
+    .contact .avatar {
+      width: 52px;
+      height: 52px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 2px solid var(--line);
+      background: #f3eee6;
+      cursor: pointer;
+    }
+    .contact .avatar:hover { border-color: var(--accent); }
+    .contact .who-name { font-weight: 700; }
+    .contact .agency { color: var(--muted); line-height: 1.35; }
+    .contact a.tel { color: var(--accent-2); text-decoration: none; font-family: "Noto Sans TC", sans-serif; }
+    .line-qr {
+      width: 72px;
+      height: 72px;
+      border-radius: 8px;
+      background: #fff;
+      border: 1px solid var(--line);
+    }
     .who { color: var(--muted); font-size: 13px; }
     .tags { display: flex; gap: 6px; flex-wrap: wrap; }
     .tag { font-size: 11px; padding: 3px 8px; border-radius: 999px; background: #f3eee6; }
@@ -192,8 +240,12 @@
     .hide-box { font-size: 13px; color: var(--muted); display: flex; gap: 6px; align-items: center; cursor: pointer; }
     .status { font-size: 12px; color: var(--muted); padding: 0 16px 12px; }
     .empty { padding: 40px; color: var(--muted); text-align: center; }
+    @media (max-width: 1100px) {
+      .item { grid-template-columns: 28px 120px 1fr; }
+      .contact, .actions { grid-column: 2 / -1; flex-direction: row; flex-wrap: wrap; justify-content: flex-start; }
+    }
     @media (max-width: 980px) {
-      .wrap, .item, .stats { grid-template-columns: 1fr; }
+      .wrap, .stats { grid-template-columns: 1fr; }
       header, .wrap { padding-left: 16px; padding-right: 16px; }
     }
   </style>
@@ -234,6 +286,9 @@
       <label>排除路名／關鍵字（一行一個）</label>
       <p class="hint">地址或標題含這些字就不列入、也不通知。例如路名、路段。</p>
       <textarea id="excludeKeywords" placeholder="延平北路八段&#10;承德路"></textarea>
+      <label>排除房仲／聯絡人（一行一個）</label>
+      <p class="hint">可填公司名、姓氏，或直接點列表右側頭像排除該人。之後也能用這個名單過濾特定名牌。</p>
+      <textarea id="excludeAgents" placeholder="美樂房屋&#10;黃小姐"></textarea>
       <label>用地圖或文字排除範圍（最多 10 組）</label>
       <p class="hint">可手拉矩形，或用「路名A以東、路名B以西、路名C以南、路名D以北」產生大致範圍。關閉的範圍仍會保存，但不會套用。沒有門牌號碼的地址不會用地圖框排除。</p>
       <textarea id="regionText" placeholder="例如：承德路以東、文林路以西、士東路以南、基河路以北"></textarea>
@@ -268,6 +323,12 @@
         <button class="chip on" data-sort="price_asc">金額低→高</button>
         <button class="chip" data-sort="price_desc">金額高→低</button>
         <input type="text" id="q" placeholder="搜尋標題 / 地址 / 編號" style="max-width:240px;margin-left:auto" />
+        <div class="bulk-bar" id="bulkBar">
+          <span id="selectedCount">已選 0 筆</span>
+          <button type="button" class="ghost" id="selectPageBtn">全選本頁</button>
+          <button type="button" class="ghost" id="clearSelectBtn">取消勾選</button>
+          <button type="button" class="primary" id="hideSelectedBtn">不再顯示已選</button>
+        </div>
       </div>
       <div class="status" id="status">準備就緒</div>
       <div class="list" id="list"><div class="empty">載入中…</div></div>
@@ -310,6 +371,7 @@
     let filter = "all";
     let sort = "price_asc";
     let settings = {};
+    let selected = new Set();
     let excludeBoxes = [];
     let map, drawing = false, startLatLng = null, previewRect = null, boxLayers = [];
     let editingIdx = null;
@@ -350,6 +412,7 @@
       $("windowsToast").checked = s.windowsToast !== false;
       $("excludeLowFloors").checked = s.excludeLowFloors !== false;
       $("excludeKeywords").value = (s.excludeKeywords || []).join("\n");
+      $("excludeAgents").value = (s.excludeAgents || []).join("\n");
       $("discordWebhook").value = s.discordWebhook || "";
       excludeBoxes = Array.isArray(s.excludeBoxes)
         ? s.excludeBoxes.slice(0, MAX_BOXES).map((box) => ({
@@ -402,6 +465,35 @@
       return bits.join("");
     }
 
+    function lineQr(url) {
+      return `https://api.qrserver.com/v1/create-qr-code/?size=72x72&margin=2&data=${encodeURIComponent(url)}`;
+    }
+
+    function contactBlock(item) {
+      const role = item.contact_role || (String(item.role_name || "").includes("屋主") ? "屋主" : (item.role_name ? "仲介" : ""));
+      const name = item.contact_name || String(item.role_name || "").replace(/^仲介|^屋主|^代理人/, "").trim();
+      const agency = item.agency || "";
+      const tel = item.mobile || item.phone || "";
+      const bits = [];
+      if (item.avatar) {
+        bits.push(`<img class="avatar" src="${esc(item.avatar)}" alt="" title="點頭像排除此人" data-exclude-face="${item.post_id}" data-uid="${item.contact_uid || ""}" data-agent="${esc(agency || name)}" />`);
+      }
+      if (name || role) bits.push(`<div class="who-name">${esc([role, name].filter(Boolean).join(" · "))}</div>`);
+      if (agency) bits.push(`<div class="agency">${esc(agency)}</div>`);
+      if (tel) bits.push(`<a class="tel" href="tel:${esc(tel.replace(/[^\d+]/g, ""))}">${esc(tel)}</a>`);
+      if (item.line_url) {
+        bits.push(`<a href="${esc(item.line_url)}" target="_blank" rel="noopener noreferrer" title="加入 LINE"><img class="line-qr" src="${lineQr(item.line_url)}" alt="LINE QR" /></a>`);
+      }
+      if (!bits.length) bits.push(`<div class="agency">聯絡資料抓取中</div>`);
+      return `<div class="contact">${bits.join("")}</div>`;
+    }
+
+    function updateBulkBar() {
+      const n = selected.size;
+      $("bulkBar").classList.toggle("on", n > 0);
+      $("selectedCount").textContent = `已選 ${n} 筆`;
+    }
+
     function renderList(items, st = {}) {
       if (!items.length) {
         const q = $("q").value.trim();
@@ -410,26 +502,31 @@
         else if (filter === "suspected") {
           msg = "目前沒有被判成同一屋源的重刊。隱藏或已瀏覽的舊屋若再上架，會出現在這裡。";
         } else if (st.filteredOut > 0) {
-          msg = `資料庫有 ${st.stored} 筆，但都被樓層／路名／地圖框排除了。請清空排除條件並按儲存設定。`;
+          msg = `資料庫有 ${st.stored} 筆，但都被樓層／路名／地圖框／房仲排除了。請清空排除條件並按儲存設定。`;
         } else if (st.dbTotal > 0) {
           msg = "這個搜尋網址還沒對到已存的物件。請按「立即檢查」重新抓取。";
         }
         $("list").innerHTML = `<div class="empty">${msg}</div>`;
+        updateBulkBar();
         return;
       }
-      $("list").innerHTML = items.map((item) => `
-        <article class="item">
-          <a href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-open="${item.post_id}">
+      $("list").innerHTML = items.map((item) => {
+        const id = String(item.post_id);
+        const on = selected.has(id);
+        return `
+        <article class="item ${on ? "picked" : ""}" data-card="${id}">
+          <input class="pick" type="checkbox" data-pick="${id}" ${on ? "checked" : ""} />
+          <a class="item-cover" href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-open="${id}">
             <img src="${esc(item.cover || "")}" alt="" />
           </a>
           <div>
             <div class="tags">${tags(item)}</div>
             <h3 style="margin:8px 0 0;font-size:18px">
-              <a href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-open="${item.post_id}">${esc(item.title)}</a>
+              <a href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-open="${id}">${esc(item.title)}</a>
             </h3>
             <div class="meta">
               租金 ${item.price || ""} ${item.price_unit || "元/月"} · ${item.kind_name || ""} · ${item.layout || ""} · ${item.area_name || ""} · ${item.floor_name || ""}
-              <br>${item.address || ""} · ${item.role_name || ""} · ${item.refresh_time || ""}
+              <br>${esc(item.address || "")} · ${esc(item.refresh_time || "")}
               ${item.match_detail ? `<br>比對：${esc(item.match_detail)}${item.match_post_id ? ` · <a href="${listingUrl(item.match_post_id)}" target="_blank" rel="noopener noreferrer">舊刊登 #${item.match_post_id}</a>` : ""}` : ""}
             </div>
             ${(() => {
@@ -438,17 +535,19 @@
               return `<div class="fees">${fees.bits.map(esc).join(" · ")}${fees.total ? `<br>${esc(fees.total)}` : ""}</div>`;
             })()}
           </div>
+          ${contactBlock(item)}
           <div class="actions">
-            <button class="ghost" data-viewed="${item.post_id}">${item.viewed ? "取消已瀏覽" : "標記已瀏覽"}</button>
-            <button class="${item.watched ? "primary" : "ghost"}" data-watched="${item.post_id}">${item.watched ? "取消關注" : "特別關注"}</button>
-            ${item.match_level && !item.match_rejected ? `<button class="ghost" data-reject-match="${item.post_id}">這不是同一間</button>` : ""}
+            <button class="ghost" data-viewed="${id}">${item.viewed ? "取消已瀏覽" : "標記已瀏覽"}</button>
+            <button class="${item.watched ? "primary" : "ghost"}" data-watched="${id}">${item.watched ? "取消關注" : "特別關注"}</button>
+            ${item.match_level && !item.match_rejected ? `<button class="ghost" data-reject-match="${id}">這不是同一間</button>` : ""}
             <label class="hide-box">
-              <input type="checkbox" data-hidden="${item.post_id}" ${item.hidden ? "checked" : ""} />
-              不再顯示此物件
+              <input type="checkbox" data-hidden="${id}" ${item.hidden ? "checked" : ""} />
+              不再顯示
             </label>
           </div>
-        </article>
-      `).join("");
+        </article>`;
+      }).join("");
+      updateBulkBar();
     }
 
     async function loadList() {
@@ -491,6 +590,8 @@
         windowsToast: $("windowsToast").checked,
         excludeLowFloors: $("excludeLowFloors").checked,
         excludeKeywords: $("excludeKeywords").value.split(/[\n,，]/).map((s) => s.trim()).filter(Boolean),
+        excludeAgents: $("excludeAgents").value.split(/[\n,，]/).map((s) => s.trim()).filter(Boolean),
+        excludeAgentIds: settings.excludeAgentIds || [],
         excludeBoxes,
         discordWebhook: $("discordWebhook").value.trim(),
       };
@@ -550,6 +651,43 @@
     };
 
     $("reloadBtn").onclick = loadList;
+    $("selectPageBtn").onclick = () => {
+      document.querySelectorAll("[data-pick]").forEach((el) => {
+        el.checked = true;
+        selected.add(el.dataset.pick);
+        el.closest(".item")?.classList.add("picked");
+      });
+      updateBulkBar();
+    };
+    $("clearSelectBtn").onclick = () => {
+      selected.clear();
+      document.querySelectorAll("[data-pick]").forEach((el) => {
+        el.checked = false;
+        el.closest(".item")?.classList.remove("picked");
+      });
+      updateBulkBar();
+    };
+    $("hideSelectedBtn").onclick = async () => {
+      const ids = [...selected];
+      if (!ids.length) return;
+      $("hideSelectedBtn").disabled = true;
+      try {
+        const res = await fetch("/api/listings/hide-many", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "隱藏失敗");
+        selected.clear();
+        $("status").textContent = `已不再顯示 ${data.count} 筆`;
+        await loadList();
+      } catch (error) {
+        $("status").textContent = error.message;
+      } finally {
+        $("hideSelectedBtn").disabled = false;
+      }
+    };
     $("q").addEventListener("input", () => {
       clearTimeout(window.__q);
       window.__q = setTimeout(loadList, 250);
@@ -574,6 +712,14 @@
     });
 
     $("list").addEventListener("change", async (ev) => {
+      const pick = ev.target.dataset.pick;
+      if (pick) {
+        if (ev.target.checked) selected.add(pick);
+        else selected.delete(pick);
+        ev.target.closest(".item")?.classList.toggle("picked", ev.target.checked);
+        updateBulkBar();
+        return;
+      }
       const hiddenId = ev.target.dataset.hidden;
       if (!hiddenId) return;
       await fetch(`/api/listings/${hiddenId}/flags`, {
@@ -585,6 +731,23 @@
     });
 
     $("list").addEventListener("click", async (ev) => {
+      const face = ev.target.dataset.excludeFace;
+      if (face) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const label = ev.target.dataset.agent || "";
+        const uid = Number(ev.target.dataset.uid);
+        if (label && !$("excludeAgents").value.split(/[\n,，]/).map((s) => s.trim()).includes(label)) {
+          $("excludeAgents").value = [$("excludeAgents").value.trim(), label].filter(Boolean).join("\n");
+        }
+        if (uid) {
+          settings.excludeAgentIds = [...new Set([...(settings.excludeAgentIds || []), uid])];
+        }
+        $("saveMsg").textContent = label ? `已排除 ${label}` : "已排除此聯絡人";
+        await saveSettings(collectSettings());
+        await loadList();
+        return;
+      }
       const rejectMatch = ev.target.dataset.rejectMatch;
       if (rejectMatch) {
         await fetch(`/api/listings/${rejectMatch}/reject-match`, { method: "POST" });

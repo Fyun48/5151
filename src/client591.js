@@ -205,6 +205,25 @@ export function normalizeListing(item) {
 }
 
 export async function fetchCostDetails(postId) {
+  const detail = await fetchListingDetail(postId);
+  return detail.fees;
+}
+
+export function contactFromLink(link = {}) {
+  const line = String(link.line || "").trim();
+  return {
+    contact_name: String(link.name || link.imName || "").trim(),
+    contact_role: String(link.roleName || "").trim(),
+    agency: String(link.roleTxt || "").replace(/\s+/g, " ").trim(),
+    mobile: String(link.mobile || "").trim(),
+    phone: String(link.phone || "").trim(),
+    line_url: /^https?:\/\//i.test(line) ? line : "",
+    avatar: String(link.avatar || "").trim(),
+    contact_uid: Number(link.uid || link.imUid) || null,
+  };
+}
+
+export async function fetchListingDetail(postId) {
   const res = await fetch(`https://bff-house.591.com.tw/v2/web/rent/detail?id=${postId}`, {
     headers: {
       "User-Agent": USER_AGENT,
@@ -217,7 +236,10 @@ export async function fetchCostDetails(postId) {
   if (body.status !== 1 && body.status !== true && !body.data) {
     throw new Error(body.msg || "591 詳情失敗");
   }
-  return feesFromDetail(body.data?.cost?.data || []);
+  return {
+    fees: feesFromDetail(body.data?.cost?.data || []),
+    contact: contactFromLink(body.data?.linkInfo || {}),
+  };
 }
 
 async function fetchPage(query, firstRow) {

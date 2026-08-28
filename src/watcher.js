@@ -12,11 +12,11 @@ import {
   setCachedGeo,
   getCachedGeo,
   setFlags,
-  setListingFees,
+  setListingDetail,
   setListingMatch,
   upsertListing,
 } from "./db.js";
-import { fetchCostDetails, fetchListings, mergeFeeRows } from "./client591.js";
+import { fetchListingDetail, fetchListings, mergeFeeRows } from "./client591.js";
 import { bestMatch } from "./match.js";
 import { eventLabel, notify } from "./notify.js";
 
@@ -171,13 +171,17 @@ export async function runWatch(options = {}) {
     }
   }
 
-  const pendingFees = listingsNeedingFeeDetail(12);
+  const pendingFees = listingsNeedingFeeDetail(20);
   for (const row of pendingFees) {
     try {
       const listing = getListing(row.post_id);
       if (!listing) continue;
-      const detail = await fetchCostDetails(row.post_id);
-      setListingFees(row.post_id, mergeFeeRows(listing.extra_fees, detail), 1);
+      const detail = await fetchListingDetail(row.post_id);
+      setListingDetail(row.post_id, {
+        extraFees: mergeFeeRows(listing.extra_fees, detail.fees),
+        contact: detail.contact,
+        fetched: 1,
+      });
     } catch {
       // 詳情失敗下次再試，不中斷本輪追蹤
     }
