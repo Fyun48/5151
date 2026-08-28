@@ -21,7 +21,7 @@ import {
   stats,
 } from "./db.js";
 import { adminEmail, authConfigured, clearSessionCookie, readSession, requireAuth, sessionCookie, verifyLogin } from "./auth.js";
-import { boxFromRoadDescription, geocodeAddress, hasActiveBoxes, needsListingGeo } from "./geo.js";
+import { boxFromRoadDescription, geocodeAddress, needsListingGeo } from "./geo.js";
 import { CITIES } from "./regions.js";
 import { backfillListingCoords, runWatch } from "./watcher.js";
 
@@ -74,10 +74,13 @@ let geoBackfillBusy = false;
 function queueGeoBackfill(settings = getSettings()) {
   if (geoBackfillBusy || !needsListingGeo(settings)) return;
   geoBackfillBusy = true;
-  backfillListingCoords(settings, { limit: 40 })
-    .then((geo) => {
+  (async () => {
+    for (let round = 0; round < 6; round += 1) {
+      const geo = await backfillListingCoords(settings, { limit: 40, skipNominatim: true });
       broadcast({ type: "geo", stats: stats(), geoBackfill: geo });
-    })
+      if (!geo.attempted && !geo.located) break;
+    }
+  })()
     .catch((error) => {
       console.warn("補定位失敗：", error.message);
     })
@@ -214,9 +217,7 @@ app.post("/api/settings", async (req, res) => {
     const settings = saveSettings(body);
     schedule();
     res.json({ settings, stats: stats() });
-    if (hasActiveBoxes(settings.excludeBoxes)) {
-      queueGeoBackfill(settings);
-    }
+    queueGeoBackfill(settings);
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }

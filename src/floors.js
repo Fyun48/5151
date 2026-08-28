@@ -1,4 +1,4 @@
-import { distanceKm, isExcludedByAgent, isExcludedByBox, isExcludedByKeyword } from "./geo.js";
+import { distanceKm, isExcludedByAgent, isExcludedByBox, isExcludedByKeyword, needsListingGeo } from "./geo.js";
 
 function tagText(listing) {
   let tags = listing.tags;
@@ -70,17 +70,23 @@ export function passesAttributeFilters(listing, settings = {}) {
 }
 
 export function passesGeoFilters(listing, settings = {}) {
+  const needGeo = needsListingGeo(settings);
+  const hasCoords =
+    listing.lat != null &&
+    listing.lng != null &&
+    listing.lat !== "" &&
+    Number.isFinite(Number(listing.lat)) &&
+    Number.isFinite(Number(listing.lng));
+  if (needGeo && !hasCoords) return false;
   if (isExcludedByBox(listing.lat, listing.lng, settings.excludeBoxes)) {
     return false;
   }
   const km = Number(settings.commuteKm);
   const workLat = Number(settings.workLat);
   const workLng = Number(settings.workLng);
-  if (Number.isFinite(km) && km > 0 && Number.isFinite(workLat) && Number.isFinite(workLng)) {
-    if (listing.lat != null && listing.lng != null && listing.lat !== "") {
-      const dist = distanceKm(workLat, workLng, listing.lat, listing.lng);
-      if (dist != null && dist > km) return false;
-    }
+  if (Number.isFinite(km) && km > 0 && Number.isFinite(workLat) && Number.isFinite(workLng) && hasCoords) {
+    const dist = distanceKm(workLat, workLng, listing.lat, listing.lng);
+    if (dist != null && dist > km) return false;
   }
   return true;
 }

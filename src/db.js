@@ -557,7 +557,7 @@ export function setListingFees(postId, extraFees, fetched = 1) {
   return setListingDetail(postId, { extraFees, fetched });
 }
 
-export function setListingDetail(postId, { extraFees, contact, fetched = 1 } = {}) {
+export function setListingDetail(postId, { extraFees, contact, fetched = 1, lat, lng } = {}) {
   const listing = getListing(postId);
   if (!listing) return null;
   const fees =
@@ -578,7 +578,8 @@ export function setListingDetail(postId, { extraFees, contact, fetched = 1 } = {
     `UPDATE listings SET
       extra_fees = ?, extra_fees_fetched = ?,
       contact_name = ?, contact_role = ?, agency = ?, mobile = ?, phone = ?,
-      line_url = ?, avatar = ?, contact_uid = ?, contact_fetched = ?
+      line_url = ?, avatar = ?, contact_uid = ?, contact_fetched = ?,
+      lat = COALESCE(?, lat), lng = COALESCE(?, lng)
      WHERE post_id = ?`,
   ).run(
     fees,
@@ -592,8 +593,13 @@ export function setListingDetail(postId, { extraFees, contact, fetched = 1 } = {
     next.avatar,
     next.contact_uid,
     Number(Boolean(fetched)),
+    Number.isFinite(Number(lat)) ? Number(lat) : null,
+    Number.isFinite(Number(lng)) ? Number(lng) : null,
     postId,
   );
+  if (Number.isFinite(Number(lat)) && Number.isFinite(Number(lng)) && listing.address) {
+    setCachedGeo(listing.address, lat, lng);
+  }
   return getListing(postId);
 }
 
@@ -602,7 +608,7 @@ export function listingsNeedingFeeDetail(limit = 12) {
     .prepare(
       `SELECT post_id FROM listings
        WHERE IFNULL(contact_fetched, 0) = 0 OR IFNULL(extra_fees_fetched, 0) = 0
-       ORDER BY last_seen_at DESC
+       ORDER BY CASE WHEN lat IS NULL OR lng IS NULL THEN 0 ELSE 1 END, last_seen_at DESC
        LIMIT ?`,
     )
     .all(Math.max(1, Number(limit) || 12));

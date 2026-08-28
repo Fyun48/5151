@@ -88,7 +88,7 @@ export async function runWatch(options = {}) {
     workLng: settings.workLng,
     lookupGeo: getCachedGeo,
     saveGeo: (address, lat, lng) => updateListingsGeoByAddress(address, lat, lng),
-    geoLeft: options.skipHeavyGeo ? 0 : 8,
+    geoLeft: options.skipHeavyGeo ? 0 : 12,
   };
 
   for (const url of urls) {
@@ -191,6 +191,8 @@ export async function runWatch(options = {}) {
         extraFees: mergeFeeRows(listing.extra_fees, detail.fees),
         contact: detail.contact,
         fetched: 1,
+        lat: detail.lat,
+        lng: detail.lng,
       });
     } catch {
       // 詳情失敗下次再試，不中斷本輪追蹤
@@ -218,7 +220,7 @@ export async function runWatch(options = {}) {
   };
 }
 
-export async function backfillListingCoords(settings = getSettings(), { limit = 30 } = {}) {
+export async function backfillListingCoords(settings = getSettings(), { limit = 30, skipNominatim = true } = {}) {
   if (!needsListingGeo(settings) || limit <= 0) return { attempted: 0, located: 0 };
   const near = districtsNearBoxes(settings.excludeBoxes);
   const rows = addressesMissingGeo().sort((a, b) => {
@@ -236,7 +238,7 @@ export async function backfillListingCoords(settings = getSettings(), { limit = 
       continue;
     }
     if (attempted >= limit) break;
-    const geo = await geocodeAddress(row.address, getCachedGeo);
+    const geo = await geocodeAddress(row.address, getCachedGeo, { skipNominatim });
     attempted += 1;
     if (geo) {
       updateListingsGeoByAddress(row.address, geo.lat, geo.lng);

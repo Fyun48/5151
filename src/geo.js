@@ -216,6 +216,15 @@ export function coordsFromListing(item) {
   return { lat: null, lng: null };
 }
 
+export function coordsFrom591Detail(data) {
+  const addr = data?.address || {};
+  const pos = data?.positionRound || {};
+  return coordsFromListing({
+    lat: addr.lat ?? pos.lat,
+    lng: addr.lng ?? pos.lng ?? addr.lon ?? pos.lon,
+  });
+}
+
 export function distanceKm(lat1, lng1, lat2, lng2) {
   const a = Number(lat1);
   const b = Number(lng1);

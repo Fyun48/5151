@@ -1,6 +1,6 @@
 import { passesAttributeFilters, passesGeoFilters } from "./floors.js";
 import { allDistricts } from "./regions.js";
-import { coordsFromListing, geocodeAddress, isExcludedByKeyword, needsListingGeo } from "./geo.js";
+import { coordsFrom591Detail, coordsFromListing, geocodeAddress, isExcludedByKeyword, needsListingGeo } from "./geo.js";
 
 const LIST_URL = "https://bff-house.591.com.tw/v3/web/rent/list";
 const USER_AGENT =
@@ -265,6 +265,7 @@ export async function fetchListingDetail(postId) {
   return {
     fees: feesFromDetail(body.data?.cost?.data || []),
     contact: contactFromLink(body.data?.linkInfo || {}),
+    ...coordsFrom591Detail(body.data),
   };
 }
 
@@ -330,7 +331,7 @@ async function mapKeptListings(items, options) {
         row.lng = cached.lng;
       } else if (options.geoLeft > 0) {
         options.geoLeft -= 1;
-        const geo = await geocodeAddress(row.address, options.lookupGeo);
+        const geo = await geocodeAddress(row.address, options.lookupGeo, { skipNominatim: true });
         if (geo) {
           row.lat = geo.lat;
           row.lng = geo.lng;
