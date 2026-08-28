@@ -21,7 +21,7 @@ import {
   stats,
 } from "./db.js";
 import { adminEmail, authConfigured, clearSessionCookie, readSession, requireAuth, sessionCookie, verifyLogin } from "./auth.js";
-import { boxFromRoadDescription, geocodeAddress, needsListingGeo } from "./geo.js";
+import { boxFromRoadDescription, geocodeAddress, hasActiveBoxes, needsListingGeo } from "./geo.js";
 import { CITIES } from "./regions.js";
 import { backfillListingCoords, runWatch } from "./watcher.js";
 
@@ -187,12 +187,23 @@ app.post("/api/settings", async (req, res) => {
     const workAddress = String(body.workAddress || "").trim();
     if (Number(body.commuteKm) > 0) {
       if (!workAddress) throw new Error("請先填上班地址，才能篩通勤距離");
-      const geo = await geocodeAddress(workAddress, getCachedGeo, { strict: true, maxAttempts: 2 });
-      if (!geo) throw new Error("找不到這個上班地址，請再寫詳細一點");
-      body.workAddress = workAddress;
-      body.workLat = geo.lat;
-      body.workLng = geo.lng;
-      setCachedGeo(workAddress, geo.lat, geo.lng);
+      const current = getSettings();
+      const sameAddress =
+        String(current.workAddress || "").replace(/\s+/g, "") === workAddress.replace(/\s+/g, "") &&
+        Number.isFinite(Number(current.workLat)) &&
+        Number.isFinite(Number(current.workLng));
+      if (sameAddress) {
+        body.workAddress = workAddress;
+        body.workLat = current.workLat;
+        body.workLng = current.workLng;
+      } else {
+        const geo = await geocodeAddress(workAddress, getCachedGeo, { strict: true, maxAttempts: 2 });
+        if (!geo) throw new Error("找不到這個上班地址，請再寫詳細一點");
+        body.workAddress = workAddress;
+        body.workLat = geo.lat;
+        body.workLng = geo.lng;
+        setCachedGeo(workAddress, geo.lat, geo.lng);
+      }
     } else if (body.workAddress !== undefined) {
       body.workAddress = workAddress;
       if (!workAddress) {
@@ -203,7 +214,9 @@ app.post("/api/settings", async (req, res) => {
     const settings = saveSettings(body);
     schedule();
     res.json({ settings, stats: stats() });
-    queueGeoBackfill(settings);
+    if (hasActiveBoxes(settings.excludeBoxes)) {
+      queueGeoBackfill(settings);
+    }
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }

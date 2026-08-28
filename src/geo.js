@@ -261,12 +261,11 @@ function parseTaiwanAddress(address) {
     .replace(/台北/g, "臺北");
   const cityMatch = raw.match(/^(臺北市|新北市|桃園市|基隆市|新竹市)/);
   let city = cityMatch?.[1] || "";
-  const districtMatch = raw.match(/(.{2,3}區)/);
+  let rest = city ? raw.slice(city.length) : raw;
+  const districtMatch = rest.match(/^(.{1,3}區)/);
   const district = districtMatch?.[1] || "";
+  if (district) rest = rest.slice(district.length);
   if (!city && district) city = cityForDistrict(district);
-  let rest = raw;
-  if (city && rest.startsWith(city)) rest = rest.slice(city.length);
-  if (district && rest.startsWith(district)) rest = rest.slice(district.length);
   const numberMatch = rest.match(/(\d+(?:之\d+)?號)$/);
   const number = numberMatch?.[1] || "";
   if (number) rest = rest.slice(0, -number.length);
@@ -306,10 +305,46 @@ function geocodeQueries(address, cityHint = "") {
   return { parsed, queries: out.filter(Boolean).slice(0, 4) };
 }
 
+function photonQueries(parsed) {
+  const out = [];
+  const push = (value) => {
+    const text = String(value || "").replace(/\s+/g, " ").trim();
+    if (text && !out.includes(text)) out.push(text);
+  };
+  const street = [parsed.road, parsed.number].filter(Boolean).join(" ");
+  push([street, parsed.district, parsed.city].filter(Boolean).join(", "));
+  push([street, parsed.district].filter(Boolean).join(", "));
+  push([parsed.road, parsed.district, parsed.city].filter(Boolean).join(", "));
+  return out.slice(0, 3);
+}
+
 let lastNominatimAt = 0;
+const GEO_UA = "591-tracker/1.0 (personal rental watcher; acefengyun@gmail.com)";
+
+async function photonSearch(query) {
+  const url = new URL("https://photon.komoot.io/api/");
+  url.searchParams.set("q", query);
+  url.searchParams.set("limit", "1");
+  const res = await fetch(url, {
+    headers: {
+      "User-Agent": GEO_UA,
+      Accept: "application/json",
+    },
+    signal: AbortSignal.timeout(8000),
+  });
+  if (res.status === 429 || res.status === 503) return { busy: true };
+  if (!res.ok) return null;
+  const body = await res.json();
+  const coords = body?.features?.[0]?.geometry?.coordinates;
+  if (!Array.isArray(coords) || coords.length < 2) return null;
+  const lat = Number(coords[1]);
+  const lng = Number(coords[0]);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return { lat, lng };
+}
 
 async function nominatimSearch(params) {
-  const wait = 1100 - (Date.now() - lastNominatimAt);
+  const wait = 1200 - (Date.now() - lastNominatimAt);
   if (wait > 0) await sleep(wait);
   const url = new URL("https://nominatim.openstreetmap.org/search");
   url.searchParams.set("format", "jsonv2");
@@ -322,7 +357,7 @@ async function nominatimSearch(params) {
   lastNominatimAt = Date.now();
   const res = await fetch(url, {
     headers: {
-      "User-Agent": "591-tracker/1.0 (personal rental watcher)",
+      "User-Agent": GEO_UA,
       Accept: "application/json",
     },
     signal: AbortSignal.timeout(8000),
@@ -336,6 +371,26 @@ export async function geocodeAddress(address, lookup, options = {}) {
   const cached = lookup?.(address) || lookup?.(text);
   if (cached) return cached;
   const { parsed, queries } = geocodeQueries(address, options.cityHint);
+  let busy = false;
+
+  for (const query of photonQueries(parsed)) {
+    try {
+      const hit = await photonSearch(query);
+      if (hit?.busy) {
+        busy = true;
+        continue;
+      }
+      if (hit?.lat != null) return hit;
+    } catch {
+      // Photon 逾時就改試下一組
+    }
+  }
+
+  if (options.skipNominatim) {
+    if (options.strict && busy) throw new Error("地圖定位服務暫時忙碌，請稍後再試");
+    return null;
+  }
+
   const attempts = [];
   if (parsed.road && parsed.number && !/[巷弄]/.test(parsed.road)) {
     attempts.push({
@@ -346,30 +401,30 @@ export async function geocodeAddress(address, lookup, options = {}) {
     });
   }
   for (const query of queries) attempts.push({ q: query });
-  const maxAttempts = Math.max(1, Math.min(Number(options.maxAttempts) || attempts.length, attempts.length));
+  const maxAttempts = Math.max(1, Math.min(Number(options.maxAttempts) || 2, attempts.length));
 
   let lastStatus = 200;
   for (let i = 0; i < maxAttempts; i += 1) {
     let res;
     try {
       res = await nominatimSearch(attempts[i]);
-    } catch (error) {
-      if (options.strict) throw new Error("地圖定位逾時，請稍後再試");
+    } catch {
       lastStatus = 0;
       continue;
     }
     lastStatus = res.status;
-    if (res.status === 429) {
-      if (options.strict) throw new Error("地圖定位服務暫時忙碌，請稍後再試");
-      return null;
+    if (res.status === 429 || res.status === 503) {
+      busy = true;
+      break;
     }
     if (!res.ok) continue;
     const rows = await res.json();
     const hit = rows?.[0];
     if (hit) return { lat: Number(hit.lat), lng: Number(hit.lon) };
   }
-  if (options.strict && lastStatus !== 200) {
-    throw new Error(`地圖定位失敗（HTTP ${lastStatus}）`);
+  if (options.strict) {
+    if (busy) throw new Error("地圖定位服務暫時忙碌，請稍後再試");
+    if (lastStatus && lastStatus !== 200) throw new Error(`地圖定位失敗（HTTP ${lastStatus}）`);
   }
   return null;
 }
