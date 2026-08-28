@@ -124,11 +124,12 @@
       z-index: 200;
       padding: 20px;
     }
-    #mapOverlay.open { display: flex; }
+    #mapOverlay.open { display: flex; flex-direction: column; }
     #mapOverlay .map-stage {
       flex: 1;
       min-height: 0;
       width: 100%;
+      height: 100%;
       background: var(--paper);
       border-radius: 18px;
       box-shadow: 0 18px 50px rgba(40, 20, 8, 0.22);
@@ -145,12 +146,19 @@
       border-bottom: 1px solid var(--line);
     }
     #mapOverlay .map-overlay-bar h2 { margin: 0; font-size: 16px; }
-    #mapOverlayHost { flex: 1; min-height: 0; position: relative; }
+    #mapOverlayHost {
+      flex: 1;
+      min-height: 0;
+      position: relative;
+      height: calc(100vh - 120px);
+    }
     body.map-expanded { overflow: hidden; }
     body.map-expanded #mapOverlayHost #excludeMap {
       position: absolute;
       inset: 0;
-      height: auto;
+      width: 100% !important;
+      height: 100% !important;
+      min-height: 320px;
       border: 0;
       border-radius: 0;
       margin: 0;
@@ -655,6 +663,16 @@
         if (previewRect) { map.removeLayer(previewRect); previewRect = null; }
       }
     }
+    function refreshMapSize() {
+      const run = () => map?.invalidateSize({ animate: false });
+      run();
+      requestAnimationFrame(() => {
+        run();
+        requestAnimationFrame(run);
+      });
+      setTimeout(run, 50);
+      setTimeout(run, 250);
+    }
     function setMapExpanded(open) {
       const overlay = $("mapOverlay");
       const host = $("mapOverlayHost");
@@ -672,7 +690,7 @@
         overlay.setAttribute("aria-hidden", "true");
         document.body.classList.remove("map-expanded");
       }
-      setTimeout(() => map?.invalidateSize(), 80);
+      refreshMapSize();
     }
     function readBoxBounds(idx) {
       const south = Number(document.querySelector(`[data-box-south="${idx}"]`)?.value);
