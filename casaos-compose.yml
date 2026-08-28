@@ -18,19 +18,6 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:-}
     volumes:
       - /DATA/AppData/591-tracker:/data
-    labels:
-      - com.centurylinklabs.watchtower.enable=true
-
-  watchtower:
-    image: containrrr/watchtower:latest
-    container_name: 591-tracker-watchtower
-    restart: unless-stopped
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    environment:
-      TZ: Asia/Taipei
-      WATCHTOWER_CLEANUP: "true"
-    command: --interval 120 --label-enable 591-tracker
 
 x-casaos:
   architectures:
