@@ -1566,6 +1566,14 @@
         pushDock(data.result.events || []);
         loadList();
       }
+      if (data.type === "notify") {
+        const n = data.events?.length || 0;
+        if (n) {
+          $("status").textContent = `篩選後通知 ${n} 則 · ${new Date().toLocaleString()}`;
+          pushDock(data.events || []);
+        }
+        loadList();
+      }
       if (data.type === "geo") {
         if (data.routeBackfill?.located) {
           $("status").textContent = `已計算 ${data.routeBackfill.located} 筆機車路線，列表已更新`;

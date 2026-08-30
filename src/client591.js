@@ -1,6 +1,12 @@
 import { passesAttributeFilters, passesGeoFilters } from "./floors.js";
 import { allDistricts } from "./regions.js";
 import { coordsFrom591Detail, coordsFromListing, isExcludedByKeyword } from "./geo.js";
+import {
+  communityRefFromDetail,
+  listingAddressFromDetail,
+  parseCommunityPayload,
+  preferCommunityLocation,
+} from "./location.js";
 
 const LIST_URL = "https://bff-house.591.com.tw/v3/web/rent/list";
 const USER_AGENT =
@@ -223,6 +229,7 @@ export function normalizeListing(item) {
     role_name: item.role_name || item.linkman || "",
     cover: item.cover || (item.photoList && item.photoList[0]) || "",
     community_id: item.community_id && Number(item.community_id) !== 0 ? Number(item.community_id) : 0,
+    community_name: String(item.community_name || item.community || "").trim(),
     tags: JSON.stringify(item.tags || []),
     refresh_time: item.refresh_time || "",
     lat: coords.lat,
@@ -249,7 +256,45 @@ export function contactFromLink(link = {}) {
   };
 }
 
-export async function fetchListingDetail(postId) {
+const communityMemo = new Map();
+
+export async function fetchCommunityLocation(communityId) {
+  const id = Number(communityId);
+  if (!id) return null;
+  if (communityMemo.has(id)) return communityMemo.get(id);
+  try {
+    const res = await fetch(`https://bff.591.com.tw/v1/community/detail?id=${id}`, {
+      headers: {
+        "User-Agent": USER_AGENT,
+        Accept: "application/json, text/plain, */*",
+        Referer: "https://market.591.com.tw/",
+      },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) {
+      communityMemo.set(id, null);
+      return null;
+    }
+    const body = await res.json();
+    if (body.status !== 1 && body.status !== true && !body.data?.community) {
+      communityMemo.set(id, null);
+      return null;
+    }
+    const loc = parseCommunityPayload(body);
+    if (!loc.address && loc.lat == null) {
+      communityMemo.set(id, null);
+      return null;
+    }
+    loc.id = loc.id || id;
+    communityMemo.set(id, loc);
+    return loc;
+  } catch {
+    communityMemo.set(id, null);
+    return null;
+  }
+}
+
+export async function fetchListingDetail(postId, options = {}) {
   const res = await fetch(`https://bff-house.591.com.tw/v2/web/rent/detail?id=${postId}`, {
     headers: {
       "User-Agent": USER_AGENT,
@@ -262,10 +307,37 @@ export async function fetchListingDetail(postId) {
   if (body.status !== 1 && body.status !== true && !body.data) {
     throw new Error(body.msg || "591 詳情失敗");
   }
+  const ref = communityRefFromDetail(body.data);
+  let community = ref.id ? options.getCommunity?.(ref.id) : null;
+  const cachedCommunity = community && (community.lat != null || community.address) ? community : null;
+  if (ref.id && !community) {
+    community = await fetchCommunityLocation(ref.id);
+    options.saveCommunity?.(
+      community || { id: ref.id, name: ref.name, address: "", lat: null, lng: null },
+    );
+  }
+  const communityLoc = cachedCommunity || (community && (community.lat != null || community.address) ? community : null);
+  if (communityLoc && ref.name && !communityLoc.name) {
+    communityLoc.name = ref.name;
+  }
+  const chosen = preferCommunityLocation(
+    {
+      address: listingAddressFromDetail(body.data),
+      ...coordsFrom591Detail(body.data),
+      community_id: ref.id,
+      community_name: ref.name,
+    },
+    communityLoc ? { ...communityLoc, id: communityLoc.id || ref.id, name: communityLoc.name || ref.name } : null,
+  );
   return {
     fees: feesFromDetail(body.data?.cost?.data || []),
     contact: contactFromLink(body.data?.linkInfo || {}),
-    ...coordsFrom591Detail(body.data),
+    lat: chosen.lat,
+    lng: chosen.lng,
+    address: chosen.address,
+    geo_source: chosen.geo_source,
+    community_id: chosen.community_id || ref.id || 0,
+    community_name: chosen.community_name || ref.name || "",
   };
 }
 

@@ -23,7 +23,7 @@ import {
 import { adminEmail, authConfigured, clearSessionCookie, readSession, requireAuth, sessionCookie, verifyLogin } from "./auth.js";
 import { boxFromRoadDescription, geocodeAddress, needsListingGeo } from "./geo.js";
 import { CITIES } from "./regions.js";
-import { backfillListingCoords, backfillListingRoutes, runWatch } from "./watcher.js";
+import { backfillListingCoords, backfillListingRoutes, flushPendingNotifications, runWatch } from "./watcher.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -79,6 +79,8 @@ function queueGeoBackfill(settings = getSettings()) {
       try {
         const geo = await backfillListingCoords(settings, { limit: 12 });
         broadcast({ type: "geo", stats: stats(), geoBackfill: geo });
+        const notified = await flushPendingNotifications(settings);
+        if (notified.length) broadcast({ type: "notify", events: notified, stats: stats() });
         if (!geo.attempted && !geo.located) break;
       } catch (error) {
         console.warn("補定位失敗：", error.message);
@@ -89,6 +91,8 @@ function queueGeoBackfill(settings = getSettings()) {
       try {
         const routes = await backfillListingRoutes(settings, { limit: 15 });
         if (routes.attempted) broadcast({ type: "geo", stats: stats(), routeBackfill: routes });
+        const notified = await flushPendingNotifications(settings);
+        if (notified.length) broadcast({ type: "notify", events: notified, stats: stats() });
         if (!routes.attempted) break;
       } catch (error) {
         console.warn("補路線失敗：", error.message);
