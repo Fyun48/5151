@@ -1,6 +1,7 @@
 import {
   addEvent,
   findBySourceKey,
+  getCommunityCache,
   getListing,
   getSettings,
   listingCount,
@@ -10,8 +11,11 @@ import {
   listingsNeedingFeeDetail,
   listingsNeedingRoute,
   markEventNotified,
+  pendingNotifyEvents,
+  eventPayloadFromListing,
   saveSettings,
   setCachedRoute,
+  setCommunityCache,
   setFlags,
   setListingDetail,
   setListingMatch,
@@ -19,6 +23,7 @@ import {
 } from "./db.js";
 import { fetchListingDetail, fetchListings, mergeFeeRows } from "./client591.js";
 import { needsListingGeo } from "./geo.js";
+import { decideNotifyDelivery } from "./floors.js";
 import { fetchRoadRoutes } from "./route.js";
 import { bestMatch } from "./match.js";
 import { eventLabel, notify } from "./notify.js";
@@ -64,6 +69,82 @@ function classify(incoming, existing) {
   return { type: "seen", detail: "" };
 }
 
+function detailOptions() {
+  return {
+    getCommunity: getCommunityCache,
+    saveCommunity: setCommunityCache,
+  };
+}
+
+function applyFetchedDetail(listing, detail) {
+  return setListingDetail(listing.post_id, {
+    extraFees: mergeFeeRows(listing.extra_fees, detail.fees),
+    contact: detail.contact,
+    fetched: 1,
+    lat: detail.lat,
+    lng: detail.lng,
+    address: detail.address,
+    community_id: detail.community_id,
+    community_name: detail.community_name,
+    geo_source: detail.geo_source,
+  });
+}
+
+async function resolveListingRoute(listing, settings) {
+  const km = Number(settings.commuteKm);
+  const workLat = Number(settings.workLat);
+  const workLng = Number(settings.workLng);
+  if (!(km > 0) || !Number.isFinite(workLat) || !Number.isFinite(workLng)) return listing;
+  const lat = Number(listing?.lat);
+  const lng = Number(listing?.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return listing;
+  if (Array.isArray(listing.route_kms) && listing.route_kms.length) return listing;
+  const distances = await fetchRoadRoutes(lat, lng, workLat, workLng);
+  if (!distances?.length) return listing;
+  setCachedRoute(lat, lng, workLat, workLng, distances);
+  return getListing(listing.post_id);
+}
+
+export async function flushPendingNotifications(settings = getSettings(), { silent = false } = {}) {
+  const pending = pendingNotifyEvents(80);
+  const ready = [];
+  for (const event of pending) {
+    const listing = getListing(event.post_id);
+    if (!listing || !shouldNotify(settings, listing, event.type)) {
+      markEventNotified(event.id);
+      continue;
+    }
+    const delivery = decideNotifyDelivery(listing, settings);
+    if (delivery === "pending") continue;
+    markEventNotified(event.id);
+    if (delivery === "send") ready.push(eventPayloadFromListing(event, listing));
+  }
+  if (!silent && ready.length) await notify(settings, ready);
+  return ready.map((event) => ({ ...event, type_label: eventLabel(event.type) }));
+}
+
+async function resolvePendingNotifyLocations(settings, { withRoute = true } = {}) {
+  if (!needsListingGeo(settings)) return;
+  const pending = pendingNotifyEvents(40);
+  const seen = new Set();
+  for (const event of pending) {
+    if (seen.has(event.post_id)) continue;
+    seen.add(event.post_id);
+    let listing = getListing(event.post_id);
+    if (!listing) continue;
+    if (!shouldNotify(settings, listing, event.type)) continue;
+    if (decideNotifyDelivery(listing, settings) !== "pending") continue;
+    try {
+      const detail = await fetchListingDetail(event.post_id, detailOptions());
+      listing = applyFetchedDetail(listing, detail) || listing;
+      if (withRoute) listing = (await resolveListingRoute(listing, settings)) || listing;
+    } catch {
+      // 詳情或路線失敗就留待下一輪補
+    }
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  }
+}
+
 export async function runWatch(options = {}) {
   const settings = getSettings();
   const urls = (settings.searchUrls || []).map((url) => String(url).trim()).filter(Boolean);
@@ -106,7 +187,6 @@ export async function runWatch(options = {}) {
   }
 
   const seen = new Set();
-  const events = [];
   const searchReports = [];
 
   for (const batch of collected) {
@@ -151,7 +231,6 @@ export async function runWatch(options = {}) {
 
       if (type === "seen" || isBaseline || isSearchBaseline) continue;
 
-      const current = getListing(listing.post_id);
       const event = {
         post_id: listing.post_id,
         source_key: listing.source_key,
@@ -173,35 +252,25 @@ export async function runWatch(options = {}) {
       };
       const id = addEvent(event);
       event.id = id;
-      if (shouldNotify(settings, current, type)) {
-        events.push(event);
-        markEventNotified(id);
-      }
     }
   }
+
+  await resolvePendingNotifyLocations(settings, { withRoute: options.skipHeavyGeo !== true });
 
   const pendingFees = listingsNeedingFeeDetail(needsListingGeo(settings) ? 30 : 20);
   for (const row of pendingFees) {
     try {
       const listing = getListing(row.post_id);
       if (!listing) continue;
-      const detail = await fetchListingDetail(row.post_id);
-      setListingDetail(row.post_id, {
-        extraFees: mergeFeeRows(listing.extra_fees, detail.fees),
-        contact: detail.contact,
-        fetched: 1,
-        lat: detail.lat,
-        lng: detail.lng,
-      });
+      const detail = await fetchListingDetail(row.post_id, detailOptions());
+      applyFetchedDetail(listing, detail);
     } catch {
       // 詳情失敗下次再試，不中斷本輪追蹤
     }
     await new Promise((resolve) => setTimeout(resolve, 400));
   }
 
-  if (!options.silent && events.length) {
-    await notify(settings, events);
-  }
+  const events = options.silent ? [] : await flushPendingNotifications(settings, { silent: options.silent });
   if (settings.hasBaseline !== true) {
     saveSettings({ hasBaseline: true });
   }
@@ -210,10 +279,7 @@ export async function runWatch(options = {}) {
     baseline: isBaseline,
     fetched: seen.size,
     searches: searchReports,
-    events: events.map((event) => ({
-      ...event,
-      type_label: eventLabel(event.type),
-    })),
+    events,
     errors,
     checked_at: nowIso(),
   };
@@ -229,13 +295,17 @@ export async function backfillListingCoords(settings = getSettings(), { limit = 
     try {
       const listing = getListing(row.post_id);
       if (!listing) continue;
-      const detail = await fetchListingDetail(row.post_id);
+      const detail = await fetchListingDetail(row.post_id, detailOptions());
       setListingDetail(row.post_id, {
         extraFees: mergeFeeRows(listing.extra_fees, detail.fees),
         contact: detail.contact,
         fetched: 1,
         lat: detail.lat,
         lng: detail.lng,
+        address: detail.address,
+        community_id: detail.community_id,
+        community_name: detail.community_name,
+        geo_source: detail.geo_source,
       });
       if (detail.lat != null && detail.lng != null) located += 1;
     } catch {

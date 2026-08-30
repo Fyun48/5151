@@ -1,4 +1,5 @@
-import { hasActiveBoxes, isExcludedByAgent, isExcludedByBox, isExcludedByKeyword } from "./geo.js";
+import { hasActiveBoxes, isExcludedByAgent, isExcludedByBox, isExcludedByKeyword, needsListingGeo } from "./geo.js";
+import { isTrustedGeoSource } from "./location.js";
 
 function tagText(listing) {
   let tags = listing.tags;
@@ -73,7 +74,28 @@ export function hasTrustedCoords(listing) {
   const lat = Number(listing.lat);
   const lng = Number(listing.lng);
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat === 0 || lng === 0) return false;
-  return listing.geo_source === "591";
+  return isTrustedGeoSource(listing.geo_source);
+}
+
+export function isGeoReady(listing, settings = {}) {
+  if (!needsListingGeo(settings)) return true;
+  if (!hasTrustedCoords(listing)) return false;
+  const km = Number(settings.commuteKm);
+  const commuteOn =
+    Number.isFinite(km) &&
+    km > 0 &&
+    Number.isFinite(Number(settings.workLat)) &&
+    Number.isFinite(Number(settings.workLng));
+  if (!commuteOn) return true;
+  const routes = Array.isArray(listing.route_kms) ? listing.route_kms.map(Number).filter(Number.isFinite) : [];
+  return routes.length > 0;
+}
+
+export function decideNotifyDelivery(listing, settings = {}) {
+  if (!passesAttributeFilters(listing, settings)) return "skip";
+  if (!isGeoReady(listing, settings)) return "pending";
+  if (!passesGeoFilters(listing, settings, { strict: true })) return "skip";
+  return "send";
 }
 
 export function passesGeoFilters(listing, settings = {}, { strict = true } = {}) {

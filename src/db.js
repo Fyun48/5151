@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { shouldKeepListing, listingHasElevator } from "./floors.js";
 import { normalizeBoxes, normalizeKeywords } from "./geo.js";
+import { isTrustedGeoSource, listingCommunityId } from "./location.js";
 import { makeRouteKey } from "./route.js";
 import { sameSearch } from "./client591.js";
 import { buildSearchUrls, districtNameFromListing, districtsFromSearchUrls, normalizeWatchDistricts, priceFromSearchUrls } from "./regions.js";
@@ -203,6 +204,26 @@ try {
 } catch {
   // already migrated
 }
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN community_id INTEGER NOT NULL DEFAULT 0");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN community_name TEXT NOT NULL DEFAULT ''");
+} catch {
+  // already migrated
+}
+db.exec(`
+  CREATE TABLE IF NOT EXISTS community_cache (
+    community_id INTEGER PRIMARY KEY,
+    name TEXT,
+    address TEXT,
+    lat REAL,
+    lng REAL,
+    updated_at TEXT NOT NULL
+  );
+`);
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_search ON listings(search_key)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_hidden ON listings(hidden)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_match ON listings(match_level)");
@@ -500,13 +521,16 @@ export function upsertListing(listing) {
     typeof listing.extra_fees === "string"
       ? listing.extra_fees
       : JSON.stringify(listing.extra_fees || []);
+  const communityId = Number(listing.community_id) || listingCommunityId(listing) || 0;
+  const communityName = String(listing.community_name || "").trim();
   db.prepare(`
     INSERT INTO listings (
       post_id, source_key, search_key, title, url, price, price_num, extra_fee, extra_fee_text,
       price_contain_text, extra_fees, extra_fees_fetched, address, area_name,
       layout, floor_name, kind_name, role_name, cover, tags, refresh_time,
-      first_seen_at, last_seen_at, last_event, viewed, watched, lat, lng
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
+      first_seen_at, last_seen_at, last_event, viewed, watched, lat, lng,
+      community_id, community_name
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?)
     ON CONFLICT(post_id) DO UPDATE SET
       source_key = excluded.source_key,
       search_key = excluded.search_key,
@@ -522,7 +546,11 @@ export function upsertListing(listing) {
         THEN listings.extra_fees
         ELSE excluded.extra_fees
       END,
-      address = excluded.address,
+      address = CASE
+        WHEN IFNULL(listings.geo_source, '') = 'community' AND IFNULL(listings.address, '') != ''
+        THEN listings.address
+        ELSE excluded.address
+      END,
       area_name = excluded.area_name,
       layout = excluded.layout,
       floor_name = excluded.floor_name,
@@ -533,8 +561,22 @@ export function upsertListing(listing) {
       refresh_time = excluded.refresh_time,
       last_seen_at = excluded.last_seen_at,
       last_event = excluded.last_event,
-      lat = COALESCE(excluded.lat, listings.lat),
-      lng = COALESCE(excluded.lng, listings.lng)
+      lat = CASE
+        WHEN IFNULL(listings.geo_source, '') IN ('591', 'community') THEN listings.lat
+        ELSE COALESCE(excluded.lat, listings.lat)
+      END,
+      lng = CASE
+        WHEN IFNULL(listings.geo_source, '') IN ('591', 'community') THEN listings.lng
+        ELSE COALESCE(excluded.lng, listings.lng)
+      END,
+      community_id = CASE
+        WHEN excluded.community_id > 0 THEN excluded.community_id
+        ELSE listings.community_id
+      END,
+      community_name = CASE
+        WHEN IFNULL(excluded.community_name, '') != '' THEN excluded.community_name
+        ELSE listings.community_name
+      END
   `).run(
     listing.post_id,
     listing.source_key,
@@ -562,6 +604,8 @@ export function upsertListing(listing) {
     listing.last_event,
     listing.lat ?? null,
     listing.lng ?? null,
+    communityId,
+    communityName,
   );
 }
 
@@ -569,7 +613,7 @@ export function setListingFees(postId, extraFees, fetched = 1) {
   return setListingDetail(postId, { extraFees, fetched });
 }
 
-export function setListingDetail(postId, { extraFees, contact, fetched = 1, lat, lng } = {}) {
+export function setListingDetail(postId, { extraFees, contact, fetched = 1, lat, lng, address, community_id, community_name, geo_source } = {}) {
   const listing = getListing(postId);
   if (!listing) return null;
   const fees =
@@ -588,7 +632,15 @@ export function setListingDetail(postId, { extraFees, contact, fetched = 1, lat,
   };
   const latNum = Number(lat);
   const lngNum = Number(lng);
-  const has591 = Number.isFinite(latNum) && Number.isFinite(lngNum) && latNum !== 0 && lngNum !== 0;
+  const hasCoords = Number.isFinite(latNum) && Number.isFinite(lngNum) && latNum !== 0 && lngNum !== 0;
+  const upgradingToCommunity = hasCoords && geo_source === "community";
+  const keepCommunity = listing.geo_source === "community" && !upgradingToCommunity;
+  const applyCoords = hasCoords && !keepCommunity;
+  const source = applyCoords ? (geo_source === "community" ? "community" : "591") : null;
+  const nextAddress = String(address || "").trim();
+  const keepAddress = !nextAddress || keepCommunity;
+  const nextCommunityId = Number(community_id) || listing.community_id || 0;
+  const nextCommunityName = String(community_name || listing.community_name || "").trim();
   db.prepare(
     `UPDATE listings SET
       extra_fees = ?, extra_fees_fetched = ?,
@@ -596,7 +648,10 @@ export function setListingDetail(postId, { extraFees, contact, fetched = 1, lat,
       line_url = ?, avatar = ?, contact_uid = ?, contact_fetched = ?,
       lat = CASE WHEN ? IS NOT NULL THEN ? ELSE lat END,
       lng = CASE WHEN ? IS NOT NULL THEN ? ELSE lng END,
-      geo_source = CASE WHEN ? IS NOT NULL THEN '591' ELSE geo_source END
+      geo_source = CASE WHEN ? IS NOT NULL THEN ? ELSE geo_source END,
+      address = CASE WHEN ? THEN listings.address ELSE ? END,
+      community_id = CASE WHEN ? > 0 THEN ? ELSE community_id END,
+      community_name = CASE WHEN ? != '' THEN ? ELSE community_name END
      WHERE post_id = ?`,
   ).run(
     fees,
@@ -610,11 +665,18 @@ export function setListingDetail(postId, { extraFees, contact, fetched = 1, lat,
     next.avatar,
     next.contact_uid,
     Number(Boolean(fetched)),
-    has591 ? latNum : null,
-    has591 ? latNum : null,
-    has591 ? lngNum : null,
-    has591 ? lngNum : null,
-    has591 ? 1 : null,
+    applyCoords ? latNum : null,
+    applyCoords ? latNum : null,
+    applyCoords ? lngNum : null,
+    applyCoords ? lngNum : null,
+    source,
+    source,
+    keepAddress ? 1 : 0,
+    nextAddress,
+    nextCommunityId,
+    nextCommunityId,
+    nextCommunityName,
+    nextCommunityName,
     postId,
   );
   return getListing(postId);
@@ -636,15 +698,27 @@ export function listingsNeedingFeeDetail(limit = 12) {
 }
 
 export function listingsNeeding591Geo(limit = 20) {
-  return db
+  const cap = Math.max(1, Number(limit) || 20);
+  const rows = db
     .prepare(
-      `SELECT post_id FROM listings
+      `SELECT post_id, community_id, source_key, lat, lng, geo_source FROM listings
        WHERE IFNULL(hidden, 0) = 0
-         AND (lat IS NULL OR lng IS NULL OR IFNULL(geo_source, '') != '591')
        ORDER BY last_seen_at DESC
-       LIMIT ?`,
+       LIMIT 800`,
     )
-    .all(Math.max(1, Number(limit) || 20));
+    .all();
+  const out = [];
+  for (const row of rows) {
+    const trusted = isTrustedGeoSource(row.geo_source);
+    const missing = row.lat == null || row.lng == null || !trusted;
+    const commId = listingCommunityId(row);
+    const needsCommunity = commId > 0 && row.geo_source !== "community" && !hasCommunityCache(commId);
+    if (missing || needsCommunity) {
+      out.push({ post_id: row.post_id });
+      if (out.length >= cap) break;
+    }
+  }
+  return out;
 }
 
 export function hideMany(ids) {
@@ -714,7 +788,7 @@ export function setFlags(postId, flags) {
 
 export function applyCachedCoords(row, settings) {
   if (!row) return row;
-  if (row.geo_source !== "591") return row;
+  if (!isTrustedGeoSource(row.geo_source)) return row;
   const conf = settings || getSettings();
   const workLat = Number(conf.workLat);
   const workLng = Number(conf.workLng);
@@ -766,7 +840,7 @@ export function listingsNeedingRoute(limit = 40) {
     .prepare(
       `SELECT post_id, lat, lng FROM listings
        WHERE lat IS NOT NULL AND lng IS NOT NULL
-         AND IFNULL(geo_source, '') = '591'
+         AND IFNULL(geo_source, '') IN ('591', 'community')
          AND IFNULL(hidden, 0) = 0
        ORDER BY last_seen_at DESC
        LIMIT 2000`,
@@ -865,6 +939,77 @@ export function recentEvents(limit = 40) {
   return db.prepare("SELECT * FROM events ORDER BY id DESC LIMIT ?").all(limit);
 }
 
+export function pendingNotifyEvents(limit = 80) {
+  return db
+    .prepare("SELECT * FROM events WHERE IFNULL(notified, 0) = 0 ORDER BY id ASC LIMIT ?")
+    .all(Math.max(1, Number(limit) || 80));
+}
+
+export function eventPayloadFromListing(event, listing) {
+  if (!event) return event;
+  const row = listing || {};
+  return {
+    ...event,
+    title: row.title || event.title,
+    url: row.url || event.url,
+    price: row.price || event.price,
+    extra_fee: row.extra_fee,
+    extra_fee_text: row.extra_fee_text,
+    extra_fees: row.extra_fees,
+    address: row.address || event.address,
+    layout: row.layout,
+    floor_name: row.floor_name,
+    kind_name: row.kind_name,
+    cover: row.cover,
+  };
+}
+
+export function getCommunityCache(communityId) {
+  const id = Number(communityId);
+  if (!id) return null;
+  const row = db.prepare("SELECT community_id AS id, name, address, lat, lng FROM community_cache WHERE community_id = ?").get(id);
+  if (!row) return null;
+  const lat = Number(row.lat);
+  const lng = Number(row.lng);
+  return {
+    id: row.id,
+    name: row.name || "",
+    address: row.address || "",
+    lat: Number.isFinite(lat) && lat !== 0 ? lat : null,
+    lng: Number.isFinite(lng) && lng !== 0 ? lng : null,
+  };
+}
+
+export function hasCommunityCache(communityId) {
+  const id = Number(communityId);
+  if (!id) return false;
+  return Boolean(db.prepare("SELECT 1 AS ok FROM community_cache WHERE community_id = ?").get(id));
+}
+
+export function setCommunityCache(community) {
+  const id = Number(community?.id || community?.community_id);
+  if (!id) return;
+  const lat = Number(community.lat);
+  const lng = Number(community.lng);
+  db.prepare(
+    `INSERT INTO community_cache(community_id, name, address, lat, lng, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(community_id) DO UPDATE SET
+       name = excluded.name,
+       address = excluded.address,
+       lat = excluded.lat,
+       lng = excluded.lng,
+       updated_at = excluded.updated_at`,
+  ).run(
+    id,
+    String(community.name || "").trim(),
+    String(community.address || "").trim(),
+    Number.isFinite(lat) ? lat : null,
+    Number.isFinite(lng) ? lng : null,
+    new Date().toISOString(),
+  );
+}
+
 export function stats(searchKeys) {
   const settings = getSettings();
   const clauses = [];
@@ -885,12 +1030,12 @@ export function stats(searchKeys) {
     elevator: visible.filter((row) => listingHasElevator(row)).length,
     stored: storedVisible.length,
     filteredOut: Math.max(0, storedVisible.length - visible.length),
-    missingGeo: storedVisible.filter((row) => row.geo_source !== "591" || row.lat == null || row.lng == null).length,
+    missingGeo: storedVisible.filter((row) => !isTrustedGeoSource(row.geo_source) || row.lat == null || row.lng == null).length,
     missingRoute: storedVisible.filter((row) => {
       const geo = applyCachedCoords(row, settings);
       return (
         Number(settings.commuteKm) > 0 &&
-        geo.geo_source === "591" &&
+        isTrustedGeoSource(geo.geo_source) &&
         Number.isFinite(Number(geo.lat)) &&
         Number.isFinite(Number(geo.lng)) &&
         !(Array.isArray(geo.route_kms) && geo.route_kms.length)
