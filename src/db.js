@@ -1120,7 +1120,7 @@ export function stats(searchKeys) {
   const params = [];
   searchWhere(searchKeys, clauses, params);
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-  const raw = db.prepare(`SELECT viewed, watched, hidden, offline, last_event, floor_name, kind_name, title, address, lat, lng, geo_source, tags, match_level, match_rejected FROM listings ${where}`).all(...params);
+  const raw = db.prepare(`SELECT viewed, watched, hidden, offline, last_event, floor_name, kind_name, title, address, area_name, lat, lng, geo_source, tags, match_level, match_rejected FROM listings ${where}`).all(...params);
   const rows = applyListingFilter(raw);
   const visible = rows.filter((row) => !row.hidden && !row.offline);
   const storedVisible = raw.filter((row) => !row.hidden && !row.offline);
