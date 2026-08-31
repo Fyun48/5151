@@ -118,6 +118,30 @@ test("webhook requires URL", () => {
   assert.equal(shouldWebhookNotify({ discordWebhook: "" }, listing, { type: "new" }), false);
 });
 
+test("notify matrix can silence webhook without silencing dock", () => {
+  const settings = {
+    discordWebhook: "https://discord.com/api/webhooks/1/abc",
+    notifyMatrix: {
+      new: { dock: true, webhook: false },
+      update: { dock: false, webhook: true },
+    },
+  };
+  assert.equal(shouldDockNotify(settings, listing, { type: "new" }), true);
+  assert.equal(shouldWebhookNotify(settings, listing, { type: "new" }), false);
+  assert.equal(shouldDockNotify(settings, watched, { type: "update" }), false);
+  assert.equal(shouldWebhookNotify(settings, watched, { type: "update" }), true);
+});
+
+test("notify matrix off on both channels blocks delivery", () => {
+  const settings = {
+    discordWebhook: "https://discord.com/api/webhooks/1/abc",
+    notifyMatrix: { new: { dock: false, webhook: false } },
+  };
+  assert.equal(shouldNotify(settings, listing, { type: "new" }), true);
+  assert.equal(shouldDockNotify(settings, listing, { type: "new" }), false);
+  assert.equal(shouldWebhookNotify(settings, listing, { type: "new" }), false);
+});
+
 test("list last_event maps price drop and title to update", () => {
   assert.equal(listingLastEvent("price_drop", listing), "update");
   assert.equal(listingLastEvent("relist", listing), "same_source");

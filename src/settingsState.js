@@ -1,5 +1,6 @@
 import { buildSearchUrls, districtsFromSearchUrls, normalizeWatchDistricts, priceFromSearchUrls } from "./regions.js";
 import { normalizeBoxes, normalizeKeywords } from "./geo.js";
+import { normalizeNotifyMatrix } from "./notifyMatrix.js";
 
 export const PROFILE_FIELDS = [
   "searchUrls",
@@ -13,6 +14,7 @@ export const PROFILE_FIELDS = [
   "excludeAgentIds",
   "excludeBoxes",
   "discordWebhook",
+  "notifyMatrix",
   "workAddress",
   "commuteKm",
   "workLat",
@@ -87,6 +89,7 @@ export function hydrateSettings(stored, defaults) {
   if (next.activeProfileId && !next.settingProfiles.some((item) => item.id === next.activeProfileId)) {
     next.activeProfileId = "";
   }
+  next.notifyMatrix = normalizeNotifyMatrix(next);
   return next;
 }
 
@@ -118,9 +121,29 @@ export function applySettingPatch(current, partial = {}) {
   next.excludeRooftop = next.excludeRooftop !== false;
   next.wholeFloorOnly = next.wholeFloorOnly !== false;
   next.excludeLowFloors = next.excludeLowFloors !== false;
-  next.webhookNotifyNew = next.webhookNotifyNew !== false;
-  next.webhookNotifyPriceDrop = next.webhookNotifyPriceDrop !== false;
-  next.webhookNotifyTitleUpdate = next.webhookNotifyTitleUpdate !== false;
+  next.notifyMatrix = normalizeNotifyMatrix(next);
+  if (!Object.prototype.hasOwnProperty.call(patch, "notifyMatrix")) {
+    if (Object.prototype.hasOwnProperty.call(patch, "notifyNew")) {
+      next.notifyMatrix.new.dock = patch.notifyNew !== false;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "notifySameSource")) {
+      next.notifyMatrix.same_source.dock = patch.notifySameSource !== false;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "webhookNotifyNew")) {
+      next.notifyMatrix.new.webhook = patch.webhookNotifyNew !== false;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "webhookNotifyPriceDrop")) {
+      next.notifyMatrix.price.webhook = patch.webhookNotifyPriceDrop !== false;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "webhookNotifyTitleUpdate")) {
+      next.notifyMatrix.title.webhook = patch.webhookNotifyTitleUpdate !== false;
+    }
+  }
+  next.notifyNew = next.notifyMatrix.new.dock;
+  next.notifySameSource = next.notifyMatrix.same_source.dock;
+  next.webhookNotifyNew = next.notifyMatrix.new.webhook;
+  next.webhookNotifyPriceDrop = next.notifyMatrix.price.webhook;
+  next.webhookNotifyTitleUpdate = next.notifyMatrix.title.webhook;
   if (next.watchDistricts.length) {
     next.searchUrls = buildSearchUrls({
       districts: next.watchDistricts,

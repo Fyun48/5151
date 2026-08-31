@@ -7,6 +7,7 @@ import { makeRouteKey } from "./route.js";
 import { sameSearch } from "./client591.js";
 import { districtNameFromListing } from "./regions.js";
 import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings } from "./settingsState.js";
+import { defaultNotifyMatrix } from "./notifyMatrix.js";
 
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data");
 mkdirSync(DATA_DIR, { recursive: true });
@@ -266,6 +267,7 @@ const DEFAULTS = {
   webhookNotifyNew: true,
   webhookNotifyPriceDrop: true,
   webhookNotifyTitleUpdate: true,
+  notifyMatrix: defaultNotifyMatrix(),
   windowsToast: true,
   hasBaseline: false,
   excludeLowFloors: true,

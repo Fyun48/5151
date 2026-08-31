@@ -103,3 +103,21 @@ test("snapshot keeps commute and districts for a profile", () => {
   assert.equal(snap.commuteKm, 12);
   assert.equal(snap.workAddress, "台北市士林區德行西路7號");
 });
+
+test("notifyMatrix hydrates defaults and preserves unchecks", () => {
+  const hydrated = hydrateSettings({ webhookNotifyNew: false }, defaults);
+  assert.equal(hydrated.notifyMatrix.new.webhook, false);
+  assert.equal(hydrated.notifyMatrix.new.dock, true);
+  const next = applySettingPatch(hydrated, {
+    watchDistricts: ["1-8"],
+    notifyMatrix: {
+      new: { dock: true, webhook: false },
+      update: { dock: false, webhook: true },
+    },
+  });
+  assert.equal(next.notifyMatrix.new.webhook, false);
+  assert.equal(next.notifyMatrix.update.dock, false);
+  assert.equal(next.notifyMatrix.update.webhook, true);
+  assert.equal(next.notifyMatrix.price.dock, true);
+  assert.equal(next.webhookNotifyNew, false);
+});

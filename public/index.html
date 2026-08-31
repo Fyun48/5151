@@ -213,6 +213,33 @@
     .contact .who-name { font-weight: 700; }
     .contact .agency { color: var(--muted); line-height: 1.35; }
     .contact a.tel { color: var(--accent-deep); text-decoration: none; font-family: "Noto Sans TC", sans-serif; }
+    .notify-matrix {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      margin: 6px 0 10px;
+    }
+    .notify-matrix th, .notify-matrix td {
+      border: 1px solid var(--line);
+      padding: 8px 10px;
+      text-align: center;
+      vertical-align: middle;
+    }
+    .notify-matrix th:first-child, .notify-matrix td:first-child {
+      text-align: left;
+      font-weight: 600;
+    }
+    .notify-matrix thead th {
+      background: var(--accent-mist);
+      font-weight: 700;
+      color: var(--ink);
+    }
+    .notify-matrix tbody td:first-child { color: var(--ink); font-weight: 500; }
+    .notify-matrix input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+      accent-color: var(--accent);
+    }
     .line-qr {
       width: 72px;
       height: 72px;
@@ -647,7 +674,53 @@
       <p class="hint">路徑用 591 物件頁「點地址」那個地圖座標，不是門牌文字去猜。每個物件會抓至少兩條可騎道路線；兩條都超過上限才不顯示。開啟後可依離公司近／遠排序。還沒從 591 拿到座標或還沒算完路線的會先不顯示，完成後列表會自動更新。</p>
       <label>Discord Webhook（選填）</label>
       <input type="url" id="discordWebhook" placeholder="https://discord.com/api/webhooks/..." />
-      <p class="hint">有新物件就會通知。房仲刪掉重刊若對到同屋源／已下架舊刊登，不會當全新物件通知（有特別關注才會通知重刊）。特別關注才會通知：價格、標題、內容變更、591 下架、重新上架。一般物件的地址補齊／列表微差不會通知。浮動「待看更新」與 webhook 條件相同。</p>
+      <p class="hint">站內是右下角「待看更新」；Webhook 是 Discord。同一列可一邊勾、一邊不勾。變更／下架／重刊仍只對「特別關注」發；隱藏物件與樓層顯示篩選仍會擋掉。勾完請按儲存。</p>
+      <table class="notify-matrix" id="notifyMatrix">
+        <thead>
+          <tr>
+            <th>事件類型</th>
+            <th>站內通知</th>
+            <th>Webhook通知</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>全新物件</td>
+            <td><input type="checkbox" data-notify-row="new" data-notify-ch="dock" checked /></td>
+            <td><input type="checkbox" data-notify-row="new" data-notify-ch="webhook" checked /></td>
+          </tr>
+          <tr>
+            <td>同屋源重刊</td>
+            <td><input type="checkbox" data-notify-row="same_source" data-notify-ch="dock" checked /></td>
+            <td><input type="checkbox" data-notify-row="same_source" data-notify-ch="webhook" checked /></td>
+          </tr>
+          <tr>
+            <td>價格變動</td>
+            <td><input type="checkbox" data-notify-row="price" data-notify-ch="dock" checked /></td>
+            <td><input type="checkbox" data-notify-row="price" data-notify-ch="webhook" checked /></td>
+          </tr>
+          <tr>
+            <td>標題變更</td>
+            <td><input type="checkbox" data-notify-row="title" data-notify-ch="dock" checked /></td>
+            <td><input type="checkbox" data-notify-row="title" data-notify-ch="webhook" checked /></td>
+          </tr>
+          <tr>
+            <td>內容更新</td>
+            <td><input type="checkbox" data-notify-row="update" data-notify-ch="dock" checked /></td>
+            <td><input type="checkbox" data-notify-row="update" data-notify-ch="webhook" checked /></td>
+          </tr>
+          <tr>
+            <td>591 下架</td>
+            <td><input type="checkbox" data-notify-row="offline" data-notify-ch="dock" checked /></td>
+            <td><input type="checkbox" data-notify-row="offline" data-notify-ch="webhook" checked /></td>
+          </tr>
+          <tr>
+            <td>重新上架</td>
+            <td><input type="checkbox" data-notify-row="relist" data-notify-ch="dock" checked /></td>
+            <td><input type="checkbox" data-notify-row="relist" data-notify-ch="webhook" checked /></td>
+          </tr>
+        </tbody>
+      </table>
       <label>排除路名／關鍵字（一行一個）</label>
       <p class="hint">地址或標題含這些字就不列入、也不通知。例如路名、路段。</p>
       <textarea id="excludeKeywords" placeholder="延平北路八段&#10;承德路"></textarea>
@@ -1097,6 +1170,26 @@
       }
     }
 
+    function fillNotifyMatrix(s) {
+      const matrix = s?.notifyMatrix || {};
+      document.querySelectorAll("[data-notify-row][data-notify-ch]").forEach((el) => {
+        const row = matrix[el.dataset.notifyRow];
+        const ch = el.dataset.notifyCh;
+        el.checked = !row || row[ch] !== false;
+      });
+    }
+
+    function collectNotifyMatrix() {
+      const out = {};
+      document.querySelectorAll("[data-notify-row][data-notify-ch]").forEach((el) => {
+        const key = el.dataset.notifyRow;
+        const ch = el.dataset.notifyCh;
+        if (!out[key]) out[key] = { dock: true, webhook: true };
+        out[key][ch] = el.checked;
+      });
+      return out;
+    }
+
     function fillSettings(s) {
       if (!s || typeof s !== "object") return;
       if (!cities.length) cities = CITIES_EMBEDDED;
@@ -1117,6 +1210,7 @@
       $("excludeKeywords").value = (s.excludeKeywords || []).join("\n");
       $("excludeAgents").value = (s.excludeAgents || []).join("\n");
       $("discordWebhook").value = s.discordWebhook || "";
+      fillNotifyMatrix(s);
       excludeBoxes = Array.isArray(s.excludeBoxes)
         ? s.excludeBoxes.slice(0, MAX_BOXES).map((box) => ({
             ...box,
@@ -1464,6 +1558,7 @@
         excludeAgentIds: settings.excludeAgentIds || [],
         excludeBoxes,
         discordWebhook: $("discordWebhook").value.trim(),
+        notifyMatrix: collectNotifyMatrix(),
         workAddress: $("workAddress").value.trim(),
         commuteKm: Number($("commuteKm").value) || 0,
       };
