@@ -61,6 +61,39 @@
     h1 { margin: 0; font-size: 28px; letter-spacing: 0.08em; }
     .sub { color: var(--muted); font-size: 14px; margin-top: 6px; }
     .wrap { display: grid; grid-template-columns: 340px 1fr; gap: 20px; padding: 0 32px 40px; }
+    body.panel-collapsed .wrap { grid-template-columns: 1fr; }
+    body.panel-collapsed #settingsPanel { display: none; }
+    #expandPanelBtn { display: none; }
+    body.panel-collapsed #expandPanelBtn { display: inline-flex; }
+    .panel-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      margin: 0 0 10px;
+    }
+    .panel-toolbar strong { font-size: 15px; letter-spacing: 0.04em; }
+    .when {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 6px;
+      margin: 8px 0 2px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      background: #f8e7d4;
+      color: var(--accent);
+      font-family: "Noto Sans TC", sans-serif;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      line-height: 1.2;
+    }
+    .when-label {
+      font-size: 11px;
+      font-weight: 700;
+      color: #9a3412;
+      letter-spacing: 0.08em;
+    }
     .card {
       background: var(--paper);
       border: 1px solid var(--line);
@@ -376,6 +409,7 @@
         <span class="who" id="who"></span>
         <a class="ghost" id="logoutBtn" href="/logout">登出</a>
         <a class="ghost" href="/reset.html" style="display:inline-flex;align-items:center;text-decoration:none">清除資料</a>
+        <button class="ghost" id="expandPanelBtn" type="button">展開設定</button>
         <button class="ghost" id="reloadBtn">重新整理</button>
         <button class="primary" id="watchBtn">立即檢查</button>
       </div>
@@ -390,7 +424,11 @@
     </div>
   </header>
   <div class="wrap">
-    <aside class="card panel">
+    <aside class="card panel" id="settingsPanel">
+      <div class="panel-toolbar">
+        <strong>搜尋設定</strong>
+        <button type="button" class="ghost" id="collapsePanelBtn">收合</button>
+      </div>
       <div class="stats" id="stats"></div>
       <p class="hint" id="settingsLoadMsg">正在載入已存設定…完成前請不要按儲存或另存。右上「重新整理」會重新載入設定。</p>
       <label>搜尋行政區（台北市 region=1、新北市 region=3，可一起勾）</label>
@@ -577,6 +615,8 @@
       return res;
     };
     const $ = (id) => document.getElementById(id);
+    const PANEL_KEY = "591-panel-collapsed";
+    if (localStorage.getItem(PANEL_KEY) === "1") document.body.classList.add("panel-collapsed");
     $("status").textContent = "正在載入…";
     let filter = "all";
     let sort = "price_asc";
@@ -618,6 +658,16 @@
     function listingUrl(item) {
       const id = item?.post_id || item;
       return `https://rent.591.com.tw/${id}`;
+    }
+
+    function formatListingWhen(item) {
+      const raw = String(item?.refresh_time || "").trim();
+      if (raw) return raw;
+      const seen = item?.last_seen_at;
+      if (!seen) return "";
+      const date = new Date(seen);
+      if (Number.isNaN(date.getTime())) return "";
+      return date.toLocaleString("zh-TW", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
     }
 
     function esc(value) {
@@ -1013,9 +1063,10 @@
               <a href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-open="${id}">${esc(item.title)}</a>
             </h3>
             ${matchPeerBlock(item)}
+            ${formatListingWhen(item) ? `<div class="when"><span class="when-label">更新</span>${esc(formatListingWhen(item))}</div>` : ""}
             <div class="meta">
               租金 ${item.price || ""} ${item.price_unit || "元/月"} · ${item.kind_name || ""} · ${item.layout || ""} · ${item.area_name || ""} · ${item.floor_name || ""}
-              <br>${esc(item.address || "")} · ${esc(item.refresh_time || "")}${commuteText(item)}${offlineLine(item)}
+              <br>${esc(item.address || "")}${commuteText(item)}${offlineLine(item)}
               ${item.match_detail ? `<br>比對：${esc(item.match_detail)}${item.match_post_id ? ` · <a href="${listingUrl(item.match_post_id)}" target="_blank" rel="noopener noreferrer">舊刊登 #${item.match_post_id}</a>` : ""}` : ""}
             </div>
             ${(() => {
@@ -1341,6 +1392,12 @@
         $("status").textContent = error.message || "載入失敗，請再按重新整理";
       });
     };
+    function setPanelCollapsed(on) {
+      document.body.classList.toggle("panel-collapsed", Boolean(on));
+      localStorage.setItem(PANEL_KEY, on ? "1" : "0");
+    }
+    $("collapsePanelBtn").onclick = () => setPanelCollapsed(true);
+    $("expandPanelBtn").onclick = () => setPanelCollapsed(false);
     $("selectPageBtn").onclick = () => {
       document.querySelectorAll("[data-pick]").forEach((el) => {
         el.checked = true;
