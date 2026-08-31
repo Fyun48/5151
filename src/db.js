@@ -229,6 +229,11 @@ try {
 } catch {
   // already migrated
 }
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN offline_confirmed INTEGER NOT NULL DEFAULT 0");
+} catch {
+  // already migrated
+}
 db.exec(`
   CREATE TABLE IF NOT EXISTS community_cache (
     community_id INTEGER PRIMARY KEY,
@@ -274,7 +279,9 @@ const DEFAULTS = {
   watchDistricts: [],
   priceMin: 0,
   priceMax: 36000,
+  areaMax: 0,
   excludeRooftop: true,
+  offlineConfirmDays: 7,
   dataEpoch: "",
 };
 
@@ -486,6 +493,7 @@ export function upsertListing(listing) {
       last_checked_at = excluded.last_seen_at,
       offline = 0,
       offline_at = NULL,
+      offline_confirmed = 0,
       lat = CASE
         WHEN IFNULL(listings.geo_source, '') IN ('591', 'community') THEN listings.lat
         ELSE COALESCE(excluded.lat, listings.lat)
@@ -672,11 +680,61 @@ export function markListingOffline(postId) {
     `UPDATE listings
      SET offline = 1,
          offline_at = COALESCE(offline_at, ?),
+         offline_confirmed = 0,
          last_event = 'offline',
          last_checked_at = ?
      WHERE post_id = ?`,
   ).run(now, now, postId);
   return getListing(postId);
+}
+
+export function restoreListingOnline(postId) {
+  const listing = getListing(postId);
+  if (!listing) return null;
+  const now = new Date().toISOString();
+  db.prepare(
+    `UPDATE listings
+     SET offline = 0,
+         offline_at = NULL,
+         offline_confirmed = 0,
+         last_checked_at = ?
+     WHERE post_id = ?`,
+  ).run(now, postId);
+  return getListing(postId);
+}
+
+export function confirmListingOffline(postId) {
+  const listing = getListing(postId);
+  if (!listing?.offline) return null;
+  const now = new Date().toISOString();
+  db.prepare(
+    `UPDATE listings
+     SET offline = 1,
+         offline_confirmed = 1,
+         last_event = 'offline',
+         last_checked_at = ?
+     WHERE post_id = ?`,
+  ).run(now, postId);
+  return getListing(postId);
+}
+
+export function confirmExpiredOfflineListings(days = 7) {
+  const n = Math.max(1, Math.min(Number(days) || 7, 30));
+  const cutoff = new Date(Date.now() - n * 86_400_000).toISOString();
+  const now = new Date().toISOString();
+  const info = db
+    .prepare(
+      `UPDATE listings
+       SET offline_confirmed = 1,
+           last_event = 'offline',
+           last_checked_at = ?
+       WHERE IFNULL(offline, 0) = 1
+         AND IFNULL(offline_confirmed, 0) = 0
+         AND IFNULL(offline_at, '') != ''
+         AND offline_at <= ?`,
+    )
+    .run(now, cutoff);
+  return Number(info.changes) || 0;
 }
 
 export function touchListingChecked(postId) {
@@ -702,6 +760,22 @@ export function listingsNeedingAliveCheck({ excludeIds = [], limit = 20 } = {}) 
     if (out.length >= cap) break;
   }
   return out;
+}
+
+export function listingsNeedingOfflineRecheck({ limit = 8 } = {}) {
+  const cap = Math.max(1, Number(limit) || 8);
+  return db
+    .prepare(
+      `SELECT post_id, offline, offline_at, offline_confirmed, last_checked_at
+       FROM listings
+       WHERE IFNULL(hidden, 0) = 0
+         AND IFNULL(offline, 0) = 1
+         AND IFNULL(offline_confirmed, 0) = 0
+       ORDER BY CASE WHEN last_checked_at IS NULL THEN 0 ELSE 1 END,
+                IFNULL(last_checked_at, offline_at) ASC
+       LIMIT ?`,
+    )
+    .all(Math.max(cap, 40));
 }
 
 export function resetListings() {
@@ -1046,7 +1120,7 @@ export function stats(searchKeys) {
   const params = [];
   searchWhere(searchKeys, clauses, params);
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-  const raw = db.prepare(`SELECT viewed, watched, hidden, offline, last_event, floor_name, kind_name, title, address, lat, lng, geo_source, tags, match_level, match_rejected FROM listings ${where}`).all(...params);
+  const raw = db.prepare(`SELECT viewed, watched, hidden, offline, last_event, floor_name, kind_name, title, address, area_name, lat, lng, geo_source, tags, match_level, match_rejected FROM listings ${where}`).all(...params);
   const rows = applyListingFilter(raw);
   const visible = rows.filter((row) => !row.hidden && !row.offline);
   const storedVisible = raw.filter((row) => !row.hidden && !row.offline);

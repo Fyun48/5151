@@ -1,5 +1,6 @@
 import { hasActiveBoxes, isExcludedByAgent, isExcludedByBox, isExcludedByKeyword, needsListingGeo } from "./geo.js";
 import { isTrustedGeoSource } from "./location.js";
+import { areaNum } from "./match.js";
 
 function tagText(listing) {
   let tags = listing.tags;
@@ -76,6 +77,11 @@ export function passesAttributeFilters(listing, settings = {}) {
   }
   if (isExcludedByAgent(listing, settings)) {
     return false;
+  }
+  const areaMax = Number(settings.areaMax);
+  if (Number.isFinite(areaMax) && areaMax > 0) {
+    const area = areaNum(listing.area_name);
+    if (area != null && area > areaMax) return false;
   }
   return true;
 }

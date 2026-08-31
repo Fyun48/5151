@@ -162,6 +162,7 @@
     }
     .tag.lift { background: #dcfce7; color: #166534; }
     .tag.off { background: #e2e8f0; color: #475569; }
+    .tag.off-sure { background: #334155; color: #f8fafc; }
     .item.offline { opacity: 0.78; }
     #floatDock {
       position: fixed;
@@ -409,6 +410,9 @@
           <input type="number" id="priceMax" min="0" step="500" placeholder="例如 36000" />
         </div>
       </div>
+      <label>坪數上限（幾坪以內，可空白）</label>
+      <input type="number" id="areaMax" min="0" max="500" step="0.5" placeholder="不限，例如 30" />
+      <p class="hint">大於這個坪數的物件會從列表藏起來，也不通知。空白或 0 表示不限。按儲存就套用已抓到的結果，不必重查 591。</p>
       <div class="checks">
         <label><input type="checkbox" id="excludeRooftop" checked /> 排除頂樓加蓋</label>
       </div>
@@ -418,6 +422,10 @@
       </details>
       <label>檢查間隔（分鐘）</label>
       <input type="number" id="intervalMinutes" min="2" max="120" />
+      <p class="hint">排程會依這個間隔抓 591 搜尋。搜尋裡沒出現的物件會抽查詳情頁，確認是不是已關閉。</p>
+      <label>確認已下架天數</label>
+      <input type="number" id="offlineConfirmDays" min="1" max="30" />
+      <p class="hint">591 回「不存在／已關閉」後先標「已下架」並持續核對（同一筆至少隔 12 小時再查一次）。從第一次找不到開始算，滿這天天數仍找不到就改成「確認已下架」，不再打 591。</p>
       <label>每次最多抓取頁數（每頁約 30 筆，最多 40；會抓到搜尋結果結束為止）</label>
       <input type="number" id="pagesPerWatch" min="1" max="40" />
       <label>建物總樓層至少</label>
@@ -789,8 +797,10 @@
       $("searchUrls").value = (s.searchUrls || []).join("\n");
       $("priceMin").value = s.priceMin || "";
       $("priceMax").value = s.priceMax || "";
+      $("areaMax").value = s.areaMax || "";
       $("excludeRooftop").checked = s.excludeRooftop !== false;
       $("intervalMinutes").value = s.intervalMinutes;
+      $("offlineConfirmDays").value = s.offlineConfirmDays || 7;
       $("pagesPerWatch").value = s.pagesPerWatch;
       $("minBuildingFloors").value = s.minBuildingFloors || 4;
       $("workAddress").value = s.workAddress || "";
@@ -856,6 +866,15 @@
       return { bits, total };
     }
 
+    function offlineLine(item) {
+      if (!item.offline) return "";
+      const day = item.offline_at ? String(item.offline_at).slice(0, 10) : "";
+      if (item.offline_confirmed) {
+        return ` · 確認已下架${day ? `（自 ${esc(day)} 起找不到）` : ""}`;
+      }
+      return ` · 591 已下架，核對中${day ? `（${esc(day)} 起）` : ""}`;
+    }
+
     function tags(item) {
       const bits = [];
       if (item.last_event === "new") bits.push('<span class="tag new">全新物件</span>');
@@ -863,7 +882,8 @@
       if (item.match_level === "high") bits.push('<span class="tag same">高信心同屋源</span>');
       if (item.match_level === "medium") bits.push('<span class="tag watch">需確認同屋源</span>');
       if (item.last_event === "update") bits.push('<span class="tag same">內容更新</span>');
-      if (item.offline || item.last_event === "offline") bits.push('<span class="tag off">已下架</span>');
+      if (item.offline_confirmed) bits.push('<span class="tag off-sure">確認已下架</span>');
+      else if (item.offline || item.last_event === "offline") bits.push('<span class="tag off">已下架（核對中）</span>');
       if (item.has_elevator) bits.push('<span class="tag lift">有電梯</span>');
       if (item.watched) bits.push('<span class="tag watch">特別關注</span>');
       if (item.viewed) bits.push('<span class="tag viewed">已瀏覽</span>');
@@ -909,7 +929,7 @@
         } else if (filter === "suspected") {
           msg = "目前沒有被判成同一屋源的重刊。隱藏或已瀏覽的舊屋若再上架，會出現在這裡。";
         } else if (filter === "offline") {
-          msg = "目前沒有偵測到已從 591 下架的物件。關閉或刪除的刊登會在檢查時標成已下架。";
+          msg = "目前沒有偵測到已從 591 下架的物件。關閉或刪除的刊登會先標已下架並核對，滿設定天數仍找不到才改成確認已下架。";
         } else if (filter === "elevator") {
           msg = "目前沒有標到有電梯的物件。這只篩已抓到的結果，不會重查 591。";
         } else if (filter === "apartment") {
@@ -921,7 +941,7 @@
         } else if (st.missingRoute > 0) {
           msg = `已有 ${st.missingRoute} 筆 591 地圖座標，正在背景計算機車可走路線。兩條替代路線都超過上限的不會顯示；算完後列表會自動更新。`;
         } else if (st.filteredOut > 0) {
-          msg = `資料庫有 ${st.stored} 筆，目前都被機車路線距離或樓層／路名／地圖框／房仲排除了。`;
+          msg = `資料庫有 ${st.stored} 筆，目前都被機車路線距離或樓層／坪數／路名／地圖框／房仲排除了。`;
         } else if (st.dbTotal > 0) {
           msg = "這個搜尋網址還沒對到已存的物件。請按「立即檢查」重新抓取。";
         }
@@ -948,7 +968,7 @@
             </h3>
             <div class="meta">
               租金 ${item.price || ""} ${item.price_unit || "元/月"} · ${item.kind_name || ""} · ${item.layout || ""} · ${item.area_name || ""} · ${item.floor_name || ""}
-              <br>${esc(item.address || "")} · ${esc(item.refresh_time || "")}${commuteText(item)}${item.offline ? ` · 591 已下架${item.offline_at ? `（${esc(item.offline_at.slice(0, 10))}）` : ""}` : ""}
+              <br>${esc(item.address || "")} · ${esc(item.refresh_time || "")}${commuteText(item)}${offlineLine(item)}
               ${item.match_detail ? `<br>比對：${esc(item.match_detail)}${item.match_post_id ? ` · <a href="${listingUrl(item.match_post_id)}" target="_blank" rel="noopener noreferrer">舊刊登 #${item.match_post_id}</a>` : ""}` : ""}
             </div>
             ${(() => {
@@ -1043,8 +1063,10 @@
           searchUrls: [],
           priceMin: 0,
           priceMax: 36000,
+          areaMax: 0,
           excludeRooftop: true,
           intervalMinutes: 5,
+          offlineConfirmDays: 7,
           pagesPerWatch: 40,
           minBuildingFloors: 4,
           wholeFloorOnly: true,
@@ -1101,8 +1123,10 @@
         watchDistricts,
         priceMin: Number($("priceMin").value) || 0,
         priceMax: Number($("priceMax").value) || 0,
+        areaMax: Number($("areaMax").value) || 0,
         excludeRooftop: $("excludeRooftop").checked,
         intervalMinutes: Number($("intervalMinutes").value),
+        offlineConfirmDays: Number($("offlineConfirmDays").value) || 7,
         pagesPerWatch: Number($("pagesPerWatch").value),
         minBuildingFloors: Number($("minBuildingFloors").value) || 4,
         wholeFloorOnly: $("wholeFloorOnly").checked,
@@ -1163,11 +1187,13 @@
         ? `｜已計算 ${route.located}/${route.attempted} 筆機車路線`
         : "";
       const off = result.offline;
-      const offBit = off?.gone
-        ? `｜已下架 ${off.gone} 筆`
-        : off?.checked
-          ? `｜已核對 ${off.checked} 筆是否仍在架`
-          : "";
+      const offBits = [];
+      if (off?.gone) offBits.push(`新標下架 ${off.gone} 筆`);
+      if (off?.rechecked) offBits.push(`再核對 ${off.rechecked} 筆`);
+      if (off?.restored) offBits.push(`恢復上架 ${off.restored} 筆`);
+      if (off?.confirmed) offBits.push(`確認已下架 ${off.confirmed} 筆`);
+      if (!offBits.length && off?.checked) offBits.push(`已核對 ${off.checked} 筆是否仍在架`);
+      const offBit = offBits.length ? `｜${offBits.join("、")}` : "";
       if (result.errors?.length) {
         return `部分失敗：${result.errors.join("；")}${search ? "｜" + search : ""}${geoBit}${routeBit}${offBit}`;
       }
