@@ -245,9 +245,7 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_listings_match ON listings(match_level)"
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_offline ON listings(offline)");
 
 const DEFAULTS = {
-  searchUrls: [
-    "https://rent.591.com.tw/list?region=1&section=5&kind=1&order=posttime&orderType=desc",
-  ],
+  searchUrls: [],
   intervalMinutes: 5,
   pagesPerWatch: 40,
   notifyNew: true,
@@ -277,6 +275,7 @@ const DEFAULTS = {
   priceMin: 0,
   priceMax: 36000,
   excludeRooftop: true,
+  dataEpoch: "",
 };
 
 export function getSettings() {
@@ -709,6 +708,59 @@ export function resetListings() {
   db.exec("DELETE FROM events");
   db.exec("DELETE FROM listings");
   return saveSettings({ hasBaseline: false });
+}
+
+export const DATA_EPOCH = "wipe-20260831";
+
+export function resetAllData() {
+  db.exec("BEGIN");
+  try {
+    db.exec("DELETE FROM events");
+    db.exec("DELETE FROM listings");
+    db.exec("DELETE FROM settings");
+    db.exec("DELETE FROM geo_cache");
+    db.exec("DELETE FROM route_cache");
+    db.exec("DELETE FROM community_cache");
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  try {
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  } catch {
+    // ignore checkpoint failures; rows are already gone
+  }
+  return saveSettings({
+    dataEpoch: DATA_EPOCH,
+    searchUrls: [],
+    watchDistricts: [],
+    settingProfiles: [],
+    activeProfileId: "",
+    hasBaseline: false,
+    discordWebhook: "",
+    workAddress: "",
+    commuteKm: 0,
+    workLat: null,
+    workLng: null,
+    excludeBoxes: [],
+    excludeKeywords: [],
+    excludeAgents: [],
+    excludeAgentIds: [],
+  });
+}
+
+function readDataEpoch() {
+  try {
+    const row = db.prepare("SELECT value FROM settings WHERE key = 'dataEpoch'").get();
+    return row ? JSON.parse(row.value) : "";
+  } catch {
+    return "";
+  }
+}
+
+if (readDataEpoch() !== DATA_EPOCH) {
+  resetAllData();
 }
 
 export function addEvent(event) {

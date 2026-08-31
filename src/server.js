@@ -13,6 +13,7 @@ import {
   recentEvents,
   rejectSuspectedMatch,
   resetListings,
+  resetAllData,
   saveAsProfile,
   saveSettings,
   setCachedGeo,
@@ -31,6 +32,19 @@ const PORT = Number(process.env.PORT || 5151);
 const HOST = process.env.HOST || "0.0.0.0";
 
 app.use(express.json({ limit: "1mb" }));
+
+app.use((req, res, next) => {
+  if (req.path === "/" || req.path.endsWith(".html")) {
+    res.setHeader("Cache-Control", "no-store");
+  }
+  next();
+});
+
+app.get("/api/health", (_req, res) => {
+  res.json({ ok: true });
+});
+
+app.use("/vendor", express.static(path.join(__dirname, "../public/vendor"), { maxAge: "7d" }));
 
 app.get("/api/me", (req, res) => {
   const session = readSession(req);
@@ -204,6 +218,16 @@ app.post("/api/reset-listings", (req, res) => {
   res.json({ ok: true, settings, stats: stats() });
 });
 
+app.post("/api/reset-all", (req, res) => {
+  if (req.body?.confirm !== true) {
+    res.status(400).json({ error: "需要確認才會清除全部資料" });
+    return;
+  }
+  const settings = resetAllData();
+  lastRun = null;
+  res.json({ ok: true, settings, stats: { total: 0 } });
+});
+
 app.get("/api/listings/:id/history", (req, res) => {
   const listing = getListing(Number(req.params.id));
   if (!listing) {
@@ -356,6 +380,8 @@ app.listen(PORT, HOST, () => {
     console.log(`登入帳號：${adminEmail()}`);
   }
   setTimeout(() => {
+    const urls = (getSettings().searchUrls || []).map((url) => String(url).trim()).filter(Boolean);
+    if (!urls.length) return;
     queueGeoBackfill();
     tick("startup").catch((error) => {
       console.warn("第一次檢查失敗：", error.message);

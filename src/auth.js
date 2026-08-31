@@ -120,7 +120,7 @@ export function verifyLogin(email, password) {
 
 export function publicPath(req) {
   const p = req.path || "";
-  return p === "/login.html" || p === "/api/login" || p === "/api/logout" || p === "/api/me";
+  return p === "/login.html" || p === "/api/login" || p === "/api/logout" || p === "/api/me" || p === "/api/health" || p.startsWith("/vendor/");
 }
 
 export function requireAuth(req, res, next) {
