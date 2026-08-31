@@ -45,7 +45,7 @@
     }
     .panel { padding: 18px; }
     label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 6px; }
-    textarea, input[type="number"], input[type="text"], input[type="url"] {
+    textarea, select, input[type="number"], input[type="text"], input[type="url"] {
       width: 100%;
       border: 1px solid var(--line);
       border-radius: 10px;
@@ -53,6 +53,9 @@
       font: 14px/1.5 "IwanMincho", "Noto Sans TC", sans-serif;
       background: #fff;
     }
+    #profileSelect { min-height: 42px; }
+    #settingsLoadMsg { color: var(--watch); }
+    #settingsLoadMsg[hidden] { display: none; }
     textarea { min-height: 92px; resize: vertical; }
     .checks { display: grid; gap: 8px; margin: 10px 0 14px; font-size: 14px; }
     .checks label { margin: 0; color: var(--ink); display: flex; gap: 8px; align-items: center; }
@@ -330,11 +333,13 @@
   <div class="wrap">
     <aside class="card panel">
       <div class="stats" id="stats"></div>
+      <p class="hint" id="settingsLoadMsg">正在載入已存設定…完成前請不要按儲存或另存。右上「重新整理」會重新載入設定。</p>
       <label>設定檔名稱</label>
       <input type="text" id="profileName" placeholder="例如：士林北投＋新北四區" maxlength="40" />
-      <p class="hint">左側「另存」會用這個名稱再留一份，不覆蓋目前這份。</p>
-      <label>已存設定檔</label>
+      <p class="hint">右下「另存」會用這個名稱再留一份。成功後下面選單與「已存」清單都會出現這個名字。</p>
+      <label id="profileSelectLabel">已存設定檔</label>
       <select id="profileSelect"></select>
+      <p class="hint" id="profileListHint">還沒有設定檔。</p>
       <div class="row">
         <button type="button" class="ghost" id="deleteProfileBtn">刪除目前設定檔</button>
       </div>
@@ -432,8 +437,8 @@
     </main>
   </div>
   <div id="floatDock">
-    <button class="primary" id="saveBtn" type="button">儲存</button>
-    <button class="ghost" id="saveAsBtn" type="button">另存</button>
+    <button class="primary" id="saveBtn" type="button" disabled>儲存</button>
+    <button class="ghost" id="saveAsBtn" type="button" disabled>另存</button>
     <button class="ghost" id="topBtn" type="button">回頂</button>
     <p class="float-msg" id="saveMsg"></p>
   </div>
@@ -528,6 +533,7 @@
     };
 
     let cities = [];
+    let settingsLoaded = false;
     let viewDistricts = new Set();
     const VIEW_KEY = "591-view-districts";
     try {
@@ -538,6 +544,20 @@
     function flash(msg) {
       $("saveMsg").textContent = msg;
       if ($("status")) $("status").textContent = msg;
+    }
+
+    function setSettingsReady(ok, msg) {
+      $("saveBtn").disabled = !ok;
+      $("saveAsBtn").disabled = !ok;
+      const el = $("settingsLoadMsg");
+      if (!el) return;
+      if (ok) {
+        el.hidden = true;
+        el.textContent = "";
+        return;
+      }
+      el.hidden = false;
+      el.textContent = msg || "正在載入已存設定…完成前請不要按儲存或另存。";
     }
 
     function selectedDistrictKeys() {
@@ -621,19 +641,39 @@
     }
 
     function renderProfiles(s) {
-      const list = s.settingProfiles || [];
+      const list = Array.isArray(s?.settingProfiles) ? s.settingProfiles : [];
       const sel = $("profileSelect");
-      const current = s.activeProfileId || "";
+      const current = s?.activeProfileId || "";
       const currentName = list.find((item) => item.id === current)?.name || "";
-      if (document.activeElement?.id !== "profileName") {
+      const typed = $("profileName").value.trim();
+      if (document.activeElement?.id !== "profileName" && (!typed || list.some((item) => item.name === typed))) {
         $("profileName").value = currentName;
       }
-      sel.innerHTML =
-        `<option value="">（目前設定）</option>` +
-        list.map((item) => `<option value="${esc(item.id)}" ${item.id === current ? "selected" : ""}>${esc(item.name)}</option>`).join("");
+      const label = $("profileSelectLabel");
+      if (label) label.textContent = list.length ? `已存設定檔（${list.length}）` : "已存設定檔";
+      const hint = $("profileListHint");
+      if (hint) {
+        hint.textContent = list.length
+          ? `已存：${list.map((item) => item.name).join("、")}`
+          : "還沒有設定檔。填名稱後按右下「另存」，成功會出現在這裡與上方選單。";
+      }
+      sel.innerHTML = "";
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = list.length ? "（目前設定）" : "（還沒有設定檔，請先另存）";
+      sel.appendChild(placeholder);
+      for (const item of list) {
+        const opt = document.createElement("option");
+        opt.value = item.id;
+        opt.textContent = item.name;
+        if (item.id === current) opt.selected = true;
+        sel.appendChild(opt);
+      }
     }
 
     function fillSettings(s) {
+      if (!s || typeof s !== "object") return;
+      if (!cities.length) return;
       settings = s;
       $("searchUrls").value = (s.searchUrls || []).join("\n");
       $("priceMin").value = s.priceMin || "";
@@ -667,6 +707,8 @@
       renderDistrictPicker(s);
       renderDistrictChips(s);
       renderBoxes();
+      settingsLoaded = true;
+      setSettingsReady(true);
     }
 
     function renderStats(st) {
@@ -835,22 +877,64 @@
         return;
       }
       $("who").textContent = me.email || "";
-      const res = await fetch("/api/state");
-      const data = await res.json();
-      cities = data.cities || cities;
-      fillSettings(data.settings);
-      renderStats(data.stats);
-      renderList(applyDistrictView(data.listings), data.stats);
-      if (data.lastRun?.checked_at) {
-        const extra = data.lastRun.baseline ? "（第一次只建立基準，不推播）" : "";
-        $("status").textContent = `上次檢查 ${new Date(data.lastRun.checked_at).toLocaleString()}，抓到 ${data.lastRun.fetched || 0} 筆${extra}`;
+      settingsLoaded = false;
+      setSettingsReady(false, "正在載入已存設定…完成前請不要按儲存或另存。");
+      let lastError = "";
+      for (let attempt = 1; attempt <= 4; attempt += 1) {
+        try {
+          const res = await fetch("/api/settings", { cache: "no-store", signal: AbortSignal.timeout(12000) });
+          const data = await readApi(res);
+          if (!res.ok) throw new Error(data.error || "載入設定失敗");
+          if (!data.settings) throw new Error("伺服器沒有回傳設定");
+          cities = Array.isArray(data.cities) && data.cities.length ? data.cities : cities;
+          if (!cities.length) throw new Error("行政區清單沒載到");
+          fillSettings(data.settings);
+          lastError = "";
+          break;
+        } catch (error) {
+          lastError = error.name === "TimeoutError" || error.name === "AbortError"
+            ? "載入逾時，伺服器可能正在檢查物件"
+            : error.message;
+          $("status").textContent = `載入設定中（${attempt}/4）… ${lastError}`;
+          if (attempt < 4) await new Promise((resolve) => setTimeout(resolve, 800 * attempt));
+        }
+      }
+      if (!settingsLoaded) {
+        setSettingsReady(false, "設定沒載到。請按右上「重新整理」。現在看到的空白表單不是你的存檔，請不要按儲存。");
+        throw new Error(lastError || "載入失敗，請再按重新整理");
+      }
+      try {
+        const res = await fetch("/api/state", { cache: "no-store", signal: AbortSignal.timeout(20000) });
+        const data = await readApi(res);
+        if (res.ok && data.settings) {
+          cities = Array.isArray(data.cities) && data.cities.length ? data.cities : cities;
+          fillSettings(data.settings);
+        }
+        renderStats(data.stats || {});
+        renderList(applyDistrictView(data.listings || []), data.stats || {});
+        if (data.lastRun?.checked_at) {
+          const extra = data.lastRun.baseline ? "（第一次只建立基準，不推播）" : "";
+          $("status").textContent = `上次檢查 ${new Date(data.lastRun.checked_at).toLocaleString()}，抓到 ${data.lastRun.fetched || 0} 筆${extra}`;
+        } else {
+          $("status").textContent = "設定已載入";
+        }
+      } catch (error) {
+        $("status").textContent = "設定已載入，物件列表稍後再試";
+        try {
+          await loadList();
+        } catch {
+          $("status").textContent = "設定已載入，但物件列表暫時讀不到";
+        }
       }
     }
 
     function collectSettings() {
+      if (!settingsLoaded) throw new Error("設定還沒載入完成，請稍候或重新整理，不要先按儲存");
+      const watchDistricts = selectedDistrictKeys();
+      if (!watchDistricts.length) throw new Error("請至少選一個行政區");
       return {
         searchUrls: $("searchUrls").value.split(/\n+/).map((s) => s.trim()).filter(Boolean),
-        watchDistricts: selectedDistrictKeys(),
+        watchDistricts,
         priceMin: Number($("priceMin").value) || 0,
         priceMax: Number($("priceMax").value) || 0,
         excludeRooftop: $("excludeRooftop").checked,
@@ -939,7 +1023,7 @@
           : error.message;
         flash(msg);
       } finally {
-        $("saveBtn").disabled = false;
+        $("saveBtn").disabled = !settingsLoaded;
       }
     };
 
@@ -953,20 +1037,24 @@
       $("saveAsBtn").disabled = true;
       flash("另存中…");
       try {
-        await saveSettings(collectSettings());
         const res = await fetch("/api/profiles", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name }),
+          body: JSON.stringify({ name, settings: collectSettings() }),
+          signal: AbortSignal.timeout(25000),
         });
-        const data = await res.json();
+        const data = await readApi(res);
         if (!res.ok) throw new Error(data.error || "另存失敗");
         fillSettings(data.settings);
-        flash(`已另存「${name}」`);
+        const saved = (data.settings?.settingProfiles || []).some((item) => item.name === name);
+        flash(saved ? `已另存「${name}」，可在左上選單切換` : `另存回應沒有「${name}」，請再試一次`);
       } catch (error) {
-        flash(error.message);
+        const msg = error.name === "TimeoutError" || error.name === "AbortError"
+          ? "另存逾時，請再試一次"
+          : error.message;
+        flash(msg);
       } finally {
-        $("saveAsBtn").disabled = false;
+        $("saveAsBtn").disabled = !settingsLoaded;
       }
     };
 
@@ -1023,7 +1111,12 @@
       }
     };
 
-    $("reloadBtn").onclick = loadList;
+    $("reloadBtn").onclick = () => {
+      $("status").textContent = "重新載入設定…";
+      loadState().catch((error) => {
+        $("status").textContent = error.message || "載入失敗，請再按重新整理";
+      });
+    };
     $("selectPageBtn").onclick = () => {
       document.querySelectorAll("[data-pick]").forEach((el) => {
         el.checked = true;
@@ -1563,6 +1656,7 @@
 
     loadState().catch((error) => {
       $("status").textContent = error.message || "載入失敗，請再按重新整理";
+      setSettingsReady(false, "設定沒載到。請按右上「重新整理」。現在看到的空白表單不是你的存檔，請不要按儲存。");
     }).then(() => {
       initMap();
       renderBoxes();
