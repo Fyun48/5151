@@ -51,6 +51,38 @@ export function listingPriceNum(listing) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
+function normText(value) {
+  return String(value ?? "")
+    .replace(/\s+/g, "")
+    .replace(/,/g, "")
+    .trim();
+}
+
+function sameishAddress(a, b) {
+  const left = normText(a);
+  const right = normText(b);
+  if (!left && !right) return true;
+  if (!left || !right) return false;
+  if (left === right) return true;
+  // 詳情／社區補齊後地址常比列表長，或互有前後綴，不當成內容變更
+  return left.includes(right) || right.includes(left);
+}
+
+function sameishArea(a, b) {
+  const left = normText(a).replace(/坪/g, "");
+  const right = normText(b).replace(/坪/g, "");
+  if (left === right) return true;
+  const na = Number(left);
+  const nb = Number(right);
+  return Number.isFinite(na) && Number.isFinite(nb) && Math.abs(na - nb) < 0.05;
+}
+
+function sameishFloor(a, b) {
+  const left = normText(a).replace(/樓/g, "F").toUpperCase();
+  const right = normText(b).replace(/樓/g, "F").toUpperCase();
+  return left === right;
+}
+
 function contentDiff(incoming, existing) {
   const fields = [
     ["layout", "格局"],
@@ -63,7 +95,15 @@ function contentDiff(incoming, existing) {
   for (const [key, label] of fields) {
     const a = String(existing?.[key] || "").trim();
     const b = String(incoming?.[key] || "").trim();
-    if (a !== b) bits.push(`${label} ${a || "—"} → ${b || "—"}`);
+    // 列表偶發空白、詳情較完整 → 不算變更
+    if (!normText(b) && normText(a)) continue;
+    if (key === "address" && sameishAddress(a, b)) continue;
+    if (key === "area_name" && sameishArea(a, b)) continue;
+    if (key === "floor_name" && sameishFloor(a, b)) continue;
+    if (key === "layout" && normText(a) === normText(b)) continue;
+    if (key === "kind_name" && normText(a) === normText(b)) continue;
+    if (normText(a) === normText(b)) continue;
+    bits.push(`${label} ${a || "—"} → ${b || "—"}`);
   }
   return bits;
 }
@@ -78,7 +118,7 @@ export function classifyExistingUpdate(incoming, existing) {
   const priceDropped = oldPrice > 0 && newPrice > 0 && newPrice < oldPrice;
   const priceRaised = oldPrice > 0 && newPrice > 0 && newPrice > oldPrice;
   const priceChanged = Boolean(existing.price && incoming.price && existing.price !== incoming.price);
-  const titleChanged = String(existing.title || "") !== String(incoming.title || "");
+  const titleChanged = normText(existing.title) !== normText(incoming.title);
   const extras = contentDiff(incoming, existing);
 
   if (priceDropped && titleChanged) {
@@ -114,18 +154,24 @@ export function listingLastEvent(type, existing) {
 }
 
 /** 浮動視窗與 webhook 共用：全新物件一律通知；同屋源重刊不通知（除非已特別關注）；特別關注才通知變更／下架／重新上架。 */
+export function isWatchedListing(listing) {
+  return Number(listing?.watched) === 1;
+}
+
 export function shouldNotify(settings, listing, event) {
-  if (listing?.hidden) return false;
+  if (listing?.hidden || Number(listing?.hidden) === 1) return false;
   const type = event?.type;
+  const watched = isWatchedListing(listing);
   // 房仲刪掉重刊會變成新 post_id；已判成同屋源時不要當「全新物件」吵
-  if (type === "same_source") return Boolean(listing?.watched);
+  if (type === "same_source") return watched;
   if (type === "new") return true;
-  if (!listing?.watched) return false;
-  if (type === "offline" || type === "relist") return true;
-  if (listing?.offline) return false;
+  // 內容／價格／標題更新：只有特別關注才通知
   if (type === "price_drop" || type === "price_update" || type === "title_update" || type === "update") {
-    return true;
+    return watched;
   }
+  if (!watched) return false;
+  if (type === "offline" || type === "relist") return true;
+  if (listing?.offline || Number(listing?.offline) === 1) return false;
   return false;
 }
 

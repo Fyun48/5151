@@ -326,7 +326,11 @@ export async function runWatch(options = {}) {
 
       if (type === "seen" || isBaseline || isSearchBaseline) continue;
 
-      const event = listingEventPayload(listing, type, detail, stamp);
+      // 非特別關注的內容微差（地址補齊來回等）不要進通知佇列
+      const saved = getListing(listing.post_id) || listing;
+      if (!shouldNotify(settings, saved, { type, detail })) continue;
+
+      const event = listingEventPayload(saved, type, detail, stamp);
       const id = addEvent(event);
       event.id = id;
     }
