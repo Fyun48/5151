@@ -1,0 +1,14 @@
+{
+  "name": "591 物件追蹤 (5151)",
+  "install": "npm ci",
+  "terminals": [
+    {
+      "name": "dev-server",
+      "command": "AUTH_EMAIL=\"${AUTH_EMAIL:-demo@example.com}\" AUTH_PASSWORD=\"${AUTH_PASSWORD:-demopass123}\" npm run dev",
+      "description": "591 追蹤開發伺服器（Express + node --watch）。預設登入 demo@example.com / demopass123，可用 AUTH_EMAIL / AUTH_PASSWORD secrets 覆寫。開啟 http://localhost:5151"
+    }
+  ],
+  "ports": [
+    { "name": "web", "port": 5151 }
+  ]
+}
