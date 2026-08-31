@@ -69,7 +69,6 @@
     <input id="password" name="password" type="password" autocomplete="current-password" required />
     <button type="submit" id="btn">登入</button>
     <p class="err" id="err"></p>
-    <p class="sub">若登入後一直停在載入中，請改開 <a href="/reset.html">/reset.html</a> 清除資料後重設。</p>
   </form>
   <script>
     const $ = (id) => document.getElementById(id);
@@ -78,7 +77,6 @@
       if (data.ok && !justLoggedOut) location.replace("/");
       if (data.hint) {
         $("email").value = data.hint;
-        $("sub").textContent = `請用 ${data.hint} 登入。本機請開 http://127.0.0.1:5151`;
       } else if (data.configured === false) {
         $("err").textContent = "尚未設定 AUTH_EMAIL / AUTH_PASSWORD。";
       }
