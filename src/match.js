@@ -118,3 +118,47 @@ export function bestMatch(incoming, candidates) {
   }
   return medium;
 }
+
+function rentNum(listing) {
+  const n = Number(listing?.price_num);
+  if (Number.isFinite(n) && n > 0) return n;
+  const parsed = Number(String(listing?.price || "").replace(/[^\d]/g, ""));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : Number.MAX_SAFE_INTEGER;
+}
+
+/** 把 591「3小時前／昨日」轉成時間戳，越新越大。解析不到就用 last_seen_at。 */
+export function listingRefreshAt(listing, now = Date.now()) {
+  const raw = String(listing?.refresh_time || "").trim();
+  if (raw) {
+    if (/剛剛/.test(raw)) return now;
+    let m = raw.match(/(\d+)\s*秒前/);
+    if (m) return now - Number(m[1]) * 1000;
+    m = raw.match(/(\d+)\s*分鐘前/);
+    if (m) return now - Number(m[1]) * 60 * 1000;
+    m = raw.match(/(\d+)\s*小時(?:前|內)/);
+    if (m) return now - Number(m[1]) * 3600 * 1000;
+    if (/今日|今天/.test(raw)) return now;
+    if (/昨日|昨天/.test(raw)) return now - 24 * 3600 * 1000;
+    m = raw.match(/(\d+)\s*天前/);
+    if (m) return now - Number(m[1]) * 24 * 3600 * 1000;
+    const abs = Date.parse(raw);
+    if (Number.isFinite(abs)) return abs;
+  }
+  const seen = Date.parse(listing?.last_seen_at || "");
+  return Number.isFinite(seen) ? seen : 0;
+}
+
+/**
+ * 確認同一間時要保留的主刊登：較低價優先；同價取更新較近。
+ */
+export function preferPrimaryListing(a, b, now = Date.now()) {
+  if (!a) return b;
+  if (!b) return a;
+  const priceDiff = rentNum(a) - rentNum(b);
+  if (priceDiff !== 0) return priceDiff < 0 ? a : b;
+  const refreshDiff = listingRefreshAt(a, now) - listingRefreshAt(b, now);
+  if (refreshDiff !== 0) return refreshDiff > 0 ? a : b;
+  const seenDiff = String(b.last_seen_at || "").localeCompare(String(a.last_seen_at || ""));
+  if (seenDiff !== 0) return seenDiff < 0 ? a : b;
+  return Number(a.post_id) <= Number(b.post_id) ? a : b;
+}
