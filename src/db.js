@@ -1015,6 +1015,7 @@ export function listListings({ filter = "all", q = "", sort = "price_asc", limit
     clauses.push("IFNULL(offline, 0) = 0");
     clauses.push("(IFNULL(match_verdict, '') != 'yes')");
   }
+  if (filter === "all") clauses.push("IFNULL(watched, 0) = 0");
   if (filter === "unseen") clauses.push("viewed = 0");
   if (filter === "viewed") clauses.push("viewed = 1");
   if (filter === "watched") clauses.push("watched = 1");
@@ -1147,22 +1148,23 @@ export function stats(searchKeys) {
     .all(...params);
   const attrRows = raw.filter((row) => passesAttributeFilters(row, settings));
   const base = attrRows.filter((row) => !row.hidden && !row.offline && row.match_verdict !== "yes");
-  const geoRows = applyListingFilter(raw).filter((row) => !row.hidden && !row.offline && row.match_verdict !== "yes");
+  const browse = base.filter((row) => !row.watched);
+  const geoRows = applyListingFilter(raw).filter((row) => !row.hidden && !row.offline && row.match_verdict !== "yes" && !row.watched);
   return {
-    total: base.length,
-    unseen: base.filter((row) => !row.viewed).length,
+    total: browse.length,
+    unseen: browse.filter((row) => !row.viewed).length,
     watched: base.filter((row) => row.watched).length,
-    same_source: base.filter((row) => ["same_source", "update", "price_drop", "title_update"].includes(row.last_event)).length,
+    same_source: browse.filter((row) => ["same_source", "update", "price_drop", "title_update"].includes(row.last_event)).length,
     hidden: attrRows.filter((row) => row.hidden).length,
     offline: raw.filter((row) => row.offline).length,
     suspected: attrRows.filter((row) => row.match_level && !row.offline).length,
     suspectedPending: attrRows.filter((row) => row.match_level && !row.match_verdict && !row.offline).length,
-    elevator: base.filter((row) => listingHasElevator(row)).length,
+    elevator: browse.filter((row) => listingHasElevator(row)).length,
     stored: geoRows.length,
-    filteredOut: Math.max(0, base.length - geoRows.length),
-    missingGeo: attrRows.filter((row) => !row.hidden && !row.offline && row.match_verdict !== "yes" && (!isTrustedGeoSource(row.geo_source) || row.lat == null || row.lng == null)).length,
+    filteredOut: Math.max(0, browse.length - geoRows.length),
+    missingGeo: attrRows.filter((row) => !row.hidden && !row.offline && !row.watched && row.match_verdict !== "yes" && (!isTrustedGeoSource(row.geo_source) || row.lat == null || row.lng == null)).length,
     missingRoute: attrRows.filter((row) => {
-      if (row.hidden || row.offline || row.match_verdict === "yes") return false;
+      if (row.hidden || row.offline || row.watched || row.match_verdict === "yes") return false;
       const geo = applyCachedCoords(row, settings);
       return (
         Number(settings.commuteKm) > 0 &&
