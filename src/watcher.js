@@ -28,7 +28,7 @@ import {
   upsertListing,
 } from "./db.js";
 import { fetchListingDetail, fetchListings, isListingGoneError, mergeFeeRows, probeListingAlive } from "./client591.js";
-import { needsListingGeo } from "./geo.js";
+import { needsListingGeo, hasWorkPoint } from "./geo.js";
 import { decideNotifyDelivery } from "./floors.js";
 import { fetchRoadRoutes } from "./route.js";
 import { bestMatch } from "./match.js";
@@ -130,7 +130,7 @@ async function resolveListingRoute(listing, settings) {
   const km = Number(settings.commuteKm);
   const workLat = Number(settings.workLat);
   const workLng = Number(settings.workLng);
-  if (!(km > 0) || !Number.isFinite(workLat) || !Number.isFinite(workLng)) return listing;
+  if (!(km > 0) || !hasWorkPoint(settings)) return listing;
   const lat = Number(listing?.lat);
   const lng = Number(listing?.lng);
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return listing;
@@ -411,7 +411,7 @@ export async function backfillListingCoords(settings = getSettings(), { limit = 
 export async function backfillListingRoutes(settings = getSettings(), { limit = 20 } = {}) {
   const workLat = Number(settings.workLat);
   const workLng = Number(settings.workLng);
-  if (!(Number(settings.commuteKm) > 0) || !Number.isFinite(workLat) || !Number.isFinite(workLng) || limit <= 0) {
+  if (!(Number(settings.commuteKm) > 0) || !hasWorkPoint(settings) || limit <= 0) {
     return { attempted: 0, located: 0 };
   }
   const rows = listingsNeedingRoute(limit);

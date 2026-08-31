@@ -10,6 +10,7 @@ import {
   preferCommunityLocation,
 } from "../src/location.js";
 import { decideNotifyDelivery, hasTrustedCoords, isGeoReady, listingIsApartment, listingIsSuite, passesGeoFilters } from "../src/floors.js";
+import { hasWorkPoint, needsListingGeo } from "../src/geo.js";
 
 test("extracts the house-number address from a community page line", () => {
   const fromShot = "淡海新市鎮-行政中心 | 新北市淡水區淡金路二段173號";
@@ -105,6 +106,13 @@ test("community coordinates count as trusted for commute filters", () => {
   assert.equal(isGeoReady({ ...listingBase, route_kms: [16] }, commuteSettings), true);
   assert.equal(passesGeoFilters({ ...listingBase, route_kms: [16] }, commuteSettings), false);
   assert.equal(passesGeoFilters({ ...listingBase, route_kms: [9, 11] }, commuteSettings), true);
+});
+
+test("zero work coords do not enable commute filtering", () => {
+  const broken = { commuteKm: 12, workLat: 0, workLng: 0, workAddress: "台北市士林區德行西路7號" };
+  assert.equal(hasWorkPoint(broken), false);
+  assert.equal(needsListingGeo(broken), false);
+  assert.equal(passesGeoFilters({ ...listingBase, route_kms: [99] }, broken, { strict: true }), true);
 });
 
 test("notifications wait for commute distance then skip listings over the limit", () => {

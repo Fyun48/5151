@@ -23,7 +23,7 @@ import {
   stats,
 } from "./db.js";
 import { adminEmail, authConfigured, clearSessionCookie, readSession, requireAuth, sessionCookie, verifyLogin } from "./auth.js";
-import { boxFromRoadDescription, geocodeAddress, needsListingGeo } from "./geo.js";
+import { boxFromRoadDescription, geocodeAddress, needsListingGeo, hasWorkPoint } from "./geo.js";
 import { rent591Url } from "./openLink.js";
 import { CITIES } from "./regions.js";
 import { backfillListingCoords, backfillListingRoutes, flushPendingNotifications, runWatch } from "./watcher.js";
@@ -109,6 +109,22 @@ function broadcast(payload) {
 }
 
 let geoBackfillBusy = false;
+
+async function ensureWorkCoords() {
+  const current = getSettings();
+  if (!(Number(current.commuteKm) > 0)) return current;
+  const workAddress = String(current.workAddress || "").trim();
+  if (!workAddress || hasWorkPoint(current)) return current;
+  try {
+    const geo = await geocodeAddress(workAddress, getCachedGeo, { strict: false, maxAttempts: 2 });
+    if (!geo) return current;
+    setCachedGeo(workAddress, geo.lat, geo.lng);
+    return saveSettings({ workLat: geo.lat, workLng: geo.lng });
+  } catch (error) {
+    console.warn("補上班地址座標失敗：", error.message);
+    return current;
+  }
+}
 
 function queueGeoBackfill(settings = getSettings()) {
   if (geoBackfillBusy || !needsListingGeo(settings)) return;
@@ -307,8 +323,7 @@ async function persistSettings(body = {}) {
     const current = getSettings();
     const sameAddress =
       String(current.workAddress || "").replace(/\s+/g, "") === workAddress.replace(/\s+/g, "") &&
-      Number.isFinite(Number(current.workLat)) &&
-      Number.isFinite(Number(current.workLng));
+      hasWorkPoint(current);
     if (sameAddress) {
       body.workAddress = workAddress;
       body.workLat = current.workLat;
@@ -422,11 +437,15 @@ app.listen(PORT, HOST, () => {
     console.log(`登入帳號：${adminEmail()}`);
   }
   setTimeout(() => {
-    const urls = (getSettings().searchUrls || []).map((url) => String(url).trim()).filter(Boolean);
-    if (!urls.length) return;
-    queueGeoBackfill();
-    tick("startup").catch((error) => {
-      console.warn("第一次檢查失敗：", error.message);
-    });
+    ensureWorkCoords()
+      .then((settings) => {
+        const urls = (settings.searchUrls || []).map((url) => String(url).trim()).filter(Boolean);
+        if (!urls.length) return;
+        queueGeoBackfill(settings);
+        return tick("startup");
+      })
+      .catch((error) => {
+        console.warn("第一次檢查失敗：", error.message);
+      });
   }, 8000);
 });

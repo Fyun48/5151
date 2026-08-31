@@ -1,5 +1,5 @@
 import { buildSearchUrls, districtsFromSearchUrls, normalizeWatchDistricts, priceFromSearchUrls } from "./regions.js";
-import { normalizeBoxes, normalizeKeywords } from "./geo.js";
+import { normalizeBoxes, normalizeKeywords, parseWorkCoord } from "./geo.js";
 import { normalizeNotifyMatrix } from "./notifyMatrix.js";
 
 export const PROFILE_FIELDS = [
@@ -109,10 +109,8 @@ export function applySettingPatch(current, partial = {}) {
   next.pagesPerWatch = Math.max(1, Math.min(Number(next.pagesPerWatch) || 40, 40));
   next.commuteKm = Math.max(0, Math.min(Number(next.commuteKm) || 0, 80));
   next.workAddress = String(next.workAddress || "").trim().slice(0, 120);
-  const workLat = Number(next.workLat);
-  const workLng = Number(next.workLng);
-  next.workLat = Number.isFinite(workLat) ? workLat : null;
-  next.workLng = Number.isFinite(workLng) ? workLng : null;
+  next.workLat = parseWorkCoord(next.workLat);
+  next.workLng = parseWorkCoord(next.workLng);
   next.watchDistricts = normalizeWatchDistricts(next.watchDistricts);
   next.priceMin = Math.max(0, Number(next.priceMin) || 0);
   next.priceMax = Math.max(0, Number(next.priceMax) || 0);

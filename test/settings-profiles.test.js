@@ -104,6 +104,21 @@ test("snapshot keeps commute and districts for a profile", () => {
   assert.equal(snap.workAddress, "台北市士林區德行西路7號");
 });
 
+test("null or zero work coords stay missing", () => {
+  const cleared = applySettingPatch(
+    { ...defaults, watchDistricts: ["1-8"], workLat: 25.1, workLng: 121.5 },
+    { workLat: null, workLng: null, commuteKm: 12 },
+  );
+  assert.equal(cleared.workLat, null);
+  assert.equal(cleared.workLng, null);
+  const zero = applySettingPatch(
+    { ...defaults, watchDistricts: ["1-8"] },
+    { workLat: 0, workLng: 0, commuteKm: 8 },
+  );
+  assert.equal(zero.workLat, null);
+  assert.equal(zero.workLng, null);
+});
+
 test("notifyMatrix hydrates defaults and preserves unchecks", () => {
   const hydrated = hydrateSettings({ webhookNotifyNew: false }, defaults);
   assert.equal(hydrated.notifyMatrix.new.webhook, false);

@@ -146,11 +146,19 @@ export function hasActiveBoxes(boxes) {
   return normalizeBoxes(boxes).some((box) => box.enabled !== false);
 }
 
+export function parseWorkCoord(value) {
+  if (value == null || value === "") return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n === 0) return null;
+  return n;
+}
+
+export function hasWorkPoint(settings = {}) {
+  return parseWorkCoord(settings.workLat) != null && parseWorkCoord(settings.workLng) != null;
+}
+
 export function needsListingGeo(settings = {}) {
-  const commuteOn =
-    Number(settings.commuteKm) > 0 &&
-    Number.isFinite(Number(settings.workLat)) &&
-    Number.isFinite(Number(settings.workLng));
+  const commuteOn = Number(settings.commuteKm) > 0 && hasWorkPoint(settings);
   return commuteOn || hasActiveBoxes(settings.excludeBoxes);
 }
 
