@@ -22,6 +22,12 @@ test("new listings always notify", () => {
 test("non-watched updates do not notify except new", () => {
   assert.equal(shouldNotify(hookSettings, listing, { type: "price_drop", detail: "x" }), false);
   assert.equal(shouldNotify(hookSettings, listing, { type: "title_update", detail: "x" }), false);
+  assert.equal(shouldNotify(hookSettings, listing, { type: "same_source", detail: "重刊" }), false);
+});
+
+test("watched same_source relist can notify; non-watched cannot", () => {
+  assert.equal(shouldNotify(hookSettings, watched, { type: "same_source", detail: "指紋相同" }), true);
+  assert.equal(shouldNotify(hookSettings, listing, { type: "same_source", detail: "指紋相同" }), false);
 });
 
 test("watched listings notify on price, title, content, offline, relist", () => {

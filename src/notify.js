@@ -113,10 +113,12 @@ export function listingLastEvent(type, existing) {
   return type;
 }
 
-/** 浮動視窗與 webhook 共用：全新物件一律通知；特別關注才通知變更／下架／重新上架。 */
+/** 浮動視窗與 webhook 共用：全新物件一律通知；同屋源重刊不通知（除非已特別關注）；特別關注才通知變更／下架／重新上架。 */
 export function shouldNotify(settings, listing, event) {
   if (listing?.hidden) return false;
   const type = event?.type;
+  // 房仲刪掉重刊會變成新 post_id；已判成同屋源時不要當「全新物件」吵
+  if (type === "same_source") return Boolean(listing?.watched);
   if (type === "new") return true;
   if (!listing?.watched) return false;
   if (type === "offline" || type === "relist") return true;

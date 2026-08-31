@@ -70,18 +70,39 @@ export function scoreMatch(incoming, previous) {
   const sameCover = Boolean(coverA && coverA === coverB);
   const sameRooms = roomsA != null && roomsA === roomsB;
   const sameRole = Boolean(incoming.role_name && incoming.role_name === previous.role_name);
+  const priorGone = Boolean(previous.offline || previous.hidden || previous.viewed);
 
   if (commA && commA === commB && sameFloor && areaTight) {
     return { level: "high", detail: `同社區＋樓層＋坪數，先前 #${previous.post_id}` };
   }
 
-  if (streetA && streetA === streetB && sameFloor && areaClose && (sameCover || sameRooms || sameRole)) {
-    const why = sameCover ? "封面接近" : sameRooms ? "格局相同" : "同一聯絡人";
-    return { level: "medium", detail: `${streetA} · ${why}，先前 #${previous.post_id}` };
+  // 房仲常刪掉重刊：舊刊登已下架／隱藏／已瀏覽時，同路段＋樓層＋坪數即可判同屋源
+  if (streetA && streetA === streetB && sameFloor && areaClose && (sameCover || sameRooms || sameRole || priorGone)) {
+    const why = sameCover
+      ? "封面接近"
+      : sameRooms
+        ? "格局相同"
+        : sameRole
+          ? "同一聯絡人"
+          : previous.offline
+            ? "舊刊登已下架後重刊"
+            : previous.hidden
+              ? "對應已隱藏物件"
+              : "對應已瀏覽物件";
+    const level = previous.offline || sameCover ? "high" : "medium";
+    return { level, detail: `${streetA} · ${why}，先前 #${previous.post_id}` };
   }
 
   if (sameCover && sameFloor && areaClose && streetA && streetB && streetA.slice(0, 3) === streetB.slice(0, 3)) {
     return { level: "medium", detail: `封面圖相同，先前 #${previous.post_id}` };
+  }
+
+  // 無完整門牌、但同社區＋同聯絡人＋樓層坪數接近 → 重刊嫌疑
+  if (commA && commA === commB && sameFloor && areaClose && (sameRole || sameCover || priorGone)) {
+    return {
+      level: previous.offline ? "high" : "medium",
+      detail: `同社區重刊嫌疑，先前 #${previous.post_id}`,
+    };
   }
 
   return null;
