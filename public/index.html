@@ -1240,9 +1240,10 @@
     function updateListMeta(items, st = {}) {
       const el = $("listMeta");
       if (!el) return;
-      if (st.total > items.length && items.length > 0) {
+      const matched = Number(st.matched != null ? st.matched : st.total) || 0;
+      if (matched > items.length && items.length > 0) {
         el.hidden = false;
-        el.textContent = `目前顯示 ${items.length} / ${st.total} 筆。請用搜尋或篩選縮小範圍。`;
+        el.textContent = `目前顯示 ${items.length} / ${matched} 筆。請用搜尋或篩選縮小範圍。`;
       } else {
         el.hidden = true;
         el.textContent = "";
@@ -1333,10 +1334,14 @@
 
     async function loadList() {
       const q = $("q").value.trim();
-      const res = await fetch(`/api/listings?filter=${encodeURIComponent(filter)}&sort=${encodeURIComponent(sort)}&q=${encodeURIComponent(q)}&limit=500`);
+      const districts = [...viewDistricts].map(encodeURIComponent).join(",");
+      const res = await fetch(
+        `/api/listings?filter=${encodeURIComponent(filter)}&sort=${encodeURIComponent(sort)}&q=${encodeURIComponent(q)}&limit=500&districts=${districts}`,
+      );
       const data = await res.json();
       renderStats(data.stats);
       renderDistrictChips(settings);
+      // 伺服器已依行政區／整層／1F 篩過再排序截取；前端再套一次防呆
       renderList(applyListView(data.listings), data.stats);
     }
 
