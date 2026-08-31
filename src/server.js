@@ -342,21 +342,23 @@ app.get("/api/events/stream", (req, res) => {
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders?.();
-  res.write(`data: ${JSON.stringify({ type: "hello", stats: stats(), lastRun })}\n\n`);
+  res.write(`data: ${JSON.stringify({ type: "hello", lastRun })}\n\n`);
   clients.add(res);
   req.on("close", () => clients.delete(res));
 });
 
 app.listen(PORT, HOST, () => {
   schedule();
-  queueGeoBackfill();
   console.log(`591 追蹤已啟動：http://${HOST}:${PORT}`);
   if (!authConfigured()) {
     console.warn("尚未設定 AUTH_EMAIL / AUTH_PASSWORD，網站會要求登入但無法登入。請寫入 .env 或 data/auth.env。");
   } else {
     console.log(`登入帳號：${adminEmail()}`);
   }
-  tick("startup").catch((error) => {
-    console.warn("第一次檢查失敗：", error.message);
-  });
+  setTimeout(() => {
+    queueGeoBackfill();
+    tick("startup").catch((error) => {
+      console.warn("第一次檢查失敗：", error.message);
+    });
+  }, 8000);
 });

@@ -35,6 +35,10 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function yieldEventLoop() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 function classify(incoming, existing) {
   if (!existing) {
     const siblings = findBySourceKey(incoming.source_key, incoming.post_id);
@@ -220,6 +224,7 @@ export async function runWatch(options = {}) {
       fetched: batch.listings.length,
       baseline: isSearchBaseline,
     });
+    let upserts = 0;
     for (const listing of batch.listings) {
       if (seen.has(listing.post_id)) continue;
       seen.add(listing.post_id);
@@ -234,6 +239,8 @@ export async function runWatch(options = {}) {
         last_seen_at: stamp,
         last_event: listingLastEvent(type, existing),
       });
+      upserts += 1;
+      if (upserts % 20 === 0) await yieldEventLoop();
 
       if (!existing && prev && (prev.hidden || prev.viewed)) {
         setListingMatch(listing.post_id, {

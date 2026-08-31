@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="/vendor/leaflet/leaflet.css" />
   <title>591 物件追蹤</title>
   <style>
     :root {
@@ -470,7 +470,6 @@
       <div id="mapOverlayHost"></div>
     </div>
   </div>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
     const origFetch = window.fetch.bind(window);
     window.fetch = async (input, init) => {
@@ -482,6 +481,7 @@
       return res;
     };
     const $ = (id) => document.getElementById(id);
+    $("status").textContent = "正在載入…";
     let filter = "all";
     let sort = "price_asc";
     let settings = {};
@@ -882,7 +882,27 @@
     }
 
     async function loadState() {
-      const me = await fetch("/api/me").then((r) => r.json()).catch(() => ({ ok: false }));
+      $("status").textContent = "正在載入設定…";
+      let me = null;
+      let lastError = "";
+      for (let attempt = 1; attempt <= 4; attempt += 1) {
+        try {
+          const res = await fetch("/api/me", { cache: "no-store", signal: AbortSignal.timeout(8000) });
+          me = await res.json();
+          lastError = "";
+          break;
+        } catch (error) {
+          lastError = error.name === "TimeoutError" || error.name === "AbortError"
+            ? "伺服器忙碌（可能正在檢查 591）"
+            : error.message;
+          $("status").textContent = `連線中（${attempt}/4）… ${lastError}`;
+          if (attempt < 4) await new Promise((resolve) => setTimeout(resolve, 800 * attempt));
+        }
+      }
+      if (!me) {
+        setSettingsReady(false, "連不上伺服器。請按右上「重新整理」。現在不要按儲存。");
+        throw new Error(lastError || "連不上伺服器");
+      }
       if (!me.ok) {
         location.replace("/login.html");
         return;
@@ -890,7 +910,7 @@
       $("who").textContent = me.email || "";
       settingsLoaded = false;
       setSettingsReady(false, "正在載入已存設定…完成前請不要按儲存或另存。");
-      let lastError = "";
+      lastError = "";
       for (let attempt = 1; attempt <= 4; attempt += 1) {
         try {
           const res = await fetch("/api/settings", { cache: "no-store", signal: AbortSignal.timeout(12000) });
@@ -1293,7 +1313,11 @@
     });
 
     $("logoutBtn").onclick = async () => {
-      await fetch("/api/logout", { method: "POST" });
+      try {
+        await fetch("/api/logout", { method: "POST", signal: AbortSignal.timeout(4000) });
+      } catch {
+        // 伺服器卡住時仍離開畫面
+      }
       location.replace("/login.html");
     };
 
@@ -1455,6 +1479,15 @@
       return data.box;
     }
     function initMap() {
+      if (map) return;
+      if (!window.L) {
+        if (!initMap.tries) initMap.tries = 0;
+        if (initMap.tries < 40) {
+          initMap.tries += 1;
+          setTimeout(initMap, 250);
+        }
+        return;
+      }
       map = L.map("excludeMap", { boxZoom: false }).setView([25.093, 121.525], 13);
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         maxZoom: 19,
@@ -1676,39 +1709,42 @@
       renderBoxes();
       renderDock();
       setTimeout(() => map?.invalidateSize(), 250);
+      if (!window.__watchStream) {
+        const es = new EventSource("/api/events/stream");
+        window.__watchStream = es;
+        es.onmessage = (msg) => {
+          const data = JSON.parse(msg.data);
+          if (data.type === "watch") {
+            const n = data.result.events?.length || 0;
+            $("status").textContent = `自動檢查完成，通知 ${n} 則 · ${new Date(data.result.checked_at).toLocaleString()}`;
+            pushDock(data.result.events || []);
+            loadList();
+          }
+          if (data.type === "notify") {
+            const n = data.events?.length || 0;
+            if (n) {
+              $("status").textContent = `篩選後通知 ${n} 則 · ${new Date().toLocaleString()}`;
+              pushDock(data.events || []);
+            }
+            loadList();
+          }
+          if (data.type === "geo") {
+            if (data.routeBackfill?.located) {
+              $("status").textContent = `已計算 ${data.routeBackfill.located} 筆機車路線，列表已更新`;
+            } else if (data.geoBackfill?.located || data.geoBackfill?.attempted) {
+              $("status").textContent = `已從 591 地圖補 ${data.geoBackfill.located || 0} 筆座標，列表已更新`;
+            }
+            loadList();
+          }
+        };
+        es.onerror = () => {
+          fetch("/api/me").then((r) => r.json()).then((data) => {
+            if (!data.ok) location.replace("/login.html");
+          }).catch(() => {});
+        };
+      }
     });
-
-    const es = new EventSource("/api/events/stream");
-    es.onmessage = (msg) => {
-      const data = JSON.parse(msg.data);
-      if (data.type === "watch") {
-        const n = data.result.events?.length || 0;
-        $("status").textContent = `自動檢查完成，通知 ${n} 則 · ${new Date(data.result.checked_at).toLocaleString()}`;
-        pushDock(data.result.events || []);
-        loadList();
-      }
-      if (data.type === "notify") {
-        const n = data.events?.length || 0;
-        if (n) {
-          $("status").textContent = `篩選後通知 ${n} 則 · ${new Date().toLocaleString()}`;
-          pushDock(data.events || []);
-        }
-        loadList();
-      }
-      if (data.type === "geo") {
-        if (data.routeBackfill?.located) {
-          $("status").textContent = `已計算 ${data.routeBackfill.located} 筆機車路線，列表已更新`;
-        } else if (data.geoBackfill?.located || data.geoBackfill?.attempted) {
-          $("status").textContent = `已從 591 地圖補 ${data.geoBackfill.located || 0} 筆座標，列表已更新`;
-        }
-        loadList();
-      }
-    };
-    es.onerror = () => {
-      fetch("/api/me").then((r) => r.json()).then((data) => {
-        if (!data.ok) location.replace("/login.html");
-      }).catch(() => {});
-    };
   </script>
+  <script src="/vendor/leaflet/leaflet.js" defer></script>
 </body>
 </html>
