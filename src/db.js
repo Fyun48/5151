@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { shouldKeepListing, listingHasElevator } from "./floors.js";
+import { shouldKeepListing, listingHasElevator, listingIsApartment, listingIsSuite } from "./floors.js";
 import { isTrustedGeoSource, listingCommunityId } from "./location.js";
 import { makeRouteKey } from "./route.js";
 import { sameSearch } from "./client591.js";
@@ -946,6 +946,8 @@ export function listListings({ filter = "all", q = "", sort = "price_asc", limit
       ? raw.map((row) => decorateListing(row, settings))
       : applyListingFilter(raw).map((row) => decorateListing(row, settings));
   if (filter === "elevator") rows = rows.filter((row) => listingHasElevator(row));
+  if (filter === "apartment") rows = rows.filter((row) => listingIsApartment(row));
+  if (filter === "suite") rows = rows.filter((row) => listingIsSuite(row));
   if (sort === "commute_asc") {
     rows.sort((a, b) => (Number(a.commute_km) || 9999) - (Number(b.commute_km) || 9999));
   } else if (sort === "commute_desc") {
