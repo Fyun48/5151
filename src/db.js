@@ -11,6 +11,7 @@ import { hasWorkPoint } from "./geo.js";
 import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings } from "./settingsState.js";
 import { defaultNotifyMatrix } from "./notifyMatrix.js";
 import { DATA_EPOCH, shouldResetForEpoch } from "./dataEpoch.js";
+import { countsTowardAllTotal, isConfirmedOffline, isPendingOffline } from "./offline.js";
 
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data");
 mkdirSync(DATA_DIR, { recursive: true });
@@ -1088,6 +1089,7 @@ export function listListings({
     clauses.push("IFNULL(offline, 0) = 0");
   } else if (filter === "offline") {
     clauses.push("IFNULL(offline, 0) = 1");
+    clauses.push("IFNULL(offline_confirmed, 0) = 0");
   } else if (filter === "hidden") {
     clauses.push("hidden = 1");
   } else {
@@ -1226,28 +1228,29 @@ export function stats(searchKeys) {
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const raw = db
     .prepare(
-      `SELECT viewed, watched, hidden, offline, last_event, floor_name, kind_name, title, address, area_name, lat, lng, geo_source, tags, match_level, match_rejected, match_verdict FROM listings ${where}`,
+      `SELECT viewed, watched, hidden, offline, offline_confirmed, last_event, floor_name, kind_name, title, address, area_name, lat, lng, geo_source, tags, match_level, match_rejected, match_verdict FROM listings ${where}`,
     )
     .all(...params);
   const attrRows = raw.filter((row) => passesAttributeFilters(row, settings));
-  const base = attrRows.filter((row) => !row.hidden && !row.offline && row.match_verdict !== "yes");
-  const browse = base.filter((row) => !row.watched);
-  const geoRows = applyListingFilter(raw).filter((row) => !row.hidden && !row.offline && row.match_verdict !== "yes" && !row.watched);
+  const base = attrRows.filter((row) => !row.hidden && !isPendingOffline(row) && !isConfirmedOffline(row) && row.match_verdict !== "yes");
+  const browse = attrRows.filter(countsTowardAllTotal);
+  const geoRows = applyListingFilter(raw).filter((row) => !row.hidden && !isPendingOffline(row) && !isConfirmedOffline(row) && row.match_verdict !== "yes" && !row.watched);
   return {
     total: browse.length,
     unseen: browse.filter((row) => !row.viewed).length,
     watched: base.filter((row) => row.watched).length,
     same_source: browse.filter((row) => ["same_source", "update", "price_drop", "title_update"].includes(row.last_event)).length,
     hidden: attrRows.filter((row) => row.hidden).length,
-    offline: raw.filter((row) => row.offline).length,
+    offline: raw.filter((row) => isPendingOffline(row)).length,
+    offlineConfirmed: raw.filter((row) => isConfirmedOffline(row)).length,
     suspected: attrRows.filter((row) => row.match_level && !row.offline).length,
     suspectedPending: attrRows.filter((row) => row.match_level && !row.match_verdict && !row.offline).length,
     elevator: browse.filter((row) => listingHasElevator(row)).length,
     stored: geoRows.length,
     filteredOut: Math.max(0, browse.length - geoRows.length),
-    missingGeo: attrRows.filter((row) => !row.hidden && !row.offline && !row.watched && row.match_verdict !== "yes" && (!isTrustedGeoSource(row.geo_source) || row.lat == null || row.lng == null)).length,
+    missingGeo: attrRows.filter((row) => !row.hidden && !isPendingOffline(row) && !isConfirmedOffline(row) && !row.watched && row.match_verdict !== "yes" && (!isTrustedGeoSource(row.geo_source) || row.lat == null || row.lng == null)).length,
     missingRoute: attrRows.filter((row) => {
-      if (row.hidden || row.offline || row.watched || row.match_verdict === "yes") return false;
+      if (row.hidden || isPendingOffline(row) || isConfirmedOffline(row) || row.watched || row.match_verdict === "yes") return false;
       const geo = applyCachedCoords(row, settings);
       return (
         Number(settings.commuteKm) > 0 &&

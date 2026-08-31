@@ -712,7 +712,7 @@
       <p class="hint">排程會依這個間隔抓 591 搜尋。搜尋裡沒出現的物件會抽查詳情頁，確認是不是已關閉。</p>
       <label>確認已下架天數</label>
       <input type="number" id="offlineConfirmDays" min="1" max="30" />
-      <p class="hint">591 回「不存在／已關閉」後先標「已下架」並持續核對（同一筆至少隔 12 小時再查一次）。從第一次找不到開始算，滿這天天數仍找不到就改成「確認已下架」，不再打 591。</p>
+      <p class="hint">591 回「不存在／已關閉」後先標「正在確認中的下架」並持續核對（同一筆至少隔 12 小時再查一次）。從第一次找不到開始算，滿這天天數仍找不到就改成「確認已下架」：從「全部」與「正在確認中的下架」的數量扣除，也不再打 591。</p>
       <label>每次最多抓取頁數（每頁約 30 筆，最多 40；會抓到搜尋結果結束為止）</label>
       <input type="number" id="pagesPerWatch" min="1" max="40" />
       <label>建物總樓層至少</label>
@@ -811,7 +811,7 @@
           <button class="chip" data-filter="same_source">同屋源更新</button>
           <button class="chip" data-filter="suspected">疑似同屋源</button>
           <button class="chip" data-filter="hidden">已隱藏</button>
-          <button class="chip" data-filter="offline">已下架</button>
+          <button class="chip" data-filter="offline">正在確認中的下架</button>
           <span style="width:1px;height:22px;background:var(--line);margin:0 4px"></span>
           <button class="chip" data-sort="newest">最新</button>
           <button class="chip on" data-sort="price_asc">金額低→高</button>
@@ -1286,7 +1286,7 @@
 
     function renderStats(st) {
       $("stats").innerHTML = `
-        <p class="stat-note">以下數量只算 591 搜尋條件（坪數、建物樓層、租金等），不含地圖／路名／通勤排除。「全部」不含特別關注（請點該篩選查看）。右側「整層／樓層」勾選只影響列表顯示，不計入左側數字。</p>
+        <p class="stat-note">以下數量只算 591 搜尋條件（坪數、建物樓層、租金等），不含地圖／路名／通勤排除。「全部」不含特別關注、正在確認中的下架，以及已確認下架（滿核對天數）的物件。右側「整層／樓層」勾選只影響列表顯示，不計入左側數字。</p>
       ` + [
         ["全部", st.total],
         ["有電梯", st.elevator],
@@ -1294,7 +1294,7 @@
         ["特別關注", st.watched],
         ["已隱藏", st.hidden],
         ["疑似", st.suspected],
-        ...(st.offline ? [["已下架", st.offline]] : []),
+        ...(st.offline ? [["正在確認中的下架", st.offline]] : []),
         ...(st.filteredOut ? [["列表另排除", st.filteredOut]] : []),
       ].map(([k, v]) => `<div class="stat"><b>${v || 0}</b><span>${k}</span></div>`).join("");
     }
@@ -1341,7 +1341,7 @@
       if (item.offline_confirmed) {
         return ` · 確認已下架${day ? `（自 ${esc(day)} 起找不到）` : ""}`;
       }
-      return ` · 591 已下架，核對中${day ? `（${esc(day)} 起）` : ""}`;
+      return ` · 下架確認中${day ? `（${esc(day)} 起）` : ""}`;
     }
 
     function tags(item) {
@@ -1354,7 +1354,7 @@
       else if (item.match_level === "medium") bits.push('<span class="tag watch">需確認同屋源</span>');
       if (item.last_event === "update") bits.push('<span class="tag same">內容更新</span>');
       if (item.offline_confirmed) bits.push('<span class="tag off-sure">確認已下架</span>');
-      else if (item.offline || item.last_event === "offline") bits.push('<span class="tag off">已下架（核對中）</span>');
+      else if (item.offline || item.last_event === "offline") bits.push('<span class="tag off">正在確認中的下架</span>');
       if (item.has_elevator) bits.push('<span class="tag lift">有電梯</span>');
       if (item.watched) bits.push('<span class="tag watch">特別關注</span>');
       if (item.viewed) bits.push('<span class="tag viewed">已瀏覽</span>');
@@ -1424,7 +1424,7 @@
         } else if (filter === "suspected") {
           msg = "目前沒有被判成同一屋源的重刊。隱藏或已瀏覽的舊屋若再上架，會出現在這裡。";
         } else if (filter === "offline") {
-          msg = "目前沒有偵測到已從 591 下架的物件。關閉或刪除的刊登會先標已下架並核對，滿設定天數仍找不到才改成確認已下架。";
+          msg = "目前沒有正在確認中的下架物件。591 關閉或刪除的刊登會先列在這裡核對；滿設定天數仍找不到就改成確認已下架，並從「全部」與這個篩選的數量扣除。";
         } else if (filter === "elevator") {
           msg = "目前沒有標到有電梯的物件。這只篩已抓到的結果，不會重查 591。";
         } else if (filter === "apartment") {
