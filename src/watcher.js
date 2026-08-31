@@ -10,7 +10,9 @@ import {
   listingsNeeding591Geo,
   listingsNeedingFeeDetail,
   listingsNeedingRoute,
+  listingsNeedingAliveCheck,
   markEventNotified,
+  markListingOffline,
   pendingNotifyEvents,
   eventPayloadFromListing,
   saveSettings,
@@ -19,9 +21,10 @@ import {
   setFlags,
   setListingDetail,
   setListingMatch,
+  touchListingChecked,
   upsertListing,
 } from "./db.js";
-import { fetchListingDetail, fetchListings, mergeFeeRows } from "./client591.js";
+import { fetchListingDetail, fetchListings, isListingGoneError, mergeFeeRows, probeListingAlive } from "./client591.js";
 import { needsListingGeo } from "./geo.js";
 import { decideNotifyDelivery } from "./floors.js";
 import { fetchRoadRoutes } from "./route.js";
@@ -33,7 +36,7 @@ function nowIso() {
 }
 
 function shouldNotify(settings, listing, type) {
-  if (listing.hidden) return false;
+  if (listing.hidden || listing.offline) return false;
   if (listing.watched && settings.notifyWatchedAlways) return true;
   if (listing.viewed && !settings.notifyViewed) return false;
   if (type === "new") return Boolean(settings.notifyNew);
@@ -58,6 +61,10 @@ function classify(incoming, existing) {
       return { type: "same_source", detail: `${hit.detail}${priceBit}`, prev, level: hit.level };
     }
     return { type: "new", detail: incoming.price || "" };
+  }
+
+  if (existing.offline) {
+    return { type: "same_source", detail: "591 已重新上架", prev: existing, level: "high" };
   }
 
   if (existing.price && incoming.price && existing.price !== incoming.price) {
@@ -138,11 +145,32 @@ async function resolvePendingNotifyLocations(settings, { withRoute = true } = {}
       const detail = await fetchListingDetail(event.post_id, detailOptions());
       listing = applyFetchedDetail(listing, detail) || listing;
       if (withRoute) listing = (await resolveListingRoute(listing, settings)) || listing;
-    } catch {
+    } catch (error) {
+      if (isListingGoneError(error)) markListingOffline(event.post_id);
       // 詳情或路線失敗就留待下一輪補
     }
     await new Promise((resolve) => setTimeout(resolve, 400));
   }
+}
+
+async function sweepOfflineListings(seenIds, { limit = 20 } = {}) {
+  const rows = listingsNeedingAliveCheck({ excludeIds: [...seenIds], limit });
+  let checked = 0;
+  let gone = 0;
+  for (const row of rows) {
+    checked += 1;
+    try {
+      await probeListingAlive(row.post_id);
+      touchListingChecked(row.post_id);
+    } catch (error) {
+      if (isListingGoneError(error)) {
+        markListingOffline(row.post_id);
+        gone += 1;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  }
+  return { checked, gone };
 }
 
 export async function runWatch(options = {}) {
@@ -256,6 +284,7 @@ export async function runWatch(options = {}) {
   }
 
   await resolvePendingNotifyLocations(settings, { withRoute: options.skipHeavyGeo !== true });
+  const offlineSweep = await sweepOfflineListings(seen, { limit: options.skipHeavyGeo ? 12 : 20 });
 
   const pendingFees = listingsNeedingFeeDetail(needsListingGeo(settings) ? 30 : 20);
   for (const row of pendingFees) {
@@ -264,7 +293,8 @@ export async function runWatch(options = {}) {
       if (!listing) continue;
       const detail = await fetchListingDetail(row.post_id, detailOptions());
       applyFetchedDetail(listing, detail);
-    } catch {
+    } catch (error) {
+      if (isListingGoneError(error)) markListingOffline(row.post_id);
       // 詳情失敗下次再試，不中斷本輪追蹤
     }
     await new Promise((resolve) => setTimeout(resolve, 400));
@@ -281,6 +311,7 @@ export async function runWatch(options = {}) {
     searches: searchReports,
     events,
     errors,
+    offline: offlineSweep,
     checked_at: nowIso(),
   };
 }
@@ -308,7 +339,8 @@ export async function backfillListingCoords(settings = getSettings(), { limit = 
         geo_source: detail.geo_source,
       });
       if (detail.lat != null && detail.lng != null) located += 1;
-    } catch {
+    } catch (error) {
+      if (isListingGoneError(error)) markListingOffline(row.post_id);
       // 591 詳情失敗下次再試
     }
     await new Promise((resolve) => setTimeout(resolve, 500));

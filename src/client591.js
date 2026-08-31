@@ -25,6 +25,27 @@ const DROP_PARAMS = new Set([
 
 const MAX_LIST_PAGES = 40;
 
+export class ListingGoneError extends Error {
+  constructor(message = "物件不存在") {
+    super(message);
+    this.name = "ListingGoneError";
+    this.code = "gone";
+  }
+}
+
+export function isListingGoneError(error) {
+  return Boolean(error) && (error instanceof ListingGoneError || error.code === "gone" || error.name === "ListingGoneError");
+}
+
+export function isListingGoneResponse(body, httpStatus) {
+  if (Number(httpStatus) === 404) return true;
+  const msg = String(body?.msg || body?.message || "");
+  if (/不存在|已關閉|已刪除|已下架|找不到此/.test(msg)) return true;
+  const houseStatus = String(body?.data?.status || "").toLowerCase();
+  if (["close", "closed", "off", "offline", "delete", "deleted"].includes(houseStatus)) return true;
+  return false;
+}
+
 export function mapWebsiteSort(sort) {
   const text = String(sort || "").trim().toLowerCase();
   const matched = text.match(/^(money|posttime|area|id)_(asc|desc)$/);
@@ -294,19 +315,34 @@ export async function fetchCommunityLocation(communityId) {
   }
 }
 
-export async function fetchListingDetail(postId, options = {}) {
+async function fetchRentDetailBody(postId) {
   const res = await fetch(`https://bff-house.591.com.tw/v2/web/rent/detail?id=${postId}`, {
     headers: {
       "User-Agent": USER_AGENT,
       Accept: "application/json, text/plain, */*",
       Referer: "https://rent.591.com.tw/",
     },
+    signal: AbortSignal.timeout(8000),
   });
+  if (res.status === 404) throw new ListingGoneError("物件不存在");
   if (!res.ok) throw new Error(`591 詳情 ${res.status}`);
   const body = await res.json();
+  if (isListingGoneResponse(body, res.status)) {
+    throw new ListingGoneError(body.msg || "物件不存在");
+  }
   if (body.status !== 1 && body.status !== true && !body.data) {
     throw new Error(body.msg || "591 詳情失敗");
   }
+  return body;
+}
+
+export async function probeListingAlive(postId) {
+  await fetchRentDetailBody(postId);
+  return true;
+}
+
+export async function fetchListingDetail(postId, options = {}) {
+  const body = await fetchRentDetailBody(postId);
   const ref = communityRefFromDetail(body.data);
   let community = ref.id ? options.getCommunity?.(ref.id) : null;
   const cachedCommunity = community && (community.lat != null || community.address) ? community : null;
