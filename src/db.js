@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { shouldKeepListing, passesAttributeFilters, listingHasElevator, listingIsApartment, listingIsSuite } from "./floors.js";
+import { shouldKeepListing, passesAttributeFilters, passesDisplayFilters, listingHasElevator, listingIsApartment, listingIsSuite } from "./floors.js";
 import { isTrustedGeoSource, listingCommunityId } from "./location.js";
 import { makeRouteKey } from "./route.js";
 import { sameSearch } from "./client591.js";
@@ -1004,7 +1004,40 @@ export function updateListingsGeoByAddress(address, lat, lng) {
   ).run(Number(lat), Number(lng), key);
 }
 
-export function listListings({ filter = "all", q = "", sort = "price_asc", limit = 500, searchKeys } = {}) {
+function priceSortKey(row) {
+  const n = Number(row?.price_num) || 0;
+  return n > 0 ? n : Number.MAX_SAFE_INTEGER;
+}
+
+export function sortListingsRows(rows, sort = "price_asc") {
+  const list = [...(rows || [])];
+  if (sort === "commute_asc") {
+    list.sort((a, b) => (Number(a.commute_km) || 9999) - (Number(b.commute_km) || 9999) || priceSortKey(a) - priceSortKey(b));
+  } else if (sort === "commute_desc") {
+    list.sort((a, b) => (Number(b.commute_km) || 0) - (Number(a.commute_km) || 0) || priceSortKey(a) - priceSortKey(b));
+  } else if (sort === "price_desc") {
+    list.sort((a, b) => {
+      const pa = Number(a.price_num) || 0;
+      const pb = Number(b.price_num) || 0;
+      if ((pa > 0) !== (pb > 0)) return pa > 0 ? -1 : 1;
+      return pb - pa || String(b.last_seen_at || "").localeCompare(String(a.last_seen_at || ""));
+    });
+  } else if (sort === "newest") {
+    list.sort((a, b) => String(b.last_seen_at || "").localeCompare(String(a.last_seen_at || "")) || Number(b.post_id) - Number(a.post_id));
+  } else {
+    list.sort((a, b) => priceSortKey(a) - priceSortKey(b) || String(b.last_seen_at || "").localeCompare(String(a.last_seen_at || "")));
+  }
+  return list;
+}
+
+export function listListings({
+  filter = "all",
+  q = "",
+  sort = "price_asc",
+  limit = 500,
+  searchKeys,
+  districts = [],
+} = {}) {
   const clauses = [];
   const params = [];
   searchWhere(searchKeys, clauses, params);
@@ -1031,29 +1064,32 @@ export function listListings({ filter = "all", q = "", sort = "price_asc", limit
     params.push(like, like, like, like);
   }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-  const order =
-    sort === "price_desc"
-      ? "price_num DESC, last_seen_at DESC"
-      : sort === "newest"
-        ? "last_seen_at DESC, post_id DESC"
-        : "price_num ASC, last_seen_at DESC";
-  const raw = db
-    .prepare(`SELECT * FROM listings ${where} ORDER BY ${order}`)
-    .all(...params);
+  const raw = db.prepare(`SELECT * FROM listings ${where}`).all(...params);
   const settings = getSettings();
   let rows =
     filter === "offline" || filter === "suspected"
       ? raw.map((row) => decorateListing(row, settings))
       : applyListingFilter(raw).map((row) => decorateListing(row, settings));
+
+  // 整層／1F、行政區要在 limit 前套用，否則「全庫最便宜 500 筆」再前端篩選會漏掉新北等區
+  rows = rows.filter((row) => passesDisplayFilters(row, settings));
+  const districtSet = new Set(
+    (Array.isArray(districts) ? districts : String(districts || "").split(","))
+      .map((name) => String(name || "").trim())
+      .filter(Boolean),
+  );
+  if (districtSet.size) {
+    rows = rows.filter((row) => districtSet.has(row.district));
+  }
+
   if (filter === "elevator") rows = rows.filter((row) => listingHasElevator(row));
   if (filter === "apartment") rows = rows.filter((row) => listingIsApartment(row));
   if (filter === "suite") rows = rows.filter((row) => listingIsSuite(row));
-  if (sort === "commute_asc") {
-    rows.sort((a, b) => (Number(a.commute_km) || 9999) - (Number(b.commute_km) || 9999));
-  } else if (sort === "commute_desc") {
-    rows.sort((a, b) => (Number(b.commute_km) || 0) - (Number(a.commute_km) || 0));
-  }
-  return rows.slice(0, limit);
+
+  rows = sortListingsRows(rows, sort);
+
+  const totalMatched = rows.length;
+  return { listings: rows.slice(0, limit), totalMatched };
 }
 
 export function sourceHistory(sourceKey) {

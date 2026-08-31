@@ -182,7 +182,9 @@ app.get("/api/state", (_req, res) => {
   let events = [];
   try {
     listingStats = stats();
-    listings = listListings({ filter: "all", sort: "price_asc", limit: 500 });
+    const listed = listListings({ filter: "all", sort: "price_asc", limit: 500 });
+    listings = listed.listings;
+    listingStats = { ...listingStats, matched: listed.totalMatched };
     events = recentEvents(30);
   } catch (error) {
     console.warn("讀取物件列表失敗：", error.message);
@@ -199,14 +201,20 @@ app.get("/api/state", (_req, res) => {
 });
 
 app.get("/api/listings", (req, res) => {
+  const districts = String(req.query.districts || "")
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean);
+  const listed = listListings({
+    filter: req.query.filter || "all",
+    q: req.query.q || "",
+    sort: req.query.sort || "price_asc",
+    limit: Number(req.query.limit) || 500,
+    districts,
+  });
   res.json({
-    stats: stats(),
-    listings: listListings({
-      filter: req.query.filter || "all",
-      q: req.query.q || "",
-      sort: req.query.sort || "price_asc",
-      limit: Number(req.query.limit) || 500,
-    }),
+    stats: { ...stats(), matched: listed.totalMatched },
+    listings: listed.listings,
   });
 });
 
