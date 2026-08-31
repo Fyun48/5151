@@ -9,6 +9,7 @@ import { districtNameFromListing } from "./regions.js";
 import { preferPrimaryListing } from "./match.js";
 import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings } from "./settingsState.js";
 import { defaultNotifyMatrix } from "./notifyMatrix.js";
+import { DATA_EPOCH, shouldResetForEpoch } from "./dataEpoch.js";
 
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data");
 mkdirSync(DATA_DIR, { recursive: true });
@@ -290,7 +291,7 @@ const DEFAULTS = {
   areaMax: 0,
   excludeRooftop: true,
   offlineConfirmDays: 7,
-  dataEpoch: "",
+  dataEpoch: DATA_EPOCH,
 };
 
 export function getSettings() {
@@ -839,7 +840,7 @@ export function resetListings() {
   return saveSettings({ hasBaseline: false });
 }
 
-export const DATA_EPOCH = "wipe-20260831";
+export { DATA_EPOCH };
 
 export function resetAllData() {
   db.exec("BEGIN");
@@ -888,8 +889,17 @@ function readDataEpoch() {
   }
 }
 
-if (readDataEpoch() !== DATA_EPOCH) {
+function stampDataEpoch() {
+  db.prepare(
+    "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+  ).run("dataEpoch", JSON.stringify(DATA_EPOCH));
+}
+
+if (shouldResetForEpoch(readDataEpoch(), DATA_EPOCH)) {
+  console.warn(`[5151] DATA_EPOCH 變更（${readDataEpoch()} → ${DATA_EPOCH}），執行整庫重置`);
   resetAllData();
+} else if (readDataEpoch() !== DATA_EPOCH) {
+  stampDataEpoch();
 }
 
 export function addEvent(event) {

@@ -121,6 +121,12 @@ export function applySettingPatch(current, partial = {}) {
   next.excludeRooftop = next.excludeRooftop !== false;
   next.wholeFloorOnly = next.wholeFloorOnly !== false;
   next.excludeLowFloors = next.excludeLowFloors !== false;
+  if (!Object.prototype.hasOwnProperty.call(patch, "dataEpoch")) {
+    next.dataEpoch = current.dataEpoch;
+  }
+  if (!String(next.dataEpoch || "").trim()) {
+    next.dataEpoch = current.dataEpoch || next.dataEpoch;
+  }
   next.notifyMatrix = normalizeNotifyMatrix(next);
   if (!Object.prototype.hasOwnProperty.call(patch, "notifyMatrix")) {
     if (Object.prototype.hasOwnProperty.call(patch, "notifyNew")) {
