@@ -2,7 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { passesAttributeFilters } from "../src/floors.js";
 import {
+  countsTowardAllTotal,
   daysSince,
+  isConfirmedOffline,
+  isPendingOffline,
   shouldConfirmOffline,
   shouldRecheckOffline,
   normalizeOfflineConfirmDays,
@@ -84,6 +87,24 @@ test("does not recheck once confirmed", () => {
   };
   assert.equal(shouldConfirmOffline(listing, { days: 7, now }), false);
   assert.equal(shouldRecheckOffline(listing, { days: 7, now }), false);
+});
+
+test("pending offline count excludes confirmed listings and live ones", () => {
+  const live = { hidden: 0, watched: 0, offline: 0, offline_confirmed: 0, match_verdict: "" };
+  const pending = { ...live, offline: 1, offline_confirmed: 0 };
+  const confirmed = { ...live, offline: 1, offline_confirmed: 1 };
+  const rows = [live, pending, pending, confirmed];
+  assert.equal(rows.filter(isPendingOffline).length, 2);
+  assert.equal(rows.filter(isConfirmedOffline).length, 1);
+  assert.equal(isPendingOffline(confirmed), false);
+});
+
+test("confirmed offline is deducted from the All total", () => {
+  const live = { hidden: 0, watched: 0, offline: 0, offline_confirmed: 0, match_verdict: "" };
+  assert.equal(countsTowardAllTotal(live), true);
+  assert.equal(countsTowardAllTotal({ ...live, offline: 1, offline_confirmed: 0 }), false);
+  assert.equal(countsTowardAllTotal({ ...live, offline: 1, offline_confirmed: 1 }), false);
+  assert.equal(countsTowardAllTotal({ ...live, watched: 1 }), false);
 });
 
 test("offlineConfirmDays defaults to 7", () => {

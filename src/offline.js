@@ -24,6 +24,22 @@ export function hoursSince(fromIso, now = new Date()) {
   return (now.getTime() - from.getTime()) / 3_600_000;
 }
 
+export function isPendingOffline(listing) {
+  return Boolean(Number(listing?.offline)) && !Number(listing?.offline_confirmed);
+}
+
+export function isConfirmedOffline(listing) {
+  return Boolean(Number(listing?.offline)) && Boolean(Number(listing?.offline_confirmed));
+}
+
+export function countsTowardAllTotal(listing) {
+  if (listing?.hidden || Number(listing?.hidden)) return false;
+  if (listing?.watched || Number(listing?.watched)) return false;
+  if (listing?.match_verdict === "yes") return false;
+  if (isPendingOffline(listing) || isConfirmedOffline(listing) || Number(listing?.offline)) return false;
+  return true;
+}
+
 export function shouldConfirmOffline(listing, { days = OFFLINE_CONFIRM_DAYS_DEFAULT, now = new Date() } = {}) {
   if (!listing?.offline || listing.offline_confirmed) return false;
   return daysSince(listing.offline_at, now) >= normalizeOfflineConfirmDays(days);
