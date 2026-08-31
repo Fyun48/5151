@@ -12,6 +12,7 @@ import {
   loadProfile,
   recentEvents,
   rejectSuspectedMatch,
+  confirmSuspectedMatch,
   resetListings,
   resetAllData,
   saveAsProfile,
@@ -260,6 +261,15 @@ app.post("/api/listings/:id/reject-match", (req, res) => {
   const updated = rejectSuspectedMatch(Number(req.params.id));
   if (!updated) {
     res.status(404).json({ error: "找不到這筆物件" });
+    return;
+  }
+  res.json({ listing: updated, stats: stats() });
+});
+
+app.post("/api/listings/:id/confirm-match", (req, res) => {
+  const updated = confirmSuspectedMatch(Number(req.params.id));
+  if (!updated) {
+    res.status(404).json({ error: "找不到這筆物件或缺少比對對象" });
     return;
   }
   res.json({ listing: updated, stats: stats() });
