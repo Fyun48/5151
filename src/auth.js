@@ -64,7 +64,7 @@ export function readSession(req) {
   }
 }
 
-function cookieHeader(req, token, clear = false) {
+function cookieHeader(req, token, clear = false, { secure } = {}) {
   const parts = [
     `${COOKIE}=${clear ? "" : token}`,
     "Path=/",
@@ -72,10 +72,10 @@ function cookieHeader(req, token, clear = false) {
     "SameSite=Lax",
     clear ? "Max-Age=0" : `Max-Age=${Math.floor(MAX_AGE_MS / 1000)}`,
   ];
+  if (clear) parts.push("Expires=Thu, 01 Jan 1970 00:00:00 GMT");
   const proto = String(req.get?.("x-forwarded-proto") || "").split(",")[0].trim();
-  if (proto === "https" || req.secure === true) {
-    parts.push("Secure");
-  }
+  const useSecure = secure ?? (proto === "https" || req.secure === true);
+  if (useSecure) parts.push("Secure");
   return parts.join("; ");
 }
 
@@ -87,7 +87,11 @@ export function sessionCookie(req) {
 }
 
 export function clearSessionCookie(req) {
-  return cookieHeader(req, "", true);
+  return [
+    cookieHeader(req, "", true),
+    cookieHeader(req, "", true, { secure: true }),
+    cookieHeader(req, "", true, { secure: false }),
+  ];
 }
 
 export function verifyLogin(email, password) {
@@ -120,7 +124,7 @@ export function verifyLogin(email, password) {
 
 export function publicPath(req) {
   const p = req.path || "";
-  return p === "/login.html" || p === "/api/login" || p === "/api/logout" || p === "/api/me" || p === "/api/health" || p.startsWith("/vendor/");
+  return p === "/login.html" || p === "/logout" || p === "/api/login" || p === "/api/logout" || p === "/api/me" || p === "/api/health" || p.startsWith("/vendor/");
 }
 
 export function requireAuth(req, res, next) {

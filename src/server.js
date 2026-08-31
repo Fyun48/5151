@@ -28,6 +28,7 @@ import { backfillListingCoords, backfillListingRoutes, flushPendingNotifications
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
+app.set("trust proxy", 1);
 const PORT = Number(process.env.PORT || 5151);
 const HOST = process.env.HOST || "0.0.0.0";
 
@@ -66,9 +67,18 @@ app.post("/api/login", (req, res) => {
   }
 });
 
-app.post("/api/logout", (req, res) => {
+function sendLogout(req, res) {
   res.setHeader("Set-Cookie", clearSessionCookie(req));
+}
+
+app.post("/api/logout", (req, res) => {
+  sendLogout(req, res);
   res.json({ ok: true });
+});
+
+app.get("/logout", (req, res) => {
+  sendLogout(req, res);
+  res.redirect(303, "/login.html?logout=1");
 });
 
 app.use(requireAuth);
