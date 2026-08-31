@@ -7,6 +7,7 @@ import { makeRouteKey } from "./route.js";
 import { sameSearch } from "./client591.js";
 import { districtNameFromListing } from "./regions.js";
 import { preferPrimaryListing } from "./match.js";
+import { hasWorkPoint } from "./geo.js";
 import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings } from "./settingsState.js";
 import { defaultNotifyMatrix } from "./notifyMatrix.js";
 import { DATA_EPOCH, shouldResetForEpoch } from "./dataEpoch.js";
@@ -952,8 +953,7 @@ export function applyCachedCoords(row, settings) {
   const workLng = Number(conf.workLng);
   if (
     Number(conf.commuteKm) > 0 &&
-    Number.isFinite(workLat) &&
-    Number.isFinite(workLng) &&
+    hasWorkPoint(conf) &&
     Number.isFinite(Number(row.lat)) &&
     Number.isFinite(Number(row.lng))
   ) {
@@ -993,7 +993,7 @@ export function listingsNeedingRoute(limit = 40) {
   const settings = getSettings();
   const workLat = Number(settings.workLat);
   const workLng = Number(settings.workLng);
-  if (!(Number(settings.commuteKm) > 0) || !Number.isFinite(workLat) || !Number.isFinite(workLng)) return [];
+  if (!(Number(settings.commuteKm) > 0) || !hasWorkPoint(settings)) return [];
   const rows = db
     .prepare(
       `SELECT post_id, lat, lng FROM listings

@@ -1,4 +1,4 @@
-import { hasActiveBoxes, isExcludedByAgent, isExcludedByBox, isExcludedByKeyword, needsListingGeo } from "./geo.js";
+import { hasActiveBoxes, isExcludedByAgent, isExcludedByBox, isExcludedByKeyword, needsListingGeo, hasWorkPoint } from "./geo.js";
 import { isTrustedGeoSource } from "./location.js";
 import { areaNum } from "./match.js";
 
@@ -102,11 +102,7 @@ export function isGeoReady(listing, settings = {}) {
   if (!needsListingGeo(settings)) return true;
   if (!hasTrustedCoords(listing)) return false;
   const km = Number(settings.commuteKm);
-  const commuteOn =
-    Number.isFinite(km) &&
-    km > 0 &&
-    Number.isFinite(Number(settings.workLat)) &&
-    Number.isFinite(Number(settings.workLng));
+  const commuteOn = Number.isFinite(km) && km > 0 && hasWorkPoint(settings);
   if (!commuteOn) return true;
   const routes = Array.isArray(listing.route_kms) ? listing.route_kms.map(Number).filter(Number.isFinite) : [];
   return routes.length > 0;
@@ -126,9 +122,7 @@ export function passesGeoFilters(listing, settings = {}, { strict = true } = {})
     return false;
   }
   const km = Number(settings.commuteKm);
-  const workLat = Number(settings.workLat);
-  const workLng = Number(settings.workLng);
-  const commuteOn = Number.isFinite(km) && km > 0 && Number.isFinite(workLat) && Number.isFinite(workLng);
+  const commuteOn = Number.isFinite(km) && km > 0 && hasWorkPoint(settings);
   const boxesOn = hasActiveBoxes(settings.excludeBoxes);
   if (strict && boxesOn && !hasCoords) return false;
   if (commuteOn) {
