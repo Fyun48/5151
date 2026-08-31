@@ -11,8 +11,11 @@ import {
   listingsNeedingFeeDetail,
   listingsNeedingRoute,
   listingsNeedingAliveCheck,
+  listingsNeedingOfflineRecheck,
   markEventNotified,
   markListingOffline,
+  confirmExpiredOfflineListings,
+  restoreListingOnline,
   pendingNotifyEvents,
   eventPayloadFromListing,
   saveSettings,
@@ -30,6 +33,7 @@ import { decideNotifyDelivery } from "./floors.js";
 import { fetchRoadRoutes } from "./route.js";
 import { bestMatch } from "./match.js";
 import { classifyExistingUpdate, eventLabel, listingLastEvent, notify, shouldDockNotify, shouldWebhookNotify } from "./notify.js";
+import { normalizeOfflineConfirmDays, shouldRecheckOffline } from "./offline.js";
 
 function nowIso() {
   return new Date().toISOString();
@@ -152,9 +156,14 @@ async function resolvePendingNotifyLocations(settings, { withRoute = true } = {}
 }
 
 async function sweepOfflineListings(seenIds, { limit = 20 } = {}) {
+  const settings = getSettings();
+  const confirmDays = normalizeOfflineConfirmDays(settings.offlineConfirmDays);
+  const confirmed = confirmExpiredOfflineListings(confirmDays);
   const rows = listingsNeedingAliveCheck({ excludeIds: [...seenIds], limit });
   let checked = 0;
   let gone = 0;
+  let rechecked = 0;
+  let restored = 0;
   for (const row of rows) {
     checked += 1;
     try {
@@ -168,7 +177,22 @@ async function sweepOfflineListings(seenIds, { limit = 20 } = {}) {
     }
     await new Promise((resolve) => setTimeout(resolve, 400));
   }
-  return { checked, gone };
+  const pendingRecheck = listingsNeedingOfflineRecheck({ limit: 8 });
+  const now = new Date();
+  for (const row of pendingRecheck) {
+    if (rechecked >= 8) break;
+    if (!shouldRecheckOffline(row, { days: confirmDays, now })) continue;
+    rechecked += 1;
+    try {
+      await probeListingAlive(row.post_id);
+      restoreListingOnline(row.post_id);
+      restored += 1;
+    } catch (error) {
+      if (isListingGoneError(error)) touchListingChecked(row.post_id);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  }
+  return { checked, gone, rechecked, restored, confirmed };
 }
 
 export async function runWatch(options = {}) {

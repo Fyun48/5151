@@ -28,7 +28,9 @@ export const PROFILE_FIELDS = [
   "watchDistricts",
   "priceMin",
   "priceMax",
+  "areaMax",
   "excludeRooftop",
+  "offlineConfirmDays",
 ];
 
 export function parseSettingRows(rows) {
@@ -119,6 +121,8 @@ export function applySettingPatch(current, partial = {}) {
   next.watchDistricts = normalizeWatchDistricts(next.watchDistricts);
   next.priceMin = Math.max(0, Number(next.priceMin) || 0);
   next.priceMax = Math.max(0, Number(next.priceMax) || 0);
+  next.areaMax = Math.max(0, Math.min(Number(next.areaMax) || 0, 500));
+  next.offlineConfirmDays = Math.max(1, Math.min(Math.round(Number(next.offlineConfirmDays) || 7), 30));
   next.excludeRooftop = next.excludeRooftop !== false;
   next.webhookNotifyNew = next.webhookNotifyNew !== false;
   next.webhookNotifyPriceDrop = next.webhookNotifyPriceDrop !== false;
