@@ -27,6 +27,7 @@ import { boxFromRoadDescription, geocodeAddress, needsListingGeo, hasWorkPoint }
 import { rent591Url } from "./openLink.js";
 import { CITIES } from "./regions.js";
 import { backfillListingCoords, backfillListingRoutes, flushPendingNotifications, runWatch } from "./watcher.js";
+import { LIST_PAGE_SIZE } from "./client591.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -130,21 +131,21 @@ function queueGeoBackfill(settings = getSettings()) {
   if (geoBackfillBusy || !needsListingGeo(settings)) return;
   geoBackfillBusy = true;
   (async () => {
-    for (let round = 0; round < 12; round += 1) {
+    for (let round = 0; round < 80; round += 1) {
       try {
-        const geo = await backfillListingCoords(settings, { limit: 12 });
+        const geo = await backfillListingCoords(settings, { limit: LIST_PAGE_SIZE });
         broadcast({ type: "geo", stats: stats(), geoBackfill: geo });
         const notified = await flushPendingNotifications(settings);
         if (notified.length) broadcast({ type: "notify", events: notified, stats: stats() });
-        if (!geo.attempted && !geo.located) break;
+        if (!geo.attempted) break;
       } catch (error) {
         console.warn("補定位失敗：", error.message);
         await new Promise((resolve) => setTimeout(resolve, 1500));
       }
     }
-    for (let round = 0; round < 20; round += 1) {
+    for (let round = 0; round < 200; round += 1) {
       try {
-        const routes = await backfillListingRoutes(settings, { limit: 15 });
+        const routes = await backfillListingRoutes(settings, { limit: 20 });
         if (routes.attempted) broadcast({ type: "geo", stats: stats(), routeBackfill: routes });
         const notified = await flushPendingNotifications(settings);
         if (notified.length) broadcast({ type: "notify", events: notified, stats: stats() });
