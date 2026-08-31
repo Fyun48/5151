@@ -268,6 +268,8 @@ const DEFAULTS = {
   webhookNotifyTitleUpdate: true,
   windowsToast: true,
   hasBaseline: false,
+  excludeLowFloors: true,
+  wholeFloorOnly: true,
   minBuildingFloors: 4,
   excludeKeywords: [],
   excludeAgents: [],
@@ -971,7 +973,10 @@ export function listingsNeedingRoute(limit = 40) {
 
 function applyListingFilter(rows) {
   const settings = getSettings();
-  return rows.map((row) => applyCachedCoords(row, settings)).filter((row) => shouldKeepListing(row, settings));
+  // 列表用非嚴格通勤：還沒算完路線的先顯示（排在離公司排序末端），避免新北等區整批空白
+  return rows
+    .map((row) => applyCachedCoords(row, settings))
+    .filter((row) => shouldKeepListing(row, settings, { strict: false }));
 }
 
 export function addressesMissingGeo() {

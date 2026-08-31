@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { passesDisplayFilters } from "./floors.js";
 
 function toastWindows(title, body) {
   const script = `
@@ -160,6 +161,8 @@ export function isWatchedListing(listing) {
 
 export function shouldNotify(settings, listing, event) {
   if (listing?.hidden || Number(listing?.hidden) === 1) return false;
+  // 與列表「整層／排除 1F」勾選一致，避免通知出現已排除樓層
+  if (!passesDisplayFilters(listing, settings)) return false;
   const type = event?.type;
   const watched = isWatchedListing(listing);
   // 房仲刪掉重刊會變成新 post_id；已判成同屋源時不要當「全新物件」吵
