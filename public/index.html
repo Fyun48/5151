@@ -1959,7 +1959,7 @@
           <div class="meta">${item.price || ""} ${item.address || ""} ${item.detail || ""} ${item.extra_fee_text || ""}</div>
           <div class="row" style="margin-top:8px">
             <a class="primary" href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-dock-open="${item.post_id}" style="display:inline-flex;align-items:center;text-decoration:none">打開 591</a>
-            <button class="ghost" data-dock-dismiss="${item.post_id}">關閉</button>
+            <button type="button" class="ghost" data-dock-hide="${item.post_id}">不再顯示</button>
           </div>
         </div>
       `).join("");
@@ -1967,6 +1967,16 @@
     function dismissDock(postId) {
       saveDock(loadDock().filter((item) => String(item.post_id) !== String(postId)));
       renderDock();
+    }
+    /** 與列表「不再顯示」相同：hidden=true，並從待看 dock 移除 */
+    async function hideDockListing(postId) {
+      await fetch(`/api/listings/${encodeURIComponent(postId)}/flags`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hidden: true }),
+      });
+      dismissDock(postId);
+      await loadList();
     }
 
     function renderBoxes() {
@@ -2288,7 +2298,19 @@
     $("dockClearBtn").onclick = () => { saveDock([]); renderDock(); };
     $("dockList").addEventListener("click", async (ev) => {
       const open = ev.target.closest("[data-dock-open]")?.dataset.dockOpen;
-      const dismiss = ev.target.dataset.dockDismiss;
+      const hide = ev.target.closest("[data-dock-hide]")?.dataset.dockHide;
+      if (hide) {
+        ev.preventDefault();
+        const btn = ev.target.closest("[data-dock-hide]");
+        if (btn) btn.disabled = true;
+        try {
+          await hideDockListing(hide);
+        } catch (error) {
+          $("status").textContent = error.message || "不再顯示失敗";
+          if (btn) btn.disabled = false;
+        }
+        return;
+      }
       if (open) {
         // 連結走 /go/:id（含中鍵開新分頁）；左鍵也記已瀏覽並關閉 dock 項
         if (ev.button === 0 && !ev.metaKey && !ev.ctrlKey && !ev.shiftKey && !ev.altKey) {
@@ -2302,7 +2324,6 @@
         }
         return;
       }
-      if (dismiss) dismissDock(dismiss);
     });
 
     renderDistrictPicker({ watchDistricts: [] });
