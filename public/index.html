@@ -275,6 +275,69 @@
       border-radius: 16px;
       box-shadow: 0 8px 28px rgba(26, 43, 51, 0.08);
     }
+    body.panel-collapsed .list-head-sticky:not(.filter-compact) {
+      padding-bottom: 38px;
+    }
+    body.panel-collapsed .list-head-sticky.filter-compact .filter-body {
+      display: none;
+    }
+    body.panel-collapsed .list-head-sticky.filter-compact .filter-head {
+      padding-right: 92px;
+      border-bottom: none;
+    }
+    body.panel-collapsed .list-head-sticky.filter-compact .district-block {
+      padding-bottom: 6px;
+    }
+    body.panel-collapsed .list-head-sticky.filter-compact #districtChips {
+      border-top: none;
+      padding-top: 6px;
+    }
+    .filter-mini-btn,
+    .filter-restore-btn {
+      display: none;
+    }
+    body.panel-collapsed .filter-mini-btn {
+      display: inline-flex;
+      position: absolute;
+      right: 12px;
+      bottom: 10px;
+      z-index: 2;
+      width: 30px;
+      height: 30px;
+      padding: 0;
+      border-radius: 50%;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      line-height: 1;
+      color: var(--muted);
+      background: #fff;
+      border: 1px solid var(--line);
+      box-shadow: 0 2px 8px rgba(26, 43, 51, 0.06);
+    }
+    body.panel-collapsed .filter-mini-btn:hover:not(:disabled) {
+      color: var(--ink);
+      background: var(--accent-soft);
+      border-color: #c5e8e6;
+    }
+    body.panel-collapsed .list-head-sticky.filter-compact .filter-mini-btn {
+      display: none;
+    }
+    body.panel-collapsed .filter-restore-btn {
+      display: none;
+      position: absolute;
+      top: 10px;
+      right: 12px;
+      z-index: 2;
+      padding: 5px 11px;
+      font-size: 12px;
+      background: #fff;
+      border: 1px solid var(--line);
+      box-shadow: 0 2px 8px rgba(26, 43, 51, 0.06);
+    }
+    body.panel-collapsed .list-head-sticky.filter-compact .filter-restore-btn {
+      display: inline-flex;
+    }
     .filter-head {
       padding: 12px 18px 10px;
       border-bottom: 1px solid var(--line);
@@ -608,11 +671,13 @@
       <div class="box-list" id="boxList"></div>
     </aside>
     <main class="card">
-      <div class="list-head-sticky">
+      <div class="list-head-sticky" id="listHeadSticky">
+        <button type="button" class="filter-restore-btn ghost" id="filterRestoreBtn" title="還原完整篩選">還原篩選</button>
         <div class="filter-head">
           <div class="status" id="status">準備就緒</div>
           <div class="list-meta" id="listMeta" hidden></div>
         </div>
+        <div class="filter-body" id="filterBody">
         <div class="toolbar">
           <button class="chip on" data-filter="all">全部</button>
           <button class="chip" data-filter="elevator">有電梯</button>
@@ -643,9 +708,11 @@
           <label><input type="checkbox" id="excludeLowFloors" /> 排除 1F 及以下（含地下室、整棟、頂加）</label>
           <span class="hint" style="margin:0">只篩選右側列表顯示，不影響 591 抓取與左側統計。勾選後立即生效。</span>
         </div>
+        </div>
         <div class="district-block">
           <div id="districtChips"></div>
         </div>
+        <button type="button" class="filter-mini-btn ghost" id="filterMiniBtn" title="收合篩選" aria-label="收合篩選">×</button>
       </div>
       <div class="list" id="list"><div class="empty">尚未載入列表</div></div>
     </main>
@@ -685,7 +752,13 @@
     };
     const $ = (id) => document.getElementById(id);
     const PANEL_KEY = "591-panel-collapsed";
-    if (localStorage.getItem(PANEL_KEY) === "1") document.body.classList.add("panel-collapsed");
+    const FILTER_COMPACT_KEY = "591-filter-compact";
+    if (localStorage.getItem(PANEL_KEY) === "1") {
+      document.body.classList.add("panel-collapsed");
+      if (localStorage.getItem(FILTER_COMPACT_KEY) === "1") {
+        $("listHeadSticky")?.classList.add("filter-compact");
+      }
+    }
     $("status").textContent = "正在載入…";
     let filter = "all";
     let sort = "price_asc";
@@ -1520,9 +1593,26 @@
     function setPanelCollapsed(on) {
       document.body.classList.toggle("panel-collapsed", Boolean(on));
       localStorage.setItem(PANEL_KEY, on ? "1" : "0");
+      if (!on) setFilterCompact(false);
+      else if (localStorage.getItem(FILTER_COMPACT_KEY) === "1") {
+        $("listHeadSticky")?.classList.add("filter-compact");
+      }
+    }
+    function setFilterCompact(on) {
+      const sticky = $("listHeadSticky");
+      if (!sticky) return;
+      if (!document.body.classList.contains("panel-collapsed")) {
+        sticky.classList.remove("filter-compact");
+        localStorage.setItem(FILTER_COMPACT_KEY, "0");
+        return;
+      }
+      sticky.classList.toggle("filter-compact", Boolean(on));
+      localStorage.setItem(FILTER_COMPACT_KEY, on ? "1" : "0");
     }
     $("collapsePanelBtn").onclick = () => setPanelCollapsed(true);
     $("expandPanelBtn").onclick = () => setPanelCollapsed(false);
+    $("filterMiniBtn").onclick = () => setFilterCompact(true);
+    $("filterRestoreBtn").onclick = () => setFilterCompact(false);
     $("wholeFloorOnly").onchange = () => {
       saveViewFilters();
       loadList();
