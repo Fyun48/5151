@@ -29,19 +29,10 @@ import { needsListingGeo } from "./geo.js";
 import { decideNotifyDelivery } from "./floors.js";
 import { fetchRoadRoutes } from "./route.js";
 import { bestMatch } from "./match.js";
-import { eventLabel, notify } from "./notify.js";
+import { classifyExistingUpdate, eventLabel, listingLastEvent, notify, shouldDockNotify, shouldWebhookNotify } from "./notify.js";
 
 function nowIso() {
   return new Date().toISOString();
-}
-
-function shouldNotify(settings, listing, type) {
-  if (listing.hidden || listing.offline) return false;
-  if (listing.watched && settings.notifyWatchedAlways) return true;
-  if (listing.viewed && !settings.notifyViewed) return false;
-  if (type === "new") return Boolean(settings.notifyNew);
-  if (type === "same_source" || type === "update") return Boolean(settings.notifySameSource);
-  return false;
 }
 
 function classify(incoming, existing) {
@@ -63,17 +54,11 @@ function classify(incoming, existing) {
     return { type: "new", detail: incoming.price || "" };
   }
 
+  const change = classifyExistingUpdate(incoming, existing);
   if (existing.offline) {
-    return { type: "same_source", detail: "591 已重新上架", prev: existing, level: "high" };
+    return { ...change, prev: existing, level: "high" };
   }
-
-  if (existing.price && incoming.price && existing.price !== incoming.price) {
-    return { type: "update", detail: `價格 ${existing.price} → ${incoming.price}` };
-  }
-  if (existing.title !== incoming.title) {
-    return { type: "update", detail: "標題變更" };
-  }
-  return { type: "seen", detail: "" };
+  return change;
 }
 
 function detailOptions() {
@@ -115,18 +100,27 @@ async function resolveListingRoute(listing, settings) {
 export async function flushPendingNotifications(settings = getSettings(), { silent = false } = {}) {
   const pending = pendingNotifyEvents(80);
   const ready = [];
+  const hookReady = [];
   for (const event of pending) {
     const listing = getListing(event.post_id);
-    if (!listing || !shouldNotify(settings, listing, event.type)) {
+    const forDock = listing ? shouldDockNotify(settings, listing, event.type) : false;
+    const forHook = listing ? shouldWebhookNotify(settings, listing, event) : false;
+    if (!listing || (!forDock && !forHook)) {
       markEventNotified(event.id);
       continue;
     }
     const delivery = decideNotifyDelivery(listing, settings);
     if (delivery === "pending") continue;
     markEventNotified(event.id);
-    if (delivery === "send") ready.push(eventPayloadFromListing(event, listing));
+    if (delivery === "send") {
+      const payload = eventPayloadFromListing(event, listing);
+      if (forDock) ready.push(payload);
+      if (forHook) hookReady.push(payload);
+    }
   }
-  if (!silent && ready.length) await notify(settings, ready);
+  if (!silent && (ready.length || hookReady.length)) {
+    await notify(settings, ready, { webhookEvents: hookReady });
+  }
   return ready.map((event) => ({ ...event, type_label: eventLabel(event.type) }));
 }
 
@@ -139,7 +133,7 @@ async function resolvePendingNotifyLocations(settings, { withRoute = true } = {}
     seen.add(event.post_id);
     let listing = getListing(event.post_id);
     if (!listing) continue;
-    if (!shouldNotify(settings, listing, event.type)) continue;
+    if (!shouldDockNotify(settings, listing, event.type) && !shouldWebhookNotify(settings, listing, event)) continue;
     if (decideNotifyDelivery(listing, settings) !== "pending") continue;
     try {
       const detail = await fetchListingDetail(event.post_id, detailOptions());
@@ -238,7 +232,7 @@ export async function runWatch(options = {}) {
         search_key: batch.searchUrl,
         first_seen_at: existing?.first_seen_at || stamp,
         last_seen_at: stamp,
-        last_event: type === "seen" ? existing?.last_event || "new" : type,
+        last_event: listingLastEvent(type, existing),
       });
 
       if (!existing && prev && (prev.hidden || prev.viewed)) {

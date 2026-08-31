@@ -255,6 +255,9 @@ const DEFAULTS = {
   notifyViewed: false,
   notifyWatchedAlways: true,
   discordWebhook: "",
+  webhookNotifyNew: true,
+  webhookNotifyPriceDrop: true,
+  webhookNotifyTitleUpdate: true,
   windowsToast: true,
   hasBaseline: false,
   excludeLowFloors: true,
@@ -869,7 +872,7 @@ export function listListings({ filter = "all", q = "", sort = "price_asc", limit
   if (filter === "unseen") clauses.push("viewed = 0");
   if (filter === "viewed") clauses.push("viewed = 1");
   if (filter === "watched") clauses.push("watched = 1");
-  if (filter === "same_source") clauses.push("last_event IN ('same_source', 'update')");
+  if (filter === "same_source") clauses.push("last_event IN ('same_source', 'update', 'price_drop', 'title_update')");
   if (q) {
     clauses.push("(title LIKE ? OR address LIKE ? OR CAST(post_id AS TEXT) LIKE ? OR IFNULL(watch_note, '') LIKE ?)");
     const like = `%${q}%`;
@@ -997,7 +1000,7 @@ export function stats(searchKeys) {
     total: visible.length,
     unseen: visible.filter((row) => !row.viewed).length,
     watched: visible.filter((row) => row.watched).length,
-    same_source: visible.filter((row) => row.last_event === "same_source" || row.last_event === "update").length,
+    same_source: visible.filter((row) => ["same_source", "update", "price_drop", "title_update"].includes(row.last_event)).length,
     hidden: rows.filter((row) => row.hidden).length,
     offline: raw.filter((row) => row.offline).length,
     suspected: rows.filter((row) => row.match_level && !row.match_rejected).length,

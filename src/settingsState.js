@@ -18,6 +18,9 @@ export const PROFILE_FIELDS = [
   "excludeAgentIds",
   "excludeBoxes",
   "discordWebhook",
+  "webhookNotifyNew",
+  "webhookNotifyPriceDrop",
+  "webhookNotifyTitleUpdate",
   "workAddress",
   "commuteKm",
   "workLat",
@@ -117,6 +120,9 @@ export function applySettingPatch(current, partial = {}) {
   next.priceMin = Math.max(0, Number(next.priceMin) || 0);
   next.priceMax = Math.max(0, Number(next.priceMax) || 0);
   next.excludeRooftop = next.excludeRooftop !== false;
+  next.webhookNotifyNew = next.webhookNotifyNew !== false;
+  next.webhookNotifyPriceDrop = next.webhookNotifyPriceDrop !== false;
+  next.webhookNotifyTitleUpdate = next.webhookNotifyTitleUpdate !== false;
   if (next.watchDistricts.length) {
     next.searchUrls = buildSearchUrls({
       districts: next.watchDistricts,

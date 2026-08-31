@@ -383,6 +383,14 @@
         <label><input type="checkbox" id="notifyWatchedAlways" /> 特別關注一律通知</label>
         <label><input type="checkbox" id="windowsToast" /> Windows 桌面通知</label>
       </div>
+      <label>Discord Webhook（選填）</label>
+      <input type="url" id="discordWebhook" placeholder="https://discord.com/api/webhooks/..." />
+      <p class="hint">有網址才會傳到 Discord。下面三項只影響 webhook，不影響網頁「待看更新」。價格只有變低才會發，漲價不會。</p>
+      <div class="checks">
+        <label><input type="checkbox" id="webhookNotifyNew" checked /> Webhook：有新物件</label>
+        <label><input type="checkbox" id="webhookNotifyPriceDrop" checked /> Webhook：原價格調低</label>
+        <label><input type="checkbox" id="webhookNotifyTitleUpdate" checked /> Webhook：標題更新</label>
+      </div>
       <label>排除路名／關鍵字（一行一個）</label>
       <p class="hint">地址或標題含這些字就不列入、也不通知。例如路名、路段。</p>
       <textarea id="excludeKeywords" placeholder="延平北路八段&#10;承德路"></textarea>
@@ -404,8 +412,6 @@
       </div>
       <div id="excludeMapWrap"><div id="excludeMap"></div></div>
       <div class="box-list" id="boxList"></div>
-      <label>Discord Webhook（選填）</label>
-      <input type="url" id="discordWebhook" placeholder="https://discord.com/api/webhooks/..." />
     </aside>
     <main class="card">
       <div class="toolbar">
@@ -530,6 +536,8 @@
       new: "全新物件",
       same_source: "同屋源更新",
       update: "內容更新",
+      price_drop: "價格調降",
+      title_update: "標題更新",
     };
 
     let cities = [];
@@ -695,6 +703,9 @@
       $("excludeKeywords").value = (s.excludeKeywords || []).join("\n");
       $("excludeAgents").value = (s.excludeAgents || []).join("\n");
       $("discordWebhook").value = s.discordWebhook || "";
+      $("webhookNotifyNew").checked = s.webhookNotifyNew !== false;
+      $("webhookNotifyPriceDrop").checked = s.webhookNotifyPriceDrop !== false;
+      $("webhookNotifyTitleUpdate").checked = s.webhookNotifyTitleUpdate !== false;
       excludeBoxes = Array.isArray(s.excludeBoxes)
         ? s.excludeBoxes.slice(0, MAX_BOXES).map((box) => ({
             ...box,
@@ -953,6 +964,9 @@
         excludeAgentIds: settings.excludeAgentIds || [],
         excludeBoxes,
         discordWebhook: $("discordWebhook").value.trim(),
+        webhookNotifyNew: $("webhookNotifyNew").checked,
+        webhookNotifyPriceDrop: $("webhookNotifyPriceDrop").checked,
+        webhookNotifyTitleUpdate: $("webhookNotifyTitleUpdate").checked,
         workAddress: $("workAddress").value.trim(),
         commuteKm: Number($("commuteKm").value) || 0,
       };
