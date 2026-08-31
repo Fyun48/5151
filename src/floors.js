@@ -60,12 +60,6 @@ export function isWholeFloorHome(kindName) {
 }
 
 export function passesAttributeFilters(listing, settings = {}) {
-  if (settings.wholeFloorOnly !== false && !isWholeFloorHome(listing.kind_name)) {
-    return false;
-  }
-  if (settings.excludeLowFloors !== false && isAtOrBelowFirstFloor(listing.floor_name)) {
-    return false;
-  }
   const minFloors = Number(settings.minBuildingFloors);
   const min = Number.isFinite(minFloors) && minFloors > 0 ? minFloors : 4;
   const totalFloors = buildingTotalFloors(listing.floor_name);

@@ -6,8 +6,6 @@ export const PROFILE_FIELDS = [
   "intervalMinutes",
   "pagesPerWatch",
   "minBuildingFloors",
-  "wholeFloorOnly",
-  "excludeLowFloors",
   "excludeKeywords",
   "excludeAgents",
   "excludeAgentIds",
@@ -125,7 +123,6 @@ export function applySettingPatch(current, partial = {}) {
       priceMin: next.priceMin,
       priceMax: next.priceMax,
       excludeRooftop: next.excludeRooftop,
-      wholeFloorOnly: next.wholeFloorOnly !== false,
     });
   }
   next.settingProfiles = normalizeProfiles(next.settingProfiles);

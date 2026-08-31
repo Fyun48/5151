@@ -573,7 +573,7 @@
         <div class="view-filters">
           <label><input type="checkbox" id="wholeFloorOnly" /> 只看整層住家</label>
           <label><input type="checkbox" id="excludeLowFloors" /> 排除 1F 及以下（含地下室、整棟、頂加）</label>
-          <span class="hint" style="margin:0">變更後請按上方「儲存」才會寫進 591 搜尋。</span>
+          <span class="hint" style="margin:0">只篩選右側列表顯示，不影響 591 抓取與左側統計。勾選後立即生效。</span>
         </div>
         <div id="districtChips"></div>
       </div>
@@ -714,10 +714,59 @@
     let settingsLoaded = false;
     let viewDistricts = new Set();
     const VIEW_KEY = "591-view-districts";
+    const VIEW_WHOLE_KEY = "591-view-whole-floor";
+    const VIEW_LOW_FLOOR_KEY = "591-view-exclude-low";
     try {
       const saved = JSON.parse(sessionStorage.getItem(VIEW_KEY) || "[]");
       if (Array.isArray(saved)) viewDistricts = new Set(saved);
     } catch {}
+
+    function loadViewFilters() {
+      const wf = sessionStorage.getItem(VIEW_WHOLE_KEY);
+      const low = sessionStorage.getItem(VIEW_LOW_FLOOR_KEY);
+      $("wholeFloorOnly").checked = wf === null ? true : wf === "1";
+      $("excludeLowFloors").checked = low === null ? true : low === "1";
+    }
+
+    function saveViewFilters() {
+      sessionStorage.setItem(VIEW_WHOLE_KEY, $("wholeFloorOnly").checked ? "1" : "0");
+      sessionStorage.setItem(VIEW_LOW_FLOOR_KEY, $("excludeLowFloors").checked ? "1" : "0");
+    }
+
+    function isWholeFloorHome(kindName) {
+      return String(kindName || "").includes("整層住家");
+    }
+
+    function isAtOrBelowFirstFloor(floorName) {
+      const text = String(floorName || "").replace(/\s+/g, "");
+      if (!text) return false;
+      const main = text.split("/")[0];
+      if (/整棟|地下|騎樓|半地下|地面|頂樓加蓋/i.test(main) || /^B\d/i.test(main) || /^B$/i.test(main)) {
+        return true;
+      }
+      if (/一樓|1樓/.test(main)) return true;
+      const range = main.match(/(\d+)\s*(?:F|樓)?\s*[~～\-至到]/i);
+      if (range) return Number(range[1]) <= 1;
+      const numbered = main.match(/(\d+)\s*(?:F|樓)/i);
+      if (numbered) return Number(numbered[1]) <= 1;
+      return false;
+    }
+
+    function applyViewFilters(items) {
+      let out = items;
+      if ($("wholeFloorOnly").checked) {
+        out = out.filter((item) => isWholeFloorHome(item.kind_name));
+      }
+      if ($("excludeLowFloors").checked) {
+        out = out.filter((item) => !isAtOrBelowFirstFloor(item.floor_name));
+      }
+      return out;
+    }
+
+    function applyListView(items) {
+      return applyViewFilters(applyDistrictView(items));
+    }
+    loadViewFilters();
 
     function flash(msg) {
       $("saveMsg").textContent = msg;
@@ -889,8 +938,7 @@
       $("workAddress").value = s.workAddress || "";
       $("commuteKm").value = s.commuteKm || 0;
       syncCommuteSort();
-      $("wholeFloorOnly").checked = s.wholeFloorOnly !== false;
-      $("excludeLowFloors").checked = s.excludeLowFloors !== false;
+      loadViewFilters();
       $("excludeKeywords").value = (s.excludeKeywords || []).join("\n");
       $("excludeAgents").value = (s.excludeAgents || []).join("\n");
       $("discordWebhook").value = s.discordWebhook || "";
@@ -912,7 +960,7 @@
 
     function renderStats(st) {
       $("stats").innerHTML = `
-        <p class="stat-note">以下數量只算 591 搜尋條件（整層、樓層、坪數、租金等），不含地圖／路名／通勤排除。右側列表仍會套用那些排除。</p>
+        <p class="stat-note">以下數量只算 591 搜尋條件（坪數、建物樓層、租金等），不含地圖／路名／通勤排除。右側「整層／樓層」勾選只影響列表顯示，不計入左側數字。</p>
       ` + [
         ["全部", st.total],
         ["有電梯", st.elevator],
@@ -1022,6 +1070,8 @@
         if (q) msg = `沒有符合「${q}」的物件。`;
         else if (viewDistricts.size) {
           msg = "這個行政區篩選目前沒有物件。可點「全部」或再勾其他區。";
+        } else if ($("wholeFloorOnly").checked || $("excludeLowFloors").checked) {
+          msg = "目前沒有符合右側「整層／樓層」顯示篩選的物件。取消勾選可看到更多已抓到的結果。";
         } else if (filter === "suspected") {
           msg = "目前沒有被判成同一屋源的重刊。隱藏或已瀏覽的舊屋若再上架，會出現在這裡。";
         } else if (filter === "offline") {
@@ -1031,7 +1081,7 @@
         } else if (filter === "apartment") {
           msg = "目前沒有標成公寓的物件。這只篩已抓到的結果，不會重查 591。";
         } else if (filter === "suite") {
-          msg = "目前沒有套房／雅房。若搜尋有勾「只看整層住家」，591 本來就不會抓套房。";
+          msg = "目前沒有套房／雅房。這只篩已抓到的結果，不會重查 591。";
         } else if (st.missingGeo > 0) {
           msg = `正在從 591 物件地圖補 ${st.missingGeo} 筆座標（就是網頁上點地址看到的那個），完成後會自動計算機車路線。`;
         } else if (st.missingRoute > 0) {
@@ -1103,7 +1153,7 @@
       const data = await res.json();
       renderStats(data.stats);
       renderDistrictChips(settings);
-      renderList(applyDistrictView(data.listings), data.stats);
+      renderList(applyListView(data.listings), data.stats);
     }
 
     async function loadState() {
@@ -1167,8 +1217,6 @@
           offlineConfirmDays: 7,
           pagesPerWatch: 40,
           minBuildingFloors: 4,
-          wholeFloorOnly: true,
-          excludeLowFloors: true,
           excludeKeywords: [],
           excludeAgents: [],
           excludeBoxes: [],
@@ -1187,7 +1235,7 @@
           fillSettings(data.settings);
         }
         renderStats(data.stats || {});
-        renderList(applyDistrictView(data.listings || []), data.stats || {});
+        renderList(applyListView(data.listings || []), data.stats || {});
         if (data.lastRun?.checked_at) {
           const extra = data.lastRun.baseline ? "（第一次只建立基準，不推播）" : "";
           $("status").textContent = `上次檢查 ${new Date(data.lastRun.checked_at).toLocaleString()}，抓到 ${data.lastRun.fetched || 0} 筆${extra}`;
@@ -1219,8 +1267,6 @@
         offlineConfirmDays: Number($("offlineConfirmDays").value) || 7,
         pagesPerWatch: Number($("pagesPerWatch").value),
         minBuildingFloors: Number($("minBuildingFloors").value) || 4,
-        wholeFloorOnly: $("wholeFloorOnly").checked,
-        excludeLowFloors: $("excludeLowFloors").checked,
         excludeKeywords: $("excludeKeywords").value.split(/[\n,，]/).map((s) => s.trim()).filter(Boolean),
         excludeAgents: $("excludeAgents").value.split(/[\n,，]/).map((s) => s.trim()).filter(Boolean),
         excludeAgentIds: settings.excludeAgentIds || [],
@@ -1398,6 +1444,14 @@
     }
     $("collapsePanelBtn").onclick = () => setPanelCollapsed(true);
     $("expandPanelBtn").onclick = () => setPanelCollapsed(false);
+    $("wholeFloorOnly").onchange = () => {
+      saveViewFilters();
+      loadList();
+    };
+    $("excludeLowFloors").onchange = () => {
+      saveViewFilters();
+      loadList();
+    };
     $("selectPageBtn").onclick = () => {
       document.querySelectorAll("[data-pick]").forEach((el) => {
         el.checked = true;

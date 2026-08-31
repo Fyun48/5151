@@ -85,8 +85,6 @@ test("reads community id from listing detail and source key", () => {
 });
 
 const commuteSettings = {
-  wholeFloorOnly: false,
-  excludeLowFloors: false,
   commuteKm: 12,
   workLat: 25.05,
   workLng: 121.52,

@@ -245,8 +245,6 @@ export async function runWatch(options = {}) {
   const collected = [];
   const errors = [];
   const fetchOptions = {
-    excludeLowFloors: settings.excludeLowFloors !== false,
-    wholeFloorOnly: settings.wholeFloorOnly !== false,
     minBuildingFloors: settings.minBuildingFloors || 4,
     excludeKeywords: settings.excludeKeywords,
     excludeBoxes: settings.excludeBoxes,
