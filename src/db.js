@@ -694,8 +694,7 @@ export function listingsNeeding591Geo(limit = 20) {
       `SELECT post_id, community_id, source_key, lat, lng, geo_source FROM listings
        WHERE IFNULL(hidden, 0) = 0
          AND IFNULL(offline, 0) = 0
-       ORDER BY last_seen_at DESC
-       LIMIT 800`,
+       ORDER BY last_seen_at DESC`,
     )
     .all();
   const out = [];

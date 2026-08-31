@@ -5,6 +5,39 @@ function parseCoord(value) {
   return Number.isFinite(n) && Math.abs(n) > 0 ? n : null;
 }
 
+export function isTaiwanMapPin(lat, lng) {
+  const a = parseCoord(lat);
+  const b = parseCoord(lng);
+  return a != null && b != null && a > 21.5 && a < 26.5 && b > 118 && b < 123;
+}
+
+export function extractMapFromHtml(html) {
+  const text = String(html || "");
+  if (!text) return null;
+  const pairs = [];
+  const patterns = [
+    /"lat"\s*:\s*"(-?\d+\.\d+)"\s*,\s*"lng"\s*:\s*"(-?\d+\.\d+)"/gi,
+    /"lat"\s*:\s*(-?\d+\.\d+)\s*,\s*"lng"\s*:\s*(-?\d+\.\d+)/gi,
+    /"lng"\s*:\s*"(-?\d+\.\d+)"\s*,\s*"lat"\s*:\s*"(-?\d+\.\d+)"/gi,
+    /"lng"\s*:\s*(-?\d+\.\d+)\s*,\s*"lat"\s*:\s*(-?\d+\.\d+)/gi,
+    /data-lat="(-?\d+\.\d+)"[^>]*data-lng="(-?\d+\.\d+)"/gi,
+    /query=(-?\d+\.\d+),(-?\d+\.\d+)/gi,
+  ];
+  for (const re of patterns) {
+    re.lastIndex = 0;
+    let match;
+    while ((match = re.exec(text))) {
+      const swapped = /"lng"\s*:/.test(match[0]) && match[0].indexOf("lng") < match[0].indexOf("lat");
+      const lat = swapped ? match[2] : match[1];
+      const lng = swapped ? match[1] : match[2];
+      if (isTaiwanMapPin(lat, lng)) pairs.push({ lat: Number(lat), lng: Number(lng) });
+    }
+  }
+  if (!pairs.length) return null;
+  const address = extractTaiwanStreetAddress(text.replace(/<[^>]+>/g, " "));
+  return { ...pairs[0], address };
+}
+
 export function hasHouseNumber(address) {
   return /\d+(?:之\d+)?號/.test(String(address || "").replace(/\s+/g, ""));
 }

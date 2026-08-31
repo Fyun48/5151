@@ -3,12 +3,14 @@ import { allDistricts } from "./regions.js";
 import { coordsFrom591Detail, coordsFromListing, isExcludedByKeyword } from "./geo.js";
 import {
   communityRefFromDetail,
+  extractMapFromHtml,
   listingAddressFromDetail,
   parseCommunityPayload,
   preferCommunityLocation,
 } from "./location.js";
 
 const LIST_URL = "https://bff-house.591.com.tw/v3/web/rent/list";
+export const LIST_PAGE_SIZE = 30;
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
@@ -293,24 +295,83 @@ export async function fetchCommunityLocation(communityId) {
       signal: AbortSignal.timeout(8000),
     });
     if (!res.ok) {
-      communityMemo.set(id, null);
-      return null;
+      const fromPage = await fetchCommunityPageLocation(id);
+      communityMemo.set(id, fromPage);
+      return fromPage;
     }
     const body = await res.json();
     if (body.status !== 1 && body.status !== true && !body.data?.community) {
-      communityMemo.set(id, null);
-      return null;
+      const fromPage = await fetchCommunityPageLocation(id);
+      communityMemo.set(id, fromPage);
+      return fromPage;
     }
     const loc = parseCommunityPayload(body);
+    loc.id = loc.id || id;
+    if (loc.lat == null || loc.lng == null) {
+      const fromPage = await fetchCommunityPageLocation(id);
+      if (fromPage) {
+        loc.lat = loc.lat ?? fromPage.lat;
+        loc.lng = loc.lng ?? fromPage.lng;
+        loc.address = loc.address || fromPage.address || "";
+        loc.name = loc.name || fromPage.name || "";
+      }
+    }
     if (!loc.address && loc.lat == null) {
       communityMemo.set(id, null);
       return null;
     }
-    loc.id = loc.id || id;
     communityMemo.set(id, loc);
     return loc;
   } catch {
+    const fromPage = await fetchCommunityPageLocation(id);
+    if (fromPage) {
+      fromPage.id = fromPage.id || id;
+      communityMemo.set(id, fromPage);
+      return fromPage;
+    }
     communityMemo.set(id, null);
+    return null;
+  }
+}
+
+async function fetchHtml(url) {
+  const res = await fetch(url, {
+    headers: {
+      "User-Agent": USER_AGENT,
+      Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+      Referer: "https://rent.591.com.tw/",
+    },
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!res.ok) return "";
+  return res.text();
+}
+
+export async function fetchCommunityPageLocation(communityId) {
+  const id = Number(communityId);
+  if (!id) return null;
+  try {
+    const html = await fetchHtml(`https://www.591.com.tw/home/housing/detail?id=${id}`);
+    const pin = extractMapFromHtml(html);
+    if (!pin) return null;
+    const nameMatch = html.match(/<title>([^<]+)<\/title>/i);
+    const name = String(nameMatch?.[1] || "")
+      .replace(/\s*[-_|｜].*$/, "")
+      .replace(/591.*/, "")
+      .trim();
+    return { id, name, address: pin.address || "", lat: pin.lat, lng: pin.lng };
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchListingPageMap(postId) {
+  const id = Number(postId);
+  if (!id) return null;
+  try {
+    const html = await fetchHtml(`https://rent.591.com.tw/${id}`);
+    return extractMapFromHtml(html);
+  } catch {
     return null;
   }
 }
@@ -356,7 +417,7 @@ export async function fetchListingDetail(postId, options = {}) {
   if (communityLoc && ref.name && !communityLoc.name) {
     communityLoc.name = ref.name;
   }
-  const chosen = preferCommunityLocation(
+  let chosen = preferCommunityLocation(
     {
       address: listingAddressFromDetail(body.data),
       ...coordsFrom591Detail(body.data),
@@ -365,6 +426,21 @@ export async function fetchListingDetail(postId, options = {}) {
     },
     communityLoc ? { ...communityLoc, id: communityLoc.id || ref.id, name: communityLoc.name || ref.name } : null,
   );
+  if (chosen.lat == null || chosen.lng == null) {
+    const pageMap = await fetchListingPageMap(postId);
+    if (pageMap?.lat != null) {
+      chosen = preferCommunityLocation(
+        {
+          address: chosen.address || pageMap.address || "",
+          lat: chosen.lat ?? pageMap.lat,
+          lng: chosen.lng ?? pageMap.lng,
+          community_id: ref.id,
+          community_name: ref.name,
+        },
+        communityLoc ? { ...communityLoc, id: communityLoc.id || ref.id, name: communityLoc.name || ref.name } : null,
+      );
+    }
+  }
   return {
     fees: feesFromDetail(body.data?.cost?.data || []),
     contact: contactFromLink(body.data?.linkInfo || {}),
@@ -407,13 +483,13 @@ export async function fetchListings(searchUrl, pages = 40, options = {}) {
   let total = 0;
   const maxPages = Math.max(1, Math.min(Number(pages) || MAX_LIST_PAGES, MAX_LIST_PAGES));
   for (let page = 0; page < maxPages; page += 1) {
-    const { total: t, items } = await fetchPage(parsed.query, page * 30);
+    const { total: t, items } = await fetchPage(parsed.query, page * LIST_PAGE_SIZE);
     total = t;
     listings.push(
       ...(await mapKeptListings(items, options)),
     );
-    const fetched = (page + 1) * 30;
-    if (items.length < 30 || fetched >= total) break;
+    const fetched = (page + 1) * LIST_PAGE_SIZE;
+    if (items.length < LIST_PAGE_SIZE || fetched >= total) break;
     if (page + 1 < maxPages) {
       await new Promise((resolve) => setTimeout(resolve, 1200));
     }
