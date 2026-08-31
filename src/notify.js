@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { passesDisplayFilters } from "./floors.js";
+import { notifyChannelOn } from "./notifyMatrix.js";
 import { trackedListingUrl } from "./openLink.js";
 
 function toastWindows(title, body) {
@@ -180,12 +181,12 @@ export function shouldNotify(settings, listing, event) {
 }
 
 export function shouldDockNotify(settings, listing, event) {
-  return shouldNotify(settings, listing, event);
+  return shouldNotify(settings, listing, event) && notifyChannelOn(settings, "dock", event?.type);
 }
 
 export function shouldWebhookNotify(settings, listing, event) {
   if (!String(settings?.discordWebhook || "").trim()) return false;
-  return shouldNotify(settings, listing, event);
+  return shouldNotify(settings, listing, event) && notifyChannelOn(settings, "webhook", event?.type);
 }
 
 function formatFeeLine(event) {
