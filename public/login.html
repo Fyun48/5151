@@ -73,8 +73,9 @@
   </form>
   <script>
     const $ = (id) => document.getElementById(id);
+    const justLoggedOut = new URLSearchParams(location.search).has("logout");
     fetch("/api/me").then((r) => r.json()).then((data) => {
-      if (data.ok) location.replace("/");
+      if (data.ok && !justLoggedOut) location.replace("/");
       if (data.hint) {
         $("email").value = data.hint;
         $("sub").textContent = `請用 ${data.hint} 登入。本機請開 http://127.0.0.1:5151`;
