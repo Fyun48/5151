@@ -63,6 +63,38 @@ test("detects content diff and price changes", () => {
   assert.equal(relist.type, "relist");
 });
 
+test("address enrichment churn is not a content update", () => {
+  const existing = {
+    ...listing,
+    address: "杭州大廈 蘆洲區長安街274巷",
+    area_name: "46坪",
+    floor_name: "6F/6F",
+    layout: "3房2廳2衛",
+  };
+  const incoming = {
+    ...listing,
+    address: "蘆洲區長安街274巷",
+    area_name: "46坪",
+    floor_name: "6F/6F",
+    layout: "3房2廳2衛",
+  };
+  assert.equal(classifyExistingUpdate(incoming, existing).type, "seen");
+  assert.equal(
+    classifyExistingUpdate(
+      { ...incoming, area_name: "46.0坪" },
+      existing,
+    ).type,
+    "seen",
+  );
+});
+
+test("non-watched content updates never notify", () => {
+  assert.equal(shouldNotify(hookSettings, listing, { type: "update", detail: "地址 x → y" }), false);
+  assert.equal(shouldNotify(hookSettings, { ...listing, watched: 0 }, { type: "update" }), false);
+  assert.equal(shouldNotify(hookSettings, { ...listing, watched: "0" }, { type: "update" }), false);
+  assert.equal(shouldNotify(hookSettings, watched, { type: "update", detail: "格局變更" }), true);
+});
+
 test("webhook requires URL", () => {
   assert.equal(shouldWebhookNotify({ discordWebhook: "" }, listing, { type: "new" }), false);
 });
