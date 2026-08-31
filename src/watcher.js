@@ -32,11 +32,47 @@ import { needsListingGeo } from "./geo.js";
 import { decideNotifyDelivery } from "./floors.js";
 import { fetchRoadRoutes } from "./route.js";
 import { bestMatch } from "./match.js";
-import { classifyExistingUpdate, eventLabel, listingLastEvent, notify, shouldDockNotify, shouldWebhookNotify } from "./notify.js";
+import { classifyExistingUpdate, eventLabel, listingLastEvent, notify, shouldDockNotify, shouldNotify, shouldWebhookNotify } from "./notify.js";
 import { normalizeOfflineConfirmDays, shouldRecheckOffline } from "./offline.js";
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function listingEventPayload(listing, type, detail, stamp = nowIso()) {
+  return {
+    post_id: listing.post_id,
+    source_key: listing.source_key,
+    type,
+    title: listing.title,
+    detail,
+    created_at: stamp,
+    notified: 0,
+    url: listing.url,
+    price: listing.price,
+    extra_fee: listing.extra_fee,
+    extra_fee_text: listing.extra_fee_text,
+    extra_fees: listing.extra_fees,
+    address: listing.address,
+    layout: listing.layout,
+    floor_name: listing.floor_name,
+    kind_name: listing.kind_name,
+    cover: listing.cover,
+  };
+}
+
+function queueOfflineEvent(postId, { wasOnline = true } = {}) {
+  if (!wasOnline) return;
+  const listing = getListing(postId);
+  if (!listing?.watched) return;
+  const stamp = nowIso();
+  const event = listingEventPayload(listing, "offline", "591 詳情已不存在或已關閉", stamp);
+  event.id = addEvent(event);
+}
+
+async function markOfflineAndNotify(postId, { wasOnline = true } = {}) {
+  markListingOffline(postId);
+  queueOfflineEvent(postId, { wasOnline });
 }
 
 function yieldEventLoop() {
@@ -111,7 +147,7 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
   const hookReady = [];
   for (const event of pending) {
     const listing = getListing(event.post_id);
-    const forDock = listing ? shouldDockNotify(settings, listing, event.type) : false;
+    const forDock = listing ? shouldDockNotify(settings, listing, event) : false;
     const forHook = listing ? shouldWebhookNotify(settings, listing, event) : false;
     if (!listing || (!forDock && !forHook)) {
       markEventNotified(event.id);
@@ -141,14 +177,14 @@ async function resolvePendingNotifyLocations(settings, { withRoute = true } = {}
     seen.add(event.post_id);
     let listing = getListing(event.post_id);
     if (!listing) continue;
-    if (!shouldDockNotify(settings, listing, event.type) && !shouldWebhookNotify(settings, listing, event)) continue;
+    if (!shouldNotify(settings, listing, event)) continue;
     if (decideNotifyDelivery(listing, settings) !== "pending") continue;
     try {
       const detail = await fetchListingDetail(event.post_id, detailOptions());
       listing = applyFetchedDetail(listing, detail) || listing;
       if (withRoute) listing = (await resolveListingRoute(listing, settings)) || listing;
     } catch (error) {
-      if (isListingGoneError(error)) markListingOffline(event.post_id);
+      if (isListingGoneError(error)) await markOfflineAndNotify(event.post_id, { wasOnline: !listing?.offline });
       // 詳情或路線失敗就留待下一輪補
     }
     await new Promise((resolve) => setTimeout(resolve, 400));
@@ -171,7 +207,8 @@ async function sweepOfflineListings(seenIds, { limit = 20 } = {}) {
       touchListingChecked(row.post_id);
     } catch (error) {
       if (isListingGoneError(error)) {
-        markListingOffline(row.post_id);
+        const wasOnline = !getListing(row.post_id)?.offline;
+        await markOfflineAndNotify(row.post_id, { wasOnline });
         gone += 1;
       }
     }
@@ -266,6 +303,13 @@ export async function runWatch(options = {}) {
       upserts += 1;
       if (upserts % 20 === 0) await yieldEventLoop();
 
+      if (!existing && prev && (level === "high" || level === "medium")) {
+        setListingMatch(listing.post_id, {
+          match_post_id: prev.post_id,
+          match_level: level,
+          match_detail: detail,
+        });
+      }
       if (!existing && prev && (prev.hidden || prev.viewed)) {
         setListingMatch(listing.post_id, {
           match_post_id: prev.post_id,
@@ -284,25 +328,7 @@ export async function runWatch(options = {}) {
 
       if (type === "seen" || isBaseline || isSearchBaseline) continue;
 
-      const event = {
-        post_id: listing.post_id,
-        source_key: listing.source_key,
-        type,
-        title: listing.title,
-        detail,
-        created_at: stamp,
-        notified: 0,
-        url: listing.url,
-        price: listing.price,
-        extra_fee: listing.extra_fee,
-        extra_fee_text: listing.extra_fee_text,
-        extra_fees: listing.extra_fees,
-        address: listing.address,
-        layout: listing.layout,
-        floor_name: listing.floor_name,
-        kind_name: listing.kind_name,
-        cover: listing.cover,
-      };
+      const event = listingEventPayload(listing, type, detail, stamp);
       const id = addEvent(event);
       event.id = id;
     }
@@ -319,7 +345,10 @@ export async function runWatch(options = {}) {
       const detail = await fetchListingDetail(row.post_id, detailOptions());
       applyFetchedDetail(listing, detail);
     } catch (error) {
-      if (isListingGoneError(error)) markListingOffline(row.post_id);
+      if (isListingGoneError(error)) {
+        const listing = getListing(row.post_id);
+        await markOfflineAndNotify(row.post_id, { wasOnline: !listing?.offline });
+      }
       // 詳情失敗下次再試，不中斷本輪追蹤
     }
     await new Promise((resolve) => setTimeout(resolve, 400));
@@ -365,7 +394,10 @@ export async function backfillListingCoords(settings = getSettings(), { limit = 
       });
       if (detail.lat != null && detail.lng != null) located += 1;
     } catch (error) {
-      if (isListingGoneError(error)) markListingOffline(row.post_id);
+      if (isListingGoneError(error)) {
+        const listing = getListing(row.post_id);
+        await markOfflineAndNotify(row.post_id, { wasOnline: !listing?.offline });
+      }
       // 591 詳情失敗下次再試
     }
     await new Promise((resolve) => setTimeout(resolve, 500));

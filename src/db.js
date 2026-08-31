@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { shouldKeepListing, listingHasElevator, listingIsApartment, listingIsSuite } from "./floors.js";
+import { shouldKeepListing, passesAttributeFilters, listingHasElevator, listingIsApartment, listingIsSuite } from "./floors.js";
 import { isTrustedGeoSource, listingCommunityId } from "./location.js";
 import { makeRouteKey } from "./route.js";
 import { sameSearch } from "./client591.js";
@@ -234,6 +234,11 @@ try {
 } catch {
   // already migrated
 }
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN match_verdict TEXT");
+} catch {
+  // already migrated
+}
 db.exec(`
   CREATE TABLE IF NOT EXISTS community_cache (
     community_id INTEGER PRIMARY KEY,
@@ -362,6 +367,10 @@ function decorateListing(row, settings = getSettings()) {
   if (!row) return row;
   row = applyCachedCoords(row, settings);
   const commute = Number.isFinite(Number(row.route_km)) ? Number(row.route_km) : null;
+  const matchPostId = Number(row.match_post_id) || 0;
+  const matchPeer = matchPostId
+    ? db.prepare("SELECT post_id, title, url, price, offline FROM listings WHERE post_id = ?").get(matchPostId)
+    : null;
   return {
     ...row,
     extra_fees: Array.isArray(row.extra_fees) ? row.extra_fees : parseJson(row.extra_fees, []),
@@ -369,6 +378,7 @@ function decorateListing(row, settings = getSettings()) {
     commute_km: commute == null ? null : Math.round(commute * 10) / 10,
     commute_routes: Array.isArray(row.route_kms) ? row.route_kms : [],
     district: districtNameFromListing(row),
+    match_peer: matchPeer || null,
   };
 }
 
@@ -410,7 +420,18 @@ export function rejectSuspectedMatch(postId) {
   if (!listing) return null;
   db.prepare(
     `UPDATE listings
-     SET match_rejected = 1, hidden = 0, viewed = 0
+     SET match_verdict = 'no', match_rejected = 1, hidden = 0, viewed = 0
+     WHERE post_id = ?`,
+  ).run(postId);
+  return getListing(postId);
+}
+
+export function confirmSuspectedMatch(postId) {
+  const listing = getListing(postId);
+  if (!listing?.match_post_id) return null;
+  db.prepare(
+    `UPDATE listings
+     SET match_verdict = 'yes', match_rejected = 0, hidden = 1, viewed = 1
      WHERE post_id = ?`,
   ).run(postId);
   return getListing(postId);
@@ -984,7 +1005,6 @@ export function listListings({ filter = "all", q = "", sort = "price_asc", limit
   const params = [];
   searchWhere(searchKeys, clauses, params);
   if (filter === "suspected") {
-    clauses.push("IFNULL(match_rejected, 0) = 0");
     clauses.push("match_level IN ('high', 'medium')");
     clauses.push("IFNULL(offline, 0) = 0");
   } else if (filter === "offline") {
@@ -994,6 +1014,7 @@ export function listListings({ filter = "all", q = "", sort = "price_asc", limit
   } else {
     clauses.push("IFNULL(hidden, 0) = 0");
     clauses.push("IFNULL(offline, 0) = 0");
+    clauses.push("(IFNULL(match_verdict, '') != 'yes')");
   }
   if (filter === "unseen") clauses.push("viewed = 0");
   if (filter === "viewed") clauses.push("viewed = 1");
@@ -1016,7 +1037,7 @@ export function listListings({ filter = "all", q = "", sort = "price_asc", limit
     .all(...params);
   const settings = getSettings();
   let rows =
-    filter === "offline"
+    filter === "offline" || filter === "suspected"
       ? raw.map((row) => decorateListing(row, settings))
       : applyListingFilter(raw).map((row) => decorateListing(row, settings));
   if (filter === "elevator") rows = rows.filter((row) => listingHasElevator(row));
@@ -1120,23 +1141,29 @@ export function stats(searchKeys) {
   const params = [];
   searchWhere(searchKeys, clauses, params);
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-  const raw = db.prepare(`SELECT viewed, watched, hidden, offline, last_event, floor_name, kind_name, title, address, area_name, lat, lng, geo_source, tags, match_level, match_rejected FROM listings ${where}`).all(...params);
-  const rows = applyListingFilter(raw);
-  const visible = rows.filter((row) => !row.hidden && !row.offline);
-  const storedVisible = raw.filter((row) => !row.hidden && !row.offline);
+  const raw = db
+    .prepare(
+      `SELECT viewed, watched, hidden, offline, last_event, floor_name, kind_name, title, address, area_name, lat, lng, geo_source, tags, match_level, match_rejected, match_verdict FROM listings ${where}`,
+    )
+    .all(...params);
+  const attrRows = raw.filter((row) => passesAttributeFilters(row, settings));
+  const base = attrRows.filter((row) => !row.hidden && !row.offline && row.match_verdict !== "yes");
+  const geoRows = applyListingFilter(raw).filter((row) => !row.hidden && !row.offline && row.match_verdict !== "yes");
   return {
-    total: visible.length,
-    unseen: visible.filter((row) => !row.viewed).length,
-    watched: visible.filter((row) => row.watched).length,
-    same_source: visible.filter((row) => ["same_source", "update", "price_drop", "title_update"].includes(row.last_event)).length,
-    hidden: rows.filter((row) => row.hidden).length,
+    total: base.length,
+    unseen: base.filter((row) => !row.viewed).length,
+    watched: base.filter((row) => row.watched).length,
+    same_source: base.filter((row) => ["same_source", "update", "price_drop", "title_update"].includes(row.last_event)).length,
+    hidden: attrRows.filter((row) => row.hidden).length,
     offline: raw.filter((row) => row.offline).length,
-    suspected: rows.filter((row) => row.match_level && !row.match_rejected).length,
-    elevator: visible.filter((row) => listingHasElevator(row)).length,
-    stored: storedVisible.length,
-    filteredOut: Math.max(0, storedVisible.length - visible.length),
-    missingGeo: storedVisible.filter((row) => !isTrustedGeoSource(row.geo_source) || row.lat == null || row.lng == null).length,
-    missingRoute: storedVisible.filter((row) => {
+    suspected: attrRows.filter((row) => row.match_level && !row.offline).length,
+    suspectedPending: attrRows.filter((row) => row.match_level && !row.match_verdict && !row.offline).length,
+    elevator: base.filter((row) => listingHasElevator(row)).length,
+    stored: geoRows.length,
+    filteredOut: Math.max(0, base.length - geoRows.length),
+    missingGeo: attrRows.filter((row) => !row.hidden && !row.offline && row.match_verdict !== "yes" && (!isTrustedGeoSource(row.geo_source) || row.lat == null || row.lng == null)).length,
+    missingRoute: attrRows.filter((row) => {
+      if (row.hidden || row.offline || row.match_verdict === "yes") return false;
       const geo = applyCachedCoords(row, settings);
       return (
         Number(settings.commuteKm) > 0 &&

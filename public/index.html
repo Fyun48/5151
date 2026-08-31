@@ -29,11 +29,35 @@
     }
     header {
       display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 20px 32px 14px;
+    }
+    .header-main {
+      display: flex;
       justify-content: space-between;
       align-items: flex-end;
       gap: 16px;
-      padding: 28px 32px 16px;
+      flex-wrap: wrap;
     }
+    .header-profiles {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      padding-top: 10px;
+      border-top: 1px solid var(--line);
+    }
+    .header-profiles input[type="text"],
+    .header-profiles select {
+      width: auto;
+      min-width: 140px;
+      max-width: 220px;
+      margin: 0;
+      padding: 8px 10px;
+      font-size: 13px;
+    }
+    .save-msg { font-size: 12px; color: var(--muted); margin-left: 4px; }
     h1 { margin: 0; font-size: 28px; letter-spacing: 0.08em; }
     .sub { color: var(--muted); font-size: 14px; margin-top: 6px; }
     .wrap { display: grid; grid-template-columns: 340px 1fr; gap: 20px; padding: 0 32px 40px; }
@@ -70,7 +94,8 @@
     button:disabled { opacity: 0.5; cursor: wait; }
     .ghost { background: #efe8de; color: var(--ink); }
     .row { display: flex; gap: 8px; flex-wrap: wrap; }
-    .stats { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin-bottom: 12px; }
+    .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 8px; }
+    .stat-note { font-size: 11px; color: var(--muted); margin: 0 0 8px; line-height: 1.45; grid-column: 1 / -1; }
     .stat { background: #f7f1e8; border-radius: 12px; padding: 10px; }
     .stat b { display: block; font-size: 20px; }
     .stat span { color: var(--muted); font-size: 12px; }
@@ -163,39 +188,58 @@
     .tag.lift { background: #dcfce7; color: #166534; }
     .tag.off { background: #e2e8f0; color: #475569; }
     .tag.off-sure { background: #334155; color: #f8fafc; }
+    .tag.verdict-yes { background: #334155; color: #f8fafc; font-weight: 700; }
+    .tag.verdict-no { background: #dcfce7; color: #166534; font-weight: 700; }
+    .match-peer {
+      background: #fef3c7;
+      border: 1px solid #fcd34d;
+      border-radius: 10px;
+      padding: 8px 10px;
+      margin: 8px 0 4px;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .match-peer a { color: var(--ink); font-weight: 700; }
     .item.offline { opacity: 0.78; }
-    #floatDock {
-      position: fixed;
-      left: 10px;
-      top: 46%;
-      transform: translateY(-50%);
-      z-index: 90;
+    .list-head-sticky {
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      background: var(--paper);
+      border-bottom: 1px solid var(--line);
+      box-shadow: 0 6px 16px rgba(80, 50, 20, 0.05);
+    }
+    .view-filters {
       display: flex;
-      flex-direction: column;
-      gap: 8px;
-      width: 72px;
+      gap: 18px;
+      flex-wrap: wrap;
+      align-items: center;
+      padding: 8px 16px;
+      border-bottom: 1px solid var(--line);
+      font-size: 14px;
     }
-    #floatDock button { width: 100%; padding: 10px 8px; font-size: 13px; }
-    #floatDock .float-msg {
-      color: var(--muted);
-      font-size: 11px;
-      line-height: 1.4;
+    .view-filters label {
       margin: 0;
-      text-align: center;
+      color: var(--ink);
+      display: inline-flex;
+      gap: 6px;
+      align-items: center;
     }
-    .wrap { padding-left: 92px; }
-    @media (max-width: 980px) {
-      #floatDock {
-        top: auto;
-        bottom: 18px;
-        transform: none;
-        flex-direction: row;
-        width: auto;
-        align-items: center;
-      }
-      #floatDock button { width: auto; }
-      #floatDock .float-msg { display: none; }
+    #scrollTopBtn {
+      position: fixed;
+      right: 18px;
+      bottom: 24px;
+      z-index: 95;
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      font-size: 22px;
+      line-height: 1;
+      padding: 0;
+      box-shadow: 0 8px 22px rgba(40, 20, 8, 0.18);
     }
+    #floatDock { display: none; }
+    .wrap { padding-left: 32px; padding-right: 32px; }
     .district-city { margin: 8px 0 12px; }
     .district-city-head { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; }
     .district-city h3 { margin: 0; font-size: 14px; flex: 1; }
@@ -323,31 +367,32 @@
 </head>
 <body>
   <header>
-    <div>
-      <h1>591 物件追蹤</h1>
-      <div class="sub">新物件通知 · 已瀏覽標記 · 特別關注 · 同屋源更新</div>
+    <div class="header-main">
+      <div>
+        <h1>591 物件追蹤</h1>
+        <div class="sub">新物件與特別關注變更通知 · 已瀏覽 · 同屋源比對</div>
+      </div>
+      <div class="row">
+        <span class="who" id="who"></span>
+        <a class="ghost" id="logoutBtn" href="/logout">登出</a>
+        <a class="ghost" href="/reset.html" style="display:inline-flex;align-items:center;text-decoration:none">清除資料</a>
+        <button class="ghost" id="reloadBtn">重新整理</button>
+        <button class="primary" id="watchBtn">立即檢查</button>
+      </div>
     </div>
-    <div class="row">
-      <span class="who" id="who"></span>
-      <a class="ghost" id="logoutBtn" href="/logout">登出</a>
-      <a class="ghost" href="/reset.html" style="display:inline-flex;align-items:center;text-decoration:none">清除資料</a>
-      <button class="ghost" id="reloadBtn">重新整理</button>
-      <button class="primary" id="watchBtn">立即檢查</button>
+    <div class="header-profiles">
+      <input type="text" id="profileName" placeholder="設定檔名稱" maxlength="40" aria-label="設定檔名稱" />
+      <select id="profileSelect" aria-label="已存設定檔"></select>
+      <button type="button" class="primary" id="saveBtn" disabled>儲存</button>
+      <button type="button" class="ghost" id="saveAsBtn" disabled>另存</button>
+      <button type="button" class="ghost" id="deleteProfileBtn">刪除</button>
+      <span class="save-msg" id="saveMsg"></span>
     </div>
   </header>
   <div class="wrap">
     <aside class="card panel">
       <div class="stats" id="stats"></div>
       <p class="hint" id="settingsLoadMsg">正在載入已存設定…完成前請不要按儲存或另存。右上「重新整理」會重新載入設定。</p>
-      <label>設定檔名稱</label>
-      <input type="text" id="profileName" placeholder="例如：士林北投＋新北四區" maxlength="40" />
-      <p class="hint">右下「另存」會用這個名稱再留一份。成功後下面選單與「已存」清單都會出現這個名字。</p>
-      <label id="profileSelectLabel">已存設定檔</label>
-      <select id="profileSelect"></select>
-      <p class="hint" id="profileListHint">還沒有設定檔。</p>
-      <div class="row">
-        <button type="button" class="ghost" id="deleteProfileBtn">刪除目前設定檔</button>
-      </div>
       <label>搜尋行政區（台北市 region=1、新北市 region=3，可一起勾）</label>
       <p class="hint">比照 591 勾選行政區。591 一次只能查一個縣市，這裡會自動拆成多組網址，物件仍合在同一份列表。金額上限與排除頂加會一併寫進搜尋。勾完請按右下「儲存」，再按「立即檢查」。上方按鈕只篩目前已抓到的結果，不會重查 591。</p>
       <div id="districtPicker">
@@ -435,23 +480,9 @@
       <label>機車路線上限（公里，0 表示不篩）</label>
       <input type="number" id="commuteKm" min="0" max="80" step="0.5" />
       <p class="hint">路徑用 591 物件頁「點地址」那個地圖座標，不是門牌文字去猜。每個物件會抓至少兩條可騎道路線；兩條都超過上限才不顯示。開啟後可依離公司近／遠排序。還沒從 591 拿到座標或還沒算完路線的會先不顯示，完成後列表會自動更新。</p>
-      <div class="checks">
-        <label><input type="checkbox" id="wholeFloorOnly" /> 只看整層住家</label>
-        <label><input type="checkbox" id="excludeLowFloors" /> 排除 1F 及以下（含地下室、整棟、頂加）</label>
-        <label><input type="checkbox" id="notifyNew" /> 全新物件要通知</label>
-        <label><input type="checkbox" id="notifySameSource" /> 同屋源更新要通知</label>
-        <label><input type="checkbox" id="notifyViewed" /> 已瀏覽過的也通知</label>
-        <label><input type="checkbox" id="notifyWatchedAlways" /> 特別關注一律通知</label>
-        <label><input type="checkbox" id="windowsToast" /> Windows 桌面通知</label>
-      </div>
       <label>Discord Webhook（選填）</label>
       <input type="url" id="discordWebhook" placeholder="https://discord.com/api/webhooks/..." />
-      <p class="hint">有網址才會傳到 Discord。下面三項只影響 webhook，不影響網頁「待看更新」。價格只有變低才會發，漲價不會。</p>
-      <div class="checks">
-        <label><input type="checkbox" id="webhookNotifyNew" checked /> Webhook：有新物件</label>
-        <label><input type="checkbox" id="webhookNotifyPriceDrop" checked /> Webhook：原價格調低</label>
-        <label><input type="checkbox" id="webhookNotifyTitleUpdate" checked /> Webhook：標題更新</label>
-      </div>
+      <p class="hint">有新物件就會通知（已排除同屋源重刊）。特別關注的物件另會通知：價格、標題、內容變更（含差異）、591 下架、尚未確認下架前又重新上架。浮動「待看更新」與 webhook 條件相同。</p>
       <label>排除路名／關鍵字（一行一個）</label>
       <p class="hint">地址或標題含這些字就不列入、也不通知。例如路名、路段。</p>
       <textarea id="excludeKeywords" placeholder="延平北路八段&#10;承德路"></textarea>
@@ -475,42 +506,44 @@
       <div class="box-list" id="boxList"></div>
     </aside>
     <main class="card">
-      <div class="toolbar">
-        <button class="chip on" data-filter="all">全部</button>
-        <button class="chip" data-filter="elevator">有電梯</button>
-        <button class="chip" data-filter="apartment">公寓</button>
-        <button class="chip" data-filter="suite">套房</button>
-        <button class="chip" data-filter="unseen">未瀏覽</button>
-        <button class="chip" data-filter="watched">特別關注</button>
-        <button class="chip" data-filter="same_source">同屋源更新</button>
-        <button class="chip" data-filter="suspected">疑似同屋源</button>
-        <button class="chip" data-filter="hidden">已隱藏</button>
-        <button class="chip" data-filter="offline">已下架</button>
-        <span style="width:1px;height:22px;background:var(--line);margin:0 4px"></span>
-        <button class="chip" data-sort="newest">最新</button>
-        <button class="chip on" data-sort="price_asc">金額低→高</button>
-        <button class="chip" data-sort="price_desc">金額高→低</button>
-        <button class="chip commute-sort" data-sort="commute_asc" hidden>離公司近→遠</button>
-        <button class="chip commute-sort" data-sort="commute_desc" hidden>離公司遠→近</button>
-        <input type="text" id="q" placeholder="搜尋標題 / 地址 / 編號 / 備註" style="max-width:240px;margin-left:auto" />
-        <div class="bulk-bar" id="bulkBar">
-          <span id="selectedCount">已選 0 筆</span>
-          <button type="button" class="ghost" id="selectPageBtn">全選本頁</button>
-          <button type="button" class="ghost" id="clearSelectBtn">取消勾選</button>
-          <button type="button" class="primary" id="hideSelectedBtn">不再顯示已選</button>
+      <div class="list-head-sticky">
+        <div class="toolbar">
+          <button class="chip on" data-filter="all">全部</button>
+          <button class="chip" data-filter="elevator">有電梯</button>
+          <button class="chip" data-filter="apartment">公寓</button>
+          <button class="chip" data-filter="suite">套房</button>
+          <button class="chip" data-filter="unseen">未瀏覽</button>
+          <button class="chip" data-filter="watched">特別關注</button>
+          <button class="chip" data-filter="same_source">同屋源更新</button>
+          <button class="chip" data-filter="suspected">疑似同屋源</button>
+          <button class="chip" data-filter="hidden">已隱藏</button>
+          <button class="chip" data-filter="offline">已下架</button>
+          <span style="width:1px;height:22px;background:var(--line);margin:0 4px"></span>
+          <button class="chip" data-sort="newest">最新</button>
+          <button class="chip on" data-sort="price_asc">金額低→高</button>
+          <button class="chip" data-sort="price_desc">金額高→低</button>
+          <button class="chip commute-sort" data-sort="commute_asc" hidden>離公司近→遠</button>
+          <button class="chip commute-sort" data-sort="commute_desc" hidden>離公司遠→近</button>
+          <input type="text" id="q" placeholder="搜尋標題 / 地址 / 編號 / 備註" style="max-width:240px;margin-left:auto" />
+          <div class="bulk-bar" id="bulkBar">
+            <span id="selectedCount">已選 0 筆</span>
+            <button type="button" class="ghost" id="selectPageBtn">全選本頁</button>
+            <button type="button" class="ghost" id="clearSelectBtn">取消勾選</button>
+            <button type="button" class="primary" id="hideSelectedBtn">不再顯示已選</button>
+          </div>
         </div>
+        <div class="view-filters">
+          <label><input type="checkbox" id="wholeFloorOnly" /> 只看整層住家</label>
+          <label><input type="checkbox" id="excludeLowFloors" /> 排除 1F 及以下（含地下室、整棟、頂加）</label>
+          <span class="hint" style="margin:0">變更後請按上方「儲存」才會寫進 591 搜尋。</span>
+        </div>
+        <div id="districtChips"></div>
       </div>
-      <div id="districtChips"></div>
       <div class="status" id="status">準備就緒</div>
       <div class="list" id="list"><div class="empty">尚未載入列表</div></div>
     </main>
   </div>
-  <div id="floatDock">
-    <button class="primary" id="saveBtn" type="button" disabled>儲存</button>
-    <button class="ghost" id="saveAsBtn" type="button" disabled>另存</button>
-    <button class="ghost" id="topBtn" type="button">回頂</button>
-    <p class="float-msg" id="saveMsg"></p>
-  </div>
+  <button type="button" class="primary" id="scrollTopBtn" title="回頂" aria-label="回頂">↑</button>
   <aside id="alertDock" aria-live="polite">
     <header>
       <h2>待看更新</h2>
@@ -774,7 +807,7 @@
       if (hint) {
         hint.textContent = list.length
           ? `已存：${list.map((item) => item.name).join("、")}`
-          : "還沒有設定檔。填名稱後按右下「另存」，成功會出現在這裡與上方選單。";
+          : "還沒有設定檔。填名稱後按上方「另存」。";
       }
       sel.innerHTML = "";
       const placeholder = document.createElement("option");
@@ -807,18 +840,10 @@
       $("commuteKm").value = s.commuteKm || 0;
       syncCommuteSort();
       $("wholeFloorOnly").checked = s.wholeFloorOnly !== false;
-      $("notifyNew").checked = !!s.notifyNew;
-      $("notifySameSource").checked = !!s.notifySameSource;
-      $("notifyViewed").checked = !!s.notifyViewed;
-      $("notifyWatchedAlways").checked = !!s.notifyWatchedAlways;
-      $("windowsToast").checked = s.windowsToast !== false;
       $("excludeLowFloors").checked = s.excludeLowFloors !== false;
       $("excludeKeywords").value = (s.excludeKeywords || []).join("\n");
       $("excludeAgents").value = (s.excludeAgents || []).join("\n");
       $("discordWebhook").value = s.discordWebhook || "";
-      $("webhookNotifyNew").checked = s.webhookNotifyNew !== false;
-      $("webhookNotifyPriceDrop").checked = s.webhookNotifyPriceDrop !== false;
-      $("webhookNotifyTitleUpdate").checked = s.webhookNotifyTitleUpdate !== false;
       excludeBoxes = Array.isArray(s.excludeBoxes)
         ? s.excludeBoxes.slice(0, MAX_BOXES).map((box) => ({
             ...box,
@@ -836,7 +861,9 @@
     }
 
     function renderStats(st) {
-      $("stats").innerHTML = [
+      $("stats").innerHTML = `
+        <p class="stat-note">以下數量只算 591 搜尋條件（整層、樓層、坪數、租金等），不含地圖／路名／通勤排除。右側列表仍會套用那些排除。</p>
+      ` + [
         ["全部", st.total],
         ["有電梯", st.elevator],
         ["未瀏覽", st.unseen],
@@ -844,8 +871,25 @@
         ["已隱藏", st.hidden],
         ["疑似", st.suspected],
         ...(st.offline ? [["已下架", st.offline]] : []),
-        ...(st.filteredOut ? [["路線篩選中", st.filteredOut]] : []),
+        ...(st.filteredOut ? [["列表另排除", st.filteredOut]] : []),
       ].map(([k, v]) => `<div class="stat"><b>${v || 0}</b><span>${k}</span></div>`).join("");
+    }
+
+    function matchPeerBlock(item) {
+      if (!item.match_level && !item.match_post_id) return "";
+      const peer = item.match_peer;
+      const peerId = peer?.post_id || item.match_post_id;
+      if (!peerId) return "";
+      const title = peer?.title || `刊登 #${peerId}`;
+      const url = peer?.url || listingUrl(peerId);
+      return `<div class="match-peer">疑似同一間：<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(title)}</a>${peer?.price ? ` · 租金 ${esc(peer.price)}` : ""}</div>`;
+    }
+
+    function matchActionButtons(item, id) {
+      if (!item.match_level || item.match_verdict) return "";
+      return `
+            <button class="primary" data-confirm-match="${id}">是同一間</button>
+            <button class="ghost" data-reject-match="${id}">不是同一間</button>`;
     }
 
     function feeLines(item) {
@@ -879,8 +923,10 @@
       const bits = [];
       if (item.last_event === "new") bits.push('<span class="tag new">全新物件</span>');
       if (item.last_event === "same_source" && !item.match_level) bits.push('<span class="tag same">同屋源更新</span>');
-      if (item.match_level === "high") bits.push('<span class="tag same">高信心同屋源</span>');
-      if (item.match_level === "medium") bits.push('<span class="tag watch">需確認同屋源</span>');
+      if (item.match_verdict === "yes") bits.push('<span class="tag verdict-yes">已確認：同一間</span>');
+      else if (item.match_verdict === "no") bits.push('<span class="tag verdict-no">已確認：不同物件</span>');
+      else if (item.match_level === "high") bits.push('<span class="tag same">高信心同屋源</span>');
+      else if (item.match_level === "medium") bits.push('<span class="tag watch">需確認同屋源</span>');
       if (item.last_event === "update") bits.push('<span class="tag same">內容更新</span>');
       if (item.offline_confirmed) bits.push('<span class="tag off-sure">確認已下架</span>');
       else if (item.offline || item.last_event === "offline") bits.push('<span class="tag off">已下架（核對中）</span>');
@@ -966,6 +1012,7 @@
             <h3 style="margin:8px 0 0;font-size:18px">
               <a href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-open="${id}">${esc(item.title)}</a>
             </h3>
+            ${matchPeerBlock(item)}
             <div class="meta">
               租金 ${item.price || ""} ${item.price_unit || "元/月"} · ${item.kind_name || ""} · ${item.layout || ""} · ${item.area_name || ""} · ${item.floor_name || ""}
               <br>${esc(item.address || "")} · ${esc(item.refresh_time || "")}${commuteText(item)}${offlineLine(item)}
@@ -983,7 +1030,7 @@
           <div class="actions">
             <button class="ghost" data-viewed="${id}">${item.viewed ? "取消已瀏覽" : "標記已瀏覽"}</button>
             <button class="${item.watched ? "primary" : "ghost"}" data-watched="${id}">${item.watched ? "取消關注" : "特別關注"}</button>
-            ${item.match_level && !item.match_rejected ? `<button class="ghost" data-reject-match="${id}">這不是同一間</button>` : ""}
+            ${matchActionButtons(item, id)}
             <label class="hide-box">
               <input type="checkbox" data-hidden="${id}" ${item.hidden ? "checked" : ""} />
               不再顯示
@@ -1070,19 +1117,11 @@
           pagesPerWatch: 40,
           minBuildingFloors: 4,
           wholeFloorOnly: true,
-          notifyNew: true,
-          notifySameSource: true,
-          notifyViewed: false,
-          notifyWatchedAlways: true,
-          windowsToast: true,
           excludeLowFloors: true,
           excludeKeywords: [],
           excludeAgents: [],
           excludeBoxes: [],
           discordWebhook: "",
-          webhookNotifyNew: true,
-          webhookNotifyPriceDrop: true,
-          webhookNotifyTitleUpdate: true,
           workAddress: "",
           commuteKm: 0,
           settingProfiles: [],
@@ -1130,20 +1169,12 @@
         pagesPerWatch: Number($("pagesPerWatch").value),
         minBuildingFloors: Number($("minBuildingFloors").value) || 4,
         wholeFloorOnly: $("wholeFloorOnly").checked,
-        notifyNew: $("notifyNew").checked,
-        notifySameSource: $("notifySameSource").checked,
-        notifyViewed: $("notifyViewed").checked,
-        notifyWatchedAlways: $("notifyWatchedAlways").checked,
-        windowsToast: $("windowsToast").checked,
         excludeLowFloors: $("excludeLowFloors").checked,
         excludeKeywords: $("excludeKeywords").value.split(/[\n,，]/).map((s) => s.trim()).filter(Boolean),
         excludeAgents: $("excludeAgents").value.split(/[\n,，]/).map((s) => s.trim()).filter(Boolean),
         excludeAgentIds: settings.excludeAgentIds || [],
         excludeBoxes,
         discordWebhook: $("discordWebhook").value.trim(),
-        webhookNotifyNew: $("webhookNotifyNew").checked,
-        webhookNotifyPriceDrop: $("webhookNotifyPriceDrop").checked,
-        webhookNotifyTitleUpdate: $("webhookNotifyTitleUpdate").checked,
         workAddress: $("workAddress").value.trim(),
         commuteKm: Number($("commuteKm").value) || 0,
       };
@@ -1251,7 +1282,7 @@
       }
     };
 
-    $("topBtn").onclick = () => window.scrollTo({ top: 0, behavior: "smooth" });
+    $("scrollTopBtn").onclick = () => window.scrollTo({ top: 0, behavior: "smooth" });
 
     $("profileSelect").onchange = async () => {
       const id = $("profileSelect").value;
@@ -1433,6 +1464,12 @@
       const rejectMatch = ev.target.dataset.rejectMatch;
       if (rejectMatch) {
         await fetch(`/api/listings/${rejectMatch}/reject-match`, { method: "POST" });
+        loadList();
+        return;
+      }
+      const confirmMatch = ev.target.dataset.confirmMatch;
+      if (confirmMatch) {
+        await fetch(`/api/listings/${confirmMatch}/confirm-match`, { method: "POST" });
         loadList();
         return;
       }
