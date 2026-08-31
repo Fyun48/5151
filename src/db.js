@@ -6,6 +6,7 @@ import { isTrustedGeoSource, listingCommunityId } from "./location.js";
 import { makeRouteKey } from "./route.js";
 import { sameSearch } from "./client591.js";
 import { districtNameFromListing } from "./regions.js";
+import { preferPrimaryListing } from "./match.js";
 import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings } from "./settingsState.js";
 import { defaultNotifyMatrix } from "./notifyMatrix.js";
 
@@ -432,11 +433,41 @@ export function rejectSuspectedMatch(postId) {
 export function confirmSuspectedMatch(postId) {
   const listing = getListing(postId);
   if (!listing?.match_post_id) return null;
-  db.prepare(
-    `UPDATE listings
-     SET match_verdict = 'yes', match_rejected = 0, hidden = 1, viewed = 1
-     WHERE post_id = ?`,
-  ).run(postId);
+  const peer = getListing(listing.match_post_id);
+  if (!peer) return null;
+  const primary = preferPrimaryListing(listing, peer);
+  const duplicate = Number(primary.post_id) === Number(listing.post_id) ? peer : listing;
+  const now = new Date().toISOString();
+  const watched = Number(primary.watched) === 1 || Number(duplicate.watched) === 1 ? 1 : 0;
+  const watchNote = String(primary.watch_note || "").trim() || String(duplicate.watch_note || "").trim();
+  db.exec("BEGIN");
+  try {
+    db.prepare(
+      `UPDATE listings
+       SET match_verdict = 'yes', match_rejected = 0, hidden = 1, viewed = 1,
+           match_post_id = ?, hidden_at = COALESCE(hidden_at, ?), viewed_at = COALESCE(viewed_at, ?)
+       WHERE post_id = ?`,
+    ).run(primary.post_id, now, now, duplicate.post_id);
+    db.prepare(
+      `UPDATE listings
+       SET match_verdict = '', match_rejected = 0, hidden = 0, match_level = NULL,
+           match_detail = ?, match_post_id = ?, watched = ?, watch_note = ?,
+           watched_at = CASE WHEN ? = 1 THEN COALESCE(watched_at, ?) ELSE watched_at END
+       WHERE post_id = ?`,
+    ).run(
+      `已確認同一間，保留較低價／較新刊登，隱藏 #${duplicate.post_id}`,
+      duplicate.post_id,
+      watched,
+      watchNote,
+      watched,
+      now,
+      primary.post_id,
+    );
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
   return getListing(postId);
 }
 
