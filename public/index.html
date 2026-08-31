@@ -541,6 +541,21 @@
     .hide-box { font-size: 13px; color: var(--muted); display: flex; gap: 6px; align-items: center; cursor: pointer; }
     .list { display: grid; gap: 14px; padding: 14px 16px 16px; }
     .empty { padding: 40px; color: var(--muted); text-align: center; }
+    #bootFail {
+      display: none;
+      position: sticky;
+      top: 0;
+      z-index: 10000;
+      margin: 0;
+      padding: 12px 32px;
+      background: var(--rose-soft);
+      color: var(--rose-deep);
+      border-bottom: 1px solid var(--rose);
+      font-size: 14px;
+      line-height: 1.55;
+    }
+    #bootFail[data-open="1"] { display: block; }
+    #bootFail strong { display: block; margin-bottom: 4px; font-size: 15px; }
     @media (max-width: 1100px) {
       .item { grid-template-columns: 28px 120px 1fr; }
       .contact, .actions { grid-column: 2 / -1; flex-direction: row; flex-wrap: wrap; justify-content: flex-start; }
@@ -553,6 +568,41 @@
   </style>
 </head>
 <body>
+  <div id="bootFail" role="alert">
+    <strong>畫面程式沒有跑起來</strong>
+    <span id="bootFailDetail">這是網頁程式錯誤，不是物件資料壞了。請按右上「重新整理」。不要按「清除資料」，清資料解不了這個狀況。</span>
+  </div>
+  <script>
+    window.__APP_PARSED = false;
+    window.__APP_BOOTED = false;
+    window.__showBootFail = function (detail) {
+      var box = document.getElementById("bootFail");
+      var text = document.getElementById("bootFailDetail");
+      if (text && detail) text.textContent = detail;
+      if (box) box.setAttribute("data-open", "1");
+      var status = document.getElementById("status");
+      if (status) status.textContent = "頁面程式沒跑起來（不是資料壞了）";
+      var loadMsg = document.getElementById("settingsLoadMsg");
+      if (loadMsg) {
+        loadMsg.hidden = false;
+        loadMsg.textContent = "網頁程式沒執行到。現在看到的空白表單不是你的存檔。請重新整理，不要按儲存或清除資料。";
+      }
+    };
+    window.addEventListener("error", function (ev) {
+      if (window.__APP_BOOTED) return;
+      var msg = ev && ev.message ? String(ev.message) : "";
+      if (!msg || msg === "Script error.") return;
+      window.__showBootFail("錯誤：" + msg + "。請重新整理，不要按清除資料。");
+    });
+    setTimeout(function () {
+      if (window.__APP_BOOTED) return;
+      if (!window.__APP_PARSED) {
+        window.__showBootFail("主程式腳本沒有執行，多半是語法錯誤。請重新整理，不要按清除資料。");
+        return;
+      }
+      window.__showBootFail("程式執行到一半就停了。請重新整理，不要按清除資料。");
+    }, 4000);
+  </script>
   <header>
     <div class="header-main">
       <div>
@@ -562,7 +612,7 @@
       <div class="row">
         <span class="who" id="who"></span>
         <a class="ghost" id="logoutBtn" href="/logout">登出</a>
-        <a class="ghost" href="/reset.html" style="display:inline-flex;align-items:center;text-decoration:none">清除資料</a>
+        <a class="ghost" href="/reset.html" title="會刪光物件與設定；無法修復畫面卡住" style="display:inline-flex;align-items:center;text-decoration:none">清除資料</a>
         <button class="ghost" id="expandPanelBtn" type="button">展開設定</button>
         <button class="ghost" id="reloadBtn">重新整理</button>
         <button class="primary" id="watchBtn">立即檢查</button>
@@ -584,7 +634,7 @@
         <button type="button" class="ghost" id="collapsePanelBtn">收合</button>
       </div>
       <div class="stats" id="stats"></div>
-      <p class="hint" id="settingsLoadMsg">正在載入已存設定…完成前請不要按儲存或另存。右上「重新整理」會重新載入設定。</p>
+      <p class="hint" id="settingsLoadMsg">正在載入已存設定…完成前請不要按儲存或另存。若一直停在這句、儲存也不能按，是網頁程式沒跑起來，不是資料壞了；請重新整理，不要按清除資料。</p>
       <label>搜尋行政區（台北市 region=1、新北市 region=3，可一起勾）</label>
       <p class="hint">比照 591 勾選行政區。591 一次只能查一個縣市，這裡會自動拆成多組網址，物件仍合在同一份列表。金額上限與排除頂加會一併寫進搜尋。勾完請按右下「儲存」，再按「立即檢查」。上方按鈕只篩目前已抓到的結果，不會重查 591。</p>
       <div id="districtPicker">
@@ -814,6 +864,8 @@
     </div>
   </div>
   <script>
+    window.__APP_PARSED = true;
+    try {
     const origFetch = window.fetch.bind(window);
     window.fetch = async (input, init) => {
       const res = await origFetch(input, { credentials: "same-origin", ...init });
@@ -2368,6 +2420,12 @@
         };
       }
     });
+    window.__APP_BOOTED = true;
+    } catch (error) {
+      window.__APP_BOOTED = false;
+      const detail = error && error.message ? error.message : String(error || "未知錯誤");
+      window.__showBootFail(`錯誤：${detail}。請重新整理，不要按清除資料。`);
+    }
   </script>
   <script src="/vendor/leaflet/leaflet.js" defer></script>
 </body>
