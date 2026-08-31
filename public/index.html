@@ -847,10 +847,15 @@
     const DOCK_KEY = "591-alert-dock-v1";
 
     function commuteText(item) {
-      if (item.commute_km == null) return "";
-      const routes = Array.isArray(item.commute_routes) ? item.commute_routes.filter((n) => Number.isFinite(Number(n))) : [];
-      const extra = routes.length > 1 ? `（${routes.map((n) => `${n}`).join(" / ")} 公里）` : "";
-      return ` · 機車路線約 ${item.commute_km} 公里${extra}`;
+      if (item.commute_km != null) {
+        const routes = Array.isArray(item.commute_routes) ? item.commute_routes.filter((n) => Number.isFinite(Number(n))) : [];
+        const extra = routes.length > 1 ? `（${routes.map((n) => `${n}`).join(" / ")} 公里）` : "";
+        return ` · 機車路線約 ${item.commute_km} 公里${extra}`;
+      }
+      if (!commuteOn()) return "";
+      const src = String(item.geo_source || "");
+      const hasPin = Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lng)) && (src === "591" || src === "community");
+      return hasPin ? " · 機車路線計算中" : " · 尚未取得地圖座標";
     }
 
     function commuteOn(s = settings) {
@@ -1340,10 +1345,18 @@
       if (matched > items.length && items.length > 0) {
         el.hidden = false;
         el.textContent = `目前顯示 ${items.length} / ${matched} 筆。請用搜尋或篩選縮小範圍。`;
-      } else {
-        el.hidden = true;
-        el.textContent = "";
+        return;
       }
+      if (commuteOn() && ((Number(st.missingGeo) || 0) > 0 || (Number(st.missingRoute) || 0) > 0)) {
+        const bits = [];
+        if (st.missingGeo > 0) bits.push(`還有 ${st.missingGeo} 筆要從 591 補地圖座標`);
+        if (st.missingRoute > 0) bits.push(`${st.missingRoute} 筆正在算機車路線`);
+        el.hidden = false;
+        el.textContent = `${bits.join("；")}。有距離的會排在「離公司近→遠」前面，其餘會隨背景計算陸續補上。`;
+        return;
+      }
+      el.hidden = true;
+      el.textContent = "";
     }
 
     function renderList(items, st = {}) {
