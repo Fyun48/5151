@@ -21,6 +21,16 @@ export function listingHasElevator(listing) {
   return /有電梯|電梯大樓|電梯公寓/.test(hay);
 }
 
+export function listingIsApartment(listing) {
+  const hay = `${listing.title || ""} ${listing.kind_name || ""} ${listing.address || ""} ${tagText(listing)}`;
+  if (/電梯大樓/.test(hay)) return false;
+  return /公寓/.test(hay);
+}
+
+export function listingIsSuite(listing) {
+  return /套房|雅房/.test(String(listing.kind_name || ""));
+}
+
 export function isAtOrBelowFirstFloor(floorName) {
   const text = String(floorName || "").replace(/\s+/g, "");
   if (!text) return false;

@@ -9,7 +9,7 @@ import {
   parseCommunityPayload,
   preferCommunityLocation,
 } from "../src/location.js";
-import { decideNotifyDelivery, hasTrustedCoords, isGeoReady, passesGeoFilters } from "../src/floors.js";
+import { decideNotifyDelivery, hasTrustedCoords, isGeoReady, listingIsApartment, listingIsSuite, passesGeoFilters } from "../src/floors.js";
 
 test("extracts the house-number address from a community page line", () => {
   const fromShot = "淡海新市鎮-行政中心 | 新北市淡水區淡金路二段173號";
@@ -120,4 +120,11 @@ test("webhook-bound filter also skips listings without trusted coordinates once 
     decideNotifyDelivery({ ...listingBase, geo_source: "", route_kms: [8] }, commuteSettings),
     "pending",
   );
+});
+
+test("apartment and suite view filters do not treat elevator buildings as 公寓", () => {
+  assert.equal(listingIsApartment({ title: "公寓三樓", kind_name: "整層住家", tags: ["公寓"] }), true);
+  assert.equal(listingIsApartment({ title: "電梯大樓", kind_name: "整層住家", tags: ["電梯大樓"] }), false);
+  assert.equal(listingIsSuite({ kind_name: "獨立套房" }), true);
+  assert.equal(listingIsSuite({ kind_name: "整層住家" }), false);
 });
