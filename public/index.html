@@ -797,9 +797,10 @@
       }
     }
 
+    /** 經本站 /go/:id 標記已瀏覽後再開 591（系統通知／卡片／Discord 皆同） */
     function listingUrl(item) {
       const id = item?.post_id || item;
-      return `https://rent.591.com.tw/${id}`;
+      return `/go/${encodeURIComponent(id)}`;
     }
 
     function formatListingWhen(item) {
@@ -1862,7 +1863,7 @@
           </h3>
           <div class="meta">${item.price || ""} ${item.address || ""} ${item.detail || ""} ${item.extra_fee_text || ""}</div>
           <div class="row" style="margin-top:8px">
-            <button class="primary" data-dock-open="${item.post_id}">打開 591</button>
+            <a class="primary" href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-dock-open="${item.post_id}" style="display:inline-flex;align-items:center;text-decoration:none">打開 591</a>
             <button class="ghost" data-dock-dismiss="${item.post_id}">關閉</button>
           </div>
         </div>
@@ -2194,14 +2195,16 @@
       const open = ev.target.closest("[data-dock-open]")?.dataset.dockOpen;
       const dismiss = ev.target.dataset.dockDismiss;
       if (open) {
-        ev.preventDefault();
-        window.open(listingUrl(open), "_blank", "noopener,noreferrer");
-        fetch(`/api/listings/${open}/flags`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ viewed: true }),
-        }).then(loadList);
-        dismissDock(open);
+        // 連結走 /go/:id（含中鍵開新分頁）；左鍵也記已瀏覽並關閉 dock 項
+        if (ev.button === 0 && !ev.metaKey && !ev.ctrlKey && !ev.shiftKey && !ev.altKey) {
+          // 讓 <a> 自己開分頁；另外標記並刷新（/go 也會標記，雙寫無妨）
+          fetch(`/api/listings/${open}/flags`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ viewed: true }),
+          }).then(loadList);
+          dismissDock(open);
+        }
         return;
       }
       if (dismiss) dismissDock(dismiss);

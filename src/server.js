@@ -24,6 +24,7 @@ import {
 } from "./db.js";
 import { adminEmail, authConfigured, clearSessionCookie, readSession, requireAuth, sessionCookie, verifyLogin } from "./auth.js";
 import { boxFromRoadDescription, geocodeAddress, needsListingGeo } from "./geo.js";
+import { rent591Url } from "./openLink.js";
 import { CITIES } from "./regions.js";
 import { backfillListingCoords, backfillListingRoutes, flushPendingNotifications, runWatch } from "./watcher.js";
 
@@ -44,6 +45,19 @@ app.use((req, res, next) => {
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
+});
+
+/** 點通知／Discord 連結：標記已瀏覽後導向 591（免登入，方便 webhook）。 */
+app.get("/go/:id", (req, res) => {
+  const id = Number(req.params.id);
+  if (Number.isFinite(id) && id > 0) {
+    try {
+      if (getListing(id)) setFlags(id, { viewed: true });
+    } catch (error) {
+      console.warn("標記已瀏覽失敗：", error.message);
+    }
+  }
+  res.redirect(302, rent591Url(id));
 });
 
 app.use("/vendor", express.static(path.join(__dirname, "../public/vendor"), { maxAge: "7d" }));
