@@ -2,11 +2,11 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { shouldKeepListing, listingHasElevator } from "./floors.js";
-import { normalizeBoxes, normalizeKeywords } from "./geo.js";
 import { isTrustedGeoSource, listingCommunityId } from "./location.js";
 import { makeRouteKey } from "./route.js";
 import { sameSearch } from "./client591.js";
-import { buildSearchUrls, districtNameFromListing, districtsFromSearchUrls, normalizeWatchDistricts, priceFromSearchUrls } from "./regions.js";
+import { districtNameFromListing } from "./regions.js";
+import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings } from "./settingsState.js";
 
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data");
 mkdirSync(DATA_DIR, { recursive: true });
@@ -255,6 +255,9 @@ const DEFAULTS = {
   notifyViewed: false,
   notifyWatchedAlways: true,
   discordWebhook: "",
+  webhookNotifyNew: true,
+  webhookNotifyPriceDrop: true,
+  webhookNotifyTitleUpdate: true,
   windowsToast: true,
   hasBaseline: false,
   excludeLowFloors: true,
@@ -278,66 +281,19 @@ const DEFAULTS = {
 
 export function getSettings() {
   const rows = db.prepare("SELECT key, value FROM settings").all();
-  const stored = Object.fromEntries(rows.map((row) => [row.key, JSON.parse(row.value)]));
-  const next = { ...DEFAULTS, ...stored };
-  if (Number(next.pagesPerWatch) <= 5) next.pagesPerWatch = 40;
-  if (!Array.isArray(stored.watchDistricts) || !stored.watchDistricts.length) {
-    next.watchDistricts = districtsFromSearchUrls(next.searchUrls);
-  } else {
-    next.watchDistricts = normalizeWatchDistricts(next.watchDistricts);
-  }
-  if (stored.priceMax == null && stored.priceMin == null) {
-    const parsed = priceFromSearchUrls(next.searchUrls);
-    if (parsed.max || parsed.min) {
-      next.priceMin = parsed.min;
-      next.priceMax = parsed.max;
-    }
-  }
-  return next;
+  return hydrateSettings(parseSettingRows(rows), DEFAULTS);
 }
 
 export function saveSettings(partial) {
   const current = getSettings();
-  const next = { ...current, ...partial };
-  next.excludeKeywords = normalizeKeywords(next.excludeKeywords);
-  next.excludeAgents = normalizeKeywords(next.excludeAgents);
-  next.excludeAgentIds = [...new Set((next.excludeAgentIds || []).map(Number).filter((id) => id > 0))].slice(0, 80);
-  next.excludeBoxes = normalizeBoxes(next.excludeBoxes);
-  next.pagesPerWatch = Math.max(1, Math.min(Number(next.pagesPerWatch) || 40, 40));
-  next.commuteKm = Math.max(0, Math.min(Number(next.commuteKm) || 0, 80));
-  next.workAddress = String(next.workAddress || "").trim().slice(0, 120);
-  const workLat = Number(next.workLat);
-  const workLng = Number(next.workLng);
-  next.workLat = Number.isFinite(workLat) ? workLat : null;
-  next.workLng = Number.isFinite(workLng) ? workLng : null;
-  next.watchDistricts = normalizeWatchDistricts(next.watchDistricts);
-  next.priceMin = Math.max(0, Number(next.priceMin) || 0);
-  next.priceMax = Math.max(0, Number(next.priceMax) || 0);
-  next.excludeRooftop = next.excludeRooftop !== false;
-  if (next.watchDistricts.length) {
-    next.searchUrls = buildSearchUrls({
-      districts: next.watchDistricts,
-      priceMin: next.priceMin,
-      priceMax: next.priceMax,
-      excludeRooftop: next.excludeRooftop,
-      wholeFloorOnly: next.wholeFloorOnly !== false,
-    });
-  }
-  next.settingProfiles = normalizeProfiles(next.settingProfiles);
-  next.activeProfileId = String(next.activeProfileId || "");
-  if (next.activeProfileId) {
-    next.settingProfiles = next.settingProfiles.map((profile) =>
-      profile.id === next.activeProfileId
-        ? { ...profile, saved_at: new Date().toISOString(), data: snapshotSettings(next) }
-        : profile,
-    );
-  }
+  const next = applySettingPatch(current, partial);
   const upsert = db.prepare(
     "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
   );
   db.exec("BEGIN");
   try {
     for (const [key, value] of Object.entries(next)) {
+      if (value === undefined) continue;
       upsert.run(key, JSON.stringify(value));
     }
     db.exec("COMMIT");
@@ -348,60 +304,8 @@ export function saveSettings(partial) {
   return next;
 }
 
-const PROFILE_FIELDS = [
-  "searchUrls",
-  "intervalMinutes",
-  "pagesPerWatch",
-  "minBuildingFloors",
-  "wholeFloorOnly",
-  "excludeLowFloors",
-  "notifyNew",
-  "notifySameSource",
-  "notifyViewed",
-  "notifyWatchedAlways",
-  "windowsToast",
-  "excludeKeywords",
-  "excludeAgents",
-  "excludeAgentIds",
-  "excludeBoxes",
-  "discordWebhook",
-  "workAddress",
-  "commuteKm",
-  "workLat",
-  "workLng",
-  "watchDistricts",
-  "priceMin",
-  "priceMax",
-  "excludeRooftop",
-];
-
-function normalizeProfiles(value) {
-  const list = Array.isArray(value) ? value : [];
-  const out = [];
-  for (const raw of list) {
-    if (!raw || typeof raw !== "object") continue;
-    const id = String(raw.id || "").trim();
-    const name = String(raw.name || "").trim().slice(0, 40);
-    if (!id || !name) continue;
-    out.push({
-      id,
-      name,
-      saved_at: String(raw.saved_at || new Date().toISOString()),
-      data: raw.data && typeof raw.data === "object" ? raw.data : {},
-    });
-    if (out.length >= 12) break;
-  }
-  return out;
-}
-
-function snapshotSettings(settings) {
-  const out = {};
-  for (const key of PROFILE_FIELDS) out[key] = settings[key];
-  return out;
-}
-
-export function saveAsProfile(name) {
-  const current = getSettings();
+export function saveAsProfile(name, livePatch) {
+  const current = livePatch && typeof livePatch === "object" ? saveSettings(livePatch) : getSettings();
   const profiles = [...(current.settingProfiles || [])];
   const id = `p-${Date.now()}`;
   const label = String(name || "").trim().slice(0, 40) || `設定 ${profiles.length + 1}`;
@@ -968,7 +872,7 @@ export function listListings({ filter = "all", q = "", sort = "price_asc", limit
   if (filter === "unseen") clauses.push("viewed = 0");
   if (filter === "viewed") clauses.push("viewed = 1");
   if (filter === "watched") clauses.push("watched = 1");
-  if (filter === "same_source") clauses.push("last_event IN ('same_source', 'update')");
+  if (filter === "same_source") clauses.push("last_event IN ('same_source', 'update', 'price_drop', 'title_update')");
   if (q) {
     clauses.push("(title LIKE ? OR address LIKE ? OR CAST(post_id AS TEXT) LIKE ? OR IFNULL(watch_note, '') LIKE ?)");
     const like = `%${q}%`;
@@ -1096,7 +1000,7 @@ export function stats(searchKeys) {
     total: visible.length,
     unseen: visible.filter((row) => !row.viewed).length,
     watched: visible.filter((row) => row.watched).length,
-    same_source: visible.filter((row) => row.last_event === "same_source" || row.last_event === "update").length,
+    same_source: visible.filter((row) => ["same_source", "update", "price_drop", "title_update"].includes(row.last_event)).length,
     hidden: rows.filter((row) => row.hidden).length,
     offline: raw.filter((row) => row.offline).length,
     suspected: rows.filter((row) => row.match_level && !row.match_rejected).length,

@@ -127,14 +127,48 @@ function schedule() {
   }, minutes * 60 * 1000);
 }
 
+function safeStats() {
+  try {
+    return stats();
+  } catch (error) {
+    console.warn("讀取統計失敗：", error.message);
+    return { total: 0, error: error.message };
+  }
+}
+
+app.get("/api/settings", (_req, res) => {
+  try {
+    res.json({ settings: getSettings(), cities: CITIES });
+  } catch (error) {
+    res.status(500).json({ error: error.message || "讀取設定失敗" });
+  }
+});
+
 app.get("/api/state", (_req, res) => {
-  const settings = getSettings();
+  let settings;
+  try {
+    settings = getSettings();
+  } catch (error) {
+    res.status(500).json({ error: error.message || "讀取設定失敗" });
+    return;
+  }
+  let listingStats = { total: 0 };
+  let listings = [];
+  let events = [];
+  try {
+    listingStats = stats();
+    listings = listListings({ filter: "all", sort: "price_asc", limit: 500 });
+    events = recentEvents(30);
+  } catch (error) {
+    console.warn("讀取物件列表失敗：", error.message);
+    listingStats = { ...listingStats, error: error.message };
+  }
   res.json({
     settings,
-    stats: stats(),
+    stats: listingStats,
     lastRun,
-    listings: listListings({ filter: "all", sort: "price_asc", limit: 500 }),
-    events: recentEvents(30),
+    listings,
+    events,
     cities: CITIES,
   });
 });
@@ -197,51 +231,61 @@ app.post("/api/listings/:id/reject-match", (req, res) => {
   res.json({ listing: updated, stats: stats() });
 });
 
+async function persistSettings(body = {}) {
+  if (Array.isArray(body.watchDistricts) && body.watchDistricts.length === 0) {
+    throw new Error("請至少選一個行政區");
+  }
+  const workAddress = String(body.workAddress || "").trim();
+  if (Number(body.commuteKm) > 0) {
+    if (!workAddress) throw new Error("請先填上班地址，才能篩通勤距離");
+    const current = getSettings();
+    const sameAddress =
+      String(current.workAddress || "").replace(/\s+/g, "") === workAddress.replace(/\s+/g, "") &&
+      Number.isFinite(Number(current.workLat)) &&
+      Number.isFinite(Number(current.workLng));
+    if (sameAddress) {
+      body.workAddress = workAddress;
+      body.workLat = current.workLat;
+      body.workLng = current.workLng;
+    } else {
+      const geo = await geocodeAddress(workAddress, getCachedGeo, { strict: true, maxAttempts: 2 });
+      if (!geo) throw new Error("找不到這個上班地址，請再寫詳細一點");
+      body.workAddress = workAddress;
+      body.workLat = geo.lat;
+      body.workLng = geo.lng;
+      setCachedGeo(workAddress, geo.lat, geo.lng);
+    }
+  } else if (body.workAddress !== undefined) {
+    body.workAddress = workAddress;
+    if (!workAddress) {
+      body.workLat = null;
+      body.workLng = null;
+    }
+  }
+  const settings = saveSettings(body);
+  schedule();
+  return settings;
+}
+
 app.post("/api/settings", async (req, res) => {
   try {
-    const body = req.body || {};
-    if (Array.isArray(body.watchDistricts) && body.watchDistricts.length === 0) {
-      throw new Error("請至少選一個行政區");
-    }
-    const workAddress = String(body.workAddress || "").trim();
-    if (Number(body.commuteKm) > 0) {
-      if (!workAddress) throw new Error("請先填上班地址，才能篩通勤距離");
-      const current = getSettings();
-      const sameAddress =
-        String(current.workAddress || "").replace(/\s+/g, "") === workAddress.replace(/\s+/g, "") &&
-        Number.isFinite(Number(current.workLat)) &&
-        Number.isFinite(Number(current.workLng));
-      if (sameAddress) {
-        body.workAddress = workAddress;
-        body.workLat = current.workLat;
-        body.workLng = current.workLng;
-      } else {
-        const geo = await geocodeAddress(workAddress, getCachedGeo, { strict: true, maxAttempts: 2 });
-        if (!geo) throw new Error("找不到這個上班地址，請再寫詳細一點");
-        body.workAddress = workAddress;
-        body.workLat = geo.lat;
-        body.workLng = geo.lng;
-        setCachedGeo(workAddress, geo.lat, geo.lng);
-      }
-    } else if (body.workAddress !== undefined) {
-      body.workAddress = workAddress;
-      if (!workAddress) {
-        body.workLat = null;
-        body.workLng = null;
-      }
-    }
-    const settings = saveSettings(body);
-    schedule();
-    res.json({ settings, stats: stats() });
+    const settings = await persistSettings(req.body || {});
+    res.json({ settings, stats: safeStats() });
     queueGeoBackfill(settings);
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.post("/api/profiles", (req, res) => {
+app.post("/api/profiles", async (req, res) => {
   try {
-    const settings = saveAsProfile(req.body?.name);
+    const name = String(req.body?.name || "").trim();
+    if (!name) throw new Error("請先填設定檔名稱");
+    const patch = req.body?.settings;
+    if (patch && typeof patch === "object") {
+      await persistSettings(patch);
+    }
+    const settings = saveAsProfile(name);
     res.json({ settings });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
