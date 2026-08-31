@@ -124,7 +124,7 @@ export function verifyLogin(email, password) {
 
 export function publicPath(req) {
   const p = req.path || "";
-  return p === "/login.html" || p === "/logout" || p === "/api/login" || p === "/api/logout" || p === "/api/me" || p === "/api/health" || p.startsWith("/vendor/");
+  return p === "/login.html" || p === "/logout" || p === "/api/login" || p === "/api/logout" || p === "/api/me" || p === "/api/health" || p.startsWith("/vendor/") || p.startsWith("/go/");
 }
 
 export function requireAuth(req, res, next) {

@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { passesDisplayFilters } from "./floors.js";
+import { trackedListingUrl } from "./openLink.js";
 
 function toastWindows(title, body) {
   const script = `
@@ -207,7 +208,7 @@ async function postDiscord(webhook, title, events) {
   if (!webhook) return;
   const embeds = events.slice(0, 8).map((event) => ({
     title: String(event.title || "591 物件").slice(0, 250),
-    url: event.url,
+    url: trackedListingUrl(event.post_id, event.url),
     color: embedColor(event.type),
     description: [
       `**${eventLabel(event.type)}**${event.detail ? ` · ${event.detail}` : ""}`,
@@ -223,7 +224,7 @@ async function postDiscord(webhook, title, events) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      content: `**${title}**\n點標題可直接開 591。${events.length > 8 ? ` 另有 ${events.length - 8} 則未列出。` : ""}`,
+      content: `**${title}**\n點標題會先記成已瀏覽再打開 591。${events.length > 8 ? ` 另有 ${events.length - 8} 則未列出。` : ""}`,
       embeds,
     }),
   });
