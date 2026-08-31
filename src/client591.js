@@ -402,9 +402,7 @@ async function fetchPage(query, firstRow) {
 
 export async function fetchListings(searchUrl, pages = 40, options = {}) {
   const parsed = parseSearchUrl(searchUrl);
-  if (options.wholeFloorOnly !== false) {
-    parsed.query.set("kind", "1");
-  }
+  parsed.query.delete("kind");
   const listings = [];
   let total = 0;
   const maxPages = Math.max(1, Math.min(Number(pages) || MAX_LIST_PAGES, MAX_LIST_PAGES));

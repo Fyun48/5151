@@ -268,8 +268,6 @@ const DEFAULTS = {
   webhookNotifyTitleUpdate: true,
   windowsToast: true,
   hasBaseline: false,
-  excludeLowFloors: true,
-  wholeFloorOnly: true,
   minBuildingFloors: 4,
   excludeKeywords: [],
   excludeAgents: [],

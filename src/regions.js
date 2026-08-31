@@ -137,7 +137,6 @@ export function buildSearchUrls({
   priceMin = 0,
   priceMax = 0,
   excludeRooftop = true,
-  wholeFloorOnly = true,
 } = {}) {
   const selected = normalizeWatchDistricts(districts);
   const grouped = new Map();
@@ -155,7 +154,6 @@ export function buildSearchUrls({
     params.set("region", String(region));
     params.set("section", [...new Set(sections)].sort((a, b) => a - b).join(","));
     if (price) params.set("price", price);
-    if (wholeFloorOnly !== false) params.set("kind", "1");
     if (excludeRooftop !== false) params.set("notice", "not_cover");
     urls.push(`https://rent.591.com.tw/list?${params}`);
   }

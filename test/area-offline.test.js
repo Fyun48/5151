@@ -10,8 +10,6 @@ import {
 import { applySettingPatch } from "../src/settingsState.js";
 
 const attrs = {
-  wholeFloorOnly: false,
-  excludeLowFloors: false,
   minBuildingFloors: 0,
 };
 
@@ -25,6 +23,13 @@ test("hides listings larger than areaMax ping", () => {
 test("keeps listings with unknown ping when areaMax is set", () => {
   const listing = { kind_name: "整層住家", floor_name: "5F/12F", area_name: "" };
   assert.equal(passesAttributeFilters(listing, { ...attrs, areaMax: 30 }), true);
+});
+
+test("wholeFloorOnly and excludeLowFloors are view-only, not attribute filters", () => {
+  const suite = { kind_name: "套房", floor_name: "2F/5F" };
+  const low = { kind_name: "整層住家", floor_name: "1F/4F" };
+  assert.equal(passesAttributeFilters(suite, attrs), true);
+  assert.equal(passesAttributeFilters(low, attrs), true);
 });
 
 test("confirms offline after 7 days from first not-found", () => {
