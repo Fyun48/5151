@@ -214,6 +214,21 @@ try {
 } catch {
   // already migrated
 }
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN offline INTEGER NOT NULL DEFAULT 0");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN offline_at TEXT");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN last_checked_at TEXT");
+} catch {
+  // already migrated
+}
 db.exec(`
   CREATE TABLE IF NOT EXISTS community_cache (
     community_id INTEGER PRIMARY KEY,
@@ -227,6 +242,7 @@ db.exec(`
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_search ON listings(search_key)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_hidden ON listings(hidden)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_match ON listings(match_level)");
+db.exec("CREATE INDEX IF NOT EXISTS idx_listings_offline ON listings(offline)");
 
 const DEFAULTS = {
   searchUrls: [
@@ -560,7 +576,13 @@ export function upsertListing(listing) {
       tags = excluded.tags,
       refresh_time = excluded.refresh_time,
       last_seen_at = excluded.last_seen_at,
-      last_event = excluded.last_event,
+      last_event = CASE
+        WHEN IFNULL(listings.offline, 0) = 1 AND excluded.last_event IN ('seen', 'offline', '') THEN 'same_source'
+        ELSE excluded.last_event
+      END,
+      last_checked_at = excluded.last_seen_at,
+      offline = 0,
+      offline_at = NULL,
       lat = CASE
         WHEN IFNULL(listings.geo_source, '') IN ('591', 'community') THEN listings.lat
         ELSE COALESCE(excluded.lat, listings.lat)
@@ -686,7 +708,7 @@ export function listingsNeedingFeeDetail(limit = 12) {
   return db
     .prepare(
       `SELECT post_id FROM listings
-       WHERE IFNULL(hidden, 0) = 0 AND (
+       WHERE IFNULL(hidden, 0) = 0 AND IFNULL(offline, 0) = 0 AND (
          IFNULL(contact_fetched, 0) = 0
          OR IFNULL(extra_fees_fetched, 0) = 0
          OR lat IS NULL OR lng IS NULL
@@ -703,6 +725,7 @@ export function listingsNeeding591Geo(limit = 20) {
     .prepare(
       `SELECT post_id, community_id, source_key, lat, lng, geo_source FROM listings
        WHERE IFNULL(hidden, 0) = 0
+         AND IFNULL(offline, 0) = 0
        ORDER BY last_seen_at DESC
        LIMIT 800`,
     )
@@ -736,6 +759,46 @@ export function hideMany(ids) {
     throw error;
   }
   return { count: list.length, stats: stats() };
+}
+
+export function markListingOffline(postId) {
+  const listing = getListing(postId);
+  if (!listing) return null;
+  const now = new Date().toISOString();
+  db.prepare(
+    `UPDATE listings
+     SET offline = 1,
+         offline_at = COALESCE(offline_at, ?),
+         last_event = 'offline',
+         last_checked_at = ?
+     WHERE post_id = ?`,
+  ).run(now, now, postId);
+  return getListing(postId);
+}
+
+export function touchListingChecked(postId) {
+  db.prepare("UPDATE listings SET last_checked_at = ? WHERE post_id = ?").run(new Date().toISOString(), postId);
+}
+
+export function listingsNeedingAliveCheck({ excludeIds = [], limit = 20 } = {}) {
+  const cap = Math.max(1, Number(limit) || 20);
+  const skip = new Set((excludeIds || []).map(Number).filter((id) => id > 0));
+  const rows = db
+    .prepare(
+      `SELECT post_id FROM listings
+       WHERE IFNULL(hidden, 0) = 0 AND IFNULL(offline, 0) = 0
+       ORDER BY CASE WHEN last_checked_at IS NULL THEN 0 ELSE 1 END,
+                IFNULL(last_checked_at, last_seen_at) ASC
+       LIMIT 800`,
+    )
+    .all();
+  const out = [];
+  for (const row of rows) {
+    if (skip.has(Number(row.post_id))) continue;
+    out.push(row);
+    if (out.length >= cap) break;
+  }
+  return out;
 }
 
 export function resetListings() {
@@ -842,6 +905,7 @@ export function listingsNeedingRoute(limit = 40) {
        WHERE lat IS NOT NULL AND lng IS NOT NULL
          AND IFNULL(geo_source, '') IN ('591', 'community')
          AND IFNULL(hidden, 0) = 0
+         AND IFNULL(offline, 0) = 0
        ORDER BY last_seen_at DESC
        LIMIT 2000`,
     )
@@ -867,6 +931,7 @@ export function addressesMissingGeo() {
        FROM listings
        WHERE (lat IS NULL OR lng IS NULL)
          AND IFNULL(hidden, 0) = 0
+         AND IFNULL(offline, 0) = 0
          AND IFNULL(address, '') != ''
        GROUP BY address`,
     )
@@ -891,10 +956,14 @@ export function listListings({ filter = "all", q = "", sort = "price_asc", limit
   if (filter === "suspected") {
     clauses.push("IFNULL(match_rejected, 0) = 0");
     clauses.push("match_level IN ('high', 'medium')");
+    clauses.push("IFNULL(offline, 0) = 0");
+  } else if (filter === "offline") {
+    clauses.push("IFNULL(offline, 0) = 1");
   } else if (filter === "hidden") {
     clauses.push("hidden = 1");
   } else {
     clauses.push("IFNULL(hidden, 0) = 0");
+    clauses.push("IFNULL(offline, 0) = 0");
   }
   if (filter === "unseen") clauses.push("viewed = 0");
   if (filter === "viewed") clauses.push("viewed = 1");
@@ -916,7 +985,10 @@ export function listListings({ filter = "all", q = "", sort = "price_asc", limit
     .prepare(`SELECT * FROM listings ${where} ORDER BY ${order}`)
     .all(...params);
   const settings = getSettings();
-  let rows = applyListingFilter(raw).map((row) => decorateListing(row, settings));
+  let rows =
+    filter === "offline"
+      ? raw.map((row) => decorateListing(row, settings))
+      : applyListingFilter(raw).map((row) => decorateListing(row, settings));
   if (filter === "elevator") rows = rows.filter((row) => listingHasElevator(row));
   if (sort === "commute_asc") {
     rows.sort((a, b) => (Number(a.commute_km) || 9999) - (Number(b.commute_km) || 9999));
@@ -1016,16 +1088,17 @@ export function stats(searchKeys) {
   const params = [];
   searchWhere(searchKeys, clauses, params);
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-  const raw = db.prepare(`SELECT viewed, watched, hidden, last_event, floor_name, kind_name, title, address, lat, lng, geo_source, tags, match_level, match_rejected FROM listings ${where}`).all(...params);
+  const raw = db.prepare(`SELECT viewed, watched, hidden, offline, last_event, floor_name, kind_name, title, address, lat, lng, geo_source, tags, match_level, match_rejected FROM listings ${where}`).all(...params);
   const rows = applyListingFilter(raw);
-  const visible = rows.filter((row) => !row.hidden);
-  const storedVisible = raw.filter((row) => !row.hidden);
+  const visible = rows.filter((row) => !row.hidden && !row.offline);
+  const storedVisible = raw.filter((row) => !row.hidden && !row.offline);
   return {
     total: visible.length,
     unseen: visible.filter((row) => !row.viewed).length,
     watched: visible.filter((row) => row.watched).length,
     same_source: visible.filter((row) => row.last_event === "same_source" || row.last_event === "update").length,
     hidden: rows.filter((row) => row.hidden).length,
+    offline: raw.filter((row) => row.offline).length,
     suspected: rows.filter((row) => row.match_level && !row.match_rejected).length,
     elevator: visible.filter((row) => listingHasElevator(row)).length,
     stored: storedVisible.length,

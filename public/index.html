@@ -157,6 +157,8 @@
       border-color: #fdba74;
     }
     .tag.lift { background: #dcfce7; color: #166534; }
+    .tag.off { background: #e2e8f0; color: #475569; }
+    .item.offline { opacity: 0.78; }
     #floatDock {
       position: fixed;
       left: 10px;
@@ -409,6 +411,7 @@
         <button class="chip" data-filter="same_source">同屋源更新</button>
         <button class="chip" data-filter="suspected">疑似同屋源</button>
         <button class="chip" data-filter="hidden">已隱藏</button>
+        <button class="chip" data-filter="offline">已下架</button>
         <span style="width:1px;height:22px;background:var(--line);margin:0 4px"></span>
         <button class="chip" data-sort="newest">最新</button>
         <button class="chip on" data-sort="price_asc">金額低→高</button>
@@ -674,6 +677,7 @@
         ["特別關注", st.watched],
         ["已隱藏", st.hidden],
         ["疑似", st.suspected],
+        ...(st.offline ? [["已下架", st.offline]] : []),
         ...(st.filteredOut ? [["路線篩選中", st.filteredOut]] : []),
       ].map(([k, v]) => `<div class="stat"><b>${v || 0}</b><span>${k}</span></div>`).join("");
     }
@@ -703,6 +707,7 @@
       if (item.match_level === "high") bits.push('<span class="tag same">高信心同屋源</span>');
       if (item.match_level === "medium") bits.push('<span class="tag watch">需確認同屋源</span>');
       if (item.last_event === "update") bits.push('<span class="tag same">內容更新</span>');
+      if (item.offline || item.last_event === "offline") bits.push('<span class="tag off">已下架</span>');
       if (item.has_elevator) bits.push('<span class="tag lift">有電梯</span>');
       if (item.watched) bits.push('<span class="tag watch">特別關注</span>');
       if (item.viewed) bits.push('<span class="tag viewed">已瀏覽</span>');
@@ -747,6 +752,8 @@
           msg = "這個行政區篩選目前沒有物件。可點「全部」或再勾其他區。";
         } else if (filter === "suspected") {
           msg = "目前沒有被判成同一屋源的重刊。隱藏或已瀏覽的舊屋若再上架，會出現在這裡。";
+        else if (filter === "offline") {
+          msg = "目前沒有偵測到已從 591 下架的物件。關閉或刪除的刊登會在檢查時標成已下架。";
         } else if (filter === "elevator") {
           msg = "目前沒有標到有電梯的物件。請先檢查，或改看「全部」。";
         } else if (st.missingGeo > 0) {
@@ -769,7 +776,7 @@
         const id = String(item.post_id);
         const on = selected.has(id);
         return `
-        <article class="item ${on ? "picked" : ""}" data-card="${id}">
+        <article class="item ${on ? "picked" : ""} ${item.offline ? "offline" : ""}" data-card="${id}">
           <input class="pick" type="checkbox" data-pick="${id}" ${on ? "checked" : ""} />
           <a class="item-cover" href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-open="${id}">
             <img src="${esc(item.cover || "")}" alt="" />
@@ -781,7 +788,7 @@
             </h3>
             <div class="meta">
               租金 ${item.price || ""} ${item.price_unit || "元/月"} · ${item.kind_name || ""} · ${item.layout || ""} · ${item.area_name || ""} · ${item.floor_name || ""}
-              <br>${esc(item.address || "")} · ${esc(item.refresh_time || "")}${commuteText(item)}
+              <br>${esc(item.address || "")} · ${esc(item.refresh_time || "")}${commuteText(item)}${item.offline ? ` · 591 已下架${item.offline_at ? `（${esc(item.offline_at.slice(0, 10))}）` : ""}` : ""}
               ${item.match_detail ? `<br>比對：${esc(item.match_detail)}${item.match_post_id ? ` · <a href="${listingUrl(item.match_post_id)}" target="_blank" rel="noopener noreferrer">舊刊登 #${item.match_post_id}</a>` : ""}` : ""}
             </div>
             ${(() => {
@@ -904,13 +911,19 @@
       const routeBit = route?.attempted
         ? `｜已計算 ${route.located}/${route.attempted} 筆機車路線`
         : "";
+      const off = result.offline;
+      const offBit = off?.gone
+        ? `｜已下架 ${off.gone} 筆`
+        : off?.checked
+          ? `｜已核對 ${off.checked} 筆是否仍在架`
+          : "";
       if (result.errors?.length) {
-        return `部分失敗：${result.errors.join("；")}${search ? "｜" + search : ""}${geoBit}${routeBit}`;
+        return `部分失敗：${result.errors.join("；")}${search ? "｜" + search : ""}${geoBit}${routeBit}${offBit}`;
       }
       if (result.baseline || result.searches?.some((item) => item.baseline)) {
-        return `已套用篩選並建立基準，抓到 ${result.fetched} 筆。之後的新物件才會通知。${search ? "｜" + search : ""}${geoBit}${routeBit}`;
+        return `已套用篩選並建立基準，抓到 ${result.fetched} 筆。之後的新物件才會通知。${search ? "｜" + search : ""}${geoBit}${routeBit}${offBit}`;
       }
-      return `檢查完成，本次通知 ${result.events?.length || 0} 則。${search ? "｜" + search : ""}${geoBit}${routeBit}`;
+      return `檢查完成，本次通知 ${result.events?.length || 0} 則。${search ? "｜" + search : ""}${geoBit}${routeBit}${offBit}`;
     }
 
     $("saveBtn").onclick = async () => {
