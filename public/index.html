@@ -1491,26 +1491,9 @@
       }
       if (!settingsLoaded) {
         cities = CITIES_EMBEDDED;
-        fillSettings({
-          watchDistricts: [],
-          searchUrls: [],
-          priceMin: 0,
-          priceMax: 36000,
-          areaMax: 0,
-          excludeRooftop: true,
-          intervalMinutes: 5,
-          offlineConfirmDays: 7,
-          pagesPerWatch: 40,
-          minBuildingFloors: 4,
-          excludeKeywords: [],
-          excludeAgents: [],
-          excludeBoxes: [],
-          discordWebhook: "",
-          workAddress: "",
-          commuteKm: 0,
-          settingProfiles: [],
-        });
-        $("status").textContent = "行政區清單已顯示。請勾選後按儲存、立即檢查。";
+        renderDistrictPicker({ watchDistricts: [] });
+        setSettingsReady(false, "設定沒載到。請按右上「重新整理」。現在看到的空白表單不是你的存檔，請不要按儲存。");
+        $("status").textContent = lastError || "設定沒載到，請重新整理";
       }
       try {
         const res = await fetch("/api/state", { cache: "no-store", signal: AbortSignal.timeout(20000) });
