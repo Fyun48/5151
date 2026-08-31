@@ -9,7 +9,16 @@ import {
   shouldWebhookNotify,
 } from "../src/notify.js";
 
-const listing = { title: "士林二房", price: "28000", price_num: 28000, hidden: 0, offline: 0, watched: 0 };
+const listing = {
+  title: "士林二房",
+  price: "28000",
+  price_num: 28000,
+  hidden: 0,
+  offline: 0,
+  watched: 0,
+  kind_name: "整層住家",
+  floor_name: "5F/12F",
+};
 const watched = { ...listing, watched: 1 };
 const hookSettings = { discordWebhook: "https://discord.com/api/webhooks/1/abc" };
 
@@ -93,6 +102,16 @@ test("non-watched content updates never notify", () => {
   assert.equal(shouldNotify(hookSettings, { ...listing, watched: 0 }, { type: "update" }), false);
   assert.equal(shouldNotify(hookSettings, { ...listing, watched: "0" }, { type: "update" }), false);
   assert.equal(shouldNotify(hookSettings, watched, { type: "update", detail: "格局變更" }), true);
+});
+
+test("display floor filters also block notifications", () => {
+  const low = { ...listing, kind_name: "整層住家", floor_name: "1F/5F", watched: 0 };
+  const prefs = { ...hookSettings, wholeFloorOnly: true, excludeLowFloors: true };
+  assert.equal(shouldNotify(prefs, low, { type: "new" }), false);
+  assert.equal(
+    shouldNotify(prefs, { ...low, floor_name: "3F/5F" }, { type: "new" }),
+    true,
+  );
 });
 
 test("webhook requires URL", () => {

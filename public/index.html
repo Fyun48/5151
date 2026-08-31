@@ -706,7 +706,7 @@
         <div class="view-filters">
           <label><input type="checkbox" id="wholeFloorOnly" /> 只看整層住家</label>
           <label><input type="checkbox" id="excludeLowFloors" /> 排除 1F 及以下（含地下室、整棟、頂加）</label>
-          <span class="hint" style="margin:0">只篩選右側列表顯示，不影響 591 抓取與左側統計。勾選後立即生效。</span>
+          <span class="hint" style="margin:0">篩選列表與通知；不影響 591 抓取與左側統計。勾選後立即生效並寫入設定。</span>
         </div>
         </div>
         <div class="district-block">
@@ -863,16 +863,48 @@
       if (Array.isArray(saved)) viewDistricts = new Set(saved);
     } catch {}
 
-    function loadViewFilters() {
+    function loadViewFilters(s = settings) {
       const wf = sessionStorage.getItem(VIEW_WHOLE_KEY);
       const low = sessionStorage.getItem(VIEW_LOW_FLOOR_KEY);
-      $("wholeFloorOnly").checked = wf === null ? true : wf === "1";
-      $("excludeLowFloors").checked = low === null ? true : low === "1";
+      // 設定檔優先（通知也讀這個）；session 僅在尚未存過時當預設
+      if (s && Object.prototype.hasOwnProperty.call(s, "wholeFloorOnly")) {
+        $("wholeFloorOnly").checked = s.wholeFloorOnly !== false;
+      } else {
+        $("wholeFloorOnly").checked = wf === null ? true : wf === "1";
+      }
+      if (s && Object.prototype.hasOwnProperty.call(s, "excludeLowFloors")) {
+        $("excludeLowFloors").checked = s.excludeLowFloors !== false;
+      } else {
+        $("excludeLowFloors").checked = low === null ? true : low === "1";
+      }
+      saveViewFilters();
     }
 
     function saveViewFilters() {
       sessionStorage.setItem(VIEW_WHOLE_KEY, $("wholeFloorOnly").checked ? "1" : "0");
       sessionStorage.setItem(VIEW_LOW_FLOOR_KEY, $("excludeLowFloors").checked ? "1" : "0");
+    }
+
+    async function persistViewFilters() {
+      saveViewFilters();
+      if (!settingsLoaded) return;
+      try {
+        const res = await fetch("/api/settings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            wholeFloorOnly: $("wholeFloorOnly").checked,
+            excludeLowFloors: $("excludeLowFloors").checked,
+          }),
+          signal: AbortSignal.timeout(12000),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.settings) {
+          settings = { ...settings, ...data.settings };
+        }
+      } catch {
+        // 列表已先套用；設定稍後再存
+      }
     }
 
     function isWholeFloorHome(kindName) {
@@ -1080,7 +1112,7 @@
       $("workAddress").value = s.workAddress || "";
       $("commuteKm").value = s.commuteKm || 0;
       syncCommuteSort();
-      loadViewFilters();
+      loadViewFilters(s);
       $("excludeKeywords").value = (s.excludeKeywords || []).join("\n");
       $("excludeAgents").value = (s.excludeAgents || []).join("\n");
       $("discordWebhook").value = s.discordWebhook || "";
@@ -1419,6 +1451,8 @@
         offlineConfirmDays: Number($("offlineConfirmDays").value) || 7,
         pagesPerWatch: Number($("pagesPerWatch").value),
         minBuildingFloors: Number($("minBuildingFloors").value) || 4,
+        wholeFloorOnly: $("wholeFloorOnly").checked,
+        excludeLowFloors: $("excludeLowFloors").checked,
         excludeKeywords: $("excludeKeywords").value.split(/[\n,，]/).map((s) => s.trim()).filter(Boolean),
         excludeAgents: $("excludeAgents").value.split(/[\n,，]/).map((s) => s.trim()).filter(Boolean),
         excludeAgentIds: settings.excludeAgentIds || [],
@@ -1614,11 +1648,11 @@
     $("filterMiniBtn").onclick = () => setFilterCompact(true);
     $("filterRestoreBtn").onclick = () => setFilterCompact(false);
     $("wholeFloorOnly").onchange = () => {
-      saveViewFilters();
+      persistViewFilters();
       loadList();
     };
     $("excludeLowFloors").onchange = () => {
-      saveViewFilters();
+      persistViewFilters();
       loadList();
     };
     $("selectPageBtn").onclick = () => {

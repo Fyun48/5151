@@ -6,6 +6,8 @@ export const PROFILE_FIELDS = [
   "intervalMinutes",
   "pagesPerWatch",
   "minBuildingFloors",
+  "wholeFloorOnly",
+  "excludeLowFloors",
   "excludeKeywords",
   "excludeAgents",
   "excludeAgentIds",
@@ -114,6 +116,8 @@ export function applySettingPatch(current, partial = {}) {
   next.areaMax = Math.max(0, Math.min(Number(next.areaMax) || 0, 500));
   next.offlineConfirmDays = Math.max(1, Math.min(Math.round(Number(next.offlineConfirmDays) || 7), 30));
   next.excludeRooftop = next.excludeRooftop !== false;
+  next.wholeFloorOnly = next.wholeFloorOnly !== false;
+  next.excludeLowFloors = next.excludeLowFloors !== false;
   next.webhookNotifyNew = next.webhookNotifyNew !== false;
   next.webhookNotifyPriceDrop = next.webhookNotifyPriceDrop !== false;
   next.webhookNotifyTitleUpdate = next.webhookNotifyTitleUpdate !== false;

@@ -32,6 +32,17 @@ test("wholeFloorOnly and excludeLowFloors are view-only, not attribute filters",
   assert.equal(passesAttributeFilters(low, attrs), true);
 });
 
+test("display filters hide suites and 1F for notify/list preferences", async () => {
+  const { passesDisplayFilters } = await import("../src/floors.js");
+  const suite = { kind_name: "套房", floor_name: "2F/5F" };
+  const low = { kind_name: "整層住家", floor_name: "1F/4F" };
+  const ok = { kind_name: "整層住家", floor_name: "3F/5F" };
+  const prefs = { wholeFloorOnly: true, excludeLowFloors: true };
+  assert.equal(passesDisplayFilters(suite, prefs), false);
+  assert.equal(passesDisplayFilters(low, prefs), false);
+  assert.equal(passesDisplayFilters(ok, prefs), true);
+});
+
 test("confirms offline after 7 days from first not-found", () => {
   const now = new Date("2026-08-31T00:00:00.000Z");
   const listing = {

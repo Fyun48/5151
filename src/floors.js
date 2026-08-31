@@ -59,6 +59,17 @@ export function isWholeFloorHome(kindName) {
   return String(kindName || "").includes("整層住家");
 }
 
+/** 列表顯示／通知用：整層、排除 1F。不影響 591 搜尋與左側統計。 */
+export function passesDisplayFilters(listing, settings = {}) {
+  if (settings.wholeFloorOnly !== false && !isWholeFloorHome(listing.kind_name)) {
+    return false;
+  }
+  if (settings.excludeLowFloors !== false && isAtOrBelowFirstFloor(listing.floor_name)) {
+    return false;
+  }
+  return true;
+}
+
 export function passesAttributeFilters(listing, settings = {}) {
   const minFloors = Number(settings.minBuildingFloors);
   const min = Number.isFinite(minFloors) && minFloors > 0 ? minFloors : 4;
@@ -103,6 +114,7 @@ export function isGeoReady(listing, settings = {}) {
 
 export function decideNotifyDelivery(listing, settings = {}) {
   if (!passesAttributeFilters(listing, settings)) return "skip";
+  if (!passesDisplayFilters(listing, settings)) return "skip";
   if (!isGeoReady(listing, settings)) return "pending";
   if (!passesGeoFilters(listing, settings, { strict: true })) return "skip";
   return "send";
