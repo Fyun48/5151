@@ -75,10 +75,42 @@ export function normalizeWatchDistricts(value) {
   return out;
 }
 
+export function districtFromRegionSection(region, section) {
+  const key = districtKey(region, section);
+  return DISTRICT_INDEX.get(key)?.name || "";
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 export function districtNameFromListing(listing) {
-  const hay = `${listing.address || ""}${listing.area_name || ""}`;
-  for (const district of DISTRICT_INDEX.values()) {
+  const fromIds = districtFromRegionSection(
+    listing?.regionid ?? listing?.region_id,
+    listing?.sectionid ?? listing?.section_id,
+  );
+  if (fromIds) return fromIds;
+
+  const bits = String(listing?.source_key || "").split("|");
+  if (bits.length >= 2 && bits[0] !== "" && bits[1] !== "") {
+    const fromKey = districtFromRegionSection(bits[0], bits[1]);
+    if (fromKey) return fromKey;
+  }
+
+  const hay = `${listing?.address || ""}${listing?.title || ""}`;
+  if (!hay) return "";
+  const districts = [...DISTRICT_INDEX.values()].sort((a, b) => b.name.length - a.name.length);
+  for (const district of districts) {
     if (hay.includes(district.name)) return district.name;
+  }
+  // 591 地址有時只寫「五股成泰路」「八里龍形路」沒有「區」
+  for (const district of districts) {
+    const short = district.name.replace(/區$/, "");
+    if (short.length < 2) continue;
+    const re = new RegExp(
+      `(?:^|[市])${escapeRegExp(short)}|${escapeRegExp(short)}(?:區|[路街巷弄大道里村])`,
+    );
+    if (re.test(hay)) return district.name;
   }
   return "";
 }
