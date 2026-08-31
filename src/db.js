@@ -398,7 +398,8 @@ export function listMatchCandidates(excludePostId) {
     .prepare(
       `SELECT * FROM listings
        WHERE post_id != ?
-       ORDER BY hidden DESC, viewed DESC, last_seen_at DESC`,
+       ORDER BY IFNULL(offline, 0) DESC, hidden DESC, viewed DESC, last_seen_at DESC
+       LIMIT 4000`,
     )
     .all(excludePostId)
     .map(decorateListing);
