@@ -1082,7 +1082,7 @@ export function sortListingsRows(rows, sort = "price_asc", { filter } = {}) {
         const byWatch = descIso(a.watched_at, b.watched_at);
         if (byWatch) return byWatch;
       }
-      return descIso(a.last_seen_at, b.last_seen_at) || Number(b.post_id) - Number(a.post_id);
+      return descIso(a.first_seen_at, b.first_seen_at) || Number(b.post_id) - Number(a.post_id);
     });
   } else {
     list.sort((a, b) => priceSortKey(a) - priceSortKey(b) || String(b.last_seen_at || "").localeCompare(String(a.last_seen_at || "")));

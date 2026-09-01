@@ -213,7 +213,7 @@ app.get("/api/state", (_req, res) => {
   let events = [];
   try {
     listingStats = stats();
-    const listed = listListings({ filter: "all", sort: "price_asc", limit: 500 });
+    const listed = listListings({ filter: "all", sort: "newest", limit: 500 });
     listings = listed.listings;
     listingStats = { ...listingStats, matched: listed.totalMatched };
     events = recentEvents(30);
@@ -240,7 +240,7 @@ app.get("/api/listings", (req, res) => {
     filter: req.query.filter || "all",
     kind: req.query.kind || "",
     q: req.query.q || "",
-    sort: req.query.sort || "price_asc",
+    sort: req.query.sort || "newest",
     limit: Number(req.query.limit) || 500,
     districts,
   });
