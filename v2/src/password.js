@@ -48,3 +48,20 @@ export function validatePassword(password) {
   }
   return text;
 }
+
+const TEMP_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+
+export function generateTempPassword(length = 12) {
+  const n = Math.max(8, Number(length) || 12);
+  const max = 256 - (256 % TEMP_ALPHABET.length);
+  let out = "";
+  while (out.length < n) {
+    const bytes = randomBytes(n - out.length);
+    for (const byte of bytes) {
+      if (byte >= max) continue;
+      out += TEMP_ALPHABET[byte % TEMP_ALPHABET.length];
+      if (out.length >= n) break;
+    }
+  }
+  return out;
+}
