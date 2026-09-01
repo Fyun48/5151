@@ -936,10 +936,14 @@ export function setFlags(postId, flags) {
     UPDATE listings
     SET viewed = ?, watched = ?, hidden = ?, watch_note = ?,
         viewed_at = CASE WHEN ? = 1 THEN COALESCE(viewed_at, ?) ELSE viewed_at END,
-        watched_at = CASE WHEN ? = 1 THEN COALESCE(watched_at, ?) ELSE watched_at END,
+        watched_at = CASE
+          WHEN ? = 1 AND IFNULL(watched, 0) = 0 THEN ?
+          WHEN ? = 1 THEN COALESCE(watched_at, ?)
+          ELSE watched_at
+        END,
         hidden_at = CASE WHEN ? = 1 THEN COALESCE(hidden_at, ?) ELSE hidden_at END
     WHERE post_id = ?
-  `).run(viewed, watched, hidden, watchNote, viewed, now, watched, now, hidden, now, postId);
+  `).run(viewed, watched, hidden, watchNote, viewed, now, watched, now, watched, now, hidden, now, postId);
   return getListing(postId);
 }
 
@@ -1050,7 +1054,16 @@ function priceSortKey(row) {
   return n > 0 ? n : Number.MAX_SAFE_INTEGER;
 }
 
-export function sortListingsRows(rows, sort = "price_asc") {
+function descIso(a, b) {
+  const left = String(a || "");
+  const right = String(b || "");
+  if (!left && !right) return 0;
+  if (!left) return 1;
+  if (!right) return -1;
+  return right.localeCompare(left);
+}
+
+export function sortListingsRows(rows, sort = "price_asc", { filter } = {}) {
   const list = [...(rows || [])];
   if (sort === "commute_asc") {
     list.sort((a, b) => (Number(a.commute_km) || 9999) - (Number(b.commute_km) || 9999) || priceSortKey(a) - priceSortKey(b));
@@ -1064,7 +1077,13 @@ export function sortListingsRows(rows, sort = "price_asc") {
       return pb - pa || String(b.last_seen_at || "").localeCompare(String(a.last_seen_at || ""));
     });
   } else if (sort === "newest") {
-    list.sort((a, b) => String(b.last_seen_at || "").localeCompare(String(a.last_seen_at || "")) || Number(b.post_id) - Number(a.post_id));
+    list.sort((a, b) => {
+      if (filter === "watched") {
+        const byWatch = descIso(a.watched_at, b.watched_at);
+        if (byWatch) return byWatch;
+      }
+      return descIso(a.last_seen_at, b.last_seen_at) || Number(b.post_id) - Number(a.post_id);
+    });
   } else {
     list.sort((a, b) => priceSortKey(a) - priceSortKey(b) || String(b.last_seen_at || "").localeCompare(String(a.last_seen_at || "")));
   }
@@ -1128,7 +1147,7 @@ export function listListings({
   if (filter === "apartment") rows = rows.filter((row) => listingIsApartment(row));
   if (filter === "suite") rows = rows.filter((row) => listingIsSuite(row));
 
-  rows = sortListingsRows(rows, sort);
+  rows = sortListingsRows(rows, sort, { filter });
 
   const totalMatched = rows.length;
   return { listings: rows.slice(0, limit), totalMatched };
