@@ -33,3 +33,35 @@ test("price_desc keeps zero prices after real rents", () => {
     [3, 1, 2],
   );
 });
+
+test("newest in 特別關注 orders by watched_at, not last_seen_at", () => {
+  const rows = sortListingsRows(
+    [
+      { post_id: 1, watched_at: "2026-08-01T00:00:00.000Z", last_seen_at: "2026-09-01T00:00:00.000Z" },
+      { post_id: 2, watched_at: "2026-08-20T00:00:00.000Z", last_seen_at: "2026-08-02T00:00:00.000Z" },
+      { post_id: 3, watched_at: "", last_seen_at: "2026-08-15T00:00:00.000Z" },
+      { post_id: 4, watched_at: "2026-08-10T00:00:00.000Z", last_seen_at: "2026-08-20T00:00:00.000Z" },
+    ],
+    "newest",
+    { filter: "watched" },
+  );
+  assert.deepEqual(
+    rows.map((row) => row.post_id),
+    [2, 4, 1, 3],
+  );
+});
+
+test("newest outside 特別關注 still uses last_seen_at", () => {
+  const rows = sortListingsRows(
+    [
+      { post_id: 1, watched_at: "2026-08-20T00:00:00.000Z", last_seen_at: "2026-08-01T00:00:00.000Z" },
+      { post_id: 2, watched_at: "2026-08-01T00:00:00.000Z", last_seen_at: "2026-08-20T00:00:00.000Z" },
+    ],
+    "newest",
+    { filter: "all" },
+  );
+  assert.deepEqual(
+    rows.map((row) => row.post_id),
+    [2, 1],
+  );
+});
