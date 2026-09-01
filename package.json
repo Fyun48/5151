@@ -6,8 +6,10 @@
   "description": "591 新物件追蹤：已瀏覽、特別關注、同屋源更新通知",
   "scripts": {
     "start": "node src/server.js",
+    "start:v2": "PORT=5152 DATA_DIR=data-v2 node v2/src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node --test test/*.test.js"
+    "dev:v2": "PORT=5152 DATA_DIR=data-v2 node --watch v2/src/server.js",
+    "test": "node --test test/*.test.js v2/test/*.test.js"
   },
   "engines": {
     "node": ">=22"

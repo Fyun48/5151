@@ -1,0 +1,99 @@
+const GEO_UA = "591-tracker/1.0 (personal rental watcher; acefengyun@gmail.com)";
+
+let lastRouteAt = 0;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function metersToKm(meters) {
+  const n = Number(meters);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.round((n / 1000) * 10) / 10;
+}
+
+function uniqueDistances(values) {
+  const out = [];
+  for (const value of values) {
+    const km = metersToKm(value);
+    if (km == null) continue;
+    if (!out.includes(km)) out.push(km);
+  }
+  return out.sort((a, b) => a - b).slice(0, 3);
+}
+
+async function googleRoutes(fromLat, fromLng, toLat, toLng) {
+  const key = String(process.env.GOOGLE_MAPS_API_KEY || "").trim();
+  if (!key) return null;
+  const url = new URL("https://maps.googleapis.com/maps/api/directions/json");
+  url.searchParams.set("origin", `${fromLat},${fromLng}`);
+  url.searchParams.set("destination", `${toLat},${toLng}`);
+  url.searchParams.set("mode", "driving");
+  url.searchParams.set("alternatives", "true");
+  url.searchParams.set("avoid", "highways");
+  url.searchParams.set("region", "tw");
+  url.searchParams.set("language", "zh-TW");
+  url.searchParams.set("key", key);
+  const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  if (!res.ok) return null;
+  const body = await res.json();
+  if (body.status !== "OK" && body.status !== "ZERO_RESULTS") return null;
+  const meters = (body.routes || []).map((route) =>
+    (route.legs || []).reduce((sum, leg) => sum + Number(leg.distance?.value || 0), 0),
+  );
+  return uniqueDistances(meters);
+}
+
+async function osrmRoutes(fromLat, fromLng, toLat, toLng) {
+  const wait = 1100 - (Date.now() - lastRouteAt);
+  if (wait > 0) await sleep(wait);
+  const path = `${Number(fromLng)},${Number(fromLat)};${Number(toLng)},${Number(toLat)}`;
+  const url = new URL(`https://router.project-osrm.org/route/v1/driving/${path}`);
+  url.searchParams.set("alternatives", "3");
+  url.searchParams.set("overview", "false");
+  url.searchParams.set("steps", "false");
+  lastRouteAt = Date.now();
+  const res = await fetch(url, {
+    headers: { Accept: "application/json", "User-Agent": GEO_UA },
+    signal: AbortSignal.timeout(10000),
+  });
+  if (res.status === 429) return { busy: true };
+  if (!res.ok) return null;
+  const body = await res.json();
+  if (body.code && body.code !== "Ok") return null;
+  return uniqueDistances((body.routes || []).map((route) => route.distance));
+}
+
+export function roundCoord(value) {
+  return Math.round(Number(value) * 1e5) / 1e5;
+}
+
+export function makeRouteKey(fromLat, fromLng, toLat, toLng) {
+  return `${roundCoord(fromLat)},${roundCoord(fromLng)}>${roundCoord(toLat)},${roundCoord(toLng)}`;
+}
+
+function mergeKm(a, b) {
+  return [...new Set([...(a || []), ...(b || [])])].sort((x, y) => x - y).slice(0, 3);
+}
+
+export async function fetchRoadRoutes(fromLat, fromLng, toLat, toLng) {
+  const from = [Number(fromLat), Number(fromLng)];
+  const to = [Number(toLat), Number(toLng)];
+  if (!from.every(Number.isFinite) || !to.every(Number.isFinite)) return null;
+  let distances = [];
+  try {
+    const google = await googleRoutes(from[0], from[1], to[0], to[1]);
+    if (google?.length) distances = google;
+  } catch {
+    // 沒有 Google key 或失敗時改用 OpenStreetMap 路線
+  }
+  if (distances.length >= 2) return distances;
+  try {
+    const osrm = await osrmRoutes(from[0], from[1], to[0], to[1]);
+    if (osrm?.busy) return distances.length ? distances : null;
+    if (osrm?.length) distances = mergeKm(distances, osrm);
+  } catch {
+    return distances.length ? distances : null;
+  }
+  return distances.length ? distances : null;
+}

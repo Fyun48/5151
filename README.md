@@ -31,6 +31,18 @@ npm start
 
 請保持這個視窗在跑。檢查間隔建議 5 分鐘以上，且每次只抓最新 1–2 頁，避免對 591 造成負擔。此工具僅供個人找房使用。
 
+## 兩個版本
+
+目前線上 CasaOS（埠 5151、`data/591.db`）是 **v1**，也就是 root 的 `src/` 與 `public/`。推 `master` 時 Action 只同步這兩包，**不會部署 v2**。
+
+**v2** 在 `v2/`，是這份程式的複本，用來做「共用 591 抓取、個人設定／特別關注分開」的多人版。資料在 `data-v2/v2.db`，本機預設埠 5152：
+
+```bash
+npm run start:v2
+```
+
+規劃與階段見 `v2/ARCHITECTURE.md`。v2 還沒準備好取代線上版之前，請繼續用 v1。
+
 ## 部署到 CasaOS
 
 SQLite 與設定會寫進 `DATA_DIR`（容器內預設 `/data`）。CasaOS 請用 bind mount 到 `/DATA/AppData/591-tracker`，不要用 Docker 具名 volume，否則 CasaOS 重裝時資料容易不見。
