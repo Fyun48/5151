@@ -1288,7 +1288,6 @@
       }
       const cap = profileLimit();
       const atCap = cap && list.length >= cap;
-      if (label) label.textContent = list.length ? `已存設定檔（${list.length}${cap ? `／${cap}` : ""}）` : "已存設定檔";
       const hint = $("profileListHint");
       if (hint) {
         if (!list.length) {
@@ -1937,7 +1936,7 @@
           : error.message;
         flash(msg);
       } finally {
-        $("saveAsBtn").disabled = !settingsLoaded;
+        setSettingsReady(settingsLoaded);
       }
     };
 

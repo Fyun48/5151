@@ -90,4 +90,8 @@ test("member profiles cap districts and include usable ping in notify copy", () 
   assert.match(html, /每個設定檔最多選/);
   assert.match(html, /notify_facts/);
   assert.match(html, /housing_type/);
+  assert.match(html, /已存 \$\{list\.length\}／\$\{cap\}/);
+  assert.match(html, /setSettingsReady\(settingsLoaded\)/);
+  const profilesFn = html.slice(html.indexOf("function renderProfiles"), html.indexOf("function fillNotifyMatrix"));
+  assert.equal(profilesFn.includes("if (label)"), false);
 });
