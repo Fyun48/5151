@@ -837,7 +837,6 @@
           <button class="chip" data-kind="elevator">電梯</button>
           <button class="chip" data-kind="apartment">公寓</button>
           <button class="chip" data-kind="suite">套房</button>
-          <button class="chip" data-kind="building">大樓</button>
           <span style="width:1px;height:22px;background:var(--line);margin:0 4px"></span>
           <button class="chip" data-sort="newest">最新</button>
           <button class="chip on" data-sort="price_asc">金額低→高</button>
@@ -1501,10 +1500,6 @@
           msg = filter === "watched"
             ? "特別關注裡目前沒有套房／雅房。"
             : "目前沒有套房／雅房。這只篩已抓到的結果，不會重查 591。";
-        } else if (kind === "building") {
-          msg = filter === "watched"
-            ? "特別關注裡目前沒有大樓／華廈。"
-            : "目前沒有標成大樓／華廈的物件。這只篩已抓到的結果，不會重查 591。";
         } else if (st.missingGeo > 0) {
           msg = `正在從 591 物件地圖補 ${st.missingGeo} 筆座標（就是網頁上點地址看到的那個），完成後會自動計算機車路線。`;
         } else if (st.missingRoute > 0) {
