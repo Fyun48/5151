@@ -48,6 +48,36 @@ test("watch fly animation is non-blocking and targets the watched chip", () => {
   assert.match(html, /noteDrafts/);
 });
 
+test("watch draft note ignores IME composition and list redraw", () => {
+  const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
+  assert.match(html, /compositionstart/);
+  assert.match(html, /compositionend/);
+  assert.match(html, /noteComposing/);
+  assert.match(html, /noteJustComposed/);
+  assert.match(html, /listLoadGen/);
+  assert.match(html, /replaceListHtml/);
+  assert.match(html, /data-watch-draft-commit/);
+  assert.match(html, /選字不會送出/);
+  assert.match(html, /if \(gen !== listLoadGen\) return/);
+  assert.match(html, /if \(!draftWatch\.has\(key\)\) return/);
+  assert.match(html, /if \(noteComposing\) return true/);
+  assert.doesNotMatch(html, /點欄位外即加入/);
+  const keydown = html.slice(
+    html.indexOf('$("list").addEventListener("keydown"'),
+    html.indexOf('$("list").addEventListener("focusout"'),
+  );
+  assert.match(keydown, /commitWatchDraft\(id, ev\.target\.value\)/);
+  assert.match(keydown, /noteJustComposed/);
+  assert.doesNotMatch(keydown, /\.blur\(\)/);
+  const focusout = html.slice(
+    html.indexOf('$("list").addEventListener("focusout"'),
+    html.indexOf('$("list").addEventListener("change"'),
+  );
+  assert.match(focusout, /listRendering \|\| skipDraftBlur \|\| noteComposing/);
+  assert.match(focusout, /if \(!goingTo\) return/);
+  assert.match(focusout, /watchDraftCommit/);
+});
+
 test("unwatch flies to the all chip before reloading", () => {
   const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
   const unwatch = html.slice(html.indexOf("if (watched)"), html.indexOf("if (!viewed)"));

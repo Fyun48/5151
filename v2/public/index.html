@@ -978,6 +978,12 @@
     let listCache = [];
     let lastStats = {};
     let listRefreshQueued = false;
+    let noteComposing = false;
+    let noteJustComposed = false;
+    let listRendering = false;
+    let skipDraftBlur = false;
+    let draftCommitTimer = 0;
+    let listLoadGen = 0;
     const MAX_BOXES = 10;
     const MEMBER_MAX_DISTRICTS = 10;
     const MEMBER_MAX_PROFILES = 3;
@@ -1659,11 +1665,11 @@
         } else if (st.dbTotal > 0) {
           msg = "這個搜尋網址還沒對到已存的物件。請按「立即檢查」重新抓取。";
         }
-        $("list").innerHTML = `<div class="empty">${msg}</div>`;
+        replaceListHtml(`<div class="empty">${msg}</div>`);
         updateBulkBar();
         return;
       }
-      $("list").innerHTML = items.map((item) => {
+      replaceListHtml(items.map((item) => {
         const id = String(item.post_id);
         const on = selected.has(id);
         return `
@@ -1690,7 +1696,7 @@
               return `<div class="fees">${fees.bits.map(esc).join(" · ")}${fees.total ? `<br>${esc(fees.total)}` : ""}</div>`;
             })()}
             ${item.watched || draftWatch.has(String(id)) ? `<label class="watch-note-label" for="watch-note-${id}">關注備註</label>
-            <textarea class="watch-note" id="watch-note-${id}" data-watch-note="${id}" data-watch-draft="${draftWatch.has(String(id)) ? "1" : "0"}" maxlength="300" rows="2" placeholder="為什麼關注？按 Enter 或點欄位外即加入特別關注">${esc(noteValueFor(id, item.watch_note || ""))}</textarea>` : ""}
+            <textarea class="watch-note" id="watch-note-${id}" data-watch-note="${id}" data-watch-draft="${draftWatch.has(String(id)) ? "1" : "0"}" maxlength="300" rows="2" placeholder="${draftWatch.has(String(id)) ? "選填。選字不會送出；按「加入」或 Enter 才加入特別關注" : "為什麼關注？"}">${esc(noteValueFor(id, item.watch_note || ""))}</textarea>` : ""}
           </div>
           ${contactBlock(item)}
           <div class="actions">
@@ -1698,7 +1704,7 @@
             ${item.watched
               ? `<button class="primary" data-watched="${id}">取消關注</button>`
               : draftWatch.has(String(id))
-                ? `<button class="ghost" data-watch-draft-cancel="${id}">取消</button>`
+                ? `<button class="primary" data-watch-draft-commit="${id}">加入</button><button class="ghost" data-watch-draft-cancel="${id}">取消</button>`
                 : `<button class="ghost" data-watched="${id}">特別關注</button>`}
             ${matchActionButtons(item, id)}
             ${item.watched || draftWatch.has(String(id)) ? "" : `<label class="hide-box">
@@ -1707,7 +1713,7 @@
             </label>`}
           </div>
         </article>`;
-      }).join("");
+      }).join(""));
       updateBulkBar();
       restoreOpenNotes();
       if (pendingNoteFocus) {
@@ -1722,8 +1728,33 @@
     }
 
     function watchNoteBusy() {
+      if (noteComposing) return true;
       const el = document.activeElement;
       return Boolean(el?.dataset?.watchNote) || draftWatch.size > 0;
+    }
+
+    function cancelDraftCommitTimer() {
+      if (draftCommitTimer) {
+        clearTimeout(draftCommitTimer);
+        draftCommitTimer = 0;
+      }
+    }
+
+    function isWatchDraftField(el) {
+      const id = el?.dataset?.watchNote;
+      return Boolean(id && (el.dataset.watchDraft === "1" || draftWatch.has(String(id))));
+    }
+
+    function replaceListHtml(html) {
+      listRendering = true;
+      skipDraftBlur = true;
+      cancelDraftCommitTimer();
+      try {
+        $("list").innerHTML = html;
+      } finally {
+        listRendering = false;
+        queueMicrotask(() => { skipDraftBlur = false; });
+      }
     }
 
     function flushQueuedListRefresh() {
@@ -1780,6 +1811,8 @@
 
     async function commitWatchDraft(id, note) {
       const key = String(id);
+      if (!draftWatch.has(key)) return;
+      cancelDraftCommitTimer();
       const card = document.querySelector(`[data-card="${key}"]`);
       flyCardToWatchChip(card);
       draftWatch.delete(key);
@@ -1804,12 +1837,19 @@
         listRefreshQueued = true;
         return;
       }
+      const gen = ++listLoadGen;
+      if (!options.force) listRefreshQueued = false;
       const q = $("q").value.trim();
       const districts = [...viewDistricts].map(encodeURIComponent).join(",");
       const res = await fetch(
         `/api/listings?filter=${encodeURIComponent(filter)}&kind=${encodeURIComponent(kind)}&sort=${encodeURIComponent(sort)}&q=${encodeURIComponent(q)}&limit=500&districts=${districts}`,
       );
       const data = await res.json();
+      if (gen !== listLoadGen) return;
+      if (!options.force && watchNoteBusy()) {
+        listRefreshQueued = true;
+        return;
+      }
       renderStats(data.stats);
       renderDistrictChips(settings);
       // 伺服器已依行政區／整層／1F 篩過再排序截取；前端再套一次防呆
@@ -2226,21 +2266,42 @@
         }).catch(() => {});
       }, 400);
     });
+    $("list").addEventListener("compositionstart", (ev) => {
+      if (!ev.target.dataset.watchNote) return;
+      noteComposing = true;
+      cancelDraftCommitTimer();
+    });
+    $("list").addEventListener("compositionend", (ev) => {
+      if (!ev.target.dataset.watchNote) return;
+      noteComposing = false;
+      noteJustComposed = true;
+      const id = ev.target.dataset.watchNote;
+      noteDrafts.set(String(id), {
+        value: ev.target.value,
+        start: ev.target.selectionStart,
+        end: ev.target.selectionEnd,
+        focused: true,
+      });
+      setTimeout(() => { noteJustComposed = false; }, 280);
+    });
     $("list").addEventListener("keydown", (ev) => {
       const id = ev.target.dataset.watchNote;
       if (!id) return;
       if (ev.key === "Escape" && (ev.target.dataset.watchDraft === "1" || draftWatch.has(String(id)))) {
         ev.preventDefault();
+        cancelDraftCommitTimer();
+        skipDraftBlur = true;
         draftWatch.delete(String(id));
         noteDrafts.delete(String(id));
         renderList(listCache, lastStats);
         flushQueuedListRefresh();
         return;
       }
-      if (ev.key !== "Enter" || ev.shiftKey || ev.isComposing || ev.keyCode === 229) return;
+      if (ev.key !== "Enter" || ev.shiftKey || ev.isComposing || ev.keyCode === 229 || noteComposing || noteJustComposed) return;
       if (ev.target.dataset.watchDraft === "1" || draftWatch.has(String(id))) {
         ev.preventDefault();
-        ev.target.blur();
+        cancelDraftCommitTimer();
+        commitWatchDraft(id, ev.target.value).then(flushQueuedListRefresh);
       }
     });
     $("list").addEventListener("focusout", (ev) => {
@@ -2248,10 +2309,22 @@
       if (!id) return;
       const goingTo = ev.relatedTarget;
       if (goingTo?.dataset?.watchDraftCancel === String(id)) return;
+      if (goingTo?.dataset?.watchDraftCommit === String(id)) return;
       clearTimeout(noteTimers[id]);
       const isDraft = ev.target.dataset.watchDraft === "1" || draftWatch.has(String(id));
       if (isDraft) {
-        commitWatchDraft(id, ev.target.value).then(flushQueuedListRefresh);
+        if (listRendering || skipDraftBlur || noteComposing || noteJustComposed) return;
+        if (!goingTo) return;
+        const value = ev.target.value;
+        cancelDraftCommitTimer();
+        draftCommitTimer = setTimeout(() => {
+          draftCommitTimer = 0;
+          if (noteComposing || noteJustComposed || listRendering || skipDraftBlur) return;
+          const ae = document.activeElement;
+          if (isWatchDraftField(ae) && String(ae.dataset.watchNote) === String(id)) return;
+          if (!draftWatch.has(String(id))) return;
+          commitWatchDraft(id, value).then(flushQueuedListRefresh);
+        }, 280);
         return;
       }
       fetch(`/api/listings/${id}/flags`, {
@@ -2326,10 +2399,21 @@
       const draftCancel = ev.target.dataset.watchDraftCancel;
       if (draftCancel) {
         ev.preventDefault();
+        cancelDraftCommitTimer();
+        skipDraftBlur = true;
         draftWatch.delete(String(draftCancel));
         noteDrafts.delete(String(draftCancel));
         renderList(listCache, lastStats);
         flushQueuedListRefresh();
+        return;
+      }
+      const draftCommit = ev.target.dataset.watchDraftCommit;
+      if (draftCommit) {
+        ev.preventDefault();
+        cancelDraftCommitTimer();
+        const ta = document.querySelector(`[data-watch-note="${draftCommit}"]`);
+        const snap = noteDrafts.get(String(draftCommit));
+        commitWatchDraft(draftCommit, ta ? ta.value : (snap?.value || "")).then(flushQueuedListRefresh);
         return;
       }
       if (watched) {
