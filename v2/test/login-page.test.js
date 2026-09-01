@@ -1,0 +1,29 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const dir = path.dirname(fileURLToPath(import.meta.url));
+
+test("login page can register after accepting the disclaimer", () => {
+  const html = readFileSync(path.join(dir, "../public/login.html"), "utf8");
+  assert.match(html, /id="tabRegister"/);
+  assert.match(html, /id="registerForm"/);
+  assert.match(html, /\/api\/register/);
+  assert.match(html, /acceptDisclaimer/);
+  assert.match(html, /disclaimer\.html/);
+  assert.match(html, /這是免費系統/);
+  const blocks = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)];
+  for (const block of blocks) {
+    if (/\bsrc\s*=/i.test(block[1])) continue;
+    assert.doesNotThrow(() => new Function(block[2]));
+  }
+});
+
+test("disclaimer page loads the shared copy", () => {
+  const html = readFileSync(path.join(dir, "../public/disclaimer.html"), "utf8");
+  assert.match(html, /\/api\/disclaimer/);
+  assert.match(html, /免費系統/);
+  assert.match(html, /贊助是自願/);
+});

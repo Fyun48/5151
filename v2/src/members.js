@@ -1,0 +1,109 @@
+/** 會員帳號：註冊、密碼、免責聲明。只接受 db 連線。 */
+import { hashPassword, normalizeEmail, validateEmail, validatePassword, verifyPassword } from "./password.js";
+
+export const DISCLAIMER_VERSION = "2026-09-01";
+
+export const DISCLAIMER_TEXT = `這是免費的個人租屋追蹤工具，用來幫忙看 591 刊登，不是仲介、不是保證、也不是正式服務。
+
+591 上的價格、是否還在、地址與現況可能延遲、缺漏或與現場不符。請以 591 原頁與實際看屋為準。
+
+使用本系統即表示你了解以上限制。贊助是自願的；有沒有贊助都不改變「這是免費系統」。未來若有贊助方案，只會影響檢查間隔或覆蓋範圍，不會變成付費才能用。`;
+
+export function findUserByEmail(conn, email) {
+  const key = normalizeEmail(email);
+  if (!key) return null;
+  return conn.prepare("SELECT * FROM users WHERE email = ?").get(key) || null;
+}
+
+export function getUserById(conn, userId) {
+  const id = Number(userId) || 0;
+  if (!id) return null;
+  return conn.prepare("SELECT * FROM users WHERE id = ?").get(id) || null;
+}
+
+export function listUsers(conn) {
+  return conn.prepare("SELECT id, email, role, plan, created_at, accepted_disclaimer_at, disclaimer_version FROM users ORDER BY id").all();
+}
+
+export function listUserIds(conn) {
+  return conn.prepare("SELECT id FROM users ORDER BY id").all().map((row) => Number(row.id));
+}
+
+export function setUserPassword(conn, userId, password) {
+  const id = Number(userId) || 0;
+  if (!id) return;
+  conn.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(hashPassword(validatePassword(password)), id);
+}
+
+export function publicUser(row) {
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    email: row.email,
+    role: row.role || "member",
+    plan: row.plan || "free",
+  };
+}
+
+export function registerUser(conn, { email, password, acceptDisclaimer } = {}) {
+  if (!acceptDisclaimer) {
+    const err = new Error("請先閱讀並同意免責聲明");
+    err.status = 400;
+    throw err;
+  }
+  const key = validateEmail(email);
+  if (!key) {
+    const err = new Error("請輸入有效的 Email");
+    err.status = 400;
+    throw err;
+  }
+  const pass = validatePassword(password);
+  if (findUserByEmail(conn, key)) {
+    const err = new Error("這個 Email 已經註冊過了");
+    err.status = 409;
+    throw err;
+  }
+  const now = new Date().toISOString();
+  const result = conn.prepare(
+    `INSERT INTO users(email, password_hash, role, plan, created_at, accepted_disclaimer_at, disclaimer_version)
+     VALUES (?, ?, 'member', 'free', ?, ?, ?)`,
+  ).run(key, hashPassword(pass), now, now, DISCLAIMER_VERSION);
+  return getUserById(conn, Number(result.lastInsertRowid));
+}
+
+export function verifyUserPassword(conn, email, password) {
+  const user = findUserByEmail(conn, email);
+  if (!user) return null;
+  if (user.password_hash && verifyPassword(password, user.password_hash)) return user;
+  return null;
+}
+
+export function acceptDisclaimer(conn, userId) {
+  const id = Number(userId) || 0;
+  if (!id) return;
+  const now = new Date().toISOString();
+  conn.prepare(
+    "UPDATE users SET accepted_disclaimer_at = ?, disclaimer_version = ? WHERE id = ?",
+  ).run(now, DISCLAIMER_VERSION, id);
+}
+
+export function bootstrapAdminUser(conn, email, password, { ensureUser } = {}) {
+  const key = normalizeEmail(email);
+  if (!key) return 0;
+  let user = findUserByEmail(conn, key);
+  if (!user && typeof ensureUser === "function") {
+    ensureUser(conn, key, { role: "admin" });
+    user = findUserByEmail(conn, key);
+  }
+  if (!user) return 0;
+  if (user.role !== "admin") {
+    conn.prepare("UPDATE users SET role = 'admin' WHERE id = ?").run(user.id);
+  }
+  if (password && !String(user.password_hash || "").trim()) {
+    conn.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(hashPassword(password), user.id);
+  }
+  if (!user.accepted_disclaimer_at) {
+    acceptDisclaimer(conn, user.id);
+  }
+  return Number(user.id);
+}

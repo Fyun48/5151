@@ -636,7 +636,7 @@
       <div class="row">
         <span class="who" id="who"></span>
         <a class="ghost" id="logoutBtn" href="/logout">登出</a>
-        <a class="ghost" href="/reset.html" title="會刪光物件與設定；無法修復畫面卡住" style="display:inline-flex;align-items:center;text-decoration:none">清除資料</a>
+        <a class="ghost" id="resetLink" href="/reset.html" title="會刪光物件與設定；無法修復畫面卡住" style="display:inline-flex;align-items:center;text-decoration:none">清除資料</a>
         <button class="ghost" id="expandPanelBtn" type="button">展開設定</button>
         <button class="ghost" id="reloadBtn">重新整理</button>
         <button class="primary" id="watchBtn">立即檢查</button>
@@ -1693,6 +1693,7 @@
         return;
       }
       $("who").textContent = me.email || "";
+      if (me.role && me.role !== "admin" && $("resetLink")) $("resetLink").style.display = "none";
       settingsLoaded = false;
       setSettingsReady(false, "正在載入已存設定…完成前請不要按儲存或另存。");
       lastError = "";

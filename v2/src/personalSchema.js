@@ -7,7 +7,9 @@ export function ensurePersonalSchema(db) {
       password_hash TEXT NOT NULL DEFAULT '',
       role TEXT NOT NULL DEFAULT 'member',
       plan TEXT NOT NULL DEFAULT 'free',
-      created_at TEXT NOT NULL
+      created_at TEXT NOT NULL,
+      accepted_disclaimer_at TEXT,
+      disclaimer_version TEXT NOT NULL DEFAULT ''
     );
 
     CREATE TABLE IF NOT EXISTS user_settings (
@@ -49,6 +51,7 @@ export function ensurePersonalSchema(db) {
       type TEXT NOT NULL,
       title TEXT NOT NULL,
       detail TEXT,
+      source_key TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL,
       notified INTEGER NOT NULL DEFAULT 0,
       FOREIGN KEY (user_id) REFERENCES users(id)
@@ -60,4 +63,15 @@ export function ensurePersonalSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_user_events_user ON user_events(user_id, notified);
     CREATE INDEX IF NOT EXISTS idx_crawl_covers_region ON crawl_covers(region_id);
   `);
+  for (const sql of [
+    "ALTER TABLE users ADD COLUMN accepted_disclaimer_at TEXT",
+    "ALTER TABLE users ADD COLUMN disclaimer_version TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE user_events ADD COLUMN source_key TEXT NOT NULL DEFAULT ''",
+  ]) {
+    try {
+      db.exec(sql);
+    } catch {
+      // already migrated
+    }
+  }
 }
