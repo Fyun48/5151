@@ -264,6 +264,9 @@
       background: var(--rose-soft);
       border-color: #e8c4c4;
     }
+    .watch-note[data-watch-draft="1"] {
+      box-shadow: 0 0 0 2px rgba(184, 122, 122, 0.35);
+    }
     .tag.lift { background: #dcfce7; color: #166534; }
     .tag.off { background: #e2e8f0; color: #475569; }
     .tag.off-sure { background: #334155; color: #f8fafc; }
@@ -895,6 +898,10 @@
     let mapExpanded = false;
     let pendingNoteFocus = "";
     const noteTimers = {};
+    const draftWatch = new Set();
+    let listCache = [];
+    let lastStats = {};
+    let listRefreshQueued = false;
     const MAX_BOXES = 10;
     const DOCK_KEY = "591-alert-dock-v1";
 
@@ -1412,6 +1419,8 @@
     }
 
     function renderList(items, st = {}) {
+      listCache = Array.isArray(items) ? items : [];
+      lastStats = st || {};
       updateListMeta(items, st);
       if (!items.length) {
         const q = $("q").value.trim();
@@ -1470,13 +1479,17 @@
               if (!fees.bits.length && !fees.total) return "";
               return `<div class="fees">${fees.bits.map(esc).join(" · ")}${fees.total ? `<br>${esc(fees.total)}` : ""}</div>`;
             })()}
-            ${item.watched ? `<label class="watch-note-label" for="watch-note-${id}">關注備註</label>
-            <textarea class="watch-note" id="watch-note-${id}" data-watch-note="${id}" maxlength="300" rows="2" placeholder="為什麼關注？例如：採光好、可養貓、格局方正">${esc(item.watch_note || "")}</textarea>` : ""}
+            ${item.watched || draftWatch.has(String(id)) ? `<label class="watch-note-label" for="watch-note-${id}">關注備註</label>
+            <textarea class="watch-note" id="watch-note-${id}" data-watch-note="${id}" data-watch-draft="${draftWatch.has(String(id)) ? "1" : "0"}" maxlength="300" rows="2" placeholder="為什麼關注？按 Enter 或點欄位外即加入特別關注">${esc(item.watch_note || "")}</textarea>` : ""}
           </div>
           ${contactBlock(item)}
           <div class="actions">
             <button class="ghost" data-viewed="${id}">${item.viewed ? "取消已瀏覽" : "標記已瀏覽"}</button>
-            <button class="${item.watched ? "primary" : "ghost"}" data-watched="${id}">${item.watched ? "取消關注" : "特別關注"}</button>
+            ${item.watched
+              ? `<button class="primary" data-watched="${id}">取消關注</button>`
+              : draftWatch.has(String(id))
+                ? `<button class="ghost" data-watch-draft-cancel="${id}">取消</button>`
+                : `<button class="ghost" data-watched="${id}">特別關注</button>`}
             ${matchActionButtons(item, id)}
             <label class="hide-box">
               <input type="checkbox" data-hidden="${id}" ${item.hidden ? "checked" : ""} />
@@ -1489,11 +1502,40 @@
       if (pendingNoteFocus) {
         const el = document.querySelector(`[data-watch-note="${pendingNoteFocus}"]`);
         pendingNoteFocus = "";
-        el?.focus();
+        if (el) {
+          el.focus();
+          const len = el.value.length;
+          try { el.setSelectionRange(len, len); } catch { /* 部分瀏覽器略過 */ }
+        }
       }
     }
 
-    async function loadList() {
+    function watchNoteBusy() {
+      const el = document.activeElement;
+      return Boolean(el?.dataset?.watchNote) || draftWatch.size > 0;
+    }
+
+    function flushQueuedListRefresh() {
+      if (!listRefreshQueued || watchNoteBusy()) return;
+      listRefreshQueued = false;
+      loadList({ force: true });
+    }
+
+    async function commitWatchDraft(id, note) {
+      draftWatch.delete(String(id));
+      await fetch(`/api/listings/${id}/flags`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ watched: true, watch_note: note }),
+      });
+      await loadList({ force: true });
+    }
+
+    async function loadList(options = {}) {
+      if (!options.force && watchNoteBusy()) {
+        listRefreshQueued = true;
+        return;
+      }
       const q = $("q").value.trim();
       const districts = [...viewDistricts].map(encodeURIComponent).join(",");
       const res = await fetch(
@@ -1867,7 +1909,7 @@
 
     $("list").addEventListener("input", (ev) => {
       const id = ev.target.dataset.watchNote;
-      if (!id) return;
+      if (!id || ev.target.dataset.watchDraft === "1") return;
       clearTimeout(noteTimers[id]);
       noteTimers[id] = setTimeout(() => {
         fetch(`/api/listings/${id}/flags`, {
@@ -1877,15 +1919,38 @@
         }).catch(() => {});
       }, 400);
     });
+    $("list").addEventListener("keydown", (ev) => {
+      const id = ev.target.dataset.watchNote;
+      if (!id) return;
+      if (ev.key === "Escape" && (ev.target.dataset.watchDraft === "1" || draftWatch.has(String(id)))) {
+        ev.preventDefault();
+        draftWatch.delete(String(id));
+        renderList(listCache, lastStats);
+        flushQueuedListRefresh();
+        return;
+      }
+      if (ev.key !== "Enter" || ev.shiftKey || ev.isComposing || ev.keyCode === 229) return;
+      if (ev.target.dataset.watchDraft === "1" || draftWatch.has(String(id))) {
+        ev.preventDefault();
+        ev.target.blur();
+      }
+    });
     $("list").addEventListener("focusout", (ev) => {
       const id = ev.target.dataset.watchNote;
       if (!id) return;
+      const goingTo = ev.relatedTarget;
+      if (goingTo?.dataset?.watchDraftCancel === String(id)) return;
       clearTimeout(noteTimers[id]);
+      const isDraft = ev.target.dataset.watchDraft === "1" || draftWatch.has(String(id));
+      if (isDraft) {
+        commitWatchDraft(id, ev.target.value).then(flushQueuedListRefresh);
+        return;
+      }
       fetch(`/api/listings/${id}/flags`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ watch_note: ev.target.value }),
-      }).catch(() => {});
+      }).catch(() => {}).finally(flushQueuedListRefresh);
     });
 
     $("list").addEventListener("change", async (ev) => {
@@ -1950,15 +2015,28 @@
         }).then(loadList);
         return;
       }
+      const draftCancel = ev.target.dataset.watchDraftCancel;
+      if (draftCancel) {
+        ev.preventDefault();
+        draftWatch.delete(String(draftCancel));
+        renderList(listCache, lastStats);
+        flushQueuedListRefresh();
+        return;
+      }
       if (watched) {
         const turningOn = ev.target.textContent.includes("特別");
-        pendingNoteFocus = turningOn ? watched : "";
+        if (turningOn) {
+          draftWatch.add(String(watched));
+          pendingNoteFocus = watched;
+          renderList(listCache, lastStats);
+          return;
+        }
         await fetch(`/api/listings/${watched}/flags`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ watched: turningOn }),
+          body: JSON.stringify({ watched: false }),
         });
-        await loadList();
+        await loadList({ force: true });
         return;
       }
       if (!viewed) return;
