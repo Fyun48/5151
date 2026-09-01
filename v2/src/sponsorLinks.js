@@ -53,7 +53,7 @@ export const SPONSOR_PROVIDERS = [
     name: "PayPal.Me",
     label: "PayPal",
     signupUrl: "https://www.paypal.com/paypalme/",
-    memberBlurb: "PayPal／海外卡",
+    memberBlurb: "海外卡",
     feeNote: "免月費；商業收款約 4.4% + 固定費用。",
     hint: "台灣 PayPal 不易收台灣信用卡，也無法台灣帳戶互轉。適合海外用 PayPal 或海外卡的人。",
   },

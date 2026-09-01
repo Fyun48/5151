@@ -58,6 +58,7 @@ test("free members see links; admins and sponsors do not", () => {
   assert.equal(free.show, true);
   assert.equal(free.links.length, 1);
   assert.equal(free.links[0].label, "PayPal");
+  assert.equal(free.links[0].blurb, "海外卡");
   const sponsor = publicSponsorOffer(cfg, { role: "member", plan: "sponsor" });
   assert.equal(sponsor.show, false);
   assert.equal(sponsor.sponsored, true);
