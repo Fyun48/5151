@@ -26,13 +26,17 @@ import {
   sourceHistory,
   stats,
   requestTempPassword,
+  listAdminMembers,
+  adminPatchMember,
+  getAdminMailSettings,
+  saveAdminMailSettings,
 } from "./db.js";
 import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requireAuth, sessionCookie, verifyLogin } from "./auth.js";
 import { boxFromRoadDescription, geocodeAddress, needsListingGeo, hasWorkPoint } from "./geo.js";
 import { rent591Url } from "./openLink.js";
 import { CITIES } from "./regions.js";
 import { DISCLAIMER_TEXT, DISCLAIMER_VERSION } from "./members.js";
-import { mailConfigured } from "./mail.js";
+import { mailConfigured, sendMail } from "./mail.js";
 import { assertHuman, issueCaptcha } from "./captcha.js";
 import { assertCaptchaIssuable, authAttemptKeys, clientIp } from "./rateLimit.js";
 import { backfillListingCoords, backfillListingRoutes, flushPendingNotifications, runWatch } from "./watcher.js";
@@ -181,6 +185,69 @@ app.get("/logout", (req, res) => {
 });
 
 app.use(requireAuth);
+
+function requireAdminApi(req, res, next) {
+  if (actorIsAdmin(req)) return next();
+  res.status(403).json({ error: "只有管理員可以做這個" });
+}
+
+app.get("/admin.html", (req, res, next) => {
+  if (!actorIsAdmin(req)) {
+    res.redirect("/");
+    return;
+  }
+  next();
+});
+
+app.get("/api/admin/members", requireAdminApi, (_req, res) => {
+  const members = listAdminMembers();
+  const payload = { members };
+  if (/password_hash|"password"|scrypt:/.test(JSON.stringify(payload))) {
+    res.status(500).json({ error: "會員列表不得含密碼" });
+    return;
+  }
+  res.json(payload);
+});
+
+app.patch("/api/admin/members/:id", requireAdminApi, (req, res) => {
+  try {
+    const member = adminPatchMember(req.params.id, req.body || {});
+    schedule();
+    res.json({ member });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/admin/mail", requireAdminApi, (_req, res) => {
+  res.json(getAdminMailSettings());
+});
+
+app.put("/api/admin/mail", requireAdminApi, (req, res) => {
+  try {
+    res.json(saveAdminMailSettings(req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/admin/mail/test", requireAdminApi, async (req, res) => {
+  try {
+    const session = readSession(req);
+    const to = String(req.body?.to || session?.email || "").trim();
+    if (!to) throw new Error("請先填收件信箱");
+    if (!mailConfigured()) throw Object.assign(new Error("請先儲存 SMTP 設定"), { status: 400 });
+    await sendMail({
+      to,
+      subject: "591 物件追蹤：測試信",
+      text: "這是後台管理寄出的測試信。若你看得到這封，SMTP 已可用。\n\n——591 物件追蹤\n",
+    });
+    res.json({ ok: true, to });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
 app.use(express.static(path.join(__dirname, "../public")));
 
 let timer = null;

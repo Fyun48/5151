@@ -182,9 +182,18 @@ test("members cannot change interval, pages, or offline days; admins can", () =>
     offlineConfirmDays: 14,
   };
   const memberHydrated = hydrateSettings(stored, defaults);
-  assert.equal(memberHydrated.intervalMinutes, 5);
+  assert.equal(memberHydrated.intervalMinutes, 8);
   assert.equal(memberHydrated.pagesPerWatch, 40);
   assert.equal(memberHydrated.offlineConfirmDays, 7);
+
+  const sponsorHydrated = hydrateSettings(stored, defaults, { plan: "sponsor" });
+  assert.equal(sponsorHydrated.intervalMinutes, 5);
+
+  const overridden = hydrateSettings(
+    { ...stored, intervalMinutes: 3, intervalAdminSet: true },
+    defaults,
+  );
+  assert.equal(overridden.intervalMinutes, 3);
 
   const adminHydrated = hydrateSettings(stored, defaults, { admin: true });
   assert.equal(adminHydrated.intervalMinutes, 2);
@@ -192,19 +201,19 @@ test("members cannot change interval, pages, or offline days; admins can", () =>
   assert.equal(adminHydrated.offlineConfirmDays, 14);
 
   const memberPatched = applySettingPatch(
-    { ...defaults, watchDistricts: ["1-8"], intervalMinutes: 5, pagesPerWatch: 40, offlineConfirmDays: 7 },
+    { ...defaults, watchDistricts: ["1-8"], intervalMinutes: 8, pagesPerWatch: 40, offlineConfirmDays: 7 },
     { intervalMinutes: 30, pagesPerWatch: 8, offlineConfirmDays: 21 },
   );
-  assert.equal(memberPatched.intervalMinutes, 5);
+  assert.equal(memberPatched.intervalMinutes, 8);
   assert.equal(memberPatched.pagesPerWatch, 40);
   assert.equal(memberPatched.offlineConfirmDays, 7);
 
   const adminPatched = applySettingPatch(
     { ...defaults, watchDistricts: ["1-8"], intervalMinutes: 5, pagesPerWatch: 40, offlineConfirmDays: 7 },
-    { intervalMinutes: 30, pagesPerWatch: 8, offlineConfirmDays: 21 },
+    { intervalMinutes: 1, pagesPerWatch: 8, offlineConfirmDays: 21 },
     { admin: true },
   );
-  assert.equal(adminPatched.intervalMinutes, 30);
+  assert.equal(adminPatched.intervalMinutes, 1);
   assert.equal(adminPatched.pagesPerWatch, 8);
   assert.equal(adminPatched.offlineConfirmDays, 21);
 });

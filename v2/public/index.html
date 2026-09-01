@@ -637,6 +637,7 @@
       <div class="row">
         <span class="who" id="who"></span>
         <a class="ghost" id="logoutBtn" href="/logout">登出</a>
+        <a class="ghost admin-only" id="adminLink" href="/admin.html">後台管理</a>
         <a class="ghost" id="resetLink" href="/reset.html" title="會刪光物件與設定；無法修復畫面卡住" style="display:inline-flex;align-items:center;text-decoration:none">清除資料</a>
         <button class="ghost" id="expandPanelBtn" type="button">展開設定</button>
         <button class="ghost" id="reloadBtn">重新整理</button>
@@ -734,9 +735,9 @@
       </details>
       <div class="admin-only">
         <label>檢查間隔（分鐘）</label>
-        <input type="number" id="intervalMinutes" min="2" max="120" />
+        <input type="number" id="intervalMinutes" min="1" max="120" />
       </div>
-      <p class="hint member-only">本系統每5分鐘會重新檢本物件來源比對篩選</p>
+      <p class="hint member-only" id="intervalMemberHint">本系統每8分鐘會重新檢本物件來源比對篩選</p>
       <div class="admin-only">
         <label>確認已下架天數</label>
         <input type="number" id="offlineConfirmDays" min="1" max="30" />
@@ -936,6 +937,7 @@
     const MEMBER_MAX_PROFILES = 3;
     const DOCK_KEY = "591-alert-dock-v1";
     let meIsAdmin = false;
+    let mePlan = "free";
 
     function districtLimit() {
       return meIsAdmin ? 0 : MEMBER_MAX_DISTRICTS;
@@ -1346,6 +1348,11 @@
       $("areaMax").value = s.areaMax || "";
       $("excludeRooftop").checked = s.excludeRooftop !== false;
       $("intervalMinutes").value = s.intervalMinutes;
+      const hint = $("intervalMemberHint");
+      if (hint) {
+        const mins = Math.max(1, Number(s.intervalMinutes) || (mePlan === "sponsor" ? 5 : 8));
+        hint.textContent = `本系統每${mins}分鐘會重新檢本物件來源比對篩選`;
+      }
       $("offlineConfirmDays").value = s.offlineConfirmDays || 7;
       $("pagesPerWatch").value = s.pagesPerWatch;
       $("minBuildingFloors").value = s.minBuildingFloors || 4;
@@ -1750,6 +1757,7 @@
       }
       $("who").textContent = me.email || "";
       meIsAdmin = me.role === "admin";
+      mePlan = me.plan || "free";
       document.body.classList.toggle("role-admin", meIsAdmin);
       if (me.role && me.role !== "admin" && $("resetLink")) $("resetLink").style.display = "none";
       settingsLoaded = false;
@@ -1817,7 +1825,7 @@
         priceMax: Number($("priceMax").value) || 0,
         areaMax: Number($("areaMax").value) || 0,
         excludeRooftop: $("excludeRooftop").checked,
-        intervalMinutes: meIsAdmin ? Number($("intervalMinutes").value) : 5,
+        intervalMinutes: meIsAdmin ? Number($("intervalMinutes").value) : undefined,
         offlineConfirmDays: meIsAdmin ? (Number($("offlineConfirmDays").value) || 7) : 7,
         pagesPerWatch: meIsAdmin ? Number($("pagesPerWatch").value) : 40,
         minBuildingFloors: Number($("minBuildingFloors").value) || 4,

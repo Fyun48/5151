@@ -1,6 +1,7 @@
 import { findUserByEmail, setUserPassword } from "./members.js";
 import { mailConfigured, sendMail } from "./mail.js";
 import { generateTempPassword, validateEmail } from "./password.js";
+import { composeForgotPasswordMail, defaultMailTemplates } from "./siteMail.js";
 
 const recent = new Map();
 const COOLDOWN_MS = 5 * 60 * 1000;
@@ -9,23 +10,8 @@ export function forgotPasswordMessage() {
   return "若此帳號存在，臨時密碼已寄到信箱。請用信裡的密碼登入。";
 }
 
-export function tempPasswordEmail({ tempPassword }) {
-  return {
-    subject: "591 物件追蹤（v2）：你的臨時密碼",
-    text: `你好，
-
-有人用這個信箱申請 591 物件追蹤（v2 開發版）的臨時密碼。
-
-臨時密碼：
-${tempPassword}
-
-請用這組密碼登入。它會取代原本的密碼。若要再換，可到登入頁再申請一次忘記密碼。
-
-若你沒有申請，也請立刻用這組密碼登入，並再申請一組新的臨時密碼。
-
-——591 物件追蹤（v2）
-`,
-  };
+export function tempPasswordEmail({ tempPassword, email } = {}) {
+  return composeForgotPasswordMail(defaultMailTemplates(), { tempPassword, email: email || "" });
 }
 
 export async function requestTempPassword(conn, email, opts = {}) {
@@ -41,6 +27,7 @@ export async function requestTempPassword(conn, email, opts = {}) {
       conn.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(String(hash || ""), Number(id) || 0);
     },
     makePassword = generateTempPassword,
+    compose = tempPasswordEmail,
   } = opts;
 
   const key = validateEmail(email);
@@ -74,7 +61,7 @@ export async function requestTempPassword(conn, email, opts = {}) {
   const previousHash = user.password_hash;
   setPassword(user.id, tempPassword);
   try {
-    const mail = tempPasswordEmail({ tempPassword });
+    const mail = compose({ tempPassword, email: user.email || key });
     await send({
       to: user.email || key,
       subject: mail.subject,

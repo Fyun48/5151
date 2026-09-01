@@ -25,6 +25,14 @@ export function listUsers(conn) {
   return conn.prepare("SELECT id, email, role, plan, created_at, accepted_disclaimer_at, disclaimer_version FROM users ORDER BY id").all();
 }
 
+export function setUserPlan(conn, userId, plan) {
+  const id = Number(userId) || 0;
+  if (!id) return null;
+  const next = plan === "sponsor" ? "sponsor" : "free";
+  conn.prepare("UPDATE users SET plan = ? WHERE id = ?").run(next, id);
+  return publicUser(getUserById(conn, id));
+}
+
 export function listUserIds(conn) {
   return conn.prepare("SELECT id FROM users ORDER BY id").all().map((row) => Number(row.id));
 }

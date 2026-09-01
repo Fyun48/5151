@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { shouldKeepListing, passesAttributeFilters, passesDisplayFilters, listingHasElevator, matchesHousingKind, normalizeListQuery, housingTypeLabel } from "./floors.js";
@@ -8,7 +8,7 @@ import { sameSearch } from "./client591.js";
 import { districtNameFromListing } from "./regions.js";
 import { preferPrimaryListing } from "./match.js";
 import { hasWorkPoint } from "./geo.js";
-import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings, canAddProfile } from "./settingsState.js";
+import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings, canAddProfile, planIntervalMinutes } from "./settingsState.js";
 import { defaultNotifyMatrix } from "./notifyMatrix.js";
 import { DATA_EPOCH, shouldResetForEpoch } from "./dataEpoch.js";
 import { countsTowardAllTotal, isConfirmedOffline, isPendingOffline } from "./offline.js";
@@ -40,10 +40,22 @@ import {
   publicUser,
   registerUser as registerUserOn,
   setUserPassword as setUserPasswordOn,
+  setUserPlan as setUserPlanOn,
   verifyUserPassword as verifyUserPasswordOn,
 } from "./members.js";
 import { requestTempPassword as requestTempPasswordOn } from "./forgotPassword.js";
 import { shouldDockNotify, shouldWebhookNotify, formatNotifyFacts } from "./notify.js";
+import {
+  applySmtpEnv,
+  composeForgotPasswordMail,
+  mergeEnvMap,
+  normalizeMailTemplates,
+  normalizeSmtp,
+  parseEnvFileText,
+  publicSmtp,
+  serializeEnvMap,
+  smtpFromEnv,
+} from "./siteMail.js";
 
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data-v2");
 mkdirSync(DATA_DIR, { recursive: true });
@@ -324,6 +336,119 @@ export function listUsers() {
   return listUsersOn(db);
 }
 
+function settingKey(key) {
+  const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key);
+  if (!row) return undefined;
+  try {
+    return JSON.parse(row.value);
+  } catch {
+    return undefined;
+  }
+}
+
+function writeSettingKey(key, value) {
+  db.prepare(
+    "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+  ).run(key, JSON.stringify(value));
+}
+
+function publicAdminMember(user) {
+  if (!user) return null;
+  const settings = getSettings(user.id);
+  return {
+    id: Number(user.id),
+    email: user.email,
+    role: user.role || "member",
+    plan: user.plan || "free",
+    created_at: user.created_at || "",
+    accepted_disclaimer_at: user.accepted_disclaimer_at || "",
+    intervalMinutes: Number(settings.intervalMinutes) || planIntervalMinutes(user.plan),
+    intervalAdminSet: settings.intervalAdminSet === true,
+  };
+}
+
+export function listAdminMembers() {
+  return listUsersOn(db).map((user) => publicAdminMember(user));
+}
+
+export function adminPatchMember(userId, patch = {}) {
+  const uid = Number(userId) || 0;
+  const user = getUserById(uid);
+  if (!user) {
+    const err = new Error("找不到這位會員");
+    err.status = 404;
+    throw err;
+  }
+  const body = patch && typeof patch === "object" ? patch : {};
+  if (body.plan === "free" || body.plan === "sponsor") {
+    setUserPlanOn(db, uid, body.plan);
+  }
+  const fresh = getUserById(uid);
+  const settingsPatch = {};
+  if (body.intervalMinutes != null && body.intervalMinutes !== "") {
+    settingsPatch.intervalMinutes = Number(body.intervalMinutes);
+    settingsPatch.intervalAdminSet = true;
+  } else if ((body.plan === "free" || body.plan === "sponsor") && fresh?.role !== "admin") {
+    settingsPatch.intervalMinutes = planIntervalMinutes(fresh.plan);
+    settingsPatch.intervalAdminSet = false;
+  }
+  if (Object.keys(settingsPatch).length) {
+    saveSettings(settingsPatch, uid, { forceAdmin: true });
+  }
+  return publicAdminMember(getUserById(uid));
+}
+
+function authEnvPath() {
+  return path.join(DATA_DIR, "auth.env");
+}
+
+function persistSmtpToAuthEnv(config) {
+  const file = authEnvPath();
+  const existing = existsSync(file) ? parseEnvFileText(readFileSync(file, "utf8")) : {};
+  const merged = mergeEnvMap(existing, applySmtpEnv(config));
+  writeFileSync(file, serializeEnvMap(merged), { encoding: "utf8", mode: 0o600 });
+}
+
+export function getMailTemplates() {
+  return normalizeMailTemplates(settingKey("mailTemplates"));
+}
+
+export function getStoredSmtp() {
+  const stored = settingKey("smtp");
+  if (stored && typeof stored === "object" && String(stored.host || "").trim()) {
+    return normalizeSmtp(stored);
+  }
+  return smtpFromEnv();
+}
+
+export function getAdminMailSettings() {
+  const smtp = getStoredSmtp();
+  return {
+    smtp: publicSmtp(smtp),
+    templates: getMailTemplates(),
+    configured: Boolean(smtp.host && (smtp.from || smtp.user)),
+  };
+}
+
+export function saveAdminMailSettings(partial = {}) {
+  const current = getStoredSmtp();
+  const smtp = normalizeSmtp(partial.smtp || {}, current);
+  const templates = normalizeMailTemplates({
+    ...getMailTemplates(),
+    ...(partial.templates && typeof partial.templates === "object" ? partial.templates : {}),
+  });
+  writeSettingKey("smtp", smtp);
+  writeSettingKey("mailTemplates", templates);
+  persistSmtpToAuthEnv(smtp);
+  return getAdminMailSettings();
+}
+
+export function applyStoredSmtp() {
+  const smtp = getStoredSmtp();
+  if (smtp.host) applySmtpEnv(smtp);
+  return smtp;
+}
+
 export function listUserIds() {
   return listUserIdsOn(db);
 }
@@ -340,8 +465,11 @@ export function setUserPassword(userId, password) {
   return setUserPasswordOn(db, userId, password);
 }
 
-export function requestTempPassword(email, opts) {
-  return requestTempPasswordOn(db, email, opts);
+export function requestTempPassword(email, opts = {}) {
+  return requestTempPasswordOn(db, email, {
+    compose: (vars) => composeForgotPasswordMail(getMailTemplates(), vars),
+    ...opts,
+  });
 }
 
 export { publicUser };
@@ -357,7 +485,7 @@ const SITE_SETTING_KEYS = new Set([
 
 const DEFAULTS = {
   searchUrls: [],
-  intervalMinutes: 5,
+  intervalMinutes: 8,
   pagesPerWatch: 40,
   notifyNew: true,
   notifySameSource: true,
@@ -392,29 +520,40 @@ const DEFAULTS = {
   dataEpoch: DATA_EPOCH,
 };
 
+function omitSiteMail(stored) {
+  if (!stored || typeof stored !== "object") return stored;
+  const next = { ...stored };
+  delete next.smtp;
+  delete next.mailTemplates;
+  return next;
+}
+
 export function getSettings(userId) {
   const rows = db.prepare("SELECT key, value FROM settings").all();
-  const global = hydrateSettings(parseSettingRows(rows), DEFAULTS, { admin: true });
+  const global = hydrateSettings(omitSiteMail(parseSettingRows(rows)), DEFAULTS, { admin: true, plan: "free" });
   const uid = Number(userId) || 0;
   if (!uid) return global;
   const userRows = db.prepare("SELECT key, value FROM user_settings WHERE user_id = ?").all(uid);
-  const admin = getUserById(uid)?.role === "admin";
+  const user = getUserById(uid);
+  const admin = user?.role === "admin";
+  const plan = user?.plan || "free";
   if (!userRows.length) {
-    const user = getUserById(uid);
     if (user?.role === "admin") return global;
     return hydrateSettings({
       dataEpoch: global.dataEpoch,
       hasBaseline: global.hasBaseline,
-    }, DEFAULTS, { admin: false });
+    }, DEFAULTS, { admin: false, plan });
   }
-  return hydrateSettings({ ...global, ...parseSettingRows(userRows) }, DEFAULTS, { admin });
+  return hydrateSettings(omitSiteMail({ ...global, ...parseSettingRows(userRows) }), DEFAULTS, { admin, plan });
 }
 
-export function saveSettings(partial, userId) {
+export function saveSettings(partial, userId, { forceAdmin = false } = {}) {
   const uid = userId == null ? defaultUserId() : Number(userId) || defaultUserId();
   const current = getSettings(uid);
-  const admin = getUserById(uid)?.role === "admin";
-  const next = applySettingPatch(current, partial, { admin });
+  const user = getUserById(uid);
+  const admin = forceAdmin || user?.role === "admin";
+  const plan = user?.plan || "free";
+  const next = applySettingPatch(current, partial, { admin, plan });
   const userUpsert = db.prepare(
     "INSERT INTO user_settings(user_id, key, value) VALUES (?, ?, ?) ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value",
   );
@@ -425,6 +564,7 @@ export function saveSettings(partial, userId) {
   try {
     for (const [key, value] of Object.entries(next)) {
       if (value === undefined) continue;
+      if (key === "smtp" || key === "mailTemplates") continue;
       const encoded = JSON.stringify(value);
       if (SITE_SETTING_KEYS.has(key)) globalUpsert.run(key, encoded);
       else userUpsert.run(uid, key, encoded);
@@ -1125,9 +1265,9 @@ export function enqueueListingEvent(listing, event) {
 }
 
 export function crawlIntervalMinutes() {
-  const mins = listUserIds().map((id) => Number(getSettings(id).intervalMinutes) || 5);
-  if (!mins.length) return Math.max(2, Number(getSettings().intervalMinutes) || 5);
-  return Math.max(2, Math.min(...mins));
+  const mins = listUserIds().map((id) => Number(getSettings(id).intervalMinutes) || planIntervalMinutes(getUserById(id)?.plan));
+  if (!mins.length) return Math.max(1, Number(getSettings().intervalMinutes) || 8);
+  return Math.max(1, Math.min(...mins));
 }
 
 export function setFlags(postId, flags, userId) {
@@ -1642,6 +1782,11 @@ try {
   const adminId = bootstrapAdminFromEnv();
   migrateGlobalSettingsToUser(adminId);
   migrateEventsToUser(adminId);
+  try {
+    applyStoredSmtp();
+  } catch (error) {
+    console.warn("套用 SMTP 設定失敗：", error.message);
+  }
   try {
     const imported = importV1CacheIfNeeded(db, { adminUserId: adminId });
     if (imported.imported) {

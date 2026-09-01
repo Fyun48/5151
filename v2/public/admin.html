@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>後台管理 · 591 物件追蹤</title>
+  <style>
+    :root {
+      --bg: #f3f7f9;
+      --paper: #ffffff;
+      --ink: #1a2b33;
+      --muted: #64748b;
+      --line: #e2e8ef;
+      --accent: #0da5a0;
+      --accent-deep: #0a8280;
+      --accent-mist: #f0fbfa;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+      background:
+        radial-gradient(1000px 480px at 0% -5%, rgba(13, 165, 160, 0.07) 0%, transparent 55%),
+        var(--bg);
+      color: var(--ink);
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 16px;
+      flex-wrap: wrap;
+      padding: 20px 32px 14px;
+    }
+    h1 {
+      margin: 0;
+      font-family: "Noto Serif TC", "Source Han Serif TC", serif;
+      font-size: 26px;
+      font-weight: 600;
+    }
+    .sub { color: var(--muted); font-size: 14px; margin-top: 6px; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .wrap { padding: 0 32px 40px; display: grid; gap: 20px; max-width: 1100px; }
+    .card {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      box-shadow: 0 8px 28px rgba(26, 43, 51, 0.05);
+      padding: 20px;
+    }
+    h2 { margin: 0 0 8px; font-size: 18px; }
+    .hint { font-size: 13px; color: var(--muted); line-height: 1.55; margin: 0 0 14px; }
+    label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 6px; }
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font: 14px/1.5 "Noto Sans TC", sans-serif;
+      background: #fff;
+    }
+    textarea { min-height: 140px; resize: vertical; }
+    button, a.ghost, a.primary {
+      border: 0;
+      border-radius: 999px;
+      padding: 9px 14px;
+      cursor: pointer;
+      font: 14px/1 "Noto Sans TC", sans-serif;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+    }
+    .primary { background: var(--accent); color: #fff; }
+    .ghost { background: #fff; color: var(--ink); border: 1px solid var(--line); }
+    button:disabled { opacity: 0.5; cursor: wait; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+    th { color: var(--muted); font-weight: 600; }
+    .member-interval { width: 72px; }
+    .msg { font-size: 13px; color: var(--muted); min-height: 1.4em; margin: 8px 0 0; }
+    .ok { color: var(--accent-deep); }
+    .err { color: #9f6b6b; }
+    .checks { display: flex; align-items: center; gap: 8px; margin: 12px 0; font-size: 14px; }
+    .checks input { width: auto; }
+    .who { font-size: 13px; color: var(--muted); }
+    @media (max-width: 800px) {
+      .grid-2 { grid-template-columns: 1fr; }
+      header, .wrap { padding-left: 16px; padding-right: 16px; }
+      table { font-size: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>後台管理</h1>
+      <div class="sub">會員、寄信 SMTP、信件內容。看不到會員密碼。</div>
+    </div>
+    <div class="row">
+      <span class="who" id="who"></span>
+      <a class="ghost" href="/">回追蹤首頁</a>
+      <a class="ghost" href="/logout">登出</a>
+    </div>
+  </header>
+  <div class="wrap">
+    <section class="card">
+      <h2>會員</h2>
+      <p class="hint">一般會員預設每 8 分鐘檢查；已贊助為 5 分鐘。這裡可改方案，也可手動指定間隔（分鐘）。管理員自己不受最短間隔限制。</p>
+      <p class="msg" id="memberMsg">載入中…</p>
+      <div style="overflow:auto">
+        <table>
+          <thead>
+            <tr>
+              <th>Email</th>
+              <th>身份</th>
+              <th>方案</th>
+              <th>間隔（分）</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="memberRows"></tbody>
+        </table>
+      </div>
+    </section>
+    <section class="card">
+      <h2>寄信 SMTP</h2>
+      <p class="hint">忘記密碼與之後的物件通知信都走這裡。密碼只在你新填時才更新，畫面上不會回傳已存密碼。</p>
+      <form id="smtpForm">
+        <div class="grid-2">
+          <div>
+            <label>SMTP 主機</label>
+            <input id="smtpHost" placeholder="smtp.gmail.com" autocomplete="off" />
+          </div>
+          <div>
+            <label>連接埠</label>
+            <input id="smtpPort" type="number" min="1" max="65535" placeholder="587" />
+          </div>
+          <div>
+            <label>帳號</label>
+            <input id="smtpUser" autocomplete="off" />
+          </div>
+          <div>
+            <label>密碼</label>
+            <input id="smtpPass" type="password" autocomplete="new-password" placeholder="已設定則可留白" />
+          </div>
+          <div>
+            <label>寄件 Email</label>
+            <input id="smtpFrom" placeholder="noreply@example.com" />
+          </div>
+          <div>
+            <label>寄件名稱</label>
+            <input id="smtpFromName" placeholder="591 物件追蹤" />
+          </div>
+        </div>
+        <label class="checks"><input type="checkbox" id="smtpSecure" /> 使用 TLS／SMTPS（465 會自動勾）</label>
+        <div class="row">
+          <button type="submit" class="primary" id="smtpSave">儲存 SMTP</button>
+          <button type="button" class="ghost" id="smtpTest">寄測試信到我的信箱</button>
+        </div>
+        <p class="msg" id="smtpMsg"></p>
+      </form>
+    </section>
+    <section class="card">
+      <h2>信件內容</h2>
+      <p class="hint">可用代碼：忘記密碼 <code>{{tempPassword}}</code>、<code>{{email}}</code>；物件通知 <code>{{event}}</code>、<code>{{title}}</code>、<code>{{price}}</code>、<code>{{facts}}</code>、<code>{{url}}</code>。</p>
+      <form id="tplForm">
+        <label>忘記密碼主旨</label>
+        <input id="forgotSubject" />
+        <label>忘記密碼本文</label>
+        <textarea id="forgotText"></textarea>
+        <label>物件通知主旨</label>
+        <input id="notifySubject" />
+        <label>物件通知本文</label>
+        <textarea id="notifyText"></textarea>
+        <div class="row" style="margin-top:14px">
+          <button type="submit" class="primary" id="tplSave">儲存信件內容</button>
+        </div>
+        <p class="msg" id="tplMsg"></p>
+      </form>
+    </section>
+  </div>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let meEmail = "";
+
+    function setMsg(id, text, ok) {
+      const el = $(id);
+      el.textContent = text || "";
+      el.className = "msg " + (ok ? "ok" : text ? "err" : "");
+    }
+
+    async function readApi(res) {
+      const text = await res.text();
+      try { return JSON.parse(text); } catch { return { error: text || res.statusText }; }
+    }
+
+    function roleLabel(role) {
+      return role === "admin" ? "管理員" : "會員";
+    }
+
+    function renderMembers(members) {
+      $("memberRows").innerHTML = (members || []).map((m) => `
+        <tr data-id="${m.id}" data-role="${escapeHtml(m.role)}">
+          <td>${escapeHtml(m.email)}</td>
+          <td>${roleLabel(m.role)}</td>
+          <td>
+            <select data-plan ${m.role === "admin" ? "disabled" : ""}>
+              <option value="free" ${m.plan !== "sponsor" ? "selected" : ""}>一般</option>
+              <option value="sponsor" ${m.plan === "sponsor" ? "selected" : ""}>已贊助</option>
+            </select>
+          </td>
+          <td><input class="member-interval" data-interval type="number" min="1" max="120" value="${Number(m.intervalMinutes) || 8}" /></td>
+          <td><button type="button" class="primary" data-save>儲存</button></td>
+        </tr>
+      `).join("");
+      const blob = JSON.stringify(members || []);
+      if (/password/i.test(blob) && /scrypt:/.test(blob)) {
+        setMsg("memberMsg", "會員資料含密碼欄，已擋下。", false);
+        $("memberRows").innerHTML = "";
+        return;
+      }
+      setMsg("memberMsg", `共 ${members.length} 位`, true);
+    }
+
+    function escapeHtml(value) {
+      return String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    async function loadMembers() {
+      const res = await fetch("/api/admin/members", { cache: "no-store" });
+      const data = await readApi(res);
+      if (res.status === 401) { location.replace("/login.html"); return; }
+      if (res.status === 403) { location.replace("/"); return; }
+      if (!res.ok) throw new Error(data.error || "載入會員失敗");
+      renderMembers(data.members || []);
+    }
+
+    function fillMail(data) {
+      const smtp = data.smtp || {};
+      $("smtpHost").value = smtp.host || "";
+      $("smtpPort").value = smtp.port || 587;
+      $("smtpUser").value = smtp.user || "";
+      $("smtpPass").value = "";
+      $("smtpPass").placeholder = smtp.passSet ? "已設定，空白則保留" : "SMTP 密碼";
+      $("smtpFrom").value = smtp.from || "";
+      $("smtpFromName").value = smtp.fromName || "591 物件追蹤";
+      $("smtpSecure").checked = Boolean(smtp.secure);
+      const tpl = data.templates || {};
+      $("forgotSubject").value = tpl.forgot_password?.subject || "";
+      $("forgotText").value = tpl.forgot_password?.text || "";
+      $("notifySubject").value = tpl.listing_notify?.subject || "";
+      $("notifyText").value = tpl.listing_notify?.text || "";
+    }
+
+    async function loadMail() {
+      const res = await fetch("/api/admin/mail", { cache: "no-store" });
+      const data = await readApi(res);
+      if (!res.ok) throw new Error(data.error || "載入寄信設定失敗");
+      fillMail(data);
+    }
+
+    $("memberRows").addEventListener("change", (ev) => {
+      const plan = ev.target.closest("[data-plan]");
+      if (!plan) return;
+      const tr = plan.closest("tr");
+      if (tr?.dataset.role === "admin") return;
+      const interval = tr.querySelector("[data-interval]");
+      if (interval) interval.value = plan.value === "sponsor" ? 5 : 8;
+    });
+
+    $("memberRows").addEventListener("click", async (ev) => {
+      const btn = ev.target.closest("[data-save]");
+      if (!btn) return;
+      const tr = btn.closest("tr");
+      const id = tr?.dataset.id;
+      if (!id) return;
+      btn.disabled = true;
+      setMsg("memberMsg", "儲存中…");
+      try {
+        const res = await fetch(`/api/admin/members/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            plan: tr.querySelector("[data-plan]").value,
+            intervalMinutes: Number(tr.querySelector("[data-interval]").value),
+          }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "儲存失敗");
+        await loadMembers();
+        setMsg("memberMsg", "已儲存", true);
+      } catch (error) {
+        setMsg("memberMsg", error.message);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    $("smtpForm").onsubmit = async (ev) => {
+      ev.preventDefault();
+      $("smtpSave").disabled = true;
+      setMsg("smtpMsg", "儲存中…");
+      try {
+        const res = await fetch("/api/admin/mail", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            smtp: {
+              host: $("smtpHost").value.trim(),
+              port: Number($("smtpPort").value) || 587,
+              user: $("smtpUser").value.trim(),
+              pass: $("smtpPass").value,
+              from: $("smtpFrom").value.trim(),
+              fromName: $("smtpFromName").value.trim(),
+              secure: $("smtpSecure").checked,
+            },
+          }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "儲存失敗");
+        fillMail(data);
+        setMsg("smtpMsg", data.configured ? "SMTP 已儲存" : "已儲存，但主機或寄件地址還不完整", true);
+      } catch (error) {
+        setMsg("smtpMsg", error.message);
+      } finally {
+        $("smtpSave").disabled = false;
+      }
+    };
+
+    $("smtpTest").onclick = async () => {
+      $("smtpTest").disabled = true;
+      setMsg("smtpMsg", "寄送中…");
+      try {
+        const res = await fetch("/api/admin/mail/test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ to: meEmail }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "寄送失敗");
+        setMsg("smtpMsg", `測試信已寄到 ${data.to}`, true);
+      } catch (error) {
+        setMsg("smtpMsg", error.message);
+      } finally {
+        $("smtpTest").disabled = false;
+      }
+    };
+
+    $("tplForm").onsubmit = async (ev) => {
+      ev.preventDefault();
+      $("tplSave").disabled = true;
+      setMsg("tplMsg", "儲存中…");
+      try {
+        const res = await fetch("/api/admin/mail", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            templates: {
+              forgot_password: { subject: $("forgotSubject").value, text: $("forgotText").value },
+              listing_notify: { subject: $("notifySubject").value, text: $("notifyText").value },
+            },
+          }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "儲存失敗");
+        fillMail(data);
+        setMsg("tplMsg", "信件內容已儲存", true);
+      } catch (error) {
+        setMsg("tplMsg", error.message);
+      } finally {
+        $("tplSave").disabled = false;
+      }
+    };
+
+    (async () => {
+      const meRes = await fetch("/api/me", { cache: "no-store" });
+      const me = await readApi(meRes);
+      if (!me.ok) { location.replace("/login.html"); return; }
+      if (me.role !== "admin") { location.replace("/"); return; }
+      meEmail = me.email || "";
+      $("who").textContent = meEmail;
+      await Promise.all([loadMembers(), loadMail()]);
+    })().catch((error) => {
+      setMsg("memberMsg", error.message || "載入失敗");
+    });
+  </script>
+</body>
+</html>

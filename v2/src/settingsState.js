@@ -5,7 +5,9 @@ import { normalizeNotifyMatrix } from "./notifyMatrix.js";
 export const MEMBER_MAX_PROFILE_DISTRICTS = 10;
 export const MEMBER_MAX_PROFILES = 3;
 export const ADMIN_MAX_PROFILES = 30;
-export const MEMBER_INTERVAL_MINUTES = 5;
+export const MEMBER_INTERVAL_MINUTES = 8;
+export const SPONSOR_INTERVAL_MINUTES = 5;
+export const ADMIN_MIN_INTERVAL_MINUTES = 1;
 export const MEMBER_OFFLINE_CONFIRM_DAYS = 7;
 export const MEMBER_PAGES_PER_WATCH = 40;
 
@@ -81,11 +83,33 @@ export function limitWatchDistricts(districts, { admin = false } = {}) {
   return list.slice(0, MEMBER_MAX_PROFILE_DISTRICTS);
 }
 
-export function applyMemberScheduleLocks(settings, { admin = false } = {}) {
-  if (admin || !settings) return settings;
-  settings.intervalMinutes = MEMBER_INTERVAL_MINUTES;
+export function planIntervalMinutes(plan) {
+  return plan === "sponsor" ? SPONSOR_INTERVAL_MINUTES : MEMBER_INTERVAL_MINUTES;
+}
+
+export function clampIntervalMinutes(value, { admin = false, fallback = MEMBER_INTERVAL_MINUTES } = {}) {
+  const raw = Math.round(Number(value));
+  const next = Number.isFinite(raw) && raw > 0 ? raw : fallback;
+  const min = admin ? ADMIN_MIN_INTERVAL_MINUTES : 1;
+  return Math.max(min, Math.min(next, 120));
+}
+
+export function applyMemberScheduleLocks(settings, { admin = false, plan = "free" } = {}) {
+  if (!settings) return settings;
+  if (admin) {
+    settings.intervalMinutes = clampIntervalMinutes(settings.intervalMinutes, { admin: true, fallback: 5 });
+    return settings;
+  }
   settings.offlineConfirmDays = MEMBER_OFFLINE_CONFIRM_DAYS;
   settings.pagesPerWatch = MEMBER_PAGES_PER_WATCH;
+  settings.intervalAdminSet = settings.intervalAdminSet === true;
+  if (settings.intervalAdminSet) {
+    settings.intervalMinutes = clampIntervalMinutes(settings.intervalMinutes, {
+      fallback: planIntervalMinutes(plan),
+    });
+  } else {
+    settings.intervalMinutes = planIntervalMinutes(plan);
+  }
   return settings;
 }
 
@@ -95,11 +119,12 @@ export function snapshotSettings(settings) {
   return out;
 }
 
-export function hydrateSettings(stored, defaults, { admin = false } = {}) {
+export function hydrateSettings(stored, defaults, { admin = false, plan = "free" } = {}) {
   const source = stored && typeof stored === "object" ? stored : {};
   const next = { ...defaults, ...source };
   if (Number(next.pagesPerWatch) <= 5) next.pagesPerWatch = 40;
-  applyMemberScheduleLocks(next, { admin });
+  next.intervalAdminSet = source.intervalAdminSet === true;
+  applyMemberScheduleLocks(next, { admin, plan });
   if (!Array.isArray(source.watchDistricts) || !source.watchDistricts.length) {
     next.watchDistricts = districtsFromSearchUrls(next.searchUrls);
   } else {
@@ -130,7 +155,7 @@ export function hydrateSettings(stored, defaults, { admin = false } = {}) {
   return next;
 }
 
-export function applySettingPatch(current, partial = {}, { admin = false } = {}) {
+export function applySettingPatch(current, partial = {}, { admin = false, plan = "free" } = {}) {
   const patch = partial && typeof partial === "object" ? partial : {};
   const next = { ...current, ...patch };
   if (!Object.prototype.hasOwnProperty.call(patch, "settingProfiles")) {
@@ -139,11 +164,19 @@ export function applySettingPatch(current, partial = {}, { admin = false } = {})
   if (!Object.prototype.hasOwnProperty.call(patch, "activeProfileId")) {
     next.activeProfileId = current.activeProfileId;
   }
+  if (!admin) {
+    next.intervalMinutes = current.intervalMinutes;
+    next.intervalAdminSet = current.intervalAdminSet === true;
+  } else if (Object.prototype.hasOwnProperty.call(patch, "intervalAdminSet")) {
+    next.intervalAdminSet = patch.intervalAdminSet === true;
+  } else {
+    next.intervalAdminSet = current.intervalAdminSet === true;
+  }
   next.excludeKeywords = normalizeKeywords(next.excludeKeywords);
   next.excludeAgents = normalizeKeywords(next.excludeAgents);
   next.excludeAgentIds = [...new Set((next.excludeAgentIds || []).map(Number).filter((id) => id > 0))].slice(0, 80);
   next.excludeBoxes = normalizeBoxes(next.excludeBoxes);
-  next.intervalMinutes = Math.max(2, Math.min(Math.round(Number(next.intervalMinutes) || 5), 120));
+  next.intervalMinutes = clampIntervalMinutes(next.intervalMinutes, { admin, fallback: planIntervalMinutes(plan) });
   next.pagesPerWatch = Math.max(1, Math.min(Number(next.pagesPerWatch) || 40, 40));
   next.commuteKm = Math.max(0, Math.min(Number(next.commuteKm) || 0, 80));
   next.workAddress = String(next.workAddress || "").trim().slice(0, 120);
@@ -154,7 +187,7 @@ export function applySettingPatch(current, partial = {}, { admin = false } = {})
   next.priceMax = Math.max(0, Number(next.priceMax) || 0);
   next.areaMax = Math.max(0, Math.min(Number(next.areaMax) || 0, 500));
   next.offlineConfirmDays = Math.max(1, Math.min(Math.round(Number(next.offlineConfirmDays) || 7), 30));
-  applyMemberScheduleLocks(next, { admin });
+  applyMemberScheduleLocks(next, { admin, plan });
   next.excludeRooftop = next.excludeRooftop !== false;
   next.wholeFloorOnly = next.wholeFloorOnly !== false;
   next.excludeLowFloors = next.excludeLowFloors !== false;
