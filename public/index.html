@@ -279,15 +279,14 @@
       overflow: hidden;
       margin: 0;
       border-radius: 20px;
-      box-shadow: 0 12px 32px rgba(26, 43, 51, 0.16);
+      background: var(--paper);
+      box-shadow: 0 12px 32px rgba(26, 43, 51, 0.2);
       transform-origin: center center;
       will-change: transform, opacity;
+      z-index: 12001;
     }
     .chip.watch-fly-hit {
       box-shadow: 0 0 0 4px rgba(184, 122, 122, 0.4);
-    }
-    @media (prefers-reduced-motion: reduce) {
-      .watch-fly-ghost { display: none; }
     }
     .tag.lift { background: #dcfce7; color: #166534; }
     .tag.off { background: #e2e8f0; color: #475569; }
@@ -921,6 +920,7 @@
     let pendingNoteFocus = "";
     const noteTimers = {};
     const draftWatch = new Set();
+    const noteDrafts = new Map();
     let listCache = [];
     let lastStats = {};
     let listRefreshQueued = false;
@@ -1440,7 +1440,37 @@
       el.textContent = "";
     }
 
+    function captureOpenNotes() {
+      document.querySelectorAll("[data-watch-note]").forEach((el) => {
+        const id = String(el.dataset.watchNote);
+        noteDrafts.set(id, {
+          value: el.value,
+          start: el.selectionStart,
+          end: el.selectionEnd,
+          focused: document.activeElement === el,
+        });
+      });
+    }
+
+    function noteValueFor(id, fallback) {
+      const snap = noteDrafts.get(String(id));
+      return snap ? snap.value : fallback;
+    }
+
+    function restoreOpenNotes() {
+      for (const [id, snap] of noteDrafts) {
+        const el = document.querySelector(`[data-watch-note="${id}"]`);
+        if (!el) continue;
+        el.value = snap.value;
+        if (snap.focused) {
+          el.focus();
+          try { el.setSelectionRange(snap.start ?? snap.value.length, snap.end ?? snap.value.length); } catch { /* 略過 */ }
+        }
+      }
+    }
+
     function renderList(items, st = {}) {
+      captureOpenNotes();
       listCache = Array.isArray(items) ? items : [];
       lastStats = st || {};
       updateListMeta(items, st);
@@ -1502,7 +1532,7 @@
               return `<div class="fees">${fees.bits.map(esc).join(" · ")}${fees.total ? `<br>${esc(fees.total)}` : ""}</div>`;
             })()}
             ${item.watched || draftWatch.has(String(id)) ? `<label class="watch-note-label" for="watch-note-${id}">關注備註</label>
-            <textarea class="watch-note" id="watch-note-${id}" data-watch-note="${id}" data-watch-draft="${draftWatch.has(String(id)) ? "1" : "0"}" maxlength="300" rows="2" placeholder="為什麼關注？按 Enter 或點欄位外即加入特別關注">${esc(item.watch_note || "")}</textarea>` : ""}
+            <textarea class="watch-note" id="watch-note-${id}" data-watch-note="${id}" data-watch-draft="${draftWatch.has(String(id)) ? "1" : "0"}" maxlength="300" rows="2" placeholder="為什麼關注？按 Enter 或點欄位外即加入特別關注">${esc(noteValueFor(id, item.watch_note || ""))}</textarea>` : ""}
           </div>
           ${contactBlock(item)}
           <div class="actions">
@@ -1513,14 +1543,15 @@
                 ? `<button class="ghost" data-watch-draft-cancel="${id}">取消</button>`
                 : `<button class="ghost" data-watched="${id}">特別關注</button>`}
             ${matchActionButtons(item, id)}
-            <label class="hide-box">
+            ${item.watched || draftWatch.has(String(id)) ? "" : `<label class="hide-box">
               <input type="checkbox" data-hidden="${id}" ${item.hidden ? "checked" : ""} />
               不再顯示
-            </label>
+            </label>`}
           </div>
         </article>`;
       }).join("");
       updateBulkBar();
+      restoreOpenNotes();
       if (pendingNoteFocus) {
         const el = document.querySelector(`[data-watch-note="${pendingNoteFocus}"]`);
         pendingNoteFocus = "";
@@ -1544,10 +1575,13 @@
     }
 
     function flyCardToWatchChip(card) {
-      if (!card || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
       const chip = document.querySelector("[data-filter=\"watched\"]");
       const layer = $("watchFlyLayer");
-      if (!chip || !layer) return;
+      if (chip) {
+        chip.classList.add("watch-fly-hit");
+        window.setTimeout(() => chip.classList.remove("watch-fly-hit"), 500);
+      }
+      if (!card || !chip || !layer) return;
       const from = card.getBoundingClientRect();
       const to = chip.getBoundingClientRect();
       if (from.width < 8 || from.height < 8) return;
@@ -1562,30 +1596,40 @@
       ghost.style.top = `${from.top}px`;
       ghost.style.width = `${from.width}px`;
       ghost.style.height = `${from.height}px`;
+      ghost.style.transform = "translate(0, 0) scale(1)";
+      ghost.style.opacity = "1";
       layer.appendChild(ghost);
       const dx = to.left + to.width / 2 - (from.left + from.width / 2);
       const dy = to.top + to.height / 2 - (from.top + from.height / 2);
-      const scale = Math.max(0.08, Math.min(to.width / from.width, 0.16));
+      const scale = Math.max(0.1, Math.min(to.width / from.width, 0.18));
       requestAnimationFrame(() => {
-        ghost.style.transition = "transform 1.2s cubic-bezier(.22,.82,.28,1), opacity 1.2s ease";
-        ghost.style.transform = `translate(${dx}px, ${dy}px) scale(${scale})`;
-        ghost.style.opacity = "0.12";
+        requestAnimationFrame(() => {
+          ghost.style.transition = "transform 1.15s cubic-bezier(.22,.82,.28,1), opacity 1.15s ease";
+          ghost.style.transform = `translate(${dx}px, ${dy}px) scale(${scale})`;
+          ghost.style.opacity = "0.25";
+        });
       });
-      window.setTimeout(() => {
-        ghost.remove();
-        chip.classList.add("watch-fly-hit");
-        window.setTimeout(() => chip.classList.remove("watch-fly-hit"), 400);
-      }, 1250);
+      window.setTimeout(() => ghost.remove(), 1300);
     }
 
     async function commitWatchDraft(id, note) {
-      flyCardToWatchChip(document.querySelector(`[data-card="${id}"]`));
-      draftWatch.delete(String(id));
+      const key = String(id);
+      const card = document.querySelector(`[data-card="${key}"]`);
+      flyCardToWatchChip(card);
+      draftWatch.delete(key);
+      noteDrafts.delete(key);
+      if (card) card.style.visibility = "hidden";
       await fetch(`/api/listings/${id}/flags`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ watched: true, watch_note: note }),
       });
+      if (watchNoteBusy()) {
+        listRefreshQueued = true;
+        listCache = listCache.filter((item) => String(item.post_id) !== key);
+        renderList(listCache, lastStats);
+        return;
+      }
       await loadList({ force: true });
     }
 
@@ -1967,7 +2011,14 @@
 
     $("list").addEventListener("input", (ev) => {
       const id = ev.target.dataset.watchNote;
-      if (!id || ev.target.dataset.watchDraft === "1") return;
+      if (!id) return;
+      noteDrafts.set(String(id), {
+        value: ev.target.value,
+        start: ev.target.selectionStart,
+        end: ev.target.selectionEnd,
+        focused: true,
+      });
+      if (ev.target.dataset.watchDraft === "1") return;
       clearTimeout(noteTimers[id]);
       noteTimers[id] = setTimeout(() => {
         fetch(`/api/listings/${id}/flags`, {
@@ -1983,6 +2034,7 @@
       if (ev.key === "Escape" && (ev.target.dataset.watchDraft === "1" || draftWatch.has(String(id)))) {
         ev.preventDefault();
         draftWatch.delete(String(id));
+        noteDrafts.delete(String(id));
         renderList(listCache, lastStats);
         flushQueuedListRefresh();
         return;
@@ -2077,6 +2129,7 @@
       if (draftCancel) {
         ev.preventDefault();
         draftWatch.delete(String(draftCancel));
+        noteDrafts.delete(String(draftCancel));
         renderList(listCache, lastStats);
         flushQueuedListRefresh();
         return;
