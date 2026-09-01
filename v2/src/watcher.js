@@ -18,6 +18,7 @@ import {
   restoreListingOnline,
   pendingNotifyEvents,
   eventPayloadFromListing,
+  db,
   saveSettings,
   setCachedRoute,
   setCommunityCache,
@@ -27,6 +28,8 @@ import {
   touchListingChecked,
   upsertListing,
 } from "./db.js";
+import { coveringJobsFromSettings } from "./covering.js";
+import { replaceCrawlCovers, touchCrawlCoversRun } from "./crawlCovers.js";
 import { fetchCommunityLocation, fetchListingDetail, fetchListings, isListingGoneError, LIST_PAGE_SIZE, mergeFeeRows, probeListingAlive } from "./client591.js";
 import { needsListingGeo, hasWorkPoint } from "./geo.js";
 import { isTrustedGeoSource, listingCommunityId } from "./location.js";
@@ -295,10 +298,11 @@ async function sweepOfflineListings(seenIds, { limit = 20 } = {}) {
 
 export async function runWatch(options = {}) {
   const settings = getSettings();
-  const urls = (settings.searchUrls || []).map((url) => String(url).trim()).filter(Boolean);
-  if (!urls.length) {
+  const jobs = coveringJobsFromSettings(settings);
+  if (!jobs.length) {
     throw new Error("請先貼上至少一組 591 搜尋網址");
   }
+  replaceCrawlCovers(db, jobs);
 
   const isBaseline = settings.hasBaseline !== true && listingCount() === 0;
   const requested = Number(settings.pagesPerWatch);
@@ -316,15 +320,15 @@ export async function runWatch(options = {}) {
     workLng: settings.workLng,
   };
 
-  for (const url of urls) {
+  for (const job of jobs) {
     try {
-      const result = await fetchListings(url, pages, fetchOptions);
+      const result = await fetchListings(job.searchUrl, pages, fetchOptions);
       collected.push(result);
       if (result.total > 0 && result.listings.length === 0) {
         errors.push(`${result.parsed.label}：591 有 ${result.total} 筆，但都被目前篩選排除了`);
       }
     } catch (error) {
-      errors.push(`${url} → ${error.message}`);
+      errors.push(`${job.searchUrl} → ${error.message}`);
     }
   }
 
@@ -428,11 +432,19 @@ export async function runWatch(options = {}) {
   if (settings.hasBaseline !== true) {
     saveSettings({ hasBaseline: true });
   }
+  touchCrawlCoversRun(db);
 
   return {
     baseline: isBaseline,
     fetched: seen.size,
     searches: searchReports,
+    covers: jobs.map((job) => ({
+      regionId: job.regionId,
+      sectionIds: job.sectionIds,
+      priceMin: job.priceMin,
+      priceMax: job.priceMax,
+      href: job.searchUrl,
+    })),
     events,
     errors,
     offline: offlineSweep,

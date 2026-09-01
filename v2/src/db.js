@@ -13,6 +13,8 @@ import { defaultNotifyMatrix } from "./notifyMatrix.js";
 import { DATA_EPOCH, shouldResetForEpoch } from "./dataEpoch.js";
 import { nextWatchNote } from "./watchFlags.js";
 import { countsTowardAllTotal, isConfirmedOffline, isPendingOffline } from "./offline.js";
+import { coveringJobsFromMembers } from "./covering.js";
+import { listCrawlCovers } from "./crawlCovers.js";
 import { ensurePersonalSchema } from "./personalSchema.js";
 
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data-v2");
@@ -478,7 +480,12 @@ export function confirmSuspectedMatch(postId) {
 }
 
 export function currentSearchKeys() {
-  return (getSettings().searchUrls || []).map((url) => String(url).trim()).filter(Boolean);
+  const settings = getSettings();
+  const urls = (settings.searchUrls || []).map((url) => String(url).trim()).filter(Boolean);
+  const coverUrls = coveringJobsFromMembers(listCrawlCovers(db), {
+    excludeRooftop: settings.excludeRooftop !== false,
+  }).map((job) => job.searchUrl);
+  return [...new Set([...urls, ...coverUrls].filter(Boolean))];
 }
 
 function expandSearchKeys(keys) {
