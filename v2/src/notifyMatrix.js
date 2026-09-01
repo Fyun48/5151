@@ -1,4 +1,6 @@
-/** 站內／Webhook 可獨立勾選的事件列（與設定頁表格列序一致）。 */
+/** 站內／Webhook／郵件可獨立勾選的事件列（與設定頁表格列序一致）。 */
+export const NOTIFY_CHANNELS = ["dock", "webhook", "mail"];
+
 export const NOTIFY_MATRIX_ROWS = [
   { key: "new", label: "全新物件" },
   { key: "same_source", label: "同屋源重刊" },
@@ -12,7 +14,7 @@ export const NOTIFY_MATRIX_ROWS = [
 export function defaultNotifyMatrix() {
   const out = {};
   for (const row of NOTIFY_MATRIX_ROWS) {
-    out[row.key] = { dock: true, webhook: true };
+    out[row.key] = { dock: true, webhook: true, mail: true };
   }
   return out;
 }
@@ -55,6 +57,7 @@ export function normalizeNotifyMatrix(settings = {}) {
     next[row.key] = {
       dock: cellOn(cell.dock, true),
       webhook: cellOn(cell.webhook, true),
+      mail: cellOn(cell.mail, true),
     };
   }
   return next;
@@ -62,7 +65,7 @@ export function normalizeNotifyMatrix(settings = {}) {
 
 export function notifyChannelOn(settings, channel, eventType) {
   const key = eventMatrixKey(eventType);
-  if (!key || (channel !== "dock" && channel !== "webhook")) return false;
+  if (!key || !NOTIFY_CHANNELS.includes(channel)) return false;
   const matrix = settings?.notifyMatrix && typeof settings.notifyMatrix === "object"
     ? settings.notifyMatrix
     : normalizeNotifyMatrix(settings);

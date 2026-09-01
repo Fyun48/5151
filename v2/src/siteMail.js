@@ -191,3 +191,20 @@ export function composeForgotPasswordMail(templates, vars) {
   }
   return rendered;
 }
+
+export function composeListingNotifyMail(templates, items) {
+  const defaults = defaultMailTemplates().listing_notify;
+  const tpl = templates?.listing_notify || defaults;
+  const list = Array.isArray(items) ? items.filter((row) => row && typeof row === "object") : [];
+  if (!list.length) return { subject: "", text: "" };
+  const rendered = list.map((vars) => {
+    const row = renderMailTemplate(tpl, vars);
+    if (!row.subject && !String(row.text || "").trim()) return renderMailTemplate(defaults, vars);
+    return row;
+  });
+  if (rendered.length === 1) return rendered[0];
+  return {
+    subject: `591 物件追蹤：${rendered.length} 則更新`.slice(0, 180),
+    text: rendered.map((row) => [row.subject, row.text].filter(Boolean).join("\n\n")).join("\n\n----------\n\n"),
+  };
+}

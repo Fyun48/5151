@@ -44,7 +44,7 @@ import {
   verifyUserPassword as verifyUserPasswordOn,
 } from "./members.js";
 import { requestTempPassword as requestTempPasswordOn } from "./forgotPassword.js";
-import { shouldDockNotify, shouldWebhookNotify, formatNotifyFacts } from "./notify.js";
+import { shouldDeliverNotify, formatNotifyFacts } from "./notify.js";
 import {
   applySmtpEnv,
   composeForgotPasswordMail,
@@ -1258,7 +1258,7 @@ export function enqueueListingEvent(listing, event) {
     const row = decorateListing(overlayPersonal(listing, loadFlags(db, userId, listing.post_id)), settings);
     const watched = Number(row.watched) === 1;
     if (!watched && event.type === "new" && !listingInMemberScope(row, settings)) continue;
-    if (!shouldDockNotify(settings, row, event) && !shouldWebhookNotify(settings, row, event)) continue;
+    if (!shouldDeliverNotify(settings, row, event, { to: getUserById(userId)?.email })) continue;
     ids.push(addUserEvent({ ...payload, user_id: userId }));
   }
   return ids;

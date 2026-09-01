@@ -99,6 +99,9 @@ test("member profiles cap districts and include usable ping in notify copy", () 
 test("member settings copy hides advanced hints and locks schedule defaults", () => {
   const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
   assert.match(html, /此通知只會訊息已是特別關注之物件/);
+  assert.match(html, /郵件通知會寄到你註冊的 Email/);
+  assert.match(html, /data-notify-ch="mail"/);
+  assert.match(html, /dock: true, webhook: true, mail: true/);
   assert.match(html, /本系統每8分鐘會重新檢本物件來源比對篩選/);
   assert.match(html, /id="adminLink"/);
   assert.match(html, /後台管理/);

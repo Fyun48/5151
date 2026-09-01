@@ -218,6 +218,7 @@
       font-size: 13px;
       margin: 6px 0 10px;
     }
+    .notify-matrix-wrap { overflow-x: auto; }
     .notify-matrix th, .notify-matrix td {
       border: 1px solid var(--line);
       padding: 8px 10px;
@@ -755,12 +756,15 @@
       <label>Discord Webhook（選填）</label>
       <input type="url" id="discordWebhook" placeholder="https://discord.com/api/webhooks/..." />
       <p class="hint">此通知只會訊息已是特別關注之物件</p>
+      <p class="hint" id="notifyMailHint">郵件通知會寄到你註冊的 Email。</p>
+      <div class="notify-matrix-wrap">
       <table class="notify-matrix" id="notifyMatrix">
         <thead>
           <tr>
             <th>事件類型</th>
             <th>站內通知</th>
             <th>Webhook通知</th>
+            <th>郵件通知</th>
           </tr>
         </thead>
         <tbody>
@@ -768,39 +772,47 @@
             <td>全新物件</td>
             <td><input type="checkbox" data-notify-row="new" data-notify-ch="dock" checked /></td>
             <td><input type="checkbox" data-notify-row="new" data-notify-ch="webhook" checked /></td>
+            <td><input type="checkbox" data-notify-row="new" data-notify-ch="mail" checked /></td>
           </tr>
           <tr>
             <td>同屋源重刊</td>
             <td><input type="checkbox" data-notify-row="same_source" data-notify-ch="dock" checked /></td>
             <td><input type="checkbox" data-notify-row="same_source" data-notify-ch="webhook" checked /></td>
+            <td><input type="checkbox" data-notify-row="same_source" data-notify-ch="mail" checked /></td>
           </tr>
           <tr>
             <td>價格變動</td>
             <td><input type="checkbox" data-notify-row="price" data-notify-ch="dock" checked /></td>
             <td><input type="checkbox" data-notify-row="price" data-notify-ch="webhook" checked /></td>
+            <td><input type="checkbox" data-notify-row="price" data-notify-ch="mail" checked /></td>
           </tr>
           <tr>
             <td>標題變更</td>
             <td><input type="checkbox" data-notify-row="title" data-notify-ch="dock" checked /></td>
             <td><input type="checkbox" data-notify-row="title" data-notify-ch="webhook" checked /></td>
+            <td><input type="checkbox" data-notify-row="title" data-notify-ch="mail" checked /></td>
           </tr>
           <tr>
             <td>內容更新</td>
             <td><input type="checkbox" data-notify-row="update" data-notify-ch="dock" checked /></td>
             <td><input type="checkbox" data-notify-row="update" data-notify-ch="webhook" checked /></td>
+            <td><input type="checkbox" data-notify-row="update" data-notify-ch="mail" checked /></td>
           </tr>
           <tr>
             <td>591 下架</td>
             <td><input type="checkbox" data-notify-row="offline" data-notify-ch="dock" checked /></td>
             <td><input type="checkbox" data-notify-row="offline" data-notify-ch="webhook" checked /></td>
+            <td><input type="checkbox" data-notify-row="offline" data-notify-ch="mail" checked /></td>
           </tr>
           <tr>
             <td>重新上架</td>
             <td><input type="checkbox" data-notify-row="relist" data-notify-ch="dock" checked /></td>
             <td><input type="checkbox" data-notify-row="relist" data-notify-ch="webhook" checked /></td>
+            <td><input type="checkbox" data-notify-row="relist" data-notify-ch="mail" checked /></td>
           </tr>
         </tbody>
       </table>
+      </div>
       <label>排除路名／關鍵字（一行一個）</label>
       <p class="hint">地址或標題含這些字就不列入、也不通知。例如路名、路段。</p>
       <textarea id="excludeKeywords" placeholder="延平北路八段&#10;承德路"></textarea>
@@ -937,6 +949,7 @@
     const MEMBER_MAX_PROFILES = 3;
     const DOCK_KEY = "591-alert-dock-v1";
     let meIsAdmin = false;
+    let meEmail = "";
     let mePlan = "free";
 
     function districtLimit() {
@@ -1332,7 +1345,7 @@
       document.querySelectorAll("[data-notify-row][data-notify-ch]").forEach((el) => {
         const key = el.dataset.notifyRow;
         const ch = el.dataset.notifyCh;
-        if (!out[key]) out[key] = { dock: true, webhook: true };
+        if (!out[key]) out[key] = { dock: true, webhook: true, mail: true };
         out[key][ch] = el.checked;
       });
       return out;
@@ -1756,7 +1769,14 @@
         return;
       }
       $("who").textContent = me.email || "";
+      meEmail = me.email || "";
       meIsAdmin = me.role === "admin";
+      const mailHint = $("notifyMailHint");
+      if (mailHint) {
+        mailHint.textContent = meEmail
+          ? `郵件通知會寄到你註冊的信箱 ${meEmail}`
+          : "郵件通知會寄到你註冊的 Email。";
+      }
       mePlan = me.plan || "free";
       document.body.classList.toggle("role-admin", meIsAdmin);
       if (me.role && me.role !== "admin" && $("resetLink")) $("resetLink").style.display = "none";

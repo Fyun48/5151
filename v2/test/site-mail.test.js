@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   applySmtpEnv,
   composeForgotPasswordMail,
+  composeListingNotifyMail,
   defaultMailTemplates,
   mergeEnvMap,
   normalizeSmtp,
@@ -61,6 +62,29 @@ test("forgot-password compose falls back if template drops the password", () => 
     { tempPassword: token },
   );
   assert.match(dropped.text, /temp-pass-99/);
+});
+
+test("listing notify compose fills event title price facts url", () => {
+  const one = composeListingNotifyMail(defaultMailTemplates(), [{
+    event: "全新物件",
+    title: "士林二房",
+    price: "28000 元/月",
+    facts: "士林區 · 2房",
+    url: "https://rent.591.com.tw/99",
+    detail: "",
+    email: "member@example.com",
+  }]);
+  assert.match(one.subject, /全新物件/);
+  assert.match(one.text, /士林二房/);
+  assert.match(one.text, /28000/);
+  assert.match(one.text, /rent\.591\.com\.tw\/99/);
+  const many = composeListingNotifyMail(defaultMailTemplates(), [
+    { event: "全新物件", title: "甲", price: "1", facts: "", url: "https://example.com/a" },
+    { event: "價格調降", title: "乙", price: "2", facts: "", url: "https://example.com/b" },
+  ]);
+  assert.match(many.subject, /2 則更新/);
+  assert.match(many.text, /甲/);
+  assert.match(many.text, /乙/);
 });
 
 test("smtpFromEnv and applySmtpEnv round-trip host/from", () => {

@@ -1,7 +1,9 @@
 import { execFile } from "node:child_process";
 import { passesDisplayFilters, housingTypeLabel } from "./floors.js";
+import { mailConfigured, sendMail } from "./mail.js";
 import { notifyChannelOn } from "./notifyMatrix.js";
 import { trackedListingUrl } from "./openLink.js";
+import { composeListingNotifyMail } from "./siteMail.js";
 
 function toastWindows(title, body) {
   const script = `
@@ -189,6 +191,35 @@ export function shouldWebhookNotify(settings, listing, event) {
   return shouldNotify(settings, listing, event) && notifyChannelOn(settings, "webhook", event?.type);
 }
 
+export function shouldMailNotify(settings, listing, event, opts = {}) {
+  const to = String(opts.to ?? "").trim();
+  if (!to) return false;
+  const ready = opts.configured ?? mailConfigured();
+  if (!ready) return false;
+  return shouldNotify(settings, listing, event) && notifyChannelOn(settings, "mail", event?.type);
+}
+
+export function shouldDeliverNotify(settings, listing, event, opts = {}) {
+  return (
+    shouldDockNotify(settings, listing, event)
+    || shouldWebhookNotify(settings, listing, event)
+    || shouldMailNotify(settings, listing, event, opts)
+  );
+}
+
+export function listingNotifyVars(event, extra = {}) {
+  const price = String(event?.price || "").trim();
+  return {
+    event: eventLabel(event?.type),
+    title: String(event?.title || "").trim(),
+    price: price ? (/元/.test(price) ? price : `${price} 元/月`) : "",
+    facts: formatNotifyFacts(event || {}),
+    url: trackedListingUrl(event?.post_id, event?.url),
+    detail: String(event?.detail || "").trim(),
+    email: String(extra.email || "").trim(),
+  };
+}
+
 function formatFeeLine(event) {
   let rows = event.extra_fees;
   if (typeof rows === "string") {
@@ -249,14 +280,51 @@ async function postDiscord(webhook, title, events) {
   });
 }
 
-export async function notify(settings, events, { webhookEvents } = {}) {
+async function postListingMail({ to, events, templates, send, email }) {
+  const toAddr = String(to || "").trim();
+  const list = Array.isArray(events) ? events : [];
+  if (!toAddr || !list.length) return;
+  const shown = list.slice(0, 8);
+  const mail = composeListingNotifyMail(
+    templates,
+    shown.map((event) => listingNotifyVars(event, { email: email || toAddr })),
+  );
+  if (list.length > 8) {
+    mail.text = `${mail.text}\n\n另有 ${list.length - 8} 則未列入此信。`;
+  }
+  if (!mail.subject && !String(mail.text || "").trim()) return;
+  await send({ to: toAddr, subject: mail.subject, text: mail.text });
+}
+
+export async function notify(settings, events, {
+  webhookEvents,
+  mailEvents,
+  mailTo,
+  mailTemplates,
+  send,
+} = {}) {
   const dock = Array.isArray(events) ? events : [];
   const hook = Array.isArray(webhookEvents) ? webhookEvents : [];
-  if (!dock.length && !hook.length) return;
-  if (!hook.length) return;
-  try {
-    await postDiscord(settings.discordWebhook, `591 有 ${hook.length} 則更新`, hook);
-  } catch {
-    // Discord 失敗不中斷追蹤
+  const mail = Array.isArray(mailEvents) ? mailEvents : [];
+  if (!dock.length && !hook.length && !mail.length) return;
+  if (hook.length) {
+    try {
+      await postDiscord(settings.discordWebhook, `591 有 ${hook.length} 則更新`, hook);
+    } catch {
+      // Discord 失敗不中斷追蹤
+    }
+  }
+  if (mail.length && mailTo) {
+    try {
+      await postListingMail({
+        to: mailTo,
+        events: mail,
+        templates: mailTemplates,
+        send: send || sendMail,
+        email: mailTo,
+      });
+    } catch {
+      // 寄信失敗不中斷追蹤
+    }
   }
 }

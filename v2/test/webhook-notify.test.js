@@ -5,11 +5,15 @@ import {
   formatNotifyFacts,
   formatUsableArea,
   listingLastEvent,
+  listingNotifyVars,
   listingPriceNum,
+  notify,
   shouldDockNotify,
+  shouldMailNotify,
   shouldNotify,
   shouldWebhookNotify,
 } from "../src/notify.js";
+import { defaultMailTemplates } from "../src/siteMail.js";
 
 const listing = {
   title: "士林二房",
@@ -172,4 +176,68 @@ test("notify facts add usable ping and housing type instead of 整層住家", ()
   assert.match(tower, /電梯公寓\/大樓$/);
   const suite = formatNotifyFacts({ kind_name: "獨立套房", area_name: "8坪" });
   assert.match(suite, /套房$/);
+});
+
+test("mail notify uses registered address and can be unchecked", () => {
+  const to = "member@example.com";
+  assert.equal(shouldMailNotify({}, listing, { type: "new" }, { to, configured: true }), true);
+  assert.equal(shouldMailNotify({}, listing, { type: "new" }, { to: "", configured: true }), false);
+  assert.equal(shouldMailNotify({}, listing, { type: "new" }, { to, configured: false }), false);
+  assert.equal(
+    shouldMailNotify(
+      { notifyMatrix: { new: { dock: true, webhook: true, mail: false } } },
+      listing,
+      { type: "new" },
+      { to, configured: true },
+    ),
+    false,
+  );
+  const vars = listingNotifyVars(
+    { type: "new", title: "士林二房", price: "28000", post_id: 123, address: "士林區" },
+    { email: to },
+  );
+  assert.equal(vars.event, "全新物件");
+  assert.equal(vars.price, "28000 元/月");
+  assert.equal(vars.email, to);
+  assert.match(vars.url, /123/);
+});
+
+test("notify posts listing mail to the registered inbox", async () => {
+  const sent = [];
+  const event = {
+    type: "new",
+    title: "士林二房",
+    price: "28000",
+    post_id: 88,
+    address: "士林區中山北路",
+    layout: "2房1廳",
+  };
+  await notify({}, [], {
+    mailEvents: [event],
+    mailTo: "member@example.com",
+    mailTemplates: defaultMailTemplates(),
+    send: async (mail) => sent.push(mail),
+  });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].to, "member@example.com");
+  assert.match(sent[0].subject, /全新物件/);
+  assert.match(sent[0].text, /士林二房/);
+  assert.match(sent[0].text, /28000/);
+});
+
+test("notify digest packs several listings into one mail", async () => {
+  const sent = [];
+  await notify({}, [], {
+    mailEvents: [
+      { type: "new", title: "甲物件", price: "20000", post_id: 1 },
+      { type: "price_drop", title: "乙物件", price: "18000", post_id: 2, detail: "22000 → 18000" },
+    ],
+    mailTo: "member@example.com",
+    mailTemplates: defaultMailTemplates(),
+    send: async (mail) => sent.push(mail),
+  });
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].subject, /2 則更新/);
+  assert.match(sent[0].text, /甲物件/);
+  assert.match(sent[0].text, /乙物件/);
 });
