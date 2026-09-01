@@ -146,7 +146,6 @@
     .ghost:hover:not(:disabled) { background: var(--accent-soft); border-color: #c5e8e6; }
     .row { display: flex; gap: 8px; flex-wrap: wrap; }
     .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 8px; }
-    .stat-note { font-size: 11px; color: var(--muted); margin: 0 0 8px; line-height: 1.45; grid-column: 1 / -1; }
     .stat { background: var(--accent-mist); border-radius: 14px; padding: 10px 12px; border: 1px solid var(--line); }
     .stat b { display: block; font-size: 20px; color: var(--accent-deep); font-weight: 700; }
     .stat span { color: var(--muted); font-size: 12px; }
@@ -473,6 +472,8 @@
     }
     #profileName { margin-bottom: 8px; }
     .hint { font-size: 12px; color: var(--muted); margin: 4px 0 8px; line-height: 1.5; }
+    body:not(.role-admin) .admin-only { display: none !important; }
+    body.role-admin .member-only { display: none !important; }
     #excludeMapWrap { margin: 8px 0; }
     #excludeMap { height: 220px; border-radius: 12px; border: 1px solid var(--line); }
     .box-list { display: grid; gap: 8px; margin: 8px 0; }
@@ -660,8 +661,6 @@
       <div class="stats" id="stats"></div>
       <p class="hint" id="settingsLoadMsg">正在載入已存設定…完成前請不要按儲存或另存。若一直停在這句、儲存也不能按，是網頁程式沒跑起來，不是資料壞了；請重新整理，不要按清除資料。</p>
       <p class="hint" id="profileListHint"></p>
-      <label>搜尋行政區（台北市 region=1、新北市 region=3，可一起勾）</label>
-      <p class="hint">比照 591 勾選行政區。591 一次只能查一個縣市，這裡會自動拆成多組網址，物件仍合在同一份列表。一般會員每個設定檔最多 10 個行政區（可跨縣市），最多 3 個設定檔；管理員不受此限制。金額上限與排除頂加會一併寫進搜尋。勾完請按右下「儲存」，再按「立即檢查」。上方按鈕只篩目前已抓到的結果，不會重查 591。</p>
       <p class="hint" id="districtLimitHint"></p>
       <div id="districtPicker">
         <div class="district-city">
@@ -733,24 +732,28 @@
         <summary class="hint">進階：591 網址（自動產生，通常不用改）</summary>
         <textarea id="searchUrls" placeholder="儲存後會依上方行政區自動產生"></textarea>
       </details>
-      <label>檢查間隔（分鐘）</label>
-      <input type="number" id="intervalMinutes" min="2" max="120" />
-      <p class="hint">排程會依這個間隔抓 591 搜尋。搜尋裡沒出現的物件會抽查詳情頁，確認是不是已關閉。</p>
-      <label>確認已下架天數</label>
-      <input type="number" id="offlineConfirmDays" min="1" max="30" />
-      <p class="hint">591 回「不存在／已關閉」後先標「正在確認中的下架」並持續核對（同一筆至少隔 12 小時再查一次）。從第一次找不到開始算，滿這天天數仍找不到就改成「確認已下架」：從「全部」與「正在確認中的下架」的數量扣除，也不再打 591。</p>
-      <label>每次最多抓取頁數（每頁約 30 筆，最多 40；會抓到搜尋結果結束為止）</label>
-      <input type="number" id="pagesPerWatch" min="1" max="40" />
+      <div class="admin-only">
+        <label>檢查間隔（分鐘）</label>
+        <input type="number" id="intervalMinutes" min="2" max="120" />
+      </div>
+      <p class="hint member-only">本系統每5分鐘會重新檢本物件來源比對篩選</p>
+      <div class="admin-only">
+        <label>確認已下架天數</label>
+        <input type="number" id="offlineConfirmDays" min="1" max="30" />
+      </div>
+      <div class="admin-only">
+        <label>每次最多抓取頁數</label>
+        <input type="number" id="pagesPerWatch" min="1" max="40" />
+      </div>
       <label>建物總樓層至少</label>
       <input type="number" id="minBuildingFloors" min="1" max="50" />
       <label>上班地址（選填）</label>
       <input type="text" id="workAddress" placeholder="例如：台北市士林區德行西路7號" />
       <label>機車路線上限（公里，0 表示不篩）</label>
       <input type="number" id="commuteKm" min="0" max="80" step="0.5" />
-      <p class="hint">路徑用 591 物件頁「點地址」那個地圖座標，不是門牌文字去猜。每個物件會抓至少兩條可騎道路線；兩條都超過上限才不顯示。開啟後可依離公司近／遠排序。還沒從 591 拿到座標或還沒算完路線的會先不顯示，完成後列表會自動更新。</p>
       <label>Discord Webhook（選填）</label>
       <input type="url" id="discordWebhook" placeholder="https://discord.com/api/webhooks/..." />
-      <p class="hint">站內是右下角「待看更新」；Webhook 是 Discord。同一列可一邊勾、一邊不勾。變更／下架／重刊仍只對「特別關注」發；隱藏物件與樓層顯示篩選仍會擋掉。勾完請按儲存。</p>
+      <p class="hint">此通知只會訊息已是特別關注之物件</p>
       <table class="notify-matrix" id="notifyMatrix">
         <thead>
           <tr>
@@ -1371,9 +1374,7 @@
     }
 
     function renderStats(st) {
-      $("stats").innerHTML = `
-        <p class="stat-note">以下數量只算 591 搜尋條件（坪數、建物樓層、租金等），不含地圖／路名／通勤排除。「全部」不含特別關注、正在確認中的下架，以及已確認下架（滿核對天數）的物件。右側「整層／樓層」勾選只影響列表顯示，不計入左側數字。</p>
-      ` + [
+      $("stats").innerHTML = [
         ["全部", st.total],
         ["有電梯", st.elevator],
         ["未瀏覽", st.unseen],
@@ -1749,6 +1750,7 @@
       }
       $("who").textContent = me.email || "";
       meIsAdmin = me.role === "admin";
+      document.body.classList.toggle("role-admin", meIsAdmin);
       if (me.role && me.role !== "admin" && $("resetLink")) $("resetLink").style.display = "none";
       settingsLoaded = false;
       setSettingsReady(false, "正在載入已存設定…完成前請不要按儲存或另存。");
@@ -1815,9 +1817,9 @@
         priceMax: Number($("priceMax").value) || 0,
         areaMax: Number($("areaMax").value) || 0,
         excludeRooftop: $("excludeRooftop").checked,
-        intervalMinutes: Number($("intervalMinutes").value),
-        offlineConfirmDays: Number($("offlineConfirmDays").value) || 7,
-        pagesPerWatch: Number($("pagesPerWatch").value),
+        intervalMinutes: meIsAdmin ? Number($("intervalMinutes").value) : 5,
+        offlineConfirmDays: meIsAdmin ? (Number($("offlineConfirmDays").value) || 7) : 7,
+        pagesPerWatch: meIsAdmin ? Number($("pagesPerWatch").value) : 40,
         minBuildingFloors: Number($("minBuildingFloors").value) || 4,
         wholeFloorOnly: $("wholeFloorOnly").checked,
         excludeLowFloors: $("excludeLowFloors").checked,
