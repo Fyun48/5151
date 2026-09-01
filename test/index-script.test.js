@@ -61,7 +61,7 @@ test("housing kind chips stay independent of 特別關注", () => {
   assert.match(html, /data-kind="elevator"/);
   assert.match(html, /data-kind="apartment"/);
   assert.match(html, /data-kind="suite"/);
-  assert.match(html, /data-kind="building"/);
+  assert.doesNotMatch(html, /data-kind="building"/);
   assert.match(html, /kind=\$\{encodeURIComponent\(kind\)\}/);
   assert.match(html, /document\.querySelectorAll\("\[data-kind\]"\)/);
   assert.doesNotMatch(html, /data-filter="elevator"/);

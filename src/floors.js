@@ -32,13 +32,7 @@ export function listingIsSuite(listing) {
   return /套房|雅房/.test(String(listing.kind_name || ""));
 }
 
-export function listingIsBuilding(listing) {
-  if (listingIsSuite(listing) || listingIsApartment(listing)) return false;
-  const hay = `${listing.title || ""} ${listing.kind_name || ""} ${listing.address || ""} ${tagText(listing)}`;
-  return /大樓|華廈/.test(hay);
-}
-
-export const HOUSING_KINDS = ["elevator", "apartment", "suite", "building"];
+export const HOUSING_KINDS = ["elevator", "apartment", "suite"];
 
 export function matchesHousingKind(listing, kind) {
   const key = String(kind || "").trim();
@@ -46,7 +40,6 @@ export function matchesHousingKind(listing, kind) {
   if (key === "elevator") return listingHasElevator(listing);
   if (key === "apartment") return listingIsApartment(listing);
   if (key === "suite") return listingIsSuite(listing);
-  if (key === "building") return listingIsBuilding(listing);
   return true;
 }
 
