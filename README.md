@@ -62,12 +62,12 @@ CasaOS 上第一次啟 v2：
 cd /mnt/Storage1/apps/5151
 git pull
 mkdir -p /DATA/AppData/591-tracker-v2
-# 可把 v1 的 auth.env 複製過去當暫時登入（資料庫不要互拷）
+# 登入帳號可沿用 v1 的 auth.env；刊登快取會在 v2 啟動時只讀匯入，不改 v1 的 591.db
 # cp /DATA/AppData/591-tracker/auth.env /DATA/AppData/591-tracker-v2/
 docker compose up -d --no-build --no-deps 591-tracker-v2
 ```
 
-之後推 `v2/src`、`v2/public` 或 compose 檔，GitHub Action 會 SCP 並重啟 v2 容器，不會動 v1 的 `591.db`。
+之後推 `v2/src`、`v2/public` 或 compose 檔，GitHub Action 會 SCP 並重啟 v2 容器，不會改 v1 的 `591.db`（v2 只讀取它來補刊登快取）。
 
 ## 部署到 CasaOS
 
