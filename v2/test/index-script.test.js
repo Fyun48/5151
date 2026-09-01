@@ -82,3 +82,16 @@ test("non-admin members do not see the shared reset link after boot", () => {
   assert.match(html, /id="resetLink"/);
   assert.match(html, /role !== "admin"/);
 });
+
+test("member profiles cap districts and include usable ping in notify copy", () => {
+  const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
+  assert.match(html, /MEMBER_MAX_DISTRICTS = 10/);
+  assert.match(html, /MEMBER_MAX_PROFILES = 3/);
+  assert.match(html, /每個設定檔最多選/);
+  assert.match(html, /notify_facts/);
+  assert.match(html, /housing_type/);
+  assert.match(html, /已存 \$\{list\.length\}／\$\{cap\}/);
+  assert.match(html, /setSettingsReady\(settingsLoaded\)/);
+  const profilesFn = html.slice(html.indexOf("function renderProfiles"), html.indexOf("function fillNotifyMatrix"));
+  assert.equal(profilesFn.includes("if (label)"), false);
+});

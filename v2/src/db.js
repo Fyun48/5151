@@ -1,14 +1,14 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { shouldKeepListing, passesAttributeFilters, passesDisplayFilters, listingHasElevator, matchesHousingKind, normalizeListQuery } from "./floors.js";
+import { shouldKeepListing, passesAttributeFilters, passesDisplayFilters, listingHasElevator, matchesHousingKind, normalizeListQuery, housingTypeLabel } from "./floors.js";
 import { isTrustedGeoSource, listingCommunityId } from "./location.js";
 import { makeRouteKey } from "./route.js";
 import { sameSearch } from "./client591.js";
 import { districtNameFromListing } from "./regions.js";
 import { preferPrimaryListing } from "./match.js";
 import { hasWorkPoint } from "./geo.js";
-import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings } from "./settingsState.js";
+import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings, canAddProfile } from "./settingsState.js";
 import { defaultNotifyMatrix } from "./notifyMatrix.js";
 import { DATA_EPOCH, shouldResetForEpoch } from "./dataEpoch.js";
 import { countsTowardAllTotal, isConfirmedOffline, isPendingOffline } from "./offline.js";
@@ -42,7 +42,7 @@ import {
   verifyUserPassword as verifyUserPasswordOn,
 } from "./members.js";
 import { requestTempPassword as requestTempPasswordOn } from "./forgotPassword.js";
-import { shouldDockNotify, shouldWebhookNotify } from "./notify.js";
+import { shouldDockNotify, shouldWebhookNotify, formatNotifyFacts } from "./notify.js";
 
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data-v2");
 mkdirSync(DATA_DIR, { recursive: true });
@@ -392,25 +392,27 @@ const DEFAULTS = {
 
 export function getSettings(userId) {
   const rows = db.prepare("SELECT key, value FROM settings").all();
-  const global = hydrateSettings(parseSettingRows(rows), DEFAULTS);
+  const global = hydrateSettings(parseSettingRows(rows), DEFAULTS, { admin: true });
   const uid = Number(userId) || 0;
   if (!uid) return global;
   const userRows = db.prepare("SELECT key, value FROM user_settings WHERE user_id = ?").all(uid);
+  const admin = getUserById(uid)?.role === "admin";
   if (!userRows.length) {
     const user = getUserById(uid);
     if (user?.role === "admin") return global;
     return hydrateSettings({
       dataEpoch: global.dataEpoch,
       hasBaseline: global.hasBaseline,
-    }, DEFAULTS);
+    }, DEFAULTS, { admin: false });
   }
-  return hydrateSettings({ ...global, ...parseSettingRows(userRows) }, DEFAULTS);
+  return hydrateSettings({ ...global, ...parseSettingRows(userRows) }, DEFAULTS, { admin });
 }
 
 export function saveSettings(partial, userId) {
   const uid = userId == null ? defaultUserId() : Number(userId) || defaultUserId();
   const current = getSettings(uid);
-  const next = applySettingPatch(current, partial);
+  const admin = getUserById(uid)?.role === "admin";
+  const next = applySettingPatch(current, partial, { admin });
   const userUpsert = db.prepare(
     "INSERT INTO user_settings(user_id, key, value) VALUES (?, ?, ?) ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value",
   );
@@ -435,8 +437,14 @@ export function saveSettings(partial, userId) {
 
 export function saveAsProfile(name, livePatch, userId) {
   const uid = userId == null ? defaultUserId() : Number(userId) || defaultUserId();
+  const admin = getUserById(uid)?.role === "admin";
   const current = livePatch && typeof livePatch === "object" ? saveSettings(livePatch, uid) : getSettings(uid);
   const profiles = [...(current.settingProfiles || [])];
+  if (!canAddProfile(profiles, { admin })) {
+    const err = new Error("一般會員最多 3 個設定檔");
+    err.status = 400;
+    throw err;
+  }
   const id = `p-${Date.now()}`;
   const label = String(name || "").trim().slice(0, 40) || `設定 ${profiles.length + 1}`;
   profiles.push({
@@ -1407,7 +1415,7 @@ export function pendingNotifyEvents(limit = 80) {
 export function eventPayloadFromListing(event, listing) {
   if (!event) return event;
   const row = listing || {};
-  return {
+  const merged = {
     ...event,
     title: row.title || event.title,
     url: row.url || event.url,
@@ -1419,7 +1427,14 @@ export function eventPayloadFromListing(event, listing) {
     layout: row.layout,
     floor_name: row.floor_name,
     kind_name: row.kind_name,
+    area_name: row.area_name || event.area_name,
+    tags: row.tags || event.tags,
     cover: row.cover,
+  };
+  return {
+    ...merged,
+    housing_type: housingTypeLabel(merged),
+    notify_facts: formatNotifyFacts(merged),
   };
 }
 

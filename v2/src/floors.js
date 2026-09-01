@@ -32,6 +32,13 @@ export function listingIsSuite(listing) {
   return /套房|雅房/.test(String(listing.kind_name || ""));
 }
 
+/** 通知結尾用的房屋類型，不寫「整層住家」。 */
+export function housingTypeLabel(listing) {
+  if (listingIsSuite(listing)) return "套房";
+  if (listingHasElevator(listing)) return "電梯公寓/大樓";
+  return "公寓";
+}
+
 export const HOUSING_KINDS = ["elevator", "apartment", "suite"];
 
 export function matchesHousingKind(listing, kind) {

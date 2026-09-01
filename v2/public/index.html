@@ -659,8 +659,10 @@
       </div>
       <div class="stats" id="stats"></div>
       <p class="hint" id="settingsLoadMsg">正在載入已存設定…完成前請不要按儲存或另存。若一直停在這句、儲存也不能按，是網頁程式沒跑起來，不是資料壞了；請重新整理，不要按清除資料。</p>
+      <p class="hint" id="profileListHint"></p>
       <label>搜尋行政區（台北市 region=1、新北市 region=3，可一起勾）</label>
-      <p class="hint">比照 591 勾選行政區。591 一次只能查一個縣市，這裡會自動拆成多組網址，物件仍合在同一份列表。金額上限與排除頂加會一併寫進搜尋。勾完請按右下「儲存」，再按「立即檢查」。上方按鈕只篩目前已抓到的結果，不會重查 591。</p>
+      <p class="hint">比照 591 勾選行政區。591 一次只能查一個縣市，這裡會自動拆成多組網址，物件仍合在同一份列表。一般會員每個設定檔最多 10 個行政區（可跨縣市），最多 3 個設定檔；管理員不受此限制。金額上限與排除頂加會一併寫進搜尋。勾完請按右下「儲存」，再按「立即檢查」。上方按鈕只篩目前已抓到的結果，不會重查 591。</p>
+      <p class="hint" id="districtLimitHint"></p>
       <div id="districtPicker">
         <div class="district-city">
           <div class="district-city-head">
@@ -927,7 +929,17 @@
     let lastStats = {};
     let listRefreshQueued = false;
     const MAX_BOXES = 10;
+    const MEMBER_MAX_DISTRICTS = 10;
+    const MEMBER_MAX_PROFILES = 3;
     const DOCK_KEY = "591-alert-dock-v1";
+    let meIsAdmin = false;
+
+    function districtLimit() {
+      return meIsAdmin ? 0 : MEMBER_MAX_DISTRICTS;
+    }
+    function profileLimit() {
+      return meIsAdmin ? 0 : MEMBER_MAX_PROFILES;
+    }
 
     function commuteText(item) {
       if (item.commute_km != null) {
@@ -1111,7 +1123,9 @@
 
     function setSettingsReady(ok, msg) {
       $("saveBtn").disabled = !ok;
-      $("saveAsBtn").disabled = !ok;
+      const cap = profileLimit();
+      const have = (settings?.settingProfiles || []).length;
+      $("saveAsBtn").disabled = !ok || Boolean(cap && have >= cap);
       const el = $("settingsLoadMsg");
       if (!el) return;
       if (ok) {
@@ -1121,6 +1135,17 @@
       }
       el.hidden = false;
       el.textContent = msg || "正在載入已存設定…完成前請不要按儲存或另存。";
+    }
+
+    function updateDistrictLimitHint() {
+      const el = $("districtLimitHint");
+      if (!el) return;
+      const n = selectedDistrictKeys().length;
+      if (meIsAdmin) {
+        el.textContent = `已選 ${n} 個行政區（管理員不受 10 區／3 檔限制）`;
+        return;
+      }
+      el.textContent = `已選 ${n}／${MEMBER_MAX_DISTRICTS} 個行政區`;
     }
 
     function selectedDistrictKeys() {
@@ -1157,17 +1182,40 @@
       `).join("");
       $("districtPicker").querySelectorAll("[data-district]").forEach((el) => {
         el.onchange = () => {
+          const limit = districtLimit();
+          if (el.checked && limit && selectedDistrictKeys().length > limit) {
+            el.checked = false;
+            flash(`每個設定檔最多選 ${limit} 個行政區`);
+            return;
+          }
           el.closest("label")?.classList.toggle("on", el.checked);
+          updateDistrictLimitHint();
         };
       });
       $("districtPicker").querySelectorAll("[data-city-all]").forEach((btn) => {
         btn.onclick = () => {
           const prefix = `${btn.dataset.cityAll}-`;
-          $("districtPicker").querySelectorAll("[data-district]").forEach((el) => {
-            if (!el.value.startsWith(prefix)) return;
+          const limit = districtLimit();
+          const boxes = [...$("districtPicker").querySelectorAll("[data-district]")];
+          const others = boxes.filter((el) => el.checked && !el.value.startsWith(prefix)).length;
+          const cityBoxes = boxes.filter((el) => el.value.startsWith(prefix));
+          cityBoxes.forEach((el) => {
+            el.checked = false;
+            el.closest("label")?.classList.remove("on");
+          });
+          let remaining = limit ? Math.max(0, limit - others) : cityBoxes.length;
+          let skipped = false;
+          for (const el of cityBoxes) {
+            if (remaining <= 0) {
+              skipped = true;
+              break;
+            }
             el.checked = true;
             el.closest("label")?.classList.add("on");
-          });
+            remaining -= 1;
+          }
+          updateDistrictLimitHint();
+          if (skipped) flash(`每個設定檔最多選 ${limit} 個行政區`);
         };
       });
       $("districtPicker").querySelectorAll("[data-city-none]").forEach((btn) => {
@@ -1178,8 +1226,10 @@
             el.checked = false;
             el.closest("label")?.classList.remove("on");
           });
+          updateDistrictLimitHint();
         };
       });
+      updateDistrictLimitHint();
     }
 
     function watchDistrictNames(s) {
@@ -1236,14 +1286,19 @@
       if (document.activeElement?.id !== "profileName" && (!typed || list.some((item) => item.name === typed))) {
         $("profileName").value = currentName;
       }
-      const label = $("profileSelectLabel");
-      if (label) label.textContent = list.length ? `已存設定檔（${list.length}）` : "已存設定檔";
+      const cap = profileLimit();
+      const atCap = cap && list.length >= cap;
       const hint = $("profileListHint");
       if (hint) {
-        hint.textContent = list.length
-          ? `已存：${list.map((item) => item.name).join("、")}`
-          : "還沒有設定檔。填名稱後按上方「另存」。";
+        if (!list.length) {
+          hint.textContent = "還沒有設定檔。填名稱後按上方「另存」。";
+        } else if (atCap) {
+          hint.textContent = `已存 ${list.length}／${cap} 個設定檔（${list.map((item) => item.name).join("、")}）。一般會員不能再另存，請先刪一個。`;
+        } else {
+          hint.textContent = `已存：${list.map((item) => item.name).join("、")}${cap ? `（最多 ${cap} 個）` : ""}`;
+        }
       }
+      if ($("saveAsBtn") && settingsLoaded) $("saveAsBtn").disabled = atCap;
       sel.innerHTML = "";
       const placeholder = document.createElement("option");
       placeholder.value = "";
@@ -1693,6 +1748,7 @@
         return;
       }
       $("who").textContent = me.email || "";
+      meIsAdmin = me.role === "admin";
       if (me.role && me.role !== "admin" && $("resetLink")) $("resetLink").style.display = "none";
       settingsLoaded = false;
       setSettingsReady(false, "正在載入已存設定…完成前請不要按儲存或另存。");
@@ -1750,6 +1806,8 @@
       if (!settingsLoaded) throw new Error("設定還沒載入完成，請稍候或重新整理，不要先按儲存");
       const watchDistricts = selectedDistrictKeys();
       if (!watchDistricts.length) throw new Error("請至少選一個行政區");
+      const dLimit = districtLimit();
+      if (dLimit && watchDistricts.length > dLimit) throw new Error(`每個設定檔最多選 ${dLimit} 個行政區`);
       return {
         searchUrls: $("searchUrls").value.split(/\n+/).map((s) => s.trim()).filter(Boolean),
         watchDistricts,
@@ -1846,6 +1904,12 @@
     };
 
     $("saveAsBtn").onclick = async () => {
+      const cap = profileLimit();
+      const have = (settings?.settingProfiles || []).length;
+      if (cap && have >= cap) {
+        flash(`一般會員最多 ${cap} 個設定檔，請先刪一個再另存`);
+        return;
+      }
       const name = $("profileName").value.trim();
       if (!name) {
         $("profileName").focus();
@@ -1872,7 +1936,7 @@
           : error.message;
         flash(msg);
       } finally {
-        $("saveAsBtn").disabled = !settingsLoaded;
+        setSettingsReady(settingsLoaded);
       }
     };
 
@@ -2232,7 +2296,7 @@
           <h3 style="margin:6px 0 4px;font-size:16px">
             <a href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-dock-open="${item.post_id}">${esc(item.title || "591 物件")}</a>
           </h3>
-          <div class="meta">${item.price || ""} ${item.address || ""} ${item.detail || ""} ${item.extra_fee_text || ""}</div>
+          <div class="meta">${esc([item.price ? `${item.price} 元/月` : "", item.notify_facts || [item.address, item.layout, item.floor_name, item.area_name, item.housing_type].filter(Boolean).join(" · "), item.detail, item.extra_fee_text].filter(Boolean).join(" · "))}</div>
           <div class="row" style="margin-top:8px">
             <a class="primary" href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-dock-open="${item.post_id}" style="display:inline-flex;align-items:center;text-decoration:none">打開 591</a>
             <button type="button" class="ghost" data-dock-hide="${item.post_id}">不再顯示</button>

@@ -9,7 +9,7 @@ import {
   parseCommunityPayload,
   preferCommunityLocation,
 } from "../src/location.js";
-import { decideNotifyDelivery, hasTrustedCoords, isGeoReady, listingIsApartment, listingIsSuite, listingHasElevator, matchesHousingKind, normalizeListQuery, passesGeoFilters } from "../src/floors.js";
+import { decideNotifyDelivery, hasTrustedCoords, isGeoReady, listingIsApartment, listingIsSuite, listingHasElevator, matchesHousingKind, normalizeListQuery, passesGeoFilters, housingTypeLabel } from "../src/floors.js";
 import { hasWorkPoint, needsListingGeo } from "../src/geo.js";
 
 test("extracts the house-number address from a community page line", () => {
@@ -134,6 +134,14 @@ test("apartment and suite view filters do not treat elevator buildings as 公寓
   assert.equal(listingIsSuite({ kind_name: "獨立套房" }), true);
   assert.equal(listingIsSuite({ kind_name: "整層住家" }), false);
   assert.equal(listingHasElevator({ title: "電梯大樓", kind_name: "整層住家", tags: ["電梯大樓"] }), true);
+  assert.equal(housingTypeLabel({ kind_name: "獨立套房" }), "套房");
+  assert.equal(housingTypeLabel({ kind_name: "分租套房" }), "套房");
+  assert.equal(housingTypeLabel({ kind_name: "整層住家", tags: ["公寓"] }), "公寓");
+  assert.equal(housingTypeLabel({ title: "電梯大樓", kind_name: "整層住家", tags: ["電梯大樓"] }), "電梯公寓/大樓");
+  assert.equal(housingTypeLabel({ kind_name: "整層住家", tags: ["有電梯"] }), "電梯公寓/大樓");
+  assert.equal(housingTypeLabel({ kind_name: "整層住家", tags: '["有電梯"]' }), "電梯公寓/大樓");
+  assert.equal(housingTypeLabel({ kind_name: "整層住家", tags: ["無電梯", "公寓"] }), "公寓");
+  assert.equal(housingTypeLabel({ kind_name: "整層住家" }), "公寓");
 });
 
 test("housing kind filters can combine with 特別關注", () => {

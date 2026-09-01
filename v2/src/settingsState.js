@@ -2,6 +2,10 @@ import { buildSearchUrls, districtsFromSearchUrls, normalizeWatchDistricts, pric
 import { normalizeBoxes, normalizeKeywords, parseWorkCoord } from "./geo.js";
 import { normalizeNotifyMatrix } from "./notifyMatrix.js";
 
+export const MEMBER_MAX_PROFILE_DISTRICTS = 10;
+export const MEMBER_MAX_PROFILES = 3;
+export const ADMIN_MAX_PROFILES = 30;
+
 export const PROFILE_FIELDS = [
   "searchUrls",
   "intervalMinutes",
@@ -41,10 +45,11 @@ export function parseSettingRows(rows) {
   return stored;
 }
 
-export function normalizeProfiles(value) {
+export function normalizeProfiles(value, { admin = false } = {}) {
   const list = Array.isArray(value) ? value : [];
   const out = [];
   const seen = new Set();
+  const max = admin ? ADMIN_MAX_PROFILES : 12;
   for (const raw of list) {
     if (!raw || typeof raw !== "object") continue;
     const id = String(raw.id || "").trim();
@@ -57,9 +62,20 @@ export function normalizeProfiles(value) {
       saved_at: String(raw.saved_at || new Date().toISOString()),
       data: raw.data && typeof raw.data === "object" && !Array.isArray(raw.data) ? raw.data : {},
     });
-    if (out.length >= 12) break;
+    if (out.length >= max) break;
   }
   return out;
+}
+
+export function canAddProfile(profiles, { admin = false } = {}) {
+  if (admin) return (profiles || []).length < ADMIN_MAX_PROFILES;
+  return (profiles || []).length < MEMBER_MAX_PROFILES;
+}
+
+export function limitWatchDistricts(districts, { admin = false } = {}) {
+  const list = normalizeWatchDistricts(districts);
+  if (admin) return list;
+  return list.slice(0, MEMBER_MAX_PROFILE_DISTRICTS);
 }
 
 export function snapshotSettings(settings) {
@@ -68,7 +84,7 @@ export function snapshotSettings(settings) {
   return out;
 }
 
-export function hydrateSettings(stored, defaults) {
+export function hydrateSettings(stored, defaults, { admin = false } = {}) {
   const source = stored && typeof stored === "object" ? stored : {};
   const next = { ...defaults, ...source };
   if (Number(next.pagesPerWatch) <= 5) next.pagesPerWatch = 40;
@@ -77,6 +93,7 @@ export function hydrateSettings(stored, defaults) {
   } else {
     next.watchDistricts = normalizeWatchDistricts(next.watchDistricts);
   }
+  next.watchDistricts = limitWatchDistricts(next.watchDistricts, { admin });
   if (source.priceMax == null && source.priceMin == null) {
     const parsed = priceFromSearchUrls(next.searchUrls);
     if (parsed.max || parsed.min) {
@@ -84,7 +101,15 @@ export function hydrateSettings(stored, defaults) {
       next.priceMax = parsed.max;
     }
   }
-  next.settingProfiles = normalizeProfiles(next.settingProfiles);
+  if (next.watchDistricts.length) {
+    next.searchUrls = buildSearchUrls({
+      districts: next.watchDistricts,
+      priceMin: next.priceMin,
+      priceMax: next.priceMax,
+      excludeRooftop: next.excludeRooftop !== false,
+    });
+  }
+  next.settingProfiles = normalizeProfiles(next.settingProfiles, { admin });
   next.activeProfileId = String(next.activeProfileId || "");
   if (next.activeProfileId && !next.settingProfiles.some((item) => item.id === next.activeProfileId)) {
     next.activeProfileId = "";
@@ -93,7 +118,7 @@ export function hydrateSettings(stored, defaults) {
   return next;
 }
 
-export function applySettingPatch(current, partial = {}) {
+export function applySettingPatch(current, partial = {}, { admin = false } = {}) {
   const patch = partial && typeof partial === "object" ? partial : {};
   const next = { ...current, ...patch };
   if (!Object.prototype.hasOwnProperty.call(patch, "settingProfiles")) {
@@ -111,7 +136,7 @@ export function applySettingPatch(current, partial = {}) {
   next.workAddress = String(next.workAddress || "").trim().slice(0, 120);
   next.workLat = parseWorkCoord(next.workLat);
   next.workLng = parseWorkCoord(next.workLng);
-  next.watchDistricts = normalizeWatchDistricts(next.watchDistricts);
+  next.watchDistricts = limitWatchDistricts(next.watchDistricts, { admin });
   next.priceMin = Math.max(0, Number(next.priceMin) || 0);
   next.priceMax = Math.max(0, Number(next.priceMax) || 0);
   next.areaMax = Math.max(0, Math.min(Number(next.areaMax) || 0, 500));
@@ -156,7 +181,7 @@ export function applySettingPatch(current, partial = {}) {
       excludeRooftop: next.excludeRooftop,
     });
   }
-  next.settingProfiles = normalizeProfiles(next.settingProfiles);
+  next.settingProfiles = normalizeProfiles(next.settingProfiles, { admin });
   next.activeProfileId = String(next.activeProfileId || "");
   if (next.activeProfileId && !next.settingProfiles.some((item) => item.id === next.activeProfileId)) {
     next.activeProfileId = "";
