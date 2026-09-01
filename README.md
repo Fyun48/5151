@@ -43,6 +43,32 @@ npm run start:v2
 
 規劃與階段見 `v2/ARCHITECTURE.md`。v2 還沒準備好取代線上版之前，請繼續用 v1。
 
+公開網址：
+
+- v1：`https://a5151.reversalplay.me` → `127.0.0.1:5151`，資料 `/DATA/AppData/591-tracker`
+- v2：`https://b5151.reversalplay.me` → `127.0.0.1:5152`，資料 `/DATA/AppData/591-tracker-v2`（檔名 `v2.db`）
+
+同一個 GitHub repo、同一張 Docker 映像、同一條 Cloudflare Tunnel。v2 只是多一個容器。不必新開 GitHub 專案。
+
+Cloudflare Zero Trust → Networks → Tunnels → 現有 tunnel → Public Hostname → 新增：
+
+1. Subdomain `b5151`，Domain `reversalplay.me`
+2. Type `HTTP`，URL `http://127.0.0.1:5152`
+3. 存檔。`a5151` 維持指向 `http://127.0.0.1:5151`
+
+CasaOS 上第一次啟 v2：
+
+```bash
+cd /mnt/Storage1/apps/5151
+git pull
+mkdir -p /DATA/AppData/591-tracker-v2
+# 可把 v1 的 auth.env 複製過去當暫時登入（資料庫不要互拷）
+# cp /DATA/AppData/591-tracker/auth.env /DATA/AppData/591-tracker-v2/
+docker compose up -d --no-build --no-deps 591-tracker-v2
+```
+
+之後推 `v2/src`、`v2/public` 或 compose 檔，GitHub Action 會 SCP 並重啟 v2 容器，不會動 v1 的 `591.db`。
+
 ## 部署到 CasaOS
 
 SQLite 與設定會寫進 `DATA_DIR`（容器內預設 `/data`）。CasaOS 請用 bind mount 到 `/DATA/AppData/591-tracker`，不要用 Docker 具名 volume，否則 CasaOS 重裝時資料容易不見。
@@ -81,5 +107,6 @@ docker compose --profile tunnel up -d
 
 若要把 Windows 上的「已瀏覽 / 特別關注 / 隱藏」一起帶走，把本機 `data/591.db` 複製到 CasaOS 的 `/DATA/AppData/591-tracker/591.db`（容器停止時再複製較保險）。
 
-公開網址為 `https://a5151.reversalplay.me`（獨立 Cloudflare Tunnel → CasaOS `http://127.0.0.1:5151`）。
-CasaOS 本機埠只綁 `127.0.0.1:5151`。
+公開網址為 `https://a5151.reversalplay.me`（Cloudflare Tunnel → CasaOS `http://127.0.0.1:5151`）。
+v2 為 `https://b5151.reversalplay.me` → `http://127.0.0.1:5152`。
+CasaOS 本機埠只綁 loopback。

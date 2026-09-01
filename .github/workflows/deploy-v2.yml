@@ -1,0 +1,45 @@
+name: Copy v2 source to CasaOS
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - "v2/src/**"
+      - "v2/public/**"
+      - "docker-compose.yml"
+      - "casaos-compose.yml"
+      - ".github/workflows/deploy-v2.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync-nas-v2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Copy v2 app and compose files
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.NAS_HOST }}
+          port: ${{ secrets.NAS_PORT }}
+          username: ${{ secrets.NAS_USER }}
+          key: ${{ secrets.NAS_SSH_KEY }}
+          source: "v2/src,v2/public,docker-compose.yml,casaos-compose.yml"
+          target: /mnt/Storage1/apps/5151
+          overwrite: true
+      - name: Start v2 container
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.NAS_HOST }}
+          port: ${{ secrets.NAS_PORT }}
+          username: ${{ secrets.NAS_USER }}
+          key: ${{ secrets.NAS_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            mkdir -p /DATA/AppData/591-tracker-v2
+            cd /mnt/Storage1/apps/5151
+            docker compose up -d --no-build --no-deps 591-tracker-v2
