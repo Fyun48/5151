@@ -238,6 +238,7 @@ app.get("/api/listings", (req, res) => {
     .filter(Boolean);
   const listed = listListings({
     filter: req.query.filter || "all",
+    kind: req.query.kind || "",
     q: req.query.q || "",
     sort: req.query.sort || "price_asc",
     limit: Number(req.query.limit) || 500,

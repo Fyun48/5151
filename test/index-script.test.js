@@ -55,3 +55,16 @@ test("unwatch flies to the all chip before reloading", () => {
   assert.match(unwatch, /watched: false/);
   assert.match(unwatch, /visibility = "hidden"/);
 });
+
+test("housing kind chips stay independent of 特別關注", () => {
+  const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
+  assert.match(html, /data-kind="elevator"/);
+  assert.match(html, /data-kind="apartment"/);
+  assert.match(html, /data-kind="suite"/);
+  assert.match(html, /data-kind="building"/);
+  assert.match(html, /kind=\$\{encodeURIComponent\(kind\)\}/);
+  assert.match(html, /document\.querySelectorAll\("\[data-kind\]"\)/);
+  assert.doesNotMatch(html, /data-filter="elevator"/);
+  assert.doesNotMatch(html, /data-filter="apartment"/);
+  assert.doesNotMatch(html, /data-filter="suite"/);
+});

@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { shouldKeepListing, passesAttributeFilters, passesDisplayFilters, listingHasElevator, listingIsApartment, listingIsSuite } from "./floors.js";
+import { shouldKeepListing, passesAttributeFilters, passesDisplayFilters, listingHasElevator, matchesHousingKind, normalizeListQuery } from "./floors.js";
 import { isTrustedGeoSource, listingCommunityId } from "./location.js";
 import { makeRouteKey } from "./route.js";
 import { sameSearch } from "./client591.js";
@@ -1092,12 +1092,14 @@ export function sortListingsRows(rows, sort = "price_asc", { filter } = {}) {
 
 export function listListings({
   filter = "all",
+  kind = "",
   q = "",
   sort = "price_asc",
   limit = 500,
   searchKeys,
   districts = [],
 } = {}) {
+  ({ filter, kind } = normalizeListQuery(filter, kind));
   const clauses = [];
   const params = [];
   searchWhere(searchKeys, clauses, params);
@@ -1133,7 +1135,7 @@ export function listListings({
       : applyListingFilter(raw).map((row) => decorateListing(row, settings));
 
   // 整層／1F、行政區要在 limit 前套用，否則「全庫最便宜 500 筆」再前端篩選會漏掉新北等區
-  rows = rows.filter((row) => passesDisplayFilters(row, settings));
+  rows = rows.filter((row) => passesDisplayFilters(row, settings, { skipWholeFloor: kind === "suite" }));
   const districtSet = new Set(
     (Array.isArray(districts) ? districts : String(districts || "").split(","))
       .map((name) => String(name || "").trim())
@@ -1143,9 +1145,7 @@ export function listListings({
     rows = rows.filter((row) => districtSet.has(row.district));
   }
 
-  if (filter === "elevator") rows = rows.filter((row) => listingHasElevator(row));
-  if (filter === "apartment") rows = rows.filter((row) => listingIsApartment(row));
-  if (filter === "suite") rows = rows.filter((row) => listingIsSuite(row));
+  rows = rows.filter((row) => matchesHousingKind(row, kind));
 
   rows = sortListingsRows(rows, sort, { filter });
 
