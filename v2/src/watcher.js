@@ -5,6 +5,8 @@ import {
   getCommunityCache,
   getListing,
   getSettings,
+  getUserById,
+  getMailTemplates,
   listingCount,
   listingCountForSearch,
   listMatchCandidates,
@@ -36,7 +38,7 @@ import { isTrustedGeoSource, listingCommunityId } from "./location.js";
 import { decideNotifyDelivery } from "./floors.js";
 import { fetchRoadRoutes } from "./route.js";
 import { bestMatch } from "./match.js";
-import { classifyExistingUpdate, eventLabel, listingLastEvent, notify, shouldDockNotify, shouldNotify, shouldWebhookNotify } from "./notify.js";
+import { classifyExistingUpdate, eventLabel, listingLastEvent, notify, shouldDockNotify, shouldMailNotify, shouldNotify, shouldWebhookNotify } from "./notify.js";
 import { normalizeOfflineConfirmDays, shouldRecheckOffline } from "./offline.js";
 import { detailConcurrency, mapPool } from "./pool.js";
 
@@ -215,13 +217,16 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
   const pending = pendingNotifyEvents(80);
   const dockByUser = new Map();
   const hookByUser = new Map();
+  const mailByUser = new Map();
   for (const event of pending) {
     const userId = Number(event.user_id) || 0;
     const userSettings = userId ? getSettings(userId) : settings;
     const listing = getListing(event.post_id, userId || undefined);
+    const mailTo = String(getUserById(userId)?.email || "").trim();
     const forDock = listing ? shouldDockNotify(userSettings, listing, event) : false;
     const forHook = listing ? shouldWebhookNotify(userSettings, listing, event) : false;
-    if (!listing || (!forDock && !forHook)) {
+    const forMail = listing ? shouldMailNotify(userSettings, listing, event, { to: mailTo }) : false;
+    if (!listing || (!forDock && !forHook && !forMail)) {
       markEventNotified(event.id);
       continue;
     }
@@ -240,15 +245,27 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
         list.push(payload);
         hookByUser.set(userId, list);
       }
+      if (forMail) {
+        const list = mailByUser.get(userId) || [];
+        list.push(payload);
+        mailByUser.set(userId, list);
+      }
     }
   }
   const ready = [];
-  const userIds = new Set([...dockByUser.keys(), ...hookByUser.keys()]);
+  const userIds = new Set([...dockByUser.keys(), ...hookByUser.keys(), ...mailByUser.keys()]);
+  const templates = getMailTemplates();
   for (const userId of userIds) {
     const dock = dockByUser.get(userId) || [];
     const hook = hookByUser.get(userId) || [];
-    if (!silent && (dock.length || hook.length)) {
-      await notify(getSettings(userId), dock, { webhookEvents: hook });
+    const mail = mailByUser.get(userId) || [];
+    if (!silent && (dock.length || hook.length || mail.length)) {
+      await notify(getSettings(userId), dock, {
+        webhookEvents: hook,
+        mailEvents: mail,
+        mailTo: String(getUserById(userId)?.email || "").trim(),
+        mailTemplates: templates,
+      });
     }
     ready.push(...dock.map((event) => ({ ...event, type_label: eventLabel(event.type), user_id: userId })));
   }

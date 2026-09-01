@@ -125,7 +125,7 @@
     </section>
     <section class="card">
       <h2>寄信 SMTP</h2>
-      <p class="hint">忘記密碼與之後的物件通知信都走這裡。密碼只在你新填時才更新，畫面上不會回傳已存密碼。</p>
+      <p class="hint">忘記密碼與物件通知信都走這裡。物件通知會寄到會員註冊的 Email。密碼只在你新填時才更新，畫面上不會回傳已存密碼。</p>
       <form id="smtpForm">
         <div class="grid-2">
           <div>
@@ -163,7 +163,7 @@
     </section>
     <section class="card">
       <h2>信件內容</h2>
-      <p class="hint">可用代碼：忘記密碼 <code>{{tempPassword}}</code>、<code>{{email}}</code>；物件通知 <code>{{event}}</code>、<code>{{title}}</code>、<code>{{price}}</code>、<code>{{facts}}</code>、<code>{{url}}</code>。</p>
+      <p class="hint">可用代碼：忘記密碼 <code>{{tempPassword}}</code>、<code>{{email}}</code>；物件通知會寄到各會員註冊的 Email，代碼 <code>{{event}}</code>、<code>{{title}}</code>、<code>{{price}}</code>、<code>{{facts}}</code>、<code>{{url}}</code>、<code>{{detail}}</code>、<code>{{email}}</code>。</p>
       <form id="tplForm">
         <label>忘記密碼主旨</label>
         <input id="forgotSubject" />

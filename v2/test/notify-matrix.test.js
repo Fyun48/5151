@@ -43,4 +43,18 @@ test("notifyChannelOn defaults on and respects uncheck", () => {
     false,
   );
   assert.equal(notifyChannelOn({ notifyMatrix: defaultNotifyMatrix() }, "webhook", "update"), true);
+  assert.equal(notifyChannelOn({ notifyMatrix: defaultNotifyMatrix() }, "mail", "new"), true);
+  assert.equal(
+    notifyChannelOn({ notifyMatrix: { new: { dock: true, webhook: true, mail: false } } }, "mail", "new"),
+    false,
+  );
+});
+
+test("legacy matrices gain mail=on when the cell is missing", () => {
+  const matrix = normalizeNotifyMatrix({
+    notifyMatrix: { new: { dock: true, webhook: false } },
+  });
+  assert.equal(matrix.new.mail, true);
+  assert.equal(matrix.new.webhook, false);
+  assert.equal(defaultNotifyMatrix().price.mail, true);
 });
