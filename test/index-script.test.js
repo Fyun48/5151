@@ -37,8 +37,21 @@ test("watch fly animation is non-blocking and targets the watched chip", () => {
   const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
   assert.match(html, /id="watchFlyLayer"/);
   assert.match(html, /pointer-events:\s*none/);
+  assert.match(html, /function flyCardToChip/);
   assert.match(html, /function flyCardToWatchChip/);
+  assert.match(html, /function flyCardToAllChip/);
   assert.match(html, /data-filter="watched"/);
+  assert.match(html, /data-filter="all"/);
+  assert.match(html, /flyCardToChip\(card, "watched"\)/);
+  assert.match(html, /flyCardToChip\(card, "all"\)/);
   assert.match(html, /1\.15s/);
   assert.match(html, /noteDrafts/);
+});
+
+test("unwatch flies to the all chip before reloading", () => {
+  const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
+  const unwatch = html.slice(html.indexOf("if (watched)"), html.indexOf("if (!viewed)"));
+  assert.match(unwatch, /flyCardToAllChip\(card\)/);
+  assert.match(unwatch, /watched: false/);
+  assert.match(unwatch, /visibility = "hidden"/);
 });

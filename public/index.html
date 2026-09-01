@@ -1574,8 +1574,8 @@
       loadList({ force: true });
     }
 
-    function flyCardToWatchChip(card) {
-      const chip = document.querySelector("[data-filter=\"watched\"]");
+    function flyCardToChip(card, filterKey) {
+      const chip = document.querySelector(`[data-filter="${filterKey}"]`);
       const layer = $("watchFlyLayer");
       if (chip) {
         chip.classList.add("watch-fly-hit");
@@ -1610,6 +1610,14 @@
         });
       });
       window.setTimeout(() => ghost.remove(), 1300);
+    }
+
+    function flyCardToWatchChip(card) {
+      flyCardToChip(card, "watched");
+    }
+
+    function flyCardToAllChip(card) {
+      flyCardToChip(card, "all");
     }
 
     async function commitWatchDraft(id, note) {
@@ -2142,11 +2150,21 @@
           renderList(listCache, lastStats);
           return;
         }
+        const key = String(watched);
+        const card = document.querySelector(`[data-card="${key}"]`);
+        flyCardToAllChip(card);
+        if (card) card.style.visibility = "hidden";
         await fetch(`/api/listings/${watched}/flags`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ watched: false }),
         });
+        if (watchNoteBusy()) {
+          listRefreshQueued = true;
+          listCache = listCache.filter((item) => String(item.post_id) !== key);
+          renderList(listCache, lastStats);
+          return;
+        }
         await loadList({ force: true });
         return;
       }
