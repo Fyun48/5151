@@ -5,6 +5,9 @@ import { normalizeNotifyMatrix } from "./notifyMatrix.js";
 export const MEMBER_MAX_PROFILE_DISTRICTS = 10;
 export const MEMBER_MAX_PROFILES = 3;
 export const ADMIN_MAX_PROFILES = 30;
+export const MEMBER_INTERVAL_MINUTES = 5;
+export const MEMBER_OFFLINE_CONFIRM_DAYS = 7;
+export const MEMBER_PAGES_PER_WATCH = 40;
 
 export const PROFILE_FIELDS = [
   "searchUrls",
@@ -78,6 +81,14 @@ export function limitWatchDistricts(districts, { admin = false } = {}) {
   return list.slice(0, MEMBER_MAX_PROFILE_DISTRICTS);
 }
 
+export function applyMemberScheduleLocks(settings, { admin = false } = {}) {
+  if (admin || !settings) return settings;
+  settings.intervalMinutes = MEMBER_INTERVAL_MINUTES;
+  settings.offlineConfirmDays = MEMBER_OFFLINE_CONFIRM_DAYS;
+  settings.pagesPerWatch = MEMBER_PAGES_PER_WATCH;
+  return settings;
+}
+
 export function snapshotSettings(settings) {
   const out = {};
   for (const key of PROFILE_FIELDS) out[key] = settings?.[key];
@@ -88,6 +99,7 @@ export function hydrateSettings(stored, defaults, { admin = false } = {}) {
   const source = stored && typeof stored === "object" ? stored : {};
   const next = { ...defaults, ...source };
   if (Number(next.pagesPerWatch) <= 5) next.pagesPerWatch = 40;
+  applyMemberScheduleLocks(next, { admin });
   if (!Array.isArray(source.watchDistricts) || !source.watchDistricts.length) {
     next.watchDistricts = districtsFromSearchUrls(next.searchUrls);
   } else {
@@ -131,6 +143,7 @@ export function applySettingPatch(current, partial = {}, { admin = false } = {})
   next.excludeAgents = normalizeKeywords(next.excludeAgents);
   next.excludeAgentIds = [...new Set((next.excludeAgentIds || []).map(Number).filter((id) => id > 0))].slice(0, 80);
   next.excludeBoxes = normalizeBoxes(next.excludeBoxes);
+  next.intervalMinutes = Math.max(2, Math.min(Math.round(Number(next.intervalMinutes) || 5), 120));
   next.pagesPerWatch = Math.max(1, Math.min(Number(next.pagesPerWatch) || 40, 40));
   next.commuteKm = Math.max(0, Math.min(Number(next.commuteKm) || 0, 80));
   next.workAddress = String(next.workAddress || "").trim().slice(0, 120);
@@ -141,6 +154,7 @@ export function applySettingPatch(current, partial = {}, { admin = false } = {})
   next.priceMax = Math.max(0, Number(next.priceMax) || 0);
   next.areaMax = Math.max(0, Math.min(Number(next.areaMax) || 0, 500));
   next.offlineConfirmDays = Math.max(1, Math.min(Math.round(Number(next.offlineConfirmDays) || 7), 30));
+  applyMemberScheduleLocks(next, { admin });
   next.excludeRooftop = next.excludeRooftop !== false;
   next.wholeFloorOnly = next.wholeFloorOnly !== false;
   next.excludeLowFloors = next.excludeLowFloors !== false;

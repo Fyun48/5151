@@ -173,3 +173,38 @@ test("members are capped at 10 districts and 3 profiles; admins are not", () => 
   assert.equal(jobs[0].sectionIds.includes(12), false);
   assert.equal(jobs[0].sectionIds.length, MEMBER_MAX_PROFILE_DISTRICTS);
 });
+
+test("members cannot change interval, pages, or offline days; admins can", () => {
+  const stored = {
+    watchDistricts: ["1-8"],
+    intervalMinutes: 2,
+    pagesPerWatch: 10,
+    offlineConfirmDays: 14,
+  };
+  const memberHydrated = hydrateSettings(stored, defaults);
+  assert.equal(memberHydrated.intervalMinutes, 5);
+  assert.equal(memberHydrated.pagesPerWatch, 40);
+  assert.equal(memberHydrated.offlineConfirmDays, 7);
+
+  const adminHydrated = hydrateSettings(stored, defaults, { admin: true });
+  assert.equal(adminHydrated.intervalMinutes, 2);
+  assert.equal(adminHydrated.pagesPerWatch, 10);
+  assert.equal(adminHydrated.offlineConfirmDays, 14);
+
+  const memberPatched = applySettingPatch(
+    { ...defaults, watchDistricts: ["1-8"], intervalMinutes: 5, pagesPerWatch: 40, offlineConfirmDays: 7 },
+    { intervalMinutes: 30, pagesPerWatch: 8, offlineConfirmDays: 21 },
+  );
+  assert.equal(memberPatched.intervalMinutes, 5);
+  assert.equal(memberPatched.pagesPerWatch, 40);
+  assert.equal(memberPatched.offlineConfirmDays, 7);
+
+  const adminPatched = applySettingPatch(
+    { ...defaults, watchDistricts: ["1-8"], intervalMinutes: 5, pagesPerWatch: 40, offlineConfirmDays: 7 },
+    { intervalMinutes: 30, pagesPerWatch: 8, offlineConfirmDays: 21 },
+    { admin: true },
+  );
+  assert.equal(adminPatched.intervalMinutes, 30);
+  assert.equal(adminPatched.pagesPerWatch, 8);
+  assert.equal(adminPatched.offlineConfirmDays, 21);
+});

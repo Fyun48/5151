@@ -95,3 +95,23 @@ test("member profiles cap districts and include usable ping in notify copy", () 
   const profilesFn = html.slice(html.indexOf("function renderProfiles"), html.indexOf("function fillNotifyMatrix"));
   assert.equal(profilesFn.includes("if (label)"), false);
 });
+
+test("member settings copy hides advanced hints and locks schedule defaults", () => {
+  const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
+  assert.match(html, /此通知只會訊息已是特別關注之物件/);
+  assert.match(html, /本系統每5分鐘會重新檢本物件來源比對篩選/);
+  assert.match(html, /classList\.toggle\("role-admin", meIsAdmin\)/);
+  assert.match(html, /meIsAdmin \? Number\(\$\("intervalMinutes"\)\.value\) : 5/);
+  assert.match(html, /meIsAdmin \? \(Number\(\$\("offlineConfirmDays"\)\.value\) \|\| 7\) : 7/);
+  assert.match(html, /meIsAdmin \? Number\(\$\("pagesPerWatch"\)\.value\) : 40/);
+  assert.match(html, /body:not\(\.role-admin\) \.admin-only/);
+  assert.match(html, /class="hint member-only"/);
+  assert.doesNotMatch(html, /站內是右下角「待看更新」/);
+  assert.doesNotMatch(html, /路徑用 591 物件頁「點地址」/);
+  assert.doesNotMatch(html, /每次最多抓取頁數（每頁約 30 筆/);
+  assert.doesNotMatch(html, /排程會依這個間隔抓 591 搜尋/);
+  assert.doesNotMatch(html, /591 回「不存在／已關閉」後先標/);
+  assert.doesNotMatch(html, /搜尋行政區（台北市 region=1/);
+  assert.doesNotMatch(html, /以下數量只算 591 搜尋條件/);
+  assert.doesNotMatch(html, /stat-note/);
+});
