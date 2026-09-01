@@ -1,6 +1,6 @@
 # 5151 v2 架構
 
-線上正在跑的是 repo 根目錄的 v1（`src/` + `public/`，埠 5151，資料 `data/591.db`）。GitHub Action 也只同步這兩包到 CasaOS。這份 `v2/` 是複製後的新版，資料在 `data-v2/v2.db`，預設埠 5152，完成前不會取代線上版。
+線上正在跑的是 repo 根目錄的 v1（`src/` + `public/`，埠 5151，`https://a5151.reversalplay.me`，資料 `591.db`）。這份 `v2/` 是複製後的新版（埠 5152，`https://b5151.reversalplay.me`，資料 `data-v2/v2.db`）。同一 repo、同一映像、同一條 tunnel 加 hostname；完成前不會取代 v1。
 
 ## 目標
 
