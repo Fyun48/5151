@@ -56,6 +56,7 @@ export function ensurePersonalSchema(db) {
 
     CREATE INDEX IF NOT EXISTS idx_user_flags_watched ON user_listing_flags(user_id, watched);
     CREATE INDEX IF NOT EXISTS idx_user_flags_viewed ON user_listing_flags(user_id, viewed);
+    CREATE INDEX IF NOT EXISTS idx_user_flags_post ON user_listing_flags(post_id);
     CREATE INDEX IF NOT EXISTS idx_user_events_user ON user_events(user_id, notified);
     CREATE INDEX IF NOT EXISTS idx_crawl_covers_region ON crawl_covers(region_id);
   `);

@@ -3,7 +3,9 @@ import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  defaultUserId,
   deleteProfile,
+  ensureUser,
   getCachedGeo,
   getListing,
   getSettings,
@@ -49,12 +51,18 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });
 
+function actorUserId(req) {
+  const email = String(readSession(req)?.email || adminEmail() || "").trim().toLowerCase();
+  return email ? ensureUser(email, { role: "admin" }) : defaultUserId();
+}
+
 /** 點通知／Discord 連結：標記已瀏覽後導向 591（免登入，方便 webhook）。 */
 app.get("/go/:id", (req, res) => {
   const id = Number(req.params.id);
   if (Number.isFinite(id) && id > 0) {
     try {
-      if (getListing(id)) setFlags(id, { viewed: true });
+      const uid = actorUserId(req);
+      if (getListing(id, uid)) setFlags(id, { viewed: true }, uid);
     } catch (error) {
       console.warn("標記已瀏覽失敗：", error.message);
     }
@@ -201,7 +209,8 @@ app.get("/api/settings", (_req, res) => {
   }
 });
 
-app.get("/api/state", (_req, res) => {
+app.get("/api/state", (req, res) => {
+  const uid = actorUserId(req);
   let settings;
   try {
     settings = getSettings();
@@ -213,8 +222,8 @@ app.get("/api/state", (_req, res) => {
   let listings = [];
   let events = [];
   try {
-    listingStats = stats();
-    const listed = listListings({ filter: "all", sort: "newest", limit: 500 });
+    listingStats = stats(undefined, uid);
+    const listed = listListings({ filter: "all", sort: "newest", limit: 500, userId: uid });
     listings = listed.listings;
     listingStats = { ...listingStats, matched: listed.totalMatched };
     events = recentEvents(30);
@@ -233,6 +242,7 @@ app.get("/api/state", (_req, res) => {
 });
 
 app.get("/api/listings", (req, res) => {
+  const uid = actorUserId(req);
   const districts = String(req.query.districts || "")
     .split(",")
     .map((name) => name.trim())
@@ -244,9 +254,10 @@ app.get("/api/listings", (req, res) => {
     sort: req.query.sort || "newest",
     limit: Number(req.query.limit) || 500,
     districts,
+    userId: uid,
   });
   res.json({
-    stats: { ...stats(), matched: listed.totalMatched },
+    stats: { ...stats(undefined, uid), matched: listed.totalMatched },
     listings: listed.listings,
   });
 });
@@ -257,7 +268,7 @@ app.post("/api/listings/hide-many", (req, res) => {
     res.status(400).json({ error: "請先勾選物件" });
     return;
   }
-  res.json(hideMany(ids));
+  res.json(hideMany(ids, actorUserId(req)));
 });
 
 app.post("/api/reset-listings", (req, res) => {
@@ -267,7 +278,7 @@ app.post("/api/reset-listings", (req, res) => {
   }
   const settings = resetListings();
   lastRun = null;
-  res.json({ ok: true, settings, stats: stats() });
+  res.json({ ok: true, settings, stats: stats(undefined, actorUserId(req)) });
 });
 
 app.post("/api/reset-all", (req, res) => {
@@ -281,39 +292,43 @@ app.post("/api/reset-all", (req, res) => {
 });
 
 app.get("/api/listings/:id/history", (req, res) => {
-  const listing = getListing(Number(req.params.id));
+  const uid = actorUserId(req);
+  const listing = getListing(Number(req.params.id), uid);
   if (!listing) {
     res.status(404).json({ error: "找不到這筆物件" });
     return;
   }
-  res.json({ listing, history: sourceHistory(listing.source_key) });
+  res.json({ listing, history: sourceHistory(listing.source_key, uid) });
 });
 
 app.post("/api/listings/:id/flags", (req, res) => {
-  const updated = setFlags(Number(req.params.id), req.body || {});
+  const uid = actorUserId(req);
+  const updated = setFlags(Number(req.params.id), req.body || {}, uid);
   if (!updated) {
     res.status(404).json({ error: "找不到這筆物件" });
     return;
   }
-  res.json({ listing: updated, stats: stats() });
+  res.json({ listing: updated, stats: stats(undefined, uid) });
 });
 
 app.post("/api/listings/:id/reject-match", (req, res) => {
-  const updated = rejectSuspectedMatch(Number(req.params.id));
+  const uid = actorUserId(req);
+  const updated = rejectSuspectedMatch(Number(req.params.id), uid);
   if (!updated) {
     res.status(404).json({ error: "找不到這筆物件" });
     return;
   }
-  res.json({ listing: updated, stats: stats() });
+  res.json({ listing: updated, stats: stats(undefined, uid) });
 });
 
 app.post("/api/listings/:id/confirm-match", (req, res) => {
-  const updated = confirmSuspectedMatch(Number(req.params.id));
+  const uid = actorUserId(req);
+  const updated = confirmSuspectedMatch(Number(req.params.id), uid);
   if (!updated) {
     res.status(404).json({ error: "找不到這筆物件或缺少比對對象" });
     return;
   }
-  res.json({ listing: updated, stats: stats() });
+  res.json({ listing: updated, stats: stats(undefined, uid) });
 });
 
 async function persistSettings(body = {}) {
@@ -412,10 +427,10 @@ app.post("/api/exclude-region", async (req, res) => {
   }
 });
 
-app.post("/api/watch", async (_req, res) => {
+app.post("/api/watch", async (req, res) => {
   try {
     const result = await tick("manual");
-    res.json({ result, stats: stats() });
+    res.json({ result, stats: stats(undefined, actorUserId(req)) });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
