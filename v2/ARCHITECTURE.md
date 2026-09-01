@@ -10,8 +10,8 @@
 
 ## 分階段
 
-1. **現在：** 複製可跑的 v2、獨立資料庫、覆蓋搜尋純邏輯、個人資料表骨架。畫面上仍是單人（與 v1 相同行為），方便對照。
-2. **進行中：** 排程抓取已改走 `crawl_covers`（縣市／行政區聯集 + 租金取寬，最新刊登頁）。下一步才是列表／通知改讀共用 `listings` 再套 `user_listing_flags`。
+1. **完成：** 複製可跑的 v2、獨立資料庫、覆蓋搜尋（縣市／行政區聯集 + 租金取寬）。
+2. **完成：** 列表／通知讀共用 `listings`，已瀏覽／關注／隱藏／備註改走 `user_listing_flags`。目前仍只有一位管理員（`ensureUser(AUTH_EMAIL)`），之後加會員不必再改這層表。
 3. **然後：** 真正的會員表登入（不再共用一個 AUTH）、個人通知佇列、免責聲明頁。
 4. **再來：** 贊助方案只影響間隔／覆蓋範圍等，不影響「這是不是免費系統」的條款。
 5. **最後：** 你確認 v2 可取代後，再停 v1。在那之前不要改 root `src/`、`public/` 的部署路徑。
@@ -22,15 +22,15 @@
 
 新縣市：有會員需要才加入覆蓋；不是每 5 分鐘全台全掃。
 
-## 資料（已建表、尚未切換讀寫）
+## 資料
 
 | 表 | 用途 |
 |---|---|
-| `listings` 等 | 仍暫存 v1 那套（含列上的 watched）。切換後只留 591／地圖欄位 |
-| `users` | 帳號、free／sponsor |
-| `user_settings` | 個人搜尋條件、webhook、通勤 |
+| `listings` | 591／地圖／下架／同屋源判定（共用）。`hidden=1` 只留給已確認的重複刊登（`match_verdict=yes`） |
+| `users` | 帳號、free／sponsor。現在會自動建立管理員列 |
+| `user_settings` | 個人搜尋條件、webhook、通勤（尚未切換讀寫，設定仍在全站 `settings`） |
 | `user_listing_flags` | 已瀏覽／關注／隱藏／備註 |
 | `crawl_covers` | 全站實際要打 591 的覆蓋 |
-| `user_events` | 個人通知，不再共用 `events` |
+| `user_events` | 個人通知佇列（尚未取代全站 `events`） |
 
-v1 的 `DATA_EPOCH` 沒有改。v2 用另一個檔名，避免碰到線上 `591.db`。
+啟動時若 `listings` 列上還有舊的 watched／viewed／hidden，會一次性搬到管理員的 `user_listing_flags`。v1 的 `DATA_EPOCH` 沒有改。

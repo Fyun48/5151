@@ -22,7 +22,8 @@ import {
   saveSettings,
   setCachedRoute,
   setCommunityCache,
-  setFlags,
+  copyUserFlags,
+  anyoneWatched,
   setListingDetail,
   setListingMatch,
   touchListingChecked,
@@ -68,8 +69,9 @@ function listingEventPayload(listing, type, detail, stamp = nowIso()) {
 
 function queueOfflineEvent(postId, { wasOnline = true } = {}) {
   if (!wasOnline) return;
+  if (!anyoneWatched(postId)) return;
   const listing = getListing(postId);
-  if (!listing?.watched) return;
+  if (!listing) return;
   const stamp = nowIso();
   const event = listingEventPayload(listing, "offline", "591 詳情已不存在或已關閉", stamp);
   event.id = addEvent(event);
@@ -375,20 +377,15 @@ export async function runWatch(options = {}) {
           match_detail: detail,
         });
       }
-      if (!existing && prev && (prev.hidden || prev.viewed)) {
-        setListingMatch(listing.post_id, {
-          match_post_id: prev.post_id,
-          match_level: level || "high",
-          match_detail: detail,
-        });
-        setFlags(listing.post_id, {
-          hidden: true,
-          viewed: true,
-          watched: Boolean(prev.watched),
-          watch_note: prev.watch_note || "",
-        });
-      } else if (!existing && prev?.watched) {
-        setFlags(listing.post_id, { watched: true, watch_note: prev.watch_note || "" });
+      if (!existing && prev) {
+        const copied = copyUserFlags(prev.post_id, listing.post_id);
+        if (copied || prev.hidden || prev.viewed) {
+          setListingMatch(listing.post_id, {
+            match_post_id: prev.post_id,
+            match_level: level || "high",
+            match_detail: detail,
+          });
+        }
       }
 
       if (type === "seen" || isBaseline || isSearchBaseline) continue;

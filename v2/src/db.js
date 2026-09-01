@@ -11,11 +11,25 @@ import { hasWorkPoint } from "./geo.js";
 import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings } from "./settingsState.js";
 import { defaultNotifyMatrix } from "./notifyMatrix.js";
 import { DATA_EPOCH, shouldResetForEpoch } from "./dataEpoch.js";
-import { nextWatchNote } from "./watchFlags.js";
 import { countsTowardAllTotal, isConfirmedOffline, isPendingOffline } from "./offline.js";
 import { coveringJobsFromMembers } from "./covering.js";
 import { listCrawlCovers } from "./crawlCovers.js";
 import { ensurePersonalSchema } from "./personalSchema.js";
+import {
+  adminEmailForUser,
+  anyoneWatched as anyoneWatchedOn,
+  copyUserFlagsForRelist as copyUserFlagsForRelistOn,
+  ensureUser as ensureUserOn,
+  listingMatchesListFilter,
+  loadAnyoneFlagMap,
+  loadFlagMap,
+  loadFlags,
+  mergeFlagsOnConfirm as mergeFlagsOnConfirmOn,
+  migrateListingFlagsIfNeeded,
+  overlayPersonal,
+  overlayRowsPersonal,
+  setUserListingFlags,
+} from "./personalFlags.js";
 
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data-v2");
 mkdirSync(DATA_DIR, { recursive: true });
@@ -264,6 +278,26 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_listings_match ON listings(match_level)"
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_offline ON listings(offline)");
 ensurePersonalSchema(db);
 
+let cachedDefaultUserId = 0;
+
+export function ensureUser(email, opts) {
+  return ensureUserOn(db, email, opts);
+}
+
+export function defaultUserId() {
+  if (cachedDefaultUserId) return cachedDefaultUserId;
+  cachedDefaultUserId = ensureUserOn(db, adminEmailForUser(), { role: "admin" });
+  return cachedDefaultUserId;
+}
+
+export function anyoneWatched(postId) {
+  return anyoneWatchedOn(db, postId);
+}
+
+export function copyUserFlags(fromPostId, toPostId) {
+  return copyUserFlagsForRelistOn(db, fromPostId, toPostId);
+}
+
 const DEFAULTS = {
   searchUrls: [],
   intervalMinutes: 5,
@@ -393,20 +427,33 @@ function decorateListing(row, settings = getSettings()) {
   };
 }
 
-export function getListing(postId) {
-  return decorateListing(db.prepare("SELECT * FROM listings WHERE post_id = ?").get(postId));
+function resolveUserId(userId) {
+  return userId == null ? defaultUserId() : Number(userId) || defaultUserId();
+}
+
+function withPersonal(row, userId) {
+  if (!row) return row;
+  return overlayPersonal(row, loadFlags(db, resolveUserId(userId), row.post_id));
+}
+
+export function getListing(postId, userId) {
+  const row = db.prepare("SELECT * FROM listings WHERE post_id = ?").get(postId);
+  if (!row) return row;
+  return decorateListing(withPersonal(row, userId));
 }
 
 export function findBySourceKey(sourceKey, excludePostId) {
+  const anyone = loadAnyoneFlagMap(db);
   return db
     .prepare(
       "SELECT * FROM listings WHERE source_key = ? AND post_id != ? ORDER BY last_seen_at DESC",
     )
     .all(sourceKey, excludePostId)
-    .map(decorateListing);
+    .map((row) => decorateListing(overlayPersonal(row, anyone.get(Number(row.post_id)))));
 }
 
 export function listMatchCandidates(excludePostId) {
+  const anyone = loadAnyoneFlagMap(db);
   return db
     .prepare(
       `SELECT * FROM listings
@@ -415,7 +462,7 @@ export function listMatchCandidates(excludePostId) {
        LIMIT 4000`,
     )
     .all(excludePostId)
-    .map(decorateListing);
+    .map((row) => decorateListing(overlayPersonal(row, anyone.get(Number(row.post_id)))));
 }
 
 export function setListingMatch(postId, match) {
@@ -427,56 +474,50 @@ export function setListingMatch(postId, match) {
   return getListing(postId);
 }
 
-export function rejectSuspectedMatch(postId) {
-  const listing = getListing(postId);
+export function rejectSuspectedMatch(postId, userId) {
+  const listing = getListing(postId, userId);
   if (!listing) return null;
   db.prepare(
     `UPDATE listings
-     SET match_verdict = 'no', match_rejected = 1, hidden = 0, viewed = 0
+     SET match_verdict = 'no', match_rejected = 1, hidden = 0
      WHERE post_id = ?`,
   ).run(postId);
-  return getListing(postId);
+  return getListing(postId, userId);
 }
 
-export function confirmSuspectedMatch(postId) {
-  const listing = getListing(postId);
+export function confirmSuspectedMatch(postId, userId) {
+  const listing = getListing(postId, userId);
   if (!listing?.match_post_id) return null;
-  const peer = getListing(listing.match_post_id);
+  const peer = getListing(listing.match_post_id, userId);
   if (!peer) return null;
   const primary = preferPrimaryListing(listing, peer);
   const duplicate = Number(primary.post_id) === Number(listing.post_id) ? peer : listing;
   const now = new Date().toISOString();
-  const watched = Number(primary.watched) === 1 || Number(duplicate.watched) === 1 ? 1 : 0;
-  const watchNote = String(primary.watch_note || "").trim() || String(duplicate.watch_note || "").trim();
   db.exec("BEGIN");
   try {
     db.prepare(
       `UPDATE listings
-       SET match_verdict = 'yes', match_rejected = 0, hidden = 1, viewed = 1,
-           match_post_id = ?, hidden_at = COALESCE(hidden_at, ?), viewed_at = COALESCE(viewed_at, ?)
+       SET match_verdict = 'yes', match_rejected = 0, hidden = 1,
+           match_post_id = ?, hidden_at = COALESCE(hidden_at, ?)
        WHERE post_id = ?`,
-    ).run(primary.post_id, now, now, duplicate.post_id);
+    ).run(primary.post_id, now, duplicate.post_id);
     db.prepare(
       `UPDATE listings
        SET match_verdict = '', match_rejected = 0, hidden = 0, match_level = NULL,
-           match_detail = ?, match_post_id = ?, watched = ?, watch_note = ?,
-           watched_at = CASE WHEN ? = 1 THEN COALESCE(watched_at, ?) ELSE watched_at END
+           match_detail = ?, match_post_id = ?
        WHERE post_id = ?`,
     ).run(
       `已確認同一間，保留較低價／較新刊登，隱藏 #${duplicate.post_id}`,
       duplicate.post_id,
-      watched,
-      watchNote,
-      watched,
-      now,
       primary.post_id,
     );
+    mergeFlagsOnConfirmOn(db, primary.post_id, duplicate.post_id);
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
   }
-  return getListing(postId);
+  return getListing(postId, userId);
 }
 
 export function currentSearchKeys() {
@@ -722,21 +763,22 @@ export function listingsNeeding591Geo(limit = 20) {
   return out;
 }
 
-export function hideMany(ids) {
+export function hideMany(ids, userId) {
+  const uid = resolveUserId(userId);
   const list = [...new Set((ids || []).map(Number).filter((id) => id > 0))];
-  const now = new Date().toISOString();
-  const stmt = db.prepare(
-    `UPDATE listings SET hidden = 1, hidden_at = COALESCE(hidden_at, ?) WHERE post_id = ?`,
-  );
   db.exec("BEGIN");
   try {
-    for (const id of list) stmt.run(now, id);
+    for (const id of list) {
+      const listing = getListing(id, uid);
+      if (!listing) continue;
+      setUserListingFlags(db, uid, id, { hidden: true }, listing);
+    }
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
   }
-  return { count: list.length, stats: stats() };
+  return { count: list.length, stats: stats(undefined, uid) };
 }
 
 export function markListingOffline(postId) {
@@ -847,6 +889,8 @@ export function listingsNeedingOfflineRecheck({ limit = 8 } = {}) {
 
 export function resetListings() {
   db.exec("DELETE FROM events");
+  db.exec("DELETE FROM user_events");
+  db.exec("DELETE FROM user_listing_flags");
   db.exec("DELETE FROM listings");
   return saveSettings({ hasBaseline: false });
 }
@@ -857,6 +901,10 @@ export function resetAllData() {
   db.exec("BEGIN");
   try {
     db.exec("DELETE FROM events");
+    db.exec("DELETE FROM user_events");
+    db.exec("DELETE FROM user_listing_flags");
+    db.exec("DELETE FROM user_settings");
+    db.exec("DELETE FROM crawl_covers");
     db.exec("DELETE FROM listings");
     db.exec("DELETE FROM settings");
     db.exec("DELETE FROM geo_cache");
@@ -913,6 +961,15 @@ if (shouldResetForEpoch(readDataEpoch(), DATA_EPOCH)) {
   stampDataEpoch();
 }
 
+try {
+  const migrated = migrateListingFlagsIfNeeded(db, defaultUserId());
+  if (migrated.migrated && migrated.copied) {
+    console.log(`[5151] 已把 ${migrated.copied} 筆刊登標記搬到個人資料表`);
+  }
+} catch (error) {
+  console.warn("個人標記遷移失敗：", error.message);
+}
+
 export function addEvent(event) {
   const result = db.prepare(`
     INSERT INTO events (post_id, source_key, type, title, detail, created_at, notified)
@@ -933,27 +990,12 @@ export function markEventNotified(id) {
   db.prepare("UPDATE events SET notified = 1 WHERE id = ?").run(id);
 }
 
-export function setFlags(postId, flags) {
-  const listing = getListing(postId);
+export function setFlags(postId, flags, userId) {
+  const uid = resolveUserId(userId);
+  const listing = getListing(postId, uid);
   if (!listing) return null;
-  const viewed = flags.viewed === undefined ? listing.viewed : Number(Boolean(flags.viewed));
-  const watched = flags.watched === undefined ? listing.watched : Number(Boolean(flags.watched));
-  const hidden = flags.hidden === undefined ? listing.hidden : Number(Boolean(flags.hidden));
-  const watchNote = nextWatchNote(listing, flags);
-  const now = new Date().toISOString();
-  db.prepare(`
-    UPDATE listings
-    SET viewed = ?, watched = ?, hidden = ?, watch_note = ?,
-        viewed_at = CASE WHEN ? = 1 THEN COALESCE(viewed_at, ?) ELSE viewed_at END,
-        watched_at = CASE
-          WHEN ? = 1 AND IFNULL(watched, 0) = 0 THEN ?
-          WHEN ? = 1 THEN COALESCE(watched_at, ?)
-          ELSE watched_at
-        END,
-        hidden_at = CASE WHEN ? = 1 THEN COALESCE(hidden_at, ?) ELSE hidden_at END
-    WHERE post_id = ?
-  `).run(viewed, watched, hidden, watchNote, viewed, now, watched, now, watched, now, hidden, now, postId);
-  return getListing(postId);
+  setUserListingFlags(db, uid, postId, flags || {}, listing);
+  return getListing(postId, uid);
 }
 
 export function applyCachedCoords(row, settings) {
@@ -1107,7 +1149,9 @@ export function listListings({
   limit = 500,
   searchKeys,
   districts = [],
+  userId,
 } = {}) {
+  const uid = resolveUserId(userId);
   ({ filter, kind } = normalizeListQuery(filter, kind));
   const clauses = [];
   const params = [];
@@ -1119,29 +1163,74 @@ export function listListings({
     clauses.push("IFNULL(offline, 0) = 1");
     clauses.push("IFNULL(offline_confirmed, 0) = 0");
   } else if (filter === "hidden") {
-    clauses.push("hidden = 1");
+    clauses.push(`(
+      IFNULL(match_verdict, '') = 'yes'
+      OR IFNULL(hidden, 0) = 1
+      OR EXISTS (
+        SELECT 1 FROM user_listing_flags f
+        WHERE f.post_id = listings.post_id AND f.user_id = ? AND f.hidden = 1
+      )
+    )`);
+    params.push(uid);
   } else {
-    clauses.push("IFNULL(hidden, 0) = 0");
     clauses.push("IFNULL(offline, 0) = 0");
     clauses.push("(IFNULL(match_verdict, '') != 'yes')");
+    clauses.push(`NOT EXISTS (
+      SELECT 1 FROM user_listing_flags f
+      WHERE f.post_id = listings.post_id AND f.user_id = ? AND f.hidden = 1
+    )`);
+    params.push(uid);
   }
-  if (filter === "all") clauses.push("IFNULL(watched, 0) = 0");
-  if (filter === "unseen") clauses.push("viewed = 0");
-  if (filter === "viewed") clauses.push("viewed = 1");
-  if (filter === "watched") clauses.push("watched = 1");
+  if (filter === "all") {
+    clauses.push(`IFNULL((
+      SELECT watched FROM user_listing_flags f
+      WHERE f.post_id = listings.post_id AND f.user_id = ?
+    ), 0) = 0`);
+    params.push(uid);
+  }
+  if (filter === "unseen") {
+    clauses.push(`IFNULL((
+      SELECT viewed FROM user_listing_flags f
+      WHERE f.post_id = listings.post_id AND f.user_id = ?
+    ), 0) = 0`);
+    params.push(uid);
+  }
+  if (filter === "viewed") {
+    clauses.push(`IFNULL((
+      SELECT viewed FROM user_listing_flags f
+      WHERE f.post_id = listings.post_id AND f.user_id = ?
+    ), 0) = 1`);
+    params.push(uid);
+  }
+  if (filter === "watched") {
+    clauses.push(`IFNULL((
+      SELECT watched FROM user_listing_flags f
+      WHERE f.post_id = listings.post_id AND f.user_id = ?
+    ), 0) = 1`);
+    params.push(uid);
+  }
   if (filter === "same_source") clauses.push("last_event IN ('same_source', 'update', 'price_drop', 'title_update')");
   if (q) {
-    clauses.push("(title LIKE ? OR address LIKE ? OR CAST(post_id AS TEXT) LIKE ? OR IFNULL(watch_note, '') LIKE ?)");
     const like = `%${q}%`;
-    params.push(like, like, like, like);
+    clauses.push(`(
+      title LIKE ? OR address LIKE ? OR CAST(post_id AS TEXT) LIKE ?
+      OR IFNULL((
+        SELECT watch_note FROM user_listing_flags f
+        WHERE f.post_id = listings.post_id AND f.user_id = ?
+      ), '') LIKE ?
+    )`);
+    params.push(like, like, like, uid, like);
   }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const raw = db.prepare(`SELECT * FROM listings ${where}`).all(...params);
   const settings = getSettings();
+  const flagMap = loadFlagMap(db, uid);
   let rows =
     filter === "offline" || filter === "suspected"
-      ? raw.map((row) => decorateListing(row, settings))
-      : applyListingFilter(raw).map((row) => decorateListing(row, settings));
+      ? overlayRowsPersonal(raw, flagMap).map((row) => decorateListing(row, settings))
+      : applyListingFilter(overlayRowsPersonal(raw, flagMap)).map((row) => decorateListing(row, settings));
+
+  rows = rows.filter((row) => listingMatchesListFilter(row, filter));
 
   // 整層／1F、行政區要在 limit 前套用，否則「全庫最便宜 500 筆」再前端篩選會漏掉新北等區
   rows = rows.filter((row) => passesDisplayFilters(row, settings, { skipWholeFloor: kind === "suite" }));
@@ -1162,13 +1251,17 @@ export function listListings({
   return { listings: rows.slice(0, limit), totalMatched };
 }
 
-export function sourceHistory(sourceKey) {
-  return db
-    .prepare(
-      `SELECT post_id, title, price, url, first_seen_at, last_seen_at, last_event, viewed, watched
-       FROM listings WHERE source_key = ? ORDER BY last_seen_at DESC`,
-    )
-    .all(sourceKey);
+export function sourceHistory(sourceKey, userId) {
+  const flagMap = loadFlagMap(db, resolveUserId(userId));
+  return overlayRowsPersonal(
+    db
+      .prepare(
+        `SELECT post_id, title, price, url, first_seen_at, last_seen_at, last_event, viewed, watched, hidden, watch_note
+         FROM listings WHERE source_key = ? ORDER BY last_seen_at DESC`,
+      )
+      .all(sourceKey),
+    flagMap,
+  );
 }
 
 export function recentEvents(limit = 40) {
@@ -1246,7 +1339,8 @@ export function setCommunityCache(community) {
   );
 }
 
-export function stats(searchKeys) {
+export function stats(searchKeys, userId) {
+  const uid = resolveUserId(userId);
   const settings = getSettings();
   const clauses = [];
   const params = [];
@@ -1254,13 +1348,15 @@ export function stats(searchKeys) {
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const raw = db
     .prepare(
-      `SELECT viewed, watched, hidden, offline, offline_confirmed, last_event, floor_name, kind_name, title, address, area_name, lat, lng, geo_source, tags, match_level, match_rejected, match_verdict FROM listings ${where}`,
+      `SELECT viewed, watched, hidden, offline, offline_confirmed, last_event, floor_name, kind_name, title, address, area_name, lat, lng, geo_source, tags, match_level, match_rejected, match_verdict, post_id FROM listings ${where}`,
     )
     .all(...params);
-  const attrRows = raw.filter((row) => passesAttributeFilters(row, settings));
+  const flagMap = loadFlagMap(db, uid);
+  const overlaid = overlayRowsPersonal(raw, flagMap);
+  const attrRows = overlaid.filter((row) => passesAttributeFilters(row, settings));
   const base = attrRows.filter((row) => !row.hidden && !isPendingOffline(row) && !isConfirmedOffline(row) && row.match_verdict !== "yes");
   const browse = attrRows.filter(countsTowardAllTotal);
-  const geoRows = applyListingFilter(raw).filter((row) => !row.hidden && !isPendingOffline(row) && !isConfirmedOffline(row) && row.match_verdict !== "yes" && !row.watched);
+  const geoRows = applyListingFilter(overlaid).filter((row) => !row.hidden && !isPendingOffline(row) && !isConfirmedOffline(row) && row.match_verdict !== "yes" && !row.watched);
   return {
     total: browse.length,
     unseen: browse.filter((row) => !row.viewed).length,
