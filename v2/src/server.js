@@ -26,6 +26,7 @@ import { adminEmail, authConfigured, clearSessionCookie, readSession, requireAut
 import { boxFromRoadDescription, geocodeAddress, needsListingGeo, hasWorkPoint } from "./geo.js";
 import { rent591Url } from "./openLink.js";
 import { CITIES } from "./regions.js";
+import { coveringJobsFromSettings } from "./covering.js";
 import { backfillListingCoords, backfillListingRoutes, flushPendingNotifications, runWatch } from "./watcher.js";
 import { LIST_PAGE_SIZE } from "./client591.js";
 
@@ -441,8 +442,8 @@ app.listen(PORT, HOST, () => {
   setTimeout(() => {
     ensureWorkCoords()
       .then((settings) => {
-        const urls = (settings.searchUrls || []).map((url) => String(url).trim()).filter(Boolean);
-        if (!urls.length) return;
+        const jobs = coveringJobsFromSettings(settings);
+        if (!jobs.length) return;
         queueGeoBackfill(settings);
         return tick("startup");
       })

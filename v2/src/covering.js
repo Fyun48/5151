@@ -84,3 +84,64 @@ export function isCoveredByJobs(member, jobs) {
 export function uncoveredMembers(members, jobs) {
   return (members || []).filter((member) => !isCoveredByJobs(member, jobs));
 }
+
+function coversFromWatchDistricts(settings = {}) {
+  const grouped = new Map();
+  for (const key of settings.watchDistricts || []) {
+    const [regionRaw, sectionRaw] = String(key).split("-");
+    const regionId = Number(regionRaw);
+    const sectionId = Number(sectionRaw);
+    if (!(regionId > 0) || !(sectionId > 0)) continue;
+    const list = grouped.get(regionId) || [];
+    list.push(sectionId);
+    grouped.set(regionId, list);
+  }
+  return [...grouped.entries()].map(([regionId, sectionIds]) => ({
+    regionId,
+    sectionIds: numIds(sectionIds),
+    priceMin: priceBound(settings.priceMin),
+    priceMax: priceBound(settings.priceMax),
+  }));
+}
+
+/** 單一會員目前的搜尋條件：網址與行政區／租金上限都算進覆蓋。 */
+export function coversFromMemberSettings(settings = {}) {
+  const covers = [];
+  for (const raw of settings.searchUrls || []) {
+    const cover = parseCoverFromSearchUrl(raw);
+    if (cover.regionId > 0) covers.push(cover);
+  }
+  covers.push(...coversFromWatchDistricts(settings));
+  return covers;
+}
+
+export function coverToListUrl(cover, { excludeRooftop = true } = {}) {
+  const regionId = Number(cover?.regionId) || 0;
+  if (regionId <= 0) return "";
+  const params = new URLSearchParams();
+  params.set("region", String(regionId));
+  const sections = numIds(cover.sectionIds);
+  if (sections.length) params.set("section", sections.join(","));
+  const lo = Number(cover.priceMin) > 0 ? String(Math.round(Number(cover.priceMin))) : "";
+  const hi = Number(cover.priceMax) > 0 ? String(Math.round(Number(cover.priceMax))) : "";
+  if (lo || hi) params.set("price", `${lo}_${hi}`);
+  if (excludeRooftop !== false) params.set("notice", "not_cover");
+  params.set("order", "posttime");
+  params.set("orderType", "desc");
+  return `https://rent.591.com.tw/list?${params}`;
+}
+
+export function coveringJobsFromMembers(members, { excludeRooftop = true } = {}) {
+  return mergeCovers(members)
+    .map((job) => ({
+      ...job,
+      searchUrl: coverToListUrl(job, { excludeRooftop }),
+    }))
+    .filter((job) => job.searchUrl);
+}
+
+export function coveringJobsFromSettings(settings = {}) {
+  return coveringJobsFromMembers(coversFromMemberSettings(settings), {
+    excludeRooftop: settings.excludeRooftop !== false,
+  });
+}
