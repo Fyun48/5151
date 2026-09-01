@@ -32,3 +32,12 @@ test("boot watchdog still runs if the main page script never parses", () => {
   assert.ok(watchdogIdx > 0 && parsedIdx > watchdogIdx, "watchdog script must come before main script");
   assert.ok(bootedIdx > parsedIdx, "boot flag must be set after main script body");
 });
+
+test("watch fly animation is non-blocking and targets the watched chip", () => {
+  const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
+  assert.match(html, /id="watchFlyLayer"/);
+  assert.match(html, /pointer-events:\s*none/);
+  assert.match(html, /function flyCardToWatchChip/);
+  assert.match(html, /data-filter="watched"/);
+  assert.match(html, /1\.2s/);
+});

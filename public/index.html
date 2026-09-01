@@ -267,6 +267,28 @@
     .watch-note[data-watch-draft="1"] {
       box-shadow: 0 0 0 2px rgba(184, 122, 122, 0.35);
     }
+    #watchFlyLayer {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 12000;
+    }
+    .watch-fly-ghost {
+      position: fixed;
+      pointer-events: none;
+      overflow: hidden;
+      margin: 0;
+      border-radius: 20px;
+      box-shadow: 0 12px 32px rgba(26, 43, 51, 0.16);
+      transform-origin: center center;
+      will-change: transform, opacity;
+    }
+    .chip.watch-fly-hit {
+      box-shadow: 0 0 0 4px rgba(184, 122, 122, 0.4);
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .watch-fly-ghost { display: none; }
+    }
     .tag.lift { background: #dcfce7; color: #166534; }
     .tag.off { background: #e2e8f0; color: #475569; }
     .tag.off-sure { background: #334155; color: #f8fafc; }
@@ -1521,7 +1543,43 @@
       loadList({ force: true });
     }
 
+    function flyCardToWatchChip(card) {
+      if (!card || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+      const chip = document.querySelector("[data-filter=\"watched\"]");
+      const layer = $("watchFlyLayer");
+      if (!chip || !layer) return;
+      const from = card.getBoundingClientRect();
+      const to = chip.getBoundingClientRect();
+      if (from.width < 8 || from.height < 8) return;
+      const ghost = card.cloneNode(true);
+      ghost.removeAttribute("data-card");
+      ghost.querySelectorAll("button, input, a, textarea, label").forEach((el) => {
+        el.removeAttribute("id");
+        el.setAttribute("tabindex", "-1");
+      });
+      ghost.classList.add("watch-fly-ghost");
+      ghost.style.left = `${from.left}px`;
+      ghost.style.top = `${from.top}px`;
+      ghost.style.width = `${from.width}px`;
+      ghost.style.height = `${from.height}px`;
+      layer.appendChild(ghost);
+      const dx = to.left + to.width / 2 - (from.left + from.width / 2);
+      const dy = to.top + to.height / 2 - (from.top + from.height / 2);
+      const scale = Math.max(0.08, Math.min(to.width / from.width, 0.16));
+      requestAnimationFrame(() => {
+        ghost.style.transition = "transform 1.2s cubic-bezier(.22,.82,.28,1), opacity 1.2s ease";
+        ghost.style.transform = `translate(${dx}px, ${dy}px) scale(${scale})`;
+        ghost.style.opacity = "0.12";
+      });
+      window.setTimeout(() => {
+        ghost.remove();
+        chip.classList.add("watch-fly-hit");
+        window.setTimeout(() => chip.classList.remove("watch-fly-hit"), 400);
+      }, 1250);
+    }
+
     async function commitWatchDraft(id, note) {
+      flyCardToWatchChip(document.querySelector(`[data-card="${id}"]`));
       draftWatch.delete(String(id));
       await fetch(`/api/listings/${id}/flags`, {
         method: "POST",
@@ -2505,6 +2563,7 @@
       window.__showBootFail(`錯誤：${detail}。請重新整理，不要按清除資料。`);
     }
   </script>
+  <div id="watchFlyLayer" aria-hidden="true"></div>
   <script src="/vendor/leaflet/leaflet.js" defer></script>
 </body>
 </html>
