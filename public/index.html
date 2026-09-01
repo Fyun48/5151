@@ -827,15 +827,17 @@
         <div class="filter-body" id="filterBody">
         <div class="toolbar">
           <button class="chip on" data-filter="all">全部</button>
-          <button class="chip" data-filter="elevator">有電梯</button>
-          <button class="chip" data-filter="apartment">公寓</button>
-          <button class="chip" data-filter="suite">套房</button>
           <button class="chip" data-filter="unseen">未瀏覽</button>
           <button class="chip" data-filter="watched">特別關注</button>
           <button class="chip" data-filter="same_source">同屋源更新</button>
           <button class="chip" data-filter="suspected">疑似同屋源</button>
           <button class="chip" data-filter="hidden">已隱藏</button>
           <button class="chip" data-filter="offline">正在確認中的下架</button>
+          <span style="width:1px;height:22px;background:var(--line);margin:0 4px"></span>
+          <button class="chip" data-kind="elevator">電梯</button>
+          <button class="chip" data-kind="apartment">公寓</button>
+          <button class="chip" data-kind="suite">套房</button>
+          <button class="chip" data-kind="building">大樓</button>
           <span style="width:1px;height:22px;background:var(--line);margin:0 4px"></span>
           <button class="chip" data-sort="newest">最新</button>
           <button class="chip on" data-sort="price_asc">金額低→高</button>
@@ -910,6 +912,7 @@
     }
     $("status").textContent = "正在載入…";
     let filter = "all";
+    let kind = "";
     let sort = "price_asc";
     let settings = {};
     let selected = new Set();
@@ -1088,7 +1091,7 @@
 
     function applyViewFilters(items) {
       let out = items;
-      if ($("wholeFloorOnly").checked) {
+      if ($("wholeFloorOnly").checked && kind !== "suite") {
         out = out.filter((item) => isWholeFloorHome(item.kind_name));
       }
       if ($("excludeLowFloors").checked) {
@@ -1486,12 +1489,22 @@
           msg = "目前沒有被判成同一屋源的重刊。隱藏或已瀏覽的舊屋若再上架，會出現在這裡。";
         } else if (filter === "offline") {
           msg = "目前沒有正在確認中的下架物件。591 關閉或刪除的刊登會先列在這裡核對；滿設定天數仍找不到就改成確認已下架，並從「全部」與這個篩選的數量扣除。";
-        } else if (filter === "elevator") {
-          msg = "目前沒有標到有電梯的物件。這只篩已抓到的結果，不會重查 591。";
-        } else if (filter === "apartment") {
-          msg = "目前沒有標成公寓的物件。這只篩已抓到的結果，不會重查 591。";
-        } else if (filter === "suite") {
-          msg = "目前沒有套房／雅房。這只篩已抓到的結果，不會重查 591。";
+        } else if (kind === "elevator") {
+          msg = filter === "watched"
+            ? "特別關注裡目前沒有標到有電梯的物件。"
+            : "目前沒有標到有電梯的物件。這只篩已抓到的結果，不會重查 591。";
+        } else if (kind === "apartment") {
+          msg = filter === "watched"
+            ? "特別關注裡目前沒有公寓。"
+            : "目前沒有標成公寓的物件。這只篩已抓到的結果，不會重查 591。";
+        } else if (kind === "suite") {
+          msg = filter === "watched"
+            ? "特別關注裡目前沒有套房／雅房。"
+            : "目前沒有套房／雅房。這只篩已抓到的結果，不會重查 591。";
+        } else if (kind === "building") {
+          msg = filter === "watched"
+            ? "特別關注裡目前沒有大樓／華廈。"
+            : "目前沒有標成大樓／華廈的物件。這只篩已抓到的結果，不會重查 591。";
         } else if (st.missingGeo > 0) {
           msg = `正在從 591 物件地圖補 ${st.missingGeo} 筆座標（就是網頁上點地址看到的那個），完成後會自動計算機車路線。`;
         } else if (st.missingRoute > 0) {
@@ -1649,7 +1662,7 @@
       const q = $("q").value.trim();
       const districts = [...viewDistricts].map(encodeURIComponent).join(",");
       const res = await fetch(
-        `/api/listings?filter=${encodeURIComponent(filter)}&sort=${encodeURIComponent(sort)}&q=${encodeURIComponent(q)}&limit=500&districts=${districts}`,
+        `/api/listings?filter=${encodeURIComponent(filter)}&kind=${encodeURIComponent(kind)}&sort=${encodeURIComponent(sort)}&q=${encodeURIComponent(q)}&limit=500&districts=${districts}`,
       );
       const data = await res.json();
       renderStats(data.stats);
@@ -2004,6 +2017,17 @@
         document.querySelectorAll("[data-filter]").forEach((b) => b.classList.remove("on"));
         btn.classList.add("on");
         filter = btn.dataset.filter;
+        loadList();
+      };
+    });
+
+    document.querySelectorAll("[data-kind]").forEach((btn) => {
+      btn.onclick = () => {
+        const next = btn.dataset.kind;
+        kind = kind === next ? "" : next;
+        document.querySelectorAll("[data-kind]").forEach((b) => {
+          b.classList.toggle("on", b.dataset.kind === kind);
+        });
         loadList();
       };
     });

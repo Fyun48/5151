@@ -9,7 +9,7 @@ import {
   parseCommunityPayload,
   preferCommunityLocation,
 } from "../src/location.js";
-import { decideNotifyDelivery, hasTrustedCoords, isGeoReady, listingIsApartment, listingIsSuite, passesGeoFilters } from "../src/floors.js";
+import { decideNotifyDelivery, hasTrustedCoords, isGeoReady, listingIsApartment, listingIsSuite, listingIsBuilding, matchesHousingKind, normalizeListQuery, passesGeoFilters } from "../src/floors.js";
 import { hasWorkPoint, needsListingGeo } from "../src/geo.js";
 
 test("extracts the house-number address from a community page line", () => {
@@ -133,4 +133,21 @@ test("apartment and suite view filters do not treat elevator buildings as 公寓
   assert.equal(listingIsApartment({ title: "電梯大樓", kind_name: "整層住家", tags: ["電梯大樓"] }), false);
   assert.equal(listingIsSuite({ kind_name: "獨立套房" }), true);
   assert.equal(listingIsSuite({ kind_name: "整層住家" }), false);
+  assert.equal(listingIsBuilding({ title: "電梯大樓", kind_name: "整層住家", tags: ["電梯大樓"] }), true);
+  assert.equal(listingIsBuilding({ title: "公寓三樓", kind_name: "整層住家", tags: ["公寓"] }), false);
+  assert.equal(listingIsBuilding({ kind_name: "獨立套房" }), false);
+});
+
+test("housing kind filters can combine with 特別關注", () => {
+  const apt = { title: "公寓", kind_name: "整層住家", tags: ["公寓"] };
+  const tower = { title: "電梯大樓", kind_name: "整層住家", tags: ["電梯大樓"] };
+  const suite = { kind_name: "獨立套房" };
+  assert.equal(matchesHousingKind(apt, "apartment"), true);
+  assert.equal(matchesHousingKind(tower, "apartment"), false);
+  assert.equal(matchesHousingKind(tower, "building"), true);
+  assert.equal(matchesHousingKind(suite, "suite"), true);
+  assert.equal(matchesHousingKind(tower, "elevator"), true);
+  assert.deepEqual(normalizeListQuery("watched", "suite"), { filter: "watched", kind: "suite" });
+  assert.deepEqual(normalizeListQuery("elevator", ""), { filter: "all", kind: "elevator" });
+  assert.deepEqual(normalizeListQuery("all", "building"), { filter: "all", kind: "building" });
 });

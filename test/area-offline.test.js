@@ -44,6 +44,7 @@ test("display filters hide suites and 1F for notify/list preferences", async () 
   assert.equal(passesDisplayFilters(suite, prefs), false);
   assert.equal(passesDisplayFilters(low, prefs), false);
   assert.equal(passesDisplayFilters(ok, prefs), true);
+  assert.equal(passesDisplayFilters(suite, prefs, { skipWholeFloor: true }), true);
 });
 
 test("confirms offline after 7 days from first not-found", () => {

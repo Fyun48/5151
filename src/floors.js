@@ -32,6 +32,35 @@ export function listingIsSuite(listing) {
   return /套房|雅房/.test(String(listing.kind_name || ""));
 }
 
+export function listingIsBuilding(listing) {
+  if (listingIsSuite(listing) || listingIsApartment(listing)) return false;
+  const hay = `${listing.title || ""} ${listing.kind_name || ""} ${listing.address || ""} ${tagText(listing)}`;
+  return /大樓|華廈/.test(hay);
+}
+
+export const HOUSING_KINDS = ["elevator", "apartment", "suite", "building"];
+
+export function matchesHousingKind(listing, kind) {
+  const key = String(kind || "").trim();
+  if (!key) return true;
+  if (key === "elevator") return listingHasElevator(listing);
+  if (key === "apartment") return listingIsApartment(listing);
+  if (key === "suite") return listingIsSuite(listing);
+  if (key === "building") return listingIsBuilding(listing);
+  return true;
+}
+
+export function normalizeListQuery(filter, kind) {
+  let section = String(filter || "all");
+  let housing = String(kind || "").trim();
+  if (HOUSING_KINDS.includes(section)) {
+    housing = housing || section;
+    section = "all";
+  }
+  if (!HOUSING_KINDS.includes(housing)) housing = "";
+  return { filter: section, kind: housing };
+}
+
 export function isAtOrBelowFirstFloor(floorName) {
   const text = String(floorName || "").replace(/\s+/g, "");
   if (!text) return false;
@@ -60,8 +89,8 @@ export function isWholeFloorHome(kindName) {
 }
 
 /** 列表顯示／通知用：整層、排除 1F。不影響 591 搜尋與左側統計。 */
-export function passesDisplayFilters(listing, settings = {}) {
-  if (settings.wholeFloorOnly !== false && !isWholeFloorHome(listing.kind_name)) {
+export function passesDisplayFilters(listing, settings = {}, { skipWholeFloor = false } = {}) {
+  if (!skipWholeFloor && settings.wholeFloorOnly !== false && !isWholeFloorHome(listing.kind_name)) {
     return false;
   }
   if (settings.excludeLowFloors !== false && isAtOrBelowFirstFloor(listing.floor_name)) {
