@@ -34,9 +34,19 @@
       padding: 28px 26px 24px;
     }
     h1 { margin: 0; font-size: 24px; letter-spacing: 0.08em; }
-    .sub { color: var(--muted); font-size: 14px; margin: 8px 0 20px; }
+    .sub { color: var(--muted); font-size: 14px; margin: 8px 0 16px; }
+    .tabs { display: flex; gap: 8px; margin-bottom: 8px; }
+    .tabs button {
+      margin: 0;
+      width: auto;
+      flex: 1;
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--line);
+    }
+    .tabs button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
     label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 6px; }
-    input {
+    input:not([type="checkbox"]) {
       width: 100%;
       border: 1px solid var(--line);
       border-radius: 10px;
@@ -44,6 +54,16 @@
       font: 14px/1.5 "Noto Sans TC", sans-serif;
       background: #fff;
     }
+    .check {
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+      margin-top: 14px;
+      font: 13px/1.5 "Noto Sans TC", sans-serif;
+      color: var(--muted);
+    }
+    .check input { margin-top: 3px; }
+    a { color: var(--accent); }
     button {
       margin-top: 18px;
       width: 100%;
@@ -56,34 +76,60 @@
       font: 15px/1 "Noto Sans TC", sans-serif;
     }
     button:disabled { opacity: 0.5; cursor: wait; }
-    .err { min-height: 1.4em; color: #9a3412; font-size: 13px; margin-top: 10px; }
+    .err { min-height: 1.4em; color: #9a3412; font-size: 13px; margin-top: 10px; font-family: "Noto Sans TC", sans-serif; }
+    .hidden { display: none; }
   </style>
 </head>
 <body>
-  <form class="card" id="form">
+  <div class="card">
     <h1>591 物件追蹤（v2 開發版）</h1>
-    <p class="sub" id="sub">此為新版測試站，資料與線上版分開。請用已設定的帳號登入。</p>
-    <label for="email">Email</label>
-    <input id="email" name="email" type="email" autocomplete="username" required />
-    <label for="password">密碼</label>
-    <input id="password" name="password" type="password" autocomplete="current-password" required />
-    <button type="submit" id="btn">登入</button>
+    <p class="sub">此為新版測試站，資料與線上版分開。可登入既有帳號，或註冊新會員。</p>
+    <div class="tabs">
+      <button type="button" class="on" id="tabLogin">登入</button>
+      <button type="button" id="tabRegister">註冊</button>
+    </div>
+    <form id="loginForm">
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" autocomplete="username" required />
+      <label for="password">密碼</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required />
+      <button type="submit" id="loginBtn">登入</button>
+    </form>
+    <form id="registerForm" class="hidden">
+      <label for="regEmail">Email</label>
+      <input id="regEmail" name="email" type="email" autocomplete="username" required />
+      <label for="regPassword">密碼（至少 8 個字）</label>
+      <input id="regPassword" name="password" type="password" autocomplete="new-password" minlength="8" required />
+      <label for="regPassword2">再輸入一次密碼</label>
+      <input id="regPassword2" name="password2" type="password" autocomplete="new-password" minlength="8" required />
+      <label class="check">
+        <input id="accept" type="checkbox" required />
+        <span>我已閱讀並同意<a href="/disclaimer.html" target="_blank" rel="noopener">免責聲明</a>：這是免費系統，贊助是自願的。</span>
+      </label>
+      <button type="submit" id="registerBtn">同意並註冊</button>
+    </form>
     <p class="err" id="err"></p>
-  </form>
+  </div>
   <script>
     const $ = (id) => document.getElementById(id);
     const justLoggedOut = new URLSearchParams(location.search).has("logout");
+    const showRegister = new URLSearchParams(location.search).has("register");
+    function setMode(register) {
+      $("tabLogin").classList.toggle("on", !register);
+      $("tabRegister").classList.toggle("on", register);
+      $("loginForm").classList.toggle("hidden", register);
+      $("registerForm").classList.toggle("hidden", !register);
+      $("err").textContent = "";
+    }
+    $("tabLogin").onclick = () => setMode(false);
+    $("tabRegister").onclick = () => setMode(true);
+    if (showRegister) setMode(true);
     fetch("/api/me").then((r) => r.json()).then((data) => {
       if (data.ok && !justLoggedOut) location.replace("/");
-      if (data.hint) {
-        $("email").value = data.hint;
-      } else if (data.configured === false) {
-        $("err").textContent = "尚未設定 AUTH_EMAIL / AUTH_PASSWORD。";
-      }
     }).catch(() => {});
-    $("form").onsubmit = async (ev) => {
+    $("loginForm").onsubmit = async (ev) => {
       ev.preventDefault();
-      $("btn").disabled = true;
+      $("loginBtn").disabled = true;
       $("err").textContent = "";
       try {
         const res = await fetch("/api/login", {
@@ -101,7 +147,34 @@
       } catch (error) {
         $("err").textContent = error.message;
       } finally {
-        $("btn").disabled = false;
+        $("loginBtn").disabled = false;
+      }
+    };
+    $("registerForm").onsubmit = async (ev) => {
+      ev.preventDefault();
+      $("registerBtn").disabled = true;
+      $("err").textContent = "";
+      try {
+        if ($("regPassword").value !== $("regPassword2").value) {
+          throw new Error("兩次密碼不一樣");
+        }
+        const res = await fetch("/api/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({
+            email: $("regEmail").value.trim(),
+            password: $("regPassword").value,
+            acceptDisclaimer: $("accept").checked,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "註冊失敗");
+        location.replace("/");
+      } catch (error) {
+        $("err").textContent = error.message;
+      } finally {
+        $("registerBtn").disabled = false;
       }
     };
   </script>

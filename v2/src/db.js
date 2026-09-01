@@ -12,7 +12,7 @@ import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings 
 import { defaultNotifyMatrix } from "./notifyMatrix.js";
 import { DATA_EPOCH, shouldResetForEpoch } from "./dataEpoch.js";
 import { countsTowardAllTotal, isConfirmedOffline, isPendingOffline } from "./offline.js";
-import { coveringJobsFromMembers } from "./covering.js";
+import { coveringJobsFromMembers, coveringJobsFromSettings, coversFromMemberSettings, listingInMemberScope } from "./covering.js";
 import { listCrawlCovers } from "./crawlCovers.js";
 import { ensurePersonalSchema } from "./personalSchema.js";
 import {
@@ -30,6 +30,18 @@ import {
   overlayRowsPersonal,
   setUserListingFlags,
 } from "./personalFlags.js";
+import {
+  bootstrapAdminUser as bootstrapAdminUserOn,
+  findUserByEmail as findUserByEmailOn,
+  getUserById as getUserByIdOn,
+  listUserIds as listUserIdsOn,
+  listUsers as listUsersOn,
+  publicUser,
+  registerUser as registerUserOn,
+  setUserPassword as setUserPasswordOn,
+  verifyUserPassword as verifyUserPasswordOn,
+} from "./members.js";
+import { shouldDockNotify, shouldWebhookNotify } from "./notify.js";
 
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data-v2");
 mkdirSync(DATA_DIR, { recursive: true });
@@ -298,6 +310,44 @@ export function copyUserFlags(fromPostId, toPostId) {
   return copyUserFlagsForRelistOn(db, fromPostId, toPostId);
 }
 
+export function findUserByEmail(email) {
+  return findUserByEmailOn(db, email);
+}
+
+export function getUserById(userId) {
+  return getUserByIdOn(db, userId);
+}
+
+export function listUsers() {
+  return listUsersOn(db);
+}
+
+export function listUserIds() {
+  return listUserIdsOn(db);
+}
+
+export function registerUser(input) {
+  return registerUserOn(db, input);
+}
+
+export function verifyUserPassword(email, password) {
+  return verifyUserPasswordOn(db, email, password);
+}
+
+export function setUserPassword(userId, password) {
+  return setUserPasswordOn(db, userId, password);
+}
+
+export { publicUser };
+
+const SITE_SETTING_KEYS = new Set([
+  "dataEpoch",
+  "hasBaseline",
+  "personalFlagsMigrated",
+  "personalSettingsMigrated",
+  "eventsMigrated",
+]);
+
 const DEFAULTS = {
   searchUrls: [],
   intervalMinutes: 5,
@@ -335,22 +385,40 @@ const DEFAULTS = {
   dataEpoch: DATA_EPOCH,
 };
 
-export function getSettings() {
+export function getSettings(userId) {
   const rows = db.prepare("SELECT key, value FROM settings").all();
-  return hydrateSettings(parseSettingRows(rows), DEFAULTS);
+  const global = hydrateSettings(parseSettingRows(rows), DEFAULTS);
+  const uid = Number(userId) || 0;
+  if (!uid) return global;
+  const userRows = db.prepare("SELECT key, value FROM user_settings WHERE user_id = ?").all(uid);
+  if (!userRows.length) {
+    const user = getUserById(uid);
+    if (user?.role === "admin") return global;
+    return hydrateSettings({
+      dataEpoch: global.dataEpoch,
+      hasBaseline: global.hasBaseline,
+    }, DEFAULTS);
+  }
+  return hydrateSettings({ ...global, ...parseSettingRows(userRows) }, DEFAULTS);
 }
 
-export function saveSettings(partial) {
-  const current = getSettings();
+export function saveSettings(partial, userId) {
+  const uid = userId == null ? defaultUserId() : Number(userId) || defaultUserId();
+  const current = getSettings(uid);
   const next = applySettingPatch(current, partial);
-  const upsert = db.prepare(
+  const userUpsert = db.prepare(
+    "INSERT INTO user_settings(user_id, key, value) VALUES (?, ?, ?) ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value",
+  );
+  const globalUpsert = db.prepare(
     "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
   );
   db.exec("BEGIN");
   try {
     for (const [key, value] of Object.entries(next)) {
       if (value === undefined) continue;
-      upsert.run(key, JSON.stringify(value));
+      const encoded = JSON.stringify(value);
+      if (SITE_SETTING_KEYS.has(key)) globalUpsert.run(key, encoded);
+      else userUpsert.run(uid, key, encoded);
     }
     db.exec("COMMIT");
   } catch (error) {
@@ -360,8 +428,9 @@ export function saveSettings(partial) {
   return next;
 }
 
-export function saveAsProfile(name, livePatch) {
-  const current = livePatch && typeof livePatch === "object" ? saveSettings(livePatch) : getSettings();
+export function saveAsProfile(name, livePatch, userId) {
+  const uid = userId == null ? defaultUserId() : Number(userId) || defaultUserId();
+  const current = livePatch && typeof livePatch === "object" ? saveSettings(livePatch, uid) : getSettings(uid);
   const profiles = [...(current.settingProfiles || [])];
   const id = `p-${Date.now()}`;
   const label = String(name || "").trim().slice(0, 40) || `設定 ${profiles.length + 1}`;
@@ -374,11 +443,12 @@ export function saveAsProfile(name, livePatch) {
   return saveSettings({
     settingProfiles: profiles,
     activeProfileId: id,
-  });
+  }, uid);
 }
 
-export function loadProfile(id) {
-  const current = getSettings();
+export function loadProfile(id, userId) {
+  const uid = userId == null ? defaultUserId() : Number(userId) || defaultUserId();
+  const current = getSettings(uid);
   const profile = (current.settingProfiles || []).find((item) => item.id === id);
   if (!profile) {
     const err = new Error("找不到這個設定檔");
@@ -389,14 +459,15 @@ export function loadProfile(id) {
     ...snapshotSettings({ ...DEFAULTS, ...profile.data }),
     settingProfiles: current.settingProfiles,
     activeProfileId: profile.id,
-  });
+  }, uid);
 }
 
-export function deleteProfile(id) {
-  const current = getSettings();
+export function deleteProfile(id, userId) {
+  const uid = userId == null ? defaultUserId() : Number(userId) || defaultUserId();
+  const current = getSettings(uid);
   const profiles = (current.settingProfiles || []).filter((item) => item.id !== id);
   const active = current.activeProfileId === id ? (profiles[0]?.id || "") : current.activeProfileId;
-  return saveSettings({ settingProfiles: profiles, activeProfileId: active });
+  return saveSettings({ settingProfiles: profiles, activeProfileId: active }, uid);
 }
 
 function parseJson(value, fallback) {
@@ -408,8 +479,9 @@ function parseJson(value, fallback) {
   }
 }
 
-function decorateListing(row, settings = getSettings()) {
+function decorateListing(row, settings) {
   if (!row) return row;
+  settings = settings || getSettings();
   row = applyCachedCoords(row, settings);
   const commute = Number.isFinite(Number(row.route_km)) ? Number(row.route_km) : null;
   const matchPostId = Number(row.match_post_id) || 0;
@@ -439,7 +511,8 @@ function withPersonal(row, userId) {
 export function getListing(postId, userId) {
   const row = db.prepare("SELECT * FROM listings WHERE post_id = ?").get(postId);
   if (!row) return row;
-  return decorateListing(withPersonal(row, userId));
+  const uid = resolveUserId(userId);
+  return decorateListing(withPersonal(row, uid), getSettings(uid));
 }
 
 export function findBySourceKey(sourceKey, excludePostId) {
@@ -520,13 +593,30 @@ export function confirmSuspectedMatch(postId, userId) {
   return getListing(postId, userId);
 }
 
+export function coveringJobsFromAllUsers() {
+  const ids = listUserIds();
+  const covers = [];
+  let excludeRooftop = true;
+  for (const id of ids) {
+    const settings = getSettings(id);
+    const memberCovers = coversFromMemberSettings(settings);
+    if (memberCovers.length) covers.push(...memberCovers);
+    if (settings.excludeRooftop === false) excludeRooftop = false;
+  }
+  if (!covers.length) return coveringJobsFromSettings(getSettings());
+  return coveringJobsFromMembers(covers, { excludeRooftop });
+}
+
 export function currentSearchKeys() {
-  const settings = getSettings();
-  const urls = (settings.searchUrls || []).map((url) => String(url).trim()).filter(Boolean);
+  const urls = [];
+  for (const id of listUserIds()) {
+    urls.push(...(getSettings(id).searchUrls || []));
+  }
+  urls.push(...(getSettings().searchUrls || []));
   const coverUrls = coveringJobsFromMembers(listCrawlCovers(db), {
-    excludeRooftop: settings.excludeRooftop !== false,
+    excludeRooftop: true,
   }).map((job) => job.searchUrl);
-  return [...new Set([...urls, ...coverUrls].filter(Boolean))];
+  return [...new Set([...urls, ...coverUrls].map((url) => String(url || "").trim()).filter(Boolean))];
 }
 
 function expandSearchKeys(keys) {
@@ -970,24 +1060,59 @@ try {
   console.warn("個人標記遷移失敗：", error.message);
 }
 
-export function addEvent(event) {
+export function addUserEvent(event) {
   const result = db.prepare(`
-    INSERT INTO events (post_id, source_key, type, title, detail, created_at, notified)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO user_events (user_id, post_id, type, title, detail, source_key, created_at, notified)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
+    event.user_id,
     event.post_id,
-    event.source_key,
     event.type,
     event.title,
     event.detail,
+    event.source_key || "",
     event.created_at,
-    event.notified,
+    event.notified || 0,
   );
   return Number(result.lastInsertRowid);
 }
 
+export function addEvent(event, userId) {
+  const uid = userId == null ? defaultUserId() : Number(userId) || defaultUserId();
+  return addUserEvent({ ...event, user_id: uid });
+}
+
 export function markEventNotified(id) {
-  db.prepare("UPDATE events SET notified = 1 WHERE id = ?").run(id);
+  db.prepare("UPDATE user_events SET notified = 1 WHERE id = ?").run(id);
+}
+
+export function enqueueListingEvent(listing, event) {
+  const stamp = event?.created_at || new Date().toISOString();
+  const payload = {
+    post_id: listing.post_id,
+    source_key: listing.source_key || event?.source_key || "",
+    type: event.type,
+    title: listing.title || event.title || "",
+    detail: event.detail || "",
+    created_at: stamp,
+    notified: 0,
+  };
+  const ids = [];
+  for (const userId of listUserIds()) {
+    const settings = getSettings(userId);
+    const row = decorateListing(overlayPersonal(listing, loadFlags(db, userId, listing.post_id)), settings);
+    const watched = Number(row.watched) === 1;
+    if (!watched && event.type === "new" && !listingInMemberScope(row, settings)) continue;
+    if (!shouldDockNotify(settings, row, event) && !shouldWebhookNotify(settings, row, event)) continue;
+    ids.push(addUserEvent({ ...payload, user_id: userId }));
+  }
+  return ids;
+}
+
+export function crawlIntervalMinutes() {
+  const mins = listUserIds().map((id) => Number(getSettings(id).intervalMinutes) || 5);
+  if (!mins.length) return Math.max(2, Number(getSettings().intervalMinutes) || 5);
+  return Math.max(2, Math.min(...mins));
 }
 
 export function setFlags(postId, flags, userId) {
@@ -1067,8 +1192,7 @@ export function listingsNeedingRoute(limit = 40) {
   return out;
 }
 
-function applyListingFilter(rows) {
-  const settings = getSettings();
+function applyListingFilter(rows, settings = getSettings()) {
   // 列表用非嚴格通勤：還沒算完路線的先顯示（排在離公司排序末端），避免新北等區整批空白
   return rows
     .map((row) => applyCachedCoords(row, settings))
@@ -1223,12 +1347,12 @@ export function listListings({
   }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const raw = db.prepare(`SELECT * FROM listings ${where}`).all(...params);
-  const settings = getSettings();
+  const settings = getSettings(uid);
   const flagMap = loadFlagMap(db, uid);
   let rows =
     filter === "offline" || filter === "suspected"
       ? overlayRowsPersonal(raw, flagMap).map((row) => decorateListing(row, settings))
-      : applyListingFilter(overlayRowsPersonal(raw, flagMap)).map((row) => decorateListing(row, settings));
+      : applyListingFilter(overlayRowsPersonal(raw, flagMap), settings).map((row) => decorateListing(row, settings));
 
   rows = rows.filter((row) => listingMatchesListFilter(row, filter));
 
@@ -1264,13 +1388,14 @@ export function sourceHistory(sourceKey, userId) {
   );
 }
 
-export function recentEvents(limit = 40) {
-  return db.prepare("SELECT * FROM events ORDER BY id DESC LIMIT ?").all(limit);
+export function recentEvents(limit = 40, userId) {
+  const uid = resolveUserId(userId);
+  return db.prepare("SELECT * FROM user_events WHERE user_id = ? ORDER BY id DESC LIMIT ?").all(uid, Math.max(1, Number(limit) || 40));
 }
 
 export function pendingNotifyEvents(limit = 80) {
   return db
-    .prepare("SELECT * FROM events WHERE IFNULL(notified, 0) = 0 ORDER BY id ASC LIMIT ?")
+    .prepare("SELECT * FROM user_events WHERE IFNULL(notified, 0) = 0 ORDER BY id ASC LIMIT ?")
     .all(Math.max(1, Number(limit) || 80));
 }
 
@@ -1341,7 +1466,7 @@ export function setCommunityCache(community) {
 
 export function stats(searchKeys, userId) {
   const uid = resolveUserId(userId);
-  const settings = getSettings();
+  const settings = getSettings(uid);
   const clauses = [];
   const params = [];
   searchWhere(searchKeys, clauses, params);
@@ -1356,7 +1481,7 @@ export function stats(searchKeys, userId) {
   const attrRows = overlaid.filter((row) => passesAttributeFilters(row, settings));
   const base = attrRows.filter((row) => !row.hidden && !isPendingOffline(row) && !isConfirmedOffline(row) && row.match_verdict !== "yes");
   const browse = attrRows.filter(countsTowardAllTotal);
-  const geoRows = applyListingFilter(overlaid).filter((row) => !row.hidden && !isPendingOffline(row) && !isConfirmedOffline(row) && row.match_verdict !== "yes" && !row.watched);
+  const geoRows = applyListingFilter(overlaid, settings).filter((row) => !row.hidden && !isPendingOffline(row) && !isConfirmedOffline(row) && row.match_verdict !== "yes" && !row.watched);
   return {
     total: browse.length,
     unseen: browse.filter((row) => !row.viewed).length,
@@ -1415,3 +1540,86 @@ export function setCachedGeo(address, lat, lng) {
 }
 
 export { db };
+
+function settingTrue(key) {
+  try {
+    const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key);
+    return row ? JSON.parse(row.value) === true : false;
+  } catch {
+    return false;
+  }
+}
+
+function writeSettingTrue(key) {
+  db.prepare(
+    "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+  ).run(key, JSON.stringify(true));
+}
+
+export function bootstrapAdminFromEnv() {
+  const email = adminEmailForUser();
+  const password = String(process.env.AUTH_PASSWORD || "");
+  const uid = bootstrapAdminUserOn(db, email, password, { ensureUser: ensureUserOn });
+  if (uid) cachedDefaultUserId = uid;
+  return uid || defaultUserId();
+}
+
+export function migrateGlobalSettingsToUser(userId) {
+  const uid = Number(userId) || 0;
+  if (!uid) return;
+  const existing = db.prepare("SELECT 1 AS ok FROM user_settings WHERE user_id = ? LIMIT 1").get(uid);
+  if (existing) return;
+  const global = getSettings();
+  const upsert = db.prepare(
+    "INSERT INTO user_settings(user_id, key, value) VALUES (?, ?, ?) ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value",
+  );
+  db.exec("BEGIN");
+  try {
+    for (const [key, value] of Object.entries(global)) {
+      if (value === undefined || SITE_SETTING_KEYS.has(key)) continue;
+      upsert.run(uid, key, JSON.stringify(value));
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+export function migrateEventsToUser(userId) {
+  const uid = Number(userId) || 0;
+  if (!uid || settingTrue("eventsMigrated")) return;
+  const events = db.prepare("SELECT * FROM events").all();
+  db.exec("BEGIN");
+  try {
+    const insert = db.prepare(
+      `INSERT INTO user_events (user_id, post_id, type, title, detail, source_key, created_at, notified)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (const event of events) {
+      insert.run(
+        uid,
+        event.post_id,
+        event.type,
+        event.title,
+        event.detail,
+        event.source_key || "",
+        event.created_at,
+        event.notified || 0,
+      );
+    }
+    writeSettingTrue("eventsMigrated");
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+try {
+  const adminId = bootstrapAdminFromEnv();
+  migrateGlobalSettingsToUser(adminId);
+  migrateEventsToUser(adminId);
+} catch (error) {
+  console.warn("會員帳號初始化失敗：", error.message);
+}

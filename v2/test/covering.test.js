@@ -9,6 +9,7 @@ import {
   coverToListUrl,
   coveringJobsFromMembers,
   coveringJobsFromSettings,
+  listingInMemberScope,
 } from "../src/covering.js";
 
 test("a 40000 cover in the same districts contains a 20000 member search", () => {
@@ -137,4 +138,20 @@ test("single-admin settings become one cover per city, not duplicated searchUrls
   assert.equal(taipei.priceMax, 40000);
   assert.match(taipei.searchUrl, /order=posttime/);
   assert.match(taipei.searchUrl, /orderType=desc/);
+});
+
+test("listingInMemberScope only matches that member's city, district, and rent cap", () => {
+  const settings = {
+    watchDistricts: ["1-8"],
+    priceMin: 0,
+    priceMax: 25000,
+  };
+  const inScope = { source_key: "1|8|x", price_num: 22000 };
+  const otherDistrict = { source_key: "1|9|x", price_num: 22000 };
+  const tooExpensive = { source_key: "1|8|x", price_num: 40000 };
+  const noSearch = { source_key: "1|8|x", price_num: 18000 };
+  assert.equal(listingInMemberScope(inScope, settings), true);
+  assert.equal(listingInMemberScope(otherDistrict, settings), false);
+  assert.equal(listingInMemberScope(tooExpensive, settings), false);
+  assert.equal(listingInMemberScope(noSearch, { watchDistricts: [], searchUrls: [] }), false);
 });

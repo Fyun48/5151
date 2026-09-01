@@ -145,3 +145,25 @@ export function coveringJobsFromSettings(settings = {}) {
     excludeRooftop: settings.excludeRooftop !== false,
   });
 }
+
+/** 刊登是否落在這個會員自己的縣市／行政區／租金範圍（不是全站覆蓋）。 */
+export function listingInMemberScope(listing, settings = {}) {
+  const covers = coversFromMemberSettings(settings);
+  if (!covers.length) return false;
+  const bits = String(listing?.source_key || "").split("|");
+  const regionId = Number(listing?.regionid || listing?.region_id || bits[0]) || 0;
+  const sectionId = Number(listing?.sectionid || listing?.section_id || bits[1]) || 0;
+  if (!(regionId > 0)) return false;
+  const price = Number(listing?.price_num) || 0;
+  for (const cover of covers) {
+    if (Number(cover.regionId) !== regionId) continue;
+    const want = numIds(cover.sectionIds);
+    if (want.length && sectionId > 0 && !want.includes(sectionId)) continue;
+    const max = priceBound(cover.priceMax);
+    const min = priceBound(cover.priceMin);
+    if (max > 0 && price > max) continue;
+    if (min > 0 && price > 0 && price < min) continue;
+    return true;
+  }
+  return false;
+}

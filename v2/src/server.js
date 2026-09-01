@@ -3,9 +3,10 @@ import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  coveringJobsFromAllUsers,
+  crawlIntervalMinutes,
   defaultUserId,
   deleteProfile,
-  ensureUser,
   getCachedGeo,
   getListing,
   getSettings,
@@ -13,6 +14,7 @@ import {
   listListings,
   loadProfile,
   recentEvents,
+  registerUser,
   rejectSuspectedMatch,
   confirmSuspectedMatch,
   resetListings,
@@ -24,11 +26,11 @@ import {
   sourceHistory,
   stats,
 } from "./db.js";
-import { adminEmail, authConfigured, clearSessionCookie, readSession, requireAuth, sessionCookie, verifyLogin } from "./auth.js";
+import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requireAuth, sessionCookie, verifyLogin } from "./auth.js";
 import { boxFromRoadDescription, geocodeAddress, needsListingGeo, hasWorkPoint } from "./geo.js";
 import { rent591Url } from "./openLink.js";
 import { CITIES } from "./regions.js";
-import { coveringJobsFromSettings } from "./covering.js";
+import { DISCLAIMER_TEXT, DISCLAIMER_VERSION } from "./members.js";
 import { backfillListingCoords, backfillListingRoutes, flushPendingNotifications, runWatch } from "./watcher.js";
 import { LIST_PAGE_SIZE } from "./client591.js";
 
@@ -52,8 +54,18 @@ app.get("/api/health", (_req, res) => {
 });
 
 function actorUserId(req) {
-  const email = String(readSession(req)?.email || adminEmail() || "").trim().toLowerCase();
-  return email ? ensureUser(email, { role: "admin" }) : defaultUserId();
+  const session = readSession(req);
+  if (session?.userId) return session.userId;
+  return defaultUserId();
+}
+
+function actorIsAdmin(req) {
+  return readSession(req)?.role === "admin";
+}
+
+function setSession(req, res, email) {
+  const cookie = sessionCookie(req, email);
+  res.setHeader("Set-Cookie", cookie);
 }
 
 /** 點通知／Discord 連結：標記已瀏覽後導向 591（免登入，方便 webhook）。 */
@@ -77,16 +89,37 @@ app.get("/api/me", (req, res) => {
   res.json({
     ok: Boolean(session),
     email: session?.email || "",
-    configured: authConfigured(),
-    hint: authConfigured() ? adminEmail() : "",
+    role: session?.role || "",
+    plan: session?.plan || "",
+    configured: true,
+    canRegister: true,
+    hint: "",
   });
+});
+
+app.get("/api/disclaimer", (_req, res) => {
+  res.json({ version: DISCLAIMER_VERSION, text: DISCLAIMER_TEXT });
 });
 
 app.post("/api/login", (req, res) => {
   try {
     const user = verifyLogin(req.body?.email, req.body?.password);
-    res.setHeader("Set-Cookie", sessionCookie(req));
-    res.json({ ok: true, email: user.email });
+    setSession(req, res, user.email);
+    res.json({ ok: true, email: user.email, role: user.role, plan: user.plan });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/register", (req, res) => {
+  try {
+    const user = registerUser({
+      email: req.body?.email,
+      password: req.body?.password,
+      acceptDisclaimer: req.body?.acceptDisclaimer === true,
+    });
+    setSession(req, res, user.email);
+    res.json({ ok: true, email: user.email, role: user.role, plan: user.plan });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -113,15 +146,45 @@ let timer = null;
 let lastRun = null;
 const clients = new Set();
 
-function broadcast(payload) {
+function broadcast(payload, userId) {
   const data = `data: ${JSON.stringify(payload)}\n\n`;
-  for (const res of clients) res.write(data);
+  for (const client of clients) {
+    if (userId && client.userId !== userId) continue;
+    client.res.write(data);
+  }
+}
+
+function broadcastWatch(result) {
+  for (const client of clients) {
+    const events = (result.events || []).filter((event) => !event.user_id || event.user_id === client.userId);
+    const payload = {
+      type: "watch",
+      result: { ...result, events },
+      stats: stats(undefined, client.userId),
+    };
+    client.res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  }
+}
+
+function broadcastNotify(events) {
+  const byUser = new Map();
+  for (const event of events || []) {
+    const uid = Number(event.user_id) || 0;
+    if (!uid) continue;
+    const list = byUser.get(uid) || [];
+    list.push(event);
+    byUser.set(uid, list);
+  }
+  for (const [userId, list] of byUser) {
+    broadcast({ type: "notify", events: list, stats: stats(undefined, userId) }, userId);
+  }
 }
 
 let geoBackfillBusy = false;
 
 async function ensureWorkCoords() {
-  const current = getSettings();
+  const uid = defaultUserId();
+  const current = getSettings(uid);
   if (!(Number(current.commuteKm) > 0)) return current;
   const workAddress = String(current.workAddress || "").trim();
   if (!workAddress || hasWorkPoint(current)) return current;
@@ -129,7 +192,7 @@ async function ensureWorkCoords() {
     const geo = await geocodeAddress(workAddress, getCachedGeo, { strict: false, maxAttempts: 2 });
     if (!geo) return current;
     setCachedGeo(workAddress, geo.lat, geo.lng);
-    return saveSettings({ workLat: geo.lat, workLng: geo.lng });
+    return saveSettings({ workLat: geo.lat, workLng: geo.lng }, uid);
   } catch (error) {
     console.warn("補上班地址座標失敗：", error.message);
     return current;
@@ -145,7 +208,7 @@ function queueGeoBackfill(settings = getSettings()) {
         const geo = await backfillListingCoords(settings, { limit: LIST_PAGE_SIZE });
         broadcast({ type: "geo", stats: stats(), geoBackfill: geo });
         const notified = await flushPendingNotifications(settings);
-        if (notified.length) broadcast({ type: "notify", events: notified, stats: stats() });
+        if (notified.length) broadcastNotify(notified);
         if (!geo.attempted) break;
       } catch (error) {
         console.warn("補定位失敗：", error.message);
@@ -157,7 +220,7 @@ function queueGeoBackfill(settings = getSettings()) {
         const routes = await backfillListingRoutes(settings, { limit: 20 });
         if (routes.attempted) broadcast({ type: "geo", stats: stats(), routeBackfill: routes });
         const notified = await flushPendingNotifications(settings);
-        if (notified.length) broadcast({ type: "notify", events: notified, stats: stats() });
+        if (notified.length) broadcastNotify(notified);
         if (!routes.attempted) break;
       } catch (error) {
         console.warn("補路線失敗：", error.message);
@@ -174,7 +237,7 @@ async function tick(reason = "schedule") {
   try {
     lastRun = await runWatch({ skipHeavyGeo: true });
     lastRun.reason = reason;
-    broadcast({ type: "watch", result: lastRun, stats: stats() });
+    broadcastWatch(lastRun);
     queueGeoBackfill();
     return lastRun;
   } catch (error) {
@@ -186,24 +249,24 @@ async function tick(reason = "schedule") {
 
 function schedule() {
   if (timer) clearInterval(timer);
-  const minutes = Math.max(2, Number(getSettings().intervalMinutes) || 5);
+  const minutes = crawlIntervalMinutes();
   timer = setInterval(() => {
     tick("schedule").catch(() => {});
   }, minutes * 60 * 1000);
 }
 
-function safeStats() {
+function safeStats(userId) {
   try {
-    return stats();
+    return stats(undefined, userId);
   } catch (error) {
     console.warn("讀取統計失敗：", error.message);
     return { total: 0, error: error.message };
   }
 }
 
-app.get("/api/settings", (_req, res) => {
+app.get("/api/settings", (req, res) => {
   try {
-    res.json({ settings: getSettings(), cities: CITIES });
+    res.json({ settings: getSettings(actorUserId(req)), cities: CITIES });
   } catch (error) {
     res.status(500).json({ error: error.message || "讀取設定失敗" });
   }
@@ -213,7 +276,7 @@ app.get("/api/state", (req, res) => {
   const uid = actorUserId(req);
   let settings;
   try {
-    settings = getSettings();
+    settings = getSettings(uid);
   } catch (error) {
     res.status(500).json({ error: error.message || "讀取設定失敗" });
     return;
@@ -226,15 +289,18 @@ app.get("/api/state", (req, res) => {
     const listed = listListings({ filter: "all", sort: "newest", limit: 500, userId: uid });
     listings = listed.listings;
     listingStats = { ...listingStats, matched: listed.totalMatched };
-    events = recentEvents(30);
+    events = recentEvents(30, uid);
   } catch (error) {
     console.warn("讀取物件列表失敗：", error.message);
     listingStats = { ...listingStats, error: error.message };
   }
+  const run = lastRun
+    ? { ...lastRun, events: (lastRun.events || []).filter((event) => !event.user_id || event.user_id === uid) }
+    : lastRun;
   res.json({
     settings,
     stats: listingStats,
-    lastRun,
+    lastRun: run,
     listings,
     events,
     cities: CITIES,
@@ -272,6 +338,10 @@ app.post("/api/listings/hide-many", (req, res) => {
 });
 
 app.post("/api/reset-listings", (req, res) => {
+  if (!actorIsAdmin(req)) {
+    res.status(403).json({ error: "只有管理員可以清除物件紀錄" });
+    return;
+  }
   if (req.body?.confirm !== true) {
     res.status(400).json({ error: "需要確認才會清除紀錄" });
     return;
@@ -282,6 +352,10 @@ app.post("/api/reset-listings", (req, res) => {
 });
 
 app.post("/api/reset-all", (req, res) => {
+  if (!actorIsAdmin(req)) {
+    res.status(403).json({ error: "只有管理員可以清除全部資料" });
+    return;
+  }
   if (req.body?.confirm !== true) {
     res.status(400).json({ error: "需要確認才會清除全部資料" });
     return;
@@ -331,14 +405,15 @@ app.post("/api/listings/:id/confirm-match", (req, res) => {
   res.json({ listing: updated, stats: stats(undefined, uid) });
 });
 
-async function persistSettings(body = {}) {
+async function persistSettings(body = {}, userId) {
+  const uid = userId || defaultUserId();
   if (Array.isArray(body.watchDistricts) && body.watchDistricts.length === 0) {
     throw new Error("請至少選一個行政區");
   }
   const workAddress = String(body.workAddress || "").trim();
   if (Number(body.commuteKm) > 0) {
     if (!workAddress) throw new Error("請先填上班地址，才能篩通勤距離");
-    const current = getSettings();
+    const current = getSettings(uid);
     const sameAddress =
       String(current.workAddress || "").replace(/\s+/g, "") === workAddress.replace(/\s+/g, "") &&
       hasWorkPoint(current);
@@ -361,15 +436,16 @@ async function persistSettings(body = {}) {
       body.workLng = null;
     }
   }
-  const settings = saveSettings(body);
+  const settings = saveSettings(body, uid);
   schedule();
   return settings;
 }
 
 app.post("/api/settings", async (req, res) => {
   try {
-    const settings = await persistSettings(req.body || {});
-    res.json({ settings, stats: safeStats() });
+    const uid = actorUserId(req);
+    const settings = await persistSettings(req.body || {}, uid);
+    res.json({ settings, stats: safeStats(uid) });
     queueGeoBackfill(settings);
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
@@ -378,13 +454,14 @@ app.post("/api/settings", async (req, res) => {
 
 app.post("/api/profiles", async (req, res) => {
   try {
+    const uid = actorUserId(req);
     const name = String(req.body?.name || "").trim();
     if (!name) throw new Error("請先填設定檔名稱");
     const patch = req.body?.settings;
     if (patch && typeof patch === "object") {
-      await persistSettings(patch);
+      await persistSettings(patch, uid);
     }
-    const settings = saveAsProfile(name);
+    const settings = saveAsProfile(name, undefined, uid);
     res.json({ settings });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
@@ -393,7 +470,7 @@ app.post("/api/profiles", async (req, res) => {
 
 app.post("/api/profiles/:id/load", (req, res) => {
   try {
-    const settings = loadProfile(req.params.id);
+    const settings = loadProfile(req.params.id, actorUserId(req));
     schedule();
     res.json({ settings });
   } catch (error) {
@@ -403,7 +480,7 @@ app.post("/api/profiles/:id/load", (req, res) => {
 
 app.delete("/api/profiles/:id", (req, res) => {
   try {
-    const settings = deleteProfile(req.params.id);
+    const settings = deleteProfile(req.params.id, actorUserId(req));
     res.json({ settings });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
@@ -429,8 +506,10 @@ app.post("/api/exclude-region", async (req, res) => {
 
 app.post("/api/watch", async (req, res) => {
   try {
+    const uid = actorUserId(req);
     const result = await tick("manual");
-    res.json({ result, stats: stats(undefined, actorUserId(req)) });
+    const events = (result.events || []).filter((event) => !event.user_id || event.user_id === uid);
+    res.json({ result: { ...result, events }, stats: stats(undefined, uid) });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -441,23 +520,28 @@ app.get("/api/events/stream", (req, res) => {
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders?.();
-  res.write(`data: ${JSON.stringify({ type: "hello", lastRun })}\n\n`);
-  clients.add(res);
-  req.on("close", () => clients.delete(res));
+  const userId = actorUserId(req);
+  const run = lastRun
+    ? { ...lastRun, events: (lastRun.events || []).filter((event) => !event.user_id || event.user_id === userId) }
+    : lastRun;
+  res.write(`data: ${JSON.stringify({ type: "hello", lastRun: run })}\n\n`);
+  const client = { res, userId };
+  clients.add(client);
+  req.on("close", () => clients.delete(client));
 });
 
 app.listen(PORT, HOST, () => {
   schedule();
   console.log(`591 追蹤 v2 開發版：http://${HOST}:${PORT}（資料 data-v2/v2.db，不會寫入線上 591.db）`);
-  if (!authConfigured()) {
-    console.warn("尚未設定 AUTH_EMAIL / AUTH_PASSWORD，網站會要求登入但無法登入。請寫入 .env 或 data/auth.env。");
+  if (envAdminConfigured()) {
+    console.log(`管理員帳號：${adminEmail()}（也可註冊新會員）`);
   } else {
-    console.log(`登入帳號：${adminEmail()}`);
+    console.log("可從登入頁註冊新會員。若要保留舊的單一管理員，請在 auth.env 設定 AUTH_EMAIL / AUTH_PASSWORD。");
   }
   setTimeout(() => {
     ensureWorkCoords()
       .then((settings) => {
-        const jobs = coveringJobsFromSettings(settings);
+        const jobs = coveringJobsFromAllUsers();
         if (!jobs.length) return;
         queueGeoBackfill(settings);
         return tick("startup");
@@ -467,3 +551,4 @@ app.listen(PORT, HOST, () => {
       });
   }, 8000);
 });
+

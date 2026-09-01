@@ -1,5 +1,6 @@
 import {
-  addEvent,
+  enqueueListingEvent,
+  coveringJobsFromAllUsers,
   findBySourceKey,
   getCommunityCache,
   getListing,
@@ -23,13 +24,11 @@ import {
   setCachedRoute,
   setCommunityCache,
   copyUserFlags,
-  anyoneWatched,
   setListingDetail,
   setListingMatch,
   touchListingChecked,
   upsertListing,
 } from "./db.js";
-import { coveringJobsFromSettings } from "./covering.js";
 import { replaceCrawlCovers, touchCrawlCoversRun } from "./crawlCovers.js";
 import { fetchCommunityLocation, fetchListingDetail, fetchListings, isListingGoneError, LIST_PAGE_SIZE, mergeFeeRows, probeListingAlive } from "./client591.js";
 import { needsListingGeo, hasWorkPoint } from "./geo.js";
@@ -69,12 +68,14 @@ function listingEventPayload(listing, type, detail, stamp = nowIso()) {
 
 function queueOfflineEvent(postId, { wasOnline = true } = {}) {
   if (!wasOnline) return;
-  if (!anyoneWatched(postId)) return;
   const listing = getListing(postId);
   if (!listing) return;
   const stamp = nowIso();
-  const event = listingEventPayload(listing, "offline", "591 詳情已不存在或已關閉", stamp);
-  event.id = addEvent(event);
+  enqueueListingEvent(listing, {
+    type: "offline",
+    detail: "591 詳情已不存在或已關閉",
+    created_at: stamp,
+  });
 }
 
 async function markOfflineAndNotify(postId, { wasOnline = true } = {}) {
@@ -210,29 +211,46 @@ async function resolveListingRoute(listing, settings) {
 
 export async function flushPendingNotifications(settings = getSettings(), { silent = false } = {}) {
   const pending = pendingNotifyEvents(80);
-  const ready = [];
-  const hookReady = [];
+  const dockByUser = new Map();
+  const hookByUser = new Map();
   for (const event of pending) {
-    const listing = getListing(event.post_id);
-    const forDock = listing ? shouldDockNotify(settings, listing, event) : false;
-    const forHook = listing ? shouldWebhookNotify(settings, listing, event) : false;
+    const userId = Number(event.user_id) || 0;
+    const userSettings = userId ? getSettings(userId) : settings;
+    const listing = getListing(event.post_id, userId || undefined);
+    const forDock = listing ? shouldDockNotify(userSettings, listing, event) : false;
+    const forHook = listing ? shouldWebhookNotify(userSettings, listing, event) : false;
     if (!listing || (!forDock && !forHook)) {
       markEventNotified(event.id);
       continue;
     }
-    const delivery = decideNotifyDelivery(listing, settings);
+    const delivery = decideNotifyDelivery(listing, userSettings);
     if (delivery === "pending") continue;
     markEventNotified(event.id);
     if (delivery === "send") {
-      const payload = eventPayloadFromListing(event, listing);
-      if (forDock) ready.push(payload);
-      if (forHook) hookReady.push(payload);
+      const payload = { ...eventPayloadFromListing(event, listing), user_id: userId };
+      if (forDock) {
+        const list = dockByUser.get(userId) || [];
+        list.push(payload);
+        dockByUser.set(userId, list);
+      }
+      if (forHook) {
+        const list = hookByUser.get(userId) || [];
+        list.push(payload);
+        hookByUser.set(userId, list);
+      }
     }
   }
-  if (!silent && (ready.length || hookReady.length)) {
-    await notify(settings, ready, { webhookEvents: hookReady });
+  const ready = [];
+  const userIds = new Set([...dockByUser.keys(), ...hookByUser.keys()]);
+  for (const userId of userIds) {
+    const dock = dockByUser.get(userId) || [];
+    const hook = hookByUser.get(userId) || [];
+    if (!silent && (dock.length || hook.length)) {
+      await notify(getSettings(userId), dock, { webhookEvents: hook });
+    }
+    ready.push(...dock.map((event) => ({ ...event, type_label: eventLabel(event.type), user_id: userId })));
   }
-  return ready.map((event) => ({ ...event, type_label: eventLabel(event.type) }));
+  return ready;
 }
 
 async function resolvePendingNotifyLocations(settings, { withRoute = true } = {}) {
@@ -243,10 +261,12 @@ async function resolvePendingNotifyLocations(settings, { withRoute = true } = {}
   for (const event of pending) {
     if (seen.has(event.post_id)) continue;
     seen.add(event.post_id);
-    const listing = getListing(event.post_id);
+    const userId = Number(event.user_id) || 0;
+    const listing = getListing(event.post_id, userId || undefined);
     if (!listing) continue;
-    if (!shouldNotify(settings, listing, event)) continue;
-    if (decideNotifyDelivery(listing, settings) !== "pending") continue;
+    const userSettings = userId ? getSettings(userId) : settings;
+    if (!shouldNotify(userSettings, listing, event)) continue;
+    if (decideNotifyDelivery(listing, userSettings) !== "pending") continue;
     ids.push(event.post_id);
   }
   await ingestListingGeoBatch(ids);
@@ -300,7 +320,7 @@ async function sweepOfflineListings(seenIds, { limit = 20 } = {}) {
 
 export async function runWatch(options = {}) {
   const settings = getSettings();
-  const jobs = coveringJobsFromSettings(settings);
+  const jobs = coveringJobsFromAllUsers();
   if (!jobs.length) {
     throw new Error("請先貼上至少一組 591 搜尋網址");
   }
@@ -393,11 +413,7 @@ export async function runWatch(options = {}) {
       // 非特別關注的內容微差（地址補齊來回等）不要進通知佇列
       const saved = getListing(listing.post_id) || listing;
       const evt = { type, detail };
-      if (!shouldDockNotify(settings, saved, evt) && !shouldWebhookNotify(settings, saved, evt)) continue;
-
-      const event = listingEventPayload(saved, type, detail, stamp);
-      const id = addEvent(event);
-      event.id = id;
+      enqueueListingEvent(saved, evt);
     }
   }
 

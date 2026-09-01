@@ -1,4 +1,11 @@
 import { timingSafeEqual, createHmac, randomBytes } from "node:crypto";
+import {
+  findUserByEmail,
+  publicUser,
+  setUserPassword,
+  verifyUserPassword,
+} from "./db.js";
+import { normalizeEmail } from "./password.js";
 
 const COOKIE = "591_session";
 const MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
@@ -12,8 +19,12 @@ function adminPassword() {
   return String(process.env.AUTH_PASSWORD || "");
 }
 
-export function authConfigured() {
+export function envAdminConfigured() {
   return Boolean(adminEmail() && adminPassword());
+}
+
+export function authConfigured() {
+  return envAdminConfigured() || Boolean(findUserByEmail(adminEmail()) || findUserByEmail("admin@local"));
 }
 
 function safeEqual(a, b) {
@@ -49,7 +60,6 @@ function parseCookies(req) {
 }
 
 export function readSession(req) {
-  if (!authConfigured()) return null;
   const token = parseCookies(req)[COOKIE];
   if (!token || !token.includes(".")) return null;
   const [payload, mac] = token.split(".");
@@ -57,8 +67,9 @@ export function readSession(req) {
   try {
     const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
     if (!data?.exp || Date.now() > Number(data.exp)) return null;
-    if (!safeEqual(String(data.e || "").toLowerCase(), adminEmail())) return null;
-    return { email: adminEmail() };
+    const user = findUserByEmail(data.e);
+    if (!user) return null;
+    return { email: user.email, userId: Number(user.id), role: user.role || "member", plan: user.plan || "free" };
   } catch {
     return null;
   }
@@ -79,9 +90,13 @@ function cookieHeader(req, token, clear = false, { secure } = {}) {
   return parts.join("; ");
 }
 
-export function sessionCookie(req) {
+export function sessionCookie(req, email) {
   const payload = Buffer.from(
-    JSON.stringify({ e: adminEmail(), exp: Date.now() + MAX_AGE_MS, n: randomBytes(8).toString("hex") }),
+    JSON.stringify({
+      e: normalizeEmail(email),
+      exp: Date.now() + MAX_AGE_MS,
+      n: randomBytes(8).toString("hex"),
+    }),
   ).toString("base64url");
   return cookieHeader(req, `${payload}.${sign(payload)}`);
 }
@@ -94,37 +109,65 @@ export function clearSessionCookie(req) {
   ];
 }
 
-export function verifyLogin(email, password) {
-  if (!authConfigured()) {
-    const err = new Error("尚未設定登入帳號。請在 .env 或 data/auth.env 設定 AUTH_EMAIL 與 AUTH_PASSWORD。");
-    err.status = 503;
-    throw err;
-  }
+function rateLimited() {
   if (Date.now() < fails.until) {
     const wait = Math.ceil((fails.until - Date.now()) / 1000);
     const err = new Error(`嘗試太多次，請 ${wait} 秒後再試`);
     err.status = 429;
     throw err;
   }
-  const okEmail = safeEqual(String(email || "").trim().toLowerCase(), adminEmail());
-  const okPass = safeEqual(String(password || "").trim(), adminPassword().trim());
-  if (!okEmail || !okPass) {
-    fails.n += 1;
-    if (fails.n >= 10) {
-      fails.until = Date.now() + 2 * 60 * 1000;
-      fails.n = 0;
-    }
-    const err = new Error("帳號或密碼不正確");
-    err.status = 401;
-    throw err;
+}
+
+function bumpFail() {
+  fails.n += 1;
+  if (fails.n >= 10) {
+    fails.until = Date.now() + 2 * 60 * 1000;
+    fails.n = 0;
   }
-  fails.n = 0;
-  return { email: adminEmail() };
+  const err = new Error("帳號或密碼不正確");
+  err.status = 401;
+  throw err;
+}
+
+export function verifyLogin(email, password) {
+  rateLimited();
+  const key = normalizeEmail(email);
+  const pass = String(password || "");
+  const hashed = verifyUserPassword(key, pass);
+  if (hashed) {
+    fails.n = 0;
+    return publicUser(hashed);
+  }
+  if (envAdminConfigured() && safeEqual(key, adminEmail()) && safeEqual(pass.trim(), adminPassword().trim())) {
+    const user = findUserByEmail(key);
+    if (user && !String(user.password_hash || "").trim()) {
+      try {
+        setUserPassword(user.id, pass);
+      } catch {
+        // env 密碼短於 8 碼時略過寫入，下次仍可用 AUTH_PASSWORD
+      }
+    }
+    fails.n = 0;
+    return publicUser(user) || { id: 0, email: adminEmail(), role: "admin", plan: "free" };
+  }
+  bumpFail();
 }
 
 export function publicPath(req) {
   const p = req.path || "";
-  return p === "/login.html" || p === "/logout" || p === "/api/login" || p === "/api/logout" || p === "/api/me" || p === "/api/health" || p.startsWith("/vendor/") || p.startsWith("/go/");
+  return (
+    p === "/login.html" ||
+    p === "/disclaimer.html" ||
+    p === "/logout" ||
+    p === "/api/login" ||
+    p === "/api/register" ||
+    p === "/api/logout" ||
+    p === "/api/me" ||
+    p === "/api/health" ||
+    p === "/api/disclaimer" ||
+    p.startsWith("/vendor/") ||
+    p.startsWith("/go/")
+  );
 }
 
 export function requireAuth(req, res, next) {

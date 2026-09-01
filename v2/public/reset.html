@@ -52,6 +52,10 @@
     const btn = document.getElementById("btn");
     fetch("/api/me", { cache: "no-store" }).then((r) => r.json()).then((data) => {
       if (!data.ok) location.replace("/login.html");
+      if (data.role && data.role !== "admin") {
+        btn.disabled = true;
+        msg.textContent = "只有管理員可以清除共用資料。";
+      }
     }).catch(() => {
       msg.textContent = "連不上伺服器，請稍候再開這個頁面。";
     });

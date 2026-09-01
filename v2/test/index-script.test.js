@@ -76,3 +76,9 @@ test("page defaults to 全部 + 最新", () => {
   assert.match(html, /let sort = "newest"/);
   assert.doesNotMatch(html, /class="chip on" data-sort="price_asc"/);
 });
+
+test("non-admin members do not see the shared reset link after boot", () => {
+  const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
+  assert.match(html, /id="resetLink"/);
+  assert.match(html, /role !== "admin"/);
+});
