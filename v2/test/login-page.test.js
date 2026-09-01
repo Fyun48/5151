@@ -21,6 +21,10 @@ test("login page can register after accepting the disclaimer", () => {
   assert.match(html, /\/api\/forgot-password/);
   assert.match(html, /寄出臨時密碼/);
   assert.match(html, /!register && !forgot/);
+  assert.match(html, /請證明你不是機器人/);
+  assert.match(html, /\/api\/captcha/);
+  assert.match(html, /captchaId/);
+  assert.match(html, /換一張/);
   const blocks = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)];
   for (const block of blocks) {
     if (/\bsrc\s*=/i.test(block[1])) continue;

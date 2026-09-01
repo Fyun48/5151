@@ -33,4 +33,4 @@
 | `crawl_covers` | 全站實際要打 591 的覆蓋 |
 | `user_events` | 個人通知佇列；webhook／浮動視窗依該會員的設定與標記發送 |
 
-`AUTH_EMAIL`／`AUTH_PASSWORD` 仍可當管理員種子帳號。新會員從登入頁註冊，須勾選免責聲明。登入頁可顯示密碼、勾選記住帳號（只把 Email 存在瀏覽器，不存密碼），以及申請忘記密碼。忘記密碼走 `POST /api/forgot-password`：若帳號存在，會先改成臨時密碼再寄信；寄信失敗會還原舊密碼。沒設定 SMTP 時回 503，不會改密碼。請在 `DATA_DIR/auth.env` 寫入 `SMTP_HOST`、`SMTP_PORT`（預設 587；465 會用 TLS）、`SMTP_USER`、`SMTP_PASS`、`SMTP_FROM`。清除共用資料只有管理員能做。v1 的 `DATA_EPOCH` 沒有改。
+`AUTH_EMAIL`／`AUTH_PASSWORD` 仍可當管理員種子帳號。新會員從登入頁註冊，須勾選免責聲明。登入頁可顯示密碼、勾選記住帳號（只把 Email 存在瀏覽器，不存密碼），以及申請忘記密碼。登入／註冊／忘記密碼都要通過圖形驗證碼（證明不是機器人），並有隱藏蜜罐欄位。密碼錯誤依 IP 與 Email 分開計算，連續 8 次失敗會鎖 15 分鐘，不再用全站共用計數。忘記密碼走 `POST /api/forgot-password`：若帳號存在，會先改成臨時密碼再寄信；寄信失敗會還原舊密碼。沒設定 SMTP 時回 503，不會改密碼。請在 `DATA_DIR/auth.env` 寫入 `SMTP_HOST`、`SMTP_PORT`（預設 587；465 會用 TLS）、`SMTP_USER`、`SMTP_PASS`、`SMTP_FROM`。清除共用資料只有管理員能做。v1 的 `DATA_EPOCH` 沒有改。

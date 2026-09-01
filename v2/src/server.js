@@ -33,6 +33,8 @@ import { rent591Url } from "./openLink.js";
 import { CITIES } from "./regions.js";
 import { DISCLAIMER_TEXT, DISCLAIMER_VERSION } from "./members.js";
 import { mailConfigured } from "./mail.js";
+import { assertHuman, issueCaptcha } from "./captcha.js";
+import { assertCaptchaIssuable, authAttemptKeys, clientIp } from "./rateLimit.js";
 import { backfillListingCoords, backfillListingRoutes, flushPendingNotifications, runWatch } from "./watcher.js";
 import { LIST_PAGE_SIZE } from "./client591.js";
 
@@ -103,18 +105,45 @@ app.get("/api/disclaimer", (_req, res) => {
   res.json({ version: DISCLAIMER_VERSION, text: DISCLAIMER_TEXT });
 });
 
-app.post("/api/login", (req, res) => {
+function captchaPayload() {
   try {
-    const user = verifyLogin(req.body?.email, req.body?.password);
-    setSession(req, res, user.email);
-    res.json({ ok: true, email: user.email, role: user.role, plan: user.plan });
+    return issueCaptcha();
+  } catch {
+    return null;
+  }
+}
+
+function sendAuthError(res, error) {
+  const body = { error: error.message };
+  const captcha = captchaPayload();
+  if (captcha) body.captcha = captcha;
+  res.status(error.status || 400).json(body);
+}
+
+app.get("/api/captcha", (req, res) => {
+  try {
+    assertCaptchaIssuable(clientIp(req));
+    res.json(issueCaptcha());
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
+app.post("/api/login", (req, res) => {
+  const keys = authAttemptKeys(req, req.body?.email);
+  try {
+    assertHuman(req.body);
+    const user = verifyLogin(req.body?.email, req.body?.password, { keys });
+    setSession(req, res, user.email);
+    res.json({ ok: true, email: user.email, role: user.role, plan: user.plan });
+  } catch (error) {
+    sendAuthError(res, error);
+  }
+});
+
 app.post("/api/register", (req, res) => {
   try {
+    assertHuman(req.body);
     const user = registerUser({
       email: req.body?.email,
       password: req.body?.password,
@@ -123,16 +152,17 @@ app.post("/api/register", (req, res) => {
     setSession(req, res, user.email);
     res.json({ ok: true, email: user.email, role: user.role, plan: user.plan });
   } catch (error) {
-    res.status(error.status || 400).json({ error: error.message });
+    sendAuthError(res, error);
   }
 });
 
 app.post("/api/forgot-password", async (req, res) => {
   try {
+    assertHuman(req.body);
     const result = await requestTempPassword(req.body?.email);
-    res.json(result);
+    res.json({ ...result, captcha: captchaPayload() });
   } catch (error) {
-    res.status(error.status || 500).json({ error: error.message });
+    sendAuthError(res, error);
   }
 });
 

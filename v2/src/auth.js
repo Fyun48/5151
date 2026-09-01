@@ -6,10 +6,10 @@ import {
   verifyUserPassword,
 } from "./db.js";
 import { normalizeEmail } from "./password.js";
+import { assertNotLocked, clearAuthFailures, recordAuthFailure } from "./rateLimit.js";
 
 const COOKIE = "591_session";
 const MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
-const fails = { n: 0, until: 0 };
 
 function adminEmail() {
   return String(process.env.AUTH_EMAIL || "").trim().toLowerCase();
@@ -109,33 +109,13 @@ export function clearSessionCookie(req) {
   ];
 }
 
-function rateLimited() {
-  if (Date.now() < fails.until) {
-    const wait = Math.ceil((fails.until - Date.now()) / 1000);
-    const err = new Error(`嘗試太多次，請 ${wait} 秒後再試`);
-    err.status = 429;
-    throw err;
-  }
-}
-
-function bumpFail() {
-  fails.n += 1;
-  if (fails.n >= 10) {
-    fails.until = Date.now() + 2 * 60 * 1000;
-    fails.n = 0;
-  }
-  const err = new Error("帳號或密碼不正確");
-  err.status = 401;
-  throw err;
-}
-
-export function verifyLogin(email, password) {
-  rateLimited();
+export function verifyLogin(email, password, { keys, now } = {}) {
+  if (keys?.length) assertNotLocked(keys, now);
   const key = normalizeEmail(email);
   const pass = String(password || "");
   const hashed = verifyUserPassword(key, pass);
   if (hashed) {
-    fails.n = 0;
+    if (keys?.length) clearAuthFailures(keys);
     return publicUser(hashed);
   }
   if (envAdminConfigured() && safeEqual(key, adminEmail()) && safeEqual(pass.trim(), adminPassword().trim())) {
@@ -147,10 +127,13 @@ export function verifyLogin(email, password) {
         // env 密碼短於 8 碼時略過寫入，下次仍可用 AUTH_PASSWORD
       }
     }
-    fails.n = 0;
+    if (keys?.length) clearAuthFailures(keys);
     return publicUser(user) || { id: 0, email: adminEmail(), role: "admin", plan: "free" };
   }
-  bumpFail();
+  if (keys?.length) recordAuthFailure(keys, now);
+  const err = new Error("帳號或密碼不正確");
+  err.status = 401;
+  throw err;
 }
 
 export function publicPath(req) {
@@ -166,6 +149,7 @@ export function publicPath(req) {
     p === "/api/me" ||
     p === "/api/health" ||
     p === "/api/disclaimer" ||
+    p === "/api/captcha" ||
     p.startsWith("/vendor/") ||
     p.startsWith("/go/")
   );
