@@ -15,6 +15,7 @@ import { countsTowardAllTotal, isConfirmedOffline, isPendingOffline } from "./of
 import { coveringJobsFromMembers, coveringJobsFromSettings, coversFromMemberSettings, listingInMemberScope } from "./covering.js";
 import { listCrawlCovers } from "./crawlCovers.js";
 import { ensurePersonalSchema } from "./personalSchema.js";
+import { importV1CacheIfNeeded } from "./importV1.js";
 import {
   adminEmailForUser,
   anyoneWatched as anyoneWatchedOn,
@@ -351,6 +352,7 @@ const SITE_SETTING_KEYS = new Set([
   "personalFlagsMigrated",
   "personalSettingsMigrated",
   "eventsMigrated",
+  "v1CacheImported",
 ]);
 
 const DEFAULTS = {
@@ -1640,6 +1642,16 @@ try {
   const adminId = bootstrapAdminFromEnv();
   migrateGlobalSettingsToUser(adminId);
   migrateEventsToUser(adminId);
+  try {
+    const imported = importV1CacheIfNeeded(db, { adminUserId: adminId });
+    if (imported.imported) {
+      console.log(
+        `[5151] 已從 v1 只讀匯入刊登 ${imported.listings} 筆、標記 ${imported.flags} 筆、社區 ${imported.communities}、座標 ${imported.geo}、路線 ${imported.routes}`,
+      );
+    }
+  } catch (error) {
+    console.warn("從 v1 匯入刊登快取失敗：", error.message);
+  }
 } catch (error) {
   console.warn("會員帳號初始化失敗：", error.message);
 }

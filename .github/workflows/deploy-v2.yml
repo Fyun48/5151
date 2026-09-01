@@ -47,7 +47,7 @@ jobs:
               copied=1
             fi
             cd /mnt/Storage1/apps/5151
-            docker compose up -d --no-build --no-deps 591-tracker-v2
+            docker compose up -d --no-build --no-deps --force-recreate 591-tracker-v2
             if [ "$copied" = 1 ]; then
               docker compose restart 591-tracker-v2
             fi

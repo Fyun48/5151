@@ -31,8 +31,10 @@ services:
       DATA_DIR: /data
       TZ: Asia/Taipei
       PUBLIC_BASE_URL: https://b5151.reversalplay.me
+      V1_DB_PATH: /v1-data/591.db
     volumes:
       - /DATA/AppData/591-tracker-v2:/data
+      - /DATA/AppData/591-tracker:/v1-data:ro
       - /mnt/Storage1/apps/5151/v2/src:/app/src:ro
       - /mnt/Storage1/apps/5151/v2/public:/app/public:ro
     command: ["node", "--watch-path=src", "--watch-path=public", "src/server.js"]
