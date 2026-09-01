@@ -41,5 +41,13 @@ jobs:
           script: |
             set -euo pipefail
             mkdir -p /DATA/AppData/591-tracker-v2
+            copied=0
+            if [ -f /DATA/AppData/591-tracker/auth.env ] && [ ! -f /DATA/AppData/591-tracker-v2/auth.env ]; then
+              cp /DATA/AppData/591-tracker/auth.env /DATA/AppData/591-tracker-v2/auth.env
+              copied=1
+            fi
             cd /mnt/Storage1/apps/5151
             docker compose up -d --no-build --no-deps 591-tracker-v2
+            if [ "$copied" = 1 ]; then
+              docker compose restart 591-tracker-v2
+            fi
