@@ -39,5 +39,6 @@ test("watch fly animation is non-blocking and targets the watched chip", () => {
   assert.match(html, /pointer-events:\s*none/);
   assert.match(html, /function flyCardToWatchChip/);
   assert.match(html, /data-filter="watched"/);
-  assert.match(html, /1\.2s/);
+  assert.match(html, /1\.15s/);
+  assert.match(html, /noteDrafts/);
 });
