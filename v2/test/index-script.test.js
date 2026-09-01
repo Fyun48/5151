@@ -99,9 +99,11 @@ test("member profiles cap districts and include usable ping in notify copy", () 
 test("member settings copy hides advanced hints and locks schedule defaults", () => {
   const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
   assert.match(html, /此通知只會訊息已是特別關注之物件/);
-  assert.match(html, /本系統每5分鐘會重新檢本物件來源比對篩選/);
+  assert.match(html, /本系統每8分鐘會重新檢本物件來源比對篩選/);
+  assert.match(html, /id="adminLink"/);
+  assert.match(html, /後台管理/);
   assert.match(html, /classList\.toggle\("role-admin", meIsAdmin\)/);
-  assert.match(html, /meIsAdmin \? Number\(\$\("intervalMinutes"\)\.value\) : 5/);
+  assert.match(html, /meIsAdmin \? Number\(\$\("intervalMinutes"\)\.value\) : undefined/);
   assert.match(html, /meIsAdmin \? \(Number\(\$\("offlineConfirmDays"\)\.value\) \|\| 7\) : 7/);
   assert.match(html, /meIsAdmin \? Number\(\$\("pagesPerWatch"\)\.value\) : 40/);
   assert.match(html, /body:not\(\.role-admin\) \.admin-only/);
