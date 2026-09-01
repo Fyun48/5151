@@ -105,6 +105,8 @@ test("member settings copy hides advanced hints and locks schedule defaults", ()
   assert.match(html, /本系統每8分鐘會重新檢本物件來源比對篩選/);
   assert.match(html, /id="adminLink"/);
   assert.match(html, /後台管理/);
+  assert.match(html, /id="sponsorBar"/);
+  assert.match(html, /paintSponsorOffer/);
   assert.match(html, /classList\.toggle\("role-admin", meIsAdmin\)/);
   assert.match(html, /meIsAdmin \? Number\(\$\("intervalMinutes"\)\.value\) : undefined/);
   assert.match(html, /meIsAdmin \? \(Number\(\$\("offlineConfirmDays"\)\.value\) \|\| 7\) : 7/);

@@ -83,7 +83,22 @@
     .err { color: #9f6b6b; }
     .checks { display: flex; align-items: center; gap: 8px; margin: 12px 0; font-size: 14px; }
     .checks input { width: auto; }
-    .who { font-size: 13px; color: var(--muted); }
+    .provider {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px 14px;
+      margin: 0 0 10px;
+      background: var(--accent-mist);
+    }
+    .provider h3 { margin: 0 0 4px; font-size: 15px; }
+    .provider .meta { font-size: 13px; color: var(--muted); line-height: 1.5; margin: 0 0 8px; }
+    .provider a { color: var(--accent-deep); }
+    .extras-row { display: grid; grid-template-columns: 140px 1fr auto auto; gap: 8px; align-items: end; margin-bottom: 8px; }
+    .extras-row label { margin: 0; }
+    .extras-row input[type="checkbox"] { width: auto; }
+    @media (max-width: 800px) {
+      .extras-row { grid-template-columns: 1fr; }
+    }
     @media (max-width: 800px) {
       .grid-2 { grid-template-columns: 1fr; }
       header, .wrap { padding-left: 16px; padding-right: 16px; }
@@ -95,7 +110,7 @@
   <header>
     <div>
       <h1>後台管理</h1>
-      <div class="sub">會員、寄信 SMTP、信件內容。看不到會員密碼。</div>
+      <div class="sub">會員、寄信 SMTP、信件內容、贊助連結。看不到會員密碼。</div>
     </div>
     <div class="row">
       <span class="who" id="who"></span>
@@ -122,6 +137,25 @@
           <tbody id="memberRows"></tbody>
         </table>
       </div>
+    </section>
+    <section class="card">
+      <h2>贊助連結</h2>
+      <p class="hint">預設列出免月費、會員能刷卡的方案：歐付寶收款連結、ezPay 簡單付、OEN 幫收 Link、Ko-fi、PayPal.Me、Buy Me a Coffee、GitHub Sponsors。金流仍會從贊助款抽手續費。綠界、藍新全方位金流通常要統編或年費，不放在預設清單；若你已有網址，可用下面自訂列。付款不會自動改會員方案，收到後請在上方把對方改成「已贊助」。</p>
+      <form id="sponsorForm">
+        <label>給未贊助會員看的說明</label>
+        <textarea id="sponsorIntro"></textarea>
+        <label>已贊助會員看到的短句</label>
+        <input id="sponsorThanks" />
+        <div id="sponsorProviders"></div>
+        <h3 style="margin:16px 0 8px;font-size:16px">自訂連結</h3>
+        <p class="hint">例如銀行轉帳說明頁、街口收款頁，或你已經申請好的其他金流。</p>
+        <div id="sponsorExtras"></div>
+        <div class="row" style="margin:8px 0 0">
+          <button type="button" class="ghost" id="sponsorAddExtra">新增自訂連結</button>
+          <button type="submit" class="primary" id="sponsorSave">儲存贊助連結</button>
+        </div>
+        <p class="msg" id="sponsorMsg"></p>
+      </form>
     </section>
     <section class="card">
       <h2>寄信 SMTP</h2>
@@ -183,6 +217,8 @@
   <script>
     const $ = (id) => document.getElementById(id);
     let meEmail = "";
+    let sponsorCatalog = [];
+    let sponsorExtras = [];
 
     function setMsg(id, text, ok) {
       const el = $(id);
@@ -376,6 +412,124 @@
       }
     };
 
+    function providerCell(id, field) {
+      return document.querySelector(`[data-sp="${id}"][data-spf="${field}"]`);
+    }
+
+    function renderProviders(catalog, providers) {
+      sponsorCatalog = catalog || [];
+      $("sponsorProviders").innerHTML = sponsorCatalog.map((row) => {
+        const cell = providers?.[row.id] || {};
+        return `
+          <div class="provider">
+            <h3>${escapeHtml(row.name)}</h3>
+            <p class="meta">${escapeHtml(row.hint || "")}<br>${escapeHtml(row.feeNote || "")} 申請：<a href="${escapeHtml(row.signupUrl)}" target="_blank" rel="noopener">開通頁</a></p>
+            <label>顯示名稱</label>
+            <input data-sp="${escapeHtml(row.id)}" data-spf="label" value="${escapeHtml(cell.label || row.label)}" placeholder="${escapeHtml(row.label)}" />
+            <label>你的收款網址</label>
+            <input data-sp="${escapeHtml(row.id)}" data-spf="url" value="${escapeHtml(cell.url || "")}" placeholder="https://…" />
+            <label class="checks"><input type="checkbox" data-sp="${escapeHtml(row.id)}" data-spf="enabled" ${cell.enabled ? "checked" : ""} /> 顯示給未贊助會員</label>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function renderExtras() {
+      $("sponsorExtras").innerHTML = sponsorExtras.map((row, idx) => `
+        <div class="extras-row" data-extra="${idx}">
+          <div>
+            <label>名稱</label>
+            <input data-ex="label" value="${escapeHtml(row.label || "")}" placeholder="例如：銀行轉帳" />
+          </div>
+          <div>
+            <label>網址</label>
+            <input data-ex="url" value="${escapeHtml(row.url || "")}" placeholder="https://…" />
+          </div>
+          <label class="checks"><input type="checkbox" data-ex="enabled" ${row.enabled !== false ? "checked" : ""} /> 顯示</label>
+          <button type="button" class="ghost" data-ex-del="${idx}">刪除</button>
+        </div>
+      `).join("");
+    }
+
+    function collectExtras() {
+      return [...document.querySelectorAll("#sponsorExtras .extras-row")].map((row, idx) => ({
+        id: sponsorExtras[idx]?.id || `custom-${idx + 1}`,
+        label: row.querySelector("[data-ex=label]").value,
+        url: row.querySelector("[data-ex=url]").value,
+        enabled: row.querySelector("[data-ex=enabled]").checked,
+      }));
+    }
+
+    function fillSponsor(data) {
+      const config = data.config || {};
+      $("sponsorIntro").value = config.intro || "";
+      $("sponsorThanks").value = config.thanks || "";
+      renderProviders(data.catalog || sponsorCatalog, config.providers || {});
+      sponsorExtras = Array.isArray(config.extras) ? config.extras.map((row) => ({ ...row })) : [];
+      renderExtras();
+    }
+
+    async function loadSponsor() {
+      const res = await fetch("/api/admin/sponsor", { cache: "no-store" });
+      const data = await readApi(res);
+      if (!res.ok) throw new Error(data.error || "載入贊助設定失敗");
+      fillSponsor(data);
+    }
+
+    $("sponsorExtras").addEventListener("click", (ev) => {
+      const btn = ev.target.closest("[data-ex-del]");
+      if (!btn) return;
+      sponsorExtras = collectExtras();
+      sponsorExtras.splice(Number(btn.dataset.exDel), 1);
+      renderExtras();
+    });
+
+    $("sponsorAddExtra").onclick = () => {
+      sponsorExtras = collectExtras();
+      if (sponsorExtras.length >= 8) {
+        setMsg("sponsorMsg", "自訂連結最多 8 個");
+        return;
+      }
+      sponsorExtras.push({ id: `custom-${sponsorExtras.length + 1}`, label: "", url: "", enabled: true });
+      renderExtras();
+    };
+
+    $("sponsorForm").onsubmit = async (ev) => {
+      ev.preventDefault();
+      $("sponsorSave").disabled = true;
+      setMsg("sponsorMsg", "儲存中…");
+      try {
+        const providers = {};
+        for (const row of sponsorCatalog) {
+          providers[row.id] = {
+            label: providerCell(row.id, "label")?.value || "",
+            url: providerCell(row.id, "url")?.value || "",
+            enabled: Boolean(providerCell(row.id, "enabled")?.checked),
+          };
+        }
+        const res = await fetch("/api/admin/sponsor", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            intro: $("sponsorIntro").value,
+            thanks: $("sponsorThanks").value,
+            providers,
+            extras: collectExtras(),
+          }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "儲存失敗");
+        fillSponsor(data);
+        const n = (data.config?.extras || []).filter((row) => row.enabled).length
+          + Object.values(data.config?.providers || {}).filter((row) => row.enabled).length;
+        setMsg("sponsorMsg", n ? `已儲存，目前會顯示 ${n} 個連結給未贊助會員` : "已儲存。還沒有開啟的連結，未贊助會員暫時看不到贊助列。", true);
+      } catch (error) {
+        setMsg("sponsorMsg", error.message);
+      } finally {
+        $("sponsorSave").disabled = false;
+      }
+    };
+
     (async () => {
       const meRes = await fetch("/api/me", { cache: "no-store" });
       const me = await readApi(meRes);
@@ -383,7 +537,7 @@
       if (me.role !== "admin") { location.replace("/"); return; }
       meEmail = me.email || "";
       $("who").textContent = meEmail;
-      await Promise.all([loadMembers(), loadMail()]);
+      await Promise.all([loadMembers(), loadMail(), loadSponsor()]);
     })().catch((error) => {
       setMsg("memberMsg", error.message || "載入失敗");
     });
