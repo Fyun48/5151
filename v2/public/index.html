@@ -64,6 +64,34 @@
       padding: 8px 10px;
       font-size: 13px;
     }
+    .sponsor-bar {
+      margin: 0 32px;
+      padding: 12px 16px;
+      background: var(--accent-mist);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+    }
+    .sponsor-bar p { margin: 0; font-size: 13px; color: var(--ink); line-height: 1.55; }
+    .sponsor-bar .sponsor-links,
+    #sponsorSettingsLinks {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    a.sponsor-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 14px;
+      border-radius: 999px;
+      background: var(--accent);
+      color: #fff;
+      text-decoration: none;
+      font-size: 13px;
+    }
+    a.sponsor-chip .blurb { opacity: 0.86; font-size: 12px; }
+    .sponsor-bar.thanks { background: #fff; }
     .save-msg { font-size: 12px; color: var(--muted); margin-left: 4px; }
     h1 {
       margin: 0;
@@ -590,6 +618,7 @@
       .wrap, .stats { grid-template-columns: 1fr; }
       header, .wrap { padding-left: 16px; padding-right: 16px; }
       body.panel-collapsed .list-head-sticky { margin: 10px 10px 0; top: 6px; }
+      .sponsor-bar { margin-left: 16px; margin-right: 16px; }
     }
   </style>
 </head>
@@ -654,6 +683,7 @@
       <span class="save-msg" id="saveMsg"></span>
     </div>
   </header>
+  <div id="sponsorBar" class="sponsor-bar" hidden></div>
   <div class="wrap">
     <aside class="card panel" id="settingsPanel">
       <div class="panel-toolbar">
@@ -739,6 +769,10 @@
         <input type="number" id="intervalMinutes" min="1" max="120" />
       </div>
       <p class="hint member-only" id="intervalMemberHint">本系統每8分鐘會重新檢本物件來源比對篩選</p>
+      <div class="member-only" id="sponsorSettingsBlock" hidden>
+        <p class="hint" id="sponsorSettingsIntro"></p>
+        <div class="sponsor-links" id="sponsorSettingsLinks"></div>
+      </div>
       <div class="admin-only">
         <label>確認已下架天數</label>
         <input type="number" id="offlineConfirmDays" min="1" max="30" />
@@ -951,6 +985,46 @@
     let meIsAdmin = false;
     let meEmail = "";
     let mePlan = "free";
+    function escapeSponsor(value) {
+      return String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function sponsorChipHtml(link) {
+      const blurb = link.blurb ? `<span class="blurb">${escapeSponsor(link.blurb)}</span>` : "";
+      return `<a class="sponsor-chip" href="${escapeSponsor(link.url)}" target="_blank" rel="noopener">${escapeSponsor(link.label)}${blurb}</a>`;
+    }
+
+    function paintSponsorOffer(offer) {
+      const bar = $("sponsorBar");
+      const block = $("sponsorSettingsBlock");
+      const intro = $("sponsorSettingsIntro");
+      const linksBox = $("sponsorSettingsLinks");
+      if (!bar) return;
+      if (offer?.show && Array.isArray(offer.links) && offer.links.length) {
+        bar.hidden = false;
+        bar.classList.remove("thanks");
+        bar.innerHTML = `<p>${escapeSponsor(offer.intro || "")}</p><div class="sponsor-links">${offer.links.map(sponsorChipHtml).join("")}</div>`;
+        if (block && intro && linksBox) {
+          block.hidden = false;
+          intro.textContent = offer.intro || "";
+          linksBox.innerHTML = offer.links.map(sponsorChipHtml).join("");
+        }
+        return;
+      }
+      if (offer?.sponsored && !meIsAdmin) {
+        bar.hidden = false;
+        bar.classList.add("thanks");
+        bar.innerHTML = `<p>${escapeSponsor(offer.thanks || "感謝贊助。")}</p>`;
+        if (block) block.hidden = true;
+        return;
+      }
+      bar.hidden = true;
+      bar.innerHTML = "";
+      if (block) block.hidden = true;
+    }
 
     function districtLimit() {
       return meIsAdmin ? 0 : MEMBER_MAX_DISTRICTS;
@@ -1779,6 +1853,8 @@
       }
       mePlan = me.plan || "free";
       document.body.classList.toggle("role-admin", meIsAdmin);
+      document.body.classList.toggle("plan-sponsor", mePlan === "sponsor");
+      paintSponsorOffer(me.sponsor);
       if (me.role && me.role !== "admin" && $("resetLink")) $("resetLink").style.display = "none";
       settingsLoaded = false;
       setSettingsReady(false, "正在載入已存設定…完成前請不要按儲存或另存。");

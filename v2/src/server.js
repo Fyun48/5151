@@ -30,6 +30,9 @@ import {
   adminPatchMember,
   getAdminMailSettings,
   saveAdminMailSettings,
+  getAdminSponsorSettings,
+  saveAdminSponsorSettings,
+  publicSponsorSettings,
 } from "./db.js";
 import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requireAuth, sessionCookie, verifyLogin } from "./auth.js";
 import { boxFromRoadDescription, geocodeAddress, needsListingGeo, hasWorkPoint } from "./geo.js";
@@ -102,6 +105,7 @@ app.get("/api/me", (req, res) => {
     configured: true,
     canRegister: true,
     hint: "",
+    sponsor: session ? publicSponsorSettings(session) : { show: false, links: [], sponsored: false, intro: "", thanks: "" },
   });
 });
 
@@ -226,6 +230,18 @@ app.get("/api/admin/mail", requireAdminApi, (_req, res) => {
 app.put("/api/admin/mail", requireAdminApi, (req, res) => {
   try {
     res.json(saveAdminMailSettings(req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/admin/sponsor", requireAdminApi, (_req, res) => {
+  res.json(getAdminSponsorSettings());
+});
+
+app.put("/api/admin/sponsor", requireAdminApi, (req, res) => {
+  try {
+    res.json(saveAdminSponsorSettings(req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }

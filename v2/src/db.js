@@ -56,6 +56,11 @@ import {
   serializeEnvMap,
   smtpFromEnv,
 } from "./siteMail.js";
+import {
+  normalizeSponsorConfig,
+  publicSponsorOffer,
+  sponsorCatalog,
+} from "./sponsorLinks.js";
 
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data-v2");
 mkdirSync(DATA_DIR, { recursive: true });
@@ -449,6 +454,34 @@ export function applyStoredSmtp() {
   return smtp;
 }
 
+export function getSponsorConfig() {
+  return normalizeSponsorConfig(settingKey("sponsorLinks"));
+}
+
+export function getAdminSponsorSettings() {
+  return {
+    catalog: sponsorCatalog(),
+    config: getSponsorConfig(),
+  };
+}
+
+export function saveAdminSponsorSettings(partial = {}) {
+  const src = partial && typeof partial === "object" ? partial : {};
+  const current = getSponsorConfig();
+  const next = normalizeSponsorConfig({
+    intro: Object.prototype.hasOwnProperty.call(src, "intro") ? src.intro : current.intro,
+    thanks: Object.prototype.hasOwnProperty.call(src, "thanks") ? src.thanks : current.thanks,
+    providers: src.providers && typeof src.providers === "object" ? { ...current.providers, ...src.providers } : current.providers,
+    extras: Array.isArray(src.extras) ? src.extras : current.extras,
+  });
+  writeSettingKey("sponsorLinks", next);
+  return getAdminSponsorSettings();
+}
+
+export function publicSponsorSettings(user = {}) {
+  return publicSponsorOffer(getSponsorConfig(), { role: user.role, plan: user.plan });
+}
+
 export function listUserIds() {
   return listUserIdsOn(db);
 }
@@ -525,6 +558,7 @@ function omitSiteMail(stored) {
   const next = { ...stored };
   delete next.smtp;
   delete next.mailTemplates;
+  delete next.sponsorLinks;
   return next;
 }
 
@@ -564,7 +598,7 @@ export function saveSettings(partial, userId, { forceAdmin = false } = {}) {
   try {
     for (const [key, value] of Object.entries(next)) {
       if (value === undefined) continue;
-      if (key === "smtp" || key === "mailTemplates") continue;
+      if (key === "smtp" || key === "mailTemplates" || key === "sponsorLinks") continue;
       const encoded = JSON.stringify(value);
       if (SITE_SETTING_KEYS.has(key)) globalUpsert.run(key, encoded);
       else userUpsert.run(uid, key, encoded);
