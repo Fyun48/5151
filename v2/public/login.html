@@ -157,7 +157,7 @@
     function setMode(mode) {
       const register = mode === "register";
       const forgot = mode === "forgot";
-      $("tabLogin").classList.toggle("on", !register);
+      $("tabLogin").classList.toggle("on", !register && !forgot);
       $("tabRegister").classList.toggle("on", register);
       $("loginForm").classList.toggle("hidden", register || forgot);
       $("registerForm").classList.toggle("hidden", !register);
