@@ -11,6 +11,7 @@ import { hasWorkPoint } from "./geo.js";
 import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings } from "./settingsState.js";
 import { defaultNotifyMatrix } from "./notifyMatrix.js";
 import { DATA_EPOCH, shouldResetForEpoch } from "./dataEpoch.js";
+import { nextWatchNote } from "./watchFlags.js";
 import { countsTowardAllTotal, isConfirmedOffline, isPendingOffline } from "./offline.js";
 
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data");
@@ -929,10 +930,7 @@ export function setFlags(postId, flags) {
   const viewed = flags.viewed === undefined ? listing.viewed : Number(Boolean(flags.viewed));
   const watched = flags.watched === undefined ? listing.watched : Number(Boolean(flags.watched));
   const hidden = flags.hidden === undefined ? listing.hidden : Number(Boolean(flags.hidden));
-  const watchNote =
-    flags.watch_note === undefined
-      ? listing.watch_note || ""
-      : String(flags.watch_note || "").replace(/\r/g, "").trim().slice(0, 300);
+  const watchNote = nextWatchNote(listing, flags);
   const now = new Date().toISOString();
   db.prepare(`
     UPDATE listings
