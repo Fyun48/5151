@@ -161,6 +161,7 @@ export function publicPath(req) {
     p === "/logout" ||
     p === "/api/login" ||
     p === "/api/register" ||
+    p === "/api/forgot-password" ||
     p === "/api/logout" ||
     p === "/api/me" ||
     p === "/api/health" ||

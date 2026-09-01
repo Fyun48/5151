@@ -14,6 +14,12 @@ test("login page can register after accepting the disclaimer", () => {
   assert.match(html, /acceptDisclaimer/);
   assert.match(html, /disclaimer\.html/);
   assert.match(html, /這是免費系統/);
+  assert.match(html, /顯示密碼/);
+  assert.match(html, /記住帳號/);
+  assert.match(html, /591_v2_remember_email/);
+  assert.match(html, /id="forgotForm"/);
+  assert.match(html, /\/api\/forgot-password/);
+  assert.match(html, /寄出臨時密碼/);
   const blocks = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)];
   for (const block of blocks) {
     if (/\bsrc\s*=/i.test(block[1])) continue;

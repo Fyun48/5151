@@ -41,6 +41,7 @@ import {
   setUserPassword as setUserPasswordOn,
   verifyUserPassword as verifyUserPasswordOn,
 } from "./members.js";
+import { requestTempPassword as requestTempPasswordOn } from "./forgotPassword.js";
 import { shouldDockNotify, shouldWebhookNotify } from "./notify.js";
 
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data-v2");
@@ -336,6 +337,10 @@ export function verifyUserPassword(email, password) {
 
 export function setUserPassword(userId, password) {
   return setUserPasswordOn(db, userId, password);
+}
+
+export function requestTempPassword(email, opts) {
+  return requestTempPasswordOn(db, email, opts);
 }
 
 export { publicUser };

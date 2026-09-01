@@ -25,12 +25,14 @@ import {
   setFlags,
   sourceHistory,
   stats,
+  requestTempPassword,
 } from "./db.js";
 import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requireAuth, sessionCookie, verifyLogin } from "./auth.js";
 import { boxFromRoadDescription, geocodeAddress, needsListingGeo, hasWorkPoint } from "./geo.js";
 import { rent591Url } from "./openLink.js";
 import { CITIES } from "./regions.js";
 import { DISCLAIMER_TEXT, DISCLAIMER_VERSION } from "./members.js";
+import { mailConfigured } from "./mail.js";
 import { backfillListingCoords, backfillListingRoutes, flushPendingNotifications, runWatch } from "./watcher.js";
 import { LIST_PAGE_SIZE } from "./client591.js";
 
@@ -122,6 +124,15 @@ app.post("/api/register", (req, res) => {
     res.json({ ok: true, email: user.email, role: user.role, plan: user.plan });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/forgot-password", async (req, res) => {
+  try {
+    const result = await requestTempPassword(req.body?.email);
+    res.json(result);
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message });
   }
 });
 
@@ -537,6 +548,9 @@ app.listen(PORT, HOST, () => {
     console.log(`管理員帳號：${adminEmail()}（也可註冊新會員）`);
   } else {
     console.log("可從登入頁註冊新會員。若要保留舊的單一管理員，請在 auth.env 設定 AUTH_EMAIL / AUTH_PASSWORD。");
+  }
+  if (!mailConfigured()) {
+    console.log("忘記密碼尚未能寄信：請在 auth.env 設定 SMTP_HOST、SMTP_USER、SMTP_PASS、SMTP_FROM。");
   }
   setTimeout(() => {
     ensureWorkCoords()
