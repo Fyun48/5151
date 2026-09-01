@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { passesDisplayFilters } from "./floors.js";
+import { passesDisplayFilters, housingTypeLabel } from "./floors.js";
 import { notifyChannelOn } from "./notifyMatrix.js";
 import { trackedListingUrl } from "./openLink.js";
 
@@ -205,6 +205,24 @@ function formatFeeLine(event) {
   return String(event.extra_fee_text || "").replace(/[()（）]/g, "").trim();
 }
 
+export function formatUsableArea(listing) {
+  const raw = String(listing?.area_name || "").trim();
+  if (!raw) return "";
+  const match = raw.replace(/,/g, "").match(/(\d+(?:\.\d+)?)/);
+  if (match) return `可使用 ${match[1]} 坪`;
+  return /坪/.test(raw) ? raw : `${raw}坪`;
+}
+
+export function formatNotifyFacts(event) {
+  return [
+    event.address,
+    event.layout,
+    event.floor_name,
+    formatUsableArea(event),
+    housingTypeLabel(event),
+  ].filter(Boolean).join(" · ");
+}
+
 async function postDiscord(webhook, title, events) {
   if (!webhook) return;
   const embeds = events.slice(0, 8).map((event) => ({
@@ -215,7 +233,7 @@ async function postDiscord(webhook, title, events) {
       `**${eventLabel(event.type)}**${event.detail ? ` · ${event.detail}` : ""}`,
       event.price ? `${event.price} 元/月` : "",
       formatFeeLine(event),
-      [event.address, event.layout, event.floor_name, event.kind_name].filter(Boolean).join(" · "),
+      formatNotifyFacts(event),
     ]
       .filter(Boolean)
       .join("\n")

@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   classifyExistingUpdate,
+  formatNotifyFacts,
+  formatUsableArea,
   listingLastEvent,
   listingPriceNum,
   shouldDockNotify,
@@ -146,4 +148,28 @@ test("list last_event maps price drop and title to update", () => {
   assert.equal(listingLastEvent("price_drop", listing), "update");
   assert.equal(listingLastEvent("relist", listing), "same_source");
   assert.equal(listingPriceNum({ price: "28,000" }), 28000);
+});
+
+test("notify facts add usable ping and housing type instead of 整層住家", () => {
+  assert.equal(formatUsableArea({ area_name: "15.5坪" }), "可使用 15.5 坪");
+  assert.equal(formatUsableArea({ area_name: "20" }), "可使用 20 坪");
+  const apt = formatNotifyFacts({
+    address: "士林區中山北路",
+    layout: "2房1廳",
+    floor_name: "5F/12F",
+    area_name: "22坪",
+    kind_name: "整層住家",
+    tags: ["公寓"],
+  });
+  assert.match(apt, /可使用 22 坪/);
+  assert.match(apt, /公寓$/);
+  assert.doesNotMatch(apt, /整層住家/);
+  const tower = formatNotifyFacts({
+    kind_name: "整層住家",
+    tags: ["電梯大樓"],
+    area_name: "30坪",
+  });
+  assert.match(tower, /電梯公寓\/大樓$/);
+  const suite = formatNotifyFacts({ kind_name: "獨立套房", area_name: "8坪" });
+  assert.match(suite, /套房$/);
 });

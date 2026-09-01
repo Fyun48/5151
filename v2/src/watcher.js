@@ -62,6 +62,8 @@ function listingEventPayload(listing, type, detail, stamp = nowIso()) {
     layout: listing.layout,
     floor_name: listing.floor_name,
     kind_name: listing.kind_name,
+    area_name: listing.area_name,
+    tags: listing.tags,
     cover: listing.cover,
   };
 }

@@ -6,7 +6,12 @@ import {
   normalizeProfiles,
   parseSettingRows,
   snapshotSettings,
+  canAddProfile,
+  limitWatchDistricts,
+  MEMBER_MAX_PROFILE_DISTRICTS,
+  MEMBER_MAX_PROFILES,
 } from "../src/settingsState.js";
+import { coveringJobsFromSettings } from "../src/covering.js";
 
 const defaults = {
   searchUrls: ["https://rent.591.com.tw/list?region=1&section=5"],
@@ -135,4 +140,36 @@ test("notifyMatrix hydrates defaults and preserves unchecks", () => {
   assert.equal(next.notifyMatrix.update.webhook, true);
   assert.equal(next.notifyMatrix.price.dock, true);
   assert.equal(next.webhookNotifyNew, false);
+});
+
+test("members are capped at 10 districts and 3 profiles; admins are not", () => {
+  const many = ["1-8", "1-9", "1-2", "1-3", "1-4", "1-5", "1-7", "1-10", "1-11", "1-1", "1-6", "1-12"];
+  assert.equal(many.length, 12);
+  assert.equal(limitWatchDistricts(many).length, MEMBER_MAX_PROFILE_DISTRICTS);
+  assert.equal(limitWatchDistricts(many, { admin: true }).length, 12);
+  const hydrated = hydrateSettings({ watchDistricts: many }, defaults);
+  assert.equal(hydrated.watchDistricts.length, MEMBER_MAX_PROFILE_DISTRICTS);
+  const asAdmin = hydrateSettings({ watchDistricts: many }, defaults, { admin: true });
+  assert.equal(asAdmin.watchDistricts.length, 12);
+  const patched = applySettingPatch(
+    { ...defaults, watchDistricts: ["1-8"] },
+    { watchDistricts: many },
+  );
+  assert.equal(patched.watchDistricts.length, MEMBER_MAX_PROFILE_DISTRICTS);
+  const adminPatched = applySettingPatch(
+    { ...defaults, watchDistricts: ["1-8"] },
+    { watchDistricts: many },
+    { admin: true },
+  );
+  assert.equal(adminPatched.watchDistricts.length, 12);
+  assert.equal(canAddProfile(new Array(MEMBER_MAX_PROFILES).fill({ id: "x" })), false);
+  assert.equal(canAddProfile(new Array(MEMBER_MAX_PROFILES).fill({ id: "x" }), { admin: true }), true);
+  assert.equal(hydrated.watchDistricts.includes("1-12"), false);
+  const section = new URL(hydrated.searchUrls[0]).searchParams.get("section") || "";
+  assert.equal(section.split(",").includes("12"), false);
+  assert.equal(section.split(",").length, MEMBER_MAX_PROFILE_DISTRICTS);
+  const jobs = coveringJobsFromSettings(hydrated);
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0].sectionIds.includes(12), false);
+  assert.equal(jobs[0].sectionIds.length, MEMBER_MAX_PROFILE_DISTRICTS);
 });
