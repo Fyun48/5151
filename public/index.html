@@ -838,8 +838,8 @@
           <button class="chip" data-kind="apartment">公寓</button>
           <button class="chip" data-kind="suite">套房</button>
           <span style="width:1px;height:22px;background:var(--line);margin:0 4px"></span>
-          <button class="chip" data-sort="newest">最新</button>
-          <button class="chip on" data-sort="price_asc">金額低→高</button>
+          <button class="chip on" data-sort="newest">最新</button>
+          <button class="chip" data-sort="price_asc">金額低→高</button>
           <button class="chip" data-sort="price_desc">金額高→低</button>
           <button class="chip commute-sort" data-sort="commute_asc" hidden>離公司近→遠</button>
           <button class="chip commute-sort" data-sort="commute_desc" hidden>離公司遠→近</button>
@@ -912,7 +912,7 @@
     $("status").textContent = "正在載入…";
     let filter = "all";
     let kind = "";
-    let sort = "price_asc";
+    let sort = "newest";
     let settings = {};
     let selected = new Set();
     let excludeBoxes = [];

@@ -68,3 +68,11 @@ test("housing kind chips stay independent of 特別關注", () => {
   assert.doesNotMatch(html, /data-filter="apartment"/);
   assert.doesNotMatch(html, /data-filter="suite"/);
 });
+
+test("page defaults to 全部 + 最新", () => {
+  const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
+  assert.match(html, /class="chip on" data-filter="all"/);
+  assert.match(html, /class="chip on" data-sort="newest"/);
+  assert.match(html, /let sort = "newest"/);
+  assert.doesNotMatch(html, /class="chip on" data-sort="price_asc"/);
+});
