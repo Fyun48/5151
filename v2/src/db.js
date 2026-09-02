@@ -16,6 +16,7 @@ import { sameSearch } from "./client591.js";
 import { districtNameFromListing } from "./regions.js";
 import { preferPrimaryListing } from "./match.js";
 import { commuteWorkJobs, hasWorkPoint, needsListingGeo, normalizeCommuteMode } from "./geo.js";
+import { demoCommutePatch } from "./demo.js";
 import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings, planIntervalMinutes, resolveSaveAsProfileAction, normalizeProfileName, MEMBER_MAX_PROFILES, ADMIN_MAX_PROFILES } from "./settingsState.js";
 import { defaultNotifyMatrix } from "./notifyMatrix.js";
 import { DATA_EPOCH, shouldResetForEpoch } from "./dataEpoch.js";
@@ -473,6 +474,7 @@ export function commuteRushEnabled() {
 export function collectCommuteSettings() {
   const list = listUserIds().map((id) => getSettings(id));
   list.push(getSettings());
+  list.push(demoCommutePatch());
   return list;
 }
 
@@ -1635,6 +1637,7 @@ export function listListings({
   searchKeys,
   districts = [],
   userId,
+  settings: settingsOverride,
 } = {}) {
   const uid = resolveUserId(userId);
   ({ filter, kind } = normalizeListQuery(filter, kind));
@@ -1708,7 +1711,7 @@ export function listListings({
   }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const raw = db.prepare(`SELECT * FROM listings ${where}`).all(...params);
-  const settings = getSettings(uid);
+  const settings = settingsOverride || getSettings(uid);
   const flagMap = loadFlagMap(db, uid);
   let rows =
     filter === "offline" || filter === "suspected"
@@ -1840,9 +1843,9 @@ export function setCommunityCache(community) {
   );
 }
 
-export function stats(searchKeys, userId) {
+export function stats(searchKeys, userId, settingsOverride) {
   const uid = resolveUserId(userId);
-  const settings = getSettings(uid);
+  const settings = settingsOverride || getSettings(uid);
   const clauses = [];
   const params = [];
   searchWhere(searchKeys, clauses, params);

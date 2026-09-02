@@ -203,7 +203,6 @@ test("member settings copy hides advanced hints and locks schedule defaults", ()
 test("example work address and exclusive commute modes", () => {
   const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
   assert.match(html, /臺北市南港區經貿一路170號/);
-  assert.doesNotMatch(html, /台北市士林區德行西路7號/);
   assert.match(html, /DEFAULT_COMMUTE_KM = 25/);
   assert.match(html, /id="workPromptKm"[^>]*value="25"/);
   assert.match(html, /name="commuteMode" value="scooter"/);

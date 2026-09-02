@@ -12,6 +12,7 @@ import {
   MEMBER_MAX_PROFILE_DISTRICTS,
   MEMBER_MAX_PROFILES,
 } from "../src/settingsState.js";
+import { DEMO_COMMUTE_KM, DEMO_WORK_ADDRESS } from "../src/demo.js";
 import { coveringJobsFromSettings } from "../src/covering.js";
 
 const defaults = {
@@ -22,7 +23,7 @@ const defaults = {
   priceMin: 0,
   priceMax: 36000,
   commuteKm: 12,
-  workAddress: "台北市士林區德行西路7號",
+  workAddress: "新北市淡水區淡金路二段173號",
   notifyNew: true,
 };
 
@@ -120,6 +121,21 @@ test("commuteMode is scooter or car only", () => {
   assert.equal(next.commuteMode, "scooter");
   const car = applySettingPatch(next, { commuteMode: "car" });
   assert.equal(car.commuteMode, "car");
+});
+
+test("legacy example work address hydrates to Nangang 25 km", () => {
+  const next = hydrateSettings(
+    {
+      watchDistricts: ["1-8"],
+      workAddress: "台北市士林區德行西路7號",
+      commuteKm: 13,
+      workLat: 25.106,
+      workLng: 121.524,
+    },
+    defaults,
+  );
+  assert.equal(next.workAddress, DEMO_WORK_ADDRESS);
+  assert.equal(next.commuteKm, DEMO_COMMUTE_KM);
 });
 
 test("null or zero work coords stay missing", () => {
