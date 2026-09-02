@@ -14,6 +14,39 @@ export const SMTP_ENV_KEYS = [
 
 export function defaultMailTemplates() {
   return {
+    welcome: {
+      subject: `${APP_NAME}：歡迎註冊`,
+      text: `你好，
+
+你已經用 {{email}} 註冊 ${APP_NAME}。
+
+請用這個信箱登入。物件／屋源提醒不會用站方信箱代寄，登入後請到「通知與發信設定」填你自己的 SMTP。
+
+——${APP_NAME}
+`,
+    },
+    password_changed: {
+      subject: `${APP_NAME}：密碼已變更`,
+      text: `你好，
+
+帳號 {{email}} 的密碼已變更。
+
+若這不是你本人操作，請立刻到登入頁使用「忘記密碼」重設。
+
+——${APP_NAME}
+`,
+    },
+    sponsor_thanks: {
+      subject: `${APP_NAME}：感謝你的贊助`,
+      text: `你好，
+
+感謝你贊助 ${APP_NAME}。帳號 {{email}} 已標成已贊助，檢查間隔會比較密。
+
+物件／屋源提醒仍請用你自己的 SMTP 寄出。
+
+——${APP_NAME}
+`,
+    },
     forgot_password: {
       subject: `${APP_NAME}：你的臨時密碼`,
       text: `你好，
@@ -182,6 +215,21 @@ export function mergeEnvMap(existing, updates) {
     next[key] = String(value);
   }
   return next;
+}
+
+export const ACCOUNT_MAIL_KINDS = ["welcome", "password_changed", "sponsor_thanks"];
+
+export function composeAccountMail(kind, templates, vars = {}) {
+  const key = String(kind || "").trim();
+  const defaults = defaultMailTemplates();
+  const fallback = defaults[key];
+  if (!fallback) return { subject: "", text: "" };
+  const tpl = templates?.[key] || fallback;
+  const rendered = renderMailTemplate(tpl, vars);
+  if (!rendered.subject || !String(rendered.text || "").trim()) {
+    return renderMailTemplate(fallback, vars);
+  }
+  return rendered;
 }
 
 export function composeForgotPasswordMail(templates, vars) {

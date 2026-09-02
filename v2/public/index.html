@@ -225,7 +225,9 @@
       font-size: 13px;
     }
     .hub-panel textarea { min-height: 120px; }
+    .password-panel { width: min(420px, 100%); }
     html.no-session #logoutBtn,
+    html.no-session #changePasswordBtn,
     html.no-session #adminLink,
     html.no-session #resetLink,
     html.no-session #watchBtn { display: none !important; }
@@ -235,6 +237,7 @@
     body.role-guest #resetLink,
     body.role-guest #adminLink,
     body.role-guest #logoutBtn,
+    body.role-guest #changePasswordBtn,
     body.role-guest #watchBtn,
     body.role-guest #sponsorBar { display: none !important; }
     body.role-guest .panel input,
@@ -336,7 +339,7 @@
     main.card { overflow: visible; }
     .panel { padding: 18px; }
     label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 6px; }
-    textarea, select, input[type="number"], input[type="text"], input[type="url"] {
+    textarea, select, input[type="number"], input[type="text"], input[type="url"], input[type="password"] {
       width: 100%;
       border: 1px solid var(--line);
       border-radius: 10px;
@@ -937,6 +940,7 @@
         <span class="who is-guest" id="who" data-tour="guestWho">訪客</span>
         <a class="ghost" id="loginBtn" href="/login.html">登入</a>
         <a class="primary" id="registerBtn" href="/login.html?register=1">註冊</a>
+        <button type="button" class="ghost" id="changePasswordBtn">變更密碼</button>
         <a class="ghost" id="logoutBtn" href="/logout">登出</a>
         <a class="ghost admin-only" id="adminLink" href="/admin.html">後台管理</a>
         <a class="ghost admin-only" id="resetLink" href="/reset.html" title="會刪光物件與設定；無法修復畫面卡住" style="align-items:center;text-decoration:none">清除資料</a>
@@ -1114,7 +1118,7 @@
         <button type="button" class="linkish" data-open-hub="webhook">設定 Discord Webhook</button>
         <p class="hint">特別推薦申請 Discord：免費、幾步就能收到特別關注更新。</p>
         <button type="button" class="linkish" data-open-hub="mail">設定自己的 SMTP 發信</button>
-        <p class="hint" id="notifyMailHint">郵件會寄到你註冊的信箱。請用自己的 SMTP；Gmail 要用應用程式密碼。</p>
+        <p class="hint" id="notifyMailHint">物件／屋源提醒請用你自己的 SMTP 寄到註冊信箱。註冊、忘記密碼、變更密碼、贊助通知由站方管理員 SMTP 寄出。</p>
         <button type="button" class="linkish" data-open-hub="events">選擇哪些事件要通知</button>
         <p class="hint" id="notifyHubStatus"></p>
       </div>
@@ -1216,7 +1220,7 @@
         <p class="hint">此通知預設只會訊息已是特別關注之物件。要改事件種類請切到「通知種類」。</p>
       </section>
       <section class="hub-pane" data-hub-pane="mail" hidden>
-        <p class="hint">物件通知會寄到你註冊的信箱。請用<strong>你自己的 SMTP</strong> 寄給自己，本系統不會幫你代管 Gmail 密碼以外的寄信服務。</p>
+        <p class="hint">這組 SMTP <strong>只寄物件／屋源提醒</strong>到你註冊的信箱，請用你自己的帳號寄給自己。註冊歡迎、忘記密碼、變更密碼、贊助通知由站方管理員 SMTP 寄出，不會用這裡的密碼。</p>
         <p class="hint">可用代碼：<code>{{event}}</code>、<code>{{title}}</code>、<code>{{price}}</code>、<code>{{facts}}</code>、<code>{{url}}</code>、<code>{{detail}}</code>、<code>{{email}}</code>。</p>
         <div class="row" style="margin:0 0 10px">
           <button type="button" class="ghost" id="gmailPresetBtn">填入 Gmail SMTP</button>
@@ -1323,6 +1327,31 @@
         <button type="button" class="primary" id="notifyHubSave">儲存通知設定</button>
         <span class="save-msg" id="notifyHubSaveMsg"></span>
       </div>
+    </div>
+  </div>
+  <div id="passwordDialog" class="hub-overlay" hidden>
+    <div class="hub-backdrop" data-close-password></div>
+    <div class="hub-panel password-panel" role="dialog" aria-modal="true" aria-labelledby="passwordDialogTitle">
+      <div class="hub-head">
+        <div>
+          <h2 id="passwordDialogTitle">變更密碼</h2>
+          <p class="hint" style="margin:6px 0 0">變更成功後會由站方管理員 SMTP 寄通知信到你的註冊信箱。</p>
+        </div>
+        <button type="button" class="ghost" id="passwordDialogClose">關閉</button>
+      </div>
+      <form id="changePasswordForm">
+        <label for="currentPassword">目前密碼</label>
+        <input id="currentPassword" name="currentPassword" type="password" autocomplete="current-password" required />
+        <label for="newPassword">新密碼（至少 8 個字）</label>
+        <input id="newPassword" name="newPassword" type="password" autocomplete="new-password" minlength="8" required />
+        <label for="newPassword2">再輸入一次新密碼</label>
+        <input id="newPassword2" name="newPassword2" type="password" autocomplete="new-password" minlength="8" required />
+        <label class="checks"><input type="checkbox" id="showChangePw" /> 顯示密碼</label>
+        <div class="row" style="margin-top:14px">
+          <button type="submit" class="primary" id="changePasswordSubmit">儲存新密碼</button>
+        </div>
+        <p class="msg" id="changePasswordMsg"></p>
+      </form>
     </div>
   </div>
   <footer class="site-footer">reversal play tech | 逆遊科技</footer>
@@ -1779,6 +1808,7 @@
       if ($("loginBtn")) $("loginBtn").hidden = !isGuest;
       if ($("registerBtn")) $("registerBtn").hidden = !isGuest;
       if ($("logoutBtn")) $("logoutBtn").hidden = isGuest;
+      if ($("changePasswordBtn")) $("changePasswordBtn").hidden = isGuest;
       if ($("watchBtn")) $("watchBtn").hidden = isGuest;
       if ($("who")) $("who").classList.toggle("is-guest", isGuest);
       if (isGuest) {
@@ -2747,8 +2777,8 @@
       const mailHint = $("notifyMailHint");
       if (mailHint) {
         mailHint.textContent = meEmail
-          ? `郵件會寄到你註冊的信箱 ${meEmail}。請用自己的 SMTP；Gmail 要用應用程式密碼。`
-          : "郵件會寄到你註冊的信箱。請用自己的 SMTP；Gmail 要用應用程式密碼。";
+          ? `物件／屋源提醒請用你自己的 SMTP 寄到 ${meEmail}。註冊、忘記密碼、變更密碼、贊助通知由站方管理員 SMTP 寄出。`
+          : "物件／屋源提醒請用你自己的 SMTP 寄到註冊信箱。註冊、忘記密碼、變更密碼、贊助通知由站方管理員 SMTP 寄出。";
       }
       mePlan = me.plan || "free";
       document.body.classList.toggle("role-admin", meIsAdmin);
@@ -3094,6 +3124,72 @@
       el.addEventListener("click", () => setHubTab(el.dataset.hubTab));
     });
     $("notifyHubSave")?.addEventListener("click", () => saveNotifyHub());
+    function openPasswordDialog() {
+      const box = $("passwordDialog");
+      if (!box || isGuest) return;
+      box.hidden = false;
+      if ($("changePasswordForm")) $("changePasswordForm").reset();
+      if ($("changePasswordMsg")) {
+        $("changePasswordMsg").textContent = "";
+        $("changePasswordMsg").className = "msg";
+      }
+      $("currentPassword")?.focus();
+    }
+    function closePasswordDialog() {
+      const box = $("passwordDialog");
+      if (box) box.hidden = true;
+    }
+    $("changePasswordBtn")?.addEventListener("click", openPasswordDialog);
+    $("passwordDialogClose")?.addEventListener("click", closePasswordDialog);
+    document.querySelector("[data-close-password]")?.addEventListener("click", closePasswordDialog);
+    $("showChangePw")?.addEventListener("change", () => {
+      const type = $("showChangePw").checked ? "text" : "password";
+      for (const id of ["currentPassword", "newPassword", "newPassword2"]) {
+        if ($(id)) $(id).type = type;
+      }
+    });
+    $("changePasswordForm")?.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const msg = $("changePasswordMsg");
+      const btn = $("changePasswordSubmit");
+      if ($("newPassword").value !== $("newPassword2").value) {
+        if (msg) {
+          msg.textContent = "兩次新密碼不一樣";
+          msg.className = "msg err";
+        }
+        return;
+      }
+      if (btn) btn.disabled = true;
+      if (msg) {
+        msg.textContent = "儲存中…";
+        msg.className = "msg";
+      }
+      try {
+        const res = await fetch("/api/change-password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({
+            currentPassword: $("currentPassword").value,
+            newPassword: $("newPassword").value,
+          }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "變更密碼失敗");
+        if (msg) {
+          msg.textContent = "密碼已更新。若管理員已設定寄信，通知會寄到你的信箱。";
+          msg.className = "msg ok";
+        }
+        $("changePasswordForm").reset();
+      } catch (error) {
+        if (msg) {
+          msg.textContent = error.message;
+          msg.className = "msg err";
+        }
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    });
     $("gmailPresetBtn")?.addEventListener("click", () => {
       if ($("memberSmtpHost")) $("memberSmtpHost").value = "smtp.gmail.com";
       if ($("memberSmtpPort")) $("memberSmtpPort").value = 587;

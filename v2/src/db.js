@@ -43,6 +43,7 @@ import {
 } from "./personalFlags.js";
 import {
   bootstrapAdminUser as bootstrapAdminUserOn,
+  changeUserPassword as changeUserPasswordOn,
   findUserByEmail as findUserByEmailOn,
   getUserById as getUserByIdOn,
   listUserIds as listUserIdsOn,
@@ -680,6 +681,10 @@ export function verifyUserPassword(email, password) {
 
 export function setUserPassword(userId, password) {
   return setUserPasswordOn(db, userId, password);
+}
+
+export function changeUserPassword(userId, currentPassword, nextPassword) {
+  return changeUserPasswordOn(db, userId, currentPassword, nextPassword);
 }
 
 export function requestTempPassword(email, opts = {}) {
@@ -1524,7 +1529,10 @@ export function enqueueListingEvent(listing, event) {
     const row = decorateListing(overlayPersonal(listing, loadFlags(db, userId, listing.post_id)), settings);
     const watched = Number(row.watched) === 1;
     if (!watched && event.type === "new" && !listingInMemberScope(row, settings)) continue;
-    if (!shouldDeliverNotify(settings, row, event, { to: getUserById(userId)?.email })) continue;
+    if (!shouldDeliverNotify(settings, row, event, {
+      to: getUserById(userId)?.email,
+      configured: getMemberMailBundle(userId).configured,
+    })) continue;
     const last = db.prepare(
       "SELECT detail FROM user_events WHERE user_id = ? AND post_id = ? AND type = ? ORDER BY id DESC LIMIT 1",
     ).get(userId, payload.post_id, payload.type);

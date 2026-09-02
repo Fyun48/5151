@@ -2,7 +2,7 @@ import { APP_NAME } from "./brand.js";
 import { execFile } from "node:child_process";
 import { commuteModeLabel } from "./geo.js";
 import { passesDisplayFilters, housingTypeLabel } from "./floors.js";
-import { mailConfigured, sendMail } from "./mail.js";
+import { sendMail } from "./mail.js";
 import { notifyChannelOn } from "./notifyMatrix.js";
 import { trackedListingUrl } from "./openLink.js";
 import { composeListingNotifyMail } from "./siteMail.js";
@@ -225,11 +225,14 @@ export function shouldWebhookNotify(settings, listing, event) {
   return shouldNotify(settings, listing, event) && notifyChannelOn(settings, "webhook", event?.type);
 }
 
+export function listingSmtpReady(smtp) {
+  return Boolean(smtp && typeof smtp === "object" && String(smtp.host || "").trim());
+}
+
 export function shouldMailNotify(settings, listing, event, opts = {}) {
   const to = String(opts.to ?? "").trim();
   if (!to) return false;
-  const ready = opts.configured ?? mailConfigured();
-  if (!ready) return false;
+  if (!opts.configured) return false;
   return shouldNotify(settings, listing, event) && notifyChannelOn(settings, "mail", event?.type);
 }
 
@@ -363,15 +366,16 @@ export async function notify(settings, events, {
       // Discord 失敗不中斷追蹤
     }
   }
-  if (mail.length && mailTo) {
+  const memberSmtp = listingSmtpReady(smtp) ? smtp : null;
+  if (mail.length && mailTo && (memberSmtp || send)) {
     try {
       await postListingMail({
         to: mailTo,
         events: mail,
         templates: mailTemplates,
-        send: send || ((payload) => sendMail({ ...payload, smtp })),
+        send: send || ((payload) => sendMail({ ...payload, smtp: memberSmtp })),
         email: mailTo,
-        smtp,
+        smtp: memberSmtp,
       });
     } catch {
       // 寄信失敗不中斷追蹤

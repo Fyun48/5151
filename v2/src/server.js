@@ -29,6 +29,9 @@ import {
   requestTempPassword,
   listAdminMembers,
   adminPatchMember,
+  getUserById,
+  getMailTemplates,
+  changeUserPassword,
   getAdminMailSettings,
   saveAdminMailSettings,
   getAdminSponsorSettings,
@@ -47,6 +50,7 @@ import { rent591Url } from "./openLink.js";
 import { CITIES } from "./regions.js";
 import { DISCLAIMER_TEXT, DISCLAIMER_VERSION } from "./members.js";
 import { mailConfigured, sendMail } from "./mail.js";
+import { queueAccountMail } from "./systemMail.js";
 import { assertHuman, issueCaptcha } from "./captcha.js";
 import { assertCaptchaIssuable, assertDemoReadable, authAttemptKeys, clientIp } from "./rateLimit.js";
 import { buildDemoState } from "./demo.js";
@@ -187,6 +191,15 @@ app.post("/api/login", (req, res) => {
   }
 });
 
+function queueSystemMail(kind, to, vars = {}) {
+  queueAccountMail({
+    kind,
+    to,
+    vars,
+    templates: getMailTemplates(),
+  });
+}
+
 app.post("/api/register", (req, res) => {
   try {
     assertHuman(req.body);
@@ -196,6 +209,7 @@ app.post("/api/register", (req, res) => {
       acceptDisclaimer: req.body?.acceptDisclaimer === true,
     });
     setSession(req, res, user.email);
+    queueSystemMail("welcome", user.email);
     res.json({ ok: true, email: user.email, role: user.role, plan: user.plan });
   } catch (error) {
     sendAuthError(res, error);
@@ -253,8 +267,12 @@ app.get("/api/admin/members", requireAdminApi, (_req, res) => {
 
 app.patch("/api/admin/members/:id", requireAdminApi, (req, res) => {
   try {
+    const before = getUserById(req.params.id);
     const member = adminPatchMember(req.params.id, req.body || {});
     schedule();
+    if ((before?.plan || "free") !== "sponsor" && member.plan === "sponsor") {
+      queueSystemMail("sponsor_thanks", member.email);
+    }
     res.json({ member });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
@@ -470,6 +488,22 @@ app.get("/api/member-mail", (req, res) => {
   }
 });
 
+app.post("/api/change-password", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      const err = new Error("請先登入");
+      err.status = 401;
+      throw err;
+    }
+    changeUserPassword(session.userId, req.body?.currentPassword, req.body?.newPassword);
+    queueSystemMail("password_changed", session.email);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message || "變更密碼失敗" });
+  }
+});
+
 app.post("/api/member-mail", (req, res) => {
   try {
     res.json(saveMemberMailSettings(actorUserId(req), req.body || {}));
@@ -495,7 +529,7 @@ app.post("/api/member-mail/test", async (req, res) => {
       to,
       smtp,
       subject: `${APP_NAME}：測試信`,
-      text: `這是用你自己的 SMTP 寄到 ${to} 的測試信。若你看得到這封，物件通知就可以用同一組設定寄給你。\n\n——${APP_NAME}\n`,
+      text: `這是用你自己的 SMTP 寄到 ${to} 的測試信。若你看得到這封，物件／屋源提醒就可以用同一組設定寄給你。註冊、忘記密碼、變更密碼、贊助通知仍走站方管理員 SMTP。\n\n——${APP_NAME}\n`,
     });
     res.json({ ok: true, to });
   } catch (error) {
@@ -771,7 +805,7 @@ app.listen(PORT, HOST, () => {
     console.log("可從登入頁註冊新會員。若要保留舊的單一管理員，請在 auth.env 設定 AUTH_EMAIL / AUTH_PASSWORD。");
   }
   if (!mailConfigured()) {
-    console.log("忘記密碼尚未能寄信：請在 auth.env 設定 SMTP_HOST、SMTP_USER、SMTP_PASS、SMTP_FROM。");
+    console.log("系統信（註冊、忘記密碼、變更密碼、贊助）尚未能寄信：請在後台填 SMTP，或在 auth.env 寫入 SMTP_HOST、SMTP_USER、SMTP_PASS、SMTP_FROM。");
   }
   setTimeout(() => {
     ensureWorkCoords()

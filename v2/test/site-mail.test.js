@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   applySmtpEnv,
+  composeAccountMail,
   composeForgotPasswordMail,
   composeListingNotifyMail,
   defaultMailTemplates,
@@ -51,6 +52,21 @@ test("auth.env merge keeps non-SMTP keys", () => {
   const text = serializeEnvMap(merged);
   assert.match(text, /AUTH_EMAIL=admin@test.local/);
   assert.match(text, /SMTP_HOST=smtp.example.com/);
+});
+
+test("composeAccountMail fills welcome, password, and sponsor templates", () => {
+  const welcome = composeAccountMail("welcome", defaultMailTemplates(), { email: "a@b.com" });
+  assert.match(welcome.subject, /歡迎/);
+  assert.match(welcome.text, /a@b\.com/);
+  assert.match(welcome.text, /自己的 SMTP/);
+  const changed = composeAccountMail("password_changed", defaultMailTemplates(), { email: "a@b.com" });
+  assert.match(changed.subject, /密碼已變更/);
+  assert.match(changed.text, /忘記密碼/);
+  const sponsor = composeAccountMail("sponsor_thanks", defaultMailTemplates(), { email: "a@b.com" });
+  assert.match(sponsor.subject, /贊助/);
+  assert.match(sponsor.text, /已標成已贊助/);
+  const empty = composeAccountMail("nope", defaultMailTemplates(), { email: "a@b.com" });
+  assert.equal(empty.subject, "");
 });
 
 test("forgot-password compose falls back if template drops the password", () => {
