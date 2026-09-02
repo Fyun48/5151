@@ -146,7 +146,7 @@
     </section>
     <section class="card">
       <h2>通勤路線／Google 計費</h2>
-      <p class="hint">通勤<strong>公里數走免費 OpenStreetMap（OSRM）</strong>。上／下班分鐘若快取裡已有（當初 Google 預估存下來的），列表會繼續顯示成「上約ｘ分 · 下約ｘ分」，<strong>不必再開 Google、也不會重查</strong>。同一組物件座標對同一個公司地址只會查一次。沒有金鑰、沒勾選下面「使用 Google Directions」就不會產生新費用。</p>
+      <p class="hint">通勤<strong>公里數走免費 OpenStreetMap（OSRM）</strong>。列表與通知目前<strong>只顯示公里</strong>，不上／下班分鐘（OSRM 沒有尖峰路況）。以後若再開 Google Directions，再把分鐘加回畫面。同一組物件座標對同一個公司地址只會查一次。沒有金鑰、沒勾選下面「使用 Google Directions」就不會產生新費用。</p>
       <form id="mapsForm">
         <label class="checks"><input id="googleEnabled" type="checkbox" /> 使用 Google Directions 補還沒有上／下班分鐘的物件（會計費，預設關閉）</label>
         <label class="checks"><input id="mapsEnabled" type="checkbox" /> 允許補查尚未有紀錄的尖峰分鐘（已有快取的不重查；沒金鑰不會打）</label>

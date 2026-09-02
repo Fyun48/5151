@@ -1563,11 +1563,6 @@
     function commuteText(item) {
       const label = commuteModeLabel(item.commute_mode || settings.commuteMode);
       if (item.commute_km != null) {
-        const am = Number(item.commute_min_am);
-        const pm = Number(item.commute_min_pm);
-        if (Number.isFinite(am) && Number.isFinite(pm)) {
-          return routeChip(`${label} ${item.commute_km} 公里 · 上約 ${Math.round(am)} 分 · 下約 ${Math.round(pm)} 分`);
-        }
         const routes = Array.isArray(item.commute_routes) ? item.commute_routes.filter((n) => Number.isFinite(Number(n))) : [];
         const extra = routes.length > 1 ? `（${routes.map((n) => `${n}`).join(" / ")} 公里）` : "";
         return routeChip(`${label}路線約 ${item.commute_km} 公里${extra}`);
