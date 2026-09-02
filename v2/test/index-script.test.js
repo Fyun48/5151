@@ -123,6 +123,7 @@ test("member profiles cap districts and include usable ping in notify copy", () 
   assert.match(html, /已存 \$\{list\.length\}／\$\{cap\}/);
   assert.match(html, /另存新名稱會提示已滿；同名可覆蓋/);
   assert.match(html, /setSettingsReady\(settingsLoaded\)/);
+  assert.match(html, /機車 \$\{item\.commute_km\} 公里 · 上 \$\{Math\.round\(am\)\} 分 · 下 \$\{Math\.round\(pm\)\} 分/);
   assert.match(html, /確定要覆蓋嗎？/);
   assert.match(html, /設定檔已滿（最多 \$\{cap\} 個）/);
   assert.match(html, /overwrite: existing/);

@@ -33,6 +33,8 @@ import {
   getAdminSponsorSettings,
   saveAdminSponsorSettings,
   publicSponsorSettings,
+  getAdminMapsSettings,
+  saveAdminMapsSettings,
 } from "./db.js";
 import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requireAuth, sessionCookie, verifyLogin } from "./auth.js";
 import { boxFromRoadDescription, geocodeAddress, needsListingGeo, hasWorkPoint } from "./geo.js";
@@ -242,6 +244,20 @@ app.get("/api/admin/sponsor", requireAdminApi, (_req, res) => {
 app.put("/api/admin/sponsor", requireAdminApi, (req, res) => {
   try {
     res.json(saveAdminSponsorSettings(req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/admin/maps", requireAdminApi, (_req, res) => {
+  res.json(getAdminMapsSettings());
+});
+
+app.put("/api/admin/maps", requireAdminApi, (req, res) => {
+  try {
+    const settings = saveAdminMapsSettings(req.body || {});
+    if (settings.enabled) queueGeoBackfill();
+    res.json(settings);
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }

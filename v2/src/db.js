@@ -4,6 +4,14 @@ import { DatabaseSync } from "node:sqlite";
 import { shouldKeepListing, passesAttributeFilters, passesDisplayFilters, listingHasElevator, matchesHousingKind, normalizeListQuery, housingTypeLabel } from "./floors.js";
 import { isTrustedGeoSource, listingCommunityId } from "./location.js";
 import { makeRouteKey } from "./route.js";
+import {
+  bindMapsUsageSink,
+  hasGoogleMapsKey,
+  isCommuteRushEnabled,
+  rushStale,
+  summarizeMapsUsage,
+  taipeiYmd,
+} from "./mapsBilling.js";
 import { sameSearch } from "./client591.js";
 import { districtNameFromListing } from "./regions.js";
 import { preferPrimaryListing } from "./match.js";
@@ -167,7 +175,27 @@ db.exec(`
     min_km REAL NOT NULL,
     updated_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS maps_usage_daily (
+    day TEXT PRIMARY KEY,
+    essentials INTEGER NOT NULL DEFAULT 0,
+    advanced INTEGER NOT NULL DEFAULT 0
+  );
 `);
+try {
+  db.exec("ALTER TABLE route_cache ADD COLUMN rush_am_min REAL");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE route_cache ADD COLUMN rush_pm_min REAL");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE route_cache ADD COLUMN rush_updated_at TEXT");
+} catch {
+  // already migrated
+}
 try {
   db.exec("ALTER TABLE listings ADD COLUMN match_post_id INTEGER");
 } catch {
@@ -412,6 +440,61 @@ function persistSmtpToAuthEnv(config) {
   const existing = existsSync(file) ? parseEnvFileText(readFileSync(file, "utf8")) : {};
   const merged = mergeEnvMap(existing, applySmtpEnv(config));
   writeFileSync(file, serializeEnvMap(merged), { encoding: "utf8", mode: 0o600 });
+}
+
+function persistGoogleKeyToAuthEnv(key) {
+  const trimmed = String(key || "").trim();
+  if (!trimmed) return;
+  const file = authEnvPath();
+  const existing = existsSync(file) ? parseEnvFileText(readFileSync(file, "utf8")) : {};
+  const merged = mergeEnvMap(existing, { GOOGLE_MAPS_API_KEY: trimmed });
+  writeFileSync(file, serializeEnvMap(merged), { encoding: "utf8", mode: 0o600 });
+  process.env.GOOGLE_MAPS_API_KEY = trimmed;
+}
+
+function bumpMapsUsage(sku, count = 1) {
+  const day = taipeiYmd();
+  const essentials = sku === "essentials" ? count : 0;
+  const advanced = sku === "advanced" ? count : 0;
+  db.prepare(
+    `INSERT INTO maps_usage_daily(day, essentials, advanced) VALUES (?, ?, ?)
+     ON CONFLICT(day) DO UPDATE SET
+       essentials = essentials + excluded.essentials,
+       advanced = advanced + excluded.advanced`,
+  ).run(day, essentials, advanced);
+}
+
+bindMapsUsageSink(bumpMapsUsage);
+
+export function commuteRushEnabled() {
+  return isCommuteRushEnabled(settingKey("commuteRushEnabled"));
+}
+
+export function getAdminMapsSettings() {
+  const enabled = commuteRushEnabled();
+  const hasKey = hasGoogleMapsKey();
+  const daily = db.prepare("SELECT day, essentials, advanced FROM maps_usage_daily ORDER BY day").all();
+  const usage = summarizeMapsUsage(daily);
+  let warning = "";
+  if (enabled && !hasKey) warning = "已開啟尖峰分鐘，但還沒有 Google 金鑰，物件列表仍只會顯示機車公里數。";
+  else if (!enabled) warning = "目前關閉。物件列表只顯示機車公里數，也不會打含路況的 Google 路線。";
+  return {
+    enabled,
+    hasKey,
+    warning,
+    usage,
+  };
+}
+
+export function saveAdminMapsSettings(partial = {}) {
+  const src = partial && typeof partial === "object" ? partial : {};
+  if (Object.prototype.hasOwnProperty.call(src, "enabled")) {
+    writeSettingKey("commuteRushEnabled", Boolean(src.enabled));
+  }
+  if (Object.prototype.hasOwnProperty.call(src, "apiKey")) {
+    persistGoogleKeyToAuthEnv(src.apiKey);
+  }
+  return getAdminMapsSettings();
 }
 
 export function getMailTemplates() {
@@ -712,6 +795,8 @@ function decorateListing(row, settings) {
     has_elevator: listingHasElevator(row),
     commute_km: commute == null ? null : Math.round(commute * 10) / 10,
     commute_routes: Array.isArray(row.route_kms) ? row.route_kms : [],
+    commute_min_am: commuteRushEnabled() && Number.isFinite(Number(row.rush_am_min)) ? Math.round(Number(row.rush_am_min)) : null,
+    commute_min_pm: commuteRushEnabled() && Number.isFinite(Number(row.rush_pm_min)) ? Math.round(Number(row.rush_pm_min)) : null,
     district: districtNameFromListing(row),
     match_peer: matchPeer || null,
   };
@@ -1359,7 +1444,13 @@ export function applyCachedCoords(row, settings) {
   ) {
     const route = getCachedRoute(row.lat, row.lng, workLat, workLng);
     if (route) {
-      return { ...row, route_kms: route.distances, route_km: route.min_km };
+      return {
+        ...row,
+        route_kms: route.distances,
+        route_km: route.min_km,
+        rush_am_min: route.rush_am_min,
+        rush_pm_min: route.rush_pm_min,
+      };
     }
   }
   return row;
@@ -1367,18 +1458,44 @@ export function applyCachedCoords(row, settings) {
 
 export function getCachedRoute(fromLat, fromLng, toLat, toLng) {
   const key = makeRouteKey(fromLat, fromLng, toLat, toLng);
-  const row = db.prepare("SELECT distances, min_km FROM route_cache WHERE route_key = ?").get(key);
+  const row = db.prepare("SELECT distances, min_km, rush_am_min, rush_pm_min, rush_updated_at FROM route_cache WHERE route_key = ?").get(key);
   if (!row) return null;
   const distances = parseJson(row.distances, []);
   if (!Array.isArray(distances) || !distances.length) return null;
-  return { distances: distances.map(Number).filter(Number.isFinite), min_km: Number(row.min_km) };
+  const rushAm = Number(row.rush_am_min);
+  const rushPm = Number(row.rush_pm_min);
+  return {
+    distances: distances.map(Number).filter(Number.isFinite),
+    min_km: Number(row.min_km),
+    rush_am_min: Number.isFinite(rushAm) ? rushAm : null,
+    rush_pm_min: Number.isFinite(rushPm) ? rushPm : null,
+    rush_updated_at: row.rush_updated_at || "",
+  };
 }
 
-export function setCachedRoute(fromLat, fromLng, toLat, toLng, distances) {
+export function setCachedRoute(fromLat, fromLng, toLat, toLng, distances, rush = null) {
   const list = (Array.isArray(distances) ? distances : []).map(Number).filter((n) => Number.isFinite(n) && n > 0);
   if (!list.length) return;
   const key = makeRouteKey(fromLat, fromLng, toLat, toLng);
   const minKm = Math.min(...list);
+  const stamp = new Date().toISOString();
+  const rushAm = Number(rush?.rushAm ?? rush?.am);
+  const rushPm = Number(rush?.rushPm ?? rush?.pm);
+  const hasRush = Number.isFinite(rushAm) && Number.isFinite(rushPm);
+  if (hasRush) {
+    db.prepare(
+      `INSERT INTO route_cache(route_key, distances, min_km, updated_at, rush_am_min, rush_pm_min, rush_updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(route_key) DO UPDATE SET
+         distances = excluded.distances,
+         min_km = excluded.min_km,
+         updated_at = excluded.updated_at,
+         rush_am_min = excluded.rush_am_min,
+         rush_pm_min = excluded.rush_pm_min,
+         rush_updated_at = excluded.rush_updated_at`,
+    ).run(key, JSON.stringify(list), minKm, stamp, rushAm, rushPm, stamp);
+    return;
+  }
   db.prepare(
     `INSERT INTO route_cache(route_key, distances, min_km, updated_at)
      VALUES (?, ?, ?, ?)
@@ -1386,7 +1503,7 @@ export function setCachedRoute(fromLat, fromLng, toLat, toLng, distances) {
        distances = excluded.distances,
        min_km = excluded.min_km,
        updated_at = excluded.updated_at`,
-  ).run(key, JSON.stringify(list), minKm, new Date().toISOString());
+  ).run(key, JSON.stringify(list), minKm, stamp);
 }
 
 export function listingsNeedingRoute(limit = 40) {
@@ -1406,8 +1523,12 @@ export function listingsNeedingRoute(limit = 40) {
     )
     .all();
   const out = [];
+  const wantRush = commuteRushEnabled() && hasGoogleMapsKey();
   for (const row of rows) {
-    if (getCachedRoute(row.lat, row.lng, workLat, workLng)) continue;
+    const cached = getCachedRoute(row.lat, row.lng, workLat, workLng);
+    if (cached && (!wantRush || (Number.isFinite(cached.rush_am_min) && Number.isFinite(cached.rush_pm_min) && !rushStale(cached.rush_updated_at)))) {
+      continue;
+    }
     out.push(row);
     if (out.length >= limit) break;
   }

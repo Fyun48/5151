@@ -110,7 +110,7 @@
   <header>
     <div>
       <h1>後台管理</h1>
-      <div class="sub">會員、寄信 SMTP、信件內容、贊助連結。看不到會員密碼。</div>
+      <div class="sub">會員、寄信 SMTP、信件內容、贊助連結、Google 路線用量。看不到會員密碼。</div>
     </div>
     <div class="row">
       <span class="who" id="who"></span>
@@ -137,6 +137,31 @@
           <tbody id="memberRows"></tbody>
         </table>
       </div>
+    </section>
+    <section class="card">
+      <h2>尖峰騎車時間</h2>
+      <p class="hint">CasaOS 上目前沒有 Google 金鑰時，先到 <a href="https://console.cloud.google.com/" target="_blank" rel="noopener noreferrer">Google Cloud Console</a> 建立專案、綁帳單、啟用 Directions API、建立金鑰（可限制 IP），再貼到下面。關閉後物件列表回到只顯示機車公里數，也不會再打含路況的路線。費用依 Google 公開價目估算，實際以 Cloud 帳單為準；每月一般路線前 10,000 次、含路況前 5,000 次通常免費。</p>
+      <form id="mapsForm">
+        <label class="checks"><input id="mapsEnabled" type="checkbox" /> 在物件列表顯示上班／下班尖峰分鐘</label>
+        <label>Google Maps API 金鑰</label>
+        <input id="mapsKey" type="password" autocomplete="new-password" placeholder="已設定則可留白" />
+        <p class="msg" id="mapsKeyState"></p>
+        <div class="grid-2" id="mapsUsage" style="margin-top:8px">
+          <div>
+            <h3 style="margin:0 0 6px;font-size:15px">今日用量</h3>
+            <p class="hint" id="mapsToday" style="margin:0"></p>
+          </div>
+          <div>
+            <h3 style="margin:0 0 6px;font-size:15px">本月用量</h3>
+            <p class="hint" id="mapsMonth" style="margin:0"></p>
+          </div>
+        </div>
+        <p class="hint" id="mapsLifetime" style="margin:12px 0 0"></p>
+        <div class="row" style="margin:14px 0 0">
+          <button type="submit" class="primary" id="mapsSave">儲存尖峰設定</button>
+        </div>
+        <p class="msg" id="mapsMsg"></p>
+      </form>
     </section>
     <section class="card">
       <h2>贊助連結</h2>
@@ -297,6 +322,30 @@
       const data = await readApi(res);
       if (!res.ok) throw new Error(data.error || "載入寄信設定失敗");
       fillMail(data);
+    }
+
+    function usd(value) {
+      return `US$ ${Number(value || 0).toFixed(2)}`;
+    }
+
+    function fillMaps(data) {
+      const usage = data.usage || {};
+      $("mapsEnabled").checked = Boolean(data.enabled);
+      $("mapsKey").value = "";
+      $("mapsKey").placeholder = data.hasKey ? "已設定，空白則保留" : "貼上 Google Maps API 金鑰";
+      $("mapsKeyState").textContent = data.hasKey ? "金鑰：已設定" : "金鑰：尚未設定（現在的公里數走免費 OSRM，算不出尖峰分鐘）";
+      $("mapsKeyState").className = data.hasKey ? "msg ok" : "msg";
+      $("mapsToday").textContent = `一般路線 ${usage.todayEssentials || 0} 次 · 含路況 ${usage.todayAdvanced || 0} 次`;
+      $("mapsMonth").textContent = `一般 ${usage.monthEssentials || 0}／${usage.essentialsFree || 10000} 免額 · 含路況 ${usage.monthAdvanced || 0}／${usage.advancedFree || 5000} 免額 · 本月費用約 ${usd(usage.monthUsd)}`;
+      $("mapsLifetime").textContent = `累計 ${usage.lifetimeEssentials || 0} 次一般、${usage.lifetimeAdvanced || 0} 次含路況，累計費用約 ${usd(usage.lifetimeUsd)}（自開始紀錄）`;
+      setMsg("mapsMsg", data.warning || "", true);
+    }
+
+    async function loadMaps() {
+      const res = await fetch("/api/admin/maps", { cache: "no-store" });
+      const data = await readApi(res);
+      if (!res.ok) throw new Error(data.error || "載入 Google 路線設定失敗");
+      fillMaps(data);
     }
 
     $("memberRows").addEventListener("change", (ev) => {
@@ -537,7 +586,32 @@
       if (me.role !== "admin") { location.replace("/"); return; }
       meEmail = me.email || "";
       $("who").textContent = meEmail;
-      await Promise.all([loadMembers(), loadMail(), loadSponsor()]);
+      await Promise.all([loadMembers(), loadMail(), loadSponsor(), loadMaps()]);
+      $("mapsForm").onsubmit = async (ev) => {
+        ev.preventDefault();
+        $("mapsSave").disabled = true;
+        setMsg("mapsMsg", "儲存中…");
+        try {
+          const body = { enabled: $("mapsEnabled").checked };
+          const key = $("mapsKey").value.trim();
+          if (key) body.apiKey = key;
+          const res = await fetch("/api/admin/maps", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          const data = await readApi(res);
+          if (!res.ok) throw new Error(data.error || "儲存失敗");
+          fillMaps(data);
+          setMsg("mapsMsg", data.enabled
+            ? (data.hasKey ? "已開啟。物件列表會在算出尖峰分鐘後顯示上／下班時間。" : "已開啟，但還沒有金鑰，列表仍只顯示公里數。")
+            : "已關閉。物件列表回到只顯示機車公里數。", true);
+        } catch (error) {
+          setMsg("mapsMsg", error.message);
+        } finally {
+          $("mapsSave").disabled = false;
+        }
+      };
     })().catch((error) => {
       setMsg("memberMsg", error.message || "載入失敗");
     });

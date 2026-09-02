@@ -1,3 +1,5 @@
+import { hasGoogleMapsKey, nextWeekdayTaipeiUnix, recordMapsUsage, secondsToMinutes } from "./mapsBilling.js";
+
 const GEO_UA = "591-tracker/1.0 (personal rental watcher; acefengyun@gmail.com)";
 
 let lastRouteAt = 0;
@@ -22,7 +24,20 @@ function uniqueDistances(values) {
   return out.sort((a, b) => a - b).slice(0, 3);
 }
 
-async function googleRoutes(fromLat, fromLng, toLat, toLng) {
+function routeMeters(route) {
+  return (route.legs || []).reduce((sum, leg) => sum + Number(leg.distance?.value || 0), 0);
+}
+
+function routeTrafficSeconds(route) {
+  return (route.legs || []).reduce((sum, leg) => {
+    const traffic = Number(leg.duration_in_traffic?.value);
+    const plain = Number(leg.duration?.value);
+    const n = Number.isFinite(traffic) && traffic > 0 ? traffic : plain;
+    return sum + (Number.isFinite(n) && n > 0 ? n : 0);
+  }, 0);
+}
+
+async function googleDirections(fromLat, fromLng, toLat, toLng, { departureTime = 0 } = {}) {
   const key = String(process.env.GOOGLE_MAPS_API_KEY || "").trim();
   if (!key) return null;
   const url = new URL("https://maps.googleapis.com/maps/api/directions/json");
@@ -34,14 +49,25 @@ async function googleRoutes(fromLat, fromLng, toLat, toLng) {
   url.searchParams.set("region", "tw");
   url.searchParams.set("language", "zh-TW");
   url.searchParams.set("key", key);
+  const rush = Number(departureTime) > 0;
+  if (rush) {
+    url.searchParams.set("departure_time", String(Math.round(Number(departureTime))));
+    url.searchParams.set("traffic_model", "best_guess");
+  }
   const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
   if (!res.ok) return null;
   const body = await res.json();
+  recordMapsUsage(rush ? "advanced" : "essentials", 1);
   if (body.status !== "OK" && body.status !== "ZERO_RESULTS") return null;
-  const meters = (body.routes || []).map((route) =>
-    (route.legs || []).reduce((sum, leg) => sum + Number(leg.distance?.value || 0), 0),
-  );
-  return uniqueDistances(meters);
+  const routes = body.routes || [];
+  const distances = uniqueDistances(routes.map(routeMeters));
+  const durationMin = secondsToMinutes(Math.min(...routes.map(routeTrafficSeconds).filter((n) => n > 0)));
+  return { distances, durationMin };
+}
+
+async function googleRoutes(fromLat, fromLng, toLat, toLng) {
+  const row = await googleDirections(fromLat, fromLng, toLat, toLng);
+  return row?.distances?.length ? row.distances : null;
 }
 
 async function osrmRoutes(fromLat, fromLng, toLat, toLng) {
@@ -96,4 +122,30 @@ export async function fetchRoadRoutes(fromLat, fromLng, toLat, toLng) {
     return distances.length ? distances : null;
   }
   return distances.length ? distances : null;
+}
+
+export async function fetchRushRoadRoutes(fromLat, fromLng, toLat, toLng, { now = Date.now() } = {}) {
+  const from = [Number(fromLat), Number(fromLng)];
+  const to = [Number(toLat), Number(toLng)];
+  if (!from.every(Number.isFinite) || !to.every(Number.isFinite)) return null;
+  if (!hasGoogleMapsKey()) return null;
+  const amAt = nextWeekdayTaipeiUnix(8, 15, { now });
+  const pmAt = nextWeekdayTaipeiUnix(18, 15, { now });
+  let morning = null;
+  let evening = null;
+  try {
+    morning = await googleDirections(from[0], from[1], to[0], to[1], { departureTime: amAt });
+  } catch {
+    morning = null;
+  }
+  try {
+    evening = await googleDirections(from[0], from[1], to[0], to[1], { departureTime: pmAt });
+  } catch {
+    evening = null;
+  }
+  const distances = mergeKm(morning?.distances, evening?.distances);
+  const rushAm = morning?.durationMin ?? null;
+  const rushPm = evening?.durationMin ?? null;
+  if (!distances.length && rushAm == null && rushPm == null) return null;
+  return { distances, rushAm, rushPm };
 }

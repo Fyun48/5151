@@ -24,6 +24,7 @@ import {
   db,
   saveSettings,
   setCachedRoute,
+  commuteRushEnabled,
   setCommunityCache,
   copyUserFlags,
   setListingDetail,
@@ -36,7 +37,8 @@ import { fetchCommunityLocation, fetchListingDetail, fetchListings, isListingGon
 import { needsListingGeo, hasWorkPoint } from "./geo.js";
 import { isTrustedGeoSource, listingCommunityId } from "./location.js";
 import { decideNotifyDelivery } from "./floors.js";
-import { fetchRoadRoutes } from "./route.js";
+import { fetchRoadRoutes, fetchRushRoadRoutes } from "./route.js";
+import { hasGoogleMapsKey } from "./mapsBilling.js";
 import { bestMatch } from "./match.js";
 import { classifyExistingUpdate, eventLabel, listingLastEvent, notify, shouldDockNotify, shouldMailNotify, shouldNotify, shouldWebhookNotify } from "./notify.js";
 import { normalizeOfflineConfirmDays, shouldRecheckOffline } from "./offline.js";
@@ -206,7 +208,16 @@ async function resolveListingRoute(listing, settings) {
   const lat = Number(listing?.lat);
   const lng = Number(listing?.lng);
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return listing;
-  if (Array.isArray(listing.route_kms) && listing.route_kms.length) return listing;
+  const wantRush = commuteRushEnabled() && hasGoogleMapsKey();
+  const hasKm = Array.isArray(listing.route_kms) && listing.route_kms.length;
+  const hasRush = Number.isFinite(Number(listing.rush_am_min)) && Number.isFinite(Number(listing.rush_pm_min));
+  if (hasKm && (!wantRush || hasRush)) return listing;
+  if (wantRush) {
+    const rush = await fetchRushRoadRoutes(lat, lng, workLat, workLng);
+    const distances = rush?.distances?.length ? rush.distances : listing.route_kms;
+    if (distances?.length) setCachedRoute(lat, lng, workLat, workLng, distances, rush);
+    return getListing(listing.post_id);
+  }
   const distances = await fetchRoadRoutes(lat, lng, workLat, workLng);
   if (!distances?.length) return listing;
   setCachedRoute(lat, lng, workLat, workLng, distances);
@@ -501,11 +512,13 @@ export async function backfillListingRoutes(settings = getSettings(), { limit = 
   let located = 0;
   for (const row of rows) {
     attempted += 1;
-    const distances = await fetchRoadRoutes(row.lat, row.lng, workLat, workLng);
+    const wantRush = commuteRushEnabled() && hasGoogleMapsKey();
+    const rush = wantRush ? await fetchRushRoadRoutes(row.lat, row.lng, workLat, workLng) : null;
+    const distances = rush?.distances?.length ? rush.distances : await fetchRoadRoutes(row.lat, row.lng, workLat, workLng);
     if (distances?.length) {
       for (let tryNo = 0; tryNo < 4; tryNo += 1) {
         try {
-          setCachedRoute(row.lat, row.lng, workLat, workLng, distances);
+          setCachedRoute(row.lat, row.lng, workLat, workLng, distances, rush);
           located += 1;
           break;
         } catch (error) {
