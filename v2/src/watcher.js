@@ -7,6 +7,7 @@ import {
   getSettings,
   getUserById,
   getMailTemplates,
+  getMemberMailBundle,
   listingCount,
   listingCountForSearch,
   listMatchCandidates,
@@ -42,6 +43,7 @@ import { isTrustedGeoSource, listingCommunityId } from "./location.js";
 import { decideNotifyDelivery } from "./floors.js";
 import { fetchRoadRoutes, fetchRushRoadRoutes } from "./route.js";
 import { fetchMrtAccess } from "./mrt.js";
+import { mailConfigured } from "./mail.js";
 import { hasGoogleMapsKey } from "./mapsBilling.js";
 import { bestMatch } from "./match.js";
 import { classifyExistingUpdate, eventLabel, listingLastEvent, notify, shouldDockNotify, shouldMailNotify, shouldNotify, shouldWebhookNotify } from "./notify.js";
@@ -239,9 +241,11 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
     const userSettings = userId ? getSettings(userId) : settings;
     const listing = getListing(event.post_id, userId || undefined);
     const mailTo = String(getUserById(userId)?.email || "").trim();
+    const mailBundle = userId ? getMemberMailBundle(userId) : { configured: false, smtp: null, templates: getMailTemplates() };
+    const mailReady = mailBundle.configured || mailConfigured();
     const forDock = listing ? shouldDockNotify(userSettings, listing, event) : false;
     const forHook = listing ? shouldWebhookNotify(userSettings, listing, event) : false;
-    const forMail = listing ? shouldMailNotify(userSettings, listing, event, { to: mailTo }) : false;
+    const forMail = listing ? shouldMailNotify(userSettings, listing, event, { to: mailTo, configured: mailReady }) : false;
     if (!listing || (!forDock && !forHook && !forMail)) {
       markEventNotified(event.id);
       continue;
@@ -273,17 +277,18 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
   }
   const ready = [];
   const userIds = new Set([...dockByUser.keys(), ...hookByUser.keys(), ...mailByUser.keys()]);
-  const templates = getMailTemplates();
   for (const userId of userIds) {
     const dock = dockByUser.get(userId) || [];
     const hook = hookByUser.get(userId) || [];
     const mail = mailByUser.get(userId) || [];
+    const mailBundle = userId ? getMemberMailBundle(userId) : { smtp: null, templates: getMailTemplates() };
     if (!silent && (dock.length || hook.length || mail.length)) {
       await notify(getSettings(userId), dock, {
         webhookEvents: hook,
         mailEvents: mail,
         mailTo: String(getUserById(userId)?.email || "").trim(),
-        mailTemplates: templates,
+        mailTemplates: mailBundle.templates,
+        smtp: mailBundle.smtp || undefined,
       });
     }
     ready.push(...dock.map((event) => ({ ...event, type_label: eventLabel(event.type), user_id: userId })));

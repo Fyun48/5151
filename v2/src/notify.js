@@ -327,7 +327,7 @@ async function postDiscord(webhook, title, events) {
   });
 }
 
-async function postListingMail({ to, events, templates, send, email }) {
+async function postListingMail({ to, events, templates, send, email, smtp }) {
   const toAddr = String(to || "").trim();
   const list = Array.isArray(events) ? events : [];
   if (!toAddr || !list.length) return;
@@ -340,7 +340,7 @@ async function postListingMail({ to, events, templates, send, email }) {
     mail.text = `${mail.text}\n\n另有 ${list.length - 8} 則未列入此信。`;
   }
   if (!mail.subject && !String(mail.text || "").trim()) return;
-  await send({ to: toAddr, subject: mail.subject, text: mail.text });
+  await send({ to: toAddr, subject: mail.subject, text: mail.text, smtp });
 }
 
 export async function notify(settings, events, {
@@ -349,6 +349,7 @@ export async function notify(settings, events, {
   mailTo,
   mailTemplates,
   send,
+  smtp,
 } = {}) {
   const dock = Array.isArray(events) ? events : [];
   const hook = Array.isArray(webhookEvents) ? webhookEvents : [];
@@ -367,8 +368,9 @@ export async function notify(settings, events, {
         to: mailTo,
         events: mail,
         templates: mailTemplates,
-        send: send || sendMail,
+        send: send || ((payload) => sendMail({ ...payload, smtp })),
         email: mailTo,
+        smtp,
       });
     } catch {
       // 寄信失敗不中斷追蹤
