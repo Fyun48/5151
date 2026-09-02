@@ -64,21 +64,6 @@
       padding: 8px 10px;
       font-size: 13px;
     }
-    .work-prompt {
-      margin: 0 32px 0;
-      padding: 12px 16px;
-      background: var(--accent-mist);
-      border: 1px solid var(--line);
-      border-radius: 16px;
-    }
-    .work-prompt p { margin: 0; font-size: 13px; color: var(--ink); line-height: 1.55; }
-    .work-prompt .row { margin-top: 10px; }
-    .work-prompt input[type="text"],
-    .work-prompt input[type="number"] {
-      width: min(420px, 100%);
-      margin: 8px 0 0;
-    }
-    .work-prompt .commute-mode { margin: 8px 0 0; }
     .mrt-line {
       margin-top: 6px;
       color: var(--accent-deep);
@@ -299,8 +284,48 @@
     .wrap { display: grid; grid-template-columns: 340px 1fr; gap: 20px; padding: 0 32px 40px; }
     body.panel-collapsed .wrap { grid-template-columns: 1fr; }
     body.panel-collapsed #settingsPanel { display: none; }
-    #expandPanelBtn { display: none; }
+    #expandPanelBtn {
+      display: none;
+      position: relative;
+      width: 44px;
+      height: 44px;
+      padding: 0;
+      border-radius: 50%;
+      z-index: 6;
+      box-shadow: 0 8px 22px rgba(13, 165, 160, 0.28);
+      align-items: center;
+      justify-content: center;
+    }
     body.panel-collapsed #expandPanelBtn { display: inline-flex; }
+    #expandPanelBtn .panel-fab-icon {
+      width: 18px;
+      height: 18px;
+      display: block;
+    }
+    #expandPanelBtn .panel-fab-label {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      padding: 6px 10px;
+      border-radius: 10px;
+      background: var(--ink);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(-4px);
+      transition: opacity 0.15s ease, transform 0.15s ease;
+      box-shadow: 0 8px 18px rgba(26, 43, 51, 0.18);
+      z-index: 2;
+    }
+    #expandPanelBtn:hover .panel-fab-label,
+    #expandPanelBtn:focus-visible .panel-fab-label {
+      opacity: 1;
+      transform: translateY(0);
+    }
     .panel-toolbar {
       display: flex;
       justify-content: space-between;
@@ -944,8 +969,14 @@
         <a class="ghost" id="logoutBtn" href="/logout">登出</a>
         <a class="ghost admin-only" id="adminLink" href="/admin.html">後台管理</a>
         <a class="ghost admin-only" id="resetLink" href="/reset.html" title="會刪光物件與設定；無法修復畫面卡住" style="align-items:center;text-decoration:none">清除資料</a>
-        <button class="ghost" id="expandPanelBtn" type="button">展開設定</button>
         <button class="ghost" id="reloadBtn">重新整理</button>
+        <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
+          <svg class="panel-fab-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M14.8 4.2 6.5 12l8.3 7.8" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="square" stroke-linejoin="miter" />
+            <path d="M18.6 4.2 10.3 12l8.3 7.8" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="square" stroke-linejoin="miter" />
+          </svg>
+          <span class="panel-fab-label">功能表展開</span>
+        </button>
         <button class="primary" id="watchBtn">立即檢查</button>
       </div>
     </div>
@@ -977,22 +1008,6 @@
       <button type="button" class="ghost" id="guestToastClose">知道了</button>
     </div>
   </div>
-  <div id="workPrompt" class="work-prompt" hidden>
-    <p>公司地址（選填，用來算通勤公里與尖峰時間）。略過的話之後可在左側設定再填。</p>
-    <label for="workPromptAddress">上班地址</label>
-    <input id="workPromptAddress" type="text" maxlength="120" placeholder="例如：臺北市南港區經貿一路170號" />
-    <label>通勤路徑（同時只能選一種）</label>
-    <div class="commute-mode" role="radiogroup" aria-label="通勤路徑">
-      <label><input type="radio" name="workPromptMode" value="scooter" checked /> 機車</label>
-      <label><input type="radio" name="workPromptMode" value="car" /> 汽車</label>
-    </div>
-    <label for="workPromptKm">路線上限（公里）</label>
-    <input id="workPromptKm" type="number" min="0" max="80" step="0.5" value="25" />
-    <div class="row">
-      <button type="button" class="primary" id="workPromptSave">儲存</button>
-      <button type="button" class="ghost" id="workPromptSkip">略過</button>
-    </div>
-    <p class="hint" id="workPromptMsg"></p>
   </div>
   <div id="sponsorBar" class="sponsor-bar" hidden></div>
   <div class="wrap">
@@ -1407,7 +1422,6 @@
     let guestLockClicks = 0;
     let guestToastTimer = 0;
     const GUEST_LOCK_TOAST_AFTER = 2;
-    const WORK_PROMPT_SKIP = "591_v2_work_prompt_skip";
     const GUEST_TOUR_SKIP = "591_v2_guest_tour_skip";
     const DEFAULT_COMMUTE_KM = 25;
     let settings = {};
@@ -1920,23 +1934,6 @@
       remindGuest();
     }, true);
     $("guestToastClose")?.addEventListener("click", hideGuestToast);
-
-    function maybeShowWorkPrompt() {
-      const box = $("workPrompt");
-      if (!box || isGuest || meIsAdmin) return;
-      if (String(settings.workAddress || "").trim()) {
-        box.hidden = true;
-        return;
-      }
-      try {
-        if (localStorage.getItem(WORK_PROMPT_SKIP) === "1") return;
-      } catch {
-        /* 略過 */
-      }
-      box.hidden = false;
-      if ($("workPromptKm")) $("workPromptKm").value = Number(settings.commuteKm) > 0 ? settings.commuteKm : DEFAULT_COMMUTE_KM;
-      setCommuteMode("workPromptMode", settings.commuteMode);
-    }
 
     function setSettingsReady(ok, msg) {
       $("saveBtn").disabled = !ok;
@@ -2828,7 +2825,6 @@
         } else {
           $("status").textContent = "設定已載入";
         }
-        maybeShowWorkPrompt();
       } catch (error) {
         $("status").textContent = "設定已載入，物件列表稍後再試";
         try {
@@ -2842,7 +2838,6 @@
     function collectSettings() {
       if (!settingsLoaded) throw new Error("設定還沒載入完成，請稍候或重新整理，不要先按儲存");
       const watchDistricts = selectedDistrictKeys();
-      if (!watchDistricts.length) throw new Error("請至少選一個行政區");
       const dLimit = districtLimit();
       if (dLimit && watchDistricts.length > dLimit) throw new Error(`每個設定檔最多選 ${dLimit} 個行政區`);
       return {
@@ -3044,46 +3039,6 @@
         $("status").textContent = error.message || "載入失敗，請再按重新整理";
       });
     };
-    if ($("workPromptSave")) {
-      $("workPromptSave").onclick = async () => {
-        const address = $("workPromptAddress").value.trim();
-        if (!address) {
-          $("workPromptMsg").textContent = "請先填公司地址，或按略過。";
-          $("workPromptAddress").focus();
-          return;
-        }
-        $("workPromptSave").disabled = true;
-        $("workPromptMsg").textContent = "儲存中…";
-        try {
-          const km = Number($("workPromptKm").value) || DEFAULT_COMMUTE_KM;
-          const mode = selectedCommuteMode("workPromptMode");
-          await saveSettings({
-            workAddress: address,
-            commuteKm: km,
-            commuteMode: mode,
-          });
-          $("workAddress").value = address;
-          $("commuteKm").value = km;
-          setCommuteMode("commuteMode", mode);
-          settings.workAddress = address;
-          settings.commuteKm = km;
-          settings.commuteMode = mode;
-          $("workPrompt").hidden = true;
-          flash(`公司地址已儲存，會用來算${commuteModeLabel(mode)}路線`);
-          await loadList({ force: true });
-        } catch (error) {
-          $("workPromptMsg").textContent = error.message;
-        } finally {
-          $("workPromptSave").disabled = false;
-        }
-      };
-    }
-    if ($("workPromptSkip")) {
-      $("workPromptSkip").onclick = () => {
-        try { localStorage.setItem(WORK_PROMPT_SKIP, "1"); } catch { /* 略過 */ }
-        $("workPrompt").hidden = true;
-      };
-    }
     function setPanelCollapsed(on) {
       document.body.classList.toggle("panel-collapsed", Boolean(on));
       localStorage.setItem(PANEL_KEY, on ? "1" : "0");
