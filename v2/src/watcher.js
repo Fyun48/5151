@@ -43,7 +43,6 @@ import { isTrustedGeoSource, listingCommunityId } from "./location.js";
 import { decideNotifyDelivery } from "./floors.js";
 import { fetchRoadRoutes, fetchRushRoadRoutes } from "./route.js";
 import { fetchMrtAccess } from "./mrt.js";
-import { mailConfigured } from "./mail.js";
 import { hasGoogleMapsKey } from "./mapsBilling.js";
 import { bestMatch } from "./match.js";
 import { classifyExistingUpdate, eventLabel, listingLastEvent, notify, shouldDockNotify, shouldMailNotify, shouldNotify, shouldWebhookNotify } from "./notify.js";
@@ -242,7 +241,7 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
     const listing = getListing(event.post_id, userId || undefined);
     const mailTo = String(getUserById(userId)?.email || "").trim();
     const mailBundle = userId ? getMemberMailBundle(userId) : { configured: false, smtp: null, templates: getMailTemplates() };
-    const mailReady = mailBundle.configured || mailConfigured();
+    const mailReady = Boolean(mailBundle.configured);
     const forDock = listing ? shouldDockNotify(userSettings, listing, event) : false;
     const forHook = listing ? shouldWebhookNotify(userSettings, listing, event) : false;
     const forMail = listing ? shouldMailNotify(userSettings, listing, event, { to: mailTo, configured: mailReady }) : false;
@@ -288,7 +287,7 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
         mailEvents: mail,
         mailTo: String(getUserById(userId)?.email || "").trim(),
         mailTemplates: mailBundle.templates,
-        smtp: mailBundle.smtp || undefined,
+        smtp: mailBundle.smtp || null,
       });
     }
     ready.push(...dock.map((event) => ({ ...event, type_label: eventLabel(event.type), user_id: userId })));

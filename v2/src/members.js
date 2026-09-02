@@ -43,6 +43,28 @@ export function setUserPassword(conn, userId, password) {
   conn.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(hashPassword(validatePassword(password)), id);
 }
 
+export function changeUserPassword(conn, userId, currentPassword, nextPassword) {
+  const user = getUserById(conn, userId);
+  if (!user) {
+    const err = new Error("請先登入");
+    err.status = 401;
+    throw err;
+  }
+  if (!verifyPassword(currentPassword, user.password_hash)) {
+    const err = new Error("目前密碼不對");
+    err.status = 400;
+    throw err;
+  }
+  const next = validatePassword(nextPassword);
+  if (next === String(currentPassword || "")) {
+    const err = new Error("新密碼不能跟目前密碼一樣");
+    err.status = 400;
+    throw err;
+  }
+  setUserPassword(conn, user.id, next);
+  return publicUser(user);
+}
+
 export function publicUser(row) {
   if (!row) return null;
   return {

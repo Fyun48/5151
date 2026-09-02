@@ -190,7 +190,7 @@
     </section>
     <section class="card">
       <h2>寄信 SMTP</h2>
-      <p class="hint">忘記密碼與物件通知信都走這裡。物件通知會寄到會員註冊的 Email。密碼只在你新填時才更新，畫面上不會回傳已存密碼。</p>
+      <p class="hint">這組 SMTP 只寄<strong>系統信</strong>：註冊歡迎、忘記密碼、變更密碼、贊助後通知。物件／屋源提醒請會員自己在前台填 SMTP，不會用這裡的帳號代寄。密碼只在你新填時才更新，畫面上不會回傳已存密碼。</p>
       <form id="smtpForm">
         <div class="grid-2">
           <div>
@@ -228,15 +228,27 @@
     </section>
     <section class="card">
       <h2>信件內容</h2>
-      <p class="hint">可用代碼：忘記密碼 <code>{{tempPassword}}</code>、<code>{{email}}</code>；物件通知會寄到各會員註冊的 Email，代碼 <code>{{event}}</code>、<code>{{title}}</code>、<code>{{price}}</code>、<code>{{facts}}</code>、<code>{{url}}</code>、<code>{{detail}}</code>、<code>{{email}}</code>。</p>
+      <p class="hint">系統信走上面的管理員 SMTP。可用代碼：<code>{{email}}</code>；忘記密碼另有 <code>{{tempPassword}}</code>。物件通知預設內容只在會員未自訂時使用，實際寄出走會員自己的 SMTP。</p>
       <form id="tplForm">
+        <label>註冊歡迎主旨</label>
+        <input id="welcomeSubject" />
+        <label>註冊歡迎本文</label>
+        <textarea id="welcomeText"></textarea>
         <label>忘記密碼主旨</label>
         <input id="forgotSubject" />
         <label>忘記密碼本文</label>
         <textarea id="forgotText"></textarea>
-        <label>物件通知主旨</label>
+        <label>變更密碼主旨</label>
+        <input id="passwordSubject" />
+        <label>變更密碼本文</label>
+        <textarea id="passwordText"></textarea>
+        <label>贊助通知主旨</label>
+        <input id="sponsorMailSubject" />
+        <label>贊助通知本文</label>
+        <textarea id="sponsorMailText"></textarea>
+        <label>物件通知預設主旨（會員未自訂時）</label>
         <input id="notifySubject" />
-        <label>物件通知本文</label>
+        <label>物件通知預設本文（會員未自訂時；寄出走會員 SMTP）</label>
         <textarea id="notifyText"></textarea>
         <div class="row" style="margin-top:14px">
           <button type="submit" class="primary" id="tplSave">儲存信件內容</button>
@@ -317,8 +329,14 @@
       $("smtpFromName").value = smtp.fromName || "吉比租房物件追蹤";
       $("smtpSecure").checked = Boolean(smtp.secure);
       const tpl = data.templates || {};
+      $("welcomeSubject").value = tpl.welcome?.subject || "";
+      $("welcomeText").value = tpl.welcome?.text || "";
       $("forgotSubject").value = tpl.forgot_password?.subject || "";
       $("forgotText").value = tpl.forgot_password?.text || "";
+      $("passwordSubject").value = tpl.password_changed?.subject || "";
+      $("passwordText").value = tpl.password_changed?.text || "";
+      $("sponsorMailSubject").value = tpl.sponsor_thanks?.subject || "";
+      $("sponsorMailText").value = tpl.sponsor_thanks?.text || "";
       $("notifySubject").value = tpl.listing_notify?.subject || "";
       $("notifyText").value = tpl.listing_notify?.text || "";
     }
@@ -451,7 +469,10 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             templates: {
+              welcome: { subject: $("welcomeSubject").value, text: $("welcomeText").value },
               forgot_password: { subject: $("forgotSubject").value, text: $("forgotText").value },
+              password_changed: { subject: $("passwordSubject").value, text: $("passwordText").value },
+              sponsor_thanks: { subject: $("sponsorMailSubject").value, text: $("sponsorMailText").value },
               listing_notify: { subject: $("notifySubject").value, text: $("notifyText").value },
             },
           }),

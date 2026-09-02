@@ -65,6 +65,10 @@ test("index page has a same-page notify hub and Discord guide", () => {
   assert.match(html, /id="mailPreset"/);
   assert.match(html, /function openNotifyHub/);
   assert.match(html, /\/api\/member-mail/);
+  assert.match(html, /id="changePasswordBtn"/);
+  assert.match(html, /\/api\/change-password/);
+  assert.match(html, /物件／屋源提醒請用你自己的 SMTP/);
+  assert.match(html, /站方管理員 SMTP/);
 });
 
 test("server exposes member-mail APIs", () => {

@@ -8,6 +8,7 @@ import {
   listingLastEvent,
   listingNotifyVars,
   listingPriceNum,
+  listingSmtpReady,
   notify,
   parseNotifyChanges,
   shouldDockNotify,
@@ -210,6 +211,9 @@ test("mail notify uses registered address and can be unchecked", () => {
   assert.equal(shouldMailNotify({}, listing, { type: "new" }, { to, configured: true }), true);
   assert.equal(shouldMailNotify({}, listing, { type: "new" }, { to: "", configured: true }), false);
   assert.equal(shouldMailNotify({}, listing, { type: "new" }, { to, configured: false }), false);
+  assert.equal(shouldMailNotify({}, listing, { type: "new" }, { to }), false);
+  assert.equal(listingSmtpReady({ host: "smtp.member.test" }), true);
+  assert.equal(listingSmtpReady(null), false);
   assert.equal(
     shouldMailNotify(
       { notifyMatrix: { new: { dock: true, webhook: true, mail: false } } },
@@ -271,4 +275,26 @@ test("notify digest packs several listings into one mail", async () => {
   assert.match(sent[0].subject, /2 則更新/);
   assert.match(sent[0].text, /甲物件/);
   assert.match(sent[0].text, /乙物件/);
+});
+
+test("listing mail without member SMTP is skipped", async () => {
+  await notify({}, [], {
+    mailEvents: [{ type: "new", title: "甲物件", price: "20000", post_id: 1 }],
+    mailTo: "member@example.com",
+    mailTemplates: defaultMailTemplates(),
+  });
+});
+
+test("listing mail keeps the member smtp on the payload", async () => {
+  const sent = [];
+  const smtp = { host: "smtp.member.test", from: "me@example.com" };
+  await notify({}, [], {
+    mailEvents: [{ type: "new", title: "甲物件", price: "20000", post_id: 1 }],
+    mailTo: "member@example.com",
+    mailTemplates: defaultMailTemplates(),
+    smtp,
+    send: async (mail) => sent.push(mail),
+  });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].smtp.host, "smtp.member.test");
 });

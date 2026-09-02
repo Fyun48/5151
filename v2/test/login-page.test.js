@@ -10,6 +10,8 @@ test("login page can register after accepting the disclaimer", () => {
   const html = readFileSync(path.join(dir, "../public/login.html"), "utf8");
   assert.match(html, /id="tabRegister"/);
   assert.match(html, /id="registerForm"/);
+  assert.match(html, /歡迎信/);
+  assert.match(html, /自己填 SMTP/);
   assert.match(html, /\/api\/register/);
   assert.match(html, /acceptDisclaimer/);
   assert.match(html, /disclaimer\.html/);
