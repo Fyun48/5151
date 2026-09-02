@@ -303,7 +303,7 @@ test("only acefengyun admin gets a red frame on 社子島 listings", () => {
   assert.match(html, /\/acefengyun\/i\.test\(meEmail/);
   assert.match(html, /meIsAdmin && \/acefengyun\/i/);
   assert.match(html, /社子島\|社之島\|葫蘆堵/);
-  assert.match(html, /延平北路\(六\|七\|八\|九\|\[6-9\]\)段/);
+  assert.match(html, /延平北路\(五\|六\|七\|八\|九\|\[5-9\]\)段/);
   assert.match(html, /class="item .*shezidao/);
   assert.match(html, /\.item\.shezidao/);
   assert.match(html, /--shezi-red:\s*#DC2626/);
@@ -313,14 +313,22 @@ test("only acefengyun admin gets a red frame on 社子島 listings", () => {
   const isShezidaoAddress = new Function(`${html.slice(start, end)}; return isShezidaoAddress;`)();
   assert.equal(isShezidaoAddress("台北市士林區延平北路七段88號"), true);
   assert.equal(isShezidaoAddress("延平北路6段12號"), true);
+  assert.equal(isShezidaoAddress("士林區延平北路五段83巷"), true);
   assert.equal(isShezidaoAddress("士林區社子街20號"), true);
   assert.equal(isShezidaoAddress("社子島抽水站附近"), true);
   assert.equal(isShezidaoAddress("士林區社正路"), true);
   assert.equal(isShezidaoAddress("士林區葫蘆街30巷37號"), true);
   assert.equal(isShezidaoAddress("台北市士林區葫東街"), true);
+  assert.equal(isShezidaoAddress("士林區中正路"), true);
+  assert.equal(isShezidaoAddress("台北市士林區中正路601號"), true);
+  assert.equal(isShezidaoAddress("士林區重慶北路四段"), true);
   assert.equal(isShezidaoAddress("士林區中山北路五段"), false);
-  assert.equal(isShezidaoAddress("延平北路五段"), false);
-  assert.equal(isShezidaoAddress("文林路100號"), false);
+    assert.equal(isShezidaoAddress("士林區中正路80號"), false);
+    assert.equal(isShezidaoAddress("台北市士林區中正路一段200號"), false);
+    assert.equal(isShezidaoAddress("中正路100號"), false);
+    assert.equal(isShezidaoAddress("文林路100號"), false);
+    assert.equal(isShezidaoAddress({ address: "士林區延平北路五段83巷", title: "海光新村", area_name: "士林區" }), true);
+    assert.equal(isShezidaoAddress({ address: "士林區中正路", title: "近重陽橋", area_name: "士林區" }), true);
   const aceStart = html.indexOf("function isAcefengyunAdmin");
   const aceEnd = html.indexOf("function isShezidaoAddress");
   const isAcefengyunAdmin = new Function(
