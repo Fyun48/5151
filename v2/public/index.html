@@ -82,6 +82,59 @@
       margin: 8px 0 0;
     }
     .work-prompt .commute-mode { margin: 8px 0 0; }
+    .mrt-line {
+      margin-top: 6px;
+      color: var(--accent-deep);
+      font-size: 13px;
+    }
+    .guest-tour {
+      position: fixed;
+      inset: 0;
+      z-index: 80;
+      pointer-events: none;
+    }
+    .guest-tour-dim {
+      position: absolute;
+      inset: 0;
+      background: rgba(16, 28, 34, 0.38);
+      animation: guestTourFade 0.35s ease;
+    }
+    .guest-tour-spot {
+      position: absolute;
+      border: 2px solid var(--accent);
+      border-radius: 18px;
+      box-shadow: 0 0 0 9999px rgba(16, 28, 34, 0.45), 0 0 0 8px rgba(13, 165, 160, 0.22);
+      transition: top 0.45s ease, left 0.45s ease, width 0.45s ease, height 0.45s ease;
+      animation: guestTourPulse 1.6s ease-in-out infinite;
+    }
+    .guest-tour-card {
+      position: absolute;
+      width: min(360px, calc(100vw - 32px));
+      padding: 14px 16px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: 0 16px 40px rgba(26, 43, 51, 0.16);
+      pointer-events: auto;
+      transition: top 0.45s ease, left 0.45s ease;
+    }
+    .guest-tour-card p { margin: 0; font-size: 14px; line-height: 1.55; }
+    .guest-tour-step {
+      color: var(--accent-deep);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      margin-bottom: 6px !important;
+    }
+    .guest-tour-card .row { margin-top: 12px; }
+    @keyframes guestTourFade {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    @keyframes guestTourPulse {
+      0%, 100% { box-shadow: 0 0 0 9999px rgba(16, 28, 34, 0.45), 0 0 0 6px rgba(13, 165, 160, 0.16); }
+      50% { box-shadow: 0 0 0 9999px rgba(16, 28, 34, 0.45), 0 0 0 12px rgba(13, 165, 160, 0.28); }
+    }
     body.role-guest #resetLink,
     body.role-guest #adminLink,
     body.role-guest #logoutBtn,
@@ -751,7 +804,7 @@
         <button class="primary" id="watchBtn">立即檢查</button>
       </div>
     </div>
-    <div class="header-profiles">
+    <div class="header-profiles" data-tour="profiles">
       <input type="text" id="profileName" placeholder="設定檔名稱" maxlength="40" aria-label="設定檔名稱" />
       <select id="profileSelect" aria-label="已存設定檔"></select>
       <button type="button" class="primary" id="saveBtn" disabled>儲存</button>
@@ -760,6 +813,18 @@
       <span class="save-msg" id="saveMsg"></span>
     </div>
   </header>
+  <div id="guestTour" class="guest-tour" hidden>
+    <div class="guest-tour-dim"></div>
+    <div class="guest-tour-spot" id="guestTourSpot"></div>
+    <div class="guest-tour-card" id="guestTourCard">
+      <p class="guest-tour-step" id="guestTourStep"></p>
+      <p id="guestTourText"></p>
+      <div class="row">
+        <button type="button" class="ghost" id="guestTourSkip">略過</button>
+        <button type="button" class="primary" id="guestTourNext">下一步</button>
+      </div>
+    </div>
+  </div>
   <div id="guestBanner" class="guest-banner" hidden>
     <p>這是示範列表，條件與公司地址為展示用。註冊後才能改成你的條件、收到通知。</p>
     <div class="row">
@@ -795,7 +860,7 @@
       <p class="hint" id="settingsLoadMsg">正在載入已存設定…完成前請不要按儲存或另存。若一直停在這句、儲存也不能按，是網頁程式沒跑起來，不是資料壞了；請重新整理，不要按清除資料。</p>
       <p class="hint" id="profileListHint"></p>
       <p class="hint" id="districtLimitHint"></p>
-      <div id="districtPicker">
+      <div id="districtPicker" data-tour="districts">
         <div class="district-city">
           <div class="district-city-head">
             <h3>台北市</h3>
@@ -884,7 +949,7 @@
       </div>
       <label>建物總樓層至少</label>
       <input type="number" id="minBuildingFloors" min="1" max="50" />
-      <label>上班地址（選填）</label>
+      <label data-tour="commute">上班地址（選填）</label>
       <input type="text" id="workAddress" placeholder="例如：臺北市南港區經貿一路170號" />
       <label>通勤路徑（同時只能選一種）</label>
       <div class="commute-mode" role="radiogroup" aria-label="通勤路徑">
@@ -893,11 +958,14 @@
       </div>
       <label>路線上限（公里，0 表示不篩）</label>
       <input type="number" id="commuteKm" min="0" max="80" step="0.5" />
+      <div class="checks" data-tour="mrt">
+        <label><input type="checkbox" id="showMrt" checked /> 顯示最近捷運站走路／騎車距離</label>
+      </div>
       <label>Discord Webhook（選填）</label>
       <input type="url" id="discordWebhook" placeholder="https://discord.com/api/webhooks/..." />
       <p class="hint">此通知只會訊息已是特別關注之物件</p>
       <p class="hint" id="notifyMailHint">郵件通知會寄到你註冊的 Email。</p>
-      <div class="notify-matrix-wrap">
+      <div class="notify-matrix-wrap" data-tour="notify">
       <table class="notify-matrix" id="notifyMatrix">
         <thead>
           <tr>
@@ -1020,7 +1088,7 @@
         </div>
         <button type="button" class="filter-mini-btn ghost" id="filterMiniBtn" title="收合篩選" aria-label="收合篩選">×</button>
       </div>
-      <div class="list" id="list"><div class="empty">尚未載入列表</div></div>
+      <div class="list" id="list" data-tour="list"><div class="empty">尚未載入列表</div></div>
     </main>
   </div>
   <footer class="site-footer">reversal play tech | 逆遊科技</footer>
@@ -1075,6 +1143,7 @@
     let isGuest = false;
     let guestLockClicks = 0;
     const WORK_PROMPT_SKIP = "591_v2_work_prompt_skip";
+    const GUEST_TOUR_SKIP = "591_v2_guest_tour_skip";
     const DEFAULT_COMMUTE_KM = 25;
     let settings = {};
     let selected = new Set();
@@ -1187,6 +1256,31 @@
       const src = String(item.geo_source || "");
       const hasPin = Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lng)) && (src === "591" || src === "community");
       return hasPin ? ` · ${label}路線計算中` : " · 尚未取得地圖座標";
+    }
+
+    function mrtOn(s = settings) {
+      return s.showMrt !== false;
+    }
+    function mrtText(item) {
+      if (!mrtOn()) return "";
+      const name = String(item.mrt_station || "").trim();
+      if (name) {
+        const bits = [`捷運${name.replace(/站$/, "")}站`];
+        const walkKm = Number(item.mrt_walk_km);
+        const walkMin = Number(item.mrt_walk_min);
+        const rideKm = Number(item.mrt_ride_km);
+        const rideMin = Number(item.mrt_ride_min);
+        if (Number.isFinite(walkKm) && walkKm > 0) {
+          bits.push(Number.isFinite(walkMin) ? `走路 ${walkKm} 公里（${walkMin} 分）` : `走路 ${walkKm} 公里`);
+        }
+        if (Number.isFinite(rideKm) && rideKm > 0) {
+          bits.push(Number.isFinite(rideMin) ? `騎車 ${rideKm} 公里（${rideMin} 分）` : `騎車 ${rideKm} 公里`);
+        }
+        return bits.join(" · ");
+      }
+      const src = String(item.geo_source || "");
+      const hasPin = Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lng)) && (src === "591" || src === "community");
+      return hasPin ? "捷運距離計算中" : "";
     }
 
     function commuteOn(s = settings) {
@@ -1440,9 +1534,89 @@
       }
     }
 
+    const GUEST_TOUR_STEPS = [
+      { target: "#guestBanner", title: "第 1／7 步", text: "這是示範列表。左側條件與公司地址目前不能改，註冊成為會員後才能換成你的設定。" },
+      { target: "[data-tour=districts]", title: "第 2／7 步", text: "行政區與租金篩選現在是展示用。註冊後才能勾選你要找的區域並儲存。" },
+      { target: "[data-tour=commute]", title: "第 3／7 步", text: "公司地址、機車或汽車路徑也無法在示範模式變更。會員才能填自己的上班地址並篩通勤距離。" },
+      { target: "[data-tour=mrt]", title: "第 4／7 步", text: "最近捷運站的走路與騎車距離可以開關。示範模式看得到效果，註冊後才能自己開啟或關閉。" },
+      { target: "[data-tour=notify]", title: "第 5／7 步", text: "站內、Webhook、郵件通知現在不能改。成為會員後才能決定哪些物件更新要通知你。" },
+      { target: "[data-tour=profiles]", title: "第 6／7 步", text: "設定檔的儲存、另存與刪除也鎖定中。註冊後最多可存 3 組自己的條件。" },
+      { target: "[data-tour=list]", title: "第 7／7 步", text: "已瀏覽、特別關注與隱藏要登入才寫得進去。按「前往註冊」就能開始用這些功能。" },
+    ];
+    let guestTourIndex = 0;
+    let guestTourTimer = 0;
+
+    function guestTourSkipped() {
+      try { return localStorage.getItem(GUEST_TOUR_SKIP) === "1"; } catch { return false; }
+    }
+    function stopGuestTour(persist) {
+      if (guestTourTimer) window.clearTimeout(guestTourTimer);
+      guestTourTimer = 0;
+      const box = $("guestTour");
+      if (box) box.hidden = true;
+      if (persist) {
+        try { localStorage.setItem(GUEST_TOUR_SKIP, "1"); } catch { /* 略過 */ }
+      }
+    }
+    function placeGuestTour(step) {
+      const spot = $("guestTourSpot");
+      const card = $("guestTourCard");
+      if (!spot || !card) return;
+      const el = document.querySelector(step.target);
+      const pad = 8;
+      let rect = el?.getBoundingClientRect();
+      if (!rect || !el || rect.width < 8 || rect.height < 8) {
+        rect = { top: 80, left: 32, width: 320, height: 72 };
+      }
+      spot.style.top = `${Math.max(8, rect.top - pad)}px`;
+      spot.style.left = `${Math.max(8, rect.left - pad)}px`;
+      spot.style.width = `${Math.min(window.innerWidth - 16, rect.width + pad * 2)}px`;
+      spot.style.height = `${Math.min(window.innerHeight - 16, rect.height + pad * 2)}px`;
+      const cardW = Math.min(360, window.innerWidth - 32);
+      const below = rect.bottom + 16 + 180 < window.innerHeight;
+      const top = below ? rect.bottom + 12 : Math.max(12, rect.top - 170);
+      const left = Math.min(Math.max(16, rect.left), window.innerWidth - cardW - 16);
+      card.style.top = `${top}px`;
+      card.style.left = `${left}px`;
+    }
+    function showGuestTourStep(index) {
+      const steps = GUEST_TOUR_STEPS;
+      guestTourIndex = Math.max(0, Math.min(index, steps.length - 1));
+      const step = steps[guestTourIndex];
+      const last = guestTourIndex === steps.length - 1;
+      $("guestTourStep").textContent = step.title;
+      $("guestTourText").textContent = step.text;
+      $("guestTourNext").textContent = last ? "前往註冊" : "下一步";
+      if (step.target === "[data-tour=list]" || step.target === "[data-tour=notify]" || step.target === "[data-tour=mrt]") {
+        document.querySelector(step.target)?.scrollIntoView({ block: "center", behavior: "smooth" });
+      }
+      window.requestAnimationFrame(() => placeGuestTour(step));
+      if (guestTourTimer) window.clearTimeout(guestTourTimer);
+      guestTourTimer = window.setTimeout(() => {
+        if (last) return;
+        showGuestTourStep(guestTourIndex + 1);
+      }, 5200);
+    }
+    function maybeStartGuestTour() {
+      const box = $("guestTour");
+      if (!box || !isGuest || guestTourSkipped()) return;
+      document.body.classList.remove("panel-collapsed");
+      box.hidden = false;
+      showGuestTourStep(0);
+    }
+    $("guestTourSkip")?.addEventListener("click", () => stopGuestTour(true));
+    $("guestTourNext")?.addEventListener("click", () => {
+      if (guestTourIndex >= GUEST_TOUR_STEPS.length - 1) {
+        stopGuestTour(true);
+        goRegister();
+        return;
+      }
+      showGuestTourStep(guestTourIndex + 1);
+    });
+
     function isGuestLockedTarget(el) {
       if (!el || !isGuest) return false;
-      if (el.closest("#collapsePanelBtn, #expandPanelBtn, #reloadBtn, #loginBtn, #registerBtn, #guestBanner, #listHeadSticky .chip, #q, #wholeFloorOnly, #excludeLowFloors, [data-view-district]")) return false;
+      if (el.closest("#collapsePanelBtn, #expandPanelBtn, #reloadBtn, #loginBtn, #registerBtn, #guestBanner, #guestTour, #listHeadSticky .chip, #q, #wholeFloorOnly, #excludeLowFloors, [data-view-district]")) return false;
       if (el.closest(".item-cover, h3 a, a.tel, .line-qr")) return false;
       if (el.closest("#settingsPanel, .header-profiles, #watchBtn, #bulkBar")) return true;
       if (el.closest("[data-watched], [data-viewed], [data-hidden], [data-watch-draft-commit], [data-watch-draft-cancel], [data-watch-note], .pick")) return true;
@@ -1713,6 +1887,7 @@
       $("workAddress").value = s.workAddress || "";
       $("commuteKm").value = s.commuteKm || 0;
       setCommuteMode("commuteMode", s.commuteMode);
+      if ($("showMrt")) $("showMrt").checked = s.showMrt !== false;
       syncCommuteSort();
       loadViewFilters(s);
       $("excludeKeywords").value = (s.excludeKeywords || []).join("\n");
@@ -1950,6 +2125,7 @@
             <div class="meta">
               租金 ${item.price || ""} ${item.price_unit || "元/月"} · ${item.kind_name || ""} · ${item.layout || ""} · ${item.area_name || ""} · ${item.floor_name || ""}
               <br>${esc(item.address || "")}${commuteText(item)}${offlineLine(item)}
+              ${mrtText(item) ? `<div class="mrt-line">${esc(mrtText(item))}</div>` : ""}
               ${item.match_detail ? `<br>比對：${esc(item.match_detail)}${item.match_post_id ? ` · <a href="${listingUrl(item.match_post_id)}" target="_blank" rel="noopener noreferrer">舊刊登 #${item.match_post_id}</a>` : ""}` : ""}
             </div>
             ${(() => {
@@ -2160,6 +2336,7 @@
         renderStats(lastStats);
         renderList(applyGuestQuery(guestListings), lastStats);
         $("status").textContent = "示範列表（唯讀）。註冊後才能改條件與收到通知。";
+        maybeStartGuestTour();
         return;
       }
       setGuestMode(false);
@@ -2258,6 +2435,7 @@
         workAddress: $("workAddress").value.trim(),
         commuteKm: Number($("commuteKm").value) || 0,
         commuteMode: selectedCommuteMode("commuteMode"),
+        showMrt: $("showMrt") ? $("showMrt").checked : true,
       };
     }
 
@@ -3297,6 +3475,8 @@
               $("status").textContent = `已計算 ${data.routeBackfill.located} 筆${commuteModeLabel()}路線，列表已更新`;
             } else if (data.geoBackfill?.located || data.geoBackfill?.attempted) {
               $("status").textContent = `已從 591 地圖補 ${data.geoBackfill.located || 0} 筆座標，列表已更新`;
+            } else if (data.mrtBackfill?.located) {
+              $("status").textContent = `已計算 ${data.mrtBackfill.located} 筆捷運走路／騎車距離，列表已更新`;
             }
             loadList();
           }

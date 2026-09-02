@@ -66,6 +66,7 @@ test("public demo settings strip webhooks and exclusion lists", () => {
   assert.equal(pub.workAddress, DEMO_WORK_ADDRESS);
   assert.equal(pub.commuteKm, DEMO_COMMUTE_KM);
   assert.equal(pub.commuteMode, "car");
+  assert.equal(pub.showMrt, true);
   assert.deepEqual(pub.excludeKeywords, []);
   assert.deepEqual(pub.excludeAgents, []);
   assert.deepEqual(pub.excludeBoxes, []);

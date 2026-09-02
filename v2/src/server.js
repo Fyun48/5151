@@ -47,7 +47,7 @@ import { mailConfigured, sendMail } from "./mail.js";
 import { assertHuman, issueCaptcha } from "./captcha.js";
 import { assertCaptchaIssuable, assertDemoReadable, authAttemptKeys, clientIp } from "./rateLimit.js";
 import { buildDemoState } from "./demo.js";
-import { backfillListingCoords, backfillListingRoutes, flushPendingNotifications, runWatch } from "./watcher.js";
+import { backfillListingCoords, backfillListingMrt, backfillListingRoutes, flushPendingNotifications, runWatch } from "./watcher.js";
 import { LIST_PAGE_SIZE } from "./client591.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -373,30 +373,43 @@ async function ensureWorkCoords() {
 
 function queueGeoBackfill(settings = getSettings()) {
   settings = settingsForGeoBackfill(settings);
-  if (geoBackfillBusy || !needsListingGeo(settings)) return;
+  if (geoBackfillBusy) return;
+  const needCommute = needsListingGeo(settings);
   geoBackfillBusy = true;
   (async () => {
-    for (let round = 0; round < 200; round += 1) {
-      try {
-        const routes = await backfillListingRoutes(settings, { limit: 20 });
-        if (routes.attempted) broadcast({ type: "geo", stats: stats(), routeBackfill: routes });
-        const notified = await flushPendingNotifications(settings);
-        if (notified.length) broadcastNotify(notified);
-        if (!routes.attempted) break;
-      } catch (error) {
-        console.warn("補路線失敗：", error.message);
-        await new Promise((resolve) => setTimeout(resolve, 1500));
+    if (needCommute) {
+      for (let round = 0; round < 200; round += 1) {
+        try {
+          const routes = await backfillListingRoutes(settings, { limit: 20 });
+          if (routes.attempted) broadcast({ type: "geo", stats: stats(), routeBackfill: routes });
+          const notified = await flushPendingNotifications(settings);
+          if (notified.length) broadcastNotify(notified);
+          if (!routes.attempted) break;
+        } catch (error) {
+          console.warn("補路線失敗：", error.message);
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+        }
+      }
+      for (let round = 0; round < 80; round += 1) {
+        try {
+          const geo = await backfillListingCoords(settings, { limit: LIST_PAGE_SIZE });
+          broadcast({ type: "geo", stats: stats(), geoBackfill: geo });
+          const notified = await flushPendingNotifications(settings);
+          if (notified.length) broadcastNotify(notified);
+          if (!geo.attempted) break;
+        } catch (error) {
+          console.warn("補定位失敗：", error.message);
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+        }
       }
     }
     for (let round = 0; round < 80; round += 1) {
       try {
-        const geo = await backfillListingCoords(settings, { limit: LIST_PAGE_SIZE });
-        broadcast({ type: "geo", stats: stats(), geoBackfill: geo });
-        const notified = await flushPendingNotifications(settings);
-        if (notified.length) broadcastNotify(notified);
-        if (!geo.attempted) break;
+        const mrt = await backfillListingMrt({ limit: 20 });
+        if (mrt.attempted) broadcast({ type: "geo", stats: stats(), mrtBackfill: mrt });
+        if (!mrt.attempted) break;
       } catch (error) {
-        console.warn("補定位失敗：", error.message);
+        console.warn("補捷運距離失敗：", error.message);
         await new Promise((resolve) => setTimeout(resolve, 1500));
       }
     }

@@ -17,6 +17,7 @@ import { districtNameFromListing } from "./regions.js";
 import { preferPrimaryListing } from "./match.js";
 import { commuteWorkJobs, hasWorkPoint, needsListingGeo, normalizeCommuteMode } from "./geo.js";
 import { demoCommutePatch } from "./demo.js";
+import { makeMrtKey } from "./mrt.js";
 import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings, planIntervalMinutes, resolveSaveAsProfileAction, normalizeProfileName, MEMBER_MAX_PROFILES, ADMIN_MAX_PROFILES } from "./settingsState.js";
 import { defaultNotifyMatrix } from "./notifyMatrix.js";
 import { DATA_EPOCH, shouldResetForEpoch } from "./dataEpoch.js";
@@ -180,6 +181,15 @@ db.exec(`
     day TEXT PRIMARY KEY,
     essentials INTEGER NOT NULL DEFAULT 0,
     advanced INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS mrt_cache (
+    geo_key TEXT PRIMARY KEY,
+    station TEXT NOT NULL,
+    walk_km REAL,
+    walk_min REAL,
+    ride_km REAL,
+    ride_min REAL,
+    updated_at TEXT NOT NULL
   );
 `);
 try {
@@ -640,6 +650,7 @@ const DEFAULTS = {
   workAddress: "",
   commuteKm: 0,
   commuteMode: "scooter",
+  showMrt: true,
   workLat: null,
   workLng: null,
   settingProfiles: [],
@@ -818,6 +829,7 @@ function decorateListing(row, settings) {
     commute_min_pm: commuteRushEnabled() && Number.isFinite(Number(row.rush_pm_min)) ? Math.round(Number(row.rush_pm_min)) : null,
     district: districtNameFromListing(row),
     match_peer: matchPeer || null,
+    ...mrtFields(row, settings),
   };
 }
 
@@ -1343,6 +1355,7 @@ export function resetAllData() {
     workAddress: "",
     commuteKm: 0,
     commuteMode: "scooter",
+    showMrt: true,
     workLat: null,
     workLng: null,
     excludeBoxes: [],
@@ -1490,6 +1503,94 @@ export function getCachedRoute(fromLat, fromLng, toLat, toLng, mode = "scooter")
     rush_am_min: Number.isFinite(rushAm) ? rushAm : null,
     rush_pm_min: Number.isFinite(rushPm) ? rushPm : null,
     rush_updated_at: row.rush_updated_at || "",
+  };
+}
+
+export function getCachedMrt(lat, lng) {
+  const key = makeMrtKey(lat, lng);
+  if (!key.includes("NaN")) {
+    const row = db.prepare("SELECT station, walk_km, walk_min, ride_km, ride_min FROM mrt_cache WHERE geo_key = ?").get(key);
+    if (row?.station) {
+      return {
+        station: row.station,
+        walk_km: Number(row.walk_km) || null,
+        walk_min: Number(row.walk_min) || null,
+        ride_km: Number(row.ride_km) || null,
+        ride_min: Number(row.ride_min) || null,
+      };
+    }
+  }
+  return null;
+}
+
+export function setCachedMrt(lat, lng, access) {
+  if (!access?.station) return;
+  const key = makeMrtKey(lat, lng);
+  if (key.includes("NaN")) return;
+  db.prepare(
+    `INSERT INTO mrt_cache(geo_key, station, walk_km, walk_min, ride_km, ride_min, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(geo_key) DO UPDATE SET
+       station = excluded.station,
+       walk_km = excluded.walk_km,
+       walk_min = excluded.walk_min,
+       ride_km = excluded.ride_km,
+       ride_min = excluded.ride_min,
+       updated_at = excluded.updated_at`,
+  ).run(
+    key,
+    String(access.station),
+    Number(access.walk_km) || null,
+    Number(access.walk_min) || null,
+    Number(access.ride_km) || null,
+    Number(access.ride_min) || null,
+    new Date().toISOString(),
+  );
+}
+
+export function listingsNeedingMrt(limit = 20) {
+  const cap = Math.max(1, Math.min(Number(limit) || 20, 80));
+  const rows = db
+    .prepare(
+      `SELECT lat, lng FROM listings
+       WHERE lat IS NOT NULL AND lng IS NOT NULL
+         AND IFNULL(geo_source, '') IN ('591', 'community')
+         AND IFNULL(hidden, 0) = 0
+         AND IFNULL(offline, 0) = 0
+       ORDER BY last_seen_at DESC
+       LIMIT 2000`,
+    )
+    .all();
+  const seen = new Set();
+  const out = [];
+  for (const row of rows) {
+    const key = makeMrtKey(row.lat, row.lng);
+    if (seen.has(key) || key.includes("NaN")) continue;
+    seen.add(key);
+    if (getCachedMrt(row.lat, row.lng)) continue;
+    out.push({ lat: row.lat, lng: row.lng });
+    if (out.length >= cap) break;
+  }
+  return out;
+}
+
+function mrtFields(row, settings) {
+  if (settings?.showMrt === false) {
+    return { mrt_station: null, mrt_walk_km: null, mrt_walk_min: null, mrt_ride_km: null, mrt_ride_min: null };
+  }
+  if (!isTrustedGeoSource(row.geo_source) || !Number.isFinite(Number(row.lat)) || !Number.isFinite(Number(row.lng))) {
+    return { mrt_station: null, mrt_walk_km: null, mrt_walk_min: null, mrt_ride_km: null, mrt_ride_min: null };
+  }
+  const cached = getCachedMrt(row.lat, row.lng);
+  if (!cached) {
+    return { mrt_station: "", mrt_walk_km: null, mrt_walk_min: null, mrt_ride_km: null, mrt_ride_min: null };
+  }
+  return {
+    mrt_station: cached.station,
+    mrt_walk_km: cached.walk_km,
+    mrt_walk_min: cached.walk_min,
+    mrt_ride_km: cached.ride_km,
+    mrt_ride_min: cached.ride_min,
   };
 }
 
