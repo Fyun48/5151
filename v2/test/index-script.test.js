@@ -293,12 +293,62 @@ test("listing chips use Hermes orange and do not escape chip HTML", () => {
   assert.match(html, /--hermes-light:\s*#F47A2A/);
   assert.match(html, /\.mrt-chip/);
   assert.match(html, /\.route-chip/);
+  assert.match(html, /\.fee-chip/);
+  assert.match(html, /\.rent-price/);
   assert.match(html, /function mrtChip/);
   assert.match(html, /function routeChip/);
   assert.match(html, /class="mrt-chip"/);
   assert.match(html, /class="route-chip"/);
+  assert.match(html, /class="fee-chip"/);
+  assert.match(html, /class="rent-price"/);
+  const routeCss = html.slice(html.indexOf(".route-chip"), html.indexOf(".fee-chip"));
+  assert.match(routeCss, /background:\s*none/);
+  assert.doesNotMatch(routeCss, /linear-gradient/);
+  const feeCss = html.slice(html.indexOf(".fee-chip"), html.indexOf(".rent-price"));
+  assert.match(feeCss, /linear-gradient\(90deg, var\(--hermes-deep\)/);
+  const rentCss = html.slice(html.indexOf(".rent-price"), html.indexOf(".guest-tour"));
+  assert.match(rentCss, /font-weight:\s*700/);
+  assert.match(rentCss, /color:\s*var\(--ink\)/);
   assert.match(html, /<div class="mrt-line">\$\{mrtText\(item\)\}<\/div>/);
   assert.doesNotMatch(html, /esc\(mrtText\(item\)\)/);
+});
+
+test("extra-fee and high-deposit text use fee chips, two-month deposit does not", () => {
+  const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
+  const start = html.indexOf("function chineseMonthCount");
+  const end = html.indexOf("function offlineLine");
+  assert.ok(start > 0 && end > start);
+  const { depositMonths, isHighDeposit, feeLines } = new Function(
+    "esc",
+    `${html.slice(start, end)}; return { depositMonths, isHighDeposit, feeLines };`,
+  )((value) => String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"));
+  assert.equal(depositMonths("押金 二個月"), 2);
+  assert.equal(depositMonths("押金 兩個月"), 2);
+  assert.equal(depositMonths("押金 3個月"), 3);
+  assert.equal(depositMonths("押金 60,000元", 20000), 3);
+  assert.equal(isHighDeposit("押金 二個月", 20000), false);
+  assert.equal(isHighDeposit("押金 三個月", 20000), true);
+  assert.equal(isHighDeposit("押金 40000元", 20000), false);
+  assert.equal(isHighDeposit("押金 60000元", 20000), true);
+  const high = feeLines({
+    extra_fees: [
+      { name: "押金", value: "三個月" },
+      { name: "管理費", value: "1000元" },
+    ],
+    extra_fee: 1500,
+    price_num: 20000,
+  });
+  assert.match(high.html, /class="fee-chip">押金 三個月/);
+  assert.match(high.html, /管理費 1000元/);
+  assert.doesNotMatch(high.html, /class="fee-chip">管理費/);
+  assert.match(high.html, /class="fee-chip">含額外費用約 21,500 元\/月/);
+  const normal = feeLines({
+    extra_fees: [{ name: "押金", value: "二個月" }],
+    extra_fee: 0,
+    price_num: 20000,
+  });
+  assert.match(normal.html, /押金 二個月/);
+  assert.doesNotMatch(normal.html, /fee-chip/);
 });
 
 test("only acefengyun admin gets a red frame on 社子島 listings", () => {
