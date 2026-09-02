@@ -10,7 +10,7 @@ import {
   preferCommunityLocation,
 } from "../src/location.js";
 import { decideNotifyDelivery, hasTrustedCoords, isGeoReady, listingIsApartment, listingIsSuite, listingHasElevator, matchesHousingKind, normalizeListQuery, passesGeoFilters, housingTypeLabel } from "../src/floors.js";
-import { hasWorkPoint, needsListingGeo } from "../src/geo.js";
+import { hasWorkPoint, needsListingGeo, commuteWorkJobs } from "../src/geo.js";
 
 test("extracts the house-number address from a community page line", () => {
   const fromShot = "淡海新市鎮-行政中心 | 新北市淡水區淡金路二段173號";
@@ -106,6 +106,17 @@ test("community coordinates count as trusted for commute filters", () => {
   assert.equal(isGeoReady({ ...listingBase, route_kms: [16] }, commuteSettings), true);
   assert.equal(passesGeoFilters({ ...listingBase, route_kms: [16] }, commuteSettings), false);
   assert.equal(passesGeoFilters({ ...listingBase, route_kms: [9, 11] }, commuteSettings), true);
+});
+
+test("commute work jobs come from member settings, not empty global defaults", () => {
+  const jobs = commuteWorkJobs([
+    { commuteKm: 0, workLat: 25.1, workLng: 121.5 },
+    { commuteKm: 13, workLat: 25.1062827, workLng: 121.524189 },
+    { commuteKm: 13, workLat: 25.1062827, workLng: 121.524189 },
+  ]);
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0].workLat, 25.1062827);
+  assert.equal(commuteWorkJobs([{ commuteKm: 12, workLat: 0, workLng: 0 }]).length, 0);
 });
 
 test("zero work coords do not enable commute filtering", () => {
