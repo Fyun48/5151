@@ -159,6 +159,17 @@ test("guest demo is read-only and work prompt can be skipped", () => {
   assert.match(html, /成為會員後就能使用這項功能/);
   assert.match(html, /\$\("who"\)\.textContent = "訪客"/);
   assert.match(html, /classList\.toggle\("is-guest", isGuest\)/);
+  assert.match(html, /DFKai-SB/);
+  assert.match(html, /標楷體/);
+  assert.match(html, /font-size: 21px/);
+  assert.match(html, /color: #000/);
+  assert.match(html, /class="role-guest"/);
+  assert.match(html, /let isGuest = true/);
+  assert.match(html, /591_session=/);
+  assert.match(html, /html\.no-session #logoutBtn/);
+  assert.match(html, /html\.has-session #loginBtn/);
+  assert.match(html, /<span>全部<\/span>/);
+  assert.match(html, /<span>有電梯<\/span>/);
   assert.match(html, /data-tour="guestWho"/);
   assert.match(html, /class="site-footer"/);
   assert.match(html, /reversal play tech \| 逆遊科技/);
