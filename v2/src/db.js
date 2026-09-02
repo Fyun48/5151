@@ -15,7 +15,7 @@ import {
 import { sameSearch } from "./client591.js";
 import { districtNameFromListing } from "./regions.js";
 import { preferPrimaryListing } from "./match.js";
-import { hasWorkPoint } from "./geo.js";
+import { hasWorkPoint, needsListingGeo, commuteWorkJobs } from "./geo.js";
 import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings, planIntervalMinutes, resolveSaveAsProfileAction, normalizeProfileName, MEMBER_MAX_PROFILES, ADMIN_MAX_PROFILES } from "./settingsState.js";
 import { defaultNotifyMatrix } from "./notifyMatrix.js";
 import { DATA_EPOCH, shouldResetForEpoch } from "./dataEpoch.js";
@@ -468,6 +468,20 @@ bindMapsUsageSink(bumpMapsUsage);
 
 export function commuteRushEnabled() {
   return isCommuteRushEnabled(settingKey("commuteRushEnabled"));
+}
+
+export function collectCommuteSettings() {
+  const list = listUserIds().map((id) => getSettings(id));
+  list.push(getSettings());
+  return list;
+}
+
+export function settingsForGeoBackfill(preferred) {
+  if (preferred && needsListingGeo(preferred)) return preferred;
+  for (const settings of collectCommuteSettings()) {
+    if (needsListingGeo(settings)) return settings;
+  }
+  return preferred || getSettings();
 }
 
 export function getAdminMapsSettings() {
@@ -1507,10 +1521,8 @@ export function setCachedRoute(fromLat, fromLng, toLat, toLng, distances, rush =
 }
 
 export function listingsNeedingRoute(limit = 40) {
-  const settings = getSettings();
-  const workLat = Number(settings.workLat);
-  const workLng = Number(settings.workLng);
-  if (!(Number(settings.commuteKm) > 0) || !hasWorkPoint(settings)) return [];
+  const jobs = commuteWorkJobs(collectCommuteSettings());
+  if (!jobs.length) return [];
   const rows = db
     .prepare(
       `SELECT post_id, lat, lng FROM listings
@@ -1525,12 +1537,14 @@ export function listingsNeedingRoute(limit = 40) {
   const out = [];
   const wantRush = commuteRushEnabled() && hasGoogleMapsKey();
   for (const row of rows) {
-    const cached = getCachedRoute(row.lat, row.lng, workLat, workLng);
-    if (cached && (!wantRush || (Number.isFinite(cached.rush_am_min) && Number.isFinite(cached.rush_pm_min) && !rushStale(cached.rush_updated_at)))) {
-      continue;
+    for (const job of jobs) {
+      const cached = getCachedRoute(row.lat, row.lng, job.workLat, job.workLng);
+      if (cached && (!wantRush || (Number.isFinite(cached.rush_am_min) && Number.isFinite(cached.rush_pm_min) && !rushStale(cached.rush_updated_at)))) {
+        continue;
+      }
+      out.push({ ...row, workLat: job.workLat, workLng: job.workLng });
+      if (out.length >= limit) return out;
     }
-    out.push(row);
-    if (out.length >= limit) break;
   }
   return out;
 }

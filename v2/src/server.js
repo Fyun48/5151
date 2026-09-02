@@ -35,6 +35,7 @@ import {
   publicSponsorSettings,
   getAdminMapsSettings,
   saveAdminMapsSettings,
+  settingsForGeoBackfill,
 } from "./db.js";
 import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requireAuth, sessionCookie, verifyLogin } from "./auth.js";
 import { boxFromRoadDescription, geocodeAddress, needsListingGeo, hasWorkPoint } from "./geo.js";
@@ -340,6 +341,7 @@ async function ensureWorkCoords() {
 }
 
 function queueGeoBackfill(settings = getSettings()) {
+  settings = settingsForGeoBackfill(settings);
   if (geoBackfillBusy || !needsListingGeo(settings)) return;
   geoBackfillBusy = true;
   (async () => {

@@ -162,6 +162,21 @@ export function needsListingGeo(settings = {}) {
   return commuteOn || hasActiveBoxes(settings.excludeBoxes);
 }
 
+export function commuteWorkJobs(settingsList) {
+  const seen = new Set();
+  const out = [];
+  for (const settings of settingsList || []) {
+    if (!(Number(settings?.commuteKm) > 0) || !hasWorkPoint(settings)) continue;
+    const workLat = Number(settings.workLat);
+    const workLng = Number(settings.workLng);
+    const key = `${workLat},${workLng}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ workLat, workLng, commuteKm: Number(settings.commuteKm) });
+  }
+  return out;
+}
+
 export function districtsNearBoxes(boxes) {
   const active = normalizeBoxes(boxes).filter((box) => box.enabled !== false);
   if (!active.length) return [];
