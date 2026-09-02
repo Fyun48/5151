@@ -224,5 +224,7 @@ test("MRT toggle and guest tour are in the page", () => {
   assert.match(html, /GUEST_TOUR_STEPS/);
   assert.match(html, /function maybeStartGuestTour/);
   assert.match(html, /前往註冊/);
+  assert.match(html, /#listHeadSticky/);
+  assert.match(html, /\$\("showMrt"\)\?\.addEventListener\("change"/);
   assert.equal(html.includes('showMrt: $("showMrt") ? $("showMrt").checked : true'), true);
 });

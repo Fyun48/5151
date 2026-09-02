@@ -1541,7 +1541,7 @@
       { target: "[data-tour=mrt]", title: "第 4／7 步", text: "最近捷運站的走路與騎車距離可以開關。示範模式看得到效果，註冊後才能自己開啟或關閉。" },
       { target: "[data-tour=notify]", title: "第 5／7 步", text: "站內、Webhook、郵件通知現在不能改。成為會員後才能決定哪些物件更新要通知你。" },
       { target: "[data-tour=profiles]", title: "第 6／7 步", text: "設定檔的儲存、另存與刪除也鎖定中。註冊後最多可存 3 組自己的條件。" },
-      { target: "[data-tour=list]", title: "第 7／7 步", text: "已瀏覽、特別關注與隱藏要登入才寫得進去。按「前往註冊」就能開始用這些功能。" },
+      { target: "#listHeadSticky", title: "第 7／7 步", text: "已瀏覽、特別關注與隱藏要登入才寫得進去。按「前往註冊」就能開始用這些功能。" },
     ];
     let guestTourIndex = 0;
     let guestTourTimer = 0;
@@ -1587,7 +1587,7 @@
       $("guestTourStep").textContent = step.title;
       $("guestTourText").textContent = step.text;
       $("guestTourNext").textContent = last ? "前往註冊" : "下一步";
-      if (step.target === "[data-tour=list]" || step.target === "[data-tour=notify]" || step.target === "[data-tour=mrt]") {
+      if (step.target === "#listHeadSticky" || step.target === "[data-tour=notify]" || step.target === "[data-tour=mrt]") {
         document.querySelector(step.target)?.scrollIntoView({ block: "center", behavior: "smooth" });
       }
       window.requestAnimationFrame(() => placeGuestTour(step));
@@ -2297,7 +2297,8 @@
       renderStats(data.stats);
       renderDistrictChips(settings);
       // 伺服器已依行政區／整層／1F 篩過再排序截取；前端再套一次防呆
-      renderList(applyListView(data.listings), data.stats);
+      lastStats = data.stats || {};
+      renderList(applyListView(data.listings), lastStats);
     }
 
     async function loadState() {
@@ -2675,6 +2676,14 @@
     $("expandPanelBtn").onclick = () => setPanelCollapsed(false);
     $("filterMiniBtn").onclick = () => setFilterCompact(true);
     $("filterRestoreBtn").onclick = () => setFilterCompact(false);
+    $("showMrt")?.addEventListener("change", () => {
+      if (isGuest) {
+        $("showMrt").checked = settings.showMrt !== false;
+        return;
+      }
+      settings.showMrt = $("showMrt").checked;
+      renderList(listCache, lastStats);
+    });
     $("wholeFloorOnly").onchange = () => {
       persistViewFilters();
       loadList();
