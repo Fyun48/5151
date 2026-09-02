@@ -1,3 +1,4 @@
+import { APP_NAME } from "./brand.js";
 import { execFile } from "node:child_process";
 import { commuteModeLabel } from "./geo.js";
 import { passesDisplayFilters, housingTypeLabel } from "./floors.js";
@@ -357,7 +358,7 @@ export async function notify(settings, events, {
   if (!dock.length && !hook.length && !mail.length) return;
   if (hook.length) {
     try {
-      await postDiscord(settings.discordWebhook, `591 有 ${hook.length} 則更新`, hook);
+      await postDiscord(settings.discordWebhook, `${APP_NAME}有 ${hook.length} 則更新`, hook);
     } catch {
       // Discord 失敗不中斷追蹤
     }

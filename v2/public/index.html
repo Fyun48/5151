@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="/vendor/leaflet/leaflet.css" />
-  <title>591 物件追蹤</title>
+  <title>吉比租房物件追蹤</title>
   <style>
     :root {
       --bg: #f3f7f9;
@@ -885,8 +885,7 @@
   <header>
     <div class="header-main">
       <div>
-        <h1>591 物件追蹤 <span class="sub">v2 開發版</span></h1>
-        <div class="sub">與線上版分開的資料庫 · 新物件與特別關注變更通知</div>
+        <h1>吉比租房物件追蹤</h1>
       </div>
       <div class="row">
         <span class="who" id="who"></span>
@@ -1193,7 +1192,7 @@
           </div>
           <div>
             <label>寄件名稱</label>
-            <input id="memberSmtpFromName" placeholder="591 物件追蹤" />
+            <input id="memberSmtpFromName" placeholder="吉比租房物件追蹤" />
           </div>
         </div>
         <label class="checks"><input type="checkbox" id="memberSmtpSecure" /> 使用 TLS／SMTPS（465 會自動勾）</label>
@@ -2091,7 +2090,7 @@
         $("memberSmtpPass").placeholder = smtp.passSet ? "已設定，空白則保留" : "SMTP 密碼或 Gmail 應用程式密碼";
       }
       if ($("memberSmtpFrom")) $("memberSmtpFrom").value = smtp.from || meEmail || "";
-      if ($("memberSmtpFromName")) $("memberSmtpFromName").value = smtp.fromName || "591 物件追蹤";
+      if ($("memberSmtpFromName")) $("memberSmtpFromName").value = smtp.fromName || "吉比租房物件追蹤";
       if ($("memberSmtpSecure")) $("memberSmtpSecure").checked = Boolean(smtp.secure);
       const tpl = data.templates?.listing_notify || {};
       if ($("memberMailSubject")) $("memberMailSubject").value = tpl.subject || "";
@@ -3037,15 +3036,15 @@
     $("mailPreset")?.addEventListener("change", () => {
       const bodies = {
         concise: {
-          subject: "591 物件追蹤：{{event}} {{title}}",
+          subject: "吉比租房物件追蹤：{{event}} {{title}}",
           text: "{{event}}\n{{title}}\n{{url}}\n",
         },
         detailed: {
-          subject: "591 物件追蹤：{{event}} {{title}}",
-          text: "{{event}}\n\n{{title}}\n{{price}}\n{{facts}}\n\n{{url}}\n\n——591 物件追蹤\n",
+          subject: "吉比租房物件追蹤：{{event}} {{title}}",
+          text: "{{event}}\n\n{{title}}\n{{price}}\n{{facts}}\n\n{{url}}\n\n——吉比租房物件追蹤\n",
         },
         facts: {
-          subject: "591 物件追蹤：{{event}} {{title}}",
+          subject: "吉比租房物件追蹤：{{event}} {{title}}",
           text: "{{event}} · {{title}}\n{{price}}\n{{facts}}\n{{url}}\n",
         },
       };

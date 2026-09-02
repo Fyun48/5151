@@ -22,7 +22,7 @@ test("parseSmtpReply reads multiline EHLO replies", () => {
 
 test("rfc822 encodes subject and dots the payload", () => {
   const msg = buildRfc822({
-    from: formatFrom("bot@example.com", "591 物件追蹤"),
+    from: formatFrom("bot@example.com", "吉比租房物件追蹤"),
     to: "user@example.com",
     subject: "臨時密碼",
     text: "第一行\n.hidden\n第三行",

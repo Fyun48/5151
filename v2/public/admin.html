@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>後台管理 · 591 物件追蹤</title>
+  <title>後台管理 · 吉比租房物件追蹤</title>
   <style>
     :root {
       --bg: #f3f7f9;
@@ -215,7 +215,7 @@
           </div>
           <div>
             <label>寄件名稱</label>
-            <input id="smtpFromName" placeholder="591 物件追蹤" />
+            <input id="smtpFromName" placeholder="吉比租房物件追蹤" />
           </div>
         </div>
         <label class="checks"><input type="checkbox" id="smtpSecure" /> 使用 TLS／SMTPS（465 會自動勾）</label>
@@ -314,7 +314,7 @@
       $("smtpPass").value = "";
       $("smtpPass").placeholder = smtp.passSet ? "已設定，空白則保留" : "SMTP 密碼";
       $("smtpFrom").value = smtp.from || "";
-      $("smtpFromName").value = smtp.fromName || "591 物件追蹤";
+      $("smtpFromName").value = smtp.fromName || "吉比租房物件追蹤";
       $("smtpSecure").checked = Boolean(smtp.secure);
       const tpl = data.templates || {};
       $("forgotSubject").value = tpl.forgot_password?.subject || "";

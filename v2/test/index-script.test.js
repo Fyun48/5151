@@ -215,6 +215,18 @@ test("example work address and exclusive commute modes", () => {
   assert.match(html, /commuteMode: selectedCommuteMode\("commuteMode"\)/);
 });
 
+test("product name is 吉比租房物件追蹤 without v2 開發版 copy", () => {
+  const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
+  const login = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/login.html"), "utf8");
+  assert.match(html, /<title>吉比租房物件追蹤<\/title>/);
+  assert.match(html, /<h1>吉比租房物件追蹤<\/h1>/);
+  assert.equal(html.includes("v2 開發版"), false);
+  assert.equal(html.includes("與線上版分開的資料庫"), false);
+  assert.match(login, /<h1>吉比租房物件追蹤<\/h1>/);
+  assert.equal(login.includes("v2 開發版"), false);
+  assert.equal(login.includes("資料與線上版分開"), false);
+});
+
 test("MRT toggle and guest tour are in the page", () => {
   const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
   assert.match(html, /id="showMrt"/);

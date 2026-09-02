@@ -1,3 +1,5 @@
+import { APP_NAME } from "./brand.js";
+
 /** 全站 SMTP 與信件樣板：管理員後台可改，寫入 settings 與 auth.env。 */
 
 export const SMTP_ENV_KEYS = [
@@ -13,10 +15,10 @@ export const SMTP_ENV_KEYS = [
 export function defaultMailTemplates() {
   return {
     forgot_password: {
-      subject: "591 物件追蹤：你的臨時密碼",
+      subject: `${APP_NAME}：你的臨時密碼`,
       text: `你好，
 
-有人用這個信箱申請 591 物件追蹤的臨時密碼。
+有人用這個信箱申請 ${APP_NAME} 的臨時密碼。
 
 臨時密碼：
 {{tempPassword}}
@@ -25,11 +27,11 @@ export function defaultMailTemplates() {
 
 若你沒有申請，也請立刻用這組密碼登入，並再申請一組新的臨時密碼。
 
-——591 物件追蹤
+——${APP_NAME}
 `,
     },
     listing_notify: {
-      subject: "591 物件追蹤：{{event}} {{title}}",
+      subject: `${APP_NAME}：{{event}} {{title}}`,
       text: `{{event}}
 
 {{title}}
@@ -38,7 +40,7 @@ export function defaultMailTemplates() {
 
 {{url}}
 
-——591 物件追蹤
+——${APP_NAME}
 `,
     },
   };
@@ -81,7 +83,7 @@ export function normalizeSmtp(input = {}, previous = {}) {
   const keepPrevious = !submitted || submitted === "(unchanged)";
   const pass = keepPrevious ? String(prev.pass || "") : submitted.slice(0, 400);
   const from = String(src.from ?? prev.from ?? "").trim().slice(0, 200);
-  const fromName = String(src.fromName ?? prev.fromName ?? "591 物件追蹤").trim().slice(0, 80) || "591 物件追蹤";
+  const fromName = String(src.fromName ?? prev.fromName ?? APP_NAME).trim().slice(0, 80) || APP_NAME;
   const secureFlag = src.secure;
   const secure = secureFlag === true || secureFlag === "1" || String(secureFlag).toLowerCase() === "true" || port === 465;
   return { host, port, user, pass, from, fromName, secure };
@@ -95,7 +97,7 @@ export function publicSmtp(config) {
     user: String(row.user || ""),
     passSet: Boolean(String(row.pass || "")),
     from: String(row.from || ""),
-    fromName: String(row.fromName || "591 物件追蹤"),
+    fromName: String(row.fromName || APP_NAME),
     secure: Boolean(row.secure),
   };
 }
@@ -132,7 +134,7 @@ export function smtpFromEnv(env = process.env) {
     user: String(env.SMTP_USER || "").trim(),
     pass: String(env.SMTP_PASS || ""),
     from,
-    fromName: String(env.SMTP_FROM_NAME || "591 物件追蹤").trim(),
+    fromName: String(env.SMTP_FROM_NAME || APP_NAME).trim(),
     secure: secureFlag === "1" || secureFlag.toLowerCase() === "true" || port === 465,
   });
 }
@@ -204,7 +206,7 @@ export function composeListingNotifyMail(templates, items) {
   });
   if (rendered.length === 1) return rendered[0];
   return {
-    subject: `591 物件追蹤：${rendered.length} 則更新`.slice(0, 180),
+    subject: `${APP_NAME}：${rendered.length} 則更新`.slice(0, 180),
     text: rendered.map((row) => [row.subject, row.text].filter(Boolean).join("\n\n")).join("\n\n----------\n\n"),
   };
 }
