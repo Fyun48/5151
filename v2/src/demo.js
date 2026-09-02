@@ -75,6 +75,7 @@ export function publicDemoSettings(settings = {}) {
     notifyMatrix: settings.notifyMatrix || {},
     ...demoCommutePatch(),
     commuteMode: settings.commuteMode === "car" ? "car" : "scooter",
+    showMrt: settings.showMrt !== false,
     settingProfiles: Array.isArray(settings.settingProfiles)
       ? settings.settingProfiles.map((item) => ({ id: item.id, name: item.name }))
       : [],

@@ -214,3 +214,18 @@ test("example work address and exclusive commute modes", () => {
   assert.match(html, /function setCommuteMode/);
   assert.match(html, /commuteMode: selectedCommuteMode\("commuteMode"\)/);
 });
+
+test("MRT toggle and guest tour are in the page", () => {
+  const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
+  assert.match(html, /id="showMrt"/);
+  assert.match(html, /顯示最近捷運站走路／騎車距離/);
+  assert.match(html, /function mrtText/);
+  assert.match(html, /id="guestTour"/);
+  assert.match(html, /GUEST_TOUR_STEPS/);
+  assert.match(html, /function maybeStartGuestTour/);
+  assert.match(html, /前往註冊/);
+  assert.match(html, /#listHeadSticky/);
+  assert.match(html, /behavior: "instant"/);
+  assert.match(html, /\$\("showMrt"\)\?\.addEventListener\("change"/);
+  assert.equal(html.includes('showMrt: $("showMrt") ? $("showMrt").checked : true'), true);
+});

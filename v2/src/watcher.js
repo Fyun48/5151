@@ -24,6 +24,8 @@ import {
   db,
   saveSettings,
   setCachedRoute,
+  setCachedMrt,
+  listingsNeedingMrt,
   commuteRushEnabled,
   collectCommuteSettings,
   setCommunityCache,
@@ -39,6 +41,7 @@ import { commuteWorkJobs, hasWorkPoint, needsListingGeo, normalizeCommuteMode } 
 import { isTrustedGeoSource, listingCommunityId } from "./location.js";
 import { decideNotifyDelivery } from "./floors.js";
 import { fetchRoadRoutes, fetchRushRoadRoutes } from "./route.js";
+import { fetchMrtAccess } from "./mrt.js";
 import { hasGoogleMapsKey } from "./mapsBilling.js";
 import { bestMatch } from "./match.js";
 import { classifyExistingUpdate, eventLabel, listingLastEvent, notify, shouldDockNotify, shouldMailNotify, shouldNotify, shouldWebhookNotify } from "./notify.js";
@@ -538,6 +541,22 @@ export async function backfillListingRoutes(settings = getSettings(), { limit = 
           await new Promise((resolve) => setTimeout(resolve, 400 * (tryNo + 1)));
         }
       }
+    }
+  }
+  return { attempted, located };
+}
+
+export async function backfillListingMrt({ limit = 20 } = {}) {
+  const rows = listingsNeedingMrt(limit);
+  if (!rows.length) return { attempted: 0, located: 0 };
+  let attempted = 0;
+  let located = 0;
+  for (const row of rows) {
+    attempted += 1;
+    const access = await fetchMrtAccess(row.lat, row.lng);
+    if (access?.station) {
+      setCachedMrt(row.lat, row.lng, access);
+      located += 1;
     }
   }
   return { attempted, located };
