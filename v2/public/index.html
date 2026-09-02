@@ -23,6 +23,10 @@
       --watch: #b87a7a;
       --new: #0a8280;
       --same: #8b7fd4;
+      --hermes: #E65326;
+      --hermes-deep: #C2410C;
+      --hermes-light: #F47A2A;
+      --shezi-red: #DC2626;
     }
     * { box-sizing: border-box; }
     body {
@@ -66,8 +70,34 @@
     }
     .mrt-line {
       margin-top: 6px;
-      color: var(--accent-deep);
+      color: var(--muted);
       font-size: 13px;
+    }
+    .mrt-chip {
+      display: inline-block;
+      padding: 1px 7px;
+      border: 1px solid var(--hermes);
+      border-radius: 4px;
+      background: #fff;
+      color: var(--hermes);
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.5;
+      letter-spacing: .02em;
+      vertical-align: baseline;
+    }
+    .route-chip {
+      display: inline-block;
+      margin-left: 6px;
+      padding: 3px 10px;
+      border-radius: 6px;
+      background: linear-gradient(90deg, var(--hermes-deep) 0%, var(--hermes) 55%, var(--hermes-light) 100%);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .04em;
+      line-height: 1.45;
+      vertical-align: baseline;
     }
     .guest-tour {
       position: fixed;
@@ -432,6 +462,14 @@
       align-items: start;
     }
     .item.picked { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(13, 165, 160, 0.12); }
+    .item.shezidao {
+      border: 2px solid var(--shezi-red);
+      box-shadow: 0 0 0 1px rgba(220, 38, 38, 0.18);
+    }
+    .item.picked.shezidao {
+      border-color: var(--shezi-red);
+      box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.16);
+    }
     .pick { margin-top: 8px; width: 18px; height: 18px; accent-color: var(--accent); }
     .item-cover img, .item-cover {
       width: 132px;
@@ -1519,47 +1557,65 @@
         el.checked = el.value === value;
       });
     }
+    function routeChip(text) {
+      return `<span class="route-chip">${esc(text)}</span>`;
+    }
     function commuteText(item) {
       const label = commuteModeLabel(item.commute_mode || settings.commuteMode);
       if (item.commute_km != null) {
         const am = Number(item.commute_min_am);
         const pm = Number(item.commute_min_pm);
         if (Number.isFinite(am) && Number.isFinite(pm)) {
-          return ` · ${label} ${item.commute_km} 公里 · 上 ${Math.round(am)} 分 · 下 ${Math.round(pm)} 分`;
+          return routeChip(`${label} ${item.commute_km} 公里 · 上 ${Math.round(am)} 分 · 下 ${Math.round(pm)} 分`);
         }
         const routes = Array.isArray(item.commute_routes) ? item.commute_routes.filter((n) => Number.isFinite(Number(n))) : [];
         const extra = routes.length > 1 ? `（${routes.map((n) => `${n}`).join(" / ")} 公里）` : "";
-        return ` · ${label}路線約 ${item.commute_km} 公里${extra}`;
+        return routeChip(`${label}路線約 ${item.commute_km} 公里${extra}`);
       }
       if (isGuest || !commuteOn()) return "";
       const src = String(item.geo_source || "");
       const hasPin = Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lng)) && (src === "591" || src === "community");
-      return hasPin ? ` · ${label}路線計算中` : " · 尚未取得地圖座標";
+      return hasPin ? ` · ${esc(label)}路線計算中` : " · 尚未取得地圖座標";
     }
 
     function mrtOn(s = settings) {
       return s.showMrt !== false;
     }
+    function mrtChip(name) {
+      return `<span class="mrt-chip">${esc(name)}</span>`;
+    }
     function mrtText(item) {
       if (!mrtOn()) return "";
       const name = String(item.mrt_station || "").trim();
       if (name) {
-        const bits = [`捷運${name.replace(/站$/, "")}站`];
+        const bits = [mrtChip(`捷運${name.replace(/站$/, "")}站`)];
         const walkKm = Number(item.mrt_walk_km);
         const walkMin = Number(item.mrt_walk_min);
         const rideKm = Number(item.mrt_ride_km);
         const rideMin = Number(item.mrt_ride_min);
         if (Number.isFinite(walkKm) && walkKm > 0) {
-          bits.push(Number.isFinite(walkMin) ? `走路 ${walkKm} 公里（${walkMin} 分）` : `走路 ${walkKm} 公里`);
+          bits.push(Number.isFinite(walkMin) ? `走路 ${esc(walkKm)} 公里（${esc(walkMin)} 分）` : `走路 ${esc(walkKm)} 公里`);
         }
         if (Number.isFinite(rideKm) && rideKm > 0) {
-          bits.push(Number.isFinite(rideMin) ? `騎車 ${rideKm} 公里（${rideMin} 分）` : `騎車 ${rideKm} 公里`);
+          bits.push(Number.isFinite(rideMin) ? `騎車 ${esc(rideKm)} 公里（${esc(rideMin)} 分）` : `騎車 ${esc(rideKm)} 公里`);
         }
         return bits.join(" · ");
       }
       const src = String(item.geo_source || "");
       const hasPin = Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lng)) && (src === "591" || src === "community");
       return hasPin ? "捷運距離計算中" : "";
+    }
+
+    function isAcefengyunAdmin() {
+      return Boolean(meIsAdmin && /acefengyun/i.test(meEmail || ""));
+    }
+    function isShezidaoAddress(address) {
+      const s = String(address || "");
+      if (/社子島|社之島/.test(s)) return true;
+      if (/延平北路(六|七|八|九|[6-9])段/.test(s)) return true;
+      if (/社子街|社子.{0,8}街/.test(s)) return true;
+      if (/社中街|社正路|永平街|倫等街|富安街/.test(s)) return true;
+      return false;
     }
 
     function commuteOn(s = settings) {
@@ -2537,7 +2593,7 @@
         const id = String(item.post_id);
         const on = selected.has(id);
         return `
-        <article class="item ${on ? "picked" : ""} ${item.offline ? "offline" : ""}" data-card="${id}">
+        <article class="item ${on ? "picked" : ""} ${item.offline ? "offline" : ""} ${isAcefengyunAdmin() && isShezidaoAddress(item.address) ? "shezidao" : ""}" data-card="${id}">
           <input class="pick" type="checkbox" data-pick="${id}" ${on ? "checked" : ""} />
           <a class="item-cover" href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-open="${id}">
             <img src="${esc(item.cover || "")}" alt="" />
@@ -2552,7 +2608,7 @@
             <div class="meta">
               租金 ${item.price || ""} ${item.price_unit || "元/月"} · ${item.kind_name || ""} · ${item.layout || ""} · ${item.area_name || ""} · ${item.floor_name || ""}
               <br>${esc(item.address || "")}${commuteText(item)}${offlineLine(item)}
-              ${mrtText(item) ? `<div class="mrt-line">${esc(mrtText(item))}</div>` : ""}
+              ${mrtText(item) ? `<div class="mrt-line">${mrtText(item)}</div>` : ""}
               ${item.match_detail ? `<br>比對：${esc(item.match_detail)}${item.match_post_id ? ` · <a href="${listingUrl(item.match_post_id)}" target="_blank" rel="noopener noreferrer">舊刊登 #${item.match_post_id}</a>` : ""}` : ""}
             </div>
             ${(() => {
