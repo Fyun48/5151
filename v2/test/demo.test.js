@@ -5,9 +5,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { publicPath } from "../src/auth.js";
 import {
-  applyLegacyDemoCommute,
   buildDemoState,
   DEMO_COMMUTE_KM,
+  DEMO_COMMUTE_MODE,
   DEMO_WORK_ADDRESS,
   demoSourceUserId,
   GUEST_LIST_LIMIT,
@@ -65,13 +65,14 @@ test("public demo settings strip webhooks and exclusion lists", () => {
   assert.deepEqual(pub.watchDistricts, ["1-8", "1-5"]);
   assert.equal(pub.workAddress, DEMO_WORK_ADDRESS);
   assert.equal(pub.commuteKm, DEMO_COMMUTE_KM);
-  assert.equal(pub.commuteMode, "car");
+  assert.equal(pub.commuteMode, DEMO_COMMUTE_MODE);
   assert.equal(pub.showMrt, true);
   assert.deepEqual(pub.excludeKeywords, []);
   assert.deepEqual(pub.excludeAgents, []);
   assert.deepEqual(pub.excludeBoxes, []);
   assert.equal(pub.discordWebhook, "");
-  assert.deepEqual(pub.settingProfiles, [{ id: "p-1", name: "上班" }]);
+  assert.deepEqual(pub.settingProfiles, []);
+  assert.equal(pub.activeProfileId, "");
   assert.equal(JSON.stringify(pub).includes("webhook/secret"), false);
 });
 
@@ -108,23 +109,41 @@ test("buildDemoState is read-only and caps the guest list", () => {
   const listQuery = calls.find((row) => row[0] === "list")[1];
   assert.equal(listQuery.settings.workAddress, DEMO_WORK_ADDRESS);
   assert.equal(listQuery.settings.commuteKm, DEMO_COMMUTE_KM);
+  assert.equal(listQuery.settings.commuteMode, DEMO_COMMUTE_MODE);
 });
 
-test("legacy 士林 example commute becomes 南港 25 km", () => {
-  const next = applyLegacyDemoCommute({
+test("guest commute template ignores the source member work address", () => {
+  const member = {
+    watchDistricts: ["1-8"],
     workAddress: "台北市士林區德行西路7號",
     commuteKm: 13,
-    workLat: 25.1,
-    workLng: 121.5,
+    commuteMode: "car",
+    workLat: 25.106,
+    workLng: 121.524,
+    settingProfiles: [{ id: "p-1", name: "士林北投" }],
+    activeProfileId: "p-1",
+  };
+  const pub = publicDemoSettings(member);
+  assert.equal(pub.workAddress, DEMO_WORK_ADDRESS);
+  assert.equal(pub.commuteKm, DEMO_COMMUTE_KM);
+  assert.equal(pub.commuteMode, DEMO_COMMUTE_MODE);
+  assert.deepEqual(pub.settingProfiles, []);
+  const listed = [];
+  const state = buildDemoState({
+    listUserIds: () => [1],
+    getSettings: () => member,
+    defaultUserId: () => 1,
+    listListings: (query) => {
+      listed.push(query);
+      return { listings: [], totalMatched: 0 };
+    },
   });
-  assert.equal(next.workAddress, DEMO_WORK_ADDRESS);
-  assert.equal(next.commuteKm, DEMO_COMMUTE_KM);
-  const kept = applyLegacyDemoCommute({
-    workAddress: "新北市淡水區淡金路二段173號",
-    commuteKm: 12,
-  });
-  assert.equal(kept.workAddress, "新北市淡水區淡金路二段173號");
-  assert.equal(kept.commuteKm, 12);
+  assert.equal(state.settings.workAddress, DEMO_WORK_ADDRESS);
+  assert.equal(state.settings.commuteKm, DEMO_COMMUTE_KM);
+  assert.equal(listed[0].settings.workAddress, DEMO_WORK_ADDRESS);
+  assert.notEqual(listed[0].settings.workAddress, member.workAddress);
+  assert.equal(listed[0].settings.commuteKm, DEMO_COMMUTE_KM);
+  assert.notEqual(listed[0].settings.commuteKm, member.commuteKm);
 });
 
 test("demo API is a public path and is rate-limited per IP", () => {

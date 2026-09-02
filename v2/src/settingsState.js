@@ -1,5 +1,4 @@
 import { buildSearchUrls, districtsFromSearchUrls, normalizeWatchDistricts, priceFromSearchUrls } from "./regions.js";
-import { applyLegacyDemoCommute } from "./demo.js";
 import { normalizeBoxes, normalizeCommuteMode, normalizeKeywords, parseWorkCoord } from "./geo.js";
 import { normalizeNotifyMatrix } from "./notifyMatrix.js";
 
@@ -176,7 +175,6 @@ export function hydrateSettings(stored, defaults, { admin = false, plan = "free"
   }
   next.notifyMatrix = normalizeNotifyMatrix(next);
   next.commuteMode = normalizeCommuteMode(next.commuteMode);
-  Object.assign(next, applyLegacyDemoCommute(next));
   return next;
 }
 
@@ -260,7 +258,6 @@ export function applySettingPatch(current, partial = {}, { admin = false, plan =
   if (next.activeProfileId && !next.settingProfiles.some((item) => item.id === next.activeProfileId)) {
     next.activeProfileId = "";
   }
-  Object.assign(next, applyLegacyDemoCommute(next));
   const fullFormSave = Object.prototype.hasOwnProperty.call(patch, "watchDistricts");
   if (fullFormSave && next.activeProfileId) {
     next.settingProfiles = next.settingProfiles.map((profile) =>
