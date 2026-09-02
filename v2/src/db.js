@@ -67,6 +67,12 @@ import {
   smtpFromEnv,
 } from "./siteMail.js";
 import {
+  listingMailPresetById,
+  normalizeMemberMailTemplates,
+  publicMemberMail,
+  smtpReady,
+} from "./memberMail.js";
+import {
   normalizeSponsorConfig,
   publicSponsorOffer,
   sponsorCatalog,
@@ -563,6 +569,75 @@ export function applyStoredSmtp() {
   return smtp;
 }
 
+function userSettingKey(userId, key) {
+  const uid = Number(userId) || 0;
+  if (!uid) return undefined;
+  const row = db.prepare("SELECT value FROM user_settings WHERE user_id = ? AND key = ?").get(uid, key);
+  if (!row) return undefined;
+  try {
+    return JSON.parse(row.value);
+  } catch {
+    return undefined;
+  }
+}
+
+function writeUserSettingKey(userId, key, value) {
+  const uid = Number(userId) || 0;
+  if (!uid) return;
+  db.prepare(
+    "INSERT INTO user_settings(user_id, key, value) VALUES (?, ?, ?) ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value",
+  ).run(uid, key, JSON.stringify(value));
+}
+
+export function getMemberSmtp(userId) {
+  return normalizeSmtp(userSettingKey(userId, "memberSmtp") || {});
+}
+
+export function getMemberMailSettings(userId) {
+  const smtp = getMemberSmtp(userId);
+  const templates = normalizeMemberMailTemplates(userSettingKey(userId, "memberMailTemplates"));
+  const preset = String(userSettingKey(userId, "mailPreset") || "detailed");
+  return publicMemberMail(smtp, templates, preset);
+}
+
+export function getMemberMailBundle(userId) {
+  const smtp = getMemberSmtp(userId);
+  const templates = normalizeMemberMailTemplates(userSettingKey(userId, "memberMailTemplates"));
+  const siteTemplates = getMailTemplates();
+  const ready = smtpReady(smtp);
+  return {
+    smtp: ready ? smtp : null,
+    templates: {
+      listing_notify: templates.listing_notify || siteTemplates.listing_notify,
+    },
+    configured: ready,
+  };
+}
+
+export function saveMemberMailSettings(userId, partial = {}) {
+  const uid = Number(userId) || 0;
+  if (!uid) {
+    const err = new Error("請先登入");
+    err.status = 401;
+    throw err;
+  }
+  const src = partial && typeof partial === "object" ? partial : {};
+  if (src.smtp && typeof src.smtp === "object") {
+    writeUserSettingKey(uid, "memberSmtp", normalizeSmtp(src.smtp, getMemberSmtp(uid)));
+  }
+  if (src.templates && typeof src.templates === "object") {
+    writeUserSettingKey(uid, "memberMailTemplates", normalizeMemberMailTemplates(src.templates));
+  }
+  if (Object.prototype.hasOwnProperty.call(src, "preset")) {
+    const preset = listingMailPresetById(src.preset);
+    writeUserSettingKey(uid, "mailPreset", preset.id);
+    if (!src.templates) {
+      writeUserSettingKey(uid, "memberMailTemplates", normalizeMemberMailTemplates(preset));
+    }
+  }
+  return getMemberMailSettings(uid);
+}
+
 export function getSponsorConfig() {
   return normalizeSponsorConfig(settingKey("sponsorLinks"));
 }
@@ -670,6 +745,9 @@ function omitSiteMail(stored) {
   delete next.smtp;
   delete next.mailTemplates;
   delete next.sponsorLinks;
+  delete next.memberSmtp;
+  delete next.memberMailTemplates;
+  delete next.mailPreset;
   return next;
 }
 
@@ -709,7 +787,14 @@ export function saveSettings(partial, userId, { forceAdmin = false } = {}) {
   try {
     for (const [key, value] of Object.entries(next)) {
       if (value === undefined) continue;
-      if (key === "smtp" || key === "mailTemplates" || key === "sponsorLinks") continue;
+      if (
+        key === "smtp"
+        || key === "mailTemplates"
+        || key === "sponsorLinks"
+        || key === "memberSmtp"
+        || key === "memberMailTemplates"
+        || key === "mailPreset"
+      ) continue;
       const encoded = JSON.stringify(value);
       if (SITE_SETTING_KEYS.has(key)) globalUpsert.run(key, encoded);
       else userUpsert.run(uid, key, encoded);

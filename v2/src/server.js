@@ -37,6 +37,9 @@ import {
   getAdminMapsSettings,
   saveAdminMapsSettings,
   settingsForGeoBackfill,
+  getMemberMailSettings,
+  getMemberSmtp,
+  saveMemberMailSettings,
 } from "./db.js";
 import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requireAuth, sessionCookie, verifyLogin } from "./auth.js";
 import { boxFromRoadDescription, geocodeAddress, needsListingGeo, hasWorkPoint } from "./geo.js";
@@ -455,6 +458,47 @@ app.get("/api/settings", (req, res) => {
     res.json({ settings: getSettings(actorUserId(req)), cities: CITIES });
   } catch (error) {
     res.status(500).json({ error: error.message || "讀取設定失敗" });
+  }
+});
+
+app.get("/api/member-mail", (req, res) => {
+  try {
+    res.json(getMemberMailSettings(actorUserId(req)));
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "讀取郵件設定失敗" });
+  }
+});
+
+app.post("/api/member-mail", (req, res) => {
+  try {
+    res.json(saveMemberMailSettings(actorUserId(req), req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message || "儲存郵件設定失敗" });
+  }
+});
+
+app.post("/api/member-mail/test", async (req, res) => {
+  try {
+    const uid = actorUserId(req);
+    const session = readSession(req);
+    const to = String(req.body?.to || session?.email || "").trim();
+    if (!to) throw Object.assign(new Error("請先登入並確認信箱"), { status: 400 });
+    if (req.body?.smtp && typeof req.body.smtp === "object") {
+      saveMemberMailSettings(uid, { smtp: req.body.smtp });
+    }
+    const smtp = getMemberSmtp(uid);
+    if (!mailConfigured(smtp)) {
+      throw Object.assign(new Error("請先填 SMTP 主機、帳號與寄件 Email"), { status: 400 });
+    }
+    await sendMail({
+      to,
+      smtp,
+      subject: "591 物件追蹤：測試信",
+      text: `這是用你自己的 SMTP 寄到 ${to} 的測試信。若你看得到這封，物件通知就可以用同一組設定寄給你。\n\n——591 物件追蹤\n`,
+    });
+    res.json({ ok: true, to });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message || "寄測試信失敗" });
   }
 });
 

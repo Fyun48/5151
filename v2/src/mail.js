@@ -5,12 +5,6 @@ import tls from "node:tls";
 const READ_MS = 20_000;
 const CONNECT_MS = 20_000;
 
-export function mailConfigured() {
-  const host = String(process.env.SMTP_HOST || "").trim();
-  const from = String(process.env.SMTP_FROM || process.env.SMTP_USER || "").trim();
-  return Boolean(host && from);
-}
-
 export function smtpConfig() {
   const host = String(process.env.SMTP_HOST || "").trim();
   const port = Number(process.env.SMTP_PORT || 587) || 587;
@@ -21,6 +15,32 @@ export function smtpConfig() {
   const secureFlag = String(process.env.SMTP_SECURE || "").trim();
   const secure = secureFlag === "1" || secureFlag.toLowerCase() === "true" || port === 465;
   return { host, port, user, pass, from, fromName, secure };
+}
+
+export function smtpConfigFrom(override) {
+  if (!override || typeof override !== "object") return smtpConfig();
+  const host = String(override.host || "").trim();
+  if (!host) return smtpConfig();
+  const port = Number(override.port || 587) || 587;
+  const user = String(override.user || "").trim();
+  const from = String(override.from || user).trim();
+  const fromName = String(override.fromName || "591 物件追蹤").trim();
+  const secureFlag = override.secure;
+  const secure = secureFlag === true || secureFlag === "1" || String(secureFlag).toLowerCase() === "true" || port === 465;
+  return {
+    host,
+    port,
+    user,
+    pass: String(override.pass || ""),
+    from,
+    fromName,
+    secure,
+  };
+}
+
+export function mailConfigured(override) {
+  const cfg = override && typeof override === "object" ? smtpConfigFrom(override) : smtpConfig();
+  return Boolean(cfg.host && cfg.from);
 }
 
 export function extractAddress(value) {
@@ -285,14 +305,20 @@ export async function smtpSend(config, { to, subject, text }) {
   }
 }
 
-export async function sendMail({ to, subject, text }) {
-  if (!mailConfigured()) {
-    const err = new Error("尚未設定寄信，請聯絡管理員在伺服器 auth.env 寫入 SMTP 設定");
+export async function sendMail({ to, subject, text, smtp } = {}) {
+  const usingMember = Boolean(smtp && typeof smtp === "object" && String(smtp.host || "").trim());
+  const config = usingMember ? smtpConfigFrom(smtp) : smtpConfig();
+  if (!config.host || !config.from) {
+    const err = new Error(
+      usingMember
+        ? "請先填完整的 SMTP 主機與寄件 Email"
+        : "尚未設定寄信，請聯絡管理員在伺服器 auth.env 寫入 SMTP 設定",
+    );
     err.status = 503;
     throw err;
   }
   try {
-    await smtpSend(smtpConfig(), { to, subject, text });
+    await smtpSend(config, { to, subject, text });
   } catch (error) {
     if (error.status) throw error;
     console.warn("SMTP 失敗：", error.message);
