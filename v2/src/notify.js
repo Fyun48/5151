@@ -289,7 +289,7 @@ export function formatNotifyCommute(event = {}) {
   const am = Number(event.commute_min_am ?? event.rush_am_min);
   const pm = Number(event.commute_min_pm ?? event.rush_pm_min);
   if (Number.isFinite(am) && Number.isFinite(pm)) {
-    return `${label} ${rounded} 公里 · 上 ${Math.round(am)} 分 · 下 ${Math.round(pm)} 分`;
+    return `${label} ${rounded} 公里 · 上約 ${Math.round(am)} 分 · 下約 ${Math.round(pm)} 分`;
   }
   return `${label}路線約 ${rounded} 公里`;
 }

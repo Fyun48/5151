@@ -146,10 +146,10 @@
     </section>
     <section class="card">
       <h2>通勤路線／Google 計費</h2>
-      <p class="hint">通勤<strong>公里數一律走免費 OpenStreetMap（OSRM）</strong>，同一組座標寫進快取後不會重算。Google Cloud 的「要求次數」含失敗重試，失敗多半不計費，但成功的仍會讓費用摘要往上加。本站只要下面「使用 Google Directions」沒勾，就不會打 Google。若 Google 回 OVER_QUERY_LIMIT／拒絕，本站會熔斷 6 小時，避免背景一直重試。金鑰可以留著，不必去官方停 API。請勿按「關閉並清除金鑰」，除非你真的想把已存金鑰從伺服器刪掉。</p>
+      <p class="hint">通勤<strong>公里數走免費 OpenStreetMap（OSRM）</strong>。上／下班分鐘若快取裡已有（當初 Google 預估存下來的），列表會繼續顯示成「上約ｘ分 · 下約ｘ分」，<strong>不必再開 Google、也不會重查</strong>。同一組物件座標對同一個公司地址只會查一次。沒有金鑰、沒勾選下面「使用 Google Directions」就不會產生新費用。</p>
       <form id="mapsForm">
-        <label class="checks"><input id="googleEnabled" type="checkbox" /> 使用 Google Directions（會計費，預設關閉）</label>
-        <label class="checks"><input id="mapsEnabled" type="checkbox" /> 在物件列表顯示上班／下班尖峰分鐘（需要上面那項）</label>
+        <label class="checks"><input id="googleEnabled" type="checkbox" /> 使用 Google Directions 補還沒有上／下班分鐘的物件（會計費，預設關閉）</label>
+        <label class="checks"><input id="mapsEnabled" type="checkbox" /> 允許補查尚未有紀錄的尖峰分鐘（已有快取的不重查；沒金鑰不會打）</label>
         <label>Google Maps API 金鑰</label>
         <input id="mapsKey" type="password" autocomplete="new-password" placeholder="已設定則可留白" />
         <p class="msg" id="mapsKeyState"></p>

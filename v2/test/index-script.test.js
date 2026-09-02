@@ -123,7 +123,7 @@ test("member profiles cap districts and include usable ping in notify copy", () 
   assert.match(html, /已存 \$\{list\.length\}／\$\{cap\}/);
   assert.match(html, /另存新名稱會提示已滿；同名可覆蓋/);
   assert.match(html, /setSettingsReady\(settingsLoaded\)/);
-  assert.match(html, /\$\{label\} \$\{item\.commute_km\} 公里 · 上 \$\{Math\.round\(am\)\} 分 · 下 \$\{Math\.round\(pm\)\} 分/);
+  assert.match(html, /\$\{label\} \$\{item\.commute_km\} 公里 · 上約 \$\{Math\.round\(am\)\} 分 · 下約 \$\{Math\.round\(pm\)\} 分/);
   assert.match(html, /確定要覆蓋嗎？/);
   assert.match(html, /設定檔已滿（最多 \$\{cap\} 個）/);
   assert.match(html, /overwrite: existing/);
@@ -257,6 +257,8 @@ test("MRT toggle and guest tour are in the page", () => {
   assert.match(html, /id="showMrt"/);
   assert.match(html, /顯示最近捷運站走路／騎車距離/);
   assert.match(html, /function mrtText/);
+  assert.match(html, /走路約/);
+  assert.match(html, /騎車約/);
   assert.match(html, /id="guestTour"/);
   assert.match(html, /GUEST_TOUR_STEPS/);
   assert.match(html, /function maybeStartGuestTour/);
@@ -268,6 +270,15 @@ test("MRT toggle and guest tour are in the page", () => {
   assert.match(html, /id="notifyHub"/);
   assert.match(html, /data-open-hub="webhook"/);
   assert.equal(html.includes('showMrt: $("showMrt") ? $("showMrt").checked : true'), true);
+});
+
+test("cached rush minutes stay in listing copy without calling Google", () => {
+  const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
+  const dbSrc = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../src/db.js"), "utf8");
+  assert.match(html, /上約 \$\{Math\.round\(am\)\} 分 · 下約 \$\{Math\.round\(pm\)\} 分/);
+  assert.match(dbSrc, /commute_min_am: Number\.isFinite\(Number\(row\.rush_am_min\)\)/);
+  assert.doesNotMatch(dbSrc, /commute_min_am: commuteRushEnabled\(\)/);
+  assert.doesNotMatch(dbSrc, /rushStale\(cached\.rush_updated_at\)/);
 });
 
 test("listing chips use Hermes orange and do not escape chip HTML", () => {

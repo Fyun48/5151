@@ -1566,7 +1566,7 @@
         const am = Number(item.commute_min_am);
         const pm = Number(item.commute_min_pm);
         if (Number.isFinite(am) && Number.isFinite(pm)) {
-          return routeChip(`${label} ${item.commute_km} 公里 · 上 ${Math.round(am)} 分 · 下 ${Math.round(pm)} 分`);
+          return routeChip(`${label} ${item.commute_km} 公里 · 上約 ${Math.round(am)} 分 · 下約 ${Math.round(pm)} 分`);
         }
         const routes = Array.isArray(item.commute_routes) ? item.commute_routes.filter((n) => Number.isFinite(Number(n))) : [];
         const extra = routes.length > 1 ? `（${routes.map((n) => `${n}`).join(" / ")} 公里）` : "";
@@ -1594,10 +1594,10 @@
         const rideKm = Number(item.mrt_ride_km);
         const rideMin = Number(item.mrt_ride_min);
         if (Number.isFinite(walkKm) && walkKm > 0) {
-          bits.push(Number.isFinite(walkMin) ? `走路 ${esc(walkKm)} 公里（${esc(walkMin)} 分）` : `走路 ${esc(walkKm)} 公里`);
+          bits.push(Number.isFinite(walkMin) && walkMin > 0 ? `走路約 ${esc(Math.round(walkMin))} 分` : `走路 ${esc(walkKm)} 公里`);
         }
         if (Number.isFinite(rideKm) && rideKm > 0) {
-          bits.push(Number.isFinite(rideMin) ? `騎車 ${esc(rideKm)} 公里（${esc(rideMin)} 分）` : `騎車 ${esc(rideKm)} 公里`);
+          bits.push(Number.isFinite(rideMin) && rideMin > 0 ? `騎車約 ${esc(Math.round(rideMin))} 分` : `騎車 ${esc(rideKm)} 公里`);
         }
         return bits.join(" · ");
       }
