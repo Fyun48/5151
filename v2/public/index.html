@@ -83,6 +83,8 @@
     }
     body.role-guest #resetLink,
     body.role-guest #adminLink,
+    body.role-guest #logoutBtn,
+    body.role-guest #watchBtn,
     body.role-guest #sponsorBar { display: none !important; }
     body.role-guest .panel input,
     body.role-guest .panel textarea,
@@ -1141,7 +1143,7 @@
         const extra = routes.length > 1 ? `（${routes.map((n) => `${n}`).join(" / ")} 公里）` : "";
         return ` · 機車路線約 ${item.commute_km} 公里${extra}`;
       }
-      if (!commuteOn()) return "";
+      if (isGuest || !commuteOn()) return "";
       const src = String(item.geo_source || "");
       const hasPin = Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lng)) && (src === "591" || src === "community");
       return hasPin ? " · 機車路線計算中" : " · 尚未取得地圖座標";

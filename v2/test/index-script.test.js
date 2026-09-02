@@ -163,6 +163,8 @@ test("guest demo is read-only and work prompt can be skipped", () => {
   assert.match(html, /workAddress: address/);
   assert.doesNotMatch(html, /collectSettingsSafe/);
   assert.match(html, /body\.role-guest #sponsorBar/);
+  assert.match(html, /body\.role-guest #logoutBtn/);
+  assert.match(html, /if \(isGuest \|\| !commuteOn\(\)\) return ""/);
   assert.match(html, /一般會員每 8 分鐘檢查一次，贊助會員為 5 分鐘/);
   assert.match(html, /贊助會員為 5 分鐘/);
   assert.match(html, /if \(isGuest\) \{\s*bar\.hidden = true/s);
