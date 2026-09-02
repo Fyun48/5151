@@ -13,7 +13,6 @@ import {
   isCommuteRushEnabled,
   isGoogleDirectionsEnabled,
   mapsAdminWarning,
-  rushStale,
   summarizeMapsUsage,
   pacificYmd,
 } from "./mapsBilling.js";
@@ -950,8 +949,8 @@ function decorateListing(row, settings) {
     commute_km: commute == null ? null : Math.round(commute * 10) / 10,
     commute_mode: commuteMode,
     commute_routes: Array.isArray(row.route_kms) ? row.route_kms : [],
-    commute_min_am: commuteRushEnabled() && Number.isFinite(Number(row.rush_am_min)) ? Math.round(Number(row.rush_am_min)) : null,
-    commute_min_pm: commuteRushEnabled() && Number.isFinite(Number(row.rush_pm_min)) ? Math.round(Number(row.rush_pm_min)) : null,
+    commute_min_am: Number.isFinite(Number(row.rush_am_min)) && Number(row.rush_am_min) > 0 ? Math.round(Number(row.rush_am_min)) : null,
+    commute_min_pm: Number.isFinite(Number(row.rush_pm_min)) && Number(row.rush_pm_min) > 0 ? Math.round(Number(row.rush_pm_min)) : null,
     district: districtNameFromListing(row),
     match_peer: matchPeer || null,
     ...mrtFields(row, settings),
@@ -1774,7 +1773,7 @@ export function listingsNeedingRoute(limit = 40) {
   for (const row of rows) {
     for (const job of jobs) {
       const cached = getCachedRoute(row.lat, row.lng, job.workLat, job.workLng, job.commuteMode);
-      if (cached && (!wantRush || (Number.isFinite(cached.rush_am_min) && Number.isFinite(cached.rush_pm_min) && !rushStale(cached.rush_updated_at)))) {
+      if (cached && (!wantRush || (Number.isFinite(cached.rush_am_min) && Number.isFinite(cached.rush_pm_min)))) {
         continue;
       }
       out.push({ ...row, workLat: job.workLat, workLng: job.workLng, commuteMode: job.commuteMode });

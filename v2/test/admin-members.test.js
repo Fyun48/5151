@@ -45,12 +45,12 @@ test("admin page lists members, smtp, and templates without password fields", ()
   assert.match(html, /\/api\/admin\/maps/);
   assert.match(html, /通勤路線／Google 計費/);
   assert.match(html, /id="googleEnabled"/);
-  assert.match(html, /使用 Google Directions（會計費，預設關閉）/);
+  assert.match(html, /使用 Google Directions 補還沒有上／下班分鐘的物件/);
   assert.match(html, /關閉並清除金鑰/);
   assert.match(html, /伺服器暫時沒回 JSON/);
   assert.match(html, /AbortSignal\.timeout\(20000\)/);
   assert.doesNotMatch(html, /return \{ error: text \|\| res\.statusText \}/);
-  assert.match(html, /不必去官方停 API/);
+  assert.match(html, /不必再開 Google/);
   assert.match(html, /熔斷/);
   assert.match(html, /官方價目試算/);
   assert.match(html, /本月合計/);
