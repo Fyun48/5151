@@ -64,7 +64,6 @@
       padding: 8px 10px;
       font-size: 13px;
     }
-    .guest-banner,
     .work-prompt {
       margin: 0 32px 0;
       padding: 12px 16px;
@@ -72,9 +71,7 @@
       border: 1px solid var(--line);
       border-radius: 16px;
     }
-    .guest-banner p,
     .work-prompt p { margin: 0; font-size: 13px; color: var(--ink); line-height: 1.55; }
-    .guest-banner .row,
     .work-prompt .row { margin-top: 10px; }
     .work-prompt input[type="text"],
     .work-prompt input[type="number"] {
@@ -469,7 +466,41 @@
       background: #fff;
       border: 1px solid var(--line);
     }
+    .header-main .row { align-items: center; }
     .who { color: var(--muted); font-size: 13px; }
+    .who.is-guest {
+      color: var(--accent-deep);
+      font-size: 22px;
+      font-weight: 800;
+      letter-spacing: 0.14em;
+      line-height: 1;
+      padding: 0 6px 0 0;
+    }
+    .guest-toast {
+      position: fixed;
+      right: 20px;
+      bottom: 24px;
+      z-index: 110;
+      width: min(380px, calc(100vw - 32px));
+      padding: 16px 18px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: 0 18px 44px rgba(26, 43, 51, 0.2);
+      animation: guestToastIn 0.28s ease;
+    }
+    .guest-toast[hidden] { display: none; }
+    .guest-toast p {
+      margin: 0 0 12px;
+      font-size: 14px;
+      line-height: 1.55;
+      color: var(--ink);
+    }
+    .guest-toast .row { margin: 0; }
+    @keyframes guestToastIn {
+      from { opacity: 0; transform: translateY(12px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
     .tags { display: flex; gap: 6px; flex-wrap: wrap; }
     .tag { font-size: 11px; padding: 3px 8px; border-radius: 999px; background: var(--accent-soft); }
     .tag.new { background: var(--accent-mist); color: var(--accent-deep); }
@@ -888,7 +919,7 @@
         <h1>吉比租房物件追蹤</h1>
       </div>
       <div class="row">
-        <span class="who" id="who"></span>
+        <span class="who" id="who" data-tour="guestWho"></span>
         <a class="ghost" id="loginBtn" href="/login.html" hidden>登入</a>
         <a class="primary" id="registerBtn" href="/login.html?register=1" hidden>註冊</a>
         <a class="ghost" id="logoutBtn" href="/logout">登出</a>
@@ -920,11 +951,11 @@
       </div>
     </div>
   </div>
-  <div id="guestBanner" class="guest-banner" hidden>
-    <p>這是示範列表，條件與公司地址為展示用。註冊後才能改成你的條件、收到通知。</p>
+  <div id="guestToast" class="guest-toast" hidden role="status" aria-live="polite">
+    <p>成為會員後就能使用這項功能：改搜尋條件、儲存設定、標記已瀏覽與特別關注。</p>
     <div class="row">
-      <a class="primary" href="/login.html?register=1">註冊</a>
-      <a class="ghost" href="/login.html">登入</a>
+      <a class="primary" href="/login.html?register=1">前往註冊</a>
+      <button type="button" class="ghost" id="guestToastClose">知道了</button>
     </div>
   </div>
   <div id="workPrompt" class="work-prompt" hidden>
@@ -1323,6 +1354,8 @@
     let sort = "newest";
     let isGuest = false;
     let guestLockClicks = 0;
+    let guestToastTimer = 0;
+    const GUEST_LOCK_TOAST_AFTER = 2;
     const WORK_PROMPT_SKIP = "591_v2_work_prompt_skip";
     const GUEST_TOUR_SKIP = "591_v2_guest_tour_skip";
     const DEFAULT_COMMUTE_KM = 25;
@@ -1689,12 +1722,27 @@
       if ($("status")) $("status").textContent = msg;
     }
 
+    function hideGuestToast() {
+      const box = $("guestToast");
+      if (box) box.hidden = true;
+      if (guestToastTimer) {
+        window.clearTimeout(guestToastTimer);
+        guestToastTimer = 0;
+      }
+    }
+
+    function showGuestToast() {
+      const box = $("guestToast");
+      if (!box) return;
+      box.hidden = false;
+      if (guestToastTimer) window.clearTimeout(guestToastTimer);
+      guestToastTimer = window.setTimeout(hideGuestToast, 8000);
+    }
+
     function remindGuest() {
       guestLockClicks += 1;
-      if ($("guestBanner")) $("guestBanner").hidden = false;
-      const msg = "註冊後才能改成你的條件。";
-      if (guestLockClicks <= 3) flash(msg);
-      else if ($("status")) $("status").textContent = msg;
+      if (guestLockClicks < GUEST_LOCK_TOAST_AFTER) return;
+      showGuestToast();
     }
 
     function goRegister() {
@@ -1704,19 +1752,22 @@
     function setGuestMode(on) {
       isGuest = Boolean(on);
       document.body.classList.toggle("role-guest", isGuest);
-      if ($("guestBanner")) $("guestBanner").hidden = !isGuest;
       if ($("loginBtn")) $("loginBtn").hidden = !isGuest;
       if ($("registerBtn")) $("registerBtn").hidden = !isGuest;
       if ($("logoutBtn")) $("logoutBtn").hidden = isGuest;
       if ($("watchBtn")) $("watchBtn").hidden = isGuest;
+      if ($("who")) $("who").classList.toggle("is-guest", isGuest);
       if (isGuest) {
-        $("who").textContent = "示範瀏覽";
+        $("who").textContent = "訪客";
         paintSponsorOffer({ show: false });
+      } else {
+        hideGuestToast();
+        guestLockClicks = 0;
       }
     }
 
     const GUEST_TOUR_STEPS = [
-      { target: "#guestBanner", title: "第 1／7 步", text: "這是示範列表。左側條件與公司地址目前不能改，註冊成為會員後才能換成你的設定。" },
+      { target: "[data-tour=guestWho]", title: "第 1／7 步", text: "右上角顯示你目前是訪客。這是示範列表，左側條件與公司地址目前不能改；註冊成為會員後才能換成你的設定。" },
       { target: "[data-tour=districts]", title: "第 2／7 步", text: "行政區與租金篩選現在是展示用。註冊後才能勾選你要找的區域並儲存。" },
       { target: "[data-tour=commute]", title: "第 3／7 步", text: "公司地址、機車或汽車路徑也無法在示範模式變更。會員才能填自己的上班地址並篩通勤距離。" },
       { target: "[data-tour=mrt]", title: "第 4／7 步", text: "最近捷運站的走路與騎車距離可以開關。示範模式看得到效果，註冊後才能自己開啟或關閉。" },
@@ -1799,7 +1850,7 @@
 
     function isGuestLockedTarget(el) {
       if (!el || !isGuest) return false;
-      if (el.closest("#collapsePanelBtn, #expandPanelBtn, #reloadBtn, #loginBtn, #registerBtn, #guestBanner, #guestTour, #listHeadSticky .chip, #q, #wholeFloorOnly, #excludeLowFloors, [data-view-district], [data-open-hub], #notifyHubClose, [data-close-hub], [data-hub-tab]")) return false;
+      if (el.closest("#collapsePanelBtn, #expandPanelBtn, #reloadBtn, #loginBtn, #registerBtn, #guestToast, #guestTour, #listHeadSticky .chip, #q, #wholeFloorOnly, #excludeLowFloors, [data-view-district], [data-open-hub], #notifyHubClose, [data-close-hub], [data-hub-tab]")) return false;
       if (el.closest(".item-cover, h3 a, a.tel, .line-qr")) return false;
       if (el.closest("#notifyHubSave, #memberMailTest, #gmailPresetBtn")) return true;
       if (el.closest("#notifyHub")) return true;
@@ -1812,12 +1863,9 @@
       if (!isGuest || !isGuestLockedTarget(ev.target)) return;
       ev.preventDefault();
       ev.stopPropagation();
-      if (ev.target.closest("[data-watched], [data-viewed], [data-hidden], #saveBtn, #saveAsBtn, #watchBtn, #deleteProfileBtn, #hideSelectedBtn, .pick")) {
-        goRegister();
-        return;
-      }
       remindGuest();
     }, true);
+    $("guestToastClose")?.addEventListener("click", hideGuestToast);
 
     function maybeShowWorkPrompt() {
       const box = $("workPrompt");

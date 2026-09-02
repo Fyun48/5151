@@ -149,7 +149,17 @@ test("dock has mark-read buttons and renders content diffs", () => {
 
 test("guest demo is read-only and work prompt can be skipped", () => {
   const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
-  assert.match(html, /id="guestBanner"/);
+  assert.doesNotMatch(html, /id="guestBanner"/);
+  assert.doesNotMatch(html, /示範瀏覽/);
+  assert.match(html, /id="guestToast"/);
+  assert.match(html, /class="guest-toast"/);
+  assert.match(html, /GUEST_LOCK_TOAST_AFTER = 2/);
+  assert.match(html, /function showGuestToast/);
+  assert.match(html, /function remindGuest/);
+  assert.match(html, /成為會員後就能使用這項功能/);
+  assert.match(html, /\$\("who"\)\.textContent = "訪客"/);
+  assert.match(html, /classList\.toggle\("is-guest", isGuest\)/);
+  assert.match(html, /data-tour="guestWho"/);
   assert.match(html, /class="site-footer"/);
   assert.match(html, /reversal play tech \| 逆遊科技/);
   assert.match(html, /這是示範列表/);
@@ -235,6 +245,7 @@ test("MRT toggle and guest tour are in the page", () => {
   assert.match(html, /id="guestTour"/);
   assert.match(html, /GUEST_TOUR_STEPS/);
   assert.match(html, /function maybeStartGuestTour/);
+  assert.match(html, /\[data-tour=guestWho\]/);
   assert.match(html, /前往註冊/);
   assert.match(html, /#listHeadSticky/);
   assert.match(html, /behavior: "instant"/);
