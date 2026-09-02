@@ -121,7 +121,13 @@ test("member profiles cap districts and include usable ping in notify copy", () 
   assert.match(html, /notify_facts/);
   assert.match(html, /housing_type/);
   assert.match(html, /已存 \$\{list\.length\}／\$\{cap\}/);
+  assert.match(html, /另存新名稱會提示已滿；同名可覆蓋/);
   assert.match(html, /setSettingsReady\(settingsLoaded\)/);
+  assert.match(html, /確定要覆蓋嗎？/);
+  assert.match(html, /設定檔已滿（最多 \$\{cap\} 個）/);
+  assert.match(html, /overwrite: existing/);
+  assert.doesNotMatch(html, /saveAsBtn"\)\.disabled = atCap/);
+  assert.doesNotMatch(html, /disabled = !ok \|\| Boolean\(cap && have >= cap\)/);
   const profilesFn = html.slice(html.indexOf("function renderProfiles"), html.indexOf("function fillNotifyMatrix"));
   assert.equal(profilesFn.includes("if (label)"), false);
 });

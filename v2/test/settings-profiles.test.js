@@ -8,6 +8,7 @@ import {
   snapshotSettings,
   canAddProfile,
   limitWatchDistricts,
+  resolveSaveAsProfileAction,
   MEMBER_MAX_PROFILE_DISTRICTS,
   MEMBER_MAX_PROFILES,
 } from "../src/settingsState.js";
@@ -173,6 +174,23 @@ test("members are capped at 10 districts and 3 profiles; admins are not", () => 
   assert.equal(jobs.length, 1);
   assert.equal(jobs[0].sectionIds.includes(12), false);
   assert.equal(jobs[0].sectionIds.length, MEMBER_MAX_PROFILE_DISTRICTS);
+});
+
+test("save-as resolves overwrite, create, and full without adding a fourth slot", () => {
+  const full = [
+    { id: "p-1", name: "蘆洲" },
+    { id: "p-2", name: "五股" },
+    { id: "p-3", name: "三重" },
+  ];
+  assert.equal(resolveSaveAsProfileAction([], "").action, "empty");
+  assert.equal(resolveSaveAsProfileAction(full.slice(0, 1), "士林").action, "create");
+  assert.equal(resolveSaveAsProfileAction(full, "士林").action, "full");
+  assert.equal(resolveSaveAsProfileAction(full, "士林", { admin: true }).action, "create");
+  assert.equal(resolveSaveAsProfileAction(full, "蘆洲").action, "confirm_overwrite");
+  const overwrite = resolveSaveAsProfileAction(full, " 蘆洲 ", { overwrite: true });
+  assert.equal(overwrite.action, "overwrite");
+  assert.equal(overwrite.existing.id, "p-1");
+  assert.equal(resolveSaveAsProfileAction(full, "蘆洲", { overwrite: true }).action, "overwrite");
 });
 
 test("members cannot change interval, pages, or offline days; admins can", () => {

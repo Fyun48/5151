@@ -1255,9 +1255,7 @@
 
     function setSettingsReady(ok, msg) {
       $("saveBtn").disabled = !ok;
-      const cap = profileLimit();
-      const have = (settings?.settingProfiles || []).length;
-      $("saveAsBtn").disabled = !ok || Boolean(cap && have >= cap);
+      $("saveAsBtn").disabled = !ok;
       const el = $("settingsLoadMsg");
       if (!el) return;
       if (ok) {
@@ -1425,12 +1423,11 @@
         if (!list.length) {
           hint.textContent = "還沒有設定檔。填名稱後按上方「另存」。";
         } else if (atCap) {
-          hint.textContent = `已存 ${list.length}／${cap} 個設定檔（${list.map((item) => item.name).join("、")}）。一般會員不能再另存，請先刪一個。`;
+          hint.textContent = `已存 ${list.length}／${cap} 個設定檔（${list.map((item) => item.name).join("、")}）。另存新名稱會提示已滿；同名可覆蓋。`;
         } else {
           hint.textContent = `已存：${list.map((item) => item.name).join("、")}${cap ? `（最多 ${cap} 個）` : ""}`;
         }
       }
-      if ($("saveAsBtn") && settingsLoaded) $("saveAsBtn").disabled = atCap;
       sel.innerHTML = "";
       const placeholder = document.createElement("option");
       placeholder.value = "";
@@ -2084,32 +2081,38 @@
     };
 
     $("saveAsBtn").onclick = async () => {
-      const cap = profileLimit();
-      const have = (settings?.settingProfiles || []).length;
-      if (cap && have >= cap) {
-        flash(`一般會員最多 ${cap} 個設定檔，請先刪一個再另存`);
-        return;
-      }
       const name = $("profileName").value.trim();
       if (!name) {
         $("profileName").focus();
         flash("請先在左側填設定檔名稱，再按另存");
         return;
       }
+      const profiles = Array.isArray(settings?.settingProfiles) ? settings.settingProfiles : [];
+      const existing = profiles.some((item) => String(item.name || "").trim() === name);
+      const cap = profileLimit();
+      const atCap = Boolean(cap && profiles.length >= cap);
+      if (existing) {
+        if (!window.confirm(`已有同名設定檔「${name}」。確定要覆蓋嗎？`)) return;
+      } else if (atCap) {
+        window.alert(`設定檔已滿（最多 ${cap} 個）。請先刪除一個，或改用現有設定檔名稱覆蓋。`);
+        return;
+      }
       $("saveAsBtn").disabled = true;
-      flash("另存中…");
+      flash(existing ? "覆蓋中…" : "另存中…");
       try {
         const res = await fetch("/api/profiles", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name, settings: collectSettings() }),
+          body: JSON.stringify({ name, overwrite: existing, settings: collectSettings() }),
           signal: AbortSignal.timeout(25000),
         });
         const data = await readApi(res);
         if (!res.ok) throw new Error(data.error || "另存失敗");
         fillSettings(data.settings);
         const saved = (data.settings?.settingProfiles || []).some((item) => item.name === name);
-        flash(saved ? `已另存「${name}」，可在左上選單切換` : `另存回應沒有「${name}」，請再試一次`);
+        flash(saved
+          ? (existing ? `已覆蓋「${name}」` : `已另存「${name}」，可在左上選單切換`)
+          : `另存回應沒有「${name}」，請再試一次`);
       } catch (error) {
         const msg = error.name === "TimeoutError" || error.name === "AbortError"
           ? "另存逾時，請再試一次"
