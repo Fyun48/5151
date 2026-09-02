@@ -123,7 +123,7 @@ test("member profiles cap districts and include usable ping in notify copy", () 
   assert.match(html, /已存 \$\{list\.length\}／\$\{cap\}/);
   assert.match(html, /另存新名稱會提示已滿；同名可覆蓋/);
   assert.match(html, /setSettingsReady\(settingsLoaded\)/);
-  assert.match(html, /機車 \$\{item\.commute_km\} 公里 · 上 \$\{Math\.round\(am\)\} 分 · 下 \$\{Math\.round\(pm\)\} 分/);
+  assert.match(html, /\$\{label\} \$\{item\.commute_km\} 公里 · 上 \$\{Math\.round\(am\)\} 分 · 下 \$\{Math\.round\(pm\)\} 分/);
   assert.match(html, /確定要覆蓋嗎？/);
   assert.match(html, /設定檔已滿（最多 \$\{cap\} 個）/);
   assert.match(html, /overwrite: existing/);
@@ -163,6 +163,7 @@ test("guest demo is read-only and work prompt can be skipped", () => {
   assert.match(html, /if \(isGuest\) return `https:\/\/rent\.591\.com\.tw\//);
   assert.match(html, /if \(!settingsLoaded \|\| isGuest\) return/);
   assert.match(html, /workAddress: address/);
+  assert.match(html, /commuteMode: mode/);
   assert.doesNotMatch(html, /collectSettingsSafe/);
   assert.match(html, /body\.role-guest #sponsorBar/);
   assert.match(html, /body\.role-guest #logoutBtn/);
@@ -197,4 +198,20 @@ test("member settings copy hides advanced hints and locks schedule defaults", ()
   assert.doesNotMatch(html, /搜尋行政區（台北市 region=1/);
   assert.doesNotMatch(html, /以下數量只算 591 搜尋條件/);
   assert.doesNotMatch(html, /stat-note/);
+});
+
+test("example work address and exclusive commute modes", () => {
+  const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
+  assert.match(html, /臺北市南港區經貿一路170號/);
+  assert.doesNotMatch(html, /台北市士林區德行西路7號/);
+  assert.match(html, /DEFAULT_COMMUTE_KM = 25/);
+  assert.match(html, /id="workPromptKm"[^>]*value="25"/);
+  assert.match(html, /name="commuteMode" value="scooter"/);
+  assert.match(html, /name="commuteMode" value="car"/);
+  assert.match(html, /name="workPromptMode" value="scooter"/);
+  assert.match(html, /name="workPromptMode" value="car"/);
+  assert.match(html, /同時只能選一種/);
+  assert.match(html, /function selectedCommuteMode/);
+  assert.match(html, /function setCommuteMode/);
+  assert.match(html, /commuteMode: selectedCommuteMode\("commuteMode"\)/);
 });

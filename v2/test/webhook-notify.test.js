@@ -201,6 +201,8 @@ test("notify facts add usable ping and housing type instead of 整層住家", ()
   assert.match(commute, /機車 11.2 公里 · 上 28 分 · 下 35 分/);
   const kmOnly = formatNotifyFacts({ route_km: 9.4, kind_name: "公寓" });
   assert.match(kmOnly, /機車路線約 9.4 公里/);
+  const car = formatNotifyFacts({ route_km: 18.5, commute_mode: "car", kind_name: "公寓" });
+  assert.match(car, /汽車路線約 18.5 公里/);
 });
 
 test("mail notify uses registered address and can be unchecked", () => {

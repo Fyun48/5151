@@ -102,12 +102,24 @@ test("snapshot keeps commute and districts for a profile", () => {
   const snap = snapshotSettings({
     watchDistricts: ["1-8", "3-50"],
     commuteKm: 12,
+    commuteMode: "car",
     workAddress: "台北市士林區德行西路7號",
     notifyNew: true,
   });
   assert.deepEqual(snap.watchDistricts, ["1-8", "3-50"]);
   assert.equal(snap.commuteKm, 12);
+  assert.equal(snap.commuteMode, "car");
   assert.equal(snap.workAddress, "台北市士林區德行西路7號");
+});
+
+test("commuteMode is scooter or car only", () => {
+  const next = applySettingPatch(
+    { ...defaults, watchDistricts: ["1-8"] },
+    { commuteMode: "bike", commuteKm: 25 },
+  );
+  assert.equal(next.commuteMode, "scooter");
+  const car = applySettingPatch(next, { commuteMode: "car" });
+  assert.equal(car.commuteMode, "car");
 });
 
 test("null or zero work coords stay missing", () => {

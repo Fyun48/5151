@@ -46,6 +46,7 @@ export function publicDemoSettings(settings = {}) {
     notifyMatrix: settings.notifyMatrix || {},
     workAddress: String(settings.workAddress || "").trim(),
     commuteKm: Number(settings.commuteKm) || 0,
+    commuteMode: settings.commuteMode === "car" ? "car" : "scooter",
     workLat: Number(settings.workLat) || null,
     workLng: Number(settings.workLng) || null,
     settingProfiles: Array.isArray(settings.settingProfiles)

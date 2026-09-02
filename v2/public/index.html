@@ -81,6 +81,7 @@
       width: min(420px, 100%);
       margin: 8px 0 0;
     }
+    .work-prompt .commute-mode { margin: 8px 0 0; }
     body.role-guest #resetLink,
     body.role-guest #adminLink,
     body.role-guest #logoutBtn,
@@ -196,6 +197,13 @@
     textarea { min-height: 92px; resize: vertical; }
     .checks { display: grid; gap: 8px; margin: 10px 0 14px; font-size: 14px; }
     .checks label { margin: 0; color: var(--ink); display: flex; gap: 8px; align-items: center; }
+    .commute-mode {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 16px;
+      margin: 0 0 8px;
+    }
+    .commute-mode label { margin: 0; color: var(--ink); display: flex; gap: 8px; align-items: center; font-size: 14px; }
     button, header .row a.ghost, a.primary {
       border: 0;
       border-radius: 999px;
@@ -760,11 +768,16 @@
     </div>
   </div>
   <div id="workPrompt" class="work-prompt" hidden>
-    <p>公司地址（選填，用來算機車公里與尖峰時間）。略過的話之後可在左側設定再填。</p>
+    <p>公司地址（選填，用來算通勤公里與尖峰時間）。略過的話之後可在左側設定再填。</p>
     <label for="workPromptAddress">上班地址</label>
-    <input id="workPromptAddress" type="text" maxlength="120" placeholder="例如：台北市士林區德行西路7號" />
-    <label for="workPromptKm">機車路線上限（公里）</label>
-    <input id="workPromptKm" type="number" min="0" max="80" step="0.5" value="13" />
+    <input id="workPromptAddress" type="text" maxlength="120" placeholder="例如：臺北市南港區經貿一路170號" />
+    <label>通勤路徑（同時只能選一種）</label>
+    <div class="commute-mode" role="radiogroup" aria-label="通勤路徑">
+      <label><input type="radio" name="workPromptMode" value="scooter" checked /> 機車</label>
+      <label><input type="radio" name="workPromptMode" value="car" /> 汽車</label>
+    </div>
+    <label for="workPromptKm">路線上限（公里）</label>
+    <input id="workPromptKm" type="number" min="0" max="80" step="0.5" value="25" />
     <div class="row">
       <button type="button" class="primary" id="workPromptSave">儲存</button>
       <button type="button" class="ghost" id="workPromptSkip">略過</button>
@@ -872,8 +885,13 @@
       <label>建物總樓層至少</label>
       <input type="number" id="minBuildingFloors" min="1" max="50" />
       <label>上班地址（選填）</label>
-      <input type="text" id="workAddress" placeholder="例如：台北市士林區德行西路7號" />
-      <label>機車路線上限（公里，0 表示不篩）</label>
+      <input type="text" id="workAddress" placeholder="例如：臺北市南港區經貿一路170號" />
+      <label>通勤路徑（同時只能選一種）</label>
+      <div class="commute-mode" role="radiogroup" aria-label="通勤路徑">
+        <label><input type="radio" name="commuteMode" value="scooter" checked /> 機車</label>
+        <label><input type="radio" name="commuteMode" value="car" /> 汽車</label>
+      </div>
+      <label>路線上限（公里，0 表示不篩）</label>
       <input type="number" id="commuteKm" min="0" max="80" step="0.5" />
       <label>Discord Webhook（選填）</label>
       <input type="url" id="discordWebhook" placeholder="https://discord.com/api/webhooks/..." />
@@ -1057,6 +1075,7 @@
     let isGuest = false;
     let guestLockClicks = 0;
     const WORK_PROMPT_SKIP = "591_v2_work_prompt_skip";
+    const DEFAULT_COMMUTE_KM = 25;
     let settings = {};
     let selected = new Set();
     let excludeBoxes = [];
@@ -1139,21 +1158,35 @@
       return meIsAdmin ? 0 : MEMBER_MAX_PROFILES;
     }
 
+    function commuteModeLabel(mode = settings.commuteMode) {
+      return mode === "car" ? "汽車" : "機車";
+    }
+    function selectedCommuteMode(name) {
+      const el = document.querySelector(`input[name="${name}"]:checked`);
+      return el?.value === "car" ? "car" : "scooter";
+    }
+    function setCommuteMode(name, mode) {
+      const value = mode === "car" ? "car" : "scooter";
+      document.querySelectorAll(`input[name="${name}"]`).forEach((el) => {
+        el.checked = el.value === value;
+      });
+    }
     function commuteText(item) {
+      const label = commuteModeLabel(item.commute_mode || settings.commuteMode);
       if (item.commute_km != null) {
         const am = Number(item.commute_min_am);
         const pm = Number(item.commute_min_pm);
         if (Number.isFinite(am) && Number.isFinite(pm)) {
-          return ` · 機車 ${item.commute_km} 公里 · 上 ${Math.round(am)} 分 · 下 ${Math.round(pm)} 分`;
+          return ` · ${label} ${item.commute_km} 公里 · 上 ${Math.round(am)} 分 · 下 ${Math.round(pm)} 分`;
         }
         const routes = Array.isArray(item.commute_routes) ? item.commute_routes.filter((n) => Number.isFinite(Number(n))) : [];
         const extra = routes.length > 1 ? `（${routes.map((n) => `${n}`).join(" / ")} 公里）` : "";
-        return ` · 機車路線約 ${item.commute_km} 公里${extra}`;
+        return ` · ${label}路線約 ${item.commute_km} 公里${extra}`;
       }
       if (isGuest || !commuteOn()) return "";
       const src = String(item.geo_source || "");
       const hasPin = Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lng)) && (src === "591" || src === "community");
-      return hasPin ? " · 機車路線計算中" : " · 尚未取得地圖座標";
+      return hasPin ? ` · ${label}路線計算中` : " · 尚未取得地圖座標";
     }
 
     function commuteOn(s = settings) {
@@ -1440,7 +1473,8 @@
         /* 略過 */
       }
       box.hidden = false;
-      if ($("workPromptKm")) $("workPromptKm").value = Number(settings.commuteKm) > 0 ? settings.commuteKm : 13;
+      if ($("workPromptKm")) $("workPromptKm").value = Number(settings.commuteKm) > 0 ? settings.commuteKm : DEFAULT_COMMUTE_KM;
+      setCommuteMode("workPromptMode", settings.commuteMode);
     }
 
     function setSettingsReady(ok, msg) {
@@ -1678,6 +1712,7 @@
       $("minBuildingFloors").value = s.minBuildingFloors || 4;
       $("workAddress").value = s.workAddress || "";
       $("commuteKm").value = s.commuteKm || 0;
+      setCommuteMode("commuteMode", s.commuteMode);
       syncCommuteSort();
       loadViewFilters(s);
       $("excludeKeywords").value = (s.excludeKeywords || []).join("\n");
@@ -1816,7 +1851,7 @@
       if (commuteOn() && ((Number(st.missingGeo) || 0) > 0 || (Number(st.missingRoute) || 0) > 0)) {
         const bits = [];
         if (st.missingGeo > 0) bits.push(`還有 ${st.missingGeo} 筆要從 591 補地圖座標`);
-        if (st.missingRoute > 0) bits.push(`${st.missingRoute} 筆正在算機車路線`);
+        if (st.missingRoute > 0) bits.push(`${st.missingRoute} 筆正在算${commuteModeLabel()}路線`);
         el.hidden = false;
         el.textContent = `${bits.join("；")}。有距離的會排在「離公司近→遠」前面，其餘會隨背景計算陸續補上。`;
         return;
@@ -1884,11 +1919,11 @@
             ? "特別關注裡目前沒有套房／雅房。"
             : "目前沒有套房／雅房。這只篩已抓到的結果，不會重查 591。";
         } else if (st.missingGeo > 0) {
-          msg = `正在從 591 物件地圖補 ${st.missingGeo} 筆座標（就是網頁上點地址看到的那個），完成後會自動計算機車路線。`;
+          msg = `正在從 591 物件地圖補 ${st.missingGeo} 筆座標（就是網頁上點地址看到的那個），完成後會自動計算${commuteModeLabel()}路線。`;
         } else if (st.missingRoute > 0) {
-          msg = `已有 ${st.missingRoute} 筆 591 地圖座標，正在背景計算機車可走路線。兩條替代路線都超過上限的不會顯示；算完後列表會自動更新。`;
+          msg = `已有 ${st.missingRoute} 筆 591 地圖座標，正在背景計算${commuteModeLabel()}可走路線。兩條替代路線都超過上限的不會顯示；算完後列表會自動更新。`;
         } else if (st.filteredOut > 0) {
-          msg = `資料庫有 ${st.stored} 筆，目前都被機車路線距離或樓層／坪數／路名／地圖框／房仲排除了。`;
+          msg = `資料庫有 ${st.stored} 筆，目前都被${commuteModeLabel()}路線距離或樓層／坪數／路名／地圖框／房仲排除了。`;
         } else if (st.dbTotal > 0) {
           msg = "這個搜尋網址還沒對到已存的物件。請按「立即檢查」重新抓取。";
         }
@@ -2222,6 +2257,7 @@
         notifyMatrix: collectNotifyMatrix(),
         workAddress: $("workAddress").value.trim(),
         commuteKm: Number($("commuteKm").value) || 0,
+        commuteMode: selectedCommuteMode("commuteMode"),
       };
     }
 
@@ -2260,7 +2296,7 @@
         : "";
       const route = result.routeBackfill;
       const routeBit = route?.attempted
-        ? `｜已計算 ${route.located}/${route.attempted} 筆機車路線`
+        ? `｜已計算 ${route.located}/${route.attempted} 筆${commuteModeLabel()}路線`
         : "";
       const off = result.offline;
       const offBits = [];
@@ -2409,15 +2445,21 @@
         $("workPromptSave").disabled = true;
         $("workPromptMsg").textContent = "儲存中…";
         try {
+          const km = Number($("workPromptKm").value) || DEFAULT_COMMUTE_KM;
+          const mode = selectedCommuteMode("workPromptMode");
           await saveSettings({
             workAddress: address,
-            commuteKm: Number($("workPromptKm").value) || 13,
+            commuteKm: km,
+            commuteMode: mode,
           });
           $("workAddress").value = address;
-          $("commuteKm").value = Number($("workPromptKm").value) || 13;
+          $("commuteKm").value = km;
+          setCommuteMode("commuteMode", mode);
           settings.workAddress = address;
+          settings.commuteKm = km;
+          settings.commuteMode = mode;
           $("workPrompt").hidden = true;
-          flash("公司地址已儲存，會用來算機車路線");
+          flash(`公司地址已儲存，會用來算${commuteModeLabel(mode)}路線`);
           await loadList({ force: true });
         } catch (error) {
           $("workPromptMsg").textContent = error.message;
@@ -3252,7 +3294,7 @@
           }
           if (data.type === "geo") {
             if (data.routeBackfill?.located) {
-              $("status").textContent = `已計算 ${data.routeBackfill.located} 筆機車路線，列表已更新`;
+              $("status").textContent = `已計算 ${data.routeBackfill.located} 筆${commuteModeLabel()}路線，列表已更新`;
             } else if (data.geoBackfill?.located || data.geoBackfill?.attempted) {
               $("status").textContent = `已從 591 地圖補 ${data.geoBackfill.located || 0} 筆座標，列表已更新`;
             }
