@@ -1,3 +1,4 @@
+import { APP_NAME } from "./brand.js";
 import net from "node:net";
 import os from "node:os";
 import tls from "node:tls";
@@ -11,7 +12,7 @@ export function smtpConfig() {
   const user = String(process.env.SMTP_USER || "").trim();
   const pass = String(process.env.SMTP_PASS || "");
   const from = String(process.env.SMTP_FROM || process.env.SMTP_USER || "").trim();
-  const fromName = String(process.env.SMTP_FROM_NAME || "591 物件追蹤").trim();
+  const fromName = String(process.env.SMTP_FROM_NAME || APP_NAME).trim();
   const secureFlag = String(process.env.SMTP_SECURE || "").trim();
   const secure = secureFlag === "1" || secureFlag.toLowerCase() === "true" || port === 465;
   return { host, port, user, pass, from, fromName, secure };
@@ -24,7 +25,7 @@ export function smtpConfigFrom(override) {
   const port = Number(override.port || 587) || 587;
   const user = String(override.user || "").trim();
   const from = String(override.from || user).trim();
-  const fromName = String(override.fromName || "591 物件追蹤").trim();
+  const fromName = String(override.fromName || APP_NAME).trim();
   const secureFlag = override.secure;
   const secure = secureFlag === true || secureFlag === "1" || String(secureFlag).toLowerCase() === "true" || port === 465;
   return {

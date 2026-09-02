@@ -52,6 +52,7 @@ import { assertCaptchaIssuable, assertDemoReadable, authAttemptKeys, clientIp } 
 import { buildDemoState } from "./demo.js";
 import { backfillListingCoords, backfillListingMrt, backfillListingRoutes, flushPendingNotifications, runWatch } from "./watcher.js";
 import { LIST_PAGE_SIZE } from "./client591.js";
+import { APP_NAME } from "./brand.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -306,8 +307,8 @@ app.post("/api/admin/mail/test", requireAdminApi, async (req, res) => {
     if (!mailConfigured()) throw Object.assign(new Error("請先儲存 SMTP 設定"), { status: 400 });
     await sendMail({
       to,
-      subject: "591 物件追蹤：測試信",
-      text: "這是後台管理寄出的測試信。若你看得到這封，SMTP 已可用。\n\n——591 物件追蹤\n",
+      subject: `${APP_NAME}：測試信`,
+      text: `這是後台管理寄出的測試信。若你看得到這封，SMTP 已可用。\n\n——${APP_NAME}\n`,
     });
     res.json({ ok: true, to });
   } catch (error) {
@@ -493,8 +494,8 @@ app.post("/api/member-mail/test", async (req, res) => {
     await sendMail({
       to,
       smtp,
-      subject: "591 物件追蹤：測試信",
-      text: `這是用你自己的 SMTP 寄到 ${to} 的測試信。若你看得到這封，物件通知就可以用同一組設定寄給你。\n\n——591 物件追蹤\n`,
+      subject: `${APP_NAME}：測試信`,
+      text: `這是用你自己的 SMTP 寄到 ${to} 的測試信。若你看得到這封，物件通知就可以用同一組設定寄給你。\n\n——${APP_NAME}\n`,
     });
     res.json({ ok: true, to });
   } catch (error) {
@@ -763,7 +764,7 @@ app.get("/api/events/stream", (req, res) => {
 
 app.listen(PORT, HOST, () => {
   schedule();
-  console.log(`591 追蹤 v2 開發版：http://${HOST}:${PORT}（資料 data-v2/v2.db，不會寫入線上 591.db）`);
+  console.log(`${APP_NAME}：http://${HOST}:${PORT}`);
   if (envAdminConfigured()) {
     console.log(`管理員帳號：${adminEmail()}（也可註冊新會員）`);
   } else {

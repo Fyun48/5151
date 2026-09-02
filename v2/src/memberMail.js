@@ -1,3 +1,4 @@
+import { APP_NAME } from "./brand.js";
 import { defaultMailTemplates, normalizeMailTemplates, normalizeSmtp, publicSmtp } from "./siteMail.js";
 
 export const GMAIL_APP_PASSWORD_HINT =
@@ -9,7 +10,7 @@ export function listingMailPresets() {
     {
       id: "concise",
       name: "簡潔",
-      subject: "591 物件追蹤：{{event}} {{title}}",
+      subject: `${APP_NAME}：{{event}} {{title}}`,
       text: `{{event}}
 {{title}}
 {{url}}
@@ -24,7 +25,7 @@ export function listingMailPresets() {
     {
       id: "facts",
       name: "重點條列",
-      subject: "591 物件追蹤：{{event}} {{title}}",
+      subject: `${APP_NAME}：{{event}} {{title}}`,
       text: `{{event}} · {{title}}
 {{price}}
 {{facts}}
