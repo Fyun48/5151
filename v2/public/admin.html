@@ -116,7 +116,7 @@
   <header>
     <div>
       <h1>後台管理</h1>
-      <div class="sub">會員、寄信 SMTP、信件內容、贊助連結、Google 路線用量。看不到會員密碼。</div>
+      <div class="sub">會員、寄信 SMTP、信件內容、贊助連結、通勤路線來源。看不到會員密碼。</div>
     </div>
     <div class="row">
       <span class="who" id="who"></span>
@@ -145,10 +145,11 @@
       </div>
     </section>
     <section class="card">
-      <h2>尖峰騎車時間</h2>
-      <p class="hint">CasaOS 上目前沒有 Google 金鑰時，先到 <a href="https://console.cloud.google.com/" target="_blank" rel="noopener noreferrer">Google Cloud Console</a> 建立專案、綁帳單、啟用 Directions API、建立金鑰（可限制 IP），再貼到下面。關閉後物件列表回到只顯示通勤公里數，也不會再打含路況的路線。費用依 Google 公開價目估算，實際以 Cloud 帳單為準；每月一般路線前 10,000 次、含路況前 5,000 次通常免費。</p>
+      <h2>通勤路線／Google 計費</h2>
+      <p class="hint">通勤<strong>公里數一律走免費 OpenStreetMap（OSRM）</strong>，同一組座標寫進路線快取後不會重算。Google Directions 只在你手動打開「使用 Google Directions」且要算尖峰上／下班分鐘時才會計費；預設關閉。費用依 <a href="https://developers.google.com/maps/billing-and-pricing/pricing" target="_blank" rel="noopener noreferrer">官方價目表</a>：免額於太平洋時間每月 1 日 00:00 重置。含路況 Advanced 前 5,000 次免費、之後 US$10／千次。請同時到 <a href="https://console.cloud.google.com/google/maps-apis/api-list" target="_blank" rel="noopener noreferrer">Google Cloud 停用 Directions API</a> 或刪除金鑰，避免金鑰被別的程式打到。</p>
       <form id="mapsForm">
-        <label class="checks"><input id="mapsEnabled" type="checkbox" /> 在物件列表顯示上班／下班尖峰分鐘</label>
+        <label class="checks"><input id="googleEnabled" type="checkbox" /> 使用 Google Directions（會計費，預設關閉）</label>
+        <label class="checks"><input id="mapsEnabled" type="checkbox" /> 在物件列表顯示上班／下班尖峰分鐘（需要上面那項）</label>
         <label>Google Maps API 金鑰</label>
         <input id="mapsKey" type="password" autocomplete="new-password" placeholder="已設定則可留白" />
         <p class="msg" id="mapsKeyState"></p>
@@ -162,9 +163,11 @@
             <p class="hint" id="mapsMonth" style="margin:0"></p>
           </div>
         </div>
+        <p class="hint" id="mapsOfficial" style="margin:12px 0 0;white-space:pre-wrap;font-family:ui-monospace,monospace"></p>
         <p class="hint" id="mapsLifetime" style="margin:12px 0 0"></p>
         <div class="row" style="margin:14px 0 0">
-          <button type="submit" class="primary" id="mapsSave">儲存尖峰設定</button>
+          <button type="submit" class="primary" id="mapsSave">儲存路線設定</button>
+          <button type="button" class="ghost" id="mapsClearKey">關閉並清除金鑰</button>
         </div>
         <p class="msg" id="mapsMsg"></p>
       </form>
@@ -352,16 +355,41 @@
       return `US$ ${Number(value || 0).toFixed(2)}`;
     }
 
+    function officialLine(line) {
+      const rate = Number(line.usdPerThousand) === 0 ? "免費" : `${usd(line.usdPerThousand)}／千次`;
+      return `  ${line.range}：${line.events || 0} 次 × ${rate} = ${usd(line.usd)}`;
+    }
+
+    function officialMapsWorksheet(usage) {
+      const ess = usage.essentialsBreakdown || {};
+      const adv = usage.advancedBreakdown || {};
+      const essLines = (ess.lines || []).map(officialLine).join("\n");
+      const advLines = (adv.lines || []).map(officialLine).join("\n");
+      return [
+        "官方價目試算（與 Cloud 同一套級距）",
+        `Directions（${ess.skuId || "28A8-3EB4-4595"}）本月 ${ess.used || 0} 次`,
+        essLines || "  （無）",
+        `  小計 ${usd(ess.usd)}`,
+        `Directions Advanced（${adv.skuId || "9407-00C2-CF85"}）本月 ${adv.used || 0} 次`,
+        advLines || "  （無）",
+        `  小計 ${usd(adv.usd)}`,
+        `本月合計 ${usd(usage.monthUsd)}`,
+      ].join("\n");
+    }
+
     function fillMaps(data) {
       const usage = data.usage || {};
+      $("googleEnabled").checked = Boolean(data.googleEnabled);
       $("mapsEnabled").checked = Boolean(data.enabled);
       $("mapsKey").value = "";
       $("mapsKey").placeholder = data.hasKey ? "已設定，空白則保留" : "貼上 Google Maps API 金鑰";
-      $("mapsKeyState").textContent = data.hasKey ? "金鑰：已設定" : "金鑰：尚未設定（現在的公里數走免費 OSRM，算不出尖峰分鐘）";
-      $("mapsKeyState").className = data.hasKey ? "msg ok" : "msg";
-      $("mapsToday").textContent = `一般路線 ${usage.todayEssentials || 0} 次 · 含路況 ${usage.todayAdvanced || 0} 次`;
-      $("mapsMonth").textContent = `一般 ${usage.monthEssentials || 0}／${usage.essentialsFree || 10000} 免額 · 含路況 ${usage.monthAdvanced || 0}／${usage.advancedFree || 5000} 免額 · 本月費用約 ${usd(usage.monthUsd)}`;
-      $("mapsLifetime").textContent = `累計 ${usage.lifetimeEssentials || 0} 次一般、${usage.lifetimeAdvanced || 0} 次含路況，累計費用約 ${usd(usage.lifetimeUsd)}（自開始紀錄）`;
+      const provider = data.provider === "google" ? "目前實際呼叫：Google Directions（計費）" : "目前實際呼叫：OpenStreetMap OSRM（免費）";
+      $("mapsKeyState").textContent = `${provider}。${data.hasKey ? "金鑰：已設定" : "金鑰：尚未設定"}`;
+      $("mapsKeyState").className = data.provider === "google" ? "msg err" : "msg ok";
+      $("mapsToday").textContent = `太平洋時間 ${usage.today || ""}：Directions ${usage.todayEssentials || 0} 次 · Directions Advanced ${usage.todayAdvanced || 0} 次`;
+      $("mapsMonth").textContent = `計費月 ${usage.month || ""}（${usage.billingTz || "America/Los_Angeles"}）：Directions ${usage.monthEssentials || 0} 次（免額 ${usage.essentialsFree || 10000}）· Advanced ${usage.monthAdvanced || 0} 次（免額 ${usage.advancedFree || 5000}）`;
+      $("mapsOfficial").textContent = officialMapsWorksheet(usage);
+      $("mapsLifetime").textContent = `累計紀錄 ${usage.lifetimeEssentials || 0} 次 Directions、${usage.lifetimeAdvanced || 0} 次 Advanced；各月官方價目加總約 ${usd(usage.lifetimeUsd)}。實際請款以 Cloud 帳單為準。`;
       setMsg("mapsMsg", data.warning || "", true);
     }
 
@@ -614,12 +642,16 @@
       meEmail = me.email || "";
       $("who").textContent = meEmail;
       await Promise.all([loadMembers(), loadMail(), loadSponsor(), loadMaps()]);
-      $("mapsForm").onsubmit = async (ev) => {
-        ev.preventDefault();
+      async function saveMaps(extra = {}) {
         $("mapsSave").disabled = true;
+        $("mapsClearKey").disabled = true;
         setMsg("mapsMsg", "儲存中…");
         try {
-          const body = { enabled: $("mapsEnabled").checked };
+          const body = {
+            googleEnabled: $("googleEnabled").checked,
+            enabled: $("mapsEnabled").checked,
+            ...extra,
+          };
           const key = $("mapsKey").value.trim();
           if (key) body.apiKey = key;
           const res = await fetch("/api/admin/maps", {
@@ -630,14 +662,25 @@
           const data = await readApi(res);
           if (!res.ok) throw new Error(data.error || "儲存失敗");
           fillMaps(data);
-          setMsg("mapsMsg", data.enabled
-            ? (data.hasKey ? "已開啟。物件列表會在算出尖峰分鐘後顯示上／下班時間。" : "已開啟，但還沒有金鑰，列表仍只顯示公里數。")
-            : "已關閉。物件列表回到只顯示通勤公里數。", true);
+          const note = data.googleEnabled
+            ? (data.hasKey ? "已允許 Google Directions，之後補算會計費。" : "已允許 Google Directions，但還沒有金鑰，仍走 OSRM。")
+            : "已關閉 Google Directions。通勤公里數走免費 OSRM。";
+          setMsg("mapsMsg", data.warning || note, true);
         } catch (error) {
           setMsg("mapsMsg", error.message);
         } finally {
           $("mapsSave").disabled = false;
+          $("mapsClearKey").disabled = false;
         }
+      }
+      $("mapsForm").onsubmit = async (ev) => {
+        ev.preventDefault();
+        await saveMaps();
+      };
+      $("mapsClearKey").onclick = async () => {
+        $("googleEnabled").checked = false;
+        $("mapsEnabled").checked = false;
+        await saveMaps({ clearKey: true });
       };
     })().catch((error) => {
       setMsg("memberMsg", error.message || "載入失敗");

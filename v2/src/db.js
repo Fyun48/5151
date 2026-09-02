@@ -5,12 +5,16 @@ import { shouldKeepListing, passesAttributeFilters, passesDisplayFilters, listin
 import { isTrustedGeoSource, listingCommunityId } from "./location.js";
 import { makeRouteKey } from "./route.js";
 import {
+  bindGoogleDirectionsEnabled,
   bindMapsUsageSink,
+  googleDirectionsAllowed,
   hasGoogleMapsKey,
   isCommuteRushEnabled,
+  isGoogleDirectionsEnabled,
+  mapsAdminWarning,
   rushStale,
   summarizeMapsUsage,
-  taipeiYmd,
+  pacificYmd,
 } from "./mapsBilling.js";
 import { sameSearch } from "./client591.js";
 import { districtNameFromListing } from "./regions.js";
@@ -460,18 +464,24 @@ function persistSmtpToAuthEnv(config) {
   writeFileSync(file, serializeEnvMap(merged), { encoding: "utf8", mode: 0o600 });
 }
 
-function persistGoogleKeyToAuthEnv(key) {
-  const trimmed = String(key || "").trim();
-  if (!trimmed) return;
+function persistGoogleKeyToAuthEnv(key, { unset = false } = {}) {
   const file = authEnvPath();
   const existing = existsSync(file) ? parseEnvFileText(readFileSync(file, "utf8")) : {};
+  if (unset) {
+    delete existing.GOOGLE_MAPS_API_KEY;
+    writeFileSync(file, serializeEnvMap(existing), { encoding: "utf8", mode: 0o600 });
+    delete process.env.GOOGLE_MAPS_API_KEY;
+    return;
+  }
+  const trimmed = String(key || "").trim();
+  if (!trimmed) return;
   const merged = mergeEnvMap(existing, { GOOGLE_MAPS_API_KEY: trimmed });
   writeFileSync(file, serializeEnvMap(merged), { encoding: "utf8", mode: 0o600 });
   process.env.GOOGLE_MAPS_API_KEY = trimmed;
 }
 
 function bumpMapsUsage(sku, count = 1) {
-  const day = taipeiYmd();
+  const day = pacificYmd();
   const essentials = sku === "essentials" ? count : 0;
   const advanced = sku === "advanced" ? count : 0;
   db.prepare(
@@ -487,6 +497,12 @@ bindMapsUsageSink(bumpMapsUsage);
 export function commuteRushEnabled() {
   return isCommuteRushEnabled(settingKey("commuteRushEnabled"));
 }
+
+export function googleDirectionsEnabled() {
+  return isGoogleDirectionsEnabled(settingKey("googleDirectionsEnabled"));
+}
+
+bindGoogleDirectionsEnabled(() => googleDirectionsEnabled());
 
 export function collectCommuteSettings() {
   const list = listUserIds().map((id) => getSettings(id));
@@ -504,27 +520,32 @@ export function settingsForGeoBackfill(preferred) {
 }
 
 export function getAdminMapsSettings() {
+  const googleEnabled = googleDirectionsEnabled();
   const enabled = commuteRushEnabled();
   const hasKey = hasGoogleMapsKey();
   const daily = db.prepare("SELECT day, essentials, advanced FROM maps_usage_daily ORDER BY day").all();
   const usage = summarizeMapsUsage(daily);
-  let warning = "";
-  if (enabled && !hasKey) warning = "已開啟尖峰分鐘，但還沒有 Google 金鑰，物件列表仍只會顯示通勤公里數。";
-  else if (!enabled) warning = "目前關閉。物件列表只顯示通勤公里數，也不會打含路況的 Google 路線。";
   return {
     enabled,
+    googleEnabled,
     hasKey,
-    warning,
+    provider: googleDirectionsAllowed() ? "google" : "osrm",
+    warning: mapsAdminWarning({ googleEnabled, rushEnabled: enabled, hasKey }),
     usage,
   };
 }
 
 export function saveAdminMapsSettings(partial = {}) {
   const src = partial && typeof partial === "object" ? partial : {};
+  if (Object.prototype.hasOwnProperty.call(src, "googleEnabled")) {
+    writeSettingKey("googleDirectionsEnabled", Boolean(src.googleEnabled));
+  }
   if (Object.prototype.hasOwnProperty.call(src, "enabled")) {
     writeSettingKey("commuteRushEnabled", Boolean(src.enabled));
   }
-  if (Object.prototype.hasOwnProperty.call(src, "apiKey")) {
+  if (src.clearKey === true) {
+    persistGoogleKeyToAuthEnv("", { unset: true });
+  } else if (Object.prototype.hasOwnProperty.call(src, "apiKey")) {
     persistGoogleKeyToAuthEnv(src.apiKey);
   }
   return getAdminMapsSettings();
@@ -1735,7 +1756,7 @@ export function listingsNeedingRoute(limit = 40) {
     )
     .all();
   const out = [];
-  const wantRush = commuteRushEnabled() && hasGoogleMapsKey();
+  const wantRush = commuteRushEnabled() && googleDirectionsAllowed();
   for (const row of rows) {
     for (const job of jobs) {
       const cached = getCachedRoute(row.lat, row.lng, job.workLat, job.workLng, job.commuteMode);
