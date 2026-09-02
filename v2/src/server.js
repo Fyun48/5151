@@ -345,18 +345,6 @@ function queueGeoBackfill(settings = getSettings()) {
   if (geoBackfillBusy || !needsListingGeo(settings)) return;
   geoBackfillBusy = true;
   (async () => {
-    for (let round = 0; round < 80; round += 1) {
-      try {
-        const geo = await backfillListingCoords(settings, { limit: LIST_PAGE_SIZE });
-        broadcast({ type: "geo", stats: stats(), geoBackfill: geo });
-        const notified = await flushPendingNotifications(settings);
-        if (notified.length) broadcastNotify(notified);
-        if (!geo.attempted) break;
-      } catch (error) {
-        console.warn("補定位失敗：", error.message);
-        await new Promise((resolve) => setTimeout(resolve, 1500));
-      }
-    }
     for (let round = 0; round < 200; round += 1) {
       try {
         const routes = await backfillListingRoutes(settings, { limit: 20 });
@@ -366,6 +354,18 @@ function queueGeoBackfill(settings = getSettings()) {
         if (!routes.attempted) break;
       } catch (error) {
         console.warn("補路線失敗：", error.message);
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
+    }
+    for (let round = 0; round < 80; round += 1) {
+      try {
+        const geo = await backfillListingCoords(settings, { limit: LIST_PAGE_SIZE });
+        broadcast({ type: "geo", stats: stats(), geoBackfill: geo });
+        const notified = await flushPendingNotifications(settings);
+        if (notified.length) broadcastNotify(notified);
+        if (!geo.attempted) break;
+      } catch (error) {
+        console.warn("補定位失敗：", error.message);
         await new Promise((resolve) => setTimeout(resolve, 1500));
       }
     }
