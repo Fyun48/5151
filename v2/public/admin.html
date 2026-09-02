@@ -146,7 +146,7 @@
     </section>
     <section class="card">
       <h2>通勤路線／Google 計費</h2>
-      <p class="hint">通勤<strong>公里數一律走免費 OpenStreetMap（OSRM）</strong>，同一組座標寫進路線快取後不會重算。Google Directions 只在你手動打開「使用 Google Directions」且要算尖峰上／下班分鐘時才會計費；預設關閉。費用依 <a href="https://developers.google.com/maps/billing-and-pricing/pricing" target="_blank" rel="noopener noreferrer">官方價目表</a>：免額於太平洋時間每月 1 日 00:00 重置。含路況 Advanced 前 5,000 次免費、之後 US$10／千次。請同時到 <a href="https://console.cloud.google.com/google/maps-apis/api-list" target="_blank" rel="noopener noreferrer">Google Cloud 停用 Directions API</a> 或刪除金鑰，避免金鑰被別的程式打到。</p>
+      <p class="hint">通勤<strong>公里數一律走免費 OpenStreetMap（OSRM）</strong>，同一組座標寫進快取後不會重算。Google Cloud 的 API 與金鑰可以留著，不必去官方停用；本站只要下面「使用 Google Directions」沒勾，就不會打 Google、也不會產生新費用。以後若要尖峰上／下班分鐘，再勾選並按儲存即可，不必重開 API、不必重貼金鑰。請勿按「關閉並清除金鑰」，除非你真的想把已存金鑰從伺服器刪掉。</p>
       <form id="mapsForm">
         <label class="checks"><input id="googleEnabled" type="checkbox" /> 使用 Google Directions（會計費，預設關閉）</label>
         <label class="checks"><input id="mapsEnabled" type="checkbox" /> 在物件列表顯示上班／下班尖峰分鐘（需要上面那項）</label>

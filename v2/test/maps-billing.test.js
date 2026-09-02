@@ -101,7 +101,8 @@ test("Google Directions stays off unless the admin switch is explicitly true", (
 });
 
 test("admin warning explains OSRM fallback when Google is off", () => {
-  assert.match(mapsAdminWarning({ googleEnabled: false, hasKey: true, rushEnabled: true }), /OSRM/);
+  assert.match(mapsAdminWarning({ googleEnabled: false, hasKey: true, rushEnabled: true }), /金鑰仍保留/);
+  assert.match(mapsAdminWarning({ googleEnabled: false, hasKey: false }), /OSRM/);
   assert.match(mapsAdminWarning({ googleEnabled: true, hasKey: false }), /還沒有金鑰/);
   assert.match(mapsAdminWarning({ googleEnabled: true, hasKey: true, rushEnabled: true }), /含路況/);
 });

@@ -47,6 +47,7 @@ test("admin page lists members, smtp, and templates without password fields", ()
   assert.match(html, /id="googleEnabled"/);
   assert.match(html, /使用 Google Directions（會計費，預設關閉）/);
   assert.match(html, /關閉並清除金鑰/);
+  assert.match(html, /不必去官方停用/);
   assert.match(html, /官方價目試算/);
   assert.match(html, /本月合計/);
   assert.match(html, /America\/Los_Angeles/);
