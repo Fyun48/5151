@@ -87,8 +87,20 @@
       vertical-align: baseline;
     }
     .route-chip {
-      display: inline-block;
+      display: inline;
       margin-left: 6px;
+      padding: 0;
+      border-radius: 0;
+      background: none;
+      color: inherit;
+      font-size: inherit;
+      font-weight: inherit;
+      letter-spacing: inherit;
+      line-height: inherit;
+      vertical-align: baseline;
+    }
+    .fee-chip {
+      display: inline-block;
       padding: 3px 10px;
       border-radius: 6px;
       background: linear-gradient(90deg, var(--hermes-deep) 0%, var(--hermes) 55%, var(--hermes-light) 100%);
@@ -98,6 +110,10 @@
       letter-spacing: .04em;
       line-height: 1.45;
       vertical-align: baseline;
+    }
+    .rent-price {
+      color: var(--ink);
+      font-weight: 700;
     }
     .guest-tour {
       position: fixed;
@@ -2434,6 +2450,40 @@
             <span class="hint">確認後保留較低價；同價留較新刊登</span>`;
     }
 
+    function chineseMonthCount(token) {
+      const map = { 一: 1, 二: 2, 兩: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
+      const s = String(token || "");
+      if (!s) return null;
+      if (s === "十") return 10;
+      if (s.startsWith("十")) return 10 + (map[s.slice(1)] || 0);
+      if (s.endsWith("十") && s.length === 2) return (map[s[0]] || 0) * 10;
+      return map[s] ?? null;
+    }
+    function depositMonths(text, rent) {
+      const s = String(text || "");
+      if (!/押金/.test(s)) return null;
+      const num = s.match(/(\d+(?:\.\d+)?)\s*個?月/);
+      if (num) return Number(num[1]);
+      const cn = s.match(/([一二兩三两四五六七八九十]+)\s*個?月/);
+      if (cn) {
+        const n = chineseMonthCount(cn[1]);
+        if (n != null) return n;
+      }
+      const yen = s.match(/([\d,]+)\s*元/);
+      const rentN = Number(rent);
+      if (yen && rentN > 0) {
+        const amt = Number(yen[1].replace(/,/g, ""));
+        if (Number.isFinite(amt) && amt > 0) return amt / rentN;
+      }
+      return null;
+    }
+    function isHighDeposit(text, rent) {
+      const months = depositMonths(text, rent);
+      return Number.isFinite(months) && months > 2;
+    }
+    function feeChip(text) {
+      return `<span class="fee-chip">${esc(text)}</span>`;
+    }
     function feeLines(item) {
       let rows = item.extra_fees;
       if (typeof rows === "string") {
@@ -2446,10 +2496,17 @@
       if (!bits.length && item.price_contain_text) bits.push(String(item.price_contain_text).replace(/[()（）]/g, ""));
       const extraAmt = Number(item.extra_fee) || 0;
       const rent = Number(item.price_num) || 0;
+      const htmlBits = bits.map((bit) => {
+        if (isHighDeposit(bit, rent) || /額外費用|含額外費用/.test(bit)) return feeChip(bit);
+        return esc(bit);
+      });
       const total = rent && extraAmt
         ? `含額外費用約 ${(rent + extraAmt).toLocaleString("zh-TW")} 元/月`
         : "";
-      return { bits, total };
+      const parts = [];
+      if (htmlBits.length) parts.push(htmlBits.join(" · "));
+      if (total) parts.push(feeChip(total));
+      return { bits, total, html: parts.join("<br>") };
     }
 
     function offlineLine(item) {
@@ -2616,15 +2673,15 @@
             ${matchPeerBlock(item)}
             ${formatListingWhen(item) ? `<div class="when"><span class="when-label">更新</span>${esc(formatListingWhen(item))}</div>` : ""}
             <div class="meta">
-              租金 ${item.price || ""} ${item.price_unit || "元/月"} · ${item.kind_name || ""} · ${item.layout || ""} · ${item.area_name || ""} · ${item.floor_name || ""}
+              <span class="rent-price">租金 ${esc(item.price || "")} ${esc(item.price_unit || "元/月")}</span> · ${esc(item.kind_name || "")} · ${esc(item.layout || "")} · ${esc(item.area_name || "")} · ${esc(item.floor_name || "")}
               <br>${esc(item.address || "")}${commuteText(item)}${offlineLine(item)}
               ${mrtText(item) ? `<div class="mrt-line">${mrtText(item)}</div>` : ""}
               ${item.match_detail ? `<br>比對：${esc(item.match_detail)}${item.match_post_id ? ` · <a href="${listingUrl(item.match_post_id)}" target="_blank" rel="noopener noreferrer">舊刊登 #${item.match_post_id}</a>` : ""}` : ""}
             </div>
             ${(() => {
               const fees = feeLines(item);
-              if (!fees.bits.length && !fees.total) return "";
-              return `<div class="fees">${fees.bits.map(esc).join(" · ")}${fees.total ? `<br>${esc(fees.total)}` : ""}</div>`;
+              if (!fees.html) return "";
+              return `<div class="fees">${fees.html}</div>`;
             })()}
             ${item.watched || draftWatch.has(String(id)) ? `<label class="watch-note-label" for="watch-note-${id}">關注備註</label>
             <textarea class="watch-note" id="watch-note-${id}" data-watch-note="${id}" data-watch-draft="${draftWatch.has(String(id)) ? "1" : "0"}" maxlength="300" rows="2" placeholder="${draftWatch.has(String(id)) ? "選填。選字不會送出；按「加入」或 Enter 才加入特別關注" : "為什麼關注？"}">${esc(noteValueFor(id, item.watch_note || ""))}</textarea>` : ""}
