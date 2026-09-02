@@ -66,7 +66,9 @@ export function googleDirectionsAllowed(env = process.env) {
 
 export function mapsAdminWarning({ googleEnabled, rushEnabled, hasKey } = {}) {
   if (!googleEnabled) {
-    return "Google Directions 已關閉。通勤公里數改走免費 OpenStreetMap（OSRM），不會再產生 Google 路線費用。";
+    return hasKey
+      ? "Google Directions 已關閉，金鑰仍保留。本站不呼叫就不計費；以後要尖峰分鐘再勾選即可，不必去官方重開 API。"
+      : "Google Directions 已關閉。通勤公里數走免費 OpenStreetMap（OSRM）。";
   }
   if (!hasKey) {
     return "已允許 Google Directions，但還沒有金鑰，公里數仍走 OSRM。";
