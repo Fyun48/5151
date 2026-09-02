@@ -4,9 +4,12 @@ on:
   push:
     branches: [master, main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
+  actions: write
 
 jobs:
   test:
@@ -18,3 +21,12 @@ jobs:
         with:
           node-version: "22"
       - run: npm test
+      - name: Auto-merge and deploy
+        if: github.event_name == 'pull_request' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh pr merge "${{ github.event.pull_request.number }}" --squash --delete-branch
+          gh workflow run deploy.yml --ref master
+          gh workflow run deploy-v2.yml --ref master
