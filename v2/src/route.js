@@ -67,11 +67,6 @@ async function googleDirections(fromLat, fromLng, toLat, toLng, { departureTime 
   return { distances, durationMin };
 }
 
-async function googleRoutes(fromLat, fromLng, toLat, toLng, mode = "scooter") {
-  const row = await googleDirections(fromLat, fromLng, toLat, toLng, { mode });
-  return row?.distances?.length ? row.distances : null;
-}
-
 async function osrmRoutes(fromLat, fromLng, toLat, toLng) {
   const wait = 1100 - (Date.now() - lastRouteAt);
   if (wait > 0) await sleep(wait);
@@ -109,22 +104,13 @@ export async function fetchRoadRoutes(fromLat, fromLng, toLat, toLng, { mode = "
   const from = [Number(fromLat), Number(fromLng)];
   const to = [Number(toLat), Number(toLng)];
   if (!from.every(Number.isFinite) || !to.every(Number.isFinite)) return null;
-  let distances = [];
-  try {
-    const google = await googleRoutes(from[0], from[1], to[0], to[1], mode);
-    if (google?.length) distances = google;
-  } catch {
-    // 沒有 Google key 或失敗時改用 OpenStreetMap 路線
-  }
-  if (distances.length >= 2) return distances;
   try {
     const osrm = await osrmRoutes(from[0], from[1], to[0], to[1]);
-    if (osrm?.busy) return distances.length ? distances : null;
-    if (osrm?.length) distances = mergeKm(distances, osrm);
+    if (osrm?.busy) return null;
+    return osrm?.length ? osrm : null;
   } catch {
-    return distances.length ? distances : null;
+    return null;
   }
-  return distances.length ? distances : null;
 }
 
 export async function fetchRushRoadRoutes(fromLat, fromLng, toLat, toLng, { now = Date.now(), mode = "scooter" } = {}) {

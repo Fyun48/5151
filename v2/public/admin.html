@@ -146,7 +146,7 @@
     </section>
     <section class="card">
       <h2>通勤路線／Google 計費</h2>
-      <p class="hint">費用依 <a href="https://developers.google.com/maps/billing-and-pricing/pricing" target="_blank" rel="noopener noreferrer">Google Maps Platform 官方價目表</a>（Directions／Directions Advanced）：免額於太平洋時間每月 1 日 00:00 重置；只計算成功請求（OK、ZERO_RESULTS）。Directions 前 10,000 次免費，之後 US$5／千次（超過 10 萬次 US$4）；含路況的 Advanced 前 5,000 次免費，之後 US$10／千次（超過 10 萬次 US$8）。本站試算用同一公式；Cloud 帳單若還含稅或其他 SKU，仍以官方帳單為準。通勤公里數預設走免費 OSRM。請同時到 <a href="https://console.cloud.google.com/google/maps-apis/api-list" target="_blank" rel="noopener noreferrer">Google Cloud 停用 Directions API</a> 或刪除金鑰。</p>
+      <p class="hint">通勤<strong>公里數一律走免費 OpenStreetMap（OSRM）</strong>，同一組座標寫進路線快取後不會重算。Google Directions 只在你手動打開「使用 Google Directions」且要算尖峰上／下班分鐘時才會計費；預設關閉。費用依 <a href="https://developers.google.com/maps/billing-and-pricing/pricing" target="_blank" rel="noopener noreferrer">官方價目表</a>：免額於太平洋時間每月 1 日 00:00 重置。含路況 Advanced 前 5,000 次免費、之後 US$10／千次。請同時到 <a href="https://console.cloud.google.com/google/maps-apis/api-list" target="_blank" rel="noopener noreferrer">Google Cloud 停用 Directions API</a> 或刪除金鑰，避免金鑰被別的程式打到。</p>
       <form id="mapsForm">
         <label class="checks"><input id="googleEnabled" type="checkbox" /> 使用 Google Directions（會計費，預設關閉）</label>
         <label class="checks"><input id="mapsEnabled" type="checkbox" /> 在物件列表顯示上班／下班尖峰分鐘（需要上面那項）</label>

@@ -51,27 +51,40 @@ test("fetchRoadRoutes does not call Google when the admin switch is off", async 
   }
 });
 
-test("fetchRoadRoutes calls Google only after the admin switch is on", async () => {
+test("fetchRoadRoutes always uses OSRM, even if the Google switch is on", async () => {
   const prevKey = process.env.GOOGLE_MAPS_API_KEY;
   process.env.GOOGLE_MAPS_API_KEY = "fake-key";
   bindGoogleDirectionsEnabled(() => true);
   const urls = [];
   const orig = globalThis.fetch;
   globalThis.fetch = async (input) => {
-    urls.push(String(input));
+    const url = String(input);
+    urls.push(url);
+    if (url.includes("maps.googleapis.com")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          status: "OK",
+          routes: [{ legs: [{ distance: { value: 5100 }, duration: { value: 720 } }] }],
+        }),
+      };
+    }
     return {
       ok: true,
       status: 200,
-      json: async () => ({
-        status: "OK",
-        routes: [{ legs: [{ distance: { value: 5100 }, duration: { value: 720 } }] }],
-      }),
+      json: async () => ({ code: "Ok", routes: [{ distance: 4200 }] }),
     };
   };
   try {
     const distances = await fetchRoadRoutes(25.05, 121.52, 25.06, 121.61);
-    assert.deepEqual(distances, [5.1]);
-    assert.equal(urls.some((url) => url.includes("maps.googleapis.com/maps/api/directions")), true);
+    assert.deepEqual(distances, [4.2]);
+    assert.equal(urls.some((url) => url.includes("maps.googleapis.com")), false);
+    assert.equal(urls.some((url) => url.includes("router.project-osrm.org")), true);
+    urls.length = 0;
+    const rush = await fetchRushRoadRoutes(25.05, 121.52, 25.06, 121.61);
+    assert.equal(rush?.distances?.[0], 5.1);
+    assert.equal(urls.filter((url) => url.includes("maps.googleapis.com/maps/api/directions")).length, 2);
   } finally {
     globalThis.fetch = orig;
     bindGoogleDirectionsEnabled(() => false);

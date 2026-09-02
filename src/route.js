@@ -22,29 +22,6 @@ function uniqueDistances(values) {
   return out.sort((a, b) => a - b).slice(0, 3);
 }
 
-async function googleRoutes(fromLat, fromLng, toLat, toLng) {
-  if (String(process.env.GOOGLE_DIRECTIONS_ENABLED || "").trim() !== "1") return null;
-  const key = String(process.env.GOOGLE_MAPS_API_KEY || "").trim();
-  if (!key) return null;
-  const url = new URL("https://maps.googleapis.com/maps/api/directions/json");
-  url.searchParams.set("origin", `${fromLat},${fromLng}`);
-  url.searchParams.set("destination", `${toLat},${toLng}`);
-  url.searchParams.set("mode", "driving");
-  url.searchParams.set("alternatives", "true");
-  url.searchParams.set("avoid", "highways");
-  url.searchParams.set("region", "tw");
-  url.searchParams.set("language", "zh-TW");
-  url.searchParams.set("key", key);
-  const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
-  if (!res.ok) return null;
-  const body = await res.json();
-  if (body.status !== "OK" && body.status !== "ZERO_RESULTS") return null;
-  const meters = (body.routes || []).map((route) =>
-    (route.legs || []).reduce((sum, leg) => sum + Number(leg.distance?.value || 0), 0),
-  );
-  return uniqueDistances(meters);
-}
-
 async function osrmRoutes(fromLat, fromLng, toLat, toLng) {
   const wait = 1100 - (Date.now() - lastRouteAt);
   if (wait > 0) await sleep(wait);
@@ -73,28 +50,15 @@ export function makeRouteKey(fromLat, fromLng, toLat, toLng) {
   return `${roundCoord(fromLat)},${roundCoord(fromLng)}>${roundCoord(toLat)},${roundCoord(toLng)}`;
 }
 
-function mergeKm(a, b) {
-  return [...new Set([...(a || []), ...(b || [])])].sort((x, y) => x - y).slice(0, 3);
-}
-
 export async function fetchRoadRoutes(fromLat, fromLng, toLat, toLng) {
   const from = [Number(fromLat), Number(fromLng)];
   const to = [Number(toLat), Number(toLng)];
   if (!from.every(Number.isFinite) || !to.every(Number.isFinite)) return null;
-  let distances = [];
-  try {
-    const google = await googleRoutes(from[0], from[1], to[0], to[1]);
-    if (google?.length) distances = google;
-  } catch {
-    // 沒有 Google key 或失敗時改用 OpenStreetMap 路線
-  }
-  if (distances.length >= 2) return distances;
   try {
     const osrm = await osrmRoutes(from[0], from[1], to[0], to[1]);
-    if (osrm?.busy) return distances.length ? distances : null;
-    if (osrm?.length) distances = mergeKm(distances, osrm);
+    if (osrm?.busy) return null;
+    return osrm?.length ? osrm : null;
   } catch {
-    return distances.length ? distances : null;
+    return null;
   }
-  return distances.length ? distances : null;
 }
