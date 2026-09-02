@@ -43,8 +43,13 @@ test("admin page lists members, smtp, and templates without password fields", ()
   assert.match(html, /\/api\/admin\/mail/);
   assert.match(html, /\/api\/admin\/sponsor/);
   assert.match(html, /\/api\/admin\/maps/);
-  assert.match(html, /尖峰騎車時間/);
-  assert.match(html, /本月費用約/);
+  assert.match(html, /通勤路線／Google 計費/);
+  assert.match(html, /id="googleEnabled"/);
+  assert.match(html, /使用 Google Directions（會計費，預設關閉）/);
+  assert.match(html, /關閉並清除金鑰/);
+  assert.match(html, /官方價目試算/);
+  assert.match(html, /本月合計/);
+  assert.match(html, /America\/Los_Angeles/);
   assert.match(html, /SMTP 主機/);
   assert.match(html, /贊助連結/);
   assert.match(html, /忘記密碼主旨/);

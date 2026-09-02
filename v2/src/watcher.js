@@ -43,7 +43,7 @@ import { isTrustedGeoSource, listingCommunityId } from "./location.js";
 import { decideNotifyDelivery } from "./floors.js";
 import { fetchRoadRoutes, fetchRushRoadRoutes } from "./route.js";
 import { fetchMrtAccess } from "./mrt.js";
-import { hasGoogleMapsKey } from "./mapsBilling.js";
+import { googleDirectionsAllowed } from "./mapsBilling.js";
 import { bestMatch } from "./match.js";
 import { classifyExistingUpdate, eventLabel, listingLastEvent, notify, shouldDockNotify, shouldMailNotify, shouldNotify, shouldWebhookNotify } from "./notify.js";
 import { normalizeOfflineConfirmDays, shouldRecheckOffline } from "./offline.js";
@@ -214,7 +214,7 @@ async function resolveListingRoute(listing, settings) {
   const lat = Number(listing?.lat);
   const lng = Number(listing?.lng);
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return listing;
-  const wantRush = commuteRushEnabled() && hasGoogleMapsKey();
+  const wantRush = commuteRushEnabled() && googleDirectionsAllowed();
   const hasKm = Array.isArray(listing.route_kms) && listing.route_kms.length;
   const hasRush = Number.isFinite(Number(listing.rush_am_min)) && Number.isFinite(Number(listing.rush_pm_min));
   if (hasKm && (!wantRush || hasRush)) return listing;
@@ -251,7 +251,7 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
     }
     const delivery = decideNotifyDelivery(listing, {
       ...userSettings,
-      waitRushMinutes: commuteRushEnabled() && hasGoogleMapsKey(),
+      waitRushMinutes: commuteRushEnabled() && googleDirectionsAllowed(),
     });
     if (delivery === "pending") continue;
     markEventNotified(event.id);
@@ -310,7 +310,7 @@ async function resolvePendingNotifyLocations(settings, { withRoute = true } = {}
     if (!shouldNotify(userSettings, listing, event)) continue;
     if (decideNotifyDelivery(listing, {
       ...userSettings,
-      waitRushMinutes: commuteRushEnabled() && hasGoogleMapsKey(),
+      waitRushMinutes: commuteRushEnabled() && googleDirectionsAllowed(),
     }) !== "pending") continue;
     ids.push(event.post_id);
   }
@@ -531,7 +531,7 @@ export async function backfillListingRoutes(settings = getSettings(), { limit = 
     const mode = normalizeCommuteMode(row.commuteMode || settings.commuteMode || fallback?.commuteMode);
     if (!Number.isFinite(workLat) || !Number.isFinite(workLng)) continue;
     attempted += 1;
-    const wantRush = commuteRushEnabled() && hasGoogleMapsKey();
+    const wantRush = commuteRushEnabled() && googleDirectionsAllowed();
     const rush = wantRush ? await fetchRushRoadRoutes(row.lat, row.lng, workLat, workLng, { mode }) : null;
     const distances = rush?.distances?.length ? rush.distances : await fetchRoadRoutes(row.lat, row.lng, workLat, workLng, { mode });
     if (distances?.length) {

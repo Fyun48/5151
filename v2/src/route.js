@@ -1,5 +1,5 @@
 import { normalizeCommuteMode } from "./geo.js";
-import { hasGoogleMapsKey, nextWeekdayTaipeiUnix, recordMapsUsage, secondsToMinutes } from "./mapsBilling.js";
+import { googleDirectionsAllowed, isBillableDirectionsStatus, nextWeekdayTaipeiUnix, recordMapsUsage, secondsToMinutes } from "./mapsBilling.js";
 
 const GEO_UA = "591-tracker/1.0 (personal rental watcher; acefengyun@gmail.com)";
 
@@ -39,6 +39,7 @@ function routeTrafficSeconds(route) {
 }
 
 async function googleDirections(fromLat, fromLng, toLat, toLng, { departureTime = 0, mode = "scooter" } = {}) {
+  if (!googleDirectionsAllowed()) return null;
   const key = String(process.env.GOOGLE_MAPS_API_KEY || "").trim();
   if (!key) return null;
   const url = new URL("https://maps.googleapis.com/maps/api/directions/json");
@@ -58,8 +59,8 @@ async function googleDirections(fromLat, fromLng, toLat, toLng, { departureTime 
   const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
   if (!res.ok) return null;
   const body = await res.json();
+  if (!isBillableDirectionsStatus(body.status)) return null;
   recordMapsUsage(rush ? "advanced" : "essentials", 1);
-  if (body.status !== "OK" && body.status !== "ZERO_RESULTS") return null;
   const routes = body.routes || [];
   const distances = uniqueDistances(routes.map(routeMeters));
   const durationMin = secondsToMinutes(Math.min(...routes.map(routeTrafficSeconds).filter((n) => n > 0)));
@@ -130,7 +131,7 @@ export async function fetchRushRoadRoutes(fromLat, fromLng, toLat, toLng, { now 
   const from = [Number(fromLat), Number(fromLng)];
   const to = [Number(toLat), Number(toLng)];
   if (!from.every(Number.isFinite) || !to.every(Number.isFinite)) return null;
-  if (!hasGoogleMapsKey()) return null;
+  if (!googleDirectionsAllowed()) return null;
   const amAt = nextWeekdayTaipeiUnix(8, 15, { now });
   const pmAt = nextWeekdayTaipeiUnix(18, 15, { now });
   let morning = null;

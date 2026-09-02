@@ -23,6 +23,7 @@ function uniqueDistances(values) {
 }
 
 async function googleRoutes(fromLat, fromLng, toLat, toLng) {
+  if (String(process.env.GOOGLE_DIRECTIONS_ENABLED || "").trim() !== "1") return null;
   const key = String(process.env.GOOGLE_MAPS_API_KEY || "").trim();
   if (!key) return null;
   const url = new URL("https://maps.googleapis.com/maps/api/directions/json");
