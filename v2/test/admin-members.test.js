@@ -42,6 +42,9 @@ test("admin page lists members, smtp, and templates without password fields", ()
   assert.match(html, /\/api\/admin\/members/);
   assert.match(html, /\/api\/admin\/mail/);
   assert.match(html, /\/api\/admin\/sponsor/);
+  assert.match(html, /\/api\/admin\/maps/);
+  assert.match(html, /尖峰騎車時間/);
+  assert.match(html, /本月費用約/);
   assert.match(html, /SMTP 主機/);
   assert.match(html, /贊助連結/);
   assert.match(html, /忘記密碼主旨/);
@@ -61,6 +64,7 @@ test("admin API routes exist and members payload is guarded", () => {
   assert.match(src, /\/api\/admin\/members/);
   assert.match(src, /\/api\/admin\/mail/);
   assert.match(src, /\/api\/admin\/sponsor/);
+  assert.match(src, /\/api\/admin\/maps/);
   assert.match(src, /publicSponsorSettings/);
   assert.match(src, /會員列表不得含密碼/);
   assert.match(src, /requireAdminApi/);
