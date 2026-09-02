@@ -64,6 +64,37 @@
       padding: 8px 10px;
       font-size: 13px;
     }
+    .guest-banner,
+    .work-prompt {
+      margin: 0 32px 0;
+      padding: 12px 16px;
+      background: var(--accent-mist);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+    }
+    .guest-banner p,
+    .work-prompt p { margin: 0; font-size: 13px; color: var(--ink); line-height: 1.55; }
+    .guest-banner .row,
+    .work-prompt .row { margin-top: 10px; }
+    .work-prompt input[type="text"],
+    .work-prompt input[type="number"] {
+      width: min(420px, 100%);
+      margin: 8px 0 0;
+    }
+    body.role-guest #resetLink,
+    body.role-guest #adminLink,
+    body.role-guest #logoutBtn,
+    body.role-guest #watchBtn,
+    body.role-guest #sponsorBar { display: none !important; }
+    body.role-guest .panel input,
+    body.role-guest .panel textarea,
+    body.role-guest .panel select,
+    body.role-guest .header-profiles input,
+    body.role-guest .header-profiles select,
+    body.role-guest .header-profiles button {
+      caret-color: transparent;
+      pointer-events: none;
+    }
     .sponsor-bar {
       margin: 0 32px;
       padding: 12px 16px;
@@ -93,6 +124,12 @@
     a.sponsor-chip .blurb { opacity: 0.86; font-size: 12px; }
     .sponsor-bar.thanks { background: #fff; }
     .save-msg { font-size: 12px; color: var(--muted); margin-left: 4px; }
+    .site-footer {
+      margin: 8px 32px 28px;
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: 0.02em;
+    }
     h1 {
       margin: 0;
       font-family: "Noto Serif TC", "Source Han Serif TC", serif;
@@ -696,6 +733,8 @@
       </div>
       <div class="row">
         <span class="who" id="who"></span>
+        <a class="ghost" id="loginBtn" href="/login.html" hidden>登入</a>
+        <a class="primary" id="registerBtn" href="/login.html?register=1" hidden>註冊</a>
         <a class="ghost" id="logoutBtn" href="/logout">登出</a>
         <a class="ghost admin-only" id="adminLink" href="/admin.html">後台管理</a>
         <a class="ghost" id="resetLink" href="/reset.html" title="會刪光物件與設定；無法修復畫面卡住" style="display:inline-flex;align-items:center;text-decoration:none">清除資料</a>
@@ -713,6 +752,25 @@
       <span class="save-msg" id="saveMsg"></span>
     </div>
   </header>
+  <div id="guestBanner" class="guest-banner" hidden>
+    <p>這是示範列表，條件與公司地址為展示用。註冊後才能改成你的條件、收到通知。</p>
+    <div class="row">
+      <a class="primary" href="/login.html?register=1">註冊</a>
+      <a class="ghost" href="/login.html">登入</a>
+    </div>
+  </div>
+  <div id="workPrompt" class="work-prompt" hidden>
+    <p>公司地址（選填，用來算機車公里與尖峰時間）。略過的話之後可在左側設定再填。</p>
+    <label for="workPromptAddress">上班地址</label>
+    <input id="workPromptAddress" type="text" maxlength="120" placeholder="例如：台北市士林區德行西路7號" />
+    <label for="workPromptKm">機車路線上限（公里）</label>
+    <input id="workPromptKm" type="number" min="0" max="80" step="0.5" value="13" />
+    <div class="row">
+      <button type="button" class="primary" id="workPromptSave">儲存</button>
+      <button type="button" class="ghost" id="workPromptSkip">略過</button>
+    </div>
+    <p class="hint" id="workPromptMsg"></p>
+  </div>
   <div id="sponsorBar" class="sponsor-bar" hidden></div>
   <div class="wrap">
     <aside class="card panel" id="settingsPanel">
@@ -947,6 +1005,7 @@
       <div class="list" id="list"><div class="empty">尚未載入列表</div></div>
     </main>
   </div>
+  <footer class="site-footer">reversal play tech | 逆遊科技</footer>
   <button type="button" class="primary" id="scrollTopBtn" title="回頂" aria-label="回頂">↑</button>
   <aside id="alertDock" aria-live="polite">
     <header>
@@ -977,7 +1036,7 @@
     window.fetch = async (input, init) => {
       const res = await origFetch(input, { credentials: "same-origin", ...init });
       const url = String(input);
-      if (url.startsWith("/api/") && res.status === 401 && !url.includes("/api/login") && !url.includes("/api/me")) {
+      if (url.startsWith("/api/") && res.status === 401 && !isGuest && !url.includes("/api/login") && !url.includes("/api/me") && !url.includes("/api/demo")) {
         location.replace("/login.html");
       }
       return res;
@@ -995,6 +1054,9 @@
     let filter = "all";
     let kind = "";
     let sort = "newest";
+    let isGuest = false;
+    let guestLockClicks = 0;
+    const WORK_PROMPT_SKIP = "591_v2_work_prompt_skip";
     let settings = {};
     let selected = new Set();
     let excludeBoxes = [];
@@ -1006,6 +1068,7 @@
     const draftWatch = new Set();
     const noteDrafts = new Map();
     let listCache = [];
+    let guestListings = [];
     let lastStats = {};
     let listRefreshQueued = false;
     let noteComposing = false;
@@ -1040,6 +1103,12 @@
       const intro = $("sponsorSettingsIntro");
       const linksBox = $("sponsorSettingsLinks");
       if (!bar) return;
+      if (isGuest) {
+        bar.hidden = true;
+        bar.innerHTML = "";
+        if (block) block.hidden = true;
+        return;
+      }
       if (offer?.show && Array.isArray(offer.links) && offer.links.length) {
         bar.hidden = false;
         bar.classList.remove("thanks");
@@ -1081,7 +1150,7 @@
         const extra = routes.length > 1 ? `（${routes.map((n) => `${n}`).join(" / ")} 公里）` : "";
         return ` · 機車路線約 ${item.commute_km} 公里${extra}`;
       }
-      if (!commuteOn()) return "";
+      if (isGuest || !commuteOn()) return "";
       const src = String(item.geo_source || "");
       const hasPin = Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lng)) && (src === "591" || src === "community");
       return hasPin ? " · 機車路線計算中" : " · 尚未取得地圖座標";
@@ -1104,9 +1173,10 @@
       }
     }
 
-    /** 經本站 /go/:id 標記已瀏覽後再開 591（系統通知／卡片／Discord 皆同） */
+    /** 已登入經 /go/:id 標記已瀏覽；訪客直接開 591，不寫入任何人的已瀏覽。 */
     function listingUrl(item) {
       const id = item?.post_id || item;
+      if (isGuest) return `https://rent.591.com.tw/${encodeURIComponent(id)}`;
       return `/go/${encodeURIComponent(id)}`;
     }
 
@@ -1198,7 +1268,7 @@
 
     async function persistViewFilters() {
       saveViewFilters();
-      if (!settingsLoaded) return;
+      if (!settingsLoaded || isGuest) return;
       try {
         const res = await fetch("/api/settings", {
           method: "POST",
@@ -1251,11 +1321,126 @@
     function applyListView(items) {
       return applyViewFilters(applyDistrictView(items));
     }
+
+    function guestKindMatch(item, key) {
+      if (!key) return true;
+      const hay = `${item.title || ""} ${item.kind_name || ""} ${item.address || ""}`;
+      if (key === "elevator") return /有電梯|電梯大樓|電梯公寓/.test(hay) && !/無電梯/.test(hay);
+      if (key === "apartment") return /公寓/.test(hay) && !/電梯大樓/.test(hay);
+      if (key === "suite") return /套房|雅房/.test(String(item.kind_name || ""));
+      return true;
+    }
+
+    function guestFilterMatch(item, key) {
+      const hidden = Number(item.hidden) === 1;
+      const watched = Number(item.watched) === 1;
+      const viewed = Number(item.viewed) === 1;
+      const offline = Number(item.offline) === 1;
+      const confirmed = Number(item.offline_confirmed) === 1;
+      const dup = String(item.match_verdict || "") === "yes";
+      if (key === "hidden") return hidden || dup;
+      if (key === "offline") return offline && !confirmed;
+      if (key === "suspected") return Boolean(item.match_level) && !offline;
+      if (dup || offline || hidden) return false;
+      if (key === "all") return !watched;
+      if (key === "unseen") return !viewed;
+      if (key === "viewed") return viewed;
+      if (key === "watched") return watched;
+      if (key === "same_source") {
+        return ["same_source", "update", "price_drop", "title_update"].includes(item.last_event);
+      }
+      return true;
+    }
+
+    function applyGuestQuery(items) {
+      let out = (items || []).filter((item) => guestFilterMatch(item, filter) && guestKindMatch(item, kind));
+      const q = ($("q")?.value || "").trim().toLowerCase();
+      if (q) {
+        out = out.filter((item) => {
+          const hay = `${item.title || ""} ${item.address || ""} ${item.post_id || ""} ${item.watch_note || ""}`.toLowerCase();
+          return hay.includes(q);
+        });
+      }
+      if (sort === "commute_asc") {
+        out.sort((a, b) => (Number(a.commute_km) || 9999) - (Number(b.commute_km) || 9999) || (Number(a.price_num) || 1e15) - (Number(b.price_num) || 1e15));
+      } else if (sort === "commute_desc") {
+        out.sort((a, b) => (Number(b.commute_km) || 0) - (Number(a.commute_km) || 0));
+      } else if (sort === "price_desc") {
+        out.sort((a, b) => (Number(b.price_num) || 0) - (Number(a.price_num) || 0));
+      } else if (sort === "newest") {
+        out.sort((a, b) => String(b.first_seen_at || "").localeCompare(String(a.first_seen_at || "")) || Number(b.post_id) - Number(a.post_id));
+      } else {
+        out.sort((a, b) => (Number(a.price_num) || 1e15) - (Number(b.price_num) || 1e15));
+      }
+      return applyListView(out);
+    }
     loadViewFilters();
 
     function flash(msg) {
       $("saveMsg").textContent = msg;
       if ($("status")) $("status").textContent = msg;
+    }
+
+    function remindGuest() {
+      guestLockClicks += 1;
+      if ($("guestBanner")) $("guestBanner").hidden = false;
+      const msg = "註冊後才能改成你的條件。";
+      if (guestLockClicks <= 3) flash(msg);
+      else if ($("status")) $("status").textContent = msg;
+    }
+
+    function goRegister() {
+      location.href = "/login.html?register=1";
+    }
+
+    function setGuestMode(on) {
+      isGuest = Boolean(on);
+      document.body.classList.toggle("role-guest", isGuest);
+      if ($("guestBanner")) $("guestBanner").hidden = !isGuest;
+      if ($("loginBtn")) $("loginBtn").hidden = !isGuest;
+      if ($("registerBtn")) $("registerBtn").hidden = !isGuest;
+      if ($("logoutBtn")) $("logoutBtn").hidden = isGuest;
+      if ($("watchBtn")) $("watchBtn").hidden = isGuest;
+      if (isGuest) {
+        $("who").textContent = "示範瀏覽";
+        paintSponsorOffer({ show: false });
+      }
+    }
+
+    function isGuestLockedTarget(el) {
+      if (!el || !isGuest) return false;
+      if (el.closest("#collapsePanelBtn, #expandPanelBtn, #reloadBtn, #loginBtn, #registerBtn, #guestBanner, #listHeadSticky .chip, #q, #wholeFloorOnly, #excludeLowFloors, [data-view-district]")) return false;
+      if (el.closest(".item-cover, h3 a, a.tel, .line-qr")) return false;
+      if (el.closest("#settingsPanel, .header-profiles, #watchBtn, #bulkBar")) return true;
+      if (el.closest("[data-watched], [data-viewed], [data-hidden], [data-watch-draft-commit], [data-watch-draft-cancel], [data-watch-note], .pick")) return true;
+      return false;
+    }
+
+    document.addEventListener("click", (ev) => {
+      if (!isGuest || !isGuestLockedTarget(ev.target)) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (ev.target.closest("[data-watched], [data-viewed], [data-hidden], #saveBtn, #saveAsBtn, #watchBtn, #deleteProfileBtn, #hideSelectedBtn, .pick")) {
+        goRegister();
+        return;
+      }
+      remindGuest();
+    }, true);
+
+    function maybeShowWorkPrompt() {
+      const box = $("workPrompt");
+      if (!box || isGuest || meIsAdmin) return;
+      if (String(settings.workAddress || "").trim()) {
+        box.hidden = true;
+        return;
+      }
+      try {
+        if (localStorage.getItem(WORK_PROMPT_SKIP) === "1") return;
+      } catch {
+        /* 略過 */
+      }
+      box.hidden = false;
+      if ($("workPromptKm")) $("workPromptKm").value = Number(settings.commuteKm) > 0 ? settings.commuteKm : 13;
     }
 
     function setSettingsReady(ok, msg) {
@@ -1480,7 +1665,13 @@
       const hint = $("intervalMemberHint");
       if (hint) {
         const mins = Math.max(1, Number(s.intervalMinutes) || (mePlan === "sponsor" ? 5 : 8));
-        hint.textContent = `本系統每${mins}分鐘會重新檢本物件來源比對篩選`;
+        if (isGuest) {
+          hint.textContent = `示範資料沿用目前的檢查節奏。註冊後一般會員每 8 分鐘檢查一次，贊助會員為 5 分鐘。`;
+        } else if (mePlan === "sponsor") {
+          hint.textContent = `本系統每${mins}分鐘會重新檢查物件來源並比對篩選。`;
+        } else {
+          hint.textContent = `本系統每${mins}分鐘會重新檢查物件來源並比對篩選。贊助會員為 5 分鐘。`;
+        }
       }
       $("offlineConfirmDays").value = s.offlineConfirmDays || 7;
       $("pagesPerWatch").value = s.pagesPerWatch;
@@ -1506,7 +1697,7 @@
       renderDistrictChips(s);
       renderBoxes();
       settingsLoaded = true;
-      setSettingsReady(true);
+      setSettingsReady(!isGuest);
     }
 
     function renderStats(st) {
@@ -1869,6 +2060,12 @@
     }
 
     async function loadList(options = {}) {
+      if (isGuest) {
+        renderStats(lastStats);
+        renderDistrictChips(settings);
+        renderList(applyGuestQuery(guestListings), lastStats);
+        return;
+      }
       if (!options.force && watchNoteBusy()) {
         listRefreshQueued = true;
         return;
@@ -1915,9 +2112,22 @@
         throw new Error(lastError || "連不上伺服器");
       }
       if (!me.ok) {
-        location.replace("/login.html");
+        setGuestMode(true);
+        setSettingsReady(false, "示範條件不能改。註冊後才能存成你的設定。");
+        const demoRes = await fetch("/api/demo", { cache: "no-store", signal: AbortSignal.timeout(20000) });
+        const demo = await readApi(demoRes);
+        if (!demoRes.ok) throw new Error(demo.error || "示範列表載入失敗");
+        cities = Array.isArray(demo.cities) && demo.cities.length ? demo.cities : CITIES_EMBEDDED;
+        if (demo.settings) fillSettings(demo.settings);
+        setSettingsReady(false, "示範條件不能改。註冊後才能存成你的設定。");
+        guestListings = Array.isArray(demo.listings) ? demo.listings : [];
+        lastStats = demo.stats || {};
+        renderStats(lastStats);
+        renderList(applyGuestQuery(guestListings), lastStats);
+        $("status").textContent = "示範列表（唯讀）。註冊後才能改條件與收到通知。";
         return;
       }
+      setGuestMode(false);
       $("who").textContent = me.email || "";
       meEmail = me.email || "";
       meIsAdmin = me.role === "admin";
@@ -1974,6 +2184,7 @@
         } else {
           $("status").textContent = "設定已載入";
         }
+        maybeShowWorkPrompt();
       } catch (error) {
         $("status").textContent = "設定已載入，物件列表稍後再試";
         try {
@@ -2187,6 +2398,40 @@
         $("status").textContent = error.message || "載入失敗，請再按重新整理";
       });
     };
+    if ($("workPromptSave")) {
+      $("workPromptSave").onclick = async () => {
+        const address = $("workPromptAddress").value.trim();
+        if (!address) {
+          $("workPromptMsg").textContent = "請先填公司地址，或按略過。";
+          $("workPromptAddress").focus();
+          return;
+        }
+        $("workPromptSave").disabled = true;
+        $("workPromptMsg").textContent = "儲存中…";
+        try {
+          await saveSettings({
+            workAddress: address,
+            commuteKm: Number($("workPromptKm").value) || 13,
+          });
+          $("workAddress").value = address;
+          $("commuteKm").value = Number($("workPromptKm").value) || 13;
+          settings.workAddress = address;
+          $("workPrompt").hidden = true;
+          flash("公司地址已儲存，會用來算機車路線");
+          await loadList({ force: true });
+        } catch (error) {
+          $("workPromptMsg").textContent = error.message;
+        } finally {
+          $("workPromptSave").disabled = false;
+        }
+      };
+    }
+    if ($("workPromptSkip")) {
+      $("workPromptSkip").onclick = () => {
+        try { localStorage.setItem(WORK_PROMPT_SKIP, "1"); } catch { /* 略過 */ }
+        $("workPrompt").hidden = true;
+      };
+    }
     function setPanelCollapsed(on) {
       document.body.classList.toggle("panel-collapsed", Boolean(on));
       localStorage.setItem(PANEL_KEY, on ? "1" : "0");
@@ -2986,7 +3231,7 @@
       renderBoxes();
       renderDock();
       setTimeout(() => map?.invalidateSize(), 250);
-      if (!window.__watchStream) {
+      if (!window.__watchStream && !isGuest) {
         const es = new EventSource("/api/events/stream");
         window.__watchStream = es;
         es.onmessage = (msg) => {
@@ -3016,7 +3261,7 @@
         };
         es.onerror = () => {
           fetch("/api/me").then((r) => r.json()).then((data) => {
-            if (!data.ok) location.replace("/login.html");
+            if (!data.ok && !isGuest) location.replace("/login.html");
           }).catch(() => {});
         };
       }

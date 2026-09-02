@@ -192,6 +192,15 @@ test("notify facts add usable ping and housing type instead of 整層住家", ()
   assert.match(tower, /電梯公寓\/大樓$/);
   const suite = formatNotifyFacts({ kind_name: "獨立套房", area_name: "8坪" });
   assert.match(suite, /套房$/);
+  const commute = formatNotifyFacts({
+    address: "士林區中山北路",
+    commute_km: 11.2,
+    commute_min_am: 28,
+    commute_min_pm: 35,
+  });
+  assert.match(commute, /機車 11.2 公里 · 上 28 分 · 下 35 分/);
+  const kmOnly = formatNotifyFacts({ route_km: 9.4, kind_name: "公寓" });
+  assert.match(kmOnly, /機車路線約 9.4 公里/);
 });
 
 test("mail notify uses registered address and can be unchecked", () => {
@@ -227,6 +236,9 @@ test("notify posts listing mail to the registered inbox", async () => {
     post_id: 88,
     address: "士林區中山北路",
     layout: "2房1廳",
+    commute_km: 11,
+    commute_min_am: 28,
+    commute_min_pm: 35,
   };
   await notify({}, [], {
     mailEvents: [event],
@@ -239,6 +251,7 @@ test("notify posts listing mail to the registered inbox", async () => {
   assert.match(sent[0].subject, /全新物件/);
   assert.match(sent[0].text, /士林二房/);
   assert.match(sent[0].text, /28000/);
+  assert.match(sent[0].text, /機車 11 公里 · 上 28 分 · 下 35 分/);
 });
 
 test("notify digest packs several listings into one mail", async () => {

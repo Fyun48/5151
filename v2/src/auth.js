@@ -139,6 +139,8 @@ export function verifyLogin(email, password, { keys, now } = {}) {
 export function publicPath(req) {
   const p = req.path || "";
   return (
+    p === "/" ||
+    p === "/index.html" ||
     p === "/login.html" ||
     p === "/disclaimer.html" ||
     p === "/logout" ||
@@ -148,6 +150,7 @@ export function publicPath(req) {
     p === "/api/logout" ||
     p === "/api/me" ||
     p === "/api/health" ||
+    p === "/api/demo" ||
     p === "/api/disclaimer" ||
     p === "/api/captcha" ||
     p.startsWith("/vendor/") ||

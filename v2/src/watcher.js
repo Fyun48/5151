@@ -242,7 +242,10 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
       markEventNotified(event.id);
       continue;
     }
-    const delivery = decideNotifyDelivery(listing, userSettings);
+    const delivery = decideNotifyDelivery(listing, {
+      ...userSettings,
+      waitRushMinutes: commuteRushEnabled() && hasGoogleMapsKey(),
+    });
     if (delivery === "pending") continue;
     markEventNotified(event.id);
     if (delivery === "send") {
@@ -297,7 +300,10 @@ async function resolvePendingNotifyLocations(settings, { withRoute = true } = {}
     if (!listing) continue;
     const userSettings = userId ? getSettings(userId) : settings;
     if (!shouldNotify(userSettings, listing, event)) continue;
-    if (decideNotifyDelivery(listing, userSettings) !== "pending") continue;
+    if (decideNotifyDelivery(listing, {
+      ...userSettings,
+      waitRushMinutes: commuteRushEnabled() && hasGoogleMapsKey(),
+    }) !== "pending") continue;
     ids.push(event.post_id);
   }
   await ingestListingGeoBatch(ids);

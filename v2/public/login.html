@@ -108,6 +108,13 @@
     .bot-q { flex: 0 0 auto; }
     .bot-q svg { display: block; border-radius: 8px; border: 1px solid var(--line); background: #fffdf8; }
     .bot-row input { flex: 1; margin: 0; min-width: 0; }
+    .site-footer {
+      margin: 18px 0 0;
+      text-align: center;
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: 0.02em;
+    }
     button.ghost {
       margin: 0;
       width: auto;
@@ -124,7 +131,7 @@
 <body>
   <div class="card">
     <h1>591 物件追蹤（v2 開發版）</h1>
-    <p class="sub">此為新版測試站，資料與線上版分開。可登入既有帳號，或註冊新會員。</p>
+    <p class="sub">此為新版測試站，資料與線上版分開。想先看實際畫面，可以<a href="/">先看示範列表</a>；登入後才會載入你自己的條件與關注。</p>
     <div class="tabs">
       <button type="button" class="on" id="tabLogin">登入</button>
       <button type="button" id="tabRegister">註冊</button>
@@ -200,6 +207,7 @@
     </form>
     <p class="ok" id="ok"></p>
     <p class="err" id="err"></p>
+    <footer class="site-footer">reversal play tech | 逆遊科技</footer>
   </div>
   <script>
     const $ = (id) => document.getElementById(id);

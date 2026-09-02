@@ -134,7 +134,13 @@ export function isGeoReady(listing, settings = {}) {
   const commuteOn = Number.isFinite(km) && km > 0 && hasWorkPoint(settings);
   if (!commuteOn) return true;
   const routes = Array.isArray(listing.route_kms) ? listing.route_kms.map(Number).filter(Number.isFinite) : [];
-  return routes.length > 0;
+  if (!routes.length) return false;
+  if (settings.waitRushMinutes) {
+    const am = Number(listing.commute_min_am ?? listing.rush_am_min);
+    const pm = Number(listing.commute_min_pm ?? listing.rush_pm_min);
+    return Number.isFinite(am) && Number.isFinite(pm);
+  }
+  return true;
 }
 
 export function decideNotifyDelivery(listing, settings = {}) {

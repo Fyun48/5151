@@ -6,6 +6,7 @@ import {
   coveringJobsFromAllUsers,
   crawlIntervalMinutes,
   defaultUserId,
+  listUserIds,
   deleteProfile,
   getCachedGeo,
   getListing,
@@ -44,7 +45,8 @@ import { CITIES } from "./regions.js";
 import { DISCLAIMER_TEXT, DISCLAIMER_VERSION } from "./members.js";
 import { mailConfigured, sendMail } from "./mail.js";
 import { assertHuman, issueCaptcha } from "./captcha.js";
-import { assertCaptchaIssuable, authAttemptKeys, clientIp } from "./rateLimit.js";
+import { assertCaptchaIssuable, assertDemoReadable, authAttemptKeys, clientIp } from "./rateLimit.js";
+import { buildDemoState } from "./demo.js";
 import { backfillListingCoords, backfillListingRoutes, flushPendingNotifications, runWatch } from "./watcher.js";
 import { LIST_PAGE_SIZE } from "./client591.js";
 
@@ -67,6 +69,33 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });
 
+app.get("/", (_req, res) => {
+  res.sendFile(path.join(__dirname, "../public/index.html"));
+});
+
+app.get("/index.html", (_req, res) => {
+  res.sendFile(path.join(__dirname, "../public/index.html"));
+});
+
+app.get("/api/demo", (req, res) => {
+  try {
+    if (readSession(req)) {
+      res.redirect(302, "/api/state");
+      return;
+    }
+    assertDemoReadable(clientIp(req));
+    res.json(buildDemoState({
+      listUserIds,
+      getSettings,
+      defaultUserId,
+      listListings,
+      stats,
+    }));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
 function actorUserId(req) {
   const session = readSession(req);
   if (session?.userId) return session.userId;
@@ -82,13 +111,15 @@ function setSession(req, res, email) {
   res.setHeader("Set-Cookie", cookie);
 }
 
-/** 點通知／Discord 連結：標記已瀏覽後導向 591（免登入，方便 webhook）。 */
+/** 點通知／Discord 連結：已登入才標記已瀏覽，再導向 591。訪客只轉址、不寫入。 */
 app.get("/go/:id", (req, res) => {
   const id = Number(req.params.id);
   if (Number.isFinite(id) && id > 0) {
     try {
-      const uid = actorUserId(req);
-      if (getListing(id, uid)) setFlags(id, { viewed: true }, uid);
+      const session = readSession(req);
+      if (session?.userId && getListing(id, session.userId)) {
+        setFlags(id, { viewed: true }, session.userId);
+      }
     } catch (error) {
       console.warn("標記已瀏覽失敗：", error.message);
     }

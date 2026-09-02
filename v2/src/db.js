@@ -1774,6 +1774,13 @@ export function eventPayloadFromListing(event, listing) {
     area_name: row.area_name || event.area_name,
     tags: row.tags || event.tags,
     cover: row.cover,
+    commute_km: row.commute_km,
+    commute_min_am: row.commute_min_am,
+    commute_min_pm: row.commute_min_pm,
+    commute_routes: row.commute_routes,
+    route_km: row.route_km,
+    rush_am_min: row.rush_am_min,
+    rush_pm_min: row.rush_pm_min,
   };
   return {
     ...merged,

@@ -132,6 +132,18 @@ test("notifications wait for commute distance then skip listings over the limit"
   assert.equal(decideNotifyDelivery({ ...listingBase, route_kms: [8, 10] }, commuteSettings), "send");
 });
 
+test("notifications wait for rush minutes when that flag is on", () => {
+  const withKm = { ...listingBase, route_kms: [8, 10] };
+  assert.equal(decideNotifyDelivery(withKm, { ...commuteSettings, waitRushMinutes: true }), "pending");
+  assert.equal(
+    decideNotifyDelivery(
+      { ...withKm, rush_am_min: 28, rush_pm_min: 35 },
+      { ...commuteSettings, waitRushMinutes: true },
+    ),
+    "send",
+  );
+});
+
 test("webhook-bound filter also skips listings without trusted coordinates once commute is on", () => {
   assert.equal(
     decideNotifyDelivery({ ...listingBase, geo_source: "", route_kms: [8] }, commuteSettings),

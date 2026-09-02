@@ -68,7 +68,29 @@ export function assertCaptchaIssuable(ip, now = Date.now()) {
   }
 }
 
+const demoHits = new Map();
+const DEMO_LIMIT = 40;
+const DEMO_WINDOW_MS = 10 * 60 * 1000;
+
+export function assertDemoReadable(ip, now = Date.now()) {
+  const key = `ip:${ip || "unknown"}`;
+  const row = demoHits.get(key) || { n: 0, start: now };
+  if (now - row.start >= DEMO_WINDOW_MS) {
+    row.n = 0;
+    row.start = now;
+  }
+  row.n += 1;
+  demoHits.set(key, row);
+  if (row.n > DEMO_LIMIT) {
+    const wait = Math.max(1, Math.ceil((DEMO_WINDOW_MS - (now - row.start)) / 1000));
+    const err = new Error(`示範列表讀太多次，請 ${wait} 秒後再試`);
+    err.status = 429;
+    throw err;
+  }
+}
+
 export function resetAuthRateLimits() {
   fails.clear();
   captchaHits.clear();
+  demoHits.clear();
 }
