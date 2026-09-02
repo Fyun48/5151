@@ -276,6 +276,18 @@ export function formatUsableArea(listing) {
   return /坪/.test(raw) ? raw : `${raw}坪`;
 }
 
+export function formatNotifyCommute(event = {}) {
+  const km = Number(event.commute_km ?? event.route_km);
+  if (!Number.isFinite(km) || km <= 0) return "";
+  const rounded = Math.round(km * 10) / 10;
+  const am = Number(event.commute_min_am ?? event.rush_am_min);
+  const pm = Number(event.commute_min_pm ?? event.rush_pm_min);
+  if (Number.isFinite(am) && Number.isFinite(pm)) {
+    return `機車 ${rounded} 公里 · 上 ${Math.round(am)} 分 · 下 ${Math.round(pm)} 分`;
+  }
+  return `機車路線約 ${rounded} 公里`;
+}
+
 export function formatNotifyFacts(event) {
   return [
     event.address,
@@ -283,6 +295,7 @@ export function formatNotifyFacts(event) {
     event.floor_name,
     formatUsableArea(event),
     housingTypeLabel(event),
+    formatNotifyCommute(event),
   ].filter(Boolean).join(" · ");
 }
 

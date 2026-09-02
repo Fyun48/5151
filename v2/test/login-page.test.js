@@ -16,6 +16,7 @@ test("login page can register after accepting the disclaimer", () => {
   assert.match(html, /這是免費系統/);
   assert.match(html, /href="\/"/);
   assert.match(html, /先看示範列表/);
+  assert.match(html, /reversal play tech \| 逆遊科技/);
   assert.match(html, /顯示密碼/);
   assert.match(html, /記住帳號/);
   assert.match(html, /591_v2_remember_email/);
@@ -39,4 +40,5 @@ test("disclaimer page loads the shared copy", () => {
   assert.match(html, /\/api\/disclaimer/);
   assert.match(html, /免費系統/);
   assert.match(html, /贊助是自願/);
+  assert.match(html, /reversal play tech \| 逆遊科技/);
 });

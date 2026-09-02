@@ -36,6 +36,12 @@
     .body { font-family: "Noto Sans TC", sans-serif; font-size: 15px; line-height: 1.8; white-space: pre-wrap; }
     a { color: var(--accent); }
     .back { display: inline-block; margin-top: 18px; font-family: "Noto Sans TC", sans-serif; }
+    .site-footer {
+      margin: 16px 4px 0;
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: 0.02em;
+    }
   </style>
 </head>
 <body>
@@ -46,6 +52,7 @@
       <div class="body" id="text">載入中…</div>
       <a class="back" href="/login.html">返回登入／註冊</a>
     </article>
+    <footer class="site-footer">reversal play tech | 逆遊科技</footer>
   </div>
   <script>
     fetch("/api/disclaimer").then((r) => r.json()).then((data) => {

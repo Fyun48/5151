@@ -150,6 +150,8 @@ test("dock has mark-read buttons and renders content diffs", () => {
 test("guest demo is read-only and work prompt can be skipped", () => {
   const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
   assert.match(html, /id="guestBanner"/);
+  assert.match(html, /class="site-footer"/);
+  assert.match(html, /reversal play tech \| 逆遊科技/);
   assert.match(html, /這是示範列表/);
   assert.match(html, /id="workPrompt"/);
   assert.match(html, /591_v2_work_prompt_skip/);
