@@ -236,6 +236,9 @@ test("notify posts listing mail to the registered inbox", async () => {
     post_id: 88,
     address: "士林區中山北路",
     layout: "2房1廳",
+    commute_km: 11,
+    commute_min_am: 28,
+    commute_min_pm: 35,
   };
   await notify({}, [], {
     mailEvents: [event],
@@ -248,6 +251,7 @@ test("notify posts listing mail to the registered inbox", async () => {
   assert.match(sent[0].subject, /全新物件/);
   assert.match(sent[0].text, /士林二房/);
   assert.match(sent[0].text, /28000/);
+  assert.match(sent[0].text, /機車 11 公里 · 上 28 分 · 下 35 分/);
 });
 
 test("notify digest packs several listings into one mail", async () => {
