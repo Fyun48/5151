@@ -1568,15 +1568,17 @@
       if (!rect || !el || rect.width < 8 || rect.height < 8) {
         rect = { top: 80, left: 32, width: 320, height: 72 };
       }
+      const maxH = Math.min(window.innerHeight - 24, 240);
+      const maxW = window.innerWidth - 16;
       spot.style.top = `${Math.max(8, rect.top - pad)}px`;
       spot.style.left = `${Math.max(8, rect.left - pad)}px`;
-      spot.style.width = `${Math.min(window.innerWidth - 16, rect.width + pad * 2)}px`;
-      spot.style.height = `${Math.min(window.innerHeight - 16, rect.height + pad * 2)}px`;
+      spot.style.width = `${Math.min(maxW, rect.width + pad * 2)}px`;
+      spot.style.height = `${Math.min(maxH, rect.height + pad * 2)}px`;
       const cardW = Math.min(360, window.innerWidth - 32);
       const below = rect.bottom + 16 + 180 < window.innerHeight;
-      const top = below ? rect.bottom + 12 : Math.max(12, rect.top - 170);
+      const top = below ? Math.min(rect.bottom + 12, window.innerHeight - 190) : Math.max(12, rect.top - 170);
       const left = Math.min(Math.max(16, rect.left), window.innerWidth - cardW - 16);
-      card.style.top = `${top}px`;
+      card.style.top = `${Math.max(12, top)}px`;
       card.style.left = `${left}px`;
     }
     function showGuestTourStep(index) {
@@ -1587,10 +1589,10 @@
       $("guestTourStep").textContent = step.title;
       $("guestTourText").textContent = step.text;
       $("guestTourNext").textContent = last ? "前往註冊" : "下一步";
-      if (step.target === "#listHeadSticky" || step.target === "[data-tour=notify]" || step.target === "[data-tour=mrt]") {
-        document.querySelector(step.target)?.scrollIntoView({ block: "center", behavior: "smooth" });
-      }
+      document.querySelector(step.target)?.scrollIntoView({ block: "center", behavior: "instant" });
+      placeGuestTour(step);
       window.requestAnimationFrame(() => placeGuestTour(step));
+      window.setTimeout(() => placeGuestTour(step), 280);
       if (guestTourTimer) window.clearTimeout(guestTourTimer);
       guestTourTimer = window.setTimeout(() => {
         if (last) return;
