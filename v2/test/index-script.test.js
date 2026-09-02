@@ -147,6 +147,27 @@ test("dock has mark-read buttons and renders content diffs", () => {
   assert.match(html, /class="dock-change-to"/);
 });
 
+test("guest demo is read-only and work prompt can be skipped", () => {
+  const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
+  assert.match(html, /id="guestBanner"/);
+  assert.match(html, /這是示範列表/);
+  assert.match(html, /id="workPrompt"/);
+  assert.match(html, /591_v2_work_prompt_skip/);
+  assert.match(html, /id="workPromptSkip"/);
+  assert.match(html, /\/api\/demo/);
+  assert.match(html, /function setGuestMode/);
+  assert.match(html, /function applyGuestQuery/);
+  assert.match(html, /guestListings/);
+  assert.match(html, /if \(isGuest\) return `https:\/\/rent\.591\.com\.tw\//);
+  assert.match(html, /if \(!settingsLoaded \|\| isGuest\) return/);
+  assert.match(html, /workAddress: address/);
+  assert.doesNotMatch(html, /collectSettingsSafe/);
+  assert.match(html, /body\.role-guest #sponsorBar/);
+  assert.match(html, /一般會員每 8 分鐘檢查一次，贊助會員為 5 分鐘/);
+  assert.match(html, /贊助會員為 5 分鐘/);
+  assert.match(html, /if \(isGuest\) \{\s*bar\.hidden = true/s);
+});
+
 test("member settings copy hides advanced hints and locks schedule defaults", () => {
   const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
   assert.match(html, /此通知只會訊息已是特別關注之物件/);
