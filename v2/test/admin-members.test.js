@@ -50,7 +50,8 @@ test("admin page lists members, smtp, and templates without password fields", ()
   assert.match(html, /伺服器暫時沒回 JSON/);
   assert.match(html, /AbortSignal\.timeout\(20000\)/);
   assert.doesNotMatch(html, /return \{ error: text \|\| res\.statusText \}/);
-  assert.match(html, /不必再開 Google/);
+  assert.match(html, /只顯示公里/);
+  assert.match(html, /不上／下班分鐘/);
   assert.match(html, /熔斷/);
   assert.match(html, /官方價目試算/);
   assert.match(html, /本月合計/);

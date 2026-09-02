@@ -123,7 +123,9 @@ test("member profiles cap districts and include usable ping in notify copy", () 
   assert.match(html, /已存 \$\{list\.length\}／\$\{cap\}/);
   assert.match(html, /另存新名稱會提示已滿；同名可覆蓋/);
   assert.match(html, /setSettingsReady\(settingsLoaded\)/);
-  assert.match(html, /\$\{label\} \$\{item\.commute_km\} 公里 · 上約 \$\{Math\.round\(am\)\} 分 · 下約 \$\{Math\.round\(pm\)\} 分/);
+  assert.match(html, /\$\{label\}路線約 \$\{item\.commute_km\} 公里/);
+  assert.doesNotMatch(html, /上約/);
+  assert.doesNotMatch(html, /下約/);
   assert.match(html, /確定要覆蓋嗎？/);
   assert.match(html, /設定檔已滿（最多 \$\{cap\} 個）/);
   assert.match(html, /overwrite: existing/);
@@ -272,13 +274,16 @@ test("MRT toggle and guest tour are in the page", () => {
   assert.equal(html.includes('showMrt: $("showMrt") ? $("showMrt").checked : true'), true);
 });
 
-test("cached rush minutes stay in listing copy without calling Google", () => {
+test("listing commute copy is kilometers only and does not show rush minutes", () => {
   const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
-  const dbSrc = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../src/db.js"), "utf8");
-  assert.match(html, /上約 \$\{Math\.round\(am\)\} 分 · 下約 \$\{Math\.round\(pm\)\} 分/);
-  assert.match(dbSrc, /commute_min_am: Number\.isFinite\(Number\(row\.rush_am_min\)\)/);
-  assert.doesNotMatch(dbSrc, /commute_min_am: commuteRushEnabled\(\)/);
-  assert.doesNotMatch(dbSrc, /rushStale\(cached\.rush_updated_at\)/);
+  const start = html.indexOf("function commuteText");
+  const end = html.indexOf("function mrtOn");
+  assert.ok(start > 0 && end > start);
+  const fn = html.slice(start, end);
+  assert.match(fn, /\$\{label\}路線約 \$\{item\.commute_km\} 公里/);
+  assert.doesNotMatch(fn, /上約/);
+  assert.doesNotMatch(fn, /下約/);
+  assert.doesNotMatch(fn, /commute_min_am/);
 });
 
 test("listing chips use Hermes orange and do not escape chip HTML", () => {

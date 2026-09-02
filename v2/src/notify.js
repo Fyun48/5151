@@ -286,11 +286,6 @@ export function formatNotifyCommute(event = {}) {
   if (!Number.isFinite(km) || km <= 0) return "";
   const rounded = Math.round(km * 10) / 10;
   const label = commuteModeLabel(event.commute_mode);
-  const am = Number(event.commute_min_am ?? event.rush_am_min);
-  const pm = Number(event.commute_min_pm ?? event.rush_pm_min);
-  if (Number.isFinite(am) && Number.isFinite(pm)) {
-    return `${label} ${rounded} 公里 · 上約 ${Math.round(am)} 分 · 下約 ${Math.round(pm)} 分`;
-  }
   return `${label}路線約 ${rounded} 公里`;
 }
 
