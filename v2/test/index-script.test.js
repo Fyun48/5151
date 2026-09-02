@@ -269,3 +269,53 @@ test("MRT toggle and guest tour are in the page", () => {
   assert.match(html, /data-open-hub="webhook"/);
   assert.equal(html.includes('showMrt: $("showMrt") ? $("showMrt").checked : true'), true);
 });
+
+test("listing chips use Hermes orange and do not escape chip HTML", () => {
+  const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
+  assert.match(html, /--hermes:\s*#E65326/);
+  assert.match(html, /--hermes-deep:\s*#C2410C/);
+  assert.match(html, /--hermes-light:\s*#F47A2A/);
+  assert.match(html, /\.mrt-chip/);
+  assert.match(html, /\.route-chip/);
+  assert.match(html, /function mrtChip/);
+  assert.match(html, /function routeChip/);
+  assert.match(html, /class="mrt-chip"/);
+  assert.match(html, /class="route-chip"/);
+  assert.match(html, /<div class="mrt-line">\$\{mrtText\(item\)\}<\/div>/);
+  assert.doesNotMatch(html, /esc\(mrtText\(item\)\)/);
+});
+
+test("only acefengyun admin gets a red frame on 社子島 listings", () => {
+  const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
+  assert.match(html, /function isAcefengyunAdmin/);
+  assert.match(html, /function isShezidaoAddress/);
+  assert.match(html, /\/acefengyun\/i\.test\(meEmail/);
+  assert.match(html, /meIsAdmin && \/acefengyun\/i/);
+  assert.match(html, /社子島\|社之島/);
+  assert.match(html, /延平北路\(六\|七\|八\|九\|\[6-9\]\)段/);
+  assert.match(html, /class="item .*shezidao/);
+  assert.match(html, /\.item\.shezidao/);
+  assert.match(html, /--shezi-red:\s*#DC2626/);
+  const start = html.indexOf("function isShezidaoAddress");
+  const end = html.indexOf("function commuteOn");
+  assert.ok(start > 0 && end > start);
+  const isShezidaoAddress = new Function(`${html.slice(start, end)}; return isShezidaoAddress;`)();
+  assert.equal(isShezidaoAddress("台北市士林區延平北路七段88號"), true);
+  assert.equal(isShezidaoAddress("延平北路6段12號"), true);
+  assert.equal(isShezidaoAddress("士林區社子街20號"), true);
+  assert.equal(isShezidaoAddress("社子島抽水站附近"), true);
+  assert.equal(isShezidaoAddress("士林區社正路"), true);
+  assert.equal(isShezidaoAddress("士林區中山北路五段"), false);
+  assert.equal(isShezidaoAddress("延平北路五段"), false);
+  assert.equal(isShezidaoAddress("文林路100號"), false);
+  const aceStart = html.indexOf("function isAcefengyunAdmin");
+  const aceEnd = html.indexOf("function isShezidaoAddress");
+  const isAcefengyunAdmin = new Function(
+    "meIsAdmin",
+    "meEmail",
+    `${html.slice(aceStart, aceEnd)}; return isAcefengyunAdmin();`,
+  );
+  assert.equal(isAcefengyunAdmin(true, "acefengyun@gmail.com"), true);
+  assert.equal(isAcefengyunAdmin(true, "other-admin@example.com"), false);
+  assert.equal(isAcefengyunAdmin(false, "acefengyun@gmail.com"), false);
+});
