@@ -58,6 +58,14 @@ export function estimateMrtAccess(straightKm) {
   };
 }
 
+export function estimateMrtAccessForPoint(lat, lng) {
+  const station = nearestMrtStation(lat, lng);
+  if (!station) return null;
+  const est = estimateMrtAccess(station.straightKm);
+  if (!est) return null;
+  return { station: station.name, ...est };
+}
+
 async function osrmDistanceKm(profile, fromLat, fromLng, toLat, toLng) {
   const wait = 1100 - (Date.now() - lastMrtRouteAt);
   if (wait > 0) await sleep(wait);

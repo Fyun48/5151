@@ -554,7 +554,7 @@ export async function backfillListingMrt({ limit = 20 } = {}) {
   for (const row of rows) {
     attempted += 1;
     const access = await fetchMrtAccess(row.lat, row.lng);
-    if (access?.station && !access.pending) {
+    if (access?.station) {
       setCachedMrt(row.lat, row.lng, access);
       located += 1;
     }

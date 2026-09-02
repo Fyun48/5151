@@ -17,7 +17,7 @@ import { districtNameFromListing } from "./regions.js";
 import { preferPrimaryListing } from "./match.js";
 import { commuteWorkJobs, hasWorkPoint, needsListingGeo, normalizeCommuteMode } from "./geo.js";
 import { demoCommutePatch } from "./demo.js";
-import { makeMrtKey } from "./mrt.js";
+import { estimateMrtAccessForPoint, makeMrtKey } from "./mrt.js";
 import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings, planIntervalMinutes, resolveSaveAsProfileAction, normalizeProfileName, MEMBER_MAX_PROFILES, ADMIN_MAX_PROFILES } from "./settingsState.js";
 import { defaultNotifyMatrix } from "./notifyMatrix.js";
 import { DATA_EPOCH, shouldResetForEpoch } from "./dataEpoch.js";
@@ -1581,7 +1581,7 @@ function mrtFields(row, settings) {
   if (!isTrustedGeoSource(row.geo_source) || !Number.isFinite(Number(row.lat)) || !Number.isFinite(Number(row.lng))) {
     return { mrt_station: null, mrt_walk_km: null, mrt_walk_min: null, mrt_ride_km: null, mrt_ride_min: null };
   }
-  const cached = getCachedMrt(row.lat, row.lng);
+  const cached = getCachedMrt(row.lat, row.lng) || estimateMrtAccessForPoint(row.lat, row.lng);
   if (!cached) {
     return { mrt_station: "", mrt_walk_km: null, mrt_walk_min: null, mrt_ride_km: null, mrt_ride_min: null };
   }

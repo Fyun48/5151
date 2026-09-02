@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { estimateMrtAccess, formatMrtAccess, makeMrtKey, nearestMrtStation } from "../src/mrt.js";
+import { estimateMrtAccess, estimateMrtAccessForPoint, formatMrtAccess, makeMrtKey, nearestMrtStation } from "../src/mrt.js";
 import { MRT_STATIONS } from "../src/mrtStations.js";
 
 test("MRT station list has unique names and valid coordinates", () => {
@@ -31,6 +31,16 @@ test("estimated walk is a bit longer than the straight line", () => {
   assert.equal(est.ride_km, 0.6);
   assert.ok(est.walk_min >= 7);
   assert.ok(est.ride_min >= 2);
+});
+
+test("estimateMrtAccessForPoint returns the nearest station and route-like distances", () => {
+  const row = estimateMrtAccessForPoint(25.05781, 121.6184);
+  assert.equal(row.station, "南港展覽館");
+  assert.ok(row.walk_km > 0);
+  assert.ok(row.ride_km > 0);
+  assert.ok(row.walk_min >= 1);
+  assert.ok(row.ride_min >= 1);
+  assert.match(formatMrtAccess(row), /捷運南港展覽館站/);
 });
 
 test("formatMrtAccess shows walk and ride", () => {
