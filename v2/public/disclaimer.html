@@ -6,20 +6,22 @@
   <title>免責聲明 · 吉比租房物件追蹤</title>
   <style>
     :root {
-      --bg: #f4f1ea;
-      --paper: #fffdf8;
-      --ink: #1f1a16;
-      --muted: #6d645c;
-      --line: #e6ddd2;
-      --accent: #c45c26;
+      --bg: #f3f7f9;
+      --paper: #ffffff;
+      --ink: #1a2b33;
+      --muted: #64748b;
+      --line: #e2e8ef;
+      --accent: #0da5a0;
+      --accent-deep: #0a8280;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       min-height: 100vh;
-      font-family: "IwanMincho", "Source Han Serif TC", "Noto Serif TC", "PMingLiU", serif;
+      font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
       background:
-        radial-gradient(1200px 500px at 10% -10%, #f8e7d4 0%, transparent 55%),
+        radial-gradient(1000px 480px at 0% -5%, rgba(13, 165, 160, 0.07) 0%, transparent 55%),
+        radial-gradient(800px 400px at 100% 0%, rgba(212, 165, 165, 0.09) 0%, transparent 50%),
         var(--bg);
       color: var(--ink);
     }
@@ -27,15 +29,21 @@
     .card {
       background: var(--paper);
       border: 1px solid var(--line);
-      border-radius: 18px;
-      box-shadow: 0 10px 30px rgba(80, 50, 20, 0.05);
+      border-radius: 20px;
+      box-shadow: 0 8px 28px rgba(26, 43, 51, 0.05);
       padding: 28px 26px 24px;
     }
-    h1 { margin: 0 0 12px; font-size: 24px; letter-spacing: 0.08em; }
+    h1 {
+      margin: 0 0 12px;
+      font-family: "Noto Serif TC", "Source Han Serif TC", serif;
+      font-size: 26px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+    }
     .sub { color: var(--muted); font-size: 14px; margin: 0 0 18px; }
-    .body { font-family: "Noto Sans TC", sans-serif; font-size: 15px; line-height: 1.8; white-space: pre-wrap; }
-    a { color: var(--accent); }
-    .back { display: inline-block; margin-top: 18px; font-family: "Noto Sans TC", sans-serif; }
+    .body { font-size: 15px; line-height: 1.8; white-space: pre-wrap; }
+    a { color: var(--accent-deep); }
+    .back { display: inline-block; margin-top: 18px; }
     .site-footer {
       margin: 16px 4px 0;
       color: var(--muted);

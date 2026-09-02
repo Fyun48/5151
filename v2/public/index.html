@@ -225,6 +225,13 @@
       font-size: 13px;
     }
     .hub-panel textarea { min-height: 120px; }
+    html.no-session #logoutBtn,
+    html.no-session #adminLink,
+    html.no-session #resetLink,
+    html.no-session #watchBtn { display: none !important; }
+    html.has-session #loginBtn,
+    html.has-session #registerBtn { display: none !important; }
+    html.has-session .who.is-guest { visibility: hidden; }
     body.role-guest #resetLink,
     body.role-guest #adminLink,
     body.role-guest #logoutBtn,
@@ -469,10 +476,11 @@
     .header-main .row { align-items: center; }
     .who { color: var(--muted); font-size: 13px; }
     .who.is-guest {
-      color: var(--accent-deep);
-      font-size: 22px;
-      font-weight: 800;
-      letter-spacing: 0.14em;
+      color: #000;
+      font-family: "DFKai-SB", "BiauKai", "標楷體", "TW-Kai", "STKaiti", "KaiTi", serif;
+      font-size: 21px;
+      font-weight: 400;
+      letter-spacing: 0.08em;
       line-height: 1;
       padding: 0 6px 0 0;
     }
@@ -876,8 +884,15 @@
       .sponsor-bar { margin-left: 16px; margin-right: 16px; }
     }
   </style>
+  <script>
+    (function () {
+      var html = document.documentElement;
+      if (document.cookie.indexOf("591_session=") !== -1) html.classList.add("has-session");
+      else html.classList.add("no-session");
+    })();
+  </script>
 </head>
-<body>
+<body class="role-guest">
   <div id="bootFail" role="alert">
     <strong>畫面程式沒有跑起來</strong>
     <span id="bootFailDetail">這是網頁程式錯誤，不是物件資料壞了。請按右上「重新整理」。不要按「清除資料」，清資料解不了這個狀況。</span>
@@ -919,12 +934,12 @@
         <h1>吉比租房物件追蹤</h1>
       </div>
       <div class="row">
-        <span class="who" id="who" data-tour="guestWho"></span>
-        <a class="ghost" id="loginBtn" href="/login.html" hidden>登入</a>
-        <a class="primary" id="registerBtn" href="/login.html?register=1" hidden>註冊</a>
+        <span class="who is-guest" id="who" data-tour="guestWho">訪客</span>
+        <a class="ghost" id="loginBtn" href="/login.html">登入</a>
+        <a class="primary" id="registerBtn" href="/login.html?register=1">註冊</a>
         <a class="ghost" id="logoutBtn" href="/logout">登出</a>
         <a class="ghost admin-only" id="adminLink" href="/admin.html">後台管理</a>
-        <a class="ghost" id="resetLink" href="/reset.html" title="會刪光物件與設定；無法修復畫面卡住" style="display:inline-flex;align-items:center;text-decoration:none">清除資料</a>
+        <a class="ghost admin-only" id="resetLink" href="/reset.html" title="會刪光物件與設定；無法修復畫面卡住" style="align-items:center;text-decoration:none">清除資料</a>
         <button class="ghost" id="expandPanelBtn" type="button">展開設定</button>
         <button class="ghost" id="reloadBtn">重新整理</button>
         <button class="primary" id="watchBtn">立即檢查</button>
@@ -982,7 +997,14 @@
         <strong>搜尋設定</strong>
         <button type="button" class="ghost" id="collapsePanelBtn">收合</button>
       </div>
-      <div class="stats" id="stats"></div>
+      <div class="stats" id="stats">
+        <div class="stat"><b>—</b><span>全部</span></div>
+        <div class="stat"><b>—</b><span>有電梯</span></div>
+        <div class="stat"><b>—</b><span>未瀏覽</span></div>
+        <div class="stat"><b>—</b><span>特別關注</span></div>
+        <div class="stat"><b>—</b><span>已隱藏</span></div>
+        <div class="stat"><b>—</b><span>疑似</span></div>
+      </div>
       <p class="hint" id="settingsLoadMsg">正在載入已存設定…完成前請不要按儲存或另存。若一直停在這句、儲存也不能按，是網頁程式沒跑起來，不是資料壞了；請重新整理，不要按清除資料。</p>
       <p class="hint" id="profileListHint"></p>
       <p class="hint" id="districtLimitHint"></p>
@@ -1352,7 +1374,7 @@
     let filter = "all";
     let kind = "";
     let sort = "newest";
-    let isGuest = false;
+    let isGuest = true;
     let guestLockClicks = 0;
     let guestToastTimer = 0;
     const GUEST_LOCK_TOAST_AFTER = 2;
@@ -1752,6 +1774,8 @@
     function setGuestMode(on) {
       isGuest = Boolean(on);
       document.body.classList.toggle("role-guest", isGuest);
+      document.documentElement.classList.toggle("no-session", isGuest);
+      document.documentElement.classList.toggle("has-session", !isGuest);
       if ($("loginBtn")) $("loginBtn").hidden = !isGuest;
       if ($("registerBtn")) $("registerBtn").hidden = !isGuest;
       if ($("logoutBtn")) $("logoutBtn").hidden = isGuest;

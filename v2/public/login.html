@@ -6,12 +6,15 @@
   <title>登入 · 吉比租房物件追蹤</title>
   <style>
     :root {
-      --bg: #f4f1ea;
-      --paper: #fffdf8;
-      --ink: #1f1a16;
-      --muted: #6d645c;
-      --line: #e6ddd2;
-      --accent: #c45c26;
+      --bg: #f3f7f9;
+      --paper: #ffffff;
+      --ink: #1a2b33;
+      --muted: #64748b;
+      --line: #e2e8ef;
+      --accent: #0da5a0;
+      --accent-deep: #0a8280;
+      --accent-soft: #e8f7f6;
+      --accent-mist: #f0fbfa;
     }
     * { box-sizing: border-box; }
     body {
@@ -19,9 +22,10 @@
       min-height: 100vh;
       display: grid;
       place-items: center;
-      font-family: "IwanMincho", "Source Han Serif TC", "Noto Serif TC", "PMingLiU", serif;
+      font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
       background:
-        radial-gradient(1200px 500px at 10% -10%, #f8e7d4 0%, transparent 55%),
+        radial-gradient(1000px 480px at 0% -5%, rgba(13, 165, 160, 0.07) 0%, transparent 55%),
+        radial-gradient(800px 400px at 100% 0%, rgba(212, 165, 165, 0.09) 0%, transparent 50%),
         var(--bg);
       color: var(--ink);
     }
@@ -29,19 +33,25 @@
       width: min(420px, calc(100vw - 32px));
       background: var(--paper);
       border: 1px solid var(--line);
-      border-radius: 18px;
-      box-shadow: 0 10px 30px rgba(80, 50, 20, 0.05);
+      border-radius: 20px;
+      box-shadow: 0 8px 28px rgba(26, 43, 51, 0.05);
       padding: 28px 26px 24px;
     }
-    h1 { margin: 0; font-size: 24px; letter-spacing: 0.08em; }
-    .sub { color: var(--muted); font-size: 14px; margin: 8px 0 16px; }
+    h1 {
+      margin: 0;
+      font-family: "Noto Serif TC", "Source Han Serif TC", serif;
+      font-size: 26px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+    }
+    .sub { color: var(--muted); font-size: 14px; margin: 8px 0 16px; line-height: 1.55; }
     .tabs { display: flex; gap: 8px; margin-bottom: 8px; }
     .tabs button {
       margin: 0;
       width: auto;
       flex: 1;
-      background: transparent;
-      color: var(--muted);
+      background: #fff;
+      color: var(--ink);
       border: 1px solid var(--line);
     }
     .tabs button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
@@ -64,7 +74,7 @@
     }
     .check input { margin-top: 3px; }
     .checks { display: grid; gap: 2px; }
-    a { color: var(--accent); }
+    a { color: var(--accent-deep); }
     button {
       margin-top: 18px;
       width: 100%;
@@ -81,13 +91,13 @@
       margin: 12px 0 0;
       width: auto;
       background: none;
-      color: var(--accent);
+      color: var(--accent-deep);
       padding: 0;
       border-radius: 0;
       font-size: 13px;
     }
-    .ok { min-height: 1.4em; color: #3f6b4a; font-size: 13px; margin-top: 10px; font-family: "Noto Sans TC", sans-serif; }
-    .err { min-height: 1.4em; color: #9a3412; font-size: 13px; margin-top: 10px; font-family: "Noto Sans TC", sans-serif; }
+    .ok { min-height: 1.4em; color: var(--accent-deep); font-size: 13px; margin-top: 10px; }
+    .err { min-height: 1.4em; color: #9f6b6b; font-size: 13px; margin-top: 10px; }
     .hidden { display: none; }
     .hp {
       position: absolute;
@@ -101,12 +111,12 @@
       padding: 12px;
       border: 1px dashed var(--line);
       border-radius: 12px;
-      background: #faf7f1;
+      background: var(--accent-mist);
     }
-    .bot-kicker { margin: 0 0 8px; font-size: 13px; color: var(--muted); font-family: "Noto Sans TC", sans-serif; }
+    .bot-kicker { margin: 0 0 8px; font-size: 13px; color: var(--muted); }
     .bot-row { display: flex; gap: 8px; align-items: center; }
     .bot-q { flex: 0 0 auto; }
-    .bot-q svg { display: block; border-radius: 8px; border: 1px solid var(--line); background: #fffdf8; }
+    .bot-q svg { display: block; border-radius: 8px; border: 1px solid var(--line); background: #fff; }
     .bot-row input { flex: 1; margin: 0; min-width: 0; }
     .site-footer {
       margin: 18px 0 0;
@@ -122,8 +132,8 @@
       background: #fff;
       color: var(--ink);
       border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 10px 10px;
+      border-radius: 999px;
+      padding: 9px 12px;
       font-size: 12px;
     }
   </style>
