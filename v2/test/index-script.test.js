@@ -291,7 +291,7 @@ test("only acefengyun admin gets a red frame on 社子島 listings", () => {
   assert.match(html, /function isShezidaoAddress/);
   assert.match(html, /\/acefengyun\/i\.test\(meEmail/);
   assert.match(html, /meIsAdmin && \/acefengyun\/i/);
-  assert.match(html, /社子島\|社之島/);
+  assert.match(html, /社子島\|社之島\|葫蘆堵/);
   assert.match(html, /延平北路\(六\|七\|八\|九\|\[6-9\]\)段/);
   assert.match(html, /class="item .*shezidao/);
   assert.match(html, /\.item\.shezidao/);
@@ -305,6 +305,8 @@ test("only acefengyun admin gets a red frame on 社子島 listings", () => {
   assert.equal(isShezidaoAddress("士林區社子街20號"), true);
   assert.equal(isShezidaoAddress("社子島抽水站附近"), true);
   assert.equal(isShezidaoAddress("士林區社正路"), true);
+  assert.equal(isShezidaoAddress("士林區葫蘆街30巷37號"), true);
+  assert.equal(isShezidaoAddress("台北市士林區葫東街"), true);
   assert.equal(isShezidaoAddress("士林區中山北路五段"), false);
   assert.equal(isShezidaoAddress("延平北路五段"), false);
   assert.equal(isShezidaoAddress("文林路100號"), false);

@@ -1611,10 +1611,11 @@
     }
     function isShezidaoAddress(address) {
       const s = String(address || "");
-      if (/社子島|社之島/.test(s)) return true;
+      if (/社子島|社之島|葫蘆堵/.test(s)) return true;
       if (/延平北路(六|七|八|九|[6-9])段/.test(s)) return true;
       if (/社子街|社子.{0,8}街/.test(s)) return true;
-      if (/社中街|社正路|永平街|倫等街|富安街/.test(s)) return true;
+      if (/社中街|社正路|永平街|倫等街|富安街|福安街/.test(s)) return true;
+      if (/葫蘆街|葫東街|海光新村/.test(s)) return true;
       return false;
     }
 
