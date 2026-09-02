@@ -146,7 +146,7 @@
     </section>
     <section class="card">
       <h2>通勤路線／Google 計費</h2>
-      <p class="hint">通勤<strong>公里數一律走免費 OpenStreetMap（OSRM）</strong>，同一組座標寫進快取後不會重算。Google Cloud 的 API 與金鑰可以留著，不必去官方停用；本站只要下面「使用 Google Directions」沒勾，就不會打 Google、也不會產生新費用。以後若要尖峰上／下班分鐘，再勾選並按儲存即可，不必重開 API、不必重貼金鑰。請勿按「關閉並清除金鑰」，除非你真的想把已存金鑰從伺服器刪掉。</p>
+      <p class="hint">通勤<strong>公里數一律走免費 OpenStreetMap（OSRM）</strong>，同一組座標寫進快取後不會重算。Google Cloud 的「要求次數」含失敗重試，失敗多半不計費，但成功的仍會讓費用摘要往上加。本站只要下面「使用 Google Directions」沒勾，就不會打 Google。若 Google 回 OVER_QUERY_LIMIT／拒絕，本站會熔斷 6 小時，避免背景一直重試。金鑰可以留著，不必去官方停 API。請勿按「關閉並清除金鑰」，除非你真的想把已存金鑰從伺服器刪掉。</p>
       <form id="mapsForm">
         <label class="checks"><input id="googleEnabled" type="checkbox" /> 使用 Google Directions（會計費，預設關閉）</label>
         <label class="checks"><input id="mapsEnabled" type="checkbox" /> 在物件列表顯示上班／下班尖峰分鐘（需要上面那項）</label>
@@ -386,6 +386,10 @@
       const provider = data.provider === "google" ? "目前實際呼叫：Google Directions（計費）" : "目前實際呼叫：OpenStreetMap OSRM（免費）";
       $("mapsKeyState").textContent = `${provider}。${data.hasKey ? "金鑰：已設定" : "金鑰：尚未設定"}`;
       $("mapsKeyState").className = data.provider === "google" ? "msg err" : "msg ok";
+      if (data.googleBlocked) {
+        $("mapsKeyState").textContent += `。已熔斷（${data.googleBlockReason || "error"}）至 ${data.googleBlockUntil || "稍後"}`;
+        $("mapsKeyState").className = "msg err";
+      }
       $("mapsToday").textContent = `太平洋時間 ${usage.today || ""}：Directions ${usage.todayEssentials || 0} 次 · Directions Advanced ${usage.todayAdvanced || 0} 次`;
       $("mapsMonth").textContent = `計費月 ${usage.month || ""}（${usage.billingTz || "America/Los_Angeles"}）：Directions ${usage.monthEssentials || 0} 次（免額 ${usage.essentialsFree || 10000}）· Advanced ${usage.monthAdvanced || 0} 次（免額 ${usage.advancedFree || 5000}）`;
       $("mapsOfficial").textContent = officialMapsWorksheet(usage);

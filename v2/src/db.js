@@ -8,6 +8,7 @@ import {
   bindGoogleDirectionsEnabled,
   bindMapsUsageSink,
   googleDirectionsAllowed,
+  googleDirectionsBlockState,
   hasGoogleMapsKey,
   isCommuteRushEnabled,
   isGoogleDirectionsEnabled,
@@ -523,14 +524,18 @@ export function getAdminMapsSettings() {
   const googleEnabled = googleDirectionsEnabled();
   const enabled = commuteRushEnabled();
   const hasKey = hasGoogleMapsKey();
+  const block = googleDirectionsBlockState();
   const daily = db.prepare("SELECT day, essentials, advanced FROM maps_usage_daily ORDER BY day").all();
   const usage = summarizeMapsUsage(daily);
   return {
     enabled,
     googleEnabled,
     hasKey,
+    googleBlocked: block.blocked,
+    googleBlockReason: block.reason,
+    googleBlockUntil: block.until,
     provider: googleDirectionsAllowed() ? "google" : "osrm",
-    warning: mapsAdminWarning({ googleEnabled, rushEnabled: enabled, hasKey }),
+    warning: mapsAdminWarning({ googleEnabled, rushEnabled: enabled, hasKey, block }),
     usage,
   };
 }
