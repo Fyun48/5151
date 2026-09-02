@@ -126,6 +126,19 @@ test("member profiles cap districts and include usable ping in notify copy", () 
   assert.equal(profilesFn.includes("if (label)"), false);
 });
 
+test("dock has mark-read buttons and renders content diffs", () => {
+  const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
+  assert.match(html, />全部已讀</);
+  assert.doesNotMatch(html, />全部關閉</);
+  assert.match(html, /data-dock-read=/);
+  assert.match(html, /function parseNotifyChanges/);
+  assert.match(html, /function dockChangeHtml/);
+  assert.match(html, /DOCK_READ_KEY/);
+  assert.match(html, /markDockRead\(loadDock\(\)\)/);
+  assert.match(html, /class="dock-change-from"/);
+  assert.match(html, /class="dock-change-to"/);
+});
+
 test("member settings copy hides advanced hints and locks schedule defaults", () => {
   const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
   assert.match(html, /此通知只會訊息已是特別關注之物件/);

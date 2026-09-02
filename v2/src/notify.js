@@ -26,6 +26,38 @@ $n.Dispose()
   );
 }
 
+export function isSameNotifyDetail(previous, next) {
+  if (previous == null) return false;
+  return String(previous).replace(/\s+/g, "") === String(next ?? "").replace(/\s+/g, "");
+}
+
+const CHANGE_LABELS = "格局|樓層|坪數|地址|類型|價格|標題";
+
+/** 把「格局 2房 → 3房；樓層 3F → 5F」拆成對照列，給站內通知卡片用。 */
+export function parseNotifyChanges(detail) {
+  const text = String(detail || "").trim();
+  if (!text) return [];
+  const parts = text.split(/；|;/).map((part) => part.trim()).filter(Boolean);
+  const out = [];
+  for (const part of parts) {
+    const arrow = part.match(new RegExp(`^(${CHANGE_LABELS})[：:]?\\s*(.*?)\\s*→\\s*(.+)$`));
+    if (arrow) {
+      out.push({
+        label: arrow[1],
+        from: arrow[2].replace(/^[：:]/, "").trim() || "—",
+        to: arrow[3].trim() || "—",
+      });
+      continue;
+    }
+    if (part === "標題變更") {
+      out.push({ label: "標題", from: "—", to: "已變更" });
+      continue;
+    }
+    out.push({ label: "說明", from: "", to: part });
+  }
+  return out;
+}
+
 export function eventLabel(type) {
   if (type === "new") return "全新物件";
   if (type === "same_source") return "同屋源更新";

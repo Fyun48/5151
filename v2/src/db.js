@@ -44,7 +44,7 @@ import {
   verifyUserPassword as verifyUserPasswordOn,
 } from "./members.js";
 import { requestTempPassword as requestTempPasswordOn } from "./forgotPassword.js";
-import { shouldDeliverNotify, formatNotifyFacts } from "./notify.js";
+import { shouldDeliverNotify, formatNotifyFacts, isSameNotifyDetail } from "./notify.js";
 import {
   applySmtpEnv,
   composeForgotPasswordMail,
@@ -1293,6 +1293,10 @@ export function enqueueListingEvent(listing, event) {
     const watched = Number(row.watched) === 1;
     if (!watched && event.type === "new" && !listingInMemberScope(row, settings)) continue;
     if (!shouldDeliverNotify(settings, row, event, { to: getUserById(userId)?.email })) continue;
+    const last = db.prepare(
+      "SELECT detail FROM user_events WHERE user_id = ? AND post_id = ? AND type = ? ORDER BY id DESC LIMIT 1",
+    ).get(userId, payload.post_id, payload.type);
+    if (last && isSameNotifyDetail(last.detail, payload.detail)) continue;
     ids.push(addUserEvent({ ...payload, user_id: userId }));
   }
   return ids;
