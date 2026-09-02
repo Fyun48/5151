@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { commuteModeLabel } from "./geo.js";
 import { passesDisplayFilters, housingTypeLabel } from "./floors.js";
 import { mailConfigured, sendMail } from "./mail.js";
 import { notifyChannelOn } from "./notifyMatrix.js";
@@ -280,12 +281,13 @@ export function formatNotifyCommute(event = {}) {
   const km = Number(event.commute_km ?? event.route_km);
   if (!Number.isFinite(km) || km <= 0) return "";
   const rounded = Math.round(km * 10) / 10;
+  const label = commuteModeLabel(event.commute_mode);
   const am = Number(event.commute_min_am ?? event.rush_am_min);
   const pm = Number(event.commute_min_pm ?? event.rush_pm_min);
   if (Number.isFinite(am) && Number.isFinite(pm)) {
-    return `機車 ${rounded} 公里 · 上 ${Math.round(am)} 分 · 下 ${Math.round(pm)} 分`;
+    return `${label} ${rounded} 公里 · 上 ${Math.round(am)} 分 · 下 ${Math.round(pm)} 分`;
   }
-  return `機車路線約 ${rounded} 公里`;
+  return `${label}路線約 ${rounded} 公里`;
 }
 
 export function formatNotifyFacts(event) {

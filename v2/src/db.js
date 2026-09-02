@@ -15,7 +15,7 @@ import {
 import { sameSearch } from "./client591.js";
 import { districtNameFromListing } from "./regions.js";
 import { preferPrimaryListing } from "./match.js";
-import { hasWorkPoint, needsListingGeo, commuteWorkJobs } from "./geo.js";
+import { commuteWorkJobs, hasWorkPoint, needsListingGeo, normalizeCommuteMode } from "./geo.js";
 import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings, planIntervalMinutes, resolveSaveAsProfileAction, normalizeProfileName, MEMBER_MAX_PROFILES, ADMIN_MAX_PROFILES } from "./settingsState.js";
 import { defaultNotifyMatrix } from "./notifyMatrix.js";
 import { DATA_EPOCH, shouldResetForEpoch } from "./dataEpoch.js";
@@ -490,8 +490,8 @@ export function getAdminMapsSettings() {
   const daily = db.prepare("SELECT day, essentials, advanced FROM maps_usage_daily ORDER BY day").all();
   const usage = summarizeMapsUsage(daily);
   let warning = "";
-  if (enabled && !hasKey) warning = "已開啟尖峰分鐘，但還沒有 Google 金鑰，物件列表仍只會顯示機車公里數。";
-  else if (!enabled) warning = "目前關閉。物件列表只顯示機車公里數，也不會打含路況的 Google 路線。";
+  if (enabled && !hasKey) warning = "已開啟尖峰分鐘，但還沒有 Google 金鑰，物件列表仍只會顯示通勤公里數。";
+  else if (!enabled) warning = "目前關閉。物件列表只顯示通勤公里數，也不會打含路況的 Google 路線。";
   return {
     enabled,
     hasKey,
@@ -637,6 +637,7 @@ const DEFAULTS = {
   excludeBoxes: [],
   workAddress: "",
   commuteKm: 0,
+  commuteMode: "scooter",
   workLat: null,
   workLng: null,
   settingProfiles: [],
@@ -799,6 +800,7 @@ function decorateListing(row, settings) {
   settings = settings || getSettings();
   row = applyCachedCoords(row, settings);
   const commute = Number.isFinite(Number(row.route_km)) ? Number(row.route_km) : null;
+  const commuteMode = normalizeCommuteMode(settings.commuteMode);
   const matchPostId = Number(row.match_post_id) || 0;
   const matchPeer = matchPostId
     ? db.prepare("SELECT post_id, title, url, price, offline FROM listings WHERE post_id = ?").get(matchPostId)
@@ -808,6 +810,7 @@ function decorateListing(row, settings) {
     extra_fees: Array.isArray(row.extra_fees) ? row.extra_fees : parseJson(row.extra_fees, []),
     has_elevator: listingHasElevator(row),
     commute_km: commute == null ? null : Math.round(commute * 10) / 10,
+    commute_mode: commuteMode,
     commute_routes: Array.isArray(row.route_kms) ? row.route_kms : [],
     commute_min_am: commuteRushEnabled() && Number.isFinite(Number(row.rush_am_min)) ? Math.round(Number(row.rush_am_min)) : null,
     commute_min_pm: commuteRushEnabled() && Number.isFinite(Number(row.rush_pm_min)) ? Math.round(Number(row.rush_pm_min)) : null,
@@ -1337,6 +1340,7 @@ export function resetAllData() {
     discordWebhook: "",
     workAddress: "",
     commuteKm: 0,
+    commuteMode: "scooter",
     workLat: null,
     workLng: null,
     excludeBoxes: [],
@@ -1456,7 +1460,7 @@ export function applyCachedCoords(row, settings) {
     Number.isFinite(Number(row.lat)) &&
     Number.isFinite(Number(row.lng))
   ) {
-    const route = getCachedRoute(row.lat, row.lng, workLat, workLng);
+    const route = getCachedRoute(row.lat, row.lng, workLat, workLng, conf.commuteMode);
     if (route) {
       return {
         ...row,
@@ -1470,8 +1474,8 @@ export function applyCachedCoords(row, settings) {
   return row;
 }
 
-export function getCachedRoute(fromLat, fromLng, toLat, toLng) {
-  const key = makeRouteKey(fromLat, fromLng, toLat, toLng);
+export function getCachedRoute(fromLat, fromLng, toLat, toLng, mode = "scooter") {
+  const key = makeRouteKey(fromLat, fromLng, toLat, toLng, mode);
   const row = db.prepare("SELECT distances, min_km, rush_am_min, rush_pm_min, rush_updated_at FROM route_cache WHERE route_key = ?").get(key);
   if (!row) return null;
   const distances = parseJson(row.distances, []);
@@ -1487,10 +1491,10 @@ export function getCachedRoute(fromLat, fromLng, toLat, toLng) {
   };
 }
 
-export function setCachedRoute(fromLat, fromLng, toLat, toLng, distances, rush = null) {
+export function setCachedRoute(fromLat, fromLng, toLat, toLng, distances, rush = null, mode = "scooter") {
   const list = (Array.isArray(distances) ? distances : []).map(Number).filter((n) => Number.isFinite(n) && n > 0);
   if (!list.length) return;
-  const key = makeRouteKey(fromLat, fromLng, toLat, toLng);
+  const key = makeRouteKey(fromLat, fromLng, toLat, toLng, mode);
   const minKm = Math.min(...list);
   const stamp = new Date().toISOString();
   const rushAm = Number(rush?.rushAm ?? rush?.am);
@@ -1538,11 +1542,11 @@ export function listingsNeedingRoute(limit = 40) {
   const wantRush = commuteRushEnabled() && hasGoogleMapsKey();
   for (const row of rows) {
     for (const job of jobs) {
-      const cached = getCachedRoute(row.lat, row.lng, job.workLat, job.workLng);
+      const cached = getCachedRoute(row.lat, row.lng, job.workLat, job.workLng, job.commuteMode);
       if (cached && (!wantRush || (Number.isFinite(cached.rush_am_min) && Number.isFinite(cached.rush_pm_min) && !rushStale(cached.rush_updated_at)))) {
         continue;
       }
-      out.push({ ...row, workLat: job.workLat, workLng: job.workLng });
+      out.push({ ...row, workLat: job.workLat, workLng: job.workLng, commuteMode: job.commuteMode });
       if (out.length >= limit) return out;
     }
   }
@@ -1775,6 +1779,7 @@ export function eventPayloadFromListing(event, listing) {
     tags: row.tags || event.tags,
     cover: row.cover,
     commute_km: row.commute_km,
+    commute_mode: row.commute_mode,
     commute_min_am: row.commute_min_am,
     commute_min_pm: row.commute_min_pm,
     commute_routes: row.commute_routes,

@@ -1,5 +1,5 @@
 import { buildSearchUrls, districtsFromSearchUrls, normalizeWatchDistricts, priceFromSearchUrls } from "./regions.js";
-import { normalizeBoxes, normalizeKeywords, parseWorkCoord } from "./geo.js";
+import { normalizeBoxes, normalizeCommuteMode, normalizeKeywords, parseWorkCoord } from "./geo.js";
 import { normalizeNotifyMatrix } from "./notifyMatrix.js";
 
 export const MEMBER_MAX_PROFILE_DISTRICTS = 10;
@@ -26,6 +26,7 @@ export const PROFILE_FIELDS = [
   "notifyMatrix",
   "workAddress",
   "commuteKm",
+  "commuteMode",
   "workLat",
   "workLng",
   "watchDistricts",
@@ -172,6 +173,7 @@ export function hydrateSettings(stored, defaults, { admin = false, plan = "free"
     next.activeProfileId = "";
   }
   next.notifyMatrix = normalizeNotifyMatrix(next);
+  next.commuteMode = normalizeCommuteMode(next.commuteMode);
   return next;
 }
 
@@ -199,6 +201,7 @@ export function applySettingPatch(current, partial = {}, { admin = false, plan =
   next.intervalMinutes = clampIntervalMinutes(next.intervalMinutes, { admin, fallback: planIntervalMinutes(plan) });
   next.pagesPerWatch = Math.max(1, Math.min(Number(next.pagesPerWatch) || 40, 40));
   next.commuteKm = Math.max(0, Math.min(Number(next.commuteKm) || 0, 80));
+  next.commuteMode = normalizeCommuteMode(next.commuteMode);
   next.workAddress = String(next.workAddress || "").trim().slice(0, 120);
   next.workLat = parseWorkCoord(next.workLat);
   next.workLng = parseWorkCoord(next.workLng);

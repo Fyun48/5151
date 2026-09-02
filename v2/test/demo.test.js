@@ -43,6 +43,7 @@ test("public demo settings strip webhooks and exclusion lists", () => {
     watchDistricts: ["1-8", "1-5"],
     priceMax: 28000,
     commuteKm: 13,
+    commuteMode: "car",
     workAddress: "台北市士林區德行西路7號",
     workLat: 25.1,
     workLng: 121.5,
@@ -56,6 +57,7 @@ test("public demo settings strip webhooks and exclusion lists", () => {
   assert.deepEqual(pub.watchDistricts, ["1-8", "1-5"]);
   assert.equal(pub.workAddress, "台北市士林區德行西路7號");
   assert.equal(pub.commuteKm, 13);
+  assert.equal(pub.commuteMode, "car");
   assert.deepEqual(pub.excludeKeywords, []);
   assert.deepEqual(pub.excludeAgents, []);
   assert.deepEqual(pub.excludeBoxes, []);

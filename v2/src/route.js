@@ -1,3 +1,4 @@
+import { normalizeCommuteMode } from "./geo.js";
 import { hasGoogleMapsKey, nextWeekdayTaipeiUnix, recordMapsUsage, secondsToMinutes } from "./mapsBilling.js";
 
 const GEO_UA = "591-tracker/1.0 (personal rental watcher; acefengyun@gmail.com)";
@@ -37,7 +38,7 @@ function routeTrafficSeconds(route) {
   }, 0);
 }
 
-async function googleDirections(fromLat, fromLng, toLat, toLng, { departureTime = 0 } = {}) {
+async function googleDirections(fromLat, fromLng, toLat, toLng, { departureTime = 0, mode = "scooter" } = {}) {
   const key = String(process.env.GOOGLE_MAPS_API_KEY || "").trim();
   if (!key) return null;
   const url = new URL("https://maps.googleapis.com/maps/api/directions/json");
@@ -45,7 +46,7 @@ async function googleDirections(fromLat, fromLng, toLat, toLng, { departureTime 
   url.searchParams.set("destination", `${toLat},${toLng}`);
   url.searchParams.set("mode", "driving");
   url.searchParams.set("alternatives", "true");
-  url.searchParams.set("avoid", "highways");
+  if (normalizeCommuteMode(mode) !== "car") url.searchParams.set("avoid", "highways");
   url.searchParams.set("region", "tw");
   url.searchParams.set("language", "zh-TW");
   url.searchParams.set("key", key);
@@ -65,8 +66,8 @@ async function googleDirections(fromLat, fromLng, toLat, toLng, { departureTime 
   return { distances, durationMin };
 }
 
-async function googleRoutes(fromLat, fromLng, toLat, toLng) {
-  const row = await googleDirections(fromLat, fromLng, toLat, toLng);
+async function googleRoutes(fromLat, fromLng, toLat, toLng, mode = "scooter") {
+  const row = await googleDirections(fromLat, fromLng, toLat, toLng, { mode });
   return row?.distances?.length ? row.distances : null;
 }
 
@@ -94,21 +95,22 @@ export function roundCoord(value) {
   return Math.round(Number(value) * 1e5) / 1e5;
 }
 
-export function makeRouteKey(fromLat, fromLng, toLat, toLng) {
-  return `${roundCoord(fromLat)},${roundCoord(fromLng)}>${roundCoord(toLat)},${roundCoord(toLng)}`;
+export function makeRouteKey(fromLat, fromLng, toLat, toLng, mode = "scooter") {
+  const base = `${roundCoord(fromLat)},${roundCoord(fromLng)}>${roundCoord(toLat)},${roundCoord(toLng)}`;
+  return normalizeCommuteMode(mode) === "car" ? `car:${base}` : base;
 }
 
 function mergeKm(a, b) {
   return [...new Set([...(a || []), ...(b || [])])].sort((x, y) => x - y).slice(0, 3);
 }
 
-export async function fetchRoadRoutes(fromLat, fromLng, toLat, toLng) {
+export async function fetchRoadRoutes(fromLat, fromLng, toLat, toLng, { mode = "scooter" } = {}) {
   const from = [Number(fromLat), Number(fromLng)];
   const to = [Number(toLat), Number(toLng)];
   if (!from.every(Number.isFinite) || !to.every(Number.isFinite)) return null;
   let distances = [];
   try {
-    const google = await googleRoutes(from[0], from[1], to[0], to[1]);
+    const google = await googleRoutes(from[0], from[1], to[0], to[1], mode);
     if (google?.length) distances = google;
   } catch {
     // 沒有 Google key 或失敗時改用 OpenStreetMap 路線
@@ -124,7 +126,7 @@ export async function fetchRoadRoutes(fromLat, fromLng, toLat, toLng) {
   return distances.length ? distances : null;
 }
 
-export async function fetchRushRoadRoutes(fromLat, fromLng, toLat, toLng, { now = Date.now() } = {}) {
+export async function fetchRushRoadRoutes(fromLat, fromLng, toLat, toLng, { now = Date.now(), mode = "scooter" } = {}) {
   const from = [Number(fromLat), Number(fromLng)];
   const to = [Number(toLat), Number(toLng)];
   if (!from.every(Number.isFinite) || !to.every(Number.isFinite)) return null;
@@ -134,12 +136,12 @@ export async function fetchRushRoadRoutes(fromLat, fromLng, toLat, toLng, { now 
   let morning = null;
   let evening = null;
   try {
-    morning = await googleDirections(from[0], from[1], to[0], to[1], { departureTime: amAt });
+    morning = await googleDirections(from[0], from[1], to[0], to[1], { departureTime: amAt, mode });
   } catch {
     morning = null;
   }
   try {
-    evening = await googleDirections(from[0], from[1], to[0], to[1], { departureTime: pmAt });
+    evening = await googleDirections(from[0], from[1], to[0], to[1], { departureTime: pmAt, mode });
   } catch {
     evening = null;
   }

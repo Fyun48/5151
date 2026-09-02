@@ -116,6 +116,13 @@ test("commute work jobs come from member settings, not empty global defaults", (
   ]);
   assert.equal(jobs.length, 1);
   assert.equal(jobs[0].workLat, 25.1062827);
+  assert.equal(jobs[0].commuteMode, "scooter");
+  const both = commuteWorkJobs([
+    { commuteKm: 13, workLat: 25.1, workLng: 121.5, commuteMode: "scooter" },
+    { commuteKm: 25, workLat: 25.1, workLng: 121.5, commuteMode: "car" },
+  ]);
+  assert.equal(both.length, 2);
+  assert.deepEqual(both.map((job) => job.commuteMode).sort(), ["car", "scooter"]);
   assert.equal(commuteWorkJobs([{ commuteKm: 12, workLat: 0, workLng: 0 }]).length, 0);
 });
 

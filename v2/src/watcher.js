@@ -35,7 +35,7 @@ import {
 } from "./db.js";
 import { replaceCrawlCovers, touchCrawlCoversRun } from "./crawlCovers.js";
 import { fetchCommunityLocation, fetchListingDetail, fetchListings, isListingGoneError, LIST_PAGE_SIZE, mergeFeeRows, probeListingAlive } from "./client591.js";
-import { needsListingGeo, hasWorkPoint, commuteWorkJobs } from "./geo.js";
+import { commuteWorkJobs, hasWorkPoint, needsListingGeo, normalizeCommuteMode } from "./geo.js";
 import { isTrustedGeoSource, listingCommunityId } from "./location.js";
 import { decideNotifyDelivery } from "./floors.js";
 import { fetchRoadRoutes, fetchRushRoadRoutes } from "./route.js";
@@ -205,6 +205,7 @@ async function resolveListingRoute(listing, settings) {
   const km = Number(settings.commuteKm);
   const workLat = Number(settings.workLat);
   const workLng = Number(settings.workLng);
+  const mode = normalizeCommuteMode(settings.commuteMode);
   if (!(km > 0) || !hasWorkPoint(settings)) return listing;
   const lat = Number(listing?.lat);
   const lng = Number(listing?.lng);
@@ -214,14 +215,14 @@ async function resolveListingRoute(listing, settings) {
   const hasRush = Number.isFinite(Number(listing.rush_am_min)) && Number.isFinite(Number(listing.rush_pm_min));
   if (hasKm && (!wantRush || hasRush)) return listing;
   if (wantRush) {
-    const rush = await fetchRushRoadRoutes(lat, lng, workLat, workLng);
+    const rush = await fetchRushRoadRoutes(lat, lng, workLat, workLng, { mode });
     const distances = rush?.distances?.length ? rush.distances : listing.route_kms;
-    if (distances?.length) setCachedRoute(lat, lng, workLat, workLng, distances, rush);
+    if (distances?.length) setCachedRoute(lat, lng, workLat, workLng, distances, rush, mode);
     return getListing(listing.post_id);
   }
-  const distances = await fetchRoadRoutes(lat, lng, workLat, workLng);
+  const distances = await fetchRoadRoutes(lat, lng, workLat, workLng, { mode });
   if (!distances?.length) return listing;
-  setCachedRoute(lat, lng, workLat, workLng, distances);
+  setCachedRoute(lat, lng, workLat, workLng, distances, null, mode);
   return getListing(listing.post_id);
 }
 
@@ -520,15 +521,16 @@ export async function backfillListingRoutes(settings = getSettings(), { limit = 
   for (const row of rows) {
     const workLat = Number(row.workLat || settings.workLat || fallback?.workLat);
     const workLng = Number(row.workLng || settings.workLng || fallback?.workLng);
+    const mode = normalizeCommuteMode(row.commuteMode || settings.commuteMode || fallback?.commuteMode);
     if (!Number.isFinite(workLat) || !Number.isFinite(workLng)) continue;
     attempted += 1;
     const wantRush = commuteRushEnabled() && hasGoogleMapsKey();
-    const rush = wantRush ? await fetchRushRoadRoutes(row.lat, row.lng, workLat, workLng) : null;
-    const distances = rush?.distances?.length ? rush.distances : await fetchRoadRoutes(row.lat, row.lng, workLat, workLng);
+    const rush = wantRush ? await fetchRushRoadRoutes(row.lat, row.lng, workLat, workLng, { mode }) : null;
+    const distances = rush?.distances?.length ? rush.distances : await fetchRoadRoutes(row.lat, row.lng, workLat, workLng, { mode });
     if (distances?.length) {
       for (let tryNo = 0; tryNo < 4; tryNo += 1) {
         try {
-          setCachedRoute(row.lat, row.lng, workLat, workLng, distances, rush);
+          setCachedRoute(row.lat, row.lng, workLat, workLng, distances, rush, mode);
           located += 1;
           break;
         } catch (error) {

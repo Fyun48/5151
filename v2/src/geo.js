@@ -157,6 +157,14 @@ export function hasWorkPoint(settings = {}) {
   return parseWorkCoord(settings.workLat) != null && parseWorkCoord(settings.workLng) != null;
 }
 
+export function normalizeCommuteMode(value) {
+  return String(value || "").trim() === "car" ? "car" : "scooter";
+}
+
+export function commuteModeLabel(mode) {
+  return normalizeCommuteMode(mode) === "car" ? "汽車" : "機車";
+}
+
 export function needsListingGeo(settings = {}) {
   const commuteOn = Number(settings.commuteKm) > 0 && hasWorkPoint(settings);
   return commuteOn || hasActiveBoxes(settings.excludeBoxes);
@@ -169,10 +177,11 @@ export function commuteWorkJobs(settingsList) {
     if (!(Number(settings?.commuteKm) > 0) || !hasWorkPoint(settings)) continue;
     const workLat = Number(settings.workLat);
     const workLng = Number(settings.workLng);
-    const key = `${workLat},${workLng}`;
+    const commuteMode = normalizeCommuteMode(settings.commuteMode);
+    const key = `${workLat},${workLng},${commuteMode}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ workLat, workLng, commuteKm: Number(settings.commuteKm) });
+    out.push({ workLat, workLng, commuteKm: Number(settings.commuteKm), commuteMode });
   }
   return out;
 }
