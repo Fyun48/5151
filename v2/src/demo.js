@@ -1,5 +1,11 @@
 import { hasWorkPoint } from "./geo.js";
-import { CITIES } from "./regions.js";
+import { CITIES, lookupDistrict } from "./regions.js";
+
+export function demoDistrictNames(settings = {}) {
+  return (settings.watchDistricts || [])
+    .map((key) => lookupDistrict(key)?.name)
+    .filter(Boolean);
+}
 
 export const GUEST_LIST_LIMIT = 30;
 
@@ -63,6 +69,8 @@ export function buildDemoState({
     sort: "newest",
     limit: GUEST_LIST_LIMIT,
     userId: uid,
+    searchKeys: [],
+    districts: demoDistrictNames(settings),
   });
   const listingStats = typeof stats === "function" ? stats(undefined, uid) : {};
   return {

@@ -91,7 +91,8 @@ test("buildDemoState is read-only and caps the guest list", () => {
   assert.equal(state.stats.matched, 80);
   assert.equal(state.stats.shown, 3);
   assert.equal(state.settings.discordWebhook, "");
-  assert.equal(calls.some((row) => row[0] === "list" && row[1].filter === "guest" && row[1].limit === GUEST_LIST_LIMIT && row[1].userId === 7), true);
+  assert.equal(calls.some((row) => row[0] === "list" && row[1].filter === "guest" && row[1].limit === GUEST_LIST_LIMIT && row[1].userId === 7 && Array.isArray(row[1].searchKeys) && row[1].searchKeys.length === 0), true);
+  assert.deepEqual(calls.find((row) => row[0] === "list")[1].districts, ["士林區"]);
   assert.equal(calls.some((row) => row[0] === "stats" && row[2] === 7), true);
 });
 
