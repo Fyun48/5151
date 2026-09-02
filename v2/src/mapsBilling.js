@@ -30,8 +30,12 @@ export const MAPS_SKU = {
   },
 };
 
+export const GOOGLE_DIRECTIONS_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+
 let usageSink = null;
 let directionsEnabledReader = () => false;
+let googleBlockUntil = 0;
+let googleBlockReason = "";
 
 export function bindMapsUsageSink(fn) {
   usageSink = typeof fn === "function" ? fn : null;
@@ -60,11 +64,35 @@ export function isGoogleDirectionsEnabled(value) {
   return value === true;
 }
 
-export function googleDirectionsAllowed(env = process.env) {
+export function resetGoogleDirectionsBlock() {
+  googleBlockUntil = 0;
+  googleBlockReason = "";
+}
+
+export function tripGoogleDirections(reason, ms = GOOGLE_DIRECTIONS_COOLDOWN_MS) {
+  const wait = Math.max(1000, Number(ms) || GOOGLE_DIRECTIONS_COOLDOWN_MS);
+  googleBlockUntil = Date.now() + wait;
+  googleBlockReason = String(reason || "error").slice(0, 120);
+}
+
+export function googleDirectionsBlockState(now = Date.now()) {
+  const active = Number(now) < googleBlockUntil;
+  return {
+    blocked: active,
+    reason: active ? googleBlockReason : "",
+    until: active ? new Date(googleBlockUntil).toISOString() : "",
+  };
+}
+
+export function googleDirectionsAllowed(env = process.env, now = Date.now()) {
+  if (Number(now) < googleBlockUntil) return false;
   return hasGoogleMapsKey(env) && directionsEnabledReader() === true;
 }
 
-export function mapsAdminWarning({ googleEnabled, rushEnabled, hasKey } = {}) {
+export function mapsAdminWarning({ googleEnabled, rushEnabled, hasKey, block } = {}) {
+  if (block?.blocked) {
+    return `Google Directions 已熔斷（${block.reason || "error"}），暫停呼叫至 ${block.until || "稍後"}。Cloud 的「要求次數」含失敗重試，失敗多半不計費，但成功的仍會讓帳單往上加。`;
+  }
   if (!googleEnabled) {
     return hasKey
       ? "Google Directions 已關閉，金鑰仍保留。本站不呼叫就不計費；以後要尖峰分鐘再勾選即可，不必去官方重開 API。"

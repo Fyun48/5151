@@ -9,12 +9,14 @@ import {
   mapsAdminWarning,
   nextWeekdayTaipeiUnix,
   pacificYmd,
+  resetGoogleDirectionsBlock,
   rushStale,
   secondsToMinutes,
   skuCostBreakdown,
   skuUsd,
   summarizeMapsUsage,
   taipeiYmd,
+  tripGoogleDirections,
 } from "../src/mapsBilling.js";
 
 test("free monthly caps keep estimated cost at zero", () => {
@@ -30,6 +32,7 @@ test("official volume tiers match Google's Directions price list", () => {
   assert.equal(skuUsd(100001, MAPS_SKU.essentials), 450);
   assert.equal(skuUsd(101000, MAPS_SKU.essentials), 454);
   assert.equal(skuUsd(12135, MAPS_SKU.advanced), 71.35);
+  assert.equal(skuUsd(12816, MAPS_SKU.advanced), 78.16);
   const sheet = skuCostBreakdown(12135, MAPS_SKU.advanced);
   assert.equal(sheet.billable, 7135);
   assert.equal(sheet.lines[0].usd, 0);
@@ -85,6 +88,7 @@ test("rush cache is stale after 14 days", () => {
 test("Google Directions stays off unless the admin switch is explicitly true", () => {
   const prev = process.env.GOOGLE_MAPS_API_KEY;
   process.env.GOOGLE_MAPS_API_KEY = "fake-key";
+  resetGoogleDirectionsBlock();
   try {
     assert.equal(isGoogleDirectionsEnabled(undefined), false);
     assert.equal(isGoogleDirectionsEnabled(false), false);
@@ -95,6 +99,25 @@ test("Google Directions stays off unless the admin switch is explicitly true", (
     assert.equal(googleDirectionsAllowed(), true);
   } finally {
     bindGoogleDirectionsEnabled(() => false);
+    resetGoogleDirectionsBlock();
+    if (prev == null) delete process.env.GOOGLE_MAPS_API_KEY;
+    else process.env.GOOGLE_MAPS_API_KEY = prev;
+  }
+});
+
+test("non-billable Google status trips a cooldown so retries stop", () => {
+  const prev = process.env.GOOGLE_MAPS_API_KEY;
+  process.env.GOOGLE_MAPS_API_KEY = "fake-key";
+  resetGoogleDirectionsBlock();
+  try {
+    bindGoogleDirectionsEnabled(() => true);
+    assert.equal(googleDirectionsAllowed(), true);
+    tripGoogleDirections("OVER_QUERY_LIMIT", 60_000);
+    assert.equal(googleDirectionsAllowed(), false);
+    assert.match(mapsAdminWarning({ googleEnabled: true, hasKey: true, rushEnabled: true, block: { blocked: true, reason: "OVER_QUERY_LIMIT", until: "稍後" } }), /熔斷/);
+  } finally {
+    bindGoogleDirectionsEnabled(() => false);
+    resetGoogleDirectionsBlock();
     if (prev == null) delete process.env.GOOGLE_MAPS_API_KEY;
     else process.env.GOOGLE_MAPS_API_KEY = prev;
   }

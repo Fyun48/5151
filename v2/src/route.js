@@ -1,5 +1,5 @@
 import { normalizeCommuteMode } from "./geo.js";
-import { googleDirectionsAllowed, isBillableDirectionsStatus, nextWeekdayTaipeiUnix, recordMapsUsage, secondsToMinutes } from "./mapsBilling.js";
+import { googleDirectionsAllowed, isBillableDirectionsStatus, nextWeekdayTaipeiUnix, recordMapsUsage, secondsToMinutes, tripGoogleDirections } from "./mapsBilling.js";
 
 const GEO_UA = "591-tracker/1.0 (personal rental watcher; acefengyun@gmail.com)";
 
@@ -57,9 +57,15 @@ async function googleDirections(fromLat, fromLng, toLat, toLng, { departureTime 
     url.searchParams.set("traffic_model", "best_guess");
   }
   const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
-  if (!res.ok) return null;
+  if (!res.ok) {
+    tripGoogleDirections(`HTTP ${res.status}`);
+    return null;
+  }
   const body = await res.json();
-  if (!isBillableDirectionsStatus(body.status)) return null;
+  if (!isBillableDirectionsStatus(body.status)) {
+    tripGoogleDirections(body.status || "unknown");
+    return null;
+  }
   recordMapsUsage(rush ? "advanced" : "essentials", 1);
   const routes = body.routes || [];
   const distances = uniqueDistances(routes.map(routeMeters));
