@@ -1,6 +1,35 @@
 import { hasWorkPoint } from "./geo.js";
 import { CITIES, lookupDistrict } from "./regions.js";
 
+export const DEMO_WORK_ADDRESS = "臺北市南港區經貿一路170號";
+export const DEMO_COMMUTE_KM = 25;
+export const DEMO_WORK_LAT = 25.05781;
+export const DEMO_WORK_LNG = 121.6184;
+
+const LEGACY_DEMO_WORK = /^(台北市|臺北市)士林區德行西路7號$/;
+
+export function isLegacyDemoWorkAddress(address) {
+  return LEGACY_DEMO_WORK.test(String(address || "").replace(/\s+/g, ""));
+}
+
+export function demoCommutePatch() {
+  return {
+    workAddress: DEMO_WORK_ADDRESS,
+    commuteKm: DEMO_COMMUTE_KM,
+    workLat: DEMO_WORK_LAT,
+    workLng: DEMO_WORK_LNG,
+  };
+}
+
+export function applyDemoCommute(settings = {}) {
+  return { ...settings, ...demoCommutePatch() };
+}
+
+export function applyLegacyDemoCommute(settings = {}) {
+  if (!isLegacyDemoWorkAddress(settings.workAddress)) return settings;
+  return applyDemoCommute(settings);
+}
+
 export function demoDistrictNames(settings = {}) {
   return (settings.watchDistricts || [])
     .map((key) => lookupDistrict(key)?.name)
@@ -44,11 +73,8 @@ export function publicDemoSettings(settings = {}) {
     excludeBoxes: [],
     discordWebhook: "",
     notifyMatrix: settings.notifyMatrix || {},
-    workAddress: String(settings.workAddress || "").trim(),
-    commuteKm: Number(settings.commuteKm) || 0,
+    ...demoCommutePatch(),
     commuteMode: settings.commuteMode === "car" ? "car" : "scooter",
-    workLat: Number(settings.workLat) || null,
-    workLng: Number(settings.workLng) || null,
     settingProfiles: Array.isArray(settings.settingProfiles)
       ? settings.settingProfiles.map((item) => ({ id: item.id, name: item.name }))
       : [],
@@ -64,16 +90,18 @@ export function buildDemoState({
   stats,
 } = {}) {
   const uid = demoSourceUserId({ listUserIds, getSettings, defaultUserId });
-  const settings = uid ? getSettings(uid) : getSettings();
+  const source = uid ? getSettings(uid) : getSettings();
+  const settings = applyDemoCommute(source);
   const listed = listListings({
     filter: "guest",
     sort: "newest",
     limit: GUEST_LIST_LIMIT,
     userId: uid,
     searchKeys: [],
-    districts: demoDistrictNames(settings),
+    districts: demoDistrictNames(source),
+    settings,
   });
-  const listingStats = typeof stats === "function" ? stats(undefined, uid) : {};
+  const listingStats = typeof stats === "function" ? stats(undefined, uid, settings) : {};
   return {
     guest: true,
     settings: publicDemoSettings(settings),
