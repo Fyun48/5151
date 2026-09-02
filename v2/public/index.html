@@ -590,6 +590,36 @@
     #alertDock header h2 { margin: 0; font-size: 16px; letter-spacing: 0.04em; }
     .dock-item { padding: 10px 16px 14px; border-top: 1px solid var(--line); }
     .dock-item a { color: var(--ink); }
+    .dock-changes { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+    .dock-change {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px 8px;
+      padding: 8px 10px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, #fff7ed 0%, var(--rose-soft) 100%);
+      border: 1px solid #f0d8c8;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    .dock-change-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      color: #9a5b32;
+      background: #fff;
+      border-radius: 999px;
+      padding: 2px 8px;
+    }
+    .dock-change-from {
+      color: var(--muted);
+      text-decoration: line-through;
+      text-decoration-color: #d4a5a5;
+    }
+    .dock-change-arrow { color: var(--watch); font-weight: 800; }
+    .dock-change-to { color: var(--ink); font-weight: 700; }
+    .dock-item .row { flex-wrap: wrap; }
     .drawing .leaflet-container { cursor: crosshair; }
     .actions { display: flex; flex-direction: column; gap: 8px; min-width: 132px; }
     .hide-box { font-size: 13px; color: var(--muted); display: flex; gap: 6px; align-items: center; cursor: pointer; }
@@ -922,7 +952,7 @@
     <header>
       <h2>待看更新</h2>
       <div class="row">
-        <button class="ghost" id="dockClearBtn">全部關閉</button>
+        <button class="ghost" id="dockClearBtn">全部已讀</button>
         <button class="primary" id="dockHideBtn">收合</button>
       </div>
     </header>
@@ -988,6 +1018,7 @@
     const MEMBER_MAX_DISTRICTS = 10;
     const MEMBER_MAX_PROFILES = 3;
     const DOCK_KEY = "591-alert-dock-v1";
+    const DOCK_READ_KEY = "591-alert-dock-read-v1";
     let meIsAdmin = false;
     let meEmail = "";
     let mePlan = "free";
@@ -1097,7 +1128,10 @@
       same_source: "同屋源更新",
       update: "內容更新",
       price_drop: "價格調降",
+      price_update: "價格變更",
       title_update: "標題更新",
+      relist: "重新上架",
+      offline: "591 已下架",
     };
 
     const CITIES_EMBEDDED = [
@@ -2459,11 +2493,65 @@
     function saveDock(items) {
       localStorage.setItem(DOCK_KEY, JSON.stringify(items.slice(0, 30)));
     }
+    function dockItemKey(item) {
+      return `${item.post_id}:${item.type}:${String(item.detail || "").replace(/\s+/g, "")}`;
+    }
+    function loadDockReadKeys() {
+      try {
+        const raw = JSON.parse(localStorage.getItem(DOCK_READ_KEY) || "[]");
+        return new Set((Array.isArray(raw) ? raw : []).map(String));
+      } catch {
+        return new Set();
+      }
+    }
+    function saveDockReadKeys(keys) {
+      localStorage.setItem(DOCK_READ_KEY, JSON.stringify([...keys].slice(-300)));
+    }
+    function markDockRead(items) {
+      const keys = loadDockReadKeys();
+      for (const item of items) keys.add(dockItemKey(item));
+      saveDockReadKeys(keys);
+    }
+    function parseNotifyChanges(detail) {
+      const text = String(detail || "").trim();
+      if (!text) return [];
+      const parts = text.split(/；|;/).map((part) => part.trim()).filter(Boolean);
+      const out = [];
+      for (const part of parts) {
+        const arrow = part.match(/^(格局|樓層|坪數|地址|類型|價格|標題)[：:]?\s*(.*?)\s*→\s*(.+)$/);
+        if (arrow) {
+          out.push({
+            label: arrow[1],
+            from: arrow[2].replace(/^[：:]/, "").trim() || "—",
+            to: arrow[3].trim() || "—",
+          });
+          continue;
+        }
+        if (part === "標題變更") {
+          out.push({ label: "標題", from: "—", to: "已變更" });
+          continue;
+        }
+        out.push({ label: "說明", from: "", to: part });
+      }
+      return out;
+    }
+    function dockChangeHtml(item) {
+      const changes = parseNotifyChanges(item.detail);
+      if (!changes.length) return "";
+      return `<div class="dock-changes">${changes.map((change) => `
+        <div class="dock-change">
+          ${change.label ? `<span class="dock-change-label">${esc(change.label)}</span>` : ""}
+          ${change.from ? `<span class="dock-change-from">${esc(change.from)}</span><span class="dock-change-arrow" aria-hidden="true">→</span>` : ""}
+          <span class="dock-change-to">${esc(change.to)}</span>
+        </div>`).join("")}</div>`;
+    }
     function pushDock(events) {
       if (!events?.length) return;
       const current = loadDock();
+      const read = loadDockReadKeys();
       const seen = new Set(current.map((item) => `${item.post_id}:${item.type}:${item.created_at || ""}`));
       for (const event of events) {
+        if (read.has(dockItemKey(event))) continue;
         const key = `${event.post_id}:${event.type}:${event.created_at || ""}`;
         if (seen.has(key)) continue;
         current.unshift(event);
@@ -2472,7 +2560,10 @@
       renderDock();
     }
     function renderDock() {
-      const items = loadDock();
+      const read = loadDockReadKeys();
+      const stored = loadDock();
+      const items = stored.filter((item) => !read.has(dockItemKey(item)));
+      if (items.length !== stored.length) saveDock(items);
       const dock = $("alertDock");
       if (!items.length) {
         dock.classList.remove("open");
@@ -2481,13 +2572,15 @@
       }
       dock.classList.add("open");
       $("dockList").innerHTML = items.map((item) => `
-        <div class="dock-item">
+        <div class="dock-item" data-dock-key="${esc(dockItemKey(item))}">
           <div class="tags"><span class="tag ${item.type === "new" ? "new" : "same"}">${eventText[item.type] || item.type_label || item.type}</span></div>
           <h3 style="margin:6px 0 4px;font-size:16px">
             <a href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-dock-open="${item.post_id}">${esc(item.title || "591 物件")}</a>
           </h3>
-          <div class="meta">${esc([item.price ? `${item.price} 元/月` : "", item.notify_facts || [item.address, item.layout, item.floor_name, item.area_name, item.housing_type].filter(Boolean).join(" · "), item.detail, item.extra_fee_text].filter(Boolean).join(" · "))}</div>
+          <div class="meta">${esc([item.price ? `${item.price} 元/月` : "", item.notify_facts || [item.address, item.layout, item.floor_name, item.area_name, item.housing_type].filter(Boolean).join(" · "), item.extra_fee_text].filter(Boolean).join(" · "))}</div>
+          ${dockChangeHtml(item)}
           <div class="row" style="margin-top:8px">
+            <button type="button" class="ghost" data-dock-read="${esc(dockItemKey(item))}">已讀</button>
             <a class="primary" href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-dock-open="${item.post_id}" style="display:inline-flex;align-items:center;text-decoration:none">打開 591</a>
             <button type="button" class="ghost" data-dock-hide="${item.post_id}">不再顯示</button>
           </div>
@@ -2498,8 +2591,16 @@
       saveDock(loadDock().filter((item) => String(item.post_id) !== String(postId)));
       renderDock();
     }
+    function dismissDockByKey(key) {
+      const items = loadDock();
+      const hit = items.find((item) => dockItemKey(item) === key);
+      if (hit) markDockRead([hit]);
+      saveDock(items.filter((item) => dockItemKey(item) !== key));
+      renderDock();
+    }
     /** 與列表「不再顯示」相同：hidden=true，並從待看 dock 移除 */
     async function hideDockListing(postId) {
+      markDockRead(loadDock().filter((item) => String(item.post_id) === String(postId)));
       await fetch(`/api/listings/${encodeURIComponent(postId)}/flags`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -2825,8 +2926,18 @@
       }
     });
     $("dockHideBtn").onclick = () => $("alertDock").classList.remove("open");
-    $("dockClearBtn").onclick = () => { saveDock([]); renderDock(); };
+    $("dockClearBtn").onclick = () => {
+      markDockRead(loadDock());
+      saveDock([]);
+      renderDock();
+    };
     $("dockList").addEventListener("click", async (ev) => {
+      const readKey = ev.target.closest("[data-dock-read]")?.dataset.dockRead;
+      if (readKey) {
+        ev.preventDefault();
+        dismissDockByKey(readKey);
+        return;
+      }
       const open = ev.target.closest("[data-dock-open]")?.dataset.dockOpen;
       const hide = ev.target.closest("[data-dock-hide]")?.dataset.dockHide;
       if (hide) {
@@ -2845,6 +2956,7 @@
         // 連結走 /go/:id（含中鍵開新分頁）；左鍵也記已瀏覽並關閉 dock 項
         if (ev.button === 0 && !ev.metaKey && !ev.ctrlKey && !ev.shiftKey && !ev.altKey) {
           // 讓 <a> 自己開分頁；另外標記並刷新（/go 也會標記，雙寫無妨）
+          markDockRead(loadDock().filter((item) => String(item.post_id) === String(open)));
           fetch(`/api/listings/${open}/flags`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },

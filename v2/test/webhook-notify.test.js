@@ -4,10 +4,12 @@ import {
   classifyExistingUpdate,
   formatNotifyFacts,
   formatUsableArea,
+  isSameNotifyDetail,
   listingLastEvent,
   listingNotifyVars,
   listingPriceNum,
   notify,
+  parseNotifyChanges,
   shouldDockNotify,
   shouldMailNotify,
   shouldNotify,
@@ -52,6 +54,20 @@ test("watched listings notify on price, title, content, offline, relist", () => 
   assert.equal(shouldNotify(hookSettings, watched, { type: "update", detail: "格局 2房 → 3房" }), true);
   assert.equal(shouldNotify(hookSettings, { ...watched, offline: 1 }, { type: "offline", detail: "gone" }), true);
   assert.equal(shouldNotify(hookSettings, watched, { type: "relist", detail: "重新上架" }), true);
+});
+
+test("parseNotifyChanges splits layout and floor diffs", () => {
+  const bits = parseNotifyChanges("格局 2房1廳 → 3房1廳；樓層 3F/5F → 5F/12F");
+  assert.deepEqual(bits, [
+    { label: "格局", from: "2房1廳", to: "3房1廳" },
+    { label: "樓層", from: "3F/5F", to: "5F/12F" },
+  ]);
+  const title = parseNotifyChanges("標題：舊標題 → 新標題");
+  assert.equal(title[0].label, "標題");
+  assert.equal(title[0].to, "新標題");
+  assert.equal(isSameNotifyDetail("格局 2房 → 3房", "格局 2房 → 3房"), true);
+  assert.equal(isSameNotifyDetail("格局 2房 → 3房", "格局 2房 → 4房"), false);
+  assert.equal(isSameNotifyDetail(null, "格局 2房 → 3房"), false);
 });
 
 test("detects content diff and price changes", () => {
