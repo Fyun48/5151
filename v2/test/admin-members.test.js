@@ -47,6 +47,9 @@ test("admin page lists members, smtp, and templates without password fields", ()
   assert.match(html, /id="googleEnabled"/);
   assert.match(html, /使用 Google Directions（會計費，預設關閉）/);
   assert.match(html, /關閉並清除金鑰/);
+  assert.match(html, /伺服器暫時沒回 JSON/);
+  assert.match(html, /AbortSignal\.timeout\(20000\)/);
+  assert.doesNotMatch(html, /return \{ error: text \|\| res\.statusText \}/);
   assert.match(html, /不必去官方停 API/);
   assert.match(html, /熔斷/);
   assert.match(html, /官方價目試算/);
@@ -79,9 +82,19 @@ test("admin API routes exist and members payload is guarded", () => {
   assert.match(src, /\/api\/admin\/maps/);
   const backfillFn = src.slice(src.indexOf("function queueGeoBackfill"), src.indexOf("async function tick"));
   assert.ok(backfillFn.indexOf("backfillListingRoutes") < backfillFn.indexOf("backfillListingCoords"));
+  assert.match(src, /body\.clearKey !== true/);
   assert.match(src, /publicSponsorSettings/);
   assert.match(src, /會員列表不得含密碼/);
   assert.match(src, /requireAdminApi/);
   assert.match(src, /queueSystemMail\("welcome"/);
   assert.match(src, /app\.post\("\/api\/change-password"/);
+});
+
+test("clearing the maps key unsets process env before rewriting auth.env", () => {
+  const src = readFileSync(path.join(dir, "../src/db.js"), "utf8");
+  const fn = src.slice(src.indexOf("function persistGoogleKeyToAuthEnv"), src.indexOf("function bumpMapsUsage"));
+  assert.ok(fn.indexOf("delete process.env.GOOGLE_MAPS_API_KEY") < fn.indexOf("writeFileSync"));
+  const save = src.slice(src.indexOf("export function saveAdminMapsSettings"), src.indexOf("export function getMailTemplates"));
+  assert.match(save, /if \(src\.clearKey === true\)/);
+  assert.ok(save.indexOf('persistGoogleKeyToAuthEnv("", { unset: true })') < save.indexOf('writeSettingKey("googleDirectionsEnabled", false)'));
 });

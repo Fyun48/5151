@@ -467,15 +467,20 @@ function persistSmtpToAuthEnv(config) {
 
 function persistGoogleKeyToAuthEnv(key, { unset = false } = {}) {
   const file = authEnvPath();
-  const existing = existsSync(file) ? parseEnvFileText(readFileSync(file, "utf8")) : {};
   if (unset) {
-    delete existing.GOOGLE_MAPS_API_KEY;
-    writeFileSync(file, serializeEnvMap(existing), { encoding: "utf8", mode: 0o600 });
     delete process.env.GOOGLE_MAPS_API_KEY;
+    try {
+      const existing = existsSync(file) ? parseEnvFileText(readFileSync(file, "utf8")) : {};
+      delete existing.GOOGLE_MAPS_API_KEY;
+      writeFileSync(file, serializeEnvMap(existing), { encoding: "utf8", mode: 0o600 });
+    } catch (error) {
+      console.warn("寫入 auth.env 清除 Google 金鑰失敗：", error.message);
+    }
     return;
   }
   const trimmed = String(key || "").trim();
   if (!trimmed) return;
+  const existing = existsSync(file) ? parseEnvFileText(readFileSync(file, "utf8")) : {};
   const merged = mergeEnvMap(existing, { GOOGLE_MAPS_API_KEY: trimmed });
   writeFileSync(file, serializeEnvMap(merged), { encoding: "utf8", mode: 0o600 });
   process.env.GOOGLE_MAPS_API_KEY = trimmed;
@@ -542,15 +547,19 @@ export function getAdminMapsSettings() {
 
 export function saveAdminMapsSettings(partial = {}) {
   const src = partial && typeof partial === "object" ? partial : {};
+  if (src.clearKey === true) {
+    persistGoogleKeyToAuthEnv("", { unset: true });
+    writeSettingKey("googleDirectionsEnabled", false);
+    writeSettingKey("commuteRushEnabled", false);
+    return getAdminMapsSettings();
+  }
   if (Object.prototype.hasOwnProperty.call(src, "googleEnabled")) {
     writeSettingKey("googleDirectionsEnabled", Boolean(src.googleEnabled));
   }
   if (Object.prototype.hasOwnProperty.call(src, "enabled")) {
     writeSettingKey("commuteRushEnabled", Boolean(src.enabled));
   }
-  if (src.clearKey === true) {
-    persistGoogleKeyToAuthEnv("", { unset: true });
-  } else if (Object.prototype.hasOwnProperty.call(src, "apiKey")) {
+  if (Object.prototype.hasOwnProperty.call(src, "apiKey")) {
     persistGoogleKeyToAuthEnv(src.apiKey);
   }
   return getAdminMapsSettings();

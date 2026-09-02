@@ -274,7 +274,15 @@
 
     async function readApi(res) {
       const text = await res.text();
-      try { return JSON.parse(text); } catch { return { error: text || res.statusText }; }
+      try {
+        return JSON.parse(text);
+      } catch {
+        const html = /<\s*html|bad gateway|cloudflare/i.test(text || "");
+        if (res.status === 502 || res.status === 504 || res.status === 524 || html) {
+          return { error: "伺服器暫時沒回 JSON。若剛按清除金鑰，請重新整理後台看「金鑰」是不是已變成尚未設定。不要把這段當失敗連續猛按。" };
+        }
+        return { error: (text || res.statusText || "讀取失敗").slice(0, 180) };
+      }
     }
 
     function roleLabel(role) {
@@ -662,6 +670,7 @@
             method: "PUT",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(body),
+            signal: AbortSignal.timeout(20000),
           });
           const data = await readApi(res);
           if (!res.ok) throw new Error(data.error || "儲存失敗");
