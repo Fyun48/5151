@@ -12,7 +12,6 @@ import {
   MEMBER_MAX_PROFILE_DISTRICTS,
   MEMBER_MAX_PROFILES,
 } from "../src/settingsState.js";
-import { DEMO_COMMUTE_KM, DEMO_WORK_ADDRESS } from "../src/demo.js";
 import { coveringJobsFromSettings } from "../src/covering.js";
 
 const defaults = {
@@ -123,19 +122,22 @@ test("commuteMode is scooter or car only", () => {
   assert.equal(car.commuteMode, "car");
 });
 
-test("legacy example work address hydrates to Nangang 25 km", () => {
-  const next = hydrateSettings(
-    {
-      watchDistricts: ["1-8"],
-      workAddress: "台北市士林區德行西路7號",
-      commuteKm: 13,
-      workLat: 25.106,
-      workLng: 121.524,
-    },
-    defaults,
-  );
-  assert.equal(next.workAddress, DEMO_WORK_ADDRESS);
-  assert.equal(next.commuteKm, DEMO_COMMUTE_KM);
+test("member work address is not rewritten to the guest demo template", () => {
+  const stored = {
+    watchDistricts: ["1-8"],
+    workAddress: "台北市士林區德行西路7號",
+    commuteKm: 13,
+    workLat: 25.106,
+    workLng: 121.524,
+  };
+  const next = hydrateSettings(stored, defaults);
+  assert.equal(next.workAddress, "台北市士林區德行西路7號");
+  assert.equal(next.commuteKm, 13);
+  assert.equal(next.workLat, 25.106);
+  assert.equal(next.workLng, 121.524);
+  const patched = applySettingPatch(next, { notifyNew: false });
+  assert.equal(patched.workAddress, "台北市士林區德行西路7號");
+  assert.equal(patched.commuteKm, 13);
 });
 
 test("null or zero work coords stay missing", () => {

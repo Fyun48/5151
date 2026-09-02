@@ -1,16 +1,12 @@
 import { hasWorkPoint } from "./geo.js";
 import { CITIES, lookupDistrict } from "./regions.js";
 
+/** 訪客示範用的固定公司地址（台北台積電南港），與任何會員帳號的個人設定無關。 */
 export const DEMO_WORK_ADDRESS = "臺北市南港區經貿一路170號";
 export const DEMO_COMMUTE_KM = 25;
 export const DEMO_WORK_LAT = 25.05781;
 export const DEMO_WORK_LNG = 121.6184;
-
-const LEGACY_DEMO_WORK = /^(台北市|臺北市)士林區德行西路7號$/;
-
-export function isLegacyDemoWorkAddress(address) {
-  return LEGACY_DEMO_WORK.test(String(address || "").replace(/\s+/g, ""));
-}
+export const DEMO_COMMUTE_MODE = "scooter";
 
 export function demoCommutePatch() {
   return {
@@ -18,16 +14,12 @@ export function demoCommutePatch() {
     commuteKm: DEMO_COMMUTE_KM,
     workLat: DEMO_WORK_LAT,
     workLng: DEMO_WORK_LNG,
+    commuteMode: DEMO_COMMUTE_MODE,
   };
 }
 
 export function applyDemoCommute(settings = {}) {
   return { ...settings, ...demoCommutePatch() };
-}
-
-export function applyLegacyDemoCommute(settings = {}) {
-  if (!isLegacyDemoWorkAddress(settings.workAddress)) return settings;
-  return applyDemoCommute(settings);
 }
 
 export function demoDistrictNames(settings = {}) {
@@ -74,12 +66,9 @@ export function publicDemoSettings(settings = {}) {
     discordWebhook: "",
     notifyMatrix: settings.notifyMatrix || {},
     ...demoCommutePatch(),
-    commuteMode: settings.commuteMode === "car" ? "car" : "scooter",
     showMrt: settings.showMrt !== false,
-    settingProfiles: Array.isArray(settings.settingProfiles)
-      ? settings.settingProfiles.map((item) => ({ id: item.id, name: item.name }))
-      : [],
-    activeProfileId: settings.activeProfileId || "",
+    settingProfiles: [],
+    activeProfileId: "",
   };
 }
 
