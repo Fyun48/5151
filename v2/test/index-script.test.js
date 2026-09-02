@@ -135,6 +135,7 @@ test("dock has mark-read buttons and renders content diffs", () => {
   assert.match(html, /function dockChangeHtml/);
   assert.match(html, /DOCK_READ_KEY/);
   assert.match(html, /markDockRead\(loadDock\(\)\)/);
+  assert.match(html, /stored\.filter\(\(item\) => !read\.has\(dockItemKey\(item\)\)\)/);
   assert.match(html, /class="dock-change-from"/);
   assert.match(html, /class="dock-change-to"/);
 });

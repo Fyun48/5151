@@ -2560,7 +2560,10 @@
       renderDock();
     }
     function renderDock() {
-      const items = loadDock();
+      const read = loadDockReadKeys();
+      const stored = loadDock();
+      const items = stored.filter((item) => !read.has(dockItemKey(item)));
+      if (items.length !== stored.length) saveDock(items);
       const dock = $("alertDock");
       if (!items.length) {
         dock.classList.remove("open");
