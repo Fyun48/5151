@@ -638,9 +638,6 @@ app.post("/api/listings/:id/confirm-match", (req, res) => {
 
 async function persistSettings(body = {}, userId) {
   const uid = userId || defaultUserId();
-  if (Array.isArray(body.watchDistricts) && body.watchDistricts.length === 0) {
-    throw new Error("請至少選一個行政區");
-  }
   const workAddress = String(body.workAddress || "").trim();
   if (Number(body.commuteKm) > 0) {
     if (!workAddress) throw new Error("請先填上班地址，才能篩通勤距離");
