@@ -1609,13 +1609,27 @@
     function isAcefengyunAdmin() {
       return Boolean(meIsAdmin && /acefengyun/i.test(meEmail || ""));
     }
-    function isShezidaoAddress(address) {
-      const s = String(address || "");
-      if (/社子島|社之島|葫蘆堵/.test(s)) return true;
-      if (/延平北路(六|七|八|九|[6-9])段/.test(s)) return true;
+    // 廣義社子＝士林區社子次分區 10 里（葫蘆、葫東、富光、福順、社子、社新、社園、永倫、福安、富洲）。
+    // 路名依據：延平北路五～九段、重慶北路四段、中正路過百齡橋後（門牌約 500 號起，如 601 百齡大樓、694 銘傳一帶）屬社子；
+    // 另含葫蘆街、葫東街、社子街、社中街、社正路、永平街、倫等街、富安／福安街、環河北路三段、海光新村。
+    // 官方「社子島開發計畫」較窄（福安、富洲、部分永倫／延平北路七～九段），紅框用廣義社子，含葫蘆堵。
+    // 不含後港截彎取直後分離的通河街，也不含中正路一段～三段、以及 499 號以前的士林市街段。
+    function isShezidaoAddress(item) {
+      const s = typeof item === "string" || item == null
+        ? String(item || "")
+        : [item.address, item.title, item.area_name].filter(Boolean).join(" ");
+      if (/社子島|社之島|葫蘆堵|葫蘆里|富光里|福順里|福安里|富洲里/.test(s)) return true;
+      if (/延平北路(五|六|七|八|九|[5-9])段/.test(s)) return true;
+      if (/重慶北路四段|環河北路三段/.test(s)) return true;
       if (/社子街|社子.{0,8}街/.test(s)) return true;
       if (/社中街|社正路|永平街|倫等街|富安街|福安街/.test(s)) return true;
       if (/葫蘆街|葫東街|海光新村/.test(s)) return true;
+      if (/中正路/.test(s) && /士林|社子|葫蘆|重陽|百齡|銘傳/.test(s)) {
+        if (/中正路[一二三1-3]段/.test(s)) return false;
+        const house = s.match(/中正路[^0-9]{0,8}(\d{2,4})\s*號/);
+        if (house) return Number(house[1]) >= 500;
+        return true;
+      }
       return false;
     }
 
@@ -2594,7 +2608,7 @@
         const id = String(item.post_id);
         const on = selected.has(id);
         return `
-        <article class="item ${on ? "picked" : ""} ${item.offline ? "offline" : ""} ${isAcefengyunAdmin() && isShezidaoAddress(item.address) ? "shezidao" : ""}" data-card="${id}">
+        <article class="item ${on ? "picked" : ""} ${item.offline ? "offline" : ""} ${isAcefengyunAdmin() && isShezidaoAddress(item) ? "shezidao" : ""}" data-card="${id}">
           <input class="pick" type="checkbox" data-pick="${id}" ${on ? "checked" : ""} />
           <a class="item-cover" href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-open="${id}">
             <img src="${esc(item.cover || "")}" alt="" />
