@@ -309,8 +309,9 @@ app.get("/api/admin/maps", requireAdminApi, (_req, res) => {
 
 app.put("/api/admin/maps", requireAdminApi, (req, res) => {
   try {
-    const settings = saveAdminMapsSettings(req.body || {});
-    if (settings.enabled) queueGeoBackfill();
+    const body = req.body || {};
+    const settings = saveAdminMapsSettings(body);
+    if (settings.enabled && body.clearKey !== true) queueGeoBackfill();
     res.json(settings);
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
