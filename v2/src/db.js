@@ -8,7 +8,7 @@ import { sameSearch } from "./client591.js";
 import { districtNameFromListing } from "./regions.js";
 import { preferPrimaryListing } from "./match.js";
 import { hasWorkPoint } from "./geo.js";
-import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings, canAddProfile, planIntervalMinutes } from "./settingsState.js";
+import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings, planIntervalMinutes, resolveSaveAsProfileAction, normalizeProfileName, MEMBER_MAX_PROFILES, ADMIN_MAX_PROFILES } from "./settingsState.js";
 import { defaultNotifyMatrix } from "./notifyMatrix.js";
 import { DATA_EPOCH, shouldResetForEpoch } from "./dataEpoch.js";
 import { countsTowardAllTotal, isConfirmedOffline, isPendingOffline } from "./offline.js";
@@ -611,18 +611,47 @@ export function saveSettings(partial, userId, { forceAdmin = false } = {}) {
   return next;
 }
 
-export function saveAsProfile(name, livePatch, userId) {
+export function saveAsProfile(name, livePatch, userId, { overwrite = false } = {}) {
   const uid = userId == null ? defaultUserId() : Number(userId) || defaultUserId();
   const admin = getUserById(uid)?.role === "admin";
   const current = livePatch && typeof livePatch === "object" ? saveSettings(livePatch, uid) : getSettings(uid);
   const profiles = [...(current.settingProfiles || [])];
-  if (!canAddProfile(profiles, { admin })) {
-    const err = new Error("一般會員最多 3 個設定檔");
+  const label = normalizeProfileName(name);
+  const decision = resolveSaveAsProfileAction(profiles, label, { overwrite, admin });
+  if (decision.action === "empty") {
+    const err = new Error("請先填設定檔名稱");
     err.status = 400;
     throw err;
   }
+  if (decision.action === "confirm_overwrite") {
+    const err = new Error("同名設定檔已存在，請確認是否覆蓋");
+    err.status = 409;
+    err.code = "confirm_overwrite";
+    throw err;
+  }
+  if (decision.action === "full") {
+    const err = new Error(
+      admin
+        ? `設定檔已滿，最多 ${ADMIN_MAX_PROFILES} 個`
+        : `設定檔已滿，最多 ${MEMBER_MAX_PROFILES} 個。請先刪除一個，或覆蓋現有同名設定檔。`,
+    );
+    err.status = 400;
+    err.code = "full";
+    throw err;
+  }
+  if (decision.action === "overwrite") {
+    const id = decision.existing.id;
+    const next = profiles.map((item) => (
+      item.id === id
+        ? { ...item, name: label, saved_at: new Date().toISOString(), data: snapshotSettings(current) }
+        : item
+    ));
+    return saveSettings({
+      settingProfiles: next,
+      activeProfileId: id,
+    }, uid);
+  }
   const id = `p-${Date.now()}`;
-  const label = String(name || "").trim().slice(0, 40) || `設定 ${profiles.length + 1}`;
   profiles.push({
     id,
     name: label,

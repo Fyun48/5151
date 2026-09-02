@@ -77,6 +77,26 @@ export function canAddProfile(profiles, { admin = false } = {}) {
   return (profiles || []).length < MEMBER_MAX_PROFILES;
 }
 
+export function normalizeProfileName(name) {
+  return String(name || "").trim().slice(0, 40);
+}
+
+export function findProfileByName(profiles, name) {
+  const label = normalizeProfileName(name);
+  if (!label) return null;
+  return (profiles || []).find((item) => normalizeProfileName(item?.name) === label) || null;
+}
+
+export function resolveSaveAsProfileAction(profiles, name, { overwrite = false, admin = false } = {}) {
+  const label = normalizeProfileName(name);
+  if (!label) return { action: "empty" };
+  const existing = findProfileByName(profiles, label);
+  if (existing && !overwrite) return { action: "confirm_overwrite", existing };
+  if (existing && overwrite) return { action: "overwrite", existing };
+  if (!canAddProfile(profiles, { admin })) return { action: "full" };
+  return { action: "create" };
+}
+
 export function limitWatchDistricts(districts, { admin = false } = {}) {
   const list = normalizeWatchDistricts(districts);
   if (admin) return list;

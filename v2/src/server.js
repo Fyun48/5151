@@ -585,7 +585,8 @@ app.post("/api/profiles", async (req, res) => {
     if (patch && typeof patch === "object") {
       await persistSettings(patch, uid);
     }
-    const settings = saveAsProfile(name, undefined, uid);
+    const overwrite = Boolean(req.body?.overwrite);
+    const settings = saveAsProfile(name, undefined, uid, { overwrite });
     res.json({ settings });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
