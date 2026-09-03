@@ -16,7 +16,9 @@ test("login page can register after accepting the disclaimer", () => {
   assert.match(html, /acceptDisclaimer/);
   assert.match(html, /disclaimer\.html/);
   assert.match(html, /這是免費系統/);
-  assert.match(html, /--accent: #0f6f6a/);
+  assert.match(html, /href="\/tokens\.css"/);
+  const tokens = readFileSync(path.join(dir, "../public/tokens.css"), "utf8");
+  assert.match(tokens, /--accent: #0f6f6a/);
   assert.equal(html.includes("#c45c26"), false);
   assert.equal(html.includes("IwanMincho"), false);
   assert.match(html, /reversal play tech \| 逆遊科技/);

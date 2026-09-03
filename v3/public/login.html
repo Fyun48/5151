@@ -6,17 +6,6 @@
   <title>登入 · 吉比租房物件追蹤</title>
   <link rel="stylesheet" href="/tokens.css" />
   <style>
-    :root {
-      --bg: #f3efe8;
-      --paper: #faf8f4;
-      --ink: #1c1917;
-      --muted: #6f6a64;
-      --line: #e4dfd6;
-      --accent: #0f6f6a;
-      --accent-deep: #0b5551;
-      --accent-soft: #e7f1ef;
-      --accent-mist: #f3f6f5;
-    }
     * { box-sizing: border-box; }
     body {
       margin: 0;
@@ -49,7 +38,7 @@
       margin: 0;
       width: auto;
       flex: 1;
-      background: #fff;
+      background: var(--paper);
       color: var(--ink);
       border: 1px solid var(--line);
     }
@@ -61,7 +50,7 @@
       border-radius: 10px;
       padding: 12px 12px;
       font: 16px/1.5 "Noto Sans TC", sans-serif;
-      background: #fff;
+      background: var(--paper);
       min-height: 44px;
     }
     .check {
@@ -141,7 +130,7 @@
       margin: 0 auto;
       border-radius: 8px;
       border: 1px solid var(--line);
-      background: #fff;
+      background: var(--paper);
     }
     .bot-row input {
       grid-area: in;
@@ -168,7 +157,7 @@
       margin: 0;
       width: auto;
       flex: 0 0 auto;
-      background: #fff;
+      background: var(--paper);
       color: var(--ink);
       border: 1px solid var(--line);
       border-radius: 999px;

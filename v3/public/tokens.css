@@ -1,5 +1,6 @@
 /* Quiet Luxury Property Intelligence — v3 design tokens
-   本站名與 shadcn 別名並存，禁止主視覺滿版圖／糖果漸層／巨型空白。 */
+   單一 source of truth。頁面不要再複製一份 :root。
+   禁止主視覺滿版圖／糖果漸層／巨型空白／展示型英文襯線。 */
 :root {
   --bg: #f3efe8;
   --paper: #faf8f4;
@@ -26,6 +27,16 @@
   --shadow: none;
   --font-sans: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
   --font-serif: "Noto Serif TC", "Source Han Serif TC", serif;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-price: 20px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --touch: 44px;
   --background: var(--bg);
   --foreground: var(--ink);
   --card: var(--paper);

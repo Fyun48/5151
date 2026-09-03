@@ -12,28 +12,6 @@
   <link rel="stylesheet" href="/vendor/leaflet/leaflet.css" />
   <title>吉比租房物件追蹤</title>
   <style>
-    :root {
-      --bg: #f3efe8;
-      --paper: #faf8f4;
-      --ink: #1c1917;
-      --muted: #6f6a64;
-      --line: #e4dfd6;
-      --accent: #0f6f6a;
-      --accent-deep: #0b5551;
-      --accent-soft: #e7f1ef;
-      --accent-mist: #f3f6f5;
-      --rose: #b08989;
-      --rose-soft: #f7f1f0;
-      --rose-deep: #8a5e5e;
-      --accent-2: #0b5551;
-      --watch: #9a6b6b;
-      --new: #0b5551;
-      --same: #6b6394;
-      --hermes: #E65326;
-      --hermes-deep: #C2410C;
-      --hermes-light: #F47A2A;
-      --shezi-red: #DC2626;
-    }
     * { box-sizing: border-box; }
     body {
       margin: 0;
@@ -364,8 +342,8 @@
       margin: 0 32px 12px;
       padding: 4px;
       border: 1px solid var(--line);
-      border-radius: 16px;
-      background: #fff;
+      border-radius: var(--radius-lg);
+      background: var(--paper);
     }
     .bottom-nav button {
       margin: 0;
@@ -373,10 +351,11 @@
       border: 0;
       background: none;
       color: var(--muted);
-      font-size: 13px;
+      font-size: var(--text-sm);
       font-weight: 700;
+      min-height: var(--touch);
       padding: 8px 4px;
-      border-radius: 12px;
+      border-radius: var(--radius);
     }
     .bottom-nav button[aria-current="page"] {
       color: var(--accent-deep);
@@ -1103,7 +1082,7 @@
     .actions button { min-height: 44px; }
     .hide-box { font-size: 13px; color: var(--muted); display: flex; gap: 6px; align-items: center; cursor: pointer; }
     .list { display: grid; gap: 14px; padding: 14px 16px 16px; }
-    .empty { padding: 40px; color: var(--muted); text-align: center; }
+    .empty { padding: 24px 16px; color: var(--muted); text-align: center; font-size: var(--text-md); line-height: 1.6; }
     #bootFail {
       display: none;
       position: sticky;
@@ -1143,7 +1122,7 @@
         bottom: 0;
         z-index: 120;
         margin: 0;
-        background: #fff;
+        background: var(--paper);
         border: 0;
         border-top: 1px solid var(--line);
         border-radius: 0;
@@ -1155,10 +1134,11 @@
         border: 0;
         background: none;
         color: var(--muted);
-        font-size: 12px;
+        font-size: var(--text-xs);
         font-weight: 700;
+        min-height: var(--touch);
         padding: 8px 4px;
-        border-radius: 12px;
+        border-radius: var(--radius);
       }
       .bottom-nav button[aria-current="page"] {
         color: var(--accent-deep);
@@ -1208,21 +1188,17 @@
         font-size: 16px;
       }
       .chip-row {
-        flex-wrap: nowrap;
-        overflow-x: auto;
-        overflow-y: hidden;
-        -webkit-overflow-scrolling: touch;
-        scrollbar-width: none;
-        margin: 0 -12px;
-        padding: 2px 12px;
+        flex-wrap: wrap;
+        overflow: visible;
+        margin: 0;
+        padding: 2px 0;
         gap: 8px;
       }
-      .chip-row::-webkit-scrollbar { display: none; }
       .chip-row .chip {
         flex: 0 0 auto;
-        min-height: 36px;
+        min-height: var(--touch);
         padding: 8px 13px;
-        font-size: 13px;
+        font-size: var(--text-sm);
       }
       .view-filters {
         flex-direction: column;
@@ -1343,6 +1319,23 @@
       .notify-shortcuts { display: none; }
       #demandView, #meView, #notifyView { padding: 0 16px 24px; }
       .site-footer { margin: 8px 16px 88px; }
+    }
+    @media (max-width: 767px) {
+      .chip-row {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        overflow-y: hidden;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+        margin: 0 -12px;
+        padding: 2px 12px;
+        gap: 8px;
+      }
+      .chip-row::-webkit-scrollbar { display: none; }
+      .chip-row .chip {
+        flex: 0 0 auto;
+        min-height: 36px;
+      }
     }
   </style>
   <script>
@@ -3247,7 +3240,7 @@
       if (!items.length) {
         const q = $("q").value.trim();
         let msg = "目前沒有符合條件的物件。請勾選行政區並按儲存、立即檢查。";
-        if (q) msg = `沒有符合「${q}」的物件。`;
+        if (q) msg = `沒有符合「${q}」的物件。試試較短關鍵字，或清掉搜尋看全部列表。`;
         else if (viewDistricts.size) {
           msg = "這個行政區篩選目前沒有物件。可點「全部」或再勾其他區。";
         } else if ($("wholeFloorOnly").checked || $("excludeLowFloors").checked) {
