@@ -1,0 +1,20 @@
+---
+description: UI/UX 工作必須依研究 → 規格 → 實作 → Playwright → 審查，不得只以好看作為完成標準
+alwaysApply: true
+---
+
+# Agent Tool Routing
+
+當任務涉及 UI、UX、網站版面或 Design System：
+
+1. Design Research Agent 先研究相關產品與設計模式。
+2. 使用 Figma 工具建立或更新設計規格。
+3. 完成設計方向後，Builder Agent 才能修改前端程式。
+4. 優先使用既有 Design Tokens 和共用元件。
+5. 禁止只以「看起來更漂亮」作為完成標準。
+6. 實作完成後必須使用 Playwright 實際操作網站。
+7. 分別檢查 375px、768px、1440px 畫面。
+8. UX Reviewer 必須檢查資訊層級、查詢效率、空白狀態、
+   錯誤狀態、Loading、Accessibility 和操作一致性。
+9. Security Reviewer 執行權限、輸入驗證和個資檢查。
+10. Reviewer 不得自行批准自己實作的修改。
