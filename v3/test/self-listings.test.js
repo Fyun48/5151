@@ -119,6 +119,7 @@ test("self listing ids stay above the reserved range and require login", () => {
   assert.ok(row.post_id > SELF_POST_ID_BASE);
   assert.equal(row.source, "self");
   assert.equal(row.source_label, "站內刊登");
+  assert.deepEqual(row.photos, []);
   assert.equal(row.kind_name, "整層住家");
   assert.match(row.search_key || db.prepare("SELECT search_key FROM listings WHERE post_id = ?").get(row.post_id).search_key, /region=1/);
   db.close();
@@ -159,6 +160,16 @@ test("rejects unsafe photo url and matches an existing 591 listing", () => {
     () => createSelfListing(db, 1, sampleInput({ cover: "javascript:alert(1)" })),
     /封面/,
   );
+  assert.throws(
+    () => createSelfListing(db, 1, sampleInput({ cover: "/media/self/../secret.jpg" })),
+    /封面/,
+  );
+  const uploaded = createSelfListing(db, 1, sampleInput({
+    address: "台北市士林區中正路199號",
+    photos: ["/media/self/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg"],
+  }));
+  assert.equal(uploaded.cover, "/media/self/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg");
+  assert.deepEqual(uploaded.photos, ["/media/self/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg"]);
   db.prepare(`
     INSERT INTO listings (
       post_id, source_key, search_key, title, url, price, price_num, address, area_name,
@@ -201,9 +212,13 @@ test("index, server and admin expose self listing surfaces", () => {
   assert.match(html, /id="selfListingPanel"/);
   assert.match(html, /\/api\/self-listings/);
   assert.match(html, /站內刊登/);
+  assert.match(html, /id="selfPhotos"/);
+  assert.match(html, /\/api\/self-listings\/photos/);
   assert.match(html, /item\.source === "self"/);
   assert.match(html, /id="selfListingOverlay"/);
   assert.match(server, /app\.post\("\/api\/self-listings"/);
+  assert.match(server, /app\.post\("\/api\/self-listings\/photos"/);
+  assert.match(server, /app\.get\("\/media\/self\/:file"/);
   assert.match(server, /listingRedirectTarget/);
   assert.match(admin, /站內自行刊登/);
   assert.match(admin, /模型分數欄位已預留/);

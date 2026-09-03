@@ -50,6 +50,7 @@ import {
   hideSelfListing as hideSelfListingOn,
   keepSelfListingForViewer,
   listMineSelfListings as listMineSelfListingsOn,
+  listingPhotoUrls,
   reportSelfListing as reportSelfListingOn,
   selfListingMeta,
   selfSourceLabel,
@@ -1178,6 +1179,7 @@ function decorateListing(row, settings, userId) {
     source,
     source_label: selfSourceLabel(source),
     self_body: String(row.self_body || ""),
+    photos: listingPhotoUrls(row),
     mine: uid > 0 && listedBy === uid,
     ...mrtFields(row, settings),
   };

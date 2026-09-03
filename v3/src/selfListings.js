@@ -1,6 +1,7 @@
 import { lookupDistrict, normalizeWatchDistricts } from "./regions.js";
 import { coverToListUrl } from "./covering.js";
 import { bestMatch } from "./match.js";
+import { isSelfPhotoPublicUrl, SELF_PHOTO_MAX_BYTES, SELF_PHOTO_MAX_COUNT } from "./selfPhotos.js";
 
 export const SELF_POST_ID_BASE = 2_100_000_000;
 export const SELF_POST_ID_END = 2_200_000_000;
@@ -53,6 +54,11 @@ export function selfListingMeta() {
     ttl_days: SELF_TTL_DAYS,
     kinds: SELF_KINDS,
     roles: SELF_ROLES,
+    photos: {
+      max_count: SELF_PHOTO_MAX_COUNT,
+      max_bytes: SELF_PHOTO_MAX_BYTES,
+      accept: "image/jpeg,image/png,image/webp",
+    },
   };
 }
 
@@ -62,6 +68,7 @@ export function ensureSelfListingSchema(db) {
     "ALTER TABLE listings ADD COLUMN self_status TEXT",
     "ALTER TABLE listings ADD COLUMN self_expires_at TEXT",
     "ALTER TABLE listings ADD COLUMN self_body TEXT",
+    "ALTER TABLE listings ADD COLUMN self_photos TEXT",
   ]) {
     try {
       db.exec(sql);
@@ -194,6 +201,7 @@ function digitsPhone(value) {
 function normalizePhotoUrl(value) {
   const raw = String(value || "").trim().slice(0, SELF_PHOTO_URL_MAX);
   if (!raw) return "";
+  if (isSelfPhotoPublicUrl(raw)) return raw;
   let url;
   try {
     url = new URL(raw);
@@ -201,9 +209,36 @@ function normalizePhotoUrl(value) {
     throw httpError("封面網址格式不正確");
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw httpError("封面只接受 http 或 https 網址");
+    throw httpError("封面只接受 http 或 https 網址，或本站上傳的照片");
   }
   return url.toString().slice(0, SELF_PHOTO_URL_MAX);
+}
+
+function normalizePhotoList(input) {
+  const raw = Array.isArray(input) ? input : [];
+  const out = [];
+  for (const item of raw) {
+    const url = normalizePhotoUrl(item);
+    if (url && !out.includes(url)) out.push(url);
+  }
+  return out.slice(0, SELF_PHOTO_MAX_COUNT);
+}
+
+export function listingPhotoUrls(row) {
+  let stored = [];
+  try {
+    const parsed = JSON.parse(row?.self_photos || "[]");
+    stored = Array.isArray(parsed) ? parsed : [];
+  } catch {
+    stored = [];
+  }
+  const cover = String(row?.cover || "").trim();
+  const out = [];
+  for (const item of [cover, ...stored]) {
+    const url = String(item || "").trim();
+    if (url && !out.includes(url)) out.push(url);
+  }
+  return out.slice(0, SELF_PHOTO_MAX_COUNT);
 }
 
 function normalizeLineUrl(value) {
@@ -265,6 +300,7 @@ export function decorateSelfListing(row, { viewerId = 0 } = {}) {
     kind_name: String(row.kind_name || ""),
     role_name: String(row.role_name || ""),
     cover: String(row.cover || ""),
+    photos: listingPhotoUrls(row),
     body: String(row.self_body || ""),
     contact_name: String(row.contact_name || ""),
     contact_role: String(row.contact_role || row.role_name || ""),
@@ -344,7 +380,10 @@ export function createSelfListing(db, userId, input = {}, now = new Date(), { ma
   if (!phone && !lineUrl) throw httpError("請至少留電話或 LINE 連結（公開顯示，不是私訊）");
   if (phone && phone.replace(/\D/g, "").length < 8) throw httpError("電話號碼太短");
 
-  const cover = normalizePhotoUrl(input.cover || input.photo_url);
+  const photos = normalizePhotoList(input.photos || input.photo_urls);
+  const cover = normalizePhotoUrl(input.cover || input.photo_url) || photos[0] || "";
+  if (cover && !photos.includes(cover)) photos.unshift(cover);
+  const storedPhotos = photos.slice(0, SELF_PHOTO_MAX_COUNT);
   const kindName = kindLabel(kind);
   const roleName = roleLabel(role);
   const areaName = `${String(Math.round(ping * 10) / 10).replace(/\.0$/, "")}坪`;
@@ -386,7 +425,7 @@ export function createSelfListing(db, userId, input = {}, now = new Date(), { ma
     floorName,
     kindName,
     roleName,
-    cover,
+    storedPhotos[0] || cover,
     JSON.stringify(["站內刊登"]),
     created,
     created,
@@ -400,6 +439,7 @@ export function createSelfListing(db, userId, input = {}, now = new Date(), { ma
       self_status = 'open',
       self_expires_at = ?,
       self_body = ?,
+      self_photos = ?,
       contact_name = ?,
       contact_role = ?,
       mobile = ?,
@@ -412,6 +452,7 @@ export function createSelfListing(db, userId, input = {}, now = new Date(), { ma
     uid,
     expires,
     body,
+    JSON.stringify(storedPhotos),
     contactName || roleName,
     roleName,
     phone,
