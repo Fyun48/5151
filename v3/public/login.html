@@ -4,17 +4,18 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>登入 · 吉比租房物件追蹤</title>
+  <link rel="stylesheet" href="/tokens.css" />
   <style>
     :root {
-      --bg: #f3f7f9;
-      --paper: #ffffff;
-      --ink: #1a2b33;
-      --muted: #64748b;
-      --line: #e2e8ef;
-      --accent: #0da5a0;
-      --accent-deep: #0a8280;
-      --accent-soft: #e8f7f6;
-      --accent-mist: #f0fbfa;
+      --bg: #f3efe8;
+      --paper: #faf8f4;
+      --ink: #1c1917;
+      --muted: #6f6a64;
+      --line: #e4dfd6;
+      --accent: #0f6f6a;
+      --accent-deep: #0b5551;
+      --accent-soft: #e7f1ef;
+      --accent-mist: #f3f6f5;
     }
     * { box-sizing: border-box; }
     body {
@@ -23,27 +24,24 @@
       display: grid;
       place-items: center;
       font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
-      background:
-        radial-gradient(1000px 480px at 0% -5%, rgba(13, 165, 160, 0.07) 0%, transparent 55%),
-        radial-gradient(800px 400px at 100% 0%, rgba(212, 165, 165, 0.09) 0%, transparent 50%),
-        var(--bg);
+      background: var(--bg);
       color: var(--ink);
     }
     .card {
       width: min(420px, calc(100vw - 24px));
       background: var(--paper);
       border: 1px solid var(--line);
-      border-radius: 20px;
-      box-shadow: 0 8px 28px rgba(26, 43, 51, 0.05);
-      padding: 24px 20px 20px;
-      padding-bottom: max(20px, env(safe-area-inset-bottom, 0px));
+      border-radius: 10px;
+      box-shadow: none;
+      padding: 20px 18px 16px;
+      padding-bottom: max(16px, env(safe-area-inset-bottom, 0px));
     }
     h1 {
       margin: 0;
       font-family: "Noto Serif TC", "Source Han Serif TC", serif;
-      font-size: 26px;
+      font-size: 22px;
       font-weight: 600;
-      letter-spacing: 0.04em;
+      letter-spacing: 0.03em;
     }
     .sub { color: var(--muted); font-size: 14px; margin: 8px 0 16px; line-height: 1.55; }
     .tabs { display: flex; gap: 8px; margin-bottom: 8px; }
@@ -253,7 +251,7 @@
     </form>
     <p class="ok" id="ok"></p>
     <p class="err" id="err"></p>
-    <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:#94a3b8;font-size:11px">ver. 3.12</span></footer>
+    <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:#94a3b8;font-size:11px">ver. 3.13</span></footer>
   </div>
   <script>
     const $ = (id) => document.getElementById(id);

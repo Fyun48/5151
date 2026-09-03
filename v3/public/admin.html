@@ -4,24 +4,23 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>後台管理 · 吉比租房物件追蹤</title>
+  <link rel="stylesheet" href="/tokens.css" />
   <style>
     :root {
-      --bg: #f3f7f9;
-      --paper: #ffffff;
-      --ink: #1a2b33;
-      --muted: #64748b;
-      --line: #e2e8ef;
-      --accent: #0da5a0;
-      --accent-deep: #0a8280;
-      --accent-mist: #f0fbfa;
+      --bg: #f3efe8;
+      --paper: #faf8f4;
+      --ink: #1c1917;
+      --muted: #6f6a64;
+      --line: #e4dfd6;
+      --accent: #0f6f6a;
+      --accent-deep: #0b5551;
+      --accent-mist: #f3f6f5;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
-      background:
-        radial-gradient(1000px 480px at 0% -5%, rgba(13, 165, 160, 0.07) 0%, transparent 55%),
-        var(--bg);
+      background: var(--bg);
       color: var(--ink);
     }
     header {
@@ -50,8 +49,8 @@
     .card {
       background: var(--paper);
       border: 1px solid var(--line);
-      border-radius: 20px;
-      box-shadow: 0 8px 28px rgba(26, 43, 51, 0.05);
+      border-radius: 10px;
+      box-shadow: none;
       padding: 20px;
     }
     h2 { margin: 0 0 8px; font-size: 18px; }
@@ -977,6 +976,6 @@
       setMsg("memberMsg", error.message || "載入失敗");
     });
   </script>
-  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:#94a3b8;font-size:11px">ver. 3.12</span></footer>
+  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:#94a3b8;font-size:11px">ver. 3.13</span></footer>
 </body>
 </html>

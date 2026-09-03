@@ -3,31 +3,32 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#0da5a0" />
+  <meta name="theme-color" content="#0f6f6a" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-title" content="吉比租房" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+  <link rel="stylesheet" href="/tokens.css" />
   <link rel="stylesheet" href="/vendor/leaflet/leaflet.css" />
   <title>吉比租房物件追蹤</title>
   <style>
     :root {
-      --bg: #f3f7f9;
-      --paper: #ffffff;
-      --ink: #1a2b33;
-      --muted: #64748b;
-      --line: #e2e8ef;
-      --accent: #0da5a0;
-      --accent-deep: #0a8280;
-      --accent-soft: #e8f7f6;
-      --accent-mist: #f0fbfa;
-      --rose: #d4a5a5;
-      --rose-soft: #faf3f3;
-      --rose-deep: #9f6b6b;
-      --accent-2: #0a8280;
-      --watch: #b87a7a;
-      --new: #0a8280;
-      --same: #8b7fd4;
+      --bg: #f3efe8;
+      --paper: #faf8f4;
+      --ink: #1c1917;
+      --muted: #6f6a64;
+      --line: #e4dfd6;
+      --accent: #0f6f6a;
+      --accent-deep: #0b5551;
+      --accent-soft: #e7f1ef;
+      --accent-mist: #f3f6f5;
+      --rose: #b08989;
+      --rose-soft: #f7f1f0;
+      --rose-deep: #8a5e5e;
+      --accent-2: #0b5551;
+      --watch: #9a6b6b;
+      --new: #0b5551;
+      --same: #6b6394;
       --hermes: #E65326;
       --hermes-deep: #C2410C;
       --hermes-light: #F47A2A;
@@ -36,18 +37,15 @@
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
-      background:
-        radial-gradient(1000px 480px at 0% -5%, rgba(13, 165, 160, 0.07) 0%, transparent 55%),
-        radial-gradient(800px 400px at 100% 0%, rgba(212, 165, 165, 0.09) 0%, transparent 50%),
-        var(--bg);
+      font-family: var(--font-sans, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif);
+      background: var(--bg);
       color: var(--ink);
     }
     header {
       display: flex;
       flex-direction: column;
-      gap: 12px;
-      padding: 20px 32px 14px;
+      gap: 8px;
+      padding: 12px 20px 8px;
     }
     .header-main {
       display: flex;
@@ -119,6 +117,8 @@
     .rent-price {
       color: var(--ink);
       font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -0.02em;
     }
     .guest-tour {
       position: fixed;
@@ -213,8 +213,8 @@
       margin-top: 24px;
       background: var(--paper);
       border: 1px solid var(--line);
-      border-radius: 20px;
-      box-shadow: 0 22px 50px rgba(26, 43, 51, 0.18);
+      border-radius: var(--radius-lg, 10px);
+      box-shadow: 0 12px 32px rgba(28, 25, 23, 0.12);
       padding: 18px 20px 22px;
     }
     .hub-head {
@@ -385,13 +385,13 @@
     h1 {
       margin: 0;
       font-family: "Noto Serif TC", "Source Han Serif TC", serif;
-      font-size: 26px;
+      font-size: 22px;
       font-weight: 600;
-      letter-spacing: 0.04em;
+      letter-spacing: 0.03em;
       color: var(--ink);
     }
     .sub { color: var(--muted); font-size: 14px; margin-top: 6px; }
-    .wrap { display: grid; grid-template-columns: 340px 1fr; gap: 20px; padding: 0 32px 40px; }
+    .wrap { display: grid; grid-template-columns: 340px 1fr; gap: 16px; padding: 0 20px 32px; }
     body.panel-collapsed .wrap { grid-template-columns: 1fr; }
     body.panel-collapsed #settingsPanel { display: none; }
     #expandPanelBtn {
@@ -472,8 +472,8 @@
     .card {
       background: var(--paper);
       border: 1px solid var(--line);
-      border-radius: 20px;
-      box-shadow: 0 8px 28px rgba(26, 43, 51, 0.05);
+      border-radius: var(--radius-lg, 10px);
+      box-shadow: none;
     }
     main.card { overflow: visible; }
     .panel { padding: 18px; }
@@ -508,10 +508,10 @@
     }
     header .row a.ghost, a.primary { text-decoration: none; display: inline-flex; align-items: center; }
     button:disabled { opacity: 0.5; cursor: wait; }
-    .primary { background: var(--accent); color: #fff; box-shadow: 0 4px 14px rgba(13, 165, 160, 0.22); }
+    .primary { background: var(--accent); color: #fff; box-shadow: none; }
     .primary:hover:not(:disabled) { background: var(--accent-deep); }
-    .ghost { background: #fff; color: var(--ink); border: 1px solid var(--line); }
-    .ghost:hover:not(:disabled) { background: var(--accent-soft); border-color: #c5e8e6; }
+    .ghost { background: var(--paper); color: var(--ink); border: 1px solid var(--line); }
+    .ghost:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--line); }
     .row { display: flex; gap: 8px; flex-wrap: wrap; }
     .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 8px; }
     .stat { background: var(--accent-mist); border-radius: 14px; padding: 10px 12px; border: 1px solid var(--line); }
@@ -525,15 +525,23 @@
       min-height: 40px;
     }
     .item-title {
-      margin: 8px 0 0;
-      font-size: 18px;
+      margin: 6px 0 0;
+      font-size: 17px;
       line-height: 1.35;
+    }
+    .item-title a {
+      color: var(--ink);
+      text-decoration: none;
+    }
+    .item-title a:hover {
+      color: var(--accent-deep);
+      text-decoration: underline;
     }
     .chip {
       border: 1px solid var(--line);
-      background: #fff;
+      background: var(--paper);
       color: var(--ink);
-      padding: 7px 12px;
+      padding: 6px 11px;
       border-radius: 999px;
       transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
     }
@@ -548,15 +556,15 @@
     .bulk-bar.on { display: flex; }
     .item {
       display: grid;
-      grid-template-columns: 28px 132px minmax(0, 1fr) 120px 148px;
-      gap: 14px;
-      padding: 14px;
+      grid-template-columns: 28px 112px minmax(0, 1fr) 120px 148px;
+      gap: 10px 12px;
+      padding: 10px 12px;
       border: 1px solid var(--line);
-      border-radius: 18px;
-      background: #fff;
+      border-radius: var(--radius, 8px);
+      background: var(--paper);
       align-items: start;
     }
-    .item.picked { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(13, 165, 160, 0.12); }
+    .item.picked { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
     .item.shezidao {
       border: 2px solid var(--shezi-red);
       box-shadow: 0 0 0 1px rgba(220, 38, 38, 0.18);
@@ -567,11 +575,11 @@
     }
     .pick { margin-top: 8px; width: 18px; height: 18px; accent-color: var(--accent); }
     .item-cover img, .item-cover {
-      width: 132px;
-      height: 100px;
+      width: 112px;
+      height: 84px;
       object-fit: cover;
-      border-radius: 12px;
-      background: #eee;
+      border-radius: 6px;
+      background: var(--line);
       display: block;
     }
     .meta { color: var(--muted); font-size: 13px; margin: 6px 0; line-height: 1.55; }
@@ -787,11 +795,11 @@
       top: 10px;
       z-index: 40;
       margin: 12px 12px 0;
-      background: linear-gradient(180deg, #fff 0%, #f8fbfc 100%);
+      background: var(--paper);
       border: 1px solid var(--line);
       border-bottom: 1px solid var(--line);
-      border-radius: 16px;
-      box-shadow: 0 8px 28px rgba(26, 43, 51, 0.08);
+      border-radius: var(--radius-lg, 10px);
+      box-shadow: none;
     }
     body.panel-collapsed .list-head-sticky:not(.filter-compact) {
       padding-bottom: 38px;
@@ -867,7 +875,7 @@
       background: var(--accent-mist);
     }
     body.panel-collapsed .filter-head {
-      background: linear-gradient(180deg, var(--accent-mist) 0%, rgba(240, 251, 250, 0.55) 100%);
+      background: var(--accent-mist);
     }
     .filter-head .status {
       padding: 0;
@@ -1983,7 +1991,7 @@
       </form>
     </div>
   </div>
-  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver">ver. 3.12</span></footer>
+  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver">ver. 3.13</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
