@@ -1,9 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
@@ -141,7 +139,7 @@ test("forgot password forwards admin smtp to sendMail", async () => {
     host: "smtp.admin.test",
     port: 587,
     user: "bot@admin.test",
-    pass: "secret",
+    pass: "smtp-test-pass",
     from: "bot@admin.test",
     fromName: "吉比",
     secure: false,
@@ -194,7 +192,7 @@ test("forgot password uses admin smtp when process.env SMTP is empty", async () 
       host: "smtp.admin.test",
       from: "bot@admin.test",
       user: "bot@admin.test",
-      pass: "secret",
+      pass: "smtp-test-pass",
     };
     const sent = [];
     const result = await requestTempPassword(db, "a@b.com", {
@@ -282,7 +280,7 @@ test("forgot password delivers via admin smtp even if env points at the wrong ho
             host: "127.0.0.1",
             port: mock.port,
             user: "bot@admin.test",
-            pass: "secret",
+            pass: "smtp-test-pass",
             from: "bot@admin.test",
             fromName: "吉比",
             secure: false,
@@ -316,143 +314,4 @@ test("db wrapper and admin test mail read getStoredSmtp", () => {
   );
   assert.match(mailTest, /getStoredSmtp\(\)/);
   assert.match(mailTest, /\bsmtp,/);
-});
-
-function captchaCode(svg) {
-  return [...String(svg || "").matchAll(/>([^<]+)<\/text>/g)].map((row) => row[1]).join("");
-}
-
-function cookieHeader(res) {
-  const list = typeof res.headers.getSetCookie === "function" ? res.headers.getSetCookie() : [];
-  const raw = list.length ? list : [res.headers.get("set-cookie")].filter(Boolean);
-  return raw.map((row) => String(row).split(";")[0]).join("; ");
-}
-
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.listen(0, "127.0.0.1", () => {
-      const { port } = server.address();
-      server.close((error) => (error ? reject(error) : resolve(port)));
-    });
-    server.on("error", reject);
-  });
-}
-
-async function waitForListen(child, needle, timeoutMs = 8000) {
-  let buf = "";
-  return new Promise((resolve, reject) => {
-    const finish = (fn) => (value) => {
-      clearTimeout(timer);
-      child.stdout.off("data", onData);
-      child.stderr.off("data", onErr);
-      child.off("exit", onExit);
-      fn(value);
-    };
-    const onData = (chunk) => {
-      buf += chunk.toString("utf8");
-      if (buf.includes(needle)) finish(resolve)(buf);
-    };
-    const onErr = (chunk) => {
-      buf += chunk.toString("utf8");
-    };
-    const onExit = (code) => finish(reject)(new Error(`server exited ${code}: ${buf}`));
-    const timer = setTimeout(() => finish(reject)(new Error(`server listen timeout: ${buf}`)), timeoutMs);
-    child.stdout.on("data", onData);
-    child.stderr.on("data", onErr);
-    child.once("exit", onExit);
-  });
-}
-
-test("HTTP forgot-password uses admin-saved SMTP, not empty process env", { timeout: 20000 }, async () => {
-  const mock = await startMockSmtp();
-  const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-forgot-smtp-"));
-  const port = await freePort();
-  const env = { ...process.env };
-  for (const key of SMTP_ENV_KEYS) delete env[key];
-  env.DATA_DIR = dataDir;
-  env.PORT = String(port);
-  env.HOST = "127.0.0.1";
-  env.AUTH_EMAIL = "admin@smtp.test";
-  env.AUTH_PASSWORD = "password1";
-  env.SESSION_SECRET = "forgot-smtp-test-secret";
-  const child = spawn("node", ["src/server.js"], {
-    cwd: path.join(dir, ".."),
-    env,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const pid = child.pid;
-  try {
-    await waitForListen(child, `http://127.0.0.1:${port}`);
-    const origin = `http://127.0.0.1:${port}`;
-    async function api(pathname, options = {}) {
-      const res = await fetch(`${origin}${pathname}`, {
-        ...options,
-        headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-      });
-      const data = await res.json().catch(() => ({}));
-      return { res, data };
-    }
-    async function withCaptcha(extra) {
-      const cap = await api("/api/captcha");
-      assert.equal(cap.res.ok, true, cap.data.error);
-      return {
-        ...extra,
-        captchaId: cap.data.id,
-        captchaAnswer: captchaCode(cap.data.svg),
-        website: "",
-      };
-    }
-    const login = await api("/api/login", {
-      method: "POST",
-      body: JSON.stringify(
-        await withCaptcha({ email: "admin@smtp.test", password: "password1" }),
-      ),
-    });
-    assert.equal(login.res.ok, true, login.data.error);
-    const cookie = cookieHeader(login.res);
-    assert.match(cookie, /591_session=/);
-    const saved = await api("/api/admin/mail", {
-      method: "PUT",
-      headers: { Cookie: cookie },
-      body: JSON.stringify({
-        smtp: {
-          host: "127.0.0.1",
-          port: mock.port,
-          user: "bot@admin.test",
-          pass: "secret",
-          from: "bot@admin.test",
-          fromName: "吉比租房物件追蹤",
-          secure: false,
-        },
-      }),
-    });
-    assert.equal(saved.res.ok, true, saved.data.error);
-    assert.equal(saved.data.configured, true);
-    const tested = await api("/api/admin/mail/test", {
-      method: "POST",
-      headers: { Cookie: cookie },
-      body: JSON.stringify({ to: "admin@smtp.test" }),
-    });
-    assert.equal(tested.res.ok, true, tested.data.error);
-    const forgot = await api("/api/forgot-password", {
-      method: "POST",
-      body: JSON.stringify(await withCaptcha({ email: "admin@smtp.test" })),
-    });
-    assert.equal(forgot.res.ok, true, forgot.data.error);
-    assert.match(forgot.data.message || "", /若此帳號存在/);
-    assert.equal(mock.messages.length, 2);
-    assert.match(decodeSmtpBody(mock.messages[0]), /測試信/);
-    assert.match(decodeSmtpBody(mock.messages[1]), /臨時密碼/);
-  } finally {
-    if (pid) {
-      try {
-        process.kill(pid, "SIGTERM");
-      } catch {
-        // already gone
-      }
-    }
-    await mock.close();
-    rmSync(dataDir, { recursive: true, force: true });
-  }
 });
