@@ -30,7 +30,7 @@ import { coveringJobsFromMembers, coveringJobsFromSettings, coversFromMemberSett
 import { listCrawlCovers } from "./crawlCovers.js";
 import { ensurePersonalSchema } from "./personalSchema.js";
 import { importV1CacheIfNeeded, importV2CacheIfNeeded } from "./importV1.js";
-import { defaultCrawlSources, normalizeCrawlSources, publicCrawlSources, crawlSourceEnabled } from "./crawlSources.js";
+import { listingFitFields } from "./listingScore.js";
 import {
   ensureDemandSchema,
   listDemandPosts as listDemandPostsOn,
@@ -114,7 +114,7 @@ import {
   serializeEnvMap,
   smtpFromEnv,
 } from "./siteMail.js";
-import { defaultHelpQaItems, normalizeHelpQaItems, publicHelpQa } from "./helpQa.js";
+import { defaultHelpQaItems, mergeMissingDefaultHelpQa, normalizeHelpQaItems, publicHelpQa } from "./helpQa.js";
 import {
   listingMailPresetById,
   normalizeMemberMailTemplates,
@@ -799,7 +799,7 @@ export function publicSponsorSettings(user = {}) {
 
 export function getHelpQa() {
   const stored = settingKey("helpQa");
-  const items = stored == null ? defaultHelpQaItems() : stored.items ?? stored;
+  const items = stored == null ? defaultHelpQaItems() : mergeMissingDefaultHelpQa(stored.items ?? stored);
   return publicHelpQa(items);
 }
 
@@ -1152,6 +1152,7 @@ function decorateListing(row, settings, userId) {
   settings = settings || getSettings();
   row = applyCachedCoords(row, settings);
   const commute = Number.isFinite(Number(row.route_km)) ? Number(row.route_km) : null;
+  const commuteKm = commute == null ? null : Math.round(commute * 10) / 10;
   const commuteMode = normalizeCommuteMode(settings.commuteMode);
   const matchPostId = Number(row.match_post_id) || 0;
   const matchPeer = matchPostId
@@ -1160,6 +1161,7 @@ function decorateListing(row, settings, userId) {
   const source = String(row.source || "591") || "591";
   const uid = Number(userId) || 0;
   const listedBy = Number(row.listed_by_user_id) || 0;
+  const fit = listingFitFields({ ...row, commute_km: commuteKm }, settings);
   const {
     listed_by_user_id: _listedBy,
     model_score: _modelScore,
@@ -1169,7 +1171,7 @@ function decorateListing(row, settings, userId) {
     ...publicRow,
     extra_fees: Array.isArray(row.extra_fees) ? row.extra_fees : parseJson(row.extra_fees, []),
     has_elevator: listingHasElevator(row),
-    commute_km: commute == null ? null : Math.round(commute * 10) / 10,
+    commute_km: commuteKm,
     commute_mode: commuteMode,
     commute_routes: Array.isArray(row.route_kms) ? row.route_kms : [],
     commute_min_am: Number.isFinite(Number(row.rush_am_min)) && Number(row.rush_am_min) > 0 ? Math.round(Number(row.rush_am_min)) : null,
@@ -1181,6 +1183,7 @@ function decorateListing(row, settings, userId) {
     self_body: String(row.self_body || ""),
     photos: listingPhotoUrls(row),
     mine: uid > 0 && listedBy === uid,
+    ...fit,
     ...mrtFields(row, settings),
   };
 }
@@ -2122,6 +2125,8 @@ export function sortListingsRows(rows, sort = "price_asc", { filter } = {}) {
       }
       return descIso(a.first_seen_at, b.first_seen_at) || Number(b.post_id) - Number(a.post_id);
     });
+  } else if (sort === "fit_desc") {
+    list.sort((a, b) => (Number(b.fit_score) || 0) - (Number(a.fit_score) || 0) || priceSortKey(a) - priceSortKey(b));
   } else {
     list.sort((a, b) => priceSortKey(a) - priceSortKey(b) || String(b.last_seen_at || "").localeCompare(String(a.last_seen_at || "")));
   }

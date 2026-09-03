@@ -50,7 +50,12 @@ export function defaultHelpQaItems() {
     {
       id: "extra-portals",
       question: "找房列表會不會出現 591 以外的網站？",
-      answer: "會，但預設仍以 591 為主。管理員可另外打開住商、信義、5168、租租通、好房網：系統只抓該區租屋摘要，點進去是原站頁面，不是完整鏡像。樂屋被 Cloudflare 擋住，打開也不會抓。跨站若像同一間，會標成需確認同屋源，不會自動刪掉。這是免費找房工具，不是仲介、不經手金錢。",
+      answer: "會，但預設仍以 591 為主。管理員可另外打開住商、信義、5168、租租通、好房網：系統只抓該區租屋摘要，點進去是原站頁面，不是完整鏡像。樂屋被 Cloudflare 擋住，打開也不會抓。跨站若像同一間，會標成需確認同屋源，不會自動刪掉。列表可依「較適合」排序。這是免費找房工具，不是仲介、不經手金錢。",
+    },
+    {
+      id: "listing-fit",
+      question: "「較適合」是什麼分數？會不會預測成交？",
+      answer: "不會。較適合是依你目前的租金區間、是否整層、1 樓、最低樓層、通勤公里、電梯與額外費用打的規則分（0–100），每人條件不同。不是成交預測、不是仲介評等，也不是原站的分數。",
     },
     {
       id: "not-broker",
@@ -85,6 +90,16 @@ export function normalizeHelpQaItems(input) {
     seen.add(id);
     out.push({ id, question, answer });
   });
+  return out.slice(0, 40);
+}
+
+/** 後台已存過 Q&A 時，仍補上程式新增、尚未寫入的預設條目。 */
+export function mergeMissingDefaultHelpQa(items) {
+  const out = normalizeHelpQaItems(items);
+  const have = new Set(out.map((row) => row.id));
+  for (const row of defaultHelpQaItems()) {
+    if (row.id && !have.has(row.id)) out.push(row);
+  }
   return out.slice(0, 40);
 }
 

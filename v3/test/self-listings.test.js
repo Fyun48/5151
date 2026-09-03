@@ -221,5 +221,5 @@ test("index, server and admin expose self listing surfaces", () => {
   assert.match(server, /app\.get\("\/media\/self\/:file"/);
   assert.match(server, /listingRedirectTarget/);
   assert.match(admin, /站內自行刊登/);
-  assert.match(admin, /模型分數欄位已預留/);
+  assert.match(admin, /列表「較適合」依會員租金、樓層與通勤估算/);
 });

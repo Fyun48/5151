@@ -106,6 +106,8 @@ test("page defaults to 全部 + 最新", () => {
   const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
   assert.match(html, /class="chip on" data-filter="all"/);
   assert.match(html, /class="chip on" data-sort="newest"/);
+  assert.match(html, /data-sort="fit_desc"/);
+  assert.match(html, />較適合</);
   assert.match(html, /let sort = "newest"/);
   assert.doesNotMatch(html, /class="chip on" data-sort="price_asc"/);
   assert.match(html, /class="chip-row"/);
@@ -265,7 +267,7 @@ test("product name is 吉比租房物件追蹤 without v2 開發版 copy", () =>
   assert.equal(html.includes("v2 開發版"), false);
   assert.equal(html.includes("v3 開發版"), false);
   assert.equal(html.includes("與線上版分開的資料庫"), false);
-  assert.match(html, /ver\. 3\.17/);
+  assert.match(html, /ver\. 3\.18/);
   assert.doesNotMatch(html, /<h1>[^<]*v3/i);
   assert.match(login, /<h1>吉比租房物件追蹤<\/h1>/);
   assert.equal(login.includes("v2 開發版"), false);
@@ -453,5 +455,9 @@ test("self listing form and in-site detail stay on this site", () => {
   assert.match(html, /打開5168/);
   assert.match(html, /打開租租通/);
   assert.match(html, /打開好房/);
+  assert.match(html, /class="tag fit"/);
+  assert.match(html, /item\.fit_label/);
+  assert.match(html, /item\.fit_score/);
+  assert.match(html, /sort === "fit_desc"/);
   assert.doesNotMatch(html, /model_score/);
 });

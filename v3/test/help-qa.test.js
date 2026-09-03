@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { defaultHelpQaItems, normalizeHelpQaItems, publicHelpQa } from "../src/helpQa.js";
+import { defaultHelpQaItems, mergeMissingDefaultHelpQa, normalizeHelpQaItems, publicHelpQa } from "../src/helpQa.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -21,7 +21,10 @@ test("default Q&A explains walkable MRT distance not straight-line", () => {
   assert.ok(items.some((row) => row.id === "self-listings"));
   assert.ok(items.some((row) => row.id === "demand-wall"));
   assert.ok(items.some((row) => row.id === "extra-portals"));
+  assert.ok(items.some((row) => row.id === "listing-fit"));
   assert.ok(items.some((row) => row.id === "not-broker"));
+  const fit = items.find((row) => row.id === "listing-fit");
+  assert.match(fit.answer, /不是成交預測/);
 });
 
 test("normalizeHelpQaItems drops empty rows and caps length", () => {
@@ -34,6 +37,14 @@ test("normalizeHelpQaItems drops empty rows and caps length", () => {
   assert.equal(out[0].id, "ok");
   assert.equal(out[1].question, "第二題");
   assert.equal(publicHelpQa(out).items.length, 2);
+});
+
+test("mergeMissingDefaultHelpQa appends new default ids", () => {
+  const merged = mergeMissingDefaultHelpQa([
+    { id: "extra-portals", question: "舊問？", answer: "舊答。" },
+  ]);
+  assert.equal(merged.find((row) => row.id === "extra-portals").answer, "舊答。");
+  assert.ok(merged.some((row) => row.id === "listing-fit"));
 });
 
 test("public help-qa route and admin editor exist", () => {
