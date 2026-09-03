@@ -76,6 +76,7 @@ import {
   serializeEnvMap,
   smtpFromEnv,
 } from "./siteMail.js";
+import { defaultHelpQaItems, normalizeHelpQaItems, publicHelpQa } from "./helpQa.js";
 import {
   listingMailPresetById,
   normalizeMemberMailTemplates,
@@ -731,6 +732,22 @@ export function saveAdminSponsorSettings(partial = {}) {
 
 export function publicSponsorSettings(user = {}) {
   return publicSponsorOffer(getSponsorConfig(), { role: user.role, plan: user.plan });
+}
+
+export function getHelpQa() {
+  const stored = settingKey("helpQa");
+  const items = stored == null ? defaultHelpQaItems() : stored.items ?? stored;
+  return publicHelpQa(items);
+}
+
+export function saveHelpQa(partial = {}) {
+  const src = partial && typeof partial === "object" ? partial : {};
+  if (src.reset === true) {
+    writeSettingKey("helpQa", { items: defaultHelpQaItems() });
+    return getHelpQa();
+  }
+  writeSettingKey("helpQa", { items: normalizeHelpQaItems(src.items) });
+  return getHelpQa();
 }
 
 export function listUserIds() {

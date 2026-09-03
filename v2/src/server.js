@@ -47,6 +47,8 @@ import {
   getMemberMailSettings,
   getMemberSmtp,
   saveMemberMailSettings,
+  getHelpQa,
+  saveHelpQa,
 } from "./db.js";
 import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requireAuth, sessionCookie, verifyLogin } from "./auth.js";
 import { boxFromRoadDescription, geocodeAddress, needsListingGeo, hasWorkPoint } from "./geo.js";
@@ -157,6 +159,10 @@ app.get("/api/me", (req, res) => {
 
 app.get("/api/disclaimer", (_req, res) => {
   res.json({ version: DISCLAIMER_VERSION, text: DISCLAIMER_TEXT });
+});
+
+app.get("/api/help-qa", (_req, res) => {
+  res.json(getHelpQa());
 });
 
 function captchaPayload() {
@@ -347,6 +353,18 @@ app.get("/api/admin/sponsor", requireAdminApi, (_req, res) => {
 app.put("/api/admin/sponsor", requireAdminApi, (req, res) => {
   try {
     res.json(saveAdminSponsorSettings(req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/admin/help-qa", requireAdminApi, (_req, res) => {
+  res.json(getHelpQa());
+});
+
+app.put("/api/admin/help-qa", requireAdminApi, (req, res) => {
+  try {
+    res.json(saveHelpQa(req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }

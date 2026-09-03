@@ -66,6 +66,7 @@ test("admin page lists members, smtp, and templates without password fields", ()
   assert.match(html, /不會用這裡的帳號代寄/);
   assert.match(html, /\{\{tempPassword\}\}/);
   assert.match(html, /看不到會員密碼/);
+  assert.match(html, /功能說明 Q&amp;A/);
   assert.match(html, /memberSort/);
   assert.match(html, /註冊時間/);
   assert.match(html, /確認刪除並寄信/);
