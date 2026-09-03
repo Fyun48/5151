@@ -18,5 +18,3 @@ alwaysApply: true
    錯誤狀態、Loading、Accessibility 和操作一致性。
 9. Security Reviewer 執行權限、輸入驗證和個資檢查。
 10. Reviewer 不得自行批准自己實作的修改。
-
-環境備註：Cloud Agent 無法互動授權 Figma／Mobbin MCP；Playwright MCP 未安裝時，改讀 `v3/DESIGN.md` 與 `v3/public/tokens.css`，並用 Playwright 或同等瀏覽器在 375／768／1440 實際截圖。
