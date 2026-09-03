@@ -17,6 +17,9 @@ test("default Q&A explains walkable MRT distance not straight-line", () => {
   assert.match(mrt.answer, /不是房子到捷運站的直線距離/);
   assert.ok(items.some((row) => row.id === "hidden-admin"));
   assert.ok(items.some((row) => row.id === "interval"));
+  assert.ok(items.some((row) => row.id === "pwa-ios"));
+  assert.ok(items.some((row) => row.id === "demand-wall"));
+  assert.ok(items.some((row) => row.id === "not-broker"));
 });
 
 test("normalizeHelpQaItems drops empty rows and caps length", () => {

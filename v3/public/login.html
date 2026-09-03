@@ -174,7 +174,7 @@
       <button type="button" class="text" id="forgotLink">忘記密碼？</button>
     </form>
     <form id="registerForm" class="hidden">
-      <p class="sub">註冊成功後，若管理員已設定寄信，會收到一封歡迎信。物件／屋源提醒請之後自己填 SMTP。</p>
+      <p class="sub">註冊成功後，若管理員已設定寄信，會收到一封歡迎信。物件更新預設走站內通知與系統推播，郵件與 Webhook 可之後在「我的 → 通知設定」選填。</p>
       <label for="regEmail">Email</label>
       <input id="regEmail" name="email" type="email" autocomplete="username" required />
       <label for="regPassword">密碼（至少 8 個字）</label>
@@ -218,7 +218,7 @@
     </form>
     <p class="ok" id="ok"></p>
     <p class="err" id="err"></p>
-    <footer class="site-footer">reversal play tech | 逆遊科技</footer>
+    <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:#94a3b8;font-size:11px">ver. 3.11</span></footer>
   </div>
   <script>
     const $ = (id) => document.getElementById(id);

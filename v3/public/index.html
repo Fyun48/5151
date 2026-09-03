@@ -3,6 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#0da5a0" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="吉比租房" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="/icons/icon-192.png" />
   <link rel="stylesheet" href="/vendor/leaflet/leaflet.css" />
   <title>吉比租房物件追蹤</title>
   <style>
@@ -262,7 +267,11 @@
     html.no-session #deleteAccountBtn,
     html.no-session #adminLink,
     html.no-session #resetLink,
-    html.no-session #watchBtn { display: none !important; }
+    html.no-session #watchBtn,
+    html.no-session #meLogoutBtn,
+    html.no-session #mePasswordBtn,
+    html.no-session #meDeleteBtn,
+    html.no-session #meWatchBtn { display: none !important; }
     html.has-session #loginBtn,
     html.has-session #registerBtn { display: none !important; }
     html.has-session .who.is-guest { visibility: hidden; }
@@ -272,6 +281,10 @@
     body.role-guest #changePasswordBtn,
     body.role-guest #deleteAccountBtn,
     body.role-guest #watchBtn,
+    body.role-guest #meLogoutBtn,
+    body.role-guest #mePasswordBtn,
+    body.role-guest #meDeleteBtn,
+    body.role-guest #meWatchBtn,
     body.role-guest #sponsorBar { display: none !important; }
     body.role-guest .panel input,
     body.role-guest .panel textarea,
@@ -311,6 +324,7 @@
     a.sponsor-chip .blurb { opacity: 0.86; font-size: 12px; }
     .sponsor-bar.thanks { background: #fff; }
     .save-msg { font-size: 12px; color: var(--muted); margin-left: 4px; }
+    .muted { color: var(--muted); font-size: 13px; }
     .hub-panel .msg { font-size: 13px; color: var(--muted); min-height: 1.4em; margin: 8px 0 0; }
     .hub-panel .msg.ok { color: var(--accent-deep); }
     .hub-panel .msg.err { color: var(--rose-deep); }
@@ -319,6 +333,49 @@
       color: var(--muted);
       font-size: 12px;
       letter-spacing: 0.02em;
+    }
+    .site-ver {
+      margin-left: 8px;
+      color: #94a3b8;
+      font-size: 11px;
+      letter-spacing: 0.04em;
+    }
+    .app-view { display: none; }
+    body:not([data-app-view="listings"]) #listingsView { display: none; }
+    body[data-app-view="demand"] #demandView { display: block; }
+    body[data-app-view="notify"] #notifyView { display: block; }
+    body[data-app-view="me"] #meView { display: block; }
+    #demandView, #meView, #notifyView {
+      padding: 0 32px 40px;
+    }
+    .bottom-nav {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+      margin: 0 32px 12px;
+      padding: 4px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: #fff;
+    }
+    .bottom-nav button {
+      margin: 0;
+      width: auto;
+      border: 0;
+      background: none;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+      padding: 8px 4px;
+      border-radius: 12px;
+    }
+    .bottom-nav button[aria-current="page"] {
+      color: var(--accent-deep);
+      background: var(--accent-mist);
+    }
+    .mobile-only { display: none; }
+    .filter-sheet-backdrop {
+      display: none;
     }
     h1 {
       margin: 0;
@@ -1006,6 +1063,81 @@
       body.panel-collapsed .list-head-sticky { margin: 10px 10px 0; top: 6px; }
       .sponsor-bar { margin-left: 16px; margin-right: 16px; }
     }
+    @media (max-width: 880px) {
+      body { padding-bottom: 72px; }
+      .header-desk-only { display: none !important; }
+      .header-profiles { display: none; }
+      .mobile-only { display: inline-flex; }
+      .bottom-nav {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 120;
+        margin: 0;
+        background: #fff;
+        border: 0;
+        border-top: 1px solid var(--line);
+        border-radius: 0;
+        padding: 6px 4px calc(6px + env(safe-area-inset-bottom, 0px));
+      }
+      .bottom-nav button {
+        margin: 0;
+        width: auto;
+        border: 0;
+        background: none;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+        padding: 8px 4px;
+        border-radius: 12px;
+      }
+      .bottom-nav button[aria-current="page"] {
+        color: var(--accent-deep);
+        background: var(--accent-mist);
+      }
+      #expandPanelBtn { bottom: 78px; }
+      #scrollTopBtn { bottom: 128px; }
+      #alertDock { bottom: 72px; right: 10px; left: 10px; width: auto; }
+      body[data-app-view="notify"] #alertDock {
+        display: block;
+        inset: 72px 0 64px;
+        width: auto;
+        max-height: none;
+        border-radius: 0;
+        border-left: 0;
+        border-right: 0;
+      }
+      .wrap { grid-template-columns: 1fr; padding-bottom: 16px; }
+      #settingsPanel {
+        display: none;
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 56px;
+        top: auto;
+        z-index: 130;
+        max-height: min(78vh, calc(100vh - 130px));
+        overflow: auto;
+        border-radius: 20px 20px 0 0;
+        box-shadow: 0 -12px 40px rgba(26, 43, 51, 0.18);
+      }
+      body.filter-sheet-open #settingsPanel { display: block; }
+      body.filter-sheet-open .filter-sheet-backdrop {
+        display: block;
+        position: fixed;
+        inset: 0 0 56px;
+        background: rgba(16, 28, 34, 0.42);
+        z-index: 125;
+      }
+      body.panel-collapsed #settingsPanel { display: none; }
+      body.panel-collapsed.filter-sheet-open #settingsPanel { display: block; }
+      .notify-shortcuts { display: none; }
+      #demandView, #meView, #notifyView { padding: 0 16px 24px; }
+      .site-footer { margin: 8px 16px 88px; }
+    }
   </style>
   <script>
     (function () {
@@ -1015,7 +1147,7 @@
     })();
   </script>
 </head>
-<body class="role-guest">
+<body class="role-guest" data-app-view="listings">
   <div id="bootFail" role="alert">
     <strong>畫面程式沒有跑起來</strong>
     <span id="bootFailDetail">這是網頁程式錯誤，不是物件資料壞了。請按右上「重新整理」。不要按「清除資料」，清資料解不了這個狀況。</span>
@@ -1063,13 +1195,13 @@
         </span>
         <a class="ghost" id="loginBtn" href="/login.html">登入</a>
         <a class="primary" id="registerBtn" href="/login.html?register=1">註冊</a>
-        <button type="button" class="ghost" id="changePasswordBtn">變更密碼</button>
-        <button type="button" class="ghost" id="deleteAccountBtn">取消會員</button>
-        <a class="ghost" id="logoutBtn" href="/logout">登出</a>
-        <a class="ghost admin-only" id="adminLink" href="/admin.html">後台管理</a>
-        <a class="ghost admin-only" id="resetLink" href="/reset.html" title="會刪光物件與設定；無法修復畫面卡住" style="align-items:center;text-decoration:none">清除資料</a>
-        <button class="ghost" id="reloadBtn">重新整理</button>
-        <button class="primary" id="watchBtn">立即檢查</button>
+        <button type="button" class="ghost header-desk-only" id="changePasswordBtn">變更密碼</button>
+        <button type="button" class="ghost header-desk-only" id="deleteAccountBtn">取消會員</button>
+        <a class="ghost header-desk-only" id="logoutBtn" href="/logout">登出</a>
+        <a class="ghost admin-only header-desk-only" id="adminLink" href="/admin.html">後台管理</a>
+        <a class="ghost admin-only header-desk-only" id="resetLink" href="/reset.html" title="會刪光物件與設定；無法修復畫面卡住" style="align-items:center;text-decoration:none">清除資料</a>
+        <button class="ghost header-desk-only" id="reloadBtn">重新整理</button>
+        <button class="primary header-desk-only" id="watchBtn">立即檢查</button>
       </div>
     </div>
     <div class="header-profiles" data-tour="profiles">
@@ -1102,7 +1234,8 @@
   </div>
   </div>
   <div id="sponsorBar" class="sponsor-bar" hidden></div>
-  <div class="wrap">
+  <div class="filter-sheet-backdrop" id="filterSheetBackdrop" hidden></div>
+  <div class="wrap" id="listingsView">
     <aside class="card panel" id="settingsPanel">
       <div class="panel-toolbar">
         <strong>搜尋設定</strong>
@@ -1220,14 +1353,8 @@
       <div class="checks" data-tour="mrt">
         <label><input type="checkbox" id="showMrt" checked /> 顯示最近捷運站步行距離</label>
       </div>
-      <div class="notify-shortcuts" data-tour="notify">
-        <p class="hint">Webhook、郵件與通知種類改到浮動設定，左側只留常用條件。</p>
-        <button type="button" class="linkish" data-open-hub="webhook">設定 Discord Webhook</button>
-        <p class="hint">特別推薦申請 Discord：免費、幾步就能收到特別關注更新。</p>
-        <button type="button" class="linkish" data-open-hub="mail">設定自己的 SMTP 發信</button>
-        <p class="hint" id="notifyMailHint">物件／屋源提醒請用你自己的 SMTP 寄到註冊信箱。註冊、忘記密碼、變更密碼、贊助通知由站方管理員 SMTP 寄出。</p>
-        <button type="button" class="linkish" data-open-hub="events">選擇哪些事件要通知</button>
-        <p class="hint" id="notifyHubStatus"></p>
+      <div class="notify-shortcuts" data-tour="notify" hidden>
+        <p class="hint">Webhook、郵件已移到「我的 → 通知設定」。左側只留常用條件。</p>
       </div>
       <label>排除路名／關鍵字（一行一個）</label>
       <p class="hint">地址或標題含這些字就不列入、也不通知。例如路名、路段。</p>
@@ -1256,6 +1383,7 @@
         <button type="button" class="filter-restore-btn ghost" id="filterRestoreBtn" title="還原完整篩選">還原篩選</button>
         <div class="filter-head">
           <div class="status" id="status">準備就緒</div>
+          <button type="button" class="ghost mobile-only" id="openFilterSheetBtn">篩選</button>
           <div class="list-meta" id="listMeta" hidden></div>
         </div>
         <div class="filter-body" id="filterBody">
@@ -1299,13 +1427,90 @@
       <div class="list" id="list" data-tour="list"><div class="empty">尚未載入列表</div></div>
     </main>
   </div>
+  <section class="app-view" id="demandView">
+    <div class="card panel">
+      <h2 style="margin:0 0 8px">需求專區</h2>
+      <p class="hint" id="demandLegal">這是免費找房工具，不是仲介、不保證媒合、不經手金錢。需求牆是公開留言板，沒有即時私訊。內容由使用者自行負責；平台可隱藏或移除不當貼文。</p>
+      <form id="demandForm">
+        <p class="hint">訪客可看全部需求。發文、回覆需登入；新帳號須滿 24 小時。同時最多 2 則未過期需求，14 天後失效。</p>
+        <div id="demandDistricts" class="districts" style="margin:8px 0"></div>
+        <div class="price-row">
+          <div>
+            <label>租金上限</label>
+            <input type="number" id="demandRentMax" min="0" step="500" placeholder="例如 28000" />
+          </div>
+          <div>
+            <label>房屋類型</label>
+            <select id="demandHousing">
+              <option value="any">不限</option>
+              <option value="elevator">電梯大樓</option>
+              <option value="apartment">公寓</option>
+              <option value="suite">套房</option>
+              <option value="whole">整層住家</option>
+            </select>
+          </div>
+        </div>
+        <label class="checks"><input type="checkbox" id="demandMrt" /> 需要可步行捷運（未滿 1.5 公里）</label>
+        <label>短述（最多 280 字）</label>
+        <textarea id="demandBody" maxlength="280" placeholder="例如：士林／北投，兩房，近捷運，可養小型寵物"></textarea>
+        <div class="row" style="margin-top:10px">
+          <button type="submit" class="primary" id="demandSubmit">刊登需求</button>
+          <span class="save-msg" id="demandMsg"></span>
+        </div>
+      </form>
+    </div>
+    <div class="list" id="demandList" style="padding-top:12px"><div class="empty">載入需求…</div></div>
+  </section>
+  <section class="app-view" id="notifyView">
+    <div class="card panel">
+      <h2 style="margin:0 0 8px">通知</h2>
+      <p class="hint">站內待看更新會顯示在右下角（手機則占滿這一頁）。系統推播不必填 SMTP；郵件與 Webhook 在「我的」。</p>
+      <p class="hint" id="notifyViewHint">尚無待看更新。</p>
+    </div>
+  </section>
+  <section class="app-view" id="meView">
+    <div class="card panel" data-tour="notify">
+      <h2 style="margin:0 0 8px">我的</h2>
+      <p class="hint">帳號、設定檔與進階通知。系統推播預設開啟；郵件與 Webhook 選用。</p>
+      <div class="row" style="margin:8px 0 12px">
+        <button type="button" class="primary" data-open-hub="events">通知種類</button>
+        <button type="button" class="ghost" data-open-hub="webhook">Discord Webhook（選用）</button>
+        <button type="button" class="ghost" data-open-hub="mail">自己的 SMTP（選用）</button>
+      </div>
+      <p class="hint" id="notifyMailHint">物件／屋源提醒若要用信，請自己填 SMTP。註冊、忘記密碼、變更密碼、贊助通知由站方管理員 SMTP 寄出。</p>
+      <p class="hint" id="notifyHubStatus"></p>
+      <p class="hint">iPhone 請用 Safari「加入主畫面」後，從主畫面圖示開啟才能收到鎖定畫面推播。</p>
+      <div class="row">
+        <button type="button" class="ghost" id="enablePushBtn">允許系統推播</button>
+        <button type="button" class="ghost" id="installHintBtn">加入主畫面說明</button>
+      </div>
+      <p class="save-msg" id="pushMsg"></p>
+      <div class="row" style="margin-top:14px">
+        <button type="button" class="ghost" id="meFilterBtn">開啟篩選</button>
+        <button type="button" class="ghost" id="meWatchBtn">立即檢查</button>
+        <button type="button" class="ghost" id="meReloadBtn">重新整理</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button type="button" class="ghost" id="mePasswordBtn">變更密碼</button>
+        <button type="button" class="ghost" id="meDeleteBtn">取消會員</button>
+        <a class="ghost" id="meLogoutBtn" href="/logout">登出</a>
+        <a class="ghost admin-only" href="/admin.html">後台管理</a>
+      </div>
+    </div>
+  </section>
+  <nav class="bottom-nav" id="bottomNav" aria-label="主要分頁">
+    <button type="button" data-nav="listings" aria-current="page">找房</button>
+    <button type="button" data-nav="demand">需求</button>
+    <button type="button" data-nav="notify">通知</button>
+    <button type="button" data-nav="me">我的</button>
+  </nav>
   <div id="notifyHub" class="hub-overlay" hidden>
     <div class="hub-backdrop" data-close-hub></div>
     <div class="hub-panel" role="dialog" aria-modal="true" aria-labelledby="notifyHubTitle">
       <div class="hub-head">
         <div>
           <h2 id="notifyHubTitle">通知與發信設定</h2>
-          <p class="hint" style="margin:6px 0 0">不離開這一頁。Webhook 與郵件都在這裡集中，左側只留連結。</p>
+          <p class="hint" style="margin:6px 0 0">不離開這一頁。Webhook 與郵件是選用；預設用站內與系統推播。</p>
         </div>
         <button type="button" class="ghost" id="notifyHubClose">關閉</button>
       </div>
@@ -1372,13 +1577,14 @@
         <p class="msg" id="memberMailMsg"></p>
       </section>
       <section class="hub-pane" data-hub-pane="events" hidden>
-        <p class="hint">站內是網頁右下角浮動視窗。Webhook 與郵件要先在另外兩個分頁填好才會真的送出。</p>
+        <p class="hint">站內是網頁右下角浮動視窗。系統推播可在「我的」允許通知。Webhook 與郵件要先填好才會送出，預設關閉。</p>
         <div class="notify-matrix-wrap">
         <table class="notify-matrix" id="notifyMatrix">
           <thead>
             <tr>
               <th>事件類型</th>
               <th>站內通知</th>
+              <th>系統推播</th>
               <th>Webhook通知</th>
               <th>郵件通知</th>
             </tr>
@@ -1387,44 +1593,51 @@
             <tr>
               <td>全新物件</td>
               <td><input type="checkbox" data-notify-row="new" data-notify-ch="dock" checked /></td>
-              <td><input type="checkbox" data-notify-row="new" data-notify-ch="webhook" checked /></td>
-              <td><input type="checkbox" data-notify-row="new" data-notify-ch="mail" checked /></td>
+              <td><input type="checkbox" data-notify-row="new" data-notify-ch="push" checked /></td>
+              <td><input type="checkbox" data-notify-row="new" data-notify-ch="webhook" /></td>
+              <td><input type="checkbox" data-notify-row="new" data-notify-ch="mail" /></td>
             </tr>
             <tr>
               <td>同屋源重刊</td>
               <td><input type="checkbox" data-notify-row="same_source" data-notify-ch="dock" checked /></td>
-              <td><input type="checkbox" data-notify-row="same_source" data-notify-ch="webhook" checked /></td>
-              <td><input type="checkbox" data-notify-row="same_source" data-notify-ch="mail" checked /></td>
+              <td><input type="checkbox" data-notify-row="same_source" data-notify-ch="push" checked /></td>
+              <td><input type="checkbox" data-notify-row="same_source" data-notify-ch="webhook" /></td>
+              <td><input type="checkbox" data-notify-row="same_source" data-notify-ch="mail" /></td>
             </tr>
             <tr>
               <td>價格變動</td>
               <td><input type="checkbox" data-notify-row="price" data-notify-ch="dock" checked /></td>
-              <td><input type="checkbox" data-notify-row="price" data-notify-ch="webhook" checked /></td>
-              <td><input type="checkbox" data-notify-row="price" data-notify-ch="mail" checked /></td>
+              <td><input type="checkbox" data-notify-row="price" data-notify-ch="push" checked /></td>
+              <td><input type="checkbox" data-notify-row="price" data-notify-ch="webhook" /></td>
+              <td><input type="checkbox" data-notify-row="price" data-notify-ch="mail" /></td>
             </tr>
             <tr>
               <td>標題變更</td>
               <td><input type="checkbox" data-notify-row="title" data-notify-ch="dock" checked /></td>
-              <td><input type="checkbox" data-notify-row="title" data-notify-ch="webhook" checked /></td>
-              <td><input type="checkbox" data-notify-row="title" data-notify-ch="mail" checked /></td>
+              <td><input type="checkbox" data-notify-row="title" data-notify-ch="push" checked /></td>
+              <td><input type="checkbox" data-notify-row="title" data-notify-ch="webhook" /></td>
+              <td><input type="checkbox" data-notify-row="title" data-notify-ch="mail" /></td>
             </tr>
             <tr>
               <td>內容更新</td>
               <td><input type="checkbox" data-notify-row="update" data-notify-ch="dock" checked /></td>
-              <td><input type="checkbox" data-notify-row="update" data-notify-ch="webhook" checked /></td>
-              <td><input type="checkbox" data-notify-row="update" data-notify-ch="mail" checked /></td>
+              <td><input type="checkbox" data-notify-row="update" data-notify-ch="push" checked /></td>
+              <td><input type="checkbox" data-notify-row="update" data-notify-ch="webhook" /></td>
+              <td><input type="checkbox" data-notify-row="update" data-notify-ch="mail" /></td>
             </tr>
             <tr>
               <td>591 下架</td>
               <td><input type="checkbox" data-notify-row="offline" data-notify-ch="dock" checked /></td>
-              <td><input type="checkbox" data-notify-row="offline" data-notify-ch="webhook" checked /></td>
-              <td><input type="checkbox" data-notify-row="offline" data-notify-ch="mail" checked /></td>
+              <td><input type="checkbox" data-notify-row="offline" data-notify-ch="push" checked /></td>
+              <td><input type="checkbox" data-notify-row="offline" data-notify-ch="webhook" /></td>
+              <td><input type="checkbox" data-notify-row="offline" data-notify-ch="mail" /></td>
             </tr>
             <tr>
               <td>重新上架</td>
               <td><input type="checkbox" data-notify-row="relist" data-notify-ch="dock" checked /></td>
-              <td><input type="checkbox" data-notify-row="relist" data-notify-ch="webhook" checked /></td>
-              <td><input type="checkbox" data-notify-row="relist" data-notify-ch="mail" checked /></td>
+              <td><input type="checkbox" data-notify-row="relist" data-notify-ch="push" checked /></td>
+              <td><input type="checkbox" data-notify-row="relist" data-notify-ch="webhook" /></td>
+              <td><input type="checkbox" data-notify-row="relist" data-notify-ch="mail" /></td>
             </tr>
           </tbody>
         </table>
@@ -1494,7 +1707,7 @@
       </form>
     </div>
   </div>
-  <footer class="site-footer">reversal play tech | 逆遊科技</footer>
+  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver">ver. 3.11</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -1537,11 +1750,17 @@
     const $ = (id) => document.getElementById(id);
     const PANEL_KEY = "591-panel-collapsed";
     const FILTER_COMPACT_KEY = "591-filter-compact";
+    const APP_VIEW_KEY = "591-v3-app-view";
+    const PUSH_ASKED_KEY = "591-v3-push-asked";
+    const CHANNEL_DEFAULT_ON = { dock: true, push: true, webhook: false, mail: false };
     if (localStorage.getItem(PANEL_KEY) === "1") {
       document.body.classList.add("panel-collapsed");
       if (localStorage.getItem(FILTER_COMPACT_KEY) === "1") {
         $("listHeadSticky")?.classList.add("filter-compact");
       }
+    }
+    if (window.matchMedia("(max-width: 880px)").matches) {
+      document.body.classList.add("panel-collapsed");
     }
     $("status").textContent = "正在載入…";
     let filter = "all";
@@ -1988,7 +2207,7 @@
       { target: "[data-tour=districts]", title: "第 2／7 步", text: "行政區與租金篩選現在是展示用。註冊後才能勾選你要找的區域並儲存。" },
       { target: "[data-tour=commute]", title: "第 3／7 步", text: "公司地址、機車或汽車路徑也無法在示範模式變更。會員才能填自己的上班地址並篩通勤距離。" },
       { target: "[data-tour=mrt]", title: "第 4／7 步", text: "最近捷運站的步行路線距離可以開關。步行達 1.5 公里（含）就不顯示站名。示範模式看得到效果，註冊後才能自己開啟或關閉。" },
-      { target: "[data-tour=notify]", title: "第 5／7 步", text: "Webhook 與郵件已收到浮動設定裡。示範模式不能改；註冊後點左側連結就能在本頁展開設定。" },
+      { target: "[data-tour=notify]", title: "第 5／7 步", text: "系統推播與站內待看是預設通知。郵件與 Webhook 是選用，在「我的 → 通知設定」。示範模式不能改。" },
       { target: "[data-tour=profiles]", title: "第 6／7 步", text: "設定檔的儲存、另存與刪除也鎖定中。註冊後最多可存 3 組自己的條件。" },
       { target: "#listHeadSticky", title: "第 7／7 步", text: "已瀏覽、特別關注與隱藏要登入才寫得進去。按「前往註冊」就能開始用這些功能。" },
     ];
@@ -2279,7 +2498,13 @@
       document.querySelectorAll("[data-notify-row][data-notify-ch]").forEach((el) => {
         const row = matrix[el.dataset.notifyRow];
         const ch = el.dataset.notifyCh;
-        el.checked = !row || row[ch] !== false;
+        if (row && Object.prototype.hasOwnProperty.call(row, ch)) {
+          el.checked = row[ch] !== false;
+        } else {
+          el.checked = CHANNEL_DEFAULT_ON[ch] !== false && CHANNEL_DEFAULT_ON[ch] !== undefined
+            ? Boolean(CHANNEL_DEFAULT_ON[ch])
+            : ch === "dock" || ch === "push";
+        }
       });
     }
 
@@ -2288,7 +2513,7 @@
       document.querySelectorAll("[data-notify-row][data-notify-ch]").forEach((el) => {
         const key = el.dataset.notifyRow;
         const ch = el.dataset.notifyCh;
-        if (!out[key]) out[key] = { dock: true, webhook: true, mail: true };
+        if (!out[key]) out[key] = { dock: true, push: true, webhook: false, mail: false };
         out[key][ch] = el.checked;
       });
       return out;
@@ -2879,6 +3104,7 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ watched: true, watch_note: note }),
       });
+      maybeAskPush();
       if (watchNoteBusy()) {
         listRefreshQueued = true;
         listCache = listCache.filter((item) => String(item.post_id) !== key);
@@ -3117,6 +3343,7 @@
       try {
         await saveSettings(collectSettings());
         flash("設定已儲存");
+        maybeAskPush("儲存條件後可允許系統推播。");
         await loadList();
       } catch (error) {
         const msg = error.name === "TimeoutError" || error.name === "AbortError"
@@ -3216,6 +3443,7 @@
         if (!res.ok) throw new Error(data.error || "檢查失敗");
         $("status").textContent = statusFromResult(data.result);
         pushDock(data.result.events || []);
+        maybeAskPush("檢查完成後可允許系統推播。");
         await loadList();
       } catch (error) {
         $("status").textContent = error.message;
@@ -3262,11 +3490,266 @@
       sticky.classList.toggle("filter-compact", Boolean(on));
       localStorage.setItem(FILTER_COMPACT_KEY, on ? "1" : "0");
     }
-    $("collapsePanelBtn").onclick = () => setPanelCollapsed(true);
-    $("expandPanelBtn").onclick = () => setPanelCollapsed(!document.body.classList.contains("panel-collapsed"));
+    function openFilterSheet() {
+      document.body.classList.add("filter-sheet-open");
+      const bg = $("filterSheetBackdrop");
+      if (bg) bg.hidden = false;
+      setAppView("listings");
+    }
+    function closeFilterSheet() {
+      document.body.classList.remove("filter-sheet-open");
+      const bg = $("filterSheetBackdrop");
+      if (bg) bg.hidden = true;
+    }
+    function setAppView(name) {
+      const view = ["listings", "demand", "notify", "me"].includes(name) ? name : "listings";
+      document.body.dataset.appView = view;
+      document.querySelectorAll("#bottomNav [data-nav]").forEach((btn) => {
+        btn.setAttribute("aria-current", btn.dataset.nav === view ? "page" : "false");
+      });
+      if (view !== "listings") closeFilterSheet();
+      if (view === "demand") loadDemand().catch(() => {});
+      if (view === "notify") {
+        $("alertDock")?.classList.add("open");
+        renderDock();
+      }
+      try { localStorage.setItem(APP_VIEW_KEY, view); } catch { /* ignore */ }
+    }
+    function urlBase64ToUint8Array(base64String) {
+      const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+      const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+      const raw = atob(base64);
+      const out = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+      return out;
+    }
+    async function ensureServiceWorker() {
+      if (!("serviceWorker" in navigator)) return null;
+      try {
+        return await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+      } catch {
+        return null;
+      }
+    }
+    function showLocalNotice(title, body) {
+      if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+      try {
+        new Notification(title || "吉比租房物件追蹤", {
+          body: body || "有新的物件更新",
+          icon: "/icons/icon-192.png",
+        });
+      } catch {
+        // ignore
+      }
+    }
+    async function subscribeWebPush() {
+      if (isGuest || !("serviceWorker" in navigator) || !("PushManager" in window)) {
+        return { ok: false, reason: "unsupported" };
+      }
+      const reg = await ensureServiceWorker();
+      if (!reg) return { ok: false, reason: "sw" };
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") return { ok: false, reason: "denied" };
+      const vapid = await fetch("/api/push/vapid").then((r) => r.json()).catch(() => ({}));
+      const key = String(vapid.publicKey || "").trim();
+      if (!key) {
+        showLocalNotice("吉比租房物件追蹤", "已允許通知。伺服器尚未設定 VAPID 時，分頁開著仍可收到提示。");
+        return { ok: true, local: true };
+      }
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(key),
+      });
+      const res = await fetch("/api/push/subscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(sub.toJSON()),
+      });
+      if (!res.ok) throw new Error("無法儲存推播訂閱");
+      return { ok: true };
+    }
+    function maybeAskPush(reason) {
+      if (isGuest) return;
+      try {
+        if (localStorage.getItem(PUSH_ASKED_KEY) === "1") return;
+      } catch { /* ignore */ }
+      if (typeof Notification === "undefined") return;
+      if (Notification.permission !== "default") return;
+      const msg = $("pushMsg");
+      if (msg) msg.textContent = reason || "需要的話可允許系統推播，不必填 SMTP。";
+      const go = window.confirm("要允許系統推播嗎？之後有新物件會出現在鎖定畫面（iPhone 請先加入主畫面）。");
+      try { localStorage.setItem(PUSH_ASKED_KEY, "1"); } catch { /* ignore */ }
+      if (go) {
+        subscribeWebPush().then((result) => {
+          if (msg) msg.textContent = result.ok ? "已允許系統推播" : "尚未允許通知";
+        }).catch((error) => {
+          if (msg) msg.textContent = error.message || "推播設定失敗";
+        });
+      }
+    }
+    function demandDistrictKeys() {
+      return [...document.querySelectorAll("#demandDistricts [data-demand-district]:checked")].map((el) => el.value);
+    }
+    function fillDemandDistricts() {
+      const host = $("demandDistricts");
+      if (!host || host.dataset.ready === "1") return;
+      const src = [...document.querySelectorAll("#districtPicker [data-district]")];
+      host.innerHTML = src.map((el) => {
+        const label = el.closest("label")?.textContent?.trim() || el.value;
+        return `<label><input type="checkbox" data-demand-district value="${el.value}" />${label.replace(/[<>]/g, "")}</label>`;
+      }).join("");
+      host.dataset.ready = "1";
+    }
+    function demandCardHtml(post) {
+      const districts = (post.district_labels || []).join("、") || "未填行政區";
+      const rent = post.rent_max ? `租金上限 ${post.rent_max}` : "租金不限";
+      const replies = (post.replies || []).map((item) => `
+        <div class="dock-item">
+          <div class="muted">${esc(item.author)} · ${esc(item.created_at || "").replace("T", " ").slice(0, 16)}</div>
+          <div>${esc(item.body)}</div>
+          ${isGuest ? "" : `<button type="button" class="ghost" data-demand-report-reply="${item.id}">檢舉</button>`}
+        </div>
+      `).join("");
+      return `
+        <article class="item" data-demand-id="${post.id}">
+          <div>
+            <strong>${esc(districts)}</strong>
+            <div class="muted">${esc(rent)} · ${esc(post.housing_label || "")}${post.mrt_walk ? " · 要近捷運" : ""} · ${esc(post.author || "會員")}</div>
+            <p>${esc(post.body)}</p>
+            <div class="muted">到期 ${esc(String(post.expires_at || "").replace("T", " ").slice(0, 16))}</div>
+            ${replies}
+            ${isGuest ? `<p class="hint">登入後才能回覆或刊登。</p>` : `
+              <div class="row">
+                <input type="text" data-demand-reply="${post.id}" maxlength="200" placeholder="公開回覆（不是私訊）" />
+                <button type="button" class="primary" data-demand-send="${post.id}">回覆</button>
+                ${post.mine ? `<button type="button" class="ghost" data-demand-close="${post.id}">關閉</button>` : `<button type="button" class="ghost" data-demand-report="${post.id}">檢舉</button>`}
+              </div>
+            `}
+          </div>
+        </article>
+      `;
+    }
+    async function loadDemand() {
+      fillDemandDistricts();
+      const box = $("demandList");
+      if (!box) return;
+      const res = await fetch("/api/demand");
+      const data = await res.json();
+      if (data.legal && $("demandLegal")) $("demandLegal").textContent = data.legal;
+      const posts = data.posts || [];
+      box.innerHTML = posts.length ? posts.map(demandCardHtml).join("") : `<div class="empty">目前沒有公開需求。登入後可以刊登（不是仲介、沒有私訊）。</div>`;
+    }
+    $("collapsePanelBtn").onclick = () => {
+      if (window.matchMedia("(max-width: 880px)").matches) closeFilterSheet();
+      setPanelCollapsed(true);
+    };
+    $("expandPanelBtn").onclick = () => {
+      if (window.matchMedia("(max-width: 880px)").matches) {
+        if (document.body.classList.contains("filter-sheet-open")) closeFilterSheet();
+        else openFilterSheet();
+        return;
+      }
+      setPanelCollapsed(!document.body.classList.contains("panel-collapsed"));
+    };
     syncPanelFab();
     $("filterMiniBtn").onclick = () => setFilterCompact(true);
     $("filterRestoreBtn").onclick = () => setFilterCompact(false);
+    $("openFilterSheetBtn")?.addEventListener("click", openFilterSheet);
+    $("filterSheetBackdrop")?.addEventListener("click", closeFilterSheet);
+    $("meFilterBtn")?.addEventListener("click", openFilterSheet);
+    $("meWatchBtn")?.addEventListener("click", () => $("watchBtn")?.click());
+    $("meReloadBtn")?.addEventListener("click", () => $("reloadBtn")?.click());
+    $("mePasswordBtn")?.addEventListener("click", () => $("changePasswordBtn")?.click());
+    $("meDeleteBtn")?.addEventListener("click", () => $("deleteAccountBtn")?.click());
+    $("enablePushBtn")?.addEventListener("click", async () => {
+      const msg = $("pushMsg");
+      try {
+        const result = await subscribeWebPush();
+        if (msg) msg.textContent = result.ok ? (result.local ? "已允許分頁通知（尚未設定 VAPID）" : "已允許系統推播") : "尚未允許通知";
+      } catch (error) {
+        if (msg) msg.textContent = error.message || "推播設定失敗";
+      }
+    });
+    $("installHintBtn")?.addEventListener("click", () => {
+      window.alert("iPhone：Safari 開啟本站 → 分享 → 加入主畫面，再從主畫面圖示打開並允許通知。\nAndroid：Chrome 選單 → 加到主畫面。");
+    });
+    document.getElementById("bottomNav")?.addEventListener("click", (ev) => {
+      const btn = ev.target.closest("[data-nav]");
+      if (!btn) return;
+      setAppView(btn.dataset.nav);
+    });
+    $("demandForm")?.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      if (isGuest) {
+        remindGuest();
+        return;
+      }
+      const msg = $("demandMsg");
+      try {
+        const res = await fetch("/api/demand", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            districts: demandDistrictKeys(),
+            rent_max: Number($("demandRentMax")?.value) || 0,
+            housing_type: $("demandHousing")?.value || "any",
+            mrt_walk: Boolean($("demandMrt")?.checked),
+            body: $("demandBody")?.value || "",
+          }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "刊登失敗");
+        if (msg) msg.textContent = "已刊登";
+        $("demandBody").value = "";
+        await loadDemand();
+        maybeAskPush("刊登需求後可允許系統推播。");
+      } catch (error) {
+        if (msg) msg.textContent = error.message;
+      }
+    });
+    $("demandList")?.addEventListener("click", async (ev) => {
+      if (isGuest) {
+        if (ev.target.closest("button")) remindGuest();
+        return;
+      }
+      const send = ev.target.closest("[data-demand-send]")?.dataset.demandSend;
+      const closeId = ev.target.closest("[data-demand-close]")?.dataset.demandClose;
+      const reportId = ev.target.closest("[data-demand-report]")?.dataset.demandReport;
+      const reportReply = ev.target.closest("[data-demand-report-reply]")?.dataset.demandReportReply;
+      try {
+        if (send) {
+          const input = $("demandList").querySelector(`[data-demand-reply="${send}"]`);
+          const res = await fetch(`/api/demand/${send}/reply`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ body: input?.value || "" }),
+          });
+          const data = await readApi(res);
+          if (!res.ok) throw new Error(data.error || "回覆失敗");
+          await loadDemand();
+        } else if (closeId) {
+          const res = await fetch(`/api/demand/${closeId}/close`, { method: "POST" });
+          const data = await readApi(res);
+          if (!res.ok) throw new Error(data.error || "關閉失敗");
+          await loadDemand();
+        } else if (reportId || reportReply) {
+          const res = await fetch(`/api/demand/${reportId || reportReply}/report`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              targetType: reportReply ? "reply" : "post",
+              targetId: reportReply || reportId,
+              reason: "檢舉",
+            }),
+          });
+          const data = await readApi(res);
+          if (!res.ok) throw new Error(data.error || "檢舉失敗");
+          await loadDemand();
+        }
+      } catch (error) {
+        $("demandMsg").textContent = error.message;
+      }
+    });
     $("showMrt")?.addEventListener("change", () => {
       if (isGuest) {
         $("showMrt").checked = settings.showMrt !== false;
@@ -4274,6 +4757,8 @@
       initMap();
       renderBoxes();
       renderDock();
+      ensureServiceWorker();
+      fillDemandDistricts();
       setTimeout(() => map?.invalidateSize(), 250);
       if (!window.__watchStream && !isGuest) {
         const es = new EventSource("/api/events/stream");
@@ -4284,6 +4769,7 @@
             const n = data.result.events?.length || 0;
             $("status").textContent = `自動檢查完成，通知 ${n} 則 · ${new Date(data.result.checked_at).toLocaleString()}`;
             pushDock(data.result.events || []);
+            if (n) showLocalNotice("吉比租房物件追蹤", `自動檢查完成，通知 ${n} 則`);
             loadList();
           }
           if (data.type === "notify") {
@@ -4291,6 +4777,7 @@
             if (n) {
               $("status").textContent = `篩選後通知 ${n} 則 · ${new Date().toLocaleString()}`;
               pushDock(data.events || []);
+              showLocalNotice("吉比租房物件追蹤", `篩選後通知 ${n} 則`);
             }
             loadList();
           }

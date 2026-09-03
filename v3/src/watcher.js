@@ -35,6 +35,9 @@ import {
   setListingMatch,
   touchListingChecked,
   upsertListing,
+  isCrawlSourceEnabled,
+  sendUserWebPush,
+  pushPayloadFromEvents,
 } from "./db.js";
 import { replaceCrawlCovers, touchCrawlCoversRun } from "./crawlCovers.js";
 import { fetchCommunityLocation, fetchListingDetail, fetchListings, isListingGoneError, LIST_PAGE_SIZE, mergeFeeRows, probeListingAlive } from "./client591.js";
@@ -45,7 +48,7 @@ import { fetchRoadRoutes, fetchRushRoadRoutes } from "./route.js";
 import { fetchMrtAccess } from "./mrt.js";
 import { googleDirectionsAllowed } from "./mapsBilling.js";
 import { bestMatch } from "./match.js";
-import { classifyExistingUpdate, eventLabel, listingLastEvent, notify, shouldDockNotify, shouldMailNotify, shouldNotify, shouldWebhookNotify } from "./notify.js";
+import { classifyExistingUpdate, eventLabel, listingLastEvent, notify, shouldDockNotify, shouldMailNotify, shouldNotify, shouldPushNotify, shouldWebhookNotify } from "./notify.js";
 import { normalizeOfflineConfirmDays, shouldRecheckOffline } from "./offline.js";
 import { detailConcurrency, mapPool } from "./pool.js";
 
@@ -235,6 +238,7 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
   const dockByUser = new Map();
   const hookByUser = new Map();
   const mailByUser = new Map();
+  const pushByUser = new Map();
   for (const event of pending) {
     const userId = Number(event.user_id) || 0;
     const userSettings = userId ? getSettings(userId) : settings;
@@ -245,7 +249,8 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
     const forDock = listing ? shouldDockNotify(userSettings, listing, event) : false;
     const forHook = listing ? shouldWebhookNotify(userSettings, listing, event) : false;
     const forMail = listing ? shouldMailNotify(userSettings, listing, event, { to: mailTo, configured: mailReady }) : false;
-    if (!listing || (!forDock && !forHook && !forMail)) {
+    const forPush = listing ? shouldPushNotify(userSettings, listing, event) : false;
+    if (!listing || (!forDock && !forHook && !forMail && !forPush)) {
       markEventNotified(event.id);
       continue;
     }
@@ -272,14 +277,20 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
         list.push(payload);
         mailByUser.set(userId, list);
       }
+      if (forPush) {
+        const list = pushByUser.get(userId) || [];
+        list.push(payload);
+        pushByUser.set(userId, list);
+      }
     }
   }
   const ready = [];
-  const userIds = new Set([...dockByUser.keys(), ...hookByUser.keys(), ...mailByUser.keys()]);
+  const userIds = new Set([...dockByUser.keys(), ...hookByUser.keys(), ...mailByUser.keys(), ...pushByUser.keys()]);
   for (const userId of userIds) {
     const dock = dockByUser.get(userId) || [];
     const hook = hookByUser.get(userId) || [];
     const mail = mailByUser.get(userId) || [];
+    const push = pushByUser.get(userId) || [];
     const mailBundle = userId ? getMemberMailBundle(userId) : { smtp: null, templates: getMailTemplates() };
     if (!silent && (dock.length || hook.length || mail.length)) {
       await notify(getSettings(userId), dock, {
@@ -289,6 +300,13 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
         mailTemplates: mailBundle.templates,
         smtp: mailBundle.smtp || null,
       });
+    }
+    if (!silent && push.length) {
+      try {
+        await sendUserWebPush(userId, pushPayloadFromEvents(push));
+      } catch {
+        // 推播失敗不中斷追蹤
+      }
     }
     ready.push(...dock.map((event) => ({ ...event, type_label: eventLabel(event.type), user_id: userId })));
   }
@@ -364,6 +382,15 @@ async function sweepOfflineListings(seenIds, { limit = 20 } = {}) {
 }
 
 export async function runWatch(options = {}) {
+  if (!isCrawlSourceEnabled("591")) {
+    return {
+      checked_at: nowIso(),
+      searches: [],
+      events: [],
+      skipped: "591",
+      message: "591 來源已在後台關閉，這次沒有抓取",
+    };
+  }
   const settings = getSettings();
   const jobs = coveringJobsFromAllUsers();
   if (!jobs.length) {

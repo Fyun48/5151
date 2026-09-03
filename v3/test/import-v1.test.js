@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { ensurePersonalSchema } from "../src/personalSchema.js";
-import { importV1CacheIfNeeded } from "../src/importV1.js";
+import { importV1CacheIfNeeded, importV2CacheIfNeeded } from "../src/importV1.js";
 
 function makeDir() {
   return mkdtempSync(path.join(os.tmpdir(), "v1-import-"));
@@ -171,6 +171,53 @@ test("skips when v1 database is missing", () => {
   const result = importV1CacheIfNeeded(dest, { v1Path: path.join(dir, "nope.db"), adminUserId: 1 });
   assert.equal(result.imported, false);
   assert.equal(result.reason, "missing");
+  dest.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("imports v2 listings read-only without overwriting v3 rows", () => {
+  const dir = makeDir();
+  const v2file = path.join(dir, "v2.db");
+  const destFile = path.join(dir, "v3.db");
+  const src = open(v2file);
+  src.exec(`
+    CREATE TABLE listings (
+      post_id INTEGER PRIMARY KEY,
+      source_key TEXT NOT NULL,
+      search_key TEXT NOT NULL DEFAULT '',
+      title TEXT NOT NULL,
+      url TEXT NOT NULL,
+      first_seen_at TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL
+    );
+    CREATE TABLE geo_cache (
+      address TEXT PRIMARY KEY,
+      lat REAL NOT NULL,
+      lng REAL NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
+  src.prepare(
+    `INSERT INTO listings(post_id, source_key, search_key, title, url, first_seen_at, last_seen_at)
+     VALUES (88, '1|8|z', 'https://rent.591.com.tw/list?region=1&section=8', 'v2 物件', 'https://rent.591.com.tw/88', '2026-03-01', '2026-03-02')`,
+  ).run();
+  src.prepare("INSERT INTO geo_cache(address, lat, lng, updated_at) VALUES ('台北市', 25.0, 121.5, '2026-03-01')").run();
+  src.close();
+  const dest = seedV2(destFile);
+  dest.prepare(
+    `INSERT INTO listings(post_id, source_key, search_key, title, url, first_seen_at, last_seen_at)
+     VALUES (88, '1|8|z', 'https://rent.591.com.tw/list?region=1&section=8', 'v3 已有', 'https://rent.591.com.tw/88', '2026-04-01', '2026-04-02')`,
+  ).run();
+  dest.prepare(
+    `INSERT INTO listings(post_id, source_key, search_key, title, url, first_seen_at, last_seen_at)
+     VALUES (99, 'keep', '', 'keep', 'https://x', '2026-04-01', '2026-04-02')`,
+  ).run();
+  const result = importV2CacheIfNeeded(dest, { v2Path: v2file });
+  assert.equal(result.imported, true);
+  assert.equal(dest.prepare("SELECT title FROM listings WHERE post_id = 88").get().title, "v3 已有");
+  assert.equal(result.geo, 1);
+  const again = importV2CacheIfNeeded(dest, { v2Path: v2file });
+  assert.equal(again.imported, false);
   dest.close();
   rmSync(dir, { recursive: true, force: true });
 });

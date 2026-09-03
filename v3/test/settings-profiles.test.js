@@ -170,7 +170,8 @@ test("notifyMatrix hydrates defaults and preserves unchecks", () => {
   assert.equal(next.notifyMatrix.update.dock, false);
   assert.equal(next.notifyMatrix.update.webhook, true);
   assert.equal(next.notifyMatrix.price.dock, true);
-  assert.equal(next.notifyMatrix.new.mail, true);
+  assert.equal(next.notifyMatrix.new.mail, false);
+  assert.equal(next.notifyMatrix.new.push, true);
   assert.equal(next.webhookNotifyNew, false);
 });
 

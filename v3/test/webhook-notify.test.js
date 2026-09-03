@@ -34,7 +34,15 @@ const hookSettings = { discordWebhook: "https://discord.com/api/webhooks/1/abc" 
 test("new listings always notify", () => {
   assert.equal(shouldNotify(hookSettings, listing, { type: "new" }), true);
   assert.equal(shouldDockNotify(hookSettings, listing, { type: "new" }), true);
-  assert.equal(shouldWebhookNotify(hookSettings, listing, { type: "new" }), true);
+  assert.equal(shouldWebhookNotify(hookSettings, listing, { type: "new" }), false);
+  assert.equal(
+    shouldWebhookNotify(
+      { ...hookSettings, notifyMatrix: { new: { dock: true, push: true, webhook: true, mail: false } } },
+      listing,
+      { type: "new" },
+    ),
+    true,
+  );
 });
 
 test("non-watched updates do not notify except new", () => {
@@ -210,7 +218,16 @@ test("notify facts add usable ping and housing type instead of 整層住家", ()
 
 test("mail notify uses registered address and can be unchecked", () => {
   const to = "member@example.com";
-  assert.equal(shouldMailNotify({}, listing, { type: "new" }, { to, configured: true }), true);
+  assert.equal(shouldMailNotify({}, listing, { type: "new" }, { to, configured: true }), false);
+  assert.equal(
+    shouldMailNotify(
+      { notifyMatrix: { new: { dock: true, push: true, webhook: false, mail: true } } },
+      listing,
+      { type: "new" },
+      { to, configured: true },
+    ),
+    true,
+  );
   assert.equal(shouldMailNotify({}, listing, { type: "new" }, { to: "", configured: true }), false);
   assert.equal(shouldMailNotify({}, listing, { type: "new" }, { to, configured: false }), false);
   assert.equal(shouldMailNotify({}, listing, { type: "new" }, { to }), false);

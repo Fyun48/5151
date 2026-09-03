@@ -207,6 +207,17 @@
       </form>
     </section>
     <section class="card">
+      <h2>物件來源</h2>
+      <p class="hint">目前只實作 591 爬蟲。其他平台先留開關，打開也不會抓。自行刊登與評分欄位之後再用。已抓到的物件帶 <code>source</code>／<code>source_id</code>。</p>
+      <form id="crawlForm">
+        <div id="crawlSourceList"></div>
+        <div class="row" style="margin:14px 0 0">
+          <button type="submit" class="primary" id="crawlSave">儲存來源開關</button>
+        </div>
+        <p class="msg" id="crawlMsg"></p>
+      </form>
+    </section>
+    <section class="card">
       <h2>贊助連結</h2>
       <p class="hint">預設列出免月費、會員能刷卡的方案：歐付寶收款連結、ezPay 簡單付、OEN 幫收 Link、Ko-fi、PayPal.Me、Buy Me a Coffee、GitHub Sponsors。金流仍會從贊助款抽手續費。綠界、藍新全方位金流通常要統編或年費，不放在預設清單；若你已有網址，可用下面自訂列。付款不會自動改會員方案，收到後請在上方把對方改成「已贊助」。</p>
       <form id="sponsorForm">
@@ -515,6 +526,24 @@
       const data = await readApi(res);
       if (!res.ok) throw new Error(data.error || "載入 Google 路線設定失敗");
       fillMaps(data);
+    }
+
+    function renderCrawlSources(items) {
+      const host = $("crawlSourceList");
+      if (!host) return;
+      host.innerHTML = (items || []).map((row) => `
+        <label class="checks">
+          <input type="checkbox" data-crawl-id="${row.id}" ${row.enabled ? "checked" : ""} />
+          ${row.label}${row.stub ? "（尚未實作）" : ""}
+        </label>
+      `).join("");
+    }
+
+    async function loadCrawlSources() {
+      const res = await fetch("/api/admin/crawl-sources", { cache: "no-store" });
+      const data = await readApi(res);
+      if (!res.ok) throw new Error(data.error || "載入來源失敗");
+      renderCrawlSources(data.items || []);
     }
 
     $("memberRows").addEventListener("change", (ev) => {
@@ -830,7 +859,7 @@
       if (me.role !== "admin") { location.replace("/"); return; }
       meEmail = me.email || "";
       $("who").textContent = meEmail;
-      await Promise.all([loadMembers(), loadMail(), loadSponsor(), loadMaps(), loadHelpQa()]);
+      await Promise.all([loadMembers(), loadMail(), loadSponsor(), loadMaps(), loadHelpQa(), loadCrawlSources()]);
       $("helpQaAdd").onclick = () => {
         renderHelpQaEditor([...collectHelpQa(), { question: "", answer: "", id: "" }]);
       };
@@ -920,10 +949,34 @@
         $("mapsEnabled").checked = false;
         await saveMaps({ clearKey: true });
       };
+      $("crawlForm").onsubmit = async (ev) => {
+        ev.preventDefault();
+        $("crawlSave").disabled = true;
+        setMsg("crawlMsg", "儲存中…");
+        try {
+          const items = [...document.querySelectorAll("[data-crawl-id]")].map((el) => ({
+            id: el.dataset.crawlId,
+            enabled: el.checked,
+          }));
+          const res = await fetch("/api/admin/crawl-sources", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ items }),
+          });
+          const data = await readApi(res);
+          if (!res.ok) throw new Error(data.error || "儲存失敗");
+          renderCrawlSources(data.items || []);
+          setMsg("crawlMsg", "來源開關已儲存", true);
+        } catch (error) {
+          setMsg("crawlMsg", error.message);
+        } finally {
+          $("crawlSave").disabled = false;
+        }
+      };
     })().catch((error) => {
       setMsg("memberMsg", error.message || "載入失敗");
     });
   </script>
-  <footer class="site-footer">reversal play tech | 逆遊科技</footer>
+  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:#94a3b8;font-size:11px">ver. 3.11</span></footer>
 </body>
 </html>
