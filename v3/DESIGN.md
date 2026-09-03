@@ -27,7 +27,7 @@
 
 ## 3. Design tokens
 
-實作於 `public/tokens.css`。變數同時提供本站名（`--ink`）與 shadcn 別名（`--foreground`），之後若另開 Next.js 可直接吃同一套，不必先拆 CasaOS Express。
+實作於 `public/tokens.css`（與 `design-system/property-platform/MASTER.md` 同步）。變數同時提供本站名（`--ink`）與 shadcn 別名（`--foreground`），之後若另開 Next.js 可直接吃同一套，不必先拆 CasaOS Express。頁面不要再複製一份 `:root`。
 
 **為什麼這次不改寫 Next.js：** 線上部署只同步 `v3/src` + `v3/public`，PWA／session cookie／五千行列表邏輯都在 Express。完整改 Next.js 會先犧牲查詢效率，違反「功能永遠優先於形象」。本規格把 tokens 做成可移植層。
 
