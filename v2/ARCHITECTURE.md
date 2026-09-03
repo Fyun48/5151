@@ -1,6 +1,6 @@
 # 5151 v2 架構
 
-線上正在跑的是 repo 根目錄的 v1（`src/` + `public/`，埠 5151，`https://a5151.reversalplay.me`，資料 `591.db`）。這份 `v2/` 是複製後的新版（埠 5152，`https://b5151.reversalplay.me`，資料 `data-v2/v2.db`）。同一 repo、同一映像、同一條 tunnel 加 hostname；完成前不會取代 v1。
+v1 已停用（root `src/` + `public/`，埠 5151，`https://a5151.reversalplay.me` 不再是正式追蹤站；CasaOS 預設不啟動，原始碼仍保留）。這份 `v2/` 是線上版之一（埠 5152，`https://b5151.reversalplay.me`，資料 `data-v2/v2.db`）。同一 repo、同一映像、同一條 tunnel 加 hostname。
 
 ## 目標
 
@@ -14,7 +14,7 @@
 2. **完成：** 列表／通知讀共用 `listings`，已瀏覽／關注／隱藏／備註走 `user_listing_flags`。
 3. **完成：** 會員註冊／登入（`users` 表，不再只認一組 AUTH）、免責聲明、個人 `user_events` 通知佇列。設定寫入 `user_settings`。覆蓋搜尋仍合併所有會員的縣市／租金。
 4. **再來：** 贊助方案只影響間隔／覆蓋範圍等，不影響「這是免費系統」的條款。
-5. **最後：** 你確認 v2 可取代後，再停 v1。在那之前不要改 root `src/`、`public/` 的部署路徑。
+5. **完成：** v1 已停用（compose `profiles: ["v1"]`，不再自動部署 root `src/`、`public/`）。
 
 ## 覆蓋抓取（為什麼 20 人不必打 20 次 591）
 
