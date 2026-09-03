@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>登入 · 吉比租房物件追蹤</title>
   <style>
     :root {
@@ -30,12 +30,13 @@
       color: var(--ink);
     }
     .card {
-      width: min(420px, calc(100vw - 32px));
+      width: min(420px, calc(100vw - 24px));
       background: var(--paper);
       border: 1px solid var(--line);
       border-radius: 20px;
       box-shadow: 0 8px 28px rgba(26, 43, 51, 0.05);
-      padding: 28px 26px 24px;
+      padding: 24px 20px 20px;
+      padding-bottom: max(20px, env(safe-area-inset-bottom, 0px));
     }
     h1 {
       margin: 0;
@@ -60,9 +61,10 @@
       width: 100%;
       border: 1px solid var(--line);
       border-radius: 10px;
-      padding: 10px 12px;
-      font: 14px/1.5 "Noto Sans TC", sans-serif;
+      padding: 12px 12px;
+      font: 16px/1.5 "Noto Sans TC", sans-serif;
       background: #fff;
+      min-height: 44px;
     }
     .check {
       display: flex;
@@ -80,21 +82,24 @@
       width: 100%;
       border: 0;
       border-radius: 999px;
-      padding: 11px 14px;
+      padding: 12px 14px;
       cursor: pointer;
       background: var(--accent);
       color: #fff;
-      font: 15px/1 "Noto Sans TC", sans-serif;
+      font: 16px/1 "Noto Sans TC", sans-serif;
+      min-height: 44px;
     }
     button:disabled { opacity: 0.5; cursor: wait; }
     button.text {
-      margin: 12px 0 0;
-      width: auto;
+      margin: 10px 0 0;
+      width: 100%;
       background: none;
       color: var(--accent-deep);
-      padding: 0;
-      border-radius: 0;
-      font-size: 13px;
+      padding: 12px 8px;
+      border-radius: 12px;
+      font-size: 15px;
+      min-height: 44px;
+      text-align: center;
     }
     .ok { min-height: 1.4em; color: var(--accent-deep); font-size: 13px; margin-top: 10px; }
     .err { min-height: 1.4em; color: #9f6b6b; font-size: 13px; margin-top: 10px; }
@@ -114,10 +119,39 @@
       background: var(--accent-mist);
     }
     .bot-kicker { margin: 0 0 8px; font-size: 13px; color: var(--muted); }
-    .bot-row { display: flex; gap: 8px; align-items: center; }
-    .bot-q { flex: 0 0 auto; }
-    .bot-q svg { display: block; border-radius: 8px; border: 1px solid var(--line); background: #fff; }
-    .bot-row input { flex: 1; margin: 0; min-width: 0; }
+    .bot-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-areas:
+        "q q"
+        "in go";
+      gap: 8px;
+      align-items: center;
+    }
+    .bot-q { grid-area: q; }
+    .bot-q svg {
+      display: block;
+      width: min(100%, 180px);
+      height: auto;
+      max-height: 56px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+    .bot-row input {
+      grid-area: in;
+      width: 100%;
+      min-width: 0;
+      min-height: 44px;
+      margin: 0;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+    }
+    .bot-row button.ghost {
+      grid-area: go;
+      min-height: 44px;
+      padding: 10px 14px;
+    }
     .site-footer {
       margin: 18px 0 0;
       text-align: center;
@@ -218,7 +252,7 @@
     </form>
     <p class="ok" id="ok"></p>
     <p class="err" id="err"></p>
-    <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:#94a3b8;font-size:11px">ver. 3.11</span></footer>
+    <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:#94a3b8;font-size:11px">ver. 3.12</span></footer>
   </div>
   <script>
     const $ = (id) => document.getElementById(id);

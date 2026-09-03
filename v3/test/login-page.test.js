@@ -31,6 +31,10 @@ test("login page can register after accepting the disclaimer", () => {
   assert.match(html, /\/api\/captcha/);
   assert.match(html, /captchaId/);
   assert.match(html, /換一張/);
+  assert.match(html, /grid-template-areas/);
+  assert.match(html, /min-height: 44px/);
+  assert.match(html, /viewport-fit=cover/);
+  assert.match(html, /button\.text \{[\s\S]*width: 100%/);
   const blocks = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)];
   for (const block of blocks) {
     if (/\bsrc\s*=/i.test(block[1])) continue;

@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#0da5a0" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-title" content="吉比租房" />
@@ -518,6 +518,17 @@
     .stat b { display: block; font-size: 20px; color: var(--accent-deep); font-weight: 700; }
     .stat span { color: var(--muted); font-size: 12px; }
     .toolbar { display: flex; gap: 8px; align-items: center; padding: 12px 18px; flex-wrap: wrap; }
+    .chip-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .list-search {
+      width: min(240px, 100%);
+      margin-left: auto;
+      min-height: 40px;
+    }
+    .item-title {
+      margin: 8px 0 0;
+      font-size: 18px;
+      line-height: 1.35;
+    }
     .chip {
       border: 1px solid var(--line);
       background: #fff;
@@ -1113,9 +1124,123 @@
         color: var(--accent-deep);
         background: var(--accent-mist);
       }
-      #expandPanelBtn { bottom: 78px; }
-      #scrollTopBtn { bottom: 128px; }
+      #expandPanelBtn { display: none; }
+      #scrollTopBtn {
+        right: 12px;
+        bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+      }
       #alertDock { bottom: 72px; right: 10px; left: 10px; width: auto; }
+      .list-head-sticky {
+        margin: 8px 8px 0;
+        border-radius: 16px;
+      }
+      .filter-head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px 8px;
+      }
+      .filter-head .status { flex: 1; min-width: 0; }
+      #openFilterSheetBtn {
+        min-height: 40px;
+        padding: 8px 16px;
+        font-weight: 700;
+      }
+      .toolbar {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 8px;
+        padding: 8px 12px 10px;
+      }
+      .list-search {
+        width: 100%;
+        margin-left: 0;
+        min-height: 44px;
+        font-size: 16px;
+      }
+      .chip-row {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        overflow-y: hidden;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+        margin: 0 -12px;
+        padding: 2px 12px;
+        gap: 8px;
+      }
+      .chip-row::-webkit-scrollbar { display: none; }
+      .chip-row .chip {
+        flex: 0 0 auto;
+        min-height: 36px;
+        padding: 8px 13px;
+        font-size: 13px;
+      }
+      .view-filters {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+        padding: 8px 12px 10px;
+      }
+      .view-filters .hint { display: none; }
+      #districtChips {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+        padding-top: 8px;
+      }
+      #districtChips::-webkit-scrollbar { display: none; }
+      .item {
+        grid-template-columns: 22px 92px minmax(0, 1fr);
+        gap: 8px 10px;
+        padding: 12px;
+      }
+      .item-cover, .item-cover img {
+        width: 92px;
+        height: 92px;
+      }
+      .item-title {
+        font-size: 16px;
+        margin-top: 4px;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+      .item .meta {
+        font-size: 13px;
+        margin: 4px 0;
+      }
+      .item .line-qr { display: none; }
+      .item .contact,
+      .item .actions {
+        grid-column: 1 / -1;
+        flex-direction: row;
+        flex-wrap: wrap;
+        justify-content: flex-start;
+        align-items: center;
+        text-align: left;
+        min-width: 0;
+        gap: 8px;
+      }
+      .item .contact .avatar { width: 40px; height: 40px; }
+      .item .actions button {
+        flex: 1 1 calc(50% - 8px);
+        min-height: 44px;
+        margin: 0;
+      }
+      .item .hide-box {
+        width: 100%;
+        min-height: 36px;
+      }
+      .list { padding: 10px 10px 28px; gap: 10px; }
+      .guest-toast {
+        right: 12px;
+        left: 12px;
+        width: auto;
+        bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+      }
       body[data-app-view="notify"] #alertDock {
         display: block;
         inset: 72px 0 64px;
@@ -1403,6 +1528,8 @@
         </div>
         <div class="filter-body" id="filterBody">
         <div class="toolbar">
+          <input type="text" id="q" class="list-search" placeholder="搜尋標題 / 地址 / 編號 / 備註" />
+          <div class="chip-row" data-chip-row="filter">
           <button class="chip on" data-filter="all">全部</button>
           <button class="chip" data-filter="unseen">未瀏覽</button>
           <button class="chip" data-filter="watched">特別關注</button>
@@ -1410,17 +1537,19 @@
           <button class="chip" data-filter="suspected">疑似同屋源</button>
           <button class="chip" data-filter="hidden">已隱藏</button>
           <button class="chip" data-filter="offline">正在確認中的下架</button>
-          <span style="width:1px;height:22px;background:var(--line);margin:0 4px"></span>
+          </div>
+          <div class="chip-row" data-chip-row="kind">
           <button class="chip" data-kind="elevator">電梯</button>
           <button class="chip" data-kind="apartment">公寓</button>
           <button class="chip" data-kind="suite">套房</button>
-          <span style="width:1px;height:22px;background:var(--line);margin:0 4px"></span>
+          </div>
+          <div class="chip-row" data-chip-row="sort">
           <button class="chip on" data-sort="newest">最新</button>
           <button class="chip" data-sort="price_asc">金額低→高</button>
           <button class="chip" data-sort="price_desc">金額高→低</button>
           <button class="chip commute-sort" data-sort="commute_asc" hidden>離公司近→遠</button>
           <button class="chip commute-sort" data-sort="commute_desc" hidden>離公司遠→近</button>
-          <input type="text" id="q" placeholder="搜尋標題 / 地址 / 編號 / 備註" style="max-width:240px;margin-left:auto" />
+          </div>
           <div class="bulk-bar" id="bulkBar">
             <span id="selectedCount">已選 0 筆</span>
             <button type="button" class="ghost" id="selectPageBtn">全選本頁</button>
@@ -1821,7 +1950,7 @@
       </form>
     </div>
   </div>
-  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver">ver. 3.11</span></footer>
+  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver">ver. 3.12</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -3092,7 +3221,7 @@
           </a>
           <div>
             <div class="tags">${tags(item)}</div>
-            <h3 style="margin:8px 0 0;font-size:18px">
+            <h3 class="item-title">
               <a ${listingLinkAttrs(item)}>${esc(item.title)}</a>
             </h3>
             ${matchPeerBlock(item)}
