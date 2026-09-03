@@ -765,6 +765,26 @@
     }
     .self-mine-card strong { display: block; margin-bottom: 4px; }
     .self-mine-card .muted { margin: 2px 0; }
+    .self-photos {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      margin: 8px 0;
+      -webkit-overflow-scrolling: touch;
+    }
+    .self-photos img {
+      width: 72px;
+      height: 72px;
+      object-fit: cover;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: var(--accent-mist);
+      flex: 0 0 auto;
+    }
+    .self-photos.detail img {
+      width: min(100%, 220px);
+      height: 140px;
+    }
     .match-peer {
       background: var(--rose-soft);
       border: 1px solid #ecd4d4;
@@ -1774,7 +1794,10 @@
         <input id="selfPhone" maxlength="40" inputmode="tel" placeholder="09xxxxxxxx" />
         <label>LINE 連結（選填）</label>
         <input id="selfLine" maxlength="300" placeholder="https://line.me/..." />
-        <label>封面圖片網址（選填，不上傳檔案）</label>
+        <label>物件照片（選填，最多 5 張，每張 2MB，JPG／PNG／WebP）</label>
+        <input type="file" id="selfPhotos" accept="image/jpeg,image/png,image/webp" multiple />
+        <div class="self-photos" id="selfPhotoPreview" hidden></div>
+        <label>或貼封面網址（選填）</label>
         <input id="selfCover" maxlength="500" placeholder="https://..." />
         <label>標題（選填）</label>
         <input id="selfTitle" maxlength="80" placeholder="空白則自動用行政區與租金" />
@@ -2010,7 +2033,7 @@
       </form>
     </div>
   </div>
-  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver">ver. 3.14</span></footer>
+  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver">ver. 3.15</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -3990,6 +4013,7 @@
         const tel = item.mobile || item.phone || "";
         body.innerHTML = `
           <p class="hint">${esc(item.price || "")} 元/月 · ${esc(item.kind_name || "")} · ${esc(item.layout || "")} · ${esc(item.area_name || "")} · ${esc(item.floor_name || "")}</p>
+          ${(item.photos || []).length ? `<div class="self-photos detail">${(item.photos || []).map((url) => `<img src="${esc(url)}" alt="" />`).join("")}</div>` : item.cover ? `<div class="self-photos detail"><img src="${esc(item.cover)}" alt="" /></div>` : ""}
           <p>${esc(item.address || "")}</p>
           ${item.body || item.self_body ? `<p>${esc(item.body || item.self_body)}</p>` : ""}
           <p class="hint">${esc(item.contact_role || item.role_name || "")} ${esc(item.contact_name || "")}</p>
@@ -4028,6 +4052,7 @@
           <article class="self-mine-card">
             <div>
               <strong>${esc(item.title)}</strong>
+              ${(item.photos || item.cover) ? `<div class="self-photos">${(item.photos || [item.cover]).filter(Boolean).slice(0, 5).map((url) => `<img src="${esc(url)}" alt="" />`).join("")}</div>` : ""}
               <div class="muted">${esc(item.price || "")} 元 · ${esc(item.address || "")} · ${esc(item.status || "")}</div>
               <div class="muted">到期 ${esc(String(item.expires_at || "").replace("T", " ").slice(0, 16))}</div>
               ${item.status === "open" ? `<button type="button" class="ghost" data-self-close="${item.post_id}">關閉刊登</button>` : ""}
@@ -4202,6 +4227,19 @@
         $("demandMsg").textContent = error.message;
       }
     });
+    $("selfPhotos")?.addEventListener("change", () => {
+      const box = $("selfPhotoPreview");
+      const files = [...($("selfPhotos")?.files || [])].slice(0, 5);
+      if (!box) return;
+      box.hidden = !files.length;
+      box.innerHTML = "";
+      for (const file of files) {
+        const img = document.createElement("img");
+        img.alt = "";
+        img.src = URL.createObjectURL(file);
+        box.appendChild(img);
+      }
+    });
     $("selfListingForm")?.addEventListener("submit", async (ev) => {
       ev.preventDefault();
       if (isGuest) {
@@ -4210,6 +4248,18 @@
       }
       const msg = $("selfMsg");
       try {
+        const photoUrls = [];
+        const files = [...($("selfPhotos")?.files || [])].slice(0, 5);
+        for (const file of files) {
+          const up = await fetch("/api/self-listings/photos", {
+            method: "POST",
+            headers: { "Content-Type": file.type || "image/jpeg" },
+            body: file,
+          });
+          const saved = await readApi(up);
+          if (!up.ok) throw new Error(saved.error || "照片上傳失敗");
+          if (saved.url) photoUrls.push(saved.url);
+        }
         const res = await fetch("/api/self-listings", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -4229,6 +4279,7 @@
             phone: $("selfPhone")?.value || "",
             line_url: $("selfLine")?.value || "",
             cover: $("selfCover")?.value || "",
+            photos: photoUrls,
             title: $("selfTitle")?.value || "",
             body: $("selfBody")?.value || "",
           }),
@@ -4237,6 +4288,11 @@
         if (!res.ok) throw new Error(data.error || "刊登失敗");
         if (msg) msg.textContent = "已刊登";
         if ($("selfBody")) $("selfBody").value = "";
+        if ($("selfPhotos")) $("selfPhotos").value = "";
+        if ($("selfPhotoPreview")) {
+          $("selfPhotoPreview").innerHTML = "";
+          $("selfPhotoPreview").hidden = true;
+        }
         await loadMineSelfListings();
         loadList();
         maybeAskPush("刊登物件後可允許系統推播。");

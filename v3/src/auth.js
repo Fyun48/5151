@@ -162,6 +162,7 @@ export function publicPath(req) {
     p.startsWith("/api/demand/") ||
     p.startsWith("/vendor/") ||
     p.startsWith("/icons/") ||
+    p.startsWith("/media/self/") ||
     p.startsWith("/go/")
   );
 }

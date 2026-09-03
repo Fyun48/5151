@@ -74,6 +74,12 @@ import {
 import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requireAuth, sessionCookie, verifyLogin } from "./auth.js";
 import { boxFromRoadDescription, geocodeAddress, needsListingGeo, hasWorkPoint } from "./geo.js";
 import { listingRedirectTarget } from "./openLink.js";
+import {
+  mimeForSelfPhoto,
+  saveSelfPhoto,
+  SELF_PHOTO_MAX_BYTES,
+  selfPhotoFilePath,
+} from "./selfPhotos.js";
 import { CITIES } from "./regions.js";
 import { DISCLAIMER_TEXT, DISCLAIMER_VERSION } from "./members.js";
 import { mailConfigured, sendMail } from "./mail.js";
@@ -558,6 +564,31 @@ app.post("/api/self-listings", (req, res) => {
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
+});
+
+app.post("/api/self-listings/photos", express.raw({ type: () => true, limit: SELF_PHOTO_MAX_BYTES }), (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入才能上傳照片" });
+      return;
+    }
+    const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    res.json(saveSelfPhoto(body));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/media/self/:file", (req, res) => {
+  const full = selfPhotoFilePath(req.params.file);
+  if (!full) {
+    res.status(404).end();
+    return;
+  }
+  res.setHeader("Content-Type", mimeForSelfPhoto(req.params.file));
+  res.setHeader("Cache-Control", "public, max-age=604800");
+  res.sendFile(full);
 });
 
 app.post("/api/self-listings/:id/close", (req, res) => {
