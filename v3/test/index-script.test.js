@@ -273,7 +273,7 @@ test("product name is 吉比租房物件追蹤 without v2 開發版 copy", () =>
   assert.equal(login.includes("v2 開發版"), false);
   assert.equal(login.includes("v3 開發版"), false);
   assert.equal(login.includes("資料與線上版分開"), false);
-  assert.match(login, /ver\. 3\.17/);
+  assert.match(login, /ver\. 3\.18/);
 });
 
 test("MRT toggle and guest tour are in the page", () => {
