@@ -32,6 +32,12 @@ import { ensurePersonalSchema } from "./personalSchema.js";
 import { importV1CacheIfNeeded, importV2CacheIfNeeded } from "./importV1.js";
 import { listingFitFields } from "./listingScore.js";
 import {
+  crawlSourceEnabled,
+  defaultCrawlSources,
+  normalizeCrawlSources,
+  publicCrawlSources,
+} from "./crawlSources.js";
+import {
   ensureDemandSchema,
   listDemandPosts as listDemandPostsOn,
   getDemandPost as getDemandPostOn,

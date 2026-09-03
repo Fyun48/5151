@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { listingFitFields, listingFitLabel, listingFitScore } from "../src/listingScore.js";
-import { sortListingsRows } from "../src/db.js";
+import { getCrawlSources, sortListingsRows } from "../src/db.js";
 
 const settings = {
   priceMin: 15000,
@@ -63,4 +63,9 @@ test("decorateListing strips model_score and attaches fit fields", () => {
   assert.match(dbSrc, /model_score: _modelScore/);
   assert.match(dbSrc, /\.\.\.fit/);
   assert.doesNotMatch(dbSrc, /fit_score:\s*row\.model_score/);
+});
+
+test("getCrawlSources is wired so listing lists can load", () => {
+  const { items } = getCrawlSources();
+  assert.ok(items.some((row) => row.id === "591" && row.enabled));
 });
