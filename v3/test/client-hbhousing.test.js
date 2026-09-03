@@ -127,5 +127,9 @@ test("watcher still crawls 住商 when 591 is closed", () => {
   assert.match(src, /fetchHbCoveringListings/);
   assert.match(src, /wantHb/);
   assert.match(src, /isCrawlSourceEnabled\("hbhousing"\)/);
-  assert.match(src, /skipped: "hbhousing"/);
+  assert.match(src, /isCrawlSourceEnabled\("sinyi"\)/);
+  assert.match(src, /fetchSinyiCoveringListings/);
+  assert.match(src, /fetchHpCoveringListings/);
+  assert.match(src, /fetchDdCoveringListings/);
+  assert.match(src, /skipped: "portals"/);
 });

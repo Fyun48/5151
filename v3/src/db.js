@@ -1398,11 +1398,11 @@ export function upsertListing(listing) {
       offline_at = NULL,
       offline_confirmed = 0,
       lat = CASE
-        WHEN IFNULL(listings.geo_source, '') IN ('591', 'community', 'hbhousing') THEN listings.lat
+        WHEN ${sqlTrustedGeoSource("listings.geo_source")} THEN listings.lat
         ELSE COALESCE(excluded.lat, listings.lat)
       END,
       lng = CASE
-        WHEN IFNULL(listings.geo_source, '') IN ('591', 'community', 'hbhousing') THEN listings.lng
+        WHEN ${sqlTrustedGeoSource("listings.geo_source")} THEN listings.lng
         ELSE COALESCE(excluded.lng, listings.lng)
       END,
       community_id = CASE
