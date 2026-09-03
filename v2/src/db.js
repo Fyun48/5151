@@ -21,7 +21,7 @@ import { districtNameFromListing } from "./regions.js";
 import { preferPrimaryListing } from "./match.js";
 import { commuteWorkJobs, hasWorkPoint, needsListingGeo, normalizeCommuteMode } from "./geo.js";
 import { demoCommutePatch } from "./demo.js";
-import { estimateMrtAccessForPoint, makeMrtKey } from "./mrt.js";
+import { isWalkableMrtDistance, makeMrtKey } from "./mrt.js";
 import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings, planIntervalMinutes, resolveSaveAsProfileAction, normalizeProfileName, MEMBER_MAX_PROFILES, ADMIN_MAX_PROFILES } from "./settingsState.js";
 import { defaultNotifyMatrix } from "./notifyMatrix.js";
 import { DATA_EPOCH, shouldResetForEpoch } from "./dataEpoch.js";
@@ -1671,13 +1671,14 @@ export function getCachedMrt(lat, lng) {
   const key = makeMrtKey(lat, lng);
   if (!key.includes("NaN")) {
     const row = db.prepare("SELECT station, walk_km, walk_min, ride_km, ride_min FROM mrt_cache WHERE geo_key = ?").get(key);
-    if (row?.station) {
+    if (row) {
       return {
-        station: row.station,
+        station: String(row.station || ""),
         walk_km: Number(row.walk_km) || null,
         walk_min: Number(row.walk_min) || null,
         ride_km: Number(row.ride_km) || null,
         ride_min: Number(row.ride_min) || null,
+        resolved: true,
       };
     }
   }
@@ -1685,7 +1686,7 @@ export function getCachedMrt(lat, lng) {
 }
 
 export function setCachedMrt(lat, lng, access) {
-  if (!access?.station) return;
+  if (!access || access.pending || access.resolved === false) return;
   const key = makeMrtKey(lat, lng);
   if (key.includes("NaN")) return;
   db.prepare(
@@ -1700,7 +1701,7 @@ export function setCachedMrt(lat, lng, access) {
        updated_at = excluded.updated_at`,
   ).run(
     key,
-    String(access.station),
+    String(access.station || ""),
     Number(access.walk_km) || null,
     Number(access.walk_min) || null,
     Number(access.ride_km) || null,
@@ -1742,16 +1743,19 @@ function mrtFields(row, settings) {
   if (!isTrustedGeoSource(row.geo_source) || !Number.isFinite(Number(row.lat)) || !Number.isFinite(Number(row.lng))) {
     return { mrt_station: null, mrt_walk_km: null, mrt_walk_min: null, mrt_ride_km: null, mrt_ride_min: null };
   }
-  const cached = getCachedMrt(row.lat, row.lng) || estimateMrtAccessForPoint(row.lat, row.lng);
+  const cached = getCachedMrt(row.lat, row.lng);
   if (!cached) {
     return { mrt_station: "", mrt_walk_km: null, mrt_walk_min: null, mrt_ride_km: null, mrt_ride_min: null };
+  }
+  if (!cached.station || !isWalkableMrtDistance(cached.walk_km)) {
+    return { mrt_station: null, mrt_walk_km: null, mrt_walk_min: null, mrt_ride_km: null, mrt_ride_min: null };
   }
   return {
     mrt_station: cached.station,
     mrt_walk_km: cached.walk_km,
-    mrt_walk_min: cached.walk_min,
-    mrt_ride_km: cached.ride_km,
-    mrt_ride_min: cached.ride_min,
+    mrt_walk_min: null,
+    mrt_ride_km: null,
+    mrt_ride_min: null,
   };
 }
 

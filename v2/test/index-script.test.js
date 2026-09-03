@@ -257,10 +257,11 @@ test("product name is 吉比租房物件追蹤 without v2 開發版 copy", () =>
 test("MRT toggle and guest tour are in the page", () => {
   const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
   assert.match(html, /id="showMrt"/);
-  assert.match(html, /顯示最近捷運站走路／騎車距離/);
+  assert.match(html, /顯示最近捷運站步行距離/);
   assert.match(html, /function mrtText/);
-  assert.match(html, /走路約/);
-  assert.match(html, /騎車約/);
+  assert.match(html, /步行約 \$\{esc\(walkKm\)\} 公里/);
+  assert.doesNotMatch(html, /騎車約/);
+  assert.match(html, /walkKm < 1\.5/);
   assert.match(html, /id="guestTour"/);
   assert.match(html, /GUEST_TOUR_STEPS/);
   assert.match(html, /function maybeStartGuestTour/);

@@ -1180,7 +1180,7 @@
       <label>路線上限（公里，0 表示不篩）</label>
       <input type="number" id="commuteKm" min="0" max="80" step="0.5" />
       <div class="checks" data-tour="mrt">
-        <label><input type="checkbox" id="showMrt" checked /> 顯示最近捷運站走路／騎車距離</label>
+        <label><input type="checkbox" id="showMrt" checked /> 顯示最近捷運站步行距離</label>
       </div>
       <div class="notify-shortcuts" data-tour="notify">
         <p class="hint">Webhook、郵件與通知種類改到浮動設定，左側只留常用條件。</p>
@@ -1622,23 +1622,14 @@
     function mrtText(item) {
       if (!mrtOn()) return "";
       const name = String(item.mrt_station || "").trim();
-      if (name) {
-        const bits = [mrtChip(`捷運${name.replace(/站$/, "")}站`)];
-        const walkKm = Number(item.mrt_walk_km);
-        const walkMin = Number(item.mrt_walk_min);
-        const rideKm = Number(item.mrt_ride_km);
-        const rideMin = Number(item.mrt_ride_min);
-        if (Number.isFinite(walkKm) && walkKm > 0) {
-          bits.push(Number.isFinite(walkMin) && walkMin > 0 ? `走路約 ${esc(Math.round(walkMin))} 分` : `走路 ${esc(walkKm)} 公里`);
-        }
-        if (Number.isFinite(rideKm) && rideKm > 0) {
-          bits.push(Number.isFinite(rideMin) && rideMin > 0 ? `騎車約 ${esc(Math.round(rideMin))} 分` : `騎車 ${esc(rideKm)} 公里`);
-        }
-        return bits.join(" · ");
+      const walkKm = Number(item.mrt_walk_km);
+      if (name && Number.isFinite(walkKm) && walkKm > 0 && walkKm < 1.5) {
+        return `${mrtChip(`捷運${name.replace(/站$/, "")}站`)} · 步行約 ${esc(walkKm)} 公里`;
       }
+      if (item.mrt_station == null) return "";
       const src = String(item.geo_source || "");
       const hasPin = Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lng)) && (src === "591" || src === "community");
-      return hasPin ? "捷運距離計算中" : "";
+      return hasPin ? "捷運步行距離計算中" : "";
     }
 
     function isAcefengyunAdmin() {
@@ -1945,7 +1936,7 @@
       { target: "[data-tour=guestWho]", title: "第 1／7 步", text: "右上角顯示你目前是訪客。這是示範列表，左側條件與公司地址目前不能改；註冊成為會員後才能換成你的設定。" },
       { target: "[data-tour=districts]", title: "第 2／7 步", text: "行政區與租金篩選現在是展示用。註冊後才能勾選你要找的區域並儲存。" },
       { target: "[data-tour=commute]", title: "第 3／7 步", text: "公司地址、機車或汽車路徑也無法在示範模式變更。會員才能填自己的上班地址並篩通勤距離。" },
-      { target: "[data-tour=mrt]", title: "第 4／7 步", text: "最近捷運站的走路與騎車距離可以開關。示範模式看得到效果，註冊後才能自己開啟或關閉。" },
+      { target: "[data-tour=mrt]", title: "第 4／7 步", text: "最近捷運站的步行路線距離可以開關。步行達 1.5 公里（含）就不顯示站名。示範模式看得到效果，註冊後才能自己開啟或關閉。" },
       { target: "[data-tour=notify]", title: "第 5／7 步", text: "Webhook 與郵件已收到浮動設定裡。示範模式不能改；註冊後點左側連結就能在本頁展開設定。" },
       { target: "[data-tour=profiles]", title: "第 6／7 步", text: "設定檔的儲存、另存與刪除也鎖定中。註冊後最多可存 3 組自己的條件。" },
       { target: "#listHeadSticky", title: "第 7／7 步", text: "已瀏覽、特別關注與隱藏要登入才寫得進去。按「前往註冊」就能開始用這些功能。" },
@@ -4218,7 +4209,7 @@
             } else if (data.geoBackfill?.located || data.geoBackfill?.attempted) {
               $("status").textContent = `已從 591 地圖補 ${data.geoBackfill.located || 0} 筆座標，列表已更新`;
             } else if (data.mrtBackfill?.located) {
-              $("status").textContent = `已計算 ${data.mrtBackfill.located} 筆捷運走路／騎車距離，列表已更新`;
+              $("status").textContent = `已計算 ${data.mrtBackfill.located} 筆捷運步行距離，列表已更新`;
             }
             loadList();
           }
