@@ -1,34 +1,36 @@
-name: Stop v1 on CasaOS
+name: Copy v3 source to CasaOS
 
 on:
   push:
     branches: [master, main]
     paths:
+      - "v3/src/**"
+      - "v3/public/**"
       - "docker-compose.yml"
       - "casaos-compose.yml"
-      - ".github/workflows/deploy.yml"
+      - ".github/workflows/deploy-v3.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  stop-v1:
+  sync-nas-v3:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: Copy compose files
+      - name: Copy v3 app and compose files
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.NAS_HOST }}
           port: ${{ secrets.NAS_PORT }}
           username: ${{ secrets.NAS_USER }}
           key: ${{ secrets.NAS_SSH_KEY }}
-          source: "docker-compose.yml,casaos-compose.yml"
+          source: "v3/src,v3/public,docker-compose.yml,casaos-compose.yml"
           target: /mnt/Storage1/apps/5151
           overwrite: true
-      - name: Stop v1 container and keep its data
+      - name: Start v3 container
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.NAS_HOST }}
@@ -38,7 +40,20 @@ jobs:
           script_stop: true
           script: |
             set -euo pipefail
+            mkdir -p /DATA/AppData/591-tracker-v3
+            copied=0
+            if [ -f /DATA/AppData/591-tracker-v2/auth.env ] && [ ! -f /DATA/AppData/591-tracker-v3/auth.env ]; then
+              cp /DATA/AppData/591-tracker-v2/auth.env /DATA/AppData/591-tracker-v3/auth.env
+              copied=1
+            elif [ -f /DATA/AppData/591-tracker/auth.env ] && [ ! -f /DATA/AppData/591-tracker-v3/auth.env ]; then
+              cp /DATA/AppData/591-tracker/auth.env /DATA/AppData/591-tracker-v3/auth.env
+              copied=1
+            fi
             cd /mnt/Storage1/apps/5151
             docker compose stop 591-tracker || true
             docker stop 591-tracker || true
             docker rm -f 591-tracker || true
+            docker compose up -d --no-build --no-deps --force-recreate 591-tracker-v3
+            if [ "$copied" = 1 ]; then
+              docker compose restart 591-tracker-v3
+            fi

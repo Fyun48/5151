@@ -7,9 +7,11 @@
   "scripts": {
     "start": "node src/server.js",
     "start:v2": "PORT=5152 DATA_DIR=data-v2 node v2/src/server.js",
+    "start:v3": "PORT=5153 DATA_DIR=data-v3 node v3/src/server.js",
     "dev": "node --watch src/server.js",
     "dev:v2": "PORT=5152 DATA_DIR=data-v2 node --watch v2/src/server.js",
-    "test": "node --test test/*.test.js v2/test/*.test.js"
+    "dev:v3": "PORT=5153 DATA_DIR=data-v3 node --watch v3/src/server.js",
+    "test": "node --test test/*.test.js v2/test/*.test.js v3/test/*.test.js"
   },
   "engines": {
     "node": ">=22"

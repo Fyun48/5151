@@ -58,5 +58,8 @@ jobs:
           script: |
             set -euo pipefail
             cd /mnt/Storage1/apps/5151
-            docker compose pull 591-tracker
-            docker compose up -d --no-build --no-deps 591-tracker 591-tracker-v2
+            docker compose stop 591-tracker || true
+            docker stop 591-tracker || true
+            docker rm -f 591-tracker || true
+            docker compose pull 591-tracker-v2 591-tracker-v3 || docker compose pull
+            docker compose up -d --no-build --no-deps 591-tracker-v2 591-tracker-v3
