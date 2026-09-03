@@ -7,13 +7,13 @@ import { APP_NAME, APP_VERSION } from "../src/brand.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 
-test("branding stays 吉比租房物件追蹤 with inconspicuous ver. 3.12", () => {
+test("branding stays 吉比租房物件追蹤 with inconspicuous ver. 3.14", () => {
   assert.equal(APP_NAME, "吉比租房物件追蹤");
-  assert.equal(APP_VERSION, "3.12");
+  assert.equal(APP_VERSION, "3.14");
   for (const rel of ["../public/index.html", "../public/login.html", "../public/admin.html"]) {
     const html = readFileSync(path.join(dir, rel), "utf8");
     assert.match(html, /吉比租房物件追蹤/);
-    assert.match(html, /ver\. 3\.12/);
+    assert.match(html, /ver\. 3\.14/);
     assert.equal(html.includes("開發版"), false);
     assert.doesNotMatch(html, /<h1>[^<]*v3/i);
     assert.doesNotMatch(html, /<title>[^<]*v3/i);

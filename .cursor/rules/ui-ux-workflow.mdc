@@ -1,0 +1,90 @@
+---
+description: Use this rule for new pages, major visual redesigns, design-system changes, responsive layouts, information architecture, complex forms, search interfaces, maps, dashboards, property cards, comparison screens, and UI/UX audits.
+alwaysApply: false
+---
+
+# UI/UX design workflow
+
+## Product identity
+
+This product is a functional real-estate search and property intelligence
+platform similar in purpose to 591, but it must not inherit the visual style
+of a traditional classified-listing website.
+
+Design direction:
+
+- Quiet Luxury Property Intelligence
+- Modern, refined, calm and editorial
+- High information density without visual clutter
+- Search efficiency and information clarity before brand imagery
+- Suitable for Traditional Chinese and numeric property data
+- Responsive at 375px, 768px and 1440px
+
+Avoid:
+
+- Full-screen hero images
+- Marketing landing-page layouts
+- Oversized headings and excessive empty space
+- Excessive glassmorphism, gradients or animation
+- Turning every section into a rounded card
+- Hiding important information for aesthetic reasons
+- Replacing established design tokens without justification
+
+## Mandatory skill routing
+
+For any of the following tasks, invoke the installed `ui-ux-pro-max` skill
+before implementation:
+
+1. Creating a new user-facing page
+2. Redesigning an existing page or major component
+3. Establishing or changing colors, typography, spacing or visual hierarchy
+4. Designing search, filtering, map, comparison or analytics experiences
+5. Creating a new reusable component family
+6. Conducting a UI/UX review
+7. Resolving inconsistent visual patterns across multiple pages
+8. Creating or updating the project Design System
+
+The skill may be selected automatically. If automatic invocation is uncertain,
+explicitly invoke `/ui-ux-pro-max`.
+
+## Design-system source of truth
+
+Before changing user-facing UI:
+
+1. Read `design-system/property-platform/MASTER.md`.
+2. Check whether a page-specific file exists under
+   `design-system/property-platform/pages/`.
+3. Page-specific rules override MASTER only for that page.
+4. Do not invent new colors, font sizes, spacing, shadows or radius values
+   when an existing token is suitable.
+5. If a required pattern is missing, propose and document the new token before
+   implementing it.
+
+## Workflow
+
+For a major UI/UX task:
+
+1. Inspect the current implementation and existing design system.
+2. Use `ui-ux-pro-max` to research applicable UI styles and UX guidance.
+3. Produce a short design rationale.
+4. Update the MASTER or page-specific design specification when necessary.
+5. Use Figma for new composed screens or significant layout changes.
+6. Wait until the design direction is internally consistent.
+7. Implement using the project's existing framework and components.
+8. Use Playwright to test functionality and responsive behavior.
+9. Have a separate UX reviewer inspect the implementation.
+10. Fix rejected findings before marking the task complete.
+
+## Scope control
+
+Do not regenerate the complete Design System for:
+
+- Copy changes
+- Small bug fixes
+- Event-handler fixes
+- API or backend changes
+- Minor spacing corrections that already use defined tokens
+- Refactors with no intended visual change
+
+For these tasks, follow the existing Design System without rerunning the full
+`ui-ux-pro-max` workflow.

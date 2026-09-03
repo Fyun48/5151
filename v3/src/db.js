@@ -935,6 +935,7 @@ export function changeUserPassword(userId, currentPassword, nextPassword) {
 export function requestTempPassword(email, opts = {}) {
   return requestTempPasswordOn(db, email, {
     compose: (vars) => composeForgotPasswordMail(getMailTemplates(), vars),
+    smtp: getStoredSmtp(),
     ...opts,
   });
 }

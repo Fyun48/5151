@@ -1,0 +1,23 @@
+---
+description: Keep user-facing frontend changes compliant with the property-platform design system.
+globs: "src/**/*.{tsx,jsx,css,scss},app/**/*.{tsx,jsx,css,scss},components/**/*.{tsx,jsx,css,scss},v3/public/**/*.{html,css,js},v3/src/**/*.js"
+alwaysApply: false
+---
+
+# Frontend design compliance
+
+For every user-facing frontend change:
+
+1. Follow `design-system/property-platform/MASTER.md`.
+2. Follow the applicable page override when one exists.
+3. Reuse existing components and design tokens.
+4. Do not introduce arbitrary colors, spacing, shadows or border radii.
+5. Preserve loading, empty, error, disabled, hover, focus and selected states.
+6. Maintain keyboard navigation and accessible labels.
+7. Avoid horizontal overflow at 375px.
+8. Do not reduce information clarity merely to make the interface look minimal.
+9. Run existing lint, typecheck and frontend tests.
+10. For visible layout changes, perform browser verification before completion.
+
+A small change does not require regenerating the Design System, but it must
+remain compliant with it.

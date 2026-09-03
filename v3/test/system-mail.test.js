@@ -34,6 +34,26 @@ test("sendAccountMail uses admin SMTP and never passes a member smtp override", 
   assert.match(sent[0].subject, /歡迎/);
 });
 
+test("sendAccountMail forwards stored admin smtp without a configured callback", async () => {
+  const smtp = {
+    host: "smtp.admin.test",
+    from: "bot@admin.test",
+    user: "bot@admin.test",
+    pass: "x",
+  };
+  const sent = [];
+  const result = await sendAccountMail({
+    kind: "welcome",
+    to: "new@example.com",
+    templates: defaultMailTemplates(),
+    smtp,
+    send: async (mail) => sent.push(mail),
+  });
+  assert.equal(result.sent, true);
+  assert.equal(sent[0].smtp, smtp);
+  assert.equal(sent[0].to, "new@example.com");
+});
+
 test("sendAccountMail skips when admin SMTP is not configured", async () => {
   const sent = [];
   const result = await sendAccountMail({
@@ -74,6 +94,8 @@ test("server register, change-password, and sponsor patch queue system mail", ()
   assert.match(src, /queueSystemMail\("sponsor_thanks"/);
   assert.match(src, /queueSystemMail\("account_deleted"/);
   assert.match(src, /app\.post\("\/api\/change-password"/);
+  const queue = src.slice(src.indexOf("function queueSystemMail"), src.indexOf('app.post("/api/register"'));
+  assert.match(queue, /smtp:\s*getStoredSmtp\(\)/);
   const watcher = readFileSync(path.join(dir, "../src/watcher.js"), "utf8");
   assert.match(watcher, /smtp: mailBundle\.smtp \|\| null/);
   assert.doesNotMatch(watcher, /mailBundle\.configured \|\| mailConfigured\(\)/);

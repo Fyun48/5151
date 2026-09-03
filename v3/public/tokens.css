@@ -1,0 +1,49 @@
+/* Quiet Luxury Property Intelligence — v3 design tokens
+   單一 source of truth。頁面不要再複製一份 :root。
+   禁止主視覺滿版圖／糖果漸層／巨型空白／展示型英文襯線。 */
+:root {
+  --bg: #f3efe8;
+  --paper: #faf8f4;
+  --ink: #1c1917;
+  --muted: #6f6a64;
+  --line: #e4dfd6;
+  --accent: #0f6f6a;
+  --accent-deep: #0b5551;
+  --accent-soft: #e7f1ef;
+  --accent-mist: #f3f6f5;
+  --rose: #b08989;
+  --rose-soft: #f7f1f0;
+  --rose-deep: #8a5e5e;
+  --accent-2: #0b5551;
+  --watch: #9a6b6b;
+  --new: #0b5551;
+  --same: #6b6394;
+  --hermes: #E65326;
+  --hermes-deep: #C2410C;
+  --hermes-light: #F47A2A;
+  --shezi-red: #DC2626;
+  --radius: 8px;
+  --radius-lg: 10px;
+  --shadow: none;
+  --font-sans: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+  --font-serif: "Noto Serif TC", "Source Han Serif TC", serif;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-price: 20px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --touch: 44px;
+  --background: var(--bg);
+  --foreground: var(--ink);
+  --card: var(--paper);
+  --card-foreground: var(--ink);
+  --primary: var(--accent);
+  --primary-foreground: #faf8f4;
+  --muted-foreground: var(--muted);
+  --border: var(--line);
+  --ring: var(--accent);
+}
