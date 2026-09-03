@@ -4,8 +4,11 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+const dir = path.dirname(fileURLToPath(import.meta.url));
+const pub = (rel) => readFileSync(path.join(dir, "../public", rel), "utf8");
+
 test("index.html inline script parses", () => {
-  const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
+  const html = pub("index.html");
   const blocks = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)].map((m) => ({
     attrs: m[1],
     source: m[2],
@@ -260,13 +263,13 @@ test("product name is 吉比租房物件追蹤 without v2 開發版 copy", () =>
   assert.equal(html.includes("v2 開發版"), false);
   assert.equal(html.includes("v3 開發版"), false);
   assert.equal(html.includes("與線上版分開的資料庫"), false);
-  assert.match(html, /ver\. 3\.12/);
+  assert.match(html, /ver\. 3\.13/);
   assert.doesNotMatch(html, /<h1>[^<]*v3/i);
   assert.match(login, /<h1>吉比租房物件追蹤<\/h1>/);
   assert.equal(login.includes("v2 開發版"), false);
   assert.equal(login.includes("v3 開發版"), false);
   assert.equal(login.includes("資料與線上版分開"), false);
-  assert.match(login, /ver\. 3\.12/);
+  assert.match(login, /ver\. 3\.13/);
 });
 
 test("MRT toggle and guest tour are in the page", () => {
@@ -305,10 +308,11 @@ test("listing commute copy is kilometers only and does not show rush minutes", (
 });
 
 test("listing chips use Hermes orange and do not escape chip HTML", () => {
-  const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
-  assert.match(html, /--hermes:\s*#E65326/);
-  assert.match(html, /--hermes-deep:\s*#C2410C/);
-  assert.match(html, /--hermes-light:\s*#F47A2A/);
+  const html = pub("index.html");
+  const tokens = pub("tokens.css");
+  assert.match(tokens, /--hermes:\s*#E65326/);
+  assert.match(tokens, /--hermes-deep:\s*#C2410C/);
+  assert.match(tokens, /--hermes-light:\s*#F47A2A/);
   assert.match(html, /\.mrt-chip/);
   assert.match(html, /\.route-chip/);
   assert.match(html, /\.fee-chip/);
@@ -373,7 +377,7 @@ test("extra-fee and high-deposit text use fee chips, two-month deposit does not"
 });
 
 test("only acefengyun admin gets a red frame on 社子島 listings", () => {
-  const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
+  const html = pub("index.html");
   assert.match(html, /function isAcefengyunAdmin/);
   assert.match(html, /function isShezidaoAddress/);
   assert.match(html, /\/acefengyun\/i\.test\(meEmail/);
@@ -382,7 +386,7 @@ test("only acefengyun admin gets a red frame on 社子島 listings", () => {
   assert.match(html, /延平北路\(五\|六\|七\|八\|九\|\[5-9\]\)段/);
   assert.match(html, /class="item .*shezidao/);
   assert.match(html, /\.item\.shezidao/);
-  assert.match(html, /--shezi-red:\s*#DC2626/);
+  assert.match(pub("tokens.css"), /--shezi-red:\s*#DC2626/);
   const start = html.indexOf("function isShezidaoAddress");
   const end = html.indexOf("function commuteOn");
   assert.ok(start > 0 && end > start);

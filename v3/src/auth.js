@@ -158,6 +158,7 @@ export function publicPath(req) {
     p === "/api/push/vapid" ||
     p === "/manifest.webmanifest" ||
     p === "/sw.js" ||
+    p === "/tokens.css" ||
     p.startsWith("/api/demand/") ||
     p.startsWith("/vendor/") ||
     p.startsWith("/icons/") ||

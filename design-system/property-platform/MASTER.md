@@ -2,7 +2,26 @@
 
 產品：**吉比租房物件追蹤**（v3）。這是找房租屋的**情報台**，用途接近 591，但視覺不得做成傳統分類廣告站或行銷官網。
 
-這份檔案是 user-facing UI 的 source of truth。頁面覆寫見 `pages/`。Cursor 規則見 `.cursor/rules/ui-ux-workflow.mdc` 與 `.cursor/rules/frontend-design-compliance.mdc`。
+這份檔案是 user-facing UI 的 source of truth。頁面覆寫見 `pages/`。實作檔是 `v3/public/tokens.css`。
+
+## Design rationale
+
+`ui-ux-pro-max`（density 9、motion 2、variance 3）採用的部分：
+
+- **Minimalism & Swiss Style**：網格、高對比、低動效
+- **Data-Dense Dashboard**：8–12px 間距、12–14px 輔助字、租金用 tabular 數字
+- 主色偏信任綠（技能 `#0F766E` → 本站 `#0f6f6a`）
+- PWA／iPhone 觸控目標 44px
+
+明確拒絕（技能會建議，但與產品衝突）：
+
+- Hero-Centric、滿版大圖、行銷 landing
+- Glassmorphism、糖果薄荷邊 `#99F6E4`
+- Cinzel／Josefin 等展示型英文字體（繁中與租金數字不適合）
+- Exaggerated Minimalism 的巨型標題與 8rem 留白
+- GSAP scroll reveal
+
+禁止把技能 `--persist` 直接覆蓋本檔。
 
 ## Identity
 
@@ -14,51 +33,45 @@
 - 繁體中文與租金、坪數、樓層、通勤數字必須一眼可讀
 - 必查寬度：375px、768px、1440px
 
-禁止：
+禁止：滿版 Hero、過大標題與巨型留白、過度玻璃擬態／漸層／動畫、每一區塊都做成圓角大卡片、為了好看而藏租金或錯誤狀態、沒有理由改 token。
 
-- 滿版 Hero 大圖或行銷 landing 版型
-- 過大標題與巨型留白
-- 過度玻璃擬態、漸層、動畫
-- 每一區塊都做成圓角大卡片
-- 為了「看起來比較高級」而藏租金、捷運、錯誤或空白狀態
-- 沒有理由就改掉既有 token
+## Stack
 
-## Stack（實作約束）
+CasaOS 只同步 `v3/src` 與 `v3/public`。前端是 Express 靜態頁，**不是 Next.js**。不要為了設計系統另開一套前端。
 
-線上 CasaOS 部署只同步 `v3/src` 與 `v3/public`。目前前端是 Express 靜態頁：HTML + 頁內 CSS + 頁內 JS，**不是 Next.js / React / Tailwind 專案**。
+`v3/src/auth.js` 的 `publicPath` 必須放行 `/tokens.css`，否則訪客會被導去登入頁。
 
-- 新畫面優先改 `v3/public/*.html` 與既有元件，不要為了設計系統另開一套前端。
-- `ui-ux-pro-max` 是研究工具。它的 `--design-system` 常會建議 Hero、Glassmorphism、展示型字體；**與本檔衝突時以本檔為準**，禁止把技能預設直接 `--persist` 覆蓋這份 MASTER。
-- Token 目前寫在各頁 `:root`（`v3/public/index.html`、`login.html`、`admin.html`、`reset.html`）。抽成共用 `tokens.css` 可以，但必須先改本檔再改程式，且 `v3/src/auth.js` 的 `publicPath` 要放行該靜態檔，否則訪客會被導去登入頁。
+## Tokens
 
-## Shipped tokens
-
-下列為 **master 已上線** 的變數。視覺大改必須先更新本節，再改 CSS。
+顏色與字體以 `v3/public/tokens.css` 為準。頁面 **不要再複製一份 `:root`**。
 
 | Token | Value | 用途 |
 | --- | --- | --- |
-| `--bg` | `#f3f7f9` | 頁面底 |
-| `--paper` | `#ffffff` | 卡片／紙面 |
-| `--ink` | `#1a2b33` | 正文 |
-| `--muted` | `#64748b` | 次要文字 |
-| `--line` | `#e2e8ef` | 分隔線 |
-| `--accent` | `#0da5a0` | 主色、焦點、主按鈕 |
-| `--accent-deep` | `#0a8280` | 主色強調 |
-| `--accent-soft` | `#e8f7f6` | 淺底 |
-| `--accent-mist` | `#f0fbfa` | 更淺底 |
-| `--rose` / `--watch` | `#d4a5a5` / `#b87a7a` | 關注、警示柔色 |
-| `--new` | `#0a8280` | 新物件標記 |
-| `--same` | `#8b7fd4` | 同屋源 |
-| `--hermes` | `#E65326` | 贊助／強調例外（少用） |
-| `--shezi-red` | `#DC2626` | 社子等例外標記 |
-| 字體 | `"Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif` | 正文 |
-| 標題可襯線 | `"Noto Serif TC", "Source Han Serif TC", serif` | 後台／少數大標，列表不要用展示型英文襯線 |
+| `--bg` | `#f3efe8` | 頁面底 |
+| `--paper` | `#faf8f4` | 卡片／紙面／底欄 |
+| `--ink` | `#1c1917` | 正文 |
+| `--muted` | `#6f6a64` | 次要文字 |
+| `--line` | `#e4dfd6` | 分隔線 |
+| `--accent` | `#0f6f6a` | 主色、焦點、主按鈕 |
+| `--accent-deep` | `#0b5551` | 主色強調 |
+| `--accent-soft` | `#e7f1ef` | 淺底 |
+| `--accent-mist` | `#f3f6f5` | 更淺底／選中底欄 |
+| `--rose` / `--watch` | `#b08989` / `#9a6b6b` | 關注、警示 |
+| `--new` | `#0b5551` | 新物件 |
+| `--same` | `#6b6394` | 同屋源 |
+| `--hermes` | `#E65326` | 贊助／例外，少用 |
+| `--shezi-red` | `#DC2626` | 例外標記 |
+| `--radius` / `--radius-lg` | `8px` / `10px` | 控制項／卡片 |
+| `--shadow` | `none` | 不要再加玻璃陰影 |
+| `--text-xs` … `--text-price` | 12 / 13 / 14 / 16 / 20px | 輔助／正文／租金 |
+| `--space-1` … `--space-4` | 4 / 8 / 12 / 16px | 密度間距 |
+| `--touch` | `44px` | 主要觸控目標 |
+| 字體 | `--font-sans` | 正文；列表不要用展示型英文襯線 |
+| 標題可襯線 | `--font-serif` | 站名／後台大標 |
 
-尚未成為 token、但既有畫面在用的值：卡片圓角約 `20px`（登入卡）、一般控制項約 `8–10px`。新增元件時先複用這些數字，不要再發明第三種 radius。
+shadcn 別名（`--foreground`、`--primary`、`--border`、`--ring`）指向同一組值，供日後移植，不是第二套色。
 
 ## 資訊架構
-
-主要產品在 `v3/public/index.html`，以 `data-app-view` 切換：
 
 ```
 找房     需求     通知     我的
@@ -70,39 +83,39 @@
 
 其它頁：`login.html`、`reset.html`、`disclaimer.html`、`admin.html`。
 
-## 元件（現況）
+## 元件
 
-- **CommandBar**：搜尋必須可點；手機篩選晶片可橫滑；「更多條件」才展開完整列。觸控目標至少 44px。
-- **ListingRow**：縮圖小、租金是決策數字、標題最多兩行、通勤／捷運當不同iator。不可把租金藏進次要文字。
-- **AuthCard**：驗證碼圖與輸入列在窄螢幕要可橫向填寫，不可被擠成直向細條。沒有 Hero。
-- **BottomNav**：找房／需求／通知／我的。FAB 不得擋住列表主操作。
-- **AlertDock**：站內通知。桌面右下；手機在「通知」分頁。
-- **Empty / error / loading**：沿用現有文案與狀態，設計不得刪掉。
+- **CommandBar**：搜尋永遠在。375 晶片可橫滑；768 起晶片改換行，不要裁切看不到的條件。觸控 ≥ `--touch`。
+- **ListingRow**：租金 `--text-price` tabular-nums 最大；標題最多兩行。
+- **AuthCard**：驗證碼圖在上、輸入列在下；無 Hero。圓角用 `--radius-lg`。
+- **BottomNav**：四格。`--paper` 底、選中用 `--accent-mist`。固定底欄時按鈕高度 ≥ `--touch`。
+- **AlertDock**：桌面右下；手機在「通知」分頁。
+- **Empty**：說明下一步（放寬篩選、清搜尋），不要大插圖。
 
 ## 響應式
 
-審查寬度固定為 **375 / 768 / 1440**。現行程式多用 `max-width: 880px` 當窄螢幕切點，沒有獨立 tablet breakpoint。新增版面時：
+| 寬度 | 行為 |
+| --- | --- |
+| 375 | 單欄、固定底欄、篩選預設收合、晶片橫滑、無橫向溢出 |
+| 768 | 仍單欄＋底欄，但晶片換行可點完；搜尋全寬 |
+| 1440 | 可留左側條件欄；不要改成行銷雙欄 Hero |
 
-- 375：單欄、底欄、篩選預設收合但搜尋仍在、無橫向溢出
-- 768：仍要能搜尋與掃列表；不要做成半成品桌面
-- 1440：可保留左側條件欄給會員查詢，不要改成行銷雙欄 Hero
+實作切點：共用窄版 `max-width: 880px`；晶片橫滑只在 `max-width: 767px`；`768–880px` 晶片換行。
 
 ## 無障礙與狀態
 
-- `:focus-visible` 必須看得見，建議用 `--accent`
-- 鍵盤可操作搜尋、篩選、列表動作
-- 保留 hover、selected、disabled、空白、錯誤、載入
-- 對比：正文對 `--bg`、主按鈕文字對 `--accent`
+- `:focus-visible` 用 `--ring`／`--accent`
+- 保留空白、錯誤、載入、disabled、hover、selected
+- 正文對 `--bg`、主按鈕文字對 `--accent` 需可讀
 
-## 權限（Security Reviewer）
+## 權限
 
-- 訪客可看示範列表，不可寫入已瀏覽、關注、設定
-- 會員寫入必須帶 session；`/go/:id` 僅已登入才標記已瀏覽
-- 後台、SMTP、個資、刪除帳號只在 `admin.html`／對應 API
-- 不要把 token、SMTP、VAPID 私鑰畫在前端
+- 訪客可看示範，不可寫入已瀏覽／關注／設定
+- `/go/:id` 僅已登入才標記已瀏覽
+- 後台、SMTP、密鑰不進前端
 
 ## 何時更新本檔
 
-要改：新頁、大改版、改色／字級／間距／層級、新元件族、跨頁不一致。
+要改：新頁、大改版、改色／字級／間距、新元件族。
 
-不要整份重生：文案、小 bug、事件處理、API、已用既有 token 的微調、無視覺意圖的重構。
+不要整份重生：文案、小 bug、API、已用既有 token 的微調。
