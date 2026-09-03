@@ -29,6 +29,10 @@ import {
   requestTempPassword,
   listAdminMembers,
   adminPatchMember,
+  adminDeleteMember,
+  adminRestoreMember,
+  deleteOwnAccount,
+  ADMIN_DELETE_REASONS,
   getUserById,
   getMailTemplates,
   changeUserPassword,
@@ -255,14 +259,59 @@ app.get("/admin.html", (req, res, next) => {
   next();
 });
 
-app.get("/api/admin/members", requireAdminApi, (_req, res) => {
-  const members = listAdminMembers();
-  const payload = { members };
+app.get("/api/admin/members", requireAdminApi, (req, res) => {
+  const members = listAdminMembers({
+    q: req.query?.q,
+    sort: req.query?.sort,
+    order: req.query?.order,
+  });
+  const payload = { members, deleteReasons: ADMIN_DELETE_REASONS };
   if (/password_hash|"password"|scrypt:/.test(JSON.stringify(payload))) {
     res.status(500).json({ error: "會員列表不得含密碼" });
     return;
   }
   res.json(payload);
+});
+
+app.post("/api/admin/members/:id/delete", requireAdminApi, (req, res) => {
+  try {
+    const result = adminDeleteMember(req.params.id, {
+      reasonCode: req.body?.reasonCode,
+      reasonText: req.body?.reasonText,
+    });
+    schedule();
+    queueSystemMail("account_deleted", result.member.email, { reason: result.reason.text || result.reason.label });
+    res.json({ member: result.member, reason: result.reason });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/admin/members/:id/restore", requireAdminApi, (req, res) => {
+  try {
+    const member = adminRestoreMember(req.params.id);
+    schedule();
+    res.json({ member });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/account/delete", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      const err = new Error("請先登入");
+      err.status = 401;
+      throw err;
+    }
+    deleteOwnAccount(session.userId, req.body?.reason);
+    schedule();
+    sendLogout(req, res);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
 });
 
 app.patch("/api/admin/members/:id", requireAdminApi, (req, res) => {

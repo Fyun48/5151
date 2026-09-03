@@ -68,7 +68,7 @@ export function readSession(req) {
     const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
     if (!data?.exp || Date.now() > Number(data.exp)) return null;
     const user = findUserByEmail(data.e);
-    if (!user) return null;
+    if (!user || String(user.deleted_at || "").trim()) return null;
     return { email: user.email, userId: Number(user.id), role: user.role || "member", plan: user.plan || "free" };
   } catch {
     return null;
