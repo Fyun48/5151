@@ -11,7 +11,7 @@ test("591 crawl source is on, self listings are on, extra portals are off until 
   assert.equal(items.find((row) => row.id === "houseprice")?.stub, false);
   assert.equal(items.find((row) => row.id === "ddroom")?.stub, false);
   assert.equal(items.find((row) => row.id === "rakuya")?.stub, true);
-  assert.equal(items.find((row) => row.id === "housefun")?.stub, true);
+  assert.equal(items.find((row) => row.id === "housefun")?.stub, false);
   assert.equal(crawlSourceEnabled(items, "rakuya"), false);
   assert.equal(crawlSourceEnabled(items, "self"), true);
   assert.equal(items.find((row) => row.id === "self")?.stub, false);

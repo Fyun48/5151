@@ -46,6 +46,7 @@ export function selfSourceLabel(source) {
   if (id === "sinyi") return "信義";
   if (id === "houseprice") return "5168";
   if (id === "ddroom") return "租租通";
+  if (id === "housefun") return "好房";
   if (id === "591") return "591";
   return id;
 }

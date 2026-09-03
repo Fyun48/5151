@@ -1,4 +1,4 @@
-/** 爬蟲來源開關。591 與站內自行刊登預設開；住商／信義／5168／租租通預設關。樂屋（Cloudflare）與好房網列表 API 仍是 stub。 */
+/** 爬蟲來源開關。591 與站內自行刊登預設開；住商／信義／5168／租租通／好房網預設關。樂屋（Cloudflare）仍是 stub。 */
 
 export const CRAWL_SOURCE_CATALOG = [
   { id: "591", label: "591 租屋", stub: false },
@@ -7,7 +7,7 @@ export const CRAWL_SOURCE_CATALOG = [
   { id: "houseprice", label: "5168 租屋", stub: false },
   { id: "ddroom", label: "租租通", stub: false },
   { id: "rakuya", label: "樂屋網", stub: true },
-  { id: "housefun", label: "好房網", stub: true },
+  { id: "housefun", label: "好房網", stub: false },
   { id: "self", label: "自行刊登", stub: false },
 ];
 
