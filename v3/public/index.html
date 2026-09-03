@@ -271,7 +271,8 @@
     html.no-session #meLogoutBtn,
     html.no-session #mePasswordBtn,
     html.no-session #meDeleteBtn,
-    html.no-session #meWatchBtn { display: none !important; }
+    html.no-session #meWatchBtn,
+    html.no-session #helpQaBtn { display: none !important; }
     html.has-session #loginBtn,
     html.has-session #registerBtn { display: none !important; }
     html.has-session .who.is-guest { visibility: hidden; }
@@ -285,6 +286,8 @@
     body.role-guest #mePasswordBtn,
     body.role-guest #meDeleteBtn,
     body.role-guest #meWatchBtn,
+    body.role-guest #helpQaBtn,
+    body.role-guest #helpQaDialog,
     body.role-guest #sponsorBar { display: none !important; }
     body.role-guest .panel input,
     body.role-guest .panel textarea,
@@ -2192,13 +2195,16 @@
       if ($("changePasswordBtn")) $("changePasswordBtn").hidden = isGuest;
       if ($("deleteAccountBtn")) $("deleteAccountBtn").hidden = isGuest;
       if ($("watchBtn")) $("watchBtn").hidden = isGuest;
+      if ($("helpQaBtn")) $("helpQaBtn").hidden = isGuest;
       if ($("who")) $("who").classList.toggle("is-guest", isGuest);
       if (isGuest) {
         $("who").textContent = "訪客";
         paintSponsorOffer({ show: false });
+        closeHelpQaDialog();
       } else {
         hideGuestToast();
         guestLockClicks = 0;
+        loadHelpQa();
       }
     }
 
@@ -3828,7 +3834,7 @@
     }
     function openHelpQaDialog() {
       const box = $("helpQaDialog");
-      if (!box) return;
+      if (!box || isGuest) return;
       box.hidden = false;
       if (!helpQaItems.length) loadHelpQa();
     }
@@ -3839,7 +3845,7 @@
     $("helpQaBtn")?.addEventListener("click", openHelpQaDialog);
     $("helpQaClose")?.addEventListener("click", closeHelpQaDialog);
     document.querySelector("[data-close-help-qa]")?.addEventListener("click", closeHelpQaDialog);
-    loadHelpQa();
+    if (!document.body.classList.contains("role-guest")) loadHelpQa();
     $("deleteAccountBtn")?.addEventListener("click", openDeleteAccountDialog);
     $("deleteAccountClose")?.addEventListener("click", closeDeleteAccountDialog);
     document.querySelector("[data-close-delete-account]")?.addEventListener("click", closeDeleteAccountDialog);

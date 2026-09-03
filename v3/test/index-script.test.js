@@ -263,6 +263,7 @@ test("MRT toggle and guest tour are in the page", () => {
   const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
   assert.match(html, /id="showMrt"/);
   assert.match(html, /id="helpQaBtn"/);
+  assert.match(html, /html\.no-session #helpQaBtn/);
   assert.match(html, /顯示最近捷運站步行距離/);
   assert.match(html, /function mrtText/);
   assert.match(html, /步行約 \$\{esc\(walkKm\)\} 公里/);

@@ -53,6 +53,9 @@ test("index puts Q&A beside the account name", () => {
   assert.match(html, /who-cluster/);
   assert.match(html, /\/api\/help-qa/);
   assert.match(html, /功能說明 Q&amp;A/);
+  assert.match(html, /html\.no-session #helpQaBtn/);
+  assert.match(html, /body\.role-guest #helpQaBtn/);
+  assert.match(html, /helpQaBtn"\)\.hidden = isGuest/);
 });
 
 test("admin page can add and save Q&A items", () => {
