@@ -168,6 +168,17 @@
       </div>
     </section>
     <section class="card">
+      <h2>功能說明 Q&amp;A</h2>
+      <p class="hint">顯示在追蹤頁帳號名稱同一排。專門說明功能表上看得到與看不到的限制，例如為什麼有的物件有捷運站、有的沒有（看的是可步行路線，不是直線距離）。可改現有題目，也可新增。</p>
+      <div id="helpQaRows"></div>
+      <div class="row" style="margin-top:10px">
+        <button type="button" class="ghost" id="helpQaAdd">新增一則</button>
+        <button type="button" class="ghost" id="helpQaReset">還原預設</button>
+        <button type="button" class="primary" id="helpQaSave">儲存 Q&amp;A</button>
+      </div>
+      <p class="msg" id="helpQaMsg"></p>
+    </section>
+    <section class="card">
       <h2>通勤路線／Google 計費</h2>
       <p class="hint">通勤<strong>公里數走免費 OpenStreetMap（OSRM）</strong>。列表與通知目前<strong>只顯示公里</strong>，不上／下班分鐘（OSRM 沒有尖峰路況）。以後若再開 Google Directions，再把分鐘加回畫面。同一組物件座標對同一個公司地址只會查一次。沒有金鑰、沒勾選下面「使用 Google Directions」就不會產生新費用。</p>
       <form id="mapsForm">
@@ -461,6 +472,42 @@
       $("mapsOfficial").textContent = officialMapsWorksheet(usage);
       $("mapsLifetime").textContent = `累計紀錄 ${usage.lifetimeEssentials || 0} 次 Directions、${usage.lifetimeAdvanced || 0} 次 Advanced；各月官方價目加總約 ${usd(usage.lifetimeUsd)}。實際請款以 Cloud 帳單為準。`;
       setMsg("mapsMsg", data.warning || "", true);
+    }
+
+    function helpQaRowHtml(row = {}, index = 0) {
+      return `
+        <div class="qa-edit" data-qa-row>
+          <label>問題 ${index + 1}</label>
+          <input data-qa-q value="${escapeHtml(row.question || "")}" maxlength="200" />
+          <label>回答</label>
+          <textarea data-qa-a style="min-height:90px">${escapeHtml(row.answer || "")}</textarea>
+          <input type="hidden" data-qa-id value="${escapeHtml(row.id || "")}" />
+          <div class="row" style="margin:8px 0 16px">
+            <button type="button" class="ghost" data-qa-del>刪除此則</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderHelpQaEditor(items) {
+      const list = Array.isArray(items) && items.length ? items : [{ question: "", answer: "", id: "" }];
+      $("helpQaRows").innerHTML = list.map((row, index) => helpQaRowHtml(row, index)).join("");
+    }
+
+    function collectHelpQa() {
+      return [...document.querySelectorAll("[data-qa-row]")].map((row) => ({
+        id: row.querySelector("[data-qa-id]")?.value || "",
+        question: row.querySelector("[data-qa-q]")?.value || "",
+        answer: row.querySelector("[data-qa-a]")?.value || "",
+      }));
+    }
+
+    async function loadHelpQa() {
+      const res = await fetch("/api/admin/help-qa", { cache: "no-store" });
+      const data = await readApi(res);
+      if (!res.ok) throw new Error(data.error || "載入 Q&A 失敗");
+      renderHelpQaEditor(data.items || []);
+      setMsg("helpQaMsg", `共 ${ (data.items || []).length } 則`, true);
     }
 
     async function loadMaps() {
@@ -783,7 +830,55 @@
       if (me.role !== "admin") { location.replace("/"); return; }
       meEmail = me.email || "";
       $("who").textContent = meEmail;
-      await Promise.all([loadMembers(), loadMail(), loadSponsor(), loadMaps()]);
+      await Promise.all([loadMembers(), loadMail(), loadSponsor(), loadMaps(), loadHelpQa()]);
+      $("helpQaAdd").onclick = () => {
+        renderHelpQaEditor([...collectHelpQa(), { question: "", answer: "", id: "" }]);
+      };
+      $("helpQaRows").addEventListener("click", (ev) => {
+        const btn = ev.target.closest("[data-qa-del]");
+        if (!btn) return;
+        btn.closest("[data-qa-row]")?.remove();
+        if (!$("helpQaRows").children.length) renderHelpQaEditor([{ question: "", answer: "", id: "" }]);
+      });
+      $("helpQaSave").onclick = async () => {
+        $("helpQaSave").disabled = true;
+        setMsg("helpQaMsg", "儲存中…");
+        try {
+          const res = await fetch("/api/admin/help-qa", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ items: collectHelpQa() }),
+          });
+          const data = await readApi(res);
+          if (!res.ok) throw new Error(data.error || "儲存失敗");
+          renderHelpQaEditor(data.items || []);
+          setMsg("helpQaMsg", "Q&A 已儲存", true);
+        } catch (error) {
+          setMsg("helpQaMsg", error.message);
+        } finally {
+          $("helpQaSave").disabled = false;
+        }
+      };
+      $("helpQaReset").onclick = async () => {
+        if (!confirm("還原成系統預設的功能說明？你改過的題目會被蓋掉。")) return;
+        $("helpQaReset").disabled = true;
+        setMsg("helpQaMsg", "還原中…");
+        try {
+          const res = await fetch("/api/admin/help-qa", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reset: true }),
+          });
+          const data = await readApi(res);
+          if (!res.ok) throw new Error(data.error || "還原失敗");
+          renderHelpQaEditor(data.items || []);
+          setMsg("helpQaMsg", "已還原預設", true);
+        } catch (error) {
+          setMsg("helpQaMsg", error.message);
+        } finally {
+          $("helpQaReset").disabled = false;
+        }
+      };
       async function saveMaps(extra = {}) {
         $("mapsSave").disabled = true;
         $("mapsClearKey").disabled = true;

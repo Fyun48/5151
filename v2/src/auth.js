@@ -152,6 +152,7 @@ export function publicPath(req) {
     p === "/api/health" ||
     p === "/api/demo" ||
     p === "/api/disclaimer" ||
+    p === "/api/help-qa" ||
     p === "/api/captcha" ||
     p.startsWith("/vendor/") ||
     p.startsWith("/go/")
