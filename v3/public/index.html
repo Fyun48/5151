@@ -740,6 +740,7 @@
     .tag.verdict-yes { background: #334155; color: #f8fafc; font-weight: 700; }
     .tag.verdict-no { background: #dcfce7; color: #166534; font-weight: 700; }
     .tag.self-src { background: var(--accent-mist); color: var(--accent-deep); font-weight: 700; }
+    .tag.ext-src { background: #e8f1ff; color: #1d4f91; font-weight: 700; }
     .self-mine-card {
       margin: 8px 0 0;
       padding: 12px 14px;
@@ -1821,7 +1822,7 @@
       </form>
     </div>
   </div>
-  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver">ver. 3.11</span></footer>
+  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver">ver. 3.12</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -1993,7 +1994,7 @@
       }
       if (isGuest || !commuteOn()) return "";
       const src = String(item.geo_source || "");
-      const hasPin = Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lng)) && (src === "591" || src === "community");
+      const hasPin = Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lng)) && trustedPinSource(src);
       return hasPin ? ` · ${esc(label)}路線計算中` : " · 尚未取得地圖座標";
     }
 
@@ -2012,7 +2013,7 @@
       }
       if (item.mrt_station == null) return "";
       const src = String(item.geo_source || "");
-      const hasPin = Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lng)) && (src === "591" || src === "community");
+      const hasPin = Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lng)) && trustedPinSource(src);
       return hasPin ? "捷運步行距離計算中" : "";
     }
 
@@ -2060,25 +2061,44 @@
       }
     }
 
-    /** 已登入經 /go/:id 標記已瀏覽；站內刊登留在本站。訪客直接開 591，不寫入任何人的已瀏覽。 */
+    /** 已登入經 /go/:id 標記已瀏覽；站內刊登留在本站；其他來源導向該站。訪客不寫入已瀏覽。 */
     function listingById(id) {
       return (listCache || []).find((row) => String(row.post_id) === String(id)) || null;
     }
+    function listingSource(item) {
+      const row = item && typeof item === "object" ? item : listingById(item);
+      return String(row?.source || "591") || "591";
+    }
     function isSelfSource(item) {
-      if (item && typeof item === "object") return String(item.source || "") === "self";
-      const found = listingById(item);
-      return Boolean(found && String(found.source || "") === "self");
+      return listingSource(item) === "self";
+    }
+    function is591Source(item) {
+      const source = listingSource(item);
+      return source === "591" || source === "";
+    }
+    function trustedPinSource(src) {
+      return src === "591" || src === "community" || src === "hbhousing";
     }
     function listingUrl(item) {
       const row = item && typeof item === "object" ? item : listingById(item);
       if (isSelfSource(row)) return `#self-${row.post_id}`;
       const id = row?.post_id || item;
-      if (isGuest) return `https://rent.591.com.tw/${encodeURIComponent(id)}`;
+      if (isGuest) {
+        if (row?.url && !is591Source(row)) return row.url;
+        return `https://rent.591.com.tw/${encodeURIComponent(id)}`;
+      }
       return `/go/${encodeURIComponent(id)}`;
     }
     function listingLinkAttrs(item) {
       if (isSelfSource(item)) return `href="${listingUrl(item)}" data-open="${item.post_id}"`;
       return `href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-open="${item.post_id || item}"`;
+    }
+    function openListingCta(item) {
+      const source = listingSource(item);
+      if (source === "self") return "查看刊登";
+      if (source === "hbhousing") return "打開住商";
+      if (!is591Source(item)) return "打開原站";
+      return "打開 591";
     }
 
     function formatListingWhen(item) {
@@ -2945,6 +2965,8 @@
     function tags(item) {
       const bits = [];
       if (item.source === "self") bits.push('<span class="tag self-src">站內刊登</span>');
+      else if (item.source === "hbhousing") bits.push('<span class="tag ext-src">住商</span>');
+      else if (item.source && item.source !== "591") bits.push(`<span class="tag ext-src">${esc(item.source_label || item.source)}</span>`);
       if (item.last_event === "new") bits.push('<span class="tag new">全新物件</span>');
       if (item.last_event === "same_source" && !item.match_level) bits.push('<span class="tag same">同屋源更新</span>');
       if (item.match_verdict === "yes") bits.push('<span class="tag verdict-yes">已確認：同一間</span>');
@@ -2979,7 +3001,11 @@
       if (item.line_url) {
         bits.push(`<a href="${esc(item.line_url)}" target="_blank" rel="noopener noreferrer" title="加入 LINE"><img class="line-qr" src="${lineQr(item.line_url)}" alt="LINE QR" /></a>`);
       }
-      if (!bits.length) bits.push(item.source === "self" ? `<div class="agency">未留聯絡方式</div>` : `<div class="agency">聯絡資料抓取中</div>`);
+      if (!bits.length) {
+        if (item.source === "self") bits.push(`<div class="agency">未留聯絡方式</div>`);
+        else if (item.source === "hbhousing") bits.push(`<div class="agency">聯絡請打開住商頁面</div>`);
+        else bits.push(`<div class="agency">聯絡資料抓取中</div>`);
+      }
       return `<div class="contact">${bits.join("")}</div>`;
     }
 
@@ -4652,7 +4678,7 @@
           ${dockChangeHtml(item)}
           <div class="row" style="margin-top:8px">
             <button type="button" class="ghost" data-dock-read="${esc(dockItemKey(item))}">已讀</button>
-            <a class="primary" href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-dock-open="${item.post_id}" style="display:inline-flex;align-items:center;text-decoration:none">打開 591</a>
+            <a class="primary" href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-dock-open="${item.post_id}" style="display:inline-flex;align-items:center;text-decoration:none">${esc(openListingCta(item))}</a>
             <button type="button" class="ghost" data-dock-hide="${item.post_id}">不再顯示</button>
           </div>
         </div>

@@ -109,6 +109,7 @@ function sampleInput(extra = {}) {
 test("self listing ids stay above the reserved range and require login", () => {
   assert.equal(isSelfListingId(15801234), false);
   assert.equal(isSelfListingId(SELF_POST_ID_BASE + 1), true);
+  assert.equal(isSelfListingId(2_200_000_000), false);
   assert.match(SELF_LEGAL, /不是仲介/);
   assert.match(selfListingMeta().legal, /不經手金錢/);
   const db = open();
@@ -203,7 +204,7 @@ test("index, server and admin expose self listing surfaces", () => {
   assert.match(html, /item\.source === "self"/);
   assert.match(html, /id="selfListingOverlay"/);
   assert.match(server, /app\.post\("\/api\/self-listings"/);
-  assert.match(server, /isSelfListingId\(id\)/);
+  assert.match(server, /listingRedirectTarget/);
   assert.match(admin, /站內自行刊登/);
   assert.match(admin, /模型分數欄位已預留/);
 });

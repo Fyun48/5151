@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  listingRedirectTarget,
   publicBaseUrl,
   rent591Url,
   trackedListingPath,
@@ -48,4 +49,16 @@ test("trackedListingUrl falls back to 591 when base unset", () => {
     if (prevApp === undefined) delete process.env.APP_URL;
     else process.env.APP_URL = prevApp;
   }
+});
+
+test("listingRedirectTarget keeps self on-site and 住商 on stored url", () => {
+  assert.equal(listingRedirectTarget({ source: "self" }, 2100000001), "/?self=2100000001");
+  assert.equal(
+    listingRedirectTarget({
+      source: "hbhousing",
+      url: "https://www.hbhousing.com.tw/detail?sn=ZR204342",
+    }, 2200000001),
+    "https://www.hbhousing.com.tw/detail?sn=ZR204342",
+  );
+  assert.equal(listingRedirectTarget(null, 15801234), "https://rent.591.com.tw/15801234");
 });

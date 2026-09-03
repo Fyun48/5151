@@ -1,3 +1,14 @@
+import { isSelfListingId } from "./selfListings.js";
+
+export function listingRedirectTarget(listing, postId) {
+  const id = Number(postId) || Number(listing?.post_id) || 0;
+  const source = String(listing?.source || "591");
+  if (source === "self" || isSelfListingId(id)) return `/?self=${id}`;
+  const url = String(listing?.url || "").trim();
+  if (url && source !== "591" && /^https?:\/\//i.test(url)) return url;
+  return rent591Url(id);
+}
+
 export function publicBaseUrl() {
   return String(process.env.PUBLIC_BASE_URL || process.env.APP_URL || "")
     .trim()

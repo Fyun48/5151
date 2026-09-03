@@ -41,6 +41,7 @@ import {
 } from "./db.js";
 import { replaceCrawlCovers, touchCrawlCoversRun } from "./crawlCovers.js";
 import { fetchCommunityLocation, fetchListingDetail, fetchListings, isListingGoneError, LIST_PAGE_SIZE, mergeFeeRows, probeListingAlive } from "./client591.js";
+import { fetchHbCoveringListings } from "./hbhousing.js";
 import { commuteWorkJobs, hasWorkPoint, needsListingGeo, normalizeCommuteMode } from "./geo.js";
 import { isTrustedGeoSource, listingCommunityId } from "./location.js";
 import { decideNotifyDelivery } from "./floors.js";
@@ -170,6 +171,9 @@ async function applyCommunityPin(listing, community) {
 export async function ingestListingGeo(postId) {
   let listing = getListing(postId);
   if (!listing) return { located: false };
+  if (String(listing.source || "591") !== "591") {
+    return { located: listingHasTrustedPin(listing) };
+  }
   if (listingHasTrustedPin(listing) && listing.geo_source === "community") {
     return { located: true };
   }
@@ -382,25 +386,28 @@ async function sweepOfflineListings(seenIds, { limit = 20 } = {}) {
 }
 
 export async function runWatch(options = {}) {
-  if (!isCrawlSourceEnabled("591")) {
+  const want591 = isCrawlSourceEnabled("591");
+  const wantHb = isCrawlSourceEnabled("hbhousing");
+  if (!want591 && !wantHb) {
     return {
       checked_at: nowIso(),
       searches: [],
       events: [],
-      skipped: "591",
-      message: "591 來源已在後台關閉，這次沒有抓取",
+      skipped: "sources",
+      message: "591 與住商來源都已在後台關閉，這次沒有抓取",
     };
   }
   const settings = getSettings();
   const jobs = coveringJobsFromAllUsers();
   if (!jobs.length) {
-    throw new Error("請先貼上至少一組 591 搜尋網址");
+    throw new Error("請先選行政區或貼上至少一組 591 搜尋網址");
   }
   replaceCrawlCovers(db, jobs);
 
   const isBaseline = settings.hasBaseline !== true && listingCount() === 0;
   const requested = Number(settings.pagesPerWatch);
   const pages = Math.min(40, requested > 5 ? requested : 40);
+  const hbPages = Math.min(8, requested > 5 ? requested : 8);
   const collected = [];
   const errors = [];
   const fetchOptions = {
@@ -414,20 +421,50 @@ export async function runWatch(options = {}) {
     workLng: settings.workLng,
   };
 
-  for (const job of jobs) {
+  if (want591) {
+    for (const job of jobs) {
+      try {
+        const result = await fetchListings(job.searchUrl, pages, fetchOptions);
+        collected.push(result);
+        if (result.total > 0 && result.listings.length === 0) {
+          errors.push(`${result.parsed.label}：591 有 ${result.total} 筆，但都被目前篩選排除了`);
+        }
+      } catch (error) {
+        errors.push(`${job.searchUrl} → ${error.message}`);
+      }
+    }
+  }
+
+  if (wantHb) {
     try {
-      const result = await fetchListings(job.searchUrl, pages, fetchOptions);
-      collected.push(result);
-      if (result.total > 0 && result.listings.length === 0) {
-        errors.push(`${result.parsed.label}：591 有 ${result.total} 筆，但都被目前篩選排除了`);
+      const batches = await fetchHbCoveringListings(jobs, {
+        ...fetchOptions,
+        pages: hbPages,
+        postJson: options.hbPostJson,
+      });
+      for (const batch of batches) {
+        collected.push(batch);
+        if (batch.total > 0 && batch.listings.length === 0) {
+          errors.push(`${batch.parsed.label}：住商有資料，但都被目前篩選排除了`);
+        }
       }
     } catch (error) {
-      errors.push(`${job.searchUrl} → ${error.message}`);
+      errors.push(`住商 → ${error.message}`);
     }
   }
 
   if (!collected.length) {
-    throw new Error(errors.join("；") || "591 搜尋沒有回傳資料");
+    if (want591) {
+      throw new Error(errors.join("；") || "591 搜尋沒有回傳資料");
+    }
+    return {
+      checked_at: nowIso(),
+      searches: [],
+      events: [],
+      errors,
+      skipped: "hbhousing",
+      message: errors.join("；") || "住商這次沒抓到資料（可能被擋或暫時失敗）",
+    };
   }
 
   const seen = new Set();

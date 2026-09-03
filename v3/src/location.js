@@ -102,8 +102,14 @@ export function listingCommunityId(listing) {
   return parseCommunityIdFromSourceKey(listing?.source_key);
 }
 
+export const TRUSTED_GEO_SOURCES = ["591", "community", "hbhousing"];
+
 export function isTrustedGeoSource(source) {
-  return source === "591" || source === "community";
+  return TRUSTED_GEO_SOURCES.includes(String(source || ""));
+}
+
+export function sqlTrustedGeoSource() {
+  return `IFNULL(geo_source, '') IN (${TRUSTED_GEO_SOURCES.map((id) => `'${id}'`).join(", ")})`;
 }
 
 export function preferCommunityLocation(listingLoc = {}, communityLoc = null) {
