@@ -105,6 +105,16 @@ test("page defaults to 全部 + 最新", () => {
   assert.match(html, /class="chip on" data-sort="newest"/);
   assert.match(html, /let sort = "newest"/);
   assert.doesNotMatch(html, /class="chip on" data-sort="price_asc"/);
+  assert.match(html, /class="chip-row"/);
+  assert.match(html, /class="list-search"/);
+  assert.match(html, /class="item-title"/);
+  assert.match(html, /viewport-fit=cover/);
+  assert.doesNotMatch(html, /width:1px;height:22px/);
+  assert.match(html, />更多條件</);
+  assert.match(html, /FILTER_COMPACT_KEY\) !== "0"/);
+  assert.match(html, /filter-compact \.chip-row/);
+  assert.match(html, /filter-compact \.filter-body \{\s*display: block;/);
+  assert.match(html, /max-width: 880px[\s\S]*#expandPanelBtn \{ display: none; /);
 });
 
 test("non-admin members do not see the shared reset link after boot", () => {
@@ -250,13 +260,13 @@ test("product name is 吉比租房物件追蹤 without v2 開發版 copy", () =>
   assert.equal(html.includes("v2 開發版"), false);
   assert.equal(html.includes("v3 開發版"), false);
   assert.equal(html.includes("與線上版分開的資料庫"), false);
-  assert.match(html, /ver\. 3\.11/);
+  assert.match(html, /ver\. 3\.12/);
   assert.doesNotMatch(html, /<h1>[^<]*v3/i);
   assert.match(login, /<h1>吉比租房物件追蹤<\/h1>/);
   assert.equal(login.includes("v2 開發版"), false);
   assert.equal(login.includes("v3 開發版"), false);
   assert.equal(login.includes("資料與線上版分開"), false);
-  assert.match(login, /ver\. 3\.11/);
+  assert.match(login, /ver\. 3\.12/);
 });
 
 test("MRT toggle and guest tour are in the page", () => {
@@ -414,6 +424,8 @@ test("panel toggle sits above scroll-top and uses expand/collapse glyphs", () =>
   assert.ok(expandIdx > 0 && topIdx > expandIdx);
   assert.match(html, /bottom:\s*80px/);
   assert.match(html, /#scrollTopBtn \{[\s\S]*bottom:\s*24px/);
+  assert.match(html, /#scrollTopBtn\.on/);
+  assert.match(html, /function syncScrollTopBtn/);
   assert.match(html, /icon\.textContent = collapsed \? "<|>" : ">|<"/);
   assert.match(html, /id="deleteAccountBtn"/);
   assert.match(html, /\/api\/account\/delete/);
