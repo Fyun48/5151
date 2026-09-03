@@ -17,6 +17,11 @@ test("Cursor UI routing rules and ui-ux-pro-max skill are in the repo", () => {
   }
   const skill = readFileSync(path.join(root, ".cursor/skills/ui-ux-pro-max/SKILL.md"), "utf8");
   assert.match(skill, /^name:\s*ui-ux-pro-max/m);
+  assert.equal(
+    existsSync(path.join(root, ".cursor/skills/ui-ux-pro-max/data/ux-guidelines.csv")),
+    true,
+    "ui-ux-pro-max CSV data must not be ignored by gitignore data/",
+  );
   const routing = readFileSync(path.join(root, ".cursor/rules/agent-routing.mdc"), "utf8");
   assert.match(routing, /alwaysApply:\s*true/);
   assert.match(routing, /Playwright/);
