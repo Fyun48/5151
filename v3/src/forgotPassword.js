@@ -16,10 +16,11 @@ export function tempPasswordEmail({ tempPassword, email } = {}) {
 
 export async function requestTempPassword(conn, email, opts = {}) {
   const {
+    smtp,
     now = Date.now(),
     cooldownMs = COOLDOWN_MS,
     attempts = recent,
-    configured = mailConfigured,
+    configured,
     send = sendMail,
     findUser = (key) => findUserByEmail(conn, key),
     setPassword = (id, pass) => setUserPassword(conn, id, pass),
@@ -29,6 +30,7 @@ export async function requestTempPassword(conn, email, opts = {}) {
     makePassword = generateTempPassword,
     compose = tempPasswordEmail,
   } = opts;
+  const mailReady = typeof configured === "function" ? configured : () => mailConfigured(smtp);
 
   const key = validateEmail(email);
   if (!key) {
@@ -36,8 +38,8 @@ export async function requestTempPassword(conn, email, opts = {}) {
     err.status = 400;
     throw err;
   }
-  if (!configured()) {
-    const err = new Error("尚未設定寄信，請聯絡管理員在伺服器 auth.env 寫入 SMTP 設定");
+  if (!mailReady()) {
+    const err = new Error("尚未設定寄信，請聯絡管理員到後台填 SMTP，或在伺服器 auth.env 寫入 SMTP 設定");
     err.status = 503;
     throw err;
   }
@@ -66,6 +68,7 @@ export async function requestTempPassword(conn, email, opts = {}) {
       to: user.email || key,
       subject: mail.subject,
       text: mail.text,
+      smtp,
     });
   } catch (error) {
     try {

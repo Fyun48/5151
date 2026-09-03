@@ -40,7 +40,7 @@ export function smtpConfigFrom(override) {
 }
 
 export function mailConfigured(override) {
-  const cfg = override && typeof override === "object" ? smtpConfigFrom(override) : smtpConfig();
+  const cfg = smtpConfigFrom(override);
   return Boolean(cfg.host && cfg.from);
 }
 
@@ -313,7 +313,7 @@ export async function sendMail({ to, subject, text, smtp } = {}) {
     const err = new Error(
       usingMember
         ? "請先填完整的 SMTP 主機與寄件 Email"
-        : "尚未設定寄信，請聯絡管理員在伺服器 auth.env 寫入 SMTP 設定",
+        : "尚未設定寄信，請聯絡管理員到後台填 SMTP，或在伺服器 auth.env 寫入 SMTP 設定",
     );
     err.status = 503;
     throw err;

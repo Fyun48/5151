@@ -37,6 +37,7 @@ import {
   getMailTemplates,
   changeUserPassword,
   getAdminMailSettings,
+  getStoredSmtp,
   saveAdminMailSettings,
   getAdminSponsorSettings,
   saveAdminSponsorSettings,
@@ -273,6 +274,7 @@ function queueSystemMail(kind, to, vars = {}) {
     to,
     vars,
     templates: getMailTemplates(),
+    smtp: getStoredSmtp(),
   });
 }
 
@@ -626,9 +628,11 @@ app.post("/api/admin/mail/test", requireAdminApi, async (req, res) => {
     const session = readSession(req);
     const to = String(req.body?.to || session?.email || "").trim();
     if (!to) throw new Error("請先填收件信箱");
-    if (!mailConfigured()) throw Object.assign(new Error("請先儲存 SMTP 設定"), { status: 400 });
+    const smtp = getStoredSmtp();
+    if (!mailConfigured(smtp)) throw Object.assign(new Error("請先儲存 SMTP 設定"), { status: 400 });
     await sendMail({
       to,
+      smtp,
       subject: `${APP_NAME}：測試信`,
       text: `這是後台管理寄出的測試信。若你看得到這封，SMTP 已可用。\n\n——${APP_NAME}\n`,
     });
@@ -1105,7 +1109,7 @@ app.listen(PORT, HOST, () => {
   } else {
     console.log("可從登入頁註冊新會員。若要保留舊的單一管理員，請在 auth.env 設定 AUTH_EMAIL / AUTH_PASSWORD。");
   }
-  if (!mailConfigured()) {
+  if (!mailConfigured(getStoredSmtp())) {
     console.log("系統信（註冊、忘記密碼、變更密碼、贊助）尚未能寄信：請在後台填 SMTP，或在 auth.env 寫入 SMTP_HOST、SMTP_USER、SMTP_PASS、SMTP_FROM。");
   }
   setTimeout(() => {
