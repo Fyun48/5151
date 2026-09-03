@@ -20,6 +20,7 @@ test("default Q&A explains walkable MRT distance not straight-line", () => {
   assert.ok(items.some((row) => row.id === "pwa-ios"));
   assert.ok(items.some((row) => row.id === "self-listings"));
   assert.ok(items.some((row) => row.id === "demand-wall"));
+  assert.ok(items.some((row) => row.id === "extra-portals"));
   assert.ok(items.some((row) => row.id === "not-broker"));
 });
 

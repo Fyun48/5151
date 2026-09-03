@@ -197,7 +197,7 @@
     </section>
     <section class="card">
       <h2>物件來源</h2>
-      <p class="hint">591 爬蟲與站內自行刊登預設開啟。樂屋、信義等其他平台先留開關，打開也不會抓。模型分數欄位已預留，畫面上先不顯示。已抓到或刊登的物件帶 <code>source</code>／<code>source_id</code>。</p>
+      <p class="hint">591 與站內自行刊登預設開啟。住商不動產預設關閉，打開後會用會員行政區抓租屋摘要並連回住商頁面；樂屋、信義仍先留開關，打開也不會抓。模型分數欄位已預留，畫面上先不顯示。已抓到或刊登的物件帶 <code>source</code>／<code>source_id</code>。</p>
       <form id="crawlForm">
         <div id="crawlSourceList"></div>
         <div class="row" style="margin:14px 0 0">
@@ -966,6 +966,6 @@
       setMsg("memberMsg", error.message || "載入失敗");
     });
   </script>
-  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:#94a3b8;font-size:11px">ver. 3.13</span></footer>
+  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:#94a3b8;font-size:11px">ver. 3.14</span></footer>
 </body>
 </html>

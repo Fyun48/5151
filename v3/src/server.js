@@ -66,7 +66,6 @@ import {
   hideSelfListing,
   reportSelfListing,
   selfListingMeta,
-  isSelfListingId,
   saveUserPushSubscription,
   deleteUserPushSubscription,
   publicVapidKey,
@@ -74,7 +73,7 @@ import {
 } from "./db.js";
 import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requireAuth, sessionCookie, verifyLogin } from "./auth.js";
 import { boxFromRoadDescription, geocodeAddress, needsListingGeo, hasWorkPoint } from "./geo.js";
-import { rent591Url } from "./openLink.js";
+import { listingRedirectTarget } from "./openLink.js";
 import { CITIES } from "./regions.js";
 import { DISCLAIMER_TEXT, DISCLAIMER_VERSION } from "./members.js";
 import { mailConfigured, sendMail } from "./mail.js";
@@ -163,11 +162,13 @@ function setSession(req, res, email) {
   res.setHeader("Set-Cookie", cookie);
 }
 
-/** 點通知／Discord 連結：已登入才標記已瀏覽，再導向 591。站內刊登留在本站。訪客只轉址、不寫入。 */
+/** 點通知／Discord 連結：已登入才標記已瀏覽，再導向原站。站內刊登留在本站。訪客只轉址、不寫入。 */
 app.get("/go/:id", (req, res) => {
   const id = Number(req.params.id);
+  let listing = null;
   if (Number.isFinite(id) && id > 0) {
     try {
+      listing = getListing(id);
       const session = readSession(req);
       if (session?.userId && getListing(id, session.userId)) {
         setFlags(id, { viewed: true }, session.userId);
@@ -176,11 +177,7 @@ app.get("/go/:id", (req, res) => {
       console.warn("標記已瀏覽失敗：", error.message);
     }
   }
-  if (isSelfListingId(id)) {
-    res.redirect(302, `/?self=${id}`);
-    return;
-  }
-  res.redirect(302, rent591Url(id));
+  res.redirect(302, listingRedirectTarget(listing, id));
 });
 
 app.use("/vendor", express.static(path.join(__dirname, "../public/vendor"), { maxAge: "7d" }));

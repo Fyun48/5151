@@ -3,6 +3,7 @@ import { coverToListUrl } from "./covering.js";
 import { bestMatch } from "./match.js";
 
 export const SELF_POST_ID_BASE = 2_100_000_000;
+export const SELF_POST_ID_END = 2_200_000_000;
 export const SELF_MAX_OPEN = 3;
 export const SELF_TTL_DAYS = 30;
 export const SELF_NEW_ACCOUNT_WAIT_MS = 24 * 60 * 60 * 1000;
@@ -29,7 +30,8 @@ export const SELF_ROLES = [
 export const SELF_LEGAL = "這是免費找房工具，不是仲介、不保證媒合、不經手金錢。自行刊登是公開物件摘要，沒有即時私訊；聯絡方式會顯示給已登入會員。內容由刊登者負責，平台可隱藏或移除。跨站若判定可能同一間，會標成需確認同屋源，不會自動刪掉。";
 
 export function isSelfListingId(postId) {
-  return Number(postId) >= SELF_POST_ID_BASE;
+  const n = Number(postId);
+  return Number.isFinite(n) && n >= SELF_POST_ID_BASE && n < SELF_POST_ID_END;
 }
 
 export function isSelfListingRow(row) {
@@ -37,7 +39,11 @@ export function isSelfListingRow(row) {
 }
 
 export function selfSourceLabel(source) {
-  return String(source || "591") === "self" ? "站內刊登" : String(source || "591");
+  const id = String(source || "591");
+  if (id === "self") return "站內刊登";
+  if (id === "hbhousing") return "住商";
+  if (id === "591") return "591";
+  return id;
 }
 
 export function selfListingMeta() {
@@ -78,6 +84,10 @@ export function ensureSelfListingSchema(db) {
 
 export function sqlNotSelfSource() {
   return `COALESCE(source, '591') != 'self'`;
+}
+
+export function sql591Source() {
+  return `COALESCE(source, '591') = '591'`;
 }
 
 export function sqlOpenSelfListing(nowIso) {
@@ -169,10 +179,12 @@ function assertCanPublish(db, userId, now = new Date()) {
 
 function nextSelfPostId(db) {
   const row = db.prepare(
-    "SELECT MAX(post_id) AS n FROM listings WHERE post_id >= ?",
-  ).get(SELF_POST_ID_BASE);
+    "SELECT MAX(post_id) AS n FROM listings WHERE post_id >= ? AND post_id < ?",
+  ).get(SELF_POST_ID_BASE, SELF_POST_ID_END);
   const current = Number(row?.n) || SELF_POST_ID_BASE;
-  return Math.max(SELF_POST_ID_BASE, current) + 1;
+  const next = Math.max(SELF_POST_ID_BASE, current) + 1;
+  if (next >= SELF_POST_ID_END) throw httpError("站內刊登編號已滿", 500);
+  return next;
 }
 
 function digitsPhone(value) {

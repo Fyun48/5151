@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { shouldKeepListing, passesAttributeFilters, passesDisplayFilters, listingHasElevator, matchesHousingKind, normalizeListQuery, housingTypeLabel } from "./floors.js";
-import { isTrustedGeoSource, listingCommunityId } from "./location.js";
+import { isTrustedGeoSource, listingCommunityId, sqlTrustedGeoSource } from "./location.js";
 import { makeRouteKey } from "./route.js";
 import {
   bindGoogleDirectionsEnabled,
@@ -54,6 +54,7 @@ import {
   selfListingMeta,
   selfSourceLabel,
   sqlNotSelfSource,
+  sql591Source,
   sqlOpenSelfListing,
   isSelfListingId,
 } from "./selfListings.js";
@@ -1395,11 +1396,11 @@ export function upsertListing(listing) {
       offline_at = NULL,
       offline_confirmed = 0,
       lat = CASE
-        WHEN IFNULL(listings.geo_source, '') IN ('591', 'community') THEN listings.lat
+        WHEN IFNULL(listings.geo_source, '') IN ('591', 'community', 'hbhousing') THEN listings.lat
         ELSE COALESCE(excluded.lat, listings.lat)
       END,
       lng = CASE
-        WHEN IFNULL(listings.geo_source, '') IN ('591', 'community') THEN listings.lng
+        WHEN IFNULL(listings.geo_source, '') IN ('591', 'community', 'hbhousing') THEN listings.lng
         ELSE COALESCE(excluded.lng, listings.lng)
       END,
       community_id = CASE
@@ -1447,6 +1448,16 @@ export function upsertListing(listing) {
       .run(origin, originId, listing.post_id);
   } catch {
     // ignore
+  }
+  const geoSource = String(listing.geo_source || "").trim();
+  if (geoSource) {
+    try {
+      db.prepare(
+        "UPDATE listings SET geo_source = COALESCE(NULLIF(geo_source, ''), ?) WHERE post_id = ?",
+      ).run(geoSource, listing.post_id);
+    } catch {
+      // ignore
+    }
   }
 }
 
@@ -1528,7 +1539,7 @@ export function listingsNeedingFeeDetail(limit = 12) {
     .prepare(
       `SELECT post_id FROM listings
        WHERE IFNULL(hidden, 0) = 0 AND IFNULL(offline, 0) = 0
-         AND ${sqlNotSelfSource()} AND (
+         AND ${sql591Source()} AND (
          IFNULL(contact_fetched, 0) = 0
          OR IFNULL(extra_fees_fetched, 0) = 0
          OR lat IS NULL OR lng IS NULL
@@ -1546,7 +1557,7 @@ export function listingsNeeding591Geo(limit = 20) {
       `SELECT post_id, community_id, source_key, lat, lng, geo_source FROM listings
        WHERE IFNULL(hidden, 0) = 0
          AND IFNULL(offline, 0) = 0
-         AND ${sqlNotSelfSource()}
+         AND ${sql591Source()}
        ORDER BY last_seen_at DESC`,
     )
     .all();
@@ -1658,7 +1669,7 @@ export function listingsNeedingAliveCheck({ excludeIds = [], limit = 20 } = {}) 
     .prepare(
       `SELECT post_id FROM listings
        WHERE IFNULL(hidden, 0) = 0 AND IFNULL(offline, 0) = 0
-         AND ${sqlNotSelfSource()}
+         AND ${sql591Source()}
        ORDER BY CASE WHEN last_checked_at IS NULL THEN 0 ELSE 1 END,
                 IFNULL(last_checked_at, last_seen_at) ASC
        LIMIT 800`,
@@ -1682,7 +1693,7 @@ export function listingsNeedingOfflineRecheck({ limit = 8 } = {}) {
        WHERE IFNULL(hidden, 0) = 0
          AND IFNULL(offline, 0) = 1
          AND IFNULL(offline_confirmed, 0) = 0
-         AND ${sqlNotSelfSource()}
+         AND ${sql591Source()}
        ORDER BY CASE WHEN last_checked_at IS NULL THEN 0 ELSE 1 END,
                 IFNULL(last_checked_at, offline_at) ASC
        LIMIT ?`,
@@ -1937,7 +1948,7 @@ export function listingsNeedingMrt(limit = 20) {
     .prepare(
       `SELECT lat, lng FROM listings
        WHERE lat IS NOT NULL AND lng IS NOT NULL
-         AND IFNULL(geo_source, '') IN ('591', 'community')
+         AND ${sqlTrustedGeoSource()}
          AND IFNULL(hidden, 0) = 0
          AND IFNULL(offline, 0) = 0
        ORDER BY last_seen_at DESC
@@ -2020,7 +2031,7 @@ export function listingsNeedingRoute(limit = 40) {
     .prepare(
       `SELECT post_id, lat, lng FROM listings
        WHERE lat IS NOT NULL AND lng IS NOT NULL
-         AND IFNULL(geo_source, '') IN ('591', 'community')
+         AND ${sqlTrustedGeoSource()}
          AND IFNULL(hidden, 0) = 0
          AND IFNULL(offline, 0) = 0
        ORDER BY last_seen_at DESC
