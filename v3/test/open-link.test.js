@@ -60,5 +60,12 @@ test("listingRedirectTarget keeps self on-site and 住商 on stored url", () => 
     }, 2200000001),
     "https://www.hbhousing.com.tw/detail?sn=ZR204342",
   );
+  assert.equal(
+    listingRedirectTarget({
+      source: "sinyi",
+      url: "https://www.sinyi.com.tw/rent/houseno/C366801",
+    }, 2300000001),
+    "https://www.sinyi.com.tw/rent/houseno/C366801",
+  );
   assert.equal(listingRedirectTarget(null, 15801234), "https://rent.591.com.tw/15801234");
 });

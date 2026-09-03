@@ -43,6 +43,9 @@ export function selfSourceLabel(source) {
   const id = String(source || "591");
   if (id === "self") return "站內刊登";
   if (id === "hbhousing") return "住商";
+  if (id === "sinyi") return "信義";
+  if (id === "houseprice") return "5168";
+  if (id === "ddroom") return "租租通";
   if (id === "591") return "591";
   return id;
 }

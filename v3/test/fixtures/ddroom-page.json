@@ -1,0 +1,368 @@
+{
+  "code": 200,
+  "message": "ok",
+  "data": {
+    "ads": [],
+    "search": {
+      "current_page": 1,
+      "per_page": 20,
+      "total": 71,
+      "last_page": 4,
+      "items": [
+        {
+          "object_id": "rvjwjje2subwa0gk",
+          "category": "house",
+          "themes": [
+            "垃圾代收",
+            "租金補貼"
+          ],
+          "type_space": "studio",
+          "title": "重陽大橋【超值大空間】補助報稅★洗衣機★垃圾代收",
+          "rent": 24999,
+          "floor": 2,
+          "ping": 6,
+          "role": "broker",
+          "point_id": "",
+          "ad_exposure_point_id": null,
+          "ad_exposure_start_at": null,
+          "ad_exposure_end_at": null,
+          "is_point": "N",
+          "is_plan_point": "N",
+          "is_ad_exposure_point": "N",
+          "published_date": "",
+          "expiry_at": 0,
+          "ad_exposure_expiry_at": 0,
+          "unpublish_at": 0,
+          "category_name": "租屋",
+          "type_space_name": "獨立套房",
+          "address": {
+            "city": "臺北市",
+            "area": "士林區",
+            "road": "重慶北路四段",
+            "complete": "臺北市士林區重慶北路四段"
+          },
+          "pattern": {
+            "living_room": 0,
+            "bedroom": 1,
+            "bathroom": 1,
+            "kitchen": 0,
+            "balcony": 0
+          },
+          "covers": [
+            {
+              "object_cover_id": 2235414,
+              "seq": 1,
+              "image": {
+                "md": "https://img2.591.com.tw/house/2026/09/02/178836386860431609.jpg!1000x.jpg",
+                "sm": "https://img2.591.com.tw/house/2026/09/02/178836386860431609.jpg!1000x.jpg",
+                "xs": "https://img2.591.com.tw/house/2026/09/02/178836386860431609.jpg!1000x.jpg"
+              }
+            },
+            {
+              "object_cover_id": 2235415,
+              "seq": 2,
+              "image": {
+                "md": "https://img1.591.com.tw/house/2026/09/02/178836386876077602.jpg!1000x.jpg",
+                "sm": "https://img1.591.com.tw/house/2026/09/02/178836386876077602.jpg!1000x.jpg",
+                "xs": "https://img1.591.com.tw/house/2026/09/02/178836386876077602.jpg!1000x.jpg"
+              }
+            },
+            {
+              "object_cover_id": 2235416,
+              "seq": 3,
+              "image": {
+                "md": "https://img1.591.com.tw/house/2026/09/02/178836386867077703.jpg!1000x.jpg",
+                "sm": "https://img1.591.com.tw/house/2026/09/02/178836386867077703.jpg!1000x.jpg",
+                "xs": "https://img1.591.com.tw/house/2026/09/02/178836386867077703.jpg!1000x.jpg"
+              }
+            },
+            {
+              "object_cover_id": 2235417,
+              "seq": 4,
+              "image": {
+                "md": "https://img2.591.com.tw/house/2026/09/02/178836386872101509.jpg!1000x.jpg",
+                "sm": "https://img2.591.com.tw/house/2026/09/02/178836386872101509.jpg!1000x.jpg",
+                "xs": "https://img2.591.com.tw/house/2026/09/02/178836386872101509.jpg!1000x.jpg"
+              }
+            },
+            {
+              "object_cover_id": 2235418,
+              "seq": 5,
+              "image": {
+                "md": "https://img2.591.com.tw/house/2026/09/02/178836386866797305.jpg!1000x.jpg",
+                "sm": "https://img2.591.com.tw/house/2026/09/02/178836386866797305.jpg!1000x.jpg",
+                "xs": "https://img2.591.com.tw/house/2026/09/02/178836386866797305.jpg!1000x.jpg"
+              }
+            },
+            {
+              "object_cover_id": 2235419,
+              "seq": 6,
+              "image": {
+                "md": "https://img2.591.com.tw/house/2026/09/02/178836386876893900.jpg!1000x.jpg",
+                "sm": "https://img2.591.com.tw/house/2026/09/02/178836386876893900.jpg!1000x.jpg",
+                "xs": "https://img2.591.com.tw/house/2026/09/02/178836386876893900.jpg!1000x.jpg"
+              }
+            }
+          ]
+        },
+        {
+          "object_id": "o85e3vnqpm61g9v4",
+          "category": "house",
+          "themes": [
+            "可無火煮食",
+            "可養貓",
+            "租金補貼",
+            "可報稅",
+            "可入籍",
+            "對外窗",
+            "可養其他寵物"
+          ],
+          "type_space": "studio",
+          "title": "💓大可/士林•社子葫蘆堵套房/可養貓/可租補/獨洗獨曬",
+          "rent": 15000,
+          "floor": 2,
+          "ping": 7,
+          "role": "broker",
+          "point_id": "2024_publish_999",
+          "ad_exposure_point_id": null,
+          "ad_exposure_start_at": null,
+          "ad_exposure_end_at": null,
+          "is_point": "Y",
+          "is_plan_point": "Y",
+          "is_ad_exposure_point": "N",
+          "published_date": "",
+          "expiry_at": 29,
+          "ad_exposure_expiry_at": 0,
+          "unpublish_at": 0,
+          "category_name": "租屋",
+          "type_space_name": "獨立套房",
+          "address": {
+            "city": "臺北市",
+            "area": "士林區",
+            "road": "延平北路五段",
+            "complete": "臺北市士林區延平北路五段"
+          },
+          "pattern": {
+            "living_room": 0,
+            "bedroom": 1,
+            "bathroom": 1,
+            "kitchen": 0,
+            "balcony": 0
+          },
+          "covers": [
+            {
+              "object_cover_id": 2230819,
+              "seq": 1,
+              "image": {
+                "md": "https://static.dd-room.com/images/object/o/8/5/o85e3vnqpm61g9v4/cover/38184593adbc7bbd510e39ac7fbb4d34_766x510.jpg",
+                "sm": "https://static.dd-room.com/images/object/o/8/5/o85e3vnqpm61g9v4/cover/38184593adbc7bbd510e39ac7fbb4d34_383x255.jpg",
+                "xs": "https://static.dd-room.com/images/object/o/8/5/o85e3vnqpm61g9v4/cover/38184593adbc7bbd510e39ac7fbb4d34_166x111.jpg"
+              }
+            },
+            {
+              "object_cover_id": 2230818,
+              "seq": 2,
+              "image": {
+                "md": "https://static.dd-room.com/images/object/o/8/5/o85e3vnqpm61g9v4/cover/a619690c4f6cc6aacec20d7e02fa7ead_766x510.jpg",
+                "sm": "https://static.dd-room.com/images/object/o/8/5/o85e3vnqpm61g9v4/cover/a619690c4f6cc6aacec20d7e02fa7ead_383x255.jpg",
+                "xs": "https://static.dd-room.com/images/object/o/8/5/o85e3vnqpm61g9v4/cover/a619690c4f6cc6aacec20d7e02fa7ead_166x111.jpg"
+              }
+            },
+            {
+              "object_cover_id": 2230820,
+              "seq": 3,
+              "image": {
+                "md": "https://static.dd-room.com/images/object/o/8/5/o85e3vnqpm61g9v4/cover/1f9d77a40264262808313c1916866257_766x510.jpg",
+                "sm": "https://static.dd-room.com/images/object/o/8/5/o85e3vnqpm61g9v4/cover/1f9d77a40264262808313c1916866257_383x255.jpg",
+                "xs": "https://static.dd-room.com/images/object/o/8/5/o85e3vnqpm61g9v4/cover/1f9d77a40264262808313c1916866257_166x111.jpg"
+              }
+            },
+            {
+              "object_cover_id": 2230821,
+              "seq": 4,
+              "image": {
+                "md": "https://static.dd-room.com/images/object/o/8/5/o85e3vnqpm61g9v4/cover/c90f1e6e0e1b04b7a9f25d64068ea420_766x510.jpg",
+                "sm": "https://static.dd-room.com/images/object/o/8/5/o85e3vnqpm61g9v4/cover/c90f1e6e0e1b04b7a9f25d64068ea420_383x255.jpg",
+                "xs": "https://static.dd-room.com/images/object/o/8/5/o85e3vnqpm61g9v4/cover/c90f1e6e0e1b04b7a9f25d64068ea420_166x111.jpg"
+              }
+            },
+            {
+              "object_cover_id": 2230822,
+              "seq": 5,
+              "image": {
+                "md": "https://static.dd-room.com/images/object/o/8/5/o85e3vnqpm61g9v4/cover/4088983f7f499c28a29bc4fa3b3b1254_766x510.jpg",
+                "sm": "https://static.dd-room.com/images/object/o/8/5/o85e3vnqpm61g9v4/cover/4088983f7f499c28a29bc4fa3b3b1254_383x255.jpg",
+                "xs": "https://static.dd-room.com/images/object/o/8/5/o85e3vnqpm61g9v4/cover/4088983f7f499c28a29bc4fa3b3b1254_166x111.jpg"
+              }
+            },
+            {
+              "object_cover_id": 2230823,
+              "seq": 6,
+              "image": {
+                "md": "https://static.dd-room.com/images/object/o/8/5/o85e3vnqpm61g9v4/cover/d864197f87d32e0b8310367ec0163623_766x510.jpg",
+                "sm": "https://static.dd-room.com/images/object/o/8/5/o85e3vnqpm61g9v4/cover/d864197f87d32e0b8310367ec0163623_383x255.jpg",
+                "xs": "https://static.dd-room.com/images/object/o/8/5/o85e3vnqpm61g9v4/cover/d864197f87d32e0b8310367ec0163623_166x111.jpg"
+              }
+            },
+            {
+              "object_cover_id": 2230824,
+              "seq": 7,
+              "image": {
+                "md": "https://static.dd-room.com/images/object/o/8/5/o85e3vnqpm61g9v4/cover/0b4bbcd58769d75936744ad4716b31aa_766x510.jpg",
+                "sm": "https://static.dd-room.com/images/object/o/8/5/o85e3vnqpm61g9v4/cover/0b4bbcd58769d75936744ad4716b31aa_383x255.jpg",
+                "xs": "https://static.dd-room.com/images/object/o/8/5/o85e3vnqpm61g9v4/cover/0b4bbcd58769d75936744ad4716b31aa_166x111.jpg"
+              }
+            },
+            {
+              "object_cover_id": 2230825,
+              "seq": 8,
+              "image": {
+                "md": "https://static.dd-room.com/images/object/o/8/5/o85e3vnqpm61g9v4/cover/7eb030d7f9460ce55d3d84769ee58085_766x510.jpg",
+                "sm": "https://static.dd-room.com/images/object/o/8/5/o85e3vnqpm61g9v4/cover/7eb030d7f9460ce55d3d84769ee58085_383x255.jpg",
+                "xs": "https://static.dd-room.com/images/object/o/8/5/o85e3vnqpm61g9v4/cover/7eb030d7f9460ce55d3d84769ee58085_166x111.jpg"
+              }
+            }
+          ]
+        },
+        {
+          "object_id": "dgdgvumpmdmjxe3x",
+          "category": "house",
+          "themes": [
+            "可無火煮食",
+            "可報稅",
+            "有電梯",
+            "可入籍",
+            "有陽台",
+            "對外窗",
+            "包裹代收",
+            "垃圾代收"
+          ],
+          "type_space": "whole",
+          "title": "🍀可短租/天母國小/陽台套房/有代收包裹/可租補",
+          "rent": 26500,
+          "floor": 7,
+          "ping": 9,
+          "role": "broker",
+          "point_id": "2024_publish_999",
+          "ad_exposure_point_id": null,
+          "ad_exposure_start_at": null,
+          "ad_exposure_end_at": null,
+          "is_point": "Y",
+          "is_plan_point": "Y",
+          "is_ad_exposure_point": "N",
+          "published_date": "",
+          "expiry_at": 29,
+          "ad_exposure_expiry_at": 0,
+          "unpublish_at": 0,
+          "category_name": "租屋",
+          "type_space_name": "整層",
+          "address": {
+            "city": "臺北市",
+            "area": "士林區",
+            "road": "天玉街",
+            "complete": "臺北市士林區天玉街"
+          },
+          "pattern": {
+            "living_room": 0,
+            "bedroom": 1,
+            "bathroom": 1,
+            "kitchen": 0,
+            "balcony": 1
+          },
+          "covers": [
+            {
+              "object_cover_id": 2230785,
+              "seq": 1,
+              "image": {
+                "md": "https://static.dd-room.com/images/object/d/g/d/dgdgvumpmdmjxe3x/cover/84e7daf08f1c79c2a6fddbebbdafd755_766x510.jpg",
+                "sm": "https://static.dd-room.com/images/object/d/g/d/dgdgvumpmdmjxe3x/cover/84e7daf08f1c79c2a6fddbebbdafd755_383x255.jpg",
+                "xs": "https://static.dd-room.com/images/object/d/g/d/dgdgvumpmdmjxe3x/cover/84e7daf08f1c79c2a6fddbebbdafd755_166x111.jpg"
+              }
+            },
+            {
+              "object_cover_id": 2230786,
+              "seq": 2,
+              "image": {
+                "md": "https://static.dd-room.com/images/object/d/g/d/dgdgvumpmdmjxe3x/cover/1277edeffbf7b7bb4891e15baf52f1a4_766x510.jpg",
+                "sm": "https://static.dd-room.com/images/object/d/g/d/dgdgvumpmdmjxe3x/cover/1277edeffbf7b7bb4891e15baf52f1a4_383x255.jpg",
+                "xs": "https://static.dd-room.com/images/object/d/g/d/dgdgvumpmdmjxe3x/cover/1277edeffbf7b7bb4891e15baf52f1a4_166x111.jpg"
+              }
+            },
+            {
+              "object_cover_id": 2230787,
+              "seq": 3,
+              "image": {
+                "md": "https://static.dd-room.com/images/object/d/g/d/dgdgvumpmdmjxe3x/cover/baaa40d82fc3ef005e4e1a21c5c09b48_766x510.jpg",
+                "sm": "https://static.dd-room.com/images/object/d/g/d/dgdgvumpmdmjxe3x/cover/baaa40d82fc3ef005e4e1a21c5c09b48_383x255.jpg",
+                "xs": "https://static.dd-room.com/images/object/d/g/d/dgdgvumpmdmjxe3x/cover/baaa40d82fc3ef005e4e1a21c5c09b48_166x111.jpg"
+              }
+            },
+            {
+              "object_cover_id": 2230788,
+              "seq": 4,
+              "image": {
+                "md": "https://static.dd-room.com/images/object/d/g/d/dgdgvumpmdmjxe3x/cover/6013f6744adec2a16a3f647e63547aab_766x510.jpg",
+                "sm": "https://static.dd-room.com/images/object/d/g/d/dgdgvumpmdmjxe3x/cover/6013f6744adec2a16a3f647e63547aab_383x255.jpg",
+                "xs": "https://static.dd-room.com/images/object/d/g/d/dgdgvumpmdmjxe3x/cover/6013f6744adec2a16a3f647e63547aab_166x111.jpg"
+              }
+            },
+            {
+              "object_cover_id": 2230789,
+              "seq": 5,
+              "image": {
+                "md": "https://static.dd-room.com/images/object/d/g/d/dgdgvumpmdmjxe3x/cover/abc58ec855f6f28985544023e47cbdc0_766x510.jpg",
+                "sm": "https://static.dd-room.com/images/object/d/g/d/dgdgvumpmdmjxe3x/cover/abc58ec855f6f28985544023e47cbdc0_383x255.jpg",
+                "xs": "https://static.dd-room.com/images/object/d/g/d/dgdgvumpmdmjxe3x/cover/abc58ec855f6f28985544023e47cbdc0_166x111.jpg"
+              }
+            },
+            {
+              "object_cover_id": 2230790,
+              "seq": 6,
+              "image": {
+                "md": "https://static.dd-room.com/images/object/d/g/d/dgdgvumpmdmjxe3x/cover/10d2e3fa517a485519fd770f7f30477f_766x510.jpg",
+                "sm": "https://static.dd-room.com/images/object/d/g/d/dgdgvumpmdmjxe3x/cover/10d2e3fa517a485519fd770f7f30477f_383x255.jpg",
+                "xs": "https://static.dd-room.com/images/object/d/g/d/dgdgvumpmdmjxe3x/cover/10d2e3fa517a485519fd770f7f30477f_166x111.jpg"
+              }
+            },
+            {
+              "object_cover_id": 2230791,
+              "seq": 7,
+              "image": {
+                "md": "https://static.dd-room.com/images/object/d/g/d/dgdgvumpmdmjxe3x/cover/cfa4f117149b1660ec7551e51510b49c_766x510.jpg",
+                "sm": "https://static.dd-room.com/images/object/d/g/d/dgdgvumpmdmjxe3x/cover/cfa4f117149b1660ec7551e51510b49c_383x255.jpg",
+                "xs": "https://static.dd-room.com/images/object/d/g/d/dgdgvumpmdmjxe3x/cover/cfa4f117149b1660ec7551e51510b49c_166x111.jpg"
+              }
+            },
+            {
+              "object_cover_id": 2230792,
+              "seq": 8,
+              "image": {
+                "md": "https://static.dd-room.com/images/object/d/g/d/dgdgvumpmdmjxe3x/cover/af68254b054c838aa27e9687c7994cfb_766x510.jpg",
+                "sm": "https://static.dd-room.com/images/object/d/g/d/dgdgvumpmdmjxe3x/cover/af68254b054c838aa27e9687c7994cfb_383x255.jpg",
+                "xs": "https://static.dd-room.com/images/object/d/g/d/dgdgvumpmdmjxe3x/cover/af68254b054c838aa27e9687c7994cfb_166x111.jpg"
+              }
+            },
+            {
+              "object_cover_id": 2230793,
+              "seq": 9,
+              "image": {
+                "md": "https://static.dd-room.com/images/object/d/g/d/dgdgvumpmdmjxe3x/cover/7e9440b81335d9d92e024dcbc668cde0_766x510.jpg",
+                "sm": "https://static.dd-room.com/images/object/d/g/d/dgdgvumpmdmjxe3x/cover/7e9440b81335d9d92e024dcbc668cde0_383x255.jpg",
+                "xs": "https://static.dd-room.com/images/object/d/g/d/dgdgvumpmdmjxe3x/cover/7e9440b81335d9d92e024dcbc668cde0_166x111.jpg"
+              }
+            },
+            {
+              "object_cover_id": 2230794,
+              "seq": 10,
+              "image": {
+                "md": "https://static.dd-room.com/images/object/d/g/d/dgdgvumpmdmjxe3x/cover/88abf78da739e71609755cbdeb5d1fc4_766x510.jpg",
+                "sm": "https://static.dd-room.com/images/object/d/g/d/dgdgvumpmdmjxe3x/cover/88abf78da739e71609755cbdeb5d1fc4_383x255.jpg",
+                "xs": "https://static.dd-room.com/images/object/d/g/d/dgdgvumpmdmjxe3x/cover/88abf78da739e71609755cbdeb5d1fc4_166x111.jpg"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

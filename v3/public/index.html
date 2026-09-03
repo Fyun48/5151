@@ -2033,7 +2033,7 @@
       </form>
     </div>
   </div>
-  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver">ver. 3.15</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver">ver. 3.16</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -2297,7 +2297,7 @@
       return source === "591" || source === "";
     }
     function trustedPinSource(src) {
-      return src === "591" || src === "community" || src === "hbhousing";
+      return src === "591" || src === "community" || src === "hbhousing" || src === "sinyi";
     }
     function listingUrl(item) {
       const row = item && typeof item === "object" ? item : listingById(item);
@@ -2317,6 +2317,9 @@
       const source = listingSource(item);
       if (source === "self") return "查看刊登";
       if (source === "hbhousing") return "打開住商";
+      if (source === "sinyi") return "打開信義";
+      if (source === "houseprice") return "打開5168";
+      if (source === "ddroom") return "打開租租通";
       if (!is591Source(item)) return "打開原站";
       return "打開 591";
     }
@@ -3188,6 +3191,9 @@
       const bits = [];
       if (item.source === "self") bits.push('<span class="tag self-src">站內刊登</span>');
       else if (item.source === "hbhousing") bits.push('<span class="tag ext-src">住商</span>');
+      else if (item.source === "sinyi") bits.push('<span class="tag ext-src">信義</span>');
+      else if (item.source === "houseprice") bits.push('<span class="tag ext-src">5168</span>');
+      else if (item.source === "ddroom") bits.push('<span class="tag ext-src">租租通</span>');
       else if (item.source && item.source !== "591") bits.push(`<span class="tag ext-src">${esc(item.source_label || item.source)}</span>`);
       if (item.last_event === "new") bits.push('<span class="tag new">全新物件</span>');
       if (item.last_event === "same_source" && !item.match_level) bits.push('<span class="tag same">同屋源更新</span>');
@@ -3226,6 +3232,9 @@
       if (!bits.length) {
         if (item.source === "self") bits.push(`<div class="agency">未留聯絡方式</div>`);
         else if (item.source === "hbhousing") bits.push(`<div class="agency">聯絡請打開住商頁面</div>`);
+        else if (item.source === "sinyi") bits.push(`<div class="agency">聯絡請打開信義頁面</div>`);
+        else if (item.source === "houseprice") bits.push(`<div class="agency">聯絡請打開 5168 頁面</div>`);
+        else if (item.source === "ddroom") bits.push(`<div class="agency">聯絡請打開租租通頁面</div>`);
         else bits.push(`<div class="agency">聯絡資料抓取中</div>`);
       }
       return `<div class="contact">${bits.join("")}</div>`;

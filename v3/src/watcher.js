@@ -42,6 +42,9 @@ import {
 import { replaceCrawlCovers, touchCrawlCoversRun } from "./crawlCovers.js";
 import { fetchCommunityLocation, fetchListingDetail, fetchListings, isListingGoneError, LIST_PAGE_SIZE, mergeFeeRows, probeListingAlive } from "./client591.js";
 import { fetchHbCoveringListings } from "./hbhousing.js";
+import { fetchSinyiCoveringListings } from "./sinyi.js";
+import { fetchHpCoveringListings } from "./houseprice.js";
+import { fetchDdCoveringListings } from "./ddroom.js";
 import { commuteWorkJobs, hasWorkPoint, needsListingGeo, normalizeCommuteMode } from "./geo.js";
 import { isTrustedGeoSource, listingCommunityId } from "./location.js";
 import { decideNotifyDelivery } from "./floors.js";
@@ -388,13 +391,16 @@ async function sweepOfflineListings(seenIds, { limit = 20 } = {}) {
 export async function runWatch(options = {}) {
   const want591 = isCrawlSourceEnabled("591");
   const wantHb = isCrawlSourceEnabled("hbhousing");
-  if (!want591 && !wantHb) {
+  const wantSinyi = isCrawlSourceEnabled("sinyi");
+  const wantHp = isCrawlSourceEnabled("houseprice");
+  const wantDd = isCrawlSourceEnabled("ddroom");
+  if (!want591 && !wantHb && !wantSinyi && !wantHp && !wantDd) {
     return {
       checked_at: nowIso(),
       searches: [],
       events: [],
       skipped: "sources",
-      message: "591 與住商來源都已在後台關閉，這次沒有抓取",
+      message: "591 與外站來源都已在後台關閉，這次沒有抓取",
     };
   }
   const settings = getSettings();
@@ -435,22 +441,47 @@ export async function runWatch(options = {}) {
     }
   }
 
-  if (wantHb) {
+  async function collectExternal(label, run) {
     try {
-      const batches = await fetchHbCoveringListings(jobs, {
-        ...fetchOptions,
-        pages: hbPages,
-        postJson: options.hbPostJson,
-      });
+      const batches = await run();
       for (const batch of batches) {
         collected.push(batch);
         if (batch.total > 0 && batch.listings.length === 0) {
-          errors.push(`${batch.parsed.label}：住商有資料，但都被目前篩選排除了`);
+          errors.push(`${batch.parsed.label}：有資料，但都被目前篩選排除了`);
         }
       }
     } catch (error) {
-      errors.push(`住商 → ${error.message}`);
+      errors.push(`${label} → ${error.message}`);
     }
+  }
+
+  if (wantHb) {
+    await collectExternal("住商", () => fetchHbCoveringListings(jobs, {
+      ...fetchOptions,
+      pages: hbPages,
+      postJson: options.hbPostJson,
+    }));
+  }
+  if (wantSinyi) {
+    await collectExternal("信義", () => fetchSinyiCoveringListings(jobs, {
+      ...fetchOptions,
+      pages: hbPages,
+      postForm: options.sinyiPostForm,
+    }));
+  }
+  if (wantHp) {
+    await collectExternal("5168", () => fetchHpCoveringListings(jobs, {
+      ...fetchOptions,
+      pages: hbPages,
+      getHtml: options.hpGetHtml,
+    }));
+  }
+  if (wantDd) {
+    await collectExternal("租租通", () => fetchDdCoveringListings(jobs, {
+      ...fetchOptions,
+      pages: hbPages,
+      getJson: options.ddGetJson,
+    }));
   }
 
   if (!collected.length) {
@@ -462,8 +493,8 @@ export async function runWatch(options = {}) {
       searches: [],
       events: [],
       errors,
-      skipped: "hbhousing",
-      message: errors.join("；") || "住商這次沒抓到資料（可能被擋或暫時失敗）",
+      skipped: "portals",
+      message: errors.join("；") || "外站這次沒抓到資料（可能被擋或暫時失敗）",
     };
   }
 
