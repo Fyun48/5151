@@ -7,12 +7,14 @@ export async function sendAccountMail({
   to,
   vars = {},
   templates,
+  smtp,
   send = sendMail,
-  configured = mailConfigured,
+  configured,
 } = {}) {
   const addr = String(to || "").trim();
   if (!addr) return { sent: false, reason: "no_to" };
-  if (typeof configured === "function" ? !configured() : !configured) {
+  const mailReady = typeof configured === "function" ? configured : () => mailConfigured(smtp);
+  if (!mailReady()) {
     return { sent: false, reason: "not_configured" };
   }
   const mail = composeAccountMail(kind, templates, { email: addr, ...vars });
@@ -23,6 +25,7 @@ export async function sendAccountMail({
     to: addr,
     subject: mail.subject,
     text: mail.text,
+    smtp,
   });
   return { sent: true };
 }
