@@ -911,6 +911,15 @@
       line-height: 1;
       padding: 0;
       box-shadow: 0 8px 22px rgba(13, 165, 160, 0.24);
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(8px);
+      transition: opacity 0.18s ease, transform 0.18s ease;
+    }
+    #scrollTopBtn.on {
+      opacity: 1;
+      pointer-events: auto;
+      transform: none;
     }
     #floatDock { display: none; }
     .wrap { padding-left: 32px; padding-right: 32px; }
@@ -1146,7 +1155,14 @@
         gap: 8px;
         padding: 10px 12px 8px;
       }
-      .filter-head .status { flex: 1; min-width: 0; }
+      .filter-head .status {
+        flex: 1;
+        min-width: 0;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
       #openFilterSheetBtn {
         min-height: 40px;
         padding: 8px 16px;
@@ -1226,6 +1242,7 @@
         overflow: hidden;
       }
       body.role-guest .pick { display: none; }
+      body.role-guest .hide-box { display: none; }
       body.role-guest .item {
         grid-template-columns: 92px minmax(0, 1fr);
       }
@@ -3683,6 +3700,11 @@
     };
 
     $("scrollTopBtn").onclick = () => window.scrollTo({ top: 0, behavior: "smooth" });
+    function syncScrollTopBtn() {
+      $("scrollTopBtn")?.classList.toggle("on", window.scrollY > 280);
+    }
+    window.addEventListener("scroll", syncScrollTopBtn, { passive: true });
+    syncScrollTopBtn();
 
     $("profileSelect").onchange = async () => {
       const id = $("profileSelect").value;

@@ -32,7 +32,7 @@ test("login page can register after accepting the disclaimer", () => {
   assert.match(html, /captchaId/);
   assert.match(html, /換一張/);
   assert.match(html, /grid-template-areas/);
-  assert.match(html, /min-width: 8em/);
+  assert.match(html, /margin: 0 auto/);
   assert.match(html, /min-height: 44px/);
   assert.match(html, /viewport-fit=cover/);
   assert.match(html, /button\.text \{[\s\S]*width: 100%/);

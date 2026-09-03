@@ -424,6 +424,8 @@ test("panel toggle sits above scroll-top and uses expand/collapse glyphs", () =>
   assert.ok(expandIdx > 0 && topIdx > expandIdx);
   assert.match(html, /bottom:\s*80px/);
   assert.match(html, /#scrollTopBtn \{[\s\S]*bottom:\s*24px/);
+  assert.match(html, /#scrollTopBtn\.on/);
+  assert.match(html, /function syncScrollTopBtn/);
   assert.match(html, /icon\.textContent = collapsed \? "<|>" : ">|<"/);
   assert.match(html, /id="deleteAccountBtn"/);
   assert.match(html, /\/api\/account\/delete/);
