@@ -51,7 +51,7 @@ npm run start:v2
 
 規劃見 `v2/ARCHITECTURE.md`。
 
-**目前線上**另有 `v3/`，埠 5153，資料 `data-v3/v3.db`。規劃見 `v3/ARCHITECTURE.md`。
+**目前線上**另有 `v3/`，埠 5153，資料 `data-v3/v3.db`。規劃見 `v3/ARCHITECTURE.md`。**之後新功能只做 v3**；v2 只維護、不再加功能。畫面上的產品名仍是「吉比租房物件追蹤」，頁尾寫 `ver. 3.11`。
 
 公開網址：
 
@@ -84,7 +84,9 @@ docker compose up -d --no-build --no-deps 591-tracker-v2 591-tracker-v3
 
 SQLite 與設定會寫進 `DATA_DIR`（容器內預設 `/data`）。CasaOS 請用 bind mount 到 `/DATA/AppData/591-tracker-v2` 與 `/DATA/AppData/591-tracker-v3`，不要用 Docker 具名 volume，否則 CasaOS 重裝時資料容易不見。v1 的 `/DATA/AppData/591-tracker` 可留著給只讀匯入，但不要再當正式站資料目錄。
 
-Linux 容器沒有 Windows 氣泡通知，請在畫面填 Discord Webhook。
+Linux 容器沒有 Windows 氣泡通知。預設用站內待看視窗與系統推播（PWA）。第一次若要鎖定畫面推播，可在資料目錄的 `auth.env` 放 `VAPID_PUBLIC_KEY`／`VAPID_PRIVATE_KEY`；沒填時容器會自行寫入 `vapid.json`。郵件與 Discord Webhook 仍是選用。
+
+Cloudflare Zero Trust 請為目前版加 Public Hostname：Subdomain `c5151`，Domain `reversalplay.me`，Type `HTTP`，URL `http://127.0.0.1:5153`。
 
 ### 方式一：CasaOS 匯入 Compose（建議，拉 GitHub 映像）
 
