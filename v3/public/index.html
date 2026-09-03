@@ -273,6 +273,8 @@
     html.no-session #meDeleteBtn,
     html.no-session #meWatchBtn,
     html.no-session #helpQaBtn { display: none !important; }
+    body.role-guest #selfListingForm { display: none !important; }
+    body:not(.role-guest) #selfGuestHint { display: none; }
     html.has-session #loginBtn,
     html.has-session #registerBtn { display: none !important; }
     html.has-session .who.is-guest { visibility: hidden; }
@@ -737,6 +739,16 @@
     .tag.off-sure { background: #334155; color: #f8fafc; }
     .tag.verdict-yes { background: #334155; color: #f8fafc; font-weight: 700; }
     .tag.verdict-no { background: #dcfce7; color: #166534; font-weight: 700; }
+    .tag.self-src { background: var(--accent-mist); color: var(--accent-deep); font-weight: 700; }
+    .self-mine-card {
+      margin: 8px 0 0;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fff;
+    }
+    .self-mine-card strong { display: block; margin-bottom: 4px; }
+    .self-mine-card .muted { margin: 2px 0; }
     .match-peer {
       background: var(--rose-soft);
       border: 1px solid #ecd4d4;
@@ -1500,6 +1512,92 @@
         <a class="ghost admin-only" href="/admin.html">後台管理</a>
       </div>
     </div>
+    <div class="card panel" id="selfListingPanel">
+      <h2 style="margin:0 0 8px">自行刊登</h2>
+      <p class="hint" id="selfGuestHint">登入後才能自行刊登（不是仲介、沒有私訊）。</p>
+      <p class="hint" id="selfLegal">這是免費找房工具，不是仲介、不保證媒合、不經手金錢。自行刊登是公開物件摘要，沒有即時私訊。</p>
+      <p class="hint">同時最多 3 則、30 天後失效。新帳號須滿 24 小時。找房列表預設仍只顯示整層住家；聯絡方式會公開給已登入會員。</p>
+      <form id="selfListingForm">
+        <label>行政區</label>
+        <select id="selfDistrict"></select>
+        <div class="price-row">
+          <div>
+            <label>每月租金</label>
+            <input type="number" id="selfRent" min="1000" max="200000" step="500" placeholder="例如 25000" />
+          </div>
+          <div>
+            <label>坪數</label>
+            <input type="number" id="selfPing" min="1" max="500" step="0.5" placeholder="例如 18" />
+          </div>
+        </div>
+        <div class="price-row">
+          <div>
+            <label>類型</label>
+            <select id="selfKind">
+              <option value="whole">整層住家</option>
+              <option value="suite">獨立套房</option>
+              <option value="share">分租套房</option>
+              <option value="room">雅房</option>
+              <option value="other">其他</option>
+            </select>
+          </div>
+          <div>
+            <label>身分</label>
+            <select id="selfRole">
+              <option value="owner">屋主</option>
+              <option value="agent">代理人</option>
+            </select>
+          </div>
+        </div>
+        <div class="price-row">
+          <div>
+            <label>所在樓層</label>
+            <input type="number" id="selfFloor" min="1" max="80" placeholder="例如 3" />
+          </div>
+          <div>
+            <label>總樓層（選填）</label>
+            <input type="number" id="selfTotalFloors" min="1" max="80" placeholder="例如 5" />
+          </div>
+        </div>
+        <div class="price-row">
+          <div>
+            <label>房</label>
+            <input type="number" id="selfRooms" min="0" max="12" value="2" />
+          </div>
+          <div>
+            <label>廳</label>
+            <input type="number" id="selfLiving" min="0" max="8" value="1" />
+          </div>
+        </div>
+        <div class="price-row">
+          <div>
+            <label>衛</label>
+            <input type="number" id="selfBath" min="0" max="8" value="1" />
+          </div>
+          <div>
+            <label>聯絡人稱呼</label>
+            <input id="selfContactName" maxlength="80" placeholder="例如 林先生" />
+          </div>
+        </div>
+        <label>地址</label>
+        <input id="selfAddress" maxlength="120" placeholder="例如 台北市士林區中正路 100 號" />
+        <label>公開電話</label>
+        <input id="selfPhone" maxlength="40" inputmode="tel" placeholder="09xxxxxxxx" />
+        <label>LINE 連結（選填）</label>
+        <input id="selfLine" maxlength="300" placeholder="https://line.me/..." />
+        <label>封面圖片網址（選填，不上傳檔案）</label>
+        <input id="selfCover" maxlength="500" placeholder="https://..." />
+        <label>標題（選填）</label>
+        <input id="selfTitle" maxlength="80" placeholder="空白則自動用行政區與租金" />
+        <label>說明（最多 800 字）</label>
+        <textarea id="selfBody" maxlength="800" placeholder="格局、設備、可入住日。沒有私訊，聯絡請用上面的電話或 LINE。"></textarea>
+        <div class="row" style="margin-top:10px">
+          <button type="submit" class="primary" id="selfSubmit">刊登物件</button>
+          <span class="save-msg" id="selfMsg"></span>
+        </div>
+      </form>
+      <div class="list" id="selfMineList" style="padding-top:12px"></div>
+    </div>
   </section>
   <nav class="bottom-nav" id="bottomNav" aria-label="主要分頁">
     <button type="button" data-nav="listings" aria-current="page">找房</button>
@@ -1507,6 +1605,19 @@
     <button type="button" data-nav="notify">通知</button>
     <button type="button" data-nav="me">我的</button>
   </nav>
+  <div id="selfListingOverlay" class="hub-overlay" hidden>
+    <div class="hub-backdrop" data-close-self></div>
+    <div class="hub-panel" role="dialog" aria-modal="true" aria-labelledby="selfListingTitle">
+      <div class="hub-head">
+        <div>
+          <h2 id="selfListingTitle">站內刊登</h2>
+          <p class="hint" style="margin:6px 0 0">公開聯絡方式，沒有即時私訊。</p>
+        </div>
+        <button type="button" class="ghost" id="selfListingClose">關閉</button>
+      </div>
+      <div id="selfListingDetail"></div>
+    </div>
+  </div>
   <div id="notifyHub" class="hub-overlay" hidden>
     <div class="hub-backdrop" data-close-hub></div>
     <div class="hub-panel" role="dialog" aria-modal="true" aria-labelledby="notifyHubTitle">
@@ -1949,11 +2060,25 @@
       }
     }
 
-    /** 已登入經 /go/:id 標記已瀏覽；訪客直接開 591，不寫入任何人的已瀏覽。 */
+    /** 已登入經 /go/:id 標記已瀏覽；站內刊登留在本站。訪客直接開 591，不寫入任何人的已瀏覽。 */
+    function listingById(id) {
+      return (listCache || []).find((row) => String(row.post_id) === String(id)) || null;
+    }
+    function isSelfSource(item) {
+      if (item && typeof item === "object") return String(item.source || "") === "self";
+      const found = listingById(item);
+      return Boolean(found && String(found.source || "") === "self");
+    }
     function listingUrl(item) {
-      const id = item?.post_id || item;
+      const row = item && typeof item === "object" ? item : listingById(item);
+      if (isSelfSource(row)) return `#self-${row.post_id}`;
+      const id = row?.post_id || item;
       if (isGuest) return `https://rent.591.com.tw/${encodeURIComponent(id)}`;
       return `/go/${encodeURIComponent(id)}`;
+    }
+    function listingLinkAttrs(item) {
+      if (isSelfSource(item)) return `href="${listingUrl(item)}" data-open="${item.post_id}"`;
+      return `href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-open="${item.post_id || item}"`;
     }
 
     function formatListingWhen(item) {
@@ -2819,6 +2944,7 @@
 
     function tags(item) {
       const bits = [];
+      if (item.source === "self") bits.push('<span class="tag self-src">站內刊登</span>');
       if (item.last_event === "new") bits.push('<span class="tag new">全新物件</span>');
       if (item.last_event === "same_source" && !item.match_level) bits.push('<span class="tag same">同屋源更新</span>');
       if (item.match_verdict === "yes") bits.push('<span class="tag verdict-yes">已確認：同一間</span>');
@@ -2853,7 +2979,7 @@
       if (item.line_url) {
         bits.push(`<a href="${esc(item.line_url)}" target="_blank" rel="noopener noreferrer" title="加入 LINE"><img class="line-qr" src="${lineQr(item.line_url)}" alt="LINE QR" /></a>`);
       }
-      if (!bits.length) bits.push(`<div class="agency">聯絡資料抓取中</div>`);
+      if (!bits.length) bits.push(item.source === "self" ? `<div class="agency">未留聯絡方式</div>` : `<div class="agency">聯絡資料抓取中</div>`);
       return `<div class="contact">${bits.join("")}</div>`;
     }
 
@@ -2961,13 +3087,13 @@
         return `
         <article class="item ${on ? "picked" : ""} ${item.offline ? "offline" : ""} ${isAcefengyunAdmin() && isShezidaoAddress(item) ? "shezidao" : ""}" data-card="${id}">
           <input class="pick" type="checkbox" data-pick="${id}" ${on ? "checked" : ""} />
-          <a class="item-cover" href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-open="${id}">
+          <a class="item-cover" ${listingLinkAttrs(item)}>
             <img src="${esc(item.cover || "")}" alt="" />
           </a>
           <div>
             <div class="tags">${tags(item)}</div>
             <h3 style="margin:8px 0 0;font-size:18px">
-              <a href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-open="${id}">${esc(item.title)}</a>
+              <a ${listingLinkAttrs(item)}>${esc(item.title)}</a>
             </h3>
             ${matchPeerBlock(item)}
             ${formatListingWhen(item) ? `<div class="when"><span class="when-label">更新</span>${esc(formatListingWhen(item))}</div>` : ""}
@@ -2977,6 +3103,7 @@
               ${mrtText(item) ? `<div class="mrt-line">${mrtText(item)}</div>` : ""}
               ${item.match_detail ? `<br>比對：${esc(item.match_detail)}${item.match_post_id ? ` · <a href="${listingUrl(item.match_post_id)}" target="_blank" rel="noopener noreferrer">舊刊登 #${item.match_post_id}</a>` : ""}` : ""}
             </div>
+              ${item.self_body ? `<div class="meta">${esc(item.self_body)}</div>` : ""}
             ${(() => {
               const fees = feeLines(item);
               if (!fees.html) return "";
@@ -2994,6 +3121,7 @@
                 ? `<button class="primary" data-watch-draft-commit="${id}">加入</button><button class="ghost" data-watch-draft-cancel="${id}">取消</button>`
                 : `<button class="ghost" data-watched="${id}">特別關注</button>`}
             ${matchActionButtons(item, id)}
+            ${item.source === "self" && !item.mine && !isGuest ? `<button class="ghost" data-self-report="${id}">檢舉</button>` : ""}
             ${item.watched || draftWatch.has(String(id)) ? "" : `<label class="hide-box">
               <input type="checkbox" data-hidden="${id}" ${item.hidden ? "checked" : ""} />
               不再顯示
@@ -3515,6 +3643,7 @@
       });
       if (view !== "listings") closeFilterSheet();
       if (view === "demand") loadDemand().catch(() => {});
+      if (view === "me") loadMineSelfListings().catch(() => {});
       if (view === "notify") {
         $("alertDock")?.classList.add("open");
         renderDock();
@@ -3605,6 +3734,92 @@
         return `<label><input type="checkbox" data-demand-district value="${el.value}" />${label.replace(/[<>]/g, "")}</label>`;
       }).join("");
       host.dataset.ready = "1";
+    }
+    function fillSelfDistricts() {
+      const host = $("selfDistrict");
+      if (!host || host.dataset.ready === "1") return;
+      const src = [...document.querySelectorAll("#districtPicker [data-district]")];
+      host.innerHTML = `<option value="">請選擇行政區</option>` + src.map((el) => {
+        const label = el.closest("label")?.textContent?.trim() || el.value;
+        return `<option value="${el.value}">${label.replace(/[<>]/g, "")}</option>`;
+      }).join("");
+      host.dataset.ready = "1";
+    }
+    function closeSelfOverlay() {
+      const box = $("selfListingOverlay");
+      if (box) box.hidden = true;
+    }
+    function openSelfDetail(item) {
+      if (!item) return;
+      const box = $("selfListingOverlay");
+      const title = $("selfListingTitle");
+      const body = $("selfListingDetail");
+      if (title) title.textContent = item.title || "站內刊登";
+      if (body) {
+        const tel = item.mobile || item.phone || "";
+        body.innerHTML = `
+          <p class="hint">${esc(item.price || "")} 元/月 · ${esc(item.kind_name || "")} · ${esc(item.layout || "")} · ${esc(item.area_name || "")} · ${esc(item.floor_name || "")}</p>
+          <p>${esc(item.address || "")}</p>
+          ${item.body || item.self_body ? `<p>${esc(item.body || item.self_body)}</p>` : ""}
+          <p class="hint">${esc(item.contact_role || item.role_name || "")} ${esc(item.contact_name || "")}</p>
+          ${tel ? `<p><a class="tel" href="tel:${esc(tel.replace(/[^\d+]/g, ""))}">${esc(tel)}</a></p>` : ""}
+          ${item.line_url ? `<p><a href="${esc(item.line_url)}" target="_blank" rel="noopener noreferrer">加入 LINE</a></p>` : ""}
+          ${item.match_detail ? `<p class="hint">比對：${esc(item.match_detail)}</p>` : ""}
+          <p class="hint">到期 ${esc(String(item.expires_at || item.self_expires_at || "").replace("T", " ").slice(0, 16))}</p>
+          ${isGuest || item.mine ? "" : `<button type="button" class="ghost" id="selfDetailReport">檢舉</button>`}
+        `;
+        $("selfDetailReport")?.addEventListener("click", async () => {
+          const reason = window.prompt("檢舉原因（可空白）", "") ?? "";
+          await fetch(`/api/self-listings/${item.post_id}/report`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reason }),
+          });
+          closeSelfOverlay();
+          loadList();
+        });
+      }
+      if (box) box.hidden = false;
+    }
+    async function loadMineSelfListings() {
+      fillSelfDistricts();
+      const box = $("selfMineList");
+      if (!box || isGuest) {
+        if (box) box.innerHTML = "";
+        return;
+      }
+      const res = await fetch("/api/self-listings");
+      const data = await res.json().catch(() => ({}));
+      if (data.legal && $("selfLegal")) $("selfLegal").textContent = data.legal;
+      const rows = data.listings || [];
+      box.innerHTML = rows.length
+        ? rows.map((item) => `
+          <article class="self-mine-card">
+            <div>
+              <strong>${esc(item.title)}</strong>
+              <div class="muted">${esc(item.price || "")} 元 · ${esc(item.address || "")} · ${esc(item.status || "")}</div>
+              <div class="muted">到期 ${esc(String(item.expires_at || "").replace("T", " ").slice(0, 16))}</div>
+              ${item.status === "open" ? `<button type="button" class="ghost" data-self-close="${item.post_id}">關閉刊登</button>` : ""}
+            </div>
+          </article>
+        `).join("")
+        : `<div class="empty">尚未刊登。填好上面的資料後送出，會出現在「找房」（預設仍只顯示整層住家）。</div>`;
+    }
+    async function openSelfFromQuery() {
+      const id = new URLSearchParams(location.search).get("self");
+      if (!id) return;
+      const local = listingById(id);
+      if (local) {
+        openSelfDetail(local);
+        return;
+      }
+      try {
+        const res = await fetch(`/api/self-listings/${id}`);
+        const data = await res.json();
+        if (res.ok) openSelfDetail(data);
+      } catch {
+        // ignore
+      }
     }
     function demandCardHtml(post) {
       const districts = (post.district_labels || []).join("、") || "未填行政區";
@@ -3756,6 +3971,64 @@
         $("demandMsg").textContent = error.message;
       }
     });
+    $("selfListingForm")?.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      if (isGuest) {
+        remindGuest();
+        return;
+      }
+      const msg = $("selfMsg");
+      try {
+        const res = await fetch("/api/self-listings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            district: $("selfDistrict")?.value || "",
+            rent: Number($("selfRent")?.value) || 0,
+            ping: Number($("selfPing")?.value) || 0,
+            kind: $("selfKind")?.value || "whole",
+            role: $("selfRole")?.value || "owner",
+            floor: Number($("selfFloor")?.value) || 0,
+            total_floors: Number($("selfTotalFloors")?.value) || 0,
+            rooms: Number($("selfRooms")?.value) || 0,
+            living: Number($("selfLiving")?.value) || 0,
+            bath: Number($("selfBath")?.value) || 0,
+            contact_name: $("selfContactName")?.value || "",
+            address: $("selfAddress")?.value || "",
+            phone: $("selfPhone")?.value || "",
+            line_url: $("selfLine")?.value || "",
+            cover: $("selfCover")?.value || "",
+            title: $("selfTitle")?.value || "",
+            body: $("selfBody")?.value || "",
+          }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "刊登失敗");
+        if (msg) msg.textContent = "已刊登";
+        if ($("selfBody")) $("selfBody").value = "";
+        await loadMineSelfListings();
+        loadList();
+        maybeAskPush("刊登物件後可允許系統推播。");
+      } catch (error) {
+        if (msg) msg.textContent = error.message;
+      }
+    });
+    $("selfMineList")?.addEventListener("click", async (ev) => {
+      const closeId = ev.target.closest("[data-self-close]")?.dataset.selfClose;
+      if (!closeId) return;
+      try {
+        const res = await fetch(`/api/self-listings/${closeId}/close`, { method: "POST" });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "關閉失敗");
+        await loadMineSelfListings();
+        loadList();
+      } catch (error) {
+        const msg = $("selfMsg");
+        if (msg) msg.textContent = error.message;
+      }
+    });
+    $("selfListingClose")?.addEventListener("click", closeSelfOverlay);
+    document.querySelector("[data-close-self]")?.addEventListener("click", closeSelfOverlay);
     $("showMrt")?.addEventListener("change", () => {
       if (isGuest) {
         $("showMrt").checked = settings.showMrt !== false;
@@ -4208,12 +4481,24 @@
       const open = ev.target.closest("[data-open]")?.dataset.open;
       if (open) {
         ev.preventDefault();
-        window.open(listingUrl(open), "_blank", "noopener,noreferrer");
+        const item = listingById(open);
+        if (isSelfSource(item)) openSelfDetail(item);
+        else window.open(listingUrl(item || open), "_blank", "noopener,noreferrer");
         fetch(`/api/listings/${open}/flags`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ viewed: true }),
         }).then(loadList);
+        return;
+      }
+      const selfReport = ev.target.dataset.selfReport;
+      if (selfReport) {
+        const reason = window.prompt("檢舉原因（可空白）", "") ?? "";
+        fetch(`/api/self-listings/${selfReport}/report`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reason }),
+        }).then(() => loadList());
         return;
       }
       const draftCancel = ev.target.dataset.watchDraftCancel;
@@ -4765,6 +5050,8 @@
       renderDock();
       ensureServiceWorker();
       fillDemandDistricts();
+      fillSelfDistricts();
+      openSelfFromQuery().catch(() => {});
       setTimeout(() => map?.invalidateSize(), 250);
       if (!window.__watchStream && !isGuest) {
         const es = new EventSource("/api/events/stream");

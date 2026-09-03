@@ -419,3 +419,13 @@ test("panel toggle sits above scroll-top and uses expand/collapse glyphs", () =>
   assert.match(html, /\/api\/account\/delete/);
   assert.match(html, /理由（可空白）/);
 });
+
+test("self listing form and in-site detail stay on this site", () => {
+  const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
+  assert.match(html, /id="selfListingForm"/);
+  assert.match(html, /\/api\/self-listings/);
+  assert.match(html, /function openSelfDetail/);
+  assert.match(html, /source === "self"/);
+  assert.match(html, /站內刊登/);
+  assert.doesNotMatch(html, /model_score/);
+});

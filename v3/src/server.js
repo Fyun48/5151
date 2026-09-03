@@ -58,6 +58,14 @@ import {
   replyDemand,
   reportDemandItem,
   demandMeta,
+  listMineSelfListings,
+  getSelfListing,
+  createSelfListing,
+  closeSelfListing,
+  hideSelfListing,
+  reportSelfListing,
+  selfListingMeta,
+  isSelfListingId,
   saveUserPushSubscription,
   deleteUserPushSubscription,
   publicVapidKey,
@@ -154,7 +162,7 @@ function setSession(req, res, email) {
   res.setHeader("Set-Cookie", cookie);
 }
 
-/** 點通知／Discord 連結：已登入才標記已瀏覽，再導向 591。訪客只轉址、不寫入。 */
+/** 點通知／Discord 連結：已登入才標記已瀏覽，再導向 591。站內刊登留在本站。訪客只轉址、不寫入。 */
 app.get("/go/:id", (req, res) => {
   const id = Number(req.params.id);
   if (Number.isFinite(id) && id > 0) {
@@ -166,6 +174,10 @@ app.get("/go/:id", (req, res) => {
     } catch (error) {
       console.warn("標記已瀏覽失敗：", error.message);
     }
+  }
+  if (isSelfListingId(id)) {
+    res.redirect(302, `/?self=${id}`);
+    return;
   }
   res.redirect(302, rent591Url(id));
 });
@@ -502,6 +514,82 @@ app.post("/api/demand/:id/report", (req, res) => {
       targetId: req.body?.targetId || req.params.id,
       reason: req.body?.reason,
     }));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/self-listings", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入才能看自己的刊登" });
+      return;
+    }
+    res.json({
+      ...selfListingMeta(),
+      listings: listMineSelfListings(session.userId),
+    });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/self-listings/:id", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入" });
+      return;
+    }
+    res.json(getSelfListing(req.params.id, { viewerId: session.userId }));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/self-listings", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入才能刊登" });
+      return;
+    }
+    res.json(createSelfListing(session.userId, req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/self-listings/:id/close", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入" });
+      return;
+    }
+    res.json(closeSelfListing(session.userId, req.params.id, { admin: session.role === "admin" }));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/self-listings/:id/report", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入才能檢舉" });
+      return;
+    }
+    res.json(reportSelfListing(session.userId, req.params.id, req.body?.reason));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/admin/self-listings/:id/hide", requireAdminApi, (req, res) => {
+  try {
+    res.json(hideSelfListing(req.params.id));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
