@@ -1,11 +1,11 @@
-/** 爬蟲來源開關。591 預設開；其他平台先留 stub，不實作抓取。 */
+/** 爬蟲來源開關。591 與站內自行刊登預設開；其他平台先留 stub，不實作抓取。 */
 
 export const CRAWL_SOURCE_CATALOG = [
   { id: "591", label: "591 租屋", stub: false },
   { id: "rakuya", label: "樂屋網", stub: true },
   { id: "sinyi", label: "信義房屋", stub: true },
   { id: "house591", label: "其他租屋網（之後）", stub: true },
-  { id: "self", label: "自行刊登（之後）", stub: true },
+  { id: "self", label: "自行刊登", stub: false },
 ];
 
 const DEFAULT_ENABLED = {
@@ -13,7 +13,7 @@ const DEFAULT_ENABLED = {
   rakuya: false,
   sinyi: false,
   house591: false,
-  self: false,
+  self: true,
 };
 
 export function defaultCrawlSources() {

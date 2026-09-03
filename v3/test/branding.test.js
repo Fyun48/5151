@@ -30,6 +30,7 @@ test("PWA files and bottom nav exist", () => {
   assert.match(html, /data-nav="notify"/);
   assert.match(html, /data-nav="me"/);
   assert.match(html, /id="demandView"/);
+  assert.match(html, /id="selfListingForm"/);
   assert.match(html, /id="openFilterSheetBtn"/);
   assert.match(html, /data-notify-ch="push"/);
   assert.match(html, /bottom-nav/);

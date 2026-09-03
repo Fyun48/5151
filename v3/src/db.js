@@ -42,6 +42,22 @@ import {
   demandMeta,
 } from "./demand.js";
 import {
+  closeSelfListing as closeSelfListingOn,
+  createSelfListing as createSelfListingOn,
+  ensureSelfListingSchema,
+  expireOpenSelfListings as expireOpenSelfListingsOn,
+  getSelfListing as getSelfListingOn,
+  hideSelfListing as hideSelfListingOn,
+  keepSelfListingForViewer,
+  listMineSelfListings as listMineSelfListingsOn,
+  reportSelfListing as reportSelfListingOn,
+  selfListingMeta,
+  selfSourceLabel,
+  sqlNotSelfSource,
+  sqlOpenSelfListing,
+  isSelfListingId,
+} from "./selfListings.js";
+import {
   ensurePushSchema,
   savePushSubscription as savePushSubscriptionOn,
   deletePushSubscription as deletePushSubscriptionOn,
@@ -407,6 +423,7 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_listings_match ON listings(match_level)"
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_offline ON listings(offline)");
 ensurePersonalSchema(db);
 ensureDemandSchema(db);
+ensureSelfListingSchema(db);
 ensurePushSchema(db);
 
 let cachedDefaultUserId = 0;
@@ -794,6 +811,23 @@ export function saveHelpQa(partial = {}) {
   return getHelpQa();
 }
 
+function migrateSelfCrawlSourceOn() {
+  const raw = settingKey("crawlSources");
+  if (raw == null) return;
+  const stored = Array.isArray(raw) ? raw : raw.items;
+  if (!Array.isArray(stored)) return;
+  const self = stored.find((row) => row?.id === "self");
+  if (!self || self.stub !== true) return;
+  writeSettingKey(
+    "crawlSources",
+    normalizeCrawlSources(stored.map((row) => (
+      row?.id === "self" ? { ...row, enabled: true, stub: false } : row
+    ))),
+  );
+}
+
+migrateSelfCrawlSourceOn();
+
 export function getCrawlSources() {
   return publicCrawlSources(settingKey("crawlSources") ?? defaultCrawlSources());
 }
@@ -833,7 +867,33 @@ export function reportDemandItem(userId, input) {
   return reportDemandOn(db, userId, input);
 }
 
-export { demandMeta };
+export { demandMeta, selfListingMeta, isSelfListingId };
+
+export function listMineSelfListings(userId) {
+  return listMineSelfListingsOn(db, userId);
+}
+
+export function getSelfListing(postId, opts = {}) {
+  return getSelfListingOn(db, postId, opts);
+}
+
+export function createSelfListing(userId, input) {
+  return createSelfListingOn(db, userId, input, new Date(), {
+    matchCandidates: (listing) => listMatchCandidates(listing.post_id),
+  });
+}
+
+export function closeSelfListing(userId, postId, opts = {}) {
+  return closeSelfListingOn(db, userId, postId, opts);
+}
+
+export function hideSelfListing(postId) {
+  return hideSelfListingOn(db, postId);
+}
+
+export function reportSelfListing(userId, postId, reason) {
+  return reportSelfListingOn(db, userId, postId, reason);
+}
 
 export function saveUserPushSubscription(userId, sub) {
   return savePushSubscriptionOn(db, userId, sub);
@@ -1084,7 +1144,7 @@ function parseJson(value, fallback) {
   }
 }
 
-function decorateListing(row, settings) {
+function decorateListing(row, settings, userId) {
   if (!row) return row;
   settings = settings || getSettings();
   row = applyCachedCoords(row, settings);
@@ -1094,8 +1154,16 @@ function decorateListing(row, settings) {
   const matchPeer = matchPostId
     ? db.prepare("SELECT post_id, title, url, price, offline FROM listings WHERE post_id = ?").get(matchPostId)
     : null;
+  const source = String(row.source || "591") || "591";
+  const uid = Number(userId) || 0;
+  const listedBy = Number(row.listed_by_user_id) || 0;
+  const {
+    listed_by_user_id: _listedBy,
+    model_score: _modelScore,
+    ...publicRow
+  } = row;
   return {
-    ...row,
+    ...publicRow,
     extra_fees: Array.isArray(row.extra_fees) ? row.extra_fees : parseJson(row.extra_fees, []),
     has_elevator: listingHasElevator(row),
     commute_km: commute == null ? null : Math.round(commute * 10) / 10,
@@ -1105,6 +1173,10 @@ function decorateListing(row, settings) {
     commute_min_pm: Number.isFinite(Number(row.rush_pm_min)) && Number(row.rush_pm_min) > 0 ? Math.round(Number(row.rush_pm_min)) : null,
     district: districtNameFromListing(row),
     match_peer: matchPeer || null,
+    source,
+    source_label: selfSourceLabel(source),
+    self_body: String(row.self_body || ""),
+    mine: uid > 0 && listedBy === uid,
     ...mrtFields(row, settings),
   };
 }
@@ -1122,7 +1194,7 @@ export function getListing(postId, userId) {
   const row = db.prepare("SELECT * FROM listings WHERE post_id = ?").get(postId);
   if (!row) return row;
   const uid = resolveUserId(userId);
-  return decorateListing(withPersonal(row, uid), getSettings(uid));
+  return decorateListing(withPersonal(row, uid), getSettings(uid), uid);
 }
 
 export function findBySourceKey(sourceKey, excludePostId) {
@@ -1246,8 +1318,26 @@ function expandSearchKeys(keys) {
 function searchWhere(searchKeys, clauses, params) {
   const keys = expandSearchKeys(searchKeys === undefined ? currentSearchKeys() : searchKeys);
   if (keys?.length) {
-    clauses.push(`search_key IN (${keys.map(() => "?").join(",")})`);
+    clauses.push(`(
+      search_key IN (${keys.map(() => "?").join(",")})
+      OR COALESCE(source, '591') = 'self'
+    )`);
     params.push(...keys);
+  }
+}
+
+function listingVisibilityClauses(clauses, params) {
+  expireOpenSelfListingsOn(db);
+  const stamp = new Date().toISOString();
+  const openSelf = sqlOpenSelfListing(stamp);
+  clauses.push(openSelf.sql);
+  params.push(...openSelf.params);
+  const disabled = (getCrawlSources().items || [])
+    .filter((row) => !row.enabled)
+    .map((row) => row.id);
+  if (disabled.length) {
+    clauses.push(`COALESCE(source, '591') NOT IN (${disabled.map(() => "?").join(",")})`);
+    params.push(...disabled);
   }
 }
 
@@ -1436,7 +1526,8 @@ export function listingsNeedingFeeDetail(limit = 12) {
   return db
     .prepare(
       `SELECT post_id FROM listings
-       WHERE IFNULL(hidden, 0) = 0 AND IFNULL(offline, 0) = 0 AND (
+       WHERE IFNULL(hidden, 0) = 0 AND IFNULL(offline, 0) = 0
+         AND ${sqlNotSelfSource()} AND (
          IFNULL(contact_fetched, 0) = 0
          OR IFNULL(extra_fees_fetched, 0) = 0
          OR lat IS NULL OR lng IS NULL
@@ -1454,6 +1545,7 @@ export function listingsNeeding591Geo(limit = 20) {
       `SELECT post_id, community_id, source_key, lat, lng, geo_source FROM listings
        WHERE IFNULL(hidden, 0) = 0
          AND IFNULL(offline, 0) = 0
+         AND ${sqlNotSelfSource()}
        ORDER BY last_seen_at DESC`,
     )
     .all();
@@ -1565,6 +1657,7 @@ export function listingsNeedingAliveCheck({ excludeIds = [], limit = 20 } = {}) 
     .prepare(
       `SELECT post_id FROM listings
        WHERE IFNULL(hidden, 0) = 0 AND IFNULL(offline, 0) = 0
+         AND ${sqlNotSelfSource()}
        ORDER BY CASE WHEN last_checked_at IS NULL THEN 0 ELSE 1 END,
                 IFNULL(last_checked_at, last_seen_at) ASC
        LIMIT 800`,
@@ -1588,6 +1681,7 @@ export function listingsNeedingOfflineRecheck({ limit = 8 } = {}) {
        WHERE IFNULL(hidden, 0) = 0
          AND IFNULL(offline, 0) = 1
          AND IFNULL(offline_confirmed, 0) = 0
+         AND ${sqlNotSelfSource()}
        ORDER BY CASE WHEN last_checked_at IS NULL THEN 0 ELSE 1 END,
                 IFNULL(last_checked_at, offline_at) ASC
        LIMIT ?`,
@@ -2036,6 +2130,7 @@ export function listListings({
   const clauses = [];
   const params = [];
   searchWhere(searchKeys, clauses, params);
+  listingVisibilityClauses(clauses, params);
   if (filter === "suspected") {
     clauses.push("match_level IN ('high', 'medium')");
     clauses.push("IFNULL(offline, 0) = 0");
@@ -2107,10 +2202,11 @@ export function listListings({
   const flagMap = loadFlagMap(db, uid);
   let rows =
     filter === "offline" || filter === "suspected"
-      ? overlayRowsPersonal(raw, flagMap).map((row) => decorateListing(row, settings))
-      : applyListingFilter(overlayRowsPersonal(raw, flagMap), settings).map((row) => decorateListing(row, settings));
+      ? overlayRowsPersonal(raw, flagMap).map((row) => decorateListing(row, settings, uid))
+      : applyListingFilter(overlayRowsPersonal(raw, flagMap), settings).map((row) => decorateListing(row, settings, uid));
 
   rows = rows.filter((row) => listingMatchesListFilter(row, filter));
+  rows = rows.filter((row) => keepSelfListingForViewer(row, uid, settings, listingInMemberScope));
 
   // 整層／1F、行政區要在 limit 前套用，否則「全庫最便宜 500 筆」再前端篩選會漏掉新北等區
   rows = rows.filter((row) => passesDisplayFilters(row, settings, { skipWholeFloor: kind === "suite" }));
@@ -2241,14 +2337,16 @@ export function stats(searchKeys, userId, settingsOverride) {
   const clauses = [];
   const params = [];
   searchWhere(searchKeys, clauses, params);
+  listingVisibilityClauses(clauses, params);
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const raw = db
     .prepare(
-      `SELECT viewed, watched, hidden, offline, offline_confirmed, last_event, floor_name, kind_name, title, address, area_name, lat, lng, geo_source, tags, match_level, match_rejected, match_verdict, post_id FROM listings ${where}`,
+      `SELECT viewed, watched, hidden, offline, offline_confirmed, last_event, floor_name, kind_name, title, address, area_name, lat, lng, geo_source, tags, match_level, match_rejected, match_verdict, post_id, source, source_key, listed_by_user_id, price_num, self_status FROM listings ${where}`,
     )
     .all(...params);
   const flagMap = loadFlagMap(db, uid);
-  const overlaid = overlayRowsPersonal(raw, flagMap);
+  const overlaid = overlayRowsPersonal(raw, flagMap)
+    .filter((row) => keepSelfListingForViewer(row, uid, settings, listingInMemberScope));
   const attrRows = overlaid.filter((row) => passesAttributeFilters(row, settings));
   const base = attrRows.filter((row) => !row.hidden && !isPendingOffline(row) && !isConfirmedOffline(row) && row.match_verdict !== "yes");
   const browse = attrRows.filter(countsTowardAllTotal);
