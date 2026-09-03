@@ -756,6 +756,7 @@
     .tag.verdict-no { background: var(--tag-on-bg); color: var(--tag-on-fg); font-weight: 700; }
     .tag.self-src { background: var(--accent-mist); color: var(--accent-deep); font-weight: 700; }
     .tag.ext-src { background: var(--same-soft); color: var(--same); font-weight: 700; }
+    .tag.fit { background: var(--accent-mist); color: var(--accent-deep); font-variant-numeric: tabular-nums; }
     .self-mine-card {
       margin: 8px 0 0;
       padding: 12px 14px;
@@ -1625,6 +1626,7 @@
           </div>
           <div class="chip-row" data-chip-row="sort">
           <button class="chip on" data-sort="newest">最新</button>
+          <button class="chip" data-sort="fit_desc">較適合</button>
           <button class="chip" data-sort="price_asc">金額低→高</button>
           <button class="chip" data-sort="price_desc">金額高→低</button>
           <button class="chip commute-sort" data-sort="commute_asc" hidden>離公司近→遠</button>
@@ -2033,7 +2035,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver">ver. 3.17</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver">ver. 3.18</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -2514,6 +2516,8 @@
         out.sort((a, b) => (Number(b.price_num) || 0) - (Number(a.price_num) || 0));
       } else if (sort === "newest") {
         out.sort((a, b) => String(b.first_seen_at || "").localeCompare(String(a.first_seen_at || "")) || Number(b.post_id) - Number(a.post_id));
+      } else if (sort === "fit_desc") {
+        out.sort((a, b) => (Number(b.fit_score) || 0) - (Number(a.fit_score) || 0) || (Number(a.price_num) || 1e15) - (Number(b.price_num) || 1e15));
       } else {
         out.sort((a, b) => (Number(a.price_num) || 1e15) - (Number(b.price_num) || 1e15));
       }
@@ -3197,6 +3201,9 @@
       else if (item.source === "ddroom") bits.push('<span class="tag ext-src">租租通</span>');
       else if (item.source === "housefun") bits.push('<span class="tag ext-src">好房</span>');
       else if (item.source && item.source !== "591") bits.push(`<span class="tag ext-src">${esc(item.source_label || item.source)}</span>`);
+      if (item.fit_label && item.fit_score != null) {
+        bits.push(`<span class="tag fit" title="依你的租金、樓層與通勤估算，不是成交預測">${esc(item.fit_label)} ${esc(item.fit_score)}</span>`);
+      }
       if (item.last_event === "new") bits.push('<span class="tag new">全新物件</span>');
       if (item.last_event === "same_source" && !item.match_level) bits.push('<span class="tag same">同屋源更新</span>');
       if (item.match_verdict === "yes") bits.push('<span class="tag verdict-yes">已確認：同一間</span>');
