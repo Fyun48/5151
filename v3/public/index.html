@@ -797,18 +797,23 @@
       padding-bottom: 38px;
     }
     body.panel-collapsed .list-head-sticky.filter-compact .filter-body {
+      display: block;
+    }
+    body.panel-collapsed .list-head-sticky.filter-compact .chip-row,
+    body.panel-collapsed .list-head-sticky.filter-compact .view-filters,
+    body.panel-collapsed .list-head-sticky.filter-compact .bulk-bar {
       display: none;
     }
+    body.panel-collapsed .list-head-sticky.filter-compact .toolbar {
+      padding-top: 8px;
+      padding-bottom: 10px;
+    }
     body.panel-collapsed .list-head-sticky.filter-compact .filter-head {
-      padding-right: 92px;
+      padding-right: 12px;
       border-bottom: none;
     }
     body.panel-collapsed .list-head-sticky.filter-compact .district-block {
-      padding-bottom: 6px;
-    }
-    body.panel-collapsed .list-head-sticky.filter-compact #districtChips {
-      border-top: none;
-      padding-top: 6px;
+      display: none;
     }
     .filter-mini-btn,
     .filter-restore-btn {
@@ -843,15 +848,15 @@
     }
     body.panel-collapsed .filter-restore-btn {
       display: none;
-      position: absolute;
-      top: 10px;
-      right: 12px;
-      z-index: 2;
-      padding: 5px 11px;
-      font-size: 12px;
+      position: static;
+      margin: 0;
+      padding: 7px 12px;
+      font-size: 13px;
+      font-weight: 700;
       background: #fff;
       border: 1px solid var(--line);
-      box-shadow: 0 2px 8px rgba(26, 43, 51, 0.06);
+      box-shadow: none;
+      min-height: 40px;
     }
     body.panel-collapsed .list-head-sticky.filter-compact .filter-restore-btn {
       display: inline-flex;
@@ -1213,6 +1218,17 @@
         margin: 4px 0;
       }
       .item .line-qr { display: none; }
+      .item .when { font-size: 12px; margin: 4px 0; }
+      .item .meta {
+        display: -webkit-box;
+        -webkit-line-clamp: 5;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+      body.role-guest .pick { display: none; }
+      body.role-guest .item {
+        grid-template-columns: 92px minmax(0, 1fr);
+      }
       .item .contact,
       .item .actions {
         grid-column: 1 / -1;
@@ -1520,10 +1536,10 @@
     </aside>
     <main class="card">
       <div class="list-head-sticky" id="listHeadSticky">
-        <button type="button" class="filter-restore-btn ghost" id="filterRestoreBtn" title="還原完整篩選">還原篩選</button>
         <div class="filter-head">
           <div class="status" id="status">準備就緒</div>
           <button type="button" class="ghost mobile-only" id="openFilterSheetBtn">篩選</button>
+          <button type="button" class="filter-restore-btn ghost" id="filterRestoreBtn" title="展開類型、排序與樓層條件">更多條件</button>
           <div class="list-meta" id="listMeta" hidden></div>
         </div>
         <div class="filter-body" id="filterBody">
@@ -2004,6 +2020,9 @@
     }
     if (window.matchMedia("(max-width: 880px)").matches) {
       document.body.classList.add("panel-collapsed");
+      if (localStorage.getItem(FILTER_COMPACT_KEY) !== "0") {
+        $("listHeadSticky")?.classList.add("filter-compact");
+      }
     }
     $("status").textContent = "正在載入…";
     let filter = "all";
@@ -2530,8 +2549,10 @@
     function maybeStartGuestTour() {
       const box = $("guestTour");
       if (!box || !isGuest || guestTourSkipped()) return;
-      document.body.classList.remove("panel-collapsed");
-      syncPanelFab();
+      if (!window.matchMedia("(max-width: 880px)").matches) {
+        document.body.classList.remove("panel-collapsed");
+        syncPanelFab();
+      }
       box.hidden = false;
       showGuestTourStep(0);
     }

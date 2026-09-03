@@ -110,6 +110,11 @@ test("page defaults to 全部 + 最新", () => {
   assert.match(html, /class="item-title"/);
   assert.match(html, /viewport-fit=cover/);
   assert.doesNotMatch(html, /width:1px;height:22px/);
+  assert.match(html, />更多條件</);
+  assert.match(html, /FILTER_COMPACT_KEY\) !== "0"/);
+  assert.match(html, /filter-compact \.chip-row/);
+  assert.match(html, /filter-compact \.filter-body \{\s*display: block;/);
+  assert.match(html, /max-width: 880px[\s\S]*#expandPanelBtn \{ display: none; /);
 });
 
 test("non-admin members do not see the shared reset link after boot", () => {
