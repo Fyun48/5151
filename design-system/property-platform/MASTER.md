@@ -59,6 +59,10 @@ CasaOS 只同步 `v3/src` 與 `v3/public`。前端是 Express 靜態頁，**不�
 | `--rose` / `--watch` | `#b08989` / `#9a6b6b` | 關注、警示 |
 | `--new` | `#0b5551` | 新物件 |
 | `--same` | `#6b6394` | 同屋源 |
+| `--same-soft` | `#eceaf4` | 同屋源／外站標籤底 |
+| `--tag-on-bg` / `--tag-on-fg` | accent-soft / accent-deep | 上架、可保留 |
+| `--tag-off-bg` / `--tag-off-fg` | line / muted | 下架 |
+| `--tag-strong-bg` / `--tag-strong-fg` | ink / paper | 確定隱藏 |
 | `--hermes` | `#E65326` | 贊助／例外，少用 |
 | `--shezi-red` | `#DC2626` | 例外標記 |
 | `--radius` / `--radius-lg` | `8px` / `10px` | 控制項／卡片 |

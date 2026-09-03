@@ -323,7 +323,7 @@
     }
     .site-ver {
       margin-left: 8px;
-      color: #94a3b8;
+      color: var(--muted);
       font-size: 11px;
       letter-spacing: 0.04em;
     }
@@ -712,7 +712,7 @@
     .tags { display: flex; gap: 6px; flex-wrap: wrap; }
     .tag { font-size: 11px; padding: 3px 8px; border-radius: 999px; background: var(--accent-soft); }
     .tag.new { background: var(--accent-mist); color: var(--accent-deep); }
-    .tag.same { background: #ede9fe; color: var(--same); }
+    .tag.same { background: var(--same-soft); color: var(--same); }
     .tag.watch { background: var(--rose-soft); color: var(--watch); }
     .watch-note-label { margin: 8px 0 4px; font-size: 12px; color: var(--rose-deep); font-weight: 700; }
     .watch-note {
@@ -723,7 +723,7 @@
       font-size: 13px;
       line-height: 1.45;
       background: var(--rose-soft);
-      border-color: #e8c4c4;
+      border-color: var(--rose);
     }
     .watch-note[data-watch-draft="1"] {
       box-shadow: 0 0 0 2px rgba(184, 122, 122, 0.35);
@@ -749,13 +749,13 @@
     .chip.watch-fly-hit {
       box-shadow: 0 0 0 4px rgba(184, 122, 122, 0.4);
     }
-    .tag.lift { background: #dcfce7; color: #166534; }
-    .tag.off { background: #e2e8f0; color: #475569; }
-    .tag.off-sure { background: #334155; color: #f8fafc; }
-    .tag.verdict-yes { background: #334155; color: #f8fafc; font-weight: 700; }
-    .tag.verdict-no { background: #dcfce7; color: #166534; font-weight: 700; }
+    .tag.lift { background: var(--tag-on-bg); color: var(--tag-on-fg); }
+    .tag.off { background: var(--tag-off-bg); color: var(--tag-off-fg); }
+    .tag.off-sure { background: var(--tag-strong-bg); color: var(--tag-strong-fg); }
+    .tag.verdict-yes { background: var(--tag-strong-bg); color: var(--tag-strong-fg); font-weight: 700; }
+    .tag.verdict-no { background: var(--tag-on-bg); color: var(--tag-on-fg); font-weight: 700; }
     .tag.self-src { background: var(--accent-mist); color: var(--accent-deep); font-weight: 700; }
-    .tag.ext-src { background: #e8f1ff; color: #1d4f91; font-weight: 700; }
+    .tag.ext-src { background: var(--same-soft); color: var(--same); font-weight: 700; }
     .self-mine-card {
       margin: 8px 0 0;
       padding: 12px 14px;
@@ -787,7 +787,7 @@
     }
     .match-peer {
       background: var(--rose-soft);
-      border: 1px solid #ecd4d4;
+      border: 1px solid var(--rose);
       border-radius: 12px;
       padding: 8px 10px;
       margin: 8px 0 4px;
@@ -1093,7 +1093,7 @@
     .dock-change-from {
       color: var(--muted);
       text-decoration: line-through;
-      text-decoration-color: #d4a5a5;
+      text-decoration-color: var(--rose);
     }
     .dock-change-arrow { color: var(--watch); font-weight: 800; }
     .dock-change-to { color: var(--ink); font-weight: 700; }
@@ -5005,7 +5005,7 @@
       boxLayers = excludeBoxes.map((box) => {
         const on = box.enabled !== false;
         return L.rectangle([[box.south, box.west], [box.north, box.east]], {
-          color: on ? "#c45c26" : "#9a8f84",
+          color: on ? "#E65326" : "#6f6a64",
           weight: 1,
           dashArray: on ? null : "6 4",
           fillOpacity: on ? 0.18 : 0.06,
@@ -5100,7 +5100,7 @@
         map.dragging.disable();
         startLatLng = ev.latlng;
         if (previewRect) map.removeLayer(previewRect);
-        previewRect = L.rectangle([startLatLng, startLatLng], { color: "#2f6f5e", weight: 1, dashArray: "4 3" }).addTo(map);
+        previewRect = L.rectangle([startLatLng, startLatLng], { color: "#0f6f6a", weight: 1, dashArray: "4 3" }).addTo(map);
       });
       map.on("mousemove", (ev) => {
         if (!drawing || !startLatLng || !previewRect) return;
