@@ -7,6 +7,10 @@ const WALK_KMH = 4.5;
 const RIDE_KMH = 15;
 const WALK_FACTOR = 1.28;
 const RIDE_FACTOR = 1.18;
+const WALK_CANDIDATE_LIMIT = 5;
+
+/** 步行路線達此距離（含）就不顯示最近捷運站。 */
+export const MRT_WALK_MAX_KM = 1.5;
 
 let lastMrtRouteAt = 0;
 
@@ -30,6 +34,11 @@ export function makeMrtKey(lat, lng) {
   return `${roundCoord(lat)},${roundCoord(lng)}`;
 }
 
+export function isWalkableMrtDistance(km) {
+  const n = Number(km);
+  return Number.isFinite(n) && n > 0 && n < MRT_WALK_MAX_KM;
+}
+
 export function nearestMrtStation(lat, lng) {
   const fromLat = Number(lat);
   const fromLng = Number(lng);
@@ -43,6 +52,23 @@ export function nearestMrtStation(lat, lng) {
     }
   }
   return best;
+}
+
+/** 直線距離未達 1.5 公里的站才可能走出小於 1.5 公里的步行路線。 */
+export function nearbyWalkMrtStations(lat, lng, { maxStraightKm = MRT_WALK_MAX_KM, limit = WALK_CANDIDATE_LIMIT } = {}) {
+  const fromLat = Number(lat);
+  const fromLng = Number(lng);
+  if (!Number.isFinite(fromLat) || !Number.isFinite(fromLng)) return [];
+  const cap = Math.max(1, Number(limit) || WALK_CANDIDATE_LIMIT);
+  const max = Number(maxStraightKm);
+  const rows = [];
+  for (const [name, stationLat, stationLng] of MRT_STATIONS) {
+    const km = distanceKm(fromLat, fromLng, stationLat, stationLng);
+    if (km == null || !Number.isFinite(max) || km >= max) continue;
+    rows.push({ name, lat: stationLat, lng: stationLng, straightKm: km });
+  }
+  rows.sort((a, b) => a.straightKm - b.straightKm);
+  return rows.slice(0, cap);
 }
 
 export function estimateMrtAccess(straightKm) {
@@ -66,11 +92,23 @@ export function estimateMrtAccessForPoint(lat, lng) {
   return { station: station.name, ...est };
 }
 
-async function osrmDistanceKm(profile, fromLat, fromLng, toLat, toLng) {
+function tooFarResult(walkKm = null) {
+  return {
+    station: "",
+    walk_km: walkKm,
+    walk_min: null,
+    ride_km: null,
+    ride_min: null,
+    too_far: true,
+    resolved: true,
+  };
+}
+
+async function osrmWalkKm(fromLat, fromLng, toLat, toLng) {
   const wait = 1100 - (Date.now() - lastMrtRouteAt);
   if (wait > 0) await sleep(wait);
   const path = `${Number(fromLng)},${Number(fromLat)};${Number(toLng)},${Number(toLat)}`;
-  const url = new URL(`https://router.project-osrm.org/route/v1/${profile}/${path}`);
+  const url = new URL(`https://router.project-osrm.org/route/v1/walking/${path}`);
   url.searchParams.set("alternatives", "false");
   url.searchParams.set("overview", "false");
   url.searchParams.set("steps", "false");
@@ -84,62 +122,45 @@ async function osrmDistanceKm(profile, fromLat, fromLng, toLat, toLng) {
   const body = await res.json();
   if (body.code && body.code !== "Ok") return null;
   const meters = Number(body.routes?.[0]?.distance);
-  const seconds = Number(body.routes?.[0]?.duration);
   if (!Number.isFinite(meters) || meters <= 0) return null;
-  return {
-    km: roundKm(meters / 1000),
-    min: Number.isFinite(seconds) && seconds > 0 ? Math.max(1, Math.round(seconds / 60)) : null,
-  };
+  return { km: roundKm(meters / 1000) };
 }
 
-export async function fetchMrtAccess(lat, lng) {
-  const station = nearestMrtStation(lat, lng);
-  if (!station) return null;
-  const fallback = estimateMrtAccess(station.straightKm) || {};
-  let walk = null;
-  let ride = null;
-  try {
-    walk = await osrmDistanceKm("walking", lat, lng, station.lat, station.lng);
-    if (walk?.busy) return { station: station.name, ...fallback, pending: true };
-  } catch {
-    walk = null;
-  }
-  try {
-    ride = await osrmDistanceKm("cycling", lat, lng, station.lat, station.lng);
-    if (ride?.busy) {
-      return {
+export async function fetchMrtAccess(lat, lng, { routeWalk } = {}) {
+  const candidates = nearbyWalkMrtStations(lat, lng);
+  if (!candidates.length) return tooFarResult();
+  const walkFn = typeof routeWalk === "function" ? routeWalk : osrmWalkKm;
+  let best = null;
+  for (const station of candidates) {
+    let walk = null;
+    try {
+      walk = await walkFn(lat, lng, station.lat, station.lng);
+    } catch {
+      walk = null;
+    }
+    if (walk?.busy) return { pending: true, resolved: false };
+    const km = Number(walk?.km);
+    if (!Number.isFinite(km) || km <= 0) continue;
+    if (!best || km < best.walk_km) {
+      best = {
         station: station.name,
-        walk_km: walk?.km ?? fallback.walk_km,
-        walk_min: walk?.min ?? fallback.walk_min,
-        ride_km: fallback.ride_km,
-        ride_min: fallback.ride_min,
+        walk_km: km,
+        walk_min: null,
+        ride_km: null,
+        ride_min: null,
+        too_far: !isWalkableMrtDistance(km),
+        resolved: true,
       };
     }
-  } catch {
-    ride = null;
   }
-  return {
-    station: station.name,
-    walk_km: walk?.km ?? fallback.walk_km,
-    walk_min: walk?.min ?? fallback.walk_min,
-    ride_km: ride?.km ?? fallback.ride_km,
-    ride_min: ride?.min ?? fallback.ride_min,
-  };
+  if (!best) return { pending: true, resolved: false };
+  if (!isWalkableMrtDistance(best.walk_km)) return tooFarResult(best.walk_km);
+  return best;
 }
 
 export function formatMrtAccess(row = {}) {
   const name = String(row.mrt_station || row.station || "").trim();
-  if (!name) return "";
   const walkKm = Number(row.mrt_walk_km ?? row.walk_km);
-  const rideKm = Number(row.mrt_ride_km ?? row.ride_km);
-  const walkMin = Number(row.mrt_walk_min ?? row.walk_min);
-  const rideMin = Number(row.mrt_ride_min ?? row.ride_min);
-  const bits = [`捷運${name.replace(/站$/, "")}站`];
-  if (Number.isFinite(walkKm) && walkKm > 0) {
-    bits.push(Number.isFinite(walkMin) ? `走路 ${walkKm} 公里（${walkMin} 分）` : `走路 ${walkKm} 公里`);
-  }
-  if (Number.isFinite(rideKm) && rideKm > 0) {
-    bits.push(Number.isFinite(rideMin) ? `騎車 ${rideKm} 公里（${rideMin} 分）` : `騎車 ${rideKm} 公里`);
-  }
-  return bits.join(" · ");
+  if (!name || !isWalkableMrtDistance(walkKm)) return "";
+  return `捷運${name.replace(/站$/, "")}站 · 步行約 ${walkKm} 公里`;
 }
