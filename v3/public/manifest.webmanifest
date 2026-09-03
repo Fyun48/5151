@@ -1,0 +1,25 @@
+{
+  "name": "吉比租房物件追蹤",
+  "short_name": "吉比租房",
+  "description": "找房追蹤與需求牆。免費工具，不是仲介。",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f3f7f9",
+  "theme_color": "#0da5a0",
+  "lang": "zh-Hant",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

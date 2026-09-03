@@ -49,6 +49,19 @@ import {
   saveMemberMailSettings,
   getHelpQa,
   saveHelpQa,
+  getCrawlSources,
+  saveCrawlSources,
+  listDemand,
+  getDemand,
+  createDemand,
+  closeDemand,
+  replyDemand,
+  reportDemandItem,
+  demandMeta,
+  saveUserPushSubscription,
+  deleteUserPushSubscription,
+  publicVapidKey,
+  vapidConfigured,
 } from "./db.js";
 import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requireAuth, sessionCookie, verifyLogin } from "./auth.js";
 import { boxFromRoadDescription, geocodeAddress, needsListingGeo, hasWorkPoint } from "./geo.js";
@@ -62,7 +75,7 @@ import { assertCaptchaIssuable, assertDemoReadable, authAttemptKeys, clientIp } 
 import { buildDemoState } from "./demo.js";
 import { backfillListingCoords, backfillListingMrt, backfillListingRoutes, flushPendingNotifications, runWatch } from "./watcher.js";
 import { LIST_PAGE_SIZE } from "./client591.js";
-import { APP_NAME } from "./brand.js";
+import { APP_NAME, APP_VERSION } from "./brand.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -80,7 +93,23 @@ app.use((req, res, next) => {
 });
 
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true });
+  res.json({ ok: true, version: APP_VERSION });
+});
+
+app.get("/manifest.webmanifest", (_req, res) => {
+  res.setHeader("Content-Type", "application/manifest+json");
+  res.sendFile(path.join(__dirname, "../public/manifest.webmanifest"));
+});
+
+app.get("/sw.js", (_req, res) => {
+  res.setHeader("Content-Type", "text/javascript; charset=utf-8");
+  res.setHeader("Service-Worker-Allowed", "/");
+  res.setHeader("Cache-Control", "no-cache");
+  res.sendFile(path.join(__dirname, "../public/sw.js"));
+});
+
+app.get("/api/push/vapid", (_req, res) => {
+  res.json({ publicKey: publicVapidKey(), configured: vapidConfigured() });
 });
 
 app.get("/", (_req, res) => {
@@ -142,6 +171,7 @@ app.get("/go/:id", (req, res) => {
 });
 
 app.use("/vendor", express.static(path.join(__dirname, "../public/vendor"), { maxAge: "7d" }));
+app.use("/icons", express.static(path.join(__dirname, "../public/icons"), { maxAge: "7d" }));
 
 app.get("/api/me", (req, res) => {
   const session = readSession(req);
@@ -153,6 +183,8 @@ app.get("/api/me", (req, res) => {
     configured: true,
     canRegister: true,
     hint: "",
+    version: APP_VERSION,
+    vapidPublicKey: publicVapidKey(),
     sponsor: session ? publicSponsorSettings(session) : { show: false, links: [], sponsored: false, intro: "", thanks: "" },
   });
 });
@@ -163,6 +195,28 @@ app.get("/api/disclaimer", (_req, res) => {
 
 app.get("/api/help-qa", (_req, res) => {
   res.json(getHelpQa());
+});
+
+app.get("/api/demand", (req, res) => {
+  try {
+    const session = readSession(req);
+    const mine = String(req.query?.mine || "") === "1";
+    res.json({
+      ...demandMeta(),
+      posts: listDemand({ viewerId: session?.userId || 0, mine: mine && Boolean(session?.userId) }),
+    });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/demand/:id", (req, res) => {
+  try {
+    const session = readSession(req);
+    res.json(getDemand(req.params.id, { viewerId: session?.userId || 0 }));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
 });
 
 function captchaPayload() {
@@ -380,6 +434,100 @@ app.put("/api/admin/maps", requireAdminApi, (req, res) => {
     const settings = saveAdminMapsSettings(body);
     if (settings.enabled && body.clearKey !== true) queueGeoBackfill();
     res.json(settings);
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/admin/crawl-sources", requireAdminApi, (_req, res) => {
+  res.json(getCrawlSources());
+});
+
+app.put("/api/admin/crawl-sources", requireAdminApi, (req, res) => {
+  try {
+    res.json(saveCrawlSources(req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/demand", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入才能發需求" });
+      return;
+    }
+    res.json(createDemand(session.userId, req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/demand/:id/reply", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入才能回覆" });
+      return;
+    }
+    res.json(replyDemand(session.userId, req.params.id, req.body?.body));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/demand/:id/close", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入" });
+      return;
+    }
+    res.json(closeDemand(session.userId, req.params.id, { admin: session.role === "admin" }));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/demand/:id/report", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入才能檢舉" });
+      return;
+    }
+    res.json(reportDemandItem(session.userId, {
+      targetType: req.body?.targetType || "post",
+      targetId: req.body?.targetId || req.params.id,
+      reason: req.body?.reason,
+    }));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/push/subscribe", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入" });
+      return;
+    }
+    res.json(saveUserPushSubscription(session.userId, req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/push/unsubscribe", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入" });
+      return;
+    }
+    res.json(deleteUserPushSubscription(session.userId, req.body?.endpoint));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }

@@ -154,7 +154,13 @@ export function publicPath(req) {
     p === "/api/disclaimer" ||
     p === "/api/help-qa" ||
     p === "/api/captcha" ||
+    p === "/api/demand" ||
+    p === "/api/push/vapid" ||
+    p === "/manifest.webmanifest" ||
+    p === "/sw.js" ||
+    p.startsWith("/api/demand/") ||
     p.startsWith("/vendor/") ||
+    p.startsWith("/icons/") ||
     p.startsWith("/go/")
   );
 }

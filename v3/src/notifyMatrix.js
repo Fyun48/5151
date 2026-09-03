@@ -1,5 +1,5 @@
-/** 站內／Webhook／郵件可獨立勾選的事件列（與設定頁表格列序一致）。 */
-export const NOTIFY_CHANNELS = ["dock", "webhook", "mail"];
+/** 站內／系統推播／Webhook／郵件可獨立勾選的事件列（與設定頁表格列序一致）。 */
+export const NOTIFY_CHANNELS = ["dock", "push", "webhook", "mail"];
 
 export const NOTIFY_MATRIX_ROWS = [
   { key: "new", label: "全新物件" },
@@ -11,10 +11,12 @@ export const NOTIFY_MATRIX_ROWS = [
   { key: "relist", label: "重新上架" },
 ];
 
+const CHANNEL_DEFAULTS = { dock: true, push: true, webhook: false, mail: false };
+
 export function defaultNotifyMatrix() {
   const out = {};
   for (const row of NOTIFY_MATRIX_ROWS) {
-    out[row.key] = { dock: true, webhook: true, mail: true };
+    out[row.key] = { ...CHANNEL_DEFAULTS };
   }
   return out;
 }
@@ -35,7 +37,7 @@ function cellOn(value, fallback) {
 
 /**
  * 正規化勾選表。舊設定沒有 notifyMatrix 時，從 webhookNotify*／notifyNew 等旗標帶過來。
- * 缺列或缺格預設為開（維持目前「該通知的都通知」行為）。
+ * 站內與系統推播預設開；郵件／Webhook 為選用，缺格預設關。
  */
 export function normalizeNotifyMatrix(settings = {}) {
   const next = defaultNotifyMatrix();
@@ -44,10 +46,11 @@ export function normalizeNotifyMatrix(settings = {}) {
 
   if (!hasMatrix) {
     next.new.dock = settings.notifyNew !== false;
-    next.new.webhook = settings.webhookNotifyNew !== false;
+    next.new.push = settings.notifyPush !== false;
+    next.new.webhook = settings.webhookNotifyNew === true;
     next.same_source.dock = settings.notifySameSource !== false;
-    next.price.webhook = settings.webhookNotifyPriceDrop !== false;
-    next.title.webhook = settings.webhookNotifyTitleUpdate !== false;
+    next.price.webhook = settings.webhookNotifyPriceDrop === true;
+    next.title.webhook = settings.webhookNotifyTitleUpdate === true;
     return next;
   }
 
@@ -55,9 +58,10 @@ export function normalizeNotifyMatrix(settings = {}) {
     const cell = incoming[row.key];
     if (!cell || typeof cell !== "object") continue;
     next[row.key] = {
-      dock: cellOn(cell.dock, true),
-      webhook: cellOn(cell.webhook, true),
-      mail: cellOn(cell.mail, true),
+      dock: cellOn(cell.dock, CHANNEL_DEFAULTS.dock),
+      push: cellOn(cell.push, CHANNEL_DEFAULTS.push),
+      webhook: cellOn(cell.webhook, CHANNEL_DEFAULTS.webhook),
+      mail: cellOn(cell.mail, CHANNEL_DEFAULTS.mail),
     };
   }
   return next;
@@ -66,8 +70,6 @@ export function normalizeNotifyMatrix(settings = {}) {
 export function notifyChannelOn(settings, channel, eventType) {
   const key = eventMatrixKey(eventType);
   if (!key || !NOTIFY_CHANNELS.includes(channel)) return false;
-  const matrix = settings?.notifyMatrix && typeof settings.notifyMatrix === "object"
-    ? settings.notifyMatrix
-    : normalizeNotifyMatrix(settings);
-  return matrix?.[key]?.[channel] !== false;
+  const matrix = normalizeNotifyMatrix(settings);
+  return matrix?.[key]?.[channel] === true;
 }

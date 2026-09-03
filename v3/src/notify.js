@@ -236,9 +236,14 @@ export function shouldMailNotify(settings, listing, event, opts = {}) {
   return shouldNotify(settings, listing, event) && notifyChannelOn(settings, "mail", event?.type);
 }
 
+export function shouldPushNotify(settings, listing, event) {
+  return shouldNotify(settings, listing, event) && notifyChannelOn(settings, "push", event?.type);
+}
+
 export function shouldDeliverNotify(settings, listing, event, opts = {}) {
   return (
     shouldDockNotify(settings, listing, event)
+    || shouldPushNotify(settings, listing, event)
     || shouldWebhookNotify(settings, listing, event)
     || shouldMailNotify(settings, listing, event, opts)
   );

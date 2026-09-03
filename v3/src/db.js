@@ -29,7 +29,27 @@ import { countsTowardAllTotal, isConfirmedOffline, isPendingOffline } from "./of
 import { coveringJobsFromMembers, coveringJobsFromSettings, coversFromMemberSettings, listingInMemberScope } from "./covering.js";
 import { listCrawlCovers } from "./crawlCovers.js";
 import { ensurePersonalSchema } from "./personalSchema.js";
-import { importV1CacheIfNeeded } from "./importV1.js";
+import { importV1CacheIfNeeded, importV2CacheIfNeeded } from "./importV1.js";
+import { defaultCrawlSources, normalizeCrawlSources, publicCrawlSources, crawlSourceEnabled } from "./crawlSources.js";
+import {
+  ensureDemandSchema,
+  listDemandPosts as listDemandPostsOn,
+  getDemandPost as getDemandPostOn,
+  createDemandPost as createDemandPostOn,
+  closeDemandPost as closeDemandPostOn,
+  addDemandReply as addDemandReplyOn,
+  reportDemand as reportDemandOn,
+  demandMeta,
+} from "./demand.js";
+import {
+  ensurePushSchema,
+  savePushSubscription as savePushSubscriptionOn,
+  deletePushSubscription as deletePushSubscriptionOn,
+  sendWebPush,
+  publicVapidKey,
+  vapidConfigured,
+  pushPayloadFromEvents,
+} from "./webPush.js";
 import {
   adminEmailForUser,
   anyoneWatched as anyoneWatchedOn,
@@ -349,6 +369,28 @@ try {
 } catch {
   // already migrated
 }
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN source TEXT NOT NULL DEFAULT '591'");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN source_id TEXT");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN model_score REAL");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("UPDATE listings SET source = '591' WHERE IFNULL(source, '') = ''");
+  db.exec("UPDATE listings SET source_id = CAST(post_id AS TEXT) WHERE IFNULL(source_id, '') = ''");
+} catch {
+  // ignore
+}
+db.exec("CREATE INDEX IF NOT EXISTS idx_listings_origin ON listings(source, source_id)");
 db.exec(`
   CREATE TABLE IF NOT EXISTS community_cache (
     community_id INTEGER PRIMARY KEY,
@@ -364,6 +406,8 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_listings_hidden ON listings(hidden)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_match ON listings(match_level)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_offline ON listings(offline)");
 ensurePersonalSchema(db);
+ensureDemandSchema(db);
+ensurePushSchema(db);
 
 let cachedDefaultUserId = 0;
 
@@ -750,6 +794,61 @@ export function saveHelpQa(partial = {}) {
   return getHelpQa();
 }
 
+export function getCrawlSources() {
+  return publicCrawlSources(settingKey("crawlSources") ?? defaultCrawlSources());
+}
+
+export function saveCrawlSources(partial = {}) {
+  const src = partial && typeof partial === "object" ? partial : {};
+  const next = normalizeCrawlSources(src.items ?? src);
+  writeSettingKey("crawlSources", next);
+  return getCrawlSources();
+}
+
+export function isCrawlSourceEnabled(id) {
+  return crawlSourceEnabled(getCrawlSources().items, id);
+}
+
+export function listDemand(opts = {}) {
+  return listDemandPostsOn(db, opts);
+}
+
+export function getDemand(postId, opts = {}) {
+  return getDemandPostOn(db, postId, opts);
+}
+
+export function createDemand(userId, input) {
+  return createDemandPostOn(db, userId, input);
+}
+
+export function closeDemand(userId, postId, opts = {}) {
+  return closeDemandPostOn(db, userId, postId, opts);
+}
+
+export function replyDemand(userId, postId, body) {
+  return addDemandReplyOn(db, userId, postId, body);
+}
+
+export function reportDemandItem(userId, input) {
+  return reportDemandOn(db, userId, input);
+}
+
+export { demandMeta };
+
+export function saveUserPushSubscription(userId, sub) {
+  return savePushSubscriptionOn(db, userId, sub);
+}
+
+export function deleteUserPushSubscription(userId, endpoint) {
+  return deletePushSubscriptionOn(db, userId, endpoint);
+}
+
+export async function sendUserWebPush(userId, payload) {
+  return sendWebPush(db, userId, payload);
+}
+
+export { publicVapidKey, vapidConfigured, pushPayloadFromEvents };
+
 export function listUserIds() {
   return listUserIdsOn(db);
 }
@@ -788,6 +887,8 @@ const SITE_SETTING_KEYS = new Set([
   "personalSettingsMigrated",
   "eventsMigrated",
   "v1CacheImported",
+  "v2CacheImported",
+  "crawlSources",
 ]);
 
 const DEFAULTS = {
@@ -799,9 +900,9 @@ const DEFAULTS = {
   notifyViewed: false,
   notifyWatchedAlways: true,
   discordWebhook: "",
-  webhookNotifyNew: true,
-  webhookNotifyPriceDrop: true,
-  webhookNotifyTitleUpdate: true,
+  webhookNotifyNew: false,
+  webhookNotifyPriceDrop: false,
+  webhookNotifyTitleUpdate: false,
   notifyMatrix: defaultNotifyMatrix(),
   windowsToast: true,
   hasBaseline: false,
@@ -1248,6 +1349,14 @@ export function upsertListing(listing) {
     communityId,
     communityName,
   );
+  const origin = String(listing.source || "591").trim() || "591";
+  const originId = String(listing.source_id || listing.post_id || "").trim() || String(listing.post_id);
+  try {
+    db.prepare("UPDATE listings SET source = ?, source_id = COALESCE(NULLIF(source_id, ''), ?) WHERE post_id = ?")
+      .run(origin, originId, listing.post_id);
+  } catch {
+    // ignore
+  }
 }
 
 export function setListingFees(postId, extraFees, fetched = 1) {
@@ -2296,6 +2405,16 @@ try {
     }
   } catch (error) {
     console.warn("從 v1 匯入刊登快取失敗：", error.message);
+  }
+  try {
+    const importedV2 = importV2CacheIfNeeded(db);
+    if (importedV2.imported) {
+      console.log(
+        `[5151] 已從 v2 只讀匯入刊登 ${importedV2.listings} 筆、社區 ${importedV2.communities}、座標 ${importedV2.geo}、路線 ${importedV2.routes}`,
+      );
+    }
+  } catch (error) {
+    console.warn("從 v2 匯入刊登快取失敗：", error.message);
   }
 } catch (error) {
   console.warn("會員帳號初始化失敗：", error.message);
