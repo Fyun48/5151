@@ -1,29 +1,44 @@
-name: Copy source to CasaOS
+name: Stop v1 on CasaOS
 
 on:
   push:
     branches: [master, main]
     paths:
-      - "src/**"
-      - "public/**"
+      - "docker-compose.yml"
+      - "casaos-compose.yml"
+      - ".github/workflows/deploy.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  sync-nas:
+  stop-v1:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: Copy src and public only
+      - name: Copy compose files
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.NAS_HOST }}
           port: ${{ secrets.NAS_PORT }}
           username: ${{ secrets.NAS_USER }}
           key: ${{ secrets.NAS_SSH_KEY }}
-          source: "src,public"
+          source: "docker-compose.yml,casaos-compose.yml"
           target: /mnt/Storage1/apps/5151
           overwrite: true
+      - name: Stop v1 container and keep its data
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.NAS_HOST }}
+          port: ${{ secrets.NAS_PORT }}
+          username: ${{ secrets.NAS_USER }}
+          key: ${{ secrets.NAS_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            cd /mnt/Storage1/apps/5151
+            docker compose stop 591-tracker || true
+            docker stop 591-tracker || true
+            docker rm -f 591-tracker || true

@@ -1,0 +1,4325 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/vendor/leaflet/leaflet.css" />
+  <title>吉比租房物件追蹤</title>
+  <style>
+    :root {
+      --bg: #f3f7f9;
+      --paper: #ffffff;
+      --ink: #1a2b33;
+      --muted: #64748b;
+      --line: #e2e8ef;
+      --accent: #0da5a0;
+      --accent-deep: #0a8280;
+      --accent-soft: #e8f7f6;
+      --accent-mist: #f0fbfa;
+      --rose: #d4a5a5;
+      --rose-soft: #faf3f3;
+      --rose-deep: #9f6b6b;
+      --accent-2: #0a8280;
+      --watch: #b87a7a;
+      --new: #0a8280;
+      --same: #8b7fd4;
+      --hermes: #E65326;
+      --hermes-deep: #C2410C;
+      --hermes-light: #F47A2A;
+      --shezi-red: #DC2626;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+      background:
+        radial-gradient(1000px 480px at 0% -5%, rgba(13, 165, 160, 0.07) 0%, transparent 55%),
+        radial-gradient(800px 400px at 100% 0%, rgba(212, 165, 165, 0.09) 0%, transparent 50%),
+        var(--bg);
+      color: var(--ink);
+    }
+    header {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 20px 32px 14px;
+    }
+    .header-main {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .header-profiles {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      padding-top: 10px;
+      border-top: 1px solid var(--line);
+    }
+    .header-profiles input[type="text"],
+    .header-profiles select {
+      width: auto;
+      min-width: 140px;
+      max-width: 220px;
+      margin: 0;
+      padding: 8px 10px;
+      font-size: 13px;
+    }
+    .mrt-line {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .mrt-chip {
+      display: inline-block;
+      padding: 1px 7px;
+      border: 1px solid var(--hermes);
+      border-radius: 4px;
+      background: #fff;
+      color: var(--hermes);
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.5;
+      letter-spacing: .02em;
+      vertical-align: baseline;
+    }
+    .route-chip {
+      display: inline;
+      margin-left: 6px;
+      padding: 0;
+      border-radius: 0;
+      background: none;
+      color: inherit;
+      font-size: inherit;
+      font-weight: inherit;
+      letter-spacing: inherit;
+      line-height: inherit;
+      vertical-align: baseline;
+    }
+    .fee-chip {
+      display: inline;
+      padding: 0;
+      border-radius: 0;
+      background: none;
+      color: var(--ink);
+      font-size: inherit;
+      font-weight: 800;
+      letter-spacing: .02em;
+      line-height: inherit;
+      vertical-align: baseline;
+    }
+    .rent-price {
+      color: var(--ink);
+      font-weight: 700;
+    }
+    .guest-tour {
+      position: fixed;
+      inset: 0;
+      z-index: 80;
+      pointer-events: none;
+    }
+    .guest-tour-dim {
+      position: absolute;
+      inset: 0;
+      background: rgba(16, 28, 34, 0.38);
+      animation: guestTourFade 0.35s ease;
+    }
+    .guest-tour-spot {
+      position: absolute;
+      border: 2px solid var(--accent);
+      border-radius: 18px;
+      box-shadow: 0 0 0 9999px rgba(16, 28, 34, 0.45), 0 0 0 8px rgba(13, 165, 160, 0.22);
+      transition: top 0.45s ease, left 0.45s ease, width 0.45s ease, height 0.45s ease;
+      animation: guestTourPulse 1.6s ease-in-out infinite;
+    }
+    .guest-tour-card {
+      position: absolute;
+      width: min(360px, calc(100vw - 32px));
+      padding: 14px 16px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: 0 16px 40px rgba(26, 43, 51, 0.16);
+      pointer-events: auto;
+      transition: top 0.45s ease, left 0.45s ease;
+    }
+    .guest-tour-card p { margin: 0; font-size: 14px; line-height: 1.55; }
+    .guest-tour-step {
+      color: var(--accent-deep);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      margin-bottom: 6px !important;
+    }
+    .guest-tour-card .row { margin-top: 12px; }
+    @keyframes guestTourFade {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    @keyframes guestTourPulse {
+      0%, 100% { box-shadow: 0 0 0 9999px rgba(16, 28, 34, 0.45), 0 0 0 6px rgba(13, 165, 160, 0.16); }
+      50% { box-shadow: 0 0 0 9999px rgba(16, 28, 34, 0.45), 0 0 0 12px rgba(13, 165, 160, 0.28); }
+    }
+    .notify-shortcuts {
+      margin: 10px 0 4px;
+      padding: 10px 12px;
+      background: var(--accent-mist);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+    }
+    .notify-shortcuts p { margin: 0 0 8px; }
+    .notify-shortcuts p:last-child { margin-bottom: 0; }
+    button.linkish {
+      display: inline-flex;
+      align-items: center;
+      margin: 0 0 6px;
+      padding: 0;
+      border: 0;
+      background: none;
+      color: var(--accent-deep);
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+    .hub-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 90;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 28px 16px 40px;
+      overflow: auto;
+    }
+    .hub-overlay[hidden] { display: none; }
+    .hub-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(16, 28, 34, 0.42);
+    }
+    .hub-panel {
+      position: relative;
+      width: min(760px, 100%);
+      margin-top: 24px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      box-shadow: 0 22px 50px rgba(26, 43, 51, 0.18);
+      padding: 18px 20px 22px;
+    }
+    .hub-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    .hub-head h2 { margin: 0; font-size: 18px; }
+    .hub-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 14px 0 12px;
+    }
+    .hub-tabs button[aria-selected="true"] {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+    .hub-pane[hidden] { display: none; }
+    .hub-steps {
+      margin: 0 0 12px;
+      padding-left: 18px;
+      color: var(--ink);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .hub-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px 14px;
+    }
+    @media (max-width: 720px) {
+      .hub-grid { grid-template-columns: 1fr; }
+    }
+    .gmail-hint {
+      margin: 8px 0 0;
+      padding: 8px 10px;
+      background: #fff8e8;
+      border: 1px solid #ead7a4;
+      border-radius: 10px;
+      color: #6b5420;
+      font-size: 13px;
+    }
+    .hub-panel textarea { min-height: 120px; }
+    .password-panel { width: min(420px, 100%); }
+    html.no-session #logoutBtn,
+    html.no-session #changePasswordBtn,
+    html.no-session #deleteAccountBtn,
+    html.no-session #adminLink,
+    html.no-session #resetLink,
+    html.no-session #watchBtn { display: none !important; }
+    html.has-session #loginBtn,
+    html.has-session #registerBtn { display: none !important; }
+    html.has-session .who.is-guest { visibility: hidden; }
+    body.role-guest #resetLink,
+    body.role-guest #adminLink,
+    body.role-guest #logoutBtn,
+    body.role-guest #changePasswordBtn,
+    body.role-guest #deleteAccountBtn,
+    body.role-guest #watchBtn,
+    body.role-guest #sponsorBar { display: none !important; }
+    body.role-guest .panel input,
+    body.role-guest .panel textarea,
+    body.role-guest .panel select,
+    body.role-guest .header-profiles input,
+    body.role-guest .header-profiles select,
+    body.role-guest .header-profiles button {
+      caret-color: transparent;
+      pointer-events: none;
+    }
+    .sponsor-bar {
+      margin: 0 32px;
+      padding: 12px 16px;
+      background: var(--accent-mist);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+    }
+    .sponsor-bar p { margin: 0; font-size: 13px; color: var(--ink); line-height: 1.55; }
+    .sponsor-bar .sponsor-links,
+    #sponsorSettingsLinks {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    a.sponsor-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 14px;
+      border-radius: 999px;
+      background: var(--accent);
+      color: #fff;
+      text-decoration: none;
+      font-size: 13px;
+    }
+    a.sponsor-chip .blurb { opacity: 0.86; font-size: 12px; }
+    .sponsor-bar.thanks { background: #fff; }
+    .save-msg { font-size: 12px; color: var(--muted); margin-left: 4px; }
+    .hub-panel .msg { font-size: 13px; color: var(--muted); min-height: 1.4em; margin: 8px 0 0; }
+    .hub-panel .msg.ok { color: var(--accent-deep); }
+    .hub-panel .msg.err { color: var(--rose-deep); }
+    .site-footer {
+      margin: 8px 32px 28px;
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: 0.02em;
+    }
+    h1 {
+      margin: 0;
+      font-family: "Noto Serif TC", "Source Han Serif TC", serif;
+      font-size: 26px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      color: var(--ink);
+    }
+    .sub { color: var(--muted); font-size: 14px; margin-top: 6px; }
+    .wrap { display: grid; grid-template-columns: 340px 1fr; gap: 20px; padding: 0 32px 40px; }
+    body.panel-collapsed .wrap { grid-template-columns: 1fr; }
+    body.panel-collapsed #settingsPanel { display: none; }
+    #expandPanelBtn {
+      display: inline-flex;
+      position: fixed;
+      right: 18px;
+      bottom: 80px;
+      width: 44px;
+      height: 44px;
+      padding: 0;
+      border-radius: 50%;
+      z-index: 96;
+      box-shadow: 0 8px 22px rgba(13, 165, 160, 0.28);
+      align-items: center;
+      justify-content: center;
+      font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: -0.12em;
+    }
+    #expandPanelBtn .panel-fab-icon {
+      display: block;
+      line-height: 1;
+    }
+    #expandPanelBtn .panel-fab-label {
+      position: absolute;
+      right: calc(100% + 8px);
+      top: 50%;
+      transform: translateY(-50%);
+      padding: 6px 10px;
+      border-radius: 10px;
+      background: var(--ink);
+      color: #fff;
+      font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.15s ease;
+      box-shadow: 0 8px 18px rgba(26, 43, 51, 0.18);
+      z-index: 2;
+    }
+    #expandPanelBtn:hover .panel-fab-label,
+    #expandPanelBtn:focus-visible .panel-fab-label {
+      opacity: 1;
+    }
+    .panel-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      margin: 0 0 10px;
+    }
+    .panel-toolbar strong { font-size: 14px; letter-spacing: 0.06em; color: var(--accent-deep); font-weight: 700; }
+    .when {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 6px;
+      margin: 8px 0 2px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      background: var(--accent-mist);
+      color: var(--accent-deep);
+      font-family: "Noto Sans TC", sans-serif;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      line-height: 1.2;
+    }
+    .when-label {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--accent-deep);
+      letter-spacing: 0.08em;
+    }
+    .card {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      box-shadow: 0 8px 28px rgba(26, 43, 51, 0.05);
+    }
+    main.card { overflow: visible; }
+    .panel { padding: 18px; }
+    label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 6px; }
+    textarea, select, input[type="number"], input[type="text"], input[type="url"], input[type="password"] {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font: 14px/1.5 "Noto Sans TC", "PingFang TC", sans-serif;
+      background: #fff;
+    }
+    #profileSelect { min-height: 42px; }
+    #settingsLoadMsg { color: var(--watch); }
+    #settingsLoadMsg[hidden] { display: none; }
+    textarea { min-height: 92px; resize: vertical; }
+    .checks { display: grid; gap: 8px; margin: 10px 0 14px; font-size: 14px; }
+    .checks label { margin: 0; color: var(--ink); display: flex; gap: 8px; align-items: center; }
+    .commute-mode {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 16px;
+      margin: 0 0 8px;
+    }
+    .commute-mode label { margin: 0; color: var(--ink); display: flex; gap: 8px; align-items: center; font-size: 14px; }
+    button, header .row a.ghost, a.primary {
+      border: 0;
+      border-radius: 999px;
+      padding: 9px 14px;
+      cursor: pointer;
+      font: 14px/1 "Noto Sans TC", sans-serif;
+    }
+    header .row a.ghost, a.primary { text-decoration: none; display: inline-flex; align-items: center; }
+    button:disabled { opacity: 0.5; cursor: wait; }
+    .primary { background: var(--accent); color: #fff; box-shadow: 0 4px 14px rgba(13, 165, 160, 0.22); }
+    .primary:hover:not(:disabled) { background: var(--accent-deep); }
+    .ghost { background: #fff; color: var(--ink); border: 1px solid var(--line); }
+    .ghost:hover:not(:disabled) { background: var(--accent-soft); border-color: #c5e8e6; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 8px; }
+    .stat { background: var(--accent-mist); border-radius: 14px; padding: 10px 12px; border: 1px solid var(--line); }
+    .stat b { display: block; font-size: 20px; color: var(--accent-deep); font-weight: 700; }
+    .stat span { color: var(--muted); font-size: 12px; }
+    .toolbar { display: flex; gap: 8px; align-items: center; padding: 12px 18px; flex-wrap: wrap; }
+    .chip {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--ink);
+      padding: 7px 12px;
+      border-radius: 999px;
+      transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+    }
+    .chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .bulk-bar {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      padding: 8px 0 0;
+    }
+    .bulk-bar.on { display: flex; }
+    .item {
+      display: grid;
+      grid-template-columns: 28px 132px minmax(0, 1fr) 120px 148px;
+      gap: 14px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: #fff;
+      align-items: start;
+    }
+    .item.picked { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(13, 165, 160, 0.12); }
+    .item.shezidao {
+      border: 2px solid var(--shezi-red);
+      box-shadow: 0 0 0 1px rgba(220, 38, 38, 0.18);
+    }
+    .item.picked.shezidao {
+      border-color: var(--shezi-red);
+      box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.16);
+    }
+    .pick { margin-top: 8px; width: 18px; height: 18px; accent-color: var(--accent); }
+    .item-cover img, .item-cover {
+      width: 132px;
+      height: 100px;
+      object-fit: cover;
+      border-radius: 12px;
+      background: #eee;
+      display: block;
+    }
+    .meta { color: var(--muted); font-size: 13px; margin: 6px 0; line-height: 1.55; }
+    .fees { color: var(--accent-deep); font-size: 13px; margin-top: 4px; line-height: 1.55; }
+    .contact {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 5px;
+      text-align: center;
+      font-size: 12px;
+      color: var(--ink);
+      min-width: 0;
+    }
+    .contact .avatar {
+      width: 52px;
+      height: 52px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 2px solid var(--line);
+      background: var(--accent-soft);
+      cursor: pointer;
+    }
+    .contact .avatar:hover { border-color: var(--accent); }
+    .contact .who-name { font-weight: 700; }
+    .contact .agency { color: var(--muted); line-height: 1.35; }
+    .contact a.tel { color: var(--accent-deep); text-decoration: none; font-family: "Noto Sans TC", sans-serif; }
+    .notify-matrix {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      margin: 6px 0 10px;
+    }
+    .notify-matrix-wrap { overflow-x: auto; }
+    .notify-matrix th, .notify-matrix td {
+      border: 1px solid var(--line);
+      padding: 8px 10px;
+      text-align: center;
+      vertical-align: middle;
+    }
+    .notify-matrix th:first-child, .notify-matrix td:first-child {
+      text-align: left;
+      font-weight: 600;
+    }
+    .notify-matrix thead th {
+      background: var(--accent-mist);
+      font-weight: 700;
+      color: var(--ink);
+    }
+    .notify-matrix tbody td:first-child { color: var(--ink); font-weight: 500; }
+    .notify-matrix input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+      accent-color: var(--accent);
+    }
+    .line-qr {
+      width: 72px;
+      height: 72px;
+      border-radius: 8px;
+      background: #fff;
+      border: 1px solid var(--line);
+    }
+    .header-main .row { align-items: center; }
+    .who-cluster {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .who { color: var(--muted); font-size: 13px; }
+    #helpQaBtn {
+      padding: 5px 10px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+    .help-qa-panel { width: min(640px, 100%); }
+    .help-qa-list { display: grid; gap: 8px; }
+    .help-qa-item {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+      overflow: hidden;
+    }
+    .help-qa-item summary {
+      cursor: pointer;
+      padding: 10px 12px;
+      font-weight: 700;
+      font-size: 14px;
+      list-style: none;
+    }
+    .help-qa-item summary::-webkit-details-marker { display: none; }
+    .help-qa-item p {
+      margin: 0;
+      padding: 0 12px 12px;
+      color: var(--ink);
+      font-size: 13px;
+      line-height: 1.65;
+      white-space: pre-wrap;
+    }
+    .who.is-guest {
+      color: #000;
+      font-family: "DFKai-SB", "BiauKai", "標楷體", "TW-Kai", "STKaiti", "KaiTi", serif;
+      font-size: 21px;
+      font-weight: 400;
+      letter-spacing: 0.08em;
+      line-height: 1;
+      padding: 0 6px 0 0;
+    }
+    .guest-toast {
+      position: fixed;
+      right: 20px;
+      bottom: 24px;
+      z-index: 110;
+      width: min(380px, calc(100vw - 32px));
+      padding: 16px 18px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: 0 18px 44px rgba(26, 43, 51, 0.2);
+      animation: guestToastIn 0.28s ease;
+    }
+    .guest-toast[hidden] { display: none; }
+    .guest-toast p {
+      margin: 0 0 12px;
+      font-size: 14px;
+      line-height: 1.55;
+      color: var(--ink);
+    }
+    .guest-toast .row { margin: 0; }
+    @keyframes guestToastIn {
+      from { opacity: 0; transform: translateY(12px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .tags { display: flex; gap: 6px; flex-wrap: wrap; }
+    .tag { font-size: 11px; padding: 3px 8px; border-radius: 999px; background: var(--accent-soft); }
+    .tag.new { background: var(--accent-mist); color: var(--accent-deep); }
+    .tag.same { background: #ede9fe; color: var(--same); }
+    .tag.watch { background: var(--rose-soft); color: var(--watch); }
+    .watch-note-label { margin: 8px 0 4px; font-size: 12px; color: var(--rose-deep); font-weight: 700; }
+    .watch-note {
+      margin: 0;
+      width: 100%;
+      min-height: 56px;
+      resize: vertical;
+      font-size: 13px;
+      line-height: 1.45;
+      background: var(--rose-soft);
+      border-color: #e8c4c4;
+    }
+    .watch-note[data-watch-draft="1"] {
+      box-shadow: 0 0 0 2px rgba(184, 122, 122, 0.35);
+    }
+    #watchFlyLayer {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 12000;
+    }
+    .watch-fly-ghost {
+      position: fixed;
+      pointer-events: none;
+      overflow: hidden;
+      margin: 0;
+      border-radius: 20px;
+      background: var(--paper);
+      box-shadow: 0 12px 32px rgba(26, 43, 51, 0.2);
+      transform-origin: center center;
+      will-change: transform, opacity;
+      z-index: 12001;
+    }
+    .chip.watch-fly-hit {
+      box-shadow: 0 0 0 4px rgba(184, 122, 122, 0.4);
+    }
+    .tag.lift { background: #dcfce7; color: #166534; }
+    .tag.off { background: #e2e8f0; color: #475569; }
+    .tag.off-sure { background: #334155; color: #f8fafc; }
+    .tag.verdict-yes { background: #334155; color: #f8fafc; font-weight: 700; }
+    .tag.verdict-no { background: #dcfce7; color: #166534; font-weight: 700; }
+    .match-peer {
+      background: var(--rose-soft);
+      border: 1px solid #ecd4d4;
+      border-radius: 12px;
+      padding: 8px 10px;
+      margin: 8px 0 4px;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .match-peer a { color: var(--ink); font-weight: 700; }
+    .item.offline { opacity: 0.78; }
+    .list-head-sticky {
+      position: static;
+      z-index: 1;
+      margin: 0;
+      background: var(--paper);
+      border: none;
+      border-bottom: 1px solid var(--line);
+      border-radius: 0;
+      box-shadow: none;
+      overflow: hidden;
+    }
+    body.panel-collapsed .list-head-sticky {
+      position: sticky;
+      top: 10px;
+      z-index: 40;
+      margin: 12px 12px 0;
+      background: linear-gradient(180deg, #fff 0%, #f8fbfc 100%);
+      border: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: 0 8px 28px rgba(26, 43, 51, 0.08);
+    }
+    body.panel-collapsed .list-head-sticky:not(.filter-compact) {
+      padding-bottom: 38px;
+    }
+    body.panel-collapsed .list-head-sticky.filter-compact .filter-body {
+      display: none;
+    }
+    body.panel-collapsed .list-head-sticky.filter-compact .filter-head {
+      padding-right: 92px;
+      border-bottom: none;
+    }
+    body.panel-collapsed .list-head-sticky.filter-compact .district-block {
+      padding-bottom: 6px;
+    }
+    body.panel-collapsed .list-head-sticky.filter-compact #districtChips {
+      border-top: none;
+      padding-top: 6px;
+    }
+    .filter-mini-btn,
+    .filter-restore-btn {
+      display: none;
+    }
+    body.panel-collapsed .filter-mini-btn {
+      display: inline-flex;
+      position: absolute;
+      right: 12px;
+      bottom: 10px;
+      z-index: 2;
+      width: 30px;
+      height: 30px;
+      padding: 0;
+      border-radius: 50%;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      line-height: 1;
+      color: var(--muted);
+      background: #fff;
+      border: 1px solid var(--line);
+      box-shadow: 0 2px 8px rgba(26, 43, 51, 0.06);
+    }
+    body.panel-collapsed .filter-mini-btn:hover:not(:disabled) {
+      color: var(--ink);
+      background: var(--accent-soft);
+      border-color: #c5e8e6;
+    }
+    body.panel-collapsed .list-head-sticky.filter-compact .filter-mini-btn {
+      display: none;
+    }
+    body.panel-collapsed .filter-restore-btn {
+      display: none;
+      position: absolute;
+      top: 10px;
+      right: 12px;
+      z-index: 2;
+      padding: 5px 11px;
+      font-size: 12px;
+      background: #fff;
+      border: 1px solid var(--line);
+      box-shadow: 0 2px 8px rgba(26, 43, 51, 0.06);
+    }
+    body.panel-collapsed .list-head-sticky.filter-compact .filter-restore-btn {
+      display: inline-flex;
+    }
+    .filter-head {
+      padding: 12px 18px 10px;
+      border-bottom: 1px solid var(--line);
+      background: var(--accent-mist);
+    }
+    body.panel-collapsed .filter-head {
+      background: linear-gradient(180deg, var(--accent-mist) 0%, rgba(240, 251, 250, 0.55) 100%);
+    }
+    .filter-head .status {
+      padding: 0;
+      margin: 0;
+      font-size: 12px;
+      line-height: 1.55;
+      color: var(--muted);
+    }
+    .list-meta {
+      font-size: 12px;
+      color: var(--accent-deep);
+      margin-top: 3px;
+      line-height: 1.45;
+    }
+    .list-meta[hidden] { display: none; }
+    .view-filters {
+      display: flex;
+      gap: 18px;
+      flex-wrap: wrap;
+      align-items: center;
+      padding: 10px 18px 11px;
+      font-size: 14px;
+      background: rgba(255, 255, 255, 0.72);
+    }
+    .view-filters label {
+      margin: 0;
+      color: var(--ink);
+      display: inline-flex;
+      gap: 6px;
+      align-items: center;
+    }
+    #scrollTopBtn {
+      position: fixed;
+      right: 18px;
+      bottom: 24px;
+      z-index: 95;
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      font-size: 22px;
+      line-height: 1;
+      padding: 0;
+      box-shadow: 0 8px 22px rgba(13, 165, 160, 0.24);
+    }
+    #floatDock { display: none; }
+    .wrap { padding-left: 32px; padding-right: 32px; }
+    .district-city { margin: 8px 0 12px; }
+    .district-city-head { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; }
+    .district-city h3 { margin: 0; font-size: 14px; flex: 1; }
+    .district-city-head button { padding: 4px 10px; font-size: 12px; }
+    .districts { display: flex; flex-wrap: wrap; gap: 6px; }
+    .districts label {
+      margin: 0;
+      color: var(--ink);
+      display: flex;
+      gap: 5px;
+      align-items: center;
+      font-size: 13px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 5px 10px;
+    }
+    .districts label.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .districts input { width: auto; margin: 0; }
+    .price-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .district-block { padding: 0 18px 3px; }
+    #districtChips {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      padding: 10px 0 3px;
+      flex-wrap: wrap;
+      border-top: 1px solid var(--line);
+    }
+    #profileName { margin-bottom: 8px; }
+    .hint { font-size: 12px; color: var(--muted); margin: 4px 0 8px; line-height: 1.5; }
+    body:not(.role-admin) .admin-only { display: none !important; }
+    body.role-admin .member-only { display: none !important; }
+    #excludeMapWrap { margin: 8px 0; }
+    #excludeMap { height: 220px; border-radius: 12px; border: 1px solid var(--line); }
+    .box-list { display: grid; gap: 8px; margin: 8px 0; }
+    .box-row { display: flex; gap: 6px; align-items: center; font-size: 13px; flex-wrap: wrap; }
+    .box-row input[type="text"] { flex: 1; margin: 0; padding: 6px 8px; min-width: 72px; }
+    .box-enable { margin: 0; color: var(--ink); display: flex; gap: 4px; align-items: center; font-size: 13px; white-space: nowrap; }
+    .box-enable input { width: auto; }
+    .box-edit {
+      background: var(--accent-mist);
+      border-radius: 12px;
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+    }
+    .box-bounds { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .box-bounds label { margin: 0; font-size: 12px; }
+    .box-card.off { opacity: 0.72; }
+    #regionText { min-height: 72px; }
+    #mapOverlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(31, 26, 22, 0.55);
+      z-index: 200;
+      padding: 20px;
+    }
+    #mapOverlay.open { display: flex; flex-direction: column; }
+    #mapOverlay .map-stage {
+      flex: 1;
+      min-height: 0;
+      width: 100%;
+      height: 100%;
+      background: var(--paper);
+      border-radius: 18px;
+      box-shadow: 0 18px 50px rgba(40, 20, 8, 0.22);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    #mapOverlay .map-overlay-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--line);
+    }
+    #mapOverlay .map-overlay-bar h2 { margin: 0; font-size: 16px; }
+    #mapOverlayHost {
+      flex: 1;
+      min-height: 0;
+      position: relative;
+      height: calc(100vh - 120px);
+    }
+    body.map-expanded { overflow: hidden; }
+    body.map-expanded #mapOverlayHost #excludeMap {
+      position: absolute;
+      inset: 0;
+      width: 100% !important;
+      height: 100% !important;
+      min-height: 320px;
+      border: 0;
+      border-radius: 0;
+      margin: 0;
+    }
+    #alertDock {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      width: min(380px, calc(100vw - 24px));
+      max-height: 72vh;
+      overflow: auto;
+      z-index: 80;
+      display: none;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: var(--paper);
+      box-shadow: 0 18px 50px rgba(40, 20, 8, 0.18);
+    }
+    #alertDock.open { display: block; }
+    #alertDock header {
+      padding: 14px 16px 8px;
+      align-items: center;
+    }
+    #alertDock header h2 { margin: 0; font-size: 16px; letter-spacing: 0.04em; }
+    .dock-item { padding: 10px 16px 14px; border-top: 1px solid var(--line); }
+    .dock-item a { color: var(--ink); }
+    .dock-changes { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+    .dock-change {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px 8px;
+      padding: 8px 10px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, #fff7ed 0%, var(--rose-soft) 100%);
+      border: 1px solid #f0d8c8;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    .dock-change-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      color: #9a5b32;
+      background: #fff;
+      border-radius: 999px;
+      padding: 2px 8px;
+    }
+    .dock-change-from {
+      color: var(--muted);
+      text-decoration: line-through;
+      text-decoration-color: #d4a5a5;
+    }
+    .dock-change-arrow { color: var(--watch); font-weight: 800; }
+    .dock-change-to { color: var(--ink); font-weight: 700; }
+    .dock-item .row { flex-wrap: wrap; }
+    .drawing .leaflet-container { cursor: crosshair; }
+    .actions { display: flex; flex-direction: column; gap: 8px; min-width: 132px; }
+    .hide-box { font-size: 13px; color: var(--muted); display: flex; gap: 6px; align-items: center; cursor: pointer; }
+    .list { display: grid; gap: 14px; padding: 14px 16px 16px; }
+    .empty { padding: 40px; color: var(--muted); text-align: center; }
+    #bootFail {
+      display: none;
+      position: sticky;
+      top: 0;
+      z-index: 10000;
+      margin: 0;
+      padding: 12px 32px;
+      background: var(--rose-soft);
+      color: var(--rose-deep);
+      border-bottom: 1px solid var(--rose);
+      font-size: 14px;
+      line-height: 1.55;
+    }
+    #bootFail[data-open="1"] { display: block; }
+    #bootFail strong { display: block; margin-bottom: 4px; font-size: 15px; }
+    @media (max-width: 1100px) {
+      .item { grid-template-columns: 28px 120px 1fr; }
+      .contact, .actions { grid-column: 2 / -1; flex-direction: row; flex-wrap: wrap; justify-content: flex-start; }
+    }
+    @media (max-width: 980px) {
+      .wrap, .stats { grid-template-columns: 1fr; }
+      header, .wrap { padding-left: 16px; padding-right: 16px; }
+      body.panel-collapsed .list-head-sticky { margin: 10px 10px 0; top: 6px; }
+      .sponsor-bar { margin-left: 16px; margin-right: 16px; }
+    }
+  </style>
+  <script>
+    (function () {
+      var html = document.documentElement;
+      if (document.cookie.indexOf("591_session=") !== -1) html.classList.add("has-session");
+      else html.classList.add("no-session");
+    })();
+  </script>
+</head>
+<body class="role-guest">
+  <div id="bootFail" role="alert">
+    <strong>畫面程式沒有跑起來</strong>
+    <span id="bootFailDetail">這是網頁程式錯誤，不是物件資料壞了。請按右上「重新整理」。不要按「清除資料」，清資料解不了這個狀況。</span>
+  </div>
+  <script>
+    window.__APP_PARSED = false;
+    window.__APP_BOOTED = false;
+    window.__showBootFail = function (detail) {
+      var box = document.getElementById("bootFail");
+      var text = document.getElementById("bootFailDetail");
+      if (text && detail) text.textContent = detail;
+      if (box) box.setAttribute("data-open", "1");
+      var status = document.getElementById("status");
+      if (status) status.textContent = "頁面程式沒跑起來（不是資料壞了）";
+      var loadMsg = document.getElementById("settingsLoadMsg");
+      if (loadMsg) {
+        loadMsg.hidden = false;
+        loadMsg.textContent = "網頁程式沒執行到。現在看到的空白表單不是你的存檔。請重新整理，不要按儲存或清除資料。";
+      }
+    };
+    window.addEventListener("error", function (ev) {
+      if (window.__APP_BOOTED) return;
+      var msg = ev && ev.message ? String(ev.message) : "";
+      if (!msg || msg === "Script error.") return;
+      window.__showBootFail("錯誤：" + msg + "。請重新整理，不要按清除資料。");
+    });
+    setTimeout(function () {
+      if (window.__APP_BOOTED) return;
+      if (!window.__APP_PARSED) {
+        window.__showBootFail("主程式腳本沒有執行，多半是語法錯誤。請重新整理，不要按清除資料。");
+        return;
+      }
+      window.__showBootFail("程式執行到一半就停了。請重新整理，不要按清除資料。");
+    }, 4000);
+  </script>
+  <header>
+    <div class="header-main">
+      <div>
+        <h1>吉比租房物件追蹤</h1>
+      </div>
+      <div class="row">
+        <span class="who-cluster">
+          <span class="who is-guest" id="who" data-tour="guestWho">訪客</span>
+          <button type="button" class="ghost" id="helpQaBtn" title="功能說明 Q&amp;A" aria-label="功能說明 Q&amp;A">Q&amp;A</button>
+        </span>
+        <a class="ghost" id="loginBtn" href="/login.html">登入</a>
+        <a class="primary" id="registerBtn" href="/login.html?register=1">註冊</a>
+        <button type="button" class="ghost" id="changePasswordBtn">變更密碼</button>
+        <button type="button" class="ghost" id="deleteAccountBtn">取消會員</button>
+        <a class="ghost" id="logoutBtn" href="/logout">登出</a>
+        <a class="ghost admin-only" id="adminLink" href="/admin.html">後台管理</a>
+        <a class="ghost admin-only" id="resetLink" href="/reset.html" title="會刪光物件與設定；無法修復畫面卡住" style="align-items:center;text-decoration:none">清除資料</a>
+        <button class="ghost" id="reloadBtn">重新整理</button>
+        <button class="primary" id="watchBtn">立即檢查</button>
+      </div>
+    </div>
+    <div class="header-profiles" data-tour="profiles">
+      <input type="text" id="profileName" placeholder="設定檔名稱" maxlength="40" aria-label="設定檔名稱" />
+      <select id="profileSelect" aria-label="已存設定檔"></select>
+      <button type="button" class="primary" id="saveBtn" disabled>儲存</button>
+      <button type="button" class="ghost" id="saveAsBtn" disabled>另存</button>
+      <button type="button" class="ghost" id="deleteProfileBtn">刪除</button>
+      <span class="save-msg" id="saveMsg"></span>
+    </div>
+  </header>
+  <div id="guestTour" class="guest-tour" hidden>
+    <div class="guest-tour-dim"></div>
+    <div class="guest-tour-spot" id="guestTourSpot"></div>
+    <div class="guest-tour-card" id="guestTourCard">
+      <p class="guest-tour-step" id="guestTourStep"></p>
+      <p id="guestTourText"></p>
+      <div class="row">
+        <button type="button" class="ghost" id="guestTourSkip">略過</button>
+        <button type="button" class="primary" id="guestTourNext">下一步</button>
+      </div>
+    </div>
+  </div>
+  <div id="guestToast" class="guest-toast" hidden role="status" aria-live="polite">
+    <p>成為會員後就能使用這項功能：改搜尋條件、儲存設定、標記已瀏覽與特別關注。</p>
+    <div class="row">
+      <a class="primary" href="/login.html?register=1">前往註冊</a>
+      <button type="button" class="ghost" id="guestToastClose">知道了</button>
+    </div>
+  </div>
+  </div>
+  <div id="sponsorBar" class="sponsor-bar" hidden></div>
+  <div class="wrap">
+    <aside class="card panel" id="settingsPanel">
+      <div class="panel-toolbar">
+        <strong>搜尋設定</strong>
+        <button type="button" class="ghost" id="collapsePanelBtn">收合</button>
+      </div>
+      <div class="stats" id="stats">
+        <div class="stat"><b>—</b><span>全部</span></div>
+        <div class="stat"><b>—</b><span>有電梯</span></div>
+        <div class="stat"><b>—</b><span>未瀏覽</span></div>
+        <div class="stat"><b>—</b><span>特別關注</span></div>
+        <div class="stat"><b>—</b><span>已隱藏</span></div>
+        <div class="stat"><b>—</b><span>疑似</span></div>
+      </div>
+      <p class="hint" id="settingsLoadMsg">正在載入已存設定…完成前請不要按儲存或另存。若一直停在這句、儲存也不能按，是網頁程式沒跑起來，不是資料壞了；請重新整理，不要按清除資料。</p>
+      <p class="hint" id="profileListHint"></p>
+      <p class="hint" id="districtLimitHint"></p>
+      <div id="districtPicker" data-tour="districts">
+        <div class="district-city">
+          <div class="district-city-head">
+            <h3>台北市</h3>
+            <button type="button" class="ghost" data-city-all="1">全選</button>
+            <button type="button" class="ghost" data-city-none="1">清除</button>
+          </div>
+          <div class="districts">
+            <label><input type="checkbox" data-district value="1-8" />士林</label>
+            <label><input type="checkbox" data-district value="1-9" />北投</label>
+            <label><input type="checkbox" data-district value="1-2" />大同</label>
+            <label><input type="checkbox" data-district value="1-3" />中山</label>
+            <label><input type="checkbox" data-district value="1-4" />松山</label>
+            <label><input type="checkbox" data-district value="1-5" />大安</label>
+            <label><input type="checkbox" data-district value="1-7" />信義</label>
+            <label><input type="checkbox" data-district value="1-10" />內湖</label>
+            <label><input type="checkbox" data-district value="1-11" />南港</label>
+            <label><input type="checkbox" data-district value="1-1" />中正</label>
+            <label><input type="checkbox" data-district value="1-6" />萬華</label>
+            <label><input type="checkbox" data-district value="1-12" />文山</label>
+          </div>
+        </div>
+        <div class="district-city">
+          <div class="district-city-head">
+            <h3>新北市</h3>
+            <button type="button" class="ghost" data-city-all="3">全選</button>
+            <button type="button" class="ghost" data-city-none="3">清除</button>
+          </div>
+          <div class="districts">
+            <label><input type="checkbox" data-district value="3-48" />五股</label>
+            <label><input type="checkbox" data-district value="3-47" />蘆洲</label>
+            <label><input type="checkbox" data-district value="3-49" />八里</label>
+            <label><input type="checkbox" data-district value="3-50" />淡水</label>
+            <label><input type="checkbox" data-district value="3-26" />板橋</label>
+            <label><input type="checkbox" data-district value="3-43" />三重</label>
+            <label><input type="checkbox" data-district value="3-38" />中和</label>
+            <label><input type="checkbox" data-district value="3-37" />永和</label>
+            <label><input type="checkbox" data-district value="3-44" />新莊</label>
+            <label><input type="checkbox" data-district value="3-34" />新店</label>
+            <label><input type="checkbox" data-district value="3-39" />土城</label>
+            <label><input type="checkbox" data-district value="3-27" />汐止</label>
+            <label><input type="checkbox" data-district value="3-46" />林口</label>
+            <label><input type="checkbox" data-district value="3-45" />泰山</label>
+            <label><input type="checkbox" data-district value="3-41" />樹林</label>
+            <label><input type="checkbox" data-district value="3-40" />三峽</label>
+            <label><input type="checkbox" data-district value="3-42" />鶯歌</label>
+            <label><input type="checkbox" data-district value="3-51" />三芝</label>
+          </div>
+        </div>
+      </div>
+      <div class="price-row">
+        <div>
+          <label>租金下限（可空白）</label>
+          <input type="number" id="priceMin" min="0" step="500" placeholder="不限" />
+        </div>
+        <div>
+          <label>租金上限（可只填這個）</label>
+          <input type="number" id="priceMax" min="0" step="500" placeholder="例如 36000" />
+        </div>
+      </div>
+      <label>坪數上限（幾坪以內，可空白）</label>
+      <input type="number" id="areaMax" min="0" max="500" step="0.5" placeholder="不限，例如 30" />
+      <p class="hint">大於這個坪數的物件會從列表藏起來，也不通知。空白或 0 表示不限。按儲存就套用已抓到的結果，不必重查 591。</p>
+      <div class="checks">
+        <label><input type="checkbox" id="excludeRooftop" checked /> 排除頂樓加蓋</label>
+      </div>
+      <details>
+        <summary class="hint">進階：591 網址（自動產生，通常不用改）</summary>
+        <textarea id="searchUrls" placeholder="儲存後會依上方行政區自動產生"></textarea>
+      </details>
+      <div class="admin-only">
+        <label>檢查間隔（分鐘）</label>
+        <input type="number" id="intervalMinutes" min="1" max="120" />
+      </div>
+      <p class="hint member-only" id="intervalMemberHint">本系統每8分鐘會重新檢本物件來源比對篩選</p>
+      <div class="member-only" id="sponsorSettingsBlock" hidden>
+        <p class="hint" id="sponsorSettingsIntro"></p>
+        <div class="sponsor-links" id="sponsorSettingsLinks"></div>
+      </div>
+      <div class="admin-only">
+        <label>確認已下架天數</label>
+        <input type="number" id="offlineConfirmDays" min="1" max="30" />
+      </div>
+      <div class="admin-only">
+        <label>每次最多抓取頁數</label>
+        <input type="number" id="pagesPerWatch" min="1" max="40" />
+      </div>
+      <label>建物總樓層至少</label>
+      <input type="number" id="minBuildingFloors" min="1" max="50" />
+      <label data-tour="commute">上班地址（選填）</label>
+      <input type="text" id="workAddress" placeholder="例如：臺北市南港區經貿一路170號" />
+      <label>通勤路徑（同時只能選一種）</label>
+      <div class="commute-mode" role="radiogroup" aria-label="通勤路徑">
+        <label><input type="radio" name="commuteMode" value="scooter" checked /> 機車</label>
+        <label><input type="radio" name="commuteMode" value="car" /> 汽車</label>
+      </div>
+      <label>路線上限（公里，0 表示不篩）</label>
+      <input type="number" id="commuteKm" min="0" max="80" step="0.5" />
+      <div class="checks" data-tour="mrt">
+        <label><input type="checkbox" id="showMrt" checked /> 顯示最近捷運站步行距離</label>
+      </div>
+      <div class="notify-shortcuts" data-tour="notify">
+        <p class="hint">Webhook、郵件與通知種類改到浮動設定，左側只留常用條件。</p>
+        <button type="button" class="linkish" data-open-hub="webhook">設定 Discord Webhook</button>
+        <p class="hint">特別推薦申請 Discord：免費、幾步就能收到特別關注更新。</p>
+        <button type="button" class="linkish" data-open-hub="mail">設定自己的 SMTP 發信</button>
+        <p class="hint" id="notifyMailHint">物件／屋源提醒請用你自己的 SMTP 寄到註冊信箱。註冊、忘記密碼、變更密碼、贊助通知由站方管理員 SMTP 寄出。</p>
+        <button type="button" class="linkish" data-open-hub="events">選擇哪些事件要通知</button>
+        <p class="hint" id="notifyHubStatus"></p>
+      </div>
+      <label>排除路名／關鍵字（一行一個）</label>
+      <p class="hint">地址或標題含這些字就不列入、也不通知。例如路名、路段。</p>
+      <textarea id="excludeKeywords" placeholder="延平北路八段&#10;承德路"></textarea>
+      <label>排除房仲／聯絡人（一行一個）</label>
+      <p class="hint">可填公司名、姓氏，或直接點列表右側頭像排除該人。之後也能用這個名單過濾特定名牌。</p>
+      <textarea id="excludeAgents" placeholder="美樂房屋&#10;黃小姐"></textarea>
+      <label>用地圖或文字排除範圍（最多 10 組）</label>
+      <p class="hint">手拉矩形或用「路名A以東、路名B以西、路名C以南、路名D以北」產生大致範圍。關閉的範圍仍會保存，但不會套用。框選後會在背景抓 591 地圖座標，落在框內的才會排除。大範圍請先按「展開地圖」再框。</p>
+      <textarea id="regionText" placeholder="例如：承德路以東、文林路以西、士東路以南、基河路以北"></textarea>
+      <p class="hint">路名請盡量寫完整（含「路／街／段」）。系統會先當臺北市查，找不到再查新北市。</p>
+      <div class="row">
+        <button type="button" class="ghost" id="regionTextBtn">產生範圍</button>
+      </div>
+      <p class="hint" id="regionTextMsg"></p>
+      <div class="row">
+        <button type="button" class="ghost" id="drawBoxBtn">開始框選</button>
+        <button type="button" class="ghost" id="expandMapBtn">展開地圖</button>
+        <button type="button" class="ghost" id="cancelDrawBtn">清除全部範圍</button>
+      </div>
+      <div id="excludeMapWrap"><div id="excludeMap"></div></div>
+      <div class="box-list" id="boxList"></div>
+    </aside>
+    <main class="card">
+      <div class="list-head-sticky" id="listHeadSticky">
+        <button type="button" class="filter-restore-btn ghost" id="filterRestoreBtn" title="還原完整篩選">還原篩選</button>
+        <div class="filter-head">
+          <div class="status" id="status">準備就緒</div>
+          <div class="list-meta" id="listMeta" hidden></div>
+        </div>
+        <div class="filter-body" id="filterBody">
+        <div class="toolbar">
+          <button class="chip on" data-filter="all">全部</button>
+          <button class="chip" data-filter="unseen">未瀏覽</button>
+          <button class="chip" data-filter="watched">特別關注</button>
+          <button class="chip" data-filter="same_source">同屋源更新</button>
+          <button class="chip" data-filter="suspected">疑似同屋源</button>
+          <button class="chip" data-filter="hidden">已隱藏</button>
+          <button class="chip" data-filter="offline">正在確認中的下架</button>
+          <span style="width:1px;height:22px;background:var(--line);margin:0 4px"></span>
+          <button class="chip" data-kind="elevator">電梯</button>
+          <button class="chip" data-kind="apartment">公寓</button>
+          <button class="chip" data-kind="suite">套房</button>
+          <span style="width:1px;height:22px;background:var(--line);margin:0 4px"></span>
+          <button class="chip on" data-sort="newest">最新</button>
+          <button class="chip" data-sort="price_asc">金額低→高</button>
+          <button class="chip" data-sort="price_desc">金額高→低</button>
+          <button class="chip commute-sort" data-sort="commute_asc" hidden>離公司近→遠</button>
+          <button class="chip commute-sort" data-sort="commute_desc" hidden>離公司遠→近</button>
+          <input type="text" id="q" placeholder="搜尋標題 / 地址 / 編號 / 備註" style="max-width:240px;margin-left:auto" />
+          <div class="bulk-bar" id="bulkBar">
+            <span id="selectedCount">已選 0 筆</span>
+            <button type="button" class="ghost" id="selectPageBtn">全選本頁</button>
+            <button type="button" class="ghost" id="clearSelectBtn">取消勾選</button>
+            <button type="button" class="primary" id="hideSelectedBtn">不再顯示已選</button>
+          </div>
+        </div>
+        <div class="view-filters">
+          <label><input type="checkbox" id="wholeFloorOnly" /> 只看整層住家</label>
+          <label><input type="checkbox" id="excludeLowFloors" /> 排除 1F 及以下（含地下室、整棟、頂加）</label>
+          <span class="hint" style="margin:0">篩選列表與通知；不影響 591 抓取與左側統計。勾選後立即生效並寫入設定。</span>
+        </div>
+        </div>
+        <div class="district-block">
+          <div id="districtChips"></div>
+        </div>
+        <button type="button" class="filter-mini-btn ghost" id="filterMiniBtn" title="收合篩選" aria-label="收合篩選">×</button>
+      </div>
+      <div class="list" id="list" data-tour="list"><div class="empty">尚未載入列表</div></div>
+    </main>
+  </div>
+  <div id="notifyHub" class="hub-overlay" hidden>
+    <div class="hub-backdrop" data-close-hub></div>
+    <div class="hub-panel" role="dialog" aria-modal="true" aria-labelledby="notifyHubTitle">
+      <div class="hub-head">
+        <div>
+          <h2 id="notifyHubTitle">通知與發信設定</h2>
+          <p class="hint" style="margin:6px 0 0">不離開這一頁。Webhook 與郵件都在這裡集中，左側只留連結。</p>
+        </div>
+        <button type="button" class="ghost" id="notifyHubClose">關閉</button>
+      </div>
+      <div class="hub-tabs" role="tablist">
+        <button type="button" class="ghost" data-hub-tab="webhook" aria-selected="true">Discord Webhook</button>
+        <button type="button" class="ghost" data-hub-tab="mail" aria-selected="false">自己的郵件 SMTP</button>
+        <button type="button" class="ghost" data-hub-tab="events" aria-selected="false">通知種類</button>
+      </div>
+      <section class="hub-pane" data-hub-pane="webhook">
+        <p class="hint">我們特別推薦 Discord：免費、不用架伺服器，把 Webhook 貼上就能收到特別關注更新。其它相容 Discord 格式的 Webhook 也可以。</p>
+        <ol class="hub-steps">
+          <li>申請 <a href="https://discord.com/register" target="_blank" rel="noopener noreferrer">Discord 帳號</a>，並建立一個只給自己看的伺服器。</li>
+          <li>伺服器設定 → 整合 → Webhooks → 新增 Webhook，選一個頻道。</li>
+          <li>複製 Webhook 網址（會像 <code>https://discord.com/api/webhooks/…</code>）。</li>
+          <li>貼到下面並儲存。變更通知預設只會推「特別關注」的物件。</li>
+        </ol>
+        <label>Discord Webhook（選填）</label>
+        <input type="url" id="discordWebhook" placeholder="https://discord.com/api/webhooks/..." />
+        <p class="hint">此通知預設只會訊息已是特別關注之物件。要改事件種類請切到「通知種類」。</p>
+      </section>
+      <section class="hub-pane" data-hub-pane="mail" hidden>
+        <p class="hint">這組 SMTP <strong>只寄物件／屋源提醒</strong>到你註冊的信箱，請用你自己的帳號寄給自己。註冊歡迎、忘記密碼、變更密碼、贊助通知由站方管理員 SMTP 寄出，不會用這裡的密碼。</p>
+        <p class="hint">可用代碼：<code>{{event}}</code>、<code>{{title}}</code>、<code>{{price}}</code>、<code>{{facts}}</code>、<code>{{url}}</code>、<code>{{detail}}</code>、<code>{{email}}</code>。</p>
+        <div class="row" style="margin:0 0 10px">
+          <button type="button" class="ghost" id="gmailPresetBtn">填入 Gmail SMTP</button>
+        </div>
+        <p class="gmail-hint" id="gmailHint" hidden>Gmail 不能用平常登入的密碼。請到 Google 帳戶 → 安全性 → 兩步驟驗證 → 應用程式密碼，產生 16 碼後填在這裡。</p>
+        <div class="hub-grid">
+          <div>
+            <label>SMTP 主機</label>
+            <input id="memberSmtpHost" placeholder="smtp.gmail.com" autocomplete="off" />
+          </div>
+          <div>
+            <label>連接埠</label>
+            <input id="memberSmtpPort" type="number" min="1" max="65535" placeholder="587" />
+          </div>
+          <div>
+            <label>帳號</label>
+            <input id="memberSmtpUser" autocomplete="username" />
+          </div>
+          <div>
+            <label>密碼</label>
+            <input id="memberSmtpPass" type="password" autocomplete="new-password" placeholder="已設定則可留白" />
+          </div>
+          <div>
+            <label>寄件 Email</label>
+            <input id="memberSmtpFrom" placeholder="you@gmail.com" />
+          </div>
+          <div>
+            <label>寄件名稱</label>
+            <input id="memberSmtpFromName" placeholder="吉比租房物件追蹤" />
+          </div>
+        </div>
+        <label class="checks"><input type="checkbox" id="memberSmtpSecure" /> 使用 TLS／SMTPS（465 會自動勾）</label>
+        <label>罐頭訊息</label>
+        <select id="mailPreset" aria-label="罐頭訊息"></select>
+        <label>物件通知主旨</label>
+        <input id="memberMailSubject" />
+        <label>物件通知本文</label>
+        <textarea id="memberMailText"></textarea>
+        <div class="row" style="margin-top:12px">
+          <button type="button" class="ghost" id="memberMailTest">寄測試信到我的信箱</button>
+        </div>
+        <p class="msg" id="memberMailMsg"></p>
+      </section>
+      <section class="hub-pane" data-hub-pane="events" hidden>
+        <p class="hint">站內是網頁右下角浮動視窗。Webhook 與郵件要先在另外兩個分頁填好才會真的送出。</p>
+        <div class="notify-matrix-wrap">
+        <table class="notify-matrix" id="notifyMatrix">
+          <thead>
+            <tr>
+              <th>事件類型</th>
+              <th>站內通知</th>
+              <th>Webhook通知</th>
+              <th>郵件通知</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>全新物件</td>
+              <td><input type="checkbox" data-notify-row="new" data-notify-ch="dock" checked /></td>
+              <td><input type="checkbox" data-notify-row="new" data-notify-ch="webhook" checked /></td>
+              <td><input type="checkbox" data-notify-row="new" data-notify-ch="mail" checked /></td>
+            </tr>
+            <tr>
+              <td>同屋源重刊</td>
+              <td><input type="checkbox" data-notify-row="same_source" data-notify-ch="dock" checked /></td>
+              <td><input type="checkbox" data-notify-row="same_source" data-notify-ch="webhook" checked /></td>
+              <td><input type="checkbox" data-notify-row="same_source" data-notify-ch="mail" checked /></td>
+            </tr>
+            <tr>
+              <td>價格變動</td>
+              <td><input type="checkbox" data-notify-row="price" data-notify-ch="dock" checked /></td>
+              <td><input type="checkbox" data-notify-row="price" data-notify-ch="webhook" checked /></td>
+              <td><input type="checkbox" data-notify-row="price" data-notify-ch="mail" checked /></td>
+            </tr>
+            <tr>
+              <td>標題變更</td>
+              <td><input type="checkbox" data-notify-row="title" data-notify-ch="dock" checked /></td>
+              <td><input type="checkbox" data-notify-row="title" data-notify-ch="webhook" checked /></td>
+              <td><input type="checkbox" data-notify-row="title" data-notify-ch="mail" checked /></td>
+            </tr>
+            <tr>
+              <td>內容更新</td>
+              <td><input type="checkbox" data-notify-row="update" data-notify-ch="dock" checked /></td>
+              <td><input type="checkbox" data-notify-row="update" data-notify-ch="webhook" checked /></td>
+              <td><input type="checkbox" data-notify-row="update" data-notify-ch="mail" checked /></td>
+            </tr>
+            <tr>
+              <td>591 下架</td>
+              <td><input type="checkbox" data-notify-row="offline" data-notify-ch="dock" checked /></td>
+              <td><input type="checkbox" data-notify-row="offline" data-notify-ch="webhook" checked /></td>
+              <td><input type="checkbox" data-notify-row="offline" data-notify-ch="mail" checked /></td>
+            </tr>
+            <tr>
+              <td>重新上架</td>
+              <td><input type="checkbox" data-notify-row="relist" data-notify-ch="dock" checked /></td>
+              <td><input type="checkbox" data-notify-row="relist" data-notify-ch="webhook" checked /></td>
+              <td><input type="checkbox" data-notify-row="relist" data-notify-ch="mail" checked /></td>
+            </tr>
+          </tbody>
+        </table>
+        </div>
+      </section>
+      <div class="row" style="margin-top:16px">
+        <button type="button" class="primary" id="notifyHubSave">儲存通知設定</button>
+        <span class="save-msg" id="notifyHubSaveMsg"></span>
+      </div>
+    </div>
+  </div>
+  <div id="passwordDialog" class="hub-overlay" hidden>
+    <div class="hub-backdrop" data-close-password></div>
+    <div class="hub-panel password-panel" role="dialog" aria-modal="true" aria-labelledby="passwordDialogTitle">
+      <div class="hub-head">
+        <div>
+          <h2 id="passwordDialogTitle">變更密碼</h2>
+          <p class="hint" style="margin:6px 0 0">變更成功後會由站方管理員 SMTP 寄通知信到你的註冊信箱。</p>
+        </div>
+        <button type="button" class="ghost" id="passwordDialogClose">關閉</button>
+      </div>
+      <form id="changePasswordForm">
+        <label for="currentPassword">目前密碼</label>
+        <input id="currentPassword" name="currentPassword" type="password" autocomplete="current-password" required />
+        <label for="newPassword">新密碼（至少 8 個字）</label>
+        <input id="newPassword" name="newPassword" type="password" autocomplete="new-password" minlength="8" required />
+        <label for="newPassword2">再輸入一次新密碼</label>
+        <input id="newPassword2" name="newPassword2" type="password" autocomplete="new-password" minlength="8" required />
+        <label class="checks"><input type="checkbox" id="showChangePw" /> 顯示密碼</label>
+        <div class="row" style="margin-top:14px">
+          <button type="submit" class="primary" id="changePasswordSubmit">儲存新密碼</button>
+        </div>
+        <p class="msg" id="changePasswordMsg"></p>
+      </form>
+    </div>
+  </div>
+  <div id="helpQaDialog" class="hub-overlay" hidden>
+    <div class="hub-backdrop" data-close-help-qa></div>
+    <div class="hub-panel help-qa-panel" role="dialog" aria-modal="true" aria-labelledby="helpQaTitle">
+      <div class="hub-head">
+        <div>
+          <h2 id="helpQaTitle">功能說明 Q&amp;A</h2>
+          <p class="hint" style="margin:6px 0 0">說明功能表上看得到與看不到的限制。捷運站是否顯示，看的是可步行路線，不是直線距離。</p>
+        </div>
+        <button type="button" class="ghost" id="helpQaClose">關閉</button>
+      </div>
+      <div class="help-qa-list" id="helpQaList"></div>
+    </div>
+  </div>
+  <div id="deleteAccountDialog" class="hub-overlay" hidden>
+    <div class="hub-backdrop" data-close-delete-account></div>
+    <div class="hub-panel password-panel" role="dialog" aria-modal="true" aria-labelledby="deleteAccountTitle">
+      <div class="hub-head">
+        <div>
+          <h2 id="deleteAccountTitle">取消會員</h2>
+          <p class="hint" style="margin:6px 0 0">帳號資料會留下來，避免立刻被重新註冊。同一 Email 只允許再註冊一次；第二次刪除後就不能再用。</p>
+        </div>
+        <button type="button" class="ghost" id="deleteAccountClose">關閉</button>
+      </div>
+      <form id="deleteAccountForm">
+        <label for="deleteAccountReason">理由（可空白）</label>
+        <textarea id="deleteAccountReason" name="reason" maxlength="2000" placeholder="可寫為什麼要取消，也可留白"></textarea>
+        <div class="row" style="margin-top:14px">
+          <button type="submit" class="primary" id="deleteAccountSubmit">確認取消會員</button>
+        </div>
+        <p class="msg" id="deleteAccountMsg"></p>
+      </form>
+    </div>
+  </div>
+  <footer class="site-footer">reversal play tech | 逆遊科技</footer>
+  <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
+    <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
+    <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
+  </button>
+  <button type="button" class="primary" id="scrollTopBtn" title="回頂" aria-label="回頂">↑</button>
+  <aside id="alertDock" aria-live="polite">
+    <header>
+      <h2>待看更新</h2>
+      <div class="row">
+        <button class="ghost" id="dockClearBtn">全部已讀</button>
+        <button class="primary" id="dockHideBtn">收合</button>
+      </div>
+    </header>
+    <div id="dockList"></div>
+  </aside>
+  <div id="mapOverlay" aria-hidden="true">
+    <div class="map-stage">
+      <div class="map-overlay-bar">
+        <h2>框選排除範圍</h2>
+        <div class="row">
+          <button type="button" class="ghost" id="overlayDrawBtn">開始框選</button>
+          <button type="button" class="primary" id="closeMapBtn">關閉</button>
+        </div>
+      </div>
+      <div id="mapOverlayHost"></div>
+    </div>
+  </div>
+  <script>
+    window.__APP_PARSED = true;
+    try {
+    const origFetch = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const res = await origFetch(input, { credentials: "same-origin", ...init });
+      const url = String(input);
+      if (url.startsWith("/api/") && res.status === 401 && !isGuest && !url.includes("/api/login") && !url.includes("/api/me") && !url.includes("/api/demo")) {
+        location.replace("/login.html");
+      }
+      return res;
+    };
+    const $ = (id) => document.getElementById(id);
+    const PANEL_KEY = "591-panel-collapsed";
+    const FILTER_COMPACT_KEY = "591-filter-compact";
+    if (localStorage.getItem(PANEL_KEY) === "1") {
+      document.body.classList.add("panel-collapsed");
+      if (localStorage.getItem(FILTER_COMPACT_KEY) === "1") {
+        $("listHeadSticky")?.classList.add("filter-compact");
+      }
+    }
+    $("status").textContent = "正在載入…";
+    let filter = "all";
+    let kind = "";
+    let sort = "newest";
+    let isGuest = true;
+    let guestLockClicks = 0;
+    let guestToastTimer = 0;
+    const GUEST_LOCK_TOAST_AFTER = 2;
+    const GUEST_TOUR_SKIP = "591_v3_guest_tour_skip";
+    const DEFAULT_COMMUTE_KM = 25;
+    let settings = {};
+    let selected = new Set();
+    let excludeBoxes = [];
+    let map, drawing = false, startLatLng = null, previewRect = null, boxLayers = [];
+    let editingIdx = null;
+    let mapExpanded = false;
+    let pendingNoteFocus = "";
+    const noteTimers = {};
+    const draftWatch = new Set();
+    const noteDrafts = new Map();
+    let listCache = [];
+    let guestListings = [];
+    let lastStats = {};
+    let listRefreshQueued = false;
+    let noteComposing = false;
+    let noteJustComposed = false;
+    let listRendering = false;
+    let skipDraftBlur = false;
+    let draftCommitTimer = 0;
+    let listLoadGen = 0;
+    const MAX_BOXES = 10;
+    const MEMBER_MAX_DISTRICTS = 10;
+    const MEMBER_MAX_PROFILES = 3;
+    const DOCK_KEY = "591-alert-dock-v1";
+    const DOCK_READ_KEY = "591-alert-dock-read-v1";
+    let meIsAdmin = false;
+    let meEmail = "";
+    let mePlan = "free";
+    function escapeSponsor(value) {
+      return String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function sponsorChipHtml(link) {
+      const blurb = link.blurb ? `<span class="blurb">${escapeSponsor(link.blurb)}</span>` : "";
+      return `<a class="sponsor-chip" href="${escapeSponsor(link.url)}" target="_blank" rel="noopener">${escapeSponsor(link.label)}${blurb}</a>`;
+    }
+
+    function paintSponsorOffer(offer) {
+      const bar = $("sponsorBar");
+      const block = $("sponsorSettingsBlock");
+      const intro = $("sponsorSettingsIntro");
+      const linksBox = $("sponsorSettingsLinks");
+      if (!bar) return;
+      if (isGuest) {
+        bar.hidden = true;
+        bar.innerHTML = "";
+        if (block) block.hidden = true;
+        return;
+      }
+      if (offer?.show && Array.isArray(offer.links) && offer.links.length) {
+        bar.hidden = false;
+        bar.classList.remove("thanks");
+        bar.innerHTML = `<p>${escapeSponsor(offer.intro || "")}</p><div class="sponsor-links">${offer.links.map(sponsorChipHtml).join("")}</div>`;
+        if (block && intro && linksBox) {
+          block.hidden = false;
+          intro.textContent = offer.intro || "";
+          linksBox.innerHTML = offer.links.map(sponsorChipHtml).join("");
+        }
+        return;
+      }
+      if (offer?.sponsored && !meIsAdmin) {
+        bar.hidden = false;
+        bar.classList.add("thanks");
+        bar.innerHTML = `<p>${escapeSponsor(offer.thanks || "感謝贊助。")}</p>`;
+        if (block) block.hidden = true;
+        return;
+      }
+      bar.hidden = true;
+      bar.innerHTML = "";
+      if (block) block.hidden = true;
+    }
+
+    function districtLimit() {
+      return meIsAdmin ? 0 : MEMBER_MAX_DISTRICTS;
+    }
+    function profileLimit() {
+      return meIsAdmin ? 0 : MEMBER_MAX_PROFILES;
+    }
+
+    function commuteModeLabel(mode = settings.commuteMode) {
+      return mode === "car" ? "汽車" : "機車";
+    }
+    function selectedCommuteMode(name) {
+      const el = document.querySelector(`input[name="${name}"]:checked`);
+      return el?.value === "car" ? "car" : "scooter";
+    }
+    function setCommuteMode(name, mode) {
+      const value = mode === "car" ? "car" : "scooter";
+      document.querySelectorAll(`input[name="${name}"]`).forEach((el) => {
+        el.checked = el.value === value;
+      });
+    }
+    function routeChip(text) {
+      return `<span class="route-chip">${esc(text)}</span>`;
+    }
+    function commuteText(item) {
+      const label = commuteModeLabel(item.commute_mode || settings.commuteMode);
+      if (item.commute_km != null) {
+        const routes = Array.isArray(item.commute_routes) ? item.commute_routes.filter((n) => Number.isFinite(Number(n))) : [];
+        const extra = routes.length > 1 ? `（${routes.map((n) => `${n}`).join(" / ")} 公里）` : "";
+        return routeChip(`${label}路線約 ${item.commute_km} 公里${extra}`);
+      }
+      if (isGuest || !commuteOn()) return "";
+      const src = String(item.geo_source || "");
+      const hasPin = Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lng)) && (src === "591" || src === "community");
+      return hasPin ? ` · ${esc(label)}路線計算中` : " · 尚未取得地圖座標";
+    }
+
+    function mrtOn(s = settings) {
+      return s.showMrt !== false;
+    }
+    function mrtChip(name) {
+      return `<span class="mrt-chip">${esc(name)}</span>`;
+    }
+    function mrtText(item) {
+      if (!mrtOn()) return "";
+      const name = String(item.mrt_station || "").trim();
+      const walkKm = Number(item.mrt_walk_km);
+      if (name && Number.isFinite(walkKm) && walkKm > 0 && walkKm < 1.5) {
+        return `${mrtChip(`捷運${name.replace(/站$/, "")}站`)} · 步行約 ${esc(walkKm)} 公里`;
+      }
+      if (item.mrt_station == null) return "";
+      const src = String(item.geo_source || "");
+      const hasPin = Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lng)) && (src === "591" || src === "community");
+      return hasPin ? "捷運步行距離計算中" : "";
+    }
+
+    function isAcefengyunAdmin() {
+      return Boolean(meIsAdmin && /acefengyun/i.test(meEmail || ""));
+    }
+    // 廣義社子＝士林區社子次分區 10 里（葫蘆、葫東、富光、福順、社子、社新、社園、永倫、福安、富洲）。
+    // 路名依據：延平北路五～九段、重慶北路四段、中正路過百齡橋後（門牌約 500 號起，如 601 百齡大樓、694 銘傳一帶）屬社子；
+    // 另含葫蘆街、葫東街、社子街、社中街、社正路、永平街、倫等街、富安／福安街、環河北路三段、海光新村。
+    // 官方「社子島開發計畫」較窄（福安、富洲、部分永倫／延平北路七～九段），紅框用廣義社子，含葫蘆堵。
+    // 不含後港截彎取直後分離的通河街，也不含中正路一段～三段、以及 499 號以前的士林市街段。
+    function isShezidaoAddress(item) {
+      const s = typeof item === "string" || item == null
+        ? String(item || "")
+        : [item.address, item.title, item.area_name].filter(Boolean).join(" ");
+      if (/社子島|社之島|葫蘆堵|葫蘆里|富光里|福順里|福安里|富洲里/.test(s)) return true;
+      if (/延平北路(五|六|七|八|九|[5-9])段/.test(s)) return true;
+      if (/重慶北路四段|環河北路三段/.test(s)) return true;
+      if (/社子街|社子.{0,8}街/.test(s)) return true;
+      if (/社中街|社正路|永平街|倫等街|富安街|福安街/.test(s)) return true;
+      if (/葫蘆街|葫東街|海光新村/.test(s)) return true;
+      if (/中正路/.test(s) && /士林|社子|葫蘆|重陽|百齡|銘傳/.test(s)) {
+        if (/中正路[一二三1-3]段/.test(s)) return false;
+        const house = s.match(/中正路[^0-9]{0,8}(\d{2,4})\s*號/);
+        if (house) return Number(house[1]) >= 500;
+        return true;
+      }
+      return false;
+    }
+
+    function commuteOn(s = settings) {
+      return Number(s.commuteKm) > 0 && String(s.workAddress || "").trim() !== "";
+    }
+
+    function syncCommuteSort() {
+      const on = commuteOn();
+      document.querySelectorAll(".commute-sort").forEach((el) => {
+        el.hidden = !on;
+      });
+      if (!on && (sort === "commute_asc" || sort === "commute_desc")) {
+        sort = "price_asc";
+        document.querySelectorAll("[data-sort]").forEach((btn) => {
+          btn.classList.toggle("on", btn.dataset.sort === "price_asc");
+        });
+      }
+    }
+
+    /** 已登入經 /go/:id 標記已瀏覽；訪客直接開 591，不寫入任何人的已瀏覽。 */
+    function listingUrl(item) {
+      const id = item?.post_id || item;
+      if (isGuest) return `https://rent.591.com.tw/${encodeURIComponent(id)}`;
+      return `/go/${encodeURIComponent(id)}`;
+    }
+
+    function formatListingWhen(item) {
+      const raw = String(item?.refresh_time || "").trim();
+      if (raw) return raw;
+      const seen = item?.last_seen_at;
+      if (!seen) return "";
+      const date = new Date(seen);
+      if (Number.isNaN(date.getTime())) return "";
+      return date.toLocaleString("zh-TW", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    }
+
+    function esc(value) {
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    const eventText = {
+      new: "全新物件",
+      same_source: "同屋源更新",
+      update: "內容更新",
+      price_drop: "價格調降",
+      price_update: "價格變更",
+      title_update: "標題更新",
+      relist: "重新上架",
+      offline: "591 已下架",
+    };
+
+    const CITIES_EMBEDDED = [
+      {
+        id: 1,
+        name: "台北市",
+        districts: [
+          { id: 8, name: "士林區" }, { id: 9, name: "北投區" }, { id: 2, name: "大同區" },
+          { id: 3, name: "中山區" }, { id: 4, name: "松山區" }, { id: 5, name: "大安區" },
+          { id: 7, name: "信義區" }, { id: 10, name: "內湖區" }, { id: 11, name: "南港區" },
+          { id: 1, name: "中正區" }, { id: 6, name: "萬華區" }, { id: 12, name: "文山區" },
+        ],
+      },
+      {
+        id: 3,
+        name: "新北市",
+        districts: [
+          { id: 48, name: "五股區" }, { id: 47, name: "蘆洲區" }, { id: 49, name: "八里區" },
+          { id: 50, name: "淡水區" }, { id: 26, name: "板橋區" }, { id: 43, name: "三重區" },
+          { id: 38, name: "中和區" }, { id: 37, name: "永和區" }, { id: 44, name: "新莊區" },
+          { id: 34, name: "新店區" }, { id: 39, name: "土城區" }, { id: 27, name: "汐止區" },
+          { id: 46, name: "林口區" }, { id: 45, name: "泰山區" }, { id: 41, name: "樹林區" },
+          { id: 40, name: "三峽區" }, { id: 42, name: "鶯歌區" }, { id: 51, name: "三芝區" },
+        ],
+      },
+    ];
+    let cities = CITIES_EMBEDDED;
+    let settingsLoaded = false;
+    let viewDistricts = new Set();
+    const VIEW_KEY = "591-view-districts";
+    const VIEW_WHOLE_KEY = "591-view-whole-floor";
+    const VIEW_LOW_FLOOR_KEY = "591-view-exclude-low";
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(VIEW_KEY) || "[]");
+      if (Array.isArray(saved)) viewDistricts = new Set(saved);
+    } catch {}
+
+    function loadViewFilters(s = settings) {
+      const wf = sessionStorage.getItem(VIEW_WHOLE_KEY);
+      const low = sessionStorage.getItem(VIEW_LOW_FLOOR_KEY);
+      // 設定檔優先（通知也讀這個）；session 僅在尚未存過時當預設
+      if (s && Object.prototype.hasOwnProperty.call(s, "wholeFloorOnly")) {
+        $("wholeFloorOnly").checked = s.wholeFloorOnly !== false;
+      } else {
+        $("wholeFloorOnly").checked = wf === null ? true : wf === "1";
+      }
+      if (s && Object.prototype.hasOwnProperty.call(s, "excludeLowFloors")) {
+        $("excludeLowFloors").checked = s.excludeLowFloors !== false;
+      } else {
+        $("excludeLowFloors").checked = low === null ? true : low === "1";
+      }
+      saveViewFilters();
+    }
+
+    function saveViewFilters() {
+      sessionStorage.setItem(VIEW_WHOLE_KEY, $("wholeFloorOnly").checked ? "1" : "0");
+      sessionStorage.setItem(VIEW_LOW_FLOOR_KEY, $("excludeLowFloors").checked ? "1" : "0");
+    }
+
+    async function persistViewFilters() {
+      saveViewFilters();
+      if (!settingsLoaded || isGuest) return;
+      try {
+        const res = await fetch("/api/settings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            wholeFloorOnly: $("wholeFloorOnly").checked,
+            excludeLowFloors: $("excludeLowFloors").checked,
+          }),
+          signal: AbortSignal.timeout(12000),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.settings) {
+          settings = { ...settings, ...data.settings };
+        }
+      } catch {
+        // 列表已先套用；設定稍後再存
+      }
+    }
+
+    function isWholeFloorHome(kindName) {
+      return String(kindName || "").includes("整層住家");
+    }
+
+    function isAtOrBelowFirstFloor(floorName) {
+      const text = String(floorName || "").replace(/\s+/g, "");
+      if (!text) return false;
+      const main = text.split("/")[0];
+      if (/整棟|地下|騎樓|半地下|地面|頂樓加蓋/i.test(main) || /^B\d/i.test(main) || /^B$/i.test(main)) {
+        return true;
+      }
+      if (/一樓|1樓/.test(main)) return true;
+      const range = main.match(/(\d+)\s*(?:F|樓)?\s*[~～\-至到]/i);
+      if (range) return Number(range[1]) <= 1;
+      const numbered = main.match(/(\d+)\s*(?:F|樓)/i);
+      if (numbered) return Number(numbered[1]) <= 1;
+      return false;
+    }
+
+    function applyViewFilters(items) {
+      let out = items;
+      if ($("wholeFloorOnly").checked && kind !== "suite") {
+        out = out.filter((item) => isWholeFloorHome(item.kind_name));
+      }
+      if ($("excludeLowFloors").checked) {
+        out = out.filter((item) => !isAtOrBelowFirstFloor(item.floor_name));
+      }
+      return out;
+    }
+
+    function applyListView(items) {
+      return applyViewFilters(applyDistrictView(items));
+    }
+
+    function guestKindMatch(item, key) {
+      if (!key) return true;
+      const hay = `${item.title || ""} ${item.kind_name || ""} ${item.address || ""}`;
+      if (key === "elevator") return /有電梯|電梯大樓|電梯公寓/.test(hay) && !/無電梯/.test(hay);
+      if (key === "apartment") return /公寓/.test(hay) && !/電梯大樓/.test(hay);
+      if (key === "suite") return /套房|雅房/.test(String(item.kind_name || ""));
+      return true;
+    }
+
+    function guestFilterMatch(item, key) {
+      const hidden = Number(item.hidden) === 1;
+      const watched = Number(item.watched) === 1;
+      const viewed = Number(item.viewed) === 1;
+      const offline = Number(item.offline) === 1;
+      const confirmed = Number(item.offline_confirmed) === 1;
+      const dup = String(item.match_verdict || "") === "yes";
+      if (key === "hidden") return hidden || dup;
+      if (key === "offline") return offline && !confirmed;
+      if (key === "suspected") return Boolean(item.match_level) && !offline;
+      if (dup || offline || hidden) return false;
+      if (key === "all") return !watched;
+      if (key === "unseen") return !viewed;
+      if (key === "viewed") return viewed;
+      if (key === "watched") return watched;
+      if (key === "same_source") {
+        return ["same_source", "update", "price_drop", "title_update"].includes(item.last_event);
+      }
+      return true;
+    }
+
+    function applyGuestQuery(items) {
+      let out = (items || []).filter((item) => guestFilterMatch(item, filter) && guestKindMatch(item, kind));
+      const q = ($("q")?.value || "").trim().toLowerCase();
+      if (q) {
+        out = out.filter((item) => {
+          const hay = `${item.title || ""} ${item.address || ""} ${item.post_id || ""} ${item.watch_note || ""}`.toLowerCase();
+          return hay.includes(q);
+        });
+      }
+      if (sort === "commute_asc") {
+        out.sort((a, b) => (Number(a.commute_km) || 9999) - (Number(b.commute_km) || 9999) || (Number(a.price_num) || 1e15) - (Number(b.price_num) || 1e15));
+      } else if (sort === "commute_desc") {
+        out.sort((a, b) => (Number(b.commute_km) || 0) - (Number(a.commute_km) || 0));
+      } else if (sort === "price_desc") {
+        out.sort((a, b) => (Number(b.price_num) || 0) - (Number(a.price_num) || 0));
+      } else if (sort === "newest") {
+        out.sort((a, b) => String(b.first_seen_at || "").localeCompare(String(a.first_seen_at || "")) || Number(b.post_id) - Number(a.post_id));
+      } else {
+        out.sort((a, b) => (Number(a.price_num) || 1e15) - (Number(b.price_num) || 1e15));
+      }
+      return applyListView(out);
+    }
+    loadViewFilters();
+
+    function flash(msg) {
+      $("saveMsg").textContent = msg;
+      if ($("status")) $("status").textContent = msg;
+    }
+
+    function hideGuestToast() {
+      const box = $("guestToast");
+      if (box) box.hidden = true;
+      if (guestToastTimer) {
+        window.clearTimeout(guestToastTimer);
+        guestToastTimer = 0;
+      }
+    }
+
+    function showGuestToast() {
+      const box = $("guestToast");
+      if (!box) return;
+      box.hidden = false;
+      if (guestToastTimer) window.clearTimeout(guestToastTimer);
+      guestToastTimer = window.setTimeout(hideGuestToast, 8000);
+    }
+
+    function remindGuest() {
+      guestLockClicks += 1;
+      if (guestLockClicks < GUEST_LOCK_TOAST_AFTER) return;
+      showGuestToast();
+    }
+
+    function goRegister() {
+      location.href = "/login.html?register=1";
+    }
+
+    function setGuestMode(on) {
+      isGuest = Boolean(on);
+      document.body.classList.toggle("role-guest", isGuest);
+      document.documentElement.classList.toggle("no-session", isGuest);
+      document.documentElement.classList.toggle("has-session", !isGuest);
+      if ($("loginBtn")) $("loginBtn").hidden = !isGuest;
+      if ($("registerBtn")) $("registerBtn").hidden = !isGuest;
+      if ($("logoutBtn")) $("logoutBtn").hidden = isGuest;
+      if ($("changePasswordBtn")) $("changePasswordBtn").hidden = isGuest;
+      if ($("deleteAccountBtn")) $("deleteAccountBtn").hidden = isGuest;
+      if ($("watchBtn")) $("watchBtn").hidden = isGuest;
+      if ($("who")) $("who").classList.toggle("is-guest", isGuest);
+      if (isGuest) {
+        $("who").textContent = "訪客";
+        paintSponsorOffer({ show: false });
+      } else {
+        hideGuestToast();
+        guestLockClicks = 0;
+      }
+    }
+
+    const GUEST_TOUR_STEPS = [
+      { target: "[data-tour=guestWho]", title: "第 1／7 步", text: "右上角顯示你目前是訪客。這是示範列表，左側條件與公司地址目前不能改；註冊成為會員後才能換成你的設定。" },
+      { target: "[data-tour=districts]", title: "第 2／7 步", text: "行政區與租金篩選現在是展示用。註冊後才能勾選你要找的區域並儲存。" },
+      { target: "[data-tour=commute]", title: "第 3／7 步", text: "公司地址、機車或汽車路徑也無法在示範模式變更。會員才能填自己的上班地址並篩通勤距離。" },
+      { target: "[data-tour=mrt]", title: "第 4／7 步", text: "最近捷運站的步行路線距離可以開關。步行達 1.5 公里（含）就不顯示站名。示範模式看得到效果，註冊後才能自己開啟或關閉。" },
+      { target: "[data-tour=notify]", title: "第 5／7 步", text: "Webhook 與郵件已收到浮動設定裡。示範模式不能改；註冊後點左側連結就能在本頁展開設定。" },
+      { target: "[data-tour=profiles]", title: "第 6／7 步", text: "設定檔的儲存、另存與刪除也鎖定中。註冊後最多可存 3 組自己的條件。" },
+      { target: "#listHeadSticky", title: "第 7／7 步", text: "已瀏覽、特別關注與隱藏要登入才寫得進去。按「前往註冊」就能開始用這些功能。" },
+    ];
+    let guestTourIndex = 0;
+    let guestTourTimer = 0;
+
+    function guestTourSkipped() {
+      try { return localStorage.getItem(GUEST_TOUR_SKIP) === "1"; } catch { return false; }
+    }
+    function stopGuestTour(persist) {
+      if (guestTourTimer) window.clearTimeout(guestTourTimer);
+      guestTourTimer = 0;
+      const box = $("guestTour");
+      if (box) box.hidden = true;
+      if (persist) {
+        try { localStorage.setItem(GUEST_TOUR_SKIP, "1"); } catch { /* 略過 */ }
+      }
+    }
+    function placeGuestTour(step) {
+      const spot = $("guestTourSpot");
+      const card = $("guestTourCard");
+      if (!spot || !card) return;
+      const el = document.querySelector(step.target);
+      const pad = 8;
+      let rect = el?.getBoundingClientRect();
+      if (!rect || !el || rect.width < 8 || rect.height < 8) {
+        rect = { top: 80, left: 32, width: 320, height: 72 };
+      }
+      const maxH = Math.min(window.innerHeight - 24, 240);
+      const maxW = window.innerWidth - 16;
+      spot.style.top = `${Math.max(8, rect.top - pad)}px`;
+      spot.style.left = `${Math.max(8, rect.left - pad)}px`;
+      spot.style.width = `${Math.min(maxW, rect.width + pad * 2)}px`;
+      spot.style.height = `${Math.min(maxH, rect.height + pad * 2)}px`;
+      const cardW = Math.min(360, window.innerWidth - 32);
+      const below = rect.bottom + 16 + 180 < window.innerHeight;
+      const top = below ? Math.min(rect.bottom + 12, window.innerHeight - 190) : Math.max(12, rect.top - 170);
+      const left = Math.min(Math.max(16, rect.left), window.innerWidth - cardW - 16);
+      card.style.top = `${Math.max(12, top)}px`;
+      card.style.left = `${left}px`;
+    }
+    function showGuestTourStep(index) {
+      const steps = GUEST_TOUR_STEPS;
+      guestTourIndex = Math.max(0, Math.min(index, steps.length - 1));
+      const step = steps[guestTourIndex];
+      const last = guestTourIndex === steps.length - 1;
+      $("guestTourStep").textContent = step.title;
+      $("guestTourText").textContent = step.text;
+      $("guestTourNext").textContent = last ? "前往註冊" : "下一步";
+      document.querySelector(step.target)?.scrollIntoView({ block: "center", behavior: "instant" });
+      placeGuestTour(step);
+      window.requestAnimationFrame(() => placeGuestTour(step));
+      window.setTimeout(() => placeGuestTour(step), 280);
+      if (guestTourTimer) window.clearTimeout(guestTourTimer);
+      guestTourTimer = window.setTimeout(() => {
+        if (last) return;
+        showGuestTourStep(guestTourIndex + 1);
+      }, 5200);
+    }
+    function maybeStartGuestTour() {
+      const box = $("guestTour");
+      if (!box || !isGuest || guestTourSkipped()) return;
+      document.body.classList.remove("panel-collapsed");
+      syncPanelFab();
+      box.hidden = false;
+      showGuestTourStep(0);
+    }
+    $("guestTourSkip")?.addEventListener("click", () => stopGuestTour(true));
+    $("guestTourNext")?.addEventListener("click", () => {
+      if (guestTourIndex >= GUEST_TOUR_STEPS.length - 1) {
+        stopGuestTour(true);
+        goRegister();
+        return;
+      }
+      showGuestTourStep(guestTourIndex + 1);
+    });
+
+    function isGuestLockedTarget(el) {
+      if (!el || !isGuest) return false;
+      if (el.closest("#collapsePanelBtn, #expandPanelBtn, #reloadBtn, #loginBtn, #registerBtn, #helpQaBtn, #helpQaDialog, #guestToast, #guestTour, #listHeadSticky .chip, #q, #wholeFloorOnly, #excludeLowFloors, [data-view-district], [data-open-hub], #notifyHubClose, [data-close-hub], [data-hub-tab]")) return false;
+      if (el.closest(".item-cover, h3 a, a.tel, .line-qr")) return false;
+      if (el.closest("#notifyHubSave, #memberMailTest, #gmailPresetBtn")) return true;
+      if (el.closest("#notifyHub")) return true;
+      if (el.closest("#settingsPanel, .header-profiles, #watchBtn, #bulkBar")) return true;
+      if (el.closest("[data-watched], [data-viewed], [data-hidden], [data-watch-draft-commit], [data-watch-draft-cancel], [data-watch-note], .pick")) return true;
+      return false;
+    }
+
+    document.addEventListener("click", (ev) => {
+      if (!isGuest || !isGuestLockedTarget(ev.target)) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      remindGuest();
+    }, true);
+    $("guestToastClose")?.addEventListener("click", hideGuestToast);
+
+    function setSettingsReady(ok, msg) {
+      $("saveBtn").disabled = !ok;
+      $("saveAsBtn").disabled = !ok;
+      const el = $("settingsLoadMsg");
+      if (!el) return;
+      if (ok) {
+        el.hidden = true;
+        el.textContent = "";
+        return;
+      }
+      el.hidden = false;
+      el.textContent = msg || "正在載入已存設定…完成前請不要按儲存或另存。";
+    }
+
+    function updateDistrictLimitHint() {
+      const el = $("districtLimitHint");
+      if (!el) return;
+      const n = selectedDistrictKeys().length;
+      if (meIsAdmin) {
+        el.textContent = `已選 ${n} 個行政區（管理員不受 10 區／3 檔限制）`;
+        return;
+      }
+      el.textContent = `已選 ${n}／${MEMBER_MAX_DISTRICTS} 個行政區`;
+    }
+
+    function selectedDistrictKeys() {
+      return [...document.querySelectorAll("#districtPicker [data-district]:checked")].map((el) => el.value);
+    }
+
+    function districtOptions() {
+      const byKey = new Map();
+      for (const city of cities) {
+        for (const district of city.districts) {
+          byKey.set(`${city.id}-${district.id}`, { ...district, city: city.name, region: city.id });
+        }
+      }
+      return byKey;
+    }
+
+    function renderDistrictPicker(s) {
+      const selected = new Set(s.watchDistricts || []);
+      $("districtPicker").innerHTML = cities.map((city) => `
+        <div class="district-city">
+          <div class="district-city-head">
+            <h3>${esc(city.name)}</h3>
+            <button type="button" class="ghost" data-city-all="${city.id}">全選</button>
+            <button type="button" class="ghost" data-city-none="${city.id}">清除</button>
+          </div>
+          <div class="districts">
+            ${city.districts.map((district) => {
+              const key = `${city.id}-${district.id}`;
+              const on = selected.has(key);
+              return `<label class="${on ? "on" : ""}"><input type="checkbox" data-district value="${esc(key)}" ${on ? "checked" : ""} />${esc(district.name.replace(/區$/, ""))}</label>`;
+            }).join("")}
+          </div>
+        </div>
+      `).join("");
+      $("districtPicker").querySelectorAll("[data-district]").forEach((el) => {
+        el.onchange = () => {
+          const limit = districtLimit();
+          if (el.checked && limit && selectedDistrictKeys().length > limit) {
+            el.checked = false;
+            flash(`每個設定檔最多選 ${limit} 個行政區`);
+            return;
+          }
+          el.closest("label")?.classList.toggle("on", el.checked);
+          updateDistrictLimitHint();
+        };
+      });
+      $("districtPicker").querySelectorAll("[data-city-all]").forEach((btn) => {
+        btn.onclick = () => {
+          const prefix = `${btn.dataset.cityAll}-`;
+          const limit = districtLimit();
+          const boxes = [...$("districtPicker").querySelectorAll("[data-district]")];
+          const others = boxes.filter((el) => el.checked && !el.value.startsWith(prefix)).length;
+          const cityBoxes = boxes.filter((el) => el.value.startsWith(prefix));
+          cityBoxes.forEach((el) => {
+            el.checked = false;
+            el.closest("label")?.classList.remove("on");
+          });
+          let remaining = limit ? Math.max(0, limit - others) : cityBoxes.length;
+          let skipped = false;
+          for (const el of cityBoxes) {
+            if (remaining <= 0) {
+              skipped = true;
+              break;
+            }
+            el.checked = true;
+            el.closest("label")?.classList.add("on");
+            remaining -= 1;
+          }
+          updateDistrictLimitHint();
+          if (skipped) flash(`每個設定檔最多選 ${limit} 個行政區`);
+        };
+      });
+      $("districtPicker").querySelectorAll("[data-city-none]").forEach((btn) => {
+        btn.onclick = () => {
+          const prefix = `${btn.dataset.cityNone}-`;
+          $("districtPicker").querySelectorAll("[data-district]").forEach((el) => {
+            if (!el.value.startsWith(prefix)) return;
+            el.checked = false;
+            el.closest("label")?.classList.remove("on");
+          });
+          updateDistrictLimitHint();
+        };
+      });
+      updateDistrictLimitHint();
+    }
+
+    function watchDistrictNames(s) {
+      const map = districtOptions();
+      return (s.watchDistricts || []).map((key) => map.get(key)?.name).filter(Boolean);
+    }
+
+    function renderDistrictChips(s) {
+      const names = watchDistrictNames(s);
+      const host = $("districtChips");
+      if (!names.length) {
+        host.innerHTML = "";
+        return;
+      }
+      const allOn = viewDistricts.size === 0;
+      host.innerHTML =
+        `<span class="hint" style="margin:0">顯示行政區</span>` +
+        `<button type="button" class="chip ${allOn ? "on" : ""}" data-view-district="">全部</button>` +
+        names.map((name) => {
+          const on = !allOn && viewDistricts.has(name);
+          return `<button type="button" class="chip ${on ? "on" : ""}" data-view-district="${esc(name)}">${esc(name.replace(/區$/, ""))}</button>`;
+        }).join("");
+      host.querySelectorAll("[data-view-district]").forEach((btn) => {
+        btn.onclick = () => {
+          const name = btn.dataset.viewDistrict;
+          if (!name) {
+            viewDistricts = new Set();
+          } else if (viewDistricts.size === 0) {
+            viewDistricts = new Set([name]);
+          } else if (viewDistricts.has(name)) {
+            viewDistricts.delete(name);
+            if (!viewDistricts.size) viewDistricts = new Set();
+          } else {
+            viewDistricts.add(name);
+          }
+          sessionStorage.setItem(VIEW_KEY, JSON.stringify([...viewDistricts]));
+          renderDistrictChips(settings);
+          loadList();
+        };
+      });
+    }
+
+    function applyDistrictView(items) {
+      if (!viewDistricts.size) return items;
+      return items.filter((item) => viewDistricts.has(item.district));
+    }
+
+    function renderProfiles(s) {
+      const list = Array.isArray(s?.settingProfiles) ? s.settingProfiles : [];
+      const sel = $("profileSelect");
+      const current = s?.activeProfileId || "";
+      const currentName = list.find((item) => item.id === current)?.name || "";
+      const typed = $("profileName").value.trim();
+      if (document.activeElement?.id !== "profileName" && (!typed || list.some((item) => item.name === typed))) {
+        $("profileName").value = currentName;
+      }
+      const cap = profileLimit();
+      const atCap = cap && list.length >= cap;
+      const hint = $("profileListHint");
+      if (hint) {
+        if (!list.length) {
+          hint.textContent = "還沒有設定檔。填名稱後按上方「另存」。";
+        } else if (atCap) {
+          hint.textContent = `已存 ${list.length}／${cap} 個設定檔（${list.map((item) => item.name).join("、")}）。另存新名稱會提示已滿；同名可覆蓋。`;
+        } else {
+          hint.textContent = `已存：${list.map((item) => item.name).join("、")}${cap ? `（最多 ${cap} 個）` : ""}`;
+        }
+      }
+      sel.innerHTML = "";
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = list.length ? "（目前設定）" : "（還沒有設定檔，請先另存）";
+      sel.appendChild(placeholder);
+      for (const item of list) {
+        const opt = document.createElement("option");
+        opt.value = item.id;
+        opt.textContent = item.name;
+        if (item.id === current) opt.selected = true;
+        sel.appendChild(opt);
+      }
+    }
+
+    function fillNotifyMatrix(s) {
+      const matrix = s?.notifyMatrix || {};
+      document.querySelectorAll("[data-notify-row][data-notify-ch]").forEach((el) => {
+        const row = matrix[el.dataset.notifyRow];
+        const ch = el.dataset.notifyCh;
+        el.checked = !row || row[ch] !== false;
+      });
+    }
+
+    function collectNotifyMatrix() {
+      const out = {};
+      document.querySelectorAll("[data-notify-row][data-notify-ch]").forEach((el) => {
+        const key = el.dataset.notifyRow;
+        const ch = el.dataset.notifyCh;
+        if (!out[key]) out[key] = { dock: true, webhook: true, mail: true };
+        out[key][ch] = el.checked;
+      });
+      return out;
+    }
+
+    let mailPresets = [];
+    function looksLikeGmailFields() {
+      const blob = [
+        $("memberSmtpHost")?.value,
+        $("memberSmtpUser")?.value,
+        $("memberSmtpFrom")?.value,
+      ].join(" ").toLowerCase();
+      return /gmail\.com|googlemail\.com|smtp\.gmail/.test(blob);
+    }
+    function syncGmailHint() {
+      const el = $("gmailHint");
+      if (el) el.hidden = !looksLikeGmailFields();
+    }
+    function fillMailPresets(presets) {
+      mailPresets = Array.isArray(presets) && presets.length
+        ? presets
+        : [
+          { id: "concise", name: "簡潔" },
+          { id: "detailed", name: "詳細（含地址與通勤）" },
+          { id: "facts", name: "重點條列" },
+        ];
+      const sel = $("mailPreset");
+      if (!sel) return;
+      const current = sel.value;
+      sel.innerHTML = "";
+      for (const row of mailPresets) {
+        const opt = document.createElement("option");
+        opt.value = row.id;
+        opt.textContent = row.name;
+        sel.appendChild(opt);
+      }
+      if (current && mailPresets.some((row) => row.id === current)) sel.value = current;
+    }
+    function fillMemberMail(data) {
+      if (!data || typeof data !== "object") return;
+      fillMailPresets(data.presets);
+      const smtp = data.smtp || {};
+      if ($("memberSmtpHost")) $("memberSmtpHost").value = smtp.host || "";
+      if ($("memberSmtpPort")) $("memberSmtpPort").value = smtp.port || 587;
+      if ($("memberSmtpUser")) $("memberSmtpUser").value = smtp.user || "";
+      if ($("memberSmtpPass")) {
+        $("memberSmtpPass").value = "";
+        $("memberSmtpPass").placeholder = smtp.passSet ? "已設定，空白則保留" : "SMTP 密碼或 Gmail 應用程式密碼";
+      }
+      if ($("memberSmtpFrom")) $("memberSmtpFrom").value = smtp.from || meEmail || "";
+      if ($("memberSmtpFromName")) $("memberSmtpFromName").value = smtp.fromName || "吉比租房物件追蹤";
+      if ($("memberSmtpSecure")) $("memberSmtpSecure").checked = Boolean(smtp.secure);
+      const tpl = data.templates?.listing_notify || {};
+      if ($("memberMailSubject")) $("memberMailSubject").value = tpl.subject || "";
+      if ($("memberMailText")) $("memberMailText").value = tpl.text || "";
+      if ($("mailPreset") && data.preset) $("mailPreset").value = data.preset;
+      syncGmailHint();
+      const status = $("notifyHubStatus");
+      if (status) {
+        const hookOn = Boolean(String($("discordWebhook")?.value || "").trim());
+        status.textContent = [
+          hookOn ? "Webhook 已填" : "Webhook 尚未填",
+          data.configured ? "SMTP 已設定" : "SMTP 尚未設定",
+        ].join(" · ");
+      }
+    }
+    function collectMemberMail() {
+      return {
+        smtp: {
+          host: $("memberSmtpHost")?.value.trim() || "",
+          port: Number($("memberSmtpPort")?.value) || 587,
+          user: $("memberSmtpUser")?.value.trim() || "",
+          pass: $("memberSmtpPass")?.value || "",
+          from: $("memberSmtpFrom")?.value.trim() || "",
+          fromName: $("memberSmtpFromName")?.value.trim() || "",
+          secure: Boolean($("memberSmtpSecure")?.checked),
+        },
+        templates: {
+          listing_notify: {
+            subject: $("memberMailSubject")?.value || "",
+            text: $("memberMailText")?.value || "",
+          },
+        },
+        preset: $("mailPreset")?.value || "detailed",
+      };
+    }
+    function setHubTab(name) {
+      const tab = String(name || "webhook");
+      document.querySelectorAll("[data-hub-tab]").forEach((el) => {
+        el.setAttribute("aria-selected", el.dataset.hubTab === tab ? "true" : "false");
+      });
+      document.querySelectorAll("[data-hub-pane]").forEach((el) => {
+        el.hidden = el.dataset.hubPane !== tab;
+      });
+    }
+    function openNotifyHub(tab) {
+      const box = $("notifyHub");
+      if (!box) return;
+      box.hidden = false;
+      setHubTab(tab || "webhook");
+      if (isGuest) {
+        box.querySelectorAll("input, textarea, select").forEach((el) => { el.disabled = true; });
+        if ($("notifyHubSave")) $("notifyHubSave").disabled = true;
+        if ($("notifyHubSaveMsg")) $("notifyHubSaveMsg").textContent = "示範模式只能看說明。註冊後才能儲存。";
+      } else {
+        box.querySelectorAll("input, textarea, select").forEach((el) => { el.disabled = false; });
+        if ($("notifyHubSave")) $("notifyHubSave").disabled = !settingsLoaded;
+      }
+    }
+    function closeNotifyHub() {
+      const box = $("notifyHub");
+      if (box) box.hidden = true;
+    }
+    async function loadMemberMail() {
+      if (isGuest) return;
+      try {
+        const res = await fetch("/api/member-mail", { cache: "no-store" });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "讀取郵件設定失敗");
+        fillMemberMail(data);
+      } catch (error) {
+        if ($("notifyHubStatus")) $("notifyHubStatus").textContent = error.message;
+      }
+    }
+    async function saveNotifyHub() {
+      if (isGuest) {
+        goRegister();
+        return;
+      }
+      if ($("notifyHubSaveMsg")) $("notifyHubSaveMsg").textContent = "儲存中…";
+      try {
+        await saveSettings(collectSettings());
+        const mailRes = await fetch("/api/member-mail", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(collectMemberMail()),
+          signal: AbortSignal.timeout(20000),
+        });
+        const mailData = await readApi(mailRes);
+        if (!mailRes.ok) throw new Error(mailData.error || "郵件設定沒存到");
+        fillMemberMail(mailData);
+        if ($("notifyHubSaveMsg")) $("notifyHubSaveMsg").textContent = "已儲存";
+        flash("通知設定已儲存");
+      } catch (error) {
+        if ($("notifyHubSaveMsg")) $("notifyHubSaveMsg").textContent = error.message;
+      }
+    }
+
+    function fillSettings(s) {
+      if (!s || typeof s !== "object") return;
+      if (!cities.length) cities = CITIES_EMBEDDED;
+      settings = s;
+      $("searchUrls").value = (s.searchUrls || []).join("\n");
+      $("priceMin").value = s.priceMin || "";
+      $("priceMax").value = s.priceMax || "";
+      $("areaMax").value = s.areaMax || "";
+      $("excludeRooftop").checked = s.excludeRooftop !== false;
+      $("intervalMinutes").value = s.intervalMinutes;
+      const hint = $("intervalMemberHint");
+      if (hint) {
+        const mins = Math.max(1, Number(s.intervalMinutes) || (mePlan === "sponsor" ? 5 : 8));
+        if (isGuest) {
+          hint.textContent = `示範資料沿用目前的檢查節奏。註冊後一般會員每 8 分鐘檢查一次，贊助會員為 5 分鐘。`;
+        } else if (mePlan === "sponsor") {
+          hint.textContent = `本系統每${mins}分鐘會重新檢查物件來源並比對篩選。`;
+        } else {
+          hint.textContent = `本系統每${mins}分鐘會重新檢查物件來源並比對篩選。贊助會員為 5 分鐘。`;
+        }
+      }
+      $("offlineConfirmDays").value = s.offlineConfirmDays || 7;
+      $("pagesPerWatch").value = s.pagesPerWatch;
+      $("minBuildingFloors").value = s.minBuildingFloors || 4;
+      $("workAddress").value = s.workAddress || "";
+      $("commuteKm").value = s.commuteKm || 0;
+      setCommuteMode("commuteMode", s.commuteMode);
+      if ($("showMrt")) $("showMrt").checked = s.showMrt !== false;
+      syncCommuteSort();
+      loadViewFilters(s);
+      $("excludeKeywords").value = (s.excludeKeywords || []).join("\n");
+      $("excludeAgents").value = (s.excludeAgents || []).join("\n");
+      $("discordWebhook").value = s.discordWebhook || "";
+      fillNotifyMatrix(s);
+      excludeBoxes = Array.isArray(s.excludeBoxes)
+        ? s.excludeBoxes.slice(0, MAX_BOXES).map((box) => ({
+            ...box,
+            enabled: box.enabled !== false,
+            description: box.description || "",
+            source: box.source === "text" ? "text" : "draw",
+          }))
+        : [];
+      renderProfiles(s);
+      renderDistrictPicker(s);
+      renderDistrictChips(s);
+      renderBoxes();
+      settingsLoaded = true;
+      setSettingsReady(!isGuest);
+    }
+
+    function renderStats(st) {
+      $("stats").innerHTML = [
+        ["全部", st.total],
+        ["有電梯", st.elevator],
+        ["未瀏覽", st.unseen],
+        ["特別關注", st.watched],
+        ["已隱藏", st.hidden],
+        ["疑似", st.suspected],
+        ...(st.offline ? [["正在確認中的下架", st.offline]] : []),
+        ...(st.filteredOut ? [["列表另排除", st.filteredOut]] : []),
+      ].map(([k, v]) => `<div class="stat"><b>${v || 0}</b><span>${k}</span></div>`).join("");
+    }
+
+    function matchPeerBlock(item) {
+      if (!item.match_level && !item.match_post_id) return "";
+      const peer = item.match_peer;
+      const peerId = peer?.post_id || item.match_post_id;
+      if (!peerId) return "";
+      const title = peer?.title || `刊登 #${peerId}`;
+      const url = peer?.url || listingUrl(peerId);
+      return `<div class="match-peer">疑似同一間：<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(title)}</a>${peer?.price ? ` · 租金 ${esc(peer.price)}` : ""}</div>`;
+    }
+
+    function matchActionButtons(item, id) {
+      if (!item.match_level || item.match_verdict) return "";
+      return `
+            <button class="primary" data-confirm-match="${id}">是同一間</button>
+            <button class="ghost" data-reject-match="${id}">不是同一間</button>
+            <span class="hint">確認後保留較低價；同價留較新刊登</span>`;
+    }
+
+    function chineseMonthCount(token) {
+      const map = { 一: 1, 二: 2, 兩: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
+      const s = String(token || "");
+      if (!s) return null;
+      if (s === "十") return 10;
+      if (s.startsWith("十")) return 10 + (map[s.slice(1)] || 0);
+      if (s.endsWith("十") && s.length === 2) return (map[s[0]] || 0) * 10;
+      return map[s] ?? null;
+    }
+    function depositMonths(text, rent) {
+      const s = String(text || "");
+      if (!/押金/.test(s)) return null;
+      const num = s.match(/(\d+(?:\.\d+)?)\s*個?月/);
+      if (num) return Number(num[1]);
+      const cn = s.match(/([一二兩三两四五六七八九十]+)\s*個?月/);
+      if (cn) {
+        const n = chineseMonthCount(cn[1]);
+        if (n != null) return n;
+      }
+      const yen = s.match(/([\d,]+)\s*元/);
+      const rentN = Number(rent);
+      if (yen && rentN > 0) {
+        const amt = Number(yen[1].replace(/,/g, ""));
+        if (Number.isFinite(amt) && amt > 0) return amt / rentN;
+      }
+      return null;
+    }
+    function isHighDeposit(text, rent) {
+      const months = depositMonths(text, rent);
+      return Number.isFinite(months) && months > 2;
+    }
+    function feeChip(text) {
+      return `<span class="fee-chip">${esc(text)}</span>`;
+    }
+    function feeLines(item) {
+      let rows = item.extra_fees;
+      if (typeof rows === "string") {
+        try { rows = JSON.parse(rows); } catch { rows = []; }
+      }
+      const bits = (Array.isArray(rows) ? rows : [])
+        .filter((row) => row?.value && row.value !== "--")
+        .map((row) => `${row.name} ${row.value}`.replace(/\s+/g, " ").trim());
+      if (!bits.length && item.extra_fee_text) bits.push(String(item.extra_fee_text).replace(/[()（）]/g, ""));
+      if (!bits.length && item.price_contain_text) bits.push(String(item.price_contain_text).replace(/[()（）]/g, ""));
+      const extraAmt = Number(item.extra_fee) || 0;
+      const rent = Number(item.price_num) || 0;
+      const htmlBits = bits.map((bit) => {
+        if (isHighDeposit(bit, rent) || /額外費用|含額外費用/.test(bit)) return feeChip(bit);
+        return esc(bit);
+      });
+      const total = rent && extraAmt
+        ? `含額外費用約 ${(rent + extraAmt).toLocaleString("zh-TW")} 元/月`
+        : "";
+      const parts = [];
+      if (htmlBits.length) parts.push(htmlBits.join(" · "));
+      if (total) parts.push(feeChip(total));
+      return { bits, total, html: parts.join("<br>") };
+    }
+
+    function offlineLine(item) {
+      if (!item.offline) return "";
+      const day = item.offline_at ? String(item.offline_at).slice(0, 10) : "";
+      if (item.offline_confirmed) {
+        return ` · 確認已下架${day ? `（自 ${esc(day)} 起找不到）` : ""}`;
+      }
+      return ` · 下架確認中${day ? `（${esc(day)} 起）` : ""}`;
+    }
+
+    function tags(item) {
+      const bits = [];
+      if (item.last_event === "new") bits.push('<span class="tag new">全新物件</span>');
+      if (item.last_event === "same_source" && !item.match_level) bits.push('<span class="tag same">同屋源更新</span>');
+      if (item.match_verdict === "yes") bits.push('<span class="tag verdict-yes">已確認：同一間</span>');
+      else if (item.match_verdict === "no") bits.push('<span class="tag verdict-no">已確認：不同物件</span>');
+      else if (item.match_level === "high") bits.push('<span class="tag same">高信心同屋源</span>');
+      else if (item.match_level === "medium") bits.push('<span class="tag watch">需確認同屋源</span>');
+      if (item.last_event === "update") bits.push('<span class="tag same">內容更新</span>');
+      if (item.offline_confirmed) bits.push('<span class="tag off-sure">確認已下架</span>');
+      else if (item.offline || item.last_event === "offline") bits.push('<span class="tag off">正在確認中的下架</span>');
+      if (item.has_elevator) bits.push('<span class="tag lift">有電梯</span>');
+      if (item.watched) bits.push('<span class="tag watch">特別關注</span>');
+      if (item.viewed) bits.push('<span class="tag viewed">已瀏覽</span>');
+      return bits.join("");
+    }
+
+    function lineQr(url) {
+      return `https://api.qrserver.com/v1/create-qr-code/?size=72x72&margin=2&data=${encodeURIComponent(url)}`;
+    }
+
+    function contactBlock(item) {
+      const role = item.contact_role || (String(item.role_name || "").includes("屋主") ? "屋主" : (item.role_name ? "仲介" : ""));
+      const name = item.contact_name || String(item.role_name || "").replace(/^仲介|^屋主|^代理人/, "").trim();
+      const agency = item.agency || "";
+      const tel = item.mobile || item.phone || "";
+      const bits = [];
+      if (item.avatar) {
+        bits.push(`<img class="avatar" src="${esc(item.avatar)}" alt="" title="點頭像排除此人" data-exclude-face="${item.post_id}" data-uid="${item.contact_uid || ""}" data-agent="${esc(agency || name)}" />`);
+      }
+      if (name || role) bits.push(`<div class="who-name">${esc([role, name].filter(Boolean).join(" · "))}</div>`);
+      if (agency) bits.push(`<div class="agency">${esc(agency)}</div>`);
+      if (tel) bits.push(`<a class="tel" href="tel:${esc(tel.replace(/[^\d+]/g, ""))}">${esc(tel)}</a>`);
+      if (item.line_url) {
+        bits.push(`<a href="${esc(item.line_url)}" target="_blank" rel="noopener noreferrer" title="加入 LINE"><img class="line-qr" src="${lineQr(item.line_url)}" alt="LINE QR" /></a>`);
+      }
+      if (!bits.length) bits.push(`<div class="agency">聯絡資料抓取中</div>`);
+      return `<div class="contact">${bits.join("")}</div>`;
+    }
+
+    function updateBulkBar() {
+      const n = selected.size;
+      $("bulkBar").classList.toggle("on", n > 0);
+      $("selectedCount").textContent = `已選 ${n} 筆`;
+    }
+
+    function updateListMeta(items, st = {}) {
+      const el = $("listMeta");
+      if (!el) return;
+      const matched = Number(st.matched != null ? st.matched : st.total) || 0;
+      if (matched > items.length && items.length > 0) {
+        el.hidden = false;
+        el.textContent = `目前顯示 ${items.length} / ${matched} 筆。請用搜尋或篩選縮小範圍。`;
+        return;
+      }
+      if (commuteOn() && ((Number(st.missingGeo) || 0) > 0 || (Number(st.missingRoute) || 0) > 0)) {
+        const bits = [];
+        if (st.missingGeo > 0) bits.push(`還有 ${st.missingGeo} 筆要從 591 補地圖座標`);
+        if (st.missingRoute > 0) bits.push(`${st.missingRoute} 筆正在算${commuteModeLabel()}路線`);
+        el.hidden = false;
+        el.textContent = `${bits.join("；")}。有距離的會排在「離公司近→遠」前面，其餘會隨背景計算陸續補上。`;
+        return;
+      }
+      el.hidden = true;
+      el.textContent = "";
+    }
+
+    function captureOpenNotes() {
+      document.querySelectorAll("[data-watch-note]").forEach((el) => {
+        const id = String(el.dataset.watchNote);
+        noteDrafts.set(id, {
+          value: el.value,
+          start: el.selectionStart,
+          end: el.selectionEnd,
+          focused: document.activeElement === el,
+        });
+      });
+    }
+
+    function noteValueFor(id, fallback) {
+      const snap = noteDrafts.get(String(id));
+      return snap ? snap.value : fallback;
+    }
+
+    function restoreOpenNotes() {
+      for (const [id, snap] of noteDrafts) {
+        const el = document.querySelector(`[data-watch-note="${id}"]`);
+        if (!el) continue;
+        el.value = snap.value;
+        if (snap.focused) {
+          el.focus();
+          try { el.setSelectionRange(snap.start ?? snap.value.length, snap.end ?? snap.value.length); } catch { /* 略過 */ }
+        }
+      }
+    }
+
+    function renderList(items, st = {}) {
+      captureOpenNotes();
+      listCache = Array.isArray(items) ? items : [];
+      lastStats = st || {};
+      updateListMeta(items, st);
+      if (!items.length) {
+        const q = $("q").value.trim();
+        let msg = "目前沒有符合條件的物件。請勾選行政區並按儲存、立即檢查。";
+        if (q) msg = `沒有符合「${q}」的物件。`;
+        else if (viewDistricts.size) {
+          msg = "這個行政區篩選目前沒有物件。可點「全部」或再勾其他區。";
+        } else if ($("wholeFloorOnly").checked || $("excludeLowFloors").checked) {
+          msg = "目前沒有符合右側「整層／樓層」顯示篩選的物件。取消勾選可看到更多已抓到的結果。";
+        } else if (filter === "suspected") {
+          msg = "目前沒有被判成同一屋源的重刊。隱藏或已瀏覽的舊屋若再上架，會出現在這裡。";
+        } else if (filter === "offline") {
+          msg = "目前沒有正在確認中的下架物件。591 關閉或刪除的刊登會先列在這裡核對；滿設定天數仍找不到就改成確認已下架，並從「全部」與這個篩選的數量扣除。";
+        } else if (kind === "elevator") {
+          msg = filter === "watched"
+            ? "特別關注裡目前沒有標到有電梯的物件。"
+            : "目前沒有標到有電梯的物件。這只篩已抓到的結果，不會重查 591。";
+        } else if (kind === "apartment") {
+          msg = filter === "watched"
+            ? "特別關注裡目前沒有公寓。"
+            : "目前沒有標成公寓的物件。這只篩已抓到的結果，不會重查 591。";
+        } else if (kind === "suite") {
+          msg = filter === "watched"
+            ? "特別關注裡目前沒有套房／雅房。"
+            : "目前沒有套房／雅房。這只篩已抓到的結果，不會重查 591。";
+        } else if (st.missingGeo > 0) {
+          msg = `正在從 591 物件地圖補 ${st.missingGeo} 筆座標（就是網頁上點地址看到的那個），完成後會自動計算${commuteModeLabel()}路線。`;
+        } else if (st.missingRoute > 0) {
+          msg = `已有 ${st.missingRoute} 筆 591 地圖座標，正在背景計算${commuteModeLabel()}可走路線。兩條替代路線都超過上限的不會顯示；算完後列表會自動更新。`;
+        } else if (st.filteredOut > 0) {
+          msg = `資料庫有 ${st.stored} 筆，目前都被${commuteModeLabel()}路線距離或樓層／坪數／路名／地圖框／房仲排除了。`;
+        } else if (st.dbTotal > 0) {
+          msg = "這個搜尋網址還沒對到已存的物件。請按「立即檢查」重新抓取。";
+        }
+        replaceListHtml(`<div class="empty">${msg}</div>`);
+        updateBulkBar();
+        return;
+      }
+      replaceListHtml(items.map((item) => {
+        const id = String(item.post_id);
+        const on = selected.has(id);
+        return `
+        <article class="item ${on ? "picked" : ""} ${item.offline ? "offline" : ""} ${isAcefengyunAdmin() && isShezidaoAddress(item) ? "shezidao" : ""}" data-card="${id}">
+          <input class="pick" type="checkbox" data-pick="${id}" ${on ? "checked" : ""} />
+          <a class="item-cover" href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-open="${id}">
+            <img src="${esc(item.cover || "")}" alt="" />
+          </a>
+          <div>
+            <div class="tags">${tags(item)}</div>
+            <h3 style="margin:8px 0 0;font-size:18px">
+              <a href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-open="${id}">${esc(item.title)}</a>
+            </h3>
+            ${matchPeerBlock(item)}
+            ${formatListingWhen(item) ? `<div class="when"><span class="when-label">更新</span>${esc(formatListingWhen(item))}</div>` : ""}
+            <div class="meta">
+              <span class="rent-price">租金 ${esc(item.price || "")} ${esc(item.price_unit || "元/月")}</span> · ${esc(item.kind_name || "")} · ${esc(item.layout || "")} · ${esc(item.area_name || "")} · ${esc(item.floor_name || "")}
+              <br>${esc(item.address || "")}${commuteText(item)}${offlineLine(item)}
+              ${mrtText(item) ? `<div class="mrt-line">${mrtText(item)}</div>` : ""}
+              ${item.match_detail ? `<br>比對：${esc(item.match_detail)}${item.match_post_id ? ` · <a href="${listingUrl(item.match_post_id)}" target="_blank" rel="noopener noreferrer">舊刊登 #${item.match_post_id}</a>` : ""}` : ""}
+            </div>
+            ${(() => {
+              const fees = feeLines(item);
+              if (!fees.html) return "";
+              return `<div class="fees">${fees.html}</div>`;
+            })()}
+            ${item.watched || draftWatch.has(String(id)) ? `<label class="watch-note-label" for="watch-note-${id}">關注備註</label>
+            <textarea class="watch-note" id="watch-note-${id}" data-watch-note="${id}" data-watch-draft="${draftWatch.has(String(id)) ? "1" : "0"}" maxlength="300" rows="2" placeholder="${draftWatch.has(String(id)) ? "選填。選字不會送出；按「加入」或 Enter 才加入特別關注" : "為什麼關注？"}">${esc(noteValueFor(id, item.watch_note || ""))}</textarea>` : ""}
+          </div>
+          ${contactBlock(item)}
+          <div class="actions">
+            <button class="ghost" data-viewed="${id}">${item.viewed ? "取消已瀏覽" : "標記已瀏覽"}</button>
+            ${item.watched
+              ? `<button class="primary" data-watched="${id}">取消關注</button>`
+              : draftWatch.has(String(id))
+                ? `<button class="primary" data-watch-draft-commit="${id}">加入</button><button class="ghost" data-watch-draft-cancel="${id}">取消</button>`
+                : `<button class="ghost" data-watched="${id}">特別關注</button>`}
+            ${matchActionButtons(item, id)}
+            ${item.watched || draftWatch.has(String(id)) ? "" : `<label class="hide-box">
+              <input type="checkbox" data-hidden="${id}" ${item.hidden ? "checked" : ""} />
+              不再顯示
+            </label>`}
+          </div>
+        </article>`;
+      }).join(""));
+      updateBulkBar();
+      restoreOpenNotes();
+      if (pendingNoteFocus) {
+        const el = document.querySelector(`[data-watch-note="${pendingNoteFocus}"]`);
+        pendingNoteFocus = "";
+        if (el) {
+          el.focus();
+          const len = el.value.length;
+          try { el.setSelectionRange(len, len); } catch { /* 部分瀏覽器略過 */ }
+        }
+      }
+    }
+
+    function watchNoteBusy() {
+      if (noteComposing) return true;
+      const el = document.activeElement;
+      return Boolean(el?.dataset?.watchNote) || draftWatch.size > 0;
+    }
+
+    function cancelDraftCommitTimer() {
+      if (draftCommitTimer) {
+        clearTimeout(draftCommitTimer);
+        draftCommitTimer = 0;
+      }
+    }
+
+    function isWatchDraftField(el) {
+      const id = el?.dataset?.watchNote;
+      return Boolean(id && (el.dataset.watchDraft === "1" || draftWatch.has(String(id))));
+    }
+
+    function replaceListHtml(html) {
+      listRendering = true;
+      skipDraftBlur = true;
+      cancelDraftCommitTimer();
+      try {
+        $("list").innerHTML = html;
+      } finally {
+        listRendering = false;
+        queueMicrotask(() => { skipDraftBlur = false; });
+      }
+    }
+
+    function flushQueuedListRefresh() {
+      if (!listRefreshQueued || watchNoteBusy()) return;
+      listRefreshQueued = false;
+      loadList({ force: true });
+    }
+
+    function flyCardToChip(card, filterKey) {
+      const chip = document.querySelector(`[data-filter="${filterKey}"]`);
+      const layer = $("watchFlyLayer");
+      if (chip) {
+        chip.classList.add("watch-fly-hit");
+        window.setTimeout(() => chip.classList.remove("watch-fly-hit"), 500);
+      }
+      if (!card || !chip || !layer) return;
+      const from = card.getBoundingClientRect();
+      const to = chip.getBoundingClientRect();
+      if (from.width < 8 || from.height < 8) return;
+      const ghost = card.cloneNode(true);
+      ghost.removeAttribute("data-card");
+      ghost.querySelectorAll("button, input, a, textarea, label").forEach((el) => {
+        el.removeAttribute("id");
+        el.setAttribute("tabindex", "-1");
+      });
+      ghost.classList.add("watch-fly-ghost");
+      ghost.style.left = `${from.left}px`;
+      ghost.style.top = `${from.top}px`;
+      ghost.style.width = `${from.width}px`;
+      ghost.style.height = `${from.height}px`;
+      ghost.style.transform = "translate(0, 0) scale(1)";
+      ghost.style.opacity = "1";
+      layer.appendChild(ghost);
+      const dx = to.left + to.width / 2 - (from.left + from.width / 2);
+      const dy = to.top + to.height / 2 - (from.top + from.height / 2);
+      const scale = Math.max(0.1, Math.min(to.width / from.width, 0.18));
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          ghost.style.transition = "transform 1.15s cubic-bezier(.22,.82,.28,1), opacity 1.15s ease";
+          ghost.style.transform = `translate(${dx}px, ${dy}px) scale(${scale})`;
+          ghost.style.opacity = "0.25";
+        });
+      });
+      window.setTimeout(() => ghost.remove(), 1300);
+    }
+
+    function flyCardToWatchChip(card) {
+      flyCardToChip(card, "watched");
+    }
+
+    function flyCardToAllChip(card) {
+      flyCardToChip(card, "all");
+    }
+
+    async function commitWatchDraft(id, note) {
+      const key = String(id);
+      if (!draftWatch.has(key)) return;
+      cancelDraftCommitTimer();
+      const card = document.querySelector(`[data-card="${key}"]`);
+      flyCardToWatchChip(card);
+      draftWatch.delete(key);
+      noteDrafts.delete(key);
+      if (card) card.style.visibility = "hidden";
+      await fetch(`/api/listings/${id}/flags`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ watched: true, watch_note: note }),
+      });
+      if (watchNoteBusy()) {
+        listRefreshQueued = true;
+        listCache = listCache.filter((item) => String(item.post_id) !== key);
+        renderList(listCache, lastStats);
+        return;
+      }
+      await loadList({ force: true });
+    }
+
+    async function loadList(options = {}) {
+      if (isGuest) {
+        renderStats(lastStats);
+        renderDistrictChips(settings);
+        renderList(applyGuestQuery(guestListings), lastStats);
+        return;
+      }
+      if (!options.force && watchNoteBusy()) {
+        listRefreshQueued = true;
+        return;
+      }
+      const gen = ++listLoadGen;
+      if (!options.force) listRefreshQueued = false;
+      const q = $("q").value.trim();
+      const districts = [...viewDistricts].map(encodeURIComponent).join(",");
+      const res = await fetch(
+        `/api/listings?filter=${encodeURIComponent(filter)}&kind=${encodeURIComponent(kind)}&sort=${encodeURIComponent(sort)}&q=${encodeURIComponent(q)}&limit=500&districts=${districts}`,
+      );
+      const data = await res.json();
+      if (gen !== listLoadGen) return;
+      if (!options.force && watchNoteBusy()) {
+        listRefreshQueued = true;
+        return;
+      }
+      renderStats(data.stats);
+      renderDistrictChips(settings);
+      // 伺服器已依行政區／整層／1F 篩過再排序截取；前端再套一次防呆
+      lastStats = data.stats || {};
+      renderList(applyListView(data.listings), lastStats);
+    }
+
+    async function loadState() {
+      $("status").textContent = "正在載入設定…";
+      let me = null;
+      let lastError = "";
+      for (let attempt = 1; attempt <= 4; attempt += 1) {
+        try {
+          const res = await fetch("/api/me", { cache: "no-store", signal: AbortSignal.timeout(8000) });
+          me = await res.json();
+          lastError = "";
+          break;
+        } catch (error) {
+          lastError = error.name === "TimeoutError" || error.name === "AbortError"
+            ? "伺服器忙碌（可能正在檢查 591）"
+            : error.message;
+          $("status").textContent = `連線中（${attempt}/4）… ${lastError}`;
+          if (attempt < 4) await new Promise((resolve) => setTimeout(resolve, 800 * attempt));
+        }
+      }
+      if (!me) {
+        setSettingsReady(false, "連不上伺服器。請按右上「重新整理」。現在不要按儲存。");
+        throw new Error(lastError || "連不上伺服器");
+      }
+      if (!me.ok) {
+        setGuestMode(true);
+        setSettingsReady(false, "示範條件不能改。註冊後才能存成你的設定。");
+        const demoRes = await fetch("/api/demo", { cache: "no-store", signal: AbortSignal.timeout(20000) });
+        const demo = await readApi(demoRes);
+        if (!demoRes.ok) throw new Error(demo.error || "示範列表載入失敗");
+        cities = Array.isArray(demo.cities) && demo.cities.length ? demo.cities : CITIES_EMBEDDED;
+        if (demo.settings) fillSettings(demo.settings);
+        setSettingsReady(false, "示範條件不能改。註冊後才能存成你的設定。");
+        guestListings = Array.isArray(demo.listings) ? demo.listings : [];
+        lastStats = demo.stats || {};
+        renderStats(lastStats);
+        renderList(applyGuestQuery(guestListings), lastStats);
+        $("status").textContent = "示範列表（唯讀）。註冊後才能改條件與收到通知。";
+        maybeStartGuestTour();
+        return;
+      }
+      setGuestMode(false);
+      $("who").textContent = me.email || "";
+      meEmail = me.email || "";
+      meIsAdmin = me.role === "admin";
+      const mailHint = $("notifyMailHint");
+      if (mailHint) {
+        mailHint.textContent = meEmail
+          ? `物件／屋源提醒請用你自己的 SMTP 寄到 ${meEmail}。註冊、忘記密碼、變更密碼、贊助通知由站方管理員 SMTP 寄出。`
+          : "物件／屋源提醒請用你自己的 SMTP 寄到註冊信箱。註冊、忘記密碼、變更密碼、贊助通知由站方管理員 SMTP 寄出。";
+      }
+      mePlan = me.plan || "free";
+      document.body.classList.toggle("role-admin", meIsAdmin);
+      document.body.classList.toggle("plan-sponsor", mePlan === "sponsor");
+      paintSponsorOffer(me.sponsor);
+      if (me.role && me.role !== "admin" && $("resetLink")) $("resetLink").style.display = "none";
+      settingsLoaded = false;
+      setSettingsReady(false, "正在載入已存設定…完成前請不要按儲存或另存。");
+      lastError = "";
+      for (let attempt = 1; attempt <= 4; attempt += 1) {
+        try {
+          const res = await fetch("/api/settings", { cache: "no-store", signal: AbortSignal.timeout(12000) });
+          const data = await readApi(res);
+          if (!res.ok) throw new Error(data.error || "載入設定失敗");
+          if (!data.settings) throw new Error("伺服器沒有回傳設定");
+          cities = Array.isArray(data.cities) && data.cities.length ? data.cities : CITIES_EMBEDDED;
+          fillSettings(data.settings);
+          lastError = "";
+          break;
+        } catch (error) {
+          lastError = error.name === "TimeoutError" || error.name === "AbortError"
+            ? "載入逾時，伺服器可能正在檢查物件"
+            : error.message;
+          $("status").textContent = `載入設定中（${attempt}/4）… ${lastError}`;
+          if (attempt < 4) await new Promise((resolve) => setTimeout(resolve, 800 * attempt));
+        }
+      }
+      if (!settingsLoaded) {
+        cities = CITIES_EMBEDDED;
+        renderDistrictPicker({ watchDistricts: [] });
+        setSettingsReady(false, "設定沒載到。請按右上「重新整理」。現在看到的空白表單不是你的存檔，請不要按儲存。");
+        $("status").textContent = lastError || "設定沒載到，請重新整理";
+      }
+      try {
+        const res = await fetch("/api/state", { cache: "no-store", signal: AbortSignal.timeout(20000) });
+        const data = await readApi(res);
+        if (res.ok && data.settings) {
+          cities = Array.isArray(data.cities) && data.cities.length ? data.cities : cities;
+          fillSettings(data.settings);
+        }
+        await loadMemberMail();
+        renderStats(data.stats || {});
+        renderList(applyListView(data.listings || []), data.stats || {});
+        if (data.lastRun?.checked_at) {
+          const extra = data.lastRun.baseline ? "（第一次只建立基準，不推播）" : "";
+          $("status").textContent = `上次檢查 ${new Date(data.lastRun.checked_at).toLocaleString()}，抓到 ${data.lastRun.fetched || 0} 筆${extra}`;
+        } else {
+          $("status").textContent = "設定已載入";
+        }
+      } catch (error) {
+        $("status").textContent = "設定已載入，物件列表稍後再試";
+        try {
+          await loadList();
+        } catch {
+          $("status").textContent = "設定已載入，但物件列表暫時讀不到";
+        }
+      }
+    }
+
+    function collectSettings() {
+      if (!settingsLoaded) throw new Error("設定還沒載入完成，請稍候或重新整理，不要先按儲存");
+      const watchDistricts = selectedDistrictKeys();
+      const dLimit = districtLimit();
+      if (dLimit && watchDistricts.length > dLimit) throw new Error(`每個設定檔最多選 ${dLimit} 個行政區`);
+      return {
+        searchUrls: $("searchUrls").value.split(/\n+/).map((s) => s.trim()).filter(Boolean),
+        watchDistricts,
+        priceMin: Number($("priceMin").value) || 0,
+        priceMax: Number($("priceMax").value) || 0,
+        areaMax: Number($("areaMax").value) || 0,
+        excludeRooftop: $("excludeRooftop").checked,
+        intervalMinutes: meIsAdmin ? Number($("intervalMinutes").value) : undefined,
+        offlineConfirmDays: meIsAdmin ? (Number($("offlineConfirmDays").value) || 7) : 7,
+        pagesPerWatch: meIsAdmin ? Number($("pagesPerWatch").value) : 40,
+        minBuildingFloors: Number($("minBuildingFloors").value) || 4,
+        wholeFloorOnly: $("wholeFloorOnly").checked,
+        excludeLowFloors: $("excludeLowFloors").checked,
+        excludeKeywords: $("excludeKeywords").value.split(/[\n,，]/).map((s) => s.trim()).filter(Boolean),
+        excludeAgents: $("excludeAgents").value.split(/[\n,，]/).map((s) => s.trim()).filter(Boolean),
+        excludeAgentIds: settings.excludeAgentIds || [],
+        excludeBoxes,
+        discordWebhook: $("discordWebhook").value.trim(),
+        notifyMatrix: collectNotifyMatrix(),
+        workAddress: $("workAddress").value.trim(),
+        commuteKm: Number($("commuteKm").value) || 0,
+        commuteMode: selectedCommuteMode("commuteMode"),
+        showMrt: $("showMrt") ? $("showMrt").checked : true,
+      };
+    }
+
+    async function readApi(res) {
+      const text = await res.text();
+      try {
+        return JSON.parse(text);
+      } catch {
+        if (res.status === 502 || res.status === 504 || res.status === 524) {
+          throw new Error("伺服器回應逾時。請稍候再按一次，不要連續猛按");
+        }
+        throw new Error("伺服器沒有正確回應，請重新整理後再試");
+      }
+    }
+
+    async function saveSettings(body) {
+      const res = await fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(20000),
+      });
+      const data = await readApi(res);
+      if (!res.ok) throw new Error(data.error || "儲存失敗");
+      fillSettings(data.settings);
+      return data.settings;
+    }
+
+    function statusFromResult(result) {
+      const search = (result.searches || [])
+        .map((item) => `${item.label}（591 ${item.total} 筆，抓 ${item.fetched}）`)
+        .join("；");
+      const geo = result.geoBackfill;
+      const geoBit = geo?.attempted
+        ? `｜已為 ${geo.located}/${geo.attempted} 個地址補定位`
+        : "";
+      const route = result.routeBackfill;
+      const routeBit = route?.attempted
+        ? `｜已計算 ${route.located}/${route.attempted} 筆${commuteModeLabel()}路線`
+        : "";
+      const off = result.offline;
+      const offBits = [];
+      if (off?.gone) offBits.push(`新標下架 ${off.gone} 筆`);
+      if (off?.rechecked) offBits.push(`再核對 ${off.rechecked} 筆`);
+      if (off?.restored) offBits.push(`恢復上架 ${off.restored} 筆`);
+      if (off?.confirmed) offBits.push(`確認已下架 ${off.confirmed} 筆`);
+      if (!offBits.length && off?.checked) offBits.push(`已核對 ${off.checked} 筆是否仍在架`);
+      const offBit = offBits.length ? `｜${offBits.join("、")}` : "";
+      if (result.errors?.length) {
+        return `部分失敗：${result.errors.join("；")}${search ? "｜" + search : ""}${geoBit}${routeBit}${offBit}`;
+      }
+      if (result.baseline || result.searches?.some((item) => item.baseline)) {
+        return `已套用篩選並建立基準，抓到 ${result.fetched} 筆。之後的新物件才會通知。${search ? "｜" + search : ""}${geoBit}${routeBit}${offBit}`;
+      }
+      return `檢查完成，本次通知 ${result.events?.length || 0} 則。${search ? "｜" + search : ""}${geoBit}${routeBit}${offBit}`;
+    }
+
+    $("saveBtn").onclick = async () => {
+      $("saveBtn").disabled = true;
+      flash("儲存中…");
+      try {
+        await saveSettings(collectSettings());
+        flash("設定已儲存");
+        await loadList();
+      } catch (error) {
+        const msg = error.name === "TimeoutError" || error.name === "AbortError"
+          ? "儲存逾時，請再試一次"
+          : error.message;
+        flash(msg);
+      } finally {
+        $("saveBtn").disabled = !settingsLoaded;
+      }
+    };
+
+    $("saveAsBtn").onclick = async () => {
+      const name = $("profileName").value.trim();
+      if (!name) {
+        $("profileName").focus();
+        flash("請先在左側填設定檔名稱，再按另存");
+        return;
+      }
+      const profiles = Array.isArray(settings?.settingProfiles) ? settings.settingProfiles : [];
+      const existing = profiles.some((item) => String(item.name || "").trim() === name);
+      const cap = profileLimit();
+      const atCap = Boolean(cap && profiles.length >= cap);
+      if (existing) {
+        if (!window.confirm(`已有同名設定檔「${name}」。確定要覆蓋嗎？`)) return;
+      } else if (atCap) {
+        window.alert(`設定檔已滿（最多 ${cap} 個）。請先刪除一個，或改用現有設定檔名稱覆蓋。`);
+        return;
+      }
+      $("saveAsBtn").disabled = true;
+      flash(existing ? "覆蓋中…" : "另存中…");
+      try {
+        const res = await fetch("/api/profiles", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, overwrite: existing, settings: collectSettings() }),
+          signal: AbortSignal.timeout(25000),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "另存失敗");
+        fillSettings(data.settings);
+        const saved = (data.settings?.settingProfiles || []).some((item) => item.name === name);
+        flash(saved
+          ? (existing ? `已覆蓋「${name}」` : `已另存「${name}」，可在左上選單切換`)
+          : `另存回應沒有「${name}」，請再試一次`);
+      } catch (error) {
+        const msg = error.name === "TimeoutError" || error.name === "AbortError"
+          ? "另存逾時，請再試一次"
+          : error.message;
+        flash(msg);
+      } finally {
+        setSettingsReady(settingsLoaded);
+      }
+    };
+
+    $("scrollTopBtn").onclick = () => window.scrollTo({ top: 0, behavior: "smooth" });
+
+    $("profileSelect").onchange = async () => {
+      const id = $("profileSelect").value;
+      if (!id) return;
+      try {
+        const res = await fetch(`/api/profiles/${encodeURIComponent(id)}/load`, { method: "POST" });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "載入失敗");
+        fillSettings(data.settings);
+        $("saveMsg").textContent = "已載入設定檔";
+        await loadList();
+      } catch (error) {
+        $("saveMsg").textContent = error.message;
+      }
+    };
+
+    $("deleteProfileBtn").onclick = async () => {
+      const id = $("profileSelect").value;
+      if (!id) {
+        $("saveMsg").textContent = "目前沒有可刪的設定檔";
+        return;
+      }
+      if (!window.confirm("確定刪除這個設定檔？不會刪物件紀錄。")) return;
+      try {
+        const res = await fetch(`/api/profiles/${encodeURIComponent(id)}`, { method: "DELETE" });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "刪除失敗");
+        fillSettings(data.settings);
+        $("saveMsg").textContent = "設定檔已刪除";
+      } catch (error) {
+        $("saveMsg").textContent = error.message;
+      }
+    };
+
+    $("watchBtn").onclick = async () => {
+      $("watchBtn").disabled = true;
+      $("status").textContent = "正在儲存篩選並檢查…";
+      try {
+        await saveSettings(collectSettings());
+        const res = await fetch("/api/watch", { method: "POST", signal: AbortSignal.timeout(55000) });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "檢查失敗");
+        $("status").textContent = statusFromResult(data.result);
+        pushDock(data.result.events || []);
+        await loadList();
+      } catch (error) {
+        $("status").textContent = error.message;
+      } finally {
+        $("watchBtn").disabled = false;
+      }
+    };
+
+    $("reloadBtn").onclick = () => {
+      $("status").textContent = "重新載入設定…";
+      loadState().catch((error) => {
+        $("status").textContent = error.message || "載入失敗，請再按重新整理";
+      });
+    };
+    function syncPanelFab() {
+      const collapsed = document.body.classList.contains("panel-collapsed");
+      const icon = $("expandPanelIcon");
+      const label = $("expandPanelLabel");
+      const btn = $("expandPanelBtn");
+      if (icon) icon.textContent = collapsed ? "<|>" : ">|<";
+      if (label) label.textContent = collapsed ? "功能表展開" : "功能表收合";
+      if (btn) {
+        btn.title = collapsed ? "功能表展開" : "功能表收合";
+        btn.setAttribute("aria-label", collapsed ? "功能表展開" : "功能表收合");
+      }
+    }
+    function setPanelCollapsed(on) {
+      document.body.classList.toggle("panel-collapsed", Boolean(on));
+      localStorage.setItem(PANEL_KEY, on ? "1" : "0");
+      if (!on) setFilterCompact(false);
+      else if (localStorage.getItem(FILTER_COMPACT_KEY) === "1") {
+        $("listHeadSticky")?.classList.add("filter-compact");
+      }
+      syncPanelFab();
+    }
+    function setFilterCompact(on) {
+      const sticky = $("listHeadSticky");
+      if (!sticky) return;
+      if (!document.body.classList.contains("panel-collapsed")) {
+        sticky.classList.remove("filter-compact");
+        localStorage.setItem(FILTER_COMPACT_KEY, "0");
+        return;
+      }
+      sticky.classList.toggle("filter-compact", Boolean(on));
+      localStorage.setItem(FILTER_COMPACT_KEY, on ? "1" : "0");
+    }
+    $("collapsePanelBtn").onclick = () => setPanelCollapsed(true);
+    $("expandPanelBtn").onclick = () => setPanelCollapsed(!document.body.classList.contains("panel-collapsed"));
+    syncPanelFab();
+    $("filterMiniBtn").onclick = () => setFilterCompact(true);
+    $("filterRestoreBtn").onclick = () => setFilterCompact(false);
+    $("showMrt")?.addEventListener("change", () => {
+      if (isGuest) {
+        $("showMrt").checked = settings.showMrt !== false;
+        return;
+      }
+      settings.showMrt = $("showMrt").checked;
+      renderList(listCache, lastStats);
+    });
+    document.querySelectorAll("[data-open-hub]").forEach((el) => {
+      el.addEventListener("click", () => openNotifyHub(el.dataset.openHub));
+    });
+    $("notifyHubClose")?.addEventListener("click", closeNotifyHub);
+    document.querySelector("[data-close-hub]")?.addEventListener("click", closeNotifyHub);
+    document.querySelectorAll("[data-hub-tab]").forEach((el) => {
+      el.addEventListener("click", () => setHubTab(el.dataset.hubTab));
+    });
+    $("notifyHubSave")?.addEventListener("click", () => saveNotifyHub());
+    function openPasswordDialog() {
+      const box = $("passwordDialog");
+      if (!box || isGuest) return;
+      box.hidden = false;
+      if ($("changePasswordForm")) $("changePasswordForm").reset();
+      if ($("changePasswordMsg")) {
+        $("changePasswordMsg").textContent = "";
+        $("changePasswordMsg").className = "msg";
+      }
+      $("currentPassword")?.focus();
+    }
+    function closePasswordDialog() {
+      const box = $("passwordDialog");
+      if (box) box.hidden = true;
+    }
+    $("changePasswordBtn")?.addEventListener("click", openPasswordDialog);
+    $("passwordDialogClose")?.addEventListener("click", closePasswordDialog);
+    document.querySelector("[data-close-password]")?.addEventListener("click", closePasswordDialog);
+    function openDeleteAccountDialog() {
+      const box = $("deleteAccountDialog");
+      if (!box || isGuest) return;
+      box.hidden = false;
+      if ($("deleteAccountForm")) $("deleteAccountForm").reset();
+      if ($("deleteAccountMsg")) {
+        $("deleteAccountMsg").textContent = "";
+        $("deleteAccountMsg").className = "msg";
+      }
+      $("deleteAccountReason")?.focus();
+    }
+    function closeDeleteAccountDialog() {
+      const box = $("deleteAccountDialog");
+      if (box) box.hidden = true;
+    }
+    let helpQaItems = [];
+    function renderHelpQa(items) {
+      helpQaItems = Array.isArray(items) ? items : [];
+      const box = $("helpQaList");
+      if (!box) return;
+      if (!helpQaItems.length) {
+        box.innerHTML = `<p class="hint">目前沒有說明項目。</p>`;
+        return;
+      }
+      box.innerHTML = helpQaItems.map((row, index) => `
+        <details class="help-qa-item" ${index === 0 ? "open" : ""}>
+          <summary>${esc(row.question)}</summary>
+          <p>${esc(row.answer)}</p>
+        </details>
+      `).join("");
+    }
+    async function loadHelpQa() {
+      try {
+        const res = await fetch("/api/help-qa", { cache: "no-store" });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "載入說明失敗");
+        renderHelpQa(data.items || []);
+      } catch {
+        renderHelpQa([]);
+      }
+    }
+    function openHelpQaDialog() {
+      const box = $("helpQaDialog");
+      if (!box) return;
+      box.hidden = false;
+      if (!helpQaItems.length) loadHelpQa();
+    }
+    function closeHelpQaDialog() {
+      const box = $("helpQaDialog");
+      if (box) box.hidden = true;
+    }
+    $("helpQaBtn")?.addEventListener("click", openHelpQaDialog);
+    $("helpQaClose")?.addEventListener("click", closeHelpQaDialog);
+    document.querySelector("[data-close-help-qa]")?.addEventListener("click", closeHelpQaDialog);
+    loadHelpQa();
+    $("deleteAccountBtn")?.addEventListener("click", openDeleteAccountDialog);
+    $("deleteAccountClose")?.addEventListener("click", closeDeleteAccountDialog);
+    document.querySelector("[data-close-delete-account]")?.addEventListener("click", closeDeleteAccountDialog);
+    $("deleteAccountForm")?.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const msg = $("deleteAccountMsg");
+      const btn = $("deleteAccountSubmit");
+      if (btn) btn.disabled = true;
+      if (msg) {
+        msg.textContent = "處理中…";
+        msg.className = "msg";
+      }
+      try {
+        const res = await fetch("/api/account/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reason: $("deleteAccountReason")?.value || "" }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "取消失敗");
+        location.replace("/login.html?logout=1");
+      } catch (error) {
+        if (msg) {
+          msg.textContent = error.message || "取消失敗";
+          msg.className = "msg err";
+        }
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    });
+    $("showChangePw")?.addEventListener("change", () => {
+      const type = $("showChangePw").checked ? "text" : "password";
+      for (const id of ["currentPassword", "newPassword", "newPassword2"]) {
+        if ($(id)) $(id).type = type;
+      }
+    });
+    $("changePasswordForm")?.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const msg = $("changePasswordMsg");
+      const btn = $("changePasswordSubmit");
+      if ($("newPassword").value !== $("newPassword2").value) {
+        if (msg) {
+          msg.textContent = "兩次新密碼不一樣";
+          msg.className = "msg err";
+        }
+        return;
+      }
+      if (btn) btn.disabled = true;
+      if (msg) {
+        msg.textContent = "儲存中…";
+        msg.className = "msg";
+      }
+      try {
+        const res = await fetch("/api/change-password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({
+            currentPassword: $("currentPassword").value,
+            newPassword: $("newPassword").value,
+          }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "變更密碼失敗");
+        if (msg) {
+          msg.textContent = "密碼已更新。若管理員已設定寄信，通知會寄到你的信箱。";
+          msg.className = "msg ok";
+        }
+        $("changePasswordForm").reset();
+      } catch (error) {
+        if (msg) {
+          msg.textContent = error.message;
+          msg.className = "msg err";
+        }
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    });
+    $("gmailPresetBtn")?.addEventListener("click", () => {
+      if ($("memberSmtpHost")) $("memberSmtpHost").value = "smtp.gmail.com";
+      if ($("memberSmtpPort")) $("memberSmtpPort").value = 587;
+      if ($("memberSmtpSecure")) $("memberSmtpSecure").checked = false;
+      if (meEmail && $("memberSmtpUser") && !$("memberSmtpUser").value) $("memberSmtpUser").value = meEmail;
+      if (meEmail && $("memberSmtpFrom") && !$("memberSmtpFrom").value) $("memberSmtpFrom").value = meEmail;
+      syncGmailHint();
+    });
+    ["memberSmtpHost", "memberSmtpUser", "memberSmtpFrom"].forEach((id) => {
+      $(id)?.addEventListener("input", syncGmailHint);
+    });
+    $("mailPreset")?.addEventListener("change", () => {
+      const bodies = {
+        concise: {
+          subject: "吉比租房物件追蹤：{{event}} {{title}}",
+          text: "{{event}}\n{{title}}\n{{url}}\n",
+        },
+        detailed: {
+          subject: "吉比租房物件追蹤：{{event}} {{title}}",
+          text: "{{event}}\n\n{{title}}\n{{price}}\n{{facts}}\n\n{{url}}\n\n——吉比租房物件追蹤\n",
+        },
+        facts: {
+          subject: "吉比租房物件追蹤：{{event}} {{title}}",
+          text: "{{event}} · {{title}}\n{{price}}\n{{facts}}\n{{url}}\n",
+        },
+      };
+      const row = bodies[$("mailPreset").value];
+      if (!row) return;
+      if ($("memberMailSubject")) $("memberMailSubject").value = row.subject;
+      if ($("memberMailText")) $("memberMailText").value = row.text;
+    });
+    $("memberMailTest")?.addEventListener("click", async () => {
+      if (isGuest) {
+        goRegister();
+        return;
+      }
+      const msg = $("memberMailMsg");
+      if (msg) {
+        msg.textContent = "寄送中…";
+        msg.className = "msg";
+      }
+      try {
+        const res = await fetch("/api/member-mail/test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ smtp: collectMemberMail().smtp }),
+          signal: AbortSignal.timeout(20000),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "寄測試信失敗");
+        if (msg) {
+          msg.textContent = `測試信已寄到 ${data.to}`;
+          msg.className = "msg ok";
+        }
+      } catch (error) {
+        if (msg) {
+          msg.textContent = error.message;
+          msg.className = "msg err";
+        }
+      }
+    });
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape" && $("notifyHub") && !$("notifyHub").hidden) closeNotifyHub();
+    });
+    $("wholeFloorOnly").onchange = () => {
+      persistViewFilters();
+      loadList();
+    };
+    $("excludeLowFloors").onchange = () => {
+      persistViewFilters();
+      loadList();
+    };
+    $("selectPageBtn").onclick = () => {
+      document.querySelectorAll("[data-pick]").forEach((el) => {
+        el.checked = true;
+        selected.add(el.dataset.pick);
+        el.closest(".item")?.classList.add("picked");
+      });
+      updateBulkBar();
+    };
+    $("clearSelectBtn").onclick = () => {
+      selected.clear();
+      document.querySelectorAll("[data-pick]").forEach((el) => {
+        el.checked = false;
+        el.closest(".item")?.classList.remove("picked");
+      });
+      updateBulkBar();
+    };
+    $("hideSelectedBtn").onclick = async () => {
+      const ids = [...selected];
+      if (!ids.length) return;
+      $("hideSelectedBtn").disabled = true;
+      try {
+        const res = await fetch("/api/listings/hide-many", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "隱藏失敗");
+        selected.clear();
+        $("status").textContent = `已不再顯示 ${data.count} 筆`;
+        await loadList();
+      } catch (error) {
+        $("status").textContent = error.message;
+      } finally {
+        $("hideSelectedBtn").disabled = false;
+      }
+    };
+    $("q").addEventListener("input", () => {
+      clearTimeout(window.__q);
+      window.__q = setTimeout(loadList, 250);
+    });
+
+    document.querySelectorAll("[data-filter]").forEach((btn) => {
+      btn.onclick = () => {
+        document.querySelectorAll("[data-filter]").forEach((b) => b.classList.remove("on"));
+        btn.classList.add("on");
+        filter = btn.dataset.filter;
+        loadList();
+      };
+    });
+
+    document.querySelectorAll("[data-kind]").forEach((btn) => {
+      btn.onclick = () => {
+        const next = btn.dataset.kind;
+        kind = kind === next ? "" : next;
+        document.querySelectorAll("[data-kind]").forEach((b) => {
+          b.classList.toggle("on", b.dataset.kind === kind);
+        });
+        loadList();
+      };
+    });
+
+    document.querySelectorAll("[data-sort]").forEach((btn) => {
+      btn.onclick = () => {
+        document.querySelectorAll("[data-sort]").forEach((b) => b.classList.remove("on"));
+        btn.classList.add("on");
+        sort = btn.dataset.sort;
+        loadList();
+      };
+    });
+
+    $("list").addEventListener("input", (ev) => {
+      const id = ev.target.dataset.watchNote;
+      if (!id) return;
+      noteDrafts.set(String(id), {
+        value: ev.target.value,
+        start: ev.target.selectionStart,
+        end: ev.target.selectionEnd,
+        focused: true,
+      });
+      if (ev.target.dataset.watchDraft === "1") return;
+      clearTimeout(noteTimers[id]);
+      noteTimers[id] = setTimeout(() => {
+        fetch(`/api/listings/${id}/flags`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ watch_note: ev.target.value }),
+        }).catch(() => {});
+      }, 400);
+    });
+    $("list").addEventListener("compositionstart", (ev) => {
+      if (!ev.target.dataset.watchNote) return;
+      noteComposing = true;
+      cancelDraftCommitTimer();
+    });
+    $("list").addEventListener("compositionend", (ev) => {
+      if (!ev.target.dataset.watchNote) return;
+      noteComposing = false;
+      noteJustComposed = true;
+      const id = ev.target.dataset.watchNote;
+      noteDrafts.set(String(id), {
+        value: ev.target.value,
+        start: ev.target.selectionStart,
+        end: ev.target.selectionEnd,
+        focused: true,
+      });
+      setTimeout(() => { noteJustComposed = false; }, 280);
+    });
+    $("list").addEventListener("keydown", (ev) => {
+      const id = ev.target.dataset.watchNote;
+      if (!id) return;
+      if (ev.key === "Escape" && (ev.target.dataset.watchDraft === "1" || draftWatch.has(String(id)))) {
+        ev.preventDefault();
+        cancelDraftCommitTimer();
+        skipDraftBlur = true;
+        draftWatch.delete(String(id));
+        noteDrafts.delete(String(id));
+        renderList(listCache, lastStats);
+        flushQueuedListRefresh();
+        return;
+      }
+      if (ev.key !== "Enter" || ev.shiftKey || ev.isComposing || ev.keyCode === 229 || noteComposing || noteJustComposed) return;
+      if (ev.target.dataset.watchDraft === "1" || draftWatch.has(String(id))) {
+        ev.preventDefault();
+        cancelDraftCommitTimer();
+        commitWatchDraft(id, ev.target.value).then(flushQueuedListRefresh);
+      }
+    });
+    $("list").addEventListener("focusout", (ev) => {
+      const id = ev.target.dataset.watchNote;
+      if (!id) return;
+      const goingTo = ev.relatedTarget;
+      if (goingTo?.dataset?.watchDraftCancel === String(id)) return;
+      if (goingTo?.dataset?.watchDraftCommit === String(id)) return;
+      clearTimeout(noteTimers[id]);
+      const isDraft = ev.target.dataset.watchDraft === "1" || draftWatch.has(String(id));
+      if (isDraft) {
+        if (listRendering || skipDraftBlur || noteComposing || noteJustComposed) return;
+        if (!goingTo) return;
+        const value = ev.target.value;
+        cancelDraftCommitTimer();
+        draftCommitTimer = setTimeout(() => {
+          draftCommitTimer = 0;
+          if (noteComposing || noteJustComposed || listRendering || skipDraftBlur) return;
+          const ae = document.activeElement;
+          if (isWatchDraftField(ae) && String(ae.dataset.watchNote) === String(id)) return;
+          if (!draftWatch.has(String(id))) return;
+          commitWatchDraft(id, value).then(flushQueuedListRefresh);
+        }, 280);
+        return;
+      }
+      fetch(`/api/listings/${id}/flags`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ watch_note: ev.target.value }),
+      }).catch(() => {}).finally(flushQueuedListRefresh);
+    });
+
+    $("list").addEventListener("change", async (ev) => {
+      const pick = ev.target.dataset.pick;
+      if (pick) {
+        if (ev.target.checked) selected.add(pick);
+        else selected.delete(pick);
+        ev.target.closest(".item")?.classList.toggle("picked", ev.target.checked);
+        updateBulkBar();
+        return;
+      }
+      const hiddenId = ev.target.dataset.hidden;
+      if (!hiddenId) return;
+      await fetch(`/api/listings/${hiddenId}/flags`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hidden: ev.target.checked }),
+      });
+      loadList();
+    });
+
+    $("list").addEventListener("click", async (ev) => {
+      const face = ev.target.dataset.excludeFace;
+      if (face) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const label = ev.target.dataset.agent || "";
+        const uid = Number(ev.target.dataset.uid);
+        if (label && !$("excludeAgents").value.split(/[\n,，]/).map((s) => s.trim()).includes(label)) {
+          $("excludeAgents").value = [$("excludeAgents").value.trim(), label].filter(Boolean).join("\n");
+        }
+        if (uid) {
+          settings.excludeAgentIds = [...new Set([...(settings.excludeAgentIds || []), uid])];
+        }
+        $("saveMsg").textContent = label ? `已排除 ${label}` : "已排除此聯絡人";
+        await saveSettings(collectSettings());
+        await loadList();
+        return;
+      }
+      const rejectMatch = ev.target.dataset.rejectMatch;
+      if (rejectMatch) {
+        await fetch(`/api/listings/${rejectMatch}/reject-match`, { method: "POST" });
+        loadList();
+        return;
+      }
+      const confirmMatch = ev.target.dataset.confirmMatch;
+      if (confirmMatch) {
+        await fetch(`/api/listings/${confirmMatch}/confirm-match`, { method: "POST" });
+        loadList();
+        return;
+      }
+      const viewed = ev.target.dataset.viewed;
+      const watched = ev.target.dataset.watched;
+      const open = ev.target.closest("[data-open]")?.dataset.open;
+      if (open) {
+        ev.preventDefault();
+        window.open(listingUrl(open), "_blank", "noopener,noreferrer");
+        fetch(`/api/listings/${open}/flags`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ viewed: true }),
+        }).then(loadList);
+        return;
+      }
+      const draftCancel = ev.target.dataset.watchDraftCancel;
+      if (draftCancel) {
+        ev.preventDefault();
+        cancelDraftCommitTimer();
+        skipDraftBlur = true;
+        draftWatch.delete(String(draftCancel));
+        noteDrafts.delete(String(draftCancel));
+        renderList(listCache, lastStats);
+        flushQueuedListRefresh();
+        return;
+      }
+      const draftCommit = ev.target.dataset.watchDraftCommit;
+      if (draftCommit) {
+        ev.preventDefault();
+        cancelDraftCommitTimer();
+        const ta = document.querySelector(`[data-watch-note="${draftCommit}"]`);
+        const snap = noteDrafts.get(String(draftCommit));
+        commitWatchDraft(draftCommit, ta ? ta.value : (snap?.value || "")).then(flushQueuedListRefresh);
+        return;
+      }
+      if (watched) {
+        const turningOn = ev.target.textContent.includes("特別");
+        if (turningOn) {
+          draftWatch.add(String(watched));
+          pendingNoteFocus = watched;
+          renderList(listCache, lastStats);
+          return;
+        }
+        const key = String(watched);
+        const card = document.querySelector(`[data-card="${key}"]`);
+        flyCardToAllChip(card);
+        if (card) card.style.visibility = "hidden";
+        await fetch(`/api/listings/${watched}/flags`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ watched: false }),
+        });
+        if (watchNoteBusy()) {
+          listRefreshQueued = true;
+          listCache = listCache.filter((item) => String(item.post_id) !== key);
+          renderList(listCache, lastStats);
+          return;
+        }
+        await loadList({ force: true });
+        return;
+      }
+      if (!viewed) return;
+      const id = viewed;
+      const body = { viewed: ev.target.textContent.includes("標記") };
+      await fetch(`/api/listings/${id}/flags`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      loadList();
+    });
+
+    function loadDock() {
+      try { return JSON.parse(localStorage.getItem(DOCK_KEY) || "[]"); } catch { return []; }
+    }
+    function saveDock(items) {
+      localStorage.setItem(DOCK_KEY, JSON.stringify(items.slice(0, 30)));
+    }
+    function dockItemKey(item) {
+      return `${item.post_id}:${item.type}:${String(item.detail || "").replace(/\s+/g, "")}`;
+    }
+    function loadDockReadKeys() {
+      try {
+        const raw = JSON.parse(localStorage.getItem(DOCK_READ_KEY) || "[]");
+        return new Set((Array.isArray(raw) ? raw : []).map(String));
+      } catch {
+        return new Set();
+      }
+    }
+    function saveDockReadKeys(keys) {
+      localStorage.setItem(DOCK_READ_KEY, JSON.stringify([...keys].slice(-300)));
+    }
+    function markDockRead(items) {
+      const keys = loadDockReadKeys();
+      for (const item of items) keys.add(dockItemKey(item));
+      saveDockReadKeys(keys);
+    }
+    function parseNotifyChanges(detail) {
+      const text = String(detail || "").trim();
+      if (!text) return [];
+      const parts = text.split(/；|;/).map((part) => part.trim()).filter(Boolean);
+      const out = [];
+      for (const part of parts) {
+        const arrow = part.match(/^(格局|樓層|坪數|地址|類型|價格|標題)[：:]?\s*(.*?)\s*→\s*(.+)$/);
+        if (arrow) {
+          out.push({
+            label: arrow[1],
+            from: arrow[2].replace(/^[：:]/, "").trim() || "—",
+            to: arrow[3].trim() || "—",
+          });
+          continue;
+        }
+        if (part === "標題變更") {
+          out.push({ label: "標題", from: "—", to: "已變更" });
+          continue;
+        }
+        out.push({ label: "說明", from: "", to: part });
+      }
+      return out;
+    }
+    function dockChangeHtml(item) {
+      const changes = parseNotifyChanges(item.detail);
+      if (!changes.length) return "";
+      return `<div class="dock-changes">${changes.map((change) => `
+        <div class="dock-change">
+          ${change.label ? `<span class="dock-change-label">${esc(change.label)}</span>` : ""}
+          ${change.from ? `<span class="dock-change-from">${esc(change.from)}</span><span class="dock-change-arrow" aria-hidden="true">→</span>` : ""}
+          <span class="dock-change-to">${esc(change.to)}</span>
+        </div>`).join("")}</div>`;
+    }
+    function pushDock(events) {
+      if (!events?.length) return;
+      const current = loadDock();
+      const read = loadDockReadKeys();
+      const seen = new Set(current.map((item) => `${item.post_id}:${item.type}:${item.created_at || ""}`));
+      for (const event of events) {
+        if (read.has(dockItemKey(event))) continue;
+        const key = `${event.post_id}:${event.type}:${event.created_at || ""}`;
+        if (seen.has(key)) continue;
+        current.unshift(event);
+      }
+      saveDock(current);
+      renderDock();
+    }
+    function renderDock() {
+      const read = loadDockReadKeys();
+      const stored = loadDock();
+      const items = stored.filter((item) => !read.has(dockItemKey(item)));
+      if (items.length !== stored.length) saveDock(items);
+      const dock = $("alertDock");
+      if (!items.length) {
+        dock.classList.remove("open");
+        $("dockList").innerHTML = "";
+        return;
+      }
+      dock.classList.add("open");
+      $("dockList").innerHTML = items.map((item) => `
+        <div class="dock-item" data-dock-key="${esc(dockItemKey(item))}">
+          <div class="tags"><span class="tag ${item.type === "new" ? "new" : "same"}">${eventText[item.type] || item.type_label || item.type}</span></div>
+          <h3 style="margin:6px 0 4px;font-size:16px">
+            <a href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-dock-open="${item.post_id}">${esc(item.title || "591 物件")}</a>
+          </h3>
+          <div class="meta">${esc([item.price ? `${item.price} 元/月` : "", item.notify_facts || [item.address, item.layout, item.floor_name, item.area_name, item.housing_type].filter(Boolean).join(" · "), item.extra_fee_text].filter(Boolean).join(" · "))}</div>
+          ${dockChangeHtml(item)}
+          <div class="row" style="margin-top:8px">
+            <button type="button" class="ghost" data-dock-read="${esc(dockItemKey(item))}">已讀</button>
+            <a class="primary" href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-dock-open="${item.post_id}" style="display:inline-flex;align-items:center;text-decoration:none">打開 591</a>
+            <button type="button" class="ghost" data-dock-hide="${item.post_id}">不再顯示</button>
+          </div>
+        </div>
+      `).join("");
+    }
+    function dismissDock(postId) {
+      saveDock(loadDock().filter((item) => String(item.post_id) !== String(postId)));
+      renderDock();
+    }
+    function dismissDockByKey(key) {
+      const items = loadDock();
+      const hit = items.find((item) => dockItemKey(item) === key);
+      if (hit) markDockRead([hit]);
+      saveDock(items.filter((item) => dockItemKey(item) !== key));
+      renderDock();
+    }
+    /** 與列表「不再顯示」相同：hidden=true，並從待看 dock 移除 */
+    async function hideDockListing(postId) {
+      markDockRead(loadDock().filter((item) => String(item.post_id) === String(postId)));
+      await fetch(`/api/listings/${encodeURIComponent(postId)}/flags`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hidden: true }),
+      });
+      dismissDock(postId);
+      await loadList();
+    }
+
+    function renderBoxes() {
+      $("boxList").innerHTML = excludeBoxes.map((box, idx) => {
+        const on = box.enabled !== false;
+        const editing = editingIdx === idx;
+        return `
+        <div class="box-card ${on ? "" : "off"}">
+          <div class="box-row">
+            <label class="box-enable"><input type="checkbox" data-box-on="${idx}" ${on ? "checked" : ""} /> 啟用</label>
+            <input type="text" data-box-name="${idx}" maxlength="20" value="${esc(box.name || ("範圍 " + (idx + 1)))}" />
+            <button type="button" class="ghost" data-box-edit="${idx}">${editing ? "收合" : "編輯"}</button>
+            <button type="button" class="ghost" data-box-del="${idx}">刪除</button>
+          </div>
+          ${editing ? `
+          <div class="box-edit">
+            <label>文字描述（可再產生範圍）</label>
+            <textarea data-box-desc="${idx}" placeholder="例如：承德路以東、文林路以西、士東路以南、基河路以北">${esc(box.description || "")}</textarea>
+            <div class="box-bounds">
+              <label>南<input type="number" step="0.0001" data-box-south="${idx}" value="${box.south}" /></label>
+              <label>西<input type="number" step="0.0001" data-box-west="${idx}" value="${box.west}" /></label>
+              <label>北<input type="number" step="0.0001" data-box-north="${idx}" value="${box.north}" /></label>
+              <label>東<input type="number" step="0.0001" data-box-east="${idx}" value="${box.east}" /></label>
+            </div>
+            <div class="row">
+              <button type="button" class="ghost" data-box-regen="${idx}">依文字重算範圍</button>
+              <button type="button" class="primary" data-box-done="${idx}">完成</button>
+            </div>
+          </div>` : (box.description ? `<p class="hint">${esc(box.description)}</p>` : "")}
+        </div>`;
+      }).join("") || '<p class="hint">尚未設定範圍。空列表不會套用任何地圖排除。</p>';
+      drawBoxLayers();
+    }
+    function drawBoxLayers() {
+      if (!map) return;
+      boxLayers.forEach((layer) => map.removeLayer(layer));
+      boxLayers = excludeBoxes.map((box) => {
+        const on = box.enabled !== false;
+        return L.rectangle([[box.south, box.west], [box.north, box.east]], {
+          color: on ? "#c45c26" : "#9a8f84",
+          weight: 1,
+          dashArray: on ? null : "6 4",
+          fillOpacity: on ? 0.18 : 0.06,
+        }).bindTooltip(`${box.name || "排除範圍"}${on ? "" : "（已關閉）"}`).addTo(map);
+      });
+    }
+    function setDrawing(on) {
+      drawing = on;
+      document.body.classList.toggle("drawing", drawing);
+      const label = drawing ? "框選中…（再按一次取消）" : "開始框選";
+      $("drawBoxBtn").textContent = label;
+      $("overlayDrawBtn").textContent = label;
+      if (!drawing) {
+        startLatLng = null;
+        map?.dragging.enable();
+        if (previewRect) { map.removeLayer(previewRect); previewRect = null; }
+      }
+    }
+    function refreshMapSize() {
+      const run = () => map?.invalidateSize({ animate: false });
+      run();
+      requestAnimationFrame(() => {
+        run();
+        requestAnimationFrame(run);
+      });
+      setTimeout(run, 50);
+      setTimeout(run, 250);
+    }
+    function setMapExpanded(open) {
+      const overlay = $("mapOverlay");
+      const host = $("mapOverlayHost");
+      const wrap = $("excludeMapWrap");
+      const el = $("excludeMap");
+      mapExpanded = open;
+      if (open) {
+        overlay.classList.add("open");
+        overlay.setAttribute("aria-hidden", "false");
+        host.appendChild(el);
+        document.body.classList.add("map-expanded");
+      } else {
+        wrap.appendChild(el);
+        overlay.classList.remove("open");
+        overlay.setAttribute("aria-hidden", "true");
+        document.body.classList.remove("map-expanded");
+      }
+      refreshMapSize();
+    }
+    function readBoxBounds(idx) {
+      const south = Number(document.querySelector(`[data-box-south="${idx}"]`)?.value);
+      const west = Number(document.querySelector(`[data-box-west="${idx}"]`)?.value);
+      const north = Number(document.querySelector(`[data-box-north="${idx}"]`)?.value);
+      const east = Number(document.querySelector(`[data-box-east="${idx}"]`)?.value);
+      if (![south, west, north, east].every(Number.isFinite)) {
+        throw new Error("邊界必須是數字");
+      }
+      const south2 = Math.min(south, north);
+      const north2 = Math.max(south, north);
+      const west2 = Math.min(west, east);
+      const east2 = Math.max(west, east);
+      if (north2 - south2 < 0.0003 || east2 - west2 < 0.0003) throw new Error("範圍太小");
+      if (north2 - south2 > 0.5 || east2 - west2 > 0.5) throw new Error("範圍太大了（跨度不可超過 0.5 度）");
+      return { south: south2, west: west2, north: north2, east: east2 };
+    }
+    async function requestRegionBox(text) {
+      const res = await fetch("/api/exclude-region", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "產生範圍失敗");
+      return data.box;
+    }
+    function initMap() {
+      if (map) return;
+      if (!window.L) {
+        if (!initMap.tries) initMap.tries = 0;
+        if (initMap.tries < 40) {
+          initMap.tries += 1;
+          setTimeout(initMap, 250);
+        }
+        return;
+      }
+      map = L.map("excludeMap", { boxZoom: false }).setView([25.093, 121.525], 13);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution: "&copy; OpenStreetMap",
+      }).addTo(map);
+      drawBoxLayers();
+      map.on("mousedown", (ev) => {
+        if (!drawing) return;
+        map.dragging.disable();
+        startLatLng = ev.latlng;
+        if (previewRect) map.removeLayer(previewRect);
+        previewRect = L.rectangle([startLatLng, startLatLng], { color: "#2f6f5e", weight: 1, dashArray: "4 3" }).addTo(map);
+      });
+      map.on("mousemove", (ev) => {
+        if (!drawing || !startLatLng || !previewRect) return;
+        previewRect.setBounds(L.latLngBounds(startLatLng, ev.latlng));
+      });
+      function finishDraw(ev) {
+        if (!drawing || !startLatLng) return;
+        const end = ev.latlng || (ev.containerPoint && map.containerPointToLatLng(ev.containerPoint)) || startLatLng;
+        const bounds = L.latLngBounds(startLatLng, end);
+        startLatLng = null;
+        map.dragging.enable();
+        if (previewRect) { map.removeLayer(previewRect); previewRect = null; }
+        if (Math.abs(bounds.getNorth() - bounds.getSouth()) < 0.0004) return;
+        if (Math.abs(bounds.getEast() - bounds.getWest()) < 0.0004) return;
+        if (Math.abs(bounds.getNorth() - bounds.getSouth()) > 0.5 || Math.abs(bounds.getEast() - bounds.getWest()) > 0.5) {
+          $("saveMsg").textContent = "範圍太大了，請縮小後再框一次";
+          return;
+        }
+        if (excludeBoxes.length >= MAX_BOXES) {
+          $("saveMsg").textContent = "排除範圍最多 10 組";
+          return;
+        }
+        excludeBoxes.push({
+          id: `box-${Date.now()}`,
+          name: `範圍 ${excludeBoxes.length + 1}`,
+          south: bounds.getSouth(),
+          west: bounds.getWest(),
+          north: bounds.getNorth(),
+          east: bounds.getEast(),
+          enabled: true,
+          description: "",
+          source: "draw",
+        });
+        setDrawing(false);
+        renderBoxes();
+        persistExclusions("已新增排除範圍");
+      }
+      map.on("mouseup", finishDraw);
+      document.addEventListener("mouseup", (ev) => {
+        if (!drawing || !startLatLng) return;
+        const point = map.mouseEventToContainerPoint(ev);
+        const size = map.getSize();
+        const clamped = L.point(
+          Math.max(0, Math.min(size.x, point.x)),
+          Math.max(0, Math.min(size.y, point.y)),
+        );
+        finishDraw({ latlng: map.containerPointToLatLng(clamped) });
+      });
+    }
+
+    async function persistExclusions(msg) {
+      try {
+        $("saveMsg").textContent = "正在儲存範圍並定位已存物件地址…";
+        await saveSettings(collectSettings());
+        $("saveMsg").textContent = msg;
+        await loadList();
+      } catch (error) {
+        $("saveMsg").textContent = error.message;
+      }
+    }
+
+    $("drawBoxBtn").onclick = () => setDrawing(!drawing);
+    $("overlayDrawBtn").onclick = () => setDrawing(!drawing);
+    $("expandMapBtn").onclick = () => setMapExpanded(true);
+    $("closeMapBtn").onclick = () => setMapExpanded(false);
+    $("mapOverlay").addEventListener("click", (ev) => {
+      if (ev.target === $("mapOverlay")) setMapExpanded(false);
+    });
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape" && mapExpanded) setMapExpanded(false);
+    });
+    $("cancelDrawBtn").onclick = () => {
+      setDrawing(false);
+      if (!excludeBoxes.length) {
+        $("saveMsg").textContent = "目前沒有地圖排除範圍";
+        return;
+      }
+      editingIdx = null;
+      excludeBoxes = [];
+      renderBoxes();
+      persistExclusions("已清除地圖排除範圍");
+    };
+    $("regionTextBtn").onclick = async () => {
+      const text = $("regionText").value.trim();
+      if (!text) {
+        $("regionTextMsg").textContent = "請輸入範圍描述，例如：承德路以東、文林路以西、士東路以南、基河路以北";
+        return;
+      }
+      if (excludeBoxes.length >= MAX_BOXES) {
+        $("regionTextMsg").textContent = "排除範圍最多 10 組";
+        return;
+      }
+      $("regionTextBtn").disabled = true;
+      $("regionTextMsg").textContent = "正在查詢路名座標…（路名較多時會稍等）";
+      try {
+        const box = await requestRegionBox(text);
+        excludeBoxes.push(box);
+        renderBoxes();
+        persistExclusions("已依文字產生排除範圍");
+        $("regionTextMsg").textContent = "已產生範圍，可在列表開關、改名或編輯";
+        $("regionText").value = "";
+      } catch (error) {
+        $("regionTextMsg").textContent = error.message;
+      } finally {
+        $("regionTextBtn").disabled = false;
+      }
+    };
+    $("boxList").addEventListener("input", (ev) => {
+      const nameIdx = ev.target.dataset.boxName;
+      if (nameIdx != null && excludeBoxes[Number(nameIdx)]) {
+        excludeBoxes[Number(nameIdx)].name = ev.target.value.slice(0, 20);
+      }
+      const descIdx = ev.target.dataset.boxDesc;
+      if (descIdx != null && excludeBoxes[Number(descIdx)]) {
+        excludeBoxes[Number(descIdx)].description = ev.target.value.slice(0, 200);
+      }
+    });
+    $("boxList").addEventListener("change", async (ev) => {
+      const onIdx = ev.target.dataset.boxOn;
+      if (onIdx == null || !excludeBoxes[Number(onIdx)]) return;
+      excludeBoxes[Number(onIdx)].enabled = ev.target.checked;
+      renderBoxes();
+      persistExclusions(ev.target.checked ? "已開啟排除範圍" : "已關閉排除範圍（設定仍保留）");
+    });
+    $("boxList").addEventListener("click", async (ev) => {
+      const del = ev.target.dataset.boxDel;
+      if (del != null) {
+        const idx = Number(del);
+        excludeBoxes.splice(idx, 1);
+        if (editingIdx === idx) editingIdx = null;
+        else if (editingIdx > idx) editingIdx -= 1;
+        renderBoxes();
+        persistExclusions("已刪除排除範圍");
+        return;
+      }
+      const edit = ev.target.dataset.boxEdit;
+      if (edit != null) {
+        const idx = Number(edit);
+        editingIdx = editingIdx === idx ? null : idx;
+        renderBoxes();
+        return;
+      }
+      const done = ev.target.dataset.boxDone;
+      if (done != null) {
+        const idx = Number(done);
+        try {
+          Object.assign(excludeBoxes[idx], readBoxBounds(idx));
+          editingIdx = null;
+          renderBoxes();
+          persistExclusions("已更新排除範圍");
+        } catch (error) {
+          $("saveMsg").textContent = error.message;
+        }
+        return;
+      }
+      const regen = ev.target.dataset.boxRegen;
+      if (regen == null) return;
+      const idx = Number(regen);
+      const text = (document.querySelector(`[data-box-desc="${idx}"]`)?.value || excludeBoxes[idx].description || "").trim();
+      if (!text) {
+        $("saveMsg").textContent = "請先填寫文字描述再重算";
+        return;
+      }
+      ev.target.disabled = true;
+      $("saveMsg").textContent = "正在依文字重算範圍…";
+      try {
+        const box = await requestRegionBox(text);
+        const old = excludeBoxes[idx];
+        excludeBoxes[idx] = {
+          ...box,
+          id: old.id,
+          name: old.name,
+          enabled: old.enabled !== false,
+        };
+        renderBoxes();
+        persistExclusions("已依文字重算排除範圍");
+      } catch (error) {
+        $("saveMsg").textContent = error.message;
+      } finally {
+        ev.target.disabled = false;
+      }
+    });
+    $("dockHideBtn").onclick = () => $("alertDock").classList.remove("open");
+    $("dockClearBtn").onclick = () => {
+      markDockRead(loadDock());
+      saveDock([]);
+      renderDock();
+    };
+    $("dockList").addEventListener("click", async (ev) => {
+      const readKey = ev.target.closest("[data-dock-read]")?.dataset.dockRead;
+      if (readKey) {
+        ev.preventDefault();
+        dismissDockByKey(readKey);
+        return;
+      }
+      const open = ev.target.closest("[data-dock-open]")?.dataset.dockOpen;
+      const hide = ev.target.closest("[data-dock-hide]")?.dataset.dockHide;
+      if (hide) {
+        ev.preventDefault();
+        const btn = ev.target.closest("[data-dock-hide]");
+        if (btn) btn.disabled = true;
+        try {
+          await hideDockListing(hide);
+        } catch (error) {
+          $("status").textContent = error.message || "不再顯示失敗";
+          if (btn) btn.disabled = false;
+        }
+        return;
+      }
+      if (open) {
+        // 連結走 /go/:id（含中鍵開新分頁）；左鍵也記已瀏覽並關閉 dock 項
+        if (ev.button === 0 && !ev.metaKey && !ev.ctrlKey && !ev.shiftKey && !ev.altKey) {
+          // 讓 <a> 自己開分頁；另外標記並刷新（/go 也會標記，雙寫無妨）
+          markDockRead(loadDock().filter((item) => String(item.post_id) === String(open)));
+          fetch(`/api/listings/${open}/flags`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ viewed: true }),
+          }).then(loadList);
+          dismissDock(open);
+        }
+        return;
+      }
+    });
+
+    renderDistrictPicker({ watchDistricts: [] });
+
+    loadState().catch((error) => {
+      $("status").textContent = error.message || "載入失敗，請再按重新整理";
+      setSettingsReady(false, "設定沒載到。請按右上「重新整理」。現在看到的空白表單不是你的存檔，請不要按儲存。");
+    }).then(() => {
+      initMap();
+      renderBoxes();
+      renderDock();
+      setTimeout(() => map?.invalidateSize(), 250);
+      if (!window.__watchStream && !isGuest) {
+        const es = new EventSource("/api/events/stream");
+        window.__watchStream = es;
+        es.onmessage = (msg) => {
+          const data = JSON.parse(msg.data);
+          if (data.type === "watch") {
+            const n = data.result.events?.length || 0;
+            $("status").textContent = `自動檢查完成，通知 ${n} 則 · ${new Date(data.result.checked_at).toLocaleString()}`;
+            pushDock(data.result.events || []);
+            loadList();
+          }
+          if (data.type === "notify") {
+            const n = data.events?.length || 0;
+            if (n) {
+              $("status").textContent = `篩選後通知 ${n} 則 · ${new Date().toLocaleString()}`;
+              pushDock(data.events || []);
+            }
+            loadList();
+          }
+          if (data.type === "geo") {
+            if (data.routeBackfill?.located) {
+              $("status").textContent = `已計算 ${data.routeBackfill.located} 筆${commuteModeLabel()}路線，列表已更新`;
+            } else if (data.geoBackfill?.located || data.geoBackfill?.attempted) {
+              $("status").textContent = `已從 591 地圖補 ${data.geoBackfill.located || 0} 筆座標，列表已更新`;
+            } else if (data.mrtBackfill?.located) {
+              $("status").textContent = `已計算 ${data.mrtBackfill.located} 筆捷運步行距離，列表已更新`;
+            }
+            loadList();
+          }
+        };
+        es.onerror = () => {
+          fetch("/api/me").then((r) => r.json()).then((data) => {
+            if (!data.ok && !isGuest) location.replace("/login.html");
+          }).catch(() => {});
+        };
+      }
+    });
+    window.__APP_BOOTED = true;
+    } catch (error) {
+      window.__APP_BOOTED = false;
+      const detail = error && error.message ? error.message : String(error || "未知錯誤");
+      window.__showBootFail(`錯誤：${detail}。請重新整理，不要按清除資料。`);
+    }
+  </script>
+  <div id="watchFlyLayer" aria-hidden="true"></div>
+  <script src="/vendor/leaflet/leaflet.js" defer></script>
+</body>
+</html>

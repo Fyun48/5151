@@ -15,14 +15,22 @@
 
 ## 使用
 
-需要 Node.js 22 以上。
+需要 Node.js 22 以上。線上追蹤請用 v2 或目前版（v3）；root 的 `npm start` 是已停用的 v1 歷史程式。
 
 ```bash
 npm install
-npm start
+npm run start:v2
 ```
 
-瀏覽器開啟 http://127.0.0.1:5151
+瀏覽器開啟 http://127.0.0.1:5152
+
+目前版：
+
+```bash
+npm run start:v3
+```
+
+瀏覽器開啟 http://127.0.0.1:5153
 
 1. 到 [591 租屋](https://rent.591.com.tw/) 設好地區、租金、類型等條件，排序選「最新」
 2. 複製網址，貼進左側「搜尋網址」
@@ -31,47 +39,50 @@ npm start
 
 請保持這個視窗在跑。檢查間隔建議 5 分鐘以上，且每次只抓最新 1–2 頁，避免對 591 造成負擔。此工具僅供個人找房使用。
 
-## 兩個版本
+## 版本
 
-目前線上 CasaOS（埠 5151、`data/591.db`）是 **v1**，也就是 root 的 `src/` 與 `public/`。推 `master` 時 Action 只同步這兩包，**不會部署 v2**。
+**v1 已停用。** root 的 `src/`、`public/` 只留作歷史程式，CasaOS／Docker 預設不會啟動 `591-tracker`，推 `master` 也不再把 v1 同步上去。`https://a5151.reversalplay.me` 不再是正式追蹤站。資料目錄 `/DATA/AppData/591-tracker`（`591.db`）保留，供 v2／v3 只讀匯入。
 
-**v2** 在 `v2/`，是這份程式的複本，用來做「共用 591 抓取、個人設定／特別關注分開」的多人版。資料在 `data-v2/v2.db`，本機預設埠 5152：
+**v2** 在 `v2/`，埠 5152，資料 `data-v2/v2.db`：
 
 ```bash
 npm run start:v2
 ```
 
-規劃與階段見 `v2/ARCHITECTURE.md`。v2 還沒準備好取代線上版之前，請繼續用 v1。
+規劃見 `v2/ARCHITECTURE.md`。
+
+**目前線上**另有 `v3/`，埠 5153，資料 `data-v3/v3.db`。規劃見 `v3/ARCHITECTURE.md`。
 
 公開網址：
 
-- v1：`https://a5151.reversalplay.me` → `127.0.0.1:5151`，資料 `/DATA/AppData/591-tracker`
+- v1（已停用）：`https://a5151.reversalplay.me` → `127.0.0.1:5151`，資料 `/DATA/AppData/591-tracker`
 - v2：`https://b5151.reversalplay.me` → `127.0.0.1:5152`，資料 `/DATA/AppData/591-tracker-v2`（檔名 `v2.db`）
+- 目前版：`https://c5151.reversalplay.me` → `127.0.0.1:5153`，資料 `/DATA/AppData/591-tracker-v3`
 
-同一個 GitHub repo、同一張 Docker 映像、同一條 Cloudflare Tunnel。v2 只是多一個容器。不必新開 GitHub 專案。
+同一個 GitHub repo、同一張 Docker 映像、同一條 Cloudflare Tunnel。v2／目前版各是一個容器。不必新開 GitHub 專案。
 
-Cloudflare Zero Trust → Networks → Tunnels → 現有 tunnel → Public Hostname → 新增：
+Cloudflare Zero Trust → Networks → Tunnels → 現有 tunnel → Public Hostname：
 
-1. Subdomain `b5151`，Domain `reversalplay.me`
-2. Type `HTTP`，URL `http://127.0.0.1:5152`
-3. 存檔。`a5151` 維持指向 `http://127.0.0.1:5151`
+1. Subdomain `b5151`，Domain `reversalplay.me` → Type `HTTP`，URL `http://127.0.0.1:5152`
+2. Subdomain `c5151`，Domain `reversalplay.me` → Type `HTTP`，URL `http://127.0.0.1:5153`
+3. `a5151` 不必再當正式站；v1 容器預設不會起來。
 
-CasaOS 上第一次啟 v2：
+CasaOS 上 `docker compose up`／應用預設只跑 v2 與目前版。v1 服務定義留著，但掛了 `profiles: ["v1"]`，沒加 profile 不會啟動。第一次請確認 v1 已停：
 
 ```bash
 cd /mnt/Storage1/apps/5151
-git pull
-mkdir -p /DATA/AppData/591-tracker-v2
-# 登入帳號可沿用 v1 的 auth.env；刊登快取會在 v2 啟動時只讀匯入，不改 v1 的 591.db
-# cp /DATA/AppData/591-tracker/auth.env /DATA/AppData/591-tracker-v2/
-docker compose up -d --no-build --no-deps 591-tracker-v2
+docker compose stop 591-tracker || true
+docker stop 591-tracker || true
+docker rm -f 591-tracker || true
+mkdir -p /DATA/AppData/591-tracker-v2 /DATA/AppData/591-tracker-v3
+docker compose up -d --no-build --no-deps 591-tracker-v2 591-tracker-v3
 ```
 
-之後推 `v2/src`、`v2/public` 或 compose 檔，GitHub Action 會 SCP 並重啟 v2 容器，不會改 v1 的 `591.db`（v2 只讀取它來補刊登快取）。
+推 `v2/src`、`v2/public` 或 compose 檔，GitHub Action 會 SCP 並重啟 v2 容器。推 `v3/src`、`v3/public` 則重啟目前版容器。兩者都不會改 v1 的 `591.db`（只讀取它來補刊登快取）。
 
 ## 部署到 CasaOS
 
-SQLite 與設定會寫進 `DATA_DIR`（容器內預設 `/data`）。CasaOS 請用 bind mount 到 `/DATA/AppData/591-tracker`，不要用 Docker 具名 volume，否則 CasaOS 重裝時資料容易不見。
+SQLite 與設定會寫進 `DATA_DIR`（容器內預設 `/data`）。CasaOS 請用 bind mount 到 `/DATA/AppData/591-tracker-v2` 與 `/DATA/AppData/591-tracker-v3`，不要用 Docker 具名 volume，否則 CasaOS 重裝時資料容易不見。v1 的 `/DATA/AppData/591-tracker` 可留著給只讀匯入，但不要再當正式站資料目錄。
 
 Linux 容器沒有 Windows 氣泡通知，請在畫面填 Discord Webhook。
 
@@ -87,11 +98,11 @@ echo YOUR_GITHUB_TOKEN | docker login ghcr.io -u YOUR_GITHUB_USER --password-std
 
 Token 需要 `read:packages`。公開 repo 通常不必登入。
 
-資料目錄：`/DATA/AppData/591-tracker`（會出現 `591.db`）。
+主服務是目前版（埠 5153）。v2 一併啟動（埠 5152）。v1 不會進預設啟動。
 
-瀏覽器開 `http://<CasaOS IP>:5151`。
+瀏覽器開 `http://<CasaOS IP>:5152` 或 `http://<CasaOS IP>:5153`（本機埠只綁 loopback，一般走下方公開網址）。
 
-推到 `master` 後，GitHub Actions 會建 `ghcr.io/fyun48/5151:latest`。CasaOS 上的 Watchtower 約每 2 分鐘檢查一次，有新映像就自動換上，SQLite 資料仍在 `/DATA/AppData/591-tracker`。
+推到 `master` 後，GitHub Actions 會建 `ghcr.io/fyun48/5151:latest`。CasaOS 上的 Watchtower 約每 2 分鐘檢查一次，有新映像就自動換上；SQLite 資料仍在各版的 AppData 目錄。
 
 ### 方式二：在 CasaOS 上 clone 後拉映像
 
@@ -101,12 +112,15 @@ git pull
 docker compose --profile tunnel up -d
 ```
 
-第一次請用映像 `ghcr.io/fyun48/5151:latest`，不要再 `--build`。之後推 GitHub 即可，Watchtower 會自己更新容器。
+不要加 `--profile v1`，否則會把已停用的 v1 一併拉起來。第一次請用映像 `ghcr.io/fyun48/5151:latest`，不要再 `--build`。之後推 GitHub 即可。
 
 ### 從本機帶走已標記資料
 
-若要把 Windows 上的「已瀏覽 / 特別關注 / 隱藏」一起帶走，把本機 `data/591.db` 複製到 CasaOS 的 `/DATA/AppData/591-tracker/591.db`（容器停止時再複製較保險）。
+若要把 Windows 上的「已瀏覽 / 特別關注 / 隱藏」一起帶走，把本機資料庫複製到對應版的 CasaOS 目錄（容器停止時再複製較保險）。v1 歷史庫是 `/DATA/AppData/591-tracker/591.db`。
 
-公開網址為 `https://a5151.reversalplay.me`（Cloudflare Tunnel → CasaOS `http://127.0.0.1:5151`）。
-v2 為 `https://b5151.reversalplay.me` → `http://127.0.0.1:5152`。
+公開網址：
+
+- v2：`https://b5151.reversalplay.me` → `http://127.0.0.1:5152`
+- 目前版：`https://c5151.reversalplay.me` → `http://127.0.0.1:5153`
+
 CasaOS 本機埠只綁 loopback。

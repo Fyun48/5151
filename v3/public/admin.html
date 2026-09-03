@@ -1,0 +1,929 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>後台管理 · 吉比租房物件追蹤</title>
+  <style>
+    :root {
+      --bg: #f3f7f9;
+      --paper: #ffffff;
+      --ink: #1a2b33;
+      --muted: #64748b;
+      --line: #e2e8ef;
+      --accent: #0da5a0;
+      --accent-deep: #0a8280;
+      --accent-mist: #f0fbfa;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+      background:
+        radial-gradient(1000px 480px at 0% -5%, rgba(13, 165, 160, 0.07) 0%, transparent 55%),
+        var(--bg);
+      color: var(--ink);
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 16px;
+      flex-wrap: wrap;
+      padding: 20px 32px 14px;
+    }
+    h1 {
+      margin: 0;
+      font-family: "Noto Serif TC", "Source Han Serif TC", serif;
+      font-size: 26px;
+      font-weight: 600;
+    }
+    .sub { color: var(--muted); font-size: 14px; margin-top: 6px; }
+    .site-footer {
+      margin: 8px 32px 28px;
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: 0.02em;
+    }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .wrap { padding: 0 32px 40px; display: grid; gap: 20px; max-width: 1100px; }
+    .card {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      box-shadow: 0 8px 28px rgba(26, 43, 51, 0.05);
+      padding: 20px;
+    }
+    h2 { margin: 0 0 8px; font-size: 18px; }
+    .hint { font-size: 13px; color: var(--muted); line-height: 1.55; margin: 0 0 14px; }
+    label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 6px; }
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font: 14px/1.5 "Noto Sans TC", sans-serif;
+      background: #fff;
+    }
+    textarea { min-height: 140px; resize: vertical; }
+    button, a.ghost, a.primary {
+      border: 0;
+      border-radius: 999px;
+      padding: 9px 14px;
+      cursor: pointer;
+      font: 14px/1 "Noto Sans TC", sans-serif;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+    }
+    .primary { background: var(--accent); color: #fff; }
+    .ghost { background: #fff; color: var(--ink); border: 1px solid var(--line); }
+    button:disabled { opacity: 0.5; cursor: wait; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+    th { color: var(--muted); font-weight: 600; }
+    .member-interval { width: 72px; }
+    .msg { font-size: 13px; color: var(--muted); min-height: 1.4em; margin: 8px 0 0; }
+    .ok { color: var(--accent-deep); }
+    .err { color: #9f6b6b; }
+    .checks { display: flex; align-items: center; gap: 8px; margin: 12px 0; font-size: 14px; }
+    .checks input { width: auto; }
+    .provider {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px 14px;
+      margin: 0 0 10px;
+      background: var(--accent-mist);
+    }
+    .provider h3 { margin: 0 0 4px; font-size: 15px; }
+    .provider .meta { font-size: 13px; color: var(--muted); line-height: 1.5; margin: 0 0 8px; }
+    .provider a { color: var(--accent-deep); }
+    .extras-row { display: grid; grid-template-columns: 140px 1fr auto auto; gap: 8px; align-items: end; margin-bottom: 8px; }
+    .extras-row label { margin: 0; }
+    .extras-row input[type="checkbox"] { width: auto; }
+    @media (max-width: 800px) {
+      .extras-row { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 800px) {
+      .grid-2 { grid-template-columns: 1fr; }
+      header, .wrap { padding-left: 16px; padding-right: 16px; }
+      table { font-size: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>後台管理</h1>
+      <div class="sub">會員、寄信 SMTP、信件內容、贊助連結、通勤路線來源。看不到會員密碼。</div>
+    </div>
+    <div class="row">
+      <span class="who" id="who"></span>
+      <a class="ghost" href="/">回追蹤首頁</a>
+      <a class="ghost" href="/logout">登出</a>
+    </div>
+  </header>
+  <div class="wrap">
+    <section class="card">
+      <h2>會員</h2>
+      <p class="hint">一般會員預設每 8 分鐘檢查；已贊助為 5 分鐘。這裡可改方案，也可手動指定間隔（分鐘）。管理員自己不受最短間隔限制。刪除會保留帳號列，避免立刻重註冊；同一 Email 最多再註冊一次。</p>
+      <div class="row" style="margin-bottom:10px">
+        <input id="memberQuery" placeholder="搜尋 Email" style="max-width:260px" />
+        <select id="memberSort" style="max-width:180px">
+          <option value="created_at:desc">註冊時間（新→舊）</option>
+          <option value="created_at:asc">註冊時間（舊→新）</option>
+          <option value="id:asc">編號（小→大）</option>
+        </select>
+        <button type="button" class="ghost" id="memberSearch">查詢</button>
+      </div>
+      <p class="msg" id="memberMsg">載入中…</p>
+      <div style="overflow:auto">
+        <table>
+          <thead>
+            <tr>
+              <th>Email</th>
+              <th>註冊時間</th>
+              <th>身份</th>
+              <th>方案</th>
+              <th>間隔（分）</th>
+              <th>狀態</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="memberRows"></tbody>
+        </table>
+      </div>
+      <div id="deleteMemberBox" class="card" style="margin:16px 0 0;padding:14px;box-shadow:none" hidden>
+        <h3 style="margin:0 0 8px;font-size:16px">確認刪除會員</h3>
+        <p class="hint" id="deleteMemberHint"></p>
+        <label>刪除信件內容</label>
+        <select id="deleteReasonCode"></select>
+        <label>信件說明（可改；自訂內容請寫在這裡）</label>
+        <textarea id="deleteReasonText" style="min-height:90px"></textarea>
+        <div class="row" style="margin-top:10px">
+          <button type="button" class="primary" id="deleteMemberConfirm">確認刪除並寄信</button>
+          <button type="button" class="ghost" id="deleteMemberCancel">取消</button>
+        </div>
+      </div>
+    </section>
+    <section class="card">
+      <h2>功能說明 Q&amp;A</h2>
+      <p class="hint">顯示在追蹤頁帳號名稱同一排。專門說明功能表上看得到與看不到的限制，例如為什麼有的物件有捷運站、有的沒有（看的是可步行路線，不是直線距離）。可改現有題目，也可新增。</p>
+      <div id="helpQaRows"></div>
+      <div class="row" style="margin-top:10px">
+        <button type="button" class="ghost" id="helpQaAdd">新增一則</button>
+        <button type="button" class="ghost" id="helpQaReset">還原預設</button>
+        <button type="button" class="primary" id="helpQaSave">儲存 Q&amp;A</button>
+      </div>
+      <p class="msg" id="helpQaMsg"></p>
+    </section>
+    <section class="card">
+      <h2>通勤路線／Google 計費</h2>
+      <p class="hint">通勤<strong>公里數走免費 OpenStreetMap（OSRM）</strong>。列表與通知目前<strong>只顯示公里</strong>，不上／下班分鐘（OSRM 沒有尖峰路況）。以後若再開 Google Directions，再把分鐘加回畫面。同一組物件座標對同一個公司地址只會查一次。沒有金鑰、沒勾選下面「使用 Google Directions」就不會產生新費用。</p>
+      <form id="mapsForm">
+        <label class="checks"><input id="googleEnabled" type="checkbox" /> 使用 Google Directions 補還沒有上／下班分鐘的物件（會計費，預設關閉）</label>
+        <label class="checks"><input id="mapsEnabled" type="checkbox" /> 允許補查尚未有紀錄的尖峰分鐘（已有快取的不重查；沒金鑰不會打）</label>
+        <label>Google Maps API 金鑰</label>
+        <input id="mapsKey" type="password" autocomplete="new-password" placeholder="已設定則可留白" />
+        <p class="msg" id="mapsKeyState"></p>
+        <div class="grid-2" id="mapsUsage" style="margin-top:8px">
+          <div>
+            <h3 style="margin:0 0 6px;font-size:15px">今日用量</h3>
+            <p class="hint" id="mapsToday" style="margin:0"></p>
+          </div>
+          <div>
+            <h3 style="margin:0 0 6px;font-size:15px">本月用量</h3>
+            <p class="hint" id="mapsMonth" style="margin:0"></p>
+          </div>
+        </div>
+        <p class="hint" id="mapsOfficial" style="margin:12px 0 0;white-space:pre-wrap;font-family:ui-monospace,monospace"></p>
+        <p class="hint" id="mapsLifetime" style="margin:12px 0 0"></p>
+        <div class="row" style="margin:14px 0 0">
+          <button type="submit" class="primary" id="mapsSave">儲存路線設定</button>
+          <button type="button" class="ghost" id="mapsClearKey">關閉並清除金鑰</button>
+        </div>
+        <p class="msg" id="mapsMsg"></p>
+      </form>
+    </section>
+    <section class="card">
+      <h2>贊助連結</h2>
+      <p class="hint">預設列出免月費、會員能刷卡的方案：歐付寶收款連結、ezPay 簡單付、OEN 幫收 Link、Ko-fi、PayPal.Me、Buy Me a Coffee、GitHub Sponsors。金流仍會從贊助款抽手續費。綠界、藍新全方位金流通常要統編或年費，不放在預設清單；若你已有網址，可用下面自訂列。付款不會自動改會員方案，收到後請在上方把對方改成「已贊助」。</p>
+      <form id="sponsorForm">
+        <label>給未贊助會員看的說明</label>
+        <textarea id="sponsorIntro"></textarea>
+        <label>已贊助會員看到的短句</label>
+        <input id="sponsorThanks" />
+        <div id="sponsorProviders"></div>
+        <h3 style="margin:16px 0 8px;font-size:16px">自訂連結</h3>
+        <p class="hint">例如銀行轉帳說明頁、街口收款頁，或你已經申請好的其他金流。</p>
+        <div id="sponsorExtras"></div>
+        <div class="row" style="margin:8px 0 0">
+          <button type="button" class="ghost" id="sponsorAddExtra">新增自訂連結</button>
+          <button type="submit" class="primary" id="sponsorSave">儲存贊助連結</button>
+        </div>
+        <p class="msg" id="sponsorMsg"></p>
+      </form>
+    </section>
+    <section class="card">
+      <h2>寄信 SMTP</h2>
+      <p class="hint">這組 SMTP 只寄<strong>系統信</strong>：註冊歡迎、忘記密碼、變更密碼、贊助後通知。物件／屋源提醒請會員自己在前台填 SMTP，不會用這裡的帳號代寄。密碼只在你新填時才更新，畫面上不會回傳已存密碼。</p>
+      <form id="smtpForm">
+        <div class="grid-2">
+          <div>
+            <label>SMTP 主機</label>
+            <input id="smtpHost" placeholder="smtp.gmail.com" autocomplete="off" />
+          </div>
+          <div>
+            <label>連接埠</label>
+            <input id="smtpPort" type="number" min="1" max="65535" placeholder="587" />
+          </div>
+          <div>
+            <label>帳號</label>
+            <input id="smtpUser" autocomplete="off" />
+          </div>
+          <div>
+            <label>密碼</label>
+            <input id="smtpPass" type="password" autocomplete="new-password" placeholder="已設定則可留白" />
+          </div>
+          <div>
+            <label>寄件 Email</label>
+            <input id="smtpFrom" placeholder="noreply@example.com" />
+          </div>
+          <div>
+            <label>寄件名稱</label>
+            <input id="smtpFromName" placeholder="吉比租房物件追蹤" />
+          </div>
+        </div>
+        <label class="checks"><input type="checkbox" id="smtpSecure" /> 使用 TLS／SMTPS（465 會自動勾）</label>
+        <div class="row">
+          <button type="submit" class="primary" id="smtpSave">儲存 SMTP</button>
+          <button type="button" class="ghost" id="smtpTest">寄測試信到我的信箱</button>
+        </div>
+        <p class="msg" id="smtpMsg"></p>
+      </form>
+    </section>
+    <section class="card">
+      <h2>信件內容</h2>
+      <p class="hint">系統信走上面的管理員 SMTP。可用代碼：<code>{{email}}</code>；忘記密碼另有 <code>{{tempPassword}}</code>。物件通知預設內容只在會員未自訂時使用，實際寄出走會員自己的 SMTP。</p>
+      <form id="tplForm">
+        <label>註冊歡迎主旨</label>
+        <input id="welcomeSubject" />
+        <label>註冊歡迎本文</label>
+        <textarea id="welcomeText"></textarea>
+        <label>忘記密碼主旨</label>
+        <input id="forgotSubject" />
+        <label>忘記密碼本文</label>
+        <textarea id="forgotText"></textarea>
+        <label>變更密碼主旨</label>
+        <input id="passwordSubject" />
+        <label>變更密碼本文</label>
+        <textarea id="passwordText"></textarea>
+        <label>贊助通知主旨</label>
+        <input id="sponsorMailSubject" />
+        <label>贊助通知本文</label>
+        <textarea id="sponsorMailText"></textarea>
+        <label>刪除會員主旨</label>
+        <input id="deletedSubject" />
+        <label>刪除會員本文（可用 <code>{{reason}}</code>）</label>
+        <textarea id="deletedText"></textarea>
+        <label>物件通知預設主旨（會員未自訂時）</label>
+        <input id="notifySubject" />
+        <label>物件通知預設本文（會員未自訂時；寄出走會員 SMTP）</label>
+        <textarea id="notifyText"></textarea>
+        <div class="row" style="margin-top:14px">
+          <button type="submit" class="primary" id="tplSave">儲存信件內容</button>
+        </div>
+        <p class="msg" id="tplMsg"></p>
+      </form>
+    </section>
+  </div>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let meEmail = "";
+    let sponsorCatalog = [];
+    let sponsorExtras = [];
+    let deleteReasons = [];
+    let pendingDeleteId = "";
+
+    function setMsg(id, text, ok) {
+      const el = $(id);
+      el.textContent = text || "";
+      el.className = "msg " + (ok ? "ok" : text ? "err" : "");
+    }
+
+    async function readApi(res) {
+      const text = await res.text();
+      try {
+        return JSON.parse(text);
+      } catch {
+        const html = /<\s*html|bad gateway|cloudflare/i.test(text || "");
+        if (res.status === 502 || res.status === 504 || res.status === 524 || html) {
+          return { error: "伺服器暫時沒回 JSON。若剛按清除金鑰，請重新整理後台看「金鑰」是不是已變成尚未設定。不要把這段當失敗連續猛按。" };
+        }
+        return { error: (text || res.statusText || "讀取失敗").slice(0, 180) };
+      }
+    }
+
+    function roleLabel(role) {
+      return role === "admin" ? "管理員" : "會員";
+    }
+
+    function formatTime(value) {
+      if (!value) return "—";
+      const d = new Date(value);
+      return Number.isNaN(d.getTime()) ? escapeHtml(value) : d.toLocaleString("zh-TW");
+    }
+
+    function memberStatus(m) {
+      if (m.deleted) {
+        const chance = Number(m.signup_count) >= 2 ? "已用完二次註冊" : "可再註冊一次";
+        return `已刪除 · ${chance}`;
+      }
+      return Number(m.signup_count) > 1 ? "使用中（第二次）" : "使用中";
+    }
+
+    function renderMembers(members) {
+      $("memberRows").innerHTML = (members || []).map((m) => `
+        <tr data-id="${m.id}" data-role="${escapeHtml(m.role)}" data-email="${escapeHtml(m.email)}">
+          <td>${escapeHtml(m.email)}</td>
+          <td>${formatTime(m.created_at)}</td>
+          <td>${roleLabel(m.role)}</td>
+          <td>
+            <select data-plan ${m.role === "admin" || m.deleted ? "disabled" : ""}>
+              <option value="free" ${m.plan !== "sponsor" ? "selected" : ""}>一般</option>
+              <option value="sponsor" ${m.plan === "sponsor" ? "selected" : ""}>已贊助</option>
+            </select>
+          </td>
+          <td><input class="member-interval" data-interval type="number" min="1" max="120" value="${Number(m.intervalMinutes) || 8}" ${m.deleted ? "disabled" : ""} /></td>
+          <td>${escapeHtml(memberStatus(m))}</td>
+          <td>
+            ${m.role === "admin" ? "" : m.deleted
+              ? `<button type="button" class="ghost" data-restore>取消刪除</button>`
+              : `<button type="button" class="primary" data-save>儲存</button> <button type="button" class="ghost" data-delete>刪除</button>`}
+          </td>
+        </tr>
+      `).join("");
+      const blob = JSON.stringify(members || []);
+      if (/password/i.test(blob) && /scrypt:/.test(blob)) {
+        setMsg("memberMsg", "會員資料含密碼欄，已擋下。", false);
+        $("memberRows").innerHTML = "";
+        return;
+      }
+      setMsg("memberMsg", `共 ${members.length} 位`, true);
+    }
+
+    function escapeHtml(value) {
+      return String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    async function loadMembers() {
+      const [sort, order] = String($("memberSort").value || "created_at:desc").split(":");
+      const q = $("memberQuery").value.trim();
+      const params = new URLSearchParams({ sort, order, q });
+      const res = await fetch(`/api/admin/members?${params}`, { cache: "no-store" });
+      const data = await readApi(res);
+      if (res.status === 401) { location.replace("/login.html"); return; }
+      if (res.status === 403) { location.replace("/"); return; }
+      if (!res.ok) throw new Error(data.error || "載入會員失敗");
+      deleteReasons = data.deleteReasons || [];
+      if ($("deleteReasonCode") && !$("deleteReasonCode").options.length) {
+        $("deleteReasonCode").innerHTML = deleteReasons.map((row) => `<option value="${escapeHtml(row.id)}">${escapeHtml(row.label)}</option>`).join("");
+      }
+      renderMembers(data.members || []);
+    }
+
+    function fillMail(data) {
+      const smtp = data.smtp || {};
+      $("smtpHost").value = smtp.host || "";
+      $("smtpPort").value = smtp.port || 587;
+      $("smtpUser").value = smtp.user || "";
+      $("smtpPass").value = "";
+      $("smtpPass").placeholder = smtp.passSet ? "已設定，空白則保留" : "SMTP 密碼";
+      $("smtpFrom").value = smtp.from || "";
+      $("smtpFromName").value = smtp.fromName || "吉比租房物件追蹤";
+      $("smtpSecure").checked = Boolean(smtp.secure);
+      const tpl = data.templates || {};
+      $("welcomeSubject").value = tpl.welcome?.subject || "";
+      $("welcomeText").value = tpl.welcome?.text || "";
+      $("forgotSubject").value = tpl.forgot_password?.subject || "";
+      $("forgotText").value = tpl.forgot_password?.text || "";
+      $("passwordSubject").value = tpl.password_changed?.subject || "";
+      $("passwordText").value = tpl.password_changed?.text || "";
+      $("sponsorMailSubject").value = tpl.sponsor_thanks?.subject || "";
+      $("sponsorMailText").value = tpl.sponsor_thanks?.text || "";
+      $("deletedSubject").value = tpl.account_deleted?.subject || "";
+      $("deletedText").value = tpl.account_deleted?.text || "";
+      $("notifySubject").value = tpl.listing_notify?.subject || "";
+      $("notifyText").value = tpl.listing_notify?.text || "";
+    }
+
+    async function loadMail() {
+      const res = await fetch("/api/admin/mail", { cache: "no-store" });
+      const data = await readApi(res);
+      if (!res.ok) throw new Error(data.error || "載入寄信設定失敗");
+      fillMail(data);
+    }
+
+    function usd(value) {
+      return `US$ ${Number(value || 0).toFixed(2)}`;
+    }
+
+    function officialLine(line) {
+      const rate = Number(line.usdPerThousand) === 0 ? "免費" : `${usd(line.usdPerThousand)}／千次`;
+      return `  ${line.range}：${line.events || 0} 次 × ${rate} = ${usd(line.usd)}`;
+    }
+
+    function officialMapsWorksheet(usage) {
+      const ess = usage.essentialsBreakdown || {};
+      const adv = usage.advancedBreakdown || {};
+      const essLines = (ess.lines || []).map(officialLine).join("\n");
+      const advLines = (adv.lines || []).map(officialLine).join("\n");
+      return [
+        "官方價目試算（與 Cloud 同一套級距）",
+        `Directions（${ess.skuId || "28A8-3EB4-4595"}）本月 ${ess.used || 0} 次`,
+        essLines || "  （無）",
+        `  小計 ${usd(ess.usd)}`,
+        `Directions Advanced（${adv.skuId || "9407-00C2-CF85"}）本月 ${adv.used || 0} 次`,
+        advLines || "  （無）",
+        `  小計 ${usd(adv.usd)}`,
+        `本月合計 ${usd(usage.monthUsd)}`,
+      ].join("\n");
+    }
+
+    function fillMaps(data) {
+      const usage = data.usage || {};
+      $("googleEnabled").checked = Boolean(data.googleEnabled);
+      $("mapsEnabled").checked = Boolean(data.enabled);
+      $("mapsKey").value = "";
+      $("mapsKey").placeholder = data.hasKey ? "已設定，空白則保留" : "貼上 Google Maps API 金鑰";
+      const provider = data.provider === "google" ? "目前實際呼叫：Google Directions（計費）" : "目前實際呼叫：OpenStreetMap OSRM（免費）";
+      $("mapsKeyState").textContent = `${provider}。${data.hasKey ? "金鑰：已設定" : "金鑰：尚未設定"}`;
+      $("mapsKeyState").className = data.provider === "google" ? "msg err" : "msg ok";
+      if (data.googleBlocked) {
+        $("mapsKeyState").textContent += `。已熔斷（${data.googleBlockReason || "error"}）至 ${data.googleBlockUntil || "稍後"}`;
+        $("mapsKeyState").className = "msg err";
+      }
+      $("mapsToday").textContent = `太平洋時間 ${usage.today || ""}：Directions ${usage.todayEssentials || 0} 次 · Directions Advanced ${usage.todayAdvanced || 0} 次`;
+      $("mapsMonth").textContent = `計費月 ${usage.month || ""}（${usage.billingTz || "America/Los_Angeles"}）：Directions ${usage.monthEssentials || 0} 次（免額 ${usage.essentialsFree || 10000}）· Advanced ${usage.monthAdvanced || 0} 次（免額 ${usage.advancedFree || 5000}）`;
+      $("mapsOfficial").textContent = officialMapsWorksheet(usage);
+      $("mapsLifetime").textContent = `累計紀錄 ${usage.lifetimeEssentials || 0} 次 Directions、${usage.lifetimeAdvanced || 0} 次 Advanced；各月官方價目加總約 ${usd(usage.lifetimeUsd)}。實際請款以 Cloud 帳單為準。`;
+      setMsg("mapsMsg", data.warning || "", true);
+    }
+
+    function helpQaRowHtml(row = {}, index = 0) {
+      return `
+        <div class="qa-edit" data-qa-row>
+          <label>問題 ${index + 1}</label>
+          <input data-qa-q value="${escapeHtml(row.question || "")}" maxlength="200" />
+          <label>回答</label>
+          <textarea data-qa-a style="min-height:90px">${escapeHtml(row.answer || "")}</textarea>
+          <input type="hidden" data-qa-id value="${escapeHtml(row.id || "")}" />
+          <div class="row" style="margin:8px 0 16px">
+            <button type="button" class="ghost" data-qa-del>刪除此則</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderHelpQaEditor(items) {
+      const list = Array.isArray(items) && items.length ? items : [{ question: "", answer: "", id: "" }];
+      $("helpQaRows").innerHTML = list.map((row, index) => helpQaRowHtml(row, index)).join("");
+    }
+
+    function collectHelpQa() {
+      return [...document.querySelectorAll("[data-qa-row]")].map((row) => ({
+        id: row.querySelector("[data-qa-id]")?.value || "",
+        question: row.querySelector("[data-qa-q]")?.value || "",
+        answer: row.querySelector("[data-qa-a]")?.value || "",
+      }));
+    }
+
+    async function loadHelpQa() {
+      const res = await fetch("/api/admin/help-qa", { cache: "no-store" });
+      const data = await readApi(res);
+      if (!res.ok) throw new Error(data.error || "載入 Q&A 失敗");
+      renderHelpQaEditor(data.items || []);
+      setMsg("helpQaMsg", `共 ${ (data.items || []).length } 則`, true);
+    }
+
+    async function loadMaps() {
+      const res = await fetch("/api/admin/maps", { cache: "no-store" });
+      const data = await readApi(res);
+      if (!res.ok) throw new Error(data.error || "載入 Google 路線設定失敗");
+      fillMaps(data);
+    }
+
+    $("memberRows").addEventListener("change", (ev) => {
+      const plan = ev.target.closest("[data-plan]");
+      if (!plan) return;
+      const tr = plan.closest("tr");
+      if (tr?.dataset.role === "admin") return;
+      const interval = tr.querySelector("[data-interval]");
+      if (interval) interval.value = plan.value === "sponsor" ? 5 : 8;
+    });
+
+    $("memberSearch").onclick = () => loadMembers().catch((error) => setMsg("memberMsg", error.message));
+    $("memberSort").onchange = () => loadMembers().catch((error) => setMsg("memberMsg", error.message));
+    $("memberQuery").addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        loadMembers().catch((error) => setMsg("memberMsg", error.message));
+      }
+    });
+
+    $("deleteReasonCode").onchange = () => {
+      const row = deleteReasons.find((item) => item.id === $("deleteReasonCode").value);
+      $("deleteReasonText").value = row?.text || "";
+    };
+    $("deleteMemberCancel").onclick = () => {
+      pendingDeleteId = "";
+      $("deleteMemberBox").hidden = true;
+    };
+    $("deleteMemberConfirm").onclick = async () => {
+      if (!pendingDeleteId) return;
+      $("deleteMemberConfirm").disabled = true;
+      setMsg("memberMsg", "刪除中…");
+      try {
+        const res = await fetch(`/api/admin/members/${pendingDeleteId}/delete`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            reasonCode: $("deleteReasonCode").value,
+            reasonText: $("deleteReasonText").value,
+          }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "刪除失敗");
+        pendingDeleteId = "";
+        $("deleteMemberBox").hidden = true;
+        await loadMembers();
+        setMsg("memberMsg", "已刪除並寄信", true);
+      } catch (error) {
+        setMsg("memberMsg", error.message);
+      } finally {
+        $("deleteMemberConfirm").disabled = false;
+      }
+    };
+
+    $("memberRows").addEventListener("click", async (ev) => {
+      const tr = ev.target.closest("tr");
+      const id = tr?.dataset.id;
+      if (!id) return;
+      const del = ev.target.closest("[data-delete]");
+      if (del) {
+        pendingDeleteId = id;
+        $("deleteMemberHint").textContent = `將刪除 ${tr.dataset.email || ""}。確認後會寄信給會員，帳號列會留下來。`;
+        $("deleteMemberBox").hidden = false;
+        const first = deleteReasons[0];
+        $("deleteReasonCode").value = first?.id || "multi_ip";
+        $("deleteReasonText").value = first?.text || "";
+        $("deleteMemberBox").scrollIntoView({ behavior: "smooth", block: "nearest" });
+        return;
+      }
+      const restore = ev.target.closest("[data-restore]");
+      if (restore) {
+        restore.disabled = true;
+        setMsg("memberMsg", "還原中…");
+        try {
+          const res = await fetch(`/api/admin/members/${id}/restore`, { method: "POST" });
+          const data = await readApi(res);
+          if (!res.ok) throw new Error(data.error || "還原失敗");
+          await loadMembers();
+          setMsg("memberMsg", "已取消刪除", true);
+        } catch (error) {
+          setMsg("memberMsg", error.message);
+        } finally {
+          restore.disabled = false;
+        }
+        return;
+      }
+      const btn = ev.target.closest("[data-save]");
+      if (!btn) return;
+      btn.disabled = true;
+      setMsg("memberMsg", "儲存中…");
+      try {
+        const res = await fetch(`/api/admin/members/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            plan: tr.querySelector("[data-plan]").value,
+            intervalMinutes: Number(tr.querySelector("[data-interval]").value),
+          }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "儲存失敗");
+        await loadMembers();
+        setMsg("memberMsg", "已儲存", true);
+      } catch (error) {
+        setMsg("memberMsg", error.message);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    $("smtpForm").onsubmit = async (ev) => {
+      ev.preventDefault();
+      $("smtpSave").disabled = true;
+      setMsg("smtpMsg", "儲存中…");
+      try {
+        const res = await fetch("/api/admin/mail", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            smtp: {
+              host: $("smtpHost").value.trim(),
+              port: Number($("smtpPort").value) || 587,
+              user: $("smtpUser").value.trim(),
+              pass: $("smtpPass").value,
+              from: $("smtpFrom").value.trim(),
+              fromName: $("smtpFromName").value.trim(),
+              secure: $("smtpSecure").checked,
+            },
+          }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "儲存失敗");
+        fillMail(data);
+        setMsg("smtpMsg", data.configured ? "SMTP 已儲存" : "已儲存，但主機或寄件地址還不完整", true);
+      } catch (error) {
+        setMsg("smtpMsg", error.message);
+      } finally {
+        $("smtpSave").disabled = false;
+      }
+    };
+
+    $("smtpTest").onclick = async () => {
+      $("smtpTest").disabled = true;
+      setMsg("smtpMsg", "寄送中…");
+      try {
+        const res = await fetch("/api/admin/mail/test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ to: meEmail }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "寄送失敗");
+        setMsg("smtpMsg", `測試信已寄到 ${data.to}`, true);
+      } catch (error) {
+        setMsg("smtpMsg", error.message);
+      } finally {
+        $("smtpTest").disabled = false;
+      }
+    };
+
+    $("tplForm").onsubmit = async (ev) => {
+      ev.preventDefault();
+      $("tplSave").disabled = true;
+      setMsg("tplMsg", "儲存中…");
+      try {
+        const res = await fetch("/api/admin/mail", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            templates: {
+              welcome: { subject: $("welcomeSubject").value, text: $("welcomeText").value },
+              forgot_password: { subject: $("forgotSubject").value, text: $("forgotText").value },
+              password_changed: { subject: $("passwordSubject").value, text: $("passwordText").value },
+              sponsor_thanks: { subject: $("sponsorMailSubject").value, text: $("sponsorMailText").value },
+              account_deleted: { subject: $("deletedSubject").value, text: $("deletedText").value },
+              listing_notify: { subject: $("notifySubject").value, text: $("notifyText").value },
+            },
+          }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "儲存失敗");
+        fillMail(data);
+        setMsg("tplMsg", "信件內容已儲存", true);
+      } catch (error) {
+        setMsg("tplMsg", error.message);
+      } finally {
+        $("tplSave").disabled = false;
+      }
+    };
+
+    function providerCell(id, field) {
+      return document.querySelector(`[data-sp="${id}"][data-spf="${field}"]`);
+    }
+
+    function renderProviders(catalog, providers) {
+      sponsorCatalog = catalog || [];
+      $("sponsorProviders").innerHTML = sponsorCatalog.map((row) => {
+        const cell = providers?.[row.id] || {};
+        return `
+          <div class="provider">
+            <h3>${escapeHtml(row.name)}</h3>
+            <p class="meta">${escapeHtml(row.hint || "")}<br>${escapeHtml(row.feeNote || "")} 申請：<a href="${escapeHtml(row.signupUrl)}" target="_blank" rel="noopener">開通頁</a></p>
+            <label>顯示名稱</label>
+            <input data-sp="${escapeHtml(row.id)}" data-spf="label" value="${escapeHtml(cell.label || row.label)}" placeholder="${escapeHtml(row.label)}" />
+            <label>你的收款網址</label>
+            <input data-sp="${escapeHtml(row.id)}" data-spf="url" value="${escapeHtml(cell.url || "")}" placeholder="https://…" />
+            <label class="checks"><input type="checkbox" data-sp="${escapeHtml(row.id)}" data-spf="enabled" ${cell.enabled ? "checked" : ""} /> 顯示給未贊助會員</label>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function renderExtras() {
+      $("sponsorExtras").innerHTML = sponsorExtras.map((row, idx) => `
+        <div class="extras-row" data-extra="${idx}">
+          <div>
+            <label>名稱</label>
+            <input data-ex="label" value="${escapeHtml(row.label || "")}" placeholder="例如：銀行轉帳" />
+          </div>
+          <div>
+            <label>網址</label>
+            <input data-ex="url" value="${escapeHtml(row.url || "")}" placeholder="https://…" />
+          </div>
+          <label class="checks"><input type="checkbox" data-ex="enabled" ${row.enabled !== false ? "checked" : ""} /> 顯示</label>
+          <button type="button" class="ghost" data-ex-del="${idx}">刪除</button>
+        </div>
+      `).join("");
+    }
+
+    function collectExtras() {
+      return [...document.querySelectorAll("#sponsorExtras .extras-row")].map((row, idx) => ({
+        id: sponsorExtras[idx]?.id || `custom-${idx + 1}`,
+        label: row.querySelector("[data-ex=label]").value,
+        url: row.querySelector("[data-ex=url]").value,
+        enabled: row.querySelector("[data-ex=enabled]").checked,
+      }));
+    }
+
+    function fillSponsor(data) {
+      const config = data.config || {};
+      $("sponsorIntro").value = config.intro || "";
+      $("sponsorThanks").value = config.thanks || "";
+      renderProviders(data.catalog || sponsorCatalog, config.providers || {});
+      sponsorExtras = Array.isArray(config.extras) ? config.extras.map((row) => ({ ...row })) : [];
+      renderExtras();
+    }
+
+    async function loadSponsor() {
+      const res = await fetch("/api/admin/sponsor", { cache: "no-store" });
+      const data = await readApi(res);
+      if (!res.ok) throw new Error(data.error || "載入贊助設定失敗");
+      fillSponsor(data);
+    }
+
+    $("sponsorExtras").addEventListener("click", (ev) => {
+      const btn = ev.target.closest("[data-ex-del]");
+      if (!btn) return;
+      sponsorExtras = collectExtras();
+      sponsorExtras.splice(Number(btn.dataset.exDel), 1);
+      renderExtras();
+    });
+
+    $("sponsorAddExtra").onclick = () => {
+      sponsorExtras = collectExtras();
+      if (sponsorExtras.length >= 8) {
+        setMsg("sponsorMsg", "自訂連結最多 8 個");
+        return;
+      }
+      sponsorExtras.push({ id: `custom-${sponsorExtras.length + 1}`, label: "", url: "", enabled: true });
+      renderExtras();
+    };
+
+    $("sponsorForm").onsubmit = async (ev) => {
+      ev.preventDefault();
+      $("sponsorSave").disabled = true;
+      setMsg("sponsorMsg", "儲存中…");
+      try {
+        const providers = {};
+        for (const row of sponsorCatalog) {
+          providers[row.id] = {
+            label: providerCell(row.id, "label")?.value || "",
+            url: providerCell(row.id, "url")?.value || "",
+            enabled: Boolean(providerCell(row.id, "enabled")?.checked),
+          };
+        }
+        const res = await fetch("/api/admin/sponsor", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            intro: $("sponsorIntro").value,
+            thanks: $("sponsorThanks").value,
+            providers,
+            extras: collectExtras(),
+          }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "儲存失敗");
+        fillSponsor(data);
+        const n = (data.config?.extras || []).filter((row) => row.enabled).length
+          + Object.values(data.config?.providers || {}).filter((row) => row.enabled).length;
+        setMsg("sponsorMsg", n ? `已儲存，目前會顯示 ${n} 個連結給未贊助會員` : "已儲存。還沒有開啟的連結，未贊助會員暫時看不到贊助列。", true);
+      } catch (error) {
+        setMsg("sponsorMsg", error.message);
+      } finally {
+        $("sponsorSave").disabled = false;
+      }
+    };
+
+    (async () => {
+      const meRes = await fetch("/api/me", { cache: "no-store" });
+      const me = await readApi(meRes);
+      if (!me.ok) { location.replace("/login.html"); return; }
+      if (me.role !== "admin") { location.replace("/"); return; }
+      meEmail = me.email || "";
+      $("who").textContent = meEmail;
+      await Promise.all([loadMembers(), loadMail(), loadSponsor(), loadMaps(), loadHelpQa()]);
+      $("helpQaAdd").onclick = () => {
+        renderHelpQaEditor([...collectHelpQa(), { question: "", answer: "", id: "" }]);
+      };
+      $("helpQaRows").addEventListener("click", (ev) => {
+        const btn = ev.target.closest("[data-qa-del]");
+        if (!btn) return;
+        btn.closest("[data-qa-row]")?.remove();
+        if (!$("helpQaRows").children.length) renderHelpQaEditor([{ question: "", answer: "", id: "" }]);
+      });
+      $("helpQaSave").onclick = async () => {
+        $("helpQaSave").disabled = true;
+        setMsg("helpQaMsg", "儲存中…");
+        try {
+          const res = await fetch("/api/admin/help-qa", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ items: collectHelpQa() }),
+          });
+          const data = await readApi(res);
+          if (!res.ok) throw new Error(data.error || "儲存失敗");
+          renderHelpQaEditor(data.items || []);
+          setMsg("helpQaMsg", "Q&A 已儲存", true);
+        } catch (error) {
+          setMsg("helpQaMsg", error.message);
+        } finally {
+          $("helpQaSave").disabled = false;
+        }
+      };
+      $("helpQaReset").onclick = async () => {
+        if (!confirm("還原成系統預設的功能說明？你改過的題目會被蓋掉。")) return;
+        $("helpQaReset").disabled = true;
+        setMsg("helpQaMsg", "還原中…");
+        try {
+          const res = await fetch("/api/admin/help-qa", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reset: true }),
+          });
+          const data = await readApi(res);
+          if (!res.ok) throw new Error(data.error || "還原失敗");
+          renderHelpQaEditor(data.items || []);
+          setMsg("helpQaMsg", "已還原預設", true);
+        } catch (error) {
+          setMsg("helpQaMsg", error.message);
+        } finally {
+          $("helpQaReset").disabled = false;
+        }
+      };
+      async function saveMaps(extra = {}) {
+        $("mapsSave").disabled = true;
+        $("mapsClearKey").disabled = true;
+        setMsg("mapsMsg", "儲存中…");
+        try {
+          const body = {
+            googleEnabled: $("googleEnabled").checked,
+            enabled: $("mapsEnabled").checked,
+            ...extra,
+          };
+          const key = $("mapsKey").value.trim();
+          if (key) body.apiKey = key;
+          const res = await fetch("/api/admin/maps", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+            signal: AbortSignal.timeout(20000),
+          });
+          const data = await readApi(res);
+          if (!res.ok) throw new Error(data.error || "儲存失敗");
+          fillMaps(data);
+          const note = data.googleEnabled
+            ? (data.hasKey ? "已允許 Google Directions，之後補算會計費。" : "已允許 Google Directions，但還沒有金鑰，仍走 OSRM。")
+            : "已關閉 Google Directions。通勤公里數走免費 OSRM。";
+          setMsg("mapsMsg", data.warning || note, true);
+        } catch (error) {
+          setMsg("mapsMsg", error.message);
+        } finally {
+          $("mapsSave").disabled = false;
+          $("mapsClearKey").disabled = false;
+        }
+      }
+      $("mapsForm").onsubmit = async (ev) => {
+        ev.preventDefault();
+        await saveMaps();
+      };
+      $("mapsClearKey").onclick = async () => {
+        $("googleEnabled").checked = false;
+        $("mapsEnabled").checked = false;
+        await saveMaps({ clearKey: true });
+      };
+    })().catch((error) => {
+      setMsg("memberMsg", error.message || "載入失敗");
+    });
+  </script>
+  <footer class="site-footer">reversal play tech | 逆遊科技</footer>
+</body>
+</html>

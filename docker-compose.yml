@@ -2,6 +2,7 @@ name: 591-tracker
 
 services:
   591-tracker:
+    profiles: ["v1"]
     container_name: 591-tracker
     image: ghcr.io/fyun48/5151:latest
     restart: unless-stopped
@@ -39,6 +40,28 @@ services:
       - ./v2/public:/app/public:ro
     command: ["node", "--watch-path=src", "--watch-path=public", "src/server.js"]
 
+  591-tracker-v3:
+    container_name: 591-tracker-v3
+    image: ghcr.io/fyun48/5151:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5153:5153"
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "5153"
+      DATA_DIR: /data
+      TZ: Asia/Taipei
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL_V3:-https://c5151.reversalplay.me}
+      V1_DB_PATH: /v1-data/591.db
+      V2_DB_PATH: /v2-data/v2.db
+    volumes:
+      - ${DATA_ROOT:-/DATA}/AppData/591-tracker-v3:/data
+      - ${DATA_ROOT:-/DATA}/AppData/591-tracker:/v1-data:ro
+      - ${DATA_ROOT:-/DATA}/AppData/591-tracker-v2:/v2-data:ro
+      - ./v3/src:/app/src:ro
+      - ./v3/public:/app/public:ro
+    command: ["node", "--watch-path=src", "--watch-path=public", "src/server.js"]
+
   cloudflared:
     profiles: ["tunnel"]
     image: cloudflare/cloudflared:latest
@@ -47,5 +70,5 @@ services:
     network_mode: host
     command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
     depends_on:
-      - 591-tracker
       - 591-tracker-v2
+      - 591-tracker-v3

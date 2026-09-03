@@ -2,6 +2,7 @@ name: 591-tracker
 
 services:
   591-tracker:
+    profiles: ["v1"]
     image: ghcr.io/fyun48/5151:latest
     container_name: 591-tracker
     restart: unless-stopped
@@ -39,16 +40,38 @@ services:
       - /mnt/Storage1/apps/5151/v2/public:/app/public:ro
     command: ["node", "--watch-path=src", "--watch-path=public", "src/server.js"]
 
+  591-tracker-v3:
+    image: ghcr.io/fyun48/5151:latest
+    container_name: 591-tracker-v3
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5153:5153"
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "5153"
+      DATA_DIR: /data
+      TZ: Asia/Taipei
+      PUBLIC_BASE_URL: https://c5151.reversalplay.me
+      V1_DB_PATH: /v1-data/591.db
+      V2_DB_PATH: /v2-data/v2.db
+    volumes:
+      - /DATA/AppData/591-tracker-v3:/data
+      - /DATA/AppData/591-tracker:/v1-data:ro
+      - /DATA/AppData/591-tracker-v2:/v2-data:ro
+      - /mnt/Storage1/apps/5151/v3/src:/app/src:ro
+      - /mnt/Storage1/apps/5151/v3/public:/app/public:ro
+    command: ["node", "--watch-path=src", "--watch-path=public", "src/server.js"]
+
 x-casaos:
   architectures:
     - amd64
     - arm64
-  main: 591-tracker
+  main: 591-tracker-v3
   title:
     en_us: 591 Tracker
     zh_tw: 591 物件追蹤
   description:
     en_us: Track 591 rental listings with viewed, watched, and hidden flags.
-    zh_tw: 591 租屋新物件追蹤，資料存在 CasaOS /DATA/AppData/591-tracker。v2 在 5152／b5151。
+    zh_tw: 591 租屋新物件追蹤。v1 已停用；v2 在 5152／b5151，目前在 5153／c5151。
   category: Utility
-  port_map: "5151"
+  port_map: "5153"

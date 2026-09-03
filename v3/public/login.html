@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>登入 · 吉比租房物件追蹤</title>
+  <style>
+    :root {
+      --bg: #f3f7f9;
+      --paper: #ffffff;
+      --ink: #1a2b33;
+      --muted: #64748b;
+      --line: #e2e8ef;
+      --accent: #0da5a0;
+      --accent-deep: #0a8280;
+      --accent-soft: #e8f7f6;
+      --accent-mist: #f0fbfa;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+      background:
+        radial-gradient(1000px 480px at 0% -5%, rgba(13, 165, 160, 0.07) 0%, transparent 55%),
+        radial-gradient(800px 400px at 100% 0%, rgba(212, 165, 165, 0.09) 0%, transparent 50%),
+        var(--bg);
+      color: var(--ink);
+    }
+    .card {
+      width: min(420px, calc(100vw - 32px));
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      box-shadow: 0 8px 28px rgba(26, 43, 51, 0.05);
+      padding: 28px 26px 24px;
+    }
+    h1 {
+      margin: 0;
+      font-family: "Noto Serif TC", "Source Han Serif TC", serif;
+      font-size: 26px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+    }
+    .sub { color: var(--muted); font-size: 14px; margin: 8px 0 16px; line-height: 1.55; }
+    .tabs { display: flex; gap: 8px; margin-bottom: 8px; }
+    .tabs button {
+      margin: 0;
+      width: auto;
+      flex: 1;
+      background: #fff;
+      color: var(--ink);
+      border: 1px solid var(--line);
+    }
+    .tabs button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+    label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 6px; }
+    input:not([type="checkbox"]) {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font: 14px/1.5 "Noto Sans TC", sans-serif;
+      background: #fff;
+    }
+    .check {
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+      margin-top: 14px;
+      font: 13px/1.5 "Noto Sans TC", sans-serif;
+      color: var(--muted);
+    }
+    .check input { margin-top: 3px; }
+    .checks { display: grid; gap: 2px; }
+    a { color: var(--accent-deep); }
+    button {
+      margin-top: 18px;
+      width: 100%;
+      border: 0;
+      border-radius: 999px;
+      padding: 11px 14px;
+      cursor: pointer;
+      background: var(--accent);
+      color: #fff;
+      font: 15px/1 "Noto Sans TC", sans-serif;
+    }
+    button:disabled { opacity: 0.5; cursor: wait; }
+    button.text {
+      margin: 12px 0 0;
+      width: auto;
+      background: none;
+      color: var(--accent-deep);
+      padding: 0;
+      border-radius: 0;
+      font-size: 13px;
+    }
+    .ok { min-height: 1.4em; color: var(--accent-deep); font-size: 13px; margin-top: 10px; }
+    .err { min-height: 1.4em; color: #9f6b6b; font-size: 13px; margin-top: 10px; }
+    .hidden { display: none; }
+    .hp {
+      position: absolute;
+      left: -10000px;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+    }
+    .bot {
+      margin-top: 14px;
+      padding: 12px;
+      border: 1px dashed var(--line);
+      border-radius: 12px;
+      background: var(--accent-mist);
+    }
+    .bot-kicker { margin: 0 0 8px; font-size: 13px; color: var(--muted); }
+    .bot-row { display: flex; gap: 8px; align-items: center; }
+    .bot-q { flex: 0 0 auto; }
+    .bot-q svg { display: block; border-radius: 8px; border: 1px solid var(--line); background: #fff; }
+    .bot-row input { flex: 1; margin: 0; min-width: 0; }
+    .site-footer {
+      margin: 18px 0 0;
+      text-align: center;
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: 0.02em;
+    }
+    button.ghost {
+      margin: 0;
+      width: auto;
+      flex: 0 0 auto;
+      background: #fff;
+      color: var(--ink);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 9px 12px;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>吉比租房物件追蹤</h1>
+    <p class="sub">想先看實際畫面，可以<a href="/">先看示範列表</a>；登入後才會載入你自己的條件與關注。</p>
+    <div class="tabs">
+      <button type="button" class="on" id="tabLogin">登入</button>
+      <button type="button" id="tabRegister">註冊</button>
+    </div>
+    <form id="loginForm">
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" autocomplete="username" required />
+      <label for="password">密碼</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required />
+      <div class="checks">
+        <label class="check">
+          <input id="showLoginPw" type="checkbox" />
+          <span>顯示密碼</span>
+        </label>
+        <label class="check">
+          <input id="remember" type="checkbox" />
+          <span>記住帳號</span>
+        </label>
+      </div>
+      <div class="bot">
+        <p class="bot-kicker">請證明你不是機器人：輸入圖中的 4 個字</p>
+        <div class="bot-row">
+          <div class="bot-q" id="loginCaptchaQ"></div>
+          <input id="loginCaptcha" name="captcha" inputmode="text" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="8" required placeholder="驗證碼" />
+          <button type="button" class="ghost" id="loginCaptchaRefresh">換一張</button>
+        </div>
+      </div>
+      <label class="hp">請不要填這個欄位<input id="loginWebsite" name="website" tabindex="-1" autocomplete="off" /></label>
+      <button type="submit" id="loginBtn">登入</button>
+      <button type="button" class="text" id="forgotLink">忘記密碼？</button>
+    </form>
+    <form id="registerForm" class="hidden">
+      <p class="sub">註冊成功後，若管理員已設定寄信，會收到一封歡迎信。物件／屋源提醒請之後自己填 SMTP。</p>
+      <label for="regEmail">Email</label>
+      <input id="regEmail" name="email" type="email" autocomplete="username" required />
+      <label for="regPassword">密碼（至少 8 個字）</label>
+      <input id="regPassword" name="password" type="password" autocomplete="new-password" minlength="8" required />
+      <label for="regPassword2">再輸入一次密碼</label>
+      <input id="regPassword2" name="password2" type="password" autocomplete="new-password" minlength="8" required />
+      <label class="check">
+        <input id="showRegPw" type="checkbox" />
+        <span>顯示密碼</span>
+      </label>
+      <label class="check">
+        <input id="accept" type="checkbox" required />
+        <span>我已閱讀並同意<a href="/disclaimer.html" target="_blank" rel="noopener">免責聲明</a>：這是免費系統，贊助是自願的。</span>
+      </label>
+      <div class="bot">
+        <p class="bot-kicker">請證明你不是機器人：輸入圖中的 4 個字</p>
+        <div class="bot-row">
+          <div class="bot-q" id="regCaptchaQ"></div>
+          <input id="regCaptcha" name="captcha" inputmode="text" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="8" required placeholder="驗證碼" />
+          <button type="button" class="ghost" id="regCaptchaRefresh">換一張</button>
+        </div>
+      </div>
+      <label class="hp">請不要填這個欄位<input id="regWebsite" name="website" tabindex="-1" autocomplete="off" /></label>
+      <button type="submit" id="registerBtn">同意並註冊</button>
+    </form>
+    <form id="forgotForm" class="hidden">
+      <p class="sub">輸入註冊的 Email，我們會寄一組臨時密碼。若這個信箱有帳號，請到信箱收信後再用那組密碼登入。</p>
+      <label for="forgotEmail">Email</label>
+      <input id="forgotEmail" name="email" type="email" autocomplete="username" required />
+      <div class="bot">
+        <p class="bot-kicker">請證明你不是機器人：輸入圖中的 4 個字</p>
+        <div class="bot-row">
+          <div class="bot-q" id="forgotCaptchaQ"></div>
+          <input id="forgotCaptcha" name="captcha" inputmode="text" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="8" required placeholder="驗證碼" />
+          <button type="button" class="ghost" id="forgotCaptchaRefresh">換一張</button>
+        </div>
+      </div>
+      <label class="hp">請不要填這個欄位<input id="forgotWebsite" name="website" tabindex="-1" autocomplete="off" /></label>
+      <button type="submit" id="forgotBtn">寄出臨時密碼</button>
+      <button type="button" class="text" id="backLogin">回到登入</button>
+    </form>
+    <p class="ok" id="ok"></p>
+    <p class="err" id="err"></p>
+    <footer class="site-footer">reversal play tech | 逆遊科技</footer>
+  </div>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const REMEMBER_KEY = "591_v3_remember_email";
+    const justLoggedOut = new URLSearchParams(location.search).has("logout");
+    const showRegister = new URLSearchParams(location.search).has("register");
+    const showForgot = new URLSearchParams(location.search).has("forgot");
+    let captchaId = "";
+    function clearNotes() {
+      $("err").textContent = "";
+      $("ok").textContent = "";
+    }
+    function paintCaptcha(data) {
+      if (!data?.id) return;
+      captchaId = data.id;
+      for (const id of ["loginCaptchaQ", "regCaptchaQ", "forgotCaptchaQ"]) {
+        if (data.svg) $(id).innerHTML = data.svg;
+        else $(id).textContent = data.prompt || "";
+      }
+      for (const id of ["loginCaptcha", "regCaptcha", "forgotCaptcha"]) $(id).value = "";
+    }
+    async function loadCaptcha() {
+      const res = await fetch("/api/captcha");
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "驗證圖載入失敗");
+      paintCaptcha(data);
+    }
+    function captchaBody(extra, answerId, trapId) {
+      return {
+        ...extra,
+        captchaId,
+        captchaAnswer: $(answerId).value,
+        website: $(trapId).value,
+      };
+    }
+    function setMode(mode) {
+      const register = mode === "register";
+      const forgot = mode === "forgot";
+      $("tabLogin").classList.toggle("on", !register && !forgot);
+      $("tabRegister").classList.toggle("on", register);
+      $("loginForm").classList.toggle("hidden", register || forgot);
+      $("registerForm").classList.toggle("hidden", !register);
+      $("forgotForm").classList.toggle("hidden", !forgot);
+      clearNotes();
+      if (forgot && !$("forgotEmail").value) $("forgotEmail").value = $("email").value.trim();
+    }
+    function bindShow(checkboxId, inputIds) {
+      $(checkboxId).onchange = () => {
+        const type = $(checkboxId).checked ? "text" : "password";
+        for (const id of inputIds) $(id).type = type;
+      };
+    }
+    $("tabLogin").onclick = () => setMode("login");
+    $("tabRegister").onclick = () => setMode("register");
+    $("forgotLink").onclick = () => setMode("forgot");
+    $("backLogin").onclick = () => setMode("login");
+    $("loginCaptchaRefresh").onclick = () => loadCaptcha().catch((error) => { $("err").textContent = error.message; });
+    $("regCaptchaRefresh").onclick = () => loadCaptcha().catch((error) => { $("err").textContent = error.message; });
+    $("forgotCaptchaRefresh").onclick = () => loadCaptcha().catch((error) => { $("err").textContent = error.message; });
+    bindShow("showLoginPw", ["password"]);
+    bindShow("showRegPw", ["regPassword", "regPassword2"]);
+    try {
+      const saved = localStorage.getItem(REMEMBER_KEY) || "";
+      if (saved) {
+        $("email").value = saved;
+        $("forgotEmail").value = saved;
+        $("remember").checked = true;
+      }
+    } catch (error) {}
+    if (showRegister) setMode("register");
+    if (showForgot) setMode("forgot");
+    fetch("/api/me").then((r) => r.json()).then((data) => {
+      if (data.ok && !justLoggedOut) location.replace("/");
+    }).catch(() => {});
+    loadCaptcha().catch((error) => { $("err").textContent = error.message; });
+    $("loginForm").onsubmit = async (ev) => {
+      ev.preventDefault();
+      $("loginBtn").disabled = true;
+      clearNotes();
+      const email = $("email").value.trim();
+      try {
+        const res = await fetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify(captchaBody({
+            email,
+            password: $("password").value,
+          }, "loginCaptcha", "loginWebsite")),
+        });
+        const data = await res.json();
+        if (data.captcha) paintCaptcha(data.captcha);
+        if (!res.ok) throw new Error(data.error || "登入失敗");
+        try {
+          if ($("remember").checked) localStorage.setItem(REMEMBER_KEY, email);
+          else localStorage.removeItem(REMEMBER_KEY);
+        } catch (error) {}
+        location.replace("/");
+      } catch (error) {
+        $("err").textContent = error.message;
+      } finally {
+        $("loginBtn").disabled = false;
+      }
+    };
+    $("registerForm").onsubmit = async (ev) => {
+      ev.preventDefault();
+      $("registerBtn").disabled = true;
+      clearNotes();
+      try {
+        if ($("regPassword").value !== $("regPassword2").value) {
+          throw new Error("兩次密碼不一樣");
+        }
+        const res = await fetch("/api/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify(captchaBody({
+            email: $("regEmail").value.trim(),
+            password: $("regPassword").value,
+            acceptDisclaimer: $("accept").checked,
+          }, "regCaptcha", "regWebsite")),
+        });
+        const data = await res.json();
+        if (data.captcha) paintCaptcha(data.captcha);
+        if (!res.ok) throw new Error(data.error || "註冊失敗");
+        location.replace("/");
+      } catch (error) {
+        $("err").textContent = error.message;
+      } finally {
+        $("registerBtn").disabled = false;
+      }
+    };
+    $("forgotForm").onsubmit = async (ev) => {
+      ev.preventDefault();
+      $("forgotBtn").disabled = true;
+      clearNotes();
+      try {
+        const res = await fetch("/api/forgot-password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify(captchaBody({
+            email: $("forgotEmail").value.trim(),
+          }, "forgotCaptcha", "forgotWebsite")),
+        });
+        const data = await res.json();
+        if (data.captcha) paintCaptcha(data.captcha);
+        if (!res.ok) throw new Error(data.error || "申請失敗");
+        $("ok").textContent = data.message || "若此帳號存在，臨時密碼已寄到信箱。";
+        $("email").value = $("forgotEmail").value.trim();
+      } catch (error) {
+        $("err").textContent = error.message;
+      } finally {
+        $("forgotBtn").disabled = false;
+      }
+    };
+  </script>
+</body>
+</html>
