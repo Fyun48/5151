@@ -79,10 +79,10 @@
     .mrt-chip {
       display: inline-block;
       padding: 1px 7px;
-      border: 1px solid var(--hermes);
+      border: 1px solid var(--hermes-deep);
       border-radius: 4px;
       background: #fff;
-      color: var(--hermes);
+      color: var(--hermes-deep);
       font-size: 12px;
       font-weight: 700;
       line-height: 1.5;
@@ -115,10 +115,14 @@
       vertical-align: baseline;
     }
     .rent-price {
+      display: block;
       color: var(--ink);
       font-weight: 700;
+      font-size: 20px;
+      line-height: 1.2;
       font-variant-numeric: tabular-nums;
-      letter-spacing: -0.02em;
+      letter-spacing: -0.03em;
+      margin: 4px 0 2px;
     }
     .guest-tour {
       position: fixed;
@@ -487,7 +491,7 @@
       background: #fff;
     }
     #profileSelect { min-height: 42px; }
-    #settingsLoadMsg { color: var(--watch); }
+    #settingsLoadMsg { color: var(--rose-deep); }
     #settingsLoadMsg[hidden] { display: none; }
     textarea { min-height: 92px; resize: vertical; }
     .checks { display: grid; gap: 8px; margin: 10px 0 14px; font-size: 14px; }
@@ -507,7 +511,15 @@
       font: 14px/1 "Noto Sans TC", sans-serif;
     }
     header .row a.ghost, a.primary { text-decoration: none; display: inline-flex; align-items: center; }
-    button:disabled { opacity: 0.5; cursor: wait; }
+    button:focus-visible,
+    a:focus-visible,
+    input:focus-visible,
+    textarea:focus-visible,
+    select:focus-visible,
+    .chip:focus-visible {
+      outline: 2px solid var(--ring, var(--accent));
+      outline-offset: 2px;
+    }
     .primary { background: var(--accent); color: #fff; box-shadow: none; }
     .primary:hover:not(:disabled) { background: var(--accent-deep); }
     .ghost { background: var(--paper); color: var(--ink); border: 1px solid var(--line); }
@@ -522,7 +534,7 @@
     .list-search {
       width: min(240px, 100%);
       margin-left: auto;
-      min-height: 40px;
+      min-height: 44px;
     }
     .item-title {
       margin: 6px 0 0;
@@ -564,6 +576,9 @@
       background: var(--paper);
       align-items: start;
     }
+    .item:has(.item-cover.empty) {
+      grid-template-columns: 28px minmax(0, 1fr) 120px 148px;
+    }
     .item.picked { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
     .item.shezidao {
       border: 2px solid var(--shezi-red);
@@ -574,6 +589,8 @@
       box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.16);
     }
     .pick { margin-top: 8px; width: 18px; height: 18px; accent-color: var(--accent); }
+    .item-cover.empty,
+    .item-cover[hidden] { display: none; }
     .item-cover img, .item-cover {
       width: 112px;
       height: 84px;
@@ -864,7 +881,7 @@
       background: #fff;
       border: 1px solid var(--line);
       box-shadow: none;
-      min-height: 40px;
+      min-height: 44px;
     }
     body.panel-collapsed .list-head-sticky.filter-compact .filter-restore-btn {
       display: inline-flex;
@@ -1083,6 +1100,7 @@
     .dock-item .row { flex-wrap: wrap; }
     .drawing .leaflet-container { cursor: crosshair; }
     .actions { display: flex; flex-direction: column; gap: 8px; min-width: 132px; }
+    .actions button { min-height: 44px; }
     .hide-box { font-size: 13px; color: var(--muted); display: flex; gap: 6px; align-items: center; cursor: pointer; }
     .list { display: grid; gap: 14px; padding: 14px 16px 16px; }
     .empty { padding: 40px; color: var(--muted); text-align: center; }
@@ -1171,8 +1189,9 @@
         -webkit-box-orient: vertical;
         overflow: hidden;
       }
-      #openFilterSheetBtn {
-        min-height: 40px;
+      #openFilterSheetBtn,
+      .filter-restore-btn {
+        min-height: 44px;
         padding: 8px 16px;
         font-weight: 700;
       }
@@ -1253,6 +1272,12 @@
       body.role-guest .hide-box { display: none; }
       body.role-guest .item {
         grid-template-columns: 92px minmax(0, 1fr);
+      }
+      .item:has(.item-cover.empty) {
+        grid-template-columns: 22px minmax(0, 1fr);
+      }
+      body.role-guest .item:has(.item-cover.empty) {
+        grid-template-columns: minmax(0, 1fr);
       }
       .item .contact,
       .item .actions {
@@ -3262,8 +3287,8 @@
         return `
         <article class="item ${on ? "picked" : ""} ${item.offline ? "offline" : ""} ${isAcefengyunAdmin() && isShezidaoAddress(item) ? "shezidao" : ""}" data-card="${id}">
           <input class="pick" type="checkbox" data-pick="${id}" ${on ? "checked" : ""} />
-          <a class="item-cover" ${listingLinkAttrs(item)}>
-            <img src="${esc(item.cover || "")}" alt="" />
+          <a class="item-cover${item.cover ? "" : " empty"}" ${listingLinkAttrs(item)}>
+            ${item.cover ? `<img src="${esc(item.cover)}" alt="" onerror="this.parentNode.classList.add('empty')" />` : ""}
           </a>
           <div>
             <div class="tags">${tags(item)}</div>
@@ -3272,8 +3297,9 @@
             </h3>
             ${matchPeerBlock(item)}
             ${formatListingWhen(item) ? `<div class="when"><span class="when-label">更新</span>${esc(formatListingWhen(item))}</div>` : ""}
+            <div class="rent-price">租金 ${esc(item.price || "")} ${esc(item.price_unit || "元/月")}</div>
             <div class="meta">
-              <span class="rent-price">租金 ${esc(item.price || "")} ${esc(item.price_unit || "元/月")}</span> · ${esc(item.kind_name || "")} · ${esc(item.layout || "")} · ${esc(item.area_name || "")} · ${esc(item.floor_name || "")}
+              ${esc(item.kind_name || "")} · ${esc(item.layout || "")} · ${esc(item.area_name || "")} · ${esc(item.floor_name || "")}
               <br>${esc(item.address || "")}${commuteText(item)}${offlineLine(item)}
               ${mrtText(item) ? `<div class="mrt-line">${mrtText(item)}</div>` : ""}
               ${item.match_detail ? `<br>比對：${esc(item.match_detail)}${item.match_post_id ? ` · <a href="${listingUrl(item.match_post_id)}" target="_blank" rel="noopener noreferrer">舊刊登 #${item.match_post_id}</a>` : ""}` : ""}

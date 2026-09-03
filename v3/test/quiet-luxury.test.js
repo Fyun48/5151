@@ -25,6 +25,9 @@ test("Quiet Luxury tokens exist and pages do not use classifieds candy", () => {
 
   const index = pub("index.html");
   assert.match(index, /font-variant-numeric: tabular-nums/);
+  assert.match(index, /font-size: 20px/);
+  assert.match(index, /:focus-visible/);
+  assert.match(index, /item-cover\$\{item\.cover \? "" : " empty"\}/);
   assert.match(index, /\.item-title a \{/);
   assert.doesNotMatch(index, /滿版/);
 });
