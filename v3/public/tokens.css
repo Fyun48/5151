@@ -18,6 +18,13 @@
   --watch: #9a6b6b;
   --new: #0b5551;
   --same: #6b6394;
+  --same-soft: #eceaf4;
+  --tag-on-bg: var(--accent-soft);
+  --tag-on-fg: var(--accent-deep);
+  --tag-off-bg: var(--line);
+  --tag-off-fg: var(--muted);
+  --tag-strong-bg: var(--ink);
+  --tag-strong-fg: var(--paper);
   --hermes: #E65326;
   --hermes-deep: #C2410C;
   --hermes-light: #F47A2A;

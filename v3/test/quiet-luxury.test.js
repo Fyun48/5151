@@ -15,7 +15,8 @@ test("Quiet Luxury tokens exist and pages do not use classifieds candy", () => {
   assert.match(tokens, /--primary: var\(--accent\)/);
   assert.doesNotMatch(tokens, /radial-gradient/);
   assert.match(tokens, /--touch: 44px/);
-  assert.match(tokens, /--text-price: 20px/);
+  assert.match(tokens, /--tag-on-bg: var\(--accent-soft\)/);
+  assert.match(tokens, /--same-soft: #eceaf4/);
 
   for (const rel of ["index.html", "login.html", "admin.html", "disclaimer.html", "reset.html"]) {
     const html = pub(rel);
@@ -37,6 +38,10 @@ test("Quiet Luxury tokens exist and pages do not use classifieds candy", () => {
   assert.match(index, /skipTour/);
   assert.match(index, /expandFilters/);
   assert.doesNotMatch(index, /background:\s*#fff\b/);
+  assert.doesNotMatch(index, /#dcfce7/);
+  assert.doesNotMatch(index, /#e8f1ff/);
+  assert.match(index, /\.tag\.lift \{ background: var\(--tag-on-bg\)/);
+  assert.match(index, /\.tag\.ext-src \{ background: var\(--same-soft\)/);
   assert.doesNotMatch(index, /滿版/);
 });
 
