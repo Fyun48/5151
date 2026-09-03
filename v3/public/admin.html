@@ -52,7 +52,7 @@
       border-radius: 10px;
       padding: 10px 12px;
       font: 14px/1.5 "Noto Sans TC", sans-serif;
-      background: #fff;
+      background: var(--paper);
     }
     textarea { min-height: 140px; resize: vertical; }
     button, a.ghost, a.primary {
@@ -65,8 +65,8 @@
       display: inline-flex;
       align-items: center;
     }
-    .primary { background: var(--accent); color: #fff; }
-    .ghost { background: #fff; color: var(--ink); border: 1px solid var(--line); }
+    .primary { background: var(--accent); color: var(--primary-foreground); }
+    .ghost { background: var(--paper); color: var(--ink); border: 1px solid var(--line); }
     button:disabled { opacity: 0.5; cursor: wait; }
     .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
