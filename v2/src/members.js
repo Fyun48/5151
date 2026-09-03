@@ -21,8 +21,24 @@ export function getUserById(conn, userId) {
   return conn.prepare("SELECT * FROM users WHERE id = ?").get(id) || null;
 }
 
-export function listUsers(conn) {
-  return conn.prepare("SELECT id, email, role, plan, created_at, accepted_disclaimer_at, disclaimer_version FROM users ORDER BY id").all();
+export function isUserDeleted(row) {
+  return Boolean(String(row?.deleted_at || "").trim());
+}
+
+export function listUsers(conn, { includeDeleted = true, sort = "id", order = "asc", q = "" } = {}) {
+  const dir = String(order).toLowerCase() === "desc" ? "DESC" : "ASC";
+  const sortKey = String(sort) === "created_at" ? "created_at" : "id";
+  const needle = String(q || "").trim().toLowerCase();
+  const rows = conn.prepare(
+    `SELECT id, email, role, plan, created_at, accepted_disclaimer_at, disclaimer_version,
+            signup_count, deleted_at, deleted_by, deleted_reason, deleted_reason_code
+     FROM users ORDER BY ${sortKey} ${dir}, id ${dir}`,
+  ).all();
+  return rows.filter((row) => {
+    if (!includeDeleted && isUserDeleted(row)) return false;
+    if (!needle) return true;
+    return String(row.email || "").toLowerCase().includes(needle);
+  });
 }
 
 export function setUserPlan(conn, userId, plan) {
@@ -34,7 +50,9 @@ export function setUserPlan(conn, userId, plan) {
 }
 
 export function listUserIds(conn) {
-  return conn.prepare("SELECT id FROM users ORDER BY id").all().map((row) => Number(row.id));
+  return conn.prepare(
+    "SELECT id FROM users WHERE deleted_at IS NULL OR deleted_at = '' ORDER BY id",
+  ).all().map((row) => Number(row.id));
 }
 
 export function setUserPassword(conn, userId, password) {
@@ -72,6 +90,7 @@ export function publicUser(row) {
     email: row.email,
     role: row.role || "member",
     plan: row.plan || "free",
+    deleted: isUserDeleted(row),
   };
 }
 
@@ -88,22 +107,116 @@ export function registerUser(conn, { email, password, acceptDisclaimer } = {}) {
     throw err;
   }
   const pass = validatePassword(password);
-  if (findUserByEmail(conn, key)) {
-    const err = new Error("這個 Email 已經註冊過了");
-    err.status = 409;
-    throw err;
-  }
+  const existing = findUserByEmail(conn, key);
   const now = new Date().toISOString();
+  if (existing) {
+    if (!isUserDeleted(existing)) {
+      const err = new Error("這個 Email 已經註冊過了");
+      err.status = 409;
+      throw err;
+    }
+    const signups = Number(existing.signup_count) || 1;
+    if (signups >= 2) {
+      const err = new Error("這個 Email 已刪除兩次，不能再註冊");
+      err.status = 409;
+      throw err;
+    }
+    conn.prepare(
+      `UPDATE users
+       SET password_hash = ?, plan = 'free', accepted_disclaimer_at = ?, disclaimer_version = ?,
+           signup_count = ?, deleted_at = NULL, deleted_by = '', deleted_reason = '', deleted_reason_code = ''
+       WHERE id = ?`,
+    ).run(hashPassword(pass), now, DISCLAIMER_VERSION, signups + 1, existing.id);
+    return getUserById(conn, existing.id);
+  }
   const result = conn.prepare(
-    `INSERT INTO users(email, password_hash, role, plan, created_at, accepted_disclaimer_at, disclaimer_version)
-     VALUES (?, ?, 'member', 'free', ?, ?, ?)`,
+    `INSERT INTO users(email, password_hash, role, plan, created_at, accepted_disclaimer_at, disclaimer_version, signup_count)
+     VALUES (?, ?, 'member', 'free', ?, ?, ?, 1)`,
   ).run(key, hashPassword(pass), now, now, DISCLAIMER_VERSION);
   return getUserById(conn, Number(result.lastInsertRowid));
 }
 
+export const ADMIN_DELETE_REASONS = [
+  {
+    id: "multi_ip",
+    label: "不當使用：同時間多個不同 IP 使用",
+    text: "因偵測到同時間從多個不同 IP 使用帳號等不當使用，管理員已關閉此會員。",
+  },
+  {
+    id: "abuse",
+    label: "異常行為多次",
+    text: "因多次異常行為，管理員已關閉此會員。",
+  },
+  {
+    id: "tos",
+    label: "違反使用規範",
+    text: "因違反使用規範，管理員已關閉此會員。",
+  },
+  {
+    id: "custom",
+    label: "自訂內容",
+    text: "",
+  },
+];
+
+export function resolveDeleteReason(code, customText = "") {
+  const id = String(code || "").trim() || "custom";
+  const preset = ADMIN_DELETE_REASONS.find((row) => row.id === id) || ADMIN_DELETE_REASONS.find((row) => row.id === "custom");
+  const custom = String(customText || "").trim();
+  if (preset.id === "custom") {
+    return { code: "custom", label: preset.label, text: custom };
+  }
+  return { code: preset.id, label: preset.label, text: custom || preset.text };
+}
+
+export function deleteUser(conn, userId, { by = "self", reason = "", reasonCode = "" } = {}) {
+  const user = getUserById(conn, userId);
+  if (!user) {
+    const err = new Error("找不到這位會員");
+    err.status = 404;
+    throw err;
+  }
+  if (user.role === "admin") {
+    const err = new Error("不能刪除管理員帳號");
+    err.status = 400;
+    throw err;
+  }
+  if (isUserDeleted(user)) {
+    const err = new Error("這位會員已經刪除");
+    err.status = 400;
+    throw err;
+  }
+  const now = new Date().toISOString();
+  const who = by === "admin" ? "admin" : "self";
+  conn.prepare(
+    `UPDATE users
+     SET deleted_at = ?, deleted_by = ?, deleted_reason = ?, deleted_reason_code = ?
+     WHERE id = ?`,
+  ).run(now, who, String(reason || "").slice(0, 2000), String(reasonCode || "").slice(0, 40), user.id);
+  return getUserById(conn, user.id);
+}
+
+export function restoreUser(conn, userId) {
+  const user = getUserById(conn, userId);
+  if (!user) {
+    const err = new Error("找不到這位會員");
+    err.status = 404;
+    throw err;
+  }
+  if (!isUserDeleted(user)) {
+    const err = new Error("這位會員尚未刪除");
+    err.status = 400;
+    throw err;
+  }
+  conn.prepare(
+    "UPDATE users SET deleted_at = NULL, deleted_by = '', deleted_reason = '', deleted_reason_code = '' WHERE id = ?",
+  ).run(user.id);
+  return getUserById(conn, user.id);
+}
+
 export function verifyUserPassword(conn, email, password) {
   const user = findUserByEmail(conn, email);
-  if (!user) return null;
+  if (!user || isUserDeleted(user)) return null;
   if (user.password_hash && verifyPassword(password, user.password_hash)) return user;
   return null;
 }

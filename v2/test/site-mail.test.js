@@ -67,6 +67,12 @@ test("composeAccountMail fills welcome, password, and sponsor templates", () => 
   assert.match(sponsor.text, /已標成已贊助/);
   const empty = composeAccountMail("nope", defaultMailTemplates(), { email: "a@b.com" });
   assert.equal(empty.subject, "");
+  const deleted = composeAccountMail("account_deleted", defaultMailTemplates(), {
+    email: "a@b.com",
+    reason: "同時間多個不同 IP 使用",
+  });
+  assert.match(deleted.subject, /關閉/);
+  assert.match(deleted.text, /同時間多個不同 IP/);
 });
 
 test("forgot-password compose falls back if template drops the password", () => {

@@ -100,15 +100,15 @@
       vertical-align: baseline;
     }
     .fee-chip {
-      display: inline-block;
-      padding: 3px 10px;
-      border-radius: 6px;
-      background: linear-gradient(90deg, var(--hermes-deep) 0%, var(--hermes) 55%, var(--hermes-light) 100%);
-      color: #fff;
-      font-size: 12px;
-      font-weight: 700;
-      letter-spacing: .04em;
-      line-height: 1.45;
+      display: inline;
+      padding: 0;
+      border-radius: 0;
+      background: none;
+      color: var(--ink);
+      font-size: inherit;
+      font-weight: 800;
+      letter-spacing: .02em;
+      line-height: inherit;
       vertical-align: baseline;
     }
     .rent-price {
@@ -259,6 +259,7 @@
     .password-panel { width: min(420px, 100%); }
     html.no-session #logoutBtn,
     html.no-session #changePasswordBtn,
+    html.no-session #deleteAccountBtn,
     html.no-session #adminLink,
     html.no-session #resetLink,
     html.no-session #watchBtn { display: none !important; }
@@ -269,6 +270,7 @@
     body.role-guest #adminLink,
     body.role-guest #logoutBtn,
     body.role-guest #changePasswordBtn,
+    body.role-guest #deleteAccountBtn,
     body.role-guest #watchBtn,
     body.role-guest #sponsorBar { display: none !important; }
     body.role-guest .panel input,
@@ -331,46 +333,50 @@
     body.panel-collapsed .wrap { grid-template-columns: 1fr; }
     body.panel-collapsed #settingsPanel { display: none; }
     #expandPanelBtn {
-      display: none;
-      position: relative;
+      display: inline-flex;
+      position: fixed;
+      right: 18px;
+      bottom: 80px;
       width: 44px;
       height: 44px;
       padding: 0;
       border-radius: 50%;
-      z-index: 6;
+      z-index: 96;
       box-shadow: 0 8px 22px rgba(13, 165, 160, 0.28);
       align-items: center;
       justify-content: center;
+      font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: -0.12em;
     }
-    body.panel-collapsed #expandPanelBtn { display: inline-flex; }
     #expandPanelBtn .panel-fab-icon {
-      width: 18px;
-      height: 18px;
       display: block;
+      line-height: 1;
     }
     #expandPanelBtn .panel-fab-label {
       position: absolute;
-      top: calc(100% + 8px);
-      right: 0;
+      right: calc(100% + 8px);
+      top: 50%;
+      transform: translateY(-50%);
       padding: 6px 10px;
       border-radius: 10px;
       background: var(--ink);
       color: #fff;
+      font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
       font-size: 12px;
       font-weight: 700;
       letter-spacing: 0.04em;
       white-space: nowrap;
       opacity: 0;
       pointer-events: none;
-      transform: translateY(-4px);
-      transition: opacity 0.15s ease, transform 0.15s ease;
+      transition: opacity 0.15s ease;
       box-shadow: 0 8px 18px rgba(26, 43, 51, 0.18);
       z-index: 2;
     }
     #expandPanelBtn:hover .panel-fab-label,
     #expandPanelBtn:focus-visible .panel-fab-label {
       opacity: 1;
-      transform: translateY(0);
     }
     .panel-toolbar {
       display: flex;
@@ -1020,17 +1026,11 @@
         <a class="ghost" id="loginBtn" href="/login.html">登入</a>
         <a class="primary" id="registerBtn" href="/login.html?register=1">註冊</a>
         <button type="button" class="ghost" id="changePasswordBtn">變更密碼</button>
+        <button type="button" class="ghost" id="deleteAccountBtn">取消會員</button>
         <a class="ghost" id="logoutBtn" href="/logout">登出</a>
         <a class="ghost admin-only" id="adminLink" href="/admin.html">後台管理</a>
         <a class="ghost admin-only" id="resetLink" href="/reset.html" title="會刪光物件與設定；無法修復畫面卡住" style="align-items:center;text-decoration:none">清除資料</a>
         <button class="ghost" id="reloadBtn">重新整理</button>
-        <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
-          <svg class="panel-fab-icon" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M14.8 4.2 6.5 12l8.3 7.8" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="square" stroke-linejoin="miter" />
-            <path d="M18.6 4.2 10.3 12l8.3 7.8" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="square" stroke-linejoin="miter" />
-          </svg>
-          <span class="panel-fab-label">功能表展開</span>
-        </button>
         <button class="primary" id="watchBtn">立即檢查</button>
       </div>
     </div>
@@ -1423,7 +1423,31 @@
       </form>
     </div>
   </div>
+  <div id="deleteAccountDialog" class="hub-overlay" hidden>
+    <div class="hub-backdrop" data-close-delete-account></div>
+    <div class="hub-panel password-panel" role="dialog" aria-modal="true" aria-labelledby="deleteAccountTitle">
+      <div class="hub-head">
+        <div>
+          <h2 id="deleteAccountTitle">取消會員</h2>
+          <p class="hint" style="margin:6px 0 0">帳號資料會留下來，避免立刻被重新註冊。同一 Email 只允許再註冊一次；第二次刪除後就不能再用。</p>
+        </div>
+        <button type="button" class="ghost" id="deleteAccountClose">關閉</button>
+      </div>
+      <form id="deleteAccountForm">
+        <label for="deleteAccountReason">理由（可空白）</label>
+        <textarea id="deleteAccountReason" name="reason" maxlength="2000" placeholder="可寫為什麼要取消，也可留白"></textarea>
+        <div class="row" style="margin-top:14px">
+          <button type="submit" class="primary" id="deleteAccountSubmit">確認取消會員</button>
+        </div>
+        <p class="msg" id="deleteAccountMsg"></p>
+      </form>
+    </div>
+  </div>
   <footer class="site-footer">reversal play tech | 逆遊科技</footer>
+  <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
+    <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
+    <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
+  </button>
   <button type="button" class="primary" id="scrollTopBtn" title="回頂" aria-label="回頂">↑</button>
   <aside id="alertDock" aria-live="polite">
     <header>
@@ -1905,6 +1929,7 @@
       if ($("registerBtn")) $("registerBtn").hidden = !isGuest;
       if ($("logoutBtn")) $("logoutBtn").hidden = isGuest;
       if ($("changePasswordBtn")) $("changePasswordBtn").hidden = isGuest;
+      if ($("deleteAccountBtn")) $("deleteAccountBtn").hidden = isGuest;
       if ($("watchBtn")) $("watchBtn").hidden = isGuest;
       if ($("who")) $("who").classList.toggle("is-guest", isGuest);
       if (isGuest) {
@@ -1985,6 +2010,7 @@
       const box = $("guestTour");
       if (!box || !isGuest || guestTourSkipped()) return;
       document.body.classList.remove("panel-collapsed");
+      syncPanelFab();
       box.hidden = false;
       showGuestTourStep(0);
     }
@@ -3162,6 +3188,18 @@
         $("status").textContent = error.message || "載入失敗，請再按重新整理";
       });
     };
+    function syncPanelFab() {
+      const collapsed = document.body.classList.contains("panel-collapsed");
+      const icon = $("expandPanelIcon");
+      const label = $("expandPanelLabel");
+      const btn = $("expandPanelBtn");
+      if (icon) icon.textContent = collapsed ? "<|>" : ">|<";
+      if (label) label.textContent = collapsed ? "功能表展開" : "功能表收合";
+      if (btn) {
+        btn.title = collapsed ? "功能表展開" : "功能表收合";
+        btn.setAttribute("aria-label", collapsed ? "功能表展開" : "功能表收合");
+      }
+    }
     function setPanelCollapsed(on) {
       document.body.classList.toggle("panel-collapsed", Boolean(on));
       localStorage.setItem(PANEL_KEY, on ? "1" : "0");
@@ -3169,6 +3207,7 @@
       else if (localStorage.getItem(FILTER_COMPACT_KEY) === "1") {
         $("listHeadSticky")?.classList.add("filter-compact");
       }
+      syncPanelFab();
     }
     function setFilterCompact(on) {
       const sticky = $("listHeadSticky");
@@ -3182,7 +3221,8 @@
       localStorage.setItem(FILTER_COMPACT_KEY, on ? "1" : "0");
     }
     $("collapsePanelBtn").onclick = () => setPanelCollapsed(true);
-    $("expandPanelBtn").onclick = () => setPanelCollapsed(false);
+    $("expandPanelBtn").onclick = () => setPanelCollapsed(!document.body.classList.contains("panel-collapsed"));
+    syncPanelFab();
     $("filterMiniBtn").onclick = () => setFilterCompact(true);
     $("filterRestoreBtn").onclick = () => setFilterCompact(false);
     $("showMrt")?.addEventListener("change", () => {
@@ -3220,6 +3260,51 @@
     $("changePasswordBtn")?.addEventListener("click", openPasswordDialog);
     $("passwordDialogClose")?.addEventListener("click", closePasswordDialog);
     document.querySelector("[data-close-password]")?.addEventListener("click", closePasswordDialog);
+    function openDeleteAccountDialog() {
+      const box = $("deleteAccountDialog");
+      if (!box || isGuest) return;
+      box.hidden = false;
+      if ($("deleteAccountForm")) $("deleteAccountForm").reset();
+      if ($("deleteAccountMsg")) {
+        $("deleteAccountMsg").textContent = "";
+        $("deleteAccountMsg").className = "msg";
+      }
+      $("deleteAccountReason")?.focus();
+    }
+    function closeDeleteAccountDialog() {
+      const box = $("deleteAccountDialog");
+      if (box) box.hidden = true;
+    }
+    $("deleteAccountBtn")?.addEventListener("click", openDeleteAccountDialog);
+    $("deleteAccountClose")?.addEventListener("click", closeDeleteAccountDialog);
+    document.querySelector("[data-close-delete-account]")?.addEventListener("click", closeDeleteAccountDialog);
+    $("deleteAccountForm")?.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const msg = $("deleteAccountMsg");
+      const btn = $("deleteAccountSubmit");
+      if (btn) btn.disabled = true;
+      if (msg) {
+        msg.textContent = "處理中…";
+        msg.className = "msg";
+      }
+      try {
+        const res = await fetch("/api/account/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reason: $("deleteAccountReason")?.value || "" }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "取消失敗");
+        location.replace("/login.html?logout=1");
+      } catch (error) {
+        if (msg) {
+          msg.textContent = error.message || "取消失敗";
+          msg.className = "msg err";
+        }
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    });
     $("showChangePw")?.addEventListener("change", () => {
       const type = $("showChangePw").checked ? "text" : "password";
       for (const id of ["currentPassword", "newPassword", "newPassword2"]) {

@@ -305,7 +305,10 @@ test("listing chips use Hermes orange and do not escape chip HTML", () => {
   assert.match(routeCss, /background:\s*none/);
   assert.doesNotMatch(routeCss, /linear-gradient/);
   const feeCss = html.slice(html.indexOf(".fee-chip"), html.indexOf(".rent-price"));
-  assert.match(feeCss, /linear-gradient\(90deg, var\(--hermes-deep\)/);
+  assert.match(feeCss, /background:\s*none/);
+  assert.match(feeCss, /font-weight:\s*800/);
+  assert.match(feeCss, /color:\s*var\(--ink\)/);
+  assert.doesNotMatch(feeCss, /linear-gradient/);
   const rentCss = html.slice(html.indexOf(".rent-price"), html.indexOf(".guest-tour"));
   assert.match(rentCss, /font-weight:\s*700/);
   assert.match(rentCss, /color:\s*var\(--ink\)/);
@@ -394,4 +397,17 @@ test("only acefengyun admin gets a red frame on 社子島 listings", () => {
   assert.equal(isAcefengyunAdmin(true, "acefengyun@gmail.com"), true);
   assert.equal(isAcefengyunAdmin(true, "other-admin@example.com"), false);
   assert.equal(isAcefengyunAdmin(false, "acefengyun@gmail.com"), false);
+});
+
+test("panel toggle sits above scroll-top and uses expand/collapse glyphs", () => {
+  const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
+  const expandIdx = html.indexOf('id="expandPanelBtn"');
+  const topIdx = html.indexOf('id="scrollTopBtn"');
+  assert.ok(expandIdx > 0 && topIdx > expandIdx);
+  assert.match(html, /bottom:\s*80px/);
+  assert.match(html, /#scrollTopBtn \{[\s\S]*bottom:\s*24px/);
+  assert.match(html, /icon\.textContent = collapsed \? "<|>" : ">|<"/);
+  assert.match(html, /id="deleteAccountBtn"/);
+  assert.match(html, /\/api\/account\/delete/);
+  assert.match(html, /理由（可空白）/);
 });

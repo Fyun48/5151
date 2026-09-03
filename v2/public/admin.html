@@ -127,21 +127,44 @@
   <div class="wrap">
     <section class="card">
       <h2>會員</h2>
-      <p class="hint">一般會員預設每 8 分鐘檢查；已贊助為 5 分鐘。這裡可改方案，也可手動指定間隔（分鐘）。管理員自己不受最短間隔限制。</p>
+      <p class="hint">一般會員預設每 8 分鐘檢查；已贊助為 5 分鐘。這裡可改方案，也可手動指定間隔（分鐘）。管理員自己不受最短間隔限制。刪除會保留帳號列，避免立刻重註冊；同一 Email 最多再註冊一次。</p>
+      <div class="row" style="margin-bottom:10px">
+        <input id="memberQuery" placeholder="搜尋 Email" style="max-width:260px" />
+        <select id="memberSort" style="max-width:180px">
+          <option value="created_at:desc">註冊時間（新→舊）</option>
+          <option value="created_at:asc">註冊時間（舊→新）</option>
+          <option value="id:asc">編號（小→大）</option>
+        </select>
+        <button type="button" class="ghost" id="memberSearch">查詢</button>
+      </div>
       <p class="msg" id="memberMsg">載入中…</p>
       <div style="overflow:auto">
         <table>
           <thead>
             <tr>
               <th>Email</th>
+              <th>註冊時間</th>
               <th>身份</th>
               <th>方案</th>
               <th>間隔（分）</th>
+              <th>狀態</th>
               <th></th>
             </tr>
           </thead>
           <tbody id="memberRows"></tbody>
         </table>
+      </div>
+      <div id="deleteMemberBox" class="card" style="margin:16px 0 0;padding:14px;box-shadow:none" hidden>
+        <h3 style="margin:0 0 8px;font-size:16px">確認刪除會員</h3>
+        <p class="hint" id="deleteMemberHint"></p>
+        <label>刪除信件內容</label>
+        <select id="deleteReasonCode"></select>
+        <label>信件說明（可改；自訂內容請寫在這裡）</label>
+        <textarea id="deleteReasonText" style="min-height:90px"></textarea>
+        <div class="row" style="margin-top:10px">
+          <button type="button" class="primary" id="deleteMemberConfirm">確認刪除並寄信</button>
+          <button type="button" class="ghost" id="deleteMemberCancel">取消</button>
+        </div>
       </div>
     </section>
     <section class="card">
@@ -249,6 +272,10 @@
         <input id="sponsorMailSubject" />
         <label>贊助通知本文</label>
         <textarea id="sponsorMailText"></textarea>
+        <label>刪除會員主旨</label>
+        <input id="deletedSubject" />
+        <label>刪除會員本文（可用 <code>{{reason}}</code>）</label>
+        <textarea id="deletedText"></textarea>
         <label>物件通知預設主旨（會員未自訂時）</label>
         <input id="notifySubject" />
         <label>物件通知預設本文（會員未自訂時；寄出走會員 SMTP）</label>
@@ -265,6 +292,8 @@
     let meEmail = "";
     let sponsorCatalog = [];
     let sponsorExtras = [];
+    let deleteReasons = [];
+    let pendingDeleteId = "";
 
     function setMsg(id, text, ok) {
       const el = $(id);
@@ -289,19 +318,39 @@
       return role === "admin" ? "管理員" : "會員";
     }
 
+    function formatTime(value) {
+      if (!value) return "—";
+      const d = new Date(value);
+      return Number.isNaN(d.getTime()) ? escapeHtml(value) : d.toLocaleString("zh-TW");
+    }
+
+    function memberStatus(m) {
+      if (m.deleted) {
+        const chance = Number(m.signup_count) >= 2 ? "已用完二次註冊" : "可再註冊一次";
+        return `已刪除 · ${chance}`;
+      }
+      return Number(m.signup_count) > 1 ? "使用中（第二次）" : "使用中";
+    }
+
     function renderMembers(members) {
       $("memberRows").innerHTML = (members || []).map((m) => `
-        <tr data-id="${m.id}" data-role="${escapeHtml(m.role)}">
+        <tr data-id="${m.id}" data-role="${escapeHtml(m.role)}" data-email="${escapeHtml(m.email)}">
           <td>${escapeHtml(m.email)}</td>
+          <td>${formatTime(m.created_at)}</td>
           <td>${roleLabel(m.role)}</td>
           <td>
-            <select data-plan ${m.role === "admin" ? "disabled" : ""}>
+            <select data-plan ${m.role === "admin" || m.deleted ? "disabled" : ""}>
               <option value="free" ${m.plan !== "sponsor" ? "selected" : ""}>一般</option>
               <option value="sponsor" ${m.plan === "sponsor" ? "selected" : ""}>已贊助</option>
             </select>
           </td>
-          <td><input class="member-interval" data-interval type="number" min="1" max="120" value="${Number(m.intervalMinutes) || 8}" /></td>
-          <td><button type="button" class="primary" data-save>儲存</button></td>
+          <td><input class="member-interval" data-interval type="number" min="1" max="120" value="${Number(m.intervalMinutes) || 8}" ${m.deleted ? "disabled" : ""} /></td>
+          <td>${escapeHtml(memberStatus(m))}</td>
+          <td>
+            ${m.role === "admin" ? "" : m.deleted
+              ? `<button type="button" class="ghost" data-restore>取消刪除</button>`
+              : `<button type="button" class="primary" data-save>儲存</button> <button type="button" class="ghost" data-delete>刪除</button>`}
+          </td>
         </tr>
       `).join("");
       const blob = JSON.stringify(members || []);
@@ -321,11 +370,18 @@
     }
 
     async function loadMembers() {
-      const res = await fetch("/api/admin/members", { cache: "no-store" });
+      const [sort, order] = String($("memberSort").value || "created_at:desc").split(":");
+      const q = $("memberQuery").value.trim();
+      const params = new URLSearchParams({ sort, order, q });
+      const res = await fetch(`/api/admin/members?${params}`, { cache: "no-store" });
       const data = await readApi(res);
       if (res.status === 401) { location.replace("/login.html"); return; }
       if (res.status === 403) { location.replace("/"); return; }
       if (!res.ok) throw new Error(data.error || "載入會員失敗");
+      deleteReasons = data.deleteReasons || [];
+      if ($("deleteReasonCode") && !$("deleteReasonCode").options.length) {
+        $("deleteReasonCode").innerHTML = deleteReasons.map((row) => `<option value="${escapeHtml(row.id)}">${escapeHtml(row.label)}</option>`).join("");
+      }
       renderMembers(data.members || []);
     }
 
@@ -348,6 +404,8 @@
       $("passwordText").value = tpl.password_changed?.text || "";
       $("sponsorMailSubject").value = tpl.sponsor_thanks?.subject || "";
       $("sponsorMailText").value = tpl.sponsor_thanks?.text || "";
+      $("deletedSubject").value = tpl.account_deleted?.subject || "";
+      $("deletedText").value = tpl.account_deleted?.text || "";
       $("notifySubject").value = tpl.listing_notify?.subject || "";
       $("notifyText").value = tpl.listing_notify?.text || "";
     }
@@ -421,12 +479,83 @@
       if (interval) interval.value = plan.value === "sponsor" ? 5 : 8;
     });
 
+    $("memberSearch").onclick = () => loadMembers().catch((error) => setMsg("memberMsg", error.message));
+    $("memberSort").onchange = () => loadMembers().catch((error) => setMsg("memberMsg", error.message));
+    $("memberQuery").addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        loadMembers().catch((error) => setMsg("memberMsg", error.message));
+      }
+    });
+
+    $("deleteReasonCode").onchange = () => {
+      const row = deleteReasons.find((item) => item.id === $("deleteReasonCode").value);
+      $("deleteReasonText").value = row?.text || "";
+    };
+    $("deleteMemberCancel").onclick = () => {
+      pendingDeleteId = "";
+      $("deleteMemberBox").hidden = true;
+    };
+    $("deleteMemberConfirm").onclick = async () => {
+      if (!pendingDeleteId) return;
+      $("deleteMemberConfirm").disabled = true;
+      setMsg("memberMsg", "刪除中…");
+      try {
+        const res = await fetch(`/api/admin/members/${pendingDeleteId}/delete`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            reasonCode: $("deleteReasonCode").value,
+            reasonText: $("deleteReasonText").value,
+          }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "刪除失敗");
+        pendingDeleteId = "";
+        $("deleteMemberBox").hidden = true;
+        await loadMembers();
+        setMsg("memberMsg", "已刪除並寄信", true);
+      } catch (error) {
+        setMsg("memberMsg", error.message);
+      } finally {
+        $("deleteMemberConfirm").disabled = false;
+      }
+    };
+
     $("memberRows").addEventListener("click", async (ev) => {
-      const btn = ev.target.closest("[data-save]");
-      if (!btn) return;
-      const tr = btn.closest("tr");
+      const tr = ev.target.closest("tr");
       const id = tr?.dataset.id;
       if (!id) return;
+      const del = ev.target.closest("[data-delete]");
+      if (del) {
+        pendingDeleteId = id;
+        $("deleteMemberHint").textContent = `將刪除 ${tr.dataset.email || ""}。確認後會寄信給會員，帳號列會留下來。`;
+        $("deleteMemberBox").hidden = false;
+        const first = deleteReasons[0];
+        $("deleteReasonCode").value = first?.id || "multi_ip";
+        $("deleteReasonText").value = first?.text || "";
+        $("deleteMemberBox").scrollIntoView({ behavior: "smooth", block: "nearest" });
+        return;
+      }
+      const restore = ev.target.closest("[data-restore]");
+      if (restore) {
+        restore.disabled = true;
+        setMsg("memberMsg", "還原中…");
+        try {
+          const res = await fetch(`/api/admin/members/${id}/restore`, { method: "POST" });
+          const data = await readApi(res);
+          if (!res.ok) throw new Error(data.error || "還原失敗");
+          await loadMembers();
+          setMsg("memberMsg", "已取消刪除", true);
+        } catch (error) {
+          setMsg("memberMsg", error.message);
+        } finally {
+          restore.disabled = false;
+        }
+        return;
+      }
+      const btn = ev.target.closest("[data-save]");
+      if (!btn) return;
       btn.disabled = true;
       setMsg("memberMsg", "儲存中…");
       try {
@@ -513,6 +642,7 @@
               forgot_password: { subject: $("forgotSubject").value, text: $("forgotText").value },
               password_changed: { subject: $("passwordSubject").value, text: $("passwordText").value },
               sponsor_thanks: { subject: $("sponsorMailSubject").value, text: $("sponsorMailText").value },
+              account_deleted: { subject: $("deletedSubject").value, text: $("deletedText").value },
               listing_notify: { subject: $("notifySubject").value, text: $("notifyText").value },
             },
           }),

@@ -46,14 +46,19 @@ import {
   setUserListingFlags,
 } from "./personalFlags.js";
 import {
+  ADMIN_DELETE_REASONS,
   bootstrapAdminUser as bootstrapAdminUserOn,
   changeUserPassword as changeUserPasswordOn,
+  deleteUser as deleteUserOn,
   findUserByEmail as findUserByEmailOn,
   getUserById as getUserByIdOn,
+  isUserDeleted,
   listUserIds as listUserIdsOn,
   listUsers as listUsersOn,
   publicUser,
   registerUser as registerUserOn,
+  resolveDeleteReason,
+  restoreUser as restoreUserOn,
   setUserPassword as setUserPasswordOn,
   setUserPlan as setUserPlanOn,
   verifyUserPassword as verifyUserPasswordOn,
@@ -417,13 +422,40 @@ function publicAdminMember(user) {
     plan: user.plan || "free",
     created_at: user.created_at || "",
     accepted_disclaimer_at: user.accepted_disclaimer_at || "",
+    signup_count: Number(user.signup_count) || 1,
+    deleted: isUserDeleted(user),
+    deleted_at: user.deleted_at || "",
+    deleted_by: user.deleted_by || "",
+    deleted_reason: user.deleted_reason || "",
     intervalMinutes: Number(settings.intervalMinutes) || planIntervalMinutes(user.plan),
     intervalAdminSet: settings.intervalAdminSet === true,
   };
 }
 
-export function listAdminMembers() {
-  return listUsersOn(db).map((user) => publicAdminMember(user));
+export function listAdminMembers(query = {}) {
+  return listUsersOn(db, query).map((user) => publicAdminMember(user));
+}
+
+export function adminDeleteMember(userId, { reasonCode, reasonText } = {}) {
+  const resolved = resolveDeleteReason(reasonCode, reasonText);
+  const user = deleteUserOn(db, userId, {
+    by: "admin",
+    reason: resolved.text,
+    reasonCode: resolved.code,
+  });
+  return { member: publicAdminMember(user), reason: resolved };
+}
+
+export function adminRestoreMember(userId) {
+  return publicAdminMember(restoreUserOn(db, userId));
+}
+
+export function deleteOwnAccount(userId, reason = "") {
+  return publicAdminMember(deleteUserOn(db, userId, {
+    by: "self",
+    reason: String(reason || "").trim().slice(0, 2000),
+    reasonCode: "self",
+  }));
 }
 
 export function adminPatchMember(userId, patch = {}) {
@@ -704,6 +736,8 @@ export function publicSponsorSettings(user = {}) {
 export function listUserIds() {
   return listUserIdsOn(db);
 }
+
+export { ADMIN_DELETE_REASONS };
 
 export function registerUser(input) {
   return registerUserOn(db, input);

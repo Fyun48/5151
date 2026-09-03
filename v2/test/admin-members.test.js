@@ -66,6 +66,12 @@ test("admin page lists members, smtp, and templates without password fields", ()
   assert.match(html, /不會用這裡的帳號代寄/);
   assert.match(html, /\{\{tempPassword\}\}/);
   assert.match(html, /看不到會員密碼/);
+  assert.match(html, /memberSort/);
+  assert.match(html, /註冊時間/);
+  assert.match(html, /確認刪除並寄信/);
+  assert.match(html, /取消刪除/);
+  assert.match(html, /\/api\/admin\/members\/\$\{pendingDeleteId\}\/delete/);
+  assert.match(html, /account_deleted/);
   assert.doesNotMatch(html, /password_hash/);
   const blocks = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)];
   for (const block of blocks) {
@@ -88,6 +94,8 @@ test("admin API routes exist and members payload is guarded", () => {
   assert.match(src, /會員列表不得含密碼/);
   assert.match(src, /requireAdminApi/);
   assert.match(src, /queueSystemMail\("welcome"/);
+  assert.match(src, /queueSystemMail\("account_deleted"/);
+  assert.match(src, /app\.post\("\/api\/account\/delete"/);
   assert.match(src, /app\.post\("\/api\/change-password"/);
 });
 

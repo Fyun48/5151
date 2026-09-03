@@ -52,7 +52,7 @@ export async function requestTempPassword(conn, email, opts = {}) {
 
   const user = findUser(key);
   const result = { ok: true, message: forgotPasswordMessage() };
-  if (!user?.id) {
+  if (!user?.id || String(user.deleted_at || "").trim()) {
     attempts.set(key, now);
     return result;
   }

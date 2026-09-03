@@ -76,6 +76,20 @@ export function defaultMailTemplates() {
 ——${APP_NAME}
 `,
     },
+    account_deleted: {
+      subject: `${APP_NAME}：會員帳號已關閉`,
+      text: `你好，
+
+帳號 {{email}} 已被關閉。
+
+原因：
+{{reason}}
+
+此信箱資料會保留，避免被立刻重新註冊。同一信箱最多可再註冊一次；第二次刪除後就不能再用這個 Email 註冊。
+
+——${APP_NAME}
+`,
+    },
   };
 }
 
@@ -217,7 +231,7 @@ export function mergeEnvMap(existing, updates) {
   return next;
 }
 
-export const ACCOUNT_MAIL_KINDS = ["welcome", "password_changed", "sponsor_thanks"];
+export const ACCOUNT_MAIL_KINDS = ["welcome", "password_changed", "sponsor_thanks", "account_deleted"];
 
 export function composeAccountMail(kind, templates, vars = {}) {
   const key = String(kind || "").trim();

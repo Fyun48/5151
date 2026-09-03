@@ -9,7 +9,12 @@ export function ensurePersonalSchema(db) {
       plan TEXT NOT NULL DEFAULT 'free',
       created_at TEXT NOT NULL,
       accepted_disclaimer_at TEXT,
-      disclaimer_version TEXT NOT NULL DEFAULT ''
+      disclaimer_version TEXT NOT NULL DEFAULT '',
+      signup_count INTEGER NOT NULL DEFAULT 1,
+      deleted_at TEXT,
+      deleted_by TEXT NOT NULL DEFAULT '',
+      deleted_reason TEXT NOT NULL DEFAULT '',
+      deleted_reason_code TEXT NOT NULL DEFAULT ''
     );
 
     CREATE TABLE IF NOT EXISTS user_settings (
@@ -66,6 +71,11 @@ export function ensurePersonalSchema(db) {
   for (const sql of [
     "ALTER TABLE users ADD COLUMN accepted_disclaimer_at TEXT",
     "ALTER TABLE users ADD COLUMN disclaimer_version TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN signup_count INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE users ADD COLUMN deleted_at TEXT",
+    "ALTER TABLE users ADD COLUMN deleted_by TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN deleted_reason TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN deleted_reason_code TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE user_events ADD COLUMN source_key TEXT NOT NULL DEFAULT ''",
   ]) {
     try {

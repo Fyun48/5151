@@ -72,6 +72,7 @@ test("server register, change-password, and sponsor patch queue system mail", ()
   assert.match(src, /queueSystemMail\("welcome"/);
   assert.match(src, /queueSystemMail\("password_changed"/);
   assert.match(src, /queueSystemMail\("sponsor_thanks"/);
+  assert.match(src, /queueSystemMail\("account_deleted"/);
   assert.match(src, /app\.post\("\/api\/change-password"/);
   const watcher = readFileSync(path.join(dir, "../src/watcher.js"), "utf8");
   assert.match(watcher, /smtp: mailBundle\.smtp \|\| null/);
