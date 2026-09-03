@@ -45,6 +45,7 @@ import { fetchHbCoveringListings } from "./hbhousing.js";
 import { fetchSinyiCoveringListings } from "./sinyi.js";
 import { fetchHpCoveringListings } from "./houseprice.js";
 import { fetchDdCoveringListings } from "./ddroom.js";
+import { fetchHfCoveringListings } from "./housefun.js";
 import { commuteWorkJobs, hasWorkPoint, needsListingGeo, normalizeCommuteMode } from "./geo.js";
 import { isTrustedGeoSource, listingCommunityId } from "./location.js";
 import { decideNotifyDelivery } from "./floors.js";
@@ -394,7 +395,8 @@ export async function runWatch(options = {}) {
   const wantSinyi = isCrawlSourceEnabled("sinyi");
   const wantHp = isCrawlSourceEnabled("houseprice");
   const wantDd = isCrawlSourceEnabled("ddroom");
-  if (!want591 && !wantHb && !wantSinyi && !wantHp && !wantDd) {
+  const wantHf = isCrawlSourceEnabled("housefun");
+  if (!want591 && !wantHb && !wantSinyi && !wantHp && !wantDd && !wantHf) {
     return {
       checked_at: nowIso(),
       searches: [],
@@ -481,6 +483,13 @@ export async function runWatch(options = {}) {
       ...fetchOptions,
       pages: hbPages,
       getJson: options.ddGetJson,
+    }));
+  }
+  if (wantHf) {
+    await collectExternal("好房網", () => fetchHfCoveringListings(jobs, {
+      ...fetchOptions,
+      pages: hbPages,
+      postForm: options.hfPostForm,
     }));
   }
 
