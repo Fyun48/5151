@@ -47,6 +47,21 @@ test("display filters hide suites and 1F for notify/list preferences", async () 
   assert.equal(passesDisplayFilters(suite, prefs, { skipWholeFloor: true }), true);
 });
 
+test("excludeLowFloors is 1F and basement only, not 整棟 or 頂加", async () => {
+  const { isAtOrBelowFirstFloor, passesDisplayFilters } = await import("../src/floors.js");
+  assert.equal(isAtOrBelowFirstFloor("1F/5F"), true);
+  assert.equal(isAtOrBelowFirstFloor("一樓/4樓"), true);
+  assert.equal(isAtOrBelowFirstFloor("B1/5F"), true);
+  assert.equal(isAtOrBelowFirstFloor("地下/5F"), true);
+  assert.equal(isAtOrBelowFirstFloor("3F/5F"), false);
+  assert.equal(isAtOrBelowFirstFloor("整棟"), false);
+  assert.equal(isAtOrBelowFirstFloor("頂樓加蓋"), false);
+  const prefs = { wholeFloorOnly: false, excludeLowFloors: true };
+  assert.equal(passesDisplayFilters({ kind_name: "整層住家", floor_name: "頂樓加蓋" }, prefs), true);
+  assert.equal(passesDisplayFilters({ kind_name: "整層住家", floor_name: "整棟" }, prefs), true);
+  assert.equal(passesDisplayFilters({ kind_name: "整層住家", floor_name: "B2/4F" }, prefs), false);
+});
+
 test("confirms offline after 7 days from first not-found", () => {
   const now = new Date("2026-08-31T00:00:00.000Z");
   const listing = {

@@ -2041,7 +2041,7 @@
       <div class="checks">
         <label><input type="checkbox" id="excludeRooftop" checked /> 排除頂樓加蓋</label>
         <label><input type="checkbox" id="wholeFloorOnly" checked /> 只看整層住家</label>
-        <label><input type="checkbox" id="excludeLowFloors" checked /> 排除 1F 及以下（含地下室、整棟、頂加）</label>
+        <label><input type="checkbox" id="excludeLowFloors" checked /> 排除 1F 及地下室</label>
       </div>
       <p class="hint">這三項會寫進設定檔。列表與新物件通知都用同一套；按儲存後才套用。</p>
       <div class="admin-only">
@@ -2495,7 +2495,7 @@
         <p class="msg" id="memberMailMsg"></p>
       </section>
       <section class="hub-pane" data-hub-pane="events" hidden>
-        <p class="hint">全新物件只通知符合目前設定檔的篩選（例如只看整層、排除 1F、行政區、租金）。頻道勾選也存在同一個設定檔。</p>
+        <p class="hint">全新物件只通知符合目前設定檔的篩選（例如只看整層、排除 1F 及地下室、行政區、租金）。頻道勾選也存在同一個設定檔。</p>
         <div class="notify-matrix-wrap">
         <table class="notify-matrix" id="notifyMatrix">
           <thead>
@@ -2625,7 +2625,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.29</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.30</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -3022,10 +3022,10 @@
       const text = String(floorName || "").replace(/\s+/g, "");
       if (!text) return false;
       const main = text.split("/")[0];
-      if (/整棟|地下|騎樓|半地下|地面|頂樓加蓋/i.test(main) || /^B\d/i.test(main) || /^B$/i.test(main)) {
+      if (/地下|半地下/i.test(main) || /^B\d/i.test(main) || /^B$/i.test(main)) {
         return true;
       }
-      if (/一樓|1樓/.test(main)) return true;
+      if (/一樓|1樓|騎樓|地面/.test(main)) return true;
       const range = main.match(/(\d+)\s*(?:F|樓)?\s*[~～\-至到]/i);
       if (range) return Number(range[1]) <= 1;
       const numbered = main.match(/(\d+)\s*(?:F|樓)/i);
