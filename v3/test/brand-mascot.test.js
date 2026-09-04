@@ -17,9 +17,10 @@ const publicDir = path.join(dir, "../public");
 test("bundled mark exists without Pawprints filename and English name is JibbyRentH", () => {
   assert.equal(APP_NAME, "吉比租房物件追蹤");
   assert.equal(APP_NAME_EN, "JibbyRentH");
-  assert.equal(APP_VERSION, "3.35");
+  assert.equal(APP_VERSION, "3.36");
   assert.equal(existsSync(path.join(publicDir, "brand/mark.png")), true);
   assert.equal(existsSync(path.join(publicDir, "brand/confused.webm")), true);
+  assert.equal(existsSync(path.join(publicDir, "brand/walk.webp")), true);
   assert.equal(existsSync(path.join(publicDir, "icons/icon-192.png")), true);
   const html = readFileSync(path.join(publicDir, "index.html"), "utf8");
   const login = readFileSync(path.join(publicDir, "login.html"), "utf8");
@@ -47,4 +48,14 @@ test("brand URLs stay on this site and Pawprints cannot be the English name", ()
   assert.equal(next.markUrl, defaultBrandMascot().markUrl);
   assert.equal(next.clips.confused.url, defaultBrandMascot().clips.confused.url);
   assert.match(next.clips.confused.url, /confused\.webm/);
+  assert.match(defaultBrandMascot().clips.welcome.url, /walk\.webp/);
+  const tokens = readFileSync(path.join(publicDir, "tokens.css"), "utf8");
+  assert.match(tokens, /width: min\(75vw, 75vh\)/);
+  assert.match(tokens, /max-height: 75vh/);
+  assert.match(tokens, /\.jibby-mascot-media img,[\s\S]*background: transparent/);
+  assert.doesNotMatch(tokens, /background: #111/);
+  const admin = readFileSync(path.join(publicDir, "admin.html"), "utf8");
+  assert.match(admin, /透明底/);
+  assert.match(admin, /75% 畫面/);
+  assert.doesNotMatch(admin, /background: var\(--ink\)/);
 });
