@@ -81,6 +81,21 @@ test("watch draft note ignores IME composition and list redraw", () => {
   assert.match(focusout, /watchDraftCommit/);
 });
 
+test("listing cards support left swipe watch and right swipe hide", () => {
+  const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
+  assert.match(html, /class="item-swipe-wrap"/);
+  assert.match(html, /function bindCardSwipe/);
+  assert.match(html, /beginWatchDraft\(id\)/);
+  assert.match(html, /hideListing\(id, card\)/);
+  assert.match(html, /dx < -thresh/);
+  assert.match(html, /dx > thresh/);
+  assert.match(html, /class="ghost btn-watch"/);
+  assert.match(html, /watch-hide-stack/);
+  const start = html.indexOf("@media (max-width: 880px)");
+  const mobile = html.slice(start, start + 12000);
+  assert.match(mobile, /\.item \.hide-box \{\s*display: none;/);
+});
+
 test("unwatch flies to the all chip before reloading", () => {
   const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
   const unwatch = html.slice(html.indexOf("if (watched)"), html.indexOf("if (!viewed)"));
@@ -267,13 +282,13 @@ test("product name is 吉比租房物件追蹤 without v2 開發版 copy", () =>
   assert.equal(html.includes("v2 開發版"), false);
   assert.equal(html.includes("v3 開發版"), false);
   assert.equal(html.includes("與線上版分開的資料庫"), false);
-  assert.match(html, /ver\. 3\.22/);
+  assert.match(html, /ver\. 3\.23/);
   assert.doesNotMatch(html, /<h1>[^<]*v3/i);
   assert.match(login, /<h1>吉比租房物件追蹤<\/h1>/);
   assert.equal(login.includes("v2 開發版"), false);
   assert.equal(login.includes("v3 開發版"), false);
   assert.equal(login.includes("資料與線上版分開"), false);
-  assert.match(login, /ver\. 3\.22/);
+  assert.match(login, /ver\. 3\.23/);
 });
 
 test("MRT toggle and guest tour are in the page", () => {

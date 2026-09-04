@@ -569,6 +569,34 @@
       padding: 8px 0 0;
     }
     .bulk-bar.on { display: flex; }
+    .item-swipe-wrap {
+      position: relative;
+      overflow: hidden;
+      border-radius: var(--radius, 8px);
+    }
+    .swipe-rail {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      align-items: center;
+      padding: 0 16px;
+      pointer-events: none;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .swipe-hide-hint {
+      justify-self: start;
+      color: var(--rose-deep);
+      opacity: 0;
+    }
+    .swipe-watch-hint {
+      justify-self: end;
+      color: var(--accent-deep);
+      opacity: 0;
+    }
+    .item-swipe-wrap.reveal-hide .swipe-hide-hint,
+    .item-swipe-wrap.reveal-watch .swipe-watch-hint { opacity: 1; }
     .item {
       display: grid;
       grid-template-columns: 28px 112px minmax(0, 1fr) 120px 148px;
@@ -578,7 +606,12 @@
       border-radius: var(--radius, 8px);
       background: var(--paper);
       align-items: start;
+      touch-action: pan-y;
+      transition: transform 0.2s ease;
+      position: relative;
+      z-index: 1;
     }
+    .item.swiping { transition: none; }
     .item:has(.item-cover.empty) {
       grid-template-columns: 28px minmax(0, 1fr) 120px 148px;
     }
@@ -1309,8 +1342,39 @@
     .drawing .leaflet-container { cursor: crosshair; }
     .actions { display: flex; flex-direction: column; gap: 8px; min-width: 132px; }
     .actions button { min-height: 44px; }
-    .hide-box { font-size: 13px; color: var(--muted); display: flex; gap: 6px; align-items: center; cursor: pointer; }
-    .list { display: grid; gap: 14px; padding: 14px 16px 16px; }
+    .watch-hide-stack {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 8px;
+      width: 100%;
+    }
+    .actions .btn-watch {
+      min-height: 30px;
+      padding: 4px 10px;
+      font-size: 12px;
+      font-weight: 700;
+      border: 1px solid var(--line);
+      border-bottom-color: color-mix(in srgb, var(--ink) 22%, var(--line));
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72), 0 2px 5px rgba(28, 25, 23, 0.1);
+      background: linear-gradient(180deg, color-mix(in srgb, var(--paper) 88%, #fff), var(--paper));
+    }
+    .actions .btn-watch.primary {
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28), 0 2px 6px rgba(28, 25, 23, 0.16);
+    }
+    .hide-box {
+      font-size: 12px;
+      color: var(--muted);
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      min-height: 30px;
+      margin: 0;
+    }
+    .hide-box input { width: 16px; height: 16px; accent-color: var(--accent); }
+    .list { display: grid; gap: 14px; padding: 14px 16px 16px; overflow-x: hidden; }
     .empty { padding: 24px 16px; color: var(--muted); text-align: center; font-size: var(--text-md); line-height: 1.6; }
     #bootFail {
       display: none;
@@ -1513,9 +1577,13 @@
         min-height: 44px;
         margin: 0;
       }
+      .item .actions .btn-watch {
+        flex: 0 0 auto;
+        min-height: 30px;
+        max-width: 132px;
+      }
       .item .hide-box {
-        width: 100%;
-        min-height: 36px;
+        display: none;
       }
       .list { padding: 10px 10px 28px; gap: 10px; }
       .guest-toast {
@@ -2340,7 +2408,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver">ver. 3.22</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver">ver. 3.23</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -3726,6 +3794,11 @@
         const id = String(item.post_id);
         const on = selected.has(id);
         return `
+        <div class="item-swipe-wrap">
+          <div class="swipe-rail" aria-hidden="true">
+            <span class="swipe-hide-hint">不再顯示</span>
+            <span class="swipe-watch-hint">特別關注</span>
+          </div>
         <article class="item ${on ? "picked" : ""} ${item.offline ? "offline" : ""} ${isAcefengyunAdmin() && isShezidaoAddress(item) ? "shezidao" : ""}" data-card="${id}">
           <input class="pick" type="checkbox" data-pick="${id}" ${on ? "checked" : ""} />
           <a class="item-cover${item.cover ? "" : " empty"}" ${listingLinkAttrs(item)}>
@@ -3756,19 +3829,22 @@
           </div>
           ${contactBlock(item)}
           <div class="actions">
+            <div class="watch-hide-stack">
             ${item.watched
-              ? `<button class="primary" data-watched="${id}">取消關注</button>`
+              ? `<button class="primary btn-watch" data-watched="${id}">取消關注</button>`
               : draftWatch.has(String(id))
-                ? `<button class="primary" data-watch-draft-commit="${id}">加入</button><button class="ghost" data-watch-draft-cancel="${id}">取消</button>`
-                : `<button class="ghost" data-watched="${id}">特別關注</button>`}
-            ${matchActionButtons(item, id)}
-            ${item.source === "self" && !item.mine && !isGuest ? `<button class="ghost" data-self-report="${id}">檢舉</button>` : ""}
+                ? `<button class="primary btn-watch" data-watch-draft-commit="${id}">加入</button><button class="ghost btn-watch" data-watch-draft-cancel="${id}">取消</button>`
+                : `<button class="ghost btn-watch" data-watched="${id}">特別關注</button>`}
             ${item.watched || draftWatch.has(String(id)) ? "" : `<label class="hide-box">
               <input type="checkbox" data-hidden="${id}" ${item.hidden ? "checked" : ""} />
               不再顯示
             </label>`}
+            </div>
+            ${matchActionButtons(item, id)}
+            ${item.source === "self" && !item.mine && !isGuest ? `<button class="ghost" data-self-report="${id}">檢舉</button>` : ""}
           </div>
-        </article>`;
+        </article>
+        </div>`;
       }).join(""));
       updateBulkBar();
       restoreOpenNotes();
@@ -3863,6 +3939,127 @@
 
     function flyCardToAllChip(card) {
       flyCardToChip(card, "all");
+    }
+
+    function beginWatchDraft(id) {
+      draftWatch.add(String(id));
+      pendingNoteFocus = id;
+      renderList(listCache, lastStats);
+    }
+
+    async function hideListing(id, card) {
+      const key = String(id);
+      if (card) {
+        card.style.visibility = "hidden";
+        const wrap = card.closest(".item-swipe-wrap");
+        if (wrap) wrap.style.visibility = "hidden";
+      }
+      await fetch(`/api/listings/${key}/flags`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hidden: true }),
+      });
+      await loadList({ force: true });
+    }
+
+    function swipeIgnoreTarget(el) {
+      return Boolean(el.closest("a, button, input, textarea, label, select, .pick, .actions, .contact"));
+    }
+
+    function bindCardSwipe() {
+      const list = $("list");
+      if (!list || list.dataset.swipeBound === "1") return;
+      list.dataset.swipeBound = "1";
+      let drag = null;
+      let suppressClick = 0;
+      function resetCard(card) {
+        if (!card) return;
+        card.classList.remove("swiping");
+        card.style.transform = "";
+        card.closest(".item-swipe-wrap")?.classList.remove("reveal-watch", "reveal-hide");
+      }
+      function finish(ev) {
+        if (!drag || ev.pointerId !== drag.pointerId) return;
+        const { card, id, dx, tracking } = drag;
+        drag = null;
+        if (!tracking) {
+          resetCard(card);
+          return;
+        }
+        suppressClick = Date.now();
+        const thresh = Math.min(110, Math.max(72, card.offsetWidth * 0.26));
+        if (dx < -thresh) {
+          card.style.transform = `translateX(${-card.offsetWidth}px)`;
+          if (isGuest) {
+            resetCard(card);
+            remindGuest();
+            return;
+          }
+          const item = listingById(id);
+          if (item?.watched || draftWatch.has(String(id))) {
+            resetCard(card);
+            return;
+          }
+          beginWatchDraft(id);
+          return;
+        }
+        if (dx > thresh) {
+          card.style.transform = `translateX(${card.offsetWidth}px)`;
+          if (isGuest) {
+            resetCard(card);
+            remindGuest();
+            return;
+          }
+          hideListing(id, card);
+          return;
+        }
+        resetCard(card);
+      }
+      list.addEventListener("pointerdown", (ev) => {
+        if (ev.button !== 0) return;
+        const card = ev.target.closest(".item");
+        if (!card || !list.contains(card)) return;
+        if (swipeIgnoreTarget(ev.target)) return;
+        drag = {
+          card,
+          id: card.dataset.card,
+          x: ev.clientX,
+          y: ev.clientY,
+          dx: 0,
+          tracking: false,
+          pointerId: ev.pointerId,
+        };
+      });
+      list.addEventListener("pointermove", (ev) => {
+        if (!drag || ev.pointerId !== drag.pointerId) return;
+        const dx = ev.clientX - drag.x;
+        const dy = ev.clientY - drag.y;
+        if (!drag.tracking) {
+          if (Math.abs(dx) < 12 && Math.abs(dy) < 12) return;
+          if (Math.abs(dy) >= Math.abs(dx)) {
+            drag = null;
+            return;
+          }
+          drag.tracking = true;
+          try { drag.card.setPointerCapture(ev.pointerId); } catch { /* 略過 */ }
+          drag.card.classList.add("swiping");
+        }
+        ev.preventDefault();
+        drag.dx = dx;
+        const max = drag.card.offsetWidth;
+        const clamped = Math.max(-max, Math.min(max, dx));
+        drag.card.style.transform = `translateX(${clamped}px)`;
+        const wrap = drag.card.closest(".item-swipe-wrap");
+        wrap?.classList.toggle("reveal-watch", clamped < -24);
+        wrap?.classList.toggle("reveal-hide", clamped > 24);
+      });
+      list.addEventListener("pointerup", finish);
+      list.addEventListener("pointercancel", finish);
+      list.addEventListener("click", (ev) => {
+        if (Date.now() - suppressClick > 400) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+      }, true);
     }
 
     async function commitWatchDraft(id, note) {
@@ -5236,6 +5433,7 @@
       };
     });
 
+    bindCardSwipe();
     $("list").addEventListener("input", (ev) => {
       const id = ev.target.dataset.watchNote;
       if (!id) return;
