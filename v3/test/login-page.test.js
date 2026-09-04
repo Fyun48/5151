@@ -51,6 +51,6 @@ test("disclaimer page loads the shared copy", () => {
   const html = readFileSync(path.join(dir, "../public/disclaimer.html"), "utf8");
   assert.match(html, /\/api\/disclaimer/);
   assert.match(html, /免費系統/);
-  assert.match(html, /贊助是自願/);
+  assert.match(html, /贊助吉比是為了幫助此站持續成長茁壯/);
   assert.match(html, /reversal play tech \| 逆遊科技/);
 });

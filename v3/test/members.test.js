@@ -72,6 +72,6 @@ test("admin can sort members by created_at", () => {
 
 test("disclaimer text says the system is free and sponsorship is voluntary", () => {
   assert.match(DISCLAIMER_TEXT, /免費/);
-  assert.match(DISCLAIMER_TEXT, /贊助是自願/);
+  assert.match(DISCLAIMER_TEXT, /贊助吉比是為了幫助此站持續成長茁壯/);
   assert.match(DISCLAIMER_TEXT, /不是仲介/);
 });

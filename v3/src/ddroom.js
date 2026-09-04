@@ -66,7 +66,9 @@ export function parseDdApiBody(body) {
 export function kindFromDdItem(item) {
   const space = String(item?.type_space || "").toLowerCase();
   const name = String(item?.type_space_name || item?.title || "");
-  if (/店面|辦公|廠房|車位|土地/.test(name) || space === "shop" || space === "office") return "";
+  if (space === "warehouse" || /倉庫|廠房/.test(name)) return "倉庫";
+  if (space === "shop" || /店面/.test(name)) return "店面";
+  if (/辦公|車位|土地/.test(name) || space === "office") return "";
   if (space === "room" || /雅房/.test(name)) return "雅房";
   if (space === "share" || /分租/.test(name)) return "分租套房";
   if (space === "studio" || /套房/.test(name)) return "獨立套房";

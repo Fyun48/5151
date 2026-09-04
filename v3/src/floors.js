@@ -29,7 +29,18 @@ export function listingIsApartment(listing) {
 }
 
 export function listingIsSuite(listing) {
-  return /套房|雅房/.test(String(listing.kind_name || ""));
+  const hay = `${listing?.kind_name || ""} ${listing?.title || ""}`;
+  return /套房|雅房|分租|合租/.test(hay);
+}
+
+export function listingIsShop(listing) {
+  const hay = `${listing?.kind_name || ""} ${listing?.title || ""}`;
+  return /店面|店鋪/.test(hay);
+}
+
+export function listingIsWarehouse(listing) {
+  const hay = `${listing?.kind_name || ""} ${listing?.title || ""}`;
+  return /倉庫|廠房|倉儲/.test(hay);
 }
 
 /** 通知結尾用的房屋類型，不寫「整層住家」。 */
@@ -39,32 +50,109 @@ export function housingTypeLabel(listing) {
   return "公寓";
 }
 
-export const HOUSING_KINDS = ["elevator", "apartment", "suite", "whole"];
+export const HOUSING_KINDS = ["elevator", "apartment", "suite", "whole", "shop", "warehouse"];
+export const HOUSING_KIND_GROUPS = {
+  building: ["elevator", "apartment"],
+  dwelling: ["suite", "whole", "shop", "warehouse"],
+};
+export const LISTING_SOURCE_KEYS = ["591", "self", "hbhousing", "sinyi", "houseprice", "ddroom", "housefun"];
+
+export function housingKindConflicts(a, b) {
+  if (!a || !b || a === b) return false;
+  const home = (key) => key === "suite" || key === "whole";
+  const commercial = (key) => key === "shop" || key === "warehouse";
+  if (home(a) && home(b)) return true;
+  if ((home(a) && commercial(b)) || (commercial(a) && home(b))) return true;
+  return false;
+}
+
+export function toggleHousingKind(selected, next) {
+  const key = String(next || "").trim();
+  if (!HOUSING_KINDS.includes(key)) return parseHousingKinds(selected);
+  const current = parseHousingKinds(selected);
+  if (current.includes(key)) return current.filter((item) => item !== key);
+  const nextSet = current.filter((item) => !housingKindConflicts(item, key));
+  nextSet.push(key);
+  return HOUSING_KINDS.filter((item) => nextSet.includes(item));
+}
+
+export function parseHousingKinds(kind) {
+  const raw = Array.isArray(kind) ? kind : String(kind || "").split(/[,|]/);
+  const keys = [];
+  for (const item of raw) {
+    const key = String(item || "").trim();
+    if (HOUSING_KINDS.includes(key) && !keys.includes(key)) keys.push(key);
+  }
+  return keys;
+}
+
+export function resolveHousingKinds(kind) {
+  const resolved = [];
+  for (const key of parseHousingKinds(kind)) {
+    for (let i = resolved.length - 1; i >= 0; i -= 1) {
+      if (housingKindConflicts(resolved[i], key)) resolved.splice(i, 1);
+    }
+    if (!resolved.includes(key)) resolved.push(key);
+  }
+  return resolved;
+}
+
+export function parseListingSources(sources) {
+  const raw = Array.isArray(sources) ? sources : String(sources || "").split(/[,|]/);
+  const keys = [];
+  for (const item of raw) {
+    const key = String(item || "").trim();
+    if (LISTING_SOURCE_KEYS.includes(key) && !keys.includes(key)) keys.push(key);
+  }
+  return keys;
+}
+
+export function listingSourceKey(listing) {
+  const src = String(listing?.source || "591").trim() || "591";
+  return src;
+}
+
+export function matchesListingSources(listing, sources) {
+  const keys = parseListingSources(sources);
+  if (!keys.length) return true;
+  return keys.includes(listingSourceKey(listing));
+}
 
 export function isRooftopAddition(listing) {
   const hay = `${listing?.floor_name || ""} ${listing?.title || ""} ${listing?.kind_name || ""} ${tagText(listing)}`;
   return /頂樓加蓋|頂加/.test(hay);
 }
 
-export function matchesHousingKind(listing, kind) {
+export function listingMatchesKindKey(listing, kind) {
   const key = String(kind || "").trim();
-  if (!key) return true;
   if (key === "elevator") return listingHasElevator(listing);
   if (key === "apartment") return listingIsApartment(listing);
   if (key === "suite") return listingIsSuite(listing);
   if (key === "whole") return isWholeFloorHome(listing.kind_name);
+  if (key === "shop") return listingIsShop(listing);
+  if (key === "warehouse") return listingIsWarehouse(listing);
   return true;
 }
 
-export function normalizeListQuery(filter, kind) {
+export function matchesHousingKind(listing, kind) {
+  const kinds = resolveHousingKinds(kind);
+  if (!kinds.length) return true;
+  const building = kinds.filter((key) => HOUSING_KIND_GROUPS.building.includes(key));
+  const dwelling = kinds.filter((key) => HOUSING_KIND_GROUPS.dwelling.includes(key));
+  if (building.length && !building.some((key) => listingMatchesKindKey(listing, key))) return false;
+  if (dwelling.length && !dwelling.some((key) => listingMatchesKindKey(listing, key))) return false;
+  return true;
+}
+
+export function normalizeListQuery(filter, kind, sources) {
   let section = String(filter || "all");
-  let housing = String(kind || "").trim();
+  let kinds = parseHousingKinds(kind);
   if (HOUSING_KINDS.includes(section)) {
-    housing = housing || section;
+    if (!kinds.length) kinds = [section];
     section = "all";
   }
-  if (!HOUSING_KINDS.includes(housing)) housing = "";
-  return { filter: section, kind: housing };
+  const resolved = resolveHousingKinds(kinds);
+  return { filter: section, kind: resolved.join(","), kinds: resolved, sources: parseListingSources(sources) };
 }
 
 /** 1F、地面／騎樓、地下室。不含整棟、頂樓加蓋（頂加另用排除頂樓加蓋）。 */

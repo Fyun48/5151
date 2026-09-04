@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { shouldKeepListing, passesAttributeFilters, passesDisplayFilters, listingHasElevator, matchesHousingKind, normalizeListQuery, housingTypeLabel } from "./floors.js";
+import { shouldKeepListing, passesAttributeFilters, passesDisplayFilters, listingHasElevator, matchesHousingKind, matchesListingSources, normalizeListQuery, housingTypeLabel } from "./floors.js";
 import { isTrustedGeoSource, listingCommunityId, sqlTrustedGeoSource } from "./location.js";
 import { makeRouteKey } from "./route.js";
 import {
@@ -2328,6 +2328,7 @@ export function sortListingsRows(rows, sort = "price_asc", { filter } = {}) {
 export function listListings({
   filter = "all",
   kind = "",
+  sources = "",
   q = "",
   sort = "price_asc",
   limit = 500,
@@ -2337,7 +2338,7 @@ export function listListings({
   settings: settingsOverride,
 } = {}) {
   const uid = resolveUserId(userId);
-  ({ filter, kind } = normalizeListQuery(filter, kind));
+  ({ filter, kind, sources } = normalizeListQuery(filter, kind, sources));
   const clauses = [];
   const params = [];
   searchWhere(searchKeys, clauses, params);
@@ -2433,6 +2434,7 @@ export function listListings({
   }
 
   rows = rows.filter((row) => matchesHousingKind(row, kind));
+  rows = rows.filter((row) => matchesListingSources(row, sources));
 
   rows = sortListingsRows(rows, sort, { filter });
 

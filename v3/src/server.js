@@ -1099,6 +1099,7 @@ app.get("/api/listings", (req, res) => {
   const listed = listListings({
     filter: req.query.filter || "all",
     kind: req.query.kind || "",
+    sources: req.query.sources || "",
     q: req.query.q || "",
     sort: req.query.sort || "newest",
     limit: Number(req.query.limit) || 500,

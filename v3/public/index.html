@@ -1036,7 +1036,7 @@
     #scrollTopBtn {
       position: fixed;
       right: 18px;
-      bottom: 80px;
+      bottom: 136px;
       z-index: 95;
       width: 44px;
       height: 44px;
@@ -1044,11 +1044,20 @@
       font-size: 22px;
       line-height: 1;
       padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
       box-shadow: 0 8px 22px rgba(13, 165, 160, 0.24);
       opacity: 0;
       pointer-events: none;
       transform: translateY(8px);
       transition: opacity 0.18s ease, transform 0.18s ease;
+    }
+    #scrollTopBtn svg {
+      width: 22px;
+      height: 22px;
+      display: block;
     }
     #scrollTopBtn.on {
       opacity: 1;
@@ -1370,7 +1379,7 @@
     #ownerFab {
       position: fixed;
       right: 18px;
-      bottom: 136px;
+      bottom: 192px;
       z-index: 118;
       min-height: 44px;
       padding: 10px 14px;
@@ -2028,9 +2037,9 @@
         <label>進階：591 網址（自動產生，通常不用改）</label>
         <textarea id="searchUrls" placeholder="儲存後會依上方行政區自動產生"></textarea>
       </div>
-      <label>檢查間隔（分鐘）</label>
+      <label>全站底庫抓取間隔（分鐘）</label>
       <input type="number" id="intervalMinutes" min="1" max="120" />
-      <p class="hint" id="intervalMemberHint">全站共用抓取庫，約每 15 分鐘檢查一次有沒有新物件。</p>
+      <p class="hint" id="intervalMemberHint">全站底庫由管理員設定抓取節奏；一般會員每 8 分鐘、已贊助每 5 分鐘，用底庫資料比對新來源。</p>
       <div class="member-only" id="sponsorSettingsBlock" hidden>
         <p class="hint" id="sponsorSettingsIntro"></p>
         <div class="sponsor-links" id="sponsorSettingsLinks"></div>
@@ -2098,10 +2107,21 @@
           <button class="chip" data-filter="offline">正在確認中的下架</button>
           </div>
           <div class="chip-row" data-chip-row="kind">
-          <button class="chip" data-kind="elevator">電梯</button>
-          <button class="chip" data-kind="apartment">公寓</button>
-          <button class="chip" data-kind="suite">套房</button>
-          <button class="chip" data-kind="whole">整層住家</button>
+          <button type="button" class="chip" data-kind="elevator">電梯</button>
+          <button type="button" class="chip" data-kind="apartment">公寓</button>
+          <button type="button" class="chip" data-kind="suite">套房</button>
+          <button type="button" class="chip" data-kind="whole">整層住家</button>
+          <button type="button" class="chip" data-kind="shop">店面</button>
+          <button type="button" class="chip" data-kind="warehouse">倉庫</button>
+          </div>
+          <div class="chip-row" data-chip-row="source">
+          <button type="button" class="chip" data-source="591">591</button>
+          <button type="button" class="chip" data-source="self">吉比本站</button>
+          <button type="button" class="chip" data-source="hbhousing">住商</button>
+          <button type="button" class="chip" data-source="sinyi">信義</button>
+          <button type="button" class="chip" data-source="houseprice">5168</button>
+          <button type="button" class="chip" data-source="ddroom">租租通</button>
+          <button type="button" class="chip" data-source="housefun">好房</button>
           </div>
           <div class="chip-row view-checks" data-chip-row="display">
             <label class="view-check"><input type="checkbox" id="excludeRooftop" checked /> 排除頂樓加蓋</label>
@@ -2608,7 +2628,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.37</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.38</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -2627,7 +2647,11 @@
       <div class="owner-list" id="ownerOverlayList"></div>
     </div>
   </div>
-  <button type="button" class="primary" id="scrollTopBtn" title="回頂" aria-label="回頂">↑</button>
+  <button type="button" class="primary" id="scrollTopBtn" title="回頂" aria-label="回頂">
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M6 15l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>
+  </button>
   <aside id="alertDock" aria-live="polite">
     <header>
       <h2>待看更新</h2>
@@ -2687,7 +2711,8 @@
     }
     $("status").textContent = "正在載入…";
     let filter = "all";
-    let kind = "";
+    let kinds = [];
+    let sources = [];
     let sort = "newest";
     let isGuest = true;
     let guestLockClicks = 0;
@@ -2969,13 +2994,35 @@
       if (Array.isArray(saved)) viewDistricts = new Set(saved);
     } catch {}
 
+    function housingKindConflicts(a, b) {
+      if (!a || !b || a === b) return false;
+      const home = (key) => key === "suite" || key === "whole";
+      const commercial = (key) => key === "shop" || key === "warehouse";
+      if (home(a) && home(b)) return true;
+      if ((home(a) && commercial(b)) || (commercial(a) && home(b))) return true;
+      return false;
+    }
+    function toggleHousingKind(selected, next) {
+      const current = Array.isArray(selected) ? selected.slice() : [];
+      if (current.includes(next)) return current.filter((item) => item !== next);
+      return [...current.filter((item) => !housingKindConflicts(item, next)), next];
+    }
+    function syncKindChips() {
+      document.querySelectorAll("[data-kind]").forEach((b) => {
+        b.classList.toggle("on", kinds.includes(b.dataset.kind));
+      });
+    }
+    function syncSourceChips() {
+      document.querySelectorAll("[data-source]").forEach((b) => {
+        b.classList.toggle("on", sources.includes(b.dataset.source));
+      });
+    }
     function fillFloorFilters(s = settings) {
       if ($("excludeRooftop")) $("excludeRooftop").checked = s.excludeRooftop !== false;
       if ($("excludeLowFloors")) $("excludeLowFloors").checked = s.excludeLowFloors !== false;
-      if (s.wholeFloorOnly === true) kind = "whole";
-      document.querySelectorAll("[data-kind]").forEach((b) => {
-        b.classList.toggle("on", b.dataset.kind === kind);
-      });
+      if (s.wholeFloorOnly === true && !kinds.length) kinds = ["whole"];
+      syncKindChips();
+      syncSourceChips();
     }
 
     function isWholeFloorHome(kindName) {
@@ -3004,9 +3051,6 @@
 
     function applyViewFilters(items) {
       let out = items;
-      if (kind === "whole") {
-        out = out.filter((item) => isWholeFloorHome(item.kind_name));
-      }
       if ($("excludeLowFloors")?.checked) {
         out = out.filter((item) => !isAtOrBelowFirstFloor(item.floor_name));
       }
@@ -3069,14 +3113,29 @@
       return applyViewFilters(applyDistrictView(items));
     }
 
-    function guestKindMatch(item, key) {
-      if (!key) return true;
+    function guestKindMatch(item, keys) {
+      const list = Array.isArray(keys) ? keys.filter(Boolean) : (keys ? [keys] : []);
+      if (!list.length) return true;
       const hay = `${item.title || ""} ${item.kind_name || ""} ${item.address || ""}`;
-      if (key === "elevator") return /有電梯|電梯大樓|電梯公寓/.test(hay) && !/無電梯/.test(hay);
-      if (key === "apartment") return /公寓/.test(hay) && !/電梯大樓/.test(hay);
-      if (key === "suite") return /套房|雅房/.test(String(item.kind_name || ""));
-      if (key === "whole") return isWholeFloorHome(item.kind_name);
+      const matchKey = (key) => {
+        if (key === "elevator") return /有電梯|電梯大樓|電梯公寓/.test(hay) && !/無電梯/.test(hay);
+        if (key === "apartment") return /公寓/.test(hay) && !/電梯大樓/.test(hay);
+        if (key === "suite") return /套房|雅房|分租|合租/.test(`${item.kind_name || ""} ${item.title || ""}`);
+        if (key === "whole") return isWholeFloorHome(item.kind_name);
+        if (key === "shop") return /店面|店鋪/.test(`${item.kind_name || ""} ${item.title || ""}`);
+        if (key === "warehouse") return /倉庫|廠房|倉儲/.test(`${item.kind_name || ""} ${item.title || ""}`);
+        return true;
+      };
+      const building = list.filter((key) => key === "elevator" || key === "apartment");
+      const dwelling = list.filter((key) => key === "suite" || key === "whole" || key === "shop" || key === "warehouse");
+      if (building.length && !building.some(matchKey)) return false;
+      if (dwelling.length && !dwelling.some(matchKey)) return false;
       return true;
+    }
+    function guestSourceMatch(item, keys) {
+      if (!keys.length) return true;
+      const src = listingSource(item);
+      return keys.includes(src);
     }
 
     function guestFilterMatch(item, key) {
@@ -3101,7 +3160,7 @@
     }
 
     function applyGuestQuery(items) {
-      let out = (items || []).filter((item) => guestFilterMatch(item, filter) && guestKindMatch(item, kind));
+      let out = (items || []).filter((item) => guestFilterMatch(item, filter) && guestKindMatch(item, kinds) && guestSourceMatch(item, sources));
       const q = ($("q")?.value || "").trim().toLowerCase();
       if (q) {
         out = out.filter((item) => {
@@ -3722,8 +3781,9 @@
       $("intervalMinutes").classList.add("schedule-readonly");
       const hint = $("intervalMemberHint");
       if (hint) {
-        const mins = Math.max(1, Number(s.systemCrawlIntervalMinutes || s.intervalMinutes) || 15);
-        hint.textContent = `全站共用抓取庫，約每 ${mins} 分鐘檢查一次有沒有新物件。會員不能改這個間隔。`;
+        const mins = Math.max(1, Number(s.systemCrawlIntervalMinutes) || 15);
+        const planMins = mePlan === "sponsor" ? 5 : 8;
+        hint.textContent = `全站底庫約每 ${mins} 分鐘爬一次（管理員設定，會員不能改）。你的列表與通知會先用底庫資料，再依方案每 ${planMins} 分鐘比對一次新來源${mePlan === "sponsor" ? "（已贊助）" : "；贊助後改為 5 分鐘"}。`;
       }
       $("offlineConfirmDays").value = s.offlineConfirmDays || 7;
       $("offlineConfirmDays").disabled = !meIsAdmin;
@@ -3974,24 +4034,12 @@
         if (q) msg = `沒有符合「${q}」的物件。試試較短關鍵字，或清掉搜尋看全部列表。`;
         else if (viewDistricts.size) {
           msg = "這個行政區篩選目前沒有物件。可點「全部」或再勾其他區。";
-        } else if (kind === "whole" || $("excludeLowFloors")?.checked || $("excludeRooftop")?.checked) {
-          msg = "目前沒有符合列表上方「整層／樓層／頂加」過濾的物件。可取消勾選或關掉整層住家再看。";
+        } else if (kinds.length || sources.length || $("excludeLowFloors")?.checked || $("excludeRooftop")?.checked) {
+          msg = "目前沒有符合列表上方房型／來源／樓層過濾的物件。可取消部分按鈕或勾選再看。";
         } else if (filter === "suspected") {
           msg = "目前沒有被判成同一屋源的重刊。隱藏或已瀏覽的舊屋若再上架，會出現在這裡。";
         } else if (filter === "offline") {
           msg = "目前沒有正在確認中的下架物件。591 關閉或刪除的刊登會先列在這裡核對；滿設定天數仍找不到就改成確認已下架，並從「全部」與這個篩選的數量扣除。";
-        } else if (kind === "elevator") {
-          msg = filter === "watched"
-            ? "特別關注裡目前沒有標到有電梯的物件。"
-            : "目前沒有標到有電梯的物件。這只篩已抓到的結果，不會重查 591。";
-        } else if (kind === "apartment") {
-          msg = filter === "watched"
-            ? "特別關注裡目前沒有公寓。"
-            : "目前沒有標成公寓的物件。這只篩已抓到的結果，不會重查 591。";
-        } else if (kind === "suite") {
-          msg = filter === "watched"
-            ? "特別關注裡目前沒有套房／雅房。"
-            : "目前沒有套房／雅房。這只篩已抓到的結果，不會重查 591。";
         } else if (st.missingGeo > 0) {
           msg = `正在從 591 物件地圖補 ${st.missingGeo} 筆座標（就是網頁上點地址看到的那個），完成後會自動計算${commuteModeLabel()}路線。`;
         } else if (st.missingRoute > 0) {
@@ -4320,7 +4368,7 @@
       const q = $("q").value.trim();
       const districts = [...viewDistricts].map(encodeURIComponent).join(",");
       const res = await fetch(
-        `/api/listings?filter=${encodeURIComponent(filter)}&kind=${encodeURIComponent(kind)}&sort=${encodeURIComponent(sort)}&q=${encodeURIComponent(q)}&limit=500&districts=${districts}`,
+        `/api/listings?filter=${encodeURIComponent(filter)}&kind=${encodeURIComponent(kinds.join(","))}&sources=${encodeURIComponent(sources.join(","))}&sort=${encodeURIComponent(sort)}&q=${encodeURIComponent(q)}&limit=500&districts=${districts}`,
       );
       const data = await res.json();
       if (gen !== listLoadGen) return;
@@ -4458,7 +4506,7 @@
         excludeRooftop: $("excludeRooftop") ? $("excludeRooftop").checked : true,
         offlineConfirmDays: meIsAdmin ? (Number($("offlineConfirmDays").value) || 7) : 7,
         minBuildingFloors: Number($("minBuildingFloors").value) || 4,
-        wholeFloorOnly: kind === "whole",
+        wholeFloorOnly: kinds.length === 1 && kinds[0] === "whole",
         excludeLowFloors: $("excludeLowFloors") ? $("excludeLowFloors").checked : true,
         excludeKeywords: $("excludeKeywords").value.split(/[\n,，]/).map((s) => s.trim()).filter(Boolean),
         excludeAgents: $("excludeAgents").value.split(/[\n,，]/).map((s) => s.trim()).filter(Boolean),
@@ -5507,7 +5555,7 @@
     function persistDisplayFilters() {
       if (isGuest || !settingsLoaded) return;
       const body = {
-        wholeFloorOnly: kind === "whole",
+        wholeFloorOnly: kinds.length === 1 && kinds[0] === "whole",
         excludeRooftop: $("excludeRooftop") ? $("excludeRooftop").checked : true,
         excludeLowFloors: $("excludeLowFloors") ? $("excludeLowFloors").checked : true,
       };
@@ -5804,12 +5852,17 @@
 
     document.querySelectorAll("[data-kind]").forEach((btn) => {
       btn.onclick = () => {
-        const next = btn.dataset.kind;
-        kind = kind === next ? "" : next;
-        document.querySelectorAll("[data-kind]").forEach((b) => {
-          b.classList.toggle("on", b.dataset.kind === kind);
-        });
+        kinds = toggleHousingKind(kinds, btn.dataset.kind);
+        syncKindChips();
         persistDisplayFilters();
+        loadList();
+      };
+    });
+    document.querySelectorAll("[data-source]").forEach((btn) => {
+      btn.onclick = () => {
+        const next = btn.dataset.source;
+        sources = sources.includes(next) ? sources.filter((item) => item !== next) : [...sources, next];
+        syncSourceChips();
         loadList();
       };
     });

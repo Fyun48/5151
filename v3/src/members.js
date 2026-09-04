@@ -1,13 +1,13 @@
 /** 會員帳號：註冊、密碼、免責聲明。只接受 db 連線。 */
 import { hashPassword, normalizeEmail, validateEmail, validatePassword, verifyPassword } from "./password.js";
 
-export const DISCLAIMER_VERSION = "2026-09-01";
+export const DISCLAIMER_VERSION = "2026-09-04";
 
 export const DISCLAIMER_TEXT = `這是免費的個人租屋追蹤工具，用來幫忙看 591 刊登，不是仲介、不是保證、也不是正式服務。
 
 591 上的價格、是否還在、地址與現況可能延遲、缺漏或與現場不符。請以 591 原頁與實際看屋為準。
 
-使用本系統即表示你了解以上限制。贊助是自願的；有沒有贊助都不改變「這是免費系統」。未來若有贊助方案，只會影響檢查間隔或覆蓋範圍，不會變成付費才能用。`;
+使用本系統即表示你了解以上限制。贊助吉比是為了幫助此站持續成長茁壯；有沒有贊助都不改變「這是免費系統」。未來若有贊助方案，只會影響檢查間隔或覆蓋範圍，不會變成付費才能用。`;
 
 export function findUserByEmail(conn, email) {
   const key = normalizeEmail(email);
