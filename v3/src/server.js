@@ -16,6 +16,8 @@ import {
   loadProfile,
   recentEvents,
   registerUser,
+  updateUserProfile,
+  countOpenSelfListings,
   issueVerifyToken,
   confirmVerifyToken,
   expireStaleVerifyTokens,
@@ -194,11 +196,17 @@ app.use("/icons", express.static(path.join(__dirname, "../public/icons"), { maxA
 
 app.get("/api/me", (req, res) => {
   const session = readSession(req);
+  const user = session?.userId ? getUserById(session.userId) : null;
+  const nickname = String(user?.nickname || "").trim();
   res.json({
     ok: Boolean(session),
     email: session?.email || "",
     role: session?.role || "",
     plan: session?.plan || "",
+    nickname,
+    avatar_url: String(user?.avatar_url || "").trim(),
+    display_name: nickname || session?.email || "",
+    open_self_listings: session?.userId ? countOpenSelfListings(session.userId) : 0,
     configured: true,
     canRegister: true,
     hint: "",
@@ -206,6 +214,20 @@ app.get("/api/me", (req, res) => {
     vapidPublicKey: publicVapidKey(),
     sponsor: session ? publicSponsorSettings(session) : { show: false, links: [], sponsored: false, intro: "", thanks: "" },
   });
+});
+
+app.patch("/api/profile", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入" });
+      return;
+    }
+    const user = updateUserProfile(session.userId, req.body || {});
+    res.json({ ok: true, ...user });
+  } catch (error) {
+    sendAuthError(res, error);
+  }
 });
 
 app.get("/api/disclaimer", (_req, res) => {

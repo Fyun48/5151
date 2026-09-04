@@ -7,16 +7,19 @@ import { DatabaseSync } from "node:sqlite";
 import { listingInMemberScope } from "../src/covering.js";
 import {
   closeSelfListing,
+  composeSelfAddress,
   createSelfListing,
   ensureSelfListingSchema,
   isSelfListingId,
   keepSelfListingForViewer,
   listMineSelfListings,
   reportSelfListing,
+  SELF_BODY_MAX,
   SELF_LEGAL,
   SELF_POST_ID_BASE,
   selfListingMeta,
 } from "../src/selfListings.js";
+import { lookupDistrict } from "../src/regions.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const OLD = "2026-01-01T00:00:00.000Z";
@@ -102,6 +105,7 @@ function sampleInput(extra = {}) {
     address: "台北市士林區中正路100號",
     phone: "0912345678",
     body: "近捷運、可入住、有洗衣機。",
+    accept_pledge: true,
     ...extra,
   };
 }
@@ -112,6 +116,9 @@ test("self listing ids stay above the reserved range and require login", () => {
   assert.equal(isSelfListingId(2_200_000_000), false);
   assert.match(SELF_LEGAL, /不是仲介/);
   assert.match(selfListingMeta().legal, /不經手金錢/);
+  assert.match(selfListingMeta().audit, /14 天/);
+  assert.equal(SELF_BODY_MAX, 500);
+  assert.equal(selfListingMeta().body_max, 500);
   const db = open();
   addUser(db, { id: 1, email: "a@example.com", createdAt: OLD });
   assert.throws(() => createSelfListing(db, 0, sampleInput()), /請先登入/);
@@ -150,6 +157,31 @@ test("open quota, new-account wait, close and report hide", () => {
   reportSelfListing(db, 3, afterClose.post_id, "廣告");
   const second = reportSelfListing(db, 4, afterClose.post_id, "廣告");
   assert.equal(second.hidden, true);
+  assert.throws(
+    () => createSelfListing(db, 1, sampleInput({ address: "台北市士林區中正路199號" })),
+    /暫停上傳/,
+  );
+  db.close();
+});
+
+test("self listing needs street name and owner pledge, phone is optional", () => {
+  const db = open();
+  addUser(db, { id: 1, email: "a@example.com", createdAt: OLD });
+  const district = lookupDistrict("1-8");
+  assert.equal(composeSelfAddress(district, "中正路100號"), "台北市士林區中正路100號");
+  assert.throws(() => composeSelfAddress(district, "100號"), /路名/);
+  assert.throws(() => createSelfListing(db, 1, sampleInput({ accept_pledge: false })), /聲明/);
+  const row = createSelfListing(db, 1, sampleInput({
+    phone: "",
+    line_url: "",
+    street: "中正路88號",
+    traits: ["elevator", "ac"],
+    deposit: "one",
+  }));
+  assert.equal(row.address, "台北市士林區中正路88號");
+  assert.equal(row.phone, "");
+  assert.deepEqual(row.traits, ["elevator", "ac"]);
+  assert.equal(row.pledged, true);
   db.close();
 });
 
@@ -216,6 +248,12 @@ test("index, server and admin expose self listing surfaces", () => {
   assert.match(html, /\/api\/self-listings\/photos/);
   assert.match(html, /item\.source === "self"/);
   assert.match(html, /id="selfListingOverlay"/);
+  assert.match(html, /id="notifyInbox"/);
+  assert.match(html, /id="profileForm"/);
+  assert.match(html, /id="ownerFab"/);
+  assert.match(html, /可使用坪數/);
+  assert.match(html, /id="selfPledge"/);
+  assert.match(html, /maxlength="500"/);
   assert.match(server, /app\.post\("\/api\/self-listings"/);
   assert.match(server, /app\.post\("\/api\/self-listings\/photos"/);
   assert.match(server, /app\.get\("\/media\/self\/:file"/);

@@ -80,6 +80,9 @@ export function ensurePersonalSchema(db) {
     "ALTER TABLE users ADD COLUMN verify_token TEXT",
     "ALTER TABLE users ADD COLUMN verify_expires_at TEXT",
     "ALTER TABLE users ADD COLUMN verify_expire_notified INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN nickname TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN avatar_url TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN self_ban_until TEXT",
     "ALTER TABLE user_events ADD COLUMN source_key TEXT NOT NULL DEFAULT ''",
   ]) {
     try {

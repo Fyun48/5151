@@ -993,6 +993,104 @@
     #profileName { margin-bottom: 8px; }
     .hint { font-size: 12px; color: var(--muted); margin: 4px 0 8px; line-height: 1.5; }
     #deleteAccountBtn { display: none !important; }
+    .page-lead { margin: 0 0 10px; }
+    .notify-inbox { display: grid; gap: 10px; }
+    .notify-empty {
+      padding: 22px 8px 8px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    body:not([data-app-view="notify"]) #notifyHub { display: none !important; }
+    body[data-app-view="notify"] #notifyHub {
+      position: static;
+      inset: auto;
+      display: block;
+      padding: 0 32px 40px;
+      overflow: visible;
+      z-index: auto;
+    }
+    body[data-app-view="notify"] #notifyHub .hub-backdrop,
+    body[data-app-view="notify"] #notifyHubClose { display: none !important; }
+    body[data-app-view="notify"] #notifyHub .hub-panel {
+      width: min(760px, 100%);
+      margin: 0 auto;
+      box-shadow: none;
+    }
+    .profile-card {
+      display: flex;
+      gap: 14px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .profile-avatar {
+      width: 72px;
+      height: 72px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 1px solid var(--line);
+      background: var(--accent-mist);
+    }
+    .profile-avatar.empty { display: grid; place-items: center; color: var(--muted); font-size: 12px; }
+    .addr-combo {
+      display: grid;
+      grid-template-columns: minmax(120px, auto) 1fr;
+      gap: 8px;
+      align-items: end;
+    }
+    .addr-prefix {
+      margin: 0;
+      padding: 10px 12px;
+      border: 1px dashed var(--line);
+      border-radius: 10px;
+      background: var(--accent-mist);
+      color: var(--accent-deep);
+      font-weight: 700;
+      font-size: 13px;
+    }
+    .trait-group { margin: 10px 0; }
+    .trait-group h3 { margin: 0 0 6px; font-size: 13px; color: var(--muted); font-weight: 700; }
+    .trait-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .trait-chips label {
+      margin: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 12px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--paper);
+      font-size: 13px;
+      color: var(--ink);
+    }
+    .trait-chips label:has(input:checked) {
+      background: var(--accent);
+      color: var(--primary-foreground);
+      border-color: var(--accent);
+    }
+    .trait-chips input { width: auto; margin: 0; }
+    .body-templates { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+    .pledge-box {
+      margin: 12px 0 0;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--accent-mist);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    #ownerFab {
+      position: fixed;
+      right: 18px;
+      bottom: 136px;
+      z-index: 118;
+      min-height: 44px;
+      padding: 10px 14px;
+      border-radius: 999px;
+      box-shadow: 0 10px 24px rgba(15, 111, 106, 0.22);
+    }
+    #ownerFab[hidden] { display: none !important; }
+    .owner-list { display: grid; gap: 10px; margin-top: 12px; }
     body:not(.role-admin) .admin-only { display: none !important; }
     body.role-admin .member-only { display: none !important; }
     #excludeMapWrap { margin: 8px 0; }
@@ -1184,6 +1282,11 @@
         right: 12px;
         bottom: calc(76px + env(safe-area-inset-bottom, 0px));
       }
+      #ownerFab {
+        right: 12px;
+        bottom: calc(128px + env(safe-area-inset-bottom, 0px));
+      }
+      .addr-combo { grid-template-columns: 1fr; }
       #alertDock { bottom: 72px; right: 10px; left: 10px; width: auto; }
       .list-head-sticky {
         margin: 8px 8px 0;
@@ -1703,28 +1806,44 @@
   <section class="app-view" id="notifyView">
     <div class="card panel">
       <h2 style="margin:0 0 8px">通知</h2>
-      <p class="hint">站內待看更新會顯示在右下角（手機則占滿這一頁）。系統推播不必填 SMTP；郵件與 Webhook 在「我的」。</p>
+      <p class="hint page-lead">待看更新集中在這裡。系統推播不必填 SMTP；郵件與 Discord 是選用。手機也會在右下角顯示同一份清單。</p>
+      <div class="row" style="margin:0 0 10px">
+        <button type="button" class="ghost" id="enablePushBtn">允許系統推播</button>
+        <button type="button" class="ghost" id="installHintBtn">加入主畫面說明</button>
+        <button type="button" class="ghost" id="notifyJumpSettings">跳到通知設定</button>
+      </div>
+      <p class="save-msg" id="pushMsg"></p>
       <p class="hint" id="notifyViewHint">尚無待看更新。</p>
+      <div class="notify-inbox" id="notifyInbox"></div>
     </div>
   </section>
   <section class="app-view" id="meView">
+    <div class="card panel" id="profilePanel">
+      <h2 style="margin:0 0 8px">個人資料</h2>
+      <p class="hint">填暱稱後，需求牆與系統會用這個名字稱呼你。沒填則顯示信箱。</p>
+      <form id="profileForm">
+        <div class="profile-card">
+          <img class="profile-avatar empty" id="profileAvatarImg" alt="" hidden />
+          <div class="profile-avatar empty" id="profileAvatarFallback">頭像</div>
+          <div style="flex:1;min-width:200px">
+            <label>暱稱（2～20 字，選填）</label>
+            <input id="profileNickname" maxlength="20" placeholder="例如 小林" />
+            <label>上傳頭像（JPG／PNG／WebP，2MB）</label>
+            <input type="file" id="profileAvatar" accept="image/jpeg,image/png,image/webp" />
+          </div>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <button type="submit" class="primary" id="profileSave">儲存個人資料</button>
+          <span class="save-msg" id="profileMsg"></span>
+        </div>
+      </form>
+    </div>
     <div class="card panel" data-tour="notify">
-      <h2 style="margin:0 0 8px">我的</h2>
-      <p class="hint">帳號、設定檔與進階通知。系統推播預設開啟；郵件與 Webhook 選用。</p>
-      <div class="row" style="margin:8px 0 12px">
-        <button type="button" class="primary" data-open-hub="events">通知種類</button>
-        <button type="button" class="ghost" data-open-hub="webhook">Discord Webhook（選用）</button>
-        <button type="button" class="ghost" data-open-hub="mail">自己的 SMTP（選用）</button>
-      </div>
-      <p class="hint" id="notifyMailHint">物件／屋源提醒若要用信，請自己填 SMTP。註冊、忘記密碼、變更密碼、贊助通知由站方管理員 SMTP 寄出。</p>
-      <p class="hint" id="notifyHubStatus"></p>
-      <p class="hint">iPhone 請用 Safari「加入主畫面」後，從主畫面圖示開啟才能收到鎖定畫面推播。</p>
-      <div class="row">
-        <button type="button" class="ghost" id="enablePushBtn">允許系統推播</button>
-        <button type="button" class="ghost" id="installHintBtn">加入主畫面說明</button>
-      </div>
-      <p class="save-msg" id="pushMsg"></p>
-      <div class="row" style="margin-top:14px">
+      <h2 style="margin:0 0 8px">帳號</h2>
+      <p class="hint">通知種類、推播與 Discord／SMTP 請到「通知」。這裡管帳號本身。</p>
+      <p class="hint" id="notifyMailHint" hidden>物件／屋源提醒若要用信，請自己填 SMTP。</p>
+      <p class="hint" id="notifyHubStatus" hidden></p>
+      <div class="row" style="margin-top:8px">
         <button type="button" class="ghost" id="meFilterBtn">開啟篩選</button>
         <button type="button" class="ghost admin-only" id="meWatchBtn">立即檢查</button>
         <button type="button" class="ghost" id="meReloadBtn">重新整理</button>
@@ -1740,7 +1859,8 @@
       <h2 style="margin:0 0 8px">自行刊登</h2>
       <p class="hint" id="selfGuestHint">登入後才能自行刊登（不是仲介、沒有私訊）。</p>
       <p class="hint" id="selfLegal">這是免費找房工具，不是仲介、不保證媒合、不經手金錢。自行刊登是公開物件摘要，沒有即時私訊。</p>
-      <p class="hint">同時最多 3 則、30 天後失效。新帳號須滿 24 小時。找房列表預設仍只顯示整層住家；聯絡方式會公開給已登入會員。</p>
+      <p class="hint" id="selfAudit">站內物件會不定期抽查。若發現不實、惡作劇或明顯誤導，系統會自動下架，並暫停該帳號上傳物件 14 天。這不是仲介認證，也不保證屋況屬實。</p>
+      <p class="hint">同時最多 3 則、30 天後失效。新帳號須滿 24 小時。找房列表預設仍只顯示整層住家。</p>
       <form id="selfListingForm">
         <label>行政區</label>
         <select id="selfDistrict"></select>
@@ -1750,7 +1870,7 @@
             <input type="number" id="selfRent" min="1000" max="200000" step="500" placeholder="例如 25000" />
           </div>
           <div>
-            <label>坪數</label>
+            <label>可使用坪數（扣除公設坪後）</label>
             <input type="number" id="selfPing" min="1" max="500" step="0.5" placeholder="例如 18" />
           </div>
         </div>
@@ -1803,9 +1923,12 @@
             <input id="selfContactName" maxlength="80" placeholder="例如 林先生" />
           </div>
         </div>
-        <label>地址</label>
-        <input id="selfAddress" maxlength="120" placeholder="例如 台北市士林區中正路 100 號" />
-        <label>公開電話</label>
+        <label>地址（行政區會自動帶入，請至少加上路名）</label>
+        <div class="addr-combo">
+          <p class="addr-prefix" id="selfAddressPrefix">請先選行政區</p>
+          <input id="selfAddress" maxlength="80" placeholder="例如 中正路 100 號" />
+        </div>
+        <label>公開電話（選填）</label>
         <input id="selfPhone" maxlength="40" inputmode="tel" placeholder="09xxxxxxxx" />
         <label>LINE 連結（選填）</label>
         <input id="selfLine" maxlength="300" placeholder="https://line.me/..." />
@@ -1816,8 +1939,23 @@
         <input id="selfCover" maxlength="500" placeholder="https://..." />
         <label>標題（選填）</label>
         <input id="selfTitle" maxlength="80" placeholder="空白則自動用行政區與租金" />
-        <label>說明（最多 800 字）</label>
-        <textarea id="selfBody" maxlength="800" placeholder="格局、設備、可入住日。沒有私訊，聯絡請用上面的電話或 LINE。"></textarea>
+        <label>押金</label>
+        <select id="selfDeposit">
+          <option value="">未填</option>
+          <option value="one">押金一個月</option>
+          <option value="two">押金兩個月</option>
+          <option value="talk">押金面議</option>
+        </select>
+        <div id="selfTraitGroups"></div>
+        <label>說明（最多 500 字）</label>
+        <div class="body-templates" id="selfBodyTemplates">
+          <button type="button" class="ghost" data-body-tpl="family">套用：家庭整層</button>
+          <button type="button" class="ghost" data-body-tpl="suite">套用：套房自住</button>
+          <button type="button" class="ghost" data-body-tpl="near-mrt">套用：近捷運通勤</button>
+        </div>
+        <textarea id="selfBody" maxlength="500" placeholder="格局、設備、可入住日。沒有私訊。"></textarea>
+        <p class="pledge-box" id="selfPledgeText">我是這間房子的屋主，或已取得屋主授權的代理人。我確認刊登內容屬實，了解平台會抽查，不實刊登會被下架並暫停上傳。平台不驗證權狀、不保證真實，法律責任由我自行負擔。</p>
+        <label class="checks"><input type="checkbox" id="selfPledge" /> 我已閱讀並同意以上聲明</label>
         <div class="row" style="margin-top:10px">
           <button type="submit" class="primary" id="selfSubmit">刊登物件</button>
           <span class="save-msg" id="selfMsg"></span>
@@ -1845,13 +1983,13 @@
       <div id="selfListingDetail"></div>
     </div>
   </div>
-  <div id="notifyHub" class="hub-overlay" hidden>
+  <div id="notifyHub" class="hub-overlay">
     <div class="hub-backdrop" data-close-hub></div>
     <div class="hub-panel" role="dialog" aria-modal="true" aria-labelledby="notifyHubTitle">
       <div class="hub-head">
         <div>
-          <h2 id="notifyHubTitle">通知與發信設定</h2>
-          <p class="hint" style="margin:6px 0 0">不離開這一頁。Webhook 與郵件是選用；預設用站內與系統推播。</p>
+          <h2 id="notifyHubTitle">通知設定</h2>
+          <p class="hint" style="margin:6px 0 0">這頁就能改完。Webhook 與郵件是選用；預設用站內與系統推播。</p>
         </div>
         <button type="button" class="ghost" id="notifyHubClose">關閉</button>
       </div>
@@ -1918,7 +2056,7 @@
         <p class="msg" id="memberMailMsg"></p>
       </section>
       <section class="hub-pane" data-hub-pane="events" hidden>
-        <p class="hint">站內是網頁右下角浮動視窗。系統推播可在「我的」允許通知。Webhook 與郵件要先填好才會送出，預設關閉。</p>
+        <p class="hint">站內待看在這一頁上方。系統推播按上面的「允許系統推播」。Webhook 與郵件要先填好才會送出，預設關閉。</p>
         <div class="notify-matrix-wrap">
         <table class="notify-matrix" id="notifyMatrix">
           <thead>
@@ -2048,11 +2186,25 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver">ver. 3.19</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver">ver. 3.20</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
   </button>
+  <button type="button" class="primary" id="ownerFab" hidden>我刊登的房子</button>
+  <div id="ownerOverlay" class="hub-overlay" hidden>
+    <div class="hub-backdrop" data-close-owner></div>
+    <div class="hub-panel" role="dialog" aria-modal="true" aria-labelledby="ownerOverlayTitle">
+      <div class="hub-head">
+        <div>
+          <h2 id="ownerOverlayTitle">我刊登的房子</h2>
+          <p class="hint" style="margin:6px 0 0">只顯示你自己上傳的站內物件。</p>
+        </div>
+        <button type="button" class="ghost" id="ownerOverlayClose">關閉</button>
+      </div>
+      <div class="owner-list" id="ownerOverlayList"></div>
+    </div>
+  </div>
   <button type="button" class="primary" id="scrollTopBtn" title="回頂" aria-label="回頂">↑</button>
   <aside id="alertDock" aria-live="polite">
     <header>
@@ -2589,6 +2741,7 @@
       if ($("who")) $("who").classList.toggle("is-guest", isGuest);
       if (isGuest) {
         $("who").textContent = "訪客";
+        setOwnerFab([]);
         paintSponsorOffer({ show: false });
         closeHelpQaDialog();
       } else {
@@ -3009,21 +3162,22 @@
     }
     function openNotifyHub(tab) {
       const box = $("notifyHub");
-      if (!box) return;
-      box.hidden = false;
-      setHubTab(tab || "webhook");
-      if (isGuest) {
-        box.querySelectorAll("input, textarea, select").forEach((el) => { el.disabled = true; });
-        if ($("notifyHubSave")) $("notifyHubSave").disabled = true;
-        if ($("notifyHubSaveMsg")) $("notifyHubSaveMsg").textContent = "示範模式只能看說明。註冊後才能儲存。";
-      } else {
-        box.querySelectorAll("input, textarea, select").forEach((el) => { el.disabled = false; });
-        if ($("notifyHubSave")) $("notifyHubSave").disabled = !settingsLoaded;
+      setAppView("notify");
+      setHubTab(tab || "events");
+      if (box) {
+        if (isGuest) {
+          box.querySelectorAll("input, textarea, select").forEach((el) => { el.disabled = true; });
+          if ($("notifyHubSave")) $("notifyHubSave").disabled = true;
+          if ($("notifyHubSaveMsg")) $("notifyHubSaveMsg").textContent = "示範模式只能看說明。註冊後才能儲存。";
+        } else {
+          box.querySelectorAll("input, textarea, select").forEach((el) => { el.disabled = false; });
+          if ($("notifyHubSave")) $("notifyHubSave").disabled = !settingsLoaded;
+        }
+        box.scrollIntoView({ behavior: "smooth", block: "start" });
       }
     }
     function closeNotifyHub() {
-      const box = $("notifyHub");
-      if (box) box.hidden = true;
+      // 通知設定已固定在「通知」頁，不必關閉。
     }
     async function loadMemberMail() {
       if (isGuest) return;
@@ -3603,8 +3757,9 @@
         return;
       }
       setGuestMode(false);
-      $("who").textContent = me.email || "";
+      $("who").textContent = me.display_name || me.nickname || me.email || "";
       meEmail = me.email || "";
+      paintProfile(me);
       meIsAdmin = me.role === "admin";
       const mailHint = $("notifyMailHint");
       if (mailHint) {
@@ -3937,6 +4092,7 @@
       if (view === "notify") {
         $("alertDock")?.classList.add("open");
         renderDock();
+        setHubTab(document.querySelector("[data-hub-tab][aria-selected='true']")?.dataset.hubTab || "events");
       }
       try { localStorage.setItem(APP_VIEW_KEY, view); } catch { /* ignore */ }
     }
@@ -4027,13 +4183,59 @@
     }
     function fillSelfDistricts() {
       const host = $("selfDistrict");
+      if (!host) return;
+      if (host.dataset.ready !== "1") {
+        const src = [...document.querySelectorAll("#districtPicker [data-district]")];
+        host.innerHTML = `<option value="">請選擇行政區</option>` + src.map((el) => {
+          const label = el.closest("label")?.textContent?.trim() || el.value;
+          return `<option value="${el.value}">${label.replace(/[<>]/g, "")}</option>`;
+        }).join("");
+        host.dataset.ready = "1";
+      }
+      syncSelfAddressPrefix();
+    }
+    function syncSelfAddressPrefix() {
+      const host = $("selfDistrict");
+      const prefix = $("selfAddressPrefix");
+      if (!prefix) return;
+      const opt = host?.selectedOptions?.[0];
+      const label = String(opt?.textContent || "").trim();
+      prefix.textContent = host?.value && label ? label.replace(/\s+/g, "") : "請先選行政區";
+    }
+    const SELF_BODY_TPL = {
+      family: "屋況整潔、採光佳，適合小家庭。可使用坪數已扣除公設。可遷入日可再約看屋時間確認。沒有站內私訊，請用公開電話或 LINE 聯絡。",
+      suite: "獨立衛浴，家具家電可再看現場。可使用坪數已扣除公設。適合一人入住。沒有站內私訊，請用公開電話或 LINE 聯絡。",
+      "near-mrt": "步行可到捷運，適合通勤。可使用坪數已扣除公設。歡迎先約看再決定。沒有站內私訊，請用公開電話或 LINE 聯絡。",
+    };
+    const SELF_TRAIT_GROUPS = [
+      { id: "living", label: "生活條件", items: [
+        { id: "cook", label: "可開伙" }, { id: "pet", label: "可養寵物" }, { id: "short", label: "可短租" }, { id: "tax", label: "可報稅" }, { id: "mrt", label: "近捷運" },
+      ] },
+      { id: "building", label: "建物", items: [
+        { id: "elevator", label: "有電梯" }, { id: "parking", label: "有車位" }, { id: "balcony", label: "有陽台" }, { id: "manage", label: "有管理室" }, { id: "trash", label: "垃圾集中" },
+      ] },
+      { id: "gear", label: "設備", items: [
+        { id: "ac", label: "冷氣" }, { id: "washer", label: "洗衣機" }, { id: "fridge", label: "冰箱" }, { id: "net", label: "網路" }, { id: "heater", label: "熱水器" }, { id: "bed", label: "床" }, { id: "closet", label: "衣櫃" }, { id: "sofa", label: "沙發" },
+      ] },
+      { id: "who", label: "適合對象（可複選）", items: [
+        { id: "anygender", label: "不限性別" }, { id: "female", label: "限女性" }, { id: "male", label: "限男性" }, { id: "student", label: "學生可" }, { id: "worker", label: "上班族佳" },
+      ] },
+    ];
+    function paintSelfTraits() {
+      const host = $("selfTraitGroups");
       if (!host || host.dataset.ready === "1") return;
-      const src = [...document.querySelectorAll("#districtPicker [data-district]")];
-      host.innerHTML = `<option value="">請選擇行政區</option>` + src.map((el) => {
-        const label = el.closest("label")?.textContent?.trim() || el.value;
-        return `<option value="${el.value}">${label.replace(/[<>]/g, "")}</option>`;
-      }).join("");
+      host.innerHTML = SELF_TRAIT_GROUPS.map((group) => `
+        <div class="trait-group">
+          <h3>${esc(group.label)}</h3>
+          <div class="trait-chips">
+            ${group.items.map((item) => `<label><input type="checkbox" name="selfTrait" value="${esc(item.id)}" /> ${esc(item.label)}</label>`).join("")}
+          </div>
+        </div>
+      `).join("");
       host.dataset.ready = "1";
+    }
+    function collectedSelfTraits() {
+      return [...document.querySelectorAll('#selfTraitGroups input[name="selfTrait"]:checked')].map((el) => el.value);
     }
     function closeSelfOverlay() {
       const box = $("selfListingOverlay");
@@ -4058,8 +4260,9 @@
           <p class="hint">${esc(item.price || "")} 元/月 · ${esc(item.kind_name || "")} · ${esc(item.layout || "")} · ${esc(item.area_name || "")} · ${esc(item.floor_name || "")}</p>
           ${(item.photos || []).length ? `<div class="self-photos detail">${(item.photos || []).map((url) => `<img src="${esc(url)}" alt="" />`).join("")}</div>` : item.cover ? `<div class="self-photos detail"><img src="${esc(item.cover)}" alt="" /></div>` : ""}
           <p>${esc(item.address || "")}</p>
+          ${(item.trait_labels || []).length ? `<p class="hint">${esc((item.trait_labels || []).join("、"))}</p>` : ""}
           ${item.body || item.self_body ? `<p>${esc(item.body || item.self_body)}</p>` : ""}
-          <p class="hint">${esc(item.contact_role || item.role_name || "")} ${esc(item.contact_name || "")}</p>
+          <p class="hint">${esc(item.contact_role || item.role_name || "")} ${esc(item.contact_name || "")}${item.pledged ? " · 刊登者自行聲明為屋主／代理人" : ""}</p>
           ${tel ? `<p><a class="tel" href="tel:${esc(tel.replace(/[^\d+]/g, ""))}">${esc(tel)}</a></p>` : ""}
           ${item.line_url ? `<p><a href="${esc(item.line_url)}" target="_blank" rel="noopener noreferrer">加入 LINE</a></p>` : ""}
           ${item.match_detail ? `<p class="hint">比對：${esc(item.match_detail)}</p>` : ""}
@@ -4079,30 +4282,61 @@
       }
       if (box) box.hidden = false;
     }
+    function paintProfile(me) {
+      if ($("profileNickname") && me && !$("profileNickname").dataset.dirty) {
+        $("profileNickname").value = me.nickname || "";
+      }
+      const img = $("profileAvatarImg");
+      const fallback = $("profileAvatarFallback");
+      const url = me?.avatar_url || "";
+      if (img && url) {
+        img.src = url;
+        img.hidden = false;
+        img.classList.remove("empty");
+        if (fallback) fallback.hidden = true;
+      } else if (img) {
+        img.hidden = true;
+        if (fallback) fallback.hidden = false;
+      }
+    }
+    function setOwnerFab(rows) {
+      const fab = $("ownerFab");
+      if (!fab) return;
+      const open = (rows || []).filter((row) => row.status === "open");
+      fab.hidden = isGuest || !open.length;
+      fab.textContent = open.length ? `我刊登的房子（${open.length}）` : "我刊登的房子";
+    }
+    function ownerCardHtml(item) {
+      return `
+        <article class="self-mine-card">
+          <strong>${esc(item.title)}</strong>
+          ${(item.photos || item.cover) ? `<div class="self-photos">${(item.photos || [item.cover]).filter(Boolean).slice(0, 5).map((url) => `<img src="${esc(url)}" alt="" />`).join("")}</div>` : ""}
+          <div class="muted">${esc(item.price || "")} 元 · ${esc(item.address || "")} · ${esc(item.status || "")}</div>
+          ${(item.trait_labels || []).length ? `<div class="muted">${esc((item.trait_labels || []).join("、"))}</div>` : ""}
+          ${item.status === "open" ? `<button type="button" class="ghost" data-self-close="${item.post_id}">關閉刊登</button>` : ""}
+        </article>`;
+    }
     async function loadMineSelfListings() {
       fillSelfDistricts();
+      paintSelfTraits();
       const box = $("selfMineList");
       if (!box || isGuest) {
         if (box) box.innerHTML = "";
+        setOwnerFab([]);
         return;
       }
       const res = await fetch("/api/self-listings");
       const data = await res.json().catch(() => ({}));
       if (data.legal && $("selfLegal")) $("selfLegal").textContent = data.legal;
+      if (data.audit && $("selfAudit")) $("selfAudit").textContent = data.audit;
+      if (data.pledge && $("selfPledgeText")) $("selfPledgeText").textContent = data.pledge;
       const rows = data.listings || [];
       box.innerHTML = rows.length
-        ? rows.map((item) => `
-          <article class="self-mine-card">
-            <div>
-              <strong>${esc(item.title)}</strong>
-              ${(item.photos || item.cover) ? `<div class="self-photos">${(item.photos || [item.cover]).filter(Boolean).slice(0, 5).map((url) => `<img src="${esc(url)}" alt="" />`).join("")}</div>` : ""}
-              <div class="muted">${esc(item.price || "")} 元 · ${esc(item.address || "")} · ${esc(item.status || "")}</div>
-              <div class="muted">到期 ${esc(String(item.expires_at || "").replace("T", " ").slice(0, 16))}</div>
-              ${item.status === "open" ? `<button type="button" class="ghost" data-self-close="${item.post_id}">關閉刊登</button>` : ""}
-            </div>
-          </article>
-        `).join("")
+        ? rows.map((item) => ownerCardHtml(item)).join("")
         : `<div class="empty">尚未刊登。填好上面的資料後送出，會出現在「找房」（預設仍只顯示整層住家）。</div>`;
+      setOwnerFab(rows);
+      const overlayList = $("ownerOverlayList");
+      if (overlayList) overlayList.innerHTML = rows.length ? rows.map((item) => ownerCardHtml(item)).join("") : `<div class="empty">尚未刊登。</div>`;
     }
     async function openSelfFromQuery() {
       const id = new URLSearchParams(location.search).get("self");
@@ -4181,6 +4415,64 @@
     $("meReloadBtn")?.addEventListener("click", () => $("reloadBtn")?.click());
     $("mePasswordBtn")?.addEventListener("click", () => $("changePasswordBtn")?.click());
     $("meDeleteBtn")?.addEventListener("click", () => $("deleteAccountBtn")?.click());
+    $("notifyJumpSettings")?.addEventListener("click", () => openNotifyHub("events"));
+    $("selfDistrict")?.addEventListener("change", syncSelfAddressPrefix);
+    $("profileNickname")?.addEventListener("input", () => { $("profileNickname").dataset.dirty = "1"; });
+    $("profileForm")?.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      if (isGuest) {
+        remindGuest();
+        return;
+      }
+      const msg = $("profileMsg");
+      try {
+        let avatarUrl;
+        const file = $("profileAvatar")?.files?.[0];
+        if (file) {
+          const up = await fetch("/api/self-listings/photos", {
+            method: "POST",
+            headers: { "Content-Type": file.type || "image/jpeg" },
+            body: file,
+          });
+          const saved = await readApi(up);
+          if (!up.ok) throw new Error(saved.error || "頭像上傳失敗");
+          avatarUrl = saved.url;
+        }
+        const res = await fetch("/api/profile", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nickname: $("profileNickname")?.value || "",
+            ...(avatarUrl ? { avatar_url: avatarUrl } : {}),
+          }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "儲存失敗");
+        if ($("profileNickname")) $("profileNickname").dataset.dirty = "";
+        paintProfile(data);
+        if ($("who")) $("who").textContent = data.display_name || data.nickname || data.email || "";
+        if (msg) msg.textContent = "已儲存個人資料";
+      } catch (error) {
+        if (msg) msg.textContent = error.message;
+      }
+    });
+    $("selfBodyTemplates")?.addEventListener("click", (ev) => {
+      const id = ev.target.closest("[data-body-tpl]")?.dataset.bodyTpl;
+      if (!id || !$("selfBody")) return;
+      $("selfBody").value = SELF_BODY_TPL[id] || $("selfBody").value;
+    });
+    function openOwnerOverlay() {
+      const box = $("ownerOverlay");
+      if (box) box.hidden = false;
+      loadMineSelfListings().catch(() => {});
+    }
+    function closeOwnerOverlay() {
+      const box = $("ownerOverlay");
+      if (box) box.hidden = true;
+    }
+    $("ownerFab")?.addEventListener("click", openOwnerOverlay);
+    $("ownerOverlayClose")?.addEventListener("click", closeOwnerOverlay);
+    document.querySelector("[data-close-owner]")?.addEventListener("click", closeOwnerOverlay);
     $("enablePushBtn")?.addEventListener("click", async () => {
       const msg = $("pushMsg");
       try {
@@ -4318,13 +4610,16 @@
             living: Number($("selfLiving")?.value) || 0,
             bath: Number($("selfBath")?.value) || 0,
             contact_name: $("selfContactName")?.value || "",
-            address: $("selfAddress")?.value || "",
+            street: $("selfAddress")?.value || "",
             phone: $("selfPhone")?.value || "",
             line_url: $("selfLine")?.value || "",
             cover: $("selfCover")?.value || "",
             photos: photoUrls,
             title: $("selfTitle")?.value || "",
             body: $("selfBody")?.value || "",
+            traits: collectedSelfTraits(),
+            deposit: $("selfDeposit")?.value || "",
+            accept_pledge: $("selfPledge")?.checked === true,
           }),
         });
         const data = await readApi(res);
@@ -4589,7 +4884,7 @@
       }
     });
     document.addEventListener("keydown", (ev) => {
-      if (ev.key === "Escape" && $("notifyHub") && !$("notifyHub").hidden) closeNotifyHub();
+      if (ev.key === "Escape" && $("ownerOverlay") && !$("ownerOverlay").hidden) closeOwnerOverlay();
     });
     $("wholeFloorOnly").onchange = () => {
       persistViewFilters();
@@ -4966,17 +5261,11 @@
       const items = stored.filter((item) => !read.has(dockItemKey(item)));
       if (items.length !== stored.length) saveDock(items);
       const dock = $("alertDock");
-      if (!items.length) {
-        dock.classList.remove("open");
-        $("dockList").innerHTML = "";
-        return;
-      }
-      dock.classList.add("open");
-      $("dockList").innerHTML = items.map((item) => `
+      const inboxHtml = (list) => list.map((item) => `
         <div class="dock-item" data-dock-key="${esc(dockItemKey(item))}">
           <div class="tags"><span class="tag ${item.type === "new" ? "new" : "same"}">${eventText[item.type] || item.type_label || item.type}</span></div>
           <h3 style="margin:6px 0 4px;font-size:16px">
-            <a href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-dock-open="${item.post_id}">${esc(item.title || "591 物件")}</a>
+            <a href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-dock-open="${item.post_id}">${esc(item.title || "物件")}</a>
           </h3>
           <div class="meta">${esc([item.price ? `${item.price} 元/月` : "", item.notify_facts || [item.address, item.layout, item.floor_name, item.area_name, item.housing_type].filter(Boolean).join(" · "), item.extra_fee_text].filter(Boolean).join(" · "))}</div>
           ${dockChangeHtml(item)}
@@ -4987,6 +5276,19 @@
           </div>
         </div>
       `).join("");
+      const inbox = $("notifyInbox");
+      const hint = $("notifyViewHint");
+      if (!items.length) {
+        dock.classList.remove("open");
+        $("dockList").innerHTML = "";
+        if (inbox) inbox.innerHTML = `<div class="notify-empty">還沒有待看更新。條件按儲存後，全新物件、價格變動與下架會出現在這裡，也可按「允許系統推播」。</div>`;
+        if (hint) hint.textContent = "尚無待看更新。";
+        return;
+      }
+      dock.classList.add("open");
+      $("dockList").innerHTML = inboxHtml(items);
+      if (inbox) inbox.innerHTML = inboxHtml(items);
+      if (hint) hint.textContent = `有 ${items.length} 則待看更新`;
     }
     function dismissDock(postId) {
       saveDock(loadDock().filter((item) => String(item.post_id) !== String(postId)));
@@ -5332,7 +5634,7 @@
       saveDock([]);
       renderDock();
     };
-    $("dockList").addEventListener("click", async (ev) => {
+    async function onDockClick(ev) {
       const readKey = ev.target.closest("[data-dock-read]")?.dataset.dockRead;
       if (readKey) {
         ev.preventDefault();
@@ -5354,9 +5656,7 @@
         return;
       }
       if (open) {
-        // 連結走 /go/:id（含中鍵開新分頁）；左鍵也記已瀏覽並關閉 dock 項
         if (ev.button === 0 && !ev.metaKey && !ev.ctrlKey && !ev.shiftKey && !ev.altKey) {
-          // 讓 <a> 自己開分頁；另外標記並刷新（/go 也會標記，雙寫無妨）
           markDockRead(loadDock().filter((item) => String(item.post_id) === String(open)));
           fetch(`/api/listings/${open}/flags`, {
             method: "POST",
@@ -5365,9 +5665,10 @@
           }).then(loadList);
           dismissDock(open);
         }
-        return;
       }
-    });
+    }
+    $("dockList").addEventListener("click", onDockClick);
+    $("notifyInbox")?.addEventListener("click", onDockClick);
 
     renderDistrictPicker({ watchDistricts: [] });
 
@@ -5381,6 +5682,8 @@
       ensureServiceWorker();
       fillDemandDistricts();
       fillSelfDistricts();
+      paintSelfTraits();
+      loadMineSelfListings().catch(() => {});
       openSelfFromQuery().catch(() => {});
       setTimeout(() => map?.invalidateSize(), 250);
       if (!window.__watchStream && !isGuest) {

@@ -267,13 +267,13 @@ test("product name is 吉比租房物件追蹤 without v2 開發版 copy", () =>
   assert.equal(html.includes("v2 開發版"), false);
   assert.equal(html.includes("v3 開發版"), false);
   assert.equal(html.includes("與線上版分開的資料庫"), false);
-  assert.match(html, /ver\. 3\.19/);
+  assert.match(html, /ver\. 3\.20/);
   assert.doesNotMatch(html, /<h1>[^<]*v3/i);
   assert.match(login, /<h1>吉比租房物件追蹤<\/h1>/);
   assert.equal(login.includes("v2 開發版"), false);
   assert.equal(login.includes("v3 開發版"), false);
   assert.equal(login.includes("資料與線上版分開"), false);
-  assert.match(login, /ver\. 3\.19/);
+  assert.match(login, /ver\. 3\.20/);
 });
 
 test("MRT toggle and guest tour are in the page", () => {
@@ -295,7 +295,8 @@ test("MRT toggle and guest tour are in the page", () => {
   assert.match(html, /behavior: "instant"/);
   assert.match(html, /\$\("showMrt"\)\?\.addEventListener\("change"/);
   assert.match(html, /id="notifyHub"/);
-  assert.match(html, /data-open-hub="webhook"/);
+  assert.match(html, /data-hub-tab="webhook"/);
+  assert.match(html, /id="notifyInbox"/);
   assert.equal(html.includes('showMrt: $("showMrt") ? $("showMrt").checked : true'), true);
 });
 
@@ -446,6 +447,9 @@ test("panel toggle sits above scroll-top and uses expand/collapse glyphs", () =>
   assert.match(html, /filter-restore-btn[\s\S]*background:\s*var\(--accent\)/);
   assert.match(html, /verified"\) === "1"/);
   assert.match(html, /信箱已確認/);
+  assert.match(html, /id="notifyInbox"/);
+  assert.match(html, /id="profileForm"/);
+  assert.match(html, /id="ownerFab"/);
 });
 
 test("self listing form and in-site detail stay on this site", () => {

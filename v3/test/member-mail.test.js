@@ -58,8 +58,9 @@ test("sendMail can use a member SMTP override without touching env defaults", ()
 test("index page has a same-page notify hub and Discord guide", () => {
   const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
   assert.match(html, /id="notifyHub"/);
-  assert.match(html, /data-open-hub="webhook"/);
-  assert.match(html, /data-open-hub="mail"/);
+  assert.match(html, /data-hub-tab="webhook"/);
+  assert.match(html, /data-hub-tab="mail"/);
+  assert.match(html, /id="notifyInbox"/);
   assert.match(html, /discord.com\/register/);
   assert.match(html, /應用程式密碼/);
   assert.match(html, /id="mailPreset"/);
