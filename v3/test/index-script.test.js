@@ -444,6 +444,8 @@ test("panel toggle sits above scroll-top and uses expand/collapse glyphs", () =>
   assert.match(html, /admin-only" id="watchBtn"/);
   assert.match(html, /bottom-nav[\s\S]*position:\s*fixed/);
   assert.match(html, /filter-restore-btn[\s\S]*background:\s*var\(--accent\)/);
+  assert.match(html, /verified"\) === "1"/);
+  assert.match(html, /信箱已確認/);
 });
 
 test("self listing form and in-site detail stay on this site", () => {

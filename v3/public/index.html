@@ -2542,6 +2542,10 @@
       $("saveMsg").textContent = msg;
       if ($("status")) $("status").textContent = msg;
     }
+    if (new URLSearchParams(location.search).get("verified") === "1") {
+      flash("信箱已確認，歡迎使用。");
+      history.replaceState({}, "", location.pathname);
+    }
 
     function hideGuestToast() {
       const box = $("guestToast");

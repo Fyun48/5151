@@ -90,6 +90,7 @@ test("change password rejects the current password and stores the new one", () =
 test("server register, change-password, and sponsor patch queue system mail", () => {
   const src = readFileSync(path.join(dir, "../src/server.js"), "utf8");
   assert.match(src, /queueSystemMail\("welcome"/);
+  assert.match(src, /queueSystemMail\("verify_expired"/);
   assert.match(src, /queueSystemMail\("password_changed"/);
   assert.match(src, /queueSystemMail\("sponsor_thanks"/);
   assert.match(src, /queueSystemMail\("account_deleted"/);
