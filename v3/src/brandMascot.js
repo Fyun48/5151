@@ -9,7 +9,7 @@ export const BRAND_SLOTS = ["mark", "welcome", "register", "sponsor", "confused"
 
 const BUNDLED = {
   mark: "/brand/mark.png",
-  welcome: "/brand/walk.gif",
+  welcome: "/brand/walk.webp",
   register: "/brand/duo.png",
   sponsor: "/brand/heads.png",
   confused: "/brand/confused.webm",

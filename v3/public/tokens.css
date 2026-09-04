@@ -82,32 +82,41 @@
 }
 .jibby-mascot {
   position: fixed;
-  right: 16px;
-  bottom: 72px;
+  inset: 0;
   z-index: 240;
-  width: min(280px, calc(100vw - 28px));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  background: transparent;
 }
+.jibby-mascot[hidden] { display: none !important; }
 .jibby-mascot-card {
   position: relative;
-  background: var(--paper);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  padding: 12px 14px 14px;
+  width: min(75vw, 75vh);
+  max-width: 75vw;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
 }
 .jibby-mascot-close {
   position: absolute;
-  top: 6px;
-  right: 6px;
+  top: -4px;
+  right: -4px;
+  z-index: 1;
   min-width: 36px;
   width: 36px;
   height: 36px;
   padding: 0;
+  background: var(--paper);
+  border: 1px solid var(--line);
 }
 .jibby-mascot-media {
-  margin: 4px 18px 8px 0;
-  border-radius: 8px;
-  overflow: hidden;
-  background: var(--ink);
+  margin: 0;
+  border-radius: 0;
+  overflow: visible;
+  background: transparent;
   line-height: 0;
 }
 .jibby-mascot-media img,
@@ -115,9 +124,17 @@
   display: block;
   width: 100%;
   height: auto;
-  max-height: 180px;
+  max-width: 75vw;
+  max-height: 75vh;
   object-fit: contain;
-  background: #111;
+  background: transparent;
+}
+.jibby-mascot-copy {
+  margin: 10px 8px 0;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 10px 12px;
 }
 .jibby-mascot-title {
   margin: 0;

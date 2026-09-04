@@ -24,11 +24,16 @@
       <div class="jibby-mascot-card">
         <button type="button" class="ghost jibby-mascot-close" id="jibbyMascotClose" aria-label="關閉">×</button>
         <div class="jibby-mascot-media" id="jibbyMascotMedia"></div>
-        <p class="jibby-mascot-title" id="jibbyMascotTitle"></p>
-        <p class="jibby-mascot-body" id="jibbyMascotBody"></p>
+        <div class="jibby-mascot-copy">
+          <p class="jibby-mascot-title" id="jibbyMascotTitle"></p>
+          <p class="jibby-mascot-body" id="jibbyMascotBody"></p>
+        </div>
       </div>`;
     document.body.appendChild(wrap);
     $("jibbyMascotClose").onclick = hide;
+    wrap.addEventListener("click", (ev) => {
+      if (ev.target === wrap) hide();
+    });
   }
 
   function applyChrome() {
