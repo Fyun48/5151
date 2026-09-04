@@ -112,7 +112,7 @@ import {
   setUserPlan as setUserPlanOn,
   verifyUserPassword as verifyUserPasswordOn,
 } from "./members.js";
-import { updateUserProfile as updateUserProfileOn } from "./profile.js";
+import { publicProfile, updateUserProfile as updateUserProfileOn } from "./profile.js";
 import { requestTempPassword as requestTempPasswordOn } from "./forgotPassword.js";
 import { shouldDeliverNotify, formatNotifyFacts, isSameNotifyDetail } from "./notify.js";
 import {
@@ -957,7 +957,8 @@ export function registerUser(input) {
 }
 
 export function updateUserProfile(userId, input) {
-  return publicUser(updateUserProfileOn(db, userId, input));
+  const row = updateUserProfileOn(db, userId, input);
+  return { ...publicUser(row), ...publicProfile(row) };
 }
 
 export function countOpenSelfListings(userId) {

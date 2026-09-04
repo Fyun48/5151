@@ -28,7 +28,7 @@ export const SPONSOR_PROVIDERS = [
     signupUrl: "https://www.ezpay.com.tw/",
     memberBlurb: "台灣信用卡",
     feeNote: "個人免年費；刷卡約 2.8%。",
-    hint: "藍新集團的電子支付。實名驗證後可做收款連結，台灣卡較順。",
+    hint: "登入 ezPay 簡單付後台（ezpay.com.tw），個人會員與銀行帳戶通過後，到「收款連結／產生收款連結」建立一筆（固定金額或讓對方自填）。複製 https 網址貼到下面「你的收款網址」並勾選顯示。銀行帳號是給平台撥款用，不是給會員看的收款網址。",
   },
   {
     id: "oen",

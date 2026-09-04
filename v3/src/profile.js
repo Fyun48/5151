@@ -1,7 +1,12 @@
-/** 會員暱稱與頭像：系統與需求牆用這個名字稱呼，沒填才退回信箱。 */
+/** 會員暱稱、頭像與選填聯絡資料。聯絡欄預設不公開。 */
+
+import { validateEmail } from "./password.js";
 
 export const NICKNAME_MIN = 2;
 export const NICKNAME_MAX = 20;
+
+export const PROFILE_PRIVACY =
+  "這些欄位只存在你的會員資料，預設不公開、也不會自動出現在刊登。本站依提供服務所需處理，不做專責保管、不轉售、也不主動散給第三人；除非法律要求，或你另外同意公開。可隨時改或清空。請勿填無法承受外洩的機密。";
 
 export function normalizeNickname(value, { required = false } = {}) {
   const raw = String(value || "").trim().replace(/\s+/g, " ");
@@ -45,6 +50,13 @@ export function ensureProfileSchema(db) {
     "ALTER TABLE users ADD COLUMN nickname TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE users ADD COLUMN avatar_url TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE users ADD COLUMN self_ban_until TEXT",
+    "ALTER TABLE users ADD COLUMN home_address TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN company_address TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN contact_phone TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN line_id TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN line_qr_url TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN contact_email TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN profile_privacy_at TEXT",
   ]) {
     try {
       db.exec(sql);
@@ -54,6 +66,30 @@ export function ensureProfileSchema(db) {
   }
 }
 
+function cleanLine(value, max) {
+  return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
+}
+
+function mediaUrl(value, label) {
+  const next = String(value || "").trim();
+  if (!next) return "";
+  if (/^\/media\/self\/[a-f0-9]{32}\.(jpg|png|webp)$/.test(next)) return next;
+  const err = new Error(`${label}請用本站上傳的照片`);
+  err.status = 400;
+  throw err;
+}
+
+function extraFilled(row) {
+  return Boolean(
+    String(row.home_address || "").trim()
+    || String(row.company_address || "").trim()
+    || String(row.contact_phone || "").trim()
+    || String(row.line_id || "").trim()
+    || String(row.line_qr_url || "").trim()
+    || String(row.contact_email || "").trim(),
+  );
+}
+
 export function publicProfile(row) {
   if (!row) return null;
   const nickname = String(row.nickname || "").trim();
@@ -61,6 +97,14 @@ export function publicProfile(row) {
     nickname,
     avatar_url: String(row.avatar_url || "").trim(),
     display_name: displayName(row),
+    home_address: String(row.home_address || "").trim(),
+    company_address: String(row.company_address || "").trim(),
+    contact_phone: String(row.contact_phone || "").trim(),
+    line_id: String(row.line_id || "").trim(),
+    line_qr_url: String(row.line_qr_url || "").trim(),
+    contact_email: String(row.contact_email || "").trim(),
+    privacy_accepted: Boolean(String(row.profile_privacy_at || "").trim()),
+    privacy_text: PROFILE_PRIVACY,
   };
 }
 
@@ -82,14 +126,61 @@ export function updateUserProfile(conn, userId, input = {}) {
     : String(row.nickname || "");
   let avatar = String(row.avatar_url || "");
   if (Object.prototype.hasOwnProperty.call(input, "avatar_url")) {
-    const next = String(input.avatar_url || "").trim();
-    if (next && !/^\/media\/self\/[a-f0-9]{32}\.(jpg|png|webp)$/.test(next)) {
-      const err = new Error("頭像請用本站上傳的照片");
+    avatar = mediaUrl(input.avatar_url, "頭像");
+  }
+  const home = Object.prototype.hasOwnProperty.call(input, "home_address")
+    ? cleanLine(input.home_address, 120)
+    : String(row.home_address || "");
+  const company = Object.prototype.hasOwnProperty.call(input, "company_address")
+    ? cleanLine(input.company_address, 120)
+    : String(row.company_address || "");
+  const phone = Object.prototype.hasOwnProperty.call(input, "contact_phone")
+    ? cleanLine(input.contact_phone, 40)
+    : String(row.contact_phone || "");
+  const lineId = Object.prototype.hasOwnProperty.call(input, "line_id")
+    ? cleanLine(input.line_id, 40)
+    : String(row.line_id || "");
+  let lineQr = String(row.line_qr_url || "");
+  if (Object.prototype.hasOwnProperty.call(input, "line_qr_url")) {
+    lineQr = mediaUrl(input.line_qr_url, "LINE QR");
+  }
+  let contactEmail = Object.prototype.hasOwnProperty.call(input, "contact_email")
+    ? cleanLine(input.contact_email, 120)
+    : String(row.contact_email || "");
+  if (contactEmail) {
+    const ok = validateEmail(contactEmail);
+    if (!ok) {
+      const err = new Error("聯絡 Email 格式不對");
       err.status = 400;
       throw err;
     }
-    avatar = next;
+    contactEmail = ok;
   }
-  conn.prepare("UPDATE users SET nickname = ?, avatar_url = ? WHERE id = ?").run(nickname, avatar, uid);
+  const next = {
+    ...row,
+    nickname,
+    avatar_url: avatar,
+    home_address: home,
+    company_address: company,
+    contact_phone: phone,
+    line_id: lineId,
+    line_qr_url: lineQr,
+    contact_email: contactEmail,
+  };
+  let privacyAt = String(row.profile_privacy_at || "").trim();
+  if (extraFilled(next) && !privacyAt) {
+    if (input.accept_privacy !== true) {
+      const err = new Error("請先勾選個資說明");
+      err.status = 400;
+      throw err;
+    }
+    privacyAt = new Date().toISOString();
+  }
+  conn.prepare(`
+    UPDATE users SET
+      nickname = ?, avatar_url = ?, home_address = ?, company_address = ?,
+      contact_phone = ?, line_id = ?, line_qr_url = ?, contact_email = ?, profile_privacy_at = ?
+    WHERE id = ?
+  `).run(nickname, avatar, home, company, phone, lineId, lineQr, contactEmail, privacyAt || null, uid);
   return conn.prepare("SELECT * FROM users WHERE id = ?").get(uid);
 }

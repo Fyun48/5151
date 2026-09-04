@@ -332,21 +332,29 @@
     .app-view { display: none; }
     body:not([data-app-view="listings"]) #listingsView { display: none; }
     body[data-app-view="demand"] #demandView { display: block; }
+    body[data-app-view="post"] #postView { display: block; }
     body[data-app-view="notify"] #notifyView { display: block; }
     body[data-app-view="me"] #meView { display: block; }
-    #demandView, #meView, #notifyView {
+    #demandView, #meView, #notifyView, #postView {
       padding: 0 32px 40px;
+    }
+    #notifyView .card.panel,
+    #meView .card.panel,
+    #postView .card.panel {
+      width: min(760px, 100%);
+      margin-left: auto;
+      margin-right: auto;
     }
     body { padding-bottom: 88px; }
     .bottom-nav {
       display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 6px;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 4px;
       position: fixed;
       left: 50%;
       transform: translateX(-50%);
       bottom: 16px;
-      width: min(520px, calc(100vw - 32px));
+      width: min(680px, calc(100vw - 16px));
       z-index: 120;
       margin: 0;
       padding: 4px;
@@ -360,10 +368,10 @@
       border: 0;
       background: none;
       color: var(--muted);
-      font-size: var(--text-sm);
+      font-size: 12px;
       font-weight: 700;
       min-height: var(--touch);
-      padding: 8px 4px;
+      padding: 8px 2px;
       border-radius: var(--radius);
     }
     .bottom-nav button[aria-current="page"] {
@@ -1095,6 +1103,49 @@
       font-size: 13px;
       line-height: 1.6;
     }
+    .pledge-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      margin: 12px 0 0;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--accent-mist);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .pledge-row input { width: auto; margin: 3px 0 0; flex: 0 0 auto; }
+    .pledge-row span { flex: 1; min-width: 0; }
+    .self-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px 12px;
+      margin: 0 0 12px;
+    }
+    .self-grid label { margin: 0 0 4px; }
+    .self-grid input,
+    .self-grid select { margin: 0; }
+    .self-grid .span-2 { grid-column: span 2; }
+    .self-grid .span-all { grid-column: 1 / -1; }
+    @media (min-width: 900px) {
+      .self-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .self-grid .span-2 { grid-column: span 2; }
+      .self-grid .span-3 { grid-column: span 3; }
+    }
+    .profile-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px 12px;
+      margin-top: 12px;
+    }
+    .profile-grid .span-2 { grid-column: span 2; }
+    .profile-grid label { margin: 0 0 4px; }
+    .profile-grid input { margin: 0; }
+    @media (min-width: 900px) {
+      .profile-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .profile-grid .span-2 { grid-column: span 2; }
+    }
     #ownerFab {
       position: fixed;
       right: 18px;
@@ -1507,7 +1558,10 @@
       body.panel-collapsed #settingsPanel { display: none; }
       body.panel-collapsed.filter-sheet-open #settingsPanel { display: block; }
       .notify-shortcuts { display: none; }
-      #demandView, #meView, #notifyView { padding: 0 16px 24px; }
+      #demandView, #meView, #notifyView, #postView { padding: 0 16px 24px; }
+      #notifyView .card.panel,
+      #meView .card.panel,
+      #postView .card.panel { width: 100%; }
       .site-footer { margin: 8px 16px 88px; }
     }
     @media (max-width: 767px) {
@@ -1875,7 +1929,7 @@
   <section class="app-view" id="meView">
     <div class="card panel" id="profilePanel">
       <h2 style="margin:0 0 8px">個人資料</h2>
-      <p class="hint">填暱稱後，需求牆與系統會用這個名字稱呼你。沒填則顯示信箱。</p>
+      <p class="hint">填暱稱後，需求牆與系統會用這個名字稱呼你。沒填則顯示信箱。下面聯絡欄預設不公開。</p>
       <form id="profileForm">
         <div class="profile-card">
           <img class="profile-avatar empty" id="profileAvatarImg" alt="" hidden />
@@ -1887,6 +1941,39 @@
             <input type="file" id="profileAvatar" accept="image/jpeg,image/png,image/webp" />
           </div>
         </div>
+        <div class="profile-grid">
+          <div class="span-2">
+            <label>註冊 Email</label>
+            <input id="profileAccountEmail" readonly />
+          </div>
+          <div class="span-2">
+            <label>聯絡 Email（選填）</label>
+            <input id="profileContactEmail" maxlength="120" placeholder="與註冊信箱不同再填" />
+          </div>
+          <div class="span-2">
+            <label>現在居住地（選填）</label>
+            <input id="profileHome" maxlength="120" placeholder="例如 台北市士林區…" />
+          </div>
+          <div class="span-2">
+            <label>公司地址（選填）</label>
+            <input id="profileCompany" maxlength="120" placeholder="通勤篩選請仍到找房設定" />
+          </div>
+          <div>
+            <label>聯絡電話（選填）</label>
+            <input id="profilePhone" maxlength="40" inputmode="tel" placeholder="09xxxxxxxx" />
+          </div>
+          <div>
+            <label>LINE ID（選填）</label>
+            <input id="profileLineId" maxlength="40" placeholder="不含網址" />
+          </div>
+          <div class="span-2">
+            <label>LINE QR Code 圖（選填）</label>
+            <input type="file" id="profileLineQr" accept="image/jpeg,image/png,image/webp" />
+            <img id="profileLineQrImg" alt="" hidden style="margin-top:8px;max-height:88px;border-radius:8px;border:1px solid var(--line)" />
+          </div>
+        </div>
+        <p class="hint" id="profilePrivacyText">這些欄位只存在你的會員資料，預設不公開、也不會自動出現在刊登。本站依提供服務所需處理，不做專責保管、不轉售、也不主動散給第三人；除非法律要求，或你另外同意公開。可隨時改或清空。請勿填無法承受外洩的機密。</p>
+        <label class="checks"><input type="checkbox" id="profilePrivacy" /> 我已了解上述個資說明</label>
         <div class="row" style="margin-top:12px">
           <button type="submit" class="primary" id="profileSave">儲存個人資料</button>
           <span class="save-msg" id="profileMsg"></span>
@@ -1896,42 +1983,32 @@
     <div class="ad-slot me" id="adMe" hidden></div>
     <div class="card panel" data-tour="notify">
       <h2 style="margin:0 0 8px">帳號</h2>
-      <p class="hint">通知種類、推播與 Discord／SMTP 請到「通知」。這裡管帳號本身。</p>
+      <p class="hint">通知種類、推播與 Discord／SMTP 請到「通知」。這裡只留帳號本身。</p>
       <p class="hint" id="notifyMailHint" hidden>物件／屋源提醒若要用信，請自己填 SMTP。</p>
       <p class="hint" id="notifyHubStatus" hidden></p>
-      <div class="row" style="margin-top:8px">
-        <button type="button" class="ghost" id="meFilterBtn">開啟篩選</button>
-        <button type="button" class="ghost admin-only" id="meWatchBtn">立即檢查</button>
-        <button type="button" class="ghost" id="meReloadBtn">重新整理</button>
-      </div>
       <div class="row" style="margin-top:10px">
         <button type="button" class="ghost" id="mePasswordBtn">變更密碼</button>
         <button type="button" class="ghost" id="meDeleteBtn">取消會員</button>
-        <a class="ghost" id="meLogoutBtn" href="/logout">登出</a>
-        <a class="ghost admin-only" href="/admin.html">後台管理</a>
       </div>
     </div>
+  </section>
+  <section class="app-view" id="postView">
     <div class="card panel" id="selfListingPanel">
-      <h2 style="margin:0 0 8px">自行刊登</h2>
-      <p class="hint" id="selfGuestHint">登入後才能自行刊登（不是仲介、沒有私訊）。</p>
-      <p class="hint" id="selfLegal">這是免費找房工具，不是仲介、不保證媒合、不經手金錢。自行刊登是公開物件摘要，沒有即時私訊。</p>
-      <p class="hint" id="selfAudit">站內物件會不定期抽查。若發現不實、惡作劇或明顯誤導，系統會自動下架，並暫停該帳號上傳物件 14 天。這不是仲介認證，也不保證屋況屬實。</p>
-      <p class="hint">同時最多 3 則、30 天後失效。新帳號須滿 24 小時。找房列表預設仍只顯示整層住家。</p>
+      <h2 style="margin:0 0 8px">有房刊登</h2>
+      <p class="hint" id="selfGuestHint">登入後才能刊登（不是仲介、沒有私訊）。</p>
+      <p class="hint" id="selfLegal">免費找房工具，不是仲介、不經手金錢。公開摘要、沒有即時私訊。同時最多 3 則、30 天失效；新帳號滿 24 小時。找房預設仍只顯示整層住家。</p>
+      <p class="hint" id="selfAudit">不實、惡作劇或明顯誤導會下架並暫停上傳 14 天。不驗證權狀、不保證真實。</p>
       <p class="hint" id="selfRichHint">來看的人最常問的，其實多半寫在這裡就能先答完。多勾一項、多寫一句，之後就少被重複打擾，也比較快遇到適合的人。</p>
       <form id="selfListingForm">
-        <label>行政區</label>
-        <select id="selfDistrict"></select>
-        <div class="price-row">
+        <div class="self-grid">
           <div>
-            <label>每月租金</label>
-            <input type="number" id="selfRent" min="1000" max="200000" step="500" placeholder="例如 25000" />
+            <label>縣市</label>
+            <select id="selfCity"></select>
           </div>
           <div>
-            <label>可使用坪數（扣除公設坪後）</label>
-            <input type="number" id="selfPing" min="1" max="500" step="0.5" placeholder="例如 18" />
+            <label>行政區</label>
+            <select id="selfDistrict"></select>
           </div>
-        </div>
-        <div class="price-row">
           <div>
             <label>類型</label>
             <select id="selfKind">
@@ -1949,18 +2026,22 @@
               <option value="agent">代理人</option>
             </select>
           </div>
-        </div>
-        <div class="price-row">
+          <div>
+            <label>每月租金</label>
+            <input type="number" id="selfRent" min="1000" max="200000" step="500" placeholder="例如 25000" />
+          </div>
+          <div>
+            <label>可用坪數</label>
+            <input type="number" id="selfPing" min="1" max="500" step="0.5" placeholder="扣除公設" />
+          </div>
           <div>
             <label>所在樓層</label>
             <input type="number" id="selfFloor" min="1" max="80" placeholder="例如 3" />
           </div>
           <div>
-            <label>總樓層（選填）</label>
-            <input type="number" id="selfTotalFloors" min="1" max="80" placeholder="例如 5" />
+            <label>總樓層</label>
+            <input type="number" id="selfTotalFloors" min="1" max="80" placeholder="選填" />
           </div>
-        </div>
-        <div class="price-row">
           <div>
             <label>房</label>
             <input type="number" id="selfRooms" min="0" max="12" value="2" />
@@ -1969,40 +2050,52 @@
             <label>廳</label>
             <input type="number" id="selfLiving" min="0" max="8" value="1" />
           </div>
-        </div>
-        <div class="price-row">
           <div>
             <label>衛</label>
             <input type="number" id="selfBath" min="0" max="8" value="1" />
           </div>
           <div>
+            <label>押金</label>
+            <select id="selfDeposit">
+              <option value="">未填</option>
+              <option value="one">一個月</option>
+              <option value="two">兩個月</option>
+              <option value="talk">面議</option>
+            </select>
+          </div>
+          <div class="span-2">
             <label>聯絡人稱呼</label>
             <input id="selfContactName" maxlength="80" placeholder="例如 林先生" />
           </div>
+          <div class="span-2">
+            <label>標題（選填）</label>
+            <input id="selfTitle" maxlength="80" placeholder="空白則用行政區與租金" />
+          </div>
+          <div class="span-all">
+            <label>路名地址</label>
+            <div class="addr-combo">
+              <p class="addr-prefix" id="selfAddressPrefix">請先選縣市與行政區</p>
+              <input id="selfAddress" maxlength="80" placeholder="例如 中正路 100 號" />
+            </div>
+          </div>
+          <div class="span-2">
+            <label>公開電話（選填）</label>
+            <input id="selfPhone" maxlength="40" inputmode="tel" placeholder="09xxxxxxxx" />
+          </div>
+          <div class="span-2">
+            <label>LINE 連結（選填）</label>
+            <input id="selfLine" maxlength="300" placeholder="https://line.me/..." />
+          </div>
+          <div class="span-2">
+            <label>物件照片（最多 5 張）</label>
+            <input type="file" id="selfPhotos" accept="image/jpeg,image/png,image/webp" multiple />
+          </div>
+          <div class="span-2">
+            <label>或貼封面網址</label>
+            <input id="selfCover" maxlength="500" placeholder="https://..." />
+          </div>
         </div>
-        <label>地址（行政區會自動帶入，請至少加上路名）</label>
-        <div class="addr-combo">
-          <p class="addr-prefix" id="selfAddressPrefix">請先選行政區</p>
-          <input id="selfAddress" maxlength="80" placeholder="例如 中正路 100 號" />
-        </div>
-        <label>公開電話（選填）</label>
-        <input id="selfPhone" maxlength="40" inputmode="tel" placeholder="09xxxxxxxx" />
-        <label>LINE 連結（選填）</label>
-        <input id="selfLine" maxlength="300" placeholder="https://line.me/..." />
-        <label>物件照片（選填，最多 5 張，每張 2MB，JPG／PNG／WebP）</label>
-        <input type="file" id="selfPhotos" accept="image/jpeg,image/png,image/webp" multiple />
         <div class="self-photos" id="selfPhotoPreview" hidden></div>
-        <label>或貼封面網址（選填）</label>
-        <input id="selfCover" maxlength="500" placeholder="https://..." />
-        <label>標題（選填）</label>
-        <input id="selfTitle" maxlength="80" placeholder="空白則自動用行政區與租金" />
-        <label>押金</label>
-        <select id="selfDeposit">
-          <option value="">未填</option>
-          <option value="one">押金一個月</option>
-          <option value="two">押金兩個月</option>
-          <option value="talk">押金面議</option>
-        </select>
         <div id="selfTraitGroups"></div>
         <p class="hint" id="selfTraitNudge" hidden>社區大樓的話，中庭與陽台常常是租客想先知道的。有的話點一下就好。</p>
         <label>說明（最多 500 字）</label>
@@ -2012,8 +2105,10 @@
           <button type="button" class="ghost" data-body-tpl="near-mrt">套用：近捷運通勤</button>
         </div>
         <textarea id="selfBody" maxlength="500" placeholder="格局、設備、可入住日。沒有私訊。"></textarea>
-        <p class="pledge-box" id="selfPledgeText">我是這間房子的屋主，或已取得屋主授權的代理人。我確認刊登內容屬實，了解平台會抽查，不實刊登會被下架並暫停上傳。平台不驗證權狀、不保證真實，法律責任由我自行負擔。</p>
-        <label class="checks"><input type="checkbox" id="selfPledge" /> 我已閱讀並同意以上聲明</label>
+        <label class="pledge-row">
+          <input type="checkbox" id="selfPledge" />
+          <span id="selfPledgeText">我是這間房子的屋主，或已取得屋主授權的代理人。我確認刊登內容屬實，了解平台會抽查，不實刊登會被下架並暫停上傳。平台不驗證權狀、不保證真實，法律責任由我自行負擔。</span>
+        </label>
         <div class="row" style="margin-top:10px">
           <button type="submit" class="primary" id="selfSubmit">刊登物件</button>
           <span class="save-msg" id="selfMsg"></span>
@@ -2024,9 +2119,10 @@
   </section>
   <nav class="bottom-nav" id="bottomNav" aria-label="主要分頁">
     <button type="button" data-nav="listings" aria-current="page">找房</button>
+    <button type="button" data-nav="post">有房刊登</button>
     <button type="button" data-nav="demand">需求</button>
+    <button type="button" data-nav="me">設定</button>
     <button type="button" data-nav="notify">通知</button>
-    <button type="button" data-nav="me">我的</button>
   </nav>
   <div id="selfListingOverlay" class="hub-overlay" hidden>
     <div class="hub-backdrop" data-close-self></div>
@@ -2244,7 +2340,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver">ver. 3.21</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver">ver. 3.22</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -4188,14 +4284,14 @@
       if (bg) bg.hidden = true;
     }
     function setAppView(name) {
-      const view = ["listings", "demand", "notify", "me"].includes(name) ? name : "listings";
+      const view = ["listings", "post", "demand", "notify", "me"].includes(name) ? name : "listings";
       document.body.dataset.appView = view;
       document.querySelectorAll("#bottomNav [data-nav]").forEach((btn) => {
         btn.setAttribute("aria-current", btn.dataset.nav === view ? "page" : "false");
       });
       if (view !== "listings") closeFilterSheet();
       if (view === "demand") loadDemand().catch(() => {});
-      if (view === "me") loadMineSelfListings().catch(() => {});
+      if (view === "post") loadMineSelfListings().catch(() => {});
       if (view === "notify") {
         $("alertDock")?.classList.add("open");
         renderDock();
@@ -4288,26 +4384,41 @@
       }).join("");
       host.dataset.ready = "1";
     }
+    function selfCityList() {
+      return Array.isArray(cities) && cities.length ? cities : CITIES_EMBEDDED;
+    }
     function fillSelfDistricts() {
-      const host = $("selfDistrict");
-      if (!host) return;
-      if (host.dataset.ready !== "1") {
-        const src = [...document.querySelectorAll("#districtPicker [data-district]")];
-        host.innerHTML = `<option value="">請選擇行政區</option>` + src.map((el) => {
-          const label = el.closest("label")?.textContent?.trim() || el.value;
-          return `<option value="${el.value}">${label.replace(/[<>]/g, "")}</option>`;
-        }).join("");
-        host.dataset.ready = "1";
+      const citySel = $("selfCity");
+      const distSel = $("selfDistrict");
+      if (!citySel || !distSel) return;
+      if (citySel.dataset.ready !== "1") {
+        citySel.innerHTML = `<option value="">縣市</option>` + selfCityList().map((city) => (
+          `<option value="${esc(String(city.id))}">${esc(city.name)}</option>`
+        )).join("");
+        citySel.dataset.ready = "1";
       }
+      fillSelfDistrictOptions();
+    }
+    function fillSelfDistrictOptions() {
+      const citySel = $("selfCity");
+      const distSel = $("selfDistrict");
+      if (!distSel) return;
+      const city = selfCityList().find((row) => String(row.id) === String(citySel?.value || ""));
+      const keep = distSel.value;
+      distSel.innerHTML = `<option value="">行政區</option>` + (city?.districts || []).map((row) => (
+        `<option value="${esc(String(city.id))}-${esc(String(row.id))}">${esc(row.name)}</option>`
+      )).join("");
+      if ([...distSel.options].some((opt) => opt.value === keep)) distSel.value = keep;
       syncSelfAddressPrefix();
     }
     function syncSelfAddressPrefix() {
-      const host = $("selfDistrict");
+      const citySel = $("selfCity");
+      const distSel = $("selfDistrict");
       const prefix = $("selfAddressPrefix");
       if (!prefix) return;
-      const opt = host?.selectedOptions?.[0];
-      const label = String(opt?.textContent || "").trim();
-      prefix.textContent = host?.value && label ? label.replace(/\s+/g, "") : "請先選行政區";
+      const cityName = citySel?.selectedOptions?.[0]?.textContent?.trim() || "";
+      const distName = distSel?.selectedOptions?.[0]?.textContent?.trim() || "";
+      prefix.textContent = citySel?.value && distSel?.value ? `${cityName}${distName}`.replace(/\s+/g, "") : "請先選縣市與行政區";
     }
     const SELF_BODY_TPL = {
       family: "屋況整潔、採光佳，適合小家庭。可使用坪數已扣除公設。社區大樓可順便標中庭、陽台。可遷入日可再約看屋時間確認。沒有站內私訊，請用公開電話或 LINE 聯絡。",
@@ -4400,6 +4511,14 @@
       if ($("profileNickname") && me && !$("profileNickname").dataset.dirty) {
         $("profileNickname").value = me.nickname || "";
       }
+      if ($("profileAccountEmail")) $("profileAccountEmail").value = me?.email || "";
+      if ($("profileContactEmail") && me) $("profileContactEmail").value = me.contact_email || "";
+      if ($("profileHome") && me) $("profileHome").value = me.home_address || "";
+      if ($("profileCompany") && me) $("profileCompany").value = me.company_address || "";
+      if ($("profilePhone") && me) $("profilePhone").value = me.contact_phone || "";
+      if ($("profileLineId") && me) $("profileLineId").value = me.line_id || "";
+      if (me?.privacy_text && $("profilePrivacyText")) $("profilePrivacyText").textContent = me.privacy_text;
+      if ($("profilePrivacy") && me?.privacy_accepted) $("profilePrivacy").checked = true;
       const img = $("profileAvatarImg");
       const fallback = $("profileAvatarFallback");
       const url = me?.avatar_url || "";
@@ -4411,6 +4530,15 @@
       } else if (img) {
         img.hidden = true;
         if (fallback) fallback.hidden = false;
+      }
+      const qr = $("profileLineQrImg");
+      if (qr) {
+        if (me?.line_qr_url) {
+          qr.src = me.line_qr_url;
+          qr.hidden = false;
+        } else {
+          qr.hidden = true;
+        }
       }
     }
     function setOwnerFab(rows) {
@@ -4525,12 +4653,13 @@
     $("filterRestoreBtn").onclick = () => setFilterCompact(false);
     $("openFilterSheetBtn")?.addEventListener("click", openFilterSheet);
     $("filterSheetBackdrop")?.addEventListener("click", closeFilterSheet);
-    $("meFilterBtn")?.addEventListener("click", openFilterSheet);
-    $("meWatchBtn")?.addEventListener("click", () => $("watchBtn")?.click());
-    $("meReloadBtn")?.addEventListener("click", () => $("reloadBtn")?.click());
     $("mePasswordBtn")?.addEventListener("click", () => $("changePasswordBtn")?.click());
     $("meDeleteBtn")?.addEventListener("click", () => $("deleteAccountBtn")?.click());
-    $("notifyJumpSettings")?.addEventListener("click", () => openNotifyHub("events"));
+    $("notifyJumpSettings")?.addEventListener("click", () => {
+      openNotifyHub("events");
+      $("notifyHub")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    $("selfCity")?.addEventListener("change", fillSelfDistrictOptions);
     $("selfDistrict")?.addEventListener("change", syncSelfAddressPrefix);
     $("profileNickname")?.addEventListener("input", () => { $("profileNickname").dataset.dirty = "1"; });
     $("profileForm")?.addEventListener("submit", async (ev) => {
@@ -4542,6 +4671,7 @@
       const msg = $("profileMsg");
       try {
         let avatarUrl;
+        let lineQrUrl;
         const file = $("profileAvatar")?.files?.[0];
         if (file) {
           const up = await fetch("/api/self-listings/photos", {
@@ -4553,12 +4683,30 @@
           if (!up.ok) throw new Error(saved.error || "頭像上傳失敗");
           avatarUrl = saved.url;
         }
+        const qrFile = $("profileLineQr")?.files?.[0];
+        if (qrFile) {
+          const up = await fetch("/api/self-listings/photos", {
+            method: "POST",
+            headers: { "Content-Type": qrFile.type || "image/jpeg" },
+            body: qrFile,
+          });
+          const saved = await readApi(up);
+          if (!up.ok) throw new Error(saved.error || "LINE QR 上傳失敗");
+          lineQrUrl = saved.url;
+        }
         const res = await fetch("/api/profile", {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             nickname: $("profileNickname")?.value || "",
+            home_address: $("profileHome")?.value || "",
+            company_address: $("profileCompany")?.value || "",
+            contact_phone: $("profilePhone")?.value || "",
+            line_id: $("profileLineId")?.value || "",
+            contact_email: $("profileContactEmail")?.value || "",
+            accept_privacy: $("profilePrivacy")?.checked === true,
             ...(avatarUrl ? { avatar_url: avatarUrl } : {}),
+            ...(lineQrUrl ? { line_qr_url: lineQrUrl } : {}),
           }),
         });
         const data = await readApi(res);

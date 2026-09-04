@@ -26,6 +26,7 @@ test("default Q&A explains walkable MRT distance not straight-line", () => {
   assert.ok(items.some((row) => row.id === "register-verify"));
   assert.ok(items.some((row) => row.id === "notify-page"));
   assert.ok(items.some((row) => row.id === "profile-nick"));
+  assert.ok(items.some((row) => row.id === "profile-privacy"));
   assert.ok(items.some((row) => row.id === "self-verify"));
   assert.ok(items.some((row) => row.id === "self-rich"));
   assert.ok(items.some((row) => row.id === "not-broker"));

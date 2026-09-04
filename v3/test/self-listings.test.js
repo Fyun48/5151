@@ -256,6 +256,11 @@ test("index, server and admin expose self listing surfaces", () => {
   assert.match(html, /id="ownerFab"/);
   assert.match(html, /可使用坪數/);
   assert.match(html, /id="selfPledge"/);
+  assert.match(html, /id="selfCity"/);
+  assert.match(html, /data-nav="post"/);
+  assert.match(html, /有房刊登/);
+  assert.match(html, /pledge-row/);
+  assert.doesNotMatch(html, /id="meFilterBtn"/);
   assert.match(html, /id="needCourtyard"/);
   assert.match(html, /id="needBalcony"/);
   assert.match(html, /社區大樓/);
