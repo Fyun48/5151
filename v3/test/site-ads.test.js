@@ -8,7 +8,7 @@ import { normalizeSiteAds, publicSiteAds, SITE_AD_SLOTS } from "../src/siteAds.j
 const dir = path.dirname(fileURLToPath(import.meta.url));
 
 test("site ads sanitize urls and hide empty slots", () => {
-  assert.deepEqual(SITE_AD_SLOTS.map((row) => row.id), ["listings", "login", "me"]);
+  assert.deepEqual(SITE_AD_SLOTS.map((row) => row.id), ["listings", "between", "native", "login", "me"]);
   const cfg = normalizeSiteAds({
     slots: {
       listings: {

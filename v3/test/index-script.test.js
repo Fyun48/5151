@@ -282,13 +282,13 @@ test("product name is 吉比租房物件追蹤 without v2 開發版 copy", () =>
   assert.equal(html.includes("v2 開發版"), false);
   assert.equal(html.includes("v3 開發版"), false);
   assert.equal(html.includes("與線上版分開的資料庫"), false);
-  assert.match(html, /ver\. 3\.23/);
+  assert.match(html, /ver\. 3\.24/);
   assert.doesNotMatch(html, /<h1>[^<]*v3/i);
   assert.match(login, /<h1>吉比租房物件追蹤<\/h1>/);
   assert.equal(login.includes("v2 開發版"), false);
   assert.equal(login.includes("v3 開發版"), false);
   assert.equal(login.includes("資料與線上版分開"), false);
-  assert.match(login, /ver\. 3\.23/);
+  assert.match(login, /ver\. 3\.24/);
 });
 
 test("MRT toggle and guest tour are in the page", () => {
@@ -470,7 +470,12 @@ test("panel toggle sits above scroll-top and uses expand/collapse glyphs", () =>
   assert.match(html, /id="ownerFab"/);
   assert.match(html, /data-nav="post"/);
   assert.match(html, /id="selfCity"/);
-  assert.match(html, /id="needCourtyard"/);
+  assert.match(html, /grid-template-columns:\s*repeat\(5, minmax\(0, 1fr\)\)/);
+  assert.match(html, /transform:\s*none/);
+  assert.match(html, /id: "courtyard"/);
+  assert.match(html, /id="profileAvatarHit"/);
+  assert.match(html, /pledge-row/);
+  assert.doesNotMatch(html, /id="needCourtyard"/);
   assert.match(html, /id="adListings"/);
 });
 

@@ -50,6 +50,9 @@ import {
   getAdminAdsSettings,
   saveAdminAdsSettings,
   publicAdsSettings,
+  getAdminBroadcastsSettings,
+  saveAdminBroadcastsSettings,
+  publicBroadcastsSettings,
   getAdminMapsSettings,
   saveAdminMapsSettings,
   settingsForGeoBackfill,
@@ -512,6 +515,22 @@ app.put("/api/admin/ads", requireAdminApi, (req, res) => {
 
 app.get("/api/ads", (_req, res) => {
   res.json(publicAdsSettings());
+});
+
+app.get("/api/admin/broadcasts", requireAdminApi, (_req, res) => {
+  res.json(getAdminBroadcastsSettings());
+});
+
+app.put("/api/admin/broadcasts", requireAdminApi, (req, res) => {
+  try {
+    res.json(saveAdminBroadcastsSettings(req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/broadcasts", (_req, res) => {
+  res.json({ items: publicBroadcastsSettings() });
 });
 
 app.get("/api/admin/help-qa", requireAdminApi, (_req, res) => {

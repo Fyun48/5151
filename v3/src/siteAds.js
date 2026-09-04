@@ -6,9 +6,11 @@ const MAX_TITLE = 40;
 const MAX_TEXT = 160;
 
 export const SITE_AD_SLOTS = [
-  { id: "listings", label: "找房列表", hint: "物件清單上方，安靜一則" },
+  { id: "listings", label: "找房列表上方", hint: "清單上方安靜一則" },
+  { id: "between", label: "物件與物件之間", hint: "細字＋小連結，插在卡片中間" },
+  { id: "native", label: "找房列表卡片型", hint: "看起來像一則物件，標贊助訊息" },
   { id: "login", label: "登入頁", hint: "登入表單下方" },
-  { id: "me", label: "我的頁", hint: "個人資料下方、自行刊登上方" },
+  { id: "me", label: "我的頁", hint: "個人資料下方" },
 ];
 
 function emptySlot() {

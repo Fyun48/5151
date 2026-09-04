@@ -44,6 +44,9 @@
   --space-3: 12px;
   --space-4: 16px;
   --touch: 44px;
+  --page-gutter: 16px;
+  --btn-height: 40px;
+  --chip-height: 32px;
   --background: var(--bg);
   --foreground: var(--ink);
   --card: var(--paper);

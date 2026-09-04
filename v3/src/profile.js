@@ -168,12 +168,7 @@ export function updateUserProfile(conn, userId, input = {}) {
     contact_email: contactEmail,
   };
   let privacyAt = String(row.profile_privacy_at || "").trim();
-  if (extraFilled(next) && !privacyAt) {
-    if (input.accept_privacy !== true) {
-      const err = new Error("請先勾選個資說明");
-      err.status = 400;
-      throw err;
-    }
+  if (extraFilled(next) && !privacyAt && input.accept_privacy === true) {
     privacyAt = new Date().toISOString();
   }
   conn.prepare(`

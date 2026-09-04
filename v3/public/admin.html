@@ -255,6 +255,28 @@
             <input id="adLoginImage" maxlength="500" />
           </div>
         </div>
+        <h3 style="margin:16px 0 8px;font-size:16px">物件與物件之間</h3>
+        <p class="hint">細字一小塊，插在列表中間，不要做成整張大圖。</p>
+        <label class="checks"><input type="checkbox" id="adBetweenEnabled" /> 顯示這則</label>
+        <label>標題</label>
+        <input id="adBetweenTitle" maxlength="40" />
+        <label>說明</label>
+        <textarea id="adBetweenText" maxlength="160"></textarea>
+        <label>連結（選填）</label>
+        <input id="adBetweenUrl" maxlength="500" />
+        <label>圖片網址（選填）</label>
+        <input id="adBetweenImage" maxlength="500" />
+        <h3 style="margin:16px 0 8px;font-size:16px">找房列表卡片型</h3>
+        <p class="hint">排在物件之間，外觀接近物件卡，仍標贊助訊息。</p>
+        <label class="checks"><input type="checkbox" id="adNativeEnabled" /> 顯示這則</label>
+        <label>標題</label>
+        <input id="adNativeTitle" maxlength="40" />
+        <label>說明</label>
+        <textarea id="adNativeText" maxlength="160"></textarea>
+        <label>連結（選填）</label>
+        <input id="adNativeUrl" maxlength="500" />
+        <label>圖片網址（選填）</label>
+        <input id="adNativeImage" maxlength="500" />
         <h3 style="margin:16px 0 8px;font-size:16px">我的頁</h3>
         <label class="checks"><input type="checkbox" id="adMeEnabled" /> 顯示這則</label>
         <label>標題</label>
@@ -269,6 +291,52 @@
           <button type="submit" class="primary" id="adsSave">儲存小廣告</button>
         </div>
         <p class="msg" id="adsMsg"></p>
+      </form>
+    </section>
+    <section class="card">
+      <h2>公告／最新消息／贊助提醒</h2>
+      <p class="hint">轉頁時在底欄上方出現一小則，可按 × 暫時不看。贊助提醒請寫維護品質，不要擋操作、不要連發。 hops 是每隔幾次換頁才再出現。</p>
+      <form id="broadcastsForm">
+        <div class="grid-2">
+          <div>
+            <h3 style="margin:0 0 8px;font-size:16px">公告</h3>
+            <label class="checks"><input type="checkbox" id="bcAnnouncementEnabled" /> 顯示</label>
+            <label>標題</label>
+            <input id="bcAnnouncementTitle" maxlength="48" />
+            <label>內文</label>
+            <textarea id="bcAnnouncementBody" maxlength="220"></textarea>
+            <label>連結（選填）</label>
+            <input id="bcAnnouncementUrl" maxlength="500" />
+            <label>每隔幾次換頁</label>
+            <input id="bcAnnouncementHops" type="number" min="1" max="20" value="3" />
+          </div>
+          <div>
+            <h3 style="margin:0 0 8px;font-size:16px">最新消息</h3>
+            <label class="checks"><input type="checkbox" id="bcNewsEnabled" /> 顯示</label>
+            <label>標題</label>
+            <input id="bcNewsTitle" maxlength="48" />
+            <label>內文</label>
+            <textarea id="bcNewsBody" maxlength="220"></textarea>
+            <label>連結（選填）</label>
+            <input id="bcNewsUrl" maxlength="500" />
+            <label>每隔幾次換頁</label>
+            <input id="bcNewsHops" type="number" min="1" max="20" value="3" />
+          </div>
+        </div>
+        <h3 style="margin:16px 0 8px;font-size:16px">贊助提醒</h3>
+        <label class="checks"><input type="checkbox" id="bcSponsorEnabled" /> 顯示</label>
+        <label>標題</label>
+        <input id="bcSponsorTitle" maxlength="48" placeholder="贊助能讓本站維持免費比價" />
+        <label>內文</label>
+        <textarea id="bcSponsorBody" maxlength="220" placeholder="不擋找房。寫維護品質即可。"></textarea>
+        <label>連結（選填）</label>
+        <input id="bcSponsorUrl" maxlength="500" />
+        <label>每隔幾次換頁</label>
+        <input id="bcSponsorHops" type="number" min="1" max="20" value="5" />
+        <div class="row" style="margin:14px 0 0">
+          <button type="submit" class="primary" id="broadcastsSave">儲存公告與提醒</button>
+        </div>
+        <p class="msg" id="broadcastsMsg"></p>
       </form>
     </section>
     <section class="card">
@@ -869,7 +937,7 @@
     }
     function fillAds(data) {
       const slots = data.config?.slots || {};
-      for (const [key, prefix] of [["listings", "Listings"], ["login", "Login"], ["me", "Me"]]) {
+      for (const [key, prefix] of [["listings", "Listings"], ["login", "Login"], ["me", "Me"], ["between", "Between"], ["native", "Native"]]) {
         const slot = slots[key] || {};
         if ($(`ad${prefix}Enabled`)) $(`ad${prefix}Enabled`).checked = Boolean(slot.enabled);
         if ($(`ad${prefix}Title`)) $(`ad${prefix}Title`).value = slot.title || "";
@@ -897,6 +965,8 @@
               listings: slotFromForm("Listings"),
               login: slotFromForm("Login"),
               me: slotFromForm("Me"),
+              between: slotFromForm("Between"),
+              native: slotFromForm("Native"),
             },
           }),
         });
@@ -947,6 +1017,59 @@
       }
     };
 
+    function bcFromForm(prefix) {
+      return {
+        enabled: Boolean($(`bc${prefix}Enabled`)?.checked),
+        title: $(`bc${prefix}Title`)?.value || "",
+        body: $(`bc${prefix}Body`)?.value || "",
+        url: $(`bc${prefix}Url`)?.value || "",
+        hops: Number($(`bc${prefix}Hops`)?.value) || 3,
+      };
+    }
+    function fillBroadcasts(data) {
+      const items = data.config?.items || {};
+      for (const [key, prefix] of [["announcement", "Announcement"], ["news", "News"], ["sponsor", "Sponsor"]]) {
+        const item = items[key] || {};
+        if ($(`bc${prefix}Enabled`)) $(`bc${prefix}Enabled`).checked = Boolean(item.enabled);
+        if ($(`bc${prefix}Title`)) $(`bc${prefix}Title`).value = item.title || "";
+        if ($(`bc${prefix}Body`)) $(`bc${prefix}Body`).value = item.body || "";
+        if ($(`bc${prefix}Url`)) $(`bc${prefix}Url`).value = item.url || "";
+        if ($(`bc${prefix}Hops`)) $(`bc${prefix}Hops`).value = item.hops || 3;
+      }
+    }
+    async function loadBroadcasts() {
+      const res = await fetch("/api/admin/broadcasts", { cache: "no-store" });
+      const data = await readApi(res);
+      if (!res.ok) throw new Error(data.error || "載入公告失敗");
+      fillBroadcasts(data);
+    }
+    $("broadcastsForm").onsubmit = async (ev) => {
+      ev.preventDefault();
+      $("broadcastsSave").disabled = true;
+      setMsg("broadcastsMsg", "儲存中…");
+      try {
+        const res = await fetch("/api/admin/broadcasts", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            items: {
+              announcement: bcFromForm("Announcement"),
+              news: bcFromForm("News"),
+              sponsor: bcFromForm("Sponsor"),
+            },
+          }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "儲存失敗");
+        fillBroadcasts(data);
+        setMsg("broadcastsMsg", "已儲存公告與提醒", true);
+      } catch (error) {
+        setMsg("broadcastsMsg", error.message);
+      } finally {
+        $("broadcastsSave").disabled = false;
+      }
+    };
+
     (async () => {
       const meRes = await fetch("/api/me", { cache: "no-store" });
       const me = await readApi(meRes);
@@ -954,7 +1077,7 @@
       if (me.role !== "admin") { location.replace("/"); return; }
       meEmail = me.email || "";
       $("who").textContent = meEmail;
-      await Promise.all([loadMembers(), loadMail(), loadSponsor(), loadAds(), loadMaps(), loadHelpQa(), loadCrawlSources()]);
+      await Promise.all([loadMembers(), loadMail(), loadSponsor(), loadAds(), loadBroadcasts(), loadMaps(), loadHelpQa(), loadCrawlSources()]);
       $("helpQaAdd").onclick = () => {
         renderHelpQaEditor([...collectHelpQa(), { question: "", answer: "", id: "" }]);
       };
@@ -1072,6 +1195,6 @@
       setMsg("memberMsg", error.message || "載入失敗");
     });
   </script>
-  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.23</span></footer>
+  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.24</span></footer>
 </body>
 </html>
