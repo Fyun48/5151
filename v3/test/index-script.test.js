@@ -239,6 +239,8 @@ test("notify channels lock until webhook or smtp is set and account can pause al
   assert.match(html, /body\.role-guest #demandForm/);
   assert.match(html, /id="demandAudit"/);
   assert.match(html, /function demandCardHtml[\s\S]*self-mine-card/);
+  const demandForm = html.slice(html.indexOf('id="demandForm"'), html.indexOf('id="demandList"'));
+  assert.ok(demandForm.indexOf("demandRentMax") < demandForm.indexOf("demandDistricts"));
   assert.match(html, /function passesClientPrice/);
   assert.match(html, /function rentPriceLabel/);
   assert.match(html, /profileNameOrDraft|暫存/);
