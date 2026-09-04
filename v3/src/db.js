@@ -139,6 +139,7 @@ import {
   sponsorCatalog,
 } from "./sponsorLinks.js";
 import { adminSiteAdsView, normalizeSiteAds, publicSiteAds } from "./siteAds.js";
+import { adminBroadcastsView, normalizeBroadcasts, publicBroadcasts } from "./broadcasts.js";
 
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data-v3");
 mkdirSync(DATA_DIR, { recursive: true });
@@ -832,6 +833,28 @@ export function publicAdsSettings() {
   return publicSiteAds(getSiteAdsConfig());
 }
 
+export function getBroadcastsConfig() {
+  return normalizeBroadcasts(settingKey("broadcasts"));
+}
+
+export function getAdminBroadcastsSettings() {
+  return adminBroadcastsView(getBroadcastsConfig());
+}
+
+export function saveAdminBroadcastsSettings(partial = {}) {
+  const src = partial && typeof partial === "object" ? partial : {};
+  const current = getBroadcastsConfig();
+  const next = normalizeBroadcasts({
+    items: src.items && typeof src.items === "object" ? { ...current.items, ...src.items } : current.items,
+  });
+  writeSettingKey("broadcasts", next);
+  return getAdminBroadcastsSettings();
+}
+
+export function publicBroadcastsSettings() {
+  return publicBroadcasts(getBroadcastsConfig());
+}
+
 export function getHelpQa() {
   const stored = settingKey("helpQa");
   const items = stored == null ? defaultHelpQaItems() : mergeMissingDefaultHelpQa(stored.items ?? stored);
@@ -1065,6 +1088,7 @@ function omitSiteMail(stored) {
   delete next.mailTemplates;
   delete next.sponsorLinks;
   delete next.siteAds;
+  delete next.broadcasts;
   delete next.memberSmtp;
   delete next.memberMailTemplates;
   delete next.mailPreset;
@@ -1112,6 +1136,7 @@ export function saveSettings(partial, userId, { forceAdmin = false } = {}) {
         || key === "mailTemplates"
         || key === "sponsorLinks"
         || key === "siteAds"
+        || key === "broadcasts"
         || key === "memberSmtp"
         || key === "memberMailTemplates"
         || key === "mailPreset"

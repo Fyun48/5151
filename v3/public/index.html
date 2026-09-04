@@ -13,6 +13,10 @@
   <title>吉比租房物件追蹤</title>
   <style>
     * { box-sizing: border-box; }
+    html, body {
+      max-width: 100%;
+      overflow-x: clip;
+    }
     body {
       margin: 0;
       font-family: var(--font-sans, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif);
@@ -933,20 +937,6 @@
       display: none;
       position: static;
       margin: 0;
-      padding: 5px 14px;
-      font-size: var(--text-sm);
-      font-weight: 700;
-      line-height: 1.2;
-      text-align: center;
-      align-items: center;
-      justify-content: center;
-      color: var(--primary-foreground);
-      background: var(--accent);
-      border: 1px solid var(--accent);
-      box-shadow: none;
-      min-height: 0;
-      height: auto;
-      border-radius: 999px;
     }
     body.panel-collapsed .filter-restore-btn:hover:not(:disabled) {
       background: var(--accent-deep);
@@ -955,11 +945,34 @@
     }
     body.panel-collapsed .list-head-sticky.filter-compact .filter-restore-btn {
       display: inline-flex;
+      color: var(--primary-foreground);
+      background: var(--accent);
+      border-color: var(--accent);
     }
     .filter-head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
       padding: 12px 18px 10px;
       border-bottom: 1px solid var(--line);
       background: var(--accent-mist);
+    }
+    .filter-head-actions {
+      display: flex;
+      gap: 8px;
+      align-items: stretch;
+      margin-left: auto;
+    }
+    .filter-head-actions > button {
+      min-height: var(--btn-height);
+      min-width: 76px;
+      padding: 8px 14px;
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.2;
+      text-align: center;
+      border-radius: 999px;
     }
     body.panel-collapsed .filter-head {
       background: var(--accent-mist);
@@ -1168,16 +1181,56 @@
     }
     .profile-grid {
       display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: minmax(0, 1fr);
       gap: 10px 12px;
       margin-top: 12px;
     }
-    .profile-grid .span-2 { grid-column: span 2; }
+    .profile-grid .span-2 { grid-column: auto; }
     .profile-grid label { margin: 0 0 4px; }
-    .profile-grid input { margin: 0; }
+    .profile-grid input { margin: 0; width: 100%; max-width: 100%; }
+    @media (min-width: 720px) {
+      .profile-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .profile-grid .span-2 { grid-column: span 2; }
+    }
     @media (min-width: 900px) {
       .profile-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
       .profile-grid .span-2 { grid-column: span 2; }
+    }
+    .pledge-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      margin: 12px 0 0;
+    }
+    .pledge-row input {
+      flex: 0 0 auto;
+      width: 18px;
+      height: 18px;
+      margin-top: 3px;
+      accent-color: var(--accent);
+    }
+    .pledge-row .pledge-copy { min-width: 0; margin: 0; }
+    .media-hit {
+      position: relative;
+      cursor: pointer;
+      border: 0;
+      background: none;
+      padding: 0;
+      text-align: left;
+    }
+    .media-hit .media-x {
+      position: absolute;
+      top: -4px;
+      right: -4px;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      border: 1px solid var(--line);
+      background: var(--paper);
+      color: var(--ink);
+      font-size: 14px;
+      line-height: 1;
+      padding: 0;
     }
     #ownerFab {
       position: fixed;
@@ -1219,11 +1272,47 @@
       background: var(--accent-mist);
     }
     .ad-slot.me { margin: 0 0 14px; }
+    .ad-between {
+      display: flex;
+      align-items: baseline;
+      flex-wrap: wrap;
+      gap: 6px 10px;
+      margin: 2px 4px;
+      padding: 8px 12px;
+      border-left: 2px solid var(--accent);
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .ad-between a { color: var(--accent-deep); }
+    .ad-native {
+      border-style: dashed;
+      background: var(--accent-mist);
+    }
+    .site-notice {
+      position: fixed;
+      left: 12px;
+      right: 12px;
+      bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+      z-index: 121;
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+      padding: 10px 12px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      box-shadow: 0 8px 24px rgba(28, 25, 23, 0.08);
+    }
+    .site-notice[hidden] { display: none !important; }
+    .site-notice p { margin: 0; flex: 1; min-width: 0; font-size: 13px; line-height: 1.55; }
+    .site-notice b { color: var(--accent-deep); margin-right: 4px; }
+    .site-notice .ghost { min-height: 32px; padding: 4px 8px; }
     .owner-list { display: grid; gap: 10px; margin-top: 12px; }
     body:not(.role-admin) .admin-only { display: none !important; }
     body.role-admin .member-only { display: none !important; }
-    #excludeMapWrap { margin: 8px 0; }
-    #excludeMap { height: 220px; border-radius: 12px; border: 1px solid var(--line); }
+    #excludeMapWrap { margin: 8px 0; width: 100%; min-height: 240px; }
+    #excludeMap { width: 100%; height: 240px; border-radius: 12px; border: 1px solid var(--line); }
     .box-list { display: grid; gap: 8px; margin: 8px 0; }
     .box-row { display: flex; gap: 6px; align-items: center; font-size: 13px; flex-wrap: wrap; }
     .box-row input[type="text"] { flex: 1; margin: 0; padding: 6px 8px; min-width: 72px; }
@@ -1408,11 +1497,13 @@
       .mobile-only { display: inline-flex; }
       .bottom-nav {
         display: grid;
-        grid-template-columns: repeat(4, 1fr);
+        grid-template-columns: repeat(5, minmax(0, 1fr));
         position: fixed;
         left: 0;
         right: 0;
         bottom: 0;
+        width: auto;
+        transform: none;
         z-index: 120;
         margin: 0;
         background: var(--paper);
@@ -1467,18 +1558,17 @@
         -webkit-box-orient: vertical;
         overflow: hidden;
       }
-      #openFilterSheetBtn {
-        min-height: 44px;
-        padding: 8px 16px;
-        font-weight: 700;
+      .filter-head-actions {
+        margin-left: 0;
+        width: 100%;
       }
-      .filter-restore-btn {
-        min-height: 0;
-        padding: 5px 14px;
+      .filter-head-actions > button {
+        flex: 1 1 0;
+      }
+      #openFilterSheetBtn {
+        min-height: var(--btn-height);
+        padding: 8px 14px;
         font-weight: 700;
-        text-align: center;
-        align-items: center;
-        justify-content: center;
       }
       .toolbar {
         flex-direction: column;
@@ -1634,19 +1724,15 @@
     }
     @media (max-width: 767px) {
       .chip-row {
-        flex-wrap: nowrap;
-        overflow-x: auto;
-        overflow-y: hidden;
-        -webkit-overflow-scrolling: touch;
-        scrollbar-width: none;
-        margin: 0 -12px;
-        padding: 2px 12px;
-        gap: 8px;
+        flex-wrap: wrap;
+        overflow: visible;
+        margin: 0;
+        padding: 2px 0;
+        gap: 6px;
       }
-      .chip-row::-webkit-scrollbar { display: none; }
       .chip-row .chip {
         flex: 0 0 auto;
-        min-height: 33px;
+        min-height: var(--chip-height);
       }
     }
   </style>
@@ -1742,7 +1828,6 @@
       <a class="primary" href="/login.html?register=1">前往註冊</a>
       <button type="button" class="ghost" id="guestToastClose">知道了</button>
     </div>
-  </div>
   </div>
   <div id="sponsorBar" class="sponsor-bar" hidden></div>
   <div class="filter-sheet-backdrop" id="filterSheetBackdrop" hidden></div>
@@ -1893,8 +1978,10 @@
       <div class="list-head-sticky" id="listHeadSticky">
         <div class="filter-head">
           <div class="status" id="status">準備就緒</div>
+          <div class="filter-head-actions">
           <button type="button" class="ghost mobile-only" id="openFilterSheetBtn">篩選</button>
-          <button type="button" class="filter-restore-btn" id="filterRestoreBtn" title="展開類型、排序與樓層條件">更多條件</button>
+          <button type="button" class="filter-restore-btn ghost" id="filterRestoreBtn" title="展開類型、排序與樓層條件">更多條件</button>
+          </div>
           <div class="list-meta" id="listMeta" hidden></div>
         </div>
         <div class="filter-body" id="filterBody">
@@ -1929,12 +2016,10 @@
             <button type="button" class="primary" id="hideSelectedBtn">不再顯示已選</button>
           </div>
         </div>
-        <div class="view-filters">
+          <div class="view-filters">
           <label><input type="checkbox" id="wholeFloorOnly" /> 只看整層住家</label>
           <label><input type="checkbox" id="excludeLowFloors" /> 排除 1F 及以下（含地下室、整棟、頂加）</label>
-          <label><input type="checkbox" id="needCourtyard" /> 有中庭（選填）</label>
-          <label><input type="checkbox" id="needBalcony" /> 有陽台（選填）</label>
-          <span class="hint" style="margin:0">篩選列表與通知；不影響 591 抓取與左側統計。勾選後立即生效並寫入設定。中庭／陽台只篩站內刊登，其他網站沒有這項資料，不會被排除。</span>
+          <span class="hint" style="margin:0">篩選列表與通知；不影響 591 抓取與左側統計。勾選後立即生效並寫入設定。</span>
         </div>
         </div>
         <div class="district-block">
@@ -1997,16 +2082,17 @@
   <section class="app-view" id="meView">
     <div class="card panel" id="profilePanel">
       <h2 style="margin:0 0 8px">個人資料</h2>
-      <p class="hint">填暱稱後，需求牆與系統會用這個名字稱呼你。沒填則顯示信箱。下面聯絡欄預設不公開。</p>
       <form id="profileForm">
         <div class="profile-card">
-          <img class="profile-avatar empty" id="profileAvatarImg" alt="" hidden />
-          <div class="profile-avatar empty" id="profileAvatarFallback">頭像</div>
-          <div style="flex:1;min-width:200px">
+          <button type="button" class="media-hit" id="profileAvatarHit" title="點擊上傳或刪除頭像" aria-label="上傳或刪除頭像">
+            <img class="profile-avatar empty" id="profileAvatarImg" alt="" hidden />
+            <div class="profile-avatar empty" id="profileAvatarFallback">頭像</div>
+            <span class="media-x" id="profileAvatarClear" hidden>×</span>
+          </button>
+          <div style="flex:1;min-width:0">
             <label>暱稱（2～20 字，選填）</label>
             <input id="profileNickname" maxlength="20" placeholder="例如 小林" />
-            <label>上傳頭像（JPG／PNG／WebP，2MB）</label>
-            <input type="file" id="profileAvatar" accept="image/jpeg,image/png,image/webp" />
+            <input type="file" id="profileAvatar" accept="image/jpeg,image/png,image/webp" hidden />
           </div>
         </div>
         <div class="profile-grid">
@@ -2035,13 +2121,19 @@
             <input id="profileLineId" maxlength="40" placeholder="不含網址" />
           </div>
           <div class="span-2">
-            <label>LINE QR Code 圖（選填）</label>
-            <input type="file" id="profileLineQr" accept="image/jpeg,image/png,image/webp" />
-            <img id="profileLineQrImg" alt="" hidden style="margin-top:8px;max-height:88px;border-radius:8px;border:1px solid var(--line)" />
+            <label>LINE QR Code 圖（選填，點圖上傳或刪除）</label>
+            <input type="file" id="profileLineQr" accept="image/jpeg,image/png,image/webp" hidden />
+            <button type="button" class="media-hit" id="profileLineQrHit" aria-label="上傳或刪除 LINE QR">
+              <img id="profileLineQrImg" alt="" hidden style="margin-top:8px;max-height:88px;border-radius:8px;border:1px solid var(--line)" />
+              <span class="hint" id="profileLineQrHint">點此上傳</span>
+              <span class="media-x" id="profileLineQrClear" hidden>×</span>
+            </button>
           </div>
         </div>
-        <p class="hint" id="profilePrivacyText">這些欄位只存在你的會員資料，預設不公開、也不會自動出現在刊登。本站依提供服務所需處理，不做專責保管、不轉售、也不主動散給第三人；除非法律要求，或你另外同意公開。可隨時改或清空。請勿填無法承受外洩的機密。</p>
-        <label class="checks"><input type="checkbox" id="profilePrivacy" /> 我已了解上述個資說明</label>
+        <label class="pledge-row" for="profilePrivacy">
+          <input type="checkbox" id="profilePrivacy" />
+          <span class="pledge-copy hint" id="profilePrivacyText">這些欄位只存在你的會員資料，預設不公開、也不會自動出現在刊登。本站依提供服務所需處理，不做專責保管、不轉售、也不主動散給第三人；除非法律要求，或你另外同意公開。可隨時改或清空。請勿填無法承受外洩的機密。我已了解上述個資說明</span>
+        </label>
         <div class="row" style="margin-top:12px">
           <button type="submit" class="primary" id="profileSave">儲存個人資料</button>
           <span class="save-msg" id="profileMsg"></span>
@@ -2051,7 +2143,7 @@
     <div class="ad-slot me" id="adMe" hidden></div>
     <div class="card panel" data-tour="notify">
       <h2 style="margin:0 0 8px">帳號</h2>
-      <p class="hint">通知種類、推播與 Discord／SMTP 請到「通知」。這裡只留帳號本身。</p>
+      <p class="hint">通知種類、推播與 Discord／SMTP 請到「通知」。這裡只留帳號本身。<a href="/spirit.html">本站在做什麼</a></p>
       <p class="hint" id="notifyMailHint" hidden>物件／屋源提醒若要用信，請自己填 SMTP。</p>
       <p class="hint" id="notifyHubStatus" hidden></p>
       <div class="row" style="margin-top:10px">
@@ -2185,6 +2277,11 @@
       <div class="list" id="selfMineList" style="padding-top:12px"></div>
     </div>
   </section>
+  <div id="siteNotice" class="site-notice" hidden>
+    <p><b id="siteNoticeKicker"></b><span id="siteNoticeText"></span></p>
+    <a class="ghost" id="siteNoticeLink" hidden target="_blank" rel="noopener noreferrer">開啟</a>
+    <button type="button" class="ghost" id="siteNoticeClose" aria-label="暫時不看">×</button>
+  </div>
   <nav class="bottom-nav" id="bottomNav" aria-label="主要分頁">
     <button type="button" data-nav="listings" aria-current="page">找房</button>
     <button type="button" data-nav="post">有房刊登</button>
@@ -2408,7 +2505,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver">ver. 3.23</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.24</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -2773,8 +2870,6 @@
     const VIEW_KEY = "591-view-districts";
     const VIEW_WHOLE_KEY = "591-view-whole-floor";
     const VIEW_LOW_FLOOR_KEY = "591-view-exclude-low";
-    const VIEW_COURTYARD_KEY = "591-view-need-courtyard";
-    const VIEW_BALCONY_KEY = "591-view-need-balcony";
     try {
       const saved = JSON.parse(sessionStorage.getItem(VIEW_KEY) || "[]");
       if (Array.isArray(saved)) viewDistricts = new Set(saved);
@@ -2794,18 +2889,12 @@
       } else {
         $("excludeLowFloors").checked = low === null ? true : low === "1";
       }
-      const yard = sessionStorage.getItem(VIEW_COURTYARD_KEY);
-      const balc = sessionStorage.getItem(VIEW_BALCONY_KEY);
-      if ($("needCourtyard")) $("needCourtyard").checked = yard === "1";
-      if ($("needBalcony")) $("needBalcony").checked = balc === "1";
       saveViewFilters();
     }
 
     function saveViewFilters() {
       sessionStorage.setItem(VIEW_WHOLE_KEY, $("wholeFloorOnly").checked ? "1" : "0");
       sessionStorage.setItem(VIEW_LOW_FLOOR_KEY, $("excludeLowFloors").checked ? "1" : "0");
-      if ($("needCourtyard")) sessionStorage.setItem(VIEW_COURTYARD_KEY, $("needCourtyard").checked ? "1" : "0");
-      if ($("needBalcony")) sessionStorage.setItem(VIEW_BALCONY_KEY, $("needBalcony").checked ? "1" : "0");
     }
 
     async function persistViewFilters() {
@@ -2857,12 +2946,6 @@
       if ($("excludeLowFloors").checked) {
         out = out.filter((item) => !isAtOrBelowFirstFloor(item.floor_name));
       }
-      if ($("needCourtyard")?.checked) {
-        out = out.filter((item) => String(item.source || "") !== "self" || listingHasTrait(item, "courtyard"));
-      }
-      if ($("needBalcony")?.checked) {
-        out = out.filter((item) => String(item.source || "") !== "self" || listingHasTrait(item, "balcony"));
-      }
       return out;
     }
 
@@ -2874,6 +2957,22 @@
       return String(item.tags || "").includes(label);
     }
 
+    let publicAdsCache = {};
+    function adMarkup(ad, cls) {
+      if (!ad?.title) return "";
+      const href = ad.url || "";
+      const img = ad.image_url ? `<img class="ad-card-image" src="${esc(ad.image_url)}" alt="">` : "";
+      const inner = `<span class="ad-kicker">贊助訊息</span>${img}<strong>${esc(ad.title)}</strong><span>${esc(ad.text || "")}</span>`;
+      if (cls === "ad-between") {
+        const link = href ? ` <a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(ad.title)}</a>` : ` ${esc(ad.title)}`;
+        return `<aside class="ad-between"><span class="ad-kicker">贊助</span>${link}${ad.text ? ` · ${esc(ad.text)}` : ""}</aside>`;
+      }
+      const body = href
+        ? `<a class="ad-card ${cls || ""}" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${inner}</a>`
+        : `<div class="ad-card ${cls || ""}">${inner}</div>`;
+      return cls === "ad-native" ? `<article class="item ad-native">${body}</article>` : body;
+    }
+
     function renderAdSlot(el, ad) {
       if (!el) return;
       if (!ad || !ad.title) {
@@ -2882,20 +2981,18 @@
         return;
       }
       el.hidden = false;
-      const href = ad.url || "";
-      const img = ad.image_url ? `<img class="ad-card-image" src="${esc(ad.image_url)}" alt="">` : "";
-      el.innerHTML = href
-        ? `<a class="ad-card" href="${esc(href)}" target="_blank" rel="noopener noreferrer"><span class="ad-kicker">贊助訊息</span>${img}<strong>${esc(ad.title)}</strong><span>${esc(ad.text || "")}</span></a>`
-        : `<div class="ad-card"><span class="ad-kicker">贊助訊息</span>${img}<strong>${esc(ad.title)}</strong><span>${esc(ad.text || "")}</span></div>`;
+      el.innerHTML = adMarkup(ad);
     }
 
     async function loadPublicAds() {
       try {
         const res = await fetch("/api/ads", { cache: "no-store" });
         const ads = await res.json().catch(() => ({}));
+        publicAdsCache = ads || {};
         renderAdSlot($("adListings"), ads.listings);
         renderAdSlot($("adMe"), ads.me);
       } catch {
+        publicAdsCache = {};
         renderAdSlot($("adListings"));
         renderAdSlot($("adMe"));
       }
@@ -3109,7 +3206,7 @@
 
     function isGuestLockedTarget(el) {
       if (!el || !isGuest) return false;
-      if (el.closest("#collapsePanelBtn, #expandPanelBtn, #reloadBtn, #loginBtn, #registerBtn, #helpQaBtn, #helpQaDialog, #guestToast, #guestTour, #listHeadSticky .chip, #q, #wholeFloorOnly, #excludeLowFloors, #needCourtyard, #needBalcony, [data-view-district], [data-open-hub], #notifyHubClose, [data-close-hub], [data-hub-tab]")) return false;
+      if (el.closest("#collapsePanelBtn, #expandPanelBtn, #reloadBtn, #loginBtn, #registerBtn, #helpQaBtn, #helpQaDialog, #guestToast, #guestTour, #listHeadSticky .chip, #q, #wholeFloorOnly, #excludeLowFloors, [data-view-district], [data-open-hub], #notifyHubClose, [data-close-hub], [data-hub-tab]")) return false;
       if (el.closest(".item-cover, h3 a, a.tel, .line-qr")) return false;
       if (el.closest("#notifyHubSave, #memberMailTest, #gmailPresetBtn")) return true;
       if (el.closest("#notifyHub")) return true;
@@ -3759,8 +3856,8 @@
         if (q) msg = `沒有符合「${q}」的物件。試試較短關鍵字，或清掉搜尋看全部列表。`;
         else if (viewDistricts.size) {
           msg = "這個行政區篩選目前沒有物件。可點「全部」或再勾其他區。";
-        } else if ($("wholeFloorOnly").checked || $("excludeLowFloors").checked || $("needCourtyard")?.checked || $("needBalcony")?.checked) {
-          msg = "目前沒有符合右側「整層／樓層／中庭／陽台」顯示篩選的物件。取消勾選可看到更多已抓到的結果。中庭與陽台只篩站內刊登。";
+        } else if ($("wholeFloorOnly").checked || $("excludeLowFloors").checked) {
+          msg = "目前沒有符合右側「整層／樓層」顯示篩選的物件。取消勾選可看到更多已抓到的結果。";
         } else if (filter === "suspected") {
           msg = "目前沒有被判成同一屋源的重刊。隱藏或已瀏覽的舊屋若再上架，會出現在這裡。";
         } else if (filter === "offline") {
@@ -3790,10 +3887,13 @@
         updateBulkBar();
         return;
       }
-      replaceListHtml(items.map((item) => {
+      replaceListHtml(items.map((item, idx) => {
         const id = String(item.post_id);
         const on = selected.has(id);
-        return `
+        const extras = [];
+        if (idx === 1 && publicAdsCache.native) extras.push(adMarkup(publicAdsCache.native, "ad-native"));
+        if (idx === 2 && publicAdsCache.between) extras.push(adMarkup(publicAdsCache.between, "ad-between"));
+        return extras.join("") + `
         <div class="item-swipe-wrap">
           <div class="swipe-rail" aria-hidden="true">
             <span class="swipe-hide-hint">不再顯示</span>
@@ -4311,6 +4411,7 @@
     }
 
     $("saveBtn").onclick = async () => {
+      if (!$("profileName").value.trim()) $("profileName").value = "暫存";
       $("saveBtn").disabled = true;
       flash("儲存中…");
       try {
@@ -4469,11 +4570,72 @@
       sticky.classList.toggle("filter-compact", Boolean(on));
       localStorage.setItem(FILTER_COMPACT_KEY, on ? "1" : "0");
     }
+    const NOTICE_DISMISS_KEY = "591-notice-dismiss-v1";
+    const NOTICE_HOPS_KEY = "591-notice-hops-v1";
+    let broadcastItems = [];
+    let noticeHops = 0;
+    try { noticeHops = Number(sessionStorage.getItem(NOTICE_HOPS_KEY) || 0) || 0; } catch { noticeHops = 0; }
+    function dismissedNotices() {
+      try { return JSON.parse(localStorage.getItem(NOTICE_DISMISS_KEY) || "{}"); } catch { return {}; }
+    }
+    function hideSiteNotice() {
+      const box = $("siteNotice");
+      if (box) box.hidden = true;
+    }
+    function showSiteNotice(item) {
+      const box = $("siteNotice");
+      if (!box || !item) return;
+      $("siteNoticeKicker").textContent = item.kicker || "";
+      $("siteNoticeText").textContent = [item.title, item.body].filter(Boolean).join(" · ");
+      const link = $("siteNoticeLink");
+      if (item.url) {
+        link.hidden = false;
+        link.href = item.url;
+      } else {
+        link.hidden = true;
+        link.removeAttribute("href");
+      }
+      box.hidden = false;
+    }
+    function maybeShowBroadcast() {
+      hideSiteNotice();
+      noticeHops += 1;
+      try { sessionStorage.setItem(NOTICE_HOPS_KEY, String(noticeHops)); } catch { /* ignore */ }
+      const dismissed = dismissedNotices();
+      const item = broadcastItems.find((row) => {
+        if (dismissed[row.id]) return false;
+        const hops = Math.max(1, Number(row.hops) || 3);
+        return noticeHops % hops === 0;
+      });
+      if (item) showSiteNotice(item);
+    }
+    async function loadBroadcasts() {
+      try {
+        const res = await fetch("/api/broadcasts", { cache: "no-store" });
+        const data = await res.json().catch(() => ({}));
+        broadcastItems = Array.isArray(data.items) ? data.items : [];
+      } catch {
+        broadcastItems = [];
+      }
+    }
+    $("siteNoticeClose")?.addEventListener("click", () => {
+      const kicker = $("siteNoticeKicker")?.textContent || "";
+      const item = broadcastItems.find((row) => row.kicker === kicker) || broadcastItems[0];
+      if (item) {
+        const next = { ...dismissedNotices(), [item.id]: Date.now() };
+        try { localStorage.setItem(NOTICE_DISMISS_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      }
+      hideSiteNotice();
+    });
+
     function openFilterSheet() {
       document.body.classList.add("filter-sheet-open");
       const bg = $("filterSheetBackdrop");
       if (bg) bg.hidden = false;
       setAppView("listings");
+      initMap();
+      setTimeout(refreshMapSize, 80);
+      setTimeout(refreshMapSize, 320);
     }
     function closeFilterSheet() {
       document.body.classList.remove("filter-sheet-open");
@@ -4495,6 +4657,7 @@
         setHubTab(document.querySelector("[data-hub-tab][aria-selected='true']")?.dataset.hubTab || "events");
       }
       try { localStorage.setItem(APP_VIEW_KEY, view); } catch { /* ignore */ }
+      maybeShowBroadcast();
     }
     function urlBase64ToUint8Array(base64String) {
       const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -4714,7 +4877,9 @@
       if ($("profileCompany") && me) $("profileCompany").value = me.company_address || "";
       if ($("profilePhone") && me) $("profilePhone").value = me.contact_phone || "";
       if ($("profileLineId") && me) $("profileLineId").value = me.line_id || "";
-      if (me?.privacy_text && $("profilePrivacyText")) $("profilePrivacyText").textContent = me.privacy_text;
+      if (me?.privacy_text && $("profilePrivacyText")) {
+        $("profilePrivacyText").textContent = `${me.privacy_text}我已了解上述個資說明`;
+      }
       if ($("profilePrivacy") && me?.privacy_accepted) $("profilePrivacy").checked = true;
       const img = $("profileAvatarImg");
       const fallback = $("profileAvatarFallback");
@@ -4724,17 +4889,24 @@
         img.hidden = false;
         img.classList.remove("empty");
         if (fallback) fallback.hidden = true;
+        if ($("profileAvatarClear")) $("profileAvatarClear").hidden = false;
       } else if (img) {
         img.hidden = true;
         if (fallback) fallback.hidden = false;
+        if ($("profileAvatarClear")) $("profileAvatarClear").hidden = true;
       }
       const qr = $("profileLineQrImg");
+      const qrHint = $("profileLineQrHint");
       if (qr) {
         if (me?.line_qr_url) {
           qr.src = me.line_qr_url;
           qr.hidden = false;
+          if (qrHint) qrHint.hidden = true;
+          if ($("profileLineQrClear")) $("profileLineQrClear").hidden = false;
         } else {
           qr.hidden = true;
+          if (qrHint) qrHint.hidden = false;
+          if ($("profileLineQrClear")) $("profileLineQrClear").hidden = true;
         }
       }
     }
@@ -4859,6 +5031,40 @@
     $("selfCity")?.addEventListener("change", fillSelfDistrictOptions);
     $("selfDistrict")?.addEventListener("change", syncSelfAddressPrefix);
     $("profileNickname")?.addEventListener("input", () => { $("profileNickname").dataset.dirty = "1"; });
+    let pendingClearAvatar = false;
+    let pendingClearQr = false;
+    $("profileAvatarHit")?.addEventListener("click", (ev) => {
+      if (ev.target.closest("#profileAvatarClear")) {
+        ev.preventDefault();
+        pendingClearAvatar = true;
+        if ($("profileAvatar")) $("profileAvatar").value = "";
+        $("profileForm")?.requestSubmit();
+        return;
+      }
+      $("profileAvatar")?.click();
+    });
+    $("profileLineQrHit")?.addEventListener("click", (ev) => {
+      if (ev.target.closest("#profileLineQrClear")) {
+        ev.preventDefault();
+        pendingClearQr = true;
+        if ($("profileLineQr")) $("profileLineQr").value = "";
+        $("profileForm")?.requestSubmit();
+        return;
+      }
+      $("profileLineQr")?.click();
+    });
+    $("profileAvatar")?.addEventListener("change", () => {
+      if ($("profileAvatar")?.files?.[0]) {
+        pendingClearAvatar = false;
+        $("profileForm")?.requestSubmit();
+      }
+    });
+    $("profileLineQr")?.addEventListener("change", () => {
+      if ($("profileLineQr")?.files?.[0]) {
+        pendingClearQr = false;
+        $("profileForm")?.requestSubmit();
+      }
+    });
     $("profileForm")?.addEventListener("submit", async (ev) => {
       ev.preventDefault();
       if (isGuest) {
@@ -4902,13 +5108,15 @@
             line_id: $("profileLineId")?.value || "",
             contact_email: $("profileContactEmail")?.value || "",
             accept_privacy: $("profilePrivacy")?.checked === true,
-            ...(avatarUrl ? { avatar_url: avatarUrl } : {}),
-            ...(lineQrUrl ? { line_qr_url: lineQrUrl } : {}),
+            ...(pendingClearAvatar ? { avatar_url: "" } : avatarUrl ? { avatar_url: avatarUrl } : {}),
+            ...(pendingClearQr ? { line_qr_url: "" } : lineQrUrl ? { line_qr_url: lineQrUrl } : {}),
           }),
         });
         const data = await readApi(res);
         if (!res.ok) throw new Error(data.error || "儲存失敗");
         if ($("profileNickname")) $("profileNickname").dataset.dirty = "";
+        pendingClearAvatar = false;
+        pendingClearQr = false;
         paintProfile(data);
         if ($("who")) $("who").textContent = data.display_name || data.nickname || data.email || "";
         if (msg) msg.textContent = "已儲存個人資料";
@@ -5354,14 +5562,6 @@
       persistViewFilters();
       loadList();
     };
-    $("needCourtyard")?.addEventListener("change", () => {
-      persistViewFilters();
-      loadList();
-    });
-    $("needBalcony")?.addEventListener("change", () => {
-      persistViewFilters();
-      loadList();
-    });
     $("selectPageBtn").onclick = () => {
       document.querySelectorAll("[data-pick]").forEach((el) => {
         el.checked = true;
@@ -5903,12 +6103,23 @@
         }
         return;
       }
-      map = L.map("excludeMap", { boxZoom: false }).setView([25.093, 121.525], 13);
+      map = L.map("excludeMap", { boxZoom: false }).setView([25.0478, 121.517], 14);
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         maxZoom: 19,
         attribution: "&copy; OpenStreetMap",
       }).addTo(map);
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            map.setView([pos.coords.latitude, pos.coords.longitude], 15);
+            refreshMapSize();
+          },
+          () => refreshMapSize(),
+          { enableHighAccuracy: false, timeout: 4000, maximumAge: 120000 },
+        );
+      }
       drawBoxLayers();
+      refreshMapSize();
       map.on("mousedown", (ev) => {
         if (!drawing) return;
         map.dragging.disable();
@@ -6154,6 +6365,7 @@
       paintSelfTraits();
       loadMineSelfListings().catch(() => {});
       loadPublicAds().catch(() => {});
+      loadBroadcasts().catch(() => {});
       openSelfFromQuery().catch(() => {});
       setTimeout(() => map?.invalidateSize(), 250);
       if (!window.__watchStream && !isGuest) {

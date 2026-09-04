@@ -24,15 +24,11 @@ test("nickname is optional and becomes the display name", () => {
   assert.equal(displayName(next), "小林");
 });
 
-test("contact fields need a privacy tick the first time", () => {
+test("contact fields can save without a privacy tick", () => {
   const db = memoryDb();
   const user = registerUser(db, { email: "a@b.com", password: "password1", acceptDisclaimer: true });
-  assert.throws(
-    () => updateUserProfile(db, user.id, { contact_phone: "0912345678" }),
-    /個資說明/,
-  );
-  const saved = updateUserProfile(db, user.id, { contact_phone: "0912345678", accept_privacy: true });
+  const saved = updateUserProfile(db, user.id, { contact_phone: "0912345678" });
   assert.equal(saved.contact_phone, "0912345678");
-  const again = updateUserProfile(db, user.id, { contact_phone: "0987654321" });
-  assert.equal(again.contact_phone, "0987654321");
+  const ticked = updateUserProfile(db, user.id, { contact_phone: "0987654321", accept_privacy: true });
+  assert.equal(ticked.contact_phone, "0987654321");
 });
