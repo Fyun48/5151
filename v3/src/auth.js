@@ -161,6 +161,7 @@ export function publicPath(req) {
     p === "/api/disclaimer" ||
     p === "/api/help-qa" ||
     p === "/api/ads" ||
+    p === "/api/brand" ||
     p === "/api/broadcasts" ||
     p === "/api/captcha" ||
     p === "/api/demand" ||
@@ -168,10 +169,13 @@ export function publicPath(req) {
     p === "/manifest.webmanifest" ||
     p === "/sw.js" ||
     p === "/tokens.css" ||
+    p === "/mascot.js" ||
     p.startsWith("/api/demand/") ||
     p.startsWith("/vendor/") ||
     p.startsWith("/icons/") ||
+    p.startsWith("/brand/") ||
     p.startsWith("/media/self/") ||
+    p.startsWith("/media/brand/") ||
     p.startsWith("/go/")
   );
 }
