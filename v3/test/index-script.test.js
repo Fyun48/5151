@@ -560,3 +560,11 @@ test("self listing form and in-site detail stay on this site", () => {
   assert.match(html, /疑似同一間（\$\{esc\(srcPeer \|\| srcMine\)\}）/);
   assert.match(html, /確認後列表只留總費用（租金＋額外費用）較低的那則/);
 });
+
+test("filter city accordion markup is generated from shared city list", () => {
+  const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
+  assert.match(html, /cities-embed\.js/);
+  assert.match(html, /data-city-toggle=/);
+  assert.match(html, /role="button"/);
+  assert.match(html, /aria-expanded=/);
+});

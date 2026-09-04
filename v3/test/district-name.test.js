@@ -53,3 +53,10 @@ test("matches short road address without 區 suffix", () => {
     "八里區",
   );
 });
+
+test("same district names in different cities follow the city prefix", () => {
+  assert.equal(districtNameFromListing({ address: "台中市東區復興路" }), "東區");
+  assert.equal(districtNameFromListing({ address: "台南市東區東門路" }), "東區");
+  assert.equal(districtNameFromListing({ address: "基隆市中正區新豐街" }), "中正區");
+  assert.equal(districtNameFromListing({ address: "台北市中正區重慶南路" }), "中正區");
+});
