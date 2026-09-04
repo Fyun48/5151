@@ -1,4 +1,5 @@
 import { passesAttributeFilters, passesGeoFilters } from "./floors.js";
+import { feeRowMonthlyAmount } from "./listingCost.js";
 import { allDistricts } from "./regions.js";
 import { coordsFrom591Detail, coordsFromListing, isExcludedByKeyword } from "./geo.js";
 import {
@@ -216,7 +217,8 @@ export function feesFromDetail(costRows, listFees = []) {
     if (!row?.name || skip.has(row.key)) continue;
     const value = String(row.value || "").trim();
     if (!value || value === "--") continue;
-    rows.push({ name: row.name, value, key: row.key || "" });
+    const amount = feeRowMonthlyAmount({ name: row.name, value, key: row.key || "" });
+    rows.push({ name: row.name, value, key: row.key || "", amount: amount > 0 ? amount : undefined });
   }
   const contain = (listFees || []).find((row) => row.key === "contain");
   if (contain && !rows.some((row) => row.key === "contain" || /含水|含網路|含瓦斯/.test(row.value))) {
