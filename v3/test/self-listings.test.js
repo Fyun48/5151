@@ -125,7 +125,7 @@ test("self listing ids stay above the reserved range and require login", () => {
   const row = createSelfListing(db, 1, sampleInput());
   assert.ok(row.post_id > SELF_POST_ID_BASE);
   assert.equal(row.source, "self");
-  assert.equal(row.source_label, "站內刊登");
+  assert.equal(row.source_label, "吉比本站");
   assert.deepEqual(row.photos, []);
   assert.equal(row.kind_name, "整層住家");
   assert.match(row.search_key || db.prepare("SELECT search_key FROM listings WHERE post_id = ?").get(row.post_id).search_key, /region=1/);

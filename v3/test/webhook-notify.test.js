@@ -135,6 +135,12 @@ test("non-watched content updates never notify", () => {
   assert.equal(shouldNotify(hookSettings, watched, { type: "update", detail: "格局變更" }), true);
 });
 
+test("new listing notify follows profile whole-floor filter", () => {
+  const suite = { ...listing, kind_name: "分租套房" };
+  assert.equal(shouldNotify({ ...hookSettings, wholeFloorOnly: true }, suite, { type: "new" }), false);
+  assert.equal(shouldNotify({ ...hookSettings, wholeFloorOnly: false }, suite, { type: "new" }), true);
+});
+
 test("display floor filters also block notifications", () => {
   const low = { ...listing, kind_name: "整層住家", floor_name: "1F/5F", watched: 0 };
   const prefs = { ...hookSettings, wholeFloorOnly: true, excludeLowFloors: true };

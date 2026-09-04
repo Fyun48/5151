@@ -78,6 +78,28 @@ test("empty settingProfiles patch cannot sneak in via unrelated save", () => {
   assert.equal(next.notifyNew, false);
 });
 
+test("notify and floor prefs write into the active profile snapshot", () => {
+  const current = hydrateSettings(
+    {
+      settingProfiles: [{ id: "p-1", name: "士林北投", data: { wholeFloorOnly: true, commuteKm: 12 } }],
+      activeProfileId: "p-1",
+      watchDistricts: ["1-8"],
+      wholeFloorOnly: true,
+    },
+    defaults,
+  );
+  const next = applySettingPatch(current, {
+    wholeFloorOnly: false,
+    excludeLowFloors: false,
+    notifyMatrix: { new: { dock: true, push: false, webhook: false, mail: false } },
+  });
+  assert.equal(next.wholeFloorOnly, false);
+  assert.equal(next.excludeLowFloors, false);
+  assert.equal(next.settingProfiles[0].data.wholeFloorOnly, false);
+  assert.equal(next.settingProfiles[0].data.excludeLowFloors, false);
+  assert.equal(next.settingProfiles[0].data.notifyMatrix.new.push, false);
+});
+
 test("full form save updates the active profile snapshot", () => {
   const current = hydrateSettings(
     {

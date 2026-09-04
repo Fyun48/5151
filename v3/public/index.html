@@ -1936,7 +1936,10 @@
       <p class="hint">大於這個坪數的物件會從列表藏起來，也不通知。空白或 0 表示不限。按儲存就套用已抓到的結果，不必重查 591。</p>
       <div class="checks">
         <label><input type="checkbox" id="excludeRooftop" checked /> 排除頂樓加蓋</label>
+        <label><input type="checkbox" id="wholeFloorOnly" checked /> 只看整層住家</label>
+        <label><input type="checkbox" id="excludeLowFloors" checked /> 排除 1F 及以下（含地下室、整棟、頂加）</label>
       </div>
+      <p class="hint">這三項會寫進設定檔。列表與新物件通知都用同一套；按儲存後才套用。</p>
       <details>
         <summary class="hint">進階：591 網址（自動產生，通常不用改）</summary>
         <textarea id="searchUrls" placeholder="儲存後會依上方行政區自動產生"></textarea>
@@ -2003,7 +2006,7 @@
           <div class="status" id="status">準備就緒</div>
           <div class="filter-head-actions">
           <button type="button" class="ghost mobile-only" id="openFilterSheetBtn">篩選</button>
-          <button type="button" class="filter-restore-btn ghost" id="filterRestoreBtn" title="展開類型、排序與樓層條件">更多條件</button>
+          <button type="button" class="filter-restore-btn ghost" id="filterRestoreBtn" title="展開類型與排序">更多條件</button>
           </div>
           <div class="list-meta" id="listMeta" hidden></div>
         </div>
@@ -2038,11 +2041,6 @@
             <button type="button" class="ghost" id="clearSelectBtn">取消勾選</button>
             <button type="button" class="primary" id="hideSelectedBtn">不再顯示已選</button>
           </div>
-        </div>
-          <div class="view-filters">
-          <label><input type="checkbox" id="wholeFloorOnly" /> 只看整層住家</label>
-          <label><input type="checkbox" id="excludeLowFloors" /> 排除 1F 及以下（含地下室、整棟、頂加）</label>
-          <span class="hint" style="margin:0">篩選列表與通知；不影響 591 抓取與左側統計。勾選後立即生效並寫入設定。</span>
         </div>
         </div>
         <div class="district-block" id="districtBlock" hidden>
@@ -2399,7 +2397,7 @@
         <p class="msg" id="memberMailMsg"></p>
       </section>
       <section class="hub-pane" data-hub-pane="events" hidden>
-        <p class="hint">站內待看在這一頁上方。系統推播按上面的「允許系統推播」。Webhook 與郵件要先填好才會送出，預設關閉。</p>
+        <p class="hint">全新物件只通知符合目前設定檔的篩選（例如只看整層、排除 1F、行政區、租金）。頻道勾選也存在同一個設定檔。</p>
         <div class="notify-matrix-wrap">
         <table class="notify-matrix" id="notifyMatrix">
           <thead>
@@ -2529,7 +2527,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.25</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.26</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -2892,55 +2890,14 @@
     let settingsLoaded = false;
     let viewDistricts = new Set();
     const VIEW_KEY = "591-view-districts";
-    const VIEW_WHOLE_KEY = "591-view-whole-floor";
-    const VIEW_LOW_FLOOR_KEY = "591-view-exclude-low";
     try {
       const saved = JSON.parse(sessionStorage.getItem(VIEW_KEY) || "[]");
       if (Array.isArray(saved)) viewDistricts = new Set(saved);
     } catch {}
 
-    function loadViewFilters(s = settings) {
-      const wf = sessionStorage.getItem(VIEW_WHOLE_KEY);
-      const low = sessionStorage.getItem(VIEW_LOW_FLOOR_KEY);
-      // 設定檔優先（通知也讀這個）；session 僅在尚未存過時當預設
-      if (s && Object.prototype.hasOwnProperty.call(s, "wholeFloorOnly")) {
-        $("wholeFloorOnly").checked = s.wholeFloorOnly !== false;
-      } else {
-        $("wholeFloorOnly").checked = wf === null ? true : wf === "1";
-      }
-      if (s && Object.prototype.hasOwnProperty.call(s, "excludeLowFloors")) {
-        $("excludeLowFloors").checked = s.excludeLowFloors !== false;
-      } else {
-        $("excludeLowFloors").checked = low === null ? true : low === "1";
-      }
-      saveViewFilters();
-    }
-
-    function saveViewFilters() {
-      sessionStorage.setItem(VIEW_WHOLE_KEY, $("wholeFloorOnly").checked ? "1" : "0");
-      sessionStorage.setItem(VIEW_LOW_FLOOR_KEY, $("excludeLowFloors").checked ? "1" : "0");
-    }
-
-    async function persistViewFilters() {
-      saveViewFilters();
-      if (!settingsLoaded || isGuest) return;
-      try {
-        const res = await fetch("/api/settings", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            wholeFloorOnly: $("wholeFloorOnly").checked,
-            excludeLowFloors: $("excludeLowFloors").checked,
-          }),
-          signal: AbortSignal.timeout(12000),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok && data.settings) {
-          settings = { ...settings, ...data.settings };
-        }
-      } catch {
-        // 列表已先套用；設定稍後再存
-      }
+    function fillFloorFilters(s = settings) {
+      $("wholeFloorOnly").checked = s.wholeFloorOnly !== false;
+      $("excludeLowFloors").checked = s.excludeLowFloors !== false;
     }
 
     function isWholeFloorHome(kindName) {
@@ -3080,7 +3037,6 @@
       }
       return applyListView(out);
     }
-    loadViewFilters();
 
     function flash(msg) {
       $("saveMsg").textContent = msg;
@@ -3230,7 +3186,7 @@
 
     function isGuestLockedTarget(el) {
       if (!el || !isGuest) return false;
-      if (el.closest("#collapsePanelBtn, #expandPanelBtn, #reloadBtn, #loginBtn, #registerBtn, #helpQaBtn, #helpQaDialog, #guestToast, #guestTour, #listHeadSticky .chip, #q, #wholeFloorOnly, #excludeLowFloors, [data-view-district], [data-open-hub], #notifyHubClose, [data-close-hub], [data-hub-tab]")) return false;
+      if (el.closest("#collapsePanelBtn, #expandPanelBtn, #reloadBtn, #loginBtn, #registerBtn, #helpQaBtn, #helpQaDialog, #guestToast, #guestTour, #listHeadSticky .chip, #q, [data-view-district], [data-open-hub], #notifyHubClose, [data-close-hub], [data-hub-tab]")) return false;
       if (el.closest(".item-cover, h3 a, a.tel, .line-qr")) return false;
       if (el.closest("#notifyHubSave, #memberMailTest, #gmailPresetBtn")) return true;
       if (el.closest("#notifyHub")) return true;
@@ -3638,7 +3594,7 @@
       setCommuteMode("commuteMode", s.commuteMode);
       if ($("showMrt")) $("showMrt").checked = s.showMrt !== false;
       syncCommuteSort();
-      loadViewFilters(s);
+      fillFloorFilters(s);
       $("excludeKeywords").value = (s.excludeKeywords || []).join("\n");
       $("excludeAgents").value = (s.excludeAgents || []).join("\n");
       $("discordWebhook").value = s.discordWebhook || "";
@@ -3760,13 +3716,14 @@
 
     function tags(item) {
       const bits = [];
-      if (item.source === "self") bits.push('<span class="tag self-src">站內刊登</span>');
-      else if (item.source === "hbhousing") bits.push('<span class="tag ext-src">住商</span>');
-      else if (item.source === "sinyi") bits.push('<span class="tag ext-src">信義</span>');
-      else if (item.source === "houseprice") bits.push('<span class="tag ext-src">5168</span>');
-      else if (item.source === "ddroom") bits.push('<span class="tag ext-src">租租通</span>');
-      else if (item.source === "housefun") bits.push('<span class="tag ext-src">好房</span>');
-      else if (item.source && item.source !== "591") bits.push(`<span class="tag ext-src">${esc(item.source_label || item.source)}</span>`);
+      const source = listingSource(item);
+      if (source === "self") bits.push('<span class="tag self-src">吉比本站</span>');
+      else if (source === "hbhousing") bits.push('<span class="tag ext-src">住商</span>');
+      else if (source === "sinyi") bits.push('<span class="tag ext-src">信義</span>');
+      else if (source === "houseprice") bits.push('<span class="tag ext-src">5168</span>');
+      else if (source === "ddroom") bits.push('<span class="tag ext-src">租租通</span>');
+      else if (source === "housefun") bits.push('<span class="tag ext-src">好房</span>');
+      else bits.push(`<span class="tag ext-src">${esc(item.source_label || "591")}</span>`);
       if (item.fit_label && item.fit_score != null) {
         bits.push(`<span class="tag fit" title="依你的租金、樓層與通勤估算，不是成交預測">${esc(item.fit_label)} ${esc(item.fit_score)}</span>`);
       }
@@ -3884,7 +3841,7 @@
         else if (viewDistricts.size) {
           msg = "這個行政區篩選目前沒有物件。可點「全部」或再勾其他區。";
         } else if ($("wholeFloorOnly").checked || $("excludeLowFloors").checked) {
-          msg = "目前沒有符合右側「整層／樓層」顯示篩選的物件。取消勾選可看到更多已抓到的結果。";
+          msg = "目前沒有符合設定檔「整層／樓層」篩選的物件。到篩選裡取消勾選並儲存後可看到更多已抓到的結果。";
         } else if (filter === "suspected") {
           msg = "目前沒有被判成同一屋源的重刊。隱藏或已瀏覽的舊屋若再上架，會出現在這裡。";
         } else if (filter === "offline") {
@@ -5581,14 +5538,6 @@
     document.addEventListener("keydown", (ev) => {
       if (ev.key === "Escape" && $("ownerOverlay") && !$("ownerOverlay").hidden) closeOwnerOverlay();
     });
-    $("wholeFloorOnly").onchange = () => {
-      persistViewFilters();
-      loadList();
-    };
-    $("excludeLowFloors").onchange = () => {
-      persistViewFilters();
-      loadList();
-    };
     $("selectPageBtn").onclick = () => {
       document.querySelectorAll("[data-pick]").forEach((el) => {
         el.checked = true;

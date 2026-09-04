@@ -88,7 +88,7 @@ export function isWholeFloorHome(kindName) {
   return String(kindName || "").includes("整層住家");
 }
 
-/** 列表顯示／通知用：整層、排除 1F。不影響 591 搜尋與左側統計。 */
+/** 列表顯示／通知用：整層、排除 1F。與設定檔同一套，不影響 591 抓取與左側統計。 */
 export function passesDisplayFilters(listing, settings = {}, { skipWholeFloor = false } = {}) {
   if (!skipWholeFloor && settings.wholeFloorOnly !== false && !isWholeFloorHome(listing.kind_name)) {
     return false;
