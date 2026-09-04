@@ -105,7 +105,7 @@
   <header>
     <div>
       <h1>後台管理</h1>
-      <div class="sub">會員、寄信 SMTP、信件內容、贊助連結、通勤路線來源。看不到會員密碼。</div>
+      <div class="sub">會員、寄信 SMTP、信件內容、贊助連結、站內小廣告、通勤路線來源。看不到會員密碼。</div>
     </div>
     <div class="row">
       <span class="who" id="who"></span>
@@ -208,7 +208,7 @@
     </section>
     <section class="card">
       <h2>贊助連結</h2>
-      <p class="hint">預設列出免月費、會員能刷卡的方案：歐付寶收款連結、ezPay 簡單付、OEN 幫收 Link、Ko-fi、PayPal.Me、Buy Me a Coffee、GitHub Sponsors。金流仍會從贊助款抽手續費。綠界、藍新全方位金流通常要統編或年費，不放在預設清單；若你已有網址，可用下面自訂列。付款不會自動改會員方案，收到後請在上方把對方改成「已贊助」。</p>
+      <p class="hint">預設列出免月費、會員能刷卡的方案：歐付寶收款連結、ezPay 簡單付、OEN 幫收 Link、Ko-fi、PayPal.Me、Buy Me a Coffee、GitHub Sponsors。金流仍會從贊助款抽手續費。ezPay 個人會員通過、銀行設好後，請到 ezPay 後台做「收款連結」，把 https 網址貼到該列「你的收款網址」並勾選顯示；銀行帳號本身不會出現在前台。綠界、藍新全方位金流通常要統編或年費，不放在預設清單。付款不會自動改會員方案，收到後請在上方把對方改成「已贊助」。</p>
       <form id="sponsorForm">
         <label>給未贊助會員看的說明</label>
         <textarea id="sponsorIntro"></textarea>
@@ -223,6 +223,52 @@
           <button type="submit" class="primary" id="sponsorSave">儲存贊助連結</button>
         </div>
         <p class="msg" id="sponsorMsg"></p>
+      </form>
+    </section>
+    <section class="card">
+      <h2>站內小廣告</h2>
+      <p class="hint">短期小額曝光用，不是 Google Ads，也不會自動追蹤訪客。每個版位最多一則安靜卡片，前台標「贊助訊息」。這與上方「贊助連結」（會員贊助金流）分開。沒開的版位前台不會出現空框。</p>
+      <form id="adsForm">
+        <div class="grid-2">
+          <div>
+            <h3 style="margin:0 0 8px;font-size:16px">找房列表</h3>
+            <label class="checks"><input type="checkbox" id="adListingsEnabled" /> 顯示這則</label>
+            <label>標題</label>
+            <input id="adListingsTitle" maxlength="40" placeholder="例如 附近早餐店" />
+            <label>說明</label>
+            <textarea id="adListingsText" maxlength="160" placeholder="一句話即可"></textarea>
+            <label>連結（選填，http／https）</label>
+            <input id="adListingsUrl" maxlength="500" placeholder="https://..." />
+            <label>圖片網址（選填）</label>
+            <input id="adListingsImage" maxlength="500" placeholder="https://..." />
+          </div>
+          <div>
+            <h3 style="margin:0 0 8px;font-size:16px">登入頁</h3>
+            <label class="checks"><input type="checkbox" id="adLoginEnabled" /> 顯示這則</label>
+            <label>標題</label>
+            <input id="adLoginTitle" maxlength="40" />
+            <label>說明</label>
+            <textarea id="adLoginText" maxlength="160"></textarea>
+            <label>連結（選填）</label>
+            <input id="adLoginUrl" maxlength="500" />
+            <label>圖片網址（選填）</label>
+            <input id="adLoginImage" maxlength="500" />
+          </div>
+        </div>
+        <h3 style="margin:16px 0 8px;font-size:16px">我的頁</h3>
+        <label class="checks"><input type="checkbox" id="adMeEnabled" /> 顯示這則</label>
+        <label>標題</label>
+        <input id="adMeTitle" maxlength="40" />
+        <label>說明</label>
+        <textarea id="adMeText" maxlength="160"></textarea>
+        <label>連結（選填）</label>
+        <input id="adMeUrl" maxlength="500" />
+        <label>圖片網址（選填）</label>
+        <input id="adMeImage" maxlength="500" />
+        <div class="row" style="margin:14px 0 0">
+          <button type="submit" class="primary" id="adsSave">儲存小廣告</button>
+        </div>
+        <p class="msg" id="adsMsg"></p>
       </form>
     </section>
     <section class="card">
@@ -812,6 +858,59 @@
       renderExtras();
     };
 
+    function slotFromForm(prefix) {
+      return {
+        enabled: Boolean($(`ad${prefix}Enabled`)?.checked),
+        title: $(`ad${prefix}Title`)?.value || "",
+        text: $(`ad${prefix}Text`)?.value || "",
+        url: $(`ad${prefix}Url`)?.value || "",
+        image_url: $(`ad${prefix}Image`)?.value || "",
+      };
+    }
+    function fillAds(data) {
+      const slots = data.config?.slots || {};
+      for (const [key, prefix] of [["listings", "Listings"], ["login", "Login"], ["me", "Me"]]) {
+        const slot = slots[key] || {};
+        if ($(`ad${prefix}Enabled`)) $(`ad${prefix}Enabled`).checked = Boolean(slot.enabled);
+        if ($(`ad${prefix}Title`)) $(`ad${prefix}Title`).value = slot.title || "";
+        if ($(`ad${prefix}Text`)) $(`ad${prefix}Text`).value = slot.text || "";
+        if ($(`ad${prefix}Url`)) $(`ad${prefix}Url`).value = slot.url || "";
+        if ($(`ad${prefix}Image`)) $(`ad${prefix}Image`).value = slot.image_url || "";
+      }
+    }
+    async function loadAds() {
+      const res = await fetch("/api/admin/ads", { cache: "no-store" });
+      const data = await readApi(res);
+      if (!res.ok) throw new Error(data.error || "載入廣告設定失敗");
+      fillAds(data);
+    }
+    $("adsForm").onsubmit = async (ev) => {
+      ev.preventDefault();
+      $("adsSave").disabled = true;
+      setMsg("adsMsg", "儲存中…");
+      try {
+        const res = await fetch("/api/admin/ads", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            slots: {
+              listings: slotFromForm("Listings"),
+              login: slotFromForm("Login"),
+              me: slotFromForm("Me"),
+            },
+          }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "儲存失敗");
+        fillAds(data);
+        const n = Object.values(data.config?.slots || {}).filter((row) => row.enabled).length;
+        setMsg("adsMsg", n ? `已儲存，目前會顯示 ${n} 則贊助訊息` : "已儲存。還沒有開啟的版位，前台暫時看不到廣告。", true);
+      } catch (error) {
+        setMsg("adsMsg", error.message);
+      } finally {
+        $("adsSave").disabled = false;
+      }
+    };
     $("sponsorForm").onsubmit = async (ev) => {
       ev.preventDefault();
       $("sponsorSave").disabled = true;
@@ -855,7 +954,7 @@
       if (me.role !== "admin") { location.replace("/"); return; }
       meEmail = me.email || "";
       $("who").textContent = meEmail;
-      await Promise.all([loadMembers(), loadMail(), loadSponsor(), loadMaps(), loadHelpQa(), loadCrawlSources()]);
+      await Promise.all([loadMembers(), loadMail(), loadSponsor(), loadAds(), loadMaps(), loadHelpQa(), loadCrawlSources()]);
       $("helpQaAdd").onclick = () => {
         renderHelpQaEditor([...collectHelpQa(), { question: "", answer: "", id: "" }]);
       };
@@ -973,6 +1072,6 @@
       setMsg("memberMsg", error.message || "載入失敗");
     });
   </script>
-  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.20</span></footer>
+  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.22</span></footer>
 </body>
 </html>

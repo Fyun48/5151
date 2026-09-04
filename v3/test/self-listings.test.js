@@ -175,12 +175,15 @@ test("self listing needs street name and owner pledge, phone is optional", () =>
     phone: "",
     line_url: "",
     street: "中正路88號",
-    traits: ["elevator", "ac"],
+    traits: ["elevator", "community", "courtyard", "balcony", "ac"],
     deposit: "one",
   }));
   assert.equal(row.address, "台北市士林區中正路88號");
   assert.equal(row.phone, "");
-  assert.deepEqual(row.traits, ["elevator", "ac"]);
+  assert.deepEqual(row.traits, ["elevator", "community", "courtyard", "balcony", "ac"]);
+  assert.ok(row.trait_labels.includes("社區大樓"));
+  assert.ok(row.trait_labels.includes("有中庭"));
+  assert.ok(row.trait_labels.includes("有陽台"));
   assert.equal(row.pledged, true);
   db.close();
 });
@@ -253,6 +256,17 @@ test("index, server and admin expose self listing surfaces", () => {
   assert.match(html, /id="ownerFab"/);
   assert.match(html, /可使用坪數/);
   assert.match(html, /id="selfPledge"/);
+  assert.match(html, /id="selfCity"/);
+  assert.match(html, /data-nav="post"/);
+  assert.match(html, /有房刊登/);
+  assert.match(html, /pledge-row/);
+  assert.doesNotMatch(html, /id="meFilterBtn"/);
+  assert.match(html, /id="needCourtyard"/);
+  assert.match(html, /id="needBalcony"/);
+  assert.match(html, /社區大樓/);
+  assert.match(html, /有中庭/);
+  assert.match(html, /selfRichHint/);
+  assert.match(html, /刊登者自行聲明為屋主／代理人/);
   assert.match(html, /maxlength="500"/);
   assert.match(server, /app\.post\("\/api\/self-listings"/);
   assert.match(server, /app\.post\("\/api\/self-listings\/photos"/);

@@ -83,6 +83,13 @@ export function ensurePersonalSchema(db) {
     "ALTER TABLE users ADD COLUMN nickname TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE users ADD COLUMN avatar_url TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE users ADD COLUMN self_ban_until TEXT",
+    "ALTER TABLE users ADD COLUMN home_address TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN company_address TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN contact_phone TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN line_id TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN line_qr_url TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN contact_email TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN profile_privacy_at TEXT",
     "ALTER TABLE user_events ADD COLUMN source_key TEXT NOT NULL DEFAULT ''",
   ]) {
     try {

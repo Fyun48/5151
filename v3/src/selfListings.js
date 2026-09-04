@@ -43,6 +43,8 @@ export const SELF_LEGAL = "這是免費找房工具，不是仲介、不保證�
 
 export const SELF_AUDIT = "站內物件會不定期抽查。若發現不實、惡作劇或明顯誤導，系統會自動下架，並暫停該帳號上傳物件 14 天。這不是仲介認證，也不保證屋況屬實；請租屋族仍以現場與合約為準。";
 
+export const SELF_RICH_HINT = "來看的人最常問的，其實多半寫在這裡就能先答完。多勾一項、多寫一句，之後就少被重複打擾，也比較快遇到適合的人。";
+
 export const SELF_PLEDGE = "我是這間房子的屋主，或已取得屋主授權的代理人。我確認刊登內容屬實，了解平台會抽查，不實刊登會被下架並暫停上傳。平台不驗證權狀、不保證真實，法律責任由我自行負擔。";
 
 export function isSelfListingId(postId) {
@@ -78,6 +80,7 @@ export function selfListingMeta() {
     templates: SELF_BODY_TEMPLATES,
     body_max: SELF_BODY_MAX,
     audit: SELF_AUDIT,
+    rich_hint: SELF_RICH_HINT,
     pledge: SELF_PLEDGE,
     ban_days: SELF_BAN_DAYS,
     photos: {

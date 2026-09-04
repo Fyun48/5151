@@ -112,7 +112,7 @@ import {
   setUserPlan as setUserPlanOn,
   verifyUserPassword as verifyUserPasswordOn,
 } from "./members.js";
-import { updateUserProfile as updateUserProfileOn } from "./profile.js";
+import { publicProfile, updateUserProfile as updateUserProfileOn } from "./profile.js";
 import { requestTempPassword as requestTempPasswordOn } from "./forgotPassword.js";
 import { shouldDeliverNotify, formatNotifyFacts, isSameNotifyDetail } from "./notify.js";
 import {
@@ -138,6 +138,7 @@ import {
   publicSponsorOffer,
   sponsorCatalog,
 } from "./sponsorLinks.js";
+import { adminSiteAdsView, normalizeSiteAds, publicSiteAds } from "./siteAds.js";
 
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data-v3");
 mkdirSync(DATA_DIR, { recursive: true });
@@ -809,6 +810,28 @@ export function publicSponsorSettings(user = {}) {
   return publicSponsorOffer(getSponsorConfig(), { role: user.role, plan: user.plan });
 }
 
+export function getSiteAdsConfig() {
+  return normalizeSiteAds(settingKey("siteAds"));
+}
+
+export function getAdminAdsSettings() {
+  return adminSiteAdsView(getSiteAdsConfig());
+}
+
+export function saveAdminAdsSettings(partial = {}) {
+  const src = partial && typeof partial === "object" ? partial : {};
+  const current = getSiteAdsConfig();
+  const next = normalizeSiteAds({
+    slots: src.slots && typeof src.slots === "object" ? { ...current.slots, ...src.slots } : current.slots,
+  });
+  writeSettingKey("siteAds", next);
+  return getAdminAdsSettings();
+}
+
+export function publicAdsSettings() {
+  return publicSiteAds(getSiteAdsConfig());
+}
+
 export function getHelpQa() {
   const stored = settingKey("helpQa");
   const items = stored == null ? defaultHelpQaItems() : mergeMissingDefaultHelpQa(stored.items ?? stored);
@@ -934,7 +957,8 @@ export function registerUser(input) {
 }
 
 export function updateUserProfile(userId, input) {
-  return publicUser(updateUserProfileOn(db, userId, input));
+  const row = updateUserProfileOn(db, userId, input);
+  return { ...publicUser(row), ...publicProfile(row) };
 }
 
 export function countOpenSelfListings(userId) {
@@ -1040,6 +1064,7 @@ function omitSiteMail(stored) {
   delete next.smtp;
   delete next.mailTemplates;
   delete next.sponsorLinks;
+  delete next.siteAds;
   delete next.memberSmtp;
   delete next.memberMailTemplates;
   delete next.mailPreset;
@@ -1086,6 +1111,7 @@ export function saveSettings(partial, userId, { forceAdmin = false } = {}) {
         key === "smtp"
         || key === "mailTemplates"
         || key === "sponsorLinks"
+        || key === "siteAds"
         || key === "memberSmtp"
         || key === "memberMailTemplates"
         || key === "mailPreset"

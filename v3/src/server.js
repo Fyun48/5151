@@ -47,6 +47,9 @@ import {
   getAdminSponsorSettings,
   saveAdminSponsorSettings,
   publicSponsorSettings,
+  getAdminAdsSettings,
+  saveAdminAdsSettings,
+  publicAdsSettings,
   getAdminMapsSettings,
   saveAdminMapsSettings,
   settingsForGeoBackfill,
@@ -95,6 +98,7 @@ import { buildDemoState } from "./demo.js";
 import { backfillListingCoords, backfillListingMrt, backfillListingRoutes, flushPendingNotifications, runWatch } from "./watcher.js";
 import { LIST_PAGE_SIZE } from "./client591.js";
 import { APP_NAME, APP_VERSION } from "./brand.js";
+import { PROFILE_PRIVACY } from "./profile.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -206,6 +210,14 @@ app.get("/api/me", (req, res) => {
     nickname,
     avatar_url: String(user?.avatar_url || "").trim(),
     display_name: nickname || session?.email || "",
+    home_address: String(user?.home_address || "").trim(),
+    company_address: String(user?.company_address || "").trim(),
+    contact_phone: String(user?.contact_phone || "").trim(),
+    line_id: String(user?.line_id || "").trim(),
+    line_qr_url: String(user?.line_qr_url || "").trim(),
+    contact_email: String(user?.contact_email || "").trim(),
+    privacy_accepted: Boolean(String(user?.profile_privacy_at || "").trim()),
+    privacy_text: PROFILE_PRIVACY,
     open_self_listings: session?.userId ? countOpenSelfListings(session.userId) : 0,
     configured: true,
     canRegister: true,
@@ -484,6 +496,22 @@ app.put("/api/admin/sponsor", requireAdminApi, (req, res) => {
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
+});
+
+app.get("/api/admin/ads", requireAdminApi, (_req, res) => {
+  res.json(getAdminAdsSettings());
+});
+
+app.put("/api/admin/ads", requireAdminApi, (req, res) => {
+  try {
+    res.json(saveAdminAdsSettings(req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/ads", (_req, res) => {
+  res.json(publicAdsSettings());
 });
 
 app.get("/api/admin/help-qa", requireAdminApi, (_req, res) => {
