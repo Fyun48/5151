@@ -2,6 +2,16 @@ import { lookupDistrict, normalizeWatchDistricts } from "./regions.js";
 import { coverToListUrl } from "./covering.js";
 import { bestMatch } from "./match.js";
 import { isSelfPhotoPublicUrl, SELF_PHOTO_MAX_BYTES, SELF_PHOTO_MAX_COUNT } from "./selfPhotos.js";
+import {
+  SELF_BODY_TEMPLATES,
+  SELF_DEPOSIT_OPTIONS,
+  SELF_TRAIT_GROUPS,
+  depositLabel,
+  normalizeDeposit,
+  normalizeSelfTraits,
+  selfTraitLabels,
+} from "./selfTraits.js";
+import { ensureProfileSchema } from "./profile.js";
 
 export const SELF_POST_ID_BASE = 2_100_000_000;
 export const SELF_POST_ID_END = 2_200_000_000;
@@ -9,7 +19,8 @@ export const SELF_MAX_OPEN = 3;
 export const SELF_TTL_DAYS = 30;
 export const SELF_NEW_ACCOUNT_WAIT_MS = 24 * 60 * 60 * 1000;
 export const SELF_TITLE_MAX = 80;
-export const SELF_BODY_MAX = 800;
+export const SELF_BODY_MAX = 500;
+export const SELF_BAN_DAYS = 14;
 export const SELF_BODY_MIN = 8;
 export const SELF_CONTACT_MAX = 80;
 export const SELF_PHOTO_URL_MAX = 500;
@@ -28,7 +39,11 @@ export const SELF_ROLES = [
   { id: "agent", label: "代理人" },
 ];
 
-export const SELF_LEGAL = "這是免費找房工具，不是仲介、不保證媒合、不經手金錢。自行刊登是公開物件摘要，沒有即時私訊；聯絡方式會顯示給已登入會員。內容由刊登者負責，平台可隱藏或移除。跨站若判定可能同一間，會標成需確認同屋源，不會自動刪掉。";
+export const SELF_LEGAL = "這是免費找房工具，不是仲介、不保證媒合、不經手金錢。自行刊登是公開物件摘要，沒有即時私訊；聯絡方式若有填會顯示給已登入會員。內容由刊登者負責，平台可隱藏或移除。跨站若判定可能同一間，會標成需確認同屋源，不會自動刪掉。";
+
+export const SELF_AUDIT = "站內物件會不定期抽查。若發現不實、惡作劇或明顯誤導，系統會自動下架，並暫停該帳號上傳物件 14 天。這不是仲介認證，也不保證屋況屬實；請租屋族仍以現場與合約為準。";
+
+export const SELF_PLEDGE = "我是這間房子的屋主，或已取得屋主授權的代理人。我確認刊登內容屬實，了解平台會抽查，不實刊登會被下架並暫停上傳。平台不驗證權狀、不保證真實，法律責任由我自行負擔。";
 
 export function isSelfListingId(postId) {
   const n = Number(postId);
@@ -53,11 +68,18 @@ export function selfSourceLabel(source) {
 
 export function selfListingMeta() {
   return {
-    legal: SELF_LEGAL,
+    legal: `${SELF_LEGAL} ${SELF_AUDIT}`,
     max_open: SELF_MAX_OPEN,
     ttl_days: SELF_TTL_DAYS,
     kinds: SELF_KINDS,
     roles: SELF_ROLES,
+    traits: SELF_TRAIT_GROUPS,
+    deposits: SELF_DEPOSIT_OPTIONS,
+    templates: SELF_BODY_TEMPLATES,
+    body_max: SELF_BODY_MAX,
+    audit: SELF_AUDIT,
+    pledge: SELF_PLEDGE,
+    ban_days: SELF_BAN_DAYS,
     photos: {
       max_count: SELF_PHOTO_MAX_COUNT,
       max_bytes: SELF_PHOTO_MAX_BYTES,
@@ -73,6 +95,9 @@ export function ensureSelfListingSchema(db) {
     "ALTER TABLE listings ADD COLUMN self_expires_at TEXT",
     "ALTER TABLE listings ADD COLUMN self_body TEXT",
     "ALTER TABLE listings ADD COLUMN self_photos TEXT",
+    "ALTER TABLE listings ADD COLUMN self_traits TEXT",
+    "ALTER TABLE listings ADD COLUMN self_pledge_at TEXT",
+    "ALTER TABLE listings ADD COLUMN self_deposit TEXT",
   ]) {
     try {
       db.exec(sql);
@@ -91,6 +116,7 @@ export function ensureSelfListingSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_listings_self ON listings(source, self_status, listed_by_user_id);
     CREATE INDEX IF NOT EXISTS idx_listing_reports_post ON listing_reports(post_id, user_id);
   `);
+  ensureProfileSchema(db);
 }
 
 export function sqlNotSelfSource() {
@@ -171,7 +197,32 @@ export function expireOpenSelfListings(db, now = new Date()) {
   }
 }
 
+function selfBanUntil(db, userId) {
+  try {
+    return String(db.prepare("SELECT self_ban_until FROM users WHERE id = ?").get(userId)?.self_ban_until || "");
+  } catch {
+    return "";
+  }
+}
+
+export function banSelfPublisher(db, userId, now = new Date()) {
+  const uid = Number(userId) || 0;
+  if (!uid) return "";
+  const until = new Date(nowMs(now) + SELF_BAN_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  try {
+    db.prepare("UPDATE users SET self_ban_until = ? WHERE id = ?").run(until, uid);
+  } catch {
+    // 測試庫可能還沒有這欄
+  }
+  return until;
+}
+
 function assertCanPublish(db, userId, now = new Date()) {
+  const banned = Date.parse(selfBanUntil(db, userId));
+  if (Number.isFinite(banned) && banned > nowMs(now)) {
+    const when = new Date(banned).toISOString().slice(0, 10);
+    throw httpError(`因不實刊登暫停上傳，直到 ${when}`, 403);
+  }
   const created = Date.parse(userCreatedAt(db, userId));
   if (Number.isFinite(created) && nowMs(now) - created < SELF_NEW_ACCOUNT_WAIT_MS) {
     throw httpError("新帳號註冊滿 24 小時後才能自行刊登，避免洗版", 403);
@@ -196,6 +247,16 @@ function nextSelfPostId(db) {
   const next = Math.max(SELF_POST_ID_BASE, current) + 1;
   if (next >= SELF_POST_ID_END) throw httpError("站內刊登編號已滿", 500);
   return next;
+}
+
+export function composeSelfAddress(district, streetOrFull) {
+  const prefix = `${district.city}${district.name}`;
+  let street = String(streetOrFull || "").replace(/\s+/g, " ").trim();
+  if (street.startsWith(prefix)) street = street.slice(prefix.length).trim();
+  if (!/[路街巷弄大道]/.test(street) || street.replace(/\s+/g, "").length < 2) {
+    throw httpError("請至少加上路名（例如 中正路 100 號）");
+  }
+  return `${prefix}${street}`;
 }
 
 function digitsPhone(value) {
@@ -306,6 +367,22 @@ export function decorateSelfListing(row, { viewerId = 0 } = {}) {
     cover: String(row.cover || ""),
     photos: listingPhotoUrls(row),
     body: String(row.self_body || ""),
+    traits: (() => {
+      try {
+        return normalizeSelfTraits(JSON.parse(row.self_traits || "[]"));
+      } catch {
+        return [];
+      }
+    })(),
+    trait_labels: (() => {
+      try {
+        return selfTraitLabels(JSON.parse(row.self_traits || "[]"));
+      } catch {
+        return [];
+      }
+    })(),
+    deposit: String(row.self_deposit || ""),
+    pledged: Boolean(row.self_pledge_at),
     contact_name: String(row.contact_name || ""),
     contact_role: String(row.contact_role || row.role_name || ""),
     mobile: String(row.mobile || row.phone || ""),
@@ -366,11 +443,16 @@ export function createSelfListing(db, userId, input = {}, now = new Date(), { ma
   const ping = Number(String(input.ping || input.area || "").replace(/坪/g, ""));
   if (!(ping > 0 && ping <= 500)) throw httpError("請填坪數");
 
-  const address = String(input.address || "").replace(/\s+/g, " ").trim();
-  if (address.length < 6) throw httpError("請填完整地址（至少 6 個字）");
+  if (input.accept_pledge !== true) {
+    throw httpError("請勾選屋主／代理人聲明後才能刊登");
+  }
 
-  const body = String(input.body || "").trim().slice(0, SELF_BODY_MAX);
-  if (body.length < SELF_BODY_MIN) throw httpError(`請寫一點物件說明（至少 ${SELF_BODY_MIN} 個字）`);
+  const address = composeSelfAddress(district, input.street || input.address);
+
+  const rawBody = String(input.body || "").trim();
+  if (rawBody.length > SELF_BODY_MAX) throw httpError(`說明最多 ${SELF_BODY_MAX} 字`);
+  if (rawBody.length < SELF_BODY_MIN) throw httpError(`請寫一點物件說明（至少 ${SELF_BODY_MIN} 個字）`);
+  const body = rawBody;
 
   const kind = kindId(input.kind || input.housing_type);
   const role = roleId(input.role);
@@ -378,11 +460,19 @@ export function createSelfListing(db, userId, input = {}, now = new Date(), { ma
   const floorName = floorText(input);
   if (!floorName) throw httpError("請填所在樓層");
 
-  const contactName = String(input.contact_name || "").trim().slice(0, SELF_CONTACT_MAX);
+  let contactName = String(input.contact_name || "").trim().slice(0, SELF_CONTACT_MAX);
+  if (!contactName) {
+    try {
+      contactName = String(db.prepare("SELECT nickname FROM users WHERE id = ?").get(uid)?.nickname || "").trim();
+    } catch {
+      contactName = "";
+    }
+  }
   const phone = digitsPhone(input.phone || input.mobile);
   const lineUrl = normalizeLineUrl(input.line_url);
-  if (!phone && !lineUrl) throw httpError("請至少留電話或 LINE 連結（公開顯示，不是私訊）");
   if (phone && phone.replace(/\D/g, "").length < 8) throw httpError("電話號碼太短");
+  const traitIds = normalizeSelfTraits(input.traits);
+  const deposit = normalizeDeposit(input.deposit);
 
   const photos = normalizePhotoList(input.photos || input.photo_urls);
   const cover = normalizePhotoUrl(input.cover || input.photo_url) || photos[0] || "";
@@ -430,7 +520,7 @@ export function createSelfListing(db, userId, input = {}, now = new Date(), { ma
     kindName,
     roleName,
     storedPhotos[0] || cover,
-    JSON.stringify(["站內刊登"]),
+    JSON.stringify(["站內刊登", ...selfTraitLabels(traitIds), depositLabel(deposit)].filter(Boolean)),
     created,
     created,
   );
@@ -444,6 +534,9 @@ export function createSelfListing(db, userId, input = {}, now = new Date(), { ma
       self_expires_at = ?,
       self_body = ?,
       self_photos = ?,
+      self_traits = ?,
+      self_deposit = ?,
+      self_pledge_at = ?,
       contact_name = ?,
       contact_role = ?,
       mobile = ?,
@@ -457,6 +550,9 @@ export function createSelfListing(db, userId, input = {}, now = new Date(), { ma
     expires,
     body,
     JSON.stringify(storedPhotos),
+    JSON.stringify(traitIds),
+    deposit,
+    created,
     contactName || roleName,
     roleName,
     phone,
@@ -504,7 +600,8 @@ export function hideSelfListing(db, postId, now = new Date()) {
   db.prepare(
     "UPDATE listings SET self_status = 'hidden', hidden = 1, hidden_at = ? WHERE post_id = ?",
   ).run(iso(now), row.post_id);
-  return { ok: true, post_id: Number(row.post_id), hidden: true };
+  const until = banSelfPublisher(db, row.listed_by_user_id, now);
+  return { ok: true, post_id: Number(row.post_id), hidden: true, ban_until: until };
 }
 
 export function reportSelfListing(db, userId, postId, reason = "", now = new Date()) {

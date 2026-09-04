@@ -85,12 +85,16 @@ export function changeUserPassword(conn, userId, currentPassword, nextPassword) 
 
 export function publicUser(row) {
   if (!row) return null;
+  const nickname = String(row.nickname || "").trim();
   return {
     id: Number(row.id),
     email: row.email,
     role: row.role || "member",
     plan: row.plan || "free",
     deleted: isUserDeleted(row),
+    nickname,
+    avatar_url: String(row.avatar_url || "").trim(),
+    display_name: nickname || String(row.email || ""),
   };
 }
 

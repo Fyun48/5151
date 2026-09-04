@@ -121,6 +121,17 @@ function userEmail(db, userId) {
   }
 }
 
+function userAuthorName(db, userId, email) {
+  try {
+    const row = db.prepare("SELECT nickname, email FROM users WHERE id = ?").get(userId);
+    const nick = String(row?.nickname || "").trim();
+    if (nick) return nick;
+    return maskEmail(email || row?.email);
+  } catch {
+    return maskEmail(email);
+  }
+}
+
 function userCreatedAt(db, userId) {
   try {
     return String(db.prepare("SELECT created_at FROM users WHERE id = ?").get(userId)?.created_at || "");
@@ -156,7 +167,7 @@ function decoratePost(db, row, { viewerId = 0, includeHiddenReplies = false } = 
   return {
     id: Number(row.id),
     user_id: Number(row.user_id),
-    author: maskEmail(row.email || userEmail(db, row.user_id)),
+    author: userAuthorName(db, row.user_id, row.email || userEmail(db, row.user_id)),
     mine: Number(row.user_id) === Number(viewerId),
     districts,
     district_labels: districtLabels(districts),
@@ -171,7 +182,7 @@ function decoratePost(db, row, { viewerId = 0, includeHiddenReplies = false } = 
     closed_at: row.closed_at || null,
     replies: visible.map((item) => ({
       id: Number(item.id),
-      author: maskEmail(item.email),
+      author: userAuthorName(db, item.user_id, item.email),
       mine: Number(item.user_id) === Number(viewerId),
       body: String(item.body || ""),
       created_at: item.created_at,

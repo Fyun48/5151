@@ -112,6 +112,7 @@ import {
   setUserPlan as setUserPlanOn,
   verifyUserPassword as verifyUserPasswordOn,
 } from "./members.js";
+import { updateUserProfile as updateUserProfileOn } from "./profile.js";
 import { requestTempPassword as requestTempPasswordOn } from "./forgotPassword.js";
 import { shouldDeliverNotify, formatNotifyFacts, isSameNotifyDetail } from "./notify.js";
 import {
@@ -930,6 +931,23 @@ export { ADMIN_DELETE_REASONS };
 
 export function registerUser(input) {
   return registerUserOn(db, input);
+}
+
+export function updateUserProfile(userId, input) {
+  return publicUser(updateUserProfileOn(db, userId, input));
+}
+
+export function countOpenSelfListings(userId) {
+  const uid = Number(userId) || 0;
+  if (!uid) return 0;
+  expireOpenSelfListingsOn(db);
+  const row = db.prepare(
+    `SELECT COUNT(*) AS n FROM listings
+     WHERE listed_by_user_id = ?
+       AND COALESCE(source, '591') = 'self'
+       AND COALESCE(self_status, 'open') = 'open'`,
+  ).get(uid);
+  return Number(row?.n) || 0;
 }
 
 export function issueVerifyToken(userId, opts) {
