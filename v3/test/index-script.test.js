@@ -137,6 +137,23 @@ test("page defaults to 全部 + 最新", () => {
   assert.match(html, /max-width: 880px[\s\S]*#expandPanelBtn \{ display: none; /);
 });
 
+test("mobile more-filters keep chips and districts inside the card", () => {
+  const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
+  assert.match(html, /class="district-view-label"/);
+  assert.match(html, /id="districtBlock"/);
+  assert.match(html, /grid-template-columns: minmax\(0, 1fr\)/);
+  assert.match(html, /white-space: nowrap;/);
+  assert.match(html, /body\.panel-collapsed \.list-head-sticky \{[\s\S]*margin: 8px 0 0;/);
+  assert.doesNotMatch(html, /innerHTML =\s*`<span class="hint"[^>]*>顯示行政區/);
+  const render = html.slice(html.indexOf("function renderDistrictChips"), html.indexOf("function applyDistrictView"));
+  assert.match(render, /block\.hidden = true/);
+  assert.match(render, /block\.hidden = false/);
+  assert.doesNotMatch(render, /顯示行政區/);
+  const mobile = html.slice(html.indexOf("@media (max-width: 880px)"));
+  assert.match(mobile, /#districtChips \{[\s\S]*flex-wrap: wrap;/);
+  assert.doesNotMatch(mobile, /#districtChips \{[\s\S]*flex-wrap: nowrap;/);
+});
+
 test("non-admin members do not see the shared reset link after boot", () => {
   const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
   assert.match(html, /id="resetLink"/);
@@ -282,13 +299,13 @@ test("product name is 吉比租房物件追蹤 without v2 開發版 copy", () =>
   assert.equal(html.includes("v2 開發版"), false);
   assert.equal(html.includes("v3 開發版"), false);
   assert.equal(html.includes("與線上版分開的資料庫"), false);
-  assert.match(html, /ver\. 3\.24/);
+  assert.match(html, /ver\. 3\.25/);
   assert.doesNotMatch(html, /<h1>[^<]*v3/i);
   assert.match(login, /<h1>吉比租房物件追蹤<\/h1>/);
   assert.equal(login.includes("v2 開發版"), false);
   assert.equal(login.includes("v3 開發版"), false);
   assert.equal(login.includes("資料與線上版分開"), false);
-  assert.match(login, /ver\. 3\.24/);
+  assert.match(login, /ver\. 3\.25/);
 });
 
 test("MRT toggle and guest tour are in the page", () => {

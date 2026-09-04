@@ -395,8 +395,8 @@
       color: var(--ink);
     }
     .sub { color: var(--muted); font-size: 14px; margin-top: 6px; }
-    .wrap { display: grid; grid-template-columns: 340px 1fr; gap: 16px; padding: 0 20px 32px; }
-    body.panel-collapsed .wrap { grid-template-columns: 1fr; }
+    .wrap { display: grid; grid-template-columns: minmax(0, 340px) minmax(0, 1fr); gap: 16px; padding: 0 20px 32px; }
+    body.panel-collapsed .wrap { grid-template-columns: minmax(0, 1fr); }
     body.panel-collapsed #settingsPanel { display: none; }
     #expandPanelBtn {
       display: inline-flex;
@@ -479,7 +479,7 @@
       border-radius: var(--radius-lg, 10px);
       box-shadow: none;
     }
-    main.card { overflow: visible; }
+    main.card { overflow: visible; min-width: 0; max-width: 100%; }
     .panel { padding: 18px; }
     label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 6px; }
     textarea, select, input[type="number"], input[type="text"], input[type="url"], input[type="password"] {
@@ -529,8 +529,9 @@
     .stat { background: var(--accent-mist); border-radius: 14px; padding: 10px 12px; border: 1px solid var(--line); }
     .stat b { display: block; font-size: 20px; color: var(--accent-deep); font-weight: 700; }
     .stat span { color: var(--muted); font-size: 12px; }
-    .toolbar { display: flex; gap: 8px; align-items: center; padding: 12px 18px; flex-wrap: wrap; }
-    .chip-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .toolbar { display: flex; gap: 8px; align-items: center; padding: 12px 18px; flex-wrap: wrap; min-width: 0; max-width: 100%; }
+    .toolbar > * { min-width: 0; max-width: 100%; }
+    .chip-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; width: 100%; min-width: 0; }
     .list-search {
       width: min(240px, 100%);
       margin-left: auto;
@@ -557,6 +558,8 @@
       border-radius: 999px;
       font-size: 15px;
       line-height: 1.3;
+      white-space: nowrap;
+      flex: 0 0 auto;
       transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
     }
     .chip.on {
@@ -868,6 +871,8 @@
       border-radius: 0;
       box-shadow: none;
       overflow: hidden;
+      min-width: 0;
+      max-width: 100%;
     }
     body.panel-collapsed .list-head-sticky {
       position: sticky;
@@ -902,6 +907,7 @@
     body.panel-collapsed .list-head-sticky.filter-compact .district-block {
       display: none;
     }
+    .district-block[hidden] { display: none !important; }
     .filter-mini-btn,
     .filter-restore-btn {
       display: none;
@@ -949,6 +955,7 @@
       background: var(--accent);
       border-color: var(--accent);
     }
+    .filter-body { min-width: 0; max-width: 100%; }
     .filter-head {
       display: flex;
       flex-wrap: wrap;
@@ -957,6 +964,7 @@
       padding: 12px 18px 10px;
       border-bottom: 1px solid var(--line);
       background: var(--accent-mist);
+      min-width: 0;
     }
     .filter-head-actions {
       display: flex;
@@ -1051,14 +1059,23 @@
     .districts label.on { background: var(--accent); color: var(--primary-foreground); border-color: var(--accent); }
     .districts input { width: auto; margin: 0; }
     .price-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-    .district-block { padding: 0 18px 3px; }
+    .district-block { padding: 8px 18px 10px; min-width: 0; max-width: 100%; border-top: 1px solid var(--line); }
+    .district-view-label {
+      margin: 8px 0 0;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.5;
+      white-space: nowrap;
+    }
     #districtChips {
       display: flex;
       gap: 8px;
       align-items: center;
-      padding: 10px 0 3px;
+      padding: 8px 0 3px;
       flex-wrap: wrap;
-      border-top: 1px solid var(--line);
+      min-width: 0;
+      max-width: 100%;
+      border-top: 0;
     }
     #profileName { margin-bottom: 8px; }
     .hint { font-size: 12px; color: var(--muted); margin: 4px 0 8px; line-height: 1.5; }
@@ -1485,7 +1502,7 @@
       .contact, .actions { grid-column: 2 / -1; flex-direction: row; flex-wrap: wrap; justify-content: flex-start; }
     }
     @media (max-width: 980px) {
-      .wrap, .stats { grid-template-columns: 1fr; }
+      .wrap, .stats { grid-template-columns: minmax(0, 1fr); }
       header, .wrap { padding-left: 16px; padding-right: 16px; }
       body.panel-collapsed .list-head-sticky { margin: 10px 10px 0; top: 6px; }
       .sponsor-bar { margin-left: 16px; margin-right: 16px; }
@@ -1539,9 +1556,13 @@
       }
       .addr-combo { grid-template-columns: 1fr; }
       #alertDock { bottom: 72px; right: 10px; left: 10px; width: auto; }
-      .list-head-sticky {
-        margin: 8px 8px 0;
+      .list-head-sticky,
+      body.panel-collapsed .list-head-sticky {
+        margin: 8px 0 0;
+        top: 6px;
         border-radius: 16px;
+        max-width: 100%;
+        overflow-x: clip;
       }
       .filter-head {
         display: flex;
@@ -1588,6 +1609,7 @@
         margin: 0;
         padding: 2px 0;
         gap: 8px;
+        width: 100%;
       }
       .chip-row .chip {
         flex: 0 0 auto;
@@ -1602,14 +1624,13 @@
         padding: 8px 12px 10px;
       }
       .view-filters .hint { display: none; }
+      .district-block { padding: 8px 12px 10px; }
+      .district-view-label { margin-top: 0; }
       #districtChips {
-        flex-wrap: nowrap;
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
-        scrollbar-width: none;
+        flex-wrap: wrap;
+        overflow: visible;
         padding-top: 8px;
       }
-      #districtChips::-webkit-scrollbar { display: none; }
       .item {
         grid-template-columns: 22px 92px minmax(0, 1fr);
         gap: 8px 10px;
@@ -1691,7 +1712,7 @@
         border-left: 0;
         border-right: 0;
       }
-      .wrap { grid-template-columns: 1fr; padding-bottom: 16px; }
+      .wrap { grid-template-columns: minmax(0, 1fr); padding-bottom: 16px; overflow-x: clip; }
       #settingsPanel {
         display: none;
         position: fixed;
@@ -1699,6 +1720,8 @@
         right: 0;
         bottom: 56px;
         top: auto;
+        width: 100%;
+        max-width: 100%;
         z-index: 130;
         max-height: min(78vh, calc(100vh - 130px));
         overflow: auto;
@@ -2022,7 +2045,8 @@
           <span class="hint" style="margin:0">篩選列表與通知；不影響 591 抓取與左側統計。勾選後立即生效並寫入設定。</span>
         </div>
         </div>
-        <div class="district-block">
+        <div class="district-block" id="districtBlock" hidden>
+          <p class="district-view-label">顯示行政區</p>
           <div id="districtChips"></div>
         </div>
         <button type="button" class="filter-mini-btn ghost" id="filterMiniBtn" title="收合篩選" aria-label="收合篩選">×</button>
@@ -2505,7 +2529,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.24</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.25</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -3340,13 +3364,16 @@
     function renderDistrictChips(s) {
       const names = watchDistrictNames(s);
       const host = $("districtChips");
+      const block = $("districtBlock") || host?.closest(".district-block");
+      if (!host) return;
       if (!names.length) {
         host.innerHTML = "";
+        if (block) block.hidden = true;
         return;
       }
+      if (block) block.hidden = false;
       const allOn = viewDistricts.size === 0;
       host.innerHTML =
-        `<span class="hint" style="margin:0">顯示行政區</span>` +
         `<button type="button" class="chip ${allOn ? "on" : ""}" data-view-district="">全部</button>` +
         names.map((name) => {
           const on = !allOn && viewDistricts.has(name);
