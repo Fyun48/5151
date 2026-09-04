@@ -258,8 +258,10 @@ export function applySettingPatch(current, partial = {}, { admin = false, plan =
   if (next.activeProfileId && !next.settingProfiles.some((item) => item.id === next.activeProfileId)) {
     next.activeProfileId = "";
   }
-  const fullFormSave = Object.prototype.hasOwnProperty.call(patch, "watchDistricts");
-  if (fullFormSave && next.activeProfileId) {
+  const syncActiveProfile = ["watchDistricts", "notifyMatrix", "wholeFloorOnly", "excludeLowFloors", "excludeRooftop"].some(
+    (key) => Object.prototype.hasOwnProperty.call(patch, key),
+  );
+  if (syncActiveProfile && next.activeProfileId) {
     next.settingProfiles = next.settingProfiles.map((profile) =>
       profile.id === next.activeProfileId
         ? { ...profile, saved_at: new Date().toISOString(), data: snapshotSettings(next) }

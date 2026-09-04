@@ -28,7 +28,7 @@ test("keeps listings with unknown ping when areaMax is set", () => {
   assert.equal(passesAttributeFilters(listing, { ...attrs, areaMax: 30 }), true);
 });
 
-test("wholeFloorOnly and excludeLowFloors are view-only, not attribute filters", () => {
+test("wholeFloorOnly and excludeLowFloors are profile filters, not 591 crawl attributes", () => {
   const suite = { kind_name: "套房", floor_name: "2F/5F" };
   const low = { kind_name: "整層住家", floor_name: "1F/4F" };
   assert.equal(passesAttributeFilters(suite, attrs), true);

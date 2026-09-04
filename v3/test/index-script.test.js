@@ -236,7 +236,8 @@ test("guest demo is read-only and work prompt can be skipped", () => {
   assert.match(html, /if \(isGuest\) \{/);
   assert.match(html, /https:\/\/rent\.591\.com\.tw\//);
   assert.match(html, /row\?\.url && !is591Source\(row\)/);
-  assert.match(html, /if \(!settingsLoaded \|\| isGuest\) return/);
+  assert.doesNotMatch(html, /persistViewFilters/);
+  assert.match(html, /if \(el\.closest\("#settingsPanel/);
   assert.match(html, /workAddress: \$\("workAddress"\)\.value\.trim\(\)/);
   assert.match(html, /commuteMode: selectedCommuteMode\("commuteMode"\)/);
   assert.doesNotMatch(html, /collectSettingsSafe/);
@@ -299,13 +300,13 @@ test("product name is 吉比租房物件追蹤 without v2 開發版 copy", () =>
   assert.equal(html.includes("v2 開發版"), false);
   assert.equal(html.includes("v3 開發版"), false);
   assert.equal(html.includes("與線上版分開的資料庫"), false);
-  assert.match(html, /ver\. 3\.25/);
+  assert.match(html, /ver\. 3\.26/);
   assert.doesNotMatch(html, /<h1>[^<]*v3/i);
   assert.match(login, /<h1>吉比租房物件追蹤<\/h1>/);
   assert.equal(login.includes("v2 開發版"), false);
   assert.equal(login.includes("v3 開發版"), false);
   assert.equal(login.includes("資料與線上版分開"), false);
-  assert.match(login, /ver\. 3\.25/);
+  assert.match(login, /ver\. 3\.26/);
 });
 
 test("MRT toggle and guest tour are in the page", () => {
@@ -505,6 +506,13 @@ test("self listing form and in-site detail stay on this site", () => {
   assert.match(html, /\/api\/self-listings\/photos/);
   assert.match(html, /source === "self"/);
   assert.match(html, /站內刊登/);
+  assert.match(html, /吉比本站/);
+  assert.match(html, /source_label \|\| "591"/);
+  assert.match(html, /id="excludeRooftop"/);
+  assert.match(html, /id="wholeFloorOnly"/);
+  assert.match(html, /id="excludeLowFloors"/);
+  assert.doesNotMatch(html, /class="view-filters"/);
+  assert.doesNotMatch(html, /persistViewFilters/);
   assert.match(html, /hbhousing/);
   assert.match(html, /打開住商/);
   assert.match(html, /打開信義/);

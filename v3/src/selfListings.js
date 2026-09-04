@@ -58,7 +58,7 @@ export function isSelfListingRow(row) {
 
 export function selfSourceLabel(source) {
   const id = String(source || "591");
-  if (id === "self") return "站內刊登";
+  if (id === "self") return "吉比本站";
   if (id === "hbhousing") return "住商";
   if (id === "sinyi") return "信義";
   if (id === "houseprice") return "5168";
@@ -356,7 +356,7 @@ export function decorateSelfListing(row, { viewerId = 0 } = {}) {
   return {
     post_id: Number(row.post_id),
     source: "self",
-    source_label: "站內刊登",
+    source_label: "吉比本站",
     title: String(row.title || ""),
     url: String(row.url || `/go/${row.post_id}`),
     price: String(row.price || ""),
@@ -523,7 +523,7 @@ export function createSelfListing(db, userId, input = {}, now = new Date(), { ma
     kindName,
     roleName,
     storedPhotos[0] || cover,
-    JSON.stringify(["站內刊登", ...selfTraitLabels(traitIds), depositLabel(deposit)].filter(Boolean)),
+    JSON.stringify(["吉比本站", ...selfTraitLabels(traitIds), depositLabel(deposit)].filter(Boolean)),
     created,
     created,
   );
