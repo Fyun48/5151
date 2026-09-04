@@ -1,52 +1,17 @@
-export const CITIES = [
-  {
-    id: 1,
-    name: "台北市",
-    districts: [
-      { id: 8, name: "士林區" },
-      { id: 9, name: "北投區" },
-      { id: 2, name: "大同區" },
-      { id: 3, name: "中山區" },
-      { id: 4, name: "松山區" },
-      { id: 5, name: "大安區" },
-      { id: 7, name: "信義區" },
-      { id: 10, name: "內湖區" },
-      { id: 11, name: "南港區" },
-      { id: 1, name: "中正區" },
-      { id: 6, name: "萬華區" },
-      { id: 12, name: "文山區" },
-    ],
-  },
-  {
-    id: 3,
-    name: "新北市",
-    districts: [
-      { id: 48, name: "五股區" },
-      { id: 47, name: "蘆洲區" },
-      { id: 49, name: "八里區" },
-      { id: 50, name: "淡水區" },
-      { id: 26, name: "板橋區" },
-      { id: 43, name: "三重區" },
-      { id: 38, name: "中和區" },
-      { id: 37, name: "永和區" },
-      { id: 44, name: "新莊區" },
-      { id: 34, name: "新店區" },
-      { id: 39, name: "土城區" },
-      { id: 27, name: "汐止區" },
-      { id: 46, name: "林口區" },
-      { id: 45, name: "泰山區" },
-      { id: 41, name: "樹林區" },
-      { id: 40, name: "三峽區" },
-      { id: 42, name: "鶯歌區" },
-      { id: 51, name: "三芝區" },
-    ],
-  },
-];
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+export const CITIES = JSON.parse(
+  readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../public/cities.json"), "utf8"),
+);
 
 const DISTRICT_INDEX = new Map();
+const DISTRICT_NAME_COUNTS = new Map();
 for (const city of CITIES) {
   for (const district of city.districts) {
     DISTRICT_INDEX.set(`${city.id}-${district.id}`, { ...district, region: city.id, city: city.name });
+    DISTRICT_NAME_COUNTS.set(district.name, (DISTRICT_NAME_COUNTS.get(district.name) || 0) + 1);
   }
 }
 
@@ -100,12 +65,29 @@ export function districtNameFromListing(listing) {
   const hay = `${listing?.address || ""}${listing?.title || ""}`;
   if (!hay) return "";
   const districts = [...DISTRICT_INDEX.values()].sort((a, b) => b.name.length - a.name.length);
+  for (const city of CITIES) {
+    if (!hay.includes(city.name)) continue;
+    const inCity = districts.filter((row) => row.region === city.id);
+    for (const district of inCity) {
+      if (hay.includes(district.name)) return district.name;
+    }
+    for (const district of inCity) {
+      const short = district.name.replace(/[區市鄉鎮]$/, "");
+      if (short.length < 2) continue;
+      const re = new RegExp(
+        `${escapeRegExp(city.name)}${escapeRegExp(short)}|${escapeRegExp(short)}(?:區|[路街巷弄大道里村])`,
+      );
+      if (re.test(hay)) return district.name;
+    }
+  }
   for (const district of districts) {
+    if ((DISTRICT_NAME_COUNTS.get(district.name) || 0) !== 1) continue;
     if (hay.includes(district.name)) return district.name;
   }
   // 591 地址有時只寫「五股成泰路」「八里龍形路」沒有「區」
   for (const district of districts) {
-    const short = district.name.replace(/區$/, "");
+    if ((DISTRICT_NAME_COUNTS.get(district.name) || 0) !== 1) continue;
+    const short = district.name.replace(/[區市鄉鎮]$/, "");
     if (short.length < 2) continue;
     const re = new RegExp(
       `(?:^|[市])${escapeRegExp(short)}|${escapeRegExp(short)}(?:區|[路街巷弄大道里村])`,

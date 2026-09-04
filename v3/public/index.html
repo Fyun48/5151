@@ -1048,7 +1048,28 @@
     .wrap { padding-left: 32px; padding-right: 32px; }
     .district-city { margin: 8px 0 12px; }
     .district-city-head { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; }
-    .district-city h3 { margin: 0; font-size: 14px; flex: 1; }
+    .district-city-toggle {
+      margin: 0;
+      font-size: 14px;
+      flex: 1;
+      min-width: 0;
+      cursor: pointer;
+      user-select: none;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: 650;
+    }
+    .district-city-toggle:hover { color: var(--accent, #0f6f6a); }
+    .district-city-toggle .chev {
+      display: inline-block;
+      font-size: 11px;
+      color: var(--muted);
+      transform: rotate(-90deg);
+      transition: transform 0.15s ease;
+    }
+    .district-city.is-open .district-city-toggle .chev { transform: rotate(0deg); }
+    .district-city:not(.is-open) .districts { display: none; }
     .district-city-head button { padding: 4px 10px; font-size: 12px; }
     .districts { display: flex; flex-wrap: wrap; gap: 6px; }
     .districts label {
@@ -1980,56 +2001,7 @@
       <p class="hint" id="settingsLoadMsg">正在載入已存設定…完成前請不要按儲存或另存。若一直停在這句、儲存也不能按，是網頁程式沒跑起來，不是資料壞了；請重新整理，不要按清除資料。</p>
       <p class="hint" id="profileListHint"></p>
       <p class="hint" id="districtLimitHint"></p>
-      <div id="districtPicker" data-tour="districts">
-        <div class="district-city">
-          <div class="district-city-head">
-            <h3>台北市</h3>
-            <button type="button" class="ghost" data-city-all="1">全選</button>
-            <button type="button" class="ghost" data-city-none="1">清除</button>
-          </div>
-          <div class="districts">
-            <label><input type="checkbox" data-district value="1-8" />士林</label>
-            <label><input type="checkbox" data-district value="1-9" />北投</label>
-            <label><input type="checkbox" data-district value="1-2" />大同</label>
-            <label><input type="checkbox" data-district value="1-3" />中山</label>
-            <label><input type="checkbox" data-district value="1-4" />松山</label>
-            <label><input type="checkbox" data-district value="1-5" />大安</label>
-            <label><input type="checkbox" data-district value="1-7" />信義</label>
-            <label><input type="checkbox" data-district value="1-10" />內湖</label>
-            <label><input type="checkbox" data-district value="1-11" />南港</label>
-            <label><input type="checkbox" data-district value="1-1" />中正</label>
-            <label><input type="checkbox" data-district value="1-6" />萬華</label>
-            <label><input type="checkbox" data-district value="1-12" />文山</label>
-          </div>
-        </div>
-        <div class="district-city">
-          <div class="district-city-head">
-            <h3>新北市</h3>
-            <button type="button" class="ghost" data-city-all="3">全選</button>
-            <button type="button" class="ghost" data-city-none="3">清除</button>
-          </div>
-          <div class="districts">
-            <label><input type="checkbox" data-district value="3-48" />五股</label>
-            <label><input type="checkbox" data-district value="3-47" />蘆洲</label>
-            <label><input type="checkbox" data-district value="3-49" />八里</label>
-            <label><input type="checkbox" data-district value="3-50" />淡水</label>
-            <label><input type="checkbox" data-district value="3-26" />板橋</label>
-            <label><input type="checkbox" data-district value="3-43" />三重</label>
-            <label><input type="checkbox" data-district value="3-38" />中和</label>
-            <label><input type="checkbox" data-district value="3-37" />永和</label>
-            <label><input type="checkbox" data-district value="3-44" />新莊</label>
-            <label><input type="checkbox" data-district value="3-34" />新店</label>
-            <label><input type="checkbox" data-district value="3-39" />土城</label>
-            <label><input type="checkbox" data-district value="3-27" />汐止</label>
-            <label><input type="checkbox" data-district value="3-46" />林口</label>
-            <label><input type="checkbox" data-district value="3-45" />泰山</label>
-            <label><input type="checkbox" data-district value="3-41" />樹林</label>
-            <label><input type="checkbox" data-district value="3-40" />三峽</label>
-            <label><input type="checkbox" data-district value="3-42" />鶯歌</label>
-            <label><input type="checkbox" data-district value="3-51" />三芝</label>
-          </div>
-        </div>
-      </div>
+      <div id="districtPicker" data-tour="districts"></div>
       <div class="price-row">
         <div>
           <label>租金下限（可空白）</label>
@@ -2161,7 +2133,7 @@
       <p class="hint" id="demandLegal">這是免費找房工具，不是仲介、不保證媒合、不經手金錢。需求牆是公開留言板，沒有即時私訊。內容由使用者自行負責；平台可隱藏或移除不當貼文。</p>
       <form id="demandForm">
         <p class="hint">訪客可看全部需求。發文、回覆需登入；新帳號須滿 24 小時。同時最多 2 則未過期需求，14 天後失效。</p>
-        <div id="demandDistricts" class="districts" style="margin:8px 0"></div>
+        <div id="demandDistricts" style="margin:8px 0"></div>
         <div class="price-row">
           <div>
             <label>租金上限</label>
@@ -2630,7 +2602,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.31</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.32</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -2673,6 +2645,7 @@
     </div>
   </div>
   <script src="/mascot.js"></script>
+  <script src="/cities-embed.js"></script>
   <script>
     window.__APP_PARSED = true;
     try {
@@ -2982,31 +2955,10 @@
       offline: "591 已下架",
     };
 
-    const CITIES_EMBEDDED = [
-      {
-        id: 1,
-        name: "台北市",
-        districts: [
-          { id: 8, name: "士林區" }, { id: 9, name: "北投區" }, { id: 2, name: "大同區" },
-          { id: 3, name: "中山區" }, { id: 4, name: "松山區" }, { id: 5, name: "大安區" },
-          { id: 7, name: "信義區" }, { id: 10, name: "內湖區" }, { id: 11, name: "南港區" },
-          { id: 1, name: "中正區" }, { id: 6, name: "萬華區" }, { id: 12, name: "文山區" },
-        ],
-      },
-      {
-        id: 3,
-        name: "新北市",
-        districts: [
-          { id: 48, name: "五股區" }, { id: 47, name: "蘆洲區" }, { id: 49, name: "八里區" },
-          { id: 50, name: "淡水區" }, { id: 26, name: "板橋區" }, { id: 43, name: "三重區" },
-          { id: 38, name: "中和區" }, { id: 37, name: "永和區" }, { id: 44, name: "新莊區" },
-          { id: 34, name: "新店區" }, { id: 39, name: "土城區" }, { id: 27, name: "汐止區" },
-          { id: 46, name: "林口區" }, { id: 45, name: "泰山區" }, { id: 41, name: "樹林區" },
-          { id: 40, name: "三峽區" }, { id: 42, name: "鶯歌區" }, { id: 51, name: "三芝區" },
-        ],
-      },
-    ];
+    const CITIES_EMBEDDED = Array.isArray(window.CITIES_EMBEDDED) ? window.CITIES_EMBEDDED : [];
     let cities = CITIES_EMBEDDED;
+    const cityAccordionOpen = new Set();
+    const cityAccordionClosed = new Set();
     let settingsLoaded = false;
     let viewDistricts = new Set();
     const VIEW_KEY = "591-view-districts";
@@ -3363,24 +3315,71 @@
       return byKey;
     }
 
-    function renderDistrictPicker(s) {
-      const selected = new Set(s.watchDistricts || []);
-      $("districtPicker").innerHTML = cities.map((city) => `
-        <div class="district-city">
+    function districtChipLabel(name) {
+      const text = String(name || "");
+      const stripped = text.replace(/區$/, "");
+      return stripped.length < 2 ? text : stripped;
+    }
+
+    function cityBlockOpen(city, selected) {
+      if (cityAccordionClosed.has(city.id)) return false;
+      if (cityAccordionOpen.has(city.id)) return true;
+      return (city.districts || []).some((district) => selected.has(`${city.id}-${district.id}`));
+    }
+
+    function bindCityAccordion(root, persistPicker) {
+      if (!root) return;
+      root.querySelectorAll("[data-city-toggle]").forEach((el) => {
+        const apply = (open) => {
+          const block = el.closest(".district-city");
+          if (!block) return;
+          block.classList.toggle("is-open", open);
+          el.setAttribute("aria-expanded", open ? "true" : "false");
+          if (!persistPicker) return;
+          const id = Number(el.dataset.cityToggle);
+          if (open) {
+            cityAccordionOpen.add(id);
+            cityAccordionClosed.delete(id);
+          } else {
+            cityAccordionOpen.delete(id);
+            cityAccordionClosed.add(id);
+          }
+        };
+        el.onclick = (ev) => {
+          ev.preventDefault();
+          apply(!el.closest(".district-city")?.classList.contains("is-open"));
+        };
+        el.onkeydown = (ev) => {
+          if (ev.key !== "Enter" && ev.key !== " ") return;
+          ev.preventDefault();
+          apply(!el.closest(".district-city")?.classList.contains("is-open"));
+        };
+      });
+    }
+
+    function cityAccordionHtml(city, selected, checkboxAttr, open) {
+      const boxes = (city.districts || []).map((district) => {
+        const key = `${city.id}-${district.id}`;
+        const on = selected.has(key);
+        return `<label class="${on ? "on" : ""}"><input type="checkbox" ${checkboxAttr} value="${esc(key)}" ${on ? "checked" : ""} />${esc(districtChipLabel(district.name))}</label>`;
+      }).join("");
+      return `
+        <div class="district-city ${open ? "is-open" : ""}" data-city-block="${city.id}">
           <div class="district-city-head">
-            <h3>${esc(city.name)}</h3>
+            <h3 class="district-city-toggle" data-city-toggle="${city.id}" role="button" tabindex="0" aria-expanded="${open ? "true" : "false"}"><span class="chev" aria-hidden="true">▾</span>${esc(city.name)}</h3>
             <button type="button" class="ghost" data-city-all="${city.id}">全選</button>
             <button type="button" class="ghost" data-city-none="${city.id}">清除</button>
           </div>
-          <div class="districts">
-            ${city.districts.map((district) => {
-              const key = `${city.id}-${district.id}`;
-              const on = selected.has(key);
-              return `<label class="${on ? "on" : ""}"><input type="checkbox" data-district value="${esc(key)}" ${on ? "checked" : ""} />${esc(district.name.replace(/區$/, ""))}</label>`;
-            }).join("")}
-          </div>
-        </div>
-      `).join("");
+          <div class="districts">${boxes}</div>
+        </div>`;
+    }
+
+    function renderDistrictPicker(s) {
+      const selected = new Set(s.watchDistricts || []);
+      $("districtPicker").innerHTML = cities.map((city) => (
+        cityAccordionHtml(city, selected, "data-district", cityBlockOpen(city, selected))
+      )).join("");
+      bindCityAccordion($("districtPicker"), true);
       $("districtPicker").querySelectorAll("[data-district]").forEach((el) => {
         el.onchange = () => {
           const limit = districtLimit();
@@ -3414,6 +3413,15 @@
             el.checked = true;
             el.closest("label")?.classList.add("on");
             remaining -= 1;
+          }
+          const block = btn.closest(".district-city");
+          const toggle = block?.querySelector("[data-city-toggle]");
+          if (block && toggle) {
+            block.classList.add("is-open");
+            toggle.setAttribute("aria-expanded", "true");
+            const id = Number(toggle.dataset.cityToggle);
+            cityAccordionOpen.add(id);
+            cityAccordionClosed.delete(id);
           }
           updateDistrictLimitHint();
           if (skipped) flash(`每個設定檔最多選 ${limit} 個行政區`);
@@ -4847,13 +4855,45 @@
     }
     function fillDemandDistricts() {
       const host = $("demandDistricts");
-      if (!host || host.dataset.ready === "1") return;
-      const src = [...document.querySelectorAll("#districtPicker [data-district]")];
-      host.innerHTML = src.map((el) => {
-        const label = el.closest("label")?.textContent?.trim() || el.value;
-        return `<label><input type="checkbox" data-demand-district value="${el.value}" />${label.replace(/[<>]/g, "")}</label>`;
-      }).join("");
+      if (!host) return;
+      const list = selfCityList();
+      const mark = String(list.length);
+      if (host.dataset.ready === "1" && host.dataset.cityCount === mark) return;
+      const selected = new Set(demandDistrictKeys());
+      host.innerHTML = list.map((city) => (
+        cityAccordionHtml(
+          city,
+          selected,
+          "data-demand-district",
+          (city.districts || []).some((district) => selected.has(`${city.id}-${district.id}`)),
+        )
+      )).join("");
+      bindCityAccordion(host, false);
+      host.querySelectorAll("[data-city-all]").forEach((btn) => {
+        btn.onclick = () => {
+          const prefix = `${btn.dataset.cityAll}-`;
+          host.querySelectorAll("[data-demand-district]").forEach((el) => {
+            if (!el.value.startsWith(prefix)) return;
+            el.checked = true;
+            el.closest("label")?.classList.add("on");
+          });
+        };
+      });
+      host.querySelectorAll("[data-city-none]").forEach((btn) => {
+        btn.onclick = () => {
+          const prefix = `${btn.dataset.cityNone}-`;
+          host.querySelectorAll("[data-demand-district]").forEach((el) => {
+            if (!el.value.startsWith(prefix)) return;
+            el.checked = false;
+            el.closest("label")?.classList.remove("on");
+          });
+        };
+      });
+      host.querySelectorAll("[data-demand-district]").forEach((el) => {
+        el.onchange = () => el.closest("label")?.classList.toggle("on", el.checked);
+      });
       host.dataset.ready = "1";
+      host.dataset.cityCount = mark;
     }
     function selfCityList() {
       return Array.isArray(cities) && cities.length ? cities : CITIES_EMBEDDED;
