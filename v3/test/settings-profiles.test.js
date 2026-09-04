@@ -9,6 +9,8 @@ import {
   canAddProfile,
   limitWatchDistricts,
   resolveSaveAsProfileAction,
+  profileNameOrDraft,
+  DRAFT_PROFILE_NAME,
   MEMBER_MAX_PROFILE_DISTRICTS,
   MEMBER_MAX_PROFILES,
   MEMBER_MAX_EXCLUDE_KEYWORDS,
@@ -264,6 +266,14 @@ test("save-as resolves overwrite, create, and full without adding a fourth slot"
   assert.equal(overwrite.action, "overwrite");
   assert.equal(overwrite.existing.id, "p-1");
   assert.equal(resolveSaveAsProfileAction(full, "蘆洲", { overwrite: true }).action, "overwrite");
+});
+
+test("blank profile names become 暫存 before save", () => {
+  assert.equal(DRAFT_PROFILE_NAME, "暫存");
+  assert.equal(profileNameOrDraft(""), "暫存");
+  assert.equal(profileNameOrDraft("   "), "暫存");
+  assert.equal(profileNameOrDraft("士林"), "士林");
+  assert.equal(resolveSaveAsProfileAction([], profileNameOrDraft("")).action, "create");
 });
 
 test("members cannot change interval, pages, or offline days; admins can", () => {

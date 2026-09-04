@@ -11,7 +11,7 @@ import { extraMonthlyAmount, listingCompareCost } from "./listingCost.js";
 export function listingFitScore(listing, settings = {}) {
   let score = 58;
   const includeExtras = settings.priceMaxIncludesExtras === true;
-  const price = listingCompareCost(listing, { includeExtras }) || Number(listing?.price_num) || 0;
+  const price = listingCompareCost(listing, { includeExtras }) || 0;
   const min = Number(settings.priceMin) || 0;
   const max = Number(settings.priceMax) || 0;
   if (price > 0 && (min > 0 || max > 0)) {

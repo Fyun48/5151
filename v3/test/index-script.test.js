@@ -166,6 +166,9 @@ test("left panel profile save stays in the settings sheet", () => {
   assert.match(panel, /panel-sticky/);
   assert.match(panel, /panel-close/);
   assert.match(html, /#settingsPanel \.profile-row \{[\s\S]*flex-wrap: wrap;/);
+  assert.match(html, /profile-row-actions/);
+  assert.match(html, /#settingsPanel \.profile-row-actions button \{[\s\S]*white-space: nowrap;/);
+  assert.match(html, /#settingsPanel \.header-profiles #saveMsg/);
   const mobile = html.slice(html.indexOf("@media (max-width: 880px)"));
   assert.doesNotMatch(mobile, /\.header-profiles \{ display: none/);
   assert.match(mobile, /#settingsPanel \.panel-sticky/);
@@ -233,6 +236,12 @@ test("notify channels lock until webhook or smtp is set and account can pause al
   assert.match(html, /租金上限是包含其它額外需繳的費用/);
   assert.match(html, /id="demandPanel"/);
   assert.match(html, /#demandView \.card\.panel/);
+  assert.match(html, /body\.role-guest #demandForm/);
+  assert.match(html, /id="demandAudit"/);
+  assert.match(html, /function demandCardHtml[\s\S]*self-mine-card/);
+  assert.match(html, /function passesClientPrice/);
+  assert.match(html, /function rentPriceLabel/);
+  assert.match(html, /profileNameOrDraft|暫存/);
 });
 
 test("dock has mark-read buttons and renders content diffs", () => {
@@ -362,13 +371,13 @@ test("product name is 吉比租房物件追蹤 without v2 開發版 copy", () =>
   assert.equal(html.includes("v2 開發版"), false);
   assert.equal(html.includes("v3 開發版"), false);
   assert.equal(html.includes("與線上版分開的資料庫"), false);
-  assert.match(html, /ver\. 3\.39/);
+  assert.match(html, /ver\. 3\.40/);
   assert.doesNotMatch(html, /<h1>[^<]*v3/i);
   assert.match(login, /<h1>吉比租房物件追蹤<\/h1>/);
   assert.equal(login.includes("v2 開發版"), false);
   assert.equal(login.includes("v3 開發版"), false);
   assert.equal(login.includes("資料與線上版分開"), false);
-  assert.match(login, /ver\. 3\.39/);
+  assert.match(login, /ver\. 3\.40/);
 });
 
 test("MRT is admin-only and guest tour is in the page", () => {

@@ -261,8 +261,10 @@
     html.no-session #helpQaBtn,
     html.no-session #ownerFab,
     html.no-session #profileForm { display: none !important; }
-    body.role-guest #selfListingForm { display: none !important; }
-    body:not(.role-guest) #selfGuestHint { display: none; }
+    body.role-guest #selfListingForm,
+    body.role-guest #demandForm { display: none !important; }
+    body:not(.role-guest) #selfGuestHint,
+    body:not(.role-guest) #selfGuestHintDemand { display: none; }
     html.has-session #loginBtn,
     html.has-session #registerBtn { display: none !important; }
     html.has-session .who.is-guest { visibility: hidden; }
@@ -861,6 +863,10 @@
     }
     .self-mine-card strong { display: block; margin-bottom: 4px; }
     .self-mine-card .muted { margin: 2px 0; }
+    .self-mine-card p { margin: 8px 0; font-size: 14px; line-height: 1.5; }
+    .self-mine-card .row { margin-top: 8px; }
+    .self-mine-card .row input[type="text"] { flex: 1 1 12rem; width: auto; min-width: 0; }
+    #demandPanel .self-grid .checks { margin: 0; }
     .self-photos {
       display: flex;
       gap: 8px;
@@ -1144,6 +1150,9 @@
       min-width: 0;
       width: 100%;
     }
+    #settingsPanel .profile-row-actions {
+      flex-wrap: nowrap;
+    }
     #settingsPanel .header-profiles input[type="text"],
     #settingsPanel .header-profiles select {
       min-width: 0;
@@ -1156,15 +1165,22 @@
       width: auto;
       max-width: none;
     }
-    #settingsPanel .profile-row button {
+    #settingsPanel .profile-row-actions button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       flex: 0 0 auto;
+      flex-shrink: 0;
+      white-space: nowrap;
       min-width: 4.5rem;
-      height: 40px;
+      min-height: var(--touch, 44px);
+      height: var(--touch, 44px);
       padding: 0 16px;
     }
-    #settingsPanel .profile-row #deleteProfileBtn { flex: 0 0 auto; }
-    #settingsPanel .profile-row #saveMsg {
-      flex: 1 1 100%;
+    #settingsPanel .header-profiles #saveMsg {
+      flex: none;
+      width: 100%;
+      margin: 0;
       min-height: 1.2em;
     }
     .panel-sticky {
@@ -2022,11 +2038,11 @@
           <input type="text" id="profileName" placeholder="設定檔名稱" maxlength="40" aria-label="設定檔名稱" />
           <select id="profileSelect" aria-label="已存設定檔"></select>
         </div>
-        <div class="profile-row">
+        <div class="profile-row profile-row-actions">
           <button type="button" class="primary" id="saveBtn" disabled>儲存</button>
           <button type="button" class="ghost" id="deleteProfileBtn">刪除</button>
-          <span class="save-msg" id="saveMsg"></span>
         </div>
+        <p class="save-msg" id="saveMsg"></p>
       </div>
       </div>
       <div class="stats" id="stats">
@@ -2168,10 +2184,10 @@
   <section class="app-view" id="demandView">
     <div class="card panel" id="demandPanel">
       <h2 style="margin:0 0 8px">需求專區</h2>
-      <p class="hint" id="demandLegal">這是免費找房工具，不是仲介、不保證媒合、不經手金錢。需求牆是公開留言板，沒有即時私訊。內容由使用者自行負責；平台可隱藏或移除不當貼文。</p>
       <p class="hint" id="selfGuestHintDemand">登入後才能刊登需求（不是仲介、沒有私訊）。</p>
+      <p class="hint" id="demandLegal">這是免費找房工具，不是仲介、不保證媒合、不經手金錢。需求牆是公開留言板，沒有即時私訊。內容由使用者自行負責；平台可隱藏或移除不當貼文。</p>
+      <p class="hint" id="demandAudit">訪客可看全部需求。發文、回覆需登入；新帳號須滿 24 小時。同時最多 2 則未過期需求，14 天後失效。</p>
       <form id="demandForm">
-        <p class="hint">訪客可看全部需求。發文、回覆需登入；新帳號須滿 24 小時。同時最多 2 則未過期需求，14 天後失效。</p>
         <div class="self-grid">
           <div class="span-all">
             <label>行政區</label>
@@ -2651,7 +2667,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.39</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.40</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -3110,6 +3126,53 @@
       return false;
     }
 
+    function parseClientRent(item) {
+      const n = Number(item?.price_num);
+      const fromNum = Number.isFinite(n) && n > 0 ? n : 0;
+      const text = String(item?.price || "");
+      let fromText = 0;
+      const wan = text.match(/(\d+(?:\.\d+)?)\s*萬/);
+      if (wan) fromText = Math.round(Number(wan[1]) * 10000);
+      else {
+        const m = text.replace(/,/g, "").match(/(\d{4,6})/);
+        if (m) fromText = Number(m[1]);
+      }
+      if (fromNum >= 1000) return Math.round(fromNum);
+      if (fromText >= 1000) return fromText;
+      if (fromNum > 0 && fromNum < 1000) return Math.round(fromNum * 10000);
+      return fromText > 0 ? fromText : 0;
+    }
+    function extraClientMonthly(item) {
+      const col = Number(item?.extra_fee) || 0;
+      if (col > 0) return col;
+      let rows = item?.extra_fees;
+      if (typeof rows === "string") {
+        try { rows = JSON.parse(rows); } catch { rows = []; }
+      }
+      return (Array.isArray(rows) ? rows : []).reduce((sum, row) => sum + (Number(row?.amount) || 0), 0);
+    }
+    function listingCompareCostClient(item) {
+      const rent = parseClientRent(item);
+      if (rent <= 0) return 0;
+      if (!$("priceMaxIncludesExtras")?.checked) return rent;
+      return rent + extraClientMonthly(item);
+    }
+    function passesClientPrice(item) {
+      const min = Number($("priceMin")?.value) || 0;
+      const max = Number($("priceMax")?.value) || 0;
+      if (min <= 0 && max <= 0) return true;
+      const cost = listingCompareCostClient(item);
+      if (cost <= 0) return true;
+      if (min > 0 && cost < min) return false;
+      if (max > 0 && cost > max) return false;
+      return true;
+    }
+    function rentPriceLabel(item) {
+      const n = listingCompareCostClient(item);
+      if (n > 0) return `租金 ${n.toLocaleString("zh-TW")} 元/月`;
+      return `租金 ${item.price || ""} ${item.price_unit || "元/月"}`.trim();
+    }
+
     function applyViewFilters(items) {
       let out = items;
       if (kind === "whole") {
@@ -3121,6 +3184,7 @@
       if ($("excludeRooftop")?.checked) {
         out = out.filter((item) => !isRooftopAddition(item));
       }
+      out = out.filter((item) => passesClientPrice(item));
       return out;
     }
 
@@ -4144,7 +4208,7 @@
             </h3>
             ${matchPeerBlock(item)}
             ${formatListingWhen(item) ? `<div class="when"><span class="when-label">更新</span>${esc(formatListingWhen(item))}</div>` : ""}
-            <div class="rent-price">租金 ${esc(item.price || "")} ${esc(item.price_unit || "元/月")}</div>
+            <div class="rent-price">${esc(rentPriceLabel(item))}</div>
             <div class="meta">
               ${esc(item.kind_name || "")} · ${esc(item.layout || "")} · ${esc(item.area_name || "")} · ${esc(item.floor_name || "")}
               <br>${esc(item.address || "")}${commuteText(item)}${offlineLine(item)}
@@ -5234,7 +5298,7 @@
     }
     function demandCardHtml(post) {
       const districts = (post.district_labels || []).join("、") || "未填行政區";
-      const rent = post.rent_max ? `租金上限 ${post.rent_max}` : "租金不限";
+      const rent = post.rent_max ? `租金上限 ${Number(post.rent_max).toLocaleString("zh-TW")} 元/月` : "租金不限";
       const replies = (post.replies || []).map((item) => `
         <div class="dock-item">
           <div class="muted">${esc(item.author)} · ${esc(item.created_at || "").replace("T", " ").slice(0, 16)}</div>
@@ -5243,21 +5307,20 @@
         </div>
       `).join("");
       return `
-        <article class="item" data-demand-id="${post.id}">
-          <div>
-            <strong>${esc(districts)}</strong>
-            <div class="muted">${esc(rent)} · ${esc(post.housing_label || "")}${post.mrt_walk ? " · 要近捷運" : ""} · ${esc(post.author || "會員")}</div>
-            <p>${esc(post.body)}</p>
-            <div class="muted">到期 ${esc(String(post.expires_at || "").replace("T", " ").slice(0, 16))}</div>
-            ${replies}
-            ${isGuest ? `<p class="hint">登入後才能回覆或刊登。</p>` : `
-              <div class="row">
-                <input type="text" data-demand-reply="${post.id}" maxlength="200" placeholder="公開回覆（不是私訊）" />
-                <button type="button" class="primary" data-demand-send="${post.id}">回覆</button>
-                ${post.mine ? `<button type="button" class="ghost" data-demand-close="${post.id}">關閉</button>` : `<button type="button" class="ghost" data-demand-report="${post.id}">檢舉</button>`}
-              </div>
-            `}
-          </div>
+        <article class="self-mine-card" data-demand-id="${post.id}">
+          <strong>${esc(districts)}</strong>
+          <div class="rent-price">${esc(rent)}</div>
+          <div class="muted">${esc(post.housing_label || "不限類型")}${post.mrt_walk ? " · 要近捷運" : ""} · ${esc(post.author || "會員")}</div>
+          <p>${esc(post.body)}</p>
+          <div class="muted">到期 ${esc(String(post.expires_at || "").replace("T", " ").slice(0, 16))}</div>
+          ${replies}
+          ${isGuest ? `<p class="hint">登入後才能回覆或刊登。</p>` : `
+            <div class="row">
+              <input type="text" data-demand-reply="${post.id}" maxlength="200" placeholder="公開回覆（不是私訊）" />
+              <button type="button" class="primary" data-demand-send="${post.id}">回覆</button>
+              ${post.mine ? `<button type="button" class="ghost" data-demand-close="${post.id}">關閉</button>` : `<button type="button" class="ghost" data-demand-report="${post.id}">檢舉</button>`}
+            </div>
+          `}
         </article>
       `;
     }
@@ -5269,7 +5332,9 @@
       const data = await res.json();
       if (data.legal && $("demandLegal")) $("demandLegal").textContent = data.legal;
       const posts = data.posts || [];
-      box.innerHTML = posts.length ? posts.map(demandCardHtml).join("") : `<div class="empty">目前沒有公開需求。登入後可以刊登（不是仲介、沒有私訊）。</div>`;
+      box.innerHTML = posts.length
+        ? posts.map(demandCardHtml).join("")
+        : `<div class="empty">${isGuest ? "目前沒有公開需求。登入後可以刊登（不是仲介、沒有私訊）。" : "目前沒有公開需求。填好上面的資料後送出，會出現在這頁（不是仲介、沒有私訊）。"}</div>`;
     }
     $("collapsePanelBtn").onclick = () => {
       if (window.matchMedia("(max-width: 880px)").matches) closeFilterSheet();

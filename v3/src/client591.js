@@ -1,5 +1,5 @@
 import { passesAttributeFilters, passesGeoFilters } from "./floors.js";
-import { feeRowMonthlyAmount } from "./listingCost.js";
+import { feeRowMonthlyAmount, parseTwdAmount } from "./listingCost.js";
 import { allDistricts } from "./regions.js";
 import { coordsFrom591Detail, coordsFromListing, isExcludedByKeyword } from "./geo.js";
 import {
@@ -185,8 +185,7 @@ function sourceKey(item) {
 }
 
 function priceNum(price) {
-  const n = Number(String(price || "").replace(/[^\d]/g, ""));
-  return Number.isFinite(n) ? n : 0;
+  return parseTwdAmount(price);
 }
 
 function stripParen(text) {
