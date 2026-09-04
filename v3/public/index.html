@@ -539,13 +539,20 @@
     }
     .chip {
       border: 1px solid var(--line);
-      background: var(--paper);
+      background: var(--bg);
       color: var(--ink);
-      padding: 6px 11px;
+      padding: 3px 11px;
       border-radius: 999px;
+      font-size: 15px;
+      line-height: 1.3;
       transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
     }
-    .chip.on { background: var(--accent); border-color: var(--accent); color: var(--primary-foreground); }
+    .chip.on {
+      background: var(--accent-deep);
+      border-color: var(--accent-deep);
+      color: var(--primary-foreground);
+      font-weight: 700;
+    }
     .bulk-bar {
       display: none;
       align-items: center;
@@ -885,14 +892,19 @@
       display: none;
       position: static;
       margin: 0;
-      padding: 8px 16px;
+      padding: 5px 14px;
       font-size: var(--text-sm);
       font-weight: 700;
+      line-height: 1.2;
+      text-align: center;
+      align-items: center;
+      justify-content: center;
       color: var(--primary-foreground);
       background: var(--accent);
       border: 1px solid var(--accent);
       box-shadow: none;
-      min-height: 44px;
+      min-height: 0;
+      height: auto;
       border-radius: 999px;
     }
     body.panel-collapsed .filter-restore-btn:hover:not(:disabled) {
@@ -1340,11 +1352,18 @@
         -webkit-box-orient: vertical;
         overflow: hidden;
       }
-      #openFilterSheetBtn,
-      .filter-restore-btn {
+      #openFilterSheetBtn {
         min-height: 44px;
         padding: 8px 16px;
         font-weight: 700;
+      }
+      .filter-restore-btn {
+        min-height: 0;
+        padding: 5px 14px;
+        font-weight: 700;
+        text-align: center;
+        align-items: center;
+        justify-content: center;
       }
       .toolbar {
         flex-direction: column;
@@ -1367,9 +1386,9 @@
       }
       .chip-row .chip {
         flex: 0 0 auto;
-        min-height: var(--touch);
-        padding: 8px 13px;
-        font-size: var(--text-sm);
+        min-height: 0;
+        padding: 5px 13px;
+        font-size: 14px;
       }
       .view-filters {
         flex-direction: column;
@@ -1505,7 +1524,7 @@
       .chip-row::-webkit-scrollbar { display: none; }
       .chip-row .chip {
         flex: 0 0 auto;
-        min-height: 36px;
+        min-height: 33px;
       }
     }
   </style>

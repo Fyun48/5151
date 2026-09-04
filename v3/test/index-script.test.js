@@ -445,6 +445,9 @@ test("panel toggle sits above scroll-top and uses expand/collapse glyphs", () =>
   assert.match(html, /admin-only" id="watchBtn"/);
   assert.match(html, /bottom-nav[\s\S]*position:\s*fixed/);
   assert.match(html, /filter-restore-btn[\s\S]*background:\s*var\(--accent\)/);
+  assert.match(html, /\.chip \{[\s\S]*background:\s*var\(--bg\)/);
+  assert.match(html, /\.chip\.on \{[\s\S]*background:\s*var\(--accent-deep\)/);
+  assert.match(html, /filter-restore-btn[\s\S]*text-align:\s*center/);
   assert.match(html, /verified"\) === "1"/);
   assert.match(html, /信箱已確認/);
   assert.match(html, /id="notifyInbox"/);
