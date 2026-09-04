@@ -189,6 +189,9 @@ function layoutFromItem(item) {
 
 export function kindFromHbItem(item) {
   const hay = `${item?.objName || ""} ${item?.special || ""} ${item?.type || ""}`;
+  if (/倉庫|廠房/.test(hay) || item?.type === "倉庫") return "倉庫";
+  if (/店面/.test(hay) || item?.type === "店面") return "店面";
+  if (/辦公/.test(hay) || item?.type === "辦公") return "";
   if (/雅房/.test(hay)) return "雅房";
   if (/分租/.test(hay)) return "分租套房";
   if (/套房/.test(hay)) return "獨立套房";

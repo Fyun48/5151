@@ -32,7 +32,7 @@ test("信義 zip form and reserved post ids", () => {
   assert.equal(sinyiDetailUrl("houseno/C366801"), "https://www.sinyi.com.tw/rent/houseno/C366801");
 });
 
-test("normalize 信義 items keeps 成屋住宅、跳過店面", () => {
+test("normalize 信義 items keeps 成屋住宅與店面", () => {
   const parsed = parseSinyiApiBody(fixture);
   assert.equal(parsed.total, 133);
   assert.ok(parsed.items.length >= 2);
@@ -50,8 +50,9 @@ test("normalize 信義 items keeps 成屋住宅、跳過店面", () => {
   assert.ok(row.lat > 25);
   assert.match(row.url, /houseno\/C366801/);
   assert.equal(priceTwdFromSinyi("49,800"), 49800);
-  assert.equal(kindFromSinyiItem({ use: "店面", name: "金店面" }), "");
-  assert.equal(normalizeSinyiItem({ NO: "X1", use: "店面", name: "金店面" }), null);
+  assert.equal(kindFromSinyiItem({ use: "店面", name: "金店面" }), "店面");
+  assert.equal(normalizeSinyiItem({ NO: "X1", use: "店面", name: "金店面" })?.kind_name, "店面");
+  assert.equal(kindFromSinyiItem({ use: "辦公", name: "辦公室" }), "");
 });
 
 test("fetchSinyiCoveringListings uses injected POST and covering jobs", async () => {

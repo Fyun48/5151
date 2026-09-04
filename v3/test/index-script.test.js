@@ -110,7 +110,13 @@ test("housing kind chips stay independent of 特別關注", () => {
   assert.match(html, /data-kind="apartment"/);
   assert.match(html, /data-kind="suite"/);
   assert.doesNotMatch(html, /data-kind="building"/);
-  assert.match(html, /kind=\$\{encodeURIComponent\(kind\)\}/);
+  assert.match(html, /kind=\$\{encodeURIComponent\(kinds\.join\(","\)\)\}/);
+  assert.match(html, /sources=\$\{encodeURIComponent\(sources\.join\(","\)\)\}/);
+  assert.match(html, /data-kind="shop"/);
+  assert.match(html, /data-kind="warehouse"/);
+  assert.match(html, /data-source="591"/);
+  assert.match(html, /data-chip-row="source"/);
+  assert.match(html, /function toggleHousingKind/);
   assert.match(html, /document\.querySelectorAll\("\[data-kind\]"\)/);
   assert.doesNotMatch(html, /data-filter="elevator"/);
   assert.doesNotMatch(html, /data-filter="apartment"/);
@@ -262,7 +268,7 @@ test("guest demo is read-only and work prompt can be skipped", () => {
   assert.match(html, /body\.role-guest #sponsorBar/);
   assert.match(html, /body\.role-guest #logoutBtn/);
   assert.match(html, /if \(isGuest \|\| !commuteOn\(\)\) return ""/);
-  assert.match(html, /全站共用抓取庫/);
+  assert.match(html, /全站底庫/);
   assert.match(html, /if \(isGuest\) \{\s*bar\.hidden = true/s);
   const server = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../src/server.js"), "utf8");
   assert.doesNotMatch(server, /請至少選一個行政區/);
@@ -275,7 +281,7 @@ test("member settings copy hides advanced hints and locks schedule defaults", ()
   assert.match(html, /站方管理員 SMTP/);
   assert.match(html, /data-notify-ch="mail"/);
   assert.match(html, /dock: true, push: true, webhook: false, mail: false/);
-  assert.match(html, /本系統每8分鐘會重新檢本物件來源比對篩選|全站共用抓取庫/);
+  assert.match(html, /每 8 分鐘|8 分鐘/);
   assert.match(html, /id="adminLink"/);
   assert.match(html, /後台管理/);
   assert.match(html, /id="sponsorBar"/);
@@ -491,8 +497,8 @@ test("panel toggle sits above scroll-top and uses expand/collapse glyphs", () =>
   const topIdx = html.indexOf('id="scrollTopBtn"');
   assert.ok(expandIdx > 0 && topIdx > expandIdx);
   assert.match(html, /bottom:\s*80px/);
-  assert.match(html, /#scrollTopBtn \{[\s\S]*bottom:\s*80px/);
-  assert.match(html, /#scrollTopBtn\.on/);
+  assert.match(html, /#scrollTopBtn svg/);
+  assert.match(html, /aria-label="回頂"/);
   assert.match(html, /function syncScrollTopBtn/);
   assert.match(html, /icon\.textContent = collapsed \? "<|>" : ">|<"/);
   assert.match(html, /id="meDeleteBtn"/);
