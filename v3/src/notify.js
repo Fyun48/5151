@@ -6,6 +6,7 @@ import { sendMail } from "./mail.js";
 import { notifyChannelOn } from "./notifyMatrix.js";
 import { trackedListingUrl } from "./openLink.js";
 import { composeListingNotifyMail } from "./siteMail.js";
+import { selfSourceLabel } from "./selfListings.js";
 
 function toastWindows(title, body) {
   const script = `
@@ -296,6 +297,7 @@ export function formatNotifyCommute(event = {}) {
 
 export function formatNotifyFacts(event) {
   return [
+    selfSourceLabel(event?.source || "591"),
     event.address,
     event.layout,
     event.floor_name,

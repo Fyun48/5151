@@ -2385,6 +2385,8 @@ export function eventPayloadFromListing(event, listing) {
     kind_name: row.kind_name,
     area_name: row.area_name || event.area_name,
     tags: row.tags || event.tags,
+    source: row.source || event.source || "591",
+    source_label: selfSourceLabel(row.source || event.source || "591"),
     cover: row.cover,
     commute_km: row.commute_km,
     commute_mode: row.commute_mode,

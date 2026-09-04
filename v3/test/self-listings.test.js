@@ -18,6 +18,7 @@ import {
   SELF_LEGAL,
   SELF_POST_ID_BASE,
   selfListingMeta,
+  selfSourceLabel,
 } from "../src/selfListings.js";
 import { lookupDistrict } from "../src/regions.js";
 
@@ -130,6 +131,14 @@ test("self listing ids stay above the reserved range and require login", () => {
   assert.equal(row.kind_name, "整層住家");
   assert.match(row.search_key || db.prepare("SELECT search_key FROM listings WHERE post_id = ?").get(row.post_id).search_key, /region=1/);
   db.close();
+});
+
+test("selfSourceLabel marks 591 and 吉比本站", () => {
+  assert.equal(selfSourceLabel("591"), "591");
+  assert.equal(selfSourceLabel(""), "591");
+  assert.equal(selfSourceLabel(undefined), "591");
+  assert.equal(selfSourceLabel("self"), "吉比本站");
+  assert.equal(selfSourceLabel("hbhousing"), "住商");
 });
 
 test("open quota, new-account wait, close and report hide", () => {
