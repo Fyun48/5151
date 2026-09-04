@@ -93,7 +93,7 @@
 .jibby-mascot[hidden] { display: none !important; }
 .jibby-mascot-card {
   position: relative;
-  width: min(75vw, 75vh);
+  width: 75vw;
   max-width: 75vw;
   background: transparent;
   border: 0;
@@ -122,8 +122,8 @@
 .jibby-mascot-media img,
 .jibby-mascot-media video {
   display: block;
-  width: 100%;
-  height: auto;
+  width: 75vw;
+  height: 75vh;
   max-width: 75vw;
   max-height: 75vh;
   object-fit: contain;
