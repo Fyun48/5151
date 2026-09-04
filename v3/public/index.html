@@ -1092,9 +1092,16 @@
     }
     #settingsPanel .profile-row {
       display: flex;
+      flex-wrap: nowrap;
       gap: 8px;
-      align-items: center;
+      align-items: stretch;
       min-width: 0;
+      width: 100%;
+    }
+    #settingsPanel .header-profiles input[type="text"],
+    #settingsPanel .header-profiles select {
+      min-width: 0;
+      max-width: none;
     }
     #settingsPanel .profile-row input,
     #settingsPanel .profile-row select,
