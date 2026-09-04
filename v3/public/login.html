@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>登入 · 吉比租房物件追蹤</title>
   <link rel="stylesheet" href="/tokens.css" />
+  <link rel="icon" href="/brand/favicon-32.png" />
   <style>
     * { box-sizing: border-box; }
     body {
@@ -32,6 +33,7 @@
       font-weight: 600;
       letter-spacing: 0.03em;
     }
+    .brand-lockup { margin-bottom: 4px; }
     .sub { color: var(--muted); font-size: 14px; margin: 8px 0 16px; line-height: 1.55; }
     .tabs { display: flex; gap: 8px; margin-bottom: 8px; }
     .tabs button {
@@ -184,7 +186,13 @@
 </head>
 <body>
   <div class="card">
-    <h1>吉比租房物件追蹤</h1>
+    <div class="brand-lockup">
+      <img class="brand-mark" src="/brand/mark.png" alt="" width="40" height="34" />
+      <div class="brand-copy">
+        <h1>吉比租房物件追蹤</h1>
+        <p class="brand-en" data-brand-en>JibbyRentH</p>
+      </div>
+    </div>
     <p class="sub">想先看實際畫面，可以<a href="/">先看示範列表</a>；登入後才會載入你自己的條件與關注。</p>
     <div class="tabs">
       <button type="button" class="on" id="tabLogin">登入</button>
@@ -263,8 +271,9 @@
     <p class="ok" id="ok"></p>
     <p class="err" id="err"></p>
     <div class="ad-slot" id="adLogin" hidden></div>
-    <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.30</span></footer>
+    <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.31</span></footer>
   </div>
+  <script src="/mascot.js"></script>
   <script>
     const $ = (id) => document.getElementById(id);
     const REMEMBER_KEY = "591_v3_remember_email";
@@ -403,6 +412,8 @@
         const data = await res.json();
         if (data.captcha) paintCaptcha(data.captcha);
         if (!res.ok) throw new Error(data.error || "註冊失敗");
+        window.JibbyMascot?.markRegisterThanks();
+        window.JibbyMascot?.show("register");
         $("ok").textContent = data.message || "請到信箱點確認連結才算註冊成功。";
         setMode("login");
         $("email").value = $("regEmail").value.trim();
@@ -436,6 +447,7 @@
         $("forgotBtn").disabled = false;
       }
     };
+    window.JibbyMascot?.load?.().then(() => window.JibbyMascot.maybeRegister()).catch(() => {});
   </script>
 </body>
 </html>

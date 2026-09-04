@@ -57,3 +57,77 @@
   --border: var(--line);
   --ring: var(--accent);
 }
+
+.brand-lockup {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.brand-mark {
+  width: 40px;
+  height: auto;
+  display: block;
+  flex: 0 0 auto;
+}
+.brand-copy { min-width: 0; }
+.brand-en {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  line-height: 1.2;
+}
+.jibby-mascot {
+  position: fixed;
+  right: 16px;
+  bottom: 72px;
+  z-index: 240;
+  width: min(280px, calc(100vw - 28px));
+}
+.jibby-mascot-card {
+  position: relative;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 12px 14px 14px;
+}
+.jibby-mascot-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  min-width: 36px;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+}
+.jibby-mascot-media {
+  margin: 4px 18px 8px 0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--ink);
+  line-height: 0;
+}
+.jibby-mascot-media img,
+.jibby-mascot-media video {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 180px;
+  object-fit: contain;
+  background: #111;
+}
+.jibby-mascot-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.jibby-mascot-body {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}

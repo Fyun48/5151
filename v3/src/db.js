@@ -32,6 +32,7 @@ import { SYSTEM_CRAWL_INTERVAL_MINUTES } from "./crawlPolicy.js";
 import { ensurePersonalSchema } from "./personalSchema.js";
 import { importV1CacheIfNeeded, importV2CacheIfNeeded } from "./importV1.js";
 import { listingFitFields } from "./listingScore.js";
+import { defaultBrandMascot, normalizeBrandMascot, publicBrandMascot, BRAND_SLOTS } from "./brandMascot.js";
 import {
   confirmVerifyToken as confirmVerifyTokenOn,
   expireStaleVerifyTokens as expireStaleVerifyTokensOn,
@@ -834,6 +835,48 @@ export function publicAdsSettings() {
   return publicSiteAds(getSiteAdsConfig());
 }
 
+export function getBrandMascot() {
+  return publicBrandMascot(settingKey("brandMascot") || defaultBrandMascot());
+}
+
+export function saveBrandMascot(partial = {}) {
+  const current = getBrandMascot();
+  const src = partial && typeof partial === "object" ? partial : {};
+  const clipPatch = src.clips && typeof src.clips === "object" ? src.clips : {};
+  const next = normalizeBrandMascot({
+    ...current,
+    ...src,
+    clips: {
+      welcome: { ...current.clips.welcome, ...clipPatch.welcome },
+      register: { ...current.clips.register, ...clipPatch.register },
+      sponsor: { ...current.clips.sponsor, ...clipPatch.sponsor },
+      confused: { ...current.clips.confused, ...clipPatch.confused },
+    },
+  });
+  writeSettingKey("brandMascot", next);
+  return getBrandMascot();
+}
+
+export function applyBrandUpload(slot, upload) {
+  const key = String(slot || "").trim();
+  if (!BRAND_SLOTS.includes(key)) {
+    const err = new Error("請選擇要套用的位置");
+    err.status = 400;
+    throw err;
+  }
+  const current = getBrandMascot();
+  if (key === "mark") {
+    return saveBrandMascot({ ...current, markUrl: upload.url });
+  }
+  return saveBrandMascot({
+    ...current,
+    clips: {
+      ...current.clips,
+      [key]: { ...current.clips[key], url: upload.url, kind: upload.kind },
+    },
+  });
+}
+
 export function getBroadcastsConfig() {
   return normalizeBroadcasts(settingKey("broadcasts"));
 }
@@ -1093,6 +1136,7 @@ function omitSiteMail(stored) {
   delete next.memberSmtp;
   delete next.memberMailTemplates;
   delete next.mailPreset;
+  delete next.brandMascot;
   return next;
 }
 
@@ -1148,6 +1192,7 @@ export function saveSettings(partial, userId, { forceAdmin = false } = {}) {
         || key === "systemWatchDistricts"
         || key === "systemCrawlIntervalMinutes"
         || key === "systemCrawlIntervalMinutesDisplay"
+        || key === "brandMascot"
       ) continue;
       const encoded = JSON.stringify(value);
       if (SITE_SETTING_KEYS.has(key)) globalUpsert.run(key, encoded);

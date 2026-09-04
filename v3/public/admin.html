@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>後台管理 · 吉比租房物件追蹤</title>
   <link rel="stylesheet" href="/tokens.css" />
+  <link rel="icon" href="/brand/favicon-32.png" />
   <style>
     * { box-sizing: border-box; }
     body {
@@ -34,7 +35,26 @@
       font-size: 12px;
       letter-spacing: 0.02em;
     }
-    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .brand-preview {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin: 10px 0;
+    }
+    .brand-preview figure {
+      margin: 0;
+      width: 140px;
+    }
+    .brand-preview img, .brand-preview video {
+      display: block;
+      width: 140px;
+      height: 100px;
+      object-fit: contain;
+      background: var(--ink);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+    .brand-preview figcaption { font-size: 12px; color: var(--muted); margin-top: 4px; }
     .wrap { padding: 0 32px 40px; display: grid; gap: 20px; max-width: 1100px; }
     .card {
       background: var(--paper);
@@ -105,7 +125,7 @@
   <header>
     <div>
       <h1>後台管理</h1>
-      <div class="sub">會員、寄信 SMTP、信件內容、贊助連結、站內小廣告、通勤路線來源。看不到會員密碼。</div>
+      <div class="sub">會員、吉比形象、寄信 SMTP、信件內容、贊助連結、站內小廣告、通勤路線來源。看不到會員密碼。</div>
     </div>
     <div class="row">
       <span class="who" id="who"></span>
@@ -155,6 +175,67 @@
           <button type="button" class="ghost" id="deleteMemberCancel">取消</button>
         </div>
       </div>
+    </section>
+    <section class="card">
+      <h2>吉比形象／Logo</h2>
+      <p class="hint">中文名仍是「吉比租房物件追蹤」。英文名 JibbyRentH 寫在標誌旁邊，圖檔只用動物線稿、不要再疊其他英文品牌字。黑底角色圖只給感謝／疑惑短片用，避免跟找房列表搶視線。之後可再上傳歡迎、註冊、贊助、連續無效操作的短片。</p>
+      <form id="brandForm">
+        <label class="checks"><input type="checkbox" id="brandEnabled" checked /> 在站台套用這套形象</label>
+        <label class="checks"><input type="checkbox" id="brandHeader" checked /> 頁首顯示圓標</label>
+        <label class="checks"><input type="checkbox" id="brandLogin" checked /> 登入頁顯示圓標</label>
+        <label>英文名稱</label>
+        <input id="brandEnglish" maxlength="24" />
+        <label>連續無效操作幾次後跳出疑惑短片</label>
+        <input id="brandConfusedN" type="number" min="3" max="20" value="6" />
+        <div class="brand-preview" id="brandPreview"></div>
+        <h3 style="margin:16px 0 8px;font-size:16px">上傳替代檔</h3>
+        <p class="hint">圓標請用淺底線稿。歡迎／註冊／贊助／疑惑可傳 GIF、WebP、WebM 或 MP4（8MB 內）。</p>
+        <div class="row">
+          <label>圓標<input type="file" id="brandFileMark" accept="image/*" /></label>
+          <label>歡迎<input type="file" id="brandFileWelcome" accept="image/*,video/webm,video/mp4" /></label>
+          <label>註冊感謝<input type="file" id="brandFileRegister" accept="image/*,video/webm,video/mp4" /></label>
+          <label>贊助感謝<input type="file" id="brandFileSponsor" accept="image/*,video/webm,video/mp4" /></label>
+          <label>疑惑<input type="file" id="brandFileConfused" accept="image/*,video/webm,video/mp4" /></label>
+        </div>
+        <div class="grid-2" style="margin-top:12px">
+          <div>
+            <label>歡迎標題</label>
+            <input id="brandWelcomeTitle" maxlength="40" />
+            <label>歡迎說明</label>
+            <input id="brandWelcomeBody" maxlength="120" />
+            <label class="checks"><input type="checkbox" id="brandWelcomeOn" checked /> 第一次到訪播放</label>
+          </div>
+          <div>
+            <label>註冊感謝標題</label>
+            <input id="brandRegisterTitle" maxlength="40" />
+            <label>註冊說明</label>
+            <input id="brandRegisterBody" maxlength="120" />
+            <label class="checks"><input type="checkbox" id="brandRegisterOn" checked /> 註冊後播放</label>
+          </div>
+          <div>
+            <label>贊助感謝標題</label>
+            <input id="brandSponsorTitle" maxlength="40" />
+            <label>贊助說明</label>
+            <input id="brandSponsorBody" maxlength="120" />
+            <label class="checks"><input type="checkbox" id="brandSponsorOn" checked /> 已贊助會員播放一次</label>
+          </div>
+          <div>
+            <label>疑惑標題</label>
+            <input id="brandConfusedTitle" maxlength="40" />
+            <label>疑惑說明</label>
+            <input id="brandConfusedBody" maxlength="120" />
+            <label class="checks"><input type="checkbox" id="brandConfusedOn" checked /> 連續無效操作時播放</label>
+          </div>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <button type="button" class="ghost" id="brandPreviewWelcome">預覽歡迎</button>
+          <button type="button" class="ghost" id="brandPreviewRegister">預覽註冊</button>
+          <button type="button" class="ghost" id="brandPreviewSponsor">預覽贊助</button>
+          <button type="button" class="ghost" id="brandPreviewConfused">預覽疑惑</button>
+          <button type="submit" class="primary" id="brandSave">儲存形象設定</button>
+        </div>
+        <p class="msg" id="brandMsg"></p>
+      </form>
     </section>
     <section class="card">
       <h2>功能說明 Q&amp;A</h2>
@@ -429,6 +510,7 @@
       </form>
     </section>
   </div>
+  <script src="/mascot.js"></script>
   <script>
     const $ = (id) => document.getElementById(id);
     let meEmail = "";
@@ -633,6 +715,80 @@
         question: row.querySelector("[data-qa-q]")?.value || "",
         answer: row.querySelector("[data-qa-a]")?.value || "",
       }));
+    }
+
+    function fillBrand(data) {
+      if (!data) return;
+      $("brandEnabled").checked = data.enabled !== false;
+      $("brandHeader").checked = data.header !== false;
+      $("brandLogin").checked = data.login !== false;
+      $("brandEnglish").value = data.englishName || "JibbyRentH";
+      $("brandConfusedN").value = data.confusedThreshold || 6;
+      const clips = data.clips || {};
+      $("brandWelcomeTitle").value = clips.welcome?.title || "";
+      $("brandWelcomeBody").value = clips.welcome?.body || "";
+      $("brandWelcomeOn").checked = clips.welcome?.enabled !== false;
+      $("brandRegisterTitle").value = clips.register?.title || "";
+      $("brandRegisterBody").value = clips.register?.body || "";
+      $("brandRegisterOn").checked = clips.register?.enabled !== false;
+      $("brandSponsorTitle").value = clips.sponsor?.title || "";
+      $("brandSponsorBody").value = clips.sponsor?.body || "";
+      $("brandSponsorOn").checked = clips.sponsor?.enabled !== false;
+      $("brandConfusedTitle").value = clips.confused?.title || "";
+      $("brandConfusedBody").value = clips.confused?.body || "";
+      $("brandConfusedOn").checked = clips.confused?.enabled !== false;
+      const host = $("brandPreview");
+      if (host) {
+        const items = [
+          ["圓標", data.markUrl, "image"],
+          ["歡迎", clips.welcome?.url, clips.welcome?.kind],
+          ["註冊", clips.register?.url, clips.register?.kind],
+          ["贊助", clips.sponsor?.url, clips.sponsor?.kind],
+          ["疑惑", clips.confused?.url, clips.confused?.kind],
+        ];
+        host.innerHTML = items.map(([label, url, kind]) => {
+          const media = kind === "video"
+            ? `<video src="${escapeHtml(url || "")}" muted playsinline></video>`
+            : `<img src="${escapeHtml(url || "")}" alt="" />`;
+          return `<figure>${media}<figcaption>${label}</figcaption></figure>`;
+        }).join("");
+      }
+    }
+    function collectBrand() {
+      return {
+        enabled: $("brandEnabled").checked,
+        header: $("brandHeader").checked,
+        login: $("brandLogin").checked,
+        englishName: $("brandEnglish").value.trim() || "JibbyRentH",
+        confusedThreshold: Number($("brandConfusedN").value) || 6,
+        clips: {
+          welcome: { enabled: $("brandWelcomeOn").checked, title: $("brandWelcomeTitle").value, body: $("brandWelcomeBody").value },
+          register: { enabled: $("brandRegisterOn").checked, title: $("brandRegisterTitle").value, body: $("brandRegisterBody").value },
+          sponsor: { enabled: $("brandSponsorOn").checked, title: $("brandSponsorTitle").value, body: $("brandSponsorBody").value },
+          confused: { enabled: $("brandConfusedOn").checked, title: $("brandConfusedTitle").value, body: $("brandConfusedBody").value },
+        },
+      };
+    }
+    async function loadBrand() {
+      const res = await fetch("/api/admin/brand", { cache: "no-store" });
+      const data = await readApi(res);
+      if (!res.ok) throw new Error(data.error || "載入形象失敗");
+      fillBrand(data);
+      window.__brand = data;
+    }
+    async function uploadBrandSlot(slot, file) {
+      if (!file) return;
+      setMsg("brandMsg", "上傳中…");
+      const res = await fetch(`/api/admin/brand/file?slot=${encodeURIComponent(slot)}`, {
+        method: "POST",
+        headers: { "content-type": file.type || "application/octet-stream", "x-brand-slot": slot },
+        body: file,
+      });
+      const data = await readApi(res);
+      if (!res.ok) throw new Error(data.error || "上傳失敗");
+      fillBrand(data.brand || data);
+      window.__brand = data.brand || data;
+      setMsg("brandMsg", "檔案已套用，記得按儲存文案。", true);
     }
 
     async function loadHelpQa() {
@@ -1115,7 +1271,51 @@
       if (me.role !== "admin") { location.replace("/"); return; }
       meEmail = me.email || "";
       $("who").textContent = meEmail;
-      await Promise.all([loadMembers(), loadMail(), loadSponsor(), loadAds(), loadBroadcasts(), loadMaps(), loadHelpQa(), loadCrawlSources(), loadSystemCrawl()]);
+      await Promise.all([loadMembers(), loadMail(), loadSponsor(), loadAds(), loadBroadcasts(), loadMaps(), loadHelpQa(), loadCrawlSources(), loadSystemCrawl(), loadBrand()]);
+      $("brandForm").onsubmit = async (ev) => {
+        ev.preventDefault();
+        $("brandSave").disabled = true;
+        setMsg("brandMsg", "儲存中…");
+        try {
+          const res = await fetch("/api/admin/brand", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...window.__brand, ...collectBrand(), clips: {
+              welcome: { ...(window.__brand?.clips?.welcome || {}), ...collectBrand().clips.welcome },
+              register: { ...(window.__brand?.clips?.register || {}), ...collectBrand().clips.register },
+              sponsor: { ...(window.__brand?.clips?.sponsor || {}), ...collectBrand().clips.sponsor },
+              confused: { ...(window.__brand?.clips?.confused || {}), ...collectBrand().clips.confused },
+            } }),
+          });
+          const data = await readApi(res);
+          if (!res.ok) throw new Error(data.error || "儲存失敗");
+          fillBrand(data);
+          window.__brand = data;
+          setMsg("brandMsg", "形象設定已儲存。", true);
+        } catch (error) {
+          setMsg("brandMsg", error.message);
+        } finally {
+          $("brandSave").disabled = false;
+        }
+      };
+      const fileMap = [
+        ["brandFileMark", "mark"],
+        ["brandFileWelcome", "welcome"],
+        ["brandFileRegister", "register"],
+        ["brandFileSponsor", "sponsor"],
+        ["brandFileConfused", "confused"],
+      ];
+      for (const [id, slot] of fileMap) {
+        $(id)?.addEventListener("change", async (ev) => {
+          const file = ev.target.files?.[0];
+          try { await uploadBrandSlot(slot, file); } catch (error) { setMsg("brandMsg", error.message); }
+          ev.target.value = "";
+        });
+      }
+      $("brandPreviewWelcome").onclick = () => window.JibbyMascot?.load?.().then(() => window.JibbyMascot.show("welcome", { force: true }));
+      $("brandPreviewRegister").onclick = () => window.JibbyMascot?.load?.().then(() => window.JibbyMascot.show("register", { force: true }));
+      $("brandPreviewSponsor").onclick = () => window.JibbyMascot?.load?.().then(() => window.JibbyMascot.show("sponsor", { force: true }));
+      $("brandPreviewConfused").onclick = () => window.JibbyMascot?.load?.().then(() => window.JibbyMascot.show("confused", { force: true }));
       $("helpQaAdd").onclick = () => {
         renderHelpQaEditor([...collectHelpQa(), { question: "", answer: "", id: "" }]);
       };
@@ -1258,6 +1458,6 @@
       setMsg("memberMsg", error.message || "載入失敗");
     });
   </script>
-  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.30</span></footer>
+  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.31</span></footer>
 </body>
 </html>
