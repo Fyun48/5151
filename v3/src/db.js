@@ -19,11 +19,11 @@ import {
 import { sameSearch } from "./client591.js";
 import { CITIES, districtNameFromListing, normalizeWatchDistricts } from "./regions.js";
 import { preferPrimaryListing } from "./match.js";
-import { listingCompareCost } from "./listingCost.js";
+import { listingCompareCost, passesPriceFilter } from "./listingCost.js";
 import { commuteWorkJobs, hasWorkPoint, needsListingGeo, normalizeCommuteMode } from "./geo.js";
 import { demoCommutePatch } from "./demo.js";
 import { isWalkableMrtDistance, makeMrtKey } from "./mrt.js";
-import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings, planIntervalMinutes, resolveSaveAsProfileAction, normalizeProfileName, MEMBER_MAX_PROFILES, ADMIN_MAX_PROFILES, clampIntervalMinutes, memberShouldContributeCrawl, memberFetchCollision, memberHasCrawlScope } from "./settingsState.js";
+import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings, planIntervalMinutes, resolveSaveAsProfileAction, profileNameOrDraft, MEMBER_MAX_PROFILES, ADMIN_MAX_PROFILES, clampIntervalMinutes, memberShouldContributeCrawl, memberFetchCollision, memberHasCrawlScope } from "./settingsState.js";
 import { defaultLegalCopy, normalizeLegalCopy, publicLegalCopy } from "./legalCopy.js";
 import { defaultNotifyMatrix } from "./notifyMatrix.js";
 import { DATA_EPOCH, shouldResetForEpoch } from "./dataEpoch.js";
@@ -1317,7 +1317,7 @@ export function saveAsProfile(name, livePatch, userId, { overwrite = false } = {
   const admin = getUserById(uid)?.role === "admin";
   const current = livePatch && typeof livePatch === "object" ? saveSettings(livePatch, uid) : getSettings(uid);
   const profiles = [...(current.settingProfiles || [])];
-  const label = normalizeProfileName(name);
+  const label = profileNameOrDraft(name);
   const decision = resolveSaveAsProfileAction(profiles, label, { overwrite, admin });
   if (decision.action === "empty") {
     const err = new Error("請先填設定檔名稱");
@@ -2579,7 +2579,9 @@ export function listListings({
   const flagMap = loadFlagMap(db, uid);
   let rows =
     filter === "offline" || filter === "suspected"
-      ? overlayRowsPersonal(raw, flagMap).map((row) => decorateListing(row, settings, uid))
+      ? overlayRowsPersonal(raw, flagMap)
+        .filter((row) => passesPriceFilter(row, settings))
+        .map((row) => decorateListing(row, settings, uid))
       : applyListingFilter(overlayRowsPersonal(raw, flagMap), settings).map((row) => decorateListing(row, settings, uid));
 
   rows = rows.filter((row) => listingMatchesListFilter(row, filter));

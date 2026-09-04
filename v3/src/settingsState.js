@@ -82,8 +82,14 @@ export function canAddProfile(profiles, { admin = false } = {}) {
   return (profiles || []).length < MEMBER_MAX_PROFILES;
 }
 
+export const DRAFT_PROFILE_NAME = "暫存";
+
 export function normalizeProfileName(name) {
   return String(name || "").trim().slice(0, 40);
+}
+
+export function profileNameOrDraft(name) {
+  return normalizeProfileName(name) || DRAFT_PROFILE_NAME;
 }
 
 export function findProfileByName(profiles, name) {

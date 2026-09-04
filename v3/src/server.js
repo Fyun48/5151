@@ -118,6 +118,7 @@ import { buildDemoState } from "./demo.js";
 import { backfillListingCoords, backfillListingMrt, backfillListingRoutes, flushPendingNotifications, isWatchIntervalPending, runWatch } from "./watcher.js";
 import { LIST_PAGE_SIZE } from "./client591.js";
 import { APP_NAME, APP_VERSION } from "./brand.js";
+import { profileNameOrDraft } from "./settingsState.js";
 import {
   OAUTH_PROVIDERS,
   OAUTH_STATE_COOKIE,
@@ -1450,8 +1451,7 @@ app.post("/api/settings", async (req, res) => {
 app.post("/api/profiles", async (req, res) => {
   try {
     const uid = actorUserId(req);
-    const name = String(req.body?.name || "").trim();
-    if (!name) throw new Error("請先填設定檔名稱");
+    const name = profileNameOrDraft(req.body?.name);
     const patch = req.body?.settings;
     if (patch && typeof patch === "object") {
       await persistSettings(patch, uid);

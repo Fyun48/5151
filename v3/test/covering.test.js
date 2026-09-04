@@ -155,6 +155,7 @@ test("listingInMemberScope only matches that member's city, district, and rent c
   assert.equal(listingInMemberScope(inScope, settings), true);
   assert.equal(listingInMemberScope(otherDistrict, settings), false);
   assert.equal(listingInMemberScope(tooExpensive, settings), false);
+  assert.equal(listingInMemberScope({ source_key: "1|8|x", price_num: 3.8, price: "3.8萬" }, settings), false);
   assert.equal(listingInMemberScope(noSearch, { watchDistricts: [], searchUrls: [] }), false);
 });
 

@@ -6,6 +6,7 @@ import {
   listingCompareCost,
   parseTwdAmount,
   passesPriceFilter,
+  rentAmount,
 } from "../src/listingCost.js";
 import { passesAttributeFilters } from "../src/floors.js";
 import { listingTotalCost } from "../src/match.js";
@@ -83,4 +84,12 @@ test("price min/max without extras still hide over-budget rent", () => {
   assert.equal(passesPriceFilter(listing, { priceMax: 36000 }), false);
   assert.equal(passesPriceFilter(listing, { priceMax: 0 }), true);
   assert.equal(passesPriceFilter({ price_num: 12000 }, { priceMin: 15000, priceMax: 36000 }), false);
+});
+
+test("wan-style prices count as tens of thousands of TWD", () => {
+  assert.equal(rentAmount({ price_num: 3.8, price: "3.8萬" }), 38000);
+  assert.equal(rentAmount({ price_num: 3.8, price: "" }), 38000);
+  assert.equal(rentAmount({ price_num: 0, price: "38,000" }), 38000);
+  assert.equal(passesPriceFilter({ price_num: 3.8, price: "3.8萬" }, { priceMax: 36000 }), false);
+  assert.equal(passesPriceFilter({ price_num: 8500, price: "8,500" }, { priceMax: 36000 }), true);
 });

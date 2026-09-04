@@ -1,4 +1,5 @@
 import { parsePriceParam } from "./regions.js";
+import { listingCompareCost } from "./listingCost.js";
 
 function numIds(values) {
   return [...new Set((values || []).map(Number).filter((id) => Number.isFinite(id) && id > 0))].sort((a, b) => a - b);
@@ -154,7 +155,7 @@ export function listingInMemberScope(listing, settings = {}) {
   const regionId = Number(listing?.regionid || listing?.region_id || bits[0]) || 0;
   const sectionId = Number(listing?.sectionid || listing?.section_id || bits[1]) || 0;
   if (!(regionId > 0)) return false;
-  const price = Number(listing?.price_num) || 0;
+  const price = listingCompareCost(listing, { includeExtras: settings.priceMaxIncludesExtras === true });
   for (const cover of covers) {
     if (Number(cover.regionId) !== regionId) continue;
     const want = numIds(cover.sectionIds);
