@@ -866,7 +866,8 @@
     .self-mine-card p { margin: 8px 0; font-size: 14px; line-height: 1.5; }
     .self-mine-card .row { margin-top: 8px; }
     .self-mine-card .row input[type="text"] { flex: 1 1 12rem; width: auto; min-width: 0; }
-    #demandPanel .self-grid .checks { margin: 0; }
+    #demandPanel .self-grid .pledge-row { margin: 0; align-items: center; }
+    #demandPanel .self-grid .pledge-row input { margin-top: 0; }
     .self-photos {
       display: flex;
       gap: 8px;
@@ -2189,10 +2190,6 @@
       <p class="hint" id="demandAudit">訪客可看全部需求。發文、回覆需登入；新帳號須滿 24 小時。同時最多 2 則未過期需求，14 天後失效。</p>
       <form id="demandForm">
         <div class="self-grid">
-          <div class="span-all">
-            <label>行政區</label>
-            <div id="demandDistricts"></div>
-          </div>
           <div>
             <label>租金上限</label>
             <input type="number" id="demandRentMax" min="0" step="500" placeholder="例如 28000" />
@@ -2208,7 +2205,11 @@
             </select>
           </div>
           <div class="span-all">
-            <label class="checks"><input type="checkbox" id="demandMrt" /> 需要可步行捷運（未滿 1.5 公里）</label>
+            <label class="pledge-row"><input type="checkbox" id="demandMrt" /> <span>需要可步行捷運（未滿 1.5 公里）</span></label>
+          </div>
+          <div class="span-all">
+            <label>行政區</label>
+            <div id="demandDistricts"></div>
           </div>
           <div class="span-all">
             <label>短述（最多 280 字）</label>
@@ -4001,7 +4002,7 @@
     function feeChip(text) {
       return `<span class="fee-chip">${esc(text)}</span>`;
     }
-    function feeLines(item) {
+    function feeLines(item, { includeTotal = true } = {}) {
       let rows = item.extra_fees;
       if (typeof rows === "string") {
         try { rows = JSON.parse(rows); } catch { rows = []; }
@@ -4017,7 +4018,7 @@
         if (isHighDeposit(bit, rent) || /額外費用|含額外費用/.test(bit)) return feeChip(bit);
         return esc(bit);
       });
-      const total = rent && extraAmt
+      const total = includeTotal && rent && extraAmt
         ? `含額外費用約 ${(rent + extraAmt).toLocaleString("zh-TW")} 元/月`
         : "";
       const parts = [];
@@ -4217,7 +4218,7 @@
             </div>
               ${item.self_body ? `<div class="meta">${esc(item.self_body)}</div>` : ""}
             ${(() => {
-              const fees = feeLines(item);
+              const fees = feeLines(item, { includeTotal: Boolean($("priceMaxIncludesExtras")?.checked) });
               if (!fees.html) return "";
               return `<div class="fees">${fees.html}</div>`;
             })()}
