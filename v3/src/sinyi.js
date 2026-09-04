@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { passesAttributeFilters } from "./floors.js";
 import { isExcludedByKeyword } from "./geo.js";
+import { feeFieldsFromBlob } from "./listingCost.js";
 import { zipForDistrict, districtKeyForZip } from "./hbhousing.js";
 import { lookupDistrict } from "./regions.js";
 
@@ -145,10 +146,7 @@ export function normalizeSinyiItem(item, { regionId, sectionId } = {}) {
     url: path && /^https?:\/\//i.test(path) ? path : sinyiDetailUrl(path || no),
     price: priceNum ? String(priceNum) : "",
     price_num: priceNum,
-    extra_fee: 0,
-    extra_fee_text: "",
-    price_contain_text: "",
-    extra_fees: "[]",
+    ...feeFieldsFromBlob({ blob: `${item.name || ""} ${item.community || ""} ${item.use || ""} ${item.address || ""}` }),
     extra_fees_fetched: 0,
     address,
     area_name: areaName,

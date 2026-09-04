@@ -251,6 +251,47 @@ export function verifyUserPassword(conn, email, password) {
   return null;
 }
 
+export const IDLE_PAUSE_MS = 60 * 24 * 60 * 60 * 1000;
+
+export function touchLastLogin(conn, userId, { now = Date.now() } = {}) {
+  const id = Number(userId) || 0;
+  if (!id) return;
+  try {
+    conn.prepare("UPDATE users SET last_login_at = ? WHERE id = ?").run(new Date(now).toISOString(), id);
+  } catch {
+    // 舊庫還沒加欄位
+  }
+}
+
+export function listIdleMemberIds(conn, { now = Date.now(), idleMs = IDLE_PAUSE_MS } = {}) {
+  const cutoff = new Date(now - idleMs).toISOString();
+  try {
+    return conn.prepare(
+      `SELECT id FROM users
+       WHERE IFNULL(role, 'member') != 'admin'
+         AND IFNULL(deleted_at, '') = ''
+         AND IFNULL(email_verified, 1) != 0
+         AND COALESCE(last_login_at, created_at) <= ?`,
+    ).all(cutoff).map((row) => Number(row.id));
+  } catch {
+    return [];
+  }
+}
+
+export function linkOauthIdentity(conn, userId, { provider, subject } = {}) {
+  const id = Number(userId) || 0;
+  if (!id) return;
+  try {
+    conn.prepare("UPDATE users SET oauth_provider = ?, oauth_subject = ? WHERE id = ?").run(
+      String(provider || "").slice(0, 40),
+      String(subject || "").slice(0, 120),
+      id,
+    );
+  } catch {
+    // 舊庫還沒加欄位
+  }
+}
+
 export function acceptDisclaimer(conn, userId) {
   const id = Number(userId) || 0;
   if (!id) return;

@@ -23,6 +23,14 @@ test("hides listings larger than areaMax ping", () => {
   assert.equal(passesAttributeFilters(listing, { ...attrs, areaMax: 0 }), true);
 });
 
+test("hides listings over the member price cap, and extras when the checkbox is on", () => {
+  const listing = { kind_name: "整層住家", floor_name: "5F/12F", price_num: 38000, extra_fee: 0 };
+  assert.equal(passesAttributeFilters(listing, { ...attrs, priceMax: 36000 }), false);
+  const extra = { kind_name: "整層住家", floor_name: "5F/12F", price_num: 34000, extra_fee: 3500 };
+  assert.equal(passesAttributeFilters(extra, { ...attrs, priceMax: 36000 }), true);
+  assert.equal(passesAttributeFilters(extra, { ...attrs, priceMax: 36000, priceMaxIncludesExtras: true }), false);
+});
+
 test("keeps listings with unknown ping when areaMax is set", () => {
   const listing = { kind_name: "整層住家", floor_name: "5F/12F", area_name: "" };
   assert.equal(passesAttributeFilters(listing, { ...attrs, areaMax: 30 }), true);

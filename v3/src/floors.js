@@ -1,6 +1,7 @@
 import { hasActiveBoxes, isExcludedByAgent, isExcludedByBox, isExcludedByKeyword, needsListingGeo, hasWorkPoint } from "./geo.js";
 import { isTrustedGeoSource } from "./location.js";
 import { areaNum } from "./match.js";
+import { passesPriceFilter } from "./listingCost.js";
 
 function tagText(listing) {
   let tags = listing.tags;
@@ -110,6 +111,7 @@ export function passesDisplayFilters(listing, settings = {}, { skipWholeFloor = 
 }
 
 export function passesAttributeFilters(listing, settings = {}) {
+  if (!passesPriceFilter(listing, settings)) return false;
   const minFloors = Number(settings.minBuildingFloors);
   if (Number.isFinite(minFloors) && minFloors > 0) {
     const totalFloors = buildingTotalFloors(listing.floor_name);

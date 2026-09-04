@@ -578,7 +578,7 @@
       <div id="mail" class="admin-panel" data-admin-panel="mail">
 <section class="card">
       <h2>寄信 SMTP</h2>
-      <p class="hint">這組 SMTP 只寄<strong>系統信</strong>：註冊歡迎、忘記密碼、變更密碼、贊助後通知。物件／屋源提醒請會員自己在前台填 SMTP，不會用這裡的帳號代寄。密碼只在你新填時才更新，畫面上不會回傳已存密碼。</p>
+      <p class="hint">這組 SMTP 只寄<strong>系統信</strong>：註冊確認、開通完成歡迎、忘記密碼、變更密碼、贊助後通知。物件／屋源提醒請會員自己在前台填 SMTP，不會用這裡的帳號代寄。密碼只在你新填時才更新，畫面上不會回傳已存密碼。</p>
       <form id="smtpForm">
         <div class="grid-2">
           <div>
@@ -615,6 +615,31 @@
       </form>
     </section>
 <section class="card">
+      <h2>社群登入</h2>
+      <p class="hint">Google、LINE、Facebook 可帶入 Email 註冊或登入。新帳號仍須完成開通信。金鑰寫入 auth.env，畫面不會再顯示密鑰。</p>
+      <form id="oauthForm">
+        <label class="checks"><input type="checkbox" id="oauthGoogleOn" /> 開通 Google</label>
+        <label>Google Client ID</label>
+        <input id="oauthGoogleId" autocomplete="off" />
+        <label>Google Client Secret</label>
+        <input id="oauthGoogleSecret" type="password" autocomplete="new-password" />
+        <label class="checks"><input type="checkbox" id="oauthLineOn" /> 開通 LINE</label>
+        <label>LINE Channel ID</label>
+        <input id="oauthLineId" autocomplete="off" />
+        <label>LINE Channel Secret</label>
+        <input id="oauthLineSecret" type="password" autocomplete="new-password" />
+        <label class="checks"><input type="checkbox" id="oauthFacebookOn" /> 開通 Facebook</label>
+        <label>Facebook App ID</label>
+        <input id="oauthFacebookId" autocomplete="off" />
+        <label>Facebook App Secret</label>
+        <input id="oauthFacebookSecret" type="password" autocomplete="new-password" />
+        <div class="row">
+          <button type="submit" class="primary" id="oauthSave">儲存社群登入</button>
+        </div>
+        <p class="msg" id="oauthMsg"></p>
+      </form>
+    </section>
+<section class="card">
       <h2>信件內容</h2>
       <p class="hint">系統信走上面的管理員 SMTP。可用代碼：<code>{{email}}</code>；註冊確認另有 <code>{{verifyUrl}}</code>；忘記密碼另有 <code>{{tempPassword}}</code>。物件通知預設內容只在會員未自訂時使用，實際寄出走會員自己的 SMTP。</p>
       <form id="tplForm">
@@ -622,6 +647,10 @@
         <input id="welcomeSubject" />
         <label>註冊確認本文（請保留 <code>{{verifyUrl}}</code>）</label>
         <textarea id="welcomeText"></textarea>
+        <label>開通完成歡迎主旨</label>
+        <input id="verifiedWelcomeSubject" />
+        <label>開通完成歡迎本文（可用 <code>{{spiritUrl}}</code>）</label>
+        <textarea id="verifiedWelcomeText"></textarea>
         <label>確認連結失效主旨</label>
         <input id="verifyExpiredSubject" />
         <label>確認連結失效本文</label>
@@ -793,6 +822,8 @@
       const tpl = data.templates || {};
       $("welcomeSubject").value = tpl.welcome?.subject || "";
       $("welcomeText").value = tpl.welcome?.text || "";
+      $("verifiedWelcomeSubject").value = tpl.verified_welcome?.subject || "";
+      $("verifiedWelcomeText").value = tpl.verified_welcome?.text || "";
       $("verifyExpiredSubject").value = tpl.verify_expired?.subject || "";
       $("verifyExpiredText").value = tpl.verify_expired?.text || "";
       $("forgotSubject").value = tpl.forgot_password?.subject || "";
@@ -812,6 +843,29 @@
       const data = await readApi(res);
       if (!res.ok) throw new Error(data.error || "載入寄信設定失敗");
       fillMail(data);
+    }
+
+    function fillOauth(data) {
+      const oauth = data.oauth || {};
+      $("oauthGoogleOn").checked = Boolean(oauth.google?.enabled);
+      $("oauthGoogleId").value = oauth.google?.clientId || "";
+      $("oauthGoogleSecret").value = "";
+      $("oauthGoogleSecret").placeholder = oauth.google?.configured ? "已設定，空白則保留" : "Client Secret";
+      $("oauthLineOn").checked = Boolean(oauth.line?.enabled);
+      $("oauthLineId").value = oauth.line?.clientId || "";
+      $("oauthLineSecret").value = "";
+      $("oauthLineSecret").placeholder = oauth.line?.configured ? "已設定，空白則保留" : "Channel Secret";
+      $("oauthFacebookOn").checked = Boolean(oauth.facebook?.enabled);
+      $("oauthFacebookId").value = oauth.facebook?.clientId || "";
+      $("oauthFacebookSecret").value = "";
+      $("oauthFacebookSecret").placeholder = oauth.facebook?.configured ? "已設定，空白則保留" : "App Secret";
+    }
+
+    async function loadOauth() {
+      const res = await fetch("/api/admin/oauth", { cache: "no-store" });
+      const data = await readApi(res);
+      if (!res.ok) throw new Error(data.error || "載入社群登入失敗");
+      fillOauth(data);
     }
 
     function usd(value) {
@@ -1240,6 +1294,33 @@
       }
     };
 
+    $("oauthForm").onsubmit = async (ev) => {
+      ev.preventDefault();
+      $("oauthSave").disabled = true;
+      setMsg("oauthMsg", "儲存中…");
+      try {
+        const res = await fetch("/api/admin/oauth", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            oauth: {
+              google: { enabled: $("oauthGoogleOn").checked, clientId: $("oauthGoogleId").value, clientSecret: $("oauthGoogleSecret").value || "(unchanged)" },
+              line: { enabled: $("oauthLineOn").checked, clientId: $("oauthLineId").value, clientSecret: $("oauthLineSecret").value || "(unchanged)" },
+              facebook: { enabled: $("oauthFacebookOn").checked, clientId: $("oauthFacebookId").value, clientSecret: $("oauthFacebookSecret").value || "(unchanged)" },
+            },
+          }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "儲存失敗");
+        fillOauth(data);
+        setMsg("oauthMsg", "已儲存社群登入", true);
+      } catch (error) {
+        setMsg("oauthMsg", error.message);
+      } finally {
+        $("oauthSave").disabled = false;
+      }
+    };
+
     $("smtpTest").onclick = async () => {
       $("smtpTest").disabled = true;
       setMsg("smtpMsg", "寄送中…");
@@ -1270,6 +1351,7 @@
           body: JSON.stringify({
             templates: {
               welcome: { subject: $("welcomeSubject").value, text: $("welcomeText").value },
+              verified_welcome: { subject: $("verifiedWelcomeSubject").value, text: $("verifiedWelcomeText").value },
               verify_expired: { subject: $("verifyExpiredSubject").value, text: $("verifyExpiredText").value },
               forgot_password: { subject: $("forgotSubject").value, text: $("forgotText").value },
               password_changed: { subject: $("passwordSubject").value, text: $("passwordText").value },
@@ -1523,7 +1605,7 @@
       if (me.role !== "admin") { location.replace("/"); return; }
       meEmail = me.email || "";
       $("who").textContent = meEmail;
-      await Promise.all([loadMembers(), loadMail(), loadSponsor(), loadAds(), loadBroadcasts(), loadMaps(), loadHelpQa(), loadLegalCopy(), loadCrawlSources(), loadSystemCrawl(), loadBrand()]);
+      await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadMaps(), loadHelpQa(), loadLegalCopy(), loadCrawlSources(), loadSystemCrawl(), loadBrand()]);
       $("brandForm").onsubmit = async (ev) => {
         ev.preventDefault();
         $("brandSave").disabled = true;
@@ -1765,6 +1847,6 @@
       setMsg("memberMsg", error.message || "載入失敗");
     });
   </script>
-  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.38</span></footer>
+  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.39</span></footer>
 </body>
 </html>

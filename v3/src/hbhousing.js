@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { passesAttributeFilters } from "./floors.js";
 import { isExcludedByKeyword } from "./geo.js";
+import { feeFieldsFromBlob } from "./listingCost.js";
 import { lookupDistrict } from "./regions.js";
 
 export const HB_SOURCE = "hbhousing";
@@ -255,10 +256,7 @@ export function normalizeHbItem(item, { regionId, sectionId } = {}) {
     url: hbDetailUrl(sn),
     price: priceNum ? String(priceNum) : "",
     price_num: priceNum,
-    extra_fee: 0,
-    extra_fee_text: "",
-    price_contain_text: "",
-    extra_fees: "[]",
+    ...feeFieldsFromBlob({ blob: `${item.objName || ""} ${item.emphasis1 || ""} ${item.parking || ""} ${item.special || ""}` }),
     extra_fees_fetched: 0,
     address,
     area_name: areaName,

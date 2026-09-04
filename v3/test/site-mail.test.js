@@ -64,6 +64,13 @@ test("composeAccountMail fills welcome, password, and sponsor templates", () => 
     verifyUrl: "https://c5151.reversalplay.me/verify-email?token=abc",
   });
   assert.match(verifyMail.text, /verify-email\?token=abc/);
+  const verified = composeAccountMail("verified_welcome", defaultMailTemplates(), {
+    email: "a@b.com",
+    spiritUrl: "https://c5151.reversalplay.me/spirit.html",
+  });
+  assert.match(verified.subject, /歡迎加入/);
+  assert.match(verified.text, /spirit\.html/);
+  assert.match(verified.text, /有沒有贊助都不影響/);
   const expired = composeAccountMail("verify_expired", defaultMailTemplates(), { email: "a@b.com" });
   assert.match(expired.subject, /失效/);
   assert.match(expired.text, /3 天/);

@@ -5,11 +5,13 @@ import {
   listingHasElevator,
 } from "./floors.js";
 import { hasWorkPoint } from "./geo.js";
+import { extraMonthlyAmount, listingCompareCost } from "./listingCost.js";
 
 /** 依會員條件打的規則分，不是成交預測、也不是仲介評等。 */
 export function listingFitScore(listing, settings = {}) {
   let score = 58;
-  const price = Number(listing?.price_num) || 0;
+  const includeExtras = settings.priceMaxIncludesExtras === true;
+  const price = listingCompareCost(listing, { includeExtras }) || Number(listing?.price_num) || 0;
   const min = Number(settings.priceMin) || 0;
   const max = Number(settings.priceMax) || 0;
   if (price > 0 && (min > 0 || max > 0)) {
@@ -51,7 +53,7 @@ export function listingFitScore(listing, settings = {}) {
   }
 
   if (listingHasElevator(listing)) score += 4;
-  const extra = Number(listing?.extra_fee) || 0;
+  const extra = extraMonthlyAmount(listing);
   if (extra > 0) score -= 4;
 
   return Math.max(0, Math.min(100, Math.round(score)));

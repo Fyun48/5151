@@ -345,7 +345,8 @@
     }
     #notifyView .card.panel,
     #meView .card.panel,
-    #postView .card.panel {
+    #postView .card.panel,
+    #demandView .card.panel {
       width: min(760px, 100%);
       margin-left: auto;
       margin-right: auto;
@@ -1137,9 +1138,9 @@
     }
     #settingsPanel .profile-row {
       display: flex;
-      flex-wrap: nowrap;
+      flex-wrap: wrap;
       gap: 8px;
-      align-items: stretch;
+      align-items: center;
       min-width: 0;
       width: 100%;
     }
@@ -1149,14 +1150,23 @@
       max-width: none;
     }
     #settingsPanel .profile-row input,
-    #settingsPanel .profile-row select,
-    #settingsPanel .profile-row button {
+    #settingsPanel .profile-row select {
       flex: 1 1 0;
       min-width: 0;
       width: auto;
       max-width: none;
     }
+    #settingsPanel .profile-row button {
+      flex: 0 0 auto;
+      min-width: 4.5rem;
+      height: 40px;
+      padding: 0 16px;
+    }
     #settingsPanel .profile-row #deleteProfileBtn { flex: 0 0 auto; }
+    #settingsPanel .profile-row #saveMsg {
+      flex: 1 1 100%;
+      min-height: 1.2em;
+    }
     .panel-sticky {
       position: sticky;
       top: 0;
@@ -1891,7 +1901,8 @@
       #demandView, #meView, #notifyView, #postView { padding: 0 16px 24px; }
       #notifyView .card.panel,
       #meView .card.panel,
-      #postView .card.panel { width: 100%; }
+      #postView .card.panel,
+      #demandView .card.panel { width: 100%; }
       .site-footer { margin: 8px 16px 88px; }
     }
     @media (max-width: 767px) {
@@ -2040,6 +2051,8 @@
           <input type="number" id="priceMax" min="0" step="1" inputmode="numeric" placeholder="不限" />
         </div>
       </div>
+      <label class="checks"><input type="checkbox" id="priceMaxIncludesExtras" /> 租金上限是包含其它額外需繳的費用</label>
+      <p class="hint">勾選後，租金加上管理費、停車等明文另計月費，超過上限就不顯示。押金等一次性費用不算進去；已含在租金裡的項目也不再加一次。</p>
       <label>坪數上限（幾坪以內，可空白）</label>
       <input type="number" id="areaMax" min="0" max="500" step="0.5" placeholder="不限，例如 30" />
       <p class="hint">大於這個坪數的物件會從列表藏起來，也不通知。空白或 0 表示不限。按儲存就套用已抓到的結果，不必重查 591。</p>
@@ -2153,13 +2166,17 @@
     </main>
   </div>
   <section class="app-view" id="demandView">
-    <div class="card panel">
+    <div class="card panel" id="demandPanel">
       <h2 style="margin:0 0 8px">需求專區</h2>
       <p class="hint" id="demandLegal">這是免費找房工具，不是仲介、不保證媒合、不經手金錢。需求牆是公開留言板，沒有即時私訊。內容由使用者自行負責；平台可隱藏或移除不當貼文。</p>
+      <p class="hint" id="selfGuestHintDemand">登入後才能刊登需求（不是仲介、沒有私訊）。</p>
       <form id="demandForm">
         <p class="hint">訪客可看全部需求。發文、回覆需登入；新帳號須滿 24 小時。同時最多 2 則未過期需求，14 天後失效。</p>
-        <div id="demandDistricts" style="margin:8px 0"></div>
-        <div class="price-row">
+        <div class="self-grid">
+          <div class="span-all">
+            <label>行政區</label>
+            <div id="demandDistricts"></div>
+          </div>
           <div>
             <label>租金上限</label>
             <input type="number" id="demandRentMax" min="0" step="500" placeholder="例如 28000" />
@@ -2174,17 +2191,21 @@
               <option value="whole">整層住家</option>
             </select>
           </div>
+          <div class="span-all">
+            <label class="checks"><input type="checkbox" id="demandMrt" /> 需要可步行捷運（未滿 1.5 公里）</label>
+          </div>
+          <div class="span-all">
+            <label>短述（最多 280 字）</label>
+            <textarea id="demandBody" maxlength="280" placeholder="例如：士林／北投，兩房，近捷運，可養小型寵物"></textarea>
+          </div>
         </div>
-        <label class="checks"><input type="checkbox" id="demandMrt" /> 需要可步行捷運（未滿 1.5 公里）</label>
-        <label>短述（最多 280 字）</label>
-        <textarea id="demandBody" maxlength="280" placeholder="例如：士林／北投，兩房，近捷運，可養小型寵物"></textarea>
         <div class="row" style="margin-top:10px">
           <button type="submit" class="primary" id="demandSubmit">刊登需求</button>
           <span class="save-msg" id="demandMsg"></span>
         </div>
       </form>
+      <div class="list" id="demandList" style="padding-top:12px"><div class="empty">載入需求…</div></div>
     </div>
-    <div class="list" id="demandList" style="padding-top:12px"><div class="empty">載入需求…</div></div>
   </section>
   <section class="app-view" id="notifyView">
     <div class="card panel">
@@ -2630,7 +2651,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.38</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.39</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -3805,6 +3826,7 @@
       $("searchUrls").value = (s.searchUrls || []).join("\n");
       $("priceMin").value = s.priceMin || "";
       $("priceMax").value = s.priceMax || "";
+      if ($("priceMaxIncludesExtras")) $("priceMaxIncludesExtras").checked = s.priceMaxIncludesExtras === true;
       $("areaMax").value = s.areaMax || "";
       $("excludeRooftop").checked = s.excludeRooftop !== false;
       $("intervalMinutes").value = s.systemCrawlIntervalMinutes || s.intervalMinutes || 15;
@@ -4547,6 +4569,7 @@
         watchDistricts,
         priceMin: Number($("priceMin").value) || 0,
         priceMax: Number($("priceMax").value) || 0,
+        priceMaxIncludesExtras: Boolean($("priceMaxIncludesExtras")?.checked),
         areaMax: Number($("areaMax").value) || 0,
         excludeRooftop: $("excludeRooftop") ? $("excludeRooftop").checked : true,
         offlineConfirmDays: meIsAdmin ? (Number($("offlineConfirmDays").value) || 7) : 7,
@@ -4620,8 +4643,11 @@
     }
 
     $("saveBtn").onclick = async () => {
-      const name = $("profileName").value.trim();
-      if (!name) { flash("請先填設定檔名稱"); return; }
+      let name = $("profileName").value.trim();
+      if (!name) {
+        name = "暫存";
+        $("profileName").value = name;
+      }
       if (name.length > 40) { flash("名稱太長"); return; }
       const profiles = Array.isArray(settings?.settingProfiles) ? settings.settingProfiles : [];
       const existing = profiles.some((item) => String(item.name || "").trim() === name);

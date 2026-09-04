@@ -17,7 +17,7 @@ const publicDir = path.join(dir, "../public");
 test("bundled mark exists without Pawprints filename and English name is JibbyRentH", () => {
   assert.equal(APP_NAME, "吉比租房物件追蹤");
   assert.equal(APP_NAME_EN, "JibbyRentH");
-  assert.equal(APP_VERSION, "3.38");
+  assert.equal(APP_VERSION, "3.39");
   assert.equal(existsSync(path.join(publicDir, "brand/mark.png")), true);
   assert.equal(existsSync(path.join(publicDir, "brand/confused.webm")), true);
   assert.equal(existsSync(path.join(publicDir, "brand/walk.webp")), true);

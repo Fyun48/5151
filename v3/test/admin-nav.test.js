@@ -50,5 +50,8 @@ test("admin settings are grouped into clickable categories", () => {
 
   const mail = html.slice(html.indexOf('data-admin-panel="mail"'));
   assert.match(mail, /寄信 SMTP/);
+  assert.match(mail, /社群登入/);
+  assert.match(mail, /id="oauthForm"/);
+  assert.match(mail, /verifiedWelcomeSubject/);
   assert.match(mail, /信件內容/);
 });

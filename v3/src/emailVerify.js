@@ -16,7 +16,7 @@ export function issueVerifyToken(conn, userId, { now = Date.now() } = {}) {
   const expiresAt = new Date(now + VERIFY_TTL_MS).toISOString();
   conn.prepare(
     `UPDATE users
-     SET email_verified = 0, verify_token = ?, verify_expires_at = ?, verify_expire_notified = 0
+     SET email_verified = 0, verify_token = ?, verify_expires_at = ?, verify_expire_notified = 0, verify_used_at = NULL
      WHERE id = ?`,
   ).run(token, expiresAt, Number(userId) || 0);
   return { token, expiresAt };
@@ -25,16 +25,22 @@ export function issueVerifyToken(conn, userId, { now = Date.now() } = {}) {
 export function confirmVerifyToken(conn, token, { now = Date.now() } = {}) {
   const key = String(token || "").trim();
   if (!key) {
-    const err = new Error("確認連結無效或已使用");
-    err.status = 400;
-    err.code = "invalid";
+    const err = new Error("找不到這個開通連結");
+    err.status = 404;
+    err.code = "missing";
     throw err;
   }
   const row = conn.prepare("SELECT * FROM users WHERE verify_token = ?").get(key);
   if (!row) {
-    const err = new Error("確認連結無效或已使用");
-    err.status = 400;
-    err.code = "invalid";
+    const err = new Error("找不到這個開通連結");
+    err.status = 404;
+    err.code = "missing";
+    throw err;
+  }
+  if (String(row.verify_used_at || "").trim() || Number(row.email_verified) === 1) {
+    const err = new Error("這個開通連結已經使用過");
+    err.status = 409;
+    err.code = "used";
     throw err;
   }
   const exp = Date.parse(String(row.verify_expires_at || ""));
@@ -44,9 +50,10 @@ export function confirmVerifyToken(conn, token, { now = Date.now() } = {}) {
     err.code = "expired";
     throw err;
   }
+  const usedAt = new Date(now).toISOString();
   conn.prepare(
-    "UPDATE users SET email_verified = 1, verify_token = NULL, verify_expires_at = NULL, verify_expire_notified = 0 WHERE id = ?",
-  ).run(row.id);
+    "UPDATE users SET email_verified = 1, verify_used_at = ?, verify_expires_at = NULL, verify_expire_notified = 0 WHERE id = ?",
+  ).run(usedAt, row.id);
   return findUserByEmail(conn, row.email) || row;
 }
 

@@ -31,7 +31,7 @@ test("confirm token logs the member in once then dies", () => {
   const ok = confirmVerifyToken(db, token);
   assert.equal(ok.email, "new@b.com");
   assert.equal(isEmailVerified(ok), true);
-  assert.throws(() => confirmVerifyToken(db, token), /無效或已使用/);
+  assert.throws(() => confirmVerifyToken(db, token), /已經使用過/);
 });
 
 test("unused token expires after three days and can notify once", () => {
