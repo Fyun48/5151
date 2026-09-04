@@ -168,6 +168,7 @@ test("left panel floor filters and profile save stay in the settings sheet", () 
   assert.ok(rooftop > 0 && whole > rooftop && low > whole);
   assert.match(panel, /panel-sticky/);
   assert.match(panel, /panel-close/);
+  assert.match(html, /#settingsPanel \.profile-row \{[\s\S]*flex-wrap: nowrap;/);
   const mobile = html.slice(html.indexOf("@media (max-width: 880px)"));
   assert.doesNotMatch(mobile, /\.header-profiles \{ display: none/);
   assert.match(mobile, /#settingsPanel \.panel-sticky/);
