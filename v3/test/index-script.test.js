@@ -522,8 +522,12 @@ test("self listing form and in-site detail stay on this site", () => {
   assert.match(html, /\/api\/self-listings\/photos/);
   assert.match(html, /source === "self"/);
   assert.match(html, /站內刊登/);
-  assert.match(html, /吉比本站/);
-  assert.match(html, /source_label \|\| "591"/);
+  assert.match(html, /function sourceTagHtml/);
+  assert.match(html, /class="tag src-591"/);
+  assert.match(html, /return "吉比本站"/);
+  assert.match(html, /return "591"/);
+  assert.match(html, /\$\{sourceTagHtml\(item\)\}/);
+  assert.doesNotMatch(html, /source_label \|\| "591"/);
   assert.match(html, /id="excludeRooftop"/);
   assert.match(html, /id="wholeFloorOnly"/);
   assert.match(html, /id="excludeLowFloors"/);

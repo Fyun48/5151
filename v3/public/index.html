@@ -823,8 +823,9 @@
     .tag.off-sure { background: var(--tag-strong-bg); color: var(--tag-strong-fg); }
     .tag.verdict-yes { background: var(--tag-strong-bg); color: var(--tag-strong-fg); font-weight: 700; }
     .tag.verdict-no { background: var(--tag-on-bg); color: var(--tag-on-fg); font-weight: 700; }
-    .tag.self-src { background: var(--accent-mist); color: var(--accent-deep); font-weight: 700; }
-    .tag.ext-src { background: var(--same-soft); color: var(--same); font-weight: 700; }
+    .tag.self-src { background: var(--accent-mist); color: var(--accent-deep); font-weight: 800; }
+    .tag.src-591 { background: var(--ink); color: var(--paper); font-weight: 800; }
+    .tag.ext-src { background: var(--same-soft); color: var(--same); font-weight: 800; }
     .tag.fit { background: var(--accent-mist); color: var(--accent-deep); font-variant-numeric: tabular-nums; }
     .self-mine-card {
       margin: 8px 0 0;
@@ -2538,7 +2539,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.27</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.28</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -2807,6 +2808,22 @@
     function listingSource(item) {
       const row = item && typeof item === "object" ? item : listingById(item);
       return String(row?.source || "591") || "591";
+    }
+    function listingSourceLabel(item) {
+      const source = listingSource(item);
+      if (source === "self") return "吉比本站";
+      if (source === "hbhousing") return "住商";
+      if (source === "sinyi") return "信義";
+      if (source === "houseprice") return "5168";
+      if (source === "ddroom") return "租租通";
+      if (source === "housefun") return "好房";
+      if (source === "591" || source === "") return "591";
+      return String(item?.source_label || source || "591");
+    }
+    function sourceTagHtml(item) {
+      const source = listingSource(item);
+      const cls = source === "self" ? "self-src" : (source === "591" || source === "" ? "src-591" : "ext-src");
+      return `<span class="tag ${cls}">${esc(listingSourceLabel(item))}</span>`;
     }
     function isSelfSource(item) {
       return listingSource(item) === "self";
@@ -3726,15 +3743,7 @@
     }
 
     function tags(item) {
-      const bits = [];
-      const source = listingSource(item);
-      if (source === "self") bits.push('<span class="tag self-src">吉比本站</span>');
-      else if (source === "hbhousing") bits.push('<span class="tag ext-src">住商</span>');
-      else if (source === "sinyi") bits.push('<span class="tag ext-src">信義</span>');
-      else if (source === "houseprice") bits.push('<span class="tag ext-src">5168</span>');
-      else if (source === "ddroom") bits.push('<span class="tag ext-src">租租通</span>');
-      else if (source === "housefun") bits.push('<span class="tag ext-src">好房</span>');
-      else bits.push(`<span class="tag ext-src">${esc(item.source_label || "591")}</span>`);
+      const bits = [sourceTagHtml(item)];
       if (item.fit_label && item.fit_score != null) {
         bits.push(`<span class="tag fit" title="依你的租金、樓層與通勤估算，不是成交預測">${esc(item.fit_label)} ${esc(item.fit_score)}</span>`);
       }
@@ -5919,7 +5928,7 @@
       const dock = $("alertDock");
       const inboxHtml = (list) => list.map((item) => `
         <div class="dock-item" data-dock-key="${esc(dockItemKey(item))}">
-          <div class="tags"><span class="tag ${item.type === "new" ? "new" : "same"}">${eventText[item.type] || item.type_label || item.type}</span></div>
+          <div class="tags">${sourceTagHtml(item)}<span class="tag ${item.type === "new" ? "new" : "same"}">${eventText[item.type] || item.type_label || item.type}</span></div>
           <h3 style="margin:6px 0 4px;font-size:16px">
             <a href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-dock-open="${item.post_id}">${esc(item.title || "物件")}</a>
           </h3>

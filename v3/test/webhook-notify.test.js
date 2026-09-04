@@ -196,6 +196,7 @@ test("notify facts add usable ping and housing type instead of 整層住家", ()
     kind_name: "整層住家",
     tags: ["公寓"],
   });
+  assert.match(apt, /^591 · /);
   assert.match(apt, /可使用 22 坪/);
   assert.match(apt, /公寓$/);
   assert.doesNotMatch(apt, /整層住家/);
@@ -220,6 +221,8 @@ test("notify facts add usable ping and housing type instead of 整層住家", ()
   assert.match(kmOnly, /機車路線約 9.4 公里/);
   const car = formatNotifyFacts({ route_km: 18.5, commute_mode: "car", kind_name: "公寓" });
   assert.match(car, /汽車路線約 18.5 公里/);
+  const selfFacts = formatNotifyFacts({ source: "self", kind_name: "整層住家", area_name: "20坪" });
+  assert.match(selfFacts, /^吉比本站 · /);
 });
 
 test("mail notify uses registered address and can be unchecked", () => {
