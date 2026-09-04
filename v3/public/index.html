@@ -7,6 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-title" content="吉比租房" />
   <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/brand/favicon-32.png" />
   <link rel="apple-touch-icon" href="/icons/icon-192.png" />
   <link rel="stylesheet" href="/tokens.css" />
   <link rel="stylesheet" href="/vendor/leaflet/leaflet.css" />
@@ -1901,8 +1902,12 @@
   </script>
   <header>
     <div class="header-main">
-      <div>
-        <h1>吉比租房物件追蹤</h1>
+      <div class="brand-lockup">
+        <img class="brand-mark" src="/brand/mark.png" alt="" width="40" height="34" />
+        <div class="brand-copy">
+          <h1>吉比租房物件追蹤</h1>
+          <p class="brand-en" data-brand-en>JibbyRentH</p>
+        </div>
       </div>
       <div class="row">
         <span class="who-cluster">
@@ -2625,7 +2630,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.30</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.31</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -2667,6 +2672,7 @@
       <div id="mapOverlayHost"></div>
     </div>
   </div>
+  <script src="/mascot.js"></script>
   <script>
     window.__APP_PARSED = true;
     try {
@@ -3314,6 +3320,7 @@
       ev.preventDefault();
       ev.stopPropagation();
       remindGuest();
+      window.JibbyMascot?.noteConfused();
     }, true);
     $("guestToastClose")?.addEventListener("click", hideGuestToast);
 
@@ -4355,6 +4362,7 @@
           : "物件／屋源提醒請用你自己的 SMTP 寄到註冊信箱。註冊、忘記密碼、變更密碼、贊助通知由站方管理員 SMTP 寄出。";
       }
       mePlan = me.plan || "free";
+      window.__ME_SPONSOR = me.sponsor || null;
       document.body.classList.toggle("role-admin", meIsAdmin);
       document.body.classList.toggle("plan-sponsor", mePlan === "sponsor");
       paintSponsorOffer(me.sponsor);
@@ -6500,6 +6508,11 @@
       loadPublicAds().catch(() => {});
       loadBroadcasts().catch(() => {});
       openSelfFromQuery().catch(() => {});
+      window.JibbyMascot?.load?.().then((brand) => {
+        if (!brand) return;
+        if (isGuest) window.JibbyMascot.maybeWelcome();
+        else window.JibbyMascot.maybeSponsor({ plan: mePlan, sponsor: window.__ME_SPONSOR });
+      }).catch(() => {});
       setTimeout(() => map?.invalidateSize(), 250);
       if (!window.__watchStream && !isGuest) {
         const es = new EventSource("/api/events/stream");

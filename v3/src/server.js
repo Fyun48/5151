@@ -50,6 +50,9 @@ import {
   getAdminAdsSettings,
   saveAdminAdsSettings,
   publicAdsSettings,
+  getBrandMascot,
+  saveBrandMascot,
+  applyBrandUpload,
   getAdminBroadcastsSettings,
   saveAdminBroadcastsSettings,
   publicBroadcastsSettings,
@@ -103,6 +106,12 @@ import { buildDemoState } from "./demo.js";
 import { backfillListingCoords, backfillListingMrt, backfillListingRoutes, flushPendingNotifications, runWatch } from "./watcher.js";
 import { LIST_PAGE_SIZE } from "./client591.js";
 import { APP_NAME, APP_VERSION } from "./brand.js";
+import {
+  BRAND_UPLOAD_MAX_BYTES,
+  mimeForBrandFile,
+  saveBrandUpload,
+  brandFilePath,
+} from "./brandMascot.js";
 import { PROFILE_PRIVACY } from "./profile.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -517,6 +526,43 @@ app.put("/api/admin/ads", requireAdminApi, (req, res) => {
 
 app.get("/api/ads", (_req, res) => {
   res.json(publicAdsSettings());
+});
+
+app.get("/api/brand", (_req, res) => {
+  res.json(getBrandMascot());
+});
+
+app.get("/api/admin/brand", requireAdminApi, (_req, res) => {
+  res.json(getBrandMascot());
+});
+
+app.put("/api/admin/brand", requireAdminApi, (req, res) => {
+  try {
+    res.json(saveBrandMascot(req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/admin/brand/file", requireAdminApi, express.raw({ type: () => true, limit: BRAND_UPLOAD_MAX_BYTES }), (req, res) => {
+  try {
+    const upload = saveBrandUpload(Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0));
+    const slot = String(req.query.slot || req.headers["x-brand-slot"] || "").trim();
+    res.json({ ...upload, brand: applyBrandUpload(slot, upload) });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/media/brand/:file", (req, res) => {
+  const full = brandFilePath(req.params.file);
+  if (!full) {
+    res.status(404).end();
+    return;
+  }
+  res.setHeader("Content-Type", mimeForBrandFile(req.params.file));
+  res.setHeader("Cache-Control", "public, max-age=604800");
+  res.sendFile(full);
 });
 
 app.get("/api/admin/broadcasts", requireAdminApi, (_req, res) => {
