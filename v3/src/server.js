@@ -425,9 +425,13 @@ app.get("/verify-email", (req, res) => {
     afterMemberSession(user);
     setSession(req, res, user.email);
     const base = publicBaseUrl(req);
-    queueSystemMail("verified_welcome", user.email, {
-      spiritUrl: `${base}/spirit.html`,
-    });
+    try {
+      queueSystemMail("verified_welcome", user.email, {
+        spiritUrl: `${base}/spirit.html`,
+      });
+    } catch (error) {
+      console.warn("開通歡迎信排隊失敗：", error?.message || error);
+    }
     res.redirect(303, "/login.html?verify=ok");
   } catch (error) {
     const code = error.code === "expired" ? "expired" : error.code === "used" ? "used" : error.code === "missing" ? "missing" : "invalid";

@@ -382,7 +382,7 @@
     } catch (error) {}
     if (showRegister) setMode("register");
     if (showForgot) setMode("forgot");
-    if (verifyState === "ok") $("ok").innerHTML = "信箱已開通，歡迎加入。我們另寄了一封說明信。<a href=\"/spirit.html\">本站理念</a>　<a href=\"/\">進入找房</a>";
+    if (verifyState === "ok") $("ok").innerHTML = "恭喜你，信箱已開通。我們另寄了一封說明信。<a href=\"/spirit.html\">本站理念</a>　<a href=\"/\">進入找房</a>";
     if (verifyState === "expired") $("err").textContent = "確認連結已失效。系統會另寄失效通知，請用同一個信箱重新註冊。";
     if (verifyState === "used") $("err").textContent = "這個開通連結已經使用過。";
     if (verifyState === "missing") $("err").textContent = "找不到這個開通連結。";
