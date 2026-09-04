@@ -66,7 +66,7 @@ export function publicDemoSettings(settings = {}) {
     discordWebhook: "",
     notifyMatrix: settings.notifyMatrix || {},
     ...demoCommutePatch(),
-    showMrt: settings.showMrt !== false,
+    showMrt: true,
     settingProfiles: [],
     activeProfileId: "",
   };

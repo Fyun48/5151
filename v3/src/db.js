@@ -2156,7 +2156,7 @@ export function listingsNeedingMrt(limit = 20) {
 }
 
 function mrtFields(row, settings) {
-  const showMrt = settings?.systemShowMrt !== false && getSystemCrawl().showMrt !== false;
+  const showMrt = getSystemCrawl().showMrt !== false;
   if (!showMrt) {
     return { mrt_station: null, mrt_walk_km: null, mrt_walk_min: null, mrt_ride_km: null, mrt_ride_min: null };
   }

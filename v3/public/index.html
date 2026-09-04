@@ -2836,14 +2836,10 @@
       return hasPin ? ` · ${esc(label)}路線計算中` : " · 尚未取得地圖座標";
     }
 
-    function mrtOn() {
-      return true;
-    }
     function mrtChip(name) {
       return `<span class="mrt-chip">${esc(name)}</span>`;
     }
     function mrtText(item) {
-      if (!mrtOn()) return "";
       const name = String(item.mrt_station || "").trim();
       const walkKm = Number(item.mrt_walk_km);
       if (name && Number.isFinite(walkKm) && walkKm > 0 && walkKm < 1.5) {

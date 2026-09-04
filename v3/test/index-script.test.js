@@ -362,7 +362,7 @@ test("MRT is admin-only and guest tour is in the page", () => {
 test("listing commute copy is kilometers only and does not show rush minutes", () => {
   const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
   const start = html.indexOf("function commuteText");
-  const end = html.indexOf("function mrtOn");
+  const end = html.indexOf("function mrtChip");
   assert.ok(start > 0 && end > start);
   const fn = html.slice(start, end);
   assert.match(fn, /\$\{label\}路線約 \$\{item\.commute_km\} 公里/);

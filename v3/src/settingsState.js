@@ -27,7 +27,6 @@ export const PROFILE_FIELDS = [
   "workAddress",
   "commuteKm",
   "commuteMode",
-  "showMrt",
   "workLat",
   "workLng",
   "watchDistricts",
@@ -203,7 +202,7 @@ export function applySettingPatch(current, partial = {}, { admin = false, plan =
   next.pagesPerWatch = Math.max(1, Math.min(Number(next.pagesPerWatch) || 40, 40));
   next.commuteKm = Math.max(0, Math.min(Number(next.commuteKm) || 0, 80));
   next.commuteMode = normalizeCommuteMode(next.commuteMode);
-  next.showMrt = next.showMrt !== false;
+  next.showMrt = current.showMrt !== false;
   next.workAddress = String(next.workAddress || "").trim().slice(0, 120);
   next.workLat = parseWorkCoord(next.workLat);
   next.workLng = parseWorkCoord(next.workLng);
