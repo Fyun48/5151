@@ -68,9 +68,10 @@ test("composeAccountMail fills welcome, password, and sponsor templates", () => 
     email: "a@b.com",
     spiritUrl: "https://c5151.reversalplay.me/spirit.html",
   });
-  assert.match(verified.subject, /歡迎加入/);
+  assert.match(verified.subject, /恭喜你加入/);
   assert.match(verified.text, /spirit\.html/);
-  assert.match(verified.text, /有沒有贊助都不影響/);
+  assert.match(verified.text, /歡迎正式加入/);
+  assert.match(verified.text, /都不影響你現在就能用/);
   const expired = composeAccountMail("verify_expired", defaultMailTemplates(), { email: "a@b.com" });
   assert.match(expired.subject, /失效/);
   assert.match(expired.text, /3 天/);
