@@ -40,6 +40,7 @@ import {
   pushPayloadFromEvents,
 } from "./db.js";
 import { replaceCrawlCovers, touchCrawlCoversRun } from "./crawlCovers.js";
+import { CRAWL_PAGES_591, CRAWL_PAGES_EXTERNAL } from "./crawlPolicy.js";
 import { fetchCommunityLocation, fetchListingDetail, fetchListings, isListingGoneError, LIST_PAGE_SIZE, mergeFeeRows, probeListingAlive } from "./client591.js";
 import { fetchHbCoveringListings } from "./hbhousing.js";
 import { fetchSinyiCoveringListings } from "./sinyi.js";
@@ -413,9 +414,8 @@ export async function runWatch(options = {}) {
   replaceCrawlCovers(db, jobs);
 
   const isBaseline = settings.hasBaseline !== true && listingCount() === 0;
-  const requested = Number(settings.pagesPerWatch);
-  const pages = Math.min(40, requested > 5 ? requested : 40);
-  const hbPages = Math.min(8, requested > 5 ? requested : 8);
+  const pages = CRAWL_PAGES_591;
+  const hbPages = CRAWL_PAGES_EXTERNAL;
   const collected = [];
   const errors = [];
   const fetchOptions = {

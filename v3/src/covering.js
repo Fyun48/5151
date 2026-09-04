@@ -85,7 +85,7 @@ export function uncoveredMembers(members, jobs) {
   return (members || []).filter((member) => !isCoveredByJobs(member, jobs));
 }
 
-function coversFromWatchDistricts(settings = {}) {
+export function coversFromWatchDistricts(settings = {}) {
   const grouped = new Map();
   for (const key of settings.watchDistricts || []) {
     const [regionRaw, sectionRaw] = String(key).split("-");

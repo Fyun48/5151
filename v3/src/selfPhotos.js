@@ -3,7 +3,8 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 
 export const SELF_PHOTO_MAX_BYTES = 2 * 1024 * 1024;
-export const SELF_PHOTO_MAX_COUNT = 5;
+export const SELF_PHOTO_UPLOAD_MAX_BYTES = 8 * 1024 * 1024;
+export const SELF_PHOTO_MAX_COUNT = 100;
 export const SELF_PHOTO_PUBLIC_PREFIX = "/media/self/";
 
 function dataDir() {

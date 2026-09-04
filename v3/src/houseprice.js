@@ -101,11 +101,63 @@ function decodeEntities(value) {
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
+    .replace(/&#39;/g, "'")
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => {
+      const code = Number.parseInt(hex, 16);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : "";
+    })
+    .replace(/&#(\d+);/g, (_, num) => {
+      const code = Number(num);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : "";
+    });
 }
 
 function stripTags(html) {
   return decodeEntities(String(html || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
+}
+
+function isHpPlaceholderCover(url) {
+  const text = String(url || "").toLowerCase();
+  return /default_cover|no[_-]?photo|placeholder|noimage|nopic/.test(text);
+}
+
+function collectHpImageUrls(card) {
+  const html = String(card || "");
+  const found = [];
+  const attrRe = /(?:src|data-src|data-original|data-lazy|data-bg)\s*=\s*"([^"]+)"/gi;
+  let attr;
+  while ((attr = attrRe.exec(html))) found.push(attr[1]);
+  const srcsetRe = /srcset\s*=\s*"([^"]+)"/gi;
+  let set;
+  while ((set = srcsetRe.exec(html))) {
+    for (const part of String(set[1] || "").split(",")) {
+      const url = part.trim().split(/\s+/)[0];
+      if (url) found.push(url);
+    }
+  }
+  const out = [];
+  const seen = new Set();
+  for (const raw of found) {
+    const url = decodeEntities(raw).trim();
+    if (!url || seen.has(url)) continue;
+    if (/^data:/i.test(url)) continue;
+    if (/\.svg(\?|$)/i.test(url)) continue;
+    if (isHpPlaceholderCover(url)) continue;
+    seen.add(url);
+    out.push(url);
+  }
+  return out;
+}
+
+export function pickHpCover(card) {
+  const urls = collectHpImageUrls(card);
+  const preferred = urls.find((url) => /image\.houseprice\.tw|hpimage|\/house\/.*\.(jpe?g|png|webp)/i.test(url));
+  return preferred || urls[0] || "";
+}
+
+export function titleFromHpCard(card) {
+  const block = String(card || "").match(/<h2\b[^>]*>([\s\S]*?)<\/h2>/i);
+  return stripTags(block?.[1] || "");
 }
 
 export function parseHpListHtml(html) {
@@ -120,8 +172,8 @@ export function parseHpListHtml(html) {
     const card = marker + (end >= 0 ? part.slice(0, end + "</section>".length) : part);
     const idMatch = card.match(/house\/(\d+(?:_\d+)?)/);
     if (!idMatch) continue;
-    const imgMatch = card.match(/<img[^>]+src="([^"]+)"/i);
-    const titleMatch = card.match(/<h2[^>]*>\s*([^<]+?)\s*<\/h2>/i);
+    const cover = pickHpCover(card);
+    const title = titleFromHpCard(card);
     const addressMatch = card.match(/location-filled[\s\S]{0,180}?<span>\s*([^<]+)\s*<\/span>/i)
       || card.match(/台北市[^<]{2,40}區[^<]{0,40}/)
       || card.match(/新北市[^<]{2,40}區[^<]{0,40}/);
@@ -133,10 +185,10 @@ export function parseHpListHtml(html) {
     const floorMatch = stripTags(card).match(/(\d+\s*\/\s*\d+)\s*樓/);
     items.push({
       id: idMatch[1],
-      title: decodeEntities(String(titleMatch?.[1] || "").trim()),
+      title,
       address: decodeEntities(String(addressMatch?.[1] || addressMatch?.[0] || "").trim()),
       community: decodeEntities(String(communityMatch?.[1] || "").trim()),
-      cover: decodeEntities(String(imgMatch?.[1] || "").trim()),
+      cover,
       price: Number(priceMatch?.[1]) || 0,
       kind,
       areaName: areaMatch ? `${areaMatch[1].replace(/\.0$/, "")}坪` : "",

@@ -63,6 +63,8 @@ import {
   saveHelpQa,
   getCrawlSources,
   saveCrawlSources,
+  getSystemCrawl,
+  saveSystemCrawl,
   listDemand,
   getDemand,
   createDemand,
@@ -88,7 +90,7 @@ import { listingRedirectTarget } from "./openLink.js";
 import {
   mimeForSelfPhoto,
   saveSelfPhoto,
-  SELF_PHOTO_MAX_BYTES,
+  SELF_PHOTO_UPLOAD_MAX_BYTES,
   selfPhotoFilePath,
 } from "./selfPhotos.js";
 import { CITIES } from "./regions.js";
@@ -572,6 +574,18 @@ app.put("/api/admin/crawl-sources", requireAdminApi, (req, res) => {
   }
 });
 
+app.get("/api/admin/system-crawl", requireAdminApi, (_req, res) => {
+  res.json(getSystemCrawl());
+});
+
+app.put("/api/admin/system-crawl", requireAdminApi, (req, res) => {
+  try {
+    res.json(saveSystemCrawl(req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
 app.post("/api/demand", (req, res) => {
   try {
     const session = readSession(req);
@@ -670,7 +684,7 @@ app.post("/api/self-listings", (req, res) => {
   }
 });
 
-app.post("/api/self-listings/photos", express.raw({ type: () => true, limit: SELF_PHOTO_MAX_BYTES }), (req, res) => {
+app.post("/api/self-listings/photos", express.raw({ type: () => true, limit: SELF_PHOTO_UPLOAD_MAX_BYTES }), (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
