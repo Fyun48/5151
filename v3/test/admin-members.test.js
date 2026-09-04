@@ -88,6 +88,8 @@ test("admin API routes exist and members payload is guarded", () => {
   assert.match(src, /\/api\/admin\/members/);
   assert.match(src, /\/api\/admin\/mail/);
   assert.match(src, /\/api\/admin\/sponsor/);
+  assert.match(src, /\/api\/admin\/ads/);
+  assert.match(src, /app\.get\("\/api\/ads"/);
   assert.match(src, /\/api\/admin\/maps/);
   const backfillFn = src.slice(src.indexOf("function queueGeoBackfill"), src.indexOf("async function tick"));
   assert.ok(backfillFn.indexOf("backfillListingRoutes") < backfillFn.indexOf("backfillListingCoords"));

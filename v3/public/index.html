@@ -253,7 +253,9 @@
     html.no-session #mePasswordBtn,
     html.no-session #meDeleteBtn,
     html.no-session #meWatchBtn,
-    html.no-session #helpQaBtn { display: none !important; }
+    html.no-session #helpQaBtn,
+    html.no-session #ownerFab,
+    html.no-session #profileForm { display: none !important; }
     body.role-guest #selfListingForm { display: none !important; }
     body:not(.role-guest) #selfGuestHint { display: none; }
     html.has-session #loginBtn,
@@ -270,7 +272,9 @@
     body.role-guest #meWatchBtn,
     body.role-guest #helpQaBtn,
     body.role-guest #helpQaDialog,
-    body.role-guest #sponsorBar { display: none !important; }
+    body.role-guest #sponsorBar,
+    body.role-guest #ownerFab,
+    body.role-guest #profileForm { display: none !important; }
     body.role-guest .panel input,
     body.role-guest .panel textarea,
     body.role-guest .panel select,
@@ -535,13 +539,20 @@
     }
     .chip {
       border: 1px solid var(--line);
-      background: var(--paper);
+      background: var(--bg);
       color: var(--ink);
-      padding: 6px 11px;
+      padding: 3px 11px;
       border-radius: 999px;
+      font-size: 15px;
+      line-height: 1.3;
       transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
     }
-    .chip.on { background: var(--accent); border-color: var(--accent); color: var(--primary-foreground); }
+    .chip.on {
+      background: var(--accent-deep);
+      border-color: var(--accent-deep);
+      color: var(--primary-foreground);
+      font-weight: 700;
+    }
     .bulk-bar {
       display: none;
       align-items: center;
@@ -881,14 +892,19 @@
       display: none;
       position: static;
       margin: 0;
-      padding: 8px 16px;
+      padding: 5px 14px;
       font-size: var(--text-sm);
       font-weight: 700;
+      line-height: 1.2;
+      text-align: center;
+      align-items: center;
+      justify-content: center;
       color: var(--primary-foreground);
       background: var(--accent);
       border: 1px solid var(--accent);
       box-shadow: none;
-      min-height: 44px;
+      min-height: 0;
+      height: auto;
       border-radius: 999px;
     }
     body.panel-collapsed .filter-restore-btn:hover:not(:disabled) {
@@ -1090,6 +1106,35 @@
       box-shadow: 0 10px 24px rgba(15, 111, 106, 0.22);
     }
     #ownerFab[hidden] { display: none !important; }
+    .ad-slot[hidden] { display: none !important; }
+    .ad-card {
+      display: grid;
+      gap: 6px;
+      margin: 10px 0 4px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--paper);
+      color: inherit;
+      text-decoration: none;
+    }
+    .ad-card:hover { border-color: var(--accent); }
+    .ad-kicker {
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      text-transform: none;
+    }
+    .ad-card strong { font-size: 15px; font-weight: 600; }
+    .ad-card span:last-child { font-size: 13px; color: var(--muted); line-height: 1.55; }
+    .ad-card-image {
+      width: 100%;
+      max-height: 120px;
+      object-fit: cover;
+      border-radius: 8px;
+      background: var(--accent-mist);
+    }
+    .ad-slot.me { margin: 0 0 14px; }
     .owner-list { display: grid; gap: 10px; margin-top: 12px; }
     body:not(.role-admin) .admin-only { display: none !important; }
     body.role-admin .member-only { display: none !important; }
@@ -1307,11 +1352,18 @@
         -webkit-box-orient: vertical;
         overflow: hidden;
       }
-      #openFilterSheetBtn,
-      .filter-restore-btn {
+      #openFilterSheetBtn {
         min-height: 44px;
         padding: 8px 16px;
         font-weight: 700;
+      }
+      .filter-restore-btn {
+        min-height: 0;
+        padding: 5px 14px;
+        font-weight: 700;
+        text-align: center;
+        align-items: center;
+        justify-content: center;
       }
       .toolbar {
         flex-direction: column;
@@ -1334,9 +1386,9 @@
       }
       .chip-row .chip {
         flex: 0 0 auto;
-        min-height: var(--touch);
-        padding: 8px 13px;
-        font-size: var(--text-sm);
+        min-height: 0;
+        padding: 5px 13px;
+        font-size: 14px;
       }
       .view-filters {
         flex-direction: column;
@@ -1472,7 +1524,7 @@
       .chip-row::-webkit-scrollbar { display: none; }
       .chip-row .chip {
         flex: 0 0 auto;
-        min-height: 36px;
+        min-height: 33px;
       }
     }
   </style>
@@ -1758,7 +1810,9 @@
         <div class="view-filters">
           <label><input type="checkbox" id="wholeFloorOnly" /> 只看整層住家</label>
           <label><input type="checkbox" id="excludeLowFloors" /> 排除 1F 及以下（含地下室、整棟、頂加）</label>
-          <span class="hint" style="margin:0">篩選列表與通知；不影響 591 抓取與左側統計。勾選後立即生效並寫入設定。</span>
+          <label><input type="checkbox" id="needCourtyard" /> 有中庭（選填）</label>
+          <label><input type="checkbox" id="needBalcony" /> 有陽台（選填）</label>
+          <span class="hint" style="margin:0">篩選列表與通知；不影響 591 抓取與左側統計。勾選後立即生效並寫入設定。中庭／陽台只篩站內刊登，其他網站沒有這項資料，不會被排除。</span>
         </div>
         </div>
         <div class="district-block">
@@ -1766,6 +1820,7 @@
         </div>
         <button type="button" class="filter-mini-btn ghost" id="filterMiniBtn" title="收合篩選" aria-label="收合篩選">×</button>
       </div>
+      <div class="ad-slot" id="adListings" hidden></div>
       <div class="list" id="list" data-tour="list"><div class="empty">尚未載入列表</div></div>
     </main>
   </div>
@@ -1838,6 +1893,7 @@
         </div>
       </form>
     </div>
+    <div class="ad-slot me" id="adMe" hidden></div>
     <div class="card panel" data-tour="notify">
       <h2 style="margin:0 0 8px">帳號</h2>
       <p class="hint">通知種類、推播與 Discord／SMTP 請到「通知」。這裡管帳號本身。</p>
@@ -1861,6 +1917,7 @@
       <p class="hint" id="selfLegal">這是免費找房工具，不是仲介、不保證媒合、不經手金錢。自行刊登是公開物件摘要，沒有即時私訊。</p>
       <p class="hint" id="selfAudit">站內物件會不定期抽查。若發現不實、惡作劇或明顯誤導，系統會自動下架，並暫停該帳號上傳物件 14 天。這不是仲介認證，也不保證屋況屬實。</p>
       <p class="hint">同時最多 3 則、30 天後失效。新帳號須滿 24 小時。找房列表預設仍只顯示整層住家。</p>
+      <p class="hint" id="selfRichHint">來看的人最常問的，其實多半寫在這裡就能先答完。多勾一項、多寫一句，之後就少被重複打擾，也比較快遇到適合的人。</p>
       <form id="selfListingForm">
         <label>行政區</label>
         <select id="selfDistrict"></select>
@@ -1947,6 +2004,7 @@
           <option value="talk">押金面議</option>
         </select>
         <div id="selfTraitGroups"></div>
+        <p class="hint" id="selfTraitNudge" hidden>社區大樓的話，中庭與陽台常常是租客想先知道的。有的話點一下就好。</p>
         <label>說明（最多 500 字）</label>
         <div class="body-templates" id="selfBodyTemplates">
           <button type="button" class="ghost" data-body-tpl="family">套用：家庭整層</button>
@@ -2186,7 +2244,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver">ver. 3.20</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver">ver. 3.21</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -2551,6 +2609,8 @@
     const VIEW_KEY = "591-view-districts";
     const VIEW_WHOLE_KEY = "591-view-whole-floor";
     const VIEW_LOW_FLOOR_KEY = "591-view-exclude-low";
+    const VIEW_COURTYARD_KEY = "591-view-need-courtyard";
+    const VIEW_BALCONY_KEY = "591-view-need-balcony";
     try {
       const saved = JSON.parse(sessionStorage.getItem(VIEW_KEY) || "[]");
       if (Array.isArray(saved)) viewDistricts = new Set(saved);
@@ -2570,12 +2630,18 @@
       } else {
         $("excludeLowFloors").checked = low === null ? true : low === "1";
       }
+      const yard = sessionStorage.getItem(VIEW_COURTYARD_KEY);
+      const balc = sessionStorage.getItem(VIEW_BALCONY_KEY);
+      if ($("needCourtyard")) $("needCourtyard").checked = yard === "1";
+      if ($("needBalcony")) $("needBalcony").checked = balc === "1";
       saveViewFilters();
     }
 
     function saveViewFilters() {
       sessionStorage.setItem(VIEW_WHOLE_KEY, $("wholeFloorOnly").checked ? "1" : "0");
       sessionStorage.setItem(VIEW_LOW_FLOOR_KEY, $("excludeLowFloors").checked ? "1" : "0");
+      if ($("needCourtyard")) sessionStorage.setItem(VIEW_COURTYARD_KEY, $("needCourtyard").checked ? "1" : "0");
+      if ($("needBalcony")) sessionStorage.setItem(VIEW_BALCONY_KEY, $("needBalcony").checked ? "1" : "0");
     }
 
     async function persistViewFilters() {
@@ -2627,7 +2693,48 @@
       if ($("excludeLowFloors").checked) {
         out = out.filter((item) => !isAtOrBelowFirstFloor(item.floor_name));
       }
+      if ($("needCourtyard")?.checked) {
+        out = out.filter((item) => String(item.source || "") !== "self" || listingHasTrait(item, "courtyard"));
+      }
+      if ($("needBalcony")?.checked) {
+        out = out.filter((item) => String(item.source || "") !== "self" || listingHasTrait(item, "balcony"));
+      }
       return out;
+    }
+
+    function listingHasTrait(item, id) {
+      const labels = { courtyard: "中庭", balcony: "陽台" };
+      const label = labels[id];
+      if (!label) return false;
+      if ((item.trait_labels || []).some((row) => String(row).includes(label))) return true;
+      return String(item.tags || "").includes(label);
+    }
+
+    function renderAdSlot(el, ad) {
+      if (!el) return;
+      if (!ad || !ad.title) {
+        el.hidden = true;
+        el.innerHTML = "";
+        return;
+      }
+      el.hidden = false;
+      const href = ad.url || "";
+      const img = ad.image_url ? `<img class="ad-card-image" src="${esc(ad.image_url)}" alt="">` : "";
+      el.innerHTML = href
+        ? `<a class="ad-card" href="${esc(href)}" target="_blank" rel="noopener noreferrer"><span class="ad-kicker">贊助訊息</span>${img}<strong>${esc(ad.title)}</strong><span>${esc(ad.text || "")}</span></a>`
+        : `<div class="ad-card"><span class="ad-kicker">贊助訊息</span>${img}<strong>${esc(ad.title)}</strong><span>${esc(ad.text || "")}</span></div>`;
+    }
+
+    async function loadPublicAds() {
+      try {
+        const res = await fetch("/api/ads", { cache: "no-store" });
+        const ads = await res.json().catch(() => ({}));
+        renderAdSlot($("adListings"), ads.listings);
+        renderAdSlot($("adMe"), ads.me);
+      } catch {
+        renderAdSlot($("adListings"));
+        renderAdSlot($("adMe"));
+      }
     }
 
     function applyListView(items) {
@@ -2838,7 +2945,7 @@
 
     function isGuestLockedTarget(el) {
       if (!el || !isGuest) return false;
-      if (el.closest("#collapsePanelBtn, #expandPanelBtn, #reloadBtn, #loginBtn, #registerBtn, #helpQaBtn, #helpQaDialog, #guestToast, #guestTour, #listHeadSticky .chip, #q, #wholeFloorOnly, #excludeLowFloors, [data-view-district], [data-open-hub], #notifyHubClose, [data-close-hub], [data-hub-tab]")) return false;
+      if (el.closest("#collapsePanelBtn, #expandPanelBtn, #reloadBtn, #loginBtn, #registerBtn, #helpQaBtn, #helpQaDialog, #guestToast, #guestTour, #listHeadSticky .chip, #q, #wholeFloorOnly, #excludeLowFloors, #needCourtyard, #needBalcony, [data-view-district], [data-open-hub], #notifyHubClose, [data-close-hub], [data-hub-tab]")) return false;
       if (el.closest(".item-cover, h3 a, a.tel, .line-qr")) return false;
       if (el.closest("#notifyHubSave, #memberMailTest, #gmailPresetBtn")) return true;
       if (el.closest("#notifyHub")) return true;
@@ -3488,8 +3595,8 @@
         if (q) msg = `沒有符合「${q}」的物件。試試較短關鍵字，或清掉搜尋看全部列表。`;
         else if (viewDistricts.size) {
           msg = "這個行政區篩選目前沒有物件。可點「全部」或再勾其他區。";
-        } else if ($("wholeFloorOnly").checked || $("excludeLowFloors").checked) {
-          msg = "目前沒有符合右側「整層／樓層」顯示篩選的物件。取消勾選可看到更多已抓到的結果。";
+        } else if ($("wholeFloorOnly").checked || $("excludeLowFloors").checked || $("needCourtyard")?.checked || $("needBalcony")?.checked) {
+          msg = "目前沒有符合右側「整層／樓層／中庭／陽台」顯示篩選的物件。取消勾選可看到更多已抓到的結果。中庭與陽台只篩站內刊登。";
         } else if (filter === "suspected") {
           msg = "目前沒有被判成同一屋源的重刊。隱藏或已瀏覽的舊屋若再上架，會出現在這裡。";
         } else if (filter === "offline") {
@@ -4203,16 +4310,16 @@
       prefix.textContent = host?.value && label ? label.replace(/\s+/g, "") : "請先選行政區";
     }
     const SELF_BODY_TPL = {
-      family: "屋況整潔、採光佳，適合小家庭。可使用坪數已扣除公設。可遷入日可再約看屋時間確認。沒有站內私訊，請用公開電話或 LINE 聯絡。",
-      suite: "獨立衛浴，家具家電可再看現場。可使用坪數已扣除公設。適合一人入住。沒有站內私訊，請用公開電話或 LINE 聯絡。",
-      "near-mrt": "步行可到捷運，適合通勤。可使用坪數已扣除公設。歡迎先約看再決定。沒有站內私訊，請用公開電話或 LINE 聯絡。",
+      family: "屋況整潔、採光佳，適合小家庭。可使用坪數已扣除公設。社區大樓可順便標中庭、陽台。可遷入日可再約看屋時間確認。沒有站內私訊，請用公開電話或 LINE 聯絡。",
+      suite: "獨立衛浴，家具家電可再看現場。可使用坪數已扣除公設。有陽台或中庭的話點一下就好。適合一人入住。沒有站內私訊，請用公開電話或 LINE 聯絡。",
+      "near-mrt": "步行可到捷運，適合通勤。可使用坪數已扣除公設。社區大樓可順便標中庭、陽台。歡迎先約看再決定。沒有站內私訊，請用公開電話或 LINE 聯絡。",
     };
     const SELF_TRAIT_GROUPS = [
       { id: "living", label: "生活條件", items: [
         { id: "cook", label: "可開伙" }, { id: "pet", label: "可養寵物" }, { id: "short", label: "可短租" }, { id: "tax", label: "可報稅" }, { id: "mrt", label: "近捷運" },
       ] },
       { id: "building", label: "建物", items: [
-        { id: "elevator", label: "有電梯" }, { id: "parking", label: "有車位" }, { id: "balcony", label: "有陽台" }, { id: "manage", label: "有管理室" }, { id: "trash", label: "垃圾集中" },
+        { id: "elevator", label: "有電梯" }, { id: "parking", label: "有車位" }, { id: "community", label: "社區大樓" }, { id: "courtyard", label: "有中庭" }, { id: "balcony", label: "有陽台" }, { id: "manage", label: "有管理室" }, { id: "trash", label: "垃圾集中" },
       ] },
       { id: "gear", label: "設備", items: [
         { id: "ac", label: "冷氣" }, { id: "washer", label: "洗衣機" }, { id: "fridge", label: "冰箱" }, { id: "net", label: "網路" }, { id: "heater", label: "熱水器" }, { id: "bed", label: "床" }, { id: "closet", label: "衣櫃" }, { id: "sofa", label: "沙發" },
@@ -4233,6 +4340,13 @@
         </div>
       `).join("");
       host.dataset.ready = "1";
+      host.addEventListener("change", syncCommunityNudge);
+      syncCommunityNudge();
+    }
+    function syncCommunityNudge() {
+      const community = document.querySelector('#selfTraitGroups input[value="community"]');
+      const box = $("selfTraitNudge");
+      if (box) box.hidden = !community?.checked;
     }
     function collectedSelfTraits() {
       return [...document.querySelectorAll('#selfTraitGroups input[name="selfTrait"]:checked')].map((el) => el.value);
@@ -4330,6 +4444,7 @@
       if (data.legal && $("selfLegal")) $("selfLegal").textContent = data.legal;
       if (data.audit && $("selfAudit")) $("selfAudit").textContent = data.audit;
       if (data.pledge && $("selfPledgeText")) $("selfPledgeText").textContent = data.pledge;
+      if (data.rich_hint && $("selfRichHint")) $("selfRichHint").textContent = data.rich_hint;
       const rows = data.listings || [];
       box.innerHTML = rows.length
         ? rows.map((item) => ownerCardHtml(item)).join("")
@@ -4624,7 +4739,7 @@
         });
         const data = await readApi(res);
         if (!res.ok) throw new Error(data.error || "刊登失敗");
-        if (msg) msg.textContent = "已刊登";
+        if (msg) msg.textContent = "已刊登。資料寫得越清楚，來看的人越少再問一遍。";
         if ($("selfBody")) $("selfBody").value = "";
         if ($("selfPhotos")) $("selfPhotos").value = "";
         if ($("selfPhotoPreview")) {
@@ -4894,6 +5009,14 @@
       persistViewFilters();
       loadList();
     };
+    $("needCourtyard")?.addEventListener("change", () => {
+      persistViewFilters();
+      loadList();
+    });
+    $("needBalcony")?.addEventListener("change", () => {
+      persistViewFilters();
+      loadList();
+    });
     $("selectPageBtn").onclick = () => {
       document.querySelectorAll("[data-pick]").forEach((el) => {
         el.checked = true;
@@ -5684,6 +5807,7 @@
       fillSelfDistricts();
       paintSelfTraits();
       loadMineSelfListings().catch(() => {});
+      loadPublicAds().catch(() => {});
       openSelfFromQuery().catch(() => {});
       setTimeout(() => map?.invalidateSize(), 250);
       if (!window.__watchStream && !isGuest) {
