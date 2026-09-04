@@ -22,6 +22,14 @@ test("shared crawl uses fixed page depth and a 15-minute default interval", () =
   assert.match(admin, /id="systemShowMrt"/);
   assert.match(admin, /全站顯示步行未滿 1\.5 公里的最近捷運站/);
   assert.match(admin, /會員畫面沒有這個選項/);
+  assert.match(admin, /id="systemCrawlSelectAll"/);
+  assert.match(admin, /id="systemCrawlSelectNone"/);
+  assert.match(admin, /data-city-toggle/);
+  assert.match(admin, /data-city-all/);
+  assert.match(admin, /data-city-none/);
+  assert.match(admin, /district-city:not\(\.is-open\) \.districts \{ display: none; \}/);
+  assert.match(admin, />取消<\/button>/);
+  assert.doesNotMatch(admin, /flex:1 1 280px/);
   const dbSrc = readFileSync(path.join(dir, "../src/db.js"), "utf8");
   const mrtFn = dbSrc.slice(dbSrc.indexOf("function mrtFields"), dbSrc.indexOf("export function setCachedRoute"));
   assert.match(mrtFn, /getSystemCrawl\(\)\.showMrt/);

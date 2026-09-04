@@ -114,6 +114,48 @@
     @media (max-width: 800px) {
       .extras-row { grid-template-columns: 1fr; }
     }
+    .district-toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 4px; }
+    .district-city { margin: 8px 0 12px; }
+    .district-city-head { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; }
+    .district-city-toggle {
+      margin: 0;
+      font-size: 14px;
+      flex: 1;
+      min-width: 0;
+      cursor: pointer;
+      user-select: none;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: 650;
+      color: var(--ink);
+    }
+    .district-city-toggle:hover { color: var(--accent); }
+    .district-city-toggle .chev {
+      display: inline-block;
+      font-size: 11px;
+      color: var(--muted);
+      transform: rotate(-90deg);
+      transition: transform 0.15s ease;
+    }
+    .district-city.is-open .district-city-toggle .chev { transform: rotate(0deg); }
+    .district-city:not(.is-open) .districts { display: none; }
+    .district-city-head button { padding: 4px 10px; font-size: 12px; }
+    .districts { display: flex; flex-wrap: wrap; gap: 6px; }
+    .districts label {
+      margin: 0;
+      color: var(--ink);
+      display: flex;
+      gap: 5px;
+      align-items: center;
+      font-size: 13px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 5px 10px;
+    }
+    .districts label.on { background: var(--accent); color: var(--primary-foreground); border-color: var(--accent); }
+    .districts input { width: auto; margin: 0; }
     @media (max-width: 800px) {
       .grid-2 { grid-template-columns: 1fr; }
       header, .wrap { padding-left: 16px; padding-right: 16px; }
@@ -294,7 +336,12 @@
         <label>全站檢查間隔（分鐘）</label>
         <input id="systemCrawlInterval" type="number" min="1" max="120" value="15" />
         <label class="checks" style="display:block;margin:10px 0 0"><input type="checkbox" id="systemShowMrt" checked /> 全站顯示步行未滿 1.5 公里的最近捷運站</label>
-        <div id="systemCrawlDistricts" class="districts" style="display:flex;flex-wrap:wrap;gap:8px 14px;margin:12px 0"></div>
+        <label>底庫行政區</label>
+        <div class="district-toolbar">
+          <button type="button" class="ghost" id="systemCrawlSelectAll">全選</button>
+          <button type="button" class="ghost" id="systemCrawlSelectNone">取消</button>
+        </div>
+        <div id="systemCrawlDistricts"></div>
         <div class="row">
           <button type="submit" class="primary" id="systemCrawlSave">儲存底庫與間隔</button>
         </div>
@@ -825,21 +872,85 @@
       renderCrawlSources(data.items || []);
     }
 
+    function districtChipLabel(name) {
+      const text = String(name || "");
+      const stripped = text.replace(/區$/, "");
+      return stripped.length < 2 ? text : stripped;
+    }
+
+    function cityHasSelected(city, selected) {
+      return (city.districts || []).some((district) => selected.has(`${city.id}-${district.id}`));
+    }
+
+    function setSystemDistrictChecked(el, checked) {
+      el.checked = checked;
+      el.closest("label")?.classList.toggle("on", checked);
+    }
+
+    function setCityAccordionOpen(block, open) {
+      if (!block) return;
+      block.classList.toggle("is-open", open);
+      block.querySelector("[data-city-toggle]")?.setAttribute("aria-expanded", open ? "true" : "false");
+    }
+
+    function bindSystemCityAccordion(root) {
+      if (!root) return;
+      root.querySelectorAll("[data-city-toggle]").forEach((el) => {
+        const apply = (open) => setCityAccordionOpen(el.closest(".district-city"), open);
+        el.onclick = (ev) => {
+          ev.preventDefault();
+          apply(!el.closest(".district-city")?.classList.contains("is-open"));
+        };
+        el.onkeydown = (ev) => {
+          if (ev.key !== "Enter" && ev.key !== " ") return;
+          ev.preventDefault();
+          apply(!el.closest(".district-city")?.classList.contains("is-open"));
+        };
+      });
+      root.querySelectorAll("[data-city-all]").forEach((btn) => {
+        btn.onclick = () => {
+          const prefix = `${btn.dataset.cityAll}-`;
+          root.querySelectorAll("[data-system-district]").forEach((el) => {
+            if (el.value.startsWith(prefix)) setSystemDistrictChecked(el, true);
+          });
+          setCityAccordionOpen(btn.closest(".district-city"), true);
+        };
+      });
+      root.querySelectorAll("[data-city-none]").forEach((btn) => {
+        btn.onclick = () => {
+          const prefix = `${btn.dataset.cityNone}-`;
+          root.querySelectorAll("[data-system-district]").forEach((el) => {
+            if (el.value.startsWith(prefix)) setSystemDistrictChecked(el, false);
+          });
+        };
+      });
+      root.querySelectorAll("[data-system-district]").forEach((el) => {
+        el.onchange = () => el.closest("label")?.classList.toggle("on", el.checked);
+      });
+    }
+
     function renderSystemCrawlDistricts(cities, selected) {
       const host = $("systemCrawlDistricts");
       if (!host) return;
       const on = new Set(selected || []);
-      host.innerHTML = (cities || []).map((city) => `
-        <div style="flex:1 1 280px">
-          <strong>${city.name}</strong>
-          <div style="display:flex;flex-wrap:wrap;gap:6px 12px;margin-top:6px">
-            ${(city.districts || []).map((d) => {
-              const key = `${city.id}-${d.id}`;
-              return `<label class="checks"><input type="checkbox" data-system-district value="${key}" ${on.has(key) ? "checked" : ""} />${String(d.name || "").replace(/區$/, "")}</label>`;
-            }).join("")}
-          </div>
-        </div>
-      `).join("");
+      host.innerHTML = (cities || []).map((city) => {
+        const open = cityHasSelected(city, on);
+        const boxes = (city.districts || []).map((district) => {
+          const key = `${city.id}-${district.id}`;
+          const checked = on.has(key);
+          return `<label class="${checked ? "on" : ""}"><input type="checkbox" data-system-district value="${escapeHtml(key)}" ${checked ? "checked" : ""} />${escapeHtml(districtChipLabel(district.name))}</label>`;
+        }).join("");
+        return `
+          <div class="district-city ${open ? "is-open" : ""}" data-city-block="${city.id}">
+            <div class="district-city-head">
+              <h3 class="district-city-toggle" data-city-toggle="${city.id}" role="button" tabindex="0" aria-expanded="${open ? "true" : "false"}"><span class="chev" aria-hidden="true">▾</span>${escapeHtml(city.name)}</h3>
+              <button type="button" class="ghost" data-city-all="${city.id}">全選</button>
+              <button type="button" class="ghost" data-city-none="${city.id}">取消</button>
+            </div>
+            <div class="districts">${boxes}</div>
+          </div>`;
+      }).join("");
+      bindSystemCityAccordion(host);
     }
 
     async function loadSystemCrawl() {
@@ -1431,6 +1542,14 @@
           $("crawlSave").disabled = false;
         }
       };
+      $("systemCrawlSelectAll").onclick = () => {
+        const host = $("systemCrawlDistricts");
+        host?.querySelectorAll("[data-system-district]").forEach((el) => setSystemDistrictChecked(el, true));
+        host?.querySelectorAll(".district-city").forEach((block) => setCityAccordionOpen(block, true));
+      };
+      $("systemCrawlSelectNone").onclick = () => {
+        $("systemCrawlDistricts")?.querySelectorAll("[data-system-district]").forEach((el) => setSystemDistrictChecked(el, false));
+      };
       $("systemCrawlForm").onsubmit = async (ev) => {
         ev.preventDefault();
         $("systemCrawlSave").disabled = true;
@@ -1462,6 +1581,6 @@
       setMsg("memberMsg", error.message || "載入失敗");
     });
   </script>
-  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.33</span></footer>
+  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.34</span></footer>
 </body>
 </html>
