@@ -161,7 +161,8 @@ test("left panel floor filters and profile save stay in the settings sheet", () 
   assert.match(panel, /id="saveBtn"/);
   assert.match(panel, /id="excludeRooftop"/);
   assert.match(panel, /id="wholeFloorOnly"/);
-  assert.match(panel, /id="excludeLowFloors"/);
+  assert.match(panel, /排除 1F 及地下室/);
+  assert.doesNotMatch(panel, /含地下室、整棟、頂加/);
   const rooftop = panel.indexOf("excludeRooftop");
   const whole = panel.indexOf("wholeFloorOnly");
   const low = panel.indexOf("excludeLowFloors");
@@ -329,13 +330,13 @@ test("product name is 吉比租房物件追蹤 without v2 開發版 copy", () =>
   assert.equal(html.includes("v2 開發版"), false);
   assert.equal(html.includes("v3 開發版"), false);
   assert.equal(html.includes("與線上版分開的資料庫"), false);
-  assert.match(html, /ver\. 3\.29/);
+  assert.match(html, /ver\. 3\.30/);
   assert.doesNotMatch(html, /<h1>[^<]*v3/i);
   assert.match(login, /<h1>吉比租房物件追蹤<\/h1>/);
   assert.equal(login.includes("v2 開發版"), false);
   assert.equal(login.includes("v3 開發版"), false);
   assert.equal(login.includes("資料與線上版分開"), false);
-  assert.match(login, /ver\. 3\.29/);
+  assert.match(login, /ver\. 3\.30/);
 });
 
 test("MRT toggle and guest tour are in the page", () => {

@@ -61,14 +61,15 @@ export function normalizeListQuery(filter, kind) {
   return { filter: section, kind: housing };
 }
 
+/** 1F、地面／騎樓、地下室。不含整棟、頂樓加蓋（頂加另用排除頂樓加蓋）。 */
 export function isAtOrBelowFirstFloor(floorName) {
   const text = String(floorName || "").replace(/\s+/g, "");
   if (!text) return false;
   const main = text.split("/")[0];
-  if (/整棟|地下|騎樓|半地下|地面|頂樓加蓋/i.test(main) || /^B\d/i.test(main) || /^B$/i.test(main)) {
+  if (/地下|半地下/i.test(main) || /^B\d/i.test(main) || /^B$/i.test(main)) {
     return true;
   }
-  if (/一樓|1樓/.test(main)) return true;
+  if (/一樓|1樓|騎樓|地面/.test(main)) return true;
   const range = main.match(/(\d+)\s*(?:F|樓)?\s*[~～\-至到]/i);
   if (range) return Number(range[1]) <= 1;
   const numbered = main.match(/(\d+)\s*(?:F|樓)/i);
@@ -88,7 +89,7 @@ export function isWholeFloorHome(kindName) {
   return String(kindName || "").includes("整層住家");
 }
 
-/** 列表顯示／通知用：整層、排除 1F。與設定檔同一套，不影響 591 抓取與左側統計。 */
+/** 列表顯示／通知用：整層、排除 1F 及地下室。與設定檔同一套，不影響 591 抓取與左側統計。 */
 export function passesDisplayFilters(listing, settings = {}, { skipWholeFloor = false } = {}) {
   if (!skipWholeFloor && settings.wholeFloorOnly !== false && !isWholeFloorHome(listing.kind_name)) {
     return false;
