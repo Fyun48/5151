@@ -25,6 +25,7 @@ import { demoCommutePatch } from "./demo.js";
 import { isWalkableMrtDistance, makeMrtKey } from "./mrt.js";
 import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings, planIntervalMinutes, resolveSaveAsProfileAction, profileNameOrDraft, MEMBER_MAX_PROFILES, ADMIN_MAX_PROFILES, clampIntervalMinutes, memberShouldContributeCrawl, memberFetchCollision, memberHasCrawlScope } from "./settingsState.js";
 import { defaultLegalCopy, normalizeLegalCopy, publicLegalCopy } from "./legalCopy.js";
+import { applyIdlePauseToMembers, applyIdleResume } from "./idlePause.js";
 import { defaultNotifyMatrix } from "./notifyMatrix.js";
 import { DATA_EPOCH, shouldResetForEpoch } from "./dataEpoch.js";
 import { countsTowardAllTotal, isConfirmedOffline, isPendingOffline } from "./offline.js";
@@ -765,25 +766,19 @@ export function touchLastLogin(userId, opts) {
 export function resumeIdleIfNeeded(userId) {
   const uid = Number(userId) || 0;
   if (!uid) return getSettings(uid);
-  const current = getSettings(uid);
-  if (current.inactivityPaused !== true) return current;
-  let settings = saveSettings({ notificationsPaused: false, inactivityPaused: false }, uid);
-  if (settings.notificationsPaused !== true) {
-    settings = armMemberExternalFetch(uid);
-  }
-  return settings;
+  return applyIdleResume(uid, {
+    getSettings,
+    saveSettings: (id, patch) => saveSettings(patch, id),
+    armFetch: armMemberExternalFetch,
+  }).settings;
 }
 
 export function pauseIdleMembers({ now = Date.now() } = {}) {
   const ids = listIdleMemberIdsOn(db, { now, idleMs: IDLE_PAUSE_MS });
-  let n = 0;
-  for (const id of ids) {
-    const settings = getSettings(id);
-    if (settings.notificationsPaused === true) continue;
-    saveSettings({ notificationsPaused: true, inactivityPaused: true }, id);
-    n += 1;
-  }
-  return n;
+  return applyIdlePauseToMembers(ids, {
+    getSettings,
+    saveSettings: (id, patch) => saveSettings(patch, id),
+  });
 }
 
 export { IDLE_PAUSE_MS };

@@ -273,4 +273,16 @@ export function randomOauthPassword() {
   return `oauth-${randomBytes(18).toString("hex")}`;
 }
 
+/** 社群回調：新帳號必須先勾選宣告；未開通信箱不得設 session。 */
+export function planOauthSignup({ user, accept } = {}) {
+  if (user && String(user.deleted_at || "").trim()) return { action: "closed" };
+  if (!user) return { action: accept === true ? "register" : "need_accept" };
+  return { action: "existing" };
+}
+
+export function planOauthSession(user, { verified } = {}) {
+  if (!verified) return { action: "pending_verify" };
+  return { action: "session" };
+}
+
 export { normalizeEmail };

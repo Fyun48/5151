@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { ensurePersonalSchema } from "../src/personalSchema.js";
 import { registerUser } from "../src/members.js";
-import { displayName, normalizeNickname, updateUserProfile } from "../src/profile.js";
+import { displayName, nicknameFromOauthName, normalizeNickname, updateUserProfile } from "../src/profile.js";
 
 function memoryDb() {
   const db = new DatabaseSync(":memory:");
@@ -22,6 +22,15 @@ test("nickname is optional and becomes the display name", () => {
   const next = updateUserProfile(db, user.id, { nickname: "小林" });
   assert.equal(next.nickname, "小林");
   assert.equal(displayName(next), "小林");
+});
+
+test("oauth display names fill blank nicknames only when they fit", () => {
+  assert.equal(nicknameFromOauthName(""), "");
+  assert.equal(nicknameFromOauthName("U"), "");
+  assert.equal(nicknameFromOauthName("a@b.com"), "");
+  assert.equal(nicknameFromOauthName("小林"), "小林");
+  const long = "這是一段超過二十個字的社群顯示名稱ABCDEFG";
+  assert.equal(nicknameFromOauthName(long), long.slice(0, 20));
 });
 
 test("contact fields can save without a privacy tick", () => {
