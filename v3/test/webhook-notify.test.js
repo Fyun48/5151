@@ -31,6 +31,13 @@ const listing = {
 const watched = { ...listing, watched: 1 };
 const hookSettings = { discordWebhook: "https://discord.com/api/webhooks/1/abc" };
 
+test("pausing notifications blocks every channel", () => {
+  const paused = { ...hookSettings, notificationsPaused: true, notifyMatrix: { new: { dock: true, push: true, webhook: true, mail: true } } };
+  assert.equal(shouldNotify(paused, listing, { type: "new" }), false);
+  assert.equal(shouldDockNotify(paused, listing, { type: "new" }), false);
+  assert.equal(shouldWebhookNotify(paused, listing, { type: "new" }), false);
+});
+
 test("new listings always notify", () => {
   assert.equal(shouldNotify(hookSettings, listing, { type: "new" }), true);
   assert.equal(shouldDockNotify(hookSettings, listing, { type: "new" }), true);

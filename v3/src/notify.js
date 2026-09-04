@@ -199,6 +199,7 @@ export function isWatchedListing(listing) {
 }
 
 export function shouldNotify(settings, listing, event) {
+  if (settings?.notificationsPaused === true) return false;
   if (listing?.hidden || Number(listing?.hidden) === 1) return false;
   // 與列表「整層／排除 1F 及地下室」勾選一致，避免通知出現已排除樓層
   if (!passesDisplayFilters(listing, settings)) return false;

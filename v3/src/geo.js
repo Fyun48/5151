@@ -76,7 +76,7 @@ function geoKey(address) {
   return String(address || "").replace(/\s+/g, "").replace(/-/g, "");
 }
 
-export function normalizeKeywords(value) {
+export function normalizeKeywords(value, max = 40) {
   const list = Array.isArray(value)
     ? value
     : String(value || "")
@@ -85,13 +85,14 @@ export function normalizeKeywords(value) {
         .filter(Boolean);
   const seen = new Set();
   const out = [];
+  const cap = Number.isFinite(Number(max)) && Number(max) > 0 ? Number(max) : 40;
   for (const item of list) {
     const key = item.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(item);
   }
-  return out.slice(0, 40);
+  return out.slice(0, cap);
 }
 
 export function normalizeBoxes(value) {

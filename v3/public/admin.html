@@ -235,7 +235,7 @@
     <nav class="admin-nav" aria-label="後台分類">
       <a href="#members" data-admin-nav="members"><strong>會員</strong><span>帳號、方案、刪除</span></a>
       <a href="#crawl" data-admin-nav="crawl"><strong>抓取底庫</strong><span>來源、行政區、捷運、通勤</span></a>
-      <a href="#site" data-admin-nav="site"><strong>畫面說明</strong><span>形象、Q&amp;A</span></a>
+      <a href="#site" data-admin-nav="site"><strong>畫面說明</strong><span>形象、Q&amp;A、宣告</span></a>
       <a href="#notices" data-admin-nav="notices"><strong>公告專區</strong><span>公告、最新消息、贊助提醒</span></a>
       <a href="#promo" data-admin-nav="promo"><strong>贊助曝光</strong><span>收款連結、站內小廣告</span></a>
       <a href="#mail" data-admin-nav="mail"><strong>系統信件</strong><span>SMTP、信件範本</span></a>
@@ -417,6 +417,25 @@
         <button type="button" class="primary" id="helpQaSave">儲存 Q&amp;A</button>
       </div>
       <p class="msg" id="helpQaMsg"></p>
+    </section>
+<section class="card">
+      <h2>宣告／免責／個資</h2>
+      <p class="hint">註冊時必須勾選同意才能下一步。會員在「設定 → 個人資料」只能看到當初已同意的文字，不能再改勾選。這裡改的是全站宣告本文與勾選短句。</p>
+      <form id="legalCopyForm">
+        <label>免責聲明本文</label>
+        <textarea id="legalDisclaimer" maxlength="4000" style="min-height:140px"></textarea>
+        <label>註冊勾選短句（免責）</label>
+        <input id="legalDisclaimerCheck" maxlength="160" />
+        <label>個資說明本文</label>
+        <textarea id="legalPrivacy" maxlength="4000" style="min-height:120px"></textarea>
+        <label>註冊勾選短句（個資）</label>
+        <input id="legalPrivacyCheck" maxlength="160" />
+        <div class="row" style="margin-top:10px">
+          <button type="button" class="ghost" id="legalCopyReset">還原預設</button>
+          <button type="submit" class="primary" id="legalCopySave">儲存宣告文字</button>
+        </div>
+        <p class="msg" id="legalCopyMsg"></p>
+      </form>
     </section>
       </div>
       <div id="notices" class="admin-panel" data-admin-panel="notices">
@@ -949,6 +968,22 @@
       if (!res.ok) throw new Error(data.error || "載入 Q&A 失敗");
       renderHelpQaEditor(data.items || []);
       setMsg("helpQaMsg", `共 ${ (data.items || []).length } 則`, true);
+    }
+
+    function fillLegalCopy(data) {
+      if (!data) return;
+      if ($("legalDisclaimer")) $("legalDisclaimer").value = data.disclaimer || "";
+      if ($("legalDisclaimerCheck")) $("legalDisclaimerCheck").value = data.disclaimerCheck || "";
+      if ($("legalPrivacy")) $("legalPrivacy").value = data.privacy || "";
+      if ($("legalPrivacyCheck")) $("legalPrivacyCheck").value = data.privacyCheck || "";
+    }
+
+    async function loadLegalCopy() {
+      const res = await fetch("/api/admin/legal-copy", { cache: "no-store" });
+      const data = await readApi(res);
+      if (!res.ok) throw new Error(data.error || "載入宣告失敗");
+      fillLegalCopy(data);
+      setMsg("legalCopyMsg", "已載入", true);
     }
 
     async function loadMaps() {
@@ -1488,7 +1523,7 @@
       if (me.role !== "admin") { location.replace("/"); return; }
       meEmail = me.email || "";
       $("who").textContent = meEmail;
-      await Promise.all([loadMembers(), loadMail(), loadSponsor(), loadAds(), loadBroadcasts(), loadMaps(), loadHelpQa(), loadCrawlSources(), loadSystemCrawl(), loadBrand()]);
+      await Promise.all([loadMembers(), loadMail(), loadSponsor(), loadAds(), loadBroadcasts(), loadMaps(), loadHelpQa(), loadLegalCopy(), loadCrawlSources(), loadSystemCrawl(), loadBrand()]);
       $("brandForm").onsubmit = async (ev) => {
         ev.preventDefault();
         $("brandSave").disabled = true;
@@ -1579,6 +1614,51 @@
           setMsg("helpQaMsg", error.message);
         } finally {
           $("helpQaReset").disabled = false;
+        }
+      };
+      $("legalCopyForm").onsubmit = async (ev) => {
+        ev.preventDefault();
+        $("legalCopySave").disabled = true;
+        setMsg("legalCopyMsg", "儲存中…");
+        try {
+          const res = await fetch("/api/admin/legal-copy", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              disclaimer: $("legalDisclaimer").value,
+              disclaimerCheck: $("legalDisclaimerCheck").value,
+              privacy: $("legalPrivacy").value,
+              privacyCheck: $("legalPrivacyCheck").value,
+            }),
+          });
+          const data = await readApi(res);
+          if (!res.ok) throw new Error(data.error || "儲存失敗");
+          fillLegalCopy(data);
+          setMsg("legalCopyMsg", "宣告文字已儲存", true);
+        } catch (error) {
+          setMsg("legalCopyMsg", error.message);
+        } finally {
+          $("legalCopySave").disabled = false;
+        }
+      };
+      $("legalCopyReset").onclick = async () => {
+        if (!window.confirm("還原成預設宣告文字？")) return;
+        $("legalCopyReset").disabled = true;
+        setMsg("legalCopyMsg", "還原中…");
+        try {
+          const res = await fetch("/api/admin/legal-copy", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reset: true }),
+          });
+          const data = await readApi(res);
+          if (!res.ok) throw new Error(data.error || "還原失敗");
+          fillLegalCopy(data);
+          setMsg("legalCopyMsg", "已還原預設", true);
+        } catch (error) {
+          setMsg("legalCopyMsg", error.message);
+        } finally {
+          $("legalCopyReset").disabled = false;
         }
       };
       async function saveMaps(extra = {}) {
@@ -1685,6 +1765,6 @@
       setMsg("memberMsg", error.message || "載入失敗");
     });
   </script>
-  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.37</span></footer>
+  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.38</span></footer>
 </body>
 </html>

@@ -38,6 +38,16 @@ test("register requires the disclaimer and stores a hashed password", () => {
   );
 });
 
+test("register can require the privacy pledge", () => {
+  const db = memoryDb();
+  assert.throws(
+    () => registerUser(db, { email: "p@b.com", password: "password1", acceptDisclaimer: true, acceptPrivacy: false }),
+    /個資/,
+  );
+  const user = registerUser(db, { email: "p@b.com", password: "password1", acceptDisclaimer: true });
+  assert.ok(user.id);
+});
+
 test("deleted accounts stay in the table and allow only one reregister", () => {
   const db = memoryDb();
   const user = registerUser(db, { email: "keep@b.com", password: "password1", acceptDisclaimer: true });

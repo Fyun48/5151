@@ -33,7 +33,7 @@ test("admin and index expose broadcast and spirit page", () => {
   assert.match(index, /id="siteNotice"/);
   assert.match(index, /maybeShowBroadcast/);
   assert.match(index, /spirit\.html/);
-  assert.match(index, /profileName"\)\.value = "暫存"/);
+  assert.match(index, /請先填設定檔名稱/);
   assert.match(spirit, /這個站為什麼存在/);
   assert.match(spirit, /居住正義/);
   assert.match(server, /publicBroadcastsSettings/);

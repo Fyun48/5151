@@ -239,7 +239,11 @@
       </label>
       <label class="check">
         <input id="accept" type="checkbox" required />
-        <span>我已閱讀並同意<a href="/disclaimer.html" target="_blank" rel="noopener">免責聲明</a>：這是免費系統，贊助是自願的。</span>
+        <span id="acceptDisclaimerLabel">我已閱讀並同意<a href="/disclaimer.html" target="_blank" rel="noopener">免責聲明</a>：這是免費系統，贊助是自願的。</span>
+      </label>
+      <label class="check">
+        <input id="acceptPrivacy" type="checkbox" required />
+        <span id="acceptPrivacyLabel">我已閱讀並同意個資說明：個人資料只用於本站服務，預設不公開。</span>
       </label>
       <div class="bot">
         <p class="bot-kicker">請證明你不是機器人：輸入圖中的 4 個字</p>
@@ -271,7 +275,7 @@
     <p class="ok" id="ok"></p>
     <p class="err" id="err"></p>
     <div class="ad-slot" id="adLogin" hidden></div>
-    <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.37</span></footer>
+    <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.38</span></footer>
   </div>
   <script src="/mascot.js"></script>
   <script>
@@ -285,6 +289,9 @@
     function clearNotes() {
       $("err").textContent = "";
       $("ok").textContent = "";
+    }
+    function escLegal(value) {
+      return String(value || "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
     }
     function paintCaptcha(data) {
       if (!data?.id) return;
@@ -351,6 +358,14 @@
       if (data.ok && !justLoggedOut) location.replace("/");
     }).catch(() => {});
     loadCaptcha().catch((error) => { $("err").textContent = error.message; });
+    fetch("/api/disclaimer", { cache: "no-store" }).then((r) => r.json()).then((copy) => {
+      if (copy?.disclaimerCheck && $("acceptDisclaimerLabel")) {
+        $("acceptDisclaimerLabel").innerHTML = `${escLegal(copy.disclaimerCheck)}（<a href="/disclaimer.html" target="_blank" rel="noopener">完整免責聲明</a>）`;
+      }
+      if (copy?.privacyCheck && $("acceptPrivacyLabel")) {
+        $("acceptPrivacyLabel").textContent = copy.privacyCheck;
+      }
+    }).catch(() => {});
     fetch("/api/ads", { cache: "no-store" }).then((r) => r.json()).then((ads) => {
       const el = $("adLogin");
       const ad = ads?.login;
@@ -399,6 +414,8 @@
         if ($("regPassword").value !== $("regPassword2").value) {
           throw new Error("兩次密碼不一樣");
         }
+        if (!$("accept").checked) throw new Error("請先閱讀並同意免責聲明");
+        if (!$("acceptPrivacy").checked) throw new Error("請先閱讀並同意個資說明");
         const res = await fetch("/api/register", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -407,6 +424,7 @@
             email: $("regEmail").value.trim(),
             password: $("regPassword").value,
             acceptDisclaimer: $("accept").checked,
+            acceptPrivacy: $("acceptPrivacy").checked,
           }, "regCaptcha", "regWebsite")),
         });
         const data = await res.json();

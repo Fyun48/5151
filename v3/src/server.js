@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   coveringJobsFromAllUsers,
+  coveringPlan,
   crawlIntervalMinutes,
   defaultUserId,
   listUserIds,
@@ -64,10 +65,14 @@ import {
   saveMemberMailSettings,
   getHelpQa,
   saveHelpQa,
+  getLegalCopy,
+  saveLegalCopy,
   getCrawlSources,
   saveCrawlSources,
   getSystemCrawl,
   saveSystemCrawl,
+  armMemberExternalFetch,
+  isSystemCoveringDue,
   listDemand,
   getDemand,
   createDemand,
@@ -97,7 +102,6 @@ import {
   selfPhotoFilePath,
 } from "./selfPhotos.js";
 import { CITIES } from "./regions.js";
-import { DISCLAIMER_TEXT, DISCLAIMER_VERSION } from "./members.js";
 import { mailConfigured, sendMail } from "./mail.js";
 import { queueAccountMail } from "./systemMail.js";
 import { assertHuman, issueCaptcha } from "./captcha.js";
@@ -112,7 +116,6 @@ import {
   saveBrandUpload,
   brandFilePath,
 } from "./brandMascot.js";
-import { PROFILE_PRIVACY } from "./profile.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -230,8 +233,11 @@ app.get("/api/me", (req, res) => {
     line_id: String(user?.line_id || "").trim(),
     line_qr_url: String(user?.line_qr_url || "").trim(),
     contact_email: String(user?.contact_email || "").trim(),
-    privacy_accepted: Boolean(String(user?.profile_privacy_at || "").trim()),
-    privacy_text: PROFILE_PRIVACY,
+    privacy_accepted: Boolean(String(user?.profile_privacy_at || user?.accepted_disclaimer_at || "").trim()),
+    privacy_text: getLegalCopy().privacy,
+    disclaimer_text: getLegalCopy().disclaimer,
+    privacy_check: getLegalCopy().privacyCheck,
+    disclaimer_check: getLegalCopy().disclaimerCheck,
     open_self_listings: session?.userId ? countOpenSelfListings(session.userId) : 0,
     configured: true,
     canRegister: true,
@@ -257,7 +263,7 @@ app.patch("/api/profile", (req, res) => {
 });
 
 app.get("/api/disclaimer", (_req, res) => {
-  res.json({ version: DISCLAIMER_VERSION, text: DISCLAIMER_TEXT });
+  res.json(getLegalCopy());
 });
 
 app.get("/api/help-qa", (_req, res) => {
@@ -351,6 +357,7 @@ app.post("/api/register", (req, res) => {
       email: req.body?.email,
       password: req.body?.password,
       acceptDisclaimer: req.body?.acceptDisclaimer === true,
+      acceptPrivacy: req.body?.acceptPrivacy,
       emailVerified: false,
     });
     const issued = issueVerifyToken(user.id);
@@ -588,6 +595,18 @@ app.get("/api/admin/help-qa", requireAdminApi, (_req, res) => {
 app.put("/api/admin/help-qa", requireAdminApi, (req, res) => {
   try {
     res.json(saveHelpQa(req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/admin/legal-copy", requireAdminApi, (_req, res) => {
+  res.json(getLegalCopy());
+});
+
+app.put("/api/admin/legal-copy", requireAdminApi, (req, res) => {
+  try {
+    res.json(saveLegalCopy(req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -838,6 +857,7 @@ app.use(express.static(path.join(__dirname, "../public")));
 
 let timer = null;
 let lastRun = null;
+let tickBusy = false;
 const clients = new Set();
 
 function broadcast(payload, userId) {
@@ -942,26 +962,53 @@ function queueGeoBackfill(settings = getSettings()) {
 }
 
 async function tick(reason = "schedule") {
+  if (tickBusy && reason === "schedule") {
+    return lastRun || { skipped: "busy", reason, checked_at: new Date().toISOString(), searches: [], events: [] };
+  }
+  tickBusy = true;
   try {
-    if (
-      reason === "manual"
-      && lastRun?.checked_at
-      && !lastRun.error
-      && isWatchIntervalPending(lastRun.checked_at, crawlIntervalMinutes())
-    ) {
-      return {
-        ...lastRun,
-        skipped: "interval",
-        reason,
-        message: "設定已記下，下次排程會用最新條件檢查",
-      };
-    }
     expireStaleVerifyTokens({
       onExpire: (user) => {
         if (user?.email) queueSystemMail("verify_expired", user.email);
       },
     });
-    lastRun = await runWatch({ skipHeavyGeo: true });
+    const now = Date.now();
+    const systemDue = reason === "force" || reason === "startup" || isSystemCoveringDue(now);
+    if (
+      reason === "manual"
+      && !systemDue
+      && lastRun?.checked_at
+      && !lastRun.error
+      && isWatchIntervalPending(lastRun.checked_at, crawlIntervalMinutes(), now)
+    ) {
+      const duePlan = coveringPlan({ now, includeSystem: false });
+      if (!duePlan.jobs.length) {
+        return {
+          ...lastRun,
+          skipped: "interval",
+          reason,
+          message: "設定已記下，下次排程會用最新條件檢查",
+        };
+      }
+    }
+    const includeSystem = reason === "force" || reason === "startup" || (reason !== "schedule" && systemDue) || (reason === "schedule" && systemDue);
+    const plan = coveringPlan({ now, includeSystem });
+    if (!plan.jobs.length) {
+      return {
+        skipped: "idle",
+        reason,
+        message: "目前沒有要向外抓取的條件",
+        checked_at: new Date().toISOString(),
+        searches: [],
+        events: [],
+      };
+    }
+    lastRun = await runWatch({
+      skipHeavyGeo: true,
+      jobs: plan.jobs,
+      includedUserIds: plan.includedUserIds,
+      includeSystem: plan.includeSystem,
+    });
     lastRun.reason = reason;
     broadcastWatch(lastRun);
     queueGeoBackfill();
@@ -970,15 +1017,16 @@ async function tick(reason = "schedule") {
     lastRun = { error: error.message, checked_at: new Date().toISOString(), reason };
     broadcast({ type: "error", error: error.message });
     throw error;
+  } finally {
+    tickBusy = false;
   }
 }
 
 function schedule() {
   if (timer) clearInterval(timer);
-  const minutes = crawlIntervalMinutes();
   timer = setInterval(() => {
     tick("schedule").catch(() => {});
-  }, minutes * 60 * 1000);
+  }, 60 * 1000);
 }
 
 function safeStats(userId) {
@@ -1216,7 +1264,11 @@ async function persistSettings(body = {}, userId) {
       body.workLng = null;
     }
   }
+  const pausing = Object.prototype.hasOwnProperty.call(body, "notificationsPaused");
   const settings = saveSettings(body, uid);
+  if (pausing && settings.notificationsPaused !== true) {
+    armMemberExternalFetch(uid);
+  }
   schedule();
   return settings;
 }
@@ -1325,7 +1377,7 @@ app.listen(PORT, HOST, () => {
   setTimeout(() => {
     ensureWorkCoords()
       .then((settings) => {
-        const jobs = coveringJobsFromAllUsers();
+        const jobs = coveringJobsFromAllUsers({ includeSystem: true });
         if (!jobs.length) return;
         queueGeoBackfill(settings);
         return tick("startup");

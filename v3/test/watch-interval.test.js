@@ -14,11 +14,14 @@ test("manual watch is pending when the last check is still inside the interval",
   assert.equal(isWatchIntervalPending("", 5, now), false);
 });
 
-test("member save calls watch without force; admin immediate check forces", () => {
+test("member save does not crawl immediately; admin immediate check still forces", () => {
   const html = readFileSync(path.join(dir, "../public/index.html"), "utf8");
   const server = readFileSync(path.join(dir, "../src/server.js"), "utf8");
-  assert.match(html, /fetch\("\/api\/watch", \{ method: "POST", headers: \{ "Content-Type": "application\/json" \}, body: "\{\}"/);
+  const saveFn = html.slice(html.indexOf('$("saveBtn").onclick'), html.indexOf('$("scrollTopBtn")'));
+  assert.doesNotMatch(saveFn, /\/api\/watch/);
+  assert.match(saveFn, /\/api\/profiles/);
   assert.match(html, /body: JSON.stringify\(\{ force: true \}\)/);
   assert.match(server, /req.body\?\.force === true \? "force" : "manual"/);
   assert.match(server, /skipped: "interval"/);
+  assert.match(server, /isSystemCoveringDue/);
 });

@@ -31,11 +31,12 @@ export function listingFitScore(listing, settings = {}) {
   }
 
   const minFloors = Number(settings.minBuildingFloors);
-  const need = Number.isFinite(minFloors) && minFloors > 0 ? minFloors : 4;
-  const total = buildingTotalFloors(listing?.floor_name);
-  if (total > 0) {
-    if (total >= need) score += 8;
-    else score -= 14;
+  if (Number.isFinite(minFloors) && minFloors > 0) {
+    const total = buildingTotalFloors(listing?.floor_name);
+    if (total > 0) {
+      if (total >= minFloors) score += 8;
+      else score -= 14;
+    }
   }
 
   const budget = Number(settings.commuteKm);
