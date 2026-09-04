@@ -254,6 +254,7 @@
         <input id="acceptPrivacy" type="checkbox" required />
         <span id="acceptPrivacyLabel">我已閱讀並同意個資說明：個人資料只用於本站服務，預設不公開。</span>
       </label>
+      <p class="oauth-kicker" id="registerPolicy" hidden>超過約兩個月沒登入，系統會暫停向外抓取與通知；帳號仍可登入。再登入後會自動恢復，不會另外寄信。一年未使用是否停權刪除仍在評估，尚未執行。</p>
       <div class="bot">
         <p class="bot-kicker">請證明你不是機器人：輸入圖中的 4 個字</p>
         <div class="bot-row">
@@ -292,7 +293,7 @@
     <p class="ok" id="ok"></p>
     <p class="err" id="err"></p>
     <div class="ad-slot" id="adLogin" hidden></div>
-    <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.40</span></footer>
+    <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.41</span></footer>
   </div>
   <script src="/mascot.js"></script>
   <script>
@@ -343,6 +344,7 @@
       $("registerForm").classList.toggle("hidden", !register);
       $("forgotForm").classList.toggle("hidden", !forgot);
       if ($("oauthBox")) $("oauthBox").classList.toggle("hidden", forgot);
+      if ($("registerPolicy")) $("registerPolicy").hidden = !register;
       clearNotes();
       if (forgot && !$("forgotEmail").value) $("forgotEmail").value = $("email").value.trim();
     }

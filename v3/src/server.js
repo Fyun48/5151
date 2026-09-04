@@ -128,8 +128,11 @@ import {
   providerAuthorizeUrl,
   exchangeOauthCode,
   randomOauthPassword,
+  planOauthSignup,
+  planOauthSession,
 } from "./oauth.js";
 import { isEmailVerified } from "./emailVerify.js";
+import { nicknameFromOauthName } from "./profile.js";
 import {
   BRAND_UPLOAD_MAX_BYTES,
   mimeForBrandFile,
@@ -494,16 +497,17 @@ app.get("/auth/:provider/callback", async (req, res) => {
       clientSecret: cfg.clientSecret,
     });
     let user = findUserByEmail(profile.email);
-    if (user && String(user.deleted_at || "").trim()) {
+    const signup = planOauthSignup({ user, accept: state.accept === true });
+    if (signup.action === "closed") {
       const err = new Error("這個 Email 的帳號已關閉");
       err.status = 409;
       throw err;
     }
-    if (!user) {
-      if (!state.accept) {
-        res.redirect(303, `/login.html?register=1&oauth=${encodeURIComponent("請先勾選免責與個資說明，再用社群帳號註冊")}`);
-        return;
-      }
+    if (signup.action === "need_accept") {
+      res.redirect(303, `/login.html?register=1&oauth=${encodeURIComponent("請先勾選免責與個資說明，再用社群帳號註冊")}`);
+      return;
+    }
+    if (signup.action === "register") {
       user = registerUser({
         email: profile.email,
         password: randomOauthPassword(),
@@ -513,7 +517,18 @@ app.get("/auth/:provider/callback", async (req, res) => {
       });
     }
     linkOauthIdentity(user.id, { provider, subject: profile.subject });
-    if (!isEmailVerified(user)) {
+    if (!String(user.nickname || "").trim()) {
+      const nick = nicknameFromOauthName(profile.name);
+      if (nick) {
+        try {
+          updateUserProfile(user.id, { nickname: nick });
+          user = { ...user, nickname: nick };
+        } catch {
+          // 顯示名不合暱稱規則就略過，不擋開通信
+        }
+      }
+    }
+    if (planOauthSession(user, { verified: isEmailVerified(user) }).action === "pending_verify") {
       const issued = issueVerifyToken(user.id);
       queueSystemMail("welcome", user.email, {
         verifyUrl: `${base}/verify-email?token=${encodeURIComponent(issued.token)}`,

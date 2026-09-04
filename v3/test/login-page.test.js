@@ -18,6 +18,11 @@ test("login page can register after accepting the disclaimer", () => {
   assert.match(html, /進入找房/);
   assert.match(html, /!verifyState/);
   assert.match(html, /id="oauthBox"/);
+  assert.match(html, /id="registerPolicy"/);
+  assert.match(html, /兩個月沒登入/);
+  assert.match(html, /不會另外寄信/);
+  assert.match(html, /一年未使用/);
+  assert.match(html, /registerPolicy"\)\.hidden = !register/);
   assert.match(html, /\/auth\/google/);
   assert.match(html, /\/api\/oauth/);
   assert.match(html, /請到信箱點確認連結才算註冊成功/);

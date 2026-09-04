@@ -31,6 +31,15 @@ export function normalizeNickname(value, { required = false } = {}) {
   return raw;
 }
 
+/** 社群 API 顯示名：空白暱稱才帶入；過短、信箱或網址則略過，不丟錯。 */
+export function nicknameFromOauthName(value) {
+  const raw = String(value || "").trim().replace(/\s+/g, " ");
+  if (!raw || /@/.test(raw) || /https?:\/\//i.test(raw)) return "";
+  const clipped = raw.slice(0, NICKNAME_MAX);
+  if (clipped.length < NICKNAME_MIN) return "";
+  return clipped;
+}
+
 export function displayName(user) {
   const nick = String(user?.nickname || "").trim();
   if (nick) return nick;

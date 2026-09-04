@@ -19,7 +19,11 @@ test("default Q&A explains walkable MRT distance not straight-line", () => {
   assert.match(mrt.answer, /會員不能開關/);
   assert.ok(items.some((row) => row.id === "hidden-admin"));
   assert.ok(items.some((row) => row.id === "extra-fees"));
-  assert.ok(items.some((row) => row.id === "oauth-idle"));
+  const oauth = items.find((row) => row.id === "oauth-idle");
+  assert.match(oauth.answer, /開通信/);
+  assert.match(oauth.answer, /兩個月/);
+  assert.match(oauth.answer, /不會另外寄信/);
+  assert.match(oauth.answer, /仍在評估/);
   assert.ok(items.some((row) => row.id === "interval"));
   assert.ok(items.some((row) => row.id === "pwa-ios"));
   assert.ok(items.some((row) => row.id === "self-listings"));

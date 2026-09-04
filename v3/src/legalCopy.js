@@ -19,8 +19,32 @@ export const DEFAULT_PRIVACY_CHECK =
 
 export const DEFAULT_LEGAL_VERSION = "2026-09-04";
 
+export const IDLE_TWO_MONTH_CLAUSE =
+  "超過約兩個月沒有登入，系統會暫停主動向外抓取與通知，以節省資源；你再登入後會自動恢復，不會另外寄信。";
+
+export const IDLE_YEAR_CLAUSE =
+  "若長達一年完全沒使用，未來可能停權或刪除帳號（目前仍在評估，尚未執行）。";
+
+export const IDLE_LEGAL_PARAGRAPH = `${IDLE_TWO_MONTH_CLAUSE}${IDLE_YEAR_CLAUSE}`;
+
 const MAX_LONG = 4000;
 const MAX_CHECK = 160;
+
+/** 後台若存了舊宣告，讀取時仍補上兩個月暫停／一年刪帳（評估中），不覆蓋管理員已寫入的同段文字。 */
+export function ensureIdleLegalClauses(text) {
+  const t = String(text || "").trim();
+  const hasTwoMonth = /兩個月/.test(t) && /(暫停|停用)/.test(t);
+  const hasYear = /一年/.test(t) && /(刪除|停權)/.test(t);
+  if (hasTwoMonth && hasYear) return t;
+  const extras = [];
+  if (!hasTwoMonth && !hasYear) extras.push(IDLE_LEGAL_PARAGRAPH);
+  else {
+    if (!hasTwoMonth) extras.push(IDLE_TWO_MONTH_CLAUSE);
+    if (!hasYear) extras.push(IDLE_YEAR_CLAUSE);
+  }
+  if (!t) return extras.join("");
+  return `${t}\n\n${extras.join("")}`;
+}
 
 function clip(value, fallback, max) {
   const text = String(value ?? "").trim();
@@ -52,10 +76,11 @@ export function normalizeLegalCopy(value = {}) {
 
 export function publicLegalCopy(value) {
   const copy = normalizeLegalCopy(value);
+  const disclaimer = ensureIdleLegalClauses(copy.disclaimer);
   return {
     version: copy.version,
-    text: copy.disclaimer,
-    disclaimer: copy.disclaimer,
+    text: disclaimer,
+    disclaimer,
     disclaimerCheck: copy.disclaimerCheck,
     privacy: copy.privacy,
     privacyCheck: copy.privacyCheck,
