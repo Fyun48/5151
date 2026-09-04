@@ -151,6 +151,8 @@ test("demo API is a public path and is rate-limited per IP", () => {
   assert.equal(publicPath({ path: "/api/brand" }), true);
   assert.equal(publicPath({ path: "/brand/mark.png" }), true);
   assert.equal(publicPath({ path: "/mascot.js" }), true);
+  assert.equal(publicPath({ path: "/cities-embed.js" }), true);
+  assert.equal(publicPath({ path: "/cities.json" }), true);
   assert.equal(publicPath({ path: "/media/self/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg" }), true);
   assert.equal(publicPath({ path: "/api/demo" }), true);
   assert.equal(publicPath({ path: "/" }), true);
