@@ -1,0 +1,45 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const html = readFileSync(
+  path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/admin.html"),
+  "utf8",
+);
+
+test("admin settings are grouped into clickable categories", () => {
+  assert.match(html, /aria-label="後台分類"/);
+  assert.match(html, /data-admin-nav="members"/);
+  assert.match(html, /data-admin-nav="crawl"/);
+  assert.match(html, /data-admin-nav="site"/);
+  assert.match(html, /data-admin-nav="promo"/);
+  assert.match(html, /data-admin-nav="mail"/);
+  assert.match(html, /抓取底庫/);
+  assert.match(html, /畫面說明/);
+  assert.match(html, /贊助曝光/);
+  assert.match(html, /系統信件/);
+  assert.match(html, /function showAdminPanel/);
+  assert.match(html, /admin-shell\.is-ready \.admin-panel \{ display: none; \}/);
+
+  const crawl = html.slice(html.indexOf('data-admin-panel="crawl"'), html.indexOf('data-admin-panel="site"'));
+  assert.match(crawl, /物件來源/);
+  assert.match(crawl, /系統抓取底庫/);
+  assert.match(crawl, /通勤路線／Google 計費/);
+  assert.ok(crawl.indexOf("物件來源") < crawl.indexOf("系統抓取底庫"));
+  assert.ok(crawl.indexOf("系統抓取底庫") < crawl.indexOf("通勤路線"));
+
+  const site = html.slice(html.indexOf('data-admin-panel="site"'), html.indexOf('data-admin-panel="promo"'));
+  assert.match(site, /吉比形象／Logo/);
+  assert.match(site, /功能說明 Q&amp;A/);
+  assert.match(site, /公告／最新消息／贊助提醒/);
+
+  const promo = html.slice(html.indexOf('data-admin-panel="promo"'), html.indexOf('data-admin-panel="mail"'));
+  assert.match(promo, /贊助連結/);
+  assert.match(promo, /站內小廣告/);
+
+  const mail = html.slice(html.indexOf('data-admin-panel="mail"'));
+  assert.match(mail, /寄信 SMTP/);
+  assert.match(mail, /信件內容/);
+});
