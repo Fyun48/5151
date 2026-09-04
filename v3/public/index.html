@@ -538,6 +538,17 @@
     .toolbar { display: flex; gap: 8px; align-items: center; padding: 12px 18px; flex-wrap: wrap; min-width: 0; max-width: 100%; }
     .toolbar > * { min-width: 0; max-width: 100%; }
     .chip-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; width: 100%; min-width: 0; }
+    .view-checks { margin-top: 2px; }
+    .view-check {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin: 0;
+      font-size: 13px;
+      color: var(--ink);
+      white-space: nowrap;
+    }
+    .view-check input { width: auto; margin: 0; }
     .list-search {
       width: min(240px, 100%);
       margin-left: auto;
@@ -1961,9 +1972,6 @@
         </div>
         <div class="profile-row">
           <button type="button" class="primary" id="saveBtn" disabled>儲存</button>
-          <button type="button" class="ghost" id="saveAsBtn" disabled>另存</button>
-        </div>
-        <div class="profile-row">
           <button type="button" class="ghost" id="deleteProfileBtn">刪除</button>
           <span class="save-msg" id="saveMsg"></span>
         </div>
@@ -1977,7 +1985,7 @@
         <div class="stat"><b>—</b><span>已隱藏</span></div>
         <div class="stat"><b>—</b><span>疑似</span></div>
       </div>
-      <p class="hint" id="settingsLoadMsg">正在載入已存設定…完成前請不要按儲存或另存。若一直停在這句、儲存也不能按，是網頁程式沒跑起來，不是資料壞了；請重新整理，不要按清除資料。</p>
+      <p class="hint" id="settingsLoadMsg">正在載入已存設定…完成前請不要按儲存。若一直停在這句、儲存也不能按，是網頁程式沒跑起來，不是資料壞了；請重新整理，不要按清除資料。</p>
       <p class="hint" id="profileListHint"></p>
       <p class="hint" id="districtLimitHint"></p>
       <div id="districtPicker" data-tour="districts">
@@ -2043,12 +2051,7 @@
       <label>坪數上限（幾坪以內，可空白）</label>
       <input type="number" id="areaMax" min="0" max="500" step="0.5" placeholder="不限，例如 30" />
       <p class="hint">大於這個坪數的物件會從列表藏起來，也不通知。空白或 0 表示不限。按儲存就套用已抓到的結果，不必重查 591。</p>
-      <div class="checks">
-        <label><input type="checkbox" id="excludeRooftop" checked /> 排除頂樓加蓋</label>
-        <label><input type="checkbox" id="wholeFloorOnly" checked /> 只看整層住家</label>
-        <label><input type="checkbox" id="excludeLowFloors" checked /> 排除 1F 及地下室</label>
-      </div>
-      <p class="hint">這三項會寫進設定檔。列表與新物件通知都用同一套；按儲存後才套用。</p>
+      <p class="hint">頂樓加蓋、整層住家、一樓與地下室改在物件列表上方過濾顯示，不會讓爬蟲少抓。</p>
       <div class="admin-only">
         <label>進階：591 網址（自動產生，通常不用改）</label>
         <textarea id="searchUrls" placeholder="儲存後會依上方行政區自動產生"></textarea>
@@ -2074,9 +2077,7 @@
       </div>
       <label>路線上限（公里，0 表示不篩）</label>
       <input type="number" id="commuteKm" min="0" max="80" step="0.5" />
-      <div class="checks" data-tour="mrt">
-        <label><input type="checkbox" id="showMrt" checked /> 顯示最近捷運站步行距離</label>
-      </div>
+      <p class="hint" data-tour="mrt">步行路線未滿 1.5 公里的最近捷運站會顯示在列表。這個開關只在後台統一設定。</p>
       <div class="notify-shortcuts" data-tour="notify" hidden>
         <p class="hint">Webhook、郵件已移到「我的 → 通知設定」。左側只留常用條件。</p>
       </div>
@@ -2128,6 +2129,11 @@
           <button class="chip" data-kind="elevator">電梯</button>
           <button class="chip" data-kind="apartment">公寓</button>
           <button class="chip" data-kind="suite">套房</button>
+          <button class="chip" data-kind="whole">整層住家</button>
+          </div>
+          <div class="chip-row view-checks" data-chip-row="display">
+            <label class="view-check"><input type="checkbox" id="excludeRooftop" checked /> 排除頂樓加蓋</label>
+            <label class="view-check"><input type="checkbox" id="excludeLowFloors" checked /> 排除 1F 及地下室</label>
           </div>
           <div class="chip-row" data-chip-row="sort">
           <button class="chip on" data-sort="newest">最新</button>
@@ -2630,7 +2636,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.31</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.32</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -2830,14 +2836,10 @@
       return hasPin ? ` · ${esc(label)}路線計算中` : " · 尚未取得地圖座標";
     }
 
-    function mrtOn(s = settings) {
-      return s.showMrt !== false;
-    }
     function mrtChip(name) {
       return `<span class="mrt-chip">${esc(name)}</span>`;
     }
     function mrtText(item) {
-      if (!mrtOn()) return "";
       const name = String(item.mrt_station || "").trim();
       const walkKm = Number(item.mrt_walk_km);
       if (name && Number.isFinite(walkKm) && walkKm > 0 && walkKm < 1.5) {
@@ -3016,12 +3018,21 @@
     } catch {}
 
     function fillFloorFilters(s = settings) {
-      $("wholeFloorOnly").checked = s.wholeFloorOnly !== false;
-      $("excludeLowFloors").checked = s.excludeLowFloors !== false;
+      if ($("excludeRooftop")) $("excludeRooftop").checked = s.excludeRooftop !== false;
+      if ($("excludeLowFloors")) $("excludeLowFloors").checked = s.excludeLowFloors !== false;
+      if (s.wholeFloorOnly === true) kind = "whole";
+      document.querySelectorAll("[data-kind]").forEach((b) => {
+        b.classList.toggle("on", b.dataset.kind === kind);
+      });
     }
 
     function isWholeFloorHome(kindName) {
       return String(kindName || "").includes("整層住家");
+    }
+
+    function isRooftopAddition(item) {
+      const hay = `${item?.floor_name || ""} ${item?.title || ""} ${item?.kind_name || ""}`;
+      return /頂樓加蓋|頂加/.test(hay);
     }
 
     function isAtOrBelowFirstFloor(floorName) {
@@ -3041,11 +3052,14 @@
 
     function applyViewFilters(items) {
       let out = items;
-      if ($("wholeFloorOnly").checked && kind !== "suite") {
+      if (kind === "whole") {
         out = out.filter((item) => isWholeFloorHome(item.kind_name));
       }
-      if ($("excludeLowFloors").checked) {
+      if ($("excludeLowFloors")?.checked) {
         out = out.filter((item) => !isAtOrBelowFirstFloor(item.floor_name));
+      }
+      if ($("excludeRooftop")?.checked) {
+        out = out.filter((item) => !isRooftopAddition(item));
       }
       return out;
     }
@@ -3109,6 +3123,7 @@
       if (key === "elevator") return /有電梯|電梯大樓|電梯公寓/.test(hay) && !/無電梯/.test(hay);
       if (key === "apartment") return /公寓/.test(hay) && !/電梯大樓/.test(hay);
       if (key === "suite") return /套房|雅房/.test(String(item.kind_name || ""));
+      if (key === "whole") return isWholeFloorHome(item.kind_name);
       return true;
     }
 
@@ -3121,7 +3136,7 @@
       const dup = String(item.match_verdict || "") === "yes";
       if (key === "hidden") return hidden || dup;
       if (key === "offline") return offline && !confirmed;
-      if (key === "suspected") return Boolean(item.match_level) && !offline;
+      if (key === "suspected") return Boolean(item.match_level) && !offline && !dup && !hidden;
       if (dup || offline || hidden) return false;
       if (key === "all") return !watched;
       if (key === "unseen") return !viewed;
@@ -3223,9 +3238,9 @@
       { target: "[data-tour=guestWho]", title: "第 1／7 步", text: "右上角顯示你目前是訪客。這是示範列表，左側條件與公司地址目前不能改；註冊成為會員後才能換成你的設定。" },
       { target: "[data-tour=districts]", title: "第 2／7 步", text: "行政區與租金篩選現在是展示用。註冊後才能勾選你要找的區域並儲存。" },
       { target: "[data-tour=commute]", title: "第 3／7 步", text: "公司地址、機車或汽車路徑也無法在示範模式變更。會員才能填自己的上班地址並篩通勤距離。" },
-      { target: "[data-tour=mrt]", title: "第 4／7 步", text: "最近捷運站的步行路線距離可以開關。步行達 1.5 公里（含）就不顯示站名。示範模式看得到效果，註冊後才能自己開啟或關閉。" },
+      { target: "[data-tour=mrt]", title: "第 4／7 步", text: "步行未滿 1.5 公里的最近捷運站會顯示在列表。這個開關由站方後台統一決定。" },
       { target: "[data-tour=notify]", title: "第 5／7 步", text: "系統推播與站內待看是預設通知。郵件與 Webhook 是選用，在「我的 → 通知設定」。示範模式不能改。" },
-      { target: "[data-tour=profiles]", title: "第 6／7 步", text: "設定檔的儲存、另存與刪除也鎖定中。註冊後最多可存 3 組自己的條件。" },
+      { target: "[data-tour=profiles]", title: "第 6／7 步", text: "設定檔的儲存與刪除也鎖定中。註冊後最多可存 3 組自己的條件；同名儲存會覆蓋。" },
       { target: "#listHeadSticky", title: "第 7／7 步", text: "特別關注與隱藏要登入才寫得進去。點進物件會自動記成已瀏覽。按「前往註冊」就能開始用這些功能。" },
     ];
     let guestTourIndex = 0;
@@ -3326,7 +3341,6 @@
 
     function setSettingsReady(ok, msg) {
       $("saveBtn").disabled = !ok;
-      $("saveAsBtn").disabled = !ok;
       const el = $("settingsLoadMsg");
       if (!el) return;
       if (ok) {
@@ -3335,7 +3349,7 @@
         return;
       }
       el.hidden = false;
-      el.textContent = msg || "正在載入已存設定…完成前請不要按儲存或另存。";
+      el.textContent = msg || "正在載入已存設定…完成前請不要按儲存。";
     }
 
     function updateDistrictLimitHint() {
@@ -3495,9 +3509,9 @@
       const hint = $("profileListHint");
       if (hint) {
         if (!list.length) {
-          hint.textContent = "還沒有設定檔。填名稱後按上方「另存」。";
+          hint.textContent = "還沒有設定檔。填名稱後按儲存，下拉選單就會出現。";
         } else if (atCap) {
-          hint.textContent = `已存 ${list.length}／${cap} 個設定檔（${list.map((item) => item.name).join("、")}）。另存新名稱會提示已滿；同名可覆蓋。`;
+          hint.textContent = `已存 ${list.length}／${cap} 個設定檔（${list.map((item) => item.name).join("、")}）。新名稱會提示已滿；同名儲存會覆蓋。`;
         } else {
           hint.textContent = `已存：${list.map((item) => item.name).join("、")}${cap ? `（最多 ${cap} 個）` : ""}`;
         }
@@ -3505,7 +3519,7 @@
       sel.innerHTML = "";
       const placeholder = document.createElement("option");
       placeholder.value = "";
-      placeholder.textContent = list.length ? "（目前設定）" : "（還沒有設定檔，請先另存）";
+      placeholder.textContent = list.length ? "（目前設定）" : "（還沒有設定檔，請先儲存）";
       sel.appendChild(placeholder);
       for (const item of list) {
         const opt = document.createElement("option");
@@ -3710,7 +3724,6 @@
       $("workAddress").value = s.workAddress || "";
       $("commuteKm").value = s.commuteKm || 0;
       setCommuteMode("commuteMode", s.commuteMode);
-      if ($("showMrt")) $("showMrt").checked = s.showMrt !== false;
       syncCommuteSort();
       fillFloorFilters(s);
       $("excludeKeywords").value = (s.excludeKeywords || []).join("\n");
@@ -3753,7 +3766,10 @@
       if (!peerId) return "";
       const title = peer?.title || `刊登 #${peerId}`;
       const url = peer?.url || listingUrl(peerId);
-      return `<div class="match-peer">疑似同一間：<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(title)}</a>${peer?.price ? ` · 租金 ${esc(peer.price)}` : ""}</div>`;
+      const srcMine = listingSourceLabel(item);
+      const srcPeer = listingSourceLabel(peer || {});
+      const srcBit = ` · ${esc(srcMine)}${srcPeer ? `／${esc(srcPeer)}` : ""}`;
+      return `<div class="match-peer">疑似同一間（${esc(srcPeer || srcMine)}）：<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(title)}</a>${peer?.price ? ` · 租金 ${esc(peer.price)}` : ""}${srcBit}</div>`;
     }
 
     function matchActionButtons(item, id) {
@@ -3761,7 +3777,7 @@
       return `
             <button class="primary" data-confirm-match="${id}">是同一間</button>
             <button class="ghost" data-reject-match="${id}">不是同一間</button>
-            <span class="hint">確認後保留較低價；同價留較新刊登</span>`;
+            <span class="hint">確認後列表只留總費用（租金＋額外費用）較低的那則；同價留較新</span>`;
     }
 
     function chineseMonthCount(token) {
@@ -3841,8 +3857,8 @@
       if (item.last_event === "same_source" && !item.match_level) bits.push('<span class="tag same">同屋源更新</span>');
       if (item.match_verdict === "yes") bits.push('<span class="tag verdict-yes">已確認：同一間</span>');
       else if (item.match_verdict === "no") bits.push('<span class="tag verdict-no">已確認：不同物件</span>');
-      else if (item.match_level === "high") bits.push('<span class="tag same">高信心同屋源</span>');
-      else if (item.match_level === "medium") bits.push('<span class="tag watch">需確認同屋源</span>');
+      else if (item.match_level === "high") bits.push(`<span class="tag same">高信心同屋源 · ${esc(listingSourceLabel(item))}${item.match_peer ? `／${esc(listingSourceLabel(item.match_peer))}` : ""}</span>`);
+      else if (item.match_level === "medium") bits.push(`<span class="tag watch">需確認同屋源 · ${esc(listingSourceLabel(item))}${item.match_peer ? `／${esc(listingSourceLabel(item.match_peer))}` : ""}</span>`);
       if (item.last_event === "update") bits.push('<span class="tag same">內容更新</span>');
       if (item.offline_confirmed) bits.push('<span class="tag off-sure">確認已下架</span>');
       else if (item.offline || item.last_event === "offline") bits.push('<span class="tag off">正在確認中的下架</span>');
@@ -3950,8 +3966,8 @@
         if (q) msg = `沒有符合「${q}」的物件。試試較短關鍵字，或清掉搜尋看全部列表。`;
         else if (viewDistricts.size) {
           msg = "這個行政區篩選目前沒有物件。可點「全部」或再勾其他區。";
-        } else if ($("wholeFloorOnly").checked || $("excludeLowFloors").checked) {
-          msg = "目前沒有符合設定檔「整層／樓層」篩選的物件。到篩選裡取消勾選並儲存後可看到更多已抓到的結果。";
+        } else if (kind === "whole" || $("excludeLowFloors")?.checked || $("excludeRooftop")?.checked) {
+          msg = "目前沒有符合列表上方「整層／樓層／頂加」過濾的物件。可取消勾選或關掉整層住家再看。";
         } else if (filter === "suspected") {
           msg = "目前沒有被判成同一屋源的重刊。隱藏或已瀏覽的舊屋若再上架，會出現在這裡。";
         } else if (filter === "offline") {
@@ -4368,7 +4384,7 @@
       paintSponsorOffer(me.sponsor);
       if (me.role && me.role !== "admin" && $("resetLink")) $("resetLink").style.display = "none";
       settingsLoaded = false;
-      setSettingsReady(false, "正在載入已存設定…完成前請不要按儲存或另存。");
+      setSettingsReady(false, "正在載入已存設定…完成前請不要按儲存。");
       lastError = "";
       for (let attempt = 1; attempt <= 4; attempt += 1) {
         try {
@@ -4431,11 +4447,11 @@
         priceMin: Number($("priceMin").value) || 0,
         priceMax: Number($("priceMax").value) || 0,
         areaMax: Number($("areaMax").value) || 0,
-        excludeRooftop: $("excludeRooftop").checked,
+        excludeRooftop: $("excludeRooftop") ? $("excludeRooftop").checked : true,
         offlineConfirmDays: meIsAdmin ? (Number($("offlineConfirmDays").value) || 7) : 7,
         minBuildingFloors: Number($("minBuildingFloors").value) || 4,
-        wholeFloorOnly: $("wholeFloorOnly").checked,
-        excludeLowFloors: $("excludeLowFloors").checked,
+        wholeFloorOnly: kind === "whole",
+        excludeLowFloors: $("excludeLowFloors") ? $("excludeLowFloors").checked : true,
         excludeKeywords: $("excludeKeywords").value.split(/[\n,，]/).map((s) => s.trim()).filter(Boolean),
         excludeAgents: $("excludeAgents").value.split(/[\n,，]/).map((s) => s.trim()).filter(Boolean),
         excludeAgentIds: settings.excludeAgentIds || [],
@@ -4445,7 +4461,6 @@
         workAddress: $("workAddress").value.trim(),
         commuteKm: Number($("commuteKm").value) || 0,
         commuteMode: selectedCommuteMode("commuteMode"),
-        showMrt: $("showMrt") ? $("showMrt").checked : true,
       };
     }
 
@@ -4455,7 +4470,7 @@
         return JSON.parse(text);
       } catch {
         if (res.status === 502 || res.status === 504 || res.status === 524) {
-          throw new Error("伺服器回應逾時。請稍候再按一次，不要連續猛按");
+          throw new Error("伺服器回應逾時，請稍候再試");
         }
         throw new Error("伺服器沒有正確回應，請重新整理後再試");
       }
@@ -4505,13 +4520,34 @@
 
     $("saveBtn").onclick = async () => {
       if (!$("profileName").value.trim()) $("profileName").value = "暫存";
+      const name = $("profileName").value.trim();
+      if (name.length > 40) { flash("名稱太長"); return; }
+      const profiles = Array.isArray(settings?.settingProfiles) ? settings.settingProfiles : [];
+      const existing = profiles.some((item) => String(item.name || "").trim() === name);
+      const cap = profileLimit();
+      if (!existing && cap && profiles.length >= cap) {
+        flash("設定檔已滿");
+        return;
+      }
       $("saveBtn").disabled = true;
       flash("儲存中…");
       try {
-        await saveSettings(collectSettings());
-        flash("設定已儲存，之後會依條件自動抓取與篩選");
+        const res = await fetch("/api/profiles", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, overwrite: true, settings: collectSettings() }),
+          signal: AbortSignal.timeout(25000),
+        });
+        const data = await readApi(res);
+        if (!res.ok) {
+          const err = String(data.error || "");
+          throw new Error(err.includes("設定檔已滿") ? "設定檔已滿" : (err || "儲存失敗"));
+        }
+        fillSettings(data.settings);
+        const saved = (data.settings?.settingProfiles || []).some((item) => item.name === name);
+        flash(saved ? "設定已儲存" : "設定已寫入，但下拉選單沒看到名稱，請再試一次");
         maybeAskPush("儲存條件後可允許系統推播。");
-        fetch("/api/watch", { method: "POST", signal: AbortSignal.timeout(55000) }).catch(() => {});
+        fetch("/api/watch", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}", signal: AbortSignal.timeout(55000) }).catch(() => {});
         await loadList();
       } catch (error) {
         const msg = error.name === "TimeoutError" || error.name === "AbortError"
@@ -4520,49 +4556,6 @@
         flash(msg);
       } finally {
         $("saveBtn").disabled = !settingsLoaded;
-      }
-    };
-
-    $("saveAsBtn").onclick = async () => {
-      const name = $("profileName").value.trim();
-      if (!name) {
-        $("profileName").focus();
-        flash("請先在左側填設定檔名稱，再按另存");
-        return;
-      }
-      const profiles = Array.isArray(settings?.settingProfiles) ? settings.settingProfiles : [];
-      const existing = profiles.some((item) => String(item.name || "").trim() === name);
-      const cap = profileLimit();
-      const atCap = Boolean(cap && profiles.length >= cap);
-      if (existing) {
-        if (!window.confirm(`已有同名設定檔「${name}」。確定要覆蓋嗎？`)) return;
-      } else if (atCap) {
-        window.alert(`設定檔已滿（最多 ${cap} 個）。請先刪除一個，或改用現有設定檔名稱覆蓋。`);
-        return;
-      }
-      $("saveAsBtn").disabled = true;
-      flash(existing ? "覆蓋中…" : "另存中…");
-      try {
-        const res = await fetch("/api/profiles", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name, overwrite: existing, settings: collectSettings() }),
-          signal: AbortSignal.timeout(25000),
-        });
-        const data = await readApi(res);
-        if (!res.ok) throw new Error(data.error || "另存失敗");
-        fillSettings(data.settings);
-        const saved = (data.settings?.settingProfiles || []).some((item) => item.name === name);
-        flash(saved
-          ? (existing ? `已覆蓋「${name}」` : `已另存「${name}」，可在左上選單切換`)
-          : `另存回應沒有「${name}」，請再試一次`);
-      } catch (error) {
-        const msg = error.name === "TimeoutError" || error.name === "AbortError"
-          ? "另存逾時，請再試一次"
-          : error.message;
-        flash(msg);
-      } finally {
-        setSettingsReady(settingsLoaded);
       }
     };
 
@@ -4612,7 +4605,7 @@
       $("status").textContent = "正在儲存篩選並檢查…";
       try {
         await saveSettings(collectSettings());
-        const res = await fetch("/api/watch", { method: "POST", signal: AbortSignal.timeout(55000) });
+        const res = await fetch("/api/watch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ force: true }), signal: AbortSignal.timeout(55000) });
         const data = await readApi(res);
         if (!res.ok) throw new Error(data.error || "檢查失敗");
         $("status").textContent = statusFromResult(data.result);
@@ -5471,13 +5464,28 @@
     });
     $("selfListingClose")?.addEventListener("click", closeSelfOverlay);
     document.querySelector("[data-close-self]")?.addEventListener("click", closeSelfOverlay);
-    $("showMrt")?.addEventListener("change", () => {
-      if (isGuest) {
-        $("showMrt").checked = settings.showMrt !== false;
-        return;
-      }
-      settings.showMrt = $("showMrt").checked;
-      renderList(listCache, lastStats);
+    function persistDisplayFilters() {
+      if (isGuest || !settingsLoaded) return;
+      const body = {
+        wholeFloorOnly: kind === "whole",
+        excludeRooftop: $("excludeRooftop") ? $("excludeRooftop").checked : true,
+        excludeLowFloors: $("excludeLowFloors") ? $("excludeLowFloors").checked : true,
+      };
+      settings = { ...settings, ...body };
+      fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(15000),
+      }).catch(() => {});
+    }
+    $("excludeRooftop")?.addEventListener("change", () => {
+      persistDisplayFilters();
+      loadList();
+    });
+    $("excludeLowFloors")?.addEventListener("change", () => {
+      persistDisplayFilters();
+      loadList();
     });
     document.querySelectorAll("[data-open-hub]").forEach((el) => {
       el.addEventListener("click", () => openNotifyHub(el.dataset.openHub));
@@ -5761,6 +5769,7 @@
         document.querySelectorAll("[data-kind]").forEach((b) => {
           b.classList.toggle("on", b.dataset.kind === kind);
         });
+        persistDisplayFilters();
         loadList();
       };
     });

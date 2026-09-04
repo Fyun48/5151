@@ -289,10 +289,11 @@
     </section>
     <section class="card">
       <h2>系統抓取底庫</h2>
-      <p class="hint">會員抓到的物件會寫進同一份資料庫、互相共用，不會每人各爬一遍。這裡可再指定「底庫行政區」：就算還沒有會員勾這些區，系統仍會定期抓進來給之後的搜尋用。間隔是全站共用節奏（建議 10–15 分鐘），不是每個會員各抓一次。</p>
+      <p class="hint">會員抓到的物件會寫進同一份資料庫、互相共用，不會每人各爬一遍。這裡可再指定「底庫行政區」：就算還沒有會員勾這些區，系統仍會定期抓進來給之後的搜尋用。間隔是全站共用節奏（建議 10–15 分鐘），不是每個會員各抓一次。列表捷運站也在這裡統一開關：開啟後，只有步行路線未滿 1.5 公里才顯示站名與距離；會員畫面沒有這個選項。</p>
       <form id="systemCrawlForm">
         <label>全站檢查間隔（分鐘）</label>
         <input id="systemCrawlInterval" type="number" min="1" max="120" value="15" />
+        <label class="checks" style="display:block;margin:10px 0 0"><input type="checkbox" id="systemShowMrt" checked /> 全站顯示步行未滿 1.5 公里的最近捷運站</label>
         <div id="systemCrawlDistricts" class="districts" style="display:flex;flex-wrap:wrap;gap:8px 14px;margin:12px 0"></div>
         <div class="row">
           <button type="submit" class="primary" id="systemCrawlSave">儲存底庫與間隔</button>
@@ -846,6 +847,7 @@
       const data = await readApi(res);
       if (!res.ok) throw new Error(data.error || "載入底庫失敗");
       if ($("systemCrawlInterval")) $("systemCrawlInterval").value = data.intervalMinutes || 15;
+      if ($("systemShowMrt")) $("systemShowMrt").checked = data.showMrt !== false;
       renderSystemCrawlDistricts(data.cities || [], data.watchDistricts || []);
     }
 
@@ -1441,11 +1443,13 @@
             body: JSON.stringify({
               watchDistricts,
               intervalMinutes: Number($("systemCrawlInterval").value) || 15,
+              showMrt: $("systemShowMrt") ? $("systemShowMrt").checked : true,
             }),
           });
           const data = await readApi(res);
           if (!res.ok) throw new Error(data.error || "儲存失敗");
           if ($("systemCrawlInterval")) $("systemCrawlInterval").value = data.intervalMinutes || 15;
+          if ($("systemShowMrt")) $("systemShowMrt").checked = data.showMrt !== false;
           renderSystemCrawlDistricts(data.cities || [], data.watchDistricts || []);
           setMsg("systemCrawlMsg", "底庫與間隔已儲存。之後會依這個節奏抓共用庫。", true);
         } catch (error) {
@@ -1458,6 +1462,6 @@
       setMsg("memberMsg", error.message || "載入失敗");
     });
   </script>
-  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.31</span></footer>
+  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.32</span></footer>
 </body>
 </html>

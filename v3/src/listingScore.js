@@ -19,7 +19,7 @@ export function listingFitScore(listing, settings = {}) {
     else score += 16;
   }
 
-  if (settings.wholeFloorOnly !== false) {
+  if (settings.wholeFloorOnly === true) {
     if (isWholeFloorHome(listing?.kind_name)) score += 12;
     else score -= 18;
   } else if (isWholeFloorHome(listing?.kind_name)) {

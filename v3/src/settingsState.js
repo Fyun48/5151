@@ -27,7 +27,6 @@ export const PROFILE_FIELDS = [
   "workAddress",
   "commuteKm",
   "commuteMode",
-  "showMrt",
   "workLat",
   "workLng",
   "watchDistricts",
@@ -165,7 +164,7 @@ export function hydrateSettings(stored, defaults, { admin = false, plan = "free"
       districts: next.watchDistricts,
       priceMin: next.priceMin,
       priceMax: next.priceMax,
-      excludeRooftop: next.excludeRooftop !== false,
+      excludeRooftop: false,
     });
   }
   next.settingProfiles = normalizeProfiles(next.settingProfiles, { admin });
@@ -203,7 +202,7 @@ export function applySettingPatch(current, partial = {}, { admin = false, plan =
   next.pagesPerWatch = Math.max(1, Math.min(Number(next.pagesPerWatch) || 40, 40));
   next.commuteKm = Math.max(0, Math.min(Number(next.commuteKm) || 0, 80));
   next.commuteMode = normalizeCommuteMode(next.commuteMode);
-  next.showMrt = next.showMrt !== false;
+  next.showMrt = current.showMrt !== false;
   next.workAddress = String(next.workAddress || "").trim().slice(0, 120);
   next.workLat = parseWorkCoord(next.workLat);
   next.workLng = parseWorkCoord(next.workLng);
@@ -214,7 +213,7 @@ export function applySettingPatch(current, partial = {}, { admin = false, plan =
   next.offlineConfirmDays = Math.max(1, Math.min(Math.round(Number(next.offlineConfirmDays) || 7), 30));
   applyMemberScheduleLocks(next, { admin, plan });
   next.excludeRooftop = next.excludeRooftop !== false;
-  next.wholeFloorOnly = next.wholeFloorOnly !== false;
+  next.wholeFloorOnly = next.wholeFloorOnly === true;
   next.excludeLowFloors = next.excludeLowFloors !== false;
   if (!Object.prototype.hasOwnProperty.call(patch, "dataEpoch")) {
     next.dataEpoch = current.dataEpoch;
@@ -250,7 +249,7 @@ export function applySettingPatch(current, partial = {}, { admin = false, plan =
       districts: next.watchDistricts,
       priceMin: next.priceMin,
       priceMax: next.priceMax,
-      excludeRooftop: next.excludeRooftop,
+      excludeRooftop: false,
     });
   }
   next.settingProfiles = normalizeProfiles(next.settingProfiles, { admin });

@@ -390,6 +390,13 @@ async function sweepOfflineListings(seenIds, { limit = 20 } = {}) {
   return { checked, gone, rechecked, restored, confirmed };
 }
 
+export function isWatchIntervalPending(lastCheckedAt, intervalMinutes, now = Date.now()) {
+  const t = Date.parse(lastCheckedAt);
+  if (!Number.isFinite(t)) return false;
+  const wait = Math.max(1, Number(intervalMinutes) || 1) * 60 * 1000;
+  return now - t < wait;
+}
+
 export async function runWatch(options = {}) {
   const want591 = isCrawlSourceEnabled("591");
   const wantHb = isCrawlSourceEnabled("hbhousing");

@@ -154,19 +154,15 @@ test("mobile more-filters keep chips and districts inside the card", () => {
   assert.doesNotMatch(mobile, /#districtChips \{[\s\S]*flex-wrap: nowrap;/);
 });
 
-test("left panel floor filters and profile save stay in the settings sheet", () => {
+test("left panel profile save stays in the settings sheet", () => {
   const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
   const panel = html.slice(html.indexOf('id="settingsPanel"'), html.indexOf('id="listHeadSticky"'));
   assert.match(panel, /class="header-profiles"/);
   assert.match(panel, /id="saveBtn"/);
-  assert.match(panel, /id="excludeRooftop"/);
-  assert.match(panel, /id="wholeFloorOnly"/);
-  assert.match(panel, /排除 1F 及地下室/);
-  assert.doesNotMatch(panel, /含地下室、整棟、頂加/);
-  const rooftop = panel.indexOf("excludeRooftop");
-  const whole = panel.indexOf("wholeFloorOnly");
-  const low = panel.indexOf("excludeLowFloors");
-  assert.ok(rooftop > 0 && whole > rooftop && low > whole);
+  assert.doesNotMatch(panel, /id="saveAsBtn"/);
+  assert.doesNotMatch(panel, /id="excludeRooftop"/);
+  assert.doesNotMatch(panel, /id="wholeFloorOnly"/);
+  assert.doesNotMatch(panel, /排除 1F 及地下室/);
   assert.match(panel, /panel-sticky/);
   assert.match(panel, /panel-close/);
   assert.match(html, /#settingsPanel \.profile-row \{[\s\S]*flex-wrap: nowrap;/);
@@ -189,14 +185,15 @@ test("member profiles cap districts and include usable ping in notify copy", () 
   assert.match(html, /notify_facts/);
   assert.match(html, /housing_type/);
   assert.match(html, /已存 \$\{list\.length\}／\$\{cap\}/);
-  assert.match(html, /另存新名稱會提示已滿；同名可覆蓋/);
-  assert.match(html, /setSettingsReady\(settingsLoaded\)/);
+  assert.match(html, /新名稱會提示已滿；同名儲存會覆蓋/);
+  assert.match(html, /function setSettingsReady/);
   assert.match(html, /\$\{label\}路線約 \$\{item\.commute_km\} 公里/);
   assert.doesNotMatch(html, /上約/);
   assert.doesNotMatch(html, /下約/);
-  assert.match(html, /確定要覆蓋嗎？/);
-  assert.match(html, /設定檔已滿（最多 \$\{cap\} 個）/);
-  assert.match(html, /overwrite: existing/);
+  assert.doesNotMatch(html, /確定要覆蓋嗎？/);
+  assert.match(html, /flash\("設定檔已滿"\)/);
+  assert.match(html, /overwrite: true/);
+  assert.doesNotMatch(html, /id="saveAsBtn"/);
   assert.doesNotMatch(html, /saveAsBtn"\)\.disabled = atCap/);
   assert.doesNotMatch(html, /disabled = !ok \|\| Boolean\(cap && have >= cap\)/);
   const profilesFn = html.slice(html.indexOf("function renderProfiles"), html.indexOf("function fillNotifyMatrix"));
@@ -330,21 +327,21 @@ test("product name is 吉比租房物件追蹤 without v2 開發版 copy", () =>
   assert.equal(html.includes("v2 開發版"), false);
   assert.equal(html.includes("v3 開發版"), false);
   assert.equal(html.includes("與線上版分開的資料庫"), false);
-  assert.match(html, /ver\. 3\.31/);
+  assert.match(html, /ver\. 3\.32/);
   assert.doesNotMatch(html, /<h1>[^<]*v3/i);
   assert.match(login, /<h1>吉比租房物件追蹤<\/h1>/);
   assert.equal(login.includes("v2 開發版"), false);
   assert.equal(login.includes("v3 開發版"), false);
   assert.equal(login.includes("資料與線上版分開"), false);
-  assert.match(login, /ver\. 3\.31/);
+  assert.match(login, /ver\. 3\.32/);
 });
 
-test("MRT toggle and guest tour are in the page", () => {
+test("MRT is admin-only and guest tour is in the page", () => {
   const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
-  assert.match(html, /id="showMrt"/);
+  assert.doesNotMatch(html, /id="showMrt"/);
   assert.match(html, /id="helpQaBtn"/);
   assert.match(html, /html\.no-session #helpQaBtn/);
-  assert.match(html, /顯示最近捷運站步行距離/);
+  assert.match(html, /這個開關只在後台統一設定/);
   assert.match(html, /function mrtText/);
   assert.match(html, /步行約 \$\{esc\(walkKm\)\} 公里/);
   assert.doesNotMatch(html, /騎車約/);
@@ -356,17 +353,16 @@ test("MRT toggle and guest tour are in the page", () => {
   assert.match(html, /前往註冊/);
   assert.match(html, /#listHeadSticky/);
   assert.match(html, /behavior: "instant"/);
-  assert.match(html, /\$\("showMrt"\)\?\.addEventListener\("change"/);
   assert.match(html, /id="notifyHub"/);
   assert.match(html, /data-hub-tab="webhook"/);
   assert.match(html, /id="notifyInbox"/);
-  assert.equal(html.includes('showMrt: $("showMrt") ? $("showMrt").checked : true'), true);
+  assert.doesNotMatch(html, /showMrt: \$\("showMrt"\)/);
 });
 
 test("listing commute copy is kilometers only and does not show rush minutes", () => {
   const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
   const start = html.indexOf("function commuteText");
-  const end = html.indexOf("function mrtOn");
+  const end = html.indexOf("function mrtChip");
   assert.ok(start > 0 && end > start);
   const fn = html.slice(start, end);
   assert.match(fn, /\$\{label\}路線約 \$\{item\.commute_km\} 公里/);
@@ -544,8 +540,10 @@ test("self listing form and in-site detail stay on this site", () => {
   assert.match(html, /\$\{sourceTagHtml\(item\)\}/);
   assert.doesNotMatch(html, /source_label \|\| "591"/);
   assert.match(html, /id="excludeRooftop"/);
-  assert.match(html, /id="wholeFloorOnly"/);
+  assert.match(html, /data-kind="whole"/);
+  assert.doesNotMatch(html, /id="wholeFloorOnly"/);
   assert.match(html, /id="excludeLowFloors"/);
+  assert.match(html, /class="chip-row view-checks"/);
   assert.doesNotMatch(html, /class="view-filters"/);
   assert.doesNotMatch(html, /persistViewFilters/);
   assert.match(html, /hbhousing/);
@@ -559,4 +557,6 @@ test("self listing form and in-site detail stay on this site", () => {
   assert.match(html, /item\.fit_score/);
   assert.match(html, /sort === "fit_desc"/);
   assert.doesNotMatch(html, /model_score/);
+  assert.match(html, /疑似同一間（\$\{esc\(srcPeer \|\| srcMine\)\}）/);
+  assert.match(html, /確認後列表只留總費用（租金＋額外費用）較低的那則/);
 });

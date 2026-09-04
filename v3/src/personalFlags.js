@@ -298,7 +298,7 @@ export function listingMatchesListFilter(row, filter) {
   const dup = String(row?.match_verdict || "") === "yes";
   if (filter === "hidden") return hidden || dup;
   if (filter === "offline") return offline && !confirmed;
-  if (filter === "suspected") return Boolean(row?.match_level) && !offline;
+  if (filter === "suspected") return Boolean(row?.match_level) && !offline && !dup && !hidden;
   if (dup || offline || hidden) return false;
   if (filter === "all") return !watched;
   if (filter === "unseen") return !viewed;
