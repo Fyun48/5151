@@ -78,7 +78,7 @@ test("coverToListUrl builds a newest-first 591 list search", () => {
   assert.equal(parsed.searchParams.get("region"), "1");
   assert.equal(parsed.searchParams.get("section"), "8,9");
   assert.equal(parsed.searchParams.get("price"), "_40000");
-  assert.equal(parsed.searchParams.get("notice"), "not_cover");
+  assert.equal(parsed.searchParams.get("notice"), null);
   assert.equal(parsed.searchParams.get("order"), "posttime");
   assert.equal(parsed.searchParams.get("orderType"), "desc");
 });
@@ -139,6 +139,7 @@ test("single-admin settings become one cover per city, not duplicated searchUrls
   assert.equal(taipei.priceMax, 40000);
   assert.match(taipei.searchUrl, /order=posttime/);
   assert.match(taipei.searchUrl, /orderType=desc/);
+  assert.equal(new URL(taipei.searchUrl).searchParams.get("notice"), null);
 });
 
 test("listingInMemberScope only matches that member's city, district, and rent cap", () => {

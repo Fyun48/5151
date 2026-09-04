@@ -1102,7 +1102,7 @@ const DEFAULTS = {
   windowsToast: true,
   hasBaseline: false,
   excludeLowFloors: true,
-  wholeFloorOnly: true,
+  wholeFloorOnly: false,
   minBuildingFloors: 4,
   excludeKeywords: [],
   excludeAgents: [],
@@ -1300,8 +1300,17 @@ function decorateListing(row, settings, userId) {
   const commuteKm = commute == null ? null : Math.round(commute * 10) / 10;
   const commuteMode = normalizeCommuteMode(settings.commuteMode);
   const matchPostId = Number(row.match_post_id) || 0;
-  const matchPeer = matchPostId
-    ? db.prepare("SELECT post_id, title, url, price, offline FROM listings WHERE post_id = ?").get(matchPostId)
+  const matchPeerRaw = matchPostId
+    ? db.prepare(
+      "SELECT post_id, title, url, price, price_num, extra_fee, extra_fees, source, offline FROM listings WHERE post_id = ?",
+    ).get(matchPostId)
+    : null;
+  const matchPeer = matchPeerRaw
+    ? {
+      ...matchPeerRaw,
+      source: String(matchPeerRaw.source || "591") || "591",
+      source_label: selfSourceLabel(matchPeerRaw.source || "591"),
+    }
     : null;
   const source = String(row.source || "591") || "591";
   const uid = Number(userId) || 0;
@@ -1430,17 +1439,15 @@ export function confirmSuspectedMatch(postId, userId) {
 export function coveringJobsFromAllUsers() {
   const ids = listUserIds();
   const covers = [];
-  let excludeRooftop = true;
   const system = getSystemCrawl();
   covers.push(...coversFromWatchDistricts({ watchDistricts: system.watchDistricts }));
   for (const id of ids) {
     const settings = getSettings(id);
     const memberCovers = coversFromMemberSettings(settings);
     if (memberCovers.length) covers.push(...memberCovers);
-    if (settings.excludeRooftop === false) excludeRooftop = false;
   }
   if (!covers.length) return coveringJobsFromSettings(getSettings());
-  return coveringJobsFromMembers(covers, { excludeRooftop });
+  return coveringJobsFromMembers(covers, { excludeRooftop: false });
 }
 
 export function currentSearchKeys() {
@@ -1450,7 +1457,7 @@ export function currentSearchKeys() {
   }
   urls.push(...(getSettings().searchUrls || []));
   const coverUrls = coveringJobsFromMembers(listCrawlCovers(db), {
-    excludeRooftop: true,
+    excludeRooftop: false,
   }).map((job) => job.searchUrl);
   return [...new Set([...urls, ...coverUrls].map((url) => String(url || "").trim()).filter(Boolean))];
 }
@@ -2008,6 +2015,7 @@ export function getSystemCrawl() {
     intervalMinutes: Number.isFinite(intervalRaw) && intervalRaw > 0
       ? clampIntervalMinutes(intervalRaw, { admin: true, fallback: SYSTEM_CRAWL_INTERVAL_MINUTES })
       : SYSTEM_CRAWL_INTERVAL_MINUTES,
+    showMrt: stored.systemShowMrt !== false,
     cities: CITIES,
   };
 }
@@ -2023,8 +2031,12 @@ export function saveSystemCrawl(partial = {}) {
   const upsert = db.prepare(
     "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
   );
+  const showMrt = Object.prototype.hasOwnProperty.call(partial, "showMrt")
+    ? partial.showMrt !== false
+    : current.showMrt !== false;
   upsert.run("systemWatchDistricts", JSON.stringify(watchDistricts));
   upsert.run("systemCrawlIntervalMinutes", JSON.stringify(intervalMinutes));
+  upsert.run("systemShowMrt", JSON.stringify(showMrt));
   return getSystemCrawl();
 }
 
@@ -2153,7 +2165,8 @@ export function listingsNeedingMrt(limit = 20) {
 }
 
 function mrtFields(row, settings) {
-  if (settings?.showMrt === false) {
+  const showMrt = getSystemCrawl().showMrt !== false;
+  if (!showMrt) {
     return { mrt_station: null, mrt_walk_km: null, mrt_walk_min: null, mrt_ride_km: null, mrt_ride_min: null };
   }
   if (!isTrustedGeoSource(row.geo_source) || !Number.isFinite(Number(row.lat)) || !Number.isFinite(Number(row.lng))) {
@@ -2332,6 +2345,8 @@ export function listListings({
   if (filter === "suspected") {
     clauses.push("match_level IN ('high', 'medium')");
     clauses.push("IFNULL(offline, 0) = 0");
+    clauses.push("(IFNULL(match_verdict, '') != 'yes')");
+    clauses.push("IFNULL(hidden, 0) = 0");
   } else if (filter === "offline") {
     clauses.push("IFNULL(offline, 0) = 1");
     clauses.push("IFNULL(offline_confirmed, 0) = 0");
@@ -2407,7 +2422,7 @@ export function listListings({
   rows = rows.filter((row) => keepSelfListingForViewer(row, uid, settings, listingInMemberScope));
 
   // 整層／1F、行政區要在 limit 前套用，否則「全庫最便宜 500 筆」再前端篩選會漏掉新北等區
-  rows = rows.filter((row) => passesDisplayFilters(row, settings, { skipWholeFloor: kind === "suite" }));
+  rows = rows.filter((row) => passesDisplayFilters(row, settings, { skipWholeFloor: Boolean(kind) }));
   const districtSet = new Set(
     (Array.isArray(districts) ? districts : String(districts || "").split(","))
       .map((name) => String(name || "").trim())
@@ -2559,8 +2574,8 @@ export function stats(searchKeys, userId, settingsOverride) {
     hidden: attrRows.filter((row) => row.hidden).length,
     offline: raw.filter((row) => isPendingOffline(row)).length,
     offlineConfirmed: raw.filter((row) => isConfirmedOffline(row)).length,
-    suspected: attrRows.filter((row) => row.match_level && !row.offline).length,
-    suspectedPending: attrRows.filter((row) => row.match_level && !row.match_verdict && !row.offline).length,
+    suspected: attrRows.filter((row) => row.match_level && !row.offline && row.match_verdict !== "yes" && !row.hidden).length,
+    suspectedPending: attrRows.filter((row) => row.match_level && !row.match_verdict && !row.offline && !row.hidden).length,
     elevator: browse.filter((row) => listingHasElevator(row)).length,
     stored: geoRows.length,
     filteredOut: Math.max(0, browse.length - geoRows.length),

@@ -115,7 +115,7 @@ export function coversFromMemberSettings(settings = {}) {
   return covers;
 }
 
-export function coverToListUrl(cover, { excludeRooftop = true } = {}) {
+export function coverToListUrl(cover, { excludeRooftop = false } = {}) {
   const regionId = Number(cover?.regionId) || 0;
   if (regionId <= 0) return "";
   const params = new URLSearchParams();
@@ -125,13 +125,13 @@ export function coverToListUrl(cover, { excludeRooftop = true } = {}) {
   const lo = Number(cover.priceMin) > 0 ? String(Math.round(Number(cover.priceMin))) : "";
   const hi = Number(cover.priceMax) > 0 ? String(Math.round(Number(cover.priceMax))) : "";
   if (lo || hi) params.set("price", `${lo}_${hi}`);
-  if (excludeRooftop !== false) params.set("notice", "not_cover");
+  if (excludeRooftop === true) params.set("notice", "not_cover");
   params.set("order", "posttime");
   params.set("orderType", "desc");
   return `https://rent.591.com.tw/list?${params}`;
 }
 
-export function coveringJobsFromMembers(members, { excludeRooftop = true } = {}) {
+export function coveringJobsFromMembers(members, { excludeRooftop = false } = {}) {
   return mergeCovers(members)
     .map((job) => ({
       ...job,
@@ -142,7 +142,7 @@ export function coveringJobsFromMembers(members, { excludeRooftop = true } = {})
 
 export function coveringJobsFromSettings(settings = {}) {
   return coveringJobsFromMembers(coversFromMemberSettings(settings), {
-    excludeRooftop: settings.excludeRooftop !== false,
+    excludeRooftop: false,
   });
 }
 

@@ -57,7 +57,7 @@ export function publicDemoSettings(settings = {}) {
     offlineConfirmDays: Number(settings.offlineConfirmDays) || 7,
     pagesPerWatch: Number(settings.pagesPerWatch) || 40,
     minBuildingFloors: Number(settings.minBuildingFloors) || 4,
-    wholeFloorOnly: settings.wholeFloorOnly !== false,
+    wholeFloorOnly: settings.wholeFloorOnly === true,
     excludeLowFloors: settings.excludeLowFloors !== false,
     excludeKeywords: [],
     excludeAgents: [],
@@ -66,7 +66,7 @@ export function publicDemoSettings(settings = {}) {
     discordWebhook: "",
     notifyMatrix: settings.notifyMatrix || {},
     ...demoCommutePatch(),
-    showMrt: settings.showMrt !== false,
+    showMrt: true,
     settingProfiles: [],
     activeProfileId: "",
   };
