@@ -111,10 +111,11 @@ export function passesDisplayFilters(listing, settings = {}, { skipWholeFloor = 
 
 export function passesAttributeFilters(listing, settings = {}) {
   const minFloors = Number(settings.minBuildingFloors);
-  const min = Number.isFinite(minFloors) && minFloors > 0 ? minFloors : 4;
-  const totalFloors = buildingTotalFloors(listing.floor_name);
-  if (totalFloors > 0 && totalFloors < min) {
-    return false;
+  if (Number.isFinite(minFloors) && minFloors > 0) {
+    const totalFloors = buildingTotalFloors(listing.floor_name);
+    if (totalFloors > 0 && totalFloors < minFloors) {
+      return false;
+    }
   }
   if (isExcludedByKeyword(listing, settings.excludeKeywords)) {
     return false;

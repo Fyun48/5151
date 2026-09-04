@@ -35,6 +35,8 @@ test("admin settings are grouped into clickable categories", () => {
   const site = html.slice(html.indexOf('data-admin-panel="site"'), html.indexOf('data-admin-panel="notices"'));
   assert.match(site, /吉比形象／Logo/);
   assert.match(site, /功能說明 Q&amp;A/);
+  assert.match(site, /宣告／免責／個資/);
+  assert.match(site, /id="legalCopyForm"/);
   assert.doesNotMatch(site, /id="broadcastsForm"/);
 
   const notices = html.slice(html.indexOf('data-admin-panel="notices"'), html.indexOf('data-admin-panel="promo"'));

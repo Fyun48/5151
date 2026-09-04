@@ -1,6 +1,6 @@
 import {
   enqueueListingEvent,
-  coveringJobsFromAllUsers,
+  coveringPlan,
   findBySourceKey,
   getCommunityCache,
   getListing,
@@ -16,6 +16,7 @@ import {
   listingsNeedingRoute,
   listingsNeedingAliveCheck,
   listingsNeedingOfflineRecheck,
+  markCoveringCompleted,
   markEventNotified,
   markListingOffline,
   confirmExpiredOfflineListings,
@@ -414,7 +415,17 @@ export async function runWatch(options = {}) {
     };
   }
   const settings = getSettings();
-  const jobs = coveringJobsFromAllUsers();
+  const plan = Array.isArray(options.jobs)
+    ? {
+      jobs: options.jobs,
+      includedUserIds: options.includedUserIds || [],
+      includeSystem: options.includeSystem === true,
+    }
+    : coveringPlan({
+      now: Date.now(),
+      includeSystem: options.includeSystem !== false,
+    });
+  const jobs = plan.jobs;
   if (!jobs.length) {
     throw new Error("請先選行政區或貼上至少一組 591 搜尋網址");
   }
@@ -426,7 +437,7 @@ export async function runWatch(options = {}) {
   const collected = [];
   const errors = [];
   const fetchOptions = {
-    minBuildingFloors: settings.minBuildingFloors || 4,
+    minBuildingFloors: Number(settings.minBuildingFloors) || 0,
     excludeKeywords: settings.excludeKeywords,
     excludeBoxes: settings.excludeBoxes,
     excludeAgents: settings.excludeAgents,
@@ -602,6 +613,11 @@ export async function runWatch(options = {}) {
     saveSettings({ hasBaseline: true });
   }
   touchCrawlCoversRun(db);
+  markCoveringCompleted({
+    includedUserIds: plan.includedUserIds,
+    includeSystem: plan.includeSystem === true,
+    at: nowIso(),
+  });
 
   return {
     baseline: isBaseline,

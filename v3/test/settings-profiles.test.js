@@ -11,6 +11,11 @@ import {
   resolveSaveAsProfileAction,
   MEMBER_MAX_PROFILE_DISTRICTS,
   MEMBER_MAX_PROFILES,
+  MEMBER_MAX_EXCLUDE_KEYWORDS,
+  MEMBER_MAX_EXCLUDE_AGENTS,
+  memberShouldContributeCrawl,
+  memberFetchCollision,
+  memberHasCrawlScope,
 } from "../src/settingsState.js";
 import { coveringJobsFromSettings } from "../src/covering.js";
 
@@ -254,7 +259,7 @@ test("save-as resolves overwrite, create, and full without adding a fourth slot"
   assert.equal(resolveSaveAsProfileAction(full.slice(0, 1), "士林").action, "create");
   assert.equal(resolveSaveAsProfileAction(full, "士林").action, "full");
   assert.equal(resolveSaveAsProfileAction(full, "士林", { admin: true }).action, "create");
-  assert.equal(resolveSaveAsProfileAction(full, "蘆洲").action, "confirm_overwrite");
+  assert.equal(resolveSaveAsProfileAction(full, "蘆洲").action, "overwrite");
   const overwrite = resolveSaveAsProfileAction(full, " 蘆洲 ", { overwrite: true });
   assert.equal(overwrite.action, "overwrite");
   assert.equal(overwrite.existing.id, "p-1");
@@ -303,4 +308,46 @@ test("members cannot change interval, pages, or offline days; admins can", () =>
   assert.equal(adminPatched.intervalMinutes, 1);
   assert.equal(adminPatched.pagesPerWatch, 8);
   assert.equal(adminPatched.offlineConfirmDays, 21);
+});
+
+test("same-name save overwrites without a confirm action", () => {
+  const one = [{ id: "p-1", name: "蘆洲" }];
+  assert.equal(resolveSaveAsProfileAction(one, "蘆洲").action, "overwrite");
+  assert.equal(resolveSaveAsProfileAction(one, "蘆洲", { overwrite: false }).action, "overwrite");
+});
+
+test("commute km keeps one decimal and exclude lists are capped", () => {
+  const next = applySettingPatch(
+    { ...defaults, watchDistricts: ["1-8"] },
+    {
+      commuteKm: 12.34,
+      minBuildingFloors: 120,
+      excludeKeywords: Array.from({ length: 40 }, (_, i) => `路${i}`),
+      excludeAgents: Array.from({ length: 20 }, (_, i) => `仲介${i}`),
+    },
+  );
+  assert.equal(next.commuteKm, 12.3);
+  assert.equal(next.minBuildingFloors, 99);
+  assert.equal(next.excludeKeywords.length, MEMBER_MAX_EXCLUDE_KEYWORDS);
+  assert.equal(next.excludeAgents.length, MEMBER_MAX_EXCLUDE_AGENTS);
+  const blank = applySettingPatch({ ...defaults }, { priceMax: "", minBuildingFloors: "" });
+  assert.equal(blank.priceMax, 0);
+  assert.equal(blank.minBuildingFloors, 0);
+});
+
+test("member crawl waits for due time, districts, and a recent covering collision", () => {
+  const now = Date.parse("2026-09-04T12:00:00.000Z");
+  const last = "2026-09-04T11:59:30.000Z";
+  const due = "2026-09-04T11:59:40.000Z";
+  const scoped = { watchDistricts: ["1-8"], searchUrls: ["https://rent.591.com.tw/list?region=1&section=8"], memberFetchDueAt: due };
+  assert.equal(memberHasCrawlScope({ watchDistricts: [] }), false);
+  assert.equal(memberHasCrawlScope(scoped), true);
+  assert.equal(memberShouldContributeCrawl({ ...scoped, memberFetchDueAt: "" }, { now }), false);
+  assert.equal(memberShouldContributeCrawl({ ...scoped, notificationsPaused: true }, { now, lastCoveringAt: last }), false);
+  assert.equal(memberFetchCollision(scoped, { now, lastCoveringAt: last }), true);
+  assert.equal(memberShouldContributeCrawl(scoped, { now, lastCoveringAt: last }), false);
+  const laterDue = { ...scoped, memberFetchDueAt: "2026-09-04T11:00:00.000Z" };
+  assert.equal(memberFetchCollision(laterDue, { now, lastCoveringAt: last }), false);
+  assert.equal(memberShouldContributeCrawl(laterDue, { now, lastCoveringAt: last }), true);
+  assert.equal(memberShouldContributeCrawl({ ...scoped, memberFetchDueAt: "2026-09-04T13:00:00.000Z" }, { now }), false);
 });

@@ -185,19 +185,48 @@ test("member profiles cap districts and include usable ping in notify copy", () 
   assert.match(html, /notify_facts/);
   assert.match(html, /housing_type/);
   assert.match(html, /已存 \$\{list\.length\}／\$\{cap\}/);
-  assert.match(html, /新名稱會提示已滿；同名儲存會覆蓋/);
+  assert.match(html, /再新增會提示最多 3 個；同名儲存會覆蓋/);
   assert.match(html, /function setSettingsReady/);
   assert.match(html, /\$\{label\}路線約 \$\{item\.commute_km\} 公里/);
   assert.doesNotMatch(html, /上約/);
   assert.doesNotMatch(html, /下約/);
   assert.doesNotMatch(html, /確定要覆蓋嗎？/);
-  assert.match(html, /flash\("設定檔已滿"\)/);
+  assert.match(html, /設定檔最多只能 \$\{cap\} 個/);
   assert.match(html, /overwrite: true/);
   assert.doesNotMatch(html, /id="saveAsBtn"/);
   assert.doesNotMatch(html, /saveAsBtn"\)\.disabled = atCap/);
   assert.doesNotMatch(html, /disabled = !ok \|\| Boolean\(cap && have >= cap\)/);
+  const saveFn = html.slice(html.indexOf('$("saveBtn").onclick'), html.indexOf('$("scrollTopBtn")'));
+  assert.doesNotMatch(saveFn, /\/api\/watch/);
+  assert.match(saveFn, /先用站內資料比對/);
   const profilesFn = html.slice(html.indexOf("function renderProfiles"), html.indexOf("function fillNotifyMatrix"));
   assert.equal(profilesFn.includes("if (label)"), false);
+});
+
+test("rent sort is a single toggle chip with gradient classes", () => {
+  const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
+  assert.match(html, />租金</);
+  assert.match(html, /data-sort="price"/);
+  assert.match(html, /function syncSortChips/);
+  assert.match(html, /rent-asc/);
+  assert.match(html, /rent-desc/);
+  assert.doesNotMatch(html, /金額低→高/);
+  assert.doesNotMatch(html, /金額高→低/);
+});
+
+test("notify channels lock until webhook or smtp is set and account can pause all", () => {
+  const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
+  assert.match(html, /function syncNotifyChannelLocks/);
+  assert.match(html, /id="mePauseNotifyBtn"/);
+  assert.match(html, /停止所有通知/);
+  assert.match(html, /notificationsPaused/);
+  assert.match(html, /id="profileLegalBox"/);
+  assert.match(html, /註冊時已同意，無法在此變更/);
+  assert.doesNotMatch(html, /id="profilePrivacy"/);
+  assert.match(html, /物件與公司距離上限/);
+  assert.match(html, /最多 30 個/);
+  assert.match(html, /最多 15 個/);
+  assert.match(html, /placeholder="不限"/);
 });
 
 test("dock has mark-read buttons and renders content diffs", () => {
@@ -327,13 +356,13 @@ test("product name is 吉比租房物件追蹤 without v2 開發版 copy", () =>
   assert.equal(html.includes("v2 開發版"), false);
   assert.equal(html.includes("v3 開發版"), false);
   assert.equal(html.includes("與線上版分開的資料庫"), false);
-  assert.match(html, /ver\. 3\.37/);
+  assert.match(html, /ver\. 3\.38/);
   assert.doesNotMatch(html, /<h1>[^<]*v3/i);
   assert.match(login, /<h1>吉比租房物件追蹤<\/h1>/);
   assert.equal(login.includes("v2 開發版"), false);
   assert.equal(login.includes("v3 開發版"), false);
   assert.equal(login.includes("資料與線上版分開"), false);
-  assert.match(login, /ver\. 3\.37/);
+  assert.match(login, /ver\. 3\.38/);
 });
 
 test("MRT is admin-only and guest tour is in the page", () => {

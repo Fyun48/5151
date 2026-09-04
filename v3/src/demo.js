@@ -56,7 +56,7 @@ export function publicDemoSettings(settings = {}) {
     intervalMinutes: Number(settings.intervalMinutes) || 8,
     offlineConfirmDays: Number(settings.offlineConfirmDays) || 7,
     pagesPerWatch: Number(settings.pagesPerWatch) || 40,
-    minBuildingFloors: Number(settings.minBuildingFloors) || 4,
+    minBuildingFloors: Number(settings.minBuildingFloors) || 0,
     wholeFloorOnly: settings.wholeFloorOnly === true,
     excludeLowFloors: settings.excludeLowFloors !== false,
     excludeKeywords: [],

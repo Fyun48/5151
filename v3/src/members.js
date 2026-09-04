@@ -1,13 +1,10 @@
 /** 會員帳號：註冊、密碼、免責聲明。只接受 db 連線。 */
 import { hashPassword, normalizeEmail, validateEmail, validatePassword, verifyPassword } from "./password.js";
+import { DEFAULT_DISCLAIMER_TEXT, DEFAULT_LEGAL_VERSION } from "./legalCopy.js";
 
-export const DISCLAIMER_VERSION = "2026-09-01";
+export const DISCLAIMER_VERSION = DEFAULT_LEGAL_VERSION;
 
-export const DISCLAIMER_TEXT = `這是免費的個人租屋追蹤工具，用來幫忙看 591 刊登，不是仲介、不是保證、也不是正式服務。
-
-591 上的價格、是否還在、地址與現況可能延遲、缺漏或與現場不符。請以 591 原頁與實際看屋為準。
-
-使用本系統即表示你了解以上限制。贊助是自願的；有沒有贊助都不改變「這是免費系統」。未來若有贊助方案，只會影響檢查間隔或覆蓋範圍，不會變成付費才能用。`;
+export const DISCLAIMER_TEXT = DEFAULT_DISCLAIMER_TEXT;
 
 export function findUserByEmail(conn, email) {
   const key = normalizeEmail(email);
@@ -98,9 +95,24 @@ export function publicUser(row) {
   };
 }
 
-export function registerUser(conn, { email, password, acceptDisclaimer, emailVerified = true } = {}) {
+function stampPrivacy(conn, userId, at) {
+  try {
+    conn.prepare(
+      "UPDATE users SET profile_privacy_at = COALESCE(NULLIF(profile_privacy_at, ''), ?) WHERE id = ?",
+    ).run(at, userId);
+  } catch {
+    // 舊庫還沒有個資欄，ensureProfileSchema 會補
+  }
+}
+
+export function registerUser(conn, { email, password, acceptDisclaimer, acceptPrivacy, emailVerified = true } = {}) {
   if (!acceptDisclaimer) {
     const err = new Error("請先閱讀並同意免責聲明");
+    err.status = 400;
+    throw err;
+  }
+  if (acceptPrivacy === false) {
+    const err = new Error("請先閱讀並同意個資說明");
     err.status = 400;
     throw err;
   }
@@ -121,6 +133,7 @@ export function registerUser(conn, { email, password, acceptDisclaimer, emailVer
          SET password_hash = ?, accepted_disclaimer_at = ?, disclaimer_version = ?
          WHERE id = ?`,
       ).run(hashPassword(pass), now, DISCLAIMER_VERSION, existing.id);
+      stampPrivacy(conn, existing.id, now);
       return getUserById(conn, existing.id);
     }
     if (!isUserDeleted(existing)) {
@@ -141,13 +154,16 @@ export function registerUser(conn, { email, password, acceptDisclaimer, emailVer
            email_verified = ?
        WHERE id = ?`,
     ).run(hashPassword(pass), now, DISCLAIMER_VERSION, signups + 1, verifiedFlag, existing.id);
+    stampPrivacy(conn, existing.id, now);
     return getUserById(conn, existing.id);
   }
   const result = conn.prepare(
     `INSERT INTO users(email, password_hash, role, plan, created_at, accepted_disclaimer_at, disclaimer_version, signup_count, email_verified)
      VALUES (?, ?, 'member', 'free', ?, ?, ?, 1, ?)`,
   ).run(key, hashPassword(pass), now, now, DISCLAIMER_VERSION, verifiedFlag);
-  return getUserById(conn, Number(result.lastInsertRowid));
+  const id = Number(result.lastInsertRowid);
+  stampPrivacy(conn, id, now);
+  return getUserById(conn, id);
 }
 
 export const ADMIN_DELETE_REASONS = [

@@ -1,12 +1,12 @@
 /** 會員暱稱、頭像與選填聯絡資料。聯絡欄預設不公開。 */
 
 import { validateEmail } from "./password.js";
+import { DEFAULT_PRIVACY_TEXT } from "./legalCopy.js";
 
 export const NICKNAME_MIN = 2;
 export const NICKNAME_MAX = 20;
 
-export const PROFILE_PRIVACY =
-  "這些欄位只存在你的會員資料，預設不公開、也不會自動出現在刊登。本站依提供服務所需處理，不做專責保管、不轉售、也不主動散給第三人；除非法律要求，或你另外同意公開。可隨時改或清空。請勿填無法承受外洩的機密。";
+export const PROFILE_PRIVACY = DEFAULT_PRIVACY_TEXT;
 
 export function normalizeNickname(value, { required = false } = {}) {
   const raw = String(value || "").trim().replace(/\s+/g, " ");
@@ -79,17 +79,6 @@ function mediaUrl(value, label) {
   throw err;
 }
 
-function extraFilled(row) {
-  return Boolean(
-    String(row.home_address || "").trim()
-    || String(row.company_address || "").trim()
-    || String(row.contact_phone || "").trim()
-    || String(row.line_id || "").trim()
-    || String(row.line_qr_url || "").trim()
-    || String(row.contact_email || "").trim(),
-  );
-}
-
 export function publicProfile(row) {
   if (!row) return null;
   const nickname = String(row.nickname || "").trim();
@@ -103,7 +92,7 @@ export function publicProfile(row) {
     line_id: String(row.line_id || "").trim(),
     line_qr_url: String(row.line_qr_url || "").trim(),
     contact_email: String(row.contact_email || "").trim(),
-    privacy_accepted: Boolean(String(row.profile_privacy_at || "").trim()),
+    privacy_accepted: Boolean(String(row.profile_privacy_at || row.accepted_disclaimer_at || "").trim()),
     privacy_text: PROFILE_PRIVACY,
   };
 }
@@ -167,10 +156,8 @@ export function updateUserProfile(conn, userId, input = {}) {
     line_qr_url: lineQr,
     contact_email: contactEmail,
   };
-  let privacyAt = String(row.profile_privacy_at || "").trim();
-  if (extraFilled(next) && !privacyAt && input.accept_privacy === true) {
-    privacyAt = new Date().toISOString();
-  }
+  let privacyAt = String(row.profile_privacy_at || row.accepted_disclaimer_at || "").trim();
+  if (!privacyAt) privacyAt = String(row.accepted_disclaimer_at || "").trim();
   conn.prepare(`
     UPDATE users SET
       nickname = ?, avatar_url = ?, home_address = ?, company_address = ?,

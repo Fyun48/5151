@@ -585,6 +585,18 @@
       color: var(--primary-foreground);
       font-weight: 700;
     }
+    .chip.rent-asc {
+      background: linear-gradient(90deg, var(--accent-soft), var(--accent-deep));
+      border-color: var(--accent-deep);
+      color: var(--primary-foreground);
+      font-weight: 700;
+    }
+    .chip.rent-desc {
+      background: linear-gradient(90deg, var(--accent-deep), var(--accent-soft));
+      border-color: var(--accent-deep);
+      color: var(--primary-foreground);
+      font-weight: 700;
+    }
     .bulk-bar {
       display: none;
       align-items: center;
@@ -1298,6 +1310,14 @@
     }
     .pledge-row input { width: auto; margin: 3px 0 0; flex: 0 0 auto; }
     .pledge-row span { flex: 1; min-width: 0; }
+    .pledge-locked {
+      margin: 12px 0 0;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--accent-mist);
+    }
+    .pledge-locked .pledge-copy { white-space: pre-wrap; }
     .self-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2012,12 +2032,12 @@
       <div id="districtPicker" data-tour="districts"></div>
       <div class="price-row">
         <div>
-          <label>租金下限（可空白）</label>
-          <input type="number" id="priceMin" min="0" step="500" placeholder="不限" />
+          <label>租金下限（可空白＝不限）</label>
+          <input type="number" id="priceMin" min="0" step="1" inputmode="numeric" placeholder="不限" />
         </div>
         <div>
-          <label>租金上限（可只填這個）</label>
-          <input type="number" id="priceMax" min="0" step="500" placeholder="例如 36000" />
+          <label>租金上限（可空白＝不限）</label>
+          <input type="number" id="priceMax" min="0" step="1" inputmode="numeric" placeholder="不限" />
         </div>
       </div>
       <label>坪數上限（幾坪以內，可空白）</label>
@@ -2038,8 +2058,8 @@
       <label>確認已下架天數</label>
       <input type="number" id="offlineConfirmDays" min="1" max="30" />
       <p class="hint member-only">這個天數由全站設定，會員可以看、不能改。</p>
-      <label>建物總樓層至少</label>
-      <input type="number" id="minBuildingFloors" min="1" max="50" />
+      <label>建物總樓層至少（可空白＝不限）</label>
+      <input type="number" id="minBuildingFloors" min="0" max="99" step="1" inputmode="numeric" placeholder="不限" />
       <label data-tour="commute">上班地址（選填）</label>
       <input type="text" id="workAddress" placeholder="例如：臺北市南港區經貿一路170號" />
       <label>通勤路徑（同時只能選一種）</label>
@@ -2047,17 +2067,17 @@
         <label><input type="radio" name="commuteMode" value="scooter" checked /> 機車</label>
         <label><input type="radio" name="commuteMode" value="car" /> 汽車</label>
       </div>
-      <label>路線上限（公里，0 表示不篩）</label>
-      <input type="number" id="commuteKm" min="0" max="80" step="0.5" />
+      <label>物件與公司距離上限（公里，0 表示不篩）</label>
+      <input type="number" id="commuteKm" min="0" max="80" step="0.1" />
       <p class="hint" data-tour="mrt">步行路線未滿 1.5 公里的最近捷運站會顯示在列表。這個開關只在後台統一設定。</p>
       <div class="notify-shortcuts" data-tour="notify" hidden>
         <p class="hint">Webhook、郵件已移到「我的 → 通知設定」。左側只留常用條件。</p>
       </div>
-      <label>排除路名／關鍵字（一行一個）</label>
-      <p class="hint">地址或標題含這些字就不列入、也不通知。例如路名、路段。</p>
+      <label>排除路名／關鍵字（一行一個，最多 30 個）</label>
+      <p class="hint">地址或標題含這些字就不列入、也不通知。例如路名、路段。最多 30 個。</p>
       <textarea id="excludeKeywords" placeholder="延平北路八段&#10;承德路"></textarea>
-      <label>排除房仲／聯絡人（一行一個）</label>
-      <p class="hint">可填公司名、姓氏，或直接點物件列表中的頭像可以排除該人。之後也能用這個名單過濾特定名牌。</p>
+      <label>排除房仲／聯絡人（一行一個，最多 15 個）</label>
+      <p class="hint">可填公司名、姓氏，或直接點物件列表中的頭像可以排除該人。最多 15 個。之後也能用這個名單過濾特定名牌。</p>
       <textarea id="excludeAgents" placeholder="美樂房屋&#10;黃小姐"></textarea>
       <label>用地圖或文字排除範圍（最多 10 組）</label>
       <p class="hint">手拉矩形或用「路名A以東、路名B以西、路名C以南、路名D以北」產生大致範圍。關閉的範圍仍會保存，但不會套用。框選後會在背景抓 591 地圖座標，落在框內的才會排除。大範圍請先按「展開地圖」再框。</p>
@@ -2110,8 +2130,7 @@
           <div class="chip-row" data-chip-row="sort">
           <button class="chip on" data-sort="newest">最新</button>
           <button class="chip" data-sort="fit_desc">較適合</button>
-          <button class="chip" data-sort="price_asc">金額低→高</button>
-          <button class="chip" data-sort="price_desc">金額高→低</button>
+          <button class="chip" id="rentSortBtn" data-sort="price">租金</button>
           <button class="chip commute-sort" data-sort="commute_asc" hidden>離公司近→遠</button>
           <button class="chip commute-sort" data-sort="commute_desc" hidden>離公司遠→近</button>
           </div>
@@ -2232,10 +2251,11 @@
             </button>
           </div>
         </div>
-        <label class="pledge-row" for="profilePrivacy">
-          <input type="checkbox" id="profilePrivacy" />
-          <span class="pledge-copy hint" id="profilePrivacyText">這些欄位只存在你的會員資料，預設不公開、也不會自動出現在刊登。本站依提供服務所需處理，不做專責保管、不轉售、也不主動散給第三人；除非法律要求，或你另外同意公開。可隨時改或清空。請勿填無法承受外洩的機密。我已了解上述個資說明</span>
-        </label>
+        <div class="pledge-locked" id="profileLegalBox">
+          <p class="hint"><strong>註冊時已同意，無法在此變更。</strong>以下為你當時同意的宣告內容，僅供查閱。</p>
+          <p class="pledge-copy hint" id="profileDisclaimerText"></p>
+          <p class="pledge-copy hint" id="profilePrivacyText">這些欄位只存在你的會員資料，預設不公開、也不會自動出現在刊登。本站依提供服務所需處理，不做專責保管、不轉售、也不主動散給第三人；除非法律要求，或你另外同意公開。可隨時改或清空。請勿填無法承受外洩的機密。</p>
+        </div>
         <div class="row" style="margin-top:12px">
           <button type="submit" class="primary" id="profileSave">儲存個人資料</button>
           <span class="save-msg" id="profileMsg"></span>
@@ -2249,9 +2269,11 @@
       <p class="hint" id="notifyMailHint" hidden>物件／屋源提醒若要用信，請自己填 SMTP。</p>
       <p class="hint" id="notifyHubStatus" hidden></p>
       <div class="row" style="margin-top:10px">
+        <button type="button" class="ghost" id="mePauseNotifyBtn">停止所有通知</button>
         <button type="button" class="ghost" id="mePasswordBtn">變更密碼</button>
         <button type="button" class="ghost" id="meDeleteBtn">取消會員</button>
       </div>
+      <p class="hint" id="mePauseNotifyHint">找到房子後可停止通知。停止後不會再主動向外抓取，也不會推播；仍可看到全站底庫資料。</p>
     </div>
   </section>
   <section class="app-view" id="postView">
@@ -2608,7 +2630,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.37</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.38</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -2721,6 +2743,9 @@
     const MAX_BOXES = 10;
     const MEMBER_MAX_DISTRICTS = 10;
     const MEMBER_MAX_PROFILES = 3;
+    const MEMBER_MAX_EXCLUDE_KEYWORDS = 30;
+    const MEMBER_MAX_EXCLUDE_AGENTS = 15;
+    let memberMailConfigured = false;
     const DOCK_KEY = "591-alert-dock-v1";
     const DOCK_READ_KEY = "591-alert-dock-read-v1";
     let meIsAdmin = false;
@@ -2778,6 +2803,58 @@
     }
     function profileLimit() {
       return meIsAdmin ? 0 : MEMBER_MAX_PROFILES;
+    }
+    function clipLines(text, max) {
+      const list = String(text || "").split(/[\n,，]/).map((s) => s.trim()).filter(Boolean);
+      const seen = new Set();
+      const out = [];
+      for (const item of list) {
+        const key = item.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(item);
+        if (out.length >= max) break;
+      }
+      return out;
+    }
+    function syncNotifyChannelLocks() {
+      const hookOn = Boolean(String($("discordWebhook")?.value || "").trim());
+      const mailOn = memberMailConfigured === true;
+      document.querySelectorAll('[data-notify-ch="webhook"]').forEach((el) => {
+        el.disabled = isGuest || !hookOn;
+        if (!hookOn) el.checked = false;
+      });
+      document.querySelectorAll('[data-notify-ch="mail"]').forEach((el) => {
+        el.disabled = isGuest || !mailOn;
+        if (!mailOn) el.checked = false;
+      });
+    }
+    function syncPauseNotifyBtn(s = settings) {
+      const paused = s?.notificationsPaused === true;
+      const btn = $("mePauseNotifyBtn");
+      if (btn) btn.textContent = paused ? "恢復通知" : "停止所有通知";
+      const hint = $("mePauseNotifyHint");
+      if (hint) {
+        hint.textContent = paused
+          ? "已停止所有通知。系統不再依你的間隔向外抓取，只會看到全站底庫資料。"
+          : "找到房子後可停止通知。停止後不會再主動向外抓取，也不會推播；仍可看到全站底庫資料。";
+      }
+    }
+    function bindNumericInput(el, { maxDigits = 0, decimals = 0 } = {}) {
+      if (!el) return;
+      el.addEventListener("input", () => {
+        if (decimals > 0) {
+          let v = String(el.value || "").replace(/[^\d.]/g, "");
+          const firstDot = v.indexOf(".");
+          if (firstDot >= 0) {
+            v = `${v.slice(0, firstDot + 1)}${v.slice(firstDot + 1).replace(/\./g, "").slice(0, decimals)}`;
+          }
+          if (v !== el.value) el.value = v;
+          return;
+        }
+        const v = String(el.value || "").replace(/\D/g, "").slice(0, maxDigits || 12);
+        if (v !== el.value) el.value = v;
+      });
     }
 
     function commuteModeLabel(mode = settings.commuteMode) {
@@ -2861,11 +2938,21 @@
         el.hidden = !on;
       });
       if (!on && (sort === "commute_asc" || sort === "commute_desc")) {
-        sort = "price_asc";
-        document.querySelectorAll("[data-sort]").forEach((btn) => {
-          btn.classList.toggle("on", btn.dataset.sort === "price_asc");
-        });
+        sort = "newest";
+        syncSortChips();
       }
+    }
+
+    function syncSortChips() {
+      document.querySelectorAll("[data-sort]").forEach((btn) => {
+        btn.classList.remove("on", "rent-asc", "rent-desc");
+        if (btn.dataset.sort === "price") {
+          if (sort === "price_asc") btn.classList.add("on", "rent-asc");
+          else if (sort === "price_desc") btn.classList.add("on", "rent-desc");
+        } else {
+          btn.classList.toggle("on", btn.dataset.sort === sort);
+        }
+      });
     }
 
     /** 已登入經 /go/:id 記成已看過；站內刊登留在本站；其他來源導向該站。訪客不寫入。 */
@@ -3518,8 +3605,8 @@
       if (hint) {
         if (!list.length) {
           hint.textContent = "還沒有設定檔。填名稱後按儲存，下拉選單就會出現。";
-        } else if (atCap) {
-          hint.textContent = `已存 ${list.length}／${cap} 個設定檔（${list.map((item) => item.name).join("、")}）。新名稱會提示已滿；同名儲存會覆蓋。`;
+        } else         if (atCap) {
+          hint.textContent = `已存 ${list.length}／${cap} 個設定檔（${list.map((item) => item.name).join("、")}）。再新增會提示最多 3 個；同名儲存會覆蓋。`;
         } else {
           hint.textContent = `已存：${list.map((item) => item.name).join("、")}${cap ? `（最多 ${cap} 個）` : ""}`;
         }
@@ -3616,6 +3703,8 @@
       if ($("memberMailText")) $("memberMailText").value = tpl.text || "";
       if ($("mailPreset") && data.preset) $("mailPreset").value = data.preset;
       syncGmailHint();
+      memberMailConfigured = data.configured === true;
+      syncNotifyChannelLocks();
       const status = $("notifyHubStatus");
       if (status) {
         const hookOn = Boolean(String($("discordWebhook")?.value || "").trim());
@@ -3666,6 +3755,7 @@
         } else {
           box.querySelectorAll("input, textarea, select").forEach((el) => { el.disabled = false; });
           if ($("notifyHubSave")) $("notifyHubSave").disabled = !settingsLoaded;
+          syncNotifyChannelLocks();
         }
         box.scrollIntoView({ behavior: "smooth", block: "start" });
       }
@@ -3723,12 +3813,13 @@
       const hint = $("intervalMemberHint");
       if (hint) {
         const mins = Math.max(1, Number(s.systemCrawlIntervalMinutes || s.intervalMinutes) || 15);
-        hint.textContent = `全站共用抓取庫，約每 ${mins} 分鐘檢查一次有沒有新物件。會員不能改這個間隔。`;
+        const memberMins = mePlan === "sponsor" ? 5 : 8;
+        hint.textContent = `全站底庫約每 ${mins} 分鐘向外抓一次。你儲存設定檔後，會先用站內資料比對，約 ${memberMins} 分鐘後才第一次向外抓取（一般會員 8 分鐘、贊助會員 5 分鐘）。會員不能改這些間隔。`;
       }
       $("offlineConfirmDays").value = s.offlineConfirmDays || 7;
       $("offlineConfirmDays").disabled = !meIsAdmin;
       $("offlineConfirmDays").classList.toggle("schedule-readonly", !meIsAdmin);
-      $("minBuildingFloors").value = s.minBuildingFloors || 4;
+      $("minBuildingFloors").value = s.minBuildingFloors || "";
       $("workAddress").value = s.workAddress || "";
       $("commuteKm").value = s.commuteKm || 0;
       setCommuteMode("commuteMode", s.commuteMode);
@@ -3738,6 +3829,8 @@
       $("excludeAgents").value = (s.excludeAgents || []).join("\n");
       $("discordWebhook").value = s.discordWebhook || "";
       fillNotifyMatrix(s);
+      syncNotifyChannelLocks();
+      syncPauseNotifyBtn(s);
       excludeBoxes = Array.isArray(s.excludeBoxes)
         ? s.excludeBoxes.slice(0, MAX_BOXES).map((box) => ({
             ...box,
@@ -4457,11 +4550,11 @@
         areaMax: Number($("areaMax").value) || 0,
         excludeRooftop: $("excludeRooftop") ? $("excludeRooftop").checked : true,
         offlineConfirmDays: meIsAdmin ? (Number($("offlineConfirmDays").value) || 7) : 7,
-        minBuildingFloors: Number($("minBuildingFloors").value) || 4,
+        minBuildingFloors: Number($("minBuildingFloors").value) || 0,
         wholeFloorOnly: kind === "whole",
         excludeLowFloors: $("excludeLowFloors") ? $("excludeLowFloors").checked : true,
-        excludeKeywords: $("excludeKeywords").value.split(/[\n,，]/).map((s) => s.trim()).filter(Boolean),
-        excludeAgents: $("excludeAgents").value.split(/[\n,，]/).map((s) => s.trim()).filter(Boolean),
+        excludeKeywords: clipLines($("excludeKeywords").value, MEMBER_MAX_EXCLUDE_KEYWORDS),
+        excludeAgents: clipLines($("excludeAgents").value, MEMBER_MAX_EXCLUDE_AGENTS),
         excludeAgentIds: settings.excludeAgentIds || [],
         excludeBoxes,
         discordWebhook: $("discordWebhook").value.trim(),
@@ -4527,14 +4620,14 @@
     }
 
     $("saveBtn").onclick = async () => {
-      if (!$("profileName").value.trim()) $("profileName").value = "暫存";
       const name = $("profileName").value.trim();
+      if (!name) { flash("請先填設定檔名稱"); return; }
       if (name.length > 40) { flash("名稱太長"); return; }
       const profiles = Array.isArray(settings?.settingProfiles) ? settings.settingProfiles : [];
       const existing = profiles.some((item) => String(item.name || "").trim() === name);
       const cap = profileLimit();
       if (!existing && cap && profiles.length >= cap) {
-        flash("設定檔已滿");
+        flash(`設定檔最多只能 ${cap} 個。請先刪除一個，或用現有名稱覆蓋。`);
         return;
       }
       $("saveBtn").disabled = true;
@@ -4549,13 +4642,13 @@
         const data = await readApi(res);
         if (!res.ok) {
           const err = String(data.error || "");
-          throw new Error(err.includes("設定檔已滿") ? "設定檔已滿" : (err || "儲存失敗"));
+          throw new Error(err.includes("設定檔已滿") ? `設定檔最多只能 ${cap || 3} 個。請先刪除一個，或用現有名稱覆蓋。` : (err || "儲存失敗"));
         }
         fillSettings(data.settings);
         const saved = (data.settings?.settingProfiles || []).some((item) => item.name === name);
-        flash(saved ? "設定已儲存" : "設定已寫入，但下拉選單沒看到名稱，請再試一次");
+        const waitMins = mePlan === "sponsor" ? 5 : 8;
+        flash(saved ? `設定已儲存。先用站內資料比對，約 ${waitMins} 分鐘後才會第一次向外抓取。` : "設定已寫入，但下拉選單沒看到名稱，請再試一次");
         maybeAskPush("儲存條件後可允許系統推播。");
-        fetch("/api/watch", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}", signal: AbortSignal.timeout(55000) }).catch(() => {});
         await loadList();
       } catch (error) {
         const msg = error.name === "TimeoutError" || error.name === "AbortError"
@@ -4582,7 +4675,8 @@
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "載入失敗");
         fillSettings(data.settings);
-        $("saveMsg").textContent = "已載入設定檔";
+        const waitMins = mePlan === "sponsor" ? 5 : 8;
+        $("saveMsg").textContent = `已套用設定檔。先用站內資料比對，約 ${waitMins} 分鐘後才會第一次向外抓取。`;
         await loadList();
       } catch (error) {
         $("saveMsg").textContent = error.message;
@@ -5021,10 +5115,12 @@
       if ($("profileCompany") && me) $("profileCompany").value = me.company_address || "";
       if ($("profilePhone") && me) $("profilePhone").value = me.contact_phone || "";
       if ($("profileLineId") && me) $("profileLineId").value = me.line_id || "";
-      if (me?.privacy_text && $("profilePrivacyText")) {
-        $("profilePrivacyText").textContent = `${me.privacy_text}我已了解上述個資說明`;
+      if (me?.disclaimer_text && $("profileDisclaimerText")) {
+        $("profileDisclaimerText").textContent = me.disclaimer_text;
       }
-      if ($("profilePrivacy") && me?.privacy_accepted) $("profilePrivacy").checked = true;
+      if (me?.privacy_text && $("profilePrivacyText")) {
+        $("profilePrivacyText").textContent = me.privacy_text;
+      }
       const img = $("profileAvatarImg");
       const fallback = $("profileAvatarFallback");
       const url = me?.avatar_url || "";
@@ -5168,6 +5264,25 @@
     $("filterSheetBackdrop")?.addEventListener("click", closeFilterSheet);
     $("mePasswordBtn")?.addEventListener("click", () => $("changePasswordBtn")?.click());
     $("meDeleteBtn")?.addEventListener("click", () => $("deleteAccountBtn")?.click());
+    $("mePauseNotifyBtn")?.addEventListener("click", async () => {
+      if (isGuest) {
+        goRegister();
+        return;
+      }
+      const next = !(settings?.notificationsPaused === true);
+      try {
+        await saveSettings({ notificationsPaused: next });
+        syncPauseNotifyBtn(settings);
+        flash(next ? "已停止所有通知" : "已恢復通知");
+      } catch (error) {
+        flash(error.message);
+      }
+    });
+    $("discordWebhook")?.addEventListener("input", syncNotifyChannelLocks);
+    bindNumericInput($("priceMin"), { maxDigits: 8 });
+    bindNumericInput($("priceMax"), { maxDigits: 8 });
+    bindNumericInput($("minBuildingFloors"), { maxDigits: 2 });
+    bindNumericInput($("commuteKm"), { decimals: 1 });
     $("notifyJumpSettings")?.addEventListener("click", () => {
       openNotifyHub("events");
       $("notifyHub")?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -5251,7 +5366,6 @@
             contact_phone: $("profilePhone")?.value || "",
             line_id: $("profileLineId")?.value || "",
             contact_email: $("profileContactEmail")?.value || "",
-            accept_privacy: $("profilePrivacy")?.checked === true,
             ...(pendingClearAvatar ? { avatar_url: "" } : avatarUrl ? { avatar_url: avatarUrl } : {}),
             ...(pendingClearQr ? { line_qr_url: "" } : lineQrUrl ? { line_qr_url: lineQrUrl } : {}),
           }),
@@ -5816,9 +5930,12 @@
 
     document.querySelectorAll("[data-sort]").forEach((btn) => {
       btn.onclick = () => {
-        document.querySelectorAll("[data-sort]").forEach((b) => b.classList.remove("on"));
-        btn.classList.add("on");
-        sort = btn.dataset.sort;
+        if (btn.dataset.sort === "price") {
+          sort = sort === "price_asc" ? "price_desc" : "price_asc";
+        } else {
+          sort = btn.dataset.sort;
+        }
+        syncSortChips();
         loadList();
       };
     });

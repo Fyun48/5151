@@ -22,11 +22,12 @@ import { preferPrimaryListing } from "./match.js";
 import { commuteWorkJobs, hasWorkPoint, needsListingGeo, normalizeCommuteMode } from "./geo.js";
 import { demoCommutePatch } from "./demo.js";
 import { isWalkableMrtDistance, makeMrtKey } from "./mrt.js";
-import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings, planIntervalMinutes, resolveSaveAsProfileAction, normalizeProfileName, MEMBER_MAX_PROFILES, ADMIN_MAX_PROFILES, clampIntervalMinutes } from "./settingsState.js";
+import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings, planIntervalMinutes, resolveSaveAsProfileAction, normalizeProfileName, MEMBER_MAX_PROFILES, ADMIN_MAX_PROFILES, clampIntervalMinutes, memberShouldContributeCrawl, memberFetchCollision, memberHasCrawlScope } from "./settingsState.js";
+import { defaultLegalCopy, normalizeLegalCopy, publicLegalCopy } from "./legalCopy.js";
 import { defaultNotifyMatrix } from "./notifyMatrix.js";
 import { DATA_EPOCH, shouldResetForEpoch } from "./dataEpoch.js";
 import { countsTowardAllTotal, isConfirmedOffline, isPendingOffline } from "./offline.js";
-import { coveringJobsFromMembers, coveringJobsFromSettings, coversFromMemberSettings, coversFromWatchDistricts, listingInMemberScope } from "./covering.js";
+import { coveringJobsFromMembers, coversFromMemberSettings, coversFromWatchDistricts, listingInMemberScope } from "./covering.js";
 import { listCrawlCovers } from "./crawlCovers.js";
 import { SYSTEM_CRAWL_INTERVAL_MINUTES } from "./crawlPolicy.js";
 import { ensurePersonalSchema } from "./personalSchema.js";
@@ -915,6 +916,32 @@ export function saveHelpQa(partial = {}) {
   return getHelpQa();
 }
 
+export function getLegalCopy() {
+  return publicLegalCopy(settingKey("legalCopy") ?? defaultLegalCopy());
+}
+
+export function saveLegalCopy(partial = {}) {
+  const src = partial && typeof partial === "object" ? partial : {};
+  if (src.reset === true) {
+    writeSettingKey("legalCopy", defaultLegalCopy());
+    return getLegalCopy();
+  }
+  writeSettingKey("legalCopy", normalizeLegalCopy({ ...getLegalCopy(), ...src }));
+  return getLegalCopy();
+}
+
+function withLegalProfile(profile) {
+  const copy = getLegalCopy();
+  return {
+    ...profile,
+    privacy_text: copy.privacy,
+    disclaimer_text: copy.disclaimer,
+    privacy_check: copy.privacyCheck,
+    disclaimer_check: copy.disclaimerCheck,
+    legal_version: copy.version,
+  };
+}
+
 function migrateSelfCrawlSourceOn() {
   const raw = settingKey("crawlSources");
   if (raw == null) return;
@@ -1025,7 +1052,7 @@ export function registerUser(input) {
 
 export function updateUserProfile(userId, input) {
   const row = updateUserProfileOn(db, userId, input);
-  return { ...publicUser(row), ...publicProfile(row) };
+  return withLegalProfile({ ...publicUser(row), ...publicProfile(row) });
 }
 
 export function countOpenSelfListings(userId) {
@@ -1103,7 +1130,7 @@ const DEFAULTS = {
   hasBaseline: false,
   excludeLowFloors: true,
   wholeFloorOnly: false,
-  minBuildingFloors: 4,
+  minBuildingFloors: 0,
   excludeKeywords: [],
   excludeAgents: [],
   excludeAgentIds: [],
@@ -1118,10 +1145,12 @@ const DEFAULTS = {
   activeProfileId: "",
   watchDistricts: [],
   priceMin: 0,
-  priceMax: 36000,
+  priceMax: 0,
   areaMax: 0,
   excludeRooftop: true,
   offlineConfirmDays: 7,
+  notificationsPaused: false,
+  memberFetchDueAt: "",
   dataEpoch: DATA_EPOCH,
 };
 
@@ -1218,12 +1247,6 @@ export function saveAsProfile(name, livePatch, userId, { overwrite = false } = {
     err.status = 400;
     throw err;
   }
-  if (decision.action === "confirm_overwrite") {
-    const err = new Error("同名設定檔已存在，請確認是否覆蓋");
-    err.status = 409;
-    err.code = "confirm_overwrite";
-    throw err;
-  }
   if (decision.action === "full") {
     const err = new Error(
       admin
@@ -1241,10 +1264,11 @@ export function saveAsProfile(name, livePatch, userId, { overwrite = false } = {
         ? { ...item, name: label, saved_at: new Date().toISOString(), data: snapshotSettings(current) }
         : item
     ));
-    return saveSettings({
+    saveSettings({
       settingProfiles: next,
       activeProfileId: id,
     }, uid);
+    return armMemberExternalFetch(uid);
   }
   const id = `p-${Date.now()}`;
   profiles.push({
@@ -1253,10 +1277,11 @@ export function saveAsProfile(name, livePatch, userId, { overwrite = false } = {
     saved_at: new Date().toISOString(),
     data: snapshotSettings(current),
   });
-  return saveSettings({
+  saveSettings({
     settingProfiles: profiles,
     activeProfileId: id,
   }, uid);
+  return armMemberExternalFetch(uid);
 }
 
 export function loadProfile(id, userId) {
@@ -1268,11 +1293,12 @@ export function loadProfile(id, userId) {
     err.status = 404;
     throw err;
   }
-  return saveSettings({
+  saveSettings({
     ...snapshotSettings({ ...DEFAULTS, ...profile.data }),
     settingProfiles: current.settingProfiles,
     activeProfileId: profile.id,
   }, uid);
+  return armMemberExternalFetch(uid);
 }
 
 export function deleteProfile(id, userId) {
@@ -1436,18 +1462,75 @@ export function confirmSuspectedMatch(postId, userId) {
   return getListing(postId, userId);
 }
 
-export function coveringJobsFromAllUsers() {
-  const ids = listUserIds();
+export function coveringJobsFromAllUsers(opts = {}) {
+  return coveringPlan(opts).jobs;
+}
+
+export function coveringPlan({ now = Date.now(), includeSystem = true } = {}) {
   const covers = [];
-  const system = getSystemCrawl();
-  covers.push(...coversFromWatchDistricts({ watchDistricts: system.watchDistricts }));
-  for (const id of ids) {
-    const settings = getSettings(id);
-    const memberCovers = coversFromMemberSettings(settings);
-    if (memberCovers.length) covers.push(...memberCovers);
+  const includedUserIds = [];
+  const postponedUserIds = [];
+  const lastCoveringAt = getLastCoveringAt();
+  if (includeSystem) {
+    const system = getSystemCrawl();
+    covers.push(...coversFromWatchDistricts({ watchDistricts: system.watchDistricts }));
   }
-  if (!covers.length) return coveringJobsFromSettings(getSettings());
-  return coveringJobsFromMembers(covers, { excludeRooftop: false });
+  for (const id of listUserIds()) {
+    const settings = getSettings(id);
+    if (settings.notificationsPaused === true || !memberHasCrawlScope(settings)) continue;
+    if (memberFetchCollision(settings, { now, lastCoveringAt })) {
+      armMemberExternalFetch(id, { from: now });
+      postponedUserIds.push(id);
+      continue;
+    }
+    if (!memberShouldContributeCrawl(settings, { now, lastCoveringAt })) continue;
+    const memberCovers = coversFromMemberSettings(settings);
+    if (!memberCovers.length) continue;
+    covers.push(...memberCovers);
+    includedUserIds.push(id);
+  }
+  const jobs = covers.length ? coveringJobsFromMembers(covers, { excludeRooftop: false }) : [];
+  return { jobs, includedUserIds, postponedUserIds, includeSystem };
+}
+
+export function armMemberExternalFetch(userId, { from = Date.now() } = {}) {
+  const uid = Number(userId) || 0;
+  if (!uid) return getSettings(uid);
+  const current = getSettings(uid);
+  if (current.notificationsPaused === true) {
+    if (current.memberFetchDueAt) return saveSettings({ memberFetchDueAt: "" }, uid);
+    return current;
+  }
+  const minutes = planIntervalMinutes(getUserById(uid)?.plan);
+  const due = new Date(Number(from) + minutes * 60 * 1000).toISOString();
+  return saveSettings({ memberFetchDueAt: due }, uid);
+}
+
+function getLastCoveringAt() {
+  return String(settingKey("lastCoveringAt") || "");
+}
+
+function getLastSystemCoveringAt() {
+  return String(settingKey("lastSystemCoveringAt") || "");
+}
+
+export function isSystemCoveringDue(now = Date.now()) {
+  const last = Date.parse(getLastSystemCoveringAt());
+  if (!Number.isFinite(last)) return true;
+  return now - last >= crawlIntervalMinutes() * 60 * 1000;
+}
+
+export function markCoveringCompleted({
+  includedUserIds = [],
+  includeSystem = false,
+  at = new Date().toISOString(),
+} = {}) {
+  writeSettingKey("lastCoveringAt", at);
+  if (includeSystem) writeSettingKey("lastSystemCoveringAt", at);
+  const from = Date.parse(at) || Date.now();
+  for (const id of includedUserIds) {
+    armMemberExternalFetch(id, { from });
+  }
 }
 
 export function currentSearchKeys() {

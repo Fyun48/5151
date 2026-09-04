@@ -10,6 +10,9 @@ export const SPONSOR_INTERVAL_MINUTES = 5;
 export const ADMIN_MIN_INTERVAL_MINUTES = 1;
 export const MEMBER_OFFLINE_CONFIRM_DAYS = 7;
 export const MEMBER_PAGES_PER_WATCH = 40;
+export const MEMBER_MAX_EXCLUDE_KEYWORDS = 30;
+export const MEMBER_MAX_EXCLUDE_AGENTS = 15;
+export const RECENT_COVERING_MS = 90 * 1000;
 
 export const PROFILE_FIELDS = [
   "searchUrls",
@@ -92,10 +95,33 @@ export function resolveSaveAsProfileAction(profiles, name, { overwrite = false, 
   const label = normalizeProfileName(name);
   if (!label) return { action: "empty" };
   const existing = findProfileByName(profiles, label);
-  if (existing && !overwrite) return { action: "confirm_overwrite", existing };
-  if (existing && overwrite) return { action: "overwrite", existing };
+  if (existing) return { action: "overwrite", existing };
   if (!canAddProfile(profiles, { admin })) return { action: "full" };
   return { action: "create" };
+}
+
+export function memberHasCrawlScope(settings) {
+  const districts = Array.isArray(settings?.watchDistricts) ? settings.watchDistricts : [];
+  const urls = Array.isArray(settings?.searchUrls) ? settings.searchUrls.filter((url) => String(url || "").trim()) : [];
+  return districts.length > 0 || urls.length > 0;
+}
+
+export function memberShouldContributeCrawl(settings, { now = Date.now(), lastCoveringAt = "" } = {}) {
+  if (settings?.notificationsPaused === true) return false;
+  if (!memberHasCrawlScope(settings)) return false;
+  const due = Date.parse(settings?.memberFetchDueAt || "");
+  if (!Number.isFinite(due) || now < due) return false;
+  if (memberFetchCollision(settings, { now, lastCoveringAt })) return false;
+  return true;
+}
+
+export function memberFetchCollision(settings, { now = Date.now(), lastCoveringAt = "" } = {}) {
+  if (settings?.notificationsPaused === true) return false;
+  const due = Date.parse(settings?.memberFetchDueAt || "");
+  const last = Date.parse(lastCoveringAt || "");
+  if (!Number.isFinite(due) || !Number.isFinite(last)) return false;
+  if (now < due) return false;
+  return due >= last && due - last <= RECENT_COVERING_MS;
 }
 
 export function limitWatchDistricts(districts, { admin = false } = {}) {
@@ -174,6 +200,11 @@ export function hydrateSettings(stored, defaults, { admin = false, plan = "free"
   }
   next.notifyMatrix = normalizeNotifyMatrix(next);
   next.commuteMode = normalizeCommuteMode(next.commuteMode);
+  next.notificationsPaused = next.notificationsPaused === true;
+  next.memberFetchDueAt = String(next.memberFetchDueAt || "");
+  next.minBuildingFloors = Math.max(0, Math.min(Math.round(Number(next.minBuildingFloors) || 0), 99));
+  next.priceMin = Math.max(0, Number(next.priceMin) || 0);
+  next.priceMax = Math.max(0, Number(next.priceMax) || 0);
   return next;
 }
 
@@ -194,13 +225,14 @@ export function applySettingPatch(current, partial = {}, { admin = false, plan =
   } else {
     next.intervalAdminSet = current.intervalAdminSet === true;
   }
-  next.excludeKeywords = normalizeKeywords(next.excludeKeywords);
-  next.excludeAgents = normalizeKeywords(next.excludeAgents);
+  next.excludeKeywords = normalizeKeywords(next.excludeKeywords, MEMBER_MAX_EXCLUDE_KEYWORDS);
+  next.excludeAgents = normalizeKeywords(next.excludeAgents, MEMBER_MAX_EXCLUDE_AGENTS);
   next.excludeAgentIds = [...new Set((next.excludeAgentIds || []).map(Number).filter((id) => id > 0))].slice(0, 80);
   next.excludeBoxes = normalizeBoxes(next.excludeBoxes);
   next.intervalMinutes = clampIntervalMinutes(next.intervalMinutes, { admin, fallback: planIntervalMinutes(plan) });
   next.pagesPerWatch = Math.max(1, Math.min(Number(next.pagesPerWatch) || 40, 40));
-  next.commuteKm = Math.max(0, Math.min(Number(next.commuteKm) || 0, 80));
+  const kmRaw = Number(next.commuteKm);
+  next.commuteKm = Number.isFinite(kmRaw) ? Math.max(0, Math.min(Math.round(kmRaw * 10) / 10, 80)) : 0;
   next.commuteMode = normalizeCommuteMode(next.commuteMode);
   next.showMrt = current.showMrt !== false;
   next.workAddress = String(next.workAddress || "").trim().slice(0, 120);
@@ -210,7 +242,11 @@ export function applySettingPatch(current, partial = {}, { admin = false, plan =
   next.priceMin = Math.max(0, Number(next.priceMin) || 0);
   next.priceMax = Math.max(0, Number(next.priceMax) || 0);
   next.areaMax = Math.max(0, Math.min(Number(next.areaMax) || 0, 500));
+  next.minBuildingFloors = Math.max(0, Math.min(Math.round(Number(next.minBuildingFloors) || 0), 99));
   next.offlineConfirmDays = Math.max(1, Math.min(Math.round(Number(next.offlineConfirmDays) || 7), 30));
+  next.notificationsPaused = next.notificationsPaused === true;
+  next.memberFetchDueAt = String(next.memberFetchDueAt || "");
+  if (next.notificationsPaused) next.memberFetchDueAt = "";
   applyMemberScheduleLocks(next, { admin, plan });
   next.excludeRooftop = next.excludeRooftop !== false;
   next.wholeFloorOnly = next.wholeFloorOnly === true;

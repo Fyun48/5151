@@ -16,6 +16,8 @@ test("login page can register after accepting the disclaimer", () => {
   assert.match(html, /verifyState === "expired"/);
   assert.match(html, /請到信箱點確認連結才算註冊成功/);
   assert.match(html, /acceptDisclaimer/);
+  assert.match(html, /acceptPrivacy/);
+  assert.match(html, /id="acceptPrivacy"/);
   assert.match(html, /disclaimer\.html/);
   assert.match(html, /這是免費系統/);
   assert.match(html, /href="\/tokens\.css"/);
