@@ -14,10 +14,12 @@ test("admin settings are grouped into clickable categories", () => {
   assert.match(html, /data-admin-nav="members"/);
   assert.match(html, /data-admin-nav="crawl"/);
   assert.match(html, /data-admin-nav="site"/);
+  assert.match(html, /data-admin-nav="notices"/);
   assert.match(html, /data-admin-nav="promo"/);
   assert.match(html, /data-admin-nav="mail"/);
   assert.match(html, /抓取底庫/);
   assert.match(html, /畫面說明/);
+  assert.match(html, /公告專區/);
   assert.match(html, /贊助曝光/);
   assert.match(html, /系統信件/);
   assert.match(html, /function showAdminPanel/);
@@ -30,10 +32,15 @@ test("admin settings are grouped into clickable categories", () => {
   assert.ok(crawl.indexOf("物件來源") < crawl.indexOf("系統抓取底庫"));
   assert.ok(crawl.indexOf("系統抓取底庫") < crawl.indexOf("通勤路線"));
 
-  const site = html.slice(html.indexOf('data-admin-panel="site"'), html.indexOf('data-admin-panel="promo"'));
+  const site = html.slice(html.indexOf('data-admin-panel="site"'), html.indexOf('data-admin-panel="notices"'));
   assert.match(site, /吉比形象／Logo/);
   assert.match(site, /功能說明 Q&amp;A/);
-  assert.match(site, /公告／最新消息／贊助提醒/);
+  assert.doesNotMatch(site, /id="broadcastsForm"/);
+
+  const notices = html.slice(html.indexOf('data-admin-panel="notices"'), html.indexOf('data-admin-panel="promo"'));
+  assert.match(notices, /公告／最新消息／贊助提醒/);
+  assert.match(notices, /id="broadcastsForm"/);
+  assert.doesNotMatch(notices, /吉比形象／Logo/);
 
   const promo = html.slice(html.indexOf('data-admin-panel="promo"'), html.indexOf('data-admin-panel="mail"'));
   assert.match(promo, /贊助連結/);

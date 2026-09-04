@@ -235,7 +235,8 @@
     <nav class="admin-nav" aria-label="後台分類">
       <a href="#members" data-admin-nav="members"><strong>會員</strong><span>帳號、方案、刪除</span></a>
       <a href="#crawl" data-admin-nav="crawl"><strong>抓取底庫</strong><span>來源、行政區、捷運、通勤</span></a>
-      <a href="#site" data-admin-nav="site"><strong>畫面說明</strong><span>形象、Q&amp;A、公告</span></a>
+      <a href="#site" data-admin-nav="site"><strong>畫面說明</strong><span>形象、Q&amp;A</span></a>
+      <a href="#notices" data-admin-nav="notices"><strong>公告專區</strong><span>公告、最新消息、贊助提醒</span></a>
       <a href="#promo" data-admin-nav="promo"><strong>贊助曝光</strong><span>收款連結、站內小廣告</span></a>
       <a href="#mail" data-admin-nav="mail"><strong>系統信件</strong><span>SMTP、信件範本</span></a>
     </nav>
@@ -417,6 +418,8 @@
       </div>
       <p class="msg" id="helpQaMsg"></p>
     </section>
+      </div>
+      <div id="notices" class="admin-panel" data-admin-panel="notices">
 <section class="card">
       <h2>公告／最新消息／贊助提醒</h2>
       <p class="hint">轉頁時在底欄上方出現一小則，可按 × 暫時不看。贊助提醒請寫維護品質，不要擋操作、不要連發。 hops 是每隔幾次換頁才再出現。</p>
@@ -637,7 +640,7 @@
   <script>
 
     const $ = (id) => document.getElementById(id);
-    const ADMIN_PANELS = ["members", "crawl", "site", "promo", "mail"];
+    const ADMIN_PANELS = ["members", "crawl", "site", "notices", "promo", "mail"];
     function adminPanelFromHash() {
       const key = String(location.hash || "").replace(/^#/, "");
       return ADMIN_PANELS.includes(key) ? key : "members";
@@ -1682,6 +1685,6 @@
       setMsg("memberMsg", error.message || "載入失敗");
     });
   </script>
-  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.36</span></footer>
+  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.37</span></footer>
 </body>
 </html>
