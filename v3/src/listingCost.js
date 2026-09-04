@@ -4,9 +4,9 @@ const ONE_TIME =
   /押金|保證金|禮金|仲介費|服務費|開辦費|手續費|鑰匙|訂金|轉租費|違約|一次性|一次繳/;
 const INCLUDED =
   /已含|內含|含在租金|租金內含|含於租金|租金已含|包[在於]租金|含在房租|房租已含/;
-const EXTRA_HINT = /另計|另付|另繳|外加|不含|未含|須另|需另|額外|另外支付|另外計/;
+const EXTRA_HINT = /另計|另付|另繳|另租|另收|外加|不含|未含|須另|需另|須加|需加|額外|另外支付|另外計/;
 const FEE_KIND =
-  /管理費|清潔費|停車費|車位費|車位|停車|水費|電費|瓦斯費|瓦斯|網路費|網路|第四台|垃圾費|垃圾代收|公共基金|修繕費|管理費／月/;
+  /管理費|清潔費|停車費|車位費|車位|停車|水費|電費|瓦斯費|瓦斯|網路費|網路|第四台|垃圾費|垃圾代收|公共基金|修繕費/;
 
 function toHalfWidth(text) {
   return String(text || "")
@@ -96,24 +96,34 @@ function pushUniqueRow(rows, row) {
   });
 }
 
-export function parseNamedMonthlyFees(text) {
+export function parseNamedMonthlyFees(text, { requireExtraHint = true } = {}) {
   const raw = toHalfWidth(text);
   if (!raw) return [];
-  const chunks = raw.split(/[\n|;；。]/);
+  const kindRe = new RegExp(FEE_KIND.source, "g");
+  const hits = [...raw.matchAll(kindRe)];
   const out = [];
-  for (const chunk of chunks) {
-    const bit = chunk.trim();
-    if (!bit || !FEE_KIND.test(bit)) continue;
-    if (isOneTimeFee(bit)) continue;
+  for (let i = 0; i < hits.length; i += 1) {
+    const kindStart = hits[i].index;
+    const prefix = raw.slice(Math.max(0, kindStart - 16), kindStart);
+    const until = i + 1 < hits.length ? hits[i + 1].index : Math.min(raw.length, kindStart + 80);
+    const tail = raw.slice(kindStart, until).trim();
+    const bit = `${prefix}${tail}`.trim();
+    if (!tail || isOneTimeFee(bit)) continue;
     const included = isIncludedFee(bit) || (/含水|含電|含瓦斯|含網路|含第四台/.test(bit) && !EXTRA_HINT.test(bit));
-    const amount = included ? 0 : parseTwdAmount(bit);
-    const kind = (bit.match(FEE_KIND) || ["費用"])[0];
+    const kind = hits[i][0];
+    if (included) {
+      out.push({ name: kind, value: bit.slice(0, 80), key: "contain", amount: 0, included: true });
+      continue;
+    }
+    if (requireExtraHint && !EXTRA_HINT.test(bit)) continue;
+    const amount = parseTwdAmount(tail);
+    if (amount <= 0) continue;
     out.push({
       name: kind,
       value: bit.slice(0, 80),
-      key: included ? "contain" : "extra",
-      amount: included ? 0 : amount,
-      included,
+      key: "extra",
+      amount,
+      included: false,
     });
   }
   return out;
@@ -125,19 +135,11 @@ function listingBlob(listing) {
     : typeof listing?.tags === "string"
       ? listing.tags
       : "";
-  return toHalfWidth(
-    [
-      listing?.extra_fee_text,
-      listing?.price_contain_text,
-      listing?.title,
-      listing?.kind_name,
-      listing?.address,
-      tags,
-      listing?.fee_blob,
-    ]
-      .filter(Boolean)
-      .join("\n"),
-  );
+  return toHalfWidth([tags, listing?.fee_blob].filter(Boolean).join("\n"));
+}
+
+function namedMonthlySum(text, opts) {
+  return parseNamedMonthlyFees(text, opts).reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
 }
 
 export function extraMonthlyAmount(listing = {}) {
@@ -150,8 +152,9 @@ export function extraMonthlyAmount(listing = {}) {
   if (fromRows > 0) return fromRows;
   const col = Number(listing.extra_fee);
   if (Number.isFinite(col) && col > 0) return Math.round(col);
-  const named = parseNamedMonthlyFees(listingBlob(listing));
-  return named.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
+  const fromText = namedMonthlySum(listing.extra_fee_text, { requireExtraHint: false });
+  if (fromText > 0) return fromText;
+  return namedMonthlySum(listingBlob(listing), { requireExtraHint: true });
 }
 
 export function extraFeeRows(listing = {}) {
@@ -163,7 +166,10 @@ export function extraFeeRows(listing = {}) {
   if (contain && !rows.some((row) => row.key === "contain" || row.value.includes(contain))) {
     pushUniqueRow(rows, { name: "租金含", value: contain, key: "contain" });
   }
-  for (const row of parseNamedMonthlyFees(listingBlob(listing))) {
+  for (const row of parseNamedMonthlyFees(listing.extra_fee_text, { requireExtraHint: false })) {
+    pushUniqueRow(rows, row);
+  }
+  for (const row of parseNamedMonthlyFees(listingBlob(listing), { requireExtraHint: true })) {
     pushUniqueRow(rows, row);
   }
   const extraText = String(listing.extra_fee_text || "").replace(/[()（）]/g, "").trim();

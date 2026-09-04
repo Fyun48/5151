@@ -52,6 +52,22 @@ test("other portals parse 管理費另計 from listing text", () => {
   assert.equal(parseTwdAmount("３，５００元"), 3500);
 });
 
+test("unstructured ads without 另計 do not invent extra monthly fees", () => {
+  const fields = feeFieldsFromBlob({ blob: "近捷運停車方便、網路通暢、管理完善、車位可詢問" });
+  assert.equal(fields.extra_fee, 0);
+  assert.equal(extraMonthlyAmount({ price_num: 34000, title: "管理費只要2000", fee_blob: "管理費只要2000" }), 0);
+});
+
+test("591 extra_fee column is enough without extra_fees amounts", () => {
+  const listing = {
+    price_num: 34000,
+    extra_fee: 3500,
+    extra_fee_text: "管理費 3,500元/月",
+  };
+  assert.equal(extraMonthlyAmount(listing), 3500);
+  assert.equal(passesPriceFilter(listing, { priceMax: 36000, priceMaxIncludesExtras: true }), false);
+});
+
 test("deposit-only extra_fees still count extra_fee column", () => {
   const listing = {
     price_num: 34000,
