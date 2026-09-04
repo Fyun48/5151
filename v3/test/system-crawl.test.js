@@ -19,4 +19,6 @@ test("shared crawl uses fixed page depth and a 15-minute default interval", () =
   const admin = readFileSync(path.join(dir, "../public/admin.html"), "utf8");
   assert.match(admin, /id="systemCrawlForm"/);
   assert.match(admin, /系統抓取底庫/);
+  assert.match(admin, /id="systemShowMrt"/);
+  assert.match(admin, /顯示步行 1\.5 公里內捷運站/);
 });

@@ -112,6 +112,12 @@ test("confirm same listing keeps the cheaper post as primary", () => {
   assert.equal(preferPrimaryListing(pricey, cheap).post_id, 1);
 });
 
+test("cheaper includes extra_fee when choosing the primary listing", () => {
+  const lowRentHighExtra = { post_id: 1, price_num: 18000, extra_fee: 5000, refresh_time: "剛剛" };
+  const higherRentNoExtra = { post_id: 2, price_num: 20000, extra_fee: 0, refresh_time: "3天前" };
+  assert.equal(preferPrimaryListing(lowRentHighExtra, higherRentNoExtra).post_id, 2);
+});
+
 test("same price keeps the listing updated more recently", () => {
   const older = { post_id: 1, price_num: 20000, refresh_time: "3天前" };
   const newer = { post_id: 2, price_num: 20000, refresh_time: "2小時前" };

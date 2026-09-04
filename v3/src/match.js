@@ -121,9 +121,10 @@ export function bestMatch(incoming, candidates) {
 
 function rentNum(listing) {
   const n = Number(listing?.price_num);
-  if (Number.isFinite(n) && n > 0) return n;
+  const extra = Number(listing?.extra_fee) || 0;
+  if (Number.isFinite(n) && n > 0) return n + (extra > 0 ? extra : 0);
   const parsed = Number(String(listing?.price || "").replace(/[^\d]/g, ""));
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : Number.MAX_SAFE_INTEGER;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed + (extra > 0 ? extra : 0) : Number.MAX_SAFE_INTEGER;
 }
 
 /** 把 591「3小時前／昨日」轉成時間戳，越新越大。解析不到就用 last_seen_at。 */

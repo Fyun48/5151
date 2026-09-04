@@ -39,7 +39,12 @@ export function housingTypeLabel(listing) {
   return "公寓";
 }
 
-export const HOUSING_KINDS = ["elevator", "apartment", "suite"];
+export const HOUSING_KINDS = ["elevator", "apartment", "suite", "whole"];
+
+export function isRooftopAddition(listing) {
+  const hay = `${listing?.floor_name || ""} ${listing?.title || ""} ${listing?.kind_name || ""} ${tagText(listing)}`;
+  return /頂樓加蓋|頂加/.test(hay);
+}
 
 export function matchesHousingKind(listing, kind) {
   const key = String(kind || "").trim();
@@ -47,6 +52,7 @@ export function matchesHousingKind(listing, kind) {
   if (key === "elevator") return listingHasElevator(listing);
   if (key === "apartment") return listingIsApartment(listing);
   if (key === "suite") return listingIsSuite(listing);
+  if (key === "whole") return isWholeFloorHome(listing.kind_name);
   return true;
 }
 
@@ -89,12 +95,15 @@ export function isWholeFloorHome(kindName) {
   return String(kindName || "").includes("整層住家");
 }
 
-/** 列表顯示／通知用：整層、排除 1F 及地下室。與設定檔同一套，不影響 591 抓取與左側統計。 */
+/** 列表顯示／通知用：排除頂加、排除 1F 及地下室。不影響抓取。列表 kind 晶片優先於設定檔整層。 */
 export function passesDisplayFilters(listing, settings = {}, { skipWholeFloor = false } = {}) {
-  if (!skipWholeFloor && settings.wholeFloorOnly !== false && !isWholeFloorHome(listing.kind_name)) {
+  if (!skipWholeFloor && settings.wholeFloorOnly === true && !isWholeFloorHome(listing.kind_name)) {
     return false;
   }
   if (settings.excludeLowFloors !== false && isAtOrBelowFirstFloor(listing.floor_name)) {
+    return false;
+  }
+  if (settings.excludeRooftop !== false && isRooftopAddition(listing)) {
     return false;
   }
   return true;

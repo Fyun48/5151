@@ -57,7 +57,7 @@ export function publicDemoSettings(settings = {}) {
     offlineConfirmDays: Number(settings.offlineConfirmDays) || 7,
     pagesPerWatch: Number(settings.pagesPerWatch) || 40,
     minBuildingFloors: Number(settings.minBuildingFloors) || 4,
-    wholeFloorOnly: settings.wholeFloorOnly !== false,
+    wholeFloorOnly: settings.wholeFloorOnly === true,
     excludeLowFloors: settings.excludeLowFloors !== false,
     excludeKeywords: [],
     excludeAgents: [],

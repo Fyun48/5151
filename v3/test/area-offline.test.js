@@ -56,10 +56,20 @@ test("excludeLowFloors is 1F and basement only, not 整棟 or 頂加", async () 
   assert.equal(isAtOrBelowFirstFloor("3F/5F"), false);
   assert.equal(isAtOrBelowFirstFloor("整棟"), false);
   assert.equal(isAtOrBelowFirstFloor("頂樓加蓋"), false);
-  const prefs = { wholeFloorOnly: false, excludeLowFloors: true };
+  const prefs = { wholeFloorOnly: false, excludeLowFloors: true, excludeRooftop: false };
   assert.equal(passesDisplayFilters({ kind_name: "整層住家", floor_name: "頂樓加蓋" }, prefs), true);
   assert.equal(passesDisplayFilters({ kind_name: "整層住家", floor_name: "整棟" }, prefs), true);
   assert.equal(passesDisplayFilters({ kind_name: "整層住家", floor_name: "B2/4F" }, prefs), false);
+});
+
+test("excludeRooftop hides 頂加 only as a display filter", async () => {
+  const { isRooftopAddition, passesDisplayFilters } = await import("../src/floors.js");
+  assert.equal(isRooftopAddition({ floor_name: "頂樓加蓋", title: "套房" }), true);
+  assert.equal(isRooftopAddition({ title: "頂加出租" }), true);
+  assert.equal(isRooftopAddition({ floor_name: "5F/12F", title: "整層住家" }), false);
+  const prefs = { wholeFloorOnly: false, excludeLowFloors: false, excludeRooftop: true };
+  assert.equal(passesDisplayFilters({ kind_name: "整層住家", floor_name: "頂樓加蓋" }, prefs), false);
+  assert.equal(passesDisplayFilters({ kind_name: "整層住家", floor_name: "5F/12F" }, prefs), true);
 });
 
 test("confirms offline after 7 days from first not-found", () => {

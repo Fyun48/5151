@@ -103,7 +103,7 @@ import { queueAccountMail } from "./systemMail.js";
 import { assertHuman, issueCaptcha } from "./captcha.js";
 import { assertCaptchaIssuable, assertDemoReadable, authAttemptKeys, clientIp } from "./rateLimit.js";
 import { buildDemoState } from "./demo.js";
-import { backfillListingCoords, backfillListingMrt, backfillListingRoutes, flushPendingNotifications, runWatch } from "./watcher.js";
+import { backfillListingCoords, backfillListingMrt, backfillListingRoutes, flushPendingNotifications, isWatchIntervalPending, runWatch } from "./watcher.js";
 import { LIST_PAGE_SIZE } from "./client591.js";
 import { APP_NAME, APP_VERSION } from "./brand.js";
 import {
@@ -943,6 +943,19 @@ function queueGeoBackfill(settings = getSettings()) {
 
 async function tick(reason = "schedule") {
   try {
+    if (
+      reason === "manual"
+      && lastRun?.checked_at
+      && !lastRun.error
+      && isWatchIntervalPending(lastRun.checked_at, crawlIntervalMinutes())
+    ) {
+      return {
+        ...lastRun,
+        skipped: "interval",
+        reason,
+        message: "設定已記下，下次排程會用最新條件檢查",
+      };
+    }
     expireStaleVerifyTokens({
       onExpire: (user) => {
         if (user?.email) queueSystemMail("verify_expired", user.email);
@@ -1275,7 +1288,7 @@ app.post("/api/exclude-region", async (req, res) => {
 app.post("/api/watch", async (req, res) => {
   try {
     const uid = actorUserId(req);
-    const result = await tick("manual");
+    const result = await tick(req.body?.force === true ? "force" : "manual");
     const events = (result.events || []).filter((event) => !event.user_id || event.user_id === uid);
     res.json({ result: { ...result, events }, stats: stats(undefined, uid) });
   } catch (error) {
