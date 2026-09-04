@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CITIES, lookupDistrict } from "../src/regions.js";
+import { publicPath } from "../src/auth.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const pub = (rel) => readFileSync(path.join(dir, "../public", rel), "utf8");
@@ -43,6 +44,8 @@ test("cities.json matches server CITIES and embed script", () => {
 test("filter menu lists cities and toggles districts by city name", () => {
   const html = pub("index.html");
   assert.match(html, /src="\/cities-embed\.js"/);
+  assert.equal(publicPath({ path: "/cities-embed.js" }), true);
+  assert.equal(publicPath({ path: "/cities.json" }), true);
   assert.match(html, /data-city-toggle/);
   assert.match(html, /district-city-toggle/);
   assert.match(html, /function bindCityAccordion/);
