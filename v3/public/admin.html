@@ -55,7 +55,6 @@
       border-radius: 8px;
     }
     .brand-preview figcaption { font-size: 12px; color: var(--muted); margin-top: 4px; }
-    .wrap { padding: 0 32px 40px; display: grid; gap: 20px; max-width: 1100px; }
     .card {
       background: var(--paper);
       border: 1px solid var(--line);
@@ -156,9 +155,66 @@
     }
     .districts label.on { background: var(--accent); color: var(--primary-foreground); border-color: var(--accent); }
     .districts input { width: auto; margin: 0; }
+
+    .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .admin-shell {
+      padding: 0 32px 40px;
+      display: grid;
+      grid-template-columns: 220px minmax(0, 1fr);
+      gap: 20px 28px;
+      max-width: 1280px;
+      align-items: start;
+    }
+    .admin-nav {
+      position: sticky;
+      top: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 4px 0;
+      background: var(--bg);
+    }
+    .admin-nav a {
+      display: block;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      padding: 10px 12px;
+      color: var(--ink);
+      text-decoration: none;
+      background: transparent;
+      font: 14px/1.35 "Noto Sans TC", sans-serif;
+    }
+    .admin-nav a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .admin-nav a[aria-current="page"] {
+      background: var(--accent-mist);
+      border-color: var(--line);
+      color: var(--accent-deep);
+    }
+    .admin-nav strong { display: block; font-weight: 650; }
+    .admin-nav span { display: block; margin-top: 2px; font-size: 12px; color: var(--muted); font-weight: 400; }
+    .admin-main { display: grid; gap: 20px; min-width: 0; }
+    .admin-panel { display: grid; gap: 20px; }
+    .admin-shell.is-ready .admin-panel { display: none; }
+    .admin-shell.is-ready .admin-panel.is-on { display: grid; }
+    @media (max-width: 800px) {
+      .admin-shell { grid-template-columns: 1fr; padding-left: 16px; padding-right: 16px; }
+      .admin-nav {
+        flex-direction: row;
+        overflow-x: auto;
+        top: 0;
+        z-index: 5;
+        gap: 8px;
+        padding: 8px 0 10px;
+        margin: 0 -16px;
+        padding-left: 16px;
+        padding-right: 16px;
+      }
+      .admin-nav a { flex: 0 0 auto; }
+      .admin-nav span { display: none; }
+    }
     @media (max-width: 800px) {
       .grid-2 { grid-template-columns: 1fr; }
-      header, .wrap { padding-left: 16px; padding-right: 16px; }
+      header { padding-left: 16px; padding-right: 16px; }
       table { font-size: 12px; }
     }
   </style>
@@ -167,7 +223,7 @@
   <header>
     <div>
       <h1>後台管理</h1>
-      <div class="sub">會員、吉比形象、寄信 SMTP、信件內容、贊助連結、站內小廣告、通勤路線來源。看不到會員密碼。</div>
+      <div class="sub">用分類點選要改的項目。看不到會員密碼。</div>
     </div>
     <div class="row">
       <span class="who" id="who"></span>
@@ -175,8 +231,17 @@
       <a class="ghost" href="/logout">登出</a>
     </div>
   </header>
-  <div class="wrap">
-    <section class="card">
+  <div class="admin-shell" id="adminShell">
+    <nav class="admin-nav" aria-label="後台分類">
+      <a href="#members" data-admin-nav="members"><strong>會員</strong><span>帳號、方案、刪除</span></a>
+      <a href="#crawl" data-admin-nav="crawl"><strong>抓取底庫</strong><span>來源、行政區、捷運、通勤</span></a>
+      <a href="#site" data-admin-nav="site"><strong>畫面說明</strong><span>形象、Q&amp;A、公告</span></a>
+      <a href="#promo" data-admin-nav="promo"><strong>贊助曝光</strong><span>收款連結、站內小廣告</span></a>
+      <a href="#mail" data-admin-nav="mail"><strong>系統信件</strong><span>SMTP、信件範本</span></a>
+    </nav>
+    <div class="admin-main">
+      <div id="members" class="admin-panel" data-admin-panel="members">
+<section class="card">
       <h2>會員</h2>
       <p class="hint">一般會員預設每 8 分鐘檢查；已贊助為 5 分鐘。這裡可改方案，也可手動指定間隔（分鐘）。管理員自己不受最短間隔限制。刪除會保留帳號列，避免立刻重註冊；同一 Email 最多再註冊一次。</p>
       <div class="row" style="margin-bottom:10px">
@@ -218,7 +283,69 @@
         </div>
       </div>
     </section>
-    <section class="card">
+      </div>
+      <div id="crawl" class="admin-panel" data-admin-panel="crawl">
+<section class="card">
+      <h2>物件來源</h2>
+      <p class="hint">591 與站內自行刊登預設開啟。住商、信義、5168、租租通、好房網預設關閉，打開後會用會員行政區抓租屋摘要並連回原站。樂屋被 Cloudflare 擋住，打開也不會抓。列表「較適合」依會員租金、樓層與通勤估算，不是成交預測。已抓到或刊登的物件帶 <code>source</code>／<code>source_id</code>。</p>
+      <form id="crawlForm">
+        <div id="crawlSourceList"></div>
+        <div class="row" style="margin:14px 0 0">
+          <button type="submit" class="primary" id="crawlSave">儲存來源開關</button>
+        </div>
+        <p class="msg" id="crawlMsg"></p>
+      </form>
+    </section>
+<section class="card">
+      <h2>系統抓取底庫</h2>
+      <p class="hint">會員抓到的物件會寫進同一份資料庫、互相共用，不會每人各爬一遍。這裡可再指定「底庫行政區」：就算還沒有會員勾這些區，系統仍會定期抓進來給之後的搜尋用。間隔是全站共用節奏（建議 10–15 分鐘），不是每個會員各抓一次。列表捷運站也在這裡統一開關：開啟後，只有步行路線未滿 1.5 公里才顯示站名與距離；會員畫面沒有這個選項。</p>
+      <form id="systemCrawlForm">
+        <label>全站檢查間隔（分鐘）</label>
+        <input id="systemCrawlInterval" type="number" min="1" max="120" value="15" />
+        <label class="checks" style="display:block;margin:10px 0 0"><input type="checkbox" id="systemShowMrt" checked /> 全站顯示步行未滿 1.5 公里的最近捷運站</label>
+        <label>底庫行政區</label>
+        <div class="district-toolbar">
+          <button type="button" class="ghost" id="systemCrawlSelectAll">全選</button>
+          <button type="button" class="ghost" id="systemCrawlSelectNone">取消</button>
+        </div>
+        <div id="systemCrawlDistricts"></div>
+        <div class="row">
+          <button type="submit" class="primary" id="systemCrawlSave">儲存底庫與間隔</button>
+        </div>
+        <p class="msg" id="systemCrawlMsg"></p>
+      </form>
+    </section>
+<section class="card">
+      <h2>通勤路線／Google 計費</h2>
+      <p class="hint">通勤<strong>公里數走免費 OpenStreetMap（OSRM）</strong>。列表與通知目前<strong>只顯示公里</strong>，不上／下班分鐘（OSRM 沒有尖峰路況）。以後若再開 Google Directions，再把分鐘加回畫面。同一組物件座標對同一個公司地址只會查一次。沒有金鑰、沒勾選下面「使用 Google Directions」就不會產生新費用。</p>
+      <form id="mapsForm">
+        <label class="checks"><input id="googleEnabled" type="checkbox" /> 使用 Google Directions 補還沒有上／下班分鐘的物件（會計費，預設關閉）</label>
+        <label class="checks"><input id="mapsEnabled" type="checkbox" /> 允許補查尚未有紀錄的尖峰分鐘（已有快取的不重查；沒金鑰不會打）</label>
+        <label>Google Maps API 金鑰</label>
+        <input id="mapsKey" type="password" autocomplete="new-password" placeholder="已設定則可留白" />
+        <p class="msg" id="mapsKeyState"></p>
+        <div class="grid-2" id="mapsUsage" style="margin-top:8px">
+          <div>
+            <h3 style="margin:0 0 6px;font-size:15px">今日用量</h3>
+            <p class="hint" id="mapsToday" style="margin:0"></p>
+          </div>
+          <div>
+            <h3 style="margin:0 0 6px;font-size:15px">本月用量</h3>
+            <p class="hint" id="mapsMonth" style="margin:0"></p>
+          </div>
+        </div>
+        <p class="hint" id="mapsOfficial" style="margin:12px 0 0;white-space:pre-wrap;font-family:ui-monospace,monospace"></p>
+        <p class="hint" id="mapsLifetime" style="margin:12px 0 0"></p>
+        <div class="row" style="margin:14px 0 0">
+          <button type="submit" class="primary" id="mapsSave">儲存路線設定</button>
+          <button type="button" class="ghost" id="mapsClearKey">關閉並清除金鑰</button>
+        </div>
+        <p class="msg" id="mapsMsg"></p>
+      </form>
+    </section>
+      </div>
+      <div id="site" class="admin-panel" data-admin-panel="site">
+<section class="card">
       <h2>吉比形象／Logo</h2>
       <p class="hint">中文名仍是「吉比租房物件追蹤」。英文名 JibbyRentH 寫在標誌旁邊，圖檔只用動物線稿、不要再疊其他英文品牌字。黑底角色圖只給感謝／疑惑短片用，避免跟找房列表搶視線。之後可再上傳歡迎、註冊、贊助、連續無效操作的短片。</p>
       <form id="brandForm">
@@ -279,7 +406,7 @@
         <p class="msg" id="brandMsg"></p>
       </form>
     </section>
-    <section class="card">
+<section class="card">
       <h2>功能說明 Q&amp;A</h2>
       <p class="hint">顯示在追蹤頁帳號名稱同一排。專門說明功能表上看得到與看不到的限制，例如為什麼有的物件有捷運站、有的沒有（看的是可步行路線，不是直線距離）。可改現有題目，也可新增。</p>
       <div id="helpQaRows"></div>
@@ -290,65 +417,55 @@
       </div>
       <p class="msg" id="helpQaMsg"></p>
     </section>
-    <section class="card">
-      <h2>通勤路線／Google 計費</h2>
-      <p class="hint">通勤<strong>公里數走免費 OpenStreetMap（OSRM）</strong>。列表與通知目前<strong>只顯示公里</strong>，不上／下班分鐘（OSRM 沒有尖峰路況）。以後若再開 Google Directions，再把分鐘加回畫面。同一組物件座標對同一個公司地址只會查一次。沒有金鑰、沒勾選下面「使用 Google Directions」就不會產生新費用。</p>
-      <form id="mapsForm">
-        <label class="checks"><input id="googleEnabled" type="checkbox" /> 使用 Google Directions 補還沒有上／下班分鐘的物件（會計費，預設關閉）</label>
-        <label class="checks"><input id="mapsEnabled" type="checkbox" /> 允許補查尚未有紀錄的尖峰分鐘（已有快取的不重查；沒金鑰不會打）</label>
-        <label>Google Maps API 金鑰</label>
-        <input id="mapsKey" type="password" autocomplete="new-password" placeholder="已設定則可留白" />
-        <p class="msg" id="mapsKeyState"></p>
-        <div class="grid-2" id="mapsUsage" style="margin-top:8px">
+<section class="card">
+      <h2>公告／最新消息／贊助提醒</h2>
+      <p class="hint">轉頁時在底欄上方出現一小則，可按 × 暫時不看。贊助提醒請寫維護品質，不要擋操作、不要連發。 hops 是每隔幾次換頁才再出現。</p>
+      <form id="broadcastsForm">
+        <div class="grid-2">
           <div>
-            <h3 style="margin:0 0 6px;font-size:15px">今日用量</h3>
-            <p class="hint" id="mapsToday" style="margin:0"></p>
+            <h3 style="margin:0 0 8px;font-size:16px">公告</h3>
+            <label class="checks"><input type="checkbox" id="bcAnnouncementEnabled" /> 顯示</label>
+            <label>標題</label>
+            <input id="bcAnnouncementTitle" maxlength="48" />
+            <label>內文</label>
+            <textarea id="bcAnnouncementBody" maxlength="220"></textarea>
+            <label>連結（選填）</label>
+            <input id="bcAnnouncementUrl" maxlength="500" />
+            <label>每隔幾次換頁</label>
+            <input id="bcAnnouncementHops" type="number" min="1" max="20" value="3" />
           </div>
           <div>
-            <h3 style="margin:0 0 6px;font-size:15px">本月用量</h3>
-            <p class="hint" id="mapsMonth" style="margin:0"></p>
+            <h3 style="margin:0 0 8px;font-size:16px">最新消息</h3>
+            <label class="checks"><input type="checkbox" id="bcNewsEnabled" /> 顯示</label>
+            <label>標題</label>
+            <input id="bcNewsTitle" maxlength="48" />
+            <label>內文</label>
+            <textarea id="bcNewsBody" maxlength="220"></textarea>
+            <label>連結（選填）</label>
+            <input id="bcNewsUrl" maxlength="500" />
+            <label>每隔幾次換頁</label>
+            <input id="bcNewsHops" type="number" min="1" max="20" value="3" />
           </div>
         </div>
-        <p class="hint" id="mapsOfficial" style="margin:12px 0 0;white-space:pre-wrap;font-family:ui-monospace,monospace"></p>
-        <p class="hint" id="mapsLifetime" style="margin:12px 0 0"></p>
+        <h3 style="margin:16px 0 8px;font-size:16px">贊助提醒</h3>
+        <label class="checks"><input type="checkbox" id="bcSponsorEnabled" /> 顯示</label>
+        <label>標題</label>
+        <input id="bcSponsorTitle" maxlength="48" placeholder="贊助能讓本站維持免費比價" />
+        <label>內文</label>
+        <textarea id="bcSponsorBody" maxlength="220" placeholder="不擋找房。寫維護品質即可。"></textarea>
+        <label>連結（選填）</label>
+        <input id="bcSponsorUrl" maxlength="500" />
+        <label>每隔幾次換頁</label>
+        <input id="bcSponsorHops" type="number" min="1" max="20" value="5" />
         <div class="row" style="margin:14px 0 0">
-          <button type="submit" class="primary" id="mapsSave">儲存路線設定</button>
-          <button type="button" class="ghost" id="mapsClearKey">關閉並清除金鑰</button>
+          <button type="submit" class="primary" id="broadcastsSave">儲存公告與提醒</button>
         </div>
-        <p class="msg" id="mapsMsg"></p>
+        <p class="msg" id="broadcastsMsg"></p>
       </form>
     </section>
-    <section class="card">
-      <h2>物件來源</h2>
-      <p class="hint">591 與站內自行刊登預設開啟。住商、信義、5168、租租通、好房網預設關閉，打開後會用會員行政區抓租屋摘要並連回原站。樂屋被 Cloudflare 擋住，打開也不會抓。列表「較適合」依會員租金、樓層與通勤估算，不是成交預測。已抓到或刊登的物件帶 <code>source</code>／<code>source_id</code>。</p>
-      <form id="crawlForm">
-        <div id="crawlSourceList"></div>
-        <div class="row" style="margin:14px 0 0">
-          <button type="submit" class="primary" id="crawlSave">儲存來源開關</button>
-        </div>
-        <p class="msg" id="crawlMsg"></p>
-      </form>
-    </section>
-    <section class="card">
-      <h2>系統抓取底庫</h2>
-      <p class="hint">會員抓到的物件會寫進同一份資料庫、互相共用，不會每人各爬一遍。這裡可再指定「底庫行政區」：就算還沒有會員勾這些區，系統仍會定期抓進來給之後的搜尋用。間隔是全站共用節奏（建議 10–15 分鐘），不是每個會員各抓一次。列表捷運站也在這裡統一開關：開啟後，只有步行路線未滿 1.5 公里才顯示站名與距離；會員畫面沒有這個選項。</p>
-      <form id="systemCrawlForm">
-        <label>全站檢查間隔（分鐘）</label>
-        <input id="systemCrawlInterval" type="number" min="1" max="120" value="15" />
-        <label class="checks" style="display:block;margin:10px 0 0"><input type="checkbox" id="systemShowMrt" checked /> 全站顯示步行未滿 1.5 公里的最近捷運站</label>
-        <label>底庫行政區</label>
-        <div class="district-toolbar">
-          <button type="button" class="ghost" id="systemCrawlSelectAll">全選</button>
-          <button type="button" class="ghost" id="systemCrawlSelectNone">取消</button>
-        </div>
-        <div id="systemCrawlDistricts"></div>
-        <div class="row">
-          <button type="submit" class="primary" id="systemCrawlSave">儲存底庫與間隔</button>
-        </div>
-        <p class="msg" id="systemCrawlMsg"></p>
-      </form>
-    </section>
-    <section class="card">
+      </div>
+      <div id="promo" class="admin-panel" data-admin-panel="promo">
+<section class="card">
       <h2>贊助連結</h2>
       <p class="hint">預設列出免月費、會員能刷卡的方案：歐付寶收款連結、ezPay 簡單付、OEN 幫收 Link、Ko-fi、PayPal.Me、Buy Me a Coffee、GitHub Sponsors。金流仍會從贊助款抽手續費。ezPay 個人會員通過、銀行設好後，請到 ezPay 後台做「收款連結」，把 https 網址貼到該列「你的收款網址」並勾選顯示；銀行帳號本身不會出現在前台。綠界、藍新全方位金流通常要統編或年費，不放在預設清單。付款不會自動改會員方案，收到後請在上方把對方改成「已贊助」。</p>
       <form id="sponsorForm">
@@ -367,7 +484,7 @@
         <p class="msg" id="sponsorMsg"></p>
       </form>
     </section>
-    <section class="card">
+<section class="card">
       <h2>站內小廣告</h2>
       <p class="hint">短期小額曝光用，不是 Google Ads，也不會自動追蹤訪客。每個版位最多一則安靜卡片，前台標「贊助訊息」。這與上方「贊助連結」（會員贊助金流）分開。沒開的版位前台不會出現空框。</p>
       <form id="adsForm">
@@ -435,53 +552,9 @@
         <p class="msg" id="adsMsg"></p>
       </form>
     </section>
-    <section class="card">
-      <h2>公告／最新消息／贊助提醒</h2>
-      <p class="hint">轉頁時在底欄上方出現一小則，可按 × 暫時不看。贊助提醒請寫維護品質，不要擋操作、不要連發。 hops 是每隔幾次換頁才再出現。</p>
-      <form id="broadcastsForm">
-        <div class="grid-2">
-          <div>
-            <h3 style="margin:0 0 8px;font-size:16px">公告</h3>
-            <label class="checks"><input type="checkbox" id="bcAnnouncementEnabled" /> 顯示</label>
-            <label>標題</label>
-            <input id="bcAnnouncementTitle" maxlength="48" />
-            <label>內文</label>
-            <textarea id="bcAnnouncementBody" maxlength="220"></textarea>
-            <label>連結（選填）</label>
-            <input id="bcAnnouncementUrl" maxlength="500" />
-            <label>每隔幾次換頁</label>
-            <input id="bcAnnouncementHops" type="number" min="1" max="20" value="3" />
-          </div>
-          <div>
-            <h3 style="margin:0 0 8px;font-size:16px">最新消息</h3>
-            <label class="checks"><input type="checkbox" id="bcNewsEnabled" /> 顯示</label>
-            <label>標題</label>
-            <input id="bcNewsTitle" maxlength="48" />
-            <label>內文</label>
-            <textarea id="bcNewsBody" maxlength="220"></textarea>
-            <label>連結（選填）</label>
-            <input id="bcNewsUrl" maxlength="500" />
-            <label>每隔幾次換頁</label>
-            <input id="bcNewsHops" type="number" min="1" max="20" value="3" />
-          </div>
-        </div>
-        <h3 style="margin:16px 0 8px;font-size:16px">贊助提醒</h3>
-        <label class="checks"><input type="checkbox" id="bcSponsorEnabled" /> 顯示</label>
-        <label>標題</label>
-        <input id="bcSponsorTitle" maxlength="48" placeholder="贊助能讓本站維持免費比價" />
-        <label>內文</label>
-        <textarea id="bcSponsorBody" maxlength="220" placeholder="不擋找房。寫維護品質即可。"></textarea>
-        <label>連結（選填）</label>
-        <input id="bcSponsorUrl" maxlength="500" />
-        <label>每隔幾次換頁</label>
-        <input id="bcSponsorHops" type="number" min="1" max="20" value="5" />
-        <div class="row" style="margin:14px 0 0">
-          <button type="submit" class="primary" id="broadcastsSave">儲存公告與提醒</button>
-        </div>
-        <p class="msg" id="broadcastsMsg"></p>
-      </form>
-    </section>
-    <section class="card">
+      </div>
+      <div id="mail" class="admin-panel" data-admin-panel="mail">
+<section class="card">
       <h2>寄信 SMTP</h2>
       <p class="hint">這組 SMTP 只寄<strong>系統信</strong>：註冊歡迎、忘記密碼、變更密碼、贊助後通知。物件／屋源提醒請會員自己在前台填 SMTP，不會用這裡的帳號代寄。密碼只在你新填時才更新，畫面上不會回傳已存密碼。</p>
       <form id="smtpForm">
@@ -519,7 +592,7 @@
         <p class="msg" id="smtpMsg"></p>
       </form>
     </section>
-    <section class="card">
+<section class="card">
       <h2>信件內容</h2>
       <p class="hint">系統信走上面的管理員 SMTP。可用代碼：<code>{{email}}</code>；註冊確認另有 <code>{{verifyUrl}}</code>；忘記密碼另有 <code>{{tempPassword}}</code>。物件通知預設內容只在會員未自訂時使用，實際寄出走會員自己的 SMTP。</p>
       <form id="tplForm">
@@ -557,10 +630,38 @@
         <p class="msg" id="tplMsg"></p>
       </form>
     </section>
+      </div>
+    </div>
   </div>
   <script src="/mascot.js"></script>
   <script>
+
     const $ = (id) => document.getElementById(id);
+    const ADMIN_PANELS = ["members", "crawl", "site", "promo", "mail"];
+    function adminPanelFromHash() {
+      const key = String(location.hash || "").replace(/^#/, "");
+      return ADMIN_PANELS.includes(key) ? key : "members";
+    }
+    function showAdminPanel(id) {
+      const key = ADMIN_PANELS.includes(id) ? id : "members";
+      document.querySelectorAll("[data-admin-panel]").forEach((el) => {
+        el.classList.toggle("is-on", el.dataset.adminPanel === key);
+      });
+      document.querySelectorAll("[data-admin-nav]").forEach((el) => {
+        el.setAttribute("aria-current", el.dataset.adminNav === key ? "page" : "false");
+      });
+      $("adminShell")?.classList.add("is-ready");
+      if (location.hash !== "#" + key) history.replaceState(null, "", "#" + key);
+    }
+    document.querySelectorAll("[data-admin-nav]").forEach((el) => {
+      el.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        showAdminPanel(el.dataset.adminNav);
+        window.scrollTo(0, 0);
+      });
+    });
+    window.addEventListener("hashchange", () => showAdminPanel(adminPanelFromHash()));
+    showAdminPanel(adminPanelFromHash());
     let meEmail = "";
     let sponsorCatalog = [];
     let sponsorExtras = [];
@@ -1581,6 +1682,6 @@
       setMsg("memberMsg", error.message || "載入失敗");
     });
   </script>
-  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.34</span></footer>
+  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.35</span></footer>
 </body>
 </html>
