@@ -34,6 +34,21 @@ test("price_desc keeps zero prices after real rents", () => {
   );
 });
 
+test("price_asc with extras uses rent plus monthly extras", () => {
+  const rows = sortListingsRows(
+    [
+      { post_id: 1, price_num: 34000, extra_fee: 3500 },
+      { post_id: 2, price_num: 36000, extra_fee: 0 },
+    ],
+    "price_asc",
+    { settings: { priceMaxIncludesExtras: true } },
+  );
+  assert.deepEqual(
+    rows.map((row) => row.post_id),
+    [2, 1],
+  );
+});
+
 test("newest in 特別關注 orders by watched_at, not last_seen_at", () => {
   const rows = sortListingsRows(
     [

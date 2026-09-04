@@ -90,6 +90,10 @@ export function ensurePersonalSchema(db) {
     "ALTER TABLE users ADD COLUMN line_qr_url TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE users ADD COLUMN contact_email TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE users ADD COLUMN profile_privacy_at TEXT",
+    "ALTER TABLE users ADD COLUMN last_login_at TEXT",
+    "ALTER TABLE users ADD COLUMN verify_used_at TEXT",
+    "ALTER TABLE users ADD COLUMN oauth_provider TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN oauth_subject TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE user_events ADD COLUMN source_key TEXT NOT NULL DEFAULT ''",
   ]) {
     try {

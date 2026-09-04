@@ -19,6 +19,7 @@ import {
 import { sameSearch } from "./client591.js";
 import { CITIES, districtNameFromListing, normalizeWatchDistricts } from "./regions.js";
 import { preferPrimaryListing } from "./match.js";
+import { listingCompareCost } from "./listingCost.js";
 import { commuteWorkJobs, hasWorkPoint, needsListingGeo, normalizeCommuteMode } from "./geo.js";
 import { demoCommutePatch } from "./demo.js";
 import { isWalkableMrtDistance, makeMrtKey } from "./mrt.js";
@@ -114,6 +115,10 @@ import {
   setUserPassword as setUserPasswordOn,
   setUserPlan as setUserPlanOn,
   verifyUserPassword as verifyUserPasswordOn,
+  touchLastLogin as touchLastLoginOn,
+  listIdleMemberIds as listIdleMemberIdsOn,
+  linkOauthIdentity as linkOauthIdentityOn,
+  IDLE_PAUSE_MS,
 } from "./members.js";
 import { publicProfile, updateUserProfile as updateUserProfileOn } from "./profile.js";
 import { requestTempPassword as requestTempPasswordOn } from "./forgotPassword.js";
@@ -129,6 +134,11 @@ import {
   serializeEnvMap,
   smtpFromEnv,
 } from "./siteMail.js";
+import {
+  applyOauthEnv,
+  normalizeOauthConfig,
+  publicOauthConfig,
+} from "./oauth.js";
 import { defaultHelpQaItems, mergeMissingDefaultHelpQa, normalizeHelpQaItems, publicHelpQa } from "./helpQa.js";
 import {
   listingMailPresetById,
@@ -717,6 +727,67 @@ export function applyStoredSmtp() {
   return smtp;
 }
 
+function persistOauthToAuthEnv(config) {
+  const file = authEnvPath();
+  const existing = existsSync(file) ? parseEnvFileText(readFileSync(file, "utf8")) : {};
+  const merged = mergeEnvMap(existing, applyOauthEnv(config));
+  writeFileSync(file, serializeEnvMap(merged), { encoding: "utf8", mode: 0o600 });
+}
+
+export function getStoredOauth() {
+  const stored = settingKey("oauth");
+  return normalizeOauthConfig(stored && typeof stored === "object" ? stored : {}, {}, process.env);
+}
+
+export function getAdminOauthSettings() {
+  const oauth = getStoredOauth();
+  return { oauth: publicOauthConfig(oauth) };
+}
+
+export function saveAdminOauthSettings(partial = {}) {
+  const current = getStoredOauth();
+  const oauth = normalizeOauthConfig(partial.oauth || {}, current);
+  writeSettingKey("oauth", oauth);
+  persistOauthToAuthEnv(oauth);
+  return getAdminOauthSettings();
+}
+
+export function applyStoredOauth() {
+  const oauth = getStoredOauth();
+  applyOauthEnv(oauth);
+  return oauth;
+}
+
+export function touchLastLogin(userId, opts) {
+  return touchLastLoginOn(db, userId, opts);
+}
+
+export function resumeIdleIfNeeded(userId) {
+  const uid = Number(userId) || 0;
+  if (!uid) return getSettings(uid);
+  const current = getSettings(uid);
+  if (current.inactivityPaused !== true) return current;
+  let settings = saveSettings({ notificationsPaused: false, inactivityPaused: false }, uid);
+  if (settings.notificationsPaused !== true) {
+    settings = armMemberExternalFetch(uid);
+  }
+  return settings;
+}
+
+export function pauseIdleMembers({ now = Date.now() } = {}) {
+  const ids = listIdleMemberIdsOn(db, { now, idleMs: IDLE_PAUSE_MS });
+  let n = 0;
+  for (const id of ids) {
+    const settings = getSettings(id);
+    if (settings.notificationsPaused === true) continue;
+    saveSettings({ notificationsPaused: true, inactivityPaused: true }, id);
+    n += 1;
+  }
+  return n;
+}
+
+export { IDLE_PAUSE_MS };
+
 function userSettingKey(userId, key) {
   const uid = Number(userId) || 0;
   if (!uid) return undefined;
@@ -1050,6 +1121,10 @@ export function registerUser(input) {
   return registerUserOn(db, input);
 }
 
+export function linkOauthIdentity(userId, opts) {
+  return linkOauthIdentityOn(db, userId, opts);
+}
+
 export function updateUserProfile(userId, input) {
   const row = updateUserProfileOn(db, userId, input);
   return withLegalProfile({ ...publicUser(row), ...publicProfile(row) });
@@ -1146,10 +1221,12 @@ const DEFAULTS = {
   watchDistricts: [],
   priceMin: 0,
   priceMax: 0,
+  priceMaxIncludesExtras: false,
   areaMax: 0,
   excludeRooftop: true,
   offlineConfirmDays: 7,
   notificationsPaused: false,
+  inactivityPaused: false,
   memberFetchDueAt: "",
   dataEpoch: DATA_EPOCH,
 };
@@ -2365,8 +2442,12 @@ export function updateListingsGeoByAddress(address, lat, lng) {
   ).run(Number(lat), Number(lng), key);
 }
 
-function priceSortKey(row) {
-  const n = Number(row?.price_num) || 0;
+function rentSortValue(row, settings = {}) {
+  return listingCompareCost(row, { includeExtras: settings?.priceMaxIncludesExtras === true });
+}
+
+function priceSortKey(row, settings = {}) {
+  const n = rentSortValue(row, settings);
   return n > 0 ? n : Number.MAX_SAFE_INTEGER;
 }
 
@@ -2379,16 +2460,16 @@ function descIso(a, b) {
   return right.localeCompare(left);
 }
 
-export function sortListingsRows(rows, sort = "price_asc", { filter } = {}) {
+export function sortListingsRows(rows, sort = "price_asc", { filter, settings } = {}) {
   const list = [...(rows || [])];
   if (sort === "commute_asc") {
-    list.sort((a, b) => (Number(a.commute_km) || 9999) - (Number(b.commute_km) || 9999) || priceSortKey(a) - priceSortKey(b));
+    list.sort((a, b) => (Number(a.commute_km) || 9999) - (Number(b.commute_km) || 9999) || priceSortKey(a, settings) - priceSortKey(b, settings));
   } else if (sort === "commute_desc") {
-    list.sort((a, b) => (Number(b.commute_km) || 0) - (Number(a.commute_km) || 0) || priceSortKey(a) - priceSortKey(b));
+    list.sort((a, b) => (Number(b.commute_km) || 0) - (Number(a.commute_km) || 0) || priceSortKey(a, settings) - priceSortKey(b, settings));
   } else if (sort === "price_desc") {
     list.sort((a, b) => {
-      const pa = Number(a.price_num) || 0;
-      const pb = Number(b.price_num) || 0;
+      const pa = rentSortValue(a, settings);
+      const pb = rentSortValue(b, settings);
       if ((pa > 0) !== (pb > 0)) return pa > 0 ? -1 : 1;
       return pb - pa || String(b.last_seen_at || "").localeCompare(String(a.last_seen_at || ""));
     });
@@ -2401,9 +2482,9 @@ export function sortListingsRows(rows, sort = "price_asc", { filter } = {}) {
       return descIso(a.first_seen_at, b.first_seen_at) || Number(b.post_id) - Number(a.post_id);
     });
   } else if (sort === "fit_desc") {
-    list.sort((a, b) => (Number(b.fit_score) || 0) - (Number(a.fit_score) || 0) || priceSortKey(a) - priceSortKey(b));
+    list.sort((a, b) => (Number(b.fit_score) || 0) - (Number(a.fit_score) || 0) || priceSortKey(a, settings) - priceSortKey(b, settings));
   } else {
-    list.sort((a, b) => priceSortKey(a) - priceSortKey(b) || String(b.last_seen_at || "").localeCompare(String(a.last_seen_at || "")));
+    list.sort((a, b) => priceSortKey(a, settings) - priceSortKey(b, settings) || String(b.last_seen_at || "").localeCompare(String(a.last_seen_at || "")));
   }
   return list;
 }
@@ -2517,7 +2598,7 @@ export function listListings({
 
   rows = rows.filter((row) => matchesHousingKind(row, kind));
 
-  rows = sortListingsRows(rows, sort, { filter });
+  rows = sortListingsRows(rows, sort, { filter, settings });
 
   const totalMatched = rows.length;
   return { listings: rows.slice(0, limit), totalMatched };
@@ -2791,6 +2872,11 @@ try {
     applyStoredSmtp();
   } catch (error) {
     console.warn("套用 SMTP 設定失敗：", error.message);
+  }
+  try {
+    applyStoredOauth();
+  } catch (error) {
+    console.warn("套用社群登入設定失敗：", error.message);
   }
   try {
     const imported = importV1CacheIfNeeded(db, { adminUserId: adminId });

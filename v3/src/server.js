@@ -40,11 +40,15 @@ import {
   deleteOwnAccount,
   ADMIN_DELETE_REASONS,
   getUserById,
+  findUserByEmail,
   getMailTemplates,
   changeUserPassword,
   getAdminMailSettings,
   getStoredSmtp,
   saveAdminMailSettings,
+  getAdminOauthSettings,
+  saveAdminOauthSettings,
+  getStoredOauth,
   getAdminSponsorSettings,
   saveAdminSponsorSettings,
   publicSponsorSettings,
@@ -72,6 +76,10 @@ import {
   getSystemCrawl,
   saveSystemCrawl,
   armMemberExternalFetch,
+  touchLastLogin,
+  resumeIdleIfNeeded,
+  pauseIdleMembers,
+  linkOauthIdentity,
   isSystemCoveringDue,
   listDemand,
   getDemand,
@@ -110,6 +118,17 @@ import { buildDemoState } from "./demo.js";
 import { backfillListingCoords, backfillListingMrt, backfillListingRoutes, flushPendingNotifications, isWatchIntervalPending, runWatch } from "./watcher.js";
 import { LIST_PAGE_SIZE } from "./client591.js";
 import { APP_NAME, APP_VERSION } from "./brand.js";
+import {
+  OAUTH_PROVIDERS,
+  OAUTH_STATE_COOKIE,
+  createOauthState,
+  readOauthState,
+  oauthStateCookie,
+  providerAuthorizeUrl,
+  exchangeOauthCode,
+  randomOauthPassword,
+} from "./oauth.js";
+import { isEmailVerified } from "./emailVerify.js";
 import {
   BRAND_UPLOAD_MAX_BYTES,
   mimeForBrandFile,
@@ -321,6 +340,7 @@ app.post("/api/login", (req, res) => {
   try {
     assertHuman(req.body);
     const user = verifyLogin(req.body?.email, req.body?.password, { keys });
+    afterMemberSession(user);
     setSession(req, res, user.email);
     res.json({ ok: true, email: user.email, role: user.role, plan: user.plan });
   } catch (error) {
@@ -376,14 +396,136 @@ app.post("/api/register", (req, res) => {
   }
 });
 
+function cookieNamed(req, name) {
+  const raw = String(req.headers.cookie || "");
+  for (const part of raw.split(";")) {
+    const idx = part.indexOf("=");
+    if (idx < 0) continue;
+    if (part.slice(0, idx).trim() !== name) continue;
+    const value = part.slice(idx + 1).trim();
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
+  }
+  return "";
+}
+
+function afterMemberSession(user) {
+  const id = Number(user?.id) || 0;
+  if (!id) return;
+  touchLastLogin(id);
+  resumeIdleIfNeeded(id);
+}
+
 app.get("/verify-email", (req, res) => {
   try {
     const user = confirmVerifyToken(String(req.query?.token || ""));
+    afterMemberSession(user);
     setSession(req, res, user.email);
-    res.redirect(303, "/?verified=1");
+    const base = publicBaseUrl(req);
+    queueSystemMail("verified_welcome", user.email, {
+      spiritUrl: `${base}/spirit.html`,
+    });
+    res.redirect(303, "/login.html?verify=ok");
   } catch (error) {
-    const code = error.code === "expired" ? "expired" : "invalid";
+    const code = error.code === "expired" ? "expired" : error.code === "used" ? "used" : error.code === "missing" ? "missing" : "invalid";
     res.redirect(303, `/login.html?verify=${code}`);
+  }
+});
+
+app.get("/api/oauth", (_req, res) => {
+  res.json(getAdminOauthSettings());
+});
+
+app.get("/auth/:provider", (req, res) => {
+  try {
+    const provider = String(req.params.provider || "");
+    if (!OAUTH_PROVIDERS.includes(provider)) {
+      const err = new Error("不支援的登入方式");
+      err.status = 404;
+      throw err;
+    }
+    const cfg = getStoredOauth()[provider];
+    if (!cfg?.enabled || !cfg.clientId || !cfg.clientSecret) {
+      const err = new Error("管理員尚未開通這個社群登入");
+      err.status = 503;
+      throw err;
+    }
+    const accept = String(req.query.accept || "") === "1";
+    const state = createOauthState({ provider, accept });
+    const base = publicBaseUrl(req);
+    const redirectUri = `${base}/auth/${provider}/callback`;
+    const url = providerAuthorizeUrl(provider, { clientId: cfg.clientId, redirectUri, state });
+    res.setHeader("Set-Cookie", oauthStateCookie(req, state));
+    res.redirect(302, url);
+  } catch (error) {
+    res.redirect(303, `/login.html?oauth=${encodeURIComponent(error.message || "授權失敗")}`);
+  }
+});
+
+app.get("/auth/:provider/callback", async (req, res) => {
+  try {
+    const provider = String(req.params.provider || "");
+    const state = readOauthState(cookieNamed(req, OAUTH_STATE_COOKIE) || String(req.query.state || ""));
+    if (!state || state.provider !== provider) {
+      const err = new Error("授權已過期，請再試一次");
+      err.status = 400;
+      throw err;
+    }
+    if (req.query.error) {
+      const err = new Error("已取消社群登入");
+      err.status = 400;
+      throw err;
+    }
+    const cfg = getStoredOauth()[provider];
+    const base = publicBaseUrl(req);
+    const redirectUri = `${base}/auth/${provider}/callback`;
+    const profile = await exchangeOauthCode(provider, {
+      code: String(req.query.code || ""),
+      redirectUri,
+      clientId: cfg.clientId,
+      clientSecret: cfg.clientSecret,
+    });
+    let user = findUserByEmail(profile.email);
+    if (user && String(user.deleted_at || "").trim()) {
+      const err = new Error("這個 Email 的帳號已關閉");
+      err.status = 409;
+      throw err;
+    }
+    if (!user) {
+      if (!state.accept) {
+        res.redirect(303, `/login.html?register=1&oauth=${encodeURIComponent("請先勾選免責與個資說明，再用社群帳號註冊")}`);
+        return;
+      }
+      user = registerUser({
+        email: profile.email,
+        password: randomOauthPassword(),
+        acceptDisclaimer: true,
+        acceptPrivacy: true,
+        emailVerified: false,
+      });
+    }
+    linkOauthIdentity(user.id, { provider, subject: profile.subject });
+    if (!isEmailVerified(user)) {
+      const issued = issueVerifyToken(user.id);
+      queueSystemMail("welcome", user.email, {
+        verifyUrl: `${base}/verify-email?token=${encodeURIComponent(issued.token)}`,
+      });
+      res.setHeader("Set-Cookie", oauthStateCookie(req, "", { clear: true }));
+      res.redirect(303, `/login.html?oauth=pending&email=${encodeURIComponent(user.email)}`);
+      return;
+    }
+    afterMemberSession(user);
+    res.setHeader("Set-Cookie", [
+      oauthStateCookie(req, "", { clear: true }),
+      sessionCookie(req, user.email),
+    ]);
+    res.redirect(303, "/");
+  } catch (error) {
+    res.setHeader("Set-Cookie", oauthStateCookie(req, "", { clear: true }));
+    res.redirect(303, `/login.html?oauth=${encodeURIComponent(error.message || "授權失敗")}`);
   }
 });
 
@@ -502,6 +644,18 @@ app.get("/api/admin/mail", requireAdminApi, (_req, res) => {
 app.put("/api/admin/mail", requireAdminApi, (req, res) => {
   try {
     res.json(saveAdminMailSettings(req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/admin/oauth", requireAdminApi, (_req, res) => {
+  res.json(getAdminOauthSettings());
+});
+
+app.put("/api/admin/oauth", requireAdminApi, (req, res) => {
+  try {
+    res.json(saveAdminOauthSettings(req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -972,6 +1126,11 @@ async function tick(reason = "schedule") {
         if (user?.email) queueSystemMail("verify_expired", user.email);
       },
     });
+    try {
+      pauseIdleMembers();
+    } catch (error) {
+      console.warn("閒置暫停失敗：", error.message);
+    }
     const now = Date.now();
     const systemDue = reason === "force" || reason === "startup" || isSystemCoveringDue(now);
     if (

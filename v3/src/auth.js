@@ -153,6 +153,8 @@ export function publicPath(req) {
     p === "/api/login" ||
     p === "/api/register" ||
     p === "/verify-email" ||
+    p.startsWith("/auth/") ||
+    p === "/api/oauth" ||
     p === "/api/forgot-password" ||
     p === "/api/logout" ||
     p === "/api/me" ||

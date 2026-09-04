@@ -182,6 +182,15 @@
       padding: 9px 12px;
       font-size: 12px;
     }
+    .oauth {
+      margin-top: 16px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+    }
+    .oauth-kicker { margin: 0 0 8px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+    .oauth-row { display: flex; flex-wrap: wrap; gap: 8px; }
+    .oauth-row a.ghost { min-height: 40px; padding: 8px 14px; font-size: 14px; text-decoration: none; display: inline-flex; align-items: center; }
+    .oauth[data-empty="1"] { display: none; }
   </style>
 </head>
 <body>
@@ -256,6 +265,14 @@
       <label class="hp">請不要填這個欄位<input id="regWebsite" name="website" tabindex="-1" autocomplete="off" /></label>
       <button type="submit" id="registerBtn">同意並註冊</button>
     </form>
+    <div class="oauth" id="oauthBox" data-empty="1" hidden>
+      <p class="oauth-kicker">或用 Google／LINE／Facebook 帶入信箱。新帳號仍須勾選上方同意，並完成開通信；已開通的帳號可直接登入。</p>
+      <div class="oauth-row">
+        <a class="ghost" id="oauthGoogle" hidden href="/auth/google">Google</a>
+        <a class="ghost" id="oauthLine" hidden href="/auth/line">LINE</a>
+        <a class="ghost" id="oauthFacebook" hidden href="/auth/facebook">Facebook</a>
+      </div>
+    </div>
     <form id="forgotForm" class="hidden">
       <p class="sub">輸入註冊的 Email，我們會寄一組臨時密碼。若這個信箱有帳號，請到信箱收信後再用那組密碼登入。</p>
       <label for="forgotEmail">Email</label>
@@ -275,7 +292,7 @@
     <p class="ok" id="ok"></p>
     <p class="err" id="err"></p>
     <div class="ad-slot" id="adLogin" hidden></div>
-    <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.38</span></footer>
+    <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.39</span></footer>
   </div>
   <script src="/mascot.js"></script>
   <script>
@@ -285,6 +302,7 @@
     const showRegister = new URLSearchParams(location.search).has("register");
     const showForgot = new URLSearchParams(location.search).has("forgot");
     const verifyState = new URLSearchParams(location.search).get("verify");
+    const oauthState = new URLSearchParams(location.search).get("oauth");
     let captchaId = "";
     function clearNotes() {
       $("err").textContent = "";
@@ -324,6 +342,7 @@
       $("loginForm").classList.toggle("hidden", register || forgot);
       $("registerForm").classList.toggle("hidden", !register);
       $("forgotForm").classList.toggle("hidden", !forgot);
+      if ($("oauthBox")) $("oauthBox").classList.toggle("hidden", forgot);
       clearNotes();
       if (forgot && !$("forgotEmail").value) $("forgotEmail").value = $("email").value.trim();
     }
@@ -337,6 +356,17 @@
     $("tabRegister").onclick = () => setMode("register");
     $("forgotLink").onclick = () => setMode("forgot");
     $("backLogin").onclick = () => setMode("login");
+    function goOauth(provider) {
+      const register = !$("registerForm").classList.contains("hidden");
+      if (register && (!$("accept").checked || !$("acceptPrivacy").checked)) {
+        $("err").textContent = "請先勾選免責與個資說明，再用社群帳號註冊";
+        return;
+      }
+      location.href = register ? `/auth/${provider}?accept=1` : `/auth/${provider}`;
+    }
+    $("oauthGoogle")?.addEventListener("click", (ev) => { ev.preventDefault(); goOauth("google"); });
+    $("oauthLine")?.addEventListener("click", (ev) => { ev.preventDefault(); goOauth("line"); });
+    $("oauthFacebook")?.addEventListener("click", (ev) => { ev.preventDefault(); goOauth("facebook"); });
     $("loginCaptchaRefresh").onclick = () => loadCaptcha().catch((error) => { $("err").textContent = error.message; });
     $("regCaptchaRefresh").onclick = () => loadCaptcha().catch((error) => { $("err").textContent = error.message; });
     $("forgotCaptchaRefresh").onclick = () => loadCaptcha().catch((error) => { $("err").textContent = error.message; });
@@ -352,10 +382,30 @@
     } catch (error) {}
     if (showRegister) setMode("register");
     if (showForgot) setMode("forgot");
+    if (verifyState === "ok") $("ok").innerHTML = "信箱已開通，歡迎加入。我們另寄了一封說明信。<a href=\"/spirit.html\">本站理念</a>　<a href=\"/\">進入找房</a>";
     if (verifyState === "expired") $("err").textContent = "確認連結已失效。系統會另寄失效通知，請用同一個信箱重新註冊。";
+    if (verifyState === "used") $("err").textContent = "這個開通連結已經使用過。";
+    if (verifyState === "missing") $("err").textContent = "找不到這個開通連結。";
     if (verifyState === "invalid") $("err").textContent = "確認連結無效或已使用。";
+    if (oauthState === "pending") $("ok").textContent = "請到信箱點開通連結才算完成註冊。連結只能用一次。";
+    else if (oauthState) $("err").textContent = oauthState;
     fetch("/api/me").then((r) => r.json()).then((data) => {
-      if (data.ok && !justLoggedOut) location.replace("/");
+      if (data.ok && !justLoggedOut && !verifyState) location.replace("/");
+    }).catch(() => {});
+    fetch("/api/oauth", { cache: "no-store" }).then((r) => r.json()).then((data) => {
+      const oauth = data?.oauth || {};
+      let any = false;
+      for (const [id, key] of [["oauthGoogle", "google"], ["oauthLine", "line"], ["oauthFacebook", "facebook"]]) {
+        const on = Boolean(oauth[key]?.enabled && oauth[key]?.configured);
+        if ($(id)) {
+          $(id).hidden = !on;
+          if (on) any = true;
+        }
+      }
+      if ($("oauthBox")) {
+        $("oauthBox").hidden = !any;
+        $("oauthBox").dataset.empty = any ? "0" : "1";
+      }
     }).catch(() => {});
     loadCaptcha().catch((error) => { $("err").textContent = error.message; });
     fetch("/api/disclaimer", { cache: "no-store" }).then((r) => r.json()).then((copy) => {

@@ -27,6 +27,23 @@ export function defaultMailTemplates() {
 ——${APP_NAME}
 `,
     },
+    verified_welcome: {
+      subject: `${APP_NAME}：歡迎加入，信箱已開通`,
+      text: `你好，
+
+信箱 {{email}} 已開通，歡迎加入 ${APP_NAME}。
+
+這是一個免費找房工具，用來把各來源的租金與條件看清楚一點，不是仲介、也不經手金錢。若你想知道這個站為什麼存在，可以看這裡：
+
+{{spiritUrl}}
+
+如果這個工具對你有幫助，日後若有餘力，歡迎以你覺得自在的方式支持維護；有沒有贊助都不影響你現在就能用的功能。
+
+祝找房順利。
+
+——${APP_NAME}
+`,
+    },
     verify_expired: {
       subject: `${APP_NAME}：註冊確認連結已失效`,
       text: `你好，
@@ -244,7 +261,7 @@ export function mergeEnvMap(existing, updates) {
   return next;
 }
 
-export const ACCOUNT_MAIL_KINDS = ["welcome", "verify_expired", "password_changed", "sponsor_thanks", "account_deleted"];
+export const ACCOUNT_MAIL_KINDS = ["welcome", "verified_welcome", "verify_expired", "password_changed", "sponsor_thanks", "account_deleted"];
 
 export function composeAccountMail(kind, templates, vars = {}) {
   const key = String(kind || "").trim();

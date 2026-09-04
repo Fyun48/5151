@@ -13,7 +13,13 @@ test("login page can register after accepting the disclaimer", () => {
   assert.match(html, /確認信/);
   assert.match(html, /系統推播/);
   assert.match(html, /\/api\/register/);
-  assert.match(html, /verifyState === "expired"/);
+  assert.match(html, /verifyState === "used"/);
+  assert.match(html, /verifyState === "missing"/);
+  assert.match(html, /進入找房/);
+  assert.match(html, /!verifyState/);
+  assert.match(html, /id="oauthBox"/);
+  assert.match(html, /\/auth\/google/);
+  assert.match(html, /\/api\/oauth/);
   assert.match(html, /請到信箱點確認連結才算註冊成功/);
   assert.match(html, /acceptDisclaimer/);
   assert.match(html, /acceptPrivacy/);
