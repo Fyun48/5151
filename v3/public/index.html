@@ -3136,7 +3136,7 @@
       const dup = String(item.match_verdict || "") === "yes";
       if (key === "hidden") return hidden || dup;
       if (key === "offline") return offline && !confirmed;
-      if (key === "suspected") return Boolean(item.match_level) && !offline;
+      if (key === "suspected") return Boolean(item.match_level) && !offline && !dup && !hidden;
       if (dup || offline || hidden) return false;
       if (key === "all") return !watched;
       if (key === "unseen") return !viewed;
@@ -3768,8 +3768,8 @@
       const url = peer?.url || listingUrl(peerId);
       const srcMine = listingSourceLabel(item);
       const srcPeer = listingSourceLabel(peer || {});
-      const srcBit = srcPeer && srcPeer !== srcMine ? ` · ${esc(srcMine)}／${esc(srcPeer)}` : ` · ${esc(srcMine)}`;
-      return `<div class="match-peer">疑似同一間：<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(title)}</a>${peer?.price ? ` · 租金 ${esc(peer.price)}` : ""}${srcBit}</div>`;
+      const srcBit = ` · ${esc(srcMine)}${srcPeer ? `／${esc(srcPeer)}` : ""}`;
+      return `<div class="match-peer">疑似同一間（${esc(srcPeer || srcMine)}）：<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(title)}</a>${peer?.price ? ` · 租金 ${esc(peer.price)}` : ""}${srcBit}</div>`;
     }
 
     function matchActionButtons(item, id) {
@@ -3777,7 +3777,7 @@
       return `
             <button class="primary" data-confirm-match="${id}">是同一間</button>
             <button class="ghost" data-reject-match="${id}">不是同一間</button>
-            <span class="hint">確認後保留較低價；同價留較新刊登</span>`;
+            <span class="hint">確認後列表只留總費用（租金＋額外費用）較低的那則；同價留較新</span>`;
     }
 
     function chineseMonthCount(token) {

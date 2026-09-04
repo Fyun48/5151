@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { bestMatch, preferPrimaryListing, scoreMatch } from "../src/match.js";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { bestMatch, listingTotalCost, preferPrimaryListing, scoreMatch } from "../src/match.js";
+
+const dir = path.dirname(fileURLToPath(import.meta.url));
 
 const base = {
   post_id: 1001,
@@ -116,6 +121,14 @@ test("cheaper includes extra_fee when choosing the primary listing", () => {
   const lowRentHighExtra = { post_id: 1, price_num: 18000, extra_fee: 5000, refresh_time: "剛剛" };
   const higherRentNoExtra = { post_id: 2, price_num: 20000, extra_fee: 0, refresh_time: "3天前" };
   assert.equal(preferPrimaryListing(lowRentHighExtra, higherRentNoExtra).post_id, 2);
+  assert.equal(listingTotalCost(lowRentHighExtra), 23000);
+});
+
+test("extra_fees rows count when extra_fee column is empty", () => {
+  const withRows = { post_id: 1, price_num: 18000, extra_fee: 0, extra_fees: [{ amount: 4000 }] };
+  const cheaper = { post_id: 2, price_num: 19000, extra_fee: 0 };
+  assert.equal(listingTotalCost(withRows), 22000);
+  assert.equal(preferPrimaryListing(withRows, cheaper).post_id, 2);
 });
 
 test("same price keeps the listing updated more recently", () => {
@@ -130,4 +143,14 @@ test("same price without refresh_time uses last_seen_at", () => {
   const older = { post_id: 1, price_num: 20000, last_seen_at: "2026-08-01T00:00:00.000Z" };
   const newer = { post_id: 2, price_num: 20000, last_seen_at: "2026-08-31T00:00:00.000Z" };
   assert.equal(preferPrimaryListing(older, newer).post_id, 2);
+});
+
+test("suspected peer payload includes source and confirm keeps cheaper listing", () => {
+  const dbSrc = readFileSync(path.join(dir, "../src/db.js"), "utf8");
+  assert.match(dbSrc, /SELECT post_id, title, url, price, price_num, extra_fee, extra_fees, source, offline FROM listings WHERE post_id/);
+  assert.match(dbSrc, /source_label: selfSourceLabel\(matchPeerRaw\.source/);
+  assert.match(dbSrc, /const primary = preferPrimaryListing\(listing, peer\)/);
+  assert.match(dbSrc, /hidden = 1/);
+  const suspected = dbSrc.slice(dbSrc.indexOf('if (filter === "suspected")'), dbSrc.indexOf('} else if (filter === "offline")'));
+  assert.match(suspected, /match_verdict/);
 });

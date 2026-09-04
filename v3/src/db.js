@@ -1300,8 +1300,17 @@ function decorateListing(row, settings, userId) {
   const commuteKm = commute == null ? null : Math.round(commute * 10) / 10;
   const commuteMode = normalizeCommuteMode(settings.commuteMode);
   const matchPostId = Number(row.match_post_id) || 0;
-  const matchPeer = matchPostId
-    ? db.prepare("SELECT post_id, title, url, price, offline FROM listings WHERE post_id = ?").get(matchPostId)
+  const matchPeerRaw = matchPostId
+    ? db.prepare(
+      "SELECT post_id, title, url, price, price_num, extra_fee, extra_fees, source, offline FROM listings WHERE post_id = ?",
+    ).get(matchPostId)
+    : null;
+  const matchPeer = matchPeerRaw
+    ? {
+      ...matchPeerRaw,
+      source: String(matchPeerRaw.source || "591") || "591",
+      source_label: selfSourceLabel(matchPeerRaw.source || "591"),
+    }
     : null;
   const source = String(row.source || "591") || "591";
   const uid = Number(userId) || 0;
@@ -2336,6 +2345,8 @@ export function listListings({
   if (filter === "suspected") {
     clauses.push("match_level IN ('high', 'medium')");
     clauses.push("IFNULL(offline, 0) = 0");
+    clauses.push("(IFNULL(match_verdict, '') != 'yes')");
+    clauses.push("IFNULL(hidden, 0) = 0");
   } else if (filter === "offline") {
     clauses.push("IFNULL(offline, 0) = 1");
     clauses.push("IFNULL(offline_confirmed, 0) = 0");
@@ -2563,8 +2574,8 @@ export function stats(searchKeys, userId, settingsOverride) {
     hidden: attrRows.filter((row) => row.hidden).length,
     offline: raw.filter((row) => isPendingOffline(row)).length,
     offlineConfirmed: raw.filter((row) => isConfirmedOffline(row)).length,
-    suspected: attrRows.filter((row) => row.match_level && !row.offline).length,
-    suspectedPending: attrRows.filter((row) => row.match_level && !row.match_verdict && !row.offline).length,
+    suspected: attrRows.filter((row) => row.match_level && !row.offline && row.match_verdict !== "yes" && !row.hidden).length,
+    suspectedPending: attrRows.filter((row) => row.match_level && !row.match_verdict && !row.offline && !row.hidden).length,
     elevator: browse.filter((row) => listingHasElevator(row)).length,
     stored: geoRows.length,
     filteredOut: Math.max(0, browse.length - geoRows.length),

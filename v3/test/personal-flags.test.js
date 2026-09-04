@@ -75,6 +75,17 @@ test("overlay keeps system-hidden duplicates even without a personal hide flag",
   assert.equal(listingMatchesListFilter(row, "all"), false);
 });
 
+test("confirmed same-house duplicates leave the suspected filter", () => {
+  const pending = { match_level: "high", match_verdict: "", hidden: 0, offline: 0 };
+  const kept = { match_level: null, match_verdict: "", hidden: 0, offline: 0 };
+  const hiddenDup = { match_level: "high", match_verdict: "yes", hidden: 1, offline: 0 };
+  assert.equal(listingMatchesListFilter(pending, "suspected"), true);
+  assert.equal(listingMatchesListFilter(kept, "suspected"), false);
+  assert.equal(listingMatchesListFilter(hiddenDup, "suspected"), false);
+  assert.equal(listingMatchesListFilter(hiddenDup, "hidden"), true);
+  assert.equal(listingMatchesListFilter(hiddenDup, "all"), false);
+});
+
 test("relist copies each member's flags onto the new post_id", () => {
   const db = memoryDb();
   const alice = ensureUser(db, "alice@example.com");

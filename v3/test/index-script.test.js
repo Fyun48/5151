@@ -557,4 +557,6 @@ test("self listing form and in-site detail stay on this site", () => {
   assert.match(html, /item\.fit_score/);
   assert.match(html, /sort === "fit_desc"/);
   assert.doesNotMatch(html, /model_score/);
+  assert.match(html, /疑似同一間（\$\{esc\(srcPeer \|\| srcMine\)\}）/);
+  assert.match(html, /確認後列表只留總費用（租金＋額外費用）較低的那則/);
 });

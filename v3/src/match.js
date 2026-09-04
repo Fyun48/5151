@@ -119,12 +119,35 @@ export function bestMatch(incoming, candidates) {
   return medium;
 }
 
-function rentNum(listing) {
+export function extraFeeAmount(listing) {
+  const col = Number(listing?.extra_fee);
+  if (Number.isFinite(col) && col > 0) return col;
+  let fees = listing?.extra_fees;
+  if (typeof fees === "string") {
+    try {
+      fees = JSON.parse(fees);
+    } catch {
+      fees = [];
+    }
+  }
+  if (!Array.isArray(fees)) return 0;
+  return fees.reduce((sum, row) => {
+    const n = Number(row?.amount);
+    return sum + (Number.isFinite(n) && n > 0 ? n : 0);
+  }, 0);
+}
+
+/** 列表要比的月費：租金＋額外費用。缺租金時盡量從 price 字串解析。 */
+export function listingTotalCost(listing) {
+  const extra = extraFeeAmount(listing);
   const n = Number(listing?.price_num);
-  const extra = Number(listing?.extra_fee) || 0;
-  if (Number.isFinite(n) && n > 0) return n + (extra > 0 ? extra : 0);
+  if (Number.isFinite(n) && n > 0) return n + extra;
   const parsed = Number(String(listing?.price || "").replace(/[^\d]/g, ""));
-  return Number.isFinite(parsed) && parsed > 0 ? parsed + (extra > 0 ? extra : 0) : Number.MAX_SAFE_INTEGER;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed + extra : Number.MAX_SAFE_INTEGER;
+}
+
+function rentNum(listing) {
+  return listingTotalCost(listing);
 }
 
 /** 把 591「3小時前／昨日」轉成時間戳，越新越大。解析不到就用 last_seen_at。 */
@@ -150,7 +173,7 @@ export function listingRefreshAt(listing, now = Date.now()) {
 }
 
 /**
- * 確認同一間時要保留的主刊登：較低價優先；同價取更新較近。
+ * 確認同一間時要保留的主刊登：總費用（租金＋額外費用）較低優先；同價取更新較近。
  */
 export function preferPrimaryListing(a, b, now = Date.now()) {
   if (!a) return b;
