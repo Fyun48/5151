@@ -22,6 +22,8 @@ test("default Q&A explains walkable MRT distance not straight-line", () => {
   assert.ok(items.some((row) => row.id === "demand-wall"));
   assert.ok(items.some((row) => row.id === "extra-portals"));
   assert.ok(items.some((row) => row.id === "listing-fit"));
+  assert.ok(items.some((row) => row.id === "viewed-once"));
+  assert.ok(items.some((row) => row.id === "register-verify"));
   assert.ok(items.some((row) => row.id === "not-broker"));
   const fit = items.find((row) => row.id === "listing-fit");
   assert.match(fit.answer, /不是成交預測/);

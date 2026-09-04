@@ -7,6 +7,7 @@ import {
 } from "./db.js";
 import { normalizeEmail } from "./password.js";
 import { assertNotLocked, clearAuthFailures, recordAuthFailure } from "./rateLimit.js";
+import { isEmailVerified } from "./emailVerify.js";
 
 const COOKIE = "591_session";
 const MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
@@ -115,6 +116,11 @@ export function verifyLogin(email, password, { keys, now } = {}) {
   const pass = String(password || "");
   const hashed = verifyUserPassword(key, pass);
   if (hashed) {
+    if (!isEmailVerified(hashed)) {
+      const err = new Error("請先到信箱點確認連結才能登入");
+      err.status = 403;
+      throw err;
+    }
     if (keys?.length) clearAuthFailures(keys);
     return publicUser(hashed);
   }
@@ -146,6 +152,7 @@ export function publicPath(req) {
     p === "/logout" ||
     p === "/api/login" ||
     p === "/api/register" ||
+    p === "/verify-email" ||
     p === "/api/forgot-password" ||
     p === "/api/logout" ||
     p === "/api/me" ||

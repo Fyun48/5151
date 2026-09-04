@@ -10,9 +10,11 @@ test("login page can register after accepting the disclaimer", () => {
   const html = readFileSync(path.join(dir, "../public/login.html"), "utf8");
   assert.match(html, /id="tabRegister"/);
   assert.match(html, /id="registerForm"/);
-  assert.match(html, /歡迎信/);
+  assert.match(html, /確認信/);
   assert.match(html, /系統推播/);
   assert.match(html, /\/api\/register/);
+  assert.match(html, /verifyState === "expired"/);
+  assert.match(html, /請到信箱點確認連結才算註冊成功/);
   assert.match(html, /acceptDisclaimer/);
   assert.match(html, /disclaimer\.html/);
   assert.match(html, /這是免費系統/);
