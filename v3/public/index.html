@@ -452,6 +452,11 @@
       margin: 0 0 10px;
     }
     .panel-toolbar strong { font-size: 14px; letter-spacing: 0.06em; color: var(--accent-deep); font-weight: 700; }
+    #settingsPanel .header-profiles {
+      border-top: 0;
+      padding: 0 0 12px;
+      margin: 0 0 4px;
+    }
     .when {
       display: inline-flex;
       align-items: baseline;
@@ -1510,7 +1515,6 @@
     @media (max-width: 880px) {
       body { padding-bottom: 72px; }
       .header-desk-only { display: none !important; }
-      .header-profiles { display: none; }
       .mobile-only { display: inline-flex; }
       .bottom-nav {
         display: grid;
@@ -1713,6 +1717,13 @@
         border-right: 0;
       }
       .wrap { grid-template-columns: minmax(0, 1fr); padding-bottom: 16px; overflow-x: clip; }
+      #settingsPanel .header-profiles {
+        position: sticky;
+        top: 0;
+        z-index: 3;
+        background: var(--paper);
+        padding: 4px 0 12px;
+      }
       #settingsPanel {
         display: none;
         position: fixed;
@@ -1824,14 +1835,6 @@
         <button class="primary header-desk-only admin-only" id="watchBtn">立即檢查</button>
       </div>
     </div>
-    <div class="header-profiles" data-tour="profiles">
-      <input type="text" id="profileName" placeholder="設定檔名稱" maxlength="40" aria-label="設定檔名稱" />
-      <select id="profileSelect" aria-label="已存設定檔"></select>
-      <button type="button" class="primary" id="saveBtn" disabled>儲存</button>
-      <button type="button" class="ghost" id="saveAsBtn" disabled>另存</button>
-      <button type="button" class="ghost" id="deleteProfileBtn">刪除</button>
-      <span class="save-msg" id="saveMsg"></span>
-    </div>
   </header>
   <div id="guestTour" class="guest-tour" hidden>
     <div class="guest-tour-dim"></div>
@@ -1859,6 +1862,14 @@
       <div class="panel-toolbar">
         <strong>搜尋設定</strong>
         <button type="button" class="ghost" id="collapsePanelBtn">收合</button>
+      </div>
+      <div class="header-profiles" data-tour="profiles">
+        <input type="text" id="profileName" placeholder="設定檔名稱" maxlength="40" aria-label="設定檔名稱" />
+        <select id="profileSelect" aria-label="已存設定檔"></select>
+        <button type="button" class="primary" id="saveBtn" disabled>儲存</button>
+        <button type="button" class="ghost" id="saveAsBtn" disabled>另存</button>
+        <button type="button" class="ghost" id="deleteProfileBtn">刪除</button>
+        <span class="save-msg" id="saveMsg"></span>
       </div>
       <div class="stats" id="stats">
         <div class="stat"><b>—</b><span>全部</span></div>
@@ -2527,7 +2538,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.26</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.27</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>

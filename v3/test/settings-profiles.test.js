@@ -100,6 +100,21 @@ test("notify and floor prefs write into the active profile snapshot", () => {
   assert.equal(next.settingProfiles[0].data.notifyMatrix.new.push, false);
 });
 
+test("any left-panel field save writes into the active profile", () => {
+  const current = hydrateSettings(
+    {
+      settingProfiles: [{ id: "p-1", name: "士林北投", data: { commuteKm: 12 } }],
+      activeProfileId: "p-1",
+      watchDistricts: ["1-8"],
+      commuteKm: 12,
+    },
+    defaults,
+  );
+  const next = applySettingPatch(current, { commuteKm: 9 });
+  assert.equal(next.commuteKm, 9);
+  assert.equal(next.settingProfiles[0].data.commuteKm, 9);
+});
+
 test("full form save updates the active profile snapshot", () => {
   const current = hydrateSettings(
     {
