@@ -1265,9 +1265,9 @@ async function persistSettings(body = {}, userId) {
     }
   }
   const pausing = Object.prototype.hasOwnProperty.call(body, "notificationsPaused");
-  const settings = saveSettings(body, uid);
+  let settings = saveSettings(body, uid);
   if (pausing && settings.notificationsPaused !== true) {
-    armMemberExternalFetch(uid);
+    settings = armMemberExternalFetch(uid);
   }
   schedule();
   return settings;
