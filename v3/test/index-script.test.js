@@ -186,7 +186,7 @@ test("member profiles cap districts and include usable ping in notify copy", () 
   assert.match(html, /housing_type/);
   assert.match(html, /已存 \$\{list\.length\}／\$\{cap\}/);
   assert.match(html, /新名稱會提示已滿；同名儲存會覆蓋/);
-  assert.match(html, /setSettingsReady\(settingsLoaded\)/);
+  assert.match(html, /function setSettingsReady/);
   assert.match(html, /\$\{label\}路線約 \$\{item\.commute_km\} 公里/);
   assert.doesNotMatch(html, /上約/);
   assert.doesNotMatch(html, /下約/);
