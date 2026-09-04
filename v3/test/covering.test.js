@@ -6,6 +6,7 @@ import {
   mergeCovers,
   uncoveredMembers,
   coversFromMemberSettings,
+  coversFromWatchDistricts,
   coverToListUrl,
   coveringJobsFromMembers,
   coveringJobsFromSettings,
@@ -154,4 +155,12 @@ test("listingInMemberScope only matches that member's city, district, and rent c
   assert.equal(listingInMemberScope(otherDistrict, settings), false);
   assert.equal(listingInMemberScope(tooExpensive, settings), false);
   assert.equal(listingInMemberScope(noSearch, { watchDistricts: [], searchUrls: [] }), false);
+});
+
+test("system watch districts become covering jobs the same way as member picks", () => {
+  const covers = coversFromWatchDistricts({ watchDistricts: ["1-8", "3-50"] });
+  const jobs = coveringJobsFromMembers(covers, { excludeRooftop: true });
+  assert.equal(covers.length, 2);
+  assert.ok(jobs.some((job) => job.regionId === 1 && job.sectionIds.includes(8)));
+  assert.ok(jobs.some((job) => job.regionId === 3 && job.sectionIds.includes(50)));
 });

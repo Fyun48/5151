@@ -166,8 +166,11 @@ test("left panel floor filters and profile save stay in the settings sheet", () 
   const whole = panel.indexOf("wholeFloorOnly");
   const low = panel.indexOf("excludeLowFloors");
   assert.ok(rooftop > 0 && whole > rooftop && low > whole);
+  assert.match(panel, /panel-sticky/);
+  assert.match(panel, /panel-close/);
   const mobile = html.slice(html.indexOf("@media (max-width: 880px)"));
   assert.doesNotMatch(mobile, /\.header-profiles \{ display: none/);
+  assert.match(mobile, /#settingsPanel \.panel-sticky/);
 });
 
 test("non-admin members do not see the shared reset link after boot", () => {
@@ -260,8 +263,7 @@ test("guest demo is read-only and work prompt can be skipped", () => {
   assert.match(html, /body\.role-guest #sponsorBar/);
   assert.match(html, /body\.role-guest #logoutBtn/);
   assert.match(html, /if \(isGuest \|\| !commuteOn\(\)\) return ""/);
-  assert.match(html, /一般會員每 8 分鐘檢查一次，贊助會員為 5 分鐘/);
-  assert.match(html, /贊助會員為 5 分鐘/);
+  assert.match(html, /全站共用抓取庫/);
   assert.match(html, /if \(isGuest\) \{\s*bar\.hidden = true/s);
   const server = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../src/server.js"), "utf8");
   assert.doesNotMatch(server, /請至少選一個行政區/);
@@ -274,15 +276,25 @@ test("member settings copy hides advanced hints and locks schedule defaults", ()
   assert.match(html, /站方管理員 SMTP/);
   assert.match(html, /data-notify-ch="mail"/);
   assert.match(html, /dock: true, push: true, webhook: false, mail: false/);
-  assert.match(html, /本系統每8分鐘會重新檢本物件來源比對篩選/);
+  assert.match(html, /本系統每8分鐘會重新檢本物件來源比對篩選|全站共用抓取庫/);
   assert.match(html, /id="adminLink"/);
   assert.match(html, /後台管理/);
   assert.match(html, /id="sponsorBar"/);
   assert.match(html, /paintSponsorOffer/);
   assert.match(html, /classList\.toggle\("role-admin", meIsAdmin\)/);
-  assert.match(html, /meIsAdmin \? Number\(\$\("intervalMinutes"\)\.value\) : undefined/);
-  assert.match(html, /meIsAdmin \? \(Number\(\$\("offlineConfirmDays"\)\.value\) \|\| 7\) : 7/);
-  assert.match(html, /meIsAdmin \? Number\(\$\("pagesPerWatch"\)\.value\) : 40/);
+  assert.match(html, /function compressSelfPhoto/);
+  assert.match(html, /SELF_PHOTO_LIMIT = 100/);
+  assert.match(html, /syncFilterSheetKeyboard/);
+  assert.match(html, /直接點物件列表中的頭像可以排除該人/);
+  assert.match(html, /panel-close/);
+  assert.match(html, /class="profile-row"/);
+  assert.match(html, /確定刪除設定檔/);
+  assert.match(html, /systemCrawlIntervalMinutes/);
+  assert.match(html, /schedule-readonly/);
+  assert.doesNotMatch(html, /id="pagesPerWatch"/);
+  assert.doesNotMatch(html, /進階：591 網址（自動產生，通常不用改）<\/summary>/);
+  assert.match(html, /class="admin-only"[\s\S]*searchUrls/s);
+  assert.doesNotMatch(html, /meIsAdmin \? Number\(\$\("pagesPerWatch"\)\.value\) : 40/);
   assert.match(html, /body:not\(\.role-admin\) \.admin-only/);
   assert.match(html, /class="hint member-only"/);
   assert.doesNotMatch(html, /站內是右下角「待看更新」/);
@@ -316,13 +328,13 @@ test("product name is 吉比租房物件追蹤 without v2 開發版 copy", () =>
   assert.equal(html.includes("v2 開發版"), false);
   assert.equal(html.includes("v3 開發版"), false);
   assert.equal(html.includes("與線上版分開的資料庫"), false);
-  assert.match(html, /ver\. 3\.28/);
+  assert.match(html, /ver\. 3\.29/);
   assert.doesNotMatch(html, /<h1>[^<]*v3/i);
   assert.match(login, /<h1>吉比租房物件追蹤<\/h1>/);
   assert.equal(login.includes("v2 開發版"), false);
   assert.equal(login.includes("v3 開發版"), false);
   assert.equal(login.includes("資料與線上版分開"), false);
-  assert.match(login, /ver\. 3\.28/);
+  assert.match(login, /ver\. 3\.29/);
 });
 
 test("MRT toggle and guest tour are in the page", () => {

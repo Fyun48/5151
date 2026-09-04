@@ -36,7 +36,11 @@ test("parseHpListHtml reads 5168 SSR cards", () => {
   const whole = normalizeHpItem(parsed.items[0], { regionId: 1, sectionId: 8 });
   assert.equal(whole.source, HP_SOURCE);
   assert.equal(whole.source_id, "1447592_285879");
-  assert.equal(whole.kind_name, "整層住家");
+  assert.match(whole.title, /🔥\s*御陽明美景豪邸拎包入住/);
+  assert.match(whole.title, /御陽明美景豪邸拎包入住/);
+  assert.equal(whole.title.includes("<"), false);
+  assert.match(whole.cover, /0b4edd2ae1664881/);
+  assert.doesNotMatch(whole.cover, /default_cover/);
   assert.equal(whole.price_num, 200000);
   assert.equal(whole.floor_name, "4/4");
   assert.match(whole.address, /士林區格致路/);
@@ -44,6 +48,8 @@ test("parseHpListHtml reads 5168 SSR cards", () => {
   const suite = normalizeHpItem(parsed.items[1], { regionId: 1, sectionId: 8 });
   assert.equal(suite.kind_name, "獨立套房");
   assert.equal(suite.price_num, 24999);
+  assert.match(suite.cover, /realphoto_800x600/);
+  assert.doesNotMatch(suite.cover, /default_cover/);
 });
 
 test("fetchHpCoveringListings uses injected HTML", async () => {

@@ -45,7 +45,21 @@ test("viewed previous listing also matches soft relist fingerprint", () => {
   assert.match(hit.detail, /已瀏覽/);
 });
 
-test("online strangers on same street need extra signal", () => {
+test("cross-source listings can still be suspected same house", () => {
+  const incoming = {
+    ...base,
+    post_id: 2400000001,
+    source: "houseprice",
+    cover: "https://image.houseprice.tw/a.jpg",
+    source_key: "3|50||新北市淡水區淡金路二段173號|11F|15.5|2房1廳",
+  };
+  const previous = { ...base, source: "591", offline: 1 };
+  const hit = scoreMatch(incoming, previous);
+  assert.ok(hit);
+  assert.equal(hit.level, "high");
+});
+
+test("unrelated live listing without shared fingerprint does not match", () => {
   const incoming = {
     ...base,
     post_id: 4004,

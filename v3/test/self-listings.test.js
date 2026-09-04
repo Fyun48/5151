@@ -118,6 +118,7 @@ test("self listing ids stay above the reserved range and require login", () => {
   assert.match(SELF_LEGAL, /不是仲介/);
   assert.match(selfListingMeta().legal, /不經手金錢/);
   assert.match(selfListingMeta().audit, /14 天/);
+  assert.equal(selfListingMeta().photos.max_count, 100);
   assert.equal(SELF_BODY_MAX, 500);
   assert.equal(selfListingMeta().body_max, 500);
   const db = open();
@@ -147,22 +148,22 @@ test("open quota, new-account wait, close and report hide", () => {
   addUser(db, { id: 2, email: "new@example.com", createdAt: new Date().toISOString() });
   addUser(db, { id: 3, email: "b@example.com", createdAt: OLD });
   addUser(db, { id: 4, email: "c@example.com", createdAt: OLD });
-  createSelfListing(db, 1, sampleInput({ address: "台北市士林區中正路101號" }));
-  createSelfListing(db, 1, sampleInput({ address: "台北市士林區中正路102號" }));
-  createSelfListing(db, 1, sampleInput({ address: "台北市士林區中正路103號" }));
+  for (let i = 1; i <= 10; i++) {
+    createSelfListing(db, 1, sampleInput({ address: `台北市士林區中正路${100 + i}號` }));
+  }
   assert.throws(
-    () => createSelfListing(db, 1, sampleInput({ address: "台北市士林區中正路104號" })),
-    /最多 3 則/,
+    () => createSelfListing(db, 1, sampleInput({ address: "台北市士林區中正路199號" })),
+    /最多 10 則/,
   );
   assert.throws(
     () => createSelfListing(db, 2, sampleInput()),
     /24 小時/,
   );
   const mine = listMineSelfListings(db, 1);
-  assert.equal(mine.length, 3);
+  assert.equal(mine.length, 10);
   closeSelfListing(db, 1, mine[0].post_id);
-  const afterClose = createSelfListing(db, 1, sampleInput({ address: "台北市士林區中正路105號" }));
-  assert.equal(listMineSelfListings(db, 1).filter((row) => row.status === "open").length, 3);
+  const afterClose = createSelfListing(db, 1, sampleInput({ address: "台北市士林區中正路198號" }));
+  assert.equal(listMineSelfListings(db, 1).filter((row) => row.status === "open").length, 10);
   reportSelfListing(db, 3, afterClose.post_id, "廣告");
   const second = reportSelfListing(db, 4, afterClose.post_id, "廣告");
   assert.equal(second.hidden, true);

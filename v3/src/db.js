@@ -17,17 +17,18 @@ import {
   pacificYmd,
 } from "./mapsBilling.js";
 import { sameSearch } from "./client591.js";
-import { districtNameFromListing } from "./regions.js";
+import { CITIES, districtNameFromListing, normalizeWatchDistricts } from "./regions.js";
 import { preferPrimaryListing } from "./match.js";
 import { commuteWorkJobs, hasWorkPoint, needsListingGeo, normalizeCommuteMode } from "./geo.js";
 import { demoCommutePatch } from "./demo.js";
 import { isWalkableMrtDistance, makeMrtKey } from "./mrt.js";
-import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings, planIntervalMinutes, resolveSaveAsProfileAction, normalizeProfileName, MEMBER_MAX_PROFILES, ADMIN_MAX_PROFILES } from "./settingsState.js";
+import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings, planIntervalMinutes, resolveSaveAsProfileAction, normalizeProfileName, MEMBER_MAX_PROFILES, ADMIN_MAX_PROFILES, clampIntervalMinutes } from "./settingsState.js";
 import { defaultNotifyMatrix } from "./notifyMatrix.js";
 import { DATA_EPOCH, shouldResetForEpoch } from "./dataEpoch.js";
 import { countsTowardAllTotal, isConfirmedOffline, isPendingOffline } from "./offline.js";
-import { coveringJobsFromMembers, coveringJobsFromSettings, coversFromMemberSettings, listingInMemberScope } from "./covering.js";
+import { coveringJobsFromMembers, coveringJobsFromSettings, coversFromMemberSettings, coversFromWatchDistricts, listingInMemberScope } from "./covering.js";
 import { listCrawlCovers } from "./crawlCovers.js";
+import { SYSTEM_CRAWL_INTERVAL_MINUTES } from "./crawlPolicy.js";
 import { ensurePersonalSchema } from "./personalSchema.js";
 import { importV1CacheIfNeeded, importV2CacheIfNeeded } from "./importV1.js";
 import { listingFitFields } from "./listingScore.js";
@@ -1095,23 +1096,28 @@ function omitSiteMail(stored) {
   return next;
 }
 
+function withSystemCrawl(settings) {
+  if (!settings) return settings;
+  return { ...settings, systemCrawlIntervalMinutes: getSystemCrawl().intervalMinutes };
+}
+
 export function getSettings(userId) {
   const rows = db.prepare("SELECT key, value FROM settings").all();
   const global = hydrateSettings(omitSiteMail(parseSettingRows(rows)), DEFAULTS, { admin: true, plan: "free" });
   const uid = Number(userId) || 0;
-  if (!uid) return global;
+  if (!uid) return withSystemCrawl(global);
   const userRows = db.prepare("SELECT key, value FROM user_settings WHERE user_id = ?").all(uid);
   const user = getUserById(uid);
   const admin = user?.role === "admin";
   const plan = user?.plan || "free";
   if (!userRows.length) {
-    if (user?.role === "admin") return global;
-    return hydrateSettings({
+    if (user?.role === "admin") return withSystemCrawl(global);
+    return withSystemCrawl(hydrateSettings({
       dataEpoch: global.dataEpoch,
       hasBaseline: global.hasBaseline,
-    }, DEFAULTS, { admin: false, plan });
+    }, DEFAULTS, { admin: false, plan }));
   }
-  return hydrateSettings(omitSiteMail({ ...global, ...parseSettingRows(userRows) }), DEFAULTS, { admin, plan });
+  return withSystemCrawl(hydrateSettings(omitSiteMail({ ...global, ...parseSettingRows(userRows) }), DEFAULTS, { admin, plan }));
 }
 
 export function saveSettings(partial, userId, { forceAdmin = false } = {}) {
@@ -1139,7 +1145,9 @@ export function saveSettings(partial, userId, { forceAdmin = false } = {}) {
         || key === "broadcasts"
         || key === "memberSmtp"
         || key === "memberMailTemplates"
-        || key === "mailPreset"
+        || key === "systemWatchDistricts"
+        || key === "systemCrawlIntervalMinutes"
+        || key === "systemCrawlIntervalMinutesDisplay"
       ) continue;
       const encoded = JSON.stringify(value);
       if (SITE_SETTING_KEYS.has(key)) globalUpsert.run(key, encoded);
@@ -1378,6 +1386,8 @@ export function coveringJobsFromAllUsers() {
   const ids = listUserIds();
   const covers = [];
   let excludeRooftop = true;
+  const system = getSystemCrawl();
+  covers.push(...coversFromWatchDistricts({ watchDistricts: system.watchDistricts }));
   for (const id of ids) {
     const settings = getSettings(id);
     const memberCovers = coversFromMemberSettings(settings);
@@ -1945,10 +1955,36 @@ export function enqueueListingEvent(listing, event) {
   return ids;
 }
 
+export function getSystemCrawl() {
+  const stored = parseSettingRows(db.prepare("SELECT key, value FROM settings").all());
+  const intervalRaw = Number(stored.systemCrawlIntervalMinutes);
+  return {
+    watchDistricts: normalizeWatchDistricts(stored.systemWatchDistricts),
+    intervalMinutes: Number.isFinite(intervalRaw) && intervalRaw > 0
+      ? clampIntervalMinutes(intervalRaw, { admin: true, fallback: SYSTEM_CRAWL_INTERVAL_MINUTES })
+      : SYSTEM_CRAWL_INTERVAL_MINUTES,
+    cities: CITIES,
+  };
+}
+
+export function saveSystemCrawl(partial = {}) {
+  const current = getSystemCrawl();
+  const watchDistricts = Object.prototype.hasOwnProperty.call(partial, "watchDistricts")
+    ? normalizeWatchDistricts(partial.watchDistricts)
+    : current.watchDistricts;
+  const intervalMinutes = Object.prototype.hasOwnProperty.call(partial, "intervalMinutes")
+    ? clampIntervalMinutes(partial.intervalMinutes, { admin: true, fallback: current.intervalMinutes })
+    : current.intervalMinutes;
+  const upsert = db.prepare(
+    "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+  );
+  upsert.run("systemWatchDistricts", JSON.stringify(watchDistricts));
+  upsert.run("systemCrawlIntervalMinutes", JSON.stringify(intervalMinutes));
+  return getSystemCrawl();
+}
+
 export function crawlIntervalMinutes() {
-  const mins = listUserIds().map((id) => Number(getSettings(id).intervalMinutes) || planIntervalMinutes(getUserById(id)?.plan));
-  if (!mins.length) return Math.max(1, Number(getSettings().intervalMinutes) || 8);
-  return Math.max(1, Math.min(...mins));
+  return Math.max(1, Number(getSystemCrawl().intervalMinutes) || SYSTEM_CRAWL_INTERVAL_MINUTES);
 }
 
 export function setFlags(postId, flags, userId) {

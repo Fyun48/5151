@@ -15,7 +15,7 @@ import { ensureProfileSchema } from "./profile.js";
 
 export const SELF_POST_ID_BASE = 2_100_000_000;
 export const SELF_POST_ID_END = 2_200_000_000;
-export const SELF_MAX_OPEN = 3;
+export const SELF_MAX_OPEN = 10;
 export const SELF_TTL_DAYS = 30;
 export const SELF_NEW_ACCOUNT_WAIT_MS = 24 * 60 * 60 * 1000;
 export const SELF_TITLE_MAX = 80;

@@ -207,6 +207,19 @@
       </form>
     </section>
     <section class="card">
+      <h2>系統抓取底庫</h2>
+      <p class="hint">會員抓到的物件會寫進同一份資料庫、互相共用，不會每人各爬一遍。這裡可再指定「底庫行政區」：就算還沒有會員勾這些區，系統仍會定期抓進來給之後的搜尋用。間隔是全站共用節奏（建議 10–15 分鐘），不是每個會員各抓一次。</p>
+      <form id="systemCrawlForm">
+        <label>全站檢查間隔（分鐘）</label>
+        <input id="systemCrawlInterval" type="number" min="1" max="120" value="15" />
+        <div id="systemCrawlDistricts" class="districts" style="display:flex;flex-wrap:wrap;gap:8px 14px;margin:12px 0"></div>
+        <div class="row">
+          <button type="submit" class="primary" id="systemCrawlSave">儲存底庫與間隔</button>
+        </div>
+        <p class="msg" id="systemCrawlMsg"></p>
+      </form>
+    </section>
+    <section class="card">
       <h2>贊助連結</h2>
       <p class="hint">預設列出免月費、會員能刷卡的方案：歐付寶收款連結、ezPay 簡單付、OEN 幫收 Link、Ko-fi、PayPal.Me、Buy Me a Coffee、GitHub Sponsors。金流仍會從贊助款抽手續費。ezPay 個人會員通過、銀行設好後，請到 ezPay 後台做「收款連結」，把 https 網址貼到該列「你的收款網址」並勾選顯示；銀行帳號本身不會出現在前台。綠界、藍新全方位金流通常要統編或年費，不放在預設清單。付款不會自動改會員方案，收到後請在上方把對方改成「已贊助」。</p>
       <form id="sponsorForm">
@@ -655,6 +668,31 @@
       renderCrawlSources(data.items || []);
     }
 
+    function renderSystemCrawlDistricts(cities, selected) {
+      const host = $("systemCrawlDistricts");
+      if (!host) return;
+      const on = new Set(selected || []);
+      host.innerHTML = (cities || []).map((city) => `
+        <div style="flex:1 1 280px">
+          <strong>${city.name}</strong>
+          <div style="display:flex;flex-wrap:wrap;gap:6px 12px;margin-top:6px">
+            ${(city.districts || []).map((d) => {
+              const key = `${city.id}-${d.id}`;
+              return `<label class="checks"><input type="checkbox" data-system-district value="${key}" ${on.has(key) ? "checked" : ""} />${String(d.name || "").replace(/區$/, "")}</label>`;
+            }).join("")}
+          </div>
+        </div>
+      `).join("");
+    }
+
+    async function loadSystemCrawl() {
+      const res = await fetch("/api/admin/system-crawl", { cache: "no-store" });
+      const data = await readApi(res);
+      if (!res.ok) throw new Error(data.error || "載入底庫失敗");
+      if ($("systemCrawlInterval")) $("systemCrawlInterval").value = data.intervalMinutes || 15;
+      renderSystemCrawlDistricts(data.cities || [], data.watchDistricts || []);
+    }
+
     $("memberRows").addEventListener("change", (ev) => {
       const plan = ev.target.closest("[data-plan]");
       if (!plan) return;
@@ -1077,7 +1115,7 @@
       if (me.role !== "admin") { location.replace("/"); return; }
       meEmail = me.email || "";
       $("who").textContent = meEmail;
-      await Promise.all([loadMembers(), loadMail(), loadSponsor(), loadAds(), loadBroadcasts(), loadMaps(), loadHelpQa(), loadCrawlSources()]);
+      await Promise.all([loadMembers(), loadMail(), loadSponsor(), loadAds(), loadBroadcasts(), loadMaps(), loadHelpQa(), loadCrawlSources(), loadSystemCrawl()]);
       $("helpQaAdd").onclick = () => {
         renderHelpQaEditor([...collectHelpQa(), { question: "", answer: "", id: "" }]);
       };
@@ -1191,10 +1229,35 @@
           $("crawlSave").disabled = false;
         }
       };
+      $("systemCrawlForm").onsubmit = async (ev) => {
+        ev.preventDefault();
+        $("systemCrawlSave").disabled = true;
+        setMsg("systemCrawlMsg", "儲存中…");
+        try {
+          const watchDistricts = [...document.querySelectorAll("[data-system-district]:checked")].map((el) => el.value);
+          const res = await fetch("/api/admin/system-crawl", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              watchDistricts,
+              intervalMinutes: Number($("systemCrawlInterval").value) || 15,
+            }),
+          });
+          const data = await readApi(res);
+          if (!res.ok) throw new Error(data.error || "儲存失敗");
+          if ($("systemCrawlInterval")) $("systemCrawlInterval").value = data.intervalMinutes || 15;
+          renderSystemCrawlDistricts(data.cities || [], data.watchDistricts || []);
+          setMsg("systemCrawlMsg", "底庫與間隔已儲存。之後會依這個節奏抓共用庫。", true);
+        } catch (error) {
+          setMsg("systemCrawlMsg", error.message);
+        } finally {
+          $("systemCrawlSave").disabled = false;
+        }
+      };
     })().catch((error) => {
       setMsg("memberMsg", error.message || "載入失敗");
     });
   </script>
-  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.28</span></footer>
+  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.29</span></footer>
 </body>
 </html>

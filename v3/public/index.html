@@ -1083,7 +1083,79 @@
       max-width: 100%;
       border-top: 0;
     }
-    #profileName { margin-bottom: 8px; }
+    #profileName { margin-bottom: 0; }
+    #settingsPanel .header-profiles {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 8px;
+    }
+    #settingsPanel .profile-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      min-width: 0;
+    }
+    #settingsPanel .profile-row input,
+    #settingsPanel .profile-row select,
+    #settingsPanel .profile-row button {
+      flex: 1 1 0;
+      min-width: 0;
+      width: auto;
+      max-width: none;
+    }
+    #settingsPanel .profile-row #deleteProfileBtn { flex: 0 0 auto; }
+    .panel-sticky {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      background: var(--paper);
+      padding: 0 0 10px;
+      margin: 0 0 4px;
+    }
+    .panel-close {
+      min-width: 40px;
+      width: 40px;
+      height: 40px;
+      padding: 0;
+      font-size: 22px;
+      line-height: 1;
+      flex: 0 0 auto;
+    }
+    .schedule-readonly[disabled] {
+      opacity: 0.9;
+      background: var(--accent-mist);
+      color: var(--ink);
+    }
+    .self-photo-tray {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 8px 0;
+    }
+    .self-photo-chip {
+      position: relative;
+      width: 72px;
+      height: 72px;
+    }
+    .self-photo-chip img {
+      width: 72px;
+      height: 72px;
+      object-fit: cover;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+    }
+    .self-photo-chip button {
+      position: absolute;
+      top: -6px;
+      right: -6px;
+      width: 22px;
+      height: 22px;
+      padding: 0;
+      border-radius: 999px;
+      font-size: 14px;
+      line-height: 1;
+    }
     .hint { font-size: 12px; color: var(--muted); margin: 4px 0 8px; line-height: 1.5; }
     #deleteAccountBtn { display: none !important; }
     .page-lead { margin: 0 0 10px; }
@@ -1718,12 +1790,17 @@
         border-right: 0;
       }
       .wrap { grid-template-columns: minmax(0, 1fr); padding-bottom: 16px; overflow-x: clip; }
-      #settingsPanel .header-profiles {
+      #settingsPanel .panel-sticky {
         position: sticky;
         top: 0;
-        z-index: 3;
+        z-index: 6;
         background: var(--paper);
         padding: 4px 0 12px;
+      }
+      #settingsPanel .header-profiles {
+        position: static;
+        top: auto;
+        padding: 0;
       }
       #settingsPanel {
         display: none;
@@ -1860,17 +1937,25 @@
   <div class="filter-sheet-backdrop" id="filterSheetBackdrop" hidden></div>
   <div class="wrap" id="listingsView">
     <aside class="card panel" id="settingsPanel">
+      <div class="panel-sticky" id="settingsSticky">
       <div class="panel-toolbar">
         <strong>搜尋設定</strong>
-        <button type="button" class="ghost" id="collapsePanelBtn">收合</button>
+        <button type="button" class="ghost panel-close" id="collapsePanelBtn" aria-label="關閉篩選">×</button>
       </div>
       <div class="header-profiles" data-tour="profiles">
-        <input type="text" id="profileName" placeholder="設定檔名稱" maxlength="40" aria-label="設定檔名稱" />
-        <select id="profileSelect" aria-label="已存設定檔"></select>
-        <button type="button" class="primary" id="saveBtn" disabled>儲存</button>
-        <button type="button" class="ghost" id="saveAsBtn" disabled>另存</button>
-        <button type="button" class="ghost" id="deleteProfileBtn">刪除</button>
-        <span class="save-msg" id="saveMsg"></span>
+        <div class="profile-row">
+          <input type="text" id="profileName" placeholder="設定檔名稱" maxlength="40" aria-label="設定檔名稱" />
+          <select id="profileSelect" aria-label="已存設定檔"></select>
+        </div>
+        <div class="profile-row">
+          <button type="button" class="primary" id="saveBtn" disabled>儲存</button>
+          <button type="button" class="ghost" id="saveAsBtn" disabled>另存</button>
+        </div>
+        <div class="profile-row">
+          <button type="button" class="ghost" id="deleteProfileBtn">刪除</button>
+          <span class="save-msg" id="saveMsg"></span>
+        </div>
+      </div>
       </div>
       <div class="stats" id="stats">
         <div class="stat"><b>—</b><span>全部</span></div>
@@ -1952,27 +2037,20 @@
         <label><input type="checkbox" id="excludeLowFloors" checked /> 排除 1F 及以下（含地下室、整棟、頂加）</label>
       </div>
       <p class="hint">這三項會寫進設定檔。列表與新物件通知都用同一套；按儲存後才套用。</p>
-      <details>
-        <summary class="hint">進階：591 網址（自動產生，通常不用改）</summary>
-        <textarea id="searchUrls" placeholder="儲存後會依上方行政區自動產生"></textarea>
-      </details>
       <div class="admin-only">
-        <label>檢查間隔（分鐘）</label>
-        <input type="number" id="intervalMinutes" min="1" max="120" />
+        <label>進階：591 網址（自動產生，通常不用改）</label>
+        <textarea id="searchUrls" placeholder="儲存後會依上方行政區自動產生"></textarea>
       </div>
-      <p class="hint member-only" id="intervalMemberHint">本系統每8分鐘會重新檢本物件來源比對篩選</p>
+      <label>檢查間隔（分鐘）</label>
+      <input type="number" id="intervalMinutes" min="1" max="120" />
+      <p class="hint" id="intervalMemberHint">全站共用抓取庫，約每 15 分鐘檢查一次有沒有新物件。</p>
       <div class="member-only" id="sponsorSettingsBlock" hidden>
         <p class="hint" id="sponsorSettingsIntro"></p>
         <div class="sponsor-links" id="sponsorSettingsLinks"></div>
       </div>
-      <div class="admin-only">
-        <label>確認已下架天數</label>
-        <input type="number" id="offlineConfirmDays" min="1" max="30" />
-      </div>
-      <div class="admin-only">
-        <label>每次最多抓取頁數</label>
-        <input type="number" id="pagesPerWatch" min="1" max="40" />
-      </div>
+      <label>確認已下架天數</label>
+      <input type="number" id="offlineConfirmDays" min="1" max="30" />
+      <p class="hint member-only">這個天數由全站設定，會員可以看、不能改。</p>
       <label>建物總樓層至少</label>
       <input type="number" id="minBuildingFloors" min="1" max="50" />
       <label data-tour="commute">上班地址（選填）</label>
@@ -1994,7 +2072,7 @@
       <p class="hint">地址或標題含這些字就不列入、也不通知。例如路名、路段。</p>
       <textarea id="excludeKeywords" placeholder="延平北路八段&#10;承德路"></textarea>
       <label>排除房仲／聯絡人（一行一個）</label>
-      <p class="hint">可填公司名、姓氏，或直接點列表右側頭像排除該人。之後也能用這個名單過濾特定名牌。</p>
+      <p class="hint">可填公司名、姓氏，或直接點物件列表中的頭像可以排除該人。之後也能用這個名單過濾特定名牌。</p>
       <textarea id="excludeAgents" placeholder="美樂房屋&#10;黃小姐"></textarea>
       <label>用地圖或文字排除範圍（最多 10 組）</label>
       <p class="hint">手拉矩形或用「路名A以東、路名B以西、路名C以南、路名D以北」產生大致範圍。關閉的範圍仍會保存，但不會套用。框選後會在背景抓 591 地圖座標，落在框內的才會排除。大範圍請先按「展開地圖」再框。</p>
@@ -2190,7 +2268,7 @@
     <div class="card panel" id="selfListingPanel">
       <h2 style="margin:0 0 8px">有房刊登</h2>
       <p class="hint" id="selfGuestHint">登入後才能刊登（不是仲介、沒有私訊）。</p>
-      <p class="hint" id="selfLegal">免費找房工具，不是仲介、不經手金錢。公開摘要、沒有即時私訊。同時最多 3 則、30 天失效；新帳號滿 24 小時。找房預設仍只顯示整層住家。</p>
+        <p class="hint" id="selfLegal">免費找房工具，不是仲介、不經手金錢。公開摘要、沒有即時私訊。同時最多 10 則、30 天失效；新帳號滿 24 小時。找房預設仍只顯示整層住家。</p>
       <p class="hint" id="selfAudit">不實、惡作劇或明顯誤導會下架並暫停上傳 14 天。不驗證權狀、不保證真實。</p>
       <p class="hint" id="selfRichHint">來看的人最常問的，其實多半寫在這裡就能先答完。多勾一項、多寫一句，之後就少被重複打擾，也比較快遇到適合的人。</p>
       <form id="selfListingForm">
@@ -2280,16 +2358,17 @@
             <label>LINE 連結（選填）</label>
             <input id="selfLine" maxlength="300" placeholder="https://line.me/..." />
           </div>
-          <div class="span-2">
-            <label>物件照片（最多 5 張）</label>
+          <div class="span-all">
+            <label>物件照片專區（最多 100 張，上傳時自動壓縮）</label>
             <input type="file" id="selfPhotos" accept="image/jpeg,image/png,image/webp" multiple />
+            <p class="hint" id="selfPhotoCount">已選 0／100 張。大圖會先在瀏覽器壓成較小的 JPEG。</p>
           </div>
           <div class="span-2">
             <label>或貼封面網址</label>
             <input id="selfCover" maxlength="500" placeholder="https://..." />
           </div>
         </div>
-        <div class="self-photos" id="selfPhotoPreview" hidden></div>
+        <div class="self-photo-tray" id="selfPhotoPreview" hidden></div>
         <div id="selfTraitGroups"></div>
         <p class="hint" id="selfTraitNudge" hidden>社區大樓的話，中庭與陽台常常是租客想先知道的。有的話點一下就好。</p>
         <label>說明（最多 500 字）</label>
@@ -2539,7 +2618,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.28</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.29</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -3602,20 +3681,17 @@
       $("priceMax").value = s.priceMax || "";
       $("areaMax").value = s.areaMax || "";
       $("excludeRooftop").checked = s.excludeRooftop !== false;
-      $("intervalMinutes").value = s.intervalMinutes;
+      $("intervalMinutes").value = s.systemCrawlIntervalMinutes || s.intervalMinutes || 15;
+      $("intervalMinutes").disabled = true;
+      $("intervalMinutes").classList.add("schedule-readonly");
       const hint = $("intervalMemberHint");
       if (hint) {
-        const mins = Math.max(1, Number(s.intervalMinutes) || (mePlan === "sponsor" ? 5 : 8));
-        if (isGuest) {
-          hint.textContent = `示範資料沿用目前的檢查節奏。註冊後一般會員每 8 分鐘檢查一次，贊助會員為 5 分鐘。`;
-        } else if (mePlan === "sponsor") {
-          hint.textContent = `本系統每${mins}分鐘會重新檢查物件來源並比對篩選。`;
-        } else {
-          hint.textContent = `本系統每${mins}分鐘會重新檢查物件來源並比對篩選。贊助會員為 5 分鐘。`;
-        }
+        const mins = Math.max(1, Number(s.systemCrawlIntervalMinutes || s.intervalMinutes) || 15);
+        hint.textContent = `全站共用抓取庫，約每 ${mins} 分鐘檢查一次有沒有新物件。會員不能改這個間隔。`;
       }
       $("offlineConfirmDays").value = s.offlineConfirmDays || 7;
-      $("pagesPerWatch").value = s.pagesPerWatch;
+      $("offlineConfirmDays").disabled = !meIsAdmin;
+      $("offlineConfirmDays").classList.toggle("schedule-readonly", !meIsAdmin);
       $("minBuildingFloors").value = s.minBuildingFloors || 4;
       $("workAddress").value = s.workAddress || "";
       $("commuteKm").value = s.commuteKm || 0;
@@ -3906,7 +3982,7 @@
         <article class="item ${on ? "picked" : ""} ${item.offline ? "offline" : ""} ${isAcefengyunAdmin() && isShezidaoAddress(item) ? "shezidao" : ""}" data-card="${id}">
           <input class="pick" type="checkbox" data-pick="${id}" ${on ? "checked" : ""} />
           <a class="item-cover${item.cover ? "" : " empty"}" ${listingLinkAttrs(item)}>
-            ${item.cover ? `<img src="${esc(item.cover)}" alt="" onerror="this.parentNode.classList.add('empty')" />` : ""}
+            ${item.cover ? `<img src="${esc(item.cover)}" alt="" referrerpolicy="no-referrer" onerror="this.parentNode.classList.add('empty')" />` : ""}
           </a>
           <div>
             <div class="tags">${tags(item)}</div>
@@ -4341,9 +4417,7 @@
         priceMax: Number($("priceMax").value) || 0,
         areaMax: Number($("areaMax").value) || 0,
         excludeRooftop: $("excludeRooftop").checked,
-        intervalMinutes: meIsAdmin ? Number($("intervalMinutes").value) : undefined,
         offlineConfirmDays: meIsAdmin ? (Number($("offlineConfirmDays").value) || 7) : 7,
-        pagesPerWatch: meIsAdmin ? Number($("pagesPerWatch").value) : 40,
         minBuildingFloors: Number($("minBuildingFloors").value) || 4,
         wholeFloorOnly: $("wholeFloorOnly").checked,
         excludeLowFloors: $("excludeLowFloors").checked,
@@ -4505,7 +4579,8 @@
         $("saveMsg").textContent = "目前沒有可刪的設定檔";
         return;
       }
-      if (!window.confirm("確定刪除這個設定檔？不會刪物件紀錄。")) return;
+      const name = $("profileSelect").selectedOptions[0]?.textContent || $("profileName").value.trim() || "這個設定檔";
+      if (!window.confirm(`確定刪除設定檔「${name}」？不會刪物件紀錄。`)) return;
       try {
         const res = await fetch(`/api/profiles/${encodeURIComponent(id)}`, { method: "DELETE" });
         const data = await res.json();
@@ -4632,6 +4707,19 @@
       hideSiteNotice();
     });
 
+    function syncFilterSheetKeyboard() {
+      const panel = $("settingsPanel");
+      if (!panel || !window.matchMedia("(max-width: 880px)").matches) return;
+      const vv = window.visualViewport;
+      if (!vv || !document.body.classList.contains("filter-sheet-open")) {
+        panel.style.maxHeight = "";
+        panel.style.bottom = "";
+        return;
+      }
+      const leftover = Math.max(56, window.innerHeight - vv.height - vv.offsetTop);
+      panel.style.bottom = leftover + "px";
+      panel.style.maxHeight = Math.max(220, Math.round(vv.height) - 24) + "px";
+    }
     function openFilterSheet() {
       document.body.classList.add("filter-sheet-open");
       const bg = $("filterSheetBackdrop");
@@ -4640,12 +4728,16 @@
       initMap();
       setTimeout(refreshMapSize, 80);
       setTimeout(refreshMapSize, 320);
+      syncFilterSheetKeyboard();
     }
     function closeFilterSheet() {
       document.body.classList.remove("filter-sheet-open");
       const bg = $("filterSheetBackdrop");
       if (bg) bg.hidden = true;
+      syncFilterSheetKeyboard();
     }
+    window.visualViewport?.addEventListener("resize", syncFilterSheetKeyboard);
+    window.visualViewport?.addEventListener("scroll", syncFilterSheetKeyboard);
     function setAppView(name) {
       const view = ["listings", "post", "demand", "notify", "me"].includes(name) ? name : "listings";
       document.body.dataset.appView = view;
@@ -4925,7 +5017,7 @@
       return `
         <article class="self-mine-card">
           <strong>${esc(item.title)}</strong>
-          ${(item.photos || item.cover) ? `<div class="self-photos">${(item.photos || [item.cover]).filter(Boolean).slice(0, 5).map((url) => `<img src="${esc(url)}" alt="" />`).join("")}</div>` : ""}
+          ${(item.photos || item.cover) ? `<div class="self-photos">${(item.photos || [item.cover]).filter(Boolean).slice(0, 24).map((url) => `<img src="${esc(url)}" alt="" />`).join("")}</div>` : ""}
           <div class="muted">${esc(item.price || "")} 元 · ${esc(item.address || "")} · ${esc(item.status || "")}</div>
           ${(item.trait_labels || []).length ? `<div class="muted">${esc((item.trait_labels || []).join("、"))}</div>` : ""}
           ${item.status === "open" ? `<button type="button" class="ghost" data-self-close="${item.post_id}">關閉刊登</button>` : ""}
@@ -5234,18 +5326,69 @@
         $("demandMsg").textContent = error.message;
       }
     });
-    $("selfPhotos")?.addEventListener("change", () => {
+    let selfPhotoDraft = [];
+    const SELF_PHOTO_LIMIT = 100;
+    function renderSelfPhotoDraft() {
       const box = $("selfPhotoPreview");
-      const files = [...($("selfPhotos")?.files || [])].slice(0, 5);
+      const count = $("selfPhotoCount");
+      if (count) count.textContent = `已選 ${selfPhotoDraft.length}／${SELF_PHOTO_LIMIT} 張。大圖會先在瀏覽器壓成較小的 JPEG。`;
       if (!box) return;
-      box.hidden = !files.length;
-      box.innerHTML = "";
-      for (const file of files) {
-        const img = document.createElement("img");
-        img.alt = "";
+      box.hidden = !selfPhotoDraft.length;
+      box.innerHTML = selfPhotoDraft.map((url, idx) => `
+        <div class="self-photo-chip">
+          <img src="${esc(url)}" alt="" />
+          <button type="button" class="ghost" data-photo-del="${idx}" aria-label="移除照片">×</button>
+        </div>
+      `).join("");
+    }
+    async function compressSelfPhoto(file) {
+      const maxEdge = 1600;
+      const blob = await new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          const scale = Math.min(1, maxEdge / Math.max(img.width || 1, img.height || 1));
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, Math.round((img.width || 1) * scale));
+          canvas.height = Math.max(1, Math.round((img.height || 1) * scale));
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          canvas.toBlob((out) => (out ? resolve(out) : reject(new Error("壓縮失敗"))), "image/jpeg", 0.82);
+        };
+        img.onerror = () => reject(new Error("讀不到這張照片"));
         img.src = URL.createObjectURL(file);
-        box.appendChild(img);
+      });
+      return blob;
+    }
+    $("selfPhotoPreview")?.addEventListener("click", (ev) => {
+      const idx = ev.target.closest("[data-photo-del]")?.dataset.photoDel;
+      if (idx == null) return;
+      selfPhotoDraft.splice(Number(idx), 1);
+      renderSelfPhotoDraft();
+    });
+    $("selfPhotos")?.addEventListener("change", async () => {
+      const msg = $("selfMsg");
+      const files = [...($("selfPhotos")?.files || [])];
+      if ($("selfPhotos")) $("selfPhotos").value = "";
+      for (const file of files) {
+        if (selfPhotoDraft.length >= SELF_PHOTO_LIMIT) {
+          if (msg) msg.textContent = `照片最多 ${SELF_PHOTO_LIMIT} 張`;
+          break;
+        }
+        try {
+          const blob = await compressSelfPhoto(file);
+          const up = await fetch("/api/self-listings/photos", {
+            method: "POST",
+            headers: { "Content-Type": blob.type || "image/jpeg" },
+            body: blob,
+          });
+          const saved = await readApi(up);
+          if (!up.ok) throw new Error(saved.error || "照片上傳失敗");
+          if (saved.url) selfPhotoDraft.push(saved.url);
+        } catch (error) {
+          if (msg) msg.textContent = error.message;
+        }
       }
+      renderSelfPhotoDraft();
     });
     $("selfListingForm")?.addEventListener("submit", async (ev) => {
       ev.preventDefault();
@@ -5255,18 +5398,7 @@
       }
       const msg = $("selfMsg");
       try {
-        const photoUrls = [];
-        const files = [...($("selfPhotos")?.files || [])].slice(0, 5);
-        for (const file of files) {
-          const up = await fetch("/api/self-listings/photos", {
-            method: "POST",
-            headers: { "Content-Type": file.type || "image/jpeg" },
-            body: file,
-          });
-          const saved = await readApi(up);
-          if (!up.ok) throw new Error(saved.error || "照片上傳失敗");
-          if (saved.url) photoUrls.push(saved.url);
-        }
+        const photoUrls = [...selfPhotoDraft];
         const res = await fetch("/api/self-listings", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -5299,10 +5431,8 @@
         if (msg) msg.textContent = "已刊登。資料寫得越清楚，來看的人越少再問一遍。";
         if ($("selfBody")) $("selfBody").value = "";
         if ($("selfPhotos")) $("selfPhotos").value = "";
-        if ($("selfPhotoPreview")) {
-          $("selfPhotoPreview").innerHTML = "";
-          $("selfPhotoPreview").hidden = true;
-        }
+        selfPhotoDraft = [];
+        renderSelfPhotoDraft();
         await loadMineSelfListings();
         loadList();
         maybeAskPush("刊登物件後可允許系統推播。");
