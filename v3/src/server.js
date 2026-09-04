@@ -16,6 +16,9 @@ import {
   loadProfile,
   recentEvents,
   registerUser,
+  issueVerifyToken,
+  confirmVerifyToken,
+  expireStaleVerifyTokens,
   rejectSuspectedMatch,
   confirmSuspectedMatch,
   resetListings,
@@ -281,19 +284,51 @@ function queueSystemMail(kind, to, vars = {}) {
   });
 }
 
+function publicBaseUrl(req) {
+  const proto = String(req.headers["x-forwarded-proto"] || req.protocol || "https").split(",")[0].trim() || "https";
+  const host = String(req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
+  if (!host) return "";
+  return `${proto}://${host}`;
+}
+
 app.post("/api/register", (req, res) => {
   try {
     assertHuman(req.body);
+    if (!mailConfigured(getStoredSmtp())) {
+      const err = new Error("尚未設定寄信，無法寄出註冊確認信。請聯絡管理員到後台填 SMTP。");
+      err.status = 503;
+      throw err;
+    }
     const user = registerUser({
       email: req.body?.email,
       password: req.body?.password,
       acceptDisclaimer: req.body?.acceptDisclaimer === true,
+      emailVerified: false,
     });
-    setSession(req, res, user.email);
-    queueSystemMail("welcome", user.email);
-    res.json({ ok: true, email: user.email, role: user.role, plan: user.plan });
+    const issued = issueVerifyToken(user.id);
+    const base = publicBaseUrl(req);
+    queueSystemMail("welcome", user.email, {
+      verifyUrl: `${base}/verify-email?token=${encodeURIComponent(issued.token)}`,
+    });
+    res.json({
+      ok: true,
+      pending: true,
+      email: user.email,
+      message: "請到信箱點確認連結才算註冊成功。連結只能用一次，3 天內未點會失效。",
+    });
   } catch (error) {
     sendAuthError(res, error);
+  }
+});
+
+app.get("/verify-email", (req, res) => {
+  try {
+    const user = confirmVerifyToken(String(req.query?.token || ""));
+    setSession(req, res, user.email);
+    res.redirect(303, "/?verified=1");
+  } catch (error) {
+    const code = error.code === "expired" ? "expired" : "invalid";
+    res.redirect(303, `/login.html?verify=${code}`);
   }
 });
 
@@ -779,6 +814,11 @@ function queueGeoBackfill(settings = getSettings()) {
 
 async function tick(reason = "schedule") {
   try {
+    expireStaleVerifyTokens({
+      onExpire: (user) => {
+        if (user?.email) queueSystemMail("verify_expired", user.email);
+      },
+    });
     lastRun = await runWatch({ skipHeavyGeo: true });
     lastRun.reason = reason;
     broadcastWatch(lastRun);

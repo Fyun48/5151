@@ -202,7 +202,7 @@
       <button type="button" class="text" id="forgotLink">忘記密碼？</button>
     </form>
     <form id="registerForm" class="hidden">
-      <p class="sub">註冊成功後，若管理員已設定寄信，會收到一封歡迎信。物件更新預設走站內通知與系統推播，郵件與 Webhook 可之後在「我的 → 通知設定」選填。</p>
+      <p class="sub">送出後會寄確認信到這個信箱。請點信裡的連結才算註冊成功（連結只能用一次，3 天內未點會失效）。物件更新預設走站內通知與系統推播，郵件與 Webhook 可之後在「我的」選填。</p>
       <label for="regEmail">Email</label>
       <input id="regEmail" name="email" type="email" autocomplete="username" required />
       <label for="regPassword">密碼（至少 8 個字）</label>
@@ -246,7 +246,7 @@
     </form>
     <p class="ok" id="ok"></p>
     <p class="err" id="err"></p>
-    <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.18</span></footer>
+    <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.19</span></footer>
   </div>
   <script>
     const $ = (id) => document.getElementById(id);
@@ -254,6 +254,7 @@
     const justLoggedOut = new URLSearchParams(location.search).has("logout");
     const showRegister = new URLSearchParams(location.search).has("register");
     const showForgot = new URLSearchParams(location.search).has("forgot");
+    const verifyState = new URLSearchParams(location.search).get("verify");
     let captchaId = "";
     function clearNotes() {
       $("err").textContent = "";
@@ -318,6 +319,8 @@
     } catch (error) {}
     if (showRegister) setMode("register");
     if (showForgot) setMode("forgot");
+    if (verifyState === "expired") $("err").textContent = "確認連結已失效。系統會另寄失效通知，請用同一個信箱重新註冊。";
+    if (verifyState === "invalid") $("err").textContent = "確認連結無效或已使用。";
     fetch("/api/me").then((r) => r.json()).then((data) => {
       if (data.ok && !justLoggedOut) location.replace("/");
     }).catch(() => {});
@@ -372,7 +375,9 @@
         const data = await res.json();
         if (data.captcha) paintCaptcha(data.captcha);
         if (!res.ok) throw new Error(data.error || "註冊失敗");
-        location.replace("/");
+        $("ok").textContent = data.message || "請到信箱點確認連結才算註冊成功。";
+        setMode("login");
+        $("email").value = $("regEmail").value.trim();
       } catch (error) {
         $("err").textContent = error.message;
       } finally {

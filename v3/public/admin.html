@@ -265,12 +265,16 @@
     </section>
     <section class="card">
       <h2>信件內容</h2>
-      <p class="hint">系統信走上面的管理員 SMTP。可用代碼：<code>{{email}}</code>；忘記密碼另有 <code>{{tempPassword}}</code>。物件通知預設內容只在會員未自訂時使用，實際寄出走會員自己的 SMTP。</p>
+      <p class="hint">系統信走上面的管理員 SMTP。可用代碼：<code>{{email}}</code>；註冊確認另有 <code>{{verifyUrl}}</code>；忘記密碼另有 <code>{{tempPassword}}</code>。物件通知預設內容只在會員未自訂時使用，實際寄出走會員自己的 SMTP。</p>
       <form id="tplForm">
-        <label>註冊歡迎主旨</label>
+        <label>註冊確認主旨</label>
         <input id="welcomeSubject" />
-        <label>註冊歡迎本文</label>
+        <label>註冊確認本文（請保留 <code>{{verifyUrl}}</code>）</label>
         <textarea id="welcomeText"></textarea>
+        <label>確認連結失效主旨</label>
+        <input id="verifyExpiredSubject" />
+        <label>確認連結失效本文</label>
+        <textarea id="verifyExpiredText"></textarea>
         <label>忘記密碼主旨</label>
         <input id="forgotSubject" />
         <label>忘記密碼本文</label>
@@ -409,6 +413,8 @@
       const tpl = data.templates || {};
       $("welcomeSubject").value = tpl.welcome?.subject || "";
       $("welcomeText").value = tpl.welcome?.text || "";
+      $("verifyExpiredSubject").value = tpl.verify_expired?.subject || "";
+      $("verifyExpiredText").value = tpl.verify_expired?.text || "";
       $("forgotSubject").value = tpl.forgot_password?.subject || "";
       $("forgotText").value = tpl.forgot_password?.text || "";
       $("passwordSubject").value = tpl.password_changed?.subject || "";
@@ -704,6 +710,7 @@
           body: JSON.stringify({
             templates: {
               welcome: { subject: $("welcomeSubject").value, text: $("welcomeText").value },
+              verify_expired: { subject: $("verifyExpiredSubject").value, text: $("verifyExpiredText").value },
               forgot_password: { subject: $("forgotSubject").value, text: $("forgotText").value },
               password_changed: { subject: $("passwordSubject").value, text: $("passwordText").value },
               sponsor_thanks: { subject: $("sponsorMailSubject").value, text: $("sponsorMailText").value },
@@ -966,6 +973,6 @@
       setMsg("memberMsg", error.message || "載入失敗");
     });
   </script>
-  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.18</span></footer>
+  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.19</span></footer>
 </body>
 </html>

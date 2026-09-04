@@ -59,7 +59,8 @@ test("admin page lists members, smtp, and templates without password fields", ()
   assert.match(html, /SMTP 主機/);
   assert.match(html, /贊助連結/);
   assert.match(html, /忘記密碼主旨/);
-  assert.match(html, /註冊歡迎主旨/);
+  assert.match(html, /註冊確認主旨/);
+  assert.match(html, /確認連結失效/);
   assert.match(html, /變更密碼主旨/);
   assert.match(html, /贊助通知主旨/);
   assert.match(html, /系統信/);

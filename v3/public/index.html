@@ -246,7 +246,6 @@
     .password-panel { width: min(420px, 100%); }
     html.no-session #logoutBtn,
     html.no-session #changePasswordBtn,
-    html.no-session #deleteAccountBtn,
     html.no-session #adminLink,
     html.no-session #resetLink,
     html.no-session #watchBtn,
@@ -264,7 +263,6 @@
     body.role-guest #adminLink,
     body.role-guest #logoutBtn,
     body.role-guest #changePasswordBtn,
-    body.role-guest #deleteAccountBtn,
     body.role-guest #watchBtn,
     body.role-guest #meLogoutBtn,
     body.role-guest #mePasswordBtn,
@@ -335,14 +333,21 @@
     #demandView, #meView, #notifyView {
       padding: 0 32px 40px;
     }
+    body { padding-bottom: 88px; }
     .bottom-nav {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
       gap: 6px;
-      margin: 0 32px 12px;
+      position: fixed;
+      left: 50%;
+      transform: translateX(-50%);
+      bottom: 16px;
+      width: min(520px, calc(100vw - 32px));
+      z-index: 120;
+      margin: 0;
       padding: 4px;
       border: 1px solid var(--line);
-      border-radius: var(--radius-lg);
+      border-radius: 999px;
       background: var(--paper);
     }
     .bottom-nav button {
@@ -876,13 +881,20 @@
       display: none;
       position: static;
       margin: 0;
-      padding: 7px 12px;
-      font-size: 13px;
+      padding: 8px 16px;
+      font-size: var(--text-sm);
       font-weight: 700;
-      background: var(--paper);
-      border: 1px solid var(--line);
+      color: var(--primary-foreground);
+      background: var(--accent);
+      border: 1px solid var(--accent);
       box-shadow: none;
       min-height: 44px;
+      border-radius: 999px;
+    }
+    body.panel-collapsed .filter-restore-btn:hover:not(:disabled) {
+      background: var(--accent-deep);
+      border-color: var(--accent-deep);
+      color: var(--primary-foreground);
     }
     body.panel-collapsed .list-head-sticky.filter-compact .filter-restore-btn {
       display: inline-flex;
@@ -928,7 +940,7 @@
     #scrollTopBtn {
       position: fixed;
       right: 18px;
-      bottom: 24px;
+      bottom: 80px;
       z-index: 95;
       width: 44px;
       height: 44px;
@@ -980,6 +992,7 @@
     }
     #profileName { margin-bottom: 8px; }
     .hint { font-size: 12px; color: var(--muted); margin: 4px 0 8px; line-height: 1.5; }
+    #deleteAccountBtn { display: none !important; }
     body:not(.role-admin) .admin-only { display: none !important; }
     body.role-admin .member-only { display: none !important; }
     #excludeMapWrap { margin: 8px 0; }
@@ -1417,12 +1430,12 @@
         <a class="ghost" id="loginBtn" href="/login.html">登入</a>
         <a class="primary" id="registerBtn" href="/login.html?register=1">註冊</a>
         <button type="button" class="ghost header-desk-only" id="changePasswordBtn">變更密碼</button>
-        <button type="button" class="ghost header-desk-only" id="deleteAccountBtn">取消會員</button>
+        <button type="button" class="ghost header-desk-only" id="deleteAccountBtn" hidden>取消會員</button>
         <a class="ghost header-desk-only" id="logoutBtn" href="/logout">登出</a>
         <a class="ghost admin-only header-desk-only" id="adminLink" href="/admin.html">後台管理</a>
         <a class="ghost admin-only header-desk-only" id="resetLink" href="/reset.html" title="會刪光物件與設定；無法修復畫面卡住" style="align-items:center;text-decoration:none">清除資料</a>
         <button class="ghost header-desk-only" id="reloadBtn">重新整理</button>
-        <button class="primary header-desk-only" id="watchBtn">立即檢查</button>
+        <button class="primary header-desk-only admin-only" id="watchBtn">立即檢查</button>
       </div>
     </div>
     <div class="header-profiles" data-tour="profiles">
@@ -1447,7 +1460,7 @@
     </div>
   </div>
   <div id="guestToast" class="guest-toast" hidden role="status" aria-live="polite">
-    <p>成為會員後就能使用這項功能：改搜尋條件、儲存設定、標記已瀏覽與特別關注。</p>
+    <p>成為會員後就能使用這項功能：改搜尋條件、儲存設定與特別關注。</p>
     <div class="row">
       <a class="primary" href="/login.html?register=1">前往註冊</a>
       <button type="button" class="ghost" id="guestToastClose">知道了</button>
@@ -1604,7 +1617,7 @@
         <div class="filter-head">
           <div class="status" id="status">準備就緒</div>
           <button type="button" class="ghost mobile-only" id="openFilterSheetBtn">篩選</button>
-          <button type="button" class="filter-restore-btn ghost" id="filterRestoreBtn" title="展開類型、排序與樓層條件">更多條件</button>
+          <button type="button" class="filter-restore-btn" id="filterRestoreBtn" title="展開類型、排序與樓層條件">更多條件</button>
           <div class="list-meta" id="listMeta" hidden></div>
         </div>
         <div class="filter-body" id="filterBody">
@@ -1713,7 +1726,7 @@
       <p class="save-msg" id="pushMsg"></p>
       <div class="row" style="margin-top:14px">
         <button type="button" class="ghost" id="meFilterBtn">開啟篩選</button>
-        <button type="button" class="ghost" id="meWatchBtn">立即檢查</button>
+        <button type="button" class="ghost admin-only" id="meWatchBtn">立即檢查</button>
         <button type="button" class="ghost" id="meReloadBtn">重新整理</button>
       </div>
       <div class="row" style="margin-top:10px">
@@ -2035,7 +2048,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver">ver. 3.18</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver">ver. 3.19</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -2283,7 +2296,7 @@
       }
     }
 
-    /** 已登入經 /go/:id 標記已瀏覽；站內刊登留在本站；其他來源導向該站。訪客不寫入已瀏覽。 */
+    /** 已登入經 /go/:id 記成已看過；站內刊登留在本站；其他來源導向該站。訪客不寫入。 */
     function listingById(id) {
       return (listCache || []).find((row) => String(row.post_id) === String(id)) || null;
     }
@@ -2588,7 +2601,7 @@
       { target: "[data-tour=mrt]", title: "第 4／7 步", text: "最近捷運站的步行路線距離可以開關。步行達 1.5 公里（含）就不顯示站名。示範模式看得到效果，註冊後才能自己開啟或關閉。" },
       { target: "[data-tour=notify]", title: "第 5／7 步", text: "系統推播與站內待看是預設通知。郵件與 Webhook 是選用，在「我的 → 通知設定」。示範模式不能改。" },
       { target: "[data-tour=profiles]", title: "第 6／7 步", text: "設定檔的儲存、另存與刪除也鎖定中。註冊後最多可存 3 組自己的條件。" },
-      { target: "#listHeadSticky", title: "第 7／7 步", text: "已瀏覽、特別關注與隱藏要登入才寫得進去。按「前往註冊」就能開始用這些功能。" },
+      { target: "#listHeadSticky", title: "第 7／7 步", text: "特別關注與隱藏要登入才寫得進去。點進物件會自動記成已瀏覽。按「前往註冊」就能開始用這些功能。" },
     ];
     let guestTourIndex = 0;
     let guestTourTimer = 0;
@@ -3313,7 +3326,7 @@
       updateListMeta(items, st);
       if (!items.length) {
         const q = $("q").value.trim();
-        let msg = "目前沒有符合條件的物件。請勾選行政區並按儲存、立即檢查。";
+        let msg = "目前沒有符合條件的物件。請勾選行政區並按儲存，之後會自動抓取與篩選。";
         if (q) msg = `沒有符合「${q}」的物件。試試較短關鍵字，或清掉搜尋看全部列表。`;
         else if (viewDistricts.size) {
           msg = "這個行政區篩選目前沒有物件。可點「全部」或再勾其他區。";
@@ -3342,7 +3355,7 @@
         } else if (st.filteredOut > 0) {
           msg = `資料庫有 ${st.stored} 筆，目前都被${commuteModeLabel()}路線距離或樓層／坪數／路名／地圖框／房仲排除了。`;
         } else if (st.dbTotal > 0) {
-          msg = "這個搜尋網址還沒對到已存的物件。請按「立即檢查」重新抓取。";
+          msg = "這個搜尋網址還沒對到已存的物件。條件儲存後會自動抓取，請稍候再重新整理。";
         }
         replaceListHtml(`<div class="empty">${msg}</div>`);
         updateBulkBar();
@@ -3382,7 +3395,6 @@
           </div>
           ${contactBlock(item)}
           <div class="actions">
-            <button class="ghost" data-viewed="${id}">${item.viewed ? "取消已瀏覽" : "標記已瀏覽"}</button>
             ${item.watched
               ? `<button class="primary" data-watched="${id}">取消關注</button>`
               : draftWatch.has(String(id))
@@ -3744,8 +3756,9 @@
       flash("儲存中…");
       try {
         await saveSettings(collectSettings());
-        flash("設定已儲存");
+        flash("設定已儲存，之後會依條件自動抓取與篩選");
         maybeAskPush("儲存條件後可允許系統推播。");
+        fetch("/api/watch", { method: "POST", signal: AbortSignal.timeout(55000) }).catch(() => {});
         await loadList();
       } catch (error) {
         const msg = error.name === "TimeoutError" || error.name === "AbortError"
@@ -4024,6 +4037,13 @@
     }
     function openSelfDetail(item) {
       if (!item) return;
+      if (!isGuest && item.post_id) {
+        fetch(`/api/listings/${item.post_id}/flags`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ viewed: true }),
+        }).catch(() => {});
+      }
       const box = $("selfListingOverlay");
       const title = $("selfListingTitle");
       const body = $("selfListingDetail");

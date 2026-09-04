@@ -15,12 +15,25 @@ export const SMTP_ENV_KEYS = [
 export function defaultMailTemplates() {
   return {
     welcome: {
-      subject: `${APP_NAME}：歡迎註冊`,
+      subject: `${APP_NAME}：請確認信箱以完成註冊`,
       text: `你好，
 
-你已經用 {{email}} 註冊 ${APP_NAME}。
+請點下面的連結完成 ${APP_NAME} 註冊（信箱 {{email}}）。點過就會登入，這個連結只能用一次。
 
-請用這個信箱登入。物件／屋源提醒不會用站方信箱代寄，登入後請到「通知與發信設定」填你自己的 SMTP。
+{{verifyUrl}}
+
+若 3 天內沒點，連結會失效。物件／屋源提醒不會用站方信箱代寄，登入後可到「我的」選填自己的 SMTP。
+
+——${APP_NAME}
+`,
+    },
+    verify_expired: {
+      subject: `${APP_NAME}：註冊確認連結已失效`,
+      text: `你好，
+
+信箱 {{email}} 的註冊確認連結已超過 3 天未點擊，已經失效。此次註冊尚未完成，不能登入。
+
+若要加入，請再到註冊頁用同一個信箱重新註冊，我們會再寄一封新的確認信。
 
 ——${APP_NAME}
 `,
@@ -231,7 +244,7 @@ export function mergeEnvMap(existing, updates) {
   return next;
 }
 
-export const ACCOUNT_MAIL_KINDS = ["welcome", "password_changed", "sponsor_thanks", "account_deleted"];
+export const ACCOUNT_MAIL_KINDS = ["welcome", "verify_expired", "password_changed", "sponsor_thanks", "account_deleted"];
 
 export function composeAccountMail(kind, templates, vars = {}) {
   const key = String(kind || "").trim();

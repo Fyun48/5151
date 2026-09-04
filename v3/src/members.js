@@ -94,7 +94,7 @@ export function publicUser(row) {
   };
 }
 
-export function registerUser(conn, { email, password, acceptDisclaimer } = {}) {
+export function registerUser(conn, { email, password, acceptDisclaimer, emailVerified = true } = {}) {
   if (!acceptDisclaimer) {
     const err = new Error("請先閱讀並同意免責聲明");
     err.status = 400;
@@ -109,7 +109,16 @@ export function registerUser(conn, { email, password, acceptDisclaimer } = {}) {
   const pass = validatePassword(password);
   const existing = findUserByEmail(conn, key);
   const now = new Date().toISOString();
+  const verifiedFlag = emailVerified === false ? 0 : 1;
   if (existing) {
+    if (!isUserDeleted(existing) && Number(existing.email_verified) === 0 && emailVerified === false) {
+      conn.prepare(
+        `UPDATE users
+         SET password_hash = ?, accepted_disclaimer_at = ?, disclaimer_version = ?
+         WHERE id = ?`,
+      ).run(hashPassword(pass), now, DISCLAIMER_VERSION, existing.id);
+      return getUserById(conn, existing.id);
+    }
     if (!isUserDeleted(existing)) {
       const err = new Error("這個 Email 已經註冊過了");
       err.status = 409;
@@ -124,15 +133,16 @@ export function registerUser(conn, { email, password, acceptDisclaimer } = {}) {
     conn.prepare(
       `UPDATE users
        SET password_hash = ?, plan = 'free', accepted_disclaimer_at = ?, disclaimer_version = ?,
-           signup_count = ?, deleted_at = NULL, deleted_by = '', deleted_reason = '', deleted_reason_code = ''
+           signup_count = ?, deleted_at = NULL, deleted_by = '', deleted_reason = '', deleted_reason_code = '',
+           email_verified = ?
        WHERE id = ?`,
-    ).run(hashPassword(pass), now, DISCLAIMER_VERSION, signups + 1, existing.id);
+    ).run(hashPassword(pass), now, DISCLAIMER_VERSION, signups + 1, verifiedFlag, existing.id);
     return getUserById(conn, existing.id);
   }
   const result = conn.prepare(
-    `INSERT INTO users(email, password_hash, role, plan, created_at, accepted_disclaimer_at, disclaimer_version, signup_count)
-     VALUES (?, ?, 'member', 'free', ?, ?, ?, 1)`,
-  ).run(key, hashPassword(pass), now, now, DISCLAIMER_VERSION);
+    `INSERT INTO users(email, password_hash, role, plan, created_at, accepted_disclaimer_at, disclaimer_version, signup_count, email_verified)
+     VALUES (?, ?, 'member', 'free', ?, ?, ?, 1, ?)`,
+  ).run(key, hashPassword(pass), now, now, DISCLAIMER_VERSION, verifiedFlag);
   return getUserById(conn, Number(result.lastInsertRowid));
 }
 
@@ -244,6 +254,11 @@ export function bootstrapAdminUser(conn, email, password, { ensureUser } = {}) {
   }
   if (password && !String(user.password_hash || "").trim()) {
     conn.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(hashPassword(password), user.id);
+  }
+  try {
+    conn.prepare("UPDATE users SET email_verified = 1, verify_token = NULL WHERE id = ?").run(user.id);
+  } catch {
+    // 舊庫還沒加欄位時略過
   }
   if (!user.accepted_disclaimer_at) {
     acceptDisclaimer(conn, user.id);

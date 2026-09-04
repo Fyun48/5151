@@ -76,6 +76,10 @@ export function ensurePersonalSchema(db) {
     "ALTER TABLE users ADD COLUMN deleted_by TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE users ADD COLUMN deleted_reason TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE users ADD COLUMN deleted_reason_code TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE users ADD COLUMN verify_token TEXT",
+    "ALTER TABLE users ADD COLUMN verify_expires_at TEXT",
+    "ALTER TABLE users ADD COLUMN verify_expire_notified INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE user_events ADD COLUMN source_key TEXT NOT NULL DEFAULT ''",
   ]) {
     try {

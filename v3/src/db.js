@@ -32,6 +32,11 @@ import { ensurePersonalSchema } from "./personalSchema.js";
 import { importV1CacheIfNeeded, importV2CacheIfNeeded } from "./importV1.js";
 import { listingFitFields } from "./listingScore.js";
 import {
+  confirmVerifyToken as confirmVerifyTokenOn,
+  expireStaleVerifyTokens as expireStaleVerifyTokensOn,
+  issueVerifyToken as issueVerifyTokenOn,
+} from "./emailVerify.js";
+import {
   crawlSourceEnabled,
   defaultCrawlSources,
   normalizeCrawlSources,
@@ -925,6 +930,18 @@ export { ADMIN_DELETE_REASONS };
 
 export function registerUser(input) {
   return registerUserOn(db, input);
+}
+
+export function issueVerifyToken(userId, opts) {
+  return issueVerifyTokenOn(db, userId, opts);
+}
+
+export function confirmVerifyToken(token, opts) {
+  return confirmVerifyTokenOn(db, token, opts);
+}
+
+export function expireStaleVerifyTokens(opts) {
+  return expireStaleVerifyTokensOn(db, opts);
 }
 
 export function verifyUserPassword(email, password) {
@@ -1844,6 +1861,12 @@ export function enqueueListingEvent(listing, event) {
       to: getUserById(userId)?.email,
       configured: getMemberMailBundle(userId).configured,
     })) continue;
+    if (payload.type === "new") {
+      const alreadyNew = db.prepare(
+        "SELECT id FROM user_events WHERE user_id = ? AND post_id = ? AND type = 'new' LIMIT 1",
+      ).get(userId, payload.post_id);
+      if (alreadyNew) continue;
+    }
     const last = db.prepare(
       "SELECT detail FROM user_events WHERE user_id = ? AND post_id = ? AND type = ? ORDER BY id DESC LIMIT 1",
     ).get(userId, payload.post_id, payload.type);

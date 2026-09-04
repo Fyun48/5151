@@ -56,9 +56,17 @@ test("auth.env merge keeps non-SMTP keys", () => {
 
 test("composeAccountMail fills welcome, password, and sponsor templates", () => {
   const welcome = composeAccountMail("welcome", defaultMailTemplates(), { email: "a@b.com" });
-  assert.match(welcome.subject, /歡迎/);
+  assert.match(welcome.subject, /確認信箱/);
   assert.match(welcome.text, /a@b\.com/);
-  assert.match(welcome.text, /自己的 SMTP/);
+  assert.match(welcome.text, /\{\{verifyUrl\}\}|verifyUrl|自己的 SMTP/);
+  const verifyMail = composeAccountMail("welcome", defaultMailTemplates(), {
+    email: "a@b.com",
+    verifyUrl: "https://c5151.reversalplay.me/verify-email?token=abc",
+  });
+  assert.match(verifyMail.text, /verify-email\?token=abc/);
+  const expired = composeAccountMail("verify_expired", defaultMailTemplates(), { email: "a@b.com" });
+  assert.match(expired.subject, /失效/);
+  assert.match(expired.text, /3 天/);
   const changed = composeAccountMail("password_changed", defaultMailTemplates(), { email: "a@b.com" });
   assert.match(changed.subject, /密碼已變更/);
   assert.match(changed.text, /忘記密碼/);

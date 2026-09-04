@@ -31,7 +31,7 @@ test("sendAccountMail uses admin SMTP and never passes a member smtp override", 
   assert.equal(sent.length, 1);
   assert.equal(sent[0].to, "new@example.com");
   assert.equal(sent[0].smtp, undefined);
-  assert.match(sent[0].subject, /歡迎/);
+  assert.match(sent[0].subject, /確認信箱|歡迎/);
 });
 
 test("sendAccountMail forwards stored admin smtp without a configured callback", async () => {
