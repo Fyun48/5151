@@ -18,6 +18,8 @@ export const SELF_TRAIT_GROUPS = [
     items: [
       { id: "elevator", label: "有電梯" },
       { id: "parking", label: "有車位" },
+      { id: "community", label: "社區大樓" },
+      { id: "courtyard", label: "有中庭" },
       { id: "balcony", label: "有陽台" },
       { id: "manage", label: "有管理室" },
       { id: "trash", label: "垃圾集中" },
@@ -60,17 +62,17 @@ export const SELF_BODY_TEMPLATES = [
   {
     id: "family",
     label: "家庭整層",
-    text: "屋況整潔、採光佳，適合小家庭。可使用坪數已扣除公設。可遷入日可再約看屋時間確認。沒有站內私訊，請用公開電話或 LINE 聯絡。",
+    text: "屋況整潔、採光佳，適合小家庭。可使用坪數已扣除公設。社區大樓可順便標中庭、陽台。可遷入日可再約看屋時間確認。沒有站內私訊，請用公開電話或 LINE 聯絡。",
   },
   {
     id: "suite",
     label: "套房自住",
-    text: "獨立衛浴，家具家電可再看現場。可使用坪數已扣除公設。適合一人入住。沒有站內私訊，請用公開電話或 LINE 聯絡。",
+    text: "獨立衛浴，家具家電可再看現場。可使用坪數已扣除公設。有陽台或中庭的話點一下就好。適合一人入住。沒有站內私訊，請用公開電話或 LINE 聯絡。",
   },
   {
     id: "near-mrt",
     label: "近捷運通勤",
-    text: "步行可到捷運，適合通勤。可使用坪數已扣除公設。歡迎先約看再決定。沒有站內私訊，請用公開電話或 LINE 聯絡。",
+    text: "步行可到捷運，適合通勤。可使用坪數已扣除公設。社區大樓可順便標中庭、陽台。歡迎先約看再決定。沒有站內私訊，請用公開電話或 LINE 聯絡。",
   },
 ];
 
@@ -85,7 +87,7 @@ export function normalizeSelfTraits(input) {
     const id = String(item || "").trim();
     if (ALL_TRAITS.has(id) && !ids.includes(id)) ids.push(id);
   }
-  return ids.slice(0, 24);
+  return ids.slice(0, 28);
 }
 
 export function selfTraitLabels(ids) {

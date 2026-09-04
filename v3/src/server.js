@@ -47,6 +47,9 @@ import {
   getAdminSponsorSettings,
   saveAdminSponsorSettings,
   publicSponsorSettings,
+  getAdminAdsSettings,
+  saveAdminAdsSettings,
+  publicAdsSettings,
   getAdminMapsSettings,
   saveAdminMapsSettings,
   settingsForGeoBackfill,
@@ -484,6 +487,22 @@ app.put("/api/admin/sponsor", requireAdminApi, (req, res) => {
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
+});
+
+app.get("/api/admin/ads", requireAdminApi, (_req, res) => {
+  res.json(getAdminAdsSettings());
+});
+
+app.put("/api/admin/ads", requireAdminApi, (req, res) => {
+  try {
+    res.json(saveAdminAdsSettings(req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/ads", (_req, res) => {
+  res.json(publicAdsSettings());
 });
 
 app.get("/api/admin/help-qa", requireAdminApi, (_req, res) => {
