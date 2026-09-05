@@ -253,13 +253,20 @@ export function verifyUserPassword(conn, email, password) {
 
 export const IDLE_PAUSE_MS = 60 * 24 * 60 * 60 * 1000;
 
-export function touchLastLogin(conn, userId, { now = Date.now() } = {}) {
+export function touchLastLogin(conn, userId, { now = Date.now(), minIntervalMs = 0 } = {}) {
   const id = Number(userId) || 0;
-  if (!id) return;
+  if (!id) return false;
   try {
+    if (minIntervalMs > 0) {
+      const row = conn.prepare("SELECT last_login_at FROM users WHERE id = ?").get(id);
+      const prev = row?.last_login_at ? Date.parse(row.last_login_at) : 0;
+      if (Number.isFinite(prev) && prev > 0 && now - prev < minIntervalMs) return false;
+    }
     conn.prepare("UPDATE users SET last_login_at = ? WHERE id = ?").run(new Date(now).toISOString(), id);
+    return true;
   } catch {
     // 舊庫還沒加欄位
+    return false;
   }
 }
 

@@ -45,6 +45,22 @@ test("members idle after 60 days without login", () => {
   assert.deepEqual(listIdleMemberIds(db, { now, idleMs: IDLE_PAUSE_MS }), []);
 });
 
+test("recent last_login is not rewritten inside the throttle window", () => {
+  const db = memoryDb();
+  const user = registerUser(db, {
+    email: "active@b.com",
+    password: "password1",
+    acceptDisclaimer: true,
+    emailVerified: true,
+  });
+  const first = Date.parse("2026-09-05T01:00:00.000Z");
+  assert.equal(touchLastLogin(db, user.id, { now: first }), true);
+  const stamp = db.prepare("SELECT last_login_at FROM users WHERE id = ?").get(user.id).last_login_at;
+  assert.equal(touchLastLogin(db, user.id, { now: first + 60 * 60 * 1000, minIntervalMs: 12 * 60 * 60 * 1000 }), false);
+  assert.equal(db.prepare("SELECT last_login_at FROM users WHERE id = ?").get(user.id).last_login_at, stamp);
+  assert.equal(touchLastLogin(db, user.id, { now: first + 13 * 60 * 60 * 1000, minIntervalMs: 12 * 60 * 60 * 1000 }), true);
+});
+
 test("unverified members are not auto-paused", () => {
   const db = memoryDb();
   const user = registerUser(db, {
@@ -102,6 +118,9 @@ test("idle pause stops crawl and notify; login resume does not mail", () => {
   const after = src.slice(src.indexOf("function afterMemberSession"), src.indexOf('app.get("/verify-email"'));
   assert.match(after, /resumeIdleIfNeeded/);
   assert.doesNotMatch(after, /queueSystemMail/);
+  const me = src.slice(src.indexOf('app.get("/api/me"'), src.indexOf("app.patch(\"/api/profile\""));
+  assert.match(me, /touchLastLogin\(session\.userId/);
+  assert.match(me, /minIntervalMs: 12 \* 60 \* 60 \* 1000/);
 });
 
 test("used verify token stays findable as used, empty token is missing", () => {

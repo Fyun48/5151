@@ -864,6 +864,18 @@
       color: var(--muted);
     }
     .same-house-cost strong { color: var(--watch); font-weight: 800; }
+    .same-diff-kicker {
+      margin-top: 6px;
+      font-size: 11px;
+      font-weight: 800;
+      color: var(--same);
+    }
+    .same-diff {
+      font-size: 12px;
+      line-height: 1.4;
+      color: var(--ink);
+    }
+    .contact-defer .agency { color: var(--watch); font-weight: 700; }
     .same-house-open {
       display: inline-flex;
       align-items: center;
@@ -2731,7 +2743,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.42</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.43</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -2833,6 +2845,7 @@
     const noteDrafts = new Map();
     let listCache = [];
     const sameHouseOpen = new Set();
+    const sameHouseClosed = new Set();
     let guestListings = [];
     let lastStats = {};
     let listRefreshQueued = false;
@@ -4036,22 +4049,55 @@
       return peer?.url || listingUrl(peer);
     }
 
+    function sameHouseOf(item) {
+      if (item?.same_house?.peers?.length) return item.same_house;
+      const peer = item?.match_peer;
+      if (!peer || item.match_verdict === "no") return null;
+      return {
+        status: item.match_verdict === "yes" ? "confirmed" : "suspected",
+        is_primary: true,
+        cheaper_exists: false,
+        cheaper_gap: 0,
+        mine_total: 0,
+        peers: [{ ...peer, role: "affiliate", notes: [], diffs: [] }],
+      };
+    }
+
+    function sameHouseIsOpen(item) {
+      const key = String(item.post_id);
+      if (sameHouseClosed.has(key)) return false;
+      if (sameHouseOpen.has(key)) return true;
+      const house = sameHouseOf(item);
+      return Boolean(house?.cheaper_exists);
+    }
+
+    function peerCostChangeLine(peer) {
+      if (!peer?.cost_changed_at) return "";
+      const typeLabel = peer.cost_change_type === "price_drop"
+        ? "租金調降"
+        : peer.cost_change_type === "price_update"
+          ? "租金變更"
+          : "費用變更";
+      return `${typeLabel} ${formatCostWhen(peer.cost_changed_at)}`;
+    }
+
     function sameHouseTag(item) {
-      const house = item.same_house;
+      const house = sameHouseOf(item);
       if (!house?.peers?.length) return "";
       const confirmed = house.status === "confirmed";
-      const label = confirmed
+      let label = confirmed
         ? (house.is_primary ? "確定同屋源 · 最低總月費" : "確定同屋源 · 附屬")
         : (item.match_level === "high" ? "高信心同屋源" : "疑似同屋源");
+      if (house.cheaper_exists) label += " · 另有較便宜";
       const src = listingSourceLabel(item);
       const peerSrc = house.peers[0]?.source_label || listingSourceLabel(house.peers[0] || {});
-      const open = sameHouseOpen.has(String(item.post_id));
+      const open = sameHouseIsOpen(item);
       const cls = confirmed || item.match_level === "high" ? "same" : "watch";
       return `<button type="button" class="tag ${cls} tag-btn" data-same-toggle="${item.post_id}" aria-expanded="${open ? "true" : "false"}" aria-controls="same-house-panel-${item.post_id}">${esc(label)}${peerSrc ? ` · ${esc(src)}／${esc(peerSrc)}` : ""}</button>`;
     }
 
     function sameHouseWarn(item) {
-      const house = item.same_house;
+      const house = sameHouseOf(item);
       if (!house?.cheaper_exists) return "";
       const primary = house.peers.find((peer) => peer.role === "primary") || house.peers[0];
       const total = Number(primary?.total) || 0;
@@ -4060,9 +4106,9 @@
     }
 
     function sameHousePanel(item) {
-      const house = item.same_house;
+      const house = sameHouseOf(item);
       if (!house?.peers?.length) return "";
-      const open = sameHouseOpen.has(String(item.post_id));
+      const open = sameHouseIsOpen(item);
       const mineTotal = Number(house.mine_total) || ((Number(item.price_num) || 0) + (Number(item.extra_fee) || 0));
       const rows = house.peers.map((peer) => {
         const peerTotal = Number(peer.total) || 0;
@@ -4075,13 +4121,17 @@
           ? "同屋源最低總月費"
           : (peer.offline ? "已下架附屬" : "附屬刊登");
         const notes = (peer.notes || []).map((note) => `<div class="same-note">${esc(note)}</div>`).join("");
-        const costChange = peer.cost_changed_at ? `費用曾改 ${formatCostWhen(peer.cost_changed_at)}` : "";
+        const diffs = (peer.diffs || []).slice(0, 6).map((diff) => (
+          `<div class="same-diff">${esc(diff.label)}：這則 ${esc(diff.mine)} · 卡片 ${esc(diff.theirs)}</div>`
+        )).join("");
+        const costChange = peerCostChangeLine(peer);
         return `<div class="same-house-row">
           <div class="same-house-role">${esc(role)}${peer.offline ? " · 可能空號" : ""}</div>
           <a href="${esc(href)}" ${String(peer.source || "") === "self" ? "" : 'target="_blank" rel="noopener noreferrer"'} data-open="${peer.post_id}" title="${esc(cheapWarn || "打開原站")}">${esc(peer.title || `刊登 #${peer.post_id}`)}</a>
           <div class="same-house-cost">租金 ${esc(peer.price || (peer.price_num ? peer.price_num.toLocaleString("zh-TW") : "—"))} · 含額外約 ${(peerTotal || 0).toLocaleString("zh-TW")}${cheapWarn ? ` · <strong>${esc(cheapWarn)}</strong>` : ""}</div>
           <div class="same-house-meta">${esc(peer.source_label || listingSourceLabel(peer))} · ${esc(peer.layout || "")} · ${esc(peer.area_name || "")} · ${esc(peer.floor_name || "")}${costChange ? ` · ${esc(costChange)}` : ""}</div>
           ${notes}
+          ${diffs ? `<div class="same-diff-kicker">交叉比對</div>${diffs}` : ""}
           <a class="same-house-open" href="${esc(href)}" ${String(peer.source || "") === "self" ? "" : 'target="_blank" rel="noopener noreferrer"'} data-open="${peer.post_id}">${esc(openListingCta(peer))}</a>
         </div>`;
       }).join("");
@@ -4171,12 +4221,10 @@
       }
       if (item.last_event === "new") bits.push('<span class="tag new">全新物件</span>');
       if (item.last_event === "same_source" && !item.match_level && !item.same_house) bits.push('<span class="tag same">同屋源更新</span>');
-      if (item.same_house) bits.push(sameHouseTag(item));
+      if (sameHouseOf(item)) bits.push(sameHouseTag(item));
       else if (item.match_verdict === "yes") bits.push('<span class="tag verdict-yes">已確認：同一間</span>');
-      else if (item.match_level === "high") bits.push(`<span class="tag same">高信心同屋源 · ${esc(listingSourceLabel(item))}${item.match_peer ? `／${esc(listingSourceLabel(item.match_peer))}` : ""}</span>`);
-      else if (item.match_level === "medium") bits.push(`<span class="tag watch">需確認同屋源 · ${esc(listingSourceLabel(item))}${item.match_peer ? `／${esc(listingSourceLabel(item.match_peer))}` : ""}</span>`);
       if (item.match_verdict === "no") bits.push('<span class="tag verdict-no">已確認：不同物件</span>');
-      if (item.last_event === "update") bits.push('<span class="tag same">內容更新</span>');
+      if (item.last_event === "update" && !item.cost_change) bits.push('<span class="tag same">內容更新</span>');
       if (item.offline_confirmed) bits.push('<span class="tag off-sure">確認已下架</span>');
       else if (item.offline || item.last_event === "offline") bits.push('<span class="tag off">正在確認中的下架</span>');
       if (item.has_elevator) bits.push('<span class="tag lift">有電梯</span>');
@@ -4200,9 +4248,14 @@
       }
       if (name || role) bits.push(`<div class="who-name">${esc([role, name].filter(Boolean).join(" · "))}</div>`);
       if (agency) bits.push(`<div class="agency">${esc(agency)}</div>`);
-      if (tel) bits.push(`<a class="tel" href="tel:${esc(tel.replace(/[^\d+]/g, ""))}">${esc(tel)}</a>`);
-      if (item.line_url) {
-        bits.push(`<a href="${esc(item.line_url)}" target="_blank" rel="noopener noreferrer" title="加入 LINE"><img class="line-qr" src="${lineQr(item.line_url)}" alt="LINE QR" /></a>`);
+      const deferContact = Boolean(sameHouseOf(item)?.cheaper_exists);
+      if (deferContact) {
+        bits.push(`<div class="agency">較貴刊登，電話／LINE 已收合。請先點同屋源看較便宜那則。</div>`);
+      } else {
+        if (tel) bits.push(`<a class="tel" href="tel:${esc(tel.replace(/[^\d+]/g, ""))}">${esc(tel)}</a>`);
+        if (item.line_url) {
+          bits.push(`<a href="${esc(item.line_url)}" target="_blank" rel="noopener noreferrer" title="加入 LINE"><img class="line-qr" src="${lineQr(item.line_url)}" alt="LINE QR" /></a>`);
+        }
       }
       if (!bits.length) {
         if (item.source === "self") bits.push(`<div class="agency">未留聯絡方式</div>`);
@@ -4213,7 +4266,7 @@
         else if (item.source === "housefun") bits.push(`<div class="agency">聯絡請打開好房頁面</div>`);
         else bits.push(`<div class="agency">聯絡資料抓取中</div>`);
       }
-      return `<div class="contact">${bits.join("")}</div>`;
+      return `<div class="contact${deferContact ? " contact-defer" : ""}">${bits.join("")}</div>`;
     }
 
     function updateBulkBar() {
@@ -4344,7 +4397,7 @@
               ${esc(item.kind_name || "")} · ${esc(item.layout || "")} · ${esc(item.area_name || "")} · ${esc(item.floor_name || "")}
               <br>${esc(item.address || "")}${commuteText(item)}${offlineLine(item)}
               ${mrtText(item) ? `<div class="mrt-line">${mrtText(item)}</div>` : ""}
-              ${item.match_detail && !item.same_house ? `<br>比對：${esc(item.match_detail)}${item.match_post_id ? ` · <a href="${listingUrl(item.match_post_id)}" target="_blank" rel="noopener noreferrer">舊刊登 #${item.match_post_id}</a>` : ""}` : ""}
+              ${item.match_detail && !sameHouseOf(item) ? `<br>比對：${esc(item.match_detail)}${item.match_post_id ? ` · <a href="${listingUrl(item.match_post_id)}" target="_blank" rel="noopener noreferrer">舊刊登 #${item.match_post_id}</a>` : ""}` : ""}
             </div>
               ${item.self_body ? `<div class="meta">${esc(item.self_body)}</div>` : ""}
             ${(() => {
@@ -6293,8 +6346,14 @@
         ev.preventDefault();
         ev.stopPropagation();
         const key = String(sameToggle);
-        if (sameHouseOpen.has(key)) sameHouseOpen.delete(key);
-        else sameHouseOpen.add(key);
+        const card = listCache.find((row) => String(row.post_id) === key);
+        if (sameHouseIsOpen(card || { post_id: key })) {
+          sameHouseClosed.add(key);
+          sameHouseOpen.delete(key);
+        } else {
+          sameHouseClosed.delete(key);
+          sameHouseOpen.add(key);
+        }
         renderList(listCache, lastStats);
         return;
       }
