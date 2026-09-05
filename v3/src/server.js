@@ -32,6 +32,7 @@ import {
   setFlags,
   sourceHistory,
   stats,
+  holdStatsCache,
   requestTempPassword,
   listAdminMembers,
   adminPatchMember,
@@ -1092,12 +1093,13 @@ function queueGeoBackfill(settings = getSettings()) {
   if (geoBackfillBusy) return;
   const needCommute = needsListingGeo(settings);
   geoBackfillBusy = true;
+  holdStatsCache(20_000);
   (async () => {
     if (needCommute) {
       for (let round = 0; round < 200; round += 1) {
         try {
           const routes = await backfillListingRoutes(settings, { limit: 20 });
-          if (routes.attempted) broadcast({ type: "geo", stats: stats(), routeBackfill: routes });
+          if (routes.attempted) broadcast({ type: "geo", routeBackfill: routes });
           const notified = await flushPendingNotifications(settings);
           if (notified.length) broadcastNotify(notified);
           if (!routes.attempted) break;
@@ -1109,7 +1111,7 @@ function queueGeoBackfill(settings = getSettings()) {
       for (let round = 0; round < 80; round += 1) {
         try {
           const geo = await backfillListingCoords(settings, { limit: LIST_PAGE_SIZE });
-          broadcast({ type: "geo", stats: stats(), geoBackfill: geo });
+          if (geo.attempted) broadcast({ type: "geo", geoBackfill: geo });
           const notified = await flushPendingNotifications(settings);
           if (notified.length) broadcastNotify(notified);
           if (!geo.attempted) break;
@@ -1122,12 +1124,17 @@ function queueGeoBackfill(settings = getSettings()) {
     for (let round = 0; round < 80; round += 1) {
       try {
         const mrt = await backfillListingMrt({ limit: 20 });
-        if (mrt.attempted) broadcast({ type: "geo", stats: stats(), mrtBackfill: mrt });
+        if (mrt.attempted) broadcast({ type: "geo", mrtBackfill: mrt });
         if (!mrt.attempted) break;
       } catch (error) {
         console.warn("補捷運距離失敗：", error.message);
         await new Promise((resolve) => setTimeout(resolve, 1500));
       }
+    }
+    try {
+      broadcast({ type: "geo", stats: stats(), done: true });
+    } catch (error) {
+      console.warn("補定位後統計失敗：", error.message);
     }
   })()
     .finally(() => {
@@ -1190,7 +1197,7 @@ async function tick(reason = "schedule") {
     });
     lastRun.reason = reason;
     broadcastWatch(lastRun);
-    queueGeoBackfill();
+    if (reason !== "startup") queueGeoBackfill();
     return lastRun;
   } catch (error) {
     lastRun = { error: error.message, checked_at: new Date().toISOString(), reason };
@@ -1556,10 +1563,15 @@ app.listen(PORT, HOST, () => {
     ensureWorkCoords()
       .then((settings) => {
         const jobs = coveringJobsFromAllUsers({ includeSystem: true });
-        if (!jobs.length) return;
+        if (!jobs.length) {
+          queueGeoBackfill(settings);
+          return;
+        }
         console.log(`第一次檢查：${jobs.length} 組覆蓋條件`);
-        queueGeoBackfill(settings);
         return tick("startup");
+      })
+      .then((result) => {
+        if (result != null) queueGeoBackfill();
       })
       .catch((error) => {
         console.warn("第一次檢查失敗：", error.message);

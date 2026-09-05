@@ -201,7 +201,7 @@ export function sameHouseBundle(listing, peers = []) {
   const mineSnap = listingCostSnapshot(listing);
   const primarySnap = listingCostSnapshot(primary);
   const cheaperGap = mineSnap.total > 0 && primarySnap.total > 0 ? mineSnap.total - primarySnap.total : 0;
-  return {
+  const bundle = {
     status: confirmed ? "confirmed" : "suspected",
     is_primary: mineId === primaryId,
     primary_id: primaryId,
@@ -220,6 +220,7 @@ export function sameHouseBundle(listing, peers = []) {
       };
     }),
   };
+  return bundle;
 }
 
 export function costChangePayload(row) {

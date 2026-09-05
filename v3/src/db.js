@@ -1487,60 +1487,91 @@ function loadSameHousePeers(row) {
     .map(decorateSameHousePeer);
 }
 
-function decorateListing(row, settings, userId) {
+function decorateListingLite(row, settings, userId) {
   if (!row) return row;
   settings = settings || getSettings();
-  row = applyCachedCoords(row, settings);
+  if (!Array.isArray(row.route_kms) && !Number.isFinite(Number(row.route_km))) {
+    row = applyCachedCoords(row, settings);
+  }
   const commute = Number.isFinite(Number(row.route_km)) ? Number(row.route_km) : null;
   const commuteKm = commute == null ? null : Math.round(commute * 10) / 10;
-  const commuteMode = normalizeCommuteMode(settings.commuteMode);
-  const matchPostId = Number(row.match_post_id) || 0;
-  const sameHousePeers = loadSameHousePeers(row);
-  const matchPeerRaw = sameHousePeers.find((item) => Number(item.post_id) === matchPostId) || sameHousePeers[0] || null;
-  const matchPeer = matchPeerRaw;
+  const extraFees = Array.isArray(row.extra_fees) ? row.extra_fees : parseJson(row.extra_fees, []);
   const source = String(row.source || "591") || "591";
-  const sourceLabel = selfSourceLabel(source);
   const uid = Number(userId) || 0;
   const listedBy = Number(row.listed_by_user_id) || 0;
-  const fit = listingFitFields({ ...row, commute_km: commuteKm }, settings);
-  const {
-    listed_by_user_id: _listedBy,
-    model_score: _modelScore,
-    ...publicRow
-  } = row;
-  const extraFees = Array.isArray(row.extra_fees) ? row.extra_fees : parseJson(row.extra_fees, []);
-  const decoratedSelf = {
+  const fit = listingFitFields({ ...row, extra_fees: extraFees, commute_km: commuteKm }, settings);
+  const out = {
     ...row,
-    extra_fees: extraFees,
-    source,
-    source_label: sourceLabel,
-  };
-  return {
-    ...publicRow,
     extra_fees: extraFees,
     has_elevator: listingHasElevator(row),
     commute_km: commuteKm,
-    commute_mode: commuteMode,
+    commute_mode: normalizeCommuteMode(settings.commuteMode),
     commute_routes: Array.isArray(row.route_kms) ? row.route_kms : [],
     commute_min_am: Number.isFinite(Number(row.rush_am_min)) && Number(row.rush_am_min) > 0 ? Math.round(Number(row.rush_am_min)) : null,
     commute_min_pm: Number.isFinite(Number(row.rush_pm_min)) && Number(row.rush_pm_min) > 0 ? Math.round(Number(row.rush_pm_min)) : null,
     district: districtNameFromListing(row),
-    match_peer: matchPeer || null,
-    same_house: (row.match_verdict === "no" || Number(row.match_rejected) === 1)
-      ? null
-      : sameHouseBundle(
-        decoratedSelf,
-        sameHousePeers.filter((peer) => peer.match_verdict !== "no"),
-      ),
+    source,
+    source_label: selfSourceLabel(source),
+    mine: uid > 0 && listedBy === uid,
+    ...fit,
+  };
+  return out;
+}
+
+function attachListingPeers(row, settings) {
+  if (!row) return row;
+  const sameHousePeers = loadSameHousePeers(row);
+  const matchPostId = Number(row.match_post_id) || 0;
+  const matchPeer = sameHousePeers.find((item) => Number(item.post_id) === matchPostId) || sameHousePeers[0] || null;
+  const extraFees = Array.isArray(row.extra_fees) ? row.extra_fees : parseJson(row.extra_fees, []);
+  const source = String(row.source || "591") || "591";
+  const decoratedSelf = {
+    ...row,
+    extra_fees: extraFees,
+    source,
+    source_label: row.source_label || selfSourceLabel(source),
+  };
+  const same_house = (row.match_verdict === "no" || Number(row.match_rejected) === 1)
+    ? null
+    : sameHouseBundle(
+      decoratedSelf,
+      sameHousePeers.filter((peer) => peer.match_verdict !== "no"),
+    );
+  return { ...row, match_peer: matchPeer || null, same_house };
+}
+
+function finalizeListingDecorate(row, settings, userId, { sameHouse = true } = {}) {
+  if (!row) return row;
+  settings = settings || getSettings();
+  const uid = Number(userId) || 0;
+  const listedBy = Number(row.listed_by_user_id) || 0;
+  const extraFees = Array.isArray(row.extra_fees) ? row.extra_fees : parseJson(row.extra_fees, []);
+  const source = String(row.source || "591") || "591";
+  const withPeers = sameHouse
+    ? attachListingPeers({ ...row, extra_fees: extraFees, source, source_label: row.source_label || selfSourceLabel(source) }, settings)
+    : { ...row, extra_fees: extraFees, source, source_label: row.source_label || selfSourceLabel(source), match_peer: null, same_house: null };
+  const {
+    listed_by_user_id: _listedBy,
+    model_score: _modelScore,
+    ...publicRow
+  } = withPeers;
+  return {
+    ...publicRow,
+    extra_fees: extraFees,
     cost_change: costChangePayload(row),
     source,
-    source_label: sourceLabel,
+    source_label: withPeers.source_label,
     self_body: String(row.self_body || ""),
     photos: listingPhotoUrls(row),
     mine: uid > 0 && listedBy === uid,
-    ...fit,
     ...mrtFields(row, settings),
   };
+}
+
+function decorateListing(row, settings, userId, options = {}) {
+  if (!row) return row;
+  settings = settings || getSettings();
+  return finalizeListingDecorate(decorateListingLite(row, settings, userId), settings, userId, options);
 }
 
 function resolveUserId(userId) {
@@ -1552,11 +1583,11 @@ function withPersonal(row, userId) {
   return overlayPersonal(row, loadFlags(db, resolveUserId(userId), row.post_id));
 }
 
-export function getListing(postId, userId) {
+export function getListing(postId, userId, options = {}) {
   const row = db.prepare("SELECT * FROM listings WHERE post_id = ?").get(postId);
   if (!row) return row;
   const uid = resolveUserId(userId);
-  return decorateListing(withPersonal(row, uid), getSettings(uid), uid);
+  return decorateListing(withPersonal(row, uid), getSettings(uid), uid, options);
 }
 
 export function findBySourceKey(sourceKey, excludePostId) {
@@ -2276,7 +2307,7 @@ export function enqueueListingEvent(listing, event) {
   const ids = [];
   for (const userId of listUserIds()) {
     const settings = getSettings(userId);
-    const row = decorateListing(overlayPersonal(listing, loadFlags(db, userId, listing.post_id)), settings);
+    const row = decorateListing(overlayPersonal(listing, loadFlags(db, userId, listing.post_id)), settings, userId, { sameHouse: false });
     const watched = Number(row.watched) === 1;
     if (!watched && event.type === "new" && !listingInMemberScope(row, settings)) continue;
     if (!shouldDeliverNotify(settings, row, event, {
@@ -2712,8 +2743,8 @@ export function listListings({
     filter === "offline" || filter === "suspected"
       ? overlayRowsPersonal(raw, flagMap)
         .filter((row) => passesPriceFilter(row, settings))
-        .map((row) => decorateListing(row, settings, uid))
-      : applyListingFilter(overlayRowsPersonal(raw, flagMap), settings).map((row) => decorateListing(row, settings, uid));
+        .map((row) => decorateListingLite(row, settings, uid))
+      : applyListingFilter(overlayRowsPersonal(raw, flagMap), settings).map((row) => decorateListingLite(row, settings, uid));
 
   rows = rows.filter((row) => listingMatchesListFilter(row, filter));
   rows = rows.filter((row) => keepSelfListingForViewer(row, uid, settings, listingInMemberScope));
@@ -2734,7 +2765,8 @@ export function listListings({
   rows = sortListingsRows(rows, sort, { filter, settings });
 
   const totalMatched = rows.length;
-  return { listings: rows.slice(0, limit), totalMatched };
+  const listings = rows.slice(0, limit).map((row) => finalizeListingDecorate(row, settings, uid, { sameHouse: true }));
+  return { listings, totalMatched };
 }
 
 export function sourceHistory(sourceKey, userId) {
@@ -2843,8 +2875,20 @@ export function setCommunityCache(community) {
   );
 }
 
+let statsHoldUntil = 0;
+let statsHoldValue = null;
+let statsHoldKey = "";
+
+export function holdStatsCache(ms = 15000) {
+  statsHoldUntil = Date.now() + Math.max(0, Number(ms) || 0);
+}
+
 export function stats(searchKeys, userId, settingsOverride) {
   const uid = resolveUserId(userId);
+  const holdKey = `${uid}|${JSON.stringify(searchKeys || null)}`;
+  if (Date.now() < statsHoldUntil && statsHoldValue && statsHoldKey === holdKey) {
+    return statsHoldValue;
+  }
   const settings = settingsOverride || getSettings(uid);
   const clauses = [];
   const params = [];
@@ -2863,7 +2907,7 @@ export function stats(searchKeys, userId, settingsOverride) {
   const base = attrRows.filter((row) => !row.hidden && !isPendingOffline(row) && !isConfirmedOffline(row) && row.match_verdict !== "yes");
   const browse = attrRows.filter(countsTowardAllTotal);
   const geoRows = applyListingFilter(overlaid, settings).filter((row) => !row.hidden && !isPendingOffline(row) && !isConfirmedOffline(row) && row.match_verdict !== "yes" && !row.watched);
-  return {
+  const out = {
     total: browse.length,
     unseen: browse.filter((row) => !row.viewed).length,
     watched: base.filter((row) => row.watched).length,
@@ -2890,6 +2934,11 @@ export function stats(searchKeys, userId, settingsOverride) {
     }).length,
     dbTotal: listingCount(),
   };
+  if (Date.now() < statsHoldUntil) {
+    statsHoldValue = out;
+    statsHoldKey = holdKey;
+  }
+  return out;
 }
 
 export function listingCount() {
