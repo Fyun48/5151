@@ -181,7 +181,9 @@
     #pickCompareOverlay.hub-overlay { z-index: 140; }
     body.compare-open #scrollTopBtn,
     body.compare-open #expandPanelBtn,
-    body.compare-open #ownerFab { visibility: hidden; pointer-events: none; }
+    body.compare-open #ownerFab,
+    body.guest-toast-open #scrollTopBtn,
+    body.guest-toast-open #expandPanelBtn { visibility: hidden; pointer-events: none; }
     .hub-overlay {
       position: fixed;
       inset: 0;
@@ -860,7 +862,7 @@
       position: fixed;
       right: 20px;
       bottom: 24px;
-      z-index: 110;
+      z-index: 122;
       width: min(380px, calc(100vw - 32px));
       padding: 16px 18px;
       background: var(--paper);
@@ -3652,6 +3654,7 @@
     function hideGuestToast() {
       const box = $("guestToast");
       if (box) box.hidden = true;
+      document.body.classList.remove("guest-toast-open");
       if (guestToastTimer) {
         window.clearTimeout(guestToastTimer);
         guestToastTimer = 0;
@@ -3662,6 +3665,7 @@
       const box = $("guestToast");
       if (!box) return;
       box.hidden = false;
+      document.body.classList.add("guest-toast-open");
       if (guestToastTimer) window.clearTimeout(guestToastTimer);
       guestToastTimer = window.setTimeout(hideGuestToast, 8000);
     }
