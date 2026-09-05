@@ -36,6 +36,10 @@ test("default Q&A explains walkable MRT distance not straight-line", () => {
   assert.match(sameHouse.answer, /變更時間/);
   assert.match(sameHouse.answer, /交叉比對/);
   assert.match(sameHouse.answer, /收合/);
+  assert.match(sameHouse.answer, /主列表只留/);
+  assert.match(sameHouse.answer, /不是同一間/);
+  assert.match(sameHouse.answer, /先只從你的列表拆開/);
+  assert.doesNotMatch(sameHouse.answer, /確認同一間後/);
   assert.match(oauth.answer, /開站使用/);
   assert.ok(items.some((row) => row.id === "viewed-once"));
   assert.ok(items.some((row) => row.id === "register-verify"));

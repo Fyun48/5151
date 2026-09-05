@@ -836,6 +836,48 @@
       line-height: 1.45;
       font-weight: 700;
     }
+    .same-house-teaser {
+      margin: 6px 0 0;
+      font-size: var(--text-xs, 12px);
+      line-height: 1.45;
+      font-weight: 700;
+      color: var(--same);
+    }
+    .same-house-compare {
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--paper);
+      min-width: 0;
+    }
+    .same-house-compare-headline {
+      margin: 0 0 8px;
+      font-size: var(--text-sm, 13px);
+      font-weight: 800;
+      line-height: 1.45;
+      color: var(--ink);
+    }
+    .same-compare-row {
+      display: grid;
+      gap: 4px;
+      margin-top: 8px;
+      font-size: var(--text-xs, 12px);
+      line-height: 1.4;
+      font-variant-numeric: tabular-nums;
+    }
+    .same-compare-k {
+      font-weight: 800;
+      color: var(--same);
+    }
+    .same-compare-vals { color: var(--ink); }
+    .same-split-btn { min-height: var(--touch, 44px); margin-top: 8px; }
+    .same-split-hint {
+      display: block;
+      margin-top: 4px;
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.4;
+    }
     .same-house-panel {
       display: grid;
       gap: 8px;
@@ -2743,7 +2785,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.43</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.44</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -3529,7 +3571,7 @@
       if (el.closest("#notifyHubSave, #memberMailTest, #gmailPresetBtn")) return true;
       if (el.closest("#notifyHub")) return true;
       if (el.closest("#settingsPanel, .header-profiles, #watchBtn, #bulkBar")) return true;
-      if (el.closest("[data-watched], [data-viewed], [data-hidden], [data-watch-draft-commit], [data-watch-draft-cancel], [data-watch-note], .pick")) return true;
+      if (el.closest("[data-watched], [data-viewed], [data-hidden], [data-watch-draft-commit], [data-watch-draft-cancel], [data-watch-note], [data-reject-match], .pick")) return true;
       return false;
     }
 
@@ -4105,6 +4147,25 @@
       return `<div class="same-house-warn">同屋源另有較低總月費${total ? ` ${total.toLocaleString("zh-TW")}` : ""}${src ? `（${esc(src)}）` : ""} · 這則貴 ${Number(house.cheaper_gap).toLocaleString("zh-TW")} 元，先別打這則</div>`;
     }
 
+    function sameHouseTeaser(item) {
+      const house = sameHouseOf(item);
+      if (!house?.is_primary || !house.compare?.headline) return "";
+      return `<div class="same-house-teaser">${esc(house.compare.headline)}</div>`;
+    }
+
+    function sameHouseCompareHtml(house) {
+      const cmp = house?.compare;
+      if (!cmp?.headline) return "";
+      const rows = (cmp.rows || []).map((row) => {
+        const vals = (row.values || []).map((value, idx) => {
+          const name = (cmp.labels && cmp.labels[idx]) || "";
+          return `${name ? `${esc(name)} ` : ""}${esc(value)}`;
+        }).join(" · ");
+        return `<div class="same-compare-row"><div class="same-compare-k">${esc(row.label)}</div><div class="same-compare-vals">${vals}</div></div>`;
+      }).join("");
+      return `<div class="same-house-compare"><p class="same-house-compare-headline">${esc(cmp.headline)}</p>${rows}</div>`;
+    }
+
     function sameHousePanel(item) {
       const house = sameHouseOf(item);
       if (!house?.peers?.length) return "";
@@ -4125,6 +4186,9 @@
           `<div class="same-diff">${esc(diff.label)}：這則 ${esc(diff.mine)} · 卡片 ${esc(diff.theirs)}</div>`
         )).join("");
         const costChange = peerCostChangeLine(peer);
+        const split = peer.role === "affiliate"
+          ? `<button type="button" class="ghost same-split-btn" data-reject-match="${peer.post_id}" data-reject-peer="${item.post_id}">不是同一間</button><span class="same-split-hint">先只從你的列表拆開；多人這樣說，才會對大家拆開</span>`
+          : "";
         return `<div class="same-house-row">
           <div class="same-house-role">${esc(role)}${peer.offline ? " · 可能空號" : ""}</div>
           <a href="${esc(href)}" ${String(peer.source || "") === "self" ? "" : 'target="_blank" rel="noopener noreferrer"'} data-open="${peer.post_id}" title="${esc(cheapWarn || "打開原站")}">${esc(peer.title || `刊登 #${peer.post_id}`)}</a>
@@ -4133,17 +4197,10 @@
           ${notes}
           ${diffs ? `<div class="same-diff-kicker">交叉比對</div>${diffs}` : ""}
           <a class="same-house-open" href="${esc(href)}" ${String(peer.source || "") === "self" ? "" : 'target="_blank" rel="noopener noreferrer"'} data-open="${peer.post_id}">${esc(openListingCta(peer))}</a>
+          ${split}
         </div>`;
       }).join("");
-      return `<div class="same-house-panel same-house-span" id="same-house-panel-${item.post_id}" ${open ? "" : "hidden"}>${rows}</div>`;
-    }
-
-    function matchActionButtons(item, id) {
-      if (!item.match_level || item.match_verdict) return "";
-      return `
-            <button class="primary" data-confirm-match="${id}">是同一間</button>
-            <button class="ghost" data-reject-match="${id}">不是同一間</button>
-            <span class="hint">確認後主卡留總月費較低的那則；較貴的可從同屋源按鈕展開，仍可開原站</span>`;
+      return `<div class="same-house-panel same-house-span" id="same-house-panel-${item.post_id}" ${open ? "" : "hidden"}>${sameHouseCompareHtml(house)}${rows}</div>`;
     }
 
     function chineseMonthCount(token) {
@@ -4391,6 +4448,7 @@
             </h3>
             ${costChangeLine(item)}
             ${sameHouseWarn(item)}
+            ${sameHouseTeaser(item)}
             ${formatListingWhen(item) ? `<div class="when"><span class="when-label">更新</span>${esc(formatListingWhen(item))}</div>` : ""}
             <div class="rent-price">${esc(rentPriceLabel(item))}</div>
             <div class="meta">
@@ -4421,7 +4479,6 @@
               不再顯示
             </label>`}
             </div>
-            ${matchActionButtons(item, id)}
             ${item.source === "self" && !item.mine && !isGuest ? `<button class="ghost" data-self-report="${id}">檢舉</button>` : ""}
           </div>
           ${sameHousePanel(item)}
@@ -6357,15 +6414,32 @@
         renderList(listCache, lastStats);
         return;
       }
-      const rejectMatch = ev.target.dataset.rejectMatch;
+      const rejectBtn = ev.target.closest("[data-reject-match]");
+      const rejectMatch = rejectBtn?.dataset.rejectMatch;
       if (rejectMatch) {
-        await fetch(`/api/listings/${rejectMatch}/reject-match`, { method: "POST" });
-        loadList();
-        return;
-      }
-      const confirmMatch = ev.target.dataset.confirmMatch;
-      if (confirmMatch) {
-        await fetch(`/api/listings/${confirmMatch}/confirm-match`, { method: "POST" });
+        ev.preventDefault();
+        if (isGuest) {
+          remindGuest();
+          return;
+        }
+        const sure = window.confirm("先只從你的列表拆開這則。其他人仍會看到捆綁；多人這樣說，才會對大家拆開。若其實是同一間，請不要按。確定？");
+        if (!sure) return;
+        const peerId = rejectBtn.dataset.rejectPeer || "";
+        const res = await fetch(`/api/listings/${rejectMatch}/reject-match`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(peerId ? { peer_id: Number(peerId) } : {}),
+        });
+        const data = await res.json().catch(() => ({}));
+        const note = data.error || (data.promoted
+          ? "已拆開。多人這樣說，現在大家的列表都分開了。"
+          : "已從你的列表拆開。其他人仍可能看到捆綁。");
+        if ($("listMeta")) {
+          $("listMeta").hidden = false;
+          $("listMeta").textContent = note;
+        }
+        if ($("saveMsg")) $("saveMsg").textContent = note;
+        if (!res.ok) return;
         loadList();
         return;
       }

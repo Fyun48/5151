@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  compareHouseGroup,
+  compareHouseHeadline,
   compareListingDiffs,
   compareListingNotes,
   costChangePayload,
@@ -89,10 +91,37 @@ test("same-house bundle keeps lowest total as primary and notes the surcharge", 
   assert.equal(bundle.cheaper_gap, 5500);
   assert.equal(bundle.peers[0].role, "primary");
   assert.ok(bundle.peers[0].notes.some((note) => /便宜 5,500/.test(note)));
+  assert.match(bundle.compare.headline, /總月費差 5,500/);
   const diffs = compareListingDiffs(pricey, cheap);
   assert.ok(diffs.some((row) => row.field === "total"));
   assert.ok(diffs.some((row) => row.field === "source"));
   assert.ok(compareListingNotes(pricey, cheap).some((note) => /來源不同/.test(note)));
+});
+
+test("house group compare keeps at most 3 listings and only differing fields", () => {
+  const mid = {
+    post_id: 33,
+    title: "南港整層 中價",
+    price: "33,000元",
+    price_num: 33000,
+    extra_fee: 0,
+    extra_fees: [],
+    source: "sinyi",
+    source_label: "信義",
+    floor_name: "5F/12F",
+    area_name: "20坪",
+    layout: "2房1廳",
+  };
+  const extra = { ...mid, post_id: 44, title: "第四則", price_num: 40000, price: "40,000元" };
+  const group = compareHouseGroup([cheap, pricey, mid, extra]);
+  assert.equal(group.count, 3);
+  assert.deepEqual(group.ids, [11, 44, 22]);
+  assert.match(group.headline, /3 則屋源/);
+  assert.match(group.headline, /591最便宜/);
+  assert.ok(group.rows.some((row) => row.field === "total"));
+  assert.ok(group.rows.some((row) => row.field === "source"));
+  assert.equal(group.rows.some((row) => row.field === "floor"), false);
+  assert.match(compareHouseHeadline([cheap, pricey]), /總月費差 5,500/);
 });
 
 test("preferPrimaryListing still prefers lower total monthly cost", () => {

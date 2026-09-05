@@ -373,13 +373,13 @@ test("product name is 吉比租房物件追蹤 without v2 開發版 copy", () =>
   assert.equal(html.includes("v2 開發版"), false);
   assert.equal(html.includes("v3 開發版"), false);
   assert.equal(html.includes("與線上版分開的資料庫"), false);
-  assert.match(html, /ver\. 3\.43/);
+  assert.match(html, /ver\. 3\.44/);
   assert.doesNotMatch(html, /<h1>[^<]*v3/i);
   assert.match(login, /<h1>吉比租房物件追蹤<\/h1>/);
   assert.equal(login.includes("v2 開發版"), false);
   assert.equal(login.includes("v3 開發版"), false);
   assert.equal(login.includes("資料與線上版分開"), false);
-  assert.match(login, /ver\. 3\.43/);
+  assert.match(login, /ver\. 3\.44/);
 });
 
 test("MRT is admin-only and guest tour is in the page", () => {
@@ -608,13 +608,18 @@ test("self listing form and in-site detail stay on this site", () => {
   assert.match(html, /同屋源最低總月費/);
   assert.match(html, /先別打這則/);
   assert.match(html, /打開原站/);
-  assert.match(html, /確認後主卡留總月費較低的那則/);
+  assert.doesNotMatch(html, /data-confirm-match/);
+  assert.doesNotMatch(html, />是同一間</);
+  assert.match(html, /不是同一間/);
+  assert.match(html, /先只從你的列表拆開/);
   assert.match(html, /function sameHouseOf\(/);
+  assert.match(html, /function sameHouseCompareHtml\(/);
   assert.match(html, /另有較便宜/);
   assert.match(html, /交叉比對/);
   assert.match(html, /contact-defer/);
   assert.match(html, /電話／LINE 已收合/);
   assert.match(html, /peer\.diffs/);
+  assert.match(html, /same-house-compare-headline/);
 });
 
 test("filter city accordion markup is generated from shared city list", () => {
