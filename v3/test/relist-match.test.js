@@ -150,6 +150,9 @@ test("suspected peer payload includes source and confirm keeps cheaper listing",
   assert.match(dbSrc, /sameHouseBundle/);
   assert.match(dbSrc, /cost_change: costChangePayload\(row\)/);
   assert.match(dbSrc, /idx_listings_match_peer/);
+  const matchFns = dbSrc.slice(dbSrc.indexOf("export function findBySourceKey"), dbSrc.indexOf("export function setListingMatch"));
+  assert.match(matchFns, /overlayPersonal/);
+  assert.doesNotMatch(matchFns, /decorateListing\(/);
   assert.match(dbSrc, /source_label: selfSourceLabel\(source\)/);
   assert.match(dbSrc, /const primary = preferPrimaryListing\(listing, peer\)/);
   assert.match(dbSrc, /hidden = 1/);

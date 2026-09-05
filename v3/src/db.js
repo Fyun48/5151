@@ -1566,7 +1566,7 @@ export function findBySourceKey(sourceKey, excludePostId) {
       "SELECT * FROM listings WHERE source_key = ? AND post_id != ? ORDER BY last_seen_at DESC",
     )
     .all(sourceKey, excludePostId)
-    .map((row) => decorateListing(overlayPersonal(row, anyone.get(Number(row.post_id)))));
+    .map((row) => overlayPersonal(row, anyone.get(Number(row.post_id))));
 }
 
 export function listMatchCandidates(excludePostId) {
@@ -1579,7 +1579,7 @@ export function listMatchCandidates(excludePostId) {
        LIMIT 4000`,
     )
     .all(excludePostId)
-    .map((row) => decorateListing(overlayPersonal(row, anyone.get(Number(row.post_id)))));
+    .map((row) => overlayPersonal(row, anyone.get(Number(row.post_id))));
 }
 
 export function setListingMatch(postId, match) {

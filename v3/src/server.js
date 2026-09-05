@@ -1557,12 +1557,13 @@ app.listen(PORT, HOST, () => {
       .then((settings) => {
         const jobs = coveringJobsFromAllUsers({ includeSystem: true });
         if (!jobs.length) return;
+        console.log(`第一次檢查：${jobs.length} 組覆蓋條件`);
         queueGeoBackfill(settings);
         return tick("startup");
       })
       .catch((error) => {
         console.warn("第一次檢查失敗：", error.message);
       });
-  }, 8000);
+  }, 20000);
 });
 
