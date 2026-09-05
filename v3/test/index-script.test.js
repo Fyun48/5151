@@ -114,7 +114,7 @@ test("housing kind chips stay independent of 特別關注", () => {
   assert.match(html, /data-kind="suite"/);
   assert.doesNotMatch(html, /data-kind="building"/);
   assert.match(html, /kind=\$\{encodeURIComponent\(kinds\.join\(","\)\)\}/);
-  assert.match(html, /sources=\$\{encodeURIComponent\(sources\.join\(","\)\)\}/);
+  assert.match(html, /sources=\$\{encodeURIComponent\(canFilterSources\(\) \? sources\.join\(","\) : ""\)\}/);
   assert.match(html, /data-kind="shop"/);
   assert.match(html, /data-kind="warehouse"/);
   assert.match(html, /data-source="591"/);
@@ -559,11 +559,15 @@ test("panel toggle sits above scroll-top and uses expand/collapse glyphs", () =>
   assert.ok(expandIdx > 0 && topIdx > expandIdx);
   assert.match(html, /#expandPanelBtn \{[\s\S]*bottom:\s*140px/);
   assert.match(html, /#scrollTopBtn \{[\s\S]*bottom:\s*80px/);
-  assert.match(html, /#scrollTopBtn \{[\s\S]*z-index:\s*97/);
+  assert.match(html, /#scrollTopBtn \{[\s\S]*z-index:\s*119/);
   assert.match(html, /#scrollTopBtn[\s\S]*<svg /);
   assert.match(html, /#scrollTopBtn\.on/);
   assert.match(html, /function syncScrollTopBtn/);
   assert.match(html, /pageScrollY\(\) > 120/);
+  assert.match(html, /v3-scroll-top-fab/);
+  assert.match(html, /#scrollTopBtn \{[\s\S]*opacity:\s*1/);
+  assert.doesNotMatch(html, /id="scrollTopBtn"[^>]*\bhidden\b/);
+  assert.match(html, /btn\.hidden = false/);
   assert.match(html, /icon\.textContent = collapsed \? "<|>" : ">|<"/);
   assert.match(html, /id="meDeleteBtn"/);
   assert.match(html, /id="deleteAccountBtn"/);
@@ -638,6 +642,13 @@ test("self listing form and in-site detail stay on this site", () => {
   assert.match(html, /data-same-toggle/);
   assert.match(html, /費用變更/);
   assert.match(html, /同屋源最低總月費/);
+  assert.match(html, /function sameHousePeerRole/);
+  assert.match(html, /function sameHouseTitlePrefix/);
+  assert.match(html, /slice\(0, 10\)/);
+  assert.match(html, /同房源物件/);
+  assert.doesNotMatch(html, /附屬刊登/);
+  assert.match(html, /has-same-house/);
+  assert.match(html, /\.item\.has-same-house \{[\s\S]*background:\s*var\(--same-soft\)/);
   assert.match(html, /先別打這則/);
   assert.match(html, /打開原站/);
   assert.doesNotMatch(html, /data-confirm-match/);
@@ -660,4 +671,33 @@ test("filter city accordion markup is generated from shared city list", () => {
   assert.match(html, /data-city-toggle=/);
   assert.match(html, /role="button"/);
   assert.match(html, /aria-expanded=/);
+});
+
+test("source chips stay hidden unless admin or sponsor", () => {
+  const html = pub("index.html");
+  const server = readFileSync(path.join(dir, "../src/server.js"), "utf8");
+  assert.match(html, /data-source-filter/);
+  assert.match(html, /\[data-source-filter\] \{ display: none; \}/);
+  assert.match(html, /body\.role-admin \[data-source-filter\]/);
+  assert.match(html, /body\.plan-sponsor \[data-source-filter\]/);
+  assert.match(html, /function canFilterSources/);
+  assert.match(html, /meIsAdmin \|\| mePlan === "sponsor"/);
+  assert.match(html, /if \(!canFilterSources\(\)\) return;/);
+  assert.match(html, /syncSourceFilterAccess/);
+  assert.match(server, /authorizedListingSources\(req\.query\.sources/);
+});
+
+test("same-house affiliate label uses the first 10 title characters", () => {
+  const html = pub("index.html");
+  const start = html.indexOf("function sameHouseTitlePrefix");
+  const end = html.indexOf("function sameHousePanel");
+  assert.ok(start > 0 && end > start);
+  const fns = new Function(`${html.slice(start, end)}; return { sameHouseTitlePrefix, sameHousePeerRole };`)();
+  assert.equal(fns.sameHouseTitlePrefix("至善/福星*電梯可租補*台水電*漂亮採光大空間"), "至善/福星*電梯可租");
+  assert.equal(
+    fns.sameHousePeerRole({ title: "至善/福星*電梯可租補*台水電" }, { role: "affiliate" }),
+    "至善/福星*電梯可租同房源物件",
+  );
+  assert.equal(fns.sameHousePeerRole({ title: "短標" }, { role: "affiliate", offline: true }), "短標同房源物件（已下架）");
+  assert.equal(fns.sameHousePeerRole({ title: "主標" }, { role: "primary" }), "同屋源最低總月費");
 });
