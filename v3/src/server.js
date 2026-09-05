@@ -105,6 +105,7 @@ import {
 import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requireAuth, sessionCookie, verifyLogin } from "./auth.js";
 import { boxFromRoadDescription, geocodeAddress, needsListingGeo, hasWorkPoint } from "./geo.js";
 import { listingRedirectTarget } from "./openLink.js";
+import { authorizedListingSources } from "./floors.js";
 import {
   mimeForSelfPhoto,
   saveSelfPhoto,
@@ -1373,7 +1374,7 @@ app.get("/api/listings", async (req, res) => {
   const listed = listListings({
     filter: req.query.filter || "all",
     kind: req.query.kind || "",
-    sources: req.query.sources || "",
+    sources: authorizedListingSources(req.query.sources || "", readSession(req)).join(","),
     q: req.query.q || "",
     sort: req.query.sort || "newest",
     limit: Number(req.query.limit) || 500,

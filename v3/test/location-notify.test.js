@@ -9,7 +9,7 @@ import {
   parseCommunityPayload,
   preferCommunityLocation,
 } from "../src/location.js";
-import { decideNotifyDelivery, hasTrustedCoords, isGeoReady, listingIsApartment, listingIsSuite, listingIsShop, listingIsWarehouse, listingHasElevator, matchesHousingKind, matchesListingSources, normalizeListQuery, toggleHousingKind, passesGeoFilters, housingTypeLabel } from "../src/floors.js";
+import { decideNotifyDelivery, hasTrustedCoords, isGeoReady, listingIsApartment, listingIsSuite, listingIsShop, listingIsWarehouse, listingHasElevator, matchesHousingKind, matchesListingSources, authorizedListingSources, canUseListingSourceFilter, normalizeListQuery, toggleHousingKind, passesGeoFilters, housingTypeLabel } from "../src/floors.js";
 import { hasWorkPoint, needsListingGeo, commuteWorkJobs } from "../src/geo.js";
 
 test("extracts the house-number address from a community page line", () => {
@@ -204,4 +204,10 @@ test("housing kind filters can combine with 特別關注", () => {
   assert.equal(matchesHousingKind({ title: "電梯大樓", kind_name: "整層住家", tags: ["電梯大樓"] }, "elevator,apartment"), true);
   assert.equal(matchesListingSources({ source: "sinyi" }, "591,sinyi"), true);
   assert.equal(matchesListingSources({ source: "housefun" }, "591"), false);
+  assert.equal(canUseListingSourceFilter({ role: "admin", plan: "free" }), true);
+  assert.equal(canUseListingSourceFilter({ role: "member", plan: "sponsor" }), true);
+  assert.equal(canUseListingSourceFilter({ role: "member", plan: "free" }), false);
+  assert.deepEqual(authorizedListingSources("591,sinyi", { role: "member", plan: "free" }), []);
+  assert.deepEqual(authorizedListingSources("591,sinyi", { role: "admin" }), ["591", "sinyi"]);
+  assert.deepEqual(authorizedListingSources("591,sinyi", { plan: "sponsor" }), ["591", "sinyi"]);
 });
