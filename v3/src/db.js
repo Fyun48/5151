@@ -1578,6 +1578,15 @@ function attachSameHouseRoles(rows, voteUserId) {
     row.same_house_primary_id = primaryId;
     row.same_house_primary_offline = Number(primaryRow.offline) === 1;
   }
+  const standins = new Map();
+  for (const row of list) {
+    if (row.same_house_role !== "affiliate" || !row.same_house_primary_offline) continue;
+    if (Number(row.offline) === 1) continue;
+    const pid = Number(row.same_house_primary_id) || 0;
+    const prev = standins.get(pid);
+    standins.set(pid, prev ? preferPrimaryListing(prev, row) : row);
+  }
+  for (const row of standins.values()) row.same_house_live_standin = true;
   return list;
 }
 

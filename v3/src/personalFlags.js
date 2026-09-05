@@ -293,7 +293,9 @@ export function listingIsMainListAffiliate(row, filter) {
   if (filter === "hidden") return false;
   if (row?.same_house_split) return false;
   if (row?.same_house_role !== "affiliate") return false;
-  if (row?.same_house_primary_offline && Number(row.offline) !== 1) return false;
+  if (row?.same_house_primary_offline && Number(row.offline) !== 1) {
+    return row?.same_house_live_standin !== true;
+  }
   return true;
 }
 

@@ -80,13 +80,15 @@ test("main list hides cheaper-house affiliates except hidden filter or personal 
   const affiliate = { same_house_role: "affiliate", hidden: 0, offline: 0, match_verdict: "" };
   const split = { ...affiliate, same_house_split: true };
   const liveWhilePrimaryGone = { ...affiliate, same_house_primary_offline: true, offline: 0 };
+  const liveStandin = { ...liveWhilePrimaryGone, same_house_live_standin: true };
   assert.equal(listingIsMainListAffiliate(affiliate, "all"), true);
   assert.equal(listingMatchesListFilter(affiliate, "all"), false);
   assert.equal(listingMatchesListFilter(affiliate, "guest"), false);
   assert.equal(listingMatchesListFilter(affiliate, "hidden"), false);
   assert.equal(listingIsMainListAffiliate(split, "all"), false);
   assert.equal(listingMatchesListFilter({ ...split, match_level: "high" }, "all"), true);
-  assert.equal(listingIsMainListAffiliate(liveWhilePrimaryGone, "all"), false);
+  assert.equal(listingIsMainListAffiliate(liveWhilePrimaryGone, "all"), true);
+  assert.equal(listingIsMainListAffiliate(liveStandin, "all"), false);
 });
 
 test("confirmed same-house duplicates leave the suspected filter", () => {
