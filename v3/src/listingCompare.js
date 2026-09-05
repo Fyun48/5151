@@ -215,8 +215,8 @@ export function sameHouseBundle(listing, peers = []) {
       return {
         ...pub,
         role: Number(row.post_id) === primaryId ? "primary" : "affiliate",
-        diffs: compareListingDiffs(listing, row),
-        notes: compareListingNotes(listing, row),
+        diffs: compareListingDiffs(row, listing),
+        notes: compareListingNotes(row, listing),
       };
     }),
   };
