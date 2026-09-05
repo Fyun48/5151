@@ -648,7 +648,7 @@ test("self listing form and in-site detail stay on this site", () => {
   assert.match(html, /同房源物件/);
   assert.doesNotMatch(html, /附屬刊登/);
   assert.match(html, /has-same-house/);
-  assert.match(html, /\.item\.has-same-house \{[\s\S]*background:\s*var\(--same-soft\)/);
+  assert.match(html, /\.item\.has-same-house,[\s\S]*\.item:has\(\.same-house-panel\) \{[\s\S]*background:\s*var\(--same-soft\)/);
   assert.match(html, /先別打這則/);
   assert.match(html, /打開原站/);
   assert.doesNotMatch(html, /data-confirm-match/);
