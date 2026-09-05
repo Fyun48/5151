@@ -1,4 +1,5 @@
 import { extraMonthlyAmount, listingCompareCost, rentAmount } from "./listingCost.js";
+import { unhangLog } from "./debugUnhang.js";
 
 export function streetKey(address) {
   const text = String(address || "")
@@ -111,13 +112,52 @@ export function scoreMatch(incoming, previous) {
 }
 
 export function bestMatch(incoming, candidates) {
+  // #region agent log
+  const __t0 = Date.now();
+  let __scored = 0;
+  // #endregion
   let medium = null;
   for (const previous of candidates || []) {
     const hit = scoreMatch(incoming, previous);
+    // #region agent log
+    __scored += 1;
+    // #endregion
     if (!hit) continue;
-    if (hit.level === "high") return { ...hit, listing: previous };
+    if (hit.level === "high") {
+      // #region agent log
+      unhangLog({
+        hypothesisId: "A",
+        location: "match.js:bestMatch",
+        message: "bestMatch",
+        data: {
+          incomingPostId: Number(incoming?.post_id) || 0,
+          candidateCount: (candidates || []).length,
+          scored: __scored,
+          level: "high",
+          peerPostId: Number(previous?.post_id) || 0,
+          ms: Date.now() - __t0,
+        },
+      });
+      // #endregion
+      return { ...hit, listing: previous };
+    }
     if (!medium) medium = { ...hit, listing: previous };
   }
+  // #region agent log
+  unhangLog({
+    hypothesisId: "A",
+    location: "match.js:bestMatch",
+    message: "bestMatch",
+    data: {
+      incomingPostId: Number(incoming?.post_id) || 0,
+      candidateCount: (candidates || []).length,
+      scored: __scored,
+      level: medium?.level || null,
+      peerPostId: Number(medium?.listing?.post_id) || 0,
+      ms: Date.now() - __t0,
+    },
+  });
+  // #endregion
   return medium;
 }
 

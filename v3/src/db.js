@@ -160,6 +160,7 @@ import {
 } from "./sponsorLinks.js";
 import { adminSiteAdsView, normalizeSiteAds, publicSiteAds } from "./siteAds.js";
 import { adminBroadcastsView, normalizeBroadcasts, publicBroadcasts } from "./broadcasts.js";
+import { unhangAgg, unhangLog } from "./debugUnhang.js";
 
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data-v3");
 mkdirSync(DATA_DIR, { recursive: true });
@@ -1459,6 +1460,11 @@ function decorateSameHousePeer(raw) {
 function loadSameHousePeers(row) {
   const selfId = Number(row?.post_id) || 0;
   if (!selfId) return [];
+  // #region agent log
+  const __t0 = Date.now();
+  let __queries = 0;
+  let __sqlRows = 0;
+  // #endregion
   const seed = new Set([selfId, Number(row.match_post_id) || 0].filter(Boolean));
   const found = new Map();
   for (let hop = 0; hop < 2 && seed.size; hop += 1) {
@@ -1474,6 +1480,10 @@ function loadSameHousePeers(row) {
        WHERE post_id IN (${placeholders}) OR match_post_id IN (${placeholders})
        LIMIT 8`,
     ).all(...ids, ...ids);
+    // #region agent log
+    __queries += 1;
+    __sqlRows += rows.length;
+    // #endregion
     for (const item of rows) {
       const id = Number(item.post_id);
       if (!id || found.has(id)) continue;
@@ -1482,20 +1492,40 @@ function loadSameHousePeers(row) {
       if (peer && !found.has(peer)) seed.add(peer);
     }
   }
-  return [...found.values()]
+  const peers = [...found.values()]
     .filter((item) => Number(item.post_id) !== selfId)
     .map(decorateSameHousePeer);
+  // #region agent log
+  unhangAgg("loadSameHousePeers", { hypothesisId: "B", location: "db.js:loadSameHousePeers", message: "loadSameHousePeers-agg" }, {
+    ms: Date.now() - __t0,
+    selfId,
+    peerCount: peers.length,
+    queries: __queries,
+    sqlRows: __sqlRows,
+  }, { every: 40, slowMs: 20 });
+  // #endregion
+  return peers;
 }
 
 function decorateListing(row, settings, userId) {
   if (!row) return row;
+  // #region agent log
+  const __t0 = Date.now();
+  const __hadSettings = Boolean(settings);
+  // #endregion
   settings = settings || getSettings();
   row = applyCachedCoords(row, settings);
   const commute = Number.isFinite(Number(row.route_km)) ? Number(row.route_km) : null;
   const commuteKm = commute == null ? null : Math.round(commute * 10) / 10;
   const commuteMode = normalizeCommuteMode(settings.commuteMode);
   const matchPostId = Number(row.match_post_id) || 0;
+  // #region agent log
+  const __tPeers = Date.now();
+  // #endregion
   const sameHousePeers = loadSameHousePeers(row);
+  // #region agent log
+  const __peersMs = Date.now() - __tPeers;
+  // #endregion
   const matchPeerRaw = sameHousePeers.find((item) => Number(item.post_id) === matchPostId) || sameHousePeers[0] || null;
   const matchPeer = matchPeerRaw;
   const source = String(row.source || "591") || "591";
@@ -1515,7 +1545,19 @@ function decorateListing(row, settings, userId) {
     source,
     source_label: sourceLabel,
   };
-  return {
+  // #region agent log
+  const __tBundle = Date.now();
+  // #endregion
+  const same_house = (row.match_verdict === "no" || Number(row.match_rejected) === 1)
+    ? null
+    : sameHouseBundle(
+      decoratedSelf,
+      sameHousePeers.filter((peer) => peer.match_verdict !== "no"),
+    );
+  // #region agent log
+  const __bundleMs = Date.now() - __tBundle;
+  // #endregion
+  const out = {
     ...publicRow,
     extra_fees: extraFees,
     has_elevator: listingHasElevator(row),
@@ -1526,12 +1568,7 @@ function decorateListing(row, settings, userId) {
     commute_min_pm: Number.isFinite(Number(row.rush_pm_min)) && Number(row.rush_pm_min) > 0 ? Math.round(Number(row.rush_pm_min)) : null,
     district: districtNameFromListing(row),
     match_peer: matchPeer || null,
-    same_house: (row.match_verdict === "no" || Number(row.match_rejected) === 1)
-      ? null
-      : sameHouseBundle(
-        decoratedSelf,
-        sameHousePeers.filter((peer) => peer.match_verdict !== "no"),
-      ),
+    same_house,
     cost_change: costChangePayload(row),
     source,
     source_label: sourceLabel,
@@ -1541,6 +1578,17 @@ function decorateListing(row, settings, userId) {
     ...fit,
     ...mrtFields(row, settings),
   };
+  // #region agent log
+  unhangAgg("decorateListing", { hypothesisId: "B", location: "db.js:decorateListing", message: "decorateListing-agg" }, {
+    ms: Date.now() - __t0,
+    peersMs: __peersMs,
+    bundleMs: __bundleMs,
+    peerCount: sameHousePeers.length,
+    hadSettings: __hadSettings,
+    postId: Number(row.post_id) || 0,
+  }, { every: 25, slowMs: 25 });
+  // #endregion
+  return out;
 }
 
 function resolveUserId(userId) {
@@ -1553,33 +1601,103 @@ function withPersonal(row, userId) {
 }
 
 export function getListing(postId, userId) {
+  // #region agent log
+  const __t0 = Date.now();
+  // #endregion
   const row = db.prepare("SELECT * FROM listings WHERE post_id = ?").get(postId);
   if (!row) return row;
   const uid = resolveUserId(userId);
-  return decorateListing(withPersonal(row, uid), getSettings(uid), uid);
+  // #region agent log
+  const __tSet = Date.now();
+  // #endregion
+  const settings = getSettings(uid);
+  // #region agent log
+  const __setMs = Date.now() - __tSet;
+  const __tDec = Date.now();
+  // #endregion
+  const out = decorateListing(withPersonal(row, uid), settings, uid);
+  // #region agent log
+  unhangAgg("getListing", { hypothesisId: "B", location: "db.js:getListing", message: "getListing-agg" }, {
+    ms: Date.now() - __t0,
+    settingsMs: __setMs,
+    decorateMs: Date.now() - __tDec,
+    postId: Number(postId) || 0,
+    uid,
+  }, { every: 20, slowMs: 30 });
+  // #endregion
+  return out;
 }
 
 export function findBySourceKey(sourceKey, excludePostId) {
+  // #region agent log
+  const __t0 = Date.now();
+  // #endregion
   const anyone = loadAnyoneFlagMap(db);
-  return db
+  // #region agent log
+  const __flagMs = Date.now() - __t0;
+  const __tSql = Date.now();
+  // #endregion
+  const out = db
     .prepare(
       "SELECT * FROM listings WHERE source_key = ? AND post_id != ? ORDER BY last_seen_at DESC",
     )
     .all(sourceKey, excludePostId)
     .map((row) => overlayPersonal(row, anyone.get(Number(row.post_id))));
+  // #region agent log
+  unhangLog({
+    hypothesisId: "E",
+    location: "db.js:findBySourceKey",
+    message: "findBySourceKey",
+    data: {
+      excludePostId: Number(excludePostId) || 0,
+      rowCount: out.length,
+      flagMs: __flagMs,
+      sqlMs: Date.now() - __tSql,
+      ms: Date.now() - __t0,
+    },
+  });
+  // #endregion
+  return out;
 }
 
 export function listMatchCandidates(excludePostId) {
+  // #region agent log
+  const __t0 = Date.now();
+  // #endregion
   const anyone = loadAnyoneFlagMap(db);
-  return db
+  // #region agent log
+  const __flagMs = Date.now() - __t0;
+  const __tSql = Date.now();
+  // #endregion
+  const rows = db
     .prepare(
       `SELECT * FROM listings
        WHERE post_id != ?
        ORDER BY IFNULL(offline, 0) DESC, hidden DESC, viewed DESC, last_seen_at DESC
        LIMIT 4000`,
     )
-    .all(excludePostId)
-    .map((row) => overlayPersonal(row, anyone.get(Number(row.post_id))));
+    .all(excludePostId);
+  // #region agent log
+  const __sqlMs = Date.now() - __tSql;
+  const __tMap = Date.now();
+  // #endregion
+  const out = rows.map((row) => overlayPersonal(row, anyone.get(Number(row.post_id))));
+  // #region agent log
+  unhangLog({
+    hypothesisId: "A",
+    location: "db.js:listMatchCandidates",
+    message: "listMatchCandidates",
+    data: {
+      excludePostId: Number(excludePostId) || 0,
+      rowCount: out.length,
+      flagMs: __flagMs,
+      sqlMs: __sqlMs,
+      overlayMs: Date.now() - __tMap,
+      ms: Date.now() - __t0,
+    },
+  });
+  // #endregion
+  return out;
 }
 
 export function setListingMatch(postId, match) {
@@ -1642,6 +1760,9 @@ export function coveringJobsFromAllUsers(opts = {}) {
 }
 
 export function coveringPlan({ now = Date.now(), includeSystem = true } = {}) {
+  // #region agent log
+  const __t0 = Date.now();
+  // #endregion
   const covers = [];
   const includedUserIds = [];
   const postponedUserIds = [];
@@ -1665,7 +1786,23 @@ export function coveringPlan({ now = Date.now(), includeSystem = true } = {}) {
     includedUserIds.push(id);
   }
   const jobs = covers.length ? coveringJobsFromMembers(covers, { excludeRooftop: false }) : [];
-  return { jobs, includedUserIds, postponedUserIds, includeSystem };
+  const plan = { jobs, includedUserIds, postponedUserIds, includeSystem };
+  // #region agent log
+  unhangLog({
+    hypothesisId: "C",
+    location: "db.js:coveringPlan",
+    message: "coveringPlan",
+    data: {
+      jobCount: jobs.length,
+      includedUsers: includedUserIds.length,
+      postponedUsers: postponedUserIds.length,
+      includeSystem,
+      listingCount: listingCount(),
+      ms: Date.now() - __t0,
+    },
+  });
+  // #endregion
+  return plan;
 }
 
 export function armMemberExternalFetch(userId, { from = Date.now() } = {}) {
@@ -2263,6 +2400,10 @@ export function markEventNotified(id) {
 }
 
 export function enqueueListingEvent(listing, event) {
+  // #region agent log
+  const __t0 = Date.now();
+  let __decorated = 0;
+  // #endregion
   const stamp = event?.created_at || new Date().toISOString();
   const payload = {
     post_id: listing.post_id,
@@ -2277,6 +2418,9 @@ export function enqueueListingEvent(listing, event) {
   for (const userId of listUserIds()) {
     const settings = getSettings(userId);
     const row = decorateListing(overlayPersonal(listing, loadFlags(db, userId, listing.post_id)), settings);
+    // #region agent log
+    __decorated += 1;
+    // #endregion
     const watched = Number(row.watched) === 1;
     if (!watched && event.type === "new" && !listingInMemberScope(row, settings)) continue;
     if (!shouldDeliverNotify(settings, row, event, {
@@ -2295,6 +2439,20 @@ export function enqueueListingEvent(listing, event) {
     if (last && isSameNotifyDetail(last.detail, payload.detail)) continue;
     ids.push(addUserEvent({ ...payload, user_id: userId }));
   }
+  // #region agent log
+  unhangLog({
+    hypothesisId: "B",
+    location: "db.js:enqueueListingEvent",
+    message: "enqueueListingEvent",
+    data: {
+      postId: Number(listing?.post_id) || 0,
+      type: event?.type || "",
+      decorated: __decorated,
+      queued: ids.length,
+      ms: Date.now() - __t0,
+    },
+  });
+  // #endregion
   return ids;
 }
 
@@ -2631,6 +2789,9 @@ export function listListings({
   userId,
   settings: settingsOverride,
 } = {}) {
+  // #region agent log
+  const __t0 = Date.now();
+  // #endregion
   const uid = resolveUserId(userId);
   ({ filter, kind } = normalizeListQuery(filter, kind));
   const clauses = [];
@@ -2705,9 +2866,18 @@ export function listListings({
     params.push(like, like, like, uid, like);
   }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  // #region agent log
+  const __tSql = Date.now();
+  // #endregion
   const raw = db.prepare(`SELECT * FROM listings ${where}`).all(...params);
+  // #region agent log
+  const __sqlMs = Date.now() - __tSql;
+  // #endregion
   const settings = settingsOverride || getSettings(uid);
   const flagMap = loadFlagMap(db, uid);
+  // #region agent log
+  const __tDec = Date.now();
+  // #endregion
   let rows =
     filter === "offline" || filter === "suspected"
       ? overlayRowsPersonal(raw, flagMap)
@@ -2734,7 +2904,27 @@ export function listListings({
   rows = sortListingsRows(rows, sort, { filter, settings });
 
   const totalMatched = rows.length;
-  return { listings: rows.slice(0, limit), totalMatched };
+  const listings = rows.slice(0, limit);
+  // #region agent log
+  unhangLog({
+    hypothesisId: "D",
+    location: "db.js:listListings",
+    message: "listListings",
+    data: {
+      filter,
+      kind: String(kind || ""),
+      uid,
+      rawCount: raw.length,
+      decorated: rows.length,
+      returned: listings.length,
+      limit,
+      sqlMs: __sqlMs,
+      decorateMs: Date.now() - __tDec,
+      ms: Date.now() - __t0,
+    },
+  });
+  // #endregion
+  return { listings, totalMatched };
 }
 
 export function sourceHistory(sourceKey, userId) {
@@ -2844,6 +3034,9 @@ export function setCommunityCache(community) {
 }
 
 export function stats(searchKeys, userId, settingsOverride) {
+  // #region agent log
+  const __t0 = Date.now();
+  // #endregion
   const uid = resolveUserId(userId);
   const settings = settingsOverride || getSettings(uid);
   const clauses = [];
@@ -2863,7 +3056,7 @@ export function stats(searchKeys, userId, settingsOverride) {
   const base = attrRows.filter((row) => !row.hidden && !isPendingOffline(row) && !isConfirmedOffline(row) && row.match_verdict !== "yes");
   const browse = attrRows.filter(countsTowardAllTotal);
   const geoRows = applyListingFilter(overlaid, settings).filter((row) => !row.hidden && !isPendingOffline(row) && !isConfirmedOffline(row) && row.match_verdict !== "yes" && !row.watched);
-  return {
+  const out = {
     total: browse.length,
     unseen: browse.filter((row) => !row.viewed).length,
     watched: base.filter((row) => row.watched).length,
@@ -2890,6 +3083,23 @@ export function stats(searchKeys, userId, settingsOverride) {
     }).length,
     dbTotal: listingCount(),
   };
+  // #region agent log
+  unhangLog({
+    hypothesisId: "D",
+    location: "db.js:stats",
+    message: "stats",
+    data: {
+      uid,
+      rawCount: raw.length,
+      overlaid: overlaid.length,
+      browse: browse.length,
+      stored: out.stored,
+      dbTotal: out.dbTotal,
+      ms: Date.now() - __t0,
+    },
+  });
+  // #endregion
+  return out;
 }
 
 export function listingCount() {

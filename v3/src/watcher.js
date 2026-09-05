@@ -55,6 +55,7 @@ import { fetchRoadRoutes, fetchRushRoadRoutes } from "./route.js";
 import { fetchMrtAccess } from "./mrt.js";
 import { googleDirectionsAllowed } from "./mapsBilling.js";
 import { bestMatch } from "./match.js";
+import { setUnhangPhase, unhangLog } from "./debugUnhang.js";
 import { classifyExistingUpdate, eventLabel, listingLastEvent, notify, shouldDockNotify, shouldMailNotify, shouldNotify, shouldPushNotify, shouldWebhookNotify } from "./notify.js";
 import { feeChangeDetail, feeFieldsChanged, incomingHasFeePayload, isCostChangeType } from "./listingCompare.js";
 import { rentAmount } from "./listingCost.js";
@@ -138,6 +139,9 @@ function costPatchFromClassify({ type, detail, cost_change_type }, incoming, exi
 }
 
 function classify(incoming, existing) {
+  // #region agent log
+  const __t0 = Date.now();
+  // #endregion
   if (!existing) {
     const siblings = findBySourceKey(incoming.source_key, incoming.post_id);
     if (siblings.length) {
@@ -145,18 +149,67 @@ function classify(incoming, existing) {
       const detail = prev.price && prev.price !== incoming.price
         ? `指紋相同，先前 #${prev.post_id}，${prev.price} → ${incoming.price}`
         : `指紋相同，先前 #${prev.post_id}`;
+      // #region agent log
+      unhangLog({
+        hypothesisId: "A",
+        location: "watcher.js:classify",
+        message: "classify",
+        data: {
+          path: "siblings",
+          incomingPostId: Number(incoming.post_id) || 0,
+          siblingCount: siblings.length,
+          ms: Date.now() - __t0,
+        },
+      });
+      // #endregion
       return { type: "same_source", detail, prev, level: "high" };
     }
     const hit = bestMatch(incoming, listMatchCandidates(incoming.post_id));
     if (hit?.listing) {
       const prev = hit.listing;
       const priceBit = prev.price && prev.price !== incoming.price ? `，${prev.price} → ${incoming.price}` : "";
+      // #region agent log
+      unhangLog({
+        hypothesisId: "A",
+        location: "watcher.js:classify",
+        message: "classify",
+        data: {
+          path: "bestMatch",
+          incomingPostId: Number(incoming.post_id) || 0,
+          level: hit.level || "",
+          ms: Date.now() - __t0,
+        },
+      });
+      // #endregion
       return { type: "same_source", detail: `${hit.detail}${priceBit}`, prev, level: hit.level };
     }
+    // #region agent log
+    unhangLog({
+      hypothesisId: "A",
+      location: "watcher.js:classify",
+      message: "classify",
+      data: { path: "new", incomingPostId: Number(incoming.post_id) || 0, ms: Date.now() - __t0 },
+    });
+    // #endregion
     return { type: "new", detail: incoming.price || "" };
   }
 
   const change = classifyExistingUpdate(incoming, existing);
+  // #region agent log
+  const __ms = Date.now() - __t0;
+  if (__ms >= 15) {
+    unhangLog({
+      hypothesisId: "B",
+      location: "watcher.js:classify",
+      message: "classify",
+      data: {
+        path: existing.offline ? "existing-offline" : "existing",
+        incomingPostId: Number(incoming.post_id) || 0,
+        ms: __ms,
+      },
+    });
+  }
+  // #endregion
   if (existing.offline) {
     return { ...change, prev: existing, level: "high" };
   }
@@ -428,6 +481,10 @@ export function isWatchIntervalPending(lastCheckedAt, intervalMinutes, now = Dat
 }
 
 export async function runWatch(options = {}) {
+  // #region agent log
+  const __tRun = Date.now();
+  setUnhangPhase("runWatch:enter", { listingCount: listingCount() });
+  // #endregion
   const want591 = isCrawlSourceEnabled("591");
   const wantHb = isCrawlSourceEnabled("hbhousing");
   const wantSinyi = isCrawlSourceEnabled("sinyi");
@@ -435,6 +492,9 @@ export async function runWatch(options = {}) {
   const wantDd = isCrawlSourceEnabled("ddroom");
   const wantHf = isCrawlSourceEnabled("housefun");
   if (!want591 && !wantHb && !wantSinyi && !wantHp && !wantDd && !wantHf) {
+    // #region agent log
+    setUnhangPhase("runWatch:skip-sources");
+    // #endregion
     return {
       checked_at: nowIso(),
       searches: [],
@@ -459,6 +519,9 @@ export async function runWatch(options = {}) {
     throw new Error("請先選行政區或貼上至少一組 591 搜尋網址");
   }
   replaceCrawlCovers(db, jobs);
+  // #region agent log
+  setUnhangPhase("runWatch:fetch", { jobCount: jobs.length, listingCount: listingCount() });
+  // #endregion
 
   const isBaseline = settings.hasBaseline !== true && listingCount() === 0;
   const pages = CRAWL_PAGES_591;
@@ -544,6 +607,9 @@ export async function runWatch(options = {}) {
     if (want591) {
       throw new Error(errors.join("；") || "591 搜尋沒有回傳資料");
     }
+    // #region agent log
+    setUnhangPhase("runWatch:skip-portals", { errors: errors.length, ms: Date.now() - __tRun });
+    // #endregion
     return {
       checked_at: nowIso(),
       searches: [],
@@ -557,6 +623,20 @@ export async function runWatch(options = {}) {
   const seen = new Set();
   const freshIds = [];
   const searchReports = [];
+  // #region agent log
+  const __incoming = collected.reduce((n, batch) => n + (batch.listings?.length || 0), 0);
+  setUnhangPhase("runWatch:classify", {
+    batches: collected.length,
+    incoming: __incoming,
+    jobCount: jobs.length,
+    listingCount: listingCount(),
+    fetchMs: Date.now() - __tRun,
+  });
+  let __new = 0;
+  let __exist = 0;
+  let __getMs = 0;
+  let __classifyMs = 0;
+  // #endregion
 
   for (const batch of collected) {
     const isSearchBaseline = listingCountForSearch(batch.searchUrl) === 0;
@@ -572,8 +652,39 @@ export async function runWatch(options = {}) {
       if (seen.has(listing.post_id)) continue;
       seen.add(listing.post_id);
 
+      // #region agent log
+      const __tGet = Date.now();
+      // #endregion
       const existing = getListing(listing.post_id);
+      // #region agent log
+      const __oneGet = Date.now() - __tGet;
+      __getMs += __oneGet;
+      const __tCl = Date.now();
+      // #endregion
       const { type, detail, prev, level, cost_change_type } = classify(listing, existing);
+      // #region agent log
+      const __oneCl = Date.now() - __tCl;
+      __classifyMs += __oneCl;
+      if (existing) __exist += 1;
+      else __new += 1;
+      if (__oneCl >= 30 || __oneGet >= 25 || (__new + __exist) % 10 === 0) {
+        unhangLog({
+          hypothesisId: "A",
+          location: "watcher.js:runWatch",
+          message: "runWatch-item",
+          data: {
+            postId: Number(listing.post_id) || 0,
+            existing: Boolean(existing),
+            type,
+            getMs: __oneGet,
+            classifyMs: __oneCl,
+            newCount: __new,
+            existCount: __exist,
+            listingCount: listingCount(),
+          },
+        });
+      }
+      // #endregion
       const stamp = nowIso();
       upsertListing({
         ...listing,
@@ -614,6 +725,19 @@ export async function runWatch(options = {}) {
     }
   }
 
+  // #region agent log
+  setUnhangPhase("runWatch:post-classify", {
+    seen: seen.size,
+    fresh: freshIds.length,
+    newCount: __new,
+    existCount: __exist,
+    getMs: __getMs,
+    classifyMs: __classifyMs,
+    listingCount: listingCount(),
+    ms: Date.now() - __tRun,
+  });
+  // #endregion
+
   if (needsListingGeo(settings) && freshIds.length > 0 && freshIds.length <= LIST_PAGE_SIZE) {
     await ingestListingGeoBatch(freshIds);
   }
@@ -638,7 +762,19 @@ export async function runWatch(options = {}) {
     await new Promise((resolve) => setTimeout(resolve, 400));
   }
 
+  // #region agent log
+  const __tFlush = Date.now();
+  setUnhangPhase("runWatch:flush");
+  // #endregion
   const events = options.silent ? [] : await flushPendingNotifications(settings, { silent: options.silent });
+  // #region agent log
+  unhangLog({
+    hypothesisId: "B",
+    location: "watcher.js:runWatch",
+    message: "runWatch-flush",
+    data: { eventCount: events.length, ms: Date.now() - __tFlush },
+  });
+  // #endregion
   if (settings.hasBaseline !== true) {
     saveSettings({ hasBaseline: true });
   }
@@ -649,7 +785,7 @@ export async function runWatch(options = {}) {
     at: nowIso(),
   });
 
-  return {
+  const result = {
     baseline: isBaseline,
     fetched: seen.size,
     searches: searchReports,
@@ -665,6 +801,16 @@ export async function runWatch(options = {}) {
     offline: offlineSweep,
     checked_at: nowIso(),
   };
+  // #region agent log
+  setUnhangPhase("runWatch:done", {
+    fetched: result.fetched,
+    events: events.length,
+    errors: errors.length,
+    listingCount: listingCount(),
+    ms: Date.now() - __tRun,
+  });
+  // #endregion
+  return result;
 }
 
 export async function backfillListingCoords(settings = getSettings(), { limit = LIST_PAGE_SIZE } = {}) {
