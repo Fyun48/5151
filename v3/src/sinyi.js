@@ -63,7 +63,9 @@ export function parseSinyiApiBody(body) {
 
 export function kindFromSinyiItem(item) {
   const hay = `${item?.use || ""} ${item?.type || ""} ${item?.name || ""} ${item?.layout || ""}`;
-  if (/店面|辦公|廠房|車位|土地|倉庫/.test(hay)) return "";
+  if (/倉庫|廠房/.test(hay)) return "倉庫";
+  if (/店面/.test(hay)) return "店面";
+  if (/辦公|車位|土地/.test(hay)) return "";
   if (/雅房/.test(hay)) return "雅房";
   if (/分租/.test(hay)) return "分租套房";
   if (/套房/.test(hay)) return "獨立套房";

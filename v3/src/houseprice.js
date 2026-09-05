@@ -85,7 +85,9 @@ export function kindFromHpText(text) {
   if (/分租套房/.test(hay)) return "分租套房";
   if (/獨立套房/.test(hay)) return "獨立套房";
   if (/套房/.test(hay)) return "獨立套房";
-  if (/店面|辦公|廠房|土地/.test(hay)) return "";
+  if (/倉庫|廠房/.test(hay)) return "倉庫";
+  if (/店面/.test(hay)) return "店面";
+  if (/辦公|土地/.test(hay)) return "";
   return "";
 }
 

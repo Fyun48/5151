@@ -34,14 +34,15 @@ test("好房網 city codes, gateway encode, reserved ids", () => {
   assert.equal(hfUnwrapGateway(fixture).Status, "1");
 });
 
-test("parse 好房網 SearchContent skips 店面 and keeps 整層", () => {
+test("parse 好房網 SearchContent keeps 店面 and 整層", () => {
   const parsed = parseHfApiBody(fixture);
   assert.equal(parsed.total, 188);
   assert.equal(parsed.pageCount, 19);
   assert.equal(parsed.items.length, 2);
   const shop = parsed.items.find((row) => row.id === "1992374");
-  assert.equal(kindFromHfText(`${shop.title} ${shop.layout}`), "");
-  assert.equal(normalizeHfItem(shop, { regionId: 1, sectionId: 8 }), null);
+  assert.equal(kindFromHfText(`${shop.title} ${shop.layout}`), "店面");
+  const shopRow = normalizeHfItem(shop, { regionId: 1, sectionId: 8 });
+  assert.equal(shopRow.kind_name, "店面");
   const home = normalizeHfItem(parsed.items.find((row) => row.id === "1956467"), {
     regionId: 1,
     sectionId: 8,

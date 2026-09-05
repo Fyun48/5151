@@ -189,8 +189,12 @@
     }
     .oauth-kicker { margin: 0 0 8px; color: var(--muted); font-size: 13px; line-height: 1.5; }
     .oauth-row { display: flex; flex-wrap: wrap; gap: 8px; }
-    .oauth-row a.ghost { min-height: 40px; padding: 8px 14px; font-size: 14px; text-decoration: none; display: inline-flex; align-items: center; }
-    .oauth[data-empty="1"] { display: none; }
+    .oauth-row a.ghost { min-height: 44px; padding: 8px 14px; font-size: 14px; text-decoration: none; display: inline-flex; align-items: center; }
+    .oauth-row a.ghost.is-off,
+    .oauth-row a.ghost[aria-disabled="true"] {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
   </style>
 </head>
 <body>
@@ -266,12 +270,13 @@
       <label class="hp">請不要填這個欄位<input id="regWebsite" name="website" tabindex="-1" autocomplete="off" /></label>
       <button type="submit" id="registerBtn">同意並註冊</button>
     </form>
-    <div class="oauth" id="oauthBox" data-empty="1" hidden>
+    <div class="oauth" id="oauthBox">
       <p class="oauth-kicker">或用 Google／LINE／Facebook 帶入信箱。新帳號仍須勾選上方同意，並完成開通信；已開通的帳號可直接登入。</p>
+      <p class="oauth-kicker" id="oauthHint">三顆社群鈕都會顯示；後台還沒開通的會反灰不能按。</p>
       <div class="oauth-row">
-        <a class="ghost" id="oauthGoogle" hidden href="/auth/google">Google</a>
-        <a class="ghost" id="oauthLine" hidden href="/auth/line">LINE</a>
-        <a class="ghost" id="oauthFacebook" hidden href="/auth/facebook">Facebook</a>
+        <a class="ghost is-off" id="oauthGoogle" href="/auth/google" aria-disabled="true">Google</a>
+        <a class="ghost is-off" id="oauthLine" href="/auth/line" aria-disabled="true">LINE</a>
+        <a class="ghost is-off" id="oauthFacebook" href="/auth/facebook" aria-disabled="true">Facebook</a>
       </div>
     </div>
     <form id="forgotForm" class="hidden">
@@ -293,7 +298,7 @@
     <p class="ok" id="ok"></p>
     <p class="err" id="err"></p>
     <div class="ad-slot" id="adLogin" hidden></div>
-    <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.46</span></footer>
+    <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.47</span></footer>
   </div>
   <script src="/mascot.js"></script>
   <script>
@@ -358,7 +363,16 @@
     $("tabRegister").onclick = () => setMode("register");
     $("forgotLink").onclick = () => setMode("forgot");
     $("backLogin").onclick = () => setMode("login");
+    function oauthReady(provider) {
+      const id = { google: "oauthGoogle", line: "oauthLine", facebook: "oauthFacebook" }[provider];
+      return $(id)?.getAttribute("aria-disabled") !== "true";
+    }
     function goOauth(provider) {
+      const names = { google: "Google", line: "LINE", facebook: "Facebook" };
+      if (!oauthReady(provider)) {
+        $("err").textContent = `後台尚未開通 ${names[provider] || "社群"} 登入`;
+        return;
+      }
       const register = !$("registerForm").classList.contains("hidden");
       if (register && (!$("accept").checked || !$("acceptPrivacy").checked)) {
         $("err").textContent = "請先勾選免責與個資說明，再用社群帳號註冊";
@@ -398,21 +412,35 @@
       }
       if (data.ok && !justLoggedOut && !verifyState) location.replace("/");
     }).catch(() => {});
-    fetch("/api/oauth", { cache: "no-store" }).then((r) => r.json()).then((data) => {
-      const oauth = data?.oauth || {};
-      let any = false;
+    function paintOauthButtons(oauth = {}) {
+      const names = { google: "Google", line: "LINE", facebook: "Facebook" };
+      const off = [];
       for (const [id, key] of [["oauthGoogle", "google"], ["oauthLine", "line"], ["oauthFacebook", "facebook"]]) {
         const on = Boolean(oauth[key]?.enabled && oauth[key]?.configured);
-        if ($(id)) {
-          $(id).hidden = !on;
-          if (on) any = true;
-        }
+        const el = $(id);
+        if (!el) continue;
+        el.hidden = false;
+        el.classList.toggle("is-off", !on);
+        el.setAttribute("aria-disabled", on ? "false" : "true");
+        if (!on) off.push(names[key]);
       }
       if ($("oauthBox")) {
-        $("oauthBox").hidden = !any;
-        $("oauthBox").dataset.empty = any ? "0" : "1";
+        $("oauthBox").hidden = false;
+        $("oauthBox").dataset.empty = "0";
       }
-    }).catch(() => {});
+      if ($("oauthHint")) {
+        $("oauthHint").hidden = false;
+        $("oauthHint").textContent = off.length === 3
+          ? "後台尚未開通社群登入。請先用 Email 註冊；開通後這三顆才能用。"
+          : (off.length ? `${off.join("、")} 後台尚未開通，暫時不能按。` : "可用社群帶入信箱。新帳號仍要點開通信。");
+      }
+    }
+    paintOauthButtons();
+    fetch("/api/oauth", { cache: "no-store" }).then((r) => r.json()).then((data) => {
+      paintOauthButtons(data?.oauth || {});
+    }).catch(() => {
+      paintOauthButtons();
+    });
     loadCaptcha().catch((error) => { $("err").textContent = error.message; });
     fetch("/api/disclaimer", { cache: "no-store" }).then((r) => r.json()).then((copy) => {
       if (copy?.disclaimerCheck && $("acceptDisclaimerLabel")) {

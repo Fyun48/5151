@@ -412,7 +412,7 @@
       display: inline-flex;
       position: fixed;
       right: 18px;
-      bottom: 80px;
+      bottom: 140px;
       width: 44px;
       height: 44px;
       padding: 0;
@@ -609,11 +609,52 @@
     .bulk-bar {
       display: none;
       align-items: center;
+      flex-wrap: wrap;
       gap: 8px;
       width: 100%;
       padding: 8px 0 0;
     }
     .bulk-bar.on { display: flex; }
+    .bulk-bar .compare-hint {
+      width: 100%;
+      margin: 0;
+      color: var(--muted);
+      font-size: var(--text-xs, 12px);
+      line-height: 1.4;
+    }
+    .pick-compare-body {
+      display: grid;
+      gap: 10px;
+      min-width: 0;
+    }
+    .pick-compare-cols {
+      display: grid;
+      gap: 8px;
+      overflow-x: auto;
+    }
+    .pick-compare-head {
+      display: grid;
+      grid-template-columns: repeat(var(--compare-cols, 2), minmax(120px, 1fr));
+      gap: 8px;
+    }
+    .pick-compare-card {
+      min-width: 0;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg, 10px);
+      background: var(--paper);
+    }
+    .pick-compare-card strong {
+      display: block;
+      font-size: var(--text-sm, 13px);
+      line-height: 1.4;
+    }
+    .pick-compare-card span {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: var(--text-xs, 12px);
+    }
     .item-swipe-wrap {
       position: relative;
       overflow: hidden;
@@ -1179,7 +1220,7 @@
     #scrollTopBtn {
       position: fixed;
       right: 18px;
-      bottom: 140px;
+      bottom: 80px;
       z-index: 97;
       width: 44px;
       height: 44px;
@@ -1544,7 +1585,7 @@
     #ownerFab {
       position: fixed;
       right: 18px;
-      bottom: 136px;
+      bottom: 196px;
       z-index: 118;
       min-height: 44px;
       padding: 10px 14px;
@@ -2282,10 +2323,21 @@
           <button class="chip" data-filter="offline">正在確認中的下架</button>
           </div>
           <div class="chip-row" data-chip-row="kind">
-          <button class="chip" data-kind="elevator">電梯</button>
-          <button class="chip" data-kind="apartment">公寓</button>
-          <button class="chip" data-kind="suite">套房</button>
-          <button class="chip" data-kind="whole">整層住家</button>
+          <button type="button" class="chip" data-kind="elevator">電梯</button>
+          <button type="button" class="chip" data-kind="apartment">公寓</button>
+          <button type="button" class="chip" data-kind="suite">套房</button>
+          <button type="button" class="chip" data-kind="whole">整層住家</button>
+          <button type="button" class="chip" data-kind="shop">店面</button>
+          <button type="button" class="chip" data-kind="warehouse">倉庫</button>
+          </div>
+          <div class="chip-row" data-chip-row="source">
+          <button type="button" class="chip" data-source="591">591</button>
+          <button type="button" class="chip" data-source="self">吉比本站</button>
+          <button type="button" class="chip" data-source="hbhousing">住商</button>
+          <button type="button" class="chip" data-source="sinyi">信義</button>
+          <button type="button" class="chip" data-source="houseprice">5168</button>
+          <button type="button" class="chip" data-source="ddroom">租租通</button>
+          <button type="button" class="chip" data-source="housefun">好房</button>
           </div>
           <div class="chip-row view-checks" data-chip-row="display">
             <label class="view-check"><input type="checkbox" id="excludeRooftop" checked /> 排除頂樓加蓋</label>
@@ -2302,7 +2354,9 @@
             <span id="selectedCount">已選 0 筆</span>
             <button type="button" class="ghost" id="selectPageBtn">全選本頁</button>
             <button type="button" class="ghost" id="clearSelectBtn">取消勾選</button>
+            <button type="button" class="ghost" id="compareSelectedBtn" disabled>比較（0／3）</button>
             <button type="button" class="primary" id="hideSelectedBtn">不再顯示已選</button>
+            <p class="compare-hint" id="compareHint" hidden>比較最多 3 筆，只列有差異的欄。</p>
           </div>
         </div>
         </div>
@@ -2336,6 +2390,8 @@
               <option value="apartment">公寓</option>
               <option value="suite">套房</option>
               <option value="whole">整層住家</option>
+              <option value="shop">店面</option>
+              <option value="warehouse">倉庫</option>
             </select>
           </div>
           <div class="span-all">
@@ -2801,7 +2857,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.46</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.47</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -2823,6 +2879,19 @@
   <button type="button" class="primary" id="scrollTopBtn" title="回頂" aria-label="回頂">
     <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 6.2 4.8 13.4l1.4 1.4L11 9.99V19h2V9.99l4.8 4.81 1.4-1.4z"/></svg>
   </button>
+  <div id="pickCompareOverlay" class="hub-overlay" hidden>
+    <div class="hub-backdrop" data-close-compare></div>
+    <div class="hub-panel" role="dialog" aria-modal="true" aria-labelledby="pickCompareTitle">
+      <div class="hub-head">
+        <div>
+          <h2 id="pickCompareTitle">物件比較</h2>
+          <p class="hint" style="margin:6px 0 0">最多 3 筆，只列有差異的欄。不是仲介估價。</p>
+        </div>
+        <button type="button" class="ghost" id="pickCompareClose">關閉</button>
+      </div>
+      <div class="pick-compare-body" id="pickCompareBody"></div>
+    </div>
+  </div>
   <aside id="alertDock" aria-live="polite">
     <header>
       <h2>待看更新</h2>
@@ -2882,7 +2951,8 @@
     }
     $("status").textContent = "正在載入…";
     let filter = "all";
-    let kind = "";
+    let kinds = [];
+    let sources = [];
     let sort = "newest";
     let isGuest = true;
     let guestLockClicks = 0;
@@ -3232,13 +3302,35 @@
       if (Array.isArray(saved)) viewDistricts = new Set(saved);
     } catch {}
 
+    function housingKindConflicts(a, b) {
+      if (!a || !b || a === b) return false;
+      const home = (key) => key === "suite" || key === "whole";
+      const commercial = (key) => key === "shop" || key === "warehouse";
+      if (home(a) && home(b)) return true;
+      if ((home(a) && commercial(b)) || (commercial(a) && home(b))) return true;
+      return false;
+    }
+    function toggleHousingKind(selected, next) {
+      const current = Array.isArray(selected) ? selected.slice() : [];
+      if (current.includes(next)) return current.filter((item) => item !== next);
+      return [...current.filter((item) => !housingKindConflicts(item, next)), next];
+    }
+    function syncKindChips() {
+      document.querySelectorAll("[data-kind]").forEach((b) => {
+        b.classList.toggle("on", kinds.includes(b.dataset.kind));
+      });
+    }
+    function syncSourceChips() {
+      document.querySelectorAll("[data-source]").forEach((b) => {
+        b.classList.toggle("on", sources.includes(b.dataset.source));
+      });
+    }
     function fillFloorFilters(s = settings) {
       if ($("excludeRooftop")) $("excludeRooftop").checked = s.excludeRooftop !== false;
       if ($("excludeLowFloors")) $("excludeLowFloors").checked = s.excludeLowFloors !== false;
-      if (s.wholeFloorOnly === true) kind = "whole";
-      document.querySelectorAll("[data-kind]").forEach((b) => {
-        b.classList.toggle("on", b.dataset.kind === kind);
-      });
+      if (s.wholeFloorOnly === true && !kinds.length) kinds = ["whole"];
+      syncKindChips();
+      syncSourceChips();
     }
 
     function isWholeFloorHome(kindName) {
@@ -3314,8 +3406,8 @@
 
     function applyViewFilters(items) {
       let out = items;
-      if (kind === "whole") {
-        out = out.filter((item) => isWholeFloorHome(item.kind_name));
+      if (kinds.length) {
+        out = out.filter((item) => guestKindMatch(item, kinds));
       }
       if ($("excludeLowFloors")?.checked) {
         out = out.filter((item) => !isAtOrBelowFirstFloor(item.floor_name));
@@ -3380,14 +3472,29 @@
       return applyViewFilters(applyDistrictView(items));
     }
 
-    function guestKindMatch(item, key) {
-      if (!key) return true;
+    function guestKindMatch(item, keys) {
+      const list = Array.isArray(keys) ? keys.filter(Boolean) : (keys ? [keys] : []);
+      if (!list.length) return true;
       const hay = `${item.title || ""} ${item.kind_name || ""} ${item.address || ""}`;
-      if (key === "elevator") return /有電梯|電梯大樓|電梯公寓/.test(hay) && !/無電梯/.test(hay);
-      if (key === "apartment") return /公寓/.test(hay) && !/電梯大樓/.test(hay);
-      if (key === "suite") return /套房|雅房/.test(String(item.kind_name || ""));
-      if (key === "whole") return isWholeFloorHome(item.kind_name);
+      const matchKey = (key) => {
+        if (key === "elevator") return /有電梯|電梯大樓|電梯公寓/.test(hay) && !/無電梯/.test(hay);
+        if (key === "apartment") return /公寓/.test(hay) && !/電梯大樓/.test(hay);
+        if (key === "suite") return /套房|雅房/.test(String(item.kind_name || ""));
+        if (key === "whole") return isWholeFloorHome(item.kind_name);
+        if (key === "shop") return /店面|店鋪/.test(`${item.kind_name || ""} ${item.title || ""}`);
+        if (key === "warehouse") return /倉庫|廠房|倉儲/.test(`${item.kind_name || ""} ${item.title || ""}`);
+        return true;
+      };
+      const building = list.filter((key) => key === "elevator" || key === "apartment");
+      const dwelling = list.filter((key) => ["suite", "whole", "shop", "warehouse"].includes(key));
+      if (building.length && !building.some(matchKey)) return false;
+      if (dwelling.length && !dwelling.some(matchKey)) return false;
       return true;
+    }
+    function guestSourceMatch(item) {
+      if (!sources.length) return true;
+      const src = String(item.source || "591").trim() || "591";
+      return sources.includes(src);
     }
 
     function guestFilterMatch(item, key) {
@@ -3412,7 +3519,7 @@
     }
 
     function applyGuestQuery(items) {
-      let out = (items || []).filter((item) => guestFilterMatch(item, filter) && guestKindMatch(item, kind));
+      let out = (items || []).filter((item) => guestFilterMatch(item, filter) && guestKindMatch(item, kinds) && guestSourceMatch(item));
       const q = ($("q")?.value || "").trim().toLowerCase();
       if (q) {
         out = out.filter((item) => {
@@ -4350,6 +4457,121 @@
       const n = selected.size;
       $("bulkBar").classList.toggle("on", n > 0);
       $("selectedCount").textContent = `已選 ${n} 筆`;
+      const compareBtn = $("compareSelectedBtn");
+      const hint = $("compareHint");
+      if (compareBtn) {
+        compareBtn.textContent = `比較（${Math.min(n, 3)}／3）`;
+        compareBtn.disabled = n < 2 || n > 3;
+      }
+      if (hint) {
+        if (n === 1) {
+          hint.hidden = false;
+          hint.textContent = "再勾 1～2 筆才能比較（最多 3 筆）。";
+        } else if (n > 3) {
+          hint.hidden = false;
+          hint.textContent = "比較最多 3 筆。請先取消到 3 筆以內，或改用「不再顯示已選」。";
+        } else {
+          hint.hidden = n < 2;
+          hint.textContent = "比較最多 3 筆，只列有差異的欄。";
+        }
+      }
+    }
+
+    function closePickCompare() {
+      const overlay = $("pickCompareOverlay");
+      if (!overlay) return;
+      overlay.hidden = true;
+    }
+
+    function pickCompareNorm(value) {
+      return String(value ?? "").replace(/\s+/g, "").replace(/[()（），,]/g, "").replace(/元\/月|元/g, "").toLowerCase();
+    }
+
+    function pickCompareGroup(items) {
+      const group = (items || []).filter(Boolean).slice(0, 3);
+      if (group.length < 2) return null;
+      const labels = group.map((row) => listingSourceLabel(row) || `#${row.post_id}`);
+      const fields = [
+        ["price", "租金", (row) => String(row.price || (parseClientRent(row) ? parseClientRent(row).toLocaleString("zh-TW") : "")).trim()],
+        ["extra", "額外月費", (row) => extraClientMonthly(row) ? extraClientMonthly(row).toLocaleString("zh-TW") : "0"],
+        ["total", "總月費", (row) => {
+          const rent = parseClientRent(row);
+          const extra = extraClientMonthly(row);
+          const total = rent > 0 ? rent + extra : 0;
+          return total ? total.toLocaleString("zh-TW") : "0";
+        }],
+        ["fees", "費用說明", (row) => String(row.extra_fee_text || row.price_contain_text || "").trim()],
+        ["area", "坪數", (row) => String(row.area_name || "").trim()],
+        ["floor", "樓層", (row) => String(row.floor_name || "").trim()],
+        ["layout", "格局", (row) => String(row.layout || "").trim()],
+        ["title", "標題", (row) => String(row.title || "").trim()],
+        ["source", "來源", (row) => listingSourceLabel(row)],
+        ["offline", "上架", (row) => (
+          Number(row.offline_confirmed) === 1 ? "確認已下架" : Number(row.offline) === 1 ? "下架確認中" : "刊登中"
+        )],
+      ];
+      const rows = [];
+      for (const [field, label, pick] of fields) {
+        const values = group.map((row) => String(pick(row) || "").trim());
+        const norms = values.map((value) => pickCompareNorm(value) || "—");
+        if (new Set(norms).size <= 1) continue;
+        rows.push({ field, label, values: values.map((value) => value || "—") });
+      }
+      const totals = group.map((row) => {
+        const rent = parseClientRent(row);
+        const extra = extraClientMonthly(row);
+        return rent > 0 ? rent + extra : 0;
+      });
+      const priced = totals.map((total, idx) => ({ total, src: labels[idx] })).filter((item) => item.total > 0);
+      const bits = [];
+      if (priced.length >= 2) {
+        const cheap = priced.reduce((best, item) => (item.total < best.total ? item : best));
+        const dear = priced.reduce((best, item) => (item.total > best.total ? item : best));
+        const gap = dear.total - cheap.total;
+        if (gap > 0) bits.push(`總月費差 ${gap.toLocaleString("zh-TW")} 元，${cheap.src}最便宜、${dear.src}最貴`);
+      }
+      if (!bits.length && new Set(labels).size >= 2) bits.push(`來源：${[...new Set(labels)].join("、")}`);
+      return {
+        headline: bits.length ? `${group.length} 則屋源：${bits.join("；")}` : `${group.length} 則屋源，標價與條件幾乎相同`,
+        labels,
+        rows,
+        items: group,
+      };
+    }
+
+    function openPickCompare() {
+      const ids = [...selected];
+      if (ids.length < 2) {
+        flash("請再勾 1～2 筆才能比較");
+        return;
+      }
+      if (ids.length > 3) {
+        flash("比較最多 3 筆，請先取消到 3 筆以內");
+        return;
+      }
+      const items = ids.map((id) => listCache.find((row) => String(row.post_id) === String(id))).filter(Boolean);
+      const cmp = pickCompareGroup(items);
+      const body = $("pickCompareBody");
+      const overlay = $("pickCompareOverlay");
+      if (!cmp || !body || !overlay) {
+        flash("這幾筆目前無法比較");
+        return;
+      }
+      const heads = cmp.items.map((row, idx) => (
+        `<div class="pick-compare-card"><strong>${esc(cmp.labels[idx] || "")}</strong><span>${esc(row.title || `#${row.post_id}`)}</span></div>`
+      )).join("");
+      const rows = (cmp.rows || []).map((row) => {
+        const vals = (row.values || []).map((value, idx) => {
+          const name = (cmp.labels && cmp.labels[idx]) || "";
+          return `${name ? `${esc(name)} ` : ""}${esc(value)}`;
+        }).join(" · ");
+        return `<div class="same-compare-row"><div class="same-compare-k">${esc(row.label)}</div><div class="same-compare-vals">${vals}</div></div>`;
+      }).join("");
+      body.style.setProperty("--compare-cols", String(cmp.items.length));
+      body.innerHTML = `<p class="same-house-compare-headline">${esc(cmp.headline)}</p>
+        <div class="pick-compare-cols"><div class="pick-compare-head">${heads}</div></div>
+        <div class="same-house-compare">${rows || `<p class="hint">這 ${cmp.items.length} 筆在租金、費用與格局上看起來幾乎相同。</p>`}</div>`;
+      overlay.hidden = false;
     }
 
     function updateListMeta(items, st = {}) {
@@ -4413,24 +4635,12 @@
         if (q) msg = `沒有符合「${q}」的物件。試試較短關鍵字，或清掉搜尋看全部列表。`;
         else if (viewDistricts.size) {
           msg = "這個行政區篩選目前沒有物件。可點「全部」或再勾其他區。";
-        } else if (kind === "whole" || $("excludeLowFloors")?.checked || $("excludeRooftop")?.checked) {
-          msg = "目前沒有符合列表上方「整層／樓層／頂加」過濾的物件。可取消勾選或關掉整層住家再看。";
+        }         else if (kinds.length || $("excludeLowFloors")?.checked || $("excludeRooftop")?.checked) {
+          msg = "目前沒有符合列表上方房屋類型／樓層／頂加過濾的物件。可取消勾選或關掉類型晶片再看。";
         } else if (filter === "suspected") {
           msg = "目前沒有被判成同一屋源的重刊。隱藏或已瀏覽的舊屋若再上架，會出現在這裡。";
         } else if (filter === "offline") {
           msg = "目前沒有正在確認中的下架物件。591 關閉或刪除的刊登會先列在這裡核對；滿設定天數仍找不到就改成確認已下架，並從「全部」與這個篩選的數量扣除。";
-        } else if (kind === "elevator") {
-          msg = filter === "watched"
-            ? "特別關注裡目前沒有標到有電梯的物件。"
-            : "目前沒有標到有電梯的物件。這只篩已抓到的結果，不會重查 591。";
-        } else if (kind === "apartment") {
-          msg = filter === "watched"
-            ? "特別關注裡目前沒有公寓。"
-            : "目前沒有標成公寓的物件。這只篩已抓到的結果，不會重查 591。";
-        } else if (kind === "suite") {
-          msg = filter === "watched"
-            ? "特別關注裡目前沒有套房／雅房。"
-            : "目前沒有套房／雅房。這只篩已抓到的結果，不會重查 591。";
         } else if (st.missingGeo > 0) {
           msg = `正在從 591 物件地圖補 ${st.missingGeo} 筆座標（就是網頁上點地址看到的那個），完成後會自動計算${commuteModeLabel()}路線。`;
         } else if (st.missingRoute > 0) {
@@ -4761,7 +4971,7 @@
       const q = $("q").value.trim();
       const districts = [...viewDistricts].map(encodeURIComponent).join(",");
       const res = await fetch(
-        `/api/listings?filter=${encodeURIComponent(filter)}&kind=${encodeURIComponent(kind)}&sort=${encodeURIComponent(sort)}&q=${encodeURIComponent(q)}&limit=500&districts=${districts}`,
+        `/api/listings?filter=${encodeURIComponent(filter)}&kind=${encodeURIComponent(kinds.join(","))}&sources=${encodeURIComponent(sources.join(","))}&sort=${encodeURIComponent(sort)}&q=${encodeURIComponent(q)}&limit=500&districts=${districts}`,
       );
       const data = await res.json();
       if (gen !== listLoadGen) return;
@@ -4911,7 +5121,7 @@
         excludeRooftop: $("excludeRooftop") ? $("excludeRooftop").checked : true,
         offlineConfirmDays: meIsAdmin ? (Number($("offlineConfirmDays").value) || 7) : 7,
         minBuildingFloors: Number($("minBuildingFloors").value) || 0,
-        wholeFloorOnly: kind === "whole",
+        wholeFloorOnly: kinds.length === 1 && kinds[0] === "whole",
         excludeLowFloors: $("excludeLowFloors") ? $("excludeLowFloors").checked : true,
         excludeKeywords: clipLines($("excludeKeywords").value, MEMBER_MAX_EXCLUDE_KEYWORDS),
         excludeAgents: clipLines($("excludeAgents").value, MEMBER_MAX_EXCLUDE_AGENTS),
@@ -5990,7 +6200,7 @@
     function persistDisplayFilters() {
       if (isGuest || !settingsLoaded) return;
       const body = {
-        wholeFloorOnly: kind === "whole",
+        wholeFloorOnly: kinds.length === 1 && kinds[0] === "whole",
         excludeRooftop: $("excludeRooftop") ? $("excludeRooftop").checked : true,
         excludeLowFloors: $("excludeLowFloors") ? $("excludeLowFloors").checked : true,
       };
@@ -6229,6 +6439,10 @@
       }
     });
     document.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape" && $("pickCompareOverlay") && !$("pickCompareOverlay").hidden) {
+        closePickCompare();
+        return;
+      }
       if (ev.key === "Escape" && $("ownerOverlay") && !$("ownerOverlay").hidden) closeOwnerOverlay();
     });
     $("selectPageBtn").onclick = () => {
@@ -6284,15 +6498,23 @@
 
     document.querySelectorAll("[data-kind]").forEach((btn) => {
       btn.onclick = () => {
-        const next = btn.dataset.kind;
-        kind = kind === next ? "" : next;
-        document.querySelectorAll("[data-kind]").forEach((b) => {
-          b.classList.toggle("on", b.dataset.kind === kind);
-        });
+        kinds = toggleHousingKind(kinds, btn.dataset.kind);
+        syncKindChips();
         persistDisplayFilters();
         loadList();
       };
     });
+    document.querySelectorAll("[data-source]").forEach((btn) => {
+      btn.onclick = () => {
+        const next = btn.dataset.source;
+        sources = sources.includes(next) ? sources.filter((item) => item !== next) : [...sources, next];
+        syncSourceChips();
+        loadList();
+      };
+    });
+    $("compareSelectedBtn")?.addEventListener("click", openPickCompare);
+    $("pickCompareClose")?.addEventListener("click", closePickCompare);
+    document.querySelector("[data-close-compare]")?.addEventListener("click", closePickCompare);
 
     document.querySelectorAll("[data-sort]").forEach((btn) => {
       btn.onclick = () => {
