@@ -189,10 +189,24 @@
     }
     .oauth-kicker { margin: 0 0 8px; color: var(--muted); font-size: 13px; line-height: 1.5; }
     .oauth-row { display: flex; flex-wrap: wrap; gap: 8px; }
-    .oauth-row a.ghost { min-height: 44px; padding: 8px 14px; font-size: 14px; text-decoration: none; display: inline-flex; align-items: center; }
+    .oauth-row a.ghost {
+      min-height: 44px;
+      padding: 8px 14px;
+      font-size: 14px;
+      font-weight: 700;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--line);
+      background: var(--paper);
+      color: var(--ink);
+    }
     .oauth-row a.ghost.is-off,
     .oauth-row a.ghost[aria-disabled="true"] {
-      opacity: 0.45;
+      opacity: 1;
+      color: var(--muted);
+      background: var(--accent-mist);
       cursor: not-allowed;
     }
   </style>

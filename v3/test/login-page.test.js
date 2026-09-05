@@ -25,6 +25,7 @@ test("login page can register after accepting the disclaimer", () => {
   assert.match(html, /aria-disabled/);
   assert.match(html, /role="alert"/);
   assert.match(html, /tabindex/);
+  assert.match(html, /oauth-row a\.ghost\.is-off/);
   assert.doesNotMatch(html, /oauth\[data-empty="1"\] \{ display: none/);
   assert.doesNotMatch(html, /id="oauthGoogle" hidden/);
   assert.match(html, /id="registerPolicy"/);
