@@ -123,6 +123,8 @@ test("housing kind chips stay independent of 特別關注", () => {
   assert.match(html, /id="sourceRowLabel"/);
   assert.match(html, /aria-pressed/);
   assert.match(html, /function toggleHousingKind/);
+  assert.match(html, /#pickCompareOverlay, #compareSelectedBtn, #selectPageBtn, #clearSelectBtn, \.pick-hit, \.pick/);
+  assert.match(html, /#hideSelectedBtn, #settingsPanel/);
   assert.match(html, /document\.querySelectorAll\("\[data-kind\]"\)/);
   assert.doesNotMatch(html, /data-filter="elevator"/);
   assert.doesNotMatch(html, /data-filter="apartment"/);
@@ -313,7 +315,7 @@ test("guest demo is read-only and work prompt can be skipped", () => {
   assert.match(html, /https:\/\/rent\.591\.com\.tw\//);
   assert.match(html, /row\?\.url && !is591Source\(row\)/);
   assert.doesNotMatch(html, /persistViewFilters/);
-  assert.match(html, /if \(el\.closest\("#settingsPanel/);
+  assert.match(html, /if \(el\.closest\("#hideSelectedBtn, #settingsPanel/);
   assert.match(html, /workAddress: \$\("workAddress"\)\.value\.trim\(\)/);
   assert.match(html, /commuteMode: selectedCommuteMode\("commuteMode"\)/);
   assert.doesNotMatch(html, /collectSettingsSafe/);

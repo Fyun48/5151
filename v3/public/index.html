@@ -3731,11 +3731,12 @@
     function isGuestLockedTarget(el) {
       if (!el || !isGuest) return false;
       if (el.closest("#collapsePanelBtn, #expandPanelBtn, #reloadBtn, #loginBtn, #registerBtn, #helpQaBtn, #qaView, #guestToast, #guestTour, #listHeadSticky .chip, #q, [data-view-district], [data-open-hub], #notifyHubClose, [data-close-hub], [data-hub-tab]")) return false;
+      if (el.closest("#pickCompareOverlay, #compareSelectedBtn, #selectPageBtn, #clearSelectBtn, .pick-hit, .pick")) return false;
       if (el.closest(".item-cover, h3 a, a.tel, .line-qr")) return false;
       if (el.closest("#notifyHubSave, #memberMailTest, #gmailPresetBtn")) return true;
       if (el.closest("#notifyHub")) return true;
-      if (el.closest("#settingsPanel, .header-profiles, #watchBtn, #bulkBar")) return true;
-      if (el.closest("[data-watched], [data-viewed], [data-hidden], [data-watch-draft-commit], [data-watch-draft-cancel], [data-watch-note], [data-reject-match], .pick")) return true;
+      if (el.closest("#hideSelectedBtn, #settingsPanel, .header-profiles, #watchBtn")) return true;
+      if (el.closest("[data-watched], [data-viewed], [data-hidden], [data-watch-draft-commit], [data-watch-draft-cancel], [data-watch-note], [data-reject-match]")) return true;
       return false;
     }
 
