@@ -20,7 +20,10 @@ test("default Q&A explains walkable MRT distance not straight-line", () => {
   assert.ok(items.some((row) => row.id === "hidden-admin"));
   assert.ok(items.some((row) => row.id === "extra-fees"));
   const oauth = items.find((row) => row.id === "oauth-idle");
-  assert.match(oauth.answer, /開通信/);
+  assert.match(oauth.answer, /開通連結/);
+  assert.match(oauth.answer, /帶入/);
+  assert.match(oauth.answer, /個人資料/);
+  assert.match(oauth.answer, /不能更改/);
   assert.match(oauth.answer, /兩個月/);
   assert.match(oauth.answer, /不會另外寄信/);
   assert.match(oauth.answer, /仍在評估/);
@@ -82,9 +85,10 @@ test("public help-qa route and admin editor exist", () => {
   assert.match(auth, /\/api\/help-qa/);
   assert.match(db, /helpQa/);
   assert.match(db, /defaultHelpQaItems/);
+  assert.match(db, /profileOnboardedBackfill/);
 });
 
-test("index puts Q&A beside the account name", () => {
+test("index puts Q&A beside the account name and as its own view", () => {
   const html = readFileSync(path.join(dir, "../public/index.html"), "utf8");
   const who = html.indexOf('id="who"');
   const btn = html.indexOf('id="helpQaBtn"');
@@ -92,9 +96,13 @@ test("index puts Q&A beside the account name", () => {
   assert.match(html, /who-cluster/);
   assert.match(html, /\/api\/help-qa/);
   assert.match(html, /功能說明 Q&amp;A/);
+  assert.match(html, /id="qaView"/);
+  assert.match(html, /id="meHelpQaBtn"/);
+  assert.match(html, /setAppView\("qa"\)/);
   assert.match(html, /html\.no-session #helpQaBtn/);
   assert.match(html, /body\.role-guest #helpQaBtn/);
   assert.match(html, /helpQaBtn"\)\.hidden = isGuest/);
+  assert.doesNotMatch(html, /id="helpQaDialog"/);
 });
 
 test("admin page can add and save Q&A items", () => {

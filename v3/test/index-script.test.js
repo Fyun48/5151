@@ -376,13 +376,13 @@ test("product name is 吉比租房物件追蹤 without v2 開發版 copy", () =>
   assert.equal(html.includes("v2 開發版"), false);
   assert.equal(html.includes("v3 開發版"), false);
   assert.equal(html.includes("與線上版分開的資料庫"), false);
-  assert.match(html, /ver\. 3\.45/);
+  assert.match(html, /ver\. 3\.46/);
   assert.doesNotMatch(html, /<h1>[^<]*v3/i);
   assert.match(login, /<h1>吉比租房物件追蹤<\/h1>/);
   assert.equal(login.includes("v2 開發版"), false);
   assert.equal(login.includes("v3 開發版"), false);
   assert.equal(login.includes("資料與線上版分開"), false);
-  assert.match(login, /ver\. 3\.45/);
+  assert.match(login, /ver\. 3\.46/);
 });
 
 test("MRT is admin-only and guest tour is in the page", () => {
@@ -539,10 +539,13 @@ test("panel toggle sits above scroll-top and uses expand/collapse glyphs", () =>
   const expandIdx = html.indexOf('id="expandPanelBtn"');
   const topIdx = html.indexOf('id="scrollTopBtn"');
   assert.ok(expandIdx > 0 && topIdx > expandIdx);
-  assert.match(html, /bottom:\s*80px/);
-  assert.match(html, /#scrollTopBtn \{[\s\S]*bottom:\s*80px/);
+  assert.match(html, /#expandPanelBtn \{[\s\S]*bottom:\s*80px/);
+  assert.match(html, /#scrollTopBtn \{[\s\S]*bottom:\s*140px/);
+  assert.match(html, /#scrollTopBtn \{[\s\S]*z-index:\s*97/);
+  assert.match(html, /#scrollTopBtn[\s\S]*<svg /);
   assert.match(html, /#scrollTopBtn\.on/);
   assert.match(html, /function syncScrollTopBtn/);
+  assert.match(html, /pageScrollY\(\) > 120/);
   assert.match(html, /icon\.textContent = collapsed \? "<|>" : ">|<"/);
   assert.match(html, /id="meDeleteBtn"/);
   assert.match(html, /id="deleteAccountBtn"/);

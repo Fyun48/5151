@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { ensurePersonalSchema } from "../src/personalSchema.js";
 import { registerUser } from "../src/members.js";
-import { displayName, nicknameFromOauthName, normalizeNickname, updateUserProfile } from "../src/profile.js";
+import { displayName, needsProfileOnboard, nicknameFromOauthName, normalizeNickname, updateUserProfile } from "../src/profile.js";
 
 function memoryDb() {
   const db = new DatabaseSync(":memory:");
@@ -31,6 +31,23 @@ test("oauth display names fill blank nicknames only when they fit", () => {
   assert.equal(nicknameFromOauthName("小林"), "小林");
   const long = "這是一段超過二十個字的社群顯示名稱ABCDEFG";
   assert.equal(nicknameFromOauthName(long), long.slice(0, 20));
+});
+
+test("verified members need profile until first save; register email cannot change", () => {
+  const db = memoryDb();
+  const pending = registerUser(db, {
+    email: "new@b.com",
+    password: "password1",
+    acceptDisclaimer: true,
+    emailVerified: false,
+  });
+  assert.equal(needsProfileOnboard(pending), false);
+  const user = registerUser(db, { email: "a@b.com", password: "password1", acceptDisclaimer: true });
+  assert.equal(needsProfileOnboard(user), true);
+  assert.throws(() => updateUserProfile(db, user.id, { email: "other@b.com" }), /不能更改/);
+  const saved = updateUserProfile(db, user.id, { nickname: "小林" });
+  assert.equal(needsProfileOnboard(saved), false);
+  assert.equal(saved.email, "a@b.com");
 });
 
 test("contact fields can save without a privacy tick", () => {

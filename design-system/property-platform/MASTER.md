@@ -78,14 +78,14 @@ shadcn 別名（`--foreground`、`--primary`、`--border`、`--ring`）指向同
 ## 資訊架構
 
 ```
-找房     需求     通知     我的
+找房     需求     通知     我的     功能說明 Q&A
  │
  ├─ 指揮列：狀態 + 搜尋 + 篩選／更多條件
  ├─ 列表（決策面：租金、格局、通勤／捷運）
  └─ 條件抽屜（行政區、租金、通勤；不得擋住列表掃讀）
 ```
 
-其它頁：`login.html`、`reset.html`、`disclaimer.html`、`admin.html`。
+其它頁：`login.html`、`reset.html`、`disclaimer.html`、`admin.html`。Q&A 由帳號旁與設定頁進入，不是第六個底欄。
 
 ## 元件
 
