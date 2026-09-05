@@ -289,7 +289,16 @@ export function migrateListingFlagsIfNeeded(conn, userId) {
   return { migrated: true, copied };
 }
 
+export function listingIsMainListAffiliate(row, filter) {
+  if (filter === "hidden") return false;
+  if (row?.same_house_split) return false;
+  if (row?.same_house_role !== "affiliate") return false;
+  if (row?.same_house_primary_offline && Number(row.offline) !== 1) return false;
+  return true;
+}
+
 export function listingMatchesListFilter(row, filter) {
+  if (listingIsMainListAffiliate(row, filter)) return false;
   const hidden = Number(row?.hidden) === 1;
   const watched = Number(row?.watched) === 1;
   const viewed = Number(row?.viewed) === 1;

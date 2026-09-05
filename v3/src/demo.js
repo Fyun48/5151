@@ -87,6 +87,7 @@ export function buildDemoState({
     sort: "newest",
     limit: GUEST_LIST_LIMIT,
     userId: uid,
+    matchVoteUserId: 0,
     searchKeys: [],
     districts: demoDistrictNames(source),
     settings,

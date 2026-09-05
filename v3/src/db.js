@@ -26,6 +26,13 @@ import {
   feeSignature,
   sameHouseBundle,
 } from "./listingCompare.js";
+import {
+  MATCH_SPLIT_DAILY_LIMIT,
+  pairConfidence,
+  shouldPromoteGlobalSplit,
+  votePair,
+  votePairKey,
+} from "./matchVotes.js";
 import { commuteWorkJobs, hasWorkPoint, needsListingGeo, normalizeCommuteMode } from "./geo.js";
 import { demoCommutePatch } from "./demo.js";
 import { isWalkableMrtDistance, makeMrtKey } from "./mrt.js";
@@ -1518,11 +1525,74 @@ function decorateListingLite(row, settings, userId) {
   return out;
 }
 
-function attachListingPeers(row, settings) {
+function loadUserSplitPairSet(userId) {
+  const uid = Number(userId) || 0;
+  if (!uid) return new Set();
+  try {
+    return new Set(
+      db.prepare(
+        `SELECT post_id, peer_id FROM user_match_votes WHERE user_id = ? AND vote = 'split'`,
+      ).all(uid).map((row) => `${row.post_id}:${row.peer_id}`),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function attachSameHouseRoles(rows, voteUserId) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) return list;
+  const byId = new Map(list.map((row) => [Number(row.post_id), row]));
+  const missing = new Set();
+  for (const row of list) {
+    if (String(row.match_verdict || "") === "no") continue;
+    const mid = Number(row.match_post_id) || 0;
+    if (mid && !byId.has(mid)) missing.add(mid);
+  }
+  const extras = new Map();
+  if (missing.size) {
+    const ids = [...missing];
+    const placeholders = ids.map(() => "?").join(",");
+    const found = db.prepare(
+      `SELECT post_id, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text,
+              refresh_time, last_seen_at, hidden, offline, match_verdict, match_level
+       FROM listings WHERE post_id IN (${placeholders})`,
+    ).all(...ids);
+    for (const item of found) extras.set(Number(item.post_id), item);
+  }
+  const resolve = (id) => byId.get(id) || extras.get(id) || null;
+  const splits = loadUserSplitPairSet(voteUserId);
+  for (const row of list) {
+    const mid = Number(row.match_post_id) || 0;
+    if (!mid || String(row.match_verdict || "") === "no") continue;
+    const peer = resolve(mid);
+    if (!peer || String(peer.match_verdict || "") === "no") continue;
+    if (splits.has(votePairKey(row.post_id, mid))) {
+      row.same_house_split = true;
+      continue;
+    }
+    const primary = preferPrimaryListing(row, peer);
+    const primaryId = Number(primary.post_id);
+    const primaryRow = Number(row.post_id) === primaryId ? row : peer;
+    row.same_house_role = Number(row.post_id) === primaryId ? "primary" : "affiliate";
+    row.same_house_primary_id = primaryId;
+    row.same_house_primary_offline = Number(primaryRow.offline) === 1;
+  }
+  return list;
+}
+
+function attachListingPeers(row, settings, voteUserId) {
   if (!row) return row;
-  const sameHousePeers = loadSameHousePeers(row);
+  const splits = loadUserSplitPairSet(voteUserId);
+  const selfId = Number(row.post_id) || 0;
+  const sameHousePeers = loadSameHousePeers(row).filter((peer) => (
+    peer.match_verdict !== "no" && !splits.has(votePairKey(selfId, peer.post_id))
+  ));
   const matchPostId = Number(row.match_post_id) || 0;
-  const matchPeer = sameHousePeers.find((item) => Number(item.post_id) === matchPostId) || sameHousePeers[0] || null;
+  const splitFromMatch = matchPostId > 0 && splits.has(votePairKey(selfId, matchPostId));
+  const matchPeer = splitFromMatch
+    ? null
+    : sameHousePeers.find((item) => Number(item.post_id) === matchPostId) || sameHousePeers[0] || null;
   const extraFees = Array.isArray(row.extra_fees) ? row.extra_fees : parseJson(row.extra_fees, []);
   const source = String(row.source || "591") || "591";
   const decoratedSelf = {
@@ -1531,24 +1601,22 @@ function attachListingPeers(row, settings) {
     source,
     source_label: row.source_label || selfSourceLabel(source),
   };
-  const same_house = (row.match_verdict === "no" || Number(row.match_rejected) === 1)
+  const same_house = (row.match_verdict === "no" || Number(row.match_rejected) === 1 || splitFromMatch)
     ? null
-    : sameHouseBundle(
-      decoratedSelf,
-      sameHousePeers.filter((peer) => peer.match_verdict !== "no"),
-    );
+    : sameHouseBundle(decoratedSelf, sameHousePeers);
   return { ...row, match_peer: matchPeer || null, same_house };
 }
 
-function finalizeListingDecorate(row, settings, userId, { sameHouse = true } = {}) {
+function finalizeListingDecorate(row, settings, userId, { sameHouse = true, matchVoteUserId } = {}) {
   if (!row) return row;
   settings = settings || getSettings();
   const uid = Number(userId) || 0;
+  const voteUid = matchVoteUserId == null ? uid : Number(matchVoteUserId) || 0;
   const listedBy = Number(row.listed_by_user_id) || 0;
   const extraFees = Array.isArray(row.extra_fees) ? row.extra_fees : parseJson(row.extra_fees, []);
   const source = String(row.source || "591") || "591";
   const withPeers = sameHouse
-    ? attachListingPeers({ ...row, extra_fees: extraFees, source, source_label: row.source_label || selfSourceLabel(source) }, settings)
+    ? attachListingPeers({ ...row, extra_fees: extraFees, source, source_label: row.source_label || selfSourceLabel(source) }, settings, voteUid)
     : { ...row, extra_fees: extraFees, source, source_label: row.source_label || selfSourceLabel(source), match_peer: null, same_house: null };
   const {
     listed_by_user_id: _listedBy,
@@ -1622,15 +1690,113 @@ export function setListingMatch(postId, match) {
   return getListing(postId);
 }
 
-export function rejectSuspectedMatch(postId, userId) {
-  const listing = getListing(postId, userId);
-  if (!listing) return null;
-  db.prepare(
-    `UPDATE listings
-     SET match_verdict = 'no', match_rejected = 1, hidden = 0
-     WHERE post_id = ?`,
-  ).run(postId);
-  return getListing(postId, userId);
+function countPairVotes(lo, hi) {
+  const rows = db.prepare(
+    `SELECT vote, COUNT(DISTINCT user_id) AS n
+     FROM user_match_votes
+     WHERE post_id = ? AND peer_id = ?
+     GROUP BY vote`,
+  ).all(lo, hi);
+  const out = { split: 0, same: 0 };
+  for (const row of rows) {
+    if (row.vote === "split") out.split = Number(row.n) || 0;
+    if (row.vote === "keep" || row.vote === "same") out.same = Number(row.n) || 0;
+  }
+  return out;
+}
+
+function dayStartIso(now = new Date()) {
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  return start.toISOString();
+}
+
+export function rejectSuspectedMatch(postId, userId, { peerId } = {}) {
+  const uid = Number(userId) || 0;
+  if (!uid) {
+    return { ok: false, code: "guest", error: "請先登入才能拆開同屋源" };
+  }
+  const listing = db.prepare("SELECT * FROM listings WHERE post_id = ?").get(postId);
+  if (!listing) return { ok: false, code: "not_found", error: "找不到這筆物件" };
+
+  let otherId = Number(peerId) || Number(listing.match_post_id) || 0;
+  if (!otherId) {
+    const incoming = db.prepare(
+      `SELECT post_id FROM listings
+       WHERE match_post_id = ? AND IFNULL(match_verdict, '') != 'no'
+       LIMIT 1`,
+    ).get(postId);
+    otherId = Number(incoming?.post_id) || 0;
+  }
+  if (!otherId || otherId === Number(postId)) {
+    return { ok: false, code: "no_peer", error: "找不到要拆開的同屋源" };
+  }
+
+  const [lo, hi] = votePair(postId, otherId);
+  const existing = db.prepare(
+    `SELECT vote FROM user_match_votes WHERE user_id = ? AND post_id = ? AND peer_id = ?`,
+  ).get(uid, lo, hi);
+  const used = Number(db.prepare(
+    `SELECT COUNT(*) AS n FROM user_match_votes
+     WHERE user_id = ? AND vote = 'split' AND created_at >= ?`,
+  ).get(uid, dayStartIso())?.n) || 0;
+  if (existing?.vote !== "split" && used >= MATCH_SPLIT_DAILY_LIMIT) {
+    return {
+      ok: false,
+      code: "rate_limit",
+      error: "今天拆開次數已達上限。請先看展開列的差異再決定，明天再試。",
+    };
+  }
+
+  const now = new Date().toISOString();
+  if (existing?.vote !== "split") {
+    const peer = db.prepare("SELECT match_level FROM listings WHERE post_id = ?").get(otherId);
+    db.prepare(
+      `INSERT INTO user_match_votes (user_id, post_id, peer_id, vote, confidence, created_at, updated_at)
+       VALUES (?, ?, ?, 'split', ?, ?, ?)
+       ON CONFLICT(user_id, post_id, peer_id) DO UPDATE SET
+         vote = 'split',
+         confidence = excluded.confidence,
+         updated_at = excluded.updated_at`,
+    ).run(uid, lo, hi, pairConfidence(listing, peer), now, now);
+    db.prepare(
+      `INSERT INTO user_match_signals (user_id, post_id, peer_id, type, weight, created_at)
+       VALUES (?, ?, ?, 'split', 1, ?)`,
+    ).run(uid, lo, hi, now);
+    addUserEvent({
+      user_id: uid,
+      post_id: Number(postId),
+      type: "match_split",
+      title: listing.title || `刊登 #${postId}`,
+      detail: `個人拆開 #${postId} 與 #${otherId}`,
+      source_key: listing.source_key || "",
+      created_at: now,
+      notified: 1,
+    });
+  }
+
+  const peer = db.prepare("SELECT match_level FROM listings WHERE post_id = ?").get(otherId);
+  const tally = countPairVotes(lo, hi);
+  const promoted = shouldPromoteGlobalSplit({
+    ...tally,
+    confidence: pairConfidence(listing, peer),
+  });
+  if (promoted) {
+    db.prepare(
+      `UPDATE listings
+       SET match_verdict = 'no', match_rejected = 1, hidden = 0
+       WHERE post_id IN (?, ?)`,
+    ).run(lo, hi);
+  }
+
+  return {
+    ok: true,
+    listing: getListing(postId, uid),
+    personal: true,
+    promoted,
+    remaining: Math.max(0, MATCH_SPLIT_DAILY_LIMIT - (existing?.vote === "split" ? used : used + 1)),
+    already: existing?.vote === "split",
+  };
 }
 
 export function confirmSuspectedMatch(postId, userId) {
@@ -2660,9 +2826,11 @@ export function listListings({
   searchKeys,
   districts = [],
   userId,
+  matchVoteUserId,
   settings: settingsOverride,
 } = {}) {
   const uid = resolveUserId(userId);
+  const voteUid = matchVoteUserId == null ? uid : Number(matchVoteUserId) || 0;
   ({ filter, kind } = normalizeListQuery(filter, kind));
   const clauses = [];
   const params = [];
@@ -2746,6 +2914,7 @@ export function listListings({
         .map((row) => decorateListingLite(row, settings, uid))
       : applyListingFilter(overlayRowsPersonal(raw, flagMap), settings).map((row) => decorateListingLite(row, settings, uid));
 
+  rows = attachSameHouseRoles(rows, voteUid);
   rows = rows.filter((row) => listingMatchesListFilter(row, filter));
   rows = rows.filter((row) => keepSelfListingForViewer(row, uid, settings, listingInMemberScope));
 
@@ -2765,7 +2934,7 @@ export function listListings({
   rows = sortListingsRows(rows, sort, { filter, settings });
 
   const totalMatched = rows.length;
-  const listings = rows.slice(0, limit).map((row) => finalizeListingDecorate(row, settings, uid, { sameHouse: true }));
+  const listings = rows.slice(0, limit).map((row) => finalizeListingDecorate(row, settings, uid, { sameHouse: true, matchVoteUserId: voteUid }));
   return { listings, totalMatched };
 }
 

@@ -6,6 +6,7 @@ import {
   anyoneWatched,
   copyUserFlagsForRelist,
   ensureUser,
+  listingIsMainListAffiliate,
   listingMatchesListFilter,
   loadFlagMap,
   loadFlags,
@@ -73,6 +74,19 @@ test("overlay keeps system-hidden duplicates even without a personal hide flag",
   assert.equal(row.hidden_at, "2026-01-01T00:00:00.000Z");
   assert.equal(listingMatchesListFilter(row, "hidden"), true);
   assert.equal(listingMatchesListFilter(row, "all"), false);
+});
+
+test("main list hides cheaper-house affiliates except hidden filter or personal split", () => {
+  const affiliate = { same_house_role: "affiliate", hidden: 0, offline: 0, match_verdict: "" };
+  const split = { ...affiliate, same_house_split: true };
+  const liveWhilePrimaryGone = { ...affiliate, same_house_primary_offline: true, offline: 0 };
+  assert.equal(listingIsMainListAffiliate(affiliate, "all"), true);
+  assert.equal(listingMatchesListFilter(affiliate, "all"), false);
+  assert.equal(listingMatchesListFilter(affiliate, "guest"), false);
+  assert.equal(listingMatchesListFilter(affiliate, "hidden"), false);
+  assert.equal(listingIsMainListAffiliate(split, "all"), false);
+  assert.equal(listingMatchesListFilter({ ...split, match_level: "high" }, "all"), true);
+  assert.equal(listingIsMainListAffiliate(liveWhilePrimaryGone, "all"), false);
 });
 
 test("confirmed same-house duplicates leave the suspected filter", () => {

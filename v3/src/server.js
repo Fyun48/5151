@@ -1314,7 +1314,13 @@ app.get("/api/state", (req, res) => {
   let events = [];
   try {
     listingStats = stats(undefined, uid);
-    const listed = listListings({ filter: "all", sort: "newest", limit: 500, userId: uid });
+    const listed = listListings({
+      filter: "all",
+      sort: "newest",
+      limit: 500,
+      userId: uid,
+      matchVoteUserId: readSession(req)?.userId || 0,
+    });
     listings = listed.listings;
     listingStats = { ...listingStats, matched: listed.totalMatched };
     events = recentEvents(30, uid);
@@ -1349,6 +1355,7 @@ app.get("/api/listings", (req, res) => {
     limit: Number(req.query.limit) || 500,
     districts,
     userId: uid,
+    matchVoteUserId: readSession(req)?.userId || 0,
   });
   res.json({
     stats: { ...stats(undefined, uid), matched: listed.totalMatched },
@@ -1414,13 +1421,26 @@ app.post("/api/listings/:id/flags", (req, res) => {
 });
 
 app.post("/api/listings/:id/reject-match", (req, res) => {
-  const uid = actorUserId(req);
-  const updated = rejectSuspectedMatch(Number(req.params.id), uid);
-  if (!updated) {
-    res.status(404).json({ error: "找不到這筆物件" });
+  const session = readSession(req);
+  if (!session?.userId) {
+    res.status(401).json({ error: "請先登入才能拆開同屋源" });
     return;
   }
-  res.json({ listing: updated, stats: stats(undefined, uid) });
+  const result = rejectSuspectedMatch(Number(req.params.id), session.userId, {
+    peerId: req.body?.peer_id,
+  });
+  if (!result?.ok) {
+    const status = result?.code === "not_found" ? 404 : result?.code === "rate_limit" ? 429 : 400;
+    res.status(status).json({ error: result?.error || "無法拆開同屋源" });
+    return;
+  }
+  res.json({
+    listing: result.listing,
+    stats: stats(undefined, session.userId),
+    personal: true,
+    promoted: result.promoted,
+    remaining: result.remaining,
+  });
 });
 
 app.post("/api/listings/:id/confirm-match", (req, res) => {

@@ -95,27 +95,28 @@ export function feeChangeDetail(existing, incoming) {
   return bits.join("；") || "服務費或其它費用有改";
 }
 
+const COMPARE_FIELDS = [
+  ["price", "租金", (row) => String(row.price || formatTwMoney(rentAmount(row)) || "").trim()],
+  ["extra", "額外月費", (row) => formatTwMoney(extraMonthlyAmount(row)) || "0"],
+  ["total", "總月費", (row) => formatTwMoney(listingCompareCost(row, { includeExtras: true })) || "0"],
+  ["fees", "費用說明", feeRowsText],
+  ["area", "坪數", (row) => String(row.area_name || "").trim()],
+  ["floor", "樓層", (row) => String(row.floor_name || "").trim()],
+  ["layout", "格局", (row) => String(row.layout || "").trim()],
+  ["title", "標題", (row) => String(row.title || "").trim()],
+  ["source", "來源", (row) => String(row.source_label || row.source || "").trim()],
+  ["offline", "上架", (row) => (
+    Number(row.offline_confirmed) === 1
+      ? "確認已下架"
+      : Number(row.offline) === 1
+        ? "下架確認中"
+        : "刊登中"
+  )],
+];
+
 export function compareListingDiffs(mine, other) {
-  const fields = [
-    ["price", "租金", (row) => String(row.price || formatTwMoney(rentAmount(row)) || "").trim()],
-    ["extra", "額外月費", (row) => formatTwMoney(extraMonthlyAmount(row)) || "0"],
-    ["total", "總月費", (row) => formatTwMoney(listingCompareCost(row, { includeExtras: true })) || "0"],
-    ["fees", "費用說明", feeRowsText],
-    ["area", "坪數", (row) => String(row.area_name || "").trim()],
-    ["floor", "樓層", (row) => String(row.floor_name || "").trim()],
-    ["layout", "格局", (row) => String(row.layout || "").trim()],
-    ["title", "標題", (row) => String(row.title || "").trim()],
-    ["source", "來源", (row) => String(row.source_label || row.source || "").trim()],
-    ["offline", "上架", (row) => (
-      Number(row.offline_confirmed) === 1
-        ? "確認已下架"
-        : Number(row.offline) === 1
-          ? "下架確認中"
-          : "刊登中"
-    )],
-  ];
   const diffs = [];
-  for (const [field, label, pick] of fields) {
+  for (const [field, label, pick] of COMPARE_FIELDS) {
     const a = pick(mine);
     const b = pick(other);
     if (!a && !b) continue;
@@ -123,6 +124,79 @@ export function compareListingDiffs(mine, other) {
     diffs.push({ field, label, mine: a || "—", theirs: b || "—" });
   }
   return diffs;
+}
+
+function sourceName(row) {
+  return String(row?.source_label || row?.source || "").trim() || `#${row?.post_id || ""}`;
+}
+
+export function compareHouseHeadline(listings = []) {
+  const group = (listings || []).filter(Boolean).slice(0, 3);
+  if (group.length < 2) return "";
+  const snaps = group.map((row) => ({
+    row,
+    snap: listingCostSnapshot(row),
+    src: sourceName(row),
+  }));
+  const priced = snaps.filter((item) => item.snap.total > 0);
+  const bits = [];
+  if (priced.length >= 2) {
+    const cheap = priced.reduce((best, item) => (item.snap.total < best.snap.total ? item : best));
+    const dear = priced.reduce((best, item) => (item.snap.total > best.snap.total ? item : best));
+    const gap = dear.snap.total - cheap.snap.total;
+    if (gap > 0) {
+      bits.push(`總月費差 ${formatTwMoney(gap)} 元，${cheap.src}最便宜、${dear.src}最貴`);
+    }
+  }
+  const extras = snaps.filter((item) => item.snap.extra_monthly > 0);
+  if (extras.length && extras.length < snaps.length) {
+    bits.push(`${extras.map((item) => item.src).join("、")}另有額外月費`);
+  } else if (new Set(extras.map((item) => item.snap.extra_monthly)).size > 1) {
+    bits.push("額外月費不同");
+  }
+  const rents = priced.map((item) => item.snap.rent).filter((n) => n > 0);
+  if (rents.length >= 2 && new Set(rents).size === 1 && extras.length) {
+    bits.push("租金相同，差在額外月費");
+  }
+  if (!bits.length) {
+    const sources = [...new Set(snaps.map((item) => item.src))];
+    if (sources.length >= 2) bits.push(`來源：${sources.join("、")}`);
+  }
+  const prefix = `${group.length} 則屋源`;
+  return bits.length ? `${prefix}：${bits.join("；")}` : `${prefix}，標價與條件幾乎相同`;
+}
+
+/** 最多 3 筆：只列有差異的欄，並給一句重點。 */
+export function compareHouseGroup(listings = []) {
+  const uniq = [];
+  const seen = new Set();
+  for (const row of listings || []) {
+    const id = Number(row?.post_id);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    uniq.push(row);
+  }
+  if (uniq.length < 2) return null;
+  const primary = uniq.reduce((best, row) => preferPrimaryListing(best, row), uniq[0]);
+  const others = uniq
+    .filter((row) => Number(row.post_id) !== Number(primary.post_id))
+    .sort((a, b) => listingCompareCost(b, { includeExtras: true }) - listingCompareCost(a, { includeExtras: true }));
+  const group = [primary, ...others].slice(0, 3);
+  const labels = group.map((row) => sourceName(row));
+  const rows = [];
+  for (const [field, label, pick] of COMPARE_FIELDS) {
+    const values = group.map((row) => String(pick(row) || "").trim());
+    const norms = values.map((value) => normFeeText(value) || "—");
+    if (new Set(norms).size <= 1) continue;
+    rows.push({ field, label, values: values.map((value) => value || "—") });
+  }
+  return {
+    headline: compareHouseHeadline(group),
+    count: group.length,
+    labels,
+    ids: group.map((row) => Number(row.post_id)),
+    rows,
+  };
 }
 
 export function compareListingNotes(mine, other) {
@@ -197,7 +271,10 @@ export function sameHouseBundle(listing, peers = []) {
   const primary = uniq.reduce((best, row) => preferPrimaryListing(best, row), uniq[0]);
   const primaryId = Number(primary.post_id);
   const mineId = Number(listing.post_id);
-  const others = uniq.filter((row) => Number(row.post_id) !== mineId);
+  const others = uniq
+    .filter((row) => Number(row.post_id) !== mineId)
+    .sort((a, b) => listingCompareCost(b, { includeExtras: true }) - listingCompareCost(a, { includeExtras: true }))
+    .slice(0, 2);
   const mineSnap = listingCostSnapshot(listing);
   const primarySnap = listingCostSnapshot(primary);
   const cheaperGap = mineSnap.total > 0 && primarySnap.total > 0 ? mineSnap.total - primarySnap.total : 0;
@@ -210,6 +287,7 @@ export function sameHouseBundle(listing, peers = []) {
     mine_total: mineSnap.total,
     primary_total: primarySnap.total,
     peer_count: others.length,
+    compare: compareHouseGroup([listing, ...others]),
     peers: others.map((row) => {
       const pub = publicSameHousePeer(row);
       return {

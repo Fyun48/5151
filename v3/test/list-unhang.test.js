@@ -77,7 +77,8 @@ test("listListings attaches same-house only on the returned page", () => {
     assert.equal(result.status, 0, result.stderr || result.stdout);
     const line = result.stdout.trim().split("\n").filter((row) => row.startsWith("{")).at(-1);
     const out = JSON.parse(line);
-    assert.ok(out.totalMatched >= 80, JSON.stringify(out));
+    assert.ok(out.totalMatched >= 79, JSON.stringify(out));
+    assert.ok(out.totalMatched <= 80, JSON.stringify(out));
     assert.equal(out.returned, 5);
     assert.ok(out.withHouse >= 1, JSON.stringify(out));
     assert.ok(out.ms < 1500, `listListings took ${out.ms}ms`);

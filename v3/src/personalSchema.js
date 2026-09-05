@@ -62,11 +62,37 @@ export function ensurePersonalSchema(db) {
       FOREIGN KEY (user_id) REFERENCES users(id)
     );
 
+    CREATE TABLE IF NOT EXISTS user_match_votes (
+      user_id INTEGER NOT NULL,
+      post_id INTEGER NOT NULL,
+      peer_id INTEGER NOT NULL,
+      vote TEXT NOT NULL,
+      confidence TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, post_id, peer_id),
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS user_match_signals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      post_id INTEGER NOT NULL,
+      peer_id INTEGER NOT NULL DEFAULT 0,
+      type TEXT NOT NULL,
+      weight REAL NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_user_flags_watched ON user_listing_flags(user_id, watched);
     CREATE INDEX IF NOT EXISTS idx_user_flags_viewed ON user_listing_flags(user_id, viewed);
     CREATE INDEX IF NOT EXISTS idx_user_flags_post ON user_listing_flags(post_id);
     CREATE INDEX IF NOT EXISTS idx_user_events_user ON user_events(user_id, notified);
     CREATE INDEX IF NOT EXISTS idx_crawl_covers_region ON crawl_covers(region_id);
+    CREATE INDEX IF NOT EXISTS idx_user_match_votes_pair ON user_match_votes(post_id, peer_id, vote);
+    CREATE INDEX IF NOT EXISTS idx_user_match_signals_user ON user_match_signals(user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_user_match_signals_pair ON user_match_signals(post_id, peer_id, type);
   `);
   for (const sql of [
     "ALTER TABLE users ADD COLUMN accepted_disclaimer_at TEXT",
