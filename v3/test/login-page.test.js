@@ -19,9 +19,16 @@ test("login page can register after accepting the disclaimer", () => {
   assert.match(html, /!verifyState/);
   assert.match(html, /id="oauthBox"/);
   assert.match(html, /id="oauthHint"/);
+  assert.match(html, /id="oauthIntro"/);
+  assert.match(html, /id="tabRegister"[\s\S]*id="oauthBox"[\s\S]*id="loginForm"/);
+  assert.match(html, /用 Google／LINE／Facebook 註冊/);
   assert.match(html, /function paintOauthButtons/);
   assert.match(html, /後台尚未開通社群登入/);
+  assert.match(html, /正在確認社群登入/);
   assert.match(html, /aria-disabled/);
+  assert.match(html, /role="alert"/);
+  assert.match(html, /tabindex/);
+  assert.match(html, /oauth-row a\.ghost\.is-off/);
   assert.doesNotMatch(html, /oauth\[data-empty="1"\] \{ display: none/);
   assert.doesNotMatch(html, /id="oauthGoogle" hidden/);
   assert.match(html, /id="registerPolicy"/);

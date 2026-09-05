@@ -119,7 +119,12 @@ test("housing kind chips stay independent of 特別關注", () => {
   assert.match(html, /data-kind="warehouse"/);
   assert.match(html, /data-source="591"/);
   assert.match(html, /data-chip-row="source"/);
+  assert.match(html, /房屋類型（可複選）/);
+  assert.match(html, /id="sourceRowLabel"/);
+  assert.match(html, /aria-pressed/);
   assert.match(html, /function toggleHousingKind/);
+  assert.match(html, /#pickCompareOverlay, #compareSelectedBtn, #selectPageBtn, #clearSelectBtn, \.pick-hit, \.pick/);
+  assert.match(html, /#hideSelectedBtn, #settingsPanel/);
   assert.match(html, /document\.querySelectorAll\("\[data-kind\]"\)/);
   assert.doesNotMatch(html, /data-filter="elevator"/);
   assert.doesNotMatch(html, /data-filter="apartment"/);
@@ -159,8 +164,15 @@ test("mobile more-filters keep chips and districts inside the card", () => {
   assert.match(render, /block\.hidden = false/);
   assert.doesNotMatch(render, /顯示行政區/);
   const mobile = html.slice(html.indexOf("@media (max-width: 880px)"));
-  assert.match(mobile, /#districtChips \{[\s\S]*flex-wrap: wrap;/);
-  assert.doesNotMatch(mobile, /#districtChips \{[\s\S]*flex-wrap: nowrap;/);
+  const districtRule = mobile.match(/#districtChips \{[^}]+\}/);
+  assert.ok(districtRule);
+  assert.match(districtRule[0], /flex-wrap: wrap;/);
+  assert.doesNotMatch(districtRule[0], /flex-wrap: nowrap;/);
+  const narrow = html.slice(html.indexOf("@media (max-width: 767px)"));
+  assert.match(narrow, /\.chip-row \{[\s\S]*flex-wrap: nowrap;/);
+  assert.match(narrow, /\.chip-row \{[\s\S]*overflow-x: auto;/);
+  assert.match(html, /max-height: min\(42vh, calc\(100dvh - 56px - 220px/);
+  assert.match(html, /list-head-sticky:not\(\.filter-compact\) \{[\s\S]*position: static;/);
 });
 
 test("left panel profile save stays in the settings sheet", () => {
@@ -275,7 +287,7 @@ test("guest demo is read-only and work prompt can be skipped", () => {
   assert.doesNotMatch(html, /示範瀏覽/);
   assert.match(html, /id="guestToast"/);
   assert.match(html, /class="guest-toast"/);
-  assert.match(html, /GUEST_LOCK_TOAST_AFTER = 2/);
+  assert.match(html, /GUEST_LOCK_TOAST_AFTER = 1/);
   assert.match(html, /function showGuestToast/);
   assert.match(html, /function remindGuest/);
   assert.match(html, /成為會員後就能使用這項功能/);
@@ -310,7 +322,7 @@ test("guest demo is read-only and work prompt can be skipped", () => {
   assert.match(html, /https:\/\/rent\.591\.com\.tw\//);
   assert.match(html, /row\?\.url && !is591Source\(row\)/);
   assert.doesNotMatch(html, /persistViewFilters/);
-  assert.match(html, /if \(el\.closest\("#settingsPanel/);
+  assert.match(html, /if \(el\.closest\("#hideSelectedBtn, #settingsPanel/);
   assert.match(html, /workAddress: \$\("workAddress"\)\.value\.trim\(\)/);
   assert.match(html, /commuteMode: selectedCommuteMode\("commuteMode"\)/);
   assert.doesNotMatch(html, /collectSettingsSafe/);
@@ -604,6 +616,10 @@ test("self listing form and in-site detail stay on this site", () => {
   assert.match(html, /id="pickCompareOverlay"/);
   assert.match(html, /function openPickCompare/);
   assert.match(html, /比較最多 3 筆/);
+  assert.match(html, /比較（\$\{n\}／3）/);
+  assert.match(html, /class="pick-hit"/);
+  assert.match(html, /compare-open/);
+  assert.match(html, /更多條件 · /);
   assert.match(html, /id="excludeLowFloors"/);
   assert.match(html, /class="chip-row view-checks"/);
   assert.doesNotMatch(html, /class="view-filters"/);
