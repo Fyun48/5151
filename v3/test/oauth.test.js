@@ -141,5 +141,7 @@ test("oauth callback still queues the verify mail and does not set session first
   const callback = src.slice(src.indexOf('app.get("/auth/:provider/callback"'), src.indexOf('app.post("/api/forgot-password"'));
   assert.match(callback, /pending_verify/);
   assert.match(callback, /issueVerifyToken/);
+  assert.match(callback, /mailConfigured\(getStoredSmtp\(\)\)/);
+  assert.match(callback, /無法寄出開通信|無法完成社群註冊開通信/);
   assert.doesNotMatch(callback.split("pending_verify")[1].split("afterMemberSession")[0], /sessionCookie/);
 });

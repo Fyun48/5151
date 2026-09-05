@@ -241,6 +241,7 @@ app.use("/icons", express.static(path.join(__dirname, "../public/icons"), { maxA
 
 app.get("/api/me", (req, res) => {
   const session = readSession(req);
+  if (session?.userId) touchLastLogin(session.userId, { minIntervalMs: 12 * 60 * 60 * 1000 });
   const user = session?.userId ? getUserById(session.userId) : null;
   const nickname = String(user?.nickname || "").trim();
   res.json({
@@ -509,6 +510,11 @@ app.get("/auth/:provider/callback", async (req, res) => {
       return;
     }
     if (signup.action === "register") {
+      if (!mailConfigured(getStoredSmtp())) {
+        const err = new Error("尚未設定寄信，無法完成社群註冊開通信。請聯絡管理員到後台填 SMTP。");
+        err.status = 503;
+        throw err;
+      }
       user = registerUser({
         email: profile.email,
         password: randomOauthPassword(),
@@ -530,6 +536,11 @@ app.get("/auth/:provider/callback", async (req, res) => {
       }
     }
     if (planOauthSession(user, { verified: isEmailVerified(user) }).action === "pending_verify") {
+      if (!mailConfigured(getStoredSmtp())) {
+        const err = new Error("尚未設定寄信，無法寄出開通信。請改用信箱註冊或聯絡管理員。");
+        err.status = 503;
+        throw err;
+      }
       const issued = issueVerifyToken(user.id);
       queueSystemMail("welcome", user.email, {
         verifyUrl: `${base}/verify-email?token=${encodeURIComponent(issued.token)}`,
