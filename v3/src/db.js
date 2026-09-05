@@ -160,7 +160,6 @@ import {
 } from "./sponsorLinks.js";
 import { adminSiteAdsView, normalizeSiteAds, publicSiteAds } from "./siteAds.js";
 import { adminBroadcastsView, normalizeBroadcasts, publicBroadcasts } from "./broadcasts.js";
-import { unhangAgg, unhangLog } from "./debugUnhang.js";
 
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data-v3");
 mkdirSync(DATA_DIR, { recursive: true });
@@ -1460,11 +1459,6 @@ function decorateSameHousePeer(raw) {
 function loadSameHousePeers(row) {
   const selfId = Number(row?.post_id) || 0;
   if (!selfId) return [];
-  // #region agent log
-  const __t0 = Date.now();
-  let __queries = 0;
-  let __sqlRows = 0;
-  // #endregion
   const seed = new Set([selfId, Number(row.match_post_id) || 0].filter(Boolean));
   const found = new Map();
   for (let hop = 0; hop < 2 && seed.size; hop += 1) {
@@ -1480,10 +1474,6 @@ function loadSameHousePeers(row) {
        WHERE post_id IN (${placeholders}) OR match_post_id IN (${placeholders})
        LIMIT 8`,
     ).all(...ids, ...ids);
-    // #region agent log
-    __queries += 1;
-    __sqlRows += rows.length;
-    // #endregion
     for (const item of rows) {
       const id = Number(item.post_id);
       if (!id || found.has(id)) continue;
@@ -1492,26 +1482,13 @@ function loadSameHousePeers(row) {
       if (peer && !found.has(peer)) seed.add(peer);
     }
   }
-  const peers = [...found.values()]
+  return [...found.values()]
     .filter((item) => Number(item.post_id) !== selfId)
     .map(decorateSameHousePeer);
-  // #region agent log
-  unhangAgg("loadSameHousePeers", { hypothesisId: "B", location: "db.js:loadSameHousePeers", message: "loadSameHousePeers-agg" }, {
-    ms: Date.now() - __t0,
-    selfId,
-    peerCount: peers.length,
-    queries: __queries,
-    sqlRows: __sqlRows,
-  }, { every: 40, slowMs: 20 });
-  // #endregion
-  return peers;
 }
 
 function decorateListingLite(row, settings, userId) {
   if (!row) return row;
-  // #region agent log
-  const __t0 = Date.now();
-  // #endregion
   settings = settings || getSettings();
   if (!Array.isArray(row.route_kms) && !Number.isFinite(Number(row.route_km))) {
     row = applyCachedCoords(row, settings);
@@ -1538,25 +1515,12 @@ function decorateListingLite(row, settings, userId) {
     mine: uid > 0 && listedBy === uid,
     ...fit,
   };
-  // #region agent log
-  unhangAgg("decorateListingLite", { hypothesisId: "D", location: "db.js:decorateListingLite", message: "decorateListingLite-agg" }, {
-    ms: Date.now() - __t0,
-    postId: Number(row.post_id) || 0,
-  }, { every: 200, slowMs: 20 });
-  // #endregion
   return out;
 }
 
 function attachListingPeers(row, settings) {
   if (!row) return row;
-  // #region agent log
-  const __t0 = Date.now();
-  const __tPeers = Date.now();
-  // #endregion
   const sameHousePeers = loadSameHousePeers(row);
-  // #region agent log
-  const __peersMs = Date.now() - __tPeers;
-  // #endregion
   const matchPostId = Number(row.match_post_id) || 0;
   const matchPeer = sameHousePeers.find((item) => Number(item.post_id) === matchPostId) || sameHousePeers[0] || null;
   const extraFees = Array.isArray(row.extra_fees) ? row.extra_fees : parseJson(row.extra_fees, []);
@@ -1567,24 +1531,12 @@ function attachListingPeers(row, settings) {
     source,
     source_label: row.source_label || selfSourceLabel(source),
   };
-  // #region agent log
-  const __tBundle = Date.now();
-  // #endregion
   const same_house = (row.match_verdict === "no" || Number(row.match_rejected) === 1)
     ? null
     : sameHouseBundle(
       decoratedSelf,
       sameHousePeers.filter((peer) => peer.match_verdict !== "no"),
     );
-  // #region agent log
-  unhangAgg("attachListingPeers", { hypothesisId: "B", location: "db.js:attachListingPeers", message: "attachListingPeers-agg" }, {
-    ms: Date.now() - __t0,
-    peersMs: __peersMs,
-    bundleMs: Date.now() - __tBundle,
-    peerCount: sameHousePeers.length,
-    postId: Number(row.post_id) || 0,
-  }, { every: 25, slowMs: 25 });
-  // #endregion
   return { ...row, match_peer: matchPeer || null, same_house };
 }
 
@@ -1618,23 +1570,8 @@ function finalizeListingDecorate(row, settings, userId, { sameHouse = true } = {
 
 function decorateListing(row, settings, userId, options = {}) {
   if (!row) return row;
-  // #region agent log
-  const __t0 = Date.now();
-  const __hadSettings = Boolean(settings);
-  const __sameHouse = options.sameHouse !== false;
-  // #endregion
   settings = settings || getSettings();
-  const lite = decorateListingLite(row, settings, userId);
-  const out = finalizeListingDecorate(lite, settings, userId, options);
-  // #region agent log
-  unhangAgg("decorateListing", { hypothesisId: "B", location: "db.js:decorateListing", message: "decorateListing-agg" }, {
-    ms: Date.now() - __t0,
-    sameHouse: __sameHouse,
-    hadSettings: __hadSettings,
-    postId: Number(row.post_id) || 0,
-  }, { every: 25, slowMs: 25 });
-  // #endregion
-  return out;
+  return finalizeListingDecorate(decorateListingLite(row, settings, userId), settings, userId, options);
 }
 
 function resolveUserId(userId) {
@@ -1647,105 +1584,33 @@ function withPersonal(row, userId) {
 }
 
 export function getListing(postId, userId, options = {}) {
-  // #region agent log
-  const __t0 = Date.now();
-  const __sameHouse = options.sameHouse !== false;
-  // #endregion
   const row = db.prepare("SELECT * FROM listings WHERE post_id = ?").get(postId);
   if (!row) return row;
   const uid = resolveUserId(userId);
-  // #region agent log
-  const __tSet = Date.now();
-  // #endregion
-  const settings = getSettings(uid);
-  // #region agent log
-  const __setMs = Date.now() - __tSet;
-  const __tDec = Date.now();
-  // #endregion
-  const out = decorateListing(withPersonal(row, uid), settings, uid, options);
-  // #region agent log
-  unhangAgg("getListing", { hypothesisId: "B", location: "db.js:getListing", message: "getListing-agg" }, {
-    ms: Date.now() - __t0,
-    settingsMs: __setMs,
-    decorateMs: Date.now() - __tDec,
-    sameHouse: __sameHouse,
-    postId: Number(postId) || 0,
-    uid,
-  }, { every: 20, slowMs: 30 });
-  // #endregion
-  return out;
+  return decorateListing(withPersonal(row, uid), getSettings(uid), uid, options);
 }
 
 export function findBySourceKey(sourceKey, excludePostId) {
-  // #region agent log
-  const __t0 = Date.now();
-  // #endregion
   const anyone = loadAnyoneFlagMap(db);
-  // #region agent log
-  const __flagMs = Date.now() - __t0;
-  const __tSql = Date.now();
-  // #endregion
-  const out = db
+  return db
     .prepare(
       "SELECT * FROM listings WHERE source_key = ? AND post_id != ? ORDER BY last_seen_at DESC",
     )
     .all(sourceKey, excludePostId)
     .map((row) => overlayPersonal(row, anyone.get(Number(row.post_id))));
-  // #region agent log
-  unhangLog({
-    hypothesisId: "E",
-    location: "db.js:findBySourceKey",
-    message: "findBySourceKey",
-    data: {
-      excludePostId: Number(excludePostId) || 0,
-      rowCount: out.length,
-      flagMs: __flagMs,
-      sqlMs: Date.now() - __tSql,
-      ms: Date.now() - __t0,
-    },
-  });
-  // #endregion
-  return out;
 }
 
 export function listMatchCandidates(excludePostId) {
-  // #region agent log
-  const __t0 = Date.now();
-  // #endregion
   const anyone = loadAnyoneFlagMap(db);
-  // #region agent log
-  const __flagMs = Date.now() - __t0;
-  const __tSql = Date.now();
-  // #endregion
-  const rows = db
+  return db
     .prepare(
       `SELECT * FROM listings
        WHERE post_id != ?
        ORDER BY IFNULL(offline, 0) DESC, hidden DESC, viewed DESC, last_seen_at DESC
        LIMIT 4000`,
     )
-    .all(excludePostId);
-  // #region agent log
-  const __sqlMs = Date.now() - __tSql;
-  const __tMap = Date.now();
-  // #endregion
-  const out = rows.map((row) => overlayPersonal(row, anyone.get(Number(row.post_id))));
-  // #region agent log
-  unhangLog({
-    hypothesisId: "A",
-    location: "db.js:listMatchCandidates",
-    message: "listMatchCandidates",
-    data: {
-      excludePostId: Number(excludePostId) || 0,
-      rowCount: out.length,
-      flagMs: __flagMs,
-      sqlMs: __sqlMs,
-      overlayMs: Date.now() - __tMap,
-      ms: Date.now() - __t0,
-    },
-  });
-  // #endregion
-  return out;
+    .all(excludePostId)
+    .map((row) => overlayPersonal(row, anyone.get(Number(row.post_id))));
 }
 
 export function setListingMatch(postId, match) {
@@ -1808,9 +1673,6 @@ export function coveringJobsFromAllUsers(opts = {}) {
 }
 
 export function coveringPlan({ now = Date.now(), includeSystem = true } = {}) {
-  // #region agent log
-  const __t0 = Date.now();
-  // #endregion
   const covers = [];
   const includedUserIds = [];
   const postponedUserIds = [];
@@ -1834,23 +1696,7 @@ export function coveringPlan({ now = Date.now(), includeSystem = true } = {}) {
     includedUserIds.push(id);
   }
   const jobs = covers.length ? coveringJobsFromMembers(covers, { excludeRooftop: false }) : [];
-  const plan = { jobs, includedUserIds, postponedUserIds, includeSystem };
-  // #region agent log
-  unhangLog({
-    hypothesisId: "C",
-    location: "db.js:coveringPlan",
-    message: "coveringPlan",
-    data: {
-      jobCount: jobs.length,
-      includedUsers: includedUserIds.length,
-      postponedUsers: postponedUserIds.length,
-      includeSystem,
-      listingCount: listingCount(),
-      ms: Date.now() - __t0,
-    },
-  });
-  // #endregion
-  return plan;
+  return { jobs, includedUserIds, postponedUserIds, includeSystem };
 }
 
 export function armMemberExternalFetch(userId, { from = Date.now() } = {}) {
@@ -2448,10 +2294,6 @@ export function markEventNotified(id) {
 }
 
 export function enqueueListingEvent(listing, event) {
-  // #region agent log
-  const __t0 = Date.now();
-  let __decorated = 0;
-  // #endregion
   const stamp = event?.created_at || new Date().toISOString();
   const payload = {
     post_id: listing.post_id,
@@ -2466,9 +2308,6 @@ export function enqueueListingEvent(listing, event) {
   for (const userId of listUserIds()) {
     const settings = getSettings(userId);
     const row = decorateListing(overlayPersonal(listing, loadFlags(db, userId, listing.post_id)), settings, userId, { sameHouse: false });
-    // #region agent log
-    __decorated += 1;
-    // #endregion
     const watched = Number(row.watched) === 1;
     if (!watched && event.type === "new" && !listingInMemberScope(row, settings)) continue;
     if (!shouldDeliverNotify(settings, row, event, {
@@ -2487,20 +2326,6 @@ export function enqueueListingEvent(listing, event) {
     if (last && isSameNotifyDetail(last.detail, payload.detail)) continue;
     ids.push(addUserEvent({ ...payload, user_id: userId }));
   }
-  // #region agent log
-  unhangLog({
-    hypothesisId: "B",
-    location: "db.js:enqueueListingEvent",
-    message: "enqueueListingEvent",
-    data: {
-      postId: Number(listing?.post_id) || 0,
-      type: event?.type || "",
-      decorated: __decorated,
-      queued: ids.length,
-      ms: Date.now() - __t0,
-    },
-  });
-  // #endregion
   return ids;
 }
 
@@ -2837,9 +2662,6 @@ export function listListings({
   userId,
   settings: settingsOverride,
 } = {}) {
-  // #region agent log
-  const __t0 = Date.now();
-  // #endregion
   const uid = resolveUserId(userId);
   ({ filter, kind } = normalizeListQuery(filter, kind));
   const clauses = [];
@@ -2914,18 +2736,9 @@ export function listListings({
     params.push(like, like, like, uid, like);
   }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-  // #region agent log
-  const __tSql = Date.now();
-  // #endregion
   const raw = db.prepare(`SELECT * FROM listings ${where}`).all(...params);
-  // #region agent log
-  const __sqlMs = Date.now() - __tSql;
-  // #endregion
   const settings = settingsOverride || getSettings(uid);
   const flagMap = loadFlagMap(db, uid);
-  // #region agent log
-  const __tDec = Date.now();
-  // #endregion
   let rows =
     filter === "offline" || filter === "suspected"
       ? overlayRowsPersonal(raw, flagMap)
@@ -2952,36 +2765,7 @@ export function listListings({
   rows = sortListingsRows(rows, sort, { filter, settings });
 
   const totalMatched = rows.length;
-  // #region agent log
-  const __cheapMs = Date.now() - __tDec;
-  const __tPage = Date.now();
-  // #endregion
   const listings = rows.slice(0, limit).map((row) => finalizeListingDecorate(row, settings, uid, { sameHouse: true }));
-  // #region agent log
-  unhangLog({
-    hypothesisId: "D",
-    location: "db.js:listListings",
-    message: "listListings",
-    runId: "post-fix",
-    data: {
-      filter,
-      kind: String(kind || ""),
-      uid,
-      rawCount: raw.length,
-      cheapDecorated: rows.length,
-      decorated: rows.length,
-      pageDecorated: listings.length,
-      sameHouseAttached: listings.length,
-      returned: listings.length,
-      limit,
-      sqlMs: __sqlMs,
-      cheapMs: __cheapMs,
-      pageMs: Date.now() - __tPage,
-      decorateMs: Date.now() - __tDec,
-      ms: Date.now() - __t0,
-    },
-  });
-  // #endregion
   return { listings, totalMatched };
 }
 
@@ -3094,38 +2878,15 @@ export function setCommunityCache(community) {
 let statsHoldUntil = 0;
 let statsHoldValue = null;
 let statsHoldKey = "";
-let statsHoldAt = 0;
 
 export function holdStatsCache(ms = 15000) {
   statsHoldUntil = Date.now() + Math.max(0, Number(ms) || 0);
-  statsHoldAt = Date.now();
-  // #region agent log
-  unhangLog({
-    hypothesisId: "C",
-    location: "db.js:holdStatsCache",
-    message: "stats-hold",
-    runId: "post-fix",
-    data: { holdMs: Math.max(0, Number(ms) || 0), until: statsHoldUntil },
-  });
-  // #endregion
 }
 
 export function stats(searchKeys, userId, settingsOverride) {
-  // #region agent log
-  const __t0 = Date.now();
-  // #endregion
   const uid = resolveUserId(userId);
   const holdKey = `${uid}|${JSON.stringify(searchKeys || null)}`;
   if (Date.now() < statsHoldUntil && statsHoldValue && statsHoldKey === holdKey) {
-    // #region agent log
-    unhangLog({
-      hypothesisId: "C",
-      location: "db.js:stats",
-      message: "stats-held",
-      runId: "post-fix",
-      data: { uid, ageMs: statsHoldAt ? Date.now() - statsHoldAt : 0, ms: Date.now() - __t0 },
-    });
-    // #endregion
     return statsHoldValue;
   }
   const settings = settingsOverride || getSettings(uid);
@@ -3173,28 +2934,9 @@ export function stats(searchKeys, userId, settingsOverride) {
     }).length,
     dbTotal: listingCount(),
   };
-  // #region agent log
-  unhangLog({
-    hypothesisId: "D",
-    location: "db.js:stats",
-    message: "stats",
-    runId: "post-fix",
-    data: {
-      uid,
-      rawCount: raw.length,
-      overlaid: overlaid.length,
-      browse: browse.length,
-      stored: out.stored,
-      dbTotal: out.dbTotal,
-      ms: Date.now() - __t0,
-      held: Date.now() < statsHoldUntil,
-    },
-  });
-  // #endregion
   if (Date.now() < statsHoldUntil) {
     statsHoldValue = out;
     statsHoldKey = holdKey;
-    statsHoldAt = Date.now();
   }
   return out;
 }

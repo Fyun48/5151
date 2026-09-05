@@ -14,7 +14,6 @@ import {
   getSettings,
   hideMany,
   listListings,
-  listingCount,
   loadProfile,
   recentEvents,
   registerUser,
@@ -118,7 +117,6 @@ import { assertHuman, issueCaptcha } from "./captcha.js";
 import { assertCaptchaIssuable, assertDemoReadable, authAttemptKeys, clientIp } from "./rateLimit.js";
 import { buildDemoState } from "./demo.js";
 import { backfillListingCoords, backfillListingMrt, backfillListingRoutes, flushPendingNotifications, isWatchIntervalPending, runWatch } from "./watcher.js";
-import { setUnhangPhase, startUnhangProbe, unhangLog } from "./debugUnhang.js";
 import { LIST_PAGE_SIZE } from "./client591.js";
 import { APP_NAME, APP_VERSION } from "./brand.js";
 import { profileNameOrDraft } from "./settingsState.js";
@@ -157,30 +155,6 @@ app.use((req, res, next) => {
   }
   next();
 });
-
-app.use((req, res, next) => {
-  if (!String(req.path || "").startsWith("/api/")) return next();
-  // #region agent log
-  const __t0 = Date.now();
-  unhangLog({
-    hypothesisId: "D",
-    location: "server.js:api",
-    message: "api-start",
-    data: { method: req.method, path: req.path },
-  });
-  res.on("finish", () => {
-    unhangLog({
-      hypothesisId: "D",
-      location: "server.js:api",
-      message: "api-finish",
-      data: { method: req.method, path: req.path, status: res.statusCode, ms: Date.now() - __t0 },
-    });
-  });
-  // #endregion
-  next();
-});
-
-startUnhangProbe();
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, version: APP_VERSION });
@@ -1116,38 +1090,15 @@ async function ensureWorkCoords() {
 
 function queueGeoBackfill(settings = getSettings()) {
   settings = settingsForGeoBackfill(settings);
-  if (geoBackfillBusy) {
-    // #region agent log
-    unhangLog({ hypothesisId: "C", location: "server.js:queueGeoBackfill", message: "geo-busy", data: {} });
-    // #endregion
-    return;
-  }
+  if (geoBackfillBusy) return;
   const needCommute = needsListingGeo(settings);
   geoBackfillBusy = true;
   holdStatsCache(20_000);
-  // #region agent log
-  unhangLog({
-    hypothesisId: "C",
-    location: "server.js:queueGeoBackfill",
-    message: "geo-start",
-    runId: "post-fix",
-    data: { needCommute, listingCount: listingCount(), skipRoundStats: true },
-  });
-  // #endregion
   (async () => {
     if (needCommute) {
       for (let round = 0; round < 200; round += 1) {
         try {
           const routes = await backfillListingRoutes(settings, { limit: 20 });
-          // #region agent log
-          unhangLog({
-            hypothesisId: "C",
-            location: "server.js:queueGeoBackfill",
-            message: "geo-routes",
-            runId: "post-fix",
-            data: { round, attempted: routes.attempted, located: routes.located, skippedStats: true },
-          });
-          // #endregion
           if (routes.attempted) broadcast({ type: "geo", routeBackfill: routes });
           const notified = await flushPendingNotifications(settings);
           if (notified.length) broadcastNotify(notified);
@@ -1160,15 +1111,6 @@ function queueGeoBackfill(settings = getSettings()) {
       for (let round = 0; round < 80; round += 1) {
         try {
           const geo = await backfillListingCoords(settings, { limit: LIST_PAGE_SIZE });
-          // #region agent log
-          unhangLog({
-            hypothesisId: "C",
-            location: "server.js:queueGeoBackfill",
-            message: "geo-coords",
-            runId: "post-fix",
-            data: { round, attempted: geo.attempted, located: geo.located, skippedStats: true },
-          });
-          // #endregion
           if (geo.attempted) broadcast({ type: "geo", geoBackfill: geo });
           const notified = await flushPendingNotifications(settings);
           if (notified.length) broadcastNotify(notified);
@@ -1182,15 +1124,6 @@ function queueGeoBackfill(settings = getSettings()) {
     for (let round = 0; round < 80; round += 1) {
       try {
         const mrt = await backfillListingMrt({ limit: 20 });
-        // #region agent log
-        unhangLog({
-          hypothesisId: "C",
-          location: "server.js:queueGeoBackfill",
-          message: "geo-mrt",
-          runId: "post-fix",
-          data: { round, attempted: mrt.attempted, located: mrt.located, skippedStats: true },
-        });
-        // #endregion
         if (mrt.attempted) broadcast({ type: "geo", mrtBackfill: mrt });
         if (!mrt.attempted) break;
       } catch (error) {
@@ -1206,32 +1139,11 @@ function queueGeoBackfill(settings = getSettings()) {
   })()
     .finally(() => {
       geoBackfillBusy = false;
-      // #region agent log
-      unhangLog({
-        hypothesisId: "C",
-        location: "server.js:queueGeoBackfill",
-        message: "geo-done",
-        runId: "post-fix",
-        data: { listingCount: listingCount() },
-      });
-      // #endregion
     });
 }
 
 async function tick(reason = "schedule") {
-  // #region agent log
-  const __t0 = Date.now();
-  setUnhangPhase(`tick:${reason}:enter`, { tickBusy, listingCount: listingCount() });
-  // #endregion
   if (tickBusy && reason === "schedule") {
-    // #region agent log
-    unhangLog({
-      hypothesisId: "C",
-      location: "server.js:tick",
-      message: "tick-skip-busy",
-      data: { reason, listingCount: listingCount() },
-    });
-    // #endregion
     return lastRun || { skipped: "busy", reason, checked_at: new Date().toISOString(), searches: [], events: [] };
   }
   tickBusy = true;
@@ -1267,23 +1179,7 @@ async function tick(reason = "schedule") {
     }
     const includeSystem = reason === "force" || reason === "startup" || (reason !== "schedule" && systemDue) || (reason === "schedule" && systemDue);
     const plan = coveringPlan({ now, includeSystem });
-    // #region agent log
-    setUnhangPhase(`tick:${reason}:plan`, {
-      jobCount: plan.jobs.length,
-      includeSystem: plan.includeSystem === true,
-      listingCount: listingCount(),
-      ms: Date.now() - __t0,
-    });
-    // #endregion
     if (!plan.jobs.length) {
-      // #region agent log
-      unhangLog({
-        hypothesisId: "C",
-        location: "server.js:tick",
-        message: "tick-idle",
-        data: { reason, ms: Date.now() - __t0 },
-      });
-      // #endregion
       return {
         skipped: "idle",
         reason,
@@ -1300,34 +1196,15 @@ async function tick(reason = "schedule") {
       includeSystem: plan.includeSystem,
     });
     lastRun.reason = reason;
-    // #region agent log
-    setUnhangPhase(`tick:${reason}:broadcast`, {
-      fetched: lastRun.fetched || 0,
-      events: (lastRun.events || []).length,
-      listingCount: listingCount(),
-      ms: Date.now() - __t0,
-    });
-    // #endregion
     broadcastWatch(lastRun);
     if (reason !== "startup") queueGeoBackfill();
     return lastRun;
   } catch (error) {
     lastRun = { error: error.message, checked_at: new Date().toISOString(), reason };
-    // #region agent log
-    unhangLog({
-      hypothesisId: "C",
-      location: "server.js:tick",
-      message: "tick-error",
-      data: { reason, error: error.message, ms: Date.now() - __t0 },
-    });
-    // #endregion
     broadcast({ type: "error", error: error.message });
     throw error;
   } finally {
     tickBusy = false;
-    // #region agent log
-    setUnhangPhase(`tick:${reason}:finally`, { listingCount: listingCount(), ms: Date.now() - __t0 });
-    // #endregion
   }
 }
 
@@ -1683,23 +1560,9 @@ app.listen(PORT, HOST, () => {
     console.log("系統信（註冊、忘記密碼、變更密碼、贊助）尚未能寄信：請在後台填 SMTP，或在 auth.env 寫入 SMTP_HOST、SMTP_USER、SMTP_PASS、SMTP_FROM。");
   }
   setTimeout(() => {
-    // #region agent log
-    setUnhangPhase("startup:timer", { listingCount: listingCount() });
-    // #endregion
     ensureWorkCoords()
       .then((settings) => {
-        // #region agent log
-        const __tJobs = Date.now();
-        // #endregion
         const jobs = coveringJobsFromAllUsers({ includeSystem: true });
-        // #region agent log
-        unhangLog({
-          hypothesisId: "C",
-          location: "server.js:listen",
-          message: "startup-jobs",
-          data: { jobCount: jobs.length, listingCount: listingCount(), ms: Date.now() - __tJobs },
-        });
-        // #endregion
         if (!jobs.length) {
           queueGeoBackfill(settings);
           return;
@@ -1708,31 +1571,9 @@ app.listen(PORT, HOST, () => {
         return tick("startup");
       })
       .then((result) => {
-        // #region agent log
-        unhangLog({
-          hypothesisId: "C",
-          location: "server.js:listen",
-          message: "startup-tick-done",
-          runId: "post-fix",
-          data: {
-            fetched: result?.fetched || 0,
-            skipped: result?.skipped || "",
-            listingCount: listingCount(),
-            queueGeoAfterTick: result != null,
-          },
-        });
-        // #endregion
         if (result != null) queueGeoBackfill();
       })
       .catch((error) => {
-        // #region agent log
-        unhangLog({
-          hypothesisId: "C",
-          location: "server.js:listen",
-          message: "startup-error",
-          data: { error: error.message },
-        });
-        // #endregion
         console.warn("第一次檢查失敗：", error.message);
       });
   }, 20000);

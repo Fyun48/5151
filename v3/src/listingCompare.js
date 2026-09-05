@@ -2,7 +2,6 @@
 
 import { extraMonthlyAmount, listingCompareCost, parseJsonFees, rentAmount } from "./listingCost.js";
 import { preferPrimaryListing } from "./match.js";
-import { unhangAgg } from "./debugUnhang.js";
 
 function normFeeText(value) {
   return String(value ?? "")
@@ -182,9 +181,6 @@ export function publicSameHousePeer(row) {
 }
 
 export function sameHouseBundle(listing, peers = []) {
-  // #region agent log
-  const __t0 = Date.now();
-  // #endregion
   const group = [listing, ...peers].filter(Boolean);
   const uniq = [];
   const seen = new Set();
@@ -194,18 +190,7 @@ export function sameHouseBundle(listing, peers = []) {
     seen.add(id);
     uniq.push(row);
   }
-  if (uniq.length < 2) {
-    // #region agent log
-    unhangAgg("sameHouseBundle", { hypothesisId: "B", location: "listingCompare.js:sameHouseBundle", message: "sameHouseBundle-agg" }, {
-      ms: Date.now() - __t0,
-      uniq: uniq.length,
-      peerIn: peers.length,
-      postId: Number(listing?.post_id) || 0,
-      skipped: "lt2",
-    }, { every: 50, slowMs: 15 });
-    // #endregion
-    return null;
-  }
+  if (uniq.length < 2) return null;
   const confirmed = uniq.some((row) => (
     row.match_verdict === "yes" || /已確認同一間/.test(String(row.match_detail || ""))
   ));
@@ -235,15 +220,6 @@ export function sameHouseBundle(listing, peers = []) {
       };
     }),
   };
-  // #region agent log
-  unhangAgg("sameHouseBundle", { hypothesisId: "B", location: "listingCompare.js:sameHouseBundle", message: "sameHouseBundle-agg" }, {
-    ms: Date.now() - __t0,
-    uniq: uniq.length,
-    peerIn: peers.length,
-    peerOut: others.length,
-    postId: mineId,
-  }, { every: 50, slowMs: 15 });
-  // #endregion
   return bundle;
 }
 

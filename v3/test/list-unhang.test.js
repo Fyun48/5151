@@ -72,7 +72,7 @@ test("listListings attaches same-house only on the returned page", () => {
   try {
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
       encoding: "utf8",
-      env: { ...process.env, DATA_DIR: dataDir, DEBUG_UNHANG: "0" },
+      env: { ...process.env, DATA_DIR: dataDir },
     });
     assert.equal(result.status, 0, result.stderr || result.stdout);
     const line = result.stdout.trim().split("\n").filter((row) => row.startsWith("{")).at(-1);

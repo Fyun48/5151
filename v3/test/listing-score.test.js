@@ -70,7 +70,7 @@ test("listListings cheap-filters then attaches same-house only on the page slice
   const listFn = dbSrc.slice(dbSrc.indexOf("export function listListings"), dbSrc.indexOf("export function sourceHistory"));
   assert.match(listFn, /decorateListingLite/);
   assert.match(listFn, /finalizeListingDecorate/);
-  assert.match(listFn, /sameHouseAttached/);
+  assert.match(listFn, /\{ sameHouse: true \}/);
   assert.doesNotMatch(listFn, /\.map\(\(row\) => decorateListing\(/);
   assert.ok(listFn.indexOf("decorateListingLite") < listFn.indexOf("sortListingsRows"));
   assert.ok(listFn.indexOf("sortListingsRows") < listFn.indexOf("finalizeListingDecorate"));
