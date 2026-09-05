@@ -73,9 +73,10 @@ test("listListings cheap-filters then attaches same-house only on the page slice
   assert.match(listFn, /sameHouse: true/);
   assert.doesNotMatch(listFn, /\.map\(\(row\) => decorateListing\(/);
   assert.match(listFn, /attachSameHouseRoles/);
-  assert.ok(listFn.indexOf("decorateListingLite") < listFn.indexOf("attachSameHouseRoles"));
+  assert.match(listFn, /needFit \? row : decorateListingLite/);
+  assert.doesNotMatch(listFn, /applyListingFilter\([\s\S]*?\)\.map\(\(row\) => decorateListingLite/);
   assert.ok(listFn.indexOf("attachSameHouseRoles") < listFn.indexOf("listingMatchesListFilter"));
-  assert.ok(listFn.indexOf("decorateListingLite") < listFn.indexOf("sortListingsRows"));
+  assert.ok(listFn.indexOf("listingMatchesListFilter") < listFn.indexOf("sortListingsRows"));
   assert.ok(listFn.indexOf("sortListingsRows") < listFn.indexOf("finalizeListingDecorate"));
   assert.ok(listFn.indexOf("rows.slice(0, limit)") < listFn.indexOf("finalizeListingDecorate"));
 });

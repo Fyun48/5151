@@ -29,6 +29,9 @@ test("boot watchdog still runs if the main page script never parses", () => {
   assert.match(html, /window\.__APP_PARSED = true/);
   assert.match(html, /window\.__APP_BOOTED = true/);
   assert.match(html, /不要按清除資料/);
+  assert.match(html, /function armBootWatch/);
+  assert.match(html, /document\.readyState !== "complete"/);
+  assert.match(html, /主程式腳本還沒載入完/);
   const watchdogIdx = html.indexOf("window.__showBootFail");
   const parsedIdx = html.indexOf("window.__APP_PARSED = true");
   const bootedIdx = html.lastIndexOf("window.__APP_BOOTED = true");
@@ -373,13 +376,13 @@ test("product name is 吉比租房物件追蹤 without v2 開發版 copy", () =>
   assert.equal(html.includes("v2 開發版"), false);
   assert.equal(html.includes("v3 開發版"), false);
   assert.equal(html.includes("與線上版分開的資料庫"), false);
-  assert.match(html, /ver\. 3\.44/);
+  assert.match(html, /ver\. 3\.45/);
   assert.doesNotMatch(html, /<h1>[^<]*v3/i);
   assert.match(login, /<h1>吉比租房物件追蹤<\/h1>/);
   assert.equal(login.includes("v2 開發版"), false);
   assert.equal(login.includes("v3 開發版"), false);
   assert.equal(login.includes("資料與線上版分開"), false);
-  assert.match(login, /ver\. 3\.44/);
+  assert.match(login, /ver\. 3\.45/);
 });
 
 test("MRT is admin-only and guest tour is in the page", () => {
