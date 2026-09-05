@@ -2566,9 +2566,11 @@ export function applyCachedCoords(row, settings) {
   return row;
 }
 
-export function getCachedRoute(fromLat, fromLng, toLat, toLng, mode = "scooter") {
-  const key = makeRouteKey(fromLat, fromLng, toLat, toLng, mode);
-  const row = db.prepare("SELECT distances, min_km, rush_am_min, rush_pm_min, rush_updated_at FROM route_cache WHERE route_key = ?").get(key);
+let routeCacheMemo = null;
+let routeCacheMemoAt = 0;
+const ROUTE_CACHE_MEMO_MS = 8000;
+
+function parseRouteCacheRow(row) {
   if (!row) return null;
   const distances = parseJson(row.distances, []);
   if (!Array.isArray(distances) || !distances.length) return null;
@@ -2581,6 +2583,26 @@ export function getCachedRoute(fromLat, fromLng, toLat, toLng, mode = "scooter")
     rush_pm_min: Number.isFinite(rushPm) ? rushPm : null,
     rush_updated_at: row.rush_updated_at || "",
   };
+}
+
+export function warmRouteCache() {
+  const stamp = Date.now();
+  if (routeCacheMemo && stamp - routeCacheMemoAt < ROUTE_CACHE_MEMO_MS) return routeCacheMemo;
+  routeCacheMemo = new Map();
+  for (const row of db.prepare("SELECT route_key, distances, min_km, rush_am_min, rush_pm_min, rush_updated_at FROM route_cache").all()) {
+    const parsed = parseRouteCacheRow(row);
+    if (parsed) routeCacheMemo.set(row.route_key, parsed);
+  }
+  routeCacheMemoAt = stamp;
+  return routeCacheMemo;
+}
+
+export function getCachedRoute(fromLat, fromLng, toLat, toLng, mode = "scooter") {
+  const key = makeRouteKey(fromLat, fromLng, toLat, toLng, mode);
+  const memo = routeCacheMemo && Date.now() - routeCacheMemoAt < ROUTE_CACHE_MEMO_MS
+    ? routeCacheMemo
+    : warmRouteCache();
+  return memo.get(key) || null;
 }
 
 export function getCachedMrt(lat, lng) {
@@ -2697,16 +2719,26 @@ export function setCachedRoute(fromLat, fromLng, toLat, toLng, distances, rush =
          rush_pm_min = excluded.rush_pm_min,
          rush_updated_at = excluded.rush_updated_at`,
     ).run(key, JSON.stringify(list), minKm, stamp, rushAm, rushPm, stamp);
-    return;
+  } else {
+    db.prepare(
+      `INSERT INTO route_cache(route_key, distances, min_km, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(route_key) DO UPDATE SET
+         distances = excluded.distances,
+         min_km = excluded.min_km,
+         updated_at = excluded.updated_at`,
+    ).run(key, JSON.stringify(list), minKm, stamp);
   }
-  db.prepare(
-    `INSERT INTO route_cache(route_key, distances, min_km, updated_at)
-     VALUES (?, ?, ?, ?)
-     ON CONFLICT(route_key) DO UPDATE SET
-       distances = excluded.distances,
-       min_km = excluded.min_km,
-       updated_at = excluded.updated_at`,
-  ).run(key, JSON.stringify(list), minKm, stamp);
+  if (routeCacheMemo && Date.now() - routeCacheMemoAt < ROUTE_CACHE_MEMO_MS) {
+    const prev = routeCacheMemo.get(key);
+    routeCacheMemo.set(key, {
+      distances: list,
+      min_km: minKm,
+      rush_am_min: hasRush ? rushAm : prev?.rush_am_min ?? null,
+      rush_pm_min: hasRush ? rushPm : prev?.rush_pm_min ?? null,
+      rush_updated_at: hasRush ? stamp : prev?.rush_updated_at || "",
+    });
+  }
 }
 
 export function listingsNeedingRoute(limit = 40) {
@@ -2740,9 +2772,10 @@ export function listingsNeedingRoute(limit = 40) {
 
 function applyListingFilter(rows, settings = getSettings()) {
   // 列表用非嚴格通勤：還沒算完路線的先顯示（排在離公司排序末端），避免新北等區整批空白
-  return rows
-    .map((row) => applyCachedCoords(row, settings))
-    .filter((row) => shouldKeepListing(row, settings, { strict: false }));
+  const commuteOn = Number(settings.commuteKm) > 0 && hasWorkPoint(settings);
+  if (commuteOn) warmRouteCache();
+  const prepared = commuteOn ? rows.map((row) => applyCachedCoords(row, settings)) : rows;
+  return prepared.filter((row) => shouldKeepListing(row, settings, { strict: false }));
 }
 
 export function addressesMissingGeo() {
@@ -2770,6 +2803,14 @@ export function updateListingsGeoByAddress(address, lat, lng) {
   ).run(Number(lat), Number(lng), key);
 }
 
+function listingCommuteKm(row) {
+  const decorated = Number(row?.commute_km);
+  if (Number.isFinite(decorated)) return decorated;
+  const raw = Number(row?.route_km);
+  if (Number.isFinite(raw)) return Math.round(raw * 10) / 10;
+  return null;
+}
+
 function rentSortValue(row, settings = {}) {
   return listingCompareCost(row, { includeExtras: settings?.priceMaxIncludesExtras === true });
 }
@@ -2791,9 +2832,9 @@ function descIso(a, b) {
 export function sortListingsRows(rows, sort = "price_asc", { filter, settings } = {}) {
   const list = [...(rows || [])];
   if (sort === "commute_asc") {
-    list.sort((a, b) => (Number(a.commute_km) || 9999) - (Number(b.commute_km) || 9999) || priceSortKey(a, settings) - priceSortKey(b, settings));
+    list.sort((a, b) => (listingCommuteKm(a) ?? 9999) - (listingCommuteKm(b) ?? 9999) || priceSortKey(a, settings) - priceSortKey(b, settings));
   } else if (sort === "commute_desc") {
-    list.sort((a, b) => (Number(b.commute_km) || 0) - (Number(a.commute_km) || 0) || priceSortKey(a, settings) - priceSortKey(b, settings));
+    list.sort((a, b) => (listingCommuteKm(b) ?? 0) - (listingCommuteKm(a) ?? 0) || priceSortKey(a, settings) - priceSortKey(b, settings));
   } else if (sort === "price_desc") {
     list.sort((a, b) => {
       const pa = rentSortValue(a, settings);
@@ -2907,12 +2948,11 @@ export function listListings({
   const raw = db.prepare(`SELECT * FROM listings ${where}`).all(...params);
   const settings = settingsOverride || getSettings(uid);
   const flagMap = loadFlagMap(db, uid);
+  const overlaid = overlayRowsPersonal(raw, flagMap);
   let rows =
     filter === "offline" || filter === "suspected"
-      ? overlayRowsPersonal(raw, flagMap)
-        .filter((row) => passesPriceFilter(row, settings))
-        .map((row) => decorateListingLite(row, settings, uid))
-      : applyListingFilter(overlayRowsPersonal(raw, flagMap), settings).map((row) => decorateListingLite(row, settings, uid));
+      ? overlaid.filter((row) => passesPriceFilter(row, settings))
+      : applyListingFilter(overlaid, settings);
 
   rows = attachSameHouseRoles(rows, voteUid);
   rows = rows.filter((row) => listingMatchesListFilter(row, filter));
@@ -2926,15 +2966,22 @@ export function listListings({
       .filter(Boolean),
   );
   if (districtSet.size) {
-    rows = rows.filter((row) => districtSet.has(row.district));
+    rows = rows.filter((row) => districtSet.has(row.district || districtNameFromListing(row)));
   }
 
   rows = rows.filter((row) => matchesHousingKind(row, kind));
 
+  const needFit = sort === "fit_desc";
+  if (needFit) {
+    rows = rows.map((row) => decorateListingLite(row, settings, uid));
+  }
   rows = sortListingsRows(rows, sort, { filter, settings });
 
   const totalMatched = rows.length;
-  const listings = rows.slice(0, limit).map((row) => finalizeListingDecorate(row, settings, uid, { sameHouse: true, matchVoteUserId: voteUid }));
+  const listings = rows.slice(0, limit).map((row) => {
+    const lite = needFit ? row : decorateListingLite(row, settings, uid);
+    return finalizeListingDecorate(lite, settings, uid, { sameHouse: true, matchVoteUserId: voteUid });
+  });
   return { listings, totalMatched };
 }
 
@@ -3047,18 +3094,32 @@ export function setCommunityCache(community) {
 let statsHoldUntil = 0;
 let statsHoldValue = null;
 let statsHoldKey = "";
+let statsMemo = null;
+let statsMemoAt = 0;
+let statsMemoKey = "";
+const STATS_MEMO_MS = 4000;
 
 export function holdStatsCache(ms = 15000) {
   statsHoldUntil = Date.now() + Math.max(0, Number(ms) || 0);
 }
 
+function statsCacheKey(uid, searchKeys, settingsOverride) {
+  if (!settingsOverride) return `${uid}|${JSON.stringify(searchKeys || null)}`;
+  return `${uid}|${JSON.stringify(searchKeys || null)}|${Number(settingsOverride.commuteKm) || 0}|${settingsOverride.workLat || ""}|${settingsOverride.workLng || ""}|${settingsOverride.commuteMode || ""}`;
+}
+
 export function stats(searchKeys, userId, settingsOverride) {
   const uid = resolveUserId(userId);
-  const holdKey = `${uid}|${JSON.stringify(searchKeys || null)}`;
-  if (Date.now() < statsHoldUntil && statsHoldValue && statsHoldKey === holdKey) {
+  const holdKey = statsCacheKey(uid, searchKeys, settingsOverride);
+  const now = Date.now();
+  if (now < statsHoldUntil && statsHoldValue && statsHoldKey === holdKey) {
     return statsHoldValue;
   }
+  if (statsMemo && statsMemoKey === holdKey && now - statsMemoAt < STATS_MEMO_MS) {
+    return { ...statsMemo };
+  }
   const settings = settingsOverride || getSettings(uid);
+  if (Number(settings.commuteKm) > 0 && hasWorkPoint(settings)) warmRouteCache();
   const clauses = [];
   const params = [];
   searchWhere(searchKeys, clauses, params);
@@ -3103,6 +3164,9 @@ export function stats(searchKeys, userId, settingsOverride) {
     }).length,
     dbTotal: listingCount(),
   };
+  statsMemo = out;
+  statsMemoAt = Date.now();
+  statsMemoKey = holdKey;
   if (Date.now() < statsHoldUntil) {
     statsHoldValue = out;
     statsHoldKey = holdKey;

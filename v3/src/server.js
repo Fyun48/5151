@@ -1,5 +1,6 @@
 import "./env.js";
 import express from "express";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -146,6 +147,20 @@ const app = express();
 app.set("trust proxy", 1);
 const PORT = Number(process.env.PORT || 5153);
 const HOST = process.env.HOST || "0.0.0.0";
+const INDEX_HTML = readFileSync(path.join(__dirname, "../public/index.html"));
+const LOGIN_HTML = readFileSync(path.join(__dirname, "../public/login.html"));
+
+function sendHtmlBuffer(res, buf) {
+  res.status(200);
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Content-Length", String(buf.length));
+  res.end(buf);
+}
+
+function yieldEventLoop() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
 
 app.use(express.json({ limit: "1mb" }));
 
@@ -177,14 +192,19 @@ app.get("/api/push/vapid", (_req, res) => {
 });
 
 app.get("/", (_req, res) => {
-  res.sendFile(path.join(__dirname, "../public/index.html"));
+  sendHtmlBuffer(res, INDEX_HTML);
 });
 
 app.get("/index.html", (_req, res) => {
-  res.sendFile(path.join(__dirname, "../public/index.html"));
+  sendHtmlBuffer(res, INDEX_HTML);
 });
 
-app.get("/api/demo", (req, res) => {
+app.get("/login.html", (_req, res) => {
+  sendHtmlBuffer(res, LOGIN_HTML);
+});
+
+app.get("/api/demo", async (req, res) => {
+  await yieldEventLoop();
   try {
     if (readSession(req)) {
       res.redirect(302, "/api/state");
@@ -1300,7 +1320,8 @@ app.post("/api/member-mail/test", async (req, res) => {
   }
 });
 
-app.get("/api/state", (req, res) => {
+app.get("/api/state", async (req, res) => {
+  await yieldEventLoop();
   const uid = actorUserId(req);
   let settings;
   try {
@@ -1341,7 +1362,8 @@ app.get("/api/state", (req, res) => {
   });
 });
 
-app.get("/api/listings", (req, res) => {
+app.get("/api/listings", async (req, res) => {
+  await yieldEventLoop();
   const uid = actorUserId(req);
   const districts = String(req.query.districts || "")
     .split(",")

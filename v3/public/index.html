@@ -2088,14 +2088,21 @@
       if (!msg || msg === "Script error.") return;
       window.__showBootFail("錯誤：" + msg + "。請重新整理，不要按清除資料。");
     });
-    setTimeout(function () {
-      if (window.__APP_BOOTED) return;
-      if (!window.__APP_PARSED) {
-        window.__showBootFail("主程式腳本沒有執行，多半是語法錯誤。請重新整理，不要按清除資料。");
-        return;
-      }
-      window.__showBootFail("程式執行到一半就停了。請重新整理，不要按清除資料。");
-    }, 4000);
+    function armBootWatch(delay) {
+      setTimeout(function () {
+        if (window.__APP_BOOTED) return;
+        if (document.readyState !== "complete") {
+          armBootWatch(Math.min((delay || 4000) + 3000, 16000));
+          return;
+        }
+        if (!window.__APP_PARSED) {
+          window.__showBootFail("主程式腳本還沒載入完。通常是伺服器正在算列表，請再整理一次。不要按清除資料。");
+          return;
+        }
+        window.__showBootFail("程式執行到一半就停了。請重新整理，不要按清除資料。");
+      }, delay || 4000);
+    }
+    armBootWatch(4000);
   </script>
   <header>
     <div class="header-main">
@@ -2785,7 +2792,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.44</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.45</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -4781,7 +4788,7 @@
       if (!me.ok) {
         setGuestMode(true);
         setSettingsReady(false, "示範條件不能改。註冊後才能存成你的設定。");
-        const demoRes = await fetch("/api/demo", { cache: "no-store", signal: AbortSignal.timeout(20000) });
+        const demoRes = await fetch("/api/demo", { cache: "no-store", signal: AbortSignal.timeout(35000) });
         const demo = await readApi(demoRes);
         if (!demoRes.ok) throw new Error(demo.error || "示範列表載入失敗");
         cities = Array.isArray(demo.cities) && demo.cities.length ? demo.cities : CITIES_EMBEDDED;
@@ -4840,7 +4847,7 @@
         $("status").textContent = lastError || "設定沒載到，請重新整理";
       }
       try {
-        const res = await fetch("/api/state", { cache: "no-store", signal: AbortSignal.timeout(20000) });
+        const res = await fetch("/api/state", { cache: "no-store", signal: AbortSignal.timeout(35000) });
         const data = await readApi(res);
         if (res.ok && data.settings) {
           cities = Array.isArray(data.cities) && data.cities.length ? data.cities : cities;
