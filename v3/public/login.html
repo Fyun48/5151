@@ -202,13 +202,8 @@
       background: var(--paper);
       color: var(--ink);
     }
-    .oauth-row a.ghost.is-off,
-    .oauth-row a.ghost[aria-disabled="true"] {
-      opacity: 1;
-      color: var(--muted);
-      background: var(--accent-mist);
-      cursor: not-allowed;
-    }
+    .oauth[hidden],
+    .oauth-row a[hidden] { display: none !important; }
   </style>
 </head>
 <body>
@@ -225,13 +220,13 @@
       <button type="button" class="on" id="tabLogin">登入</button>
       <button type="button" id="tabRegister">註冊</button>
     </div>
-    <div class="oauth" id="oauthBox">
-      <p class="oauth-kicker" id="oauthIntro">用 Google／LINE／Facebook 登入。後台未開通的鈕會反灰。</p>
+    <div class="oauth" id="oauthBox" hidden>
+      <p class="oauth-kicker" id="oauthIntro">用社群帳號登入。</p>
       <p class="oauth-kicker" id="oauthHint">正在確認社群登入…</p>
       <div class="oauth-row">
-        <a class="ghost is-off" id="oauthGoogle" href="/auth/google" aria-disabled="true">Google</a>
-        <a class="ghost is-off" id="oauthLine" href="/auth/line" aria-disabled="true">LINE</a>
-        <a class="ghost is-off" id="oauthFacebook" href="/auth/facebook" aria-disabled="true">Facebook</a>
+        <a class="ghost" id="oauthGoogle" href="/auth/google" hidden aria-disabled="true">Google</a>
+        <a class="ghost" id="oauthLine" href="/auth/line" hidden aria-disabled="true">LINE</a>
+        <a class="ghost" id="oauthFacebook" href="/auth/facebook" hidden aria-disabled="true">Facebook</a>
       </div>
     </div>
     <form id="loginForm">
@@ -324,6 +319,7 @@
     const verifyState = new URLSearchParams(location.search).get("verify");
     const oauthState = new URLSearchParams(location.search).get("oauth");
     let captchaId = "";
+    let oauthOnNames = [];
     function clearNotes() {
       $("err").textContent = "";
       $("ok").textContent = "";
@@ -362,13 +358,9 @@
       $("loginForm").classList.toggle("hidden", register || forgot);
       $("registerForm").classList.toggle("hidden", !register);
       $("forgotForm").classList.toggle("hidden", !forgot);
-      if ($("oauthBox")) $("oauthBox").classList.toggle("hidden", forgot);
       if ($("registerPolicy")) $("registerPolicy").hidden = !register;
-      if ($("oauthIntro")) {
-        $("oauthIntro").textContent = register
-          ? "用 Google／LINE／Facebook 註冊。請先勾選下方免責與個資，再按社群鈕；新帳號仍要完成開通信。"
-          : "用 Google／LINE／Facebook 登入。後台未開通的鈕會反灰。";
-      }
+      syncOauthCopy(register);
+      syncOauthBox(forgot);
       clearNotes();
       if (forgot && !$("forgotEmail").value) $("forgotEmail").value = $("email").value.trim();
     }
@@ -431,30 +423,39 @@
       }
       if (data.ok && !justLoggedOut && !verifyState) location.replace("/");
     }).catch(() => {});
+    function syncOauthCopy(register) {
+      const list = oauthOnNames.length ? oauthOnNames.join("／") : "社群帳號";
+      if ($("oauthIntro")) {
+        $("oauthIntro").textContent = register
+          ? `用 ${list} 註冊。請先勾選下方免責與個資，再按社群鈕；新帳號仍要完成開通信。`
+          : `用 ${list} 登入。`;
+      }
+      if ($("oauthHint")) {
+        $("oauthHint").hidden = !oauthOnNames.length;
+        $("oauthHint").textContent = oauthOnNames.length ? "可用社群帶入信箱。新帳號仍要點開通信。" : "";
+      }
+    }
+    function syncOauthBox(forgot) {
+      if ($("oauthBox")) $("oauthBox").hidden = forgot || !oauthOnNames.length;
+    }
     function paintOauthButtons(oauth = {}) {
       const names = { google: "Google", line: "LINE", facebook: "Facebook" };
-      const off = [];
+      oauthOnNames = [];
       for (const [id, key] of [["oauthGoogle", "google"], ["oauthLine", "line"], ["oauthFacebook", "facebook"]]) {
         const on = Boolean(oauth[key]?.enabled && oauth[key]?.configured);
         const el = $(id);
         if (!el) continue;
-        el.hidden = false;
+        el.hidden = !on;
         el.classList.toggle("is-off", !on);
         el.setAttribute("aria-disabled", on ? "false" : "true");
         el.setAttribute("tabindex", on ? "0" : "-1");
-        el.setAttribute("aria-describedby", "oauthHint");
-        if (!on) off.push(names[key]);
+        if (on) oauthOnNames.push(names[key]);
       }
-      if ($("oauthBox")) {
-        $("oauthBox").hidden = false;
-        $("oauthBox").dataset.empty = "0";
-      }
-      if ($("oauthHint")) {
-        $("oauthHint").hidden = false;
-        $("oauthHint").textContent = off.length === 3
-          ? "後台尚未開通社群登入。請先用 Email 註冊；開通後這三顆才能用。"
-          : (off.length ? `${off.join("、")} 後台尚未開通，暫時不能按。` : "可用社群帶入信箱。新帳號仍要點開通信。");
-      }
+      if ($("oauthBox")) $("oauthBox").dataset.empty = oauthOnNames.length ? "0" : "1";
+      const forgot = !$("forgotForm").classList.contains("hidden");
+      const register = !$("registerForm").classList.contains("hidden");
+      syncOauthCopy(register);
+      syncOauthBox(forgot);
     }
     paintOauthButtons();
     fetch("/api/oauth", { cache: "no-store" }).then((r) => r.json()).then((data) => {
