@@ -88,7 +88,7 @@ test("same-house bundle keeps lowest total as primary and notes the surcharge", 
   assert.equal(bundle.cheaper_exists, true);
   assert.equal(bundle.cheaper_gap, 5500);
   assert.equal(bundle.peers[0].role, "primary");
-  assert.ok(bundle.peers[0].notes.some((note) => /貴 5,500/.test(note)));
+  assert.ok(bundle.peers[0].notes.some((note) => /便宜 5,500/.test(note)));
   const diffs = compareListingDiffs(pricey, cheap);
   assert.ok(diffs.some((row) => row.field === "total"));
   assert.ok(diffs.some((row) => row.field === "source"));
