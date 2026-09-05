@@ -74,7 +74,20 @@ test("personal split hides affiliate only for that user until consensus", () => 
       extra_fees: [{ name: "管理費", value: "另計 3500", amount: 3500 }],
       source: "591",
     });
+    upsertListing({
+      ...cheap,
+      post_id: 910005,
+      source_key: "1|1|mid",
+      title: "南港中價",
+      url: "https://rent.591.com.tw/910005",
+      price: "33000元",
+      price_num: 33000,
+      extra_fee: 0,
+      extra_fees: [],
+      source: "591",
+    });
     setListingMatch(910002, { match_post_id: 910001, match_level: "high", match_detail: "同屋源" });
+    setListingMatch(910005, { match_post_id: 910001, match_level: "medium", match_detail: "同屋源" });
     const guest = listListings({ filter: "guest", sort: "newest", limit: 20, matchVoteUserId: 0 });
     const idsGuest = (guest.listings || []).map((row) => row.post_id);
     const primary = (guest.listings || []).find((row) => row.post_id === 910001);
@@ -94,7 +107,8 @@ test("personal split hides affiliate only for that user until consensus", () => 
       firstPromoted: first.promoted,
       firstVerdict: first.listing?.match_verdict || "",
       aliceHasExpensive: (aliceList.listings || []).some((row) => row.post_id === 910002),
-      alicePrimaryHouse: Boolean((aliceList.listings || []).find((row) => row.post_id === 910001)?.same_house),
+      alicePrimaryPeers: ((aliceList.listings || []).find((row) => row.post_id === 910001)?.same_house?.peers || []).map((row) => row.post_id),
+      aliceHidesMid: !(aliceList.listings || []).some((row) => row.post_id === 910005),
       bobStillBundled: Boolean((bobList.listings || []).find((row) => row.post_id === 910001)?.same_house),
       bobHidesExpensive: !(bobList.listings || []).some((row) => row.post_id === 910002),
       thirdPromoted: third.promoted,
@@ -117,7 +131,8 @@ test("personal split hides affiliate only for that user until consensus", () => 
     assert.equal(out.firstPromoted, false);
     assert.equal(out.firstVerdict, "");
     assert.equal(out.aliceHasExpensive, true);
-    assert.equal(out.alicePrimaryHouse, false);
+    assert.deepEqual(out.alicePrimaryPeers, [910005]);
+    assert.equal(out.aliceHidesMid, true);
     assert.equal(out.bobStillBundled, true);
     assert.equal(out.bobHidesExpensive, true);
     assert.equal(out.thirdPromoted, true);

@@ -1601,7 +1601,7 @@ function attachListingPeers(row, settings, voteUserId) {
     source,
     source_label: row.source_label || selfSourceLabel(source),
   };
-  const same_house = (row.match_verdict === "no" || Number(row.match_rejected) === 1 || splitFromMatch)
+  const same_house = (row.match_verdict === "no" || Number(row.match_rejected) === 1)
     ? null
     : sameHouseBundle(decoratedSelf, sameHousePeers);
   return { ...row, match_peer: matchPeer || null, same_house };
