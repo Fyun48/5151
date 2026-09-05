@@ -287,6 +287,10 @@ test("guest demo is read-only and work prompt can be skipped", () => {
   assert.doesNotMatch(html, /示範瀏覽/);
   assert.match(html, /id="guestToast"/);
   assert.match(html, /class="guest-toast"/);
+  assert.match(html, /\.guest-toast \{[\s\S]*z-index:\s*122/);
+  assert.match(html, /body\.guest-toast-open #scrollTopBtn/);
+  assert.match(html, /classList\.add\("guest-toast-open"\)/);
+  assert.match(html, /classList\.remove\("guest-toast-open"\)/);
   assert.match(html, /GUEST_LOCK_TOAST_AFTER = 1/);
   assert.match(html, /function showGuestToast/);
   assert.match(html, /function remindGuest/);
