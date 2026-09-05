@@ -456,6 +456,7 @@
           : (off.length ? `${off.join("、")} 後台尚未開通，暫時不能按。` : "可用社群帶入信箱。新帳號仍要點開通信。");
       }
     }
+    paintOauthButtons();
     fetch("/api/oauth", { cache: "no-store" }).then((r) => r.json()).then((data) => {
       paintOauthButtons(data?.oauth || {});
     }).catch(() => {

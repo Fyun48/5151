@@ -4697,7 +4697,7 @@
         if (q) msg = `沒有符合「${q}」的物件。試試較短關鍵字，或清掉搜尋看全部列表。`;
         else if (viewDistricts.size) {
           msg = "這個行政區篩選目前沒有物件。可點「全部」或再勾其他區。";
-        }         else if (kinds.length || sources.length || $("excludeLowFloors")?.checked || $("excludeRooftop")?.checked) {
+        } else if (kinds.length || sources.length || $("excludeLowFloors")?.checked || $("excludeRooftop")?.checked) {
           const bits = [];
           if (kinds.length) bits.push("房屋類型");
           if (sources.length) bits.push("來源");
