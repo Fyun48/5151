@@ -65,6 +65,18 @@ test("decorateListing strips model_score and attaches fit fields", () => {
   assert.doesNotMatch(dbSrc, /fit_score:\s*row\.model_score/);
 });
 
+test("listListings cheap-filters then attaches same-house only on the page slice", () => {
+  const dbSrc = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../src/db.js"), "utf8");
+  const listFn = dbSrc.slice(dbSrc.indexOf("export function listListings"), dbSrc.indexOf("export function sourceHistory"));
+  assert.match(listFn, /decorateListingLite/);
+  assert.match(listFn, /finalizeListingDecorate/);
+  assert.match(listFn, /sameHouseAttached/);
+  assert.doesNotMatch(listFn, /\.map\(\(row\) => decorateListing\(/);
+  assert.ok(listFn.indexOf("decorateListingLite") < listFn.indexOf("sortListingsRows"));
+  assert.ok(listFn.indexOf("sortListingsRows") < listFn.indexOf("finalizeListingDecorate"));
+  assert.ok(listFn.indexOf("rows.slice(0, limit)") < listFn.indexOf("finalizeListingDecorate"));
+});
+
 test("getCrawlSources is wired so listing lists can load", () => {
   const { items } = getCrawlSources();
   assert.ok(items.some((row) => row.id === "591" && row.enabled));

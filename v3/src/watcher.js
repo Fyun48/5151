@@ -66,6 +66,10 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function listingForWatch(postId, userId) {
+  return getListing(postId, userId, { sameHouse: false });
+}
+
 function listingEventPayload(listing, type, detail, stamp = nowIso()) {
   return {
     post_id: listing.post_id,
@@ -92,7 +96,7 @@ function listingEventPayload(listing, type, detail, stamp = nowIso()) {
 
 function queueOfflineEvent(postId, { wasOnline = true } = {}) {
   if (!wasOnline) return;
-  const listing = getListing(postId);
+  const listing = listingForWatch(postId);
   if (!listing) return;
   const stamp = nowIso();
   enqueueListingEvent(listing, {
@@ -257,7 +261,7 @@ async function applyCommunityPin(listing, community) {
 
 /** 先走社區超連結（同一棟只打一次社區 API），不夠再抓物件詳情／HTML。 */
 export async function ingestListingGeo(postId) {
-  let listing = getListing(postId);
+  let listing = listingForWatch(postId);
   if (!listing) return { located: false };
   if (String(listing.source || "591") !== "591") {
     return { located: listingHasTrustedPin(listing) };
@@ -317,12 +321,12 @@ async function resolveListingRoute(listing, settings) {
     const rush = await fetchRushRoadRoutes(lat, lng, workLat, workLng, { mode });
     const distances = rush?.distances?.length ? rush.distances : listing.route_kms;
     if (distances?.length) setCachedRoute(lat, lng, workLat, workLng, distances, rush, mode);
-    return getListing(listing.post_id);
+    return listingForWatch(listing.post_id);
   }
   const distances = await fetchRoadRoutes(lat, lng, workLat, workLng, { mode });
   if (!distances?.length) return listing;
   setCachedRoute(lat, lng, workLat, workLng, distances, null, mode);
-  return getListing(listing.post_id);
+  return listingForWatch(listing.post_id);
 }
 
 export async function flushPendingNotifications(settings = getSettings(), { silent = false } = {}) {
@@ -334,7 +338,7 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
   for (const event of pending) {
     const userId = Number(event.user_id) || 0;
     const userSettings = userId ? getSettings(userId) : settings;
-    const listing = getListing(event.post_id, userId || undefined);
+    const listing = listingForWatch(event.post_id, userId || undefined);
     const mailTo = String(getUserById(userId)?.email || "").trim();
     const mailBundle = userId ? getMemberMailBundle(userId) : { configured: false, smtp: null, templates: getMailTemplates() };
     const mailReady = Boolean(mailBundle.configured);
@@ -414,7 +418,7 @@ async function resolvePendingNotifyLocations(settings, { withRoute = true } = {}
     if (seen.has(event.post_id)) continue;
     seen.add(event.post_id);
     const userId = Number(event.user_id) || 0;
-    const listing = getListing(event.post_id, userId || undefined);
+    const listing = listingForWatch(event.post_id, userId || undefined);
     if (!listing) continue;
     const userSettings = userId ? getSettings(userId) : settings;
     if (!shouldNotify(userSettings, listing, event)) continue;
@@ -427,7 +431,7 @@ async function resolvePendingNotifyLocations(settings, { withRoute = true } = {}
   await ingestListingGeoBatch(ids);
   if (!withRoute) return;
   for (const postId of ids) {
-    const listing = getListing(postId);
+    const listing = listingForWatch(postId);
     if (listing) await resolveListingRoute(listing, settings);
   }
 }
@@ -448,7 +452,7 @@ async function sweepOfflineListings(seenIds, { limit = 20 } = {}) {
       touchListingChecked(row.post_id);
     } catch (error) {
       if (isListingGoneError(error)) {
-        const wasOnline = !getListing(row.post_id)?.offline;
+        const wasOnline = !listingForWatch(row.post_id)?.offline;
         await markOfflineAndNotify(row.post_id, { wasOnline });
         gone += 1;
       }
@@ -655,7 +659,7 @@ export async function runWatch(options = {}) {
       // #region agent log
       const __tGet = Date.now();
       // #endregion
-      const existing = getListing(listing.post_id);
+      const existing = listingForWatch(listing.post_id);
       // #region agent log
       const __oneGet = Date.now() - __tGet;
       __getMs += __oneGet;
@@ -719,7 +723,7 @@ export async function runWatch(options = {}) {
       if (type === "seen" || isBaseline || isSearchBaseline) continue;
 
       // 非特別關注的內容微差（地址補齊來回等）不要進通知佇列
-      const saved = getListing(listing.post_id) || listing;
+      const saved = listingForWatch(listing.post_id) || listing;
       const evt = { type, detail };
       enqueueListingEvent(saved, evt);
     }
@@ -748,13 +752,13 @@ export async function runWatch(options = {}) {
   const pendingFees = listingsNeedingFeeDetail(needsListingGeo(settings) ? 30 : 20);
   for (const row of pendingFees) {
     try {
-      const listing = getListing(row.post_id);
+      const listing = listingForWatch(row.post_id);
       if (!listing) continue;
       const detail = await fetchListingDetail(row.post_id, detailOptions());
       applyFetchedDetail(listing, detail);
     } catch (error) {
       if (isListingGoneError(error)) {
-        const listing = getListing(row.post_id);
+        const listing = listingForWatch(row.post_id);
         await markOfflineAndNotify(row.post_id, { wasOnline: !listing?.offline });
       }
       // 詳情失敗下次再試，不中斷本輪追蹤

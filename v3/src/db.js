@@ -1507,43 +1507,65 @@ function loadSameHousePeers(row) {
   return peers;
 }
 
-function decorateListing(row, settings, userId) {
+function decorateListingLite(row, settings, userId) {
   if (!row) return row;
   // #region agent log
   const __t0 = Date.now();
-  const __hadSettings = Boolean(settings);
   // #endregion
   settings = settings || getSettings();
-  row = applyCachedCoords(row, settings);
+  if (!Array.isArray(row.route_kms) && !Number.isFinite(Number(row.route_km))) {
+    row = applyCachedCoords(row, settings);
+  }
   const commute = Number.isFinite(Number(row.route_km)) ? Number(row.route_km) : null;
   const commuteKm = commute == null ? null : Math.round(commute * 10) / 10;
-  const commuteMode = normalizeCommuteMode(settings.commuteMode);
-  const matchPostId = Number(row.match_post_id) || 0;
+  const extraFees = Array.isArray(row.extra_fees) ? row.extra_fees : parseJson(row.extra_fees, []);
+  const source = String(row.source || "591") || "591";
+  const uid = Number(userId) || 0;
+  const listedBy = Number(row.listed_by_user_id) || 0;
+  const fit = listingFitFields({ ...row, extra_fees: extraFees, commute_km: commuteKm }, settings);
+  const out = {
+    ...row,
+    extra_fees: extraFees,
+    has_elevator: listingHasElevator(row),
+    commute_km: commuteKm,
+    commute_mode: normalizeCommuteMode(settings.commuteMode),
+    commute_routes: Array.isArray(row.route_kms) ? row.route_kms : [],
+    commute_min_am: Number.isFinite(Number(row.rush_am_min)) && Number(row.rush_am_min) > 0 ? Math.round(Number(row.rush_am_min)) : null,
+    commute_min_pm: Number.isFinite(Number(row.rush_pm_min)) && Number(row.rush_pm_min) > 0 ? Math.round(Number(row.rush_pm_min)) : null,
+    district: districtNameFromListing(row),
+    source,
+    source_label: selfSourceLabel(source),
+    mine: uid > 0 && listedBy === uid,
+    ...fit,
+  };
   // #region agent log
+  unhangAgg("decorateListingLite", { hypothesisId: "D", location: "db.js:decorateListingLite", message: "decorateListingLite-agg" }, {
+    ms: Date.now() - __t0,
+    postId: Number(row.post_id) || 0,
+  }, { every: 200, slowMs: 20 });
+  // #endregion
+  return out;
+}
+
+function attachListingPeers(row, settings) {
+  if (!row) return row;
+  // #region agent log
+  const __t0 = Date.now();
   const __tPeers = Date.now();
   // #endregion
   const sameHousePeers = loadSameHousePeers(row);
   // #region agent log
   const __peersMs = Date.now() - __tPeers;
   // #endregion
-  const matchPeerRaw = sameHousePeers.find((item) => Number(item.post_id) === matchPostId) || sameHousePeers[0] || null;
-  const matchPeer = matchPeerRaw;
-  const source = String(row.source || "591") || "591";
-  const sourceLabel = selfSourceLabel(source);
-  const uid = Number(userId) || 0;
-  const listedBy = Number(row.listed_by_user_id) || 0;
-  const fit = listingFitFields({ ...row, commute_km: commuteKm }, settings);
-  const {
-    listed_by_user_id: _listedBy,
-    model_score: _modelScore,
-    ...publicRow
-  } = row;
+  const matchPostId = Number(row.match_post_id) || 0;
+  const matchPeer = sameHousePeers.find((item) => Number(item.post_id) === matchPostId) || sameHousePeers[0] || null;
   const extraFees = Array.isArray(row.extra_fees) ? row.extra_fees : parseJson(row.extra_fees, []);
+  const source = String(row.source || "591") || "591";
   const decoratedSelf = {
     ...row,
     extra_fees: extraFees,
     source,
-    source_label: sourceLabel,
+    source_label: row.source_label || selfSourceLabel(source),
   };
   // #region agent log
   const __tBundle = Date.now();
@@ -1555,35 +1577,59 @@ function decorateListing(row, settings, userId) {
       sameHousePeers.filter((peer) => peer.match_verdict !== "no"),
     );
   // #region agent log
-  const __bundleMs = Date.now() - __tBundle;
+  unhangAgg("attachListingPeers", { hypothesisId: "B", location: "db.js:attachListingPeers", message: "attachListingPeers-agg" }, {
+    ms: Date.now() - __t0,
+    peersMs: __peersMs,
+    bundleMs: Date.now() - __tBundle,
+    peerCount: sameHousePeers.length,
+    postId: Number(row.post_id) || 0,
+  }, { every: 25, slowMs: 25 });
   // #endregion
-  const out = {
+  return { ...row, match_peer: matchPeer || null, same_house };
+}
+
+function finalizeListingDecorate(row, settings, userId, { sameHouse = true } = {}) {
+  if (!row) return row;
+  settings = settings || getSettings();
+  const uid = Number(userId) || 0;
+  const listedBy = Number(row.listed_by_user_id) || 0;
+  const extraFees = Array.isArray(row.extra_fees) ? row.extra_fees : parseJson(row.extra_fees, []);
+  const source = String(row.source || "591") || "591";
+  const withPeers = sameHouse
+    ? attachListingPeers({ ...row, extra_fees: extraFees, source, source_label: row.source_label || selfSourceLabel(source) }, settings)
+    : { ...row, extra_fees: extraFees, source, source_label: row.source_label || selfSourceLabel(source), match_peer: null, same_house: null };
+  const {
+    listed_by_user_id: _listedBy,
+    model_score: _modelScore,
+    ...publicRow
+  } = withPeers;
+  return {
     ...publicRow,
     extra_fees: extraFees,
-    has_elevator: listingHasElevator(row),
-    commute_km: commuteKm,
-    commute_mode: commuteMode,
-    commute_routes: Array.isArray(row.route_kms) ? row.route_kms : [],
-    commute_min_am: Number.isFinite(Number(row.rush_am_min)) && Number(row.rush_am_min) > 0 ? Math.round(Number(row.rush_am_min)) : null,
-    commute_min_pm: Number.isFinite(Number(row.rush_pm_min)) && Number(row.rush_pm_min) > 0 ? Math.round(Number(row.rush_pm_min)) : null,
-    district: districtNameFromListing(row),
-    match_peer: matchPeer || null,
-    same_house,
     cost_change: costChangePayload(row),
     source,
-    source_label: sourceLabel,
+    source_label: withPeers.source_label,
     self_body: String(row.self_body || ""),
     photos: listingPhotoUrls(row),
     mine: uid > 0 && listedBy === uid,
-    ...fit,
     ...mrtFields(row, settings),
   };
+}
+
+function decorateListing(row, settings, userId, options = {}) {
+  if (!row) return row;
+  // #region agent log
+  const __t0 = Date.now();
+  const __hadSettings = Boolean(settings);
+  const __sameHouse = options.sameHouse !== false;
+  // #endregion
+  settings = settings || getSettings();
+  const lite = decorateListingLite(row, settings, userId);
+  const out = finalizeListingDecorate(lite, settings, userId, options);
   // #region agent log
   unhangAgg("decorateListing", { hypothesisId: "B", location: "db.js:decorateListing", message: "decorateListing-agg" }, {
     ms: Date.now() - __t0,
-    peersMs: __peersMs,
-    bundleMs: __bundleMs,
-    peerCount: sameHousePeers.length,
+    sameHouse: __sameHouse,
     hadSettings: __hadSettings,
     postId: Number(row.post_id) || 0,
   }, { every: 25, slowMs: 25 });
@@ -1600,9 +1646,10 @@ function withPersonal(row, userId) {
   return overlayPersonal(row, loadFlags(db, resolveUserId(userId), row.post_id));
 }
 
-export function getListing(postId, userId) {
+export function getListing(postId, userId, options = {}) {
   // #region agent log
   const __t0 = Date.now();
+  const __sameHouse = options.sameHouse !== false;
   // #endregion
   const row = db.prepare("SELECT * FROM listings WHERE post_id = ?").get(postId);
   if (!row) return row;
@@ -1615,12 +1662,13 @@ export function getListing(postId, userId) {
   const __setMs = Date.now() - __tSet;
   const __tDec = Date.now();
   // #endregion
-  const out = decorateListing(withPersonal(row, uid), settings, uid);
+  const out = decorateListing(withPersonal(row, uid), settings, uid, options);
   // #region agent log
   unhangAgg("getListing", { hypothesisId: "B", location: "db.js:getListing", message: "getListing-agg" }, {
     ms: Date.now() - __t0,
     settingsMs: __setMs,
     decorateMs: Date.now() - __tDec,
+    sameHouse: __sameHouse,
     postId: Number(postId) || 0,
     uid,
   }, { every: 20, slowMs: 30 });
@@ -2417,7 +2465,7 @@ export function enqueueListingEvent(listing, event) {
   const ids = [];
   for (const userId of listUserIds()) {
     const settings = getSettings(userId);
-    const row = decorateListing(overlayPersonal(listing, loadFlags(db, userId, listing.post_id)), settings);
+    const row = decorateListing(overlayPersonal(listing, loadFlags(db, userId, listing.post_id)), settings, userId, { sameHouse: false });
     // #region agent log
     __decorated += 1;
     // #endregion
@@ -2882,8 +2930,8 @@ export function listListings({
     filter === "offline" || filter === "suspected"
       ? overlayRowsPersonal(raw, flagMap)
         .filter((row) => passesPriceFilter(row, settings))
-        .map((row) => decorateListing(row, settings, uid))
-      : applyListingFilter(overlayRowsPersonal(raw, flagMap), settings).map((row) => decorateListing(row, settings, uid));
+        .map((row) => decorateListingLite(row, settings, uid))
+      : applyListingFilter(overlayRowsPersonal(raw, flagMap), settings).map((row) => decorateListingLite(row, settings, uid));
 
   rows = rows.filter((row) => listingMatchesListFilter(row, filter));
   rows = rows.filter((row) => keepSelfListingForViewer(row, uid, settings, listingInMemberScope));
@@ -2904,21 +2952,31 @@ export function listListings({
   rows = sortListingsRows(rows, sort, { filter, settings });
 
   const totalMatched = rows.length;
-  const listings = rows.slice(0, limit);
+  // #region agent log
+  const __cheapMs = Date.now() - __tDec;
+  const __tPage = Date.now();
+  // #endregion
+  const listings = rows.slice(0, limit).map((row) => finalizeListingDecorate(row, settings, uid, { sameHouse: true }));
   // #region agent log
   unhangLog({
     hypothesisId: "D",
     location: "db.js:listListings",
     message: "listListings",
+    runId: "post-fix",
     data: {
       filter,
       kind: String(kind || ""),
       uid,
       rawCount: raw.length,
+      cheapDecorated: rows.length,
       decorated: rows.length,
+      pageDecorated: listings.length,
+      sameHouseAttached: listings.length,
       returned: listings.length,
       limit,
       sqlMs: __sqlMs,
+      cheapMs: __cheapMs,
+      pageMs: Date.now() - __tPage,
       decorateMs: Date.now() - __tDec,
       ms: Date.now() - __t0,
     },
@@ -3033,11 +3091,43 @@ export function setCommunityCache(community) {
   );
 }
 
+let statsHoldUntil = 0;
+let statsHoldValue = null;
+let statsHoldKey = "";
+let statsHoldAt = 0;
+
+export function holdStatsCache(ms = 15000) {
+  statsHoldUntil = Date.now() + Math.max(0, Number(ms) || 0);
+  statsHoldAt = Date.now();
+  // #region agent log
+  unhangLog({
+    hypothesisId: "C",
+    location: "db.js:holdStatsCache",
+    message: "stats-hold",
+    runId: "post-fix",
+    data: { holdMs: Math.max(0, Number(ms) || 0), until: statsHoldUntil },
+  });
+  // #endregion
+}
+
 export function stats(searchKeys, userId, settingsOverride) {
   // #region agent log
   const __t0 = Date.now();
   // #endregion
   const uid = resolveUserId(userId);
+  const holdKey = `${uid}|${JSON.stringify(searchKeys || null)}`;
+  if (Date.now() < statsHoldUntil && statsHoldValue && statsHoldKey === holdKey) {
+    // #region agent log
+    unhangLog({
+      hypothesisId: "C",
+      location: "db.js:stats",
+      message: "stats-held",
+      runId: "post-fix",
+      data: { uid, ageMs: statsHoldAt ? Date.now() - statsHoldAt : 0, ms: Date.now() - __t0 },
+    });
+    // #endregion
+    return statsHoldValue;
+  }
   const settings = settingsOverride || getSettings(uid);
   const clauses = [];
   const params = [];
@@ -3088,6 +3178,7 @@ export function stats(searchKeys, userId, settingsOverride) {
     hypothesisId: "D",
     location: "db.js:stats",
     message: "stats",
+    runId: "post-fix",
     data: {
       uid,
       rawCount: raw.length,
@@ -3096,9 +3187,15 @@ export function stats(searchKeys, userId, settingsOverride) {
       stored: out.stored,
       dbTotal: out.dbTotal,
       ms: Date.now() - __t0,
+      held: Date.now() < statsHoldUntil,
     },
   });
   // #endregion
+  if (Date.now() < statsHoldUntil) {
+    statsHoldValue = out;
+    statsHoldKey = holdKey;
+    statsHoldAt = Date.now();
+  }
   return out;
 }
 

@@ -93,6 +93,16 @@ test("admin API routes exist and members payload is guarded", () => {
   assert.match(src, /\/api\/admin\/maps/);
   const backfillFn = src.slice(src.indexOf("function queueGeoBackfill"), src.indexOf("async function tick"));
   assert.ok(backfillFn.indexOf("backfillListingRoutes") < backfillFn.indexOf("backfillListingCoords"));
+  assert.match(backfillFn, /skippedStats: true/);
+  assert.match(backfillFn, /holdStatsCache/);
+  assert.match(backfillFn, /broadcast\(\{ type: "geo", routeBackfill: routes \}\)/);
+  assert.match(backfillFn, /broadcast\(\{ type: "geo", geoBackfill: geo \}\)/);
+  assert.match(backfillFn, /broadcast\(\{ type: "geo", mrtBackfill: mrt \}\)/);
+  assert.match(backfillFn, /broadcast\(\{ type: "geo", stats: stats\(\), done: true \}\)/);
+  const listen = src.slice(src.indexOf("app.listen"));
+  const afterJobs = listen.slice(listen.indexOf('console.log(`第一次檢查'));
+  assert.ok(afterJobs.indexOf('tick("startup")') < afterJobs.indexOf("queueGeoBackfill()"));
+  assert.match(src, /if \(reason !== "startup"\) queueGeoBackfill\(\)/);
   assert.match(src, /body\.clearKey !== true/);
   assert.match(src, /publicSponsorSettings/);
   assert.match(src, /會員列表不得含密碼/);
