@@ -178,6 +178,10 @@
       text-decoration: underline;
       text-underline-offset: 3px;
     }
+    #pickCompareOverlay.hub-overlay { z-index: 140; }
+    body.compare-open #scrollTopBtn,
+    body.compare-open #expandPanelBtn,
+    body.compare-open #ownerFab { visibility: hidden; }
     .hub-overlay {
       position: fixed;
       inset: 0;
@@ -632,7 +636,8 @@
       gap: 8px;
       overflow-x: auto;
     }
-    .pick-compare-head {
+    .pick-compare-head,
+    .same-compare-row .pick-compare-head {
       display: grid;
       grid-template-columns: repeat(var(--compare-cols, 2), minmax(120px, 1fr));
       gap: 8px;
@@ -685,7 +690,7 @@
     .item-swipe-wrap.reveal-watch .swipe-watch-hint { opacity: 1; }
     .item {
       display: grid;
-      grid-template-columns: 28px 112px minmax(0, 1fr) 120px 148px;
+      grid-template-columns: 44px 112px minmax(0, 1fr) 120px 148px;
       gap: 10px 12px;
       padding: 10px 12px;
       border: 1px solid var(--line);
@@ -699,7 +704,7 @@
     }
     .item.swiping { transition: none; }
     .item:has(.item-cover.empty) {
-      grid-template-columns: 28px minmax(0, 1fr) 120px 148px;
+      grid-template-columns: 44px minmax(0, 1fr) 120px 148px;
     }
     .item.picked { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
     .item.shezidao {
@@ -710,7 +715,23 @@
       border-color: var(--shezi-red);
       box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.16);
     }
-    .pick { margin-top: 8px; width: 18px; height: 18px; accent-color: var(--accent); }
+    .pick { margin: 0; width: 22px; height: 22px; accent-color: var(--accent); }
+    .pick-hit {
+      display: inline-flex;
+      align-items: flex-start;
+      justify-content: center;
+      min-width: var(--touch, 44px);
+      min-height: var(--touch, 44px);
+      padding: 10px 8px 0;
+    }
+    .chip-row-label {
+      width: 100%;
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: var(--text-xs, 12px);
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
     .item-cover.empty,
     .item-cover[hidden] { display: none; }
     .item-cover img, .item-cover {
@@ -1094,6 +1115,7 @@
       display: block;
     }
     body.panel-collapsed .list-head-sticky.filter-compact .chip-row,
+    body.panel-collapsed .list-head-sticky.filter-compact .chip-row-label,
     body.panel-collapsed .list-head-sticky.filter-compact .view-filters,
     body.panel-collapsed .list-head-sticky.filter-compact .bulk-bar {
       display: none;
@@ -1831,7 +1853,7 @@
     #bootFail[data-open="1"] { display: block; }
     #bootFail strong { display: block; margin-bottom: 4px; font-size: 15px; }
     @media (max-width: 1100px) {
-      .item { grid-template-columns: 28px 120px 1fr; }
+      .item { grid-template-columns: 44px 120px 1fr; }
       .contact, .actions { grid-column: 2 / -1; flex-direction: row; flex-wrap: wrap; justify-content: flex-start; }
     }
     @media (max-width: 980px) {
@@ -1964,7 +1986,7 @@
         padding-top: 8px;
       }
       .item {
-        grid-template-columns: 22px 92px minmax(0, 1fr);
+        grid-template-columns: 44px 92px minmax(0, 1fr);
         gap: 8px 10px;
         padding: 12px;
       }
@@ -1992,16 +2014,12 @@
         -webkit-box-orient: vertical;
         overflow: hidden;
       }
-      body.role-guest .pick { display: none; }
       body.role-guest .hide-box { display: none; }
-      body.role-guest .item {
-        grid-template-columns: 92px minmax(0, 1fr);
-      }
       .item:has(.item-cover.empty) {
-        grid-template-columns: 22px minmax(0, 1fr);
+        grid-template-columns: 44px minmax(0, 1fr);
       }
       body.role-guest .item:has(.item-cover.empty) {
-        grid-template-columns: minmax(0, 1fr);
+        grid-template-columns: 44px minmax(0, 1fr);
       }
       .item .contact,
       .item .actions {
@@ -2322,22 +2340,24 @@
           <button class="chip" data-filter="hidden">已隱藏</button>
           <button class="chip" data-filter="offline">正在確認中的下架</button>
           </div>
-          <div class="chip-row" data-chip-row="kind">
-          <button type="button" class="chip" data-kind="elevator">電梯</button>
-          <button type="button" class="chip" data-kind="apartment">公寓</button>
-          <button type="button" class="chip" data-kind="suite">套房</button>
-          <button type="button" class="chip" data-kind="whole">整層住家</button>
-          <button type="button" class="chip" data-kind="shop">店面</button>
-          <button type="button" class="chip" data-kind="warehouse">倉庫</button>
+          <p class="chip-row-label" id="kindRowLabel">房屋類型（可複選）</p>
+          <div class="chip-row" data-chip-row="kind" role="group" aria-labelledby="kindRowLabel">
+          <button type="button" class="chip" data-kind="elevator" aria-pressed="false">電梯</button>
+          <button type="button" class="chip" data-kind="apartment" aria-pressed="false">公寓</button>
+          <button type="button" class="chip" data-kind="suite" aria-pressed="false">套房</button>
+          <button type="button" class="chip" data-kind="whole" aria-pressed="false">整層住家</button>
+          <button type="button" class="chip" data-kind="shop" aria-pressed="false">店面</button>
+          <button type="button" class="chip" data-kind="warehouse" aria-pressed="false">倉庫</button>
           </div>
-          <div class="chip-row" data-chip-row="source">
-          <button type="button" class="chip" data-source="591">591</button>
-          <button type="button" class="chip" data-source="self">吉比本站</button>
-          <button type="button" class="chip" data-source="hbhousing">住商</button>
-          <button type="button" class="chip" data-source="sinyi">信義</button>
-          <button type="button" class="chip" data-source="houseprice">5168</button>
-          <button type="button" class="chip" data-source="ddroom">租租通</button>
-          <button type="button" class="chip" data-source="housefun">好房</button>
+          <p class="chip-row-label" id="sourceRowLabel">來源</p>
+          <div class="chip-row" data-chip-row="source" role="group" aria-labelledby="sourceRowLabel">
+          <button type="button" class="chip" data-source="591" aria-pressed="false">591</button>
+          <button type="button" class="chip" data-source="self" aria-pressed="false">吉比本站</button>
+          <button type="button" class="chip" data-source="hbhousing" aria-pressed="false">住商</button>
+          <button type="button" class="chip" data-source="sinyi" aria-pressed="false">信義</button>
+          <button type="button" class="chip" data-source="houseprice" aria-pressed="false">5168</button>
+          <button type="button" class="chip" data-source="ddroom" aria-pressed="false">租租通</button>
+          <button type="button" class="chip" data-source="housefun" aria-pressed="false">好房</button>
           </div>
           <div class="chip-row view-checks" data-chip-row="display">
             <label class="view-check"><input type="checkbox" id="excludeRooftop" checked /> 排除頂樓加蓋</label>
@@ -3317,13 +3337,30 @@
     }
     function syncKindChips() {
       document.querySelectorAll("[data-kind]").forEach((b) => {
-        b.classList.toggle("on", kinds.includes(b.dataset.kind));
+        const on = kinds.includes(b.dataset.kind);
+        b.classList.toggle("on", on);
+        b.setAttribute("aria-pressed", on ? "true" : "false");
       });
+      syncFilterRestoreLabel();
     }
     function syncSourceChips() {
       document.querySelectorAll("[data-source]").forEach((b) => {
-        b.classList.toggle("on", sources.includes(b.dataset.source));
+        const on = sources.includes(b.dataset.source);
+        b.classList.toggle("on", on);
+        b.setAttribute("aria-pressed", on ? "true" : "false");
       });
+      syncFilterRestoreLabel();
+    }
+    function activeFilterSummary() {
+      const kindNames = { elevator: "電梯", apartment: "公寓", suite: "套房", whole: "整層", shop: "店面", warehouse: "倉庫" };
+      const sourceNames = { "591": "591", self: "吉比本站", hbhousing: "住商", sinyi: "信義", houseprice: "5168", ddroom: "租租通", housefun: "好房" };
+      return [...kinds.map((key) => kindNames[key] || key), ...sources.map((key) => sourceNames[key] || key)].filter(Boolean);
+    }
+    function syncFilterRestoreLabel() {
+      const btn = $("filterRestoreBtn");
+      if (!btn) return;
+      const bits = activeFilterSummary();
+      btn.textContent = bits.length ? `更多條件 · ${bits.join(" · ")}` : "更多條件";
     }
     function fillFloorFilters(s = settings) {
       if ($("excludeRooftop")) $("excludeRooftop").checked = s.excludeRooftop !== false;
@@ -4460,7 +4497,7 @@
       const compareBtn = $("compareSelectedBtn");
       const hint = $("compareHint");
       if (compareBtn) {
-        compareBtn.textContent = `比較（${Math.min(n, 3)}／3）`;
+        compareBtn.textContent = `比較（${n}／3）`;
         compareBtn.disabled = n < 2 || n > 3;
       }
       if (hint) {
@@ -4481,6 +4518,8 @@
       const overlay = $("pickCompareOverlay");
       if (!overlay) return;
       overlay.hidden = true;
+      document.body.classList.remove("compare-open");
+      $("compareSelectedBtn")?.focus();
     }
 
     function pickCompareNorm(value) {
@@ -4561,17 +4600,15 @@
         `<div class="pick-compare-card"><strong>${esc(cmp.labels[idx] || "")}</strong><span>${esc(row.title || `#${row.post_id}`)}</span></div>`
       )).join("");
       const rows = (cmp.rows || []).map((row) => {
-        const vals = (row.values || []).map((value, idx) => {
-          const name = (cmp.labels && cmp.labels[idx]) || "";
-          return `${name ? `${esc(name)} ` : ""}${esc(value)}`;
-        }).join(" · ");
-        return `<div class="same-compare-row"><div class="same-compare-k">${esc(row.label)}</div><div class="same-compare-vals">${vals}</div></div>`;
+        const cells = (row.values || []).map((value) => `<div class="pick-compare-card">${esc(value)}</div>`).join("");
+        return `<div class="same-compare-row"><div class="same-compare-k">${esc(row.label)}</div><div class="pick-compare-head">${cells}</div></div>`;
       }).join("");
       body.style.setProperty("--compare-cols", String(cmp.items.length));
       body.innerHTML = `<p class="same-house-compare-headline">${esc(cmp.headline)}</p>
-        <div class="pick-compare-cols"><div class="pick-compare-head">${heads}</div></div>
-        <div class="same-house-compare">${rows || `<p class="hint">這 ${cmp.items.length} 筆在租金、費用與格局上看起來幾乎相同。</p>`}</div>`;
+        <div class="pick-compare-cols"><div class="pick-compare-head">${heads}</div>${rows || `<p class="hint">這 ${cmp.items.length} 筆在租金、費用與格局上看起來幾乎相同。</p>`}</div>`;
       overlay.hidden = false;
+      document.body.classList.add("compare-open");
+      $("pickCompareClose")?.focus();
     }
 
     function updateListMeta(items, st = {}) {
@@ -4635,8 +4672,13 @@
         if (q) msg = `沒有符合「${q}」的物件。試試較短關鍵字，或清掉搜尋看全部列表。`;
         else if (viewDistricts.size) {
           msg = "這個行政區篩選目前沒有物件。可點「全部」或再勾其他區。";
-        }         else if (kinds.length || $("excludeLowFloors")?.checked || $("excludeRooftop")?.checked) {
-          msg = "目前沒有符合列表上方房屋類型／樓層／頂加過濾的物件。可取消勾選或關掉類型晶片再看。";
+        }         else if (kinds.length || sources.length || $("excludeLowFloors")?.checked || $("excludeRooftop")?.checked) {
+          const bits = [];
+          if (kinds.length) bits.push("房屋類型");
+          if (sources.length) bits.push("來源");
+          if ($("excludeLowFloors")?.checked) bits.push("樓層");
+          if ($("excludeRooftop")?.checked) bits.push("頂加");
+          msg = `目前沒有符合列表上方${bits.join("／")}過濾的物件。可取消勾選或關掉晶片再看。`;
         } else if (filter === "suspected") {
           msg = "目前沒有被判成同一屋源的重刊。隱藏或已瀏覽的舊屋若再上架，會出現在這裡。";
         } else if (filter === "offline") {
@@ -4667,7 +4709,7 @@
             <span class="swipe-watch-hint">特別關注</span>
           </div>
         <article class="item ${on ? "picked" : ""} ${item.offline ? "offline" : ""} ${isAcefengyunAdmin() && isShezidaoAddress(item) ? "shezidao" : ""}" data-card="${id}">
-          <input class="pick" type="checkbox" data-pick="${id}" ${on ? "checked" : ""} />
+          <label class="pick-hit"><input class="pick" type="checkbox" data-pick="${id}" ${on ? "checked" : ""} aria-label="選取以比較或批次處理：${esc(item.title || id)}" /></label>
           <a class="item-cover${item.cover ? "" : " empty"}" ${listingLinkAttrs(item)}>
             ${item.cover ? `<img src="${esc(item.cover)}" alt="" referrerpolicy="no-referrer" onerror="this.parentNode.classList.add('empty')" />` : ""}
           </a>
@@ -6439,9 +6481,26 @@
       }
     });
     document.addEventListener("keydown", (ev) => {
-      if (ev.key === "Escape" && $("pickCompareOverlay") && !$("pickCompareOverlay").hidden) {
-        closePickCompare();
-        return;
+      if ($("pickCompareOverlay") && !$("pickCompareOverlay").hidden) {
+        if (ev.key === "Escape") {
+          closePickCompare();
+          return;
+        }
+        if (ev.key === "Tab") {
+          const box = $("pickCompareOverlay");
+          const nodes = [...box.querySelectorAll("button, [href], input, select, textarea")].filter((el) => !el.disabled && el.offsetParent);
+          if (!nodes.length) return;
+          const first = nodes[0];
+          const last = nodes[nodes.length - 1];
+          if (ev.shiftKey && document.activeElement === first) {
+            ev.preventDefault();
+            last.focus();
+          } else if (!ev.shiftKey && document.activeElement === last) {
+            ev.preventDefault();
+            first.focus();
+          }
+          return;
+        }
       }
       if (ev.key === "Escape" && $("ownerOverlay") && !$("ownerOverlay").hidden) closeOwnerOverlay();
     });
@@ -6462,6 +6521,10 @@
       updateBulkBar();
     };
     $("hideSelectedBtn").onclick = async () => {
+      if (isGuest) {
+        remindGuest();
+        return;
+      }
       const ids = [...selected];
       if (!ids.length) return;
       $("hideSelectedBtn").disabled = true;
@@ -6498,7 +6561,12 @@
 
     document.querySelectorAll("[data-kind]").forEach((btn) => {
       btn.onclick = () => {
+        const prev = kinds.slice();
         kinds = toggleHousingKind(kinds, btn.dataset.kind);
+        const dropped = prev.filter((key) => key !== btn.dataset.kind && !kinds.includes(key));
+        if (dropped.length) {
+          flash("套房與整層／店面／倉庫一次只能選一類，已改成你剛點的那項。");
+        }
         syncKindChips();
         persistDisplayFilters();
         loadList();

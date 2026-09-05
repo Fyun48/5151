@@ -272,7 +272,7 @@
     </form>
     <div class="oauth" id="oauthBox">
       <p class="oauth-kicker">或用 Google／LINE／Facebook 帶入信箱。新帳號仍須勾選上方同意，並完成開通信；已開通的帳號可直接登入。</p>
-      <p class="oauth-kicker" id="oauthHint">三顆社群鈕都會顯示；後台還沒開通的會反灰不能按。</p>
+      <p class="oauth-kicker" id="oauthHint">正在確認社群登入…</p>
       <div class="oauth-row">
         <a class="ghost is-off" id="oauthGoogle" href="/auth/google" aria-disabled="true">Google</a>
         <a class="ghost is-off" id="oauthLine" href="/auth/line" aria-disabled="true">LINE</a>
@@ -296,7 +296,7 @@
       <button type="button" class="text" id="backLogin">回到登入</button>
     </form>
     <p class="ok" id="ok"></p>
-    <p class="err" id="err"></p>
+    <p class="err" id="err" role="alert"></p>
     <div class="ad-slot" id="adLogin" hidden></div>
     <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.47</span></footer>
   </div>
@@ -422,6 +422,8 @@
         el.hidden = false;
         el.classList.toggle("is-off", !on);
         el.setAttribute("aria-disabled", on ? "false" : "true");
+        el.setAttribute("tabindex", on ? "0" : "-1");
+        el.setAttribute("aria-describedby", "oauthHint");
         if (!on) off.push(names[key]);
       }
       if ($("oauthBox")) {
@@ -435,7 +437,6 @@
           : (off.length ? `${off.join("、")} 後台尚未開通，暫時不能按。` : "可用社群帶入信箱。新帳號仍要點開通信。");
       }
     }
-    paintOauthButtons();
     fetch("/api/oauth", { cache: "no-store" }).then((r) => r.json()).then((data) => {
       paintOauthButtons(data?.oauth || {});
     }).catch(() => {

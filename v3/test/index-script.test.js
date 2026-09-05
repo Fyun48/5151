@@ -119,6 +119,9 @@ test("housing kind chips stay independent of 特別關注", () => {
   assert.match(html, /data-kind="warehouse"/);
   assert.match(html, /data-source="591"/);
   assert.match(html, /data-chip-row="source"/);
+  assert.match(html, /房屋類型（可複選）/);
+  assert.match(html, /id="sourceRowLabel"/);
+  assert.match(html, /aria-pressed/);
   assert.match(html, /function toggleHousingKind/);
   assert.match(html, /document\.querySelectorAll\("\[data-kind\]"\)/);
   assert.doesNotMatch(html, /data-filter="elevator"/);
@@ -604,6 +607,10 @@ test("self listing form and in-site detail stay on this site", () => {
   assert.match(html, /id="pickCompareOverlay"/);
   assert.match(html, /function openPickCompare/);
   assert.match(html, /比較最多 3 筆/);
+  assert.match(html, /比較（\$\{n\}／3）/);
+  assert.match(html, /class="pick-hit"/);
+  assert.match(html, /compare-open/);
+  assert.match(html, /更多條件 · /);
   assert.match(html, /id="excludeLowFloors"/);
   assert.match(html, /class="chip-row view-checks"/);
   assert.doesNotMatch(html, /class="view-filters"/);
