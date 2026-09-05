@@ -622,6 +622,9 @@ test("self listing form and in-site detail stay on this site", () => {
   assert.match(html, /same-house-compare-headline/);
   assert.match(html, /登入後才能把副卡拆回你的列表/);
   assert.match(html, /\[data-same-toggle="\$\{key\}"\]`\)\?\.focus/);
+  assert.match(html, /role="alert"/);
+  assert.match(html, /疑似同屋源 · \$\{count\}則/);
+  assert.match(html, /主卡 \$\{esc\(diff\.theirs\)\}/);
 });
 
 test("filter city accordion markup is generated from shared city list", () => {

@@ -878,6 +878,13 @@
       color: var(--muted);
       line-height: 1.4;
     }
+    .same-split-status {
+      margin: 8px 0 0;
+      font-size: var(--text-xs, 12px);
+      line-height: 1.4;
+      font-weight: 700;
+      color: var(--watch);
+    }
     .same-house-panel {
       display: grid;
       gap: 8px;
@@ -2888,6 +2895,7 @@
     let listCache = [];
     const sameHouseOpen = new Set();
     const sameHouseClosed = new Set();
+    const splitNotes = new Map();
     let guestListings = [];
     let lastStats = {};
     let listRefreshQueued = false;
@@ -4138,15 +4146,17 @@
       const house = sameHouseOf(item);
       if (!house?.peers?.length) return "";
       const confirmed = house.status === "confirmed";
+      const count = 1 + house.peers.length;
       let label = confirmed
-        ? (house.is_primary ? "確定同屋源 · 最低總月費" : "確定同屋源 · 附屬")
-        : (item.match_level === "high" ? "高信心同屋源" : "疑似同屋源");
+        ? (house.is_primary ? `同屋源 · ${count}則` : "同屋源附屬")
+        : (item.match_level === "high" ? `高信心 · ${count}則` : `疑似同屋源 · ${count}則`);
       if (house.cheaper_exists) label += " · 另有較便宜";
-      const src = listingSourceLabel(item);
-      const peerSrc = house.peers[0]?.source_label || listingSourceLabel(house.peers[0] || {});
+      const sources = [listingSourceLabel(item), ...house.peers.map((peer) => peer.source_label || listingSourceLabel(peer))]
+        .filter(Boolean)
+        .join("／");
       const open = sameHouseIsOpen(item);
       const cls = confirmed || item.match_level === "high" ? "same" : "watch";
-      return `<button type="button" class="tag ${cls} tag-btn" data-same-toggle="${item.post_id}" aria-expanded="${open ? "true" : "false"}" aria-controls="same-house-panel-${item.post_id}">${esc(label)}${peerSrc ? ` · ${esc(src)}／${esc(peerSrc)}` : ""}</button>`;
+      return `<button type="button" class="tag ${cls} tag-btn" data-same-toggle="${item.post_id}" aria-expanded="${open ? "true" : "false"}" aria-controls="same-house-panel-${item.post_id}" title="${esc(sources || label)}">${esc(label)}</button>`;
     }
 
     function sameHouseWarn(item) {
@@ -4162,6 +4172,12 @@
       const house = sameHouseOf(item);
       if (!house?.is_primary || !house.compare?.headline) return "";
       return `<div class="same-house-teaser">${esc(house.compare.headline)}</div>`;
+    }
+
+    function splitStatusHtml(postId) {
+      const note = splitNotes.get(String(postId));
+      if (!note) return "";
+      return `<p class="same-split-status" role="alert">${esc(note)}</p>`;
     }
 
     function sameHouseCompareHtml(house) {
@@ -4194,7 +4210,7 @@
           : (peer.offline ? "已下架附屬" : "附屬刊登");
         const notes = (peer.notes || []).map((note) => `<div class="same-note">${esc(note)}</div>`).join("");
         const diffs = (peer.diffs || []).slice(0, 6).map((diff) => (
-          `<div class="same-diff">${esc(diff.label)}：這則 ${esc(diff.mine)} · 卡片 ${esc(diff.theirs)}</div>`
+          `<div class="same-diff">${esc(diff.label)}：這則 ${esc(diff.mine)} · 主卡 ${esc(diff.theirs)}</div>`
         )).join("");
         const costChange = peerCostChangeLine(peer);
         const split = peer.role === "affiliate"
@@ -4209,6 +4225,7 @@
           ${diffs ? `<div class="same-diff-kicker">交叉比對</div>${diffs}` : ""}
           <a class="same-house-open" href="${esc(href)}" ${String(peer.source || "") === "self" ? "" : 'target="_blank" rel="noopener noreferrer"'} data-open="${peer.post_id}">${esc(openListingCta(peer))}</a>
           ${split}
+          ${splitStatusHtml(peer.post_id)}
         </div>`;
       }).join("");
       return `<div class="same-house-panel same-house-span" id="same-house-panel-${item.post_id}" ${open ? "" : "hidden"}>${sameHouseCompareHtml(house)}${rows}</div>`;
@@ -4462,6 +4479,7 @@
             ${formatListingWhen(item) ? `<div class="when"><span class="when-label">更新</span>${esc(formatListingWhen(item))}</div>` : ""}
             <div class="rent-price">${esc(rentPriceLabel(item))}</div>
             ${sameHouseTeaser(item)}
+            ${splitStatusHtml(id)}
             <div class="meta">
               ${esc(item.kind_name || "")} · ${esc(item.layout || "")} · ${esc(item.area_name || "")} · ${esc(item.floor_name || "")}
               <br>${esc(item.address || "")}${commuteText(item)}${offlineLine(item)}
@@ -6446,12 +6464,16 @@
         const note = data.error || (data.promoted
           ? "已拆開。多人這樣說，現在大家的列表都分開了。"
           : "已從你的列表拆開。其他人仍可能看到捆綁。");
+        splitNotes.set(String(rejectMatch), note);
         if ($("listMeta")) {
           $("listMeta").hidden = false;
           $("listMeta").textContent = note;
         }
         if ($("saveMsg")) $("saveMsg").textContent = note;
-        if (!res.ok) return;
+        if (!res.ok) {
+          renderList(listCache, lastStats);
+          return;
+        }
         loadList();
         return;
       }
