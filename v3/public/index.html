@@ -807,6 +807,69 @@
     }
     .tags { display: flex; gap: 6px; flex-wrap: wrap; }
     .tag { font-size: 11px; padding: 3px 8px; border-radius: 999px; background: var(--accent-soft); }
+    button.tag {
+      border: 0;
+      font: inherit;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      min-height: 32px;
+      white-space: nowrap;
+      line-height: 1.2;
+    }
+    button.tag[aria-expanded="true"] { box-shadow: 0 0 0 2px var(--same-soft); }
+    .cost-change-note {
+      margin: 6px 0 0;
+      font-size: var(--text-xs, 12px);
+      color: var(--same);
+      font-weight: 700;
+      line-height: 1.45;
+      font-variant-numeric: tabular-nums;
+    }
+    .same-house-warn {
+      background: var(--rose-soft);
+      border: 1px solid var(--rose);
+      border-radius: 12px;
+      padding: 8px 10px;
+      margin: 8px 0 4px;
+      font-size: 13px;
+      line-height: 1.45;
+      font-weight: 700;
+    }
+    .same-house-panel {
+      display: grid;
+      gap: 8px;
+      margin: 4px 0 0;
+    }
+    .same-house-span { grid-column: 1 / -1; min-width: 0; }
+    .same-house-row {
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--same-soft);
+      min-width: 0;
+    }
+    .same-house-role {
+      font-size: 11px;
+      font-weight: 800;
+      color: var(--same);
+      white-space: nowrap;
+    }
+    .same-house-row a { color: var(--ink); font-weight: 700; display: inline-block; margin: 4px 0; }
+    .same-house-cost,
+    .same-house-meta,
+    .same-note {
+      font-size: 12px;
+      line-height: 1.45;
+      color: var(--muted);
+    }
+    .same-house-cost strong { color: var(--watch); font-weight: 800; }
+    .same-house-open {
+      display: inline-flex;
+      align-items: center;
+      min-height: var(--touch, 44px);
+      margin-top: 2px;
+    }
     .tag.new { background: var(--accent-mist); color: var(--accent-deep); }
     .tag.same { background: var(--same-soft); color: var(--same); }
     .tag.watch { background: var(--rose-soft); color: var(--watch); }
@@ -2668,7 +2731,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.41</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.42</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -2769,6 +2832,7 @@
     const draftWatch = new Set();
     const noteDrafts = new Map();
     let listCache = [];
+    const sameHouseOpen = new Set();
     let guestListings = [];
     let lastStats = {};
     let listRefreshQueued = false;
@@ -3077,6 +3141,7 @@
       update: "內容更新",
       price_drop: "價格調降",
       price_update: "價格變更",
+      fee_update: "費用變更",
       title_update: "標題更新",
       relist: "重新上架",
       offline: "591 已下架",
@@ -3947,17 +4012,80 @@
       ].map(([k, v]) => `<div class="stat"><b>${v || 0}</b><span>${k}</span></div>`).join("");
     }
 
-    function matchPeerBlock(item) {
-      if (!item.match_level && !item.match_post_id) return "";
-      const peer = item.match_peer;
-      const peerId = peer?.post_id || item.match_post_id;
-      if (!peerId) return "";
-      const title = peer?.title || `刊登 #${peerId}`;
-      const url = peer?.url || listingUrl(peerId);
-      const srcMine = listingSourceLabel(item);
-      const srcPeer = listingSourceLabel(peer || {});
-      const srcBit = ` · ${esc(srcMine)}${srcPeer ? `／${esc(srcPeer)}` : ""}`;
-      return `<div class="match-peer">疑似同一間（${esc(srcPeer || srcMine)}）：<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(title)}</a>${peer?.price ? ` · 租金 ${esc(peer.price)}` : ""}${srcBit}</div>`;
+    function formatCostWhen(iso) {
+      const date = new Date(iso);
+      if (Number.isNaN(date.getTime())) return "";
+      return date.toLocaleString("zh-TW", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    }
+
+    function costChangeLine(item) {
+      const change = item.cost_change;
+      if (!change) return "";
+      const typeLabel = change.type === "price_drop"
+        ? "租金調降"
+        : change.type === "price_update"
+          ? "租金變更"
+          : "費用變更";
+      const when = change.at ? formatCostWhen(change.at) : "";
+      const detail = String(change.detail || "").replace(/^價格/, "租金");
+      return `<div class="cost-change-note">${esc([typeLabel, when, detail].filter(Boolean).join(" · "))}</div>`;
+    }
+
+    function peerSourceHref(peer) {
+      if (String(peer?.source || "") === "self") return `#self-${peer.post_id}`;
+      return peer?.url || listingUrl(peer);
+    }
+
+    function sameHouseTag(item) {
+      const house = item.same_house;
+      if (!house?.peers?.length) return "";
+      const confirmed = house.status === "confirmed";
+      const label = confirmed
+        ? (house.is_primary ? "確定同屋源 · 最低總月費" : "確定同屋源 · 附屬")
+        : (item.match_level === "high" ? "高信心同屋源" : "疑似同屋源");
+      const src = listingSourceLabel(item);
+      const peerSrc = house.peers[0]?.source_label || listingSourceLabel(house.peers[0] || {});
+      const open = sameHouseOpen.has(String(item.post_id));
+      const cls = confirmed || item.match_level === "high" ? "same" : "watch";
+      return `<button type="button" class="tag ${cls} tag-btn" data-same-toggle="${item.post_id}" aria-expanded="${open ? "true" : "false"}" aria-controls="same-house-panel-${item.post_id}">${esc(label)}${peerSrc ? ` · ${esc(src)}／${esc(peerSrc)}` : ""}</button>`;
+    }
+
+    function sameHouseWarn(item) {
+      const house = item.same_house;
+      if (!house?.cheaper_exists) return "";
+      const primary = house.peers.find((peer) => peer.role === "primary") || house.peers[0];
+      const total = Number(primary?.total) || 0;
+      const src = primary?.source_label || "";
+      return `<div class="same-house-warn">同屋源另有較低總月費${total ? ` ${total.toLocaleString("zh-TW")}` : ""}${src ? `（${esc(src)}）` : ""} · 這則貴 ${Number(house.cheaper_gap).toLocaleString("zh-TW")} 元，先別打這則</div>`;
+    }
+
+    function sameHousePanel(item) {
+      const house = item.same_house;
+      if (!house?.peers?.length) return "";
+      const open = sameHouseOpen.has(String(item.post_id));
+      const mineTotal = Number(house.mine_total) || ((Number(item.price_num) || 0) + (Number(item.extra_fee) || 0));
+      const rows = house.peers.map((peer) => {
+        const peerTotal = Number(peer.total) || 0;
+        const gap = house.is_primary && peer.role !== "primary" && peerTotal > mineTotal
+          ? peerTotal - mineTotal
+          : 0;
+        const cheapWarn = gap > 0 ? `貴 ${gap.toLocaleString("zh-TW")} 元，先別打這則` : "";
+        const href = peerSourceHref(peer);
+        const role = peer.role === "primary"
+          ? "同屋源最低總月費"
+          : (peer.offline ? "已下架附屬" : "附屬刊登");
+        const notes = (peer.notes || []).map((note) => `<div class="same-note">${esc(note)}</div>`).join("");
+        const costChange = peer.cost_changed_at ? `費用曾改 ${formatCostWhen(peer.cost_changed_at)}` : "";
+        return `<div class="same-house-row">
+          <div class="same-house-role">${esc(role)}${peer.offline ? " · 可能空號" : ""}</div>
+          <a href="${esc(href)}" ${String(peer.source || "") === "self" ? "" : 'target="_blank" rel="noopener noreferrer"'} data-open="${peer.post_id}" title="${esc(cheapWarn || "打開原站")}">${esc(peer.title || `刊登 #${peer.post_id}`)}</a>
+          <div class="same-house-cost">租金 ${esc(peer.price || (peer.price_num ? peer.price_num.toLocaleString("zh-TW") : "—"))} · 含額外約 ${(peerTotal || 0).toLocaleString("zh-TW")}${cheapWarn ? ` · <strong>${esc(cheapWarn)}</strong>` : ""}</div>
+          <div class="same-house-meta">${esc(peer.source_label || listingSourceLabel(peer))} · ${esc(peer.layout || "")} · ${esc(peer.area_name || "")} · ${esc(peer.floor_name || "")}${costChange ? ` · ${esc(costChange)}` : ""}</div>
+          ${notes}
+          <a class="same-house-open" href="${esc(href)}" ${String(peer.source || "") === "self" ? "" : 'target="_blank" rel="noopener noreferrer"'} data-open="${peer.post_id}">${esc(openListingCta(peer))}</a>
+        </div>`;
+      }).join("");
+      return `<div class="same-house-panel same-house-span" id="same-house-panel-${item.post_id}" ${open ? "" : "hidden"}>${rows}</div>`;
     }
 
     function matchActionButtons(item, id) {
@@ -3965,7 +4093,7 @@
       return `
             <button class="primary" data-confirm-match="${id}">是同一間</button>
             <button class="ghost" data-reject-match="${id}">不是同一間</button>
-            <span class="hint">確認後列表只留總費用（租金＋額外費用）較低的那則；同價留較新</span>`;
+            <span class="hint">確認後主卡留總月費較低的那則；較貴的可從同屋源按鈕展開，仍可開原站</span>`;
     }
 
     function chineseMonthCount(token) {
@@ -4042,11 +4170,12 @@
         bits.push(`<span class="tag fit" title="依你的租金、樓層與通勤估算，不是成交預測">${esc(item.fit_label)} ${esc(item.fit_score)}</span>`);
       }
       if (item.last_event === "new") bits.push('<span class="tag new">全新物件</span>');
-      if (item.last_event === "same_source" && !item.match_level) bits.push('<span class="tag same">同屋源更新</span>');
-      if (item.match_verdict === "yes") bits.push('<span class="tag verdict-yes">已確認：同一間</span>');
-      else if (item.match_verdict === "no") bits.push('<span class="tag verdict-no">已確認：不同物件</span>');
+      if (item.last_event === "same_source" && !item.match_level && !item.same_house) bits.push('<span class="tag same">同屋源更新</span>');
+      if (item.same_house) bits.push(sameHouseTag(item));
+      else if (item.match_verdict === "yes") bits.push('<span class="tag verdict-yes">已確認：同一間</span>');
       else if (item.match_level === "high") bits.push(`<span class="tag same">高信心同屋源 · ${esc(listingSourceLabel(item))}${item.match_peer ? `／${esc(listingSourceLabel(item.match_peer))}` : ""}</span>`);
       else if (item.match_level === "medium") bits.push(`<span class="tag watch">需確認同屋源 · ${esc(listingSourceLabel(item))}${item.match_peer ? `／${esc(listingSourceLabel(item.match_peer))}` : ""}</span>`);
+      if (item.match_verdict === "no") bits.push('<span class="tag verdict-no">已確認：不同物件</span>');
       if (item.last_event === "update") bits.push('<span class="tag same">內容更新</span>');
       if (item.offline_confirmed) bits.push('<span class="tag off-sure">確認已下架</span>');
       else if (item.offline || item.last_event === "offline") bits.push('<span class="tag off">正在確認中的下架</span>');
@@ -4207,7 +4336,8 @@
             <h3 class="item-title">
               <a ${listingLinkAttrs(item)}>${esc(item.title)}</a>
             </h3>
-            ${matchPeerBlock(item)}
+            ${costChangeLine(item)}
+            ${sameHouseWarn(item)}
             ${formatListingWhen(item) ? `<div class="when"><span class="when-label">更新</span>${esc(formatListingWhen(item))}</div>` : ""}
             <div class="rent-price">${esc(rentPriceLabel(item))}</div>
             <div class="meta">
@@ -4241,6 +4371,7 @@
             ${matchActionButtons(item, id)}
             ${item.source === "self" && !item.mine && !isGuest ? `<button class="ghost" data-self-report="${id}">檢舉</button>` : ""}
           </div>
+          ${sameHousePanel(item)}
         </article>
         </div>`;
       }).join(""));
@@ -4361,7 +4492,7 @@
     }
 
     function swipeIgnoreTarget(el) {
-      return Boolean(el.closest("a, button, input, textarea, label, select, .pick, .actions, .contact"));
+      return Boolean(el.closest("a, button, input, textarea, label, select, .pick, .actions, .contact, .same-house-panel, .same-house-warn"));
     }
 
     function bindCardSwipe() {
@@ -6155,6 +6286,16 @@
         $("saveMsg").textContent = label ? `已排除 ${label}` : "已排除此聯絡人";
         await saveSettings(collectSettings());
         await loadList();
+        return;
+      }
+      const sameToggle = ev.target.closest("[data-same-toggle]")?.dataset.sameToggle;
+      if (sameToggle) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const key = String(sameToggle);
+        if (sameHouseOpen.has(key)) sameHouseOpen.delete(key);
+        else sameHouseOpen.add(key);
+        renderList(listCache, lastStats);
         return;
       }
       const rejectMatch = ev.target.dataset.rejectMatch;

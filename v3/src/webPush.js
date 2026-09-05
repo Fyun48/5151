@@ -12,6 +12,7 @@ function eventLabel(type) {
   if (type === "price_drop") return "價格調降";
   if (type === "price_update") return "價格變更";
   if (type === "title_update") return "標題更新";
+  if (type === "fee_update") return "費用變更";
   if (type === "update") return "內容更新";
   return type || "更新";
 }

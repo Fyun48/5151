@@ -20,6 +20,12 @@ import { sameSearch } from "./client591.js";
 import { CITIES, districtNameFromListing, normalizeWatchDistricts } from "./regions.js";
 import { preferPrimaryListing } from "./match.js";
 import { listingCompareCost, passesPriceFilter } from "./listingCost.js";
+import {
+  costChangePayload,
+  feeChangeDetail,
+  feeSignature,
+  sameHouseBundle,
+} from "./listingCompare.js";
 import { commuteWorkJobs, hasWorkPoint, needsListingGeo, normalizeCommuteMode } from "./geo.js";
 import { demoCommutePatch } from "./demo.js";
 import { isWalkableMrtDistance, makeMrtKey } from "./mrt.js";
@@ -451,10 +457,59 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_listings_search ON listings(search_key)"
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_hidden ON listings(hidden)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_match ON listings(match_level)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_offline ON listings(offline)");
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN cost_changed_at TEXT");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN cost_change_detail TEXT");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN cost_change_type TEXT");
+} catch {
+  // already migrated
+}
+db.exec("CREATE INDEX IF NOT EXISTS idx_listings_match_peer ON listings(match_post_id)");
 ensurePersonalSchema(db);
 ensureDemandSchema(db);
 ensureSelfListingSchema(db);
 ensurePushSchema(db);
+
+try {
+  const already = db.prepare("SELECT value FROM settings WHERE key = 'costChangeBackfill'").get();
+  if (!already) {
+    const latest = db.prepare(`
+      SELECT e.post_id, e.type, e.detail, e.created_at
+      FROM user_events e
+      JOIN (
+        SELECT post_id, MAX(id) AS id
+        FROM user_events
+        WHERE type IN ('price_drop', 'price_update', 'fee_update')
+        GROUP BY post_id
+      ) latest ON latest.id = e.id
+    `).all();
+    const upd = db.prepare(`
+      UPDATE listings
+      SET cost_changed_at = COALESCE(NULLIF(cost_changed_at, ''), ?),
+          cost_change_type = COALESCE(NULLIF(cost_change_type, ''), ?),
+          cost_change_detail = COALESCE(NULLIF(cost_change_detail, ''), ?)
+      WHERE post_id = ?
+    `);
+    db.exec("BEGIN");
+    for (const row of latest) {
+      upd.run(row.created_at, row.type, row.detail || "", row.post_id);
+    }
+    db.exec("COMMIT");
+    db.prepare(
+      "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    ).run("costChangeBackfill", "1");
+  }
+} catch {
+  try { db.exec("ROLLBACK"); } catch { /* ignore */ }
+}
 
 let cachedDefaultUserId = 0;
 
@@ -1390,6 +1445,48 @@ function parseJson(value, fallback) {
   }
 }
 
+function decorateSameHousePeer(raw) {
+  if (!raw) return null;
+  const source = String(raw.source || "591") || "591";
+  return {
+    ...raw,
+    extra_fees: Array.isArray(raw.extra_fees) ? raw.extra_fees : parseJson(raw.extra_fees, []),
+    source,
+    source_label: selfSourceLabel(source),
+  };
+}
+
+function loadSameHousePeers(row) {
+  const selfId = Number(row?.post_id) || 0;
+  if (!selfId) return [];
+  const seed = new Set([selfId, Number(row.match_post_id) || 0].filter(Boolean));
+  const found = new Map();
+  for (let hop = 0; hop < 2 && seed.size; hop += 1) {
+    const ids = [...seed];
+    seed.clear();
+    const placeholders = ids.map(() => "?").join(",");
+    const rows = db.prepare(
+      `SELECT post_id, title, url, price, price_num, extra_fee, extra_fees, extra_fee_text,
+              price_contain_text, floor_name, area_name, layout, source, offline, offline_confirmed,
+              hidden, match_post_id, match_level, match_verdict, match_detail,
+              cost_changed_at, cost_change_detail, cost_change_type, last_seen_at, refresh_time
+       FROM listings
+       WHERE post_id IN (${placeholders}) OR match_post_id IN (${placeholders})
+       LIMIT 8`,
+    ).all(...ids, ...ids);
+    for (const item of rows) {
+      const id = Number(item.post_id);
+      if (!id || found.has(id)) continue;
+      found.set(id, item);
+      const peer = Number(item.match_post_id) || 0;
+      if (peer && !found.has(peer)) seed.add(peer);
+    }
+  }
+  return [...found.values()]
+    .filter((item) => Number(item.post_id) !== selfId)
+    .map(decorateSameHousePeer);
+}
+
 function decorateListing(row, settings, userId) {
   if (!row) return row;
   settings = settings || getSettings();
@@ -1398,19 +1495,11 @@ function decorateListing(row, settings, userId) {
   const commuteKm = commute == null ? null : Math.round(commute * 10) / 10;
   const commuteMode = normalizeCommuteMode(settings.commuteMode);
   const matchPostId = Number(row.match_post_id) || 0;
-  const matchPeerRaw = matchPostId
-    ? db.prepare(
-      "SELECT post_id, title, url, price, price_num, extra_fee, extra_fees, source, offline FROM listings WHERE post_id = ?",
-    ).get(matchPostId)
-    : null;
-  const matchPeer = matchPeerRaw
-    ? {
-      ...matchPeerRaw,
-      source: String(matchPeerRaw.source || "591") || "591",
-      source_label: selfSourceLabel(matchPeerRaw.source || "591"),
-    }
-    : null;
+  const sameHousePeers = loadSameHousePeers(row);
+  const matchPeerRaw = sameHousePeers.find((item) => Number(item.post_id) === matchPostId) || sameHousePeers[0] || null;
+  const matchPeer = matchPeerRaw;
   const source = String(row.source || "591") || "591";
+  const sourceLabel = selfSourceLabel(source);
   const uid = Number(userId) || 0;
   const listedBy = Number(row.listed_by_user_id) || 0;
   const fit = listingFitFields({ ...row, commute_km: commuteKm }, settings);
@@ -1419,9 +1508,16 @@ function decorateListing(row, settings, userId) {
     model_score: _modelScore,
     ...publicRow
   } = row;
+  const extraFees = Array.isArray(row.extra_fees) ? row.extra_fees : parseJson(row.extra_fees, []);
+  const decoratedSelf = {
+    ...row,
+    extra_fees: extraFees,
+    source,
+    source_label: sourceLabel,
+  };
   return {
     ...publicRow,
-    extra_fees: Array.isArray(row.extra_fees) ? row.extra_fees : parseJson(row.extra_fees, []),
+    extra_fees: extraFees,
     has_elevator: listingHasElevator(row),
     commute_km: commuteKm,
     commute_mode: commuteMode,
@@ -1430,8 +1526,15 @@ function decorateListing(row, settings, userId) {
     commute_min_pm: Number.isFinite(Number(row.rush_pm_min)) && Number(row.rush_pm_min) > 0 ? Math.round(Number(row.rush_pm_min)) : null,
     district: districtNameFromListing(row),
     match_peer: matchPeer || null,
+    same_house: (row.match_verdict === "no" || Number(row.match_rejected) === 1)
+      ? null
+      : sameHouseBundle(
+        decoratedSelf,
+        sameHousePeers.filter((peer) => peer.match_verdict !== "no"),
+      ),
+    cost_change: costChangePayload(row),
     source,
-    source_label: selfSourceLabel(source),
+    source_label: sourceLabel,
     self_body: String(row.self_body || ""),
     photos: listingPhotoUrls(row),
     mine: uid > 0 && listedBy === uid,
@@ -1521,7 +1624,7 @@ export function confirmSuspectedMatch(postId, userId) {
            match_detail = ?, match_post_id = ?
        WHERE post_id = ?`,
     ).run(
-      `已確認同一間，保留較低價／較新刊登，隱藏 #${duplicate.post_id}`,
+      `已確認同一間，主卡留較低總月費，隱藏 #${duplicate.post_id}；較貴的可從同屋源按鈕展開`,
       duplicate.post_id,
       primary.post_id,
     );
@@ -1664,14 +1767,17 @@ export function upsertListing(listing) {
       : JSON.stringify(listing.extra_fees || []);
   const communityId = Number(listing.community_id) || listingCommunityId(listing) || 0;
   const communityName = String(listing.community_name || "").trim();
+  const costChangedAt = String(listing.cost_changed_at || "").trim();
+  const costChangeType = String(listing.cost_change_type || "").trim();
+  const costChangeDetail = String(listing.cost_change_detail || "").trim();
   db.prepare(`
     INSERT INTO listings (
       post_id, source_key, search_key, title, url, price, price_num, extra_fee, extra_fee_text,
       price_contain_text, extra_fees, extra_fees_fetched, address, area_name,
       layout, floor_name, kind_name, role_name, cover, tags, refresh_time,
       first_seen_at, last_seen_at, last_event, viewed, watched, lat, lng,
-      community_id, community_name
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?)
+      community_id, community_name, cost_changed_at, cost_change_type, cost_change_detail
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(post_id) DO UPDATE SET
       source_key = excluded.source_key,
       search_key = excluded.search_key,
@@ -1724,6 +1830,18 @@ export function upsertListing(listing) {
       community_name = CASE
         WHEN IFNULL(excluded.community_name, '') != '' THEN excluded.community_name
         ELSE listings.community_name
+      END,
+      cost_changed_at = CASE
+        WHEN IFNULL(excluded.cost_changed_at, '') != '' THEN excluded.cost_changed_at
+        ELSE listings.cost_changed_at
+      END,
+      cost_change_type = CASE
+        WHEN IFNULL(excluded.cost_change_type, '') != '' THEN excluded.cost_change_type
+        ELSE listings.cost_change_type
+      END,
+      cost_change_detail = CASE
+        WHEN IFNULL(excluded.cost_change_detail, '') != '' THEN excluded.cost_change_detail
+        ELSE listings.cost_change_detail
       END
   `).run(
     listing.post_id,
@@ -1754,6 +1872,9 @@ export function upsertListing(listing) {
     listing.lng ?? null,
     communityId,
     communityName,
+    costChangedAt,
+    costChangeType,
+    costChangeDetail,
   );
   const origin = String(listing.source || "591").trim() || "591";
   const originId = String(listing.source_id || listing.post_id || "").trim() || String(listing.post_id);
@@ -1845,6 +1966,21 @@ export function setListingDetail(postId, { extraFees, contact, fetched = 1, lat,
     nextCommunityName,
     postId,
   );
+  if (
+    extraFees !== undefined
+    && Number(listing.extra_fees_fetched) === 1
+    && feeSignature(listing) !== feeSignature({ ...listing, extra_fees: extraFees })
+  ) {
+    const stamp = new Date().toISOString();
+    const detail = feeChangeDetail(listing, { ...listing, extra_fees: extraFees });
+    db.prepare(
+      `UPDATE listings
+       SET cost_changed_at = ?, cost_change_type = 'fee_update', cost_change_detail = ?, last_event = 'update'
+       WHERE post_id = ?`,
+    ).run(stamp, detail, postId);
+    const saved = getListing(postId);
+    if (saved) enqueueListingEvent(saved, { type: "fee_update", detail, created_at: stamp });
+  }
   return getListing(postId);
 }
 

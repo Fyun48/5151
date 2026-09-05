@@ -7,6 +7,7 @@ import { notifyChannelOn } from "./notifyMatrix.js";
 import { trackedListingUrl } from "./openLink.js";
 import { composeListingNotifyMail } from "./siteMail.js";
 import { selfSourceLabel } from "./selfListings.js";
+import { feeChangeDetail, feeFieldsChanged } from "./listingCompare.js";
 
 function toastWindows(title, body) {
   const script = `
@@ -34,7 +35,7 @@ export function isSameNotifyDetail(previous, next) {
   return String(previous).replace(/\s+/g, "") === String(next ?? "").replace(/\s+/g, "");
 }
 
-const CHANGE_LABELS = "格局|樓層|坪數|地址|類型|價格|標題";
+const CHANGE_LABELS = "格局|樓層|坪數|地址|類型|價格|租金|額外月費|費用說明|服務費|標題";
 
 /** 把「格局 2房 → 3房；樓層 3F → 5F」拆成對照列，給站內通知卡片用。 */
 export function parseNotifyChanges(detail) {
@@ -69,6 +70,7 @@ export function eventLabel(type) {
   if (type === "price_drop") return "價格調降";
   if (type === "price_update") return "價格變更";
   if (type === "title_update") return "標題更新";
+  if (type === "fee_update") return "費用變更";
   if (type === "update") return "內容更新";
   return type;
 }
@@ -81,6 +83,7 @@ function embedColor(type) {
   if (type === "price_drop") return 0x15803d;
   if (type === "price_update") return 0x15803d;
   if (type === "title_update") return 0xb45309;
+  if (type === "fee_update") return 0xb45309;
   return 0xb45309;
 }
 
@@ -160,24 +163,34 @@ export function classifyExistingUpdate(incoming, existing) {
   const priceChanged = Boolean(existing.price && incoming.price && existing.price !== incoming.price);
   const titleChanged = normText(existing.title) !== normText(incoming.title);
   const extras = contentDiff(incoming, existing);
+  const feeChanged = feeFieldsChanged(incoming, existing);
+  const feeDetail = feeChanged ? feeChangeDetail(existing, incoming) : "";
+  const priceBit = existing.price && incoming.price ? `價格 ${existing.price} → ${incoming.price}` : "";
 
   if (priceDropped && titleChanged) {
-    return { type: "price_drop", detail: `價格 ${existing.price} → ${incoming.price}；標題變更` };
+    return { type: "price_drop", detail: [priceBit, "標題變更", feeDetail].filter(Boolean).join("；") };
   }
   if (priceDropped) {
-    return { type: "price_drop", detail: `價格 ${existing.price} → ${incoming.price}` };
+    return { type: "price_drop", detail: [priceBit, feeDetail].filter(Boolean).join("；") };
   }
   if (titleChanged && priceChanged) {
-    return { type: "title_update", detail: `標題變更；價格 ${existing.price} → ${incoming.price}` };
+    return { type: "title_update", detail: ["標題變更", priceBit, feeDetail].filter(Boolean).join("；"), cost_change_type: feeChanged ? "fee_update" : "price_update" };
   }
   if (titleChanged) {
-    return { type: "title_update", detail: `標題：${existing.title} → ${incoming.title}` };
+    return {
+      type: "title_update",
+      detail: [`標題：${existing.title} → ${incoming.title}`, feeDetail].filter(Boolean).join("；"),
+      ...(feeChanged ? { cost_change_type: "fee_update" } : {}),
+    };
   }
   if (priceRaised) {
-    return { type: "price_update", detail: `價格 ${existing.price} → ${incoming.price}` };
+    return { type: "price_update", detail: [priceBit, feeDetail].filter(Boolean).join("；") };
   }
   if (priceChanged) {
-    return { type: "price_update", detail: `價格 ${existing.price} → ${incoming.price}` };
+    return { type: "price_update", detail: [priceBit, feeDetail].filter(Boolean).join("；") };
+  }
+  if (feeChanged) {
+    return { type: "fee_update", detail: feeDetail };
   }
   if (extras.length) {
     return { type: "update", detail: extras.join("；") };
@@ -187,7 +200,7 @@ export function classifyExistingUpdate(incoming, existing) {
 
 export function listingLastEvent(type, existing) {
   if (type === "seen") return existing?.last_event || "new";
-  if (type === "price_drop" || type === "price_update" || type === "title_update") return "update";
+  if (type === "price_drop" || type === "price_update" || type === "title_update" || type === "fee_update") return "update";
   if (type === "relist") return "same_source";
   if (type === "offline") return "offline";
   return type;
@@ -209,7 +222,7 @@ export function shouldNotify(settings, listing, event) {
   if (type === "same_source") return watched;
   if (type === "new") return true;
   // 內容／價格／標題更新：只有特別關注才通知
-  if (type === "price_drop" || type === "price_update" || type === "title_update" || type === "update") {
+  if (type === "price_drop" || type === "price_update" || type === "title_update" || type === "fee_update" || type === "update") {
     return watched;
   }
   if (!watched) return false;

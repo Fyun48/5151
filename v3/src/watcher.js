@@ -56,6 +56,8 @@ import { fetchMrtAccess } from "./mrt.js";
 import { googleDirectionsAllowed } from "./mapsBilling.js";
 import { bestMatch } from "./match.js";
 import { classifyExistingUpdate, eventLabel, listingLastEvent, notify, shouldDockNotify, shouldMailNotify, shouldNotify, shouldPushNotify, shouldWebhookNotify } from "./notify.js";
+import { feeChangeDetail, feeFieldsChanged, incomingHasFeePayload, isCostChangeType } from "./listingCompare.js";
+import { rentAmount } from "./listingCost.js";
 import { normalizeOfflineConfirmDays, shouldRecheckOffline } from "./offline.js";
 import { detailConcurrency, mapPool } from "./pool.js";
 
@@ -106,6 +108,33 @@ async function markOfflineAndNotify(postId, { wasOnline = true } = {}) {
 
 function yieldEventLoop() {
   return new Promise((resolve) => setImmediate(resolve));
+}
+
+function costPatchFromClassify({ type, detail, cost_change_type }, incoming, existing, prev, stamp) {
+  if (isCostChangeType(type) || cost_change_type) {
+    return {
+      cost_changed_at: stamp,
+      cost_change_type: cost_change_type || type,
+      cost_change_detail: detail || "",
+    };
+  }
+  const prior = prev || existing;
+  if (type === "same_source" && prior) {
+    const oldRent = rentAmount(prior);
+    const newRent = rentAmount(incoming);
+    const rentChanged = oldRent > 0 && newRent > 0 && oldRent !== newRent;
+    const feeChanged = incomingHasFeePayload(prior) && feeFieldsChanged(incoming, prior);
+    if (!rentChanged && !feeChanged) return {};
+    const bits = [];
+    if (rentChanged) bits.push(`相較先前同屋源 #${prior.post_id}，租金 ${prior.price || oldRent} → ${incoming.price || newRent}`);
+    if (feeChanged) bits.push(feeChangeDetail(prior, incoming));
+    return {
+      cost_changed_at: stamp,
+      cost_change_type: rentChanged && newRent < oldRent ? "price_drop" : (rentChanged ? "price_update" : "fee_update"),
+      cost_change_detail: bits.join("；"),
+    };
+  }
+  return {};
 }
 
 function classify(incoming, existing) {
@@ -544,7 +573,7 @@ export async function runWatch(options = {}) {
       seen.add(listing.post_id);
 
       const existing = getListing(listing.post_id);
-      const { type, detail, prev, level } = classify(listing, existing);
+      const { type, detail, prev, level, cost_change_type } = classify(listing, existing);
       const stamp = nowIso();
       upsertListing({
         ...listing,
@@ -552,6 +581,7 @@ export async function runWatch(options = {}) {
         first_seen_at: existing?.first_seen_at || stamp,
         last_seen_at: stamp,
         last_event: listingLastEvent(type, existing),
+        ...costPatchFromClassify({ type, detail, cost_change_type }, listing, existing, prev, stamp),
       });
       upserts += 1;
       if (!existing) freshIds.push(listing.post_id);
