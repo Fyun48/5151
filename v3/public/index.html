@@ -829,10 +829,10 @@
     .same-house-warn {
       background: var(--rose-soft);
       border: 1px solid var(--rose);
-      border-radius: 12px;
+      border-radius: var(--radius-lg, 10px);
       padding: 8px 10px;
       margin: 8px 0 4px;
-      font-size: 13px;
+      font-size: var(--text-sm, 13px);
       line-height: 1.45;
       font-weight: 700;
     }
@@ -846,7 +846,7 @@
     .same-house-compare {
       padding: 10px 12px;
       border: 1px solid var(--line);
-      border-radius: 12px;
+      border-radius: var(--radius-lg, 10px);
       background: var(--paper);
       min-width: 0;
     }
@@ -874,7 +874,7 @@
     .same-split-hint {
       display: block;
       margin-top: 4px;
-      font-size: 11px;
+      font-size: var(--text-xs, 12px);
       color: var(--muted);
       line-height: 1.4;
     }
@@ -887,12 +887,12 @@
     .same-house-row {
       padding: 10px 12px;
       border: 1px solid var(--line);
-      border-radius: 12px;
+      border-radius: var(--radius-lg, 10px);
       background: var(--same-soft);
       min-width: 0;
     }
     .same-house-role {
-      font-size: 11px;
+      font-size: var(--text-xs, 12px);
       font-weight: 800;
       color: var(--same);
       white-space: nowrap;
@@ -908,7 +908,7 @@
     .same-house-cost strong { color: var(--watch); font-weight: 800; }
     .same-diff-kicker {
       margin-top: 6px;
-      font-size: 11px;
+      font-size: var(--text-xs, 12px);
       font-weight: 800;
       color: var(--same);
     }
@@ -3444,9 +3444,13 @@
       guestToastTimer = window.setTimeout(hideGuestToast, 8000);
     }
 
-    function remindGuest() {
+    function remindGuest(opts = {}) {
       guestLockClicks += 1;
-      if (guestLockClicks < GUEST_LOCK_TOAST_AFTER) return;
+      if (!opts.immediate && guestLockClicks < GUEST_LOCK_TOAST_AFTER) return;
+      const p = $("guestToast")?.querySelector("p");
+      if (p) {
+        p.textContent = opts.message || "成為會員後就能使用這項功能：改搜尋條件、儲存設定與特別關注。";
+      }
       showGuestToast();
     }
 
@@ -3579,7 +3583,14 @@
       if (!isGuest || !isGuestLockedTarget(ev.target)) return;
       ev.preventDefault();
       ev.stopPropagation();
-      remindGuest();
+      if (ev.target.closest("[data-reject-match]")) {
+        remindGuest({
+          immediate: true,
+          message: "登入後才能把副卡拆回你的列表。一人拆開不會改大家看到的資料。",
+        });
+      } else {
+        remindGuest();
+      }
       window.JibbyMascot?.noteConfused();
     }, true);
     $("guestToastClose")?.addEventListener("click", hideGuestToast);
@@ -4448,9 +4459,9 @@
             </h3>
             ${costChangeLine(item)}
             ${sameHouseWarn(item)}
-            ${sameHouseTeaser(item)}
             ${formatListingWhen(item) ? `<div class="when"><span class="when-label">更新</span>${esc(formatListingWhen(item))}</div>` : ""}
             <div class="rent-price">${esc(rentPriceLabel(item))}</div>
+            ${sameHouseTeaser(item)}
             <div class="meta">
               ${esc(item.kind_name || "")} · ${esc(item.layout || "")} · ${esc(item.area_name || "")} · ${esc(item.floor_name || "")}
               <br>${esc(item.address || "")}${commuteText(item)}${offlineLine(item)}
@@ -6412,6 +6423,7 @@
           sameHouseOpen.add(key);
         }
         renderList(listCache, lastStats);
+        document.querySelector(`[data-same-toggle="${key}"]`)?.focus();
         return;
       }
       const rejectBtn = ev.target.closest("[data-reject-match]");

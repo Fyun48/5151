@@ -93,6 +93,7 @@ test("personal split hides affiliate only for that user until consensus", () => 
     const primary = (guest.listings || []).find((row) => row.post_id === 910001);
     const alice = ensureUser("alice-split@example.com");
     const bob = ensureUser("bob-split@example.com");
+    const bogus = rejectSuspectedMatch(910002, alice, { peerId: 910099 });
     const first = rejectSuspectedMatch(910002, alice, { peerId: 910001 });
     const aliceList = listListings({ filter: "guest", sort: "newest", limit: 20, userId: alice, matchVoteUserId: alice });
     const bobList = listListings({ filter: "guest", sort: "newest", limit: 20, userId: bob, matchVoteUserId: bob });
@@ -103,6 +104,8 @@ test("personal split hides affiliate only for that user until consensus", () => 
       guestIds: idsGuest,
       guestHasCompare: Boolean(primary?.same_house?.compare?.headline),
       headline: primary?.same_house?.compare?.headline || "",
+      bogusOk: bogus.ok,
+      bogusCode: bogus.code,
       firstOk: first.ok,
       firstPromoted: first.promoted,
       firstVerdict: first.listing?.match_verdict || "",
@@ -127,6 +130,8 @@ test("personal split hides affiliate only for that user until consensus", () => 
     assert.deepEqual(out.guestIds.filter((id) => id === 910001 || id === 910002), [910001]);
     assert.equal(out.guestHasCompare, true);
     assert.match(out.headline, /總月費差/);
+    assert.equal(out.bogusOk, false);
+    assert.equal(out.bogusCode, "no_peer");
     assert.equal(out.firstOk, true);
     assert.equal(out.firstPromoted, false);
     assert.equal(out.firstVerdict, "");

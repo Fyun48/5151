@@ -1711,6 +1711,14 @@ function dayStartIso(now = new Date()) {
   return start.toISOString();
 }
 
+function isLinkedSameHousePeer(listing, peerId) {
+  const otherId = Number(peerId) || 0;
+  const selfId = Number(listing?.post_id) || 0;
+  if (!listing || !otherId || !selfId || otherId === selfId) return false;
+  if (Number(listing.match_post_id) === otherId) return true;
+  return loadSameHousePeers(listing).some((peer) => Number(peer.post_id) === otherId);
+}
+
 export function rejectSuspectedMatch(postId, userId, { peerId } = {}) {
   const uid = Number(userId) || 0;
   if (!uid) {
@@ -1728,7 +1736,7 @@ export function rejectSuspectedMatch(postId, userId, { peerId } = {}) {
     ).get(postId);
     otherId = Number(incoming?.post_id) || 0;
   }
-  if (!otherId || otherId === Number(postId)) {
+  if (!otherId || otherId === Number(postId) || !isLinkedSameHousePeer(listing, otherId)) {
     return { ok: false, code: "no_peer", error: "找不到要拆開的同屋源" };
   }
 
@@ -1784,8 +1792,9 @@ export function rejectSuspectedMatch(postId, userId, { peerId } = {}) {
   if (promoted) {
     db.prepare(
       `UPDATE listings
-       SET match_verdict = 'no', match_rejected = 1, hidden = 0
-       WHERE post_id IN (?, ?)`,
+       SET match_verdict = 'no', match_rejected = 1
+       WHERE post_id IN (?, ?)
+         AND IFNULL(match_verdict, '') != 'yes'`,
     ).run(lo, hi);
   }
 

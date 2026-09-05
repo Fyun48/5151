@@ -620,6 +620,8 @@ test("self listing form and in-site detail stay on this site", () => {
   assert.match(html, /電話／LINE 已收合/);
   assert.match(html, /peer\.diffs/);
   assert.match(html, /same-house-compare-headline/);
+  assert.match(html, /登入後才能把副卡拆回你的列表/);
+  assert.match(html, /\[data-same-toggle="\$\{key\}"\]`\)\?\.focus/);
 });
 
 test("filter city accordion markup is generated from shared city list", () => {
