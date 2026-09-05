@@ -164,8 +164,15 @@ test("mobile more-filters keep chips and districts inside the card", () => {
   assert.match(render, /block\.hidden = false/);
   assert.doesNotMatch(render, /顯示行政區/);
   const mobile = html.slice(html.indexOf("@media (max-width: 880px)"));
-  assert.match(mobile, /#districtChips \{[\s\S]*flex-wrap: wrap;/);
-  assert.doesNotMatch(mobile, /#districtChips \{[\s\S]*flex-wrap: nowrap;/);
+  const districtRule = mobile.match(/#districtChips \{[^}]+\}/);
+  assert.ok(districtRule);
+  assert.match(districtRule[0], /flex-wrap: wrap;/);
+  assert.doesNotMatch(districtRule[0], /flex-wrap: nowrap;/);
+  const narrow = html.slice(html.indexOf("@media (max-width: 767px)"));
+  assert.match(narrow, /\.chip-row \{[\s\S]*flex-wrap: nowrap;/);
+  assert.match(narrow, /\.chip-row \{[\s\S]*overflow-x: auto;/);
+  assert.match(html, /max-height: min\(42vh, calc\(100dvh - 56px - 220px/);
+  assert.match(html, /list-head-sticky:not\(\.filter-compact\) \{[\s\S]*position: static;/);
 });
 
 test("left panel profile save stays in the settings sheet", () => {
@@ -280,7 +287,7 @@ test("guest demo is read-only and work prompt can be skipped", () => {
   assert.doesNotMatch(html, /示範瀏覽/);
   assert.match(html, /id="guestToast"/);
   assert.match(html, /class="guest-toast"/);
-  assert.match(html, /GUEST_LOCK_TOAST_AFTER = 2/);
+  assert.match(html, /GUEST_LOCK_TOAST_AFTER = 1/);
   assert.match(html, /function showGuestToast/);
   assert.match(html, /function remindGuest/);
   assert.match(html, /成為會員後就能使用這項功能/);

@@ -1109,7 +1109,7 @@
       box-shadow: none;
     }
     body.panel-collapsed .list-head-sticky:not(.filter-compact) {
-      padding-bottom: 38px;
+      padding-bottom: 52px;
     }
     body.panel-collapsed .list-head-sticky.filter-compact .filter-body {
       display: block;
@@ -1142,8 +1142,10 @@
       right: 12px;
       bottom: 10px;
       z-index: 2;
-      width: 30px;
-      height: 30px;
+      width: var(--touch);
+      height: var(--touch);
+      min-width: var(--touch);
+      min-height: var(--touch);
       padding: 0;
       border-radius: 50%;
       align-items: center;
@@ -1197,7 +1199,7 @@
       margin-left: auto;
     }
     .filter-head-actions > button {
-      min-height: var(--btn-height);
+      min-height: var(--touch);
       min-width: 76px;
       padding: 8px 14px;
       font-size: 13px;
@@ -1916,7 +1918,17 @@
         top: 6px;
         border-radius: 16px;
         max-width: 100%;
-        overflow-x: clip;
+        overflow-x: hidden;
+      }
+      body.panel-collapsed .list-head-sticky.filter-compact {
+        position: sticky;
+        max-height: none;
+      }
+      body.panel-collapsed .list-head-sticky:not(.filter-compact) {
+        position: static;
+        max-height: min(42vh, calc(100dvh - 56px - 220px - env(safe-area-inset-bottom, 0px)));
+        overflow-x: hidden;
+        overflow-y: auto;
       }
       .filter-head {
         display: flex;
@@ -1941,7 +1953,7 @@
         flex: 1 1 0;
       }
       #openFilterSheetBtn {
-        min-height: var(--btn-height);
+        min-height: var(--touch);
         padding: 8px 14px;
         font-weight: 700;
       }
@@ -2110,11 +2122,19 @@
     }
     @media (max-width: 767px) {
       .chip-row {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        overflow-y: hidden;
+        margin: 0;
+        padding: 2px 0 6px;
+        gap: 6px;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: thin;
+      }
+      .chip-row.view-checks,
+      .bulk-bar {
         flex-wrap: wrap;
         overflow: visible;
-        margin: 0;
-        padding: 2px 0;
-        gap: 6px;
       }
       .chip-row .chip {
         flex: 0 0 auto;
@@ -2977,7 +2997,7 @@
     let isGuest = true;
     let guestLockClicks = 0;
     let guestToastTimer = 0;
-    const GUEST_LOCK_TOAST_AFTER = 2;
+    const GUEST_LOCK_TOAST_AFTER = 1;
     const GUEST_TOUR_SKIP = "591_v3_guest_tour_skip";
     try {
       if (new URLSearchParams(location.search).has("skipTour")) localStorage.setItem(GUEST_TOUR_SKIP, "1");
@@ -4532,7 +4552,11 @@
       if (group.length < 2) return null;
       const labels = group.map((row) => listingSourceLabel(row) || `#${row.post_id}`);
       const fields = [
-        ["price", "租金", (row) => String(row.price || (parseClientRent(row) ? parseClientRent(row).toLocaleString("zh-TW") : "")).trim()],
+        ["price", "租金", (row) => {
+          const rent = parseClientRent(row);
+          if (rent > 0) return rent.toLocaleString("zh-TW");
+          return String(row.price || "").trim();
+        }],
         ["extra", "額外月費", (row) => extraClientMonthly(row) ? extraClientMonthly(row).toLocaleString("zh-TW") : "0"],
         ["total", "總月費", (row) => {
           const rent = parseClientRent(row);

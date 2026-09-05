@@ -50,12 +50,13 @@ test("brand URLs stay on this site and Pawprints cannot be the English name", ()
   assert.match(next.clips.confused.url, /confused\.webm/);
   assert.match(defaultBrandMascot().clips.welcome.url, /walk\.webp/);
   const tokens = readFileSync(path.join(publicDir, "tokens.css"), "utf8");
-  assert.match(tokens, /width: 75vw/);
-  assert.match(tokens, /height: 75vh/);
+  assert.match(tokens, /pointer-events: none/);
+  assert.match(tokens, /max-height: min\(36vh, 240px\)/);
+  assert.match(tokens, /\.jibby-mascot-close \{[\s\S]*min-width: var\(--touch\)/);
   assert.match(tokens, /\.jibby-mascot-media img,[\s\S]*background: transparent/);
   assert.doesNotMatch(tokens, /background: #111/);
   const admin = readFileSync(path.join(publicDir, "admin.html"), "utf8");
   assert.match(admin, /透明底/);
-  assert.match(admin, /75% 畫面/);
+  assert.match(admin, /不擋列表點選/);
   assert.doesNotMatch(admin, /background: var\(--ink\)/);
 });
