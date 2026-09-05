@@ -22,7 +22,7 @@ export function defaultNotifyMatrix() {
 }
 
 export function eventMatrixKey(type) {
-  if (type === "price_drop" || type === "price_update") return "price";
+  if (type === "price_drop" || type === "price_update" || type === "fee_update") return "price";
   if (type === "title_update") return "title";
   if (type === "new" || type === "same_source" || type === "update" || type === "offline" || type === "relist") {
     return type;

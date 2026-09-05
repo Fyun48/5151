@@ -373,13 +373,13 @@ test("product name is 吉比租房物件追蹤 without v2 開發版 copy", () =>
   assert.equal(html.includes("v2 開發版"), false);
   assert.equal(html.includes("v3 開發版"), false);
   assert.equal(html.includes("與線上版分開的資料庫"), false);
-  assert.match(html, /ver\. 3\.41/);
+  assert.match(html, /ver\. 3\.42/);
   assert.doesNotMatch(html, /<h1>[^<]*v3/i);
   assert.match(login, /<h1>吉比租房物件追蹤<\/h1>/);
   assert.equal(login.includes("v2 開發版"), false);
   assert.equal(login.includes("v3 開發版"), false);
   assert.equal(login.includes("資料與線上版分開"), false);
-  assert.match(login, /ver\. 3\.41/);
+  assert.match(login, /ver\. 3\.42/);
 });
 
 test("MRT is admin-only and guest tour is in the page", () => {
@@ -603,8 +603,12 @@ test("self listing form and in-site detail stay on this site", () => {
   assert.match(html, /item\.fit_score/);
   assert.match(html, /sort === "fit_desc"/);
   assert.doesNotMatch(html, /model_score/);
-  assert.match(html, /疑似同一間（\$\{esc\(srcPeer \|\| srcMine\)\}）/);
-  assert.match(html, /確認後列表只留總費用（租金＋額外費用）較低的那則/);
+  assert.match(html, /data-same-toggle/);
+  assert.match(html, /費用變更/);
+  assert.match(html, /同屋源最低總月費/);
+  assert.match(html, /先別打這則/);
+  assert.match(html, /打開原站/);
+  assert.match(html, /確認後主卡留總月費較低的那則/);
 });
 
 test("filter city accordion markup is generated from shared city list", () => {

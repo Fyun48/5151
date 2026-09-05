@@ -147,8 +147,10 @@ test("same price without refresh_time uses last_seen_at", () => {
 
 test("suspected peer payload includes source and confirm keeps cheaper listing", () => {
   const dbSrc = readFileSync(path.join(dir, "../src/db.js"), "utf8");
-  assert.match(dbSrc, /SELECT post_id, title, url, price, price_num, extra_fee, extra_fees, source, offline FROM listings WHERE post_id/);
-  assert.match(dbSrc, /source_label: selfSourceLabel\(matchPeerRaw\.source/);
+  assert.match(dbSrc, /sameHouseBundle/);
+  assert.match(dbSrc, /cost_change: costChangePayload\(row\)/);
+  assert.match(dbSrc, /idx_listings_match_peer/);
+  assert.match(dbSrc, /source_label: selfSourceLabel\(source\)/);
   assert.match(dbSrc, /const primary = preferPrimaryListing\(listing, peer\)/);
   assert.match(dbSrc, /hidden = 1/);
   const suspected = dbSrc.slice(dbSrc.indexOf('if (filter === "suspected")'), dbSrc.indexOf('} else if (filter === "offline")'));

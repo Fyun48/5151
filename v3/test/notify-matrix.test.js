@@ -6,6 +6,7 @@ test("event types map onto matrix rows", async () => {
   const { eventMatrixKey } = await import("../src/notifyMatrix.js");
   assert.equal(eventMatrixKey("price_drop"), "price");
   assert.equal(eventMatrixKey("price_update"), "price");
+  assert.equal(eventMatrixKey("fee_update"), "price");
   assert.equal(eventMatrixKey("title_update"), "title");
   assert.equal(eventMatrixKey("new"), "new");
   assert.equal(eventMatrixKey("seen"), "");
