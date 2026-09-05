@@ -36,7 +36,7 @@ test("住商 zip maps onto 591 districts and reserved post ids", () => {
   assert.equal(hbDetailUrl("ZR204342"), "https://www.hbhousing.com.tw/detail?sn=ZR204342");
 });
 
-test("normalize 住商 items converts 萬元、跳過店面、套房不標整層", () => {
+test("normalize 住商 items converts 萬元、保留店面、套房不標整層", () => {
   const parsed = parseHbApiBody({ data: fixture });
   assert.ok(parsed.items.length >= 3);
   const whole = normalizeHbItem(parsed.items.find((row) => row.sn === "ZR204342"), { regionId: 1, sectionId: 5 });
@@ -56,9 +56,10 @@ test("normalize 住商 items converts 萬元、跳過店面、套房不標整層
   assert.equal(suite.kind_name, "獨立套房");
   assert.equal(suite.price_num, 8500);
 
-  const shop = parsed.items.find((row) => row.type === "店面" || row.type === "辦公");
-  assert.equal(kindFromHbItem(shop), "");
-  assert.equal(normalizeHbItem(shop, { regionId: 1, sectionId: 5 }), null);
+  const shop = parsed.items.find((row) => row.type === "店面");
+  assert.equal(kindFromHbItem(shop), "店面");
+  assert.equal(normalizeHbItem(shop, { regionId: 1, sectionId: 5 })?.kind_name, "店面");
+  assert.equal(kindFromHbItem({ type: "辦公", objName: "辦公室" }), "");
   assert.equal(priceTwdFromWan(0.85), 8500);
 });
 

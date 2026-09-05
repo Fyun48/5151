@@ -18,6 +18,12 @@ test("login page can register after accepting the disclaimer", () => {
   assert.match(html, /進入個人資料/);
   assert.match(html, /!verifyState/);
   assert.match(html, /id="oauthBox"/);
+  assert.match(html, /id="oauthHint"/);
+  assert.match(html, /function paintOauthButtons/);
+  assert.match(html, /後台尚未開通社群登入/);
+  assert.match(html, /aria-disabled/);
+  assert.doesNotMatch(html, /oauth\[data-empty="1"\] \{ display: none/);
+  assert.doesNotMatch(html, /id="oauthGoogle" hidden/);
   assert.match(html, /id="registerPolicy"/);
   assert.match(html, /兩個月沒登入/);
   assert.match(html, /不會另外寄信/);

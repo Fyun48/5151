@@ -113,7 +113,13 @@ test("housing kind chips stay independent of 特別關注", () => {
   assert.match(html, /data-kind="apartment"/);
   assert.match(html, /data-kind="suite"/);
   assert.doesNotMatch(html, /data-kind="building"/);
-  assert.match(html, /kind=\$\{encodeURIComponent\(kind\)\}/);
+  assert.match(html, /kind=\$\{encodeURIComponent\(kinds\.join\(","\)\)\}/);
+  assert.match(html, /sources=\$\{encodeURIComponent\(sources\.join\(","\)\)\}/);
+  assert.match(html, /data-kind="shop"/);
+  assert.match(html, /data-kind="warehouse"/);
+  assert.match(html, /data-source="591"/);
+  assert.match(html, /data-chip-row="source"/);
+  assert.match(html, /function toggleHousingKind/);
   assert.match(html, /document\.querySelectorAll\("\[data-kind\]"\)/);
   assert.doesNotMatch(html, /data-filter="elevator"/);
   assert.doesNotMatch(html, /data-filter="apartment"/);
@@ -376,13 +382,13 @@ test("product name is 吉比租房物件追蹤 without v2 開發版 copy", () =>
   assert.equal(html.includes("v2 開發版"), false);
   assert.equal(html.includes("v3 開發版"), false);
   assert.equal(html.includes("與線上版分開的資料庫"), false);
-  assert.match(html, /ver\. 3\.46/);
+  assert.match(html, /ver\. 3\.47/);
   assert.doesNotMatch(html, /<h1>[^<]*v3/i);
   assert.match(login, /<h1>吉比租房物件追蹤<\/h1>/);
   assert.equal(login.includes("v2 開發版"), false);
   assert.equal(login.includes("v3 開發版"), false);
   assert.equal(login.includes("資料與線上版分開"), false);
-  assert.match(login, /ver\. 3\.46/);
+  assert.match(login, /ver\. 3\.47/);
 });
 
 test("MRT is admin-only and guest tour is in the page", () => {
@@ -539,8 +545,8 @@ test("panel toggle sits above scroll-top and uses expand/collapse glyphs", () =>
   const expandIdx = html.indexOf('id="expandPanelBtn"');
   const topIdx = html.indexOf('id="scrollTopBtn"');
   assert.ok(expandIdx > 0 && topIdx > expandIdx);
-  assert.match(html, /#expandPanelBtn \{[\s\S]*bottom:\s*80px/);
-  assert.match(html, /#scrollTopBtn \{[\s\S]*bottom:\s*140px/);
+  assert.match(html, /#expandPanelBtn \{[\s\S]*bottom:\s*140px/);
+  assert.match(html, /#scrollTopBtn \{[\s\S]*bottom:\s*80px/);
   assert.match(html, /#scrollTopBtn \{[\s\S]*z-index:\s*97/);
   assert.match(html, /#scrollTopBtn[\s\S]*<svg /);
   assert.match(html, /#scrollTopBtn\.on/);
@@ -594,6 +600,10 @@ test("self listing form and in-site detail stay on this site", () => {
   assert.match(html, /id="excludeRooftop"/);
   assert.match(html, /data-kind="whole"/);
   assert.doesNotMatch(html, /id="wholeFloorOnly"/);
+  assert.match(html, /id="compareSelectedBtn"/);
+  assert.match(html, /id="pickCompareOverlay"/);
+  assert.match(html, /function openPickCompare/);
+  assert.match(html, /比較最多 3 筆/);
   assert.match(html, /id="excludeLowFloors"/);
   assert.match(html, /class="chip-row view-checks"/);
   assert.doesNotMatch(html, /class="view-filters"/);

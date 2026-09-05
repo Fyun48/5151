@@ -30,7 +30,7 @@ test("租租通 city names and reserved post ids", () => {
   assert.equal(ddDetailUrl("rvjwjje2subwa0gk"), "https://www.dd-room.com/object/rvjwjje2subwa0gk");
 });
 
-test("normalize 租租通 studio vs whole, skip shop", () => {
+test("normalize 租租通 studio vs whole, keep shop", () => {
   const parsed = parseDdApiBody(fixture);
   assert.equal(parsed.total, 71);
   const studio = normalizeDdItem(parsed.items.find((row) => row.object_id === "rvjwjje2subwa0gk"), {
@@ -47,7 +47,8 @@ test("normalize 租租通 studio vs whole, skip shop", () => {
     sectionId: 8,
   });
   assert.equal(whole.kind_name, "整層住家");
-  assert.equal(kindFromDdItem({ type_space: "shop", type_space_name: "店面" }), "");
+  assert.equal(kindFromDdItem({ type_space: "shop", type_space_name: "店面" }), "店面");
+  assert.equal(kindFromDdItem({ type_space: "office", type_space_name: "辦公" }), "");
 });
 
 test("fetchDdCoveringListings uses injected GET JSON", async () => {
