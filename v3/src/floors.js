@@ -109,6 +109,15 @@ export function parseListingSources(sources) {
   return keys;
 }
 
+export function canUseListingSourceFilter(actor = {}) {
+  return actor?.role === "admin" || actor?.plan === "sponsor";
+}
+
+export function authorizedListingSources(sources, actor = {}) {
+  if (!canUseListingSourceFilter(actor)) return [];
+  return parseListingSources(sources);
+}
+
 export function listingSourceKey(listing) {
   return String(listing?.source || "591").trim() || "591";
 }
