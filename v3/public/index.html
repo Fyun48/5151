@@ -259,6 +259,8 @@
     html.no-session #meDeleteBtn,
     html.no-session #meWatchBtn,
     html.no-session #helpQaBtn,
+    html.no-session #meHelpQaBtn,
+    html.no-session #qaView,
     html.no-session #ownerFab,
     html.no-session #profileForm { display: none !important; }
     body.role-guest #selfListingForm,
@@ -278,7 +280,8 @@
     body.role-guest #meDeleteBtn,
     body.role-guest #meWatchBtn,
     body.role-guest #helpQaBtn,
-    body.role-guest #helpQaDialog,
+    body.role-guest #meHelpQaBtn,
+    body.role-guest #qaView,
     body.role-guest #sponsorBar,
     body.role-guest #ownerFab,
     body.role-guest #profileForm { display: none !important; }
@@ -342,13 +345,15 @@
     body[data-app-view="post"] #postView { display: block; }
     body[data-app-view="notify"] #notifyView { display: block; }
     body[data-app-view="me"] #meView { display: block; }
-    #demandView, #meView, #notifyView, #postView {
+    body[data-app-view="qa"] #qaView { display: block; }
+    #demandView, #meView, #notifyView, #postView, #qaView {
       padding: 0 32px 40px;
     }
     #notifyView .card.panel,
     #meView .card.panel,
     #postView .card.panel,
-    #demandView .card.panel {
+    #demandView .card.panel,
+    #qaView .card.panel {
       width: min(760px, 100%);
       margin-left: auto;
       margin-right: auto;
@@ -747,7 +752,7 @@
       font-weight: 700;
       letter-spacing: 0.04em;
     }
-    .help-qa-panel { width: min(640px, 100%); }
+    .help-qa-panel { width: min(760px, 100%); }
     .help-qa-list { display: grid; gap: 8px; }
     .help-qa-item {
       border: 1px solid var(--line);
@@ -1173,8 +1178,8 @@
     #scrollTopBtn {
       position: fixed;
       right: 18px;
-      bottom: 80px;
-      z-index: 95;
+      bottom: 140px;
+      z-index: 97;
       width: 44px;
       height: 44px;
       border-radius: 50%;
@@ -1186,7 +1191,11 @@
       pointer-events: none;
       transform: translateY(8px);
       transition: opacity 0.18s ease, transform 0.18s ease;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
     }
+    #scrollTopBtn svg { display: block; }
     #scrollTopBtn.on {
       opacity: 1;
       pointer-events: auto;
@@ -2032,7 +2041,7 @@
       body.panel-collapsed #settingsPanel { display: none; }
       body.panel-collapsed.filter-sheet-open #settingsPanel { display: block; }
       .notify-shortcuts { display: none; }
-      #demandView, #meView, #notifyView, #postView { padding: 0 16px 24px; }
+      #demandView, #meView, #notifyView, #postView, #qaView { padding: 0 16px 24px; }
       #notifyView .card.panel,
       #meView .card.panel,
       #postView .card.panel,
@@ -2380,8 +2389,8 @@
         </div>
         <div class="profile-grid">
           <div class="span-2">
-            <label>註冊 Email</label>
-            <input id="profileAccountEmail" readonly />
+            <label>註冊 Email（開通後不能改）</label>
+            <input id="profileAccountEmail" readonly disabled autocomplete="username" />
           </div>
           <div class="span-2">
             <label>聯絡 Email（選填）</label>
@@ -2427,7 +2436,7 @@
     <div class="ad-slot me" id="adMe" hidden></div>
     <div class="card panel" data-tour="notify">
       <h2 style="margin:0 0 8px">帳號</h2>
-      <p class="hint">通知種類、推播與 Discord／SMTP 請到「通知」。這裡只留帳號本身。<a href="/spirit.html">本站在做什麼</a></p>
+      <p class="hint">通知種類、推播與 Discord／SMTP 請到「通知」。這裡只留帳號本身。<a href="/spirit.html">本站在做什麼</a>　<button type="button" class="ghost" id="meHelpQaBtn">功能說明 Q&amp;A</button></p>
       <p class="hint" id="notifyMailHint" hidden>物件／屋源提醒若要用信，請自己填 SMTP。</p>
       <p class="hint" id="notifyHubStatus" hidden></p>
       <div class="row" style="margin-top:10px">
@@ -2759,19 +2768,18 @@
       </form>
     </div>
   </div>
-  <div id="helpQaDialog" class="hub-overlay" hidden>
-    <div class="hub-backdrop" data-close-help-qa></div>
-    <div class="hub-panel help-qa-panel" role="dialog" aria-modal="true" aria-labelledby="helpQaTitle">
-      <div class="hub-head">
+  <section class="app-view" id="qaView">
+    <div class="card panel help-qa-panel">
+      <div class="hub-head" style="padding:0 0 12px">
         <div>
           <h2 id="helpQaTitle">功能說明 Q&amp;A</h2>
-          <p class="hint" style="margin:6px 0 0">說明功能表上看得到與看不到的限制。捷運站是否顯示，看的是可步行路線，不是直線距離。</p>
+          <p class="hint" style="margin:6px 0 0">獨立專區。說明功能表上看得到與看不到的限制，以及註冊／開通規則。捷運站是否顯示，看的是可步行路線，不是直線距離。</p>
         </div>
-        <button type="button" class="ghost" id="helpQaClose">關閉</button>
+        <button type="button" class="ghost" id="helpQaClose">回找房</button>
       </div>
       <div class="help-qa-list" id="helpQaList"></div>
     </div>
-  </div>
+  </section>
   <div id="deleteAccountDialog" class="hub-overlay" hidden>
     <div class="hub-backdrop" data-close-delete-account></div>
     <div class="hub-panel password-panel" role="dialog" aria-modal="true" aria-labelledby="deleteAccountTitle">
@@ -2792,7 +2800,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.45</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> <span class="site-ver">ver. 3.46</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -2811,7 +2819,9 @@
       <div class="owner-list" id="ownerOverlayList"></div>
     </div>
   </div>
-  <button type="button" class="primary" id="scrollTopBtn" title="回頂" aria-label="回頂">↑</button>
+  <button type="button" class="primary" id="scrollTopBtn" title="回頂" aria-label="回頂">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 6.2 4.8 13.4l1.4 1.4L11 9.99V19h2V9.99l4.8 4.81 1.4-1.4z"/></svg>
+  </button>
   <aside id="alertDock" aria-live="polite">
     <header>
       <h2>待看更新</h2>
@@ -3429,9 +3439,11 @@
       $("saveMsg").textContent = msg;
       if ($("status")) $("status").textContent = msg;
     }
-    if (new URLSearchParams(location.search).get("verified") === "1") {
-      flash("信箱已確認，歡迎使用。");
+    const bootQuery = new URLSearchParams(location.search);
+    if (bootQuery.get("verified") === "1" || bootQuery.get("welcome") === "1") {
+      flash(bootQuery.get("welcome") === "1" ? "信箱已開通。請先確認個人資料，註冊 Email 不能改。" : "信箱已確認，歡迎使用。");
       history.replaceState({}, "", location.pathname);
+      window.__WELCOME_PROFILE = bootQuery.get("welcome") === "1" || bootQuery.get("verified") === "1";
     }
 
     function hideGuestToast() {
@@ -3573,7 +3585,7 @@
 
     function isGuestLockedTarget(el) {
       if (!el || !isGuest) return false;
-      if (el.closest("#collapsePanelBtn, #expandPanelBtn, #reloadBtn, #loginBtn, #registerBtn, #helpQaBtn, #helpQaDialog, #guestToast, #guestTour, #listHeadSticky .chip, #q, [data-view-district], [data-open-hub], #notifyHubClose, [data-close-hub], [data-hub-tab]")) return false;
+      if (el.closest("#collapsePanelBtn, #expandPanelBtn, #reloadBtn, #loginBtn, #registerBtn, #helpQaBtn, #qaView, #guestToast, #guestTour, #listHeadSticky .chip, #q, [data-view-district], [data-open-hub], #notifyHubClose, [data-close-hub], [data-hub-tab]")) return false;
       if (el.closest(".item-cover, h3 a, a.tel, .line-qr")) return false;
       if (el.closest("#notifyHubSave, #memberMailTest, #gmailPresetBtn")) return true;
       if (el.closest("#notifyHub")) return true;
@@ -4806,6 +4818,17 @@
       $("who").textContent = me.display_name || me.nickname || me.email || "";
       meEmail = me.email || "";
       paintProfile(me);
+      if (window.__WELCOME_PROFILE || me.needs_profile) {
+        setAppView("me");
+        if ($("profileMsg")) $("profileMsg").textContent = "第一次進站請先確認或補齊個人資料。註冊 Email 不能更改。";
+        try {
+          const next = new URL(location.href);
+          next.searchParams.delete("welcome");
+          next.searchParams.delete("verified");
+          history.replaceState({}, "", next.pathname + next.search + next.hash);
+        } catch { /* ignore */ }
+        window.__WELCOME_PROFILE = false;
+      }
       meIsAdmin = me.role === "admin";
       const mailHint = $("notifyMailHint");
       if (mailHint) {
@@ -5000,10 +5023,14 @@
     };
 
     $("scrollTopBtn").onclick = () => window.scrollTo({ top: 0, behavior: "smooth" });
+    function pageScrollY() {
+      return window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
+    }
     function syncScrollTopBtn() {
-      $("scrollTopBtn")?.classList.toggle("on", window.scrollY > 280);
+      $("scrollTopBtn")?.classList.toggle("on", pageScrollY() > 120);
     }
     window.addEventListener("scroll", syncScrollTopBtn, { passive: true });
+    document.addEventListener("scroll", syncScrollTopBtn, { passive: true, capture: true });
     syncScrollTopBtn();
 
     $("profileSelect").onchange = async () => {
@@ -5188,7 +5215,7 @@
     window.visualViewport?.addEventListener("resize", syncFilterSheetKeyboard);
     window.visualViewport?.addEventListener("scroll", syncFilterSheetKeyboard);
     function setAppView(name) {
-      const view = ["listings", "post", "demand", "notify", "me"].includes(name) ? name : "listings";
+      const view = ["listings", "post", "demand", "notify", "me", "qa"].includes(name) ? name : "listings";
       document.body.dataset.appView = view;
       document.querySelectorAll("#bottomNav [data-nav]").forEach((btn) => {
         btn.setAttribute("aria-current", btn.dataset.nav === view ? "page" : "false");
@@ -5196,6 +5223,7 @@
       if (view !== "listings") closeFilterSheet();
       if (view === "demand") loadDemand().catch(() => {});
       if (view === "post") loadMineSelfListings().catch(() => {});
+      if (view === "qa") loadHelpQa();
       if (view === "notify") {
         $("alertDock")?.classList.add("open");
         renderDock();
@@ -6050,18 +6078,15 @@
       }
     }
     function openHelpQaDialog() {
-      const box = $("helpQaDialog");
-      if (!box || isGuest) return;
-      box.hidden = false;
-      if (!helpQaItems.length) loadHelpQa();
+      if (isGuest) return;
+      setAppView("qa");
     }
     function closeHelpQaDialog() {
-      const box = $("helpQaDialog");
-      if (box) box.hidden = true;
+      setAppView("listings");
     }
     $("helpQaBtn")?.addEventListener("click", openHelpQaDialog);
+    $("meHelpQaBtn")?.addEventListener("click", openHelpQaDialog);
     $("helpQaClose")?.addEventListener("click", closeHelpQaDialog);
-    document.querySelector("[data-close-help-qa]")?.addEventListener("click", closeHelpQaDialog);
     if (!document.body.classList.contains("role-guest")) loadHelpQa();
     $("deleteAccountBtn")?.addEventListener("click", openDeleteAccountDialog);
     $("deleteAccountClose")?.addEventListener("click", closeDeleteAccountDialog);

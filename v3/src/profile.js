@@ -66,6 +66,7 @@ export function ensureProfileSchema(db) {
     "ALTER TABLE users ADD COLUMN line_qr_url TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE users ADD COLUMN contact_email TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE users ADD COLUMN profile_privacy_at TEXT",
+    "ALTER TABLE users ADD COLUMN profile_onboarded_at TEXT",
   ]) {
     try {
       db.exec(sql);
@@ -88,6 +89,12 @@ function mediaUrl(value, label) {
   throw err;
 }
 
+export function needsProfileOnboard(user) {
+  if (!user) return false;
+  if (user.email_verified != null && Number(user.email_verified) === 0) return false;
+  return !String(user.profile_onboarded_at || "").trim();
+}
+
 export function publicProfile(row) {
   if (!row) return null;
   const nickname = String(row.nickname || "").trim();
@@ -103,6 +110,7 @@ export function publicProfile(row) {
     contact_email: String(row.contact_email || "").trim(),
     privacy_accepted: Boolean(String(row.profile_privacy_at || row.accepted_disclaimer_at || "").trim()),
     privacy_text: PROFILE_PRIVACY,
+    needs_profile: needsProfileOnboard(row),
   };
 }
 
@@ -118,6 +126,15 @@ export function updateUserProfile(conn, userId, input = {}) {
     const err = new Error("找不到這個會員");
     err.status = 404;
     throw err;
+  }
+  if (Object.prototype.hasOwnProperty.call(input, "email")) {
+    const next = String(input.email || "").trim().toLowerCase();
+    const cur = String(row.email || "").trim().toLowerCase();
+    if (next && next !== cur) {
+      const err = new Error("註冊 Email 不能更改");
+      err.status = 400;
+      throw err;
+    }
   }
   const nickname = Object.prototype.hasOwnProperty.call(input, "nickname")
     ? normalizeNickname(input.nickname)
@@ -167,11 +184,13 @@ export function updateUserProfile(conn, userId, input = {}) {
   };
   let privacyAt = String(row.profile_privacy_at || row.accepted_disclaimer_at || "").trim();
   if (!privacyAt) privacyAt = String(row.accepted_disclaimer_at || "").trim();
+  const onboardedAt = String(row.profile_onboarded_at || "").trim() || new Date().toISOString();
   conn.prepare(`
     UPDATE users SET
       nickname = ?, avatar_url = ?, home_address = ?, company_address = ?,
-      contact_phone = ?, line_id = ?, line_qr_url = ?, contact_email = ?, profile_privacy_at = ?
+      contact_phone = ?, line_id = ?, line_qr_url = ?, contact_email = ?, profile_privacy_at = ?,
+      profile_onboarded_at = ?
     WHERE id = ?
-  `).run(nickname, avatar, home, company, phone, lineId, lineQr, contactEmail, privacyAt || null, uid);
+  `).run(nickname, avatar, home, company, phone, lineId, lineQr, contactEmail, privacyAt || null, onboardedAt, uid);
   return conn.prepare("SELECT * FROM users WHERE id = ?").get(uid);
 }

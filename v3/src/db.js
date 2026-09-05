@@ -481,6 +481,22 @@ try {
 }
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_match_peer ON listings(match_post_id)");
 ensurePersonalSchema(db);
+try {
+  const already = db.prepare("SELECT value FROM settings WHERE key = 'profileOnboardedBackfill'").get();
+  if (!already) {
+    db.prepare(`
+      UPDATE users
+      SET profile_onboarded_at = COALESCE(NULLIF(last_login_at, ''), datetime('now'))
+      WHERE (profile_onboarded_at IS NULL OR profile_onboarded_at = '')
+        AND IFNULL(email_verified, 1) != 0
+    `).run();
+    db.prepare(
+      "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    ).run("profileOnboardedBackfill", "1");
+  }
+} catch {
+  // ignore
+}
 ensureDemandSchema(db);
 ensureSelfListingSchema(db);
 ensurePushSchema(db);

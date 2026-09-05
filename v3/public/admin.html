@@ -235,9 +235,11 @@
     <nav class="admin-nav" aria-label="後台分類">
       <a href="#members" data-admin-nav="members"><strong>會員</strong><span>帳號、方案、刪除</span></a>
       <a href="#crawl" data-admin-nav="crawl"><strong>抓取底庫</strong><span>來源、行政區、捷運、通勤</span></a>
-      <a href="#site" data-admin-nav="site"><strong>畫面說明</strong><span>形象、Q&amp;A、宣告</span></a>
+      <a href="#site" data-admin-nav="site"><strong>畫面說明</strong><span>形象、宣告</span></a>
+      <a href="#qa" data-admin-nav="qa"><strong>功能說明 Q&amp;A</strong><span>獨立專區、條目維護</span></a>
       <a href="#notices" data-admin-nav="notices"><strong>公告專區</strong><span>公告、最新消息、贊助提醒</span></a>
-      <a href="#promo" data-admin-nav="promo"><strong>贊助曝光</strong><span>收款連結、站內小廣告</span></a>
+      <a href="#promo" data-admin-nav="promo"><strong>贊助曝光</strong><span>會員贊助收款連結</span></a>
+      <a href="#ads" data-admin-nav="ads"><strong>站內小廣告</strong><span>列表／登入／卡片曝光</span></a>
       <a href="#mail" data-admin-nav="mail"><strong>系統信件</strong><span>SMTP、信件範本</span></a>
     </nav>
     <div class="admin-main">
@@ -408,17 +410,6 @@
       </form>
     </section>
 <section class="card">
-      <h2>功能說明 Q&amp;A</h2>
-      <p class="hint">顯示在追蹤頁帳號名稱同一排。專門說明功能表上看得到與看不到的限制，例如為什麼有的物件有捷運站、有的沒有（看的是可步行路線，不是直線距離）。可改現有題目，也可新增。</p>
-      <div id="helpQaRows"></div>
-      <div class="row" style="margin-top:10px">
-        <button type="button" class="ghost" id="helpQaAdd">新增一則</button>
-        <button type="button" class="ghost" id="helpQaReset">還原預設</button>
-        <button type="button" class="primary" id="helpQaSave">儲存 Q&amp;A</button>
-      </div>
-      <p class="msg" id="helpQaMsg"></p>
-    </section>
-<section class="card">
       <h2>宣告／免責／個資</h2>
       <p class="hint">註冊時必須勾選同意才能下一步。會員在「設定 → 個人資料」只能看到當初已同意的文字，不能再改勾選。這裡改的是全站宣告本文與勾選短句。</p>
       <form id="legalCopyForm">
@@ -436,6 +427,19 @@
         </div>
         <p class="msg" id="legalCopyMsg"></p>
       </form>
+    </section>
+      </div>
+      <div id="qa" class="admin-panel" data-admin-panel="qa">
+<section class="card">
+      <h2>功能說明 Q&amp;A</h2>
+      <p class="hint">獨立專區。前台帳號旁與設定頁可進入「功能說明 Q&amp;A」分頁。專門說明功能表上看得到與看不到的限制，例如為什麼有的物件有捷運站、有的沒有（看的是可步行路線，不是直線距離）。可改現有題目，也可新增。</p>
+      <div id="helpQaRows"></div>
+      <div class="row" style="margin-top:10px">
+        <button type="button" class="ghost" id="helpQaAdd">新增一則</button>
+        <button type="button" class="ghost" id="helpQaReset">還原預設</button>
+        <button type="button" class="primary" id="helpQaSave">儲存 Q&amp;A</button>
+      </div>
+      <p class="msg" id="helpQaMsg"></p>
     </section>
       </div>
       <div id="notices" class="admin-panel" data-admin-panel="notices">
@@ -506,9 +510,11 @@
         <p class="msg" id="sponsorMsg"></p>
       </form>
     </section>
+      </div>
+      <div id="ads" class="admin-panel" data-admin-panel="ads">
 <section class="card">
       <h2>站內小廣告</h2>
-      <p class="hint">短期小額曝光用，不是 Google Ads，也不會自動追蹤訪客。每個版位最多一則安靜卡片，前台標「贊助訊息」。這與上方「贊助連結」（會員贊助金流）分開。沒開的版位前台不會出現空框。</p>
+      <p class="hint">獨立專區。短期小額曝光用，不是 Google Ads，也不會自動追蹤訪客。每個版位最多一則安靜卡片，前台標「贊助訊息」。這與「贊助曝光」的會員收款連結分開。沒開的版位前台不會出現空框。</p>
       <form id="adsForm">
         <div class="grid-2">
           <div>
@@ -688,7 +694,7 @@
   <script>
 
     const $ = (id) => document.getElementById(id);
-    const ADMIN_PANELS = ["members", "crawl", "site", "notices", "promo", "mail"];
+    const ADMIN_PANELS = ["members", "crawl", "site", "qa", "notices", "promo", "ads", "mail"];
     function adminPanelFromHash() {
       const key = String(location.hash || "").replace(/^#/, "");
       return ADMIN_PANELS.includes(key) ? key : "members";
@@ -1847,6 +1853,6 @@
       setMsg("memberMsg", error.message || "載入失敗");
     });
   </script>
-  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.45</span></footer>
+  <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.46</span></footer>
 </body>
 </html>

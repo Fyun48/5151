@@ -134,7 +134,7 @@ import {
   planOauthSession,
 } from "./oauth.js";
 import { isEmailVerified } from "./emailVerify.js";
-import { nicknameFromOauthName } from "./profile.js";
+import { nicknameFromOauthName, needsProfileOnboard } from "./profile.js";
 import {
   BRAND_UPLOAD_MAX_BYTES,
   mimeForBrandFile,
@@ -279,6 +279,7 @@ app.get("/api/me", (req, res) => {
     line_qr_url: String(user?.line_qr_url || "").trim(),
     contact_email: String(user?.contact_email || "").trim(),
     privacy_accepted: Boolean(String(user?.profile_privacy_at || user?.accepted_disclaimer_at || "").trim()),
+    needs_profile: needsProfileOnboard(user),
     privacy_text: getLegalCopy().privacy,
     disclaimer_text: getLegalCopy().disclaimer,
     privacy_check: getLegalCopy().privacyCheck,
@@ -458,7 +459,7 @@ app.get("/verify-email", (req, res) => {
     } catch (error) {
       console.warn("開通歡迎信排隊失敗：", error?.message || error);
     }
-    res.redirect(303, "/login.html?verify=ok");
+    res.redirect(303, "/?welcome=1");
   } catch (error) {
     const code = error.code === "expired" ? "expired" : error.code === "used" ? "used" : error.code === "missing" ? "missing" : "invalid";
     res.redirect(303, `/login.html?verify=${code}`);

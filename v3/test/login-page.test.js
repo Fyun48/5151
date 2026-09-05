@@ -15,7 +15,7 @@ test("login page can register after accepting the disclaimer", () => {
   assert.match(html, /\/api\/register/);
   assert.match(html, /verifyState === "used"/);
   assert.match(html, /verifyState === "missing"/);
-  assert.match(html, /進入找房/);
+  assert.match(html, /進入個人資料/);
   assert.match(html, /!verifyState/);
   assert.match(html, /id="oauthBox"/);
   assert.match(html, /id="registerPolicy"/);

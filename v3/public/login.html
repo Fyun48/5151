@@ -293,7 +293,7 @@
     <p class="ok" id="ok"></p>
     <p class="err" id="err"></p>
     <div class="ad-slot" id="adLogin" hidden></div>
-    <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.45</span></footer>
+    <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.46</span></footer>
   </div>
   <script src="/mascot.js"></script>
   <script>
@@ -384,7 +384,7 @@
     } catch (error) {}
     if (showRegister) setMode("register");
     if (showForgot) setMode("forgot");
-    if (verifyState === "ok") $("ok").innerHTML = "恭喜你，信箱已開通。我們另寄了一封說明信。<a href=\"/spirit.html\">本站理念</a>　<a href=\"/\">進入找房</a>";
+    if (verifyState === "ok") $("ok").innerHTML = "恭喜你，信箱已開通。我們另寄了一封說明信。<a href=\"/spirit.html\">本站理念</a>　<a href=\"/?welcome=1\">進入個人資料</a>";
     if (verifyState === "expired") $("err").textContent = "確認連結已失效。系統會另寄失效通知，請用同一個信箱重新註冊。";
     if (verifyState === "used") $("err").textContent = "這個開通連結已經使用過。";
     if (verifyState === "missing") $("err").textContent = "找不到這個開通連結。";
@@ -392,6 +392,10 @@
     if (oauthState === "pending") $("ok").textContent = "請到信箱點開通連結才算完成註冊。連結只能用一次。";
     else if (oauthState) $("err").textContent = oauthState;
     fetch("/api/me").then((r) => r.json()).then((data) => {
+      if (data.ok && !justLoggedOut && verifyState === "ok") {
+        location.replace("/?welcome=1");
+        return;
+      }
       if (data.ok && !justLoggedOut && !verifyState) location.replace("/");
     }).catch(() => {});
     fetch("/api/oauth", { cache: "no-store" }).then((r) => r.json()).then((data) => {
