@@ -183,9 +183,9 @@
       font-size: 12px;
     }
     .oauth {
-      margin-top: 16px;
-      padding-top: 14px;
-      border-top: 1px solid var(--line);
+      margin: 4px 0 14px;
+      padding: 0 0 14px;
+      border-bottom: 1px solid var(--line);
     }
     .oauth-kicker { margin: 0 0 8px; color: var(--muted); font-size: 13px; line-height: 1.5; }
     .oauth-row { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -224,6 +224,15 @@
     <div class="tabs">
       <button type="button" class="on" id="tabLogin">登入</button>
       <button type="button" id="tabRegister">註冊</button>
+    </div>
+    <div class="oauth" id="oauthBox">
+      <p class="oauth-kicker" id="oauthIntro">用 Google／LINE／Facebook 登入。後台未開通的鈕會反灰。</p>
+      <p class="oauth-kicker" id="oauthHint">正在確認社群登入…</p>
+      <div class="oauth-row">
+        <a class="ghost is-off" id="oauthGoogle" href="/auth/google" aria-disabled="true">Google</a>
+        <a class="ghost is-off" id="oauthLine" href="/auth/line" aria-disabled="true">LINE</a>
+        <a class="ghost is-off" id="oauthFacebook" href="/auth/facebook" aria-disabled="true">Facebook</a>
+      </div>
     </div>
     <form id="loginForm">
       <label for="email">Email</label>
@@ -284,15 +293,6 @@
       <label class="hp">請不要填這個欄位<input id="regWebsite" name="website" tabindex="-1" autocomplete="off" /></label>
       <button type="submit" id="registerBtn">同意並註冊</button>
     </form>
-    <div class="oauth" id="oauthBox">
-      <p class="oauth-kicker">或用 Google／LINE／Facebook 帶入信箱。新帳號仍須勾選上方同意，並完成開通信；已開通的帳號可直接登入。</p>
-      <p class="oauth-kicker" id="oauthHint">正在確認社群登入…</p>
-      <div class="oauth-row">
-        <a class="ghost is-off" id="oauthGoogle" href="/auth/google" aria-disabled="true">Google</a>
-        <a class="ghost is-off" id="oauthLine" href="/auth/line" aria-disabled="true">LINE</a>
-        <a class="ghost is-off" id="oauthFacebook" href="/auth/facebook" aria-disabled="true">Facebook</a>
-      </div>
-    </div>
     <form id="forgotForm" class="hidden">
       <p class="sub">輸入註冊的 Email，我們會寄一組臨時密碼。若這個信箱有帳號，請到信箱收信後再用那組密碼登入。</p>
       <label for="forgotEmail">Email</label>
@@ -364,6 +364,11 @@
       $("forgotForm").classList.toggle("hidden", !forgot);
       if ($("oauthBox")) $("oauthBox").classList.toggle("hidden", forgot);
       if ($("registerPolicy")) $("registerPolicy").hidden = !register;
+      if ($("oauthIntro")) {
+        $("oauthIntro").textContent = register
+          ? "用 Google／LINE／Facebook 註冊。請先勾選下方免責與個資，再按社群鈕；新帳號仍要完成開通信。"
+          : "用 Google／LINE／Facebook 登入。後台未開通的鈕會反灰。";
+      }
       clearNotes();
       if (forgot && !$("forgotEmail").value) $("forgotEmail").value = $("email").value.trim();
     }
