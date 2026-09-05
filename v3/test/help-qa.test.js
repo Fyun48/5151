@@ -99,6 +99,16 @@ test("index puts Q&A beside the account name and as its own view", () => {
   assert.match(html, /id="qaView"/);
   assert.match(html, /id="meHelpQaBtn"/);
   assert.match(html, /setAppView\("qa"\)/);
+  assert.match(html, /helpQaReturnView/);
+  assert.match(html, /回設定/);
+  assert.match(html, /載入說明…/);
+  assert.match(html, /再試一次/);
+  assert.match(html, /role="alert"/);
+  assert.match(html, /id="profileWelcome"/);
+  assert.match(html, /aria-readonly="true"/);
+  assert.doesNotMatch(html, /id="profileAccountEmail" readonly disabled/);
+  assert.match(html, /for="profileAccountEmail"/);
+  assert.match(html, /helpQaBtn"\)\.setAttribute\("aria-current"/);
   assert.match(html, /html\.no-session #helpQaBtn/);
   assert.match(html, /body\.role-guest #helpQaBtn/);
   assert.match(html, /helpQaBtn"\)\.hidden = isGuest/);

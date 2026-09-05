@@ -436,6 +436,7 @@
       <div id="helpQaRows"></div>
       <div class="row" style="margin-top:10px">
         <button type="button" class="ghost" id="helpQaAdd">新增一則</button>
+        <button type="button" class="ghost" id="helpQaReload">重新載入</button>
         <button type="button" class="ghost" id="helpQaReset">還原預設</button>
         <button type="button" class="primary" id="helpQaSave">儲存 Q&amp;A</button>
       </div>
@@ -520,61 +521,62 @@
           <div>
             <h3 style="margin:0 0 8px;font-size:16px">找房列表</h3>
             <label class="checks"><input type="checkbox" id="adListingsEnabled" /> 顯示這則</label>
-            <label>標題</label>
+            <label for="adListingsTitle">標題</label>
             <input id="adListingsTitle" maxlength="40" placeholder="例如 附近早餐店" />
-            <label>說明</label>
+            <label for="adListingsText">說明</label>
             <textarea id="adListingsText" maxlength="160" placeholder="一句話即可"></textarea>
-            <label>連結（選填，http／https）</label>
+            <label for="adListingsUrl">連結（選填，http／https）</label>
             <input id="adListingsUrl" maxlength="500" placeholder="https://..." />
-            <label>圖片網址（選填）</label>
+            <label for="adListingsImage">圖片網址（選填）</label>
             <input id="adListingsImage" maxlength="500" placeholder="https://..." />
           </div>
           <div>
             <h3 style="margin:0 0 8px;font-size:16px">登入頁</h3>
             <label class="checks"><input type="checkbox" id="adLoginEnabled" /> 顯示這則</label>
-            <label>標題</label>
+            <label for="adLoginTitle">標題</label>
             <input id="adLoginTitle" maxlength="40" />
-            <label>說明</label>
+            <label for="adLoginText">說明</label>
             <textarea id="adLoginText" maxlength="160"></textarea>
-            <label>連結（選填）</label>
+            <label for="adLoginUrl">連結（選填）</label>
             <input id="adLoginUrl" maxlength="500" />
-            <label>圖片網址（選填）</label>
+            <label for="adLoginImage">圖片網址（選填）</label>
             <input id="adLoginImage" maxlength="500" />
           </div>
         </div>
         <h3 style="margin:16px 0 8px;font-size:16px">物件與物件之間</h3>
         <p class="hint">細字一小塊，插在列表中間，不要做成整張大圖。</p>
         <label class="checks"><input type="checkbox" id="adBetweenEnabled" /> 顯示這則</label>
-        <label>標題</label>
+        <label for="adBetweenTitle">標題</label>
         <input id="adBetweenTitle" maxlength="40" />
-        <label>說明</label>
+        <label for="adBetweenText">說明</label>
         <textarea id="adBetweenText" maxlength="160"></textarea>
-        <label>連結（選填）</label>
+        <label for="adBetweenUrl">連結（選填）</label>
         <input id="adBetweenUrl" maxlength="500" />
-        <label>圖片網址（選填）</label>
+        <label for="adBetweenImage">圖片網址（選填）</label>
         <input id="adBetweenImage" maxlength="500" />
         <h3 style="margin:16px 0 8px;font-size:16px">找房列表卡片型</h3>
         <p class="hint">排在物件之間，外觀接近物件卡，仍標贊助訊息。</p>
         <label class="checks"><input type="checkbox" id="adNativeEnabled" /> 顯示這則</label>
-        <label>標題</label>
+        <label for="adNativeTitle">標題</label>
         <input id="adNativeTitle" maxlength="40" />
-        <label>說明</label>
+        <label for="adNativeText">說明</label>
         <textarea id="adNativeText" maxlength="160"></textarea>
-        <label>連結（選填）</label>
+        <label for="adNativeUrl">連結（選填）</label>
         <input id="adNativeUrl" maxlength="500" />
-        <label>圖片網址（選填）</label>
+        <label for="adNativeImage">圖片網址（選填）</label>
         <input id="adNativeImage" maxlength="500" />
         <h3 style="margin:16px 0 8px;font-size:16px">我的頁</h3>
         <label class="checks"><input type="checkbox" id="adMeEnabled" /> 顯示這則</label>
-        <label>標題</label>
+        <label for="adMeTitle">標題</label>
         <input id="adMeTitle" maxlength="40" />
-        <label>說明</label>
+        <label for="adMeText">說明</label>
         <textarea id="adMeText" maxlength="160"></textarea>
-        <label>連結（選填）</label>
+        <label for="adMeUrl">連結（選填）</label>
         <input id="adMeUrl" maxlength="500" />
-        <label>圖片網址（選填）</label>
+        <label for="adMeImage">圖片網址（選填）</label>
         <input id="adMeImage" maxlength="500" />
         <div class="row" style="margin:14px 0 0">
+          <button type="button" class="ghost" id="adsReload">重新載入</button>
           <button type="submit" class="primary" id="adsSave">儲存小廣告</button>
         </div>
         <p class="msg" id="adsMsg"></p>
@@ -709,6 +711,7 @@
       });
       $("adminShell")?.classList.add("is-ready");
       if (location.hash !== "#" + key) history.replaceState(null, "", "#" + key);
+      document.querySelector(`[data-admin-nav="${key}"]`)?.scrollIntoView({ inline: "center", block: "nearest" });
     }
     document.querySelectorAll("[data-admin-nav]").forEach((el) => {
       el.addEventListener("click", (ev) => {
@@ -923,10 +926,10 @@
     function helpQaRowHtml(row = {}, index = 0) {
       return `
         <div class="qa-edit" data-qa-row>
-          <label>問題 ${index + 1}</label>
-          <input data-qa-q value="${escapeHtml(row.question || "")}" maxlength="200" />
-          <label>回答</label>
-          <textarea data-qa-a style="min-height:90px">${escapeHtml(row.answer || "")}</textarea>
+          <label for="helpQaQ${index}">問題 ${index + 1}</label>
+          <input id="helpQaQ${index}" data-qa-q value="${escapeHtml(row.question || "")}" maxlength="200" />
+          <label for="helpQaA${index}">回答</label>
+          <textarea id="helpQaA${index}" data-qa-a style="min-height:90px">${escapeHtml(row.answer || "")}</textarea>
           <input type="hidden" data-qa-id value="${escapeHtml(row.id || "")}" />
           <div class="row" style="margin:8px 0 16px">
             <button type="button" class="ghost" data-qa-del>刪除此則</button>
@@ -1023,11 +1026,16 @@
     }
 
     async function loadHelpQa() {
-      const res = await fetch("/api/admin/help-qa", { cache: "no-store" });
-      const data = await readApi(res);
-      if (!res.ok) throw new Error(data.error || "載入 Q&A 失敗");
-      renderHelpQaEditor(data.items || []);
-      setMsg("helpQaMsg", `共 ${ (data.items || []).length } 則`, true);
+      setMsg("helpQaMsg", "載入中…");
+      try {
+        const res = await fetch("/api/admin/help-qa", { cache: "no-store" });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "載入 Q&A 失敗");
+        renderHelpQaEditor(data.items || []);
+        setMsg("helpQaMsg", `共 ${ (data.items || []).length } 則`, true);
+      } catch (error) {
+        setMsg("helpQaMsg", error.message || "載入 Q&A 失敗");
+      }
     }
 
     function fillLegalCopy(data) {
@@ -1481,10 +1489,16 @@
       }
     }
     async function loadAds() {
-      const res = await fetch("/api/admin/ads", { cache: "no-store" });
-      const data = await readApi(res);
-      if (!res.ok) throw new Error(data.error || "載入廣告設定失敗");
-      fillAds(data);
+      setMsg("adsMsg", "載入中…");
+      try {
+        const res = await fetch("/api/admin/ads", { cache: "no-store" });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "載入廣告設定失敗");
+        fillAds(data);
+        setMsg("adsMsg", "", true);
+      } catch (error) {
+        setMsg("adsMsg", error.message || "載入廣告設定失敗");
+      }
     }
     $("adsForm").onsubmit = async (ev) => {
       ev.preventDefault();
@@ -1611,7 +1625,8 @@
       if (me.role !== "admin") { location.replace("/"); return; }
       meEmail = me.email || "";
       $("who").textContent = meEmail;
-      await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadMaps(), loadHelpQa(), loadLegalCopy(), loadCrawlSources(), loadSystemCrawl(), loadBrand()]);
+      const settled = (fn) => fn().catch((error) => console.warn(error));
+      await Promise.all([settled(loadMembers), settled(loadMail), settled(loadOauth), settled(loadSponsor), settled(loadAds), settled(loadBroadcasts), settled(loadMaps), settled(loadHelpQa), settled(loadLegalCopy), settled(loadCrawlSources), settled(loadSystemCrawl), settled(loadBrand)]);
       $("brandForm").onsubmit = async (ev) => {
         ev.preventDefault();
         $("brandSave").disabled = true;
@@ -1656,6 +1671,8 @@
       $("brandPreviewRegister").onclick = () => window.JibbyMascot?.load?.().then(() => window.JibbyMascot.show("register", { force: true }));
       $("brandPreviewSponsor").onclick = () => window.JibbyMascot?.load?.().then(() => window.JibbyMascot.show("sponsor", { force: true }));
       $("brandPreviewConfused").onclick = () => window.JibbyMascot?.load?.().then(() => window.JibbyMascot.show("confused", { force: true }));
+      $("helpQaReload")?.addEventListener("click", () => loadHelpQa());
+      $("adsReload")?.addEventListener("click", () => loadAds());
       $("helpQaAdd").onclick = () => {
         renderHelpQaEditor([...collectHelpQa(), { question: "", answer: "", id: "" }]);
       };

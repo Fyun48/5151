@@ -544,6 +544,8 @@ test("panel toggle sits above scroll-top and uses expand/collapse glyphs", () =>
   assert.match(html, /#scrollTopBtn \{[\s\S]*z-index:\s*97/);
   assert.match(html, /#scrollTopBtn[\s\S]*<svg /);
   assert.match(html, /#scrollTopBtn\.on/);
+  assert.match(html, /body\.has-owner-fab #scrollTopBtn \{ bottom: 196px; \}/);
+  assert.match(html, /btn\.hidden = !on/);
   assert.match(html, /function syncScrollTopBtn/);
   assert.match(html, /pageScrollY\(\) > 120/);
   assert.match(html, /icon\.textContent = collapsed \? "<|>" : ">|<"/);

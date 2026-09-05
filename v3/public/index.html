@@ -211,7 +211,13 @@
       gap: 12px;
     }
     .hub-head h2 { margin: 0; font-size: 18px; }
-    #qaView .hub-head button { flex: 0 0 auto; white-space: nowrap; }
+    #qaView .hub-head button {
+      flex: 0 0 auto;
+      white-space: nowrap;
+      min-height: var(--touch, 44px);
+    }
+    #helpQaTitle:focus { outline: none; }
+    #helpQaTitle:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
     .hub-tabs {
       display: flex;
       flex-wrap: wrap;
@@ -748,10 +754,17 @@
     }
     .who { color: var(--muted); font-size: 13px; }
     #helpQaBtn {
-      padding: 5px 10px;
+      min-width: var(--touch, 44px);
+      min-height: var(--touch, 44px);
+      padding: 8px 12px;
       font-size: 12px;
       font-weight: 700;
       letter-spacing: 0.04em;
+    }
+    #helpQaBtn[aria-current="page"] {
+      background: var(--accent-mist);
+      color: var(--accent-deep);
+      border-color: var(--accent);
     }
     .help-qa-panel { width: min(760px, 100%); }
     .help-qa-list { display: grid; gap: 8px; }
@@ -767,8 +780,20 @@
       font-weight: 700;
       font-size: 14px;
       list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: var(--touch, 44px);
     }
     .help-qa-item summary::-webkit-details-marker { display: none; }
+    .help-qa-item summary .chev {
+      display: inline-block;
+      flex: 0 0 auto;
+      color: var(--muted);
+      transform: rotate(-90deg);
+      transition: transform 0.15s ease;
+    }
+    .help-qa-item[open] summary .chev { transform: rotate(0deg); }
     .help-qa-item p {
       margin: 0;
       padding: 0 12px 12px;
@@ -1202,6 +1227,8 @@
       pointer-events: auto;
       transform: none;
     }
+    #scrollTopBtn[hidden] { display: none !important; }
+    body.has-owner-fab #scrollTopBtn { bottom: 196px; }
     #floatDock { display: none; }
     .wrap { padding-left: 32px; padding-right: 32px; }
     .district-city { margin: 8px 0 12px; }
@@ -1328,11 +1355,23 @@
       line-height: 1;
       flex: 0 0 auto;
     }
-    .schedule-readonly[disabled] {
+    .schedule-readonly[disabled],
+    #profileAccountEmail[readonly] {
       opacity: 0.9;
       background: var(--accent-mist);
       color: var(--ink);
     }
+    .profile-welcome {
+      margin: 0 0 12px;
+      padding: 10px 12px;
+      border: 1px solid var(--accent);
+      border-radius: var(--radius);
+      background: var(--accent-mist);
+      color: var(--accent-deep);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+    .profile-welcome[hidden] { display: none !important; }
     .self-photo-tray {
       display: flex;
       flex-wrap: wrap;
@@ -1800,6 +1839,11 @@
       .sponsor-bar { margin-left: 16px; margin-right: 16px; }
     }
     @media (max-width: 880px) {
+      #qaView .hub-head {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      #qaView .hub-head button { align-self: flex-start; }
       body { padding-bottom: 72px; }
       .header-desk-only { display: none !important; }
       .mobile-only { display: inline-flex; }
@@ -1840,6 +1884,9 @@
       #scrollTopBtn {
         right: 12px;
         bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+      }
+      body.has-owner-fab #scrollTopBtn {
+        bottom: calc(188px + env(safe-area-inset-bottom, 0px));
       }
       #ownerFab {
         right: 12px;
@@ -2376,6 +2423,7 @@
     <div class="card panel" id="profilePanel">
       <h2 style="margin:0 0 8px">個人資料</h2>
       <form id="profileForm">
+        <p class="profile-welcome" id="profileWelcome" role="status" hidden></p>
         <div class="profile-card">
           <button type="button" class="media-hit" id="profileAvatarHit" title="點擊上傳或刪除頭像" aria-label="上傳或刪除頭像">
             <img class="profile-avatar empty" id="profileAvatarImg" alt="" hidden />
@@ -2383,18 +2431,19 @@
             <span class="media-x" id="profileAvatarClear" hidden>×</span>
           </button>
           <div style="flex:1;min-width:0">
-            <label>暱稱（2～20 字，選填）</label>
+            <label for="profileNickname">暱稱（2～20 字，選填）</label>
             <input id="profileNickname" maxlength="20" placeholder="例如 小林" />
             <input type="file" id="profileAvatar" accept="image/jpeg,image/png,image/webp" hidden />
           </div>
         </div>
         <div class="profile-grid">
           <div class="span-2">
-            <label>註冊 Email（開通後不能改）</label>
-            <input id="profileAccountEmail" readonly disabled autocomplete="username" />
+            <label for="profileAccountEmail">註冊 Email（開通後不能改）</label>
+            <input id="profileAccountEmail" readonly aria-readonly="true" autocomplete="username" aria-describedby="profileEmailLockHint" />
+            <p class="hint" id="profileEmailLockHint">開通後不能更改。聯絡信箱可另外填。</p>
           </div>
           <div class="span-2">
-            <label>聯絡 Email（選填）</label>
+            <label for="profileContactEmail">聯絡 Email（選填）</label>
             <input id="profileContactEmail" maxlength="120" placeholder="與註冊信箱不同再填" />
           </div>
           <div class="span-2">
@@ -2437,10 +2486,11 @@
     <div class="ad-slot me" id="adMe" hidden></div>
     <div class="card panel" data-tour="notify">
       <h2 style="margin:0 0 8px">帳號</h2>
-      <p class="hint">通知種類、推播與 Discord／SMTP 請到「通知」。這裡只留帳號本身。<a href="/spirit.html">本站在做什麼</a>　<button type="button" class="ghost" id="meHelpQaBtn">功能說明 Q&amp;A</button></p>
+      <p class="hint">通知種類、推播與 Discord／SMTP 請到「通知」。這裡只留帳號本身。<a href="/spirit.html">本站在做什麼</a></p>
       <p class="hint" id="notifyMailHint" hidden>物件／屋源提醒若要用信，請自己填 SMTP。</p>
       <p class="hint" id="notifyHubStatus" hidden></p>
       <div class="row" style="margin-top:10px">
+        <button type="button" class="ghost" id="meHelpQaBtn">功能說明 Q&amp;A</button>
         <button type="button" class="ghost" id="mePauseNotifyBtn">停止所有通知</button>
         <button type="button" class="ghost" id="mePasswordBtn">變更密碼</button>
         <button type="button" class="ghost" id="meDeleteBtn">取消會員</button>
@@ -2773,12 +2823,12 @@
     <div class="card panel help-qa-panel">
       <div class="hub-head" style="padding:0 0 12px">
         <div>
-          <h2 id="helpQaTitle">功能說明 Q&amp;A</h2>
+          <h2 id="helpQaTitle" tabindex="-1">功能說明 Q&amp;A</h2>
           <p class="hint" style="margin:6px 0 0">獨立專區。說明功能表上看得到與看不到的限制，以及註冊／開通規則。捷運站是否顯示，看的是可步行路線，不是直線距離。</p>
         </div>
         <button type="button" class="ghost" id="helpQaClose">回找房</button>
       </div>
-      <div class="help-qa-list" id="helpQaList"></div>
+      <div class="help-qa-list" id="helpQaList" aria-live="polite"></div>
     </div>
   </section>
   <div id="deleteAccountDialog" class="hub-overlay" hidden>
@@ -2820,7 +2870,7 @@
       <div class="owner-list" id="ownerOverlayList"></div>
     </div>
   </div>
-  <button type="button" class="primary" id="scrollTopBtn" title="回頂" aria-label="回頂">
+  <button type="button" class="primary" id="scrollTopBtn" title="回頂" aria-label="回頂" hidden tabindex="-1" aria-hidden="true">
     <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 6.2 4.8 13.4l1.4 1.4L11 9.99V19h2V9.99l4.8 4.81 1.4-1.4z"/></svg>
   </button>
   <aside id="alertDock" aria-live="polite">
@@ -2863,6 +2913,7 @@
     const PANEL_KEY = "591-panel-collapsed";
     const FILTER_COMPACT_KEY = "591-filter-compact";
     const APP_VIEW_KEY = "591-v3-app-view";
+    let helpQaReturnView = "listings";
     const PUSH_ASKED_KEY = "591-v3-push-asked";
     const CHANNEL_DEFAULT_ON = { dock: true, push: true, webhook: false, mail: false };
     if (localStorage.getItem(PANEL_KEY) === "1") {
@@ -3442,9 +3493,11 @@
     }
     const bootQuery = new URLSearchParams(location.search);
     if (bootQuery.get("verified") === "1" || bootQuery.get("welcome") === "1") {
-      flash(bootQuery.get("welcome") === "1" ? "信箱已開通。請先確認個人資料，註冊 Email 不能改。" : "信箱已確認，歡迎使用。");
+      window.__WELCOME_PROFILE = true;
+      window.__WELCOME_BANNER = bootQuery.get("welcome") === "1"
+        ? "信箱已開通。請先確認或補齊個人資料。註冊 Email 不能更改。"
+        : "信箱已確認，歡迎使用。請先確認或補齊個人資料。";
       history.replaceState({}, "", location.pathname);
-      window.__WELCOME_PROFILE = bootQuery.get("welcome") === "1" || bootQuery.get("verified") === "1";
     }
 
     function hideGuestToast() {
@@ -4821,7 +4874,7 @@
       paintProfile(me);
       if (window.__WELCOME_PROFILE || me.needs_profile) {
         setAppView("me");
-        if ($("profileMsg")) $("profileMsg").textContent = "第一次進站請先確認或補齊個人資料。註冊 Email 不能更改。";
+        showProfileWelcome(window.__WELCOME_BANNER || "第一次進站請先確認或補齊個人資料。註冊 Email 不能更改。");
         try {
           const next = new URL(location.href);
           next.searchParams.delete("welcome");
@@ -5023,12 +5076,23 @@
       }
     };
 
-    $("scrollTopBtn").onclick = () => window.scrollTo({ top: 0, behavior: "smooth" });
+    $("scrollTopBtn").onclick = () => {
+      const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+      window.scrollTo({ top: 0, behavior: reduce ? "auto" : "smooth" });
+    };
     function pageScrollY() {
       return window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
     }
     function syncScrollTopBtn() {
-      $("scrollTopBtn")?.classList.toggle("on", pageScrollY() > 120);
+      const btn = $("scrollTopBtn");
+      if (!btn) return;
+      const on = pageScrollY() > 120;
+      const owner = $("ownerFab");
+      document.body.classList.toggle("has-owner-fab", Boolean(owner && !owner.hidden));
+      btn.classList.toggle("on", on);
+      btn.hidden = !on;
+      btn.tabIndex = on ? 0 : -1;
+      btn.setAttribute("aria-hidden", on ? "false" : "true");
     }
     window.addEventListener("scroll", syncScrollTopBtn, { passive: true });
     document.addEventListener("scroll", syncScrollTopBtn, { passive: true, capture: true });
@@ -5221,10 +5285,17 @@
       document.querySelectorAll("#bottomNav [data-nav]").forEach((btn) => {
         btn.setAttribute("aria-current", btn.dataset.nav === view ? "page" : "false");
       });
+      if ($("helpQaBtn")) $("helpQaBtn").setAttribute("aria-current", view === "qa" ? "page" : "false");
+      document.title = view === "qa" ? "功能說明 Q&A · 吉比租房物件追蹤" : "吉比租房物件追蹤";
+      if ($("helpQaClose")) $("helpQaClose").textContent = helpQaReturnView === "me" ? "回設定" : "回找房";
       if (view !== "listings") closeFilterSheet();
       if (view === "demand") loadDemand().catch(() => {});
       if (view === "post") loadMineSelfListings().catch(() => {});
-      if (view === "qa") loadHelpQa();
+      if (view === "qa") {
+        window.scrollTo(0, 0);
+        loadHelpQa();
+        $("helpQaTitle")?.focus();
+      }
       if (view === "notify") {
         $("alertDock")?.classList.add("open");
         renderDock();
@@ -5473,6 +5544,13 @@
       }
       if (box) box.hidden = false;
     }
+    function showProfileWelcome(text) {
+      const bar = $("profileWelcome");
+      if (!bar) return;
+      const next = String(text || "").trim();
+      bar.textContent = next;
+      bar.hidden = !next;
+    }
     function paintProfile(me) {
       if ($("profileNickname") && me && !$("profileNickname").dataset.dirty) {
         $("profileNickname").value = me.nickname || "";
@@ -5524,6 +5602,7 @@
       const open = (rows || []).filter((row) => row.status === "open");
       fab.hidden = isGuest || !open.length;
       fab.textContent = open.length ? `我刊登的房子（${open.length}）` : "我刊登的房子";
+      syncScrollTopBtn();
     }
     function ownerCardHtml(item) {
       return `
@@ -5746,6 +5825,7 @@
         pendingClearQr = false;
         paintProfile(data);
         if ($("who")) $("who").textContent = data.display_name || data.nickname || data.email || "";
+        showProfileWelcome("");
         if (msg) msg.textContent = "已儲存個人資料";
       } catch (error) {
         if (msg) msg.textContent = error.message;
@@ -6057,33 +6137,45 @@
       helpQaItems = Array.isArray(items) ? items : [];
       const box = $("helpQaList");
       if (!box) return;
+      box.removeAttribute("aria-busy");
       if (!helpQaItems.length) {
         box.innerHTML = `<p class="hint">目前沒有說明項目。</p>`;
         return;
       }
       box.innerHTML = helpQaItems.map((row, index) => `
         <details class="help-qa-item" ${index === 0 ? "open" : ""}>
-          <summary>${esc(row.question)}</summary>
+          <summary><span class="chev" aria-hidden="true">▾</span>${esc(row.question)}</summary>
           <p>${esc(row.answer)}</p>
         </details>
       `).join("");
     }
     async function loadHelpQa() {
+      const box = $("helpQaList");
+      if (box) {
+        box.setAttribute("aria-busy", "true");
+        if (!helpQaItems.length) box.innerHTML = `<p class="hint">載入說明…</p>`;
+      }
       try {
         const res = await fetch("/api/help-qa", { cache: "no-store" });
         const data = await readApi(res);
         if (!res.ok) throw new Error(data.error || "載入說明失敗");
         renderHelpQa(data.items || []);
       } catch {
-        renderHelpQa([]);
+        helpQaItems = [];
+        if (!box) return;
+        box.removeAttribute("aria-busy");
+        box.innerHTML = `<p class="hint" role="alert">說明載入失敗。</p><button type="button" class="ghost" id="helpQaRetry">再試一次</button>`;
+        $("helpQaRetry")?.addEventListener("click", () => loadHelpQa());
       }
     }
     function openHelpQaDialog() {
       if (isGuest) return;
+      const current = document.body.dataset.appView || "listings";
+      if (current !== "qa") helpQaReturnView = current === "me" ? "me" : "listings";
       setAppView("qa");
     }
     function closeHelpQaDialog() {
-      setAppView("listings");
+      setAppView(helpQaReturnView === "me" ? "me" : "listings");
     }
     $("helpQaBtn")?.addEventListener("click", openHelpQaDialog);
     $("meHelpQaBtn")?.addEventListener("click", openHelpQaDialog);

@@ -27,6 +27,7 @@ test("admin settings are grouped into clickable categories", () => {
   assert.match(html, /站內小廣告/);
   assert.match(html, /系統信件/);
   assert.match(html, /function showAdminPanel/);
+  assert.match(html, /scrollIntoView/);
   assert.match(html, /admin-shell\.is-ready \.admin-panel \{ display: none; \}/);
 
   const crawl = html.slice(html.indexOf('data-admin-panel="crawl"'), html.indexOf('data-admin-panel="site"'));
@@ -46,6 +47,8 @@ test("admin settings are grouped into clickable categories", () => {
   const qa = html.slice(html.indexOf('data-admin-panel="qa"'), html.indexOf('data-admin-panel="notices"'));
   assert.match(qa, /功能說明 Q&amp;A/);
   assert.match(qa, /id="helpQaRows"/);
+  assert.match(qa, /id="helpQaReload"/);
+  assert.match(html, /id="helpQaQ\$\{index\}"/);
   assert.doesNotMatch(qa, /吉比形象／Logo/);
 
   const notices = html.slice(html.indexOf('data-admin-panel="notices"'), html.indexOf('data-admin-panel="promo"'));
@@ -60,6 +63,8 @@ test("admin settings are grouped into clickable categories", () => {
   const ads = html.slice(html.indexOf('data-admin-panel="ads"'), html.indexOf('data-admin-panel="mail"'));
   assert.match(ads, /站內小廣告/);
   assert.match(ads, /id="adsForm"/);
+  assert.match(ads, /for="adListingsTitle"/);
+  assert.match(ads, /id="adsReload"/);
   assert.doesNotMatch(ads, /id="sponsorForm"/);
 
   const mail = html.slice(html.indexOf('data-admin-panel="mail"'));
