@@ -78,6 +78,25 @@ export function applyOpsSchema(db) {
       received_at TEXT NOT NULL
     );
 
+    -- Phase 3：附件 metadata。內容存於 Storage Provider；此處只存不透明 object_key。
+    -- FK → ingested_feedback，ON DELETE RESTRICT：不因刪除 feedback 而靜默連鎖刪除附件歷史（保留可稽核性）。
+    CREATE TABLE IF NOT EXISTS feedback_attachment (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      feedback_id INTEGER NOT NULL,
+      object_key TEXT NOT NULL UNIQUE,
+      original_filename TEXT,
+      mime TEXT NOT NULL,
+      category TEXT,
+      bytes INTEGER NOT NULL,
+      sha256 TEXT NOT NULL,
+      storage_provider TEXT NOT NULL,
+      scan_status TEXT NOT NULL DEFAULT 'pending',
+      pii_flag INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (feedback_id) REFERENCES ingested_feedback(id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS idx_attachment_feedback ON feedback_attachment(feedback_id);
+
     CREATE INDEX IF NOT EXISTS idx_state_entity_type ON state_entity(entity_type, state);
     CREATE INDEX IF NOT EXISTS idx_state_transition_entity ON state_transition(entity_type, entity_id, id);
     CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_type, entity_id, id);
