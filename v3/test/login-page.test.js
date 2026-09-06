@@ -22,6 +22,8 @@ test("login page can register after accepting the disclaimer", () => {
   assert.match(html, /id="oauthIntro"/);
   assert.match(html, /id="tabRegister"[\s\S]*id="oauthBox"[\s\S]*id="loginForm"/);
   assert.match(html, /function paintOauthButtons/);
+  assert.match(html, /\$\("oauthBox"\)\.hidden = !anyOn/);
+  assert.match(html, /if \(!anyOn\) return;/);
   assert.match(html, /正在確認社群登入/);
   assert.match(html, /aria-disabled/);
   assert.match(html, /role="alert"/);
