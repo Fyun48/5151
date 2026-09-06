@@ -241,6 +241,7 @@
       <a href="#promo" data-admin-nav="promo"><strong>贊助曝光</strong><span>會員贊助收款連結</span></a>
       <a href="#ads" data-admin-nav="ads"><strong>站內小廣告</strong><span>列表／登入／卡片曝光</span></a>
       <a href="#mail" data-admin-nav="mail"><strong>系統信件</strong><span>SMTP、信件範本</span></a>
+      <a href="#feedback" data-admin-nav="feedback"><strong>使用者回饋</strong><span>bug、建議、處理狀態</span></a>
     </nav>
     <div class="admin-main">
       <div id="members" class="admin-panel" data-admin-panel="members">
@@ -718,13 +719,35 @@
       </form>
     </section>
       </div>
+      <div id="feedback" class="admin-panel" data-admin-panel="feedback">
+<section class="card">
+      <h2>使用者回饋</h2>
+      <p class="hint">前台會員在「意見」按鈕送出的 bug 回報／功能建議。每則都自動附上當時的畫面、篩選條件、裝置與版本，方便重現與分類；未來可作為自動化分析的來源。</p>
+      <div class="row" id="feedbackStats" style="gap:8px;flex-wrap:wrap;margin-bottom:10px"></div>
+      <div class="row" style="gap:8px;flex-wrap:wrap;align-items:center">
+        <label style="margin:0">狀態
+          <select id="feedbackFilterStatus" style="margin-left:6px">
+            <option value="">全部</option>
+          </select>
+        </label>
+        <label style="margin:0">類型
+          <select id="feedbackFilterKind" style="margin-left:6px">
+            <option value="">全部</option>
+          </select>
+        </label>
+        <button type="button" class="ghost" id="feedbackReload">重新整理</button>
+      </div>
+      <div id="feedbackList" style="margin-top:12px"></div>
+      <p class="msg" id="feedbackMsg"></p>
+    </section>
+      </div>
     </div>
   </div>
   <script src="/mascot.js"></script>
   <script>
 
     const $ = (id) => document.getElementById(id);
-    const ADMIN_PANELS = ["members", "crawl", "site", "qa", "notices", "promo", "ads", "mail"];
+    const ADMIN_PANELS = ["members", "crawl", "site", "qa", "notices", "promo", "ads", "mail", "feedback"];
     function adminPanelFromHash() {
       const key = String(location.hash || "").replace(/^#/, "");
       return ADMIN_PANELS.includes(key) ? key : "members";
@@ -1705,6 +1728,124 @@
       }
     };
 
+    let feedbackMeta = { kinds: [], statuses: [] };
+    function feedbackKindLabel(id) {
+      return feedbackMeta.kinds.find((row) => row.id === id)?.label || id || "其他";
+    }
+    function feedbackStatusOptions(current) {
+      return feedbackMeta.statuses
+        .map((row) => `<option value="${escapeHtml(row.id)}" ${row.id === current ? "selected" : ""}>${escapeHtml(row.label)}</option>`)
+        .join("");
+    }
+    function renderFeedbackContext(ctx) {
+      if (!ctx || typeof ctx !== "object") return "";
+      const rows = [];
+      if (ctx.view) rows.push(["分頁", ctx.view]);
+      if (ctx.route) rows.push(["路徑", ctx.route]);
+      if (ctx.role) rows.push(["身分", ctx.role]);
+      if (ctx.q) rows.push(["搜尋字", ctx.q]);
+      if (ctx.filter) rows.push(["篩選", ctx.filter]);
+      if (ctx.viewport) rows.push(["畫面", ctx.viewport]);
+      if (ctx.version) rows.push(["版本", ctx.version]);
+      if (ctx.lang) rows.push(["語言", ctx.lang]);
+      if (ctx.ua) rows.push(["裝置", ctx.ua]);
+      let html = rows.map(([k, v]) => `<div><b>${escapeHtml(k)}：</b>${escapeHtml(v)}</div>`).join("");
+      if (Array.isArray(ctx.errors) && ctx.errors.length) {
+        html += `<div style="margin-top:4px"><b>最近錯誤：</b><pre style="white-space:pre-wrap;margin:2px 0 0">${escapeHtml(ctx.errors.join("\n"))}</pre></div>`;
+      }
+      return html;
+    }
+    function renderFeedbackStats(stats) {
+      const box = $("feedbackStats");
+      if (!box) return;
+      if (!stats) { box.innerHTML = ""; return; }
+      const pill = (text) => `<span style="display:inline-block;padding:3px 10px;border:1px solid var(--line,#ddd);border-radius:999px;font-size:12px;font-weight:700">${escapeHtml(text)}</span>`;
+      const parts = [pill(`總計 ${stats.total || 0}`)];
+      for (const row of feedbackMeta.statuses) {
+        const n = (stats.byStatus && stats.byStatus[row.id]) || 0;
+        if (n) parts.push(pill(`${row.label} ${n}`));
+      }
+      box.innerHTML = parts.join(" ");
+    }
+    function renderFeedbackList(items) {
+      const box = $("feedbackList");
+      if (!box) return;
+      if (!items || !items.length) {
+        box.innerHTML = `<p class="hint">目前沒有符合條件的回饋。</p>`;
+        return;
+      }
+      box.innerHTML = items.map((row) => `
+        <div class="card" data-fb-id="${row.id}" style="margin-bottom:10px">
+          <div class="row" style="justify-content:space-between;gap:8px;flex-wrap:wrap">
+            <div><b>${escapeHtml(feedbackKindLabel(row.kind))}</b> · #${row.id} · <span class="hint">${escapeHtml(row.nickname || row.email || ("會員#" + row.user_id))}</span></div>
+            <span class="hint">${formatTime(row.created_at)}</span>
+          </div>
+          <p style="white-space:pre-wrap;margin:8px 0">${escapeHtml(row.body)}</p>
+          ${row.contact ? `<p class="hint">聯絡：${escapeHtml(row.contact)}</p>` : ""}
+          <details class="hint" style="margin:6px 0"><summary>系統附帶資訊</summary><div style="margin-top:6px">${renderFeedbackContext(row.context) || "（無）"}</div></details>
+          <div class="row" style="gap:8px;flex-wrap:wrap;align-items:center">
+            <label style="margin:0">狀態
+              <select data-fb-status style="margin-left:6px">${feedbackStatusOptions(row.status)}</select>
+            </label>
+            <input data-fb-note value="${escapeHtml(row.admin_note || "")}" placeholder="內部備註（會員看不到）" style="flex:1;min-width:180px" />
+            <button type="button" class="ghost" data-fb-save>儲存</button>
+          </div>
+        </div>
+      `).join("");
+    }
+    async function loadFeedback() {
+      const status = $("feedbackFilterStatus")?.value || "";
+      const kind = $("feedbackFilterKind")?.value || "";
+      const qs = new URLSearchParams();
+      if (status) qs.set("status", status);
+      if (kind) qs.set("kind", kind);
+      const res = await fetch(`/api/admin/feedback${qs.toString() ? `?${qs}` : ""}`, { cache: "no-store" });
+      const data = await readApi(res);
+      if (!res.ok) { setMsg("feedbackMsg", data.error || "載入回饋失敗"); return; }
+      feedbackMeta = { kinds: data.kinds || [], statuses: data.statuses || [] };
+      if ($("feedbackFilterStatus") && $("feedbackFilterStatus").options.length <= 1) {
+        $("feedbackFilterStatus").insertAdjacentHTML("beforeend", feedbackMeta.statuses.map((r) => `<option value="${escapeHtml(r.id)}">${escapeHtml(r.label)}</option>`).join(""));
+        if (status) $("feedbackFilterStatus").value = status;
+      }
+      if ($("feedbackFilterKind") && $("feedbackFilterKind").options.length <= 1) {
+        $("feedbackFilterKind").insertAdjacentHTML("beforeend", feedbackMeta.kinds.map((r) => `<option value="${escapeHtml(r.id)}">${escapeHtml(r.label)}</option>`).join(""));
+        if (kind) $("feedbackFilterKind").value = kind;
+      }
+      renderFeedbackStats(data.stats);
+      renderFeedbackList(data.items || []);
+      setMsg("feedbackMsg", `共 ${(data.items || []).length} 則`, true);
+    }
+    $("feedbackReload")?.addEventListener("click", loadFeedback);
+    $("feedbackFilterStatus")?.addEventListener("change", loadFeedback);
+    $("feedbackFilterKind")?.addEventListener("change", loadFeedback);
+    $("feedbackList")?.addEventListener("click", async (ev) => {
+      const btn = ev.target.closest("[data-fb-save]");
+      if (!btn) return;
+      const card = btn.closest("[data-fb-id]");
+      if (!card) return;
+      const id = card.dataset.fbId;
+      btn.disabled = true;
+      setMsg("feedbackMsg", "儲存中…");
+      try {
+        const res = await fetch(`/api/admin/feedback/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            status: card.querySelector("[data-fb-status]")?.value || "new",
+            admin_note: card.querySelector("[data-fb-note]")?.value || "",
+          }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "儲存失敗");
+        setMsg("feedbackMsg", `#${id} 已更新`, true);
+        loadFeedback();
+      } catch (error) {
+        setMsg("feedbackMsg", error.message);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
     (async () => {
       const meRes = await fetch("/api/me", { cache: "no-store" });
       const me = await readApi(meRes);
@@ -1712,7 +1853,7 @@
       if (me.role !== "admin") { location.replace("/"); return; }
       meEmail = me.email || "";
       $("who").textContent = meEmail;
-      await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadMaps(), loadHelpQa(), loadLegalCopy(), loadSpirit(), loadHousing(), loadCrawlSources(), loadSystemCrawl(), loadBrand()]);
+      await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadMaps(), loadHelpQa(), loadLegalCopy(), loadSpirit(), loadHousing(), loadCrawlSources(), loadSystemCrawl(), loadBrand(), loadFeedback()]);
       $("brandForm").onsubmit = async (ev) => {
         ev.preventDefault();
         $("brandSave").disabled = true;

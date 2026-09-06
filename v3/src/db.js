@@ -73,6 +73,14 @@ import {
   demandMeta,
 } from "./demand.js";
 import {
+  ensureFeedbackSchema,
+  createFeedback as createFeedbackOn,
+  listFeedback as listFeedbackOn,
+  updateFeedback as updateFeedbackOn,
+  feedbackStats as feedbackStatsOn,
+  feedbackMeta,
+} from "./feedback.js";
+import {
   closeSelfListing as closeSelfListingOn,
   createSelfListing as createSelfListingOn,
   ensureSelfListingSchema,
@@ -500,6 +508,7 @@ try {
   // ignore
 }
 ensureDemandSchema(db);
+ensureFeedbackSchema(db);
 ensureSelfListingSchema(db);
 ensurePushSchema(db);
 
@@ -1182,6 +1191,24 @@ export function reportDemandItem(userId, input) {
 }
 
 export { demandMeta, selfListingMeta, isSelfListingId };
+
+export function submitFeedback(userId, input) {
+  return createFeedbackOn(db, userId, input);
+}
+
+export function listFeedbackItems(opts = {}) {
+  return listFeedbackOn(db, opts);
+}
+
+export function updateFeedbackItem(id, patch) {
+  return updateFeedbackOn(db, id, patch);
+}
+
+export function getFeedbackStats() {
+  return feedbackStatsOn(db);
+}
+
+export { feedbackMeta };
 
 export function listMineSelfListings(userId) {
   return listMineSelfListingsOn(db, userId);

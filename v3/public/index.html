@@ -278,6 +278,7 @@
     html.no-session #meDeleteBtn,
     html.no-session #meWatchBtn,
     html.no-session #helpQaBtn,
+    html.no-session #feedbackBtn,
     html.no-session #meHelpQaBtn,
     html.no-session #qaView,
     html.no-session #ownerFab,
@@ -299,6 +300,7 @@
     body.role-guest #meDeleteBtn,
     body.role-guest #meWatchBtn,
     body.role-guest #helpQaBtn,
+    body.role-guest #feedbackBtn,
     body.role-guest #meHelpQaBtn,
     body.role-guest #qaView,
     body.role-guest #sponsorBar,
@@ -852,12 +854,31 @@
       gap: 8px;
     }
     .who { color: var(--muted); font-size: 13px; }
-    #helpQaBtn {
+    #helpQaBtn, #feedbackBtn {
       padding: 5px 10px;
       font-size: 12px;
       font-weight: 700;
       letter-spacing: 0.04em;
     }
+    .feedback-panel { width: min(560px, 100%); }
+    .feedback-kinds { display: flex; flex-wrap: wrap; gap: 8px; }
+    .feedback-kinds .chip {
+      cursor: pointer;
+      border: 1px solid var(--line);
+      background: var(--paper);
+      color: var(--ink);
+      border-radius: 999px;
+      padding: 7px 14px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .feedback-kinds .chip.is-on {
+      border-color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 14%, var(--paper));
+      color: var(--accent);
+    }
+    .feedback-context summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+    .feedback-context pre { color: var(--muted); }
     .help-qa-panel { width: min(760px, 100%); }
     .help-qa-list { display: grid; gap: 8px; }
     .help-qa-item {
@@ -2275,6 +2296,23 @@
       if (!msg || msg === "Script error.") return;
       window.__showBootFail("錯誤：" + msg + "。請重新整理，不要按清除資料。");
     });
+    // 給「意見回饋」用的最近錯誤紀錄，讓 bug 回報自帶現場證據。
+    window.__fbErrors = [];
+    function __fbRecordError(text) {
+      if (!text) return;
+      window.__fbErrors.push(new Date().toISOString().slice(11, 19) + " " + String(text).slice(0, 300));
+      if (window.__fbErrors.length > 5) window.__fbErrors.shift();
+    }
+    window.addEventListener("error", function (ev) {
+      var msg = ev && ev.message ? String(ev.message) : "";
+      if (!msg || msg === "Script error.") return;
+      var where = ev && ev.filename ? " @" + String(ev.filename).split("/").pop() + ":" + (ev.lineno || 0) : "";
+      __fbRecordError(msg + where);
+    });
+    window.addEventListener("unhandledrejection", function (ev) {
+      var reason = ev && ev.reason ? (ev.reason.message || ev.reason) : "";
+      if (reason) __fbRecordError("Promise: " + reason);
+    });
     function armBootWatch(delay) {
       setTimeout(function () {
         if (window.__APP_BOOTED) return;
@@ -2304,6 +2342,7 @@
         <span class="who-cluster">
           <span class="who is-guest" id="who" data-tour="guestWho">訪客</span>
           <button type="button" class="ghost" id="helpQaBtn" title="功能說明 Q&amp;A" aria-label="功能說明 Q&amp;A">Q&amp;A</button>
+          <button type="button" class="ghost" id="feedbackBtn" title="意見回饋" aria-label="意見回饋">意見</button>
         </span>
         <a class="ghost" id="loginBtn" href="/login.html">登入</a>
         <a class="primary" id="registerBtn" href="/login.html?register=1">註冊</a>
@@ -3032,7 +3071,40 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> · <a href="/data.html">居住數據</a> <span class="site-ver">ver. 3.47</span></footer>
+  <div id="feedbackDialog" class="hub-overlay" hidden>
+    <div class="hub-backdrop" data-close-feedback></div>
+    <div class="hub-panel password-panel feedback-panel" role="dialog" aria-modal="true" aria-labelledby="feedbackTitle">
+      <div class="hub-head">
+        <div>
+          <h2 id="feedbackTitle">意見回饋</h2>
+          <p class="hint" style="margin:6px 0 0">遇到問題或想到更好用的功能，直接說一句就好。目前畫面、篩選條件、裝置與版本會自動附上，不用自己描述。</p>
+        </div>
+        <button type="button" class="ghost" id="feedbackClose">關閉</button>
+      </div>
+      <form id="feedbackForm" autocomplete="off">
+        <div class="feedback-kinds" id="feedbackKinds" role="group" aria-label="回饋類型">
+          <button type="button" class="chip" data-fb-kind="bug">回報問題</button>
+          <button type="button" class="chip is-on" data-fb-kind="idea">功能建議</button>
+          <button type="button" class="chip" data-fb-kind="other">其他</button>
+        </div>
+        <p class="hint" id="feedbackKindHint" style="margin:8px 0 0">想要什麼、希望怎麼更好用</p>
+        <label for="feedbackBody" style="margin-top:12px">想說的話</label>
+        <textarea id="feedbackBody" name="body" maxlength="2000" style="min-height:120px" placeholder="例如：手機上篩選面板的 X 蓋到標題／希望可以依走路到捷運的時間排序"></textarea>
+        <label for="feedbackContact" style="margin-top:10px">聯絡方式（可空白）</label>
+        <input id="feedbackContact" name="contact" maxlength="200" placeholder="想收到回覆再留 Email，預設用你的帳號" />
+        <input type="text" id="feedbackHp" name="website" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0" />
+        <details class="feedback-context" id="feedbackContextBox" style="margin-top:12px">
+          <summary>系統會一起送出的資訊（點開看）</summary>
+          <pre id="feedbackContextView" style="white-space:pre-wrap;word-break:break-word;margin:8px 0 0;font-size:12px"></pre>
+        </details>
+        <div class="row" style="margin-top:14px">
+          <button type="submit" class="primary" id="feedbackSubmit">送出回饋</button>
+        </div>
+        <p class="msg" id="feedbackMsg"></p>
+      </form>
+    </div>
+  </div>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> · <a href="/data.html">居住數據</a> · <a href="#" id="feedbackFooterLink">意見回饋</a> <span class="site-ver">ver. 3.47</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -6646,6 +6718,121 @@
     $("meHelpQaBtn")?.addEventListener("click", openHelpQaDialog);
     $("helpQaClose")?.addEventListener("click", closeHelpQaDialog);
     if (!document.body.classList.contains("role-guest")) loadHelpQa();
+
+    const FEEDBACK_KIND_HINTS = {
+      bug: "哪裡怪怪的、壞掉、看到錯誤畫面",
+      idea: "想要什麼、希望怎麼更好用",
+      other: "體驗、文字、任何想說的",
+    };
+    let feedbackKind = "idea";
+    function buildFeedbackContext() {
+      const activeChips = Array.from(document.querySelectorAll("#listHeadSticky .chip.on, .filter-chip.on"))
+        .map((el) => (el.textContent || "").trim())
+        .filter(Boolean)
+        .slice(0, 12);
+      const ctx = {
+        route: location.pathname + location.search,
+        view: document.body.dataset.appView || "",
+        version: ($(".site-ver")?.textContent || document.querySelector(".site-ver")?.textContent || "").trim(),
+        viewport: window.innerWidth + "x" + window.innerHeight + " @" + (window.devicePixelRatio || 1) + "x",
+        ua: navigator.userAgent || "",
+        lang: navigator.language || "",
+        q: ($("q")?.value || "").trim(),
+        filter: activeChips.join(" · "),
+        errors: Array.isArray(window.__fbErrors) ? window.__fbErrors.slice(-5) : [],
+      };
+      Object.keys(ctx).forEach((key) => {
+        if (ctx[key] === "" || (Array.isArray(ctx[key]) && !ctx[key].length)) delete ctx[key];
+      });
+      return ctx;
+    }
+    function paintFeedbackKinds() {
+      document.querySelectorAll("#feedbackKinds .chip").forEach((el) => {
+        el.classList.toggle("is-on", el.dataset.fbKind === feedbackKind);
+      });
+      if ($("feedbackKindHint")) $("feedbackKindHint").textContent = FEEDBACK_KIND_HINTS[feedbackKind] || "";
+      if ($("feedbackBody")) {
+        $("feedbackBody").placeholder = feedbackKind === "bug"
+          ? "發生什麼事？在哪個畫面、做了什麼、看到什麼？"
+          : feedbackKind === "idea"
+            ? "希望多一個什麼功能？想解決什麼麻煩？"
+            : "任何想說的都可以";
+      }
+    }
+    function renderFeedbackContext() {
+      const ctx = buildFeedbackContext();
+      const lines = [];
+      if (ctx.view) lines.push("目前分頁：" + ctx.view);
+      if (ctx.q) lines.push("搜尋字：" + ctx.q);
+      if (ctx.filter) lines.push("篩選：" + ctx.filter);
+      if (ctx.viewport) lines.push("畫面：" + ctx.viewport);
+      if (ctx.version) lines.push(ctx.version);
+      if (ctx.errors && ctx.errors.length) lines.push("最近錯誤：\n" + ctx.errors.join("\n"));
+      if ($("feedbackContextView")) $("feedbackContextView").textContent = lines.join("\n") || "（沒有可附加的資訊）";
+    }
+    function openFeedbackDialog() {
+      const box = $("feedbackDialog");
+      if (!box) return;
+      if (isGuest) {
+        alert("登入後才能送出回饋喔。訪客看到的示範資料無法回報。");
+        return;
+      }
+      feedbackKind = "idea";
+      paintFeedbackKinds();
+      renderFeedbackContext();
+      if ($("feedbackForm")) $("feedbackForm").reset();
+      if ($("feedbackMsg")) { $("feedbackMsg").textContent = ""; $("feedbackMsg").className = "msg"; }
+      box.hidden = false;
+      setTimeout(() => $("feedbackBody")?.focus(), 40);
+    }
+    function closeFeedbackDialog() {
+      const box = $("feedbackDialog");
+      if (box) box.hidden = true;
+    }
+    $("feedbackBtn")?.addEventListener("click", openFeedbackDialog);
+    $("feedbackFooterLink")?.addEventListener("click", (ev) => { ev.preventDefault(); openFeedbackDialog(); });
+    $("feedbackClose")?.addEventListener("click", closeFeedbackDialog);
+    document.querySelector("[data-close-feedback]")?.addEventListener("click", closeFeedbackDialog);
+    document.querySelectorAll("#feedbackKinds .chip").forEach((el) => {
+      el.addEventListener("click", () => {
+        feedbackKind = el.dataset.fbKind || "other";
+        paintFeedbackKinds();
+        renderFeedbackContext();
+      });
+    });
+    $("feedbackForm")?.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const msg = $("feedbackMsg");
+      const btn = $("feedbackSubmit");
+      const body = ($("feedbackBody")?.value || "").trim();
+      if (body.length < 4) {
+        if (msg) { msg.textContent = "請多寫一點（至少 4 個字）"; msg.className = "msg err"; }
+        return;
+      }
+      if (btn) btn.disabled = true;
+      if (msg) { msg.textContent = "送出中…"; msg.className = "msg"; }
+      try {
+        const res = await fetch("/api/feedback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            kind: feedbackKind,
+            body,
+            contact: ($("feedbackContact")?.value || "").trim(),
+            website: ($("feedbackHp")?.value || "").trim(),
+            context: buildFeedbackContext(),
+          }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "送出失敗");
+        if (msg) { msg.textContent = "收到了，謝謝你的回饋！"; msg.className = "msg ok"; }
+        setTimeout(closeFeedbackDialog, 1200);
+      } catch (error) {
+        if (msg) { msg.textContent = error.message || "送出失敗，請稍後再試"; msg.className = "msg err"; }
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    });
     $("deleteAccountBtn")?.addEventListener("click", openDeleteAccountDialog);
     $("deleteAccountClose")?.addEventListener("click", closeDeleteAccountDialog);
     document.querySelector("[data-close-delete-account]")?.addEventListener("click", closeDeleteAccountDialog);
