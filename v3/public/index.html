@@ -2452,6 +2452,9 @@
           <button type="button" class="chip" data-kind="elevator" aria-pressed="false">電梯</button>
           <button type="button" class="chip" data-kind="apartment" aria-pressed="false">公寓</button>
           <button type="button" class="chip" data-kind="suite" aria-pressed="false">套房</button>
+          <button type="button" class="chip" data-kind="yafang" aria-pressed="false">雅房</button>
+          <button type="button" class="chip" data-kind="share" aria-pressed="false">分租</button>
+          <button type="button" class="chip" data-kind="coliving" aria-pressed="false">共宅</button>
           <button type="button" class="chip" data-kind="whole" aria-pressed="false">整層住家</button>
           <button type="button" class="chip" data-kind="shop" aria-pressed="false">店面</button>
           <button type="button" class="chip" data-kind="warehouse" aria-pressed="false">倉庫</button>
@@ -3463,7 +3466,7 @@
 
     function housingKindConflicts(a, b) {
       if (!a || !b || a === b) return false;
-      const home = (key) => key === "suite" || key === "whole";
+      const home = (key) => key === "suite" || key === "whole" || key === "yafang" || key === "share" || key === "coliving";
       const commercial = (key) => key === "shop" || key === "warehouse";
       if (home(a) && home(b)) return true;
       if ((home(a) && commercial(b)) || (commercial(a) && home(b))) return true;
@@ -3498,7 +3501,7 @@
       syncFilterRestoreLabel();
     }
     function activeFilterSummary() {
-      const kindNames = { elevator: "電梯", apartment: "公寓", suite: "套房", whole: "整層", shop: "店面", warehouse: "倉庫" };
+      const kindNames = { elevator: "電梯", apartment: "公寓", suite: "套房", yafang: "雅房", share: "分租", coliving: "共宅", whole: "整層", shop: "店面", warehouse: "倉庫" };
       const sourceNames = { "591": "591", self: "吉比本站", hbhousing: "住商", sinyi: "信義", houseprice: "5168", ddroom: "租租通", housefun: "好房" };
       const sourceBits = canFilterSources() ? sources.map((key) => sourceNames[key] || key) : [];
       return [...kinds.map((key) => kindNames[key] || key), ...sourceBits].filter(Boolean);
@@ -3727,13 +3730,16 @@
         if (key === "elevator") return /有電梯|電梯大樓|電梯公寓/.test(hay) && !/無電梯/.test(hay);
         if (key === "apartment") return /公寓/.test(hay) && !/電梯大樓/.test(hay);
         if (key === "suite") return /套房|雅房/.test(String(item.kind_name || ""));
+        if (key === "yafang") return /雅房/.test(`${item.kind_name || ""} ${item.title || ""}`);
+        if (key === "share") return /分租/.test(`${item.kind_name || ""} ${item.title || ""}`);
+        if (key === "coliving") return /共生宅|共居宅|共生住宅|共居|共宅/.test(`${item.kind_name || ""} ${item.title || ""} ${item.tags || ""}`);
         if (key === "whole") return isWholeFloorHome(item.kind_name);
         if (key === "shop") return /店面|店鋪/.test(`${item.kind_name || ""} ${item.title || ""}`);
         if (key === "warehouse") return /倉庫|廠房|倉儲/.test(`${item.kind_name || ""} ${item.title || ""}`);
         return true;
       };
       const building = list.filter((key) => key === "elevator" || key === "apartment");
-      const dwelling = list.filter((key) => ["suite", "whole", "shop", "warehouse"].includes(key));
+      const dwelling = list.filter((key) => ["suite", "yafang", "share", "coliving", "whole", "shop", "warehouse"].includes(key));
       if (building.length && !building.some(matchKey)) return false;
       if (dwelling.length && !dwelling.some(matchKey)) return false;
       return true;
