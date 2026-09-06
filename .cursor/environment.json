@@ -1,0 +1,14 @@
+{
+  "name": "吉比租房物件追蹤 (v3)",
+  "install": "npm ci",
+  "terminals": [
+    {
+      "name": "v3-dev-server",
+      "command": "AUTH_EMAIL=\"${AUTH_EMAIL:-demo@example.com}\" AUTH_PASSWORD=\"${AUTH_PASSWORD:-demopass123}\" npm run dev:v3",
+      "description": "吉比租房物件追蹤 v3 開發伺服器（Express + node --watch，埠 5153，資料寫入 data-v3/v3.db）。預設管理員登入 demo@example.com / demopass123，可用 AUTH_EMAIL / AUTH_PASSWORD secrets 覆寫。開啟 http://localhost:5153"
+    }
+  ],
+  "ports": [
+    { "name": "web", "port": 5153 }
+  ]
+}
