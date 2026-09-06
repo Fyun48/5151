@@ -332,6 +332,28 @@ export function keepHpListing(listing, options = {}) {
   return true;
 }
 
+/** 點擊時即時確認 5168 物件是否還在：404/410 或頁面出現已下架字樣視為不存在（保守，其它錯誤不當作下架）。 */
+export async function probeHpListingAlive(url) {
+  const target = String(url || "").trim();
+  if (!target) return true;
+  const res = await fetch(target, {
+    headers: {
+      "User-Agent": USER_AGENT,
+      Accept: "text/html,application/xhtml+xml",
+      Referer: `${HP_SITE}/`,
+    },
+    redirect: "follow",
+    signal: AbortSignal.timeout(15000),
+  });
+  if (res.status === 404 || res.status === 410) return false;
+  if (!res.ok) return true;
+  const html = await res.text();
+  if (/物件已(下架|不存在|刪除|成交|出租)|此(物件|案件|租屋)已(不存在|下架|刪除)|查無(此|該)?(物件|案件|租屋)|找不到.{0,6}(物件|案件|租屋)/.test(html)) {
+    return false;
+  }
+  return true;
+}
+
 async function defaultGetHtml(url) {
   const res = await fetch(url, {
     headers: {

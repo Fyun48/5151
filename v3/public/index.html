@@ -7008,6 +7008,15 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ viewed: true }),
         }).then(loadList);
+        if (!isGuest && item && !isSelfSource(item)) {
+          fetch(`/api/listings/${open}/recheck`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+          })
+            .then((r) => r.json())
+            .then((data) => { if (data && data.gone) loadList(); })
+            .catch(() => {});
+        }
         return;
       }
       const selfReport = ev.target.dataset.selfReport;

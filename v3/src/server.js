@@ -12,6 +12,9 @@ import {
   deleteProfile,
   getCachedGeo,
   getListing,
+  markListingOffline,
+  restoreListingOnline,
+  touchListingChecked,
   getSettings,
   hideMany,
   listListings,
@@ -121,7 +124,8 @@ import { assertHuman, issueCaptcha } from "./captcha.js";
 import { assertCaptchaIssuable, assertDemoReadable, authAttemptKeys, clientIp } from "./rateLimit.js";
 import { buildDemoState } from "./demo.js";
 import { backfillListingCoords, backfillListingMrt, backfillListingRoutes, flushPendingNotifications, isWatchIntervalPending, runWatch } from "./watcher.js";
-import { LIST_PAGE_SIZE } from "./client591.js";
+import { LIST_PAGE_SIZE, isListingGoneError, probeListingAlive } from "./client591.js";
+import { probeHpListingAlive } from "./houseprice.js";
 import { APP_NAME, APP_VERSION } from "./brand.js";
 import { profileNameOrDraft } from "./settingsState.js";
 import {
@@ -1461,6 +1465,61 @@ app.post("/api/listings/:id/flags", (req, res) => {
     return;
   }
   res.json({ listing: updated, stats: stats(undefined, uid) });
+});
+
+app.post("/api/listings/:id/recheck", async (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入", login: true });
+      return;
+    }
+    const postId = Number(req.params.id);
+    const listing = getListing(postId);
+    if (!listing) {
+      res.json({ supported: false, gone: false });
+      return;
+    }
+    const source = String(listing.source || "591") || "591";
+    if (source === "self") {
+      res.json({ supported: false, gone: false });
+      return;
+    }
+    if (Number(listing.offline_confirmed) === 1) {
+      res.json({ supported: true, gone: true, confirmed: true });
+      return;
+    }
+    const lastCheck = Date.parse(listing.last_checked_at || "") || 0;
+    if (lastCheck && Date.now() - lastCheck < 60_000) {
+      res.json({ supported: true, gone: Boolean(Number(listing.offline)), cooldown: true });
+      return;
+    }
+    let alive = null;
+    if (source === "591" || source === "") {
+      try {
+        await probeListingAlive(postId);
+        alive = true;
+      } catch (error) {
+        if (isListingGoneError(error)) alive = false;
+        else throw error;
+      }
+    } else if (source === "houseprice") {
+      alive = await probeHpListingAlive(listing.url);
+    } else {
+      res.json({ supported: false, gone: false });
+      return;
+    }
+    if (alive === false) {
+      markListingOffline(postId);
+      res.json({ supported: true, gone: true });
+      return;
+    }
+    touchListingChecked(postId);
+    if (Number(listing.offline) === 1) restoreListingOnline(postId);
+    res.json({ supported: true, gone: false });
+  } catch (error) {
+    res.json({ supported: true, gone: false, error: error.message });
+  }
 });
 
 app.post("/api/listings/:id/reject-match", (req, res) => {
