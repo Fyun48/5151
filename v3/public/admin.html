@@ -428,6 +428,21 @@
         <p class="msg" id="legalCopyMsg"></p>
       </form>
     </section>
+<section class="card">
+      <h2>本站理念（這個站為什麼存在）</h2>
+      <p class="hint">前台「本站理念」頁（spirit.html）顯示這份文字。標記：一行 <code>## 小標</code> 為小標題、一行 <code>- 項目</code> 為條列、空一行分段，其餘為段落。存檔即時生效。</p>
+      <form id="spiritForm">
+        <label>標題</label>
+        <input id="spiritTitle" maxlength="120" />
+        <label>內文</label>
+        <textarea id="spiritBody" maxlength="8000" style="min-height:260px"></textarea>
+        <div class="row" style="margin-top:10px">
+          <button type="button" class="ghost" id="spiritReset">還原預設</button>
+          <button type="submit" class="primary" id="spiritSave">儲存理念文字</button>
+        </div>
+        <p class="msg" id="spiritMsg"></p>
+      </form>
+    </section>
       </div>
       <div id="qa" class="admin-panel" data-admin-panel="qa">
 <section class="card">
@@ -1046,6 +1061,19 @@
       setMsg("legalCopyMsg", "已載入", true);
     }
 
+    function fillSpirit(data = {}) {
+      if ($("spiritTitle")) $("spiritTitle").value = data.title || "";
+      if ($("spiritBody")) $("spiritBody").value = data.body || "";
+    }
+
+    async function loadSpirit() {
+      const res = await fetch("/api/admin/spirit", { cache: "no-store" });
+      const data = await readApi(res);
+      if (!res.ok) throw new Error(data.error || "載入理念失敗");
+      fillSpirit(data);
+      setMsg("spiritMsg", "已載入", true);
+    }
+
     async function loadMaps() {
       const res = await fetch("/api/admin/maps", { cache: "no-store" });
       const data = await readApi(res);
@@ -1611,7 +1639,7 @@
       if (me.role !== "admin") { location.replace("/"); return; }
       meEmail = me.email || "";
       $("who").textContent = meEmail;
-      await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadMaps(), loadHelpQa(), loadLegalCopy(), loadCrawlSources(), loadSystemCrawl(), loadBrand()]);
+      await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadMaps(), loadHelpQa(), loadLegalCopy(), loadSpirit(), loadCrawlSources(), loadSystemCrawl(), loadBrand()]);
       $("brandForm").onsubmit = async (ev) => {
         ev.preventDefault();
         $("brandSave").disabled = true;
@@ -1702,6 +1730,46 @@
           setMsg("helpQaMsg", error.message);
         } finally {
           $("helpQaReset").disabled = false;
+        }
+      };
+      $("spiritForm").onsubmit = async (ev) => {
+        ev.preventDefault();
+        $("spiritSave").disabled = true;
+        setMsg("spiritMsg", "儲存中…");
+        try {
+          const res = await fetch("/api/admin/spirit", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title: $("spiritTitle").value, body: $("spiritBody").value }),
+          });
+          const data = await readApi(res);
+          if (!res.ok) throw new Error(data.error || "儲存失敗");
+          fillSpirit(data);
+          setMsg("spiritMsg", "理念文字已儲存", true);
+        } catch (error) {
+          setMsg("spiritMsg", error.message);
+        } finally {
+          $("spiritSave").disabled = false;
+        }
+      };
+      $("spiritReset").onclick = async () => {
+        if (!window.confirm("還原成預設理念文字？")) return;
+        $("spiritReset").disabled = true;
+        setMsg("spiritMsg", "還原中…");
+        try {
+          const res = await fetch("/api/admin/spirit", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reset: true }),
+          });
+          const data = await readApi(res);
+          if (!res.ok) throw new Error(data.error || "還原失敗");
+          fillSpirit(data);
+          setMsg("spiritMsg", "已還原預設", true);
+        } catch (error) {
+          setMsg("spiritMsg", error.message);
+        } finally {
+          $("spiritReset").disabled = false;
         }
       };
       $("legalCopyForm").onsubmit = async (ev) => {
