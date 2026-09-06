@@ -121,6 +121,9 @@ export function ensurePersonalSchema(db) {
     "ALTER TABLE users ADD COLUMN oauth_provider TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE users ADD COLUMN oauth_subject TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE users ADD COLUMN profile_onboarded_at TEXT",
+    "ALTER TABLE users ADD COLUMN birth_date TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN gender TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN residence TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE user_events ADD COLUMN source_key TEXT NOT NULL DEFAULT ''",
   ]) {
     try {
