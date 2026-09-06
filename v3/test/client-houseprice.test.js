@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import {
   HP_POST_ID_BASE,
   HP_SOURCE,
+  enrichHpListingFromDetail,
   fetchHpCoveringListings,
   hpDetailUrl,
   hpListUrl,
@@ -13,11 +14,13 @@ import {
   hpSidForDistrict,
   isHpListingId,
   normalizeHpItem,
+  parseHpDetailHtml,
   parseHpListHtml,
 } from "../src/houseprice.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const fixture = readFileSync(path.join(dir, "fixtures/houseprice-list.html"), "utf8");
+const detailFixture = readFileSync(path.join(dir, "fixtures/houseprice-detail.html"), "utf8");
 
 test("5168 maps 591 districts onto list path and reserved ids", () => {
   assert.equal(hpSidForDistrict(1, 8), 8);
@@ -50,6 +53,56 @@ test("parseHpListHtml reads 5168 SSR cards", () => {
   assert.equal(suite.price_num, 24999);
   assert.match(suite.cover, /realphoto_800x600/);
   assert.doesNotMatch(suite.cover, /default_cover/);
+});
+
+test("parseHpDetailHtml reads total/rental floor and community from the detail page", () => {
+  const detail = parseHpDetailHtml(detailFixture);
+  assert.equal(detail.floorName, "4/4");
+  assert.equal(detail.community, "御陽明");
+  assert.equal(detail.areaName, "64.73坪");
+  assert.equal(detail.layout, "4房2廳4衛2陽台");
+  assert.equal(detail.kind, "整層住家");
+  assert.equal(detail.buildingType, "大樓");
+  assert.match(detail.address, /士林區格致路/);
+});
+
+test("parseHpDetailHtml falls back to meta description when label spans are absent", () => {
+  const lite = readFileSync(path.join(dir, "fixtures/houseprice-detail-lite.html"), "utf8");
+  const detail = parseHpDetailHtml(lite);
+  assert.equal(detail.floorName, "");
+  assert.equal(detail.community, "");
+  assert.equal(detail.areaName, "53坪");
+  assert.equal(detail.layout, "2房2廳2衛");
+  assert.equal(detail.kind, "整層住家");
+  assert.match(detail.address, /士林區士商路/);
+});
+
+test("enrichHpListingFromDetail fills missing floor and community and rebuilds the fingerprint", () => {
+  const bare = normalizeHpItem({
+    id: "9999_1", kind: "獨立套房", title: "測試套房", price: 20000,
+    areaName: "7坪", layout: "1房1衛", floorName: "", address: "台北市士林區格致路", community: "",
+  }, { regionId: 1, sectionId: 8 });
+  assert.equal(bare.floor_name, "");
+  assert.equal(bare.community_name, "");
+  const beforeKey = bare.source_key;
+  const enriched = enrichHpListingFromDetail(bare, parseHpDetailHtml(detailFixture), { regionId: 1, sectionId: 8 });
+  assert.equal(enriched.floor_name, "4/4");
+  assert.equal(enriched.community_name, "御陽明");
+  assert.notEqual(enriched.source_key, beforeKey);
+  assert.match(enriched.tags, /御陽明/);
+});
+
+test("fetchHpCoveringListings enriches suite listings from the detail page", async () => {
+  const jobs = [{ regionId: 1, sectionIds: [8], priceMin: 0, priceMax: 0, searchUrl: "x" }];
+  const batches = await fetchHpCoveringListings(jobs, {
+    pages: 1,
+    detailGapMs: 0,
+    getHtml: async (url) => (String(url).includes("/house/") ? detailFixture : fixture),
+  });
+  const suite = batches[0].listings.find((row) => row.source_id === "16512158_1170048");
+  assert.ok(suite);
+  assert.equal(suite.floor_name, "4/4");
+  assert.equal(suite.community_name, "御陽明");
 });
 
 test("fetchHpCoveringListings uses injected HTML", async () => {
