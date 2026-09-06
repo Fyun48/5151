@@ -146,6 +146,30 @@ export function applyOpsSchema(db) {
       FOREIGN KEY (analysis_id) REFERENCES feedback_analysis(id) ON DELETE RESTRICT
     );
 
+    -- Phase 4.2：DB 層強制 CURRENT 指標不變式（不僅靠應用層 helper）。
+    -- 指向的 feedback_analysis 必須：同 feedback_id、同 analysis_type、且 status='completed'。
+    -- 即使用直接 SQL（INSERT/UPDATE）也無法違反。違反則 ABORT，整個 promotion 交易回滾。
+    CREATE TRIGGER IF NOT EXISTS fac_guard_insert BEFORE INSERT ON feedback_analysis_current
+    BEGIN
+      SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM feedback_analysis fa
+        WHERE fa.id = NEW.analysis_id
+          AND fa.feedback_id = NEW.feedback_id
+          AND fa.analysis_type = NEW.analysis_type
+          AND fa.status = 'completed'
+      ) THEN RAISE(ABORT, 'current pointer must reference a COMPLETED analysis of the same feedback_id and analysis_type') END;
+    END;
+    CREATE TRIGGER IF NOT EXISTS fac_guard_update BEFORE UPDATE ON feedback_analysis_current
+    BEGIN
+      SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM feedback_analysis fa
+        WHERE fa.id = NEW.analysis_id
+          AND fa.feedback_id = NEW.feedback_id
+          AND fa.analysis_type = NEW.analysis_type
+          AND fa.status = 'completed'
+      ) THEN RAISE(ABORT, 'current pointer must reference a COMPLETED analysis of the same feedback_id and analysis_type') END;
+    END;
+
     CREATE INDEX IF NOT EXISTS idx_state_entity_type ON state_entity(entity_type, state);
     CREATE INDEX IF NOT EXISTS idx_state_transition_entity ON state_transition(entity_type, entity_id, id);
     CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_type, entity_id, id);
