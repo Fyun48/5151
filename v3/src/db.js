@@ -1604,10 +1604,17 @@ function attachSameHouseRoles(rows, voteUserId) {
     }
     const primary = preferPrimaryListing(row, peer);
     const primaryId = Number(primary.post_id);
-    const primaryRow = Number(row.post_id) === primaryId ? row : peer;
-    row.same_house_role = Number(row.post_id) === primaryId ? "primary" : "affiliate";
-    row.same_house_primary_id = primaryId;
-    row.same_house_primary_offline = Number(primaryRow.offline) === 1;
+    const primaryOffline = Number(primary.offline) === 1;
+    // 疑似／確定同源都是成對關係。即使只有其中一側存 match_post_id，
+    // 也要把「非主卡」那側標成 affiliate 收進展開列，避免同一對在主列表出現兩次。
+    const assignRole = (target) => {
+      if (!target || target.same_house_split || target.same_house_role) return;
+      target.same_house_role = Number(target.post_id) === primaryId ? "primary" : "affiliate";
+      target.same_house_primary_id = primaryId;
+      target.same_house_primary_offline = primaryOffline;
+    };
+    assignRole(row);
+    assignRole(byId.get(mid));
   }
   return list;
 }
