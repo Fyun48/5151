@@ -98,6 +98,15 @@ test("same-house bundle keeps lowest total as primary and notes the surcharge", 
   assert.ok(compareListingNotes(pricey, cheap).some((note) => /來源不同/.test(note)));
 });
 
+test("same-house peers expose update time and source for the panel", () => {
+  const withTime = { ...cheap, refresh_time: "9/6 上午11:19", last_seen_at: "2026-09-06T03:19:00.000Z" };
+  const bundle = sameHouseBundle(pricey, [withTime]);
+  const peer = bundle.peers.find((p) => p.post_id === 11);
+  assert.equal(peer.refresh_time, "9/6 上午11:19");
+  assert.equal(peer.last_seen_at, "2026-09-06T03:19:00.000Z");
+  assert.equal(peer.source_label, "591");
+});
+
 test("house group compare keeps at most 3 listings and only differing fields", () => {
   const mid = {
     post_id: 33,

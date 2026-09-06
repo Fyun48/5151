@@ -1014,12 +1014,14 @@
     .same-house-row a { color: var(--ink); font-weight: 700; display: inline-block; margin: 4px 0; }
     .same-house-cost,
     .same-house-meta,
+    .same-house-when,
     .same-house-fee,
     .same-note {
       font-size: 12px;
       line-height: 1.45;
       color: var(--muted);
     }
+    .same-house-when { color: var(--ink); font-weight: 600; }
     .same-house-fee { color: var(--ink); }
     .same-house-cost strong { color: var(--watch); font-weight: 800; }
     .same-house-prices {
@@ -4538,15 +4540,20 @@
         const role = sameHousePeerRole(item, peer, idxOf(peer.post_id));
         const costChange = peerCostChangeLine(peer);
         const feeDiff = sameHouseFeeDiff(item, peer);
+        const peerSource = peer.source_label || listingSourceLabel(peer);
+        const peerWhen = formatListingWhen(peer);
+        const whenLine = peerWhen ? `更新 ${peerWhen} · 來源 ${peerSource}` : `來源 ${peerSource}`;
+        const metaBits = [peer.layout || "", peer.area_name || "", peer.floor_name || ""].filter(Boolean).join(" · ");
         const split = peer.role === "affiliate"
           ? `<button type="button" class="ghost same-split-btn" data-reject-match="${peer.post_id}" data-reject-peer="${item.post_id}">不是同一間</button>`
           : "";
         return `<div class="same-house-row">
           <div class="same-house-role">${esc(role)}${peer.offline ? " · 可能空號" : ""}</div>
           <a href="${esc(href)}" ${String(peer.source || "") === "self" ? "" : 'target="_blank" rel="noopener noreferrer"'} data-open="${peer.post_id}" title="${esc(cheapWarn || "打開原站")}">${esc(peer.title || `刊登 #${peer.post_id}`)}</a>
+          <div class="same-house-when">${esc(whenLine)}</div>
           <div class="same-house-cost">租金 ${esc(peer.price || (peer.price_num ? peer.price_num.toLocaleString("zh-TW") : "—"))} · 總月費 ${(peerTotal || 0).toLocaleString("zh-TW")} · 狀態：${esc(listingStatusLabel(peer))}${cheapWarn ? ` · <strong>${esc(cheapWarn)}</strong>` : ""}</div>
           <div class="same-house-fee">費用說明：${esc(feeDiff)}</div>
-          <div class="same-house-meta">${esc(peer.source_label || listingSourceLabel(peer))} · ${esc(peer.layout || "")} · ${esc(peer.area_name || "")} · ${esc(peer.floor_name || "")}${costChange ? ` · ${esc(costChange)}` : ""}</div>
+          <div class="same-house-meta">${esc(metaBits)}${costChange ? ` · ${esc(costChange)}` : ""}</div>
           <a class="same-house-open" href="${esc(href)}" ${String(peer.source || "") === "self" ? "" : 'target="_blank" rel="noopener noreferrer"'} data-open="${peer.post_id}">${esc(openListingCta(peer))}</a>
           ${split}
         </div>`;

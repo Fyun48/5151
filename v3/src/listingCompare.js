@@ -248,6 +248,8 @@ export function publicSameHousePeer(row) {
     offline: Number(row.offline) === 1,
     offline_confirmed: Number(row.offline_confirmed) === 1,
     hidden: Number(row.hidden) === 1,
+    refresh_time: row.refresh_time || "",
+    last_seen_at: row.last_seen_at || "",
     match_verdict: row.match_verdict || "",
     match_level: row.match_level || "",
     cost_changed_at: row.cost_changed_at || "",
