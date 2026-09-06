@@ -57,6 +57,27 @@ export function applyOpsSchema(db) {
       created_at TEXT NOT NULL
     );
 
+    -- Phase 2：從 Product 非同步遞送進來的 feedback。
+    -- delivery_id / idempotency_key 皆唯一 → 重複遞送只會有一筆邏輯紀錄（冪等）。
+    -- trust_level 一律 untrusted；Phase 2 只儲存與傳輸，不執行任何內容。
+    CREATE TABLE IF NOT EXISTS ingested_feedback (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      delivery_id TEXT NOT NULL UNIQUE,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      source TEXT NOT NULL DEFAULT 'unknown',
+      external_feedback_id TEXT,
+      user_ref TEXT,
+      kind TEXT,
+      content TEXT,
+      contact TEXT,
+      context TEXT,
+      app_version TEXT,
+      submitted_at TEXT,
+      trust_level TEXT NOT NULL DEFAULT 'untrusted',
+      payload_hash TEXT,
+      received_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_state_entity_type ON state_entity(entity_type, state);
     CREATE INDEX IF NOT EXISTS idx_state_transition_entity ON state_transition(entity_type, entity_id, id);
     CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_type, entity_id, id);

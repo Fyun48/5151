@@ -75,11 +75,17 @@ import {
 import {
   ensureFeedbackSchema,
   createFeedback as createFeedbackOn,
+  createFeedbackWithOutbox as createFeedbackWithOutboxOn,
   listFeedback as listFeedbackOn,
   updateFeedback as updateFeedbackOn,
   feedbackStats as feedbackStatsOn,
   feedbackMeta,
 } from "./feedback.js";
+import {
+  ensureFeedbackOutboxSchema,
+  listOutbox as listOutboxOn,
+  outboxStats as outboxStatsOn,
+} from "./feedbackOutbox.js";
 import {
   closeSelfListing as closeSelfListingOn,
   createSelfListing as createSelfListingOn,
@@ -509,6 +515,7 @@ try {
 }
 ensureDemandSchema(db);
 ensureFeedbackSchema(db);
+ensureFeedbackOutboxSchema(db);
 ensureSelfListingSchema(db);
 ensurePushSchema(db);
 
@@ -1192,8 +1199,22 @@ export function reportDemandItem(userId, input) {
 
 export { demandMeta, selfListingMeta, isSelfListingId };
 
+// Phase 2：feedback 與 outbox 於同一交易原子建立（可用 OPS_OUTBOX_ENABLED=0 關閉 outbox 建立）。
+const OUTBOX_ENABLED = process.env.OPS_OUTBOX_ENABLED !== "0";
 export function submitFeedback(userId, input) {
-  return createFeedbackOn(db, userId, input);
+  return createFeedbackWithOutboxOn(db, userId, input, { enqueue: OUTBOX_ENABLED });
+}
+
+export function listFeedbackOutbox(opts = {}) {
+  return listOutboxOn(db, opts);
+}
+
+export function feedbackOutboxStats() {
+  return outboxStatsOn(db);
+}
+
+export function opsDeliveryDb() {
+  return db;
 }
 
 export function listFeedbackItems(opts = {}) {

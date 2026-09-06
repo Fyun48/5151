@@ -7,6 +7,8 @@ import { openOpsDb, defaultDataDir, defaultDbPath } from "./opsDb.js";
 import { makeAuth } from "./auth.js";
 import { appendAudit, listAudit, verifyAuditChain, createCheckpoint, listCheckpoints } from "./audit.js";
 import { listTransitions } from "./stateMachine.js";
+import { verifyIngestRequest, bodyHashHex } from "./ingestSignature.js";
+import { ingestFeedback } from "./ingest.js";
 
 // 刻意不使用 express：ops 服務維持「零外部相依」，與本 repo 的 CI（不跑 npm install）相容，
 // 也縮小攻擊面。所有路由用 node:http 手刻的極小 router。
@@ -51,6 +53,24 @@ function sendJson(res, status, obj) {
   res.end(JSON.stringify(obj));
 }
 
+function readRawBody(req) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on("data", (c) => {
+      size += c.length;
+      if (size > BODY_LIMIT) {
+        reject(Object.assign(new Error("payload too large"), { status: 413 }));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.on("error", reject);
+  });
+}
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let size = 0;
@@ -84,7 +104,7 @@ function runGuard(mw, req, reply) {
   return passed;
 }
 
-export function createHandler({ db, auth, publicDir = PUBLIC_DIR }) {
+export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret = process.env.OPS_INGEST_SECRET || "" }) {
   if (!db) throw new Error("createHandler requires db");
   if (!auth) throw new Error("createHandler requires auth");
 
@@ -112,7 +132,48 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR }) {
 
       // ── 公開 API ──
       if (pathname === "/ops/api/health" && method === "GET") {
-        sendJson(res, 200, { ok: true, service: "ops", phase: "1.1", configured: auth.configured });
+        sendJson(res, 200, { ok: true, service: "ops", phase: "2", configured: auth.configured });
+        return;
+      }
+
+      // ── Ingest（HMAC 認證，非 Owner session） ──
+      if (pathname === "/ops/api/ingest/feedback" && method === "POST") {
+        if (!ingestSecret) {
+          sendJson(res, 503, { error: "ingest not configured" });
+          return;
+        }
+        const raw = await readRawBody(req);
+        const check = verifyIngestRequest({
+          method: "POST",
+          path: "/ops/api/ingest/feedback",
+          headers: req.headers,
+          rawBody: raw,
+          secret: ingestSecret,
+        });
+        if (!check.ok) {
+          // 不外洩簽章細節；只回通用錯誤（reason 僅供內部推斷）。
+          const status = check.reason === "expired_timestamp" ? 401 : 401;
+          sendJson(res, status, { error: "unauthorized" });
+          return;
+        }
+        let payload;
+        try {
+          payload = JSON.parse(raw || "{}");
+        } catch {
+          sendJson(res, 400, { error: "invalid JSON" });
+          return;
+        }
+        // 防 payload 替換：header 的 delivery 必須與 body 一致（body-hash 已在簽章內驗過）。
+        if (String(payload.delivery_id || "") !== check.deliveryId) {
+          sendJson(res, 400, { error: "delivery_id mismatch" });
+          return;
+        }
+        try {
+          const result = ingestFeedback(db, { deliveryId: check.deliveryId, payload, payloadHash: check.bodyHash });
+          sendJson(res, 200, { ok: true, id: result.id, duplicate: result.duplicate });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
         return;
       }
 
@@ -206,8 +267,8 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR }) {
 }
 
 // 相容舊測試/呼叫：createApp 回傳一個 { listen } 介面（用 node:http 包裝 handler）。
-export function createApp({ db, auth, publicDir = PUBLIC_DIR }) {
-  const handler = createHandler({ db, auth, publicDir });
+export function createApp({ db, auth, publicDir = PUBLIC_DIR, ingestSecret = process.env.OPS_INGEST_SECRET || "" }) {
+  const handler = createHandler({ db, auth, publicDir, ingestSecret });
   return {
     handler,
     listen(...args) {
@@ -245,7 +306,7 @@ export function startServer() {
   const port = Number(process.env.OPS_PORT || 5154);
   http.createServer(handler).listen(port, host, () => {
     // eslint-disable-next-line no-console
-    console.log(`Ops console (Phase 1.1)：http://${host}:${port}  owner=${auth.configured ? auth.ownerEmail : "(未設定)"}`);
+    console.log(`Ops console (Phase 2)：http://${host}:${port}  owner=${auth.configured ? auth.ownerEmail : "(未設定)"}  ingest=${process.env.OPS_INGEST_SECRET ? "on" : "off"}`);
   });
   return { db, auth };
 }
