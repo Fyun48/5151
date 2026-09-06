@@ -19,6 +19,9 @@ import {
 } from "./attachments.js";
 import { LocalPersistentStorage, defaultAttachmentDir } from "./storage/localStorage.js";
 import { makeScanner } from "./malwareScan.js";
+import { listAnalyses, publicAnalysis, reprocessAnalysis, analysisStats, currentAnalysisId, getCurrentFeedbackAnalysis } from "./feedbackAnalysis.js";
+import { makeProvider } from "./ai/provider.js";
+import { analysisConfigFromEnv, startAnalysisLoop } from "./analysisWorker.js";
 
 // 刻意不使用 express：ops 服務維持「零外部相依」，與本 repo 的 CI（不跑 npm install）相容，
 // 也縮小攻擊面。所有路由用 node:http 手刻的極小 router。
@@ -163,7 +166,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
 
       // ── 公開 API ──
       if (pathname === "/ops/api/health" && method === "GET") {
-        sendJson(res, 200, { ok: true, service: "ops", phase: "3", configured: auth.configured });
+        sendJson(res, 200, { ok: true, service: "ops", phase: "4", configured: auth.configured });
         return;
       }
 
@@ -374,6 +377,48 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         return;
       }
 
+      // ── Phase 4：Owner 檢視某 feedback 的分析結果 ──
+      const analysisListMatch = pathname.match(/^\/ops\/api\/feedback\/(\d+)\/analysis$/);
+      if (analysisListMatch && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        const fid = Number(analysisListMatch[1]);
+        const fb = db.prepare("SELECT id, source, kind, content, app_version, submitted_at, received_at, trust_level FROM ingested_feedback WHERE id = ?").get(fid);
+        if (!fb) { sendJson(res, 404, { error: "not found" }); return; }
+        const currentId = currentAnalysisId(db, fid);
+        sendJson(res, 200, {
+          feedback: fb,
+          current_analysis_id: currentId,
+          current: getCurrentFeedbackAnalysis(db, fid),
+          analyses: listAnalyses(db, { feedbackId: fid }).map((row) => ({ ...publicAnalysis(row), is_current: Number(row.id) === currentId })),
+        });
+        return;
+      }
+
+      // ── Phase 4：Owner 手動重新分析（建立新 attempt，不覆寫歷史；需 CSRF） ──
+      const reanalyzeMatch = pathname.match(/^\/ops\/api\/feedback\/(\d+)\/reanalyze$/);
+      if (reanalyzeMatch && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          let body = {};
+          try { body = JSON.parse(await readRawBody(req) || "{}"); } catch { body = {}; }
+          const row = reprocessAnalysis(db, Number(reanalyzeMatch[1]), {
+            promptVersion: body.prompt_version || undefined,
+            actor: `owner:${req.owner.email}`,
+          });
+          sendJson(res, 201, { ok: true, analysis_id: row.id, revision: row.revision });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
+
+      // ── Phase 4：Owner 分析佇列統計 ──
+      if (pathname === "/ops/api/analysis/stats" && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        sendJson(res, 200, analysisStats(db));
+        return;
+      }
+
       if (pathname.startsWith("/ops/api/")) {
         sendJson(res, 404, { error: "not found" });
         return;
@@ -425,9 +470,15 @@ export function startServer() {
   const handler = createHandler({ db, auth });
   const host = process.env.OPS_HOST || "127.0.0.1";
   const port = Number(process.env.OPS_PORT || 5154);
+  // Phase 4：AI 分析背景 worker。provider 未設定（AI_PROVIDER 未設）→ 不啟動、feedback 仍正常入庫。
+  const aiProvider = makeProvider();
+  const aiConfig = analysisConfigFromEnv();
+  if (aiProvider.available && aiConfig.enabled) {
+    startAnalysisLoop(db, { provider: aiProvider, config: aiConfig, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
+  }
   http.createServer(handler).listen(port, host, () => {
     // eslint-disable-next-line no-console
-    console.log(`Ops console (Phase 3)：http://${host}:${port}  owner=${auth.configured ? auth.ownerEmail : "(未設定)"}  ingest=${process.env.OPS_INGEST_SECRET ? "on" : "off"}`);
+    console.log(`Ops console (Phase 4)：http://${host}:${port}  owner=${auth.configured ? auth.ownerEmail : "(未設定)"}  ingest=${process.env.OPS_INGEST_SECRET ? "on" : "off"}  ai=${aiProvider.available ? aiProvider.name : "off"}`);
   });
   return { db, auth };
 }

@@ -1,6 +1,7 @@
 import { withImmediateTx } from "./tx.js";
 import { appendAuditRow } from "./audit.js";
 import { httpError } from "./errors.js";
+import { enqueueAnalysisRow } from "./feedbackAnalysis.js";
 
 // Ops ingest：儲存從 Product 遞送進來的 feedback，並以 delivery_id / idempotency_key 冪等去重。
 // 只儲存與傳輸；不執行任何 feedback 內容。trust_level 一律 untrusted。
@@ -98,6 +99,8 @@ export function ingestFeedback(db, { deliveryId, payload, payloadHash, now = new
         data: { delivery_id: deliveryId, source: payload.source || "unknown", kind: payload.kind || null, external_feedback_id: payload.external_feedback_id ?? null },
         now,
       });
+      // Phase 4：新 feedback 入庫的同一交易內，排入一筆待 AI 分析 job（不依賴 AI 可用性）。
+      enqueueAnalysisRow(db, { feedbackId: id, now });
       return { id, duplicate: false };
     } catch (err) {
       // 併發下另一寫入者先插入（UNIQUE 撞號）→ 重新分類：相同邏輯=冪等；否則=衝突。

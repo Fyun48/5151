@@ -14,15 +14,23 @@ test("only state_entity holds a lifecycle state column", () => {
     .map((r) => r.name);
 
   const STATE_COL = /^(state|status|lifecycle_state)$/i;
-  const ALLOWED = new Set(["state_entity"]);
+  // state_entity 是唯一可寫的「中央 lifecycle 狀態」。
+  // feedback_analysis.status 是「背景分析 job 的處理狀態」（pending/processing/completed/failed），
+  // 屬於局部工作狀態、非中央 lifecycle，且不會與 state_entity 分歧，故列入白名單。
+  const STATE_COL_ALLOWED = /^(state|lifecycle_state)$/i; // 對白名單表僅允許 status（job 狀態）
+  const ALLOWED = new Set(["state_entity", "feedback_analysis"]);
   const offenders = [];
 
   for (const table of tables) {
     const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
     for (const col of cols) {
-      if (STATE_COL.test(col) && !ALLOWED.has(table)) {
-        offenders.push(`${table}.${col}`);
+      if (!STATE_COL.test(col)) continue;
+      if (ALLOWED.has(table)) {
+        // 白名單表：state_entity 可有任何；其餘白名單表只允許 job 狀態欄位 `status`（不得有 state/lifecycle_state）
+        if (table !== "state_entity" && STATE_COL_ALLOWED.test(col)) offenders.push(`${table}.${col}`);
+        continue;
       }
+      offenders.push(`${table}.${col}`);
     }
   }
 
