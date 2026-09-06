@@ -673,6 +673,9 @@ test("self listing form and in-site detail stay on this site", () => {
   assert.match(html, /function listingStatusLabel/);
   assert.match(html, /function decodeEntities/);
   assert.match(html, /狀態：/);
+  assert.match(html, /same-house-when/);
+  assert.match(html, /const peerWhen = formatListingWhen\(peer\)/);
+  assert.match(html, /更新 \$\{peerWhen\} · 來源 \$\{peerSource\}/);
 });
 
 test("filter city accordion markup is generated from shared city list", () => {
