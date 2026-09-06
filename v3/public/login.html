@@ -527,6 +527,7 @@
     function paintOauthButtons(oauth = {}) {
       const names = { google: "Google", line: "LINE", facebook: "Facebook" };
       const off = [];
+      let anyOn = false;
       for (const [id, key] of [["oauthGoogle", "google"], ["oauthLine", "line"], ["oauthFacebook", "facebook"]]) {
         const on = Boolean(oauth[key]?.enabled && oauth[key]?.configured);
         const el = $(id);
@@ -536,16 +537,16 @@
         el.setAttribute("aria-disabled", on ? "false" : "true");
         el.setAttribute("tabindex", on ? "0" : "-1");
         el.setAttribute("aria-describedby", "oauthHint");
-        if (!on) off.push(names[key]);
+        if (on) anyOn = true;
+        else off.push(names[key]);
       }
       if ($("oauthBox")) {
-        $("oauthBox").hidden = false;
-        $("oauthBox").dataset.empty = "0";
+        $("oauthBox").hidden = !anyOn;
+        $("oauthBox").dataset.empty = anyOn ? "0" : "1";
       }
+      if (!anyOn) return;
       if ($("oauthHint")) {
-        const hintText = off.length === 3
-          ? ""
-          : (off.length ? `${off.join("、")} 後台尚未開通，暫時不能按。` : "可用社群帶入信箱。新帳號仍要點開通信。");
+        const hintText = off.length ? `${off.join("、")} 後台尚未開通，暫時不能按。` : "可用社群帶入信箱。新帳號仍要點開通信。";
         $("oauthHint").textContent = hintText;
         $("oauthHint").hidden = !hintText;
       }
