@@ -39,6 +39,18 @@ export function listingIsSuite(listing) {
   return /套房|雅房/.test(String(listing.kind_name || ""));
 }
 
+export function listingIsYafang(listing) {
+  return /雅房/.test(`${listing?.kind_name || ""} ${listing?.title || ""}`);
+}
+
+export function listingIsShareRental(listing) {
+  return /分租/.test(`${listing?.kind_name || ""} ${listing?.title || ""}`);
+}
+
+export function listingIsColiving(listing) {
+  return /共生宅|共居宅|共生住宅|共居|共宅/.test(`${listing?.kind_name || ""} ${listing?.title || ""} ${tagText(listing)}`);
+}
+
 export function listingIsShop(listing) {
   const hay = `${listing?.kind_name || ""} ${listing?.title || ""}`;
   return /店面|店鋪/.test(hay);
@@ -58,16 +70,16 @@ export function housingTypeLabel(listing) {
   return "公寓";
 }
 
-export const HOUSING_KINDS = ["elevator", "apartment", "suite", "whole", "shop", "warehouse"];
+export const HOUSING_KINDS = ["elevator", "apartment", "suite", "yafang", "share", "coliving", "whole", "shop", "warehouse"];
 export const HOUSING_KIND_GROUPS = {
   building: ["elevator", "apartment"],
-  dwelling: ["suite", "whole", "shop", "warehouse"],
+  dwelling: ["suite", "yafang", "share", "coliving", "whole", "shop", "warehouse"],
 };
 export const LISTING_SOURCE_KEYS = ["591", "self", "hbhousing", "sinyi", "houseprice", "ddroom", "housefun"];
 
 export function housingKindConflicts(a, b) {
   if (!a || !b || a === b) return false;
-  const home = (key) => key === "suite" || key === "whole";
+  const home = (key) => key === "suite" || key === "whole" || key === "yafang" || key === "share" || key === "coliving";
   const commercial = (key) => key === "shop" || key === "warehouse";
   if (home(a) && home(b)) return true;
   if ((home(a) && commercial(b)) || (commercial(a) && home(b))) return true;
@@ -144,6 +156,9 @@ export function listingMatchesKindKey(listing, kind) {
   if (key === "elevator") return listingHasElevator(listing);
   if (key === "apartment") return listingIsApartment(listing);
   if (key === "suite") return listingIsSuite(listing);
+  if (key === "yafang") return listingIsYafang(listing);
+  if (key === "share") return listingIsShareRental(listing);
+  if (key === "coliving") return listingIsColiving(listing);
   if (key === "whole") return isWholeFloorHome(listing.kind_name);
   if (key === "shop") return listingIsShop(listing);
   if (key === "warehouse") return listingIsWarehouse(listing);

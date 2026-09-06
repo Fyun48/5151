@@ -202,6 +202,13 @@ test("housing kind filters can combine with 特別關注", () => {
   assert.deepEqual(toggleHousingKind(["elevator"], "apartment"), ["elevator", "apartment"]);
   assert.deepEqual(toggleHousingKind(["shop"], "warehouse"), ["shop", "warehouse"]);
   assert.equal(matchesHousingKind({ title: "電梯大樓", kind_name: "整層住家", tags: ["電梯大樓"] }, "elevator,apartment"), true);
+  assert.equal(matchesHousingKind({ kind_name: "雅房" }, "yafang"), true);
+  assert.equal(matchesHousingKind({ kind_name: "分租套房" }, "share"), true);
+  assert.equal(matchesHousingKind({ kind_name: "分租套房" }, "yafang"), false);
+  assert.equal(matchesHousingKind({ kind_name: "整層住家", title: "青創共生宅" }, "coliving"), true);
+  assert.equal(matchesHousingKind({ kind_name: "整層住家" }, "coliving"), false);
+  assert.deepEqual(toggleHousingKind(["suite"], "yafang"), ["yafang"]);
+  assert.deepEqual(toggleHousingKind(["yafang"], "share"), ["share"]);
   assert.equal(matchesListingSources({ source: "sinyi" }, "591,sinyi"), true);
   assert.equal(matchesListingSources({ source: "housefun" }, "591"), false);
   assert.equal(canUseListingSourceFilter({ role: "admin", plan: "free" }), true);
