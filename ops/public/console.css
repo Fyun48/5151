@@ -1,0 +1,65 @@
+:root {
+  --ink: #1f2933;
+  --muted: #6b7684;
+  --line: #e2e6ea;
+  --paper: #ffffff;
+  --bg: #f5f6f8;
+  --accent: #2f6f4f;
+  --danger: #b3261e;
+  --ok: #2f6f4f;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Noto Sans TC", sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+}
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  background: var(--paper);
+  border-bottom: 1px solid var(--line);
+}
+.topbar h1 { margin: 0; font-size: 20px; }
+.sub { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+.who { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 14px; }
+main { max-width: 1000px; margin: 0 auto; padding: 20px; display: grid; gap: 16px; }
+.card {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px 18px;
+}
+.card h2 { margin: 0 0 8px; font-size: 16px; }
+.hint { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+.row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.grow { flex: 1; }
+label { display: block; font-size: 13px; margin: 10px 0 4px; }
+input {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 14px;
+}
+button {
+  cursor: pointer;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 700;
+}
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; margin-top: 14px; }
+.msg { min-height: 18px; font-size: 13px; margin: 8px 0 0; }
+.msg.err { color: var(--danger); }
+.msg.ok { color: var(--ok); }
+.kv { font-size: 13px; color: var(--muted); white-space: pre-wrap; word-break: break-word; }
+.tbl { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
+.tbl th, .tbl td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.tbl th { color: var(--muted); font-weight: 700; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }

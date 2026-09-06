@@ -6,9 +6,15 @@
       "name": "v3-dev-server",
       "command": "AUTH_EMAIL=\"${AUTH_EMAIL:-demo@example.com}\" AUTH_PASSWORD=\"${AUTH_PASSWORD:-demopass123}\" npm run dev:v3",
       "description": "吉比租房物件追蹤 v3 開發伺服器（Express + node --watch，埠 5153，資料寫入 data-v3/v3.db）。預設管理員登入 demo@example.com / demopass123，可用 AUTH_EMAIL / AUTH_PASSWORD secrets 覆寫。開啟 http://localhost:5153"
+    },
+    {
+      "name": "ops-dev-server",
+      "command": "AUTH_EMAIL=\"${AUTH_EMAIL:-demo@example.com}\" AUTH_PASSWORD=\"${AUTH_PASSWORD:-demopass123}\" npm run dev:ops",
+      "description": "維運自動化 Ops 服務（Phase 1 骨架，Express + node --watch，埠 5154，資料寫入 data-ops/ops.db）。預設只綁 127.0.0.1、不對外公開；Owner 登入沿用 AUTH_EMAIL / AUTH_PASSWORD。開啟 http://localhost:5154"
     }
   ],
   "ports": [
-    { "name": "web", "port": 5153 }
+    { "name": "web", "port": 5153 },
+    { "name": "ops", "port": 5154 }
   ]
 }
