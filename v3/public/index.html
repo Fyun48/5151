@@ -14,6 +14,18 @@
   <title>吉比租房物件追蹤</title>
   <style>
     * { box-sizing: border-box; }
+    /* 全站統一的淺色細卷軸（橫向 chip 列與各面板同一套色系） */
+    * { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb {
+      background-color: var(--line);
+      border-radius: 999px;
+      border: 3px solid transparent;
+      background-clip: content-box;
+    }
+    ::-webkit-scrollbar-thumb:hover { background-color: var(--muted); }
+    ::-webkit-scrollbar-corner { background: transparent; }
     html, body {
       max-width: 100%;
       overflow-x: clip;
@@ -1971,8 +1983,9 @@
         max-height: none;
       }
       body.panel-collapsed .list-head-sticky:not(.filter-compact) {
-        position: static;
-        max-height: min(42vh, calc(100dvh - 56px - 220px - env(safe-area-inset-bottom, 0px)));
+        position: sticky;
+        top: 6px;
+        max-height: min(72vh, calc(100dvh - 56px - 96px - env(safe-area-inset-bottom, 0px)));
         overflow-x: hidden;
         overflow-y: auto;
       }
@@ -2126,8 +2139,11 @@
         top: 0;
         z-index: 6;
         background: var(--paper);
-        padding: 4px 0 12px;
+        padding: 10px 0 12px;
+        margin-bottom: 8px;
+        border-bottom: 1px solid var(--line);
       }
+      #settingsPanel .panel-toolbar { margin-bottom: 12px; }
       #settingsPanel .header-profiles {
         position: static;
         top: auto;
@@ -2138,13 +2154,13 @@
         position: fixed;
         left: 0;
         right: 0;
-        bottom: 56px;
-        top: auto;
+        top: 52px;
+        bottom: calc(56px + env(safe-area-inset-bottom, 0px));
         width: 100%;
         max-width: 100%;
         z-index: 130;
-        max-height: min(78vh, calc(100vh - 130px));
         overflow: auto;
+        overscroll-behavior: contain;
         border-radius: 20px 20px 0 0;
         box-shadow: 0 -12px 40px rgba(26, 43, 51, 0.18);
       }
