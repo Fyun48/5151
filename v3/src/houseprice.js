@@ -187,6 +187,78 @@ export function parseHpListHtml(html) {
   return { total: total || items.length, items };
 }
 
+/** 5168 物件明細頁：`現況/型態/坪數/樓層/格局/車位/社區` 是一組 label→value span。
+    列表頁常缺總樓層與社區，明細頁才完整，故用它補齊同屋源指紋需要的欄位。 */
+export function parseHpDetailHtml(html) {
+  const source = String(html || "");
+  const fields = {};
+  const re = /<span class="mr-3 text-c-dark-300">([^<]+)<\/span><span class="text-c-dark-900">([\s\S]*?)<\/span>/g;
+  let m;
+  while ((m = re.exec(source))) {
+    const label = stripTags(m[1]).trim();
+    const value = stripTags(m[2]).trim();
+    if (label && !(label in fields)) fields[label] = value;
+  }
+  const cleanCommunity = (value) => {
+    const v = String(value || "").trim();
+    if (!v || /^[-–—]$/.test(v) || v === "無" || v === "無社區") return "";
+    return v;
+  };
+  const floorName = String(fields["樓層"] || "").replace(/樓\s*$/, "").replace(/\s+/g, "").trim();
+  // 部分（多為 591 轉入的純數字 id）明細頁沒有 label span，只有 meta description，用它補地址／坪數／格局／現況。
+  const descMatch = source.match(/<meta[^>]*name="description"[^>]*content="([^"]*)"/i);
+  const desc = descMatch ? decodeEntities(descMatch[1]) : "";
+  const addrMeta = source.match(/位於([^租,，]+?)(?:租金|[,，]|坪數|$)/) || desc.match(/位於([^租,，]+?)(?:租金|[,，]|坪數|$)/);
+  const descArea = desc.match(/坪數\s*([\d.]+)/) || desc.match(/([\d.]+)\s*坪/);
+  const descLayout = [...desc.matchAll(/(\d+\s*房[\d廳衛陽台\s]*)/g)]
+    .map((m) => m[1].replace(/\s+/g, ""))
+    .sort((a, b) => b.length - a.length)[0] || "";
+  const areaName = String(fields["坪數"] || "").replace(/\s+/g, "").trim()
+    || (descArea ? `${descArea[1].replace(/\.0$/, "")}坪` : "");
+  const layout = String(fields["格局"] || "").replace(/\s+/g, "").trim() || descLayout;
+  return {
+    floorName,
+    community: cleanCommunity(fields["社區"]),
+    areaName,
+    layout,
+    kind: kindFromHpText(fields["現況"] || "") || kindFromHpText(fields["型態"] || "") || kindFromHpText(desc),
+    buildingType: String(fields["型態"] || "").trim(),
+    parking: String(fields["車位"] || "").trim(),
+    address: addrMeta ? addrMeta[1].trim() : "",
+    fields,
+  };
+}
+
+/** 用明細頁補齊列表頁缺的樓層／社區／坪數／格局／現況，並重算同屋源指紋 source_key。 */
+export function enrichHpListingFromDetail(row, detail, { regionId, sectionId } = {}) {
+  if (!row || !detail) return row;
+  const next = { ...row };
+  let changed = false;
+  if (!next.floor_name && detail.floorName) { next.floor_name = detail.floorName; changed = true; }
+  if (!next.area_name && detail.areaName) { next.area_name = detail.areaName; }
+  if (!next.layout && detail.layout) { next.layout = detail.layout; }
+  if ((!next.kind_name || next.kind_name === "") && detail.kind) { next.kind_name = detail.kind; }
+  if (!next.community_name && detail.community) {
+    next.community_name = detail.community;
+    let tags = [];
+    try { tags = JSON.parse(next.tags || "[]"); } catch { tags = []; }
+    if (!tags.includes(detail.community)) tags.push(detail.community);
+    next.tags = JSON.stringify(tags);
+    changed = true;
+  }
+  if (changed) {
+    next.source_key = listingSourceKey({
+      regionId: Number(regionId) || 0,
+      sectionId: Number(sectionId) || 0,
+      address: next.address,
+      floorName: next.floor_name,
+      areaName: next.area_name,
+      layout: next.layout,
+    });
+  }
+  return next;
+}
+
 export function normalizeHpItem(item, { regionId, sectionId } = {}) {
   const id = String(item?.id || "").trim();
   const kindName = item?.kind || kindFromHpText(item?.text);
@@ -276,6 +348,7 @@ export async function fetchHpCoveringListings(jobs, options = {}) {
   const getHtml = options.getHtml || defaultGetHtml;
   const batches = [];
   const seen = new Set();
+  let detailBudget = Math.max(0, Number(options.detailLimit ?? 30));
 
   for (const job of jobs || []) {
     const regionId = Number(job.regionId) || 0;
@@ -303,7 +376,7 @@ export async function fetchHpCoveringListings(jobs, options = {}) {
         for (const item of result.items) {
           const id = String(item.id || "");
           if (!id || seen.has(id)) continue;
-          const row = normalizeHpItem(item, { regionId, sectionId });
+          let row = normalizeHpItem(item, { regionId, sectionId });
           if (!row) continue;
           if (!keepHpListing(row, {
             ...options,
@@ -311,6 +384,15 @@ export async function fetchHpCoveringListings(jobs, options = {}) {
             priceMax: job.priceMax,
           })) continue;
           seen.add(id);
+          if (detailBudget > 0 && (!row.floor_name || !row.community_name)) {
+            try {
+              const detail = parseHpDetailHtml(await getHtml(hpDetailUrl(id)));
+              row = enrichHpListingFromDetail(row, detail, { regionId, sectionId });
+              detailBudget -= 1;
+              const gap = options.detailGapMs ?? options.gapMs ?? 300;
+              if (gap > 0) await new Promise((resolve) => setTimeout(resolve, gap));
+            } catch { /* 明細補抓失敗就用列表資料 */ }
+          }
           listings.push(row);
         }
         if (result.items.length < HP_PAGE_ROWS || page * HP_PAGE_ROWS >= sidTotal) break;
