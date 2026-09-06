@@ -238,14 +238,24 @@ export function enrichHpListingFromDetail(row, detail, { regionId, sectionId } =
   if (!next.area_name && detail.areaName) { next.area_name = detail.areaName; }
   if (!next.layout && detail.layout) { next.layout = detail.layout; }
   if ((!next.kind_name || next.kind_name === "") && detail.kind) { next.kind_name = detail.kind; }
+  let tags = null;
+  const ensureTags = () => {
+    if (tags) return tags;
+    try { tags = JSON.parse(next.tags || "[]"); } catch { tags = []; }
+    if (!Array.isArray(tags)) tags = [];
+    return tags;
+  };
   if (!next.community_name && detail.community) {
     next.community_name = detail.community;
-    let tags = [];
-    try { tags = JSON.parse(next.tags || "[]"); } catch { tags = []; }
-    if (!tags.includes(detail.community)) tags.push(detail.community);
-    next.tags = JSON.stringify(tags);
+    const t = ensureTags();
+    if (!t.includes(detail.community)) t.push(detail.community);
     changed = true;
   }
+  if (detail.parking && /車位/.test(detail.parking) && !/^無/.test(detail.parking)) {
+    const t = ensureTags();
+    if (!t.includes(detail.parking)) t.push(detail.parking);
+  }
+  if (tags) next.tags = JSON.stringify(tags);
   if (changed) {
     next.source_key = listingSourceKey({
       regionId: Number(regionId) || 0,

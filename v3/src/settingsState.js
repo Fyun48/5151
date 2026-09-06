@@ -38,6 +38,7 @@ export const PROFILE_FIELDS = [
   "priceMaxIncludesExtras",
   "areaMax",
   "excludeRooftop",
+  "hasParking",
   "offlineConfirmDays",
 ];
 
@@ -214,6 +215,7 @@ export function hydrateSettings(stored, defaults, { admin = false, plan = "free"
   next.priceMin = Math.max(0, Number(next.priceMin) || 0);
   next.priceMax = Math.max(0, Number(next.priceMax) || 0);
   next.priceMaxIncludesExtras = next.priceMaxIncludesExtras === true;
+  next.hasParking = next.hasParking === true;
   return next;
 }
 
@@ -263,6 +265,7 @@ export function applySettingPatch(current, partial = {}, { admin = false, plan =
   if (next.notificationsPaused) next.memberFetchDueAt = "";
   applyMemberScheduleLocks(next, { admin, plan });
   next.excludeRooftop = next.excludeRooftop !== false;
+  next.hasParking = next.hasParking === true;
   next.wholeFloorOnly = next.wholeFloorOnly === true;
   next.excludeLowFloors = next.excludeLowFloors !== false;
   if (!Object.prototype.hasOwnProperty.call(patch, "dataEpoch")) {

@@ -630,6 +630,9 @@ test("self listing form and in-site detail stay on this site", () => {
   assert.match(html, /compare-open/);
   assert.match(html, /更多條件 · /);
   assert.match(html, /id="excludeLowFloors"/);
+  assert.match(html, /id="hasParking"/);
+  assert.match(html, /有車位/);
+  assert.match(html, /function listingHasParkingClient/);
   assert.match(html, /class="chip-row view-checks"/);
   assert.doesNotMatch(html, /class="view-filters"/);
   assert.doesNotMatch(html, /persistViewFilters/);

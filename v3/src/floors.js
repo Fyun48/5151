@@ -23,6 +23,12 @@ export function listingHasElevator(listing) {
   return /有電梯|電梯大樓|電梯公寓/.test(hay);
 }
 
+export function listingHasParking(listing) {
+  const hay = `${listing.title || ""} ${listing.kind_name || ""} ${listing.address || ""} ${tagText(listing)}`;
+  if (/無車位|沒有車位|不含車位|不附車位|無停車/.test(hay)) return false;
+  return /車位|停車位|平面車位|機械車位|坡道車位|含車位|附車位|可停車/.test(hay);
+}
+
 export function listingIsApartment(listing) {
   const hay = `${listing.title || ""} ${listing.kind_name || ""} ${listing.address || ""} ${tagText(listing)}`;
   if (/電梯大樓/.test(hay)) return false;
@@ -202,6 +208,9 @@ export function passesDisplayFilters(listing, settings = {}, { skipWholeFloor = 
     return false;
   }
   if (settings.excludeRooftop !== false && isRooftopAddition(listing)) {
+    return false;
+  }
+  if (settings.hasParking === true && !listingHasParking(listing)) {
     return false;
   }
   return true;
