@@ -451,9 +451,11 @@
       <div id="housingRows"></div>
       <div class="row" style="margin-top:10px">
         <button type="button" class="ghost" id="housingAdd">新增一則</button>
+        <button type="button" class="ghost" id="housingRefresh">立即更新開放資料</button>
         <button type="button" class="ghost" id="housingReset">還原預設</button>
         <button type="button" class="primary" id="housingSave">儲存居住數據</button>
       </div>
+      <p class="hint">「立即更新開放資料」會抓內政部戶政司等來源，把雙北與全國戶籍人口等以「自動更新」標記寫入（系統每天也會自動跑一次）。</p>
       <p class="msg" id="housingMsg"></p>
     </section>
       </div>
@@ -1829,6 +1831,21 @@
           setMsg("housingMsg", error.message);
         } finally {
           $("housingSave").disabled = false;
+        }
+      };
+      $("housingRefresh").onclick = async () => {
+        $("housingRefresh").disabled = true;
+        setMsg("housingMsg", "抓取中…（可能需數秒）");
+        try {
+          const res = await fetch("/api/admin/housing-data/refresh", { method: "POST" });
+          const data = await readApi(res);
+          if (!res.ok || !data.ok) throw new Error(data.error || "更新失敗");
+          if (data.data) fillHousing(data.data);
+          setMsg("housingMsg", `已更新 ${data.count || 0} 筆${(data.errors && data.errors.length) ? `（${data.errors.length} 個來源失敗）` : ""}`, true);
+        } catch (error) {
+          setMsg("housingMsg", error.message);
+        } finally {
+          $("housingRefresh").disabled = false;
         }
       };
       $("housingReset").onclick = async () => {
