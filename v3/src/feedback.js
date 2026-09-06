@@ -1,5 +1,6 @@
 // 使用者回饋（bug 回報／功能建議／其他）。
 // 設計目標：使用者輸入越少越好，系統自動補齊情境，方便日後自動化分類與優先排序。
+import { enqueueFeedbackOutbox } from "./feedbackOutbox.js";
 
 export const FEEDBACK_KINDS = [
   { id: "bug", label: "回報問題", hint: "哪裡怪怪的、壞掉、看到錯誤" },
@@ -166,6 +167,42 @@ export function createFeedback(db, userId, input = {}, now = new Date()) {
      VALUES (?, ?, ?, ?, ?, 'new', '', ?, ?)`,
   ).run(uid, kind, trimmedBody, contact, contextText, stamp, stamp);
   return { ok: true, id: Number(result.lastInsertRowid) };
+}
+
+// Phase 2：原子地建立 feedback 與其初始 outbox 事件（同一交易）。
+// 不變式：一筆成功寫入的 feedback ⇔ 一筆初始 outbox 事件存在。
+// 正常 Product 執行路徑一律 enqueue=true（見 db.js submitFeedback，不受任何 feature flag 影響）。
+// enqueue 參數僅供測試/緊急用途；不得在正常執行時關閉而違反不變式。
+export function createFeedbackWithOutbox(db, userId, input = {}, { enqueue = true, now = new Date() } = {}) {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const res = createFeedback(db, userId, input, now);
+    if (enqueue && res.id > 0) {
+      const row = db.prepare("SELECT * FROM feedback WHERE id = ?").get(res.id);
+      const ctx = parseContext(row.context);
+      enqueueFeedbackOutbox(db, {
+        feedbackId: res.id,
+        data: {
+          source: "v3",
+          external_feedback_id: res.id,
+          user_ref: Number(row.user_id) || 0,
+          kind: row.kind,
+          content: row.body,
+          contact: row.contact || "",
+          context: ctx,
+          app_version: ctx.version || null,
+          submitted_at: row.created_at,
+          trust_level: "untrusted",
+        },
+        now,
+      });
+    }
+    db.exec("COMMIT");
+    return res;
+  } catch (err) {
+    try { db.exec("ROLLBACK"); } catch { /* keep original error */ }
+    throw err;
+  }
 }
 
 function parseContext(raw) {

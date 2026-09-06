@@ -135,6 +135,8 @@ import { buildDemoState } from "./demo.js";
 import { backfillListingCoords, backfillListingMrt, backfillListingRoutes, flushPendingNotifications, isWatchIntervalPending, runWatch } from "./watcher.js";
 import { LIST_PAGE_SIZE, isListingGoneError, probeListingAlive } from "./client591.js";
 import { probeHpListingAlive } from "./houseprice.js";
+import { deliveryConfigFromEnv, startDeliveryLoop } from "./opsDelivery.js";
+import { opsDeliveryDb } from "./db.js";
 import { refreshHousingData } from "./housingFetch.js";
 import { APP_NAME, APP_VERSION } from "./brand.js";
 import { profileNameOrDraft } from "./settingsState.js";
@@ -1768,6 +1770,12 @@ app.listen(PORT, HOST, () => {
   // 居住數據：開站 30 秒後補一次、之後每天自動抓開放資料（失敗不影響服務）
   setTimeout(runHousingRefresh, 30_000);
   setInterval(runHousingRefresh, 24 * 60 * 60 * 1000);
+  // Phase 2：非同步 feedback → Ops 遞送。預設關閉（需 OPS_FEEDBACK_DELIVERY=1 + OPS_INGEST_URL + OPS_INGEST_SECRET）。
+  const opsDelivery = deliveryConfigFromEnv();
+  if (opsDelivery.enabled) {
+    startDeliveryLoop(opsDeliveryDb(), opsDelivery, { log: (tag, info) => console.log(tag, JSON.stringify(info)) });
+    console.log(`Ops feedback 遞送已啟用：每 ${opsDelivery.intervalMs}ms 一次 → ${opsDelivery.url}`);
+  }
   console.log(`${APP_NAME}：http://${HOST}:${PORT}`);
   if (envAdminConfigured()) {
     console.log(`管理員帳號：${adminEmail()}（也可註冊新會員）`);

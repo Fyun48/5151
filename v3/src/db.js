@@ -75,11 +75,17 @@ import {
 import {
   ensureFeedbackSchema,
   createFeedback as createFeedbackOn,
+  createFeedbackWithOutbox as createFeedbackWithOutboxOn,
   listFeedback as listFeedbackOn,
   updateFeedback as updateFeedbackOn,
   feedbackStats as feedbackStatsOn,
   feedbackMeta,
 } from "./feedback.js";
+import {
+  ensureFeedbackOutboxSchema,
+  listOutbox as listOutboxOn,
+  outboxStats as outboxStatsOn,
+} from "./feedbackOutbox.js";
 import {
   closeSelfListing as closeSelfListingOn,
   createSelfListing as createSelfListingOn,
@@ -509,6 +515,7 @@ try {
 }
 ensureDemandSchema(db);
 ensureFeedbackSchema(db);
+ensureFeedbackOutboxSchema(db);
 ensureSelfListingSchema(db);
 ensurePushSchema(db);
 
@@ -1192,8 +1199,22 @@ export function reportDemandItem(userId, input) {
 
 export { demandMeta, selfListingMeta, isSelfListingId };
 
+// Phase 2：feedback 與其初始 outbox 事件永遠在同一交易原子建立（不變式：accepted feedback ⇔ outbox 事件）。
+// 傳輸開關（OPS_FEEDBACK_DELIVERY）只影響背景 worker 是否遞送，不影響 outbox 是否建立。
 export function submitFeedback(userId, input) {
-  return createFeedbackOn(db, userId, input);
+  return createFeedbackWithOutboxOn(db, userId, input);
+}
+
+export function listFeedbackOutbox(opts = {}) {
+  return listOutboxOn(db, opts);
+}
+
+export function feedbackOutboxStats() {
+  return outboxStatsOn(db);
+}
+
+export function opsDeliveryDb() {
+  return db;
 }
 
 export function listFeedbackItems(opts = {}) {
