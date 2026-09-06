@@ -209,6 +209,56 @@
       background: var(--accent-mist);
       cursor: not-allowed;
     }
+    .legal-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 60;
+      display: grid;
+      place-items: center;
+      padding: 16px;
+    }
+    .legal-overlay[hidden] { display: none; }
+    .legal-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(20, 24, 24, 0.45);
+    }
+    .legal-panel {
+      position: relative;
+      width: min(480px, calc(100vw - 24px));
+      max-height: min(80vh, 620px);
+      display: flex;
+      flex-direction: column;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      box-shadow: 0 12px 40px rgba(20, 24, 24, 0.18);
+      overflow: hidden;
+    }
+    .legal-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+    }
+    .legal-head h2 {
+      margin: 0;
+      font-family: "Noto Serif TC", "Source Han Serif TC", serif;
+      font-size: 17px;
+      font-weight: 600;
+    }
+    .legal-head button.ghost { margin: 0; }
+    .legal-body {
+      padding: 16px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      line-height: 1.7;
+      font-size: 14px;
+      color: var(--ink);
+      -webkit-overflow-scrolling: touch;
+    }
   </style>
 </head>
 <body>
@@ -220,7 +270,7 @@
         <p class="brand-en" data-brand-en>JibbyRentH</p>
       </div>
     </div>
-    <p class="sub">想先看實際畫面，可以<a href="/">先看示範列表</a>；登入後才會載入你自己的條件與關注。</p>
+    <p class="sub"><a href="/">網站功能畫面示範(含連結)</a></p>
     <div class="tabs">
       <button type="button" class="on" id="tabLogin">登入</button>
       <button type="button" id="tabRegister">註冊</button>
@@ -275,13 +325,13 @@
       </label>
       <label class="check">
         <input id="accept" type="checkbox" required />
-        <span id="acceptDisclaimerLabel">我已閱讀並同意<a href="/disclaimer.html" target="_blank" rel="noopener">免責聲明</a>：這是免費系統，贊助是自願的。</span>
+        <span id="acceptDisclaimerLabel">我已閱讀並同意<a href="/disclaimer.html" data-legal="disclaimer" target="_blank" rel="noopener">免責聲明</a>：這是免費系統，贊助是自願的。</span>
       </label>
       <label class="check">
         <input id="acceptPrivacy" type="checkbox" required />
         <span id="acceptPrivacyLabel">我已閱讀並同意個資說明：個人資料只用於本站服務，預設不公開。</span>
       </label>
-      <p class="oauth-kicker" id="registerPolicy" hidden>超過約兩個月沒登入，系統會暫停向外抓取與通知；帳號仍可登入。再登入後會自動恢復，不會另外寄信。一年未使用是否停權刪除仍在評估，尚未執行。</p>
+      <p class="oauth-kicker" id="registerPolicy" hidden><a href="/disclaimer.html" data-legal="idle" target="_blank" rel="noopener">帳號閒置與停用說明</a></p>
       <div class="bot">
         <p class="bot-kicker">請證明你不是機器人：輸入圖中的 4 個字</p>
         <div class="bot-row">
@@ -314,6 +364,16 @@
     <div class="ad-slot" id="adLogin" hidden></div>
     <footer class="site-footer">reversal play tech | 逆遊科技 <span class="site-ver" style="color:var(--muted);font-size:11px">ver. 3.47</span></footer>
   </div>
+  <div class="legal-overlay" id="legalOverlay" hidden>
+    <div class="legal-backdrop" data-legal-close></div>
+    <div class="legal-panel" role="dialog" aria-modal="true" aria-labelledby="legalTitle">
+      <div class="legal-head">
+        <h2 id="legalTitle">免責聲明</h2>
+        <button type="button" class="ghost" id="legalClose" data-legal-close aria-label="關閉">關閉</button>
+      </div>
+      <div class="legal-body" id="legalBody"></div>
+    </div>
+  </div>
   <script src="/mascot.js"></script>
   <script>
     const $ = (id) => document.getElementById(id);
@@ -324,6 +384,39 @@
     const verifyState = new URLSearchParams(location.search).get("verify");
     const oauthState = new URLSearchParams(location.search).get("oauth");
     let captchaId = "";
+    let legalCopyCache = null;
+    let legalActiveTrigger = null;
+    const IDLE_POLICY_TEXT = "超過約兩個月沒有登入，系統會暫停主動向外抓取與通知，以節省資源；你再登入後會自動恢復，不會另外寄信。若長達一年完全沒使用，未來可能停權或刪除帳號（目前仍在評估，尚未執行）。";
+    function openLegal(kind) {
+      const overlay = $("legalOverlay");
+      if (!overlay) return;
+      const isIdle = kind === "idle";
+      $("legalTitle").textContent = isIdle ? "帳號閒置與停用說明" : "免責聲明";
+      const body = isIdle ? IDLE_POLICY_TEXT : (legalCopyCache?.disclaimer || legalCopyCache?.text || "");
+      $("legalBody").textContent = body || "載入中…";
+      legalActiveTrigger = document.activeElement;
+      overlay.hidden = false;
+      $("legalClose")?.focus();
+      if (!body && !isIdle) {
+        fetch("/api/disclaimer", { cache: "no-store" }).then((r) => r.json()).then((copy) => {
+          legalCopyCache = copy;
+          if (!$("legalOverlay").hidden) $("legalBody").textContent = copy?.disclaimer || copy?.text || "無法載入，請稍後再試。";
+        }).catch(() => { $("legalBody").textContent = "無法載入，請稍後再試。"; });
+      }
+    }
+    function closeLegal() {
+      const overlay = $("legalOverlay");
+      if (!overlay || overlay.hidden) return;
+      overlay.hidden = true;
+      if (legalActiveTrigger && legalActiveTrigger.focus) legalActiveTrigger.focus();
+      legalActiveTrigger = null;
+    }
+    document.addEventListener("click", (ev) => {
+      const trigger = ev.target.closest("[data-legal]");
+      if (trigger) { ev.preventDefault(); openLegal(trigger.dataset.legal); return; }
+      if (ev.target.closest("[data-legal-close]")) { ev.preventDefault(); closeLegal(); }
+    });
+    document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") closeLegal(); });
     function clearNotes() {
       $("err").textContent = "";
       $("ok").textContent = "";
@@ -366,7 +459,7 @@
       if ($("registerPolicy")) $("registerPolicy").hidden = !register;
       if ($("oauthIntro")) {
         $("oauthIntro").textContent = register
-          ? "用 Google／LINE／Facebook 註冊。請先勾選下方免責與個資，再按社群鈕；新帳號仍要完成開通信。"
+          ? ""
           : "用 Google／LINE／Facebook 登入。後台未開通的鈕會反灰。";
       }
       clearNotes();
@@ -450,10 +543,11 @@
         $("oauthBox").dataset.empty = "0";
       }
       if ($("oauthHint")) {
-        $("oauthHint").hidden = false;
-        $("oauthHint").textContent = off.length === 3
-          ? "後台尚未開通社群登入。請先用 Email 註冊；開通後這三顆才能用。"
+        const hintText = off.length === 3
+          ? ""
           : (off.length ? `${off.join("、")} 後台尚未開通，暫時不能按。` : "可用社群帶入信箱。新帳號仍要點開通信。");
+        $("oauthHint").textContent = hintText;
+        $("oauthHint").hidden = !hintText;
       }
     }
     paintOauthButtons();
@@ -464,8 +558,9 @@
     });
     loadCaptcha().catch((error) => { $("err").textContent = error.message; });
     fetch("/api/disclaimer", { cache: "no-store" }).then((r) => r.json()).then((copy) => {
+      legalCopyCache = copy;
       if (copy?.disclaimerCheck && $("acceptDisclaimerLabel")) {
-        $("acceptDisclaimerLabel").innerHTML = `${escLegal(copy.disclaimerCheck)}（<a href="/disclaimer.html" target="_blank" rel="noopener">完整免責聲明</a>）`;
+        $("acceptDisclaimerLabel").innerHTML = `${escLegal(copy.disclaimerCheck)}（<a href="/disclaimer.html" data-legal="disclaimer" target="_blank" rel="noopener">完整免責聲明</a>）`;
       }
       if (copy?.privacyCheck && $("acceptPrivacyLabel")) {
         $("acceptPrivacyLabel").textContent = copy.privacyCheck;
