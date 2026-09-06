@@ -248,6 +248,56 @@ export function applyOpsSchema(db) {
     CREATE TRIGGER IF NOT EXISTS cluster_operation_no_delete BEFORE DELETE ON cluster_operation
       BEGIN SELECT RAISE(ABORT, 'cluster_operation is append-only'); END;
 
+    -- Phase 6：Issue 影響力/頻率評估（決定性、可解釋、版本化、歷史化）。不投票、不建 proposal、不觸發任何開發/發布。
+    CREATE TABLE IF NOT EXISTS issue_impact_assessment (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      issue_id INTEGER NOT NULL,
+      scoring_version TEXT NOT NULL,
+      membership_fingerprint TEXT NOT NULL,
+      membership_count INTEGER NOT NULL,
+      current_feedback_count INTEGER NOT NULL,
+      distinct_reporter_count INTEGER NOT NULL,
+      anonymous_feedback_count INTEGER NOT NULL,
+      first_seen_at TEXT,
+      last_seen_at TEXT,
+      feedback_count_24h INTEGER NOT NULL DEFAULT 0,
+      feedback_count_7d INTEGER NOT NULL DEFAULT 0,
+      feedback_count_30d INTEGER NOT NULL DEFAULT 0,
+      recent_velocity REAL,
+      severity_distribution TEXT,
+      category_distribution TEXT,
+      app_version_distribution TEXT,
+      source_distribution TEXT,
+      components TEXT,
+      impact_score REAL NOT NULL,
+      impact_level TEXT NOT NULL,
+      calculated_at TEXT NOT NULL,
+      FOREIGN KEY (issue_id) REFERENCES issue_candidate(id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS idx_impact_issue ON issue_impact_assessment(issue_id, id);
+
+    -- 每 issue 至多一個 CURRENT 影響力評估（下游 Phase 7 只讀此指標，不猜最新）。
+    CREATE TABLE IF NOT EXISTS issue_impact_current (
+      issue_id INTEGER NOT NULL PRIMARY KEY,
+      assessment_id INTEGER NOT NULL,
+      membership_fingerprint TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (assessment_id) REFERENCES issue_impact_assessment(id) ON DELETE RESTRICT
+    );
+    -- DB 層不變式：current 指標必須指向「同一 issue」的評估。
+    CREATE TRIGGER IF NOT EXISTS iic_guard_insert BEFORE INSERT ON issue_impact_current
+    BEGIN
+      SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM issue_impact_assessment a WHERE a.id = NEW.assessment_id AND a.issue_id = NEW.issue_id
+      ) THEN RAISE(ABORT, 'impact current must reference an assessment of the same issue') END;
+    END;
+    CREATE TRIGGER IF NOT EXISTS iic_guard_update BEFORE UPDATE ON issue_impact_current
+    BEGIN
+      SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM issue_impact_assessment a WHERE a.id = NEW.assessment_id AND a.issue_id = NEW.issue_id
+      ) THEN RAISE(ABORT, 'impact current must reference an assessment of the same issue') END;
+    END;
+
     CREATE INDEX IF NOT EXISTS idx_state_entity_type ON state_entity(entity_type, state);
     CREATE INDEX IF NOT EXISTS idx_state_transition_entity ON state_transition(entity_type, entity_id, id);
     CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_type, entity_id, id);
