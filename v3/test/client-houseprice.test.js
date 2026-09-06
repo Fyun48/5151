@@ -8,6 +8,7 @@ import {
   HP_SOURCE,
   enrichHpListingFromDetail,
   fetchHpCoveringListings,
+  probeHpListingAlive,
   hpDetailUrl,
   hpListUrl,
   hpPostIdFromCase,
@@ -103,6 +104,23 @@ test("fetchHpCoveringListings enriches suite listings from the detail page", asy
   assert.ok(suite);
   assert.equal(suite.floor_name, "4/4");
   assert.equal(suite.community_name, "御陽明");
+});
+
+test("probeHpListingAlive flags 404 and gone pages, keeps normal pages alive", async () => {
+  const orig = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => ({ ok: false, status: 404, text: async () => "" });
+    assert.equal(await probeHpListingAlive("https://rent.houseprice.tw/house/a"), false);
+    globalThis.fetch = async () => ({ ok: true, status: 200, text: async () => "<html>正常出租物件 樓層 4/4</html>" });
+    assert.equal(await probeHpListingAlive("https://rent.houseprice.tw/house/b"), true);
+    globalThis.fetch = async () => ({ ok: true, status: 200, text: async () => "<html>此物件已下架</html>" });
+    assert.equal(await probeHpListingAlive("https://rent.houseprice.tw/house/c"), false);
+    globalThis.fetch = async () => ({ ok: false, status: 503, text: async () => "" });
+    assert.equal(await probeHpListingAlive("https://rent.houseprice.tw/house/d"), true);
+    assert.equal(await probeHpListingAlive(""), true);
+  } finally {
+    globalThis.fetch = orig;
+  }
 });
 
 test("fetchHpCoveringListings uses injected HTML", async () => {
