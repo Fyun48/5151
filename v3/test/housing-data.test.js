@@ -18,6 +18,8 @@ test("housing data defaults and normalization", () => {
   const d = defaultHousingData();
   assert.ok(d.entries.length >= 5);
   assert.ok(d.entries.some((e) => e.category === "vacancy"));
+  assert.ok(d.entries.some((e) => e.category === "mobility"));
+  assert.ok(d.entries.some((e) => e.category === "foreign"));
   assert.ok(d.entries.every((e) => HOUSING_DATA_CATEGORIES.some((c) => c.id === e.category)));
   const pub = publicHousingData(undefined);
   assert.ok(Array.isArray(pub.categories) && pub.categories.length === HOUSING_DATA_CATEGORIES.length);
