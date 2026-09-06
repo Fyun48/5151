@@ -23,7 +23,8 @@ export const DEFAULT_HOUSING_DATA_ENTRIES = [
   { category: "vacancy", title: "低度用電住宅（空屋）比率", value: "待更新", note: "以台電低度用電住宅估算，非戶籍空屋", source: "內政部不動產資訊平台", sourceUrl: "https://pip.moi.gov.tw/V3/E/SCRE0104.aspx" },
   { category: "income", title: "受僱員工全時薪資中位數／平均數", value: "待更新", note: "可分縣市與行業", source: "行政院主計總處 薪情平台", sourceUrl: "https://earnings.dgbas.gov.tw/" },
   { category: "socialhousing", title: "社會住宅興辦進度與各地區比例", value: "待更新", note: "只租不賣；一定比例保留給弱勢，租期有上限", source: "國家住宅及都市更新中心／內政部", sourceUrl: "https://www.hurc.org.tw/" },
-  { category: "foreign", title: "外籍合法在台工作者人數", value: "待更新", note: "產業與社福移工、外國專業人員", source: "勞動部 勞動統計", sourceUrl: "https://statdb.mol.gov.tw/" },
+  { category: "foreign", title: "外籍合法在台工作者人數", value: "待更新", note: "產業與社福移工、外國專業人員", source: "勞動部 勞動統計查詢網", sourceUrl: "https://statdb.mol.gov.tw/" },
+  { category: "mobility", title: "白天／夜間人口與縣市間人口流動", value: "待更新", note: "由電信信令推估白晝、夜間人口差；目前僅政府定期報告釋出，無免費即時 API，依報告更新", source: "內政部 社會經濟資料服務平台（SEGIS）／主計總處 電信信令人口統計", sourceUrl: "https://segis.moi.gov.tw/" },
   { category: "ltc", title: "長照 2.0 服務與申請方式", value: "撥打 1966 長照專線，或洽各縣市長照管理中心", note: "失能、失智照顧、喘息服務、輔具與居家服務", source: "衛生福利部 長期照顧專區", sourceUrl: "https://1966.gov.tw/" },
 ];
 

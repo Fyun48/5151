@@ -16,6 +16,8 @@ function villageRow(site, persons) {
     household_ordinary_f: String(persons - half),
     household_business_m: "0", household_business_f: "0",
     household_single_m: "0", household_single_f: "0",
+    household_ordinary_total: String(Math.round(persons / 2)),
+    household_business_total: "0", household_single_total: "0",
   };
 }
 
@@ -38,6 +40,8 @@ test("fetchRisPopulation aggregates Taipei/New Taipei/national from paged data",
   assert.equal(byTitle["臺北市 戶籍人口"], "1,500 人");
   assert.equal(byTitle["新北市 戶籍人口"], "2,000 人");
   assert.equal(byTitle["全國 戶籍人口"], "3,800 人");
+  assert.equal(byTitle["臺北市 平均每戶人口"], "2.00 人/戶");
+  assert.equal(byTitle["全國 平均每戶人口"], "2.00 人/戶");
   assert.ok(entries.every((e) => e.category === "population" && e.source === "內政部戶政司"));
   assert.match(entries[0].asOf, /民國114年/);
 });
