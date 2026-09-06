@@ -1,25 +1,89 @@
-name: Copy v3 source to CasaOS
+name: Deploy v3 to CasaOS (manual)
 
+# Production 部署一律「明確手動觸發」。合併/push 到 master 不會自動部署 v3。
+# 部署會把指定 commit SHA 的 v3/src、v3/public 與 compose 檔 SCP 到正式 NAS，並重啟 591-tracker-v3 容器。
+#
+# 【必要前提】當本 repo 有其他使用者/App 具 write 權限時，master 的 branch protection / ruleset 為「必要」：
+#   具備對 master 無限制直接 push 權的人，可能直接修改此部署 workflow 本身而繞過以下所有授權檢查。
+#   本任務不自動設定 branch protection；請於 GitHub UI 設定保護 master（限制直接 push、要求 PR/審查）。
 on:
-  push:
-    branches: [master, main]
-    paths:
-      - "v3/src/**"
-      - "v3/public/**"
-      - "docker-compose.yml"
-      - "casaos-compose.yml"
-      - ".github/workflows/deploy-v3.yml"
   workflow_dispatch:
+    inputs:
+      sha:
+        description: "要部署的完整 40 碼 commit SHA（必須可從 origin/master 追溯）"
+        required: true
+      confirmation:
+        description: "輸入 DEPLOY-PRODUCTION 以確認正式部署"
+        required: true
+        default: ""
 
+# 最小權限：只需讀取原始碼。
 permissions:
   contents: read
+
+# 全域 Production 部署鎖：v1/v2/v3/docker 共用同一組，避免對共享 NAS 基礎設施重疊操作。
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
 
 jobs:
   sync-nas-v3:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # environment: production 提供 environment-scoped secrets／部署歷史／未來保護規則；
+    # Required Reviewers 視 repo 方案而定為「可選」的額外防禦，不作為唯一保護。
+    environment: production
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - name: Authorize production deployment (fail-closed)
+        env:
+          WF_REF: ${{ github.ref }}
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          ALLOWED_ACTOR: ${{ vars.PRODUCTION_DEPLOY_ALLOWED_ACTOR }}
+          CONFIRM: ${{ inputs.confirmation }}
+          DEPLOY_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          # 1) workflow 定義必須來自受保護的 master（避免用任意分支的改過的 workflow 部署）
+          if [ "$WF_REF" != "refs/heads/master" ]; then
+            echo "::error::Production deploy must run from the master workflow definition (got $WF_REF)"; exit 1
+          fi
+          # 2) 部署者 allowlist（未設定即 fail-closed）
+          if [ -z "${ALLOWED_ACTOR:-}" ]; then
+            echo "::error::PRODUCTION_DEPLOY_ALLOWED_ACTOR is not configured; refusing (fail-closed)"; exit 1
+          fi
+          # 同時檢查 actor 與 triggering_actor：re-run 時 github.actor 仍是初始觸發者，
+          # github.triggering_actor 才是本次 re-run 的人；兩者都必須是授權部署者。
+          if [ "$ACTOR" != "$ALLOWED_ACTOR" ]; then
+            echo "::error::actor '$ACTOR' is not the authorized deployer"; exit 1
+          fi
+          if [ "$TRIGGERING_ACTOR" != "$ALLOWED_ACTOR" ]; then
+            echo "::error::triggering actor '$TRIGGERING_ACTOR' is not the authorized deployer (re-run by another user is refused)"; exit 1
+          fi
+          # 3) 明確確認字串
+          if [ "${CONFIRM:-}" != "DEPLOY-PRODUCTION" ]; then
+            echo "::error::confirmation must be exactly DEPLOY-PRODUCTION"; exit 1
+          fi
+          # 4) 部署目標必須是不可變的完整 40 碼 commit SHA
+          if ! printf '%s' "${DEPLOY_SHA:-}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::sha must be a full 40-character commit SHA"; exit 1
+          fi
+      - name: Checkout master (for ancestry validation)
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+      - name: Validate SHA reachable from origin/master, then check it out
+        env:
+          DEPLOY_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin master
+          # 未合併進 master 的 feature 分支 commit 不可部署到 Production
+          if ! git merge-base --is-ancestor "$DEPLOY_SHA" origin/master; then
+            echo "::error::commit $DEPLOY_SHA is not reachable from origin/master; refusing"; exit 1
+          fi
+          git checkout --force "$DEPLOY_SHA"
       - name: Copy v3 app and compose files
         uses: appleboy/scp-action@v0.1.7
         with:

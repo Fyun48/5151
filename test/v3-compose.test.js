@@ -34,12 +34,16 @@ test("CasaOS compose lists v3 as main on port 5153", () => {
   assert.match(casaos, /c5151\.reversalplay\.me/);
 });
 
-test("deploy-v3 workflow recreates only the v3 container", () => {
+test("deploy-v3 workflow recreates only the v3 container (manual dispatch after Phase 3.5)", () => {
   const file = path.join(root, ".github/workflows/deploy-v3.yml");
   assert.equal(existsSync(file), true);
   const yml = readFileSync(file, "utf8");
-  assert.match(yml, /v3\/src\/\*\*/);
-  assert.match(yml, /v3\/public\/\*\*/);
+  // Phase 3.5：改為明確手動觸發，不再由 push 自動部署。
+  const onBlock = yml.match(/\non:\n([\s\S]*?)\n[a-zA-Z]/)?.[1] || "";
+  assert.match(onBlock, /workflow_dispatch:/);
+  assert.doesNotMatch(onBlock, /push:/);
+  // 仍只 SCP 並重建 v3（不動其他容器）。
+  assert.match(yml, /source: "v3\/src,v3\/public/);
   assert.match(yml, /docker compose up -d --no-build --no-deps --force-recreate 591-tracker-v3/);
   assert.equal(/docker compose up[^\n]*591-tracker(?!-v)/.test(yml), false);
 });

@@ -1,24 +1,77 @@
-name: Docker image
+name: Docker image (manual)
 
+# 明確手動觸發：建置並推送映像，並在 CasaOS 上拉取重啟正式容器。
+# 合併/push 到 master（含 package.json 變更）不會自動建置或動到正式站。
 on:
-  push:
-    branches: [master, main]
-    paths:
-      - Dockerfile
-      - package.json
-      - package-lock.json
-      - .github/workflows/docker.yml
   workflow_dispatch:
+    inputs:
+      sha:
+        description: "要建置/部署的完整 40 碼 commit SHA（必須可從 origin/master 追溯）"
+        required: true
+      confirmation:
+        description: "輸入 DEPLOY-PRODUCTION 以確認正式部署"
+        required: true
+        default: ""
 
+# 最小權限：讀原始碼 + 推送 GHCR 映像。
 permissions:
   contents: read
   packages: write
 
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    # 拉取重啟正式容器會用到 NAS 密鑰；限定在 'production' environment。
+    environment: production
     steps:
-      - uses: actions/checkout@v4
+      - name: Authorize production deployment (fail-closed)
+        env:
+          WF_REF: ${{ github.ref }}
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          ALLOWED_ACTOR: ${{ vars.PRODUCTION_DEPLOY_ALLOWED_ACTOR }}
+          CONFIRM: ${{ inputs.confirmation }}
+          DEPLOY_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$WF_REF" != "refs/heads/master" ]; then
+            echo "::error::Production deploy must run from the master workflow definition (got $WF_REF)"; exit 1
+          fi
+          if [ -z "${ALLOWED_ACTOR:-}" ]; then
+            echo "::error::PRODUCTION_DEPLOY_ALLOWED_ACTOR is not configured; refusing (fail-closed)"; exit 1
+          fi
+          # re-run 時 github.actor 仍是初始觸發者，github.triggering_actor 才是本次 re-run 的人；兩者都必須是授權部署者。
+          if [ "$ACTOR" != "$ALLOWED_ACTOR" ]; then
+            echo "::error::actor '$ACTOR' is not the authorized deployer"; exit 1
+          fi
+          if [ "$TRIGGERING_ACTOR" != "$ALLOWED_ACTOR" ]; then
+            echo "::error::triggering actor '$TRIGGERING_ACTOR' is not the authorized deployer (re-run by another user is refused)"; exit 1
+          fi
+          if [ "${CONFIRM:-}" != "DEPLOY-PRODUCTION" ]; then
+            echo "::error::confirmation must be exactly DEPLOY-PRODUCTION"; exit 1
+          fi
+          if ! printf '%s' "${DEPLOY_SHA:-}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::sha must be a full 40-character commit SHA"; exit 1
+          fi
+      - name: Checkout master (for ancestry validation)
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+      - name: Validate SHA reachable from origin/master, then check it out
+        env:
+          DEPLOY_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin master
+          if ! git merge-base --is-ancestor "$DEPLOY_SHA" origin/master; then
+            echo "::error::commit $DEPLOY_SHA is not reachable from origin/master; refusing"; exit 1
+          fi
+          git checkout --force "$DEPLOY_SHA"
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -36,7 +89,7 @@ jobs:
           push: true
           tags: |
             ${{ steps.image.outputs.name }}:latest
-            ${{ steps.image.outputs.name }}:${{ github.sha }}
+            ${{ steps.image.outputs.name }}:${{ inputs.sha }}
       - name: Make GHCR package public
         continue-on-error: true
         env:
