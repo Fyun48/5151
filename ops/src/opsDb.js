@@ -217,6 +217,8 @@ export function applyOpsSchema(db) {
       clustering_version TEXT,
       added_by TEXT NOT NULL DEFAULT 'auto',
       membership_status TEXT NOT NULL DEFAULT 'active',
+      review_flag INTEGER NOT NULL DEFAULT 0,
+      review_reason TEXT,
       reason TEXT,
       active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL,

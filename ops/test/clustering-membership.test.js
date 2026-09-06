@@ -118,23 +118,50 @@ test("6. ambiguous re-evaluation keeps review_required (not counted as current)"
   db.close();
 });
 
-test("7. Owner MOVE is not silently undone by embedding refresh", async () => {
+test("7. Owner MOVE stays current & authoritative under conflicting re-analysis; conflict shown as review metadata", async () => {
   const db = openOpsDb(":memory:");
   const A = seedAnalyzed(db, [1, 0]);
-  const B = seedAnalyzed(db, [1, 0]);
+  seedAnalyzed(db, [1, 0]); // B
   await runEmbeddingOnce(db, { provider: P, ...RUN });
-  // 另建一個空 issue（用第三筆），Owner 把 A 移過去
   const C = seedAnalyzed(db, [0, 1]);
   await runEmbeddingOnce(db, { provider: P, ...RUN });
   const targetIssue = feedbackIssue(db, C.fid);
   moveFeedback(db, { feedbackId: A.fid, toIssueId: targetIssue, actor: "owner:o" });
   assert.equal(feedbackIssue(db, A.fid), targetIssue);
   assert.equal(link(db, A.fid).added_by, "owner");
-  // 重新分析 A 後刷新 → 不得把 Owner 的 MOVE 撤銷
+  // 用「與 target issue（含 C=[0,1]）衝突」的新證據重新分析 A
   reanalyzeWith(db, A.fid, [1, 0]);
   await runEmbeddingOnce(db, { provider: P, ...RUN });
-  assert.equal(feedbackIssue(db, A.fid), targetIssue); // 仍在 Owner 指定的 issue
-  assert.equal(link(db, A.fid).added_by, "owner");
+  // Owner membership 仍是 current 權威成員（不因 AI 衝突而消失）
+  assert.equal(feedbackIssue(db, A.fid), targetIssue);
+  const la = link(db, A.fid);
+  assert.equal(la.added_by, "owner");
+  assert.equal(la.membership_status, "active");
+  const currentIds = getCurrentIssueMembers(db, targetIssue).map((m) => m.feedback_id);
+  assert.ok(currentIds.includes(A.fid)); // 仍被 canonical 查詢視為 current
+  // 衝突以 review-needed 中繼資料呈現
+  assert.equal(la.review_flag, 1);
+  assert.ok(getReviewRequiredMembers(db, targetIssue).some((m) => m.feedback_id === A.fid));
+  db.close();
+});
+
+test("8b. only an explicit later Owner action supersedes an Owner membership", async () => {
+  const db = openOpsDb(":memory:");
+  const A = seedAnalyzed(db, [1, 0]);
+  const C = seedAnalyzed(db, [0, 1]);
+  await runEmbeddingOnce(db, { provider: P, ...RUN });
+  const issueA = feedbackIssue(db, A.fid);
+  const issueC = feedbackIssue(db, C.fid);
+  moveFeedback(db, { feedbackId: A.fid, toIssueId: issueC, actor: "owner:o" });
+  // 多次衝突刷新都不會撤銷 owner 決定
+  reanalyzeWith(db, A.fid, [1, 0]);
+  await runEmbeddingOnce(db, { provider: P, ...RUN });
+  assert.equal(feedbackIssue(db, A.fid), issueC);
+  // 只有明確的後續 Owner MOVE 能取代 owner membership
+  moveFeedback(db, { feedbackId: A.fid, toIssueId: issueA, actor: "owner:o" });
+  assert.equal(feedbackIssue(db, A.fid), issueA);
+  // 歷史 provenance 完整（多筆 link 保留）
+  assert.ok(db.prepare("SELECT COUNT(*) n FROM issue_feedback_link WHERE feedback_id=?").get(A.fid).n >= 3);
   db.close();
 });
 

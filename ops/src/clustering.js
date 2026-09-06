@@ -110,7 +110,8 @@ export function linkFeedback(db, { issueId, feedbackId, analysisId = null, simil
 }
 
 // 群代表：只用「相容 + active + membership_status='active'」的成員 embedding 取 centroid（不混不相容空間）。
-export function issueRepresentative(db, issueId, meta) {
+// excludeFeedbackId：計算某成員自身的一致性時，需把自己排除，避免 centroid 被自己灌水。
+export function issueRepresentative(db, issueId, meta, { excludeFeedbackId = null } = {}) {
   const members = db.prepare(
     `SELECT e.* FROM issue_feedback_link l
      JOIN embedding e ON e.feedback_id = l.feedback_id AND e.status='active'
@@ -118,6 +119,7 @@ export function issueRepresentative(db, issueId, meta) {
   ).all(Number(issueId));
   const vecs = [];
   for (const m of members) {
+    if (excludeFeedbackId != null && Number(m.feedback_id) === Number(excludeFeedbackId)) continue;
     if (!areComparable(meta, embMeta(m))) continue;
     vecs.push(parseVector(m));
   }
@@ -174,10 +176,11 @@ export function getCurrentIssueMembers(db, issueId) {
   ).all(Number(issueId));
 }
 
-// 需人工檢視的成員（stale 證據 / 與 Owner 決定衝突）。
+// 需人工檢視的成員（auto: 非 current 的 review_required；或 owner: current 但 AI 證據衝突 review_flag）。
+// 注意：owner review_flag 成員「仍是 current 權威成員」，只是被標記建議檢視。
 export function getReviewRequiredMembers(db, issueId) {
   return db.prepare(
-    "SELECT * FROM issue_feedback_link WHERE issue_id=? AND active=1 AND membership_status='review_required' ORDER BY id ASC",
+    "SELECT * FROM issue_feedback_link WHERE issue_id=? AND active=1 AND (membership_status='review_required' OR review_flag=1) ORDER BY id ASC",
   ).all(Number(issueId));
 }
 
@@ -196,13 +199,16 @@ export function reevaluateMembershipOnRefresh(db, { feedbackId, config = cluster
     const vec = parseVector(emb);
     const isOwner = String(link.added_by || "").startsWith("owner");
     if (isOwner) {
-      const rep = issueRepresentative(db, link.issue_id, meta);
+      // Owner 決定為權威：membership 永遠維持 current（membership_status 不動）。
+      // 若新 AI 證據衝突，只設「review_flag」中繼資料，不影響 currentness；一致則清除旗標。
+      const rep = issueRepresentative(db, link.issue_id, meta, { excludeFeedbackId: feedbackId });
       const coh = rep ? cosineSimilarity(vec, rep.centroid) : 1;
-      if (link.membership_status === "active" && rep && coh < config.coherence) {
-        db.prepare("UPDATE issue_feedback_link SET membership_status='review_required', analysis_id=?, coherence_score=? WHERE id=?").run(emb.analysis_id, coh, link.id);
-        appendAuditRow(db, { actor: "system", action: "issue.membership.review_required", entityType: "issue_candidate", entityId: String(link.issue_id), data: { feedback_id: Number(feedbackId), reason: "owner_link_conflicts_new_evidence", coherence_score: coh } });
-        return { action: "owner_review_required", issueId: Number(link.issue_id), coherence: coh };
+      if (rep && coh < config.coherence) {
+        db.prepare("UPDATE issue_feedback_link SET review_flag=1, review_reason='ai_evidence_conflicts', analysis_id=?, coherence_score=? WHERE id=?").run(emb.analysis_id, coh, link.id);
+        appendAuditRow(db, { actor: "system", action: "issue.membership.review_recommended", entityType: "issue_candidate", entityId: String(link.issue_id), data: { feedback_id: Number(feedbackId), reason: "owner_link_conflicts_new_evidence", coherence_score: coh, authoritative: true } });
+        return { action: "owner_review_recommended", issueId: Number(link.issue_id), coherence: coh };
       }
+      db.prepare("UPDATE issue_feedback_link SET review_flag=0, review_reason=NULL, analysis_id=?, coherence_score=? WHERE id=?").run(emb.analysis_id, coh, link.id);
       return { action: "owner_kept", issueId: Number(link.issue_id) };
     }
     // auto：先標 review（排除於 centroid），再用新證據重評
@@ -311,7 +317,7 @@ export function listIssues(db, { limit = 100, includeMerged = true } = {}) {
 export function getIssueWithMembers(db, issueId) {
   const issue = db.prepare("SELECT * FROM issue_candidate WHERE id=?").get(Number(issueId));
   if (!issue) return null;
-  const members = db.prepare("SELECT feedback_id, analysis_id, similarity_score, coherence_score, embedding_id, embedding_model, clustering_version, added_by, membership_status, reason, created_at FROM issue_feedback_link WHERE issue_id=? AND active=1 ORDER BY id ASC").all(Number(issueId));
+  const members = db.prepare("SELECT feedback_id, analysis_id, similarity_score, coherence_score, embedding_id, embedding_model, clustering_version, added_by, membership_status, review_flag, review_reason, reason, created_at FROM issue_feedback_link WHERE issue_id=? AND active=1 ORDER BY id ASC").all(Number(issueId));
   const history = db.prepare("SELECT op, from_issue, to_issue, feedback_ids, actor, reason, created_at FROM cluster_operation WHERE issue_id=? OR from_issue=? OR to_issue=? ORDER BY id ASC").all(Number(issueId), Number(issueId), Number(issueId));
   return { issue, members, history };
 }
