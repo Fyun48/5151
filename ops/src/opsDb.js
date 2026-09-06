@@ -98,13 +98,17 @@ export function applyOpsSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_attachment_feedback ON feedback_attachment(feedback_id);
 
     -- Phase 4：AI 首輪分類/摘要結果（版本化、可追溯、可重跑）。
-    -- 每次 (feedback_id, analysis_type, prompt_version, attempt) 一列；reprocess 產生新的 attempt，不覆寫歷史。
-    -- 只存結構化結果與 raw_output_hash（雜湊），不存隱藏推理鏈。FK → ingested_feedback。
+    -- 明確區分兩個概念（Phase 4.1）：
+    --   revision    = 語意上的「分析執行/版本」identity（每 feedback_id+analysis_type 遞增；reprocess 產生新的 revision）
+    --   retry_count = 「同一個 revision」的執行層重試次數（provider timeout 等暫時性失敗）
+    -- 每列一個 revision；reprocess 產生新 revision，不覆寫歷史。只存結構化結果與 raw_output_hash，不存隱藏推理鏈。
     CREATE TABLE IF NOT EXISTS feedback_analysis (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       feedback_id INTEGER NOT NULL,
       analysis_type TEXT NOT NULL DEFAULT 'classification',
-      attempt INTEGER NOT NULL DEFAULT 1,
+      revision INTEGER NOT NULL DEFAULT 1,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      max_retries INTEGER NOT NULL DEFAULT 5,
       provider TEXT,
       model TEXT,
       model_version TEXT,
@@ -117,8 +121,6 @@ export function applyOpsSchema(db) {
       raw_output_hash TEXT,
       status TEXT NOT NULL DEFAULT 'pending',
       error_code TEXT,
-      attempts INTEGER NOT NULL DEFAULT 0,
-      max_attempts INTEGER NOT NULL DEFAULT 5,
       next_attempt_at TEXT NOT NULL,
       claimed_at TEXT,
       usage_input_tokens INTEGER,
@@ -128,9 +130,21 @@ export function applyOpsSchema(db) {
       completed_at TEXT,
       FOREIGN KEY (feedback_id) REFERENCES ingested_feedback(id) ON DELETE RESTRICT
     );
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_analysis_identity ON feedback_analysis(feedback_id, analysis_type, prompt_version, attempt);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_analysis_identity ON feedback_analysis(feedback_id, analysis_type, revision);
     CREATE INDEX IF NOT EXISTS idx_analysis_status ON feedback_analysis(status, next_attempt_at);
     CREATE INDEX IF NOT EXISTS idx_analysis_feedback ON feedback_analysis(feedback_id, id);
+
+    -- Phase 4.1：CURRENT 指標。每 (feedback_id, analysis_type) 至多一筆，指向「唯一、確定、已 COMPLETED」的分析。
+    -- 下游（Phase 5/6/7）一律透過此指標取用，而非 ORDER BY created_at DESC（最新可能是 failed/invalid）。
+    CREATE TABLE IF NOT EXISTS feedback_analysis_current (
+      feedback_id INTEGER NOT NULL,
+      analysis_type TEXT NOT NULL,
+      analysis_id INTEGER NOT NULL,
+      updated_at TEXT NOT NULL,
+      reason TEXT,
+      PRIMARY KEY (feedback_id, analysis_type),
+      FOREIGN KEY (analysis_id) REFERENCES feedback_analysis(id) ON DELETE RESTRICT
+    );
 
     CREATE INDEX IF NOT EXISTS idx_state_entity_type ON state_entity(entity_type, state);
     CREATE INDEX IF NOT EXISTS idx_state_transition_entity ON state_transition(entity_type, entity_id, id);

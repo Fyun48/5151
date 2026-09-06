@@ -63,7 +63,8 @@ test("ingesting new feedback enqueues exactly one pending analysis; duplicate in
   assert.equal(rows.length, 1);
   assert.equal(rows[0].status, "pending");
   assert.equal(rows[0].prompt_version, CLASSIFICATION_PROMPT_VERSION);
-  assert.equal(rows[0].attempt, 1);
+  assert.equal(rows[0].revision, 1);
+  assert.equal(rows[0].retry_count, 0);
   db.close();
 });
 
@@ -151,7 +152,7 @@ test("provider timeout keeps feedback stored and retries (transient)", async () 
   assert.equal(s.failed_retry, 1);
   const a = listAnalyses(db, { feedbackId: fid })[0];
   assert.equal(a.status, "failed_retry");
-  assert.equal(a.attempts, 1);
+  assert.equal(a.retry_count, 1);
   assert.equal(db.prepare("SELECT COUNT(*) n FROM ingested_feedback WHERE id=?").get(fid).n, 1); // feedback 仍在
   db.close();
 });
@@ -164,7 +165,7 @@ test("provider not configured → worker skips, no attempts consumed", async () 
   assert.equal(s.skipped, "no_provider");
   const a = listAnalyses(db, { feedbackId: fid })[0];
   assert.equal(a.status, "pending");
-  assert.equal(a.attempts, 0);
+  assert.equal(a.retry_count, 0);
   db.close();
 });
 
@@ -172,7 +173,7 @@ test("transient failures reach max_attempts → failed", async () => {
   const db = openOpsDb(":memory:");
   const fid = seed(db);
   enqueueAnalysisRow(db, { feedbackId: fid });
-  db.prepare("UPDATE feedback_analysis SET max_attempts=2 WHERE feedback_id=?").run(fid);
+  db.prepare("UPDATE feedback_analysis SET max_retries=2 WHERE feedback_id=?").run(fid);
   const err = makeStubProvider({ behavior: "error" });
   await runAnalysisOnce(db, { provider: err, ...RUN });
   db.prepare("UPDATE feedback_analysis SET next_attempt_at='2000-01-01T00:00:00.000Z' WHERE feedback_id=?").run(fid);
@@ -203,7 +204,7 @@ test("reprocess creates a new attempt and does not overwrite prior result", asyn
   const firstId = listAnalyses(db, { feedbackId: fid })[0].id;
   const re = reprocessAnalysis(db, fid, {});
   assert.notEqual(re.id, firstId);
-  assert.equal(re.attempt, 2);
+  assert.equal(re.revision, 2);
   await runAnalysisOnce(db, { provider: makeStubProvider(), ...RUN });
   const all = listAnalyses(db, { feedbackId: fid });
   assert.equal(all.length, 2); // 舊結果保留

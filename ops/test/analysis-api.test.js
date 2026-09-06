@@ -65,7 +65,7 @@ test("owner re-analyze requires CSRF and creates a new attempt", async () => {
     const ok = await fetch(`${base}/ops/api/feedback/${fid}/reanalyze`, { method: "POST", headers: { cookie, "X-CSRF-Token": csrf, Origin: base, "Content-Type": "application/json" }, body: "{}" });
     assert.equal(ok.status, 201);
     const body = await ok.json();
-    assert.equal(body.attempt, 2);
+    assert.equal(body.revision, 2);
     const list = await (await fetch(`${base}/ops/api/feedback/${fid}/analysis`, { headers: { cookie } })).json();
     assert.equal(list.analyses.length, 2);
   });

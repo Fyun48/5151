@@ -19,7 +19,7 @@ import {
 } from "./attachments.js";
 import { LocalPersistentStorage, defaultAttachmentDir } from "./storage/localStorage.js";
 import { makeScanner } from "./malwareScan.js";
-import { listAnalyses, publicAnalysis, reprocessAnalysis, analysisStats } from "./feedbackAnalysis.js";
+import { listAnalyses, publicAnalysis, reprocessAnalysis, analysisStats, currentAnalysisId, getCurrentFeedbackAnalysis } from "./feedbackAnalysis.js";
 import { makeProvider } from "./ai/provider.js";
 import { analysisConfigFromEnv, startAnalysisLoop } from "./analysisWorker.js";
 
@@ -384,9 +384,12 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         const fid = Number(analysisListMatch[1]);
         const fb = db.prepare("SELECT id, source, kind, content, app_version, submitted_at, received_at, trust_level FROM ingested_feedback WHERE id = ?").get(fid);
         if (!fb) { sendJson(res, 404, { error: "not found" }); return; }
+        const currentId = currentAnalysisId(db, fid);
         sendJson(res, 200, {
           feedback: fb,
-          analyses: listAnalyses(db, { feedbackId: fid }).map(publicAnalysis),
+          current_analysis_id: currentId,
+          current: getCurrentFeedbackAnalysis(db, fid),
+          analyses: listAnalyses(db, { feedbackId: fid }).map((row) => ({ ...publicAnalysis(row), is_current: Number(row.id) === currentId })),
         });
         return;
       }
@@ -402,7 +405,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
             promptVersion: body.prompt_version || undefined,
             actor: `owner:${req.owner.email}`,
           });
-          sendJson(res, 201, { ok: true, analysis_id: row.id, attempt: row.attempt });
+          sendJson(res, 201, { ok: true, analysis_id: row.id, revision: row.revision });
         } catch (err) {
           sendJson(res, err.status || 400, { error: err.message });
         }

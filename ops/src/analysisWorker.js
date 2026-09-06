@@ -58,7 +58,7 @@ async function processOne(db, job, { provider, timeoutMs, now = () => new Date()
     const result = parseAndValidate(rawText); // 嚴格驗證；失敗會丟 422
     const rawOutputHash = createHash("sha256").update(String(rawText)).digest("hex");
     withImmediateTx(db, () => {
-      completeAnalysis(db, job.id, {
+      const promo = completeAnalysis(db, job.id, {
         provider: provider.name,
         model: provider.model || null,
         result,
@@ -72,7 +72,15 @@ async function processOne(db, job, { provider, timeoutMs, now = () => new Date()
         entityType: "feedback_analysis",
         entityId: String(job.id),
         // 只記 metadata；不記 prompt、不記完整內容、不記隱藏推理。
-        data: { feedback_id: job.feedback_id, category: result.category, severity_hint: result.severity_hint, confidence: result.confidence, provider: provider.name, model: provider.model || null, prompt_version: promptVersion },
+        data: { feedback_id: job.feedback_id, revision: job.revision, category: result.category, severity_hint: result.severity_hint, confidence: result.confidence, provider: provider.name, model: provider.model || null, prompt_version: promptVersion },
+      });
+      // CURRENT 指標移動（promotion）稽核：只記 metadata。
+      appendAuditRow(db, {
+        actor: "system",
+        action: "feedback.analysis.promoted",
+        entityType: "feedback_analysis_current",
+        entityId: String(job.feedback_id),
+        data: { feedback_id: job.feedback_id, analysis_type: job.analysis_type, from_analysis_id: promo.previousCurrentId, to_analysis_id: job.id, revision: job.revision },
       });
     });
     return "completed";
@@ -82,7 +90,7 @@ async function processOne(db, job, { provider, timeoutMs, now = () => new Date()
     let out;
     withImmediateTx(db, () => {
       out = failAnalysis(db, job, { errorCode: code, transient: !isSchema, now: now(), random });
-      appendAuditRow(db, { actor: "system", action: "feedback.analysis.failed", entityType: "feedback_analysis", entityId: String(job.id), data: { feedback_id: job.feedback_id, error_code: code, status: out.status, attempts: out.attempts } });
+      appendAuditRow(db, { actor: "system", action: "feedback.analysis.failed", entityType: "feedback_analysis", entityId: String(job.id), data: { feedback_id: job.feedback_id, revision: job.revision, error_code: code, status: out.status, retry_count: out.retry_count } });
     });
     return out.status;
   }
