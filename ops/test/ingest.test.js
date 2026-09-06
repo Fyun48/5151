@@ -110,6 +110,52 @@ test("delivery_id mismatch between header and body is rejected", async () => {
   });
 });
 
+// ── Phase 2.1 item 2：idempotency / delivery 衝突 ──
+
+test("same delivery + same body → idempotent success (one record)", async () => {
+  await withServer(async ({ base, db }) => {
+    const p = payloadFor("c1", { content: "same body" });
+    const r1 = await post(base, { deliveryId: "c1", payload: p });
+    const r2 = await post(base, { deliveryId: "c1", payload: p });
+    assert.equal(r1.status, 200);
+    assert.equal(r2.status, 200);
+    assert.equal((await r2.json()).duplicate, true);
+    assert.equal(countIngested(db), 1);
+  });
+});
+
+test("same delivery + changed body → 409 conflict, original unchanged", async () => {
+  await withServer(async ({ base, db }) => {
+    await post(base, { deliveryId: "c2", payload: payloadFor("c2", { content: "original" }) });
+    const before = db.prepare("SELECT content, payload_hash FROM ingested_feedback WHERE delivery_id='c2'").get();
+    // 用有效簽章送同一 delivery_id 但不同 body
+    const res = await post(base, { deliveryId: "c2", payload: payloadFor("c2", { content: "DIFFERENT" }) });
+    assert.equal(res.status, 409);
+    assert.equal((await res.json()).reason, "delivery_conflict");
+    assert.equal(countIngested(db), 1);
+    const after = db.prepare("SELECT content, payload_hash FROM ingested_feedback WHERE delivery_id='c2'").get();
+    assert.equal(after.content, before.content); // 未被覆寫
+    assert.equal(after.payload_hash, before.payload_hash);
+    const audit = db.prepare("SELECT * FROM audit_log WHERE action='feedback.ingest.conflict'").get();
+    assert.ok(audit);
+    assert.doesNotMatch(audit.data || "", /DIFFERENT/); // 只記中繼資料
+  });
+});
+
+test("same idempotency key + conflicting payload → 409 conflict", async () => {
+  await withServer(async ({ base, db }) => {
+    // 兩個不同 delivery_id，但相同 idempotency_key，內容不同
+    const p1 = { delivery_id: "c3a", idempotency_key: "feedback:shared", source: "v3", content: "first", kind: "bug" };
+    const p2 = { delivery_id: "c3b", idempotency_key: "feedback:shared", source: "v3", content: "second", kind: "bug" };
+    const r1 = await post(base, { deliveryId: "c3a", payload: p1 });
+    assert.equal(r1.status, 200);
+    const r2 = await post(base, { deliveryId: "c3b", payload: p2 });
+    assert.equal(r2.status, 409);
+    assert.equal((await r2.json()).reason, "idempotency_conflict");
+    assert.equal(countIngested(db), 1);
+  });
+});
+
 test("audit records ingestion without full content", async () => {
   await withServer(async ({ base, db }) => {
     await post(base, { deliveryId: "d9", payload: payloadFor("d9", { content: "super secret feedback text" }) });

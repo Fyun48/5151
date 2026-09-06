@@ -170,8 +170,9 @@ export function createFeedback(db, userId, input = {}, now = new Date()) {
 }
 
 // Phase 2：原子地建立 feedback 與其初始 outbox 事件（同一交易）。
-// 不變式：feedback 存在 ⇔ 對應的初始 outbox 事件存在。
-// enqueue=false 時只寫 feedback（供 outbox 功能停用時使用；此時不保證 IFF，僅用於明確關閉整合的情境）。
+// 不變式：一筆成功寫入的 feedback ⇔ 一筆初始 outbox 事件存在。
+// 正常 Product 執行路徑一律 enqueue=true（見 db.js submitFeedback，不受任何 feature flag 影響）。
+// enqueue 參數僅供測試/緊急用途；不得在正常執行時關閉而違反不變式。
 export function createFeedbackWithOutbox(db, userId, input = {}, { enqueue = true, now = new Date() } = {}) {
   db.exec("BEGIN IMMEDIATE");
   try {

@@ -1199,10 +1199,10 @@ export function reportDemandItem(userId, input) {
 
 export { demandMeta, selfListingMeta, isSelfListingId };
 
-// Phase 2：feedback 與 outbox 於同一交易原子建立（可用 OPS_OUTBOX_ENABLED=0 關閉 outbox 建立）。
-const OUTBOX_ENABLED = process.env.OPS_OUTBOX_ENABLED !== "0";
+// Phase 2：feedback 與其初始 outbox 事件永遠在同一交易原子建立（不變式：accepted feedback ⇔ outbox 事件）。
+// 傳輸開關（OPS_FEEDBACK_DELIVERY）只影響背景 worker 是否遞送，不影響 outbox 是否建立。
 export function submitFeedback(userId, input) {
-  return createFeedbackWithOutboxOn(db, userId, input, { enqueue: OUTBOX_ENABLED });
+  return createFeedbackWithOutboxOn(db, userId, input);
 }
 
 export function listFeedbackOutbox(opts = {}) {

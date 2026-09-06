@@ -170,6 +170,11 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         }
         try {
           const result = ingestFeedback(db, { deliveryId: check.deliveryId, payload, payloadHash: check.bodyHash });
+          if (result.conflict) {
+            // delivery_id / idempotency_key 被重用於不同內容 → 409，不覆寫原紀錄。
+            sendJson(res, 409, { error: "conflict", reason: result.reason });
+            return;
+          }
           sendJson(res, 200, { ok: true, id: result.id, duplicate: result.duplicate });
         } catch (err) {
           sendJson(res, err.status || 400, { error: err.message });

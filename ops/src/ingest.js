@@ -13,18 +13,60 @@ function clip(v, n) {
   return s.length > n ? s.slice(0, n) : s;
 }
 
+// 判斷既有紀錄與本次遞送是否為「相同邏輯 payload」。
+// 冪等成立條件：delivery_id 與 idempotency_key 對應到同一列，且 payload_hash 相同。
+// 否則視為衝突（delivery_id 或 idempotency_key 被重用於不同內容）。
+function classifyExisting({ byDelivery, byIdem, deliveryId, idempotencyKey, payloadHash }) {
+  if (byDelivery) {
+    const sameLogical =
+      byDelivery.idempotency_key === idempotencyKey &&
+      String(byDelivery.payload_hash || "") === String(payloadHash || "");
+    if (sameLogical) return { kind: "duplicate", id: Number(byDelivery.id) };
+    return { kind: "conflict", reason: "delivery_conflict", id: Number(byDelivery.id) };
+  }
+  if (byIdem) {
+    // delivery_id 是新的，但 idempotency_key 已被用過。正常運作下一個 idempotency_key
+    // 只會對應唯一的 delivery_id；出現不同 delivery_id 即視為衝突（不覆寫原紀錄）。
+    return { kind: "conflict", reason: "idempotency_conflict", id: Number(byIdem.id) };
+  }
+  return null;
+}
+
 // payload：已解析的物件（含 delivery_id / idempotency_key 與 feedback 欄位）。
+// 回傳：{duplicate:false,id} | {duplicate:true,id} | {conflict:true,reason,id}
 export function ingestFeedback(db, { deliveryId, payload, payloadHash, now = new Date() }) {
   const idempotencyKey = String(payload?.idempotency_key || "").trim();
   if (!deliveryId) throw httpError("missing delivery_id", 400);
   if (!idempotencyKey) throw httpError("missing idempotency_key", 400);
   const ts = (now instanceof Date ? now : new Date(now)).toISOString();
 
+  const conflictAudit = (verdict) => {
+    // 只記中繼資料與 hash（非機密），絕不覆寫原始紀錄。
+    appendAuditRow(db, {
+      actor: "ingest",
+      action: "feedback.ingest.conflict",
+      entityType: "ingested_feedback",
+      entityId: String(verdict.id),
+      data: { delivery_id: deliveryId, reason: verdict.reason, incoming_payload_hash: payloadHash || null },
+      now,
+    });
+  };
+
   return withImmediateTx(db, () => {
-    const existing = db.prepare(
-      "SELECT id FROM ingested_feedback WHERE delivery_id = ? OR idempotency_key = ?",
-    ).get(deliveryId, idempotencyKey);
-    if (existing) return { id: Number(existing.id), duplicate: true };
+    const lookup = () => ({
+      byDelivery: db.prepare("SELECT * FROM ingested_feedback WHERE delivery_id = ?").get(deliveryId),
+      byIdem: db.prepare("SELECT * FROM ingested_feedback WHERE idempotency_key = ?").get(idempotencyKey),
+    });
+
+    let { byDelivery, byIdem } = lookup();
+    let verdict = classifyExisting({ byDelivery, byIdem, deliveryId, idempotencyKey, payloadHash });
+    if (verdict) {
+      if (verdict.kind === "conflict") {
+        conflictAudit(verdict);
+        return { conflict: true, reason: verdict.reason, id: verdict.id };
+      }
+      return { duplicate: true, id: verdict.id };
+    }
 
     try {
       const res = db.prepare(
@@ -58,11 +100,16 @@ export function ingestFeedback(db, { deliveryId, payload, payloadHash, now = new
       });
       return { id, duplicate: false };
     } catch (err) {
-      // 併發下另一寫入者先插入（UNIQUE 撞號）→ 視為冪等重複。
-      const row = db.prepare(
-        "SELECT id FROM ingested_feedback WHERE delivery_id = ? OR idempotency_key = ?",
-      ).get(deliveryId, idempotencyKey);
-      if (row) return { id: Number(row.id), duplicate: true };
+      // 併發下另一寫入者先插入（UNIQUE 撞號）→ 重新分類：相同邏輯=冪等；否則=衝突。
+      ({ byDelivery, byIdem } = lookup());
+      verdict = classifyExisting({ byDelivery, byIdem, deliveryId, idempotencyKey, payloadHash });
+      if (verdict) {
+        if (verdict.kind === "conflict") {
+          conflictAudit(verdict);
+          return { conflict: true, reason: verdict.reason, id: verdict.id };
+        }
+        return { duplicate: true, id: verdict.id };
+      }
       throw err;
     }
   });

@@ -1,5 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import os from "node:os";
+import path from "node:path";
+import { rmSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { ensureFeedbackSchema, createFeedbackWithOutbox } from "../src/feedback.js";
 import {
@@ -169,4 +172,100 @@ test("delivery skips cleanly when not configured", async () => {
   assert.equal(summary.skipped, "not_configured");
   assert.equal(outboxStats(db).pending, 1); // 仍保留，未遺失
   db.close();
+});
+
+// ── Phase 2.1 item 1：outbox 建立永不受傳輸旗標影響 ──
+
+test("transport disabled still creates feedback + outbox (invariant holds)", () => {
+  const db = open();
+  // 不啟動任何 worker，等同傳輸關閉
+  const r = createFeedbackWithOutbox(db, 1, { kind: "bug", body: "transport is off but outbox must exist" });
+  assert.ok(r.id > 0);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM feedback").get().n, 1);
+  assert.equal(outboxStats(db).total, 1);
+  assert.equal(outboxStats(db).pending, 1);
+  db.close();
+});
+
+test("multiple submissions with transport disabled all remain pending, no attempts consumed", async () => {
+  const db = open();
+  const T0 = Date.parse("2026-05-01T00:00:00.000Z");
+  for (let i = 0; i < 5; i++) createFeedbackWithOutbox(db, 1, { kind: "idea", body: `pending idea ${i}` }, { now: new Date(T0 + i * 60000) });
+  // 傳輸未設定：多次跑遞送都不應消耗 attempts 或移到 dead
+  for (let i = 0; i < 3; i++) {
+    const s = await deliverOutboxOnce(db, { url: "", secret: "", fetchImpl: okFetch });
+    assert.equal(s.skipped, "not_configured");
+  }
+  const rows = listOutbox(db);
+  assert.equal(rows.length, 5);
+  for (const row of rows) {
+    assert.equal(row.status, "pending");
+    assert.equal(row.attempts, 0);
+  }
+  assert.equal(outboxStats(db).dead, 0);
+  db.close();
+});
+
+test("enabling transport later delivers historical pending items", async () => {
+  const db = open();
+  const T0 = Date.parse("2026-05-02T00:00:00.000Z");
+  for (let i = 0; i < 4; i++) createFeedbackWithOutbox(db, 1, { kind: "bug", body: `historical ${i}` }, { now: new Date(T0 + i * 60000) });
+  // 稍後才啟用傳輸
+  const s = await deliverOutboxOnce(db, { ...cfg, fetchImpl: okFetch, batchSize: 100 });
+  assert.equal(s.sent, 4);
+  assert.equal(outboxStats(db).sent, 4);
+  assert.equal(outboxStats(db).pending, 0);
+  db.close();
+});
+
+// ── Phase 2.1 item 3：多 worker 併發認領 ──
+
+test("two independent connections claim 30 rows with no loss and no overlap", () => {
+  const file = path.join(os.tmpdir(), `ops-claim-${process.pid}-${Date.now()}.db`);
+  const seed = new DatabaseSync(file);
+  seed.exec("PRAGMA journal_mode=WAL");
+  seed.exec("PRAGMA busy_timeout=5000");
+  ensureFeedbackSchema(seed);
+  ensureFeedbackOutboxSchema(seed);
+  // 用不同 user id 迴避「同一使用者送出頻率限制」，專注測 claim 併發
+  for (let i = 0; i < 30; i++) createFeedbackWithOutbox(seed, i + 1, { kind: "bug", body: `row ${i}` });
+
+  const a = new DatabaseSync(file);
+  const b = new DatabaseSync(file);
+  a.exec("PRAGMA busy_timeout=5000");
+  b.exec("PRAGMA busy_timeout=5000");
+
+  const claimedA = new Set();
+  const claimedB = new Set();
+  // 兩個 worker 交錯以小批次認領，直到取盡
+  let guard = 0;
+  for (;;) {
+    const ca = claimOutboxBatch(a, { limit: 7 });
+    const cb = claimOutboxBatch(b, { limit: 7 });
+    ca.forEach((r) => claimedA.add(r.id));
+    cb.forEach((r) => claimedB.add(r.id));
+    if (!ca.length && !cb.length) break;
+    if (++guard > 50) break;
+  }
+
+  // 無重疊（每列最多被一個 worker 認領）
+  const overlap = [...claimedA].filter((id) => claimedB.has(id));
+  assert.deepEqual(overlap, []);
+  // 無遺失（30 列全被認領，且唯一）
+  const union = new Set([...claimedA, ...claimedB]);
+  assert.equal(union.size, 30);
+  // DB 內全部處於 sending
+  assert.equal(seed.prepare("SELECT COUNT(*) n FROM feedback_outbox WHERE status='sending'").get().n, 30);
+
+  // stale 逾時後可被復原認領
+  seed.prepare("UPDATE feedback_outbox SET claimed_at='2000-01-01T00:00:00.000Z'").run();
+  const recovered = claimOutboxBatch(a, { limit: 100 });
+  assert.equal(recovered.length, 30);
+
+  a.close();
+  b.close();
+  seed.close();
+  for (const suffix of ["", "-wal", "-shm"]) {
+    try { rmSync(file + suffix, { force: true }); } catch { /* ignore */ }
+  }
 });
