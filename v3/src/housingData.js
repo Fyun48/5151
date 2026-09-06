@@ -80,12 +80,13 @@ export function normalizeHousingData(value = {}) {
     .map((e) => normalizeHousingEntry(e))
     .filter((e) => e.title || e.value)
     .slice(0, MAX_ENTRIES);
-  return { intro, entries };
+  const updatedAt = clip(src.updatedAt, 40);
+  return { intro, entries, updatedAt };
 }
 
 export function publicHousingData(value) {
   const data = normalizeHousingData(value && (value.entries || value.intro) ? value : defaultHousingData());
-  return { intro: data.intro, entries: data.entries, categories: HOUSING_DATA_CATEGORIES };
+  return { intro: data.intro, entries: data.entries, updatedAt: data.updatedAt, categories: HOUSING_DATA_CATEGORIES };
 }
 
 /** 供 B 階段：以 (category + title) 當鍵，更新或插入自動抓取的一筆，不動管理員手改的其它筆。 */
