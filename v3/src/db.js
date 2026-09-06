@@ -38,6 +38,7 @@ import { demoCommutePatch } from "./demo.js";
 import { isWalkableMrtDistance, makeMrtKey } from "./mrt.js";
 import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings, planIntervalMinutes, resolveSaveAsProfileAction, profileNameOrDraft, MEMBER_MAX_PROFILES, ADMIN_MAX_PROFILES, clampIntervalMinutes, memberShouldContributeCrawl, memberFetchCollision, memberHasCrawlScope } from "./settingsState.js";
 import { defaultLegalCopy, normalizeLegalCopy, publicLegalCopy } from "./legalCopy.js";
+import { defaultSpirit, normalizeSpirit, publicSpirit } from "./spirit.js";
 import { applyIdlePauseToMembers, applyIdleResume } from "./idlePause.js";
 import { defaultNotifyMatrix } from "./notifyMatrix.js";
 import { DATA_EPOCH, shouldResetForEpoch } from "./dataEpoch.js";
@@ -1058,6 +1059,20 @@ export function saveHelpQa(partial = {}) {
   }
   writeSettingKey("helpQa", { items: normalizeHelpQaItems(src.items) });
   return getHelpQa();
+}
+
+export function getSpirit() {
+  return publicSpirit(settingKey("spirit") ?? defaultSpirit());
+}
+
+export function saveSpirit(partial = {}) {
+  const src = partial && typeof partial === "object" ? partial : {};
+  if (src.reset === true) {
+    writeSettingKey("spirit", defaultSpirit());
+    return getSpirit();
+  }
+  writeSettingKey("spirit", normalizeSpirit({ ...getSpirit(), ...src }));
+  return getSpirit();
 }
 
 export function getLegalCopy() {

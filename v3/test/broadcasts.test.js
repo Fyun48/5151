@@ -35,6 +35,8 @@ test("admin and index expose broadcast and spirit page", () => {
   assert.match(index, /spirit\.html/);
   assert.match(index, /name = "暫存"/);
   assert.match(spirit, /這個站為什麼存在/);
-  assert.match(spirit, /居住正義/);
+  assert.match(spirit, /fetch\("\/api\/spirit"/);
+  const spiritSrc = readFileSync(path.join(dir, "../src/spirit.js"), "utf8");
+  assert.match(spiritSrc, /居住正義/);
   assert.match(server, /publicBroadcastsSettings/);
 });

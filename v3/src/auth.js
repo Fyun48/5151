@@ -161,6 +161,7 @@ export function publicPath(req) {
     p === "/api/health" ||
     p === "/api/demo" ||
     p === "/api/disclaimer" ||
+    p === "/api/spirit" ||
     p === "/api/help-qa" ||
     p === "/api/ads" ||
     p === "/api/brand" ||
