@@ -170,6 +170,77 @@ export function applyOpsSchema(db) {
       ) THEN RAISE(ABORT, 'current pointer must reference a COMPLETED analysis of the same feedback_id and analysis_type') END;
     END;
 
+    -- Phase 5：語意去重 + 可逆 Issue 分群。
+    -- embedding：由「CURRENT 有效分析 + 症狀」產生的向量；記錄完整 provenance；current 變更時舊向量標 stale。
+    CREATE TABLE IF NOT EXISTS embedding (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      feedback_id INTEGER NOT NULL,
+      analysis_id INTEGER NOT NULL,
+      provider TEXT NOT NULL,
+      model TEXT NOT NULL,
+      model_version TEXT,
+      dim INTEGER NOT NULL,
+      normalization_version TEXT NOT NULL,
+      vector TEXT NOT NULL,
+      text_hash TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (feedback_id) REFERENCES ingested_feedback(id) ON DELETE RESTRICT,
+      FOREIGN KEY (analysis_id) REFERENCES feedback_analysis(id) ON DELETE RESTRICT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_embedding_identity ON embedding(feedback_id, analysis_id, model, model_version, normalization_version);
+    CREATE INDEX IF NOT EXISTS idx_embedding_status ON embedding(status, feedback_id);
+
+    -- issue_candidate：可能的共同問題群（純分析用途；不啟動 Development/Proposal）。
+    CREATE TABLE IF NOT EXISTS issue_candidate (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT,
+      summary TEXT,
+      category TEXT,
+      clustering_version TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open',
+      merged_into INTEGER,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    -- issue↔feedback 明確成員關係（不藏在 JSON）；一筆 feedback 至多屬於一個 active issue。
+    CREATE TABLE IF NOT EXISTS issue_feedback_link (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      issue_id INTEGER NOT NULL,
+      feedback_id INTEGER NOT NULL,
+      similarity_score REAL,
+      embedding_id INTEGER,
+      embedding_model TEXT,
+      added_by TEXT NOT NULL DEFAULT 'auto',
+      reason TEXT,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      removed_at TEXT,
+      FOREIGN KEY (issue_id) REFERENCES issue_candidate(id) ON DELETE RESTRICT,
+      FOREIGN KEY (feedback_id) REFERENCES ingested_feedback(id) ON DELETE RESTRICT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_link_one_active_per_feedback ON issue_feedback_link(feedback_id) WHERE active = 1;
+    CREATE INDEX IF NOT EXISTS idx_link_issue ON issue_feedback_link(issue_id, active);
+
+    -- cluster_operation：所有分群操作的可追溯歷史（append-only）。
+    CREATE TABLE IF NOT EXISTS cluster_operation (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      op TEXT NOT NULL,
+      issue_id INTEGER,
+      from_issue INTEGER,
+      to_issue INTEGER,
+      feedback_ids TEXT,
+      actor TEXT NOT NULL,
+      reason TEXT,
+      clustering_version TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE TRIGGER IF NOT EXISTS cluster_operation_no_update BEFORE UPDATE ON cluster_operation
+      BEGIN SELECT RAISE(ABORT, 'cluster_operation is append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS cluster_operation_no_delete BEFORE DELETE ON cluster_operation
+      BEGIN SELECT RAISE(ABORT, 'cluster_operation is append-only'); END;
+
     CREATE INDEX IF NOT EXISTS idx_state_entity_type ON state_entity(entity_type, state);
     CREATE INDEX IF NOT EXISTS idx_state_transition_entity ON state_transition(entity_type, entity_id, id);
     CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_type, entity_id, id);
