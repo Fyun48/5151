@@ -714,6 +714,24 @@ test("same-house peer role labels use 同源屋件第N則 ordering", () => {
   assert.equal(fns.sameHousePeerRole({}, { role: "affiliate", offline: true }, 3), "同源屋件第3則（已下架）");
 });
 
+test("quick-exclude agent works for non-591 platforms, not just avatars", () => {
+  const html = pub("index.html");
+  assert.match(html, /function agentExcludeLabel/);
+  assert.match(html, /class="ghost exclude-agent-btn"/);
+  assert.match(html, /!isGuest && !item\.avatar && exLabel/);
+  const start = html.indexOf("function agentExcludeLabel");
+  const end = html.indexOf("function contactBlock");
+  assert.ok(start > 0 && end > start);
+  const fns = new Function(`${html.slice(start, end)}; return { agentExcludeLabel };`)();
+  assert.equal(fns.agentExcludeLabel({ role_name: "信義房屋" }), "信義房屋");
+  assert.equal(fns.agentExcludeLabel({ role_name: "住商 A12" }), "住商 A12");
+  assert.equal(fns.agentExcludeLabel({ agency: "大安好房東" }), "大安好房東");
+  assert.equal(fns.agentExcludeLabel({ contact_name: "王先生", role_name: "屋主" }), "王先生");
+  assert.equal(fns.agentExcludeLabel({ role_name: "5168租屋" }), "");
+  assert.equal(fns.agentExcludeLabel({ role_name: "好房網" }), "");
+  assert.equal(fns.agentExcludeLabel({ role_name: "屋主" }), "");
+});
+
 test("listing titles decode HTML entity emoji for display", () => {
   const html = pub("index.html");
   const start = html.indexOf("function decodeEntities");
