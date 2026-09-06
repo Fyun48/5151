@@ -1,13 +1,13 @@
-name: Stop v1 on CasaOS
+name: Stop v1 on CasaOS (manual)
 
+# 明確手動觸發：停止 v1 容器（正式基礎設施變更）。合併/push 到 master 不會自動執行。
 on:
-  push:
-    branches: [master, main]
-    paths:
-      - "docker-compose.yml"
-      - "casaos-compose.yml"
-      - ".github/workflows/deploy.yml"
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "要使用的 git ref（預設 master）"
+        required: false
+        default: master
 
 permissions:
   contents: read
@@ -15,9 +15,12 @@ permissions:
 jobs:
   stop-v1:
     runs-on: ubuntu-latest
+    environment: production
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
       - name: Copy compose files
         uses: appleboy/scp-action@v0.1.7
         with:

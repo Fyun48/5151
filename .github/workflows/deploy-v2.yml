@@ -1,15 +1,13 @@
-name: Copy v2 source to CasaOS
+name: Deploy v2 to CasaOS (manual)
 
+# Production 部署一律「明確手動觸發」。合併/push 到 master 不會自動部署 v2。
 on:
-  push:
-    branches: [master, main]
-    paths:
-      - "v2/src/**"
-      - "v2/public/**"
-      - "docker-compose.yml"
-      - "casaos-compose.yml"
-      - ".github/workflows/deploy-v2.yml"
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "要部署的 git ref / 分支 / tag / commit SHA（預設 master）"
+        required: false
+        default: master
 
 permissions:
   contents: read
@@ -17,9 +15,12 @@ permissions:
 jobs:
   sync-nas-v2:
     runs-on: ubuntu-latest
+    environment: production
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
       - name: Copy v2 app and compose files
         uses: appleboy/scp-action@v0.1.7
         with:

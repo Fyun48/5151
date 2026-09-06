@@ -1,15 +1,14 @@
-name: Copy v3 source to CasaOS
+name: Deploy v3 to CasaOS (manual)
 
+# Production 部署一律「明確手動觸發」。合併/push 到 master 不會自動部署 v3。
+# 部署會把指定 ref 的 v3/src、v3/public 與 compose 檔 SCP 到正式 NAS，並重啟 591-tracker-v3 容器。
 on:
-  push:
-    branches: [master, main]
-    paths:
-      - "v3/src/**"
-      - "v3/public/**"
-      - "docker-compose.yml"
-      - "casaos-compose.yml"
-      - ".github/workflows/deploy-v3.yml"
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "要部署的 git ref / 分支 / tag / commit SHA（預設 master）"
+        required: false
+        default: master
 
 permissions:
   contents: read
@@ -17,9 +16,13 @@ permissions:
 jobs:
   sync-nas-v3:
     runs-on: ubuntu-latest
+    # Production 密鑰限定在 'production' environment；建議在 GitHub UI 設定 required reviewers 做人工核准閘門。
+    environment: production
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
       - name: Copy v3 app and compose files
         uses: appleboy/scp-action@v0.1.7
         with:
