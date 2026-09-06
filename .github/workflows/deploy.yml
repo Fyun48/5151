@@ -29,6 +29,7 @@ jobs:
         env:
           WF_REF: ${{ github.ref }}
           ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
           ALLOWED_ACTOR: ${{ vars.PRODUCTION_DEPLOY_ALLOWED_ACTOR }}
           CONFIRM: ${{ inputs.confirmation }}
           DEPLOY_SHA: ${{ inputs.sha }}
@@ -40,8 +41,12 @@ jobs:
           if [ -z "${ALLOWED_ACTOR:-}" ]; then
             echo "::error::PRODUCTION_DEPLOY_ALLOWED_ACTOR is not configured; refusing (fail-closed)"; exit 1
           fi
+          # re-run 時 github.actor 仍是初始觸發者，github.triggering_actor 才是本次 re-run 的人；兩者都必須是授權部署者。
           if [ "$ACTOR" != "$ALLOWED_ACTOR" ]; then
             echo "::error::actor '$ACTOR' is not the authorized deployer"; exit 1
+          fi
+          if [ "$TRIGGERING_ACTOR" != "$ALLOWED_ACTOR" ]; then
+            echo "::error::triggering actor '$TRIGGERING_ACTOR' is not the authorized deployer (re-run by another user is refused)"; exit 1
           fi
           if [ "${CONFIRM:-}" != "DEPLOY-PRODUCTION" ]; then
             echo "::error::confirmation must be exactly DEPLOY-PRODUCTION"; exit 1

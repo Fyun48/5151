@@ -45,6 +45,18 @@ test("3+4. explicit deployer allowlist checked; missing config fails closed; wro
   }
 });
 
+// Phase 3.5.2：re-run 時 github.actor 仍是初始觸發者，須同時檢查 github.triggering_actor，
+// 以免他人 re-run Owner 建立的 workflow 而繞過授權。
+test("3.5.2 both github.actor and github.triggering_actor must match the allowlist", () => {
+  for (const name of PROD) {
+    const text = wf(name);
+    assert.match(text, /TRIGGERING_ACTOR:\s*\$\{\{\s*github\.triggering_actor\s*\}\}/, `${name} must read github.triggering_actor`);
+    assert.match(text, /ACTOR:\s*\$\{\{\s*github\.actor\s*\}\}/, `${name} must read github.actor`);
+    assert.match(text, /"\$TRIGGERING_ACTOR"\s*!=\s*"\$ALLOWED_ACTOR"/, `${name} must reject re-run by a non-allowed triggering actor`);
+    assert.match(text, /"\$ACTOR"\s*!=\s*"\$ALLOWED_ACTOR"/, `${name} must reject non-allowed initial actor`);
+  }
+});
+
 test("6. exact confirmation value DEPLOY-PRODUCTION is required", () => {
   for (const name of PROD) {
     const text = wf(name);

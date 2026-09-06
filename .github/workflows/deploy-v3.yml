@@ -1,7 +1,11 @@
 name: Deploy v3 to CasaOS (manual)
 
 # Production 部署一律「明確手動觸發」。合併/push 到 master 不會自動部署 v3。
-# 部署會把指定 ref 的 v3/src、v3/public 與 compose 檔 SCP 到正式 NAS，並重啟 591-tracker-v3 容器。
+# 部署會把指定 commit SHA 的 v3/src、v3/public 與 compose 檔 SCP 到正式 NAS，並重啟 591-tracker-v3 容器。
+#
+# 【必要前提】當本 repo 有其他使用者/App 具 write 權限時，master 的 branch protection / ruleset 為「必要」：
+#   具備對 master 無限制直接 push 權的人，可能直接修改此部署 workflow 本身而繞過以下所有授權檢查。
+#   本任務不自動設定 branch protection；請於 GitHub UI 設定保護 master（限制直接 push、要求 PR/審查）。
 on:
   workflow_dispatch:
     inputs:
@@ -34,6 +38,7 @@ jobs:
         env:
           WF_REF: ${{ github.ref }}
           ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
           ALLOWED_ACTOR: ${{ vars.PRODUCTION_DEPLOY_ALLOWED_ACTOR }}
           CONFIRM: ${{ inputs.confirmation }}
           DEPLOY_SHA: ${{ inputs.sha }}
@@ -47,8 +52,13 @@ jobs:
           if [ -z "${ALLOWED_ACTOR:-}" ]; then
             echo "::error::PRODUCTION_DEPLOY_ALLOWED_ACTOR is not configured; refusing (fail-closed)"; exit 1
           fi
+          # 同時檢查 actor 與 triggering_actor：re-run 時 github.actor 仍是初始觸發者，
+          # github.triggering_actor 才是本次 re-run 的人；兩者都必須是授權部署者。
           if [ "$ACTOR" != "$ALLOWED_ACTOR" ]; then
             echo "::error::actor '$ACTOR' is not the authorized deployer"; exit 1
+          fi
+          if [ "$TRIGGERING_ACTOR" != "$ALLOWED_ACTOR" ]; then
+            echo "::error::triggering actor '$TRIGGERING_ACTOR' is not the authorized deployer (re-run by another user is refused)"; exit 1
           fi
           # 3) 明確確認字串
           if [ "${CONFIRM:-}" != "DEPLOY-PRODUCTION" ]; then
