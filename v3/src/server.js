@@ -99,6 +99,11 @@ import {
   replyDemand,
   reportDemandItem,
   demandMeta,
+  submitFeedback,
+  listFeedbackItems,
+  updateFeedbackItem,
+  getFeedbackStats,
+  feedbackMeta,
   listMineSelfListings,
   getSelfListing,
   createSelfListing,
@@ -822,6 +827,22 @@ app.put("/api/admin/help-qa", requireAdminApi, (req, res) => {
   }
 });
 
+app.get("/api/admin/feedback", requireAdminApi, (req, res) => {
+  res.json({
+    ...feedbackMeta(),
+    stats: getFeedbackStats(),
+    items: listFeedbackItems({ status: req.query?.status, kind: req.query?.kind }),
+  });
+});
+
+app.patch("/api/admin/feedback/:id", requireAdminApi, (req, res) => {
+  try {
+    res.json(updateFeedbackItem(req.params.id, req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
 app.get("/api/spirit", (_req, res) => {
   res.json(getSpirit());
 });
@@ -965,6 +986,28 @@ app.post("/api/demand/:id/report", (req, res) => {
       targetId: req.body?.targetId || req.params.id,
       reason: req.body?.reason,
     }));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/feedback/meta", (_req, res) => {
+  res.json(feedbackMeta());
+});
+
+app.post("/api/feedback", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入才能送出回饋" });
+      return;
+    }
+    const body = req.body || {};
+    const context = {
+      ...(body.context && typeof body.context === "object" ? body.context : {}),
+      role: session.role || "member",
+    };
+    res.json(submitFeedback(session.userId, { ...body, context }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
