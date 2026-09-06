@@ -645,12 +645,12 @@ test("self listing form and in-site detail stay on this site", () => {
   assert.doesNotMatch(html, /model_score/);
   assert.match(html, /data-same-toggle/);
   assert.match(html, /費用變更/);
-  assert.match(html, /同屋源最低總月費/);
+  assert.match(html, /同源屋件第首則/);
   assert.match(html, /function sameHousePeerRole/);
-  assert.match(html, /function sameHouseTitlePrefix/);
-  assert.match(html, /slice\(0, 10\)/);
-  assert.match(html, /同房源物件/);
+  assert.match(html, /function sameHousePriceList/);
+  assert.match(html, /same-house-prices/);
   assert.doesNotMatch(html, /附屬刊登/);
+  assert.doesNotMatch(html, /同房源物件/);
   assert.match(html, /has-same-house/);
   assert.match(html, /\.item\.has-same-house,[\s\S]*\.item:has\(\.same-house-panel\) \{[\s\S]*background:\s*var\(--same-soft\)/);
   assert.match(html, /先別打這則/);
@@ -660,13 +660,18 @@ test("self listing form and in-site detail stay on this site", () => {
   assert.match(html, /不是同一間/);
   assert.match(html, /先只從你的列表拆開/);
   assert.match(html, /function sameHouseOf\(/);
-  assert.match(html, /function sameHouseCompareHtml\(/);
+  assert.doesNotMatch(html, /function sameHouseCompareHtml\(/);
   assert.match(html, /另有較便宜/);
   assert.match(html, /交叉比對/);
   assert.match(html, /contact-defer/);
   assert.match(html, /電話／LINE 已收合/);
-  assert.match(html, /peer\.diffs/);
+  assert.match(html, /費用說明：/);
+  assert.match(html, /（無差別）/);
   assert.match(html, /same-house-compare-headline/);
+  assert.match(html, /function rentStatusLine/);
+  assert.match(html, /function listingStatusLabel/);
+  assert.match(html, /function decodeEntities/);
+  assert.match(html, /狀態：/);
 });
 
 test("filter city accordion markup is generated from shared city list", () => {
@@ -691,17 +696,23 @@ test("source chips stay hidden unless admin or sponsor", () => {
   assert.match(server, /authorizedListingSources\(req\.query\.sources/);
 });
 
-test("same-house affiliate label uses the first 10 title characters", () => {
+test("same-house peer role labels use 同源屋件第N則 ordering", () => {
   const html = pub("index.html");
-  const start = html.indexOf("function sameHouseTitlePrefix");
-  const end = html.indexOf("function sameHousePanel");
+  const start = html.indexOf("function sameHousePeerRole");
+  const end = html.indexOf("function sameHouseFeeDiff");
   assert.ok(start > 0 && end > start);
-  const fns = new Function(`${html.slice(start, end)}; return { sameHouseTitlePrefix, sameHousePeerRole };`)();
-  assert.equal(fns.sameHouseTitlePrefix("至善/福星*電梯可租補*台水電*漂亮採光大空間"), "至善/福星*電梯可租");
-  assert.equal(
-    fns.sameHousePeerRole({ title: "至善/福星*電梯可租補*台水電" }, { role: "affiliate" }),
-    "至善/福星*電梯可租同房源物件",
-  );
-  assert.equal(fns.sameHousePeerRole({ title: "短標" }, { role: "affiliate", offline: true }), "短標同房源物件（已下架）");
-  assert.equal(fns.sameHousePeerRole({ title: "主標" }, { role: "primary" }), "同屋源最低總月費");
+  const fns = new Function(`${html.slice(start, end)}; return { sameHousePeerRole };`)();
+  assert.equal(fns.sameHousePeerRole({ title: "主標" }, { role: "primary" }), "同源屋件第首則");
+  assert.equal(fns.sameHousePeerRole({}, { role: "affiliate" }, 2), "同源屋件第2則");
+  assert.equal(fns.sameHousePeerRole({}, { role: "affiliate", offline: true }, 3), "同源屋件第3則（已下架）");
+});
+
+test("listing titles decode HTML entity emoji for display", () => {
+  const html = pub("index.html");
+  const start = html.indexOf("function decodeEntities");
+  const end = html.indexOf("function normalizeListingText");
+  assert.ok(start > 0 && end > start);
+  const fns = new Function(`${html.slice(start, end)}; return { decodeEntities };`)();
+  assert.equal(fns.decodeEntities("&#x1F525;北門站&#x2728;採光房"), "🔥北門站✨採光房");
+  assert.equal(fns.decodeEntities("A &amp; B"), "A & B");
 });
