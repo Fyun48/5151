@@ -443,6 +443,19 @@
         <p class="msg" id="spiritMsg"></p>
       </form>
     </section>
+<section class="card">
+      <h2>居住數據</h2>
+      <p class="hint">前台「居住數據」頁（data.html）與 <code>/api/housing-data</code> 讀這份。每筆一個指標；「自動更新」標記的是系統定期抓的開放資料，通常不用手改。可新增／修改／刪除，數值可填「待更新」。</p>
+      <label>頁面說明（intro）</label>
+      <textarea id="housingIntro" maxlength="2000" style="min-height:70px"></textarea>
+      <div id="housingRows"></div>
+      <div class="row" style="margin-top:10px">
+        <button type="button" class="ghost" id="housingAdd">新增一則</button>
+        <button type="button" class="ghost" id="housingReset">還原預設</button>
+        <button type="button" class="primary" id="housingSave">儲存居住數據</button>
+      </div>
+      <p class="msg" id="housingMsg"></p>
+    </section>
       </div>
       <div id="qa" class="admin-panel" data-admin-panel="qa">
 <section class="card">
@@ -1074,6 +1087,64 @@
       setMsg("spiritMsg", "已載入", true);
     }
 
+    const HOUSING_CATEGORIES = [
+      ["population", "人口與年齡"], ["vacancy", "空屋率"], ["income", "薪資所得"],
+      ["socialhousing", "社會住宅（社宅）"], ["foreign", "外籍在台工作者"],
+      ["mobility", "日夜人口流動"], ["ltc", "長照資訊與申請"], ["other", "其他"],
+    ];
+    function housingRowHtml(row = {}) {
+      const opts = HOUSING_CATEGORIES.map(([id, label]) =>
+        `<option value="${id}"${row.category === id ? " selected" : ""}>${label}</option>`).join("");
+      const auto = row.auto === true;
+      return `<div class="card housing-row" data-housing-row style="margin-top:8px;padding:10px 12px">
+        <div class="row" style="gap:8px;align-items:center">
+          <select data-hf="category" style="max-width:180px">${opts}</select>
+          ${auto ? '<span class="msg" style="color:var(--accent-deep)">自動更新</span>' : ""}
+          <button type="button" class="ghost" data-housing-del style="margin-left:auto">刪除</button>
+        </div>
+        <label>指標名稱</label>
+        <input data-hf="title" maxlength="300" value="${escAttr(row.title)}" />
+        <label>數值</label>
+        <input data-hf="value" maxlength="300" value="${escAttr(row.value)}" placeholder="可填「待更新」" />
+        <label>備註</label>
+        <input data-hf="note" maxlength="300" value="${escAttr(row.note)}" />
+        <div class="row" style="gap:8px">
+          <div style="flex:1 1 160px"><label>來源名稱</label><input data-hf="source" maxlength="300" value="${escAttr(row.source)}" /></div>
+          <div style="flex:1 1 160px"><label>資料時間</label><input data-hf="asOf" maxlength="40" value="${escAttr(row.asOf)}" placeholder="例如 2026-08" /></div>
+        </div>
+        <label>來源連結（https://）</label>
+        <input data-hf="sourceUrl" maxlength="500" value="${escAttr(row.sourceUrl)}" />
+        <input type="hidden" data-hf="auto" value="${auto ? "1" : "0"}" />
+      </div>`;
+    }
+    function escAttr(value) {
+      return String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+    }
+    function renderHousingRows(entries = []) {
+      $("housingRows").innerHTML = (entries.length ? entries : [{}]).map((row) => housingRowHtml(row)).join("");
+    }
+    function collectHousing() {
+      const entries = [...document.querySelectorAll("[data-housing-row]")].map((el) => {
+        const get = (f) => el.querySelector(`[data-hf="${f}"]`)?.value || "";
+        return {
+          category: get("category"), title: get("title"), value: get("value"), note: get("note"),
+          source: get("source"), sourceUrl: get("sourceUrl"), asOf: get("asOf"), auto: get("auto") === "1",
+        };
+      }).filter((r) => r.title || r.value);
+      return { intro: $("housingIntro").value, entries };
+    }
+    function fillHousing(data = {}) {
+      if ($("housingIntro")) $("housingIntro").value = data.intro || "";
+      renderHousingRows(data.entries || []);
+    }
+    async function loadHousing() {
+      const res = await fetch("/api/admin/housing-data", { cache: "no-store" });
+      const data = await readApi(res);
+      if (!res.ok) throw new Error(data.error || "載入居住數據失敗");
+      fillHousing(data);
+      setMsg("housingMsg", `共 ${(data.entries || []).length} 則`, true);
+    }
+
     async function loadMaps() {
       const res = await fetch("/api/admin/maps", { cache: "no-store" });
       const data = await readApi(res);
@@ -1639,7 +1710,7 @@
       if (me.role !== "admin") { location.replace("/"); return; }
       meEmail = me.email || "";
       $("who").textContent = meEmail;
-      await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadMaps(), loadHelpQa(), loadLegalCopy(), loadSpirit(), loadCrawlSources(), loadSystemCrawl(), loadBrand()]);
+      await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadMaps(), loadHelpQa(), loadLegalCopy(), loadSpirit(), loadHousing(), loadCrawlSources(), loadSystemCrawl(), loadBrand()]);
       $("brandForm").onsubmit = async (ev) => {
         ev.preventDefault();
         $("brandSave").disabled = true;
@@ -1730,6 +1801,54 @@
           setMsg("helpQaMsg", error.message);
         } finally {
           $("helpQaReset").disabled = false;
+        }
+      };
+      $("housingAdd").onclick = () => {
+        $("housingRows").insertAdjacentHTML("beforeend", housingRowHtml({ category: "other" }));
+      };
+      $("housingRows").addEventListener("click", (ev) => {
+        const del = ev.target.closest("[data-housing-del]");
+        if (!del) return;
+        del.closest("[data-housing-row]")?.remove();
+        if (!$("housingRows").children.length) renderHousingRows([{}]);
+      });
+      $("housingSave").onclick = async () => {
+        $("housingSave").disabled = true;
+        setMsg("housingMsg", "儲存中…");
+        try {
+          const res = await fetch("/api/admin/housing-data", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(collectHousing()),
+          });
+          const data = await readApi(res);
+          if (!res.ok) throw new Error(data.error || "儲存失敗");
+          fillHousing(data);
+          setMsg("housingMsg", "居住數據已儲存", true);
+        } catch (error) {
+          setMsg("housingMsg", error.message);
+        } finally {
+          $("housingSave").disabled = false;
+        }
+      };
+      $("housingReset").onclick = async () => {
+        if (!window.confirm("還原成預設居住數據？（會清掉自訂項目）")) return;
+        $("housingReset").disabled = true;
+        setMsg("housingMsg", "還原中…");
+        try {
+          const res = await fetch("/api/admin/housing-data", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reset: true }),
+          });
+          const data = await readApi(res);
+          if (!res.ok) throw new Error(data.error || "還原失敗");
+          fillHousing(data);
+          setMsg("housingMsg", "已還原預設", true);
+        } catch (error) {
+          setMsg("housingMsg", error.message);
+        } finally {
+          $("housingReset").disabled = false;
         }
       };
       $("spiritForm").onsubmit = async (ev) => {

@@ -39,6 +39,7 @@ import { isWalkableMrtDistance, makeMrtKey } from "./mrt.js";
 import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings, planIntervalMinutes, resolveSaveAsProfileAction, profileNameOrDraft, MEMBER_MAX_PROFILES, ADMIN_MAX_PROFILES, clampIntervalMinutes, memberShouldContributeCrawl, memberFetchCollision, memberHasCrawlScope } from "./settingsState.js";
 import { defaultLegalCopy, normalizeLegalCopy, publicLegalCopy } from "./legalCopy.js";
 import { defaultSpirit, normalizeSpirit, publicSpirit } from "./spirit.js";
+import { defaultHousingData, normalizeHousingData, publicHousingData } from "./housingData.js";
 import { applyIdlePauseToMembers, applyIdleResume } from "./idlePause.js";
 import { defaultNotifyMatrix } from "./notifyMatrix.js";
 import { DATA_EPOCH, shouldResetForEpoch } from "./dataEpoch.js";
@@ -1059,6 +1060,29 @@ export function saveHelpQa(partial = {}) {
   }
   writeSettingKey("helpQa", { items: normalizeHelpQaItems(src.items) });
   return getHelpQa();
+}
+
+export function getHousingData() {
+  return publicHousingData(settingKey("housingData") ?? defaultHousingData());
+}
+
+export function saveHousingData(partial = {}) {
+  const src = partial && typeof partial === "object" ? partial : {};
+  if (src.reset === true) {
+    writeSettingKey("housingData", defaultHousingData());
+    return getHousingData();
+  }
+  writeSettingKey("housingData", normalizeHousingData(src));
+  return getHousingData();
+}
+
+export function getHousingDataRaw() {
+  return normalizeHousingData(settingKey("housingData") ?? defaultHousingData());
+}
+
+export function writeHousingData(data) {
+  writeSettingKey("housingData", normalizeHousingData(data));
+  return getHousingData();
 }
 
 export function getSpirit() {

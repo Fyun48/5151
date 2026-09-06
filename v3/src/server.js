@@ -78,6 +78,8 @@ import {
   saveLegalCopy,
   getSpirit,
   saveSpirit,
+  getHousingData,
+  saveHousingData,
   getCrawlSources,
   saveCrawlSources,
   getSystemCrawl,
@@ -816,6 +818,22 @@ app.put("/api/admin/help-qa", requireAdminApi, (req, res) => {
 
 app.get("/api/spirit", (_req, res) => {
   res.json(getSpirit());
+});
+
+app.get("/api/housing-data", (_req, res) => {
+  res.json(getHousingData());
+});
+
+app.get("/api/admin/housing-data", requireAdminApi, (_req, res) => {
+  res.json(getHousingData());
+});
+
+app.put("/api/admin/housing-data", requireAdminApi, (req, res) => {
+  try {
+    res.json(saveHousingData(req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
 });
 
 app.get("/api/admin/spirit", requireAdminApi, (_req, res) => {

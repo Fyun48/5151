@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>居住數據 · 吉比租房物件追蹤</title>
+  <link rel="stylesheet" href="/tokens.css" />
+  <link rel="icon" href="/brand/favicon-32.png" />
+  <style>
+    * { box-sizing: border-box; }
+    html, body { max-width: 100%; overflow-x: clip; }
+    body {
+      margin: 0;
+      font-family: var(--font-sans);
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.7;
+    }
+    main { width: min(760px, calc(100% - 32px)); margin: 28px auto 80px; }
+    h1 { margin: 0 0 8px; font-family: var(--font-serif); font-size: 26px; font-weight: 600; }
+    .intro { color: var(--muted); font-size: 14px; margin: 0 0 20px; line-height: 1.6; }
+    h2 { margin: 26px 0 10px; font-size: 18px; font-weight: 700; }
+    .back { display: inline-block; margin-bottom: 16px; }
+    a { color: var(--accent-deep); }
+    .cards { display: grid; gap: 10px; }
+    .data-card {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--paper);
+      padding: 12px 14px;
+    }
+    .data-title { font-weight: 700; font-size: 15px; }
+    .data-value { margin-top: 4px; font-size: 15px; color: var(--ink); font-variant-numeric: tabular-nums; }
+    .data-value .pending { color: var(--muted); font-weight: 400; }
+    .data-note { margin-top: 4px; font-size: 13px; color: var(--muted); }
+    .data-meta { margin-top: 6px; font-size: 12px; color: var(--muted); }
+    .data-meta .auto { color: var(--accent-deep); font-weight: 700; }
+    .empty { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <main>
+    <a class="back" href="/">← 回找房</a>
+    <h1>居住數據</h1>
+    <p class="intro" id="dataIntro"></p>
+    <div id="dataBody"><p class="empty">載入中…</p></div>
+  </main>
+  <script>
+    (function () {
+      const body = document.getElementById("dataBody");
+      const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+      function render(data) {
+        document.getElementById("dataIntro").textContent = data.intro || "";
+        const cats = data.categories || [];
+        const entries = data.entries || [];
+        const parts = [];
+        for (const cat of cats) {
+          const rows = entries.filter((e) => e.category === cat.id);
+          if (!rows.length) continue;
+          parts.push(`<h2>${esc(cat.label)}</h2><div class="cards">`);
+          for (const e of rows) {
+            const isPending = !e.value || e.value === "待更新";
+            const valueHtml = isPending ? `<span class="pending">待更新</span>` : esc(e.value);
+            const src = e.sourceUrl
+              ? `<a href="${esc(e.sourceUrl)}" target="_blank" rel="noopener noreferrer">${esc(e.source || "來源")}</a>`
+              : esc(e.source || "");
+            const metaBits = [];
+            if (e.auto) metaBits.push(`<span class="auto">自動更新</span>`);
+            if (e.asOf) metaBits.push(`資料時間 ${esc(e.asOf)}`);
+            if (src) metaBits.push(`來源：${src}`);
+            parts.push(`<div class="data-card">
+              <div class="data-title">${esc(e.title)}</div>
+              <div class="data-value">${valueHtml}</div>
+              ${e.note ? `<div class="data-note">${esc(e.note)}</div>` : ""}
+              ${metaBits.length ? `<div class="data-meta">${metaBits.join(" · ")}</div>` : ""}
+            </div>`);
+          }
+          parts.push(`</div>`);
+        }
+        body.innerHTML = parts.join("") || `<p class="empty">目前沒有資料。</p>`;
+      }
+      fetch("/api/housing-data", { cache: "no-store" })
+        .then((r) => r.json())
+        .then(render)
+        .catch(() => { body.innerHTML = `<p class="empty">無法載入，請稍後再試。</p>`; });
+    })();
+  </script>
+</body>
+</html>
