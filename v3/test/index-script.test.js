@@ -171,8 +171,8 @@ test("mobile more-filters keep chips and districts inside the card", () => {
   const narrow = html.slice(html.indexOf("@media (max-width: 767px)"));
   assert.match(narrow, /\.chip-row \{[\s\S]*flex-wrap: nowrap;/);
   assert.match(narrow, /\.chip-row \{[\s\S]*overflow-x: auto;/);
-  assert.match(html, /max-height: min\(42vh, calc\(100dvh - 56px - 220px/);
-  assert.match(html, /list-head-sticky:not\(\.filter-compact\) \{[\s\S]*position: static;/);
+  assert.match(html, /max-height: min\(72vh, calc\(100dvh - 56px - 96px/);
+  assert.match(html, /list-head-sticky:not\(\.filter-compact\) \{[\s\S]*position: sticky;/);
 });
 
 test("left panel profile save stays in the settings sheet", () => {
