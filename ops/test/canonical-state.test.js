@@ -17,8 +17,10 @@ test("only state_entity holds a lifecycle state column", () => {
   // state_entity 是唯一可寫的「中央 lifecycle 狀態」。
   // feedback_analysis.status 是「背景分析 job 的處理狀態」（pending/processing/completed/failed），
   // 屬於局部工作狀態、非中央 lifecycle，且不會與 state_entity 分歧，故列入白名單。
-  const STATE_COL_ALLOWED = /^(state|lifecycle_state)$/i; // 對白名單表僅允許 status（job 狀態）
-  const ALLOWED = new Set(["state_entity", "feedback_analysis"]);
+  const STATE_COL_ALLOWED = /^(state|lifecycle_state)$/i; // 對白名單表僅允許 status（job / 分析用途狀態）
+  // feedback_analysis.status = 分析 job 狀態；embedding.status = active/stale；issue_candidate.status = open/merged（分析分群狀態）。
+  // 皆非中央 proposal lifecycle，且不會與 state_entity 分歧。
+  const ALLOWED = new Set(["state_entity", "feedback_analysis", "embedding", "issue_candidate"]);
   const offenders = [];
 
   for (const table of tables) {

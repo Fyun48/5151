@@ -22,6 +22,9 @@ import { makeScanner } from "./malwareScan.js";
 import { listAnalyses, publicAnalysis, reprocessAnalysis, analysisStats, currentAnalysisId, getCurrentFeedbackAnalysis } from "./feedbackAnalysis.js";
 import { makeProvider } from "./ai/provider.js";
 import { analysisConfigFromEnv, startAnalysisLoop } from "./analysisWorker.js";
+import { listIssues, getIssueWithMembers, mergeIssues, splitIssue, moveFeedback } from "./clustering.js";
+import { makeEmbeddingProvider } from "./ai/embeddingProvider.js";
+import { clusteringConfigFromEnv, startClusteringLoop } from "./clusteringWorker.js";
 
 // 刻意不使用 express：ops 服務維持「零外部相依」，與本 repo 的 CI（不跑 npm install）相容，
 // 也縮小攻擊面。所有路由用 node:http 手刻的極小 router。
@@ -166,7 +169,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
 
       // ── 公開 API ──
       if (pathname === "/ops/api/health" && method === "GET") {
-        sendJson(res, 200, { ok: true, service: "ops", phase: "4", configured: auth.configured });
+        sendJson(res, 200, { ok: true, service: "ops", phase: "5", configured: auth.configured });
         return;
       }
 
@@ -419,6 +422,52 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         return;
       }
 
+      // ── Phase 5：Issue Candidate 檢視（Owner） ──
+      if (pathname === "/ops/api/issues" && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        sendJson(res, 200, { items: listIssues(db, { limit: url.searchParams.get("limit") }) });
+        return;
+      }
+      const issueGet = pathname.match(/^\/ops\/api\/issues\/(\d+)$/);
+      if (issueGet && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        const data = getIssueWithMembers(db, issueGet[1]);
+        if (!data) { sendJson(res, 404, { error: "not found" }); return; }
+        sendJson(res, 200, data);
+        return;
+      }
+
+      // ── Phase 5：Owner 可逆修正（需 CSRF） ──
+      async function body() { try { return JSON.parse(await readRawBody(req) || "{}"); } catch { return {}; } }
+      if (pathname === "/ops/api/issues/merge" && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          const b = await body();
+          const r = mergeIssues(db, { sourceIssueId: Number(b.source_issue_id), targetIssueId: Number(b.target_issue_id), actor: `owner:${req.owner.email}`, reason: b.reason });
+          sendJson(res, 200, { ok: true, ...r });
+        } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+      const issueSplit = pathname.match(/^\/ops\/api\/issues\/(\d+)\/split$/);
+      if (issueSplit && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          const b = await body();
+          const r = splitIssue(db, { issueId: Number(issueSplit[1]), feedbackIds: b.feedback_ids, actor: `owner:${req.owner.email}`, reason: b.reason });
+          sendJson(res, 201, { ok: true, ...r });
+        } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+      if (pathname === "/ops/api/issues/move" && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          const b = await body();
+          const r = moveFeedback(db, { feedbackId: Number(b.feedback_id), toIssueId: Number(b.to_issue_id), actor: `owner:${req.owner.email}`, reason: b.reason });
+          sendJson(res, 200, { ok: true, ...r });
+        } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+
       if (pathname.startsWith("/ops/api/")) {
         sendJson(res, 404, { error: "not found" });
         return;
@@ -476,9 +525,15 @@ export function startServer() {
   if (aiProvider.available && aiConfig.enabled) {
     startAnalysisLoop(db, { provider: aiProvider, config: aiConfig, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
   }
+  // Phase 5：embedding + 分群 worker。EMBEDDING_PROVIDER 未設定 → 不啟動、feedback 照常入庫。
+  const embProvider = makeEmbeddingProvider();
+  const clusterCfg = clusteringConfigFromEnv();
+  if (embProvider.available && clusterCfg.enabled) {
+    startClusteringLoop(db, { provider: embProvider, config: clusterCfg, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
+  }
   http.createServer(handler).listen(port, host, () => {
     // eslint-disable-next-line no-console
-    console.log(`Ops console (Phase 4)：http://${host}:${port}  owner=${auth.configured ? auth.ownerEmail : "(未設定)"}  ingest=${process.env.OPS_INGEST_SECRET ? "on" : "off"}  ai=${aiProvider.available ? aiProvider.name : "off"}`);
+    console.log(`Ops console (Phase 5)：http://${host}:${port}  owner=${auth.configured ? auth.ownerEmail : "(未設定)"}  ingest=${process.env.OPS_INGEST_SECRET ? "on" : "off"}  ai=${aiProvider.available ? aiProvider.name : "off"}  embed=${embProvider.available ? embProvider.name : "off"}`);
   });
   return { db, auth };
 }
