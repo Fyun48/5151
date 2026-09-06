@@ -799,6 +799,17 @@
     .contact .who-name { font-weight: 700; }
     .contact .agency { color: var(--muted); line-height: 1.35; }
     .contact a.tel { color: var(--accent-deep); text-decoration: none; font-family: "Noto Sans TC", sans-serif; }
+    .exclude-agent-btn {
+      margin: 4px 0 0;
+      padding: 4px 10px;
+      font-size: 12px;
+      line-height: 1.3;
+      border-radius: 999px;
+      max-width: 100%;
+      white-space: normal;
+      color: var(--muted);
+    }
+    .exclude-agent-btn:hover:not(:disabled) { color: var(--rose-deep); border-color: var(--rose); }
     .notify-matrix {
       width: 100%;
       border-collapse: collapse;
@@ -4664,6 +4675,14 @@
       return `https://api.qrserver.com/v1/create-qr-code/?size=72x72&margin=2&data=${encodeURIComponent(url)}`;
     }
 
+    function agentExcludeLabel(item) {
+      const name = item.contact_name || String(item.role_name || "").replace(/^仲介|^屋主|^代理人/, "").trim();
+      const agency = String(item.agency || "").trim();
+      const cand = (agency || name || "").trim();
+      const generic = new Set(["5168租屋", "好房網", "好房", "租租通", "屋主", "代理人", "仲介", ""]);
+      if (generic.has(cand)) return "";
+      return cand;
+    }
     function contactBlock(item) {
       const role = item.contact_role || (String(item.role_name || "").includes("屋主") ? "屋主" : (item.role_name ? "仲介" : ""));
       const name = item.contact_name || String(item.role_name || "").replace(/^仲介|^屋主|^代理人/, "").trim();
@@ -4692,6 +4711,10 @@
         else if (item.source === "ddroom") bits.push(`<div class="agency">聯絡請打開租租通頁面</div>`);
         else if (item.source === "housefun") bits.push(`<div class="agency">聯絡請打開好房頁面</div>`);
         else bits.push(`<div class="agency">聯絡資料抓取中</div>`);
+      }
+      const exLabel = agentExcludeLabel(item);
+      if (!isGuest && !item.avatar && exLabel && item.source !== "self") {
+        bits.push(`<button type="button" class="ghost exclude-agent-btn" data-exclude-face="${item.post_id}" data-agent="${esc(exLabel)}" data-uid="${item.contact_uid || ""}" title="不再顯示這個仲介／聯絡人的物件">排除 ${esc(exLabel)}</button>`);
       }
       return `<div class="contact${deferContact ? " contact-defer" : ""}">${bits.join("")}</div>`;
     }
