@@ -79,6 +79,11 @@ export function applyOpsSchema(db) {
 }
 
 // 開一個 ops 資料庫。dbPath = ":memory:" 供測試使用。
+// Baseline 設定（明確且集中）：
+// - foreign_keys = ON：外鍵約束（未來 domain 表需要）。
+// - journal_mode = WAL：檔案型 DB 併發讀寫較佳（:memory: 會忽略）。
+// - busy_timeout = 5000：兩個連線競爭寫鎖時等待而非立即 SQLITE_BUSY，配合 BEGIN IMMEDIATE 避免 fork。
+// - synchronous = FULL：稽核/狀態機是 metadata，重durability 勝過吞吐；每次 commit 落盤。
 export function openOpsDb(dbPath) {
   const target = dbPath || defaultDbPath();
   if (target !== ":memory:") {
@@ -87,6 +92,8 @@ export function openOpsDb(dbPath) {
   const db = new DatabaseSync(target);
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA foreign_keys = ON");
+  db.exec("PRAGMA busy_timeout = 5000");
+  db.exec("PRAGMA synchronous = FULL");
   applyOpsSchema(db);
   return db;
 }

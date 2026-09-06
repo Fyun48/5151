@@ -1,8 +1,14 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
+let CSRF = "";
 
 async function api(path, opts) {
-  const res = await fetch(path, { cache: "no-store", ...(opts || {}) });
+  const o = { cache: "no-store", ...(opts || {}) };
+  const method = (o.method || "GET").toUpperCase();
+  if (method !== "GET" && method !== "HEAD") {
+    o.headers = { ...(o.headers || {}), "X-CSRF-Token": CSRF };
+  }
+  const res = await fetch(path, o);
   let data = {};
   try { data = await res.json(); } catch { data = {}; }
   return { res, data };
@@ -44,7 +50,7 @@ async function refreshHealth() {
 }
 
 async function refreshAudit() {
-  const { res, data } = await api("/ops/api/audit");
+  const { res, data } = await api("/ops/api/audit?limit=100");
   if (!res.ok) return;
   const body = $("auditTable").querySelector("tbody");
   const rows = data.items || [];
@@ -57,7 +63,7 @@ async function refreshAudit() {
       <td>${esc(r.entity_type || "")}${r.entity_id ? " · " + esc(String(r.entity_id).slice(0, 8)) : ""}</td>
       <td><code>${esc(String(r.hash).slice(0, 12))}</code></td>
     </tr>`).join("") || `<tr><td colspan="6" class="hint">尚無稽核紀錄</td></tr>`;
-  $("auditMsg").textContent = `共 ${rows.length} 筆（顯示最新）`;
+  $("auditMsg").textContent = `顯示最新 ${rows.length} 筆 / 共 ${data.total || rows.length} 筆`;
   $("auditMsg").className = "msg";
 }
 
@@ -84,6 +90,7 @@ async function refreshAll() {
 async function init() {
   const { data } = await api("/ops/api/me");
   if (data.ok) {
+    CSRF = data.csrfToken || "";
     showLoggedIn(data.email);
     await refreshAll();
   } else {
@@ -106,6 +113,8 @@ $("loginForm").addEventListener("submit", async (ev) => {
     msg.className = "msg err";
     return;
   }
+  const me = await api("/ops/api/me");
+  CSRF = me.data.csrfToken || "";
   showLoggedIn(data.email);
   await refreshAll();
 });

@@ -1,112 +1,224 @@
+import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
-import express from "express";
 import { openOpsDb, defaultDataDir, defaultDbPath } from "./opsDb.js";
 import { makeAuth } from "./auth.js";
 import { appendAudit, listAudit, verifyAuditChain, createCheckpoint, listCheckpoints } from "./audit.js";
 import { listTransitions } from "./stateMachine.js";
 
+// 刻意不使用 express：ops 服務維持「零外部相依」，與本 repo 的 CI（不跑 npm install）相容，
+// 也縮小攻擊面。所有路由用 node:http 手刻的極小 router。
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(here, "..", "public");
+const BODY_LIMIT = 256 * 1024;
 
-// 建立 Ops app（依賴注入 db 與 auth，方便測試）。
-export function createApp({ db, auth, publicDir = PUBLIC_DIR } = {}) {
-  if (!db) throw new Error("createApp requires db");
-  if (!auth) throw new Error("createApp requires auth");
-  const app = express();
-  app.disable("x-powered-by");
-  app.use(express.json({ limit: "256kb" }));
+const STATIC_FILES = {
+  "/": { file: "console.html", type: "text/html; charset=utf-8" },
+  "/console.html": { file: "console.html", type: "text/html; charset=utf-8" },
+  "/console.css": { file: "console.css", type: "text/css; charset=utf-8" },
+  "/console.js": { file: "console.js", type: "application/javascript; charset=utf-8" },
+};
 
-  // 基本安全標頭；API 一律 no-store。
-  app.use((req, res, next) => {
-    res.setHeader("X-Content-Type-Options", "nosniff");
-    res.setHeader("X-Frame-Options", "DENY");
-    res.setHeader("Referrer-Policy", "no-referrer");
-    res.setHeader("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'");
-    if (req.path.startsWith("/ops/api/")) res.setHeader("Cache-Control", "no-store");
-    next();
-  });
+function securityHeaders(req, res) {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader(
+    "Content-Security-Policy",
+    "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'",
+  );
+  if ((req.url || "").startsWith("/ops/api/")) res.setHeader("Cache-Control", "no-store");
+}
 
-  app.get("/ops/api/health", (_req, res) => {
-    res.json({ ok: true, service: "ops", phase: 1, configured: auth.configured });
-  });
+// 讓 auth 的 express-style middleware（res.status().json()）能在 node:http 上重用。
+function makeReply(res) {
+  return {
+    _status: 200,
+    setHeader: (k, v) => res.setHeader(k, v),
+    status(code) { this._status = code; return this; },
+    json(obj) {
+      res.writeHead(this._status, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify(obj));
+    },
+  };
+}
 
-  app.post("/ops/api/login", (req, res) => {
-    const email = req.body?.email;
-    const password = req.body?.password;
-    const key = auth.attemptKey(req, email);
-    try {
-      auth.assertNotLocked(key);
-    } catch (err) {
-      res.status(err.status || 429).json({ error: err.message });
-      return;
-    }
-    if (!auth.configured) {
-      res.status(503).json({ error: "Owner 身分尚未設定（AUTH_EMAIL / AUTH_PASSWORD）" });
-      return;
-    }
-    if (!auth.verify(email, password)) {
-      auth.recordFail(key);
-      appendAudit(db, { actor: `anon:${auth.attemptKey(req, email)}`, action: "owner.login.fail" });
-      res.status(401).json({ error: "帳號或密碼不正確" });
-      return;
-    }
-    auth.clearFails(key);
-    res.setHeader("Set-Cookie", auth.sessionCookie(req));
-    appendAudit(db, { actor: `owner:${auth.ownerEmail}`, action: "owner.login.ok" });
-    res.json({ ok: true, email: auth.ownerEmail, role: "owner" });
-  });
+function sendJson(res, status, obj) {
+  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify(obj));
+}
 
-  app.post("/ops/api/logout", (req, res) => {
-    res.setHeader("Set-Cookie", auth.clearCookie(req));
-    res.json({ ok: true });
-  });
-
-  app.get("/ops/api/me", (req, res) => {
-    const session = auth.readSession(req);
-    if (!session) {
-      res.json({ ok: false, role: "guest", configured: auth.configured });
-      return;
-    }
-    res.json({ ok: true, email: session.email, role: session.role });
-  });
-
-  app.get("/ops/api/audit", auth.requireOwner, (req, res) => {
-    res.json({
-      items: listAudit(db, { limit: req.query?.limit, offset: req.query?.offset }),
-      checkpoints: listCheckpoints(db, {}),
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on("data", (c) => {
+      size += c.length;
+      if (size > BODY_LIMIT) {
+        reject(Object.assign(new Error("payload too large"), { status: 413 }));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
     });
+    req.on("end", () => {
+      const raw = Buffer.concat(chunks).toString("utf8");
+      if (!raw) return resolve({});
+      try {
+        resolve(JSON.parse(raw));
+      } catch {
+        reject(Object.assign(new Error("invalid JSON"), { status: 400 }));
+      }
+    });
+    req.on("error", reject);
   });
+}
 
-  app.get("/ops/api/audit/verify", auth.requireOwner, (_req, res) => {
-    res.json(verifyAuditChain(db));
-  });
+// 執行一個 express-style middleware；回傳 true 表示放行（next 被呼叫），false 表示已自行回應。
+function runGuard(mw, req, reply) {
+  let passed = false;
+  mw(req, reply, () => { passed = true; });
+  return passed;
+}
 
-  app.post("/ops/api/audit/checkpoint", auth.requireOwner, (req, res) => {
-    const cp = createCheckpoint(db);
-    appendAudit(db, { actor: `owner:${req.owner.email}`, action: "audit.checkpoint", data: cp });
-    res.json({ ok: true, checkpoint: cp });
-  });
+export function createHandler({ db, auth, publicDir = PUBLIC_DIR }) {
+  if (!db) throw new Error("createHandler requires db");
+  if (!auth) throw new Error("createHandler requires auth");
 
-  app.get("/ops/api/state/transitions", auth.requireOwner, (req, res) => {
-    res.json({ items: listTransitions(db, { entityId: req.query?.entityId, limit: req.query?.limit }) });
-  });
+  return async function handler(req, res) {
+    try {
+      securityHeaders(req, res);
+      const url = new URL(req.url, "http://localhost");
+      const pathname = url.pathname;
+      const method = req.method || "GET";
+      const reply = makeReply(res);
 
-  // 任何未定義的 API 一律 404 JSON（不要掉進靜態檔）。
-  app.all("/ops/api/*splat", (_req, res) => {
-    res.status(404).json({ error: "not found" });
-  });
+      // ── 靜態檔（登入前可讀，無需 cookie） ──
+      if (method === "GET" && STATIC_FILES[pathname]) {
+        const entry = STATIC_FILES[pathname];
+        const full = path.join(publicDir, entry.file);
+        try {
+          const buf = readFileSync(full);
+          res.writeHead(200, { "Content-Type": entry.type });
+          res.end(buf);
+        } catch {
+          sendJson(res, 404, { error: "not found" });
+        }
+        return;
+      }
 
-  app.use(express.static(publicDir, { index: "console.html" }));
-  app.get("/", (_req, res) => res.sendFile(path.join(publicDir, "console.html")));
+      // ── 公開 API ──
+      if (pathname === "/ops/api/health" && method === "GET") {
+        sendJson(res, 200, { ok: true, service: "ops", phase: "1.1", configured: auth.configured });
+        return;
+      }
 
-  return app;
+      if (pathname === "/ops/api/login" && method === "POST") {
+        const body = await readBody(req).catch((e) => { throw e; });
+        const email = body?.email;
+        const key = auth.attemptKey(req, email);
+        try {
+          auth.assertNotLocked(key);
+        } catch (err) {
+          sendJson(res, err.status || 429, { error: err.message });
+          return;
+        }
+        if (!auth.configured) {
+          sendJson(res, 503, { error: "Owner 身分尚未設定（AUTH_EMAIL / AUTH_PASSWORD / OPS_SESSION_SECRET）" });
+          return;
+        }
+        if (!auth.verify(email, body?.password)) {
+          auth.recordFail(key);
+          // 稽核只記錄「有一次失敗登入」與來源 IP，不記帳號輸入內容、不記密碼。
+          appendAudit(db, { actor: `anon:${auth.clientIp(req)}`, action: "owner.login.fail" });
+          sendJson(res, 401, { error: "帳號或密碼不正確" });
+          return;
+        }
+        auth.clearFails(key);
+        res.setHeader("Set-Cookie", auth.sessionCookie(req));
+        appendAudit(db, { actor: `owner:${auth.ownerEmail}`, action: "owner.login.ok" });
+        // 前端登入成功後會呼叫 /ops/api/me 取得 CSRF token（用新 cookie）。
+        sendJson(res, 200, { ok: true, email: auth.ownerEmail, role: "owner" });
+        return;
+      }
+
+      if (pathname === "/ops/api/logout" && method === "POST") {
+        // logout 也是 state-changing，但即便 CSRF 失敗也允許清除自身 cookie（降風險、不擴權）。
+        res.setHeader("Set-Cookie", auth.clearCookie(req));
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+
+      if (pathname === "/ops/api/me" && method === "GET") {
+        const session = auth.readSession(req);
+        if (!session) {
+          sendJson(res, 200, { ok: false, role: "guest", configured: auth.configured });
+          return;
+        }
+        res.setHeader("Set-Cookie", auth.slideCookie(req, session));
+        sendJson(res, 200, { ok: true, email: session.email, role: session.role, csrfToken: auth.csrfTokenFor(session) });
+        return;
+      }
+
+      // ── Owner-only 讀取 API ──
+      if (pathname === "/ops/api/audit" && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        const page = listAudit(db, { limit: url.searchParams.get("limit"), offset: url.searchParams.get("offset") });
+        sendJson(res, 200, { ...page, checkpoints: listCheckpoints(db, {}) });
+        return;
+      }
+
+      if (pathname === "/ops/api/audit/verify" && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        sendJson(res, 200, verifyAuditChain(db));
+        return;
+      }
+
+      if (pathname === "/ops/api/state/transitions" && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        sendJson(res, 200, { items: listTransitions(db, { entityId: url.searchParams.get("entityId"), limit: url.searchParams.get("limit") }) });
+        return;
+      }
+
+      // ── Owner-only mutation API（需 CSRF + 同源） ──
+      if (pathname === "/ops/api/audit/checkpoint" && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        const cp = createCheckpoint(db);
+        appendAudit(db, { actor: `owner:${req.owner.email}`, action: "audit.checkpoint", data: cp });
+        sendJson(res, 200, { ok: true, checkpoint: cp });
+        return;
+      }
+
+      if (pathname.startsWith("/ops/api/")) {
+        sendJson(res, 404, { error: "not found" });
+        return;
+      }
+
+      sendJson(res, 404, { error: "not found" });
+    } catch (err) {
+      const status = err?.status || 500;
+      sendJson(res, status, { error: status === 500 ? "internal error" : err.message });
+    }
+  };
+}
+
+// 相容舊測試/呼叫：createApp 回傳一個 { listen } 介面（用 node:http 包裝 handler）。
+export function createApp({ db, auth, publicDir = PUBLIC_DIR }) {
+  const handler = createHandler({ db, auth, publicDir });
+  return {
+    handler,
+    listen(...args) {
+      return http.createServer(handler).listen(...args);
+    },
+  };
 }
 
 function resolveSessionSecret(dataDir) {
-  if (process.env.SESSION_SECRET) return process.env.SESSION_SECRET;
+  // 必須與 v3 的 SESSION_SECRET 分離：只吃 OPS_SESSION_SECRET，否則自行產生並持久化。
+  if (process.env.OPS_SESSION_SECRET) return process.env.OPS_SESSION_SECRET;
   const file = path.join(dataDir, "ops.session.secret");
   try {
     if (existsSync(file)) return readFileSync(file, "utf8").trim();
@@ -123,21 +235,19 @@ export function startServer() {
   const dataDir = defaultDataDir();
   const db = openOpsDb(defaultDbPath());
   const auth = makeAuth({
-    // 重用既有 admin identity：預設吃 AUTH_EMAIL / AUTH_PASSWORD，可用 OPS_OWNER_* 覆寫。
     ownerEmail: process.env.OPS_OWNER_EMAIL || process.env.AUTH_EMAIL,
     ownerPassword: process.env.OPS_OWNER_PASSWORD || process.env.AUTH_PASSWORD,
     sessionSecret: resolveSessionSecret(dataDir),
     cookieSecure: process.env.COOKIE_SECURE === "1" ? true : undefined,
   });
-  const app = createApp({ db, auth });
-  // 預設只綁 127.0.0.1，不對外公開。要對外需明確設定 OPS_HOST。
+  const handler = createHandler({ db, auth });
   const host = process.env.OPS_HOST || "127.0.0.1";
   const port = Number(process.env.OPS_PORT || 5154);
-  app.listen(port, host, () => {
+  http.createServer(handler).listen(port, host, () => {
     // eslint-disable-next-line no-console
-    console.log(`Ops console (Phase 1)：http://${host}:${port}  owner=${auth.configured ? auth.ownerEmail : "(未設定)"}`);
+    console.log(`Ops console (Phase 1.1)：http://${host}:${port}  owner=${auth.configured ? auth.ownerEmail : "(未設定)"}`);
   });
-  return { app, db, auth };
+  return { db, auth };
 }
 
 const invokedDirectly = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
