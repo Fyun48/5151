@@ -1,4 +1,5 @@
 import { passesAttributeFilters, passesGeoFilters } from "./floors.js";
+import { decodeEntities } from "./htmlEntities.js";
 import { feeRowMonthlyAmount, parseTwdAmount } from "./listingCost.js";
 import { allDistricts } from "./regions.js";
 import { coordsFrom591Detail, coordsFromListing, isExcludedByKeyword } from "./geo.js";
@@ -236,7 +237,7 @@ export function normalizeListing(item) {
   return {
     post_id: Number(item.id),
     source_key: sourceKey(item),
-    title: item.title || "(無標題)",
+    title: decodeEntities(item.title).trim() || "(無標題)",
     url: item.url || `https://rent.591.com.tw/${item.id}`,
     price: item.price || "",
     price_num: priceNum(item.price),

@@ -1,5 +1,6 @@
 /** 同屋源交叉比對與費用變更註記（規則化，不呼叫外部模型）。 */
 
+import { decodeEntities } from "./htmlEntities.js";
 import { extraMonthlyAmount, listingCompareCost, parseJsonFees, rentAmount } from "./listingCost.js";
 import { preferPrimaryListing } from "./match.js";
 
@@ -105,7 +106,7 @@ const COMPARE_FIELDS = [
   ["layout", "格局", (row) => String(row.layout || "").trim()],
   ["title", "標題", (row) => String(row.title || "").trim()],
   ["source", "來源", (row) => String(row.source_label || row.source || "").trim()],
-  ["offline", "上架", (row) => (
+  ["offline", "物件狀態", (row) => (
     Number(row.offline_confirmed) === 1
       ? "確認已下架"
       : Number(row.offline) === 1
@@ -232,7 +233,7 @@ export function publicSameHousePeer(row) {
   const snap = listingCostSnapshot(row);
   return {
     post_id: Number(row.post_id),
-    title: row.title || "",
+    title: decodeEntities(row.title || ""),
     url: row.url || "",
     source: String(row.source || "591") || "591",
     source_label: row.source_label || "",
@@ -240,6 +241,7 @@ export function publicSameHousePeer(row) {
     price_num: snap.rent,
     extra_monthly: snap.extra_monthly,
     total: snap.total,
+    fee_text: feeRowsText(row),
     floor_name: row.floor_name || "",
     area_name: row.area_name || "",
     layout: row.layout || "",

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { passesAttributeFilters } from "./floors.js";
+import { decodeEntities } from "./htmlEntities.js";
 import { isExcludedByKeyword } from "./geo.js";
 import { feeFieldsFromBlob } from "./listingCost.js";
 import { zipForDistrict } from "./hbhousing.js";
@@ -96,23 +97,6 @@ function listingSourceKey({ regionId, sectionId, address, floorName, areaName, l
   const floor = String(floorName || "").split("/")[0].trim();
   const area = String(areaName || "").replace(/坪/g, "");
   return [regionId || "", sectionId || "", "", addr, floor, area, layout].join("|");
-}
-
-function decodeEntities(value) {
-  return String(value || "")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => {
-      const code = Number.parseInt(hex, 16);
-      return Number.isFinite(code) ? String.fromCodePoint(code) : "";
-    })
-    .replace(/&#(\d+);/g, (_, num) => {
-      const code = Number(num);
-      return Number.isFinite(code) ? String.fromCodePoint(code) : "";
-    });
 }
 
 function stripTags(html) {
