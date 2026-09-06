@@ -55,6 +55,18 @@ test("display filters hide suites and 1F for notify/list preferences", async () 
   assert.equal(passesDisplayFilters(suite, prefs, { skipWholeFloor: true }), true);
 });
 
+test("hasParking display filter keeps only listings mentioning a parking space", async () => {
+  const { passesDisplayFilters, listingHasParking } = await import("../src/floors.js");
+  const withParking = { kind_name: "整層住家", floor_name: "3F/5F", title: "近站附平面車位" };
+  const noParking = { kind_name: "整層住家", floor_name: "3F/5F", title: "採光佳", tags: JSON.stringify(["無車位"]) };
+  const unknown = { kind_name: "整層住家", floor_name: "3F/5F", title: "採光佳" };
+  assert.equal(listingHasParking(withParking), true);
+  assert.equal(listingHasParking(noParking), false);
+  assert.equal(passesDisplayFilters(withParking, { hasParking: true }), true);
+  assert.equal(passesDisplayFilters(unknown, { hasParking: true }), false);
+  assert.equal(passesDisplayFilters(unknown, { hasParking: false }), true);
+});
+
 test("excludeLowFloors is 1F and basement only, not 整棟 or 頂加", async () => {
   const { isAtOrBelowFirstFloor, passesDisplayFilters } = await import("../src/floors.js");
   assert.equal(isAtOrBelowFirstFloor("1F/5F"), true);

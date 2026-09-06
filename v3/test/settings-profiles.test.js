@@ -345,6 +345,8 @@ test("commute km keeps one decimal and exclude lists are capped", () => {
   assert.equal(blank.minBuildingFloors, 0);
   const extras = applySettingPatch({ ...defaults }, { priceMaxIncludesExtras: true });
   assert.equal(extras.priceMaxIncludesExtras, true);
+  assert.equal(applySettingPatch({ ...defaults }, {}).hasParking, false);
+  assert.equal(applySettingPatch({ ...defaults }, { hasParking: true }).hasParking, true);
 });
 
 test("member crawl waits for due time, districts, and a recent covering collision", () => {
