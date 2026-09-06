@@ -4,23 +4,66 @@ name: Deploy v2 to CasaOS (manual)
 on:
   workflow_dispatch:
     inputs:
-      ref:
-        description: "要部署的 git ref / 分支 / tag / commit SHA（預設 master）"
-        required: false
-        default: master
+      sha:
+        description: "要部署的完整 40 碼 commit SHA（必須可從 origin/master 追溯）"
+        required: true
+      confirmation:
+        description: "輸入 DEPLOY-PRODUCTION 以確認正式部署"
+        required: true
+        default: ""
 
 permissions:
   contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
 
 jobs:
   sync-nas-v2:
     runs-on: ubuntu-latest
     environment: production
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - name: Authorize production deployment (fail-closed)
+        env:
+          WF_REF: ${{ github.ref }}
+          ACTOR: ${{ github.actor }}
+          ALLOWED_ACTOR: ${{ vars.PRODUCTION_DEPLOY_ALLOWED_ACTOR }}
+          CONFIRM: ${{ inputs.confirmation }}
+          DEPLOY_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$WF_REF" != "refs/heads/master" ]; then
+            echo "::error::Production deploy must run from the master workflow definition (got $WF_REF)"; exit 1
+          fi
+          if [ -z "${ALLOWED_ACTOR:-}" ]; then
+            echo "::error::PRODUCTION_DEPLOY_ALLOWED_ACTOR is not configured; refusing (fail-closed)"; exit 1
+          fi
+          if [ "$ACTOR" != "$ALLOWED_ACTOR" ]; then
+            echo "::error::actor '$ACTOR' is not the authorized deployer"; exit 1
+          fi
+          if [ "${CONFIRM:-}" != "DEPLOY-PRODUCTION" ]; then
+            echo "::error::confirmation must be exactly DEPLOY-PRODUCTION"; exit 1
+          fi
+          if ! printf '%s' "${DEPLOY_SHA:-}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::sha must be a full 40-character commit SHA"; exit 1
+          fi
+      - name: Checkout master (for ancestry validation)
+        uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: master
+          fetch-depth: 0
+      - name: Validate SHA reachable from origin/master, then check it out
+        env:
+          DEPLOY_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin master
+          if ! git merge-base --is-ancestor "$DEPLOY_SHA" origin/master; then
+            echo "::error::commit $DEPLOY_SHA is not reachable from origin/master; refusing"; exit 1
+          fi
+          git checkout --force "$DEPLOY_SHA"
       - name: Copy v2 app and compose files
         uses: appleboy/scp-action@v0.1.7
         with:
