@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex,nofollow" />
+  <title>Ops Console · 維運自動化（Phase 1）</title>
+  <link rel="stylesheet" href="/console.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>Ops Console</h1>
+      <p class="sub">維運自動化系統 · Phase 1（骨架 / Owner / Audit / State Machine）</p>
+    </div>
+    <div class="who">
+      <span id="who">未登入</span>
+      <button type="button" id="logoutBtn" hidden>登出</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="loginCard" class="card" hidden>
+      <h2>Owner 登入</h2>
+      <p class="hint">使用既有管理者帳號（AUTH_EMAIL / AUTH_PASSWORD）。此系統預設只在內網存取，不對外公開。</p>
+      <form id="loginForm" autocomplete="off">
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email" autocomplete="username" />
+        <label for="password">密碼</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" />
+        <button type="submit" class="primary">登入</button>
+        <p class="msg" id="loginMsg"></p>
+      </form>
+    </section>
+
+    <div id="ownerArea" hidden>
+      <section class="card">
+        <h2>系統狀態</h2>
+        <p class="hint">Phase 1 只包含基礎設施。Feedback 擷取、AI、Coding Agent 皆尚未啟用。</p>
+        <div id="healthBox" class="kv"></div>
+      </section>
+
+      <section class="card">
+        <div class="row">
+          <h2>稽核鏈（Audit Log）</h2>
+          <span class="grow"></span>
+          <button type="button" id="verifyBtn">驗證鏈完整性</button>
+          <button type="button" id="checkpointBtn">建立 Checkpoint</button>
+          <button type="button" id="refreshBtn">重新整理</button>
+        </div>
+        <p class="msg" id="auditMsg"></p>
+        <div id="verifyBox" class="kv"></div>
+        <table class="tbl" id="auditTable">
+          <thead><tr><th>#</th><th>時間</th><th>actor</th><th>action</th><th>entity</th><th>hash（前12）</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </section>
+
+      <section class="card">
+        <h2>狀態轉移紀錄（State Transitions）</h2>
+        <p class="hint">目前尚無業務實體；此區在後續 Phase 會顯示 proposal / release 等 lifecycle 轉移。</p>
+        <table class="tbl" id="stateTable">
+          <thead><tr><th>#</th><th>時間</th><th>entity</th><th>from → to</th><th>ver</th><th>actor</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </section>
+    </div>
+  </main>
+
+  <script src="/console.js"></script>
+</body>
+</html>
