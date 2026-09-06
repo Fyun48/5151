@@ -97,6 +97,41 @@ export function applyOpsSchema(db) {
     );
     CREATE INDEX IF NOT EXISTS idx_attachment_feedback ON feedback_attachment(feedback_id);
 
+    -- Phase 4：AI 首輪分類/摘要結果（版本化、可追溯、可重跑）。
+    -- 每次 (feedback_id, analysis_type, prompt_version, attempt) 一列；reprocess 產生新的 attempt，不覆寫歷史。
+    -- 只存結構化結果與 raw_output_hash（雜湊），不存隱藏推理鏈。FK → ingested_feedback。
+    CREATE TABLE IF NOT EXISTS feedback_analysis (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      feedback_id INTEGER NOT NULL,
+      analysis_type TEXT NOT NULL DEFAULT 'classification',
+      attempt INTEGER NOT NULL DEFAULT 1,
+      provider TEXT,
+      model TEXT,
+      model_version TEXT,
+      prompt_version TEXT NOT NULL,
+      category TEXT,
+      summary TEXT,
+      severity_hint TEXT,
+      confidence REAL,
+      language TEXT,
+      raw_output_hash TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      error_code TEXT,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      max_attempts INTEGER NOT NULL DEFAULT 5,
+      next_attempt_at TEXT NOT NULL,
+      claimed_at TEXT,
+      usage_input_tokens INTEGER,
+      usage_output_tokens INTEGER,
+      estimated_cost REAL,
+      created_at TEXT NOT NULL,
+      completed_at TEXT,
+      FOREIGN KEY (feedback_id) REFERENCES ingested_feedback(id) ON DELETE RESTRICT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_analysis_identity ON feedback_analysis(feedback_id, analysis_type, prompt_version, attempt);
+    CREATE INDEX IF NOT EXISTS idx_analysis_status ON feedback_analysis(status, next_attempt_at);
+    CREATE INDEX IF NOT EXISTS idx_analysis_feedback ON feedback_analysis(feedback_id, id);
+
     CREATE INDEX IF NOT EXISTS idx_state_entity_type ON state_entity(entity_type, state);
     CREATE INDEX IF NOT EXISTS idx_state_transition_entity ON state_transition(entity_type, entity_id, id);
     CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_type, entity_id, id);

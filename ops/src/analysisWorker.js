@@ -1,0 +1,130 @@
+import { createHash } from "node:crypto";
+import { withImmediateTx } from "./tx.js";
+import { appendAudit, appendAuditRow } from "./audit.js";
+import { claimAnalysisBatch, completeAnalysis, failAnalysis } from "./feedbackAnalysis.js";
+import { minimizeForAnalysis, buildClassificationPrompt } from "./ai/prompt.js";
+import { parseAndValidate } from "./ai/schema.js";
+
+// AI 分析背景 worker：bounded concurrency、provider timeout、retry/backoff、stale 復原。
+// provider 未設定（available=false）→ 直接略過，不認領、不消耗 attempts（feedback 保持 pending）。
+// 分析輸出一律經 ai/schema 嚴格驗證；驗證失敗＝非暫時性錯誤（較低重試上限）。
+
+const DEFAULT_TIMEOUT_MS = 20000;
+const DEFAULT_BATCH = 10;
+const DEFAULT_CONCURRENCY = 2;
+
+export function analysisConfigFromEnv(env = process.env) {
+  const provider = String(env.AI_PROVIDER || "").toLowerCase();
+  return {
+    enabled: provider === "local" || provider === "stub",
+    intervalMs: Number(env.AI_ANALYSIS_INTERVAL_MS || 15000),
+    timeoutMs: Number(env.AI_TIMEOUT_MS || DEFAULT_TIMEOUT_MS),
+    batchSize: Number(env.AI_ANALYSIS_BATCH || DEFAULT_BATCH),
+    concurrency: Number(env.AI_ANALYSIS_CONCURRENCY || DEFAULT_CONCURRENCY),
+  };
+}
+
+async function runPool(items, concurrency, worker) {
+  const results = [];
+  let idx = 0;
+  const runners = new Array(Math.max(1, concurrency)).fill(0).map(async () => {
+    while (idx < items.length) {
+      const cur = items[idx++];
+      results.push(await worker(cur));
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
+
+async function processOne(db, job, { provider, timeoutMs, now = () => new Date(), random = Math.random }) {
+  const fb = db.prepare("SELECT * FROM ingested_feedback WHERE id = ?").get(job.feedback_id);
+  if (!fb) {
+    // 理論上不會發生（FK）；視為非暫時性失敗。
+    let out;
+    withImmediateTx(db, () => {
+      out = failAnalysis(db, job, { errorCode: "feedback_missing", transient: false, now: now() });
+      appendAuditRow(db, { actor: "system", action: "feedback.analysis.failed", entityType: "feedback_analysis", entityId: String(job.id), data: { feedback_id: job.feedback_id, error_code: "feedback_missing", status: out.status } });
+    });
+    return out.status;
+  }
+
+  const input = minimizeForAnalysis(fb);
+  const { system, user, promptVersion } = buildClassificationPrompt(input);
+  appendAudit(db, { actor: "system", action: "feedback.analysis.started", entityType: "feedback_analysis", entityId: String(job.id), data: { feedback_id: job.feedback_id, provider: provider.name, prompt_version: promptVersion, attempt: job.attempt } });
+
+  try {
+    const { rawText, usage } = await provider.analyze({ system, user, timeoutMs });
+    const result = parseAndValidate(rawText); // 嚴格驗證；失敗會丟 422
+    const rawOutputHash = createHash("sha256").update(String(rawText)).digest("hex");
+    withImmediateTx(db, () => {
+      completeAnalysis(db, job.id, {
+        provider: provider.name,
+        model: provider.model || null,
+        result,
+        rawOutputHash,
+        usage: usage || {},
+        now: now(),
+      });
+      appendAuditRow(db, {
+        actor: "system",
+        action: "feedback.analysis.completed",
+        entityType: "feedback_analysis",
+        entityId: String(job.id),
+        // 只記 metadata；不記 prompt、不記完整內容、不記隱藏推理。
+        data: { feedback_id: job.feedback_id, category: result.category, severity_hint: result.severity_hint, confidence: result.confidence, provider: provider.name, model: provider.model || null, prompt_version: promptVersion },
+      });
+    });
+    return "completed";
+  } catch (err) {
+    const isSchema = err?.status === 422;
+    const code = isSchema ? "schema_invalid" : (err?.name === "AbortError" ? "timeout" : (err?.name || "provider_error"));
+    let out;
+    withImmediateTx(db, () => {
+      out = failAnalysis(db, job, { errorCode: code, transient: !isSchema, now: now(), random });
+      appendAuditRow(db, { actor: "system", action: "feedback.analysis.failed", entityType: "feedback_analysis", entityId: String(job.id), data: { feedback_id: job.feedback_id, error_code: code, status: out.status, attempts: out.attempts } });
+    });
+    return out.status;
+  }
+}
+
+export async function runAnalysisOnce(db, { provider, now = () => new Date(), timeoutMs = DEFAULT_TIMEOUT_MS, batchSize = DEFAULT_BATCH, concurrency = DEFAULT_CONCURRENCY, random = Math.random } = {}) {
+  if (!provider || !provider.available) {
+    return { claimed: 0, completed: 0, failed: 0, failed_retry: 0, skipped: "no_provider" };
+  }
+  const claimed = claimAnalysisBatch(db, { limit: batchSize, now: now() });
+  if (!claimed.length) return { claimed: 0, completed: 0, failed: 0, failed_retry: 0 };
+  const results = await runPool(claimed, concurrency, (job) => processOne(db, job, { provider, timeoutMs, now, random }));
+  const summary = { claimed: claimed.length, completed: 0, failed: 0, failed_retry: 0 };
+  for (const r of results) {
+    if (r === "completed") summary.completed += 1;
+    else if (r === "failed") summary.failed += 1;
+    else summary.failed_retry += 1;
+  }
+  return summary;
+}
+
+export function startAnalysisLoop(db, { provider, config, log = () => {} }) {
+  if (!provider?.available || !config?.enabled) return () => {};
+  let running = false;
+  const tick = async () => {
+    if (running) return;
+    running = true;
+    try {
+      const summary = await runAnalysisOnce(db, {
+        provider,
+        timeoutMs: config.timeoutMs,
+        batchSize: config.batchSize,
+        concurrency: config.concurrency,
+      });
+      if (summary.claimed) log("ai-analysis", summary);
+    } catch (err) {
+      log("ai-analysis-error", { error: err?.name || "error" });
+    } finally {
+      running = false;
+    }
+  };
+  const timer = setInterval(tick, config.intervalMs);
+  if (typeof timer.unref === "function") timer.unref();
+  return () => clearInterval(timer);
+}
