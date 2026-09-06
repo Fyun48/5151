@@ -209,16 +209,21 @@ export function applyOpsSchema(db) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       issue_id INTEGER NOT NULL,
       feedback_id INTEGER NOT NULL,
+      analysis_id INTEGER,
       similarity_score REAL,
+      coherence_score REAL,
       embedding_id INTEGER,
       embedding_model TEXT,
+      clustering_version TEXT,
       added_by TEXT NOT NULL DEFAULT 'auto',
+      membership_status TEXT NOT NULL DEFAULT 'active',
       reason TEXT,
       active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL,
       removed_at TEXT,
       FOREIGN KEY (issue_id) REFERENCES issue_candidate(id) ON DELETE RESTRICT,
-      FOREIGN KEY (feedback_id) REFERENCES ingested_feedback(id) ON DELETE RESTRICT
+      FOREIGN KEY (feedback_id) REFERENCES ingested_feedback(id) ON DELETE RESTRICT,
+      FOREIGN KEY (analysis_id) REFERENCES feedback_analysis(id) ON DELETE RESTRICT
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_link_one_active_per_feedback ON issue_feedback_link(feedback_id) WHERE active = 1;
     CREATE INDEX IF NOT EXISTS idx_link_issue ON issue_feedback_link(issue_id, active);

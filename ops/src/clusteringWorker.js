@@ -1,8 +1,6 @@
-import { withImmediateTx } from "./tx.js";
-import { appendAuditRow } from "./audit.js";
 import { getCurrentFeedbackAnalysis } from "./feedbackAnalysis.js";
 import { buildEmbeddingInput, NORMALIZATION_VERSION } from "./ai/embeddingInput.js";
-import { storeEmbedding, autoClusterFeedback, activeEmbedding, bestMatch, feedbackIssue, clusteringConfig } from "./clustering.js";
+import { storeEmbedding, autoClusterFeedback, feedbackIssue, clusteringConfig, reevaluateMembershipOnRefresh } from "./clustering.js";
 
 // Phase 5 背景 worker：異步產生 embedding 並保守自動分群。
 // - ingestion 永不等待；provider 未設定（available=false）→ 略過，不影響 feedback 儲存。
@@ -36,16 +34,6 @@ function candidates(db, { model, modelVersion, normVersion, limit }) {
   ).all(model, modelVersion, normVersion, Math.max(1, Math.min(Number(limit) || DEFAULT_BATCH, 200)));
 }
 
-// 新 embedding 產生後，若該 feedback 已在某 issue：保守 re-evaluate（僅在明確更相似的其他 issue 才移動）。
-function reevaluateMembership(db, { feedbackId, emb, config, now }) {
-  const curIssue = feedbackIssue(db, feedbackId);
-  if (curIssue == null) return { action: "not_linked" };
-  const match = bestMatch(db, emb, { excludeFeedbackId: feedbackId });
-  appendAuditRow(db, { actor: "system", action: "issue.membership.reevaluated", entityType: "issue_candidate", entityId: String(curIssue), data: { feedback_id: Number(feedbackId), best_issue: match.issueId, best_score: match.score } });
-  // 保守：不因 stale 主動搬移；僅記錄。實際搬移交由 Owner（MOVE）或未來政策。
-  return { action: "kept", issue: curIssue, best: match };
-}
-
 export async function runEmbeddingOnce(db, { provider, now = () => new Date(), timeoutMs = DEFAULT_TIMEOUT_MS, batchSize = DEFAULT_BATCH, config = clusteringConfig() } = {}) {
   if (!provider || !provider.available) return { embedded: 0, clustered: 0, staled: 0, skipped: "no_provider" };
   const model = provider.model;
@@ -74,7 +62,6 @@ export async function runEmbeddingOnce(db, { provider, now = () => new Date(), t
     });
     summary.embedded += 1;
     summary.staled += stored.staled || 0;
-    const emb = activeEmbedding(db, c.feedback_id);
     const alreadyLinked = feedbackIssue(db, c.feedback_id) != null;
     if (!alreadyLinked) {
       const res = autoClusterFeedback(db, { feedbackId: c.feedback_id, currentAnalysis: current, now: now(), config });
@@ -82,7 +69,8 @@ export async function runEmbeddingOnce(db, { provider, now = () => new Date(), t
       if (res.action === "new_issue") summary.new_issues += 1;
       if (res.action === "linked") summary.linked += 1;
     } else if (stored.created) {
-      withImmediateTx(db, () => reevaluateMembership(db, { feedbackId: c.feedback_id, emb, config, now: now() }));
+      // CURRENT 分析變更 → stale 傳播 + 重新評估（含 Owner 權威保護）
+      reevaluateMembershipOnRefresh(db, { feedbackId: c.feedback_id, config, now: now() });
     }
   }
   return summary;
