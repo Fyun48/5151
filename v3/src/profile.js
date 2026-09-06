@@ -67,6 +67,9 @@ export function ensureProfileSchema(db) {
     "ALTER TABLE users ADD COLUMN contact_email TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE users ADD COLUMN profile_privacy_at TEXT",
     "ALTER TABLE users ADD COLUMN profile_onboarded_at TEXT",
+    "ALTER TABLE users ADD COLUMN birth_date TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN gender TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN residence TEXT NOT NULL DEFAULT ''",
   ]) {
     try {
       db.exec(sql);
@@ -78,6 +81,26 @@ export function ensureProfileSchema(db) {
 
 function cleanLine(value, max) {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
+}
+
+export const GENDER_OPTIONS = ["男", "女", "其他"];
+
+/** 出生年月日：只接受 YYYY-MM-DD、且年份在合理範圍，否則存空字串（選填，不強迫）。 */
+export function normalizeBirthDate(value) {
+  const raw = String(value || "").trim().slice(0, 10);
+  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return "";
+  const year = Number(m[1]);
+  const nowYear = new Date().getFullYear();
+  if (year < 1900 || year > nowYear) return "";
+  const date = new Date(`${raw}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return "";
+  return raw;
+}
+
+export function normalizeGender(value) {
+  const raw = String(value || "").trim();
+  return GENDER_OPTIONS.includes(raw) ? raw : "";
 }
 
 function mediaUrl(value, label) {
@@ -108,6 +131,9 @@ export function publicProfile(row) {
     line_id: String(row.line_id || "").trim(),
     line_qr_url: String(row.line_qr_url || "").trim(),
     contact_email: String(row.contact_email || "").trim(),
+    birth_date: String(row.birth_date || "").trim(),
+    gender: String(row.gender || "").trim(),
+    residence: String(row.residence || "").trim(),
     privacy_accepted: Boolean(String(row.profile_privacy_at || row.accepted_disclaimer_at || "").trim()),
     privacy_text: PROFILE_PRIVACY,
     needs_profile: needsProfileOnboard(row),
@@ -171,6 +197,15 @@ export function updateUserProfile(conn, userId, input = {}) {
     }
     contactEmail = ok;
   }
+  const birthDate = Object.prototype.hasOwnProperty.call(input, "birth_date")
+    ? normalizeBirthDate(input.birth_date)
+    : String(row.birth_date || "");
+  const gender = Object.prototype.hasOwnProperty.call(input, "gender")
+    ? normalizeGender(input.gender)
+    : String(row.gender || "");
+  const residence = Object.prototype.hasOwnProperty.call(input, "residence")
+    ? cleanLine(input.residence, 20)
+    : String(row.residence || "");
   const next = {
     ...row,
     nickname,
@@ -181,6 +216,9 @@ export function updateUserProfile(conn, userId, input = {}) {
     line_id: lineId,
     line_qr_url: lineQr,
     contact_email: contactEmail,
+    birth_date: birthDate,
+    gender,
+    residence,
   };
   let privacyAt = String(row.profile_privacy_at || row.accepted_disclaimer_at || "").trim();
   if (!privacyAt) privacyAt = String(row.accepted_disclaimer_at || "").trim();
@@ -189,8 +227,8 @@ export function updateUserProfile(conn, userId, input = {}) {
     UPDATE users SET
       nickname = ?, avatar_url = ?, home_address = ?, company_address = ?,
       contact_phone = ?, line_id = ?, line_qr_url = ?, contact_email = ?, profile_privacy_at = ?,
-      profile_onboarded_at = ?
+      profile_onboarded_at = ?, birth_date = ?, gender = ?, residence = ?
     WHERE id = ?
-  `).run(nickname, avatar, home, company, phone, lineId, lineQr, contactEmail, privacyAt || null, onboardedAt, uid);
+  `).run(nickname, avatar, home, company, phone, lineId, lineQr, contactEmail, privacyAt || null, onboardedAt, birthDate, gender, residence, uid);
   return conn.prepare("SELECT * FROM users WHERE id = ?").get(uid);
 }

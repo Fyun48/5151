@@ -717,6 +717,26 @@ test("same-house peer role labels use 同源屋件第N則 ordering", () => {
   assert.equal(fns.sameHousePeerRole({}, { role: "affiliate", offline: true }, 3), "同源屋件第3則（已下架）");
 });
 
+test("mobile filter buttons: collapse × moves top-right and 篩選/更多條件 share accent", () => {
+  const html = pub("index.html");
+  assert.match(html, /body\.panel-collapsed \.filter-mini-btn \{[\s\S]*?top: 8px;[\s\S]*?\}/);
+  assert.match(html, /body\.panel-collapsed \.filter-mini-btn \{[\s\S]*?bottom: auto;[\s\S]*?\}/);
+  assert.match(html, /#openFilterSheetBtn \{[\s\S]*?background: var\(--accent\);[\s\S]*?\}/);
+  assert.match(html, /list-head-sticky\.filter-compact \.filter-restore-btn \{[\s\S]*?background: var\(--accent\);/);
+});
+
+test("profile has optional analytics fields (birth date, gender, residence)", () => {
+  const html = pub("index.html");
+  assert.match(html, /id="profileBirthDate"/);
+  assert.match(html, /id="profileGender"/);
+  assert.match(html, /id="profileResidence"/);
+  assert.match(html, /分析用資料/);
+  assert.match(html, /birth_date: \$\("profileBirthDate"\)/);
+  assert.match(html, /me\.birth_date/);
+  const server = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../src/server.js"), "utf8");
+  assert.match(server, /birth_date: String\(user\?\.birth_date/);
+});
+
 test("quick-exclude agent works for non-591 platforms, not just avatars", () => {
   const html = pub("index.html");
   assert.match(html, /function agentExcludeLabel/);

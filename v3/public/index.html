@@ -1215,9 +1215,10 @@
     body.panel-collapsed .filter-mini-btn {
       display: inline-flex;
       position: absolute;
-      right: 12px;
-      bottom: 10px;
-      z-index: 2;
+      right: 8px;
+      top: 8px;
+      bottom: auto;
+      z-index: 3;
       width: var(--touch);
       height: var(--touch);
       min-width: var(--touch);
@@ -2038,6 +2039,17 @@
         min-height: var(--touch);
         padding: 8px 14px;
         font-weight: 700;
+        background: var(--accent);
+        color: var(--primary-foreground);
+        border-color: var(--accent);
+      }
+      #openFilterSheetBtn:hover:not(:disabled) {
+        background: var(--accent-deep);
+        border-color: var(--accent-deep);
+        color: var(--primary-foreground);
+      }
+      body.panel-collapsed .list-head-sticky:not(.filter-compact) .filter-head {
+        padding-right: 46px;
       }
       .toolbar {
         flex-direction: column;
@@ -2610,6 +2622,36 @@
               <span class="hint" id="profileLineQrHint">點此上傳</span>
               <span class="media-x" id="profileLineQrClear" hidden>×</span>
             </button>
+          </div>
+        </div>
+        <div class="profile-grid" style="margin-top:4px">
+          <div class="span-2">
+            <p class="hint" style="margin:6px 0 0">以下為<strong>選填</strong>的分析用資料，預設不公開、可留空或清空。填了有助於整體了解租屋／房屋買賣／人口結構／中古商品等居住相關趨勢；不會出現在你的刊登，也不強迫填寫。</p>
+          </div>
+          <div>
+            <label>出生年月日（選填）</label>
+            <input type="date" id="profileBirthDate" min="1900-01-01" />
+          </div>
+          <div>
+            <label>性別（選填）</label>
+            <select id="profileGender">
+              <option value="">不透露</option>
+              <option value="男">男</option>
+              <option value="女">女</option>
+              <option value="其他">其他</option>
+            </select>
+          </div>
+          <div class="span-2">
+            <label>目前居住縣市（選填）</label>
+            <select id="profileResidence">
+              <option value="">不透露</option>
+              <option>臺北市</option><option>新北市</option><option>桃園市</option><option>臺中市</option>
+              <option>臺南市</option><option>高雄市</option><option>基隆市</option><option>新竹市</option>
+              <option>嘉義市</option><option>新竹縣</option><option>苗栗縣</option><option>彰化縣</option>
+              <option>南投縣</option><option>雲林縣</option><option>嘉義縣</option><option>屏東縣</option>
+              <option>宜蘭縣</option><option>花蓮縣</option><option>臺東縣</option><option>澎湖縣</option>
+              <option>金門縣</option><option>連江縣</option>
+            </select>
           </div>
         </div>
         <div class="pledge-locked" id="profileLegalBox">
@@ -5987,6 +6029,9 @@
       if ($("profileCompany") && me) $("profileCompany").value = me.company_address || "";
       if ($("profilePhone") && me) $("profilePhone").value = me.contact_phone || "";
       if ($("profileLineId") && me) $("profileLineId").value = me.line_id || "";
+      if ($("profileBirthDate") && me) $("profileBirthDate").value = me.birth_date || "";
+      if ($("profileGender") && me) $("profileGender").value = me.gender || "";
+      if ($("profileResidence") && me) $("profileResidence").value = me.residence || "";
       if (me?.disclaimer_text && $("profileDisclaimerText")) {
         $("profileDisclaimerText").textContent = me.disclaimer_text;
       }
@@ -6239,6 +6284,9 @@
             contact_phone: $("profilePhone")?.value || "",
             line_id: $("profileLineId")?.value || "",
             contact_email: $("profileContactEmail")?.value || "",
+            birth_date: $("profileBirthDate")?.value || "",
+            gender: $("profileGender")?.value || "",
+            residence: $("profileResidence")?.value || "",
             ...(pendingClearAvatar ? { avatar_url: "" } : avatarUrl ? { avatar_url: avatarUrl } : {}),
             ...(pendingClearQr ? { line_qr_url: "" } : lineQrUrl ? { line_qr_url: lineQrUrl } : {}),
           }),
