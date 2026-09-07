@@ -6589,7 +6589,7 @@
             ${item.status === "open" ? `<a class="ghost" href="/l/${encodeURIComponent(item.post_id)}">公開分享頁</a>
             <button type="button" class="ghost" data-self-close="${item.post_id}">關閉刊登</button>` : ""}
             ${item.status === "cancelled" ? "" : `<button type="button" class="ghost" data-self-copy="${item.post_id}">複製刊登</button>`}
-          </div>`
+          </div>
         </article>`;
     }
     async function loadMineSelfListings() {
