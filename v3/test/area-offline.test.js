@@ -145,10 +145,12 @@ test("pending offline count excludes confirmed listings and live ones", () => {
   assert.equal(isPendingOffline(confirmed), false);
 });
 
-test("confirmed offline is deducted from the All total", () => {
+test("only confirmed offline is deducted from the All total (pending stays, grayed)", () => {
   const live = { hidden: 0, watched: 0, offline: 0, offline_confirmed: 0, match_verdict: "" };
   assert.equal(countsTowardAllTotal(live), true);
-  assert.equal(countsTowardAllTotal({ ...live, offline: 1, offline_confirmed: 0 }), false);
+  // 「下架確認中」（pending）仍留在列表並計數（灰階）。
+  assert.equal(countsTowardAllTotal({ ...live, offline: 1, offline_confirmed: 0 }), true);
+  // 只有「確認已下架」才從總數扣除。
   assert.equal(countsTowardAllTotal({ ...live, offline: 1, offline_confirmed: 1 }), false);
   assert.equal(countsTowardAllTotal({ ...live, watched: 1 }), false);
 });

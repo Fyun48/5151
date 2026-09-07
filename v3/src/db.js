@@ -445,6 +445,11 @@ try {
   // already migrated
 }
 try {
+  db.exec("ALTER TABLE listings ADD COLUMN alive_checked_at TEXT");
+} catch {
+  // already migrated
+}
+try {
   db.exec("ALTER TABLE listings ADD COLUMN match_verdict TEXT");
 } catch {
   // already migrated
@@ -2442,6 +2447,24 @@ export function restoreListingOnline(postId) {
   return getListing(postId);
 }
 
+// 探測確認「還在」：打上 alive_checked_at（供 30 分鐘全站鎖）＋ last_checked_at；若原本 offline 則回復上架。
+export function markListingAlive(postId) {
+  const listing = getListing(postId);
+  if (!listing) return null;
+  const now = new Date().toISOString();
+  const wasOffline = Number(listing.offline) === 1;
+  db.prepare(
+    `UPDATE listings
+     SET alive_checked_at = ?,
+         last_checked_at = ?,
+         offline = CASE WHEN offline = 1 THEN 0 ELSE offline END,
+         offline_at = CASE WHEN offline = 1 THEN NULL ELSE offline_at END,
+         offline_confirmed = 0
+     WHERE post_id = ?`,
+  ).run(now, now, postId);
+  return { listing: getListing(postId), restored: wasOffline };
+}
+
 export function confirmListingOffline(postId) {
   const listing = getListing(postId);
   if (!listing?.offline) return null;
@@ -2487,7 +2510,7 @@ export function listingsNeedingAliveCheck({ excludeIds = [], limit = 20 } = {}) 
     .prepare(
       `SELECT post_id FROM listings
        WHERE IFNULL(hidden, 0) = 0 AND IFNULL(offline, 0) = 0
-         AND ${sql591Source()}
+         AND ${sqlNotSelfSource()}
        ORDER BY CASE WHEN last_checked_at IS NULL THEN 0 ELSE 1 END,
                 IFNULL(last_checked_at, last_seen_at) ASC
        LIMIT 800`,
@@ -2511,7 +2534,7 @@ export function listingsNeedingOfflineRecheck({ limit = 8 } = {}) {
        WHERE IFNULL(hidden, 0) = 0
          AND IFNULL(offline, 0) = 1
          AND IFNULL(offline_confirmed, 0) = 0
-         AND ${sql591Source()}
+         AND ${sqlNotSelfSource()}
        ORDER BY CASE WHEN last_checked_at IS NULL THEN 0 ELSE 1 END,
                 IFNULL(last_checked_at, offline_at) ASC
        LIMIT ?`,
@@ -3068,7 +3091,8 @@ export function listListings({
     )`);
     params.push(uid);
   } else {
-    clauses.push("IFNULL(offline, 0) = 0");
+    // 只排除「確認已下架」；「下架確認中」的物件仍留在一般列表（前端灰階呈現）。
+    clauses.push("NOT (IFNULL(offline, 0) = 1 AND IFNULL(offline_confirmed, 0) = 1)");
     clauses.push("(IFNULL(match_verdict, '') != 'yes')");
     clauses.push(`NOT EXISTS (
       SELECT 1 FROM user_listing_flags f

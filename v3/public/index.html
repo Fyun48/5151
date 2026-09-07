@@ -2496,7 +2496,6 @@
           <button class="chip" data-filter="same_source">同屋源更新</button>
           <button class="chip" data-filter="suspected">疑似同屋源</button>
           <button class="chip" data-filter="hidden">已隱藏</button>
-          <button class="chip" data-filter="offline">正在確認中的下架</button>
           </div>
           <p class="chip-row-label" id="kindRowLabel">房屋類型（可複選）</p>
           <div class="chip-row" data-chip-row="kind" role="group" aria-labelledby="kindRowLabel">
@@ -2713,6 +2712,7 @@
       <div class="row" style="margin-top:10px">
         <button type="button" class="ghost" id="mePauseNotifyBtn">停止所有通知</button>
         <button type="button" class="ghost" id="mePasswordBtn">變更密碼</button>
+        <button type="button" class="ghost" id="meLogoutBtn">登出</button>
         <button type="button" class="ghost" id="meDeleteBtn">取消會員</button>
       </div>
       <p class="hint" id="mePauseNotifyHint">找到房子後可停止通知。停止後不會再主動向外抓取，也不會推播；仍可看到全站底庫資料。</p>
@@ -3873,8 +3873,9 @@
       const dup = String(item.match_verdict || "") === "yes";
       if (key === "hidden") return hidden || dup;
       if (key === "offline") return offline && !confirmed;
-      if (key === "suspected") return Boolean(item.match_level) && !offline && !dup && !hidden;
-      if (dup || offline || hidden) return false;
+      if (key === "suspected") return Boolean(item.match_level) && !confirmed && !dup && !hidden;
+      // 「下架確認中」（pending）留在一般列表（灰階）；只有「確認已下架」才排除。
+      if (dup || confirmed || hidden) return false;
       if (key === "all") return !watched;
       if (key === "unseen") return !viewed;
       if (key === "viewed") return viewed;
@@ -4564,7 +4565,6 @@
         ["特別關注", st.watched],
         ["已隱藏", st.hidden],
         ["疑似", st.suspected],
-        ...(st.offline ? [["正在確認中的下架", st.offline]] : []),
         ...(st.filteredOut ? [["列表另排除", st.filteredOut]] : []),
       ].map(([k, v]) => `<div class="stat"><b>${v || 0}</b><span>${k}</span></div>`).join("");
     }
@@ -5107,6 +5107,7 @@
             </label>`}
             </div>
             ${item.source === "self" && !item.mine && !isGuest ? `<button class="ghost" data-self-report="${id}">檢舉</button>` : ""}
+            ${!isGuest && item.source !== "self" && !item.offline && !item.offline_confirmed ? `<button type="button" class="ghost btn-report-gone" data-report-gone="${id}" title="打開後若發現已不在，可回報；系統會主動再確認一次">回報已不在</button>` : ""}
           </div>
           ${sameHousePanel(item)}
         </article>
@@ -6256,6 +6257,7 @@
     $("openFilterSheetBtn")?.addEventListener("click", openFilterSheet);
     $("filterSheetBackdrop")?.addEventListener("click", closeFilterSheet);
     $("mePasswordBtn")?.addEventListener("click", () => $("changePasswordBtn")?.click());
+    $("meLogoutBtn")?.addEventListener("click", () => { window.location.href = "/logout"; });
     $("meDeleteBtn")?.addEventListener("click", () => $("deleteAccountBtn")?.click());
     $("mePauseNotifyBtn")?.addEventListener("click", async () => {
       if (isGuest) {
@@ -7294,6 +7296,38 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ reason }),
         }).then(() => loadList());
+        return;
+      }
+      const reportGone = ev.target.dataset.reportGone;
+      if (reportGone) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (isGuest) { remindGuest(); return; }
+        const btn = ev.target;
+        const orig = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "確認中…";
+        try {
+          const res = await fetch(`/api/listings/${reportGone}/report-gone`, { method: "POST", headers: { "Content-Type": "application/json" } });
+          const data = await res.json().catch(() => ({}));
+          if (data.login) { remindGuest(); btn.disabled = false; btn.textContent = orig; return; }
+          if (data.gone) {
+            if ($("status")) $("status").textContent = data.message || "已記錄此物件下架。";
+            await loadList();
+            return;
+          }
+          if (data.locked) {
+            btn.textContent = "確認中·暫鎖 30 分";
+            if ($("status")) $("status").textContent = data.message || "此物件似乎仍上架中，為避免重複回報，暫時鎖定 30 分鐘。";
+            return;
+          }
+          btn.disabled = false;
+          btn.textContent = orig;
+          if ($("status")) $("status").textContent = data.supported === false ? "此來源暫不支援即時確認。" : "已送出，稍後再試。";
+        } catch {
+          btn.disabled = false;
+          btn.textContent = orig;
+        }
         return;
       }
       const draftCancel = ev.target.dataset.watchDraftCancel;
