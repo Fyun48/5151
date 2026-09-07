@@ -36,6 +36,11 @@ import { makeProposalProvider } from "./ai/proposalProvider.js";
 import { proposalWorkerConfigFromEnv, startProposalLoop } from "./proposalWorker.js";
 import { getReevaluationView, ownerManualReevaluate, ownerUnblock } from "./reevaluation.js";
 import { reevaluationWorkerConfigFromEnv, startReevaluationLoop } from "./reevaluationWorker.js";
+import { getIssueCodingView, getCodingTask, cancelCodingTask } from "./codingTask.js";
+import { codingWorkerConfigFromEnv, startCodingLoop } from "./codingWorker.js";
+import { makeCodingProvider } from "./coding/provider.js";
+import { makeCodingRepo } from "./coding/gitRepo.js";
+import { makePrGateway } from "./coding/prGateway.js";
 
 // 刻意不使用 express：ops 服務維持「零外部相依」，與本 repo 的 CI（不跑 npm install）相容，
 // 也縮小攻擊面。所有路由用 node:http 手刻的極小 router。
@@ -180,7 +185,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
 
       // ── 公開 API ──
       if (pathname === "/ops/api/health" && method === "GET") {
-        sendJson(res, 200, { ok: true, service: "ops", phase: "9", configured: auth.configured });
+        sendJson(res, 200, { ok: true, service: "ops", phase: "10", configured: auth.configured });
         return;
       }
 
@@ -622,6 +627,35 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         return;
       }
 
+      // ── Phase 10：授權後的 Coding Task（Owner 檢視 + 取消；不 auto-merge、不部署） ──
+      const codingGet = pathname.match(/^\/ops\/api\/issues\/(\d+)\/coding$/);
+      if (codingGet && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        const iid = Number(codingGet[1]);
+        if (!db.prepare("SELECT id FROM issue_candidate WHERE id=?").get(iid)) { sendJson(res, 404, { error: "not found" }); return; }
+        sendJson(res, 200, getIssueCodingView(db, iid));
+        return;
+      }
+      const codingTaskGet = pathname.match(/^\/ops\/api\/coding-tasks\/(\d+)$/);
+      if (codingTaskGet && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        const t = getCodingTask(db, Number(codingTaskGet[1]));
+        if (!t) { sendJson(res, 404, { error: "not found" }); return; }
+        sendJson(res, 200, t);
+        return;
+      }
+      const codingCancel = pathname.match(/^\/ops\/api\/coding-tasks\/(\d+)\/cancel$/);
+      if (codingCancel && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {};
+        try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          const r = cancelCodingTask(db, Number(codingCancel[1]), { actor: `owner:${req.owner.email}`, reason: b.reason });
+          sendJson(res, 200, { ok: true, ...r });
+        } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+
       if (pathname.startsWith("/ops/api/")) {
         sendJson(res, 404, { error: "not found" });
         return;
@@ -707,9 +741,18 @@ export function startServer() {
   if (reevalCfg.enabled) {
     startReevaluationLoop(db, { config: reevalCfg, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
   }
+  // Phase 10：Coding worker。唯一會呼叫 coding provider 的階段，且僅在 ACTIVE 授權存在時。
+  // 成本控制 + 安全預設：CODING_PROVIDER 未設 → provider 不可用；OPS_CODING_REPO_PATH 未設 → repo 不可用 → 不建/不跑。
+  const codingProvider = makeCodingProvider();
+  const codingRepo = makeCodingRepo();
+  const codingPr = makePrGateway();
+  const codingCfg = codingWorkerConfigFromEnv();
+  if (codingCfg.enabled && codingProvider.available && codingRepo.available) {
+    startCodingLoop(db, { provider: codingProvider, repo: codingRepo, pr: codingPr, config: codingCfg, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
+  }
   http.createServer(handler).listen(port, host, () => {
     // eslint-disable-next-line no-console
-    console.log(`Ops console (Phase 9)：http://${host}:${port}  owner=${auth.configured ? auth.ownerEmail : "(未設定)"}  ingest=${process.env.OPS_INGEST_SECRET ? "on" : "off"}  ai=${aiProvider.available ? aiProvider.name : "off"}  embed=${embProvider.available ? embProvider.name : "off"}  impact=${impactCfg.enabled ? "on" : "off"}  eval=${evalProvider.available ? evalProvider.name : "off"}  proposal=${proposalProvider.available ? proposalProvider.name : "off"}  reeval=${reevalCfg.enabled ? "on" : "off"}`);
+    console.log(`Ops console (Phase 10)：http://${host}:${port}  owner=${auth.configured ? auth.ownerEmail : "(未設定)"}  ingest=${process.env.OPS_INGEST_SECRET ? "on" : "off"}  ai=${aiProvider.available ? aiProvider.name : "off"}  embed=${embProvider.available ? embProvider.name : "off"}  impact=${impactCfg.enabled ? "on" : "off"}  eval=${evalProvider.available ? evalProvider.name : "off"}  proposal=${proposalProvider.available ? proposalProvider.name : "off"}  reeval=${reevalCfg.enabled ? "on" : "off"}  coding=${codingProvider.available && codingRepo.available ? codingProvider.name : "off"}`);
   });
   return { db, auth };
 }

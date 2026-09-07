@@ -546,6 +546,64 @@ export function applyOpsSchema(db) {
     CREATE TRIGGER IF NOT EXISTS reauth_no_delete BEFORE DELETE ON issue_reevaluation_authorization
       BEGIN SELECT RAISE(ABORT, 'issue_reevaluation_authorization is append-only'); END;
 
+    -- Phase 10：授權後的 Coding Task（唯一可呼叫 coding provider、修改原始碼的階段）。
+    -- 只能由「ACTIVE development_authorization」建立；綁定確切 Proposal 快照與 base SHA。
+    -- provenance 不可變（issue/authorization/proposal/base 綁定不改）；status 為工作狀態，與中央 Issue lifecycle 分離。
+    -- 不 auto-merge、不部署、不建 Release Candidate。
+    CREATE TABLE IF NOT EXISTS development_coding_task (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      issue_id INTEGER NOT NULL,
+      development_authorization_id INTEGER NOT NULL,
+      proposal_id INTEGER NOT NULL,
+      proposal_version INTEGER NOT NULL,
+      proposal_hash TEXT NOT NULL,
+      task_fingerprint TEXT NOT NULL,
+      provider TEXT,
+      provider_task_id TEXT,
+      model TEXT,
+      repository TEXT,
+      base_branch TEXT NOT NULL,
+      base_sha TEXT NOT NULL,
+      coding_branch TEXT,
+      head_sha TEXT,
+      approved_scope_snapshot TEXT,
+      changed_files TEXT,
+      diff_insertions INTEGER,
+      diff_deletions INTEGER,
+      protected_flags TEXT,
+      selftest_results TEXT,
+      warnings TEXT,
+      result_hash TEXT,
+      pr_number INTEGER,
+      pr_url TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',   -- pending|claimed|running|changes_ready|failed|failed_retry|cancelled
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      max_attempts INTEGER NOT NULL DEFAULT 3,
+      error_code TEXT,
+      next_attempt_at TEXT NOT NULL,
+      claimed_at TEXT,
+      started_at TEXT,
+      completed_at TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (issue_id) REFERENCES issue_candidate(id) ON DELETE RESTRICT,
+      FOREIGN KEY (development_authorization_id) REFERENCES development_authorization(id) ON DELETE RESTRICT,
+      FOREIGN KEY (proposal_id) REFERENCES issue_proposal(id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS idx_coding_task_issue ON development_coding_task(issue_id, id);
+    CREATE INDEX IF NOT EXISTS idx_coding_task_status ON development_coding_task(status, next_attempt_at);
+    -- 每個 task_fingerprint 至多一個「未取消」的 task（idempotency：同授權+base+policy 不重複建立/推分支）。
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_coding_task_active_fp ON development_coding_task(task_fingerprint) WHERE status != 'cancelled';
+    -- provenance 不可變：completed（changes_ready）後不可竄改綁定欄位。
+    CREATE TRIGGER IF NOT EXISTS coding_task_provenance_immutable BEFORE UPDATE ON development_coding_task
+    WHEN OLD.status = 'changes_ready' AND (
+      IFNULL(NEW.proposal_hash,'') <> IFNULL(OLD.proposal_hash,'')
+      OR IFNULL(NEW.development_authorization_id,0) <> IFNULL(OLD.development_authorization_id,0)
+      OR IFNULL(NEW.base_sha,'') <> IFNULL(OLD.base_sha,'')
+      OR IFNULL(NEW.task_fingerprint,'') <> IFNULL(OLD.task_fingerprint,'')
+      OR IFNULL(NEW.head_sha,'') <> IFNULL(OLD.head_sha,'')
+    )
+    BEGIN SELECT RAISE(ABORT, 'coding task provenance is immutable once changes are ready'); END;
+
     CREATE INDEX IF NOT EXISTS idx_state_entity_type ON state_entity(entity_type, state);
     CREATE INDEX IF NOT EXISTS idx_state_transition_entity ON state_transition(entity_type, entity_id, id);
     CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_type, entity_id, id);
