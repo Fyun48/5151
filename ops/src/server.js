@@ -47,6 +47,8 @@ import { makeQaReviewProvider } from "./qa/reviewProvider.js";
 import { getCodingStagingView, getStagingDeployment, requestStagingRedeploy, cancelStagingDeployment, cleanupStagingDeployment } from "./stagingDeploy.js";
 import { stagingWorkerConfigFromEnv, startStagingLoop } from "./stagingWorker.js";
 import { makeStagingProvider } from "./staging/provider.js";
+import { getReleaseCandidateView, getReleaseManifest, submitOwnerReleaseDecision, retryReleaseNotification, listReleaseNotifications } from "./releaseCandidate.js";
+import { releaseWorkerConfigFromEnv, startReleaseLoop } from "./releaseWorker.js";
 
 // 刻意不使用 express：ops 服務維持「零外部相依」，與本 repo 的 CI（不跑 npm install）相容，
 // 也縮小攻擊面。所有路由用 node:http 手刻的極小 router。
@@ -161,7 +163,8 @@ function runGuard(mw, req, reply) {
   return passed;
 }
 
-export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret = process.env.OPS_INGEST_SECRET || "", storage = null, scanner = null }) {
+export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret = process.env.OPS_INGEST_SECRET || "", storage = null, scanner = null, codingRepo = null }) {
+  const releaseRepo = codingRepo || makeCodingRepo();
   if (!db) throw new Error("createHandler requires db");
   if (!auth) throw new Error("createHandler requires auth");
   const store = storage || new LocalPersistentStorage(defaultAttachmentDir(process.env.OPS_DATA_DIR || process.cwd()));
@@ -191,7 +194,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
 
       // ── 公開 API ──
       if (pathname === "/ops/api/health" && method === "GET") {
-        sendJson(res, 200, { ok: true, service: "ops", phase: "12", configured: auth.configured });
+        sendJson(res, 200, { ok: true, service: "ops", phase: "13", configured: auth.configured });
         return;
       }
 
@@ -727,6 +730,40 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         return;
       }
 
+      // ── Phase 13：Release Candidate + Owner Gate #2（Owner 檢視 + 決策 + 通知重試；不部署、不 merge） ──
+      const rcGet = pathname.match(/^\/ops\/api\/coding-tasks\/(\d+)\/release$/);
+      if (rcGet && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        try { sendJson(res, 200, getReleaseCandidateView(db, Number(rcGet[1]), { repo: releaseRepo })); }
+        catch (err) { sendJson(res, err.status || 404, { error: err.message }); }
+        return;
+      }
+      const rmGet = pathname.match(/^\/ops\/api\/release-manifests\/(\d+)$/);
+      if (rmGet && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        const m = getReleaseManifest(db, Number(rmGet[1]));
+        if (!m) { sendJson(res, 404, { error: "not found" }); return; }
+        sendJson(res, 200, m);
+        return;
+      }
+      const rcDecision = pathname.match(/^\/ops\/api\/coding-tasks\/(\d+)\/release\/decision$/);
+      if (rcDecision && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {}; try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          const r = submitOwnerReleaseDecision(db, { codingTaskId: Number(rcDecision[1]), action: b.action, manifestId: b.manifest_id, manifestVersion: b.manifest_version, manifestHash: b.manifest_hash, artifactDigest: b.artifact_digest, headSha: b.head_sha, actor: `owner:${req.owner.email}`, reason: b.reason, repo: releaseRepo });
+          sendJson(res, 200, { ok: true, ...r });
+        } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+      const rcNotifRetry = pathname.match(/^\/ops\/api\/release-notifications\/(\d+)\/retry$/);
+      if (rcNotifRetry && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try { sendJson(res, 200, { ok: true, ...retryReleaseNotification(db, Number(rcNotifRetry[1]), { actor: `owner:${req.owner.email}` }) }); }
+        catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+
       if (pathname.startsWith("/ops/api/")) {
         sendJson(res, 404, { error: "not found" });
         return;
@@ -741,8 +778,8 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
 }
 
 // 相容舊測試/呼叫：createApp 回傳一個 { listen } 介面（用 node:http 包裝 handler）。
-export function createApp({ db, auth, publicDir = PUBLIC_DIR, ingestSecret = process.env.OPS_INGEST_SECRET || "", storage = null, scanner = null }) {
-  const handler = createHandler({ db, auth, publicDir, ingestSecret, storage, scanner });
+export function createApp({ db, auth, publicDir = PUBLIC_DIR, ingestSecret = process.env.OPS_INGEST_SECRET || "", storage = null, scanner = null, codingRepo = null }) {
+  const handler = createHandler({ db, auth, publicDir, ingestSecret, storage, scanner, codingRepo });
   return {
     handler,
     listen(...args) {
@@ -837,9 +874,15 @@ export function startServer() {
   if (stagingCfg.enabled && stagingProvider.available && stagingRepo.available) {
     startStagingLoop(db, { repo: stagingRepo, provider: stagingProvider, config: stagingCfg, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
   }
+  // Phase 13：Release Candidate worker（決定性組裝；不用 LLM）。安全預設：repo 不可用 → 不建。絕不部署/合併。
+  const releaseRepo = makeCodingRepo();
+  const releaseCfg = releaseWorkerConfigFromEnv();
+  if (releaseCfg.enabled && releaseRepo.available) {
+    startReleaseLoop(db, { repo: releaseRepo, config: releaseCfg, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
+  }
   http.createServer(handler).listen(port, host, () => {
     // eslint-disable-next-line no-console
-    console.log(`Ops console (Phase 12)：http://${host}:${port}  owner=${auth.configured ? auth.ownerEmail : "(未設定)"}  ingest=${process.env.OPS_INGEST_SECRET ? "on" : "off"}  ai=${aiProvider.available ? aiProvider.name : "off"}  embed=${embProvider.available ? embProvider.name : "off"}  impact=${impactCfg.enabled ? "on" : "off"}  eval=${evalProvider.available ? evalProvider.name : "off"}  proposal=${proposalProvider.available ? proposalProvider.name : "off"}  reeval=${reevalCfg.enabled ? "on" : "off"}  coding=${codingProvider.available && codingRepo.available ? codingProvider.name : "off"}  qa=${qaCfg.enabled && qaRepo.available ? "on" : "off"}  staging=${stagingCfg.enabled && stagingProvider.available && stagingRepo.available ? stagingProvider.name : "off"}`);
+    console.log(`Ops console (Phase 13)：http://${host}:${port}  owner=${auth.configured ? auth.ownerEmail : "(未設定)"}  ingest=${process.env.OPS_INGEST_SECRET ? "on" : "off"}  ai=${aiProvider.available ? aiProvider.name : "off"}  embed=${embProvider.available ? embProvider.name : "off"}  impact=${impactCfg.enabled ? "on" : "off"}  eval=${evalProvider.available ? evalProvider.name : "off"}  proposal=${proposalProvider.available ? proposalProvider.name : "off"}  reeval=${reevalCfg.enabled ? "on" : "off"}  coding=${codingProvider.available && codingRepo.available ? codingProvider.name : "off"}  qa=${qaCfg.enabled && qaRepo.available ? "on" : "off"}  staging=${stagingCfg.enabled && stagingProvider.available && stagingRepo.available ? stagingProvider.name : "off"}  release=${releaseCfg.enabled && releaseRepo.available ? "on" : "off"}`);
   });
   return { db, auth };
 }
