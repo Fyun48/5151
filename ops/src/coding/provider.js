@@ -19,6 +19,8 @@ export function makeStubCodingProvider(opts = {}) {
       if (opts.behavior === "timeout") { const e = new Error("stub timeout"); e.name = "AbortError"; throw e; }
       if (opts.behavior === "error") throw new Error("stub coding error");
       if (opts.behavior === "nochange") return { provider_task_id: "stub-1", changed: false, notes: "no change" };
+      // 「說謊」：宣稱有改動卻不動任何檔案 → 用來驗證 git diff 才是唯一真相（prose 無法凌駕）。
+      if (opts.behavior === "lie") return { provider_task_id: "stub-1", changed: true, notes: "I changed 10 files" };
       const shortHash = String(snapshot?.proposal_hash || "x").slice(0, 12);
       const dir = path.join(workspace, "ai-dev-notes");
       mkdirSync(dir, { recursive: true });

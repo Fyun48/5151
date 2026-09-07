@@ -25,7 +25,7 @@ jobs:
       # Production 部署一律改為明確的 workflow_dispatch（見 deploy-v3.yml / docker.yml / deploy-v2.yml / deploy.yml）。
       # 維運自動化（cursor/ops-*）分支不自動合併，交由 Owner 依序人工合併。
       - name: Auto-merge (no production deploy)
-        if: github.event_name == 'pull_request' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository && !startsWith(github.event.pull_request.head.ref, 'cursor/ops-')
+        if: github.event_name == 'pull_request' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository && !startsWith(github.event.pull_request.head.ref, 'cursor/ops-') && !startsWith(github.event.pull_request.head.ref, 'ai-dev/')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
