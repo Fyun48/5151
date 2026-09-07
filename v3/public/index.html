@@ -1542,6 +1542,24 @@
       font-size: 14px;
       line-height: 1;
     }
+    .media-lib { margin: 8px 0; border: 1px solid var(--line); border-radius: var(--radius); padding: 10px; background: var(--accent-mist); }
+    .media-lib-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+    .media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; }
+    .media-cell { position: relative; }
+    .media-cell .media-thumb { width: 100%; aspect-ratio: 1/1; object-fit: cover; border-radius: var(--radius); border: 2px solid var(--line); background: #eee; cursor: pointer; display: block; }
+    .media-cell.is-selected .media-thumb { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+    .media-cell .media-order { position: absolute; top: 4px; left: 4px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 999px; background: var(--accent); color: #fff; font-size: 12px; font-weight: 700; display: none; align-items: center; justify-content: center; }
+    .media-cell.is-selected .media-order { display: inline-flex; }
+    .media-cell .media-del { position: absolute; top: -6px; right: -6px; width: 22px; height: 22px; padding: 0; border-radius: 999px; font-size: 14px; line-height: 1; }
+    .media-cell .media-zoom { position: absolute; bottom: 4px; right: 4px; width: 24px; height: 24px; padding: 0; border-radius: 999px; font-size: 12px; line-height: 1; background: rgba(255,255,255,0.85); }
+    .lightbox { position: fixed; inset: 0; background: rgba(20,16,12,0.92); display: none; z-index: 300; }
+    .lightbox.open { display: flex; align-items: center; justify-content: center; }
+    .lightbox img { max-width: 94vw; max-height: 82vh; object-fit: contain; border-radius: 8px; }
+    .lightbox button { position: fixed; background: rgba(255,255,255,0.16); color: #fff; border: 0; border-radius: 999px; width: 44px; height: 44px; font-size: 20px; cursor: pointer; }
+    .lightbox .lb-close { top: calc(10px + env(safe-area-inset-top, 0px)); right: 14px; }
+    .lightbox .lb-prev { left: 10px; top: 50%; transform: translateY(-50%); }
+    .lightbox .lb-next { right: 10px; top: 50%; transform: translateY(-50%); }
+    .lightbox .lb-count { position: fixed; bottom: calc(14px + env(safe-area-inset-bottom, 0px)); left: 0; right: 0; text-align: center; color: #fff; font-size: 13px; background: none; width: auto; height: auto; }
     .hint { font-size: 12px; color: var(--muted); margin: 4px 0 8px; line-height: 1.5; }
     #deleteAccountBtn { display: none !important; }
     .page-lead { margin: 0 0 10px; }
@@ -2829,11 +2847,21 @@
             <input id="selfLine" maxlength="300" placeholder="https://line.me/..." />
           </div>
           <div class="span-all">
-            <label>物件照片專區（最多 100 張，上傳時自動壓縮）</label>
-            <input type="file" id="selfPhotos" accept="image/jpeg,image/png,image/webp" multiple />
-            <p class="hint" id="selfPhotoCount">已選 0／100 張。大圖會先在瀏覽器壓成較小的 JPEG。</p>
+            <label>物件照片</label>
+            <p class="hint">從「照片素材庫」點選要放上這則物件的照片；第一張會作為封面。上傳的照片會存進你的素材庫並在伺服器自動壓縮、去除定位等中繼資料。</p>
+            <input type="file" id="selfPhotos" accept="image/jpeg,image/png,image/webp,image/avif" multiple />
+            <p class="hint" id="selfPhotoCount">已選 0／100 張放上此物件。</p>
+            <div class="media-lib" id="mediaLib">
+              <div class="media-lib-head">
+                <strong>照片素材庫</strong>
+                <span class="hint" id="mediaQuota">— / —</span>
+              </div>
+              <div class="media-grid" id="mediaGrid"></div>
+              <p class="hint" id="mediaLibEmpty" hidden>素材庫還沒有照片，上傳後會出現在這裡，可重複用在不同物件。</p>
+            </div>
           </div>
         </div>
+        <p class="hint">已選到此物件的照片（可拖不需要的按 × 移除；順序即顯示順序，第一張為封面）：</p>
         <div class="self-photo-tray" id="selfPhotoPreview" hidden></div>
         <div id="selfTraitGroups"></div>
         <p class="hint" id="selfTraitNudge" hidden>電梯大樓的話，中庭與陽台常常是租客想先知道的。有的話點一下就好。</p>
@@ -3121,6 +3149,13 @@
   <div class="mobile-help-dock" id="mobileHelpDock" aria-label="求助與意見">
     <button type="button" class="ghost" id="mobileHelpQaBtn" title="常見問題 Q&amp;A"><span aria-hidden="true">？</span> Q&amp;A</button>
     <button type="button" class="ghost" id="mobileFeedbackBtn" title="回報錯誤或提出意見"><span aria-hidden="true">✎</span> 意見</button>
+  </div>
+  <div class="lightbox" id="appLightbox" role="dialog" aria-modal="true" aria-label="照片瀏覽" hidden>
+    <button type="button" class="lb-close" id="appLbClose" aria-label="關閉">✕</button>
+    <button type="button" class="lb-prev" id="appLbPrev" aria-label="上一張">‹</button>
+    <img id="appLbImg" alt="照片" />
+    <button type="button" class="lb-next" id="appLbNext" aria-label="下一張">›</button>
+    <div class="lb-count" id="appLbCount"></div>
   </div>
   <div id="ownerOverlay" class="hub-overlay" hidden>
     <div class="hub-backdrop" data-close-owner></div>
@@ -5866,7 +5901,7 @@
       });
       if (view !== "listings") closeFilterSheet();
       if (view === "demand") loadDemand().catch(() => {});
-      if (view === "post") loadMineSelfListings().catch(() => {});
+      if (view === "post") { loadMineSelfListings().catch(() => {}); loadMediaLibrary().catch(() => {}); }
       if (view === "qa") loadHelpQa();
       if (view === "notify") {
         // 桌機保留較寬的浮動 dock；手機不強制展開「待看更新」浮層（通知內容已在 #notifyInbox）。
@@ -6617,27 +6652,133 @@
       const msg = $("selfMsg");
       const files = [...($("selfPhotos")?.files || [])];
       if ($("selfPhotos")) $("selfPhotos").value = "";
+      let uploaded = 0;
+      let failed = 0;
       for (const file of files) {
-        if (selfPhotoDraft.length >= SELF_PHOTO_LIMIT) {
-          if (msg) msg.textContent = `照片最多 ${SELF_PHOTO_LIMIT} 張`;
-          break;
-        }
+        if (msg) msg.textContent = `上傳處理中…（${uploaded + failed + 1}/${files.length}）`;
         try {
-          const blob = await compressSelfPhoto(file);
-          const up = await fetch("/api/self-listings/photos", {
+          // 前端先縮圖降低上傳量；伺服器仍會再做權威的正規化/壓縮/去中繼資料。
+          const blob = await compressSelfPhoto(file).catch(() => file);
+          const up = await fetch("/api/media", {
             method: "POST",
             headers: { "Content-Type": blob.type || "image/jpeg" },
             body: blob,
           });
           const saved = await readApi(up);
           if (!up.ok) throw new Error(saved.error || "照片上傳失敗");
-          if (saved.url) selfPhotoDraft.push(saved.url);
+          uploaded += 1;
+          // 上傳成功即自動選入此物件（維持既有 UX）。
+          if (saved.url && !selfPhotoDraft.includes(saved.url) && selfPhotoDraft.length < SELF_PHOTO_LIMIT) {
+            selfPhotoDraft.push(saved.url);
+          }
         } catch (error) {
+          failed += 1;
           if (msg) msg.textContent = error.message;
         }
       }
+      await loadMediaLibrary().catch(() => {});
       renderSelfPhotoDraft();
+      if (msg && !failed) msg.textContent = uploaded ? `已上傳 ${uploaded} 張到素材庫` : "";
+      else if (msg && failed) msg.textContent = `上傳 ${uploaded} 張成功、${failed} 張失敗（${msg.textContent}）`;
     });
+
+    // ── 會員照片素材庫 ──
+    let mediaLibItems = [];
+    function renderSelfPhotoDraftAndGrid() { renderSelfPhotoDraft(); renderMediaGrid(); }
+    async function loadMediaLibrary() {
+      const grid = $("mediaGrid");
+      if (!grid || isGuest) return;
+      try {
+        const data = await (await fetch("/api/media")).json();
+        mediaLibItems = Array.isArray(data.items) ? data.items : [];
+        if ($("mediaQuota")) $("mediaQuota").textContent = `${data.used ?? mediaLibItems.length} / ${data.quota ?? "?"}`;
+        renderMediaGrid();
+      } catch { /* ignore */ }
+    }
+    function renderMediaGrid() {
+      const grid = $("mediaGrid");
+      if (!grid) return;
+      if ($("mediaLibEmpty")) $("mediaLibEmpty").hidden = mediaLibItems.length > 0;
+      grid.innerHTML = mediaLibItems.map((m) => {
+        const order = selfPhotoDraft.indexOf(m.url);
+        const selected = order >= 0;
+        return `
+          <div class="media-cell${selected ? " is-selected" : ""}" data-media-url="${esc(m.url)}" data-media-id="${m.id}">
+            <span class="media-order">${selected ? order + 1 : ""}</span>
+            <img class="media-thumb" src="${esc(m.thumb_url || m.url)}" alt="素材庫照片" loading="lazy" />
+            <button type="button" class="ghost media-zoom" data-media-zoom="${esc(m.url)}" aria-label="放大檢視">⤢</button>
+            <button type="button" class="ghost media-del" data-media-del="${m.id}" aria-label="從素材庫刪除">×</button>
+          </div>`;
+      }).join("");
+    }
+    $("mediaGrid")?.addEventListener("click", async (ev) => {
+      const zoom = ev.target.closest("[data-media-zoom]");
+      if (zoom) { openAppLightbox(mediaLibItems.map((m) => m.url), mediaLibItems.findIndex((m) => m.url === zoom.dataset.mediaZoom)); return; }
+      const del = ev.target.closest("[data-media-del]");
+      if (del) {
+        const id = del.dataset.mediaDel;
+        const url = mediaLibItems.find((m) => String(m.id) === String(id))?.url;
+        if (url && selfPhotoDraft.includes(url) && !window.confirm("這張已選入此物件。仍要從素材庫刪除嗎？")) return;
+        try {
+          const res = await fetch(`/api/media/${encodeURIComponent(id)}`, { method: "DELETE" });
+          const out = await readApi(res);
+          if (!res.ok) throw new Error(out.error || "刪除失敗");
+          if (url) { const i = selfPhotoDraft.indexOf(url); if (i >= 0) selfPhotoDraft.splice(i, 1); }
+          await loadMediaLibrary();
+          renderSelfPhotoDraft();
+        } catch (error) { if ($("selfMsg")) $("selfMsg").textContent = error.message; }
+        return;
+      }
+      const cell = ev.target.closest("[data-media-url]");
+      if (cell) {
+        const url = cell.dataset.mediaUrl;
+        const i = selfPhotoDraft.indexOf(url);
+        if (i >= 0) selfPhotoDraft.splice(i, 1);
+        else if (selfPhotoDraft.length < SELF_PHOTO_LIMIT) selfPhotoDraft.push(url);
+        renderSelfPhotoDraftAndGrid();
+      }
+    });
+    // 讓「已選照片」移除後也刷新素材庫格子的序號
+    const _renderSelfPhotoDraft = renderSelfPhotoDraft;
+    renderSelfPhotoDraft = function () { _renderSelfPhotoDraft(); renderMediaGrid(); };
+
+    // ── 共用 lightbox（素材庫檢視／已選預覽） ──
+    let appLbPhotos = [];
+    let appLbIndex = 0;
+    function openAppLightbox(urls, index) {
+      appLbPhotos = (urls || []).filter(Boolean);
+      if (!appLbPhotos.length) return;
+      appLbIndex = Math.max(0, Math.min(index || 0, appLbPhotos.length - 1));
+      const box = $("appLightbox");
+      $("appLbImg").src = appLbPhotos[appLbIndex];
+      $("appLbCount").textContent = `${appLbIndex + 1} / ${appLbPhotos.length}`;
+      if (box) { box.hidden = false; box.classList.add("open"); }
+    }
+    function moveAppLightbox(delta) {
+      if (!appLbPhotos.length) return;
+      appLbIndex = (appLbIndex + delta + appLbPhotos.length) % appLbPhotos.length;
+      $("appLbImg").src = appLbPhotos[appLbIndex];
+      $("appLbCount").textContent = `${appLbIndex + 1} / ${appLbPhotos.length}`;
+    }
+    function closeAppLightbox() { const box = $("appLightbox"); if (box) { box.classList.remove("open"); box.hidden = true; } }
+    $("appLbClose")?.addEventListener("click", closeAppLightbox);
+    $("appLbPrev")?.addEventListener("click", () => moveAppLightbox(-1));
+    $("appLbNext")?.addEventListener("click", () => moveAppLightbox(1));
+    $("appLightbox")?.addEventListener("click", (e) => { if (e.target === $("appLightbox")) closeAppLightbox(); });
+    document.addEventListener("keydown", (e) => {
+      if ($("appLightbox")?.hidden !== false) return;
+      if (e.key === "Escape") closeAppLightbox();
+      else if (e.key === "ArrowLeft") moveAppLightbox(-1);
+      else if (e.key === "ArrowRight") moveAppLightbox(1);
+    });
+    let appLbTouchX = null;
+    $("appLightbox")?.addEventListener("touchstart", (e) => { appLbTouchX = e.touches[0].clientX; }, { passive: true });
+    $("appLightbox")?.addEventListener("touchend", (e) => {
+      if (appLbTouchX == null) return;
+      const dx = e.changedTouches[0].clientX - appLbTouchX;
+      if (Math.abs(dx) > 40) moveAppLightbox(dx < 0 ? 1 : -1);
+      appLbTouchX = null;
+    }, { passive: true });
     $("selfListingForm")?.addEventListener("submit", async (ev) => {
       ev.preventDefault();
       if (isGuest) {

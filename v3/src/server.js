@@ -108,6 +108,10 @@ import {
   listMineSelfListings,
   getSelfListing,
   createSelfListing,
+  saveMemberMediaFor,
+  listMemberMediaFor,
+  deleteMemberMediaFor,
+  assertOwnsMemberMediaUrls,
   closeSelfListing,
   hideSelfListing,
   reportSelfListing,
@@ -127,6 +131,8 @@ import {
   SELF_PHOTO_UPLOAD_MAX_BYTES,
   selfPhotoFilePath,
 } from "./selfPhotos.js";
+import { IMAGE_MAX_UPLOAD_BYTES } from "./imageProcess.js";
+import { memberMediaFilePath } from "./memberMedia.js";
 import { CITIES } from "./regions.js";
 import { mailConfigured, sendMail } from "./mail.js";
 import { queueAccountMail } from "./systemMail.js";
@@ -1053,7 +1059,10 @@ app.post("/api/self-listings", (req, res) => {
       res.status(401).json({ error: "請先登入才能刊登" });
       return;
     }
-    res.json(createSelfListing(session.userId, req.body || {}));
+    // 安全：素材庫照片必須屬於本人（擋以猜測 URL 盜連他人 media）。
+    const body = req.body || {};
+    assertOwnsMemberMediaUrls(session.userId, [...(Array.isArray(body.photos) ? body.photos : []), body.cover].filter(Boolean));
+    res.json(createSelfListing(session.userId, body));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -1082,6 +1091,82 @@ app.get("/media/self/:file", (req, res) => {
   res.setHeader("Content-Type", mimeForSelfPhoto(req.params.file));
   res.setHeader("Cache-Control", "public, max-age=604800");
   res.sendFile(full);
+});
+
+// ── 會員照片素材庫（member media library） ──
+app.get("/api/media", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(listMemberMediaFor(session.userId, { plan: session.plan || "free" }));
+  } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
+});
+
+app.post("/api/media", express.raw({ type: () => true, limit: IMAGE_MAX_UPLOAD_BYTES }), async (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入才能上傳照片" }); return; }
+    const buf = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    const item = await saveMemberMediaFor(session.userId, buf, { plan: session.plan || "free", originalName: String(req.query.name || "") });
+    res.json(item);
+  } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
+});
+
+app.delete("/api/media/:id", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(deleteMemberMediaFor(session.userId, req.params.id));
+  } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
+});
+
+// 素材庫檔案（本站上傳、已正規化、內容定址）。公開可讀（供公開分享頁顯示照片）。
+app.get("/media/lib/:file", (req, res) => {
+  const full = memberMediaFilePath(req.params.file);
+  if (!full) { res.status(404).end(); return; }
+  res.setHeader("Content-Type", "image/jpeg");
+  res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+  res.sendFile(full);
+});
+
+// ── 公開分享：站內會員刊登（未登入可看主要內容；只輸出白名單公開欄位） ──
+function publicListingView(listing, id) {
+  return {
+    id: Number(listing.post_id || listing.id || id) || 0,
+    title: listing.title || "",
+    price: listing.price || "",
+    price_num: Number(listing.price_num) || 0,
+    address: listing.address || "",
+    area_name: listing.area_name || "",
+    layout: listing.layout || "",
+    floor_name: listing.floor_name || "",
+    kind_name: listing.kind_name || "",
+    role_name: listing.role_name || "",
+    cover: listing.cover || "",
+    photos: Array.isArray(listing.photos) ? listing.photos : [],
+    body: listing.body || "",
+    traits: Array.isArray(listing.traits) ? listing.traits : [],
+    trait_labels: Array.isArray(listing.trait_labels) ? listing.trait_labels : [],
+    deposit: listing.deposit || "",
+    contact_name: listing.contact_name || "",
+    contact_role: listing.contact_role || "",
+    mobile: listing.mobile || "",
+    phone: listing.phone || "",
+    line_url: listing.line_url || "",
+    created_at: listing.created_at || null,
+  };
+}
+app.get("/api/public/self-listing/:id", (req, res) => {
+  try {
+    const listing = getSelfListing(req.params.id, { viewerId: 0 });
+    res.setHeader("Cache-Control", "public, max-age=60");
+    res.json(publicListingView(listing, req.params.id));
+  } catch (error) {
+    res.status(error.status === 404 ? 404 : 400).json({ error: error.message });
+  }
+});
+app.get("/l/:id", (_req, res) => {
+  res.sendFile(path.join(__dirname, "../public/listing.html"));
 });
 
 app.post("/api/self-listings/:id/close", (req, res) => {

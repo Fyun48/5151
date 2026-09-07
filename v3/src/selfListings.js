@@ -2,6 +2,7 @@ import { lookupDistrict, normalizeWatchDistricts } from "./regions.js";
 import { coverToListUrl } from "./covering.js";
 import { bestMatch } from "./match.js";
 import { isSelfPhotoPublicUrl, SELF_PHOTO_MAX_BYTES, SELF_PHOTO_MAX_COUNT } from "./selfPhotos.js";
+import { isMemberMediaUrl } from "./memberMedia.js";
 import {
   SELF_BODY_TEMPLATES,
   SELF_DEPOSIT_OPTIONS,
@@ -271,6 +272,7 @@ function normalizePhotoUrl(value) {
   const raw = String(value || "").trim().slice(0, SELF_PHOTO_URL_MAX);
   if (!raw) return "";
   if (isSelfPhotoPublicUrl(raw)) return raw;
+  if (isMemberMediaUrl(raw)) return raw; // 會員素材庫照片（/media/lib/...）；所有權由路由層驗證
   let url;
   try {
     url = new URL(raw);
