@@ -390,6 +390,11 @@ try {
   // already migrated
 }
 try {
+  db.exec("ALTER TABLE listings ADD COLUMN contact_fetched_at TEXT");
+} catch {
+  // already migrated
+}
+try {
   db.exec("ALTER TABLE listings ADD COLUMN line_url TEXT");
 } catch {
   // already migrated
@@ -2250,11 +2255,15 @@ export function setListingDetail(postId, { extraFees, contact, fetched = 1, lat,
   const keepAddress = !nextAddress || keepCommunity;
   const nextCommunityId = Number(community_id) || listing.community_id || 0;
   const nextCommunityName = String(community_name || listing.community_name || "").trim();
+  // 有實際帶入聯絡資料（非只補社區座標）才更新 contact_fetched_at，供之後「過期重抓聯絡人」判斷。
+  const contactRefreshed = Boolean(fetched) && contact != null;
+  const contactStamp = new Date().toISOString();
   db.prepare(
     `UPDATE listings SET
       extra_fees = ?, extra_fees_fetched = ?,
       contact_name = ?, contact_role = ?, agency = ?, mobile = ?, phone = ?,
       line_url = ?, avatar = ?, contact_uid = ?, contact_fetched = ?,
+      contact_fetched_at = CASE WHEN ? = 1 THEN ? ELSE contact_fetched_at END,
       lat = CASE WHEN ? IS NOT NULL THEN ? ELSE lat END,
       lng = CASE WHEN ? IS NOT NULL THEN ? ELSE lng END,
       geo_source = CASE WHEN ? IS NOT NULL THEN ? ELSE geo_source END,
@@ -2274,6 +2283,8 @@ export function setListingDetail(postId, { extraFees, contact, fetched = 1, lat,
     next.avatar,
     next.contact_uid,
     Number(Boolean(fetched)),
+    contactRefreshed ? 1 : 0,
+    contactRefreshed ? contactStamp : null,
     applyCoords ? latNum : null,
     applyCoords ? latNum : null,
     applyCoords ? lngNum : null,
@@ -2306,8 +2317,14 @@ export function setListingDetail(postId, { extraFees, contact, fetched = 1, lat,
   return getListing(postId);
 }
 
+// 聯絡資料過期重抓：591 刊登可能換仲介／換電話，但我們只抓過一次就快取。
+// 用最低優先序、且每輪硬上限 CONTACT_REFRESH_CAP 筆補抓，總量不超過原本的明細補抓預算，避免加重 591 負載。
+const CONTACT_REFRESH_MS = 7 * 24 * 60 * 60 * 1000;
+const CONTACT_REFRESH_CAP = 6;
+
 export function listingsNeedingFeeDetail(limit = 12) {
-  return db
+  const cap = Math.max(1, Number(limit) || 12);
+  const needy = db
     .prepare(
       `SELECT post_id FROM listings
        WHERE IFNULL(hidden, 0) = 0 AND IFNULL(offline, 0) = 0
@@ -2319,7 +2336,30 @@ export function listingsNeedingFeeDetail(limit = 12) {
        ORDER BY CASE WHEN lat IS NULL OR lng IS NULL THEN 0 ELSE 1 END, last_seen_at DESC
        LIMIT ?`,
     )
-    .all(Math.max(1, Number(limit) || 12));
+    .all(cap);
+  if (needy.length >= cap) return needy;
+  // 只用剩餘預算補「聯絡資料過期」的線上 591 物件（最舊的先），且不超過小上限。
+  const room = Math.min(cap - needy.length, CONTACT_REFRESH_CAP);
+  if (room <= 0) return needy;
+  const staleBefore = new Date(Date.now() - CONTACT_REFRESH_MS).toISOString();
+  const seen = new Set(needy.map((r) => Number(r.post_id)));
+  const stale = db
+    .prepare(
+      `SELECT post_id FROM listings
+       WHERE IFNULL(hidden, 0) = 0 AND IFNULL(offline, 0) = 0
+         AND ${sql591Source()}
+         AND IFNULL(contact_fetched, 0) = 1
+         AND IFNULL(contact_fetched_at, '') < ?
+       ORDER BY IFNULL(contact_fetched_at, '') ASC
+       LIMIT ?`,
+    )
+    .all(staleBefore, room + needy.length);
+  const out = [...needy];
+  for (const r of stale) {
+    if (out.length >= needy.length + room) break;
+    if (!seen.has(Number(r.post_id))) out.push(r);
+  }
+  return out;
 }
 
 export function listingsNeeding591Geo(limit = 20) {
