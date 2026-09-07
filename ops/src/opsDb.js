@@ -781,6 +781,148 @@ export function applyOpsSchema(db) {
       FOREIGN KEY (staging_deployment_id) REFERENCES development_staging_deployment(id) ON DELETE RESTRICT
     );
 
+    -- Phase 13：Release Candidate + 不可變 Release Manifest + Owner Gate #2。
+    -- 把「確切通過 Gate#1 + QA PASS + Staging PASS」的證據打包成不可變 manifest 呈給 Owner 做第二次人工核准。
+    -- 不部署 Production、不觸發 Production workflow、不跑 Production 遷移、不 merge、不 auto-merge、不改碼、不呼叫 coding provider。
+    CREATE TABLE IF NOT EXISTS development_release_candidate (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      issue_id INTEGER NOT NULL,
+      coding_task_id INTEGER NOT NULL,
+      development_authorization_id INTEGER NOT NULL,
+      proposal_id INTEGER NOT NULL,
+      proposal_version INTEGER NOT NULL,
+      proposal_hash TEXT NOT NULL,
+      qa_run_id INTEGER NOT NULL,
+      staging_deployment_id INTEGER NOT NULL,
+      manifest_version INTEGER NOT NULL,
+      release_manifest_version TEXT NOT NULL,
+      release_policy_version TEXT NOT NULL,
+      base_sha TEXT NOT NULL,
+      head_sha TEXT NOT NULL,
+      current_master_sha TEXT,
+      source_tree_hash TEXT,
+      coding_result_hash TEXT,
+      diff_hash TEXT,
+      artifact_id TEXT,
+      artifact_digest TEXT NOT NULL,
+      qa_input_fingerprint TEXT,
+      qa_policy_fingerprint TEXT,
+      staging_input_fingerprint TEXT,
+      staging_policy_fingerprint TEXT,
+      staging_config_fingerprint TEXT,
+      release_policy_fingerprint TEXT NOT NULL,
+      release_input_fingerprint TEXT NOT NULL,
+      manifest_hash TEXT NOT NULL,
+      manifest_content TEXT NOT NULL,
+      source_base_drift INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'completed',   -- completed|cancelled（manifest 產物狀態；本體不可變）
+      generated_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (issue_id) REFERENCES issue_candidate(id) ON DELETE RESTRICT,
+      FOREIGN KEY (coding_task_id) REFERENCES development_coding_task(id) ON DELETE RESTRICT,
+      FOREIGN KEY (qa_run_id) REFERENCES development_qa_run(id) ON DELETE RESTRICT,
+      FOREIGN KEY (staging_deployment_id) REFERENCES development_staging_deployment(id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS idx_rc_task ON development_release_candidate(coding_task_id, id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_rc_input_fp ON development_release_candidate(release_input_fingerprint) WHERE status != 'cancelled';
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_rc_task_version ON development_release_candidate(coding_task_id, manifest_version);
+    -- manifest 本體不可變：hash/content/artifact/head 一旦寫入不可竄改。
+    CREATE TRIGGER IF NOT EXISTS rc_manifest_immutable BEFORE UPDATE ON development_release_candidate
+    WHEN (
+      IFNULL(NEW.manifest_hash,'') <> IFNULL(OLD.manifest_hash,'')
+      OR IFNULL(NEW.manifest_content,'') <> IFNULL(OLD.manifest_content,'')
+      OR IFNULL(NEW.artifact_digest,'') <> IFNULL(OLD.artifact_digest,'')
+      OR IFNULL(NEW.head_sha,'') <> IFNULL(OLD.head_sha,'')
+      OR IFNULL(NEW.manifest_version,0) <> IFNULL(OLD.manifest_version,0)
+    )
+    BEGIN SELECT RAISE(ABORT, 'release manifest is immutable'); END;
+
+    -- 不可變 Production Release Authorization（Gate #2 通過的域授權；不含任何部署憑證）。
+    CREATE TABLE IF NOT EXISTS production_release_authorization (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      issue_id INTEGER NOT NULL,
+      coding_task_id INTEGER NOT NULL,
+      development_authorization_id INTEGER NOT NULL,
+      release_manifest_id INTEGER NOT NULL,
+      release_manifest_version INTEGER NOT NULL,
+      manifest_hash TEXT NOT NULL,
+      proposal_id INTEGER NOT NULL,
+      proposal_version INTEGER NOT NULL,
+      proposal_hash TEXT NOT NULL,
+      qa_run_id INTEGER NOT NULL,
+      staging_deployment_id INTEGER NOT NULL,
+      base_sha TEXT NOT NULL,
+      head_sha TEXT NOT NULL,
+      artifact_digest TEXT NOT NULL,
+      authorization_hash TEXT NOT NULL,
+      approved_by TEXT NOT NULL,
+      approved_at TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',   -- active|superseded
+      superseded_at TEXT,
+      superseded_reason TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (release_manifest_id) REFERENCES development_release_candidate(id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS idx_relauth_task ON production_release_authorization(coding_task_id, id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_relauth_active ON production_release_authorization(release_manifest_id, manifest_hash) WHERE status = 'active';
+    -- 授權綁定不可變（僅允許 active→superseded）。
+    CREATE TRIGGER IF NOT EXISTS relauth_immutable BEFORE UPDATE ON production_release_authorization
+    WHEN (
+      IFNULL(NEW.manifest_hash,'') <> IFNULL(OLD.manifest_hash,'')
+      OR IFNULL(NEW.release_manifest_id,0) <> IFNULL(OLD.release_manifest_id,0)
+      OR IFNULL(NEW.head_sha,'') <> IFNULL(OLD.head_sha,'')
+      OR IFNULL(NEW.artifact_digest,'') <> IFNULL(OLD.artifact_digest,'')
+      OR IFNULL(NEW.approved_by,'') <> IFNULL(OLD.approved_by,'')
+    )
+    BEGIN SELECT RAISE(ABORT, 'production release authorization is immutable'); END;
+
+    -- Owner Gate #2 決策歷史（append-only）。
+    CREATE TABLE IF NOT EXISTS release_owner_decision (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      issue_id INTEGER NOT NULL,
+      coding_task_id INTEGER NOT NULL,
+      release_manifest_id INTEGER NOT NULL,
+      manifest_version INTEGER NOT NULL,
+      manifest_hash TEXT NOT NULL,
+      action TEXT NOT NULL,        -- APPROVE_RELEASE|REQUEST_CHANGES|CANCEL_RELEASE
+      actor TEXT NOT NULL,
+      reason TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (release_manifest_id) REFERENCES development_release_candidate(id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS idx_reldec_task ON release_owner_decision(coding_task_id, id);
+    CREATE TRIGGER IF NOT EXISTS release_owner_decision_no_update BEFORE UPDATE ON release_owner_decision
+    BEGIN SELECT RAISE(ABORT, 'release owner decisions are append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS release_owner_decision_no_delete BEFORE DELETE ON release_owner_decision
+    BEGIN SELECT RAISE(ABORT, 'release owner decisions are append-only'); END;
+
+    -- 每個 Coding Task 的 canonical 當前 Release Candidate。
+    CREATE TABLE IF NOT EXISTS development_release_current (
+      coding_task_id INTEGER NOT NULL PRIMARY KEY,
+      release_manifest_id INTEGER NOT NULL,
+      manifest_version INTEGER NOT NULL,
+      manifest_hash TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (release_manifest_id) REFERENCES development_release_candidate(id) ON DELETE RESTRICT
+    );
+
+    -- Release Candidate 通知 outbox（provider-neutral；未設 adapter → 留 pending，不假造送達）。
+    CREATE TABLE IF NOT EXISTS release_notification (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      issue_id INTEGER NOT NULL,
+      coding_task_id INTEGER NOT NULL,
+      release_manifest_id INTEGER NOT NULL,
+      manifest_version INTEGER NOT NULL,
+      channel TEXT NOT NULL DEFAULT 'internal',
+      status TEXT NOT NULL DEFAULT 'pending',   -- pending|sent|failed
+      payload TEXT,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (release_manifest_id) REFERENCES development_release_candidate(id) ON DELETE CASCADE
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_relnotif_manifest ON release_notification(release_manifest_id, channel);
+
     CREATE INDEX IF NOT EXISTS idx_state_entity_type ON state_entity(entity_type, state);
     CREATE INDEX IF NOT EXISTS idx_state_transition_entity ON state_transition(entity_type, entity_id, id);
     CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_type, entity_id, id);
