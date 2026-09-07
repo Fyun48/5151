@@ -122,6 +122,10 @@ export function makeGitRepo(repoPath, opts = {}) {
     readFileAt(worktreeDir, rel) {
       try { return readFileSync(path.join(worktreeDir, rel), "utf8"); } catch { return null; }
     },
+
+    // ── Phase 12 Staging：來源身分驗證用 ──
+    resolveRef(ref) { try { return git(["rev-parse", ref]); } catch { return null; } },
+    treeHash(sha) { try { return git(["rev-parse", `${sha}^{tree}`]); } catch { return null; } },
   };
 }
 

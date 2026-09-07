@@ -44,6 +44,9 @@ import { makePrGateway } from "./coding/prGateway.js";
 import { getIssueQaView, getQaRunDetail, requestQaRerun } from "./qaRun.js";
 import { qaWorkerConfigFromEnv, startQaLoop } from "./qaWorker.js";
 import { makeQaReviewProvider } from "./qa/reviewProvider.js";
+import { getCodingStagingView, getStagingDeployment, requestStagingRedeploy, cancelStagingDeployment, cleanupStagingDeployment } from "./stagingDeploy.js";
+import { stagingWorkerConfigFromEnv, startStagingLoop } from "./stagingWorker.js";
+import { makeStagingProvider } from "./staging/provider.js";
 
 // 刻意不使用 express：ops 服務維持「零外部相依」，與本 repo 的 CI（不跑 npm install）相容，
 // 也縮小攻擊面。所有路由用 node:http 手刻的極小 router。
@@ -188,7 +191,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
 
       // ── 公開 API ──
       if (pathname === "/ops/api/health" && method === "GET") {
-        sendJson(res, 200, { ok: true, service: "ops", phase: "11", configured: auth.configured });
+        sendJson(res, 200, { ok: true, service: "ops", phase: "12", configured: auth.configured });
         return;
       }
 
@@ -685,6 +688,45 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         return;
       }
 
+      // ── Phase 12：隔離 Staging（Owner 檢視 + redeploy/cancel/cleanup；不 merge、不部署 Production） ──
+      const stgGet = pathname.match(/^\/ops\/api\/coding-tasks\/(\d+)\/staging$/);
+      if (stgGet && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        try { sendJson(res, 200, getCodingStagingView(db, Number(stgGet[1]))); }
+        catch (err) { sendJson(res, err.status || 404, { error: err.message }); }
+        return;
+      }
+      const stgDepGet = pathname.match(/^\/ops\/api\/staging-deployments\/(\d+)$/);
+      if (stgDepGet && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        const d = getStagingDeployment(db, Number(stgDepGet[1]));
+        if (!d) { sendJson(res, 404, { error: "not found" }); return; }
+        sendJson(res, 200, d);
+        return;
+      }
+      const stgRedeploy = pathname.match(/^\/ops\/api\/coding-tasks\/(\d+)\/staging\/redeploy$/);
+      if (stgRedeploy && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try { sendJson(res, 200, { ok: true, ...requestStagingRedeploy(db, Number(stgRedeploy[1]), { actor: `owner:${req.owner.email}` }) }); }
+        catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+      const stgCancel = pathname.match(/^\/ops\/api\/staging-deployments\/(\d+)\/cancel$/);
+      if (stgCancel && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {}; try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try { sendJson(res, 200, { ok: true, ...cancelStagingDeployment(db, Number(stgCancel[1]), { actor: `owner:${req.owner.email}`, reason: b.reason }) }); }
+        catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+      const stgCleanup = pathname.match(/^\/ops\/api\/staging-deployments\/(\d+)\/cleanup$/);
+      if (stgCleanup && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try { sendJson(res, 200, { ok: true, ...cleanupStagingDeployment(db, Number(stgCleanup[1]), { actor: `owner:${req.owner.email}` }) }); }
+        catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+
       if (pathname.startsWith("/ops/api/")) {
         sendJson(res, 404, { error: "not found" });
         return;
@@ -787,9 +829,17 @@ export function startServer() {
   if (qaCfg.enabled && qaRepo.available) {
     startQaLoop(db, { repo: qaRepo, reviewProvider: qaReviewer, config: qaCfg, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
   }
+  // Phase 12：隔離 Staging worker。安全預設：STAGING_PROVIDER 未設 → provider 不可用；repo 不可用 → 不建/不跑。
+  // 絕不部署 Production；Staging 憑證必須與 Production 分離。
+  const stagingRepo = makeCodingRepo();
+  const stagingProvider = makeStagingProvider();
+  const stagingCfg = stagingWorkerConfigFromEnv();
+  if (stagingCfg.enabled && stagingProvider.available && stagingRepo.available) {
+    startStagingLoop(db, { repo: stagingRepo, provider: stagingProvider, config: stagingCfg, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
+  }
   http.createServer(handler).listen(port, host, () => {
     // eslint-disable-next-line no-console
-    console.log(`Ops console (Phase 11)：http://${host}:${port}  owner=${auth.configured ? auth.ownerEmail : "(未設定)"}  ingest=${process.env.OPS_INGEST_SECRET ? "on" : "off"}  ai=${aiProvider.available ? aiProvider.name : "off"}  embed=${embProvider.available ? embProvider.name : "off"}  impact=${impactCfg.enabled ? "on" : "off"}  eval=${evalProvider.available ? evalProvider.name : "off"}  proposal=${proposalProvider.available ? proposalProvider.name : "off"}  reeval=${reevalCfg.enabled ? "on" : "off"}  coding=${codingProvider.available && codingRepo.available ? codingProvider.name : "off"}  qa=${qaCfg.enabled && qaRepo.available ? "on" : "off"}`);
+    console.log(`Ops console (Phase 12)：http://${host}:${port}  owner=${auth.configured ? auth.ownerEmail : "(未設定)"}  ingest=${process.env.OPS_INGEST_SECRET ? "on" : "off"}  ai=${aiProvider.available ? aiProvider.name : "off"}  embed=${embProvider.available ? embProvider.name : "off"}  impact=${impactCfg.enabled ? "on" : "off"}  eval=${evalProvider.available ? evalProvider.name : "off"}  proposal=${proposalProvider.available ? proposalProvider.name : "off"}  reeval=${reevalCfg.enabled ? "on" : "off"}  coding=${codingProvider.available && codingRepo.available ? codingProvider.name : "off"}  qa=${qaCfg.enabled && qaRepo.available ? "on" : "off"}  staging=${stagingCfg.enabled && stagingProvider.available && stagingRepo.available ? stagingProvider.name : "off"}`);
   });
   return { db, auth };
 }
