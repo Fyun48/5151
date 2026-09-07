@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { passesAttributeFilters } from "./floors.js";
 import { decodeEntities } from "./htmlEntities.js";
 import { isExcludedByKeyword } from "./geo.js";
+import { isTaiwanMapPin } from "./location.js";
 import { feeFieldsFromBlob } from "./listingCost.js";
 import { zipForDistrict } from "./hbhousing.js";
 import { lookupDistrict } from "./regions.js";
@@ -71,6 +72,13 @@ export function hpDetailUrl(id) {
   return `${HP_SITE}/house/${encodeURIComponent(key)}`;
 }
 
+/** 5168 明細現在是 SPA，內頁 HTML 只剩殼；完整欄位（含門牌地址與經緯度）走這支 JSON API。 */
+export function hpDetailApiUrl(id) {
+  const key = String(id || "").trim();
+  if (!key) return `${HP_SITE}/ws/detail/`;
+  return `${HP_SITE}/ws/detail/${encodeURIComponent(key)}`;
+}
+
 export function hpPostIdFromCase(id) {
   const key = String(id || "").trim();
   if (!key) return 0;
@@ -101,6 +109,17 @@ function listingSourceKey({ regionId, sectionId, address, floorName, areaName, l
 
 function stripTags(html) {
   return decodeEntities(String(html || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
+}
+
+/** 有門牌號的地址才能精準地理編碼；用它決定要不要用明細頁地址覆蓋列表頁的粗略地址。 */
+export function addressHasHouseNumber(address) {
+  return /\d+(?:之\d+)?號/.test(String(address || "").replace(/\s+/g, ""));
+}
+
+/** 從多個候選地址挑最精準：優先有門牌號者，否則第一個非空字串。 */
+function pickBestAddress(candidates) {
+  const list = (candidates || []).map((value) => String(value || "").trim()).filter(Boolean);
+  return list.find((value) => addressHasHouseNumber(value)) || list[0] || "";
 }
 
 function isHpPlaceholderCover(url) {
@@ -192,7 +211,8 @@ export function parseHpListHtml(html) {
 export function parseHpDetailHtml(html) {
   const source = String(html || "");
   const fields = {};
-  const re = /<span class="mr-3 text-c-dark-300">([^<]+)<\/span><span class="text-c-dark-900">([\s\S]*?)<\/span>/g;
+  // 「基本資料」的 label/value 相鄰；「其他資料」的 value span 帶 data-test 且中間有換行，故容忍空白與額外屬性。
+  const re = /<span class="mr-3 text-c-dark-300">([^<]+)<\/span\s*>\s*<span class="text-c-dark-900"[^>]*>([\s\S]*?)<\/span>/g;
   let m;
   while ((m = re.exec(source))) {
     const label = stripTags(m[1]).trim();
@@ -216,6 +236,17 @@ export function parseHpDetailHtml(html) {
   const areaName = String(fields["坪數"] || "").replace(/\s+/g, "").trim()
     || (descArea ? `${descArea[1].replace(/\.0$/, "")}坪` : "");
   const layout = String(fields["格局"] || "").replace(/\s+/g, "").trim() || descLayout;
+  // 明細頁的地圖連結內含精準經緯度（query=lat,lng）與地址文字，直接拿來定位，免再打地理編碼服務。
+  const mapAnchor = source.match(/data-test="map-link"[^>]*>([\s\S]*?)<\/a>/i);
+  const mapAddress = mapAnchor ? stripTags(mapAnchor[1]) : "";
+  const coordMatch = source.match(/query=(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)/);
+  let lat = null;
+  let lng = null;
+  if (coordMatch && isTaiwanMapPin(coordMatch[1], coordMatch[2])) {
+    lat = Number(coordMatch[1]);
+    lng = Number(coordMatch[2]);
+  }
+  const address = pickBestAddress([fields["地址"], mapAddress, addrMeta ? addrMeta[1] : ""]);
   return {
     floorName,
     community: cleanCommunity(fields["社區"]),
@@ -224,9 +255,100 @@ export function parseHpDetailHtml(html) {
     kind: kindFromHpText(fields["現況"] || "") || kindFromHpText(fields["型態"] || "") || kindFromHpText(desc),
     buildingType: String(fields["型態"] || "").trim(),
     parking: String(fields["車位"] || "").trim(),
-    address: addrMeta ? addrMeta[1].trim() : "",
+    usage: String(fields["用途"] || "").trim(),
+    address,
+    lat,
+    lng,
     fields,
   };
+}
+
+/** 解析 5168 明細 JSON API（/ws/detail/{id}）。回傳與 parseHpDetailHtml 相同的形狀；無法解析時回 null 讓外層退回 HTML。 */
+export function parseHpDetailJson(payload) {
+  let root = payload;
+  if (typeof payload === "string") {
+    try { root = JSON.parse(payload); } catch { return null; }
+  }
+  if (!root || typeof root !== "object") return null;
+  const det = root.webRentCaseGroupingDetail || root.webRentCaseGroupingDet || root.caseDetail || root;
+  if (!det || typeof det !== "object") return null;
+  const str = (value) => String(value ?? "").trim();
+  const num = (value) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  };
+  const cleanCommunity = (value) => {
+    const v = str(value);
+    if (!v || /^[-–—]$/.test(v) || v === "無" || v === "無社區") return "";
+    return v;
+  };
+  const toFloor = str(det.toFloor);
+  const upFloor = str(det.upFloor);
+  const fromFloor = str(det.fromFloor);
+  let floorName = "";
+  if (upFloor) {
+    const low = fromFloor && fromFloor !== toFloor ? `${fromFloor}-${toFloor}` : toFloor;
+    floorName = low ? `${low}/${upFloor}` : upFloor;
+  } else if (toFloor) {
+    floorName = toFloor;
+  }
+  const rm = str(det.rm);
+  const livingRm = str(det.livingRm);
+  const bathRm = str(det.bathRm);
+  const spaceRm = num(det.spaceRm);
+  let layout = "";
+  if (rm || livingRm || bathRm) {
+    layout = `${rm || 0}房${livingRm || 0}廳${bathRm || 0}衛`;
+    if (spaceRm && spaceRm > 0) layout += `${spaceRm}陽台`;
+  }
+  const buildPin = num(det.buildPin);
+  const areaName = buildPin && buildPin > 0 ? `${String(buildPin).replace(/\.0$/, "")}坪` : "";
+  const usage = str(det.rentPurPoseName);
+  const buildingType = str(det.caseTypeName);
+  const lat = num(det.lat);
+  const lng = num(det.lng);
+  const cityRoad = [str(det.city), str(det.district), str(det.road)].filter(Boolean).join("");
+  const address = str(det.simpAddress) || str(det.address) || cityRoad;
+  const conditionTags = Array.isArray(det.conditionTags) ? det.conditionTags.map(str).filter(Boolean) : [];
+  return {
+    floorName,
+    community: cleanCommunity(det.communityName),
+    areaName,
+    layout,
+    kind: kindFromHpText(usage) || kindFromHpText(buildingType) || kindFromHpText(str(det.caseName)),
+    buildingType,
+    parking: str(det.parkingYN) === "Y" ? "有車位" : "",
+    usage,
+    address,
+    lat: lat != null && lng != null && isTaiwanMapPin(lat, lng) ? lat : null,
+    lng: lat != null && lng != null && isTaiwanMapPin(lat, lng) ? lng : null,
+    conditionTags,
+    fields: {
+      現況: usage,
+      型態: buildingType,
+      坪數: areaName,
+      樓層: floorName ? `${floorName}樓` : "",
+      格局: layout,
+      社區: cleanCommunity(det.communityName),
+      用途: usage,
+      地址: address,
+    },
+  };
+}
+
+/** 先試 JSON API 取完整明細（含經緯度），失敗才退回舊 SSR HTML 解析。 */
+export async function fetchHpDetail(id, getHtml) {
+  try {
+    const detail = parseHpDetailJson(await getHtml(hpDetailApiUrl(id)));
+    if (detail && (detail.lat != null || detail.floorName || detail.community || detail.address || detail.layout)) {
+      return detail;
+    }
+  } catch { /* JSON API 不可用就退回 HTML */ }
+  try {
+    return parseHpDetailHtml(await getHtml(hpDetailUrl(id)));
+  } catch {
+    return null;
+  }
 }
 
 /** 用明細頁補齊列表頁缺的樓層／社區／坪數／格局／現況，並重算同屋源指紋 source_key。 */
@@ -238,6 +360,17 @@ export function enrichHpListingFromDetail(row, detail, { regionId, sectionId } =
   if (!next.area_name && detail.areaName) { next.area_name = detail.areaName; }
   if (!next.layout && detail.layout) { next.layout = detail.layout; }
   if ((!next.kind_name || next.kind_name === "") && detail.kind) { next.kind_name = detail.kind; }
+  // 明細頁地址通常比列表頁完整（含門牌號），有門牌才有機會精準定位，故用它覆蓋粗略地址。
+  if (detail.address && (!next.address || (addressHasHouseNumber(detail.address) && !addressHasHouseNumber(next.address)))) {
+    next.address = detail.address;
+    changed = true;
+  }
+  // 明細頁地圖連結帶精準座標：直接寫入 lat/lng 並標記 geo_source，之後才會被通勤／捷運距離回填採用。
+  if (detail.lat != null && detail.lng != null && (next.lat == null || next.lng == null)) {
+    next.lat = detail.lat;
+    next.lng = detail.lng;
+    next.geo_source = "houseprice";
+  }
   let tags = null;
   const ensureTags = () => {
     if (tags) return tags;
@@ -254,6 +387,18 @@ export function enrichHpListingFromDetail(row, detail, { regionId, sectionId } =
   if (detail.parking && /車位/.test(detail.parking) && !/^無/.test(detail.parking)) {
     const t = ensureTags();
     if (!t.includes(detail.parking)) t.push(detail.parking);
+  }
+  if (detail.usage && !/^[-–—]$/.test(detail.usage) && detail.usage !== next.kind_name) {
+    const t = ensureTags();
+    if (!t.includes(detail.usage)) t.push(detail.usage);
+  }
+  if (Array.isArray(detail.conditionTags)) {
+    for (const tag of detail.conditionTags) {
+      const label = String(tag || "").trim();
+      if (!label) continue;
+      const t = ensureTags();
+      if (!t.includes(label)) t.push(label);
+    }
   }
   if (tags) next.tags = JSON.stringify(tags);
   if (changed) {
@@ -416,14 +561,15 @@ export async function fetchHpCoveringListings(jobs, options = {}) {
             priceMax: job.priceMax,
           })) continue;
           seen.add(id);
-          if (detailBudget > 0 && (!row.floor_name || !row.community_name)) {
-            try {
-              const detail = parseHpDetailHtml(await getHtml(hpDetailUrl(id)));
-              row = enrichHpListingFromDetail(row, detail, { regionId, sectionId });
-              detailBudget -= 1;
-              const gap = options.detailGapMs ?? options.gapMs ?? 300;
-              if (gap > 0) await new Promise((resolve) => setTimeout(resolve, gap));
-            } catch { /* 明細補抓失敗就用列表資料 */ }
+          // 缺樓層／社區要補明細；缺座標也要補（明細頁地圖連結才有精準經緯度，通勤與捷運距離都靠它）。
+          const needDetail = !row.floor_name || !row.community_name || row.lat == null;
+          const alreadyGeo = typeof options.hasGeo === "function" && options.hasGeo(row.post_id);
+          if (detailBudget > 0 && needDetail && !alreadyGeo) {
+            const detail = await fetchHpDetail(id, getHtml);
+            if (detail) row = enrichHpListingFromDetail(row, detail, { regionId, sectionId });
+            detailBudget -= 1;
+            const gap = options.detailGapMs ?? options.gapMs ?? 300;
+            if (gap > 0) await new Promise((resolve) => setTimeout(resolve, gap));
           }
           listings.push(row);
         }

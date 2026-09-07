@@ -102,7 +102,7 @@ export function listingCommunityId(listing) {
   return parseCommunityIdFromSourceKey(listing?.source_key);
 }
 
-export const TRUSTED_GEO_SOURCES = ["591", "community", "hbhousing", "sinyi", "housefun"];
+export const TRUSTED_GEO_SOURCES = ["591", "community", "hbhousing", "sinyi", "housefun", "houseprice"];
 
 export function isTrustedGeoSource(source) {
   return TRUSTED_GEO_SOURCES.includes(String(source || ""));
