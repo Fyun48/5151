@@ -19,8 +19,11 @@ test("only state_entity holds a lifecycle state column", () => {
   // 屬於局部工作狀態、非中央 lifecycle，且不會與 state_entity 分歧，故列入白名單。
   const STATE_COL_ALLOWED = /^(state|lifecycle_state)$/i; // 對白名單表僅允許 status（job / 分析用途狀態）
   // feedback_analysis.status = 分析 job 狀態；embedding.status = active/stale；issue_candidate.status = open/merged（分析分群狀態）。
+  // issue_evaluation_run.status / issue_role_evaluation.status = Phase 7 評估 job 的處理狀態
+  //   （pending/processing/completed/failed/failed_retry）；屬局部工作狀態、非中央 proposal lifecycle，
+  //   且不會與 state_entity 分歧（Phase 7 為 analytical decision-support，不驅動 lifecycle 轉移）。
   // 皆非中央 proposal lifecycle，且不會與 state_entity 分歧。
-  const ALLOWED = new Set(["state_entity", "feedback_analysis", "embedding", "issue_candidate"]);
+  const ALLOWED = new Set(["state_entity", "feedback_analysis", "embedding", "issue_candidate", "issue_evaluation_run", "issue_role_evaluation"]);
   const offenders = [];
 
   for (const table of tables) {

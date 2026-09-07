@@ -27,6 +27,10 @@ import { makeEmbeddingProvider } from "./ai/embeddingProvider.js";
 import { clusteringConfigFromEnv, startClusteringLoop } from "./clusteringWorker.js";
 import { getCurrentIssueImpact, listAssessments, isImpactStale, calculateAndStoreImpact, currentImpactId } from "./impact.js";
 import { impactWorkerConfigFromEnv, startImpactLoop } from "./impactWorker.js";
+import { getCurrentIssueEvaluation, getEvaluationRunDetail, listEvaluationRuns, currentEvaluationRunId, isEvaluationStale, requestEvaluationRecalc } from "./evaluation.js";
+import { makeEvaluationProvider } from "./ai/evaluationProvider.js";
+import { evaluationWorkerConfigFromEnv, startEvaluationLoop } from "./evaluationWorker.js";
+import { evaluationRolesConfig } from "./evaluationRoles.js";
 
 // 刻意不使用 express：ops 服務維持「零外部相依」，與本 repo 的 CI（不跑 npm install）相容，
 // 也縮小攻擊面。所有路由用 node:http 手刻的極小 router。
@@ -171,7 +175,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
 
       // ── 公開 API ──
       if (pathname === "/ops/api/health" && method === "GET") {
-        sendJson(res, 200, { ok: true, service: "ops", phase: "6", configured: auth.configured });
+        sendJson(res, 200, { ok: true, service: "ops", phase: "7", configured: auth.configured });
         return;
       }
 
@@ -499,6 +503,42 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         return;
       }
 
+      // ── Phase 7：Issue 角色制評估（Owner 檢視 current + 歷史 + 逐角色/逐輪票；不建 proposal） ──
+      const evalGet = pathname.match(/^\/ops\/api\/issues\/(\d+)\/evaluation$/);
+      if (evalGet && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        const iid = Number(evalGet[1]);
+        if (!db.prepare("SELECT id FROM issue_candidate WHERE id=?").get(iid)) { sendJson(res, 404, { error: "not found" }); return; }
+        const currentRunId = currentEvaluationRunId(db, iid);
+        sendJson(res, 200, {
+          issue_id: iid,
+          roles: evaluationRolesConfig().roles,
+          current: getCurrentIssueEvaluation(db, iid),
+          current_run_id: currentRunId,
+          current_run: currentRunId ? getEvaluationRunDetail(db, currentRunId) : null,
+          stale: isEvaluationStale(db, iid),
+          history: listEvaluationRuns(db, { issueId: iid }),
+        });
+        return;
+      }
+      const evalRunGet = pathname.match(/^\/ops\/api\/issues\/(\d+)\/evaluation\/runs\/(\d+)$/);
+      if (evalRunGet && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        const detail = getEvaluationRunDetail(db, evalRunGet[2]);
+        if (!detail || Number(detail.run.issue_id) !== Number(evalRunGet[1])) { sendJson(res, 404, { error: "not found" }); return; }
+        sendJson(res, 200, detail);
+        return;
+      }
+      const evalRecalc = pathname.match(/^\/ops\/api\/issues\/(\d+)\/evaluation\/recalculate$/);
+      if (evalRecalc && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          const r = requestEvaluationRecalc(db, Number(evalRecalc[1]), { actor: `owner:${req.owner.email}` });
+          sendJson(res, 202, { ok: true, ...r });
+        } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+
       if (pathname.startsWith("/ops/api/")) {
         sendJson(res, 404, { error: "not found" });
         return;
@@ -567,9 +607,15 @@ export function startServer() {
   if (impactCfg.enabled) {
     startImpactLoop(db, { config: impactCfg, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
   }
+  // Phase 7：角色制評估 worker。EVALUATION_PROVIDER 未設定 → 不啟動；feedback/clustering/impact 照常。
+  const evalProvider = makeEvaluationProvider();
+  const evalCfg = evaluationWorkerConfigFromEnv();
+  if (evalProvider.available && evalCfg.enabled) {
+    startEvaluationLoop(db, { provider: evalProvider, config: evalCfg, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
+  }
   http.createServer(handler).listen(port, host, () => {
     // eslint-disable-next-line no-console
-    console.log(`Ops console (Phase 6)：http://${host}:${port}  owner=${auth.configured ? auth.ownerEmail : "(未設定)"}  ingest=${process.env.OPS_INGEST_SECRET ? "on" : "off"}  ai=${aiProvider.available ? aiProvider.name : "off"}  embed=${embProvider.available ? embProvider.name : "off"}  impact=${impactCfg.enabled ? "on" : "off"}`);
+    console.log(`Ops console (Phase 7)：http://${host}:${port}  owner=${auth.configured ? auth.ownerEmail : "(未設定)"}  ingest=${process.env.OPS_INGEST_SECRET ? "on" : "off"}  ai=${aiProvider.available ? aiProvider.name : "off"}  embed=${embProvider.available ? embProvider.name : "off"}  impact=${impactCfg.enabled ? "on" : "off"}  eval=${evalProvider.available ? evalProvider.name : "off"}`);
   });
   return { db, auth };
 }
