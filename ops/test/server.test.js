@@ -37,7 +37,7 @@ test("health is public and reports phase 1.1", async () => {
     const data = await (await fetch(`${base}/ops/api/health`)).json();
     assert.equal(data.ok, true);
     assert.equal(data.service, "ops");
-    assert.equal(data.phase, "6");
+    assert.equal(data.phase, "7");
   });
 });
 

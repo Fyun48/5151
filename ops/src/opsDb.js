@@ -302,6 +302,92 @@ export function applyOpsSchema(db) {
       ) THEN RAISE(ABORT, 'impact current must reference an assessment of the same issue') END;
     END;
 
+    -- Phase 7：角色制 Issue 評估與投票（analytical decision-support only）。
+    -- 明確不做：建 proposal、核准開發、呼叫 coding provider、建 coding 分支/PR、部署 staging/production。
+    -- 版本化歷史 run；每個 run 綁定「使用到的確切 canonical 證據」input_fingerprint 與 source_impact_assessment_id。
+    CREATE TABLE IF NOT EXISTS issue_evaluation_run (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      issue_id INTEGER NOT NULL,
+      evaluation_version TEXT NOT NULL,
+      aggregation_version TEXT NOT NULL,
+      role_set_version TEXT NOT NULL,
+      input_fingerprint TEXT NOT NULL,
+      policy_fingerprint TEXT,                       -- 決策政策/評估設定指紋（result-affecting config；不含 secrets）
+      policy_snapshot TEXT,                          -- 去識別化政策快照（可解釋歷史 run 是用哪些規則產生）
+      source_impact_assessment_id INTEGER,
+      status TEXT NOT NULL DEFAULT 'pending',       -- pending|processing|completed|failed|failed_retry
+      final_recommendation TEXT,                    -- PROPOSE|WAIT|IGNORE|ESCALATE（僅 completed）
+      aggregate_confidence REAL,
+      agreement REAL,
+      aggregation_details TEXT,
+      deliberation_enabled INTEGER NOT NULL DEFAULT 0,
+      provider TEXT,
+      model TEXT,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      max_retries INTEGER NOT NULL DEFAULT 5,
+      error_code TEXT,
+      next_attempt_at TEXT NOT NULL,
+      claimed_at TEXT,
+      started_at TEXT,
+      completed_at TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (issue_id) REFERENCES issue_candidate(id) ON DELETE RESTRICT,
+      FOREIGN KEY (source_impact_assessment_id) REFERENCES issue_impact_assessment(id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS idx_eval_run_issue ON issue_evaluation_run(issue_id, id);
+    CREATE INDEX IF NOT EXISTS idx_eval_run_status ON issue_evaluation_run(status, next_attempt_at);
+
+    -- 每個角色（每輪）獨立結構化投票。保留第一輪，即使第二輪 deliberation 改票也不覆寫第一輪。
+    -- 只存「結論式 rationale」與 output_hash，不存隱藏推理鏈（chain-of-thought）。
+    CREATE TABLE IF NOT EXISTS issue_role_evaluation (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      evaluation_run_id INTEGER NOT NULL,
+      issue_id INTEGER NOT NULL,
+      role TEXT NOT NULL,
+      round INTEGER NOT NULL DEFAULT 1,
+      recommendation TEXT NOT NULL,
+      confidence REAL NOT NULL,
+      risk_level TEXT NOT NULL,
+      rationale TEXT,
+      evidence_refs TEXT,
+      missing_evidence TEXT,
+      risk_flags TEXT,
+      provider TEXT,
+      model TEXT,
+      model_version TEXT,
+      prompt_version TEXT,
+      output_hash TEXT,
+      status TEXT NOT NULL DEFAULT 'completed',
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (evaluation_run_id) REFERENCES issue_evaluation_run(id) ON DELETE RESTRICT,
+      FOREIGN KEY (issue_id) REFERENCES issue_candidate(id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS idx_role_eval_run ON issue_role_evaluation(evaluation_run_id, role, round);
+
+    -- 每 issue 至多一個 CURRENT 評估（Phase 8 只讀此指標，不用 timestamp 猜最新）。
+    CREATE TABLE IF NOT EXISTS issue_evaluation_current (
+      issue_id INTEGER NOT NULL PRIMARY KEY,
+      evaluation_run_id INTEGER NOT NULL,
+      input_fingerprint TEXT NOT NULL,
+      policy_fingerprint TEXT NOT NULL,
+      final_recommendation TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (evaluation_run_id) REFERENCES issue_evaluation_run(id) ON DELETE RESTRICT
+    );
+    -- DB 層不變式：current 指標必須指向「同一 issue、且已 completed」的 run。即使用直接 SQL 也無法違反。
+    CREATE TRIGGER IF NOT EXISTS iec_guard_insert BEFORE INSERT ON issue_evaluation_current
+    BEGIN
+      SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM issue_evaluation_run r WHERE r.id = NEW.evaluation_run_id AND r.issue_id = NEW.issue_id AND r.status = 'completed'
+      ) THEN RAISE(ABORT, 'evaluation current must reference a COMPLETED run of the same issue') END;
+    END;
+    CREATE TRIGGER IF NOT EXISTS iec_guard_update BEFORE UPDATE ON issue_evaluation_current
+    BEGIN
+      SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM issue_evaluation_run r WHERE r.id = NEW.evaluation_run_id AND r.issue_id = NEW.issue_id AND r.status = 'completed'
+      ) THEN RAISE(ABORT, 'evaluation current must reference a COMPLETED run of the same issue') END;
+    END;
+
     CREATE INDEX IF NOT EXISTS idx_state_entity_type ON state_entity(entity_type, state);
     CREATE INDEX IF NOT EXISTS idx_state_transition_entity ON state_transition(entity_type, entity_id, id);
     CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_type, entity_id, id);
