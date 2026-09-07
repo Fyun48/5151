@@ -515,6 +515,37 @@ export function applyOpsSchema(db) {
     -- 每個 (proposal_id, proposal_hash) 至多一筆 active 授權（冪等；避免重複授權）。
     CREATE UNIQUE INDEX IF NOT EXISTS idx_devauth_active ON development_authorization(proposal_id, proposal_hash) WHERE status = 'active';
 
+    -- Phase 9：重評/重啟授權（immutable, append-only）。這是中央狀態機把 DEFERRED/REJECTED → EVALUATING
+    -- （authorization='reevaluation'）或 BLOCKED → EVALUATING（authorization='owner_unblock'）所需的「明確授權」歷史。
+    -- 只記聚合證據指紋與 reason codes；不放原始 feedback / PII。scheduler tick 本身不算授權。
+    CREATE TABLE IF NOT EXISTS issue_reevaluation_authorization (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      issue_id INTEGER NOT NULL,
+      trigger_type TEXT NOT NULL,              -- auto | owner_manual | owner_unblock
+      authorized_by TEXT NOT NULL,             -- policy | owner
+      from_state TEXT NOT NULL,
+      source_owner_decision_id INTEGER,
+      baseline_fingerprint TEXT,
+      current_evidence_fingerprint TEXT NOT NULL,
+      policy_version TEXT NOT NULL,
+      policy_fingerprint TEXT NOT NULL,
+      reason_codes TEXT,
+      observed_deltas TEXT,
+      actor TEXT NOT NULL,
+      reason TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (issue_id) REFERENCES issue_candidate(id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS idx_reauth_issue ON issue_reevaluation_authorization(issue_id, id);
+    -- 冪等：同 issue + 同 baseline + 同 current evidence + 同 policy 只授權一次（避免 flapping / 重複授權）。
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_reauth_dedupe ON issue_reevaluation_authorization(
+      issue_id, IFNULL(baseline_fingerprint, ''), current_evidence_fingerprint, policy_fingerprint
+    );
+    CREATE TRIGGER IF NOT EXISTS reauth_no_update BEFORE UPDATE ON issue_reevaluation_authorization
+      BEGIN SELECT RAISE(ABORT, 'issue_reevaluation_authorization is append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS reauth_no_delete BEFORE DELETE ON issue_reevaluation_authorization
+      BEGIN SELECT RAISE(ABORT, 'issue_reevaluation_authorization is append-only'); END;
+
     CREATE INDEX IF NOT EXISTS idx_state_entity_type ON state_entity(entity_type, state);
     CREATE INDEX IF NOT EXISTS idx_state_transition_entity ON state_transition(entity_type, entity_id, id);
     CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_type, entity_id, id);

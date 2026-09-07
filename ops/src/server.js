@@ -34,6 +34,8 @@ import { evaluationRolesConfig } from "./evaluationRoles.js";
 import { getCurrentIssueProposal, listProposals, listOwnerDecisions, currentOwnerDecision, getActiveAuthorization, submitOwnerDecision, requestProposalGeneration } from "./proposal.js";
 import { makeProposalProvider } from "./ai/proposalProvider.js";
 import { proposalWorkerConfigFromEnv, startProposalLoop } from "./proposalWorker.js";
+import { getReevaluationView, ownerManualReevaluate, ownerUnblock } from "./reevaluation.js";
+import { reevaluationWorkerConfigFromEnv, startReevaluationLoop } from "./reevaluationWorker.js";
 
 // 刻意不使用 express：ops 服務維持「零外部相依」，與本 repo 的 CI（不跑 npm install）相容，
 // 也縮小攻擊面。所有路由用 node:http 手刻的極小 router。
@@ -178,7 +180,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
 
       // ── 公開 API ──
       if (pathname === "/ops/api/health" && method === "GET") {
-        sendJson(res, 200, { ok: true, service: "ops", phase: "8", configured: auth.configured });
+        sendJson(res, 200, { ok: true, service: "ops", phase: "9", configured: auth.configured });
         return;
       }
 
@@ -588,6 +590,38 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         return;
       }
 
+      // ── Phase 9：重評/重啟（Owner 檢視 + 手動重評 + 解除 BLOCK；不寫程式、不部署） ──
+      const reevalGet = pathname.match(/^\/ops\/api\/issues\/(\d+)\/reevaluation$/);
+      if (reevalGet && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        const iid = Number(reevalGet[1]);
+        if (!db.prepare("SELECT id FROM issue_candidate WHERE id=?").get(iid)) { sendJson(res, 404, { error: "not found" }); return; }
+        sendJson(res, 200, getReevaluationView(db, iid));
+        return;
+      }
+      const reevalReopen = pathname.match(/^\/ops\/api\/issues\/(\d+)\/reevaluation\/reopen$/);
+      if (reevalReopen && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {};
+        try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          const r = ownerManualReevaluate(db, Number(reevalReopen[1]), { actor: `owner:${req.owner.email}`, reason: b.reason });
+          sendJson(res, 200, { ok: true, ...r });
+        } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+      const reevalUnblock = pathname.match(/^\/ops\/api\/issues\/(\d+)\/unblock$/);
+      if (reevalUnblock && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {};
+        try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          const r = ownerUnblock(db, Number(reevalUnblock[1]), { actor: `owner:${req.owner.email}`, reason: b.reason });
+          sendJson(res, 200, { ok: true, ...r });
+        } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+
       if (pathname.startsWith("/ops/api/")) {
         sendJson(res, 404, { error: "not found" });
         return;
@@ -668,9 +702,14 @@ export function startServer() {
   if (proposalProvider.available && proposalCfg.enabled) {
     startProposalLoop(db, { provider: proposalProvider, config: proposalCfg, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
   }
+  // Phase 9：重評 worker（純本地決定性，預設開；無外部依賴）。只自動重啟 DEFERRED/REJECTED；BLOCKED 永不自動。
+  const reevalCfg = reevaluationWorkerConfigFromEnv();
+  if (reevalCfg.enabled) {
+    startReevaluationLoop(db, { config: reevalCfg, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
+  }
   http.createServer(handler).listen(port, host, () => {
     // eslint-disable-next-line no-console
-    console.log(`Ops console (Phase 8)：http://${host}:${port}  owner=${auth.configured ? auth.ownerEmail : "(未設定)"}  ingest=${process.env.OPS_INGEST_SECRET ? "on" : "off"}  ai=${aiProvider.available ? aiProvider.name : "off"}  embed=${embProvider.available ? embProvider.name : "off"}  impact=${impactCfg.enabled ? "on" : "off"}  eval=${evalProvider.available ? evalProvider.name : "off"}  proposal=${proposalProvider.available ? proposalProvider.name : "off"}`);
+    console.log(`Ops console (Phase 9)：http://${host}:${port}  owner=${auth.configured ? auth.ownerEmail : "(未設定)"}  ingest=${process.env.OPS_INGEST_SECRET ? "on" : "off"}  ai=${aiProvider.available ? aiProvider.name : "off"}  embed=${embProvider.available ? embProvider.name : "off"}  impact=${impactCfg.enabled ? "on" : "off"}  eval=${evalProvider.available ? evalProvider.name : "off"}  proposal=${proposalProvider.available ? proposalProvider.name : "off"}  reeval=${reevalCfg.enabled ? "on" : "off"}`);
   });
   return { db, auth };
 }
