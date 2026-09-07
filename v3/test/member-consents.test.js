@@ -123,6 +123,49 @@ test("old acceptance is not treated as the required new version", () => {
   db.close();
 });
 
+test("member_consents rows are append-only at the database layer", () => {
+  const db = open();
+  const user = registerUser(db, { email: "lock@b.com", password: "password1", acceptDisclaimer: true });
+  const required = getRequiredRegistrationDocuments(db);
+  const now = new Date("2026-09-07T04:00:00.000Z");
+  const inserted = recordRegistrationConsents(db, user.id, required, { now });
+  assert.equal(inserted.length, 2);
+  const terms = inserted.find((row) => row.document_type === "registration_terms");
+  const before = db.prepare("SELECT * FROM member_consents WHERE id=?").get(terms.id);
+  assert.equal(before.document_id, terms.document_id);
+  assert.equal(before.version, terms.version);
+  assert.equal(before.content_hash, terms.content_hash);
+  assert.equal(before.agreed_at, now.toISOString());
+
+  assert.throws(
+    () => db.prepare("UPDATE member_consents SET content_hash='tampered', version=99, agreed_at='2099-01-01T00:00:00.000Z' WHERE id=?").run(terms.id),
+    /append-only/,
+  );
+  const afterUpdate = db.prepare("SELECT * FROM member_consents WHERE id=?").get(terms.id);
+  assert.equal(afterUpdate.document_id, before.document_id);
+  assert.equal(afterUpdate.version, before.version);
+  assert.equal(afterUpdate.content_hash, before.content_hash);
+  assert.equal(afterUpdate.agreed_at, before.agreed_at);
+
+  assert.throws(
+    () => db.prepare("DELETE FROM member_consents WHERE id=?").run(terms.id),
+    /append-only/,
+  );
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM member_consents WHERE id=?").get(terms.id).n, 1);
+
+  const again = recordConsent(db, user.id, {
+    document_type: terms.document_type,
+    document_id: terms.document_id,
+    version: terms.version,
+    content_hash: terms.content_hash,
+    source: "registration",
+  }, { now: new Date("2026-09-07T05:00:00.000Z") });
+  assert.equal(again.id, terms.id);
+  assert.equal(again.agreed_at, before.agreed_at);
+  assert.equal(listMemberConsents(db, user.id).length, 2);
+  db.close();
+});
+
 test("TOCTOU stale submitted version is rejected instead of silently accepting the new one", () => {
   const db = open();
   const stale = snapshot(getRequiredRegistrationDocuments(db));

@@ -38,6 +38,22 @@ export function ensureMemberConsentSchema(db) {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_member_consents_unique
       ON member_consents(user_id, document_id, content_hash);
   `);
+  try {
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS member_consents_no_update
+      BEFORE UPDATE ON member_consents
+      BEGIN
+        SELECT RAISE(ABORT, 'member_consents is append-only');
+      END;
+      CREATE TRIGGER IF NOT EXISTS member_consents_no_delete
+      BEFORE DELETE ON member_consents
+      BEGIN
+        SELECT RAISE(ABORT, 'member_consents is append-only');
+      END;
+    `);
+  } catch {
+    // trigger 已存在
+  }
 }
 
 export function listMemberConsents(db, userId) {
