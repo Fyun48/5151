@@ -120,14 +120,14 @@ test("14/15/16. membership change stales current; recalc promotes new current; h
   linkMember(db, iid, seedFeedback(db));
   calculateAndStoreImpact(db, iid, { now: NOW });
   const first = currentImpactId(db, iid);
-  assert.equal(isImpactStale(db, iid), false);
+  assert.equal(isImpactStale(db, iid, { now: NOW }), false);
   // 新增成員 → fingerprint 改變 → stale
   linkMember(db, iid, seedFeedback(db));
-  assert.equal(isImpactStale(db, iid), true);
+  assert.equal(isImpactStale(db, iid, { now: NOW }), true);
   calculateAndStoreImpact(db, iid, { now: NOW });
   const second = currentImpactId(db, iid);
   assert.notEqual(second, first); // 新 current
-  assert.equal(isImpactStale(db, iid), false);
+  assert.equal(isImpactStale(db, iid, { now: NOW }), false);
   assert.equal(listAssessments(db, { issueId: iid }).length, 2); // 歷史保留
   db.close();
 });

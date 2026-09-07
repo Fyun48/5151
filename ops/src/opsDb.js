@@ -271,6 +271,8 @@ export function applyOpsSchema(db) {
       components TEXT,
       impact_score REAL NOT NULL,
       impact_level TEXT NOT NULL,
+      as_of_at TEXT NOT NULL,
+      analysis_fingerprint TEXT NOT NULL,
       calculated_at TEXT NOT NULL,
       FOREIGN KEY (issue_id) REFERENCES issue_candidate(id) ON DELETE RESTRICT
     );
@@ -281,6 +283,8 @@ export function applyOpsSchema(db) {
       issue_id INTEGER NOT NULL PRIMARY KEY,
       assessment_id INTEGER NOT NULL,
       membership_fingerprint TEXT NOT NULL,
+      analysis_fingerprint TEXT NOT NULL,
+      as_of_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY (assessment_id) REFERENCES issue_impact_assessment(id) ON DELETE RESTRICT
     );

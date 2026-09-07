@@ -29,6 +29,8 @@ export function impactConfig(env = process.env) {
       high: Number(env.IMPACT_LEVEL_HIGH || 50),
       medium: Number(env.IMPACT_LEVEL_MEDIUM || 25),
     },
+    // 時間新鮮度：即使成員/分析未變，超過此年齡也視為 stale（時間窗數值會過時）。預設 6 小時。
+    maxAgeMs: Number(env.IMPACT_MAX_AGE_MS || 6 * 60 * 60 * 1000),
   };
 }
 
@@ -100,6 +102,18 @@ export function membershipFingerprint(members) {
   return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
 }
 
+// 當前分析 provenance：用「每個成員的 Phase-4 CURRENT 分析」（非 link 上舊的 analysis_id）排序後雜湊。
+// 成員未變但某成員的 CURRENT 分析改變（含 Owner 權威成員）→ analysis_fingerprint 變 → 舊評估 stale。
+export function analysisFingerprint(db, members) {
+  const parts = members
+    .map((m) => {
+      const ca = getCurrentFeedbackAnalysis(db, m.feedback_id);
+      return `${Number(m.feedback_id)}:${ca ? ca.id : ""}`;
+    })
+    .sort();
+  return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
+}
+
 // 決定性、可解釋分數（0..100）；保留元件值。
 export function scoreImpact(signals, config = impactConfig()) {
   const w = config.weights;
@@ -136,34 +150,37 @@ export function levelForScore(total, config = impactConfig()) {
 export function calculateAndStoreImpact(db, issueId, { now = new Date(), config = impactConfig(), actor = "system" } = {}) {
   const issue = db.prepare("SELECT id FROM issue_candidate WHERE id=?").get(Number(issueId));
   if (!issue) throw httpError("issue not found", 404);
-  const signals = computeImpactSignals(db, issueId, { now });
+  // 單一計算錨點（as_of_at）：所有 24h/7d/30d/recency 都相對於它；不在計算中各自讀時鐘。
+  const asOf = now instanceof Date ? new Date(now.getTime()) : new Date(now);
+  const ts = asOf.toISOString();
+  const signals = computeImpactSignals(db, issueId, { now: asOf });
+  const anaFp = analysisFingerprint(db, getCurrentIssueMembers(db, issueId));
   const scored = scoreImpact(signals, config);
   const level = levelForScore(scored.total, config);
-  const ts = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
   return withImmediateTx(db, () => {
     const res = db.prepare(
       `INSERT INTO issue_impact_assessment
         (issue_id, scoring_version, membership_fingerprint, membership_count, current_feedback_count, distinct_reporter_count, anonymous_feedback_count,
          first_seen_at, last_seen_at, feedback_count_24h, feedback_count_7d, feedback_count_30d, recent_velocity,
-         severity_distribution, category_distribution, app_version_distribution, source_distribution, components, impact_score, impact_level, calculated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         severity_distribution, category_distribution, app_version_distribution, source_distribution, components, impact_score, impact_level, as_of_at, analysis_fingerprint, calculated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       Number(issueId), config.version, signals.membership_fingerprint, signals.membership_count, signals.current_feedback_count,
       signals.distinct_reporter_count, signals.anonymous_feedback_count, signals.first_seen_at, signals.last_seen_at,
       signals.feedback_count_24h, signals.feedback_count_7d, signals.feedback_count_30d, signals.recent_velocity,
       JSON.stringify(signals.severity_distribution), JSON.stringify(signals.category_distribution), JSON.stringify(signals.app_version_distribution), JSON.stringify(signals.source_distribution),
-      JSON.stringify(scored), scored.total, level, ts,
+      JSON.stringify(scored), scored.total, level, ts, anaFp, ts,
     );
     const assessmentId = Number(res.lastInsertRowid);
     const prev = db.prepare("SELECT assessment_id FROM issue_impact_current WHERE issue_id=?").get(Number(issueId));
     db.prepare(
-      `INSERT INTO issue_impact_current(issue_id, assessment_id, membership_fingerprint, updated_at)
-       VALUES (?, ?, ?, ?)
-       ON CONFLICT(issue_id) DO UPDATE SET assessment_id=excluded.assessment_id, membership_fingerprint=excluded.membership_fingerprint, updated_at=excluded.updated_at`,
-    ).run(Number(issueId), assessmentId, signals.membership_fingerprint, ts);
-    appendAuditRow(db, { actor, action: "issue.impact.calculated", entityType: "issue_impact_assessment", entityId: String(assessmentId), data: { issue_id: Number(issueId), scoring_version: config.version, membership_fingerprint: signals.membership_fingerprint, score: scored.total, level, membership_count: signals.membership_count } });
+      `INSERT INTO issue_impact_current(issue_id, assessment_id, membership_fingerprint, analysis_fingerprint, as_of_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(issue_id) DO UPDATE SET assessment_id=excluded.assessment_id, membership_fingerprint=excluded.membership_fingerprint, analysis_fingerprint=excluded.analysis_fingerprint, as_of_at=excluded.as_of_at, updated_at=excluded.updated_at`,
+    ).run(Number(issueId), assessmentId, signals.membership_fingerprint, anaFp, ts, ts);
+    appendAuditRow(db, { actor, action: "issue.impact.calculated", entityType: "issue_impact_assessment", entityId: String(assessmentId), data: { issue_id: Number(issueId), scoring_version: config.version, membership_fingerprint: signals.membership_fingerprint, analysis_fingerprint: anaFp, as_of_at: ts, score: scored.total, level, membership_count: signals.membership_count } });
     appendAuditRow(db, { actor, action: "issue.impact.current_changed", entityType: "issue_impact_current", entityId: String(issueId), data: { issue_id: Number(issueId), from_assessment_id: prev ? Number(prev.assessment_id) : null, to_assessment_id: assessmentId, score: scored.total, level } });
-    return { assessmentId, score: scored.total, level, fingerprint: signals.membership_fingerprint };
+    return { assessmentId, score: scored.total, level, fingerprint: signals.membership_fingerprint, analysisFingerprint: anaFp, asOfAt: ts };
   });
 }
 
@@ -176,21 +193,32 @@ export function currentImpactId(db, issueId) {
   return r ? Number(r.assessment_id) : null;
 }
 
-// 下游 Phase 7 唯一入口。
-export function getCurrentIssueImpact(db, issueId) {
+// 新鮮度原因：成員變、當前分析變、超過年齡、或尚無評估。回傳原因陣列（空=fresh）。
+export function impactStaleReasons(db, issueId, { now = new Date(), config = impactConfig() } = {}) {
+  const cur = db.prepare("SELECT membership_fingerprint, analysis_fingerprint, as_of_at FROM issue_impact_current WHERE issue_id=?").get(Number(issueId));
+  if (!cur) return ["no_current_assessment"];
+  const members = getCurrentIssueMembers(db, issueId);
+  const reasons = [];
+  if (membershipFingerprint(members) !== cur.membership_fingerprint) reasons.push("membership_changed");
+  if (analysisFingerprint(db, members) !== cur.analysis_fingerprint) reasons.push("analysis_changed");
+  const nowMs = now instanceof Date ? now.getTime() : now;
+  const asOf = Date.parse(cur.as_of_at);
+  if (Number.isFinite(asOf) && nowMs - asOf > config.maxAgeMs) reasons.push("age_exceeded");
+  return reasons;
+}
+
+export function isImpactStale(db, issueId, opts = {}) {
+  return impactStaleReasons(db, issueId, opts).length > 0;
+}
+
+// 下游 Phase 7 唯一入口：回傳評估並「明示新鮮度」，避免誤將 stale 當 fresh。
+export function getCurrentIssueImpact(db, issueId, { now = new Date(), config = impactConfig() } = {}) {
   const id = currentImpactId(db, issueId);
   if (!id) return null;
   const row = getAssessment(db, id);
   if (!row || Number(row.issue_id) !== Number(issueId)) return null;
-  return publicImpact(row);
-}
-
-// stale：canonical 當前成員 fingerprint 與 current 評估的 fingerprint 不同（或尚無評估）。
-export function isImpactStale(db, issueId, { now = new Date() } = {}) {
-  const cur = db.prepare("SELECT membership_fingerprint FROM issue_impact_current WHERE issue_id=?").get(Number(issueId));
-  if (!cur) return true;
-  const members = getCurrentIssueMembers(db, issueId);
-  return membershipFingerprint(members) !== cur.membership_fingerprint;
+  const reasons = impactStaleReasons(db, issueId, { now, config });
+  return { ...publicImpact(row), stale: reasons.length > 0, fresh: reasons.length === 0, stale_reasons: reasons };
 }
 
 export function listAssessments(db, { issueId, limit = 100 } = {}) {
@@ -225,6 +253,8 @@ export function publicImpact(row) {
     components: parseJson(row.components),
     impact_score: Number(row.impact_score),
     impact_level: row.impact_level,
+    as_of_at: row.as_of_at,
+    analysis_fingerprint: row.analysis_fingerprint,
     calculated_at: row.calculated_at,
   };
 }

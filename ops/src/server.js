@@ -489,8 +489,11 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
       const impactRecalc = pathname.match(/^\/ops\/api\/issues\/(\d+)\/impact\/recalculate$/);
       if (impactRecalc && method === "POST") {
         if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        const iid = Number(impactRecalc[1]);
+        // 先記錄「Owner 要求重算」事件（與 calculated / current_changed 分開；metadata only）。
+        appendAudit(db, { actor: `owner:${req.owner.email}`, action: "issue.impact.recalculation_requested", entityType: "issue_candidate", entityId: String(iid), data: { issue_id: iid } });
         try {
-          const r = calculateAndStoreImpact(db, Number(impactRecalc[1]), { actor: `owner:${req.owner.email}` });
+          const r = calculateAndStoreImpact(db, iid, { actor: `owner:${req.owner.email}` });
           sendJson(res, 201, { ok: true, ...r });
         } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
         return;

@@ -53,6 +53,9 @@ test("20. recalculate requires CSRF; then succeeds", async () => {
     const ok = await fetch(`${base}/ops/api/issues/${iid}/impact/recalculate`, { method: "POST", headers: { cookie, "X-CSRF-Token": csrf, Origin: base } });
     assert.equal(ok.status, 201);
     assert.ok((await ok.json()).assessmentId > 0);
+    // recalculation_requested 事件與 calculated / current_changed 分開記錄
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM audit_log WHERE action='issue.impact.recalculation_requested'").get().n, 1);
+    assert.ok(db.prepare("SELECT COUNT(*) n FROM audit_log WHERE action='issue.impact.calculated'").get().n >= 1);
   });
 });
 
