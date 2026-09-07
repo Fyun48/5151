@@ -166,17 +166,33 @@ test("fetchHpCoveringListings skips the detail fetch when hasGeo already has the
   assert.equal(suite.lat, null);
 });
 
-test("probeHpListingAlive flags 404 and gone pages, keeps normal pages alive", async () => {
+test("probeHpListingAlive uses the JSON API: 400/404/empty gone, live detail alive", async () => {
   const orig = globalThis.fetch;
+  const calls = [];
   try {
-    globalThis.fetch = async () => ({ ok: false, status: 404, text: async () => "" });
+    // 400（不存在的 case id）＝已下架
+    globalThis.fetch = async (u) => { calls.push(String(u)); return { ok: false, status: 400, json: async () => ({}) }; };
+    assert.equal(await probeHpListingAlive("https://rent.houseprice.tw/house/9999999999"), false);
+    assert.match(calls.at(-1), /\/ws\/detail\/9999999999$/);
+    // 404 ＝已下架
+    globalThis.fetch = async () => ({ ok: false, status: 404, json: async () => ({}) });
     assert.equal(await probeHpListingAlive("https://rent.houseprice.tw/house/a"), false);
-    globalThis.fetch = async () => ({ ok: true, status: 200, text: async () => "<html>正常出租物件 樓層 4/4</html>" });
-    assert.equal(await probeHpListingAlive("https://rent.houseprice.tw/house/b"), true);
-    globalThis.fetch = async () => ({ ok: true, status: 200, text: async () => "<html>此物件已下架</html>" });
-    assert.equal(await probeHpListingAlive("https://rent.houseprice.tw/house/c"), false);
-    globalThis.fetch = async () => ({ ok: false, status: 503, text: async () => "" });
+    // 200 但沒有物件明細 ＝已下架
+    globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ code: 200, webRentCaseGroupingDetail: {} }) });
+    assert.equal(await probeHpListingAlive("https://rent.houseprice.tw/house/b"), false);
+    // 200 且有物件明細 ＝仍在
+    globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ code: 200, webRentCaseGroupingDetail: { simpAddress: "新北市淡水區中山路93號", lat: 25.1696, lng: 121.442 } }) });
+    assert.equal(await probeHpListingAlive("https://rent.houseprice.tw/house/16705651"), true);
+    // 200 但非 JSON（保守視為仍在）
+    globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => { throw new Error("not json"); } });
+    assert.equal(await probeHpListingAlive("https://rent.houseprice.tw/house/c"), true);
+    // 503 暫時錯誤（保守視為仍在）
+    globalThis.fetch = async () => ({ ok: false, status: 503, json: async () => ({}) });
     assert.equal(await probeHpListingAlive("https://rent.houseprice.tw/house/d"), true);
+    // fetch 逾時／擲錯（保守視為仍在）
+    globalThis.fetch = async () => { throw new Error("timeout"); };
+    assert.equal(await probeHpListingAlive("https://rent.houseprice.tw/house/e"), true);
+    // 空網址
     assert.equal(await probeHpListingAlive(""), true);
   } finally {
     globalThis.fetch = orig;

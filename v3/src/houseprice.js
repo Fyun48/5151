@@ -477,26 +477,47 @@ export function keepHpListing(listing, options = {}) {
   return true;
 }
 
-/** 點擊時即時確認 5168 物件是否還在：404/410 或頁面出現已下架字樣視為不存在（保守，其它錯誤不當作下架）。 */
+/** 從物件網址（或直接是 case id）取出 5168 case id。 */
+export function hpIdFromUrl(url) {
+  const raw = String(url || "").trim();
+  if (!raw) return "";
+  const m = raw.match(/\/house\/([^/?#]+)/) || raw.match(/\/ws\/detail\/([^/?#]+)/);
+  if (m) return decodeURIComponent(m[1]);
+  return /^https?:/i.test(raw) ? "" : raw;
+}
+
+/** 點擊時即時確認 5168 物件是否還在。
+ *  內頁已改為 SPA（HTML 殼恆回 200），故改打明細 JSON API /ws/detail/{id} 判斷：
+ *  400/404/410 或回應內沒有物件明細（webRentCaseGroupingDetail 空）＝已下架；
+ *  其它錯誤（403/429/5xx／逾時／非 JSON）保守不當作下架。 */
 export async function probeHpListingAlive(url) {
-  const target = String(url || "").trim();
-  if (!target) return true;
-  const res = await fetch(target, {
-    headers: {
-      "User-Agent": USER_AGENT,
-      Accept: "text/html,application/xhtml+xml",
-      Referer: `${HP_SITE}/`,
-    },
-    redirect: "follow",
-    signal: AbortSignal.timeout(15000),
-  });
-  if (res.status === 404 || res.status === 410) return false;
-  if (!res.ok) return true;
-  const html = await res.text();
-  if (/物件已(下架|不存在|刪除|成交|出租)|此(物件|案件|租屋)已(不存在|下架|刪除)|查無(此|該)?(物件|案件|租屋)|找不到.{0,6}(物件|案件|租屋)/.test(html)) {
-    return false;
+  const id = hpIdFromUrl(url);
+  if (!id) return true;
+  let res;
+  try {
+    res = await fetch(hpDetailApiUrl(id), {
+      headers: {
+        "User-Agent": USER_AGENT,
+        Accept: "application/json",
+        Referer: hpDetailUrl(id),
+      },
+      redirect: "follow",
+      signal: AbortSignal.timeout(15000),
+    });
+  } catch {
+    return true;
   }
-  return true;
+  if (res.status === 400 || res.status === 404 || res.status === 410) return false;
+  if (!res.ok) return true;
+  let body;
+  try {
+    body = await res.json();
+  } catch {
+    return true;
+  }
+  const det = body?.webRentCaseGroupingDetail || body?.webRentCaseGroupingDet || body?.caseDetail;
+  const hasDetail = det && typeof det === "object" && Object.keys(det).length > 0;
+  return hasDetail ? true : false;
 }
 
 async function defaultGetHtml(url) {
