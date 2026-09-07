@@ -404,6 +404,34 @@ export function decorateSelfListing(row, { viewerId = 0 } = {}) {
   };
 }
 
+/** 公開分享頁／API 白名單：不含帳號、所有權、媒合與刊登狀態等私有欄位。 */
+export function publicListingView(listing, id) {
+  return {
+    id: Number(listing?.post_id || listing?.id || id) || 0,
+    title: listing?.title || "",
+    price: listing?.price || "",
+    price_num: Number(listing?.price_num) || 0,
+    address: listing?.address || "",
+    area_name: listing?.area_name || "",
+    layout: listing?.layout || "",
+    floor_name: listing?.floor_name || "",
+    kind_name: listing?.kind_name || "",
+    role_name: listing?.role_name || "",
+    cover: listing?.cover || "",
+    photos: Array.isArray(listing?.photos) ? listing.photos : [],
+    body: listing?.body || "",
+    traits: Array.isArray(listing?.traits) ? listing.traits : [],
+    trait_labels: Array.isArray(listing?.trait_labels) ? listing.trait_labels : [],
+    deposit: listing?.deposit || "",
+    contact_name: listing?.contact_name || "",
+    contact_role: listing?.contact_role || "",
+    mobile: listing?.mobile || "",
+    phone: listing?.phone || "",
+    line_url: listing?.line_url || "",
+    created_at: listing?.created_at || null,
+  };
+}
+
 function getSelfRow(db, postId) {
   return db.prepare(
     "SELECT * FROM listings WHERE post_id = ? AND COALESCE(source, '591') = 'self'",

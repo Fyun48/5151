@@ -124,6 +124,7 @@ import {
 import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requireAuth, sessionCookie, verifyLogin } from "./auth.js";
 import { boxFromRoadDescription, geocodeAddress, needsListingGeo, hasWorkPoint } from "./geo.js";
 import { listingRedirectTarget } from "./openLink.js";
+import { publicListingView } from "./selfListings.js";
 import { authorizedListingSources } from "./floors.js";
 import {
   mimeForSelfPhoto,
@@ -265,14 +266,14 @@ function setSession(req, res, email) {
   res.setHeader("Set-Cookie", cookie);
 }
 
-/** 點通知／Discord 連結：已登入才標記已瀏覽，再導向原站。站內刊登留在本站。訪客只轉址、不寫入。 */
+/** 點通知／Discord 連結：已登入才標記已瀏覽，再導向原站。站內刊登：會員開站內詳情、訪客開公開分享頁。訪客只轉址、不寫入。 */
 app.get("/go/:id", (req, res) => {
   const id = Number(req.params.id);
   let listing = null;
+  const session = readSession(req);
   if (Number.isFinite(id) && id > 0) {
     try {
       listing = getListing(id);
-      const session = readSession(req);
       if (session?.userId && getListing(id, session.userId)) {
         setFlags(id, { viewed: true }, session.userId);
       }
@@ -280,7 +281,7 @@ app.get("/go/:id", (req, res) => {
       console.warn("標記已瀏覽失敗：", error.message);
     }
   }
-  res.redirect(302, listingRedirectTarget(listing, id));
+  res.redirect(302, listingRedirectTarget(listing, id, { loggedIn: Boolean(session?.userId) }));
 });
 
 app.use("/vendor", express.static(path.join(__dirname, "../public/vendor"), { maxAge: "7d" }));
@@ -1130,32 +1131,6 @@ app.get("/media/lib/:file", (req, res) => {
 });
 
 // ── 公開分享：站內會員刊登（未登入可看主要內容；只輸出白名單公開欄位） ──
-function publicListingView(listing, id) {
-  return {
-    id: Number(listing.post_id || listing.id || id) || 0,
-    title: listing.title || "",
-    price: listing.price || "",
-    price_num: Number(listing.price_num) || 0,
-    address: listing.address || "",
-    area_name: listing.area_name || "",
-    layout: listing.layout || "",
-    floor_name: listing.floor_name || "",
-    kind_name: listing.kind_name || "",
-    role_name: listing.role_name || "",
-    cover: listing.cover || "",
-    photos: Array.isArray(listing.photos) ? listing.photos : [],
-    body: listing.body || "",
-    traits: Array.isArray(listing.traits) ? listing.traits : [],
-    trait_labels: Array.isArray(listing.trait_labels) ? listing.trait_labels : [],
-    deposit: listing.deposit || "",
-    contact_name: listing.contact_name || "",
-    contact_role: listing.contact_role || "",
-    mobile: listing.mobile || "",
-    phone: listing.phone || "",
-    line_url: listing.line_url || "",
-    created_at: listing.created_at || null,
-  };
-}
 app.get("/api/public/self-listing/:id", (req, res) => {
   try {
     const listing = getSelfListing(req.params.id, { viewerId: 0 });

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   listingRedirectTarget,
   publicBaseUrl,
+  publicSharePath,
   rent591Url,
   trackedListingPath,
   trackedListingUrl,
@@ -52,7 +53,12 @@ test("trackedListingUrl falls back to 591 when base unset", () => {
 });
 
 test("listingRedirectTarget keeps self on-site and 住商 on stored url", () => {
-  assert.equal(listingRedirectTarget({ source: "self" }, 2100000001), "/?self=2100000001");
+  assert.equal(publicSharePath(2100000001), "/l/2100000001");
+  assert.equal(listingRedirectTarget({ source: "self" }, 2100000001), "/l/2100000001");
+  assert.equal(
+    listingRedirectTarget({ source: "self" }, 2100000001, { loggedIn: true }),
+    "/?self=2100000001",
+  );
   assert.equal(
     listingRedirectTarget({
       source: "hbhousing",

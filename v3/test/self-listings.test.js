@@ -10,9 +10,11 @@ import {
   composeSelfAddress,
   createSelfListing,
   ensureSelfListingSchema,
+  getSelfListing,
   isSelfListingId,
   keepSelfListingForViewer,
   listMineSelfListings,
+  publicListingView,
   reportSelfListing,
   SELF_BODY_MAX,
   SELF_LEGAL,
@@ -284,4 +286,45 @@ test("index, server and admin expose self listing surfaces", () => {
   assert.match(server, /listingRedirectTarget/);
   assert.match(admin, /站內自行刊登/);
   assert.match(admin, /列表「較適合」依會員租金、樓層與通勤估算/);
+  assert.match(html, /href="\/l\/\$\{encodeURIComponent\(item\.post_id\)\}"/);
+});
+
+test("public share view strips private fields; closed listings 404 for guests", () => {
+  const db = open();
+  addUser(db, { id: 1, email: "owner@example.com", createdAt: OLD });
+  const row = createSelfListing(db, 1, sampleInput({ address: "台北市士林區中正路101號" }));
+  const guest = getSelfListing(db, row.post_id, { viewerId: 0 });
+  assert.equal(guest.mine, false);
+  assert.equal(guest.phone, "0912345678");
+  const view = publicListingView(guest, row.post_id);
+  assert.equal(view.id, row.post_id);
+  assert.equal(view.title, guest.title);
+  assert.equal(view.phone, "0912345678");
+  assert.equal(view.contact_name, "林先生");
+  assert.equal("mine" in view, false);
+  assert.equal("status" in view, false);
+  assert.equal("pledged" in view, false);
+  assert.equal("expires_at" in view, false);
+  assert.equal("match_level" in view, false);
+  assert.equal("match_detail" in view, false);
+  assert.equal("match_post_id" in view, false);
+  assert.equal("email" in view, false);
+  assert.equal("listed_by_user_id" in view, false);
+  const leaked = publicListingView({
+    ...guest,
+    email: "owner@example.com",
+    listed_by_user_id: 1,
+    password: "secret",
+    self_ban_until: "2099-01-01",
+  }, row.post_id);
+  assert.equal("email" in leaked, false);
+  assert.equal("password" in leaked, false);
+  assert.equal("listed_by_user_id" in leaked, false);
+  assert.equal("self_ban_until" in leaked, false);
+
+  closeSelfListing(db, 1, row.post_id);
+  assert.throws(() => getSelfListing(db, row.post_id, { viewerId: 0 }), (e) => e.status === 404);
+  const owner = getSelfListing(db, row.post_id, { viewerId: 1 });
+  assert.equal(owner.status, "closed");
+  db.close();
 });

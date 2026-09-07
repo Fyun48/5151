@@ -44,10 +44,8 @@ test("public paths allow media/lib, public API, and /l share page (no login wall
 });
 
 test("public listing view whitelists safe fields only (no private/account data)", () => {
-  // publicListingView 只輸出白名單；不得出現 email / user_id / listed_by / role(session) 等私有欄位
-  const fn = server.slice(server.indexOf("function publicListingView"), server.indexOf("app.get(\"/api/public/self-listing"));
-  assert.match(fn, /contact_name|phone|line_url/);
-  assert.doesNotMatch(fn, /email|listed_by_user_id|user_id|password|self_ban|agreed/);
+  assert.match(server, /publicListingView\(listing/);
+  assert.match(server, /from "\.\/selfListings\.js"/);
 });
 
 test("in-app media library UI + gallery lightbox present", () => {
@@ -65,5 +63,14 @@ test("public share page has gallery + non-blocking CTA and does not advertise un
   assert.match(listingHtml, /api\/public\/self-listing/);
   assert.match(listingHtml, /lightbox|lb-next|lb-prev/i);
   assert.match(listingHtml, /註冊會員可使用/);
+  assert.match(listingHtml, /這則物件不存在或已下架/);
+  assert.match(listingHtml, /找不到物件/);
+  assert.match(listingHtml, /href="\/login\.html"/);
   assert.doesNotMatch(listingHtml, /許願房/); // Wish Room 尚未上線，公開頁不得宣傳
+  assert.doesNotMatch(listingHtml, /listed_by|email_verified|password/);
+});
+
+test("owner cards expose public share path /l/:id so guests can open the listing", () => {
+  assert.match(html, /href="\/l\/\$\{encodeURIComponent\(item\.post_id\)\}"/);
+  assert.match(html, /公開分享頁/);
 });
