@@ -1,4 +1,4 @@
-import { lookupDistrict, normalizeWatchDistricts } from "./regions.js";
+import { allDistricts, lookupDistrict, normalizeWatchDistricts } from "./regions.js";
 import { coverToListUrl } from "./covering.js";
 import { bestMatch } from "./match.js";
 import { isSelfPhotoPublicUrl, SELF_PHOTO_MAX_BYTES, SELF_PHOTO_MAX_COUNT } from "./selfPhotos.js";
@@ -244,7 +244,7 @@ function assertCanPublish(db, userId, now = new Date()) {
   }
 }
 
-function nextSelfPostId(db) {
+export function nextSelfPostId(db) {
   const row = db.prepare(
     "SELECT MAX(post_id) AS n FROM listings WHERE post_id >= ? AND post_id < ?",
   ).get(SELF_POST_ID_BASE, SELF_POST_ID_END);
@@ -264,7 +264,7 @@ export function composeSelfAddress(district, streetOrFull) {
   return `${prefix}${street}`;
 }
 
-function digitsPhone(value) {
+export function digitsPhone(value) {
   return String(value || "").replace(/[^\d+]/g, "");
 }
 
@@ -312,7 +312,7 @@ export function listingPhotoUrls(row) {
   return out.slice(0, SELF_PHOTO_MAX_COUNT);
 }
 
-function normalizeLineUrl(value) {
+export function normalizeLineUrl(value) {
   const raw = String(value || "").trim().slice(0, 300);
   if (!raw) return "";
   if (/^https:\/\/(line\.me|lin\.ee)\//i.test(raw)) return raw;
@@ -432,7 +432,7 @@ export function publicListingView(listing, id) {
   };
 }
 
-function getSelfRow(db, postId) {
+export function getSelfRow(db, postId) {
   return db.prepare(
     "SELECT * FROM listings WHERE post_id = ? AND COALESCE(source, '591') = 'self'",
   ).get(Number(postId) || 0);
@@ -656,6 +656,141 @@ export function createImportedDraftListing(db, userId, input = {}, now = new Dat
   return getSelfListing(db, postId, { viewerId: uid });
 }
 
+/** 會員自己的內容草稿（複製刊登）。不公開、不帶舊聲明／舊匯入身分。 */
+export function insertSelfDraftListing(db, userId, fields = {}, now = new Date()) {
+  const uid = Number(userId) || 0;
+  if (!uid) throw httpError("請先登入", 401);
+  const created = iso(now);
+  const postId = nextSelfPostId(db);
+  const title = String(fields.title || "").trim().slice(0, SELF_TITLE_MAX) || "複製草稿";
+  const body = String(fields.body || "").trim().slice(0, SELF_BODY_MAX);
+  const photos = normalizePhotoList(fields.photos || []);
+  const rent = Math.max(0, Math.round(Number(fields.price_num || fields.rent) || 0));
+  const address = String(fields.address || "").trim().slice(0, 160);
+  const areaName = String(fields.area_name || "").trim().slice(0, 40);
+  const layout = String(fields.layout || "").trim().slice(0, 20);
+  const floorName = String(fields.floor_name || "").trim().slice(0, 20);
+  const kindName = String(fields.kind_name || "").trim().slice(0, 20);
+  const roleName = String(fields.role_name || "").trim().slice(0, 20);
+  const traits = normalizeSelfTraits(fields.traits);
+  const deposit = normalizeDeposit(fields.deposit);
+  const contactName = String(fields.contact_name || "").trim().slice(0, SELF_CONTACT_MAX);
+  const phone = digitsPhone(fields.phone || fields.mobile);
+  let lineUrl = "";
+  try {
+    lineUrl = normalizeLineUrl(fields.line_url);
+  } catch {
+    lineUrl = "";
+  }
+  const sourceKey = `copy-draft:${uid}:${postId}`;
+  db.prepare(`
+    INSERT INTO listings (
+      post_id, source_key, search_key, title, url, price, price_num,
+      extra_fee, extra_fee_text, price_contain_text, extra_fees, extra_fees_fetched,
+      address, area_name, layout, floor_name, kind_name, role_name, cover, tags,
+      refresh_time, first_seen_at, last_seen_at, last_event, viewed, watched
+    ) VALUES (?, ?, '', ?, ?, ?, ?, 0, '', '', '[]', 1, ?, ?, ?, ?, ?, ?, ?, '[]', '', ?, ?, 'draft', 0, 0)
+  `).run(
+    postId, sourceKey, title, `/go/${postId}`, rent ? String(rent) : "", rent,
+    address, areaName, layout, floorName, kindName, roleName, photos[0] || "",
+    created, created,
+  );
+  db.prepare(`
+    UPDATE listings SET
+      source = 'self',
+      source_id = ?,
+      listed_by_user_id = ?,
+      self_status = 'draft',
+      self_body = ?,
+      self_photos = ?,
+      self_traits = ?,
+      self_deposit = ?,
+      contact_name = ?,
+      contact_role = ?,
+      mobile = ?,
+      phone = ?,
+      line_url = ?,
+      contact_fetched = 0
+    WHERE post_id = ?
+  `).run(
+    `copy:${uid}:${postId}`,
+    uid,
+    body,
+    JSON.stringify(photos),
+    JSON.stringify(traits),
+    deposit,
+    contactName,
+    roleName,
+    phone,
+    phone,
+    lineUrl,
+    postId,
+  );
+  return getSelfListing(db, postId, { viewerId: uid });
+}
+
+export function listingFormFields(row) {
+  if (!row) return {};
+  const decorated = row.post_id && row.self_body == null && row.body != null ? row : null;
+  const title = String(decorated?.title || row.title || "");
+  const body = String(decorated?.body || row.self_body || row.body || "");
+  const address = String(decorated?.address || row.address || "");
+  const areaName = String(decorated?.area_name || row.area_name || "");
+  const layout = String(decorated?.layout || row.layout || "");
+  const floorName = String(decorated?.floor_name || row.floor_name || "");
+  const kindName = String(decorated?.kind_name || row.kind_name || "");
+  const roleName = String(decorated?.role_name || row.role_name || "");
+  const ping = Number(String(areaName).replace(/坪/g, "")) || 0;
+  const layoutBits = layout.match(/(\d+)\s*房\s*(\d+)\s*廳\s*(\d+)\s*衛/);
+  const floorBits = floorName.match(/(\d+)\s*F(?:\s*\/\s*(\d+)\s*F)?/i);
+  const kind = SELF_KINDS.find((item) => item.label === kindName || item.id === row.kind)?.id || "whole";
+  const role = SELF_ROLES.find((item) => item.label === roleName || item.id === row.role)?.id || "owner";
+  let district = "";
+  let street = address;
+  const bits = String(row.source_key || "").split("|");
+  if (bits.length >= 2 && bits[0] && bits[1] && lookupDistrict(`${bits[0]}-${bits[1]}`)) {
+    district = `${bits[0]}-${bits[1]}`;
+  }
+  if (!district) {
+    const found = allDistricts()
+      .slice()
+      .sort((a, b) => `${b.city}${b.name}`.length - `${a.city}${a.name}`.length)
+      .find((item) => address.startsWith(`${item.city}${item.name}`));
+    if (found) district = `${found.region}-${found.id}`;
+  }
+  if (district) {
+    const info = lookupDistrict(district);
+    const prefix = info ? `${info.city}${info.name}` : "";
+    if (prefix && street.startsWith(prefix)) street = street.slice(prefix.length).trim();
+  }
+  return {
+    title,
+    body,
+    rent: Number(decorated?.price_num || row.price_num) || 0,
+    ping,
+    kind,
+    role,
+    district,
+    street,
+    floor: floorBits ? Number(floorBits[1]) : 0,
+    total_floors: floorBits && floorBits[2] ? Number(floorBits[2]) : 0,
+    rooms: layoutBits ? Number(layoutBits[1]) : 0,
+    living: layoutBits ? Number(layoutBits[2]) : 0,
+    bath: layoutBits ? Number(layoutBits[3]) : 0,
+    deposit: String(decorated?.deposit || row.self_deposit || row.deposit || ""),
+    traits: Array.isArray(decorated?.traits)
+      ? decorated.traits
+      : (() => {
+        try { return normalizeSelfTraits(JSON.parse(row.self_traits || "[]")); } catch { return []; }
+      })(),
+    contact_name: String(decorated?.contact_name || row.contact_name || ""),
+    phone: String(decorated?.phone || row.phone || row.mobile || ""),
+    line_url: String(decorated?.line_url || row.line_url || ""),
+    photos: Array.isArray(decorated?.photos) ? decorated.photos : listingPhotoUrls(row),
+    address,
+  };
+}
+
 export function updateImportedDraftListing(db, userId, postId, input = {}) {
   const uid = Number(userId) || 0;
   const row = getSelfRow(db, postId);
@@ -790,6 +925,10 @@ export function publishImportedDraftListing(db, userId, postId, input = {}, now 
     ).run(hit.listing.post_id, hit.level, hit.detail, row.post_id);
   }
   return getSelfListing(db, row.post_id, { viewerId: uid });
+}
+
+export function publishOwnedDraftListing(db, userId, postId, input = {}, now = new Date(), opts = {}) {
+  return publishImportedDraftListing(db, userId, postId, input, now, opts);
 }
 
 export function closeSelfListing(db, userId, postId, { admin = false } = {}, now = new Date()) {

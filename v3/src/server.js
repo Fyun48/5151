@@ -108,6 +108,19 @@ import {
   listMineSelfListings,
   getSelfListing,
   createSelfListing,
+  listingToolsInfo,
+  copyOwnListingFor,
+  publishOwnedDraftFor,
+  listDescriptionTemplatesFor,
+  createDescriptionTemplateFor,
+  getOwnedDescriptionTemplateFor,
+  updateDescriptionTemplateFor,
+  deleteDescriptionTemplateFor,
+  listContactProfilesFor,
+  createContactProfileFor,
+  getOwnedContactProfileFor,
+  updateContactProfileFor,
+  deleteContactProfileFor,
   listingImportMeta,
   listMineListingImports,
   getOwnedListingImport,
@@ -1189,6 +1202,7 @@ app.get("/api/self-listings", (req, res) => {
     }
     res.json({
       ...selfListingMeta(),
+      tools: listingToolsInfo(),
       listings: listMineSelfListings(session.userId),
     });
   } catch (error) {
@@ -1366,6 +1380,92 @@ app.get("/api/admin/listing-imports", requireAdminApi, (req, res) => {
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
 
+app.post("/api/self-listings/:id/copy", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(copyOwnListingFor(session.userId, req.params.id, req.body || {}));
+  } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.code || "" }); }
+});
+app.post("/api/self-listings/:id/publish", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入才能刊登" }); return; }
+    const body = req.body || {};
+    assertOwnsMemberMediaUrls(session.userId, [...(Array.isArray(body.photos) ? body.photos : []), body.cover].filter(Boolean));
+    res.json(publishOwnedDraftFor(session.userId, req.params.id, body));
+  } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
+});
+app.get("/api/listing-description-templates", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json({ items: listDescriptionTemplatesFor(session.userId), limit: listingToolsInfo().description_template_limit });
+  } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
+});
+app.post("/api/listing-description-templates", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(createDescriptionTemplateFor(session.userId, req.body || {}));
+  } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.code || "" }); }
+});
+app.get("/api/listing-description-templates/:id", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(getOwnedDescriptionTemplateFor(session.userId, req.params.id));
+  } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
+});
+app.patch("/api/listing-description-templates/:id", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(updateDescriptionTemplateFor(session.userId, req.params.id, req.body || {}));
+  } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
+});
+app.delete("/api/listing-description-templates/:id", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(deleteDescriptionTemplateFor(session.userId, req.params.id));
+  } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
+});
+app.get("/api/listing-contact-profiles", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json({ items: listContactProfilesFor(session.userId), limit: listingToolsInfo().contact_profile_limit });
+  } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
+});
+app.post("/api/listing-contact-profiles", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(createContactProfileFor(session.userId, req.body || {}));
+  } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.code || "" }); }
+});
+app.get("/api/listing-contact-profiles/:id", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(getOwnedContactProfileFor(session.userId, req.params.id));
+  } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
+});
+app.patch("/api/listing-contact-profiles/:id", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(updateContactProfileFor(session.userId, req.params.id, req.body || {}));
+  } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
+});
+app.delete("/api/listing-contact-profiles/:id", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(deleteContactProfileFor(session.userId, req.params.id));
+  } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
+});
 app.post("/api/self-listings/:id/close", (req, res) => {
   try {
     const session = readSession(req);
