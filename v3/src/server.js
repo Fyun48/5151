@@ -108,6 +108,15 @@ import {
   listMineSelfListings,
   getSelfListing,
   createSelfListing,
+  listingImportMeta,
+  listMineListingImports,
+  getOwnedListingImport,
+  startListingImportFor,
+  reviewListingImportFor,
+  cancelListingImportFor,
+  confirmListingImportFor,
+  publishConfirmedImportFor,
+  listAdminListingImports,
   saveMemberMediaFor,
   listMemberMediaFor,
   deleteMemberMediaFor,
@@ -155,7 +164,7 @@ import { CITIES } from "./regions.js";
 import { mailConfigured, sendMail } from "./mail.js";
 import { queueAccountMail } from "./systemMail.js";
 import { assertHuman, issueCaptcha } from "./captcha.js";
-import { assertCaptchaIssuable, assertDemoReadable, authAttemptKeys, clientIp } from "./rateLimit.js";
+import { assertCaptchaIssuable, assertDemoReadable, assertImportAllowed, authAttemptKeys, clientIp } from "./rateLimit.js";
 import { buildDemoState } from "./demo.js";
 import { backfillListingCoords, backfillListingMrt, backfillListingRoutes, flushPendingNotifications, isWatchIntervalPending, runWatch } from "./watcher.js";
 import { LIST_PAGE_SIZE, isListingGoneError, probeListingAlive } from "./client591.js";
@@ -1289,6 +1298,72 @@ app.get("/api/public/self-listing/:id", (req, res) => {
 });
 app.get("/l/:id", (_req, res) => {
   res.sendFile(path.join(__dirname, "../public/listing.html"));
+});
+
+app.get("/api/listing-imports/meta", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(listingImportMeta({ plan: session.plan || "free" }));
+  } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.code || "" }); }
+});
+app.get("/api/listing-imports", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json({ items: listMineListingImports(session.userId) });
+  } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.code || "" }); }
+});
+app.post("/api/listing-imports", async (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    assertImportAllowed(session.userId, clientIp(req));
+    const row = await startListingImportFor(session.userId, req.body || {}, { plan: session.plan || "free" });
+    res.json(row);
+  } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.code || "" }); }
+});
+app.get("/api/listing-imports/:id", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(getOwnedListingImport(session.userId, req.params.id));
+  } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.code || "" }); }
+});
+app.patch("/api/listing-imports/:id", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(reviewListingImportFor(session.userId, req.params.id, req.body || {}));
+  } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.code || "" }); }
+});
+app.post("/api/listing-imports/:id/cancel", async (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(await cancelListingImportFor(session.userId, req.params.id));
+  } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.code || "" }); }
+});
+app.post("/api/listing-imports/:id/confirm", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(confirmListingImportFor(session.userId, req.params.id, req.body || {}));
+  } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.code || "" }); }
+});
+app.post("/api/listing-imports/:id/publish", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入才能刊登" }); return; }
+    const body = req.body || {};
+    assertOwnsMemberMediaUrls(session.userId, [...(Array.isArray(body.photos) ? body.photos : []), body.cover].filter(Boolean));
+    res.json(publishConfirmedImportFor(session.userId, req.params.id, body));
+  } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.code || "" }); }
+});
+app.get("/api/admin/listing-imports", requireAdminApi, (req, res) => {
+  try {
+    res.json({ items: listAdminListingImports({ limit: Number(req.query?.limit) || 50 }) });
+  } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
 
 app.post("/api/self-listings/:id/close", (req, res) => {

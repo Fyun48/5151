@@ -514,6 +514,29 @@
         <div id="cmsHistory" class="hint"></div>
       </form>
     </section>
+<section class="card" id="listingImports">
+      <h2>外部物件匯入</h2>
+      <p class="hint">只供辨識來源與聲明版本，不是大型審核後台。記錄匯入 ID、會員、來源網址、草稿／刊登、聲明雜湊與狀態。</p>
+      <button type="button" class="ghost" id="importAdminReload">重新載入</button>
+      <p class="msg" id="importAdminMsg" role="status"></p>
+      <div style="overflow-x:auto">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>會員</th>
+              <th>來源</th>
+              <th>網址</th>
+              <th>草稿</th>
+              <th>聲明</th>
+              <th>狀態</th>
+              <th>時間</th>
+            </tr>
+          </thead>
+          <tbody id="importAdminRows"></tbody>
+        </table>
+      </div>
+    </section>
 <section class="card">
       <h2>本站理念（這個站為什麼存在）</h2>
       <p class="hint">前台「本站理念」頁（spirit.html）顯示這份文字。標記：一行 <code>## 小標</code> 為小標題、一行 <code>- 項目</code> 為條列、空一行分段，其餘為段落。存檔即時生效。</p>
@@ -1269,6 +1292,29 @@
       fillCmsTypeSelects();
       renderCmsRows();
       setMsg("cmsListMsg", `共 ${cmsItems.length} 筆`, true);
+    }
+
+    async function loadListingImports() {
+      const res = await fetch("/api/admin/listing-imports", { cache: "no-store" });
+      const data = await readApi(res);
+      if (!res.ok) throw new Error(data.error || "載入匯入紀錄失敗");
+      const rows = data.items || [];
+      const box = $("importAdminRows");
+      if (box) {
+        box.innerHTML = rows.length ? rows.map((row) => `
+          <tr>
+            <td>${row.id}</td>
+            <td>${escapeHtml(row.member_email || row.user_id)}</td>
+            <td>${escapeHtml(row.provider)}</td>
+            <td><code>${escapeHtml(row.normalized_source_url || "")}</code></td>
+            <td>${row.listing_id || "—"}</td>
+            <td>${row.terms_document_id ? `id ${row.terms_document_id} / v${row.declaration_version} / ${String(row.declaration_content_hash || "").slice(0, 10)}` : "—"}</td>
+            <td>${escapeHtml(row.status)}${row.failure_code ? ` (${escapeHtml(row.failure_code)})` : ""}</td>
+            <td>${escapeHtml(String(row.created_at || "").replace("T", " ").slice(0, 19))}</td>
+          </tr>
+        `).join("") : `<tr><td colspan="8">尚無匯入紀錄。</td></tr>`;
+      }
+      setMsg("importAdminMsg", `共 ${rows.length} 筆`, true);
     }
 
     async function openCmsDoc(id) {
@@ -2047,7 +2093,7 @@
       if (me.role !== "admin") { location.replace("/"); return; }
       meEmail = me.email || "";
       $("who").textContent = meEmail;
-      await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadMaps(), loadHelpQa(), loadLegalCopy(), loadContentCms(), loadSpirit(), loadHousing(), loadCrawlSources(), loadSystemCrawl(), loadBrand(), loadFeedback()]);
+      await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadMaps(), loadHelpQa(), loadLegalCopy(), loadContentCms(), loadListingImports(), loadSpirit(), loadHousing(), loadCrawlSources(), loadSystemCrawl(), loadBrand(), loadFeedback()]);
       $("brandForm").onsubmit = async (ev) => {
         ev.preventDefault();
         $("brandSave").disabled = true;
@@ -2270,6 +2316,7 @@
         }
       };
       $("cmsReload").onclick = () => loadContentCms().catch((error) => setMsg("cmsListMsg", error.message));
+      $("importAdminReload")?.addEventListener("click", () => loadListingImports().catch((error) => setMsg("importAdminMsg", error.message)));
       $("cmsTypeFilter").onchange = () => renderCmsRows();
       $("cmsRows").onclick = (ev) => {
         const id = ev.target?.closest("[data-cms-open]")?.dataset.cmsOpen;

@@ -14,6 +14,17 @@
   <title>吉比租房物件追蹤</title>
   <style>
     * { box-sizing: border-box; }
+    .visually-hidden {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
     /* 全站統一的淺色細卷軸（橫向 chip 列與各面板同一套色系） */
     * { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
     ::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -316,6 +327,7 @@
     html.no-session #ownerFab,
     html.no-session #profileForm { display: none !important; }
     body.role-guest #selfListingForm,
+    body.role-guest #importSponsorTools,
     body.role-guest #demandForm { display: none !important; }
     body:not(.role-guest) #selfGuestHint,
     body:not(.role-guest) #selfGuestHintDemand { display: none; }
@@ -1703,6 +1715,33 @@
       background: var(--accent-mist);
     }
     .pledge-locked .pledge-copy { white-space: pre-wrap; }
+    .import-box {
+      margin: 0 0 16px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg, 10px);
+      background: var(--accent-mist);
+    }
+    .import-box h3 { margin: 0 0 6px; font-size: var(--text-md, 16px); }
+    .import-box .import-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+    .import-box .import-row input[type="url"] { flex: 1 1 220px; min-width: 0; }
+    .import-photos { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+    .import-photo {
+      position: relative;
+      width: 72px;
+      height: 72px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+      background: var(--paper);
+    }
+    .import-photo img { width: 100%; height: 100%; object-fit: cover; }
+    .import-photo button {
+      position: absolute; top: 2px; right: 2px;
+      min-width: 28px; min-height: 28px; padding: 0;
+      font-size: 14px;
+    }
+    .import-locked { color: var(--muted); }
     .self-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2798,6 +2837,37 @@
       <p class="hint">一般使用條款已於註冊時同意。<a href="/terms.html?type=listing_rules" target="_blank" rel="noopener">閱讀刊登規則</a>。刊登前仍須勾選本次屋主／授權確認。</p>
       <p class="hint" id="selfAudit">不實、惡作劇或明顯誤導會下架並暫停上傳 14 天。不驗證權狀、不保證真實。</p>
       <p class="hint" id="selfRichHint">來看的人最常問的，其實多半寫在這裡就能先答完。多勾一項、多寫一句，之後就少被重複打擾，也比較快遇到適合的人。</p>
+      <div class="import-box" id="importBox">
+        <h3>從 591 / 5168 匯入</h3>
+        <p class="hint import-locked" id="importLockedHint">贊助會員可使用 591 / 5168 物件匯入</p>
+        <div id="importSponsorTools" hidden>
+          <p class="hint">貼上公開物件網址。系統只複製標題、說明與照片成草稿；聯絡方式、設施與刊登聲明仍須你自己填。</p>
+          <div class="import-row">
+            <label class="visually-hidden" for="importUrl">物件網址</label>
+            <input type="url" id="importUrl" placeholder="https://rent.591.com.tw/… 或 https://rent.houseprice.tw/house/…" autocomplete="off" />
+            <button type="button" class="primary" id="importStartBtn">匯入</button>
+            <button type="button" class="ghost" id="importCancelBtn" hidden>取消匯入</button>
+          </div>
+          <p class="hint" id="importStatus" role="status"></p>
+          <div id="importReview" hidden>
+            <p class="hint" id="importSourceHint"></p>
+            <label for="importTitle">匯入標題</label>
+            <input id="importTitle" maxlength="80" />
+            <label for="importBody">匯入說明</label>
+            <textarea id="importBody" maxlength="500"></textarea>
+            <p class="hint">匯入照片（可移除；會計入素材庫配額）</p>
+            <div class="import-photos" id="importPhotos"></div>
+            <label class="pledge-row">
+              <input type="checkbox" id="importDeclaration" />
+              <span>我確認本人有權使用及刊登以上匯入的文字與圖片，並同意本站相關刊登規範。<a id="importDeclarationLink" href="/terms.html?type=external_import_declaration" target="_blank" rel="noopener">閱讀匯入聲明</a></span>
+            </label>
+            <div class="row" style="margin-top:8px">
+              <button type="button" class="ghost" id="importApplyBtn">套用到刊登表單</button>
+              <button type="button" class="primary" id="importConfirmBtn">確認匯入（仍是草稿）</button>
+            </div>
+          </div>
+        </div>
+      </div>
       <form id="selfListingForm">
         <div class="self-grid">
           <div>
@@ -5569,6 +5639,7 @@
       window.__ME_SPONSOR = me.sponsor || null;
       document.body.classList.toggle("role-admin", meIsAdmin);
       document.body.classList.toggle("plan-sponsor", mePlan === "sponsor");
+      syncImportAccess();
       syncSourceFilterAccess();
       paintSponsorOffer(me.sponsor);
       if (me.role && me.role !== "admin" && $("resetLink")) $("resetLink").style.display = "none";
@@ -6409,7 +6480,7 @@
         <article class="self-mine-card">
           <strong>${esc(item.title)}</strong>
           ${(item.photos || item.cover) ? `<div class="self-photos">${(item.photos || [item.cover]).filter(Boolean).slice(0, 24).map((url) => `<img src="${esc(url)}" alt="" />`).join("")}</div>` : ""}
-          <div class="muted">${esc(item.price || "")} 元 · ${esc(item.address || "")} · ${esc(item.status || "")}</div>
+          <div class="muted">${esc(item.price || "")} 元 · ${esc(item.address || "")} · ${esc(item.status === "draft" ? "草稿（未刊登）" : item.status || "")}</div>
           ${(item.trait_labels || []).length ? `<div class="muted">${esc((item.trait_labels || []).join("、"))}</div>` : ""}
           ${item.status === "open" ? `<div class="share-row">
             <a class="ghost" href="/l/${encodeURIComponent(item.post_id)}">公開分享頁</a>
@@ -6925,6 +6996,157 @@
       if (Math.abs(dx) > 40) moveAppLightbox(dx < 0 ? 1 : -1);
       appLbTouchX = null;
     }, { passive: true });
+    let currentImport = null;
+    let importDeclaration = null;
+    function syncImportAccess() {
+      const locked = $("importLockedHint");
+      const tools = $("importSponsorTools");
+      const sponsored = mePlan === "sponsor";
+      if (locked) locked.hidden = sponsored;
+      if (tools) tools.hidden = !sponsored;
+      if (sponsored) loadImportMeta().catch(() => {});
+    }
+    async function loadImportMeta() {
+      const res = await fetch("/api/listing-imports/meta");
+      const data = await readApi(res);
+      if (!res.ok) return;
+      importDeclaration = data.declaration || null;
+      const link = $("importDeclarationLink");
+      if (link && importDeclaration?.id) {
+        link.href = `/terms.html?type=external_import_declaration`;
+      }
+    }
+    function paintImportReview(row) {
+      currentImport = row;
+      const review = $("importReview");
+      const status = $("importStatus");
+      const cancelBtn = $("importCancelBtn");
+      if (cancelBtn) cancelBtn.hidden = !row || !["pending", "fetching", "ready_for_review"].includes(row.status);
+      if (!row) {
+        if (review) review.hidden = true;
+        return;
+      }
+      if (status) {
+        if (row.reused) status.textContent = "已有同一來源的進行中匯入，已帶出既有草稿。";
+        else if (row.failure_code === "PHOTO_IMPORT_PARTIAL") status.textContent = row.failure_reason || "部分照片未能匯入，請檢查後再確認。";
+        else if (row.status === "ready_for_review") status.textContent = "已匯入為草稿，請檢查後再確認。這不會自動刊登。";
+        else if (row.status === "confirmed") status.textContent = "已確認聲明，草稿仍未刊登。請補齊本站欄位後送出。";
+        else status.textContent = row.failure_reason || row.status;
+      }
+      if (review) review.hidden = !["ready_for_review", "confirmed"].includes(row.status);
+      if ($("importTitle")) $("importTitle").value = row.imported_title || "";
+      if ($("importBody")) $("importBody").value = row.imported_text || "";
+      if ($("importSourceHint")) {
+        $("importSourceHint").textContent = `來源：${row.provider} · ${row.normalized_source_url}（一次性複製，不會與來源同步）`;
+      }
+      const box = $("importPhotos");
+      if (box) {
+        const photos = row.photos || row.listing?.photos || [];
+        box.innerHTML = photos.map((url) => `
+          <div class="import-photo">
+            <img src="${esc(url)}" alt="" />
+            <button type="button" class="ghost" data-import-remove="${esc(url)}" aria-label="移除這張匯入照片">×</button>
+          </div>`).join("") || `<p class="hint">沒有匯入照片。</p>`;
+      }
+    }
+    function applyImportToForm(row) {
+      if ($("selfTitle")) $("selfTitle").value = row.imported_title || "";
+      if ($("selfBody")) $("selfBody").value = row.imported_text || "";
+      selfPhotoDraft = [...(row.photos || row.listing?.photos || [])];
+      renderSelfPhotoDraftAndGrid();
+    }
+    $("importStartBtn")?.addEventListener("click", async () => {
+      const status = $("importStatus");
+      if (mePlan !== "sponsor") {
+        if (status) status.textContent = "贊助會員可使用 591 / 5168 物件匯入";
+        return;
+      }
+      try {
+        if (status) status.textContent = "正在抓取公開頁…";
+        if ($("importReview")) $("importReview").hidden = true;
+        const res = await fetch("/api/listing-imports", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: $("importUrl")?.value || "" }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "匯入失敗");
+        paintImportReview(data);
+        applyImportToForm(data);
+        await loadMediaLibrary().catch(() => {});
+        await loadMineSelfListings().catch(() => {});
+      } catch (error) {
+        currentImport = null;
+        if (status) status.textContent = error.message;
+      }
+    });
+    $("importPhotos")?.addEventListener("click", (ev) => {
+      const url = ev.target.closest("[data-import-remove]")?.dataset.importRemove;
+      if (!url || !currentImport) return;
+      const photos = (currentImport.photos || currentImport.listing?.photos || []).filter((item) => item !== url);
+      currentImport = { ...currentImport, photos };
+      paintImportReview(currentImport);
+    });
+    $("importApplyBtn")?.addEventListener("click", () => {
+      if (!currentImport) return;
+      currentImport = {
+        ...currentImport,
+        imported_title: $("importTitle")?.value || "",
+        imported_text: $("importBody")?.value || "",
+      };
+      applyImportToForm(currentImport);
+      const status = $("importStatus");
+      if (status) status.textContent = "已套用標題、說明與照片。其餘本站欄位請自行填寫。";
+    });
+    $("importConfirmBtn")?.addEventListener("click", async () => {
+      const status = $("importStatus");
+      if (!currentImport?.id) return;
+      try {
+        const patch = await fetch(`/api/listing-imports/${currentImport.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: $("importTitle")?.value || "",
+            body: $("importBody")?.value || "",
+            photos: currentImport.photos || currentImport.listing?.photos || [],
+          }),
+        });
+        const patched = await readApi(patch);
+        if (!patch.ok) throw new Error(patched.error || "儲存匯入內容失敗");
+        const res = await fetch(`/api/listing-imports/${currentImport.id}/confirm`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            accept: $("importDeclaration")?.checked === true,
+            document_id: importDeclaration?.id,
+            version: importDeclaration?.version,
+            content_hash: importDeclaration?.content_hash,
+          }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "確認失敗");
+        paintImportReview(data);
+        applyImportToForm(data);
+        await loadMineSelfListings().catch(() => {});
+      } catch (error) {
+        if (status) status.textContent = error.message;
+      }
+    });
+    $("importCancelBtn")?.addEventListener("click", async () => {
+      if (!currentImport?.id) return;
+      try {
+        const res = await fetch(`/api/listing-imports/${currentImport.id}/cancel`, { method: "POST" });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "取消失敗");
+        currentImport = null;
+        paintImportReview(null);
+        if ($("importStatus")) $("importStatus").textContent = "已取消這筆匯入。";
+        if ($("importDeclaration")) $("importDeclaration").checked = false;
+        await loadMineSelfListings().catch(() => {});
+      } catch (error) {
+        if ($("importStatus")) $("importStatus").textContent = error.message;
+      }
+    });
     $("selfListingForm")?.addEventListener("submit", async (ev) => {
       ev.preventDefault();
       if (isGuest) {
@@ -6934,35 +7156,40 @@
       const msg = $("selfMsg");
       try {
         const photoUrls = [...selfPhotoDraft];
-        const res = await fetch("/api/self-listings", {
+        const payload = {
+          district: $("selfDistrict")?.value || "",
+          rent: Number($("selfRent")?.value) || 0,
+          ping: Number($("selfPing")?.value) || 0,
+          kind: $("selfKind")?.value || "whole",
+          role: $("selfRole")?.value || "owner",
+          floor: Number($("selfFloor")?.value) || 0,
+          total_floors: Number($("selfTotalFloors")?.value) || 0,
+          rooms: Number($("selfRooms")?.value) || 0,
+          living: Number($("selfLiving")?.value) || 0,
+          bath: Number($("selfBath")?.value) || 0,
+          contact_name: $("selfContactName")?.value || "",
+          street: $("selfAddress")?.value || "",
+          phone: $("selfPhone")?.value || "",
+          line_url: $("selfLine")?.value || "",
+          photos: photoUrls,
+          title: $("selfTitle")?.value || "",
+          body: $("selfBody")?.value || "",
+          traits: collectedSelfTraits(),
+          deposit: $("selfDeposit")?.value || "",
+          accept_pledge: $("selfPledge")?.checked === true,
+        };
+        const publishFromImport = currentImport?.status === "confirmed" && currentImport?.id;
+        const res = await fetch(publishFromImport ? `/api/listing-imports/${currentImport.id}/publish` : "/api/self-listings", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            district: $("selfDistrict")?.value || "",
-            rent: Number($("selfRent")?.value) || 0,
-            ping: Number($("selfPing")?.value) || 0,
-            kind: $("selfKind")?.value || "whole",
-            role: $("selfRole")?.value || "owner",
-            floor: Number($("selfFloor")?.value) || 0,
-            total_floors: Number($("selfTotalFloors")?.value) || 0,
-            rooms: Number($("selfRooms")?.value) || 0,
-            living: Number($("selfLiving")?.value) || 0,
-            bath: Number($("selfBath")?.value) || 0,
-            contact_name: $("selfContactName")?.value || "",
-            street: $("selfAddress")?.value || "",
-            phone: $("selfPhone")?.value || "",
-            line_url: $("selfLine")?.value || "",
-            photos: photoUrls,
-            title: $("selfTitle")?.value || "",
-            body: $("selfBody")?.value || "",
-            traits: collectedSelfTraits(),
-            deposit: $("selfDeposit")?.value || "",
-            accept_pledge: $("selfPledge")?.checked === true,
-          }),
+          body: JSON.stringify(payload),
         });
         const data = await readApi(res);
         if (!res.ok) throw new Error(data.error || "刊登失敗");
         if (msg) msg.textContent = "已刊登。資料寫得越清楚，來看的人越少再問一遍。";
+        currentImport = null;
+        paintImportReview(null);
+        if ($("importDeclaration")) $("importDeclaration").checked = false;
         if ($("selfBody")) $("selfBody").value = "";
         if ($("selfPhotos")) $("selfPhotos").value = "";
         selfPhotoDraft = [];

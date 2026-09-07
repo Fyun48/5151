@@ -33,7 +33,7 @@ export const DOC_TYPES = {
   },
   external_import_declaration: {
     id: "external_import_declaration",
-    label: "外部匯入聲明（尚未開通）",
+    label: "外部匯入聲明",
     required_at: "import",
     seed_title: "外部物件匯入聲明",
   },
@@ -384,7 +384,7 @@ export function listDocumentEvents(db, { type, documentId, limit = 50 } = {}) {
   return db.prepare("SELECT * FROM content_document_events ORDER BY id DESC LIMIT ?").all(n);
 }
 
-const IMPORT_DECLARATION = `我確認匯入的物件文字與照片為本人所有，或已取得合法授權可在本站重製、公開展示。我了解不實或未授權內容可能被下架，法律責任由我自行負擔。本功能尚未開通，此文件僅供日後匯入時引用版本。`;
+const IMPORT_DECLARATION = `我確認匯入的物件文字與照片為本人所有，或已取得合法授權可在本站重製、公開展示。我了解這是一次性複製成草稿，不會與來源網站持續同步。不實或未授權內容可能被下架，法律責任由我自行負擔。`;
 
 const WISH_ROOM_RULES = `許願房是之後才會開通的需求／媒合說明區。使用前須閱讀當時有效版本。本文件現在只建立內容類型，不代表功能已上線。`;
 
