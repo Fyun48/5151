@@ -569,6 +569,18 @@
     .primary:hover:not(:disabled) { background: var(--accent-deep); }
     .ghost { background: var(--paper); color: var(--ink); border: 1px solid var(--line); }
     .ghost:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--line); }
+    /* 解除系統推播：適度警示色（不造成危險操作誤解） */
+    .push-danger { border-color: var(--rose-line, #e2b3b0); color: var(--rose-ink, #b4453f); }
+    .push-danger:hover:not(:disabled) { background: var(--rose-soft, #fbeceb); border-color: var(--rose-line, #e2b3b0); }
+    button:disabled { opacity: 0.55; cursor: not-allowed; }
+    /* 手機 Q&A／意見 就地入口：桌機沿用 header 既有按鈕，此浮動群組預設隱藏，只在手機列表頁出現 */
+    .mobile-help-dock { display: none; }
+    .mobile-help-dock button {
+      padding: 7px 12px; font-size: 12px; font-weight: 700; border-radius: 999px;
+      display: inline-flex; align-items: center; gap: 4px; min-height: 34px;
+      box-shadow: 0 2px 8px rgba(31, 27, 22, 0.14); background: var(--paper);
+    }
+    .mobile-help-dock button span { font-size: 13px; line-height: 1; }
     .row { display: flex; gap: 8px; flex-wrap: wrap; }
     .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 8px; }
     .stat { background: var(--accent-mist); border-radius: 14px; padding: 10px 12px; border: 1px solid var(--line); }
@@ -2009,6 +2021,14 @@
         right: 12px;
         bottom: calc(76px + env(safe-area-inset-bottom, 0px));
       }
+      /* 手機 Q&A／意見 就地入口：左下角、避開右下 FAB 與底部導覽，支援 safe-area，只在列表頁顯示 */
+      body[data-app-view="listings"] .mobile-help-dock {
+        display: flex; flex-direction: column; gap: 8px;
+        position: fixed; left: 12px; z-index: 117;
+        bottom: calc(120px + env(safe-area-inset-bottom, 0px));
+      }
+      html.no-session .mobile-help-dock,
+      body.role-guest .mobile-help-dock { display: none !important; }
       #ownerFab {
         right: 12px;
         bottom: calc(128px + env(safe-area-inset-bottom, 0px));
@@ -2180,14 +2200,10 @@
         width: auto;
         bottom: calc(76px + env(safe-area-inset-bottom, 0px));
       }
+      /* 手機版：進入「通知」分頁時，通知內容已由 #notifyInbox 直接列出，
+         不再額外浮出「待看更新」(#alertDock) 面板，避免遮住/卡住通知設定。 */
       body[data-app-view="notify"] #alertDock {
-        display: block;
-        inset: 72px 0 64px;
-        width: auto;
-        max-height: none;
-        border-radius: 0;
-        border-left: 0;
-        border-right: 0;
+        display: none !important;
       }
       .wrap { grid-template-columns: minmax(0, 1fr); padding-bottom: 16px; overflow-x: clip; }
       #settingsPanel .panel-sticky {
@@ -2871,11 +2887,11 @@
         <button type="button" class="ghost" id="notifyHubClose">關閉</button>
       </div>
       <div class="hub-tabs" role="tablist">
-        <button type="button" class="ghost" data-hub-tab="webhook" aria-selected="true">Discord Webhook</button>
+        <button type="button" class="ghost" data-hub-tab="events" aria-selected="true">通知種類</button>
+        <button type="button" class="ghost" data-hub-tab="webhook" aria-selected="false">Discord Webhook</button>
         <button type="button" class="ghost" data-hub-tab="mail" aria-selected="false">自己的郵件 SMTP</button>
-        <button type="button" class="ghost" data-hub-tab="events" aria-selected="false">通知種類</button>
       </div>
-      <section class="hub-pane" data-hub-pane="webhook">
+      <section class="hub-pane" data-hub-pane="webhook" hidden>
         <p class="hint">我們特別推薦 Discord：免費、不用架伺服器，把 Webhook 貼上就能收到特別關注更新。其它相容 Discord 格式的 Webhook 也可以。</p>
         <ol class="hub-steps">
           <li>申請 <a href="https://discord.com/register" target="_blank" rel="noopener noreferrer">Discord 帳號</a>，並建立一個只給自己看的伺服器。</li>
@@ -2932,7 +2948,7 @@
         </div>
         <p class="msg" id="memberMailMsg"></p>
       </section>
-      <section class="hub-pane" data-hub-pane="events" hidden>
+      <section class="hub-pane" data-hub-pane="events">
         <p class="hint">全新物件只通知符合目前設定檔的篩選（例如只看整層、排除 1F 及地下室、行政區、租金）。頻道勾選也存在同一個設定檔。</p>
         <div class="notify-matrix-wrap">
         <table class="notify-matrix" id="notifyMatrix">
@@ -3101,6 +3117,11 @@
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
   </button>
   <button type="button" class="primary" id="ownerFab" hidden>我刊登的房子</button>
+  <!-- 手機版：捲動後仍能就地開 Q&A／意見（低干擾、左下角、避開右下的回頂與刊登 FAB）。開啟後保留目前頁面位置。 -->
+  <div class="mobile-help-dock" id="mobileHelpDock" aria-label="求助與意見">
+    <button type="button" class="ghost" id="mobileHelpQaBtn" title="常見問題 Q&amp;A"><span aria-hidden="true">？</span> Q&amp;A</button>
+    <button type="button" class="ghost" id="mobileFeedbackBtn" title="回報錯誤或提出意見"><span aria-hidden="true">✎</span> 意見</button>
+  </div>
   <div id="ownerOverlay" class="hub-overlay" hidden>
     <div class="hub-backdrop" data-close-owner></div>
     <div class="hub-panel" role="dialog" aria-modal="true" aria-labelledby="ownerOverlayTitle">
@@ -3311,6 +3332,12 @@
       document.querySelectorAll('[data-notify-ch="mail"]').forEach((el) => {
         el.disabled = isGuest || !mailOn;
         if (!mailOn) el.checked = false;
+      });
+      // 系統推播：未實際訂閱（permission 非 granted 或本站未 subscribe）時，push 偏好一律 disabled/灰階，
+      // 但保留使用者原本的勾選狀態（重新啟用後不需重設）。
+      const pushOn = pushPermission === "granted" && pushSubscribed === true;
+      document.querySelectorAll('[data-notify-ch="push"]').forEach((el) => {
+        el.disabled = isGuest || !pushOn;
       });
     }
     function syncPauseNotifyBtn(s = settings) {
@@ -4437,7 +4464,7 @@
       };
     }
     function setHubTab(name) {
-      const tab = String(name || "webhook");
+      const tab = String(name || "events");
       document.querySelectorAll("[data-hub-tab]").forEach((el) => {
         el.setAttribute("aria-selected", el.dataset.hubTab === tab ? "true" : "false");
       });
@@ -5842,9 +5869,12 @@
       if (view === "post") loadMineSelfListings().catch(() => {});
       if (view === "qa") loadHelpQa();
       if (view === "notify") {
-        $("alertDock")?.classList.add("open");
+        // 桌機保留較寬的浮動 dock；手機不強制展開「待看更新」浮層（通知內容已在 #notifyInbox）。
+        if (window.matchMedia("(min-width: 881px)").matches) $("alertDock")?.classList.add("open");
+        else $("alertDock")?.classList.remove("open");
         renderDock();
         setHubTab(document.querySelector("[data-hub-tab][aria-selected='true']")?.dataset.hubTab || "events");
+        refreshPushUi().catch(() => {});
       }
       try { localStorage.setItem(APP_VIEW_KEY, view); } catch { /* ignore */ }
       maybeShowBroadcast();
@@ -5920,6 +5950,66 @@
           if (msg) msg.textContent = error.message || "推播設定失敗";
         });
       }
+    }
+    // 系統推播狀態機：明確區分「瀏覽器 Notification permission」與「本站 Push subscription」。
+    let pushPermission = "default";
+    let pushSubscribed = false;
+    function pushSupported() {
+      return typeof Notification !== "undefined" && "serviceWorker" in navigator && "PushManager" in window;
+    }
+    async function getPushSubscription() {
+      try {
+        const reg = await navigator.serviceWorker.getRegistration();
+        return reg ? await reg.pushManager.getSubscription() : null;
+      } catch { return null; }
+    }
+    async function unsubscribeWebPush() {
+      const sub = await getPushSubscription();
+      if (!sub) return { ok: true };
+      const endpoint = sub.endpoint;
+      try { await sub.unsubscribe(); } catch { /* ignore */ }
+      try {
+        await fetch("/api/push/unsubscribe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ endpoint }) });
+      } catch { /* ignore */ }
+      return { ok: true };
+    }
+    async function refreshPushUi() {
+      const btn = $("enablePushBtn");
+      const msg = $("pushMsg");
+      if (!btn) return;
+      btn.classList.remove("push-danger");
+      if (isGuest || !pushSupported()) {
+        pushPermission = "unsupported"; pushSubscribed = false;
+        btn.disabled = true; btn.dataset.pushAction = "unsupported";
+        btn.textContent = "系統推播（此裝置不支援）";
+        if (msg && !isGuest) msg.textContent = "此瀏覽器不支援系統推播。";
+        syncNotifyChannelLocks();
+        return;
+      }
+      pushPermission = Notification.permission;
+      pushSubscribed = Boolean(await getPushSubscription());
+      btn.disabled = false;
+      if (pushPermission === "denied") {
+        pushSubscribed = false;
+        btn.disabled = true; btn.dataset.pushAction = "denied";
+        btn.textContent = "瀏覽器未允許通知";
+        if (msg) msg.textContent = "瀏覽器目前未允許通知。請至瀏覽器／網站權限設定重新允許通知後，再回到這裡啟用。";
+      } else if (pushPermission === "default") {
+        pushSubscribed = false;
+        btn.dataset.pushAction = "request";
+        btn.textContent = "等待允許系統推播";
+        if (msg) msg.textContent = "點一下才會向瀏覽器要求允許通知（不會自動跳出）。";
+      } else if (pushSubscribed) {
+        btn.dataset.pushAction = "unsubscribe";
+        btn.classList.add("push-danger");
+        btn.textContent = "可解除系統推播";
+        if (msg) msg.textContent = "系統推播已啟用。";
+      } else {
+        btn.dataset.pushAction = "subscribe";
+        btn.textContent = "啟用系統推播";
+        if (msg) msg.textContent = "瀏覽器已允許，但本站目前尚未啟用系統推播。點一下即可啟用。";
+      }
+      syncNotifyChannelLocks();
     }
     function demandDistrictKeys() {
       return [...document.querySelectorAll("#demandDistricts [data-demand-district]:checked")].map((el) => el.value);
@@ -6380,12 +6470,29 @@
     document.querySelector("[data-close-owner]")?.addEventListener("click", closeOwnerOverlay);
     $("enablePushBtn")?.addEventListener("click", async () => {
       const msg = $("pushMsg");
+      const action = $("enablePushBtn")?.dataset.pushAction || "request";
       try {
-        const result = await subscribeWebPush();
-        if (msg) msg.textContent = result.ok ? (result.local ? "已允許分頁通知（尚未設定 VAPID）" : "已允許系統推播") : "尚未允許通知";
+        if (action === "denied" || action === "unsupported") {
+          if (msg) msg.textContent = action === "denied"
+            ? "瀏覽器目前未允許通知，請至瀏覽器／網站權限設定重新允許。"
+            : "此瀏覽器不支援系統推播。";
+          return;
+        }
+        if (action === "unsubscribe") {
+          if (!window.confirm("是否解除系統推播？解除後本站將不再傳送系統推播；瀏覽器層級的通知權限仍由您在瀏覽器端控制。")) return;
+          await unsubscribeWebPush();
+          if (msg) msg.textContent = "已解除本站系統推播。";
+        } else {
+          // request（permission=default，click 為 user gesture）或 subscribe（已 granted 但未訂閱）
+          const result = await subscribeWebPush();
+          if (msg) msg.textContent = result.ok
+            ? (result.local ? "已允許分頁通知（伺服器尚未設定 VAPID）" : "已啟用系統推播")
+            : (result.reason === "denied" ? "瀏覽器未允許通知" : "尚未啟用系統推播");
+        }
       } catch (error) {
         if (msg) msg.textContent = error.message || "推播設定失敗";
       }
+      await refreshPushUi();
     });
     $("installHintBtn")?.addEventListener("click", () => {
       window.alert("iPhone：Safari 開啟本站 → 分享 → 加入主畫面，再從主畫面圖示打開並允許通知。\nAndroid：Chrome 選單 → 加到主畫面。");
@@ -6776,6 +6883,9 @@
     }
     $("feedbackBtn")?.addEventListener("click", openFeedbackDialog);
     $("feedbackFooterLink")?.addEventListener("click", (ev) => { ev.preventDefault(); openFeedbackDialog(); });
+    // 手機就地入口沿用既有 dialog（保留目前頁面位置，不 scroll 到頁首）
+    $("mobileHelpQaBtn")?.addEventListener("click", openHelpQaDialog);
+    $("mobileFeedbackBtn")?.addEventListener("click", openFeedbackDialog);
     $("feedbackClose")?.addEventListener("click", closeFeedbackDialog);
     document.querySelector("[data-close-feedback]")?.addEventListener("click", closeFeedbackDialog);
     document.querySelectorAll("#feedbackKinds .chip").forEach((el) => {
