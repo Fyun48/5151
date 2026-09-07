@@ -2817,20 +2817,11 @@
             <input type="file" id="selfPhotos" accept="image/jpeg,image/png,image/webp" multiple />
             <p class="hint" id="selfPhotoCount">已選 0／100 張。大圖會先在瀏覽器壓成較小的 JPEG。</p>
           </div>
-          <div class="span-2">
-            <label>或貼封面網址</label>
-            <input id="selfCover" maxlength="500" placeholder="https://..." />
-          </div>
         </div>
         <div class="self-photo-tray" id="selfPhotoPreview" hidden></div>
         <div id="selfTraitGroups"></div>
-        <p class="hint" id="selfTraitNudge" hidden>社區大樓的話，中庭與陽台常常是租客想先知道的。有的話點一下就好。</p>
+        <p class="hint" id="selfTraitNudge" hidden>電梯大樓的話，中庭與陽台常常是租客想先知道的。有的話點一下就好。</p>
         <label>說明（最多 500 字）</label>
-        <div class="body-templates" id="selfBodyTemplates">
-          <button type="button" class="ghost" data-body-tpl="family">套用：家庭整層</button>
-          <button type="button" class="ghost" data-body-tpl="suite">套用：套房自住</button>
-          <button type="button" class="ghost" data-body-tpl="near-mrt">套用：近捷運通勤</button>
-        </div>
         <textarea id="selfBody" maxlength="500" placeholder="格局、設備、可入住日。沒有私訊。"></textarea>
         <label class="pledge-row">
           <input type="checkbox" id="selfPledge" />
@@ -3656,6 +3647,9 @@
       if (range) return Number(range[1]) <= 1;
       const numbered = main.match(/(\d+)\s*(?:F|樓)/i);
       if (numbered) return Number(numbered[1]) <= 1;
+      // 非 591 來源常見 "1/4"、"1/12" 或裸數字 "1"（無 F/樓）；主段純數字開頭時也判斷樓層。
+      const bare = main.match(/^(\d+)/);
+      if (bare) return Number(bare[1]) <= 1;
       return false;
     }
 
@@ -5107,7 +5101,7 @@
             </label>`}
             </div>
             ${item.source === "self" && !item.mine && !isGuest ? `<button class="ghost" data-self-report="${id}">檢舉</button>` : ""}
-            ${!isGuest && item.source !== "self" && !item.offline && !item.offline_confirmed ? `<button type="button" class="ghost btn-report-gone" data-report-gone="${id}" title="打開後若發現已不在，可回報；系統會主動再確認一次">回報已不在</button>` : ""}
+            ${!isGuest && item.source !== "self" && !item.offline && !item.offline_confirmed ? `<button type="button" class="ghost btn-report-gone" data-report-gone="${id}" title="打開後若發現此物件連結已失效／不存在，可回報；系統會主動再確認一次">物件連結失效</button>` : ""}
           </div>
           ${sameHousePanel(item)}
         </article>
@@ -6008,23 +6002,15 @@
       const distName = distSel?.selectedOptions?.[0]?.textContent?.trim() || "";
       prefix.textContent = citySel?.value && distSel?.value ? `${cityName}${distName}`.replace(/\s+/g, "") : "請先選縣市與行政區";
     }
-    const SELF_BODY_TPL = {
-      family: "屋況整潔、採光佳，適合小家庭。可使用坪數已扣除公設。社區大樓可順便標中庭、陽台。可遷入日可再約看屋時間確認。沒有站內私訊，請用公開電話或 LINE 聯絡。",
-      suite: "獨立衛浴，家具家電可再看現場。可使用坪數已扣除公設。有陽台或中庭的話點一下就好。適合一人入住。沒有站內私訊，請用公開電話或 LINE 聯絡。",
-      "near-mrt": "步行可到捷運，適合通勤。可使用坪數已扣除公設。社區大樓可順便標中庭、陽台。歡迎先約看再決定。沒有站內私訊，請用公開電話或 LINE 聯絡。",
-    };
     const SELF_TRAIT_GROUPS = [
       { id: "living", label: "生活條件", items: [
-        { id: "cook", label: "可開伙" }, { id: "pet", label: "可養寵物" }, { id: "short", label: "可短租" }, { id: "tax", label: "可報稅" }, { id: "mrt", label: "近捷運" },
+        { id: "nocook", label: "不可開伙" }, { id: "nopet", label: "不可養寵物" }, { id: "notax", label: "不可報稅／不可租補" }, { id: "short", label: "可短租" },
       ] },
       { id: "building", label: "建物", items: [
-        { id: "elevator", label: "有電梯" }, { id: "parking", label: "有車位" }, { id: "community", label: "社區大樓" }, { id: "courtyard", label: "有中庭" }, { id: "balcony", label: "有陽台" }, { id: "manage", label: "有管理室" }, { id: "trash", label: "垃圾集中" },
+        { id: "elevator", label: "電梯華廈／寓" }, { id: "parking", label: "有車位" }, { id: "community", label: "電梯大樓" }, { id: "courtyard", label: "有中庭" }, { id: "balcony", label: "有陽台" }, { id: "manage", label: "有門衛管理" }, { id: "trash", label: "社區定時定點集中收垃圾" }, { id: "trash24", label: "24H 大樓回收垃圾" }, { id: "parcel", label: "代收包裹快遞" },
       ] },
       { id: "gear", label: "設備", items: [
-        { id: "ac", label: "冷氣" }, { id: "washer", label: "洗衣機" }, { id: "fridge", label: "冰箱" }, { id: "net", label: "網路" }, { id: "heater", label: "熱水器" }, { id: "bed", label: "床" }, { id: "closet", label: "衣櫃" }, { id: "sofa", label: "沙發" },
-      ] },
-      { id: "who", label: "適合對象（可複選）", items: [
-        { id: "anygender", label: "不限性別" }, { id: "female", label: "限女性" }, { id: "male", label: "限男性" }, { id: "student", label: "學生可" }, { id: "worker", label: "上班族佳" },
+        { id: "ac", label: "冷氣" }, { id: "washer", label: "洗衣機" }, { id: "fridge", label: "冰箱" }, { id: "net", label: "網路" }, { id: "cable", label: "第四台" }, { id: "heater", label: "瓦斯熱水器" }, { id: "heater_e", label: "電熱水器" }, { id: "bed", label: "床" }, { id: "closet", label: "衣櫃" }, { id: "sofa", label: "沙發" }, { id: "dining", label: "餐桌" },
       ] },
     ];
     function paintSelfTraits() {
@@ -6380,11 +6366,6 @@
         if (msg) msg.textContent = error.message;
       }
     });
-    $("selfBodyTemplates")?.addEventListener("click", (ev) => {
-      const id = ev.target.closest("[data-body-tpl]")?.dataset.bodyTpl;
-      if (!id || !$("selfBody")) return;
-      $("selfBody").value = SELF_BODY_TPL[id] || $("selfBody").value;
-    });
     function openOwnerOverlay() {
       const box = $("ownerOverlay");
       if (box) box.hidden = false;
@@ -6577,7 +6558,6 @@
             street: $("selfAddress")?.value || "",
             phone: $("selfPhone")?.value || "",
             line_url: $("selfLine")?.value || "",
-            cover: $("selfCover")?.value || "",
             photos: photoUrls,
             title: $("selfTitle")?.value || "",
             body: $("selfBody")?.value || "",

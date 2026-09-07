@@ -199,6 +199,10 @@ export function isAtOrBelowFirstFloor(floorName) {
   if (range) return Number(range[1]) <= 1;
   const numbered = main.match(/(\d+)\s*(?:F|樓)/i);
   if (numbered) return Number(numbered[1]) <= 1;
+  // 非 591 來源（住商/信義/5168/租租通）樓層常寫成「current/total」且不帶 F/樓，
+  // 例如 "1/4"、"1/12" 或裸數字 "1"。當主段以純數字開頭時，也視為樓層數判斷。
+  const bare = main.match(/^(\d+)/);
+  if (bare) return Number(bare[1]) <= 1;
   return false;
 }
 

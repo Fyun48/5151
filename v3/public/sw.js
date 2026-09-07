@@ -1,12 +1,26 @@
 /* 吉比租房：系統推播與加入主畫面。沒有 VAPID 時仍可在分頁開著時用 Notification API。 */
-const CACHE = "jibi-shell-v3";
+// Cache 版本集中管理：換版時只需 bump CACHE_VERSION。CACHE 名稱一律以 CACHE_PREFIX 開頭，
+// activate 時只清除「本站、本 Service Worker 管理」的舊版本 cache，不動其它來源/其它前綴的 cache。
+const CACHE_PREFIX = "jibi-shell-";
+const CACHE_VERSION = "v4";
+const CACHE = CACHE_PREFIX + CACHE_VERSION;
 
 self.addEventListener("install", (event) => {
+  // 新版本 install 完成即接手，避免使用者停留在舊 shell。
   event.waitUntil(self.skipWaiting());
 });
 
 self.addEventListener("activate", (event) => {
-  event.waitUntil(self.clients.claim());
+  // 安全清除本站舊版本 cache（僅限 CACHE_PREFIX 開頭且非目前版本），再接管所有頁面。
+  event.waitUntil(
+    caches.keys()
+      .then((keys) => Promise.all(
+        keys
+          .filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE)
+          .map((key) => caches.delete(key)),
+      ))
+      .then(() => self.clients.claim()),
+  );
 });
 
 self.addEventListener("fetch", (event) => {

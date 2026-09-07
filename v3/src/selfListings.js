@@ -9,6 +9,7 @@ import {
   depositLabel,
   normalizeDeposit,
   normalizeSelfTraits,
+  normalizeSelfTraitsInput,
   selfTraitLabels,
 } from "./selfTraits.js";
 import { ensureProfileSchema } from "./profile.js";
@@ -474,7 +475,7 @@ export function createSelfListing(db, userId, input = {}, now = new Date(), { ma
   const phone = digitsPhone(input.phone || input.mobile);
   const lineUrl = normalizeLineUrl(input.line_url);
   if (phone && phone.replace(/\D/g, "").length < 8) throw httpError("電話號碼太短");
-  const traitIds = normalizeSelfTraits(input.traits);
+  const traitIds = normalizeSelfTraitsInput(input.traits);
   const deposit = normalizeDeposit(input.deposit);
 
   const photos = normalizePhotoList(input.photos || input.photo_urls);
