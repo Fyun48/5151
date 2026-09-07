@@ -12,6 +12,7 @@ import {
   listingCountForSearch,
   listMatchCandidates,
   listingsNeeding591Geo,
+  listingHasTrustedGeo,
   listingsNeedingFeeDetail,
   listingsNeedingRoute,
   listingsNeedingAliveCheck,
@@ -527,6 +528,7 @@ export async function runWatch(options = {}) {
       ...fetchOptions,
       pages: hbPages,
       getHtml: options.hpGetHtml,
+      hasGeo: listingHasTrustedGeo,
     }));
   }
   if (wantDd) {

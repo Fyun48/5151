@@ -9,6 +9,7 @@ import {
   enrichHpListingFromDetail,
   fetchHpCoveringListings,
   probeHpListingAlive,
+  hpDetailApiUrl,
   hpDetailUrl,
   hpListUrl,
   hpPostIdFromCase,
@@ -16,12 +17,14 @@ import {
   isHpListingId,
   normalizeHpItem,
   parseHpDetailHtml,
+  parseHpDetailJson,
   parseHpListHtml,
 } from "../src/houseprice.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const fixture = readFileSync(path.join(dir, "fixtures/houseprice-list.html"), "utf8");
 const detailFixture = readFileSync(path.join(dir, "fixtures/houseprice-detail.html"), "utf8");
+const detailApiFixture = readFileSync(path.join(dir, "fixtures/houseprice-detail-api.json"), "utf8");
 
 test("5168 maps 591 districts onto list path and reserved ids", () => {
   assert.equal(hpSidForDistrict(1, 8), 8);
@@ -65,6 +68,40 @@ test("parseHpDetailHtml reads total/rental floor and community from the detail p
   assert.equal(detail.kind, "整層住家");
   assert.equal(detail.buildingType, "大樓");
   assert.match(detail.address, /士林區格致路/);
+  assert.equal(detail.usage, "住家用");
+  assert.ok(Math.abs(detail.lat - 25.1419) < 0.01, `lat ${detail.lat}`);
+  assert.ok(Math.abs(detail.lng - 121.5493) < 0.01, `lng ${detail.lng}`);
+});
+
+test("parseHpDetailJson reads full detail (address+coords) from the SPA JSON API", () => {
+  assert.equal(hpDetailApiUrl("16705651"), "https://rent.houseprice.tw/ws/detail/16705651");
+  const detail = parseHpDetailJson(detailApiFixture);
+  assert.equal(detail.address, "新北市淡水區中山路93號");
+  assert.equal(detail.floorName, "6/12");
+  assert.equal(detail.layout, "1房0廳1衛");
+  assert.equal(detail.areaName, "11坪");
+  assert.equal(detail.usage, "獨立套房");
+  assert.equal(detail.kind, "獨立套房");
+  assert.equal(detail.buildingType, "大樓");
+  assert.equal(detail.community, "城市山水/永樂大廈");
+  assert.ok(Math.abs(detail.lat - 25.1696) < 0.001, `lat ${detail.lat}`);
+  assert.ok(Math.abs(detail.lng - 121.442) < 0.001, `lng ${detail.lng}`);
+  assert.equal(parseHpDetailJson("not json"), null);
+  assert.equal(parseHpDetailJson("<html>shell</html>"), null);
+});
+
+test("fetchHpCoveringListings enriches from the JSON API (address + geo pin)", async () => {
+  const jobs = [{ regionId: 1, sectionIds: [8], priceMin: 0, priceMax: 0, searchUrl: "x" }];
+  const batches = await fetchHpCoveringListings(jobs, {
+    pages: 1,
+    detailGapMs: 0,
+    getHtml: async (url) => (String(url).includes("/ws/detail/") ? detailApiFixture : fixture),
+  });
+  const suite = batches[0].listings.find((row) => row.source_id === "16512158_1170048");
+  assert.ok(suite);
+  assert.equal(suite.geo_source, "houseprice");
+  assert.ok(Math.abs(suite.lat - 25.1696) < 0.001);
+  assert.match(suite.address, /淡水區中山路93號/);
 });
 
 test("parseHpDetailHtml falls back to meta description when label spans are absent", () => {
@@ -91,6 +128,9 @@ test("enrichHpListingFromDetail fills missing floor and community and rebuilds t
   assert.equal(enriched.community_name, "御陽明");
   assert.notEqual(enriched.source_key, beforeKey);
   assert.match(enriched.tags, /御陽明/);
+  assert.equal(enriched.geo_source, "houseprice");
+  assert.ok(Number.isFinite(enriched.lat) && Number.isFinite(enriched.lng));
+  assert.match(enriched.tags, /住家用/);
 });
 
 test("fetchHpCoveringListings enriches suite listings from the detail page", async () => {
@@ -104,6 +144,26 @@ test("fetchHpCoveringListings enriches suite listings from the detail page", asy
   assert.ok(suite);
   assert.equal(suite.floor_name, "4/4");
   assert.equal(suite.community_name, "御陽明");
+  assert.equal(suite.geo_source, "houseprice");
+  assert.ok(Number.isFinite(suite.lat) && Number.isFinite(suite.lng));
+});
+
+test("fetchHpCoveringListings skips the detail fetch when hasGeo already has the pin", async () => {
+  const jobs = [{ regionId: 1, sectionIds: [8], priceMin: 0, priceMax: 0, searchUrl: "x" }];
+  let detailHits = 0;
+  const batches = await fetchHpCoveringListings(jobs, {
+    pages: 1,
+    detailGapMs: 0,
+    hasGeo: () => true,
+    getHtml: async (url) => {
+      if (String(url).includes("/house/")) { detailHits += 1; return detailFixture; }
+      return fixture;
+    },
+  });
+  assert.equal(detailHits, 0);
+  const suite = batches[0].listings.find((row) => row.source_id === "16512158_1170048");
+  assert.ok(suite);
+  assert.equal(suite.lat, null);
 });
 
 test("probeHpListingAlive flags 404 and gone pages, keeps normal pages alive", async () => {

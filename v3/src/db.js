@@ -2332,6 +2332,12 @@ export function listingsNeeding591Geo(limit = 20) {
   return out;
 }
 
+/** 該物件是否已有可信座標（供外站爬蟲跳過已定位者，把補明細的預算留給還沒座標的物件）。 */
+export function listingHasTrustedGeo(postId) {
+  const row = db.prepare("SELECT lat, lng, geo_source FROM listings WHERE post_id = ?").get(Number(postId));
+  return !!row && row.lat != null && row.lng != null && isTrustedGeoSource(row.geo_source);
+}
+
 export function hideMany(ids, userId) {
   const uid = resolveUserId(userId);
   const list = [...new Set((ids || []).map(Number).filter((id) => id > 0))];
