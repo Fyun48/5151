@@ -35,6 +35,8 @@ test("server exposes media library + public sharing routes with ownership check"
   assert.match(server, /assertOwnsMemberMediaUrls\(session\.userId/);
   // 內容定址檔可長快取
   assert.match(server, /max-age=31536000, immutable/);
+  // DATA_DIR 相對路徑時 sendFile 仍需絕對路徑
+  assert.match(server, /sendFile\(path\.resolve\(full\)\)/);
 });
 
 test("public paths allow media/lib, public API, and /l share page (no login wall)", () => {

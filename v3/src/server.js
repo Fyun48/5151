@@ -807,7 +807,7 @@ app.get("/media/brand/:file", (req, res) => {
   }
   res.setHeader("Content-Type", mimeForBrandFile(req.params.file));
   res.setHeader("Cache-Control", "public, max-age=604800");
-  res.sendFile(full);
+  res.sendFile(path.resolve(full));
 });
 
 app.get("/api/admin/broadcasts", requireAdminApi, (_req, res) => {
@@ -1091,7 +1091,7 @@ app.get("/media/self/:file", (req, res) => {
   }
   res.setHeader("Content-Type", mimeForSelfPhoto(req.params.file));
   res.setHeader("Cache-Control", "public, max-age=604800");
-  res.sendFile(full);
+  res.sendFile(path.resolve(full));
 });
 
 // ── 會員照片素材庫（member media library） ──
@@ -1127,7 +1127,7 @@ app.get("/media/lib/:file", (req, res) => {
   if (!full) { res.status(404).end(); return; }
   res.setHeader("Content-Type", "image/jpeg");
   res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-  res.sendFile(full);
+  res.sendFile(path.resolve(full));
 });
 
 // ── 公開分享：站內會員刊登（未登入可看主要內容；只輸出白名單公開欄位） ──
