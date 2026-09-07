@@ -689,6 +689,98 @@ export function applyOpsSchema(db) {
       FOREIGN KEY (qa_run_id) REFERENCES development_qa_run(id) ON DELETE RESTRICT
     );
 
+    -- Phase 12：隔離 Staging 部署與驗證。把「通過 fresh Phase-11 QA PASS 的確切 head SHA/artifact」
+    -- 部署到「與 Production 完全隔離」的非正式環境，做 health/smoke 驗證並保存版本化證據。
+    -- 不 merge、不 auto-merge、不部署 Production、不建 Release Manifest、不做 Owner Gate #2。
+    CREATE TABLE IF NOT EXISTS development_staging_deployment (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      issue_id INTEGER NOT NULL,
+      coding_task_id INTEGER NOT NULL,
+      development_authorization_id INTEGER NOT NULL,
+      proposal_id INTEGER NOT NULL,
+      proposal_version INTEGER NOT NULL,
+      proposal_hash TEXT NOT NULL,
+      qa_run_id INTEGER NOT NULL,
+      qa_input_fingerprint TEXT,
+      qa_policy_fingerprint TEXT,
+      base_sha TEXT NOT NULL,
+      head_sha TEXT NOT NULL,
+      coding_result_hash TEXT,
+      diff_hash TEXT,
+      source_tree_hash TEXT,
+      artifact_id TEXT,
+      artifact_digest TEXT,
+      staging_provider TEXT,
+      staging_environment_id TEXT,
+      staging_environment_class TEXT,
+      staging_url TEXT,
+      staging_policy_version TEXT NOT NULL,
+      staging_policy_fingerprint TEXT NOT NULL,
+      config_fingerprint TEXT,
+      config_snapshot TEXT,
+      input_fingerprint TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',   -- pending|claimed|building|deploying|validating|ready|failed|failed_retry|cancelled|expired|superseded（部署工作狀態）
+      validation_result TEXT,                    -- PASS|FAIL|REVIEW_REQUIRED
+      blocking_checks TEXT,
+      warning_count INTEGER,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      max_attempts INTEGER NOT NULL DEFAULT 3,
+      error_code TEXT,
+      next_attempt_at TEXT NOT NULL,
+      claimed_at TEXT,
+      started_at TEXT,
+      deployed_at TEXT,
+      completed_at TEXT,
+      expires_at TEXT,
+      cleanup_status TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (issue_id) REFERENCES issue_candidate(id) ON DELETE RESTRICT,
+      FOREIGN KEY (coding_task_id) REFERENCES development_coding_task(id) ON DELETE RESTRICT,
+      FOREIGN KEY (qa_run_id) REFERENCES development_qa_run(id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS idx_staging_task ON development_staging_deployment(coding_task_id, id);
+    CREATE INDEX IF NOT EXISTS idx_staging_status ON development_staging_deployment(status, next_attempt_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_staging_input_fp ON development_staging_deployment(input_fingerprint) WHERE status != 'cancelled';
+    -- provenance 不可變：ready 後不可竄改綁定/artifact 欄位。
+    CREATE TRIGGER IF NOT EXISTS staging_provenance_immutable BEFORE UPDATE ON development_staging_deployment
+    WHEN OLD.status = 'ready' AND (
+      IFNULL(NEW.coding_task_id,0) <> IFNULL(OLD.coding_task_id,0)
+      OR IFNULL(NEW.head_sha,'') <> IFNULL(OLD.head_sha,'')
+      OR IFNULL(NEW.qa_run_id,0) <> IFNULL(OLD.qa_run_id,0)
+      OR IFNULL(NEW.artifact_digest,'') <> IFNULL(OLD.artifact_digest,'')
+      OR IFNULL(NEW.input_fingerprint,'') <> IFNULL(OLD.input_fingerprint,'')
+      OR IFNULL(NEW.validation_result,'') <> IFNULL(OLD.validation_result,'')
+    )
+    BEGIN SELECT RAISE(ABORT, 'staging deployment provenance is immutable once ready'); END;
+
+    CREATE TABLE IF NOT EXISTS development_staging_check (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      staging_deployment_id INTEGER NOT NULL,
+      issue_id INTEGER NOT NULL,
+      coding_task_id INTEGER NOT NULL,
+      check_type TEXT NOT NULL,
+      status TEXT NOT NULL,        -- PASS|FAIL|WARN|REVIEW|SKIPPED
+      severity TEXT NOT NULL,      -- none|low|medium|high|blocking
+      finding TEXT,
+      evidence TEXT,
+      started_at TEXT,
+      completed_at TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (staging_deployment_id) REFERENCES development_staging_deployment(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_staging_check_dep ON development_staging_check(staging_deployment_id, id);
+
+    -- 每個 Coding Task 的 canonical 當前 Staging（只指向成功 ready 的部署）。
+    CREATE TABLE IF NOT EXISTS development_staging_current (
+      coding_task_id INTEGER NOT NULL PRIMARY KEY,
+      staging_deployment_id INTEGER NOT NULL,
+      head_sha TEXT NOT NULL,
+      input_fingerprint TEXT NOT NULL,
+      validation_result TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (staging_deployment_id) REFERENCES development_staging_deployment(id) ON DELETE RESTRICT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_state_entity_type ON state_entity(entity_type, state);
     CREATE INDEX IF NOT EXISTS idx_state_transition_entity ON state_transition(entity_type, entity_id, id);
     CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_type, entity_id, id);
