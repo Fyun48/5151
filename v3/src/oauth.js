@@ -106,10 +106,16 @@ function safeEqual(a, b) {
   return timingSafeEqual(left, right);
 }
 
-export function createOauthState({ provider, accept = false, now = Date.now() } = {}, secret = process.env.SESSION_SECRET) {
+export function createOauthState({ provider, accept = false, consents = [], now = Date.now() } = {}, secret = process.env.SESSION_SECRET) {
   const payload = Buffer.from(JSON.stringify({
     p: String(provider || ""),
     a: accept === true ? 1 : 0,
+    c: Array.isArray(consents) ? consents.slice(0, 8).map((row) => ({
+      t: String(row.document_type || row.t || ""),
+      i: Number(row.document_id || row.i) || 0,
+      v: Number(row.version || row.v) || 0,
+      h: String(row.content_hash || row.h || "").slice(0, 64),
+    })) : [],
     n: randomBytes(8).toString("hex"),
     exp: now + STATE_TTL_MS,
   })).toString("base64url");
@@ -126,7 +132,16 @@ export function readOauthState(token, secret = process.env.SESSION_SECRET, now =
     if (!data?.exp || Number(now) > Number(data.exp)) return null;
     const provider = String(data.p || "");
     if (!OAUTH_PROVIDERS.includes(provider)) return null;
-    return { provider, accept: Number(data.a) === 1 };
+    return {
+      provider,
+      accept: Number(data.a) === 1,
+      consents: Array.isArray(data.c) ? data.c.map((row) => ({
+        document_type: String(row.t || ""),
+        document_id: Number(row.i) || 0,
+        version: Number(row.v) || 0,
+        content_hash: String(row.h || ""),
+      })) : [],
+    };
   } catch {
     return null;
   }

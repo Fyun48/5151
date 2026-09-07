@@ -149,6 +149,7 @@ export function publicPath(req) {
     p === "/index.html" ||
     p === "/login.html" ||
     p === "/disclaimer.html" ||
+    p === "/terms.html" ||
     p === "/data.html" ||
     p === "/logout" ||
     p === "/api/login" ||
@@ -162,6 +163,8 @@ export function publicPath(req) {
     p === "/api/health" ||
     p === "/api/demo" ||
     p === "/api/disclaimer" ||
+    p === "/api/public/documents" ||
+    p.startsWith("/api/public/documents/") ||
     p === "/api/spirit" ||
     p === "/api/housing-data" ||
     p === "/api/help-qa" ||

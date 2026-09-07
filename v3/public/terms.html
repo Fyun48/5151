@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>條款 · 吉比租房物件追蹤</title>
+  <link rel="stylesheet" href="/tokens.css" />
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: var(--font-sans, "Noto Sans TC", sans-serif);
+      background: var(--bg, #f3efe8);
+      color: var(--ink, #1c1917);
+    }
+    .wrap { width: min(680px, calc(100vw - 32px)); margin: 24px auto 40px; }
+    .card {
+      background: var(--paper, #faf8f4);
+      border: 1px solid var(--line, #e4dfd6);
+      border-radius: 10px;
+      padding: 20px 18px 16px;
+    }
+    h1 { margin: 0 0 8px; font-size: 22px; font-weight: 700; }
+    .meta { color: var(--muted, #6f6a64); font-size: 13px; margin: 0 0 16px; }
+    .body { font-size: 16px; line-height: 1.75; }
+    .body p { margin: 0 0 12px; }
+    .body ul { margin: 0 0 12px; padding-left: 1.2em; }
+    a { color: var(--accent-deep, #0b5551); }
+    .err { color: var(--muted, #6f6a64); }
+    .back { display: inline-block; margin-top: 16px; min-height: 44px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <article class="card">
+      <h1 id="title">條款</h1>
+      <p class="meta" id="meta">載入中…</p>
+      <div class="body" id="body"><p class="err">載入中…</p></div>
+      <a class="back" href="/login.html">返回登入／註冊</a>
+    </article>
+  </div>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const type = params.get("type") || "registration_terms";
+    fetch("/api/public/documents/" + encodeURIComponent(type), { cache: "no-store" })
+      .then((r) => r.json().then((data) => ({ ok: r.ok, data })))
+      .then(({ ok, data }) => {
+        if (!ok) throw new Error(data.error || "找不到文件");
+        document.title = `${data.title || "條款"} · 吉比租房物件追蹤`;
+        document.getElementById("title").textContent = data.title || "條款";
+        document.getElementById("meta").textContent = `版本 v${data.version} · ${data.published_at ? String(data.published_at).slice(0, 10) : "已發布"}`;
+        document.getElementById("body").innerHTML = data.html || "";
+      })
+      .catch((err) => {
+        document.getElementById("meta").textContent = "";
+        const msg = String(err.message || "讀不到條款").replace(/[&<>"']/g, (c) => (
+          { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+        ));
+        document.getElementById("body").innerHTML = `<p class="err">${msg}</p>`;
+      });
+  </script>
+</body>
+</html>

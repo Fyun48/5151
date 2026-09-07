@@ -120,7 +120,24 @@ import {
   deleteUserPushSubscription,
   publicVapidKey,
   vapidConfigured,
+  registerUserWithConsents,
+  getRequiredRegistrationDocuments,
+  getEffectiveDocument,
+  getContentDocument,
+  listContentDocuments,
+  createContentDraft,
+  updateContentDraft,
+  publishContentDocument,
+  newContentVersion,
+  listContentEvents,
+  listMyConsents,
+  pendingMemberDocuments,
+  acceptPendingDocuments,
+  getOwnConsentDocument,
+  DOC_TYPES,
+  publicDocumentView,
 } from "./db.js";
+import { renderSafeContent } from "./safeContent.js";
 import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requireAuth, sessionCookie, verifyLogin } from "./auth.js";
 import { boxFromRoadDescription, geocodeAddress, needsListingGeo, hasWorkPoint } from "./geo.js";
 import { listingRedirectTarget } from "./openLink.js";
@@ -315,6 +332,8 @@ app.get("/api/me", (req, res) => {
     disclaimer_text: getLegalCopy().disclaimer,
     privacy_check: getLegalCopy().privacyCheck,
     disclaimer_check: getLegalCopy().disclaimerCheck,
+    pending_documents: session?.userId ? pendingMemberDocuments(session.userId) : [],
+    consents: session?.userId ? listMyConsents(session.userId) : [],
     open_self_listings: session?.userId ? countOpenSelfListings(session.userId) : 0,
     configured: true,
     canRegister: true,
@@ -341,6 +360,75 @@ app.patch("/api/profile", (req, res) => {
 
 app.get("/api/disclaimer", (_req, res) => {
   res.json(getLegalCopy());
+});
+
+app.get("/api/public/documents", (_req, res) => {
+  try {
+    res.json({
+      types: Object.values(DOC_TYPES).map((row) => ({ id: row.id, label: row.label, required_at: row.required_at })),
+      required: getRequiredRegistrationDocuments(),
+    });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/public/documents/:type", (req, res) => {
+  try {
+    const doc = getEffectiveDocument(req.params.type);
+    if (!doc || doc.status !== "published" || !doc.enabled) {
+      res.status(404).json({ error: "找不到目前有效的文件" });
+      return;
+    }
+    res.setHeader("Cache-Control", "public, max-age=30");
+    res.json({ ...publicDocumentView(doc), html: renderSafeContent(doc.body, doc.format) });
+  } catch (error) {
+    res.status(error.status === 400 ? 404 : (error.status || 400)).json({ error: error.message });
+  }
+});
+
+app.get("/terms.html", (_req, res) => {
+  res.sendFile(path.join(__dirname, "../public/terms.html"));
+});
+
+app.post("/api/consents", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入" });
+      return;
+    }
+    res.json({
+      ok: true,
+      consents: acceptPendingDocuments(session.userId, req.body?.consents, { source: "reaccept" }),
+      pending_documents: pendingMemberDocuments(session.userId),
+    });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/consents", (req, res) => {
+  const session = readSession(req);
+  if (!session?.userId) {
+    res.status(401).json({ error: "請先登入" });
+    return;
+  }
+  res.json({ items: listMyConsents(session.userId), pending_documents: pendingMemberDocuments(session.userId) });
+});
+
+app.get("/api/consents/:id/document", (req, res) => {
+  const session = readSession(req);
+  if (!session?.userId) {
+    res.status(401).json({ error: "請先登入" });
+    return;
+  }
+  const doc = getOwnConsentDocument(session.userId, req.params.id);
+  if (!doc) {
+    res.status(404).json({ error: "找不到這筆同意對應的文件" });
+    return;
+  }
+  res.json({ ...doc, html: renderSafeContent(doc.body, doc.format) });
 });
 
 app.get("/api/help-qa", (_req, res) => {
@@ -431,11 +519,12 @@ app.post("/api/register", (req, res) => {
       err.status = 503;
       throw err;
     }
-    const user = registerUser({
+    const user = registerUserWithConsents({
       email: req.body?.email,
       password: req.body?.password,
       acceptDisclaimer: req.body?.acceptDisclaimer === true,
       acceptPrivacy: req.body?.acceptPrivacy,
+      consents: req.body?.consents,
       emailVerified: false,
     });
     const issued = issueVerifyToken(user.id);
@@ -516,7 +605,8 @@ app.get("/auth/:provider", (req, res) => {
       throw err;
     }
     const accept = String(req.query.accept || "") === "1";
-    const state = createOauthState({ provider, accept });
+    const consents = accept ? getRequiredRegistrationDocuments() : [];
+    const state = createOauthState({ provider, accept, consents });
     const base = publicBaseUrl(req);
     const redirectUri = `${base}/auth/${provider}/callback`;
     const url = providerAuthorizeUrl(provider, { clientId: cfg.clientId, redirectUri, state });
@@ -567,11 +657,12 @@ app.get("/auth/:provider/callback", async (req, res) => {
         err.status = 503;
         throw err;
       }
-      user = registerUser({
+      user = registerUserWithConsents({
         email: profile.email,
         password: randomOauthPassword(),
         acceptDisclaimer: true,
         acceptPrivacy: true,
+        consents: state.consents,
         emailVerified: false,
       });
     }
@@ -902,6 +993,62 @@ app.get("/api/admin/legal-copy", requireAdminApi, (_req, res) => {
 app.put("/api/admin/legal-copy", requireAdminApi, (req, res) => {
   try {
     res.json(saveLegalCopy(req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/admin/documents", requireAdminApi, (req, res) => {
+  res.json({
+    types: Object.values(DOC_TYPES),
+    items: listContentDocuments({ type: req.query?.type, includeDrafts: true }),
+  });
+});
+
+app.get("/api/admin/documents/:id/events", requireAdminApi, (req, res) => {
+  res.json({ items: listContentEvents({ documentId: req.params.id }) });
+});
+
+app.get("/api/admin/documents/:id", requireAdminApi, (req, res) => {
+  const doc = getContentDocument(req.params.id);
+  if (!doc) {
+    res.status(404).json({ error: "找不到文件" });
+    return;
+  }
+  res.json({ ...doc, html: renderSafeContent(doc.body, doc.format), events: listContentEvents({ documentId: doc.id }) });
+});
+
+app.post("/api/admin/documents", requireAdminApi, (req, res) => {
+  try {
+    const session = readSession(req);
+    res.status(201).json(createContentDraft(req.body || {}, { actorId: session?.userId || 0 }));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.patch("/api/admin/documents/:id", requireAdminApi, (req, res) => {
+  try {
+    const session = readSession(req);
+    res.json(updateContentDraft(req.params.id, req.body || {}, { actorId: session?.userId || 0 }));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/admin/documents/:id/publish", requireAdminApi, (req, res) => {
+  try {
+    const session = readSession(req);
+    res.json(publishContentDocument(req.params.id, { actorId: session?.userId || 0 }));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/admin/documents/:id/new-version", requireAdminApi, (req, res) => {
+  try {
+    const session = readSession(req);
+    res.status(201).json(newContentVersion(req.params.id, { actorId: session?.userId || 0 }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }

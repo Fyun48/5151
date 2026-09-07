@@ -51,6 +51,12 @@ test("login page can register after accepting the disclaimer", () => {
   assert.match(html, /acceptDisclaimer/);
   assert.match(html, /acceptPrivacy/);
   assert.match(html, /id="acceptPrivacy"/);
+  assert.match(html, /\/api\/public\/documents/);
+  assert.match(html, /\/terms\.html/);
+  assert.match(html, /consents: currentConsents\(\)/);
+  assert.match(html, /refreshRequiredDocs/);
+  assert.doesNotMatch(html, /id="accept"[^>]*\bchecked\b/);
+  assert.doesNotMatch(html, /id="acceptPrivacy"[^>]*\bchecked\b/);
   assert.match(html, /disclaimer\.html/);
   assert.match(html, /這是免費系統/);
   assert.match(html, /href="\/tokens\.css"/);

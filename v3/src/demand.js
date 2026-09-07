@@ -17,7 +17,7 @@ export const DEMAND_HOUSING_TYPES = [
   { id: "whole", label: "整層住家" },
 ];
 
-export const DEMAND_LEGAL = "這是免費找房工具，不是仲介、不保證媒合、不經手金錢。需求牆是公開留言板，沒有即時私訊。內容由使用者自行負責；平台可隱藏或移除不當貼文。";
+export const DEMAND_LEGAL = "這是免費找房工具，不是仲介、不經手金錢。需求牆是公開留言板。全站使用條款以註冊時同意的版本為準。";
 
 export function ensureDemandSchema(db) {
   db.exec(`

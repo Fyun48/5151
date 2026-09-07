@@ -207,6 +207,38 @@
       overflow: auto;
     }
     .hub-overlay[hidden] { display: none; }
+    .reaccept-banner {
+      margin: 0 20px 8px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      background: var(--paper);
+      border-radius: var(--radius-lg, 10px);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      font-size: 14px;
+    }
+    .reaccept-banner[hidden] { display: none; }
+    .reaccept-docs { display: grid; gap: 14px; }
+    .reaccept-docs .check {
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+      font-size: 14px;
+    }
+    .reaccept-docs .check input { margin-top: 3px; }
+    .reaccept-body {
+      font-size: 16px;
+      line-height: 1.7;
+      max-height: 220px;
+      overflow: auto;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--bg);
+    }
+    .reaccept-body p { margin: 0 0 10px; }
     .hub-backdrop {
       position: fixed;
       inset: 0;
@@ -2391,6 +2423,10 @@
       </div>
     </div>
   </header>
+  <div class="reaccept-banner" id="reacceptBanner" hidden role="status">
+    <span>條款已更新。請閱讀並同意目前有效版本後再繼續使用需同意的功能。</span>
+    <button type="button" class="ghost" id="reacceptBannerBtn">閱讀並同意</button>
+  </div>
   <div id="guestTour" class="guest-tour" hidden>
     <div class="guest-tour-dim"></div>
     <div class="guest-tour-spot" id="guestTourSpot"></div>
@@ -2592,7 +2628,8 @@
     <div class="card panel" id="demandPanel">
       <h2 style="margin:0 0 8px">需求專區</h2>
       <p class="hint" id="selfGuestHintDemand">登入後才能刊登需求（不是仲介、沒有私訊）。</p>
-      <p class="hint" id="demandLegal">這是免費找房工具，不是仲介、不保證媒合、不經手金錢。需求牆是公開留言板，沒有即時私訊。內容由使用者自行負責；平台可隱藏或移除不當貼文。</p>
+      <p class="hint" id="demandLegal">這是免費找房工具，不是仲介、不經手金錢。需求牆是公開留言板。全站使用條款以註冊時同意的版本為準。</p>
+      <p class="hint"><a href="/terms.html?type=registration_terms" target="_blank" rel="noopener">閱讀目前有效的免責聲明</a></p>
       <p class="hint" id="demandAudit">訪客可看全部需求。發文、回覆需登入；新帳號須滿 24 小時。同時最多 2 則未過期需求，14 天後失效。</p>
       <form id="demandForm">
         <div class="self-grid">
@@ -2757,7 +2794,8 @@
     <div class="card panel" id="selfListingPanel">
       <h2 style="margin:0 0 8px">有房刊登</h2>
       <p class="hint" id="selfGuestHint">登入後才能刊登（不是仲介、沒有私訊）。</p>
-        <p class="hint" id="selfLegal">免費找房工具，不是仲介、不經手金錢。公開摘要、沒有即時私訊。同時最多 10 則、30 天失效；新帳號滿 24 小時。找房預設仍只顯示整層住家。</p>
+        <p class="hint" id="selfLegal">免費找房工具，不是仲介。公開摘要、沒有即時私訊。同時最多 10 則、30 天失效；新帳號滿 24 小時。找房預設仍只顯示整層住家。</p>
+      <p class="hint">一般使用條款已於註冊時同意。<a href="/terms.html?type=listing_rules" target="_blank" rel="noopener">閱讀刊登規則</a>。刊登前仍須勾選本次屋主／授權確認。</p>
       <p class="hint" id="selfAudit">不實、惡作劇或明顯誤導會下架並暫停上傳 14 天。不驗證權狀、不保證真實。</p>
       <p class="hint" id="selfRichHint">來看的人最常問的，其實多半寫在這裡就能先答完。多勾一項、多寫一句，之後就少被重複打擾，也比較快遇到適合的人。</p>
       <form id="selfListingForm">
@@ -3048,6 +3086,26 @@
         <button type="button" class="primary" id="notifyHubSave">儲存通知設定</button>
         <span class="save-msg" id="notifyHubSaveMsg"></span>
       </div>
+    </div>
+  </div>
+  <div id="reacceptOverlay" class="hub-overlay" hidden>
+    <div class="hub-backdrop" data-close-reaccept></div>
+    <div class="hub-panel password-panel" role="dialog" aria-modal="true" aria-labelledby="reacceptTitle">
+      <div class="hub-head">
+        <div>
+          <h2 id="reacceptTitle">請同意更新後的條款</h2>
+          <p class="hint" style="margin:6px 0 0">管理員已發布需要再同意的版本。這不會改寫你先前的同意紀錄。</p>
+        </div>
+        <button type="button" class="ghost" id="reacceptClose" data-close-reaccept>稍後再說</button>
+      </div>
+      <form id="reacceptForm">
+        <div class="reaccept-docs" id="reacceptDocs"></div>
+        <div class="row" style="margin-top:14px">
+          <button type="submit" class="primary" id="reacceptSubmit">同意並繼續</button>
+          <button type="button" class="ghost" id="reacceptLater" data-close-reaccept>稍後再說</button>
+        </div>
+        <p class="msg" id="reacceptMsg" role="alert"></p>
+      </form>
     </div>
   </div>
   <div id="passwordDialog" class="hub-overlay" hidden>
@@ -5488,6 +5546,7 @@
       $("who").textContent = me.display_name || me.nickname || me.email || "";
       meEmail = me.email || "";
       paintProfile(me);
+      syncReacceptFromMe(me);
       if (window.__WELCOME_PROFILE || me.needs_profile) {
         setAppView("me");
         if ($("profileMsg")) $("profileMsg").textContent = "第一次進站請先確認或補齊個人資料。註冊 Email 不能更改。";
@@ -6207,6 +6266,89 @@
       }
       if (box) box.hidden = false;
     }
+    function escapeReaccept(value) {
+      return String(value || "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+    }
+    function closeReacceptOverlay() {
+      const overlay = $("reacceptOverlay");
+      if (overlay) overlay.hidden = true;
+    }
+    function openReacceptOverlay() {
+      const overlay = $("reacceptOverlay");
+      if (overlay) {
+        overlay.hidden = false;
+        $("reacceptClose")?.focus();
+      }
+    }
+    function paintReaccept(pending) {
+      const items = Array.isArray(pending) ? pending : [];
+      const banner = $("reacceptBanner");
+      if (banner) banner.hidden = items.length === 0;
+      const host = $("reacceptDocs");
+      if (!host) return;
+      host.innerHTML = items.map((doc) => `
+        <div>
+          <label class="check">
+            <input type="checkbox" data-reaccept-type="${escapeReaccept(doc.document_type)}" required />
+            <span>${escapeReaccept(doc.check_label || doc.title || "我已閱讀並同意")}（<a href="/terms.html?type=${encodeURIComponent(doc.document_type)}" target="_blank" rel="noopener">閱讀 ${escapeReaccept(doc.title || "條款")} v${Number(doc.version) || "?"}</a>）</span>
+          </label>
+          <div class="reaccept-body" data-reaccept-body="${escapeReaccept(doc.document_type)}"></div>
+        </div>
+      `).join("");
+      items.forEach((doc) => {
+        const box = host.querySelector(`[data-reaccept-body="${doc.document_type}"]`);
+        if (!box) return;
+        fetch("/api/public/documents/" + encodeURIComponent(doc.document_type), { cache: "no-store" })
+          .then((r) => r.json())
+          .then((data) => { if (data?.html) box.innerHTML = data.html; else box.textContent = data?.body || ""; })
+          .catch(() => { box.textContent = "無法載入條款，請改開閱讀連結。"; });
+      });
+      window.__pendingDocuments = items;
+    }
+    function syncReacceptFromMe(me) {
+      const pending = me?.pending_documents || [];
+      paintReaccept(pending);
+      if (pending.length) openReacceptOverlay();
+      else closeReacceptOverlay();
+    }
+    $("reacceptBannerBtn")?.addEventListener("click", () => openReacceptOverlay());
+    document.querySelectorAll("[data-close-reaccept]").forEach((el) => {
+      el.addEventListener("click", (ev) => { ev.preventDefault(); closeReacceptOverlay(); });
+    });
+    $("reacceptForm")?.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const pending = window.__pendingDocuments || [];
+      const boxes = [...document.querySelectorAll("[data-reaccept-type]")];
+      if (boxes.some((el) => !el.checked)) {
+        if ($("reacceptMsg")) $("reacceptMsg").textContent = "請先閱讀並勾選每一份更新條款。";
+        return;
+      }
+      if ($("reacceptSubmit")) $("reacceptSubmit").disabled = true;
+      if ($("reacceptMsg")) $("reacceptMsg").textContent = "送出中…";
+      try {
+        const res = await fetch("/api/consents", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            consents: pending.map((doc) => ({
+              document_type: doc.document_type,
+              document_id: doc.id,
+              version: doc.version,
+              content_hash: doc.content_hash,
+            })),
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "同意失敗");
+        paintReaccept(data.pending_documents || []);
+        closeReacceptOverlay();
+        if ($("reacceptMsg")) $("reacceptMsg").textContent = "";
+      } catch (error) {
+        if ($("reacceptMsg")) $("reacceptMsg").textContent = error.message;
+      } finally {
+        if ($("reacceptSubmit")) $("reacceptSubmit").disabled = false;
+      }
+    });
     function paintProfile(me) {
       if ($("profileNickname") && me && !$("profileNickname").dataset.dirty) {
         $("profileNickname").value = me.nickname || "";
