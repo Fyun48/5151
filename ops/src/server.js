@@ -31,6 +31,9 @@ import { getCurrentIssueEvaluation, getEvaluationRunDetail, listEvaluationRuns, 
 import { makeEvaluationProvider } from "./ai/evaluationProvider.js";
 import { evaluationWorkerConfigFromEnv, startEvaluationLoop } from "./evaluationWorker.js";
 import { evaluationRolesConfig } from "./evaluationRoles.js";
+import { getCurrentIssueProposal, listProposals, listOwnerDecisions, currentOwnerDecision, getActiveAuthorization, submitOwnerDecision, requestProposalGeneration } from "./proposal.js";
+import { makeProposalProvider } from "./ai/proposalProvider.js";
+import { proposalWorkerConfigFromEnv, startProposalLoop } from "./proposalWorker.js";
 
 // 刻意不使用 express：ops 服務維持「零外部相依」，與本 repo 的 CI（不跑 npm install）相容，
 // 也縮小攻擊面。所有路由用 node:http 手刻的極小 router。
@@ -175,7 +178,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
 
       // ── 公開 API ──
       if (pathname === "/ops/api/health" && method === "GET") {
-        sendJson(res, 200, { ok: true, service: "ops", phase: "7", configured: auth.configured });
+        sendJson(res, 200, { ok: true, service: "ops", phase: "8", configured: auth.configured });
         return;
       }
 
@@ -539,6 +542,52 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         return;
       }
 
+      // ── Phase 8：開發提案 + Owner Approval Gate #1（Owner 檢視 + 決策；不寫程式、不部署） ──
+      const proposalGet = pathname.match(/^\/ops\/api\/issues\/(\d+)\/proposal$/);
+      if (proposalGet && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        const iid = Number(proposalGet[1]);
+        if (!db.prepare("SELECT id FROM issue_candidate WHERE id=?").get(iid)) { sendJson(res, 404, { error: "not found" }); return; }
+        const current = getCurrentIssueProposal(db, iid);
+        sendJson(res, 200, {
+          issue_id: iid,
+          current,
+          stale: current ? current.stale : null,
+          current_decision: currentOwnerDecision(db, iid),
+          development_authorization: getActiveAuthorization(db, iid),
+          history: listProposals(db, { issueId: iid }),
+          decisions: listOwnerDecisions(db, { issueId: iid }),
+        });
+        return;
+      }
+      const proposalGen = pathname.match(/^\/ops\/api\/issues\/(\d+)\/proposal\/generate$/);
+      if (proposalGen && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          const r = requestProposalGeneration(db, Number(proposalGen[1]), { actor: `owner:${req.owner.email}` });
+          sendJson(res, 202, { ok: true, ...r });
+        } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+      const proposalDecide = pathname.match(/^\/ops\/api\/issues\/(\d+)\/proposal\/decision$/);
+      if (proposalDecide && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {};
+        try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          const r = submitOwnerDecision(db, Number(proposalDecide[1]), {
+            action: b.action,
+            proposalId: Number(b.proposal_id),
+            proposalVersion: Number(b.proposal_version),
+            proposalHash: String(b.proposal_hash || ""),
+            reason: b.reason,
+            actor: `owner:${req.owner.email}`,
+          });
+          sendJson(res, 200, { ok: true, ...r });
+        } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+
       if (pathname.startsWith("/ops/api/")) {
         sendJson(res, 404, { error: "not found" });
         return;
@@ -613,9 +662,15 @@ export function startServer() {
   if (evalProvider.available && evalCfg.enabled) {
     startEvaluationLoop(db, { provider: evalProvider, config: evalCfg, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
   }
+  // Phase 8：提案生成 worker。PROPOSAL_PROVIDER 未設定 → 不啟動；前面各階段照常。生成提案不寫程式、不部署。
+  const proposalProvider = makeProposalProvider();
+  const proposalCfg = proposalWorkerConfigFromEnv();
+  if (proposalProvider.available && proposalCfg.enabled) {
+    startProposalLoop(db, { provider: proposalProvider, config: proposalCfg, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
+  }
   http.createServer(handler).listen(port, host, () => {
     // eslint-disable-next-line no-console
-    console.log(`Ops console (Phase 7)：http://${host}:${port}  owner=${auth.configured ? auth.ownerEmail : "(未設定)"}  ingest=${process.env.OPS_INGEST_SECRET ? "on" : "off"}  ai=${aiProvider.available ? aiProvider.name : "off"}  embed=${embProvider.available ? embProvider.name : "off"}  impact=${impactCfg.enabled ? "on" : "off"}  eval=${evalProvider.available ? evalProvider.name : "off"}`);
+    console.log(`Ops console (Phase 8)：http://${host}:${port}  owner=${auth.configured ? auth.ownerEmail : "(未設定)"}  ingest=${process.env.OPS_INGEST_SECRET ? "on" : "off"}  ai=${aiProvider.available ? aiProvider.name : "off"}  embed=${embProvider.available ? embProvider.name : "off"}  impact=${impactCfg.enabled ? "on" : "off"}  eval=${evalProvider.available ? evalProvider.name : "off"}  proposal=${proposalProvider.available ? proposalProvider.name : "off"}`);
   });
   return { db, auth };
 }

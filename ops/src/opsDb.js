@@ -388,6 +388,133 @@ export function applyOpsSchema(db) {
       ) THEN RAISE(ABORT, 'evaluation current must reference a COMPLETED run of the same issue') END;
     END;
 
+    -- Phase 8：開發提案（immutable、版本化）＋ Owner 審批閘 #1。
+    -- issue_proposal 為不可變產物：completed 後內容永不 UPDATE；任何修改＝新 proposal_version 新列。
+    -- 生成為非同步 job（pending→processing→completed|failed|failed_retry），completed 才算正式提案。
+    CREATE TABLE IF NOT EXISTS issue_proposal (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      issue_id INTEGER NOT NULL,
+      proposal_version INTEGER NOT NULL,
+      generation_version TEXT NOT NULL,
+      input_fingerprint TEXT,
+      policy_fingerprint TEXT,
+      proposal_hash TEXT,
+      source_evaluation_run_id INTEGER,
+      source_impact_assessment_id INTEGER,
+      final_recommendation TEXT,
+      title TEXT,
+      problem_statement TEXT,
+      proposed_change TEXT,
+      intended_outcome TEXT,
+      scope TEXT,
+      non_goals TEXT,
+      acceptance_criteria TEXT,
+      known_risks TEXT,
+      security_considerations TEXT,
+      compliance_considerations TEXT,
+      operational_considerations TEXT,
+      rollback_considerations TEXT,
+      evidence_summary TEXT,
+      revision_instruction TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',   -- pending|processing|completed|failed|failed_retry
+      provider TEXT,
+      model TEXT,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      max_retries INTEGER NOT NULL DEFAULT 5,
+      error_code TEXT,
+      next_attempt_at TEXT NOT NULL,
+      claimed_at TEXT,
+      generated_at TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (issue_id) REFERENCES issue_candidate(id) ON DELETE RESTRICT,
+      FOREIGN KEY (source_evaluation_run_id) REFERENCES issue_evaluation_run(id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS idx_proposal_issue ON issue_proposal(issue_id, id);
+    CREATE INDEX IF NOT EXISTS idx_proposal_status ON issue_proposal(status, next_attempt_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_proposal_version ON issue_proposal(issue_id, proposal_version);
+    -- completed 的提案內容不可變：禁止 UPDATE 內容欄位／hash／version（只允許非內容欄位維持不動）。
+    CREATE TRIGGER IF NOT EXISTS proposal_immutable_completed BEFORE UPDATE ON issue_proposal
+    WHEN OLD.status = 'completed' AND (
+      IFNULL(NEW.proposal_hash,'') <> IFNULL(OLD.proposal_hash,'')
+      OR IFNULL(NEW.proposal_version,0) <> IFNULL(OLD.proposal_version,0)
+      OR IFNULL(NEW.title,'') <> IFNULL(OLD.title,'')
+      OR IFNULL(NEW.problem_statement,'') <> IFNULL(OLD.problem_statement,'')
+      OR IFNULL(NEW.proposed_change,'') <> IFNULL(OLD.proposed_change,'')
+      OR IFNULL(NEW.intended_outcome,'') <> IFNULL(OLD.intended_outcome,'')
+      OR IFNULL(NEW.scope,'') <> IFNULL(OLD.scope,'')
+      OR IFNULL(NEW.non_goals,'') <> IFNULL(OLD.non_goals,'')
+      OR IFNULL(NEW.acceptance_criteria,'') <> IFNULL(OLD.acceptance_criteria,'')
+      OR IFNULL(NEW.evidence_summary,'') <> IFNULL(OLD.evidence_summary,'')
+      OR IFNULL(NEW.input_fingerprint,'') <> IFNULL(OLD.input_fingerprint,'')
+      OR IFNULL(NEW.status,'') <> 'completed'
+    )
+    BEGIN SELECT RAISE(ABORT, 'completed proposal is immutable'); END;
+
+    -- 每 issue 至多一個 CURRENT 提案（下游只讀此指標；不用 timestamp 猜最新）。
+    CREATE TABLE IF NOT EXISTS issue_proposal_current (
+      issue_id INTEGER NOT NULL PRIMARY KEY,
+      proposal_id INTEGER NOT NULL,
+      proposal_version INTEGER NOT NULL,
+      proposal_hash TEXT NOT NULL,
+      input_fingerprint TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (proposal_id) REFERENCES issue_proposal(id) ON DELETE RESTRICT
+    );
+    -- DB 不變式：current 必須指向「同 issue、且 completed」的提案。
+    CREATE TRIGGER IF NOT EXISTS ipc_guard_insert BEFORE INSERT ON issue_proposal_current
+    BEGIN
+      SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM issue_proposal p WHERE p.id = NEW.proposal_id AND p.issue_id = NEW.issue_id AND p.status = 'completed'
+      ) THEN RAISE(ABORT, 'proposal current must reference a COMPLETED proposal of the same issue') END;
+    END;
+    CREATE TRIGGER IF NOT EXISTS ipc_guard_update BEFORE UPDATE ON issue_proposal_current
+    BEGIN
+      SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM issue_proposal p WHERE p.id = NEW.proposal_id AND p.issue_id = NEW.issue_id AND p.status = 'completed'
+      ) THEN RAISE(ABORT, 'proposal current must reference a COMPLETED proposal of the same issue') END;
+    END;
+
+    -- Owner 決策歷史（append-only）：APPROVE_DEVELOPMENT / REQUEST_CHANGES / DEFER / REJECT / BLOCK。
+    CREATE TABLE IF NOT EXISTS proposal_owner_decision (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      issue_id INTEGER NOT NULL,
+      proposal_id INTEGER NOT NULL,
+      proposal_version INTEGER NOT NULL,
+      proposal_hash TEXT NOT NULL,
+      action TEXT NOT NULL,
+      actor TEXT NOT NULL,
+      reason TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (proposal_id) REFERENCES issue_proposal(id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS idx_owner_decision_issue ON proposal_owner_decision(issue_id, id);
+    CREATE TRIGGER IF NOT EXISTS owner_decision_no_update BEFORE UPDATE ON proposal_owner_decision
+      BEGIN SELECT RAISE(ABORT, 'proposal_owner_decision is append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS owner_decision_no_delete BEFORE DELETE ON proposal_owner_decision
+      BEGIN SELECT RAISE(ABORT, 'proposal_owner_decision is append-only'); END;
+
+    -- 開發授權（APPROVE DEVELOPMENT 的產物）：綁定確切 proposal 快照，是未來 Phase 10 Coding Agent 的授權邊界。
+    -- 內容不可變；只有 status 可從 active → superseded（提案改版後作廢，保留歷史）。
+    CREATE TABLE IF NOT EXISTS development_authorization (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      issue_id INTEGER NOT NULL,
+      proposal_id INTEGER NOT NULL,
+      proposal_version INTEGER NOT NULL,
+      proposal_hash TEXT NOT NULL,
+      source_evaluation_run_id INTEGER,
+      authorization_hash TEXT NOT NULL,
+      approved_by TEXT NOT NULL,
+      approved_at TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',   -- active|superseded
+      superseded_at TEXT,
+      superseded_reason TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (proposal_id) REFERENCES issue_proposal(id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS idx_devauth_issue ON development_authorization(issue_id, id);
+    -- 每個 (proposal_id, proposal_hash) 至多一筆 active 授權（冪等；避免重複授權）。
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_devauth_active ON development_authorization(proposal_id, proposal_hash) WHERE status = 'active';
+
     CREATE INDEX IF NOT EXISTS idx_state_entity_type ON state_entity(entity_type, state);
     CREATE INDEX IF NOT EXISTS idx_state_transition_entity ON state_transition(entity_type, entity_id, id);
     CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_type, entity_id, id);
