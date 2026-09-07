@@ -41,6 +41,9 @@ import { codingWorkerConfigFromEnv, startCodingLoop } from "./codingWorker.js";
 import { makeCodingProvider } from "./coding/provider.js";
 import { makeCodingRepo } from "./coding/gitRepo.js";
 import { makePrGateway } from "./coding/prGateway.js";
+import { getIssueQaView, getQaRunDetail, requestQaRerun } from "./qaRun.js";
+import { qaWorkerConfigFromEnv, startQaLoop } from "./qaWorker.js";
+import { makeQaReviewProvider } from "./qa/reviewProvider.js";
 
 // 刻意不使用 express：ops 服務維持「零外部相依」，與本 repo 的 CI（不跑 npm install）相容，
 // 也縮小攻擊面。所有路由用 node:http 手刻的極小 router。
@@ -185,7 +188,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
 
       // ── 公開 API ──
       if (pathname === "/ops/api/health" && method === "GET") {
-        sendJson(res, 200, { ok: true, service: "ops", phase: "10", configured: auth.configured });
+        sendJson(res, 200, { ok: true, service: "ops", phase: "11", configured: auth.configured });
         return;
       }
 
@@ -656,6 +659,32 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         return;
       }
 
+      // ── Phase 11：獨立自動化 QA（Owner 檢視 + 重跑；不 merge、不部署） ──
+      const qaGet = pathname.match(/^\/ops\/api\/coding-tasks\/(\d+)\/qa$/);
+      if (qaGet && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        try { sendJson(res, 200, getIssueQaView(db, Number(qaGet[1]))); }
+        catch (err) { sendJson(res, err.status || 404, { error: err.message }); }
+        return;
+      }
+      const qaRunGet = pathname.match(/^\/ops\/api\/qa-runs\/(\d+)$/);
+      if (qaRunGet && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        const r = getQaRunDetail(db, Number(qaRunGet[1]));
+        if (!r) { sendJson(res, 404, { error: "not found" }); return; }
+        sendJson(res, 200, r);
+        return;
+      }
+      const qaRerun = pathname.match(/^\/ops\/api\/coding-tasks\/(\d+)\/qa\/rerun$/);
+      if (qaRerun && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          const r = requestQaRerun(db, Number(qaRerun[1]), { actor: `owner:${req.owner.email}` });
+          sendJson(res, 200, { ok: true, ...r });
+        } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+
       if (pathname.startsWith("/ops/api/")) {
         sendJson(res, 404, { error: "not found" });
         return;
@@ -750,9 +779,17 @@ export function startServer() {
   if (codingCfg.enabled && codingProvider.available && codingRepo.available) {
     startCodingLoop(db, { provider: codingProvider, repo: codingRepo, pr: codingPr, config: codingCfg, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
   }
+  // Phase 11：獨立 QA worker（決定性檢核為主；optional AI reviewer 預設關）。
+  // 安全預設：repo 不可用（OPS_CODING_REPO_PATH 未設）→ 不建/不跑；QA 絕不 merge/部署。
+  const qaRepo = makeCodingRepo();
+  const qaReviewer = makeQaReviewProvider();
+  const qaCfg = qaWorkerConfigFromEnv();
+  if (qaCfg.enabled && qaRepo.available) {
+    startQaLoop(db, { repo: qaRepo, reviewProvider: qaReviewer, config: qaCfg, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
+  }
   http.createServer(handler).listen(port, host, () => {
     // eslint-disable-next-line no-console
-    console.log(`Ops console (Phase 10)：http://${host}:${port}  owner=${auth.configured ? auth.ownerEmail : "(未設定)"}  ingest=${process.env.OPS_INGEST_SECRET ? "on" : "off"}  ai=${aiProvider.available ? aiProvider.name : "off"}  embed=${embProvider.available ? embProvider.name : "off"}  impact=${impactCfg.enabled ? "on" : "off"}  eval=${evalProvider.available ? evalProvider.name : "off"}  proposal=${proposalProvider.available ? proposalProvider.name : "off"}  reeval=${reevalCfg.enabled ? "on" : "off"}  coding=${codingProvider.available && codingRepo.available ? codingProvider.name : "off"}`);
+    console.log(`Ops console (Phase 11)：http://${host}:${port}  owner=${auth.configured ? auth.ownerEmail : "(未設定)"}  ingest=${process.env.OPS_INGEST_SECRET ? "on" : "off"}  ai=${aiProvider.available ? aiProvider.name : "off"}  embed=${embProvider.available ? embProvider.name : "off"}  impact=${impactCfg.enabled ? "on" : "off"}  eval=${evalProvider.available ? evalProvider.name : "off"}  proposal=${proposalProvider.available ? proposalProvider.name : "off"}  reeval=${reevalCfg.enabled ? "on" : "off"}  coding=${codingProvider.available && codingRepo.available ? codingProvider.name : "off"}  qa=${qaCfg.enabled && qaRepo.available ? "on" : "off"}`);
   });
   return { db, auth };
 }

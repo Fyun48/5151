@@ -265,7 +265,7 @@ export async function executeCodingTask(db, taskRow, { provider, repo, pr, selfT
     appendAudit(db, { action: "issue.coding.branch_created", task: cur, data: { branch: cur.coding_branch }, now });
 
     const result = await provider.run({ workspace: worktree, snapshot, timeoutMs: cfg.timeoutMs });
-    const headSha = repo.commitAll(worktree, buildCommitMessage(cur, snapshot));
+    const headSha = repo.commitAll(worktree, buildCommitMessage(cur, snapshot), { date: cur.created_at });
     if (!headSha || result?.changed === false) throw Object.assign(new Error("provider produced no changes"), { code: "no_changes" });
 
     // Git diff 為唯一真相（不採信 provider 描述）。

@@ -604,6 +604,91 @@ export function applyOpsSchema(db) {
     )
     BEGIN SELECT RAISE(ABORT, 'coding task provenance is immutable once changes are ready'); END;
 
+    -- Phase 11：獨立自動化 QA & 安全審查。針對「確切」的 Phase-10 Coding Task 結果做獨立檢核。
+    -- Coding Provider 自測不算核准證據；Phase 11 獨立重算 diff、跑 build/lint/tests、安全/範圍審查，
+    -- 產生決定性 PASS/FAIL/REVIEW_REQUIRED。不 merge、不部署、不建 Release Manifest、不做 Owner Gate #2。
+    CREATE TABLE IF NOT EXISTS development_qa_run (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      issue_id INTEGER NOT NULL,
+      coding_task_id INTEGER NOT NULL,
+      development_authorization_id INTEGER NOT NULL,
+      proposal_id INTEGER NOT NULL,
+      proposal_version INTEGER NOT NULL,
+      proposal_hash TEXT NOT NULL,
+      base_sha TEXT NOT NULL,
+      head_sha TEXT NOT NULL,
+      coding_result_hash TEXT,
+      diff_hash TEXT,
+      qa_version TEXT NOT NULL,
+      qa_policy_fingerprint TEXT NOT NULL,
+      qa_policy_snapshot TEXT,
+      input_fingerprint TEXT NOT NULL,
+      reviewer TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',   -- pending|claimed|running|completed|failed|failed_retry|cancelled（job 狀態）
+      final_result TEXT,                         -- PASS|FAIL|REVIEW_REQUIRED（completed 時）
+      blocking_checks TEXT,
+      warning_count INTEGER,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      max_attempts INTEGER NOT NULL DEFAULT 3,
+      error_code TEXT,
+      next_attempt_at TEXT NOT NULL,
+      claimed_at TEXT,
+      started_at TEXT,
+      completed_at TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (issue_id) REFERENCES issue_candidate(id) ON DELETE RESTRICT,
+      FOREIGN KEY (coding_task_id) REFERENCES development_coding_task(id) ON DELETE RESTRICT,
+      FOREIGN KEY (development_authorization_id) REFERENCES development_authorization(id) ON DELETE RESTRICT,
+      FOREIGN KEY (proposal_id) REFERENCES issue_proposal(id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS idx_qa_run_task ON development_qa_run(coding_task_id, id);
+    CREATE INDEX IF NOT EXISTS idx_qa_run_status ON development_qa_run(status, next_attempt_at);
+    -- idempotency：同一 input（coding_task+head+result+diff+policy）至多一列（cancelled 除外）。
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_qa_run_input_fp ON development_qa_run(input_fingerprint) WHERE status != 'cancelled';
+    -- provenance 不可變：completed 後不可竄改綁定欄位。
+    CREATE TRIGGER IF NOT EXISTS qa_run_provenance_immutable BEFORE UPDATE ON development_qa_run
+    WHEN OLD.status = 'completed' AND (
+      IFNULL(NEW.coding_task_id,0) <> IFNULL(OLD.coding_task_id,0)
+      OR IFNULL(NEW.head_sha,'') <> IFNULL(OLD.head_sha,'')
+      OR IFNULL(NEW.base_sha,'') <> IFNULL(OLD.base_sha,'')
+      OR IFNULL(NEW.diff_hash,'') <> IFNULL(OLD.diff_hash,'')
+      OR IFNULL(NEW.input_fingerprint,'') <> IFNULL(OLD.input_fingerprint,'')
+      OR IFNULL(NEW.final_result,'') <> IFNULL(OLD.final_result,'')
+    )
+    BEGIN SELECT RAISE(ABORT, 'qa run provenance is immutable once completed'); END;
+
+    -- 逐項檢核結果（獨立、結構化；不存 hidden chain-of-thought）。
+    CREATE TABLE IF NOT EXISTS development_qa_check (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      qa_run_id INTEGER NOT NULL,
+      issue_id INTEGER NOT NULL,
+      coding_task_id INTEGER NOT NULL,
+      check_type TEXT NOT NULL,
+      status TEXT NOT NULL,        -- PASS|FAIL|WARN|REVIEW|SKIPPED
+      severity TEXT NOT NULL,      -- none|low|medium|high|blocking
+      finding TEXT,
+      evidence TEXT,
+      command TEXT,
+      tool TEXT,
+      tool_version TEXT,
+      started_at TEXT,
+      completed_at TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (qa_run_id) REFERENCES development_qa_run(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_qa_check_run ON development_qa_check(qa_run_id, id);
+
+    -- 每個 Coding Task 的 canonical 當前 QA（只指向 completed run；供 Phase 12 不需以時間猜測）。
+    CREATE TABLE IF NOT EXISTS development_qa_current (
+      coding_task_id INTEGER NOT NULL PRIMARY KEY,
+      qa_run_id INTEGER NOT NULL,
+      head_sha TEXT NOT NULL,
+      input_fingerprint TEXT NOT NULL,
+      final_result TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (qa_run_id) REFERENCES development_qa_run(id) ON DELETE RESTRICT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_state_entity_type ON state_entity(entity_type, state);
     CREATE INDEX IF NOT EXISTS idx_state_transition_entity ON state_transition(entity_type, entity_id, id);
     CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_type, entity_id, id);
