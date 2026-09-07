@@ -616,6 +616,182 @@ export function createSelfListing(db, userId, input = {}, now = new Date(), { ma
   return getSelfListing(db, postId, { viewerId: uid });
 }
 
+/** 匯入結果寫成草稿：不公開、不填聯絡／設施／聲明。工作者不得呼叫 publish。 */
+export function createImportedDraftListing(db, userId, input = {}, now = new Date()) {
+  const uid = Number(userId) || 0;
+  if (!uid) throw httpError("請先登入才能匯入", 401);
+  const title = String(input.title || "").trim().slice(0, SELF_TITLE_MAX);
+  const body = String(input.body || "").trim().slice(0, SELF_BODY_MAX);
+  if (!title && body.length < SELF_BODY_MIN) throw httpError("匯入內容不足以建立草稿", 400);
+  const photos = normalizePhotoList(input.photos || []);
+  const created = iso(now);
+  const postId = nextSelfPostId(db);
+  const sourceKey = `import-draft:${uid}:${postId}`;
+  db.prepare(`
+    INSERT INTO listings (
+      post_id, source_key, search_key, title, url, price, price_num,
+      extra_fee, extra_fee_text, price_contain_text, extra_fees, extra_fees_fetched,
+      address, area_name, layout, floor_name, kind_name, role_name, cover, tags,
+      refresh_time, first_seen_at, last_seen_at, last_event, viewed, watched
+    ) VALUES (?, ?, '', ?, ?, '', 0, 0, '', '', '[]', 1, '', '', '', '', '', '', ?, '[]', '', ?, ?, 'draft', 0, 0)
+  `).run(postId, sourceKey, title || "匯入草稿", `/go/${postId}`, photos[0] || "", created, created);
+  db.prepare(`
+    UPDATE listings SET
+      source = 'self',
+      source_id = ?,
+      listed_by_user_id = ?,
+      self_status = 'draft',
+      self_body = ?,
+      self_photos = ?,
+      self_traits = '[]',
+      self_deposit = '',
+      contact_name = '',
+      contact_role = '',
+      mobile = '',
+      phone = '',
+      line_url = '',
+      contact_fetched = 0
+    WHERE post_id = ?
+  `).run(`import:${uid}:${postId}`, uid, body, JSON.stringify(photos), postId);
+  return getSelfListing(db, postId, { viewerId: uid });
+}
+
+export function updateImportedDraftListing(db, userId, postId, input = {}) {
+  const uid = Number(userId) || 0;
+  const row = getSelfRow(db, postId);
+  if (!row) throw httpError("找不到這則匯入草稿", 404);
+  if (Number(row.listed_by_user_id) !== uid) throw httpError("只能改自己的匯入草稿", 403);
+  if (String(row.self_status || "") !== "draft") throw httpError("只有草稿可以修改匯入內容", 409);
+  const title = input.title != null ? String(input.title || "").trim().slice(0, SELF_TITLE_MAX) : row.title;
+  const body = input.body != null ? String(input.body || "").trim().slice(0, SELF_BODY_MAX) : String(row.self_body || "");
+  const photos = input.photos != null ? normalizePhotoList(input.photos) : listingPhotoUrls(row);
+  db.prepare(
+    "UPDATE listings SET title=?, self_body=?, self_photos=?, cover=? WHERE post_id=?",
+  ).run(title || row.title, body, JSON.stringify(photos), photos[0] || "", row.post_id);
+  return getSelfListing(db, row.post_id, { viewerId: uid });
+}
+
+export function abandonImportedDraftListing(db, userId, postId, now = new Date()) {
+  const uid = Number(userId) || 0;
+  const row = getSelfRow(db, postId);
+  if (!row) return null;
+  if (Number(row.listed_by_user_id) !== uid) throw httpError("只能取消自己的匯入草稿", 403);
+  if (String(row.self_status || "") !== "draft") return getSelfListing(db, row.post_id, { viewerId: uid });
+  db.prepare(
+    "UPDATE listings SET self_status='cancelled', last_event='offline', last_seen_at=? WHERE post_id=?",
+  ).run(iso(now), row.post_id);
+  return getSelfListing(db, row.post_id, { viewerId: uid });
+}
+
+/** 會員確認匯入後，以一般刊登欄位把同一則草稿轉成公開。工作者不得呼叫。 */
+export function publishImportedDraftListing(db, userId, postId, input = {}, now = new Date(), { matchCandidates } = {}) {
+  const uid = Number(userId) || 0;
+  if (!uid) throw httpError("請先登入才能刊登", 401);
+  const row = getSelfRow(db, postId);
+  if (!row) throw httpError("找不到這則匯入草稿", 404);
+  if (Number(row.listed_by_user_id) !== uid) throw httpError("只能刊登自己的匯入草稿", 403);
+  if (String(row.self_status || "") !== "draft") throw httpError("這則不是待刊登的匯入草稿", 409);
+  assertCanPublish(db, uid, now);
+
+  const districts = normalizeWatchDistricts(
+    input.district ? [input.district] : input.districts,
+  ).slice(0, 1);
+  if (!districts.length) throw httpError("請選一個行政區");
+  const district = lookupDistrict(districts[0]);
+  if (!district) throw httpError("請選一個有效行政區");
+  const rent = Math.round(Number(input.rent || input.price_num) || 0);
+  if (!(rent >= 1000 && rent <= 200000)) throw httpError("請填每月租金（1,000～200,000）");
+  const ping = Number(String(input.ping || input.area || "").replace(/坪/g, ""));
+  if (!(ping > 0 && ping <= 500)) throw httpError("請填坪數");
+  if (input.accept_pledge !== true) throw httpError("請勾選屋主／代理人聲明後才能刊登");
+  const address = composeSelfAddress(district, input.street || input.address);
+  const rawBody = String(input.body != null ? input.body : row.self_body || "").trim();
+  if (rawBody.length > SELF_BODY_MAX) throw httpError(`說明最多 ${SELF_BODY_MAX} 字`);
+  if (rawBody.length < SELF_BODY_MIN) throw httpError(`請寫一點物件說明（至少 ${SELF_BODY_MIN} 個字）`);
+  const kind = kindId(input.kind || input.housing_type);
+  const role = roleId(input.role);
+  const layout = layoutText(input);
+  const floorName = floorText(input);
+  if (!floorName) throw httpError("請填所在樓層");
+  let contactName = String(input.contact_name || "").trim().slice(0, SELF_CONTACT_MAX);
+  if (!contactName) {
+    try {
+      contactName = String(db.prepare("SELECT nickname FROM users WHERE id = ?").get(uid)?.nickname || "").trim();
+    } catch {
+      contactName = "";
+    }
+  }
+  const phone = digitsPhone(input.phone || input.mobile);
+  const lineUrl = normalizeLineUrl(input.line_url);
+  if (phone && phone.replace(/\D/g, "").length < 8) throw httpError("電話號碼太短");
+  const traitIds = normalizeSelfTraitsInput(input.traits);
+  const deposit = normalizeDeposit(input.deposit);
+  const photos = normalizePhotoList(input.photos != null ? input.photos : listingPhotoUrls(row));
+  const kindName = kindLabel(kind);
+  const roleName = roleLabel(role);
+  const areaName = `${String(Math.round(ping * 10) / 10).replace(/\.0$/, "")}坪`;
+  const title = String(input.title != null ? input.title : row.title || "").trim().slice(0, SELF_TITLE_MAX)
+    || `${district.city}${district.name} ${kindName} ${rent}元`;
+  const created = iso(now);
+  const expires = new Date(nowMs(now) + SELF_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const sourceKey = selfSourceKey({
+    regionId: district.region,
+    sectionId: district.id,
+    address,
+    floorName,
+    areaName,
+    layout,
+  });
+  db.prepare(`
+    UPDATE listings SET
+      source_key=?, search_key=?, title=?, url=?, price=?, price_num=?,
+      address=?, area_name=?, layout=?, floor_name=?, kind_name=?, role_name=?,
+      cover=?, tags=?,
+      self_status='open', self_expires_at=?, self_body=?, self_photos=?,
+      self_traits=?, self_deposit=?, self_pledge_at=?,
+      contact_name=?, contact_role=?, mobile=?, phone=?, line_url=?, contact_fetched=1,
+      last_event='new', last_seen_at=?
+    WHERE post_id=?
+  `).run(
+    sourceKey,
+    selfSearchKey(district.region, district.id),
+    title,
+    `/go/${postId}`,
+    String(rent),
+    rent,
+    address,
+    areaName,
+    layout,
+    floorName,
+    kindName,
+    roleName,
+    photos[0] || "",
+    JSON.stringify(["吉比本站", ...selfTraitLabels(traitIds), depositLabel(deposit)].filter(Boolean)),
+    expires,
+    rawBody,
+    JSON.stringify(photos.slice(0, SELF_PHOTO_MAX_COUNT)),
+    JSON.stringify(traitIds),
+    deposit,
+    created,
+    contactName || roleName,
+    roleName,
+    phone,
+    phone,
+    lineUrl,
+    created,
+    row.post_id,
+  );
+  const listing = db.prepare("SELECT * FROM listings WHERE post_id = ?").get(row.post_id);
+  const candidates = typeof matchCandidates === "function" ? matchCandidates(listing) : [];
+  const hit = bestMatch(listing, candidates);
+  if (hit?.listing) {
+    db.prepare(
+      `UPDATE listings SET match_post_id=?, match_level=?, match_detail=?, match_rejected=0 WHERE post_id=?`,
+    ).run(hit.listing.post_id, hit.level, hit.detail, row.post_id);
+  }
+  return getSelfListing(db, row.post_id, { viewerId: uid });
+}
+
 export function closeSelfListing(db, userId, postId, { admin = false } = {}, now = new Date()) {
   const row = getSelfRow(db, postId);
   if (!row) throw httpError("找不到這則站內刊登", 404);

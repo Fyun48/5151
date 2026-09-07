@@ -89,8 +89,39 @@ export function assertDemoReadable(ip, now = Date.now()) {
   }
 }
 
+const importHits = new Map();
+export const IMPORT_RATE = {
+  userLimit: 8,
+  ipLimit: 20,
+  windowMs: 15 * 60 * 1000,
+};
+
+export function assertImportAllowed(userId, ip, now = Date.now()) {
+  const keys = [
+    { key: `user:${Number(userId) || 0}`, limit: IMPORT_RATE.userLimit },
+    { key: `ip:${ip || "unknown"}`, limit: IMPORT_RATE.ipLimit },
+  ];
+  for (const { key, limit } of keys) {
+    const row = importHits.get(key) || { n: 0, start: now };
+    if (now - row.start >= IMPORT_RATE.windowMs) {
+      row.n = 0;
+      row.start = now;
+    }
+    row.n += 1;
+    importHits.set(key, row);
+    if (row.n > limit) {
+      const wait = Math.max(1, Math.ceil((IMPORT_RATE.windowMs - (now - row.start)) / 1000));
+      const err = new Error(`匯入次數稍多，請 ${wait} 秒後再試`);
+      err.status = 429;
+      err.code = "RATE_LIMITED";
+      throw err;
+    }
+  }
+}
+
 export function resetAuthRateLimits() {
   fails.clear();
   captchaHits.clear();
   demoHits.clear();
+  importHits.clear();
 }

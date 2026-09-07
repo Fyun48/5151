@@ -89,6 +89,7 @@ import {
 import {
   closeSelfListing as closeSelfListingOn,
   createSelfListing as createSelfListingOn,
+  createImportedDraftListing as createImportedDraftListingOn,
   ensureSelfListingSchema,
   expireOpenSelfListings as expireOpenSelfListingsOn,
   getSelfListing as getSelfListingOn,
@@ -96,6 +97,7 @@ import {
   keepSelfListingForViewer,
   listMineSelfListings as listMineSelfListingsOn,
   listingPhotoUrls,
+  publishImportedDraftListing as publishImportedDraftListingOn,
   reportSelfListing as reportSelfListingOn,
   selfListingMeta,
   selfSourceLabel,
@@ -139,6 +141,19 @@ import {
   recordExactSubmittedConsents as recordExactSubmittedConsentsOn,
   historicalDocumentForConsent as historicalDocumentForConsentOn,
 } from "./memberConsents.js";
+import {
+  cancelListingImport as cancelListingImportOn,
+  confirmListingImport as confirmListingImportOn,
+  ensureListingImportSchema,
+  getOwnedListingImport as getOwnedListingImportOn,
+  importMeta as importMetaOn,
+  listAdminListingImports as listAdminListingImportsOn,
+  listMineListingImports as listMineListingImportsOn,
+  publicImport,
+  publishConfirmedImport as publishConfirmedImportOn,
+  reviewListingImport as reviewListingImportOn,
+  startListingImport as startListingImportOn,
+} from "./listingImport.js";
 import {
   ensurePushSchema,
   savePushSubscription as savePushSubscriptionOn,
@@ -565,6 +580,7 @@ ensureSelfListingSchema(db);
 ensureMemberMediaSchema(db);
 ensureContentDocumentSchema(db);
 ensureMemberConsentSchema(db);
+ensureListingImportSchema(db);
 try {
   seedDefaultDocuments(db, { legalCopy: settingKey("legalCopy") ?? defaultLegalCopy() });
 } catch {
@@ -1324,6 +1340,38 @@ export function createSelfListing(userId, input) {
     matchCandidates: (listing) => listMatchCandidates(listing.post_id),
   });
 }
+
+export function listingImportMeta(opts) {
+  return importMetaOn(db, opts);
+}
+export function listMineListingImports(userId) {
+  return listMineListingImportsOn(db, userId);
+}
+export function getOwnedListingImport(userId, id) {
+  return publicImport(db, getOwnedListingImportOn(db, userId, id));
+}
+export function startListingImportFor(userId, input, opts = {}) {
+  return startListingImportOn(db, userId, input, opts);
+}
+export function reviewListingImportFor(userId, id, input) {
+  return reviewListingImportOn(db, userId, id, input);
+}
+export function cancelListingImportFor(userId, id) {
+  return cancelListingImportOn(db, userId, id);
+}
+export function confirmListingImportFor(userId, id, input) {
+  return confirmListingImportOn(db, userId, id, input);
+}
+export function publishConfirmedImportFor(userId, id, input) {
+  return publishConfirmedImportOn(db, userId, id, input, {
+    matchCandidates: (listing) => listMatchCandidates(listing.post_id),
+  });
+}
+export function listAdminListingImports(opts) {
+  return listAdminListingImportsOn(db, opts);
+}
+export { createImportedDraftListingOn as createImportedDraftListing };
+export { publishImportedDraftListingOn as publishImportedDraftListing };
 
 // 會員照片素材庫（member media library）：綁定本 db 的包裝。
 export function saveMemberMediaFor(userId, buffer, opts = {}) {
