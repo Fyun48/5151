@@ -5287,6 +5287,9 @@
         const card = ev.target.closest(".item");
         if (!card || !list.contains(card)) return;
         if (swipeIgnoreTarget(ev.target)) return;
+        // 已在特別關注裡的物件，不提供左托（關注）右托（不再顯示）快速功能。
+        const startItem = listingById(card.dataset.card);
+        if (startItem?.watched) return;
         drag = {
           card,
           id: card.dataset.card,

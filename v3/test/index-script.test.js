@@ -7,6 +7,14 @@ import { fileURLToPath } from "node:url";
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const pub = (rel) => readFileSync(path.join(dir, "../public", rel), "utf8");
 
+test("watched listings do not get the left/right swipe quick actions", () => {
+  const html = pub("index.html");
+  // pointerdown 內要有「已在特別關注就不啟動滑動」的守門
+  const down = html.slice(html.indexOf('addEventListener("pointerdown"'));
+  assert.match(down.slice(0, 400), /startItem\s*=\s*listingById\(card\.dataset\.card\)/);
+  assert.match(down.slice(0, 400), /startItem\?\.watched\)\s*return/);
+});
+
 test("index.html inline script parses", () => {
   const html = pub("index.html");
   const blocks = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)].map((m) => ({
