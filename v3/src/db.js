@@ -105,6 +105,14 @@ import {
   isSelfListingId,
 } from "./selfListings.js";
 import {
+  ensureMemberMediaSchema,
+  saveMemberMedia as saveMemberMediaOn,
+  listMemberMedia as listMemberMediaOn,
+  deleteMemberMedia as deleteMemberMediaOn,
+  ownsMediaUrl as ownsMediaUrlOn,
+  isMemberMediaUrl,
+} from "./memberMedia.js";
+import {
   ensurePushSchema,
   savePushSubscription as savePushSubscriptionOn,
   deletePushSubscription as deletePushSubscriptionOn,
@@ -527,6 +535,7 @@ ensureDemandSchema(db);
 ensureFeedbackSchema(db);
 ensureFeedbackOutboxSchema(db);
 ensureSelfListingSchema(db);
+ensureMemberMediaSchema(db);
 ensurePushSchema(db);
 
 try {
@@ -1253,6 +1262,30 @@ export function createSelfListing(userId, input) {
   return createSelfListingOn(db, userId, input, new Date(), {
     matchCandidates: (listing) => listMatchCandidates(listing.post_id),
   });
+}
+
+// 會員照片素材庫（member media library）：綁定本 db 的包裝。
+export function saveMemberMediaFor(userId, buffer, opts = {}) {
+  return saveMemberMediaOn(db, userId, buffer, opts);
+}
+export function listMemberMediaFor(userId, opts = {}) {
+  return listMemberMediaOn(db, userId, opts);
+}
+export function deleteMemberMediaFor(userId, id, opts = {}) {
+  return deleteMemberMediaOn(db, userId, id, opts);
+}
+export function ownsMemberMediaUrl(userId, url) {
+  return ownsMediaUrlOn(db, userId, url);
+}
+export function assertOwnsMemberMediaUrls(userId, urls) {
+  for (const u of Array.isArray(urls) ? urls : []) {
+    if (isMemberMediaUrl(u) && !ownsMediaUrlOn(db, userId, u)) {
+      const e = new Error("只能使用自己素材庫的照片");
+      e.status = 403;
+      throw e;
+    }
+  }
+  return true;
 }
 
 export function closeSelfListing(userId, postId, opts = {}) {

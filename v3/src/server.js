@@ -108,6 +108,10 @@ import {
   listMineSelfListings,
   getSelfListing,
   createSelfListing,
+  saveMemberMediaFor,
+  listMemberMediaFor,
+  deleteMemberMediaFor,
+  assertOwnsMemberMediaUrls,
   closeSelfListing,
   hideSelfListing,
   reportSelfListing,
@@ -120,6 +124,7 @@ import {
 import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requireAuth, sessionCookie, verifyLogin } from "./auth.js";
 import { boxFromRoadDescription, geocodeAddress, needsListingGeo, hasWorkPoint } from "./geo.js";
 import { listingRedirectTarget } from "./openLink.js";
+import { publicListingView } from "./selfListings.js";
 import { authorizedListingSources } from "./floors.js";
 import {
   mimeForSelfPhoto,
@@ -127,6 +132,8 @@ import {
   SELF_PHOTO_UPLOAD_MAX_BYTES,
   selfPhotoFilePath,
 } from "./selfPhotos.js";
+import { IMAGE_MAX_UPLOAD_BYTES } from "./imageProcess.js";
+import { memberMediaFilePath } from "./memberMedia.js";
 import { CITIES } from "./regions.js";
 import { mailConfigured, sendMail } from "./mail.js";
 import { queueAccountMail } from "./systemMail.js";
@@ -259,14 +266,14 @@ function setSession(req, res, email) {
   res.setHeader("Set-Cookie", cookie);
 }
 
-/** 點通知／Discord 連結：已登入才標記已瀏覽，再導向原站。站內刊登留在本站。訪客只轉址、不寫入。 */
+/** 點通知／Discord 連結：已登入才標記已瀏覽，再導向原站。站內刊登：會員開站內詳情、訪客開公開分享頁。訪客只轉址、不寫入。 */
 app.get("/go/:id", (req, res) => {
   const id = Number(req.params.id);
   let listing = null;
+  const session = readSession(req);
   if (Number.isFinite(id) && id > 0) {
     try {
       listing = getListing(id);
-      const session = readSession(req);
       if (session?.userId && getListing(id, session.userId)) {
         setFlags(id, { viewed: true }, session.userId);
       }
@@ -274,7 +281,7 @@ app.get("/go/:id", (req, res) => {
       console.warn("標記已瀏覽失敗：", error.message);
     }
   }
-  res.redirect(302, listingRedirectTarget(listing, id));
+  res.redirect(302, listingRedirectTarget(listing, id, { loggedIn: Boolean(session?.userId) }));
 });
 
 app.use("/vendor", express.static(path.join(__dirname, "../public/vendor"), { maxAge: "7d" }));
@@ -800,7 +807,7 @@ app.get("/media/brand/:file", (req, res) => {
   }
   res.setHeader("Content-Type", mimeForBrandFile(req.params.file));
   res.setHeader("Cache-Control", "public, max-age=604800");
-  res.sendFile(full);
+  res.sendFile(path.resolve(full));
 });
 
 app.get("/api/admin/broadcasts", requireAdminApi, (_req, res) => {
@@ -1053,7 +1060,10 @@ app.post("/api/self-listings", (req, res) => {
       res.status(401).json({ error: "請先登入才能刊登" });
       return;
     }
-    res.json(createSelfListing(session.userId, req.body || {}));
+    // 安全：素材庫照片必須屬於本人（擋以猜測 URL 盜連他人 media）。
+    const body = req.body || {};
+    assertOwnsMemberMediaUrls(session.userId, [...(Array.isArray(body.photos) ? body.photos : []), body.cover].filter(Boolean));
+    res.json(createSelfListing(session.userId, body));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -1081,7 +1091,57 @@ app.get("/media/self/:file", (req, res) => {
   }
   res.setHeader("Content-Type", mimeForSelfPhoto(req.params.file));
   res.setHeader("Cache-Control", "public, max-age=604800");
-  res.sendFile(full);
+  res.sendFile(path.resolve(full));
+});
+
+// ── 會員照片素材庫（member media library） ──
+app.get("/api/media", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(listMemberMediaFor(session.userId, { plan: session.plan || "free" }));
+  } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
+});
+
+app.post("/api/media", express.raw({ type: () => true, limit: IMAGE_MAX_UPLOAD_BYTES }), async (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入才能上傳照片" }); return; }
+    const buf = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    const item = await saveMemberMediaFor(session.userId, buf, { plan: session.plan || "free", originalName: String(req.query.name || "") });
+    res.json(item);
+  } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
+});
+
+app.delete("/api/media/:id", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(deleteMemberMediaFor(session.userId, req.params.id));
+  } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
+});
+
+// 素材庫檔案（本站上傳、已正規化、內容定址）。公開可讀（供公開分享頁顯示照片）。
+app.get("/media/lib/:file", (req, res) => {
+  const full = memberMediaFilePath(req.params.file);
+  if (!full) { res.status(404).end(); return; }
+  res.setHeader("Content-Type", "image/jpeg");
+  res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+  res.sendFile(path.resolve(full));
+});
+
+// ── 公開分享：站內會員刊登（未登入可看主要內容；只輸出白名單公開欄位） ──
+app.get("/api/public/self-listing/:id", (req, res) => {
+  try {
+    const listing = getSelfListing(req.params.id, { viewerId: 0 });
+    res.setHeader("Cache-Control", "public, max-age=60");
+    res.json(publicListingView(listing, req.params.id));
+  } catch (error) {
+    res.status(error.status === 404 ? 404 : 400).json({ error: error.message });
+  }
+});
+app.get("/l/:id", (_req, res) => {
+  res.sendFile(path.join(__dirname, "../public/listing.html"));
 });
 
 app.post("/api/self-listings/:id/close", (req, res) => {

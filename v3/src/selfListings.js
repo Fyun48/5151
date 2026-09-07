@@ -2,6 +2,7 @@ import { lookupDistrict, normalizeWatchDistricts } from "./regions.js";
 import { coverToListUrl } from "./covering.js";
 import { bestMatch } from "./match.js";
 import { isSelfPhotoPublicUrl, SELF_PHOTO_MAX_BYTES, SELF_PHOTO_MAX_COUNT } from "./selfPhotos.js";
+import { isMemberMediaUrl } from "./memberMedia.js";
 import {
   SELF_BODY_TEMPLATES,
   SELF_DEPOSIT_OPTIONS,
@@ -271,6 +272,7 @@ function normalizePhotoUrl(value) {
   const raw = String(value || "").trim().slice(0, SELF_PHOTO_URL_MAX);
   if (!raw) return "";
   if (isSelfPhotoPublicUrl(raw)) return raw;
+  if (isMemberMediaUrl(raw)) return raw; // 會員素材庫照片（/media/lib/...）；所有權由路由層驗證
   let url;
   try {
     url = new URL(raw);
@@ -399,6 +401,34 @@ export function decorateSelfListing(row, { viewerId = 0 } = {}) {
     match_detail: row.match_detail || "",
     match_post_id: Number(row.match_post_id) || 0,
     mine: Number(row.listed_by_user_id) === Number(viewerId),
+  };
+}
+
+/** 公開分享頁／API 白名單：不含帳號、所有權、媒合與刊登狀態等私有欄位。 */
+export function publicListingView(listing, id) {
+  return {
+    id: Number(listing?.post_id || listing?.id || id) || 0,
+    title: listing?.title || "",
+    price: listing?.price || "",
+    price_num: Number(listing?.price_num) || 0,
+    address: listing?.address || "",
+    area_name: listing?.area_name || "",
+    layout: listing?.layout || "",
+    floor_name: listing?.floor_name || "",
+    kind_name: listing?.kind_name || "",
+    role_name: listing?.role_name || "",
+    cover: listing?.cover || "",
+    photos: Array.isArray(listing?.photos) ? listing.photos : [],
+    body: listing?.body || "",
+    traits: Array.isArray(listing?.traits) ? listing.traits : [],
+    trait_labels: Array.isArray(listing?.trait_labels) ? listing.trait_labels : [],
+    deposit: listing?.deposit || "",
+    contact_name: listing?.contact_name || "",
+    contact_role: listing?.contact_role || "",
+    mobile: listing?.mobile || "",
+    phone: listing?.phone || "",
+    line_url: listing?.line_url || "",
+    created_at: listing?.created_at || null,
   };
 }
 

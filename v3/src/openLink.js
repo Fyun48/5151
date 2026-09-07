@@ -1,9 +1,17 @@
 import { isSelfListingId } from "./selfListings.js";
 
-export function listingRedirectTarget(listing, postId) {
+/** 站內刊登的公開分享路徑（未登入可看）。 */
+export function publicSharePath(postId) {
+  const id = Number(postId) || 0;
+  return `/l/${id}`;
+}
+
+export function listingRedirectTarget(listing, postId, { loggedIn = false } = {}) {
   const id = Number(postId) || Number(listing?.post_id) || 0;
   const source = String(listing?.source || "591");
-  if (source === "self" || isSelfListingId(id)) return `/?self=${id}`;
+  if (source === "self" || isSelfListingId(id)) {
+    return loggedIn ? `/?self=${id}` : publicSharePath(id);
+  }
   const url = String(listing?.url || "").trim();
   if (url && source !== "591" && /^https?:\/\//i.test(url)) return url;
   return rent591Url(id);
