@@ -64,7 +64,9 @@ export async function runEvaluationOnce(db, { provider, config = {}, aggConfig =
   const issues = db.prepare("SELECT id FROM issue_candidate WHERE status='open' ORDER BY id ASC LIMIT ?").all(batchSize);
   for (const it of issues) {
     if (hasInflightRun(db, it.id)) continue;
-    const reasons = evaluationStaleReasons(db, it.id, { now: now(), roles: roleList });
+    // 用「worker 即將實際執行的政策」判斷新鮮度（provider/aggConfig/roles/deliberation），
+    // 確保政策改變會觸發重評、且相同政策維持冪等。
+    const reasons = evaluationStaleReasons(db, it.id, { now: now(), roles: roleList, provider, aggConfig, deliberationEnabled });
     if (!reasons.length) continue; // fresh → 冪等略過
     const impactBlocked = reasons.some((r) => r === "impact_stale" || r === "impact_unavailable" || r.startsWith("impact:") || r === "issue_inactive");
     if (impactBlocked) continue; // 依賴 Phase 6 新鮮度：impact 未 fresh 就不評估

@@ -8,6 +8,7 @@ import { getCurrentFeedbackAnalysis } from "./feedbackAnalysis.js";
 import { buildRoleEvaluationPrompt, evaluationRolesConfig, ROLE_SET_VERSION, ROLE_PROMPT_VERSION } from "./evaluationRoles.js";
 import { parseAndValidateRole } from "./evaluationSchema.js";
 import { aggregateVotes, aggregationConfig, EVALUATION_VERSION, AGGREGATION_VERSION } from "./evaluationAggregation.js";
+import { buildEvaluationPolicy, evaluationPolicyFingerprint, effectiveEvaluationPolicyFingerprint } from "./evaluationPolicy.js";
 
 export const EVAL_MAX_RETRIES = 5;
 export const EVAL_SCHEMA_MAX_RETRIES = 2; // 明顯 schema/設定錯誤不無限重試
@@ -257,9 +258,12 @@ export async function executeEvaluationRun(db, run, { provider, aggConfig = aggr
     });
     const agg = aggregateVotes(finalVotes, { requiredRoles: roleList, config: aggConfig });
 
+    // 綁定「本次實際使用的政策/設定」provenance（result-affecting；不含 secrets）。
+    const policy = buildEvaluationPolicy({ aggConfig, roles: roleList, deliberationEnabled: deliberation, provider, rolePromptVersion: process.env.ROLE_PROMPT_VERSION || ROLE_PROMPT_VERSION });
+
     // ── 完成 + promote CURRENT（單一交易）──
     return withImmediateTx(db, () => {
-      completeRun(db, run, { input, agg, provider, now: nowDate });
+      completeRun(db, run, { input, agg, provider, policy, now: nowDate });
       return "completed";
     });
   } catch (err) {
@@ -275,23 +279,24 @@ export async function executeEvaluationRun(db, run, { provider, aggConfig = aggr
 }
 
 // 完成 run 並 promote CURRENT（呼叫端需在交易內）。失敗新 run 不會取代既有 valid current（未走到這裡）。
-function completeRun(db, run, { input, agg, provider, now = new Date() }) {
+function completeRun(db, run, { input, agg, provider, policy, now = new Date() }) {
   const ts = iso(now);
+  const policyFp = evaluationPolicyFingerprint(policy);
   db.prepare(
     `UPDATE issue_evaluation_run SET status='completed', final_recommendation=?, aggregate_confidence=?, agreement=?,
-       aggregation_details=?, input_fingerprint=?, source_impact_assessment_id=?, provider=?, model=?, error_code=NULL,
+       aggregation_details=?, input_fingerprint=?, policy_fingerprint=?, policy_snapshot=?, source_impact_assessment_id=?, provider=?, model=?, error_code=NULL,
        started_at=COALESCE(started_at, ?), completed_at=? WHERE id=?`,
   ).run(
     agg.final_recommendation, agg.aggregate_confidence, agg.agreement, JSON.stringify(agg.details),
-    input.fingerprint, input.sourceImpactAssessmentId, provider.name, provider.model || null, ts, ts, run.id,
+    input.fingerprint, policyFp, JSON.stringify(policy), input.sourceImpactAssessmentId, provider.name, provider.model || null, ts, ts, run.id,
   );
   const prev = db.prepare("SELECT evaluation_run_id FROM issue_evaluation_current WHERE issue_id=?").get(Number(run.issue_id));
   db.prepare(
-    `INSERT INTO issue_evaluation_current(issue_id, evaluation_run_id, input_fingerprint, final_recommendation, updated_at)
-     VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(issue_id) DO UPDATE SET evaluation_run_id=excluded.evaluation_run_id, input_fingerprint=excluded.input_fingerprint, final_recommendation=excluded.final_recommendation, updated_at=excluded.updated_at`,
-  ).run(Number(run.issue_id), Number(run.id), input.fingerprint, agg.final_recommendation, ts);
-  appendAuditRow(db, { actor: "system", action: "issue.evaluation.completed", entityType: "issue_evaluation_run", entityId: String(run.id), data: { issue_id: Number(run.issue_id), status: "completed", final_recommendation: agg.final_recommendation, aggregation_version: AGGREGATION_VERSION, evaluation_version: EVALUATION_VERSION, input_fingerprint: input.fingerprint } });
+    `INSERT INTO issue_evaluation_current(issue_id, evaluation_run_id, input_fingerprint, policy_fingerprint, final_recommendation, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(issue_id) DO UPDATE SET evaluation_run_id=excluded.evaluation_run_id, input_fingerprint=excluded.input_fingerprint, policy_fingerprint=excluded.policy_fingerprint, final_recommendation=excluded.final_recommendation, updated_at=excluded.updated_at`,
+  ).run(Number(run.issue_id), Number(run.id), input.fingerprint, policyFp, agg.final_recommendation, ts);
+  appendAuditRow(db, { actor: "system", action: "issue.evaluation.completed", entityType: "issue_evaluation_run", entityId: String(run.id), data: { issue_id: Number(run.issue_id), status: "completed", final_recommendation: agg.final_recommendation, aggregation_version: AGGREGATION_VERSION, evaluation_version: EVALUATION_VERSION, input_fingerprint: input.fingerprint, policy_fingerprint: policyFp } });
   appendAuditRow(db, { actor: "system", action: "issue.evaluation.current_changed", entityType: "issue_evaluation_current", entityId: String(run.issue_id), data: { issue_id: Number(run.issue_id), from_run_id: prev ? Number(prev.evaluation_run_id) : null, to_run_id: Number(run.id), final_recommendation: agg.final_recommendation } });
 }
 
@@ -300,27 +305,32 @@ export function currentEvaluationRunId(db, issueId) {
   return r ? Number(r.evaluation_run_id) : null;
 }
 
-// 新鮮度：無 current、impact 不可用/stale（Phase 6 傳播）、或 input fingerprint 改變、或 issue 非 active。
-export function evaluationStaleReasons(db, issueId, { now = new Date(), roles } = {}) {
-  const cur = db.prepare("SELECT evaluation_run_id, input_fingerprint FROM issue_evaluation_current WHERE issue_id=?").get(Number(issueId));
+// 新鮮度：無 current、政策/設定改變（provenance）、issue 非 active、impact 不可用/stale（Phase 6 傳播）、或 input fingerprint 改變。
+// 政策指紋比對「與 impact/成員無關」：即使成員/impact 都沒變且 impact 仍 fresh，政策/模型/prompt 變了也必須 stale。
+// env / provider / aggConfig / roles / deliberationEnabled 可覆寫，讓 worker 用「它即將實際執行的政策」判斷、tests 可精準模擬設定變更。
+export function evaluationStaleReasons(db, issueId, { now = new Date(), roles, provider, aggConfig, deliberationEnabled, env = process.env } = {}) {
+  const cur = db.prepare("SELECT evaluation_run_id, input_fingerprint, policy_fingerprint FROM issue_evaluation_current WHERE issue_id=?").get(Number(issueId));
   if (!cur) return ["no_current_evaluation"];
   const issue = db.prepare("SELECT * FROM issue_candidate WHERE id=?").get(Number(issueId));
   if (!issue) return ["issue_not_found"];
   const reasons = [];
+  // 政策/設定 provenance（獨立於 impact/成員；即使 impact fresh 也要偵測）。
+  const effPolicyFp = effectiveEvaluationPolicyFingerprint(env, { provider, aggConfig, roles, deliberationEnabled });
+  if (cur.policy_fingerprint !== effPolicyFp) reasons.push("evaluation_policy_changed");
   if (issue.status !== "open") reasons.push("issue_inactive");
   const impact = getCurrentIssueImpact(db, issueId, { now });
   if (!impact) { reasons.push("impact_unavailable"); return reasons; }
   if (impact.stale) {
     reasons.push("impact_stale");
     for (const r of impact.stale_reasons || []) reasons.push(`impact:${r}`);
-    return reasons; // impact 未 fresh 時，不宜用 stale 證據重算 fingerprint 當作 fresh
+    return reasons; // impact 未 fresh 時，不宜用 stale 證據重算 input fingerprint 當作 fresh（政策原因已在上面加入）
   }
   const fp = evaluationInputFingerprint({
     issueId: Number(issue.id), issueStatus: issue.status, issueCategory: issue.category, issueUpdatedAt: issue.updated_at,
     membershipFingerprint: impact.membership_fingerprint, impactAssessmentId: impact.id,
     impactMembershipFingerprint: impact.membership_fingerprint, impactAnalysisFingerprint: impact.analysis_fingerprint,
     impactScoringVersion: impact.scoring_version, impactAsOfAt: impact.as_of_at,
-    roles: roles || evaluationRolesConfig().roles,
+    roles: roles || evaluationRolesConfig(env).roles,
   });
   if (fp !== cur.input_fingerprint) reasons.push("input_changed");
   return reasons;
@@ -331,12 +341,12 @@ export function isEvaluationStale(db, issueId, opts = {}) {
 }
 
 // Phase 8 唯一入口：回傳 current 評估並「明示新鮮度」，避免把 stale 當 fresh。
-export function getCurrentIssueEvaluation(db, issueId, { now = new Date(), roles } = {}) {
+export function getCurrentIssueEvaluation(db, issueId, opts = {}) {
   const id = currentEvaluationRunId(db, issueId);
   if (!id) return null;
   const row = db.prepare("SELECT * FROM issue_evaluation_run WHERE id=?").get(Number(id));
   if (!row || Number(row.issue_id) !== Number(issueId) || row.status !== "completed") return null;
-  const reasons = evaluationStaleReasons(db, issueId, { now, roles });
+  const reasons = evaluationStaleReasons(db, issueId, opts);
   return { ...publicRun(row), stale: reasons.length > 0, fresh: reasons.length === 0, stale_reasons: reasons };
 }
 
@@ -355,6 +365,8 @@ export function publicRun(row) {
     source_impact_assessment_id: row.source_impact_assessment_id == null ? null : Number(row.source_impact_assessment_id),
     status: row.status,
     final_recommendation: row.final_recommendation,
+    policy_fingerprint: row.policy_fingerprint,
+    policy_snapshot: parseJson(row.policy_snapshot),
     aggregate_confidence: row.aggregate_confidence == null ? null : Number(row.aggregate_confidence),
     agreement: row.agreement == null ? null : Number(row.agreement),
     aggregation_details: parseJson(row.aggregation_details),

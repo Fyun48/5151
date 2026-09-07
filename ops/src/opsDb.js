@@ -312,6 +312,8 @@ export function applyOpsSchema(db) {
       aggregation_version TEXT NOT NULL,
       role_set_version TEXT NOT NULL,
       input_fingerprint TEXT NOT NULL,
+      policy_fingerprint TEXT,                       -- 決策政策/評估設定指紋（result-affecting config；不含 secrets）
+      policy_snapshot TEXT,                          -- 去識別化政策快照（可解釋歷史 run 是用哪些規則產生）
       source_impact_assessment_id INTEGER,
       status TEXT NOT NULL DEFAULT 'pending',       -- pending|processing|completed|failed|failed_retry
       final_recommendation TEXT,                    -- PROPOSE|WAIT|IGNORE|ESCALATE（僅 completed）
@@ -367,6 +369,7 @@ export function applyOpsSchema(db) {
       issue_id INTEGER NOT NULL PRIMARY KEY,
       evaluation_run_id INTEGER NOT NULL,
       input_fingerprint TEXT NOT NULL,
+      policy_fingerprint TEXT NOT NULL,
       final_recommendation TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY (evaluation_run_id) REFERENCES issue_evaluation_run(id) ON DELETE RESTRICT

@@ -174,7 +174,7 @@ test("1. consumes fresh canonical Phase-6 impact; run binds to current assessmen
   const impactId = db.prepare("SELECT assessment_id FROM issue_impact_current WHERE issue_id=?").get(iid).assessment_id;
   const s = await once(db);
   assert.equal(s.completed, 1);
-  const cur = getCurrentIssueEvaluation(db, iid, { now: NOW });
+  const cur = getCurrentIssueEvaluation(db, iid, { now: NOW, provider: stub() });
   assert.equal(cur.status, "completed");
   assert.equal(cur.source_impact_assessment_id, Number(impactId));
   assert.equal(cur.fresh, true);
@@ -207,8 +207,8 @@ test("6. impact age/staleness propagates to Phase 7 freshness", async () => {
   const db = openOpsDb(":memory:");
   const iid = seedIssueWithImpact(db, { members: 8 });
   await once(db);
-  assert.equal(isEvaluationStale(db, iid, { now: NOW }), false);
-  const reasons = evaluationStaleReasons(db, iid, { now: hoursLater(7) }); // > IMPACT_MAX_AGE_MS (6h)
+  assert.equal(isEvaluationStale(db, iid, { now: NOW, provider: stub() }), false);
+  const reasons = evaluationStaleReasons(db, iid, { now: hoursLater(7), provider: stub() }); // > IMPACT_MAX_AGE_MS (6h)
   assert.ok(reasons.includes("impact_stale"));
   assert.ok(reasons.some((r) => r === "impact:age_exceeded"));
   db.close();
@@ -230,10 +230,10 @@ test("24. canonical input change makes prior evaluation stale", async () => {
   const db = openOpsDb(":memory:");
   const iid = seedIssueWithImpact(db, { members: 8 });
   await once(db);
-  assert.equal(isEvaluationStale(db, iid, { now: NOW }), false);
+  assert.equal(isEvaluationStale(db, iid, { now: NOW, provider: stub() }), false);
   link(db, iid, seedFeedback(db, { userRef: "new-reporter" })); // membership change
   calculateAndStoreImpact(db, iid, { now: NOW }); // refresh impact → new assessment id + membership fp
-  const reasons = evaluationStaleReasons(db, iid, { now: NOW });
+  const reasons = evaluationStaleReasons(db, iid, { now: NOW, provider: stub() });
   assert.ok(reasons.includes("input_changed"), JSON.stringify(reasons));
   db.close();
 });
