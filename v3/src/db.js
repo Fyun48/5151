@@ -17,7 +17,7 @@ import {
   pacificYmd,
 } from "./mapsBilling.js";
 import { sameSearch } from "./client591.js";
-import { CITIES, districtNameFromListing, normalizeWatchDistricts } from "./regions.js";
+import { CITIES, districtNameFromListing, districtsFromSearchUrls, lookupDistrict, normalizeWatchDistricts } from "./regions.js";
 import { preferPrimaryListing } from "./match.js";
 import { listingCompareCost, passesPriceFilter } from "./listingCost.js";
 import {
@@ -2015,6 +2015,21 @@ export function markCoveringCompleted({
   }
 }
 
+// 此使用者「自己設定」的行政區名稱集合（watchDistricts 的核取方塊 ∪ 貼上的 591 搜尋網址所含區）。
+// 用於把預設列表（未點特定行政區時）限縮在使用者自己的區域，避免看到共用池裡別人/系統抓的其它縣市。
+export function memberRegionDistrictNames(settings = {}) {
+  const keys = new Set([
+    ...normalizeWatchDistricts(settings.watchDistricts),
+    ...districtsFromSearchUrls(settings.searchUrls),
+  ]);
+  const names = [];
+  for (const key of keys) {
+    const name = lookupDistrict(key)?.name;
+    if (name && !names.includes(name)) names.push(name);
+  }
+  return names;
+}
+
 export function currentSearchKeys() {
   const urls = [];
   for (const id of listUserIds()) {
@@ -3077,11 +3092,13 @@ export function listListings({
 
   // 整層／1F、行政區要在 limit 前套用，否則「全庫最便宜 500 筆」再前端篩選會漏掉新北等區
   rows = rows.filter((row) => passesDisplayFilters(row, settings, { skipWholeFloor: Boolean(kind) }));
-  const districtSet = new Set(
-    (Array.isArray(districts) ? districts : String(districts || "").split(","))
-      .map((name) => String(name || "").trim())
-      .filter(Boolean),
-  );
+  const requestedDistricts = (Array.isArray(districts) ? districts : String(districts || "").split(","))
+    .map((name) => String(name || "").trim())
+    .filter(Boolean);
+  // 「全部」（未指定行政區）＝只顯示此使用者自己設定的行政區（watchDistricts ∪ searchUrls），
+  // 而不是整個共用資料庫（listings 是跨使用者共用池；否則會看到別人／系統抓的其它縣市，如台中西屯）。
+  const districtNames = requestedDistricts.length ? requestedDistricts : memberRegionDistrictNames(settings);
+  const districtSet = new Set(districtNames);
   if (districtSet.size) {
     rows = rows.filter((row) => districtSet.has(row.district || districtNameFromListing(row)));
   }
