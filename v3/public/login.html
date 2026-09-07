@@ -255,7 +255,7 @@
       overflow-y: auto;
       white-space: pre-wrap;
       line-height: 1.7;
-      font-size: 14px;
+      font-size: 16px;
       color: var(--ink);
       -webkit-overflow-scrolling: touch;
     }
@@ -325,11 +325,11 @@
       </label>
       <label class="check">
         <input id="accept" type="checkbox" required />
-        <span id="acceptDisclaimerLabel">我已閱讀並同意<a href="/disclaimer.html" data-legal="disclaimer" target="_blank" rel="noopener">免責聲明</a>：這是免費系統，贊助是自願的。</span>
+        <span id="acceptDisclaimerLabel">我已閱讀並同意<a href="/terms.html?type=registration_terms" data-legal="disclaimer" target="_blank" rel="noopener">免責聲明</a>：這是免費系統，贊助是自願的。</span>
       </label>
       <label class="check">
         <input id="acceptPrivacy" type="checkbox" required />
-        <span id="acceptPrivacyLabel">我已閱讀並同意個資說明：個人資料只用於本站服務，預設不公開。</span>
+        <span id="acceptPrivacyLabel">我已閱讀並同意<a href="/terms.html?type=privacy_notice" data-legal="privacy_notice" target="_blank" rel="noopener">個資說明</a>：個人資料只用於本站服務，預設不公開。</span>
       </label>
       <p class="oauth-kicker" id="registerPolicy" hidden><a href="/disclaimer.html" data-legal="idle" target="_blank" rel="noopener">帳號閒置與停用說明</a></p>
       <div class="bot">
@@ -385,24 +385,54 @@
     const oauthState = new URLSearchParams(location.search).get("oauth");
     let captchaId = "";
     let legalCopyCache = null;
+    let requiredDocs = [];
     let legalActiveTrigger = null;
     const IDLE_POLICY_TEXT = "超過約兩個月沒有登入，系統會暫停主動向外抓取與通知，以節省資源；你再登入後會自動恢復，不會另外寄信。若長達一年完全沒使用，未來可能停權或刪除帳號（目前仍在評估，尚未執行）。";
     function openLegal(kind) {
       const overlay = $("legalOverlay");
       if (!overlay) return;
-      const isIdle = kind === "idle";
-      $("legalTitle").textContent = isIdle ? "帳號閒置與停用說明" : "免責聲明";
-      const body = isIdle ? IDLE_POLICY_TEXT : (legalCopyCache?.disclaimer || legalCopyCache?.text || "");
-      $("legalBody").textContent = body || "載入中…";
+      const type = kind === "disclaimer" ? "registration_terms" : kind;
+      const isIdle = type === "idle";
+      const titles = { idle: "帳號閒置與停用說明", registration_terms: "免責聲明", privacy_notice: "個資說明" };
+      $("legalTitle").textContent = titles[type] || "條款";
+      $("legalBody").textContent = isIdle ? IDLE_POLICY_TEXT : "載入中…";
       legalActiveTrigger = document.activeElement;
       overlay.hidden = false;
       $("legalClose")?.focus();
-      if (!body && !isIdle) {
-        fetch("/api/disclaimer", { cache: "no-store" }).then((r) => r.json()).then((copy) => {
-          legalCopyCache = copy;
-          if (!$("legalOverlay").hidden) $("legalBody").textContent = copy?.disclaimer || copy?.text || "無法載入，請稍後再試。";
-        }).catch(() => { $("legalBody").textContent = "無法載入，請稍後再試。"; });
+      if (isIdle) return;
+      fetch("/api/public/documents/" + encodeURIComponent(type), { cache: "no-store" })
+        .then((r) => r.json())
+        .then((doc) => {
+          if (!$("legalOverlay").hidden) $("legalBody").textContent = doc?.body || legalCopyCache?.disclaimer || "無法載入，請稍後再試。";
+        })
+        .catch(() => { $("legalBody").textContent = "無法載入，請稍後再試。"; });
+    }
+    function currentConsents() {
+      return requiredDocs.map((doc) => ({
+        document_type: doc.document_type,
+        document_id: doc.id,
+        version: doc.version,
+        content_hash: doc.content_hash,
+      }));
+    }
+    function paintRequiredDocs(docs) {
+      requiredDocs = Array.isArray(docs) ? docs : [];
+      const terms = requiredDocs.find((d) => d.document_type === "registration_terms");
+      const privacy = requiredDocs.find((d) => d.document_type === "privacy_notice");
+      if (terms && $("acceptDisclaimerLabel")) {
+        $("acceptDisclaimerLabel").innerHTML = `${escLegal(terms.check_label || "我已閱讀並同意免責聲明")}（<a href="/terms.html?type=registration_terms" data-legal="disclaimer" target="_blank" rel="noopener">閱讀 v${terms.version}</a>）`;
       }
+      if (privacy && $("acceptPrivacyLabel")) {
+        $("acceptPrivacyLabel").innerHTML = `${escLegal(privacy.check_label || "我已閱讀並同意個資說明")}（<a href="/terms.html?type=privacy_notice" data-legal="privacy_notice" target="_blank" rel="noopener">閱讀 v${privacy.version}</a>）`;
+      }
+    }
+    async function refreshRequiredDocs() {
+      const res = await fetch("/api/public/documents", { cache: "no-store" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "目前無法取得有效的註冊條款，請稍後再試");
+      paintRequiredDocs(data?.required || []);
+      if (requiredDocs.length < 2) throw new Error("目前無法取得有效的註冊條款，請稍後再試");
+      return requiredDocs;
     }
     function closeLegal() {
       const overlay = $("legalOverlay");
@@ -560,12 +590,9 @@
     loadCaptcha().catch((error) => { $("err").textContent = error.message; });
     fetch("/api/disclaimer", { cache: "no-store" }).then((r) => r.json()).then((copy) => {
       legalCopyCache = copy;
-      if (copy?.disclaimerCheck && $("acceptDisclaimerLabel")) {
-        $("acceptDisclaimerLabel").innerHTML = `${escLegal(copy.disclaimerCheck)}（<a href="/disclaimer.html" data-legal="disclaimer" target="_blank" rel="noopener">完整免責聲明</a>）`;
-      }
-      if (copy?.privacyCheck && $("acceptPrivacyLabel")) {
-        $("acceptPrivacyLabel").textContent = copy.privacyCheck;
-      }
+    }).catch(() => {});
+    fetch("/api/public/documents", { cache: "no-store" }).then((r) => r.json()).then((data) => {
+      paintRequiredDocs(data?.required || []);
     }).catch(() => {});
     fetch("/api/ads", { cache: "no-store" }).then((r) => r.json()).then((ads) => {
       const el = $("adLogin");
@@ -617,6 +644,7 @@
         }
         if (!$("accept").checked) throw new Error("請先閱讀並同意免責聲明");
         if (!$("acceptPrivacy").checked) throw new Error("請先閱讀並同意個資說明");
+        await refreshRequiredDocs();
         const res = await fetch("/api/register", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -626,6 +654,7 @@
             password: $("regPassword").value,
             acceptDisclaimer: $("accept").checked,
             acceptPrivacy: $("acceptPrivacy").checked,
+            consents: currentConsents(),
           }, "regCaptcha", "regWebsite")),
         });
         const data = await res.json();

@@ -40,6 +40,9 @@ test("admin settings are grouped into clickable categories", () => {
   assert.match(site, /吉比形象／Logo/);
   assert.match(site, /宣告／免責／個資/);
   assert.match(site, /id="legalCopyForm"/);
+  assert.match(site, /id="contentCms"/);
+  assert.match(site, /內容版本庫/);
+  assert.match(site, /id="cmsReaccept"/);
   assert.doesNotMatch(site, /id="helpQaRows"/);
   assert.doesNotMatch(site, /id="broadcastsForm"/);
 

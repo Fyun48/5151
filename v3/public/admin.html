@@ -212,6 +212,17 @@
       .admin-nav a { flex: 0 0 auto; }
       .admin-nav span { display: none; }
     }
+    .cms-preview {
+      min-height: 72px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--bg);
+      font-size: 15px;
+      line-height: 1.7;
+    }
+    .cms-preview p { margin: 0 0 10px; }
+    .cms-preview ul { margin: 0 0 10px; padding-left: 1.2em; }
     @media (max-width: 800px) {
       .grid-2 { grid-template-columns: 1fr; }
       header { padding-left: 16px; padding-right: 16px; }
@@ -412,7 +423,7 @@
     </section>
 <section class="card">
       <h2>宣告／免責／個資</h2>
-      <p class="hint">註冊時必須勾選同意才能下一步。會員在「設定 → 個人資料」只能看到當初已同意的文字，不能再改勾選。這裡改的是全站宣告本文與勾選短句。</p>
+      <p class="hint">註冊時必須勾選同意才能下一步。這裡改本文會發布新版本，不會改掉會員當初同意的歷史版本。若要既有會員再同意，請到下方「內容版本庫」勾選要求再同意。</p>
       <form id="legalCopyForm">
         <label>免責聲明本文</label>
         <textarea id="legalDisclaimer" maxlength="4000" style="min-height:140px"></textarea>
@@ -427,6 +438,80 @@
           <button type="submit" class="primary" id="legalCopySave">儲存宣告文字</button>
         </div>
         <p class="msg" id="legalCopyMsg"></p>
+      </form>
+    </section>
+<section class="card" id="contentCms">
+      <h2>內容版本庫</h2>
+      <p class="hint">管理免責、個資、刊登規則，以及日後匯入／許願房聲明。已發布本文不可原地改寫；請開新版本。只有勾選「要求再同意」才會擋既有會員。</p>
+      <div class="row">
+        <label style="margin:0">類型
+          <select id="cmsTypeFilter"></select>
+        </label>
+        <button type="button" class="ghost" id="cmsReload">重新載入</button>
+        <button type="button" class="ghost" id="cmsNewDraft">開新草稿</button>
+      </div>
+      <p class="msg" id="cmsListMsg" role="status"></p>
+      <p class="hint" id="cmsListEmpty" hidden>這個類型還沒有文件。請開新草稿。</p>
+      <div style="overflow-x:auto">
+        <table id="cmsTable">
+          <thead>
+            <tr>
+              <th>類型</th>
+              <th>版本</th>
+              <th>狀態</th>
+              <th>再同意</th>
+              <th>雜湊</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="cmsRows"></tbody>
+        </table>
+      </div>
+      <form id="cmsEditor" hidden>
+        <input type="hidden" id="cmsId" />
+        <div class="grid-2">
+          <div>
+            <label for="cmsType">文件類型</label>
+            <select id="cmsType"></select>
+          </div>
+          <div>
+            <label for="cmsFormat">格式</label>
+            <select id="cmsFormat">
+              <option value="plain">純文字</option>
+              <option value="markdown">安全 Markdown</option>
+            </select>
+          </div>
+        </div>
+        <label for="cmsTitle">標題</label>
+        <input id="cmsTitle" maxlength="160" />
+        <label for="cmsCheck">勾選短句</label>
+        <input id="cmsCheck" maxlength="200" />
+        <label for="cmsBody">本文</label>
+        <textarea id="cmsBody" maxlength="20000" style="min-height:180px"></textarea>
+        <div class="grid-2">
+          <div>
+            <label for="cmsFrom">生效起（可空）</label>
+            <input id="cmsFrom" placeholder="2026-09-07T00:00:00.000Z" />
+          </div>
+          <div>
+            <label for="cmsUntil">生效迄（可空）</label>
+            <input id="cmsUntil" placeholder="可留空表示無期限" />
+          </div>
+        </div>
+        <label class="checks"><input type="checkbox" id="cmsEnabled" checked /> 啟用</label>
+        <label class="checks"><input type="checkbox" id="cmsReaccept" /> 要求再同意（requires_reacceptance）</label>
+        <p class="hint" id="cmsImmutableHint" hidden>這是已發布版本，本文鎖定。若要改內容請開新版本；這裡只能改啟用、有效期間與再同意旗標。</p>
+        <div class="row" style="margin-top:10px">
+          <button type="button" class="ghost" id="cmsPreviewBtn">預覽</button>
+          <button type="submit" class="primary" id="cmsSave">儲存草稿</button>
+          <button type="button" class="ghost" id="cmsPublish">發布</button>
+          <button type="button" class="ghost" id="cmsNewVersion">從這版開新草稿</button>
+        </div>
+        <p class="msg" id="cmsEditorMsg" role="status"></p>
+        <h3 style="margin:16px 0 8px;font-size:15px">預覽</h3>
+        <div id="cmsPreview" class="cms-preview"></div>
+        <h3 style="margin:16px 0 8px;font-size:15px">版本紀錄</h3>
+        <div id="cmsHistory" class="hint"></div>
       </form>
     </section>
 <section class="card">
@@ -1097,6 +1182,115 @@
       if (!res.ok) throw new Error(data.error || "載入宣告失敗");
       fillLegalCopy(data);
       setMsg("legalCopyMsg", "已載入", true);
+    }
+
+    let cmsTypes = [];
+    let cmsItems = [];
+    let cmsCurrent = null;
+
+    function cmsTypeLabel(id) {
+      return (cmsTypes.find((row) => row.id === id) || {}).label || id;
+    }
+
+    function fillCmsTypeSelects() {
+      const options = [`<option value="">全部類型</option>`]
+        .concat(cmsTypes.map((row) => `<option value="${row.id}">${row.label}</option>`))
+        .join("");
+      if ($("cmsTypeFilter") && !$("cmsTypeFilter").dataset.ready) {
+        $("cmsTypeFilter").innerHTML = options;
+        $("cmsTypeFilter").dataset.ready = "1";
+      }
+      if ($("cmsType")) {
+        $("cmsType").innerHTML = cmsTypes.map((row) => `<option value="${row.id}">${row.label}</option>`).join("");
+      }
+    }
+
+    function renderCmsRows() {
+      const type = $("cmsTypeFilter")?.value || "";
+      const rows = cmsItems.filter((row) => !type || row.document_type === type);
+      const host = $("cmsRows");
+      if ($("cmsListEmpty")) $("cmsListEmpty").hidden = rows.length > 0;
+      if (!host) return;
+      host.innerHTML = rows.map((row) => `
+        <tr>
+          <td>${cmsTypeLabel(row.document_type)}</td>
+          <td>v${row.version}</td>
+          <td>${row.status === "published" ? "已發布" : "草稿"}${row.enabled ? "" : "／停用"}</td>
+          <td>${row.requires_reacceptance ? "是" : "否"}</td>
+          <td><code>${String(row.content_hash || "").slice(0, 10)}</code></td>
+          <td><button type="button" class="ghost" data-cms-open="${row.id}">檢視</button></td>
+        </tr>
+      `).join("");
+    }
+
+    function setCmsEditorMode(doc) {
+      const published = doc?.status === "published";
+      $("cmsType").disabled = Boolean(doc?.id);
+      $("cmsTitle").disabled = published;
+      $("cmsBody").disabled = published;
+      $("cmsFormat").disabled = published;
+      $("cmsCheck").disabled = published;
+      $("cmsImmutableHint").hidden = !published;
+      $("cmsSave").hidden = false;
+      $("cmsSave").textContent = published ? "儲存旗標" : "儲存草稿";
+      $("cmsPublish").hidden = published;
+      $("cmsNewVersion").hidden = !published;
+    }
+
+    function fillCmsEditor(doc) {
+      cmsCurrent = doc || null;
+      $("cmsEditor").hidden = false;
+      $("cmsId").value = doc?.id || "";
+      if (doc?.document_type) $("cmsType").value = doc.document_type;
+      $("cmsTitle").value = doc?.title || "";
+      $("cmsBody").value = doc?.body || "";
+      $("cmsFormat").value = doc?.format || "plain";
+      $("cmsCheck").value = doc?.check_label || "";
+      $("cmsFrom").value = doc?.effective_from || "";
+      $("cmsUntil").value = doc?.effective_until || "";
+      $("cmsEnabled").checked = doc?.enabled !== false;
+      $("cmsReaccept").checked = doc?.requires_reacceptance === true;
+      $("cmsPreview").textContent = "";
+      if (doc?.html) $("cmsPreview").innerHTML = doc.html;
+      const events = Array.isArray(doc?.events) ? doc.events : [];
+      $("cmsHistory").textContent = events.length
+        ? events.map((ev) => `${String(ev.created_at || "").slice(0, 19).replace("T", " ")} · ${ev.action} · v${ev.version || "?"} · ${String(ev.content_hash || "").slice(0, 10)}`).join("\n")
+        : "尚無紀錄。";
+      setCmsEditorMode(doc);
+    }
+
+    async function loadContentCms() {
+      const type = $("cmsTypeFilter")?.value || "";
+      const res = await fetch("/api/admin/documents" + (type ? `?type=${encodeURIComponent(type)}` : ""), { cache: "no-store" });
+      const data = await readApi(res);
+      if (!res.ok) throw new Error(data.error || "載入內容版本庫失敗");
+      cmsTypes = data.types || [];
+      cmsItems = data.items || [];
+      fillCmsTypeSelects();
+      renderCmsRows();
+      setMsg("cmsListMsg", `共 ${cmsItems.length} 筆`, true);
+    }
+
+    async function openCmsDoc(id) {
+      const res = await fetch(`/api/admin/documents/${encodeURIComponent(id)}`, { cache: "no-store" });
+      const data = await readApi(res);
+      if (!res.ok) throw new Error(data.error || "載入文件失敗");
+      fillCmsEditor(data);
+      setMsg("cmsEditorMsg", `v${data.version} · ${data.status}`, true);
+    }
+
+    function collectCmsPayload() {
+      return {
+        document_type: $("cmsType").value,
+        title: $("cmsTitle").value,
+        body: $("cmsBody").value,
+        format: $("cmsFormat").value,
+        check_label: $("cmsCheck").value,
+        effective_from: $("cmsFrom").value.trim() || null,
+        effective_until: $("cmsUntil").value.trim() || null,
+        enabled: $("cmsEnabled").checked,
+        requires_reacceptance: $("cmsReaccept").checked,
+      };
     }
 
     function fillSpirit(data = {}) {
@@ -1853,7 +2047,7 @@
       if (me.role !== "admin") { location.replace("/"); return; }
       meEmail = me.email || "";
       $("who").textContent = meEmail;
-      await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadMaps(), loadHelpQa(), loadLegalCopy(), loadSpirit(), loadHousing(), loadCrawlSources(), loadSystemCrawl(), loadBrand(), loadFeedback()]);
+      await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadMaps(), loadHelpQa(), loadLegalCopy(), loadContentCms(), loadSpirit(), loadHousing(), loadCrawlSources(), loadSystemCrawl(), loadBrand(), loadFeedback()]);
       $("brandForm").onsubmit = async (ev) => {
         ev.preventDefault();
         $("brandSave").disabled = true;
@@ -2067,11 +2261,104 @@
           const data = await readApi(res);
           if (!res.ok) throw new Error(data.error || "儲存失敗");
           fillLegalCopy(data);
-          setMsg("legalCopyMsg", "宣告文字已儲存", true);
+          setMsg("legalCopyMsg", "宣告文字已儲存（已發布新版本）", true);
+          loadContentCms().catch(() => {});
         } catch (error) {
           setMsg("legalCopyMsg", error.message);
         } finally {
           $("legalCopySave").disabled = false;
+        }
+      };
+      $("cmsReload").onclick = () => loadContentCms().catch((error) => setMsg("cmsListMsg", error.message));
+      $("cmsTypeFilter").onchange = () => renderCmsRows();
+      $("cmsRows").onclick = (ev) => {
+        const id = ev.target?.closest("[data-cms-open]")?.dataset.cmsOpen;
+        if (!id) return;
+        openCmsDoc(id).catch((error) => setMsg("cmsListMsg", error.message));
+      };
+      $("cmsNewDraft").onclick = () => {
+        fillCmsEditor({
+          document_type: $("cmsTypeFilter").value || cmsTypes[0]?.id || "registration_terms",
+          format: "plain",
+          enabled: true,
+          requires_reacceptance: false,
+          title: "",
+          body: "",
+          check_label: "",
+        });
+        setMsg("cmsEditorMsg", "新草稿尚未儲存");
+      };
+      $("cmsEditor").onsubmit = async (ev) => {
+        ev.preventDefault();
+        $("cmsSave").disabled = true;
+        setMsg("cmsEditorMsg", "儲存中…");
+        try {
+          const id = $("cmsId").value;
+          const payload = cmsCurrent?.status === "published"
+            ? {
+                enabled: $("cmsEnabled").checked,
+                requires_reacceptance: $("cmsReaccept").checked,
+                effective_from: $("cmsFrom").value.trim() || null,
+                effective_until: $("cmsUntil").value.trim() || null,
+              }
+            : collectCmsPayload();
+          const res = await fetch(id ? `/api/admin/documents/${encodeURIComponent(id)}` : "/api/admin/documents", {
+            method: id ? "PATCH" : "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          const data = await readApi(res);
+          if (!res.ok) throw new Error(data.error || "儲存失敗");
+          await loadContentCms();
+          await openCmsDoc(data.id);
+          setMsg("cmsEditorMsg", "已儲存", true);
+        } catch (error) {
+          setMsg("cmsEditorMsg", error.message);
+        } finally {
+          $("cmsSave").disabled = false;
+        }
+      };
+      $("cmsPreviewBtn").onclick = async () => {
+        if (cmsCurrent?.html && $("cmsBody").disabled) {
+          $("cmsPreview").innerHTML = cmsCurrent.html;
+          return;
+        }
+        $("cmsPreview").textContent = $("cmsBody").value || "（沒有本文）";
+      };
+      $("cmsPublish").onclick = async () => {
+        const id = $("cmsId").value;
+        if (!id) { setMsg("cmsEditorMsg", "請先儲存草稿"); return; }
+        $("cmsPublish").disabled = true;
+        setMsg("cmsEditorMsg", "發布中…");
+        try {
+          const res = await fetch(`/api/admin/documents/${encodeURIComponent(id)}/publish`, { method: "POST" });
+          const data = await readApi(res);
+          if (!res.ok) throw new Error(data.error || "發布失敗");
+          await loadContentCms();
+          await openCmsDoc(data.id);
+          setMsg("cmsEditorMsg", "已發布", true);
+        } catch (error) {
+          setMsg("cmsEditorMsg", error.message);
+        } finally {
+          $("cmsPublish").disabled = false;
+        }
+      };
+      $("cmsNewVersion").onclick = async () => {
+        const id = $("cmsId").value;
+        if (!id) return;
+        $("cmsNewVersion").disabled = true;
+        setMsg("cmsEditorMsg", "建立新版本…");
+        try {
+          const res = await fetch(`/api/admin/documents/${encodeURIComponent(id)}/new-version`, { method: "POST" });
+          const data = await readApi(res);
+          if (!res.ok) throw new Error(data.error || "建立失敗");
+          await loadContentCms();
+          await openCmsDoc(data.id);
+          setMsg("cmsEditorMsg", `已開新草稿 v${data.version}`, true);
+        } catch (error) {
+          setMsg("cmsEditorMsg", error.message);
+        } finally {
+          $("cmsNewVersion").disabled = false;
         }
       };
       $("legalCopyReset").onclick = async () => {

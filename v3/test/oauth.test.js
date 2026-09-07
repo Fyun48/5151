@@ -18,10 +18,18 @@ const dir = path.dirname(fileURLToPath(import.meta.url));
 
 test("oauth state round-trips and expires", () => {
   const secret = "test-secret";
-  const token = createOauthState({ provider: "google", accept: true, now: 1_000 }, secret);
+  const token = createOauthState({
+    provider: "google",
+    accept: true,
+    consents: [{ document_type: "registration_terms", document_id: 3, version: 2, content_hash: "abc".repeat(21).slice(0, 64) }],
+    now: 1_000,
+  }, secret);
   const ok = readOauthState(token, secret, 2_000);
   assert.equal(ok.provider, "google");
   assert.equal(ok.accept, true);
+  assert.equal(ok.consents[0].document_type, "registration_terms");
+  assert.equal(ok.consents[0].document_id, 3);
+  assert.equal(ok.consents[0].version, 2);
   assert.equal(readOauthState(token, secret, 1_000 + 16 * 60 * 1000), null);
   assert.equal(readOauthState("nope", secret, 2_000), null);
 });

@@ -113,6 +113,33 @@ import {
   isMemberMediaUrl,
 } from "./memberMedia.js";
 import {
+  ensureContentDocumentSchema,
+  seedDefaultDocuments,
+  legalCopyFromDocuments,
+  getEffectiveDocument as getEffectiveDocumentOn,
+  getRequiredRegistrationDocuments as getRequiredRegistrationDocumentsOn,
+  listDocuments as listDocumentsOn,
+  getDocumentById as getDocumentByIdOn,
+  createDraft as createDraftOn,
+  updateDraft as updateDraftOn,
+  publishDocument as publishDocumentOn,
+  createDraftFromPublished as createDraftFromPublishedOn,
+  listDocumentEvents as listDocumentEventsOn,
+  publicDocumentView,
+  DOC_TYPES,
+} from "./contentDocuments.js";
+import {
+  ensureMemberConsentSchema,
+  listMemberConsents as listMemberConsentsOn,
+  recordConsent as recordConsentOn,
+  hasAcceptedRequiredDocument as hasAcceptedRequiredDocumentOn,
+  pendingRequiredDocuments as pendingRequiredDocumentsOn,
+  assertRegistrationConsents as assertRegistrationConsentsOn,
+  recordRegistrationConsents as recordRegistrationConsentsOn,
+  recordExactSubmittedConsents as recordExactSubmittedConsentsOn,
+  historicalDocumentForConsent as historicalDocumentForConsentOn,
+} from "./memberConsents.js";
+import {
   ensurePushSchema,
   savePushSubscription as savePushSubscriptionOn,
   deletePushSubscription as deletePushSubscriptionOn,
@@ -536,6 +563,13 @@ ensureFeedbackSchema(db);
 ensureFeedbackOutboxSchema(db);
 ensureSelfListingSchema(db);
 ensureMemberMediaSchema(db);
+ensureContentDocumentSchema(db);
+ensureMemberConsentSchema(db);
+try {
+  seedDefaultDocuments(db, { legalCopy: settingKey("legalCopy") ?? defaultLegalCopy() });
+} catch {
+  // 種子失敗不擋開站；註冊會 fail-closed
+}
 ensurePushSchema(db);
 
 try {
@@ -1135,16 +1169,43 @@ export function saveSpirit(partial = {}) {
 }
 
 export function getLegalCopy() {
+  try {
+    const fromDocs = legalCopyFromDocuments(db);
+    if (fromDocs?.disclaimer && fromDocs?.privacy) return publicLegalCopy(fromDocs);
+  } catch {
+    // 回退 settings
+  }
   return publicLegalCopy(settingKey("legalCopy") ?? defaultLegalCopy());
 }
 
 export function saveLegalCopy(partial = {}) {
   const src = partial && typeof partial === "object" ? partial : {};
-  if (src.reset === true) {
-    writeSettingKey("legalCopy", defaultLegalCopy());
-    return getLegalCopy();
+  const next = src.reset === true
+    ? defaultLegalCopy()
+    : normalizeLegalCopy({ ...getLegalCopy(), ...src });
+  writeSettingKey("legalCopy", next);
+  try {
+    const now = new Date();
+    for (const [type, body, title, check] of [
+      ["registration_terms", next.disclaimer, "免責聲明", next.disclaimerCheck],
+      ["privacy_notice", next.privacy, "個資說明", next.privacyCheck],
+    ]) {
+      const current = getEffectiveDocumentOn(db, type, { now });
+      if (current && current.body === body && current.check_label === check) continue;
+      const draft = createDraftOn(db, {
+        document_type: type,
+        title: current?.title || title,
+        body,
+        check_label: check,
+        format: "plain",
+        requires_reacceptance: false,
+        supersedes_id: current?.id,
+      }, { actorId: 0, now });
+      publishDocumentOn(db, draft.id, { actorId: 0, now });
+    }
+  } catch {
+    // 舊路徑仍寫 settings；CMS 寫入失敗不擋
   }
-  writeSettingKey("legalCopy", normalizeLegalCopy({ ...getLegalCopy(), ...src }));
   return getLegalCopy();
 }
 
@@ -1323,6 +1384,64 @@ export { ADMIN_DELETE_REASONS };
 export function registerUser(input) {
   return registerUserOn(db, input);
 }
+
+export function registerUserWithConsents(input, { now = new Date(), source = "registration" } = {}) {
+  const docs = assertRegistrationConsentsOn(db, input?.consents, { now });
+  db.exec("BEGIN");
+  try {
+    const user = registerUserOn(db, input);
+    recordRegistrationConsentsOn(db, user.id, docs, { source, now });
+    db.exec("COMMIT");
+    return user;
+  } catch (error) {
+    try { db.exec("ROLLBACK"); } catch { /* ignore */ }
+    throw error;
+  }
+}
+
+export function getEffectiveDocument(type, opts) {
+  return getEffectiveDocumentOn(db, type, opts);
+}
+export function getRequiredRegistrationDocuments(opts) {
+  return getRequiredRegistrationDocumentsOn(db, opts).map(publicDocumentView);
+}
+export function listContentDocuments(opts) {
+  return listDocumentsOn(db, opts);
+}
+export function getContentDocument(id) {
+  return getDocumentByIdOn(db, id);
+}
+export function createContentDraft(input, opts) {
+  return createDraftOn(db, input, opts);
+}
+export function updateContentDraft(id, input, opts) {
+  return updateDraftOn(db, id, input, opts);
+}
+export function publishContentDocument(id, opts) {
+  return publishDocumentOn(db, id, opts);
+}
+export function newContentVersion(id, opts) {
+  return createDraftFromPublishedOn(db, id, opts);
+}
+export function listContentEvents(opts) {
+  return listDocumentEventsOn(db, opts);
+}
+export function listMyConsents(userId) {
+  return listMemberConsentsOn(db, userId);
+}
+export function pendingMemberDocuments(userId, opts) {
+  return pendingRequiredDocumentsOn(db, userId, opts);
+}
+export function acceptPendingDocuments(userId, submitted, opts) {
+  return recordExactSubmittedConsentsOn(db, userId, submitted, opts);
+}
+export function hasAcceptedRequiredDocument(userId, type, opts) {
+  return hasAcceptedRequiredDocumentOn(db, userId, type, opts);
+}
+export function getOwnConsentDocument(userId, consentId) {
+  return historicalDocumentForConsentOn(db, userId, consentId);
+}
+export { DOC_TYPES, publicDocumentView, recordConsentOn as recordMemberConsent };
 
 export function linkOauthIdentity(userId, opts) {
   return linkOauthIdentityOn(db, userId, opts);
