@@ -122,21 +122,24 @@ export function getEntity(db, id) {
   return row;
 }
 
-// 建立 entity（冪等：同 id 已存在則直接回傳現有）。整段包在單一交易內。
-export function createEntity(db, { entityType = "lifecycle", id = null, actor = "system", meta = null, now = new Date() } = {}) {
+// 建立 entity 的核心（無自帶交易）：供「已在交易內」的呼叫者（如 Phase 8 原子審批流程）組合使用。
+export function createEntityRow(db, { entityType = "lifecycle", id = null, actor = "system", meta = null, now = new Date() } = {}) {
   const def = getLifecycle(entityType);
   const eid = id ? String(id) : randomUUID();
-  return withImmediateTx(db, () => {
-    const existing = findEntity(db, eid);
-    if (existing) return existing;
-    const ts = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
-    db.prepare(
-      `INSERT INTO state_entity(id, entity_type, state, version, meta, created_at, updated_at)
-       VALUES (?, ?, ?, 0, ?, ?, ?)`,
-    ).run(eid, entityType, def.initial, meta ? JSON.stringify(meta) : null, ts, ts);
-    appendAuditRow(db, { actor, action: "state.create", entityType, entityId: eid, data: { state: def.initial }, now });
-    return getEntity(db, eid);
-  });
+  const existing = findEntity(db, eid);
+  if (existing) return existing;
+  const ts = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+  db.prepare(
+    `INSERT INTO state_entity(id, entity_type, state, version, meta, created_at, updated_at)
+     VALUES (?, ?, ?, 0, ?, ?, ?)`,
+  ).run(eid, entityType, def.initial, meta ? JSON.stringify(meta) : null, ts, ts);
+  appendAuditRow(db, { actor, action: "state.create", entityType, entityId: eid, data: { state: def.initial }, now });
+  return getEntity(db, eid);
+}
+
+// 建立 entity（冪等：同 id 已存在則直接回傳現有）。整段包在單一交易內。
+export function createEntity(db, opts = {}) {
+  return withImmediateTx(db, () => createEntityRow(db, opts));
 }
 
 export function listTransitions(db, { entityId = null, limit = 200 } = {}) {
@@ -151,11 +154,11 @@ export function listTransitions(db, { entityId = null, limit = 200 } = {}) {
 
 // 一次原子轉移：optimistic-lock 檢查 + state_entity 更新 + state_transition append + audit append，
 // 全部在同一個 BEGIN IMMEDIATE 交易內；任一步失敗則整體 ROLLBACK。
-export function transition(db, { id, to, actor = "system", idempotencyKey = null, expectedVersion = null, authorization = null, data = null, now = new Date() }) {
+// 轉移核心（無自帶交易）：供「已在交易內」的呼叫者（如 Phase 8 審批）與 transition() 共用同一套規則。
+export function transitionRow(db, { id, to, actor = "system", idempotencyKey = null, expectedVersion = null, authorization = null, data = null, now = new Date() }) {
   if (!to) throw httpError("transition requires target state 'to'", 400);
   const key = idempotencyKey || randomUUID();
-
-  return withImmediateTx(db, () => {
+  {
     // 冪等：同 key 已處理過 → no-op，回原結果。
     const prior = db.prepare("SELECT * FROM state_transition WHERE idempotency_key = ?").get(key);
     if (prior) {
@@ -218,5 +221,11 @@ export function transition(db, { id, to, actor = "system", idempotencyKey = null
     });
 
     return { entity_id: entity.id, from: entity.state, to, version: newVersion, idempotent: false };
-  });
+  }
+}
+
+// 一次原子轉移：optimistic-lock 檢查 + state_entity 更新 + state_transition append + audit append，
+// 全部在同一個 BEGIN IMMEDIATE 交易內；任一步失敗則整體 ROLLBACK。
+export function transition(db, opts) {
+  return withImmediateTx(db, () => transitionRow(db, opts));
 }
