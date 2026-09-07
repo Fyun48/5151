@@ -14,6 +14,7 @@ import {
   getListing,
   markListingOffline,
   restoreListingOnline,
+  markListingAlive,
   touchListingChecked,
   getSettings,
   hideMany,
@@ -135,6 +136,7 @@ import { buildDemoState } from "./demo.js";
 import { backfillListingCoords, backfillListingMrt, backfillListingRoutes, flushPendingNotifications, isWatchIntervalPending, runWatch } from "./watcher.js";
 import { LIST_PAGE_SIZE, isListingGoneError, probeListingAlive } from "./client591.js";
 import { probeHpListingAlive } from "./houseprice.js";
+import { probeListingAliveBySource } from "./probe.js";
 import { deliveryConfigFromEnv, startDeliveryLoop } from "./opsDelivery.js";
 import { opsDeliveryDb } from "./db.js";
 import { refreshHousingData } from "./housingFetch.js";
@@ -1572,18 +1574,8 @@ app.post("/api/listings/:id/recheck", async (req, res) => {
       res.json({ supported: true, gone: Boolean(Number(listing.offline)), cooldown: true });
       return;
     }
-    let alive = null;
-    if (source === "591" || source === "") {
-      try {
-        await probeListingAlive(postId);
-        alive = true;
-      } catch (error) {
-        if (isListingGoneError(error)) alive = false;
-        else throw error;
-      }
-    } else if (source === "houseprice") {
-      alive = await probeHpListingAlive(listing.url);
-    } else {
+    const { supported, alive } = await probeListingAliveBySource(listing);
+    if (!supported) {
       res.json({ supported: false, gone: false });
       return;
     }
@@ -1592,9 +1584,61 @@ app.post("/api/listings/:id/recheck", async (req, res) => {
       res.json({ supported: true, gone: true });
       return;
     }
-    touchListingChecked(postId);
-    if (Number(listing.offline) === 1) restoreListingOnline(postId);
+    markListingAlive(postId);
     res.json({ supported: true, gone: false });
+  } catch (error) {
+    res.json({ supported: true, gone: false, error: error.message });
+  }
+});
+
+// 硬按鈕「回報此物件已不在」：主動確認；真的不在→記錄下架（進 7 日同屋源窗口）；
+// 似乎還在→打 alive_checked_at 起算 30 分鐘「全站」鎖，避免重複回報。鎖期間再按不重打。
+const REPORT_GONE_LOCK_MS = 30 * 60 * 1000;
+const REPORT_GONE_LOCK_MSG = "此物件正在確認中，似乎仍上架中；為避免重複回報，暫時鎖定 30 分鐘。";
+app.post("/api/listings/:id/report-gone", async (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入", login: true });
+      return;
+    }
+    const postId = Number(req.params.id);
+    const listing = getListing(postId);
+    if (!listing) {
+      res.json({ supported: false });
+      return;
+    }
+    const source = String(listing.source || "591") || "591";
+    if (source === "self") {
+      res.json({ supported: false });
+      return;
+    }
+    if (Number(listing.offline_confirmed) === 1) {
+      res.json({ supported: true, gone: true, confirmed: true });
+      return;
+    }
+    if (Number(listing.offline) === 1) {
+      res.json({ supported: true, gone: true, alreadyOffline: true });
+      return;
+    }
+    // 全站鎖：近期已確認「還在」→ 直接回鎖定訊息，不重打。
+    const aliveAt = Date.parse(listing.alive_checked_at || "") || 0;
+    if (aliveAt && Date.now() - aliveAt < REPORT_GONE_LOCK_MS) {
+      res.json({ supported: true, gone: false, locked: true, until: new Date(aliveAt + REPORT_GONE_LOCK_MS).toISOString(), message: REPORT_GONE_LOCK_MSG });
+      return;
+    }
+    const { supported, alive } = await probeListingAliveBySource(listing);
+    if (!supported) {
+      res.json({ supported: false });
+      return;
+    }
+    if (alive === false) {
+      markListingOffline(postId);
+      res.json({ supported: true, gone: true, reported: true, message: "已記錄此物件下架，7 日內同屋源若在任一平台重現會自動接手。" });
+      return;
+    }
+    markListingAlive(postId);
+    res.json({ supported: true, gone: false, alive: true, locked: true, until: new Date(Date.now() + REPORT_GONE_LOCK_MS).toISOString(), message: REPORT_GONE_LOCK_MSG });
   } catch (error) {
     res.json({ supported: true, gone: false, error: error.message });
   }

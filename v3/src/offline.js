@@ -36,7 +36,8 @@ export function countsTowardAllTotal(listing) {
   if (listing?.hidden || Number(listing?.hidden)) return false;
   if (listing?.watched || Number(listing?.watched)) return false;
   if (listing?.match_verdict === "yes") return false;
-  if (isPendingOffline(listing) || isConfirmedOffline(listing) || Number(listing?.offline)) return false;
+  // 「下架確認中」（pending）仍留在列表並計數（灰階）；只有「確認已下架」才移除。
+  if (isConfirmedOffline(listing)) return false;
   return true;
 }
 

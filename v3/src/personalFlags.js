@@ -307,8 +307,9 @@ export function listingMatchesListFilter(row, filter) {
   const dup = String(row?.match_verdict || "") === "yes";
   if (filter === "hidden") return hidden || dup;
   if (filter === "offline") return offline && !confirmed;
-  if (filter === "suspected") return Boolean(row?.match_level) && !offline && !dup && !hidden;
-  if (dup || offline || hidden) return false;
+  if (filter === "suspected") return Boolean(row?.match_level) && !confirmed && !dup && !hidden;
+  // 「下架確認中」（pending）留在一般列表（灰階）；只有「確認已下架」才排除。
+  if (dup || confirmed || hidden) return false;
   if (filter === "all") return !watched;
   if (filter === "unseen") return !viewed;
   if (filter === "viewed") return viewed === true || viewed === 1;

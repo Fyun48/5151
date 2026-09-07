@@ -22,6 +22,7 @@ import {
   markListingOffline,
   confirmExpiredOfflineListings,
   restoreListingOnline,
+  markListingAlive,
   pendingNotifyEvents,
   eventPayloadFromListing,
   db,
@@ -44,6 +45,7 @@ import {
 import { replaceCrawlCovers, touchCrawlCoversRun } from "./crawlCovers.js";
 import { CRAWL_PAGES_591, CRAWL_PAGES_EXTERNAL } from "./crawlPolicy.js";
 import { fetchCommunityLocation, fetchListingDetail, fetchListings, isListingGoneError, LIST_PAGE_SIZE, mergeFeeRows, probeListingAlive } from "./client591.js";
+import { probeListingAliveBySource } from "./probe.js";
 import { fetchHbCoveringListings } from "./hbhousing.js";
 import { fetchSinyiCoveringListings } from "./sinyi.js";
 import { fetchHpCoveringListings } from "./houseprice.js";
@@ -394,16 +396,20 @@ async function sweepOfflineListings(seenIds, { limit = 20 } = {}) {
   let rechecked = 0;
   let restored = 0;
   for (const row of rows) {
+    const listing = listingForWatch(row.post_id);
+    if (!listing) continue;
     checked += 1;
     try {
-      await probeListingAlive(row.post_id);
-      touchListingChecked(row.post_id);
-    } catch (error) {
-      if (isListingGoneError(error)) {
-        const wasOnline = !listingForWatch(row.post_id)?.offline;
-        await markOfflineAndNotify(row.post_id, { wasOnline });
+      const { supported, alive } = await probeListingAliveBySource(listing);
+      if (!supported) { checked -= 1; continue; }
+      if (alive === false) {
+        await markOfflineAndNotify(row.post_id, { wasOnline: !listing.offline });
         gone += 1;
+      } else {
+        markListingAlive(row.post_id);
       }
+    } catch {
+      // 探測失敗（保守）：不動狀態，下輪再試
     }
     await new Promise((resolve) => setTimeout(resolve, 400));
   }
@@ -412,13 +418,15 @@ async function sweepOfflineListings(seenIds, { limit = 20 } = {}) {
   for (const row of pendingRecheck) {
     if (rechecked >= 8) break;
     if (!shouldRecheckOffline(row, { days: confirmDays, now })) continue;
+    const listing = listingForWatch(row.post_id);
+    if (!listing) continue;
     rechecked += 1;
     try {
-      await probeListingAlive(row.post_id);
-      restoreListingOnline(row.post_id);
-      restored += 1;
-    } catch (error) {
-      if (isListingGoneError(error)) touchListingChecked(row.post_id);
+      const { supported, alive } = await probeListingAliveBySource(listing);
+      if (supported && alive === true) { restoreListingOnline(row.post_id); restored += 1; }
+      else touchListingChecked(row.post_id);
+    } catch {
+      touchListingChecked(row.post_id);
     }
     await new Promise((resolve) => setTimeout(resolve, 400));
   }
