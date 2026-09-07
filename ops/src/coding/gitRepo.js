@@ -35,9 +35,12 @@ export function makeGitRepo(repoPath, opts = {}) {
       git(["add", "-A"], worktreeDir);
       const status = git(["status", "--porcelain"], worktreeDir);
       if (!status) return null;
-      const env = { ...process.env };
       const name = author.name || "ai-dev-bot";
       const email = author.email || "ai-dev-bot@local";
+      // 決定性 commit：固定 author/committer 日期，讓相同內容+base 得到相同 head SHA，
+      // 使同一 task 的重試具冪等性（重推同分支為 no-op，毋須 force-push）。
+      const date = author.date || "2020-01-01T00:00:00Z";
+      const env = { ...process.env, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date };
       execFileSync("git", ["-C", worktreeDir, "-c", `user.name=${name}`, "-c", `user.email=${email}`, "commit", "-q", "-m", message], { encoding: "utf8", env });
       return git(["rev-parse", "HEAD"], worktreeDir);
     },
