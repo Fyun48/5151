@@ -25,6 +25,8 @@ import { analysisConfigFromEnv, startAnalysisLoop } from "./analysisWorker.js";
 import { listIssues, getIssueWithMembers, mergeIssues, splitIssue, moveFeedback } from "./clustering.js";
 import { makeEmbeddingProvider } from "./ai/embeddingProvider.js";
 import { clusteringConfigFromEnv, startClusteringLoop } from "./clusteringWorker.js";
+import { getCurrentIssueImpact, listAssessments, isImpactStale, calculateAndStoreImpact, currentImpactId } from "./impact.js";
+import { impactWorkerConfigFromEnv, startImpactLoop } from "./impactWorker.js";
 
 // 刻意不使用 express：ops 服務維持「零外部相依」，與本 repo 的 CI（不跑 npm install）相容，
 // 也縮小攻擊面。所有路由用 node:http 手刻的極小 router。
@@ -169,7 +171,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
 
       // ── 公開 API ──
       if (pathname === "/ops/api/health" && method === "GET") {
-        sendJson(res, 200, { ok: true, service: "ops", phase: "5", configured: auth.configured });
+        sendJson(res, 200, { ok: true, service: "ops", phase: "6", configured: auth.configured });
         return;
       }
 
@@ -468,6 +470,35 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         return;
       }
 
+      // ── Phase 6：Issue 影響力（Owner） ──
+      const impactGet = pathname.match(/^\/ops\/api\/issues\/(\d+)\/impact$/);
+      if (impactGet && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        const iid = Number(impactGet[1]);
+        if (!db.prepare("SELECT id FROM issue_candidate WHERE id=?").get(iid)) { sendJson(res, 404, { error: "not found" }); return; }
+        const current = getCurrentIssueImpact(db, iid);
+        sendJson(res, 200, {
+          issue_id: iid,
+          current,
+          current_assessment_id: currentImpactId(db, iid),
+          stale: isImpactStale(db, iid),
+          history: listAssessments(db, { issueId: iid }),
+        });
+        return;
+      }
+      const impactRecalc = pathname.match(/^\/ops\/api\/issues\/(\d+)\/impact\/recalculate$/);
+      if (impactRecalc && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        const iid = Number(impactRecalc[1]);
+        // 先記錄「Owner 要求重算」事件（與 calculated / current_changed 分開；metadata only）。
+        appendAudit(db, { actor: `owner:${req.owner.email}`, action: "issue.impact.recalculation_requested", entityType: "issue_candidate", entityId: String(iid), data: { issue_id: iid } });
+        try {
+          const r = calculateAndStoreImpact(db, iid, { actor: `owner:${req.owner.email}` });
+          sendJson(res, 201, { ok: true, ...r });
+        } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+
       if (pathname.startsWith("/ops/api/")) {
         sendJson(res, 404, { error: "not found" });
         return;
@@ -531,9 +562,14 @@ export function startServer() {
   if (embProvider.available && clusterCfg.enabled) {
     startClusteringLoop(db, { provider: embProvider, config: clusterCfg, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
   }
+  // Phase 6：影響力評估 worker（純本地決定性計算，預設開；無外部依賴）。
+  const impactCfg = impactWorkerConfigFromEnv();
+  if (impactCfg.enabled) {
+    startImpactLoop(db, { config: impactCfg, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
+  }
   http.createServer(handler).listen(port, host, () => {
     // eslint-disable-next-line no-console
-    console.log(`Ops console (Phase 5)：http://${host}:${port}  owner=${auth.configured ? auth.ownerEmail : "(未設定)"}  ingest=${process.env.OPS_INGEST_SECRET ? "on" : "off"}  ai=${aiProvider.available ? aiProvider.name : "off"}  embed=${embProvider.available ? embProvider.name : "off"}`);
+    console.log(`Ops console (Phase 6)：http://${host}:${port}  owner=${auth.configured ? auth.ownerEmail : "(未設定)"}  ingest=${process.env.OPS_INGEST_SECRET ? "on" : "off"}  ai=${aiProvider.available ? aiProvider.name : "off"}  embed=${embProvider.available ? embProvider.name : "off"}  impact=${impactCfg.enabled ? "on" : "off"}`);
   });
   return { db, auth };
 }
