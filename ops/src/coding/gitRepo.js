@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, readFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
@@ -68,6 +68,56 @@ export function makeGitRepo(repoPath, opts = {}) {
 
     cleanupWorktree(worktreeDir) {
       try { git(["worktree", "remove", "--force", worktreeDir]); } catch { try { rmSync(worktreeDir, { recursive: true, force: true }); } catch { /* noop */ } }
+    },
+
+    // ── Phase 11 QA：只讀檢核用（不建分支、不改 master） ──
+    // 兩個 SHA 之間的 numstat（含檔案狀態 A/M/D/R）。回傳 { files:[{path,insertions,deletions,binary}], insertions, deletions }。
+    numstatRange(baseSha, headSha) {
+      const numstat = execFileSync("git", ["-C", repoPath, "diff", "--numstat", baseSha, headSha], { encoding: "utf8" }).trim();
+      const nameStatus = execFileSync("git", ["-C", repoPath, "diff", "--name-status", baseSha, headSha], { encoding: "utf8" }).trim();
+      const statusByPath = {};
+      for (const line of nameStatus.split("\n").filter(Boolean)) {
+        const [st, ...rest] = line.split("\t");
+        statusByPath[rest[rest.length - 1]] = st[0];
+      }
+      const files = []; let ins = 0, del = 0;
+      for (const line of numstat.split("\n").filter(Boolean)) {
+        const [a, b, ...rest] = line.split("\t");
+        const p = rest.join("\t");
+        const binary = a === "-" || b === "-";
+        const i = binary ? 0 : Number(a) || 0;
+        const d = binary ? 0 : Number(b) || 0;
+        ins += i; del += d;
+        files.push({ path: p, insertions: i, deletions: d, binary, status: statusByPath[p] || "M" });
+      }
+      return { files, insertions: ins, deletions: del };
+    },
+
+    // 兩 SHA 間新增的行（給 secret/migration/config 掃描）。回傳 [{ path, line }]，有上限避免爆量。
+    addedLines(baseSha, headSha, { maxLines = 5000 } = {}) {
+      const out = execFileSync("git", ["-C", repoPath, "diff", "--unified=0", baseSha, headSha], { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
+      const lines = []; let cur = null;
+      for (const raw of out.split("\n")) {
+        if (raw.startsWith("+++ b/")) { cur = raw.slice(6); continue; }
+        if (raw.startsWith("+++ ")) { cur = raw.replace(/^\+\+\+\s+b?\/?/, ""); continue; }
+        if (raw.startsWith("+") && !raw.startsWith("+++")) {
+          lines.push({ path: cur, line: raw.slice(1) });
+          if (lines.length >= maxLines) break;
+        }
+      }
+      return lines;
+    },
+
+    // 建立 detached worktree（指定 SHA）供 QA 跑指令；不建立分支、不影響 master。
+    createDetachedWorktree(sha) {
+      const dir = mkdtempSync(path.join(os.tmpdir(), "qa-wt-"));
+      try { git(["worktree", "remove", "--force", dir]); } catch { /* noop */ }
+      git(["worktree", "add", "--detach", dir, sha]);
+      return dir;
+    },
+
+    readFileAt(worktreeDir, rel) {
+      try { return readFileSync(path.join(worktreeDir, rel), "utf8"); } catch { return null; }
     },
   };
 }

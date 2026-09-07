@@ -27,7 +27,9 @@ test("only state_entity holds a lifecycle state column", () => {
   //   兩者皆非中央 proposal lifecycle（lifecycle 在 state_entity），且不與其分歧。
   // development_coding_task.status = Phase 10 coding job 工作狀態（pending/claimed/running/changes_ready/failed/failed_retry/cancelled）；
   //   屬局部工作狀態、非中央 Issue lifecycle（lifecycle 在 state_entity），且不與其分歧。
-  const ALLOWED = new Set(["state_entity", "feedback_analysis", "embedding", "issue_candidate", "issue_evaluation_run", "issue_role_evaluation", "issue_proposal", "development_authorization", "development_coding_task"]);
+  // development_qa_run.status = Phase 11 QA job 工作狀態；development_qa_check.status = 逐項檢核結果（PASS/FAIL/WARN/REVIEW/SKIPPED）；
+  //   development_qa_current.final_result 非 status 欄位。皆屬局部/衍生狀態、非中央 Issue lifecycle，且不與其分歧。
+  const ALLOWED = new Set(["state_entity", "feedback_analysis", "embedding", "issue_candidate", "issue_evaluation_run", "issue_role_evaluation", "issue_proposal", "development_authorization", "development_coding_task", "development_qa_run", "development_qa_check"]);
   const offenders = [];
 
   for (const table of tables) {
