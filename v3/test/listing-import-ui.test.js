@@ -21,6 +21,7 @@ test("sponsor import entry and review UI exist; normal members see locked hint",
   assert.match(html, /terms\.html\?type=external_import_declaration/);
   assert.match(html, /確認匯入（仍是草稿）/);
   assert.match(html, /function syncImportAccess/);
+  assert.match(html, /function loadActiveImport/);
   assert.match(html, /listing-imports\/\$\{currentImport\.id\}\/publish/);
   assert.doesNotMatch(html, /許願房/);
 });

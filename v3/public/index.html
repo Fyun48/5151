@@ -7004,7 +7004,21 @@
       const sponsored = mePlan === "sponsor";
       if (locked) locked.hidden = sponsored;
       if (tools) tools.hidden = !sponsored;
-      if (sponsored) loadImportMeta().catch(() => {});
+      if (sponsored) {
+        loadImportMeta().catch(() => {});
+        loadActiveImport().catch(() => {});
+      }
+    }
+    async function loadActiveImport() {
+      const res = await fetch("/api/listing-imports");
+      const data = await readApi(res);
+      if (!res.ok) return;
+      const row = (data.items || []).find((item) => ["ready_for_review", "confirmed", "fetching"].includes(item.status));
+      if (row) {
+        const one = await fetch(`/api/listing-imports/${row.id}`);
+        const full = await readApi(one);
+        if (one.ok) paintImportReview(full);
+      }
     }
     async function loadImportMeta() {
       const res = await fetch("/api/listing-imports/meta");
