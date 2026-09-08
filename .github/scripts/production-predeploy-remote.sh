@@ -45,6 +45,11 @@ REPO_DIGESTS="$(docker image inspect -f '{{range .RepoDigests}}{{.}} {{end}}' "$
 ARCH="$(docker image inspect -f '{{.Architecture}}/{{.Os}}' "$IMAGE_ID")"
 [ -n "$ARCH" ] && [ "$ARCH" != "/" ] || fail "docker image inspect returned empty Architecture/Os"
 NODE_VER="$(docker exec "$CONTAINER" node -p "process.version")"
+echo "image_ref=$IMAGE_REF"
+echo "image_id=$IMAGE_ID"
+echo "repo_digests=$REPO_DIGESTS"
+echo "architecture=$ARCH"
+echo "node=$NODE_VER"
 
 echo "=== current sharp (read-only, no install) ==="
 SHARP_STATUS="SHARP_MISSING"
@@ -172,17 +177,19 @@ BACKUP_SIZE="$(stat -c%s "$DEST_DB" 2>/dev/null || stat -f%z "$DEST_DB")"
 ORIG_SIZE="$(stat -c%s "$DATA_HOST/v3.db" 2>/dev/null || stat -f%z "$DATA_HOST/v3.db")"
 BACKUP_SHA="$(sha256sum "$DEST_DB" | awk '{print $1}')"
 
-docker cp "$INSPECT_SRC" "$CONTAINER:/tmp/sqlite-readonly-inspect.mjs"
-# Verify backup file from host via a throwaway node if possible; else copy backup into /tmp of container read-only inspect
-# Prefer host node to avoid mounting backup into the app container as /data.
-if command -v node >/dev/null 2>&1; then
-  INTEGRITY="$(node "$INSPECT_SRC" "$DEST_DB" integrity)"
-else
+# NAS host Node may be v18 without node:sqlite. Prefer python3 read-only PRAGMA,
+# then container node (has node:sqlite). Never call host `node` unless import works.
+INTEGRITY=""
+if [ -n "${HOST_PYTHON:-}" ] && [ -n "${BACKUP_PY:-}" ] && [ -f "${BACKUP_PY}" ]; then
+  INTEGRITY="$(python3 "$BACKUP_PY" integrity "$DEST_DB")"
+elif docker exec "$CONTAINER" node --input-type=module -e 'import "node:sqlite"' >/dev/null 2>&1; then
+  docker cp "$INSPECT_SRC" "$CONTAINER:/tmp/sqlite-readonly-inspect.mjs"
   docker cp "$DEST_DB" "$CONTAINER:/tmp/v3-predeploy-backup-verify.db"
   INTEGRITY="$(docker exec "$CONTAINER" node /tmp/sqlite-readonly-inspect.mjs /tmp/v3-predeploy-backup-verify.db integrity)"
-  docker exec "$CONTAINER" rm -f /tmp/v3-predeploy-backup-verify.db
+  docker exec "$CONTAINER" rm -f /tmp/v3-predeploy-backup-verify.db /tmp/sqlite-readonly-inspect.mjs
+else
+  fail "no read-only integrity checker (host python3 / container node:sqlite)"
 fi
-docker exec "$CONTAINER" rm -f /tmp/sqlite-readonly-inspect.mjs || true
 echo "$INTEGRITY" > "$WORKDIR/integrity.json"
 echo "$INTEGRITY"
 echo "$INTEGRITY" | grep -q '"ok"' || fail "backup integrity_check is not ok"

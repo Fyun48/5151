@@ -93,6 +93,8 @@ test("capability-detects node:sqlite backup() and uses Python online backup API"
   assert.equal(destCheck.prepare("SELECT v FROM t").get().v, "keep");
   assert.equal(destCheck.prepare("PRAGMA integrity_check").get().integrity_check, "ok");
   destCheck.close();
+  const integ = execFileSync("python3", [py, "integrity", dest], { encoding: "utf8" });
+  assert.match(integ, /"ok"/);
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -107,6 +109,11 @@ test("predeploy remote script reads RepoDigests and arch from image id, not cont
   assert.match(script, /IMAGE_ID="\$\(docker inspect -f '\{\{\.Image\}\}' "\$CONTAINER"\)"/);
   assert.match(script, /docker image inspect -f '\{\{range \.RepoDigests\}\}\{\{\.\}\} \{\{end\}\}' "\$IMAGE_ID"/);
   assert.match(script, /docker image inspect -f '\{\{\.Architecture\}\}\/\{\{\.Os\}\}' "\$IMAGE_ID"/);
+  assert.match(script, /python3 "\$BACKUP_PY" integrity/);
+  assert.doesNotMatch(
+    script,
+    /if command -v node >\/dev\/null 2>&1; then\n  INTEGRITY="\$\(node "\$INSPECT_SRC"/,
+  );
 });
 
 test("isolated smoke schema inspect uses bound parameter, not quoted identifier", () => {
