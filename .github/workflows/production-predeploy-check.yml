@@ -1,4 +1,5 @@
 name: Production predeploy check (no deploy)
+run-name: "phase15-intent:${{ inputs.release_intent_id }}"
 
 # 使用既有 Production NAS secrets：檢查現行 v3、做已驗證備份、Wish Room 唯讀預檢。
 # 不是部署：不 SCP 應用程式、不 pull image、不改 image、不 compose up 新版、不跑應用 schema migration。
@@ -17,6 +18,9 @@ on:
         description: "輸入 PREDEPLOY-PRODUCTION 以確認只做檢查與備份"
         required: true
         default: ""
+      release_intent_id:
+        description: "Ops Phase 15 durable release_intent_id（不可猜測，必須與 evidence 一致）"
+        required: true
 
 permissions:
   contents: read
@@ -64,6 +68,29 @@ jobs:
         with:
           ref: master
           fetch-depth: 0
+      - name: Write Phase 15 run identity
+        if: always()
+        env:
+          EVIDENCE_KIND: identity
+          WF_FILE: .github/workflows/production-predeploy-check.yml
+          WF_REF: ${{ github.ref }}
+          WF_RUN_ID: ${{ github.run_id }}
+          WF_ATTEMPT: ${{ github.run_attempt }}
+          WF_HEAD_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ inputs.sha }}
+          WF_ACTOR: ${{ github.actor }}
+          WF_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          RELEASE_INTENT_ID: ${{ inputs.release_intent_id }}
+          WF_ENVIRONMENT: production
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: python3 .github/scripts/write-phase15-workflow-evidence.py phase15-run-identity.json
+      - name: Upload Phase 15 run identity
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase15-run-identity
+          path: phase15-run-identity.json
+          if-no-files-found: error
       - name: Validate SHA reachable from origin/master (no checkout of that SHA onto NAS)
         env:
           CHECK_SHA: ${{ inputs.sha }}
@@ -81,7 +108,7 @@ jobs:
           port: ${{ secrets.NAS_PORT }}
           username: ${{ secrets.NAS_USER }}
           key: ${{ secrets.NAS_SSH_KEY }}
-          source: ".github/scripts/production-predeploy-remote.sh,.github/scripts/sqlite-readonly-inspect.mjs,.github/scripts/sqlite-online-backup.mjs,.github/scripts/sqlite-online-backup.py"
+          source: ".github/scripts/production-predeploy-remote.sh,.github/scripts/verify-sqlite-integrity-json.py,.github/scripts/sqlite-readonly-inspect.mjs,.github/scripts/sqlite-online-backup.mjs,.github/scripts/sqlite-online-backup.py"
           target: /tmp/5151-predeploy-helpers
           overwrite: true
       - name: Inspect Production v3, backup, read-only Wish Room
@@ -103,3 +130,82 @@ jobs:
             rm -f /tmp/5151-predeploy-helpers/.github/scripts/sqlite-readonly-inspect.mjs \
                   /tmp/5151-predeploy-helpers/.github/scripts/sqlite-online-backup.mjs \
                   /tmp/5151-predeploy-helpers/.github/scripts/sqlite-online-backup.py
+      - name: Pull NAS predeploy evidence
+        env:
+          NAS_HOST: ${{ secrets.NAS_HOST }}
+          NAS_PORT: ${{ secrets.NAS_PORT }}
+          NAS_USER: ${{ secrets.NAS_USER }}
+          NAS_SSH_KEY: ${{ secrets.NAS_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          key="$(mktemp)"
+          printf '%s\n' "$NAS_SSH_KEY" > "$key"
+          chmod 600 "$key"
+          scp -o StrictHostKeyChecking=accept-new -P "$NAS_PORT" -i "$key" \
+            "$NAS_USER@$NAS_HOST:/tmp/phase15-predeploy-evidence.json" ./nas-predeploy-evidence.json
+          rm -f "$key"
+          python3 - <<'PY'
+          import json, re
+          nas = json.load(open("nas-predeploy-evidence.json"))
+          backup_id = nas.get("backup_dir") or ""
+          backup_hash = nas.get("backup_sha256") or ""
+          if not backup_id or not backup_hash:
+              raise SystemExit("predeploy NAS evidence missing backup identity")
+          if not backup_hash.startswith("sha256:"):
+              backup_hash = "sha256:" + backup_hash
+          if nas.get("integrity_check") != "ok" or nas.get("ok") is not True:
+              raise SystemExit("predeploy NAS integrity_check is not ok")
+          digest = None
+          digest_re = re.compile(r"sha256:[a-f0-9]{64}")
+          for raw in (nas.get("repo_digests"), nas.get("image_ref")):
+              if not raw:
+                  continue
+              match = digest_re.search(str(raw))
+              if match:
+                  digest = match.group(0)
+                  break
+          lines = [
+              f"BACKUP_ID={backup_id}",
+              f"BACKUP_HASH={backup_hash}",
+              "BACKUP_VERIFIED=true",
+          ]
+          if digest:
+              lines.append(f"CURRENT_DIGEST={digest}")
+              if nas.get("image_ref"):
+                  lines.append(f"CURRENT_IMAGE_REF={nas.get('image_ref')}")
+              if nas.get("image_id"):
+                  lines.append(f"CURRENT_IMAGE_ID={nas.get('image_id')}")
+              if nas.get("container"):
+                  lines.append(f"CURRENT_CONTAINER={nas.get('container')}")
+          open("phase15-backup.env","w").write("\n".join(lines) + "\n")
+          PY
+      - name: Write Phase 15 workflow evidence
+        if: always()
+        env:
+          WF_FILE: .github/workflows/production-predeploy-check.yml
+          WF_REF: ${{ github.ref }}
+          WF_RUN_ID: ${{ github.run_id }}
+          WF_ATTEMPT: ${{ github.run_attempt }}
+          WF_HEAD_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ inputs.sha }}
+          WF_ACTOR: ${{ github.actor }}
+          WF_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          RELEASE_INTENT_ID: ${{ inputs.release_intent_id }}
+          WF_ENVIRONMENT: production
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          if [ -f ./phase15-backup.env ]; then
+            set -a
+            # shellcheck disable=SC1091
+            . ./phase15-backup.env
+            set +a
+          fi
+          python3 .github/scripts/write-phase15-workflow-evidence.py phase15-workflow-evidence.json
+      - name: Upload Phase 15 workflow evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase15-workflow-evidence
+          path: phase15-workflow-evidence.json
+          if-no-files-found: error

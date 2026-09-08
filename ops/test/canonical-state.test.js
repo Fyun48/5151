@@ -36,6 +36,9 @@ test("only state_entity holds a lifecycle state column", () => {
   //   皆屬局部/衍生狀態、非中央 Issue lifecycle（lifecycle 在 state_entity），且不與其分歧。
   // production_migration_safety_assessment 使用 clearance_result（非 status）；
   //   production_migration_safety_current 使用 clearance_result（非 status）。皆非中央 lifecycle。
+  // Phase 15：production_release_run 無 status（衍生自 append-only events）；
+  //   production_release_run_event 使用 to_status；production_release_current 使用 current_status；
+  //   production_release_workflow_binding 使用 binding_status。皆非中央 lifecycle。
   const ALLOWED = new Set(["state_entity", "feedback_analysis", "embedding", "issue_candidate", "issue_evaluation_run", "issue_role_evaluation", "issue_proposal", "development_authorization", "development_coding_task", "development_qa_run", "development_qa_check", "development_staging_deployment", "development_staging_check", "development_release_candidate", "production_release_authorization", "release_notification"]);
   const offenders = [];
 

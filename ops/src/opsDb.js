@@ -975,6 +975,142 @@ export function applyOpsSchema(db) {
       FOREIGN KEY (release_authorization_id) REFERENCES production_release_authorization(id) ON DELETE RESTRICT
     );
 
+    -- Phase 15：不可變 Production release attempt（狀態變更只走 append-only events + current pointer）。
+    CREATE TABLE IF NOT EXISTS production_release_run (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      issue_id INTEGER NOT NULL,
+      coding_task_id INTEGER NOT NULL,
+      release_authorization_id INTEGER NOT NULL,
+      release_authorization_hash TEXT NOT NULL,
+      release_manifest_id INTEGER NOT NULL,
+      release_manifest_version INTEGER NOT NULL,
+      manifest_hash TEXT NOT NULL,
+      migration_safety_assessment_id INTEGER NOT NULL,
+      migration_safety_policy_fingerprint TEXT NOT NULL,
+      migration_safety_input_fingerprint TEXT NOT NULL,
+      clearance_result TEXT NOT NULL,
+      proposal_id INTEGER NOT NULL,
+      qa_run_id INTEGER NOT NULL,
+      staging_deployment_id INTEGER NOT NULL,
+      authorized_head_sha TEXT NOT NULL,
+      source_tree_hash TEXT,
+      artifact_digest TEXT NOT NULL,
+      target_environment TEXT NOT NULL,
+      workflow_file TEXT NOT NULL,
+      workflow_ref TEXT NOT NULL,
+      expected_master_head TEXT,
+      input_fingerprint TEXT NOT NULL,
+      policy_fingerprint TEXT NOT NULL,
+      run_version INTEGER NOT NULL,
+      previous_stable_sha TEXT,
+      previous_stable_digest TEXT,
+      previous_stable_workflow_run_id TEXT,
+      previous_stable_release_run_id INTEGER,
+      previous_stable_provenance TEXT,
+      authorized_github_actor TEXT NOT NULL,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (release_authorization_id) REFERENCES production_release_authorization(id) ON DELETE RESTRICT,
+      FOREIGN KEY (release_manifest_id) REFERENCES development_release_candidate(id) ON DELETE RESTRICT,
+      FOREIGN KEY (migration_safety_assessment_id) REFERENCES production_migration_safety_assessment(id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS idx_prrun_task ON production_release_run(coding_task_id, id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_prrun_input_fp ON production_release_run(input_fingerprint);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_prrun_task_version ON production_release_run(coding_task_id, run_version);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_prrun_auth_env ON production_release_run(release_authorization_id, target_environment);
+
+    CREATE TABLE IF NOT EXISTS production_release_run_event (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      release_run_id INTEGER NOT NULL,
+      from_status TEXT,
+      to_status TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      reason TEXT,
+      error_code TEXT,
+      evidence_json TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (release_run_id) REFERENCES production_release_run(id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS idx_prrev_run ON production_release_run_event(release_run_id, id);
+
+    CREATE TABLE IF NOT EXISTS production_release_evidence (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      release_run_id INTEGER NOT NULL,
+      evidence_kind TEXT NOT NULL,
+      workflow_name TEXT,
+      workflow_file TEXT,
+      workflow_ref TEXT,
+      workflow_run_id TEXT,
+      workflow_attempt INTEGER,
+      workflow_conclusion TEXT,
+      workflow_head_sha TEXT,
+      workflow_actor TEXT,
+      target_environment TEXT,
+      image_digest TEXT,
+      oci_revision TEXT,
+      oci_source TEXT,
+      db_backup_identity TEXT,
+      db_backup_hash TEXT,
+      health_result TEXT,
+      smoke_result TEXT,
+      dispatch_request_id TEXT,
+      provider_response_identity TEXT,
+      payload_json TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (release_run_id) REFERENCES production_release_run(id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS idx_previd_run ON production_release_evidence(release_run_id, id);
+
+    CREATE TABLE IF NOT EXISTS production_release_workflow_binding (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      release_run_id INTEGER NOT NULL,
+      workflow_kind TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      workflow_run_id TEXT,
+      workflow_attempt INTEGER,
+      dispatch_request_id TEXT,
+      dispatch_owner TEXT,
+      dispatch_intent_id TEXT,
+      dispatch_claimed_at TEXT,
+      dispatch_submitted_at TEXT,
+      authorized_github_actor TEXT,
+      provider_response_identity TEXT,
+      binding_status TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (release_run_id) REFERENCES production_release_run(id) ON DELETE RESTRICT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_prbind_idem ON production_release_workflow_binding(idempotency_key);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_prbind_kind ON production_release_workflow_binding(release_run_id, workflow_kind);
+
+    CREATE TABLE IF NOT EXISTS production_release_current (
+      coding_task_id INTEGER NOT NULL PRIMARY KEY,
+      release_run_id INTEGER NOT NULL,
+      current_status TEXT NOT NULL,
+      input_fingerprint TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (release_run_id) REFERENCES production_release_run(id) ON DELETE RESTRICT
+    );
+
+    CREATE TABLE IF NOT EXISTS production_stable_current (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      release_run_id INTEGER,
+      source_sha TEXT,
+      artifact_digest TEXT,
+      workflow_run_id TEXT,
+      provenance_json TEXT,
+      provenance_fingerprint TEXT,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS production_release_global_lease (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      release_run_id INTEGER,
+      workflow_kind TEXT,
+      lease_owner TEXT,
+      claimed_at TEXT,
+      updated_at TEXT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_state_entity_type ON state_entity(entity_type, state);
     CREATE INDEX IF NOT EXISTS idx_state_transition_entity ON state_transition(entity_type, entity_id, id);
     CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_type, entity_id, id);
@@ -994,6 +1130,7 @@ export function applyOpsSchema(db) {
       BEGIN SELECT RAISE(ABORT, 'state_transition is append-only'); END;
   `);
   upgradeMigrationSafetyImmutability(db);
+  upgradeProductionReleaseImmutability(db);
   return db;
 }
 
@@ -1007,6 +1144,91 @@ export function upgradeMigrationSafetyImmutability(db) {
     CREATE TRIGGER migsafety_no_delete BEFORE DELETE ON production_migration_safety_assessment
     BEGIN SELECT RAISE(ABORT, 'migration safety assessment is append-only'); END;
   `);
+}
+
+// Phase 15：release attempt / evidence 全欄位不可變；events 與 binding 的 identity 欄位不可改寫成另一次 dispatch。
+export function upgradeProductionReleaseImmutability(db) {
+  db.exec(`
+    DROP TRIGGER IF EXISTS prrun_immutable;
+    DROP TRIGGER IF EXISTS prrun_no_delete;
+    DROP TRIGGER IF EXISTS prrev_no_update;
+    DROP TRIGGER IF EXISTS prrev_no_delete;
+    DROP TRIGGER IF EXISTS previd_immutable;
+    DROP TRIGGER IF EXISTS previd_no_delete;
+    DROP TRIGGER IF EXISTS prbind_identity_immutable;
+    DROP TRIGGER IF EXISTS prbind_no_delete;
+    CREATE TRIGGER prrun_immutable BEFORE UPDATE ON production_release_run
+    BEGIN SELECT RAISE(ABORT, 'production release run is immutable'); END;
+    CREATE TRIGGER prrun_no_delete BEFORE DELETE ON production_release_run
+    BEGIN SELECT RAISE(ABORT, 'production release run is append-only'); END;
+    CREATE TRIGGER prrev_no_update BEFORE UPDATE ON production_release_run_event
+    BEGIN SELECT RAISE(ABORT, 'production release events are append-only'); END;
+    CREATE TRIGGER prrev_no_delete BEFORE DELETE ON production_release_run_event
+    BEGIN SELECT RAISE(ABORT, 'production release events are append-only'); END;
+    CREATE TRIGGER previd_immutable BEFORE UPDATE ON production_release_evidence
+    BEGIN SELECT RAISE(ABORT, 'production release evidence is immutable'); END;
+    CREATE TRIGGER previd_no_delete BEFORE DELETE ON production_release_evidence
+    BEGIN SELECT RAISE(ABORT, 'production release evidence is append-only'); END;
+    CREATE TRIGGER prbind_identity_immutable BEFORE UPDATE ON production_release_workflow_binding
+    WHEN (
+      IFNULL(NEW.release_run_id,0) <> IFNULL(OLD.release_run_id,0)
+      OR IFNULL(NEW.workflow_kind,'') <> IFNULL(OLD.workflow_kind,'')
+      OR IFNULL(NEW.idempotency_key,'') <> IFNULL(OLD.idempotency_key,'')
+      OR (OLD.dispatch_intent_id IS NOT NULL AND IFNULL(NEW.dispatch_intent_id,'') <> IFNULL(OLD.dispatch_intent_id,''))
+      OR (OLD.authorized_github_actor IS NOT NULL AND IFNULL(NEW.authorized_github_actor,'') <> IFNULL(OLD.authorized_github_actor,''))
+      OR (OLD.workflow_run_id IS NOT NULL AND IFNULL(NEW.workflow_run_id,'') <> IFNULL(OLD.workflow_run_id,''))
+      OR (OLD.workflow_attempt IS NOT NULL AND IFNULL(NEW.workflow_attempt,0) <> IFNULL(OLD.workflow_attempt,0))
+      OR (OLD.dispatch_request_id IS NOT NULL AND IFNULL(NEW.dispatch_request_id,'') <> IFNULL(OLD.dispatch_request_id,''))
+      OR (OLD.provider_response_identity IS NOT NULL AND IFNULL(NEW.provider_response_identity,'') <> IFNULL(OLD.provider_response_identity,''))
+      OR (OLD.dispatch_submitted_at IS NOT NULL AND IFNULL(NEW.dispatch_submitted_at,'') <> IFNULL(OLD.dispatch_submitted_at,''))
+    )
+    BEGIN SELECT RAISE(ABORT, 'production release workflow binding identity is immutable'); END;
+    CREATE TRIGGER prbind_no_delete BEFORE DELETE ON production_release_workflow_binding
+    BEGIN SELECT RAISE(ABORT, 'production release workflow bindings are append-only'); END;
+  `);
+  ensureProductionReleaseBindingColumns(db);
+}
+
+function tableColumns(db, table) {
+  return db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+}
+
+function ensureProductionReleaseBindingColumns(db) {
+  const addIfMissing = (table, columns) => {
+    let cols = [];
+    try { cols = tableColumns(db, table); } catch { return; }
+    if (!cols.length) return;
+    for (const [name, decl] of columns) {
+      if (!cols.includes(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${decl}`);
+    }
+  };
+  addIfMissing("production_release_workflow_binding", [
+    ["dispatch_owner", "TEXT"],
+    ["dispatch_intent_id", "TEXT"],
+    ["dispatch_claimed_at", "TEXT"],
+    ["dispatch_submitted_at", "TEXT"],
+    ["authorized_github_actor", "TEXT"],
+  ]);
+  try {
+    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_prrun_auth_env ON production_release_run(release_authorization_id, target_environment)");
+  } catch { /* existing duplicate rows on old DBs stay fail-closed at app layer */ }
+  try {
+    db.exec(`CREATE TABLE IF NOT EXISTS production_release_global_lease (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      release_run_id INTEGER,
+      workflow_kind TEXT,
+      lease_owner TEXT,
+      claimed_at TEXT,
+      updated_at TEXT
+    )`);
+  } catch { /* noop */ }
+  addIfMissing("production_release_run", [
+    ["authorized_github_actor", "TEXT"],
+    ["previous_stable_release_run_id", "INTEGER"],
+  ]);
+  addIfMissing("production_stable_current", [
+    ["provenance_fingerprint", "TEXT"],
+  ]);
 }
 
 // 開一個 ops 資料庫。dbPath = ":memory:" 供測試使用。

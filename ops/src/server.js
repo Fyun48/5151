@@ -50,6 +50,17 @@ import { makeStagingProvider } from "./staging/provider.js";
 import { getReleaseCandidateView, getReleaseManifest, submitOwnerReleaseDecision, retryReleaseNotification, listReleaseNotifications } from "./releaseCandidate.js";
 import { releaseWorkerConfigFromEnv, startReleaseLoop } from "./releaseWorker.js";
 import { getMigrationSafetyView, createMigrationSafetyAssessment, assessApprovedReleaseIfNeeded } from "./release/migrationSafety.js";
+import {
+  createProductionReleaseRun,
+  executeProductionRelease,
+  getProductionRelease,
+  getProductionReleaseView,
+  getProductionStable,
+  reconcileProductionRelease,
+  requestCodeRollback,
+  retryProductionRelease,
+} from "./release/productionRelease.js";
+import { makeProductionReleaseProvider } from "./release/productionReleaseProvider.js";
 
 // 刻意不使用 express：ops 服務維持「零外部相依」，與本 repo 的 CI（不跑 npm install）相容，
 // 也縮小攻擊面。所有路由用 node:http 手刻的極小 router。
@@ -164,8 +175,9 @@ function runGuard(mw, req, reply) {
   return passed;
 }
 
-export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret = process.env.OPS_INGEST_SECRET || "", storage = null, scanner = null, codingRepo = null }) {
+export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret = process.env.OPS_INGEST_SECRET || "", storage = null, scanner = null, codingRepo = null, productionReleaseProvider = null }) {
   const releaseRepo = codingRepo || makeCodingRepo();
+  const releaseProvider = productionReleaseProvider || makeProductionReleaseProvider();
   if (!db) throw new Error("createHandler requires db");
   if (!auth) throw new Error("createHandler requires auth");
   const store = storage || new LocalPersistentStorage(defaultAttachmentDir(process.env.OPS_DATA_DIR || process.cwd()));
@@ -792,6 +804,99 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
         return;
       }
+      // ── Phase 15：Production release execution + code rollback（Owner exact IDs；不猜 latest；不持 secrets） ──
+      if (pathname === "/ops/api/production-stable" && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        sendJson(res, 200, { current_stable: getProductionStable(db) });
+        return;
+      }
+      const prodRelView = pathname.match(/^\/ops\/api\/coding-tasks\/(\d+)\/production-release$/);
+      if (prodRelView && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        try { sendJson(res, 200, getProductionReleaseView(db, Number(prodRelView[1]), { repo: releaseRepo })); }
+        catch (err) { sendJson(res, err.status || 404, { error: err.message }); }
+        return;
+      }
+      const prodRelGet = pathname.match(/^\/ops\/api\/production-releases\/(\d+)$/);
+      if (prodRelGet && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        const d = getProductionRelease(db, Number(prodRelGet[1]));
+        if (!d) { sendJson(res, 404, { error: "not found" }); return; }
+        sendJson(res, 200, d);
+        return;
+      }
+      const prodRelEvidence = pathname.match(/^\/ops\/api\/production-releases\/(\d+)\/evidence$/);
+      if (prodRelEvidence && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        const d = getProductionRelease(db, Number(prodRelEvidence[1]));
+        if (!d) { sendJson(res, 404, { error: "not found" }); return; }
+        sendJson(res, 200, { run: d.run, evidence: d.evidence, events: d.events });
+        return;
+      }
+      const prodRelExec = pathname.match(/^\/ops\/api\/coding-tasks\/(\d+)\/production-release\/execute$/);
+      if (prodRelExec && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {}; try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          const created = createProductionReleaseRun(db, {
+            codingTaskId: Number(prodRelExec[1]),
+            releaseAuthorizationId: b.release_authorization_id,
+            releaseAuthorizationHash: b.release_authorization_hash,
+            manifestId: b.manifest_id,
+            manifestVersion: b.manifest_version,
+            manifestHash: b.manifest_hash,
+            migrationSafetyAssessmentId: b.migration_safety_assessment_id,
+            migrationSafetyPolicyFingerprint: b.migration_safety_policy_fingerprint,
+            migrationSafetyInputFingerprint: b.migration_safety_input_fingerprint,
+            clearanceResult: b.clearance_result,
+            qaRunId: b.qa_run_id,
+            stagingDeploymentId: b.staging_deployment_id,
+            headSha: b.head_sha,
+            artifactDigest: b.artifact_digest,
+            targetEnvironment: b.target_environment,
+            workflowRef: b.workflow_ref,
+            expectedMasterHead: b.expected_master_head,
+            githubActor: "Fyun48",
+          }, { repo: releaseRepo, actor: `owner:${req.owner.email}` });
+          const executed = await executeProductionRelease(db, created.run.id, { provider: releaseProvider, repo: releaseRepo, actor: `owner:${req.owner.email}` });
+          sendJson(res, 200, { ok: true, idempotent: created.idempotent === true, ...executed });
+        } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+      const prodRelReconcile = pathname.match(/^\/ops\/api\/production-releases\/(\d+)\/reconcile$/);
+      if (prodRelReconcile && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          sendJson(res, 200, { ok: true, ...await reconcileProductionRelease(db, Number(prodRelReconcile[1]), { provider: releaseProvider, repo: releaseRepo, actor: `owner:${req.owner.email}` }) });
+        } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+      const prodRelRetry = pathname.match(/^\/ops\/api\/production-releases\/(\d+)\/retry$/);
+      if (prodRelRetry && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          sendJson(res, 200, { ok: true, ...await retryProductionRelease(db, Number(prodRelRetry[1]), { provider: releaseProvider, repo: releaseRepo, actor: `owner:${req.owner.email}` }) });
+        } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+      const prodRelRollback = pathname.match(/^\/ops\/api\/production-releases\/(\d+)\/rollback$/);
+      if (prodRelRollback && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {}; try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          sendJson(res, 200, { ok: true, ...await requestCodeRollback(db, {
+            releaseRunId: Number(prodRelRollback[1]),
+            previousStableSha: b.previous_stable_sha,
+            previousStableDigest: b.previous_stable_digest,
+            previousStableWorkflowRunId: b.previous_stable_workflow_run_id,
+            provider: releaseProvider,
+            repo: releaseRepo,
+            actor: `owner:${req.owner.email}`,
+          }) });
+        } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+
       const rcNotifRetry = pathname.match(/^\/ops\/api\/release-notifications\/(\d+)\/retry$/);
       if (rcNotifRetry && method === "POST") {
         if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
@@ -814,8 +919,8 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
 }
 
 // 相容舊測試/呼叫：createApp 回傳一個 { listen } 介面（用 node:http 包裝 handler）。
-export function createApp({ db, auth, publicDir = PUBLIC_DIR, ingestSecret = process.env.OPS_INGEST_SECRET || "", storage = null, scanner = null, codingRepo = null }) {
-  const handler = createHandler({ db, auth, publicDir, ingestSecret, storage, scanner, codingRepo });
+export function createApp({ db, auth, publicDir = PUBLIC_DIR, ingestSecret = process.env.OPS_INGEST_SECRET || "", storage = null, scanner = null, codingRepo = null, productionReleaseProvider = null }) {
+  const handler = createHandler({ db, auth, publicDir, ingestSecret, storage, scanner, codingRepo, productionReleaseProvider });
   return {
     handler,
     listen(...args) {

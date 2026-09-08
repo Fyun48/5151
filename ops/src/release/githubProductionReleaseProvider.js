@@ -1,0 +1,675 @@
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import {
+  PRODUCTION_RELEASE_PROVIDER_VERSION,
+  PRODUCTION_WORKFLOWS,
+  REQUIRED_OCI_SOURCE,
+  REQUIRED_TARGET_ENVIRONMENT,
+  REQUIRED_WORKFLOW_REF,
+  digestLooksImmutable,
+  isAuthorizedGithubActor,
+} from "./productionReleasePolicy.js";
+
+// Fail-closed GitHub Actions adapter for Phase 15.
+// 只用既有 protected manual workflows；Ops 不持、不回傳 Production / GitHub secrets。
+// GitHub workflow_dispatch 回 204 且沒有 run id：必須用 durable intent + 獨立查詢綁定恰好一筆 run。
+// 測試只注入 fake API；沒有 Owner mutation grant 時永遠 unavailable。
+
+export const PRODUCTION_RELEASE_MUTATION_GRANT = "owner-dispatch-v1";
+export const PHASE15_EVIDENCE_ARTIFACT = "phase15-workflow-evidence";
+export const PHASE15_EVIDENCE_SCHEMA = "phase15-workflow-evidence-v1";
+export const PHASE15_IDENTITY_ARTIFACT = "phase15-run-identity";
+export const PHASE15_IDENTITY_SCHEMA = "phase15-run-identity-v1";
+export const PHASE15_INTENT_RUN_NAME_PREFIX = "phase15-intent:";
+
+export function phase15IntentRunName(intentId) {
+  return `${PHASE15_INTENT_RUN_NAME_PREFIX}${intentId}`;
+}
+
+export function runNameMatchesIntent(run, intentId) {
+  if (!run || !intentId) return false;
+  const expected = phase15IntentRunName(intentId);
+  return run.name === expected || run.display_title === expected;
+}
+
+const ALLOWED_WORKFLOWS = new Set(Object.values(PRODUCTION_WORKFLOWS));
+
+function sha256(s) {
+  return createHash("sha256").update(String(s)).digest("hex");
+}
+
+function missing(v) {
+  return v == null || v === "";
+}
+
+function parseRepo(env = {}) {
+  const raw = String(env.GITHUB_REPOSITORY || env.PRODUCTION_RELEASE_GITHUB_REPOSITORY || "Fyun48/5151");
+  const [owner, repo] = raw.split("/");
+  if (!owner || !repo || owner !== "Fyun48" || repo !== "5151") return null;
+  return { owner, repo };
+}
+
+function workflowInputs({ workflowFile, inputs = {}, confirmation, releaseIntentId } = {}) {
+  const sha = inputs.sha;
+  if (!/^[0-9a-f]{40}$/.test(String(sha || ""))) return { ok: false, reason: "sha_not_exact" };
+  const intent = releaseIntentId || inputs.release_intent_id || "";
+  if (!intent || String(intent).length < 16) return { ok: false, reason: "release_intent_missing" };
+  const withIntent = { sha, release_intent_id: String(intent) };
+  if (workflowFile === PRODUCTION_WORKFLOWS.BUILD) {
+    return { ok: true, inputs: withIntent };
+  }
+  if (workflowFile === PRODUCTION_WORKFLOWS.PREDEPLOY) {
+    const confirm = confirmation || inputs.confirmation;
+    if (confirm !== "PREDEPLOY-PRODUCTION") return { ok: false, reason: "confirmation_mismatch" };
+    return { ok: true, inputs: { ...withIntent, confirmation: confirm } };
+  }
+  if (workflowFile === PRODUCTION_WORKFLOWS.DEPLOY) {
+    const digest = inputs.image_digest || inputs.expected_digest;
+    if (!digestLooksImmutable(digest)) return { ok: false, reason: "digest_not_immutable" };
+    const confirm = confirmation || inputs.confirmation || "DEPLOY-PRODUCTION";
+    if (confirm !== "DEPLOY-PRODUCTION") return { ok: false, reason: "confirmation_mismatch" };
+    return { ok: true, inputs: { ...withIntent, image_digest: digest, confirmation: confirm } };
+  }
+  return { ok: false, reason: "workflow_not_allowed" };
+}
+
+function loginOf(actor) {
+  if (!actor) return null;
+  if (typeof actor === "string") return actor;
+  return actor.login || null;
+}
+
+function createdAfterOk(createdAt, createdAfter) {
+  if (!createdAfter) return true;
+  return String(createdAt || "") >= String(createdAfter);
+}
+
+export function correlateGithubWorkflowRuns(runs, expected = {}) {
+  const matches = (runs || []).filter((run) => {
+    const actor = loginOf(run.actor);
+    const triggering = loginOf(run.triggering_actor);
+    const file = run.path || run.workflow_file;
+    const sha = run.head_sha;
+    if (expected.workflowFile && file !== expected.workflowFile) return false;
+    if (expected.headSha && sha !== expected.headSha) return false;
+    if (expected.actor && actor !== expected.actor) return false;
+    if (expected.actor && triggering !== expected.actor) return false;
+    if (run.event && run.event !== "workflow_dispatch") return false;
+    if (!createdAfterOk(run.created_at, expected.createdAfter)) return false;
+    return true;
+  });
+  if (matches.length === 0) return { run: null, ambiguous: false, matches: [] };
+  if (matches.length > 1) return { run: null, ambiguous: true, matches };
+  return { run: matches[0], ambiguous: false, matches };
+}
+
+export function ociLabelsFromConfig(config) {
+  if (!config || typeof config !== "object") return { revision: null, source: null };
+  const labels = config.config?.Labels || config.Labels || config.config?.labels || {};
+  const revision = labels["org.opencontainers.image.revision"] || null;
+  const source = labels["org.opencontainers.image.source"] || null;
+  return { revision: revision || null, source: source || null };
+}
+
+export function extractJsonFromArtifactZip(buf, fileName) {
+  if (!fileName || String(fileName).includes("..") || String(fileName).includes("/")) {
+    throw new Error("artifact filename is not allowed");
+  }
+  const dir = mkdtempSync(path.join(tmpdir(), "phase15-art-"));
+  try {
+    writeFileSync(path.join(dir, "a.zip"), buf);
+    const text = execFileSync("unzip", ["-p", path.join(dir, "a.zip"), fileName], { encoding: "utf8" });
+    return JSON.parse(text);
+  } finally {
+    try { rmSync(dir, { recursive: true, force: true }); } catch { /* noop */ }
+  }
+}
+
+export function sealPhase15Evidence(doc) {
+  const rest = { ...doc };
+  delete rest.evidence_sha256;
+  const canonical = JSON.stringify(sortKeys(rest));
+  return { ...rest, evidence_sha256: `sha256:${sha256(canonical)}` };
+}
+
+export function verifyPhase15EvidenceDigest(evidence) {
+  if (!evidence || typeof evidence !== "object") return false;
+  const expected = evidence.evidence_sha256;
+  if (!/^sha256:[a-f0-9]{64}$/.test(String(expected || ""))) return false;
+  const rest = { ...evidence };
+  delete rest.evidence_sha256;
+  const canonical = JSON.stringify(sortKeys(rest));
+  return `sha256:${sha256(canonical)}` === expected;
+}
+
+function sortKeys(value) {
+  if (Array.isArray(value)) return value.map(sortKeys);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.keys(value).sort().map((k) => [k, sortKeys(value[k])]));
+  }
+  return value;
+}
+
+export function bindPhase15EvidenceToRun(evidence, run, expected = {}) {
+  if (!evidence || evidence.schema !== PHASE15_EVIDENCE_SCHEMA) return null;
+  if (!verifyPhase15EvidenceDigest(evidence)) return null;
+  const required = [
+    "workflow_run_id", "workflow_attempt", "workflow_file", "workflow_ref",
+    "head_sha", "source_sha", "actor", "triggering_actor", "release_intent_id",
+  ];
+  for (const key of required) {
+    if (evidence[key] == null || evidence[key] === "") return null;
+  }
+  if (String(evidence.workflow_run_id) !== String(run.id)) return null;
+  if (Number(evidence.workflow_attempt) !== Number(run.run_attempt || run.attempt)) return null;
+  if (evidence.workflow_ref !== REQUIRED_WORKFLOW_REF) return null;
+  const file = run.path || run.workflow_file;
+  if (file && evidence.workflow_file !== file) return null;
+  if (run.workflow_ref && evidence.workflow_ref !== run.workflow_ref) return null;
+  if (run.head_sha && evidence.head_sha !== run.head_sha) return null;
+  if (loginOf(run.actor) && evidence.actor !== loginOf(run.actor)) return null;
+  if (loginOf(run.triggering_actor) && evidence.triggering_actor !== loginOf(run.triggering_actor)) return null;
+  const mutating = evidence.workflow_file === PRODUCTION_WORKFLOWS.PREDEPLOY
+    || evidence.workflow_file === PRODUCTION_WORKFLOWS.DEPLOY;
+  if (mutating) {
+    if (evidence.environment !== REQUIRED_TARGET_ENVIRONMENT) return null;
+    if (!evidence.confirmation) return null;
+    if (evidence.workflow_file === PRODUCTION_WORKFLOWS.PREDEPLOY && evidence.confirmation !== "PREDEPLOY-PRODUCTION") return null;
+    if (evidence.workflow_file === PRODUCTION_WORKFLOWS.DEPLOY && evidence.confirmation !== "DEPLOY-PRODUCTION") return null;
+    if (evidence.workflow_file === PRODUCTION_WORKFLOWS.DEPLOY && !digestLooksImmutable(evidence.image_digest)) return null;
+  } else if (evidence.environment) {
+    return null;
+  } else if (!digestLooksImmutable(evidence.image_digest)) {
+    return null;
+  }
+  if (expected.releaseIntentId && evidence.release_intent_id !== expected.releaseIntentId) return null;
+  if (expected.sourceSha && evidence.source_sha !== expected.sourceSha) return null;
+  if (expected.environment && evidence.environment !== expected.environment) return null;
+  if (expected.confirmation && evidence.confirmation !== expected.confirmation) return null;
+  if (expected.imageDigest && evidence.image_digest !== expected.imageDigest) return null;
+  const currentProduction = evidence.current_production && digestLooksImmutable(evidence.current_production.digest)
+    ? evidence.current_production
+    : null;
+  return {
+    image_digest: evidence.image_digest || null,
+    oci_revision: evidence.oci_revision || null,
+    oci_source: evidence.oci_source || null,
+    source_sha: evidence.source_sha,
+    confirmation: evidence.confirmation || null,
+    release_intent_id: evidence.release_intent_id,
+    environment: evidence.environment || null,
+    workflow_ref: evidence.workflow_ref,
+    db_backup: evidence.db_backup && evidence.db_backup.verified === true ? evidence.db_backup : null,
+    health: evidence.health && typeof evidence.health === "object" ? evidence.health : null,
+    current_production: currentProduction,
+  };
+}
+
+export function bindPhase15IdentityToRun(evidence, run, expected = {}) {
+  if (!evidence || evidence.schema !== PHASE15_IDENTITY_SCHEMA) return null;
+  if (!verifyPhase15EvidenceDigest(evidence)) return null;
+  const required = [
+    "workflow_run_id", "workflow_attempt", "workflow_file", "workflow_ref",
+    "head_sha", "source_sha", "actor", "triggering_actor", "release_intent_id",
+  ];
+  for (const key of required) {
+    if (evidence[key] == null || evidence[key] === "") return null;
+  }
+  if (String(evidence.workflow_run_id) !== String(run.id)) return null;
+  if (Number(evidence.workflow_attempt) !== Number(run.run_attempt || run.attempt)) return null;
+  if (evidence.workflow_ref !== REQUIRED_WORKFLOW_REF) return null;
+  const file = run.path || run.workflow_file;
+  if (file && evidence.workflow_file !== file) return null;
+  if (loginOf(run.actor) && evidence.actor !== loginOf(run.actor)) return null;
+  if (loginOf(run.triggering_actor) && evidence.triggering_actor !== loginOf(run.triggering_actor)) return null;
+  if (expected.releaseIntentId && evidence.release_intent_id !== expected.releaseIntentId) return null;
+  return { release_intent_id: evidence.release_intent_id };
+}
+
+export function normalizeGithubWorkflowRun(raw, extras = {}) {
+  if (!raw) return null;
+  const outputs = extras.evidenceOutputs && typeof extras.evidenceOutputs === "object" ? extras.evidenceOutputs : {};
+  const environment = Object.prototype.hasOwnProperty.call(outputs, "environment")
+    ? (outputs.environment || null)
+    : null;
+  const actor = loginOf(raw.actor);
+  const triggering = loginOf(raw.triggering_actor);
+  return {
+    id: raw.id != null ? String(raw.id) : null,
+    attempt: raw.run_attempt != null ? Number(raw.run_attempt) : (raw.attempt != null ? Number(raw.attempt) : null),
+    status: raw.status || null,
+    conclusion: raw.conclusion ?? null,
+    workflow_file: raw.path || raw.workflow_file || null,
+    workflow_ref: raw.workflow_ref || (raw.head_branch === "master" ? REQUIRED_WORKFLOW_REF : null),
+    head_sha: raw.head_sha || null,
+    actor,
+    triggering_actor: triggering,
+    environment,
+    outputs,
+    created_at: raw.created_at || null,
+    event: raw.event || "workflow_dispatch",
+    request_id: extras.request_id || raw.request_id || outputs.release_intent_id || null,
+    provider_response_identity: extras.provider_response_identity || raw.provider_response_identity || null,
+  };
+}
+
+function unavailable(setup) {
+  const err = () => {
+    throw Object.assign(new Error("github production release provider unavailable"), { status: 503, code: "provider_unavailable" });
+  };
+  return {
+    name: "github",
+    available: false,
+    version: PRODUCTION_RELEASE_PROVIDER_VERSION,
+    setup,
+    restoreCallCount: 0,
+    dispatchCount: 0,
+    async dispatchWorkflow() { err(); },
+    async getWorkflowRun() { err(); },
+    async findWorkflowRunByIdempotency() { err(); },
+    async inspectImage() { err(); },
+    async mergePullRequest() { err(); },
+    async healthSmoke() { err(); },
+    async restoreDatabase() { err(); },
+  };
+}
+
+export function githubProviderLiveEnabled(env = process.env) {
+  return String(env.PRODUCTION_RELEASE_MUTATION_GRANT || "") === PRODUCTION_RELEASE_MUTATION_GRANT
+    && String(env.PRODUCTION_RELEASE_ALLOW_LIVE || "") === "1"
+    && isAuthorizedGithubActor(env.PRODUCTION_RELEASE_GITHUB_ACTOR)
+    && !!(env.GITHUB_TOKEN || env.GH_TOKEN);
+}
+
+export function githubProviderAvailable(env = process.env, deps = {}) {
+  const grant = String(env.PRODUCTION_RELEASE_MUTATION_GRANT || "") === PRODUCTION_RELEASE_MUTATION_GRANT;
+  const actor = isAuthorizedGithubActor(env.PRODUCTION_RELEASE_GITHUB_ACTOR);
+  const repo = parseRepo(env);
+  if (!grant || !actor || !repo) return false;
+  if (deps.githubApi) return true;
+  return githubProviderLiveEnabled(env);
+}
+
+function redactGithubError(err) {
+  const msg = String(err?.message || err || "github_api_error").replace(/ghs_|github_pat_|ghp_[A-Za-z0-9_]+/g, "[REDACTED]");
+  return msg.slice(0, 240);
+}
+
+function ambiguousDispatch(releaseIntentId, err) {
+  return {
+    accepted: true,
+    timeout: true,
+    reason: redactGithubError(err),
+    workflow_run_id: null,
+    request_id: releaseIntentId,
+    provider_response_identity: `github-timeout-${sha256(releaseIntentId).slice(0, 20)}`,
+  };
+}
+
+export function createLiveGithubApi(env = process.env) {
+  const token = env.GITHUB_TOKEN || env.GH_TOKEN;
+  async function gh(path, { method = "GET", body = null, accept = "application/vnd.github+json" } = {}) {
+    const res = await fetch(`https://api.github.com${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: accept,
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "5151-ops-phase15",
+        ...(body ? { "Content-Type": "application/json" } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    return res;
+  }
+  return {
+    async dispatchWorkflow({ owner, repo, workflowFile, ref, inputs }) {
+      const encoded = encodeURIComponent(workflowFile);
+      let res;
+      try {
+        res = await gh(`/repos/${owner}/${repo}/actions/workflows/${encoded}/dispatches`, {
+          method: "POST",
+          body: { ref: ref.replace(/^refs\/heads\//, ""), inputs },
+        });
+      } catch (err) {
+        // Native fetch() does not emit dispatch_timeout. Surface a transport
+        // result so the adapter can hold the lease instead of REJECTED.
+        return { status: null, ok: false, transportError: true, reason: redactGithubError(err) };
+      }
+      return { status: res.status, ok: res.status === 204 };
+    },
+    async listWorkflowRuns({ owner, repo, workflowFile }) {
+      const encoded = encodeURIComponent(workflowFile);
+      const res = await gh(`/repos/${owner}/${repo}/actions/workflows/${encoded}/runs?event=workflow_dispatch&per_page=30`);
+      if (!res.ok) return { runs: [] };
+      const json = await res.json();
+      return { runs: json.workflow_runs || [] };
+    },
+    async getWorkflowRun({ owner, repo, runId }) {
+      const runRes = await gh(`/repos/${owner}/${repo}/actions/runs/${runId}`);
+      if (!runRes.ok) return null;
+      const run = await runRes.json();
+      const jobsRes = await gh(`/repos/${owner}/${repo}/actions/runs/${runId}/jobs`);
+      const jobsJson = jobsRes.ok ? await jobsRes.json() : { jobs: [] };
+      return { run, jobs: jobsJson.jobs || [] };
+    },
+    async inspectImage({ digest }) {
+      const headers = {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json",
+        "User-Agent": "5151-ops-phase15",
+      };
+      const manifestRes = await fetch(`https://ghcr.io/v2/fyun48/5151/manifests/${digest}`, { headers });
+      if (!manifestRes.ok) return null;
+      const observed = manifestRes.headers.get("docker-content-digest") || digest;
+      const manifest = await manifestRes.json();
+      let imageManifest = manifest;
+      if (Array.isArray(manifest.manifests) && manifest.manifests.length) {
+        const amd = manifest.manifests.find((m) => m.platform?.architecture === "amd64" && m.platform?.os === "linux") || manifest.manifests[0];
+        if (!amd?.digest) return { digest: observed };
+        const nested = await fetch(`https://ghcr.io/v2/fyun48/5151/manifests/${amd.digest}`, { headers });
+        if (!nested.ok) return { digest: observed };
+        imageManifest = await nested.json();
+      }
+      const configDigest = imageManifest.config?.digest;
+      if (!configDigest) return { digest: observed };
+      const configRes = await fetch(`https://ghcr.io/v2/fyun48/5151/blobs/${configDigest}`, { headers });
+      if (!configRes.ok) return { digest: observed };
+      const labels = ociLabelsFromConfig(await configRes.json());
+      return { digest: observed, oci_revision: labels.revision, oci_source: labels.source };
+    },
+    async listArtifacts({ owner, repo, runId }) {
+      const res = await gh(`/repos/${owner}/${repo}/actions/runs/${runId}/artifacts`);
+      if (!res.ok) return { artifacts: [] };
+      return res.json();
+    },
+    async downloadArtifact({ owner, repo, artifactId, fileName }) {
+      const res = await gh(`/repos/${owner}/${repo}/actions/artifacts/${artifactId}/zip`);
+      if (!res.ok) return null;
+      const buf = Buffer.from(await res.arrayBuffer());
+      try {
+        return { evidence: extractJsonFromArtifactZip(buf, fileName || `${PHASE15_EVIDENCE_ARTIFACT}.json`) };
+      } catch {
+        return null;
+      }
+    },
+    async compare({ owner, repo, base, head }) {
+      const res = await gh(`/repos/${owner}/${repo}/compare/${base}...${head}`);
+      if (!res.ok) return null;
+      return res.json();
+    },
+    async getRef({ owner, repo, ref }) {
+      const res = await gh(`/repos/${owner}/${repo}/git/ref/heads/${ref}`);
+      if (!res.ok) return null;
+      return res.json();
+    },
+  };
+}
+
+export function makeGithubProductionReleaseProvider(env = process.env, deps = {}) {
+  const setup = {
+    status: "mutations_disabled",
+    required: [
+      "Owner-controlled workflow_dispatch on existing Production workflows only.",
+      "Protected GitHub production environment; Ops must not store or return Production secrets.",
+      "PRODUCTION_RELEASE_PROVIDER=github plus PRODUCTION_RELEASE_MUTATION_GRANT=owner-dispatch-v1.",
+      "Exact SHA + immutable image digest + workflow ref refs/heads/master.",
+      "Authorized GitHub login captured immutably at intent creation.",
+    ],
+  };
+  if (!githubProviderAvailable(env, deps)) {
+    return unavailable(setup);
+  }
+  const repo = parseRepo(env);
+  const authorizedActor = env.PRODUCTION_RELEASE_GITHUB_ACTOR;
+  const api = deps.githubApi || createLiveGithubApi(env);
+  const acceptedIntents = deps.acceptedIntents || new Set();
+  let dispatchCount = 0;
+  let restoreCallCount = 0;
+
+  async function downloadNamedArtifact(run, artifactName) {
+    if (!run?.id) return null;
+    if (typeof api.listArtifacts !== "function" || typeof api.downloadArtifact !== "function") return null;
+    const listed = await api.listArtifacts({ owner: repo.owner, repo: repo.repo, runId: run.id });
+    const matches = (listed?.artifacts || []).filter((a) => a.name === artifactName && !a.expired);
+    if (matches.length !== 1) return null;
+    const downloaded = await api.downloadArtifact({
+      owner: repo.owner,
+      repo: repo.repo,
+      artifactId: matches[0].id,
+      runId: run.id,
+      fileName: `${artifactName}.json`,
+    });
+    return downloaded?.evidence
+      || downloaded?.files?.[`${artifactName}.json`]
+      || downloaded?.json
+      || null;
+  }
+
+  async function loadEvidenceOutputs(run, expected = {}) {
+    const evidence = await downloadNamedArtifact(run, PHASE15_EVIDENCE_ARTIFACT);
+    return bindPhase15EvidenceToRun(evidence, run, expected) || {};
+  }
+
+  async function loadIdentityIntent(run, expected = {}) {
+    const evidence = await downloadNamedArtifact(run, PHASE15_IDENTITY_ARTIFACT);
+    return bindPhase15IdentityToRun(evidence, run, expected);
+  }
+
+  function runIdentityEligible(run, { workflowFile, createdAfter } = {}) {
+    const file = run.path || run.workflow_file;
+    if (workflowFile && file !== workflowFile) return false;
+    if (run.event && run.event !== "workflow_dispatch") return false;
+    if (!createdAfterOk(run.created_at, createdAfter)) return false;
+    const actor = loginOf(run.actor);
+    const triggering = loginOf(run.triggering_actor);
+    if (actor && !isAuthorizedGithubActor(actor)) return false;
+    if (triggering && !isAuthorizedGithubActor(triggering)) return false;
+    if (run.head_branch && run.head_branch !== "master") return false;
+    if (run.workflow_ref && run.workflow_ref !== REQUIRED_WORKFLOW_REF) return false;
+    return true;
+  }
+
+  async function hydrateRun(raw, jobs, expected = {}) {
+    const evidenceOutputs = await loadEvidenceOutputs(raw, expected);
+    return normalizeGithubWorkflowRun(raw, { jobs, evidenceOutputs });
+  }
+
+  async function lookupRunByIntent({ workflowFile, releaseIntentId, createdAfter } = {}) {
+    if (!releaseIntentId) return null;
+    const listed = await api.listWorkflowRuns({
+      owner: repo.owner,
+      repo: repo.repo,
+      workflowFile,
+    });
+    const candidates = (listed.runs || []).filter((run) => runIdentityEligible(run, { workflowFile, createdAfter }));
+    const boundIds = new Set();
+    const bound = [];
+    for (const raw of candidates) {
+      const detail = await api.getWorkflowRun({ owner: repo.owner, repo: repo.repo, runId: raw.id });
+      const run = detail?.run || raw;
+      const evidenceOutputs = await loadEvidenceOutputs(run, { releaseIntentId });
+      const identity = await loadIdentityIntent(run, { releaseIntentId });
+      const named = runNameMatchesIntent(run, releaseIntentId);
+      if (evidenceOutputs.release_intent_id === releaseIntentId || identity?.release_intent_id === releaseIntentId || named) {
+        if (boundIds.has(String(run.id))) continue;
+        boundIds.add(String(run.id));
+        bound.push(normalizeGithubWorkflowRun(run, {
+          jobs: detail?.jobs,
+          evidenceOutputs,
+          request_id: releaseIntentId,
+        }));
+      }
+    }
+    if (bound.length > 1) return { ambiguous: true, id: null };
+    return bound[0] || null;
+  }
+
+  return {
+    name: "github",
+    available: true,
+    version: PRODUCTION_RELEASE_PROVIDER_VERSION,
+    setup: { status: "granted", repository: `${repo.owner}/${repo.repo}`, workflows: [...ALLOWED_WORKFLOWS] },
+    get dispatchCount() { return dispatchCount; },
+    get restoreCallCount() { return restoreCallCount; },
+
+    async dispatchWorkflow({
+      workflowFile, workflowRef, inputs = {}, actor, environment, confirmation, requestId, expectedHead,
+    } = {}) {
+      if (!ALLOWED_WORKFLOWS.has(workflowFile)) {
+        return { accepted: false, reason: "workflow_not_allowed", workflow_run_id: null };
+      }
+      if (workflowRef && workflowRef !== REQUIRED_WORKFLOW_REF) {
+        return { accepted: false, reason: "workflow_ref_mismatch", workflow_run_id: null };
+      }
+      if (actor && actor !== authorizedActor) {
+        return { accepted: false, reason: "actor_mismatch", workflow_run_id: null };
+      }
+      if (environment && environment !== REQUIRED_TARGET_ENVIRONMENT && workflowFile !== PRODUCTION_WORKFLOWS.BUILD) {
+        return { accepted: false, reason: "environment_mismatch", workflow_run_id: null };
+      }
+      const intent = requestId || inputs.release_intent_id || "";
+      const prepared = workflowInputs({ workflowFile, inputs, confirmation, releaseIntentId: intent });
+      if (!prepared.ok) return { accepted: false, reason: prepared.reason, workflow_run_id: null };
+      if (expectedHead && inputs.expected_head && expectedHead !== inputs.expected_head) {
+        return { accepted: false, reason: "expected_head_race", workflow_run_id: null };
+      }
+
+      const existing = await lookupRunByIntent({ workflowFile, releaseIntentId: prepared.inputs.release_intent_id });
+      if (existing?.ambiguous) return { accepted: false, reason: "ambiguous_workflow_run", workflow_run_id: null };
+      if (existing?.id || acceptedIntents.has(prepared.inputs.release_intent_id)) {
+        return {
+          accepted: true,
+          idempotent: true,
+          pending_lookup: !existing?.id,
+          workflow_run_id: existing?.id || null,
+          attempt: existing?.attempt || null,
+          request_id: prepared.inputs.release_intent_id,
+          provider_response_identity: `github-dispatch-${sha256(prepared.inputs.release_intent_id).slice(0, 20)}`,
+        };
+      }
+
+      let dispatched;
+      try {
+        dispatched = await api.dispatchWorkflow({
+          owner: repo.owner,
+          repo: repo.repo,
+          workflowFile,
+          ref: "master",
+          inputs: prepared.inputs,
+        });
+      } catch (err) {
+        // Native fetch() throws TypeError / network errors with no HTTP status.
+        // A POST mutation may already have been accepted. Never treat a throw as REJECTED.
+        return ambiguousDispatch(prepared.inputs.release_intent_id, err);
+      }
+      if (dispatched?.timeout || dispatched?.transportError || dispatched?.status == null) {
+        return ambiguousDispatch(prepared.inputs.release_intent_id, dispatched?.reason);
+      }
+      if (dispatched.status !== 204) {
+        return {
+          accepted: false,
+          reason: dispatched?.reason || `dispatch_http_${dispatched.status}`,
+          workflow_run_id: null,
+          request_id: prepared.inputs.release_intent_id,
+        };
+      }
+      dispatchCount += 1;
+      acceptedIntents.add(prepared.inputs.release_intent_id);
+      if (deps.crashAfterAccept) {
+        throw Object.assign(new Error("crash after dispatch response"), { code: "crash_after_dispatch" });
+      }
+      const found = await lookupRunByIntent({ workflowFile, releaseIntentId: prepared.inputs.release_intent_id });
+      if (found?.ambiguous) return { accepted: false, reason: "ambiguous_workflow_run", workflow_run_id: null, request_id: prepared.inputs.release_intent_id };
+      return {
+        accepted: true,
+        pending_lookup: !found?.id,
+        workflow_run_id: found?.id || null,
+        attempt: found?.attempt || null,
+        head_sha: found?.head_sha || null,
+        workflow_ref: found?.workflow_ref || null,
+        actor: found?.actor || null,
+        triggering_actor: found?.triggering_actor || null,
+        environment: found?.environment || null,
+        request_id: prepared.inputs.release_intent_id,
+        provider_response_identity: `github-dispatch-${sha256(prepared.inputs.release_intent_id).slice(0, 20)}`,
+      };
+    },
+
+    async getWorkflowRun({ workflow_run_id } = {}) {
+      if (!workflow_run_id) return null;
+      const detail = await api.getWorkflowRun({ owner: repo.owner, repo: repo.repo, runId: workflow_run_id });
+      if (!detail?.run && !detail?.id) return null;
+      const raw = detail.run || detail;
+      return hydrateRun(raw, detail.jobs);
+    },
+
+    async findWorkflowRunByIdempotency({
+      workflowFile, dispatchIntentId, createdAfter,
+    } = {}) {
+      if (missing(workflowFile) || missing(dispatchIntentId)) return null;
+      const found = await lookupRunByIntent({ workflowFile, releaseIntentId: dispatchIntentId, createdAfter });
+      if (found?.ambiguous) return { ambiguous: true, id: null };
+      return found;
+    },
+
+    async inspectImage({ digest } = {}) {
+      if (!digestLooksImmutable(digest)) return null;
+      if (typeof api.inspectImage !== "function") return null;
+      const inspected = await api.inspectImage({ digest });
+      if (!inspected?.digest) return null;
+      return {
+        digest: inspected.digest,
+        oci_revision: inspected.oci_revision || null,
+        oci_source: inspected.oci_source || null,
+      };
+    },
+
+    async mergePullRequest({ sha, repo: gitRepo } = {}) {
+      if (typeof api.compare === "function") {
+        const cmp = await api.compare({ owner: repo.owner, repo: repo.repo, base: sha, head: "master" });
+        const mergeBase = cmp?.merge_base_commit?.sha;
+        if (mergeBase && String(mergeBase) === String(sha)) {
+          const ref = typeof api.getRef === "function" ? await api.getRef({ owner: repo.owner, repo: repo.repo, ref: "master" }) : null;
+          return { ok: true, already_merged: true, master_sha: ref?.object?.sha || mergeBase, admin_override: false };
+        }
+        return { ok: false, reason: "target_sha_not_on_protected_master", admin_override: false };
+      }
+      if (gitRepo?.isRemoteAncestor?.(sha, "master")) {
+        return { ok: true, already_merged: true, master_sha: gitRepo.resolveRemoteRef("master"), admin_override: false };
+      }
+      return { ok: false, reason: "target_sha_not_on_protected_master", admin_override: false, local_only: true };
+    },
+
+    async healthSmoke({ workflowRunId, workflow } = {}) {
+      const empty = {
+        passed: false, health: false, landing: false, login: false, container_running: false,
+        image_digest: null, oci_revision: null, detail: "health_evidence_missing",
+      };
+      const wf = workflow || (workflowRunId ? await this.getWorkflowRun({ workflow_run_id: workflowRunId }) : null);
+      const h = wf?.outputs?.health;
+      if (!h || typeof h !== "object") return empty;
+      const imageDigest = h.image_digest || null;
+      const revision = h.oci_revision || null;
+      const complete = !!(h.health && h.landing && h.login && h.container_running && imageDigest && revision);
+      return {
+        passed: complete && h.passed !== false,
+        health: !!h.health,
+        landing: !!h.landing,
+        login: !!h.login,
+        container_running: !!h.container_running,
+        image_digest: imageDigest,
+        oci_revision: revision,
+        detail: complete ? null : "health_evidence_incomplete",
+      };
+    },
+
+    async restoreDatabase() {
+      restoreCallCount += 1;
+      throw Object.assign(new Error("automatic production DB restore is forbidden"), { code: "db_restore_forbidden", status: 409 });
+    },
+  };
+}

@@ -1,4 +1,5 @@
 name: Deploy v3 to CasaOS (manual)
+run-name: "phase15-intent:${{ inputs.release_intent_id }}"
 
 # Production 部署一律「明確手動觸發」。合併/push 到 master 不會自動部署 v3。
 # 部署會把指定 commit SHA 的 v3/src、v3/public 與 compose 檔 SCP 到正式 NAS，
@@ -30,6 +31,9 @@ on:
         description: "輸入 DEPLOY-PRODUCTION 以確認正式部署"
         required: true
         default: ""
+      release_intent_id:
+        description: "Ops Phase 15 durable release_intent_id（不可猜測，必須與 evidence 一致）"
+        required: true
 
 permissions:
   contents: read
@@ -82,6 +86,29 @@ jobs:
         with:
           ref: master
           fetch-depth: 0
+      - name: Write Phase 15 run identity
+        if: always()
+        env:
+          EVIDENCE_KIND: identity
+          WF_FILE: .github/workflows/deploy-v3.yml
+          WF_REF: ${{ github.ref }}
+          WF_RUN_ID: ${{ github.run_id }}
+          WF_ATTEMPT: ${{ github.run_attempt }}
+          WF_HEAD_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ inputs.sha }}
+          WF_ACTOR: ${{ github.actor }}
+          WF_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          RELEASE_INTENT_ID: ${{ inputs.release_intent_id }}
+          WF_ENVIRONMENT: production
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: python3 .github/scripts/write-phase15-workflow-evidence.py phase15-run-identity.json
+      - name: Upload Phase 15 run identity
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase15-run-identity
+          path: phase15-run-identity.json
+          if-no-files-found: error
       - name: Validate SHA reachable from origin/master, then check it out
         env:
           DEPLOY_SHA: ${{ inputs.sha }}
@@ -240,3 +267,70 @@ jobs:
             fi
             docker exec 591-tracker-v3 node -e "import('sharp').then(()=>console.log('SHARP_OK')).catch(()=>{console.error('SHARP_MISSING'); process.exit(1)})"
             echo "DEPLOY_V3_OK source=$DEPLOY_SHA image=$IMAGE_PIN"
+            python3 -c "import json; open('/tmp/phase15-deploy-health.json','w').write(json.dumps({'container_running':True,'health':True,'landing':True,'login':True,'image_digest':'$IMAGE_DIGEST','oci_revision':'$DEPLOY_SHA','container_image':'$IMAGE_PIN'})+'\n')"
+      - name: Pull NAS deploy health evidence
+        env:
+          NAS_HOST: ${{ secrets.NAS_HOST }}
+          NAS_PORT: ${{ secrets.NAS_PORT }}
+          NAS_USER: ${{ secrets.NAS_USER }}
+          NAS_SSH_KEY: ${{ secrets.NAS_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          key="$(mktemp)"
+          printf '%s\n' "$NAS_SSH_KEY" > "$key"
+          chmod 600 "$key"
+          scp -o StrictHostKeyChecking=accept-new -P "$NAS_PORT" -i "$key" \
+            "$NAS_USER@$NAS_HOST:/tmp/phase15-deploy-health.json" ./nas-deploy-health.json
+          rm -f "$key"
+          python3 - <<'PY'
+          import json
+          nas = json.load(open("nas-deploy-health.json"))
+          required = ("container_running", "health", "landing", "login", "image_digest", "oci_revision")
+          if not all(nas.get(k) for k in required):
+              raise SystemExit("deploy NAS health evidence incomplete")
+          digest = nas["image_digest"]
+          revision = nas["oci_revision"]
+          if not str(digest).startswith("sha256:") or len(str(digest)) != 71:
+              raise SystemExit("deploy NAS health evidence digest is not immutable")
+          lines = [
+              f"IMAGE_DIGEST={digest}",
+              f"OCI_REVISION={revision}",
+              "HEALTH_OBSERVED=true",
+              f"HEALTH_API={'true' if nas.get('health') else 'false'}",
+              f"HEALTH_LANDING={'true' if nas.get('landing') else 'false'}",
+              f"HEALTH_LOGIN={'true' if nas.get('login') else 'false'}",
+              f"HEALTH_CONTAINER={'true' if nas.get('container_running') else 'false'}",
+          ]
+          open("phase15-health.env", "w").write("\n".join(lines) + "\n")
+          PY
+      - name: Write Phase 15 workflow evidence
+        if: always()
+        env:
+          WF_FILE: .github/workflows/deploy-v3.yml
+          WF_REF: ${{ github.ref }}
+          WF_RUN_ID: ${{ github.run_id }}
+          WF_ATTEMPT: ${{ github.run_attempt }}
+          WF_HEAD_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ inputs.sha }}
+          WF_ACTOR: ${{ github.actor }}
+          WF_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          RELEASE_INTENT_ID: ${{ inputs.release_intent_id }}
+          WF_ENVIRONMENT: production
+          OCI_SOURCE: https://github.com/${{ github.repository }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          if [ -f ./phase15-health.env ]; then
+            set -a
+            # shellcheck disable=SC1091
+            . ./phase15-health.env
+            set +a
+          fi
+          python3 .github/scripts/write-phase15-workflow-evidence.py phase15-workflow-evidence.json
+      - name: Upload Phase 15 workflow evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase15-workflow-evidence
+          path: phase15-workflow-evidence.json
+          if-no-files-found: error
