@@ -100,7 +100,7 @@ test("listing cards support left swipe watch and right swipe hide", () => {
   assert.match(html, /hideListing\(id, card\)/);
   assert.match(html, /dx < -thresh/);
   assert.match(html, /dx > thresh/);
-  assert.match(html, /class="ghost btn-watch"/);
+  assert.match(html, /class="ghost btn-card-action btn-watch"/);
   assert.match(html, /watch-hide-stack/);
   const start = html.indexOf("@media (max-width: 880px)");
   const mobile = html.slice(start, start + 12000);
@@ -654,6 +654,7 @@ test("self listing form and in-site detail stay on this site", () => {
   assert.match(html, /打開5168/);
   assert.match(html, /打開租租通/);
   assert.match(html, /打開好房/);
+  assert.match(html, /打開樂屋網/);
   assert.match(html, /class="tag fit"/);
   assert.match(html, /item\.fit_label/);
   assert.match(html, /item\.fit_score/);
@@ -741,8 +742,8 @@ test("search settings city personalization and optimistic unwatch are wired", ()
 
 test("mobile filter buttons: collapse × moves top-right and 篩選/更多條件 share accent", () => {
   const html = pub("index.html");
-  assert.match(html, /body\.panel-collapsed \.filter-mini-btn \{[\s\S]*?top: 8px;[\s\S]*?\}/);
-  assert.match(html, /body\.panel-collapsed \.filter-mini-btn \{[\s\S]*?bottom: auto;[\s\S]*?\}/);
+  assert.match(html, /body\.panel-collapsed \.filter-mini-btn \{[\s\S]*?bottom: 28px;[\s\S]*?\}/);
+  assert.match(html, /body\.panel-collapsed \.filter-mini-btn \{[\s\S]*?top: 8px;[\s\S]*?bottom: auto;[\s\S]*?\}/);
   assert.match(html, /#openFilterSheetBtn \{[\s\S]*?background: var\(--accent\);[\s\S]*?\}/);
   assert.match(html, /list-head-sticky\.filter-compact \.filter-restore-btn \{[\s\S]*?background: var\(--accent\);/);
 });
