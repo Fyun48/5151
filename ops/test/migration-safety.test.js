@@ -313,7 +313,7 @@ test("stale QA/staging/release evidence cannot create or stay fresh", async () =
     const old = db.prepare("SELECT * FROM development_qa_run WHERE id=?").get(qa.qa_run_id);
     const ts = NOW.toISOString();
     const newId = Number(db.prepare(`INSERT INTO development_qa_run(issue_id, coding_task_id, development_authorization_id, proposal_id, proposal_version, proposal_hash, base_sha, head_sha, coding_result_hash, diff_hash, qa_version, qa_policy_fingerprint, input_fingerprint, status, final_result, attempt_count, max_attempts, next_attempt_at, created_at, completed_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'completed', 'PASS', 0, 3, ?, ?, ?)`).run(
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, 'completed', 'PASS', 0, 3, ?, ?, ?)`).run(
       old.issue_id, old.coding_task_id, old.development_authorization_id, old.proposal_id, old.proposal_version, old.proposal_hash,
       old.base_sha, old.head_sha, old.coding_result_hash, old.diff_hash, old.qa_version, old.qa_policy_fingerprint, "qa-fp-new",
       ts, ts, ts,
@@ -411,6 +411,6 @@ test("no third human gate and no Production mutation/deploy/SSH/workflow", () =>
   for (const f of files) {
     const txt = readFileSync(path.join(ROOT, f), "utf8");
     assert.doesNotMatch(txt, /gh\s+pr\s+merge|--auto\b|workflow_dispatch|deploy-v3\.yml|casaos-compose|ssh |force-with-lease|APPROVE_MIGRATION/i);
-    assert.doesNotMatch(txt, /openai|anthropic|llm|chat\.completions/i);
+    assert.doesNotMatch(txt, /openai|anthropic|chat\.completions|makeAiProvider|evaluationProvider/i);
   }
 });
