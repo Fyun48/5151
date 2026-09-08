@@ -1,15 +1,18 @@
 import { createHash } from "node:crypto";
 import {
-  ADDITIVE_SQL_KINDS,
   MIGRATION_CLASSIFICATIONS,
   normalizeMigrationEvidence,
+  statementsHaveAdditiveShape,
 } from "../qa/migrationEvidence.js";
 
 // Phase 14：版本化、決定性、fail-closed 的 Production DB migration safety 政策。
 // AI/LLM 不得做 PASS 決策。證據不足 → UNKNOWN / BLOCKED，不得猜安全。
 // 不新增第三個人工 Gate；Owner Gate #2 仍是最後的人工作業核准。
+// v2：分類與 rollback/compat proof 分離；禁止 env skip flags；缺失 evidence 不得當成 NONE。
 
-export const MIGRATION_SAFETY_POLICY_VERSION = "migration-safety-policy-v1";
+export const MIGRATION_SAFETY_POLICY_VERSION = "migration-safety-policy-v2";
+export const ROLLBACK_PROOF_SCHEMA_VERSION = "migration-rollback-proof-v1";
+export const COMPAT_PROOF_SCHEMA_VERSION = "migration-compat-proof-v1";
 export { MIGRATION_CLASSIFICATIONS };
 
 export const CLEARANCE_RESULTS = Object.freeze({
@@ -25,17 +28,15 @@ export const CLEARED_CLEARANCE_RESULTS = Object.freeze([
   CLEARANCE_RESULTS.CLEARED_ADDITIVE,
 ]);
 
-const ADDITIVE_KIND_SET = new Set(ADDITIVE_SQL_KINDS);
-
 export function migrationSafetyConfigFromEnv(env = process.env) {
+  void env;
   return {
-    policyVersion: env.MIGRATION_SAFETY_POLICY_VERSION || MIGRATION_SAFETY_POLICY_VERSION,
-    // 沒有版本化、可驗證的 data-migration/rollback 機制 → 一律 fail-closed。
+    policyVersion: MIGRATION_SAFETY_POLICY_VERSION,
     allowDataMigrationClearance: false,
     allowDestructiveClearance: false,
     allowUnknownClearance: false,
-    additiveRequiresRollbackProof: env.MIGRATION_SAFETY_ADDITIVE_SKIP_ROLLBACK === "1" ? false : true,
-    additiveRequiresOldCodeCompatProof: env.MIGRATION_SAFETY_ADDITIVE_SKIP_COMPAT === "1" ? false : true,
+    additiveRequiresRollbackProof: true,
+    additiveRequiresOldCodeCompatProof: true,
     noLlmDecision: true,
     noThirdHumanGate: true,
     consumeExistingEvidenceOnly: true,
@@ -43,16 +44,17 @@ export function migrationSafetyConfigFromEnv(env = process.env) {
 }
 
 export function buildMigrationSafetyPolicy(cfg = migrationSafetyConfigFromEnv()) {
+  void cfg;
   return {
-    policy_version: cfg.policyVersion,
-    allow_data_migration_clearance: !!cfg.allowDataMigrationClearance,
-    allow_destructive_clearance: !!cfg.allowDestructiveClearance,
-    allow_unknown_clearance: !!cfg.allowUnknownClearance,
-    additive_requires_rollback_proof: cfg.additiveRequiresRollbackProof !== false,
-    additive_requires_old_code_compat_proof: cfg.additiveRequiresOldCodeCompatProof !== false,
-    no_llm_decision: cfg.noLlmDecision !== false,
-    no_third_human_gate: cfg.noThirdHumanGate !== false,
-    consume_existing_evidence_only: cfg.consumeExistingEvidenceOnly !== false,
+    policy_version: MIGRATION_SAFETY_POLICY_VERSION,
+    allow_data_migration_clearance: false,
+    allow_destructive_clearance: false,
+    allow_unknown_clearance: false,
+    additive_requires_rollback_proof: true,
+    additive_requires_old_code_compat_proof: true,
+    no_llm_decision: true,
+    no_third_human_gate: true,
+    consume_existing_evidence_only: true,
     cleared_results: [...CLEARED_CLEARANCE_RESULTS],
     required_binding: [
       "release_authorization_id",
@@ -65,6 +67,8 @@ export function buildMigrationSafetyPolicy(cfg = migrationSafetyConfigFromEnv())
       "head_sha",
       "artifact_digest",
     ].sort(),
+    rollback_proof_schema_version: ROLLBACK_PROOF_SCHEMA_VERSION,
+    compat_proof_schema_version: COMPAT_PROOF_SCHEMA_VERSION,
   };
 }
 
@@ -76,27 +80,61 @@ export function effectiveMigrationSafetyPolicyFingerprint(env = process.env) {
   return fp(buildMigrationSafetyPolicy(migrationSafetyConfigFromEnv(env)));
 }
 
-function statementsProveAdditive(ev) {
-  const stmts = ev.classified_statements || [];
-  if (!stmts.length) return false;
-  return stmts.every((c) => c.kind === "ADDITIVE" && ADDITIVE_KIND_SET.has(c.sql_kind))
-    && ev.statement_counts.destructive === 0
-    && ev.statement_counts.data === 0
-    && ev.statement_counts.unknown === 0
-    && ev.statement_counts.additive > 0;
+function same(a, b) { return String(a ?? "") === String(b ?? ""); }
+function sameNum(a, b) { return Number(a) === Number(b); }
+
+export function validBoundProofShape(proof, schemaVersion) {
+  if (!proof || typeof proof !== "object" || Array.isArray(proof)) return false;
+  if (proof.schema_version !== schemaVersion) return false;
+  if (proof.verified !== true) return false;
+  if (!proof.bound_artifact_digest || String(proof.bound_artifact_digest) === "latest") return false;
+  if (proof.bound_qa_run_id == null || Number(proof.bound_qa_run_id) <= 0) return false;
+  if (proof.bound_staging_deployment_id == null || Number(proof.bound_staging_deployment_id) <= 0) return false;
+  if (!proof.method || String(proof.method).length < 3) return false;
+  return true;
+}
+
+export function boundProofMatches(proof, binding) {
+  if (!binding) return false;
+  return same(proof.bound_artifact_digest, binding.artifactDigest)
+    && sameNum(proof.bound_qa_run_id, binding.qaRunId)
+    && sameNum(proof.bound_staging_deployment_id, binding.stagingDeploymentId);
+}
+
+function proofProven(proof, schemaVersion, binding) {
+  return validBoundProofShape(proof, schemaVersion) && boundProofMatches(proof, binding);
 }
 
 export function classifyMigration({ qaCheck = null, stagingMigration = null } = {}) {
   if (!qaCheck) {
     return { classification: MIGRATION_CLASSIFICATIONS.UNKNOWN_OR_UNPROVEN, reason: "database_migration_check_missing" };
   }
+  if (qaCheck.evidence == null || typeof qaCheck.evidence !== "object" || Array.isArray(qaCheck.evidence)) {
+    return {
+      classification: MIGRATION_CLASSIFICATIONS.UNKNOWN_OR_UNPROVEN,
+      reason: "migration_evidence_missing",
+      evidence: normalizeMigrationEvidence(null),
+    };
+  }
   const ev = normalizeMigrationEvidence({
-    ...(qaCheck.evidence && typeof qaCheck.evidence === "object" ? qaCheck.evidence : {}),
+    ...qaCheck.evidence,
     qa_status: qaCheck.status,
     qa_finding: qaCheck.finding,
     staging_migration_status: stagingMigration?.status || null,
-    evidence_present: true,
   });
+
+  if (!ev.evidence_present) {
+    return { classification: MIGRATION_CLASSIFICATIONS.UNKNOWN_OR_UNPROVEN, reason: "migration_evidence_missing", evidence: ev };
+  }
+  if (!ev.evidence_complete) {
+    if (ev.destructive || ev.statement_counts.destructive > 0 || ev.classified_statements.some((c) => c.kind === "DESTRUCTIVE")) {
+      return { classification: MIGRATION_CLASSIFICATIONS.DESTRUCTIVE_OR_IRREVERSIBLE, reason: "destructive_or_irreversible_sql", evidence: ev };
+    }
+    if (ev.data_rewrite || ev.statement_counts.data > 0 || ev.classified_statements.some((c) => c.kind === "DATA")) {
+      return { classification: MIGRATION_CLASSIFICATIONS.DATA_MIGRATION, reason: "data_rewrite_or_backfill", evidence: ev };
+    }
+    return { classification: MIGRATION_CLASSIFICATIONS.UNKNOWN_OR_UNPROVEN, reason: "migration_evidence_incomplete_or_legacy", evidence: ev };
+  }
 
   if (ev.destructive || ev.statement_counts.destructive > 0 || ev.classified_statements.some((c) => c.kind === "DESTRUCTIVE")) {
     return { classification: MIGRATION_CLASSIFICATIONS.DESTRUCTIVE_OR_IRREVERSIBLE, reason: "destructive_or_irreversible_sql", evidence: ev };
@@ -104,26 +142,26 @@ export function classifyMigration({ qaCheck = null, stagingMigration = null } = 
   if (ev.data_rewrite || ev.statement_counts.data > 0 || ev.classified_statements.some((c) => c.kind === "DATA")) {
     return { classification: MIGRATION_CLASSIFICATIONS.DATA_MIGRATION, reason: "data_rewrite_or_backfill", evidence: ev };
   }
-  if (ev.statement_counts.unknown > 0 || ev.classified_statements.some((c) => c.kind === "UNKNOWN")) {
-    return { classification: MIGRATION_CLASSIFICATIONS.UNKNOWN_OR_UNPROVEN, reason: "unclassified_or_incompatible_ddl", evidence: ev };
+  if (ev.statement_counts.unknown > 0 || ev.classified_statements.some((c) => c.kind === "UNKNOWN") || (ev.runtime_files || []).length) {
+    return { classification: MIGRATION_CLASSIFICATIONS.UNKNOWN_OR_UNPROVEN, reason: "unclassified_runtime_or_incompatible_ddl", evidence: ev };
   }
 
-  const noSignal = !ev.schema && !ev.files.length && !ev.additive_only && !ev.proven_additive
+  const noSignal = !ev.schema && !ev.files.length && !(ev.runtime_files || []).length
+    && !ev.additive_only && !ev.proven_additive
     && ev.statement_counts.additive === 0 && ev.statement_counts.data === 0
     && ev.statement_counts.destructive === 0 && ev.statement_counts.unknown === 0;
-  if ((ev.qa_status === "PASS" || ev.qa_status == null) && noSignal) {
-    return { classification: MIGRATION_CLASSIFICATIONS.NONE, reason: "no_migration_evidence", evidence: ev };
+  if (ev.scan_complete && ev.analysis_complete && noSignal) {
+    return { classification: MIGRATION_CLASSIFICATIONS.NONE, reason: "complete_no_migration_scan", evidence: ev };
   }
 
-  if (ev.proven_additive || ev.additive_only || statementsProveAdditive(ev)) {
-    return { classification: MIGRATION_CLASSIFICATIONS.ADDITIVE_BACKWARD_COMPATIBLE, reason: "proven_additive_only", evidence: ev };
+  if (statementsHaveAdditiveShape(ev)) {
+    return { classification: MIGRATION_CLASSIFICATIONS.ADDITIVE_BACKWARD_COMPATIBLE, reason: "additive_statement_shape_only", evidence: ev };
   }
 
-  // Phase-11 既有 {schema:true, files} 而無 statement 證明 → 不得硬判 additive。
   return { classification: MIGRATION_CLASSIFICATIONS.UNKNOWN_OR_UNPROVEN, reason: "insufficient_phase11_evidence", evidence: ev };
 }
 
-export function assessRollback(classification, ev = {}) {
+export function assessRollback(classification, ev = {}, binding = null) {
   if (classification === MIGRATION_CLASSIFICATIONS.NONE) {
     return { status: "NOT_APPLICABLE", proven: true, reason: "no_migration" };
   }
@@ -134,17 +172,17 @@ export function assessRollback(classification, ev = {}) {
     return { status: "UNPROVEN_DATA_REWRITE", proven: false, reason: "no_versioned_data_rollback_mechanism" };
   }
   if (classification === MIGRATION_CLASSIFICATIONS.ADDITIVE_BACKWARD_COMPATIBLE) {
-    const proven = ev.rollback_compatible === true || statementsProveAdditive(ev);
+    const proven = proofProven(ev.rollback_proof, ROLLBACK_PROOF_SCHEMA_VERSION, binding);
     return {
-      status: proven ? "REVERSIBLE_DROP_NEW_OBJECTS" : "UNPROVEN",
+      status: proven ? "BOUND_ROLLBACK_PROOF_VERIFIED" : "UNPROVEN",
       proven,
-      reason: proven ? "additive_objects_can_be_dropped" : "rollback_not_proven",
+      reason: proven ? "versioned_bound_rollback_proof" : "rollback_proof_missing_or_unbound",
     };
   }
   return { status: "UNPROVEN", proven: false, reason: "classification_unproven" };
 }
 
-export function assessCompatibility(classification, ev = {}) {
+export function assessCompatibility(classification, ev = {}, binding = null) {
   if (classification === MIGRATION_CLASSIFICATIONS.NONE) {
     return { status: "NOT_APPLICABLE", proven: true, reason: "no_migration" };
   }
@@ -155,18 +193,17 @@ export function assessCompatibility(classification, ev = {}) {
     return { status: "UNPROVEN", proven: false, reason: "data_rewrite_compat_unproven" };
   }
   if (classification === MIGRATION_CLASSIFICATIONS.ADDITIVE_BACKWARD_COMPATIBLE) {
-    const proven = ev.old_code_compatible === true || statementsProveAdditive(ev);
+    const proven = proofProven(ev.old_code_compat_proof, COMPAT_PROOF_SCHEMA_VERSION, binding);
     return {
-      status: proven ? "OLD_CODE_IGNORES_NEW_OBJECTS" : "UNPROVEN",
+      status: proven ? "BOUND_COMPAT_PROOF_VERIFIED" : "UNPROVEN",
       proven,
-      reason: proven ? "nullable_or_new_table_index_ignored_by_old_code" : "old_code_compat_not_proven",
+      reason: proven ? "versioned_bound_old_code_compat_proof" : "compat_proof_missing_or_unbound",
     };
   }
   return { status: "UNPROVEN", proven: false, reason: "classification_unproven" };
 }
 
-export function decideClearance({ classification, rollback, compatibility, policy }) {
-  const p = policy || buildMigrationSafetyPolicy();
+export function decideClearance({ classification, rollback, compatibility }) {
   if (classification === MIGRATION_CLASSIFICATIONS.NONE) {
     return { clearance: CLEARANCE_RESULTS.CLEARED_NO_MIGRATION, reason: "no_migration" };
   }
@@ -177,23 +214,21 @@ export function decideClearance({ classification, rollback, compatibility, polic
     return { clearance: CLEARANCE_RESULTS.BLOCKED_DATA_MIGRATION_UNPROVEN, reason: "data_migration_fail_closed" };
   }
   if (classification === MIGRATION_CLASSIFICATIONS.ADDITIVE_BACKWARD_COMPATIBLE) {
-    const rollbackOk = !p.additive_requires_rollback_proof || rollback?.proven === true;
-    const compatOk = !p.additive_requires_old_code_compat_proof || compatibility?.proven === true;
-    if (rollbackOk && compatOk) {
-      return { clearance: CLEARANCE_RESULTS.CLEARED_ADDITIVE, reason: "additive_rollback_and_compat_proven" };
+    if (rollback?.proven === true && compatibility?.proven === true) {
+      return { clearance: CLEARANCE_RESULTS.CLEARED_ADDITIVE, reason: "additive_bound_rollback_and_compat_proven" };
     }
     return { clearance: CLEARANCE_RESULTS.BLOCKED_UNKNOWN, reason: "additive_unproven_rollback_or_compat" };
   }
   return { clearance: CLEARANCE_RESULTS.BLOCKED_UNKNOWN, reason: "unknown_or_unproven" };
 }
 
-export function evaluateMigrationSafety({ qaCheck = null, stagingMigration = null, policy = null } = {}) {
+export function evaluateMigrationSafety({ qaCheck = null, stagingMigration = null, policy = null, binding = null } = {}) {
   const pol = policy || buildMigrationSafetyPolicy();
   const classified = classifyMigration({ qaCheck, stagingMigration });
-  const ev = classified.evidence || normalizeMigrationEvidence({});
-  const rollback = assessRollback(classified.classification, ev);
-  const compatibility = assessCompatibility(classified.classification, ev);
-  const decided = decideClearance({ classification: classified.classification, rollback, compatibility, policy: pol });
+  const ev = classified.evidence || normalizeMigrationEvidence(null);
+  const rollback = assessRollback(classified.classification, ev, binding);
+  const compatibility = assessCompatibility(classified.classification, ev, binding);
+  const decided = decideClearance({ classification: classified.classification, rollback, compatibility });
   return {
     classification: classified.classification,
     classification_reason: classified.reason,

@@ -26,7 +26,7 @@ import { createStagingDeployment, claimStagingBatch, executeStagingDeployment } 
 import { makeStubStagingProvider } from "../src/staging/provider.js";
 import { createReleaseCandidate, submitOwnerReleaseDecision, RELEASE_OWNER_ACTIONS } from "../src/releaseCandidate.js";
 import { checkDatabaseMigration } from "../src/qa/qaChecks.js";
-import { classifySqlLine } from "../src/qa/migrationEvidence.js";
+import { buildDatabaseMigrationEvidence, classifySqlLine } from "../src/qa/migrationEvidence.js";
 import {
   CLEARANCE_RESULTS, MIGRATION_CLASSIFICATIONS, buildMigrationSafetyPolicy, evaluateMigrationSafety,
   migrationSafetyPolicyFingerprint,
@@ -110,6 +110,29 @@ function bind(auth) {
     artifactDigest: auth.artifact_digest,
   };
 }
+function phase15Ids(codingTaskId, auth) {
+  return { codingTaskId, ...bind(auth) };
+}
+function boundProofs(authRow) {
+  return {
+    rollback_proof: {
+      schema_version: "migration-rollback-proof-v1",
+      verified: true,
+      bound_artifact_digest: authRow.artifact_digest,
+      bound_qa_run_id: authRow.qa_run_id,
+      bound_staging_deployment_id: authRow.staging_deployment_id,
+      method: "verified_isolated_rollback_replay",
+    },
+    old_code_compat_proof: {
+      schema_version: "migration-compat-proof-v1",
+      verified: true,
+      bound_artifact_digest: authRow.artifact_digest,
+      bound_qa_run_id: authRow.qa_run_id,
+      bound_staging_deployment_id: authRow.staging_deployment_id,
+      method: "verified_old_binary_against_new_schema",
+    },
+  };
+}
 function patchQaMigration(db, codingTaskId, evidence, status = "WARN") {
   const qa = db.prepare("SELECT qa_run_id FROM development_qa_current WHERE coding_task_id=?").get(codingTaskId);
   db.prepare("UPDATE development_qa_check SET status=?, evidence=? WHERE qa_run_id=? AND check_type='DATABASE_MIGRATION'")
@@ -117,66 +140,98 @@ function patchQaMigration(db, codingTaskId, evidence, status = "WARN") {
 }
 
 // ── 單元：classification / clearance ──
-test("Phase 14 classify: NONE → CLEARED_NO_MIGRATION", () => {
-  const r = evaluateMigrationSafety({ qaCheck: { status: "PASS", finding: "no database migration detected", evidence: {} } });
+test("Phase 14 classify: complete no-migration scan → CLEARED_NO_MIGRATION", () => {
+  const evidence = buildDatabaseMigrationEvidence({ files: [], addedLines: [] });
+  const r = evaluateMigrationSafety({ qaCheck: { status: "PASS", finding: "no database migration detected", evidence } });
   assert.equal(r.classification, MIGRATION_CLASSIFICATIONS.NONE);
   assert.equal(r.clearance, CLEARANCE_RESULTS.CLEARED_NO_MIGRATION);
 });
 
-test("Phase 14 classify: Phase-11 schema:true without proof → UNKNOWN blocked", () => {
-  const r = evaluateMigrationSafety({ qaCheck: { status: "WARN", finding: "schema change", evidence: { schema: true, files: ["migrations/001.sql"] } } });
-  assert.equal(r.classification, MIGRATION_CLASSIFICATIONS.UNKNOWN_OR_UNPROVEN);
-  assert.equal(r.clearance, CLEARANCE_RESULTS.BLOCKED_UNKNOWN);
+test("Phase 14 classify: missing/empty/legacy evidence is UNKNOWN blocked, not NONE", () => {
+  const missing = evaluateMigrationSafety({ qaCheck: { status: "PASS" } });
+  assert.equal(missing.classification, MIGRATION_CLASSIFICATIONS.UNKNOWN_OR_UNPROVEN);
+  assert.equal(missing.clearance, CLEARANCE_RESULTS.BLOCKED_UNKNOWN);
+  const empty = evaluateMigrationSafety({ qaCheck: { status: "PASS", evidence: {} } });
+  assert.equal(empty.classification, MIGRATION_CLASSIFICATIONS.UNKNOWN_OR_UNPROVEN);
+  assert.equal(empty.clearance, CLEARANCE_RESULTS.BLOCKED_UNKNOWN);
+  const legacy = evaluateMigrationSafety({ qaCheck: { status: "WARN", finding: "schema change", evidence: { schema: true, files: ["migrations/001.sql"] } } });
+  assert.equal(legacy.classification, MIGRATION_CLASSIFICATIONS.UNKNOWN_OR_UNPROVEN);
+  assert.equal(legacy.clearance, CLEARANCE_RESULTS.BLOCKED_UNKNOWN);
+  const malformed = evaluateMigrationSafety({ qaCheck: { status: "PASS", evidence: "not-an-object" } });
+  assert.equal(malformed.clearance, CLEARANCE_RESULTS.BLOCKED_UNKNOWN);
 });
 
-test("Phase 14 classify: additive proven statements clear only under policy", () => {
-  const additiveEv = {
-    schema: true,
+test("Phase 14 classify: additive shape without bound proofs stays blocked", () => {
+  const additiveEv = buildDatabaseMigrationEvidence({
     files: ["migrations/001_add_index.sql"],
-    proven_additive: true,
-    additive_only: true,
-    classified_statements: [{ kind: "ADDITIVE", sql_kind: "CREATE_INDEX" }],
-    statement_counts: { additive: 1, data: 0, destructive: 0, unknown: 0 },
-  };
-  const cleared = evaluateMigrationSafety({ qaCheck: { status: "WARN", evidence: additiveEv } });
-  assert.equal(cleared.classification, MIGRATION_CLASSIFICATIONS.ADDITIVE_BACKWARD_COMPATIBLE);
-  assert.equal(cleared.clearance, CLEARANCE_RESULTS.CLEARED_ADDITIVE);
-
-  const unproven = evaluateMigrationSafety({
-    qaCheck: { status: "WARN", evidence: { schema: true, additive_only: true, files: ["migrations/001.sql"] } },
+    addedLines: ["CREATE INDEX idx_x ON t(x);"],
   });
+  const unproven = evaluateMigrationSafety({ qaCheck: { status: "WARN", evidence: additiveEv } });
   assert.equal(unproven.classification, MIGRATION_CLASSIFICATIONS.ADDITIVE_BACKWARD_COMPATIBLE);
   assert.equal(unproven.clearance, CLEARANCE_RESULTS.BLOCKED_UNKNOWN);
-
-  const skipProof = evaluateMigrationSafety({
-    qaCheck: { status: "WARN", evidence: { schema: true, additive_only: true, files: ["migrations/001.sql"] } },
-    policy: buildMigrationSafetyPolicy({
-      policyVersion: "migration-safety-policy-v1",
-      allowDataMigrationClearance: false,
-      allowDestructiveClearance: false,
-      allowUnknownClearance: false,
-      additiveRequiresRollbackProof: false,
-      additiveRequiresOldCodeCompatProof: false,
-      noLlmDecision: true,
-      noThirdHumanGate: true,
-      consumeExistingEvidenceOnly: true,
-    }),
+  const skipIgnored = evaluateMigrationSafety({
+    qaCheck: { status: "WARN", evidence: additiveEv },
+    policy: buildMigrationSafetyPolicy({ additiveRequiresRollbackProof: false, additiveRequiresOldCodeCompatProof: false }),
   });
-  assert.equal(skipProof.clearance, CLEARANCE_RESULTS.CLEARED_ADDITIVE);
+  assert.equal(skipIgnored.clearance, CLEARANCE_RESULTS.BLOCKED_UNKNOWN);
+  const cleared = evaluateMigrationSafety({
+    qaCheck: { status: "WARN", evidence: { ...additiveEv, ...boundProofs({ artifact_digest: "sha256:abc", qa_run_id: 1, staging_deployment_id: 2 }) } },
+    binding: { artifactDigest: "sha256:abc", qaRunId: 1, stagingDeploymentId: 2 },
+  });
+  assert.equal(cleared.classification, MIGRATION_CLASSIFICATIONS.ADDITIVE_BACKWARD_COMPATIBLE);
+  assert.equal(cleared.clearance, CLEARANCE_RESULTS.CLEARED_ADDITIVE);
 });
 
 test("Phase 14 classify: data migration is fail-closed", () => {
   const r = evaluateMigrationSafety({
-    qaCheck: { status: "WARN", evidence: { schema: true, data_rewrite: true, files: ["migrations/002.sql"], classified_statements: [{ kind: "DATA", sql_kind: "UPDATE_ROWS" }], statement_counts: { additive: 0, data: 1, destructive: 0, unknown: 0 } } },
+    qaCheck: { status: "WARN", evidence: buildDatabaseMigrationEvidence({ files: ["migrations/002.sql"], addedLines: ["UPDATE users SET name='x';"] }) },
   });
   assert.equal(r.classification, MIGRATION_CLASSIFICATIONS.DATA_MIGRATION);
   assert.equal(r.clearance, CLEARANCE_RESULTS.BLOCKED_DATA_MIGRATION_UNPROVEN);
 });
 
 test("Phase 14 classify: destructive is blocked", () => {
-  const r = evaluateMigrationSafety({ qaCheck: { status: "REVIEW", evidence: { destructive: true, files: ["migrations/drop.sql"] } } });
+  const r = evaluateMigrationSafety({ qaCheck: { status: "REVIEW", evidence: buildDatabaseMigrationEvidence({ files: ["migrations/drop.sql"], addedLines: ["DROP TABLE users;"] }) } });
   assert.equal(r.classification, MIGRATION_CLASSIFICATIONS.DESTRUCTIVE_OR_IRREVERSIBLE);
   assert.equal(r.clearance, CLEARANCE_RESULTS.BLOCKED_DESTRUCTIVE);
+});
+
+test("P1: multiline / multi-statement / runtime SQL cannot clear as NONE or additive", () => {
+  const runtimeDrop = buildDatabaseMigrationEvidence({
+    files: ["v3/src/opsDb.js"],
+    addedLines: ["db.exec(`DROP", "TABLE users;`);"],
+  });
+  const runtime = evaluateMigrationSafety({ qaCheck: { status: runtimeDrop.schema ? "WARN" : "PASS", evidence: runtimeDrop } });
+  assert.ok(["DESTRUCTIVE_OR_IRREVERSIBLE", "UNKNOWN_OR_UNPROVEN"].includes(runtime.classification));
+  assert.ok(["BLOCKED_DESTRUCTIVE", "BLOCKED_UNKNOWN"].includes(runtime.clearance));
+
+  const splitNotNull = buildDatabaseMigrationEvidence({
+    files: ["migrations/002.sql"],
+    addedLines: ["ALTER TABLE users ADD COLUMN status TEXT", "NOT NULL;"],
+  });
+  const notNull = evaluateMigrationSafety({ qaCheck: { status: "WARN", evidence: splitNotNull } });
+  assert.equal(notNull.classification, MIGRATION_CLASSIFICATIONS.UNKNOWN_OR_UNPROVEN);
+  assert.equal(notNull.clearance, CLEARANCE_RESULTS.BLOCKED_UNKNOWN);
+
+  const maskedRename = buildDatabaseMigrationEvidence({
+    files: ["migrations/003.sql"],
+    addedLines: ["CREATE INDEX ix ON users(email); ALTER TABLE users RENAME TO archived_users;"],
+  });
+  const rename = evaluateMigrationSafety({ qaCheck: { status: "WARN", evidence: maskedRename } });
+  assert.equal(rename.classification, MIGRATION_CLASSIFICATIONS.UNKNOWN_OR_UNPROVEN);
+  assert.equal(rename.clearance, CLEARANCE_RESULTS.BLOCKED_UNKNOWN);
+});
+
+test("P1: unique index / old-write risk is not additive-compatible and SQL kind is not proof", () => {
+  const uniqueEv = buildDatabaseMigrationEvidence({
+    files: ["migrations/004.sql"],
+    addedLines: ["CREATE UNIQUE INDEX idx_email ON users(email);"],
+  });
+  const unique = evaluateMigrationSafety({ qaCheck: { status: "WARN", evidence: uniqueEv } });
+  assert.equal(unique.classification, MIGRATION_CLASSIFICATIONS.UNKNOWN_OR_UNPROVEN);
+  assert.equal(unique.clearance, CLEARANCE_RESULTS.BLOCKED_UNKNOWN);
+  assert.equal(unique.rollback_assessment.proven, false);
+  assert.equal(unique.compatibility_assessment.proven, false);
 });
 
 test("Phase 14 classify: missing QA check → UNKNOWN blocked", () => {
@@ -210,6 +265,9 @@ test("policy fingerprint is deterministic and excludes secrets", () => {
   assert.equal(p.no_llm_decision, true);
   assert.equal(p.no_third_human_gate, true);
   assert.equal(p.allow_data_migration_clearance, false);
+  assert.equal(p.additive_requires_rollback_proof, true);
+  assert.equal(p.additive_requires_old_code_compat_proof, true);
+  assert.equal(p.policy_version, "migration-safety-policy-v2");
 });
 
 // ── 整合：binding / freshness / immutability ──
@@ -223,30 +281,33 @@ test("NONE evidence on approved authorization → CLEARED_NO_MIGRATION; Phase 15
     assert.equal(created.assessment.clearance_result, "CLEARED_NO_MIGRATION");
     const cur = getCurrentMigrationSafety(db, codingTaskId, { repo });
     assert.equal(cur.fresh, true);
-    const elig = getPhase15ReleaseEligibility(db, { codingTaskId, ...bind(authorization), repo });
+    const elig = getPhase15ReleaseEligibility(db, phase15Ids(codingTaskId, authorization), { repo });
     assert.equal(elig.allowed, true);
     const manifest = JSON.parse(db.prepare("SELECT manifest_content FROM development_release_candidate WHERE id=?").get(rc.id).manifest_content);
     assert.match(manifest.database_config.production_migration_safety, /NOT_ASSESSED \(Phase 14 required\)/);
-    assertPhase15MigrationClearance(db, { codingTaskId, ...bind(authorization) }, { repo });
+    assertPhase15MigrationClearance(db, phase15Ids(codingTaskId, authorization), { repo });
   } finally { git.cleanup(); db.close(); }
 });
 
 test("additive / data / destructive / unknown create the expected clearance rows", async () => {
   const cases = [
     {
-      ev: { schema: true, proven_additive: true, additive_only: true, files: ["migrations/a.sql"], classified_statements: [{ kind: "ADDITIVE", sql_kind: "CREATE_TABLE" }], statement_counts: { additive: 1, data: 0, destructive: 0, unknown: 0 } },
+      evFor: (authRow) => ({
+        ...buildDatabaseMigrationEvidence({ files: ["migrations/a.sql"], addedLines: ["CREATE TABLE extra (id INTEGER);"] }),
+        ...boundProofs(authRow),
+      }),
       classification: "ADDITIVE_BACKWARD_COMPATIBLE", clearance: "CLEARED_ADDITIVE",
     },
     {
-      ev: { schema: true, data_rewrite: true, files: ["migrations/b.sql"], classified_statements: [{ kind: "DATA", sql_kind: "UPDATE_ROWS" }], statement_counts: { additive: 0, data: 1, destructive: 0, unknown: 0 } },
+      evFor: () => buildDatabaseMigrationEvidence({ files: ["migrations/b.sql"], addedLines: ["UPDATE users SET name='x';"] }),
       classification: "DATA_MIGRATION", clearance: "BLOCKED_DATA_MIGRATION_UNPROVEN",
     },
     {
-      ev: { destructive: true, files: ["migrations/c.sql"], classified_statements: [{ kind: "DESTRUCTIVE", sql_kind: "DROP_TABLE" }], statement_counts: { additive: 0, data: 0, destructive: 1, unknown: 0 } },
+      evFor: () => buildDatabaseMigrationEvidence({ files: ["migrations/c.sql"], addedLines: ["DROP TABLE users;"] }),
       classification: "DESTRUCTIVE_OR_IRREVERSIBLE", clearance: "BLOCKED_DESTRUCTIVE",
     },
     {
-      ev: { schema: true, files: ["migrations/d.sql"] },
+      evFor: () => ({ schema: true, files: ["migrations/d.sql"] }),
       classification: "UNKNOWN_OR_UNPROVEN", clearance: "BLOCKED_UNKNOWN",
     },
   ];
@@ -255,11 +316,12 @@ test("additive / data / destructive / unknown create the expected clearance rows
     const { codingTaskId, repo, git } = await makeStagedTask(db);
     try {
       const { authorization } = approve(db, codingTaskId, repo);
-      patchQaMigration(db, codingTaskId, c.ev, c.classification === "DESTRUCTIVE_OR_IRREVERSIBLE" ? "REVIEW" : "WARN");
+      const authRow = db.prepare("SELECT * FROM production_release_authorization WHERE id=?").get(authorization.id);
+      patchQaMigration(db, codingTaskId, c.evFor(authRow), c.classification === "DESTRUCTIVE_OR_IRREVERSIBLE" ? "REVIEW" : "WARN");
       const created = createMigrationSafetyAssessment(db, { codingTaskId, repo, now: NOW, ...bind(authorization) });
       assert.equal(created.assessment.migration_classification, c.classification, c.classification);
       assert.equal(created.assessment.clearance_result, c.clearance, c.clearance);
-      const elig = getPhase15ReleaseEligibility(db, { codingTaskId, ...bind(authorization), repo });
+      const elig = getPhase15ReleaseEligibility(db, phase15Ids(codingTaskId, authorization), { repo });
       if (c.clearance.startsWith("CLEARED_")) assert.equal(elig.allowed, true);
       else {
         assert.equal(elig.allowed, false);
@@ -297,7 +359,7 @@ test("superseded authorization cannot keep a fresh clearance; Phase 15 blocked",
     const cur = getCurrentMigrationSafety(db, codingTaskId, { repo });
     assert.equal(cur.fresh, false);
     assert.ok(cur.stale_reasons.some((r) => /superseded|source_base_drift|release:/.test(r)));
-    const elig = getPhase15ReleaseEligibility(db, { codingTaskId, ...bind(authorization), repo });
+    const elig = getPhase15ReleaseEligibility(db, phase15Ids(codingTaskId, authorization), { repo });
     assert.equal(elig.allowed, false);
     assert.throws(() => createMigrationSafetyAssessment(db, { codingTaskId, repo, now: NOW, ...bind(authorization) }), /superseded/);
   } finally { git.cleanup(); db.close(); }
@@ -323,7 +385,7 @@ test("stale QA/staging/release evidence cannot create or stay fresh", async () =
     assert.equal(cur.fresh, false);
     assert.ok(cur.stale_reasons.some((r) => /newer_qa|qa_not_fresh|release:/.test(r)));
     assert.throws(() => createMigrationSafetyAssessment(db, { codingTaskId, repo, now: NOW, ...bind(authorization) }), /newer provenance|QA stale|stale/);
-    const elig = getPhase15ReleaseEligibility(db, { codingTaskId, ...bind(authorization), repo });
+    const elig = getPhase15ReleaseEligibility(db, phase15Ids(codingTaskId, authorization), { repo });
     assert.equal(elig.allowed, false);
   } finally { git.cleanup(); db.close(); }
 });
@@ -387,17 +449,47 @@ test("Phase 15 cannot consume missing/stale/blocked clearance", async () => {
   const db = openOpsDb(":memory:");
   const { codingTaskId, repo, git } = await makeStagedTask(db);
   try {
-    const missing = getPhase15ReleaseEligibility(db, { codingTaskId, repo });
+    const missing = getPhase15ReleaseEligibility(db, { codingTaskId }, { repo });
     assert.equal(missing.allowed, false);
-    assert.match(missing.reason, /missing|no_active/);
+    assert.match(missing.reason, /identity_required|missing/);
     const { authorization } = approve(db, codingTaskId, repo);
-    assert.equal(getPhase15ReleaseEligibility(db, { codingTaskId, ...bind(authorization), repo }).allowed, false);
+    assert.equal(getPhase15ReleaseEligibility(db, phase15Ids(codingTaskId, authorization), { repo }).allowed, false);
     patchQaMigration(db, codingTaskId, { destructive: true, files: ["x.sql"] }, "REVIEW");
     createMigrationSafetyAssessment(db, { codingTaskId, repo, now: NOW, ...bind(authorization) });
-    const blocked = getPhase15ReleaseEligibility(db, { codingTaskId, ...bind(authorization), repo });
+    const blocked = getPhase15ReleaseEligibility(db, phase15Ids(codingTaskId, authorization), { repo });
     assert.equal(blocked.allowed, false);
     assert.equal(blocked.reason, "phase14_clearance_blocked");
-    assert.throws(() => assertPhase15MigrationClearance(db, { codingTaskId, ...bind(authorization) }, { repo }), /cannot consume/);
+    assert.throws(() => assertPhase15MigrationClearance(db, phase15Ids(codingTaskId, authorization), { repo }), /cannot consume/);
+  } finally { git.cleanup(); db.close(); }
+});
+
+test("P1: Phase 15 assertion requires every identity; opts cannot override", async () => {
+  const db = openOpsDb(":memory:");
+  const { codingTaskId, repo, git } = await makeStagedTask(db);
+  try {
+    const { authorization } = approve(db, codingTaskId, repo);
+    createMigrationSafetyAssessment(db, { codingTaskId, repo, now: NOW, ...bind(authorization) });
+    assert.equal(getCurrentMigrationSafety(db, codingTaskId, { repo }).fresh, true);
+    const full = phase15Ids(codingTaskId, authorization);
+    assert.equal(getPhase15ReleaseEligibility(db, full, { repo }).allowed, true);
+    assert.equal(getPhase15ReleaseEligibility(db, { codingTaskId }, { repo }).allowed, false);
+    assert.equal(getPhase15ReleaseEligibility(db, { codingTaskId }, { repo, ...bind(authorization) }).allowed, false);
+    assert.throws(() => assertPhase15MigrationClearance(db, { codingTaskId }, { repo, ...bind(authorization) }), /identity_required/);
+    for (const key of Object.keys(full)) {
+      const omitted = { ...full };
+      delete omitted[key];
+      const omitR = getPhase15ReleaseEligibility(db, omitted, { repo });
+      assert.equal(omitR.allowed, false, `omitted ${key}`);
+      assert.equal(omitR.reason, "phase15_identity_required");
+      const nulled = { ...full, [key]: null };
+      assert.equal(getPhase15ReleaseEligibility(db, nulled, { repo }).allowed, false, `null ${key}`);
+      const emptied = { ...full, [key]: "" };
+      assert.equal(getPhase15ReleaseEligibility(db, emptied, { repo }).allowed, false, `empty ${key}`);
+      const mismatched = { ...full, [key]: key === "manifestHash" || key === "headSha" || key === "artifactDigest" ? "deadbeefdeadbeefdeadbeefdeadbeef" : 999999 };
+      const mis = getPhase15ReleaseEligibility(db, mismatched, { repo });
+      assert.equal(mis.allowed, false, `mismatch ${key}`);
+    }
+    assertPhase15MigrationClearance(db, full, { repo });
   } finally { git.cleanup(); db.close(); }
 });
 
@@ -412,5 +504,6 @@ test("no third human gate and no Production mutation/deploy/SSH/workflow", () =>
     const txt = readFileSync(path.join(ROOT, f), "utf8");
     assert.doesNotMatch(txt, /gh\s+pr\s+merge|--auto\b|workflow_dispatch|deploy-v3\.yml|casaos-compose|ssh |force-with-lease|APPROVE_MIGRATION/i);
     assert.doesNotMatch(txt, /openai|anthropic|chat\.completions|makeAiProvider|evaluationProvider/i);
+    assert.doesNotMatch(txt, /MIGRATION_SAFETY_ADDITIVE_SKIP_/);
   }
 });

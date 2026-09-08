@@ -156,10 +156,16 @@ export function createMigrationSafetyAssessment(db, {
   throwIfUnbound(reasons);
 
   const qaDetail = qa.checks ? qa : getQaRunDetail(db, Number(auth.qa_run_id));
+  const binding = {
+    artifactDigest: String(auth.artifact_digest),
+    qaRunId: Number(auth.qa_run_id),
+    stagingDeploymentId: Number(auth.staging_deployment_id),
+  };
   const evaluated = evaluateMigrationSafety({
     qaCheck: qaMigrationCheck(qaDetail),
     stagingMigration: stagingMigrationCheck(staging),
     policy,
+    binding,
   });
   const snapshot = sanitizeMigrationEvidence({
     qa_run_id: Number(auth.qa_run_id),
@@ -294,7 +300,15 @@ function assessmentFreshness(db, row, { repo = null, env = process.env } = {}) {
   if (auth && !same(auth.head_sha, row.head_sha)) reasons.push("assessment_head_sha_drift");
   if (auth && !same(auth.artifact_digest, row.artifact_digest)) reasons.push("assessment_artifact_digest_drift");
   if (qa) {
-    const live = evaluateMigrationSafety({ qaCheck: qaMigrationCheck(qa), stagingMigration: stagingMigrationCheck(staging) });
+    const live = evaluateMigrationSafety({
+      qaCheck: qaMigrationCheck(qa),
+      stagingMigration: stagingMigrationCheck(staging),
+      binding: {
+        artifactDigest: String(row.artifact_digest),
+        qaRunId: Number(row.qa_run_id),
+        stagingDeploymentId: Number(row.staging_deployment_id),
+      },
+    });
     const snap = parse(row.evidence_snapshot);
     if (evidenceFingerprint(sanitizeMigrationEvidence({
       qa_run_id: Number(row.qa_run_id),
@@ -364,18 +378,51 @@ export function getMigrationSafetyView(db, codingTaskId, { repo = null, env = pr
   return { ...current, history };
 }
 
-export function getPhase15ReleaseEligibility(db, {
-  codingTaskId,
-  releaseAuthorizationId,
-  manifestId,
-  manifestVersion,
-  manifestHash,
-  headSha,
-  artifactDigest,
-  repo = null,
-  env = process.env,
-} = {}) {
-  const current = getCurrentMigrationSafety(db, codingTaskId, { repo, env });
+export const PHASE15_REQUIRED_IDENTITIES = Object.freeze([
+  "codingTaskId",
+  "releaseAuthorizationId",
+  "manifestId",
+  "manifestVersion",
+  "manifestHash",
+  "headSha",
+  "artifactDigest",
+]);
+
+function identityPresent(v) {
+  return v != null && v !== "";
+}
+
+function phase15IdentityProblems(identities = {}) {
+  const missing = PHASE15_REQUIRED_IDENTITIES.filter((k) => !identityPresent(identities[k]));
+  if (missing.length) return { reason: "phase15_identity_required", missing };
+  const invalid = [];
+  if (!Number.isInteger(Number(identities.codingTaskId)) || Number(identities.codingTaskId) <= 0) invalid.push("coding_task_id");
+  if (!Number.isInteger(Number(identities.releaseAuthorizationId)) || Number(identities.releaseAuthorizationId) <= 0) invalid.push("release_authorization_id");
+  if (!Number.isInteger(Number(identities.manifestId)) || Number(identities.manifestId) <= 0) invalid.push("manifest_id");
+  if (!Number.isInteger(Number(identities.manifestVersion)) || Number(identities.manifestVersion) <= 0) invalid.push("manifest_version");
+  if (!/^[a-f0-9]{16,}$/i.test(String(identities.manifestHash)) && !/^sha256:[a-f0-9]{16,}$/i.test(String(identities.manifestHash))) invalid.push("manifest_hash");
+  if (!/^[a-f0-9]{7,40}$/i.test(String(identities.headSha)) && !/^sha256:[a-f0-9]{16,}$/i.test(String(identities.headSha))) invalid.push("head_sha");
+  if (String(identities.artifactDigest) === "latest" || (!/^[a-f0-9]{16,}$/i.test(String(identities.artifactDigest)) && !/^sha256:[a-f0-9]{16,}$/i.test(String(identities.artifactDigest)))) {
+    invalid.push("artifact_digest");
+  }
+  if (invalid.length) return { reason: "phase15_identity_invalid", invalid };
+  return null;
+}
+
+// Phase 15 部署消費：強制全部 identity 非空、格式有效、並與 fresh clearance 逐一比對。
+// runtime（repo/env）不得覆寫 identities。UI 寬鬆查詢請用 getCurrentMigrationSafety / getMigrationSafetyView。
+export function getPhase15ReleaseEligibility(db, identities = {}, runtime = {}) {
+  const problems = phase15IdentityProblems(identities);
+  if (problems) return { allowed: false, ...problems, clearance: null, fresh: false };
+  const repo = runtime.repo ?? null;
+  const env = runtime.env ?? process.env;
+  let current;
+  try {
+    current = getCurrentMigrationSafety(db, identities.codingTaskId, { repo, env });
+  } catch (err) {
+    if (err.status === 404) return { allowed: false, reason: "phase15_coding_task_not_found", clearance: null, fresh: false };
+    throw err;
+  }
   if (!current.assessment) {
     return { allowed: false, reason: "phase14_clearance_missing", clearance: null, fresh: false, stale_reasons: current.stale_reasons };
   }
@@ -383,22 +430,22 @@ export function getPhase15ReleaseEligibility(db, {
     return { allowed: false, reason: "phase14_clearance_stale", clearance: current.assessment.clearance_result, fresh: false, stale_reasons: current.stale_reasons, assessment: current.assessment };
   }
   const a = current.assessment;
-  if (releaseAuthorizationId != null && !sameNum(releaseAuthorizationId, a.release_authorization_id)) {
+  if (!sameNum(identities.releaseAuthorizationId, a.release_authorization_id)) {
     return { allowed: false, reason: "phase14_authorization_mismatch", clearance: a.clearance_result, fresh: false, assessment: a };
   }
-  if (manifestId != null && !sameNum(manifestId, a.release_manifest_id)) {
+  if (!sameNum(identities.manifestId, a.release_manifest_id)) {
     return { allowed: false, reason: "phase14_manifest_id_mismatch", clearance: a.clearance_result, fresh: false, assessment: a };
   }
-  if (manifestVersion != null && !sameNum(manifestVersion, a.release_manifest_version)) {
+  if (!sameNum(identities.manifestVersion, a.release_manifest_version)) {
     return { allowed: false, reason: "phase14_manifest_version_mismatch", clearance: a.clearance_result, fresh: false, assessment: a };
   }
-  if (manifestHash != null && !same(manifestHash, a.manifest_hash)) {
+  if (!same(identities.manifestHash, a.manifest_hash)) {
     return { allowed: false, reason: "phase14_manifest_hash_mismatch", clearance: a.clearance_result, fresh: false, assessment: a };
   }
-  if (headSha != null && !same(headSha, a.head_sha)) {
+  if (!same(identities.headSha, a.head_sha)) {
     return { allowed: false, reason: "phase14_head_sha_mismatch", clearance: a.clearance_result, fresh: false, assessment: a };
   }
-  if (artifactDigest != null && !same(artifactDigest, a.artifact_digest)) {
+  if (!same(identities.artifactDigest, a.artifact_digest)) {
     return { allowed: false, reason: "phase14_artifact_digest_mismatch", clearance: a.clearance_result, fresh: false, assessment: a };
   }
   if (!CLEARED_CLEARANCE_RESULTS.includes(a.clearance_result)) {
@@ -407,8 +454,8 @@ export function getPhase15ReleaseEligibility(db, {
   return { allowed: true, reason: "phase14_cleared", clearance: a.clearance_result, fresh: true, assessment: a };
 }
 
-export function assertPhase15MigrationClearance(db, identities, opts) {
-  const eligibility = getPhase15ReleaseEligibility(db, { ...identities, ...opts });
+export function assertPhase15MigrationClearance(db, identities, runtime = {}) {
+  const eligibility = getPhase15ReleaseEligibility(db, identities, runtime);
   if (!eligibility.allowed) throw httpError(`Phase 15 cannot consume clearance: ${eligibility.reason}`, 409);
   return eligibility;
 }
