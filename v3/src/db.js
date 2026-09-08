@@ -142,6 +142,12 @@ import {
   deleteMemberMedia as deleteMemberMediaOn,
   ownsMediaUrl as ownsMediaUrlOn,
   isMemberMediaUrl,
+  listMediaTags as listMediaTagsOn,
+  createMediaTag as createMediaTagOn,
+  renameMediaTag as renameMediaTagOn,
+  deleteMediaTag as deleteMediaTagOn,
+  setMediaTags as setMediaTagsOn,
+  mediaUrlsForTagIds as mediaUrlsForTagIdsOn,
 } from "./memberMedia.js";
 import {
   ensureContentDocumentSchema,
@@ -1508,6 +1514,24 @@ export function listMemberMediaFor(userId, opts = {}) {
 }
 export function deleteMemberMediaFor(userId, id, opts = {}) {
   return deleteMemberMediaOn(db, userId, id, opts);
+}
+export function listMediaTagsFor(userId) {
+  return listMediaTagsOn(db, userId);
+}
+export function createMediaTagFor(userId, name, now) {
+  return createMediaTagOn(db, userId, name, now);
+}
+export function renameMediaTagFor(userId, id, name) {
+  return renameMediaTagOn(db, userId, id, name);
+}
+export function deleteMediaTagFor(userId, id) {
+  return deleteMediaTagOn(db, userId, id);
+}
+export function setMediaTagsFor(userId, mediaId, tagIds) {
+  return setMediaTagsOn(db, userId, mediaId, tagIds);
+}
+export function mediaUrlsForTagIdsFor(userId, tagIds) {
+  return mediaUrlsForTagIdsOn(db, userId, tagIds);
 }
 export function ownsMemberMediaUrl(userId, url) {
   return ownsMediaUrlOn(db, userId, url);

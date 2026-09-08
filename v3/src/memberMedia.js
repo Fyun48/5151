@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, writeFileSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, unlinkSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
-import { normalizeImage } from "./imageProcess.js";
+import { applySiteWatermark, normalizeImage } from "./imageProcess.js";
 
 // 會員照片素材庫（member media library）。
 // 配額為「素材庫總量」：一般會員 30、贊助會員 100（≠ 單一物件照片數）。
@@ -28,6 +28,7 @@ export function ensureMemberMediaSchema(db) {
       user_id INTEGER NOT NULL,
       storage_key TEXT NOT NULL,
       thumb_key TEXT,
+      original_key TEXT,
       original_name TEXT,
       mime TEXT NOT NULL,
       format TEXT NOT NULL,
@@ -35,15 +36,36 @@ export function ensureMemberMediaSchema(db) {
       height INTEGER,
       bytes INTEGER,
       digest TEXT,
+      watermarked INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       deleted_at TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_member_media_user ON member_media(user_id, deleted_at, id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_member_media_key ON member_media(storage_key);
+    CREATE TABLE IF NOT EXISTS media_tags (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(user_id, name)
+    );
+    CREATE TABLE IF NOT EXISTS media_tag_map (
+      media_id INTEGER NOT NULL,
+      tag_id INTEGER NOT NULL,
+      PRIMARY KEY (media_id, tag_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_media_tags_user ON media_tags(user_id, name);
+    CREATE INDEX IF NOT EXISTS idx_media_tag_map_tag ON media_tag_map(tag_id);
   `);
+  for (const sql of [
+    "ALTER TABLE member_media ADD COLUMN original_key TEXT",
+    "ALTER TABLE member_media ADD COLUMN watermarked INTEGER NOT NULL DEFAULT 0",
+  ]) {
+    try { db.exec(sql); } catch { /* already exists */ }
+  }
 }
 
-const KEY_RE = /^[a-f0-9]{32}(_t)?\.jpg$/;
+const KEY_RE = /^[a-f0-9]{32}(_t|_o)?\.jpg$/;
 export function memberMediaDiskName(name) {
   const base = String(name || "").split(/[/\\]/).pop() || "";
   return KEY_RE.test(base) ? base : "";
@@ -61,7 +83,16 @@ export function memberMediaFilePath(name) {
   const full = path.join(memberMediaDir(), file);
   return existsSync(full) ? full : "";
 }
-function publicMedia(row) {
+function mediaTagsFor(db, mediaId) {
+  return db.prepare(
+    `SELECT t.id, t.name FROM media_tag_map m
+     JOIN media_tags t ON t.id = m.tag_id
+     WHERE m.media_id=?
+     ORDER BY t.name COLLATE NOCASE`,
+  ).all(Number(mediaId)).map((row) => ({ id: Number(row.id), name: row.name }));
+}
+
+function publicMedia(row, db = null) {
   const key = row.storage_key;
   const id = String(key).replace(/\.jpg$/, "");
   return {
@@ -72,7 +103,9 @@ function publicMedia(row) {
     width: row.width == null ? null : Number(row.width),
     height: row.height == null ? null : Number(row.height),
     bytes: row.bytes == null ? null : Number(row.bytes),
+    watermarked: Number(row.watermarked) === 1,
     created_at: row.created_at,
+    tags: db ? mediaTagsFor(db, row.id) : [],
   };
 }
 
@@ -80,14 +113,23 @@ export function countActiveMedia(db, userId) {
   return Number(db.prepare("SELECT COUNT(*) n FROM member_media WHERE user_id=? AND deleted_at IS NULL").get(Number(userId)).n) || 0;
 }
 
-export function listMemberMedia(db, userId, { plan = "free" } = {}) {
-  const rows = db.prepare("SELECT * FROM member_media WHERE user_id=? AND deleted_at IS NULL ORDER BY id DESC").all(Number(userId));
-  return { quota: mediaQuotaForPlan(plan), used: rows.length, items: rows.map(publicMedia) };
+export function listMemberMedia(db, userId, { plan = "free", tagIds = [] } = {}) {
+  const uid = Number(userId);
+  let rows = db.prepare("SELECT * FROM member_media WHERE user_id=? AND deleted_at IS NULL ORDER BY id DESC").all(uid);
+  const wanted = [...new Set((Array.isArray(tagIds) ? tagIds : []).map(Number).filter((n) => n > 0))];
+  if (wanted.length) {
+    const placeholders = wanted.map(() => "?").join(",");
+    const matched = new Set(
+      db.prepare(`SELECT DISTINCT media_id FROM media_tag_map WHERE tag_id IN (${placeholders})`).all(...wanted).map((r) => Number(r.media_id)),
+    );
+    rows = rows.filter((row) => matched.has(Number(row.id)));
+  }
+  return { quota: mediaQuotaForPlan(plan), used: countActiveMedia(db, uid), items: rows.map((row) => publicMedia(row, db)) };
 }
 
 export function getOwnedMedia(db, userId, id) {
   const row = db.prepare("SELECT * FROM member_media WHERE id=? AND user_id=? AND deleted_at IS NULL").get(Number(id), Number(userId));
-  return row ? publicMedia(row) : null;
+  return row ? publicMedia(row, db) : null;
 }
 
 // 依 url 驗證「本人擁有且有效」的素材（供刊登時挑選、擋盜連他人 media）。
@@ -106,12 +148,36 @@ export function isMediaReferenced(db, url) {
 }
 
 // 建立素材：先處理（CPU，於交易外）→ 交易內再檢查配額並寫入（避免並發超額）→ 落檔。
-export async function saveMemberMedia(db, userId, buffer, { plan = "free", processor = normalizeImage, now = new Date(), originalName = "" } = {}) {
+export async function saveMemberMedia(db, userId, buffer, {
+  plan = "free",
+  processor = normalizeImage,
+  watermarker = applySiteWatermark,
+  now = new Date(),
+  originalName = "",
+} = {}) {
   const quota = mediaQuotaForPlan(plan);
   const processed = await processor(buffer);
+  if (!processed?.main?.buffer?.length || !processed?.thumb?.buffer?.length) {
+    const e = new Error("顯示圖處理失敗，未寫入損壞檔案");
+    e.status = 500;
+    e.code = "watermark_failed";
+    throw e;
+  }
+  const marked = await watermarker(processed.main.buffer, {
+    width: processed.main.width,
+    height: processed.main.height,
+    watermarked: 0,
+  });
+  if (!marked?.buffer?.length) {
+    const e = new Error("顯示圖處理失敗，未寫入損壞檔案");
+    e.status = 500;
+    e.code = "watermark_failed";
+    throw e;
+  }
   const key = randomBytes(16).toString("hex");
   const mainName = `${key}.jpg`;
   const thumbName = `${key}_t.jpg`;
+  const originalNameKey = `${key}_o.jpg`;
   const dir = memberMediaDir();
   const ts = (now instanceof Date ? now : new Date(now)).toISOString();
 
@@ -126,21 +192,46 @@ export async function saveMemberMedia(db, userId, buffer, { plan = "free", proce
       e.status = 409; e.code = "quota_exceeded";
       throw e;
     }
-    writeFileSync(path.join(dir, mainName), processed.main.buffer);
+    writeFileSync(path.join(dir, originalNameKey), processed.main.buffer);
+    writeFileSync(path.join(dir, mainName), marked.buffer);
     writeFileSync(path.join(dir, thumbName), processed.thumb.buffer);
     const res = db.prepare(
-      `INSERT INTO member_media(user_id, storage_key, thumb_key, original_name, mime, format, width, height, bytes, digest, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-    ).run(Number(userId), mainName, thumbName, safeName(originalName), processed.mime, processed.format, processed.main.width, processed.main.height, processed.main.bytes, processed.digest, ts);
+      `INSERT INTO member_media(user_id, storage_key, thumb_key, original_key, original_name, mime, format, width, height, bytes, digest, watermarked, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    ).run(
+      Number(userId), mainName, thumbName, originalNameKey, safeName(originalName),
+      processed.mime, processed.format, processed.main.width, processed.main.height,
+      marked.buffer.length, processed.digest, marked.watermarked ? 1 : 0, ts,
+    );
     id = Number(res.lastInsertRowid);
     db.exec("COMMIT");
   } catch (err) {
     try { db.exec("ROLLBACK"); } catch { /* already rolled back */ }
-    // 清理可能已落的檔，避免孤兒檔。
-    for (const n of [mainName, thumbName]) { try { const p = path.join(dir, n); if (existsSync(p)) unlinkSync(p); } catch { /* ignore */ } }
+    for (const n of [mainName, thumbName, originalNameKey]) { try { const p = path.join(dir, n); if (existsSync(p)) unlinkSync(p); } catch { /* ignore */ } }
     throw err;
   }
   return getOwnedMedia(db, userId, id);
+}
+
+// 重試顯示圖：已浮水印則略過；失敗不覆寫既有成功檔。
+export async function reprocessMemberMediaDisplay(db, userId, id, { watermarker = applySiteWatermark } = {}) {
+  const row = db.prepare("SELECT * FROM member_media WHERE id=? AND user_id=? AND deleted_at IS NULL").get(Number(id), Number(userId));
+  if (!row) { const e = new Error("找不到照片或無權限"); e.status = 404; throw e; }
+  if (Number(row.watermarked) === 1) return { ...publicMedia(row, db), skipped: true };
+  const srcName = row.original_key || row.storage_key;
+  const srcPath = memberMediaFilePath(srcName);
+  if (!srcPath) { const e = new Error("找不到原始檔，無法重試"); e.status = 404; throw e; }
+  const src = readFileSync(srcPath);
+  const marked = await watermarker(src, { width: row.width, height: row.height, watermarked: 0 });
+  if (!marked?.buffer?.length) {
+    const e = new Error("顯示圖處理失敗，未寫入損壞檔案");
+    e.status = 500;
+    e.code = "watermark_failed";
+    throw e;
+  }
+  writeFileSync(path.join(memberMediaDir(), row.storage_key), marked.buffer);
+  db.prepare("UPDATE member_media SET watermarked=1, bytes=? WHERE id=? AND user_id=?").run(marked.buffer.length, Number(id), Number(userId));
+  return { ...getOwnedMedia(db, userId, id), skipped: false };
 }
 
 // 刪除：驗本人；釋放配額（soft delete）；若無任何刊登引用才移除實體檔（引用中則保留，維持歷史顯示）。
@@ -152,12 +243,85 @@ export function deleteMemberMedia(db, userId, id, { now = new Date() } = {}) {
   const referenced = isMediaReferenced(db, url);
   const ts = (now instanceof Date ? now : new Date(now)).toISOString();
   db.prepare("UPDATE member_media SET deleted_at=? WHERE id=? AND user_id=?").run(ts, Number(id), Number(userId));
+  db.prepare("DELETE FROM media_tag_map WHERE media_id=?").run(Number(id));
   if (!referenced) {
-    for (const n of [row.storage_key, row.thumb_key].filter(Boolean)) {
+    for (const n of [row.storage_key, row.thumb_key, row.original_key].filter(Boolean)) {
       try { const p = path.join(memberMediaDir(), n); if (existsSync(p)) unlinkSync(p); } catch { /* ignore */ }
     }
   }
   return { deleted: true, kept_file: referenced };
+}
+
+function httpError(message, status = 400, code = "") {
+  const err = new Error(message);
+  err.status = status;
+  if (code) err.code = code;
+  return err;
+}
+
+function tagName(value) {
+  const name = String(value || "").replace(/[\r\n\t]/g, " ").replace(/\s+/g, " ").trim().slice(0, 40);
+  if (!name) throw httpError("請填標籤名稱");
+  return name;
+}
+
+export function listMediaTags(db, userId) {
+  return db.prepare("SELECT id, name, created_at FROM media_tags WHERE user_id=? ORDER BY name COLLATE NOCASE").all(Number(userId))
+    .map((row) => ({ id: Number(row.id), name: row.name, created_at: row.created_at }));
+}
+
+export function createMediaTag(db, userId, name, now = new Date()) {
+  const label = tagName(name);
+  const ts = (now instanceof Date ? now : new Date(now)).toISOString();
+  try {
+    const res = db.prepare("INSERT INTO media_tags(user_id, name, created_at) VALUES (?,?,?)").run(Number(userId), label, ts);
+    return { id: Number(res.lastInsertRowid), name: label, created_at: ts };
+  } catch {
+    const row = db.prepare("SELECT id, name, created_at FROM media_tags WHERE user_id=? AND name=?").get(Number(userId), label);
+    if (row) return { id: Number(row.id), name: row.name, created_at: row.created_at, reused: true };
+    throw httpError("無法建立標籤");
+  }
+}
+
+export function renameMediaTag(db, userId, id, name) {
+  const row = db.prepare("SELECT * FROM media_tags WHERE id=? AND user_id=?").get(Number(id), Number(userId));
+  if (!row) throw httpError("找不到標籤或無權限", 404);
+  const label = tagName(name);
+  try {
+    db.prepare("UPDATE media_tags SET name=? WHERE id=? AND user_id=?").run(label, Number(id), Number(userId));
+  } catch {
+    throw httpError("已有同名標籤", 409, "tag_exists");
+  }
+  return { id: Number(id), name: label, created_at: row.created_at };
+}
+
+export function deleteMediaTag(db, userId, id) {
+  const row = db.prepare("SELECT id FROM media_tags WHERE id=? AND user_id=?").get(Number(id), Number(userId));
+  if (!row) throw httpError("找不到標籤或無權限", 404);
+  db.prepare("DELETE FROM media_tag_map WHERE tag_id=?").run(Number(id));
+  db.prepare("DELETE FROM media_tags WHERE id=? AND user_id=?").run(Number(id), Number(userId));
+  return { deleted: true };
+}
+
+export function setMediaTags(db, userId, mediaId, tagIds = []) {
+  const media = db.prepare("SELECT id FROM member_media WHERE id=? AND user_id=? AND deleted_at IS NULL").get(Number(mediaId), Number(userId));
+  if (!media) throw httpError("找不到照片或無權限", 404);
+  const ids = [...new Set((Array.isArray(tagIds) ? tagIds : []).map(Number).filter((n) => n > 0))];
+  for (const tagId of ids) {
+    const tag = db.prepare("SELECT id FROM media_tags WHERE id=? AND user_id=?").get(tagId, Number(userId));
+    if (!tag) throw httpError("找不到標籤或無權限", 404);
+  }
+  db.prepare("DELETE FROM media_tag_map WHERE media_id=?").run(Number(mediaId));
+  const ins = db.prepare("INSERT INTO media_tag_map(media_id, tag_id) VALUES (?,?)");
+  for (const tagId of ids) ins.run(Number(mediaId), tagId);
+  return getOwnedMedia(db, userId, mediaId);
+}
+
+export function mediaUrlsForTagIds(db, userId, tagIds = []) {
+  const wanted = [...new Set((Array.isArray(tagIds) ? tagIds : []).map(Number).filter((n) => n > 0))];
+  if (!wanted.length) return [];
+  const listed = listMemberMedia(db, userId, { tagIds: wanted });
+  return listed.items.map((item) => item.url);
 }
 
 function safeName(name) {

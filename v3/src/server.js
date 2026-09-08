@@ -141,6 +141,12 @@ import {
   saveMemberMediaFor,
   listMemberMediaFor,
   deleteMemberMediaFor,
+  listMediaTagsFor,
+  createMediaTagFor,
+  renameMediaTagFor,
+  deleteMediaTagFor,
+  setMediaTagsFor,
+  mediaUrlsForTagIdsFor,
   assertOwnsMemberMediaUrls,
   closeSelfListing,
   hideSelfListing,
@@ -1574,7 +1580,57 @@ app.get("/api/media", (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(listMemberMediaFor(session.userId, { plan: session.plan || "free" }));
+    const tagIds = String(req.query.tag_ids || "").split(",").map(Number).filter((n) => n > 0);
+    res.json(listMemberMediaFor(session.userId, { plan: session.plan || "free", tagIds }));
+  } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
+});
+
+app.get("/api/media/tags", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json({ items: listMediaTagsFor(session.userId) });
+  } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
+});
+
+app.post("/api/media/tags", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(createMediaTagFor(session.userId, req.body?.name));
+  } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
+});
+
+app.patch("/api/media/tags/:id", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(renameMediaTagFor(session.userId, req.params.id, req.body?.name));
+  } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
+});
+
+app.delete("/api/media/tags/:id", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(deleteMediaTagFor(session.userId, req.params.id));
+  } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
+});
+
+app.put("/api/media/:id/tags", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(setMediaTagsFor(session.userId, req.params.id, req.body?.tag_ids || req.body?.tags));
+  } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
+});
+
+app.get("/api/media/by-tags", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    const tagIds = String(req.query.tag_ids || "").split(",").map(Number).filter((n) => n > 0);
+    res.json({ urls: mediaUrlsForTagIdsFor(session.userId, tagIds) });
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
 
