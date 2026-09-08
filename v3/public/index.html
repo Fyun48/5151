@@ -6872,8 +6872,9 @@
         $("wishCity").innerHTML = `<option value="">先選縣市</option>` + cities.map((city) => `<option value="${esc(city.name)}">${esc(city.name)}</option>`).join("");
         $("wishCity").dataset.ready = "1";
       }
-      if ($("wishFilterHousing") && wishMeta?.housingTypes) {
+      if ($("wishFilterHousing") && !$("wishFilterHousing").dataset.ready && wishMeta?.housingTypes) {
         $("wishFilterHousing").innerHTML = wishMeta.housingTypes.map((row) => `<option value="${esc(row.id)}">${esc(row.label)}</option>`).join("");
+        $("wishFilterHousing").dataset.ready = "1";
       }
     }
     function collectWishForm() {
@@ -7012,6 +7013,7 @@
       const res = await fetch(`/api/wish-rooms?${qs.toString()}`);
       const data = await res.json();
       wishMeta = data;
+      fillWishCitySelects();
       const posts = data.rooms || data.posts || [];
       box.innerHTML = posts.length
         ? posts.map(demandCardHtml).join("")
