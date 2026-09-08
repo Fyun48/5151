@@ -80,6 +80,43 @@ test("predeploy remote script no longer greps for the ok token", () => {
   assert.match(script, /verify-sqlite-integrity-json\.py/);
 });
 
+test("host-node, Python, and container-node integrity producers share one fail-closed schema", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "phase15-int-e2e-"));
+  const dbPath = path.join(dir, "v3.db");
+  execFileSync("python3", ["-c", `
+import sqlite3
+con = sqlite3.connect(${JSON.stringify(dbPath)})
+con.execute("CREATE TABLE t(id INTEGER)")
+con.commit()
+con.close()
+`]);
+  const inspect = path.join(ROOT, ".github/scripts/sqlite-readonly-inspect.mjs");
+  const nodeJson = JSON.parse(execFileSync("node", [inspect, dbPath, "integrity"], { encoding: "utf8" }));
+  const pythonJson = JSON.parse(execFileSync("python3", ["-c", `
+import json, sqlite3, sys, urllib.parse
+path = sys.argv[1]
+uri = "file:" + urllib.parse.quote(path, safe="/") + "?mode=ro"
+con = sqlite3.connect(uri, uri=True)
+try:
+    row = con.execute("PRAGMA integrity_check").fetchone()
+    result = row[0] if row else None
+finally:
+    con.close()
+print(json.dumps({"integrity_check": result, "ok": result == "ok"}))
+`, dbPath], { encoding: "utf8" }));
+  for (const doc of [nodeJson, pythonJson]) {
+    assert.equal(doc.integrity_check, "ok");
+    assert.equal(doc.ok, true);
+    assert.deepEqual(Object.keys(doc).sort(), ["integrity_check", "ok"]);
+    execFileSync("python3", [INTEGRITY], { input: JSON.stringify(doc), encoding: "utf8" });
+  }
+  assert.throws(() => execFileSync("python3", [INTEGRITY], {
+    input: JSON.stringify({ integrity_check: "ok" }),
+    encoding: "utf8",
+  }));
+  rmSync(dir, { recursive: true, force: true });
+});
+
 test("BACKUP_VERIFIED missing fails evidence creation", async () => {
   await writeEvidenceFails({
     BACKUP_ID: "/tmp/backup",

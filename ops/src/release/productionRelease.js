@@ -471,6 +471,7 @@ function claimDispatchLease(db, { run, workflowKind, owner, now, repo, env }) {
       binding = getBinding(db, run.id, workflowKind);
     }
     if (binding.workflow_run_id) return { binding, role: "reconcile" };
+    if (binding.binding_status === BINDING_STATUSES.REJECTED) return { binding, role: "lookup" };
     if (binding.binding_status === BINDING_STATUSES.UNKNOWN) return { binding, role: "lookup" };
     if (binding.binding_status === BINDING_STATUSES.DISPATCHED || binding.binding_status === BINDING_STATUSES.RECONCILED) {
       return { binding, role: "lookup" };
@@ -497,20 +498,21 @@ function claimDispatchLease(db, { run, workflowKind, owner, now, repo, env }) {
   });
 }
 
-function expectedWorkflowEvidence(run, { workflowKind, workflowFile, environment, binding, imageDigest = null }) {
+function expectedWorkflowEvidence(run, { workflowKind, workflowFile, environment, binding, imageDigest = null, rollbackTarget = null }) {
   const rollback = workflowKind === WORKFLOW_KINDS.ROLLBACK;
   const githubActor = binding?.authorized_github_actor || run.authorized_github_actor;
+  const rollbackSha = rollbackTarget?.source_sha || run.previous_stable_sha;
   return {
     workflow_run_id: binding?.workflow_run_id || null,
     attempt: binding?.workflow_attempt == null ? null : Number(binding.workflow_attempt),
     workflow_file: workflowFile,
     workflow_ref: run.workflow_ref || REQUIRED_WORKFLOW_REF,
-    head_sha: rollback ? run.previous_stable_sha : run.authorized_head_sha,
+    head_sha: rollback ? rollbackSha : run.authorized_head_sha,
     actor: githubActor,
     triggering_actor: githubActor,
     environment: environment || null,
     image_digest: imageDigest,
-    oci_revision: imageDigest ? (rollback ? run.previous_stable_sha : run.authorized_head_sha) : null,
+    oci_revision: imageDigest ? (rollback ? rollbackSha : run.authorized_head_sha) : null,
     oci_source: imageDigest ? REQUIRED_OCI_SOURCE : null,
   };
 }
@@ -519,6 +521,9 @@ async function dispatchOrReconcile(db, {
   run, provider, workflowKind, workflowFile, inputs, environment, confirmation, actor, now, dispatchedStatus, repo, env,
   owner, hooks = null, observedStable = null, requireImageOutputs = false,
 }) {
+  const rollbackTarget = workflowKind === WORKFLOW_KINDS.ROLLBACK ? resolveAuthorizedRollbackTarget(db, run) : null;
+  const rollbackSha = rollbackTarget?.source_sha || run.previous_stable_sha;
+  const rollbackDigest = rollbackTarget?.artifact_digest || run.previous_stable_digest;
   const leaseOwner = owner || randomUUID();
   const { binding: claimedBinding, role } = claimDispatchLease(db, {
     run, workflowKind, owner: leaseOwner, now, repo, env,
@@ -530,7 +535,7 @@ async function dispatchOrReconcile(db, {
       idempotencyKey: binding.idempotency_key,
       workflowFile,
       workflowRef: run.workflow_ref,
-      headSha: workflowKind === WORKFLOW_KINDS.ROLLBACK ? run.previous_stable_sha : run.authorized_head_sha,
+      headSha: workflowKind === WORKFLOW_KINDS.ROLLBACK ? rollbackSha : run.authorized_head_sha,
       actor: run.authorized_github_actor,
       createdAfter: binding.dispatch_claimed_at || binding.created_at,
       dispatchIntentId: binding.dispatch_intent_id || binding.dispatch_request_id,
@@ -604,7 +609,7 @@ async function dispatchOrReconcile(db, {
       const fresh = getBinding(db, run.id, workflowKind);
       if (fresh.workflow_run_id) return;
       if (!dispatched?.accepted) {
-        saveBindingDispatch(db, fresh.id, { status: BINDING_STATUSES.UNKNOWN, requestId: dispatched?.request_id, responseIdentity: dispatched?.provider_response_identity });
+        saveBindingDispatch(db, fresh.id, { status: BINDING_STATUSES.REJECTED, requestId: dispatched?.request_id, responseIdentity: dispatched?.provider_response_identity });
         appendEvidence(db, {
           releaseRunId: run.id, kind: `${workflowKind}_dispatch_rejected`, now, workflow_file: workflowFile, workflow_ref: run.workflow_ref,
           target_environment: environment, dispatch_request_id: dispatched?.request_id || fresh.dispatch_request_id, provider_response_identity: dispatched?.provider_response_identity,
@@ -668,7 +673,7 @@ async function dispatchOrReconcile(db, {
       idempotencyKey: binding.idempotency_key,
       workflowFile,
       workflowRef: run.workflow_ref,
-      headSha: workflowKind === WORKFLOW_KINDS.ROLLBACK ? run.previous_stable_sha : run.authorized_head_sha,
+      headSha: workflowKind === WORKFLOW_KINDS.ROLLBACK ? rollbackSha : run.authorized_head_sha,
       actor: run.authorized_github_actor,
       createdAfter: binding.dispatch_claimed_at || binding.created_at,
       dispatchIntentId: binding.dispatch_intent_id || binding.dispatch_request_id,
@@ -718,8 +723,8 @@ async function dispatchOrReconcile(db, {
     throw httpError("workflow run missing", 409);
   }
   const expected = expectedWorkflowEvidence(run, {
-    workflowKind, workflowFile, environment, binding,
-    imageDigest: requireImageOutputs ? (workflowKind === WORKFLOW_KINDS.ROLLBACK ? run.previous_stable_digest : run.artifact_digest) : null,
+    workflowKind, workflowFile, environment, binding, rollbackTarget,
+    imageDigest: requireImageOutputs ? (workflowKind === WORKFLOW_KINDS.ROLLBACK ? rollbackDigest : run.artifact_digest) : null,
   });
   const classified = classifyWorkflowRun(wf, expected);
   if (classified.kind === "waiting") {
@@ -962,7 +967,7 @@ function recordDbDisposition(db, run, { now, actor }) {
   return decided;
 }
 
-function effectivePreviousStable(db, run) {
+function resolveAuthorizedRollbackTarget(db, run) {
   const pinned = {
     source_sha: run.previous_stable_sha,
     artifact_digest: run.previous_stable_digest,
@@ -970,20 +975,32 @@ function effectivePreviousStable(db, run) {
     previous_stable_provenance: parse(run.previous_stable_provenance) || run.previous_stable_provenance,
   };
   if (previousStableComplete(pinned)) return pinned;
-  const cur = getProductionStable(db);
-  if (
-    cur?.provenance?.kind === "first_live_bootstrap"
-    && Number(cur.release_run_id) === Number(run.id)
-    && previousStableComplete(cur)
-  ) {
-    return {
-      source_sha: cur.source_sha,
-      artifact_digest: cur.artifact_digest,
-      workflow_run_id: cur.workflow_run_id,
-      previous_stable_provenance: cur.provenance,
-    };
-  }
-  return pinned;
+  const boot = db.prepare(
+    `SELECT workflow_run_id, image_digest, oci_revision, oci_source, payload_json
+     FROM production_release_evidence
+     WHERE release_run_id=? AND evidence_kind='first_live_bootstrap'
+     ORDER BY id ASC LIMIT 1`,
+  ).get(Number(run.id));
+  if (!boot) return pinned;
+  const payload = parse(boot.payload_json) || {};
+  const inspected = payload.inspected || {};
+  const provenance = payload.provenance || {};
+  const candidate = {
+    source_sha: inspected.oci_revision || boot.oci_revision || null,
+    artifact_digest: inspected.digest || boot.image_digest || null,
+    workflow_run_id: provenance.predeploy_workflow_run_id || boot.workflow_run_id || null,
+    previous_stable_provenance: provenance.kind === "first_live_bootstrap" ? provenance : {
+      kind: "first_live_bootstrap",
+      ...provenance,
+      oci_revision: inspected.oci_revision || boot.oci_revision || null,
+      observed_digest: inspected.digest || boot.image_digest || null,
+    },
+  };
+  return previousStableComplete(candidate) ? candidate : pinned;
+}
+
+function effectivePreviousStable(db, run) {
+  return resolveAuthorizedRollbackTarget(db, run);
 }
 
 function observedStableForRun(db, run) {
@@ -1137,10 +1154,14 @@ async function executeCodeRollback(db, run, { provider, repo, env, now, actor, o
 
 function mutatingDispatchSubmitted(db, releaseRunId) {
   const rows = db.prepare(
-    `SELECT dispatch_submitted_at, workflow_run_id FROM production_release_workflow_binding
+    `SELECT dispatch_submitted_at, workflow_run_id, binding_status FROM production_release_workflow_binding
      WHERE release_run_id=? AND workflow_kind IN (?,?)`,
   ).all(Number(releaseRunId), WORKFLOW_KINDS.DEPLOY, WORKFLOW_KINDS.ROLLBACK);
-  return rows.some((b) => b.dispatch_submitted_at || b.workflow_run_id);
+  return rows.some((b) => {
+    if (b.workflow_run_id) return true;
+    if (!b.dispatch_submitted_at) return false;
+    return b.binding_status !== BINDING_STATUSES.REJECTED;
+  });
 }
 
 function holdLeaseOnUncertainMutation(db, releaseRunId, workflowKind) {
@@ -1379,7 +1400,11 @@ export async function requestCodeRollback(db, {
 } = {}) {
   const row = db.prepare("SELECT * FROM production_release_run WHERE id=?").get(Number(releaseRunId));
   if (!row) throw httpError("production release run not found", 404);
-  if (!same(previousStableSha, row.previous_stable_sha) || !same(previousStableDigest, row.previous_stable_digest) || !same(previousStableWorkflowRunId, row.previous_stable_workflow_run_id)) {
+  const authorizedTarget = resolveAuthorizedRollbackTarget(db, row);
+  if (!previousStableComplete(authorizedTarget)
+    || !same(previousStableSha, authorizedTarget.source_sha)
+    || !same(previousStableDigest, authorizedTarget.artifact_digest)
+    || !same(previousStableWorkflowRunId, authorizedTarget.workflow_run_id)) {
     throw httpError("previous stable identity mismatch", 409);
   }
   const status = latestStatus(db, row.id);

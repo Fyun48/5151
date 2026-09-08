@@ -201,6 +201,7 @@ test("Phase 15 policy is deterministic, fail-closed, and excludes secrets", () =
   assert.equal(isAllowedReleaseTransition(null, "CREATED"), true);
   assert.equal(isAllowedReleaseTransition("SUCCEEDED", "DB_ROLLBACK_MANUAL_REQUIRED"), false);
   assert.equal(isAllowedReleaseTransition("SUCCEEDED", "HEALTH_VERIFIED"), false);
+  assert.equal(isAllowedReleaseTransition("SUCCEEDED", "CODE_ROLLBACK_DISPATCHED"), true);
   assert.equal(isAllowedReleaseTransition("BLOCKED", "BUILD_DISPATCHED"), false);
   assert.equal(isTerminalReleaseStatus("PRODUCTION_STATE_UNKNOWN"), false);
   assert.equal(isAllowedReleaseTransition("PRODUCTION_STATE_UNKNOWN", "DEPLOY_RECONCILED"), true);
@@ -1570,5 +1571,137 @@ test("first-live bootstrap refuses unverified or caller-only current-stable iden
       assert.equal(getProductionStable(db2), null);
     } finally { staged2.git.cleanup(); db2.close(); }
   } finally { git.cleanup(); db.close(); }
+});
+
+test("SUCCEEDED release can request exact previous-stable code rollback once without DB restore", async () => {
+  const db = openOpsDb(":memory:");
+  const { codingTaskId, repo, git } = await makeStagedTask(db);
+  try {
+    const { authorization, assessment } = await cleared(db, codingTaskId, repo);
+    const prev = seedPrev(db, repo);
+    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW });
+    const provider = makeStubProductionReleaseProvider();
+    const out = await executeProductionRelease(db, created.run.id, { provider, repo, now: NOW });
+    assert.equal(out.run.current_status, "SUCCEEDED");
+    const deployBefore = countDeployDispatches(provider);
+    const rolled = await requestCodeRollback(db, {
+      releaseRunId: created.run.id,
+      previousStableSha: prev.source_sha,
+      previousStableDigest: prev.artifact_digest,
+      previousStableWorkflowRunId: prev.workflow_run_id,
+      provider, repo, now: NOW,
+    });
+    assert.equal(rolled.rolled_back, true);
+    assert.equal(rolled.db_restore, false);
+    assert.equal(rolled.run.current_status, "ROLLED_BACK");
+    assert.equal(deployBefore.count, 1);
+    assert.equal(getProductionStable(db).source_sha, prev.source_sha);
+    assert.equal(getProductionStable(db).artifact_digest, prev.artifact_digest);
+    assert.equal(provider.restoreCallCount, 0);
+    const again = await requestCodeRollback(db, {
+      releaseRunId: created.run.id,
+      previousStableSha: prev.source_sha,
+      previousStableDigest: prev.artifact_digest,
+      previousStableWorkflowRunId: prev.workflow_run_id,
+      provider, repo, now: NOW,
+    });
+    assert.equal(again.idempotent, true);
+    assert.equal(deployBefore.count, 1);
+  } finally { git.cleanup(); db.close(); }
+});
+
+test("first-live SUCCEEDED rollback uses immutable verified bootstrap target", async () => {
+  const db = openOpsDb(":memory:");
+  const { codingTaskId, repo, git } = await makeStagedTask(db);
+  try {
+    const { authorization, assessment } = await cleared(db, codingTaskId, repo);
+    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW });
+    assert.equal(created.run.previous_stable_sha, null);
+    const liveSha = execFileSync("git", ["-C", git.dir, "rev-parse", "origin/master^"], { encoding: "utf8" }).trim();
+    const liveDigest = "sha256:" + "33".repeat(32);
+    const provider = makeStubProductionReleaseProvider({
+      currentProduction: { digest: liveDigest, image_ref: `ghcr.io/fyun48/5151@${liveDigest}` },
+      inspectByDigest: {
+        [liveDigest]: { digest: liveDigest, oci_revision: liveSha, oci_source: "https://github.com/Fyun48/5151" },
+      },
+    });
+    const out = await executeProductionRelease(db, created.run.id, { provider, repo, now: NOW });
+    assert.equal(out.run.current_status, "SUCCEEDED");
+    assert.equal(getProductionRelease(db, created.run.id).run.previous_stable_sha, null);
+    const boot = getProductionRelease(db, created.run.id).evidence.find((e) => e.evidence_kind === "first_live_bootstrap");
+    const targetSha = boot.payload.inspected.oci_revision;
+    const targetDigest = boot.payload.inspected.digest;
+    const targetRunId = boot.payload.provenance.predeploy_workflow_run_id;
+    await assert.rejects(() => requestCodeRollback(db, {
+      releaseRunId: created.run.id,
+      previousStableSha: authorization.head_sha,
+      previousStableDigest: authorization.artifact_digest,
+      previousStableWorkflowRunId: String(out.current_stable.workflow_run_id),
+      provider, repo, now: NOW,
+    }), /previous stable identity mismatch/);
+    const deploy = countDeployDispatches(provider);
+    const rolled = await requestCodeRollback(db, {
+      releaseRunId: created.run.id,
+      previousStableSha: targetSha,
+      previousStableDigest: targetDigest,
+      previousStableWorkflowRunId: targetRunId,
+      provider, repo, now: NOW,
+    });
+    assert.equal(rolled.rolled_back, true);
+    assert.equal(rolled.db_restore, false);
+    assert.equal(rolled.run.current_status, "ROLLED_BACK");
+    assert.equal(deploy.count, 1);
+    assert.equal(getProductionStable(db).source_sha, liveSha);
+    assert.equal(getProductionStable(db).artifact_digest, liveDigest);
+    assert.equal(provider.restoreCallCount, 0);
+  } finally { git.cleanup(); db.close(); }
+});
+
+test("definitive deploy rejection blocks and releases the global Production lease", async () => {
+  const db = openOpsDb(":memory:");
+  const stagedA = await makeStagedTask(db);
+  const stagedB = await makeStagedTask(db);
+  try {
+    const a = await cleared(db, stagedA.codingTaskId, stagedA.repo);
+    seedPrev(db, stagedA.repo);
+    const runA = createProductionReleaseRun(db, execBody(stagedA.codingTaskId, a.authorization, a.assessment, { expectedMasterHead: stagedA.repo.resolveRemoteRef("master") }), { repo: stagedA.repo, now: NOW });
+    const providerA = makeStubProductionReleaseProvider({ rejectWorkflows: [PRODUCTION_WORKFLOWS.DEPLOY] });
+    await assert.rejects(() => executeProductionRelease(db, runA.run.id, { provider: providerA, repo: stagedA.repo, now: NOW }), /dispatch rejected/);
+    assert.equal(getProductionRelease(db, runA.run.id).run.current_status, "BLOCKED");
+    const lease = db.prepare("SELECT * FROM production_release_global_lease WHERE id=1").get();
+    assert.ok(!lease?.release_run_id);
+    const b = await cleared(db, stagedB.codingTaskId, stagedB.repo);
+    seedPrev(db, stagedB.repo);
+    const runB = createProductionReleaseRun(db, execBody(stagedB.codingTaskId, b.authorization, b.assessment, { expectedMasterHead: stagedB.repo.resolveRemoteRef("master") }), { repo: stagedB.repo, now: NOW });
+    const providerB = makeStubProductionReleaseProvider();
+    const outB = await executeProductionRelease(db, runB.run.id, { provider: providerB, repo: stagedB.repo, now: NOW });
+    assert.equal(outB.run.current_status, "SUCCEEDED");
+  } finally { stagedA.git.cleanup(); stagedB.git.cleanup(); db.close(); }
+});
+
+test("timeout deploy send keeps the Production lease and never redispatches", async () => {
+  const db = openOpsDb(":memory:");
+  const stagedA = await makeStagedTask(db);
+  const stagedB = await makeStagedTask(db);
+  try {
+    const a = await cleared(db, stagedA.codingTaskId, stagedA.repo);
+    seedPrev(db, stagedA.repo);
+    const runA = createProductionReleaseRun(db, execBody(stagedA.codingTaskId, a.authorization, a.assessment, { expectedMasterHead: stagedA.repo.resolveRemoteRef("master") }), { repo: stagedA.repo, now: NOW });
+    const providerA = makeStubProductionReleaseProvider({ timeoutWorkflows: [PRODUCTION_WORKFLOWS.DEPLOY] });
+    const deployA = countDeployDispatches(providerA);
+    await assert.rejects(() => executeProductionRelease(db, runA.run.id, { provider: providerA, repo: stagedA.repo, now: NOW }), /still queued|in_progress/);
+    assert.equal(deployA.count, 1);
+    assert.equal(getProductionRelease(db, runA.run.id).run.current_status, "DEPLOY_DISPATCHED");
+    assert.equal(Number(db.prepare("SELECT release_run_id FROM production_release_global_lease WHERE id=1").get().release_run_id), runA.run.id);
+    await assert.rejects(() => reconcileProductionRelease(db, runA.run.id, { provider: providerA, repo: stagedA.repo, now: NOW }), /still queued|reconcile/);
+    assert.equal(deployA.count, 1);
+    const b = await cleared(db, stagedB.codingTaskId, stagedB.repo);
+    const runB = createProductionReleaseRun(db, execBody(stagedB.codingTaskId, b.authorization, b.assessment, { expectedMasterHead: stagedB.repo.resolveRemoteRef("master") }), { repo: stagedB.repo, now: NOW });
+    const providerB = makeStubProductionReleaseProvider();
+    const countsB = countWorkflowDispatches(providerB);
+    await assert.rejects(() => executeProductionRelease(db, runB.run.id, { provider: providerB, repo: stagedB.repo, now: NOW }), /lease held|global production/);
+    assert.equal(countsB.predeploy, 0);
+    assert.equal(countsB.deploy, 0);
+  } finally { stagedA.git.cleanup(); stagedB.git.cleanup(); db.close(); }
 });
 

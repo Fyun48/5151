@@ -121,8 +121,13 @@ export function makeStubProductionReleaseProvider(opts = {}) {
       dispatchCount += 1;
       const requestId = persistRequestId || opts.requestId || `stub-req-${sha256(idempotencyKey).slice(0, 16)}`;
       const responseIdentity = `stub-dispatch-${sha256(`${idempotencyKey}|${requestId}`).slice(0, 20)}`;
+      const timeoutFiles = new Set(opts.timeoutWorkflows || (opts.dispatchTimeout ? [workflowFile] : []));
+      const rejectFiles = new Set(opts.rejectWorkflows || []);
 
-      if (opts.dispatchTimeout) {
+      if (rejectFiles.has(workflowFile)) {
+        return { accepted: false, reason: opts.rejectReason || "dispatch_rejected", workflow_run_id: null, request_id: requestId, provider_response_identity: responseIdentity };
+      }
+      if (timeoutFiles.has(workflowFile)) {
         return { accepted: true, timeout: true, workflow_run_id: null, request_id: requestId, provider_response_identity: responseIdentity };
       }
       if (opts.dispatchNoRunId) {

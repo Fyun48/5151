@@ -84,6 +84,11 @@ export function integrityCheck(dbPath) {
   }
 }
 
+export function integrityReport(dbPath) {
+  const integrity_check = integrityCheck(dbPath);
+  return { integrity_check, ok: integrity_check === "ok" };
+}
+
 export function assertSafeSelect(sql) {
   if (FORBIDDEN_SQL.test(sql)) {
     throw new Error("refusing non-read-only SQL");
@@ -99,7 +104,7 @@ if (self.endsWith("sqlite-readonly-inspect.mjs")) {
     process.exit(2);
   }
   if (mode === "integrity") {
-    console.log(JSON.stringify({ integrity_check: integrityCheck(dbPath) }));
+    console.log(JSON.stringify(integrityReport(dbPath)));
   } else {
     console.log(JSON.stringify(inspectDemandPosts(dbPath)));
   }

@@ -114,6 +114,20 @@ export function ociLabelsFromConfig(config) {
   return { revision: revision || null, source: source || null };
 }
 
+export function extractJsonFromArtifactZip(buf, fileName) {
+  if (!fileName || String(fileName).includes("..") || String(fileName).includes("/")) {
+    throw new Error("artifact filename is not allowed");
+  }
+  const dir = mkdtempSync(path.join(tmpdir(), "phase15-art-"));
+  try {
+    writeFileSync(path.join(dir, "a.zip"), buf);
+    const text = execFileSync("unzip", ["-p", path.join(dir, "a.zip"), fileName], { encoding: "utf8" });
+    return JSON.parse(text);
+  } finally {
+    try { rmSync(dir, { recursive: true, force: true }); } catch { /* noop */ }
+  }
+}
+
 export function sealPhase15Evidence(doc) {
   const rest = { ...doc };
   delete rest.evidence_sha256;
@@ -354,19 +368,14 @@ export function createLiveGithubApi(env = process.env) {
       if (!res.ok) return { artifacts: [] };
       return res.json();
     },
-    async downloadArtifact({ owner, repo, artifactId }) {
+    async downloadArtifact({ owner, repo, artifactId, fileName }) {
       const res = await gh(`/repos/${owner}/${repo}/actions/artifacts/${artifactId}/zip`);
       if (!res.ok) return null;
       const buf = Buffer.from(await res.arrayBuffer());
-      const dir = mkdtempSync(path.join(tmpdir(), "phase15-art-"));
       try {
-        writeFileSync(path.join(dir, "a.zip"), buf);
-        const text = execFileSync("unzip", ["-p", path.join(dir, "a.zip"), `${PHASE15_EVIDENCE_ARTIFACT}.json`], { encoding: "utf8" });
-        return { evidence: JSON.parse(text) };
+        return { evidence: extractJsonFromArtifactZip(buf, fileName || `${PHASE15_EVIDENCE_ARTIFACT}.json`) };
       } catch {
         return null;
-      } finally {
-        try { rmSync(dir, { recursive: true, force: true }); } catch { /* noop */ }
       }
     },
     async compare({ owner, repo, base, head }) {
@@ -409,7 +418,13 @@ export function makeGithubProductionReleaseProvider(env = process.env, deps = {}
     const listed = await api.listArtifacts({ owner: repo.owner, repo: repo.repo, runId: run.id });
     const matches = (listed?.artifacts || []).filter((a) => a.name === artifactName && !a.expired);
     if (matches.length !== 1) return null;
-    const downloaded = await api.downloadArtifact({ owner: repo.owner, repo: repo.repo, artifactId: matches[0].id, runId: run.id });
+    const downloaded = await api.downloadArtifact({
+      owner: repo.owner,
+      repo: repo.repo,
+      artifactId: matches[0].id,
+      runId: run.id,
+      fileName: `${artifactName}.json`,
+    });
     return downloaded?.evidence
       || downloaded?.files?.[`${artifactName}.json`]
       || downloaded?.json

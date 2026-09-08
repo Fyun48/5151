@@ -1,5 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
   PRODUCTION_WORKFLOWS,
   REQUIRED_OCI_SOURCE,
@@ -10,9 +14,11 @@ import {
   correlateGithubWorkflowRuns,
   ociLabelsFromConfig,
   bindPhase15EvidenceToRun,
+  extractJsonFromArtifactZip,
   sealPhase15Evidence,
   PHASE15_EVIDENCE_SCHEMA,
   PHASE15_EVIDENCE_ARTIFACT,
+  PHASE15_IDENTITY_ARTIFACT,
   phase15IntentRunName,
 } from "../src/release/githubProductionReleaseProvider.js";
 
@@ -615,4 +621,29 @@ test("every required artifact identity field missing or mismatched fails closed"
       imageDigest: DIGEST,
     }), null, `mismatch ${key}`);
   }
+});
+
+test("live zip downloader reads identity and evidence filenames from the same archive", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "phase15-zip-"));
+  const zipPath = path.join(dir, "artifacts.zip");
+  const identity = { schema: "phase15-run-identity-v1", release_intent_id: "intent-zip-identity" };
+  const evidence = { schema: PHASE15_EVIDENCE_SCHEMA, release_intent_id: "intent-zip-evidence" };
+  writeFileSync(path.join(dir, `${PHASE15_IDENTITY_ARTIFACT}.json`), JSON.stringify(identity));
+  writeFileSync(path.join(dir, `${PHASE15_EVIDENCE_ARTIFACT}.json`), JSON.stringify(evidence));
+  execFileSync("python3", ["-c", `
+import zipfile
+z = zipfile.ZipFile(${JSON.stringify(zipPath)}, "w")
+z.write(${JSON.stringify(path.join(dir, `${PHASE15_IDENTITY_ARTIFACT}.json`))}, "${PHASE15_IDENTITY_ARTIFACT}.json")
+z.write(${JSON.stringify(path.join(dir, `${PHASE15_EVIDENCE_ARTIFACT}.json`))}, "${PHASE15_EVIDENCE_ARTIFACT}.json")
+z.close()
+`]);
+  const buf = readFileSync(zipPath);
+  assert.equal(extractJsonFromArtifactZip(buf, `${PHASE15_IDENTITY_ARTIFACT}.json`).schema, "phase15-run-identity-v1");
+  assert.equal(extractJsonFromArtifactZip(buf, `${PHASE15_EVIDENCE_ARTIFACT}.json`).schema, PHASE15_EVIDENCE_SCHEMA);
+  assert.notEqual(
+    extractJsonFromArtifactZip(buf, `${PHASE15_IDENTITY_ARTIFACT}.json`).release_intent_id,
+    extractJsonFromArtifactZip(buf, `${PHASE15_EVIDENCE_ARTIFACT}.json`).release_intent_id,
+  );
+  assert.throws(() => extractJsonFromArtifactZip(buf, "../secrets.json"));
+  rmSync(dir, { recursive: true, force: true });
 });
