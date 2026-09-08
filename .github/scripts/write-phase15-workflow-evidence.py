@@ -42,6 +42,23 @@ if health_ok == "true":
         "image_digest": os.environ.get("IMAGE_DIGEST") or None,
         "oci_revision": os.environ.get("OCI_REVISION") or None,
     }
+required = [
+    "workflow_file",
+    "workflow_ref",
+    "workflow_run_id",
+    "head_sha",
+    "source_sha",
+    "actor",
+    "triggering_actor",
+    "release_intent_id",
+]
+if doc["workflow_attempt"] < 1 or any(not doc.get(k) for k in required):
+    raise SystemExit("phase15 evidence missing required identity")
+if doc["workflow_file"].endswith("production-predeploy-check.yml") or doc["workflow_file"].endswith("deploy-v3.yml"):
+    if doc.get("environment") != "production" or not doc.get("confirmation"):
+        raise SystemExit("phase15 evidence missing environment or confirmation")
+elif doc.get("environment"):
+    raise SystemExit("phase15 build evidence must not claim a Production environment")
 canonical = json.dumps(doc, sort_keys=True, separators=(",", ":")).encode("utf-8")
 doc["evidence_sha256"] = "sha256:" + hashlib.sha256(canonical).hexdigest()
 path = sys.argv[1] if len(sys.argv) > 1 else "phase15-workflow-evidence.json"

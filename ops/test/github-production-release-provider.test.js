@@ -72,6 +72,9 @@ function makeFakeGithubApi(opts = {}) {
             actor: ACTOR,
             triggering_actor: ACTOR,
             environment: workflowFile === PRODUCTION_WORKFLOWS.BUILD ? null : "production",
+            confirmation: workflowFile === PRODUCTION_WORKFLOWS.BUILD
+              ? null
+              : (inputs.confirmation || (workflowFile === PRODUCTION_WORKFLOWS.PREDEPLOY ? "PREDEPLOY-PRODUCTION" : "DEPLOY-PRODUCTION")),
             release_intent_id: inputs.release_intent_id || null,
             image_digest: DIGEST,
             oci_revision: inputs.sha,
@@ -243,10 +246,15 @@ test("ambiguous matching GitHub runs fail closed", async () => {
       evidence: sealPhase15Evidence({
         schema: PHASE15_EVIDENCE_SCHEMA,
         workflow_file: PRODUCTION_WORKFLOWS.DEPLOY,
+        workflow_ref: REQUIRED_WORKFLOW_REF,
         workflow_run_id: String(id),
         workflow_attempt: 1,
+        head_sha: SHA,
+        source_sha: SHA,
         actor: ACTOR,
         triggering_actor: ACTOR,
+        environment: "production",
+        confirmation: "DEPLOY-PRODUCTION",
         release_intent_id: "intent-ambiguous",
       }),
     }]);
@@ -360,8 +368,13 @@ test("trusted evidence artifact binds outputs only when run identity matches", (
     workflow_run_id: "11",
     workflow_attempt: 1,
     workflow_file: PRODUCTION_WORKFLOWS.DEPLOY,
+    workflow_ref: REQUIRED_WORKFLOW_REF,
+    head_sha: SHA,
+    source_sha: SHA,
     actor: ACTOR,
     triggering_actor: ACTOR,
+    environment: "production",
+    confirmation: "DEPLOY-PRODUCTION",
     release_intent_id: "intent-bind-ok",
     image_digest: DIGEST,
     oci_revision: SHA,
@@ -388,10 +401,14 @@ test("missing or tampered evidence artifact fails closed", async () => {
     workflow_run_id: "22",
     workflow_attempt: 1,
     workflow_file: PRODUCTION_WORKFLOWS.PREDEPLOY,
+    workflow_ref: REQUIRED_WORKFLOW_REF,
+    head_sha: SHA,
+    source_sha: SHA,
     actor: ACTOR,
     triggering_actor: ACTOR,
     release_intent_id: "intent-predeploy-1",
     environment: "production",
+    confirmation: "PREDEPLOY-PRODUCTION",
     db_backup: { backup_id: "b1", backup_hash: "sha256:" + "11".repeat(32), verified: true },
   });
   assert.equal(bindPhase15EvidenceToRun(null, run, { releaseIntentId: "intent-predeploy-1" }), null);
@@ -423,4 +440,90 @@ test("live REST-shaped fixture never fabricates OCI/health and rejects missing e
   const health = await provider.healthSmoke({ imageDigest: DIGEST, headSha: SHA, workflow: wf });
   assert.equal(health.passed, false);
   assert.equal(health.container_running, false);
+  assert.equal(dispatched.head_sha, null);
+  assert.equal(dispatched.actor, null);
+  assert.equal(dispatched.environment, null);
+});
+
+function liveRestRun(id, workflowFile) {
+  return {
+    id,
+    run_attempt: 1,
+    status: "completed",
+    conclusion: "success",
+    path: workflowFile,
+    head_sha: "b".repeat(40),
+    head_branch: "master",
+    actor: { login: ACTOR, id: 1, type: "User" },
+    triggering_actor: { login: ACTOR, id: 1, type: "User" },
+    event: "workflow_dispatch",
+    created_at: "2026-06-01T00:00:00.000Z",
+  };
+}
+
+function liveEvidence(workflowFile, extras = {}) {
+  return sealPhase15Evidence({
+    schema: PHASE15_EVIDENCE_SCHEMA,
+    workflow_file: workflowFile,
+    workflow_ref: REQUIRED_WORKFLOW_REF,
+    workflow_run_id: "88001",
+    workflow_attempt: 1,
+    head_sha: "b".repeat(40),
+    source_sha: SHA,
+    actor: ACTOR,
+    triggering_actor: ACTOR,
+    environment: workflowFile === PRODUCTION_WORKFLOWS.BUILD ? null : "production",
+    confirmation: workflowFile === PRODUCTION_WORKFLOWS.PREDEPLOY
+      ? "PREDEPLOY-PRODUCTION"
+      : workflowFile === PRODUCTION_WORKFLOWS.DEPLOY ? "DEPLOY-PRODUCTION" : null,
+    release_intent_id: "intent-live-artifact",
+    image_digest: DIGEST,
+    oci_revision: SHA,
+    oci_source: REQUIRED_OCI_SOURCE,
+    ...extras,
+  });
+}
+
+test("live REST-shaped run uses artifact environment and rejects missing or tampered identity", async () => {
+  const run = liveRestRun(88001, PRODUCTION_WORKFLOWS.PREDEPLOY);
+  const jobs = [{ id: 1, name: "predeploy", status: "completed", conclusion: "success" }];
+  const artifacts = new Map();
+  artifacts.set("88001", [{
+    id: 91,
+    name: PHASE15_EVIDENCE_ARTIFACT,
+    expired: false,
+    evidence: liveEvidence(PRODUCTION_WORKFLOWS.PREDEPLOY, {
+      db_backup: { backup_id: "b-live", backup_hash: "sha256:" + "11".repeat(32), verified: true },
+    }),
+  }]);
+  const api = {
+    async listWorkflowRuns() { return { runs: [run] }; },
+    async getWorkflowRun() { return { run, jobs }; },
+    async listArtifacts() { return { artifacts: artifacts.get("88001") }; },
+    async downloadArtifact() { return { evidence: artifacts.get("88001")[0].evidence }; },
+    async inspectImage({ digest }) { return { digest }; },
+  };
+  const provider = makeGithubProductionReleaseProvider(GRANT_ENV, { githubApi: api });
+  const wf = await provider.getWorkflowRun({ workflow_run_id: "88001" });
+  assert.equal(wf.environment, "production");
+  assert.equal(wf.outputs.source_sha, SHA);
+  assert.equal(wf.outputs.confirmation, "PREDEPLOY-PRODUCTION");
+  assert.equal(wf.outputs.db_backup.backup_id, "b-live");
+  assert.equal(wf.head_sha, "b".repeat(40));
+
+  const missingEnv = liveEvidence(PRODUCTION_WORKFLOWS.PREDEPLOY, { environment: null });
+  assert.equal(bindPhase15EvidenceToRun(missingEnv, run, { releaseIntentId: "intent-live-artifact" }), null);
+  const badEnv = liveEvidence(PRODUCTION_WORKFLOWS.PREDEPLOY, { environment: "staging" });
+  assert.equal(bindPhase15EvidenceToRun(badEnv, run, { releaseIntentId: "intent-live-artifact" }), null);
+  const badSource = liveEvidence(PRODUCTION_WORKFLOWS.PREDEPLOY, { source_sha: "c".repeat(40) });
+  assert.equal(bindPhase15EvidenceToRun(badSource, run, { releaseIntentId: "intent-live-artifact", sourceSha: SHA }), null);
+  const missingConfirm = liveEvidence(PRODUCTION_WORKFLOWS.PREDEPLOY, { confirmation: null });
+  assert.equal(bindPhase15EvidenceToRun(missingConfirm, run, { releaseIntentId: "intent-live-artifact" }), null);
+  const tamperedConfirm = liveEvidence(PRODUCTION_WORKFLOWS.PREDEPLOY, { confirmation: "DEPLOY-PRODUCTION" });
+  assert.equal(bindPhase15EvidenceToRun(tamperedConfirm, run, { releaseIntentId: "intent-live-artifact" }), null);
+
+  artifacts.set("88001", [{ id: 92, name: PHASE15_EVIDENCE_ARTIFACT, expired: false, evidence: missingEnv }]);
+  const blocked = await provider.getWorkflowRun({ workflow_run_id: "88001" });
+  assert.equal(blocked.environment, null);
+  assert.deepEqual(blocked.outputs, {});
 });

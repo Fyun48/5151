@@ -280,8 +280,12 @@ export function validateExactWorkflowEvidence(wf, expected = {}) {
   else if (expected.workflow_file && wf.workflow_file !== expected.workflow_file) problems.push("workflow_file_mismatch");
   if (missing(wf?.workflow_ref)) problems.push("workflow_ref");
   else if (expected.workflow_ref && wf.workflow_ref !== expected.workflow_ref) problems.push("workflow_ref_mismatch");
+  const outputs = wf?.outputs || {};
   if (missing(wf?.head_sha)) problems.push("head_sha");
-  else if (expected.head_sha && String(wf.head_sha) !== String(expected.head_sha)) problems.push("head_sha_mismatch");
+  else if (expected.head_sha) {
+    const observedSha = outputs.source_sha || wf.head_sha;
+    if (String(observedSha) !== String(expected.head_sha)) problems.push("head_sha_mismatch");
+  }
   if (missing(wf?.actor)) problems.push("actor");
   else if (expected.actor && String(wf.actor) !== String(expected.actor)) problems.push("actor_mismatch");
   if (missing(wf?.triggering_actor)) problems.push("triggering_actor");
@@ -294,7 +298,6 @@ export function validateExactWorkflowEvidence(wf, expected = {}) {
   } else if (!missing(wf?.environment)) {
     problems.push("environment_mismatch");
   }
-  const outputs = wf?.outputs || {};
   if (expected.image_digest) {
     if (missing(outputs.image_digest)) problems.push("image_digest");
     else if (String(outputs.image_digest) !== String(expected.image_digest)) problems.push("image_digest_mismatch");

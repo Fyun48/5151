@@ -18,9 +18,8 @@ on:
         required: true
         default: ""
       release_intent_id:
-        description: "Ops Phase 15 durable intent（手動觸發可留空）"
-        required: false
-        default: ""
+        description: "Ops Phase 15 durable release_intent_id（不可猜測，必須與 evidence 一致）"
+        required: true
 
 permissions:
   contents: read

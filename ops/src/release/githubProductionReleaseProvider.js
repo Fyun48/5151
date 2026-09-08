@@ -129,23 +129,44 @@ function sortKeys(value) {
 export function bindPhase15EvidenceToRun(evidence, run, expected = {}) {
   if (!evidence || evidence.schema !== PHASE15_EVIDENCE_SCHEMA) return null;
   if (!verifyPhase15EvidenceDigest(evidence)) return null;
+  const required = [
+    "workflow_run_id", "workflow_attempt", "workflow_file", "workflow_ref",
+    "head_sha", "source_sha", "actor", "triggering_actor", "release_intent_id",
+  ];
+  for (const key of required) {
+    if (evidence[key] == null || evidence[key] === "") return null;
+  }
   if (String(evidence.workflow_run_id) !== String(run.id)) return null;
   if (Number(evidence.workflow_attempt) !== Number(run.run_attempt || run.attempt)) return null;
-  if (evidence.workflow_file && (run.path || run.workflow_file) && evidence.workflow_file !== (run.path || run.workflow_file)) return null;
-  if (evidence.workflow_ref && run.workflow_ref && evidence.workflow_ref !== run.workflow_ref) return null;
-  if (evidence.head_sha && run.head_sha && evidence.head_sha !== run.head_sha) return null;
-  if (evidence.environment && run.environment && evidence.environment !== run.environment) return null;
-  if (evidence.actor && loginOf(run.actor) && evidence.actor !== loginOf(run.actor)) return null;
-  if (evidence.triggering_actor && loginOf(run.triggering_actor) && evidence.triggering_actor !== loginOf(run.triggering_actor)) return null;
+  const file = run.path || run.workflow_file;
+  if (file && evidence.workflow_file !== file) return null;
+  if (run.workflow_ref && evidence.workflow_ref !== run.workflow_ref) return null;
+  if (run.head_sha && evidence.head_sha !== run.head_sha) return null;
+  if (loginOf(run.actor) && evidence.actor !== loginOf(run.actor)) return null;
+  if (loginOf(run.triggering_actor) && evidence.triggering_actor !== loginOf(run.triggering_actor)) return null;
+  const mutating = evidence.workflow_file === PRODUCTION_WORKFLOWS.PREDEPLOY
+    || evidence.workflow_file === PRODUCTION_WORKFLOWS.DEPLOY;
+  if (mutating) {
+    if (evidence.environment !== REQUIRED_TARGET_ENVIRONMENT) return null;
+    if (!evidence.confirmation) return null;
+    if (evidence.workflow_file === PRODUCTION_WORKFLOWS.PREDEPLOY && evidence.confirmation !== "PREDEPLOY-PRODUCTION") return null;
+    if (evidence.workflow_file === PRODUCTION_WORKFLOWS.DEPLOY && evidence.confirmation !== "DEPLOY-PRODUCTION") return null;
+  } else if (evidence.environment) {
+    return null;
+  }
   if (expected.releaseIntentId && evidence.release_intent_id !== expected.releaseIntentId) return null;
-  if (expected.releaseIntentId && !evidence.release_intent_id) return null;
+  if (expected.sourceSha && evidence.source_sha !== expected.sourceSha) return null;
+  if (expected.environment && evidence.environment !== expected.environment) return null;
+  if (expected.confirmation && evidence.confirmation !== expected.confirmation) return null;
   return {
     image_digest: evidence.image_digest || null,
     oci_revision: evidence.oci_revision || null,
     oci_source: evidence.oci_source || null,
-    source_sha: evidence.source_sha || null,
+    source_sha: evidence.source_sha,
     confirmation: evidence.confirmation || null,
-    release_intent_id: evidence.release_intent_id || null,
+    release_intent_id: evidence.release_intent_id,
+    environment: evidence.environment || null,
+    workflow_ref: evidence.workflow_ref,
     db_backup: evidence.db_backup && evidence.db_backup.verified ? evidence.db_backup : null,
     health: evidence.health && typeof evidence.health === "object" ? evidence.health : null,
   };
@@ -153,12 +174,10 @@ export function bindPhase15EvidenceToRun(evidence, run, expected = {}) {
 
 export function normalizeGithubWorkflowRun(raw, extras = {}) {
   if (!raw) return null;
-  const jobs = extras.jobs || raw.jobs || [];
-  const environment = extras.environment
-    || raw.environment
-    || jobs.map((j) => j.environment?.name || j.environment).find(Boolean)
-    || null;
   const outputs = extras.evidenceOutputs && typeof extras.evidenceOutputs === "object" ? extras.evidenceOutputs : {};
+  const environment = Object.prototype.hasOwnProperty.call(outputs, "environment")
+    ? (outputs.environment || null)
+    : null;
   const actor = loginOf(raw.actor);
   const triggering = loginOf(raw.triggering_actor);
   return {
@@ -171,11 +190,11 @@ export function normalizeGithubWorkflowRun(raw, extras = {}) {
     head_sha: raw.head_sha || null,
     actor,
     triggering_actor: triggering,
-    environment: environment || null,
+    environment,
     outputs,
     created_at: raw.created_at || null,
     event: raw.event || "workflow_dispatch",
-    request_id: extras.request_id || raw.request_id || null,
+    request_id: extras.request_id || raw.request_id || outputs.release_intent_id || null,
     provider_response_identity: extras.provider_response_identity || raw.provider_response_identity || null,
   };
 }
@@ -469,10 +488,11 @@ export function makeGithubProductionReleaseProvider(env = process.env, deps = {}
         pending_lookup: !found?.id,
         workflow_run_id: found?.id || null,
         attempt: found?.attempt || null,
-        head_sha: prepared.inputs.sha,
-        workflow_ref: REQUIRED_WORKFLOW_REF,
-        actor: authorizedActor,
-        environment: workflowFile === PRODUCTION_WORKFLOWS.BUILD ? null : (environment || REQUIRED_TARGET_ENVIRONMENT),
+        head_sha: found?.head_sha || null,
+        workflow_ref: found?.workflow_ref || null,
+        actor: found?.actor || null,
+        triggering_actor: found?.triggering_actor || null,
+        environment: found?.environment || null,
         request_id: prepared.inputs.release_intent_id,
         provider_response_identity: `github-dispatch-${sha256(prepared.inputs.release_intent_id).slice(0, 20)}`,
       };
