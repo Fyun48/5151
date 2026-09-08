@@ -2601,6 +2601,11 @@
     <span>條款已更新。請閱讀並同意目前有效版本後再繼續使用需同意的功能。</span>
     <button type="button" class="ghost" id="reacceptBannerBtn">閱讀並同意</button>
   </div>
+  <aside id="announceBanner" class="announce-banner" hidden role="status" aria-label="系統公告">
+    <span class="announce-kicker" id="announceBannerKicker">系統公告</span>
+    <p><strong id="announceBannerTitle"></strong> <span id="announceBannerText"></span> <a id="announceBannerLink" hidden></a></p>
+    <button type="button" class="ghost" id="announceBannerClose" aria-label="關閉系統公告">×</button>
+  </aside>
   <div id="guestTour" class="guest-tour" hidden>
     <div class="guest-tour-dim"></div>
     <div class="guest-tour-spot" id="guestTourSpot"></div>
@@ -3254,11 +3259,6 @@
       <div class="list" id="selfMineList" style="padding-top:12px"></div>
     </div>
   </section>
-  <aside id="announceBanner" class="announce-banner" hidden role="status" aria-label="系統公告">
-    <span class="announce-kicker" id="announceBannerKicker">系統公告</span>
-    <p><strong id="announceBannerTitle"></strong> <span id="announceBannerText"></span> <a id="announceBannerLink" hidden></a></p>
-    <button type="button" class="ghost" id="announceBannerClose" aria-label="關閉系統公告">×</button>
-  </aside>
   <div id="siteNotice" class="site-notice" hidden>
     <p><b id="siteNoticeKicker"></b><span id="siteNoticeText"></span></p>
     <a class="ghost" id="siteNoticeLink" hidden target="_blank" rel="noopener noreferrer">開啟</a>

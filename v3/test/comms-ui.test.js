@@ -23,6 +23,7 @@ function assertScriptsParse(source) {
 
 test("user-facing labels keep announcements, ads, and support distinct", () => {
   assert.match(html, /id="announceBanner"/);
+  assert.ok(html.indexOf('id="announceBanner"') < html.indexOf('id="listingsView"'), "important banner sits above the listing wrap");
   assert.match(html, /系統公告/);
   assert.match(html, /贊助內容/);
   assert.match(html, /支持本站/);
