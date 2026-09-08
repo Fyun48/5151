@@ -174,6 +174,7 @@ export function publicPath(req) {
     p === "/api/broadcasts" ||
     p === "/api/captcha" ||
     p === "/api/demand" ||
+    p === "/api/wish-rooms" ||
     p === "/api/push/vapid" ||
     p === "/manifest.webmanifest" ||
     p === "/sw.js" ||
@@ -182,6 +183,7 @@ export function publicPath(req) {
     p === "/cities-embed.js" ||
     p === "/cities.json" ||
     p.startsWith("/api/demand/") ||
+    p.startsWith("/api/wish-rooms/") ||
     p.startsWith("/vendor/") ||
     p.startsWith("/icons/") ||
     p.startsWith("/brand/") ||
@@ -189,6 +191,7 @@ export function publicPath(req) {
     p.startsWith("/media/lib/") ||
     p.startsWith("/media/brand/") ||
     p.startsWith("/l/") ||
+    p.startsWith("/w/") ||
     p.startsWith("/api/public/") ||
     p.startsWith("/go/")
   );

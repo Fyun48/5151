@@ -20,7 +20,7 @@ test("copy / template / contact tools exist in publish UI", () => {
   assert.match(html, /function copyOwnListing/);
   assert.match(html, /self-listings\/\$\{editingDraftId\}\/publish/);
   assert.doesNotMatch(html, /data-canned-body|家庭整層套用/);
-  assert.doesNotMatch(html, /許願房|贊助廣告/);
+  assert.doesNotMatch(html, /贊助廣告/);
 });
 
 test("server exposes listing tool routes with auth hooks", () => {

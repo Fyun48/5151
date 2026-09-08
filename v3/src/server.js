@@ -99,6 +99,14 @@ import {
   closeDemand,
   replyDemand,
   reportDemandItem,
+  updateWishRoomFor,
+  publishWishRoomFor,
+  reopenWishRoomFor,
+  getWishExampleFor,
+  saveWishExampleFor,
+  deleteWishExampleFor,
+  wishRoomOwnerSummaryFor,
+  publicWishRoomView,
   demandMeta,
   submitFeedback,
   listFeedbackItems,
@@ -457,14 +465,99 @@ app.get("/api/help-qa", (_req, res) => {
   res.json(getHelpQa());
 });
 
+function wishListQuery(req) {
+  const session = readSession(req);
+  const mine = String(req.query?.mine || "") === "1" && Boolean(session?.userId);
+  return {
+    viewerId: session?.userId || 0,
+    mine,
+    city: req.query?.city,
+    district: req.query?.district,
+    rent_min: req.query?.rent_min,
+    rent_max: req.query?.rent_max,
+    housing_type: req.query?.housing_type,
+  };
+}
+
+function wishListPayload(req) {
+  const session = readSession(req);
+  const query = wishListQuery(req);
+  const posts = listDemand(query);
+  return {
+    ...demandMeta(),
+    posts,
+    rooms: posts,
+    mine: query.mine ? wishRoomOwnerSummaryFor(session.userId) : undefined,
+  };
+}
+
 app.get("/api/demand", (req, res) => {
   try {
+    res.json(wishListPayload(req));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/wish-rooms", (req, res) => {
+  try {
+    res.json(wishListPayload(req));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/wish-rooms/mine", (req, res) => {
+  try {
     const session = readSession(req);
-    const mine = String(req.query?.mine || "") === "1";
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入" });
+      return;
+    }
     res.json({
       ...demandMeta(),
-      posts: listDemand({ viewerId: session?.userId || 0, mine: mine && Boolean(session?.userId) }),
+      ...wishRoomOwnerSummaryFor(session.userId),
+      posts: listDemand({ viewerId: session.userId, mine: true }),
     });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/wish-rooms/example", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入" });
+      return;
+    }
+    res.json({ example: getWishExampleFor(session.userId) });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.put("/api/wish-rooms/example", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入" });
+      return;
+    }
+    res.json({ example: saveWishExampleFor(session.userId, req.body || {}) });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
+  }
+});
+
+app.delete("/api/wish-rooms/example", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入" });
+      return;
+    }
+    res.json(deleteWishExampleFor(session.userId));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -476,6 +569,25 @@ app.get("/api/demand/:id", (req, res) => {
     res.json(getDemand(req.params.id, { viewerId: session?.userId || 0 }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/wish-rooms/:id", (req, res) => {
+  try {
+    const session = readSession(req);
+    res.json(getDemand(req.params.id, { viewerId: session?.userId || 0 }));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/public/wish-room/:id", (req, res) => {
+  try {
+    const post = getDemand(req.params.id, { viewerId: 0, publicOnly: true });
+    res.setHeader("Cache-Control", "public, max-age=60");
+    res.json(publicWishRoomView(post) || post);
+  } catch (error) {
+    res.status(error.status === 404 ? 404 : 400).json({ error: error.message });
   }
 });
 
@@ -1119,12 +1231,64 @@ app.post("/api/demand", (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
-      res.status(401).json({ error: "請先登入才能發需求" });
+      res.status(401).json({ error: "請先登入才能刊登許願房" });
       return;
     }
     res.json(createDemand(session.userId, req.body || {}));
   } catch (error) {
-    res.status(error.status || 400).json({ error: error.message });
+    res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
+  }
+});
+
+app.post("/api/wish-rooms", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入才能刊登許願房" });
+      return;
+    }
+    res.json(createDemand(session.userId, req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
+  }
+});
+
+app.patch("/api/wish-rooms/:id", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入" });
+      return;
+    }
+    res.json(updateWishRoomFor(session.userId, req.params.id, req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
+  }
+});
+
+app.post("/api/wish-rooms/:id/publish", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入" });
+      return;
+    }
+    res.json(publishWishRoomFor(session.userId, req.params.id, req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
+  }
+});
+
+app.post("/api/wish-rooms/:id/reopen", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入" });
+      return;
+    }
+    res.json(reopenWishRoomFor(session.userId, req.params.id));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
   }
 });
 
@@ -1312,6 +1476,9 @@ app.get("/api/public/self-listing/:id", (req, res) => {
 });
 app.get("/l/:id", (_req, res) => {
   res.sendFile(path.join(__dirname, "../public/listing.html"));
+});
+app.get("/w/:id", (_req, res) => {
+  res.sendFile(path.join(__dirname, "../public/wish.html"));
 });
 
 app.get("/api/listing-imports/meta", (req, res) => {

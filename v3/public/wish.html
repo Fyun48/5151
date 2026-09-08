@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>許願房 · 吉比租房物件追蹤</title>
+  <link rel="stylesheet" href="/tokens.css" />
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: var(--font-sans, system-ui, sans-serif); color: var(--ink); background: var(--bg); }
+    .wrap { max-width: 760px; margin: 0 auto; padding: 16px 16px calc(24px + env(safe-area-inset-bottom, 0px)); }
+    header.top { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 0; }
+    .brand { font-weight: 800; letter-spacing: 0.02em; }
+    .brand a { color: inherit; text-decoration: none; }
+    h1 { font-size: 20px; margin: 8px 0 4px; }
+    .price { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--accent-deep); }
+    .meta { color: var(--muted); font-size: 14px; margin: 2px 0; }
+    .card { background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 14px; margin: 12px 0; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .chip { font-size: 12px; padding: 4px 8px; border-radius: 999px; background: var(--accent-mist); border: 1px solid var(--line); }
+    .chip.nice { background: var(--paper); }
+    .chip.avoid { background: var(--line); }
+    .body { white-space: pre-wrap; line-height: 1.7; }
+    .contact a { color: var(--accent-deep); }
+    .cta { margin-top: 16px; background: var(--accent-mist); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .cta a.btn { background: var(--accent); color: #fff; text-decoration: none; padding: 10px 14px; border-radius: 999px; font-weight: 700; min-height: var(--touch); display: inline-flex; align-items: center; }
+    .muted { color: var(--muted); font-size: 13px; }
+    .err { text-align: center; padding: 40px 12px; color: var(--muted); }
+    h2 { font-size: 14px; margin: 16px 0 8px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <div class="brand"><a href="/">吉比租房物件追蹤</a></div>
+      <a class="muted" href="/#demand">看全部許願房</a>
+    </header>
+    <main id="main"><p class="err" id="loading">載入中…</p></main>
+  </div>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const idMatch = location.pathname.match(/\/w\/(\d+)/);
+    const wishId = idMatch ? idMatch[1] : "";
+
+    function chips(labels, cls) {
+      return (labels || []).map((label) => `<span class="chip ${cls || ""}">${esc(label)}</span>`).join("");
+    }
+    function money(n) {
+      return n ? `${Number(n).toLocaleString("zh-TW")} 元` : "";
+    }
+    function budget(row) {
+      if (!row.rent_min && !row.rent_max) return "預算不限";
+      if (row.rent_min && row.rent_max) return `${money(row.rent_min)}–${money(row.rent_max)}／月`;
+      if (row.rent_max) return `最高 ${money(row.rent_max)}／月`;
+      return `最低 ${money(row.rent_min)}／月`;
+    }
+
+    async function load() {
+      const main = $("main");
+      if (!wishId) {
+        main.innerHTML = `<p class="err">找不到這則許願房。</p>`;
+        return;
+      }
+      try {
+        const res = await fetch(`/api/public/wish-room/${wishId}`);
+        const row = await res.json();
+        if (!res.ok) throw new Error(row.error || "載入失敗");
+        const areas = (row.district_labels || []).join("、") || row.city || "未填區域";
+        const contact = row.contact && (row.contact.contact_name || row.contact.phone || row.contact.line_url)
+          ? `<div class="card contact">
+              <h2>聯絡摘要</h2>
+              ${row.contact.contact_name ? `<p>${esc(row.contact.contact_name)}</p>` : ""}
+              ${row.contact.phone ? `<p><a href="tel:${esc(row.contact.phone)}">${esc(row.contact.phone)}</a></p>` : ""}
+              ${row.contact.line_url ? `<p><a href="${esc(row.contact.line_url)}" rel="noopener noreferrer">LINE</a></p>` : ""}
+            </div>`
+          : `<p class="muted">這則許願房沒有公開聯絡方式。</p>`;
+        main.innerHTML = `
+          <p class="muted">許願房</p>
+          <h1>${esc(areas)}</h1>
+          <p class="price">${esc(budget(row))}${row.includes_management ? " · 含水電管理費" : ""}</p>
+          <p class="meta">${esc(row.housing_label || "不限類型")}${row.layout_label ? ` · ${esc(row.layout_label)}` : ""}${row.ping_min ? ` · ${esc(row.ping_min)} 坪以上` : ""}</p>
+          <p class="meta">${row.move_in_date ? `希望 ${esc(row.move_in_date)} 入住` : "入住時間面議"}${row.lease_label ? ` · ${esc(row.lease_label)}` : ""}</p>
+          <div class="card">
+            <p class="meta">${esc(row.location_note || "")}</p>
+            ${row.transit_note ? `<p class="meta">交通：${esc(row.transit_note)}</p>` : ""}
+            ${row.destination_note ? `<p class="meta">常去：${esc(row.destination_note)}</p>` : ""}
+            ${row.commute_minutes ? `<p class="meta">可接受通勤約 ${esc(row.commute_minutes)} 分鐘</p>` : ""}
+            ${row.body ? `<p class="body">${esc(row.body)}</p>` : ""}
+          </div>
+          ${row.must_have_labels?.length ? `<h2>必須有</h2><div class="chips">${chips(row.must_have_labels)}</div>` : ""}
+          ${row.nice_to_have_labels?.length ? `<h2>希望有</h2><div class="chips">${chips(row.nice_to_have_labels, "nice")}</div>` : ""}
+          ${row.avoid_labels?.length ? `<h2>不接受</h2><div class="chips">${chips(row.avoid_labels, "avoid")}</div>` : ""}
+          ${contact}
+          <p class="muted">更新 ${esc(String(row.updated_at || row.published_at || "").replace("T", " ").slice(0, 16))}</p>
+          <div class="cta">
+            <span class="muted">回找房列表繼續看物件</span>
+            <a class="btn" href="/">回吉比租房</a>
+          </div>
+        `;
+        document.title = `${areas} · 許願房`;
+      } catch (error) {
+        main.innerHTML = `<p class="err">${esc(error.message || "這則許願房目前未公開。")}</p>`;
+      }
+    }
+    load();
+  </script>
+</body>
+</html>
