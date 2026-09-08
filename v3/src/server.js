@@ -1641,7 +1641,7 @@ app.post("/api/listing-imports", async (req, res) => {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
     assertImportAllowed(session.userId, clientIp(req));
-    const row = await startListingImportFor(session.userId, req.body || {}, { plan: session.plan || "free" });
+    const row = await startListingImportFor(session.userId, req.body || {}, { plan: session.plan || "free", role: session.role || "" });
     res.json(row);
   } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.code || "" }); }
 });

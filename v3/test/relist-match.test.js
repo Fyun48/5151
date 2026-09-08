@@ -40,14 +40,48 @@ test("viewed previous listing also matches soft relist fingerprint", () => {
     post_id: 3003,
     cover: "https://cdn/other.png",
     role_name: "別人",
-    layout: "3房1廳",
-    source_key: "3|50||淡水區淡金路二段|11F|15.5|3房1廳",
+    layout: "2房1廳",
+    source_key: "3|50||淡水區淡金路二段|11F|15.5|2房1廳",
     community_id: 0,
   };
   const previous = { ...base, viewed: 1, role_name: "湯小姐", source_key: "other-key" };
   const hit = scoreMatch(incoming, previous);
   assert.ok(hit);
-  assert.match(hit.detail, /已瀏覽/);
+  assert.match(hit.detail, /同門牌樓層|已瀏覽|先前 #1001/);
+  assert.ok(hit.evidence?.signals?.length);
+  assert.ok(hit.confidence >= 0.6);
+});
+
+test("different layout / house number / floor must not merge", () => {
+  const previous = { ...base };
+  assert.equal(scoreMatch({ ...base, post_id: 9, layout: "3房1廳", source_key: "x" }, previous), null);
+  assert.equal(scoreMatch({
+    ...base,
+    post_id: 10,
+    address: "新北市淡水區淡金路二段175號",
+    source_key: "y",
+  }, previous), null);
+  assert.equal(scoreMatch({
+    ...base,
+    post_id: 11,
+    floor_name: "8F/14F",
+    source_key: "z",
+  }, previous), null);
+});
+
+test("invalid rent cannot beat a comparable rent when choosing primary", () => {
+  const priced = { post_id: 1, price_num: 20000, refresh_time: "3天前" };
+  const broken = { post_id: 2, price_num: 0, price: "面議", refresh_time: "剛剛" };
+  assert.equal(preferPrimaryListing(priced, broken).post_id, 1);
+  assert.equal(preferPrimaryListing(broken, priced).post_id, 1);
+});
+
+test("same rent and refresh uses deterministic tie-break", () => {
+  const now = Date.parse("2026-08-31T12:00:00.000Z");
+  const a = { post_id: 30, source: "591", source_id: "b", price_num: 20000, refresh_time: "剛剛" };
+  const b = { post_id: 20, source: "591", source_id: "a", price_num: 20000, refresh_time: "剛剛" };
+  assert.equal(preferPrimaryListing(a, b, now).post_id, preferPrimaryListing(b, a, now).post_id);
+  assert.equal(preferPrimaryListing(a, b, now).post_id, 20);
 });
 
 test("cross-source listings can still be suspected same house", () => {

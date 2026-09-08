@@ -61,10 +61,13 @@ export function isSponsorPlan(plan) {
   return String(plan || "") === "sponsor";
 }
 
-export function assertSponsorMember(plan) {
-  if (!isSponsorPlan(plan)) {
-    throw httpError("贊助會員才能使用 591 / 5168 物件匯入", 403, "sponsor_required");
-  }
+export function canUseListingImport({ plan, role } = {}) {
+  return isSponsorPlan(plan) || String(role || "") === "admin";
+}
+
+export function assertSponsorMember(plan, role = "") {
+  if (canUseListingImport({ plan, role })) return;
+  throw httpError("贊助會員或管理員才能使用 591 / 5168 物件匯入", 403, "sponsor_required");
 }
 
 export function ensureListingImportSchema(db) {
@@ -248,7 +251,7 @@ async function importPhotos(db, userId, photoUrls, { plan, imageHosts, deps, rem
 export async function startListingImport(db, userId, input = {}, opts = {}) {
   const uid = Number(userId) || 0;
   if (!uid) throw httpError("請先登入", 401);
-  assertSponsorMember(opts.plan);
+  assertSponsorMember(opts.plan, opts.role);
   const parsed = normalizeImportUrl(input.url);
   const existing = findActiveImportBySource(db, uid, parsed.normalized);
   if (existing) {

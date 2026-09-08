@@ -19,6 +19,21 @@ import {
 import { sameSearch } from "./client591.js";
 import { CITIES, districtNameFromListing, districtsFromSearchUrls, lookupDistrict, normalizeWatchDistricts } from "./regions.js";
 import { preferPrimaryListing } from "./match.js";
+import {
+  alreadyNotifiedGroup,
+  bindListingsToGroup,
+  bindWatchToGroup,
+  ensureListingGroupSchema,
+  groupIdForPost,
+  watchedInGroup,
+} from "./listingGroups.js";
+import {
+  activateSearchProfile,
+  ensureSearchProfileSchema,
+  getActiveSearchProfile,
+  notifySnapshotFromProfile,
+} from "./searchProfiles.js";
+import { addressVersion, ensureGeoCacheSchema, inferGeoQuality } from "./geoQueue.js";
 import { listingCompareCost, passesPriceFilter } from "./listingCost.js";
 import {
   costChangePayload,
@@ -586,6 +601,9 @@ try {
 }
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_match_peer ON listings(match_post_id)");
 ensurePersonalSchema(db);
+ensureListingGroupSchema(db);
+ensureSearchProfileSchema(db);
+ensureGeoCacheSchema(db);
 try {
   const already = db.prepare("SELECT value FROM settings WHERE key = 'profileOnboardedBackfill'").get();
   if (!already) {
@@ -1782,7 +1800,23 @@ export function saveSettings(partial, userId, { forceAdmin = false } = {}) {
     db.exec("ROLLBACK");
     throw error;
   }
+  persistSearchProfileFromSettings(uid, next);
   return next;
+}
+
+function persistSearchProfileFromSettings(userId, settings) {
+  const uid = Number(userId) || 0;
+  if (!uid || !settings) return;
+  const profileId = String(settings.activeProfileId || settings.settingProfiles?.[0]?.id || "live");
+  const profile = (settings.settingProfiles || []).find((item) => String(item.id) === profileId);
+  try {
+    activateSearchProfile(db, uid, profileId, {
+      name: profile?.name || "目前搜尋",
+      data: snapshotSettings(settings),
+    });
+  } catch {
+    // isolated fixtures without profile table
+  }
 }
 
 export function saveAsProfile(name, livePatch, userId, { overwrite = false } = {}) {
@@ -1904,6 +1938,27 @@ function loadSameHousePeers(row) {
       const peer = Number(item.match_post_id) || 0;
       if (peer && !found.has(peer)) seed.add(peer);
     }
+  }
+  try {
+    const gid = groupIdForPost(db, selfId);
+    if (gid) {
+      const extras = db.prepare(
+        `SELECT l.post_id, l.title, l.url, l.price, l.price_num, l.extra_fee, l.extra_fees, l.extra_fee_text,
+                l.price_contain_text, l.floor_name, l.area_name, l.layout, l.source, l.offline, l.offline_confirmed,
+                l.hidden, l.match_post_id, l.match_level, l.match_verdict, l.match_detail,
+                l.cost_changed_at, l.cost_change_detail, l.cost_change_type, l.last_seen_at, l.refresh_time
+         FROM listing_group_members m
+         JOIN listings l ON l.post_id = m.post_id
+         WHERE m.group_id = ?`,
+      ).all(gid);
+      for (const item of extras) {
+        const id = Number(item.post_id);
+        if (!id || found.has(id)) continue;
+        found.set(id, item);
+      }
+    }
+  } catch {
+    // group tables optional in older isolated fixtures
   }
   return [...found.values()]
     .filter((item) => Number(item.post_id) !== selfId)
@@ -2110,6 +2165,20 @@ export function setListingMatch(postId, match) {
      SET match_post_id = ?, match_level = ?, match_detail = ?, match_rejected = 0
      WHERE post_id = ?`,
   ).run(match.match_post_id || null, match.match_level || null, match.match_detail || "", postId);
+  if (match.match_post_id) {
+    const a = getListing(postId);
+    const b = getListing(match.match_post_id);
+    if (a && b) {
+      try {
+        bindListingsToGroup(db, [a, b], {
+          evidence: match.evidence || { detail: match.match_detail || "" },
+          confidence: match.match_level === "high" ? 0.9 : 0.7,
+        });
+      } catch {
+        // isolated tests without group tables
+      }
+    }
+  }
   return getListing(postId);
 }
 
@@ -2418,11 +2487,11 @@ export function upsertListing(listing) {
       search_key = excluded.search_key,
       title = excluded.title,
       url = excluded.url,
-      price = excluded.price,
-      price_num = excluded.price_num,
+      price = CASE WHEN IFNULL(excluded.price, '') != '' THEN excluded.price ELSE listings.price END,
+      price_num = CASE WHEN excluded.price_num > 0 THEN excluded.price_num ELSE listings.price_num END,
       extra_fee = excluded.extra_fee,
-      extra_fee_text = excluded.extra_fee_text,
-      price_contain_text = excluded.price_contain_text,
+      extra_fee_text = CASE WHEN IFNULL(excluded.extra_fee_text, '') != '' THEN excluded.extra_fee_text ELSE listings.extra_fee_text END,
+      price_contain_text = CASE WHEN IFNULL(excluded.price_contain_text, '') != '' THEN excluded.price_contain_text ELSE listings.price_contain_text END,
       extra_fees = CASE
         WHEN listings.extra_fees_fetched = 1 AND IFNULL(listings.extra_fees, '') NOT IN ('', '[]')
         THEN listings.extra_fees
@@ -2431,16 +2500,17 @@ export function upsertListing(listing) {
       address = CASE
         WHEN IFNULL(listings.geo_source, '') = 'community' AND IFNULL(listings.address, '') != ''
         THEN listings.address
-        ELSE excluded.address
+        WHEN IFNULL(excluded.address, '') != '' THEN excluded.address
+        ELSE listings.address
       END,
-      area_name = excluded.area_name,
-      layout = excluded.layout,
-      floor_name = excluded.floor_name,
-      kind_name = excluded.kind_name,
-      role_name = excluded.role_name,
-      cover = excluded.cover,
+      area_name = CASE WHEN IFNULL(excluded.area_name, '') != '' THEN excluded.area_name ELSE listings.area_name END,
+      layout = CASE WHEN IFNULL(excluded.layout, '') != '' THEN excluded.layout ELSE listings.layout END,
+      floor_name = CASE WHEN IFNULL(excluded.floor_name, '') != '' THEN excluded.floor_name ELSE listings.floor_name END,
+      kind_name = CASE WHEN IFNULL(excluded.kind_name, '') != '' THEN excluded.kind_name ELSE listings.kind_name END,
+      role_name = CASE WHEN IFNULL(excluded.role_name, '') != '' THEN excluded.role_name ELSE listings.role_name END,
+      cover = CASE WHEN IFNULL(excluded.cover, '') != '' THEN excluded.cover ELSE listings.cover END,
       tags = excluded.tags,
-      refresh_time = excluded.refresh_time,
+      refresh_time = CASE WHEN IFNULL(excluded.refresh_time, '') != '' THEN excluded.refresh_time ELSE listings.refresh_time END,
       last_seen_at = excluded.last_seen_at,
       last_event = CASE
         WHEN IFNULL(listings.offline, 0) = 1 AND excluded.last_event IN ('seen', 'offline', '') THEN 'same_source'
@@ -2944,7 +3014,16 @@ export function addUserEvent(event) {
     event.created_at,
     event.notified || 0,
   );
-  return Number(result.lastInsertRowid);
+  const id = Number(result.lastInsertRowid);
+  if (event.group_id || event.notify_profile_id) {
+    try {
+      db.prepare("UPDATE user_events SET group_id = ?, notify_profile_id = ?, notify_profile_version = ? WHERE id = ?")
+        .run(event.group_id || "", event.notify_profile_id || "", Number(event.notify_profile_version) || 0, id);
+    } catch {
+      // older fixtures
+    }
+  }
+  return id;
 }
 
 export function addEvent(event, userId) {
@@ -2954,6 +3033,34 @@ export function addEvent(event, userId) {
 
 export function markEventNotified(id) {
   db.prepare("UPDATE user_events SET notified = 1 WHERE id = ?").run(id);
+}
+
+const notifyJobByUser = new Map();
+
+export function bindNotifyJobSnapshots(now = new Date()) {
+  notifyJobByUser.clear();
+  for (const uid of listUserIds()) {
+    try {
+      const row = getActiveSearchProfile(db, uid);
+      notifyJobByUser.set(Number(uid), {
+        ...notifySnapshotFromProfile(row),
+        bound_at: (now instanceof Date ? now : new Date(now)).toISOString(),
+      });
+    } catch {
+      notifyJobByUser.set(Number(uid), notifySnapshotFromProfile(null));
+    }
+  }
+  return notifyJobByUser.size;
+}
+
+export function notifyJobSnapshotFor(userId) {
+  const uid = Number(userId);
+  if (notifyJobByUser.has(uid)) return notifyJobByUser.get(uid);
+  try {
+    return notifySnapshotFromProfile(getActiveSearchProfile(db, uid));
+  } catch {
+    return notifySnapshotFromProfile(null);
+  }
 }
 
 export function enqueueListingEvent(listing, event) {
@@ -2970,13 +3077,20 @@ export function enqueueListingEvent(listing, event) {
   const ids = [];
   for (const userId of listUserIds()) {
     const settings = getSettings(userId);
-    const row = decorateListing(overlayPersonal(listing, loadFlags(db, userId, listing.post_id)), settings, userId, { sameHouse: false });
-    const watched = Number(row.watched) === 1;
-    if (!watched && event.type === "new" && !listingInMemberScope(row, settings)) continue;
-    if (!shouldDeliverNotify(settings, row, event, {
+    const snap = notifyJobSnapshotFor(userId);
+    const scoped = snap.data && Object.keys(snap.data).length
+      ? { ...settings, ...snap.data }
+      : settings;
+    const row = decorateListing(overlayPersonal(listing, loadFlags(db, userId, listing.post_id)), scoped, userId, { sameHouse: false });
+    let groupId = "";
+    try { groupId = groupIdForPost(db, payload.post_id); } catch { groupId = ""; }
+    const watched = Number(row.watched) === 1 || Boolean(groupId && watchedInGroup(db, userId, groupId));
+    if (!watched && event.type === "new" && !listingInMemberScope(row, scoped)) continue;
+    if (!shouldDeliverNotify(scoped, row, event, {
       to: getUserById(userId)?.email,
       configured: getMemberMailBundle(userId).configured,
     })) continue;
+    if (groupId && alreadyNotifiedGroup(db, userId, groupId, payload.type)) continue;
     if (payload.type === "new") {
       const alreadyNew = db.prepare(
         "SELECT id FROM user_events WHERE user_id = ? AND post_id = ? AND type = 'new' LIMIT 1",
@@ -2987,7 +3101,13 @@ export function enqueueListingEvent(listing, event) {
       "SELECT detail FROM user_events WHERE user_id = ? AND post_id = ? AND type = ? ORDER BY id DESC LIMIT 1",
     ).get(userId, payload.post_id, payload.type);
     if (last && isSameNotifyDetail(last.detail, payload.detail)) continue;
-    ids.push(addUserEvent({ ...payload, user_id: userId }));
+    ids.push(addUserEvent({
+      ...payload,
+      user_id: userId,
+      group_id: groupId,
+      notify_profile_id: snap.notify_profile_id || "",
+      notify_profile_version: snap.notify_profile_version || 0,
+    }));
   }
   return ids;
 }
@@ -3034,6 +3154,9 @@ export function setFlags(postId, flags, userId) {
   const listing = getListing(postId, uid);
   if (!listing) return null;
   setUserListingFlags(db, uid, postId, flags || {}, listing);
+  if (flags && (flags.watched === true || flags.watched === 1)) {
+    try { bindWatchToGroup(db, uid, postId); } catch { /* optional */ }
+  }
   return getListing(postId, uid);
 }
 
@@ -3691,17 +3814,42 @@ export function listingCountForSearch(searchKey) {
 }
 
 export function getCachedGeo(address) {
-  const key = String(address || "").replace(/\s+/g, "").replace(/-/g, "");
+  const key = addressVersion(address);
   if (!key) return null;
-  return db.prepare("SELECT lat, lng FROM geo_cache WHERE address = ?").get(key) || null;
+  try {
+    return db.prepare(
+      "SELECT lat, lng, quality, geo_source, address_used, address_version, updated_at FROM geo_cache WHERE address = ?",
+    ).get(key) || null;
+  } catch {
+    return db.prepare("SELECT lat, lng FROM geo_cache WHERE address = ?").get(key) || null;
+  }
 }
 
-export function setCachedGeo(address, lat, lng) {
-  const key = String(address || "").replace(/\s+/g, "").replace(/-/g, "");
+export function setCachedGeo(address, lat, lng, meta = {}) {
+  const key = addressVersion(address);
   if (!key || !Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return;
-  db.prepare(
-    "INSERT INTO geo_cache(address, lat, lng, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(address) DO UPDATE SET lat = excluded.lat, lng = excluded.lng, updated_at = excluded.updated_at",
-  ).run(key, Number(lat), Number(lng), new Date().toISOString());
+  const quality = meta.quality || inferGeoQuality({ address: meta.address_used || address });
+  const source = String(meta.geo_source || meta.source || "");
+  const used = String(meta.address_used || address || "");
+  const stamp = new Date().toISOString();
+  try {
+    db.prepare(
+      `INSERT INTO geo_cache(address, lat, lng, updated_at, quality, geo_source, address_used, address_version)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(address) DO UPDATE SET
+         lat = excluded.lat,
+         lng = excluded.lng,
+         updated_at = excluded.updated_at,
+         quality = excluded.quality,
+         geo_source = excluded.geo_source,
+         address_used = excluded.address_used,
+         address_version = excluded.address_version`,
+    ).run(key, Number(lat), Number(lng), stamp, quality, source, used, key);
+  } catch {
+    db.prepare(
+      "INSERT INTO geo_cache(address, lat, lng, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(address) DO UPDATE SET lat = excluded.lat, lng = excluded.lng, updated_at = excluded.updated_at",
+    ).run(key, Number(lat), Number(lng), stamp);
+  }
 }
 
 export { db };

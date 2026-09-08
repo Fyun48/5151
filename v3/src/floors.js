@@ -75,7 +75,7 @@ export const HOUSING_KIND_GROUPS = {
   building: ["elevator", "apartment"],
   dwelling: ["suite", "yafang", "share", "coliving", "whole", "shop", "warehouse"],
 };
-export const LISTING_SOURCE_KEYS = ["591", "self", "hbhousing", "sinyi", "houseprice", "ddroom", "housefun"];
+export const LISTING_SOURCE_KEYS = ["591", "self", "hbhousing", "sinyi", "houseprice", "ddroom", "housefun", "rakuya"];
 
 export function housingKindConflicts(a, b) {
   if (!a || !b || a === b) return false;

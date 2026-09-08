@@ -133,6 +133,41 @@ test("house group compare keeps at most 3 listings and only differing fields", (
   assert.match(compareHouseHeadline([cheap, pricey]), /總月費差 5,500/);
 });
 
+test("same-house bundle folds the 4th source into a collapsed row", () => {
+  const mid = {
+    post_id: 33,
+    title: "南港整層 中價",
+    price: "33,000元",
+    price_num: 33000,
+    extra_fee: 0,
+    extra_fees: [],
+    source: "sinyi",
+    source_label: "信義",
+    floor_name: "5F/12F",
+    area_name: "20坪",
+    layout: "2房1廳",
+    url: "https://sinyi.tw/33",
+  };
+  const extra = {
+    ...mid,
+    post_id: 44,
+    title: "第四則來源",
+    price_num: 40000,
+    price: "40,000元",
+    source: "housefun",
+    source_label: "好房網",
+    url: "https://housefun.tw/44",
+  };
+  const bundle = sameHouseBundle(cheap, [pricey, mid, extra]);
+  assert.equal(bundle.hidden_count, 1);
+  assert.match(bundle.fold_label, /另有 1 筆同物件來源/);
+  assert.equal(bundle.collapsed.length, 1);
+  assert.equal(bundle.collapsed[0].title, "第四則來源");
+  assert.equal(bundle.collapsed[0].source, "housefun");
+  assert.equal(bundle.collapsed[0].url, "https://housefun.tw/44");
+  assert.equal(bundle.peer_count, 3);
+});
+
 test("preferPrimaryListing still prefers lower total monthly cost", () => {
   assert.equal(preferPrimaryListing(cheap, pricey).post_id, 11);
   assert.equal(preferPrimaryListing(pricey, cheap).post_id, 11);
