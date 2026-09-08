@@ -556,25 +556,28 @@ async function dispatchOrReconcile(db, {
 
     if (role === "dispatch" && !binding.workflow_run_id) {
     if (hooks?.beforeDispatch) await hooks.beforeDispatch({ workflowKind, run, binding });
-    assertIdentitiesUnchanged(db, run, { repo, env, allowMasterMovement: true });
-    if (observedStable) {
+    let decisionError = null;
+    withImmediateTx(db, () => {
+      if (hooks?.duringMutatingDecision) hooks.duringMutatingDecision({ workflowKind, run, binding });
+      claimGlobalProductionLease(db, { releaseRunId: run.id, workflowKind, owner: leaseOwner, now });
       try {
-        requireStableUnchanged(db, observedStable);
+        assertIdentitiesUnchanged(db, run, { repo, env, allowMasterMovement: true });
+        if (observedStable) requireStableUnchanged(db, observedStable);
       } catch (err) {
-        withImmediateTx(db, () => {
-          appendEvent(db, {
-            releaseRunId: run.id, toStatus: RELEASE_STATUSES.BLOCKED, eventType: "stable_superseded",
-            reason: "production_stable_identity_drifted", errorCode: "stable_superseded", now, actor,
-          });
+        releaseGlobalProductionLease(db, { releaseRunId: run.id, workflowKind });
+        appendEvent(db, {
+          releaseRunId: run.id, toStatus: RELEASE_STATUSES.BLOCKED, eventType: "stable_superseded",
+          reason: err.message || "production_stable_identity_drifted", errorCode: "stable_superseded", now, actor,
         });
-        throw err;
+        decisionError = err;
+        return;
       }
-    }
-    claimGlobalProductionLease(db, { releaseRunId: run.id, workflowKind, owner: leaseOwner, now });
-    const submitted = markDispatchSubmitted(db, binding.id, now);
-    if (!submitted) {
-      throw httpError(`${workflowKind} is still queued`, 409, { code: "workflow_in_progress" });
-    }
+      const submitted = markDispatchSubmitted(db, binding.id, now);
+      if (!submitted) {
+        decisionError = httpError(`${workflowKind} is still queued`, 409, { code: "workflow_in_progress" });
+      }
+    });
+    if (decisionError) throw decisionError;
     const intentId = binding.dispatch_request_id || binding.dispatch_intent_id;
     const dispatched = await provider.dispatchWorkflow({
       workflowFile,
@@ -695,8 +698,13 @@ async function dispatchOrReconcile(db, {
 
   const wf = await provider.getWorkflowRun({ workflow_run_id: binding.workflow_run_id });
   if (!wf) {
+    const unknown = holdLeaseOnUncertainMutation(db, run.id, workflowKind);
     withImmediateTx(db, () => {
-      appendEvent(db, { releaseRunId: run.id, toStatus: RELEASE_STATUSES.BLOCKED, eventType: `${workflowKind}_missing`, reason: "workflow_run_missing", errorCode: "workflow_run_missing", now, actor });
+      appendEvent(db, {
+        releaseRunId: run.id,
+        toStatus: unknown ? RELEASE_STATUSES.PRODUCTION_STATE_UNKNOWN : RELEASE_STATUSES.BLOCKED,
+        eventType: `${workflowKind}_missing`, reason: "workflow_run_missing", errorCode: "workflow_run_missing", now, actor,
+      });
     });
     throw httpError("workflow run missing", 409);
   }
@@ -720,7 +728,11 @@ async function dispatchOrReconcile(db, {
         payload: { status: wf.status, conclusion: wf.conclusion, classification: classified.kind, problems: classified.problems || [] },
       });
       appendEvent(db, {
-        releaseRunId: run.id, toStatus: RELEASE_STATUSES.BLOCKED, eventType: `${workflowKind}_not_success`,
+        releaseRunId: run.id,
+        toStatus: holdLeaseOnUncertainMutation(db, run.id, workflowKind)
+          ? RELEASE_STATUSES.PRODUCTION_STATE_UNKNOWN
+          : RELEASE_STATUSES.BLOCKED,
+        eventType: `${workflowKind}_not_success`,
         reason, errorCode: classified.kind === "failed" ? "workflow_completed_not_success" : "workflow_not_exactly_bound", now, actor,
       });
     });
@@ -1015,11 +1027,30 @@ async function executeCodeRollback(db, run, { provider, repo, env, now, actor, o
   return { rolled_back: true, db_restore: false };
 }
 
-function releaseLeaseIfTerminal(db, releaseRunId) {
+function mutatingDispatchSubmitted(db, releaseRunId) {
+  const rows = db.prepare(
+    `SELECT dispatch_submitted_at, workflow_run_id FROM production_release_workflow_binding
+     WHERE release_run_id=? AND workflow_kind IN (?,?)`,
+  ).all(Number(releaseRunId), WORKFLOW_KINDS.DEPLOY, WORKFLOW_KINDS.ROLLBACK);
+  return rows.some((b) => b.dispatch_submitted_at || b.workflow_run_id);
+}
+
+function holdLeaseOnUncertainMutation(db, releaseRunId, workflowKind) {
+  return MUTATING_WORKFLOWS.has(workflowKind) && mutatingDispatchSubmitted(db, releaseRunId);
+}
+
+function releaseLeaseIfSafe(db, releaseRunId) {
   const status = latestStatus(db, releaseRunId);
-  if (!isTerminalReleaseStatus(status)) return;
-  releaseGlobalProductionLease(db, { releaseRunId, workflowKind: WORKFLOW_KINDS.DEPLOY });
-  releaseGlobalProductionLease(db, { releaseRunId, workflowKind: WORKFLOW_KINDS.ROLLBACK });
+  if (status === RELEASE_STATUSES.PRODUCTION_STATE_UNKNOWN) return;
+  if (status === RELEASE_STATUSES.SUCCEEDED || status === RELEASE_STATUSES.ROLLED_BACK) {
+    releaseGlobalProductionLease(db, { releaseRunId, workflowKind: WORKFLOW_KINDS.DEPLOY });
+    releaseGlobalProductionLease(db, { releaseRunId, workflowKind: WORKFLOW_KINDS.ROLLBACK });
+    return;
+  }
+  if (status === RELEASE_STATUSES.BLOCKED && !mutatingDispatchSubmitted(db, releaseRunId)) {
+    releaseGlobalProductionLease(db, { releaseRunId, workflowKind: WORKFLOW_KINDS.DEPLOY });
+    releaseGlobalProductionLease(db, { releaseRunId, workflowKind: WORKFLOW_KINDS.ROLLBACK });
+  }
 }
 
 export async function executeProductionRelease(db, releaseRunId, {
@@ -1032,7 +1063,7 @@ export async function executeProductionRelease(db, releaseRunId, {
   let run = row;
   const status = latestStatus(db, run.id) || RELEASE_STATUSES.CREATED;
   if (isTerminalReleaseStatus(status)) {
-    releaseLeaseIfTerminal(db, run.id);
+    releaseLeaseIfSafe(db, run.id);
     return { run: publicReleaseRun(db, run), current_status: status, idempotent: true };
   }
   const owner = randomUUID();
@@ -1170,7 +1201,7 @@ export async function executeProductionRelease(db, releaseRunId, {
   const dbDisp = recordDbDisposition(db, run, { now, actor });
   return { run: publicReleaseRun(db, db.prepare("SELECT * FROM production_release_run WHERE id=?").get(run.id)), current_stable: getProductionStable(db), db_rollback: dbDisp, db_restore: false };
   } finally {
-    releaseLeaseIfTerminal(db, releaseRunId);
+    releaseLeaseIfSafe(db, releaseRunId);
   }
 }
 
@@ -1210,7 +1241,7 @@ export async function requestCodeRollback(db, {
     const result = await executeCodeRollback(db, row, { provider: prov, repo, env, now, actor, hooks });
     return { run: publicReleaseRun(db, db.prepare("SELECT * FROM production_release_run WHERE id=?").get(row.id)), ...result };
   } finally {
-    releaseLeaseIfTerminal(db, row.id);
+    releaseLeaseIfSafe(db, row.id);
   }
 }
 

@@ -1348,3 +1348,96 @@ test("GitHub live REST fixture plus orchestrator stays fail-closed without evide
   } finally { git.cleanup(); db.close(); }
 });
 
+function countDeployDispatches(provider) {
+  let n = 0;
+  const orig = provider.dispatchWorkflow.bind(provider);
+  provider.dispatchWorkflow = async (opts) => {
+    if (opts.workflowFile === PRODUCTION_WORKFLOWS.DEPLOY) n += 1;
+    return orig(opts);
+  };
+  return {
+    get count() { return n; },
+  };
+}
+
+test("two WAL connections: stable changes before decision TX so A never deploys", async () => {
+  const file = path.join(os.tmpdir(), `phase15-wal-${process.pid}-${Date.now()}.db`);
+  const db1 = openOpsDb(file);
+  const db2 = openOpsDb(file);
+  const staged = await makeStagedTask(db1);
+  try {
+    const { authorization, assessment } = await cleared(db1, staged.codingTaskId, staged.repo);
+    seedPrev(db1, staged.repo);
+    const created = createProductionReleaseRun(db1, execBody(staged.codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(staged.repo) }), { repo: staged.repo, now: NOW });
+    const provider = makeStubProductionReleaseProvider();
+    const deploy = countDeployDispatches(provider);
+    let unlock;
+    const gate = new Promise((resolve) => { unlock = resolve; });
+    let atDeploy = false;
+    const running = executeProductionRelease(db1, created.run.id, {
+      provider, repo: staged.repo, now: NOW,
+      hooks: {
+        async beforeDispatch({ workflowKind }) {
+          if (workflowKind !== "deploy") return;
+          atDeploy = true;
+          await gate;
+        },
+      },
+    });
+    while (!atDeploy) await new Promise((r) => setTimeout(r, 10));
+    seedProductionStable(db2, {
+      sourceSha: "b".repeat(40),
+      artifactDigest: "sha256:" + "22".repeat(32),
+      workflowRunId: "34111111111",
+      releaseRunId: created.run.id + 50,
+      provenance: { kind: "sneak_b_wal" },
+      now: NOW,
+    });
+    unlock();
+    await assert.rejects(running, /stable identity|superseded|drifted/);
+    assert.equal(deploy.count, 0);
+    assert.equal(getProductionStable(db1).source_sha, "b".repeat(40));
+  } finally {
+    staged.git.cleanup();
+    db1.close();
+    db2.close();
+    try { rmSync(file, { force: true }); } catch {}
+    try { rmSync(`${file}-wal`, { force: true }); } catch {}
+    try { rmSync(`${file}-shm`, { force: true }); } catch {}
+  }
+});
+
+test("uncertain mutating deploy holds lease so a second release cannot dispatch", async () => {
+  const db = openOpsDb(":memory:");
+  const stagedA = await makeStagedTask(db);
+  const stagedB = await makeStagedTask(db);
+  try {
+    const a = await cleared(db, stagedA.codingTaskId, stagedA.repo);
+    seedPrev(db, stagedA.repo);
+    const runA = createProductionReleaseRun(db, execBody(stagedA.codingTaskId, a.authorization, a.assessment, { expectedMasterHead: stagedA.repo.resolveRemoteRef("master") }), { repo: stagedA.repo, now: NOW });
+    const providerA = makeStubProductionReleaseProvider();
+    wrapGetWorkflowRun(providerA, (wf) => {
+      if (wf.workflow_file !== PRODUCTION_WORKFLOWS.DEPLOY) return wf;
+      return { ...wf, outputs: {}, environment: null };
+    });
+    const deployA = countDeployDispatches(providerA);
+    await assert.rejects(() => executeProductionRelease(db, runA.run.id, { provider: providerA, repo: stagedA.repo, now: NOW }), /not an exact successful|environment|outputs/);
+    assert.equal(getProductionRelease(db, runA.run.id).run.current_status, "PRODUCTION_STATE_UNKNOWN");
+    assert.equal(deployA.count, 1);
+    const lease = db.prepare("SELECT * FROM production_release_global_lease WHERE id=1").get();
+    assert.equal(Number(lease.release_run_id), runA.run.id);
+    const replay = await executeProductionRelease(db, runA.run.id, { provider: providerA, repo: stagedA.repo, now: NOW });
+    assert.equal(replay.idempotent, true);
+    assert.equal(replay.current_status, "PRODUCTION_STATE_UNKNOWN");
+    assert.equal(deployA.count, 1);
+    const b = await cleared(db, stagedB.codingTaskId, stagedB.repo);
+    const runB = createProductionReleaseRun(db, execBody(stagedB.codingTaskId, b.authorization, b.assessment, { expectedMasterHead: stagedB.repo.resolveRemoteRef("master") }), { repo: stagedB.repo, now: NOW });
+    const providerB = makeStubProductionReleaseProvider();
+    const deployB = countDeployDispatches(providerB);
+    await assert.rejects(() => executeProductionRelease(db, runB.run.id, { provider: providerB, repo: stagedB.repo, now: NOW }), /lease held|global production/);
+    assert.equal(deployB.count, 0);
+    assert.ok(!getProductionRelease(db, runB.run.id).bindings.some((x) => x.workflow_kind === "deploy" && x.workflow_run_id));
+    assert.equal(Number(db.prepare("SELECT release_run_id FROM production_release_global_lease WHERE id=1").get().release_run_id), runA.run.id);
+  } finally { stagedA.git.cleanup(); stagedB.git.cleanup(); db.close(); }
+});
+

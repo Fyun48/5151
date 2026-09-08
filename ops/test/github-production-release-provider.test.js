@@ -256,6 +256,7 @@ test("ambiguous matching GitHub runs fail closed", async () => {
         environment: "production",
         confirmation: "DEPLOY-PRODUCTION",
         release_intent_id: "intent-ambiguous",
+        image_digest: DIGEST,
       }),
     }]);
   }
@@ -526,4 +527,55 @@ test("live REST-shaped run uses artifact environment and rejects missing or tamp
   const blocked = await provider.getWorkflowRun({ workflow_run_id: "88001" });
   assert.equal(blocked.environment, null);
   assert.deepEqual(blocked.outputs, {});
+});
+
+test("every required artifact identity field missing or mismatched fails closed", () => {
+  const run = {
+    id: "88001",
+    run_attempt: 1,
+    path: PRODUCTION_WORKFLOWS.DEPLOY,
+    head_sha: "b".repeat(40),
+    actor: { login: ACTOR },
+    triggering_actor: { login: ACTOR },
+  };
+  const base = {
+    schema: PHASE15_EVIDENCE_SCHEMA,
+    workflow_file: PRODUCTION_WORKFLOWS.DEPLOY,
+    workflow_ref: REQUIRED_WORKFLOW_REF,
+    workflow_run_id: "88001",
+    workflow_attempt: 1,
+    head_sha: "b".repeat(40),
+    source_sha: SHA,
+    actor: ACTOR,
+    triggering_actor: ACTOR,
+    environment: "production",
+    confirmation: "DEPLOY-PRODUCTION",
+    release_intent_id: "intent-live-artifact",
+    image_digest: DIGEST,
+  };
+  assert.ok(bindPhase15EvidenceToRun(sealPhase15Evidence(base), run, { releaseIntentId: "intent-live-artifact" }));
+  for (const key of ["workflow_ref", "head_sha", "actor", "triggering_actor", "source_sha", "confirmation", "environment", "release_intent_id", "image_digest"]) {
+    const missing = { ...base };
+    missing[key] = key === "workflow_attempt" ? 0 : null;
+    assert.equal(bindPhase15EvidenceToRun(sealPhase15Evidence(missing), run, { releaseIntentId: "intent-live-artifact" }), null, `missing ${key}`);
+  }
+  const mismatches = {
+    workflow_ref: "refs/heads/other",
+    head_sha: "c".repeat(40),
+    actor: "attacker",
+    triggering_actor: "attacker",
+    source_sha: "c".repeat(40),
+    confirmation: "PREDEPLOY-PRODUCTION",
+    environment: "staging",
+    release_intent_id: "intent-other-xxxxx",
+    image_digest: "sha256:" + "00".repeat(32),
+  };
+  for (const [key, value] of Object.entries(mismatches)) {
+    const bad = { ...base, [key]: value };
+    assert.equal(bindPhase15EvidenceToRun(sealPhase15Evidence(bad), run, {
+      releaseIntentId: "intent-live-artifact",
+      sourceSha: SHA,
+      imageDigest: DIGEST,
+    }), null, `mismatch ${key}`);
+  }
 });

@@ -138,6 +138,7 @@ export function bindPhase15EvidenceToRun(evidence, run, expected = {}) {
   }
   if (String(evidence.workflow_run_id) !== String(run.id)) return null;
   if (Number(evidence.workflow_attempt) !== Number(run.run_attempt || run.attempt)) return null;
+  if (evidence.workflow_ref !== REQUIRED_WORKFLOW_REF) return null;
   const file = run.path || run.workflow_file;
   if (file && evidence.workflow_file !== file) return null;
   if (run.workflow_ref && evidence.workflow_ref !== run.workflow_ref) return null;
@@ -151,13 +152,17 @@ export function bindPhase15EvidenceToRun(evidence, run, expected = {}) {
     if (!evidence.confirmation) return null;
     if (evidence.workflow_file === PRODUCTION_WORKFLOWS.PREDEPLOY && evidence.confirmation !== "PREDEPLOY-PRODUCTION") return null;
     if (evidence.workflow_file === PRODUCTION_WORKFLOWS.DEPLOY && evidence.confirmation !== "DEPLOY-PRODUCTION") return null;
+    if (evidence.workflow_file === PRODUCTION_WORKFLOWS.DEPLOY && !digestLooksImmutable(evidence.image_digest)) return null;
   } else if (evidence.environment) {
+    return null;
+  } else if (!digestLooksImmutable(evidence.image_digest)) {
     return null;
   }
   if (expected.releaseIntentId && evidence.release_intent_id !== expected.releaseIntentId) return null;
   if (expected.sourceSha && evidence.source_sha !== expected.sourceSha) return null;
   if (expected.environment && evidence.environment !== expected.environment) return null;
   if (expected.confirmation && evidence.confirmation !== expected.confirmation) return null;
+  if (expected.imageDigest && evidence.image_digest !== expected.imageDigest) return null;
   return {
     image_digest: evidence.image_digest || null,
     oci_revision: evidence.oci_revision || null,
