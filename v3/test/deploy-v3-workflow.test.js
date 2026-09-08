@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -89,4 +90,36 @@ test("deploy-v3 pins Production v3 to digest and does not recreate v2", () => {
   assert.match(yml, /State.Status/);
   assert.match(yml, /Config.Image/);
   assert.match(yml, /DEPLOY_V3_OK/);
+});
+
+function extractNasSshScript(workflowYaml) {
+  const marker = "      - name: Pull digest-pinned image and recreate v3 only";
+  const start = workflowYaml.indexOf(marker);
+  assert.ok(start >= 0, "missing NAS ssh step");
+  const scriptKey = workflowYaml.indexOf("          script: |", start);
+  assert.ok(scriptKey >= 0, "missing script: |");
+  const bodyStart = workflowYaml.indexOf("\n", scriptKey) + 1;
+  const lines = [];
+  for (const line of workflowYaml.slice(bodyStart).split("\n")) {
+    if (line.length === 0) {
+      lines.push("");
+      continue;
+    }
+    if (!line.startsWith("            ")) break;
+    lines.push(line.slice(12));
+  }
+  const script = lines.join("\n").trimEnd() + "\n";
+  assert.match(script, /^set -euo pipefail/m);
+  return script;
+}
+
+test("NAS ssh script replaces case guards with grep if-checks and stays bash-valid", () => {
+  const script = extractNasSshScript(yml);
+  assert.doesNotMatch(script, /\bcase\b/);
+  assert.doesNotMatch(script, /\besac\b/);
+  assert.doesNotMatch(script, /;;/);
+  assert.match(script, /printf '%s' "\$V3_IMAGE" \| grep -q ':latest\$'/);
+  assert.match(script, /printf '%s' "\$V2_IMAGE" \| grep -q '@sha256:'/);
+  const written = spawnSync("bash", ["-n"], { input: script, encoding: "utf8" });
+  assert.equal(written.status, 0, written.stderr);
 });
