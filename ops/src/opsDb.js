@@ -923,6 +923,73 @@ export function applyOpsSchema(db) {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_relnotif_manifest ON release_notification(release_manifest_id, channel);
 
+    -- Phase 14：Production DB Migration Safety Clearance（獨立不可變評估；不改 Phase-13 manifest 本體、不部署 Production）。
+    -- 精確綁定 Gate #2 已核准的 production_release_authorization + manifest version/hash + head SHA + artifact digest + QA/staging。
+    CREATE TABLE IF NOT EXISTS production_migration_safety_assessment (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      issue_id INTEGER NOT NULL,
+      coding_task_id INTEGER NOT NULL,
+      release_authorization_id INTEGER NOT NULL,
+      release_manifest_id INTEGER NOT NULL,
+      release_manifest_version INTEGER NOT NULL,
+      manifest_hash TEXT NOT NULL,
+      qa_run_id INTEGER NOT NULL,
+      staging_deployment_id INTEGER NOT NULL,
+      head_sha TEXT NOT NULL,
+      artifact_digest TEXT NOT NULL,
+      migration_classification TEXT NOT NULL,
+      clearance_result TEXT NOT NULL,
+      evidence_snapshot TEXT NOT NULL,
+      rollback_assessment TEXT NOT NULL,
+      compatibility_assessment TEXT NOT NULL,
+      policy_version TEXT NOT NULL,
+      policy_fingerprint TEXT NOT NULL,
+      input_fingerprint TEXT NOT NULL,
+      assessment_version INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (release_authorization_id) REFERENCES production_release_authorization(id) ON DELETE RESTRICT,
+      FOREIGN KEY (release_manifest_id) REFERENCES development_release_candidate(id) ON DELETE RESTRICT,
+      FOREIGN KEY (qa_run_id) REFERENCES development_qa_run(id) ON DELETE RESTRICT,
+      FOREIGN KEY (staging_deployment_id) REFERENCES development_staging_deployment(id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS idx_migsafety_task ON production_migration_safety_assessment(coding_task_id, id);
+    CREATE INDEX IF NOT EXISTS idx_migsafety_auth ON production_migration_safety_assessment(release_authorization_id, id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_migsafety_input_fp ON production_migration_safety_assessment(input_fingerprint);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_migsafety_auth_version ON production_migration_safety_assessment(release_authorization_id, assessment_version);
+    -- 評估本體不可變：classification / clearance / evidence / binding 不得 UPDATE。
+    CREATE TRIGGER IF NOT EXISTS migsafety_immutable BEFORE UPDATE ON production_migration_safety_assessment
+    WHEN (
+      IFNULL(NEW.migration_classification,'') <> IFNULL(OLD.migration_classification,'')
+      OR IFNULL(NEW.clearance_result,'') <> IFNULL(OLD.clearance_result,'')
+      OR IFNULL(NEW.evidence_snapshot,'') <> IFNULL(OLD.evidence_snapshot,'')
+      OR IFNULL(NEW.rollback_assessment,'') <> IFNULL(OLD.rollback_assessment,'')
+      OR IFNULL(NEW.compatibility_assessment,'') <> IFNULL(OLD.compatibility_assessment,'')
+      OR IFNULL(NEW.input_fingerprint,'') <> IFNULL(OLD.input_fingerprint,'')
+      OR IFNULL(NEW.policy_fingerprint,'') <> IFNULL(OLD.policy_fingerprint,'')
+      OR IFNULL(NEW.manifest_hash,'') <> IFNULL(OLD.manifest_hash,'')
+      OR IFNULL(NEW.head_sha,'') <> IFNULL(OLD.head_sha,'')
+      OR IFNULL(NEW.artifact_digest,'') <> IFNULL(OLD.artifact_digest,'')
+      OR IFNULL(NEW.release_authorization_id,0) <> IFNULL(OLD.release_authorization_id,0)
+      OR IFNULL(NEW.release_manifest_id,0) <> IFNULL(OLD.release_manifest_id,0)
+      OR IFNULL(NEW.qa_run_id,0) <> IFNULL(OLD.qa_run_id,0)
+      OR IFNULL(NEW.staging_deployment_id,0) <> IFNULL(OLD.staging_deployment_id,0)
+    )
+    BEGIN SELECT RAISE(ABORT, 'migration safety assessment is immutable'); END;
+    CREATE TRIGGER IF NOT EXISTS migsafety_no_delete BEFORE DELETE ON production_migration_safety_assessment
+    BEGIN SELECT RAISE(ABORT, 'migration safety assessment is append-only'); END;
+
+    -- canonical 當前 pointer（可改指向新版本；歷史 assessment 仍 append-only）。
+    CREATE TABLE IF NOT EXISTS production_migration_safety_current (
+      coding_task_id INTEGER NOT NULL PRIMARY KEY,
+      release_authorization_id INTEGER NOT NULL,
+      assessment_id INTEGER NOT NULL,
+      input_fingerprint TEXT NOT NULL,
+      clearance_result TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (assessment_id) REFERENCES production_migration_safety_assessment(id) ON DELETE RESTRICT,
+      FOREIGN KEY (release_authorization_id) REFERENCES production_release_authorization(id) ON DELETE RESTRICT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_state_entity_type ON state_entity(entity_type, state);
     CREATE INDEX IF NOT EXISTS idx_state_transition_entity ON state_transition(entity_type, entity_id, id);
     CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_type, entity_id, id);

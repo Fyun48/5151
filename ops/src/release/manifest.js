@@ -35,6 +35,7 @@ export function buildManifestContent({ snapshot, task, auth, qa, staging, curren
     database_config: {
       migration: pick(qaChecks, "DATABASE_MIGRATION") ? { status: pick(qaChecks, "DATABASE_MIGRATION").status, finding: pick(qaChecks, "DATABASE_MIGRATION").finding, evidence: pick(qaChecks, "DATABASE_MIGRATION").evidence } : null,
       config_change: pick(qaChecks, "CONFIG_CHANGE")?.evidence || null,
+      // Phase 14 不修改已核准的 immutable manifest 本體；clearance 為獨立 record，經 authorization / manifest hash 連結。
       production_migration_safety: "NOT_ASSESSED (Phase 14 required)",
     },
     staging: {

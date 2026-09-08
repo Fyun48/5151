@@ -34,6 +34,8 @@ test("only state_entity holds a lifecycle state column", () => {
   // development_release_candidate.status = Phase 13 manifest 產物狀態（completed|cancelled）；
   //   production_release_authorization.status = active|superseded（授權產物狀態）；release_notification.status = outbox 狀態。
   //   皆屬局部/衍生狀態、非中央 Issue lifecycle（lifecycle 在 state_entity），且不與其分歧。
+  // production_migration_safety_assessment 使用 clearance_result（非 status）；
+  //   production_migration_safety_current 使用 clearance_result（非 status）。皆非中央 lifecycle。
   const ALLOWED = new Set(["state_entity", "feedback_analysis", "embedding", "issue_candidate", "issue_evaluation_run", "issue_role_evaluation", "issue_proposal", "development_authorization", "development_coding_task", "development_qa_run", "development_qa_check", "development_staging_deployment", "development_staging_check", "development_release_candidate", "production_release_authorization", "release_notification"]);
   const offenders = [];
 

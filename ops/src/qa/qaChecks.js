@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { classifyChangedPaths } from "../coding/pathPolicy.js";
+import { buildDatabaseMigrationEvidence } from "./migrationEvidence.js";
 
 // Phase 11 決定性檢核。每個檢核為純函式：ctx → { check_type, status, severity, finding, evidence, command?, tool? }。
 // status: PASS|FAIL|WARN|REVIEW|SKIPPED；severity: none|low|medium|high|blocking。
@@ -131,16 +132,17 @@ export function checkDependencyChange(ctx) {
   return res("DEPENDENCY_CHANGE", "WARN", "low", "dependency manifest changed", { manifests: manifests.slice(0, 10), added_entries: [...new Set(added)].slice(0, 30) });
 }
 
-const DESTRUCTIVE_SQL = /\b(DROP\s+TABLE|TRUNCATE|DELETE\s+FROM|ALTER\s+TABLE\s+.+\s+DROP|DROP\s+COLUMN|DROP\s+DATABASE)\b/i;
-const SCHEMA_SQL = /\b(CREATE\s+TABLE|ALTER\s+TABLE|CREATE\s+INDEX|CREATE\s+TRIGGER)\b/i;
-// 13. DATABASE_MIGRATION：偵測 schema/migration/破壞性 SQL 並分類風險（不實作 Phase-14 遷移安全）。
+// 13. DATABASE_MIGRATION：偵測 schema/migration/破壞性 SQL 並輸出結構化證據（Phase 14 才做 Production clearance）。
 export function checkDatabaseMigration(ctx) {
-  const migrationFiles = changedPaths(ctx.diff).filter((p) => /(^|\/)migrations?\/|\.sql$/i.test(p));
-  let destructive = false, schema = false;
-  for (const { line } of ctx.addedLines || []) { if (DESTRUCTIVE_SQL.test(line)) destructive = true; else if (SCHEMA_SQL.test(line)) schema = true; }
-  if (destructive) return res("DATABASE_MIGRATION", "REVIEW", "high", "destructive/irreversible SQL detected (not rollback-safe)", { files: migrationFiles.slice(0, 10), destructive: true });
-  if (schema || migrationFiles.length) return res("DATABASE_MIGRATION", "WARN", "medium", "schema/migration change detected", { files: migrationFiles.slice(0, 10), schema: true });
-  return res("DATABASE_MIGRATION", "PASS", "none", "no database migration detected", {});
+  const evidence = buildDatabaseMigrationEvidence({
+    files: changedPaths(ctx.diff),
+    addedLines: ctx.addedLines || [],
+  });
+  if (evidence.destructive) return res("DATABASE_MIGRATION", "REVIEW", "high", "destructive/irreversible SQL detected (not rollback-safe)", evidence);
+  if (evidence.schema || evidence.files.length || evidence.data_rewrite) {
+    return res("DATABASE_MIGRATION", "WARN", "medium", evidence.data_rewrite ? "data rewrite/backfill detected" : "schema/migration change detected", evidence);
+  }
+  return res("DATABASE_MIGRATION", "PASS", "none", "no database migration detected", evidence);
 }
 
 // 14. CONFIG_CHANGE：偵測環境變數/設定/基礎設施/feature flag 變更（不曝露機敏值）。
