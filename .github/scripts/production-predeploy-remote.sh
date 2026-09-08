@@ -85,12 +85,14 @@ API_CHECK="$(docker exec "$CONTAINER" node --input-type=module -e 'import * as s
 SQLITE3_BIN="$(command -v sqlite3 || true)"
 IN_CONTAINER_SQLITE3="$(docker exec "$CONTAINER" sh -c 'command -v sqlite3 || true')"
 HOST_PYTHON="$(command -v python3 || true)"
+HOST_NODE_SQLITE="$(node --input-type=module -e 'import("node:sqlite").then(()=>process.stdout.write("yes")).catch(()=>process.stdout.write("no"))' 2>/dev/null || true)"
 set -e
 
 echo "node_backup_typeof=$API_CHECK"
 echo "host_python3=${HOST_PYTHON:-none}"
 echo "host_sqlite3=${SQLITE3_BIN:-none}"
 echo "container_sqlite3=${IN_CONTAINER_SQLITE3:-none}"
+echo "host_node_sqlite=${HOST_NODE_SQLITE:-no}"
 
 PARENT="$(dirname "$DATA_HOST")"
 BASE="$(basename "$DATA_HOST")"
@@ -172,17 +174,31 @@ BACKUP_SIZE="$(stat -c%s "$DEST_DB" 2>/dev/null || stat -f%z "$DEST_DB")"
 ORIG_SIZE="$(stat -c%s "$DATA_HOST/v3.db" 2>/dev/null || stat -f%z "$DATA_HOST/v3.db")"
 BACKUP_SHA="$(sha256sum "$DEST_DB" | awk '{print $1}')"
 
-docker cp "$INSPECT_SRC" "$CONTAINER:/tmp/sqlite-readonly-inspect.mjs"
-# Verify backup file from host via a throwaway node if possible; else copy backup into /tmp of container read-only inspect
-# Prefer host node to avoid mounting backup into the app container as /data.
-if command -v node >/dev/null 2>&1; then
+# Host Node may exist but be too old for node:sqlite (e.g. Node 18 on this NAS).
+# Only use it when node:sqlite capability was actually detected; otherwise prefer
+# Python's stdlib sqlite3 in strict read-only URI mode. Final fallback verifies
+# through the running Node 22 container without executing application db.js.
+if [ "$HOST_NODE_SQLITE" = "yes" ]; then
   INTEGRITY="$(node "$INSPECT_SRC" "$DEST_DB" integrity)"
+elif [ -n "$HOST_PYTHON" ]; then
+  INTEGRITY="$(python3 - "$DEST_DB" <<'PY'
+import json, sqlite3, sys
+path = sys.argv[1]
+con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+try:
+    row = con.execute("PRAGMA integrity_check").fetchone()
+    value = row[0] if row else None
+finally:
+    con.close()
+print(json.dumps({"integrity_check": value, "ok": value == "ok"}))
+PY
+)"
 else
+  docker cp "$INSPECT_SRC" "$CONTAINER:/tmp/sqlite-readonly-inspect.mjs"
   docker cp "$DEST_DB" "$CONTAINER:/tmp/v3-predeploy-backup-verify.db"
   INTEGRITY="$(docker exec "$CONTAINER" node /tmp/sqlite-readonly-inspect.mjs /tmp/v3-predeploy-backup-verify.db integrity)"
-  docker exec "$CONTAINER" rm -f /tmp/v3-predeploy-backup-verify.db
+  docker exec "$CONTAINER" rm -f /tmp/v3-predeploy-backup-verify.db /tmp/sqlite-readonly-inspect.mjs
 fi
-docker exec "$CONTAINER" rm -f /tmp/sqlite-readonly-inspect.mjs || true
 echo "$INTEGRITY" > "$WORKDIR/integrity.json"
 echo "$INTEGRITY"
 echo "$INTEGRITY" | grep -q '"ok"' || fail "backup integrity_check is not ok"
