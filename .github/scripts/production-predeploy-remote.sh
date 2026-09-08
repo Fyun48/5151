@@ -37,11 +37,13 @@ echo "discovered_data_host=$DATA_HOST"
 
 IMAGE_REF="$(docker inspect -f '{{.Config.Image}}' "$CONTAINER")"
 IMAGE_ID="$(docker inspect -f '{{.Image}}' "$CONTAINER")"
-ARCH="$(docker inspect -f '{{.Architecture}}?{{.Os}}' "$CONTAINER" 2>/dev/null || true)"
-if [ -z "$ARCH" ] || [ "$ARCH" = "?" ]; then
-  ARCH="$(docker exec "$CONTAINER" uname -m)"
+[ -n "$IMAGE_ID" ] || fail "container image id is empty"
+if ! docker image inspect "$IMAGE_ID" >/dev/null 2>&1; then
+  fail "docker image inspect failed for resolved image id (fail-closed; not fabricating a digest)"
 fi
-REPO_DIGESTS="$(docker inspect -f '{{range .RepoDigests}}{{.}} {{end}}' "$CONTAINER")"
+REPO_DIGESTS="$(docker image inspect -f '{{range .RepoDigests}}{{.}} {{end}}' "$IMAGE_ID")"
+ARCH="$(docker image inspect -f '{{.Architecture}}/{{.Os}}' "$IMAGE_ID")"
+[ -n "$ARCH" ] && [ "$ARCH" != "/" ] || fail "docker image inspect returned empty Architecture/Os"
 NODE_VER="$(docker exec "$CONTAINER" node -p "process.version")"
 
 echo "=== current sharp (read-only, no install) ==="

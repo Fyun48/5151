@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -94,4 +94,17 @@ test("capability-detects node:sqlite backup() and uses Python online backup API"
   assert.equal(destCheck.prepare("PRAGMA integrity_check").get().integrity_check, "ok");
   destCheck.close();
   rmSync(dir, { recursive: true, force: true });
+});
+
+test("predeploy remote script reads RepoDigests and arch from image id, not container", () => {
+  const script = readFileSync(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "../../.github/scripts/production-predeploy-remote.sh"),
+    "utf8",
+  );
+  assert.doesNotMatch(script, /docker inspect[^\n]*RepoDigests[^\n]*\$CONTAINER/);
+  assert.doesNotMatch(script, /docker inspect[^\n]*\.Architecture[^\n]*\$CONTAINER/);
+  assert.doesNotMatch(script, /docker inspect[^\n]*\.Os[^\n]*\$CONTAINER/);
+  assert.match(script, /IMAGE_ID="\$\(docker inspect -f '\{\{\.Image\}\}' "\$CONTAINER"\)"/);
+  assert.match(script, /docker image inspect -f '\{\{range \.RepoDigests\}\}\{\{\.\}\} \{\{end\}\}' "\$IMAGE_ID"/);
+  assert.match(script, /docker image inspect -f '\{\{\.Architecture\}\}\/\{\{\.Os\}\}' "\$IMAGE_ID"/);
 });
