@@ -90,3 +90,12 @@ test("deploy-v3 pins Production v3 to digest and does not recreate v2", () => {
   assert.match(yml, /Config.Image/);
   assert.match(yml, /DEPLOY_V3_OK/);
 });
+
+test("NAS ssh script avoids bash case/;; because drone-ssh joins lines with semicolons", () => {
+  const start = yml.indexOf("Pull digest-pinned image and recreate v3 only");
+  const ssh = yml.slice(start);
+  assert.doesNotMatch(ssh, /\besac\b/);
+  assert.doesNotMatch(ssh, /;;/);
+  assert.match(ssh, /grep -Eq ':latest\$'/);
+  assert.match(ssh, /grep -Eq '@sha256:'/);
+});

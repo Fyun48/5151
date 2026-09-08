@@ -202,19 +202,19 @@ jobs:
             if [ "$V3_IMAGE" != "$IMAGE_PIN" ]; then
               echo "rendered v3 image is not the requested digest pin"; exit 1
             fi
-            case "$V3_IMAGE" in
-              *:latest) echo "v3 must not resolve to :latest"; exit 1 ;;
-            esac
-            case "$V2_IMAGE" in
-              *@sha256:*) echo "v2 must not be digest-replaced"; exit 1 ;;
-            esac
+            # drone-ssh script_stop joins lines with ';' (in-pattern arms are unsafe).
+            if printf '%s' "$V3_IMAGE" | grep -Eq ':latest$'; then
+              echo "v3 must not resolve to :latest"; exit 1
+            fi
+            if printf '%s' "$V2_IMAGE" | grep -Eq '@sha256:'; then
+              echo "v2 must not be digest-replaced"; exit 1
+            fi
             docker pull "$IMAGE_PIN"
             # Existing intentional v1 leftover stop (v1 already retired). Do not expand to v2.
             docker compose stop 591-tracker || true
             docker stop 591-tracker || true
             docker rm -f 591-tracker || true
-            docker compose -f docker-compose.yml -f docker-compose.override.yml \
-              up -d --no-build --no-deps --force-recreate 591-tracker-v3
+            docker compose -f docker-compose.yml -f docker-compose.override.yml up -d --no-build --no-deps --force-recreate 591-tracker-v3
             if [ "$copied" = 1 ]; then
               docker compose -f docker-compose.yml -f docker-compose.override.yml restart 591-tracker-v3
             fi
