@@ -923,6 +923,58 @@ export function applyOpsSchema(db) {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_relnotif_manifest ON release_notification(release_manifest_id, channel);
 
+    -- Phase 14：Production DB Migration Safety Clearance（獨立不可變評估；不改 Phase-13 manifest 本體、不部署 Production）。
+    -- 精確綁定 Gate #2 已核准的 production_release_authorization + manifest version/hash + head SHA + artifact digest + QA/staging。
+    CREATE TABLE IF NOT EXISTS production_migration_safety_assessment (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      issue_id INTEGER NOT NULL,
+      coding_task_id INTEGER NOT NULL,
+      release_authorization_id INTEGER NOT NULL,
+      release_manifest_id INTEGER NOT NULL,
+      release_manifest_version INTEGER NOT NULL,
+      manifest_hash TEXT NOT NULL,
+      qa_run_id INTEGER NOT NULL,
+      staging_deployment_id INTEGER NOT NULL,
+      head_sha TEXT NOT NULL,
+      artifact_digest TEXT NOT NULL,
+      migration_classification TEXT NOT NULL,
+      clearance_result TEXT NOT NULL,
+      evidence_snapshot TEXT NOT NULL,
+      rollback_assessment TEXT NOT NULL,
+      compatibility_assessment TEXT NOT NULL,
+      policy_version TEXT NOT NULL,
+      policy_fingerprint TEXT NOT NULL,
+      input_fingerprint TEXT NOT NULL,
+      assessment_version INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (release_authorization_id) REFERENCES production_release_authorization(id) ON DELETE RESTRICT,
+      FOREIGN KEY (release_manifest_id) REFERENCES development_release_candidate(id) ON DELETE RESTRICT,
+      FOREIGN KEY (qa_run_id) REFERENCES development_qa_run(id) ON DELETE RESTRICT,
+      FOREIGN KEY (staging_deployment_id) REFERENCES development_staging_deployment(id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS idx_migsafety_task ON production_migration_safety_assessment(coding_task_id, id);
+    CREATE INDEX IF NOT EXISTS idx_migsafety_auth ON production_migration_safety_assessment(release_authorization_id, id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_migsafety_input_fp ON production_migration_safety_assessment(input_fingerprint);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_migsafety_auth_version ON production_migration_safety_assessment(release_authorization_id, assessment_version);
+    -- 評估本體全欄位不可變（canonical pointer 在 production_migration_safety_current）。
+    -- 實際 trigger 由 upgradeMigrationSafetyImmutability() 每次套用，以升級舊的部分欄位 WHEN 子句。
+    CREATE TRIGGER IF NOT EXISTS migsafety_immutable BEFORE UPDATE ON production_migration_safety_assessment
+    BEGIN SELECT RAISE(ABORT, 'migration safety assessment is immutable'); END;
+    CREATE TRIGGER IF NOT EXISTS migsafety_no_delete BEFORE DELETE ON production_migration_safety_assessment
+    BEGIN SELECT RAISE(ABORT, 'migration safety assessment is append-only'); END;
+
+    -- canonical 當前 pointer（可改指向新版本；歷史 assessment 仍 append-only）。
+    CREATE TABLE IF NOT EXISTS production_migration_safety_current (
+      coding_task_id INTEGER NOT NULL PRIMARY KEY,
+      release_authorization_id INTEGER NOT NULL,
+      assessment_id INTEGER NOT NULL,
+      input_fingerprint TEXT NOT NULL,
+      clearance_result TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (assessment_id) REFERENCES production_migration_safety_assessment(id) ON DELETE RESTRICT,
+      FOREIGN KEY (release_authorization_id) REFERENCES production_release_authorization(id) ON DELETE RESTRICT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_state_entity_type ON state_entity(entity_type, state);
     CREATE INDEX IF NOT EXISTS idx_state_transition_entity ON state_transition(entity_type, entity_id, id);
     CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_type, entity_id, id);
@@ -941,7 +993,20 @@ export function applyOpsSchema(db) {
     CREATE TRIGGER IF NOT EXISTS state_transition_no_delete BEFORE DELETE ON state_transition
       BEGIN SELECT RAISE(ABORT, 'state_transition is append-only'); END;
   `);
+  upgradeMigrationSafetyImmutability(db);
   return db;
+}
+
+// CREATE TRIGGER IF NOT EXISTS 不會升級已存在的舊 trigger；每次開庫重裝全欄位不可變。
+export function upgradeMigrationSafetyImmutability(db) {
+  db.exec(`
+    DROP TRIGGER IF EXISTS migsafety_immutable;
+    DROP TRIGGER IF EXISTS migsafety_no_delete;
+    CREATE TRIGGER migsafety_immutable BEFORE UPDATE ON production_migration_safety_assessment
+    BEGIN SELECT RAISE(ABORT, 'migration safety assessment is immutable'); END;
+    CREATE TRIGGER migsafety_no_delete BEFORE DELETE ON production_migration_safety_assessment
+    BEGIN SELECT RAISE(ABORT, 'migration safety assessment is append-only'); END;
+  `);
 }
 
 // 開一個 ops 資料庫。dbPath = ":memory:" 供測試使用。

@@ -49,6 +49,7 @@ import { stagingWorkerConfigFromEnv, startStagingLoop } from "./stagingWorker.js
 import { makeStagingProvider } from "./staging/provider.js";
 import { getReleaseCandidateView, getReleaseManifest, submitOwnerReleaseDecision, retryReleaseNotification, listReleaseNotifications } from "./releaseCandidate.js";
 import { releaseWorkerConfigFromEnv, startReleaseLoop } from "./releaseWorker.js";
+import { getMigrationSafetyView, createMigrationSafetyAssessment, assessApprovedReleaseIfNeeded } from "./release/migrationSafety.js";
 
 // 刻意不使用 express：ops 服務維持「零外部相依」，與本 repo 的 CI（不跑 npm install）相容，
 // 也縮小攻擊面。所有路由用 node:http 手刻的極小 router。
@@ -734,8 +735,12 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
       const rcGet = pathname.match(/^\/ops\/api\/coding-tasks\/(\d+)\/release$/);
       if (rcGet && method === "GET") {
         if (!runGuard(auth.requireOwner, req, reply)) return;
-        try { sendJson(res, 200, getReleaseCandidateView(db, Number(rcGet[1]), { repo: releaseRepo })); }
-        catch (err) { sendJson(res, err.status || 404, { error: err.message }); }
+        try {
+          const view = getReleaseCandidateView(db, Number(rcGet[1]), { repo: releaseRepo });
+          try { view.migration_safety = getMigrationSafetyView(db, Number(rcGet[1]), { repo: releaseRepo }); }
+          catch { view.migration_safety = null; }
+          sendJson(res, 200, view);
+        } catch (err) { sendJson(res, err.status || 404, { error: err.message }); }
         return;
       }
       const rmGet = pathname.match(/^\/ops\/api\/release-manifests\/(\d+)$/);
@@ -752,6 +757,37 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         let b = {}; try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
         try {
           const r = submitOwnerReleaseDecision(db, { codingTaskId: Number(rcDecision[1]), action: b.action, manifestId: b.manifest_id, manifestVersion: b.manifest_version, manifestHash: b.manifest_hash, artifactDigest: b.artifact_digest, headSha: b.head_sha, actor: `owner:${req.owner.email}`, reason: b.reason, repo: releaseRepo });
+          if (r.authorization) {
+            try { r.migration_safety = assessApprovedReleaseIfNeeded(db, { codingTaskId: Number(rcDecision[1]), authorization: r.authorization, repo: releaseRepo, actor: `owner:${req.owner.email}` }); }
+            catch (assessErr) { r.migration_safety_error = assessErr.message; }
+          }
+          sendJson(res, 200, { ok: true, ...r });
+        } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+      const migSafetyGet = pathname.match(/^\/ops\/api\/coding-tasks\/(\d+)\/migration-safety$/);
+      if (migSafetyGet && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        try { sendJson(res, 200, getMigrationSafetyView(db, Number(migSafetyGet[1]), { repo: releaseRepo })); }
+        catch (err) { sendJson(res, err.status || 404, { error: err.message }); }
+        return;
+      }
+      const migSafetyPost = pathname.match(/^\/ops\/api\/coding-tasks\/(\d+)\/migration-safety$/);
+      if (migSafetyPost && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {}; try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          const r = createMigrationSafetyAssessment(db, {
+            codingTaskId: Number(migSafetyPost[1]),
+            releaseAuthorizationId: b.release_authorization_id,
+            manifestId: b.manifest_id,
+            manifestVersion: b.manifest_version,
+            manifestHash: b.manifest_hash,
+            headSha: b.head_sha,
+            artifactDigest: b.artifact_digest,
+            repo: releaseRepo,
+            actor: `owner:${req.owner.email}`,
+          });
           sendJson(res, 200, { ok: true, ...r });
         } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
         return;
