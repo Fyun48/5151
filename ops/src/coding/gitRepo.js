@@ -140,6 +140,17 @@ export function makeGitRepo(repoPath, opts = {}) {
     // ── Phase 12 Staging：來源身分驗證用 ──
     resolveRef(ref) { try { return git(["rev-parse", ref]); } catch { return null; } },
     treeHash(sha) { try { return git(["rev-parse", `${sha}^{tree}`]); } catch { return null; } },
+
+    // ── Phase 15：protected master ancestry（SHA 必須能從 master 追溯） ──
+    isAncestor(ancestorSha, descendantRef = "master") {
+      if (!ancestorSha || !descendantRef) return false;
+      try {
+        git(["merge-base", "--is-ancestor", ancestorSha, descendantRef]);
+        return true;
+      } catch {
+        return false;
+      }
+    },
   };
 }
 

@@ -1,0 +1,211 @@
+import { createHash } from "node:crypto";
+import { MIGRATION_CLASSIFICATIONS } from "../qa/migrationEvidence.js";
+import { CLEARED_CLEARANCE_RESULTS } from "./migrationSafetyPolicy.js";
+
+// Phase 15：版本化、決定性、fail-closed 的 Production release / code-rollback 政策。
+// AI/LLM 不得核准 release、migration 或 rollback，也不得判 PASS。
+// 不新增第三個人工作業 Gate；只消費 Owner Gate #2 已建立的 exact authorization。
+// Production workflow 維持 manual-only；Ops 不持 Production secrets、不直接 SSH。
+
+export const PRODUCTION_RELEASE_POLICY_VERSION = "production-release-policy-v1";
+export const PRODUCTION_RELEASE_PROVIDER_VERSION = "production-release-provider-v1";
+
+export const PRODUCTION_WORKFLOWS = Object.freeze({
+  BUILD: ".github/workflows/build-production-image.yml",
+  PREDEPLOY: ".github/workflows/production-predeploy-check.yml",
+  DEPLOY: ".github/workflows/deploy-v3.yml",
+});
+
+export const REQUIRED_WORKFLOW_REF = "refs/heads/master";
+export const REQUIRED_TARGET_ENVIRONMENT = "production";
+export const REQUIRED_OCI_SOURCE = "https://github.com/Fyun48/5151";
+export const REQUIRED_BASE_BRANCH = "master";
+
+export const RELEASE_STATUSES = Object.freeze({
+  CREATED: "CREATED",
+  ELIGIBILITY_VERIFIED: "ELIGIBILITY_VERIFIED",
+  MERGED: "MERGED",
+  BUILD_DISPATCHED: "BUILD_DISPATCHED",
+  BUILD_RECONCILED: "BUILD_RECONCILED",
+  PREDEPLOY_DISPATCHED: "PREDEPLOY_DISPATCHED",
+  PREDEPLOY_RECONCILED: "PREDEPLOY_RECONCILED",
+  DEPLOY_DISPATCHED: "DEPLOY_DISPATCHED",
+  DEPLOY_RECONCILED: "DEPLOY_RECONCILED",
+  HEALTH_VERIFIED: "HEALTH_VERIFIED",
+  SUCCEEDED: "SUCCEEDED",
+  HEALTH_FAILED: "HEALTH_FAILED",
+  CODE_ROLLBACK_DISPATCHED: "CODE_ROLLBACK_DISPATCHED",
+  CODE_ROLLBACK_RECONCILED: "CODE_ROLLBACK_RECONCILED",
+  ROLLED_BACK: "ROLLED_BACK",
+  DB_ROLLBACK_MANUAL_REQUIRED: "DB_ROLLBACK_MANUAL_REQUIRED",
+  BLOCKED: "BLOCKED",
+});
+
+export const WORKFLOW_KINDS = Object.freeze({
+  BUILD: "build",
+  PREDEPLOY: "predeploy",
+  DEPLOY: "deploy",
+  ROLLBACK: "rollback",
+});
+
+export const BINDING_STATUSES = Object.freeze({
+  RESERVED: "reserved",
+  DISPATCHED: "dispatched",
+  RECONCILED: "reconciled",
+  UNKNOWN: "unknown",
+});
+
+export const DB_ROLLBACK_DISPOSITIONS = Object.freeze({
+  NONE: "NONE",
+  NO_DB_ROLLBACK: "NO_DB_ROLLBACK",
+  MANUAL_REQUIRED: "MANUAL_REQUIRED",
+  BLOCKED: "BLOCKED",
+});
+
+export const SUCCESS_CONCLUSIONS = Object.freeze(["success"]);
+export const NON_SUCCESS_CONCLUSIONS = Object.freeze([
+  "failure", "cancelled", "skipped", "neutral", "timed_out", "action_required", "stale", "",
+]);
+export const NON_TERMINAL_RUN_STATUSES = Object.freeze([
+  "queued", "in_progress", "pending", "waiting", "requested", "waiting_for_review",
+]);
+
+export function productionReleaseConfigFromEnv(env = process.env) {
+  void env;
+  return {
+    policyVersion: PRODUCTION_RELEASE_POLICY_VERSION,
+    providerVersion: PRODUCTION_RELEASE_PROVIDER_VERSION,
+    requiredWorkflowRef: REQUIRED_WORKFLOW_REF,
+    requiredTargetEnvironment: REQUIRED_TARGET_ENVIRONMENT,
+    requiredOciSource: REQUIRED_OCI_SOURCE,
+    requiredBaseBranch: REQUIRED_BASE_BRANCH,
+    workflows: { ...PRODUCTION_WORKFLOWS },
+    noLlmDecision: true,
+    noThirdHumanGate: true,
+    noAutoProductionDispatch: true,
+    noDirectSsh: true,
+    noAutoDbRestore: true,
+    mergePushDoesNotDeploy: true,
+    consumeExactAuthorizationOnly: true,
+    providerApiSuccessIsNotDeploySuccess: true,
+  };
+}
+
+export function buildProductionReleasePolicy(cfg = productionReleaseConfigFromEnv()) {
+  void cfg;
+  return {
+    policy_version: PRODUCTION_RELEASE_POLICY_VERSION,
+    provider_version: PRODUCTION_RELEASE_PROVIDER_VERSION,
+    required_workflow_ref: REQUIRED_WORKFLOW_REF,
+    required_target_environment: REQUIRED_TARGET_ENVIRONMENT,
+    required_oci_source: REQUIRED_OCI_SOURCE,
+    required_base_branch: REQUIRED_BASE_BRANCH,
+    workflows: { ...PRODUCTION_WORKFLOWS },
+    no_llm_decision: true,
+    no_third_human_gate: true,
+    no_auto_production_dispatch: true,
+    no_direct_ssh: true,
+    no_auto_db_restore: true,
+    merge_push_does_not_deploy: true,
+    consume_exact_authorization_only: true,
+    provider_api_success_is_not_deploy_success: true,
+    success_conclusions: [...SUCCESS_CONCLUSIONS],
+    cleared_clearance_results: [...CLEARED_CLEARANCE_RESULTS],
+    required_identities: [
+      "coding_task_id",
+      "release_authorization_id",
+      "release_authorization_hash",
+      "manifest_id",
+      "manifest_version",
+      "manifest_hash",
+      "migration_safety_assessment_id",
+      "migration_safety_policy_fingerprint",
+      "migration_safety_input_fingerprint",
+      "clearance_result",
+      "qa_run_id",
+      "staging_deployment_id",
+      "head_sha",
+      "artifact_digest",
+      "target_environment",
+      "workflow_ref",
+    ].sort(),
+  };
+}
+
+function fp(obj) {
+  return createHash("sha256").update(JSON.stringify(Object.entries(obj).map(([k, v]) => `${k}:${JSON.stringify(v)}`).sort())).digest("hex");
+}
+export function productionReleasePolicyFingerprint(policy) { return fp(policy); }
+export function effectiveProductionReleasePolicyFingerprint(env = process.env) {
+  return fp(buildProductionReleasePolicy(productionReleaseConfigFromEnv(env)));
+}
+
+export function productionReleaseInputFingerprint(p) {
+  const parts = [
+    `coding_task_id:${p.codingTaskId}`,
+    `release_authorization_id:${p.releaseAuthorizationId}`,
+    `release_authorization_hash:${p.releaseAuthorizationHash}`,
+    `manifest_id:${p.manifestId}`,
+    `manifest_version:${p.manifestVersion}`,
+    `manifest_hash:${p.manifestHash}`,
+    `migration_safety_assessment_id:${p.migrationSafetyAssessmentId}`,
+    `migration_safety_policy_fp:${p.migrationSafetyPolicyFingerprint}`,
+    `migration_safety_input_fp:${p.migrationSafetyInputFingerprint}`,
+    `clearance_result:${p.clearanceResult}`,
+    `qa_run_id:${p.qaRunId}`,
+    `staging_deployment_id:${p.stagingDeploymentId}`,
+    `head_sha:${p.headSha}`,
+    `artifact_digest:${p.artifactDigest}`,
+    `target_environment:${p.targetEnvironment}`,
+    `workflow_ref:${p.workflowRef}`,
+    `expected_master_head:${p.expectedMasterHead ?? ""}`,
+    `policy_fp:${p.policyFingerprint}`,
+  ].sort();
+  return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
+}
+
+export function workflowIdempotencyKey({ releaseRunId, workflowKind, inputFingerprint }) {
+  return createHash("sha256").update(`phase15:${releaseRunId}:${workflowKind}:${inputFingerprint}`).digest("hex");
+}
+
+export function isSuccessfulConclusion(conclusion, runStatus) {
+  if (runStatus && NON_TERMINAL_RUN_STATUSES.includes(String(runStatus))) return false;
+  if (runStatus && runStatus !== "completed") return false;
+  return SUCCESS_CONCLUSIONS.includes(String(conclusion || ""));
+}
+
+export function decideDbRollbackDisposition(classification) {
+  if (classification === MIGRATION_CLASSIFICATIONS.NONE) {
+    return { disposition: DB_ROLLBACK_DISPOSITIONS.NO_DB_ROLLBACK, auto_restore: false, reason: "no_migration" };
+  }
+  if ([
+    MIGRATION_CLASSIFICATIONS.ADDITIVE_BACKWARD_COMPATIBLE,
+    MIGRATION_CLASSIFICATIONS.DATA_MIGRATION,
+    MIGRATION_CLASSIFICATIONS.DESTRUCTIVE_OR_IRREVERSIBLE,
+    MIGRATION_CLASSIFICATIONS.UNKNOWN_OR_UNPROVEN,
+  ].includes(classification)) {
+    return {
+      disposition: DB_ROLLBACK_DISPOSITIONS.MANUAL_REQUIRED,
+      auto_restore: false,
+      reason: "no_trusted_exact_db_rollback_plan",
+    };
+  }
+  return { disposition: DB_ROLLBACK_DISPOSITIONS.BLOCKED, auto_restore: false, reason: "unknown_classification" };
+}
+
+export function previousStableComplete(prev) {
+  if (!prev) return false;
+  const sha = String(prev.source_sha || prev.previous_stable_sha || "");
+  const digest = String(prev.artifact_digest || prev.previous_stable_digest || "");
+  const runId = String(prev.workflow_run_id || prev.previous_stable_workflow_run_id || "");
+  if (!/^[a-f0-9]{40}$/i.test(sha)) return false;
+  if (!/^sha256:[a-f0-9]{64}$/i.test(digest) && !/^sha256:[a-f0-9]{16,}$/i.test(digest)) return false;
+  if (!runId || runId === "latest") return false;
+  return true;
+}
+
+export function digestLooksImmutable(digest) {
+  const d = String(digest || "");
+  if (!d || d === "latest" || /:latest$/.test(d)) return false;
+  return /^sha256:[a-f0-9]{16,}$/i.test(d);
+}
