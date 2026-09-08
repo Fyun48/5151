@@ -98,6 +98,7 @@ import {
   listMineSelfListings as listMineSelfListingsOn,
   listingPhotoUrls,
   publishImportedDraftListing as publishImportedDraftListingOn,
+  publishOwnedDraftListing as publishOwnedDraftListingOn,
   reportSelfListing as reportSelfListingOn,
   selfListingMeta,
   selfSourceLabel,
@@ -154,6 +155,21 @@ import {
   reviewListingImport as reviewListingImportOn,
   startListingImport as startListingImportOn,
 } from "./listingImport.js";
+import {
+  copyOwnListing as copyOwnListingOn,
+  createContactProfile as createContactProfileOn,
+  createDescriptionTemplate as createDescriptionTemplateOn,
+  deleteContactProfile as deleteContactProfileOn,
+  deleteDescriptionTemplate as deleteDescriptionTemplateOn,
+  ensureListingToolsSchema,
+  getOwnedContactProfile as getOwnedContactProfileOn,
+  getOwnedDescriptionTemplate as getOwnedDescriptionTemplateOn,
+  listContactProfiles as listContactProfilesOn,
+  listDescriptionTemplates as listDescriptionTemplatesOn,
+  listingToolsMeta,
+  updateContactProfile as updateContactProfileOn,
+  updateDescriptionTemplate as updateDescriptionTemplateOn,
+} from "./listingTools.js";
 import {
   ensurePushSchema,
   savePushSubscription as savePushSubscriptionOn,
@@ -581,6 +597,7 @@ ensureMemberMediaSchema(db);
 ensureContentDocumentSchema(db);
 ensureMemberConsentSchema(db);
 ensureListingImportSchema(db);
+ensureListingToolsSchema(db);
 try {
   seedDefaultDocuments(db, { legalCopy: settingKey("legalCopy") ?? defaultLegalCopy() });
 } catch {
@@ -1339,6 +1356,48 @@ export function createSelfListing(userId, input) {
   return createSelfListingOn(db, userId, input, new Date(), {
     matchCandidates: (listing) => listMatchCandidates(listing.post_id),
   });
+}
+
+export function listingToolsInfo() {
+  return listingToolsMeta();
+}
+export function copyOwnListingFor(userId, sourceId, input = {}) {
+  return copyOwnListingOn(db, userId, sourceId, input);
+}
+export function publishOwnedDraftFor(userId, postId, input = {}) {
+  return publishOwnedDraftListingOn(db, userId, postId, input, new Date(), {
+    matchCandidates: (listing) => listMatchCandidates(listing.post_id),
+  });
+}
+export function listDescriptionTemplatesFor(userId) {
+  return listDescriptionTemplatesOn(db, userId);
+}
+export function createDescriptionTemplateFor(userId, input) {
+  return createDescriptionTemplateOn(db, userId, input);
+}
+export function getOwnedDescriptionTemplateFor(userId, id) {
+  return getOwnedDescriptionTemplateOn(db, userId, id);
+}
+export function updateDescriptionTemplateFor(userId, id, input) {
+  return updateDescriptionTemplateOn(db, userId, id, input);
+}
+export function deleteDescriptionTemplateFor(userId, id) {
+  return deleteDescriptionTemplateOn(db, userId, id);
+}
+export function listContactProfilesFor(userId) {
+  return listContactProfilesOn(db, userId);
+}
+export function createContactProfileFor(userId, input) {
+  return createContactProfileOn(db, userId, input);
+}
+export function getOwnedContactProfileFor(userId, id) {
+  return getOwnedContactProfileOn(db, userId, id);
+}
+export function updateContactProfileFor(userId, id, input) {
+  return updateContactProfileOn(db, userId, id, input);
+}
+export function deleteContactProfileFor(userId, id) {
+  return deleteContactProfileOn(db, userId, id);
 }
 
 export function listingImportMeta(opts) {
