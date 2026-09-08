@@ -46,6 +46,12 @@ ARCH="$(docker image inspect -f '{{.Architecture}}/{{.Os}}' "$IMAGE_ID")"
 [ -n "$ARCH" ] && [ "$ARCH" != "/" ] || fail "docker image inspect returned empty Architecture/Os"
 NODE_VER="$(docker exec "$CONTAINER" node -p "process.version")"
 
+echo "image_ref=$IMAGE_REF"
+echo "image_id=$IMAGE_ID"
+echo "repo_digests=${REPO_DIGESTS:-none}"
+echo "architecture=$ARCH"
+echo "container_node=$NODE_VER"
+
 echo "=== current sharp (read-only, no install) ==="
 SHARP_STATUS="SHARP_MISSING"
 if docker exec "$CONTAINER" node -e "import('sharp').then(()=>console.log('SHARP_OK')).catch(()=>{console.error('SHARP_MISSING'); process.exit(1)})"; then
@@ -85,12 +91,17 @@ API_CHECK="$(docker exec "$CONTAINER" node --input-type=module -e 'import * as s
 SQLITE3_BIN="$(command -v sqlite3 || true)"
 IN_CONTAINER_SQLITE3="$(docker exec "$CONTAINER" sh -c 'command -v sqlite3 || true')"
 HOST_PYTHON="$(command -v python3 || true)"
+HOST_NODE_SQLITE=""
+if command -v node >/dev/null 2>&1; then
+  HOST_NODE_SQLITE="$(node --input-type=module -e 'import("node:sqlite").then(()=>process.stdout.write("yes")).catch(()=>process.exit(1))' 2>/dev/null || true)"
+fi
 set -e
 
 echo "node_backup_typeof=$API_CHECK"
 echo "host_python3=${HOST_PYTHON:-none}"
 echo "host_sqlite3=${SQLITE3_BIN:-none}"
 echo "container_sqlite3=${IN_CONTAINER_SQLITE3:-none}"
+echo "host_node_sqlite=${HOST_NODE_SQLITE:-no}"
 
 PARENT="$(dirname "$DATA_HOST")"
 BASE="$(basename "$DATA_HOST")"
@@ -173,10 +184,23 @@ ORIG_SIZE="$(stat -c%s "$DATA_HOST/v3.db" 2>/dev/null || stat -f%z "$DATA_HOST/v
 BACKUP_SHA="$(sha256sum "$DEST_DB" | awk '{print $1}')"
 
 docker cp "$INSPECT_SRC" "$CONTAINER:/tmp/sqlite-readonly-inspect.mjs"
-# Verify backup file from host via a throwaway node if possible; else copy backup into /tmp of container read-only inspect
-# Prefer host node to avoid mounting backup into the app container as /data.
-if command -v node >/dev/null 2>&1; then
+# Verify the backup without importing app db.js. Host Node is used only when node:sqlite is actually available.
+if [ "$HOST_NODE_SQLITE" = "yes" ]; then
   INTEGRITY="$(node "$INSPECT_SRC" "$DEST_DB" integrity)"
+elif [ -n "$HOST_PYTHON" ]; then
+  INTEGRITY="$(python3 - "$DEST_DB" <<'PY'
+import json, sqlite3, sys, urllib.parse
+path = sys.argv[1]
+uri = "file:" + urllib.parse.quote(path, safe="/") + "?mode=ro"
+con = sqlite3.connect(uri, uri=True)
+try:
+    row = con.execute("PRAGMA integrity_check").fetchone()
+    result = row[0] if row else None
+finally:
+    con.close()
+print(json.dumps({"integrity_check": result, "ok": result == "ok"}))
+PY
+)"
 else
   docker cp "$DEST_DB" "$CONTAINER:/tmp/v3-predeploy-backup-verify.db"
   INTEGRITY="$(docker exec "$CONTAINER" node /tmp/sqlite-readonly-inspect.mjs /tmp/v3-predeploy-backup-verify.db integrity)"
