@@ -4377,6 +4377,7 @@
       paintAnnounceBanner();
       paintSupportAccount();
       mergeCommsIntoInbox();
+      if (Array.isArray(listCache) && listCache.length) renderList(listCache, lastStats);
     }
 
     function paintAnnounceBanner() {
@@ -4467,16 +4468,21 @@
     function mergeCommsIntoInbox() {
       const inbox = $("notifyInbox");
       if (!inbox) return;
+      inbox.querySelectorAll("[data-comms-key]").forEach((node) => node.remove());
       const extras = commsInboxHtml(commsInboxItems());
-      if (!extras) return;
-      const empty = inbox.querySelector(".notify-empty");
-      if (empty) {
-        inbox.innerHTML = extras;
-        const hint = $("notifyViewHint");
-        if (hint) hint.textContent = "有系統公告或贊助內容";
+      if (!extras) {
+        if (!inbox.querySelector(".dock-item") && !inbox.querySelector(".notify-empty")) {
+          inbox.innerHTML = `<div class="notify-empty">還沒有待看更新。條件按儲存後，全新物件、價格變動與下架會出現在這裡，也可按「允許系統推播」。</div>`;
+        }
         return;
       }
+      const empty = inbox.querySelector(".notify-empty");
+      if (empty) empty.remove();
       inbox.insertAdjacentHTML("afterbegin", extras);
+      const hint = $("notifyViewHint");
+      if (hint && !inbox.querySelector(".dock-item:not([data-comms-key])")) {
+        hint.textContent = "有系統公告或贊助內容";
+      }
     }
     function adMarkup(ad, cls) {
       if (!ad?.title) return "";
@@ -9143,6 +9149,7 @@
         $("dockList").innerHTML = "";
         if (inbox) inbox.innerHTML = `<div class="notify-empty">還沒有待看更新。條件按儲存後，全新物件、價格變動與下架會出現在這裡，也可按「允許系統推播」。</div>`;
         if (hint) hint.textContent = "尚無待看更新。";
+        mergeCommsIntoInbox();
         return;
       }
       dock.classList.add("open");
