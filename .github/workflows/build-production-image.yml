@@ -91,7 +91,10 @@ jobs:
             echo "No existing SHA tag; will build."
             exit 0
           fi
-          DIGEST="$(docker buildx imagetools inspect "$REF" | awk '/^Digest:/{print $2; exit}')"
+          DIGEST="$(docker buildx imagetools inspect "$REF" | awk '/^Digest:/{print $2; found=1} END{if(!found) exit 1}')"
+          if ! printf '%s' "$DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo "::error::Could not resolve immutable manifest digest for $REF"; exit 1
+          fi
           docker pull --platform linux/amd64 "$REF"
           REV="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$REF")"
           echo "Existing tag digest=$DIGEST revision_label=${REV:-missing}"
