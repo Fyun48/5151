@@ -1,0 +1,211 @@
+name: Build production image (no deploy)
+
+# 只建置並推送不可變 SHA tag。不 SSH、不重啟 CasaOS、不改 :latest。
+# 合併/push 不會自動執行；必須從 refs/heads/master 做 workflow_dispatch。
+#
+# Production 身分以 IMAGE DIGEST 為準；full SHA tag 只是人讀參考。
+# 已核對的最後一次成功 v3 Production source（deploy-v3.yml run 34113624372）：
+#   584d583e56151abcf01c972b7bb45a82c73e4596 （GitHub PR #191 merge commit）
+# 錯誤寫法 584d583e56151abcf01c972b7bb45e4596 不是有效 object，禁止使用。
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "要建置的完整 40 碼 commit SHA（必須可從 origin/master 追溯）"
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: build-production-image
+  cancel-in-progress: false
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Authorize build (fail-closed)
+        env:
+          WF_REF: ${{ github.ref }}
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          ALLOWED_ACTOR: ${{ vars.PRODUCTION_DEPLOY_ALLOWED_ACTOR }}
+          BUILD_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$WF_REF" != "refs/heads/master" ]; then
+            echo "::error::Build workflow definition must run from master (got $WF_REF)"; exit 1
+          fi
+          if [ -z "${ALLOWED_ACTOR:-}" ]; then
+            echo "::error::PRODUCTION_DEPLOY_ALLOWED_ACTOR is not configured; refusing (fail-closed)"; exit 1
+          fi
+          if [ "$ACTOR" != "$ALLOWED_ACTOR" ]; then
+            echo "::error::actor '$ACTOR' is not the authorized deployer"; exit 1
+          fi
+          if [ "$TRIGGERING_ACTOR" != "$ALLOWED_ACTOR" ]; then
+            echo "::error::triggering actor '$TRIGGERING_ACTOR' is not the authorized deployer"; exit 1
+          fi
+          if ! printf '%s' "${BUILD_SHA:-}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::sha must be a full 40-character commit SHA"; exit 1
+          fi
+      - name: Checkout master (for ancestry validation)
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+      - name: Validate SHA reachable from origin/master, then check it out
+        env:
+          BUILD_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin master
+          if ! git merge-base --is-ancestor "$BUILD_SHA" origin/master; then
+            echo "::error::commit $BUILD_SHA is not reachable from origin/master; refusing"; exit 1
+          fi
+          git checkout --force "$BUILD_SHA"
+          echo "SOURCE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Image name
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - name: Reuse existing immutable SHA tag if trustworthy
+        id: existing
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          BUILD_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          REF="${IMAGE}:${BUILD_SHA}"
+          echo "image_ref=$REF" >> "$GITHUB_OUTPUT"
+          if ! docker buildx imagetools inspect "$REF" >/dev/null 2>&1; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "No existing SHA tag; will build."
+            exit 0
+          fi
+          DIGEST="$(docker buildx imagetools inspect "$REF" | awk '/^Digest:/{print $2; exit}')"
+          docker pull --platform linux/amd64 "$REF"
+          REV="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$REF")"
+          echo "Existing tag digest=$DIGEST revision_label=${REV:-missing}"
+          if [ "$REV" != "$BUILD_SHA" ]; then
+            echo "::error::Refusing to overwrite existing ${REF} (revision label '${REV:-missing}' != ${BUILD_SHA})"
+            exit 1
+          fi
+          echo "exists=true" >> "$GITHUB_OUTPUT"
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "Reusing trustworthy existing image $REF @ $DIGEST"
+      - uses: docker/build-push-action@v6
+        if: steps.existing.outputs.exists != 'true'
+        id: build
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ steps.image.outputs.name }}:${{ inputs.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ inputs.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+      - name: Record digest
+        id: digest
+        env:
+          BUILT: ${{ steps.build.outputs.digest }}
+          REUSED: ${{ steps.existing.outputs.digest }}
+          EXISTS: ${{ steps.existing.outputs.exists }}
+        run: |
+          set -euo pipefail
+          if [ "$EXISTS" = "true" ]; then
+            echo "digest=$REUSED" >> "$GITHUB_OUTPUT"
+          else
+            echo "digest=$BUILT" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Verify sharp + revision label inside built amd64 image
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}:${{ inputs.sha }}
+          BUILD_SHA: ${{ inputs.sha }}
+          MANIFEST_DIGEST: ${{ steps.digest.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker pull --platform linux/amd64 "$IMAGE"
+          REV="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$IMAGE")"
+          SRC="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.source" }}' "$IMAGE")"
+          echo "revision_label=$REV"
+          echo "source_label=$SRC"
+          if [ "$REV" != "$BUILD_SHA" ]; then
+            echo "::error::image revision label '$REV' != BUILD_SHA $BUILD_SHA"; exit 1
+          fi
+          docker run --rm --platform linux/amd64 "$IMAGE" node -e "import('sharp').then(()=>console.log('SHARP_OK')).catch(()=>{console.error('SHARP_MISSING'); process.exit(1)})"
+          docker run --rm --platform linux/amd64 "$IMAGE" node -e "console.log('NODE', process.version)"
+          echo "architecture_tested=linux/amd64"
+          echo "IMAGE_DIGEST=$MANIFEST_DIGEST"
+          echo "SOURCE_SHA=$BUILD_SHA"
+          echo "IMAGE_TAG=$IMAGE"
+          {
+            echo "## Candidate image"
+            echo "- source SHA: \`$BUILD_SHA\`"
+            echo "- SHA tag: \`$IMAGE\`"
+            echo "- multi-arch manifest digest: \`$MANIFEST_DIGEST\`"
+            echo "- architecture tested: linux/amd64"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Isolated v3 image+source smoke
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}:${{ inputs.sha }}
+          BUILD_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          SMOKE_DIR="$(mktemp -d)"
+          export DB="$SMOKE_DIR/v3.db"
+          NAME="predeploy-v3-smoke-${GITHUB_RUN_ID}"
+          cleanup() {
+            docker rm -f "$NAME" >/dev/null 2>&1 || true
+            rm -rf "$SMOKE_DIR"
+          }
+          trap cleanup EXIT
+          docker pull --platform linux/amd64 "$IMAGE"
+          docker run -d --name "$NAME" --platform linux/amd64 \
+            -e HOST=0.0.0.0 \
+            -e PORT=5153 \
+            -e DATA_DIR=/data \
+            -e OPS_FEEDBACK_DELIVERY=0 \
+            -e PUBLIC_BASE_URL=http://127.0.0.1:5153 \
+            -e AUTH_EMAIL=predeploy-smoke@example.com \
+            -e AUTH_PASSWORD=predeploy-smoke-not-production \
+            -p 15153:5153 \
+            -v "$PWD/v3/src:/app/src:ro" \
+            -v "$PWD/v3/public:/app/public:ro" \
+            -v "$SMOKE_DIR:/data" \
+            "$IMAGE" \
+            node src/server.js
+          ok=0
+          for _ in $(seq 1 40); do
+            if curl -fsS "http://127.0.0.1:15153/api/health" | grep -q '"ok":true'; then
+              ok=1
+              break
+            fi
+            sleep 1
+          done
+          [ "$ok" = 1 ] || { docker logs "$NAME" || true; echo "::error::health did not become ready"; exit 1; }
+          curl -fsS -o /tmp/health.json -w "health %{http_code}\n" "http://127.0.0.1:15153/api/health"
+          curl -fsS -o /tmp/landing.html -w "landing %{http_code}\n" "http://127.0.0.1:15153/"
+          curl -fsS -o /tmp/login.html -w "login %{http_code}\n" "http://127.0.0.1:15153/login.html"
+          docker exec "$NAME" node -e "import('sharp').then(()=>console.log('SHARP_OK')).catch(()=>{console.error('SHARP_MISSING'); process.exit(1)})"
+          test -f "$SMOKE_DIR/v3.db"
+          node --input-type=module -e '
+            import { DatabaseSync } from "node:sqlite";
+            const db = new DatabaseSync(process.env.DB, { readOnly: true });
+            const ic = db.prepare("PRAGMA integrity_check").get();
+            const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = \"table\" ORDER BY 1").all().map((r) => r.name);
+            console.log(JSON.stringify({ integrity_check: ic.integrity_check, tables }));
+            if (ic.integrity_check !== "ok") process.exit(1);
+            if (!tables.includes("demand_posts") || !tables.includes("member_media")) process.exit(1);
+            db.close();
+          '
+          echo "ISOLATED_V3_SMOKE_OK source=$BUILD_SHA image=$IMAGE"

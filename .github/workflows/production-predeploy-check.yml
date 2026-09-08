@@ -1,0 +1,105 @@
+name: Production predeploy check (no deploy)
+
+# 使用既有 Production NAS secrets：檢查現行 v3、做已驗證備份、Wish Room 唯讀預檢。
+# 不是部署：不 SCP 應用程式、不 pull image、不改 image、不 compose up 新版、不跑應用 schema migration。
+#
+# 已核對的最後一次成功 v3 Production source（deploy-v3.yml run 34113624372, 2026-09-07T10:51:37Z）：
+#   584d583e56151abcf01c972b7bb45a82c73e4596
+#   = GitHub PR #191 merge commit（gh pr view 191 / git cat-file）
+# 無效 SHA 584d583e56151abcf01c972b7bb45e4596 不是 Git object，禁止當作 rollback。
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "即將評估的完整 40 碼 source SHA（必須可從 origin/master 追溯；本 workflow 不會部署它）"
+        required: true
+      confirmation:
+        description: "輸入 PREDEPLOY-PRODUCTION 以確認只做檢查與備份"
+        required: true
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  inspect-and-backup:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 30
+    steps:
+      - name: Authorize production predeploy check (fail-closed)
+        env:
+          WF_REF: ${{ github.ref }}
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          ALLOWED_ACTOR: ${{ vars.PRODUCTION_DEPLOY_ALLOWED_ACTOR }}
+          CONFIRM: ${{ inputs.confirmation }}
+          CHECK_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$WF_REF" != "refs/heads/master" ]; then
+            echo "::error::Predeploy check must run from the master workflow definition (got $WF_REF)"; exit 1
+          fi
+          if [ -z "${ALLOWED_ACTOR:-}" ]; then
+            echo "::error::PRODUCTION_DEPLOY_ALLOWED_ACTOR is not configured; refusing (fail-closed)"; exit 1
+          fi
+          if [ "$ACTOR" != "$ALLOWED_ACTOR" ]; then
+            echo "::error::actor '$ACTOR' is not the authorized deployer"; exit 1
+          fi
+          if [ "$TRIGGERING_ACTOR" != "$ALLOWED_ACTOR" ]; then
+            echo "::error::triggering actor '$TRIGGERING_ACTOR' is not the authorized deployer"; exit 1
+          fi
+          if [ "${CONFIRM:-}" != "PREDEPLOY-PRODUCTION" ]; then
+            echo "::error::confirmation must be exactly PREDEPLOY-PRODUCTION"; exit 1
+          fi
+          if ! printf '%s' "${CHECK_SHA:-}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::sha must be a full 40-character commit SHA"; exit 1
+          fi
+      - name: Checkout master (workflow scripts only; do not deploy this tree)
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+      - name: Validate SHA reachable from origin/master (no checkout of that SHA onto NAS)
+        env:
+          CHECK_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin master
+          if ! git merge-base --is-ancestor "$CHECK_SHA" origin/master; then
+            echo "::error::commit $CHECK_SHA is not reachable from origin/master; refusing"; exit 1
+          fi
+          echo "Evaluated source SHA $CHECK_SHA is on origin/master ancestry (not deployed by this job)."
+      - name: Copy inspect/backup helpers to NAS /tmp
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.NAS_HOST }}
+          port: ${{ secrets.NAS_PORT }}
+          username: ${{ secrets.NAS_USER }}
+          key: ${{ secrets.NAS_SSH_KEY }}
+          source: ".github/scripts/production-predeploy-remote.sh,.github/scripts/sqlite-readonly-inspect.mjs,.github/scripts/sqlite-online-backup.mjs,.github/scripts/sqlite-online-backup.py"
+          target: /tmp/5151-predeploy-helpers
+          overwrite: true
+      - name: Inspect Production v3, backup, read-only Wish Room
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.NAS_HOST }}
+          port: ${{ secrets.NAS_PORT }}
+          username: ${{ secrets.NAS_USER }}
+          key: ${{ secrets.NAS_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            # 不 docker compose up、不 pull、不重啟成新版、不印 secrets。
+            export INSPECT_SCRIPT=/tmp/5151-predeploy-helpers/.github/scripts/sqlite-readonly-inspect.mjs
+            export BACKUP_SCRIPT=/tmp/5151-predeploy-helpers/.github/scripts/sqlite-online-backup.mjs
+            export BACKUP_PY_SCRIPT=/tmp/5151-predeploy-helpers/.github/scripts/sqlite-online-backup.py
+            chmod +x /tmp/5151-predeploy-helpers/.github/scripts/production-predeploy-remote.sh
+            /tmp/5151-predeploy-helpers/.github/scripts/production-predeploy-remote.sh
+            rm -f /tmp/5151-predeploy-helpers/.github/scripts/sqlite-readonly-inspect.mjs \
+                  /tmp/5151-predeploy-helpers/.github/scripts/sqlite-online-backup.mjs \
+                  /tmp/5151-predeploy-helpers/.github/scripts/sqlite-online-backup.py
