@@ -202,7 +202,7 @@ jobs:
             import { DatabaseSync } from "node:sqlite";
             const db = new DatabaseSync(process.env.DB, { readOnly: true });
             const ic = db.prepare("PRAGMA integrity_check").get();
-            const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = \"table\" ORDER BY 1").all().map((r) => r.name);
+            const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = ? ORDER BY 1").all("table").map((r) => r.name);
             console.log(JSON.stringify({ integrity_check: ic.integrity_check, tables }));
             if (ic.integrity_check !== "ok") process.exit(1);
             if (!tables.includes("demand_posts") || !tables.includes("member_media")) process.exit(1);
