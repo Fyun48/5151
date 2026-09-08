@@ -96,19 +96,33 @@ export function makeGitRepo(repoPath, opts = {}) {
       return { files, insertions: ins, deletions: del };
     },
 
-    // 兩 SHA 間新增的行（給 secret/migration/config 掃描）。回傳 [{ path, line }]，有上限避免爆量。
-    addedLines(baseSha, headSha, { maxLines = 5000 } = {}) {
+    // 兩 SHA 間新增的行（給 secret/migration/config 掃描）。
+    // 決策用 scan metadata 與顯示裁切分離：達上限時標記 truncated，不得假裝掃描完整。
+    addedLinesScan(baseSha, headSha, { maxLines = 5000 } = {}) {
       const out = execFileSync("git", ["-C", repoPath, "diff", "--unified=0", baseSha, headSha], { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
-      const lines = []; let cur = null;
+      const lines = []; let cur = null; let truncated = false;
       for (const raw of out.split("\n")) {
         if (raw.startsWith("+++ b/")) { cur = raw.slice(6); continue; }
         if (raw.startsWith("+++ ")) { cur = raw.replace(/^\+\+\+\s+b?\/?/, ""); continue; }
         if (raw.startsWith("+") && !raw.startsWith("+++")) {
+          if (lines.length >= maxLines) { truncated = true; break; }
           lines.push({ path: cur, line: raw.slice(1) });
-          if (lines.length >= maxLines) break;
         }
       }
-      return lines;
+      return {
+        lines,
+        truncated,
+        added_line_count: lines.length,
+        max_lines: maxLines,
+        base_sha: String(baseSha),
+        head_sha: String(headSha),
+        scan_complete: !truncated,
+      };
+    },
+
+    // 相容舊呼叫端：只回傳行陣列。完整性請用 addedLinesScan。
+    addedLines(baseSha, headSha, opts) {
+      return this.addedLinesScan(baseSha, headSha, opts).lines;
     },
 
     // 建立 detached worktree（指定 SHA）供 QA 跑指令；不建立分支、不影響 master。

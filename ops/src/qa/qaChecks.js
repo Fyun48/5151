@@ -134,11 +134,27 @@ export function checkDependencyChange(ctx) {
 
 // 13. DATABASE_MIGRATION：偵測 schema/migration/破壞性 SQL 並輸出結構化證據（Phase 14 才做 Production clearance）。
 export function checkDatabaseMigration(ctx) {
+  const fileRecords = ctx.diff?.files || [];
+  const scan = ctx.addedLinesScan || {
+    lines: ctx.addedLines || [],
+    truncated: false,
+    added_line_count: (ctx.addedLines || []).length,
+    max_lines: null,
+    base_sha: ctx.codingTask?.base_sha || null,
+    head_sha: ctx.codingTask?.head_sha || null,
+    scan_complete: true,
+    provided_lists_are_complete: true,
+  };
   const evidence = buildDatabaseMigrationEvidence({
-    files: changedPaths(ctx.diff),
-    addedLines: ctx.addedLines || [],
+    files: fileRecords.map((f) => f.path),
+    fileRecords,
+    addedLines: scan.lines || ctx.addedLines || [],
+    scan,
   });
   if (evidence.destructive) return res("DATABASE_MIGRATION", "REVIEW", "high", "destructive/irreversible SQL detected (not rollback-safe)", evidence);
+  if (!evidence.scan_complete || !evidence.analysis_complete || evidence.unanalyzable) {
+    return res("DATABASE_MIGRATION", "WARN", "high", "migration evidence incomplete or unanalyzable (fail-closed)", evidence);
+  }
   if (evidence.schema || evidence.files.length || evidence.data_rewrite) {
     return res("DATABASE_MIGRATION", "WARN", "medium", evidence.data_rewrite ? "data rewrite/backfill detected" : "schema/migration change detected", evidence);
   }

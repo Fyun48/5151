@@ -115,6 +115,7 @@ function throwIfUnbound(reasons) {
     ["staging stale", /staging_not_fresh_pass|staging_missing/],
     ["release candidate stale", /release:/],
     ["cannot justify old authorization with newer provenance", /cannot_justify_old_authorization/],
+    ["approved migration evidence drifted from live QA", /approved_migration_evidence_drift/],
   ];
   for (const [msg, re] of map) {
     if (reasons.some((r) => re.test(r))) throw httpError(msg, 409);
@@ -126,6 +127,25 @@ function qaMigrationCheck(qa) {
   const detail = qa?.checks ? qa : null;
   const checks = detail?.checks || [];
   return checks.find((c) => c.check_type === "DATABASE_MIGRATION") || null;
+}
+
+function approvedMigrationFromManifest(rc) {
+  const content = parse(rc?.manifest_content);
+  return content?.database_config?.migration ?? null;
+}
+
+function migrationCheckIdentity(check) {
+  if (!check) return evidenceFingerprint({ missing: true });
+  return evidenceFingerprint(sanitizeMigrationEvidence({
+    status: check.status || null,
+    finding: check.finding || null,
+    evidence: check.evidence || null,
+  }));
+}
+
+function asQaCheck(mig) {
+  if (!mig) return null;
+  return { status: mig.status, finding: mig.finding, evidence: mig.evidence, severity: mig.severity };
 }
 
 function stagingMigrationCheck(staging) {
@@ -153,16 +173,21 @@ export function createMigrationSafetyAssessment(db, {
   const policy = buildMigrationSafetyPolicy(cfg);
   const policyFp = migrationSafetyPolicyFingerprint(policy);
   const { task, auth, rc, qa, staging, reasons } = boundContext(db, codingTaskId, expected, { repo, env });
+  const qaDetail = qa.checks ? qa : getQaRunDetail(db, Number(auth.qa_run_id));
+  const approvedMigration = approvedMigrationFromManifest(rc);
+  const liveMigration = qaMigrationCheck(qaDetail);
+  if (migrationCheckIdentity(approvedMigration) !== migrationCheckIdentity(liveMigration)) {
+    reasons.push("approved_migration_evidence_drift");
+  }
   throwIfUnbound(reasons);
 
-  const qaDetail = qa.checks ? qa : getQaRunDetail(db, Number(auth.qa_run_id));
   const binding = {
     artifactDigest: String(auth.artifact_digest),
     qaRunId: Number(auth.qa_run_id),
     stagingDeploymentId: Number(auth.staging_deployment_id),
   };
   const evaluated = evaluateMigrationSafety({
-    qaCheck: qaMigrationCheck(qaDetail),
+    qaCheck: asQaCheck(approvedMigration),
     stagingMigration: stagingMigrationCheck(staging),
     policy,
     binding,
@@ -170,10 +195,11 @@ export function createMigrationSafetyAssessment(db, {
   const snapshot = sanitizeMigrationEvidence({
     qa_run_id: Number(auth.qa_run_id),
     qa_status: qaDetail?.final_result || null,
-    qa_migration: qaMigrationCheck(qaDetail) ? {
-      status: qaMigrationCheck(qaDetail).status,
-      severity: qaMigrationCheck(qaDetail).severity,
-      finding: qaMigrationCheck(qaDetail).finding,
+    evidence_source: "approved_manifest_database_config_migration",
+    qa_migration: approvedMigration ? {
+      status: approvedMigration.status,
+      severity: approvedMigration.severity || null,
+      finding: approvedMigration.finding,
       evidence: evaluated.evidence,
     } : null,
     staging_deployment_id: Number(auth.staging_deployment_id),
@@ -299,9 +325,14 @@ function assessmentFreshness(db, row, { repo = null, env = process.env } = {}) {
   if (auth && !same(auth.manifest_hash, row.manifest_hash)) reasons.push("assessment_manifest_hash_drift");
   if (auth && !same(auth.head_sha, row.head_sha)) reasons.push("assessment_head_sha_drift");
   if (auth && !same(auth.artifact_digest, row.artifact_digest)) reasons.push("assessment_artifact_digest_drift");
-  if (qa) {
-    const live = evaluateMigrationSafety({
-      qaCheck: qaMigrationCheck(qa),
+  if (rc) {
+    const approvedMigration = approvedMigrationFromManifest(rc);
+    const liveMigration = qaMigrationCheck(qa);
+    if (migrationCheckIdentity(approvedMigration) !== migrationCheckIdentity(liveMigration)) {
+      reasons.push("approved_migration_evidence_drift");
+    }
+    const approvedEval = evaluateMigrationSafety({
+      qaCheck: asQaCheck(approvedMigration),
       stagingMigration: stagingMigrationCheck(staging),
       binding: {
         artifactDigest: String(row.artifact_digest),
@@ -312,12 +343,13 @@ function assessmentFreshness(db, row, { repo = null, env = process.env } = {}) {
     const snap = parse(row.evidence_snapshot);
     if (evidenceFingerprint(sanitizeMigrationEvidence({
       qa_run_id: Number(row.qa_run_id),
-      qa_status: qa.final_result || null,
-      qa_migration: qaMigrationCheck(qa) ? {
-        status: qaMigrationCheck(qa).status,
-        severity: qaMigrationCheck(qa).severity,
-        finding: qaMigrationCheck(qa).finding,
-        evidence: live.evidence,
+      qa_status: qa?.final_result || null,
+      evidence_source: "approved_manifest_database_config_migration",
+      qa_migration: approvedMigration ? {
+        status: approvedMigration.status,
+        severity: approvedMigration.severity || null,
+        finding: approvedMigration.finding,
+        evidence: approvedEval.evidence,
       } : null,
       staging_deployment_id: Number(row.staging_deployment_id),
       staging_migration: stagingMigrationCheck(staging) ? {
@@ -325,10 +357,10 @@ function assessmentFreshness(db, row, { repo = null, env = process.env } = {}) {
         severity: stagingMigrationCheck(staging).severity,
         finding: stagingMigrationCheck(staging).finding,
       } : null,
-      classification_reason: live.classification_reason,
-      clearance_reason: live.clearance_reason,
+      classification_reason: approvedEval.classification_reason,
+      clearance_reason: approvedEval.clearance_reason,
     })) !== evidenceFingerprint(snap || {})) {
-      reasons.push("qa_evidence_changed");
+      reasons.push("approved_assessment_snapshot_drift");
     }
   }
   if (row.policy_fingerprint && row.policy_fingerprint !== effectiveMigrationSafetyPolicyFingerprint(env)) {

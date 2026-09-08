@@ -10,7 +10,7 @@ process.env.EVALUATION_PROVIDER = "stub";
 process.env.PROPOSAL_PROVIDER = "stub";
 Object.assign(process.env, { STAGING_PROVIDER: "stub", STAGING_ENV_CLASS: "staging", STAGING_ENV_ID: "staging-1", STAGING_DB_CLASS: "disposable", STAGING_STORAGE_MODE: "isolated", STAGING_INTEGRATION_MODE: "sandbox", STAGING_MIGRATION_MODE: "isolated" });
 
-import { openOpsDb } from "../src/opsDb.js";
+import { openOpsDb, applyOpsSchema } from "../src/opsDb.js";
 import { calculateAndStoreImpact } from "../src/impact.js";
 import { runEvaluationOnce } from "../src/evaluationWorker.js";
 import { makeStubEvaluationProvider } from "../src/ai/evaluationProvider.js";
@@ -174,12 +174,14 @@ test("Phase 14 classify: additive shape without bound proofs stays blocked", () 
     policy: buildMigrationSafetyPolicy({ additiveRequiresRollbackProof: false, additiveRequiresOldCodeCompatProof: false }),
   });
   assert.equal(skipIgnored.clearance, CLEARANCE_RESULTS.BLOCKED_UNKNOWN);
-  const cleared = evaluateMigrationSafety({
+  const selfDeclared = evaluateMigrationSafety({
     qaCheck: { status: "WARN", evidence: { ...additiveEv, ...boundProofs({ artifact_digest: "sha256:abc", qa_run_id: 1, staging_deployment_id: 2 }) } },
     binding: { artifactDigest: "sha256:abc", qaRunId: 1, stagingDeploymentId: 2 },
   });
-  assert.equal(cleared.classification, MIGRATION_CLASSIFICATIONS.ADDITIVE_BACKWARD_COMPATIBLE);
-  assert.equal(cleared.clearance, CLEARANCE_RESULTS.CLEARED_ADDITIVE);
+  assert.equal(selfDeclared.classification, MIGRATION_CLASSIFICATIONS.ADDITIVE_BACKWARD_COMPATIBLE);
+  assert.equal(selfDeclared.clearance, CLEARANCE_RESULTS.BLOCKED_UNKNOWN);
+  assert.equal(selfDeclared.rollback_assessment.proven, false);
+  assert.equal(selfDeclared.compatibility_assessment.proven, false);
 });
 
 test("Phase 14 classify: data migration is fail-closed", () => {
@@ -267,7 +269,9 @@ test("policy fingerprint is deterministic and excludes secrets", () => {
   assert.equal(p.allow_data_migration_clearance, false);
   assert.equal(p.additive_requires_rollback_proof, true);
   assert.equal(p.additive_requires_old_code_compat_proof, true);
-  assert.equal(p.policy_version, "migration-safety-policy-v2");
+  assert.equal(p.policy_version, "migration-safety-policy-v3");
+  assert.equal(p.trusted_proof_verifier, null);
+  assert.equal(p.additive_clearance_requires_trusted_verifier, true);
 });
 
 // ── 整合：binding / freshness / immutability ──
@@ -292,11 +296,8 @@ test("NONE evidence on approved authorization → CLEARED_NO_MIGRATION; Phase 15
 test("additive / data / destructive / unknown create the expected clearance rows", async () => {
   const cases = [
     {
-      evFor: (authRow) => ({
-        ...buildDatabaseMigrationEvidence({ files: ["migrations/a.sql"], addedLines: ["CREATE TABLE extra (id INTEGER);"] }),
-        ...boundProofs(authRow),
-      }),
-      classification: "ADDITIVE_BACKWARD_COMPATIBLE", clearance: "CLEARED_ADDITIVE",
+      evFor: () => buildDatabaseMigrationEvidence({ files: ["migrations/a.sql"], addedLines: ["CREATE TABLE extra (id INTEGER);"] }),
+      classification: "ADDITIVE_BACKWARD_COMPATIBLE", clearance: "BLOCKED_UNKNOWN",
     },
     {
       evFor: () => buildDatabaseMigrationEvidence({ files: ["migrations/b.sql"], addedLines: ["UPDATE users SET name='x';"] }),
@@ -315,18 +316,14 @@ test("additive / data / destructive / unknown create the expected clearance rows
     const db = openOpsDb(":memory:");
     const { codingTaskId, repo, git } = await makeStagedTask(db);
     try {
+      patchQaMigration(db, codingTaskId, c.evFor(), c.classification === "DESTRUCTIVE_OR_IRREVERSIBLE" ? "REVIEW" : "WARN");
       const { authorization } = approve(db, codingTaskId, repo);
-      const authRow = db.prepare("SELECT * FROM production_release_authorization WHERE id=?").get(authorization.id);
-      patchQaMigration(db, codingTaskId, c.evFor(authRow), c.classification === "DESTRUCTIVE_OR_IRREVERSIBLE" ? "REVIEW" : "WARN");
       const created = createMigrationSafetyAssessment(db, { codingTaskId, repo, now: NOW, ...bind(authorization) });
       assert.equal(created.assessment.migration_classification, c.classification, c.classification);
       assert.equal(created.assessment.clearance_result, c.clearance, c.clearance);
       const elig = getPhase15ReleaseEligibility(db, phase15Ids(codingTaskId, authorization), { repo });
-      if (c.clearance.startsWith("CLEARED_")) assert.equal(elig.allowed, true);
-      else {
-        assert.equal(elig.allowed, false);
-        assert.equal(elig.reason, "phase14_clearance_blocked");
-      }
+      assert.equal(elig.allowed, false);
+      assert.equal(elig.reason, "phase14_clearance_blocked");
     } finally { git.cleanup(); db.close(); }
   }
 });
@@ -390,7 +387,7 @@ test("stale QA/staging/release evidence cannot create or stay fresh", async () =
   } finally { git.cleanup(); db.close(); }
 });
 
-test("same input fingerprint is idempotent; evidence change appends a new version", async () => {
+test("same input fingerprint is idempotent; live QA rewrite after Gate #2 cannot re-clear", async () => {
   const db = openOpsDb(":memory:");
   const { codingTaskId, repo, git } = await makeStagedTask(db);
   try {
@@ -399,12 +396,16 @@ test("same input fingerprint is idempotent; evidence change appends a new versio
     const a2 = createMigrationSafetyAssessment(db, { codingTaskId, repo, now: NOW, ...bind(authorization) });
     assert.equal(a2.idempotent, true);
     assert.equal(a2.assessment.id, a1.assessment.id);
-    patchQaMigration(db, codingTaskId, { schema: true, files: ["migrations/x.sql"] });
-    const a3 = createMigrationSafetyAssessment(db, { codingTaskId, repo, now: NOW, ...bind(authorization) });
-    assert.notEqual(a3.assessment.id, a1.assessment.id);
-    assert.equal(a3.assessment.assessment_version, 2);
-    assert.equal(a3.assessment.clearance_result, "BLOCKED_UNKNOWN");
-    assert.equal(db.prepare("SELECT COUNT(*) n FROM production_migration_safety_assessment WHERE release_authorization_id=?").get(authorization.id).n, 2);
+    const none = buildDatabaseMigrationEvidence({ files: [], addedLines: [] });
+    patchQaMigration(db, codingTaskId, none, "PASS");
+    assert.throws(
+      () => createMigrationSafetyAssessment(db, { codingTaskId, repo, now: NOW, ...bind(authorization) }),
+      /approved migration evidence drifted/,
+    );
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM production_migration_safety_assessment WHERE release_authorization_id=?").get(authorization.id).n, 1);
+    const cur = getCurrentMigrationSafety(db, codingTaskId, { repo });
+    assert.equal(cur.fresh, false);
+    assert.ok(cur.stale_reasons.includes("approved_migration_evidence_drift"));
   } finally { git.cleanup(); db.close(); }
 });
 
@@ -412,8 +413,8 @@ test("assessment body is immutable / append-only; no secrets or PII in snapshot"
   const db = openOpsDb(":memory:");
   const { codingTaskId, repo, git } = await makeStagedTask(db);
   try {
-    const { authorization } = approve(db, codingTaskId, repo);
     patchQaMigration(db, codingTaskId, { schema: true, files: ["migrations/x.sql"], contact: "leak@example.com", ssh_key: "SECRET", password: "pw" });
+    const { authorization } = approve(db, codingTaskId, repo);
     const created = createMigrationSafetyAssessment(db, { codingTaskId, repo, now: NOW, ...bind(authorization) });
     const raw = JSON.stringify(created.assessment.evidence_snapshot);
     assert.doesNotMatch(raw, /leak@example\.com/);
@@ -452,9 +453,9 @@ test("Phase 15 cannot consume missing/stale/blocked clearance", async () => {
     const missing = getPhase15ReleaseEligibility(db, { codingTaskId }, { repo });
     assert.equal(missing.allowed, false);
     assert.match(missing.reason, /identity_required|missing/);
+    patchQaMigration(db, codingTaskId, { destructive: true, files: ["x.sql"] }, "REVIEW");
     const { authorization } = approve(db, codingTaskId, repo);
     assert.equal(getPhase15ReleaseEligibility(db, phase15Ids(codingTaskId, authorization), { repo }).allowed, false);
-    patchQaMigration(db, codingTaskId, { destructive: true, files: ["x.sql"] }, "REVIEW");
     createMigrationSafetyAssessment(db, { codingTaskId, repo, now: NOW, ...bind(authorization) });
     const blocked = getPhase15ReleaseEligibility(db, phase15Ids(codingTaskId, authorization), { repo });
     assert.equal(blocked.allowed, false);
@@ -490,6 +491,186 @@ test("P1: Phase 15 assertion requires every identity; opts cannot override", asy
       assert.equal(mis.allowed, false, `mismatch ${key}`);
     }
     assertPhase15MigrationClearance(db, full, { repo });
+  } finally { git.cleanup(); db.close(); }
+});
+
+test("P1: ORM / dynamic SQL / truncated files / flags-only cannot clear as NONE", () => {
+  const orm = buildDatabaseMigrationEvidence({
+    files: ["v3/src/server.js"],
+    addedLines: ["await sequelize.sync({ force: true });"],
+  });
+  const ormR = evaluateMigrationSafety({ qaCheck: { status: orm.schema ? "WARN" : "PASS", evidence: orm } });
+  assert.notEqual(ormR.classification, MIGRATION_CLASSIFICATIONS.NONE);
+  assert.notEqual(ormR.clearance, CLEARANCE_RESULTS.CLEARED_NO_MIGRATION);
+  assert.equal(ormR.clearance, CLEARANCE_RESULTS.BLOCKED_UNKNOWN);
+
+  const dynamic = buildDatabaseMigrationEvidence({
+    files: ["v3/src/server.js"],
+    addedLines: ['const sql = "DR" + "OP TABLE users";', "db.exec(sql);"],
+  });
+  const dynR = evaluateMigrationSafety({ qaCheck: { status: dynamic.schema ? "WARN" : "PASS", evidence: dynamic } });
+  assert.notEqual(dynR.clearance, CLEARANCE_RESULTS.CLEARED_NO_MIGRATION);
+  assert.ok(["BLOCKED_UNKNOWN", "BLOCKED_DESTRUCTIVE"].includes(dynR.clearance));
+
+  const files = [...Array.from({ length: 40 }, (_, i) => `notes/${i}.md`), "migrations/041.sql"];
+  const dropped = buildDatabaseMigrationEvidence({ files, addedLines: [] });
+  assert.ok(dropped.files.includes("migrations/041.sql"));
+  const dropR = evaluateMigrationSafety({ qaCheck: { status: dropped.schema ? "WARN" : "PASS", evidence: dropped } });
+  assert.equal(dropR.clearance, CLEARANCE_RESULTS.BLOCKED_UNKNOWN);
+
+  const truncated = buildDatabaseMigrationEvidence({
+    files: ["notes/a.md"],
+    addedLines: ["const x = 1;"],
+    scan: { truncated: true, scan_complete: false, max_lines: 5000, added_line_count: 5000 },
+  });
+  const truncR = evaluateMigrationSafety({ qaCheck: { status: "PASS", evidence: truncated } });
+  assert.equal(truncR.clearance, CLEARANCE_RESULTS.BLOCKED_UNKNOWN);
+
+  const flagsOnly = evaluateMigrationSafety({
+    qaCheck: { status: "PASS", evidence: { evidence_schema_version: "migration-evidence-v1", scan_complete: true, analysis_complete: true } },
+  });
+  assert.equal(flagsOnly.classification, MIGRATION_CLASSIFICATIONS.UNKNOWN_OR_UNPROVEN);
+  assert.equal(flagsOnly.clearance, CLEARANCE_RESULTS.BLOCKED_UNKNOWN);
+});
+
+test("P1: self-declared rollback/compat proofs cannot clear additive", () => {
+  const additiveEv = buildDatabaseMigrationEvidence({
+    files: ["migrations/001_add_index.sql"],
+    addedLines: ["CREATE INDEX idx_x ON t(x);"],
+  });
+  const binding = { artifactDigest: "sha256:abcabcabcabcabcabcabcabcabcabcab", qaRunId: 1, stagingDeploymentId: 2 };
+  const fake = evaluateMigrationSafety({
+    qaCheck: { status: "WARN", evidence: { ...additiveEv, ...boundProofs({ artifact_digest: binding.artifactDigest, qa_run_id: 1, staging_deployment_id: 2 }) } },
+    binding,
+  });
+  assert.equal(fake.clearance, CLEARANCE_RESULTS.BLOCKED_UNKNOWN);
+  const unknownMethod = evaluateMigrationSafety({
+    qaCheck: {
+      status: "WARN",
+      evidence: {
+        ...additiveEv,
+        rollback_proof: { schema_version: "migration-rollback-proof-v1", verified: true, method: "xxx", bound_artifact_digest: binding.artifactDigest, bound_qa_run_id: 1, bound_staging_deployment_id: 2 },
+        old_code_compat_proof: { schema_version: "migration-compat-proof-v1", verified: true, method: "xxx", bound_artifact_digest: binding.artifactDigest, bound_qa_run_id: 1, bound_staging_deployment_id: 2 },
+      },
+    },
+    binding,
+  });
+  assert.equal(unknownMethod.clearance, CLEARANCE_RESULTS.BLOCKED_UNKNOWN);
+  const missingOutcome = evaluateMigrationSafety({
+    qaCheck: {
+      status: "WARN",
+      evidence: {
+        ...additiveEv,
+        rollback_proof: { ...boundProofs({ artifact_digest: binding.artifactDigest, qa_run_id: 1, staging_deployment_id: 2 }).rollback_proof, outcome: { passed: true } },
+      },
+    },
+    binding,
+  });
+  assert.equal(missingOutcome.clearance, CLEARANCE_RESULTS.BLOCKED_UNKNOWN);
+  const wrongBinding = evaluateMigrationSafety({
+    qaCheck: { status: "WARN", evidence: { ...additiveEv, ...boundProofs({ artifact_digest: "sha256:deadbeefdeadbeefdeadbeefdeadbeef", qa_run_id: 9, staging_deployment_id: 9 }) } },
+    binding,
+  });
+  assert.equal(wrongBinding.clearance, CLEARANCE_RESULTS.BLOCKED_UNKNOWN);
+});
+
+test("P1: repo→QA→Phase14 truncated scan with DROP at line 5001 is blocked", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "m14-trunc-"));
+  execFileSync("git", ["init", "-q", "-b", "master", dir]);
+  execFileSync("git", ["-C", dir, "config", "user.email", "t@t"]);
+  execFileSync("git", ["-C", dir, "config", "user.name", "t"]);
+  writeFileSync(path.join(dir, "README.md"), "base\n");
+  execFileSync("git", ["-C", dir, "add", "-A"]);
+  execFileSync("git", ["-C", dir, "commit", "-q", "-m", "base"]);
+  const base = execFileSync("git", ["-C", dir, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  mkdirSync(path.join(dir, "v3", "src"), { recursive: true });
+  const body = [...Array.from({ length: 5000 }, (_, i) => `const n${i} = ${i};`), "DROP TABLE users;"].join("\n") + "\n";
+  writeFileSync(path.join(dir, "v3/src/server.js"), body);
+  execFileSync("git", ["-C", dir, "add", "-A"]);
+  execFileSync("git", ["-C", dir, "commit", "-q", "-m", "add 5001 lines"]);
+  const head = execFileSync("git", ["-C", dir, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  try {
+    const repo = makeGitRepo(dir);
+    const scan = repo.addedLinesScan(base, head);
+    assert.equal(scan.truncated, true);
+    assert.equal(scan.scan_complete, false);
+    assert.equal(scan.added_line_count, 5000);
+    const diff = repo.numstatRange(base, head);
+    const check = checkDatabaseMigration({
+      diff,
+      addedLines: scan.lines,
+      addedLinesScan: scan,
+      codingTask: { base_sha: base, head_sha: head },
+    });
+    assert.equal(check.evidence.scan_complete, false);
+    const r = evaluateMigrationSafety({ qaCheck: check });
+    assert.notEqual(r.clearance, CLEARANCE_RESULTS.CLEARED_NO_MIGRATION);
+    assert.ok(["BLOCKED_UNKNOWN", "BLOCKED_DESTRUCTIVE"].includes(r.clearance));
+  } finally {
+    try { rmSync(dir, { recursive: true, force: true }); } catch { /* noop */ }
+  }
+});
+
+test("P1: Gate #2 snapshot drift and same-run QA rewrite cannot mint a fresh clearance", async () => {
+  const db = openOpsDb(":memory:");
+  const { codingTaskId, repo, git } = await makeStagedTask(db);
+  try {
+    patchQaMigration(db, codingTaskId, { schema: true, files: ["migrations/blocked.sql"] }, "WARN");
+    const { authorization } = approve(db, codingTaskId, repo);
+    const first = createMigrationSafetyAssessment(db, { codingTaskId, repo, now: NOW, ...bind(authorization) });
+    assert.equal(first.assessment.clearance_result, "BLOCKED_UNKNOWN");
+    const completeNone = buildDatabaseMigrationEvidence({ files: [], addedLines: [] });
+    patchQaMigration(db, codingTaskId, completeNone, "PASS");
+    assert.throws(
+      () => createMigrationSafetyAssessment(db, { codingTaskId, repo, now: NOW, ...bind(authorization) }),
+      /approved migration evidence drifted/,
+    );
+    const qa = db.prepare("SELECT qa_run_id FROM development_qa_current WHERE coding_task_id=?").get(codingTaskId);
+    const old = db.prepare("SELECT * FROM development_qa_check WHERE qa_run_id=? AND check_type='DATABASE_MIGRATION'").get(qa.qa_run_id);
+    db.prepare("DELETE FROM development_qa_check WHERE id=?").run(old.id);
+    db.prepare("INSERT INTO development_qa_check(qa_run_id, issue_id, coding_task_id, check_type, status, severity, finding, evidence, created_at) VALUES (?,?,?,?,?,?,?,?,?)")
+      .run(old.qa_run_id, old.issue_id, old.coding_task_id, "DATABASE_MIGRATION", "PASS", "none", "no database migration detected", JSON.stringify(completeNone), NOW.toISOString());
+    assert.throws(
+      () => createMigrationSafetyAssessment(db, { codingTaskId, repo, now: NOW, ...bind(authorization) }),
+      /approved migration evidence drifted/,
+    );
+    const cur = getCurrentMigrationSafety(db, codingTaskId, { repo });
+    assert.equal(cur.fresh, false);
+    assert.ok(cur.stale_reasons.includes("approved_migration_evidence_drift"));
+    assert.equal(cur.assessment.clearance_result, "BLOCKED_UNKNOWN");
+    const elig = getPhase15ReleaseEligibility(db, phase15Ids(codingTaskId, authorization), { repo });
+    assert.equal(elig.allowed, false);
+  } finally { git.cleanup(); db.close(); }
+});
+
+test("P1: assessment row is fully immutable including binding/history; old trigger is upgraded", async () => {
+  const db = openOpsDb(":memory:");
+  db.exec(`
+    DROP TRIGGER IF EXISTS migsafety_immutable;
+    CREATE TRIGGER migsafety_immutable BEFORE UPDATE ON production_migration_safety_assessment
+    WHEN (IFNULL(NEW.clearance_result,'') <> IFNULL(OLD.clearance_result,''))
+    BEGIN SELECT RAISE(ABORT, 'migration safety assessment is immutable'); END;
+  `);
+  applyOpsSchema(db);
+  const { codingTaskId, repo, git } = await makeStagedTask(db);
+  try {
+    const { authorization } = approve(db, codingTaskId, repo);
+    const created = createMigrationSafetyAssessment(db, { codingTaskId, repo, now: NOW, ...bind(authorization) });
+    const id = created.assessment.id;
+    const cols = db.prepare("PRAGMA table_info(production_migration_safety_assessment)").all().map((c) => c.name);
+    for (const col of cols) {
+      if (col === "id") continue;
+      assert.throws(() => db.prepare(`UPDATE production_migration_safety_assessment SET ${col}=${col} || '' WHERE id=?`).run(id), /immutable/, col);
+    }
+    assert.throws(() => db.prepare("UPDATE production_migration_safety_assessment SET issue_id=issue_id+1 WHERE id=?").run(id), /immutable/);
+    assert.throws(() => db.prepare("UPDATE production_migration_safety_assessment SET coding_task_id=coding_task_id+1 WHERE id=?").run(id), /immutable/);
+    assert.throws(() => db.prepare("UPDATE production_migration_safety_assessment SET release_manifest_version=release_manifest_version+1 WHERE id=?").run(id), /immutable/);
+    assert.throws(() => db.prepare("UPDATE production_migration_safety_assessment SET policy_version='x' WHERE id=?").run(id), /immutable/);
+    assert.throws(() => db.prepare("UPDATE production_migration_safety_assessment SET assessment_version=assessment_version+1 WHERE id=?").run(id), /immutable/);
+    assert.throws(() => db.prepare("UPDATE production_migration_safety_assessment SET created_at='1999-01-01T00:00:00.000Z' WHERE id=?").run(id), /immutable/);
+    assert.throws(() => db.prepare("DELETE FROM production_migration_safety_assessment WHERE id=?").run(id), /append-only/);
+    db.prepare("UPDATE production_migration_safety_current SET updated_at=? WHERE coding_task_id=?").run("2026-07-01T00:00:00.000Z", codingTaskId);
+    assert.equal(db.prepare("SELECT updated_at FROM production_migration_safety_current WHERE coding_task_id=?").get(codingTaskId).updated_at, "2026-07-01T00:00:00.000Z");
   } finally { git.cleanup(); db.close(); }
 });
 

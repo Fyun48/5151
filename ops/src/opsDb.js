@@ -956,24 +956,9 @@ export function applyOpsSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_migsafety_auth ON production_migration_safety_assessment(release_authorization_id, id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_migsafety_input_fp ON production_migration_safety_assessment(input_fingerprint);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_migsafety_auth_version ON production_migration_safety_assessment(release_authorization_id, assessment_version);
-    -- 評估本體不可變：classification / clearance / evidence / binding 不得 UPDATE。
+    -- 評估本體全欄位不可變（canonical pointer 在 production_migration_safety_current）。
+    -- 實際 trigger 由 upgradeMigrationSafetyImmutability() 每次套用，以升級舊的部分欄位 WHEN 子句。
     CREATE TRIGGER IF NOT EXISTS migsafety_immutable BEFORE UPDATE ON production_migration_safety_assessment
-    WHEN (
-      IFNULL(NEW.migration_classification,'') <> IFNULL(OLD.migration_classification,'')
-      OR IFNULL(NEW.clearance_result,'') <> IFNULL(OLD.clearance_result,'')
-      OR IFNULL(NEW.evidence_snapshot,'') <> IFNULL(OLD.evidence_snapshot,'')
-      OR IFNULL(NEW.rollback_assessment,'') <> IFNULL(OLD.rollback_assessment,'')
-      OR IFNULL(NEW.compatibility_assessment,'') <> IFNULL(OLD.compatibility_assessment,'')
-      OR IFNULL(NEW.input_fingerprint,'') <> IFNULL(OLD.input_fingerprint,'')
-      OR IFNULL(NEW.policy_fingerprint,'') <> IFNULL(OLD.policy_fingerprint,'')
-      OR IFNULL(NEW.manifest_hash,'') <> IFNULL(OLD.manifest_hash,'')
-      OR IFNULL(NEW.head_sha,'') <> IFNULL(OLD.head_sha,'')
-      OR IFNULL(NEW.artifact_digest,'') <> IFNULL(OLD.artifact_digest,'')
-      OR IFNULL(NEW.release_authorization_id,0) <> IFNULL(OLD.release_authorization_id,0)
-      OR IFNULL(NEW.release_manifest_id,0) <> IFNULL(OLD.release_manifest_id,0)
-      OR IFNULL(NEW.qa_run_id,0) <> IFNULL(OLD.qa_run_id,0)
-      OR IFNULL(NEW.staging_deployment_id,0) <> IFNULL(OLD.staging_deployment_id,0)
-    )
     BEGIN SELECT RAISE(ABORT, 'migration safety assessment is immutable'); END;
     CREATE TRIGGER IF NOT EXISTS migsafety_no_delete BEFORE DELETE ON production_migration_safety_assessment
     BEGIN SELECT RAISE(ABORT, 'migration safety assessment is append-only'); END;
@@ -1008,7 +993,20 @@ export function applyOpsSchema(db) {
     CREATE TRIGGER IF NOT EXISTS state_transition_no_delete BEFORE DELETE ON state_transition
       BEGIN SELECT RAISE(ABORT, 'state_transition is append-only'); END;
   `);
+  upgradeMigrationSafetyImmutability(db);
   return db;
+}
+
+// CREATE TRIGGER IF NOT EXISTS 不會升級已存在的舊 trigger；每次開庫重裝全欄位不可變。
+export function upgradeMigrationSafetyImmutability(db) {
+  db.exec(`
+    DROP TRIGGER IF EXISTS migsafety_immutable;
+    DROP TRIGGER IF EXISTS migsafety_no_delete;
+    CREATE TRIGGER migsafety_immutable BEFORE UPDATE ON production_migration_safety_assessment
+    BEGIN SELECT RAISE(ABORT, 'migration safety assessment is immutable'); END;
+    CREATE TRIGGER migsafety_no_delete BEFORE DELETE ON production_migration_safety_assessment
+    BEGIN SELECT RAISE(ABORT, 'migration safety assessment is append-only'); END;
+  `);
 }
 
 // 開一個 ops 資料庫。dbPath = ":memory:" 供測試使用。

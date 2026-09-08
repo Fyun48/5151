@@ -8,11 +8,14 @@ import {
 // Phase 14：版本化、決定性、fail-closed 的 Production DB migration safety 政策。
 // AI/LLM 不得做 PASS 決策。證據不足 → UNKNOWN / BLOCKED，不得猜安全。
 // 不新增第三個人工 Gate；Owner Gate #2 仍是最後的人工作業核准。
-// v2：分類與 rollback/compat proof 分離；禁止 env skip flags；缺失 evidence 不得當成 NONE。
+// v3：缺失/截斷/ORM/動態 SQL 不得當成 NONE；本期沒有可信 deterministic verifier，
+// additive 維持 BLOCKED_UNKNOWN（不接受自填 verified=true / 任意 method）。
 
-export const MIGRATION_SAFETY_POLICY_VERSION = "migration-safety-policy-v2";
+export const MIGRATION_SAFETY_POLICY_VERSION = "migration-safety-policy-v3";
 export const ROLLBACK_PROOF_SCHEMA_VERSION = "migration-rollback-proof-v1";
 export const COMPAT_PROOF_SCHEMA_VERSION = "migration-compat-proof-v1";
+export const TRUSTED_PROOF_VERIFIER = null;
+const ALLOWED_PROOF_METHODS = Object.freeze([]);
 export { MIGRATION_CLASSIFICATIONS };
 
 export const CLEARANCE_RESULTS = Object.freeze({
@@ -69,6 +72,9 @@ export function buildMigrationSafetyPolicy(cfg = migrationSafetyConfigFromEnv())
     ].sort(),
     rollback_proof_schema_version: ROLLBACK_PROOF_SCHEMA_VERSION,
     compat_proof_schema_version: COMPAT_PROOF_SCHEMA_VERSION,
+    trusted_proof_verifier: TRUSTED_PROOF_VERIFIER,
+    allowed_proof_methods: [...ALLOWED_PROOF_METHODS],
+    additive_clearance_requires_trusted_verifier: true,
   };
 }
 
@@ -84,13 +90,18 @@ function same(a, b) { return String(a ?? "") === String(b ?? ""); }
 function sameNum(a, b) { return Number(a) === Number(b); }
 
 export function validBoundProofShape(proof, schemaVersion) {
+  if (!TRUSTED_PROOF_VERIFIER) return false;
   if (!proof || typeof proof !== "object" || Array.isArray(proof)) return false;
   if (proof.schema_version !== schemaVersion) return false;
   if (proof.verified !== true) return false;
   if (!proof.bound_artifact_digest || String(proof.bound_artifact_digest) === "latest") return false;
   if (proof.bound_qa_run_id == null || Number(proof.bound_qa_run_id) <= 0) return false;
   if (proof.bound_staging_deployment_id == null || Number(proof.bound_staging_deployment_id) <= 0) return false;
-  if (!proof.method || String(proof.method).length < 3) return false;
+  if (!ALLOWED_PROOF_METHODS.includes(String(proof.method || ""))) return false;
+  if (!proof.outcome || proof.outcome.passed !== true) return false;
+  if (!proof.source_record_hash || !/^[a-f0-9]{32,}$/i.test(String(proof.source_record_hash))) return false;
+  if (!proof.content_hash || !/^[a-f0-9]{32,}$/i.test(String(proof.content_hash))) return false;
+  if (!proof.verifier || proof.verifier !== TRUSTED_PROOF_VERIFIER) return false;
   return true;
 }
 
@@ -150,7 +161,7 @@ export function classifyMigration({ qaCheck = null, stagingMigration = null } = 
     && !ev.additive_only && !ev.proven_additive
     && ev.statement_counts.additive === 0 && ev.statement_counts.data === 0
     && ev.statement_counts.destructive === 0 && ev.statement_counts.unknown === 0;
-  if (ev.scan_complete && ev.analysis_complete && noSignal) {
+  if (ev.evidence_complete && ev.scan_complete && ev.analysis_complete && !ev.unanalyzable && noSignal) {
     return { classification: MIGRATION_CLASSIFICATIONS.NONE, reason: "complete_no_migration_scan", evidence: ev };
   }
 
@@ -176,7 +187,7 @@ export function assessRollback(classification, ev = {}, binding = null) {
     return {
       status: proven ? "BOUND_ROLLBACK_PROOF_VERIFIED" : "UNPROVEN",
       proven,
-      reason: proven ? "versioned_bound_rollback_proof" : "rollback_proof_missing_or_unbound",
+      reason: proven ? "versioned_bound_rollback_proof" : "no_trusted_rollback_verifier_this_phase",
     };
   }
   return { status: "UNPROVEN", proven: false, reason: "classification_unproven" };
@@ -197,7 +208,7 @@ export function assessCompatibility(classification, ev = {}, binding = null) {
     return {
       status: proven ? "BOUND_COMPAT_PROOF_VERIFIED" : "UNPROVEN",
       proven,
-      reason: proven ? "versioned_bound_old_code_compat_proof" : "compat_proof_missing_or_unbound",
+      reason: proven ? "versioned_bound_old_code_compat_proof" : "no_trusted_compat_verifier_this_phase",
     };
   }
   return { status: "UNPROVEN", proven: false, reason: "classification_unproven" };
@@ -214,6 +225,9 @@ export function decideClearance({ classification, rollback, compatibility }) {
     return { clearance: CLEARANCE_RESULTS.BLOCKED_DATA_MIGRATION_UNPROVEN, reason: "data_migration_fail_closed" };
   }
   if (classification === MIGRATION_CLASSIFICATIONS.ADDITIVE_BACKWARD_COMPATIBLE) {
+    if (!TRUSTED_PROOF_VERIFIER) {
+      return { clearance: CLEARANCE_RESULTS.BLOCKED_UNKNOWN, reason: "additive_blocked_no_trusted_verifier" };
+    }
     if (rollback?.proven === true && compatibility?.proven === true) {
       return { clearance: CLEARANCE_RESULTS.CLEARED_ADDITIVE, reason: "additive_bound_rollback_and_compat_proven" };
     }

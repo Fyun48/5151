@@ -150,9 +150,15 @@ export async function executeQaRun(db, runRow, { repo, reviewProvider = null, en
     try { const pj = repo.readFileAt(worktree, "package.json"); if (pj) packageScripts = JSON.parse(pj).scripts || {}; } catch { packageScripts = {}; }
     const hasDeploySafetyTest = repo.readFileAt(worktree, "test/deploy-safety.test.js") != null;
     const diff = repo.numstatRange(run.base_sha, run.head_sha);
-    const addedLines = repo.addedLines(run.base_sha, run.head_sha);
+    const addedLinesScan = repo.addedLinesScan ? repo.addedLinesScan(run.base_sha, run.head_sha) : {
+      lines: repo.addedLines(run.base_sha, run.head_sha),
+      truncated: false,
+      scan_complete: false,
+      inferred_incomplete: true,
+    };
+    const addedLines = addedLinesScan.lines || [];
     const runCommand = makeCommandRunner({ cwd: worktree, timeoutMs: cfg.commandTimeoutMs, env });
-    const ctx = { codingTask: taskPublicForCtx(task), snapshot: safeSnapshot(task), diff, addedLines, policy: cfg, packageScripts, runCommand, hasDeploySafetyTest };
+    const ctx = { codingTask: taskPublicForCtx(task), snapshot: safeSnapshot(task), diff, addedLines, addedLinesScan, policy: cfg, packageScripts, runCommand, hasDeploySafetyTest };
 
     const checks = runAllChecks(ctx);
 
