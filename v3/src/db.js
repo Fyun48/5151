@@ -3090,7 +3090,7 @@ export function enqueueListingEvent(listing, event) {
       to: getUserById(userId)?.email,
       configured: getMemberMailBundle(userId).configured,
     })) continue;
-    if (groupId && alreadyNotifiedGroup(db, userId, groupId, payload.type)) continue;
+    if (groupId && alreadyNotifiedGroup(db, userId, groupId, payload.type, payload.detail)) continue;
     if (payload.type === "new") {
       const alreadyNew = db.prepare(
         "SELECT id FROM user_events WHERE user_id = ? AND post_id = ? AND type = 'new' LIMIT 1",

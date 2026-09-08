@@ -8,6 +8,7 @@ import {
   collapseGroupSources,
   ensureListingGroupSchema,
   groupIdForPost,
+  pickCanonicalGroupId,
   refreshGroupPrimary,
   watchedInGroup,
 } from "../src/listingGroups.js";
@@ -39,6 +40,7 @@ function open() {
       user_id INTEGER,
       post_id INTEGER,
       type TEXT,
+      detail TEXT NOT NULL DEFAULT '',
       group_id TEXT NOT NULL DEFAULT '',
       notify_profile_id TEXT NOT NULL DEFAULT '',
       notify_profile_version INTEGER NOT NULL DEFAULT 0
@@ -111,7 +113,79 @@ test("group notify is recorded once per type", () => {
   const db = open();
   db.prepare("INSERT INTO user_events(user_id, post_id, type, group_id) VALUES (1, 11, 'new', 'lg_x')").run();
   assert.equal(alreadyNotifiedGroup(db, 1, "lg_x", "new"), true);
-  assert.equal(alreadyNotifiedGroup(db, 1, "lg_x", "price"), false);
+  assert.equal(alreadyNotifiedGroup(db, 1, "lg_x", "price_drop", "20000 → 19000"), false);
   assert.equal(alreadyNotifiedGroup(db, 2, "lg_x", "new"), false);
+  db.close();
+});
+
+test("merging groups migrates active watches to the deterministic canonical id", () => {
+  const db = open();
+  const early = [
+    { post_id: 21, title: "A1", url: "https://a1", price_num: 20000, source: "591" },
+    { post_id: 22, title: "A2", url: "https://a2", price_num: 21000, source: "sinyi" },
+  ];
+  const late = [
+    { post_id: 31, title: "B1", url: "https://b1", price_num: 20500, source: "housefun" },
+    { post_id: 32, title: "B2", url: "https://b2", price_num: 21500, source: "rakuya" },
+  ];
+  early.forEach((row) => insert(db, row));
+  late.forEach((row) => insert(db, row));
+  const groupA = bindListingsToGroup(db, early, { now: "2026-01-01T00:00:00.000Z" });
+  const groupB = bindListingsToGroup(db, late, { now: "2026-06-01T00:00:00.000Z" });
+  assert.notEqual(groupA, groupB);
+  assert.equal(pickCanonicalGroupId(db, [groupB, groupA]), groupA);
+
+  db.prepare("INSERT INTO user_listing_flags(user_id, post_id, watched, watch_group_id) VALUES (9, 31, 1, ?)").run(groupB);
+  db.prepare("INSERT INTO user_listing_flags(user_id, post_id, watched, watch_group_id) VALUES (9, 21, 0, ?)").run(groupA);
+  db.prepare("INSERT INTO user_listing_flags(user_id, post_id, watched, watch_group_id) VALUES (9, 32, 0, ?)").run(groupB);
+  db.prepare("INSERT INTO user_events(user_id, post_id, type, detail, group_id) VALUES (9, 31, 'price_drop', '21000 → 20500', ?)").run(groupB);
+
+  const mergedFirst = bindListingsToGroup(db, [late[0], early[0]], { now: "2026-09-01T00:00:00.000Z" });
+  const mergedAgain = bindListingsToGroup(db, [early[1], late[1]], { now: "2026-09-02T00:00:00.000Z" });
+  assert.equal(mergedFirst, groupA);
+  assert.equal(mergedAgain, groupA);
+  assert.equal(groupIdForPost(db, 31), groupA);
+  assert.equal(groupIdForPost(db, 32), groupA);
+  assert.equal(watchedInGroup(db, 9, groupA), true);
+  assert.equal(watchedInGroup(db, 9, groupB), false);
+  assert.equal(
+    db.prepare("SELECT watch_group_id FROM user_listing_flags WHERE user_id = 9 AND post_id = 31").get().watch_group_id,
+    groupA,
+  );
+  assert.equal(
+    db.prepare("SELECT watch_group_id FROM user_listing_flags WHERE user_id = 9 AND post_id = 32").get().watch_group_id,
+    groupB,
+    "inactive watch_group_id is not rewritten",
+  );
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM listing_groups WHERE group_id = ?").get(groupB).n, 0);
+  assert.equal(
+    db.prepare("SELECT group_id FROM user_events WHERE user_id = 9 AND type = 'price_drop'").get().group_id,
+    groupA,
+  );
+  db.close();
+});
+
+test("mutable group events dedupe by semantic detail, not forever by type", () => {
+  const db = open();
+  const gid = "lg_price";
+  assert.equal(alreadyNotifiedGroup(db, 4, gid, "price_drop", "20000 → 19000"), false);
+  db.prepare(
+    "INSERT INTO user_events(user_id, post_id, type, detail, group_id) VALUES (4, 101, 'price_drop', '20000 → 19000', ?)",
+  ).run(gid);
+  assert.equal(alreadyNotifiedGroup(db, 4, gid, "price_drop", "20000 → 19000"), true, "same change from a peer is dropped");
+  assert.equal(alreadyNotifiedGroup(db, 4, gid, "price_drop", "20000→19000"), true, "whitespace-normalized duplicate");
+  assert.equal(alreadyNotifiedGroup(db, 4, gid, "price_drop", "19000 → 18000"), false, "later distinct drop still enqueues");
+  db.prepare(
+    "INSERT INTO user_events(user_id, post_id, type, detail, group_id) VALUES (4, 102, 'price_drop', '19000 → 18000', ?)",
+  ).run(gid);
+  assert.equal(alreadyNotifiedGroup(db, 4, gid, "price_drop", "19000 → 18000"), true);
+  assert.equal(
+    alreadyNotifiedGroup(db, 4, gid, "price_drop", "20000 → 19000"),
+    true,
+    "delayed peer of an earlier change is still a duplicate fingerprint",
+  );
+  assert.equal(alreadyNotifiedGroup(db, 4, gid, "new"), false);
+  db.prepare("INSERT INTO user_events(user_id, post_id, type, detail, group_id) VALUES (4, 101, 'new', '', ?)").run(gid);
+  assert.equal(alreadyNotifiedGroup(db, 4, gid, "new", "anything"), true, "new stays once-ever");
   db.close();
 });
