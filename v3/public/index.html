@@ -329,7 +329,9 @@
     body.role-guest #selfListingForm,
     body.role-guest #importSponsorTools,
     body.role-guest #listingTools,
-    body.role-guest #demandForm { display: none !important; }
+    body.role-guest #demandForm,
+    body.role-guest #wishOwnerBar,
+    body.role-guest #wishFormWrap { display: none !important; }
     body:not(.role-guest) #selfGuestHint,
     body:not(.role-guest) #selfGuestHintDemand { display: none; }
     html.has-session #loginBtn,
@@ -1208,6 +1210,31 @@
     .self-mine-card .row input[type="text"] { flex: 1 1 12rem; width: auto; min-width: 0; }
     #demandPanel .self-grid .pledge-row { margin: 0; align-items: center; }
     #demandPanel .self-grid .pledge-row input { margin-top: 0; }
+    .wish-toolbar, .wish-filters {
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 12px;
+    }
+    .wish-filters label { margin: 0; font-size: var(--text-xs); color: var(--muted); }
+    .wish-filters input, .wish-filters select { min-height: var(--touch); }
+    .wish-card {
+      margin: 8px 0 0; padding: 12px 14px;
+      border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--paper);
+    }
+    .wish-card strong { display: block; margin-bottom: 4px; }
+    .wish-card .muted { margin: 2px 0; }
+    .wish-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 0; }
+    .wish-chip {
+      border: 1px solid var(--line); background: var(--accent-mist); color: var(--accent-deep);
+      border-radius: 999px; padding: 4px 8px; font-size: var(--text-xs);
+    }
+    .wish-chip.nice { background: var(--paper); color: var(--ink); }
+    .wish-chip.avoid { background: var(--line); color: var(--muted); }
+    .wish-cond-btn {
+      min-height: var(--touch); border: 1px solid var(--line); background: var(--paper);
+      border-radius: 999px; padding: 6px 10px; font-size: var(--text-xs); color: var(--ink);
+    }
+    .wish-cond-btn[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-deep); }
+    .wish-empty { padding: 20px 8px; color: var(--muted); line-height: 1.6; }
+    #wishFormWrap[hidden], #wishDetailOverlay[hidden] { display: none !important; }
     .self-photos {
       display: flex;
       gap: 8px;
@@ -2706,47 +2733,155 @@
   </div>
   <section class="app-view" id="demandView">
     <div class="card panel" id="demandPanel">
-      <h2 style="margin:0 0 8px">需求專區</h2>
-      <p class="hint" id="selfGuestHintDemand">登入後才能刊登需求（不是仲介、沒有私訊）。</p>
-      <p class="hint" id="demandLegal">這是免費找房工具，不是仲介、不經手金錢。需求牆是公開留言板。全站使用條款以註冊時同意的版本為準。</p>
-      <p class="hint"><a href="/terms.html?type=registration_terms" target="_blank" rel="noopener">閱讀目前有效的免責聲明</a></p>
-      <p class="hint" id="demandAudit">訪客可看全部需求。發文、回覆需登入；新帳號須滿 24 小時。同時最多 2 則未過期需求，14 天後失效。</p>
-      <form id="demandForm">
-        <div class="self-grid">
-          <div>
-            <label>租金上限</label>
-            <input type="number" id="demandRentMax" min="0" step="500" placeholder="例如 28000" />
+      <h2 style="margin:0 0 8px">許願房</h2>
+      <p class="hint" id="selfGuestHintDemand">訪客可看公開許願房。登入後才能建立或編輯（不是仲介、沒有私訊）。</p>
+      <p class="hint"><a href="/terms.html?type=wish_room_rules" target="_blank" rel="noopener">許願房規則</a> · <a href="/terms.html?type=registration_terms" target="_blank" rel="noopener">閱讀目前有效的免責聲明</a></p>
+      <div class="wish-toolbar" id="wishOwnerBar" hidden>
+        <button type="button" class="primary" id="wishCreateBtn">建立我的許願房</button>
+        <button type="button" class="ghost" id="wishViewBtn" hidden>查看</button>
+        <button type="button" class="ghost" id="wishEditBtn" hidden>編輯</button>
+        <button type="button" class="ghost" id="wishCloseBtn" hidden>下架</button>
+        <button type="button" class="ghost" id="wishReopenBtn" hidden>重新公開</button>
+        <button type="button" class="ghost" id="wishSaveExampleBtn" hidden>儲存為範例</button>
+        <button type="button" class="ghost" id="wishLoadExampleBtn" hidden>載入範例</button>
+        <button type="button" class="ghost" id="wishDeleteExampleBtn" hidden>刪除範例</button>
+      </div>
+      <div class="wish-filters" id="wishFilters">
+        <label for="wishFilterCity">縣市</label>
+        <select id="wishFilterCity"><option value="">不限縣市</option></select>
+        <label for="wishFilterRentMin">預算</label>
+        <input type="number" id="wishFilterRentMin" min="0" step="500" placeholder="最低" inputmode="numeric" />
+        <input type="number" id="wishFilterRentMax" min="0" step="500" placeholder="最高" inputmode="numeric" />
+        <label for="wishFilterHousing">類型</label>
+        <select id="wishFilterHousing"><option value="any">不限類型</option></select>
+        <button type="button" class="ghost" id="wishFilterApply">篩選</button>
+      </div>
+      <div class="list" id="demandList" style="padding-top:4px"><div class="empty">載入許願房…</div></div>
+      <div id="wishFormWrap" hidden>
+        <form id="demandForm">
+          <div class="self-grid">
+            <div>
+              <label for="wishCity">希望縣市</label>
+              <select id="wishCity"></select>
+            </div>
+            <div>
+              <label for="demandHousing">房屋類型</label>
+              <select id="demandHousing">
+                <option value="any">不限</option>
+                <option value="whole">整層住家</option>
+                <option value="suite">獨立套房</option>
+                <option value="share">分租套房</option>
+                <option value="room">雅房</option>
+                <option value="elevator">電梯大樓</option>
+                <option value="apartment">公寓</option>
+                <option value="other">其他</option>
+              </select>
+            </div>
+            <div>
+              <label for="demandRentMin">最低月租</label>
+              <input type="number" id="demandRentMin" min="0" step="500" placeholder="例如 18000" />
+            </div>
+            <div>
+              <label for="demandRentMax">最高月租</label>
+              <input type="number" id="demandRentMax" min="0" step="500" placeholder="例如 28000" />
+            </div>
+            <div class="span-all">
+              <label class="pledge-row"><input type="checkbox" id="wishIncludesFee" /> <span>預算含水電／管理費</span></label>
+            </div>
+            <div>
+              <label for="wishPingMin">最小可用坪數</label>
+              <input type="number" id="wishPingMin" min="0" step="0.5" placeholder="選填" />
+            </div>
+            <div>
+              <label for="wishLayout">希望格局</label>
+              <select id="wishLayout">
+                <option value="">不限</option>
+                <option value="1">1 房</option>
+                <option value="2">2 房</option>
+                <option value="3">3 房</option>
+                <option value="4plus">4 房以上</option>
+              </select>
+            </div>
+            <div>
+              <label for="wishMoveIn">希望入住日</label>
+              <input type="date" id="wishMoveIn" />
+            </div>
+            <div>
+              <label for="wishLease">希望租期</label>
+              <select id="wishLease">
+                <option value="">不限</option>
+                <option value="short">短期（未滿一年）</option>
+                <option value="year">約一年</option>
+                <option value="long">一年以上</option>
+              </select>
+            </div>
+            <div class="span-all">
+              <label for="wishLocationNote">補充地點</label>
+              <input type="text" id="wishLocationNote" maxlength="80" placeholder="例如近士林夜市、可接受鄰近行政區" />
+            </div>
+            <div>
+              <label for="wishTransit">捷運／車站</label>
+              <input type="text" id="wishTransit" maxlength="80" placeholder="例如劍潭站、士林站" />
+            </div>
+            <div>
+              <label for="wishDestination">常去地點</label>
+              <input type="text" id="wishDestination" maxlength="80" placeholder="公司、學校或其他" />
+            </div>
+            <div>
+              <label for="wishCommute">可接受通勤（分鐘）</label>
+              <input type="number" id="wishCommute" min="0" max="180" placeholder="選填" />
+            </div>
+            <div class="span-all">
+              <label class="pledge-row"><input type="checkbox" id="demandMrt" /> <span>需要可步行捷運（未滿 1.5 公里）</span></label>
+            </div>
+            <div class="span-all">
+              <label>行政區</label>
+              <div id="demandDistricts"></div>
+            </div>
+            <div class="span-all">
+              <p class="hint">點一下條件，在必須有／希望有／不接受之間切換。不用全勾。</p>
+            </div>
+            <div class="span-all">
+              <label>必須有</label>
+              <div class="wish-chips" id="wishMust" data-wish-group="must_have"></div>
+            </div>
+            <div class="span-all">
+              <label>希望有</label>
+              <div class="wish-chips" id="wishNice" data-wish-group="nice_to_have"></div>
+            </div>
+            <div class="span-all">
+              <label>不接受</label>
+              <div class="wish-chips" id="wishAvoid" data-wish-group="avoid"></div>
+            </div>
+            <div class="span-all">
+              <label for="demandBody">補充說明（最多 800 字）</label>
+              <textarea id="demandBody" maxlength="800" placeholder="用自己的話說明找房需要。請只寫房屋與通勤條件。"></textarea>
+            </div>
+            <div>
+              <label for="wishContactName">公開稱呼（選填）</label>
+              <input type="text" id="wishContactName" maxlength="80" placeholder="例如 小陳" />
+            </div>
+            <div>
+              <label for="wishContactPhone">公開電話（選填）</label>
+              <input type="text" id="wishContactPhone" maxlength="40" inputmode="tel" />
+            </div>
+            <div class="span-all">
+              <label for="wishContactLine">LINE 連結（選填）</label>
+              <input type="text" id="wishContactLine" maxlength="300" placeholder="https://line.me/…" />
+            </div>
+            <div class="span-all row">
+              <label class="visually-hidden" for="wishContactPick">套用已存聯絡人</label>
+              <select id="wishContactPick"><option value="">套用我的聯絡人</option></select>
+              <button type="button" class="ghost" id="wishContactApply">套用快選</button>
+            </div>
           </div>
-          <div>
-            <label>房屋類型</label>
-            <select id="demandHousing">
-              <option value="any">不限</option>
-              <option value="elevator">電梯大樓</option>
-              <option value="apartment">公寓</option>
-              <option value="suite">套房</option>
-              <option value="whole">整層住家</option>
-              <option value="shop">店面</option>
-              <option value="warehouse">倉庫</option>
-            </select>
+          <div class="row" style="margin-top:10px">
+            <button type="submit" class="primary" id="demandSubmit">公開許願房</button>
+            <button type="button" class="ghost" id="wishCancelEdit">取消</button>
+            <span class="save-msg" id="demandMsg" role="status" aria-live="polite"></span>
           </div>
-          <div class="span-all">
-            <label class="pledge-row"><input type="checkbox" id="demandMrt" /> <span>需要可步行捷運（未滿 1.5 公里）</span></label>
-          </div>
-          <div class="span-all">
-            <label>行政區</label>
-            <div id="demandDistricts"></div>
-          </div>
-          <div class="span-all">
-            <label>短述（最多 280 字）</label>
-            <textarea id="demandBody" maxlength="280" placeholder="例如：士林／北投，兩房，近捷運，可養小型寵物"></textarea>
-          </div>
-        </div>
-        <div class="row" style="margin-top:10px">
-          <button type="submit" class="primary" id="demandSubmit">刊登需求</button>
-          <span class="save-msg" id="demandMsg"></span>
-        </div>
-      </form>
-      <div class="list" id="demandList" style="padding-top:12px"><div class="empty">載入需求…</div></div>
+        </form>
+      </div>
     </div>
   </section>
   <section class="app-view" id="notifyView">
@@ -3053,10 +3188,23 @@
   <nav class="bottom-nav" id="bottomNav" aria-label="主要分頁">
     <button type="button" data-nav="listings" aria-current="page">找房</button>
     <button type="button" data-nav="post">有房刊登</button>
-    <button type="button" data-nav="demand">需求</button>
+    <button type="button" data-nav="demand">許願房</button>
     <button type="button" data-nav="me">設定</button>
     <button type="button" data-nav="notify">通知</button>
   </nav>
+  <div id="wishDetailOverlay" class="hub-overlay" hidden>
+    <div class="hub-backdrop" data-close-wish></div>
+    <div class="hub-panel" role="dialog" aria-modal="true" aria-labelledby="wishDetailTitle">
+      <div class="hub-head">
+        <div>
+          <h2 id="wishDetailTitle">許願房</h2>
+          <p class="hint" style="margin:6px 0 0">公開找房條件，沒有即時私訊。</p>
+        </div>
+        <button type="button" class="ghost" id="wishDetailClose">關閉</button>
+      </div>
+      <div id="wishDetailBody"></div>
+    </div>
+  </div>
   <div id="selfListingOverlay" class="hub-overlay" hidden>
     <div class="hub-backdrop" data-close-self></div>
     <div class="hub-panel" role="dialog" aria-modal="true" aria-labelledby="selfListingTitle">
@@ -6134,7 +6282,10 @@
         btn.setAttribute("aria-current", btn.dataset.nav === view ? "page" : "false");
       });
       if (view !== "listings") closeFilterSheet();
-      if (view === "demand") loadDemand().catch(() => {});
+      if (view === "demand") {
+        if (location.hash !== "#demand") history.replaceState({}, "", `${location.pathname}${location.search}#demand`);
+        loadDemand().catch(() => {});
+      }
       if (view === "post") { loadMineSelfListings().catch(() => {}); loadMediaLibrary().catch(() => {}); }
       if (view === "qa") loadHelpQa();
       if (view === "notify") {
@@ -6280,6 +6431,22 @@
       }
       syncNotifyChannelLocks();
     }
+    const WISH_CONDITIONS = [
+      { id: "need_cook", label: "需要可開伙" },
+      { id: "need_pet", label: "需要可養寵物" },
+      { id: "need_tax", label: "需要可申請租補／報稅" },
+      { id: "elevator", label: "電梯" },
+      { id: "trash", label: "定時垃圾處理" },
+      { id: "trash24", label: "24H 垃圾回收" },
+      { id: "parcel", label: "包裹代收" },
+      { id: "parking_car", label: "汽車位" },
+      { id: "parking_scooter", label: "機車位" },
+      { id: "manage", label: "門衛管理" },
+      { id: "short_ok", label: "可短租" },
+    ];
+    let wishMine = { active: null, draft: null, has_example: false, can_create: true };
+    let wishEditingId = 0;
+    let wishMeta = null;
     function demandDistrictKeys() {
       return [...document.querySelectorAll("#demandDistricts [data-demand-district]:checked")].map((el) => el.value);
     }
@@ -6632,45 +6799,234 @@
         // ignore
       }
     }
+    function wishBudgetText(post) {
+      const min = Number(post.rent_min) || 0;
+      const max = Number(post.rent_max) || 0;
+      if (!min && !max) return "預算不限";
+      if (min && max) return `${min.toLocaleString("zh-TW")}–${max.toLocaleString("zh-TW")} 元/月`;
+      if (max) return `最高 ${max.toLocaleString("zh-TW")} 元/月`;
+      return `最低 ${min.toLocaleString("zh-TW")} 元/月`;
+    }
+    function wishAreaText(post) {
+      return (post.district_labels || []).join("、") || post.city || "未填區域";
+    }
     function demandCardHtml(post) {
-      const districts = (post.district_labels || []).join("、") || "未填行政區";
-      const rent = post.rent_max ? `租金上限 ${Number(post.rent_max).toLocaleString("zh-TW")} 元/月` : "租金不限";
-      const replies = (post.replies || []).map((item) => `
-        <div class="dock-item">
-          <div class="muted">${esc(item.author)} · ${esc(item.created_at || "").replace("T", " ").slice(0, 16)}</div>
-          <div>${esc(item.body)}</div>
-          ${isGuest ? "" : `<button type="button" class="ghost" data-demand-report-reply="${item.id}">檢舉</button>`}
-        </div>
-      `).join("");
+      const must = (post.must_have_labels || []).slice(0, 3).map((label) => `<span class="wish-chip">${esc(label)}</span>`).join("");
+      const when = String(post.updated_at || post.published_at || post.created_at || "").replace("T", " ").slice(0, 16);
       return `
-        <article class="self-mine-card" data-demand-id="${post.id}">
-          <strong>${esc(districts)}</strong>
-          <div class="rent-price">${esc(rent)}</div>
-          <div class="muted">${esc(post.housing_label || "不限類型")}${post.mrt_walk ? " · 要近捷運" : ""} · ${esc(post.author || "會員")}</div>
-          <p>${esc(post.body)}</p>
-          <div class="muted">到期 ${esc(String(post.expires_at || "").replace("T", " ").slice(0, 16))}</div>
-          ${replies}
-          ${isGuest ? `<p class="hint">登入後才能回覆或刊登。</p>` : `
-            <div class="row">
-              <input type="text" data-demand-reply="${post.id}" maxlength="200" placeholder="公開回覆（不是私訊）" />
-              <button type="button" class="primary" data-demand-send="${post.id}">回覆</button>
-              ${post.mine ? `<button type="button" class="ghost" data-demand-close="${post.id}">關閉</button>` : `<button type="button" class="ghost" data-demand-report="${post.id}">檢舉</button>`}
-            </div>
-          `}
+        <article class="wish-card" data-demand-id="${post.id}">
+          <strong>${esc(wishAreaText(post))}</strong>
+          <div class="rent-price">${esc(wishBudgetText(post))}</div>
+          <div class="muted">${esc(post.housing_label || "不限類型")}${post.layout_label ? ` · ${esc(post.layout_label)}` : ""}${post.move_in_date ? ` · 希望 ${esc(post.move_in_date)} 入住` : ""}</div>
+          ${must ? `<div class="wish-chips">${must}</div>` : ""}
+          <div class="muted">更新 ${esc(when)}</div>
+          <div class="row">
+            <button type="button" class="ghost" data-wish-open="${post.id}">查看詳情</button>
+            ${post.public_path ? `<a class="ghost" href="${esc(post.public_path)}">公開頁</a>` : ""}
+          </div>
         </article>
       `;
     }
+    function wishConditionState(id) {
+      const groups = {
+        must_have: [...document.querySelectorAll("#wishMust [data-wish-cond][aria-pressed='true']")].map((el) => el.dataset.wishCond),
+        nice_to_have: [...document.querySelectorAll("#wishNice [data-wish-cond][aria-pressed='true']")].map((el) => el.dataset.wishCond),
+        avoid: [...document.querySelectorAll("#wishAvoid [data-wish-cond][aria-pressed='true']")].map((el) => el.dataset.wishCond),
+      };
+      if (groups.must_have.includes(id)) return "must_have";
+      if (groups.nice_to_have.includes(id)) return "nice_to_have";
+      if (groups.avoid.includes(id)) return "avoid";
+      return "";
+    }
+    function renderWishConditionGroups(selected = {}) {
+      const must = new Set(selected.must_have || []);
+      const nice = new Set(selected.nice_to_have || []);
+      const avoid = new Set(selected.avoid || []);
+      const paint = (hostId, set) => {
+        const host = $(hostId);
+        if (!host) return;
+        host.innerHTML = WISH_CONDITIONS.map((row) => (
+          `<button type="button" class="wish-cond-btn" data-wish-cond="${esc(row.id)}" aria-pressed="${set.has(row.id) ? "true" : "false"}">${esc(row.label)}</button>`
+        )).join("");
+      };
+      paint("wishMust", must);
+      paint("wishNice", nice);
+      paint("wishAvoid", avoid);
+    }
+    function collectWishConditions() {
+      const take = (id) => [...document.querySelectorAll(`#${id} [data-wish-cond][aria-pressed='true']`)].map((el) => el.dataset.wishCond);
+      return {
+        must_have: take("wishMust"),
+        nice_to_have: take("wishNice"),
+        avoid: take("wishAvoid"),
+      };
+    }
+    function fillWishCitySelects() {
+      const cities = (typeof selfCityList === "function" ? selfCityList() : []) || [];
+      const options = `<option value="">不限縣市</option>` + cities.map((city) => `<option value="${esc(city.name)}">${esc(city.name)}</option>`).join("");
+      if ($("wishFilterCity") && !$("wishFilterCity").dataset.ready) {
+        $("wishFilterCity").innerHTML = options;
+        $("wishFilterCity").dataset.ready = "1";
+      }
+      if ($("wishCity") && !$("wishCity").dataset.ready) {
+        $("wishCity").innerHTML = `<option value="">先選縣市</option>` + cities.map((city) => `<option value="${esc(city.name)}">${esc(city.name)}</option>`).join("");
+        $("wishCity").dataset.ready = "1";
+      }
+      if ($("wishFilterHousing") && wishMeta?.housingTypes) {
+        $("wishFilterHousing").innerHTML = wishMeta.housingTypes.map((row) => `<option value="${esc(row.id)}">${esc(row.label)}</option>`).join("");
+      }
+    }
+    function collectWishForm() {
+      const cond = collectWishConditions();
+      return {
+        city: $("wishCity")?.value || "",
+        districts: demandDistrictKeys(),
+        location_note: $("wishLocationNote")?.value || "",
+        rent_min: Number($("demandRentMin")?.value) || 0,
+        rent_max: Number($("demandRentMax")?.value) || 0,
+        includes_management: Boolean($("wishIncludesFee")?.checked),
+        housing_type: $("demandHousing")?.value || "any",
+        ping_min: Number($("wishPingMin")?.value) || 0,
+        layout: $("wishLayout")?.value || "",
+        move_in_date: $("wishMoveIn")?.value || "",
+        lease_duration: $("wishLease")?.value || "",
+        transit_note: $("wishTransit")?.value || "",
+        destination_note: $("wishDestination")?.value || "",
+        commute_minutes: Number($("wishCommute")?.value) || 0,
+        mrt_walk: Boolean($("demandMrt")?.checked),
+        ...cond,
+        body: $("demandBody")?.value || "",
+        contact_name: $("wishContactName")?.value || "",
+        phone: $("wishContactPhone")?.value || "",
+        line_url: $("wishContactLine")?.value || "",
+        contact_profile_id: Number($("wishContactPick")?.value) || 0,
+      };
+    }
+    function applyWishForm(row = {}) {
+      if ($("wishCity")) $("wishCity").value = row.city || "";
+      if ($("wishLocationNote")) $("wishLocationNote").value = row.location_note || "";
+      if ($("demandRentMin")) $("demandRentMin").value = row.rent_min || "";
+      if ($("demandRentMax")) $("demandRentMax").value = row.rent_max || "";
+      if ($("wishIncludesFee")) $("wishIncludesFee").checked = Boolean(row.includes_management);
+      if ($("demandHousing")) $("demandHousing").value = row.housing_type || "any";
+      if ($("wishPingMin")) $("wishPingMin").value = row.ping_min || "";
+      if ($("wishLayout")) $("wishLayout").value = row.layout || "";
+      if ($("wishMoveIn")) $("wishMoveIn").value = row.move_in_date || "";
+      if ($("wishLease")) $("wishLease").value = row.lease_duration || "";
+      if ($("wishTransit")) $("wishTransit").value = row.transit_note || "";
+      if ($("wishDestination")) $("wishDestination").value = row.destination_note || "";
+      if ($("wishCommute")) $("wishCommute").value = row.commute_minutes || "";
+      if ($("demandMrt")) $("demandMrt").checked = Boolean(row.mrt_walk);
+      if ($("demandBody")) $("demandBody").value = row.body || "";
+      if ($("wishContactName")) $("wishContactName").value = row.contact_name || row.contact?.contact_name || "";
+      if ($("wishContactPhone")) $("wishContactPhone").value = row.phone || row.contact?.phone || "";
+      if ($("wishContactLine")) $("wishContactLine").value = row.line_url || row.contact?.line_url || "";
+      fillDemandDistricts();
+      const wanted = new Set(row.districts || []);
+      document.querySelectorAll("#demandDistricts [data-demand-district]").forEach((el) => {
+        el.checked = wanted.has(el.value);
+        el.closest("label")?.classList.toggle("on", el.checked);
+      });
+      renderWishConditionGroups(row);
+    }
+    function syncWishOwnerBar() {
+      const bar = $("wishOwnerBar");
+      if (!bar) return;
+      bar.hidden = isGuest;
+      const active = wishMine.active;
+      const closed = (wishMine.posts || []).find((row) => row.status === "closed");
+      $("wishCreateBtn").hidden = Boolean(active);
+      $("wishViewBtn").hidden = !active;
+      $("wishEditBtn").hidden = !active;
+      $("wishCloseBtn").hidden = !active;
+      $("wishReopenBtn").hidden = Boolean(active) || !closed;
+      $("wishSaveExampleBtn").hidden = isGuest || (!active && $("wishFormWrap")?.hidden);
+      $("wishLoadExampleBtn").hidden = !wishMine.has_example;
+      $("wishDeleteExampleBtn").hidden = !wishMine.has_example;
+    }
+    function showWishForm(show) {
+      if ($("wishFormWrap")) $("wishFormWrap").hidden = !show;
+      if (show) {
+        fillDemandDistricts();
+        fillWishCitySelects();
+        if (!$("wishMust")?.children.length) renderWishConditionGroups();
+        refreshWishContacts();
+      }
+      syncWishOwnerBar();
+    }
+    function wishDetailHtml(post) {
+      const groups = [
+        ["必須有", post.must_have_labels, ""],
+        ["希望有", post.nice_to_have_labels, "nice"],
+        ["不接受", post.avoid_labels, "avoid"],
+      ].filter((row) => (row[1] || []).length);
+      const contact = post.contact && (post.contact.contact_name || post.contact.phone || post.contact.line_url)
+        ? `<p>${esc(post.contact.contact_name || "")} ${esc(post.contact.phone || "")}${post.contact.line_url ? ` · <a href="${esc(post.contact.line_url)}" rel="noopener noreferrer">LINE</a>` : ""}</p>`
+        : `<p class="muted">沒有公開聯絡摘要。</p>`;
+      return `
+        <p class="rent-price">${esc(wishBudgetText(post))}${post.includes_management ? " · 含水電管理費" : ""}</p>
+        <p class="muted">${esc(wishAreaText(post))}${post.location_note ? ` · ${esc(post.location_note)}` : ""}</p>
+        <p class="muted">${esc(post.housing_label || "不限類型")}${post.layout_label ? ` · ${esc(post.layout_label)}` : ""}${post.ping_min ? ` · ${esc(post.ping_min)} 坪以上` : ""}</p>
+        <p class="muted">${post.move_in_date ? `希望 ${esc(post.move_in_date)} 入住` : "入住時間面議"}${post.lease_label ? ` · ${esc(post.lease_label)}` : ""}</p>
+        ${post.transit_note ? `<p class="muted">交通：${esc(post.transit_note)}</p>` : ""}
+        ${post.destination_note ? `<p class="muted">常去：${esc(post.destination_note)}</p>` : ""}
+        ${post.commute_minutes ? `<p class="muted">可接受通勤約 ${esc(post.commute_minutes)} 分鐘</p>` : ""}
+        ${post.body ? `<p>${esc(post.body)}</p>` : ""}
+        ${groups.map(([title, labels, cls]) => `<div><div class="muted">${title}</div><div class="wish-chips">${labels.map((label) => `<span class="wish-chip ${cls}">${esc(label)}</span>`).join("")}</div></div>`).join("")}
+        ${contact}
+        <p class="muted"><a href="${esc(post.public_path || `/w/${post.id}`)}">開啟公開頁</a></p>
+      `;
+    }
+    async function openWishDetail(id) {
+      const res = await fetch(`/api/wish-rooms/${id}`);
+      const data = await readApi(res);
+      if (!res.ok) throw new Error(data.error || "載入失敗");
+      if ($("wishDetailTitle")) $("wishDetailTitle").textContent = wishAreaText(data);
+      if ($("wishDetailBody")) $("wishDetailBody").innerHTML = wishDetailHtml(data);
+      if ($("wishDetailOverlay")) $("wishDetailOverlay").hidden = false;
+    }
+    async function refreshWishContacts() {
+      const sel = $("wishContactPick");
+      if (!sel || isGuest) return;
+      try {
+        const res = await fetch("/api/listing-contact-profiles");
+        const data = await readApi(res);
+        const items = data.items || [];
+        sel.innerHTML = `<option value="">套用我的聯絡人</option>` + items.map((item) => (
+          `<option value="${item.id}">${esc(item.label || item.contact_name || "聯絡人")}</option>`
+        )).join("");
+      } catch {
+        /* 沒有聯絡人快選也可以手動填 */
+      }
+    }
     async function loadDemand() {
       fillDemandDistricts();
+      fillWishCitySelects();
       const box = $("demandList");
       if (!box) return;
-      const res = await fetch("/api/demand");
+      const qs = new URLSearchParams();
+      if ($("wishFilterCity")?.value) qs.set("city", $("wishFilterCity").value);
+      if ($("wishFilterRentMin")?.value) qs.set("rent_min", $("wishFilterRentMin").value);
+      if ($("wishFilterRentMax")?.value) qs.set("rent_max", $("wishFilterRentMax").value);
+      if ($("wishFilterHousing")?.value && $("wishFilterHousing").value !== "any") qs.set("housing_type", $("wishFilterHousing").value);
+      const res = await fetch(`/api/wish-rooms?${qs.toString()}`);
       const data = await res.json();
-      if (data.legal && $("demandLegal")) $("demandLegal").textContent = data.legal;
-      const posts = data.posts || [];
+      wishMeta = data;
+      const posts = data.rooms || data.posts || [];
       box.innerHTML = posts.length
         ? posts.map(demandCardHtml).join("")
-        : `<div class="empty">${isGuest ? "目前沒有公開需求。登入後可以刊登（不是仲介、沒有私訊）。" : "目前沒有公開需求。填好上面的資料後送出，會出現在這頁（不是仲介、沒有私訊）。"}</div>`;
+        : `<div class="empty wish-empty">${isGuest ? "目前沒有公開的許願房。登入後可以建立一則，讓屋主看到你在找什麼。" : "目前沒有公開的許願房。建立你的許願房後，會出現在這頁給屋主看。"}</div>`;
+      if (!isGuest) {
+        try {
+          const mineRes = await fetch("/api/wish-rooms/mine");
+          const mine = await readApi(mineRes);
+          if (mineRes.ok) {
+            wishMine = mine;
+            wishMine.posts = mine.posts || [];
+          }
+        } catch { /* ignore */ }
+      }
+      syncWishOwnerBar();
     }
     $("collapsePanelBtn").onclick = () => {
       if (window.matchMedia("(max-width: 880px)").matches) closeFilterSheet();
@@ -6867,70 +7223,136 @@
       }
       const msg = $("demandMsg");
       try {
-        const res = await fetch("/api/demand", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            districts: demandDistrictKeys(),
-            rent_max: Number($("demandRentMax")?.value) || 0,
-            housing_type: $("demandHousing")?.value || "any",
-            mrt_walk: Boolean($("demandMrt")?.checked),
-            body: $("demandBody")?.value || "",
-          }),
-        });
+        const payload = collectWishForm();
+        let res;
+        if (wishEditingId) {
+          res = await fetch(`/api/wish-rooms/${wishEditingId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          const current = wishMine.active;
+          if (res.ok && current && Number(current.id) === Number(wishEditingId) && current.status === "open") {
+            /* 已公開的直接就地更新 */
+          } else if (res.ok) {
+            const published = await fetch(`/api/wish-rooms/${wishEditingId}/publish`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+            if (published.ok) res = published;
+          }
+        } else {
+          res = await fetch("/api/wish-rooms", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+        }
         const data = await readApi(res);
         if (!res.ok) throw new Error(data.error || "刊登失敗");
-        if (msg) msg.textContent = "已刊登";
-        $("demandBody").value = "";
+        if (msg) msg.textContent = "已公開許願房";
+        wishEditingId = 0;
+        showWishForm(false);
         await loadDemand();
-        maybeAskPush("刊登需求後可允許系統推播。");
+        maybeAskPush("公開許願房後可允許系統推播。");
       } catch (error) {
         if (msg) msg.textContent = error.message;
       }
     });
     $("demandList")?.addEventListener("click", async (ev) => {
-      if (isGuest) {
-        if (ev.target.closest("button")) remindGuest();
-        return;
-      }
-      const send = ev.target.closest("[data-demand-send]")?.dataset.demandSend;
-      const closeId = ev.target.closest("[data-demand-close]")?.dataset.demandClose;
-      const reportId = ev.target.closest("[data-demand-report]")?.dataset.demandReport;
-      const reportReply = ev.target.closest("[data-demand-report-reply]")?.dataset.demandReportReply;
-      try {
-        if (send) {
-          const input = $("demandList").querySelector(`[data-demand-reply="${send}"]`);
-          const res = await fetch(`/api/demand/${send}/reply`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ body: input?.value || "" }),
-          });
-          const data = await readApi(res);
-          if (!res.ok) throw new Error(data.error || "回覆失敗");
-          await loadDemand();
-        } else if (closeId) {
-          const res = await fetch(`/api/demand/${closeId}/close`, { method: "POST" });
-          const data = await readApi(res);
-          if (!res.ok) throw new Error(data.error || "關閉失敗");
-          await loadDemand();
-        } else if (reportId || reportReply) {
-          const res = await fetch(`/api/demand/${reportId || reportReply}/report`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              targetType: reportReply ? "reply" : "post",
-              targetId: reportReply || reportId,
-              reason: "檢舉",
-            }),
-          });
-          const data = await readApi(res);
-          if (!res.ok) throw new Error(data.error || "檢舉失敗");
-          await loadDemand();
-        }
-      } catch (error) {
-        $("demandMsg").textContent = error.message;
+      const openId = ev.target.closest("[data-wish-open]")?.dataset.wishOpen;
+      if (openId) {
+        try { await openWishDetail(openId); } catch (error) { if ($("demandMsg")) $("demandMsg").textContent = error.message; }
       }
     });
+    document.querySelectorAll("#wishMust, #wishNice, #wishAvoid").forEach((host) => {
+      host.addEventListener("click", (ev) => {
+        const btn = ev.target.closest("[data-wish-cond]");
+        if (!btn) return;
+        const id = btn.dataset.wishCond;
+        const turningOn = btn.getAttribute("aria-pressed") !== "true";
+        document.querySelectorAll(`[data-wish-cond="${id}"]`).forEach((el) => el.setAttribute("aria-pressed", "false"));
+        if (turningOn) btn.setAttribute("aria-pressed", "true");
+      });
+    });
+    $("wishFilterApply")?.addEventListener("click", () => loadDemand().catch(() => {}));
+    $("wishCreateBtn")?.addEventListener("click", () => {
+      if (isGuest) { remindGuest(); return; }
+      if (wishMine.active) { if ($("demandMsg")) $("demandMsg").textContent = "已有一則公開許願房"; return; }
+      wishEditingId = wishMine.draft?.id || 0;
+      applyWishForm(wishMine.draft || {});
+      showWishForm(true);
+    });
+    $("wishViewBtn")?.addEventListener("click", async () => {
+      if (wishMine.active) await openWishDetail(wishMine.active.id);
+    });
+    $("wishEditBtn")?.addEventListener("click", () => {
+      if (!wishMine.active) return;
+      wishEditingId = wishMine.active.id;
+      applyWishForm(wishMine.active);
+      showWishForm(true);
+    });
+    $("wishCloseBtn")?.addEventListener("click", async () => {
+      if (!wishMine.active) return;
+      const res = await fetch(`/api/demand/${wishMine.active.id}/close`, { method: "POST" });
+      const data = await readApi(res);
+      if (!res.ok) { if ($("demandMsg")) $("demandMsg").textContent = data.error || "下架失敗"; return; }
+      showWishForm(false);
+      await loadDemand();
+    });
+    $("wishReopenBtn")?.addEventListener("click", async () => {
+      const closed = (wishMine.posts || []).find((row) => row.status === "closed");
+      if (!closed) return;
+      const res = await fetch(`/api/wish-rooms/${closed.id}/reopen`, { method: "POST" });
+      const data = await readApi(res);
+      if (!res.ok) { if ($("demandMsg")) $("demandMsg").textContent = data.error || "重開失敗"; return; }
+      await loadDemand();
+    });
+    $("wishSaveExampleBtn")?.addEventListener("click", async () => {
+      const payload = $("wishFormWrap")?.hidden && wishMine.active ? wishMine.active : collectWishForm();
+      const res = await fetch("/api/wish-rooms/example", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await readApi(res);
+      if (!res.ok) { if ($("demandMsg")) $("demandMsg").textContent = data.error || "儲存失敗"; return; }
+      wishMine.has_example = true;
+      if ($("demandMsg")) $("demandMsg").textContent = "已更新範例副本（尚未公開）";
+      syncWishOwnerBar();
+    });
+    $("wishLoadExampleBtn")?.addEventListener("click", async () => {
+      const res = await fetch("/api/wish-rooms/example");
+      const data = await readApi(res);
+      if (!res.ok || !data.example) { if ($("demandMsg")) $("demandMsg").textContent = "沒有已存範例"; return; }
+      if (wishMine.active) wishEditingId = wishMine.active.id;
+      applyWishForm(data.example);
+      showWishForm(true);
+      if ($("demandMsg")) $("demandMsg").textContent = "已載入範例，尚未公開";
+    });
+    $("wishDeleteExampleBtn")?.addEventListener("click", async () => {
+      await fetch("/api/wish-rooms/example", { method: "DELETE" });
+      wishMine.has_example = false;
+      syncWishOwnerBar();
+      if ($("demandMsg")) $("demandMsg").textContent = "已刪除範例";
+    });
+    $("wishCancelEdit")?.addEventListener("click", () => {
+      wishEditingId = 0;
+      showWishForm(false);
+    });
+    $("wishContactApply")?.addEventListener("click", async () => {
+      const id = $("wishContactPick")?.value;
+      if (!id) return;
+      const res = await fetch(`/api/listing-contact-profiles/${id}`);
+      const data = await readApi(res);
+      if (!res.ok) return;
+      if ($("wishContactName")) $("wishContactName").value = data.contact_name || "";
+      if ($("wishContactPhone")) $("wishContactPhone").value = data.phone || "";
+      if ($("wishContactLine")) $("wishContactLine").value = data.line_url || "";
+    });
+    $("wishDetailClose")?.addEventListener("click", () => { if ($("wishDetailOverlay")) $("wishDetailOverlay").hidden = true; });
+    document.querySelector("[data-close-wish]")?.addEventListener("click", () => { if ($("wishDetailOverlay")) $("wishDetailOverlay").hidden = true; });
     let selfPhotoDraft = [];
     const SELF_PHOTO_LIMIT = 100;
     function renderSelfPhotoDraft() {
@@ -7675,6 +8097,7 @@
     $("meHelpQaBtn")?.addEventListener("click", openHelpQaDialog);
     $("helpQaClose")?.addEventListener("click", closeHelpQaDialog);
     if (!document.body.classList.contains("role-guest")) loadHelpQa();
+    if (location.hash === "#demand" || location.hash === "#wish") setAppView("demand");
 
     const FEEDBACK_KIND_HINTS = {
       bug: "哪裡怪怪的、壞掉、看到錯誤畫面",

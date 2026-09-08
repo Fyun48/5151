@@ -39,7 +39,7 @@ export const DOC_TYPES = {
   },
   wish_room_rules: {
     id: "wish_room_rules",
-    label: "許願房規則（尚未開通）",
+    label: "許願房規則",
     required_at: "wish_room",
     seed_title: "許願房使用規則",
   },
@@ -386,7 +386,7 @@ export function listDocumentEvents(db, { type, documentId, limit = 50 } = {}) {
 
 const IMPORT_DECLARATION = `我確認匯入的物件文字與照片為本人所有，或已取得合法授權可在本站重製、公開展示。我了解這是一次性複製成草稿，不會與來源網站持續同步。不實或未授權內容可能被下架，法律責任由我自行負擔。`;
 
-const WISH_ROOM_RULES = `許願房是之後才會開通的需求／媒合說明區。使用前須閱讀當時有效版本。本文件現在只建立內容類型，不代表功能已上線。`;
+const WISH_ROOM_RULES = `許願房是公開的找房條件說明，不是仲介、沒有私訊、不保證媒合。每人同時只能有一則公開許願房。聯絡方式只有你主動寫上的摘要會公開。全站使用條款以註冊時同意的版本為準。`;
 
 export function seedDefaultDocuments(db, { now = new Date(), legalCopy } = {}) {
   const copy = legalCopy || defaultLegalCopy();

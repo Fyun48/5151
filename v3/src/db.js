@@ -70,6 +70,14 @@ import {
   closeDemandPost as closeDemandPostOn,
   addDemandReply as addDemandReplyOn,
   reportDemand as reportDemandOn,
+  updateWishRoom as updateWishRoomOn,
+  publishWishRoom as publishWishRoomOn,
+  reopenWishRoom as reopenWishRoomOn,
+  getWishExample as getWishExampleOn,
+  saveWishExample as saveWishExampleOn,
+  deleteWishExample as deleteWishExampleOn,
+  wishRoomOwnerSummary as wishRoomOwnerSummaryOn,
+  publicWishRoomView,
   demandMeta,
 } from "./demand.js";
 import {
@@ -1310,7 +1318,35 @@ export function reportDemandItem(userId, input) {
   return reportDemandOn(db, userId, input);
 }
 
-export { demandMeta, selfListingMeta, isSelfListingId };
+export function updateWishRoomFor(userId, postId, input) {
+  return updateWishRoomOn(db, userId, postId, input);
+}
+
+export function publishWishRoomFor(userId, postId, input) {
+  return publishWishRoomOn(db, userId, postId, input);
+}
+
+export function reopenWishRoomFor(userId, postId) {
+  return reopenWishRoomOn(db, userId, postId);
+}
+
+export function getWishExampleFor(userId) {
+  return getWishExampleOn(db, userId);
+}
+
+export function saveWishExampleFor(userId, input) {
+  return saveWishExampleOn(db, userId, input);
+}
+
+export function deleteWishExampleFor(userId) {
+  return deleteWishExampleOn(db, userId);
+}
+
+export function wishRoomOwnerSummaryFor(userId) {
+  return wishRoomOwnerSummaryOn(db, userId);
+}
+
+export { demandMeta, publicWishRoomView, selfListingMeta, isSelfListingId };
 
 // Phase 2：feedback 與其初始 outbox 事件永遠在同一交易原子建立（不變式：accepted feedback ⇔ outbox 事件）。
 // 傳輸開關（OPS_FEEDBACK_DELIVERY）只影響背景 worker 是否遞送，不影響 outbox 是否建立。

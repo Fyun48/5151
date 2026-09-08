@@ -23,7 +23,7 @@ test("sponsor import entry and review UI exist; normal members see locked hint",
   assert.match(html, /function syncImportAccess/);
   assert.match(html, /function loadActiveImport/);
   assert.match(html, /listing-imports\/\$\{currentImport\.id\}\/publish/);
-  assert.doesNotMatch(html, /許願房/);
+  assert.match(html, /許願房/);
 });
 
 test("server exposes listing-import routes with sponsor/rate-limit hooks", () => {
