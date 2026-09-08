@@ -109,6 +109,18 @@ test("predeploy remote script reads RepoDigests and arch from image id, not cont
   assert.match(script, /docker image inspect -f '\{\{\.Architecture\}\}\/\{\{\.Os\}\}' "\$IMAGE_ID"/);
 });
 
+test("backup verification checks node:sqlite capability and falls back to read-only Python", () => {
+  const script = readFileSync(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "../../.github/scripts/production-predeploy-remote.sh"),
+    "utf8",
+  );
+  assert.match(script, /HOST_NODE_SQLITE=.*node:sqlite/);
+  assert.doesNotMatch(script, /if command -v node[^\n]*; then\n\s*INTEGRITY=/);
+  assert.match(script, /if \[ "\$HOST_NODE_SQLITE" = "yes" \]; then/);
+  assert.match(script, /sqlite3\.connect\(f"file:\{path\}\?mode=ro", uri=True\)/);
+  assert.match(script, /elif \[ -n "\$HOST_PYTHON" \]; then/);
+});
+
 test("isolated smoke schema inspect uses bound parameter, not quoted identifier", () => {
   const yml = readFileSync(
     path.join(path.dirname(fileURLToPath(import.meta.url)), "../../.github/workflows/build-production-image.yml"),
