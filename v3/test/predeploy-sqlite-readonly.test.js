@@ -108,3 +108,24 @@ test("predeploy remote script reads RepoDigests and arch from image id, not cont
   assert.match(script, /docker image inspect -f '\{\{range \.RepoDigests\}\}\{\{\.\}\} \{\{end\}\}' "\$IMAGE_ID"/);
   assert.match(script, /docker image inspect -f '\{\{\.Architecture\}\}\/\{\{\.Os\}\}' "\$IMAGE_ID"/);
 });
+
+test("isolated smoke schema inspect uses bound parameter, not quoted identifier", () => {
+  const yml = readFileSync(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "../../.github/workflows/build-production-image.yml"),
+    "utf8",
+  );
+  assert.doesNotMatch(yml, /type = \\"table\\"/);
+  assert.doesNotMatch(yml, /WHERE type = "table"/);
+  assert.match(yml, /WHERE type = \?/);
+  assert.match(yml, /\.all\("table"\)/);
+  const db = new DatabaseSync(":memory:");
+  db.exec("CREATE TABLE demand_posts (id INTEGER); CREATE TABLE member_media (id INTEGER);");
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = ? ORDER BY 1").all("table").map((r) => r.name);
+  assert.ok(tables.includes("demand_posts"));
+  assert.ok(tables.includes("member_media"));
+  assert.throws(
+    () => db.prepare("SELECT name FROM sqlite_master WHERE type = \"table\" ORDER BY 1").all(),
+    /no such column|"table"|string literal/i,
+  );
+  db.close();
+});
