@@ -17,6 +17,10 @@ on:
         description: "輸入 PREDEPLOY-PRODUCTION 以確認只做檢查與備份"
         required: true
         default: ""
+      release_intent_id:
+        description: "Ops Phase 15 durable intent（手動觸發可留空）"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -138,6 +142,7 @@ jobs:
           SOURCE_SHA: ${{ inputs.sha }}
           WF_ACTOR: ${{ github.actor }}
           WF_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          RELEASE_INTENT_ID: ${{ inputs.release_intent_id }}
           WF_ENVIRONMENT: production
           CONFIRMATION: ${{ inputs.confirmation }}
         run: |

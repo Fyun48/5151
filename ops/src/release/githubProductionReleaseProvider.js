@@ -39,23 +39,26 @@ function parseRepo(env = {}) {
   return { owner, repo };
 }
 
-function workflowInputs({ workflowFile, inputs = {}, confirmation } = {}) {
+function workflowInputs({ workflowFile, inputs = {}, confirmation, releaseIntentId } = {}) {
   const sha = inputs.sha;
   if (!/^[0-9a-f]{40}$/.test(String(sha || ""))) return { ok: false, reason: "sha_not_exact" };
+  const intent = releaseIntentId || inputs.release_intent_id || "";
+  if (!intent || String(intent).length < 16) return { ok: false, reason: "release_intent_missing" };
+  const withIntent = { sha, release_intent_id: String(intent) };
   if (workflowFile === PRODUCTION_WORKFLOWS.BUILD) {
-    return { ok: true, inputs: { sha } };
+    return { ok: true, inputs: withIntent };
   }
   if (workflowFile === PRODUCTION_WORKFLOWS.PREDEPLOY) {
     const confirm = confirmation || inputs.confirmation;
     if (confirm !== "PREDEPLOY-PRODUCTION") return { ok: false, reason: "confirmation_mismatch" };
-    return { ok: true, inputs: { sha, confirmation: confirm } };
+    return { ok: true, inputs: { ...withIntent, confirmation: confirm } };
   }
   if (workflowFile === PRODUCTION_WORKFLOWS.DEPLOY) {
     const digest = inputs.image_digest || inputs.expected_digest;
     if (!digestLooksImmutable(digest)) return { ok: false, reason: "digest_not_immutable" };
     const confirm = confirmation || inputs.confirmation || "DEPLOY-PRODUCTION";
     if (confirm !== "DEPLOY-PRODUCTION") return { ok: false, reason: "confirmation_mismatch" };
-    return { ok: true, inputs: { sha, image_digest: digest, confirmation: confirm } };
+    return { ok: true, inputs: { ...withIntent, image_digest: digest, confirmation: confirm } };
   }
   return { ok: false, reason: "workflow_not_allowed" };
 }
@@ -98,8 +101,34 @@ export function ociLabelsFromConfig(config) {
   return { revision: revision || null, source: source || null };
 }
 
-export function bindPhase15EvidenceToRun(evidence, run) {
+export function sealPhase15Evidence(doc) {
+  const rest = { ...doc };
+  delete rest.evidence_sha256;
+  const canonical = JSON.stringify(sortKeys(rest));
+  return { ...rest, evidence_sha256: `sha256:${sha256(canonical)}` };
+}
+
+export function verifyPhase15EvidenceDigest(evidence) {
+  if (!evidence || typeof evidence !== "object") return false;
+  const expected = evidence.evidence_sha256;
+  if (!/^sha256:[a-f0-9]{64}$/.test(String(expected || ""))) return false;
+  const rest = { ...evidence };
+  delete rest.evidence_sha256;
+  const canonical = JSON.stringify(sortKeys(rest));
+  return `sha256:${sha256(canonical)}` === expected;
+}
+
+function sortKeys(value) {
+  if (Array.isArray(value)) return value.map(sortKeys);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.keys(value).sort().map((k) => [k, sortKeys(value[k])]));
+  }
+  return value;
+}
+
+export function bindPhase15EvidenceToRun(evidence, run, expected = {}) {
   if (!evidence || evidence.schema !== PHASE15_EVIDENCE_SCHEMA) return null;
+  if (!verifyPhase15EvidenceDigest(evidence)) return null;
   if (String(evidence.workflow_run_id) !== String(run.id)) return null;
   if (Number(evidence.workflow_attempt) !== Number(run.run_attempt || run.attempt)) return null;
   if (evidence.workflow_file && (run.path || run.workflow_file) && evidence.workflow_file !== (run.path || run.workflow_file)) return null;
@@ -108,12 +137,15 @@ export function bindPhase15EvidenceToRun(evidence, run) {
   if (evidence.environment && run.environment && evidence.environment !== run.environment) return null;
   if (evidence.actor && loginOf(run.actor) && evidence.actor !== loginOf(run.actor)) return null;
   if (evidence.triggering_actor && loginOf(run.triggering_actor) && evidence.triggering_actor !== loginOf(run.triggering_actor)) return null;
+  if (expected.releaseIntentId && evidence.release_intent_id !== expected.releaseIntentId) return null;
+  if (expected.releaseIntentId && !evidence.release_intent_id) return null;
   return {
     image_digest: evidence.image_digest || null,
     oci_revision: evidence.oci_revision || null,
     oci_source: evidence.oci_source || null,
     source_sha: evidence.source_sha || null,
     confirmation: evidence.confirmation || null,
+    release_intent_id: evidence.release_intent_id || null,
     db_backup: evidence.db_backup && evidence.db_backup.verified ? evidence.db_backup : null,
     health: evidence.health && typeof evidence.health === "object" ? evidence.health : null,
   };
@@ -309,7 +341,7 @@ export function makeGithubProductionReleaseProvider(env = process.env, deps = {}
   let dispatchCount = 0;
   let restoreCallCount = 0;
 
-  async function loadEvidenceOutputs(run) {
+  async function loadEvidenceOutputs(run, expected = {}) {
     if (!run?.id) return {};
     if (typeof api.listArtifacts !== "function" || typeof api.downloadArtifact !== "function") return {};
     const listed = await api.listArtifacts({ owner: repo.owner, repo: repo.repo, runId: run.id });
@@ -320,31 +352,39 @@ export function makeGithubProductionReleaseProvider(env = process.env, deps = {}
       || downloaded?.files?.[`${PHASE15_EVIDENCE_ARTIFACT}.json`]
       || downloaded?.json
       || null;
-    return bindPhase15EvidenceToRun(evidence, run) || {};
+    return bindPhase15EvidenceToRun(evidence, run, expected) || {};
   }
 
-  async function hydrateRun(raw, jobs) {
-    const evidenceOutputs = await loadEvidenceOutputs(raw);
+  async function hydrateRun(raw, jobs, expected = {}) {
+    const evidenceOutputs = await loadEvidenceOutputs(raw, expected);
     return normalizeGithubWorkflowRun(raw, { jobs, evidenceOutputs });
   }
 
-  async function lookupExactRun({ workflowFile, headSha, createdAfter }) {
+  async function lookupRunByIntent({ workflowFile, releaseIntentId, createdAfter } = {}) {
+    if (!releaseIntentId) return null;
     const listed = await api.listWorkflowRuns({
       owner: repo.owner,
       repo: repo.repo,
       workflowFile,
     });
-    const correlated = correlateGithubWorkflowRuns(listed.runs || [], {
-      workflowFile,
-      headSha,
-      actor: authorizedActor,
-      createdAfter,
+    const candidates = (listed.runs || []).filter((run) => {
+      const file = run.path || run.workflow_file;
+      if (workflowFile && file !== workflowFile) return false;
+      if (run.event && run.event !== "workflow_dispatch") return false;
+      if (!createdAfterOk(run.created_at, createdAfter)) return false;
+      return true;
     });
-    if (correlated.ambiguous) return { ambiguous: true, id: null };
-    if (!correlated.run) return null;
-    const detail = await api.getWorkflowRun({ owner: repo.owner, repo: repo.repo, runId: correlated.run.id });
-    const raw = detail?.run || correlated.run;
-    return hydrateRun(raw, detail?.jobs);
+    const bound = [];
+    for (const raw of candidates) {
+      const detail = await api.getWorkflowRun({ owner: repo.owner, repo: repo.repo, runId: raw.id });
+      const run = detail?.run || raw;
+      const evidenceOutputs = await loadEvidenceOutputs(run, { releaseIntentId });
+      if (evidenceOutputs.release_intent_id === releaseIntentId) {
+        bound.push(normalizeGithubWorkflowRun(run, { jobs: detail?.jobs, evidenceOutputs }));
+      }
+    }
+    if (bound.length > 1) return { ambiguous: true, id: null };
+    return bound[0] || null;
   }
 
   return {
@@ -370,27 +410,24 @@ export function makeGithubProductionReleaseProvider(env = process.env, deps = {}
       if (environment && environment !== REQUIRED_TARGET_ENVIRONMENT && workflowFile !== PRODUCTION_WORKFLOWS.BUILD) {
         return { accepted: false, reason: "environment_mismatch", workflow_run_id: null };
       }
-      const prepared = workflowInputs({ workflowFile, inputs, confirmation });
+      const intent = requestId || inputs.release_intent_id || "";
+      const prepared = workflowInputs({ workflowFile, inputs, confirmation, releaseIntentId: intent });
       if (!prepared.ok) return { accepted: false, reason: prepared.reason, workflow_run_id: null };
       if (expectedHead && inputs.expected_head && expectedHead !== inputs.expected_head) {
         return { accepted: false, reason: "expected_head_race", workflow_run_id: null };
       }
 
-      const intent = requestId || `gh-intent-${sha256(`${workflowFile}|${prepared.inputs.sha}|${authorizedActor}`).slice(0, 16)}`;
-      if (acceptedIntents.has(intent)) {
-        const found = await lookupExactRun({
-          workflowFile,
-          headSha: prepared.inputs.sha,
-        });
-        if (found?.ambiguous) return { accepted: false, reason: "ambiguous_workflow_run", workflow_run_id: null };
+      const existing = await lookupRunByIntent({ workflowFile, releaseIntentId: prepared.inputs.release_intent_id });
+      if (existing?.ambiguous) return { accepted: false, reason: "ambiguous_workflow_run", workflow_run_id: null };
+      if (existing?.id || acceptedIntents.has(prepared.inputs.release_intent_id)) {
         return {
           accepted: true,
           idempotent: true,
-          pending_lookup: !found?.id,
-          workflow_run_id: found?.id || null,
-          attempt: found?.attempt || null,
-          request_id: intent,
-          provider_response_identity: `github-dispatch-${sha256(intent).slice(0, 20)}`,
+          pending_lookup: !existing?.id,
+          workflow_run_id: existing?.id || null,
+          attempt: existing?.attempt || null,
+          request_id: prepared.inputs.release_intent_id,
+          provider_response_identity: `github-dispatch-${sha256(prepared.inputs.release_intent_id).slice(0, 20)}`,
         };
       }
 
@@ -405,28 +442,28 @@ export function makeGithubProductionReleaseProvider(env = process.env, deps = {}
         });
       } catch (err) {
         if (err?.code === "dispatch_timeout") {
-          return { accepted: true, timeout: true, workflow_run_id: null, request_id: intent, provider_response_identity: `github-timeout-${sha256(intent).slice(0, 20)}` };
+          return { accepted: true, timeout: true, workflow_run_id: null, request_id: prepared.inputs.release_intent_id, provider_response_identity: `github-timeout-${sha256(prepared.inputs.release_intent_id).slice(0, 20)}` };
         }
-        return { accepted: false, reason: redactGithubError(err), workflow_run_id: null, request_id: intent };
+        return { accepted: false, reason: redactGithubError(err), workflow_run_id: null, request_id: prepared.inputs.release_intent_id };
       }
       if (dispatched?.timeout) {
-        return { accepted: true, timeout: true, workflow_run_id: null, request_id: intent, provider_response_identity: `github-timeout-${sha256(intent).slice(0, 20)}` };
+        return { accepted: true, timeout: true, workflow_run_id: null, request_id: prepared.inputs.release_intent_id, provider_response_identity: `github-timeout-${sha256(prepared.inputs.release_intent_id).slice(0, 20)}` };
       }
       if (!dispatched || dispatched.status !== 204) {
         return {
           accepted: false,
           reason: dispatched?.reason || `dispatch_http_${dispatched?.status || "unknown"}`,
           workflow_run_id: null,
-          request_id: intent,
+          request_id: prepared.inputs.release_intent_id,
         };
       }
       dispatchCount += 1;
-      acceptedIntents.add(intent);
+      acceptedIntents.add(prepared.inputs.release_intent_id);
       if (deps.crashAfterAccept) {
         throw Object.assign(new Error("crash after dispatch response"), { code: "crash_after_dispatch" });
       }
-      const found = await lookupExactRun({ workflowFile, headSha: prepared.inputs.sha });
-      if (found?.ambiguous) return { accepted: false, reason: "ambiguous_workflow_run", workflow_run_id: null, request_id: intent };
+      const found = await lookupRunByIntent({ workflowFile, releaseIntentId: prepared.inputs.release_intent_id });
+      if (found?.ambiguous) return { accepted: false, reason: "ambiguous_workflow_run", workflow_run_id: null, request_id: prepared.inputs.release_intent_id };
       return {
         accepted: true,
         pending_lookup: !found?.id,
@@ -436,8 +473,8 @@ export function makeGithubProductionReleaseProvider(env = process.env, deps = {}
         workflow_ref: REQUIRED_WORKFLOW_REF,
         actor: authorizedActor,
         environment: workflowFile === PRODUCTION_WORKFLOWS.BUILD ? null : (environment || REQUIRED_TARGET_ENVIRONMENT),
-        request_id: intent,
-        provider_response_identity: `github-dispatch-${sha256(intent).slice(0, 20)}`,
+        request_id: prepared.inputs.release_intent_id,
+        provider_response_identity: `github-dispatch-${sha256(prepared.inputs.release_intent_id).slice(0, 20)}`,
       };
     },
 
@@ -450,10 +487,10 @@ export function makeGithubProductionReleaseProvider(env = process.env, deps = {}
     },
 
     async findWorkflowRunByIdempotency({
-      workflowFile, headSha, createdAfter,
+      workflowFile, dispatchIntentId, createdAfter,
     } = {}) {
-      if (missing(workflowFile) || missing(headSha)) return null;
-      const found = await lookupExactRun({ workflowFile, headSha, createdAfter });
+      if (missing(workflowFile) || missing(dispatchIntentId)) return null;
+      const found = await lookupRunByIntent({ workflowFile, releaseIntentId: dispatchIntentId, createdAfter });
       if (found?.ambiguous) return { ambiguous: true, id: null };
       return found;
     },

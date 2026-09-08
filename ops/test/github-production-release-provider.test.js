@@ -10,7 +10,9 @@ import {
   correlateGithubWorkflowRuns,
   ociLabelsFromConfig,
   bindPhase15EvidenceToRun,
+  sealPhase15Evidence,
   PHASE15_EVIDENCE_SCHEMA,
+  PHASE15_EVIDENCE_ARTIFACT,
 } from "../src/release/githubProductionReleaseProvider.js";
 
 const ACTOR = "Fyun48";
@@ -25,10 +27,14 @@ const GRANT_ENV = {
 
 function makeFakeGithubApi(opts = {}) {
   const runs = opts.runs || [];
+  const artifacts = opts.artifacts || new Map();
   let seq = opts.startId || 55000000000;
+  let artSeq = 1;
   let dispatchHttp = 0;
+  const liveShaped = !!opts.liveShaped;
   return {
     runs,
+    artifacts,
     get dispatchHttp() { return dispatchHttp; },
     crashBeforeDispatch: !!opts.crashBeforeDispatch,
     timeout: !!opts.timeout,
@@ -40,29 +46,39 @@ function makeFakeGithubApi(opts = {}) {
       dispatchHttp += 1;
       if (this.status !== 204) return { status: this.status, reason: "dispatch_rejected" };
       if (!this.suppressRunOnDispatch) {
-        runs.push({
+        const run = {
           id: ++seq,
           run_attempt: 1,
           status: opts.runStatus || "queued",
           conclusion: opts.runConclusion ?? null,
           path: workflowFile,
-          workflow_file: workflowFile,
-          head_sha: inputs.sha,
+          head_sha: liveShaped ? "b".repeat(40) : inputs.sha,
           head_branch: "master",
           actor: { login: ACTOR },
           triggering_actor: { login: ACTOR },
           event: "workflow_dispatch",
           created_at: opts.createdAt || "2026-06-01T00:00:00.000Z",
-          environment: workflowFile === PRODUCTION_WORKFLOWS.BUILD ? null : "production",
-          outputs: {
+        };
+        runs.push(run);
+        if (opts.attachEvidence !== false && !liveShaped) {
+          const evidence = sealPhase15Evidence({
+            schema: PHASE15_EVIDENCE_SCHEMA,
+            workflow_file: workflowFile,
+            workflow_ref: REQUIRED_WORKFLOW_REF,
+            workflow_run_id: String(run.id),
+            workflow_attempt: 1,
+            head_sha: run.head_sha,
+            source_sha: inputs.sha,
+            actor: ACTOR,
+            triggering_actor: ACTOR,
+            environment: workflowFile === PRODUCTION_WORKFLOWS.BUILD ? null : "production",
+            release_intent_id: inputs.release_intent_id || null,
             image_digest: DIGEST,
             oci_revision: inputs.sha,
             oci_source: REQUIRED_OCI_SOURCE,
-            db_backup: workflowFile === PRODUCTION_WORKFLOWS.PREDEPLOY
-              ? { backup_id: "backup-1", backup_hash: "sha256:" + "11".repeat(32), verified: true }
-              : null,
-          },
-        });
+          });
+          artifacts.set(String(run.id), [{ id: ++artSeq, name: PHASE15_EVIDENCE_ARTIFACT, expired: false, evidence }]);
+        }
       }
       return { status: 204 };
     },
@@ -72,17 +88,19 @@ function makeFakeGithubApi(opts = {}) {
     async getWorkflowRun({ runId }) {
       const run = runs.find((r) => String(r.id) === String(runId));
       if (!run) return null;
-      return {
-        run,
-        jobs: run.environment ? [{ environment: { name: run.environment } }] : [],
-        outputs: run.outputs,
-      };
+      return { run, jobs: [] };
     },
-    async inspectImage({ sha, digest }) {
-      return { digest, oci_revision: sha, oci_source: REQUIRED_OCI_SOURCE };
+    async listArtifacts({ runId }) {
+      return { artifacts: artifacts.get(String(runId)) || [] };
     },
-    async healthSmoke() {
-      return { passed: true, health: true, landing: true, login: true, container_running: true, image_digest: DIGEST, oci_revision: SHA };
+    async downloadArtifact({ artifactId, runId }) {
+      const list = artifacts.get(String(runId)) || [...artifacts.values()].flat();
+      const art = list.find((a) => a.id === artifactId) || list[0];
+      return art ? { evidence: art.evidence } : null;
+    },
+    async inspectImage({ digest }) {
+      if (liveShaped) return { digest };
+      return { digest, oci_revision: SHA, oci_source: REQUIRED_OCI_SOURCE };
     },
   };
 }
@@ -107,7 +125,7 @@ test("injected GitHub adapter is available with grant and never stores secrets",
     workflowRef: REQUIRED_WORKFLOW_REF,
     inputs: { sha: SHA, image_digest: DIGEST },
     actor: ACTOR,
-    requestId: "intent-build-1",
+    requestId: "intent-build-0001",
   });
   assert.equal(dispatched.accepted, true);
   assert.ok(dispatched.workflow_run_id);
@@ -128,13 +146,13 @@ test("GitHub adapter 204 without a visible run is pending and does not invent a 
     workflowRef: REQUIRED_WORKFLOW_REF,
     inputs: { sha: SHA },
     actor: ACTOR,
-    requestId: "intent-204",
+    requestId: "intent-204-xxxxx",
   });
   assert.equal(dispatched.accepted, true);
   assert.equal(dispatched.pending_lookup, true);
   assert.equal(dispatched.workflow_run_id, null);
   assert.equal(api.dispatchHttp, 1);
-  const found = await provider.findWorkflowRunByIdempotency({ workflowFile: PRODUCTION_WORKFLOWS.BUILD, headSha: SHA });
+  const found = await provider.findWorkflowRunByIdempotency({ workflowFile: PRODUCTION_WORKFLOWS.BUILD, dispatchIntentId: "intent-204-xxxxx" });
   assert.equal(found, null);
 });
 
@@ -180,7 +198,7 @@ test("crash after dispatch response keeps exactly-once ownership and later looku
   assert.equal(replay.idempotent, true);
   assert.equal(api.dispatchHttp, 1);
   assert.ok(replay.workflow_run_id);
-  const found = await restarted.findWorkflowRunByIdempotency({ workflowFile: PRODUCTION_WORKFLOWS.BUILD, headSha: SHA });
+  const found = await restarted.findWorkflowRunByIdempotency({ workflowFile: PRODUCTION_WORKFLOWS.BUILD, dispatchIntentId: "intent-crash-after" });
   assert.equal(String(found.id), String(replay.workflow_run_id));
   assert.equal(found.status, "in_progress");
 });
@@ -195,7 +213,7 @@ test("timeout is accepted without a run id and does not re-dispatch as success",
     confirmation: "PREDEPLOY-PRODUCTION",
     actor: ACTOR,
     environment: "production",
-    requestId: "intent-timeout",
+    requestId: "intent-timeout-xx",
   });
   assert.equal(out.accepted, true);
   assert.equal(out.timeout, true);
@@ -216,8 +234,26 @@ test("ambiguous matching GitHub runs fail closed", async () => {
     event: "workflow_dispatch",
     created_at: "2026-06-01T00:00:00.000Z",
   };
+  const artifacts = new Map();
+  for (const id of [11, 12]) {
+    artifacts.set(String(id), [{
+      id,
+      name: PHASE15_EVIDENCE_ARTIFACT,
+      expired: false,
+      evidence: sealPhase15Evidence({
+        schema: PHASE15_EVIDENCE_SCHEMA,
+        workflow_file: PRODUCTION_WORKFLOWS.DEPLOY,
+        workflow_run_id: String(id),
+        workflow_attempt: 1,
+        actor: ACTOR,
+        triggering_actor: ACTOR,
+        release_intent_id: "intent-ambiguous",
+      }),
+    }]);
+  }
   const api = makeFakeGithubApi({
     runs: [{ ...twin, id: 11 }, { ...twin, id: 12 }],
+    artifacts,
     suppressRunOnDispatch: true,
   });
   const provider = makeGithubProductionReleaseProvider(GRANT_ENV, { githubApi: api });
@@ -232,7 +268,7 @@ test("ambiguous matching GitHub runs fail closed", async () => {
   });
   assert.equal(dispatched.accepted, false);
   assert.equal(dispatched.reason, "ambiguous_workflow_run");
-  const found = await provider.findWorkflowRunByIdempotency({ workflowFile: PRODUCTION_WORKFLOWS.DEPLOY, headSha: SHA });
+  const found = await provider.findWorkflowRunByIdempotency({ workflowFile: PRODUCTION_WORKFLOWS.DEPLOY, dispatchIntentId: "intent-ambiguous" });
   assert.equal(found.ambiguous, true);
   assert.equal(found.id, null);
   const correlated = correlateGithubWorkflowRuns(api.runs, { workflowFile: PRODUCTION_WORKFLOWS.DEPLOY, headSha: SHA, actor: ACTOR });
@@ -248,14 +284,14 @@ test("durable request id is exactly-once even if dispatch is retried", async () 
     workflowRef: REQUIRED_WORKFLOW_REF,
     inputs: { sha: SHA },
     actor: ACTOR,
-    requestId: "intent-once",
+    requestId: "intent-once-xxxxx",
   });
   const second = await provider.dispatchWorkflow({
     workflowFile: PRODUCTION_WORKFLOWS.BUILD,
     workflowRef: REQUIRED_WORKFLOW_REF,
     inputs: { sha: SHA },
     actor: ACTOR,
-    requestId: "intent-once",
+    requestId: "intent-once-xxxxx",
   });
   assert.equal(first.accepted, true);
   assert.equal(second.idempotent, true);
@@ -273,9 +309,12 @@ test("GitHub REST-shaped run without evidence artifact has no synthetic outputs"
     workflowRef: REQUIRED_WORKFLOW_REF,
     inputs: { sha: SHA, image_digest: DIGEST },
     actor: ACTOR,
-    requestId: "intent-rest",
+    requestId: "intent-rest-xxxxx",
   });
-  const wf = await provider.getWorkflowRun({ workflow_run_id: dispatched.workflow_run_id });
+  assert.equal(dispatched.accepted, true);
+  assert.equal(dispatched.pending_lookup, true);
+  assert.equal(dispatched.workflow_run_id, null);
+  const wf = await provider.getWorkflowRun({ workflow_run_id: String(api.runs[0].id) });
   assert.equal(wf.status, "completed");
   assert.deepEqual(wf.outputs, {});
   assert.equal(wf.outputs.image_digest, undefined);
@@ -316,18 +355,72 @@ test("trusted evidence artifact binds outputs only when run identity matches", (
     actor: { login: ACTOR },
     triggering_actor: { login: ACTOR },
   };
-  const ok = bindPhase15EvidenceToRun({
+  const sealed = sealPhase15Evidence({
     schema: PHASE15_EVIDENCE_SCHEMA,
     workflow_run_id: "11",
     workflow_attempt: 1,
     workflow_file: PRODUCTION_WORKFLOWS.DEPLOY,
     actor: ACTOR,
     triggering_actor: ACTOR,
+    release_intent_id: "intent-bind-ok",
     image_digest: DIGEST,
     oci_revision: SHA,
     oci_source: REQUIRED_OCI_SOURCE,
     health: { passed: true, health: true, landing: true, login: true, container_running: true, image_digest: DIGEST, oci_revision: SHA },
-  }, run);
+  });
+  const ok = bindPhase15EvidenceToRun(sealed, run, { releaseIntentId: "intent-bind-ok" });
   assert.equal(ok.image_digest, DIGEST);
-  assert.equal(bindPhase15EvidenceToRun({ ...ok, schema: PHASE15_EVIDENCE_SCHEMA, workflow_run_id: "11", workflow_attempt: 2 }, run), null);
+  assert.equal(bindPhase15EvidenceToRun({ ...sealed, workflow_attempt: 2 }, run, { releaseIntentId: "intent-bind-ok" }), null);
+  const tampered = { ...sealed, image_digest: "sha256:" + "cd".repeat(32) };
+  assert.equal(bindPhase15EvidenceToRun(tampered, run, { releaseIntentId: "intent-bind-ok" }), null);
+});
+
+test("missing or tampered evidence artifact fails closed", async () => {
+  const run = {
+    id: "22",
+    run_attempt: 1,
+    path: PRODUCTION_WORKFLOWS.PREDEPLOY,
+    actor: { login: ACTOR },
+    triggering_actor: { login: ACTOR },
+  };
+  const sealed = sealPhase15Evidence({
+    schema: PHASE15_EVIDENCE_SCHEMA,
+    workflow_run_id: "22",
+    workflow_attempt: 1,
+    workflow_file: PRODUCTION_WORKFLOWS.PREDEPLOY,
+    actor: ACTOR,
+    triggering_actor: ACTOR,
+    release_intent_id: "intent-predeploy-1",
+    environment: "production",
+    db_backup: { backup_id: "b1", backup_hash: "sha256:" + "11".repeat(32), verified: true },
+  });
+  assert.equal(bindPhase15EvidenceToRun(null, run, { releaseIntentId: "intent-predeploy-1" }), null);
+  assert.equal(bindPhase15EvidenceToRun({ ...sealed, evidence_sha256: "sha256:" + "00".repeat(32) }, run, { releaseIntentId: "intent-predeploy-1" }), null);
+  assert.equal(bindPhase15EvidenceToRun(sealed, run, { releaseIntentId: "intent-other-xxxxx" }), null);
+  const ok = bindPhase15EvidenceToRun(sealed, run, { releaseIntentId: "intent-predeploy-1" });
+  assert.equal(ok.db_backup.backup_id, "b1");
+});
+
+test("live REST-shaped fixture never fabricates OCI/health and rejects missing evidence", async () => {
+  const api = makeFakeGithubApi({ liveShaped: true, runStatus: "completed", runConclusion: "success" });
+  const provider = makeGithubProductionReleaseProvider(GRANT_ENV, { githubApi: api });
+  const dispatched = await provider.dispatchWorkflow({
+    workflowFile: PRODUCTION_WORKFLOWS.BUILD,
+    workflowRef: REQUIRED_WORKFLOW_REF,
+    inputs: { sha: SHA, image_digest: DIGEST },
+    actor: ACTOR,
+    requestId: "intent-live-rest",
+  });
+  assert.equal(dispatched.accepted, true);
+  assert.equal(dispatched.pending_lookup, true);
+  assert.equal(dispatched.workflow_run_id, null);
+  const wf = await provider.getWorkflowRun({ workflow_run_id: String(api.runs[0].id) });
+  assert.deepEqual(wf.outputs, {});
+  const inspected = await provider.inspectImage({ digest: DIGEST, sha: SHA });
+  assert.equal(inspected.digest, DIGEST);
+  assert.equal(inspected.oci_revision, null);
+  assert.equal(inspected.oci_source, null);
+  const health = await provider.healthSmoke({ imageDigest: DIGEST, headSha: SHA, workflow: wf });
+  assert.equal(health.passed, false);
+  assert.equal(health.container_running, false);
 });

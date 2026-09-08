@@ -145,7 +145,7 @@ export function makeStubProductionReleaseProvider(opts = {}) {
         actor: actor || opts.actor || "Fyun48",
         triggering_actor: actor || opts.actor || "Fyun48",
         environment: workflowFile === PRODUCTION_WORKFLOWS.BUILD ? null : (environment || REQUIRED_TARGET_ENVIRONMENT),
-        inputs,
+        inputs: { ...inputs, release_intent_id: requestId },
         idempotency_key: idempotencyKey,
         request_id: requestId,
         provider_response_identity: responseIdentity,
@@ -182,7 +182,15 @@ export function makeStubProductionReleaseProvider(opts = {}) {
       return runsById.get(String(workflow_run_id)) || null;
     },
 
-    async findWorkflowRunByIdempotency({ idempotencyKey } = {}) {
+    async findWorkflowRunByIdempotency({ idempotencyKey, dispatchIntentId } = {}) {
+      if (dispatchIntentId) {
+        const matches = [];
+        for (const run of runsById.values()) {
+          if (run.request_id === dispatchIntentId || run.inputs?.release_intent_id === dispatchIntentId) matches.push(run);
+        }
+        if (matches.length > 1) return { ambiguous: true, id: null };
+        return matches[0] || null;
+      }
       if (!idempotencyKey) return null;
       return runsByKey.get(String(idempotencyKey)) || null;
     },

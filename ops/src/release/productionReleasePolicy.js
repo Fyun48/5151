@@ -208,14 +208,17 @@ export function productionReleaseInputFingerprint(p) {
     `artifact_digest:${p.artifactDigest}`,
     `target_environment:${p.targetEnvironment}`,
     `workflow_ref:${p.workflowRef}`,
-    `expected_master_head:${p.expectedMasterHead ?? ""}`,
-    `github_actor:${p.githubActor || ""}`,
     `policy_fp:${p.policyFingerprint}`,
   ].sort();
   return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
 }
 
-export function workflowIdempotencyKey({ releaseRunId, workflowKind, inputFingerprint }) {
+export function workflowIdempotencyKey({
+  releaseAuthorizationId, targetEnvironment = REQUIRED_TARGET_ENVIRONMENT, workflowKind, releaseRunId, inputFingerprint,
+}) {
+  if (releaseAuthorizationId != null) {
+    return createHash("sha256").update(`phase15-auth:${releaseAuthorizationId}:${targetEnvironment}:${workflowKind}`).digest("hex");
+  }
   return createHash("sha256").update(`phase15:${releaseRunId}:${workflowKind}:${inputFingerprint}`).digest("hex");
 }
 
@@ -228,10 +231,16 @@ export function isNonTerminalWorkflowStatus(runStatus) {
   return NON_TERMINAL_RUN_STATUSES.includes(String(runStatus || ""));
 }
 
+export const AUTHORIZED_GITHUB_ACTOR = "Fyun48";
+
 export function isAuthorizedGithubActor(login) {
-  const s = String(login || "");
-  if (!s || s === "latest" || s.startsWith("owner:") || /@/.test(s)) return false;
-  return /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(s);
+  return String(login || "") === AUTHORIZED_GITHUB_ACTOR;
+}
+
+export function authorizedGithubActorFromEnv(env = process.env) {
+  const fromEnv = String(env.PRODUCTION_RELEASE_GITHUB_ACTOR || "").trim();
+  if (fromEnv && isAuthorizedGithubActor(fromEnv)) return fromEnv;
+  return AUTHORIZED_GITHUB_ACTOR;
 }
 
 export function stableProvenanceFingerprint(provenance) {

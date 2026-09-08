@@ -13,6 +13,10 @@ on:
       sha:
         description: "要建置的完整 40 碼 commit SHA（必須可從 origin/master 追溯）"
         required: true
+      release_intent_id:
+        description: "Ops Phase 15 durable intent（手動觸發可留空）"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -222,6 +226,7 @@ jobs:
           SOURCE_SHA: ${{ inputs.sha }}
           WF_ACTOR: ${{ github.actor }}
           WF_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          RELEASE_INTENT_ID: ${{ inputs.release_intent_id }}
           IMAGE_DIGEST: ${{ steps.digest.outputs.digest }}
           OCI_REVISION: ${{ inputs.sha }}
           OCI_SOURCE: https://github.com/${{ github.repository }}

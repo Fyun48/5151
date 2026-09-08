@@ -408,12 +408,14 @@ test("timeout/unknown result reconciles by idempotency and never double-dispatch
     const { authorization, assessment } = await cleared(db, codingTaskId, repo);
     const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW });
     const provider = makeStubProductionReleaseProvider({ dispatchTimeout: true });
-    await assert.rejects(() => executeProductionRelease(db, created.run.id, { provider, repo, now: NOW }), /verifiable workflow run|reconcile/);
+    await assert.rejects(() => executeProductionRelease(db, created.run.id, { provider, repo, now: NOW }), /still queued|in_progress|verifiable/);
     assert.equal(provider.dispatchCount, 1);
-    const replay = await reconcileProductionRelease(db, created.run.id, { provider, repo, now: NOW });
-    assert.equal(replay.idempotent, true);
-    assert.equal(replay.current_status, "BLOCKED");
+    assert.equal(getProductionRelease(db, created.run.id).run.current_status, "BUILD_DISPATCHED");
+    await assert.rejects(() => reconcileProductionRelease(db, created.run.id, { provider, repo, now: NOW }), /still queued|reconcile/);
     assert.equal(provider.dispatchCount, 1);
+    const fresh = makeStubProductionReleaseProvider({ dispatchTimeout: true });
+    await assert.rejects(() => reconcileProductionRelease(db, created.run.id, { provider: fresh, repo, now: NOW }), /still queued|reconcile/);
+    assert.equal(fresh.dispatchCount, 0);
     assert.equal(getProductionStable(db), null);
   } finally { git.cleanup(); db.close(); }
 });
@@ -674,7 +676,11 @@ test("worker restart after claimed dispatch binds by idempotency and never re-di
     const { authorization, assessment } = await cleared(db, codingTaskId, repo);
     seedPrev(db, repo);
     const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW, actor: "owner" });
-    const key = workflowIdempotencyKey({ releaseRunId: created.run.id, workflowKind: "build", inputFingerprint: created.run.input_fingerprint });
+    const key = workflowIdempotencyKey({
+      releaseAuthorizationId: created.run.release_authorization_id,
+      targetEnvironment: created.run.target_environment,
+      workflowKind: "build",
+    });
     const intent = "restart-intent-1";
     db.prepare(
       `INSERT INTO production_release_workflow_binding(release_run_id, workflow_kind, idempotency_key, binding_status, dispatch_owner, dispatch_intent_id, dispatch_request_id, dispatch_claimed_at, created_at)
@@ -1077,6 +1083,268 @@ test("rewriting bound actor/run-id/attempt/provenance is aborted by DB", async (
     assert.throws(() => db.prepare("UPDATE production_release_workflow_binding SET authorized_github_actor=? WHERE id=?").run("attacker", b.id), /immutable/);
     assert.throws(() => db.prepare("UPDATE production_release_workflow_binding SET dispatch_request_id=? WHERE id=?").run("other-req", b.id), /immutable/);
     assert.throws(() => db.prepare("UPDATE production_release_workflow_binding SET provider_response_identity=? WHERE id=?").run("other-resp", b.id), /immutable/);
+    assert.throws(() => db.prepare("UPDATE production_release_workflow_binding SET dispatch_submitted_at=? WHERE id=?").run("2099-01-01T00:00:00.000Z", b.id), /immutable/);
+  } finally { git.cleanup(); db.close(); }
+});
+
+function persistClaimedBinding(db, run, workflowKind, { intent, submitted = false, actor = GITHUB_ACTOR } = {}) {
+  const key = workflowIdempotencyKey({
+    releaseAuthorizationId: run.release_authorization_id,
+    targetEnvironment: run.target_environment,
+    workflowKind,
+  });
+  db.prepare(
+    `INSERT INTO production_release_workflow_binding(
+      release_run_id, workflow_kind, idempotency_key, binding_status, dispatch_owner,
+      dispatch_intent_id, dispatch_request_id, dispatch_claimed_at, dispatch_submitted_at,
+      authorized_github_actor, created_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+  ).run(
+    run.id, workflowKind, key, "claimed", "dead-owner",
+    intent, intent, NOW.toISOString(), submitted ? NOW.toISOString() : null,
+    actor, NOW.toISOString(),
+  );
+  return key;
+}
+
+test("caller-controlled github actor and expected master do not create a second run", async () => {
+  const db = openOpsDb(":memory:");
+  const { codingTaskId, repo, git } = await makeStagedTask(db);
+  try {
+    const { authorization, assessment } = await cleared(db, codingTaskId, repo);
+    seedPrev(db, repo);
+    assert.throws(() => createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, {
+      expectedMasterHead: expectedMaster(repo), githubActor: "attacker",
+    }), { repo, now: NOW }), /github actor|GitHub login/);
+    const first = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, {
+      expectedMasterHead: expectedMaster(repo),
+    }), { repo, now: NOW, actor: "owner:a" });
+    const second = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, {
+      expectedMasterHead: "d".repeat(40),
+    }), { repo, now: NOW, actor: "owner:b" });
+    assert.equal(second.idempotent, true);
+    assert.equal(first.run.id, second.run.id);
+    assert.equal(db.prepare("SELECT COUNT(*) c FROM production_release_run WHERE release_authorization_id=?").get(authorization.id).c, 1);
+    const provider = makeStubProductionReleaseProvider({ deduplicate: false });
+    const settled = await Promise.allSettled([
+      executeProductionRelease(db, first.run.id, { provider, repo, now: NOW, actor: "owner:a" }),
+      executeProductionRelease(db, first.run.id, { provider, repo, now: NOW, actor: "owner:b" }),
+    ]);
+    assert.ok(settled.some((s) => s.status === "fulfilled"));
+    assert.equal(provider.dispatchCount, 3);
+    assert.equal(getProductionRelease(db, first.run.id).run.current_status, "SUCCEEDED");
+    assert.equal(getProductionRelease(db, first.run.id).run.authorized_github_actor, GITHUB_ACTOR);
+  } finally { git.cleanup(); db.close(); }
+});
+
+test("crash before dispatch call may retry once; crash after 204 never redispatches", async () => {
+  const db = openOpsDb(":memory:");
+  const { codingTaskId, repo, git } = await makeStagedTask(db);
+  try {
+    const { authorization, assessment } = await cleared(db, codingTaskId, repo);
+    seedPrev(db, repo);
+    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW });
+    persistClaimedBinding(db, created.run, "build", { intent: "crash-before-call-1", submitted: false });
+    const before = makeStubProductionReleaseProvider({ deduplicate: false });
+    const out = await executeProductionRelease(db, created.run.id, { provider: before, repo, now: NOW });
+    assert.equal(out.run.current_status, "SUCCEEDED");
+    assert.equal(before.dispatchCount, 3);
+  } finally { git.cleanup(); db.close(); }
+});
+
+test("crash after accepted 204 binds by release_intent_id on a fresh provider", async () => {
+  const db = openOpsDb(":memory:");
+  const { codingTaskId, repo, git } = await makeStagedTask(db);
+  try {
+    const { authorization, assessment } = await cleared(db, codingTaskId, repo);
+    seedPrev(db, repo);
+    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW });
+    const intent = "crash-after-204-intent";
+    const key = persistClaimedBinding(db, created.run, "build", { intent, submitted: true });
+    const fresh = makeStubProductionReleaseProvider({ deduplicate: false });
+    await fresh.dispatchWorkflow({
+      workflowFile: PRODUCTION_WORKFLOWS.BUILD,
+      workflowRef: REQUIRED_WORKFLOW_REF,
+      inputs: { sha: authorization.head_sha, expected_digest: authorization.artifact_digest, image_digest: authorization.artifact_digest },
+      idempotencyKey: key,
+      actor: GITHUB_ACTOR,
+      requestId: intent,
+    });
+    assert.equal(fresh.dispatchCount, 1);
+    const out = await executeProductionRelease(db, created.run.id, { provider: fresh, repo, now: NOW });
+    assert.equal(out.run.current_status, "SUCCEEDED");
+    assert.equal(fresh.dispatchCount, 3);
+    const build = getProductionRelease(db, created.run.id).bindings.find((b) => b.workflow_kind === "build");
+    assert.equal(build.dispatch_intent_id, intent);
+    assert.ok(build.workflow_run_id);
+  } finally { git.cleanup(); db.close(); }
+});
+
+test("unrelated same-SHA manual run is not bound after restart", async () => {
+  const db = openOpsDb(":memory:");
+  const { codingTaskId, repo, git } = await makeStagedTask(db);
+  try {
+    const { authorization, assessment } = await cleared(db, codingTaskId, repo);
+    seedPrev(db, repo);
+    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW });
+    persistClaimedBinding(db, created.run, "build", { intent: "claimed-intent-xxxx", submitted: true });
+    const fresh = makeStubProductionReleaseProvider({ deduplicate: false });
+    await fresh.dispatchWorkflow({
+      workflowFile: PRODUCTION_WORKFLOWS.BUILD,
+      workflowRef: REQUIRED_WORKFLOW_REF,
+      inputs: { sha: authorization.head_sha, expected_digest: authorization.artifact_digest, image_digest: authorization.artifact_digest },
+      idempotencyKey: "unrelated-manual-key",
+      actor: GITHUB_ACTOR,
+      requestId: "unrelated-manual-run",
+    });
+    assert.equal(fresh.dispatchCount, 1);
+    await assert.rejects(() => executeProductionRelease(db, created.run.id, { provider: fresh, repo, now: NOW }), /still queued/);
+    assert.equal(fresh.dispatchCount, 1);
+    const build = getProductionRelease(db, created.run.id).bindings.find((b) => b.workflow_kind === "build");
+    assert.equal(build.workflow_run_id, null);
+    assert.equal(build.dispatch_intent_id, "claimed-intent-xxxx");
+  } finally { git.cleanup(); db.close(); }
+});
+
+test("ambiguous intent-correlated runs fail closed without binding", async () => {
+  const db = openOpsDb(":memory:");
+  const { codingTaskId, repo, git } = await makeStagedTask(db);
+  try {
+    const { authorization, assessment } = await cleared(db, codingTaskId, repo);
+    seedPrev(db, repo);
+    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW });
+    const intent = "intent-ambiguous-xx";
+    persistClaimedBinding(db, created.run, "build", { intent, submitted: true });
+    const fresh = makeStubProductionReleaseProvider({ deduplicate: false });
+    for (const suffix of ["a", "b"]) {
+      await fresh.dispatchWorkflow({
+        workflowFile: PRODUCTION_WORKFLOWS.BUILD,
+        workflowRef: REQUIRED_WORKFLOW_REF,
+        inputs: { sha: authorization.head_sha, expected_digest: authorization.artifact_digest, image_digest: authorization.artifact_digest },
+        idempotencyKey: `ambiguous-key-${suffix}`,
+        actor: GITHUB_ACTOR,
+        requestId: intent,
+      });
+    }
+    await assert.rejects(() => executeProductionRelease(db, created.run.id, { provider: fresh, repo, now: NOW }), /ambiguous/);
+    const build = getProductionRelease(db, created.run.id).bindings.find((b) => b.workflow_kind === "build");
+    assert.equal(build.workflow_run_id, null);
+    assert.equal(fresh.dispatchCount, 2);
+  } finally { git.cleanup(); db.close(); }
+});
+
+test("A waiting on build then B success: resume A must not deploy or move the pointer", async () => {
+  const db = openOpsDb(":memory:");
+  const stagedA = await makeStagedTask(db);
+  const stagedB = await makeStagedTask(db);
+  try {
+    const a = await cleared(db, stagedA.codingTaskId, stagedA.repo);
+    seedPrev(db, stagedA.repo);
+    const providerA = makeStubProductionReleaseProvider({ pendingWorkflows: [PRODUCTION_WORKFLOWS.BUILD] });
+    const runA = createProductionReleaseRun(db, execBody(stagedA.codingTaskId, a.authorization, a.assessment, { expectedMasterHead: stagedA.repo.resolveRemoteRef("master") }), { repo: stagedA.repo, now: NOW });
+    await assert.rejects(() => executeProductionRelease(db, runA.run.id, { provider: providerA, repo: stagedA.repo, now: NOW }), /still in_progress|still queued/);
+    assert.equal(providerA.dispatchCount, 1);
+    const b = await cleared(db, stagedB.codingTaskId, stagedB.repo);
+    const providerB = makeStubProductionReleaseProvider();
+    const runB = createProductionReleaseRun(db, execBody(stagedB.codingTaskId, b.authorization, b.assessment, { expectedMasterHead: stagedB.repo.resolveRemoteRef("master") }), { repo: stagedB.repo, now: NOW });
+    const outB = await executeProductionRelease(db, runB.run.id, { provider: providerB, repo: stagedB.repo, now: NOW });
+    assert.equal(outB.run.current_status, "SUCCEEDED");
+    assert.equal(getProductionStable(db).source_sha, b.authorization.head_sha);
+    for (const run of providerA._runsById.values()) {
+      if (run.workflow_file === PRODUCTION_WORKFLOWS.BUILD) {
+        run.status = "completed";
+        run.conclusion = "success";
+      }
+    }
+    await assert.rejects(() => executeProductionRelease(db, runA.run.id, { provider: providerA, repo: stagedA.repo, now: NOW }), /stable identity|superseded/);
+    assert.equal(providerA.dispatchCount, 1);
+    assert.ok(!getProductionRelease(db, runA.run.id).bindings.some((x) => x.workflow_kind === "deploy" && x.workflow_run_id));
+    assert.equal(getProductionStable(db).source_sha, b.authorization.head_sha);
+    assert.equal(getProductionStable(db).release_run_id, runB.run.id);
+  } finally { stagedA.git.cleanup(); stagedB.git.cleanup(); db.close(); }
+});
+
+test("stable identity changing immediately before deploy blocks dispatch and pointer write", async () => {
+  const db = openOpsDb(":memory:");
+  const { codingTaskId, repo, git } = await makeStagedTask(db);
+  try {
+    const { authorization, assessment } = await cleared(db, codingTaskId, repo);
+    const prev = seedPrev(db, repo);
+    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW });
+    const provider = makeStubProductionReleaseProvider();
+    await assert.rejects(() => executeProductionRelease(db, created.run.id, {
+      provider, repo, now: NOW,
+      hooks: {
+        beforeDispatch({ workflowKind }) {
+          if (workflowKind === "deploy") {
+            seedProductionStable(db, {
+              sourceSha: "b".repeat(40),
+              artifactDigest: "sha256:" + "22".repeat(32),
+              workflowRunId: "34111111111",
+              releaseRunId: created.run.id + 50,
+              provenance: { kind: "sneak_b" },
+              now: NOW,
+            });
+          }
+        },
+      },
+    }), /stable identity|superseded/);
+    assert.equal(provider.dispatchCount, 2);
+    assert.ok(!getProductionRelease(db, created.run.id).bindings.some((x) => x.workflow_kind === "deploy" && x.workflow_run_id));
+    assert.equal(getProductionStable(db).source_sha, "b".repeat(40));
+    assert.notEqual(getProductionStable(db).source_sha, authorization.head_sha);
+    assert.equal(getProductionStable(db).source_sha === prev.source_sha, false);
+  } finally { git.cleanup(); db.close(); }
+});
+
+test("GitHub live REST fixture plus orchestrator stays fail-closed without evidence", async () => {
+  const db = openOpsDb(":memory:");
+  const { codingTaskId, repo, git } = await makeStagedTask(db);
+  try {
+    const { authorization, assessment } = await cleared(db, codingTaskId, repo);
+    seedPrev(db, repo);
+    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW });
+    const runs = [];
+    const artifacts = new Map();
+    let dispatchHttp = 0;
+    const api = {
+      async dispatchWorkflow({ inputs }) {
+        dispatchHttp += 1;
+        runs.push({
+          id: 55000000001,
+          run_attempt: 1,
+          status: "completed",
+          conclusion: "success",
+          path: PRODUCTION_WORKFLOWS.BUILD,
+          head_sha: "b".repeat(40),
+          head_branch: "master",
+          actor: { login: GITHUB_ACTOR },
+          triggering_actor: { login: GITHUB_ACTOR },
+          event: "workflow_dispatch",
+          created_at: NOW.toISOString(),
+        });
+        artifacts.set("55000000001", []);
+        return { status: 204, inputs };
+      },
+      async listWorkflowRuns() { return { runs }; },
+      async getWorkflowRun({ runId }) {
+        const run = runs.find((r) => String(r.id) === String(runId));
+        return run ? { run, jobs: [] } : null;
+      },
+      async listArtifacts() { return { artifacts: [] }; },
+      async downloadArtifact() { return null; },
+      async inspectImage({ digest }) { return { digest }; },
+    };
+    const provider = makeGithubProductionReleaseProvider({
+      PRODUCTION_RELEASE_PROVIDER: "github",
+      PRODUCTION_RELEASE_MUTATION_GRANT: "owner-dispatch-v1",
+      PRODUCTION_RELEASE_GITHUB_ACTOR: GITHUB_ACTOR,
+      GITHUB_REPOSITORY: "Fyun48/5151",
+    }, { githubApi: api });
+    await assert.rejects(() => executeProductionRelease(db, created.run.id, { provider, repo, now: NOW }), /still queued|not an exact successful|evidence|outputs|digest|OCI|image/);
+    assert.equal(dispatchHttp, 1);
+    assert.notEqual(getProductionRelease(db, created.run.id).run.current_status, "SUCCEEDED");
+    assert.notEqual(getProductionStable(db).source_sha, authorization.head_sha);
   } finally { git.cleanup(); db.close(); }
 });
 

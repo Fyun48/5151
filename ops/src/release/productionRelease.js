@@ -19,6 +19,7 @@ import {
   digestLooksImmutable,
   isAllowedReleaseTransition,
   isAuthorizedGithubActor,
+  authorizedGithubActorFromEnv,
   isTerminalReleaseStatus,
   previousStableComplete,
   productionReleaseConfigFromEnv,
@@ -315,15 +316,63 @@ function getBinding(db, releaseRunId, kind) {
   return db.prepare("SELECT * FROM production_release_workflow_binding WHERE release_run_id=? AND workflow_kind=?").get(Number(releaseRunId), kind) || null;
 }
 
-function reserveBinding(db, { releaseRunId, workflowKind, inputFingerprint, now }) {
-  const existing = getBinding(db, releaseRunId, workflowKind);
+function reserveBinding(db, { run, workflowKind, now }) {
+  const existing = getBinding(db, run.id, workflowKind);
   if (existing) return existing;
-  const key = workflowIdempotencyKey({ releaseRunId, workflowKind, inputFingerprint });
+  const key = workflowIdempotencyKey({
+    releaseAuthorizationId: run.release_authorization_id,
+    targetEnvironment: run.target_environment || REQUIRED_TARGET_ENVIRONMENT,
+    workflowKind,
+  });
   db.prepare(
     `INSERT INTO production_release_workflow_binding(release_run_id, workflow_kind, idempotency_key, binding_status, created_at)
      VALUES (?,?,?,?,?)`,
-  ).run(Number(releaseRunId), workflowKind, key, BINDING_STATUSES.RESERVED, iso(now));
-  return getBinding(db, releaseRunId, workflowKind);
+  ).run(Number(run.id), workflowKind, key, BINDING_STATUSES.RESERVED, iso(now));
+  return getBinding(db, run.id, workflowKind);
+}
+
+function expectedStableFromRun(run) {
+  const provenance = parse(run.previous_stable_provenance);
+  return stableSnapshot({
+    source_sha: run.previous_stable_sha,
+    artifact_digest: run.previous_stable_digest,
+    workflow_run_id: run.previous_stable_workflow_run_id,
+    release_run_id: run.previous_stable_release_run_id,
+    provenance,
+    provenance_fingerprint: provenance?.provenance_fingerprint || stableProvenanceFingerprint(provenance),
+  });
+}
+
+function markDispatchSubmitted(db, bindingId, now) {
+  const res = db.prepare(
+    `UPDATE production_release_workflow_binding SET dispatch_submitted_at=?
+     WHERE id=? AND dispatch_submitted_at IS NULL AND workflow_run_id IS NULL`,
+  ).run(iso(now), Number(bindingId));
+  return res.changes === 1;
+}
+
+const MUTATING_WORKFLOWS = new Set([WORKFLOW_KINDS.DEPLOY, WORKFLOW_KINDS.ROLLBACK]);
+
+function claimGlobalProductionLease(db, { releaseRunId, workflowKind, owner, now }) {
+  if (!MUTATING_WORKFLOWS.has(workflowKind)) return;
+  db.prepare(`INSERT OR IGNORE INTO production_release_global_lease(id, updated_at) VALUES (1, ?)`).run(iso(now));
+  const row = db.prepare("SELECT * FROM production_release_global_lease WHERE id=1").get();
+  if (row?.release_run_id && Number(row.release_run_id) !== Number(releaseRunId)) {
+    throw httpError("global production dispatch lease held by another release", 409);
+  }
+  const res = db.prepare(
+    `UPDATE production_release_global_lease SET release_run_id=?, workflow_kind=?, lease_owner=?, claimed_at=?, updated_at=?
+     WHERE id=1 AND (release_run_id IS NULL OR release_run_id=?)`,
+  ).run(Number(releaseRunId), workflowKind, owner, iso(now), iso(now), Number(releaseRunId));
+  if (res.changes !== 1) throw httpError("global production dispatch lease held by another release", 409);
+}
+
+function releaseGlobalProductionLease(db, { releaseRunId, workflowKind }) {
+  if (!MUTATING_WORKFLOWS.has(workflowKind)) return;
+  db.prepare(
+    `UPDATE production_release_global_lease SET release_run_id=NULL, workflow_kind=NULL, lease_owner=NULL, claimed_at=NULL, updated_at=?
+     WHERE id=1 AND release_run_id=?`,
+  ).run(new Date().toISOString(), Number(releaseRunId));
 }
 
 function saveBindingDispatch(db, bindingId, { workflowRunId, attempt, requestId, responseIdentity, status }) {
@@ -412,15 +461,22 @@ function claimDispatchLease(db, { run, workflowKind, owner, now, repo, env }) {
     assertIdentitiesUnchanged(db, run, { repo, env, allowMasterMovement: true });
     let binding = getBinding(db, run.id, workflowKind);
     if (!binding) {
-      reserveBinding(db, { releaseRunId: run.id, workflowKind, inputFingerprint: run.input_fingerprint, now });
+      reserveBinding(db, { run, workflowKind, now });
       binding = getBinding(db, run.id, workflowKind);
     }
     if (binding.workflow_run_id) return { binding, role: "reconcile" };
-    if (binding.binding_status === BINDING_STATUSES.UNKNOWN) return { binding, role: "reconcile_unknown" };
+    if (binding.binding_status === BINDING_STATUSES.UNKNOWN) return { binding, role: "lookup" };
     if (binding.binding_status === BINDING_STATUSES.DISPATCHED || binding.binding_status === BINDING_STATUSES.RECONCILED) {
-      return { binding, role: "wait" };
+      return { binding, role: "lookup" };
     }
-    if (binding.binding_status === BINDING_STATUSES.CLAIMED) return { binding, role: "wait" };
+    if (binding.binding_status === BINDING_STATUSES.CLAIMED && binding.dispatch_submitted_at) {
+      return { binding, role: "lookup" };
+    }
+    if (binding.binding_status === BINDING_STATUSES.CLAIMED && !binding.dispatch_submitted_at) {
+      db.prepare(`UPDATE production_release_workflow_binding SET dispatch_owner=? WHERE id=? AND dispatch_submitted_at IS NULL AND workflow_run_id IS NULL`)
+        .run(owner, Number(binding.id));
+      return { binding: getBinding(db, run.id, workflowKind), role: "dispatch" };
+    }
     const intentId = binding.dispatch_intent_id || binding.dispatch_request_id || newDispatchRequestId();
     const res = db.prepare(
       `UPDATE production_release_workflow_binding
@@ -463,20 +519,73 @@ async function dispatchOrReconcile(db, {
   });
   let binding = claimedBinding;
 
-  if (role === "dispatch") {
+  if (!binding.workflow_run_id && (binding.dispatch_intent_id || binding.dispatch_request_id)) {
+    const foundEarly = await provider.findWorkflowRunByIdempotency({
+      idempotencyKey: binding.idempotency_key,
+      workflowFile,
+      workflowRef: run.workflow_ref,
+      headSha: workflowKind === WORKFLOW_KINDS.ROLLBACK ? run.previous_stable_sha : run.authorized_head_sha,
+      actor: run.authorized_github_actor,
+      createdAfter: binding.dispatch_claimed_at || binding.created_at,
+      dispatchIntentId: binding.dispatch_intent_id || binding.dispatch_request_id,
+      environment,
+    });
+    if (foundEarly?.ambiguous) {
+      withImmediateTx(db, () => {
+        appendEvent(db, { releaseRunId: run.id, toStatus: RELEASE_STATUSES.BLOCKED, eventType: `${workflowKind}_ambiguous`, reason: "multiple_matching_workflow_runs", errorCode: "ambiguous_workflow_run", now, actor });
+      });
+      throw httpError("ambiguous workflow run correlation; refuse to guess", 409);
+    }
+    if (foundEarly?.id) {
+      withImmediateTx(db, () => {
+        const fresh = getBinding(db, run.id, workflowKind);
+        if (!fresh.workflow_run_id) {
+          saveBindingDispatch(db, fresh.id, {
+            workflowRunId: String(foundEarly.id),
+            attempt: foundEarly.attempt,
+            requestId: foundEarly.request_id || fresh.dispatch_request_id,
+            responseIdentity: foundEarly.provider_response_identity,
+            status: BINDING_STATUSES.DISPATCHED,
+          });
+          appendEvent(db, { releaseRunId: run.id, toStatus: dispatchedStatus, eventType: `${workflowKind}_dispatched`, now, actor });
+        }
+      });
+      binding = getBinding(db, run.id, workflowKind);
+    }
+  }
+
+    if (role === "dispatch" && !binding.workflow_run_id) {
     if (hooks?.beforeDispatch) await hooks.beforeDispatch({ workflowKind, run, binding });
     assertIdentitiesUnchanged(db, run, { repo, env, allowMasterMovement: true });
-    if (observedStable) requireStableUnchanged(db, observedStable);
+    if (observedStable) {
+      try {
+        requireStableUnchanged(db, observedStable);
+      } catch (err) {
+        withImmediateTx(db, () => {
+          appendEvent(db, {
+            releaseRunId: run.id, toStatus: RELEASE_STATUSES.BLOCKED, eventType: "stable_superseded",
+            reason: "production_stable_identity_drifted", errorCode: "stable_superseded", now, actor,
+          });
+        });
+        throw err;
+      }
+    }
+    claimGlobalProductionLease(db, { releaseRunId: run.id, workflowKind, owner: leaseOwner, now });
+    const submitted = markDispatchSubmitted(db, binding.id, now);
+    if (!submitted) {
+      throw httpError(`${workflowKind} is still queued`, 409, { code: "workflow_in_progress" });
+    }
+    const intentId = binding.dispatch_request_id || binding.dispatch_intent_id;
     const dispatched = await provider.dispatchWorkflow({
       workflowFile,
       workflowRef: run.workflow_ref,
-      inputs,
+      inputs: { ...inputs, release_intent_id: intentId },
       idempotencyKey: binding.idempotency_key,
       expectedHead: run.expected_master_head || null,
       actor: run.authorized_github_actor,
       environment,
       confirmation,
-      requestId: binding.dispatch_request_id || binding.dispatch_intent_id,
+      requestId: intentId,
     });
     let afterDispatchError = null;
     withImmediateTx(db, () => {
@@ -494,7 +603,7 @@ async function dispatchOrReconcile(db, {
         return;
       }
       if (!dispatched.workflow_run_id) {
-        if (dispatched.pending_lookup) {
+        if (dispatched.pending_lookup || dispatched.timeout) {
           saveBindingDispatch(db, fresh.id, {
             status: BINDING_STATUSES.DISPATCHED,
             requestId: dispatched.request_id,
@@ -560,7 +669,7 @@ async function dispatchOrReconcile(db, {
         });
         throw httpError("ambiguous workflow run correlation; refuse to guess", 409);
       }
-      if (role === "wait" || binding.binding_status === BINDING_STATUSES.CLAIMED || binding.binding_status === BINDING_STATUSES.DISPATCHED) {
+      if (role === "wait" || role === "lookup" || binding.binding_status === BINDING_STATUSES.CLAIMED || binding.binding_status === BINDING_STATUSES.DISPATCHED) {
         throw httpError(`${workflowKind} is still queued`, 409, { code: "workflow_in_progress" });
       }
       withImmediateTx(db, () => {
@@ -645,6 +754,11 @@ async function dispatchOrReconcile(db, {
 
 export function createProductionReleaseRun(db, body, { repo = null, env = process.env, now = new Date(), actor = "owner" } = {}) {
   requireExactIdentities(body);
+  const serverActor = authorizedGithubActorFromEnv(env);
+  if (!serverActor) throw httpError("authorized github actor is not configured", 503);
+  if (body.githubActor && body.githubActor !== serverActor) {
+    throw httpError("github actor must be the server-authorized login", 400);
+  }
   const policy = buildProductionReleasePolicy(productionReleaseConfigFromEnv(env));
   const policyFp = productionReleasePolicyFingerprint(policy);
   const task = db.prepare("SELECT * FROM development_coding_task WHERE id=?").get(Number(body.codingTaskId));
@@ -684,10 +798,14 @@ export function createProductionReleaseRun(db, body, { repo = null, env = proces
     artifactDigest: auth.artifact_digest,
     targetEnvironment: REQUIRED_TARGET_ENVIRONMENT,
     workflowRef: REQUIRED_WORKFLOW_REF,
-    expectedMasterHead: body.expectedMasterHead || "",
-    githubActor: body.githubActor,
     policyFingerprint: policyFp,
   });
+  const existingAuth = db.prepare(
+    "SELECT * FROM production_release_run WHERE release_authorization_id=? AND target_environment=?",
+  ).get(Number(auth.id), REQUIRED_TARGET_ENVIRONMENT);
+  if (existingAuth) {
+    return { idempotent: true, run: publicReleaseRun(db, existingAuth) };
+  }
   const existing = db.prepare("SELECT * FROM production_release_run WHERE input_fingerprint=?").get(inputFp);
   if (existing) {
     return { idempotent: true, run: publicReleaseRun(db, existing) };
@@ -711,6 +829,8 @@ export function createProductionReleaseRun(db, body, { repo = null, env = proces
   const prev = snapshotPreviousStable(db);
   const ts = iso(now);
   return withImmediateTx(db, () => {
+    const racedAuth = db.prepare("SELECT * FROM production_release_run WHERE release_authorization_id=? AND target_environment=?").get(Number(auth.id), REQUIRED_TARGET_ENVIRONMENT);
+    if (racedAuth) return { idempotent: true, run: publicReleaseRun(db, racedAuth) };
     const raced = db.prepare("SELECT * FROM production_release_run WHERE input_fingerprint=?").get(inputFp);
     if (raced) return { idempotent: true, run: publicReleaseRun(db, raced) };
     const version = 1 + (Number(db.prepare("SELECT MAX(run_version) m FROM production_release_run WHERE coding_task_id=?").get(Number(task.id)).m) || 0);
@@ -731,7 +851,7 @@ export function createProductionReleaseRun(db, body, { repo = null, env = proces
       inputFp, policyFp, version,
       prev.sha, prev.digest, prev.workflow_run_id, prev.release_run_id,
       prev.provenance ? JSON.stringify(sanitizeReleaseEvidence(prev.provenance)) : null,
-      body.githubActor, actor, ts,
+      serverActor, actor, ts,
     );
     const id = Number(res.lastInsertRowid);
     appendEvent(db, { releaseRunId: id, toStatus: RELEASE_STATUSES.CREATED, eventType: "created", now, actor });
@@ -895,6 +1015,13 @@ async function executeCodeRollback(db, run, { provider, repo, env, now, actor, o
   return { rolled_back: true, db_restore: false };
 }
 
+function releaseLeaseIfTerminal(db, releaseRunId) {
+  const status = latestStatus(db, releaseRunId);
+  if (!isTerminalReleaseStatus(status)) return;
+  releaseGlobalProductionLease(db, { releaseRunId, workflowKind: WORKFLOW_KINDS.DEPLOY });
+  releaseGlobalProductionLease(db, { releaseRunId, workflowKind: WORKFLOW_KINDS.ROLLBACK });
+}
+
 export async function executeProductionRelease(db, releaseRunId, {
   provider = null, repo = null, env = process.env, now = new Date(), actor = "owner", hooks = null,
 } = {}) {
@@ -905,10 +1032,12 @@ export async function executeProductionRelease(db, releaseRunId, {
   let run = row;
   const status = latestStatus(db, run.id) || RELEASE_STATUSES.CREATED;
   if (isTerminalReleaseStatus(status)) {
+    releaseLeaseIfTerminal(db, run.id);
     return { run: publicReleaseRun(db, run), current_status: status, idempotent: true };
   }
   const owner = randomUUID();
-  const observedStable = stableSnapshot(getProductionStable(db));
+  const observedStable = expectedStableFromRun(run);
+  try {
   if (ROLLBACK_PATH_STATUSES.includes(status) && status !== RELEASE_STATUSES.ROLLED_BACK) {
     await executeCodeRollback(db, run, { provider: prov, repo, env, now, actor, owner, hooks });
     return { run: publicReleaseRun(db, db.prepare("SELECT * FROM production_release_run WHERE id=?").get(run.id)), rolled_back: true, db_restore: false };
@@ -928,7 +1057,7 @@ export async function executeProductionRelease(db, releaseRunId, {
     run, provider: prov, workflowKind: WORKFLOW_KINDS.BUILD, workflowFile: PRODUCTION_WORKFLOWS.BUILD,
     inputs: { sha: run.authorized_head_sha, expected_digest: run.artifact_digest, image_digest: run.artifact_digest },
     environment: null, actor, now, dispatchedStatus: RELEASE_STATUSES.BUILD_DISPATCHED, repo, env,
-    owner, hooks, requireImageOutputs: true,
+    owner, hooks, observedStable, requireImageOutputs: true,
   });
   const inspected = await prov.inspectImage({ sha: run.authorized_head_sha, digest: run.artifact_digest });
   try {
@@ -950,7 +1079,7 @@ export async function executeProductionRelease(db, releaseRunId, {
     run, provider: prov, workflowKind: WORKFLOW_KINDS.PREDEPLOY, workflowFile: PRODUCTION_WORKFLOWS.PREDEPLOY,
     inputs: { sha: run.authorized_head_sha }, environment: REQUIRED_TARGET_ENVIRONMENT, confirmation: "PREDEPLOY-PRODUCTION",
     actor, now, dispatchedStatus: RELEASE_STATUSES.PREDEPLOY_DISPATCHED, repo, env,
-    owner, hooks,
+    owner, hooks, observedStable,
   });
   const backup = pre.workflow.outputs?.db_backup;
   if (!backup?.verified || !backup.backup_id || !backup.backup_hash) {
@@ -980,7 +1109,7 @@ export async function executeProductionRelease(db, releaseRunId, {
     inputs: { sha: run.authorized_head_sha, image_digest: run.artifact_digest },
     environment: REQUIRED_TARGET_ENVIRONMENT, confirmation: "DEPLOY-PRODUCTION",
     actor, now, dispatchedStatus: RELEASE_STATUSES.DEPLOY_DISPATCHED, repo, env,
-    owner, hooks, requireImageOutputs: true,
+    owner, hooks, observedStable, requireImageOutputs: true,
   });
   withImmediateTx(db, () => {
     appendEvent(db, { releaseRunId: run.id, toStatus: RELEASE_STATUSES.DEPLOY_RECONCILED, eventType: "deploy_reconciled", now, actor });
@@ -1040,6 +1169,9 @@ export async function executeProductionRelease(db, releaseRunId, {
   });
   const dbDisp = recordDbDisposition(db, run, { now, actor });
   return { run: publicReleaseRun(db, db.prepare("SELECT * FROM production_release_run WHERE id=?").get(run.id)), current_stable: getProductionStable(db), db_rollback: dbDisp, db_restore: false };
+  } finally {
+    releaseLeaseIfTerminal(db, releaseRunId);
+  }
 }
 
 export async function reconcileProductionRelease(db, releaseRunId, opts = {}) {
@@ -1074,8 +1206,12 @@ export async function requestCodeRollback(db, {
   }
   const prov = provider || makeProductionReleaseProvider(env);
   if (!prov.available) throw httpError("production release provider unavailable", 503);
-  const result = await executeCodeRollback(db, row, { provider: prov, repo, env, now, actor, hooks });
-  return { run: publicReleaseRun(db, db.prepare("SELECT * FROM production_release_run WHERE id=?").get(row.id)), ...result };
+  try {
+    const result = await executeCodeRollback(db, row, { provider: prov, repo, env, now, actor, hooks });
+    return { run: publicReleaseRun(db, db.prepare("SELECT * FROM production_release_run WHERE id=?").get(row.id)), ...result };
+  } finally {
+    releaseLeaseIfTerminal(db, row.id);
+  }
 }
 
 export function getProductionRelease(db, releaseRunId) {
@@ -1095,6 +1231,7 @@ export function getProductionRelease(db, releaseRunId) {
       dispatch_owner: b.dispatch_owner,
       dispatch_intent_id: b.dispatch_intent_id,
       dispatch_claimed_at: b.dispatch_claimed_at,
+      dispatch_submitted_at: b.dispatch_submitted_at,
       provider_response_identity: b.provider_response_identity,
       binding_status: b.binding_status,
       created_at: b.created_at,

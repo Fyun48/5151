@@ -1017,6 +1017,7 @@ export function applyOpsSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_prrun_task ON production_release_run(coding_task_id, id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_prrun_input_fp ON production_release_run(input_fingerprint);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_prrun_task_version ON production_release_run(coding_task_id, run_version);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_prrun_auth_env ON production_release_run(release_authorization_id, target_environment);
 
     CREATE TABLE IF NOT EXISTS production_release_run_event (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1071,6 +1072,7 @@ export function applyOpsSchema(db) {
       dispatch_owner TEXT,
       dispatch_intent_id TEXT,
       dispatch_claimed_at TEXT,
+      dispatch_submitted_at TEXT,
       authorized_github_actor TEXT,
       provider_response_identity TEXT,
       binding_status TEXT NOT NULL,
@@ -1098,6 +1100,15 @@ export function applyOpsSchema(db) {
       provenance_json TEXT,
       provenance_fingerprint TEXT,
       updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS production_release_global_lease (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      release_run_id INTEGER,
+      workflow_kind TEXT,
+      lease_owner TEXT,
+      claimed_at TEXT,
+      updated_at TEXT
     );
 
     CREATE INDEX IF NOT EXISTS idx_state_entity_type ON state_entity(entity_type, state);
@@ -1169,6 +1180,7 @@ export function upgradeProductionReleaseImmutability(db) {
       OR (OLD.workflow_attempt IS NOT NULL AND IFNULL(NEW.workflow_attempt,0) <> IFNULL(OLD.workflow_attempt,0))
       OR (OLD.dispatch_request_id IS NOT NULL AND IFNULL(NEW.dispatch_request_id,'') <> IFNULL(OLD.dispatch_request_id,''))
       OR (OLD.provider_response_identity IS NOT NULL AND IFNULL(NEW.provider_response_identity,'') <> IFNULL(OLD.provider_response_identity,''))
+      OR (OLD.dispatch_submitted_at IS NOT NULL AND IFNULL(NEW.dispatch_submitted_at,'') <> IFNULL(OLD.dispatch_submitted_at,''))
     )
     BEGIN SELECT RAISE(ABORT, 'production release workflow binding identity is immutable'); END;
     CREATE TRIGGER prbind_no_delete BEFORE DELETE ON production_release_workflow_binding
@@ -1194,8 +1206,22 @@ function ensureProductionReleaseBindingColumns(db) {
     ["dispatch_owner", "TEXT"],
     ["dispatch_intent_id", "TEXT"],
     ["dispatch_claimed_at", "TEXT"],
+    ["dispatch_submitted_at", "TEXT"],
     ["authorized_github_actor", "TEXT"],
   ]);
+  try {
+    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_prrun_auth_env ON production_release_run(release_authorization_id, target_environment)");
+  } catch { /* existing duplicate rows on old DBs stay fail-closed at app layer */ }
+  try {
+    db.exec(`CREATE TABLE IF NOT EXISTS production_release_global_lease (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      release_run_id INTEGER,
+      workflow_kind TEXT,
+      lease_owner TEXT,
+      claimed_at TEXT,
+      updated_at TEXT
+    )`);
+  } catch { /* noop */ }
   addIfMissing("production_release_run", [
     ["authorized_github_actor", "TEXT"],
     ["previous_stable_release_run_id", "INTEGER"],

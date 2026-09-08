@@ -856,7 +856,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
             targetEnvironment: b.target_environment,
             workflowRef: b.workflow_ref,
             expectedMasterHead: b.expected_master_head,
-            githubActor: b.github_actor || process.env.PRODUCTION_RELEASE_GITHUB_ACTOR,
+            githubActor: "Fyun48",
           }, { repo: releaseRepo, actor: `owner:${req.owner.email}` });
           const executed = await executeProductionRelease(db, created.run.id, { provider: releaseProvider, repo: releaseRepo, actor: `owner:${req.owner.email}` });
           sendJson(res, 200, { ok: true, idempotent: created.idempotent === true, ...executed });

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Write machine-readable Phase 15 workflow evidence. No secrets."""
+import hashlib
 import json
 import os
 import sys
@@ -16,6 +17,7 @@ doc = {
     "actor": os.environ.get("WF_ACTOR", ""),
     "triggering_actor": os.environ.get("WF_TRIGGERING_ACTOR", ""),
     "environment": os.environ.get("WF_ENVIRONMENT") or None,
+    "release_intent_id": os.environ.get("RELEASE_INTENT_ID") or None,
     "image_digest": os.environ.get("IMAGE_DIGEST") or None,
     "oci_revision": os.environ.get("OCI_REVISION") or None,
     "oci_source": os.environ.get("OCI_SOURCE") or None,
@@ -40,6 +42,8 @@ if health_ok == "true":
         "image_digest": os.environ.get("IMAGE_DIGEST") or None,
         "oci_revision": os.environ.get("OCI_REVISION") or None,
     }
+canonical = json.dumps(doc, sort_keys=True, separators=(",", ":")).encode("utf-8")
+doc["evidence_sha256"] = "sha256:" + hashlib.sha256(canonical).hexdigest()
 path = sys.argv[1] if len(sys.argv) > 1 else "phase15-workflow-evidence.json"
 open(path, "w").write(json.dumps(doc, indent=2) + "\n")
 print(path)
