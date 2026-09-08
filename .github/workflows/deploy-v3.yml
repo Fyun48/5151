@@ -33,6 +33,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   group: production-deploy
@@ -111,7 +112,10 @@ jobs:
           if ! docker buildx imagetools inspect "$TAG" >/dev/null; then
             echo "::error::candidate tag does not exist: $TAG"; exit 1
           fi
-          ACTUAL="$(docker buildx imagetools inspect "$TAG" | awk '/^Digest:/{print $2; exit}')"
+          ACTUAL="$(docker buildx imagetools inspect "$TAG" | awk '/^Digest:/{print $2; found=1} END{if(!found) exit 1}')"
+          if ! printf '%s' "$ACTUAL" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo "::error::Could not resolve immutable manifest digest for $TAG"; exit 1
+          fi
           echo "tag_manifest_digest=$ACTUAL"
           if [ "$ACTUAL" != "$IMAGE_DIGEST" ]; then
             echo "::error::tag digest $ACTUAL != requested $IMAGE_DIGEST"; exit 1
