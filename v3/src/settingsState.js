@@ -1,4 +1,5 @@
 import { buildSearchUrls, districtsFromSearchUrls, normalizeWatchDistricts, priceFromSearchUrls } from "./regions.js";
+import { normalizeHiddenCityIds } from "./cityPrefs.js";
 import { normalizeBoxes, normalizeCommuteMode, normalizeKeywords, parseWorkCoord } from "./geo.js";
 import { normalizeNotifyMatrix } from "./notifyMatrix.js";
 
@@ -33,6 +34,7 @@ export const PROFILE_FIELDS = [
   "workLat",
   "workLng",
   "watchDistricts",
+  "hiddenCityIds",
   "priceMin",
   "priceMax",
   "priceMaxIncludesExtras",
@@ -186,6 +188,7 @@ export function hydrateSettings(stored, defaults, { admin = false, plan = "free"
     next.watchDistricts = normalizeWatchDistricts(next.watchDistricts);
   }
   next.watchDistricts = limitWatchDistricts(next.watchDistricts, { admin });
+  next.hiddenCityIds = normalizeHiddenCityIds(next.hiddenCityIds);
   if (source.priceMax == null && source.priceMin == null) {
     const parsed = priceFromSearchUrls(next.searchUrls);
     if (parsed.max || parsed.min) {
@@ -250,6 +253,7 @@ export function applySettingPatch(current, partial = {}, { admin = false, plan =
   next.workLat = parseWorkCoord(next.workLat);
   next.workLng = parseWorkCoord(next.workLng);
   next.watchDistricts = limitWatchDistricts(next.watchDistricts, { admin });
+  next.hiddenCityIds = normalizeHiddenCityIds(next.hiddenCityIds);
   next.priceMin = Math.max(0, Number(next.priceMin) || 0);
   next.priceMax = Math.max(0, Number(next.priceMax) || 0);
   next.priceMaxIncludesExtras = next.priceMaxIncludesExtras === true;
