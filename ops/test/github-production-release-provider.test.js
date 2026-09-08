@@ -45,11 +45,12 @@ function makeFakeGithubApi(opts = {}) {
     get dispatchHttp() { return dispatchHttp; },
     crashBeforeDispatch: !!opts.crashBeforeDispatch,
     timeout: !!opts.timeout,
+    throwTransportAfterAccept: !!opts.throwTransportAfterAccept,
     status: opts.status == null ? 204 : opts.status,
     suppressRunOnDispatch: !!opts.suppressRunOnDispatch,
     async dispatchWorkflow({ workflowFile, inputs }) {
       if (this.crashBeforeDispatch) throw new Error("crash_before_dispatch");
-      if (this.timeout) throw Object.assign(new Error("timeout"), { code: "dispatch_timeout" });
+      if (this.timeout) throw new TypeError("fetch failed");
       dispatchHttp += 1;
       if (this.status !== 204) return { status: this.status, reason: "dispatch_rejected" };
       if (!this.suppressRunOnDispatch) {
@@ -92,6 +93,7 @@ function makeFakeGithubApi(opts = {}) {
           artifacts.set(String(run.id), [{ id: ++artSeq, name: PHASE15_EVIDENCE_ARTIFACT, expired: false, evidence }]);
         }
       }
+      if (this.throwTransportAfterAccept) throw new TypeError("fetch failed");
       return { status: 204 };
     },
     async listWorkflowRuns() {
@@ -179,7 +181,8 @@ test("crash before dispatch does not mark durable ownership or call GitHub", asy
     actor: ACTOR,
     requestId: "intent-crash-before",
   });
-  assert.equal(out.accepted, false);
+  assert.equal(out.accepted, true);
+  assert.equal(out.timeout, true);
   assert.equal(api.dispatchHttp, 0);
   assert.equal(acceptedIntents.size, 0);
   assert.equal(provider.dispatchCount, 0);
@@ -231,6 +234,70 @@ test("timeout is accepted without a run id and does not re-dispatch as success",
   assert.equal(out.timeout, true);
   assert.equal(out.workflow_run_id, null);
   assert.equal(provider.dispatchCount, 0);
+});
+
+test("generic fetch transport exception after GitHub accepted is ambiguous, not REJECTED", async () => {
+  const api = makeFakeGithubApi({ throwTransportAfterAccept: true });
+  const acceptedIntents = new Set();
+  const provider = makeGithubProductionReleaseProvider(GRANT_ENV, { githubApi: api, acceptedIntents });
+  const out = await provider.dispatchWorkflow({
+    workflowFile: PRODUCTION_WORKFLOWS.DEPLOY,
+    workflowRef: REQUIRED_WORKFLOW_REF,
+    inputs: { sha: SHA, image_digest: DIGEST },
+    confirmation: "DEPLOY-PRODUCTION",
+    actor: ACTOR,
+    environment: "production",
+    requestId: "intent-transport-xx",
+  });
+  assert.equal(out.accepted, true);
+  assert.equal(out.timeout, true);
+  assert.notEqual(out.reason, undefined);
+  assert.equal(out.workflow_run_id, null);
+  assert.equal(api.dispatchHttp, 1);
+  assert.equal(acceptedIntents.size, 0);
+  assert.equal(provider.dispatchCount, 0);
+  assert.equal(api.runs.length, 1);
+  const found = await provider.findWorkflowRunByIdempotency({
+    workflowFile: PRODUCTION_WORKFLOWS.DEPLOY,
+    dispatchIntentId: "intent-transport-xx",
+  });
+  assert.equal(String(found.id), String(api.runs[0].id));
+  const replay = await provider.dispatchWorkflow({
+    workflowFile: PRODUCTION_WORKFLOWS.DEPLOY,
+    workflowRef: REQUIRED_WORKFLOW_REF,
+    inputs: { sha: SHA, image_digest: DIGEST },
+    confirmation: "DEPLOY-PRODUCTION",
+    actor: ACTOR,
+    environment: "production",
+    requestId: "intent-transport-xx",
+  });
+  assert.equal(replay.accepted, true);
+  assert.equal(replay.idempotent, true);
+  assert.equal(api.dispatchHttp, 1);
+  assert.equal(provider.dispatchCount, 0);
+});
+
+test("HTTP 4xx/5xx dispatch response is a definitive rejection", async () => {
+  for (const status of [422, 500]) {
+    const api = makeFakeGithubApi({ status });
+    const provider = makeGithubProductionReleaseProvider(GRANT_ENV, { githubApi: api });
+    const out = await provider.dispatchWorkflow({
+      workflowFile: PRODUCTION_WORKFLOWS.DEPLOY,
+      workflowRef: REQUIRED_WORKFLOW_REF,
+      inputs: { sha: SHA, image_digest: DIGEST },
+      confirmation: "DEPLOY-PRODUCTION",
+      actor: ACTOR,
+      environment: "production",
+      requestId: `intent-http-${status}xxxx`,
+    });
+    assert.equal(out.accepted, false);
+    assert.equal(out.timeout, undefined);
+    assert.match(String(out.reason), /dispatch_rejected|dispatch_http_/);
+    assert.equal(out.workflow_run_id, null);
+    assert.equal(api.dispatchHttp, 1);
+    assert.equal(api.runs.length, 0);
+    assert.equal(provider.dispatchCount, 0);
+  }
 });
 
 test("ambiguous matching GitHub runs fail closed", async () => {

@@ -28,12 +28,13 @@ import { createReleaseCandidate, submitOwnerReleaseDecision } from "../src/relea
 import { createMigrationSafetyAssessment } from "../src/release/migrationSafety.js";
 import { MIGRATION_CLASSIFICATIONS } from "../src/qa/migrationEvidence.js";
 import {
-  PRODUCTION_WORKFLOWS, REQUIRED_WORKFLOW_REF, REQUIRED_TARGET_ENVIRONMENT,
+  PRODUCTION_WORKFLOWS, REQUIRED_WORKFLOW_REF, REQUIRED_TARGET_ENVIRONMENT, REQUIRED_OCI_SOURCE,
   buildProductionReleasePolicy, classifyWorkflowRun, decideDbRollbackDisposition, digestLooksImmutable,
   isAllowedReleaseTransition, isAuthorizedGithubActor, isSuccessfulConclusion, isTerminalReleaseStatus, previousStableComplete,
   productionReleasePolicyFingerprint, validateExactWorkflowEvidence, workflowIdempotencyKey,
 } from "../src/release/productionReleasePolicy.js";
 import { makeStubProductionReleaseProvider, makeProductionReleaseProvider, makeGithubProductionReleaseProvider } from "../src/release/productionReleaseProvider.js";
+import { sealPhase15Evidence, PHASE15_EVIDENCE_SCHEMA } from "../src/release/githubProductionReleaseProvider.js";
 import {
   createProductionReleaseRun, executeProductionRelease, getProductionRelease, getProductionReleaseView,
   getProductionStable, parseProductionWorkflowTriggers, reconcileProductionRelease, requestCodeRollback,
@@ -1702,6 +1703,169 @@ test("timeout deploy send keeps the Production lease and never redispatches", as
     await assert.rejects(() => executeProductionRelease(db, runB.run.id, { provider: providerB, repo: stagedB.repo, now: NOW }), /lease held|global production/);
     assert.equal(countsB.predeploy, 0);
     assert.equal(countsB.deploy, 0);
+  } finally { stagedA.git.cleanup(); stagedB.git.cleanup(); db.close(); }
+});
+
+function grantGithubEnv() {
+  return {
+    PRODUCTION_RELEASE_PROVIDER: "github",
+    PRODUCTION_RELEASE_MUTATION_GRANT: "owner-dispatch-v1",
+    PRODUCTION_RELEASE_GITHUB_ACTOR: GITHUB_ACTOR,
+    GITHUB_REPOSITORY: "Fyun48/5151",
+  };
+}
+
+function makeLiveDispatchApi({ sha, digest, deployBehavior }) {
+  const runs = [];
+  const artifacts = new Map();
+  let seq = 55000002000;
+  let artSeq = 1;
+  const dispatchHttp = { build: 0, predeploy: 0, deploy: 0 };
+  function kindOf(workflowFile) {
+    if (workflowFile === PRODUCTION_WORKFLOWS.BUILD) return "build";
+    if (workflowFile === PRODUCTION_WORKFLOWS.PREDEPLOY) return "predeploy";
+    return "deploy";
+  }
+  function attachEvidence(run, workflowFile, inputs) {
+    const evidence = sealPhase15Evidence({
+      schema: PHASE15_EVIDENCE_SCHEMA,
+      workflow_file: workflowFile,
+      workflow_ref: REQUIRED_WORKFLOW_REF,
+      workflow_run_id: String(run.id),
+      workflow_attempt: 1,
+      head_sha: sha,
+      source_sha: sha,
+      actor: GITHUB_ACTOR,
+      triggering_actor: GITHUB_ACTOR,
+      environment: workflowFile === PRODUCTION_WORKFLOWS.BUILD ? null : "production",
+      confirmation: workflowFile === PRODUCTION_WORKFLOWS.BUILD
+        ? null
+        : (workflowFile === PRODUCTION_WORKFLOWS.PREDEPLOY ? "PREDEPLOY-PRODUCTION" : "DEPLOY-PRODUCTION"),
+      release_intent_id: inputs.release_intent_id,
+      image_digest: digest,
+      oci_revision: sha,
+      oci_source: REQUIRED_OCI_SOURCE,
+      db_backup: workflowFile === PRODUCTION_WORKFLOWS.PREDEPLOY
+        ? { backup_id: `live-backup-${sha.slice(0, 8)}`, backup_hash: `sha256:${"33".repeat(32)}`, verified: true }
+        : undefined,
+    });
+    artifacts.set(String(run.id), [{ id: ++artSeq, name: "phase15-workflow-evidence", expired: false, evidence }]);
+  }
+  return {
+    runs,
+    get dispatchHttp() { return dispatchHttp; },
+    async dispatchWorkflow({ workflowFile, inputs }) {
+      const kind = kindOf(workflowFile);
+      if (kind === "deploy" && (deployBehavior === "http422" || deployBehavior === "http500")) {
+        dispatchHttp.deploy += 1;
+        return { status: deployBehavior === "http422" ? 422 : 500, reason: "dispatch_rejected" };
+      }
+      const run = {
+        id: ++seq,
+        run_attempt: 1,
+        status: "completed",
+        conclusion: "success",
+        path: workflowFile,
+        name: `phase15-intent:${inputs.release_intent_id}`,
+        display_title: `phase15-intent:${inputs.release_intent_id}`,
+        head_sha: sha,
+        head_branch: "master",
+        actor: { login: GITHUB_ACTOR },
+        triggering_actor: { login: GITHUB_ACTOR },
+        event: "workflow_dispatch",
+        created_at: NOW.toISOString(),
+      };
+      if (kind === "deploy" && deployBehavior === "transport") {
+        dispatchHttp.deploy += 1;
+        runs.push({ ...run, status: "queued", conclusion: null });
+        throw new TypeError("fetch failed");
+      }
+      dispatchHttp[kind] += 1;
+      runs.push(run);
+      attachEvidence(run, workflowFile, inputs);
+      return { status: 204 };
+    },
+    async listWorkflowRuns() { return { runs }; },
+    async getWorkflowRun({ runId }) {
+      const run = runs.find((r) => String(r.id) === String(runId));
+      return run ? { run, jobs: [] } : null;
+    },
+    async listArtifacts({ runId }) { return { artifacts: artifacts.get(String(runId)) || [] }; },
+    async downloadArtifact({ artifactId, runId }) {
+      const list = artifacts.get(String(runId)) || [...artifacts.values()].flat();
+      const art = list.find((a) => a.id === artifactId) || list[0];
+      return art ? { evidence: art.evidence } : null;
+    },
+    async inspectImage({ digest: observed }) {
+      return { digest: observed, oci_revision: sha, oci_source: REQUIRED_OCI_SOURCE };
+    },
+  };
+}
+
+test("live GitHub transport exception after accepted deploy is not REJECTED and holds the lease", async () => {
+  const db = openOpsDb(":memory:");
+  const stagedA = await makeStagedTask(db);
+  const stagedB = await makeStagedTask(db);
+  try {
+    const a = await cleared(db, stagedA.codingTaskId, stagedA.repo);
+    seedPrev(db, stagedA.repo);
+    const runA = createProductionReleaseRun(db, execBody(stagedA.codingTaskId, a.authorization, a.assessment, { expectedMasterHead: stagedA.repo.resolveRemoteRef("master") }), { repo: stagedA.repo, now: NOW });
+    const api = makeLiveDispatchApi({
+      sha: a.authorization.head_sha,
+      digest: a.authorization.artifact_digest,
+      deployBehavior: "transport",
+    });
+    const providerA = makeGithubProductionReleaseProvider(grantGithubEnv(), { githubApi: api });
+    await assert.rejects(() => executeProductionRelease(db, runA.run.id, { provider: providerA, repo: stagedA.repo, now: NOW }), /still queued|in_progress/);
+    const deployBinding = getProductionRelease(db, runA.run.id).bindings.find((b) => b.workflow_kind === "deploy");
+    assert.notEqual(deployBinding.binding_status, "rejected");
+    assert.equal(api.dispatchHttp.deploy, 1);
+    assert.equal(Number(db.prepare("SELECT release_run_id FROM production_release_global_lease WHERE id=1").get().release_run_id), runA.run.id);
+    const found = await providerA.findWorkflowRunByIdempotency({
+      workflowFile: PRODUCTION_WORKFLOWS.DEPLOY,
+      dispatchIntentId: deployBinding.dispatch_intent_id || deployBinding.dispatch_request_id,
+    });
+    assert.ok(found?.id);
+    assert.equal(String(found.id), String(api.runs.find((r) => r.path === PRODUCTION_WORKFLOWS.DEPLOY).id));
+    await assert.rejects(() => reconcileProductionRelease(db, runA.run.id, { provider: providerA, repo: stagedA.repo, now: NOW }), /still queued|reconcile|not an exact|evidence|health/);
+    assert.equal(api.dispatchHttp.deploy, 1);
+    assert.notEqual(getProductionRelease(db, runA.run.id).bindings.find((b) => b.workflow_kind === "deploy").binding_status, "rejected");
+    assert.equal(Number(db.prepare("SELECT release_run_id FROM production_release_global_lease WHERE id=1").get().release_run_id), runA.run.id);
+    const b = await cleared(db, stagedB.codingTaskId, stagedB.repo);
+    const runB = createProductionReleaseRun(db, execBody(stagedB.codingTaskId, b.authorization, b.assessment, { expectedMasterHead: stagedB.repo.resolveRemoteRef("master") }), { repo: stagedB.repo, now: NOW });
+    const providerB = makeStubProductionReleaseProvider();
+    const countsB = countWorkflowDispatches(providerB);
+    await assert.rejects(() => executeProductionRelease(db, runB.run.id, { provider: providerB, repo: stagedB.repo, now: NOW }), /lease held|global production/);
+    assert.equal(countsB.predeploy, 0);
+    assert.equal(countsB.deploy, 0);
+  } finally { stagedA.git.cleanup(); stagedB.git.cleanup(); db.close(); }
+});
+
+test("live GitHub HTTP 4xx/5xx deploy rejection releases the Production lease", async () => {
+  const db = openOpsDb(":memory:");
+  const stagedA = await makeStagedTask(db);
+  const stagedB = await makeStagedTask(db);
+  try {
+    const a = await cleared(db, stagedA.codingTaskId, stagedA.repo);
+    seedPrev(db, stagedA.repo);
+    const runA = createProductionReleaseRun(db, execBody(stagedA.codingTaskId, a.authorization, a.assessment, { expectedMasterHead: stagedA.repo.resolveRemoteRef("master") }), { repo: stagedA.repo, now: NOW });
+    const api = makeLiveDispatchApi({
+      sha: a.authorization.head_sha,
+      digest: a.authorization.artifact_digest,
+      deployBehavior: "http422",
+    });
+    const providerA = makeGithubProductionReleaseProvider(grantGithubEnv(), { githubApi: api });
+    await assert.rejects(() => executeProductionRelease(db, runA.run.id, { provider: providerA, repo: stagedA.repo, now: NOW }), /dispatch rejected/);
+    assert.equal(getProductionRelease(db, runA.run.id).run.current_status, "BLOCKED");
+    assert.equal(getProductionRelease(db, runA.run.id).bindings.find((b) => b.workflow_kind === "deploy").binding_status, "rejected");
+    assert.equal(api.dispatchHttp.deploy, 1);
+    assert.ok(!db.prepare("SELECT * FROM production_release_global_lease WHERE id=1").get()?.release_run_id);
+    const b = await cleared(db, stagedB.codingTaskId, stagedB.repo);
+    seedPrev(db, stagedB.repo);
+    const runB = createProductionReleaseRun(db, execBody(stagedB.codingTaskId, b.authorization, b.assessment, { expectedMasterHead: stagedB.repo.resolveRemoteRef("master") }), { repo: stagedB.repo, now: NOW });
+    const providerB = makeStubProductionReleaseProvider();
+    const outB = await executeProductionRelease(db, runB.run.id, { provider: providerB, repo: stagedB.repo, now: NOW });
+    assert.equal(outB.run.current_status, "SUCCEEDED");
   } finally { stagedA.git.cleanup(); stagedB.git.cleanup(); db.close(); }
 });
 

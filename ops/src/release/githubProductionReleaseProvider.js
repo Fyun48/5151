@@ -298,6 +298,17 @@ function redactGithubError(err) {
   return msg.slice(0, 240);
 }
 
+function ambiguousDispatch(releaseIntentId, err) {
+  return {
+    accepted: true,
+    timeout: true,
+    reason: redactGithubError(err),
+    workflow_run_id: null,
+    request_id: releaseIntentId,
+    provider_response_identity: `github-timeout-${sha256(releaseIntentId).slice(0, 20)}`,
+  };
+}
+
 export function createLiveGithubApi(env = process.env) {
   const token = env.GITHUB_TOKEN || env.GH_TOKEN;
   async function gh(path, { method = "GET", body = null, accept = "application/vnd.github+json" } = {}) {
@@ -317,10 +328,17 @@ export function createLiveGithubApi(env = process.env) {
   return {
     async dispatchWorkflow({ owner, repo, workflowFile, ref, inputs }) {
       const encoded = encodeURIComponent(workflowFile);
-      const res = await gh(`/repos/${owner}/${repo}/actions/workflows/${encoded}/dispatches`, {
-        method: "POST",
-        body: { ref: ref.replace(/^refs\/heads\//, ""), inputs },
-      });
+      let res;
+      try {
+        res = await gh(`/repos/${owner}/${repo}/actions/workflows/${encoded}/dispatches`, {
+          method: "POST",
+          body: { ref: ref.replace(/^refs\/heads\//, ""), inputs },
+        });
+      } catch (err) {
+        // Native fetch() does not emit dispatch_timeout. Surface a transport
+        // result so the adapter can hold the lease instead of REJECTED.
+        return { status: null, ok: false, transportError: true, reason: redactGithubError(err) };
+      }
       return { status: res.status, ok: res.status === 204 };
     },
     async listWorkflowRuns({ owner, repo, workflowFile }) {
@@ -544,18 +562,17 @@ export function makeGithubProductionReleaseProvider(env = process.env, deps = {}
           inputs: prepared.inputs,
         });
       } catch (err) {
-        if (err?.code === "dispatch_timeout") {
-          return { accepted: true, timeout: true, workflow_run_id: null, request_id: prepared.inputs.release_intent_id, provider_response_identity: `github-timeout-${sha256(prepared.inputs.release_intent_id).slice(0, 20)}` };
-        }
-        return { accepted: false, reason: redactGithubError(err), workflow_run_id: null, request_id: prepared.inputs.release_intent_id };
+        // Native fetch() throws TypeError / network errors with no HTTP status.
+        // A POST mutation may already have been accepted. Never treat a throw as REJECTED.
+        return ambiguousDispatch(prepared.inputs.release_intent_id, err);
       }
-      if (dispatched?.timeout) {
-        return { accepted: true, timeout: true, workflow_run_id: null, request_id: prepared.inputs.release_intent_id, provider_response_identity: `github-timeout-${sha256(prepared.inputs.release_intent_id).slice(0, 20)}` };
+      if (dispatched?.timeout || dispatched?.transportError || dispatched?.status == null) {
+        return ambiguousDispatch(prepared.inputs.release_intent_id, dispatched?.reason);
       }
-      if (!dispatched || dispatched.status !== 204) {
+      if (dispatched.status !== 204) {
         return {
           accepted: false,
-          reason: dispatched?.reason || `dispatch_http_${dispatched?.status || "unknown"}`,
+          reason: dispatched?.reason || `dispatch_http_${dispatched.status}`,
           workflow_run_id: null,
           request_id: prepared.inputs.release_intent_id,
         };
