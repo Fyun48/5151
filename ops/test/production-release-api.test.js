@@ -136,6 +136,7 @@ function execPayload(seeded) {
     target_environment: "production",
     workflow_ref: "refs/heads/master",
     expected_master_head: seeded.master,
+    github_actor: "Fyun48",
   };
 }
 

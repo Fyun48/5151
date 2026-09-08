@@ -29,8 +29,8 @@ import { createMigrationSafetyAssessment } from "../src/release/migrationSafety.
 import { MIGRATION_CLASSIFICATIONS } from "../src/qa/migrationEvidence.js";
 import {
   PRODUCTION_WORKFLOWS, REQUIRED_WORKFLOW_REF, REQUIRED_TARGET_ENVIRONMENT,
-  buildProductionReleasePolicy, decideDbRollbackDisposition, digestLooksImmutable,
-  isAllowedReleaseTransition, isSuccessfulConclusion, previousStableComplete,
+  buildProductionReleasePolicy, classifyWorkflowRun, decideDbRollbackDisposition, digestLooksImmutable,
+  isAllowedReleaseTransition, isAuthorizedGithubActor, isSuccessfulConclusion, previousStableComplete,
   productionReleasePolicyFingerprint, validateExactWorkflowEvidence, workflowIdempotencyKey,
 } from "../src/release/productionReleasePolicy.js";
 import { makeStubProductionReleaseProvider, makeProductionReleaseProvider, makeGithubProductionReleaseProvider } from "../src/release/productionReleaseProvider.js";
@@ -41,6 +41,7 @@ import {
 } from "../src/release/productionRelease.js";
 
 const NOW = new Date("2026-06-01T00:00:00.000Z");
+const GITHUB_ACTOR = "Fyun48";
 let seq = 1;
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -128,6 +129,7 @@ function execBody(codingTaskId, auth, assessment, extra = {}) {
     artifactDigest: auth.artifact_digest,
     targetEnvironment: REQUIRED_TARGET_ENVIRONMENT,
     workflowRef: REQUIRED_WORKFLOW_REF,
+    githubActor: GITHUB_ACTOR,
     ...extra,
   };
 }
@@ -178,6 +180,13 @@ test("Phase 15 policy is deterministic, fail-closed, and excludes secrets", () =
   assert.equal(isAllowedReleaseTransition("SUCCEEDED", "DB_ROLLBACK_MANUAL_REQUIRED"), false);
   assert.equal(isAllowedReleaseTransition("SUCCEEDED", "HEALTH_VERIFIED"), false);
   assert.equal(isAllowedReleaseTransition("BLOCKED", "BUILD_DISPATCHED"), false);
+  assert.equal(isAuthorizedGithubActor("Fyun48"), true);
+  assert.equal(isAuthorizedGithubActor("owner:demo@example.com"), false);
+  assert.equal(isAuthorizedGithubActor("demo@example.com"), false);
+  assert.equal(isAuthorizedGithubActor("latest"), false);
+  assert.equal(classifyWorkflowRun({ id: "1", status: "in_progress", conclusion: null }).kind, "waiting");
+  assert.equal(classifyWorkflowRun({ id: "1", status: "queued", conclusion: null }).kind, "waiting");
+  assert.equal(classifyWorkflowRun({ id: "1", status: "completed", conclusion: "failure" }).kind, "failed");
 });
 
 test("default and GitHub production providers stay unavailable (no live dispatch)", () => {
@@ -333,9 +342,11 @@ test("pending/cancelled/skipped/neutral/failed workflow conclusions are never su
   try {
     const { authorization, assessment } = await cleared(db, codingTaskId, repo);
     const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: repo.resolveRef("master") }), { repo, now: NOW });
-    await assert.rejects(() => executeProductionRelease(db, created.run.id, {
-      provider: makeStubProductionReleaseProvider({ pendingWorkflows: [PRODUCTION_WORKFLOWS.BUILD] }), repo, now: NOW,
-    }), /not success|exactly bound|status/);
+    const provider = makeStubProductionReleaseProvider({ pendingWorkflows: [PRODUCTION_WORKFLOWS.BUILD] });
+    await assert.rejects(() => executeProductionRelease(db, created.run.id, { provider, repo, now: NOW }), /still in_progress|still queued/);
+    assert.equal(getProductionRelease(db, created.run.id).run.current_status, "BUILD_DISPATCHED");
+    assert.equal(provider.dispatchCount, 1);
+    assert.notEqual(getProductionRelease(db, created.run.id).run.current_status, "BLOCKED");
   } finally { git.cleanup(); db.close(); }
 });
 
@@ -456,8 +467,8 @@ function exactWf(over = {}) {
     workflow_file: PRODUCTION_WORKFLOWS.BUILD,
     workflow_ref: REQUIRED_WORKFLOW_REF,
     head_sha: "a".repeat(40),
-    actor: "owner",
-    triggering_actor: "owner",
+    actor: GITHUB_ACTOR,
+    triggering_actor: GITHUB_ACTOR,
     environment: null,
     outputs: {
       image_digest: "sha256:" + "ab".repeat(32),
@@ -475,14 +486,18 @@ test("workflow evidence requires every identity field; missing or mismatch is fa
     workflow_file: PRODUCTION_WORKFLOWS.BUILD,
     workflow_ref: REQUIRED_WORKFLOW_REF,
     head_sha: "a".repeat(40),
-    actor: "owner",
+    actor: GITHUB_ACTOR,
+    triggering_actor: GITHUB_ACTOR,
     environment: null,
     image_digest: "sha256:" + "ab".repeat(32),
     oci_revision: "a".repeat(40),
     oci_source: "https://github.com/Fyun48/5151",
   };
   assert.equal(validateExactWorkflowEvidence(exactWf(), expected).ok, true);
-  assert.equal(validateExactWorkflowEvidence(exactWf({ actor: null, triggering_actor: "owner" }), expected).ok, true);
+  assert.equal(validateExactWorkflowEvidence(exactWf({ actor: null, triggering_actor: GITHUB_ACTOR }), expected).ok, false);
+  assert.equal(validateExactWorkflowEvidence(exactWf({ actor: "attacker", triggering_actor: GITHUB_ACTOR }), expected).ok, false);
+  assert.equal(validateExactWorkflowEvidence(exactWf({ actor: GITHUB_ACTOR, triggering_actor: null }), expected).ok, false);
+  assert.equal(validateExactWorkflowEvidence(exactWf({ actor: GITHUB_ACTOR, triggering_actor: "attacker" }), expected).ok, false);
   assert.equal(validateExactWorkflowEvidence({ id: "34000000001", conclusion: "success" }, expected).ok, false);
   const cases = [
     [{ id: null }, "id"],
@@ -499,8 +514,10 @@ test("workflow evidence requires every identity field; missing or mismatch is fa
     [{ workflow_ref: "refs/heads/feat" }, "workflow_ref_mismatch"],
     [{ head_sha: null }, "head_sha"],
     [{ head_sha: "b".repeat(40) }, "head_sha_mismatch"],
-    [{ actor: null, triggering_actor: null }, "actor"],
-    [{ actor: "other", triggering_actor: "other" }, "actor_mismatch"],
+    [{ actor: null, triggering_actor: GITHUB_ACTOR }, "actor"],
+    [{ actor: "other", triggering_actor: GITHUB_ACTOR }, "actor_mismatch"],
+    [{ actor: GITHUB_ACTOR, triggering_actor: null }, "triggering_actor"],
+    [{ actor: GITHUB_ACTOR, triggering_actor: "other" }, "triggering_actor_mismatch"],
     [{ environment: "production" }, "environment_mismatch"],
     [{ outputs: {} }, "image_digest"],
     [{ outputs: { image_digest: "sha256:" + "cd".repeat(32), oci_revision: "a".repeat(40), oci_source: "https://github.com/Fyun48/5151" } }, "image_digest_mismatch"],
@@ -643,7 +660,7 @@ test("worker restart after claimed dispatch binds by idempotency and never re-di
       workflowRef: REQUIRED_WORKFLOW_REF,
       inputs: { sha: authorization.head_sha, expected_digest: authorization.artifact_digest, image_digest: authorization.artifact_digest },
       idempotencyKey: key,
-      actor: "owner",
+      actor: GITHUB_ACTOR,
       requestId: intent,
     });
     assert.equal(provider.dispatchCount, 1);
@@ -771,5 +788,187 @@ test("TOCTOU drift of authorization/manifest/clearance/stable stops fail-closed 
       }), /stale or superseded|stable identity/);
     } finally { staged.git.cleanup(); db.close(); }
   }
+});
+
+test("in-progress GitHub run stays WAITING and second reconcile advances without re-dispatch", async () => {
+  const db = openOpsDb(":memory:");
+  const { codingTaskId, repo, git } = await makeStagedTask(db);
+  try {
+    const { authorization, assessment } = await cleared(db, codingTaskId, repo);
+    seedPrev(db, repo);
+    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: repo.resolveRef("master") }), { repo, now: NOW, actor: "owner:alice" });
+    const provider = makeStubProductionReleaseProvider();
+    let buildReads = 0;
+    wrapGetWorkflowRun(provider, (wf) => {
+      if (wf.workflow_file !== PRODUCTION_WORKFLOWS.BUILD) return wf;
+      buildReads += 1;
+      if (buildReads === 1) return { ...wf, status: "in_progress", conclusion: null };
+      return wf;
+    });
+    await assert.rejects(() => executeProductionRelease(db, created.run.id, { provider, repo, now: NOW, actor: "owner:alice" }), /still in_progress/);
+    assert.equal(getProductionRelease(db, created.run.id).run.current_status, "BUILD_DISPATCHED");
+    assert.equal(provider.dispatchCount, 1);
+    const again = await reconcileProductionRelease(db, created.run.id, { provider, repo, now: NOW, actor: "owner:bob" });
+    assert.equal(again.run.current_status, "SUCCEEDED");
+    assert.equal(again.run.authorized_github_actor, GITHUB_ACTOR);
+    assert.equal(provider.dispatchCount, 3);
+    assert.equal(buildReads, 2);
+  } finally { git.cleanup(); db.close(); }
+});
+
+test("missing or mismatched actor/triggering_actor fail independently; reconciler identity is ignored", async () => {
+  const mutations = [
+    [(wf) => ({ ...wf, actor: null }), /actor/],
+    [(wf) => ({ ...wf, triggering_actor: null }), /triggering_actor/],
+    [(wf) => ({ ...wf, actor: "attacker" }), /actor/],
+    [(wf) => ({ ...wf, triggering_actor: "attacker" }), /triggering_actor/],
+  ];
+  for (const [mutate, re] of mutations) {
+    const db = openOpsDb(":memory:");
+    const { codingTaskId, repo, git } = await makeStagedTask(db);
+    try {
+      const { authorization, assessment } = await cleared(db, codingTaskId, repo);
+      const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: repo.resolveRef("master") }), { repo, now: NOW, actor: "owner:alice" });
+      const provider = wrapGetWorkflowRun(makeStubProductionReleaseProvider(), mutate);
+      await assert.rejects(() => executeProductionRelease(db, created.run.id, { provider, repo, now: NOW, actor: "owner:bob" }), re);
+      assert.equal(getProductionStable(db), null);
+    } finally { git.cleanup(); db.close(); }
+  }
+});
+
+function driftAuthorization(db, authorizationId) {
+  db.prepare("UPDATE production_release_authorization SET status='superseded', superseded_at=?, superseded_reason='review-p1' WHERE id=?")
+    .run(NOW.toISOString(), authorizationId);
+}
+
+function driftManifest(db, codingTaskId) {
+  const cur = db.prepare("SELECT * FROM development_release_current WHERE coding_task_id=?").get(codingTaskId);
+  const rc = db.prepare("SELECT * FROM development_release_candidate WHERE id=?").get(cur.release_manifest_id);
+  const copy = { ...rc };
+  delete copy.id;
+  copy.manifest_hash = "e".repeat(64);
+  copy.manifest_version = Number(rc.manifest_version) + 1;
+  copy.release_input_fingerprint = "f".repeat(64);
+  const keys = Object.keys(copy);
+  const res = db.prepare(`INSERT INTO development_release_candidate (${keys.join(",")}) VALUES (${keys.map(() => "?").join(",")})`).run(...keys.map((k) => copy[k]));
+  db.prepare("UPDATE development_release_current SET release_manifest_id=?, manifest_version=?, manifest_hash=?, updated_at=? WHERE coding_task_id=?")
+    .run(Number(res.lastInsertRowid), copy.manifest_version, copy.manifest_hash, NOW.toISOString(), codingTaskId);
+}
+
+function driftProvenanceOnly(db) {
+  db.prepare("UPDATE production_stable_current SET provenance_fingerprint=? WHERE id=1")
+    .run("f".repeat(64));
+}
+
+test("final stable writes revalidate authorization/manifest/clearance/stable on release and rollback", async () => {
+  async function setup() {
+    const db = openOpsDb(":memory:");
+    const staged = await makeStagedTask(db);
+    const { authorization, assessment } = await cleared(db, staged.codingTaskId, staged.repo);
+    seedPrev(db, staged.repo);
+    const created = createProductionReleaseRun(db, execBody(staged.codingTaskId, authorization, assessment, { expectedMasterHead: staged.repo.resolveRef("master") }), { repo: staged.repo, now: NOW, actor: "owner:alice" });
+    return { db, staged, authorization, assessment, created };
+  }
+
+  const releaseDrifts = [
+    ["authorization", ({ authorization }) => driftAuthorization(dbRef.db, authorization.id), /superseded|eligibility|authorization/],
+    ["manifest", ({ staged }) => driftManifest(dbRef.db, staged.codingTaskId), /stale|manifest|eligibility/],
+    ["clearance", ({ created }) => forceClearedAdditive(dbRef.db, dbRef.db.prepare("SELECT * FROM production_migration_safety_assessment WHERE id=?").get(created.run.migration_safety_assessment_id)), /drifted|eligibility|assessment|clearance/],
+    ["stable", () => seedProductionStable(dbRef.db, {
+      sourceSha: "c".repeat(40), artifactDigest: "sha256:" + "cc".repeat(32), workflowRunId: "34111111111",
+      releaseRunId: 999, provenance: { kind: "newer_release" }, now: NOW,
+    }), /stable identity drifted or superseded|compare-and-swap/],
+  ];
+  const dbRef = { db: null };
+  for (const [name, mutate, re] of releaseDrifts) {
+    const ctx = await setup();
+    dbRef.db = ctx.db;
+    try {
+      const before = getProductionStable(ctx.db);
+      await assert.rejects(() => executeProductionRelease(ctx.db, ctx.created.run.id, {
+        provider: makeStubProductionReleaseProvider(), repo: ctx.staged.repo, now: NOW, actor: "owner:bob",
+        hooks: { beforeStableWrite() { mutate(ctx); } },
+      }), re, name);
+      assert.notEqual(getProductionRelease(ctx.db, ctx.created.run.id).run.current_status, "SUCCEEDED", name);
+      assert.ok(!getProductionRelease(ctx.db, ctx.created.run.id).events.some((e) => e.to_status === "SUCCEEDED"), name);
+      if (name !== "stable") assert.equal(getProductionStable(ctx.db).source_sha, before.source_sha, name);
+    } finally { ctx.staged.git.cleanup(); ctx.db.close(); }
+  }
+
+  const rollbackDrifts = [
+    ["authorization", ({ authorization }) => driftAuthorization(dbRef.db, authorization.id), /superseded|eligibility|authorization/],
+    ["manifest", ({ staged }) => driftManifest(dbRef.db, staged.codingTaskId), /stale|manifest|eligibility/],
+    ["clearance", ({ created }) => forceClearedAdditive(dbRef.db, dbRef.db.prepare("SELECT * FROM production_migration_safety_assessment WHERE id=?").get(created.run.migration_safety_assessment_id)), /drifted|eligibility|assessment|clearance/],
+    ["stable", () => seedProductionStable(dbRef.db, {
+      sourceSha: "d".repeat(40), artifactDigest: "sha256:" + "dd".repeat(32), workflowRunId: "34222222222",
+      releaseRunId: 998, provenance: { kind: "newer_unrelated" }, now: NOW,
+    }), /stale|superseded|stable identity|compare-and-swap/],
+  ];
+  for (const [name, mutate, re] of rollbackDrifts) {
+    const ctx = await setup();
+    dbRef.db = ctx.db;
+    try {
+      const before = getProductionStable(ctx.db);
+      await assert.rejects(() => executeProductionRelease(ctx.db, ctx.created.run.id, {
+        provider: makeStubProductionReleaseProvider({ healthFailFor: ctx.authorization.artifact_digest }),
+        repo: ctx.staged.repo, now: NOW, actor: "owner:bob",
+        hooks: { beforeStableWrite({ kind }) { if (kind === "rollback") mutate(ctx); } },
+      }), re, `rollback ${name}`);
+      assert.notEqual(getProductionRelease(ctx.db, ctx.created.run.id).run.current_status, "ROLLED_BACK", `rollback ${name}`);
+      if (name !== "stable") assert.equal(getProductionStable(ctx.db).source_sha, before.source_sha, `rollback ${name}`);
+    } finally { ctx.staged.git.cleanup(); ctx.db.close(); }
+  }
+});
+
+test("A→B same SHA/digest different provenance rejects stale-A rollback; provenance-only drift fails CAS", async () => {
+  const db = openOpsDb(":memory:");
+  const stagedA = await makeStagedTask(db);
+  const stagedB = await makeStagedTask(db);
+  try {
+    const a = await cleared(db, stagedA.codingTaskId, stagedA.repo);
+    const prev = seedPrev(db, stagedA.repo);
+    const provider = makeStubProductionReleaseProvider();
+    const runA = createProductionReleaseRun(db, execBody(stagedA.codingTaskId, a.authorization, a.assessment, { expectedMasterHead: stagedA.repo.resolveRef("master") }), { repo: stagedA.repo, now: NOW, actor: "owner:alice" });
+    const outA = await executeProductionRelease(db, runA.run.id, { provider, repo: stagedA.repo, now: NOW, actor: "owner:alice" });
+    assert.equal(outA.run.current_status, "SUCCEEDED");
+    const stableA = getProductionStable(db);
+    const b = await cleared(db, stagedB.codingTaskId, stagedB.repo);
+    const runB = createProductionReleaseRun(db, execBody(stagedB.codingTaskId, b.authorization, b.assessment, { expectedMasterHead: stagedB.repo.resolveRef("master") }), { repo: stagedB.repo, now: NOW, actor: "owner:alice" });
+    seedProductionStable(db, {
+      sourceSha: stableA.source_sha,
+      artifactDigest: stableA.artifact_digest,
+      workflowRunId: stableA.workflow_run_id,
+      releaseRunId: runB.run.id,
+      provenance: {
+        kind: "release_succeeded",
+        release_run_id: runB.run.id,
+        authorization_id: b.authorization.id,
+        assessment_id: b.assessment.id,
+      },
+      now: NOW,
+    });
+    assert.equal(getProductionStable(db).source_sha, stableA.source_sha);
+    assert.equal(getProductionStable(db).artifact_digest, stableA.artifact_digest);
+    assert.equal(getProductionStable(db).release_run_id, runB.run.id);
+    await assert.rejects(() => requestCodeRollback(db, {
+      releaseRunId: runA.run.id,
+      previousStableSha: prev.source_sha,
+      previousStableDigest: prev.artifact_digest,
+      previousStableWorkflowRunId: prev.workflow_run_id,
+      provider, repo: stagedA.repo, now: NOW, actor: "owner:alice",
+    }), /stale or superseded/);
+    assert.equal(getProductionStable(db).release_run_id, runB.run.id);
+
+    const stagedC = await makeStagedTask(db);
+    const c = await cleared(db, stagedC.codingTaskId, stagedC.repo);
+    const runC = createProductionReleaseRun(db, execBody(stagedC.codingTaskId, c.authorization, c.assessment, { expectedMasterHead: stagedC.repo.resolveRef("master") }), { repo: stagedC.repo, now: NOW, actor: "owner:alice" });
+    seedPrev(db, stagedC.repo);
+    await assert.rejects(() => executeProductionRelease(db, runC.run.id, {
+      provider: makeStubProductionReleaseProvider(), repo: stagedC.repo, now: NOW, actor: "owner:alice",
+      hooks: { beforeStableWrite() { driftProvenanceOnly(db); } },
+    }), /stable identity drifted or superseded|compare-and-swap/);
+    assert.notEqual(getProductionRelease(db, runC.run.id).run.current_status, "SUCCEEDED");
+    stagedC.git.cleanup();
+  } finally { stagedA.git.cleanup(); stagedB.git.cleanup(); db.close(); }
 });
 

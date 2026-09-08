@@ -1005,7 +1005,9 @@ export function applyOpsSchema(db) {
       previous_stable_sha TEXT,
       previous_stable_digest TEXT,
       previous_stable_workflow_run_id TEXT,
+      previous_stable_release_run_id INTEGER,
       previous_stable_provenance TEXT,
+      authorized_github_actor TEXT NOT NULL,
       created_by TEXT NOT NULL,
       created_at TEXT NOT NULL,
       FOREIGN KEY (release_authorization_id) REFERENCES production_release_authorization(id) ON DELETE RESTRICT,
@@ -1069,6 +1071,7 @@ export function applyOpsSchema(db) {
       dispatch_owner TEXT,
       dispatch_intent_id TEXT,
       dispatch_claimed_at TEXT,
+      authorized_github_actor TEXT,
       provider_response_identity TEXT,
       binding_status TEXT NOT NULL,
       created_at TEXT NOT NULL,
@@ -1093,6 +1096,7 @@ export function applyOpsSchema(db) {
       artifact_digest TEXT,
       workflow_run_id TEXT,
       provenance_json TEXT,
+      provenance_fingerprint TEXT,
       updated_at TEXT NOT NULL
     );
 
@@ -1173,21 +1177,27 @@ function tableColumns(db, table) {
 }
 
 function ensureProductionReleaseBindingColumns(db) {
-  let cols = [];
-  try {
-    cols = tableColumns(db, "production_release_workflow_binding");
-  } catch {
-    return;
-  }
-  if (!cols.length) return;
-  const add = [
+  const addIfMissing = (table, columns) => {
+    let cols = [];
+    try { cols = tableColumns(db, table); } catch { return; }
+    if (!cols.length) return;
+    for (const [name, decl] of columns) {
+      if (!cols.includes(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${decl}`);
+    }
+  };
+  addIfMissing("production_release_workflow_binding", [
     ["dispatch_owner", "TEXT"],
     ["dispatch_intent_id", "TEXT"],
     ["dispatch_claimed_at", "TEXT"],
-  ];
-  for (const [name, decl] of add) {
-    if (!cols.includes(name)) db.exec(`ALTER TABLE production_release_workflow_binding ADD COLUMN ${name} ${decl}`);
-  }
+    ["authorized_github_actor", "TEXT"],
+  ]);
+  addIfMissing("production_release_run", [
+    ["authorized_github_actor", "TEXT"],
+    ["previous_stable_release_run_id", "INTEGER"],
+  ]);
+  addIfMissing("production_stable_current", [
+    ["provenance_fingerprint", "TEXT"],
+  ]);
 }
 
 // 開一個 ops 資料庫。dbPath = ":memory:" 供測試使用。

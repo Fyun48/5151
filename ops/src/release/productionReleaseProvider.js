@@ -7,6 +7,7 @@ import {
   REQUIRED_TARGET_ENVIRONMENT,
   REQUIRED_WORKFLOW_REF,
 } from "./productionReleasePolicy.js";
+import { makeGithubProductionReleaseProvider as makeBoundGithubProductionReleaseProvider } from "./githubProductionReleaseProvider.js";
 
 // Phase 15 廠商中立 Production release provider。
 // 概念能力：dispatchWorkflow / getWorkflowRun / findByIdempotency / inspectImage / mergePullRequest / healthSmoke。
@@ -57,8 +58,8 @@ export function makeStubProductionReleaseProvider(opts = {}) {
       head_sha: partial.head_sha,
       workflow_file: partial.workflow_file,
       workflow_ref: partial.workflow_ref || REQUIRED_WORKFLOW_REF,
-      actor: partial.actor || opts.actor || "owner",
-      triggering_actor: partial.triggering_actor || opts.actor || "owner",
+      actor: partial.actor || opts.actor || "Fyun48",
+      triggering_actor: partial.triggering_actor || partial.actor || opts.actor || "Fyun48",
       environment: partial.environment ?? null,
       inputs: partial.inputs || {},
       outputs: partial.outputs || {},
@@ -142,7 +143,8 @@ export function makeStubProductionReleaseProvider(opts = {}) {
         head_sha: sha,
         workflow_file: workflowFile,
         workflow_ref: workflowRef || REQUIRED_WORKFLOW_REF,
-        actor: actor || opts.actor || "owner",
+        actor: actor || opts.actor || "Fyun48",
+        triggering_actor: actor || opts.actor || "Fyun48",
         environment: workflowFile === PRODUCTION_WORKFLOWS.BUILD ? null : (environment || REQUIRED_TARGET_ENVIRONMENT),
         inputs,
         idempotency_key: idempotencyKey,
@@ -291,19 +293,8 @@ export function makeStubProductionReleaseProvider(opts = {}) {
   return self;
 }
 
-export function makeGithubProductionReleaseProvider(env = process.env) {
-  // 正式 adapter 只允許呼叫既有受保護 CI/CD。本 Phase 開發/CI 預設拒絕，
-  // 即使環境有 token 也不自動可用，避免測試或誤設定 dispatch Production。
-  void env;
-  return unavailable("github", {
-    status: "mutations_disabled",
-    required: [
-      "Owner-controlled workflow_dispatch on existing Production workflows only.",
-      "Protected GitHub production environment; Ops must not store or return Production secrets.",
-      "PRODUCTION_RELEASE_PROVIDER=github plus an explicit Owner mutation grant (not set in tests/CI).",
-      "Exact SHA + immutable image digest + workflow ref refs/heads/master.",
-    ],
-  });
+export function makeGithubProductionReleaseProvider(env = process.env, deps = {}) {
+  return makeBoundGithubProductionReleaseProvider(env, deps);
 }
 
 export function makeProductionReleaseProvider(env = process.env) {

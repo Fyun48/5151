@@ -177,6 +177,7 @@ export function buildProductionReleasePolicy(cfg = productionReleaseConfigFromEn
       "artifact_digest",
       "target_environment",
       "workflow_ref",
+      "authorized_github_actor",
     ].sort(),
   };
 }
@@ -208,6 +209,7 @@ export function productionReleaseInputFingerprint(p) {
     `target_environment:${p.targetEnvironment}`,
     `workflow_ref:${p.workflowRef}`,
     `expected_master_head:${p.expectedMasterHead ?? ""}`,
+    `github_actor:${p.githubActor || ""}`,
     `policy_fp:${p.policyFingerprint}`,
   ].sort();
   return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
@@ -220,6 +222,22 @@ export function workflowIdempotencyKey({ releaseRunId, workflowKind, inputFinger
 export function isSuccessfulConclusion(conclusion, runStatus) {
   if (String(runStatus || "") !== "completed") return false;
   return SUCCESS_CONCLUSIONS.includes(String(conclusion || ""));
+}
+
+export function isNonTerminalWorkflowStatus(runStatus) {
+  return NON_TERMINAL_RUN_STATUSES.includes(String(runStatus || ""));
+}
+
+export function isAuthorizedGithubActor(login) {
+  const s = String(login || "");
+  if (!s || s === "latest" || s.startsWith("owner:") || /@/.test(s)) return false;
+  return /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(s);
+}
+
+export function stableProvenanceFingerprint(provenance) {
+  const p = provenance && typeof provenance === "object" ? provenance : {};
+  const parts = Object.entries(p).map(([k, v]) => `${k}:${JSON.stringify(v)}`).sort();
+  return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
 }
 
 export function isTerminalReleaseStatus(status) {
@@ -255,13 +273,11 @@ export function validateExactWorkflowEvidence(wf, expected = {}) {
   else if (expected.workflow_ref && wf.workflow_ref !== expected.workflow_ref) problems.push("workflow_ref_mismatch");
   if (missing(wf?.head_sha)) problems.push("head_sha");
   else if (expected.head_sha && String(wf.head_sha) !== String(expected.head_sha)) problems.push("head_sha_mismatch");
-  const actor = wf?.actor;
-  const triggering = wf?.triggering_actor;
-  if (missing(actor) && missing(triggering)) problems.push("actor");
-  else if (expected.actor) {
-    const actorOk = !missing(actor) && String(actor) === String(expected.actor);
-    const triggerOk = !missing(triggering) && String(triggering) === String(expected.actor);
-    if (!actorOk && !triggerOk) problems.push("actor_mismatch");
+  if (missing(wf?.actor)) problems.push("actor");
+  else if (expected.actor && String(wf.actor) !== String(expected.actor)) problems.push("actor_mismatch");
+  if (missing(wf?.triggering_actor)) problems.push("triggering_actor");
+  else if (expected.triggering_actor && String(wf.triggering_actor) !== String(expected.triggering_actor)) {
+    problems.push("triggering_actor_mismatch");
   }
   if (expected.environment) {
     if (missing(wf?.environment)) problems.push("environment");
@@ -283,6 +299,20 @@ export function validateExactWorkflowEvidence(wf, expected = {}) {
     else if (String(outputs.oci_source).toLowerCase() !== String(expected.oci_source).toLowerCase()) problems.push("oci_source_mismatch");
   }
   return { ok: problems.length === 0, problems };
+}
+
+export function classifyWorkflowRun(wf, expected = {}) {
+  if (!wf || missing(wf.id)) return { kind: "unbound", problems: ["id"] };
+  const status = String(wf.status || "");
+  if (isNonTerminalWorkflowStatus(status)) return { kind: "waiting", problems: [] };
+  if (!status) return { kind: "unbound", problems: ["status"] };
+  if (status !== "completed") return { kind: "waiting", problems: [] };
+  if (!SUCCESS_CONCLUSIONS.includes(String(wf.conclusion || ""))) {
+    return { kind: "failed", problems: ["conclusion"], conclusion: wf.conclusion, status };
+  }
+  const exact = validateExactWorkflowEvidence(wf, expected);
+  if (!exact.ok) return { kind: "unbound", problems: exact.problems };
+  return { kind: "success", problems: [] };
 }
 
 export function decideDbRollbackDisposition(classification) {

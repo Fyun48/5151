@@ -14,16 +14,17 @@ import {
   ROLLBACK_PATH_STATUSES,
   WORKFLOW_KINDS,
   buildProductionReleasePolicy,
+  classifyWorkflowRun,
   decideDbRollbackDisposition,
   digestLooksImmutable,
   isAllowedReleaseTransition,
-  isSuccessfulConclusion,
+  isAuthorizedGithubActor,
   isTerminalReleaseStatus,
   previousStableComplete,
   productionReleaseConfigFromEnv,
   productionReleaseInputFingerprint,
   productionReleasePolicyFingerprint,
-  validateExactWorkflowEvidence,
+  stableProvenanceFingerprint,
   workflowIdempotencyKey,
 } from "./productionReleasePolicy.js";
 import { makeProductionReleaseProvider, newDispatchRequestId } from "./productionReleaseProvider.js";
@@ -79,6 +80,7 @@ function requireExactIdentities(body) {
   if (body.workflowRef !== REQUIRED_WORKFLOW_REF) throw httpError("workflow ref must be refs/heads/master", 409);
   if (!digestLooksImmutable(body.artifactDigest)) throw httpError("artifact_digest must be an immutable digest", 400);
   if (String(body.headSha) === "latest") throw httpError("head_sha must be exact", 400);
+  if (!isAuthorizedGithubActor(body.githubActor)) throw httpError("authorized github actor must be an exact GitHub login", 400);
 }
 
 function latestEvent(db, releaseRunId) {
@@ -184,7 +186,9 @@ export function publicReleaseRun(db, row) {
     previous_stable_sha: row.previous_stable_sha,
     previous_stable_digest: row.previous_stable_digest,
     previous_stable_workflow_run_id: row.previous_stable_workflow_run_id,
+    previous_stable_release_run_id: row.previous_stable_release_run_id == null ? null : Number(row.previous_stable_release_run_id),
     previous_stable_provenance: parse(row.previous_stable_provenance),
+    authorized_github_actor: row.authorized_github_actor,
     current_status: status,
     created_by: row.created_by,
     created_at: row.created_at,
@@ -240,26 +244,30 @@ export function getProductionStable(db) {
     artifact_digest: row.artifact_digest,
     workflow_run_id: row.workflow_run_id,
     provenance: parse(row.provenance_json),
+    provenance_fingerprint: row.provenance_fingerprint || stableProvenanceFingerprint(parse(row.provenance_json)),
     updated_at: row.updated_at,
   };
 }
 
 export function seedProductionStable(db, { sourceSha, artifactDigest, workflowRunId, releaseRunId = null, provenance = {}, now = new Date() } = {}) {
   const ts = iso(now);
-  db.prepare(`INSERT INTO production_stable_current(id, release_run_id, source_sha, artifact_digest, workflow_run_id, provenance_json, updated_at)
-              VALUES (1,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET release_run_id=excluded.release_run_id, source_sha=excluded.source_sha, artifact_digest=excluded.artifact_digest, workflow_run_id=excluded.workflow_run_id, provenance_json=excluded.provenance_json, updated_at=excluded.updated_at`)
-    .run(releaseRunId, sourceSha, artifactDigest, workflowRunId, JSON.stringify(sanitizeReleaseEvidence(provenance)), ts);
+  const clean = sanitizeReleaseEvidence(provenance) || {};
+  const fp = stableProvenanceFingerprint(clean);
+  db.prepare(`INSERT INTO production_stable_current(id, release_run_id, source_sha, artifact_digest, workflow_run_id, provenance_json, provenance_fingerprint, updated_at)
+              VALUES (1,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET release_run_id=excluded.release_run_id, source_sha=excluded.source_sha, artifact_digest=excluded.artifact_digest, workflow_run_id=excluded.workflow_run_id, provenance_json=excluded.provenance_json, provenance_fingerprint=excluded.provenance_fingerprint, updated_at=excluded.updated_at`)
+    .run(releaseRunId, sourceSha, artifactDigest, workflowRunId, JSON.stringify(clean), fp, ts);
   return getProductionStable(db);
 }
 
 function snapshotPreviousStable(db) {
   const cur = getProductionStable(db);
-  if (!cur || !cur.source_sha) return { sha: null, digest: null, workflow_run_id: null, provenance: null };
+  if (!cur || !cur.source_sha) return { sha: null, digest: null, workflow_run_id: null, release_run_id: null, provenance: null };
   return {
     sha: cur.source_sha,
     digest: cur.artifact_digest,
     workflow_run_id: cur.workflow_run_id,
-    provenance: cur.provenance,
+    release_run_id: cur.release_run_id,
+    provenance: { ...(cur.provenance || {}), release_run_id: cur.release_run_id, provenance_fingerprint: cur.provenance_fingerprint },
   };
 }
 
@@ -326,19 +334,24 @@ function saveBindingDispatch(db, bindingId, { workflowRunId, attempt, requestId,
 }
 
 function stableSnapshot(cur) {
-  if (!cur) return { source_sha: null, artifact_digest: null, workflow_run_id: null, release_run_id: null };
+  if (!cur) {
+    return { source_sha: null, artifact_digest: null, workflow_run_id: null, release_run_id: null, provenance_fingerprint: null };
+  }
   return {
     source_sha: cur.source_sha || null,
     artifact_digest: cur.artifact_digest || null,
     workflow_run_id: cur.workflow_run_id || null,
     release_run_id: cur.release_run_id == null ? null : Number(cur.release_run_id),
+    provenance_fingerprint: cur.provenance_fingerprint || stableProvenanceFingerprint(cur.provenance),
   };
 }
 
 function sameStable(a, b) {
   return same(a?.source_sha, b?.source_sha)
     && same(a?.artifact_digest, b?.artifact_digest)
-    && same(a?.workflow_run_id, b?.workflow_run_id);
+    && same(a?.workflow_run_id, b?.workflow_run_id)
+    && sameNum(a?.release_run_id || 0, b?.release_run_id || 0)
+    && same(a?.provenance_fingerprint, b?.provenance_fingerprint);
 }
 
 function requireStableUnchanged(db, observed) {
@@ -351,26 +364,28 @@ function requireStableUnchanged(db, observed) {
 
 function casWriteProductionStable(db, { next, casFrom = null, now }) {
   const ts = iso(now);
-  const payload = JSON.stringify(sanitizeReleaseEvidence(next.provenance || {}));
+  const clean = sanitizeReleaseEvidence(next.provenance || {}) || {};
+  const payload = JSON.stringify(clean);
+  const nextFp = stableProvenanceFingerprint(clean);
   if (!casFrom || !casFrom.source_sha) {
     const cur = getProductionStable(db);
     if (cur && cur.source_sha) throw httpError("production stable identity drifted or superseded", 409);
-    db.prepare(`INSERT INTO production_stable_current(id, release_run_id, source_sha, artifact_digest, workflow_run_id, provenance_json, updated_at)
-                VALUES (1,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET release_run_id=excluded.release_run_id, source_sha=excluded.source_sha, artifact_digest=excluded.artifact_digest, workflow_run_id=excluded.workflow_run_id, provenance_json=excluded.provenance_json, updated_at=excluded.updated_at
+    db.prepare(`INSERT INTO production_stable_current(id, release_run_id, source_sha, artifact_digest, workflow_run_id, provenance_json, provenance_fingerprint, updated_at)
+                VALUES (1,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET release_run_id=excluded.release_run_id, source_sha=excluded.source_sha, artifact_digest=excluded.artifact_digest, workflow_run_id=excluded.workflow_run_id, provenance_json=excluded.provenance_json, provenance_fingerprint=excluded.provenance_fingerprint, updated_at=excluded.updated_at
                 WHERE production_stable_current.source_sha IS NULL OR production_stable_current.source_sha=''`)
-      .run(next.releaseRunId, next.sourceSha, next.artifactDigest, next.workflowRunId, payload, ts);
+      .run(next.releaseRunId, next.sourceSha, next.artifactDigest, next.workflowRunId, payload, nextFp, ts);
     const written = getProductionStable(db);
-    if (!written || !same(written.source_sha, next.sourceSha) || !same(written.artifact_digest, next.artifactDigest)) {
+    if (!written || !same(written.source_sha, next.sourceSha) || !same(written.artifact_digest, next.artifactDigest) || !sameNum(written.release_run_id, next.releaseRunId)) {
       throw httpError("production stable compare-and-swap failed", 409);
     }
     return written;
   }
   const res = db.prepare(
-    `UPDATE production_stable_current SET release_run_id=?, source_sha=?, artifact_digest=?, workflow_run_id=?, provenance_json=?, updated_at=?
-     WHERE id=1 AND source_sha=? AND artifact_digest=? AND IFNULL(workflow_run_id,'')=?`,
+    `UPDATE production_stable_current SET release_run_id=?, source_sha=?, artifact_digest=?, workflow_run_id=?, provenance_json=?, provenance_fingerprint=?, updated_at=?
+     WHERE id=1 AND source_sha=? AND artifact_digest=? AND IFNULL(workflow_run_id,'')=? AND IFNULL(release_run_id,0)=? AND IFNULL(provenance_fingerprint,'')=?`,
   ).run(
-    next.releaseRunId, next.sourceSha, next.artifactDigest, next.workflowRunId, payload, ts,
-    casFrom.source_sha, casFrom.artifact_digest, casFrom.workflow_run_id || "",
+    next.releaseRunId, next.sourceSha, next.artifactDigest, next.workflowRunId, payload, nextFp, ts,
+    casFrom.source_sha, casFrom.artifact_digest, casFrom.workflow_run_id || "", Number(casFrom.release_run_id || 0), casFrom.provenance_fingerprint || "",
   );
   if (res.changes !== 1) throw httpError("production stable compare-and-swap failed", 409);
   return getProductionStable(db);
@@ -379,10 +394,15 @@ function casWriteProductionStable(db, { next, casFrom = null, now }) {
 function rollbackObservedFrom(db, run) {
   const cur = getProductionStable(db);
   if (!cur || !cur.source_sha) throw httpError("no current production stable to roll back", 409);
-  const thisRelease = same(cur.source_sha, run.authorized_head_sha) && same(cur.artifact_digest, run.artifact_digest);
-  const stillPrevious = same(cur.source_sha, run.previous_stable_sha) && same(cur.artifact_digest, run.previous_stable_digest);
+  const thisPointer = cur.release_run_id != null && Number(cur.release_run_id) === Number(run.id);
+  const prevRid = run.previous_stable_release_run_id != null
+    ? Number(run.previous_stable_release_run_id)
+    : (parse(run.previous_stable_provenance)?.release_run_id == null ? null : Number(parse(run.previous_stable_provenance).release_run_id));
+  const stillPrevious = same(cur.source_sha, run.previous_stable_sha)
+    && same(cur.artifact_digest, run.previous_stable_digest)
+    && (prevRid == null ? cur.release_run_id == null : Number(cur.release_run_id) === prevRid);
   const status = latestStatus(db, run.id);
-  if (thisRelease) return stableSnapshot(cur);
+  if (thisPointer) return stableSnapshot(cur);
   if (stillPrevious && status !== RELEASE_STATUSES.SUCCEEDED) return stableSnapshot(cur);
   throw httpError("rollback target is stale or superseded by a newer production release", 409);
 }
@@ -405,10 +425,11 @@ function claimDispatchLease(db, { run, workflowKind, owner, now, repo, env }) {
     const res = db.prepare(
       `UPDATE production_release_workflow_binding
        SET binding_status=?, dispatch_owner=?, dispatch_intent_id=COALESCE(dispatch_intent_id, ?),
-           dispatch_request_id=COALESCE(dispatch_request_id, ?), dispatch_claimed_at=?
+           dispatch_request_id=COALESCE(dispatch_request_id, ?), dispatch_claimed_at=?,
+           authorized_github_actor=COALESCE(authorized_github_actor, ?)
        WHERE id=? AND workflow_run_id IS NULL AND binding_status=?
          AND (dispatch_owner IS NULL OR dispatch_owner='')`,
-    ).run(BINDING_STATUSES.CLAIMED, owner, intentId, intentId, iso(now), Number(binding.id), BINDING_STATUSES.RESERVED);
+    ).run(BINDING_STATUSES.CLAIMED, owner, intentId, intentId, iso(now), run.authorized_github_actor, Number(binding.id), BINDING_STATUSES.RESERVED);
     if (res.changes !== 1) return { binding: getBinding(db, run.id, workflowKind), role: "wait" };
     return { binding: getBinding(db, run.id, workflowKind), role: "dispatch" };
   });
@@ -416,26 +437,20 @@ function claimDispatchLease(db, { run, workflowKind, owner, now, repo, env }) {
 
 function expectedWorkflowEvidence(run, { workflowKind, workflowFile, environment, binding, imageDigest = null }) {
   const rollback = workflowKind === WORKFLOW_KINDS.ROLLBACK;
+  const githubActor = binding?.authorized_github_actor || run.authorized_github_actor;
   return {
     workflow_run_id: binding?.workflow_run_id || null,
     attempt: binding?.workflow_attempt == null ? null : Number(binding.workflow_attempt),
     workflow_file: workflowFile,
     workflow_ref: run.workflow_ref || REQUIRED_WORKFLOW_REF,
     head_sha: rollback ? run.previous_stable_sha : run.authorized_head_sha,
-    actor: run.created_by,
+    actor: githubActor,
+    triggering_actor: githubActor,
     environment: environment || null,
     image_digest: imageDigest,
     oci_revision: imageDigest ? (rollback ? run.previous_stable_sha : run.authorized_head_sha) : null,
     oci_source: imageDigest ? REQUIRED_OCI_SOURCE : null,
   };
-}
-
-function assertExactBoundWorkflow(wf, expected) {
-  const checked = validateExactWorkflowEvidence(wf, expected);
-  if (!checked.ok) throw httpError(`workflow evidence not exactly bound: ${checked.problems.join(",")}`, 409);
-  if (!isSuccessfulConclusion(wf.conclusion, wf.status)) {
-    throw httpError(`workflow is not success (${wf.status}/${wf.conclusion})`, 409);
-  }
 }
 
 async function dispatchOrReconcile(db, {
@@ -458,7 +473,7 @@ async function dispatchOrReconcile(db, {
       inputs,
       idempotencyKey: binding.idempotency_key,
       expectedHead: run.expected_master_head || null,
-      actor,
+      actor: run.authorized_github_actor,
       environment,
       confirmation,
       requestId: binding.dispatch_request_id || binding.dispatch_intent_id,
@@ -479,6 +494,21 @@ async function dispatchOrReconcile(db, {
         return;
       }
       if (!dispatched.workflow_run_id) {
+        if (dispatched.pending_lookup) {
+          saveBindingDispatch(db, fresh.id, {
+            status: BINDING_STATUSES.DISPATCHED,
+            requestId: dispatched.request_id,
+            responseIdentity: dispatched.provider_response_identity,
+          });
+          appendEvidence(db, {
+            releaseRunId: run.id, kind: `${workflowKind}_dispatch_pending`, now, workflow_file: workflowFile, workflow_ref: run.workflow_ref,
+            target_environment: environment, dispatch_request_id: dispatched.request_id || fresh.dispatch_request_id, provider_response_identity: dispatched.provider_response_identity,
+            payload: { accepted: true, pending_lookup: true, workflow_run_id: null },
+          });
+          appendEvent(db, { releaseRunId: run.id, toStatus: dispatchedStatus, eventType: `${workflowKind}_dispatched`, now, actor });
+          afterDispatchError = httpError(`${workflowKind} is still queued`, 409, { code: "workflow_in_progress" });
+          return;
+        }
         saveBindingDispatch(db, fresh.id, {
           status: BINDING_STATUSES.UNKNOWN,
           requestId: dispatched.request_id,
@@ -513,10 +543,25 @@ async function dispatchOrReconcile(db, {
     if (afterDispatchError) throw afterDispatchError;
     binding = getBinding(db, run.id, workflowKind);
   } else if (!binding.workflow_run_id) {
-    const found = await provider.findWorkflowRunByIdempotency({ idempotencyKey: binding.idempotency_key });
+    const found = await provider.findWorkflowRunByIdempotency({
+      idempotencyKey: binding.idempotency_key,
+      workflowFile,
+      workflowRef: run.workflow_ref,
+      headSha: workflowKind === WORKFLOW_KINDS.ROLLBACK ? run.previous_stable_sha : run.authorized_head_sha,
+      actor: run.authorized_github_actor,
+      createdAfter: binding.dispatch_claimed_at || binding.created_at,
+      dispatchIntentId: binding.dispatch_intent_id || binding.dispatch_request_id,
+      environment,
+    });
     if (!found?.id) {
-      if (role === "wait" || binding.binding_status === BINDING_STATUSES.CLAIMED) {
-        throw httpError("workflow dispatch in progress; reconcile, do not re-dispatch", 409);
+      if (found?.ambiguous) {
+        withImmediateTx(db, () => {
+          appendEvent(db, { releaseRunId: run.id, toStatus: RELEASE_STATUSES.BLOCKED, eventType: `${workflowKind}_ambiguous`, reason: "multiple_matching_workflow_runs", errorCode: "ambiguous_workflow_run", now, actor });
+        });
+        throw httpError("ambiguous workflow run correlation; refuse to guess", 409);
+      }
+      if (role === "wait" || binding.binding_status === BINDING_STATUSES.CLAIMED || binding.binding_status === BINDING_STATUSES.DISPATCHED) {
+        throw httpError(`${workflowKind} is still queued`, 409, { code: "workflow_in_progress" });
       }
       withImmediateTx(db, () => {
         appendEvent(db, { releaseRunId: run.id, toStatus: RELEASE_STATUSES.BLOCKED, eventType: `${workflowKind}_unverified`, reason: "timeout_or_unknown_must_reconcile_not_redispatch", errorCode: "unverified_workflow_run", now, actor });
@@ -550,23 +595,27 @@ async function dispatchOrReconcile(db, {
     workflowKind, workflowFile, environment, binding,
     imageDigest: requireImageOutputs ? (workflowKind === WORKFLOW_KINDS.ROLLBACK ? run.previous_stable_digest : run.artifact_digest) : null,
   });
-  expected.actor = actor;
-  try {
-    assertExactBoundWorkflow(wf, expected);
-  } catch (err) {
+  const classified = classifyWorkflowRun(wf, expected);
+  if (classified.kind === "waiting") {
+    throw httpError(`${workflowKind} is still ${wf.status || "queued"}`, 409, { code: "workflow_in_progress" });
+  }
+  if (classified.kind !== "success") {
+    const reason = classified.kind === "failed"
+      ? `workflow completed with conclusion ${wf.conclusion || "empty"}`
+      : `workflow evidence is not an exact successful ${workflowKind} run (${(classified.problems || []).join(",")})`;
     withImmediateTx(db, () => {
       appendEvidence(db, {
         releaseRunId: run.id, kind: `${workflowKind}_conclusion`, now, workflow_name: workflowKind, workflow_file: workflowFile,
         workflow_ref: wf.workflow_ref, workflow_run_id: wf.id != null ? String(wf.id) : null, workflow_attempt: wf.attempt, workflow_conclusion: wf.conclusion || wf.status,
         workflow_head_sha: wf.head_sha, workflow_actor: wf.actor || wf.triggering_actor, target_environment: wf.environment || environment,
-        payload: { status: wf.status, conclusion: wf.conclusion, problems: String(err.message || "") },
+        payload: { status: wf.status, conclusion: wf.conclusion, classification: classified.kind, problems: classified.problems || [] },
       });
       appendEvent(db, {
         releaseRunId: run.id, toStatus: RELEASE_STATUSES.BLOCKED, eventType: `${workflowKind}_not_success`,
-        reason: err.message, errorCode: "workflow_not_exactly_bound", now, actor,
+        reason, errorCode: classified.kind === "failed" ? "workflow_completed_not_success" : "workflow_not_exactly_bound", now, actor,
       });
     });
-    throw err;
+    throw httpError(reason, 409);
   }
   withImmediateTx(db, () => {
     const fresh = getBinding(db, run.id, workflowKind);
@@ -636,6 +685,7 @@ export function createProductionReleaseRun(db, body, { repo = null, env = proces
     targetEnvironment: REQUIRED_TARGET_ENVIRONMENT,
     workflowRef: REQUIRED_WORKFLOW_REF,
     expectedMasterHead: body.expectedMasterHead || "",
+    githubActor: body.githubActor,
     policyFingerprint: policyFp,
   });
   const existing = db.prepare("SELECT * FROM production_release_run WHERE input_fingerprint=?").get(inputFp);
@@ -670,16 +720,18 @@ export function createProductionReleaseRun(db, body, { repo = null, env = proces
         migration_safety_assessment_id, migration_safety_policy_fingerprint, migration_safety_input_fingerprint, clearance_result,
         proposal_id, qa_run_id, staging_deployment_id, authorized_head_sha, source_tree_hash, artifact_digest, target_environment,
         workflow_file, workflow_ref, expected_master_head, input_fingerprint, policy_fingerprint, run_version,
-        previous_stable_sha, previous_stable_digest, previous_stable_workflow_run_id, previous_stable_provenance, created_by, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        previous_stable_sha, previous_stable_digest, previous_stable_workflow_run_id, previous_stable_release_run_id, previous_stable_provenance,
+        authorized_github_actor, created_by, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     ).run(
       Number(task.issue_id), Number(task.id), Number(auth.id), auth.authorization_hash, Number(rc.id), Number(rc.manifest_version), rc.manifest_hash,
       Number(a.id), a.policy_fingerprint, a.input_fingerprint, a.clearance_result,
       Number(auth.proposal_id), Number(a.qa_run_id), Number(a.staging_deployment_id), auth.head_sha, rc.source_tree_hash || null, auth.artifact_digest,
       REQUIRED_TARGET_ENVIRONMENT, PRODUCTION_WORKFLOWS.DEPLOY, REQUIRED_WORKFLOW_REF, body.expectedMasterHead || null,
       inputFp, policyFp, version,
-      prev.sha, prev.digest, prev.workflow_run_id, prev.provenance ? JSON.stringify(sanitizeReleaseEvidence(prev.provenance)) : null,
-      actor, ts,
+      prev.sha, prev.digest, prev.workflow_run_id, prev.release_run_id,
+      prev.provenance ? JSON.stringify(sanitizeReleaseEvidence(prev.provenance)) : null,
+      body.githubActor, actor, ts,
     );
     const id = Number(res.lastInsertRowid);
     appendEvent(db, { releaseRunId: id, toStatus: RELEASE_STATUSES.CREATED, eventType: "created", now, actor });
@@ -789,13 +841,23 @@ async function executeCodeRollback(db, run, { provider, repo, env, now, actor, o
     throw httpError("code rollback health/smoke failed", 409);
   }
   if (hooks?.beforeStableWrite) await hooks.beforeStableWrite({ run, kind: "rollback" });
-  requireStableUnchanged(db, observedStable);
   withImmediateTx(db, () => {
+    assertIdentitiesUnchanged(db, run, { repo, env, allowMasterMovement: true });
+    requireStableUnchanged(db, observedStable);
     appendEvidence(db, { releaseRunId: run.id, kind: "rollback_health", now, health_result: "PASS", smoke_result: "PASS", image_digest: health.image_digest, oci_revision: health.oci_revision, payload: health });
     casWriteProductionStable(db, {
       next: {
         sourceSha: prev.source_sha, artifactDigest: prev.artifact_digest, workflowRunId: String(workflow.id),
-        releaseRunId: run.id, provenance: { kind: "code_rollback", previous_stable_workflow_run_id: prev.workflow_run_id },
+        releaseRunId: run.id,
+        provenance: {
+          kind: "code_rollback",
+          release_run_id: Number(run.id),
+          authorization_id: Number(run.release_authorization_id),
+          authorization_hash: run.release_authorization_hash,
+          assessment_id: Number(run.migration_safety_assessment_id),
+          previous_stable_workflow_run_id: prev.workflow_run_id,
+          previous_stable_release_run_id: run.previous_stable_release_run_id,
+        },
       },
       casFrom: observedStable,
       now,
@@ -908,8 +970,9 @@ export async function executeProductionRelease(db, releaseRunId, {
   }
 
   if (hooks?.beforeStableWrite) await hooks.beforeStableWrite({ run, kind: "release" });
-  requireStableUnchanged(db, observedStable);
   withImmediateTx(db, () => {
+    assertIdentitiesUnchanged(db, run, { repo, env, allowMasterMovement: true });
+    requireStableUnchanged(db, observedStable);
     appendEvidence(db, {
       releaseRunId: run.id, kind: "health_smoke", now, health_result: "PASS", smoke_result: "PASS",
       image_digest: health.image_digest, oci_revision: health.oci_revision, payload: health,
@@ -919,7 +982,17 @@ export async function executeProductionRelease(db, releaseRunId, {
       next: {
         sourceSha: run.authorized_head_sha, artifactDigest: run.artifact_digest, workflowRunId: String(deploy.workflow.id),
         releaseRunId: run.id,
-        provenance: { kind: "release_succeeded", workflow_file: PRODUCTION_WORKFLOWS.DEPLOY, workflow_ref: REQUIRED_WORKFLOW_REF, attempt: deploy.workflow.attempt },
+        provenance: {
+          kind: "release_succeeded",
+          release_run_id: Number(run.id),
+          authorization_id: Number(run.release_authorization_id),
+          authorization_hash: run.release_authorization_hash,
+          assessment_id: Number(run.migration_safety_assessment_id),
+          assessment_input_fingerprint: run.migration_safety_input_fingerprint,
+          workflow_file: PRODUCTION_WORKFLOWS.DEPLOY,
+          workflow_ref: REQUIRED_WORKFLOW_REF,
+          attempt: deploy.workflow.attempt,
+        },
       },
       casFrom: observedStable,
       now,
@@ -960,9 +1033,8 @@ export async function requestCodeRollback(db, {
     return { run: publicReleaseRun(db, row), rolled_back: true, db_restore: false, idempotent: true };
   }
   const cur = getProductionStable(db);
-  const thisRelease = cur && same(cur.source_sha, row.authorized_head_sha) && same(cur.artifact_digest, row.artifact_digest);
   const thisPointer = cur && cur.release_run_id != null && Number(cur.release_run_id) === Number(row.id);
-  if (!thisRelease && !thisPointer) {
+  if (!thisPointer) {
     throw httpError("rollback run is stale or superseded by a newer production release", 409);
   }
   const prov = provider || makeProductionReleaseProvider(env);
