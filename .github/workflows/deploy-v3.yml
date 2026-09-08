@@ -1,27 +1,40 @@
 name: Deploy v3 to CasaOS (manual)
 
 # Production 部署一律「明確手動觸發」。合併/push 到 master 不會自動部署 v3。
-# 部署會把指定 commit SHA 的 v3/src、v3/public 與 compose 檔 SCP 到正式 NAS，並重啟 591-tracker-v3 容器。
+# 部署會把指定 commit SHA 的 v3/src、v3/public 與 compose 檔 SCP 到正式 NAS，
+# 並以「已驗證的不可變 image digest」重建 591-tracker-v3。
 #
-# 【必要前提】當本 repo 有其他使用者/App 具 write 權限時，master 的 branch protection / ruleset 為「必要」：
-#   具備對 master 無限制直接 push 權的人，可能直接修改此部署 workflow 本身而繞過以下所有授權檢查。
-#   本任務不自動設定 branch protection；請於 GitHub UI 設定保護 master（限制直接 push、要求 PR/審查）。
+# 本次 #192–#197 發行候選（請用這組，不要改成較新的 workflow-only master SHA）：
+#   source: 620c3a2419c6591626eb35df0eba5ce2a13ae2fa
+#   tag:    ghcr.io/fyun48/5151:620c3a2419c6591626eb35df0eba5ce2a13ae2fa
+#   digest: sha256:17cd853459aab52ca9c32f2d31bb280792ae834073e4b866bb8ea63119896227
+#
+# 部署前必須已由 Owner 審過「Production predeploy check (no deploy)」為 PASS。
+# 本 workflow 不會自動觸發 predeploy check，也不會從其他 workflow 自動部署。
+#
+# Rollback identity（不在此 workflow 自動還原 DB）：
+#   已知先前 Production source：584d583e56151abcf01c972b7bb45a82c73e4596（#191 / deploy-v3 run 34113624372）
+#   先前 image digest、DB backup path：以 predeploy check 實際輸出為準，禁止捏造。
+#
+# 【必要前提】master branch protection / ruleset 為必要（防止直接改本 workflow 繞過授權）。
 on:
   workflow_dispatch:
     inputs:
       sha:
-        description: "要部署的完整 40 碼 commit SHA（必須可從 origin/master 追溯）"
+        description: "要部署的完整 40 碼 commit SHA（必須可從 origin/master 追溯；#192–#197 請用 620c3a2419c6591626eb35df0eba5ce2a13ae2fa）"
+        required: true
+      image_digest:
+        description: "不可變 image digest，格式必須是 sha256: 加 64 碼小寫 hex（禁止 latest / 可變 tag）"
         required: true
       confirmation:
         description: "輸入 DEPLOY-PRODUCTION 以確認正式部署"
         required: true
         default: ""
 
-# 最小權限：只需讀取原始碼。
 permissions:
   contents: read
+  packages: read
 
-# 全域 Production 部署鎖：v1/v2/v3/docker 共用同一組，避免對共享 NAS 基礎設施重疊操作。
 concurrency:
   group: production-deploy
   cancel-in-progress: false
@@ -29,10 +42,8 @@ concurrency:
 jobs:
   sync-nas-v3:
     runs-on: ubuntu-latest
-    # environment: production 提供 environment-scoped secrets／部署歷史／未來保護規則；
-    # Required Reviewers 視 repo 方案而定為「可選」的額外防禦，不作為唯一保護。
     environment: production
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - name: Authorize production deployment (fail-closed)
         env:
@@ -42,31 +53,29 @@ jobs:
           ALLOWED_ACTOR: ${{ vars.PRODUCTION_DEPLOY_ALLOWED_ACTOR }}
           CONFIRM: ${{ inputs.confirmation }}
           DEPLOY_SHA: ${{ inputs.sha }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
         run: |
           set -euo pipefail
-          # 1) workflow 定義必須來自受保護的 master（避免用任意分支的改過的 workflow 部署）
           if [ "$WF_REF" != "refs/heads/master" ]; then
             echo "::error::Production deploy must run from the master workflow definition (got $WF_REF)"; exit 1
           fi
-          # 2) 部署者 allowlist（未設定即 fail-closed）
           if [ -z "${ALLOWED_ACTOR:-}" ]; then
             echo "::error::PRODUCTION_DEPLOY_ALLOWED_ACTOR is not configured; refusing (fail-closed)"; exit 1
           fi
-          # 同時檢查 actor 與 triggering_actor：re-run 時 github.actor 仍是初始觸發者，
-          # github.triggering_actor 才是本次 re-run 的人；兩者都必須是授權部署者。
           if [ "$ACTOR" != "$ALLOWED_ACTOR" ]; then
             echo "::error::actor '$ACTOR' is not the authorized deployer"; exit 1
           fi
           if [ "$TRIGGERING_ACTOR" != "$ALLOWED_ACTOR" ]; then
             echo "::error::triggering actor '$TRIGGERING_ACTOR' is not the authorized deployer (re-run by another user is refused)"; exit 1
           fi
-          # 3) 明確確認字串
           if [ "${CONFIRM:-}" != "DEPLOY-PRODUCTION" ]; then
             echo "::error::confirmation must be exactly DEPLOY-PRODUCTION"; exit 1
           fi
-          # 4) 部署目標必須是不可變的完整 40 碼 commit SHA
           if ! printf '%s' "${DEPLOY_SHA:-}" | grep -Eq '^[0-9a-f]{40}$'; then
             echo "::error::sha must be a full 40-character commit SHA"; exit 1
+          fi
+          if ! printf '%s' "${IMAGE_DIGEST:-}" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo "::error::image_digest must be exactly sha256: plus 64 lowercase hex characters"; exit 1
           fi
       - name: Checkout master (for ancestry validation)
         uses: actions/checkout@v4
@@ -79,22 +88,86 @@ jobs:
         run: |
           set -euo pipefail
           git fetch origin master
-          # 未合併進 master 的 feature 分支 commit 不可部署到 Production
           if ! git merge-base --is-ancestor "$DEPLOY_SHA" origin/master; then
             echo "::error::commit $DEPLOY_SHA is not reachable from origin/master; refusing"; exit 1
           fi
           git checkout --force "$DEPLOY_SHA"
-      - name: Copy v3 app and compose files
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify candidate registry artifact (no rebuild, no push)
+        env:
+          DEPLOY_SHA: ${{ inputs.sha }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+        run: |
+          set -euo pipefail
+          IMAGE_REPO="ghcr.io/${GITHUB_REPOSITORY,,}"
+          TAG="${IMAGE_REPO}:${DEPLOY_SHA}"
+          PIN="${IMAGE_REPO}@${IMAGE_DIGEST}"
+          echo "candidate_tag=$TAG"
+          echo "requested_digest=$IMAGE_DIGEST"
+          if ! docker buildx imagetools inspect "$TAG" >/dev/null; then
+            echo "::error::candidate tag does not exist: $TAG"; exit 1
+          fi
+          ACTUAL="$(docker buildx imagetools inspect "$TAG" | awk '/^Digest:/{print $2; found=1} END{if(!found) exit 1}')"
+          if ! printf '%s' "$ACTUAL" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo "::error::Could not resolve immutable manifest digest for $TAG"; exit 1
+          fi
+          echo "tag_manifest_digest=$ACTUAL"
+          if [ "$ACTUAL" != "$IMAGE_DIGEST" ]; then
+            echo "::error::tag digest $ACTUAL != requested $IMAGE_DIGEST"; exit 1
+          fi
+          docker pull --platform linux/amd64 "$PIN"
+          REV="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$PIN")"
+          SRC="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.source" }}' "$PIN")"
+          echo "oci_revision=$REV"
+          echo "oci_source=$SRC"
+          if [ "$REV" != "$DEPLOY_SHA" ]; then
+            echo "::error::OCI revision '$REV' != DEPLOY_SHA $DEPLOY_SHA"; exit 1
+          fi
+          EXPECT_SRC="https://github.com/${GITHUB_REPOSITORY}"
+          if [ "${SRC,,}" != "${EXPECT_SRC,,}" ]; then
+            echo "::error::OCI source '$SRC' is not this repository"; exit 1
+          fi
+          docker run --rm --platform linux/amd64 "$PIN" node -e "import('sharp').then(()=>console.log('SHARP_OK')).catch(()=>{console.error('SHARP_MISSING'); process.exit(1)})"
+          echo "ARTIFACT_OK tag=$TAG digest=$IMAGE_DIGEST revision=$REV"
+      - name: Write v3-only digest compose override
+        env:
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+        run: |
+          set -euo pipefail
+          IMAGE_REPO="ghcr.io/${GITHUB_REPOSITORY,,}"
+          umask 022
+          {
+            echo "# Generated by deploy-v3.yml. Pins ONLY 591-tracker-v3."
+            echo "# v1/v2 keep the image defined in docker-compose.yml."
+            echo "services:"
+            echo "  591-tracker-v3:"
+            echo "    image: ${IMAGE_REPO}@${IMAGE_DIGEST}"
+          } > docker-compose.override.yml.tmp
+          mv docker-compose.override.yml.tmp docker-compose.override.yml
+          grep -q "591-tracker-v3" docker-compose.override.yml
+          grep -q "@${IMAGE_DIGEST}" docker-compose.override.yml
+          if grep -q ':latest' docker-compose.override.yml; then
+            echo "::error::override must not contain :latest"; exit 1
+          fi
+          if grep -q '591-tracker-v2' docker-compose.override.yml || grep -qE '591-tracker:' docker-compose.override.yml; then
+            echo "::error::override must pin only 591-tracker-v3"; exit 1
+          fi
+      - name: Copy v3 app, compose files, and digest override
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.NAS_HOST }}
           port: ${{ secrets.NAS_PORT }}
           username: ${{ secrets.NAS_USER }}
           key: ${{ secrets.NAS_SSH_KEY }}
-          source: "v3/src,v3/public,docker-compose.yml,casaos-compose.yml"
+          source: "v3/src,v3/public,docker-compose.yml,casaos-compose.yml,docker-compose.override.yml"
           target: /mnt/Storage1/apps/5151
           overwrite: true
-      - name: Start v3 container
+      - name: Pull digest-pinned image and recreate v3 only
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.NAS_HOST }}
@@ -104,6 +177,9 @@ jobs:
           script_stop: true
           script: |
             set -euo pipefail
+            IMAGE_DIGEST='${{ inputs.image_digest }}'
+            DEPLOY_SHA='${{ inputs.sha }}'
+            IMAGE_PIN="ghcr.io/fyun48/5151@${IMAGE_DIGEST}"
             mkdir -p /DATA/AppData/591-tracker-v3
             copied=0
             if [ -f /DATA/AppData/591-tracker-v2/auth.env ] && [ ! -f /DATA/AppData/591-tracker-v3/auth.env ]; then
@@ -114,10 +190,53 @@ jobs:
               copied=1
             fi
             cd /mnt/Storage1/apps/5151
+            test -f docker-compose.override.yml
+            if grep -q ':latest' docker-compose.override.yml; then
+              echo "override contains :latest"; exit 1
+            fi
+            V3_CFG="$(docker compose -f docker-compose.yml -f docker-compose.override.yml config --format json)"
+            V3_IMAGE="$(printf '%s' "$V3_CFG" | python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["591-tracker-v3"]["image"])')"
+            V2_IMAGE="$(printf '%s' "$V3_CFG" | python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["591-tracker-v2"]["image"])')"
+            echo "rendered_v3_image=$V3_IMAGE"
+            echo "rendered_v2_image=$V2_IMAGE"
+            if [ "$V3_IMAGE" != "$IMAGE_PIN" ]; then
+              echo "rendered v3 image is not the requested digest pin"; exit 1
+            fi
+            case "$V3_IMAGE" in
+              *:latest) echo "v3 must not resolve to :latest"; exit 1 ;;
+            esac
+            case "$V2_IMAGE" in
+              *@sha256:*) echo "v2 must not be digest-replaced"; exit 1 ;;
+            esac
+            docker pull "$IMAGE_PIN"
+            # Existing intentional v1 leftover stop (v1 already retired). Do not expand to v2.
             docker compose stop 591-tracker || true
             docker stop 591-tracker || true
             docker rm -f 591-tracker || true
-            docker compose up -d --no-build --no-deps --force-recreate 591-tracker-v3
+            docker compose -f docker-compose.yml -f docker-compose.override.yml \
+              up -d --no-build --no-deps --force-recreate 591-tracker-v3
             if [ "$copied" = 1 ]; then
-              docker compose restart 591-tracker-v3
+              docker compose -f docker-compose.yml -f docker-compose.override.yml restart 591-tracker-v3
             fi
+            ok=0
+            for _ in $(seq 1 40); do
+              if curl -fsS http://127.0.0.1:5153/api/health | grep -q '"ok":true'; then
+                ok=1
+                break
+              fi
+              sleep 1
+            done
+            [ "$ok" = 1 ] || { docker logs 591-tracker-v3 || true; echo "health did not become ready"; exit 1; }
+            curl -fsS -o /tmp/v3-health.json http://127.0.0.1:5153/api/health
+            python3 -c 'import json; d=json.load(open("/tmp/v3-health.json")); assert d.get("ok") is True'
+            curl -fsS -o /dev/null http://127.0.0.1:5153/
+            curl -fsS -o /dev/null http://127.0.0.1:5153/login.html
+            RUNNING="$(docker inspect -f '{{.State.Status}}' 591-tracker-v3)"
+            [ "$RUNNING" = "running" ]
+            CFG_IMAGE="$(docker inspect -f '{{.Config.Image}}' 591-tracker-v3)"
+            echo "container_image=$CFG_IMAGE"
+            if [ "$CFG_IMAGE" != "$IMAGE_PIN" ]; then
+              echo "running container image is not digest-pinned candidate"; exit 1
+            fi
+            docker exec 591-tracker-v3 node -e "import('sharp').then(()=>console.log('SHARP_OK')).catch(()=>{console.error('SHARP_MISSING'); process.exit(1)})"
+            echo "DEPLOY_V3_OK source=$DEPLOY_SHA image=$IMAGE_PIN"
