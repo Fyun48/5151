@@ -172,6 +172,9 @@ export function publicPath(req) {
     p === "/api/ads" ||
     p === "/api/brand" ||
     p === "/api/broadcasts" ||
+    p === "/api/announcements" ||
+    p === "/api/sponsored" ||
+    p === "/api/comms" ||
     p === "/api/captcha" ||
     p === "/api/demand" ||
     p === "/api/wish-rooms" ||
@@ -184,6 +187,8 @@ export function publicPath(req) {
     p === "/cities.json" ||
     p.startsWith("/api/demand/") ||
     p.startsWith("/api/wish-rooms/") ||
+    p.startsWith("/api/announcements/") ||
+    p.startsWith("/api/sponsored/") ||
     p.startsWith("/vendor/") ||
     p.startsWith("/icons/") ||
     p.startsWith("/brand/") ||

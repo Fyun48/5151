@@ -42,6 +42,11 @@ import { defaultSpirit, normalizeSpirit, publicSpirit } from "./spirit.js";
 import { defaultHousingData, normalizeHousingData, publicHousingData } from "./housingData.js";
 import { applyIdlePauseToMembers, applyIdleResume } from "./idlePause.js";
 import { defaultNotifyMatrix } from "./notifyMatrix.js";
+import {
+  ensureCommsSchema,
+  normalizeCommsConfig,
+  emptyCommsConfig,
+} from "./comms.js";
 import { DATA_EPOCH, shouldResetForEpoch } from "./dataEpoch.js";
 import { countsTowardAllTotal, isConfirmedOffline, isPendingOffline } from "./offline.js";
 import { coveringJobsFromMembers, coversFromMemberSettings, coversFromWatchDistricts, listingInMemberScope } from "./covering.js";
@@ -255,8 +260,8 @@ import {
   publicSponsorOffer,
   sponsorCatalog,
 } from "./sponsorLinks.js";
-import { adminSiteAdsView, normalizeSiteAds, publicSiteAds } from "./siteAds.js";
-import { adminBroadcastsView, normalizeBroadcasts, publicBroadcasts } from "./broadcasts.js";
+import { adminSiteAdsView, normalizeSiteAds, publicSiteAdsRuntime, rejectLegacySiteAdMutation } from "./siteAds.js";
+import { adminBroadcastsView, normalizeBroadcasts, publicBroadcastsRuntime, rejectLegacyBroadcastMutation } from "./broadcasts.js";
 
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data-v3");
 mkdirSync(DATA_DIR, { recursive: true });
@@ -612,6 +617,7 @@ try {
   // 種子失敗不擋開站；註冊會 fail-closed
 }
 ensurePushSchema(db);
+ensureCommsSchema(db);
 
 try {
   const already = db.prepare("SELECT value FROM settings WHERE key = 'costChangeBackfill'").get();
@@ -1078,18 +1084,12 @@ export function getAdminAdsSettings() {
   return adminSiteAdsView(getSiteAdsConfig());
 }
 
-export function saveAdminAdsSettings(partial = {}) {
-  const src = partial && typeof partial === "object" ? partial : {};
-  const current = getSiteAdsConfig();
-  const next = normalizeSiteAds({
-    slots: src.slots && typeof src.slots === "object" ? { ...current.slots, ...src.slots } : current.slots,
-  });
-  writeSettingKey("siteAds", next);
-  return getAdminAdsSettings();
+export function saveAdminAdsSettings(_partial = {}) {
+  rejectLegacySiteAdMutation();
 }
 
 export function publicAdsSettings() {
-  return publicSiteAds(getSiteAdsConfig());
+  return publicSiteAdsRuntime();
 }
 
 export function getBrandMascot() {
@@ -1142,18 +1142,24 @@ export function getAdminBroadcastsSettings() {
   return adminBroadcastsView(getBroadcastsConfig());
 }
 
-export function saveAdminBroadcastsSettings(partial = {}) {
-  const src = partial && typeof partial === "object" ? partial : {};
-  const current = getBroadcastsConfig();
-  const next = normalizeBroadcasts({
-    items: src.items && typeof src.items === "object" ? { ...current.items, ...src.items } : current.items,
-  });
-  writeSettingKey("broadcasts", next);
-  return getAdminBroadcastsSettings();
+export function saveAdminBroadcastsSettings(_partial = {}) {
+  rejectLegacyBroadcastMutation();
 }
 
 export function publicBroadcastsSettings() {
-  return publicBroadcasts(getBroadcastsConfig());
+  return publicBroadcastsRuntime();
+}
+
+export function getCommsConfig() {
+  return normalizeCommsConfig(settingKey("commsConfig") || emptyCommsConfig());
+}
+
+export function saveCommsConfig(partial = {}) {
+  const current = getCommsConfig();
+  const src = partial && typeof partial === "object" ? partial : {};
+  const next = normalizeCommsConfig({ ...current, ...src });
+  writeSettingKey("commsConfig", next);
+  return next;
 }
 
 export function getHelpQa() {
@@ -1704,6 +1710,7 @@ function omitSiteMail(stored) {
   delete next.sponsorLinks;
   delete next.siteAds;
   delete next.broadcasts;
+  delete next.commsConfig;
   delete next.memberSmtp;
   delete next.memberMailTemplates;
   delete next.mailPreset;
@@ -1758,6 +1765,7 @@ export function saveSettings(partial, userId, { forceAdmin = false } = {}) {
         || key === "sponsorLinks"
         || key === "siteAds"
         || key === "broadcasts"
+        || key === "commsConfig"
         || key === "memberSmtp"
         || key === "memberMailTemplates"
         || key === "systemWatchDistricts"

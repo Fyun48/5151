@@ -72,6 +72,8 @@ export function eventLabel(type) {
   if (type === "title_update") return "標題更新";
   if (type === "fee_update") return "費用變更";
   if (type === "update") return "內容更新";
+  if (type === "system" || type === "announcement") return "系統公告";
+  if (type === "sponsored") return "贊助內容";
   return type;
 }
 

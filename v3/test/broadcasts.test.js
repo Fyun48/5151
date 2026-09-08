@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { normalizeBroadcasts, publicBroadcasts } from "../src/broadcasts.js";
+import { normalizeBroadcasts, publicBroadcasts, publicBroadcastsRuntime } from "../src/broadcasts.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -21,6 +21,7 @@ test("broadcasts hide until enabled with copy", () => {
   const pub = publicBroadcasts(cfg);
   assert.equal(pub.length, 2);
   assert.equal(pub.find((row) => row.id === "sponsor").url, "");
+  assert.deepEqual(publicBroadcastsRuntime(cfg), []);
 });
 
 test("admin and index expose broadcast and spirit page", () => {

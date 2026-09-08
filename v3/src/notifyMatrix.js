@@ -9,14 +9,24 @@ export const NOTIFY_MATRIX_ROWS = [
   { key: "update", label: "內容更新" },
   { key: "offline", label: "591 下架" },
   { key: "relist", label: "重新上架" },
+  { key: "system", label: "系統公告" },
+  { key: "sponsored", label: "贊助內容" },
 ];
 
 const CHANNEL_DEFAULTS = { dock: true, push: true, webhook: false, mail: false };
+const ROW_CHANNEL_DEFAULTS = {
+  system: { dock: true, push: true, webhook: false, mail: false },
+  sponsored: { dock: false, push: false, webhook: false, mail: false },
+};
+
+function rowDefaults(key) {
+  return { ...(ROW_CHANNEL_DEFAULTS[key] || CHANNEL_DEFAULTS) };
+}
 
 export function defaultNotifyMatrix() {
   const out = {};
   for (const row of NOTIFY_MATRIX_ROWS) {
-    out[row.key] = { ...CHANNEL_DEFAULTS };
+    out[row.key] = rowDefaults(row.key);
   }
   return out;
 }
@@ -24,6 +34,8 @@ export function defaultNotifyMatrix() {
 export function eventMatrixKey(type) {
   if (type === "price_drop" || type === "price_update" || type === "fee_update") return "price";
   if (type === "title_update") return "title";
+  if (type === "system" || type === "announcement") return "system";
+  if (type === "sponsored") return "sponsored";
   if (type === "new" || type === "same_source" || type === "update" || type === "offline" || type === "relist") {
     return type;
   }
@@ -57,11 +69,12 @@ export function normalizeNotifyMatrix(settings = {}) {
   for (const row of NOTIFY_MATRIX_ROWS) {
     const cell = incoming[row.key];
     if (!cell || typeof cell !== "object") continue;
+    const fallback = rowDefaults(row.key);
     next[row.key] = {
-      dock: cellOn(cell.dock, CHANNEL_DEFAULTS.dock),
-      push: cellOn(cell.push, CHANNEL_DEFAULTS.push),
-      webhook: cellOn(cell.webhook, CHANNEL_DEFAULTS.webhook),
-      mail: cellOn(cell.mail, CHANNEL_DEFAULTS.mail),
+      dock: cellOn(cell.dock, fallback.dock),
+      push: cellOn(cell.push, fallback.push),
+      webhook: cellOn(cell.webhook, fallback.webhook),
+      mail: cellOn(cell.mail, fallback.mail),
     };
   }
   return next;

@@ -584,7 +584,7 @@
       <div id="notices" class="admin-panel" data-admin-panel="notices">
 <section class="card">
       <h2>公告／最新消息／贊助提醒</h2>
-      <p class="hint">轉頁時在底欄上方出現一小則，可按 × 暫時不看。贊助提醒請寫維護品質，不要擋操作、不要連發。 hops 是每隔幾次換頁才再出現。</p>
+      <p class="hint">歷史 hop 公告僅供檢視，不再寫入、也不再對前台投遞。新的服務資訊請用下方「系統公告」（含排程、類型、已讀／關閉）。</p>
       <form id="broadcastsForm">
         <div class="grid-2">
           <div>
@@ -623,10 +623,58 @@
         <label>每隔幾次換頁</label>
         <input id="bcSponsorHops" type="number" min="1" max="20" value="5" />
         <div class="row" style="margin:14px 0 0">
-          <button type="submit" class="primary" id="broadcastsSave">儲存公告與提醒</button>
+          <button type="submit" class="primary" id="broadcastsSave" disabled>已停用（請用系統公告）</button>
         </div>
         <p class="msg" id="broadcastsMsg"></p>
       </form>
+    </section>
+<section class="card">
+      <h2>系統公告</h2>
+      <p class="hint">這是服務資訊，不是廣告。一般公告進「通知」的系統公告；重要／維護才可上頂部細條。草稿不會出現在公開 API。</p>
+      <form id="announceForm">
+        <input type="hidden" id="announceId" />
+        <label>標題</label>
+        <input id="announceTitle" maxlength="80" />
+        <label>內文</label>
+        <textarea id="announceBody" maxlength="800"></textarea>
+        <div class="grid-2">
+          <div>
+            <label>類型</label>
+            <select id="announceSeverity">
+              <option value="info">一般</option>
+              <option value="maintenance">維護</option>
+              <option value="warning">警示</option>
+              <option value="important">重要</option>
+            </select>
+          </div>
+          <div>
+            <label>狀態</label>
+            <select id="announceStatus">
+              <option value="draft">草稿</option>
+              <option value="published">已發布</option>
+              <option value="disabled">停用</option>
+            </select>
+          </div>
+        </div>
+        <label class="checks"><input type="checkbox" id="announceEnabled" /> 啟用</label>
+        <label class="checks"><input type="checkbox" id="announcePinned" /> 置頂</label>
+        <label class="checks"><input type="checkbox" id="announceBanner" /> 重要時可顯示頂部細條（不用來放廣告）</label>
+        <label>開始時間（選填）</label>
+        <input id="announceStart" type="datetime-local" />
+        <label>結束時間（選填）</label>
+        <input id="announceEnd" type="datetime-local" />
+        <label>按鈕文字（選填）</label>
+        <input id="announceCtaLabel" maxlength="24" />
+        <label>連結（選填，http／https）</label>
+        <input id="announceCtaUrl" maxlength="500" />
+        <div class="row" style="margin-top:10px">
+          <button type="submit" class="primary" id="announceSave">儲存公告</button>
+          <button type="button" class="ghost" id="announcePublish">發布</button>
+          <button type="button" class="ghost" id="announceNew">新增空白</button>
+        </div>
+        <p class="msg" id="announceMsg"></p>
+      </form>
+      <div id="announceList"></div>
     </section>
       </div>
       <div id="promo" class="admin-panel" data-admin-panel="promo">
@@ -649,11 +697,27 @@
         <p class="msg" id="sponsorMsg"></p>
       </form>
     </section>
+<section class="card">
+      <h2>支持本站呈現</h2>
+      <p class="hint">這是會員自願支持，不是第三方廣告，也不會做成阻擋視窗。權益只列出目前已上線的功能。</p>
+      <form id="supportConfigForm">
+        <label class="checks"><input type="checkbox" id="supportEntryEnabled" checked /> 顯示支持入口（頁尾／帳號）</label>
+        <label class="checks"><input type="checkbox" id="supportCardEnabled" /> 偶爾在列表插入「支持本站」卡</label>
+        <label>支持卡間隔（幾筆物件出現一次，建議 20 以上）</label>
+        <input id="supportCardInterval" type="number" min="8" max="80" value="24" />
+        <label>支持說明</label>
+        <textarea id="supportCopy" maxlength="280"></textarea>
+        <div class="row" style="margin-top:10px">
+          <button type="submit" class="primary" id="supportConfigSave">儲存支持呈現</button>
+        </div>
+        <p class="msg" id="supportConfigMsg"></p>
+      </form>
+    </section>
       </div>
       <div id="ads" class="admin-panel" data-admin-panel="ads">
 <section class="card">
       <h2>站內小廣告</h2>
-      <p class="hint">獨立專區。短期小額曝光用，不是 Google Ads，也不會自動追蹤訪客。每個版位最多一則安靜卡片，前台標「贊助訊息」。這與「贊助曝光」的會員收款連結分開。沒開的版位前台不會出現空框。</p>
+      <p class="hint">歷史版位僅供檢視，不再寫入、也不再對前台投遞。不是 Google Ads。新的贊助內容請用下方「贊助活動」（含間隔、排程、頻道與「贊助內容」標籤）。</p>
       <form id="adsForm">
         <div class="grid-2">
           <div>
@@ -714,10 +778,68 @@
         <label>圖片網址（選填）</label>
         <input id="adMeImage" maxlength="500" />
         <div class="row" style="margin:14px 0 0">
-          <button type="submit" class="primary" id="adsSave">儲存小廣告</button>
+          <button type="submit" class="primary" id="adsSave" disabled>已停用（請用贊助活動）</button>
         </div>
         <p class="msg" id="adsMsg"></p>
       </form>
+    </section>
+<section class="card">
+      <h2>贊助活動（第一方）</h2>
+      <p class="hint">清楚標「贊助內容」。插入間隔可改，不影響找房筆數。頻道要個別勾選；不要把廣告寫成系統公告或重要警示。</p>
+      <form id="campaignConfigForm">
+        <label class="checks"><input type="checkbox" id="sponsoredMasterEnabled" checked /> 全站開放贊助內容</label>
+        <label class="checks"><input type="checkbox" id="listingPlacementEnabled" checked /> 找房列表可插入贊助卡</label>
+        <label>列表插入間隔（幾筆真實物件後插一則）</label>
+        <select id="listingAdInterval">
+          <option value="4">4</option>
+          <option value="5" selected>5</option>
+          <option value="6">6</option>
+          <option value="8">8</option>
+          <option value="10">10</option>
+        </select>
+        <div class="row" style="margin-top:10px">
+          <button type="submit" class="primary" id="campaignConfigSave">儲存插入設定</button>
+        </div>
+        <p class="msg" id="campaignConfigMsg"></p>
+      </form>
+      <form id="campaignForm">
+        <input type="hidden" id="campaignId" />
+        <label>贊助顯示名稱</label>
+        <input id="campaignSponsor" maxlength="40" />
+        <label>標題</label>
+        <input id="campaignTitle" maxlength="60" />
+        <label>短文</label>
+        <textarea id="campaignText" maxlength="160"></textarea>
+        <label>圖片網址（選填，http／https）</label>
+        <input id="campaignImage" maxlength="500" />
+        <label>按鈕文字</label>
+        <input id="campaignCta" maxlength="24" value="了解更多" />
+        <label>目的地（http／https）</label>
+        <input id="campaignUrl" maxlength="500" />
+        <label>狀態</label>
+        <select id="campaignStatus">
+          <option value="draft">草稿</option>
+          <option value="published">已發布</option>
+          <option value="disabled">停用</option>
+        </select>
+        <label class="checks"><input type="checkbox" id="campaignEnabled" /> 啟用</label>
+        <label class="checks"><input type="checkbox" id="campaignListing" checked /> 可插入找房列表</label>
+        <label>頻道</label>
+        <label class="checks"><input type="checkbox" id="campaignInapp" checked /> 站內通知（贊助內容）</label>
+        <label class="checks"><input type="checkbox" id="campaignWebhook" /> Webhook</label>
+        <label class="checks"><input type="checkbox" id="campaignEmail" /> 郵件</label>
+        <label class="checks"><input type="checkbox" id="campaignPush" /> 系統推播</label>
+        <label>開始</label>
+        <input id="campaignStart" type="datetime-local" />
+        <label>結束</label>
+        <input id="campaignEnd" type="datetime-local" />
+        <div class="row" style="margin-top:10px">
+          <button type="submit" class="primary" id="campaignSave">儲存活動</button>
+          <button type="button" class="ghost" id="campaignNew">新增空白</button>
+        </div>
+        <p class="msg" id="campaignMsg"></p>
+      </form>
+      <div id="campaignList"></div>
     </section>
       </div>
       <div id="mail" class="admin-panel" data-admin-panel="mail">
@@ -1941,6 +2063,205 @@
       if (!res.ok) throw new Error(data.error || "載入公告失敗");
       fillBroadcasts(data);
     }
+    function toLocalInput(value) {
+      if (!value) return "";
+      const d = new Date(value);
+      if (Number.isNaN(d.getTime())) return "";
+      const pad = (n) => String(n).padStart(2, "0");
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+    function fillAnnounceForm(row = {}) {
+      $("announceId").value = row.id || "";
+      $("announceTitle").value = row.title || "";
+      $("announceBody").value = row.body || "";
+      $("announceSeverity").value = row.severity || "info";
+      $("announceStatus").value = row.status || "draft";
+      $("announceEnabled").checked = Boolean(row.enabled);
+      $("announcePinned").checked = Boolean(row.pinned);
+      $("announceBanner").checked = Boolean(row.banner);
+      $("announceStart").value = toLocalInput(row.start_at);
+      $("announceEnd").value = toLocalInput(row.end_at);
+      $("announceCtaLabel").value = row.cta_label || "";
+      $("announceCtaUrl").value = row.cta_url || "";
+    }
+    function announcePayload() {
+      return {
+        title: $("announceTitle").value,
+        body: $("announceBody").value,
+        severity: $("announceSeverity").value,
+        status: $("announceStatus").value,
+        enabled: $("announceEnabled").checked,
+        pinned: $("announcePinned").checked,
+        banner: $("announceBanner").checked,
+        start_at: $("announceStart").value ? new Date($("announceStart").value).toISOString() : "",
+        end_at: $("announceEnd").value ? new Date($("announceEnd").value).toISOString() : "",
+        cta_label: $("announceCtaLabel").value,
+        cta_url: $("announceCtaUrl").value,
+      };
+    }
+    async function loadAnnouncements() {
+      const res = await fetch("/api/admin/announcements", { cache: "no-store" });
+      const data = await readApi(res);
+      if (!res.ok) throw new Error(data.error || "載入系統公告失敗");
+      const box = $("announceList");
+      box.innerHTML = (data.items || []).map((row) => `
+        <button type="button" class="ghost" data-announce-edit="${row.id}" style="margin:4px 6px 0 0">${escapeHtml(row.title)} · ${escapeHtml(row.status)}</button>
+      `).join("") || "<p class='hint'>尚未建立系統公告。</p>";
+    }
+    $("announceForm").onsubmit = async (ev) => {
+      ev.preventDefault();
+      try {
+        const id = $("announceId").value;
+        const res = await fetch(id ? `/api/admin/announcements/${id}` : "/api/admin/announcements", {
+          method: id ? "PATCH" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(announcePayload()),
+        });
+        const data = await readApi(res);
+        if (!res.ok) return setMsg("announceMsg", data.error || "儲存失敗");
+        fillAnnounceForm(data);
+        setMsg("announceMsg", "已儲存系統公告", true);
+        await loadAnnouncements();
+      } catch (error) {
+        setMsg("announceMsg", error.message);
+      }
+    };
+    $("announcePublish").onclick = async () => {
+      const id = $("announceId").value;
+      if (!id) return setMsg("announceMsg", "先儲存再發布");
+      const res = await fetch(`/api/admin/announcements/${id}/publish`, { method: "POST" });
+      const data = await readApi(res);
+      if (!res.ok) return setMsg("announceMsg", data.error || "發布失敗");
+      fillAnnounceForm(data);
+      setMsg("announceMsg", "已發布", true);
+      await loadAnnouncements();
+    };
+    $("announceNew").onclick = () => fillAnnounceForm({});
+    $("announceList").onclick = async (ev) => {
+      const id = ev.target?.dataset?.announceEdit;
+      if (!id) return;
+      const res = await fetch("/api/admin/announcements", { cache: "no-store" });
+      const data = await readApi(res);
+      fillAnnounceForm((data.items || []).find((row) => String(row.id) === String(id)) || {});
+    };
+
+    function fillCampaignForm(row = {}) {
+      $("campaignId").value = row.id || "";
+      $("campaignSponsor").value = row.sponsor_name || "";
+      $("campaignTitle").value = row.title || "";
+      $("campaignText").value = row.text || "";
+      $("campaignImage").value = row.image_url || "";
+      $("campaignCta").value = row.cta_label || "了解更多";
+      $("campaignUrl").value = row.destination_url || "";
+      $("campaignStatus").value = row.status || "draft";
+      $("campaignEnabled").checked = Boolean(row.enabled);
+      $("campaignListing").checked = row.listing_placement !== false;
+      $("campaignInapp").checked = row.channels?.inapp !== false;
+      $("campaignWebhook").checked = Boolean(row.channels?.webhook);
+      $("campaignEmail").checked = Boolean(row.channels?.email);
+      $("campaignPush").checked = Boolean(row.channels?.push);
+      $("campaignStart").value = toLocalInput(row.start_at);
+      $("campaignEnd").value = toLocalInput(row.end_at);
+    }
+    function campaignPayload() {
+      return {
+        sponsor_name: $("campaignSponsor").value,
+        title: $("campaignTitle").value,
+        text: $("campaignText").value,
+        image_url: $("campaignImage").value,
+        cta_label: $("campaignCta").value,
+        destination_url: $("campaignUrl").value,
+        status: $("campaignStatus").value,
+        enabled: $("campaignEnabled").checked,
+        listing_placement: $("campaignListing").checked,
+        channels: {
+          inapp: $("campaignInapp").checked,
+          webhook: $("campaignWebhook").checked,
+          email: $("campaignEmail").checked,
+          push: $("campaignPush").checked,
+        },
+        start_at: $("campaignStart").value ? new Date($("campaignStart").value).toISOString() : "",
+        end_at: $("campaignEnd").value ? new Date($("campaignEnd").value).toISOString() : "",
+      };
+    }
+    async function loadCommsAdmin() {
+      const [campRes, cfgRes] = await Promise.all([
+        fetch("/api/admin/campaigns", { cache: "no-store" }),
+        fetch("/api/admin/comms-config", { cache: "no-store" }),
+      ]);
+      const camp = await readApi(campRes);
+      const cfgWrap = await readApi(cfgRes);
+      if (!campRes.ok) throw new Error(camp.error || "載入贊助活動失敗");
+      const cfg = camp.config || cfgWrap.config || {};
+      $("sponsoredMasterEnabled").checked = cfg.sponsored_master_enabled !== false;
+      $("listingPlacementEnabled").checked = cfg.listing_placement_enabled !== false;
+      $("listingAdInterval").value = String(cfg.listing_ad_interval || 5);
+      $("supportEntryEnabled").checked = cfg.support_entry_enabled !== false;
+      $("supportCardEnabled").checked = Boolean(cfg.support_card_enabled);
+      $("supportCardInterval").value = cfg.support_card_interval || 24;
+      $("supportCopy").value = cfg.support_copy || "";
+      $("campaignList").innerHTML = (camp.items || []).map((row) => `
+        <button type="button" class="ghost" data-campaign-edit="${row.id}" style="margin:4px 6px 0 0">${escapeHtml(row.title)} · ${escapeHtml(row.status)}</button>
+      `).join("") || "<p class='hint'>尚未建立贊助活動。</p>";
+    }
+    $("campaignForm").onsubmit = async (ev) => {
+      ev.preventDefault();
+      const id = $("campaignId").value;
+      const res = await fetch(id ? `/api/admin/campaigns/${id}` : "/api/admin/campaigns", {
+        method: id ? "PATCH" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(campaignPayload()),
+      });
+      const data = await readApi(res);
+      if (!res.ok) return setMsg("campaignMsg", data.error || "儲存失敗");
+      fillCampaignForm(data);
+      setMsg("campaignMsg", "已儲存贊助活動", true);
+      await loadCommsAdmin();
+    };
+    $("campaignNew").onclick = () => fillCampaignForm({});
+    $("campaignList").onclick = async (ev) => {
+      const id = ev.target?.dataset?.campaignEdit;
+      if (!id) return;
+      const res = await fetch("/api/admin/campaigns", { cache: "no-store" });
+      const data = await readApi(res);
+      fillCampaignForm((data.items || []).find((row) => String(row.id) === String(id)) || {});
+    };
+    $("campaignConfigForm").onsubmit = async (ev) => {
+      ev.preventDefault();
+      const res = await fetch("/api/admin/comms-config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sponsored_master_enabled: $("sponsoredMasterEnabled").checked,
+          listing_placement_enabled: $("listingPlacementEnabled").checked,
+          listing_ad_interval: Number($("listingAdInterval").value),
+          support_entry_enabled: $("supportEntryEnabled").checked,
+          support_card_enabled: $("supportCardEnabled").checked,
+          support_card_interval: Number($("supportCardInterval").value),
+          support_copy: $("supportCopy").value,
+        }),
+      });
+      const data = await readApi(res);
+      if (!res.ok) return setMsg("campaignConfigMsg", data.error || "儲存失敗");
+      setMsg("campaignConfigMsg", "已儲存插入設定", true);
+    };
+    $("supportConfigForm").onsubmit = async (ev) => {
+      ev.preventDefault();
+      const res = await fetch("/api/admin/comms-config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          support_entry_enabled: $("supportEntryEnabled").checked,
+          support_card_enabled: $("supportCardEnabled").checked,
+          support_card_interval: Number($("supportCardInterval").value),
+          support_copy: $("supportCopy").value,
+        }),
+      });
+      const data = await readApi(res);
+      if (!res.ok) return setMsg("supportConfigMsg", data.error || "儲存失敗");
+      setMsg("supportConfigMsg", "已儲存支持呈現", true);
+    };
+
     $("broadcastsForm").onsubmit = async (ev) => {
       ev.preventDefault();
       $("broadcastsSave").disabled = true;
@@ -2093,7 +2414,7 @@
       if (me.role !== "admin") { location.replace("/"); return; }
       meEmail = me.email || "";
       $("who").textContent = meEmail;
-      await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadMaps(), loadHelpQa(), loadLegalCopy(), loadContentCms(), loadListingImports(), loadSpirit(), loadHousing(), loadCrawlSources(), loadSystemCrawl(), loadBrand(), loadFeedback()]);
+      await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadAnnouncements(), loadCommsAdmin(), loadMaps(), loadHelpQa(), loadLegalCopy(), loadContentCms(), loadListingImports(), loadSpirit(), loadHousing(), loadCrawlSources(), loadSystemCrawl(), loadBrand(), loadFeedback()]);
       $("brandForm").onsubmit = async (ev) => {
         ev.preventDefault();
         $("brandSave").disabled = true;

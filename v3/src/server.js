@@ -166,7 +166,32 @@ import {
   getOwnConsentDocument,
   DOC_TYPES,
   publicDocumentView,
+  getCommsConfig,
+  saveCommsConfig,
+  db,
 } from "./db.js";
+import {
+  announcementInboxForUser,
+  bannerAnnouncements,
+  commsMeta,
+  createAnnouncement,
+  createCampaign,
+  dismissAnnouncement,
+  getAnnouncement,
+  getCampaign,
+  listAnnouncementsAdmin,
+  listCampaignsAdmin,
+  listingCampaigns,
+  markAnnouncementRead,
+  publicActiveAnnouncements,
+  publicCampaignView,
+  publicCommsBundle,
+  publishAnnouncement,
+  recordSponsoredEvent,
+  supportPresentation,
+  updateAnnouncement,
+  updateCampaign,
+} from "./comms.js";
 import { renderSafeContent } from "./safeContent.js";
 import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requireAuth, sessionCookie, verifyLogin } from "./auth.js";
 import { boxFromRoadDescription, geocodeAddress, needsListingGeo, hasWorkPoint } from "./geo.js";
@@ -1049,6 +1074,122 @@ app.put("/api/admin/broadcasts", requireAdminApi, (req, res) => {
 
 app.get("/api/broadcasts", (_req, res) => {
   res.json({ items: publicBroadcastsSettings() });
+});
+
+function commsActor(req) {
+  return readSession(req)?.userId || 0;
+}
+
+function sendCommsError(res, error) {
+  res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
+}
+
+app.get("/api/admin/announcements", requireAdminApi, (_req, res) => {
+  res.json({ items: listAnnouncementsAdmin(db), meta: commsMeta() });
+});
+
+app.post("/api/admin/announcements", requireAdminApi, (req, res) => {
+  try {
+    res.status(201).json(createAnnouncement(db, commsActor(req), req.body || {}));
+  } catch (error) {
+    sendCommsError(res, error);
+  }
+});
+
+app.patch("/api/admin/announcements/:id", requireAdminApi, (req, res) => {
+  try {
+    res.json(updateAnnouncement(db, commsActor(req), Number(req.params.id), req.body || {}));
+  } catch (error) {
+    sendCommsError(res, error);
+  }
+});
+
+app.post("/api/admin/announcements/:id/publish", requireAdminApi, (req, res) => {
+  try {
+    res.json(publishAnnouncement(db, commsActor(req), Number(req.params.id)));
+  } catch (error) {
+    sendCommsError(res, error);
+  }
+});
+
+app.get("/api/admin/campaigns", requireAdminApi, (_req, res) => {
+  res.json({ items: listCampaignsAdmin(db), config: getCommsConfig(), meta: commsMeta() });
+});
+
+app.post("/api/admin/campaigns", requireAdminApi, (req, res) => {
+  try {
+    res.status(201).json(createCampaign(db, commsActor(req), req.body || {}));
+  } catch (error) {
+    sendCommsError(res, error);
+  }
+});
+
+app.patch("/api/admin/campaigns/:id", requireAdminApi, (req, res) => {
+  try {
+    res.json(updateCampaign(db, commsActor(req), Number(req.params.id), req.body || {}));
+  } catch (error) {
+    sendCommsError(res, error);
+  }
+});
+
+app.get("/api/admin/comms-config", requireAdminApi, (_req, res) => {
+  res.json({ config: getCommsConfig(), meta: commsMeta() });
+});
+
+app.put("/api/admin/comms-config", requireAdminApi, (req, res) => {
+  try {
+    res.json({ config: saveCommsConfig(req.body || {}), meta: commsMeta() });
+  } catch (error) {
+    sendCommsError(res, error);
+  }
+});
+
+app.get("/api/announcements", (_req, res) => {
+  res.json({ items: publicActiveAnnouncements(db), banner: bannerAnnouncements(db) });
+});
+
+app.get("/api/announcements/inbox", (req, res) => {
+  const session = readSession(req);
+  res.json({ items: announcementInboxForUser(db, session?.userId || null) });
+});
+
+app.post("/api/announcements/:id/read", (req, res) => {
+  const session = readSession(req);
+  res.json(markAnnouncementRead(db, session?.userId || null, Number(req.params.id)));
+});
+
+app.post("/api/announcements/:id/dismiss", (req, res) => {
+  const session = readSession(req);
+  res.json(dismissAnnouncement(db, session?.userId || null, Number(req.params.id)));
+});
+
+app.get("/api/sponsored", (_req, res) => {
+  const config = getCommsConfig();
+  res.json({
+    interval: config.listing_ad_interval,
+    listing_enabled: config.sponsored_master_enabled && config.listing_placement_enabled,
+    session_cap: 3,
+    cards: listingCampaigns(db, config).map((row) => publicCampaignView(row)),
+  });
+});
+
+app.post("/api/sponsored/:id/event", (req, res) => {
+  try {
+    const kind = String(req.body?.kind || "");
+    const placement = String(req.body?.placement || "listing");
+    res.json(recordSponsoredEvent(db, Number(req.params.id), kind, placement));
+  } catch (error) {
+    sendCommsError(res, error);
+  }
+});
+
+app.get("/api/comms", (req, res) => {
+  const session = readSession(req);
+  res.json(publicCommsBundle(db, {
+    config: getCommsConfig(),
+    sponsorOffer: session ? publicSponsorSettings(session) : {},
+    user: session ? { id: session.userId, plan: session.plan, role: session.role } : {},
+  }));
 });
 
 app.get("/api/admin/help-qa", requireAdminApi, (_req, res) => {
