@@ -212,3 +212,23 @@ jobs:
             db.close();
           '
           echo "ISOLATED_V3_SMOKE_OK source=$BUILD_SHA image=$IMAGE"
+      - name: Write Phase 15 workflow evidence
+        env:
+          WF_FILE: .github/workflows/build-production-image.yml
+          WF_REF: ${{ github.ref }}
+          WF_RUN_ID: ${{ github.run_id }}
+          WF_ATTEMPT: ${{ github.run_attempt }}
+          WF_HEAD_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ inputs.sha }}
+          WF_ACTOR: ${{ github.actor }}
+          WF_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          IMAGE_DIGEST: ${{ steps.digest.outputs.digest }}
+          OCI_REVISION: ${{ inputs.sha }}
+          OCI_SOURCE: https://github.com/${{ github.repository }}
+        run: python3 .github/scripts/write-phase15-workflow-evidence.py phase15-workflow-evidence.json
+      - name: Upload Phase 15 workflow evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase15-workflow-evidence
+          path: phase15-workflow-evidence.json
+          if-no-files-found: error

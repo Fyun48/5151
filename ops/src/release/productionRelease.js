@@ -749,33 +749,51 @@ export function createProductionReleaseRun(db, body, { repo = null, env = proces
 
 async function ensureMasterAncestry(db, run, { provider, repo, now, actor }) {
   if (!repo || !repo.available) throw httpError("release repository gateway unavailable", 503);
-  if (repo.isAncestor(run.authorized_head_sha, "master")) return { already: true };
-  if (!run.expected_master_head) {
+  const remoteOk = typeof repo.isRemoteAncestor === "function"
+    && repo.isRemoteAncestor(run.authorized_head_sha, "master");
+  if (remoteOk) {
+    const masterSha = repo.resolveRemoteRef("master");
+    if (run.expected_master_head && masterSha && !same(masterSha, run.expected_master_head)) {
+      withImmediateTx(db, () => {
+        appendEvent(db, {
+          releaseRunId: run.id, toStatus: RELEASE_STATUSES.BLOCKED, eventType: "expected_head_race",
+          reason: "expected_head_race", errorCode: "expected_head_race", now, actor,
+          evidence: { expected_master_head: run.expected_master_head, remote_master: masterSha, source: "github_remote" },
+        });
+      });
+      throw httpError("protected remote master moved: expected_head_race", 409);
+    }
     withImmediateTx(db, () => {
-      appendEvent(db, { releaseRunId: run.id, toStatus: RELEASE_STATUSES.BLOCKED, eventType: "ancestry_blocked", reason: "target_sha_not_on_master", errorCode: "master_ancestry_failed", now, actor });
+      appendEvidence(db, {
+        releaseRunId: run.id, kind: "master_ancestry", now, workflow_head_sha: run.authorized_head_sha,
+        payload: { already_on_protected_master: true, master_sha: masterSha, source: "github_remote" },
+      });
     });
-    throw httpError("target SHA is not reachable from protected master", 409);
+    return { already: true, master_sha: masterSha };
   }
   const merged = await provider.mergePullRequest({
     sha: run.authorized_head_sha,
     expectedHead: run.expected_master_head,
     repo,
   });
-  if (!merged?.ok) {
+  if (!merged?.ok || merged.local_only) {
     withImmediateTx(db, () => {
       appendEvent(db, {
-        releaseRunId: run.id, toStatus: RELEASE_STATUSES.BLOCKED, eventType: "merge_blocked",
-        reason: merged?.reason || "merge_failed", errorCode: merged?.reason || "merge_failed", now, actor,
-        evidence: { admin_override: false },
+        releaseRunId: run.id, toStatus: RELEASE_STATUSES.BLOCKED, eventType: "ancestry_blocked",
+        reason: merged?.reason || "target_sha_not_on_protected_master", errorCode: "master_ancestry_failed", now, actor,
+        evidence: { admin_override: false, source: "github_remote" },
       });
     });
-    throw httpError(`protected merge refused: ${merged?.reason || "unknown"}`, 409);
+    throw httpError(`target SHA is not reachable from protected remote master: ${merged?.reason || "not_on_protected_master"}`, 409);
   }
-  if (!repo.isAncestor(run.authorized_head_sha, "master")) {
-    throw httpError("target SHA is not reachable from protected master after merge", 409);
+  if (!repo.isRemoteAncestor(run.authorized_head_sha, "master")) {
+    withImmediateTx(db, () => {
+      appendEvent(db, { releaseRunId: run.id, toStatus: RELEASE_STATUSES.BLOCKED, eventType: "ancestry_blocked", reason: "remote_master_unverified_after_merge", errorCode: "master_ancestry_failed", now, actor });
+    });
+    throw httpError("target SHA is not reachable from protected remote master after merge", 409);
   }
   withImmediateTx(db, () => {
-    appendEvidence(db, { releaseRunId: run.id, kind: "master_merge", now, workflow_head_sha: run.authorized_head_sha, payload: { master_sha: merged.master_sha, already_merged: !!merged.already_merged } });
+    appendEvidence(db, { releaseRunId: run.id, kind: "master_merge", now, workflow_head_sha: run.authorized_head_sha, payload: { master_sha: merged.master_sha, already_merged: !!merged.already_merged, source: "github_remote" } });
     appendEvent(db, { releaseRunId: run.id, toStatus: RELEASE_STATUSES.MERGED, eventType: "merged", now, actor });
   });
   return merged;
@@ -808,6 +826,7 @@ async function executeCodeRollback(db, run, { provider, repo, env, now, actor, o
     source_sha: run.previous_stable_sha,
     artifact_digest: run.previous_stable_digest,
     workflow_run_id: run.previous_stable_workflow_run_id,
+    previous_stable_provenance: run.previous_stable_provenance,
   };
   if (!previousStableComplete(prev)) {
     withImmediateTx(db, () => {
@@ -816,8 +835,8 @@ async function executeCodeRollback(db, run, { provider, repo, env, now, actor, o
     throw httpError("previous stable identity is incomplete; code rollback blocked", 409);
   }
   const observedStable = rollbackObservedFrom(db, run);
-  if (repo?.available && !repo.isAncestor(prev.source_sha, "master")) {
-    throw httpError("previous stable SHA is not reachable from protected master", 409);
+  if (repo?.available && !(repo.isRemoteAncestor?.(prev.source_sha, "master") || repo.isAncestor(prev.source_sha, "origin/master"))) {
+    throw httpError("previous stable SHA is not reachable from protected remote master", 409);
   }
   const image = await provider.inspectImage({ sha: prev.source_sha, digest: prev.artifact_digest });
   assertImageBinding({
@@ -832,7 +851,10 @@ async function executeCodeRollback(db, run, { provider, repo, env, now, actor, o
     actor, now, dispatchedStatus: RELEASE_STATUSES.CODE_ROLLBACK_DISPATCHED, repo, env,
     owner, hooks, observedStable, requireImageOutputs: true,
   });
-  const health = await provider.healthSmoke({ imageDigest: prev.artifact_digest, headSha: prev.source_sha });
+  const health = await provider.healthSmoke({
+    imageDigest: prev.artifact_digest, headSha: prev.source_sha,
+    workflowRunId: String(workflow.id), workflow: workflow,
+  });
   if (!health?.passed || !same(health.image_digest, prev.artifact_digest) || !same(health.oci_revision, prev.source_sha)) {
     withImmediateTx(db, () => {
       appendEvidence(db, { releaseRunId: run.id, kind: "rollback_health", now, health_result: health?.health ? "PASS" : "FAIL", smoke_result: health?.passed ? "PASS" : "FAIL", image_digest: health?.image_digest, oci_revision: health?.oci_revision, payload: health });
@@ -892,15 +914,15 @@ export async function executeProductionRelease(db, releaseRunId, {
     return { run: publicReleaseRun(db, db.prepare("SELECT * FROM production_release_run WHERE id=?").get(run.id)), rolled_back: true, db_restore: false };
   }
 
+  await ensureMasterAncestry(db, run, { provider: prov, repo, now, actor });
+
   withImmediateTx(db, () => {
-    const alreadyOnMaster = !!(repo?.available && repo.isAncestor(run.authorized_head_sha, "master"));
+    const alreadyOnMaster = !!(repo?.available && repo.isRemoteAncestor?.(run.authorized_head_sha, "master"));
     assertIdentitiesUnchanged(db, run, { repo, env, allowMasterMovement: alreadyOnMaster });
     if ((latestStatus(db, run.id) || RELEASE_STATUSES.CREATED) === RELEASE_STATUSES.CREATED) {
       appendEvent(db, { releaseRunId: run.id, toStatus: RELEASE_STATUSES.ELIGIBILITY_VERIFIED, eventType: "eligibility_verified", now, actor });
     }
   });
-
-  await ensureMasterAncestry(db, run, { provider: prov, repo, now, actor });
 
   const build = await dispatchOrReconcile(db, {
     run, provider: prov, workflowKind: WORKFLOW_KINDS.BUILD, workflowFile: PRODUCTION_WORKFLOWS.BUILD,
@@ -909,11 +931,9 @@ export async function executeProductionRelease(db, releaseRunId, {
     owner, hooks, requireImageOutputs: true,
   });
   const inspected = await prov.inspectImage({ sha: run.authorized_head_sha, digest: run.artifact_digest });
-  const buildDigest = inspected?.digest || build.workflow.outputs?.image_digest;
   try {
     assertImageBinding({
-      digest: buildDigest, ociRevision: inspected?.oci_revision || build.workflow.outputs?.oci_revision,
-      ociSource: inspected?.oci_source || build.workflow.outputs?.oci_source,
+      digest: inspected?.digest, ociRevision: inspected?.oci_revision, ociSource: inspected?.oci_source,
       authorizedSha: run.authorized_head_sha, authorizedDigest: run.artifact_digest,
     });
   } catch (err) {
@@ -943,6 +963,18 @@ export async function executeProductionRelease(db, releaseRunId, {
     appendEvent(db, { releaseRunId: run.id, toStatus: RELEASE_STATUSES.PREDEPLOY_RECONCILED, eventType: "predeploy_reconciled", now, actor });
   });
 
+  if (!previousStableComplete({
+    source_sha: run.previous_stable_sha,
+    artifact_digest: run.previous_stable_digest,
+    workflow_run_id: run.previous_stable_workflow_run_id,
+    previous_stable_provenance: run.previous_stable_provenance,
+  })) {
+    withImmediateTx(db, () => {
+      appendEvent(db, { releaseRunId: run.id, toStatus: RELEASE_STATUSES.BLOCKED, eventType: "previous_stable_incomplete", reason: "previous_stable_required_before_deploy", errorCode: "previous_stable_incomplete", now, actor });
+    });
+    throw httpError("previous stable identity is incomplete; deploy blocked", 409);
+  }
+
   const deploy = await dispatchOrReconcile(db, {
     run, provider: prov, workflowKind: WORKFLOW_KINDS.DEPLOY, workflowFile: PRODUCTION_WORKFLOWS.DEPLOY,
     inputs: { sha: run.authorized_head_sha, image_digest: run.artifact_digest },
@@ -954,7 +986,10 @@ export async function executeProductionRelease(db, releaseRunId, {
     appendEvent(db, { releaseRunId: run.id, toStatus: RELEASE_STATUSES.DEPLOY_RECONCILED, eventType: "deploy_reconciled", now, actor });
   });
 
-  const health = await prov.healthSmoke({ imageDigest: run.artifact_digest, headSha: run.authorized_head_sha });
+  const health = await prov.healthSmoke({
+    imageDigest: run.artifact_digest, headSha: run.authorized_head_sha,
+    workflowRunId: String(deploy.workflow.id), workflow: deploy.workflow,
+  });
   const healthOk = !!(health?.passed && health.health && health.landing && health.login && health.container_running
     && same(health.image_digest, run.artifact_digest) && same(health.oci_revision, run.authorized_head_sha));
   if (!healthOk) {

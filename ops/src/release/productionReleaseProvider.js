@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from "node:crypto";
-import { execFileSync } from "node:child_process";
 import {
   PRODUCTION_RELEASE_PROVIDER_VERSION,
   PRODUCTION_WORKFLOWS,
@@ -189,6 +188,9 @@ export function makeStubProductionReleaseProvider(opts = {}) {
     },
 
     async inspectImage({ sha, digest } = {}) {
+      if (opts.imageMissingLabels) {
+        return { digest: digest || opts.imageDigest, oci_revision: null, oci_source: null };
+      }
       if (opts.imageMismatch) {
         return {
           digest: opts.mismatchDigest || "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
@@ -204,27 +206,24 @@ export function makeStubProductionReleaseProvider(opts = {}) {
       };
     },
 
-    async mergePullRequest({ sha, expectedHead, repo } = {}) {
+    async mergePullRequest({ sha, repo } = {}) {
       if (opts.protectionReject) {
         return { ok: false, reason: "branch_protection_rejected", admin_override: false };
       }
       if (!repo || !repo.available) return { ok: false, reason: "repo_unavailable" };
-      const master = repo.resolveRef("master");
-      if (expectedHead && String(master) !== String(expectedHead)) {
-        return { ok: false, reason: "expected_head_race", current_master: master, expected_head: expectedHead, admin_override: false };
+      if (typeof repo.isRemoteAncestor === "function" && repo.isRemoteAncestor(sha, "master")) {
+        return { ok: true, already_merged: true, master_sha: repo.resolveRemoteRef("master"), admin_override: false };
       }
-      if (repo.isAncestor && repo.isAncestor(sha, "master")) {
-        return { ok: true, already_merged: true, master_sha: master };
-      }
-      try {
-        execFileSync("git", ["-C", repo.repoPath, "merge", "--ff-only", sha], { encoding: "utf8" });
-      } catch (err) {
-        return { ok: false, reason: "branch_protection_rejected", detail: String(err?.message || err).slice(0, 200), admin_override: false };
-      }
-      return { ok: true, merged: true, master_sha: repo.resolveRef("master") };
+      return { ok: false, reason: "target_sha_not_on_protected_master", admin_override: false, local_only: true };
     },
 
     async healthSmoke({ imageDigest, headSha } = {}) {
+      if (opts.healthHttpOnly) {
+        return {
+          passed: false, health: false, landing: false, login: false, container_running: false,
+          image_digest: null, oci_revision: null, detail: "health_evidence_missing", http_status: 200,
+        };
+      }
       const failFor = self.healthFailFor || opts.healthFailFor;
       if (failFor && imageDigest === failFor) {
         return {

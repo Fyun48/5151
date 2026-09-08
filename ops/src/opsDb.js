@@ -1164,6 +1164,11 @@ export function upgradeProductionReleaseImmutability(db) {
       OR IFNULL(NEW.workflow_kind,'') <> IFNULL(OLD.workflow_kind,'')
       OR IFNULL(NEW.idempotency_key,'') <> IFNULL(OLD.idempotency_key,'')
       OR (OLD.dispatch_intent_id IS NOT NULL AND IFNULL(NEW.dispatch_intent_id,'') <> IFNULL(OLD.dispatch_intent_id,''))
+      OR (OLD.authorized_github_actor IS NOT NULL AND IFNULL(NEW.authorized_github_actor,'') <> IFNULL(OLD.authorized_github_actor,''))
+      OR (OLD.workflow_run_id IS NOT NULL AND IFNULL(NEW.workflow_run_id,'') <> IFNULL(OLD.workflow_run_id,''))
+      OR (OLD.workflow_attempt IS NOT NULL AND IFNULL(NEW.workflow_attempt,0) <> IFNULL(OLD.workflow_attempt,0))
+      OR (OLD.dispatch_request_id IS NOT NULL AND IFNULL(NEW.dispatch_request_id,'') <> IFNULL(OLD.dispatch_request_id,''))
+      OR (OLD.provider_response_identity IS NOT NULL AND IFNULL(NEW.provider_response_identity,'') <> IFNULL(OLD.provider_response_identity,''))
     )
     BEGIN SELECT RAISE(ABORT, 'production release workflow binding identity is immutable'); END;
     CREATE TRIGGER prbind_no_delete BEFORE DELETE ON production_release_workflow_binding

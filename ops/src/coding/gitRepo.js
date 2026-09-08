@@ -151,6 +151,26 @@ export function makeGitRepo(repoPath, opts = {}) {
         return false;
       }
     },
+
+    resolveRemoteRef(branch = "master") {
+      try {
+        git(["fetch", "-q", remote, branch]);
+        return git(["rev-parse", `${remote}/${branch}`]);
+      } catch {
+        return null;
+      }
+    },
+
+    isRemoteAncestor(ancestorSha, branch = "master") {
+      if (!ancestorSha || !branch) return false;
+      try {
+        git(["fetch", "-q", remote, branch]);
+        git(["merge-base", "--is-ancestor", ancestorSha, `${remote}/${branch}`]);
+        return true;
+      } catch {
+        return false;
+      }
+    },
   };
 }
 

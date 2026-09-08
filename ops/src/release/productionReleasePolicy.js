@@ -342,6 +342,8 @@ export function previousStableComplete(prev) {
   if (!/^[a-f0-9]{40}$/i.test(sha)) return false;
   if (!digestLooksImmutable(digest)) return false;
   if (!runId || runId === "latest") return false;
+  const provenance = prev.provenance || prev.previous_stable_provenance;
+  if (provenance == null || provenance === "") return false;
   return true;
 }
 

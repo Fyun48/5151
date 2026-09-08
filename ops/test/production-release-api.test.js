@@ -47,6 +47,7 @@ function initGitRepo() {
   git(["add", "-A"]); git(["commit", "-q", "-m", "base"]);
   execFileSync("git", ["init", "-q", "--bare", remote]);
   git(["remote", "add", "origin", remote]);
+  git(["push", "-q", "-u", "origin", "master"]);
   return { dir, remote, cleanup() { try { rmSync(dir, { recursive: true, force: true }); } catch {} try { rmSync(remote, { recursive: true, force: true }); } catch {} } };
 }
 function seedApprovable(db) {
@@ -79,6 +80,10 @@ async function seedCleared(db, repoRef) {
   createStagingDeployment(db, { codingTaskId: task.id, repo, now: NOW });
   const [d] = claimStagingBatch(db, { now: NOW, limit: 5 });
   await executeStagingDeployment(db, d, { repo, provider: makeStubStagingProvider(), now: NOW });
+  const coding = db.prepare("SELECT head_sha FROM development_coding_task WHERE id=?").get(task.id);
+  if (coding?.head_sha) {
+    execFileSync("git", ["-C", g.dir, "push", "-q", "origin", `${coding.head_sha}:master`]);
+  }
   const { candidate } = createReleaseCandidate(db, { codingTaskId: task.id, repo, now: NOW });
   const decided = submitOwnerReleaseDecision(db, {
     codingTaskId: task.id, action: "APPROVE_RELEASE", manifestId: candidate.id, manifestVersion: candidate.manifest_version,
@@ -97,7 +102,7 @@ async function seedCleared(db, repoRef) {
     now: NOW,
   });
   repoRef.repo = repo; repoRef.git = g;
-  return { iid, codingTaskId: task.id, authorization: decided.authorization, assessment: assessed.assessment, master: repo.resolveRef("master") };
+  return { iid, codingTaskId: task.id, authorization: decided.authorization, assessment: assessed.assessment, master: repo.resolveRemoteRef("master") };
 }
 
 async function withServer(run, provider = makeStubProductionReleaseProvider()) {

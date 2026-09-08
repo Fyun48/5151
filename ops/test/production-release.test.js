@@ -73,6 +73,7 @@ function initGitRepo() {
   git(["add", "-A"]); git(["commit", "-q", "-m", "base"]);
   execFileSync("git", ["init", "-q", "--bare", remote]);
   git(["remote", "add", "origin", remote]);
+  git(["push", "-q", "-u", "origin", "master"]);
   return { dir, remote, cleanup() { try { rmSync(dir, { recursive: true, force: true }); } catch {} try { rmSync(remote, { recursive: true, force: true }); } catch {} } };
 }
 async function makeStagedTask(db) {
@@ -90,7 +91,28 @@ async function makeStagedTask(db) {
   createStagingDeployment(db, { codingTaskId: task.id, repo, now: NOW });
   const [d] = claimStagingBatch(db, { now: NOW, limit: 5 });
   await executeStagingDeployment(db, d, { repo, provider: makeStubStagingProvider(), now: NOW });
+  const coding = db.prepare("SELECT head_sha FROM development_coding_task WHERE id=?").get(task.id);
+  // Simulate an already-merged GitHub PR: remote protected master has the
+  // authorized SHA, but local master stays at the coding base so Phase 13
+  // source-base freshness still holds.
+  if (coding?.head_sha) {
+    execFileSync("git", ["-C", g.dir, "push", "-q", "origin", `${coding.head_sha}:master`]);
+  }
   return { iid, codingTaskId: task.id, repo, git: g };
+}
+function expectedMaster(repo) {
+  return repo.resolveRemoteRef("master") || repo.resolveRef("master");
+}
+function advanceRemoteMaster(git, name) {
+  const branch = `tmp-${name}`;
+  execFileSync("git", ["-C", git.dir, "fetch", "-q", "origin", "master"]);
+  execFileSync("git", ["-C", git.dir, "checkout", "-q", "-B", branch, "origin/master"]);
+  writeFileSync(path.join(git.dir, `${name}.txt`), `${name}\n`);
+  execFileSync("git", ["-C", git.dir, "add", "-A"]);
+  execFileSync("git", ["-C", git.dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", name]);
+  execFileSync("git", ["-C", git.dir, "push", "-q", "origin", `${branch}:master`]);
+  execFileSync("git", ["-C", git.dir, "checkout", "-q", "master"]);
+  execFileSync("git", ["-C", git.dir, "branch", "-q", "-D", branch]);
 }
 function approve(db, codingTaskId, repo) {
   const { candidate: rc } = createReleaseCandidate(db, { codingTaskId, repo, now: NOW });
@@ -225,7 +247,7 @@ test("A→H isolated stub release succeeds only after health/smoke and updates c
     const { authorization, assessment } = await cleared(db, codingTaskId, repo);
     seedPrev(db, repo);
     const provider = makeStubProductionReleaseProvider();
-    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: repo.resolveRef("master") }), { repo, now: NOW, actor: "owner:test" });
+    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW, actor: "owner:test" });
     const out = await executeProductionRelease(db, created.run.id, { provider, repo, now: NOW, actor: "owner:test" });
     assert.equal(out.run.current_status, "SUCCEEDED");
     const stable = getProductionStable(db);
@@ -255,7 +277,7 @@ test("exact active authorization + fresh CLEARED clearance is required; all drif
   const { codingTaskId, repo, git } = await makeStagedTask(db);
   try {
     const { authorization, assessment } = await cleared(db, codingTaskId, repo);
-    const good = execBody(codingTaskId, authorization, assessment, { expectedMasterHead: repo.resolveRef("master") });
+    const good = execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) });
     assert.throws(() => createProductionReleaseRun(db, { ...good, targetEnvironment: "staging" }, { repo, now: NOW }), /target environment/);
     assert.throws(() => createProductionReleaseRun(db, { ...good, workflowRef: "refs/heads/feat" }, { repo, now: NOW }), /workflow ref/);
     assert.throws(() => createProductionReleaseRun(db, { ...good, artifactDigest: "latest" }, { repo, now: NOW }), /immutable digest/);
@@ -279,7 +301,7 @@ test("missing Phase-14 clearance and superseded authorization cannot create a re
     const fake = execBody(codingTaskId, authorization, {
       id: 1, policy_fingerprint: "x", input_fingerprint: "y", clearance_result: "CLEARED_NO_MIGRATION",
       qa_run_id: authRow.qa_run_id, staging_deployment_id: authRow.staging_deployment_id,
-    }, { expectedMasterHead: repo.resolveRef("master") });
+    }, { expectedMasterHead: expectedMaster(repo) });
     assert.throws(() => createProductionReleaseRun(db, fake, { repo, now: NOW }), /phase14_clearance_missing|cannot start|not found/);
     const { authorization: auth2, assessment } = await cleared(db, codingTaskId, repo);
     writeFileSync(path.join(git.dir, "m15-advance.txt"), "x\n");
@@ -287,7 +309,7 @@ test("missing Phase-14 clearance and superseded authorization cannot create a re
     execFileSync("git", ["-C", git.dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "master advance"]);
     createReleaseCandidate(db, { codingTaskId, repo, now: NOW });
     assert.equal(db.prepare("SELECT status FROM production_release_authorization WHERE id=?").get(auth2.id).status, "superseded");
-    assert.throws(() => createProductionReleaseRun(db, execBody(codingTaskId, auth2, assessment, { expectedMasterHead: repo.resolveRef("master") }), { repo, now: NOW }), /superseded|cannot start|stale/);
+    assert.throws(() => createProductionReleaseRun(db, execBody(codingTaskId, auth2, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW }), /superseded|cannot start|stale/);
   } finally { git.cleanup(); db.close(); }
 });
 
@@ -296,17 +318,17 @@ test("expected HEAD race and branch protection rejection are fail-closed without
   const { codingTaskId, repo, git } = await makeStagedTask(db);
   try {
     const { authorization, assessment } = await cleared(db, codingTaskId, repo);
-    const master = repo.resolveRef("master");
+    const master = expectedMaster(repo);
     const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: master }), { repo, now: NOW });
-    writeFileSync(path.join(git.dir, "race.txt"), "race\n");
-    execFileSync("git", ["-C", git.dir, "add", "-A"]);
-    execFileSync("git", ["-C", git.dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "race"]);
-    await assert.rejects(() => executeProductionRelease(db, created.run.id, { provider: makeStubProductionReleaseProvider(), repo, now: NOW }), /expected_head_race|protected merge|source_base|stale|eligibility/);
+    advanceRemoteMaster(git, "race");
+    await assert.rejects(() => executeProductionRelease(db, created.run.id, { provider: makeStubProductionReleaseProvider(), repo, now: NOW }), /expected_head_race|protected merge|source_base|stale|eligibility|not reachable from protected remote master/);
     const db2 = openOpsDb(":memory:");
     const staged2 = await makeStagedTask(db2);
     const c2 = await cleared(db2, staged2.codingTaskId, staged2.repo);
-    const run2 = createProductionReleaseRun(db2, execBody(staged2.codingTaskId, c2.authorization, c2.assessment, { expectedMasterHead: staged2.repo.resolveRef("master") }), { repo: staged2.repo, now: NOW });
-    await assert.rejects(() => executeProductionRelease(db2, run2.run.id, { provider: makeStubProductionReleaseProvider({ protectionReject: true }), repo: staged2.repo, now: NOW }), /branch_protection/);
+    const run2 = createProductionReleaseRun(db2, execBody(staged2.codingTaskId, c2.authorization, c2.assessment, { expectedMasterHead: expectedMaster(staged2.repo) }), { repo: staged2.repo, now: NOW });
+    const oldRemote = staged2.repo.resolveRef("master");
+    execFileSync("git", ["-C", staged2.git.remote, "update-ref", "refs/heads/master", oldRemote]);
+    await assert.rejects(() => executeProductionRelease(db2, run2.run.id, { provider: makeStubProductionReleaseProvider({ protectionReject: true }), repo: staged2.repo, now: NOW }), /not reachable from protected remote master|branch_protection/);
     staged2.git.cleanup(); db2.close();
   } finally { git.cleanup(); db.close(); }
 });
@@ -316,7 +338,7 @@ test("image digest / OCI revision / source mismatch is blocked", async () => {
   const { codingTaskId, repo, git } = await makeStagedTask(db);
   try {
     const { authorization, assessment } = await cleared(db, codingTaskId, repo);
-    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: repo.resolveRef("master") }), { repo, now: NOW });
+    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW });
     await assert.rejects(() => executeProductionRelease(db, created.run.id, {
       provider: makeStubProductionReleaseProvider({ imageMismatch: true }), repo, now: NOW,
     }), /digest mismatch|OCI /);
@@ -330,7 +352,7 @@ test("pending/cancelled/skipped/neutral/failed workflow conclusions are never su
     const { codingTaskId, repo, git } = await makeStagedTask(db);
     try {
       const { authorization, assessment } = await cleared(db, codingTaskId, repo);
-      const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: repo.resolveRef("master") }), { repo, now: NOW });
+      const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW });
       const conclusions = { [PRODUCTION_WORKFLOWS.BUILD]: conclusion };
       await assert.rejects(() => executeProductionRelease(db, created.run.id, {
         provider: makeStubProductionReleaseProvider({ conclusions }), repo, now: NOW,
@@ -341,7 +363,7 @@ test("pending/cancelled/skipped/neutral/failed workflow conclusions are never su
   const { codingTaskId, repo, git } = await makeStagedTask(db);
   try {
     const { authorization, assessment } = await cleared(db, codingTaskId, repo);
-    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: repo.resolveRef("master") }), { repo, now: NOW });
+    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW });
     const provider = makeStubProductionReleaseProvider({ pendingWorkflows: [PRODUCTION_WORKFLOWS.BUILD] });
     await assert.rejects(() => executeProductionRelease(db, created.run.id, { provider, repo, now: NOW }), /still in_progress|still queued/);
     assert.equal(getProductionRelease(db, created.run.id).run.current_status, "BUILD_DISPATCHED");
@@ -356,7 +378,7 @@ test("predeploy backup missing or unverified is blocked", async () => {
     const { codingTaskId, repo, git } = await makeStagedTask(db);
     try {
       const { authorization, assessment } = await cleared(db, codingTaskId, repo);
-      const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: repo.resolveRef("master") }), { repo, now: NOW });
+      const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW });
       await assert.rejects(() => executeProductionRelease(db, created.run.id, {
         provider: makeStubProductionReleaseProvider(opt), repo, now: NOW,
       }), /backup/);
@@ -370,7 +392,7 @@ test("provider API success without a verifiable workflow run is not started or d
   const { codingTaskId, repo, git } = await makeStagedTask(db);
   try {
     const { authorization, assessment } = await cleared(db, codingTaskId, repo);
-    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: repo.resolveRef("master") }), { repo, now: NOW });
+    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW });
     const provider = makeStubProductionReleaseProvider({ dispatchNoRunId: true });
     await assert.rejects(() => executeProductionRelease(db, created.run.id, { provider, repo, now: NOW }), /not a verifiable workflow run/);
     assert.equal(getProductionRelease(db, created.run.id).run.current_status, "BLOCKED");
@@ -384,7 +406,7 @@ test("timeout/unknown result reconciles by idempotency and never double-dispatch
   const { codingTaskId, repo, git } = await makeStagedTask(db);
   try {
     const { authorization, assessment } = await cleared(db, codingTaskId, repo);
-    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: repo.resolveRef("master") }), { repo, now: NOW });
+    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW });
     const provider = makeStubProductionReleaseProvider({ dispatchTimeout: true });
     await assert.rejects(() => executeProductionRelease(db, created.run.id, { provider, repo, now: NOW }), /verifiable workflow run|reconcile/);
     assert.equal(provider.dispatchCount, 1);
@@ -403,7 +425,7 @@ test("health failure rolls back exact previous stable code and never restores DB
     const { authorization, assessment } = await cleared(db, codingTaskId, repo);
     const prev = seedPrev(db, repo);
     const provider = makeStubProductionReleaseProvider({ healthFailFor: authorization.artifact_digest });
-    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: repo.resolveRef("master") }), { repo, now: NOW });
+    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW });
     const out = await executeProductionRelease(db, created.run.id, { provider, repo, now: NOW, actor: "owner:test" });
     assert.equal(out.rolled_back, true);
     assert.equal(out.db_restore, false);
@@ -423,10 +445,12 @@ test("previous stable identity incomplete blocks rollback", async () => {
   const { codingTaskId, repo, git } = await makeStagedTask(db);
   try {
     const { authorization, assessment } = await cleared(db, codingTaskId, repo);
-    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: repo.resolveRef("master") }), { repo, now: NOW });
+    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW });
     assert.equal(created.run.previous_stable_sha, null);
     const provider = makeStubProductionReleaseProvider({ healthFail: true });
     await assert.rejects(() => executeProductionRelease(db, created.run.id, { provider, repo, now: NOW }), /previous stable identity is incomplete/);
+    assert.ok(!getProductionRelease(db, created.run.id).bindings.some((b) => b.workflow_kind === "deploy" && b.workflow_run_id));
+    assert.ok(provider.dispatchCount < 3);
     await assert.rejects(() => requestCodeRollback(db, {
       releaseRunId: created.run.id, previousStableSha: "a".repeat(40), previousStableDigest: "sha256:" + "11".repeat(32),
       previousStableWorkflowRunId: "1", provider, repo, now: NOW,
@@ -451,7 +475,8 @@ test("sanitized evidence never stores secrets or PII; Owner view stays clean", a
   const { codingTaskId, repo, git } = await makeStagedTask(db);
   try {
     const { authorization, assessment } = await cleared(db, codingTaskId, repo);
-    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: repo.resolveRef("master") }), { repo, now: NOW });
+    seedPrev(db, repo);
+    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW });
     await executeProductionRelease(db, created.run.id, { provider: makeStubProductionReleaseProvider(), repo, now: NOW });
     const view = getProductionReleaseView(db, codingTaskId, { repo });
     assert.doesNotMatch(JSON.stringify(view), /leak@example\.com|reporter-\d|NAS_SSH|GITHUB_TOKEN|AUTH_PASSWORD/i);
@@ -559,7 +584,7 @@ test("orchestrator rejects missing/mismatched workflow run fields including miss
     const { codingTaskId, repo, git } = await makeStagedTask(db);
     try {
       const { authorization, assessment } = await cleared(db, codingTaskId, repo);
-      const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: repo.resolveRef("master") }), { repo, now: NOW });
+      const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW });
       const provider = wrapGetWorkflowRun(makeStubProductionReleaseProvider(), mutate);
       await assert.rejects(() => executeProductionRelease(db, created.run.id, { provider, repo, now: NOW, actor: "owner" }), re);
       assert.equal(getProductionStable(db), null);
@@ -598,7 +623,7 @@ test("CLEARED_ADDITIVE success stays terminal SUCCEEDED and replay is side-effec
     const additive = forceClearedAdditive(db, assessment);
     seedPrev(db, repo);
     const provider = makeStubProductionReleaseProvider();
-    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, additive, { expectedMasterHead: repo.resolveRef("master") }), { repo, now: NOW, actor: "owner:test" });
+    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, additive, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW, actor: "owner:test" });
     const out = await executeProductionRelease(db, created.run.id, { provider, repo, now: NOW, actor: "owner:test" });
     assert.equal(out.run.current_status, "SUCCEEDED");
     assert.equal(out.db_rollback.disposition, "MANUAL_REQUIRED");
@@ -629,7 +654,7 @@ test("concurrent execute on a non-deduplicating provider dispatches each workflo
     const { authorization, assessment } = await cleared(db, codingTaskId, repo);
     seedPrev(db, repo);
     const provider = makeStubProductionReleaseProvider({ deduplicate: false, dispatchDelayMs: 40 });
-    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: repo.resolveRef("master") }), { repo, now: NOW, actor: "owner" });
+    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW, actor: "owner" });
     const settled = await Promise.allSettled([
       executeProductionRelease(db, created.run.id, { provider, repo, now: NOW, actor: "owner" }),
       executeProductionRelease(db, created.run.id, { provider, repo, now: NOW, actor: "owner" }),
@@ -647,7 +672,8 @@ test("worker restart after claimed dispatch binds by idempotency and never re-di
   const { codingTaskId, repo, git } = await makeStagedTask(db);
   try {
     const { authorization, assessment } = await cleared(db, codingTaskId, repo);
-    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: repo.resolveRef("master") }), { repo, now: NOW, actor: "owner" });
+    seedPrev(db, repo);
+    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW, actor: "owner" });
     const key = workflowIdempotencyKey({ releaseRunId: created.run.id, workflowKind: "build", inputFingerprint: created.run.input_fingerprint });
     const intent = "restart-intent-1";
     db.prepare(
@@ -681,11 +707,11 @@ test("stale rollback of run A after newer release B is rejected", async () => {
     const a = await cleared(db, stagedA.codingTaskId, stagedA.repo);
     const prev = seedPrev(db, stagedA.repo);
     const provider = makeStubProductionReleaseProvider();
-    const runA = createProductionReleaseRun(db, execBody(stagedA.codingTaskId, a.authorization, a.assessment, { expectedMasterHead: stagedA.repo.resolveRef("master") }), { repo: stagedA.repo, now: NOW, actor: "owner" });
+    const runA = createProductionReleaseRun(db, execBody(stagedA.codingTaskId, a.authorization, a.assessment, { expectedMasterHead: stagedA.repo.resolveRemoteRef("master") }), { repo: stagedA.repo, now: NOW, actor: "owner" });
     const outA = await executeProductionRelease(db, runA.run.id, { provider, repo: stagedA.repo, now: NOW, actor: "owner" });
     assert.equal(outA.run.current_status, "SUCCEEDED");
     const b = await cleared(db, stagedB.codingTaskId, stagedB.repo);
-    const runB = createProductionReleaseRun(db, execBody(stagedB.codingTaskId, b.authorization, b.assessment, { expectedMasterHead: stagedB.repo.resolveRef("master") }), { repo: stagedB.repo, now: NOW, actor: "owner" });
+    const runB = createProductionReleaseRun(db, execBody(stagedB.codingTaskId, b.authorization, b.assessment, { expectedMasterHead: stagedB.repo.resolveRemoteRef("master") }), { repo: stagedB.repo, now: NOW, actor: "owner" });
     const outB = await executeProductionRelease(db, runB.run.id, { provider, repo: stagedB.repo, now: NOW, actor: "owner" });
     assert.equal(outB.run.current_status, "SUCCEEDED");
     assert.equal(getProductionStable(db).source_sha, b.authorization.head_sha);
@@ -707,7 +733,7 @@ test("TOCTOU drift of authorization/manifest/clearance/stable stops fail-closed 
     const staged = await makeStagedTask(db);
     const { authorization, assessment } = await cleared(db, staged.codingTaskId, staged.repo);
     seedPrev(db, staged.repo);
-    const created = createProductionReleaseRun(db, execBody(staged.codingTaskId, authorization, assessment, { expectedMasterHead: staged.repo.resolveRef("master") }), { repo: staged.repo, now: NOW, actor: "owner" });
+    const created = createProductionReleaseRun(db, execBody(staged.codingTaskId, authorization, assessment, { expectedMasterHead: staged.repo.resolveRemoteRef("master") }), { repo: staged.repo, now: NOW, actor: "owner" });
     return { db, staged, authorization, assessment, created };
   }
 
@@ -796,7 +822,7 @@ test("in-progress GitHub run stays WAITING and second reconcile advances without
   try {
     const { authorization, assessment } = await cleared(db, codingTaskId, repo);
     seedPrev(db, repo);
-    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: repo.resolveRef("master") }), { repo, now: NOW, actor: "owner:alice" });
+    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW, actor: "owner:alice" });
     const provider = makeStubProductionReleaseProvider();
     let buildReads = 0;
     wrapGetWorkflowRun(provider, (wf) => {
@@ -828,7 +854,7 @@ test("missing or mismatched actor/triggering_actor fail independently; reconcile
     const { codingTaskId, repo, git } = await makeStagedTask(db);
     try {
       const { authorization, assessment } = await cleared(db, codingTaskId, repo);
-      const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: repo.resolveRef("master") }), { repo, now: NOW, actor: "owner:alice" });
+      const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW, actor: "owner:alice" });
       const provider = wrapGetWorkflowRun(makeStubProductionReleaseProvider(), mutate);
       await assert.rejects(() => executeProductionRelease(db, created.run.id, { provider, repo, now: NOW, actor: "owner:bob" }), re);
       assert.equal(getProductionStable(db), null);
@@ -866,7 +892,7 @@ test("final stable writes revalidate authorization/manifest/clearance/stable on 
     const staged = await makeStagedTask(db);
     const { authorization, assessment } = await cleared(db, staged.codingTaskId, staged.repo);
     seedPrev(db, staged.repo);
-    const created = createProductionReleaseRun(db, execBody(staged.codingTaskId, authorization, assessment, { expectedMasterHead: staged.repo.resolveRef("master") }), { repo: staged.repo, now: NOW, actor: "owner:alice" });
+    const created = createProductionReleaseRun(db, execBody(staged.codingTaskId, authorization, assessment, { expectedMasterHead: staged.repo.resolveRemoteRef("master") }), { repo: staged.repo, now: NOW, actor: "owner:alice" });
     return { db, staged, authorization, assessment, created };
   }
 
@@ -928,12 +954,12 @@ test("A→B same SHA/digest different provenance rejects stale-A rollback; prove
     const a = await cleared(db, stagedA.codingTaskId, stagedA.repo);
     const prev = seedPrev(db, stagedA.repo);
     const provider = makeStubProductionReleaseProvider();
-    const runA = createProductionReleaseRun(db, execBody(stagedA.codingTaskId, a.authorization, a.assessment, { expectedMasterHead: stagedA.repo.resolveRef("master") }), { repo: stagedA.repo, now: NOW, actor: "owner:alice" });
+    const runA = createProductionReleaseRun(db, execBody(stagedA.codingTaskId, a.authorization, a.assessment, { expectedMasterHead: stagedA.repo.resolveRemoteRef("master") }), { repo: stagedA.repo, now: NOW, actor: "owner:alice" });
     const outA = await executeProductionRelease(db, runA.run.id, { provider, repo: stagedA.repo, now: NOW, actor: "owner:alice" });
     assert.equal(outA.run.current_status, "SUCCEEDED");
     const stableA = getProductionStable(db);
     const b = await cleared(db, stagedB.codingTaskId, stagedB.repo);
-    const runB = createProductionReleaseRun(db, execBody(stagedB.codingTaskId, b.authorization, b.assessment, { expectedMasterHead: stagedB.repo.resolveRef("master") }), { repo: stagedB.repo, now: NOW, actor: "owner:alice" });
+    const runB = createProductionReleaseRun(db, execBody(stagedB.codingTaskId, b.authorization, b.assessment, { expectedMasterHead: stagedB.repo.resolveRemoteRef("master") }), { repo: stagedB.repo, now: NOW, actor: "owner:alice" });
     seedProductionStable(db, {
       sourceSha: stableA.source_sha,
       artifactDigest: stableA.artifact_digest,
@@ -961,7 +987,7 @@ test("A→B same SHA/digest different provenance rejects stale-A rollback; prove
 
     const stagedC = await makeStagedTask(db);
     const c = await cleared(db, stagedC.codingTaskId, stagedC.repo);
-    const runC = createProductionReleaseRun(db, execBody(stagedC.codingTaskId, c.authorization, c.assessment, { expectedMasterHead: stagedC.repo.resolveRef("master") }), { repo: stagedC.repo, now: NOW, actor: "owner:alice" });
+    const runC = createProductionReleaseRun(db, execBody(stagedC.codingTaskId, c.authorization, c.assessment, { expectedMasterHead: stagedC.repo.resolveRemoteRef("master") }), { repo: stagedC.repo, now: NOW, actor: "owner:alice" });
     seedPrev(db, stagedC.repo);
     await assert.rejects(() => executeProductionRelease(db, runC.run.id, {
       provider: makeStubProductionReleaseProvider(), repo: stagedC.repo, now: NOW, actor: "owner:alice",
@@ -970,5 +996,87 @@ test("A→B same SHA/digest different provenance rejects stale-A rollback; prove
     assert.notEqual(getProductionRelease(db, runC.run.id).run.current_status, "SUCCEEDED");
     stagedC.git.cleanup();
   } finally { stagedA.git.cleanup(); stagedB.git.cleanup(); db.close(); }
+});
+
+test("matching digest with missing OCI revision/source is BLOCKED", async () => {
+  const db = openOpsDb(":memory:");
+  const { codingTaskId, repo, git } = await makeStagedTask(db);
+  try {
+    const { authorization, assessment } = await cleared(db, codingTaskId, repo);
+    const prev = seedPrev(db, repo);
+    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW });
+    await assert.rejects(() => executeProductionRelease(db, created.run.id, {
+      provider: makeStubProductionReleaseProvider({ imageMissingLabels: true }), repo, now: NOW,
+    }), /digest missing|OCI /);
+    assert.equal(getProductionRelease(db, created.run.id).run.current_status, "BLOCKED");
+    assert.equal(getProductionStable(db).source_sha, prev.source_sha);
+  } finally { git.cleanup(); db.close(); }
+});
+
+test("public health HTTP 200 without landing/login/container/digest proof must not SUCCEED", async () => {
+  const db = openOpsDb(":memory:");
+  const { codingTaskId, repo, git } = await makeStagedTask(db);
+  try {
+    const { authorization, assessment } = await cleared(db, codingTaskId, repo);
+    const prev = seedPrev(db, repo);
+    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW });
+    await assert.rejects(() => executeProductionRelease(db, created.run.id, {
+      provider: makeStubProductionReleaseProvider({ healthHttpOnly: true }), repo, now: NOW,
+    }), /health/);
+    assert.notEqual(getProductionRelease(db, created.run.id).run.current_status, "SUCCEEDED");
+    assert.equal(getProductionStable(db).source_sha, prev.source_sha);
+  } finally { git.cleanup(); db.close(); }
+});
+
+test("empty production_stable_current blocks before deploy dispatch", async () => {
+  const db = openOpsDb(":memory:");
+  const { codingTaskId, repo, git } = await makeStagedTask(db);
+  try {
+    const { authorization, assessment } = await cleared(db, codingTaskId, repo);
+    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW });
+    const provider = makeStubProductionReleaseProvider();
+    await assert.rejects(() => executeProductionRelease(db, created.run.id, { provider, repo, now: NOW }), /previous stable identity is incomplete/);
+    const deploy = getProductionRelease(db, created.run.id).bindings.find((b) => b.workflow_kind === "deploy");
+    assert.ok(!deploy || !deploy.workflow_run_id);
+    assert.equal(getProductionRelease(db, created.run.id).run.current_status, "BLOCKED");
+  } finally { git.cleanup(); db.close(); }
+});
+
+test("local master containing authorized SHA is not enough if remote GitHub master does not", async () => {
+  const db = openOpsDb(":memory:");
+  const { codingTaskId, repo, git } = await makeStagedTask(db);
+  try {
+    const { authorization, assessment } = await cleared(db, codingTaskId, repo);
+    seedPrev(db, repo);
+    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW });
+    execFileSync("git", ["-C", git.dir, "merge", "--ff-only", authorization.head_sha]);
+    assert.equal(repo.isAncestor(authorization.head_sha, "master"), true);
+    const old = repo.resolveRef("HEAD~1");
+    execFileSync("git", ["-C", git.remote, "update-ref", "refs/heads/master", old]);
+    assert.equal(repo.isRemoteAncestor(authorization.head_sha, "master"), false);
+    const provider = makeStubProductionReleaseProvider();
+    await assert.rejects(() => executeProductionRelease(db, created.run.id, { provider, repo, now: NOW }), /not reachable from protected remote master/);
+    assert.notEqual(getProductionRelease(db, created.run.id).run.current_status, "MERGED");
+    assert.ok(!getProductionRelease(db, created.run.id).bindings.some((b) => b.workflow_run_id));
+    assert.equal(provider.dispatchCount, 0);
+  } finally { git.cleanup(); db.close(); }
+});
+
+test("rewriting bound actor/run-id/attempt/provenance is aborted by DB", async () => {
+  const db = openOpsDb(":memory:");
+  const { codingTaskId, repo, git } = await makeStagedTask(db);
+  try {
+    const { authorization, assessment } = await cleared(db, codingTaskId, repo);
+    seedPrev(db, repo);
+    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW });
+    await executeProductionRelease(db, created.run.id, { provider: makeStubProductionReleaseProvider(), repo, now: NOW });
+    const b = getProductionRelease(db, created.run.id).bindings.find((x) => x.workflow_kind === "build");
+    assert.ok(b.workflow_run_id);
+    assert.throws(() => db.prepare("UPDATE production_release_workflow_binding SET workflow_run_id=? WHERE id=?").run("999", b.id), /immutable/);
+    assert.throws(() => db.prepare("UPDATE production_release_workflow_binding SET workflow_attempt=? WHERE id=?").run(9, b.id), /immutable/);
+    assert.throws(() => db.prepare("UPDATE production_release_workflow_binding SET authorized_github_actor=? WHERE id=?").run("attacker", b.id), /immutable/);
+    assert.throws(() => db.prepare("UPDATE production_release_workflow_binding SET dispatch_request_id=? WHERE id=?").run("other-req", b.id), /immutable/);
+    assert.throws(() => db.prepare("UPDATE production_release_workflow_binding SET provider_response_identity=? WHERE id=?").run("other-resp", b.id), /immutable/);
+  } finally { git.cleanup(); db.close(); }
 });
 

@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
   PRODUCTION_RELEASE_PROVIDER_VERSION,
   PRODUCTION_WORKFLOWS,
@@ -16,6 +19,8 @@ import {
 // 測試只注入 fake API；沒有 Owner mutation grant 時永遠 unavailable。
 
 export const PRODUCTION_RELEASE_MUTATION_GRANT = "owner-dispatch-v1";
+export const PHASE15_EVIDENCE_ARTIFACT = "phase15-workflow-evidence";
+export const PHASE15_EVIDENCE_SCHEMA = "phase15-workflow-evidence-v1";
 
 const ALLOWED_WORKFLOWS = new Set(Object.values(PRODUCTION_WORKFLOWS));
 
@@ -85,6 +90,35 @@ export function correlateGithubWorkflowRuns(runs, expected = {}) {
   return { run: matches[0], ambiguous: false, matches };
 }
 
+export function ociLabelsFromConfig(config) {
+  if (!config || typeof config !== "object") return { revision: null, source: null };
+  const labels = config.config?.Labels || config.Labels || config.config?.labels || {};
+  const revision = labels["org.opencontainers.image.revision"] || null;
+  const source = labels["org.opencontainers.image.source"] || null;
+  return { revision: revision || null, source: source || null };
+}
+
+export function bindPhase15EvidenceToRun(evidence, run) {
+  if (!evidence || evidence.schema !== PHASE15_EVIDENCE_SCHEMA) return null;
+  if (String(evidence.workflow_run_id) !== String(run.id)) return null;
+  if (Number(evidence.workflow_attempt) !== Number(run.run_attempt || run.attempt)) return null;
+  if (evidence.workflow_file && (run.path || run.workflow_file) && evidence.workflow_file !== (run.path || run.workflow_file)) return null;
+  if (evidence.workflow_ref && run.workflow_ref && evidence.workflow_ref !== run.workflow_ref) return null;
+  if (evidence.head_sha && run.head_sha && evidence.head_sha !== run.head_sha) return null;
+  if (evidence.environment && run.environment && evidence.environment !== run.environment) return null;
+  if (evidence.actor && loginOf(run.actor) && evidence.actor !== loginOf(run.actor)) return null;
+  if (evidence.triggering_actor && loginOf(run.triggering_actor) && evidence.triggering_actor !== loginOf(run.triggering_actor)) return null;
+  return {
+    image_digest: evidence.image_digest || null,
+    oci_revision: evidence.oci_revision || null,
+    oci_source: evidence.oci_source || null,
+    source_sha: evidence.source_sha || null,
+    confirmation: evidence.confirmation || null,
+    db_backup: evidence.db_backup && evidence.db_backup.verified ? evidence.db_backup : null,
+    health: evidence.health && typeof evidence.health === "object" ? evidence.health : null,
+  };
+}
+
 export function normalizeGithubWorkflowRun(raw, extras = {}) {
   if (!raw) return null;
   const jobs = extras.jobs || raw.jobs || [];
@@ -92,7 +126,7 @@ export function normalizeGithubWorkflowRun(raw, extras = {}) {
     || raw.environment
     || jobs.map((j) => j.environment?.name || j.environment).find(Boolean)
     || null;
-  const outputs = extras.outputs || raw.outputs || {};
+  const outputs = extras.evidenceOutputs && typeof extras.evidenceOutputs === "object" ? extras.evidenceOutputs : {};
   const actor = loginOf(raw.actor);
   const triggering = loginOf(raw.triggering_actor);
   return {
@@ -197,20 +231,59 @@ export function createLiveGithubApi(env = process.env) {
       return { run, jobs: jobsJson.jobs || [] };
     },
     async inspectImage({ digest }) {
-      const res = await fetch(`https://ghcr.io/v2/fyun48/5151/manifests/${digest}`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json",
-          "User-Agent": "5151-ops-phase15",
-        },
-      });
-      if (!res.ok) return null;
-      const observed = res.headers.get("docker-content-digest") || digest;
-      return { digest: observed };
+      const headers = {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json",
+        "User-Agent": "5151-ops-phase15",
+      };
+      const manifestRes = await fetch(`https://ghcr.io/v2/fyun48/5151/manifests/${digest}`, { headers });
+      if (!manifestRes.ok) return null;
+      const observed = manifestRes.headers.get("docker-content-digest") || digest;
+      const manifest = await manifestRes.json();
+      let imageManifest = manifest;
+      if (Array.isArray(manifest.manifests) && manifest.manifests.length) {
+        const amd = manifest.manifests.find((m) => m.platform?.architecture === "amd64" && m.platform?.os === "linux") || manifest.manifests[0];
+        if (!amd?.digest) return { digest: observed };
+        const nested = await fetch(`https://ghcr.io/v2/fyun48/5151/manifests/${amd.digest}`, { headers });
+        if (!nested.ok) return { digest: observed };
+        imageManifest = await nested.json();
+      }
+      const configDigest = imageManifest.config?.digest;
+      if (!configDigest) return { digest: observed };
+      const configRes = await fetch(`https://ghcr.io/v2/fyun48/5151/blobs/${configDigest}`, { headers });
+      if (!configRes.ok) return { digest: observed };
+      const labels = ociLabelsFromConfig(await configRes.json());
+      return { digest: observed, oci_revision: labels.revision, oci_source: labels.source };
     },
-    async healthSmoke({ url }) {
-      const res = await fetch(url, { method: "GET", redirect: "manual" });
-      return { status: res.status, ok: res.ok };
+    async listArtifacts({ owner, repo, runId }) {
+      const res = await gh(`/repos/${owner}/${repo}/actions/runs/${runId}/artifacts`);
+      if (!res.ok) return { artifacts: [] };
+      return res.json();
+    },
+    async downloadArtifact({ owner, repo, artifactId }) {
+      const res = await gh(`/repos/${owner}/${repo}/actions/artifacts/${artifactId}/zip`);
+      if (!res.ok) return null;
+      const buf = Buffer.from(await res.arrayBuffer());
+      const dir = mkdtempSync(path.join(tmpdir(), "phase15-art-"));
+      try {
+        writeFileSync(path.join(dir, "a.zip"), buf);
+        const text = execFileSync("unzip", ["-p", path.join(dir, "a.zip"), `${PHASE15_EVIDENCE_ARTIFACT}.json`], { encoding: "utf8" });
+        return { evidence: JSON.parse(text) };
+      } catch {
+        return null;
+      } finally {
+        try { rmSync(dir, { recursive: true, force: true }); } catch { /* noop */ }
+      }
+    },
+    async compare({ owner, repo, base, head }) {
+      const res = await gh(`/repos/${owner}/${repo}/compare/${base}...${head}`);
+      if (!res.ok) return null;
+      return res.json();
+    },
+    async getRef({ owner, repo, ref }) {
+      const res = await gh(`/repos/${owner}/${repo}/git/ref/heads/${ref}`);
+      if (!res.ok) return null;
+      return res.json();
     },
   };
 }
@@ -236,6 +309,25 @@ export function makeGithubProductionReleaseProvider(env = process.env, deps = {}
   let dispatchCount = 0;
   let restoreCallCount = 0;
 
+  async function loadEvidenceOutputs(run) {
+    if (!run?.id) return {};
+    if (typeof api.listArtifacts !== "function" || typeof api.downloadArtifact !== "function") return {};
+    const listed = await api.listArtifacts({ owner: repo.owner, repo: repo.repo, runId: run.id });
+    const matches = (listed?.artifacts || []).filter((a) => a.name === PHASE15_EVIDENCE_ARTIFACT && !a.expired);
+    if (matches.length !== 1) return {};
+    const downloaded = await api.downloadArtifact({ owner: repo.owner, repo: repo.repo, artifactId: matches[0].id, runId: run.id });
+    const evidence = downloaded?.evidence
+      || downloaded?.files?.[`${PHASE15_EVIDENCE_ARTIFACT}.json`]
+      || downloaded?.json
+      || null;
+    return bindPhase15EvidenceToRun(evidence, run) || {};
+  }
+
+  async function hydrateRun(raw, jobs) {
+    const evidenceOutputs = await loadEvidenceOutputs(raw);
+    return normalizeGithubWorkflowRun(raw, { jobs, evidenceOutputs });
+  }
+
   async function lookupExactRun({ workflowFile, headSha, createdAfter }) {
     const listed = await api.listWorkflowRuns({
       owner: repo.owner,
@@ -252,7 +344,7 @@ export function makeGithubProductionReleaseProvider(env = process.env, deps = {}
     if (!correlated.run) return null;
     const detail = await api.getWorkflowRun({ owner: repo.owner, repo: repo.repo, runId: correlated.run.id });
     const raw = detail?.run || correlated.run;
-    return normalizeGithubWorkflowRun(raw, { jobs: detail?.jobs, outputs: detail?.outputs || correlated.run.outputs });
+    return hydrateRun(raw, detail?.jobs);
   }
 
   return {
@@ -354,7 +446,7 @@ export function makeGithubProductionReleaseProvider(env = process.env, deps = {}
       const detail = await api.getWorkflowRun({ owner: repo.owner, repo: repo.repo, runId: workflow_run_id });
       if (!detail?.run && !detail?.id) return null;
       const raw = detail.run || detail;
-      return normalizeGithubWorkflowRun(raw, { jobs: detail.jobs, outputs: detail.outputs || raw.outputs });
+      return hydrateRun(raw, detail.jobs);
     },
 
     async findWorkflowRunByIdempotency({
@@ -366,61 +458,54 @@ export function makeGithubProductionReleaseProvider(env = process.env, deps = {}
       return found;
     },
 
-    async inspectImage({ sha, digest } = {}) {
+    async inspectImage({ digest } = {}) {
       if (!digestLooksImmutable(digest)) return null;
-      if (typeof api.inspectImage === "function") {
-        const inspected = await api.inspectImage({ sha, digest });
-        if (!inspected) return null;
-        return {
-          digest: inspected.digest || digest,
-          oci_revision: inspected.oci_revision || sha,
-          oci_source: inspected.oci_source || REQUIRED_OCI_SOURCE,
-        };
-      }
-      return { digest, oci_revision: sha, oci_source: REQUIRED_OCI_SOURCE };
-    },
-
-    async mergePullRequest({ sha, expectedHead, repo: gitRepo } = {}) {
-      if (!gitRepo || !gitRepo.available) return { ok: false, reason: "repo_unavailable" };
-      const master = gitRepo.resolveRef("master");
-      if (expectedHead && String(master) !== String(expectedHead)) {
-        return { ok: false, reason: "expected_head_race", current_master: master, expected_head: expectedHead, admin_override: false };
-      }
-      if (gitRepo.isAncestor && gitRepo.isAncestor(sha, "master")) {
-        return { ok: true, already_merged: true, master_sha: master };
-      }
-      try {
-        execFileSync("git", ["-C", gitRepo.repoPath, "merge", "--ff-only", sha], { encoding: "utf8" });
-      } catch (err) {
-        return { ok: false, reason: "branch_protection_rejected", detail: redactGithubError(err), admin_override: false };
-      }
-      return { ok: true, merged: true, master_sha: gitRepo.resolveRef("master") };
-    },
-
-    async healthSmoke({ imageDigest, headSha } = {}) {
-      if (typeof api.healthSmoke === "function") {
-        const raw = await api.healthSmoke({ imageDigest, headSha, url: env.PRODUCTION_PUBLIC_HEALTH_URL || null });
-        if (!raw) return { passed: false, health: false, landing: false, login: false, container_running: false, image_digest: imageDigest, oci_revision: headSha, detail: "health_unavailable" };
-        const passed = raw.passed != null ? !!raw.passed : !!raw.ok;
-        return {
-          passed,
-          health: raw.health != null ? !!raw.health : passed,
-          landing: raw.landing != null ? !!raw.landing : passed,
-          login: raw.login != null ? !!raw.login : passed,
-          container_running: raw.container_running != null ? !!raw.container_running : passed,
-          image_digest: raw.image_digest || imageDigest,
-          oci_revision: raw.oci_revision || headSha,
-          detail: raw.detail || null,
-        };
-      }
+      if (typeof api.inspectImage !== "function") return null;
+      const inspected = await api.inspectImage({ digest });
+      if (!inspected?.digest) return null;
       return {
-        passed: true,
-        health: true,
-        landing: true,
-        login: true,
-        container_running: true,
+        digest: inspected.digest,
+        oci_revision: inspected.oci_revision || null,
+        oci_source: inspected.oci_source || null,
+      };
+    },
+
+    async mergePullRequest({ sha, repo: gitRepo } = {}) {
+      if (typeof api.compare === "function") {
+        const cmp = await api.compare({ owner: repo.owner, repo: repo.repo, base: sha, head: "master" });
+        const mergeBase = cmp?.merge_base_commit?.sha;
+        if (mergeBase && String(mergeBase) === String(sha)) {
+          const ref = typeof api.getRef === "function" ? await api.getRef({ owner: repo.owner, repo: repo.repo, ref: "master" }) : null;
+          return { ok: true, already_merged: true, master_sha: ref?.object?.sha || mergeBase, admin_override: false };
+        }
+        return { ok: false, reason: "target_sha_not_on_protected_master", admin_override: false };
+      }
+      if (gitRepo?.isRemoteAncestor?.(sha, "master")) {
+        return { ok: true, already_merged: true, master_sha: gitRepo.resolveRemoteRef("master"), admin_override: false };
+      }
+      return { ok: false, reason: "target_sha_not_on_protected_master", admin_override: false, local_only: true };
+    },
+
+    async healthSmoke({ workflowRunId, workflow } = {}) {
+      const empty = {
+        passed: false, health: false, landing: false, login: false, container_running: false,
+        image_digest: null, oci_revision: null, detail: "health_evidence_missing",
+      };
+      const wf = workflow || (workflowRunId ? await this.getWorkflowRun({ workflow_run_id: workflowRunId }) : null);
+      const h = wf?.outputs?.health;
+      if (!h || typeof h !== "object") return empty;
+      const imageDigest = h.image_digest || null;
+      const revision = h.oci_revision || null;
+      const complete = !!(h.health && h.landing && h.login && h.container_running && imageDigest && revision);
+      return {
+        passed: complete && h.passed !== false,
+        health: !!h.health,
+        landing: !!h.landing,
+        login: !!h.login,
+        container_running: !!h.container_running,
         image_digest: imageDigest,
-        oci_revision: headSha,
+        oci_revision: revision,
+        detail: complete ? null : "health_evidence_incomplete",
       };
     },
 

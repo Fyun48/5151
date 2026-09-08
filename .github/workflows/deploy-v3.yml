@@ -240,3 +240,65 @@ jobs:
             fi
             docker exec 591-tracker-v3 node -e "import('sharp').then(()=>console.log('SHARP_OK')).catch(()=>{console.error('SHARP_MISSING'); process.exit(1)})"
             echo "DEPLOY_V3_OK source=$DEPLOY_SHA image=$IMAGE_PIN"
+            python3 -c "import json; open('/tmp/phase15-deploy-health.json','w').write(json.dumps({'container_running':True,'health':True,'landing':True,'login':True,'image_digest':'$IMAGE_DIGEST','oci_revision':'$DEPLOY_SHA','container_image':'$IMAGE_PIN'})+'\n')"
+      - name: Pull NAS deploy health evidence
+        env:
+          NAS_HOST: ${{ secrets.NAS_HOST }}
+          NAS_PORT: ${{ secrets.NAS_PORT }}
+          NAS_USER: ${{ secrets.NAS_USER }}
+          NAS_SSH_KEY: ${{ secrets.NAS_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          key="$(mktemp)"
+          printf '%s\n' "$NAS_SSH_KEY" > "$key"
+          chmod 600 "$key"
+          scp -o StrictHostKeyChecking=accept-new -P "$NAS_PORT" -i "$key" \
+            "$NAS_USER@$NAS_HOST:/tmp/phase15-deploy-health.json" ./nas-deploy-health.json
+          rm -f "$key"
+          python3 - <<'PY'
+          import json
+          nas = json.load(open("nas-deploy-health.json"))
+          required = ("container_running", "health", "landing", "login", "image_digest", "oci_revision")
+          if not all(nas.get(k) for k in required):
+              raise SystemExit("deploy NAS health evidence incomplete")
+          digest = nas["image_digest"]
+          revision = nas["oci_revision"]
+          if not str(digest).startswith("sha256:") or len(str(digest)) != 71:
+              raise SystemExit("deploy NAS health evidence digest is not immutable")
+          lines = [
+              f"IMAGE_DIGEST={digest}",
+              f"OCI_REVISION={revision}",
+              "HEALTH_OBSERVED=true",
+              f"HEALTH_API={'true' if nas.get('health') else 'false'}",
+              f"HEALTH_LANDING={'true' if nas.get('landing') else 'false'}",
+              f"HEALTH_LOGIN={'true' if nas.get('login') else 'false'}",
+              f"HEALTH_CONTAINER={'true' if nas.get('container_running') else 'false'}",
+          ]
+          open("phase15-health.env", "w").write("\n".join(lines) + "\n")
+          PY
+      - name: Write Phase 15 workflow evidence
+        env:
+          WF_FILE: .github/workflows/deploy-v3.yml
+          WF_REF: ${{ github.ref }}
+          WF_RUN_ID: ${{ github.run_id }}
+          WF_ATTEMPT: ${{ github.run_attempt }}
+          WF_HEAD_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ inputs.sha }}
+          WF_ACTOR: ${{ github.actor }}
+          WF_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          WF_ENVIRONMENT: production
+          OCI_SOURCE: https://github.com/${{ github.repository }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          set -a
+          # shellcheck disable=SC1091
+          . ./phase15-health.env
+          set +a
+          python3 .github/scripts/write-phase15-workflow-evidence.py phase15-workflow-evidence.json
+      - name: Upload Phase 15 workflow evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase15-workflow-evidence
+          path: phase15-workflow-evidence.json
+          if-no-files-found: error

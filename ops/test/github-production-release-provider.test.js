@@ -6,7 +6,12 @@ import {
   REQUIRED_WORKFLOW_REF,
 } from "../src/release/productionReleasePolicy.js";
 import { makeGithubProductionReleaseProvider, makeProductionReleaseProvider } from "../src/release/productionReleaseProvider.js";
-import { correlateGithubWorkflowRuns } from "../src/release/githubProductionReleaseProvider.js";
+import {
+  correlateGithubWorkflowRuns,
+  ociLabelsFromConfig,
+  bindPhase15EvidenceToRun,
+  PHASE15_EVIDENCE_SCHEMA,
+} from "../src/release/githubProductionReleaseProvider.js";
 
 const ACTOR = "Fyun48";
 const SHA = "a".repeat(40);
@@ -257,4 +262,72 @@ test("durable request id is exactly-once even if dispatch is retried", async () 
   assert.equal(api.dispatchHttp, 1);
   assert.equal(provider.dispatchCount, 1);
   assert.equal(String(first.workflow_run_id), String(second.workflow_run_id));
+});
+
+test("GitHub REST-shaped run without evidence artifact has no synthetic outputs", async () => {
+  const api = makeFakeGithubApi({ runStatus: "completed", runConclusion: "success" });
+  api.listArtifacts = async () => ({ artifacts: [] });
+  const provider = makeGithubProductionReleaseProvider(GRANT_ENV, { githubApi: api });
+  const dispatched = await provider.dispatchWorkflow({
+    workflowFile: PRODUCTION_WORKFLOWS.BUILD,
+    workflowRef: REQUIRED_WORKFLOW_REF,
+    inputs: { sha: SHA, image_digest: DIGEST },
+    actor: ACTOR,
+    requestId: "intent-rest",
+  });
+  const wf = await provider.getWorkflowRun({ workflow_run_id: dispatched.workflow_run_id });
+  assert.equal(wf.status, "completed");
+  assert.deepEqual(wf.outputs, {});
+  assert.equal(wf.outputs.image_digest, undefined);
+});
+
+test("inspectImage never synthesizes missing OCI revision or source", async () => {
+  const api = makeFakeGithubApi();
+  api.inspectImage = async ({ digest }) => ({ digest });
+  const provider = makeGithubProductionReleaseProvider(GRANT_ENV, { githubApi: api });
+  const inspected = await provider.inspectImage({ sha: SHA, digest: DIGEST });
+  assert.equal(inspected.digest, DIGEST);
+  assert.equal(inspected.oci_revision, null);
+  assert.equal(inspected.oci_source, null);
+  const labels = ociLabelsFromConfig({ config: { Labels: { "org.opencontainers.image.revision": SHA, "org.opencontainers.image.source": REQUIRED_OCI_SOURCE } } });
+  assert.equal(labels.revision, SHA);
+  assert.equal(labels.source, REQUIRED_OCI_SOURCE);
+});
+
+test("healthSmoke does not treat HTTP 200 as Production health proof", async () => {
+  const api = makeFakeGithubApi();
+  api.healthSmoke = async () => ({ ok: true, status: 200 });
+  const provider = makeGithubProductionReleaseProvider(GRANT_ENV, { githubApi: api });
+  const health = await provider.healthSmoke({ imageDigest: DIGEST, headSha: SHA });
+  assert.equal(health.passed, false);
+  assert.equal(health.health, false);
+  assert.equal(health.landing, false);
+  assert.equal(health.login, false);
+  assert.equal(health.container_running, false);
+  assert.equal(health.image_digest, null);
+  assert.equal(health.oci_revision, null);
+});
+
+test("trusted evidence artifact binds outputs only when run identity matches", () => {
+  const run = {
+    id: "11",
+    run_attempt: 1,
+    path: PRODUCTION_WORKFLOWS.DEPLOY,
+    actor: { login: ACTOR },
+    triggering_actor: { login: ACTOR },
+  };
+  const ok = bindPhase15EvidenceToRun({
+    schema: PHASE15_EVIDENCE_SCHEMA,
+    workflow_run_id: "11",
+    workflow_attempt: 1,
+    workflow_file: PRODUCTION_WORKFLOWS.DEPLOY,
+    actor: ACTOR,
+    triggering_actor: ACTOR,
+    image_digest: DIGEST,
+    oci_revision: SHA,
+    oci_source: REQUIRED_OCI_SOURCE,
+    health: { passed: true, health: true, landing: true, login: true, container_running: true, image_digest: DIGEST, oci_revision: SHA },
+  }, run);
+  assert.equal(ok.image_digest, DIGEST);
+  assert.equal(bindPhase15EvidenceToRun({ ...ok, schema: PHASE15_EVIDENCE_SCHEMA, workflow_run_id: "11", workflow_attempt: 2 }, run), null);
 });

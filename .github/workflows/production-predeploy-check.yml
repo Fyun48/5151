@@ -103,3 +103,53 @@ jobs:
             rm -f /tmp/5151-predeploy-helpers/.github/scripts/sqlite-readonly-inspect.mjs \
                   /tmp/5151-predeploy-helpers/.github/scripts/sqlite-online-backup.mjs \
                   /tmp/5151-predeploy-helpers/.github/scripts/sqlite-online-backup.py
+      - name: Pull NAS predeploy evidence
+        env:
+          NAS_HOST: ${{ secrets.NAS_HOST }}
+          NAS_PORT: ${{ secrets.NAS_PORT }}
+          NAS_USER: ${{ secrets.NAS_USER }}
+          NAS_SSH_KEY: ${{ secrets.NAS_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          key="$(mktemp)"
+          printf '%s\n' "$NAS_SSH_KEY" > "$key"
+          chmod 600 "$key"
+          scp -o StrictHostKeyChecking=accept-new -P "$NAS_PORT" -i "$key" \
+            "$NAS_USER@$NAS_HOST:/tmp/phase15-predeploy-evidence.json" ./nas-predeploy-evidence.json
+          rm -f "$key"
+          python3 - <<'PY'
+          import json
+          nas = json.load(open("nas-predeploy-evidence.json"))
+          backup_id = nas.get("backup_dir") or ""
+          backup_hash = nas.get("backup_sha256") or ""
+          if not backup_id or not backup_hash:
+              raise SystemExit("predeploy NAS evidence missing backup identity")
+          if not backup_hash.startswith("sha256:"):
+              backup_hash = "sha256:" + backup_hash
+          open("phase15-backup.env","w").write(f"BACKUP_ID={backup_id}\nBACKUP_HASH={backup_hash}\n")
+          PY
+      - name: Write Phase 15 workflow evidence
+        env:
+          WF_FILE: .github/workflows/production-predeploy-check.yml
+          WF_REF: ${{ github.ref }}
+          WF_RUN_ID: ${{ github.run_id }}
+          WF_ATTEMPT: ${{ github.run_attempt }}
+          WF_HEAD_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ inputs.sha }}
+          WF_ACTOR: ${{ github.actor }}
+          WF_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          WF_ENVIRONMENT: production
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          set -a
+          # shellcheck disable=SC1091
+          . ./phase15-backup.env
+          set +a
+          python3 .github/scripts/write-phase15-workflow-evidence.py phase15-workflow-evidence.json
+      - name: Upload Phase 15 workflow evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase15-workflow-evidence
+          path: phase15-workflow-evidence.json
+          if-no-files-found: error
