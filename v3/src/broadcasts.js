@@ -63,6 +63,20 @@ export function publicBroadcasts(input = {}) {
   }).filter(Boolean);
 }
 
+/** 前台不再投遞 hop 公告；歷史設定只給後台讀。 */
+export const LEGACY_BROADCASTS_USER_FACING = false;
+
+export function publicBroadcastsRuntime() {
+  return [];
+}
+
+export function rejectLegacyBroadcastMutation() {
+  const error = new Error("轉頁 hop 公告已停用。新的系統公告請用「系統公告」。");
+  error.status = 409;
+  error.code = "legacy_broadcasts_readonly";
+  throw error;
+}
+
 export function adminBroadcastsView(input = {}) {
   return {
     kinds: BROADCAST_KINDS.map((row) => ({ ...row })),

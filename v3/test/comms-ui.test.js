@@ -59,9 +59,11 @@ test("admin manages announcements, campaigns, and support presentation separatel
   const notices = admin.slice(admin.indexOf('data-admin-panel="notices"'), admin.indexOf('data-admin-panel="promo"'));
   assert.match(notices, /id="broadcastsForm"/);
   assert.match(notices, /id="announceForm"/);
+  assert.match(notices, /歷史 hop 公告僅供檢視/);
   const ads = admin.slice(admin.indexOf('data-admin-panel="ads"'), admin.indexOf('data-admin-panel="mail"'));
   assert.match(ads, /id="adsForm"/);
   assert.match(ads, /id="campaignForm"/);
+  assert.match(ads, /歷史版位僅供檢視/);
   assertScriptsParse(admin);
   assertScriptsParse(html);
 });

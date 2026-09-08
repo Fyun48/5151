@@ -584,7 +584,7 @@
       <div id="notices" class="admin-panel" data-admin-panel="notices">
 <section class="card">
       <h2>公告／最新消息／贊助提醒</h2>
-      <p class="hint">轉頁時在底欄上方出現一小則，可按 × 暫時不看。贊助提醒請寫維護品質，不要擋操作、不要連發。 hops 是每隔幾次換頁才再出現。</p>
+      <p class="hint">歷史 hop 公告僅供檢視，不再寫入、也不再對前台投遞。新的服務資訊請用下方「系統公告」（含排程、類型、已讀／關閉）。</p>
       <form id="broadcastsForm">
         <div class="grid-2">
           <div>
@@ -623,7 +623,7 @@
         <label>每隔幾次換頁</label>
         <input id="bcSponsorHops" type="number" min="1" max="20" value="5" />
         <div class="row" style="margin:14px 0 0">
-          <button type="submit" class="primary" id="broadcastsSave">儲存公告與提醒</button>
+          <button type="submit" class="primary" id="broadcastsSave" disabled>已停用（請用系統公告）</button>
         </div>
         <p class="msg" id="broadcastsMsg"></p>
       </form>
@@ -717,7 +717,7 @@
       <div id="ads" class="admin-panel" data-admin-panel="ads">
 <section class="card">
       <h2>站內小廣告</h2>
-      <p class="hint">獨立專區。短期小額曝光用，不是 Google Ads，也不會自動追蹤訪客。每個版位最多一則安靜卡片，前台標「贊助訊息」。這與「贊助曝光」的會員收款連結分開。沒開的版位前台不會出現空框。</p>
+      <p class="hint">歷史版位僅供檢視，不再寫入、也不再對前台投遞。不是 Google Ads。新的贊助內容請用下方「贊助活動」（含間隔、排程、頻道與「贊助內容」標籤）。</p>
       <form id="adsForm">
         <div class="grid-2">
           <div>
@@ -778,7 +778,7 @@
         <label>圖片網址（選填）</label>
         <input id="adMeImage" maxlength="500" />
         <div class="row" style="margin:14px 0 0">
-          <button type="submit" class="primary" id="adsSave">儲存小廣告</button>
+          <button type="submit" class="primary" id="adsSave" disabled>已停用（請用贊助活動）</button>
         </div>
         <p class="msg" id="adsMsg"></p>
       </form>

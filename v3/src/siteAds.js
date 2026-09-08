@@ -69,6 +69,22 @@ export function publicSiteAds(input = {}) {
   return out;
 }
 
+/** 前台不再投遞舊站內小廣告；歷史設定只給後台讀。 */
+export const LEGACY_SITE_ADS_USER_FACING = false;
+
+export function publicSiteAdsRuntime() {
+  const out = {};
+  for (const row of SITE_AD_SLOTS) out[row.id] = null;
+  return out;
+}
+
+export function rejectLegacySiteAdMutation() {
+  const error = new Error("站內小廣告已停用。新的贊助內容請用「贊助活動」。");
+  error.status = 409;
+  error.code = "legacy_site_ads_readonly";
+  throw error;
+}
+
 export function adminSiteAdsView(input = {}) {
   return {
     slots: SITE_AD_SLOTS.map((row) => ({ ...row })),

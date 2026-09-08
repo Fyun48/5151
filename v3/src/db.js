@@ -260,8 +260,8 @@ import {
   publicSponsorOffer,
   sponsorCatalog,
 } from "./sponsorLinks.js";
-import { adminSiteAdsView, normalizeSiteAds, publicSiteAds } from "./siteAds.js";
-import { adminBroadcastsView, normalizeBroadcasts, publicBroadcasts } from "./broadcasts.js";
+import { adminSiteAdsView, normalizeSiteAds, publicSiteAdsRuntime, rejectLegacySiteAdMutation } from "./siteAds.js";
+import { adminBroadcastsView, normalizeBroadcasts, publicBroadcastsRuntime, rejectLegacyBroadcastMutation } from "./broadcasts.js";
 
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data-v3");
 mkdirSync(DATA_DIR, { recursive: true });
@@ -1084,18 +1084,12 @@ export function getAdminAdsSettings() {
   return adminSiteAdsView(getSiteAdsConfig());
 }
 
-export function saveAdminAdsSettings(partial = {}) {
-  const src = partial && typeof partial === "object" ? partial : {};
-  const current = getSiteAdsConfig();
-  const next = normalizeSiteAds({
-    slots: src.slots && typeof src.slots === "object" ? { ...current.slots, ...src.slots } : current.slots,
-  });
-  writeSettingKey("siteAds", next);
-  return getAdminAdsSettings();
+export function saveAdminAdsSettings(_partial = {}) {
+  rejectLegacySiteAdMutation();
 }
 
 export function publicAdsSettings() {
-  return publicSiteAds(getSiteAdsConfig());
+  return publicSiteAdsRuntime();
 }
 
 export function getBrandMascot() {
@@ -1148,18 +1142,12 @@ export function getAdminBroadcastsSettings() {
   return adminBroadcastsView(getBroadcastsConfig());
 }
 
-export function saveAdminBroadcastsSettings(partial = {}) {
-  const src = partial && typeof partial === "object" ? partial : {};
-  const current = getBroadcastsConfig();
-  const next = normalizeBroadcasts({
-    items: src.items && typeof src.items === "object" ? { ...current.items, ...src.items } : current.items,
-  });
-  writeSettingKey("broadcasts", next);
-  return getAdminBroadcastsSettings();
+export function saveAdminBroadcastsSettings(_partial = {}) {
+  rejectLegacyBroadcastMutation();
 }
 
 export function publicBroadcastsSettings() {
-  return publicBroadcasts(getBroadcastsConfig());
+  return publicBroadcastsRuntime();
 }
 
 export function getCommsConfig() {

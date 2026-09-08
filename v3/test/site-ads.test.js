@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { normalizeSiteAds, publicSiteAds, SITE_AD_SLOTS } from "../src/siteAds.js";
+import { normalizeSiteAds, publicSiteAds, publicSiteAdsRuntime, SITE_AD_SLOTS } from "../src/siteAds.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -30,6 +30,10 @@ test("site ads sanitize urls and hide empty slots", () => {
   assert.equal(pub.listings.url, "https://example.com/breakfast");
   assert.equal(pub.login, null);
   assert.equal(pub.me, null);
+  const runtime = publicSiteAdsRuntime(cfg);
+  assert.equal(runtime.listings, null);
+  assert.equal(runtime.login, null);
+  assert.equal(runtime.me, null);
 });
 
 test("admin, index, login and server expose site ads", () => {
