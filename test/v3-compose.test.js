@@ -42,8 +42,8 @@ test("deploy-v3 workflow recreates only the v3 container (manual dispatch after 
   const onBlock = yml.match(/\non:\n([\s\S]*?)\n[a-zA-Z]/)?.[1] || "";
   assert.match(onBlock, /workflow_dispatch:/);
   assert.doesNotMatch(onBlock, /push:/);
-  // 仍只 SCP 並重建 v3（不動其他容器）。
+  // 仍只 SCP 並重建 v3（不動 v2）。digest pin 透過 override + 明確 -f 檔。
   assert.match(yml, /source: "v3\/src,v3\/public/);
-  assert.match(yml, /docker compose up -d --no-build --no-deps --force-recreate 591-tracker-v3/);
-  assert.equal(/docker compose up[^\n]*591-tracker(?!-v)/.test(yml), false);
+  assert.match(yml, /up -d --no-build --no-deps --force-recreate 591-tracker-v3/);
+  assert.equal(/docker compose[^\n]*up[^\n]*591-tracker(?!-v)/.test(yml), false);
 });
