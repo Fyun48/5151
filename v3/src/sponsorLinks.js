@@ -10,6 +10,13 @@ export const DEFAULT_SPONSOR_INTRO =
 
 export const DEFAULT_SPONSOR_THANKS = "感謝贊助。你的檢查間隔已是較短的方案。";
 
+export const CURRENT_SPONSOR_BENEFITS = [
+  { id: "media", label: "照片素材庫最多 100 張（一般會員 30 張）" },
+  { id: "import", label: "591／5168 公開物件可匯入成草稿（來源允許時）" },
+  { id: "interval", label: "自動搜尋間隔約 5 分鐘（一般會員約 8 分鐘）" },
+  { id: "sources", label: "找房列表可篩多個來源平台" },
+];
+
 /** 免月費／免年費、會員能刷卡的方案（實際開通後把收款網址填進後台）。 */
 export const SPONSOR_PROVIDERS = [
   {
@@ -189,5 +196,6 @@ export function publicSponsorOffer(config, { role, plan } = {}) {
     links: admin || sponsored ? [] : links,
     sponsored,
     show: !admin && !sponsored && links.length > 0,
+    benefits: CURRENT_SPONSOR_BENEFITS.map((row) => ({ ...row })),
   };
 }

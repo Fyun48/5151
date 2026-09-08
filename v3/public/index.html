@@ -1955,6 +1955,70 @@
     .site-notice p { margin: 0; flex: 1; min-width: 0; font-size: 13px; line-height: 1.55; }
     .site-notice b { color: var(--accent-deep); margin-right: 4px; }
     .site-notice .ghost { min-height: 32px; padding: 4px 8px; }
+    .announce-banner {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      margin: 0 32px 10px;
+      padding: 8px 12px;
+      border: 1px solid var(--line);
+      border-left: 3px solid var(--accent);
+      border-radius: var(--radius);
+      background: var(--accent-mist);
+      color: var(--ink);
+      font-size: var(--text-sm);
+      line-height: 1.45;
+    }
+    .announce-banner[hidden] { display: none !important; }
+    .announce-banner .announce-kicker {
+      flex: 0 0 auto;
+      font-size: var(--text-xs);
+      color: var(--accent-deep);
+      white-space: nowrap;
+    }
+    .announce-banner p { margin: 0; flex: 1; min-width: 0; }
+    .announce-banner a { color: var(--accent-deep); }
+    .sponsored-card {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 8px 10px;
+      align-items: center;
+      margin: 6px 0;
+      padding: 8px 10px;
+      min-height: 56px;
+      border: 1px dashed var(--line);
+      border-radius: var(--radius);
+      background: var(--accent-mist);
+      text-decoration: none;
+      color: inherit;
+    }
+    .sponsored-card img {
+      width: 40px;
+      height: 40px;
+      object-fit: cover;
+      border-radius: 6px;
+    }
+    .sponsored-kicker, .support-kicker {
+      display: inline-block;
+      font-size: 11px;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .sponsored-card strong { font-size: var(--text-sm); }
+    .sponsored-card .sponsored-text { font-size: var(--text-xs); color: var(--muted); }
+    .sponsored-card .sponsored-cta { font-size: var(--text-xs); color: var(--accent-deep); white-space: nowrap; }
+    .support-card {
+      margin: 8px 0;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--paper);
+      font-size: var(--text-sm);
+    }
+    .support-benefits { margin: 6px 0 0; padding-left: 1.1em; color: var(--muted); font-size: var(--text-xs); }
+    .dock-item.system .tag.system { background: var(--accent-soft); color: var(--accent-deep); }
+    .dock-item.sponsored .tag.sponsored { background: var(--line); color: var(--ink); }
     .owner-list { display: grid; gap: 10px; margin-top: 12px; }
     body:not(.role-admin) .admin-only { display: none !important; }
     body.role-admin .member-only { display: none !important; }
@@ -2138,6 +2202,9 @@
       .sponsor-bar { margin-left: 16px; margin-right: 16px; }
     }
     @media (max-width: 880px) {
+      .announce-banner { margin: 0 16px 8px; }
+      .sponsored-card { grid-template-columns: 1fr auto; }
+      .sponsored-card img { display: none; }
       body { padding-bottom: 72px; }
       .header-desk-only { display: none !important; }
       .mobile-only { display: inline-flex; }
@@ -2611,6 +2678,7 @@
       </div>
       <div class="member-only" id="sponsorSettingsBlock" hidden>
         <p class="hint" id="sponsorSettingsIntro"></p>
+        <ul class="support-benefits" id="sponsorSettingsBenefits"></ul>
         <div class="sponsor-links" id="sponsorSettingsLinks"></div>
       </div>
       <div class="admin-only">
@@ -2991,6 +3059,12 @@
       </form>
     </div>
     <div class="ad-slot me" id="adMe" hidden></div>
+    <div class="card panel" id="supportAccountCard">
+      <h2 style="margin:0 0 8px">支持本站</h2>
+      <p class="hint" id="supportAccountCopy">支持是自願的。沒贊助也能繼續找房與看許願房。</p>
+      <ul class="support-benefits" id="supportAccountBenefits"></ul>
+      <div class="sponsor-links" id="supportAccountLinks"></div>
+    </div>
     <div class="card panel" data-tour="notify">
       <h2 style="margin:0 0 8px">帳號</h2>
       <p class="hint">通知種類、推播與 Discord／SMTP 請到「通知」。這裡只留帳號本身。<a href="/spirit.html">本站在做什麼</a>　<button type="button" class="ghost" id="meHelpQaBtn">功能說明 Q&amp;A</button></p>
@@ -3180,6 +3254,11 @@
       <div class="list" id="selfMineList" style="padding-top:12px"></div>
     </div>
   </section>
+  <aside id="announceBanner" class="announce-banner" hidden role="status" aria-label="系統公告">
+    <span class="announce-kicker" id="announceBannerKicker">系統公告</span>
+    <p><strong id="announceBannerTitle"></strong> <span id="announceBannerText"></span> <a id="announceBannerLink" hidden></a></p>
+    <button type="button" class="ghost" id="announceBannerClose" aria-label="關閉系統公告">×</button>
+  </aside>
   <div id="siteNotice" class="site-notice" hidden>
     <p><b id="siteNoticeKicker"></b><span id="siteNoticeText"></span></p>
     <a class="ghost" id="siteNoticeLink" hidden target="_blank" rel="noopener noreferrer">開啟</a>
@@ -3353,6 +3432,20 @@
               <td><input type="checkbox" data-notify-row="relist" data-notify-ch="webhook" /></td>
               <td><input type="checkbox" data-notify-row="relist" data-notify-ch="mail" /></td>
             </tr>
+            <tr>
+              <td>系統公告</td>
+              <td><input type="checkbox" data-notify-row="system" data-notify-ch="dock" checked /></td>
+              <td><input type="checkbox" data-notify-row="system" data-notify-ch="push" checked /></td>
+              <td><input type="checkbox" data-notify-row="system" data-notify-ch="webhook" /></td>
+              <td><input type="checkbox" data-notify-row="system" data-notify-ch="mail" /></td>
+            </tr>
+            <tr>
+              <td>贊助內容</td>
+              <td><input type="checkbox" data-notify-row="sponsored" data-notify-ch="dock" /></td>
+              <td><input type="checkbox" data-notify-row="sponsored" data-notify-ch="push" /></td>
+              <td><input type="checkbox" data-notify-row="sponsored" data-notify-ch="webhook" /></td>
+              <td><input type="checkbox" data-notify-row="sponsored" data-notify-ch="mail" /></td>
+            </tr>
           </tbody>
         </table>
         </div>
@@ -3473,7 +3566,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> · <a href="/data.html">居住數據</a> · <a href="#" id="feedbackFooterLink">意見回饋</a> <span class="site-ver">ver. 3.47</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> · <a href="/data.html">居住數據</a> · <a href="#me" id="supportFooterLink">支持本站</a> · <a href="#" id="feedbackFooterLink">意見回饋</a> <span class="site-ver">ver. 3.47</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -3702,6 +3795,8 @@
         if (block && intro && linksBox) {
           block.hidden = false;
           intro.textContent = offer.intro || "";
+          const benefitBox = $("sponsorSettingsBenefits");
+          if (benefitBox) benefitBox.innerHTML = (commsCache.support?.benefits || []).map((row) => `<li>${esc(row.label)}</li>`).join("");
           linksBox.innerHTML = offer.links.map(sponsorChipHtml).join("");
         }
         return;
@@ -4228,6 +4323,161 @@
     }
 
     let publicAdsCache = {};
+    let commsCache = { announcements: [], banner: null, sponsored: { cards: [], interval: 5, listing_enabled: false, session_cap: 3, notify: [] }, support: { show_entry: false, show_card: false, benefits: [], copy: "" } };
+    let commsBannerId = "";
+
+    function sponsoredCardMarkup(card) {
+      if (!card?.title) return "";
+      const href = card.url || "";
+      const img = card.image_url ? `<img src="${esc(card.image_url)}" alt="" />` : "";
+      const inner = `<span class="sponsored-kicker">贊助內容</span><strong>${esc(card.title)}</strong><span class="sponsored-text">${esc(card.sponsor || "")}${card.text ? ` · ${esc(card.text)}` : ""}</span>`;
+      const cta = `<span class="sponsored-cta">${esc(card.cta_label || "了解更多")}</span>`;
+      const body = `${img}<span>${inner}</span>${cta}`;
+      if (href) {
+        return `<a class="sponsored-card" data-sponsored-id="${esc(String(card.id || ""))}" href="${esc(href)}" target="_blank" rel="noopener noreferrer" aria-label="贊助內容：${esc(card.title)}">${body}</a>`;
+      }
+      return `<aside class="sponsored-card" data-sponsored-id="${esc(String(card.id || ""))}" role="complementary" aria-label="贊助內容">${body}</aside>`;
+    }
+
+    function supportCardMarkup() {
+      const support = commsCache.support || {};
+      if (!support.show_card) return "";
+      const benefits = (support.benefits || []).slice(0, 3).map((row) => `<li>${esc(row.label)}</li>`).join("");
+      return `<aside class="support-card" role="complementary" aria-label="支持本站"><span class="support-kicker">支持本站</span><p>${esc(support.copy || "支持是自願的。")}</p><ul class="support-benefits">${benefits}</ul></aside>`;
+    }
+
+    function insertFeedExtras(organicHtmlParts) {
+      const sponsored = commsCache.sponsored || {};
+      const cards = sponsored.listing_enabled ? (sponsored.cards || []) : [];
+      const interval = Number(sponsored.interval) || 5;
+      const cap = Number(sponsored.session_cap) || 3;
+      const supportEvery = Number(commsCache.support?.card_interval) || 24;
+      const out = [];
+      let shownAds = 0;
+      organicHtmlParts.forEach((html, idx) => {
+        out.push(html);
+        if (cards.length && interval > 0 && (idx + 1) % interval === 0 && shownAds < cap) {
+          out.push(sponsoredCardMarkup(cards[shownAds % cards.length]));
+          shownAds += 1;
+        }
+        if (commsCache.support?.show_card && supportEvery > 0 && (idx + 1) % supportEvery === 0) {
+          out.push(supportCardMarkup());
+        }
+      });
+      return out.join("");
+    }
+
+    async function loadComms() {
+      try {
+        const res = await fetch("/api/comms", { cache: "no-store" });
+        commsCache = await res.json().catch(() => commsCache);
+      } catch {
+        /* keep previous */
+      }
+      paintAnnounceBanner();
+      paintSupportAccount();
+      mergeCommsIntoInbox();
+    }
+
+    function paintAnnounceBanner() {
+      const box = $("announceBanner");
+      const row = commsCache.banner;
+      if (!box) return;
+      if (!row || !row.banner) {
+        box.hidden = true;
+        return;
+      }
+      commsBannerId = String(row.id || "");
+      $("announceBannerKicker").textContent = "系統公告";
+      $("announceBannerTitle").textContent = row.title || "";
+      $("announceBannerText").textContent = row.body || "";
+      const link = $("announceBannerLink");
+      if (row.cta_url) {
+        link.hidden = false;
+        link.href = row.cta_url;
+        link.textContent = row.cta_label || "了解";
+      } else {
+        link.hidden = true;
+        link.removeAttribute("href");
+      }
+      box.hidden = false;
+    }
+
+    function paintSupportAccount() {
+      const support = commsCache.support || {};
+      const card = $("supportAccountCard");
+      const copy = $("supportAccountCopy");
+      const benefits = $("supportAccountBenefits");
+      const links = $("supportAccountLinks");
+      if (copy) copy.textContent = support.copy || "支持是自願的。沒贊助也能繼續找房與看許願房。";
+      if (benefits) benefits.innerHTML = (support.benefits || []).map((row) => `<li>${esc(row.label)}</li>`).join("");
+      if (card) card.hidden = support.enabled === false;
+      if (links && !links.dataset.bound) links.dataset.bound = "1";
+    }
+
+    function commsInboxItems() {
+      const items = [];
+      for (const row of commsCache.announcements || []) {
+        if (row.read) continue;
+        items.push({
+          comms: true,
+          type: "system",
+          type_label: "系統公告",
+          title: row.title,
+          detail: row.body,
+          url: row.cta_url || "",
+          created_at: row.updated_at,
+          announcement_id: row.id,
+        });
+      }
+      const matrixOn = document.querySelector('[data-notify-row="sponsored"][data-notify-ch="dock"]')?.checked === true;
+      if (matrixOn) {
+        for (const row of commsCache.sponsored?.notify || []) {
+          items.push({
+            comms: true,
+            type: "sponsored",
+            type_label: "贊助內容",
+            title: row.title,
+            detail: `${row.sponsor || ""} ${row.text || ""}`.trim(),
+            url: row.url || "",
+            created_at: "",
+            campaign_id: row.id,
+          });
+        }
+      }
+      return items;
+    }
+
+    function commsInboxHtml(list) {
+      return list.map((item) => {
+        const href = item.url || "#";
+        const key = item.announcement_id ? `announce:${item.announcement_id}` : `sponsored:${item.campaign_id}`;
+        return `<div class="dock-item ${item.type}" data-comms-key="${esc(key)}">
+          <div class="tags"><span class="tag ${item.type}">${esc(item.type_label)}</span></div>
+          <h3 style="margin:6px 0 4px;font-size:16px">${esc(item.title || "")}</h3>
+          <div class="meta">${esc(item.detail || "")}</div>
+          <div class="row" style="margin-top:8px">
+            ${item.announcement_id ? `<button type="button" class="ghost" data-announce-read="${item.announcement_id}">已讀</button>` : ""}
+            ${item.url ? `<a class="primary" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${item.type === "sponsored" ? "開啟贊助內容" : "了解"}</a>` : ""}
+          </div>
+        </div>`;
+      }).join("");
+    }
+
+    function mergeCommsIntoInbox() {
+      const inbox = $("notifyInbox");
+      if (!inbox) return;
+      const extras = commsInboxHtml(commsInboxItems());
+      if (!extras) return;
+      const empty = inbox.querySelector(".notify-empty");
+      if (empty) {
+        inbox.innerHTML = extras;
+        const hint = $("notifyViewHint");
+        if (hint) hint.textContent = "有系統公告或贊助內容";
+        return;
+      }
+      inbox.insertAdjacentHTML("afterbegin", extras);
+    }
     function adMarkup(ad, cls) {
       if (!ad?.title) return "";
       const href = ad.url || "";
@@ -5487,7 +5737,7 @@
         updateBulkBar();
         return;
       }
-      replaceListHtml(items.map((item, idx) => {
+      replaceListHtml(insertFeedExtras(items.map((item, idx) => {
         const id = String(item.post_id);
         const on = selected.has(id);
         const extras = [];
@@ -5548,7 +5798,7 @@
           ${sameHousePanel(item)}
         </article>
         </div>`;
-      }).join(""));
+      })));
       updateBulkBar();
       restoreOpenNotes();
       if (pendingNoteFocus) {
@@ -6234,6 +6484,32 @@
         broadcastItems = [];
       }
     }
+    $("announceBannerClose")?.addEventListener("click", async () => {
+      $("announceBanner").hidden = true;
+      if (commsBannerId) {
+        await fetch(`/api/announcements/${encodeURIComponent(commsBannerId)}/dismiss`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).catch(() => {});
+      }
+    });
+    $("supportFooterLink")?.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      setAppView("me");
+      $("supportAccountCard")?.scrollIntoView({ block: "nearest" });
+    });
+    document.addEventListener("click", (ev) => {
+      const ad = ev.target.closest("[data-sponsored-id]");
+      if (ad?.dataset.sponsoredId) {
+        fetch(`/api/sponsored/${encodeURIComponent(ad.dataset.sponsoredId)}/event`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ kind: "click", placement: "listing" }),
+        }).catch(() => {});
+      }
+      const readBtn = ev.target.closest("[data-announce-read]");
+      if (readBtn?.dataset.announceRead) {
+        fetch(`/api/announcements/${encodeURIComponent(readBtn.dataset.announceRead)}/read`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).catch(() => {});
+        readBtn.closest(".dock-item")?.remove();
+      }
+    });
     $("siteNoticeClose")?.addEventListener("click", () => {
       const kicker = $("siteNoticeKicker")?.textContent || "";
       const item = broadcastItems.find((row) => row.kicker === kicker) || broadcastItems[0];
@@ -8873,6 +9149,7 @@
       $("dockList").innerHTML = inboxHtml(items);
       if (inbox) inbox.innerHTML = inboxHtml(items);
       if (hint) hint.textContent = `有 ${items.length} 則待看更新`;
+      mergeCommsIntoInbox();
     }
     function dismissDock(postId) {
       saveDock(loadDock().filter((item) => String(item.post_id) !== String(postId)));
@@ -9281,6 +9558,7 @@
       loadMineSelfListings().catch(() => {});
       loadPublicAds().catch(() => {});
       loadBroadcasts().catch(() => {});
+      loadComms().catch(() => {});
       openSelfFromQuery().catch(() => {});
       window.JibbyMascot?.load?.().then((brand) => {
         if (!brand) return;

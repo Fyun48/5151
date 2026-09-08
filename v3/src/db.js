@@ -42,6 +42,11 @@ import { defaultSpirit, normalizeSpirit, publicSpirit } from "./spirit.js";
 import { defaultHousingData, normalizeHousingData, publicHousingData } from "./housingData.js";
 import { applyIdlePauseToMembers, applyIdleResume } from "./idlePause.js";
 import { defaultNotifyMatrix } from "./notifyMatrix.js";
+import {
+  ensureCommsSchema,
+  normalizeCommsConfig,
+  emptyCommsConfig,
+} from "./comms.js";
 import { DATA_EPOCH, shouldResetForEpoch } from "./dataEpoch.js";
 import { countsTowardAllTotal, isConfirmedOffline, isPendingOffline } from "./offline.js";
 import { coveringJobsFromMembers, coversFromMemberSettings, coversFromWatchDistricts, listingInMemberScope } from "./covering.js";
@@ -612,6 +617,7 @@ try {
   // 種子失敗不擋開站；註冊會 fail-closed
 }
 ensurePushSchema(db);
+ensureCommsSchema(db);
 
 try {
   const already = db.prepare("SELECT value FROM settings WHERE key = 'costChangeBackfill'").get();
@@ -1154,6 +1160,18 @@ export function saveAdminBroadcastsSettings(partial = {}) {
 
 export function publicBroadcastsSettings() {
   return publicBroadcasts(getBroadcastsConfig());
+}
+
+export function getCommsConfig() {
+  return normalizeCommsConfig(settingKey("commsConfig") || emptyCommsConfig());
+}
+
+export function saveCommsConfig(partial = {}) {
+  const current = getCommsConfig();
+  const src = partial && typeof partial === "object" ? partial : {};
+  const next = normalizeCommsConfig({ ...current, ...src });
+  writeSettingKey("commsConfig", next);
+  return next;
 }
 
 export function getHelpQa() {
@@ -1704,6 +1722,7 @@ function omitSiteMail(stored) {
   delete next.sponsorLinks;
   delete next.siteAds;
   delete next.broadcasts;
+  delete next.commsConfig;
   delete next.memberSmtp;
   delete next.memberMailTemplates;
   delete next.mailPreset;
@@ -1758,6 +1777,7 @@ export function saveSettings(partial, userId, { forceAdmin = false } = {}) {
         || key === "sponsorLinks"
         || key === "siteAds"
         || key === "broadcasts"
+        || key === "commsConfig"
         || key === "memberSmtp"
         || key === "memberMailTemplates"
         || key === "systemWatchDistricts"
