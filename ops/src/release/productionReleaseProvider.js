@@ -6,7 +6,7 @@ import {
   REQUIRED_TARGET_ENVIRONMENT,
   REQUIRED_WORKFLOW_REF,
 } from "./productionReleasePolicy.js";
-import { makeGithubProductionReleaseProvider as makeBoundGithubProductionReleaseProvider } from "./githubProductionReleaseProvider.js";
+import { makeGithubProductionReleaseProvider as makeBoundGithubProductionReleaseProvider, phase15IntentRunName } from "./githubProductionReleaseProvider.js";
 
 // Phase 15 廠商中立 Production release provider。
 // 概念能力：dispatchWorkflow / getWorkflowRun / findByIdempotency / inspectImage / mergePullRequest / healthSmoke。
@@ -54,6 +54,8 @@ export function makeStubProductionReleaseProvider(opts = {}) {
       attempt: partial.attempt || 1,
       status: partial.status || "completed",
       conclusion: partial.conclusion ?? "success",
+      name: partial.name || null,
+      display_title: partial.display_title || partial.name || null,
       head_sha: partial.head_sha,
       workflow_file: partial.workflow_file,
       workflow_ref: partial.workflow_ref || REQUIRED_WORKFLOW_REF,
@@ -140,6 +142,8 @@ export function makeStubProductionReleaseProvider(opts = {}) {
         status: pending ? "in_progress" : "completed",
         conclusion: pending ? null : conclusion,
         head_sha: sha,
+        name: phase15IntentRunName(requestId),
+        display_title: phase15IntentRunName(requestId),
         workflow_file: workflowFile,
         workflow_ref: workflowRef || REQUIRED_WORKFLOW_REF,
         actor: actor || opts.actor || "Fyun48",
@@ -159,9 +163,10 @@ export function makeStubProductionReleaseProvider(opts = {}) {
             backup_hash: opts.unverifiedBackup ? null : `sha256:${sha256(`backup|${sha}|verified`)}`,
             verified: !opts.missingBackup && !opts.unverifiedBackup,
             location_class: "isolated_stub",
-            current_stable_sha: opts.currentStableSha || null,
-            current_stable_digest: opts.currentStableDigest || null,
           } : null,
+          current_production: workflowFile === PRODUCTION_WORKFLOWS.PREDEPLOY && opts.currentProduction
+            ? opts.currentProduction
+            : null,
         },
       });
       return {
@@ -184,9 +189,15 @@ export function makeStubProductionReleaseProvider(opts = {}) {
 
     async findWorkflowRunByIdempotency({ idempotencyKey, dispatchIntentId } = {}) {
       if (dispatchIntentId) {
+        const expectedName = phase15IntentRunName(dispatchIntentId);
         const matches = [];
         for (const run of runsById.values()) {
-          if (run.request_id === dispatchIntentId || run.inputs?.release_intent_id === dispatchIntentId) matches.push(run);
+          if (
+            run.request_id === dispatchIntentId
+            || run.inputs?.release_intent_id === dispatchIntentId
+            || run.name === expectedName
+            || run.display_title === expectedName
+          ) matches.push(run);
         }
         if (matches.length > 1) return { ambiguous: true, id: null };
         return matches[0] || null;
@@ -207,9 +218,17 @@ export function makeStubProductionReleaseProvider(opts = {}) {
         };
       }
       if (opts.imageMissing) return null;
+      const mapped = digest && opts.inspectByDigest && opts.inspectByDigest[digest];
+      if (mapped) {
+        return {
+          digest: mapped.digest || digest,
+          oci_revision: mapped.oci_revision || null,
+          oci_source: mapped.oci_source || REQUIRED_OCI_SOURCE,
+        };
+      }
       return {
         digest: digest || opts.imageDigest,
-        oci_revision: sha,
+        oci_revision: sha || opts.defaultOciRevision || null,
         oci_source: REQUIRED_OCI_SOURCE,
       };
     },

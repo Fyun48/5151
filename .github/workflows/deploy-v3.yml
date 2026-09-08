@@ -1,4 +1,5 @@
 name: Deploy v3 to CasaOS (manual)
+run-name: "phase15-intent:${{ inputs.release_intent_id }}"
 
 # Production 部署一律「明確手動觸發」。合併/push 到 master 不會自動部署 v3。
 # 部署會把指定 commit SHA 的 v3/src、v3/public 與 compose 檔 SCP 到正式 NAS，
@@ -85,6 +86,29 @@ jobs:
         with:
           ref: master
           fetch-depth: 0
+      - name: Write Phase 15 run identity
+        if: always()
+        env:
+          EVIDENCE_KIND: identity
+          WF_FILE: .github/workflows/deploy-v3.yml
+          WF_REF: ${{ github.ref }}
+          WF_RUN_ID: ${{ github.run_id }}
+          WF_ATTEMPT: ${{ github.run_attempt }}
+          WF_HEAD_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ inputs.sha }}
+          WF_ACTOR: ${{ github.actor }}
+          WF_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          RELEASE_INTENT_ID: ${{ inputs.release_intent_id }}
+          WF_ENVIRONMENT: production
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: python3 .github/scripts/write-phase15-workflow-evidence.py phase15-run-identity.json
+      - name: Upload Phase 15 run identity
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase15-run-identity
+          path: phase15-run-identity.json
+          if-no-files-found: error
       - name: Validate SHA reachable from origin/master, then check it out
         env:
           DEPLOY_SHA: ${{ inputs.sha }}
@@ -280,6 +304,7 @@ jobs:
           open("phase15-health.env", "w").write("\n".join(lines) + "\n")
           PY
       - name: Write Phase 15 workflow evidence
+        if: always()
         env:
           WF_FILE: .github/workflows/deploy-v3.yml
           WF_REF: ${{ github.ref }}
@@ -295,12 +320,15 @@ jobs:
           CONFIRMATION: ${{ inputs.confirmation }}
         run: |
           set -euo pipefail
-          set -a
-          # shellcheck disable=SC1091
-          . ./phase15-health.env
-          set +a
+          if [ -f ./phase15-health.env ]; then
+            set -a
+            # shellcheck disable=SC1091
+            . ./phase15-health.env
+            set +a
+          fi
           python3 .github/scripts/write-phase15-workflow-evidence.py phase15-workflow-evidence.json
       - name: Upload Phase 15 workflow evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: phase15-workflow-evidence

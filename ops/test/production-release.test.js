@@ -30,7 +30,7 @@ import { MIGRATION_CLASSIFICATIONS } from "../src/qa/migrationEvidence.js";
 import {
   PRODUCTION_WORKFLOWS, REQUIRED_WORKFLOW_REF, REQUIRED_TARGET_ENVIRONMENT,
   buildProductionReleasePolicy, classifyWorkflowRun, decideDbRollbackDisposition, digestLooksImmutable,
-  isAllowedReleaseTransition, isAuthorizedGithubActor, isSuccessfulConclusion, previousStableComplete,
+  isAllowedReleaseTransition, isAuthorizedGithubActor, isSuccessfulConclusion, isTerminalReleaseStatus, previousStableComplete,
   productionReleasePolicyFingerprint, validateExactWorkflowEvidence, workflowIdempotencyKey,
 } from "../src/release/productionReleasePolicy.js";
 import { makeStubProductionReleaseProvider, makeProductionReleaseProvider, makeGithubProductionReleaseProvider } from "../src/release/productionReleaseProvider.js";
@@ -202,6 +202,9 @@ test("Phase 15 policy is deterministic, fail-closed, and excludes secrets", () =
   assert.equal(isAllowedReleaseTransition("SUCCEEDED", "DB_ROLLBACK_MANUAL_REQUIRED"), false);
   assert.equal(isAllowedReleaseTransition("SUCCEEDED", "HEALTH_VERIFIED"), false);
   assert.equal(isAllowedReleaseTransition("BLOCKED", "BUILD_DISPATCHED"), false);
+  assert.equal(isTerminalReleaseStatus("PRODUCTION_STATE_UNKNOWN"), false);
+  assert.equal(isAllowedReleaseTransition("PRODUCTION_STATE_UNKNOWN", "DEPLOY_RECONCILED"), true);
+  assert.equal(isAllowedReleaseTransition("PRODUCTION_STATE_UNKNOWN", "BUILD_DISPATCHED"), false);
   assert.equal(isAuthorizedGithubActor("Fyun48"), true);
   assert.equal(isAuthorizedGithubActor("owner:demo@example.com"), false);
   assert.equal(isAuthorizedGithubActor("demo@example.com"), false);
@@ -234,6 +237,16 @@ test("Production workflows remain workflow_dispatch only; merge/push does not de
     assert.equal(trig.push, false, rel);
     assert.equal(trig.pull_request, false, rel);
     assert.equal(trig.schedule, false, rel);
+  }
+  for (const rel of [
+    ".github/workflows/build-production-image.yml",
+    ".github/workflows/production-predeploy-check.yml",
+    ".github/workflows/deploy-v3.yml",
+  ]) {
+    const text = readFileSync(path.join(ROOT, rel), "utf8");
+    assert.match(text, /run-name:\s*"phase15-intent:\$\{\{ inputs\.release_intent_id \}\}"/);
+    assert.match(text, /if: always\(\)/);
+    assert.match(text, /name: phase15-run-identity/);
   }
   const ci = readFileSync(path.join(ROOT, ".github/workflows/test.yml"), "utf8");
   assert.match(ci, /Auto-merge \(no production deploy\)/);
@@ -1360,6 +1373,18 @@ function countDeployDispatches(provider) {
   };
 }
 
+function countWorkflowDispatches(provider) {
+  const counts = { build: 0, predeploy: 0, deploy: 0 };
+  const orig = provider.dispatchWorkflow.bind(provider);
+  provider.dispatchWorkflow = async (opts) => {
+    if (opts.workflowFile === PRODUCTION_WORKFLOWS.BUILD) counts.build += 1;
+    if (opts.workflowFile === PRODUCTION_WORKFLOWS.PREDEPLOY) counts.predeploy += 1;
+    if (opts.workflowFile === PRODUCTION_WORKFLOWS.DEPLOY) counts.deploy += 1;
+    return orig(opts);
+  };
+  return counts;
+}
+
 test("two WAL connections: stable changes before decision TX so A never deploys", async () => {
   const file = path.join(os.tmpdir(), `phase15-wal-${process.pid}-${Date.now()}.db`);
   const db1 = openOpsDb(file);
@@ -1407,7 +1432,7 @@ test("two WAL connections: stable changes before decision TX so A never deploys"
   }
 });
 
-test("uncertain mutating deploy holds lease so a second release cannot dispatch", async () => {
+test("uncertain mutating deploy holds lease so a second release cannot dispatch production-scoped workflows", async () => {
   const db = openOpsDb(":memory:");
   const stagedA = await makeStagedTask(db);
   const stagedB = await makeStagedTask(db);
@@ -1416,8 +1441,9 @@ test("uncertain mutating deploy holds lease so a second release cannot dispatch"
     seedPrev(db, stagedA.repo);
     const runA = createProductionReleaseRun(db, execBody(stagedA.codingTaskId, a.authorization, a.assessment, { expectedMasterHead: stagedA.repo.resolveRemoteRef("master") }), { repo: stagedA.repo, now: NOW });
     const providerA = makeStubProductionReleaseProvider();
+    let stripDeployEvidence = true;
     wrapGetWorkflowRun(providerA, (wf) => {
-      if (wf.workflow_file !== PRODUCTION_WORKFLOWS.DEPLOY) return wf;
+      if (!stripDeployEvidence || wf.workflow_file !== PRODUCTION_WORKFLOWS.DEPLOY) return wf;
       return { ...wf, outputs: {}, environment: null };
     });
     const deployA = countDeployDispatches(providerA);
@@ -1426,18 +1452,123 @@ test("uncertain mutating deploy holds lease so a second release cannot dispatch"
     assert.equal(deployA.count, 1);
     const lease = db.prepare("SELECT * FROM production_release_global_lease WHERE id=1").get();
     assert.equal(Number(lease.release_run_id), runA.run.id);
-    const replay = await executeProductionRelease(db, runA.run.id, { provider: providerA, repo: stagedA.repo, now: NOW });
-    assert.equal(replay.idempotent, true);
-    assert.equal(replay.current_status, "PRODUCTION_STATE_UNKNOWN");
+    await assert.rejects(() => executeProductionRelease(db, runA.run.id, { provider: providerA, repo: stagedA.repo, now: NOW }), /not an exact successful|environment|outputs/);
+    assert.equal(getProductionRelease(db, runA.run.id).run.current_status, "PRODUCTION_STATE_UNKNOWN");
     assert.equal(deployA.count, 1);
     const b = await cleared(db, stagedB.codingTaskId, stagedB.repo);
     const runB = createProductionReleaseRun(db, execBody(stagedB.codingTaskId, b.authorization, b.assessment, { expectedMasterHead: stagedB.repo.resolveRemoteRef("master") }), { repo: stagedB.repo, now: NOW });
     const providerB = makeStubProductionReleaseProvider();
-    const deployB = countDeployDispatches(providerB);
+    const countsB = countWorkflowDispatches(providerB);
     await assert.rejects(() => executeProductionRelease(db, runB.run.id, { provider: providerB, repo: stagedB.repo, now: NOW }), /lease held|global production/);
-    assert.equal(deployB.count, 0);
-    assert.ok(!getProductionRelease(db, runB.run.id).bindings.some((x) => x.workflow_kind === "deploy" && x.workflow_run_id));
+    assert.equal(countsB.predeploy, 0);
+    assert.equal(countsB.deploy, 0);
+    assert.ok(!getProductionRelease(db, runB.run.id).bindings.some((x) => ["predeploy", "deploy", "rollback"].includes(x.workflow_kind) && (x.workflow_run_id || x.dispatch_submitted_at)));
     assert.equal(Number(db.prepare("SELECT release_run_id FROM production_release_global_lease WHERE id=1").get().release_run_id), runA.run.id);
+    stripDeployEvidence = false;
+    const reconciled = await executeProductionRelease(db, runA.run.id, { provider: providerA, repo: stagedA.repo, now: NOW });
+    assert.equal(reconciled.run.current_status, "SUCCEEDED");
+    assert.equal(deployA.count, 1);
   } finally { stagedA.git.cleanup(); stagedB.git.cleanup(); db.close(); }
+});
+
+test("accepted deploy without final artifact still correlates by durable intent and does not redispatch", async () => {
+  const db = openOpsDb(":memory:");
+  const { codingTaskId, repo, git } = await makeStagedTask(db);
+  try {
+    const { authorization, assessment } = await cleared(db, codingTaskId, repo);
+    seedPrev(db, repo);
+    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW });
+    const provider = makeStubProductionReleaseProvider();
+    wrapGetWorkflowRun(provider, (wf) => {
+      if (wf.workflow_file !== PRODUCTION_WORKFLOWS.DEPLOY) return wf;
+      return { ...wf, outputs: {}, environment: null };
+    });
+    const deploy = countDeployDispatches(provider);
+    await assert.rejects(() => executeProductionRelease(db, created.run.id, { provider, repo, now: NOW }), /not an exact successful|environment|outputs/);
+    const detail = getProductionRelease(db, created.run.id);
+    const deployBinding = detail.bindings.find((b) => b.workflow_kind === "deploy");
+    assert.ok(deployBinding.workflow_run_id);
+    const found = await provider.findWorkflowRunByIdempotency({
+      workflowFile: PRODUCTION_WORKFLOWS.DEPLOY,
+      dispatchIntentId: deployBinding.dispatch_intent_id,
+    });
+    assert.equal(String(found.id), String(deployBinding.workflow_run_id));
+    assert.match(found.name, /^phase15-intent:/);
+    assert.equal(detail.run.current_status, "PRODUCTION_STATE_UNKNOWN");
+    assert.equal(deploy.count, 1);
+    await assert.rejects(() => executeProductionRelease(db, created.run.id, { provider, repo, now: NOW }), /not an exact successful|environment|outputs/);
+    assert.equal(deploy.count, 1);
+    assert.equal(getProductionRelease(db, created.run.id).run.current_status, "PRODUCTION_STATE_UNKNOWN");
+    assert.equal(Number(db.prepare("SELECT release_run_id FROM production_release_global_lease WHERE id=1").get().release_run_id), created.run.id);
+  } finally { git.cleanup(); db.close(); }
+});
+
+test("first-live bootstrap uses independently inspected predeploy current production, never caller identity", async () => {
+  const db = openOpsDb(":memory:");
+  const { codingTaskId, repo, git } = await makeStagedTask(db);
+  try {
+    const { authorization, assessment } = await cleared(db, codingTaskId, repo);
+    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW });
+    assert.equal(created.run.previous_stable_sha, null);
+    const liveSha = execFileSync("git", ["-C", git.dir, "rev-parse", "origin/master^"], { encoding: "utf8" }).trim();
+    const liveDigest = "sha256:" + "33".repeat(32);
+    const provider = makeStubProductionReleaseProvider({
+      currentProduction: { digest: liveDigest, image_ref: `ghcr.io/fyun48/5151@${liveDigest}` },
+      inspectByDigest: {
+        [liveDigest]: { digest: liveDigest, oci_revision: liveSha, oci_source: "https://github.com/Fyun48/5151" },
+      },
+    });
+    const out = await executeProductionRelease(db, created.run.id, {
+      provider, repo, now: NOW,
+      currentStableSha: "c".repeat(40),
+      currentStableDigest: "sha256:" + "99".repeat(32),
+      currentStable: { source_sha: "c".repeat(40) },
+    });
+    assert.equal(out.run.current_status, "SUCCEEDED");
+    const stable = getProductionStable(db);
+    assert.equal(stable.source_sha, authorization.head_sha);
+    assert.equal(stable.artifact_digest, authorization.artifact_digest);
+    const detail = getProductionRelease(db, created.run.id);
+    const boot = detail.evidence.find((e) => e.evidence_kind === "first_live_bootstrap");
+    assert.ok(boot);
+    assert.equal(boot.payload.inspected.oci_revision, liveSha);
+    assert.equal(boot.payload.observed.digest, liveDigest);
+    assert.notEqual(boot.payload.observed.digest, "sha256:" + "99".repeat(32));
+  } finally { git.cleanup(); db.close(); }
+});
+
+test("first-live bootstrap refuses unverified or caller-only current-stable identity", async () => {
+  const db = openOpsDb(":memory:");
+  const { codingTaskId, repo, git } = await makeStagedTask(db);
+  try {
+    const { authorization, assessment } = await cleared(db, codingTaskId, repo);
+    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW });
+    const noEvidence = makeStubProductionReleaseProvider({
+      currentStableSha: "c".repeat(40),
+      currentStableDigest: "sha256:" + "99".repeat(32),
+    });
+    await assert.rejects(() => executeProductionRelease(db, created.run.id, {
+      provider: noEvidence, repo, now: NOW,
+      currentStableSha: "c".repeat(40),
+      currentStableDigest: "sha256:" + "99".repeat(32),
+    }), /previous stable identity is incomplete/);
+    assert.equal(getProductionRelease(db, created.run.id).run.current_status, "BLOCKED");
+    assert.equal(getProductionStable(db), null);
+
+    const db2 = openOpsDb(":memory:");
+    const staged2 = await makeStagedTask(db2);
+    try {
+      const cleared2 = await cleared(db2, staged2.codingTaskId, staged2.repo);
+      const created2 = createProductionReleaseRun(db2, execBody(staged2.codingTaskId, cleared2.authorization, cleared2.assessment, { expectedMasterHead: expectedMaster(staged2.repo) }), { repo: staged2.repo, now: NOW });
+      const badInspect = makeStubProductionReleaseProvider({
+        currentProduction: { digest: "sha256:" + "33".repeat(32), image_ref: "ghcr.io/fyun48/5151@sha256:" + "33".repeat(32) },
+        inspectByDigest: {
+          ["sha256:" + "33".repeat(32)]: { digest: "sha256:" + "33".repeat(32), oci_revision: "0".repeat(40), oci_source: "https://github.com/Fyun48/5151" },
+        },
+      });
+      await assert.rejects(() => executeProductionRelease(db2, created2.run.id, { provider: badInspect, repo: staged2.repo, now: NOW }), /previous stable identity is incomplete/);
+      assert.equal(getProductionStable(db2), null);
+    } finally { staged2.git.cleanup(); db2.close(); }
+  } finally { git.cleanup(); db.close(); }
 });
 

@@ -1,4 +1,5 @@
 name: Build production image (no deploy)
+run-name: "phase15-intent:${{ inputs.release_intent_id }}"
 
 # 只建置並推送不可變 SHA tag。不 SSH、不重啟 CasaOS、不改 :latest。
 # 合併/push 不會自動執行；必須從 refs/heads/master 做 workflow_dispatch。
@@ -59,6 +60,27 @@ jobs:
         with:
           ref: master
           fetch-depth: 0
+      - name: Write Phase 15 run identity
+        if: always()
+        env:
+          EVIDENCE_KIND: identity
+          WF_FILE: .github/workflows/build-production-image.yml
+          WF_REF: ${{ github.ref }}
+          WF_RUN_ID: ${{ github.run_id }}
+          WF_ATTEMPT: ${{ github.run_attempt }}
+          WF_HEAD_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ inputs.sha }}
+          WF_ACTOR: ${{ github.actor }}
+          WF_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          RELEASE_INTENT_ID: ${{ inputs.release_intent_id }}
+        run: python3 .github/scripts/write-phase15-workflow-evidence.py phase15-run-identity.json
+      - name: Upload Phase 15 run identity
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase15-run-identity
+          path: phase15-run-identity.json
+          if-no-files-found: error
       - name: Validate SHA reachable from origin/master, then check it out
         env:
           BUILD_SHA: ${{ inputs.sha }}
@@ -216,6 +238,7 @@ jobs:
           '
           echo "ISOLATED_V3_SMOKE_OK source=$BUILD_SHA image=$IMAGE"
       - name: Write Phase 15 workflow evidence
+        if: always()
         env:
           WF_FILE: .github/workflows/build-production-image.yml
           WF_REF: ${{ github.ref }}
@@ -231,6 +254,7 @@ jobs:
           OCI_SOURCE: https://github.com/${{ github.repository }}
         run: python3 .github/scripts/write-phase15-workflow-evidence.py phase15-workflow-evidence.json
       - name: Upload Phase 15 workflow evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: phase15-workflow-evidence

@@ -61,6 +61,10 @@ export const TERMINAL_RELEASE_STATUSES = Object.freeze([
   RELEASE_STATUSES.SUCCEEDED,
   RELEASE_STATUSES.ROLLED_BACK,
   RELEASE_STATUSES.BLOCKED,
+]);
+
+// UNKNOWN freezes Production mutations / redispatches but is not reconcile-terminal.
+export const FROZEN_RELEASE_STATUSES = Object.freeze([
   RELEASE_STATUSES.PRODUCTION_STATE_UNKNOWN,
 ]);
 
@@ -104,7 +108,11 @@ export const ALLOWED_RELEASE_TRANSITIONS = Object.freeze({
   [RELEASE_STATUSES.ROLLED_BACK]: [],
   [RELEASE_STATUSES.DB_ROLLBACK_MANUAL_REQUIRED]: [],
   [RELEASE_STATUSES.BLOCKED]: [],
-  [RELEASE_STATUSES.PRODUCTION_STATE_UNKNOWN]: [],
+  [RELEASE_STATUSES.PRODUCTION_STATE_UNKNOWN]: [
+    RELEASE_STATUSES.DEPLOY_RECONCILED,
+    RELEASE_STATUSES.CODE_ROLLBACK_RECONCILED,
+    RELEASE_STATUSES.BLOCKED,
+  ],
 });
 
 export const DB_ROLLBACK_DISPOSITIONS = Object.freeze({
@@ -254,6 +262,10 @@ export function stableProvenanceFingerprint(provenance) {
 
 export function isTerminalReleaseStatus(status) {
   return TERMINAL_RELEASE_STATUSES.includes(String(status || ""));
+}
+
+export function isFrozenReleaseStatus(status) {
+  return FROZEN_RELEASE_STATUSES.includes(String(status || ""));
 }
 
 export function isAllowedReleaseTransition(fromStatus, toStatus) {

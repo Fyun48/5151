@@ -13,6 +13,7 @@ import {
   sealPhase15Evidence,
   PHASE15_EVIDENCE_SCHEMA,
   PHASE15_EVIDENCE_ARTIFACT,
+  phase15IntentRunName,
 } from "../src/release/githubProductionReleaseProvider.js";
 
 const ACTOR = "Fyun48";
@@ -52,6 +53,8 @@ function makeFakeGithubApi(opts = {}) {
           status: opts.runStatus || "queued",
           conclusion: opts.runConclusion ?? null,
           path: workflowFile,
+          name: `phase15-intent:${inputs.release_intent_id}`,
+          display_title: `phase15-intent:${inputs.release_intent_id}`,
           head_sha: liveShaped ? "b".repeat(40) : inputs.sha,
           head_branch: "master",
           actor: { login: ACTOR },
@@ -310,8 +313,7 @@ test("durable request id is exactly-once even if dispatch is retried", async () 
 });
 
 test("GitHub REST-shaped run without evidence artifact has no synthetic outputs", async () => {
-  const api = makeFakeGithubApi({ runStatus: "completed", runConclusion: "success" });
-  api.listArtifacts = async () => ({ artifacts: [] });
+  const api = makeFakeGithubApi({ runStatus: "completed", runConclusion: "success", attachEvidence: false });
   const provider = makeGithubProductionReleaseProvider(GRANT_ENV, { githubApi: api });
   const dispatched = await provider.dispatchWorkflow({
     workflowFile: PRODUCTION_WORKFLOWS.BUILD,
@@ -321,12 +323,48 @@ test("GitHub REST-shaped run without evidence artifact has no synthetic outputs"
     requestId: "intent-rest-xxxxx",
   });
   assert.equal(dispatched.accepted, true);
-  assert.equal(dispatched.pending_lookup, true);
-  assert.equal(dispatched.workflow_run_id, null);
+  assert.equal(String(dispatched.workflow_run_id), String(api.runs[0].id));
   const wf = await provider.getWorkflowRun({ workflow_run_id: String(api.runs[0].id) });
   assert.equal(wf.status, "completed");
   assert.deepEqual(wf.outputs, {});
   assert.equal(wf.outputs.image_digest, undefined);
+});
+
+test("accepted deploy without final artifact still correlates by run-name and does not redispatch", async () => {
+  const api = makeFakeGithubApi({ runStatus: "completed", runConclusion: "failure", attachEvidence: false });
+  const acceptedIntents = new Set();
+  const provider = makeGithubProductionReleaseProvider(GRANT_ENV, { githubApi: api, acceptedIntents });
+  const first = await provider.dispatchWorkflow({
+    workflowFile: PRODUCTION_WORKFLOWS.DEPLOY,
+    workflowRef: REQUIRED_WORKFLOW_REF,
+    inputs: { sha: SHA, image_digest: DIGEST },
+    confirmation: "DEPLOY-PRODUCTION",
+    actor: ACTOR,
+    environment: "production",
+    requestId: "intent-no-final-art",
+  });
+  assert.equal(first.accepted, true);
+  assert.equal(String(first.workflow_run_id), String(api.runs[0].id));
+  assert.equal(api.runs[0].name, phase15IntentRunName("intent-no-final-art"));
+  const found = await provider.findWorkflowRunByIdempotency({
+    workflowFile: PRODUCTION_WORKFLOWS.DEPLOY,
+    dispatchIntentId: "intent-no-final-art",
+  });
+  assert.equal(String(found.id), String(api.runs[0].id));
+  assert.deepEqual(found.outputs, {});
+  const replay = await provider.dispatchWorkflow({
+    workflowFile: PRODUCTION_WORKFLOWS.DEPLOY,
+    workflowRef: REQUIRED_WORKFLOW_REF,
+    inputs: { sha: SHA, image_digest: DIGEST },
+    confirmation: "DEPLOY-PRODUCTION",
+    actor: ACTOR,
+    environment: "production",
+    requestId: "intent-no-final-art",
+  });
+  assert.equal(replay.accepted, true);
+  assert.equal(replay.idempotent, true);
+  assert.equal(api.dispatchHttp, 1);
+  assert.equal(provider.dispatchCount, 1);
 });
 
 test("inspectImage never synthesizes missing OCI revision or source", async () => {
@@ -430,8 +468,7 @@ test("live REST-shaped fixture never fabricates OCI/health and rejects missing e
     requestId: "intent-live-rest",
   });
   assert.equal(dispatched.accepted, true);
-  assert.equal(dispatched.pending_lookup, true);
-  assert.equal(dispatched.workflow_run_id, null);
+  assert.equal(String(dispatched.workflow_run_id), String(api.runs[0].id));
   const wf = await provider.getWorkflowRun({ workflow_run_id: String(api.runs[0].id) });
   assert.deepEqual(wf.outputs, {});
   const inspected = await provider.inspectImage({ digest: DIGEST, sha: SHA });
@@ -441,8 +478,8 @@ test("live REST-shaped fixture never fabricates OCI/health and rejects missing e
   const health = await provider.healthSmoke({ imageDigest: DIGEST, headSha: SHA, workflow: wf });
   assert.equal(health.passed, false);
   assert.equal(health.container_running, false);
-  assert.equal(dispatched.head_sha, null);
-  assert.equal(dispatched.actor, null);
+  assert.equal(dispatched.head_sha, "b".repeat(40));
+  assert.equal(dispatched.actor, ACTOR);
   assert.equal(dispatched.environment, null);
 });
 

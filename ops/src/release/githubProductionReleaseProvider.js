@@ -21,6 +21,19 @@ import {
 export const PRODUCTION_RELEASE_MUTATION_GRANT = "owner-dispatch-v1";
 export const PHASE15_EVIDENCE_ARTIFACT = "phase15-workflow-evidence";
 export const PHASE15_EVIDENCE_SCHEMA = "phase15-workflow-evidence-v1";
+export const PHASE15_IDENTITY_ARTIFACT = "phase15-run-identity";
+export const PHASE15_IDENTITY_SCHEMA = "phase15-run-identity-v1";
+export const PHASE15_INTENT_RUN_NAME_PREFIX = "phase15-intent:";
+
+export function phase15IntentRunName(intentId) {
+  return `${PHASE15_INTENT_RUN_NAME_PREFIX}${intentId}`;
+}
+
+export function runNameMatchesIntent(run, intentId) {
+  if (!run || !intentId) return false;
+  const expected = phase15IntentRunName(intentId);
+  return run.name === expected || run.display_title === expected;
+}
 
 const ALLOWED_WORKFLOWS = new Set(Object.values(PRODUCTION_WORKFLOWS));
 
@@ -163,6 +176,9 @@ export function bindPhase15EvidenceToRun(evidence, run, expected = {}) {
   if (expected.environment && evidence.environment !== expected.environment) return null;
   if (expected.confirmation && evidence.confirmation !== expected.confirmation) return null;
   if (expected.imageDigest && evidence.image_digest !== expected.imageDigest) return null;
+  const currentProduction = evidence.current_production && digestLooksImmutable(evidence.current_production.digest)
+    ? evidence.current_production
+    : null;
   return {
     image_digest: evidence.image_digest || null,
     oci_revision: evidence.oci_revision || null,
@@ -172,9 +188,31 @@ export function bindPhase15EvidenceToRun(evidence, run, expected = {}) {
     release_intent_id: evidence.release_intent_id,
     environment: evidence.environment || null,
     workflow_ref: evidence.workflow_ref,
-    db_backup: evidence.db_backup && evidence.db_backup.verified ? evidence.db_backup : null,
+    db_backup: evidence.db_backup && evidence.db_backup.verified === true ? evidence.db_backup : null,
     health: evidence.health && typeof evidence.health === "object" ? evidence.health : null,
+    current_production: currentProduction,
   };
+}
+
+export function bindPhase15IdentityToRun(evidence, run, expected = {}) {
+  if (!evidence || evidence.schema !== PHASE15_IDENTITY_SCHEMA) return null;
+  if (!verifyPhase15EvidenceDigest(evidence)) return null;
+  const required = [
+    "workflow_run_id", "workflow_attempt", "workflow_file", "workflow_ref",
+    "head_sha", "source_sha", "actor", "triggering_actor", "release_intent_id",
+  ];
+  for (const key of required) {
+    if (evidence[key] == null || evidence[key] === "") return null;
+  }
+  if (String(evidence.workflow_run_id) !== String(run.id)) return null;
+  if (Number(evidence.workflow_attempt) !== Number(run.run_attempt || run.attempt)) return null;
+  if (evidence.workflow_ref !== REQUIRED_WORKFLOW_REF) return null;
+  const file = run.path || run.workflow_file;
+  if (file && evidence.workflow_file !== file) return null;
+  if (loginOf(run.actor) && evidence.actor !== loginOf(run.actor)) return null;
+  if (loginOf(run.triggering_actor) && evidence.triggering_actor !== loginOf(run.triggering_actor)) return null;
+  if (expected.releaseIntentId && evidence.release_intent_id !== expected.releaseIntentId) return null;
+  return { release_intent_id: evidence.release_intent_id };
 }
 
 export function normalizeGithubWorkflowRun(raw, extras = {}) {
@@ -365,18 +403,41 @@ export function makeGithubProductionReleaseProvider(env = process.env, deps = {}
   let dispatchCount = 0;
   let restoreCallCount = 0;
 
-  async function loadEvidenceOutputs(run, expected = {}) {
-    if (!run?.id) return {};
-    if (typeof api.listArtifacts !== "function" || typeof api.downloadArtifact !== "function") return {};
+  async function downloadNamedArtifact(run, artifactName) {
+    if (!run?.id) return null;
+    if (typeof api.listArtifacts !== "function" || typeof api.downloadArtifact !== "function") return null;
     const listed = await api.listArtifacts({ owner: repo.owner, repo: repo.repo, runId: run.id });
-    const matches = (listed?.artifacts || []).filter((a) => a.name === PHASE15_EVIDENCE_ARTIFACT && !a.expired);
-    if (matches.length !== 1) return {};
+    const matches = (listed?.artifacts || []).filter((a) => a.name === artifactName && !a.expired);
+    if (matches.length !== 1) return null;
     const downloaded = await api.downloadArtifact({ owner: repo.owner, repo: repo.repo, artifactId: matches[0].id, runId: run.id });
-    const evidence = downloaded?.evidence
-      || downloaded?.files?.[`${PHASE15_EVIDENCE_ARTIFACT}.json`]
+    return downloaded?.evidence
+      || downloaded?.files?.[`${artifactName}.json`]
       || downloaded?.json
       || null;
+  }
+
+  async function loadEvidenceOutputs(run, expected = {}) {
+    const evidence = await downloadNamedArtifact(run, PHASE15_EVIDENCE_ARTIFACT);
     return bindPhase15EvidenceToRun(evidence, run, expected) || {};
+  }
+
+  async function loadIdentityIntent(run, expected = {}) {
+    const evidence = await downloadNamedArtifact(run, PHASE15_IDENTITY_ARTIFACT);
+    return bindPhase15IdentityToRun(evidence, run, expected);
+  }
+
+  function runIdentityEligible(run, { workflowFile, createdAfter } = {}) {
+    const file = run.path || run.workflow_file;
+    if (workflowFile && file !== workflowFile) return false;
+    if (run.event && run.event !== "workflow_dispatch") return false;
+    if (!createdAfterOk(run.created_at, createdAfter)) return false;
+    const actor = loginOf(run.actor);
+    const triggering = loginOf(run.triggering_actor);
+    if (actor && !isAuthorizedGithubActor(actor)) return false;
+    if (triggering && !isAuthorizedGithubActor(triggering)) return false;
+    if (run.head_branch && run.head_branch !== "master") return false;
+    if (run.workflow_ref && run.workflow_ref !== REQUIRED_WORKFLOW_REF) return false;
+    return true;
   }
 
   async function hydrateRun(raw, jobs, expected = {}) {
@@ -391,20 +452,23 @@ export function makeGithubProductionReleaseProvider(env = process.env, deps = {}
       repo: repo.repo,
       workflowFile,
     });
-    const candidates = (listed.runs || []).filter((run) => {
-      const file = run.path || run.workflow_file;
-      if (workflowFile && file !== workflowFile) return false;
-      if (run.event && run.event !== "workflow_dispatch") return false;
-      if (!createdAfterOk(run.created_at, createdAfter)) return false;
-      return true;
-    });
+    const candidates = (listed.runs || []).filter((run) => runIdentityEligible(run, { workflowFile, createdAfter }));
+    const boundIds = new Set();
     const bound = [];
     for (const raw of candidates) {
       const detail = await api.getWorkflowRun({ owner: repo.owner, repo: repo.repo, runId: raw.id });
       const run = detail?.run || raw;
       const evidenceOutputs = await loadEvidenceOutputs(run, { releaseIntentId });
-      if (evidenceOutputs.release_intent_id === releaseIntentId) {
-        bound.push(normalizeGithubWorkflowRun(run, { jobs: detail?.jobs, evidenceOutputs }));
+      const identity = await loadIdentityIntent(run, { releaseIntentId });
+      const named = runNameMatchesIntent(run, releaseIntentId);
+      if (evidenceOutputs.release_intent_id === releaseIntentId || identity?.release_intent_id === releaseIntentId || named) {
+        if (boundIds.has(String(run.id))) continue;
+        boundIds.add(String(run.id));
+        bound.push(normalizeGithubWorkflowRun(run, {
+          jobs: detail?.jobs,
+          evidenceOutputs,
+          request_id: releaseIntentId,
+        }));
       }
     }
     if (bound.length > 1) return { ambiguous: true, id: null };

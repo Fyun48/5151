@@ -209,7 +209,11 @@ fi
 docker exec "$CONTAINER" rm -f /tmp/sqlite-readonly-inspect.mjs || true
 echo "$INTEGRITY" > "$WORKDIR/integrity.json"
 echo "$INTEGRITY"
-echo "$INTEGRITY" | grep -q '"ok"' || fail "backup integrity_check is not ok"
+VERIFY_PY="${VERIFY_INTEGRITY_SCRIPT:-$(dirname "$0")/verify-sqlite-integrity-json.py}"
+if [ ! -f "$VERIFY_PY" ]; then
+  fail "verify-sqlite-integrity-json.py is missing; refusing to treat backup as verified"
+fi
+python3 "$VERIFY_PY" "$WORKDIR/integrity.json" || fail "backup integrity_check is not ok"
 
 count_files() {
   local dir="$1"
@@ -270,6 +274,7 @@ doc = {
   "db_backup_size": int(backup_size),
   "backup_sha256": backup_sha,
   "integrity_check": integrity.get("integrity_check"),
+  "ok": integrity.get("integrity_check") == "ok" and integrity.get("ok") is True,
   "secret_files_copied_to_nas_backup_only": bool(int(secret_copied)),
   "member_media_source_files": int(src_mc),
   "member_media_source_bytes": int(src_mb),

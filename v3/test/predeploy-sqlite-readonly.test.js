@@ -120,6 +120,8 @@ test("predeploy backup verification capability-detects host node:sqlite and has 
   assert.match(script, /elif \[ -n "\$HOST_PYTHON" \]/);
   assert.match(script, /\?mode=ro/);
   assert.match(script, /PRAGMA integrity_check/);
+  assert.doesNotMatch(script, /grep -q '"ok"'/);
+  assert.match(script, /verify-sqlite-integrity-json\.py/);
   assert.doesNotMatch(script, /if command -v node[^\n]*then\n\s*INTEGRITY="\$\(node/);
 });
 
