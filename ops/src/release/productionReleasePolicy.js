@@ -50,9 +50,58 @@ export const WORKFLOW_KINDS = Object.freeze({
 
 export const BINDING_STATUSES = Object.freeze({
   RESERVED: "reserved",
+  CLAIMED: "claimed",
   DISPATCHED: "dispatched",
   RECONCILED: "reconciled",
   UNKNOWN: "unknown",
+});
+
+export const TERMINAL_RELEASE_STATUSES = Object.freeze([
+  RELEASE_STATUSES.SUCCEEDED,
+  RELEASE_STATUSES.ROLLED_BACK,
+  RELEASE_STATUSES.BLOCKED,
+]);
+
+export const HAPPY_PATH_STATUSES = Object.freeze([
+  RELEASE_STATUSES.CREATED,
+  RELEASE_STATUSES.ELIGIBILITY_VERIFIED,
+  RELEASE_STATUSES.MERGED,
+  RELEASE_STATUSES.BUILD_DISPATCHED,
+  RELEASE_STATUSES.BUILD_RECONCILED,
+  RELEASE_STATUSES.PREDEPLOY_DISPATCHED,
+  RELEASE_STATUSES.PREDEPLOY_RECONCILED,
+  RELEASE_STATUSES.DEPLOY_DISPATCHED,
+  RELEASE_STATUSES.DEPLOY_RECONCILED,
+  RELEASE_STATUSES.HEALTH_VERIFIED,
+  RELEASE_STATUSES.SUCCEEDED,
+]);
+
+export const ROLLBACK_PATH_STATUSES = Object.freeze([
+  RELEASE_STATUSES.HEALTH_FAILED,
+  RELEASE_STATUSES.CODE_ROLLBACK_DISPATCHED,
+  RELEASE_STATUSES.CODE_ROLLBACK_RECONCILED,
+  RELEASE_STATUSES.ROLLED_BACK,
+]);
+
+export const ALLOWED_RELEASE_TRANSITIONS = Object.freeze({
+  "": [RELEASE_STATUSES.CREATED],
+  [RELEASE_STATUSES.CREATED]: [RELEASE_STATUSES.ELIGIBILITY_VERIFIED, RELEASE_STATUSES.BLOCKED],
+  [RELEASE_STATUSES.ELIGIBILITY_VERIFIED]: [RELEASE_STATUSES.MERGED, RELEASE_STATUSES.BUILD_DISPATCHED, RELEASE_STATUSES.BLOCKED],
+  [RELEASE_STATUSES.MERGED]: [RELEASE_STATUSES.BUILD_DISPATCHED, RELEASE_STATUSES.BLOCKED],
+  [RELEASE_STATUSES.BUILD_DISPATCHED]: [RELEASE_STATUSES.BUILD_RECONCILED, RELEASE_STATUSES.BLOCKED],
+  [RELEASE_STATUSES.BUILD_RECONCILED]: [RELEASE_STATUSES.PREDEPLOY_DISPATCHED, RELEASE_STATUSES.BLOCKED],
+  [RELEASE_STATUSES.PREDEPLOY_DISPATCHED]: [RELEASE_STATUSES.PREDEPLOY_RECONCILED, RELEASE_STATUSES.BLOCKED],
+  [RELEASE_STATUSES.PREDEPLOY_RECONCILED]: [RELEASE_STATUSES.DEPLOY_DISPATCHED, RELEASE_STATUSES.BLOCKED],
+  [RELEASE_STATUSES.DEPLOY_DISPATCHED]: [RELEASE_STATUSES.DEPLOY_RECONCILED, RELEASE_STATUSES.BLOCKED],
+  [RELEASE_STATUSES.DEPLOY_RECONCILED]: [RELEASE_STATUSES.HEALTH_VERIFIED, RELEASE_STATUSES.HEALTH_FAILED, RELEASE_STATUSES.BLOCKED],
+  [RELEASE_STATUSES.HEALTH_VERIFIED]: [RELEASE_STATUSES.SUCCEEDED, RELEASE_STATUSES.BLOCKED],
+  [RELEASE_STATUSES.SUCCEEDED]: [],
+  [RELEASE_STATUSES.HEALTH_FAILED]: [RELEASE_STATUSES.CODE_ROLLBACK_DISPATCHED, RELEASE_STATUSES.BLOCKED],
+  [RELEASE_STATUSES.CODE_ROLLBACK_DISPATCHED]: [RELEASE_STATUSES.CODE_ROLLBACK_RECONCILED, RELEASE_STATUSES.BLOCKED],
+  [RELEASE_STATUSES.CODE_ROLLBACK_RECONCILED]: [RELEASE_STATUSES.ROLLED_BACK, RELEASE_STATUSES.BLOCKED],
+  [RELEASE_STATUSES.ROLLED_BACK]: [],
+  [RELEASE_STATUSES.DB_ROLLBACK_MANUAL_REQUIRED]: [],
+  [RELEASE_STATUSES.BLOCKED]: [],
 });
 
 export const DB_ROLLBACK_DISPOSITIONS = Object.freeze({
@@ -169,9 +218,71 @@ export function workflowIdempotencyKey({ releaseRunId, workflowKind, inputFinger
 }
 
 export function isSuccessfulConclusion(conclusion, runStatus) {
-  if (runStatus && NON_TERMINAL_RUN_STATUSES.includes(String(runStatus))) return false;
-  if (runStatus && runStatus !== "completed") return false;
+  if (String(runStatus || "") !== "completed") return false;
   return SUCCESS_CONCLUSIONS.includes(String(conclusion || ""));
+}
+
+export function isTerminalReleaseStatus(status) {
+  return TERMINAL_RELEASE_STATUSES.includes(String(status || ""));
+}
+
+export function isAllowedReleaseTransition(fromStatus, toStatus) {
+  const from = fromStatus == null || fromStatus === "" ? "" : String(fromStatus);
+  const allowed = ALLOWED_RELEASE_TRANSITIONS[from] || [];
+  return allowed.includes(String(toStatus));
+}
+
+function missing(v) {
+  return v == null || v === "";
+}
+
+export function validateExactWorkflowEvidence(wf, expected = {}) {
+  const problems = [];
+  if (!wf || missing(wf.id)) problems.push("id");
+  else if (expected.workflow_run_id != null && String(wf.id) !== String(expected.workflow_run_id)) problems.push("id_mismatch");
+  if (wf?.attempt == null || wf.attempt === "" || !Number.isInteger(Number(wf.attempt)) || Number(wf.attempt) < 1) {
+    problems.push("attempt");
+  } else if (expected.attempt != null && Number(wf.attempt) !== Number(expected.attempt)) {
+    problems.push("attempt_mismatch");
+  }
+  if (missing(wf?.status)) problems.push("status");
+  else if (String(wf.status) !== "completed") problems.push("status_mismatch");
+  if (missing(wf?.conclusion)) problems.push("conclusion");
+  else if (!SUCCESS_CONCLUSIONS.includes(String(wf.conclusion))) problems.push("conclusion_mismatch");
+  if (missing(wf?.workflow_file)) problems.push("workflow_file");
+  else if (expected.workflow_file && wf.workflow_file !== expected.workflow_file) problems.push("workflow_file_mismatch");
+  if (missing(wf?.workflow_ref)) problems.push("workflow_ref");
+  else if (expected.workflow_ref && wf.workflow_ref !== expected.workflow_ref) problems.push("workflow_ref_mismatch");
+  if (missing(wf?.head_sha)) problems.push("head_sha");
+  else if (expected.head_sha && String(wf.head_sha) !== String(expected.head_sha)) problems.push("head_sha_mismatch");
+  const actor = wf?.actor;
+  const triggering = wf?.triggering_actor;
+  if (missing(actor) && missing(triggering)) problems.push("actor");
+  else if (expected.actor) {
+    const actorOk = !missing(actor) && String(actor) === String(expected.actor);
+    const triggerOk = !missing(triggering) && String(triggering) === String(expected.actor);
+    if (!actorOk && !triggerOk) problems.push("actor_mismatch");
+  }
+  if (expected.environment) {
+    if (missing(wf?.environment)) problems.push("environment");
+    else if (String(wf.environment) !== String(expected.environment)) problems.push("environment_mismatch");
+  } else if (!missing(wf?.environment)) {
+    problems.push("environment_mismatch");
+  }
+  const outputs = wf?.outputs || {};
+  if (expected.image_digest) {
+    if (missing(outputs.image_digest)) problems.push("image_digest");
+    else if (String(outputs.image_digest) !== String(expected.image_digest)) problems.push("image_digest_mismatch");
+  }
+  if (expected.oci_revision) {
+    if (missing(outputs.oci_revision)) problems.push("oci_revision");
+    else if (String(outputs.oci_revision) !== String(expected.oci_revision)) problems.push("oci_revision_mismatch");
+  }
+  if (expected.oci_source) {
+    if (missing(outputs.oci_source)) problems.push("oci_source");
+    else if (String(outputs.oci_source).toLowerCase() !== String(expected.oci_source).toLowerCase()) problems.push("oci_source_mismatch");
+  }
+  return { ok: problems.length === 0, problems };
 }
 
 export function decideDbRollbackDisposition(classification) {
@@ -199,7 +310,7 @@ export function previousStableComplete(prev) {
   const digest = String(prev.artifact_digest || prev.previous_stable_digest || "");
   const runId = String(prev.workflow_run_id || prev.previous_stable_workflow_run_id || "");
   if (!/^[a-f0-9]{40}$/i.test(sha)) return false;
-  if (!/^sha256:[a-f0-9]{64}$/i.test(digest) && !/^sha256:[a-f0-9]{16,}$/i.test(digest)) return false;
+  if (!digestLooksImmutable(digest)) return false;
   if (!runId || runId === "latest") return false;
   return true;
 }
@@ -207,5 +318,5 @@ export function previousStableComplete(prev) {
 export function digestLooksImmutable(digest) {
   const d = String(digest || "");
   if (!d || d === "latest" || /:latest$/.test(d)) return false;
-  return /^sha256:[a-f0-9]{16,}$/i.test(d);
+  return /^sha256:[a-f0-9]{64}$/.test(d);
 }

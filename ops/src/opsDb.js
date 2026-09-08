@@ -1066,6 +1066,9 @@ export function applyOpsSchema(db) {
       workflow_run_id TEXT,
       workflow_attempt INTEGER,
       dispatch_request_id TEXT,
+      dispatch_owner TEXT,
+      dispatch_intent_id TEXT,
+      dispatch_claimed_at TEXT,
       provider_response_identity TEXT,
       binding_status TEXT NOT NULL,
       created_at TEXT NOT NULL,
@@ -1156,11 +1159,35 @@ export function upgradeProductionReleaseImmutability(db) {
       IFNULL(NEW.release_run_id,0) <> IFNULL(OLD.release_run_id,0)
       OR IFNULL(NEW.workflow_kind,'') <> IFNULL(OLD.workflow_kind,'')
       OR IFNULL(NEW.idempotency_key,'') <> IFNULL(OLD.idempotency_key,'')
+      OR (OLD.dispatch_intent_id IS NOT NULL AND IFNULL(NEW.dispatch_intent_id,'') <> IFNULL(OLD.dispatch_intent_id,''))
     )
     BEGIN SELECT RAISE(ABORT, 'production release workflow binding identity is immutable'); END;
     CREATE TRIGGER prbind_no_delete BEFORE DELETE ON production_release_workflow_binding
     BEGIN SELECT RAISE(ABORT, 'production release workflow bindings are append-only'); END;
   `);
+  ensureProductionReleaseBindingColumns(db);
+}
+
+function tableColumns(db, table) {
+  return db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+}
+
+function ensureProductionReleaseBindingColumns(db) {
+  let cols = [];
+  try {
+    cols = tableColumns(db, "production_release_workflow_binding");
+  } catch {
+    return;
+  }
+  if (!cols.length) return;
+  const add = [
+    ["dispatch_owner", "TEXT"],
+    ["dispatch_intent_id", "TEXT"],
+    ["dispatch_claimed_at", "TEXT"],
+  ];
+  for (const [name, decl] of add) {
+    if (!cols.includes(name)) db.exec(`ALTER TABLE production_release_workflow_binding ADD COLUMN ${name} ${decl}`);
+  }
 }
 
 // 開一個 ops 資料庫。dbPath = ":memory:" 供測試使用。

@@ -82,9 +82,12 @@ export function makeStubProductionReleaseProvider(opts = {}) {
     _runsByKey: runsByKey,
 
     async dispatchWorkflow({
-      workflowFile, workflowRef, inputs = {}, idempotencyKey, expectedHead, actor, environment, confirmation,
+      workflowFile, workflowRef, inputs = {}, idempotencyKey, expectedHead, actor, environment, confirmation, requestId: persistRequestId,
     } = {}) {
-      if (runsByKey.has(idempotencyKey)) {
+      if (opts.dispatchDelayMs) {
+        await new Promise((resolve) => setTimeout(resolve, Number(opts.dispatchDelayMs)));
+      }
+      if (opts.deduplicate !== false && runsByKey.has(idempotencyKey)) {
         const existing = runsByKey.get(idempotencyKey);
         return {
           accepted: true,
@@ -114,7 +117,7 @@ export function makeStubProductionReleaseProvider(opts = {}) {
       }
 
       dispatchCount += 1;
-      const requestId = opts.requestId || `stub-req-${sha256(idempotencyKey).slice(0, 16)}`;
+      const requestId = persistRequestId || opts.requestId || `stub-req-${sha256(idempotencyKey).slice(0, 16)}`;
       const responseIdentity = `stub-dispatch-${sha256(`${idempotencyKey}|${requestId}`).slice(0, 20)}`;
 
       if (opts.dispatchTimeout) {

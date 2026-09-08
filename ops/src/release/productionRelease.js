@@ -1,27 +1,32 @@
+import { randomUUID } from "node:crypto";
 import { withImmediateTx } from "../tx.js";
 import { appendAuditRow, redactAuditData } from "../audit.js";
 import { httpError } from "../errors.js";
 import { getPhase15ReleaseEligibility } from "./migrationSafety.js";
 import {
   BINDING_STATUSES,
-  DB_ROLLBACK_DISPOSITIONS,
+  HAPPY_PATH_STATUSES,
   PRODUCTION_WORKFLOWS,
   RELEASE_STATUSES,
   REQUIRED_OCI_SOURCE,
   REQUIRED_TARGET_ENVIRONMENT,
   REQUIRED_WORKFLOW_REF,
+  ROLLBACK_PATH_STATUSES,
   WORKFLOW_KINDS,
   buildProductionReleasePolicy,
   decideDbRollbackDisposition,
   digestLooksImmutable,
+  isAllowedReleaseTransition,
   isSuccessfulConclusion,
+  isTerminalReleaseStatus,
   previousStableComplete,
   productionReleaseConfigFromEnv,
   productionReleaseInputFingerprint,
   productionReleasePolicyFingerprint,
+  validateExactWorkflowEvidence,
   workflowIdempotencyKey,
 } from "./productionReleasePolicy.js";
-import { makeProductionReleaseProvider } from "./productionReleaseProvider.js";
+import { makeProductionReleaseProvider, newDispatchRequestId } from "./productionReleaseProvider.js";
 
 const PII_OR_SECRET_KEY = /(pass(word|wd)?|secret|token|cookie|authorization|auth[-_]?header|api[-_]?key|access[-_]?key|private[-_]?key|credential|session|bearer|otp|ssh|email|contact|user_ref|phone|reporter|connection_string|dsn|database_url|prod(uction)?[-_]?(host|db|user|password|secret|token|key)|nas[-_]?(host|user|key|password))/i;
 
@@ -82,11 +87,32 @@ function latestEvent(db, releaseRunId) {
 
 function latestStatus(db, releaseRunId) {
   const ev = latestEvent(db, releaseRunId);
-  return ev ? ev.to_status : RELEASE_STATUSES.CREATED;
+  return ev ? ev.to_status : null;
+}
+
+function happyRank(status) {
+  return HAPPY_PATH_STATUSES.indexOf(String(status || ""));
+}
+
+function alreadyAtOrBeyond(current, target) {
+  if (!current) return false;
+  if (current === target) return true;
+  const ci = happyRank(current);
+  const ti = happyRank(target);
+  if (ci >= 0 && ti >= 0) return ci >= ti;
+  const ri = ROLLBACK_PATH_STATUSES.indexOf(String(current));
+  const rt = ROLLBACK_PATH_STATUSES.indexOf(String(target));
+  if (ri >= 0 && rt >= 0) return ri >= rt;
+  return false;
 }
 
 function appendEvent(db, { releaseRunId, toStatus, eventType, reason = null, errorCode = null, evidence = null, now, actor }) {
   const from = latestStatus(db, releaseRunId);
+  if (from === toStatus) return;
+  if (toStatus !== RELEASE_STATUSES.BLOCKED && alreadyAtOrBeyond(from, toStatus)) return;
+  if (!isAllowedReleaseTransition(from, toStatus)) {
+    throw httpError(`illegal production release transition ${from || "∅"} → ${toStatus}`, 409);
+  }
   const ts = iso(now);
   db.prepare(
     `INSERT INTO production_release_run_event(release_run_id, from_status, to_status, event_type, reason, error_code, evidence_json, created_at)
@@ -128,7 +154,7 @@ function appendEvidence(db, { releaseRunId, kind, now, ...rest }) {
 
 export function publicReleaseRun(db, row) {
   if (!row) return null;
-  const status = latestStatus(db, row.id);
+  const status = latestStatus(db, row.id) || RELEASE_STATUSES.CREATED;
   return {
     id: Number(row.id),
     issue_id: Number(row.issue_id),
@@ -250,19 +276,14 @@ function assertIdentitiesUnchanged(db, run, { repo = null, env = process.env, al
   if (!elig.allowed) {
     const stale = elig.stale_reasons || [];
     const onlySourceDrift = stale.length > 0 && stale.every((r) => /source_base_drift|source_base_unverified|release:source_base/.test(r));
-    if (allowMasterMovement && (elig.reason === "phase14_clearance_stale" || onlySourceDrift) && onlySourceDrift) {
-      // merge 後 master 前進到 authorized head 是預期的；其餘 identity 仍須成立。
-      const auth = db.prepare("SELECT * FROM production_release_authorization WHERE id=?").get(Number(run.release_authorization_id));
-      if (!auth || auth.status !== "active") throw httpError("release authorization superseded", 409);
-      if (!same(auth.manifest_hash, run.manifest_hash) || !same(auth.head_sha, run.authorized_head_sha) || !same(auth.artifact_digest, run.artifact_digest)) {
-        throw httpError("authorization identity drifted", 409);
-      }
-      return { ...elig, allowed: true, reason: "phase15_identities_hold_after_merge" };
+    if (!(allowMasterMovement && (elig.reason === "phase14_clearance_stale" || onlySourceDrift) && onlySourceDrift)) {
+      const extra = (elig.stale_reasons || []).join(",");
+      throw httpError(`Phase 15 eligibility failed: ${elig.reason}${extra ? ` (${extra})` : ""}`, 409);
     }
-    const extra = (elig.stale_reasons || []).join(",");
-    throw httpError(`Phase 15 eligibility failed: ${elig.reason}${extra ? ` (${extra})` : ""}`, 409);
+    // merge 後 master 前進到 authorized head 是預期的；其餘 identity 仍須成立。
   }
   const a = elig.assessment;
+  if (!a) throw httpError("migration safety assessment drifted", 409);
   if (!sameNum(run.migration_safety_assessment_id, a.id)) throw httpError("migration safety assessment drifted", 409);
   if (!same(run.migration_safety_input_fingerprint, a.input_fingerprint)) throw httpError("migration safety input fingerprint drifted", 409);
   if (!same(run.migration_safety_policy_fingerprint, a.policy_fingerprint)) throw httpError("migration safety policy fingerprint drifted", 409);
@@ -299,24 +320,138 @@ function reserveBinding(db, { releaseRunId, workflowKind, inputFingerprint, now 
 
 function saveBindingDispatch(db, bindingId, { workflowRunId, attempt, requestId, responseIdentity, status }) {
   db.prepare(
-    `UPDATE production_release_workflow_binding SET workflow_run_id=?, workflow_attempt=?, dispatch_request_id=?, provider_response_identity=?, binding_status=?
+    `UPDATE production_release_workflow_binding SET workflow_run_id=?, workflow_attempt=?, dispatch_request_id=COALESCE(?, dispatch_request_id), provider_response_identity=COALESCE(?, provider_response_identity), binding_status=?
      WHERE id=?`,
   ).run(workflowRunId || null, attempt == null ? null : Number(attempt), requestId || null, responseIdentity || null, status, Number(bindingId));
 }
 
+function stableSnapshot(cur) {
+  if (!cur) return { source_sha: null, artifact_digest: null, workflow_run_id: null, release_run_id: null };
+  return {
+    source_sha: cur.source_sha || null,
+    artifact_digest: cur.artifact_digest || null,
+    workflow_run_id: cur.workflow_run_id || null,
+    release_run_id: cur.release_run_id == null ? null : Number(cur.release_run_id),
+  };
+}
+
+function sameStable(a, b) {
+  return same(a?.source_sha, b?.source_sha)
+    && same(a?.artifact_digest, b?.artifact_digest)
+    && same(a?.workflow_run_id, b?.workflow_run_id);
+}
+
+function requireStableUnchanged(db, observed) {
+  const cur = stableSnapshot(getProductionStable(db));
+  const exp = stableSnapshot(observed);
+  if (!exp.source_sha && !cur.source_sha) return cur;
+  if (!sameStable(cur, exp)) throw httpError("production stable identity drifted or superseded", 409);
+  return cur;
+}
+
+function casWriteProductionStable(db, { next, casFrom = null, now }) {
+  const ts = iso(now);
+  const payload = JSON.stringify(sanitizeReleaseEvidence(next.provenance || {}));
+  if (!casFrom || !casFrom.source_sha) {
+    const cur = getProductionStable(db);
+    if (cur && cur.source_sha) throw httpError("production stable identity drifted or superseded", 409);
+    db.prepare(`INSERT INTO production_stable_current(id, release_run_id, source_sha, artifact_digest, workflow_run_id, provenance_json, updated_at)
+                VALUES (1,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET release_run_id=excluded.release_run_id, source_sha=excluded.source_sha, artifact_digest=excluded.artifact_digest, workflow_run_id=excluded.workflow_run_id, provenance_json=excluded.provenance_json, updated_at=excluded.updated_at
+                WHERE production_stable_current.source_sha IS NULL OR production_stable_current.source_sha=''`)
+      .run(next.releaseRunId, next.sourceSha, next.artifactDigest, next.workflowRunId, payload, ts);
+    const written = getProductionStable(db);
+    if (!written || !same(written.source_sha, next.sourceSha) || !same(written.artifact_digest, next.artifactDigest)) {
+      throw httpError("production stable compare-and-swap failed", 409);
+    }
+    return written;
+  }
+  const res = db.prepare(
+    `UPDATE production_stable_current SET release_run_id=?, source_sha=?, artifact_digest=?, workflow_run_id=?, provenance_json=?, updated_at=?
+     WHERE id=1 AND source_sha=? AND artifact_digest=? AND IFNULL(workflow_run_id,'')=?`,
+  ).run(
+    next.releaseRunId, next.sourceSha, next.artifactDigest, next.workflowRunId, payload, ts,
+    casFrom.source_sha, casFrom.artifact_digest, casFrom.workflow_run_id || "",
+  );
+  if (res.changes !== 1) throw httpError("production stable compare-and-swap failed", 409);
+  return getProductionStable(db);
+}
+
+function rollbackObservedFrom(db, run) {
+  const cur = getProductionStable(db);
+  if (!cur || !cur.source_sha) throw httpError("no current production stable to roll back", 409);
+  const thisRelease = same(cur.source_sha, run.authorized_head_sha) && same(cur.artifact_digest, run.artifact_digest);
+  const stillPrevious = same(cur.source_sha, run.previous_stable_sha) && same(cur.artifact_digest, run.previous_stable_digest);
+  const status = latestStatus(db, run.id);
+  if (thisRelease) return stableSnapshot(cur);
+  if (stillPrevious && status !== RELEASE_STATUSES.SUCCEEDED) return stableSnapshot(cur);
+  throw httpError("rollback target is stale or superseded by a newer production release", 409);
+}
+
+function claimDispatchLease(db, { run, workflowKind, owner, now, repo, env }) {
+  return withImmediateTx(db, () => {
+    assertIdentitiesUnchanged(db, run, { repo, env, allowMasterMovement: true });
+    let binding = getBinding(db, run.id, workflowKind);
+    if (!binding) {
+      reserveBinding(db, { releaseRunId: run.id, workflowKind, inputFingerprint: run.input_fingerprint, now });
+      binding = getBinding(db, run.id, workflowKind);
+    }
+    if (binding.workflow_run_id) return { binding, role: "reconcile" };
+    if (binding.binding_status === BINDING_STATUSES.UNKNOWN) return { binding, role: "reconcile_unknown" };
+    if (binding.binding_status === BINDING_STATUSES.DISPATCHED || binding.binding_status === BINDING_STATUSES.RECONCILED) {
+      return { binding, role: "wait" };
+    }
+    if (binding.binding_status === BINDING_STATUSES.CLAIMED) return { binding, role: "wait" };
+    const intentId = binding.dispatch_intent_id || binding.dispatch_request_id || newDispatchRequestId();
+    const res = db.prepare(
+      `UPDATE production_release_workflow_binding
+       SET binding_status=?, dispatch_owner=?, dispatch_intent_id=COALESCE(dispatch_intent_id, ?),
+           dispatch_request_id=COALESCE(dispatch_request_id, ?), dispatch_claimed_at=?
+       WHERE id=? AND workflow_run_id IS NULL AND binding_status=?
+         AND (dispatch_owner IS NULL OR dispatch_owner='')`,
+    ).run(BINDING_STATUSES.CLAIMED, owner, intentId, intentId, iso(now), Number(binding.id), BINDING_STATUSES.RESERVED);
+    if (res.changes !== 1) return { binding: getBinding(db, run.id, workflowKind), role: "wait" };
+    return { binding: getBinding(db, run.id, workflowKind), role: "dispatch" };
+  });
+}
+
+function expectedWorkflowEvidence(run, { workflowKind, workflowFile, environment, binding, imageDigest = null }) {
+  const rollback = workflowKind === WORKFLOW_KINDS.ROLLBACK;
+  return {
+    workflow_run_id: binding?.workflow_run_id || null,
+    attempt: binding?.workflow_attempt == null ? null : Number(binding.workflow_attempt),
+    workflow_file: workflowFile,
+    workflow_ref: run.workflow_ref || REQUIRED_WORKFLOW_REF,
+    head_sha: rollback ? run.previous_stable_sha : run.authorized_head_sha,
+    actor: run.created_by,
+    environment: environment || null,
+    image_digest: imageDigest,
+    oci_revision: imageDigest ? (rollback ? run.previous_stable_sha : run.authorized_head_sha) : null,
+    oci_source: imageDigest ? REQUIRED_OCI_SOURCE : null,
+  };
+}
+
+function assertExactBoundWorkflow(wf, expected) {
+  const checked = validateExactWorkflowEvidence(wf, expected);
+  if (!checked.ok) throw httpError(`workflow evidence not exactly bound: ${checked.problems.join(",")}`, 409);
+  if (!isSuccessfulConclusion(wf.conclusion, wf.status)) {
+    throw httpError(`workflow is not success (${wf.status}/${wf.conclusion})`, 409);
+  }
+}
+
 async function dispatchOrReconcile(db, {
   run, provider, workflowKind, workflowFile, inputs, environment, confirmation, actor, now, dispatchedStatus, repo, env,
+  owner, hooks = null, observedStable = null, requireImageOutputs = false,
 }) {
-  let binding = getBinding(db, run.id, workflowKind);
-  if (!binding) {
-    withImmediateTx(db, () => {
-      assertIdentitiesUnchanged(db, run, { repo, env, allowMasterMovement: true }); // repo 仍傳入；僅忽略預期的 master 前進
-      reserveBinding(db, { releaseRunId: run.id, workflowKind, inputFingerprint: run.input_fingerprint, now });
-    });
-    binding = getBinding(db, run.id, workflowKind);
-  }
+  const leaseOwner = owner || randomUUID();
+  const { binding: claimedBinding, role } = claimDispatchLease(db, {
+    run, workflowKind, owner: leaseOwner, now, repo, env,
+  });
+  let binding = claimedBinding;
 
-  if (!binding.workflow_run_id && binding.binding_status === BINDING_STATUSES.RESERVED) {
+  if (role === "dispatch") {
+    if (hooks?.beforeDispatch) await hooks.beforeDispatch({ workflowKind, run, binding });
+    assertIdentitiesUnchanged(db, run, { repo, env, allowMasterMovement: true });
+    if (observedStable) requireStableUnchanged(db, observedStable);
     const dispatched = await provider.dispatchWorkflow({
       workflowFile,
       workflowRef: run.workflow_ref,
@@ -326,6 +461,7 @@ async function dispatchOrReconcile(db, {
       actor,
       environment,
       confirmation,
+      requestId: binding.dispatch_request_id || binding.dispatch_intent_id,
     });
     let afterDispatchError = null;
     withImmediateTx(db, () => {
@@ -335,7 +471,7 @@ async function dispatchOrReconcile(db, {
         saveBindingDispatch(db, fresh.id, { status: BINDING_STATUSES.UNKNOWN, requestId: dispatched?.request_id, responseIdentity: dispatched?.provider_response_identity });
         appendEvidence(db, {
           releaseRunId: run.id, kind: `${workflowKind}_dispatch_rejected`, now, workflow_file: workflowFile, workflow_ref: run.workflow_ref,
-          target_environment: environment, dispatch_request_id: dispatched?.request_id, provider_response_identity: dispatched?.provider_response_identity,
+          target_environment: environment, dispatch_request_id: dispatched?.request_id || fresh.dispatch_request_id, provider_response_identity: dispatched?.provider_response_identity,
           payload: { reason: dispatched?.reason || "dispatch_rejected" },
         });
         appendEvent(db, { releaseRunId: run.id, toStatus: RELEASE_STATUSES.BLOCKED, eventType: `${workflowKind}_dispatch_rejected`, reason: dispatched?.reason || "dispatch_rejected", errorCode: dispatched?.reason || "dispatch_rejected", now, actor });
@@ -350,7 +486,7 @@ async function dispatchOrReconcile(db, {
         });
         appendEvidence(db, {
           releaseRunId: run.id, kind: `${workflowKind}_dispatch_unverified`, now, workflow_file: workflowFile, workflow_ref: run.workflow_ref,
-          target_environment: environment, dispatch_request_id: dispatched.request_id, provider_response_identity: dispatched.provider_response_identity,
+          target_environment: environment, dispatch_request_id: dispatched.request_id || fresh.dispatch_request_id, provider_response_identity: dispatched.provider_response_identity,
           payload: { timeout: !!dispatched.timeout, accepted: true, workflow_run_id: null },
         });
         appendEvent(db, { releaseRunId: run.id, toStatus: RELEASE_STATUSES.BLOCKED, eventType: `${workflowKind}_unverified`, reason: "provider_accepted_without_workflow_run", errorCode: "unverified_workflow_run", now, actor });
@@ -368,9 +504,9 @@ async function dispatchOrReconcile(db, {
         releaseRunId: run.id, kind: `${workflowKind}_dispatch`, now, workflow_name: workflowKind, workflow_file: workflowFile,
         workflow_ref: dispatched.workflow_ref || run.workflow_ref, workflow_run_id: String(dispatched.workflow_run_id),
         workflow_attempt: dispatched.attempt, workflow_head_sha: dispatched.head_sha, workflow_actor: dispatched.actor,
-        target_environment: dispatched.environment || environment, dispatch_request_id: dispatched.request_id,
+        target_environment: dispatched.environment || environment, dispatch_request_id: dispatched.request_id || fresh.dispatch_request_id,
         provider_response_identity: dispatched.provider_response_identity,
-        payload: { accepted: true },
+        payload: { accepted: true, dispatch_intent_id: fresh.dispatch_intent_id, dispatch_owner: fresh.dispatch_owner },
       });
       appendEvent(db, { releaseRunId: run.id, toStatus: dispatchedStatus, eventType: `${workflowKind}_dispatched`, now, actor });
     });
@@ -379,6 +515,9 @@ async function dispatchOrReconcile(db, {
   } else if (!binding.workflow_run_id) {
     const found = await provider.findWorkflowRunByIdempotency({ idempotencyKey: binding.idempotency_key });
     if (!found?.id) {
+      if (role === "wait" || binding.binding_status === BINDING_STATUSES.CLAIMED) {
+        throw httpError("workflow dispatch in progress; reconcile, do not re-dispatch", 409);
+      }
       withImmediateTx(db, () => {
         appendEvent(db, { releaseRunId: run.id, toStatus: RELEASE_STATUSES.BLOCKED, eventType: `${workflowKind}_unverified`, reason: "timeout_or_unknown_must_reconcile_not_redispatch", errorCode: "unverified_workflow_run", now, actor });
       });
@@ -394,6 +533,7 @@ async function dispatchOrReconcile(db, {
           responseIdentity: found.provider_response_identity,
           status: BINDING_STATUSES.DISPATCHED,
         });
+        appendEvent(db, { releaseRunId: run.id, toStatus: dispatchedStatus, eventType: `${workflowKind}_dispatched`, now, actor });
       }
     });
     binding = getBinding(db, run.id, workflowKind);
@@ -406,48 +546,50 @@ async function dispatchOrReconcile(db, {
     });
     throw httpError("workflow run missing", 409);
   }
-  if (wf.workflow_ref && wf.workflow_ref !== REQUIRED_WORKFLOW_REF) {
-    throw httpError("workflow ref mismatch", 409);
-  }
-  if (environment && wf.environment && wf.environment !== environment) {
-    throw httpError("workflow environment mismatch", 409);
-  }
-  if (!isSuccessfulConclusion(wf.conclusion, wf.status)) {
+  const expected = expectedWorkflowEvidence(run, {
+    workflowKind, workflowFile, environment, binding,
+    imageDigest: requireImageOutputs ? (workflowKind === WORKFLOW_KINDS.ROLLBACK ? run.previous_stable_digest : run.artifact_digest) : null,
+  });
+  expected.actor = actor;
+  try {
+    assertExactBoundWorkflow(wf, expected);
+  } catch (err) {
     withImmediateTx(db, () => {
       appendEvidence(db, {
         releaseRunId: run.id, kind: `${workflowKind}_conclusion`, now, workflow_name: workflowKind, workflow_file: workflowFile,
-        workflow_ref: wf.workflow_ref, workflow_run_id: String(wf.id), workflow_attempt: wf.attempt, workflow_conclusion: wf.conclusion || wf.status,
-        workflow_head_sha: wf.head_sha, workflow_actor: wf.actor, target_environment: wf.environment || environment,
-        payload: { status: wf.status, conclusion: wf.conclusion },
+        workflow_ref: wf.workflow_ref, workflow_run_id: wf.id != null ? String(wf.id) : null, workflow_attempt: wf.attempt, workflow_conclusion: wf.conclusion || wf.status,
+        workflow_head_sha: wf.head_sha, workflow_actor: wf.actor || wf.triggering_actor, target_environment: wf.environment || environment,
+        payload: { status: wf.status, conclusion: wf.conclusion, problems: String(err.message || "") },
       });
       appendEvent(db, {
         releaseRunId: run.id, toStatus: RELEASE_STATUSES.BLOCKED, eventType: `${workflowKind}_not_success`,
-        reason: `conclusion=${wf.conclusion || "empty"} status=${wf.status || "empty"}`,
-        errorCode: "workflow_not_success", now, actor,
+        reason: err.message, errorCode: "workflow_not_exactly_bound", now, actor,
       });
     });
-    throw httpError(`workflow ${workflowKind} is not success (${wf.status}/${wf.conclusion})`, 409);
+    throw err;
   }
   withImmediateTx(db, () => {
     const fresh = getBinding(db, run.id, workflowKind);
-    saveBindingDispatch(db, fresh.id, {
-      workflowRunId: fresh.workflow_run_id,
-      attempt: wf.attempt,
-      requestId: fresh.dispatch_request_id,
-      responseIdentity: fresh.provider_response_identity,
-      status: BINDING_STATUSES.RECONCILED,
-    });
-    appendEvidence(db, {
-      releaseRunId: run.id, kind: `${workflowKind}_reconciled`, now, workflow_name: workflowKind, workflow_file: workflowFile,
-      workflow_ref: wf.workflow_ref, workflow_run_id: String(wf.id), workflow_attempt: wf.attempt, workflow_conclusion: wf.conclusion,
-      workflow_head_sha: wf.head_sha, workflow_actor: wf.actor, target_environment: wf.environment || environment,
-      image_digest: wf.outputs?.image_digest || null,
-      oci_revision: wf.outputs?.oci_revision || null,
-      oci_source: wf.outputs?.oci_source || null,
-      db_backup_identity: wf.outputs?.db_backup?.backup_id || null,
-      db_backup_hash: wf.outputs?.db_backup?.backup_hash || null,
-      payload: sanitizeReleaseEvidence({ outputs: wf.outputs || {} }),
-    });
+    if (fresh.binding_status !== BINDING_STATUSES.RECONCILED) {
+      saveBindingDispatch(db, fresh.id, {
+        workflowRunId: fresh.workflow_run_id,
+        attempt: wf.attempt,
+        requestId: fresh.dispatch_request_id,
+        responseIdentity: fresh.provider_response_identity,
+        status: BINDING_STATUSES.RECONCILED,
+      });
+      appendEvidence(db, {
+        releaseRunId: run.id, kind: `${workflowKind}_reconciled`, now, workflow_name: workflowKind, workflow_file: workflowFile,
+        workflow_ref: wf.workflow_ref, workflow_run_id: String(wf.id), workflow_attempt: wf.attempt, workflow_conclusion: wf.conclusion,
+        workflow_head_sha: wf.head_sha, workflow_actor: wf.actor || wf.triggering_actor, target_environment: wf.environment || environment,
+        image_digest: wf.outputs?.image_digest || null,
+        oci_revision: wf.outputs?.oci_revision || null,
+        oci_source: wf.outputs?.oci_source || null,
+        db_backup_identity: wf.outputs?.db_backup?.backup_id || null,
+        db_backup_hash: wf.outputs?.db_backup?.backup_hash || null,
+        payload: sanitizeReleaseEvidence({ outputs: wf.outputs || {} }),
+      });
+    }
   });
   return { binding: getBinding(db, run.id, workflowKind), workflow: wf };
 }
@@ -590,19 +732,26 @@ async function ensureMasterAncestry(db, run, { provider, repo, now, actor }) {
 function recordDbDisposition(db, run, { now, actor }) {
   const assessment = db.prepare("SELECT * FROM production_migration_safety_assessment WHERE id=?").get(Number(run.migration_safety_assessment_id));
   const decided = decideDbRollbackDisposition(assessment?.migration_classification);
+  const existing = db.prepare("SELECT id FROM production_release_evidence WHERE release_run_id=? AND evidence_kind='db_rollback_disposition' LIMIT 1").get(Number(run.id));
+  if (existing) return decided;
   withImmediateTx(db, () => {
     appendEvidence(db, {
       releaseRunId: run.id, kind: "db_rollback_disposition", now,
       payload: { classification: assessment?.migration_classification || null, ...decided, auto_restore: false },
     });
-    if (decided.disposition === DB_ROLLBACK_DISPOSITIONS.MANUAL_REQUIRED) {
-      appendEvent(db, { releaseRunId: run.id, toStatus: RELEASE_STATUSES.DB_ROLLBACK_MANUAL_REQUIRED, eventType: "db_rollback_manual_required", reason: decided.reason, errorCode: decided.disposition, now, actor });
-    }
+    appendAuditRow(db, {
+      actor: actor || "system",
+      action: "issue.production_release.db_disposition",
+      entityType: "production_release_run",
+      entityId: String(run.id),
+      data: { disposition: decided.disposition, auto_restore: false, reason: decided.reason },
+      now,
+    });
   });
   return decided;
 }
 
-async function executeCodeRollback(db, run, { provider, repo, env, now, actor }) {
+async function executeCodeRollback(db, run, { provider, repo, env, now, actor, owner, hooks = null }) {
   const prev = {
     source_sha: run.previous_stable_sha,
     artifact_digest: run.previous_stable_digest,
@@ -614,6 +763,7 @@ async function executeCodeRollback(db, run, { provider, repo, env, now, actor })
     });
     throw httpError("previous stable identity is incomplete; code rollback blocked", 409);
   }
+  const observedStable = rollbackObservedFrom(db, run);
   if (repo?.available && !repo.isAncestor(prev.source_sha, "master")) {
     throw httpError("previous stable SHA is not reachable from protected master", 409);
   }
@@ -622,11 +772,13 @@ async function executeCodeRollback(db, run, { provider, repo, env, now, actor })
     digest: image?.digest, ociRevision: image?.oci_revision, ociSource: image?.oci_source,
     authorizedSha: prev.source_sha, authorizedDigest: prev.artifact_digest,
   });
+  requireStableUnchanged(db, observedStable);
   const { workflow } = await dispatchOrReconcile(db, {
     run, provider, workflowKind: WORKFLOW_KINDS.ROLLBACK, workflowFile: PRODUCTION_WORKFLOWS.DEPLOY,
     inputs: { sha: prev.source_sha, image_digest: prev.artifact_digest, expected_digest: prev.artifact_digest },
     environment: REQUIRED_TARGET_ENVIRONMENT, confirmation: "DEPLOY-PRODUCTION",
     actor, now, dispatchedStatus: RELEASE_STATUSES.CODE_ROLLBACK_DISPATCHED, repo, env,
+    owner, hooks, observedStable, requireImageOutputs: true,
   });
   const health = await provider.healthSmoke({ imageDigest: prev.artifact_digest, headSha: prev.source_sha });
   if (!health?.passed || !same(health.image_digest, prev.artifact_digest) || !same(health.oci_revision, prev.source_sha)) {
@@ -636,11 +788,17 @@ async function executeCodeRollback(db, run, { provider, repo, env, now, actor })
     });
     throw httpError("code rollback health/smoke failed", 409);
   }
+  if (hooks?.beforeStableWrite) await hooks.beforeStableWrite({ run, kind: "rollback" });
+  requireStableUnchanged(db, observedStable);
   withImmediateTx(db, () => {
     appendEvidence(db, { releaseRunId: run.id, kind: "rollback_health", now, health_result: "PASS", smoke_result: "PASS", image_digest: health.image_digest, oci_revision: health.oci_revision, payload: health });
-    seedProductionStable(db, {
-      sourceSha: prev.source_sha, artifactDigest: prev.artifact_digest, workflowRunId: String(workflow.id),
-      releaseRunId: run.id, provenance: { kind: "code_rollback", previous_stable_workflow_run_id: prev.workflow_run_id }, now,
+    casWriteProductionStable(db, {
+      next: {
+        sourceSha: prev.source_sha, artifactDigest: prev.artifact_digest, workflowRunId: String(workflow.id),
+        releaseRunId: run.id, provenance: { kind: "code_rollback", previous_stable_workflow_run_id: prev.workflow_run_id },
+      },
+      casFrom: observedStable,
+      now,
     });
     appendEvent(db, { releaseRunId: run.id, toStatus: RELEASE_STATUSES.CODE_ROLLBACK_RECONCILED, eventType: "code_rollback_reconciled", now, actor });
     appendEvent(db, { releaseRunId: run.id, toStatus: RELEASE_STATUSES.ROLLED_BACK, eventType: "rolled_back", now, actor });
@@ -654,22 +812,28 @@ async function executeCodeRollback(db, run, { provider, repo, env, now, actor })
 }
 
 export async function executeProductionRelease(db, releaseRunId, {
-  provider = null, repo = null, env = process.env, now = new Date(), actor = "owner",
+  provider = null, repo = null, env = process.env, now = new Date(), actor = "owner", hooks = null,
 } = {}) {
   const prov = provider || makeProductionReleaseProvider(env);
   if (!prov.available) throw httpError("production release provider unavailable", 503);
   const row = db.prepare("SELECT * FROM production_release_run WHERE id=?").get(Number(releaseRunId));
   if (!row) throw httpError("production release run not found", 404);
   let run = row;
-  const status = latestStatus(db, run.id);
-  if (status === RELEASE_STATUSES.SUCCEEDED || status === RELEASE_STATUSES.ROLLED_BACK) {
+  const status = latestStatus(db, run.id) || RELEASE_STATUSES.CREATED;
+  if (isTerminalReleaseStatus(status)) {
     return { run: publicReleaseRun(db, run), current_status: status, idempotent: true };
+  }
+  const owner = randomUUID();
+  const observedStable = stableSnapshot(getProductionStable(db));
+  if (ROLLBACK_PATH_STATUSES.includes(status) && status !== RELEASE_STATUSES.ROLLED_BACK) {
+    await executeCodeRollback(db, run, { provider: prov, repo, env, now, actor, owner, hooks });
+    return { run: publicReleaseRun(db, db.prepare("SELECT * FROM production_release_run WHERE id=?").get(run.id)), rolled_back: true, db_restore: false };
   }
 
   withImmediateTx(db, () => {
     const alreadyOnMaster = !!(repo?.available && repo.isAncestor(run.authorized_head_sha, "master"));
     assertIdentitiesUnchanged(db, run, { repo, env, allowMasterMovement: alreadyOnMaster });
-    if (latestStatus(db, run.id) === RELEASE_STATUSES.CREATED) {
+    if ((latestStatus(db, run.id) || RELEASE_STATUSES.CREATED) === RELEASE_STATUSES.CREATED) {
       appendEvent(db, { releaseRunId: run.id, toStatus: RELEASE_STATUSES.ELIGIBILITY_VERIFIED, eventType: "eligibility_verified", now, actor });
     }
   });
@@ -680,6 +844,7 @@ export async function executeProductionRelease(db, releaseRunId, {
     run, provider: prov, workflowKind: WORKFLOW_KINDS.BUILD, workflowFile: PRODUCTION_WORKFLOWS.BUILD,
     inputs: { sha: run.authorized_head_sha, expected_digest: run.artifact_digest, image_digest: run.artifact_digest },
     environment: null, actor, now, dispatchedStatus: RELEASE_STATUSES.BUILD_DISPATCHED, repo, env,
+    owner, hooks, requireImageOutputs: true,
   });
   const inspected = await prov.inspectImage({ sha: run.authorized_head_sha, digest: run.artifact_digest });
   const buildDigest = inspected?.digest || build.workflow.outputs?.image_digest;
@@ -703,6 +868,7 @@ export async function executeProductionRelease(db, releaseRunId, {
     run, provider: prov, workflowKind: WORKFLOW_KINDS.PREDEPLOY, workflowFile: PRODUCTION_WORKFLOWS.PREDEPLOY,
     inputs: { sha: run.authorized_head_sha }, environment: REQUIRED_TARGET_ENVIRONMENT, confirmation: "PREDEPLOY-PRODUCTION",
     actor, now, dispatchedStatus: RELEASE_STATUSES.PREDEPLOY_DISPATCHED, repo, env,
+    owner, hooks,
   });
   const backup = pre.workflow.outputs?.db_backup;
   if (!backup?.verified || !backup.backup_id || !backup.backup_hash) {
@@ -720,6 +886,7 @@ export async function executeProductionRelease(db, releaseRunId, {
     inputs: { sha: run.authorized_head_sha, image_digest: run.artifact_digest },
     environment: REQUIRED_TARGET_ENVIRONMENT, confirmation: "DEPLOY-PRODUCTION",
     actor, now, dispatchedStatus: RELEASE_STATUSES.DEPLOY_DISPATCHED, repo, env,
+    owner, hooks, requireImageOutputs: true,
   });
   withImmediateTx(db, () => {
     appendEvent(db, { releaseRunId: run.id, toStatus: RELEASE_STATUSES.DEPLOY_RECONCILED, eventType: "deploy_reconciled", now, actor });
@@ -736,20 +903,25 @@ export async function executeProductionRelease(db, releaseRunId, {
       });
       appendEvent(db, { releaseRunId: run.id, toStatus: RELEASE_STATUSES.HEALTH_FAILED, eventType: "health_failed", reason: health?.detail || "health_or_smoke_failed", errorCode: "health_failed", now, actor });
     });
-    await executeCodeRollback(db, run, { provider: prov, repo, env, now, actor });
+    await executeCodeRollback(db, run, { provider: prov, repo, env, now, actor, owner, hooks });
     return { run: publicReleaseRun(db, db.prepare("SELECT * FROM production_release_run WHERE id=?").get(run.id)), rolled_back: true, db_restore: false };
   }
 
+  if (hooks?.beforeStableWrite) await hooks.beforeStableWrite({ run, kind: "release" });
+  requireStableUnchanged(db, observedStable);
   withImmediateTx(db, () => {
     appendEvidence(db, {
       releaseRunId: run.id, kind: "health_smoke", now, health_result: "PASS", smoke_result: "PASS",
       image_digest: health.image_digest, oci_revision: health.oci_revision, payload: health,
     });
     appendEvent(db, { releaseRunId: run.id, toStatus: RELEASE_STATUSES.HEALTH_VERIFIED, eventType: "health_verified", now, actor });
-    seedProductionStable(db, {
-      sourceSha: run.authorized_head_sha, artifactDigest: run.artifact_digest, workflowRunId: String(deploy.workflow.id),
-      releaseRunId: run.id,
-      provenance: { kind: "release_succeeded", workflow_file: PRODUCTION_WORKFLOWS.DEPLOY, workflow_ref: REQUIRED_WORKFLOW_REF, attempt: deploy.workflow.attempt },
+    casWriteProductionStable(db, {
+      next: {
+        sourceSha: run.authorized_head_sha, artifactDigest: run.artifact_digest, workflowRunId: String(deploy.workflow.id),
+        releaseRunId: run.id,
+        provenance: { kind: "release_succeeded", workflow_file: PRODUCTION_WORKFLOWS.DEPLOY, workflow_ref: REQUIRED_WORKFLOW_REF, attempt: deploy.workflow.attempt },
+      },
+      casFrom: observedStable,
       now,
     });
     appendEvent(db, { releaseRunId: run.id, toStatus: RELEASE_STATUSES.SUCCEEDED, eventType: "succeeded", now, actor });
@@ -776,16 +948,26 @@ export async function retryProductionRelease(db, releaseRunId, opts = {}) {
 }
 
 export async function requestCodeRollback(db, {
-  releaseRunId, previousStableSha, previousStableDigest, previousStableWorkflowRunId, provider, repo, env = process.env, now = new Date(), actor = "owner",
+  releaseRunId, previousStableSha, previousStableDigest, previousStableWorkflowRunId, provider, repo, env = process.env, now = new Date(), actor = "owner", hooks = null,
 } = {}) {
   const row = db.prepare("SELECT * FROM production_release_run WHERE id=?").get(Number(releaseRunId));
   if (!row) throw httpError("production release run not found", 404);
   if (!same(previousStableSha, row.previous_stable_sha) || !same(previousStableDigest, row.previous_stable_digest) || !same(previousStableWorkflowRunId, row.previous_stable_workflow_run_id)) {
     throw httpError("previous stable identity mismatch", 409);
   }
+  const status = latestStatus(db, row.id);
+  if (status === RELEASE_STATUSES.ROLLED_BACK) {
+    return { run: publicReleaseRun(db, row), rolled_back: true, db_restore: false, idempotent: true };
+  }
+  const cur = getProductionStable(db);
+  const thisRelease = cur && same(cur.source_sha, row.authorized_head_sha) && same(cur.artifact_digest, row.artifact_digest);
+  const thisPointer = cur && cur.release_run_id != null && Number(cur.release_run_id) === Number(row.id);
+  if (!thisRelease && !thisPointer) {
+    throw httpError("rollback run is stale or superseded by a newer production release", 409);
+  }
   const prov = provider || makeProductionReleaseProvider(env);
   if (!prov.available) throw httpError("production release provider unavailable", 503);
-  const result = await executeCodeRollback(db, row, { provider: prov, repo, env, now, actor });
+  const result = await executeCodeRollback(db, row, { provider: prov, repo, env, now, actor, hooks });
   return { run: publicReleaseRun(db, db.prepare("SELECT * FROM production_release_run WHERE id=?").get(row.id)), ...result };
 }
 
@@ -803,6 +985,9 @@ export function getProductionRelease(db, releaseRunId) {
       workflow_run_id: b.workflow_run_id,
       workflow_attempt: b.workflow_attempt == null ? null : Number(b.workflow_attempt),
       dispatch_request_id: b.dispatch_request_id,
+      dispatch_owner: b.dispatch_owner,
+      dispatch_intent_id: b.dispatch_intent_id,
+      dispatch_claimed_at: b.dispatch_claimed_at,
       provider_response_identity: b.provider_response_identity,
       binding_status: b.binding_status,
       created_at: b.created_at,
