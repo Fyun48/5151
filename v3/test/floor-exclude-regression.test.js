@@ -36,6 +36,15 @@ test("rooftop addition (頂樓加蓋/頂加) still excluded via text signals", (
   assert.equal(isRooftopAddition({ floor_name: "頂樓加蓋" }), true);
   assert.equal(isRooftopAddition({ floor_name: "5/12", title: "頂加出租" }), true);
   assert.equal(isRooftopAddition({ floor_name: "5F/12F" }), false);
+  assert.equal(isRooftopAddition({ floor_name: "4/4", title: "違蓋住家出租" }), true);
+  assert.equal(isRooftopAddition({ floor_name: "5/5", tags: JSON.stringify(["頂樓加蓋"]) }), true);
   const settings = { excludeLowFloors: true, excludeRooftop: true, minBuildingFloors: 0 };
   assert.equal(passesDisplayFilters({ kind_name: "套房", floor_name: "頂樓加蓋", area_name: "8坪" }, settings), false);
+});
+
+test("empty floor still excludes 1F/basement when title or tags say so", () => {
+  const settings = { excludeLowFloors: true, excludeRooftop: true, minBuildingFloors: 0 };
+  assert.equal(passesDisplayFilters({ kind_name: "整層住家", floor_name: "", title: "一樓住家近市場" }, settings), false);
+  assert.equal(passesDisplayFilters({ kind_name: "整層住家", floor_name: "", title: "地下室獨立套房" }, settings), false);
+  assert.equal(passesDisplayFilters({ kind_name: "整層住家", floor_name: "", title: "11樓景觀戶" }, settings), true);
 });

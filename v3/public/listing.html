@@ -106,7 +106,7 @@
         <h1>${esc(d.title || "租屋物件")}</h1>
         <div class="price">${esc(d.price || (d.price_num ? d.price_num + " 元/月" : ""))}</div>
         <p class="meta">${esc(d.address || "")}</p>
-        <p class="meta">${[d.kind_name, d.layout, d.area_name, d.floor_name].filter(Boolean).map(esc).join("・")}</p>
+        <p class="meta">${[d.kind_name, d.layout, d.area_name, d.floor_display || d.floor_name].filter(Boolean).map(esc).join("・")}</p>
         ${photos.length > 1 ? `<div class="card"><div class="gallery" id="gallery">${thumbs}</div></div>` : ""}
         ${chips ? `<div class="card"><div class="chips">${chips}</div></div>` : ""}
         ${d.body ? `<div class="card"><div class="body">${esc(d.body)}</div></div>` : ""}

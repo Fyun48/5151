@@ -52,6 +52,12 @@ test("default Q&A explains walkable MRT distance not straight-line", () => {
   assert.ok(items.some((row) => row.id === "self-verify"));
   assert.ok(items.some((row) => row.id === "self-rich"));
   assert.ok(items.some((row) => row.id === "not-broker"));
+  const watchLimit = items.find((row) => row.id === "watch-limit");
+  assert.ok(watchLimit);
+  assert.match(watchLimit.answer, /一般會員最多 6 筆/);
+  assert.match(watchLimit.answer, /贊助會員最多 15 筆/);
+  assert.match(watchLimit.answer, /優先/);
+  assert.doesNotMatch(watchLimit.answer, /管理員/);
   const fit = items.find((row) => row.id === "listing-fit");
   assert.match(fit.answer, /不是成交預測/);
 });

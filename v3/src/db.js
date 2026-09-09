@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { shouldKeepListing, passesAttributeFilters, passesDisplayFilters, listingHasElevator, matchesHousingKind, matchesListingSources, normalizeListQuery, housingTypeLabel } from "./floors.js";
-import { isTrustedGeoSource, listingCommunityId, sqlTrustedGeoSource } from "./location.js";
+import { shouldKeepListing, passesAttributeFilters, passesDisplayFilters, listingHasElevator, matchesHousingKind, matchesListingSources, normalizeListQuery, housingTypeLabel, formatFloorDisplay } from "./floors.js";
+import { addressPrecision, isTrustedGeoSource, listingCommunityId, preferListingAddress, sqlTrustedGeoSource } from "./location.js";
 import { makeRouteKey } from "./route.js";
 import {
   bindGoogleDirectionsEnabled,
@@ -18,7 +18,8 @@ import {
 } from "./mapsBilling.js";
 import { sameSearch } from "./client591.js";
 import { CITIES, districtNameFromListing, districtsFromSearchUrls, lookupDistrict, normalizeWatchDistricts } from "./regions.js";
-import { preferPrimaryListing } from "./match.js";
+import { matchFocusHints, preferPrimaryListing } from "./match.js";
+import { canAddWatch } from "./watchLimits.js";
 import {
   alreadyNotifiedGroup,
   bindListingsToGroup,
@@ -1428,7 +1429,7 @@ export function getSelfListing(postId, opts = {}) {
 
 export function createSelfListing(userId, input) {
   return createSelfListingOn(db, userId, input, new Date(), {
-    matchCandidates: (listing) => listMatchCandidates(listing.post_id),
+    matchCandidates: (listing) => listMatchCandidates(listing.post_id, listing),
   });
 }
 
@@ -1441,7 +1442,7 @@ export function copyOwnListingFor(userId, sourceId, input = {}) {
 }
 export function publishOwnedDraftFor(userId, postId, input = {}) {
   return publishOwnedDraftListingOn(db, userId, postId, input, new Date(), {
-    matchCandidates: (listing) => listMatchCandidates(listing.post_id),
+    matchCandidates: (listing) => listMatchCandidates(listing.post_id, listing),
   });
 }
 export function listDescriptionTemplatesFor(userId) {
@@ -1500,7 +1501,7 @@ export function confirmListingImportFor(userId, id, input) {
 }
 export function publishConfirmedImportFor(userId, id, input) {
   return publishConfirmedImportOn(db, userId, id, input, {
-    matchCandidates: (listing) => listMatchCandidates(listing.post_id),
+    matchCandidates: (listing) => listMatchCandidates(listing.post_id, listing),
   });
 }
 export function listAdminListingImports(opts) {
@@ -2024,6 +2025,7 @@ function decorateListingLite(row, settings, userId) {
     commute_min_am: Number.isFinite(Number(row.rush_am_min)) && Number(row.rush_am_min) > 0 ? Math.round(Number(row.rush_am_min)) : null,
     commute_min_pm: Number.isFinite(Number(row.rush_pm_min)) && Number(row.rush_pm_min) > 0 ? Math.round(Number(row.rush_pm_min)) : null,
     district: districtNameFromListing(row),
+    floor_display: formatFloorDisplay(row.floor_name),
     source,
     source_label: selfSourceLabel(source),
     mine: uid > 0 && listedBy === uid,
@@ -2182,17 +2184,35 @@ export function findBySourceKey(sourceKey, excludePostId) {
     .map((row) => overlayPersonal(row, anyone.get(Number(row.post_id))));
 }
 
-export function listMatchCandidates(excludePostId) {
+function sqlWatchedFirst() {
+  return `CASE WHEN EXISTS (
+    SELECT 1 FROM user_listing_flags f WHERE f.post_id = listings.post_id AND f.watched = 1
+  ) THEN 0 ELSE 1 END`;
+}
+
+export function listMatchCandidates(excludePostId, incoming = null) {
   const anyone = loadAnyoneFlagMap(db);
-  return db
-    .prepare(
+  const pid = Number(excludePostId) || 0;
+  const hints = incoming ? matchFocusHints(incoming) : { street: "", community: "", cover: "" };
+  const rows = hints.street || hints.community || hints.cover
+    ? db.prepare(
       `SELECT * FROM listings
        WHERE post_id != ?
-       ORDER BY IFNULL(offline, 0) DESC, hidden DESC, viewed DESC, last_seen_at DESC
-       LIMIT 4000`,
-    )
-    .all(excludePostId)
-    .map((row) => overlayPersonal(row, anyone.get(Number(row.post_id))));
+         AND (
+           (? != '' AND replace(replace(IFNULL(address, ''), ' ', ''), '-', '') LIKE '%' || ? || '%')
+           OR (? != '' AND IFNULL(community_name, '') = ?)
+           OR (? != '' AND IFNULL(cover, '') != '' AND IFNULL(cover, '') = ?)
+         )
+       ORDER BY ${sqlWatchedFirst()}, IFNULL(offline, 0) DESC, last_seen_at DESC
+       LIMIT 400`,
+    ).all(pid, hints.street, hints.street, hints.community, hints.community, hints.cover, hints.cover)
+    : db.prepare(
+      `SELECT * FROM listings
+       WHERE post_id != ?
+       ORDER BY ${sqlWatchedFirst()}, IFNULL(offline, 0) DESC, hidden DESC, viewed DESC, last_seen_at DESC
+       LIMIT 800`,
+    ).all(pid);
+  return rows.map((row) => overlayPersonal(row, anyone.get(Number(row.post_id))));
 }
 
 export function setListingMatch(postId, match) {
@@ -2521,6 +2541,8 @@ export function upsertListing(listing) {
   const costChangedAt = String(listing.cost_changed_at || "").trim();
   const costChangeType = String(listing.cost_change_type || "").trim();
   const costChangeDetail = String(listing.cost_change_detail || "").trim();
+  const existing = db.prepare("SELECT address, geo_source FROM listings WHERE post_id = ?").get(listing.post_id);
+  const address = preferListingAddress(listing.address, existing?.address, existing?.geo_source);
   db.prepare(`
     INSERT INTO listings (
       post_id, source_key, search_key, title, url, price, price_num, extra_fee, extra_fee_text,
@@ -2608,7 +2630,7 @@ export function upsertListing(listing) {
     listing.price_contain_text || "",
     extraFees,
     Number(listing.extra_fees_fetched) || 0,
-    listing.address,
+    address,
     listing.area_name,
     listing.layout,
     listing.floor_name,
@@ -2796,7 +2818,7 @@ export function listingsNeeding591Geo(limit = 20) {
        WHERE IFNULL(hidden, 0) = 0
          AND IFNULL(offline, 0) = 0
          AND ${sql591Source()}
-       ORDER BY last_seen_at DESC`,
+       ORDER BY ${sqlWatchedFirst()}, last_seen_at DESC`,
     )
     .all();
   const out = [];
@@ -2932,7 +2954,8 @@ export function listingsNeedingAliveCheck({ excludeIds = [], limit = 20 } = {}) 
       `SELECT post_id FROM listings
        WHERE IFNULL(hidden, 0) = 0 AND IFNULL(offline, 0) = 0
          AND ${sqlNotSelfSource()}
-       ORDER BY CASE WHEN last_checked_at IS NULL THEN 0 ELSE 1 END,
+       ORDER BY ${sqlWatchedFirst()},
+                CASE WHEN last_checked_at IS NULL THEN 0 ELSE 1 END,
                 IFNULL(last_checked_at, last_seen_at) ASC
        LIMIT 800`,
     )
@@ -3197,10 +3220,62 @@ export function crawlIntervalMinutes() {
   return Math.max(1, Number(getSystemCrawl().intervalMinutes) || SYSTEM_CRAWL_INTERVAL_MINUTES);
 }
 
+export function listingsNeedingAddressGeo(limit = 20) {
+  const cap = Math.max(1, Number(limit) || 20);
+  const rows = db
+    .prepare(
+      `SELECT post_id, address, lat, lng, geo_source
+       FROM listings
+       WHERE IFNULL(hidden, 0) = 0
+         AND IFNULL(offline, 0) = 0
+         AND IFNULL(address, '') != ''
+       ORDER BY ${sqlWatchedFirst()}, last_seen_at DESC
+       LIMIT 800`,
+    )
+    .all();
+  const out = [];
+  for (const row of rows) {
+    if (row.lat != null && row.lng != null && isTrustedGeoSource(row.geo_source)) continue;
+    if (inferGeoQuality({ address: row.address }) === "unknown") continue;
+    out.push(row);
+    if (out.length >= cap) break;
+  }
+  return out;
+}
+
+export function listingsNeedingAddressEnrich(limit = 12) {
+  const cap = Math.max(1, Number(limit) || 12);
+  const rows = db
+    .prepare(
+      `SELECT post_id, source, source_id, address, url
+       FROM listings
+       WHERE IFNULL(hidden, 0) = 0
+         AND IFNULL(offline, 0) = 0
+         AND source IN ('houseprice', 'ddroom')
+       ORDER BY ${sqlWatchedFirst()}, last_seen_at DESC
+       LIMIT 400`,
+    )
+    .all();
+  return rows.filter((row) => addressPrecision(row.address) < 25).slice(0, cap);
+}
+
 export function setFlags(postId, flags, userId) {
   const uid = resolveUserId(userId);
   const listing = getListing(postId, uid);
   if (!listing) return null;
+  const turningOn = flags && (flags.watched === true || flags.watched === 1);
+  if (turningOn && !Number(listing.watched)) {
+    const user = getUserById(uid) || {};
+    const gate = canAddWatch(db, uid, user);
+    if (!gate.ok) {
+      const err = new Error(gate.error);
+      err.status = 409;
+      err.code = "WATCH_LIMIT";
+      err.limit = gate.limit;
+      err.count = gate.count;
+      throw err;
+    }
+  }
   setUserListingFlags(db, uid, postId, flags || {}, listing);
   if (flags && (flags.watched === true || flags.watched === 1)) {
     try { bindWatchToGroup(db, uid, postId); } catch { /* optional */ }
@@ -3426,7 +3501,7 @@ export function listingsNeedingRoute(limit = 40) {
          AND ${sqlTrustedGeoSource()}
          AND IFNULL(hidden, 0) = 0
          AND IFNULL(offline, 0) = 0
-       ORDER BY last_seen_at DESC
+       ORDER BY ${sqlWatchedFirst()}, last_seen_at DESC
        LIMIT 2000`,
     )
     .all();
@@ -3473,7 +3548,12 @@ export function updateListingsGeoByAddress(address, lat, lng) {
   if (!key || !Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return;
   db.prepare(
     `UPDATE listings
-     SET lat = ?, lng = ?
+     SET lat = ?,
+         lng = ?,
+         geo_source = CASE
+           WHEN ${sqlTrustedGeoSource()} THEN geo_source
+           ELSE 'geocode'
+         END
      WHERE replace(replace(IFNULL(address, ''), ' ', ''), '-', '') = ?`,
   ).run(Number(lat), Number(lng), key);
 }

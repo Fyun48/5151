@@ -2951,7 +2951,7 @@
           <div class="chip-row" data-chip-row="filter">
           <button class="chip on" data-filter="all">全部</button>
           <button class="chip" data-filter="unseen">未瀏覽</button>
-          <button class="chip" data-filter="watched">特別關注</button>
+          <button class="chip" data-filter="watched" title="一般會員最多 6 筆，贊助會員最多 15 筆">特別關注</button>
           <button class="chip" data-filter="same_source">同屋源更新</button>
           <button class="chip" data-filter="suspected">疑似同屋源</button>
           <button class="chip" data-filter="hidden">已隱藏</button>
@@ -3785,7 +3785,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> · <a href="/data.html">居住數據</a> · <a href="#me" id="supportFooterLink">支持本站</a> · <a href="#" id="feedbackFooterLink">意見回饋</a> <span class="site-ver">ver. 3.49</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> · <a href="/data.html">居住數據</a> · <a href="#me" id="supportFooterLink">支持本站</a> · <a href="#" id="feedbackFooterLink">意見回饋</a> <span class="site-ver">ver. 3.50</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -4013,6 +4013,8 @@
     const MEMBER_MAX_PROFILES = 3;
     const MEMBER_MAX_EXCLUDE_KEYWORDS = 30;
     const MEMBER_MAX_EXCLUDE_AGENTS = 15;
+    const MEMBER_MAX_WATCHED = 6;
+    const SPONSOR_MAX_WATCHED = 15;
     let memberMailConfigured = false;
     const DOCK_KEY = "591-alert-dock-v1";
     const DOCK_READ_KEY = "591-alert-dock-read-v1";
@@ -4149,11 +4151,43 @@
     function routeChip(text) {
       return `<span class="route-chip">${esc(text)}</span>`;
     }
+    function floorToken(token) {
+      const raw = String(token || "").replace(/樓/g, "").trim();
+      if (!raw) return "";
+      if (/^B\d*$/i.test(raw) || /地下/.test(raw)) return raw.toUpperCase();
+      if (/^\d+(?:-\d+)?$/.test(raw)) return `${raw}F`;
+      if (/^\d+(?:-\d+)?F$/i.test(raw)) return raw.toUpperCase();
+      return raw;
+    }
+    function formatFloorDisplay(floorName) {
+      const original = String(floorName || "").trim();
+      if (!original) return "";
+      if (/^\(\s*.+\s*\/\s*.+\s*\)$/.test(original)) return original.replace(/\s+/g, " ");
+      const raw = original.replace(/\s+/g, "").replace(/[／]/g, "/");
+      const pair = raw.match(/^(?:出租)?(\d+(?:-\d+)?|B\d+|地下\d*)(?:F|樓)?\/(?:共)?(\d+)(?:F|樓)?$/i);
+      if (pair) return `( ${floorToken(pair[1])} / ${floorToken(pair[2])} )`;
+      const single = raw.match(/^(?:出租)?(\d+(?:-\d+)?|B\d+)(?:F|樓)$/i);
+      if (single) return `( ${floorToken(single[1])} )`;
+      return original;
+    }
     function floorDisplay(item) {
-      const raw = String(item?.floor_name || "").replace(/\s+/g, "").replace("／", "/");
-      const m = raw.match(/^(\d+(?:-\d+)?)\/(\d+)$/);
-      if (m) return `出租 ${m[1]}樓／共 ${m[2]}樓`;
-      return String(item?.floor_name || "").trim();
+      return item?.floor_display || formatFloorDisplay(item?.floor_name);
+    }
+    function watchLimit() {
+      if (meIsAdmin) return 0;
+      return mePlan === "sponsor" ? SPONSOR_MAX_WATCHED : MEMBER_MAX_WATCHED;
+    }
+    function watchedCount() {
+      return Number(lastStats?.watched) || 0;
+    }
+    function watchLimitReached() {
+      const cap = watchLimit();
+      return cap > 0 && watchedCount() >= cap;
+    }
+    function watchLimitText() {
+      return mePlan === "sponsor"
+        ? `贊助會員最多特別關注 ${SPONSOR_MAX_WATCHED} 筆。請先取消一筆再加。`
+        : `一般會員最多特別關注 ${MEMBER_MAX_WATCHED} 筆，贊助會員可到 ${SPONSOR_MAX_WATCHED} 筆。請先取消一筆再加。`;
     }
     function listingSpecLine(item) {
       return [
@@ -4474,14 +4508,24 @@
       return String(kindName || "").includes("整層住家");
     }
 
+    function listingFilterHay(item) {
+      return `${item?.floor_name || ""} ${item?.title || ""} ${item?.kind_name || ""} ${item?.address || ""} ${item?.tags || ""} ${(item?.trait_labels || []).join(" ")}`;
+    }
     function isRooftopAddition(item) {
-      const hay = `${item?.floor_name || ""} ${item?.title || ""} ${item?.kind_name || ""}`;
-      return /頂樓加蓋|頂加/.test(hay);
+      const hay = listingFilterHay(item);
+      if (/無加蓋|非頂加|不是頂加|無違蓋/.test(hay)) return false;
+      if (/頂樓加蓋|頂加|違蓋|違建住家|鐵皮加蓋/.test(hay)) return true;
+      return /加蓋/.test(String(item?.floor_name || ""));
     }
 
-    function isAtOrBelowFirstFloor(floorName) {
+    function isAtOrBelowFirstFloor(floorName, extraHay = "") {
       const text = String(floorName || "").replace(/\s+/g, "");
-      if (!text) return false;
+      if (!text) {
+        const hay = String(extraHay || "").replace(/\s+/g, "");
+        if (/地下[室樓]|半地下|騎樓|(?:^|[^\d])B\d/i.test(hay)) return true;
+        if (/(?:10|11|12|13|14|15|16|17|18|19|21)樓|(?:10|11|12|13|14|15|16|17|18|19|21)F/i.test(hay)) return false;
+        return /(?:^|[^\d])1樓|(?:^|[^\d])一樓|(?:^|[^\d])1F(?:[^\d]|$)/i.test(hay);
+      }
       const main = text.split("/")[0];
       if (/地下|半地下/i.test(main) || /^B\d/i.test(main) || /^B$/i.test(main)) {
         return true;
@@ -4603,7 +4647,7 @@
         out = out.filter((item) => guestKindMatch(item, kinds));
       }
       if ($("excludeLowFloors")?.checked) {
-        out = out.filter((item) => !isAtOrBelowFirstFloor(item.floor_name));
+        out = out.filter((item) => !isAtOrBelowFirstFloor(item.floor_name, listingFilterHay(item)));
       }
       if ($("excludeRooftop")?.checked) {
         out = out.filter((item) => !isRooftopAddition(item));
@@ -5750,7 +5794,7 @@
         const peerSource = peer.source_label || listingSourceLabel(peer);
         const peerWhen = formatListingWhen(peer);
         const whenLine = peerWhen ? `更新 ${peerWhen} · 來源 ${peerSource}` : `來源 ${peerSource}`;
-        const metaBits = [peer.layout || "", peer.area_name || "", peer.floor_name || ""].filter(Boolean).join(" · ");
+        const metaBits = [peer.layout || "", peer.area_name || "", peer.floor_display || formatFloorDisplay(peer.floor_name) || peer.floor_name || ""].filter(Boolean).join(" · ");
         const split = peer.role === "affiliate"
           ? `<button type="button" class="ghost same-split-btn" data-reject-match="${peer.post_id}" data-reject-peer="${item.post_id}">不是同一間</button>`
           : "";
@@ -5965,7 +6009,7 @@
         }],
         ["fees", "費用說明", (row) => String(row.extra_fee_text || row.price_contain_text || "").trim()],
         ["area", "坪數", (row) => String(row.area_name || "").trim()],
-        ["floor", "樓層", (row) => String(row.floor_name || "").trim()],
+        ["floor", "樓層", (row) => floorDisplay(row) || String(row.floor_name || "").trim()],
         ["layout", "格局", (row) => String(row.layout || "").trim()],
         ["title", "標題", (row) => String(row.title || "").trim()],
         ["source", "來源", (row) => listingSourceLabel(row)],
@@ -6286,6 +6330,10 @@
     }
 
     function beginWatchDraft(id) {
+      if (watchLimitReached()) {
+        flash(watchLimitText());
+        return;
+      }
       draftWatch.add(String(id));
       pendingNoteFocus = id;
       renderList(listCache, lastStats);
@@ -6412,17 +6460,32 @@
     async function commitWatchDraft(id, note) {
       const key = String(id);
       if (!draftWatch.has(key)) return;
+      if (watchLimitReached()) {
+        draftWatch.delete(key);
+        noteDrafts.delete(key);
+        flash(watchLimitText());
+        renderList(listCache, lastStats);
+        return;
+      }
       cancelDraftCommitTimer();
       const card = document.querySelector(`[data-card="${key}"]`);
       flyCardToWatchChip(card);
       draftWatch.delete(key);
       noteDrafts.delete(key);
       if (card) card.style.visibility = "hidden";
-      await fetch(`/api/listings/${id}/flags`, {
+      const res = await fetch(`/api/listings/${id}/flags`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ watched: true, watch_note: note }),
       });
+      if (!res.ok) {
+        let data = {};
+        try { data = await res.json(); } catch { data = {}; }
+        flash(data.error || watchLimitText());
+        if (card) card.style.visibility = "";
+        renderList(listCache, lastStats);
+        return;
+      }
       maybeAskPush();
       if (watchNoteBusy()) {
         listRefreshQueued = true;
@@ -9637,9 +9700,7 @@
       if (watched) {
         const turningOn = ev.target.textContent.includes("特別");
         if (turningOn) {
-          draftWatch.add(String(watched));
-          pendingNoteFocus = watched;
-          renderList(listCache, lastStats);
+          beginWatchDraft(watched);
           return;
         }
         const key = String(watched);

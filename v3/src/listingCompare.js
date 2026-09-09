@@ -3,6 +3,7 @@
 import { decodeEntities } from "./htmlEntities.js";
 import { extraMonthlyAmount, listingCompareCost, parseJsonFees, rentAmount } from "./listingCost.js";
 import { preferPrimaryListing, sortGroupListings } from "./match.js";
+import { formatFloorDisplay } from "./floors.js";
 
 function normFeeText(value) {
   return String(value ?? "")
@@ -102,7 +103,7 @@ const COMPARE_FIELDS = [
   ["total", "總月費", (row) => formatTwMoney(listingCompareCost(row, { includeExtras: true })) || "0"],
   ["fees", "費用說明", feeRowsText],
   ["area", "坪數", (row) => String(row.area_name || "").trim()],
-  ["floor", "樓層", (row) => String(row.floor_name || "").trim()],
+  ["floor", "樓層", (row) => formatFloorDisplay(row.floor_name) || String(row.floor_name || "").trim()],
   ["layout", "格局", (row) => String(row.layout || "").trim()],
   ["title", "標題", (row) => String(row.title || "").trim()],
   ["source", "來源", (row) => String(row.source_label || row.source || "").trim()],

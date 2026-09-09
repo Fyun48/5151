@@ -146,9 +146,41 @@ export function matchesListingSources(listing, sources) {
   return keys.includes(listingSourceKey(listing));
 }
 
+export function listingFilterHay(listing) {
+  return `${listing?.floor_name || ""} ${listing?.title || ""} ${listing?.kind_name || ""} ${listing?.address || ""} ${tagText(listing)}`;
+}
+
 export function isRooftopAddition(listing) {
-  const hay = `${listing?.floor_name || ""} ${listing?.title || ""} ${listing?.kind_name || ""} ${tagText(listing)}`;
-  return /頂樓加蓋|頂加/.test(hay);
+  const hay = listingFilterHay(listing);
+  if (/無加蓋|非頂加|不是頂加|無違蓋/.test(hay)) return false;
+  if (/頂樓加蓋|頂加|違蓋|違建住家|鐵皮加蓋/.test(hay)) return true;
+  return /加蓋/.test(String(listing?.floor_name || ""));
+}
+
+function floorToken(token) {
+  const raw = String(token || "").replace(/樓/g, "").trim();
+  if (!raw) return "";
+  if (/^B\d*$/i.test(raw) || /地下/.test(raw)) return raw.toUpperCase();
+  if (/^\d+(?:-\d+)?$/.test(raw)) return `${raw}F`;
+  if (/^\d+(?:-\d+)?F$/i.test(raw)) return raw.toUpperCase();
+  return raw;
+}
+
+/** 列表／詳情／比較統一顯示：( 3F / 8F ) */
+export function formatFloorDisplay(floorName) {
+  const original = String(floorName || "").trim();
+  if (!original) return "";
+  if (/^\(\s*.+\s*\/\s*.+\s*\)$/.test(original)) return original.replace(/\s+/g, " ");
+  const raw = original.replace(/\s+/g, "").replace(/[／]/g, "/");
+  const pair = raw.match(/^(?:出租)?(\d+(?:-\d+)?|B\d+|地下\d*)(?:F|樓)?\/(?:共)?(\d+)(?:F|樓)?$/i);
+  if (pair) {
+    const left = floorToken(pair[1]);
+    const right = floorToken(pair[2]);
+    if (left && right) return `( ${left} / ${right} )`;
+  }
+  const single = raw.match(/^(?:出租)?(\d+(?:-\d+)?|B\d+)(?:F|樓)$/i);
+  if (single) return `( ${floorToken(single[1])} )`;
+  return original;
 }
 
 export function listingMatchesKindKey(listing, kind) {
@@ -186,10 +218,18 @@ export function normalizeListQuery(filter, kind, sources) {
   return { filter: section, kind: resolved.join(","), kinds: resolved, sources: parseListingSources(sources) };
 }
 
-/** 1F、地面／騎樓、地下室。不含整棟、頂樓加蓋（頂加另用排除頂樓加蓋）。 */
-export function isAtOrBelowFirstFloor(floorName) {
-  const text = String(floorName || "").replace(/\s+/g, "");
+function hayLooksLowFloor(hay) {
+  const text = String(hay || "").replace(/\s+/g, "");
   if (!text) return false;
+  if (/地下[室樓]|半地下|騎樓|(?:^|[^\d])B\d/i.test(text)) return true;
+  if (/(?:10|11|12|13|14|15|16|17|18|19|21)樓|(?:10|11|12|13|14|15|16|17|18|19|21)F/i.test(text)) return false;
+  return /(?:^|[^\d])1樓|(?:^|[^\d])一樓|(?:^|[^\d])1F(?:[^\d]|$)/i.test(text);
+}
+
+/** 1F、地面／騎樓、地下室。不含整棟、頂樓加蓋（頂加另用排除頂樓加蓋）。 */
+export function isAtOrBelowFirstFloor(floorName, extraHay = "") {
+  const text = String(floorName || "").replace(/\s+/g, "");
+  if (!text) return hayLooksLowFloor(extraHay);
   const main = text.split("/")[0];
   if (/地下|半地下/i.test(main) || /^B\d/i.test(main) || /^B$/i.test(main)) {
     return true;
@@ -203,7 +243,7 @@ export function isAtOrBelowFirstFloor(floorName) {
   // 例如 "1/4"、"1/12" 或裸數字 "1"。當主段以純數字開頭時，也視為樓層數判斷。
   const bare = main.match(/^(\d+)/);
   if (bare) return Number(bare[1]) <= 1;
-  return false;
+  return hayLooksLowFloor(extraHay);
 }
 
 export function buildingTotalFloors(floorName) {
@@ -223,7 +263,7 @@ export function passesDisplayFilters(listing, settings = {}, { skipWholeFloor = 
   if (!skipWholeFloor && settings.wholeFloorOnly === true && !isWholeFloorHome(listing.kind_name)) {
     return false;
   }
-  if (settings.excludeLowFloors !== false && isAtOrBelowFirstFloor(listing.floor_name)) {
+  if (settings.excludeLowFloors !== false && isAtOrBelowFirstFloor(listing.floor_name, listingFilterHay(listing))) {
     return false;
   }
   if (settings.excludeRooftop !== false && isRooftopAddition(listing)) {
