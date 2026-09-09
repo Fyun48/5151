@@ -2,32 +2,47 @@ name: Tests
 
 on:
   push:
-    branches: [master, main]
+    branches:
+      - master
+      - main
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    branches:
+      - master
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
 
+# Tests only. No review gate, auto-fix, auto-merge, or deployment.
 permissions:
-  contents: write
-  pull-requests: write
-  actions: write
+  contents: read
+
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
+    name: Run Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - run: npm test
-      # 合併與部署分離（Phase 3.5）：合併 PR 只做「合併」，絕不自動觸發任何 Production 部署。
-      # Production 部署一律改為明確的 workflow_dispatch（見 deploy-v3.yml / docker.yml / deploy-v2.yml / deploy.yml）。
-      # 維運自動化（cursor/ops-*）分支不自動合併，交由 Owner 依序人工合併。
-      - name: Auto-merge (no production deploy)
-        if: github.event_name == 'pull_request' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository && !startsWith(github.event.pull_request.head.ref, 'cursor/ops-') && !startsWith(github.event.pull_request.head.ref, 'ai-dev/')
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
+
+      - name: Run Test Suite
+        shell: bash
         run: |
-          gh pr merge "${{ github.event.pull_request.number }}" --squash --delete-branch
+          set -euo pipefail
+          npm test
