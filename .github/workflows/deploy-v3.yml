@@ -109,9 +109,25 @@ jobs:
         with:
           ref: master
           fetch-depth: 0
+      - name: Stage trusted workflow-definition evidence writers
+        env:
+          TRUSTED_SCRIPT_DIR: ${{ runner.temp }}/trusted-workflow-scripts
+        run: |
+          set -euo pipefail
+          # Writers must come from the trusted master workflow definition, not from
+          # a later candidate checkout that may predate these scripts (e.g. #217).
+          mkdir -p "$TRUSTED_SCRIPT_DIR"
+          cp -f \
+            .github/scripts/write-manual-owner-workflow-evidence.py \
+            .github/scripts/write-phase15-workflow-evidence.py \
+            "$TRUSTED_SCRIPT_DIR/"
+          test -s "$TRUSTED_SCRIPT_DIR/write-manual-owner-workflow-evidence.py"
+          test -s "$TRUSTED_SCRIPT_DIR/write-phase15-workflow-evidence.py"
+          echo "TRUSTED_SCRIPT_DIR=$TRUSTED_SCRIPT_DIR" >> "$GITHUB_ENV"
       - name: Write Phase 15 run identity
         if: ${{ always() && inputs.release_mode == 'ops_phase15' }}
         env:
+          TRUSTED_SCRIPT_DIR: ${{ runner.temp }}/trusted-workflow-scripts
           EVIDENCE_KIND: identity
           WF_FILE: .github/workflows/deploy-v3.yml
           WF_REF: ${{ github.ref }}
@@ -124,7 +140,7 @@ jobs:
           RELEASE_INTENT_ID: ${{ inputs.release_intent_id }}
           WF_ENVIRONMENT: production
           CONFIRMATION: ${{ inputs.confirmation }}
-        run: python3 .github/scripts/write-phase15-workflow-evidence.py phase15-run-identity.json
+        run: python3 "${TRUSTED_SCRIPT_DIR:?}/write-phase15-workflow-evidence.py" phase15-run-identity.json
       - name: Upload Phase 15 run identity
         if: ${{ always() && inputs.release_mode == 'ops_phase15' }}
         uses: actions/upload-artifact@v4
@@ -135,6 +151,7 @@ jobs:
       - name: Write Manual Owner run identity
         if: ${{ always() && inputs.release_mode == 'manual_owner' }}
         env:
+          TRUSTED_SCRIPT_DIR: ${{ runner.temp }}/trusted-workflow-scripts
           EVIDENCE_KIND: identity
           RELEASE_MODE: manual_owner
           WF_FILE: .github/workflows/deploy-v3.yml
@@ -148,7 +165,7 @@ jobs:
           RELEASE_INTENT_ID: ${{ inputs.release_intent_id }}
           WF_ENVIRONMENT: production
           CONFIRMATION: ${{ inputs.confirmation }}
-        run: python3 .github/scripts/write-manual-owner-workflow-evidence.py manual-owner-run-identity.json
+        run: python3 "${TRUSTED_SCRIPT_DIR:?}/write-manual-owner-workflow-evidence.py" manual-owner-run-identity.json
       - name: Upload Manual Owner run identity
         if: ${{ always() && inputs.release_mode == 'manual_owner' }}
         uses: actions/upload-artifact@v4
@@ -353,6 +370,7 @@ jobs:
       - name: Write Phase 15 workflow evidence
         if: ${{ always() && inputs.release_mode == 'ops_phase15' }}
         env:
+          TRUSTED_SCRIPT_DIR: ${{ runner.temp }}/trusted-workflow-scripts
           WF_FILE: .github/workflows/deploy-v3.yml
           WF_REF: ${{ github.ref }}
           WF_RUN_ID: ${{ github.run_id }}
@@ -373,7 +391,7 @@ jobs:
             . ./phase15-health.env
             set +a
           fi
-          python3 .github/scripts/write-phase15-workflow-evidence.py phase15-workflow-evidence.json
+          python3 "${TRUSTED_SCRIPT_DIR:?}/write-phase15-workflow-evidence.py" phase15-workflow-evidence.json
       - name: Upload Phase 15 workflow evidence
         if: ${{ always() && inputs.release_mode == 'ops_phase15' }}
         uses: actions/upload-artifact@v4
@@ -384,6 +402,7 @@ jobs:
       - name: Write Manual Owner workflow evidence
         if: ${{ always() && inputs.release_mode == 'manual_owner' }}
         env:
+          TRUSTED_SCRIPT_DIR: ${{ runner.temp }}/trusted-workflow-scripts
           RELEASE_MODE: manual_owner
           WF_FILE: .github/workflows/deploy-v3.yml
           WF_REF: ${{ github.ref }}
@@ -405,7 +424,7 @@ jobs:
             . ./phase15-health.env
             set +a
           fi
-          python3 .github/scripts/write-manual-owner-workflow-evidence.py manual-owner-workflow-evidence.json
+          python3 "${TRUSTED_SCRIPT_DIR:?}/write-manual-owner-workflow-evidence.py" manual-owner-workflow-evidence.json
       - name: Upload Manual Owner workflow evidence
         if: ${{ always() && inputs.release_mode == 'manual_owner' }}
         uses: actions/upload-artifact@v4

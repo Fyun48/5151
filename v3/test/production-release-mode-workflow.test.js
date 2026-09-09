@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,7 +12,14 @@ const WORKFLOWS = [
   "production-predeploy-check.yml",
   "deploy-v3.yml",
 ];
+const CANDIDATE_CHECKOUT_WORKFLOWS = [
+  "build-production-image.yml",
+  "deploy-v3.yml",
+];
 const MANUAL_OWNER_WRITER = path.join(root, ".github/scripts/write-manual-owner-workflow-evidence.py");
+const PHASE15_WRITER = path.join(root, ".github/scripts/write-phase15-workflow-evidence.py");
+const MANUAL_OWNER_WRITER_NAME = "write-manual-owner-workflow-evidence.py";
+const PHASE15_WRITER_NAME = "write-phase15-workflow-evidence.py";
 
 function wf(name) {
   return readFileSync(path.join(root, ".github/workflows", name), "utf8");
@@ -36,6 +43,40 @@ function authorizeScript(text) {
   assert.ok(runIdx > 0, "authorize run script missing");
   const nextStep = text.indexOf("\n      - name:", runIdx);
   return text.slice(runIdx, nextStep > 0 ? nextStep : undefined);
+}
+
+function namedStep(text, name) {
+  const start = text.indexOf(`- name: ${name}`);
+  assert.ok(start >= 0, `${name} step missing`);
+  const next = text.indexOf("\n      - name:", start + 1);
+  return text.slice(start, next > 0 ? next : undefined);
+}
+
+function pipeRunScript(step) {
+  const marker = "run: |\n";
+  const runIdx = step.indexOf(marker);
+  assert.ok(runIdx >= 0, "indented run script missing");
+  return step.slice(runIdx + marker.length)
+    .split("\n")
+    .map((line) => (line.startsWith("          ") ? line.slice(10) : line))
+    .join("\n")
+    .replace(/\s+$/, "");
+}
+
+function candidateCheckoutIndex(text) {
+  return text.search(/git checkout --force "\$(?:BUILD|DEPLOY)_SHA"/);
+}
+
+function beforeCandidateCheckout(text) {
+  const idx = candidateCheckoutIndex(text);
+  assert.ok(idx >= 0, "candidate checkout missing");
+  return text.slice(0, idx);
+}
+
+function afterCandidateCheckout(text) {
+  const idx = candidateCheckoutIndex(text);
+  assert.ok(idx >= 0, "candidate checkout missing");
+  return text.slice(idx);
 }
 
 for (const name of WORKFLOWS) {
@@ -162,8 +203,8 @@ for (const name of WORKFLOWS) {
       text,
       /run-name:\s*"\$\{\{\s*inputs\.release_mode == 'ops_phase15' && format\('phase15-intent:\{0\}',\s*inputs\.release_intent_id\) \|\| format\('manual-owner:\{0\}',\s*inputs\.sha\)\s*\}\}"/,
     );
-    assert.match(text, /write-phase15-workflow-evidence\.py phase15-run-identity\.json/);
-    assert.match(text, /write-phase15-workflow-evidence\.py phase15-workflow-evidence\.json/);
+    assert.match(text, /write-phase15-workflow-evidence\.py"? phase15-run-identity\.json/);
+    assert.match(text, /write-phase15-workflow-evidence\.py"? phase15-workflow-evidence\.json/);
     assert.match(text, /name: phase15-run-identity/);
     assert.match(text, /name: phase15-workflow-evidence/);
     assert.match(text, /if: \$\{\{ always\(\) && inputs\.release_mode == 'ops_phase15' \}\}/);
@@ -261,4 +302,133 @@ test("manual owner writer rejects Phase 15 mode and missing identity", () => {
     },
   }), /missing required identity/);
   rmSync(dir, { recursive: true, force: true });
+});
+
+for (const name of CANDIDATE_CHECKOUT_WORKFLOWS) {
+  test(`${name} stages trusted evidence writers before candidate checkout and invokes the copies afterward`, () => {
+    const text = wf(name);
+    const before = beforeCandidateCheckout(text);
+    const after = afterCandidateCheckout(text);
+    const staging = namedStep(text, "Stage trusted workflow-definition evidence writers");
+    assert.match(staging, /runner\.temp/);
+    assert.match(staging, /trusted-workflow-scripts/);
+    assert.match(staging, /write-manual-owner-workflow-evidence\.py/);
+    assert.match(staging, /write-phase15-workflow-evidence\.py/);
+    assert.match(staging, /GITHUB_ENV/);
+    assert.ok(
+      text.indexOf("Stage trusted workflow-definition evidence writers")
+        < candidateCheckoutIndex(text),
+      "staging must happen before candidate checkout",
+    );
+    assert.match(before, /Stage trusted workflow-definition evidence writers/);
+    assert.doesNotMatch(after, /Stage trusted workflow-definition evidence writers/);
+    assert.match(after, /\$\{TRUSTED_SCRIPT_DIR:\?\}.*write-manual-owner-workflow-evidence\.py/);
+    assert.match(after, /\$\{TRUSTED_SCRIPT_DIR:\?\}.*write-phase15-workflow-evidence\.py/);
+    assert.doesNotMatch(after, /python3 \.github\/scripts\/write-manual-owner-workflow-evidence\.py/);
+    assert.doesNotMatch(after, /python3 \.github\/scripts\/write-phase15-workflow-evidence\.py/);
+  });
+}
+
+test("predeploy stays on master and does not lose workflow-definition scripts to a candidate checkout", () => {
+  const text = wf("production-predeploy-check.yml");
+  assert.equal(candidateCheckoutIndex(text), -1);
+  assert.doesNotMatch(text, /git checkout --force/);
+  assert.match(text, /workflow scripts only; do not deploy this tree/);
+  assert.match(text, /python3 \.github\/scripts\/write-manual-owner-workflow-evidence\.py/);
+  assert.match(text, /python3 \.github\/scripts\/write-phase15-workflow-evidence\.py/);
+});
+
+test("trusted workflow-definition copies still write manual_owner and Phase 15 evidence after an old candidate deletes the scripts", () => {
+  const buildStaging = pipeRunScript(namedStep(wf("build-production-image.yml"), "Stage trusted workflow-definition evidence writers"));
+  const deployStaging = pipeRunScript(namedStep(wf("deploy-v3.yml"), "Stage trusted workflow-definition evidence writers"));
+  assert.equal(buildStaging, deployStaging);
+  assert.match(buildStaging, /mkdir -p "\$TRUSTED_SCRIPT_DIR"/);
+  assert.match(buildStaging, /cp -f/);
+
+  const workspace = mkdtempSync(path.join(tmpdir(), "trusted-wf-master-"));
+  const runnerTemp = mkdtempSync(path.join(tmpdir(), "trusted-wf-runner-"));
+  const githubEnv = path.join(runnerTemp, "github.env");
+  const trustedDir = path.join(runnerTemp, "trusted-workflow-scripts");
+  const scriptsDir = path.join(workspace, ".github", "scripts");
+  mkdirSync(scriptsDir, { recursive: true });
+  copyFileSync(MANUAL_OWNER_WRITER, path.join(scriptsDir, MANUAL_OWNER_WRITER_NAME));
+  copyFileSync(PHASE15_WRITER, path.join(scriptsDir, PHASE15_WRITER_NAME));
+  writeFileSync(githubEnv, "");
+
+  execFileSync("bash", ["-c", buildStaging], {
+    cwd: workspace,
+    env: {
+      ...process.env,
+      TRUSTED_SCRIPT_DIR: trustedDir,
+      GITHUB_ENV: githubEnv,
+    },
+    encoding: "utf8",
+  });
+  assert.match(readFileSync(githubEnv, "utf8"), /TRUSTED_SCRIPT_DIR=/);
+  assert.equal(existsSync(path.join(trustedDir, MANUAL_OWNER_WRITER_NAME)), true);
+  assert.equal(existsSync(path.join(trustedDir, PHASE15_WRITER_NAME)), true);
+
+  // Simulate `git checkout --force` of a pre-#217 candidate such as 010095...
+  rmSync(path.join(scriptsDir, MANUAL_OWNER_WRITER_NAME), { force: true });
+  rmSync(path.join(scriptsDir, PHASE15_WRITER_NAME), { force: true });
+  assert.equal(existsSync(path.join(scriptsDir, MANUAL_OWNER_WRITER_NAME)), false);
+  assert.equal(existsSync(path.join(scriptsDir, PHASE15_WRITER_NAME)), false);
+  assert.throws(() => execFileSync("python3", [
+    path.join(scriptsDir, MANUAL_OWNER_WRITER_NAME),
+    path.join(workspace, "would-fail.json"),
+  ], { encoding: "utf8" }), /can't open file|No such file|ENOENT/i);
+
+  const identityEnv = {
+    EVIDENCE_KIND: "identity",
+    WF_REF: "refs/heads/master",
+    WF_RUN_ID: "34312182896",
+    WF_ATTEMPT: "1",
+    WF_HEAD_SHA: "439cf82d011aaf56d00cf211d7c955db7bda6f1b",
+    SOURCE_SHA: "01009558300288e772fd13592fcdffaa150a009d",
+    WF_ACTOR: "Fyun48",
+    WF_TRIGGERING_ACTOR: "Fyun48",
+  };
+  const manualDest = path.join(workspace, "manual-owner-workflow-evidence.json");
+  execFileSync("python3", [path.join(trustedDir, MANUAL_OWNER_WRITER_NAME), manualDest], {
+    cwd: workspace,
+    env: {
+      ...process.env,
+      ...identityEnv,
+      RELEASE_MODE: "manual_owner",
+      EVIDENCE_KIND: "full",
+      WF_FILE: ".github/workflows/build-production-image.yml",
+      IMAGE_DIGEST: `sha256:${"ae".repeat(32)}`,
+      OCI_REVISION: identityEnv.SOURCE_SHA,
+      OCI_SOURCE: "https://github.com/Fyun48/5151",
+    },
+    encoding: "utf8",
+  });
+  const manualDoc = JSON.parse(readFileSync(manualDest, "utf8"));
+  assert.equal(manualDoc.schema, "manual-owner-workflow-evidence-v1");
+  assert.equal(manualDoc.release_mode, "manual_owner");
+  assert.equal(manualDoc.source_sha, identityEnv.SOURCE_SHA);
+  assert.equal(Object.hasOwn(manualDoc, "release_intent_id"), false);
+
+  const phase15Dest = path.join(workspace, "phase15-workflow-evidence.json");
+  execFileSync("python3", [path.join(trustedDir, PHASE15_WRITER_NAME), phase15Dest], {
+    cwd: workspace,
+    env: {
+      ...process.env,
+      ...identityEnv,
+      EVIDENCE_KIND: "full",
+      WF_FILE: ".github/workflows/build-production-image.yml",
+      RELEASE_INTENT_ID: "intent_trusted_copy_regression",
+      IMAGE_DIGEST: `sha256:${"ab".repeat(32)}`,
+      OCI_REVISION: identityEnv.SOURCE_SHA,
+      OCI_SOURCE: "https://github.com/Fyun48/5151",
+    },
+    encoding: "utf8",
+  });
+  const phase15Doc = JSON.parse(readFileSync(phase15Dest, "utf8"));
+  assert.equal(phase15Doc.schema, "phase15-workflow-evidence-v1");
+  assert.equal(phase15Doc.release_intent_id, "intent_trusted_copy_regression");
+  assert.equal(phase15Doc.source_sha, identityEnv.SOURCE_SHA);
+
+  rmSync(workspace, { recursive: true, force: true });
+  rmSync(runnerTemp, { recursive: true, force: true });
 });
