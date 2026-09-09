@@ -2,32 +2,90 @@ name: Tests
 
 on:
   push:
-    branches: [master, main]
+    branches:
+      - master
+      - main
+
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
+# ============================================================
+# CI SECURITY INVARIANT
+#
+# Tests 只負責：
+# - Checkout
+# - Test
+# - Build / validation（未來需要時）
+#
+# Tests 永遠不得：
+# - Merge PR
+# - 寫入 PR
+# - Dispatch Production workflow
+# - Deploy Production
+# ============================================================
 
 permissions:
-  contents: write
-  pull-requests: write
-  actions: write
+  contents: read
+
+# 同一個 PR / branch 出現新 commit，
+# 取消舊 HEAD 的 Tests。
+#
+# 新 HEAD 必須重新取得 PASS，
+# 不允許舊 SHA 的 PASS 被新 SHA 沿用。
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
+    name: test
+
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+
+    # Ops / full test suite 可能較久。
+    timeout-minutes: 15
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      # --------------------------------------------------------
+      # Checkout
+      # --------------------------------------------------------
+      - name: Checkout Codebase
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      # --------------------------------------------------------
+      # Node
+      # --------------------------------------------------------
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "22"
-      - run: npm test
-      # 合併與部署分離（Phase 3.5）：合併 PR 只做「合併」，絕不自動觸發任何 Production 部署。
-      # Production 部署一律改為明確的 workflow_dispatch（見 deploy-v3.yml / docker.yml / deploy-v2.yml / deploy.yml）。
-      # 維運自動化（cursor/ops-*）分支不自動合併，交由 Owner 依序人工合併。
-      - name: Auto-merge (no production deploy)
-        if: github.event_name == 'pull_request' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository && !startsWith(github.event.pull_request.head.ref, 'cursor/ops-') && !startsWith(github.event.pull_request.head.ref, 'ai-dev/')
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
+
+      # --------------------------------------------------------
+      # Tests
+      #
+      # 暫時維持你目前 CI 的測試語意。
+      # Dependency installation 若之後需要調整，
+      # 另外獨立 PR，不跟治理修正混在一起。
+      # --------------------------------------------------------
+      - name: Run Test Suite
+        shell: bash
         run: |
-          gh pr merge "${{ github.event.pull_request.number }}" --squash --delete-branch
+          set -euo pipefail
+
+          echo "[Tests] Starting npm test..."
+          npm test
+          echo "[Tests] npm test completed successfully."
+
+      # --------------------------------------------------------
+      # PASS evidence
+      # --------------------------------------------------------
+      - name: Tests Passed
+        shell: bash
+        run: |
+          echo "✅ Tests PASSED."
+          echo "This workflow performed no merge."
+          echo "This workflow performed no Production deployment."
