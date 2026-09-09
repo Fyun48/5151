@@ -11,7 +11,7 @@ test("desktop expanded filters stay in flow; only compact summary is sticky", ()
   assert.match(html, /body\.panel-collapsed \.list-head-sticky \{\s*\n\s*position: static;/);
   assert.match(html, /body\.panel-collapsed \.list-head-sticky\.filter-compact \{\s*\n\s*position: sticky;/);
   assert.match(html, /body\.panel-collapsed \.filter-mini-btn \{[\s\S]*?bottom: 28px;/);
-  assert.match(html, /#scrollTopBtn \{[\s\S]*bottom:\s*80px/);
+  assert.match(html, /#scrollTopBtn \{[\s\S]*bottom:\s*158px/);
 });
 
 test("scroll-top stays available on other desktop views once scrolled", () => {

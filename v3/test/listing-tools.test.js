@@ -305,7 +305,7 @@ test("description templates: free limit 2, sponsor 5, ownership, sanitization, c
   assert.throws(() => getOwnedDescriptionTemplate(db, 2, one.id), (e) => e.status === 403);
   assert.throws(() => updateDescriptionTemplate(db, 2, one.id, { name: "偷" }), (e) => e.status === 403);
   deleteDescriptionTemplate(db, 1, one.id);
-  assert.equal(listDescriptionTemplates(db, 1).length, 2);
+  assert.equal(listDescriptionTemplates(db, 1).length, 1);
 
   const db2 = open();
   addUser(db2, { id: 1, email: "a@example.com" });
