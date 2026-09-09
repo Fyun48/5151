@@ -2,32 +2,136 @@ name: Tests
 
 on:
   push:
-    branches: [master, main]
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    branches:
+      - master
+      - main
 
+  pull_request:
+    branches:
+      - master
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
+
+# ============================================================
+# Tests workflow
+#
+# 職責只有：
+#
+# 1. Checkout source code
+# 2. 執行 npm test
+#
+# 明確禁止：
+#
+# - Auto Merge
+# - PR Merge
+# - Push
+# - Production Deploy
+# - Production workflow dispatch
+#
+# Merge 權限保留給 Owner。
+# DeepSeek Gatekeeper 也不得因 Tests PASS 而被繞過。
+# ============================================================
+
+
+# Tests 不需要任何寫入 Repository / PR 的權限。
 permissions:
-  contents: write
-  pull-requests: write
-  actions: write
+  contents: read
+
+
+# 同一個 PR 如果又 push 新 HEAD，
+# 舊的 Tests run 直接取消，只測最新版本。
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 
 jobs:
+
   test:
+
+    name: Run Tests
+
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+
+    timeout-minutes: 10
+
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+
+      # ============================================================
+      # STEP 1
+      # Checkout
+      # ============================================================
+
+      - name: Checkout Repository
+
+        uses: actions/checkout@v4
+
+        with:
+          fetch-depth: 1
+
+          # Tests workflow 完全不需要 Git push 能力。
+          persist-credentials: false
+
+
+      # ============================================================
+      # STEP 2
+      # Node.js
+      # ============================================================
+
+      - name: Setup Node.js
+
+        uses: actions/setup-node@v4
+
         with:
           node-version: "22"
-      - run: npm test
-      # 合併與部署分離（Phase 3.5）：合併 PR 只做「合併」，絕不自動觸發任何 Production 部署。
-      # Production 部署一律改為明確的 workflow_dispatch（見 deploy-v3.yml / docker.yml / deploy-v2.yml / deploy.yml）。
-      # 維運自動化（cursor/ops-*）分支不自動合併，交由 Owner 依序人工合併。
-      - name: Auto-merge (no production deploy)
-        if: github.event_name == 'pull_request' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository && !startsWith(github.event.pull_request.head.ref, 'cursor/ops-') && !startsWith(github.event.pull_request.head.ref, 'ai-dev/')
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
+
+
+      # ============================================================
+      # STEP 3
+      # Tests
+      # ============================================================
+
+      - name: Run Test Suite
+
+        shell: bash
+
         run: |
-          gh pr merge "${{ github.event.pull_request.number }}" --squash --delete-branch
+          set -euo pipefail
+
+          echo "[Tests] Starting npm test..."
+          npm test
+          echo "[Tests] npm test PASSED."
+
+
+      # ============================================================
+      # STEP 4
+      # Explicit governance notice
+      #
+      # 此步驟只是留下清楚的 Actions Log。
+      # 不執行任何 Merge。
+      # ============================================================
+
+      - name: Tests Passed - No Automatic Merge
+
+        if: ${{ success() }}
+
+        shell: bash
+
+        run: |
+          echo "✅ Tests PASSED."
+          echo
+          echo "This workflow does NOT merge the Pull Request."
+          echo "This workflow does NOT push code."
+          echo "This workflow does NOT deploy Production."
+          echo
+          echo "DeepSeek Gatekeeper remains an independent review gate."
+          echo "Final Merge authority remains with the Owner."
+          echo
+          echo "DeepSeek Gatekeeper remains an independent review gate."
+          echo "Final Merge authority remains with the Owner."
