@@ -55,7 +55,8 @@ else:
 if schema.startswith("phase15"):
     raise SystemExit("manual owner evidence must not use a Phase 15 schema")
 
-ignored_intent = optional_env("RELEASE_INTENT_ID")
+if optional_env("RELEASE_INTENT_ID"):
+    raise SystemExit("manual_owner forbids a non-empty release_intent_id")
 
 doc = {
     "schema": schema,
@@ -73,7 +74,6 @@ doc = {
     "oci_revision": os.environ.get("OCI_REVISION") or None,
     "oci_source": os.environ.get("OCI_SOURCE") or None,
     "confirmation": os.environ.get("CONFIRMATION") or None,
-    "ignored_release_intent_id": ignored_intent,
 }
 
 if "release_intent_id" in doc:

@@ -68,7 +68,46 @@ for (const name of WORKFLOWS) {
     const auth = authorizeScript(text);
     assert.match(auth, /release_mode must be manual_owner or ops_phase15/);
     assert.match(auth, /ops_phase15 requires a non-empty release_intent_id/);
-    assert.match(auth, /manual_owner ignores release_intent_id \(not a Phase 15 binding\)/);
+    assert.match(auth, /manual_owner forbids a non-empty release_intent_id/);
+    assert.doesNotMatch(auth, /manual_owner ignores release_intent_id/);
+  });
+}
+
+function releaseModeChecks(text) {
+  const auth = authorizeScript(text);
+  const start = auth.indexOf('if [ "${RELEASE_MODE:-}" != "manual_owner" ]');
+  assert.ok(start >= 0, "release_mode checks missing");
+  return auth.slice(start);
+}
+
+function runReleaseModeCheck(snippet, { releaseMode, releaseIntentId }) {
+  return execFileSync("bash", ["-c", `set -euo pipefail\n${snippet}`], {
+    env: {
+      ...process.env,
+      RELEASE_MODE: releaseMode,
+      RELEASE_INTENT_ID: releaseIntentId,
+    },
+    encoding: "utf8",
+  });
+}
+
+for (const name of WORKFLOWS) {
+  test(`${name} rejects mixed-mode intent and keeps Phase 15 intent required`, () => {
+    const snippet = releaseModeChecks(wf(name));
+    assert.throws(
+      () => runReleaseModeCheck(snippet, { releaseMode: "manual_owner", releaseIntentId: "intent-stale-phase15" }),
+      /manual_owner forbids a non-empty release_intent_id/,
+    );
+    assert.throws(
+      () => runReleaseModeCheck(snippet, { releaseMode: "", releaseIntentId: "intent-stale-phase15" }),
+      /release_mode must be manual_owner or ops_phase15/,
+    );
+    runReleaseModeCheck(snippet, { releaseMode: "manual_owner", releaseIntentId: "" });
+    runReleaseModeCheck(snippet, { releaseMode: "ops_phase15", releaseIntentId: "intent-live-phase15" });
+    assert.throws(
+      () => runReleaseModeCheck(snippet, { releaseMode: "ops_phase15", releaseIntentId: "" }),
+      /ops_phase15 requires a non-empty release_intent_id/,
+    );
   });
 }
 
@@ -136,7 +175,7 @@ for (const name of WORKFLOWS) {
   });
 }
 
-test("manual owner evidence writer is not Phase 15 and records ignored intent", () => {
+test("manual owner evidence writer is not Phase 15 and rejects a leftover intent", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "manual-owner-ev-"));
   const dest = path.join(dir, "manual-owner-workflow-evidence.json");
   execFileSync("python3", [MANUAL_OWNER_WRITER, dest], {
@@ -154,7 +193,6 @@ test("manual owner evidence writer is not Phase 15 and records ignored intent", 
       WF_TRIGGERING_ACTOR: "Fyun48",
       WF_ENVIRONMENT: "production",
       CONFIRMATION: "DEPLOY-PRODUCTION",
-      RELEASE_INTENT_ID: "should-not-bind-phase15",
       IMAGE_DIGEST: `sha256:${"ab".repeat(32)}`,
     },
     encoding: "utf8",
@@ -162,10 +200,28 @@ test("manual owner evidence writer is not Phase 15 and records ignored intent", 
   const doc = JSON.parse(readFileSync(dest, "utf8"));
   assert.equal(doc.schema, "manual-owner-workflow-evidence-v1");
   assert.equal(doc.release_mode, "manual_owner");
-  assert.equal(doc.ignored_release_intent_id, "should-not-bind-phase15");
   assert.equal(Object.hasOwn(doc, "release_intent_id"), false);
+  assert.equal(Object.hasOwn(doc, "ignored_release_intent_id"), false);
   assert.doesNotMatch(doc.schema, /^phase15/);
   assert.match(doc.evidence_sha256, /^sha256:[0-9a-f]{64}$/);
+  assert.throws(() => execFileSync("python3", [MANUAL_OWNER_WRITER, dest], {
+    env: {
+      ...process.env,
+      RELEASE_MODE: "manual_owner",
+      EVIDENCE_KIND: "full",
+      WF_FILE: ".github/workflows/deploy-v3.yml",
+      WF_REF: "refs/heads/master",
+      WF_RUN_ID: "123456789",
+      WF_ATTEMPT: "1",
+      WF_HEAD_SHA: "a".repeat(40),
+      SOURCE_SHA: "b".repeat(40),
+      WF_ACTOR: "Fyun48",
+      WF_TRIGGERING_ACTOR: "Fyun48",
+      WF_ENVIRONMENT: "production",
+      CONFIRMATION: "DEPLOY-PRODUCTION",
+      RELEASE_INTENT_ID: "should-not-bind-phase15",
+    },
+  }), /forbids a non-empty release_intent_id/);
   rmSync(dir, { recursive: true, force: true });
 });
 

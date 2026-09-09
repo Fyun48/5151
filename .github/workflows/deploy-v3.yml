@@ -43,7 +43,7 @@ on:
           - manual_owner
           - ops_phase15
       release_intent_id:
-        description: "僅 ops_phase15 必填：Ops Phase 15 durable release_intent_id。manual_owner 可空白（若傳入會被忽略，不當成 Phase 15 binding）"
+        description: "僅 ops_phase15 必填：Ops Phase 15 durable release_intent_id。manual_owner 必須空白；非空會 fail-closed（避免舊 Phase 15 caller 被降成 Manual Owner）"
         required: false
         default: ""
 
@@ -102,7 +102,7 @@ jobs:
             echo "::error::ops_phase15 requires a non-empty release_intent_id"; exit 1
           fi
           if [ "${RELEASE_MODE:-}" = "manual_owner" ] && [ -n "${RELEASE_INTENT_ID:-}" ]; then
-            echo "manual_owner ignores release_intent_id (not a Phase 15 binding)"
+            echo "::error::manual_owner forbids a non-empty release_intent_id; stale Phase 15 callers must set release_mode=ops_phase15"; exit 1
           fi
       - name: Checkout master (for ancestry validation)
         uses: actions/checkout@v4
