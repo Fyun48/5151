@@ -1,0 +1,80 @@
+name: DeepSeek Discord AI Bot
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize] # 當 PR 被建立或有新程式碼 Push 時觸發
+  issue_comment:
+    types: [created] # 當你在 Issue 或 PR 底下留言時觸發
+
+jobs:
+  deepseek-agent:
+    # 只有當建立 PR，或者有人在留言區輸入部署指令時才執行
+    if: |
+      github.event_name == 'pull_request' || 
+      contains(github.event.comment.body, '部署') || 
+      contains(github.event.comment.body, 'deploy')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 【步驟 1】發送開始通知到您的 Discord 頻道
+      - name: Send Discord Start Notification
+        run: |
+          curl -X POST -H "Content-Type: application/json" \
+          -d '{
+            "embeds": [{
+              "title": "🚀 AI 任務啟動",
+              "description": "DeepSeek V4 Pro 正在分析您的 GitHub 代碼與指令...",
+              "color": 3447003
+            }]
+          }' ${{ secrets.NOTIFICATION_WEBHOOK }}
+
+      # 【步驟 2】呼叫 DeepSeek 進行 Code Review 與任務分析
+      - name: DeepSeek Reviewer
+        id: deepseek
+        uses: hustcer/deepseek-review@v1
+        with:
+          chat-token: ${{ secrets.DEEPSEEK_API_KEY }}
+          model: 'deepseek-v4-pro'
+          sys-prompt: |
+            你是一位專業的資深軟體工程師。
+            請分析這次 PR 的變更內容（git diff）或使用者的留言。
+            1. 如果是程式碼審查，請列出具體的優化建議，並提供「可直接複製的修改程式碼範例」。
+            2. 檢查使用者指令是否包含「部署到正式機」或「deploy」。如果是，請在回應最後單獨留一行輸出: [DEPLOY_TRIGGER]
+
+      # 【步驟 3】將 DeepSeek 的完整審查意見與修改方案，直接丟進你的 Discord 頻道
+      - name: Send Summary to Discord
+        run: |
+          # 處理換行符號以符合 JSON 格式
+          JSON_CONTENT=$(echo "${{ steps.deepseek.outputs.summary }}" | jq -R -s '.')
+          curl -X POST -H "Content-Type: application/json" \
+          -d "{
+            \"embeds\": [{
+              \"title\": \"📊 DeepSeek 審查與執行報告\",
+              \"description\": $JSON_CONTENT,
+              \"color\": 15105570
+            }]
+          }" ${{ secrets.NOTIFICATION_WEBHOOK }}
+
+      # 【步驟 4】條件判定：如果 DeepSeek 判斷含有部署文字，自動執行部署
+      - name: Check Deploy Trigger & Execute
+        if: contains(steps.deepseek.outputs.summary, '[DEPLOY_TRIGGER]')
+        run: |
+          # 先通知 Discord 要開始部署了
+          curl -X POST -H "Content-Type: application/json" \
+          -d '{"content": "⚙️ 偵測到部署關鍵字，正在將專案發佈至正式機..."}' ${{ secrets.NOTIFICATION_WEBHOOK }}
+          
+          # ------- 這裡換成你原本專案的正式機部署指令，例如： -------
+          # npm run build
+          # npm run deploy
+          
+          # 部署完畢通知
+          curl -X POST -H "Content-Type: application/json" \
+          -d '{"content": "🎉 正式機部署完成！系統已上線！"}' ${{ secrets.NOTIFICATION_WEBHOOK }}
