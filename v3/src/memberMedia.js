@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync, unlinkSync, readFileSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, writeFileSync, unlinkSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { applySiteWatermark, normalizeImage } from "./imageProcess.js";
@@ -110,11 +110,16 @@ export function memberMediaInternalOriginalPath(name) {
 }
 
 export function servePublicMemberMedia(req, res) {
-  const full = memberMediaPublicFilePath(req.params.file);
-  if (!full) { res.status(404).end(); return; }
+  const full = memberMediaPublicFilePath(req.params?.file);
+  if (!full) {
+    res.statusCode = 404;
+    res.end();
+    return;
+  }
+  res.statusCode = 200;
   res.setHeader("Content-Type", "image/jpeg");
   res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-  res.sendFile(path.resolve(full));
+  createReadStream(path.resolve(full)).pipe(res);
 }
 
 function mediaTagsFor(db, mediaId) {

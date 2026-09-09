@@ -35,9 +35,9 @@ test("server exposes media library + public sharing routes with ownership check"
   // 刊登時驗證素材所有權（擋盜連他人 media）
   assert.match(server, /assertOwnsMemberMediaUrls\(session\.userId/);
   assert.match(memberMedia, /export function servePublicMemberMedia/);
-  assert.match(memberMedia, /memberMediaPublicFilePath\(req\.params\.file\)/);
+  assert.match(memberMedia, /memberMediaPublicFilePath\(req\.params\?\.file\)/);
   assert.match(memberMedia, /max-age=31536000, immutable/);
-  assert.match(memberMedia, /sendFile\(path\.resolve\(full\)\)/);
+  assert.match(memberMedia, /createReadStream\(path\.resolve\(full\)\)/);
   assert.match(memberMedia, /PUBLIC_KEY_RE = \/\^\[a-f0-9\]\{32\}\(_t\)\?\\.jpg\$\//);
   assert.doesNotMatch(memberMedia, /PUBLIC_KEY_RE = \/\^\[a-f0-9\]\{32\}\(_t\|_o\)\?\\.jpg\$\//);
 });

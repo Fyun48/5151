@@ -5,7 +5,6 @@ import http from "node:http";
 import path from "node:path";
 import os from "os";
 import { DatabaseSync } from "node:sqlite";
-import express from "express";
 
 process.env.DATA_DIR = mkdtempSync(path.join(os.tmpdir(), "media-http-"));
 
@@ -40,10 +39,18 @@ function open() {
 }
 
 function listenPublicMedia() {
-  const app = express();
-  app.get("/media/lib/:file", servePublicMemberMedia);
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url, "http://127.0.0.1");
+    const parts = url.pathname.split("/").filter(Boolean);
+    if (parts.length === 3 && parts[0] === "media" && parts[1] === "lib") {
+      servePublicMemberMedia({ params: { file: decodeURIComponent(parts[2]) } }, res);
+      return;
+    }
+    res.statusCode = 404;
+    res.end();
+  });
   return new Promise((resolve) => {
-    const server = app.listen(0, "127.0.0.1", () => {
+    server.listen(0, "127.0.0.1", () => {
       const { port } = server.address();
       resolve({ server, base: `http://127.0.0.1:${port}` });
     });
