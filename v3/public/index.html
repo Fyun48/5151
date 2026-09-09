@@ -7362,7 +7362,7 @@
       if (body) {
         const tel = item.mobile || item.phone || "";
         body.innerHTML = `
-          <p class="hint">${esc(item.price || "")} 元/月 · ${esc(item.kind_name || "")} · ${esc(item.layout || "")} · ${esc(item.area_name || "")} · ${esc(item.floor_name || "")}</p>
+          <p class="hint">${esc(item.price || "")} 元/月 · ${esc(item.kind_name || "")} · ${esc(item.layout || "")} · ${esc(item.area_name || "")} · ${esc(floorDisplay(item))}</p>
           ${(item.photos || []).length ? `<div class="self-photos detail">${(item.photos || []).map((url) => `<img src="${esc(url)}" alt="" />`).join("")}</div>` : item.cover ? `<div class="self-photos detail"><img src="${esc(item.cover)}" alt="" /></div>` : ""}
           <p>${esc(item.address || "")}</p>
           ${(item.trait_labels || []).length ? `<p class="hint">${esc((item.trait_labels || []).join("、"))}</p>` : ""}
@@ -9863,7 +9863,7 @@
           <h3 style="margin:6px 0 4px;font-size:16px">
             <a href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-dock-open="${item.post_id}">${esc(item.title || "物件")}</a>
           </h3>
-          <div class="meta">${esc([item.price ? `${item.price} 元/月` : "", item.notify_facts || [item.address, item.layout, item.floor_name, item.area_name, item.housing_type].filter(Boolean).join(" · "), item.extra_fee_text].filter(Boolean).join(" · "))}</div>
+          <div class="meta">${esc([item.price ? `${item.price} 元/月` : "", item.notify_facts ? String(item.notify_facts).split(" · ").map((bit) => formatFloorDisplay(bit) || bit).join(" · ") : [item.address, item.layout, floorDisplay(item), item.area_name, item.housing_type].filter(Boolean).join(" · "), item.extra_fee_text].filter(Boolean).join(" · "))}</div>
           ${dockChangeHtml(item)}
           <div class="row" style="margin-top:8px">
             <button type="button" class="ghost" data-dock-read="${esc(dockItemKey(item))}">已讀</button>

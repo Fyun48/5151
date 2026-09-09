@@ -1,7 +1,7 @@
 import { APP_NAME } from "./brand.js";
 import { execFile } from "node:child_process";
 import { commuteModeLabel } from "./geo.js";
-import { passesDisplayFilters, housingTypeLabel } from "./floors.js";
+import { formatFloorDisplay, passesDisplayFilters, housingTypeLabel } from "./floors.js";
 import { sendMail } from "./mail.js";
 import { notifyChannelOn } from "./notifyMatrix.js";
 import { trackedListingUrl } from "./openLink.js";
@@ -316,7 +316,7 @@ export function formatNotifyFacts(event) {
     selfSourceLabel(event?.source || "591"),
     event.address,
     event.layout,
-    event.floor_name,
+    formatFloorDisplay(event.floor_name) || event.floor_name,
     formatUsableArea(event),
     housingTypeLabel(event),
     formatNotifyCommute(event),
