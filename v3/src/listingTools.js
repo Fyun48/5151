@@ -139,7 +139,14 @@ export function ensureListingToolsSchema(db) {
   ensureOneAccountContactPerUser(db);
 }
 
+function hasAccountContactUniqueIndex(db) {
+  return Boolean(
+    db.prepare("SELECT 1 AS ok FROM sqlite_master WHERE type='index' AND name='idx_listing_contact_one_account'").get(),
+  );
+}
+
 function ensureOneAccountContactPerUser(db) {
+  if (hasAccountContactUniqueIndex(db)) return;
   const dupes = db.prepare(`
     SELECT user_id FROM listing_contact_profile
     WHERE IFNULL(is_account,0)=1

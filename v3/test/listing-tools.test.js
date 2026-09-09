@@ -364,6 +364,9 @@ test("schema dedupes leftover account contacts then creates the unique index", (
   assert.equal(left[0].label, "舊一");
   const idx = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_listing_contact_one_account'").get();
   assert.equal(idx?.name, "idx_listing_contact_one_account");
+  const keepId = left[0].id;
+  ensureListingToolsSchema(db);
+  assert.equal(db.prepare("SELECT id FROM listing_contact_profile WHERE user_id=1 AND is_account=1").get().id, keepId);
   assert.throws(() => {
     db.prepare(
       `INSERT INTO listing_contact_profile(user_id, label, contact_name, phone, line_url, is_account, created_at, updated_at)
