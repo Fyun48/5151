@@ -51,8 +51,8 @@ export function sanitizeListingBodyHtml(value, maxPlain = LISTING_BODY_PLAIN_MAX
   let text = String(value ?? "").replace(/\0/g, "").replace(/\r\n/g, "\n");
   text = text
     .replace(/<\s*script[\s\S]*?>[\s\S]*?<\s*\/\s*script\s*>/gi, "")
-    .replace(/<\s*(a|iframe|object|embed|link|meta|style|form|input|button|textarea|svg)[\s\S]*?>[\s\S]*?<\/\s*\1\s*>/gi, "")
-    .replace(/<\s*(a|iframe|object|embed|link|meta|style|form|input|button|textarea|svg)\b[^>]*>/gi, "")
+    .replace(/<\s*(a|iframe|object|embed|link|meta|style|form|input|button|textarea|svg|img|math)[\s\S]*?>[\s\S]*?<\/\s*\1\s*>/gi, "")
+    .replace(/<\s*(a|iframe|object|embed|link|meta|style|form|input|button|textarea|svg|img|math)\b[^>]*>/gi, "")
     .replace(/\s(?:on\w+|href|src|srcset|xlink:href|formaction|action)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "")
     .replace(/javascript\s*:/gi, "");
   text = text.replace(/<\/?([a-z0-9]+)([^>]*)>/gi, (match, tag, attrs) => {

@@ -802,5 +802,16 @@ test("listing tools default to locked account contact and mention sponsor templa
   assert.doesNotMatch(html, /管理員可存/);
   assert.match(html, /if \(keep && \[\.\.\.sel\.options\]\.some/);
   assert.match(html, /item\.is_account/);
-  assert.match(html, /applyContactProfile\(account\.id\)/);
+  assert.match(html, /if \(nameEmpty && phoneEmpty && lineEmpty\) applyContactProfile\(account\.id\)/);
+});
+
+test("safeListingHtml uses a tag whitelist instead of a loose blacklist", () => {
+  const html = pub("index.html");
+  const start = html.indexOf("function safeListingHtml");
+  const end = html.indexOf("function commuteText");
+  assert.ok(start > 0 && end > start);
+  const fns = new Function(`${html.slice(start, end)}; return { safeListingHtml };`)();
+  const out = fns.safeListingHtml('<b>採光</b><img src=x onerror=alert(1)><a href="https://evil.test">連</a>');
+  assert.match(out, /<b>採光<\/b>/);
+  assert.doesNotMatch(out, /img|href|evil|onerror/i);
 });

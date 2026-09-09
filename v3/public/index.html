@@ -4155,13 +4155,36 @@
       ].filter(Boolean).join(" · ");
     }
     function safeListingHtml(value) {
-      const raw = String(value || "");
-      if (!raw) return "";
-      return raw
+      const allowed = new Set(["b", "strong", "i", "em", "u", "br", "p", "span", "div"]);
+      let text = String(value || "").replace(/\0/g, "");
+      if (!text) return "";
+      text = text
         .replace(/<\s*script[\s\S]*?>[\s\S]*?<\s*\/\s*script\s*>/gi, "")
-        .replace(/<\s*(a|iframe|object|embed|link|meta|style|form|input|button)[\s\S]*?>[\s\S]*?<\/\s*\1\s*>/gi, "")
-        .replace(/<\s*(a|iframe|object|embed|link|meta|style|form)\b[^>]*>/gi, "")
-        .replace(/\s(?:on\w+|href|src|srcset)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "");
+        .replace(/<\s*(a|iframe|object|embed|link|meta|style|form|input|button|textarea|svg|img|math)[\s\S]*?>[\s\S]*?<\/\s*\1\s*>/gi, "")
+        .replace(/<\s*(a|iframe|object|embed|link|meta|style|form|input|button|textarea|svg|img|math)\b[^>]*>/gi, "")
+        .replace(/\s(?:on\w+|href|src|srcset|xlink:href|formaction|action)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+        .replace(/javascript\s*:/gi, "");
+      return text.replace(/<\/?([a-z0-9]+)([^>]*)>/gi, (match, tag, attrs) => {
+        const name = String(tag || "").toLowerCase();
+        if (!allowed.has(name)) return "";
+        if (name === "br") return "<br>";
+        if (match.startsWith("</")) return `</${name}>`;
+        const styleMatch = String(attrs || "").match(/style\s*=\s*["']([^"']*)["']/i);
+        const rawStyle = styleMatch ? String(styleMatch[1] || "") : "";
+        const style = rawStyle.split(";").map((part) => part.trim()).filter(Boolean).map((part) => {
+          const idx = part.indexOf(":");
+          if (idx < 0) return "";
+          const key = part.slice(0, idx).trim().toLowerCase();
+          const val = part.slice(idx + 1).trim();
+          if (key === "color" && /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(val)) return `color:${val}`;
+          if (key === "font-size" && /^\d{1,2}(?:\.\d+)?px$/i.test(val)) return `font-size:${val}`;
+          if (key === "font-weight" && /^(normal|bold|[1-9]00)$/i.test(val)) return `font-weight:${val}`;
+          if (key === "font-style" && /^(normal|italic)$/i.test(val)) return `font-style:${val.toLowerCase()}`;
+          if (key === "text-decoration" && /^(none|underline)$/i.test(val)) return `text-decoration:${val.toLowerCase()}`;
+          return "";
+        }).filter(Boolean).join(";");
+        return style ? `<${name} style="${style}">` : `<${name}>`;
+      });
     }
     function commuteText(item) {
       const label = commuteModeLabel(item.commute_mode || settings.commuteMode);
@@ -7297,6 +7320,7 @@
       window.__pendingDocuments = items;
     }
     function syncReacceptFromMe(_me) {
+      // 產品決策：宣傳／同意文字只在註冊時閱讀勾選；登入後不再要求重簽。
       const banner = $("reacceptBanner");
       if (banner) banner.hidden = true;
       closeReacceptOverlay();
@@ -8637,7 +8661,10 @@
         const account = contactProfiles.find((item) => item.is_account);
         if (account) {
           sel.value = String(account.id);
-          applyContactProfile(account.id);
+          const nameEmpty = !String($("selfContactName")?.value || "").trim();
+          const phoneEmpty = !String($("selfPhone")?.value || "").trim();
+          const lineEmpty = !String($("selfLine")?.value || "").trim();
+          if (nameEmpty && phoneEmpty && lineEmpty) applyContactProfile(account.id);
         }
       }
     }

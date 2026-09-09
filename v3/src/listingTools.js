@@ -136,6 +136,9 @@ export function ensureListingToolsSchema(db) {
     );
   `);
   try { db.exec("ALTER TABLE listing_contact_profile ADD COLUMN is_account INTEGER NOT NULL DEFAULT 0"); } catch { /* already */ }
+  try {
+    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_listing_contact_one_account ON listing_contact_profile(user_id) WHERE is_account = 1");
+  } catch { /* duplicates or older SQLite */ }
 }
 
 function publicTemplate(row) {
@@ -194,20 +197,35 @@ export function ensureAccountContactProfile(db, userId, now = new Date()) {
   ensureListingToolsSchema(db);
   const fields = accountContactFields(db, uid);
   const stamp = iso(now);
-  const existing = db.prepare(
+  const readAccount = () => db.prepare(
     "SELECT * FROM listing_contact_profile WHERE user_id=? AND IFNULL(is_account,0)=1 ORDER BY id LIMIT 1",
   ).get(uid);
-  if (existing) {
-    db.prepare(
-      "UPDATE listing_contact_profile SET label=?, contact_name=?, phone=?, line_url=?, updated_at=? WHERE id=?",
-    ).run(ACCOUNT_CONTACT_LABEL, fields.contact_name, fields.phone, fields.line_url, stamp, existing.id);
-    return publicContact(db.prepare("SELECT * FROM listing_contact_profile WHERE id=?").get(existing.id));
+  const upsert = () => {
+    const existing = readAccount();
+    if (existing) {
+      db.prepare(
+        "UPDATE listing_contact_profile SET label=?, contact_name=?, phone=?, line_url=?, updated_at=? WHERE id=?",
+      ).run(ACCOUNT_CONTACT_LABEL, fields.contact_name, fields.phone, fields.line_url, stamp, existing.id);
+      return publicContact(db.prepare("SELECT * FROM listing_contact_profile WHERE id=?").get(existing.id));
+    }
+    try {
+      const ins = db.prepare(
+        `INSERT INTO listing_contact_profile(user_id, label, contact_name, phone, line_url, is_account, created_at, updated_at)
+         VALUES (?,?,?,?,?,1,?,?)`,
+      ).run(uid, ACCOUNT_CONTACT_LABEL, fields.contact_name, fields.phone, fields.line_url, stamp, stamp);
+      return publicContact(db.prepare("SELECT * FROM listing_contact_profile WHERE id=?").get(Number(ins.lastInsertRowid)));
+    } catch (error) {
+      const raced = readAccount();
+      if (raced) return publicContact(raced);
+      throw error;
+    }
+  };
+  try {
+    return withImmediate(db, upsert);
+  } catch (error) {
+    if (/transaction|within/i.test(String(error.message || ""))) return upsert();
+    throw error;
   }
-  const ins = db.prepare(
-    `INSERT INTO listing_contact_profile(user_id, label, contact_name, phone, line_url, is_account, created_at, updated_at)
-     VALUES (?,?,?,?,?,1,?,?)`,
-  ).run(uid, ACCOUNT_CONTACT_LABEL, fields.contact_name, fields.phone, fields.line_url, stamp, stamp);
-  return publicContact(db.prepare("SELECT * FROM listing_contact_profile WHERE id=?").get(Number(ins.lastInsertRowid)));
 }
 
 export function reusableCopyPhotos(db, userId, urls) {

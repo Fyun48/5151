@@ -365,12 +365,12 @@ export function parseHpDetailJson(payload) {
   ]);
   const conditionTags = Array.isArray(det.conditionTags) ? det.conditionTags.map(str).filter(Boolean) : [];
   const tagCommunity = (Array.isArray(det.tags) ? det.tags : [])
-    .filter((row) => row && (Number(row.type) === 2 || row.communityId || row.id))
+    .filter((row) => row && (Number(row.type) === 2 || row.communityId))
     .map((row) => str(row.name))
     .find(Boolean);
   const titleCommunity = str(det.caseName).match(/【([^】]{1,20})】/)?.[1] || "";
   const community = cleanCommunityName(
-    det.communityName || det.community || det.communityTag || det.buildName || tagCommunity || titleCommunity || conditionTags[0],
+    det.communityName || det.community || det.communityTag || det.buildName || tagCommunity || titleCommunity,
   );
   return {
     floorName,

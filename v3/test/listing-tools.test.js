@@ -15,6 +15,7 @@ import { ensureListingImportSchema } from "../src/listingImport.js";
 import {
   createImportedDraftListing,
   createSelfListing,
+  updateImportedDraftListing,
   ensureSelfListingSchema,
   getSelfListing,
   publicListingView,
@@ -30,6 +31,7 @@ import {
   createDescriptionTemplate,
   deleteContactProfile,
   deleteDescriptionTemplate,
+  ensureAccountContactProfile,
   ensureListingToolsSchema,
   getOwnedContactProfile,
   getOwnedDescriptionTemplate,
@@ -237,6 +239,24 @@ test("copy does not clone import provenance or old import confirmation", () => {
   db.close();
 });
 
+test("imported draft body is sanitized on update and display", () => {
+  const db = open();
+  addUser(db, { id: 1, email: "a@example.com" });
+  const imported = createImportedDraftListing(db, 1, {
+    title: "匯入套房",
+    body: "匯入說明近捷運採光佳。",
+    photos: [],
+  });
+  const dirty = updateImportedDraftListing(db, 1, imported.post_id, {
+    body: '<b>乾淨</b><script>alert(1)</script><a href="https://evil.test">連</a>近捷運採光',
+  });
+  assert.match(dirty.body, /<b>乾淨<\/b>/);
+  assert.doesNotMatch(dirty.body, /script|href|evil/i);
+  const pub = publicListingView(dirty);
+  assert.doesNotMatch(pub.body || "", /script|href|evil/i);
+  db.close();
+});
+
 test("owned media references are reused without consuming quota; foreign media is dropped", async () => {
   const db = open();
   addUser(db, { id: 1, email: "a@example.com" });
@@ -322,6 +342,21 @@ test("description templates: free limit 2, sponsor 5, ownership, sanitization, c
   assert.equal(listDescriptionTemplates(db2, 1).length, 2);
   db.close();
   db2.close();
+});
+
+test("account contact stays unique under concurrent ensure", async () => {
+  const db = open();
+  addUser(db, { id: 1, email: "a@example.com", nickname: "吉比" });
+  const results = await Promise.all([
+    Promise.resolve().then(() => ensureAccountContactProfile(db, 1)),
+    Promise.resolve().then(() => ensureAccountContactProfile(db, 1)),
+    Promise.resolve().then(() => listContactProfiles(db, 1)),
+  ]);
+  const accounts = listContactProfiles(db, 1).filter((row) => row.is_account);
+  assert.equal(accounts.length, 1);
+  assert.equal(accounts[0].label, "此帳號");
+  assert.equal(results.filter(Boolean).length, 3);
+  db.close();
 });
 
 test("contact profiles: limit 2, private, snapshot on listing, delete does not mutate listing", async () => {

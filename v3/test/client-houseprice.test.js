@@ -126,6 +126,19 @@ test("5168 JSON 16699854 keeps 民權路 address, 南加州 community, 22/24 flo
   });
   assert.equal(fallback.community, "南加州");
   assert.equal(fallback.floorName, "22/24");
+  const noisy = parseHpDetailJson({
+    webRentCaseGroupingDetail: {
+      caseName: "近捷運套房",
+      simpAddress: "新北市淡水區民權路19號",
+      fromFloor: "2",
+      toFloor: "2",
+      upFloor: 5,
+      tags: [{ type: 1, id: 99, name: "可養寵物" }],
+      conditionTags: ["可養寵物", "可開伙"],
+    },
+  });
+  assert.equal(noisy.community, "");
+  assert.equal(noisy.floorName, "2/5");
 });
 
 test("fetchHpCoveringListings enriches from the JSON API (address + geo pin)", async () => {
