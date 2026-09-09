@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { readFileSync, existsSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 // v3 會員照片素材庫的 server-side 影像處理。
 // 重要（部署/CI 相容）：影像處理器 sharp 是「原生相依」，只在 Production（Docker `npm ci`）安裝；
@@ -93,6 +96,19 @@ export function bufferHasWatermarkMarker(buffer) {
   return Buffer.isBuffer(buffer) && buffer.includes(Buffer.from(WATERMARK_MARKER));
 }
 
+const WATERMARK_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/brand/jibi-watermark.png");
+let watermarkLogoCache = null;
+
+export function siteWatermarkLogoPath() {
+  return WATERMARK_FILE;
+}
+
+function loadWatermarkLogo() {
+  if (watermarkLogoCache) return watermarkLogoCache;
+  if (existsSync(WATERMARK_FILE)) watermarkLogoCache = readFileSync(WATERMARK_FILE);
+  return watermarkLogoCache;
+}
+
 function siteLogoSvg({ width, height }) {
   const short = Math.min(width, height);
   const margin = Math.max(10, Math.round(short * WATERMARK_MARGIN_RATIO));
@@ -123,6 +139,15 @@ async function defaultWatermarkOverlay(buffer, { width, height } = {}) {
     const e = new Error("圖片尺寸無效");
     e.status = 400;
     throw e;
+  }
+  const logo = loadWatermarkLogo();
+  if (logo) {
+    const markW = Math.max(72, Math.round(w * WATERMARK_WIDTH_RATIO));
+    const resized = await sharp(logo).resize({ width: markW, withoutEnlargement: true }).png().toBuffer();
+    return sharp(buffer, { failOn: "error" })
+      .composite([{ input: resized, gravity: "southeast", blend: "over" }])
+      .jpeg({ quality: IMAGE_MAIN_QUALITY, mozjpeg: false })
+      .toBuffer();
   }
   return sharp(buffer, { failOn: "error" })
     .composite([{ input: siteLogoSvg({ width: w, height: h }), gravity: "southeast" }])

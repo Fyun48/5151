@@ -193,6 +193,7 @@ import {
   copyOwnListing as copyOwnListingOn,
   createContactProfile as createContactProfileOn,
   createDescriptionTemplate as createDescriptionTemplateOn,
+  ensureAccountContactProfile as ensureAccountContactProfileOn,
   deleteContactProfile as deleteContactProfileOn,
   deleteDescriptionTemplate as deleteDescriptionTemplateOn,
   ensureListingToolsSchema,
@@ -1431,8 +1432,9 @@ export function createSelfListing(userId, input) {
   });
 }
 
-export function listingToolsInfo() {
-  return listingToolsMeta();
+export function listingToolsInfo(userId) {
+  const user = userId ? getUserById(userId) : null;
+  return listingToolsMeta({ plan: user?.plan, role: user?.role });
 }
 export function copyOwnListingFor(userId, sourceId, input = {}) {
   return copyOwnListingOn(db, userId, sourceId, input);
@@ -1446,7 +1448,8 @@ export function listDescriptionTemplatesFor(userId) {
   return listDescriptionTemplatesOn(db, userId);
 }
 export function createDescriptionTemplateFor(userId, input) {
-  return createDescriptionTemplateOn(db, userId, input);
+  const user = getUserById(userId);
+  return createDescriptionTemplateOn(db, userId, input, new Date(), { plan: user?.plan, role: user?.role });
 }
 export function getOwnedDescriptionTemplateFor(userId, id) {
   return getOwnedDescriptionTemplateOn(db, userId, id);
@@ -1458,6 +1461,7 @@ export function deleteDescriptionTemplateFor(userId, id) {
   return deleteDescriptionTemplateOn(db, userId, id);
 }
 export function listContactProfilesFor(userId) {
+  ensureAccountContactProfileOn(db, userId);
   return listContactProfilesOn(db, userId);
 }
 export function createContactProfileFor(userId, input) {
@@ -3232,7 +3236,8 @@ export function applyCachedCoords(row, settings) {
 
 let routeCacheMemo = null;
 let routeCacheMemoAt = 0;
-const ROUTE_CACHE_MEMO_MS = 8000;
+const ROUTE_CACHE_MEMO_MS = 60_000;
+let routeByKeyStmt = null;
 
 function parseRouteCacheRow(row) {
   if (!row) return null;
@@ -3252,21 +3257,27 @@ function parseRouteCacheRow(row) {
 export function warmRouteCache() {
   const stamp = Date.now();
   if (routeCacheMemo && stamp - routeCacheMemoAt < ROUTE_CACHE_MEMO_MS) return routeCacheMemo;
-  routeCacheMemo = new Map();
-  for (const row of db.prepare("SELECT route_key, distances, min_km, rush_am_min, rush_pm_min, rush_updated_at FROM route_cache").all()) {
-    const parsed = parseRouteCacheRow(row);
-    if (parsed) routeCacheMemo.set(row.route_key, parsed);
-  }
+  if (!routeCacheMemo) routeCacheMemo = new Map();
   routeCacheMemoAt = stamp;
   return routeCacheMemo;
 }
 
 export function getCachedRoute(fromLat, fromLng, toLat, toLng, mode = "scooter") {
   const key = makeRouteKey(fromLat, fromLng, toLat, toLng, mode);
-  const memo = routeCacheMemo && Date.now() - routeCacheMemoAt < ROUTE_CACHE_MEMO_MS
-    ? routeCacheMemo
-    : warmRouteCache();
-  return memo.get(key) || null;
+  const stamp = Date.now();
+  if (!routeCacheMemo || stamp - routeCacheMemoAt >= ROUTE_CACHE_MEMO_MS) {
+    routeCacheMemo = new Map();
+    routeCacheMemoAt = stamp;
+  }
+  if (routeCacheMemo.has(key)) return routeCacheMemo.get(key);
+  if (!routeByKeyStmt) {
+    routeByKeyStmt = db.prepare(
+      "SELECT distances, min_km, rush_am_min, rush_pm_min, rush_updated_at FROM route_cache WHERE route_key = ?",
+    );
+  }
+  const parsed = parseRouteCacheRow(routeByKeyStmt.get(key));
+  routeCacheMemo.set(key, parsed);
+  return parsed;
 }
 
 export function getCachedMrt(lat, lng) {

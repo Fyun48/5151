@@ -1,6 +1,7 @@
 /** 刊登生產力工具：複製自己的物件、說明範本、聯絡人快選。 */
 
 import { containsUnsafeMarkup, sanitizeDocumentText } from "./safeContent.js";
+import { sanitizeListingBodyHtml, listingBodyPlain } from "./listingBody.js";
 import { isMemberMediaUrl, ownsMediaUrl } from "./memberMedia.js";
 import { isSelfPhotoPublicUrl } from "./selfPhotos.js";
 import {
@@ -15,8 +16,18 @@ import {
   normalizeLineUrl,
 } from "./selfListings.js";
 
-export const DESCRIPTION_TEMPLATE_LIMIT = 3;
+export const DESCRIPTION_TEMPLATE_LIMIT_FREE = 2;
+export const DESCRIPTION_TEMPLATE_LIMIT_SPONSOR = 5;
+export const DESCRIPTION_TEMPLATE_LIMIT = DESCRIPTION_TEMPLATE_LIMIT_FREE;
 export const CONTACT_PROFILE_LIMIT = 2;
+export const ACCOUNT_CONTACT_LABEL = "此帳號";
+
+export function descriptionTemplateLimit({ plan, role } = {}) {
+  if (String(plan || "") === "sponsor" || String(role || "") === "admin") {
+    return DESCRIPTION_TEMPLATE_LIMIT_SPONSOR;
+  }
+  return DESCRIPTION_TEMPLATE_LIMIT_FREE;
+}
 export const TEMPLATE_NAME_MAX = 40;
 export const CONTACT_LABEL_MAX = 40;
 
@@ -83,9 +94,11 @@ function stripUnsafePlain(value, max) {
   return text.slice(0, max);
 }
 
-export function listingToolsMeta() {
+export function listingToolsMeta(opts = {}) {
   return {
-    description_template_limit: DESCRIPTION_TEMPLATE_LIMIT,
+    description_template_limit: descriptionTemplateLimit(opts),
+    description_template_limit_free: DESCRIPTION_TEMPLATE_LIMIT_FREE,
+    description_template_limit_sponsor: DESCRIPTION_TEMPLATE_LIMIT_SPONSOR,
     contact_profile_limit: CONTACT_PROFILE_LIMIT,
     copyable_fields: [...COPYABLE_FIELDS],
   };
@@ -122,6 +135,7 @@ export function ensureListingToolsSchema(db) {
       PRIMARY KEY (user_id, request_key)
     );
   `);
+  try { db.exec("ALTER TABLE listing_contact_profile ADD COLUMN is_account INTEGER NOT NULL DEFAULT 0"); } catch { /* already */ }
 }
 
 function publicTemplate(row) {
@@ -144,9 +158,56 @@ function publicContact(row) {
     contact_name: row.contact_name || "",
     phone: row.phone || "",
     line_url: row.line_url || "",
+    is_account: Number(row.is_account) === 1,
+    locked: Number(row.is_account) === 1,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
+}
+
+function accountContactFields(db, userId) {
+  let user = {};
+  try {
+    user = db.prepare("SELECT nickname, email, contact_phone, line_id FROM users WHERE id=?").get(Number(userId) || 0) || {};
+  } catch {
+    try {
+      user = db.prepare("SELECT nickname, email FROM users WHERE id=?").get(Number(userId) || 0) || {};
+    } catch { user = {}; }
+  }
+  const name = String(user.nickname || "").trim() || String(user.email || "").trim() || ACCOUNT_CONTACT_LABEL;
+  let lineUrl = "";
+  const lineId = String(user.line_id || "").trim();
+  if (lineId) {
+    try { lineUrl = normalizeLineUrl(lineId.includes("http") ? lineId : `https://line.me/ti/p/${lineId}`); } catch { lineUrl = ""; }
+  }
+  return {
+    label: ACCOUNT_CONTACT_LABEL,
+    contact_name: name.slice(0, SELF_CONTACT_MAX),
+    phone: digitsPhone(user.contact_phone || ""),
+    line_url: lineUrl,
+  };
+}
+
+export function ensureAccountContactProfile(db, userId, now = new Date()) {
+  const uid = Number(userId) || 0;
+  if (!uid) throw httpError("請先登入", 401);
+  ensureListingToolsSchema(db);
+  const fields = accountContactFields(db, uid);
+  const stamp = iso(now);
+  const existing = db.prepare(
+    "SELECT * FROM listing_contact_profile WHERE user_id=? AND IFNULL(is_account,0)=1 ORDER BY id LIMIT 1",
+  ).get(uid);
+  if (existing) {
+    db.prepare(
+      "UPDATE listing_contact_profile SET label=?, contact_name=?, phone=?, line_url=?, updated_at=? WHERE id=?",
+    ).run(ACCOUNT_CONTACT_LABEL, fields.contact_name, fields.phone, fields.line_url, stamp, existing.id);
+    return publicContact(db.prepare("SELECT * FROM listing_contact_profile WHERE id=?").get(existing.id));
+  }
+  const ins = db.prepare(
+    `INSERT INTO listing_contact_profile(user_id, label, contact_name, phone, line_url, is_account, created_at, updated_at)
+     VALUES (?,?,?,?,?,1,?,?)`,
+  ).run(uid, ACCOUNT_CONTACT_LABEL, fields.contact_name, fields.phone, fields.line_url, stamp, stamp);
+  return publicContact(db.prepare("SELECT * FROM listing_contact_profile WHERE id=?").get(Number(ins.lastInsertRowid)));
 }
 
 export function reusableCopyPhotos(db, userId, urls) {
@@ -248,20 +309,21 @@ export function listDescriptionTemplates(db, userId) {
   ).all(uid).map(publicTemplate);
 }
 
-export function createDescriptionTemplate(db, userId, input = {}, now = new Date()) {
+export function createDescriptionTemplate(db, userId, input = {}, now = new Date(), opts = {}) {
   const uid = Number(userId) || 0;
   if (!uid) throw httpError("請先登入", 401);
   const name = stripUnsafePlain(input.name, TEMPLATE_NAME_MAX);
-  const body = stripUnsafePlain(input.body, SELF_BODY_MAX);
+  const body = sanitizeListingBodyHtml(input.body, SELF_BODY_MAX);
   if (!name) throw httpError("請填範本名稱");
-  if (!body) throw httpError("請填範本內容");
+  if (!listingBodyPlain(body)) throw httpError("請填範本內容");
   const stamp = iso(now);
+  const limit = descriptionTemplateLimit(opts);
   return withImmediate(db, () => {
     const n = Number(db.prepare(
       "SELECT COUNT(*) AS n FROM listing_description_template WHERE user_id=?",
     ).get(uid)?.n) || 0;
-    if (n >= DESCRIPTION_TEMPLATE_LIMIT) {
-      throw httpError(`說明範本最多 ${DESCRIPTION_TEMPLATE_LIMIT} 則`, 409, "template_limit");
+    if (n >= limit) {
+      throw httpError(`說明範本最多 ${limit} 則`, 409, "template_limit");
     }
     const ins = db.prepare(
       `INSERT INTO listing_description_template(user_id, name, body, sort_order, created_at, updated_at)
@@ -281,9 +343,9 @@ function ownedTemplate(db, userId, id) {
 export function updateDescriptionTemplate(db, userId, id, input = {}, now = new Date()) {
   const row = ownedTemplate(db, userId, id);
   const name = input.name != null ? stripUnsafePlain(input.name, TEMPLATE_NAME_MAX) : row.name;
-  const body = input.body != null ? stripUnsafePlain(input.body, SELF_BODY_MAX) : row.body;
+  const body = input.body != null ? sanitizeListingBodyHtml(input.body, SELF_BODY_MAX) : row.body;
   if (!name) throw httpError("請填範本名稱");
-  if (!body) throw httpError("請填範本內容");
+  if (!listingBodyPlain(body)) throw httpError("請填範本內容");
   db.prepare(
     "UPDATE listing_description_template SET name=?, body=?, updated_at=? WHERE id=? AND user_id=?",
   ).run(name, body, iso(now), row.id, Number(userId));
@@ -299,8 +361,9 @@ export function deleteDescriptionTemplate(db, userId, id) {
 export function listContactProfiles(db, userId) {
   const uid = Number(userId) || 0;
   if (!uid) throw httpError("請先登入", 401);
+  ensureAccountContactProfile(db, uid);
   return db.prepare(
-    "SELECT * FROM listing_contact_profile WHERE user_id=? ORDER BY id",
+    "SELECT * FROM listing_contact_profile WHERE user_id=? ORDER BY IFNULL(is_account,0) DESC, id",
   ).all(uid).map(publicContact);
 }
 
@@ -326,14 +389,14 @@ export function createContactProfile(db, userId, input = {}, now = new Date()) {
   const stamp = iso(now);
   return withImmediate(db, () => {
     const n = Number(db.prepare(
-      "SELECT COUNT(*) AS n FROM listing_contact_profile WHERE user_id=?",
+      "SELECT COUNT(*) AS n FROM listing_contact_profile WHERE user_id=? AND IFNULL(is_account,0)=0",
     ).get(uid)?.n) || 0;
     if (n >= CONTACT_PROFILE_LIMIT) {
       throw httpError(`聯絡人最多 ${CONTACT_PROFILE_LIMIT} 則`, 409, "contact_limit");
     }
     const ins = db.prepare(
-      `INSERT INTO listing_contact_profile(user_id, label, contact_name, phone, line_url, created_at, updated_at)
-       VALUES (?,?,?,?,?,?,?)`,
+      `INSERT INTO listing_contact_profile(user_id, label, contact_name, phone, line_url, is_account, created_at, updated_at)
+       VALUES (?,?,?,?,?,0,?,?)`,
     ).run(uid, fields.label, fields.contact_name, fields.phone, fields.line_url, stamp, stamp);
     return publicContact(db.prepare("SELECT * FROM listing_contact_profile WHERE id=?").get(Number(ins.lastInsertRowid)));
   });
@@ -348,6 +411,9 @@ function ownedContact(db, userId, id) {
 
 export function updateContactProfile(db, userId, id, input = {}, now = new Date()) {
   const row = ownedContact(db, userId, id);
+  if (Number(row.is_account) === 1) {
+    throw httpError("此帳號聯絡人會跟著個人資料更新，不能改這裡", 403, "account_contact_locked");
+  }
   const fields = sanitizeContactInput(input, row);
   db.prepare(
     "UPDATE listing_contact_profile SET label=?, contact_name=?, phone=?, line_url=?, updated_at=? WHERE id=? AND user_id=?",
@@ -356,7 +422,10 @@ export function updateContactProfile(db, userId, id, input = {}, now = new Date(
 }
 
 export function deleteContactProfile(db, userId, id) {
-  ownedContact(db, userId, id);
+  const row = ownedContact(db, userId, id);
+  if (Number(row.is_account) === 1) {
+    throw httpError("此帳號聯絡人不能刪除", 403, "account_contact_locked");
+  }
   db.prepare("DELETE FROM listing_contact_profile WHERE id=? AND user_id=?").run(Number(id), Number(userId));
   return { deleted: true };
 }

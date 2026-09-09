@@ -14,6 +14,7 @@ import {
   selfTraitLabels,
 } from "./selfTraits.js";
 import { ensureProfileSchema } from "./profile.js";
+import { listingBodyPlain, sanitizeListingBodyHtml } from "./listingBody.js";
 
 export const SELF_POST_ID_BASE = 2_100_000_000;
 export const SELF_POST_ID_END = 2_200_000_000;
@@ -484,10 +485,9 @@ export function createSelfListing(db, userId, input = {}, now = new Date(), { ma
 
   const address = composeSelfAddress(district, input.street || input.address);
 
-  const rawBody = String(input.body || "").trim();
-  if (rawBody.length > SELF_BODY_MAX) throw httpError(`說明最多 ${SELF_BODY_MAX} 字`);
-  if (rawBody.length < SELF_BODY_MIN) throw httpError(`請寫一點物件說明（至少 ${SELF_BODY_MIN} 個字）`);
-  const body = rawBody;
+  const body = sanitizeListingBodyHtml(input.body || "", SELF_BODY_MAX);
+  const plainBody = listingBodyPlain(body);
+  if (plainBody.length < SELF_BODY_MIN) throw httpError(`請寫一點物件說明（至少 ${SELF_BODY_MIN} 個字）`);
 
   const kind = kindId(input.kind || input.housing_type);
   const role = roleId(input.role);
@@ -622,20 +622,27 @@ export function createImportedDraftListing(db, userId, input = {}, now = new Dat
   const uid = Number(userId) || 0;
   if (!uid) throw httpError("請先登入才能匯入", 401);
   const title = String(input.title || "").trim().slice(0, SELF_TITLE_MAX);
-  const body = String(input.body || "").trim().slice(0, SELF_BODY_MAX);
-  if (!title && body.length < SELF_BODY_MIN) throw httpError("匯入內容不足以建立草稿", 400);
+  const body = sanitizeListingBodyHtml(input.body || "", SELF_BODY_MAX);
+  if (!title && listingBodyPlain(body).length < SELF_BODY_MIN) throw httpError("匯入內容不足以建立草稿", 400);
   const photos = normalizePhotoList(input.photos || []);
   const created = iso(now);
   const postId = nextSelfPostId(db);
   const sourceKey = `import-draft:${uid}:${postId}`;
+  const address = String(input.address || "").trim();
+  const areaName = String(input.area_name || "").trim();
+  const layout = String(input.layout || "").trim();
+  const floorName = String(input.floor_name || "").trim();
+  const kindName = String(input.kind || input.kind_name || "").trim();
+  const community = String(input.community || input.community_name || "").trim();
+  const tags = ["吉比本站", community].filter(Boolean);
   db.prepare(`
     INSERT INTO listings (
       post_id, source_key, search_key, title, url, price, price_num,
       extra_fee, extra_fee_text, price_contain_text, extra_fees, extra_fees_fetched,
       address, area_name, layout, floor_name, kind_name, role_name, cover, tags,
       refresh_time, first_seen_at, last_seen_at, last_event, viewed, watched
-    ) VALUES (?, ?, '', ?, ?, '', 0, 0, '', '', '[]', 1, '', '', '', '', '', '', ?, '[]', '', ?, ?, 'draft', 0, 0)
-  `).run(postId, sourceKey, title || "匯入草稿", `/go/${postId}`, photos[0] || "", created, created);
+    ) VALUES (?, ?, '', ?, ?, '', 0, 0, '', '', '[]', 1, ?, ?, ?, ?, ?, '', ?, ?, '', ?, ?, 'draft', 0, 0)
+  `).run(postId, sourceKey, title || "匯入草稿", `/go/${postId}`, address, areaName, layout, floorName, kindName, photos[0] || "", JSON.stringify(tags), created, created);
   db.prepare(`
     UPDATE listings SET
       source = 'self',
@@ -654,6 +661,9 @@ export function createImportedDraftListing(db, userId, input = {}, now = new Dat
       contact_fetched = 0
     WHERE post_id = ?
   `).run(`import:${uid}:${postId}`, uid, body, JSON.stringify(photos), postId);
+  if (community) {
+    try { db.prepare("UPDATE listings SET community_name=? WHERE post_id=?").run(community, postId); } catch { /* optional column */ }
+  }
   return getSelfListing(db, postId, { viewerId: uid });
 }
 
@@ -841,9 +851,9 @@ export function publishImportedDraftListing(db, userId, postId, input = {}, now 
   if (!(ping > 0 && ping <= 500)) throw httpError("請填坪數");
   if (input.accept_pledge !== true) throw httpError("請勾選屋主／代理人聲明後才能刊登");
   const address = composeSelfAddress(district, input.street || input.address);
-  const rawBody = String(input.body != null ? input.body : row.self_body || "").trim();
-  if (rawBody.length > SELF_BODY_MAX) throw httpError(`說明最多 ${SELF_BODY_MAX} 字`);
-  if (rawBody.length < SELF_BODY_MIN) throw httpError(`請寫一點物件說明（至少 ${SELF_BODY_MIN} 個字）`);
+  const body = sanitizeListingBodyHtml(input.body != null ? input.body : row.self_body || "", SELF_BODY_MAX);
+  const plainBody = listingBodyPlain(body);
+  if (plainBody.length < SELF_BODY_MIN) throw httpError(`請寫一點物件說明（至少 ${SELF_BODY_MIN} 個字）`);
   const kind = kindId(input.kind || input.housing_type);
   const role = roleId(input.role);
   const layout = layoutText(input);
@@ -904,7 +914,7 @@ export function publishImportedDraftListing(db, userId, postId, input = {}, now 
     photos[0] || "",
     JSON.stringify(["吉比本站", ...selfTraitLabels(traitIds), depositLabel(deposit)].filter(Boolean)),
     expires,
-    rawBody,
+    body,
     JSON.stringify(photos.slice(0, SELF_PHOTO_MAX_COUNT)),
     JSON.stringify(traitIds),
     deposit,

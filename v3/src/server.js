@@ -1513,7 +1513,7 @@ app.get("/api/self-listings", (req, res) => {
     }
     res.json({
       ...selfListingMeta(),
-      tools: listingToolsInfo(),
+      tools: listingToolsInfo(session.userId),
       listings: listMineSelfListings(session.userId),
     });
   } catch (error) {
@@ -1758,7 +1758,7 @@ app.get("/api/listing-description-templates", (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json({ items: listDescriptionTemplatesFor(session.userId), limit: listingToolsInfo().description_template_limit });
+    res.json({ items: listDescriptionTemplatesFor(session.userId), limit: listingToolsInfo(session.userId).description_template_limit });
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
 app.post("/api/listing-description-templates", (req, res) => {

@@ -623,24 +623,25 @@
     /* 桌面：右下浮動 dock；閒置縮成 compact tab。手機樣式在 880 斷點覆寫。 */
     .mobile-help-dock {
       display: flex;
-      flex-direction: row;
-      gap: 8px;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 6px;
       position: fixed;
-      right: 72px;
+      right: 18px;
       bottom: 80px;
       left: auto;
       z-index: 117;
     }
     .mobile-help-dock.is-compact button {
-      padding: 8px 10px;
-      min-width: var(--touch);
+      padding: 6px 8px;
+      min-width: 32px;
     }
     .mobile-help-dock.is-compact button .help-dock-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
     html.no-session .mobile-help-dock,
     body.role-guest .mobile-help-dock { display: none !important; }
     .mobile-help-dock button {
-      padding: 7px 12px; font-size: 12px; font-weight: 700; border-radius: 999px;
-      display: inline-flex; align-items: center; gap: 4px; min-height: 34px;
+      padding: 5px 10px; font-size: 12px; font-weight: 700; border-radius: 999px;
+      display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-height: 32px;
       box-shadow: 0 2px 8px rgba(31, 27, 22, 0.14); background: var(--paper);
     }
     .mobile-help-dock button span { font-size: 13px; line-height: 1; }
@@ -667,6 +668,14 @@
       width: min(240px, 100%);
       margin-left: auto;
       min-height: 44px;
+      transition: opacity 0.35s ease;
+    }
+    body.search-bar-hidden .list-search {
+      opacity: 0;
+      pointer-events: none;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .list-search { transition: none; }
     }
     .item-title {
       margin: 6px 0 0;
@@ -1482,15 +1491,36 @@
       margin-left: auto;
     }
     .filter-head-actions > button {
-      min-height: var(--touch);
+      min-height: 32px;
       min-width: 76px;
-      padding: 8px 14px;
+      padding: 4px 12px;
       font-size: 13px;
       font-weight: 700;
       line-height: 1.2;
       text-align: center;
       border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
     }
+    .rich-editor { border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); }
+    .rich-toolbar { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; border-bottom: 1px solid var(--line); }
+    .rich-toolbar button { min-height: 32px; padding: 4px 10px; }
+    .rich-emoji { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; border-bottom: 1px solid var(--line); }
+    .rich-emoji button { min-width: 36px; min-height: 36px; padding: 0; font-size: 18px; }
+    .rich-area {
+      min-height: 120px;
+      padding: 10px 12px;
+      font-size: 14px;
+      line-height: 1.55;
+      outline: none;
+    }
+    .rich-area:empty::before { content: attr(data-placeholder); color: var(--muted); }
+    .media-mode-bar { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 8px; }
+    .media-tag-editor { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--line); }
     body.panel-collapsed .filter-head {
       background: var(--accent-mist);
     }
@@ -1527,7 +1557,7 @@
     #scrollTopBtn {
       position: fixed;
       right: 18px;
-      bottom: 80px;
+      bottom: 158px;
       z-index: 119;
       width: 44px;
       height: 44px;
@@ -1784,6 +1814,8 @@
       background: var(--accent-mist);
     }
     .profile-avatar.empty { display: grid; place-items: center; color: var(--muted); font-size: 12px; }
+    .profile-avatar[hidden] { display: none !important; }
+    .avatar-pick { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
     .addr-combo {
       display: grid;
       grid-template-columns: minmax(120px, auto) 1fr;
@@ -2363,20 +2395,21 @@
         right: 12px;
         bottom: calc(76px + env(safe-area-inset-bottom, 0px));
       }
-      /* 手機 Q&A／意見：靠近底欄「找房」，滑動才顯示，停 1 秒後漸隱 */
+      /* 手機 Q&A／意見：直排靠左，距底欄 1px */
       .mobile-help-dock {
         display: flex;
-        flex-direction: row;
-        flex-wrap: wrap;
-        gap: 6px;
+        flex-direction: column;
+        align-items: flex-start;
+        flex-wrap: nowrap;
+        gap: 4px;
         position: fixed;
         left: 8px;
         right: auto;
-        bottom: calc(58px + env(safe-area-inset-bottom, 0px));
+        bottom: calc(57px + env(safe-area-inset-bottom, 0px));
         z-index: 117;
-        opacity: 0;
-        pointer-events: none;
-        transform: translateY(6px);
+        opacity: 1;
+        pointer-events: auto;
+        transform: none;
         transition: opacity 0.2s ease, transform 0.2s ease;
       }
       .mobile-help-dock.is-visible {
@@ -2444,12 +2477,15 @@
         flex: 1 1 0;
       }
       #openFilterSheetBtn {
-        min-height: var(--touch);
-        padding: 8px 14px;
+        min-height: 32px;
+        padding: 4px 12px;
         font-weight: 700;
         background: var(--accent);
         color: var(--primary-foreground);
         border-color: var(--accent);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
       }
       #openFilterSheetBtn:hover:not(:disabled) {
         background: var(--accent-deep);
@@ -2840,10 +2876,7 @@
       <label>坪數上限（幾坪以內，可空白）</label>
       <input type="number" id="areaMax" min="0" max="500" step="0.5" placeholder="不限，例如 30" />
       <p class="hint">頂樓加蓋、整層住家、一樓與地下室改在物件列表上方過濾顯示，不會讓爬蟲少抓。</p>
-      <div class="admin-only">
-        <label>進階：591 網址（自動產生，通常不用改）</label>
-        <textarea id="searchUrls" placeholder="儲存後會依上方行政區自動產生"></textarea>
-      </div>
+      <textarea id="searchUrls" hidden aria-hidden="true"></textarea>
       <div class="admin-only">
         <label>檢查間隔（分鐘）</label>
         <input type="number" id="intervalMinutes" min="1" max="120" />
@@ -3145,15 +3178,20 @@
       <h2 style="margin:0 0 8px">個人資料</h2>
       <form id="profileForm">
         <div class="profile-card">
-          <button type="button" class="media-hit" id="profileAvatarHit" title="點擊上傳或刪除頭像" aria-label="上傳或刪除頭像">
-            <img class="profile-avatar empty" id="profileAvatarImg" alt="" hidden />
+          <button type="button" class="media-hit" id="profileAvatarHit" title="點擊拍照或上傳頭像" aria-label="拍照或上傳頭像">
+            <img class="profile-avatar" id="profileAvatarImg" alt="頭像" hidden />
             <div class="profile-avatar empty" id="profileAvatarFallback">頭像</div>
             <span class="media-x" id="profileAvatarClear" hidden>×</span>
           </button>
           <div style="flex:1;min-width:0">
             <label>暱稱（2～20 字，選填）</label>
             <input id="profileNickname" maxlength="20" placeholder="例如 小林" />
+            <div class="avatar-pick" id="avatarPick" hidden>
+              <button type="button" class="ghost" id="avatarCameraBtn">拍照</button>
+              <button type="button" class="ghost" id="avatarAlbumBtn">相簿</button>
+            </div>
             <input type="file" id="profileAvatar" accept="image/jpeg,image/png,image/webp" hidden />
+            <input type="file" id="profileAvatarCamera" accept="image/*" capture="environment" hidden />
           </div>
         </div>
         <div class="profile-grid">
@@ -3395,26 +3433,10 @@
           </div>
           <div class="span-all">
             <label>物件照片</label>
-            <p class="hint">從「照片素材庫」點選要放上這則物件的照片；第一張會作為封面。上傳的照片會存進你的素材庫並在伺服器自動壓縮、去除定位等中繼資料。</p>
             <input type="file" id="selfPhotos" accept="image/jpeg,image/png,image/webp,image/avif" multiple />
             <p class="hint" id="selfPhotoCount">已選 0／100 張放上此物件。</p>
-            <div class="media-lib" id="mediaLib">
-              <div class="media-lib-head">
-                <strong>照片素材庫</strong>
-                <span class="hint" id="mediaQuota">— / —</span>
-              </div>
-              <p class="hint">複選標籤會帶入該標籤的照片，仍可在下方單張移除。標籤只影響你自己的素材庫。</p>
-              <div class="media-tag-bar" id="mediaTagBar">
-                <div class="media-tag-picks" id="mediaTagPicks" role="group" aria-label="以標籤帶入照片"></div>
-                <div class="listing-tools-row">
-                  <label class="visually-hidden" for="mediaTagName">新標籤名稱</label>
-                  <input id="mediaTagName" maxlength="40" placeholder="新標籤，例如 廚房" />
-                  <button type="button" class="ghost" id="mediaTagAdd">新增標籤</button>
-                </div>
-              </div>
-              <div class="media-grid" id="mediaGrid"></div>
-              <p class="hint" id="mediaLibEmpty" hidden>素材庫還沒有照片，上傳後會出現在這裡，可重複用在不同物件。</p>
-            </div>
+            <button type="button" class="ghost" id="mediaLibOpen">開啟照片素材庫</button>
+            <div class="media-lib" id="mediaLib" hidden></div>
           </div>
         </div>
         <p class="hint">已選到此物件的照片（可拖不需要的按 × 移除；順序即顯示順序，第一張為封面）：</p>
@@ -3422,7 +3444,20 @@
         <div id="selfTraitGroups"></div>
         <p class="hint" id="selfTraitNudge" hidden>電梯大樓的話，中庭與陽台常常是租客想先知道的。有的話點一下就好。</p>
         <label>說明（最多 500 字）</label>
-        <textarea id="selfBody" maxlength="500" placeholder="格局、設備、可入住日。沒有私訊。"></textarea>
+        <div class="rich-editor" id="selfBodyEditorWrap">
+          <div class="rich-toolbar" role="toolbar" aria-label="說明格式">
+            <button type="button" class="ghost" data-rich="bold">粗體</button>
+            <button type="button" class="ghost" data-rich="italic">斜體</button>
+            <button type="button" class="ghost" data-rich="size" data-size="18px">大</button>
+            <button type="button" class="ghost" data-rich="size" data-size="14px">中</button>
+            <button type="button" class="ghost" data-rich="color" data-color="#0f6f6a">綠</button>
+            <button type="button" class="ghost" data-rich="color" data-color="#1c1917">黑</button>
+            <button type="button" class="ghost" id="selfEmojiToggle">表情</button>
+          </div>
+          <div class="rich-emoji" id="selfEmojiBar" hidden></div>
+          <div class="rich-area" id="selfBodyEditor" contenteditable="true" role="textbox" aria-label="物件說明" data-placeholder="格局、設備、可入住日。"></div>
+          <textarea id="selfBody" maxlength="2500" hidden></textarea>
+        </div>
         <label class="pledge-row">
           <input type="checkbox" id="selfPledge" />
           <span id="selfPledgeText">我是這間房子的屋主，或已取得屋主授權的代理人。我確認刊登內容屬實，了解平台會抽查，不實刊登會被下架並暫停上傳。平台不驗證權狀、不保證真實，法律責任由我自行負擔。</span>
@@ -3742,7 +3777,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> · <a href="/data.html">居住數據</a> · <a href="#me" id="supportFooterLink">支持本站</a> · <a href="#" id="feedbackFooterLink">意見回饋</a> <span class="site-ver">ver. 3.47</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> · <a href="/data.html">居住數據</a> · <a href="#me" id="supportFooterLink">支持本站</a> · <a href="#" id="feedbackFooterLink">意見回饋</a> <span class="site-ver">ver. 3.48</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -3773,20 +3808,56 @@
       <div class="owner-list" id="ownerOverlayList"></div>
     </div>
   </div>
+  <div id="mediaLibOverlay" class="hub-overlay" hidden>
+    <div class="hub-backdrop" data-close-media-lib></div>
+    <div class="hub-panel" role="dialog" aria-modal="true" aria-labelledby="mediaLibTitle">
+      <div class="hub-head">
+        <div>
+          <h2 id="mediaLibTitle">照片素材庫</h2>
+          <p class="hint" style="margin:6px 0 0">先選照片放上此物件；要整理分類時再切到「管理標籤」。第一張是封面。</p>
+        </div>
+        <button type="button" class="ghost" id="mediaLibClose">關閉</button>
+      </div>
+      <div class="media-lib-head">
+        <strong id="mediaQuota">— / —</strong>
+        <div class="row">
+          <button type="button" class="ghost" id="mediaLibUpload">上傳／拍照</button>
+        </div>
+      </div>
+      <div class="media-mode-bar" role="tablist" aria-label="素材庫模式">
+        <button type="button" class="ghost on" id="mediaModePick" aria-pressed="true">選照片</button>
+        <button type="button" class="ghost" id="mediaModeTag" aria-pressed="false">管理標籤</button>
+      </div>
+      <div class="media-tag-bar" id="mediaTagBar">
+        <div class="media-tag-picks" id="mediaTagPicks" role="group" aria-label="以標籤篩選照片"></div>
+        <div class="listing-tools-row media-tag-editor" id="mediaTagEditor" hidden>
+          <label class="visually-hidden" for="mediaTagName">新標籤名稱</label>
+          <input id="mediaTagName" maxlength="40" placeholder="新標籤，例如 廚房" />
+          <button type="button" class="ghost" id="mediaTagAdd">新增標籤</button>
+        </div>
+      </div>
+      <div class="media-grid" id="mediaGrid"></div>
+      <p class="hint" id="mediaLibEmpty" hidden>素材庫還沒有照片，上傳後會出現在這裡，可重複用在不同物件。</p>
+      <div class="row" style="margin-top:10px">
+        <button type="button" class="primary" id="mediaLibApply">套用到此物件</button>
+        <span class="save-msg" id="mediaLibMsg"></span>
+      </div>
+    </div>
+  </div>
   <div id="descTemplateOverlay" class="hub-overlay" hidden>
     <div class="hub-backdrop" data-close-desc-tpl></div>
     <div class="hub-panel" role="dialog" aria-modal="true" aria-labelledby="descTemplateTitle">
       <div class="hub-head">
         <div>
           <h2 id="descTemplateTitle">新增說明範本</h2>
-          <p class="hint" style="margin:6px 0 0">最多 3 則，只存在你的帳號。從下拉選單選到就會套用；若說明已有字，會先問你要不要取代。</p>
+          <p class="hint" style="margin:6px 0 0">一般會員最多 2 則，贊助會員可存到 5 則。從下拉選單選到就會套用；若說明已有字，會先問你要不要取代。</p>
         </div>
         <button type="button" class="ghost" id="descTemplateClose">關閉</button>
       </div>
       <div class="listing-tools-row">
         <input type="text" id="descTemplateName" maxlength="40" placeholder="範本名稱" />
       </div>
-      <textarea id="descTemplateBody" maxlength="500" placeholder="說明內容（純文字）"></textarea>
+      <textarea id="descTemplateBody" maxlength="2500" placeholder="說明內容（可粗體／表情，不能放連結）"></textarea>
       <div class="row" style="margin-top:8px">
         <button type="button" class="primary" id="descTemplateSave">新增範本</button>
         <span class="save-msg" id="descTemplateMsg"></span>
@@ -4070,6 +4141,30 @@
     function routeChip(text) {
       return `<span class="route-chip">${esc(text)}</span>`;
     }
+    function floorDisplay(item) {
+      const raw = String(item?.floor_name || "").replace(/\s+/g, "").replace("／", "/");
+      const m = raw.match(/^(\d+(?:-\d+)?)\/(\d+)$/);
+      if (m) return `出租 ${m[1]}樓／共 ${m[2]}樓`;
+      return String(item?.floor_name || "").trim();
+    }
+    function listingSpecLine(item) {
+      return [
+        item?.community_name ? `社區 ${item.community_name}` : "",
+        item?.kind_name || "",
+        item?.layout || "",
+        item?.area_name || "",
+        floorDisplay(item),
+      ].filter(Boolean).join(" · ");
+    }
+    function safeListingHtml(value) {
+      const raw = String(value || "");
+      if (!raw) return "";
+      return raw
+        .replace(/<\s*script[\s\S]*?>[\s\S]*?<\s*\/\s*script\s*>/gi, "")
+        .replace(/<\s*(a|iframe|object|embed|link|meta|style|form|input|button)[\s\S]*?>[\s\S]*?<\/\s*\1\s*>/gi, "")
+        .replace(/<\s*(a|iframe|object|embed|link|meta|style|form)\b[^>]*>/gi, "")
+        .replace(/\s(?:on\w+|href|src|srcset)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "");
+    }
     function commuteText(item) {
       const label = commuteModeLabel(item.commute_mode || settings.commuteMode);
       if (item.commute_km != null) {
@@ -4330,7 +4425,10 @@
       const btn = $("filterRestoreBtn");
       if (!btn) return;
       const bits = activeFilterSummary();
-      btn.textContent = bits.length ? `更多條件 · ${bits.join(" · ")}` : "更多條件";
+      const full = bits.length ? `更多條件 · ${bits.join(" · ")}` : "更多條件";
+      const compact = bits.length ? bits.join(" · ") : "更多條件";
+      btn.textContent = full;
+      if (bits.length && btn.scrollWidth > btn.clientWidth + 1) btn.textContent = compact;
     }
     function fillFloorFilters(s = settings) {
       if ($("excludeRooftop")) $("excludeRooftop").checked = s.excludeRooftop !== false;
@@ -6025,12 +6123,12 @@
             ${sameHousePriceList(item)}
             <div class="rent-price">${esc(rentStatusLine(item))}</div>
             <div class="meta">
-              ${esc(item.kind_name || "")} · ${esc(item.layout || "")} · ${esc(item.area_name || "")} · ${esc(item.floor_name || "")}
+              ${esc(listingSpecLine(item))}
               <br>${esc(item.address || "")}${commuteText(item)}${offlineLine(item)}
               ${mrtText(item) ? `<div class="mrt-line">${mrtText(item)}</div>` : ""}
               ${item.match_detail && !sameHouseOf(item) ? `<br>比對：${esc(item.match_detail)}${item.match_post_id ? ` · <a href="${listingUrl(item.match_post_id)}" target="_blank" rel="noopener noreferrer">舊刊登 #${item.match_post_id}</a>` : ""}` : ""}
             </div>
-              ${item.self_body ? `<div class="meta">${esc(item.self_body)}</div>` : ""}
+              ${item.self_body ? `<div class="meta">${safeListingHtml(item.self_body)}</div>` : ""}
             ${(() => {
               const fees = feeLines(item, { includeTotal: Boolean($("priceMaxIncludesExtras")?.checked) });
               if (!fees.html) return "";
@@ -6346,9 +6444,9 @@
       $("status").textContent = "正在載入設定…";
       let me = null;
       let lastError = "";
-      for (let attempt = 1; attempt <= 4; attempt += 1) {
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
         try {
-          const res = await fetch("/api/me", { cache: "no-store", signal: AbortSignal.timeout(8000) });
+          const res = await fetch("/api/me", { cache: "no-store", signal: AbortSignal.timeout(5000) });
           me = await res.json();
           lastError = "";
           break;
@@ -6356,8 +6454,8 @@
           lastError = error.name === "TimeoutError" || error.name === "AbortError"
             ? "伺服器忙碌（可能正在檢查 591）"
             : error.message;
-          $("status").textContent = `連線中（${attempt}/4）… ${lastError}`;
-          if (attempt < 4) await new Promise((resolve) => setTimeout(resolve, 800 * attempt));
+          $("status").textContent = `連線中（${attempt}/2）… ${lastError}`;
+          if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 400));
         }
       }
       if (!me) {
@@ -6415,38 +6513,15 @@
       settingsLoaded = false;
       setSettingsReady(false, "正在載入已存設定…完成前請不要按儲存。");
       lastError = "";
-      for (let attempt = 1; attempt <= 4; attempt += 1) {
-        try {
-          const res = await fetch("/api/settings", { cache: "no-store", signal: AbortSignal.timeout(12000) });
-          const data = await readApi(res);
-          if (!res.ok) throw new Error(data.error || "載入設定失敗");
-          if (!data.settings) throw new Error("伺服器沒有回傳設定");
+      try {
+        const res = await fetch("/api/state", { cache: "no-store", signal: AbortSignal.timeout(18000) });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "載入失敗");
+        if (data.settings) {
           cities = Array.isArray(data.cities) && data.cities.length ? data.cities : CITIES_EMBEDDED;
           fillSettings(data.settings);
-          lastError = "";
-          break;
-        } catch (error) {
-          lastError = error.name === "TimeoutError" || error.name === "AbortError"
-            ? "載入逾時，伺服器可能正在檢查物件"
-            : error.message;
-          $("status").textContent = `載入設定中（${attempt}/4）… ${lastError}`;
-          if (attempt < 4) await new Promise((resolve) => setTimeout(resolve, 800 * attempt));
         }
-      }
-      if (!settingsLoaded) {
-        cities = CITIES_EMBEDDED;
-        renderDistrictPicker({ watchDistricts: [] });
-        setSettingsReady(false, "設定沒載到。請按右上「重新整理」。現在看到的空白表單不是你的存檔，請不要按儲存。");
-        $("status").textContent = lastError || "設定沒載到，請重新整理";
-      }
-      try {
-        const res = await fetch("/api/state", { cache: "no-store", signal: AbortSignal.timeout(35000) });
-        const data = await readApi(res);
-        if (res.ok && data.settings) {
-          cities = Array.isArray(data.cities) && data.cities.length ? data.cities : cities;
-          fillSettings(data.settings);
-        }
-        await loadMemberMail();
+        loadMemberMail().catch(() => {});
         renderStats(data.stats || {});
         renderList(applyListView(data.listings || []), data.stats || {});
         if (data.lastRun?.checked_at) {
@@ -6456,11 +6531,25 @@
           $("status").textContent = "設定已載入";
         }
       } catch (error) {
-        $("status").textContent = "設定已載入，物件列表稍後再試";
+        lastError = error.name === "TimeoutError" || error.name === "AbortError"
+          ? "載入逾時，伺服器可能正在檢查物件"
+          : error.message;
         try {
-          await loadList();
-        } catch {
-          $("status").textContent = "設定已載入，但物件列表暫時讀不到";
+          const res = await fetch("/api/settings", { cache: "no-store", signal: AbortSignal.timeout(8000) });
+          const data = await readApi(res);
+          if (res.ok && data.settings) {
+            cities = Array.isArray(data.cities) && data.cities.length ? data.cities : CITIES_EMBEDDED;
+            fillSettings(data.settings);
+          }
+        } catch { /* keep going */ }
+        if (!settingsLoaded) {
+          cities = CITIES_EMBEDDED;
+          renderDistrictPicker({ watchDistricts: [] });
+          setSettingsReady(false, "設定沒載到。請按右上「重新整理」。現在看到的空白表單不是你的存檔，請不要按儲存。");
+          $("status").textContent = lastError || "設定沒載到，請重新整理";
+        } else {
+          $("status").textContent = "設定已載入，物件列表稍後再試";
+          try { await loadList(); } catch { $("status").textContent = "設定已載入，但物件列表暫時讀不到"; }
         }
       }
     }
@@ -7209,11 +7298,10 @@
       });
       window.__pendingDocuments = items;
     }
-    function syncReacceptFromMe(me) {
-      const pending = me?.pending_documents || [];
-      paintReaccept(pending);
-      if (pending.length) openReacceptOverlay();
-      else closeReacceptOverlay();
+    function syncReacceptFromMe(_me) {
+      const banner = $("reacceptBanner");
+      if (banner) banner.hidden = true;
+      closeReacceptOverlay();
     }
     $("reacceptBannerBtn")?.addEventListener("click", () => openReacceptOverlay());
     document.querySelectorAll("[data-close-reaccept]").forEach((el) => {
@@ -7649,6 +7737,15 @@
         $("profileForm")?.requestSubmit();
         return;
       }
+      const pick = $("avatarPick");
+      if (pick) pick.hidden = !pick.hidden;
+    });
+    $("avatarCameraBtn")?.addEventListener("click", () => {
+      if ($("avatarPick")) $("avatarPick").hidden = true;
+      $("profileAvatarCamera")?.click();
+    });
+    $("avatarAlbumBtn")?.addEventListener("click", () => {
+      if ($("avatarPick")) $("avatarPick").hidden = true;
       $("profileAvatar")?.click();
     });
     $("profileLineQrHit")?.addEventListener("click", (ev) => {
@@ -7663,6 +7760,12 @@
     });
     $("profileAvatar")?.addEventListener("change", () => {
       if ($("profileAvatar")?.files?.[0]) {
+        pendingClearAvatar = false;
+        $("profileForm")?.requestSubmit();
+      }
+    });
+    $("profileAvatarCamera")?.addEventListener("change", () => {
+      if ($("profileAvatarCamera")?.files?.[0]) {
         pendingClearAvatar = false;
         $("profileForm")?.requestSubmit();
       }
@@ -7683,7 +7786,7 @@
       try {
         let avatarUrl;
         let lineQrUrl;
-        const file = $("profileAvatar")?.files?.[0];
+        const file = $("profileAvatar")?.files?.[0] || $("profileAvatarCamera")?.files?.[0];
         if (file) {
           const up = await fetch("/api/self-listings/photos", {
             method: "POST",
@@ -7995,7 +8098,33 @@
     let mediaLibItems = [];
     let mediaTags = [];
     const mediaTagPick = new Set();
+    let mediaMode = "pick";
     function renderSelfPhotoDraftAndGrid() { renderSelfPhotoDraft(); renderMediaGrid(); }
+    function openMediaLib() {
+      const box = $("mediaLibOverlay");
+      if (box) box.hidden = false;
+      loadMediaLibrary().catch(() => {});
+    }
+    function closeMediaLib() {
+      const box = $("mediaLibOverlay");
+      if (box) box.hidden = true;
+    }
+    $("mediaLibOpen")?.addEventListener("click", openMediaLib);
+    $("mediaLibClose")?.addEventListener("click", closeMediaLib);
+    document.querySelector("[data-close-media-lib]")?.addEventListener("click", closeMediaLib);
+    $("mediaLibUpload")?.addEventListener("click", () => $("selfPhotos")?.click());
+    $("mediaLibApply")?.addEventListener("click", () => { closeMediaLib(); renderSelfPhotoDraft(); });
+    $("mediaModePick")?.addEventListener("click", () => setMediaMode("pick"));
+    $("mediaModeTag")?.addEventListener("click", () => setMediaMode("tag"));
+    function setMediaMode(mode) {
+      mediaMode = mode === "tag" ? "tag" : "pick";
+      $("mediaModePick")?.classList.toggle("on", mediaMode === "pick");
+      $("mediaModeTag")?.classList.toggle("on", mediaMode === "tag");
+      if ($("mediaModePick")) $("mediaModePick").setAttribute("aria-pressed", mediaMode === "pick" ? "true" : "false");
+      if ($("mediaModeTag")) $("mediaModeTag").setAttribute("aria-pressed", mediaMode === "tag" ? "true" : "false");
+      if ($("mediaTagEditor")) $("mediaTagEditor").hidden = mediaMode !== "tag";
+      renderMediaGrid();
+    }
     async function loadMediaLibrary() {
       const grid = $("mediaGrid");
       if (!grid || isGuest) return;
@@ -8037,16 +8166,18 @@
         const order = selfPhotoDraft.indexOf(m.url);
         const selected = order >= 0;
         const assigned = new Set((m.tags || []).map((t) => String(t.id)));
-        const tagBtns = mediaTags.map((tag) => (
+        const tagBtns = mediaMode === "tag" ? mediaTags.map((tag) => (
           `<button type="button" class="ghost${assigned.has(String(tag.id)) ? " on" : ""}" data-media-tag-assign="${m.id}" data-tag-id="${tag.id}" aria-pressed="${assigned.has(String(tag.id))}">${esc(tag.name)}</button>`
-        )).join("");
+        )).join("") : "";
+        const hiddenByTag = mediaTagPick.size && !(m.tags || []).some((t) => mediaTagPick.has(String(t.id)));
+        if (hiddenByTag) return "";
         return `
           <div class="media-cell${selected ? " is-selected" : ""}" data-media-url="${esc(m.url)}" data-media-id="${m.id}">
             <span class="media-order">${selected ? order + 1 : ""}</span>
             <img class="media-thumb" src="${esc(m.thumb_url || m.url)}" alt="素材庫照片" loading="lazy" />
             <button type="button" class="ghost media-zoom" data-media-zoom="${esc(m.url)}" aria-label="放大檢視">⤢</button>
             <button type="button" class="ghost media-del" data-media-del="${m.id}" aria-label="從素材庫刪除">×</button>
-            <div class="media-cell-tags">${tagBtns}</div>
+            ${tagBtns ? `<div class="media-cell-tags">${tagBtns}</div>` : ""}
           </div>`;
       }).join("");
     }
@@ -8057,7 +8188,7 @@
       if (mediaTagPick.has(id)) mediaTagPick.delete(id);
       else mediaTagPick.add(id);
       renderMediaTagPicks();
-      applyPickedTagPhotos();
+      renderMediaGrid();
     });
     $("mediaTagAdd")?.addEventListener("click", async () => {
       const name = $("mediaTagName")?.value || "";
@@ -8170,13 +8301,16 @@
     }, { passive: true });
     let currentImport = null;
     let importDeclaration = null;
+    function canUseImport() {
+      return mePlan === "sponsor" || meIsAdmin === true;
+    }
     function syncImportAccess() {
       const locked = $("importLockedHint");
       const tools = $("importSponsorTools");
-      const sponsored = mePlan === "sponsor";
-      if (locked) locked.hidden = sponsored;
-      if (tools) tools.hidden = !sponsored;
-      if (sponsored) {
+      const allowed = canUseImport();
+      if (locked) locked.hidden = allowed;
+      if (tools) tools.hidden = !allowed;
+      if (allowed) {
         loadImportMeta().catch(() => {});
         loadActiveImport().catch(() => {});
       }
@@ -8238,12 +8372,13 @@
     function applyImportToForm(row) {
       if ($("selfTitle")) $("selfTitle").value = row.imported_title || "";
       if ($("selfBody")) $("selfBody").value = row.imported_text || "";
+      syncSelfBodyEditor(row.imported_text || "");
       selfPhotoDraft = [...(row.photos || row.listing?.photos || [])];
       renderSelfPhotoDraftAndGrid();
     }
     $("importStartBtn")?.addEventListener("click", async () => {
       const status = $("importStatus");
-      if (mePlan !== "sponsor") {
+      if (!canUseImport()) {
         if (status) status.textContent = "贊助會員可使用 591 / 5168 物件匯入";
         return;
       }
@@ -8333,6 +8468,39 @@
         if ($("importStatus")) $("importStatus").textContent = error.message;
       }
     });
+    $("selfBodyEditor")?.addEventListener("input", syncSelfBodyFromEditor);
+    $("selfBodyEditorWrap")?.addEventListener("click", (ev) => {
+      const btn = ev.target.closest("[data-rich]");
+      if (!btn) return;
+      ev.preventDefault();
+      const ed = $("selfBodyEditor");
+      if (!ed) return;
+      ed.focus();
+      const cmd = btn.dataset.rich;
+      if (cmd === "bold") document.execCommand("bold");
+      else if (cmd === "italic") document.execCommand("italic");
+      else if (cmd === "size") document.execCommand("fontSize", false, "4");
+      else if (cmd === "color") document.execCommand("foreColor", false, btn.dataset.color || "#1c1917");
+      syncSelfBodyFromEditor();
+    });
+    (function paintEmojis() {
+      const bar = $("selfEmojiBar");
+      if (!bar) return;
+      bar.innerHTML = SELF_EMOJIS.map((mark) => `<button type="button" data-emoji="${mark}" aria-label="插入表情">${mark}</button>`).join("");
+    })();
+    $("selfEmojiToggle")?.addEventListener("click", () => {
+      const bar = $("selfEmojiBar");
+      if (bar) bar.hidden = !bar.hidden;
+    });
+    $("selfEmojiBar")?.addEventListener("click", (ev) => {
+      const mark = ev.target.closest("[data-emoji]")?.dataset.emoji;
+      if (!mark) return;
+      const ed = $("selfBodyEditor");
+      if (!ed) return;
+      ed.focus();
+      document.execCommand("insertText", false, mark);
+      syncSelfBodyFromEditor();
+    });
     $("selfListingForm")?.addEventListener("submit", async (ev) => {
       ev.preventDefault();
       if (isGuest) {
@@ -8359,7 +8527,7 @@
           line_url: $("selfLine")?.value || "",
           photos: photoUrls,
           title: $("selfTitle")?.value || "",
-          body: $("selfBody")?.value || "",
+          body: (syncSelfBodyFromEditor(), $("selfBody")?.value || ""),
           traits: collectedSelfTraits(),
           deposit: $("selfDeposit")?.value || "",
           accept_pledge: $("selfPledge")?.checked === true,
@@ -8386,6 +8554,7 @@
         paintImportReview(null);
         if ($("importDeclaration")) $("importDeclaration").checked = false;
         if ($("selfBody")) $("selfBody").value = "";
+        syncSelfBodyEditor("");
         if ($("selfPhotos")) $("selfPhotos").value = "";
         selfPhotoDraft = [];
         renderSelfPhotoDraft();
@@ -8426,12 +8595,23 @@
       if ($("selfPhone")) $("selfPhone").value = form.phone || "";
       if ($("selfLine")) $("selfLine").value = form.line_url || "";
       if ($("selfBody")) $("selfBody").value = form.body || "";
+      syncSelfBodyEditor(form.body || "");
       document.querySelectorAll('#selfTraitGroups input[name="selfTrait"]').forEach((el) => {
         el.checked = (form.traits || []).includes(el.value);
       });
       selfPhotoDraft = [...(form.photos || [])];
       renderSelfPhotoDraftAndGrid();
       if ($("selfPledge")) $("selfPledge").checked = false;
+    }
+    const SELF_EMOJIS = ["😊","🏠","☀️","🌿","🛁","🍳","🅿️","🛗","🚇","🚲","🐕","🐱","👶","✅","❗"];
+    function syncSelfBodyEditor(html) {
+      const ed = $("selfBodyEditor");
+      if (ed) ed.innerHTML = safeListingHtml(html || "");
+    }
+    function syncSelfBodyFromEditor() {
+      const ed = $("selfBodyEditor");
+      const ta = $("selfBody");
+      if (ed && ta) ta.value = ed.innerHTML;
     }
     function paintCopyDraftBanner(on) {
       const banner = $("copyDraftBanner");
@@ -8452,9 +8632,16 @@
       if (!sel) return;
       const keep = sel.value;
       sel.innerHTML = `<option value="">選擇聯絡人</option>` + contactProfiles.map((item) => (
-        `<option value="${item.id}">${esc(item.label)}</option>`
+        `<option value="${item.id}">${esc(item.label)}${item.is_account ? "（不可刪）" : ""}</option>`
       )).join("");
       if ([...sel.options].some((opt) => opt.value === keep)) sel.value = keep;
+      else {
+        const account = contactProfiles.find((item) => item.is_account);
+        if (account) {
+          sel.value = String(account.id);
+          if (!$("selfContactName")?.value) applyContactProfile(account.id);
+        }
+      }
     }
     async function loadListingTools() {
       if (isGuest) return;
@@ -8491,9 +8678,9 @@
       box.innerHTML = contactProfiles.length ? contactProfiles.map((item) => `
         <article class="tool-mgr-item">
           <strong>${esc(item.label)}</strong>
-          <p class="hint">${esc(item.contact_name || "未填稱呼")} · ${esc(item.phone || "未填電話")}</p>
+          <p class="hint">${esc(item.contact_name || "未填稱呼")} · ${esc(item.phone || "未填電話")}${item.is_account ? " · 跟著個人資料" : ""}</p>
           <div class="row">
-            <button type="button" class="ghost" data-contact-del="${item.id}">刪除</button>
+            ${item.is_account ? `<span class="hint">不可刪除</span>` : `<button type="button" class="ghost" data-contact-del="${item.id}">刪除</button>`}
           </div>
         </article>`).join("") : `<p class="hint">還沒有儲存的聯絡人。</p>`;
     }
@@ -8503,6 +8690,7 @@
       const current = $("selfBody")?.value || "";
       if (current.trim() && !window.confirm("套用並取代目前內容？")) return;
       if ($("selfBody")) $("selfBody").value = item.body;
+      syncSelfBodyEditor(item.body);
       const msg = $("selfMsg");
       if (msg) msg.textContent = "已套用說明範本，尚未刊登。";
     }
@@ -8838,26 +9026,32 @@
     (function bindHelpDockMotion() {
       const dock = $("mobileHelpDock");
       if (!dock) return;
-      let hideTimer = 0;
       let idleTimer = 0;
       const desktop = () => window.matchMedia("(min-width: 881px)").matches;
       const reduced = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      function showMobileOnScroll() {
-        if (desktop() || document.body.classList.contains("role-guest")) return;
-        dock.classList.add("is-visible");
-        if (hideTimer) window.clearTimeout(hideTimer);
-        hideTimer = window.setTimeout(() => dock.classList.remove("is-visible"), 1000);
-      }
       function bumpDesktopDock() {
         if (!desktop()) return;
         dock.classList.remove("is-compact");
         if (idleTimer) window.clearTimeout(idleTimer);
         idleTimer = window.setTimeout(() => dock.classList.add("is-compact"), reduced() ? 0 : 3200);
       }
-      window.addEventListener("scroll", () => { showMobileOnScroll(); bumpDesktopDock(); }, { passive: true });
-      document.addEventListener("scroll", () => { showMobileOnScroll(); bumpDesktopDock(); }, { passive: true, capture: true });
+      window.addEventListener("scroll", bumpDesktopDock, { passive: true });
+      document.addEventListener("scroll", bumpDesktopDock, { passive: true, capture: true });
       dock.addEventListener("pointerdown", bumpDesktopDock);
       bumpDesktopDock();
+    })();
+    (function bindSearchBarScrollHide() {
+      let idle = 0;
+      const reduced = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      function hide() { document.body.classList.add("search-bar-hidden"); }
+      function show() { document.body.classList.remove("search-bar-hidden"); }
+      function onScroll() {
+        hide();
+        if (idle) window.clearTimeout(idle);
+        idle = window.setTimeout(show, reduced() ? 0 : 700);
+      }
+      window.addEventListener("scroll", onScroll, { passive: true });
+      document.addEventListener("scroll", onScroll, { passive: true, capture: true });
     })();
     $("feedbackClose")?.addEventListener("click", closeFeedbackDialog);
     document.querySelector("[data-close-feedback]")?.addEventListener("click", closeFeedbackDialog);

@@ -23,6 +23,8 @@ import {
   CONTACT_PROFILE_LIMIT,
   COPYABLE_FIELDS,
   DESCRIPTION_TEMPLATE_LIMIT,
+  DESCRIPTION_TEMPLATE_LIMIT_SPONSOR,
+  descriptionTemplateLimit,
   copyOwnListing,
   createContactProfile,
   createDescriptionTemplate,
@@ -152,9 +154,12 @@ function sampleInput(extra = {}) {
 
 test("centralized listing tool limits", () => {
   const meta = listingToolsMeta();
-  assert.equal(meta.description_template_limit, 3);
+  assert.equal(meta.description_template_limit, 2);
+  assert.equal(meta.description_template_limit_sponsor, 5);
   assert.equal(meta.contact_profile_limit, 2);
-  assert.equal(DESCRIPTION_TEMPLATE_LIMIT, 3);
+  assert.equal(DESCRIPTION_TEMPLATE_LIMIT, 2);
+  assert.equal(descriptionTemplateLimit({ plan: "sponsor" }), DESCRIPTION_TEMPLATE_LIMIT_SPONSOR);
+  assert.equal(descriptionTemplateLimit({ role: "admin" }), 5);
   assert.equal(CONTACT_PROFILE_LIMIT, 2);
   assert.ok(COPYABLE_FIELDS.includes("title"));
   assert.ok(!COPYABLE_FIELDS.includes("self_pledge_at"));
@@ -277,21 +282,30 @@ test("copied draft publishes through normal pledge flow without changing the ori
   db.close();
 });
 
-test("description templates: limit 3, ownership, sanitization, concurrent create", async () => {
+test("description templates: free limit 2, sponsor 5, ownership, sanitization, concurrent create", async () => {
   const db = open();
   addUser(db, { id: 1, email: "a@example.com" });
   addUser(db, { id: 2, email: "b@example.com" });
   const one = createDescriptionTemplate(db, 1, { name: "家庭", body: "採光佳，近市場。" });
   createDescriptionTemplate(db, 1, { name: "套房", body: "獨立衛浴。" });
-  createDescriptionTemplate(db, 1, { name: "雅房", body: "公共衛浴。" });
-  assert.throws(() => createDescriptionTemplate(db, 1, { name: "第四", body: "不行" }), (e) => e.status === 409);
+  assert.throws(() => createDescriptionTemplate(db, 1, { name: "雅房", body: "公共衛浴。" }), (e) => e.status === 409);
+  const sponsorDb = open();
+  addUser(sponsorDb, { id: 3, email: "s@example.com", plan: "sponsor" });
+  for (let i = 1; i <= 5; i += 1) {
+    createDescriptionTemplate(sponsorDb, 3, { name: `範本${i}`, body: `說明內容${i}一二三` }, new Date(), { plan: "sponsor" });
+  }
+  assert.throws(
+    () => createDescriptionTemplate(sponsorDb, 3, { name: "第六", body: "不行一二三" }, new Date(), { plan: "sponsor" }),
+    (e) => e.status === 409,
+  );
+  sponsorDb.close();
   const dirty = updateDescriptionTemplate(db, 1, one.id, { body: '<script>alert(1)</script>乾淨說明' });
   assert.doesNotMatch(dirty.body, /<script>/);
   assert.match(dirty.body, /乾淨說明/);
   assert.throws(() => getOwnedDescriptionTemplate(db, 2, one.id), (e) => e.status === 403);
   assert.throws(() => updateDescriptionTemplate(db, 2, one.id, { name: "偷" }), (e) => e.status === 403);
   deleteDescriptionTemplate(db, 1, one.id);
-  assert.equal(listDescriptionTemplates(db, 1).length, 2);
+  assert.equal(listDescriptionTemplates(db, 1).length, 1);
 
   const db2 = open();
   addUser(db2, { id: 1, email: "a@example.com" });
@@ -303,9 +317,9 @@ test("description templates: limit 3, ownership, sanitization, concurrent create
   ]);
   const ok = results.filter((row) => row.status === "fulfilled");
   const rejected = results.filter((row) => row.status === "rejected");
-  assert.equal(ok.length, 3);
-  assert.equal(rejected.length, 1);
-  assert.equal(listDescriptionTemplates(db2, 1).length, 3);
+  assert.equal(ok.length, 2);
+  assert.equal(rejected.length, 2);
+  assert.equal(listDescriptionTemplates(db2, 1).length, 2);
   db.close();
   db2.close();
 });
@@ -332,7 +346,10 @@ test("contact profiles: limit 2, private, snapshot on listing, delete does not m
   const pub = publicListingView(still);
   assert.equal(pub.contact_name, "林先生");
   assert.equal(Object.hasOwn(pub, "contact_profile_id"), false);
-  assert.equal(listContactProfiles(db, 1).length, 1);
+  const left = listContactProfiles(db, 1);
+  assert.equal(left.filter((row) => !row.is_account).length, 1);
+  assert.equal(left.some((row) => row.is_account && row.locked), true);
+  assert.throws(() => deleteContactProfile(db, 1, left.find((row) => row.is_account).id), (e) => e.code === "account_contact_locked");
 
   const db2 = open();
   addUser(db2, { id: 1, email: "a@example.com" });
@@ -342,7 +359,7 @@ test("contact profiles: limit 2, private, snapshot on listing, delete does not m
     Promise.resolve().then(() => createContactProfile(db2, 1, { label: "C", contact_name: "丙", phone: "0933333333" })),
   ]);
   assert.equal(raced.filter((row) => row.status === "fulfilled").length, 2);
-  assert.equal(listContactProfiles(db2, 1).length, 2);
+  assert.equal(listContactProfiles(db2, 1).filter((row) => !row.is_account).length, 2);
   db.close();
   db2.close();
 });
