@@ -199,7 +199,7 @@ test("fetchHpCoveringListings enriches suite listings from the detail page", asy
   assert.ok(Number.isFinite(suite.lat) && Number.isFinite(suite.lng));
 });
 
-test("fetchHpCoveringListings skips the detail fetch when hasGeo already has the pin", async () => {
+test("fetchHpCoveringListings still fetches detail when pin exists but address has no alley/number", async () => {
   const jobs = [{ regionId: 1, sectionIds: [8], priceMin: 0, priceMax: 0, searchUrl: "x" }];
   let detailHits = 0;
   const batches = await fetchHpCoveringListings(jobs, {
@@ -207,14 +207,30 @@ test("fetchHpCoveringListings skips the detail fetch when hasGeo already has the
     detailGapMs: 0,
     hasGeo: () => true,
     getHtml: async (url) => {
-      if (String(url).includes("/house/")) { detailHits += 1; return detailFixture; }
+      if (String(url).includes("/house/") || String(url).includes("/ws/detail/")) {
+        detailHits += 1;
+        return detailFixture;
+      }
       return fixture;
     },
   });
-  assert.equal(detailHits, 0);
+  assert.ok(detailHits > 0);
   const suite = batches[0].listings.find((row) => row.source_id === "16512158_1170048");
   assert.ok(suite);
-  assert.equal(suite.lat, null);
+});
+
+test("5168 alley-only detail address upgrades a street-only list address", () => {
+  const live = readFileSync(path.join(dir, "fixtures/houseprice-detail-16470110.json"), "utf8");
+  const detail = parseHpDetailJson(live);
+  assert.equal(detail.address, "台北市士林區天玉街9巷");
+  assert.equal(detail.floorName, "4/4");
+  const list = normalizeHpItem({
+    id: "16470110", kind: "整層住家", title: "天玉街套房", price: 28000,
+    areaName: "19坪", layout: "1房1廳1衛", floorName: "4/4", address: "台北市士林區天玉街", community: "",
+  }, { regionId: 1, sectionId: 8 });
+  assert.equal(list.address, "台北市士林區天玉街");
+  const enriched = enrichHpListingFromDetail(list, detail, { regionId: 1, sectionId: 8 });
+  assert.equal(enriched.address, "台北市士林區天玉街9巷");
 });
 
 test("probeHpListingAlive uses the JSON API: 400/404/empty gone, live detail alive", async () => {

@@ -15,8 +15,9 @@ export function addressVersion(address) {
 export function inferGeoQuality({ address } = {}) {
   const text = String(address || "").replace(/\s+/g, "");
   const hasHouse = /\d+(?:之\d+)?號/.test(text);
+  const hasAlley = /\d+巷/.test(text) || /\d+弄/.test(text);
   const hasStreet = /[路街道大道]/.test(text);
-  if (hasHouse && hasStreet) return "house";
+  if ((hasHouse || hasAlley) && hasStreet) return "house";
   if (hasStreet) return "street";
   if (/[縣市].*[區鄉鎮]/.test(text) || /[區鄉鎮市]/.test(text)) return "district";
   return "unknown";

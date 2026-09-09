@@ -10,6 +10,7 @@ import {
 
 test("incomplete address is never treated as house-level quality", () => {
   assert.equal(inferGeoQuality({ address: "新北市淡水區淡金路二段173號" }), "house");
+  assert.equal(inferGeoQuality({ address: "台北市士林區天玉街9巷" }), "house");
   assert.equal(inferGeoQuality({ address: "新北市淡水區淡金路二段" }), "street");
   assert.equal(inferGeoQuality({ address: "新北市淡水區" }), "district");
   assert.equal(inferGeoQuality({ address: "附近" }), "unknown");

@@ -1,0 +1,25 @@
+{
+  "webRentCaseGroupingDetail": {
+    "sid": 16470110,
+    "caseName": "1房裝潢全配拎包入住景觀大露台",
+    "caseFrom": "591",
+    "simpAddress": "台北市士林區天玉街9巷",
+    "city": "台北市",
+    "district": "士林區",
+    "road": "天玉街",
+    "rm": 1,
+    "livingRm": 1,
+    "bathRm": 1,
+    "fromFloor": "4",
+    "toFloor": "4",
+    "upFloor": 4,
+    "rentPrice": 28000,
+    "buildPin": 19,
+    "lat": 25.1105,
+    "lng": 121.529,
+    "rentPurPoseName": "整層住家",
+    "caseTypeName": "公寓"
+  },
+  "code": 200,
+  "msg": ""
+}

@@ -52,6 +52,29 @@ test("viewed previous listing also matches soft relist fingerprint", () => {
   assert.ok(hit.confidence >= 0.6);
 });
 
+test("street-only vs alley does not auto high-match without extra evidence", () => {
+  const incoming = {
+    post_id: 501,
+    address: "台北市士林區天玉街9巷",
+    floor_name: "4/4",
+    area_name: "19坪",
+    layout: "1房1廳1衛",
+    role_name: "仲介",
+    cover: "https://img.example/a.jpg",
+  };
+  const previous = {
+    post_id: 502,
+    address: "台北市士林區天玉街",
+    floor_name: "4/4",
+    area_name: "19坪",
+    layout: "1房1廳1衛",
+    role_name: "仲介",
+    cover: "https://img.example/b.jpg",
+  };
+  const hit = scoreMatch(incoming, previous);
+  if (hit) assert.equal(hit.level, "medium");
+});
+
 test("different layout / house number / floor must not merge", () => {
   const previous = { ...base };
   assert.equal(scoreMatch({ ...base, post_id: 9, layout: "3房1廳", source_key: "x" }, previous), null);

@@ -16,6 +16,8 @@ import {
   listingHasTrustedGeo,
   listingsNeedingFeeDetail,
   listingsNeedingRoute,
+  listingsNeedingAddressGeo,
+  listingsNeedingAddressEnrich,
   listingsNeedingAliveCheck,
   listingsNeedingOfflineRecheck,
   markCoveringCompleted,
@@ -39,6 +41,9 @@ import {
   setListingMatch,
   touchListingChecked,
   upsertListing,
+  updateListingsGeoByAddress,
+  getCachedGeo,
+  setCachedGeo,
   isCrawlSourceEnabled,
   sendUserWebPush,
   pushPayloadFromEvents,
@@ -49,14 +54,14 @@ import { fetchCommunityLocation, fetchListingDetail, fetchListings, isListingGon
 import { probeListingAliveBySource } from "./probe.js";
 import { fetchHbCoveringListings } from "./hbhousing.js";
 import { fetchSinyiCoveringListings } from "./sinyi.js";
-import { fetchHpCoveringListings } from "./houseprice.js";
+import { enrichHpListingFromDetail, fetchHpCoveringListings, fetchHpDetail } from "./houseprice.js";
 import { fetchDdCoveringListings } from "./ddroom.js";
 import { fetchHfCoveringListings } from "./housefun.js";
 import { fetchRakuyaCoveringListings } from "./rakuya.js";
-import { commuteWorkJobs, hasWorkPoint, needsListingGeo, normalizeCommuteMode } from "./geo.js";
+import { commuteWorkJobs, geocodeAddress, hasWorkPoint, needsListingGeo, normalizeCommuteMode } from "./geo.js";
 import { isTrustedGeoSource, listingCommunityId } from "./location.js";
 import { decideNotifyDelivery } from "./floors.js";
-import { fetchRoadRoutes, fetchRushRoadRoutes } from "./route.js";
+import { fetchRoadRoutes, fetchRoadRouteTable, fetchRushRoadRoutes } from "./route.js";
 import { fetchMrtAccess } from "./mrt.js";
 import { googleDirectionsAllowed } from "./mapsBilling.js";
 import { bestMatch } from "./match.js";
@@ -156,7 +161,7 @@ function classify(incoming, existing) {
         : `指紋相同，先前 #${prev.post_id}`;
       return { type: "same_source", detail, prev, level: "high" };
     }
-    const hit = bestMatch(incoming, listMatchCandidates(incoming.post_id));
+    const hit = bestMatch(incoming, listMatchCandidates(incoming.post_id, incoming));
     if (hit?.listing) {
       const prev = hit.listing;
       const priceBit = prev.price && prev.price !== incoming.price ? `，${prev.price} → ${incoming.price}` : "";
@@ -700,6 +705,19 @@ export async function backfillListingCoords(settings = getSettings(), { limit = 
   return ingestListingGeoBatch(rows.map((row) => row.post_id));
 }
 
+async function writeCachedRoute(lat, lng, workLat, workLng, distances, rush, mode) {
+  for (let tryNo = 0; tryNo < 4; tryNo += 1) {
+    try {
+      setCachedRoute(lat, lng, workLat, workLng, distances, rush, mode);
+      return true;
+    } catch (error) {
+      if (!String(error.message || "").includes("locked") || tryNo === 3) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 400 * (tryNo + 1)));
+    }
+  }
+  return false;
+}
+
 export async function backfillListingRoutes(settings = getSettings(), { limit = 20 } = {}) {
   const fallback = commuteWorkJobs([settings, ...collectCommuteSettings()])[0];
   if (limit <= 0) return { attempted: 0, located: 0 };
@@ -709,26 +727,83 @@ export async function backfillListingRoutes(settings = getSettings(), { limit = 
   }
   let attempted = 0;
   let located = 0;
+  const wantRush = commuteRushEnabled() && googleDirectionsAllowed();
+  const groups = new Map();
   for (const row of rows) {
     const workLat = Number(row.workLat || settings.workLat || fallback?.workLat);
     const workLng = Number(row.workLng || settings.workLng || fallback?.workLng);
     const mode = normalizeCommuteMode(row.commuteMode || settings.commuteMode || fallback?.commuteMode);
     if (!Number.isFinite(workLat) || !Number.isFinite(workLng)) continue;
-    attempted += 1;
-    const wantRush = commuteRushEnabled() && googleDirectionsAllowed();
-    const rush = wantRush ? await fetchRushRoadRoutes(row.lat, row.lng, workLat, workLng, { mode }) : null;
-    const distances = rush?.distances?.length ? rush.distances : await fetchRoadRoutes(row.lat, row.lng, workLat, workLng, { mode });
-    if (distances?.length) {
-      for (let tryNo = 0; tryNo < 4; tryNo += 1) {
-        try {
-          setCachedRoute(row.lat, row.lng, workLat, workLng, distances, rush, mode);
+    const key = `${workLat}|${workLng}|${mode}`;
+    if (!groups.has(key)) groups.set(key, { workLat, workLng, mode, rows: [] });
+    groups.get(key).rows.push(row);
+  }
+  for (const group of groups.values()) {
+    if (wantRush) {
+      for (const row of group.rows) {
+        attempted += 1;
+        const rush = await fetchRushRoadRoutes(row.lat, row.lng, group.workLat, group.workLng, { mode: group.mode });
+        const distances = rush?.distances?.length
+          ? rush.distances
+          : await fetchRoadRoutes(row.lat, row.lng, group.workLat, group.workLng, { mode: group.mode });
+        if (distances?.length && await writeCachedRoute(row.lat, row.lng, group.workLat, group.workLng, distances, rush, group.mode)) {
           located += 1;
-          break;
-        } catch (error) {
-          if (!String(error.message || "").includes("locked") || tryNo === 3) throw error;
-          await new Promise((resolve) => setTimeout(resolve, 400 * (tryNo + 1)));
         }
       }
+      continue;
+    }
+    const hits = await fetchRoadRouteTable(group.workLat, group.workLng, group.rows);
+    for (const hit of hits) {
+      attempted += 1;
+      if (hit.distances?.length && await writeCachedRoute(hit.lat, hit.lng, group.workLat, group.workLng, hit.distances, null, group.mode)) {
+        located += 1;
+      }
+    }
+  }
+  return { attempted, located };
+}
+
+export async function backfillAddressGeo(settings = getSettings(), { limit = 12 } = {}) {
+  if (!needsListingGeo(settings) || limit <= 0) return { attempted: 0, located: 0 };
+  const rows = listingsNeedingAddressGeo(limit);
+  let attempted = 0;
+  let located = 0;
+  for (const row of rows) {
+    attempted += 1;
+    try {
+      const hit = await geocodeAddress(row.address, getCachedGeo, { strict: false, maxAttempts: 2 });
+      if (hit && Number.isFinite(Number(hit.lat)) && Number.isFinite(Number(hit.lng))) {
+        setCachedGeo(row.address, hit.lat, hit.lng);
+        updateListingsGeoByAddress(row.address, hit.lat, hit.lng);
+        located += 1;
+      }
+    } catch {
+      // 定位失敗就留給下一輪
+    }
+  }
+  return { attempted, located };
+}
+
+export async function backfillIncompleteAddresses({ limit = 8 } = {}) {
+  const rows = listingsNeedingAddressEnrich(limit);
+  if (!rows.length) return { attempted: 0, located: 0 };
+  let attempted = 0;
+  let located = 0;
+  for (const row of rows) {
+    if (row.source !== "houseprice") continue;
+    attempted += 1;
+    try {
+      const detail = await fetchHpDetail(row.source_id || row.url);
+      if (!detail?.address) continue;
+      const current = listingForWatch(row.post_id);
+      if (!current) continue;
+      const next = enrichHpListingFromDetail(current, detail);
+      if (next.address && next.address !== current.address) {
+        upsertListing({ ...next, last_seen_at: current.last_seen_at || nowIso() });
+        located += 1;
+      }
+    } catch {
+      // 明細暫時抓不到就下一輪
     }
   }
   return { attempted, located };

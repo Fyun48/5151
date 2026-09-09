@@ -218,7 +218,7 @@ import { queueAccountMail } from "./systemMail.js";
 import { assertHuman, issueCaptcha } from "./captcha.js";
 import { assertCaptchaIssuable, assertDemoReadable, assertImportAllowed, authAttemptKeys, clientIp } from "./rateLimit.js";
 import { buildDemoState } from "./demo.js";
-import { backfillListingCoords, backfillListingMrt, backfillListingRoutes, flushPendingNotifications, isWatchIntervalPending, runWatch } from "./watcher.js";
+import { backfillAddressGeo, backfillIncompleteAddresses, backfillListingCoords, backfillListingMrt, backfillListingRoutes, flushPendingNotifications, isWatchIntervalPending, runWatch } from "./watcher.js";
 import { LIST_PAGE_SIZE, isListingGoneError, probeListingAlive } from "./client591.js";
 import { probeHpListingAlive } from "./houseprice.js";
 import { probeListingAliveBySource } from "./probe.js";
@@ -1970,6 +1970,12 @@ function queueGeoBackfill(settings = getSettings()) {
   geoBackfillBusy = true;
   holdStatsCache(20_000);
   (async () => {
+    try {
+      const enrich = await backfillIncompleteAddresses({ limit: 8 });
+      if (enrich.attempted) broadcast({ type: "geo", addressEnrich: enrich });
+    } catch (error) {
+      console.warn("補完整地址失敗：", error.message);
+    }
     if (needCommute) {
       for (let round = 0; round < 200; round += 1) {
         try {
@@ -1992,6 +1998,18 @@ function queueGeoBackfill(settings = getSettings()) {
           if (!geo.attempted) break;
         } catch (error) {
           console.warn("補定位失敗：", error.message);
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+        }
+      }
+      for (let round = 0; round < 40; round += 1) {
+        try {
+          const geo = await backfillAddressGeo(settings, { limit: 12 });
+          if (geo.attempted) broadcast({ type: "geo", addressGeo: geo });
+          const notified = await flushPendingNotifications(settings);
+          if (notified.length) broadcastNotify(notified);
+          if (!geo.attempted) break;
+        } catch (error) {
+          console.warn("補地址定位失敗：", error.message);
           await new Promise((resolve) => setTimeout(resolve, 1500));
         }
       }
@@ -2282,14 +2300,26 @@ app.get("/api/listings/:id/history", (req, res) => {
   res.json({ listing, history: sourceHistory(listing.source_key, uid) });
 });
 
-app.post("/api/listings/:id/flags", (req, res) => {
-  const uid = actorUserId(req);
-  const updated = setFlags(Number(req.params.id), req.body || {}, uid);
-  if (!updated) {
-    res.status(404).json({ error: "找不到這筆物件" });
-    return;
+app.post("/api/listings/:id/flags", async (req, res) => {
+  try {
+    const uid = actorUserId(req);
+    const updated = setFlags(Number(req.params.id), req.body || {}, uid);
+    if (!updated) {
+      res.status(404).json({ error: "找不到這筆物件" });
+      return;
+    }
+    if (req.body?.watched === true || req.body?.watched === 1) {
+      queueGeoBackfill();
+      try { await probeListingAliveBySource(updated); } catch { /* 關注後狀態探測失敗不擋回寫 */ }
+    }
+    res.json({ listing: updated, stats: stats(undefined, uid) });
+  } catch (error) {
+    res.status(error.status || 400).json({
+      error: error.message || "無法更新標記",
+      code: error.code || "",
+      limit: error.limit,
+    });
   }
-  res.json({ listing: updated, stats: stats(undefined, uid) });
 });
 
 app.post("/api/listings/:id/recheck", async (req, res) => {

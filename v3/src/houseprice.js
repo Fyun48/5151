@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { passesAttributeFilters } from "./floors.js";
 import { decodeEntities } from "./htmlEntities.js";
 import { isExcludedByKeyword } from "./geo.js";
-import { isTaiwanMapPin } from "./location.js";
+import { addressHasPrecisePart, addressPrecision, isTaiwanMapPin, pickRicherAddress } from "./location.js";
 import { feeFieldsFromBlob } from "./listingCost.js";
 import { zipForDistrict } from "./hbhousing.js";
 import { lookupDistrict } from "./regions.js";
@@ -157,15 +157,14 @@ export function parseHpLabeledPlain(text) {
   return fields;
 }
 
-/** 有門牌號的地址才能精準地理編碼；用它決定要不要用明細頁地址覆蓋列表頁的粗略地址。 */
+/** 有門牌號或巷／弄才算精準；用來決定要不要用明細頁地址覆蓋列表粗址。 */
 export function addressHasHouseNumber(address) {
-  return /\d+(?:之\d+)?號/.test(String(address || "").replace(/\s+/g, ""));
+  return addressHasPrecisePart(address);
 }
 
-/** 從多個候選地址挑最精準：優先有門牌號者，否則第一個非空字串。 */
+/** 從多個候選地址挑最精準：號／巷／弄優先，其次較長的完整字串。 */
 function pickBestAddress(candidates) {
-  const list = (candidates || []).map((value) => String(value || "").trim()).filter(Boolean);
-  return list.find((value) => addressHasHouseNumber(value)) || list[0] || "";
+  return pickRicherAddress(candidates);
 }
 
 function isHpPlaceholderCover(url) {
@@ -228,8 +227,10 @@ export function parseHpListHtml(html) {
     const title = titleFromHpCard(card);
     const labeled = parseHpLabeledPlain(stripTags(card));
     const addressMatch = card.match(/location-filled[\s\S]{0,180}?<span>\s*([^<]+)\s*<\/span>/i)
-      || card.match(/台北市[^<]{2,80}區[^<]{0,60}\d[^<]{0,20}號/)
-      || card.match(/新北市[^<]{2,80}區[^<]{0,60}\d[^<]{0,20}號/)
+      || card.match(/台北市[^<]{2,80}區[^<]{0,80}\d[^<]{0,24}號/)
+      || card.match(/新北市[^<]{2,80}區[^<]{0,80}\d[^<]{0,24}號/)
+      || card.match(/台北市[^<]{2,80}區[^<]{0,80}\d[^<]{0,16}巷/)
+      || card.match(/新北市[^<]{2,80}區[^<]{0,80}\d[^<]{0,16}巷/)
       || card.match(/台北市[^<]{2,40}區[^<]{0,40}/)
       || card.match(/新北市[^<]{2,40}區[^<]{0,40}/);
     const communityMatch = card.match(/building-fill[\s\S]{0,180}?<span>\s*([^<]+)\s*<\/span>/i)
@@ -425,8 +426,8 @@ export function enrichHpListingFromDetail(row, detail, { regionId, sectionId } =
   if (!next.area_name && detail.areaName) { next.area_name = detail.areaName; }
   if (!next.layout && detail.layout) { next.layout = detail.layout; }
   if ((!next.kind_name || next.kind_name === "") && detail.kind) { next.kind_name = detail.kind; }
-  // 明細頁地址通常比列表頁完整（含門牌號），有門牌才有機會精準定位，故用它覆蓋粗略地址。
-  if (detail.address && (!next.address || (addressHasHouseNumber(detail.address) && !addressHasHouseNumber(next.address)))) {
+  // 明細頁地址通常比列表頁完整（含門牌號或巷／弄），精度較高才覆蓋粗略地址。
+  if (detail.address && (!next.address || addressPrecision(detail.address) > addressPrecision(next.address))) {
     next.address = detail.address;
     changed = true;
   }
@@ -648,9 +649,10 @@ export async function fetchHpCoveringListings(jobs, options = {}) {
           })) continue;
           seen.add(id);
           // 缺樓層／社區要補明細；缺座標也要補（明細頁地圖連結才有精準經緯度，通勤與捷運距離都靠它）。
-          const needDetail = !row.floor_name || !floorNameLooksComplete(row.floor_name) || !row.community_name || !addressHasHouseNumber(row.address) || row.lat == null;
+          const needDetail = !row.floor_name || !floorNameLooksComplete(row.floor_name) || !row.community_name || !addressHasPrecisePart(row.address) || row.lat == null;
           const alreadyGeo = typeof options.hasGeo === "function" && options.hasGeo(row.post_id);
-          if (detailBudget > 0 && needDetail && !alreadyGeo) {
+          const forceAddress = !addressHasPrecisePart(row.address);
+          if (detailBudget > 0 && needDetail && (!alreadyGeo || forceAddress)) {
             const detail = await fetchHpDetail(id, getHtml);
             if (detail) row = enrichHpListingFromDetail(row, detail, { regionId, sectionId });
             detailBudget -= 1;

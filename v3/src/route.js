@@ -73,15 +73,19 @@ async function googleDirections(fromLat, fromLng, toLat, toLng, { departureTime 
   return { distances, durationMin };
 }
 
-async function osrmRoutes(fromLat, fromLng, toLat, toLng) {
-  const wait = 1100 - (Date.now() - lastRouteAt);
+async function waitRouteSlot(minGapMs = 350) {
+  const wait = minGapMs - (Date.now() - lastRouteAt);
   if (wait > 0) await sleep(wait);
+  lastRouteAt = Date.now();
+}
+
+async function osrmRoutes(fromLat, fromLng, toLat, toLng) {
+  await waitRouteSlot(350);
   const path = `${Number(fromLng)},${Number(fromLat)};${Number(toLng)},${Number(toLat)}`;
   const url = new URL(`https://router.project-osrm.org/route/v1/driving/${path}`);
   url.searchParams.set("alternatives", "3");
   url.searchParams.set("overview", "false");
   url.searchParams.set("steps", "false");
-  lastRouteAt = Date.now();
   const res = await fetch(url, {
     headers: { Accept: "application/json", "User-Agent": GEO_UA },
     signal: AbortSignal.timeout(10000),
@@ -104,6 +108,38 @@ export function makeRouteKey(fromLat, fromLng, toLat, toLng, mode = "scooter") {
 
 function mergeKm(a, b) {
   return [...new Set([...(a || []), ...(b || [])])].sort((x, y) => x - y).slice(0, 3);
+}
+
+export async function fetchRoadRouteTable(fromLat, fromLng, destinations = []) {
+  const dests = (destinations || []).filter((row) => (
+    Number.isFinite(Number(row?.lat)) && Number.isFinite(Number(row?.lng))
+  ));
+  if (!dests.length) return [];
+  const from = [Number(fromLat), Number(fromLng)];
+  if (!from.every(Number.isFinite)) return dests.map((row) => ({ ...row, distances: null }));
+  try {
+    await waitRouteSlot(350);
+    const coords = [`${from[1]},${from[0]}`, ...dests.map((row) => `${Number(row.lng)},${Number(row.lat)}`)].join(";");
+    const destIdx = dests.map((_, index) => index + 1).join(";");
+    const url = new URL(`https://router.project-osrm.org/table/v1/driving/${coords}`);
+    url.searchParams.set("sources", "0");
+    url.searchParams.set("destinations", destIdx);
+    url.searchParams.set("annotations", "distance");
+    const res = await fetch(url, {
+      headers: { Accept: "application/json", "User-Agent": GEO_UA },
+      signal: AbortSignal.timeout(12000),
+    });
+    if (res.status === 429 || !res.ok) return dests.map((row) => ({ ...row, distances: null, busy: res.status === 429 }));
+    const body = await res.json();
+    if (body.code && body.code !== "Ok") return dests.map((row) => ({ ...row, distances: null }));
+    const row = Array.isArray(body.distances) ? body.distances[0] : [];
+    return dests.map((item, index) => ({
+      ...item,
+      distances: uniqueDistances([row?.[index]]),
+    }));
+  } catch {
+    return dests.map((row) => ({ ...row, distances: null }));
+  }
 }
 
 export async function fetchRoadRoutes(fromLat, fromLng, toLat, toLng, { mode = "scooter" } = {}) {

@@ -216,7 +216,10 @@ export function scoreMatch(incoming, previous) {
               : previous.hidden
                 ? "對應已隱藏物件"
                 : "對應已瀏覽物件";
-    const level = previous.offline || sameCover || sameHouse ? "high" : "medium";
+    const housePartial = Boolean((houseA && !houseB) || (!houseA && houseB));
+    const strong = sameCover || sameHouse || sameContact || sameComm;
+    let level = previous.offline || sameCover || sameHouse ? "high" : "medium";
+    if (housePartial && !strong) level = "medium";
     return {
       level,
       confidence: level === "high" ? 0.88 : 0.72,
@@ -253,6 +256,14 @@ export function scoreMatch(incoming, previous) {
   }
 
   return null;
+}
+
+export function matchFocusHints(listing) {
+  return {
+    street: streetKey(listing?.address),
+    community: String(listing?.community_name || "").trim(),
+    cover: String(listing?.cover || "").trim(),
+  };
 }
 
 export function bestMatch(incoming, candidates) {

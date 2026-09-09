@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { commuteModeLabel, normalizeCommuteMode } from "../src/geo.js";
-import { fetchRoadRoutes, fetchRushRoadRoutes, makeRouteKey } from "../src/route.js";
+import { fetchRoadRoutes, fetchRoadRouteTable, fetchRushRoadRoutes, makeRouteKey } from "../src/route.js";
 import { bindGoogleDirectionsEnabled, resetGoogleDirectionsBlock } from "../src/mapsBilling.js";
 
 test("commute mode is scooter unless the user picks car", () => {
@@ -94,6 +94,31 @@ test("fetchRoadRoutes always uses OSRM, even if the Google switch is on", async 
     resetGoogleDirectionsBlock();
     if (prevKey == null) delete process.env.GOOGLE_MAPS_API_KEY;
     else process.env.GOOGLE_MAPS_API_KEY = prevKey;
+  }
+});
+
+test("OSRM table calculates many destinations in one request", async () => {
+  const urls = [];
+  const orig = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    urls.push(String(input));
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ code: "Ok", distances: [[800, 1600]] }),
+    };
+  };
+  try {
+    const hits = await fetchRoadRouteTable(25.093, 121.525, [
+      { post_id: 1, lat: 25.11, lng: 121.529 },
+      { post_id: 2, lat: 25.12, lng: 121.53 },
+    ]);
+    assert.equal(urls.length, 1);
+    assert.match(urls[0], /table\/v1\/driving/);
+    assert.deepEqual(hits[0].distances, [0.8]);
+    assert.deepEqual(hits[1].distances, [1.6]);
+  } finally {
+    globalThis.fetch = orig;
   }
 });
 

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { passesAttributeFilters } from "./floors.js";
 import { isExcludedByKeyword } from "./geo.js";
 import { feeFieldsFromBlob } from "./listingCost.js";
+import { pickRicherAddress } from "./location.js";
 import { lookupDistrict } from "./regions.js";
 
 export const DD_SOURCE = "ddroom";
@@ -115,8 +116,12 @@ export function normalizeDdItem(item, { regionId, sectionId } = {}) {
   if (!objectId || !kindName) return null;
   const region = Number(regionId) || 0;
   const section = Number(sectionId) || 0;
-  const address = String(item.address?.complete || "").trim()
-    || [item.address?.city, item.address?.area, item.address?.road].filter(Boolean).join("");
+  const addr = item.address || {};
+  const address = pickRicherAddress([
+    addr.complete,
+    [addr.city, addr.area, addr.road, addr.lane || addr.alley, addr.number || addr.no || addr.house].filter(Boolean).join(""),
+    [addr.city, addr.area, addr.road].filter(Boolean).join(""),
+  ]);
   const areaName = areaNameFromItem(item);
   const layout = layoutFromItem(item);
   const floor = item.floor != null && item.floor !== "" ? String(item.floor).trim() : "";

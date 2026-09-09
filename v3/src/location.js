@@ -42,6 +42,42 @@ export function hasHouseNumber(address) {
   return /\d+(?:之\d+)?號/.test(String(address || "").replace(/\s+/g, ""));
 }
 
+/** 門牌精度：號 > 巷／弄 > 路街 > 行政區。用來決定要不要用較完整地址覆蓋列表粗址。 */
+export function addressPrecision(address) {
+  const text = String(address || "").replace(/\s+/g, "");
+  if (!text) return 0;
+  const hasHouse = /\d+(?:之\d+)?號/.test(text);
+  const hasAlley = /\d+巷/.test(text) || /\d+弄/.test(text);
+  const hasStreet = /[路街道大道]/.test(text);
+  if (hasHouse && hasStreet) return 40;
+  if (hasHouse) return 35;
+  if (hasAlley && hasStreet) return 30;
+  if (hasAlley) return 25;
+  if (hasStreet) return 10;
+  if (/[縣市].*[區鄉鎮]/.test(text) || /[區鄉鎮市]/.test(text)) return 5;
+  return 1;
+}
+
+export function addressHasPrecisePart(address) {
+  return addressPrecision(address) >= 25;
+}
+
+export function pickRicherAddress(candidates) {
+  const list = (candidates || []).map((value) => String(value || "").trim()).filter(Boolean);
+  if (!list.length) return "";
+  return list.slice().sort((a, b) => {
+    const diff = addressPrecision(b) - addressPrecision(a);
+    return diff !== 0 ? diff : b.length - a.length;
+  })[0];
+}
+
+export function preferListingAddress(incoming, stored, geoSource = "") {
+  const next = String(incoming || "").trim();
+  const prev = String(stored || "").trim();
+  if (String(geoSource || "") === "community" && prev) return prev;
+  return pickRicherAddress([next, prev]) || next || prev || "";
+}
+
 export function extractTaiwanStreetAddress(text) {
   const raw = String(text || "")
     .replace(/\s+/g, "")
@@ -49,8 +85,12 @@ export function extractTaiwanStreetAddress(text) {
   if (!raw) return "";
   const withCity = raw.match(new RegExp(`((?:${CITY_RE})[^<>]{0,40}?\\d+(?:之\\d+)?號)`));
   if (withCity) return withCity[1].replace(/台北市/g, "臺北市");
+  const withAlley = raw.match(new RegExp(`((?:${CITY_RE})[^<>]{0,40}?\\d+巷(?:\\d+弄)?)`));
+  if (withAlley) return withAlley[1].replace(/台北市/g, "臺北市");
   const withDistrict = raw.match(/((?:臺北|台北|新北|桃園|基隆|新竹)?[^\d<>]{1,20}區[^<>]{1,40}?\d+(?:之\d+)?號)/);
-  return withDistrict ? withDistrict[1].replace(/台北/g, "臺北") : "";
+  if (withDistrict) return withDistrict[1].replace(/台北/g, "臺北");
+  const districtAlley = raw.match(/((?:臺北|台北|新北|桃園|基隆|新竹)?[^\d<>]{1,20}區[^<>]{1,40}?\d+巷(?:\d+弄)?)/);
+  return districtAlley ? districtAlley[1].replace(/台北/g, "臺北") : "";
 }
 
 export function formatListingAddress(address, communityName) {
@@ -102,7 +142,7 @@ export function listingCommunityId(listing) {
   return parseCommunityIdFromSourceKey(listing?.source_key);
 }
 
-export const TRUSTED_GEO_SOURCES = ["591", "community", "hbhousing", "sinyi", "housefun", "houseprice"];
+export const TRUSTED_GEO_SOURCES = ["591", "community", "hbhousing", "sinyi", "housefun", "houseprice", "geocode"];
 
 export function isTrustedGeoSource(source) {
   return TRUSTED_GEO_SOURCES.includes(String(source || ""));
