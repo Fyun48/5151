@@ -114,6 +114,23 @@ test("listing cards support left swipe watch and right swipe hide", () => {
   assert.match(mobile, /\.item \.hide-box \{\s*display: none;/);
 });
 
+test("watch limit flashes and resets the card instead of leaving a swipe off-screen", () => {
+  const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
+  const draft = html.slice(html.indexOf("function beginWatchDraft"), html.indexOf("async function hideListing"));
+  assert.match(draft, /return false/);
+  assert.match(draft, /flash\(watchLimitText\(\), \{ alert: true \}\)/);
+  const swipe = html.slice(html.indexOf("function bindCardSwipe"), html.indexOf("list.addEventListener(\"pointerdown\""));
+  assert.match(swipe, /if \(!beginWatchDraft\(id\)\) \{\s*resetCard\(card\);/);
+  assert.match(html, /function paintWatchChip/);
+  assert.match(html, /特別關注 \$\{n\}\/\$\{cap\}/);
+  assert.match(html, /disabled aria-disabled="true" title="\$\{esc\(watchLimitText\(\)\)\}"/);
+  assert.match(html, /role="status" aria-live="polite" aria-atomic="true"/);
+  assert.match(html, /目前沒有特別關注的物件/);
+  assert.match(html, /排除頂樓加蓋／違蓋/);
+  assert.doesNotMatch(html, /管理員最多特別關注/);
+  assert.doesNotMatch(html.slice(html.indexOf("function watchLimitText"), html.indexOf("function paintWatchChip")), /管理員/);
+});
+
 test("unwatch flies to the all chip before reloading", () => {
   const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
   const unwatch = html.slice(html.indexOf("if (watched)"), html.indexOf("if (!viewed)"));
