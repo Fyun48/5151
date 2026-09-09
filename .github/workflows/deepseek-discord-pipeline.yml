@@ -1,18 +1,13 @@
-name: DeepSeek Discord AI Bot
+name: DeepSeek Discord AI Bot (Full Autonomous)
 
 on:
-  pull_request:
-    types: [opened, reopened, synchronize] # 當 PR 被建立或有新程式碼 Push 時觸發
   issue_comment:
-    types: [created] # 當你在 Issue 或 PR 底下留言時觸發
+    types: [created] # 鎖定只有在「留言」時才觸發，徹底解決一次噴三條通知的問題
 
 jobs:
-  deepseek-agent:
-    # 只有當建立 PR，或者有人在留言區輸入部署指令時才執行
-    if: |
-      github.event_name == 'pull_request' || 
-      contains(github.event.comment.body, '部署') || 
-      contains(github.event.comment.body, 'deploy')
+  autonomous-dev:
+    # 只有當你在 PR 或 Issue 的留言區輸入 @ai-task 開頭的指令時，才會啟動機器人
+    if: contains(github.event.comment.body, '@ai-task')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -24,57 +19,77 @@ jobs:
         with:
           fetch-depth: 0
 
-      # 【步驟 1】發送開始通知到您的 Discord 頻道
+      # 【步驟 1】發送「任務啟動」通知到您的 Discord 頻道
       - name: Send Discord Start Notification
         run: |
           curl -X POST -H "Content-Type: application/json" \
           -d '{
             "embeds": [{
               "title": "🚀 AI 任務啟動",
-              "description": "DeepSeek V4 Pro 正在分析您的 GitHub 代碼與指令...",
+              "description": "DeepSeek V4 Pro 正在分析您下達的指令並規劃架構...",
               "color": 3447003
             }]
           }' ${{ secrets.NOTIFICATION_WEBHOOK }}
 
-      # 【步驟 2】呼叫 DeepSeek 進行 Code Review 與任務分析
-      - name: DeepSeek Reviewer
+      # 【步驟 2】呼叫 DeepSeek 進行大腦規劃（拆解執行步驟、檢查部署關鍵字）
+      - name: DeepSeek Task Analyzer
         id: deepseek
         uses: hustcer/deepseek-review@v1
         with:
           chat-token: ${{ secrets.DEEPSEEK_API_KEY }}
           model: 'deepseek-v4-pro'
           sys-prompt: |
-            你是一位專業的資深軟體工程師。
-            請分析這次 PR 的變更內容（git diff）或使用者的留言。
-            1. 如果是程式碼審查，請列出具體的優化建議，並提供「可直接複製的修改程式碼範例」。
-            2. 檢查使用者指令是否包含「部署到正式機」或「deploy」。如果是，請在回應最後單獨留一行輸出: [DEPLOY_TRIGGER]
+            你是一位任務分析官。請解讀使用者的提示詞，並輸出兩個結果：
+            1. 將使用者的指令，轉化為給 Cursor Agent 執行的精準技術修改步驟。
+            2. 檢查提示詞中是否包含「部署到正式機」或「deploy」等字眼。如果包含，請在回應的最後單獨留一行輸出: [DEPLOY_TRIGGER]
 
-      # 【步驟 3】將 DeepSeek 的完整審查意見與修改方案，直接丟進你的 Discord 頻道
-      - name: Send Summary to Discord
+      # 【步驟 3】通知 Discord：大腦規劃完畢，交棒給手腳（Cursor）
+      - name: Send Discord Coding Notification
         run: |
-          # 處理換行符號以符合 JSON 格式
-          JSON_CONTENT=$(echo "${{ steps.deepseek.outputs.summary }}" | jq -R -s '.')
           curl -X POST -H "Content-Type: application/json" \
-          -d "{
-            \"embeds\": [{
-              \"title\": \"📊 DeepSeek 審查與執行報告\",
-              \"description\": $JSON_CONTENT,
-              \"color\": 15105570
+          -d '{
+            "embeds": [{
+              "title": "🤖 Cursor 接棒編寫中",
+              "description": "DeepSeek 已規劃完畢。現在啟動雲端 Cursor Agent 開始依照步驟修改專案原始碼...",
+              "color": 15105570
             }]
-          }" ${{ secrets.NOTIFICATION_WEBHOOK }}
+          }' ${{ secrets.NOTIFICATION_WEBHOOK }}
 
-      # 【步驟 4】條件判定：如果 DeepSeek 判斷含有部署文字，自動執行部署
+      # 【步驟 4】雲端呼叫 Cursor CLI / Agent 執行真正的寫程式任務（使用您剛加的 Key）
+      - name: Run Cursor Cloud Agent
+        uses: PunGrumpy/cursor-action@v1
+        with:
+          api-key: ${{ secrets.CURSOR_API_KEY }}
+          # 這裡把 DeepSeek 分析完的精準技術步驟餵給 Cursor 去瘋狂寫扣
+          prompt: "${{ steps.deepseek.outputs.summary }}" 
+
+      # 【步驟 5】將 Cursor 在雲端改好的代碼自動推回您的 GitHub 分支
+      - name: Commit & Push Changes
+        run: |
+          git config --global user.name "AI-Pipeline-Bot"
+          git config --global user.email "ai-bot@github.com"
+          git add .
+          git commit -m "chore: automated code changes by Cursor Agent" || exit 0
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+
+      # 【步驟 6】條件判定：如果 DeepSeek 判斷含有部署文字，自動執行部署
       - name: Check Deploy Trigger & Execute
         if: contains(steps.deepseek.outputs.summary, '[DEPLOY_TRIGGER]')
         run: |
-          # 先通知 Discord 要開始部署了
           curl -X POST -H "Content-Type: application/json" \
           -d '{"content": "⚙️ 偵測到部署關鍵字，正在將專案發佈至正式機..."}' ${{ secrets.NOTIFICATION_WEBHOOK }}
           
           # ------- 這裡換成你原本專案的正式機部署指令，例如： -------
-          # npm run build
-          # npm run deploy
-          
-          # 部署完畢通知
+          # npm run build && npm run deploy
+
+      # 【步驟 7】發送「任務完工」通知
+      - name: Send Success Notification
+        run: |
           curl -X POST -H "Content-Type: application/json" \
-          -d '{"content": "🎉 正式機部署完成！系統已上線！"}' ${{ secrets.NOTIFICATION_WEBHOOK }}
+          -d '{
+            "embeds": [{
+              "title": "✅ 任務圓滿完成",
+              "description": "程式碼已由 Cursor 自動編寫並推回 GitHub 分支！如有包含部署指令，也已上線完畢！",
+              "color": 3066993
+            }]
+          }' ${{ secrets.NOTIFICATION_WEBHOOK }}
