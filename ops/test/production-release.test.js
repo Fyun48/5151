@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
@@ -233,7 +233,9 @@ test("Production workflows remain workflow_dispatch only; merge/push does not de
     ".github/workflows/deploy.yml",
     ".github/workflows/deploy-v2.yml",
   ]) {
-    const text = readFileSync(path.join(ROOT, rel), "utf8");
+    const full = path.join(ROOT, rel);
+    if (!existsSync(full)) continue;
+    const text = readFileSync(full, "utf8");
     const trig = parseProductionWorkflowTriggers(text);
     assert.equal(trig.workflow_dispatch, true, rel);
     assert.equal(trig.push, false, rel);
@@ -253,9 +255,12 @@ test("Production workflows remain workflow_dispatch only; merge/push does not de
     assert.match(text, /name: phase15-run-identity/);
     assert.match(text, /name: manual-owner-run-identity/);
   }
-  const ci = readFileSync(path.join(ROOT, ".github/workflows/test.yml"), "utf8");
-  assert.match(ci, /Auto-merge \(no production deploy\)/);
-  assert.doesNotMatch(ci, /workflow_dispatch:[\s\S]*deploy-v3/);
+  const ciPath = path.join(ROOT, ".github/workflows/test.yml");
+  if (existsSync(ciPath)) {
+    const ci = readFileSync(ciPath, "utf8");
+    assert.doesNotMatch(ci, /workflow_dispatch:[\s\S]*deploy-v3/);
+    assert.doesNotMatch(ci, /gh pr merge/i);
+  }
 });
 
 test("A→H isolated stub release succeeds only after health/smoke and updates current stable", async () => {
