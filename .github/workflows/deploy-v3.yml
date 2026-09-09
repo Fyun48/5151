@@ -104,14 +104,35 @@ jobs:
           if [ "${RELEASE_MODE:-}" = "manual_owner" ] && [ -n "${RELEASE_INTENT_ID:-}" ]; then
             echo "::error::manual_owner forbids a non-empty release_intent_id; stale Phase 15 callers must set release_mode=ops_phase15"; exit 1
           fi
-      - name: Checkout master (for ancestry validation)
+      - name: Checkout workflow-definition SHA
         uses: actions/checkout@v4
         with:
-          ref: master
+          ref: ${{ github.sha }}
           fetch-depth: 0
+      - name: Stage trusted workflow-definition evidence writers
+        env:
+          TRUSTED_SCRIPT_DIR: ${{ runner.temp }}/trusted-workflow-scripts
+          EXPECTED_WF_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Writers must come from this exact workflow-definition commit (github.sha),
+          # not a moving master tip and not a later candidate checkout (e.g. #217).
+          HEAD_SHA="$(git rev-parse HEAD)"
+          if [ "$HEAD_SHA" != "$EXPECTED_WF_SHA" ]; then
+            echo "::error::trusted checkout HEAD $HEAD_SHA != workflow execution SHA $EXPECTED_WF_SHA"; exit 1
+          fi
+          mkdir -p "$TRUSTED_SCRIPT_DIR"
+          cp -f \
+            .github/scripts/write-manual-owner-workflow-evidence.py \
+            .github/scripts/write-phase15-workflow-evidence.py \
+            "$TRUSTED_SCRIPT_DIR/"
+          test -s "$TRUSTED_SCRIPT_DIR/write-manual-owner-workflow-evidence.py"
+          test -s "$TRUSTED_SCRIPT_DIR/write-phase15-workflow-evidence.py"
+          echo "TRUSTED_SCRIPT_DIR=$TRUSTED_SCRIPT_DIR" >> "$GITHUB_ENV"
       - name: Write Phase 15 run identity
         if: ${{ always() && inputs.release_mode == 'ops_phase15' }}
         env:
+          TRUSTED_SCRIPT_DIR: ${{ runner.temp }}/trusted-workflow-scripts
           EVIDENCE_KIND: identity
           WF_FILE: .github/workflows/deploy-v3.yml
           WF_REF: ${{ github.ref }}
@@ -124,7 +145,7 @@ jobs:
           RELEASE_INTENT_ID: ${{ inputs.release_intent_id }}
           WF_ENVIRONMENT: production
           CONFIRMATION: ${{ inputs.confirmation }}
-        run: python3 .github/scripts/write-phase15-workflow-evidence.py phase15-run-identity.json
+        run: python3 "${TRUSTED_SCRIPT_DIR:?}/write-phase15-workflow-evidence.py" phase15-run-identity.json
       - name: Upload Phase 15 run identity
         if: ${{ always() && inputs.release_mode == 'ops_phase15' }}
         uses: actions/upload-artifact@v4
@@ -135,6 +156,7 @@ jobs:
       - name: Write Manual Owner run identity
         if: ${{ always() && inputs.release_mode == 'manual_owner' }}
         env:
+          TRUSTED_SCRIPT_DIR: ${{ runner.temp }}/trusted-workflow-scripts
           EVIDENCE_KIND: identity
           RELEASE_MODE: manual_owner
           WF_FILE: .github/workflows/deploy-v3.yml
@@ -148,7 +170,7 @@ jobs:
           RELEASE_INTENT_ID: ${{ inputs.release_intent_id }}
           WF_ENVIRONMENT: production
           CONFIRMATION: ${{ inputs.confirmation }}
-        run: python3 .github/scripts/write-manual-owner-workflow-evidence.py manual-owner-run-identity.json
+        run: python3 "${TRUSTED_SCRIPT_DIR:?}/write-manual-owner-workflow-evidence.py" manual-owner-run-identity.json
       - name: Upload Manual Owner run identity
         if: ${{ always() && inputs.release_mode == 'manual_owner' }}
         uses: actions/upload-artifact@v4
@@ -353,6 +375,7 @@ jobs:
       - name: Write Phase 15 workflow evidence
         if: ${{ always() && inputs.release_mode == 'ops_phase15' }}
         env:
+          TRUSTED_SCRIPT_DIR: ${{ runner.temp }}/trusted-workflow-scripts
           WF_FILE: .github/workflows/deploy-v3.yml
           WF_REF: ${{ github.ref }}
           WF_RUN_ID: ${{ github.run_id }}
@@ -373,7 +396,7 @@ jobs:
             . ./phase15-health.env
             set +a
           fi
-          python3 .github/scripts/write-phase15-workflow-evidence.py phase15-workflow-evidence.json
+          python3 "${TRUSTED_SCRIPT_DIR:?}/write-phase15-workflow-evidence.py" phase15-workflow-evidence.json
       - name: Upload Phase 15 workflow evidence
         if: ${{ always() && inputs.release_mode == 'ops_phase15' }}
         uses: actions/upload-artifact@v4
@@ -384,6 +407,7 @@ jobs:
       - name: Write Manual Owner workflow evidence
         if: ${{ always() && inputs.release_mode == 'manual_owner' }}
         env:
+          TRUSTED_SCRIPT_DIR: ${{ runner.temp }}/trusted-workflow-scripts
           RELEASE_MODE: manual_owner
           WF_FILE: .github/workflows/deploy-v3.yml
           WF_REF: ${{ github.ref }}
@@ -405,7 +429,7 @@ jobs:
             . ./phase15-health.env
             set +a
           fi
-          python3 .github/scripts/write-manual-owner-workflow-evidence.py manual-owner-workflow-evidence.json
+          python3 "${TRUSTED_SCRIPT_DIR:?}/write-manual-owner-workflow-evidence.py" manual-owner-workflow-evidence.json
       - name: Upload Manual Owner workflow evidence
         if: ${{ always() && inputs.release_mode == 'manual_owner' }}
         uses: actions/upload-artifact@v4
