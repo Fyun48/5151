@@ -248,6 +248,7 @@ test("member profiles cap districts and include usable ping in notify copy", () 
   assert.doesNotMatch(html, /出租 \$\{m\[1\]\}樓／共/);
   assert.match(html, /每個設定檔最多選/);
   assert.match(html, /notify_facts/);
+  assert.match(html, /notify_facts \? String\(item\.notify_facts\)\.split\(" · "\)\.map\(\(bit\) => formatFloorDisplay\(bit\)/);
   assert.match(html, /housing_type/);
   assert.match(html, /已存 \$\{list\.length\}／\$\{cap\}/);
   assert.match(html, /再新增會提示最多 3 個；同名儲存會覆蓋/);
