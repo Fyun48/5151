@@ -620,8 +620,24 @@
     .push-danger { border-color: var(--rose-line, #e2b3b0); color: var(--rose-ink, #b4453f); }
     .push-danger:hover:not(:disabled) { background: var(--rose-soft, #fbeceb); border-color: var(--rose-line, #e2b3b0); }
     button:disabled { opacity: 0.55; cursor: not-allowed; }
-    /* 手機 Q&A／意見 就地入口：桌機沿用 header 既有按鈕，此浮動群組預設隱藏，只在手機列表頁出現 */
-    .mobile-help-dock { display: none; }
+    /* 桌面：右下浮動 dock；閒置縮成 compact tab。手機樣式在 880 斷點覆寫。 */
+    .mobile-help-dock {
+      display: flex;
+      flex-direction: row;
+      gap: 8px;
+      position: fixed;
+      right: 72px;
+      bottom: 80px;
+      left: auto;
+      z-index: 117;
+    }
+    .mobile-help-dock.is-compact button {
+      padding: 8px 10px;
+      min-width: var(--touch);
+    }
+    .mobile-help-dock.is-compact button .help-dock-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+    html.no-session .mobile-help-dock,
+    body.role-guest .mobile-help-dock { display: none !important; }
     .mobile-help-dock button {
       padding: 7px 12px; font-size: 12px; font-weight: 700; border-radius: 999px;
       display: inline-flex; align-items: center; gap: 4px; min-height: 34px;
@@ -828,7 +844,7 @@
     }
     .item.swiping { transition: none; }
     .item:has(.item-cover.empty) {
-      grid-template-columns: 44px minmax(0, 1fr) 120px 148px;
+      grid-template-columns: 44px 112px minmax(0, 1fr) 120px 148px;
     }
     .item.picked { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
     .item.shezidao {
@@ -860,15 +876,45 @@
       letter-spacing: 0.04em;
     }
     .item-cover.empty,
-    .item-cover[hidden] { display: none; }
-    .item-cover img, .item-cover {
+    .item-cover[hidden] { display: flex; }
+    .item-cover {
       width: 112px;
       height: 84px;
       object-fit: cover;
       border-radius: 6px;
       background: var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+      flex: 0 0 auto;
+    }
+    .item-cover img {
+      width: 112px;
+      height: 84px;
+      object-fit: cover;
+      border-radius: 6px;
       display: block;
     }
+    .item-cover .cover-ph {
+      display: none;
+      width: 100%;
+      height: 100%;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      font-size: var(--text-xs, 12px);
+      font-weight: 700;
+      letter-spacing: 0.06em;
+    }
+    .item-cover .cover-ph[hidden] { display: none; }
+    .item-cover.empty .cover-ph,
+    .item-cover.empty .cover-ph[hidden],
+    .item-cover:not(:has(img[src])) .cover-ph { display: flex; }
+    .item-copy { min-width: 0; }
+    .item-main { min-width: 0; }
+    .item-details { min-width: 0; }
     .meta { color: var(--muted); font-size: 13px; margin: 6px 0; line-height: 1.55; }
     .fees { color: var(--accent-deep); font-size: 13px; margin-top: 4px; line-height: 1.55; }
     .contact {
@@ -1123,6 +1169,22 @@
       margin: 4px 0 0;
     }
     .same-house-span { grid-column: 1 / -1; min-width: 0; }
+    .same-house-fold {
+      grid-column: 1 / -1;
+      border: 1px dashed var(--line);
+      border-radius: 10px;
+      padding: 8px 10px;
+      background: var(--paper);
+    }
+    .same-house-fold summary {
+      cursor: pointer;
+      font-weight: 700;
+      color: var(--same);
+      min-height: var(--touch);
+      display: flex;
+      align-items: center;
+    }
+    .same-house-fold a { display: block; margin: 6px 0 0; font-size: 13px; }
     .same-house-row {
       padding: 10px 12px;
       border: 1px solid var(--line);
@@ -1314,8 +1376,8 @@
       max-width: 100%;
     }
     body.panel-collapsed .list-head-sticky {
-      position: sticky;
-      top: 10px;
+      position: static;
+      top: auto;
       z-index: 40;
       margin: 12px 12px 0;
       background: var(--paper);
@@ -1324,8 +1386,12 @@
       border-radius: var(--radius-lg, 10px);
       box-shadow: none;
     }
+    body.panel-collapsed .list-head-sticky.filter-compact {
+      position: sticky;
+      top: 10px;
+    }
     body.panel-collapsed .list-head-sticky:not(.filter-compact) {
-      padding-bottom: 52px;
+      padding-bottom: 16px;
     }
     body.panel-collapsed .list-head-sticky.filter-compact .filter-body {
       display: block;
@@ -1354,11 +1420,11 @@
     }
     body.panel-collapsed .filter-mini-btn {
       display: inline-flex;
-      position: absolute;
-      right: 8px;
-      top: 8px;
-      bottom: auto;
-      z-index: 3;
+      position: fixed;
+      right: 18px;
+      top: auto;
+      bottom: 28px;
+      z-index: 118;
       width: var(--touch);
       height: var(--touch);
       min-width: var(--touch);
@@ -1485,7 +1551,7 @@
       transform: none;
       box-shadow: 0 8px 22px rgba(13, 165, 160, 0.36);
     }
-    body:not([data-app-view="listings"]) #scrollTopBtn {
+    body:not([data-app-view="listings"]) #scrollTopBtn:not(.on) {
       visibility: hidden;
       pointer-events: none;
     }
@@ -1651,6 +1717,16 @@
     }
     .media-lib { margin: 8px 0; border: 1px solid var(--line); border-radius: var(--radius); padding: 10px; background: var(--accent-mist); }
     .media-lib-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+    .media-tag-bar { margin: 8px 0; }
+    .media-tag-picks { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 8px; }
+    .media-tag-picks .chip { min-height: var(--touch); }
+    .media-cell-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+    .media-cell-tags button {
+      min-height: 28px;
+      padding: 2px 8px;
+      font-size: 11px;
+      border-radius: 999px;
+    }
     .media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; }
     .media-cell { position: relative; }
     .media-cell .media-thumb { width: 100%; aspect-ratio: 1/1; object-fit: cover; border-radius: var(--radius); border: 2px solid var(--line); background: #eee; cursor: pointer; display: block; }
@@ -2183,11 +2259,15 @@
       gap: 8px;
       width: 100%;
     }
-    .actions .btn-watch {
-      min-height: 30px;
-      padding: 4px 10px;
+    .actions .btn-card-action,
+    .actions .btn-watch,
+    .actions .btn-report-gone {
+      min-height: 36px;
+      padding: 6px 12px;
       font-size: 12px;
       font-weight: 700;
+      line-height: 1.2;
+      border-radius: var(--radius, 8px);
       border: 1px solid var(--line);
       border-bottom-color: color-mix(in srgb, var(--ink) 22%, var(--line));
       box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72), 0 2px 5px rgba(28, 25, 23, 0.1);
@@ -2195,6 +2275,9 @@
     }
     .actions .btn-watch.primary {
       box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28), 0 2px 6px rgba(28, 25, 23, 0.16);
+    }
+    .actions .btn-report-gone {
+      color: var(--muted);
     }
     .hide-box {
       font-size: 12px;
@@ -2280,14 +2363,39 @@
         right: 12px;
         bottom: calc(76px + env(safe-area-inset-bottom, 0px));
       }
-      /* 手機 Q&A／意見 就地入口：左下角、避開右下 FAB 與底部導覽，支援 safe-area，只在列表頁顯示 */
-      body[data-app-view="listings"] .mobile-help-dock {
-        display: flex; flex-direction: column; gap: 8px;
-        position: fixed; left: 12px; z-index: 117;
-        bottom: calc(120px + env(safe-area-inset-bottom, 0px));
+      /* 手機 Q&A／意見：靠近底欄「找房」，滑動才顯示，停 1 秒後漸隱 */
+      .mobile-help-dock {
+        display: flex;
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 6px;
+        position: fixed;
+        left: 8px;
+        right: auto;
+        bottom: calc(58px + env(safe-area-inset-bottom, 0px));
+        z-index: 117;
+        opacity: 0;
+        pointer-events: none;
+        transform: translateY(6px);
+        transition: opacity 0.2s ease, transform 0.2s ease;
+      }
+      .mobile-help-dock.is-visible {
+        opacity: 1;
+        pointer-events: auto;
+        transform: none;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .mobile-help-dock { transition: none; }
       }
       html.no-session .mobile-help-dock,
       body.role-guest .mobile-help-dock { display: none !important; }
+      body.panel-collapsed .filter-mini-btn {
+        position: absolute;
+        right: 8px;
+        top: 8px;
+        bottom: auto;
+        z-index: 3;
+      }
       #ownerFab {
         right: 12px;
         bottom: calc(128px + env(safe-area-inset-bottom, 0px));
@@ -2392,14 +2500,25 @@
         padding-top: 8px;
       }
       .item {
-        grid-template-columns: 44px 92px minmax(0, 1fr);
+        grid-template-columns: 92px minmax(0, 1fr);
         gap: 8px 10px;
         padding: 12px;
+      }
+      .item .pick-hit { display: none !important; }
+      .item-copy { display: contents; }
+      .item-main { grid-column: 2; grid-row: 1; min-width: 0; }
+      .item-details,
+      .item .contact,
+      .item .actions,
+      .same-house-panel,
+      .same-house-fold {
+        grid-column: 1 / -1;
       }
       .item-cover, .item-cover img {
         width: 92px;
         height: 92px;
       }
+      .item-cover { grid-column: 1; grid-row: 1; }
       .item-title {
         font-size: 16px;
         margin-top: 4px;
@@ -2422,10 +2541,10 @@
       }
       body.role-guest .hide-box { display: none; }
       .item:has(.item-cover.empty) {
-        grid-template-columns: 44px minmax(0, 1fr);
+        grid-template-columns: 92px minmax(0, 1fr);
       }
       body.role-guest .item:has(.item-cover.empty) {
-        grid-template-columns: 44px minmax(0, 1fr);
+        grid-template-columns: 92px minmax(0, 1fr);
       }
       .item .contact,
       .item .actions {
@@ -2444,10 +2563,12 @@
         min-height: 44px;
         margin: 0;
       }
-      .item .actions .btn-watch {
-        flex: 0 0 auto;
-        min-height: 30px;
-        max-width: 132px;
+      .item .actions .btn-watch,
+      .item .actions .btn-report-gone,
+      .item .actions .btn-card-action {
+        flex: 1 1 calc(50% - 8px);
+        min-height: 36px;
+        max-width: none;
       }
       .item .hide-box {
         display: none;
@@ -2817,6 +2938,7 @@
           <button type="button" class="chip" data-source="houseprice" aria-pressed="false">5168</button>
           <button type="button" class="chip" data-source="ddroom" aria-pressed="false">租租通</button>
           <button type="button" class="chip" data-source="housefun" aria-pressed="false">好房</button>
+          <button type="button" class="chip" data-source="rakuya" aria-pressed="false">樂屋網</button>
           </div>
           </div>
           <div class="chip-row view-checks" data-chip-row="display">
@@ -3176,14 +3298,12 @@
         <div class="listing-tools-row">
           <label class="visually-hidden" for="descTemplatePick">說明範本</label>
           <select id="descTemplatePick"><option value="">選擇說明範本</option></select>
-          <button type="button" class="ghost" id="descTemplateApply">套用說明範本</button>
-          <button type="button" class="ghost" id="descTemplateManage">我的說明範本</button>
+          <button type="button" class="ghost" id="descTemplateManage">新增說明範本</button>
         </div>
         <div class="listing-tools-row">
           <label class="visually-hidden" for="contactProfilePick">聯絡人</label>
           <select id="contactProfilePick"><option value="">選擇聯絡人</option></select>
-          <button type="button" class="ghost" id="contactProfileApply">套用聯絡人</button>
-          <button type="button" class="ghost" id="contactProfileManage">我的聯絡人</button>
+          <button type="button" class="ghost" id="contactProfileManage">新增聯絡人</button>
         </div>
       </div>
       <form id="selfListingForm">
@@ -3282,6 +3402,15 @@
               <div class="media-lib-head">
                 <strong>照片素材庫</strong>
                 <span class="hint" id="mediaQuota">— / —</span>
+              </div>
+              <p class="hint">複選標籤會帶入該標籤的照片，仍可在下方單張移除。標籤只影響你自己的素材庫。</p>
+              <div class="media-tag-bar" id="mediaTagBar">
+                <div class="media-tag-picks" id="mediaTagPicks" role="group" aria-label="以標籤帶入照片"></div>
+                <div class="listing-tools-row">
+                  <label class="visually-hidden" for="mediaTagName">新標籤名稱</label>
+                  <input id="mediaTagName" maxlength="40" placeholder="新標籤，例如 廚房" />
+                  <button type="button" class="ghost" id="mediaTagAdd">新增標籤</button>
+                </div>
               </div>
               <div class="media-grid" id="mediaGrid"></div>
               <p class="hint" id="mediaLibEmpty" hidden>素材庫還沒有照片，上傳後會出現在這裡，可重複用在不同物件。</p>
@@ -3621,8 +3750,8 @@
   <button type="button" class="primary" id="ownerFab" hidden>我刊登的房子</button>
   <!-- 手機版：捲動後仍能就地開 Q&A／意見（低干擾、左下角、避開右下的回頂與刊登 FAB）。開啟後保留目前頁面位置。 -->
   <div class="mobile-help-dock" id="mobileHelpDock" aria-label="求助與意見">
-    <button type="button" class="ghost" id="mobileHelpQaBtn" title="常見問題 Q&amp;A"><span aria-hidden="true">？</span> Q&amp;A</button>
-    <button type="button" class="ghost" id="mobileFeedbackBtn" title="回報錯誤或提出意見"><span aria-hidden="true">✎</span> 意見</button>
+    <button type="button" class="ghost" id="mobileHelpQaBtn" title="常見問題 Q&amp;A" aria-label="常見問題 Q&amp;A"><span aria-hidden="true">？</span><span class="help-dock-label"> Q&amp;A</span></button>
+    <button type="button" class="ghost" id="mobileFeedbackBtn" title="回報錯誤或提出意見" aria-label="意見回饋"><span aria-hidden="true">✎</span><span class="help-dock-label"> 意見</span></button>
   </div>
   <div class="lightbox" id="appLightbox" role="dialog" aria-modal="true" aria-label="照片瀏覽" hidden>
     <button type="button" class="lb-close" id="appLbClose" aria-label="關閉">✕</button>
@@ -3649,8 +3778,8 @@
     <div class="hub-panel" role="dialog" aria-modal="true" aria-labelledby="descTemplateTitle">
       <div class="hub-head">
         <div>
-          <h2 id="descTemplateTitle">我的說明範本</h2>
-          <p class="hint" style="margin:6px 0 0">最多 3 則，只存在你的帳號。套用時若說明已有字，會先問你要不要取代。</p>
+          <h2 id="descTemplateTitle">新增說明範本</h2>
+          <p class="hint" style="margin:6px 0 0">最多 3 則，只存在你的帳號。從下拉選單選到就會套用；若說明已有字，會先問你要不要取代。</p>
         </div>
         <button type="button" class="ghost" id="descTemplateClose">關閉</button>
       </div>
@@ -3670,8 +3799,8 @@
     <div class="hub-panel" role="dialog" aria-modal="true" aria-labelledby="contactProfileTitle">
       <div class="hub-head">
         <div>
-          <h2 id="contactProfileTitle">我的聯絡人</h2>
-          <p class="hint" style="margin:6px 0 0">最多 2 則，不會公開。套用後才會寫進這則刊登草稿；之後改聯絡人不會改已刊登物件。</p>
+          <h2 id="contactProfileTitle">新增聯絡人</h2>
+          <p class="hint" style="margin:6px 0 0">最多 2 則，不會公開。從下拉選單選到就會寫進這則刊登草稿；之後改聯絡人不會改已刊登物件。</p>
         </div>
         <button type="button" class="ghost" id="contactProfileClose">關閉</button>
       </div>
@@ -4039,6 +4168,7 @@
       if (source === "houseprice") return "5168";
       if (source === "ddroom") return "租租通";
       if (source === "housefun") return "好房";
+      if (source === "rakuya") return "樂屋網";
       if (source === "591" || source === "") return "591";
       return String(item?.source_label || source || "591");
     }
@@ -4079,6 +4209,7 @@
       if (source === "houseprice") return "打開5168";
       if (source === "ddroom") return "打開租租通";
       if (source === "housefun") return "打開好房";
+      if (source === "rakuya") return "打開樂屋網";
       if (!is591Source(item)) return "打開原站";
       return "打開 591";
     }
@@ -4191,7 +4322,7 @@
     }
     function activeFilterSummary() {
       const kindNames = { elevator: "電梯", apartment: "公寓", suite: "套房", yafang: "雅房", share: "分租", coliving: "共宅", whole: "整層", shop: "店面", warehouse: "倉庫" };
-      const sourceNames = { "591": "591", self: "吉比本站", hbhousing: "住商", sinyi: "信義", houseprice: "5168", ddroom: "租租通", housefun: "好房" };
+      const sourceNames = { "591": "591", self: "吉比本站", hbhousing: "住商", sinyi: "信義", houseprice: "5168", ddroom: "租租通", housefun: "好房", rakuya: "樂屋網" };
       const sourceBits = canFilterSources() ? sources.map((key) => sourceNames[key] || key) : [];
       return [...kinds.map((key) => kindNames[key] || key), ...sourceBits].filter(Boolean);
     }
@@ -5505,7 +5636,14 @@
           ${split}
         </div>`;
       }).join("");
-      return `<div class="same-house-panel same-house-span" id="same-house-panel-${item.post_id}" ${open ? "" : "hidden"}>${rows}</div>`;
+      const fold = (house.collapsed || []).length
+        ? `<details class="same-house-fold same-house-span"><summary>${esc(house.fold_label || `另有 ${house.hidden_count || house.collapsed.length} 筆同物件來源`)}</summary>${house.collapsed.map((row) => {
+            const href = row.url || peerSourceHref(row);
+            const src = row.source_label || listingSourceLabel(row) || row.source || "";
+            return `<a href="${esc(href)}" ${String(row.source || "") === "self" ? "" : 'target="_blank" rel="noopener noreferrer"'} data-open="${row.post_id || ""}">${esc(row.title || "同物件來源")} · ${esc(src)}</a>`;
+          }).join("")}</details>`
+        : "";
+      return `<div class="same-house-panel same-house-span" id="same-house-panel-${item.post_id}" ${open ? "" : "hidden"}>${rows}${fold}</div>`;
     }
 
     function chineseMonthCount(token) {
@@ -5869,18 +6007,22 @@
           </div>
         <article class="item ${on ? "picked" : ""} ${item.offline ? "offline" : ""} ${sameHouseOf(item) ? "has-same-house" : ""} ${isAcefengyunAdmin() && isShezidaoAddress(item) ? "shezidao" : ""}" data-card="${id}">
           <label class="pick-hit"><input class="pick" type="checkbox" data-pick="${id}" ${on ? "checked" : ""} aria-label="選取以比較或批次處理：${esc(item.title || id)}" /></label>
-          <a class="item-cover${item.cover ? "" : " empty"}" ${listingLinkAttrs(item)}>
-            ${item.cover ? `<img src="${esc(item.cover)}" alt="" referrerpolicy="no-referrer" onerror="this.parentNode.classList.add('empty')" />` : ""}
+          <a class="item-cover${item.cover ? "" : " empty"}" ${listingLinkAttrs(item)} aria-label="${item.cover ? "物件照片" : "暫無照片"}：${esc(item.title || id)}">
+            ${item.cover ? `<img src="${esc(item.cover)}" alt="" referrerpolicy="no-referrer" onerror="this.removeAttribute('src');this.style.display='none';this.parentNode.classList.add('empty');if(!this.parentNode.querySelector('.cover-ph')){var s=document.createElement('span');s.className='cover-ph';s.textContent='暫無';this.parentNode.appendChild(s);}" />` : ""}
+            <span class="cover-ph" ${item.cover ? "hidden" : ""} aria-hidden="true">暫無</span>
           </a>
-          <div>
+          <div class="item-copy">
+            <div class="item-main">
             <div class="tags">${tags(item)}</div>
             <h3 class="item-title">
               <a ${listingLinkAttrs(item)}>${esc(item.title)}</a>
             </h3>
+            ${formatListingWhen(item) ? `<div class="when"><span class="when-label">更新</span>${esc(formatListingWhen(item))}</div>` : ""}
+            </div>
+            <div class="item-details">
             ${costChangeLine(item)}
             ${sameHouseWarn(item)}
             ${sameHousePriceList(item)}
-            ${formatListingWhen(item) ? `<div class="when"><span class="when-label">更新</span>${esc(formatListingWhen(item))}</div>` : ""}
             <div class="rent-price">${esc(rentStatusLine(item))}</div>
             <div class="meta">
               ${esc(item.kind_name || "")} · ${esc(item.layout || "")} · ${esc(item.area_name || "")} · ${esc(item.floor_name || "")}
@@ -5896,22 +6038,23 @@
             })()}
             ${item.watched || draftWatch.has(String(id)) ? `<label class="watch-note-label" for="watch-note-${id}">關注備註</label>
             <textarea class="watch-note" id="watch-note-${id}" data-watch-note="${id}" data-watch-draft="${draftWatch.has(String(id)) ? "1" : "0"}" maxlength="300" rows="2" placeholder="${draftWatch.has(String(id)) ? "選填。選字不會送出；按「加入」或 Enter 才加入特別關注" : "為什麼關注？"}">${esc(noteValueFor(id, item.watch_note || ""))}</textarea>` : ""}
+            </div>
           </div>
           ${contactBlock(item)}
           <div class="actions">
             <div class="watch-hide-stack">
             ${item.watched
-              ? `<button class="primary btn-watch" data-watched="${id}">取消關注</button>`
+              ? `<button class="primary btn-card-action btn-watch" data-watched="${id}">取消關注</button>`
               : draftWatch.has(String(id))
-                ? `<button class="primary btn-watch" data-watch-draft-commit="${id}">加入</button><button class="ghost btn-watch" data-watch-draft-cancel="${id}">取消</button>`
-                : `<button class="ghost btn-watch" data-watched="${id}">特別關注</button>`}
+                ? `<button class="primary btn-card-action btn-watch" data-watch-draft-commit="${id}">加入</button><button class="ghost btn-card-action btn-watch" data-watch-draft-cancel="${id}">取消</button>`
+                : `<button class="ghost btn-card-action btn-watch" data-watched="${id}">特別關注</button>`}
             ${item.watched || draftWatch.has(String(id)) ? "" : `<label class="hide-box">
               <input type="checkbox" data-hidden="${id}" ${item.hidden ? "checked" : ""} />
               不再顯示
             </label>`}
             </div>
             ${item.source === "self" && !item.mine && !isGuest ? `<button class="ghost" data-self-report="${id}">檢舉</button>` : ""}
-            ${!isGuest && item.source !== "self" && !item.offline && !item.offline_confirmed ? `<button type="button" class="ghost btn-report-gone" data-report-gone="${id}" title="打開後若發現此物件連結已失效／不存在，可回報；系統會主動再確認一次">物件連結失效</button>` : ""}
+            ${!isGuest && item.source !== "self" && !item.offline && !item.offline_confirmed ? `<button type="button" class="ghost btn-card-action btn-report-gone" data-report-gone="${id}" title="打開後若發現此物件連結已失效／不存在，可回報；系統會主動再確認一次">物件連結失效</button>` : ""}
           </div>
           ${sameHousePanel(item)}
         </article>
@@ -7850,16 +7993,41 @@
 
     // ── 會員照片素材庫 ──
     let mediaLibItems = [];
+    let mediaTags = [];
+    const mediaTagPick = new Set();
     function renderSelfPhotoDraftAndGrid() { renderSelfPhotoDraft(); renderMediaGrid(); }
     async function loadMediaLibrary() {
       const grid = $("mediaGrid");
       if (!grid || isGuest) return;
       try {
-        const data = await (await fetch("/api/media")).json();
+        const [data, tags] = await Promise.all([
+          fetch("/api/media").then((r) => r.json()),
+          fetch("/api/media/tags").then((r) => r.json()).catch(() => ({ items: [] })),
+        ]);
         mediaLibItems = Array.isArray(data.items) ? data.items : [];
+        mediaTags = Array.isArray(tags.items) ? tags.items : [];
         if ($("mediaQuota")) $("mediaQuota").textContent = `${data.used ?? mediaLibItems.length} / ${data.quota ?? "?"}`;
+        renderMediaTagPicks();
         renderMediaGrid();
       } catch { /* ignore */ }
+    }
+    function renderMediaTagPicks() {
+      const box = $("mediaTagPicks");
+      if (!box) return;
+      box.innerHTML = mediaTags.map((tag) => (
+        `<button type="button" class="chip${mediaTagPick.has(String(tag.id)) ? " on" : ""}" data-media-tag-pick="${tag.id}" aria-pressed="${mediaTagPick.has(String(tag.id))}">${esc(tag.name)}</button>`
+      )).join("");
+    }
+    function applyPickedTagPhotos() {
+      const wanted = new Set([...mediaTagPick]);
+      if (!wanted.size) return;
+      for (const m of mediaLibItems) {
+        const ids = (m.tags || []).map((t) => String(t.id));
+        if (ids.some((id) => wanted.has(id)) && !selfPhotoDraft.includes(m.url) && selfPhotoDraft.length < SELF_PHOTO_LIMIT) {
+          selfPhotoDraft.push(m.url);
+        }
+      }
+      renderSelfPhotoDraftAndGrid();
     }
     function renderMediaGrid() {
       const grid = $("mediaGrid");
@@ -7868,16 +8036,71 @@
       grid.innerHTML = mediaLibItems.map((m) => {
         const order = selfPhotoDraft.indexOf(m.url);
         const selected = order >= 0;
+        const assigned = new Set((m.tags || []).map((t) => String(t.id)));
+        const tagBtns = mediaTags.map((tag) => (
+          `<button type="button" class="ghost${assigned.has(String(tag.id)) ? " on" : ""}" data-media-tag-assign="${m.id}" data-tag-id="${tag.id}" aria-pressed="${assigned.has(String(tag.id))}">${esc(tag.name)}</button>`
+        )).join("");
         return `
           <div class="media-cell${selected ? " is-selected" : ""}" data-media-url="${esc(m.url)}" data-media-id="${m.id}">
             <span class="media-order">${selected ? order + 1 : ""}</span>
             <img class="media-thumb" src="${esc(m.thumb_url || m.url)}" alt="素材庫照片" loading="lazy" />
             <button type="button" class="ghost media-zoom" data-media-zoom="${esc(m.url)}" aria-label="放大檢視">⤢</button>
             <button type="button" class="ghost media-del" data-media-del="${m.id}" aria-label="從素材庫刪除">×</button>
+            <div class="media-cell-tags">${tagBtns}</div>
           </div>`;
       }).join("");
     }
+    $("mediaTagPicks")?.addEventListener("click", (ev) => {
+      const btn = ev.target.closest("[data-media-tag-pick]");
+      if (!btn) return;
+      const id = String(btn.dataset.mediaTagPick);
+      if (mediaTagPick.has(id)) mediaTagPick.delete(id);
+      else mediaTagPick.add(id);
+      renderMediaTagPicks();
+      applyPickedTagPhotos();
+    });
+    $("mediaTagAdd")?.addEventListener("click", async () => {
+      const name = $("mediaTagName")?.value || "";
+      try {
+        const res = await fetch("/api/media/tags", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "新增標籤失敗");
+        if ($("mediaTagName")) $("mediaTagName").value = "";
+        await loadMediaLibrary();
+      } catch (error) {
+        if ($("selfMsg")) $("selfMsg").textContent = error.message;
+      }
+    });
     $("mediaGrid")?.addEventListener("click", async (ev) => {
+      const assign = ev.target.closest("[data-media-tag-assign]");
+      if (assign) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const mediaId = assign.dataset.mediaTagAssign;
+        const tagId = String(assign.dataset.tagId);
+        const item = mediaLibItems.find((m) => String(m.id) === String(mediaId));
+        const next = new Set((item?.tags || []).map((t) => String(t.id)));
+        if (next.has(tagId)) next.delete(tagId);
+        else next.add(tagId);
+        try {
+          const res = await fetch(`/api/media/${encodeURIComponent(mediaId)}/tags`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ tag_ids: [...next].map(Number) }),
+          });
+          const data = await readApi(res);
+          if (!res.ok) throw new Error(data.error || "標籤更新失敗");
+          if (item) item.tags = data.tags || [];
+          renderMediaGrid();
+        } catch (error) {
+          if ($("selfMsg")) $("selfMsg").textContent = error.message;
+        }
+        return;
+      }
       const zoom = ev.target.closest("[data-media-zoom]");
       if (zoom) { openAppLightbox(mediaLibItems.map((m) => m.url), mediaLibItems.findIndex((m) => m.url === zoom.dataset.mediaZoom)); return; }
       const del = ev.target.closest("[data-media-del]");
@@ -8258,7 +8481,6 @@
           <strong>${esc(item.name)}</strong>
           <p class="hint">${esc(item.body)}</p>
           <div class="row">
-            <button type="button" class="ghost" data-tpl-apply="${item.id}">套用</button>
             <button type="button" class="ghost" data-tpl-del="${item.id}">刪除</button>
           </div>
         </article>`).join("") : `<p class="hint">還沒有說明範本。</p>`;
@@ -8271,7 +8493,6 @@
           <strong>${esc(item.label)}</strong>
           <p class="hint">${esc(item.contact_name || "未填稱呼")} · ${esc(item.phone || "未填電話")}</p>
           <div class="row">
-            <button type="button" class="ghost" data-contact-apply="${item.id}">套用</button>
             <button type="button" class="ghost" data-contact-del="${item.id}">刪除</button>
           </div>
         </article>`).join("") : `<p class="hint">還沒有儲存的聯絡人。</p>`;
@@ -8342,8 +8563,14 @@
     }
     $("selfMineList")?.addEventListener("click", onSelfMineClick);
     $("ownerOverlayList")?.addEventListener("click", onSelfMineClick);
-    $("descTemplateApply")?.addEventListener("click", () => applyDescTemplate($("descTemplatePick")?.value));
-    $("contactProfileApply")?.addEventListener("click", () => applyContactProfile($("contactProfilePick")?.value));
+    $("descTemplatePick")?.addEventListener("change", () => {
+      const id = $("descTemplatePick")?.value;
+      if (id) applyDescTemplate(id);
+    });
+    $("contactProfilePick")?.addEventListener("change", () => {
+      const id = $("contactProfilePick")?.value;
+      if (id) applyContactProfile(id);
+    });
     $("descTemplateManage")?.addEventListener("click", () => { if ($("descTemplateOverlay")) $("descTemplateOverlay").hidden = false; });
     $("contactProfileManage")?.addEventListener("click", () => { if ($("contactProfileOverlay")) $("contactProfileOverlay").hidden = false; });
     $("descTemplateClose")?.addEventListener("click", () => { if ($("descTemplateOverlay")) $("descTemplateOverlay").hidden = true; });
@@ -8364,6 +8591,7 @@
         if ($("descTemplateBody")) $("descTemplateBody").value = "";
         if (msg) msg.textContent = "已新增。";
         await loadListingTools();
+        if (data.id && $("descTemplatePick")) $("descTemplatePick").value = String(data.id);
       } catch (error) {
         if (msg) msg.textContent = error.message;
       }
@@ -8388,26 +8616,37 @@
         });
         if (msg) msg.textContent = "已新增。";
         await loadListingTools();
+        if (data.id && $("contactProfilePick")) $("contactProfilePick").value = String(data.id);
       } catch (error) {
         if (msg) msg.textContent = error.message;
       }
     });
     $("descTemplateList")?.addEventListener("click", async (ev) => {
-      const applyId = ev.target.closest("[data-tpl-apply]")?.dataset.tplApply;
-      if (applyId) { applyDescTemplate(applyId); return; }
       const delId = ev.target.closest("[data-tpl-del]")?.dataset.tplDel;
       if (!delId) return;
       if (!window.confirm("刪除這個說明範本？已刊登的物件不會被改。")) return;
+      const gone = descTemplates.find((row) => String(row.id) === String(delId));
       await fetch(`/api/listing-description-templates/${delId}`, { method: "DELETE" });
+      if ($("descTemplatePick")?.value === String(delId)) {
+        $("descTemplatePick").value = "";
+        if (gone && $("selfBody") && $("selfBody").value === gone.body) $("selfBody").value = "";
+      }
       await loadListingTools();
     });
     $("contactProfileList")?.addEventListener("click", async (ev) => {
-      const applyId = ev.target.closest("[data-contact-apply]")?.dataset.contactApply;
-      if (applyId) { applyContactProfile(applyId); return; }
       const delId = ev.target.closest("[data-contact-del]")?.dataset.contactDel;
       if (!delId) return;
       if (!window.confirm("刪除這個聯絡人？已刊登的物件不會被改。")) return;
+      const gone = contactProfiles.find((row) => String(row.id) === String(delId));
       await fetch(`/api/listing-contact-profiles/${delId}`, { method: "DELETE" });
+      if ($("contactProfilePick")?.value === String(delId)) {
+        $("contactProfilePick").value = "";
+        if (gone) {
+          if ($("selfContactName") && $("selfContactName").value === (gone.contact_name || "")) $("selfContactName").value = "";
+          if ($("selfPhone") && $("selfPhone").value === (gone.phone || "")) $("selfPhone").value = "";
+          if ($("selfLine") && $("selfLine").value === (gone.line_url || "")) $("selfLine").value = "";
+        }
+      }
       await loadListingTools();
     });
     $("selfListingClose")?.addEventListener("click", closeSelfOverlay);
@@ -8596,6 +8835,30 @@
     // 手機就地入口沿用既有 dialog（保留目前頁面位置，不 scroll 到頁首）
     $("mobileHelpQaBtn")?.addEventListener("click", openHelpQaDialog);
     $("mobileFeedbackBtn")?.addEventListener("click", openFeedbackDialog);
+    (function bindHelpDockMotion() {
+      const dock = $("mobileHelpDock");
+      if (!dock) return;
+      let hideTimer = 0;
+      let idleTimer = 0;
+      const desktop = () => window.matchMedia("(min-width: 881px)").matches;
+      const reduced = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      function showMobileOnScroll() {
+        if (desktop() || document.body.classList.contains("role-guest")) return;
+        dock.classList.add("is-visible");
+        if (hideTimer) window.clearTimeout(hideTimer);
+        hideTimer = window.setTimeout(() => dock.classList.remove("is-visible"), 1000);
+      }
+      function bumpDesktopDock() {
+        if (!desktop()) return;
+        dock.classList.remove("is-compact");
+        if (idleTimer) window.clearTimeout(idleTimer);
+        idleTimer = window.setTimeout(() => dock.classList.add("is-compact"), reduced() ? 0 : 3200);
+      }
+      window.addEventListener("scroll", () => { showMobileOnScroll(); bumpDesktopDock(); }, { passive: true });
+      document.addEventListener("scroll", () => { showMobileOnScroll(); bumpDesktopDock(); }, { passive: true, capture: true });
+      dock.addEventListener("pointerdown", bumpDesktopDock);
+      bumpDesktopDock();
+    })();
     $("feedbackClose")?.addEventListener("click", closeFeedbackDialog);
     document.querySelector("[data-close-feedback]")?.addEventListener("click", closeFeedbackDialog);
     document.querySelectorAll("#feedbackKinds .chip").forEach((el) => {

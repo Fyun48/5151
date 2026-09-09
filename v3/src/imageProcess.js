@@ -80,3 +80,89 @@ export async function normalizeImage(buffer, opts = {}) {
     thumb: { buffer: thumb, bytes: thumb.length },
   };
 }
+
+export const WATERMARK_MARKER = "jibi-wm-v1";
+const WATERMARK_MARGIN_RATIO = 0.045;
+const WATERMARK_WIDTH_RATIO = 0.2;
+
+export function shouldApplyWatermark({ watermarked } = {}) {
+  return Number(watermarked) !== 1;
+}
+
+export function bufferHasWatermarkMarker(buffer) {
+  return Buffer.isBuffer(buffer) && buffer.includes(Buffer.from(WATERMARK_MARKER));
+}
+
+function siteLogoSvg({ width, height }) {
+  const short = Math.min(width, height);
+  const margin = Math.max(10, Math.round(short * WATERMARK_MARGIN_RATIO));
+  const logoW = Math.max(56, Math.round(width * WATERMARK_WIDTH_RATIO));
+  const logoH = Math.max(22, Math.round(logoW * 0.38));
+  const x = Math.max(0, width - logoW - margin);
+  const y = Math.max(0, height - logoH - margin);
+  return Buffer.from(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">` +
+      `<rect x="${x}" y="${y}" width="${logoW}" height="${logoH}" rx="${Math.round(logoH / 3)}" fill="#0f6f6a" fill-opacity="0.38"/>` +
+      `<text x="${x + logoW / 2}" y="${y + logoH * 0.68}" text-anchor="middle" ` +
+      `font-family="Noto Sans TC, sans-serif" font-size="${Math.round(logoH * 0.52)}" font-weight="700" fill="#faf8f4" fill-opacity="0.92">吉比</text>` +
+    `</svg>`,
+  );
+}
+
+async function defaultWatermarkOverlay(buffer, { width, height } = {}) {
+  const sharp = await loadSharp();
+  if (!sharp || !detectImageSignature(buffer)) return buffer;
+  let w = Number(width) || 0;
+  let h = Number(height) || 0;
+  if (!w || !h) {
+    const meta = await sharp(buffer, { failOn: "error" }).metadata();
+    w = meta.width;
+    h = meta.height;
+  }
+  if (!w || !h) {
+    const e = new Error("圖片尺寸無效");
+    e.status = 400;
+    throw e;
+  }
+  return sharp(buffer, { failOn: "error" })
+    .composite([{ input: siteLogoSvg({ width: w, height: h }), gravity: "southeast" }])
+    .jpeg({ quality: IMAGE_MAIN_QUALITY, mozjpeg: false })
+    .toBuffer();
+}
+
+function appendWatermarkMarker(buffer) {
+  if (bufferHasWatermarkMarker(buffer)) return buffer;
+  return Buffer.concat([buffer, Buffer.from(`\n${WATERMARK_MARKER}\n`)]);
+}
+
+// 顯示用衍生圖右下角本站 LOGO。已浮水印則略過，避免重試疊多層。
+export async function applySiteWatermark(buffer, opts = {}) {
+  if (!Buffer.isBuffer(buffer) || !buffer.length) {
+    const e = new Error("顯示圖處理失敗，未寫入損壞檔案");
+    e.status = 500;
+    e.code = "watermark_failed";
+    throw e;
+  }
+  if (!shouldApplyWatermark(opts) || bufferHasWatermarkMarker(buffer)) {
+    return { buffer, watermarked: 1, skipped: true };
+  }
+  const overlay = typeof opts.overlay === "function" ? opts.overlay : defaultWatermarkOverlay;
+  let out;
+  try {
+    out = await overlay(buffer, opts);
+  } catch (error) {
+    if (error?.code === "processor_unavailable") throw error;
+    const e = new Error("顯示圖處理失敗，未寫入損壞檔案");
+    e.status = 500;
+    e.code = "watermark_failed";
+    e.cause = error;
+    throw e;
+  }
+  if (!Buffer.isBuffer(out) || !out.length) {
+    const e = new Error("顯示圖處理失敗，未寫入損壞檔案");
+    e.status = 500;
+    e.code = "watermark_failed";
+    throw e;
+  }
+  return { buffer: appendWatermarkMarker(out), watermarked: 1, skipped: false };
+}

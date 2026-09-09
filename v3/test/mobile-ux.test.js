@@ -15,11 +15,12 @@ test("A: mobile help dock exists, reuses existing dialogs, hidden on desktop/gue
   assert.match(html, /id="mobileFeedbackBtn"/);
   assert.match(html, /\$\("mobileHelpQaBtn"\)\?\.addEventListener\("click", openHelpQaDialog\)/);
   assert.match(html, /\$\("mobileFeedbackBtn"\)\?\.addEventListener\("click", openFeedbackDialog\)/);
-  // 預設隱藏；只在手機列表頁顯示；guest/no-session 隱藏；safe-area
-  assert.match(html, /\.mobile-help-dock \{ display: none; \}/);
-  assert.match(html, /body\[data-app-view="listings"\] \.mobile-help-dock \{[\s\S]*?position: fixed; left: 12px; z-index: 117;/);
-  assert.match(html, /bottom: calc\(120px \+ env\(safe-area-inset-bottom, 0px\)\);/);
+  // 桌面右下可見；手機靠近找房、滑動才顯示；guest/no-session 隱藏；safe-area
+  assert.match(html, /\.mobile-help-dock \{[\s\S]*?right: 72px;[\s\S]*?bottom: 80px;/);
+  assert.match(html, /bottom: calc\(58px \+ env\(safe-area-inset-bottom, 0px\)\);/);
   assert.match(html, /html\.no-session \.mobile-help-dock,\s*\n\s*body\.role-guest \.mobile-help-dock \{ display: none !important; \}/);
+  assert.match(html, /showMobileOnScroll/);
+  assert.match(html, /prefers-reduced-motion: reduce/);
 });
 
 // Q — 手機通知不再展開「待看更新」浮層

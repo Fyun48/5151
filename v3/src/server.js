@@ -141,6 +141,12 @@ import {
   saveMemberMediaFor,
   listMemberMediaFor,
   deleteMemberMediaFor,
+  listMediaTagsFor,
+  createMediaTagFor,
+  renameMediaTagFor,
+  deleteMediaTagFor,
+  setMediaTagsFor,
+  mediaUrlsForTagIdsFor,
   assertOwnsMemberMediaUrls,
   closeSelfListing,
   hideSelfListing,
@@ -205,7 +211,7 @@ import {
   selfPhotoFilePath,
 } from "./selfPhotos.js";
 import { IMAGE_MAX_UPLOAD_BYTES } from "./imageProcess.js";
-import { memberMediaFilePath } from "./memberMedia.js";
+import { servePublicMemberMedia } from "./memberMedia.js";
 import { CITIES } from "./regions.js";
 import { mailConfigured, sendMail } from "./mail.js";
 import { queueAccountMail } from "./systemMail.js";
@@ -1574,7 +1580,57 @@ app.get("/api/media", (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(listMemberMediaFor(session.userId, { plan: session.plan || "free" }));
+    const tagIds = String(req.query.tag_ids || "").split(",").map(Number).filter((n) => n > 0);
+    res.json(listMemberMediaFor(session.userId, { plan: session.plan || "free", tagIds }));
+  } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
+});
+
+app.get("/api/media/tags", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json({ items: listMediaTagsFor(session.userId) });
+  } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
+});
+
+app.post("/api/media/tags", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(createMediaTagFor(session.userId, req.body?.name));
+  } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
+});
+
+app.patch("/api/media/tags/:id", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(renameMediaTagFor(session.userId, req.params.id, req.body?.name));
+  } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
+});
+
+app.delete("/api/media/tags/:id", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(deleteMediaTagFor(session.userId, req.params.id));
+  } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
+});
+
+app.put("/api/media/:id/tags", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(setMediaTagsFor(session.userId, req.params.id, req.body?.tag_ids || req.body?.tags));
+  } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
+});
+
+app.get("/api/media/by-tags", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    const tagIds = String(req.query.tag_ids || "").split(",").map(Number).filter((n) => n > 0);
+    res.json({ urls: mediaUrlsForTagIdsFor(session.userId, tagIds) });
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
 
@@ -1596,14 +1652,8 @@ app.delete("/api/media/:id", (req, res) => {
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
 
-// 素材庫檔案（本站上傳、已正規化、內容定址）。公開可讀（供公開分享頁顯示照片）。
-app.get("/media/lib/:file", (req, res) => {
-  const full = memberMediaFilePath(req.params.file);
-  if (!full) { res.status(404).end(); return; }
-  res.setHeader("Content-Type", "image/jpeg");
-  res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-  res.sendFile(path.resolve(full));
-});
+// 素材庫公開顯示檔（主圖／已浮水印縮圖）。未浮水印 original 不經此路由解析。
+app.get("/media/lib/:file", servePublicMemberMedia);
 
 // ── 公開分享：站內會員刊登（未登入可看主要內容；只輸出白名單公開欄位） ──
 app.get("/api/public/self-listing/:id", (req, res) => {
