@@ -773,6 +773,40 @@
     }
     .item-swipe-wrap.reveal-hide .swipe-hide-hint,
     .item-swipe-wrap.reveal-watch .swipe-watch-hint { opacity: 1; }
+    .item-swipe-wrap.is-collapsing {
+      max-height: 220px;
+      overflow: hidden;
+      transition: max-height 280ms ease, opacity 280ms ease, margin 280ms ease;
+      opacity: 0;
+      margin-block: 0;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .item-swipe-wrap.is-collapsing { transition: none; }
+    }
+    .city-pref-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin: 0 0 8px;
+    }
+    .hidden-city-dock {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 0 0 12px;
+    }
+    .hidden-city-dock[hidden] { display: none; }
+    .hidden-city-dock button { min-height: var(--touch); }
+    #cityHideDialog {
+      margin: 8px 0 12px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--paper);
+    }
+    #cityHideDialog[hidden] { display: none; }
     .item {
       display: grid;
       grid-template-columns: 44px 112px minmax(0, 1fr) 120px 148px;
@@ -2657,6 +2691,19 @@
       <p class="hint" id="settingsLoadMsg">正在載入已存設定…完成前請不要按儲存。若一直停在這句、儲存也不能按，是網頁程式沒跑起來，不是資料壞了；請重新整理，不要按清除資料。</p>
       <p class="hint" id="profileListHint"></p>
       <p class="hint" id="districtLimitHint"></p>
+      <p class="hint" id="cityPrefHint">縣市列表太長時，可把暫時用不到的縣市從主要選擇區隱藏。被隱藏的縣市會出現在下方「已隱藏縣市」，隨時可以加回；這不會刪除縣市主資料。</p>
+      <div class="city-pref-bar">
+        <button type="button" class="ghost" id="manageCitiesBtn" aria-expanded="false" aria-controls="hiddenCityDock">管理顯示縣市</button>
+      </div>
+      <div id="hiddenCityDock" class="hidden-city-dock" hidden role="region" aria-label="已隱藏縣市"></div>
+      <div id="cityHideDialog" hidden role="alertdialog" aria-labelledby="cityHideTitle" aria-describedby="cityHideDesc">
+        <p id="cityHideTitle"><strong>隱藏這個縣市？</strong></p>
+        <p id="cityHideDesc" class="hint">隱藏後會同步取消這個縣市底下已勾選的行政區，通知條件也會立刻改用更新後的區域。</p>
+        <div class="row">
+          <button type="button" class="ghost" id="cityHideCancel">取消</button>
+          <button type="button" class="primary" id="cityHideConfirm">隱藏並取消已選行政區</button>
+        </div>
+      </div>
       <div id="districtPicker" data-tour="districts"></div>
       <div class="price-row">
         <div>
@@ -2732,7 +2779,7 @@
         <div class="filter-head">
           <div class="status" id="status">準備就緒</div>
           <div class="filter-head-actions">
-          <button type="button" class="ghost mobile-only" id="openFilterSheetBtn">篩選</button>
+          <button type="button" class="ghost mobile-only" id="openFilterSheetBtn">搜尋設定</button>
           <button type="button" class="filter-restore-btn ghost" id="filterRestoreBtn" title="展開類型與排序">更多條件</button>
           </div>
           <div class="list-meta" id="listMeta" hidden></div>
@@ -4870,16 +4917,78 @@
             <h3 class="district-city-toggle" data-city-toggle="${city.id}" role="button" tabindex="0" aria-expanded="${open ? "true" : "false"}"><span class="chev" aria-hidden="true">▾</span>${esc(city.name)}</h3>
             <button type="button" class="ghost" data-city-all="${city.id}">全選</button>
             <button type="button" class="ghost" data-city-none="${city.id}">清除</button>
+            <button type="button" class="ghost" data-city-hide="${city.id}" aria-label="隱藏${esc(city.name)}">隱藏</button>
           </div>
           <div class="districts">${boxes}</div>
         </div>`;
     }
 
+    function hiddenCityIdsOf(s = settings) {
+      return [...new Set((s.hiddenCityIds || []).map(Number).filter((id) => id > 0))];
+    }
+
+    function renderHiddenCityDock(s) {
+      const dock = $("hiddenCityDock");
+      if (!dock) return;
+      const hidden = hiddenCityIdsOf(s);
+      const list = cities.filter((city) => hidden.includes(Number(city.id)));
+      if (!list.length) {
+        dock.innerHTML = `<p class="hint">目前沒有隱藏的縣市。需要時可在各縣市列按「隱藏」。</p>`;
+        return;
+      }
+      dock.innerHTML = list.map((city) => (
+        `<button type="button" class="chip" data-city-restore="${city.id}">加回${esc(city.name)}</button>`
+      )).join("");
+      dock.querySelectorAll("[data-city-restore]").forEach((btn) => {
+        btn.onclick = () => restoreHiddenCity(Number(btn.dataset.cityRestore));
+      });
+    }
+
+    function pendingHideCityId(id) {
+      const dialog = $("cityHideDialog");
+      dialog.dataset.cityId = String(id || "");
+      dialog.hidden = !id;
+      $("manageCitiesBtn")?.setAttribute("aria-expanded", String(!dialog.hidden || !$("hiddenCityDock")?.hidden));
+      if (id) $("cityHideConfirm")?.focus();
+    }
+
+    async function persistCityPrefs(nextWatch, nextHidden) {
+      const body = collectSettings();
+      body.watchDistricts = nextWatch;
+      body.hiddenCityIds = nextHidden;
+      const saved = await saveSettings(body);
+      fillSettings(saved);
+      flash("已更新顯示縣市；通知會使用目前勾選的行政區");
+    }
+
+    async function hideVisibleCity(cityId) {
+      const prefix = `${cityId}-`;
+      const selected = selectedDistrictKeys().filter((key) => key.startsWith(prefix));
+      const apply = async () => {
+        const nextWatch = selectedDistrictKeys().filter((key) => !key.startsWith(prefix));
+        const nextHidden = [...new Set([...hiddenCityIdsOf(), Number(cityId)])];
+        await persistCityPrefs(nextWatch, nextHidden);
+      };
+      if (selected.length) {
+        pendingHideCityId(cityId);
+        return;
+      }
+      await apply();
+    }
+
+    async function restoreHiddenCity(cityId) {
+      const nextHidden = hiddenCityIdsOf().filter((id) => id !== Number(cityId));
+      await persistCityPrefs(selectedDistrictKeys(), nextHidden);
+    }
+
     function renderDistrictPicker(s) {
       const selected = new Set(s.watchDistricts || []);
-      $("districtPicker").innerHTML = cities.map((city) => (
-        cityAccordionHtml(city, selected, "data-district", cityBlockOpen(city, selected))
-      )).join("");
+      const hidden = new Set(hiddenCityIdsOf(s));
+      $("districtPicker").innerHTML = cities
+        .filter((city) => !hidden.has(Number(city.id)))
+        .map((city) => cityAccordionHtml(city, selected, "data-district", cityBlockOpen(city, selected)))
+        .join("");
+      renderHiddenCityDock(s);
       bindCityAccordion($("districtPicker"), true);
       $("districtPicker").querySelectorAll("[data-district]").forEach((el) => {
         el.onchange = () => {
@@ -4938,6 +5047,9 @@
           });
           updateDistrictLimitHint();
         };
+      });
+      $("districtPicker").querySelectorAll("[data-city-hide]").forEach((btn) => {
+        btn.onclick = () => hideVisibleCity(Number(btn.dataset.cityHide));
       });
       updateDistrictLimitHint();
     }
@@ -6062,8 +6174,13 @@
       }
       const gen = ++listLoadGen;
       if (!options.force) listRefreshQueued = false;
+      if (listCache.length && !options.force) {
+        renderDistrictChips(settings);
+        renderList(applyListView(listCache), lastStats);
+      }
       const q = $("q").value.trim();
       const districts = [...viewDistricts].map(encodeURIComponent).join(",");
+      const paintStart = performance.now();
       const res = await fetch(
         `/api/listings?filter=${encodeURIComponent(filter)}&kind=${encodeURIComponent(kinds.join(","))}&sources=${encodeURIComponent(canFilterSources() ? sources.join(",") : "")}&sort=${encodeURIComponent(sort)}&q=${encodeURIComponent(q)}&limit=500&districts=${districts}`,
       );
@@ -6077,6 +6194,8 @@
       renderDistrictChips(settings);
       // 伺服器已依行政區／整層／1F 篩過再排序截取；前端再套一次防呆
       lastStats = data.stats || {};
+      lastStats.timing = data.timing || {};
+      lastStats.paint_ms = Math.round(performance.now() - paintStart);
       renderList(applyListView(data.listings), lastStats);
     }
 
@@ -6211,6 +6330,7 @@
       return {
         searchUrls: $("searchUrls").value.split(/\n+/).map((s) => s.trim()).filter(Boolean),
         watchDistricts,
+        hiddenCityIds: hiddenCityIdsOf(),
         priceMin: Number($("priceMin").value) || 0,
         priceMax: Number($("priceMax").value) || 0,
         priceMaxIncludesExtras: Boolean($("priceMaxIncludesExtras")?.checked),
@@ -6286,6 +6406,24 @@
       }
       return `檢查完成，本次通知 ${result.events?.length || 0} 則。${search ? "｜" + search : ""}${geoBit}${routeBit}${offBit}`;
     }
+
+    $("manageCitiesBtn")?.addEventListener("click", () => {
+      const dock = $("hiddenCityDock");
+      if (!dock) return;
+      dock.hidden = !dock.hidden;
+      $("manageCitiesBtn").setAttribute("aria-expanded", String(!dock.hidden));
+      if (!dock.hidden) dock.querySelector("button, p")?.focus?.();
+    });
+    $("cityHideCancel")?.addEventListener("click", () => pendingHideCityId(0));
+    $("cityHideConfirm")?.addEventListener("click", async () => {
+      const id = Number($("cityHideDialog")?.dataset.cityId || 0);
+      pendingHideCityId(0);
+      if (!id) return;
+      const prefix = `${id}-`;
+      const nextWatch = selectedDistrictKeys().filter((key) => !key.startsWith(prefix));
+      const nextHidden = [...new Set([...hiddenCityIdsOf(), id])];
+      await persistCityPrefs(nextWatch, nextHidden);
+    });
 
     $("saveBtn").onclick = async () => {
       let name = $("profileName").value.trim();
@@ -9022,17 +9160,30 @@
         }
         const key = String(watched);
         const card = document.querySelector(`[data-card="${key}"]`);
+        const wrap = card?.closest(".item-swipe-wrap");
+        const previous = listCache.map((item) => ({ ...item }));
         flyCardToAllChip(card);
-        if (card) card.style.visibility = "hidden";
-        await fetch(`/api/listings/${watched}/flags`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ watched: false }),
-        });
+        wrap?.classList.add("is-collapsing");
+        ev.target.disabled = true;
+        const waitMs = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 280;
+        if (waitMs) await new Promise((resolve) => setTimeout(resolve, waitMs));
+        listCache = listCache.filter((item) => String(item.post_id) !== key);
+        renderList(listCache, lastStats);
+        try {
+          const res = await fetch(`/api/listings/${watched}/flags`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ watched: false }),
+          });
+          if (!res.ok) throw new Error("取消關注失敗");
+        } catch {
+          listCache = previous;
+          renderList(listCache, lastStats);
+          flash("取消失敗，已還原卡片。請再試一次。");
+          return;
+        }
         if (watchNoteBusy()) {
           listRefreshQueued = true;
-          listCache = listCache.filter((item) => String(item.post_id) !== key);
-          renderList(listCache, lastStats);
           return;
         }
         await loadList({ force: true });

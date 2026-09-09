@@ -112,7 +112,8 @@ test("unwatch flies to the all chip before reloading", () => {
   const unwatch = html.slice(html.indexOf("if (watched)"), html.indexOf("if (!viewed)"));
   assert.match(unwatch, /flyCardToAllChip\(card\)/);
   assert.match(unwatch, /watched: false/);
-  assert.match(unwatch, /visibility = "hidden"/);
+  assert.match(unwatch, /is-collapsing/);
+  assert.match(unwatch, /取消失敗，已還原卡片/);
 });
 
 test("housing kind chips stay independent of 特別關注", () => {
@@ -723,6 +724,19 @@ test("same-house peer role labels use 同源屋件第N則 ordering", () => {
   assert.equal(fns.sameHousePeerRole({ title: "主標" }, { role: "primary" }), "同源屋件第首則");
   assert.equal(fns.sameHousePeerRole({}, { role: "affiliate" }, 2), "同源屋件第2則");
   assert.equal(fns.sameHousePeerRole({}, { role: "affiliate", offline: true }, 3), "同源屋件第3則（已下架）");
+});
+
+test("search settings city personalization and optimistic unwatch are wired", () => {
+  const html = pub("index.html");
+  assert.match(html, /id="openFilterSheetBtn">搜尋設定/);
+  assert.match(html, /id="manageCitiesBtn"/);
+  assert.match(html, /id="hiddenCityDock"/);
+  assert.match(html, /id="cityHideDialog"/);
+  assert.match(html, /data-city-hide/);
+  assert.match(html, /hiddenCityIds/);
+  assert.match(html, /is-collapsing/);
+  assert.match(html, /取消失敗，已還原卡片/);
+  assert.match(html, /listCache\.length && !options\.force/);
 });
 
 test("mobile filter buttons: collapse × moves top-right and 篩選/更多條件 share accent", () => {

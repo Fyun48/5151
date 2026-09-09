@@ -2163,6 +2163,7 @@ app.get("/api/listings", async (req, res) => {
     .split(",")
     .map((name) => name.trim())
     .filter(Boolean);
+  const started = Date.now();
   const listed = listListings({
     filter: req.query.filter || "all",
     kind: req.query.kind || "",
@@ -2173,10 +2174,14 @@ app.get("/api/listings", async (req, res) => {
     districts,
     userId: uid,
     matchVoteUserId: readSession(req)?.userId || 0,
+    sameHouse: req.query.sameHouse !== "0",
   });
+  const queryMs = Date.now() - started;
+  res.setHeader("Server-Timing", `list;dur=${queryMs}`);
   res.json({
     stats: { ...stats(undefined, uid), matched: listed.totalMatched },
     listings: listed.listings,
+    timing: { query_ms: queryMs, dataset: listed.totalMatched },
   });
 });
 

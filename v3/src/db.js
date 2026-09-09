@@ -600,6 +600,13 @@ try {
   // already migrated
 }
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_match_peer ON listings(match_post_id)");
+db.exec("CREATE INDEX IF NOT EXISTS idx_listings_list_scan ON listings(search_key, offline, match_verdict, hidden)");
+try {
+  db.exec("CREATE INDEX IF NOT EXISTS idx_user_listing_flags_user_watched ON user_listing_flags(user_id, watched)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_user_listing_flags_user_hidden ON user_listing_flags(user_id, hidden)");
+} catch {
+  // older fixtures
+}
 ensurePersonalSchema(db);
 ensureListingGroupSchema(db);
 ensureSearchProfileSchema(db);
@@ -1708,6 +1715,7 @@ const DEFAULTS = {
   settingProfiles: [],
   activeProfileId: "",
   watchDistricts: [],
+  hiddenCityIds: [],
   priceMin: 0,
   priceMax: 0,
   priceMaxIncludesExtras: false,
@@ -2424,13 +2432,24 @@ export function currentSearchKeys() {
   return [...new Set([...urls, ...coverUrls].map((url) => String(url || "").trim()).filter(Boolean))];
 }
 
+let searchKeyMemo = { at: 0, stored: null };
+
+function invalidateSearchKeyMemo() {
+  searchKeyMemo = { at: 0, stored: null };
+}
+
 function expandSearchKeys(keys) {
   if (!keys?.length) return keys;
-  const stored = db
-    .prepare("SELECT DISTINCT search_key FROM listings")
-    .all()
-    .map((row) => row.search_key)
-    .filter(Boolean);
+  const now = Date.now();
+  let stored = searchKeyMemo.stored;
+  if (!stored || now - searchKeyMemo.at > 8000) {
+    stored = db
+      .prepare("SELECT DISTINCT search_key FROM listings")
+      .all()
+      .map((row) => row.search_key)
+      .filter(Boolean);
+    searchKeyMemo = { at: now, stored };
+  }
   const out = new Set(keys);
   for (const key of stored) {
     if (keys.some((url) => sameSearch(url, key))) out.add(key);
@@ -2581,6 +2600,7 @@ export function upsertListing(listing) {
     costChangeType,
     costChangeDetail,
   );
+  invalidateSearchKeyMemo();
   const origin = String(listing.source || "591").trim() || "591";
   const originId = String(listing.source_id || listing.post_id || "").trim() || String(listing.post_id);
   try {
@@ -3490,6 +3510,7 @@ export function listListings({
   userId,
   matchVoteUserId,
   settings: settingsOverride,
+  sameHouse = true,
 } = {}) {
   const uid = resolveUserId(userId);
   const voteUid = matchVoteUserId == null ? uid : Number(matchVoteUserId) || 0;
@@ -3605,7 +3626,8 @@ export function listListings({
   const totalMatched = rows.length;
   const listings = rows.slice(0, limit).map((row) => {
     const lite = needFit ? row : decorateListingLite(row, settings, uid);
-    return finalizeListingDecorate(lite, settings, uid, { sameHouse: true, matchVoteUserId: voteUid });
+    const needPeers = sameHouse !== false && Boolean(row.match_post_id || row.same_house_role);
+    return finalizeListingDecorate(lite, settings, uid, { sameHouse: needPeers, matchVoteUserId: voteUid });
   });
   return { listings, totalMatched };
 }
