@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { withImmediateTx } from "./tx.js";
 import { appendAuditRow } from "./audit.js";
 import { httpError } from "./errors.js";
-import { validateCodingTaskForQa, getCurrentCodingQA, getQaRunDetail } from "./qaRun.js";
+import { validateCodingTaskForQa, getCurrentCodingQA, getQaRunDetail, isEligibleCodingStatus } from "./qaRun.js";
 import {
   stagingConfigFromEnv, stagingEnvironmentConfig, buildStagingPolicy, stagingPolicyFingerprint,
   effectiveStagingPolicyFingerprint, configFingerprint,
@@ -21,8 +21,12 @@ function backoffMs(attempt) { return Math.min(BACKOFF_BASE_MS * 2 ** Math.max(0,
 export function stagingRunConfigFromEnv(env = process.env) { return stagingConfigFromEnv(env); }
 
 // 只有「fresh Phase-11 QA PASS」的合格 coding task 可建立 Staging。
+// status 與 QA/Release 共用：changes_ready | adopted_pending_qa（isEligibleCodingStatus）。
 export function validateCodingTaskForStaging(db, codingTaskId, { env = process.env } = {}) {
-  const { task, auth } = validateCodingTaskForQa(db, codingTaskId); // 涵蓋：存在、changes_ready、未取消、授權 active、proposal 相符
+  const { task, auth } = validateCodingTaskForQa(db, codingTaskId); // 涵蓋：存在、eligible status、未取消、授權 active、proposal 相符
+  if (!isEligibleCodingStatus(task.status)) {
+    throw httpError(`coding task not eligible for staging (status=${task.status})`, 409);
+  }
   const qa = getCurrentCodingQA(db, codingTaskId, { env });
   if (!qa) throw httpError("no current QA for coding task", 409);
   if (!qa.fresh) throw httpError(`QA is stale (${(qa.stale_reasons || []).join(",")}); re-run QA`, 409);

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { withImmediateTx } from "./tx.js";
 import { appendAuditRow } from "./audit.js";
 import { httpError } from "./errors.js";
-import { validateCodingTaskForQa, getCurrentCodingQA } from "./qaRun.js";
+import { validateCodingTaskForQa, getCurrentCodingQA, isEligibleCodingStatus } from "./qaRun.js";
 import { getCurrentCodingStaging } from "./stagingDeploy.js";
 import { releaseConfigFromEnv, buildReleasePolicy, releasePolicyFingerprint, effectiveReleasePolicyFingerprint } from "./release/releasePolicy.js";
 import { buildManifestContent, computeManifestHash, releaseInputFingerprint } from "./release/manifest.js";
@@ -12,9 +12,13 @@ function iso(now) { return (now instanceof Date ? now : new Date(now || Date.now
 function parse(v) { try { return v ? JSON.parse(v) : null; } catch { return null; } }
 
 // 只有「確切、fresh 的 QA PASS + Staging PASS + 對應同一 QA run」的鏈可組 RC。source base drift 另行標記（不擋建立，但擋核准）。
+// coding task status 與 QA/Staging 共用：changes_ready | adopted_pending_qa（isEligibleCodingStatus）。
 export function validateReleaseChain(db, codingTaskId, { repo = null, env = process.env } = {}) {
   const cfg = releaseConfigFromEnv(env);
-  const { task, auth } = validateCodingTaskForQa(db, codingTaskId); // 涵蓋：coding task 合格、未取消、授權 active、proposal 相符
+  const { task, auth } = validateCodingTaskForQa(db, codingTaskId); // 涵蓋：coding task 合格（含 adopted_pending_qa）、未取消、授權 active、proposal 相符
+  if (!isEligibleCodingStatus(task.status)) {
+    throw httpError(`coding task not eligible for release (status=${task.status})`, 409);
+  }
   const qa = getCurrentCodingQA(db, codingTaskId, { env });
   if (!qa) throw httpError("no current QA", 409);
   if (!qa.fresh) throw httpError(`QA stale (${(qa.stale_reasons || []).join(",")})`, 409);

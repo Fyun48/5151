@@ -9,7 +9,7 @@ export function releaseWorkerConfigFromEnv(env = process.env) { return releaseCo
 
 export function createReleaseCandidatesForEligible(db, { repo, env = process.env, now = new Date(), limit = 5 } = {}) {
   if (!repo || !repo.available) return [];
-  // 候選：coding task changes_ready，且 QA current=PASS 且 Staging current=PASS，且尚無「當前 head 的 RC」。
+  // 候選：coding task changes_ready|adopted_pending_qa，且 QA current=PASS 且 Staging current=PASS，且尚無「當前 head 的 RC」。
   const rows = db.prepare(
     `SELECT t.id FROM development_coding_task t
      JOIN development_qa_current qc ON qc.coding_task_id=t.id AND qc.final_result='PASS'

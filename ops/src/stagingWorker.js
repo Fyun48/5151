@@ -10,7 +10,7 @@ export function stagingWorkerConfigFromEnv(env = process.env) { return stagingRu
 
 export function createStagingForReadyTasks(db, { repo, env = process.env, now = new Date(), limit = 5 } = {}) {
   if (!repo || !repo.available) return [];
-  // 候選：coding task changes_ready 且其 canonical QA 為 PASS，且尚無「當前 head 未取消」的部署。
+  // 候選：coding task changes_ready|adopted_pending_qa 且其 canonical QA 為 PASS，且尚無「當前 head 未取消」的部署。
   const rows = db.prepare(
     `SELECT t.id FROM development_coding_task t
      JOIN development_qa_current qc ON qc.coding_task_id = t.id AND qc.final_result = 'PASS'

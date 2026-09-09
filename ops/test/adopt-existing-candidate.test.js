@@ -387,6 +387,7 @@ test("G. adoption cannot skip QA / staging / release / Phase 15", async () => {
       actor: "owner:x", githubRead, repo, now: NOW,
     });
     const codingTaskId = out.coding_task.id;
+    assert.equal(out.coding_task.status, ADOPTED_PENDING_QA);
     assert.ok(validateCodingTaskForQa(db, codingTaskId).task);
     const qa = createQaRun(db, { codingTaskId, repo, now: NOW });
     assert.equal(qa.run.status, "pending");
@@ -416,6 +417,53 @@ test("G. adoption cannot skip QA / staging / release / Phase 15", async () => {
       workflowRef: "refs/heads/master",
       githubActor: "Fyun48",
     }, { repo }));
+
+    // QA PASS 後 adopted candidate 必須能建立 staging / release（不得因 status=adopted_pending_qa 被驗證擋下）。
+    const ts = NOW.toISOString();
+    db.prepare(
+      "UPDATE development_qa_run SET status='completed', final_result='PASS', blocking_checks='[]', warning_count=0, completed_at=? WHERE id=?",
+    ).run(ts, qa.run.id);
+    db.prepare(
+      `INSERT INTO development_qa_current(coding_task_id, qa_run_id, head_sha, input_fingerprint, final_result, updated_at)
+       VALUES (?,?,?,?,?,?)`,
+    ).run(codingTaskId, qa.run.id, qa.run.head_sha, qa.run.input_fingerprint, "PASS", ts);
+
+    const stagingEnv = {
+      STAGING_PROVIDER: "stub",
+      STAGING_ENV_CLASS: "staging",
+      STAGING_ENV_ID: "staging-1",
+      STAGING_DB_CLASS: "disposable",
+      STAGING_STORAGE_MODE: "isolated",
+      STAGING_INTEGRATION_MODE: "sandbox",
+      STAGING_MIGRATION_MODE: "isolated",
+    };
+    const { deployment } = createStagingDeployment(db, { codingTaskId, repo, env: stagingEnv, now: NOW });
+    assert.ok(deployment?.id);
+    assert.equal(deployment.coding_task_id, codingTaskId);
+    assert.equal(deployment.qa_run_id, qa.run.id);
+
+    // Staging ready/PASS（adopted branch 非真實 git ref，此處手動設 current，專注驗證 status 閘門）。
+    const artifactDigest = "sha256:" + "ab".repeat(32);
+    db.prepare(
+      `UPDATE development_staging_deployment SET status='ready', validation_result='PASS', blocking_checks='[]', warning_count=0,
+        artifact_id=?, artifact_digest=?, source_tree_hash=?, staging_environment_id=?, staging_environment_class=?,
+        staging_url=?, completed_at=? WHERE id=?`,
+    ).run(
+      "stub-artifact-adopt", artifactDigest, treeSha(g.dir, sha), "staging-1", "staging",
+      "staging://staging-1/stub", ts, deployment.id,
+    );
+    db.prepare(
+      `INSERT INTO development_staging_current(coding_task_id, staging_deployment_id, head_sha, input_fingerprint, validation_result, updated_at)
+       VALUES (?,?,?,?,?,?)`,
+    ).run(codingTaskId, deployment.id, deployment.head_sha, deployment.input_fingerprint, "PASS", ts);
+
+    const { candidate } = createReleaseCandidate(db, { codingTaskId, repo, env: stagingEnv, now: NOW });
+    assert.ok(candidate?.id);
+    assert.equal(candidate.coding_task_id, codingTaskId);
+    assert.equal(candidate.qa_run_id, qa.run.id);
+    assert.equal(candidate.staging_deployment_id, deployment.id);
+    assert.equal(db.prepare("SELECT status FROM development_coding_task WHERE id=?").get(codingTaskId).status, ADOPTED_PENDING_QA);
+
     const exec = await executeCodingTask(db, out.coding_task, { repo, now: NOW });
     assert.equal(exec.skipped, true);
     assert.equal(exec.reason, "existing_candidate_not_executable");
