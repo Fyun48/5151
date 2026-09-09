@@ -2,32 +2,127 @@ name: Tests
 
 on:
   push:
-    branches: [master, main]
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    branches:
+      - master
+      - main
 
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
+
+# Tests 只負責測試。
+# 不需要 Merge、PR 寫入或 Actions 寫入權限。
 permissions:
-  contents: write
-  pull-requests: write
-  actions: write
+  contents: read
+
+
+# 同一個 PR / branch 有新 commit 時，
+# 取消舊的測試，避免浪費 GitHub Actions 時間。
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 
 jobs:
+
   test:
+
+    name: test
+
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+
+    timeout-minutes: 15
+
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+
+      # ------------------------------------------------------------
+      # Checkout
+      # ------------------------------------------------------------
+
+      - name: Checkout Codebase
+
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+
+      # ------------------------------------------------------------
+      # Node.js
+      # ------------------------------------------------------------
+
+      - name: Setup Node.js
+
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+
         with:
           node-version: "22"
-      - run: npm test
-      # 合併與部署分離（Phase 3.5）：合併 PR 只做「合併」，絕不自動觸發任何 Production 部署。
-      # Production 部署一律改為明確的 workflow_dispatch（見 deploy-v3.yml / docker.yml / deploy-v2.yml / deploy.yml）。
-      # 維運自動化（cursor/ops-*）分支不自動合併，交由 Owner 依序人工合併。
-      - name: Auto-merge (no production deploy)
-        if: github.event_name == 'pull_request' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository && !startsWith(github.event.pull_request.head.ref, 'cursor/ops-') && !startsWith(github.event.pull_request.head.ref, 'ai-dev/')
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
+
+
+      # ------------------------------------------------------------
+      # Install dependencies
+      #
+      # 如果 package-lock.json 存在，使用 npm ci。
+      # 否則 fallback 到 npm install。
+      # ------------------------------------------------------------
+
+      - name: Install Dependencies
+
+        shell: bash
+
         run: |
-          gh pr merge "${{ github.event.pull_request.number }}" --squash --delete-branch
+          set -euo pipefail
+
+          if [[ -f package-lock.json ]]; then
+
+            echo "[Tests] package-lock.json found; using npm ci."
+
+            npm ci
+
+          else
+
+            echo "[Tests] package-lock.json not found; using npm install."
+
+            npm install
+
+          fi
+
+
+      # ------------------------------------------------------------
+      # Run Tests
+      #
+      # Tests 的唯一工作就是驗證程式。
+      #
+      # 不 Merge。
+      # 不 Deploy。
+      # 不修改 PR。
+      # ------------------------------------------------------------
+
+      - name: Run Test Suite
+
+        shell: bash
+
+        run: |
+          set -euo pipefail
+
+          echo "[Tests] Starting npm test..."
+
+          npm test
+
+          echo "[Tests] npm test completed successfully."
+
+
+      # ------------------------------------------------------------
+      # Explicit success message
+      # ------------------------------------------------------------
+
+      - name: Tests Passed
+
+        shell: bash
+
+        run: |
+          echo "✅ Tests PASSED."
+          echo "This workflow performed no merge."
+          echo "This workflow performed no Production deployment."
