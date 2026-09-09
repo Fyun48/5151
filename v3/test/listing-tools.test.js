@@ -344,6 +344,35 @@ test("description templates: free limit 2, sponsor 5, ownership, sanitization, c
   db2.close();
 });
 
+test("schema dedupes leftover account contacts then creates the unique index", () => {
+  const db = open();
+  addUser(db, { id: 1, email: "a@example.com", nickname: "吉比" });
+  db.exec("DROP INDEX IF EXISTS idx_listing_contact_one_account");
+  const stamp = OLD;
+  db.prepare(
+    `INSERT INTO listing_contact_profile(user_id, label, contact_name, phone, line_url, is_account, created_at, updated_at)
+     VALUES (1,'舊一','甲','0911111111','',1,?,?)`,
+  ).run(stamp, stamp);
+  db.prepare(
+    `INSERT INTO listing_contact_profile(user_id, label, contact_name, phone, line_url, is_account, created_at, updated_at)
+     VALUES (1,'舊二','乙','0922222222','',1,?,?)`,
+  ).run(stamp, stamp);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM listing_contact_profile WHERE user_id=1 AND is_account=1").get().n, 2);
+  ensureListingToolsSchema(db);
+  const left = db.prepare("SELECT * FROM listing_contact_profile WHERE user_id=1 AND is_account=1 ORDER BY id").all();
+  assert.equal(left.length, 1);
+  assert.equal(left[0].label, "舊一");
+  const idx = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_listing_contact_one_account'").get();
+  assert.equal(idx?.name, "idx_listing_contact_one_account");
+  assert.throws(() => {
+    db.prepare(
+      `INSERT INTO listing_contact_profile(user_id, label, contact_name, phone, line_url, is_account, created_at, updated_at)
+       VALUES (1,'再插','丙','0933333333','',1,?,?)`,
+    ).run(stamp, stamp);
+  });
+  db.close();
+});
+
 test("account contact stays unique under concurrent ensure", async () => {
   const db = open();
   addUser(db, { id: 1, email: "a@example.com", nickname: "吉比" });
