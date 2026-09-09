@@ -132,6 +132,12 @@ test("GitHub provider stays unavailable without Owner mutation grant", () => {
 
 test("injected GitHub adapter is available with grant and never stores secrets", async () => {
   const api = makeFakeGithubApi({ runStatus: "completed", runConclusion: "success" });
+  let seenInputs = null;
+  const origDispatch = api.dispatchWorkflow.bind(api);
+  api.dispatchWorkflow = async (args) => {
+    seenInputs = args.inputs;
+    return origDispatch(args);
+  };
   const provider = makeGithubProductionReleaseProvider(GRANT_ENV, { githubApi: api });
   assert.equal(provider.available, true);
   const dispatched = await provider.dispatchWorkflow({
@@ -143,6 +149,8 @@ test("injected GitHub adapter is available with grant and never stores secrets",
   });
   assert.equal(dispatched.accepted, true);
   assert.ok(dispatched.workflow_run_id);
+  assert.equal(seenInputs.release_mode, "ops_phase15");
+  assert.equal(seenInputs.release_intent_id, "intent-build-0001");
   const wf = await provider.getWorkflowRun({ workflow_run_id: dispatched.workflow_run_id });
   assert.equal(wf.actor, ACTOR);
   assert.equal(wf.triggering_actor, ACTOR);

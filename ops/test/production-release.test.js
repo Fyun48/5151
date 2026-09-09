@@ -246,9 +246,12 @@ test("Production workflows remain workflow_dispatch only; merge/push does not de
     ".github/workflows/deploy-v3.yml",
   ]) {
     const text = readFileSync(path.join(ROOT, rel), "utf8");
-    assert.match(text, /run-name:\s*"phase15-intent:\$\{\{ inputs\.release_intent_id \}\}"/);
-    assert.match(text, /if: always\(\)/);
+    assert.match(text, /inputs\.release_mode == 'ops_phase15'/);
+    assert.match(text, /format\('phase15-intent:\{0\}',\s*inputs\.release_intent_id\)/);
+    assert.match(text, /format\('manual-owner:\{0\}',\s*inputs\.sha\)/);
+    assert.match(text, /always\(\)/);
     assert.match(text, /name: phase15-run-identity/);
+    assert.match(text, /name: manual-owner-run-identity/);
   }
   const ci = readFileSync(path.join(ROOT, ".github/workflows/test.yml"), "utf8");
   assert.match(ci, /Auto-merge \(no production deploy\)/);

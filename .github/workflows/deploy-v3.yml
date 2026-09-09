@@ -1,5 +1,5 @@
 name: Deploy v3 to CasaOS (manual)
-run-name: "phase15-intent:${{ inputs.release_intent_id }}"
+run-name: "${{ inputs.release_mode == 'ops_phase15' && format('phase15-intent:{0}', inputs.release_intent_id) || format('manual-owner:{0}', inputs.sha) }}"
 
 # Production 部署一律「明確手動觸發」。合併/push 到 master 不會自動部署 v3。
 # 部署會把指定 commit SHA 的 v3/src、v3/public 與 compose 檔 SCP 到正式 NAS，
@@ -17,6 +17,9 @@ run-name: "phase15-intent:${{ inputs.release_intent_id }}"
 #   已知先前 Production source：584d583e56151abcf01c972b7bb45a82c73e4596（#191 / deploy-v3 run 34113624372）
 #   先前 image digest、DB backup path：以 predeploy check 實際輸出為準，禁止捏造。
 #
+# release_mode=manual_owner：人工治理路徑，不依賴 Ops Phase 15 / release_intent_id。
+# release_mode=ops_phase15：維持既有 Phase 15 綁定（run-name phase15-intent:<id>）。
+#
 # 【必要前提】master branch protection / ruleset 為必要（防止直接改本 workflow 繞過授權）。
 on:
   workflow_dispatch:
@@ -31,9 +34,18 @@ on:
         description: "輸入 DEPLOY-PRODUCTION 以確認正式部署"
         required: true
         default: ""
-      release_intent_id:
-        description: "Ops Phase 15 durable release_intent_id（不可猜測，必須與 evidence 一致）"
+      release_mode:
+        description: "Release path: manual_owner（人工治理，預設）或 ops_phase15（Ops Phase 15 綁定）"
+        type: choice
         required: true
+        default: manual_owner
+        options:
+          - manual_owner
+          - ops_phase15
+      release_intent_id:
+        description: "僅 ops_phase15 必填：Ops Phase 15 durable release_intent_id。manual_owner 必須空白；非空會 fail-closed（避免舊 Phase 15 caller 被降成 Manual Owner）"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -58,6 +70,8 @@ jobs:
           CONFIRM: ${{ inputs.confirmation }}
           DEPLOY_SHA: ${{ inputs.sha }}
           IMAGE_DIGEST: ${{ inputs.image_digest }}
+          RELEASE_MODE: ${{ inputs.release_mode }}
+          RELEASE_INTENT_ID: ${{ inputs.release_intent_id }}
         run: |
           set -euo pipefail
           if [ "$WF_REF" != "refs/heads/master" ]; then
@@ -81,13 +95,22 @@ jobs:
           if ! printf '%s' "${IMAGE_DIGEST:-}" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
             echo "::error::image_digest must be exactly sha256: plus 64 lowercase hex characters"; exit 1
           fi
+          if [ "${RELEASE_MODE:-}" != "manual_owner" ] && [ "${RELEASE_MODE:-}" != "ops_phase15" ]; then
+            echo "::error::release_mode must be manual_owner or ops_phase15 (got '${RELEASE_MODE:-}')"; exit 1
+          fi
+          if [ "${RELEASE_MODE:-}" = "ops_phase15" ] && [ -z "${RELEASE_INTENT_ID:-}" ]; then
+            echo "::error::ops_phase15 requires a non-empty release_intent_id"; exit 1
+          fi
+          if [ "${RELEASE_MODE:-}" = "manual_owner" ] && [ -n "${RELEASE_INTENT_ID:-}" ]; then
+            echo "::error::manual_owner forbids a non-empty release_intent_id; stale Phase 15 callers must set release_mode=ops_phase15"; exit 1
+          fi
       - name: Checkout master (for ancestry validation)
         uses: actions/checkout@v4
         with:
           ref: master
           fetch-depth: 0
       - name: Write Phase 15 run identity
-        if: always()
+        if: ${{ always() && inputs.release_mode == 'ops_phase15' }}
         env:
           EVIDENCE_KIND: identity
           WF_FILE: .github/workflows/deploy-v3.yml
@@ -103,11 +126,35 @@ jobs:
           CONFIRMATION: ${{ inputs.confirmation }}
         run: python3 .github/scripts/write-phase15-workflow-evidence.py phase15-run-identity.json
       - name: Upload Phase 15 run identity
-        if: always()
+        if: ${{ always() && inputs.release_mode == 'ops_phase15' }}
         uses: actions/upload-artifact@v4
         with:
           name: phase15-run-identity
           path: phase15-run-identity.json
+          if-no-files-found: error
+      - name: Write Manual Owner run identity
+        if: ${{ always() && inputs.release_mode == 'manual_owner' }}
+        env:
+          EVIDENCE_KIND: identity
+          RELEASE_MODE: manual_owner
+          WF_FILE: .github/workflows/deploy-v3.yml
+          WF_REF: ${{ github.ref }}
+          WF_RUN_ID: ${{ github.run_id }}
+          WF_ATTEMPT: ${{ github.run_attempt }}
+          WF_HEAD_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ inputs.sha }}
+          WF_ACTOR: ${{ github.actor }}
+          WF_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          RELEASE_INTENT_ID: ${{ inputs.release_intent_id }}
+          WF_ENVIRONMENT: production
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: python3 .github/scripts/write-manual-owner-workflow-evidence.py manual-owner-run-identity.json
+      - name: Upload Manual Owner run identity
+        if: ${{ always() && inputs.release_mode == 'manual_owner' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: manual-owner-run-identity
+          path: manual-owner-run-identity.json
           if-no-files-found: error
       - name: Validate SHA reachable from origin/master, then check it out
         env:
@@ -304,7 +351,7 @@ jobs:
           open("phase15-health.env", "w").write("\n".join(lines) + "\n")
           PY
       - name: Write Phase 15 workflow evidence
-        if: always()
+        if: ${{ always() && inputs.release_mode == 'ops_phase15' }}
         env:
           WF_FILE: .github/workflows/deploy-v3.yml
           WF_REF: ${{ github.ref }}
@@ -328,9 +375,41 @@ jobs:
           fi
           python3 .github/scripts/write-phase15-workflow-evidence.py phase15-workflow-evidence.json
       - name: Upload Phase 15 workflow evidence
-        if: always()
+        if: ${{ always() && inputs.release_mode == 'ops_phase15' }}
         uses: actions/upload-artifact@v4
         with:
           name: phase15-workflow-evidence
           path: phase15-workflow-evidence.json
+          if-no-files-found: error
+      - name: Write Manual Owner workflow evidence
+        if: ${{ always() && inputs.release_mode == 'manual_owner' }}
+        env:
+          RELEASE_MODE: manual_owner
+          WF_FILE: .github/workflows/deploy-v3.yml
+          WF_REF: ${{ github.ref }}
+          WF_RUN_ID: ${{ github.run_id }}
+          WF_ATTEMPT: ${{ github.run_attempt }}
+          WF_HEAD_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ inputs.sha }}
+          WF_ACTOR: ${{ github.actor }}
+          WF_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          RELEASE_INTENT_ID: ${{ inputs.release_intent_id }}
+          WF_ENVIRONMENT: production
+          OCI_SOURCE: https://github.com/${{ github.repository }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          if [ -f ./phase15-health.env ]; then
+            set -a
+            # shellcheck disable=SC1091
+            . ./phase15-health.env
+            set +a
+          fi
+          python3 .github/scripts/write-manual-owner-workflow-evidence.py manual-owner-workflow-evidence.json
+      - name: Upload Manual Owner workflow evidence
+        if: ${{ always() && inputs.release_mode == 'manual_owner' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: manual-owner-workflow-evidence
+          path: manual-owner-workflow-evidence.json
           if-no-files-found: error

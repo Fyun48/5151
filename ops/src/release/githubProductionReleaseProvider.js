@@ -57,7 +57,7 @@ function workflowInputs({ workflowFile, inputs = {}, confirmation, releaseIntent
   if (!/^[0-9a-f]{40}$/.test(String(sha || ""))) return { ok: false, reason: "sha_not_exact" };
   const intent = releaseIntentId || inputs.release_intent_id || "";
   if (!intent || String(intent).length < 16) return { ok: false, reason: "release_intent_missing" };
-  const withIntent = { sha, release_intent_id: String(intent) };
+  const withIntent = { sha, release_intent_id: String(intent), release_mode: "ops_phase15" };
   if (workflowFile === PRODUCTION_WORKFLOWS.BUILD) {
     return { ok: true, inputs: withIntent };
   }
