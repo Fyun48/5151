@@ -15,11 +15,11 @@ test("A: mobile help dock exists, reuses existing dialogs, hidden on desktop/gue
   assert.match(html, /id="mobileFeedbackBtn"/);
   assert.match(html, /\$\("mobileHelpQaBtn"\)\?\.addEventListener\("click", openHelpQaDialog\)/);
   assert.match(html, /\$\("mobileFeedbackBtn"\)\?\.addEventListener\("click", openFeedbackDialog\)/);
-  // 桌面右下可見；手機靠近找房、滑動才顯示；guest/no-session 隱藏；safe-area
-  assert.match(html, /\.mobile-help-dock \{[\s\S]*?right: 72px;[\s\S]*?bottom: 80px;/);
-  assert.match(html, /bottom: calc\(58px \+ env\(safe-area-inset-bottom, 0px\)\);/);
+  // 桌面直排在回頂下方；手機直排靠左、距底欄 1px；guest/no-session 隱藏
+  assert.match(html, /\.mobile-help-dock \{[\s\S]*?flex-direction: column;[\s\S]*?right: 18px;[\s\S]*?bottom: 80px;/);
+  assert.match(html, /bottom: calc\(57px \+ env\(safe-area-inset-bottom, 0px\)\);/);
   assert.match(html, /html\.no-session \.mobile-help-dock,\s*\n\s*body\.role-guest \.mobile-help-dock \{ display: none !important; \}/);
-  assert.match(html, /showMobileOnScroll/);
+  assert.match(html, /bindSearchBarScrollHide/);
   assert.match(html, /prefers-reduced-motion: reduce/);
 });
 

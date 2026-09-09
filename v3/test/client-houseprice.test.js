@@ -15,9 +15,11 @@ import {
   hpPostIdFromCase,
   hpSidForDistrict,
   isHpListingId,
+  normalizeHpFloorName,
   normalizeHpItem,
   parseHpDetailHtml,
   parseHpDetailJson,
+  parseHpLabeledPlain,
   parseHpListHtml,
 } from "../src/houseprice.js";
 
@@ -57,6 +59,19 @@ test("parseHpListHtml reads 5168 SSR cards", () => {
   assert.equal(suite.price_num, 24999);
   assert.match(suite.cover, /realphoto_800x600/);
   assert.doesNotMatch(suite.cover, /default_cover/);
+});
+
+test("5168 labeled 樓層 / 22 / 24樓 means rental 22 and building 24", () => {
+  assert.equal(normalizeHpFloorName("22 / 24樓"), "22/24");
+  assert.equal(normalizeHpFloorName("樓層 / 22 / 24樓"), "22/24");
+  const fields = parseHpLabeledPlain("地址 / 新北市淡水區民權路19號 社區 / 南加州 樓層 / 22 / 24樓 坪數 / 30.8 坪");
+  assert.equal(fields["地址"], "新北市淡水區民權路19號");
+  assert.equal(fields["社區"], "南加州");
+  assert.equal(normalizeHpFloorName(fields["樓層"]), "22/24");
+  const html = parseHpDetailHtml(`<p>樓層 / 22 / 24樓</p><p>社區 / 南加州</p><p>地址 / 新北市淡水區民權路19號</p>`);
+  assert.equal(html.floorName, "22/24");
+  assert.equal(html.community, "南加州");
+  assert.match(html.address, /民權路19號/);
 });
 
 test("parseHpDetailHtml reads total/rental floor and community from the detail page", () => {

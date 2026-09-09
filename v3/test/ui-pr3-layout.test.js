@@ -36,11 +36,10 @@ test("same-house fold renders collapsed sources without dropping them", () => {
   assert.match(html, /另有 \$\{house\.hidden_count/);
 });
 
-test("mobile help dock is scroll-triggered; desktop dock can compact", () => {
+test("mobile help dock stays left of bottom nav; desktop dock stacks under scroll-top", () => {
   assert.match(html, /function bindHelpDockMotion/);
-  assert.match(html, /showMobileOnScroll/);
-  assert.match(html, /window\.clearTimeout\(hideTimer\)/);
-  assert.match(html, /setTimeout\(\(\) => dock\.classList\.remove\("is-visible"\), 1000\)/);
+  assert.match(html, /bindSearchBarScrollHide/);
+  assert.match(html, /search-bar-hidden/);
   assert.match(html, /prefers-reduced-motion: reduce/);
   assert.match(html, /is-compact/);
   assert.match(html, /aria-label="常見問題 Q&amp;A"/);

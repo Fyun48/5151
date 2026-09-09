@@ -375,7 +375,8 @@ test("member settings copy hides advanced hints and locks schedule defaults", ()
   assert.match(html, /schedule-readonly/);
   assert.doesNotMatch(html, /id="pagesPerWatch"/);
   assert.doesNotMatch(html, /進階：591 網址（自動產生，通常不用改）<\/summary>/);
-  assert.match(html, /class="admin-only"[\s\S]*searchUrls/s);
+  assert.match(html, /id="searchUrls" hidden/);
+  assert.doesNotMatch(html, /進階：591 網址（自動產生，通常不用改）/);
   assert.doesNotMatch(html, /meIsAdmin \? Number\(\$\("pagesPerWatch"\)\.value\) : 40/);
   assert.match(html, /body:not\(\.role-admin\) \.admin-only/);
   assert.match(html, /<div class="admin-only">\s*<label>檢查間隔（分鐘）/);
@@ -575,7 +576,7 @@ test("panel toggle sits above scroll-top and uses expand/collapse glyphs", () =>
   const topIdx = html.indexOf('id="scrollTopBtn"');
   assert.ok(expandIdx > 0 && topIdx > expandIdx);
   assert.match(html, /#expandPanelBtn \{[\s\S]*bottom:\s*140px/);
-  assert.match(html, /#scrollTopBtn \{[\s\S]*bottom:\s*80px/);
+  assert.match(html, /#scrollTopBtn \{[\s\S]*bottom:\s*158px/);
   assert.match(html, /#scrollTopBtn \{[\s\S]*z-index:\s*119/);
   assert.match(html, /#scrollTopBtn[\s\S]*<svg /);
   assert.match(html, /#scrollTopBtn\.on/);
