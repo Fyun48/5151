@@ -795,3 +795,12 @@ test("listing titles decode HTML entity emoji for display", () => {
   assert.equal(fns.decodeEntities("&#x1F525;北門站&#x2728;採光房"), "🔥北門站✨採光房");
   assert.equal(fns.decodeEntities("A &amp; B"), "A & B");
 });
+
+test("listing tools default to locked account contact and mention sponsor template cap", () => {
+  const html = pub("index.html");
+  assert.match(html, /贊助會員可存到 5 則/);
+  assert.doesNotMatch(html, /管理員可存/);
+  assert.match(html, /if \(keep && \[\.\.\.sel\.options\]\.some/);
+  assert.match(html, /item\.is_account/);
+  assert.match(html, /applyContactProfile\(account\.id\)/);
+});

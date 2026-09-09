@@ -364,9 +364,17 @@ export function parseHpDetailJson(payload) {
     cityRoad,
   ]);
   const conditionTags = Array.isArray(det.conditionTags) ? det.conditionTags.map(str).filter(Boolean) : [];
+  const tagCommunity = (Array.isArray(det.tags) ? det.tags : [])
+    .filter((row) => row && (Number(row.type) === 2 || row.communityId || row.id))
+    .map((row) => str(row.name))
+    .find(Boolean);
+  const titleCommunity = str(det.caseName).match(/【([^】]{1,20})】/)?.[1] || "";
+  const community = cleanCommunityName(
+    det.communityName || det.community || det.communityTag || det.buildName || tagCommunity || titleCommunity || conditionTags[0],
+  );
   return {
     floorName,
-    community: cleanCommunityName(det.communityName || det.community || det.buildName),
+    community,
     areaName,
     layout,
     kind: kindFromHpText(usage) || kindFromHpText(buildingType) || kindFromHpText(str(det.caseName)),
@@ -383,7 +391,7 @@ export function parseHpDetailJson(payload) {
       坪數: areaName,
       樓層: floorName ? `${floorName}樓` : "",
       格局: layout,
-      社區: cleanCommunityName(det.communityName || det.community || det.buildName),
+      社區: community,
       用途: usage,
       地址: address,
     },
