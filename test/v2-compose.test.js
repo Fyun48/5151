@@ -45,23 +45,33 @@ test("CasaOS compose does not make v1 the main or default service", () => {
 });
 
 test("deploy workflows do not copy or start v1 as the live app", () => {
-  const deploy = readFileSync(path.join(root, ".github/workflows/deploy.yml"), "utf8");
-  const docker = readFileSync(path.join(root, ".github/workflows/docker.yml"), "utf8");
-  const deployV2 = readFileSync(path.join(root, ".github/workflows/deploy-v2.yml"), "utf8");
-  assert.equal(deploy.includes('source: "src,public"'), false);
-  assert.equal(deploy.includes("- \"src/**\""), false);
-  assert.equal(deploy.includes("- \"public/**\""), false);
-  assert.match(deploy, /docker compose stop 591-tracker/);
-  assert.equal(/docker compose up[^\n]*591-tracker(?!-v)/.test(deploy), false);
+  const wf = (name) => path.join(root, ".github/workflows", name);
+  const liveUp = /docker compose up[^\n]*591-tracker(?!-v)/;
+
+  const docker = readFileSync(wf("docker.yml"), "utf8");
   assert.match(docker, /docker compose stop 591-tracker/);
-  assert.equal(/docker compose up[^\n]*591-tracker(?!-v)/.test(docker), false);
+  assert.equal(liveUp.test(docker), false);
   assert.match(docker, /591-tracker-v2/);
+
+  const deployV2 = readFileSync(wf("deploy-v2.yml"), "utf8");
   assert.match(deployV2, /591-tracker-v2/);
-  assert.equal(/docker compose up[^\n]*591-tracker(?!-v)/.test(deployV2), false);
-  const deployV3Path = path.join(root, ".github/workflows/deploy-v3.yml");
+  assert.equal(liveUp.test(deployV2), false);
+
+  // 舊 v1 deploy.yml 已刪除；若仍存在則不得把 v1 當 live app
+  const deployPath = wf("deploy.yml");
+  if (existsSync(deployPath)) {
+    const deploy = readFileSync(deployPath, "utf8");
+    assert.equal(deploy.includes('source: "src,public"'), false);
+    assert.equal(deploy.includes("- \"src/**\""), false);
+    assert.equal(deploy.includes("- \"public/**\""), false);
+    assert.match(deploy, /docker compose stop 591-tracker/);
+    assert.equal(liveUp.test(deploy), false);
+  }
+
+  const deployV3Path = wf("deploy-v3.yml");
   if (existsSync(deployV3Path)) {
     const deployV3 = readFileSync(deployV3Path, "utf8");
     assert.match(deployV3, /591-tracker-v3/);
-    assert.equal(/docker compose up[^\n]*591-tracker(?!-v)/.test(deployV3), false);
+    assert.equal(liveUp.test(deployV3), false);
   }
 });
