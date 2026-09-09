@@ -136,9 +136,27 @@ export function ensureListingToolsSchema(db) {
     );
   `);
   try { db.exec("ALTER TABLE listing_contact_profile ADD COLUMN is_account INTEGER NOT NULL DEFAULT 0"); } catch { /* already */ }
-  try {
-    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_listing_contact_one_account ON listing_contact_profile(user_id) WHERE is_account = 1");
-  } catch { /* duplicates or older SQLite */ }
+  ensureOneAccountContactPerUser(db);
+}
+
+function ensureOneAccountContactPerUser(db) {
+  const dupes = db.prepare(`
+    SELECT user_id FROM listing_contact_profile
+    WHERE IFNULL(is_account,0)=1
+    GROUP BY user_id
+    HAVING COUNT(*) > 1
+  `).all();
+  const keepStmt = db.prepare(
+    "SELECT id FROM listing_contact_profile WHERE user_id=? AND IFNULL(is_account,0)=1 ORDER BY id LIMIT 1",
+  );
+  const dropStmt = db.prepare(
+    "DELETE FROM listing_contact_profile WHERE user_id=? AND IFNULL(is_account,0)=1 AND id!=?",
+  );
+  for (const row of dupes) {
+    const keep = keepStmt.get(row.user_id);
+    if (keep) dropStmt.run(row.user_id, keep.id);
+  }
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_listing_contact_one_account ON listing_contact_profile(user_id) WHERE is_account = 1");
 }
 
 function publicTemplate(row) {
