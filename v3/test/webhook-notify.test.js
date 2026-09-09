@@ -204,6 +204,7 @@ test("notify facts add usable ping and housing type instead of 整層住家", ()
     tags: ["公寓"],
   });
   assert.match(apt, /^591 · /);
+  assert.match(apt, /\( 5F \/ 12F \)/);
   assert.match(apt, /可使用 22 坪/);
   assert.match(apt, /公寓$/);
   assert.doesNotMatch(apt, /整層住家/);

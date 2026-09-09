@@ -248,6 +248,7 @@ test("member profiles cap districts and include usable ping in notify copy", () 
   assert.doesNotMatch(html, /出租 \$\{m\[1\]\}樓／共/);
   assert.match(html, /每個設定檔最多選/);
   assert.match(html, /notify_facts/);
+  assert.match(html, /notify_facts \? String\(item\.notify_facts\)\.split\(" · "\)\.map\(\(bit\) => formatFloorDisplay\(bit\)/);
   assert.match(html, /housing_type/);
   assert.match(html, /已存 \$\{list\.length\}／\$\{cap\}/);
   assert.match(html, /再新增會提示最多 3 個；同名儲存會覆蓋/);
@@ -441,13 +442,13 @@ test("product name is 吉比租房物件追蹤 without v2 開發版 copy", () =>
   assert.equal(html.includes("v2 開發版"), false);
   assert.equal(html.includes("v3 開發版"), false);
   assert.equal(html.includes("與線上版分開的資料庫"), false);
-  assert.match(html, /ver\. 3\.50/);
+  assert.match(html, /ver\. 3\.51/);
   assert.doesNotMatch(html, /<h1>[^<]*v3/i);
   assert.match(login, /<h1>吉比租房物件追蹤<\/h1>/);
   assert.equal(login.includes("v2 開發版"), false);
   assert.equal(login.includes("v3 開發版"), false);
   assert.equal(login.includes("資料與線上版分開"), false);
-  assert.match(login, /ver\. 3\.50/);
+  assert.match(login, /ver\. 3\.51/);
 });
 
 test("MRT is admin-only and guest tour is in the page", () => {
