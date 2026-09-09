@@ -38,17 +38,16 @@ test("same-house fold renders collapsed sources without dropping them", () => {
 
 test("mobile help dock stays left of bottom nav; desktop dock sits left of filter X", () => {
   assert.match(html, /function bindHelpDockMotion/);
-  assert.match(html, /is-idle-hidden/);
-  assert.match(html, /setTimeout\(hideDock, 1000\)/);
-  assert.match(html, /bindSearchBarScrollHide/);
-  assert.match(html, /search-bar-hidden/);
-  assert.match(html, /body\.search-bar-hidden\.panel-collapsed \.list-head-sticky:not\(\.filter-compact\)/);
-  assert.match(html, /t\.closest\("#listHeadSticky"\)/);
+  assert.match(html, /is-scroll-hidden/);
+  assert.match(html, /setTimeout\(showDock, reduced\(\) \? 0 : 1000\)/);
+  assert.doesNotMatch(html, /bindSearchBarScrollHide/);
+  assert.doesNotMatch(html, /search-bar-hidden/);
   assert.match(html, /prefers-reduced-motion: reduce/);
   assert.match(html, /is-compact/);
   assert.match(html, /aria-label="常見問題 Q&amp;A"/);
   assert.match(html, /\.mobile-help-dock \{[\s\S]*?flex-direction: row;[\s\S]*?gap: 4px;[\s\S]*?bottom: 28px;/);
   assert.match(html, /right: calc\(18px \+ var\(--touch\) \+ 4px\)/);
+  assert.match(html, /\.filter-head-actions > button\.mobile-only \{\s*display: none;/);
 });
 
 test("media tags and watermarked listing compose controls exist", () => {

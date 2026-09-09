@@ -21,7 +21,9 @@ test("A: mobile help dock exists, reuses existing dialogs, hidden on desktop/gue
   assert.match(html, /flex-direction: column;[\s\S]*?left: 8px;[\s\S]*?right: auto !important;[\s\S]*?bottom: calc\(58px \+ env\(safe-area-inset-bottom, 0px\)\);/);
   assert.match(html, /bottom: calc\(58px \+ env\(safe-area-inset-bottom, 0px\)\);/);
   assert.match(html, /html\.no-session \.mobile-help-dock,\s*\n\s*body\.role-guest \.mobile-help-dock \{ display: none !important; \}/);
-  assert.match(html, /bindSearchBarScrollHide/);
+  assert.match(html, /is-scroll-hidden/);
+  assert.match(html, /setTimeout\(showDock, reduced\(\) \? 0 : 1000\)/);
+  assert.doesNotMatch(html, /bindSearchBarScrollHide/);
   assert.match(html, /prefers-reduced-motion: reduce/);
 });
 
