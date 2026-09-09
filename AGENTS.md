@@ -19,6 +19,7 @@
 Cloud Agent 環境由 `.cursor/environment.json` 自動 `npm ci` 並啟動 v3 開發伺服器（`npm run dev:v3`，埠 5153，預設管理員 `demo@example.com` / `demopass123`，可用 `AUTH_EMAIL` / `AUTH_PASSWORD` secrets 覆寫）。
 
 - 啟動 v3：`npm run dev:v3`（開 http://localhost:5153 ）
+- 啟動 OPS：`npm run dev:ops`（開 http://127.0.0.1:5154 ，見 `ops/README.md`）
 - 測試：`npm test`
 
 ## 開發工具（務必使用專案自訂的 rules / skills / plugins / agents）
@@ -30,6 +31,9 @@ Cloud Agent 環境由 `.cursor/environment.json` 自動 `npm ci` 並啟動 v3 �
 - **Plugins / MCP**：`Figma`（設計規格）、`Playwright`（實機操作與 RWD 驗證）、`Mobbin`（設計參考）、`Shadcn`（元件）。
 - **Agents（依 `agent-routing.mdc`）**：Design Research Agent 先研究 → Figma 建立／更新規格 → Builder Agent 才實作前端 → Playwright 實機操作並分別檢查 375px / 768px / 1440px → UX Reviewer 與 Security Reviewer 審查。Reviewer 不得批准自己實作的修改；禁止只以「看起來更漂亮」作為完成標準。
 
-## Pull requests
+## Pull requests 與部署
 
-做完工作後請開**非草稿** PR（`draft: false`），讓 `.github/workflows/test.yml` 通過後自動 squash merge。不要自行執行 `gh pr merge` 或 `--auto`。
+- **Tests**（`.github/workflows/test.yml`）：`npm test` 通過後，一般非草稿 PR 會 squash merge。
+- **不自動合併**：`ai-dev/*`（OPS Coding Agent 草稿 PR）、`cursor/ops-*`（OPS 規則／管線變更，需 Owner 看過）。
+- **不自動部署**：Tests 通過只合併。V3 正式機一律走 CasaOS 三步（Build → Predeploy → Deploy v3），Owner 直接下令時即可部署，不必等 OPS 投票。
+- Owner 直接提示詞要改的功能：做完、開非草稿 PR、必要時直接部署。OPS 是給一般使用者回饋／BUG 累積後才走評估與核准。

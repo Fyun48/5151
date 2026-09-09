@@ -1,6 +1,7 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 let CSRF = "";
+let selectedIssueId = null;
 
 async function api(path, opts) {
   const o = { cache: "no-store", ...(opts || {}) };
@@ -43,10 +44,149 @@ function showLoggedIn(email) {
   $("who").textContent = email;
 }
 
+function setTab(name) {
+  document.querySelectorAll(".tab").forEach((btn) => {
+    const on = btn.dataset.tab === name;
+    btn.classList.toggle("on", on);
+    btn.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  document.querySelectorAll(".tabpane").forEach((pane) => {
+    pane.hidden = pane.id !== `tab-${name}`;
+  });
+}
+
 async function refreshHealth() {
   const { data } = await api("/ops/api/health");
-  $("healthBox").textContent =
-    `service=${data.service}  phase=${data.phase}  owner_configured=${data.configured}`;
+  return data;
+}
+
+async function refreshDashboard() {
+  const { res, data } = await api("/ops/api/dashboard");
+  if (!res.ok) {
+    $("dashMsg").textContent = data.error || "無法讀取總覽";
+    $("dashMsg").className = "msg err";
+    return;
+  }
+  const stats = [
+    ["回饋", data.feedback_total],
+    ["議題", data.issues_open],
+    ["待核准開發", data.waiting_owner_approval],
+    ["待核准發布", data.waiting_release_approval],
+    ["待送通知", data.pending_release_notifications],
+  ];
+  $("dashBox").innerHTML = stats.map(([label, n]) => `<div class="stat"><b>${esc(n)}</b><span>${esc(label)}</span></div>`).join("");
+  const hook = data.webhook?.configured
+    ? `Webhook 已設定（${data.webhook.channel}）${data.webhook.on_ingest ? "，入庫也會通知" : ""}`
+    : "尚未設定 OPS_NOTIFY_WEBHOOK_URL，核准／發布通知不會外送";
+  $("dashMsg").textContent = `Phase ${data.phase} · ${hook}`;
+  $("dashMsg").className = "msg";
+
+  const issues = await api("/ops/api/issues?limit=80");
+  const waiting = (issues.data.items || []).filter((it) =>
+    it.lifecycle_state === "WAITING_OWNER_APPROVAL" || it.lifecycle_state === "WAITING_RELEASE_APPROVAL");
+  $("queueBox").innerHTML = waiting.length
+    ? waiting.map((it) => `#${it.id} ${esc(it.title || "（無標題）")} · ${esc(it.lifecycle_state)} · 評估 ${esc(it.evaluation || "—")}`).join("\n")
+    : "目前沒有等待 Owner 核准的項目。";
+}
+
+async function refreshInbox() {
+  const include = $("showContact")?.checked ? "1" : "0";
+  const { res, data } = await api(`/ops/api/feedback?limit=80&includeContact=${include}`);
+  if (!res.ok) return;
+  $("inboxHint").textContent = `共 ${data.total} 筆，顯示最新 ${data.items.length} 筆。`;
+  const body = $("inboxTable").querySelector("tbody");
+  body.innerHTML = (data.items || []).map((r) => `
+    <tr data-fid="${r.id}">
+      <td>${r.id}</td>
+      <td>${esc(r.kind)}</td>
+      <td>${esc(String(r.content || "").slice(0, 120))}</td>
+      <td>${r.issue_id ? "#" + r.issue_id : "—"}</td>
+      <td>${esc(r.app_version || "—")}</td>
+      <td>${fmtTime(r.received_at || r.submitted_at)}</td>
+    </tr>`).join("") || `<tr><td colspan="6" class="hint">尚無回饋。請確認正式站已開 OPS_FEEDBACK_DELIVERY=1。</td></tr>`;
+}
+
+async function openFeedback(id) {
+  const { res, data } = await api(`/ops/api/feedback/${id}/analysis`);
+  const box = $("feedbackDetail");
+  if (!res.ok) {
+    box.hidden = false;
+    box.textContent = data.error || "讀取失敗";
+    return;
+  }
+  const fb = data.feedback || {};
+  const cur = data.current || {};
+  box.hidden = false;
+  box.textContent = [
+    `回饋 #${fb.id} · ${fb.kind || ""} · ${fb.source || ""}`,
+    fb.content || "",
+    "",
+    `分析：${cur.category || "尚未分析"} / ${cur.severity_hint || "—"}`,
+    cur.summary || "",
+  ].join("\n");
+}
+
+async function refreshIssues() {
+  const { res, data } = await api("/ops/api/issues?limit=80");
+  if (!res.ok) return;
+  const body = $("issueTable").querySelector("tbody");
+  body.innerHTML = (data.items || []).map((it) => `
+    <tr data-iid="${it.id}" class="${Number(it.id) === Number(selectedIssueId) ? "on" : ""}">
+      <td>${it.id}</td>
+      <td>${esc(it.title || "（無標題）")}</td>
+      <td><span class="chip ${it.lifecycle_state && it.lifecycle_state.includes("WAITING") ? "warn" : ""}">${esc(it.lifecycle_state)}</span></td>
+      <td>${it.impact_level ? esc(it.impact_level) + " " + esc(it.impact_score ?? "") : "—"}</td>
+      <td>${esc(it.evaluation || "—")}</td>
+      <td>${it.member_count}</td>
+    </tr>`).join("") || `<tr><td colspan="6" class="hint">尚無議題。回饋需先被分析／分群。</td></tr>`;
+}
+
+async function openIssue(id) {
+  selectedIssueId = Number(id);
+  const [issue, proposal] = await Promise.all([
+    api(`/ops/api/issues/${id}`),
+    api(`/ops/api/issues/${id}/proposal`),
+  ]);
+  $("issueDetailCard").hidden = false;
+  $("issueDetailTitle").textContent = `議題 #${id}`;
+  const members = issue.data.members || [];
+  const cur = proposal.data.current;
+  const lines = [
+    issue.data.issue?.title || "",
+    issue.data.issue?.summary || "",
+    `成員 ${members.length} 筆回饋`,
+    cur ? `提案 v${cur.proposal_version} · ${cur.title || ""}` : "尚無提案",
+    cur?.problem_statement || "",
+    cur?.proposed_change || "",
+  ].filter(Boolean);
+  $("issueDetail").textContent = lines.join("\n\n");
+  $("gate1Row").hidden = !cur || proposal.data.current_decision;
+  $("gate1Row").dataset.proposal = cur ? JSON.stringify({
+    proposal_id: cur.id,
+    proposal_version: cur.proposal_version,
+    proposal_hash: cur.proposal_hash,
+  }) : "";
+  $("issueMsg").textContent = "";
+  await refreshIssues();
+}
+
+async function decideGate1(action) {
+  if (!selectedIssueId) return;
+  let body = {};
+  try { body = JSON.parse($("gate1Row").dataset.proposal || "{}"); } catch { body = {}; }
+  body.action = action;
+  const { res, data } = await api(`/ops/api/issues/${selectedIssueId}/proposal/decision`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  $("issueMsg").textContent = res.ok ? `已送出 ${action}` : (data.error || "決策失敗");
+  $("issueMsg").className = res.ok ? "msg ok" : "msg err";
+  if (res.ok) {
+    $("gate1Row").hidden = true;
+    await refreshDashboard();
+    await openIssue(selectedIssueId);
+  }
 }
 
 async function refreshAudit() {
@@ -84,7 +224,7 @@ async function refreshTransitions() {
 }
 
 async function refreshAll() {
-  await Promise.all([refreshHealth(), refreshAudit(), refreshTransitions()]);
+  await Promise.all([refreshDashboard(), refreshInbox(), refreshIssues(), refreshAudit(), refreshTransitions()]);
 }
 
 async function init() {
@@ -124,7 +264,33 @@ $("logoutBtn").addEventListener("click", async () => {
   showLoggedOut(true);
 });
 
+document.querySelectorAll(".tab").forEach((btn) => {
+  btn.addEventListener("click", () => setTab(btn.dataset.tab));
+});
+
 $("refreshBtn").addEventListener("click", refreshAll);
+$("inboxRefresh").addEventListener("click", refreshInbox);
+$("issuesRefresh").addEventListener("click", refreshIssues);
+$("showContact").addEventListener("change", refreshInbox);
+
+$("inboxTable").addEventListener("click", (ev) => {
+  const tr = ev.target.closest("tr[data-fid]");
+  if (tr) openFeedback(tr.dataset.fid);
+});
+$("issueTable").addEventListener("click", (ev) => {
+  const tr = ev.target.closest("tr[data-iid]");
+  if (tr) openIssue(tr.dataset.iid);
+});
+$("gate1Row").addEventListener("click", (ev) => {
+  const btn = ev.target.closest("[data-gate1]");
+  if (btn) decideGate1(btn.dataset.gate1);
+});
+
+$("webhookTestBtn").addEventListener("click", async () => {
+  const { res, data } = await api("/ops/api/notify/test", { method: "POST" });
+  $("dashMsg").textContent = res.ok ? "測試通知已送出" : (data.error || data.reason || "webhook 未設定或送出失敗");
+  $("dashMsg").className = res.ok ? "msg ok" : "msg err";
+});
 
 $("verifyBtn").addEventListener("click", async () => {
   const { data } = await api("/ops/api/audit/verify");

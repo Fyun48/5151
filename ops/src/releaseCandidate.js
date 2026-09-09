@@ -6,6 +6,7 @@ import { validateCodingTaskForQa, getCurrentCodingQA } from "./qaRun.js";
 import { getCurrentCodingStaging } from "./stagingDeploy.js";
 import { releaseConfigFromEnv, buildReleasePolicy, releasePolicyFingerprint, effectiveReleasePolicyFingerprint } from "./release/releasePolicy.js";
 import { buildManifestContent, computeManifestHash, releaseInputFingerprint } from "./release/manifest.js";
+import { notifyConfig, buildWebhookPayload, deliverWebhook } from "./notify/webhook.js";
 
 export const RELEASE_OWNER_ACTIONS = ["APPROVE_RELEASE", "REQUEST_CHANGES", "CANCEL_RELEASE"];
 function iso(now) { return (now instanceof Date ? now : new Date(now || Date.now())).toISOString(); }
@@ -224,15 +225,54 @@ function recordDecision(db, { rc, action, actor, reason, ts }) {
 }
 
 // ── 通知 outbox retry（idempotent；不改 Gate#2 狀態、不重建 RC；無 adapter → 不假造送達） ──
-export function retryReleaseNotification(db, notificationId, { actor = "owner", now = new Date() } = {}) {
+export async function retryReleaseNotification(db, notificationId, {
+  actor = "owner",
+  now = new Date(),
+  env = process.env,
+  sender = null,
+} = {}) {
+  const n = db.prepare("SELECT * FROM release_notification WHERE id=?").get(Number(notificationId));
+  if (!n) throw httpError("notification not found", 404);
+  if (n.status === "sent") return { idempotent: true, status: "sent" };
+
+  const cfg = notifyConfig(env);
+  const deliver = sender || (cfg.configured
+    ? (payload) => deliverWebhook(cfg.url, payload, { timeoutMs: cfg.timeoutMs })
+    : null);
+
+  if (!deliver) {
+    return withImmediateTx(db, () => {
+      db.prepare("UPDATE release_notification SET attempt_count=attempt_count+1, updated_at=? WHERE id=?").run(iso(now), Number(n.id));
+      appendAuditRow(db, { actor, action: "issue.release.notification_failed", entityType: "release_notification", entityId: String(n.id), data: { issue_id: Number(n.issue_id), coding_task_id: Number(n.coding_task_id), manifest_id: Number(n.release_manifest_id), reason: "no_adapter_configured" }, now });
+      return { retried: true, status: "pending", reason: "no_adapter_configured" };
+    });
+  }
+
+  const parsed = parse(n.payload) || {};
+  const payload = buildWebhookPayload({
+    event: "ops.release.candidate",
+    title: parsed.title || `Release candidate #${n.manifest_version}`,
+    text: `議題 #${n.issue_id} 已可審核發布（coding task ${n.coding_task_id}）。`,
+    fields: [
+      { name: "issue", value: n.issue_id },
+      { name: "coding_task", value: n.coding_task_id },
+      { name: "manifest", value: n.manifest_version },
+    ],
+    channel: cfg.channel,
+  });
+  const result = await deliver(payload);
   return withImmediateTx(db, () => {
-    const n = db.prepare("SELECT * FROM release_notification WHERE id=?").get(Number(notificationId));
-    if (!n) throw httpError("notification not found", 404);
-    if (n.status === "sent") return { idempotent: true, status: "sent" };
+    const latest = db.prepare("SELECT * FROM release_notification WHERE id=?").get(Number(n.id));
+    if (!latest) throw httpError("notification not found", 404);
+    if (latest.status === "sent") return { idempotent: true, status: "sent" };
     db.prepare("UPDATE release_notification SET attempt_count=attempt_count+1, updated_at=? WHERE id=?").run(iso(now), Number(n.id));
-    // 無真實 adapter → 維持 pending（誠實，不假造 delivered）。
-    appendAuditRow(db, { actor, action: "issue.release.notification_failed", entityType: "release_notification", entityId: String(n.id), data: { issue_id: Number(n.issue_id), coding_task_id: Number(n.coding_task_id), manifest_id: Number(n.release_manifest_id), reason: "no_adapter_configured" }, now });
-    return { retried: true, status: "pending", reason: "no_adapter_configured" };
+    if (result.ok) {
+      db.prepare("UPDATE release_notification SET status='sent', updated_at=? WHERE id=?").run(iso(now), Number(n.id));
+      appendAuditRow(db, { actor, action: "issue.release.notification_sent", entityType: "release_notification", entityId: String(n.id), data: { issue_id: Number(n.issue_id), coding_task_id: Number(n.coding_task_id), manifest_id: Number(n.release_manifest_id), channel: cfg.channel }, now });
+      return { retried: true, status: "sent" };
+    }
+    appendAuditRow(db, { actor, action: "issue.release.notification_failed", entityType: "release_notification", entityId: String(n.id), data: { issue_id: Number(n.issue_id), coding_task_id: Number(n.coding_task_id), manifest_id: Number(n.release_manifest_id), reason: result.reason || "send_failed" }, now });
+    return { retried: true, status: "pending", reason: result.reason || "send_failed" };
   });
 }
 export function listReleaseNotifications(db, codingTaskId) {

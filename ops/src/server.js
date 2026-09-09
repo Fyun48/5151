@@ -22,7 +22,7 @@ import { makeScanner } from "./malwareScan.js";
 import { listAnalyses, publicAnalysis, reprocessAnalysis, analysisStats, currentAnalysisId, getCurrentFeedbackAnalysis } from "./feedbackAnalysis.js";
 import { makeProvider } from "./ai/provider.js";
 import { analysisConfigFromEnv, startAnalysisLoop } from "./analysisWorker.js";
-import { listIssues, getIssueWithMembers, mergeIssues, splitIssue, moveFeedback } from "./clustering.js";
+import { getIssueWithMembers, mergeIssues, splitIssue, moveFeedback } from "./clustering.js";
 import { makeEmbeddingProvider } from "./ai/embeddingProvider.js";
 import { clusteringConfigFromEnv, startClusteringLoop } from "./clusteringWorker.js";
 import { getCurrentIssueImpact, listAssessments, isImpactStale, calculateAndStoreImpact, currentImpactId } from "./impact.js";
@@ -61,6 +61,8 @@ import {
   retryProductionRelease,
 } from "./release/productionRelease.js";
 import { makeProductionReleaseProvider } from "./release/productionReleaseProvider.js";
+import { getDashboard, listFeedbackInbox, listIssuesWithLifecycle, OPS_PHASE } from "./dashboard.js";
+import { notifyConfig, sendOpsNotification } from "./notify/webhook.js";
 
 // 刻意不使用 express：ops 服務維持「零外部相依」，與本 repo 的 CI（不跑 npm install）相容，
 // 也縮小攻擊面。所有路由用 node:http 手刻的極小 router。
@@ -207,7 +209,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
 
       // ── 公開 API ──
       if (pathname === "/ops/api/health" && method === "GET") {
-        sendJson(res, 200, { ok: true, service: "ops", phase: "13", configured: auth.configured });
+        sendJson(res, 200, { ok: true, service: "ops", phase: OPS_PHASE, configured: auth.configured, webhook: notifyConfig().configured });
         return;
       }
 
@@ -251,6 +253,17 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
             return;
           }
           sendJson(res, 200, { ok: true, id: result.id, duplicate: result.duplicate });
+          if (!result.duplicate && !result.conflict && notifyConfig().onIngest) {
+            sendOpsNotification({
+              event: "ops.feedback.ingested",
+              title: "新的使用者回饋",
+              text: "正式站有一筆新回饋進入 OPS 收件匣。",
+              fields: [
+                { name: "id", value: result.id },
+                { name: "kind", value: payload.kind || "other" },
+              ],
+            }).catch(() => {});
+          }
         } catch (err) {
           sendJson(res, err.status || 400, { error: err.message });
         }
@@ -463,7 +476,32 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
       // ── Phase 5：Issue Candidate 檢視（Owner） ──
       if (pathname === "/ops/api/issues" && method === "GET") {
         if (!runGuard(auth.requireOwner, req, reply)) return;
-        sendJson(res, 200, { items: listIssues(db, { limit: url.searchParams.get("limit") }) });
+        sendJson(res, 200, { items: listIssuesWithLifecycle(db, { limit: url.searchParams.get("limit") }) });
+        return;
+      }
+      if (pathname === "/ops/api/feedback" && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        sendJson(res, 200, listFeedbackInbox(db, {
+          limit: url.searchParams.get("limit"),
+          offset: url.searchParams.get("offset"),
+          includeContact: url.searchParams.get("includeContact") === "1",
+        }));
+        return;
+      }
+      if (pathname === "/ops/api/dashboard" && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        sendJson(res, 200, getDashboard(db));
+        return;
+      }
+      if (pathname === "/ops/api/notify/test" && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        const sent = await sendOpsNotification({
+          event: "ops.notify.test",
+          title: "OPS webhook 測試",
+          text: "這是 Owner 從 Console 送出的測試通知。",
+          fields: [{ name: "actor", value: req.owner.email }],
+        });
+        sendJson(res, sent.ok ? 200 : 503, { ok: sent.ok, ...sent });
         return;
       }
       const issueGet = pathname.match(/^\/ops\/api\/issues\/(\d+)$/);
@@ -900,7 +938,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
       const rcNotifRetry = pathname.match(/^\/ops\/api\/release-notifications\/(\d+)\/retry$/);
       if (rcNotifRetry && method === "POST") {
         if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
-        try { sendJson(res, 200, { ok: true, ...retryReleaseNotification(db, Number(rcNotifRetry[1]), { actor: `owner:${req.owner.email}` }) }); }
+        try { sendJson(res, 200, { ok: true, ...await retryReleaseNotification(db, Number(rcNotifRetry[1]), { actor: `owner:${req.owner.email}` }) }); }
         catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
         return;
       }
@@ -1023,7 +1061,7 @@ export function startServer() {
   }
   http.createServer(handler).listen(port, host, () => {
     // eslint-disable-next-line no-console
-    console.log(`Ops console (Phase 13)：http://${host}:${port}  owner=${auth.configured ? auth.ownerEmail : "(未設定)"}  ingest=${process.env.OPS_INGEST_SECRET ? "on" : "off"}  ai=${aiProvider.available ? aiProvider.name : "off"}  embed=${embProvider.available ? embProvider.name : "off"}  impact=${impactCfg.enabled ? "on" : "off"}  eval=${evalProvider.available ? evalProvider.name : "off"}  proposal=${proposalProvider.available ? proposalProvider.name : "off"}  reeval=${reevalCfg.enabled ? "on" : "off"}  coding=${codingProvider.available && codingRepo.available ? codingProvider.name : "off"}  qa=${qaCfg.enabled && qaRepo.available ? "on" : "off"}  staging=${stagingCfg.enabled && stagingProvider.available && stagingRepo.available ? stagingProvider.name : "off"}  release=${releaseCfg.enabled && releaseRepo.available ? "on" : "off"}`);
+    console.log(`Ops console (Phase ${OPS_PHASE})：http://${host}:${port}  owner=${auth.configured ? auth.ownerEmail : "(未設定)"}  ingest=${process.env.OPS_INGEST_SECRET ? "on" : "off"}  webhook=${notifyConfig().configured ? notifyConfig().channel : "off"}  ai=${aiProvider.available ? aiProvider.name : "off"}  embed=${embProvider.available ? embProvider.name : "off"}  impact=${impactCfg.enabled ? "on" : "off"}  eval=${evalProvider.available ? evalProvider.name : "off"}  proposal=${proposalProvider.available ? proposalProvider.name : "off"}  reeval=${reevalCfg.enabled ? "on" : "off"}  coding=${codingProvider.available && codingRepo.available ? codingProvider.name : "off"}  qa=${qaCfg.enabled && qaRepo.available ? "on" : "off"}  staging=${stagingCfg.enabled && stagingProvider.available && stagingRepo.available ? stagingProvider.name : "off"}  release=${releaseCfg.enabled && releaseRepo.available ? "on" : "off"}`);
   });
   return { db, auth };
 }

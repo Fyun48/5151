@@ -10,7 +10,7 @@
     {
       "name": "ops-dev-server",
       "command": "AUTH_EMAIL=\"${AUTH_EMAIL:-demo@example.com}\" AUTH_PASSWORD=\"${AUTH_PASSWORD:-demopass123}\" npm run dev:ops",
-      "description": "維運自動化 Ops 服務（Phase 1 骨架，Express + node --watch，埠 5154，資料寫入 data-ops/ops.db）。預設只綁 127.0.0.1、不對外公開；Owner 登入沿用 AUTH_EMAIL / AUTH_PASSWORD。開啟 http://localhost:5154"
+      "description": "維運自動化 Ops 服務（Phase 15，埠 5154，資料寫入 data-ops/ops.db）。預設只綁 127.0.0.1、不對外公開；Owner 登入沿用 AUTH_EMAIL / AUTH_PASSWORD。開啟 http://127.0.0.1:5154"
     }
   ],
   "ports": [
