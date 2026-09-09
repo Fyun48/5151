@@ -576,7 +576,7 @@ export function applyOpsSchema(db) {
       result_hash TEXT,
       pr_number INTEGER,
       pr_url TEXT,
-      status TEXT NOT NULL DEFAULT 'pending',   -- pending|claimed|running|changes_ready|failed|failed_retry|cancelled
+      status TEXT NOT NULL DEFAULT 'pending',   -- pending|claimed|running|changes_ready|adopted_pending_qa|failed|failed_retry|cancelled
       attempt_count INTEGER NOT NULL DEFAULT 0,
       max_attempts INTEGER NOT NULL DEFAULT 3,
       error_code TEXT,
@@ -593,9 +593,9 @@ export function applyOpsSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_coding_task_status ON development_coding_task(status, next_attempt_at);
     -- 每個 task_fingerprint 至多一個「未取消」的 task（idempotency：同授權+base+policy 不重複建立/推分支）。
     CREATE UNIQUE INDEX IF NOT EXISTS idx_coding_task_active_fp ON development_coding_task(task_fingerprint) WHERE status != 'cancelled';
-    -- provenance 不可變：completed（changes_ready）後不可竄改綁定欄位。
+    -- provenance 不可變：completed（changes_ready）或 adopted_pending_qa 後不可竄改綁定欄位。
     CREATE TRIGGER IF NOT EXISTS coding_task_provenance_immutable BEFORE UPDATE ON development_coding_task
-    WHEN OLD.status = 'changes_ready' AND (
+    WHEN OLD.status IN ('changes_ready','adopted_pending_qa') AND (
       IFNULL(NEW.proposal_hash,'') <> IFNULL(OLD.proposal_hash,'')
       OR IFNULL(NEW.development_authorization_id,0) <> IFNULL(OLD.development_authorization_id,0)
       OR IFNULL(NEW.base_sha,'') <> IFNULL(OLD.base_sha,'')
@@ -603,6 +603,42 @@ export function applyOpsSchema(db) {
       OR IFNULL(NEW.head_sha,'') <> IFNULL(OLD.head_sha,'')
     )
     BEGIN SELECT RAISE(ABORT, 'coding task provenance is immutable once changes are ready'); END;
+
+    -- Existing Candidate identity（immutable SHA provenance）。無 status 欄：lifecycle 在 state_entity，工作狀態在 coding_task。
+    CREATE TABLE IF NOT EXISTS development_existing_candidate (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      coding_task_id INTEGER NOT NULL UNIQUE,
+      issue_id INTEGER NOT NULL,
+      development_authorization_id INTEGER NOT NULL,
+      proposal_id INTEGER NOT NULL,
+      proposal_version INTEGER NOT NULL,
+      proposal_hash TEXT NOT NULL,
+      repository TEXT NOT NULL,
+      source_type TEXT NOT NULL,
+      source_sha TEXT NOT NULL,
+      source_tree_sha TEXT,
+      pr_number INTEGER,
+      pr_head_sha TEXT,
+      pr_base_branch TEXT,
+      pr_base_sha TEXT,
+      pr_state TEXT,
+      pr_merged INTEGER,
+      pr_url TEXT,
+      adopted_by TEXT NOT NULL,
+      adopted_at TEXT NOT NULL,
+      provenance_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (coding_task_id) REFERENCES development_coding_task(id) ON DELETE RESTRICT,
+      FOREIGN KEY (issue_id) REFERENCES issue_candidate(id) ON DELETE RESTRICT,
+      FOREIGN KEY (development_authorization_id) REFERENCES development_authorization(id) ON DELETE RESTRICT,
+      FOREIGN KEY (proposal_id) REFERENCES issue_proposal(id) ON DELETE RESTRICT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_existing_candidate_repo_sha ON development_existing_candidate(repository, source_sha);
+    CREATE INDEX IF NOT EXISTS idx_existing_candidate_issue ON development_existing_candidate(issue_id, id);
+    CREATE TRIGGER IF NOT EXISTS existing_candidate_no_update BEFORE UPDATE ON development_existing_candidate
+      BEGIN SELECT RAISE(ABORT, 'development_existing_candidate is append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS existing_candidate_no_delete BEFORE DELETE ON development_existing_candidate
+      BEGIN SELECT RAISE(ABORT, 'development_existing_candidate is append-only'); END;
 
     -- Phase 11：獨立自動化 QA & 安全審查。針對「確切」的 Phase-10 Coding Task 結果做獨立檢核。
     -- Coding Provider 自測不算核准證據；Phase 11 獨立重算 diff、跑 build/lint/tests、安全/範圍審查，
@@ -1131,7 +1167,58 @@ export function applyOpsSchema(db) {
   `);
   upgradeMigrationSafetyImmutability(db);
   upgradeProductionReleaseImmutability(db);
+  upgradeCodingTaskProvenanceImmutability(db);
   return db;
+}
+
+// CREATE TRIGGER IF NOT EXISTS 不會升級已存在的舊 trigger；每次開庫重裝 adopted_pending_qa 鎖定。
+export function upgradeCodingTaskProvenanceImmutability(db) {
+  db.exec(`
+    DROP TRIGGER IF EXISTS coding_task_provenance_immutable;
+    CREATE TRIGGER coding_task_provenance_immutable BEFORE UPDATE ON development_coding_task
+    WHEN OLD.status IN ('changes_ready','adopted_pending_qa') AND (
+      IFNULL(NEW.proposal_hash,'') <> IFNULL(OLD.proposal_hash,'')
+      OR IFNULL(NEW.development_authorization_id,0) <> IFNULL(OLD.development_authorization_id,0)
+      OR IFNULL(NEW.base_sha,'') <> IFNULL(OLD.base_sha,'')
+      OR IFNULL(NEW.task_fingerprint,'') <> IFNULL(OLD.task_fingerprint,'')
+      OR IFNULL(NEW.head_sha,'') <> IFNULL(OLD.head_sha,'')
+    )
+    BEGIN SELECT RAISE(ABORT, 'coding task provenance is immutable once changes are ready'); END;
+    CREATE TABLE IF NOT EXISTS development_existing_candidate (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      coding_task_id INTEGER NOT NULL UNIQUE,
+      issue_id INTEGER NOT NULL,
+      development_authorization_id INTEGER NOT NULL,
+      proposal_id INTEGER NOT NULL,
+      proposal_version INTEGER NOT NULL,
+      proposal_hash TEXT NOT NULL,
+      repository TEXT NOT NULL,
+      source_type TEXT NOT NULL,
+      source_sha TEXT NOT NULL,
+      source_tree_sha TEXT,
+      pr_number INTEGER,
+      pr_head_sha TEXT,
+      pr_base_branch TEXT,
+      pr_base_sha TEXT,
+      pr_state TEXT,
+      pr_merged INTEGER,
+      pr_url TEXT,
+      adopted_by TEXT NOT NULL,
+      adopted_at TEXT NOT NULL,
+      provenance_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (coding_task_id) REFERENCES development_coding_task(id) ON DELETE RESTRICT,
+      FOREIGN KEY (issue_id) REFERENCES issue_candidate(id) ON DELETE RESTRICT,
+      FOREIGN KEY (development_authorization_id) REFERENCES development_authorization(id) ON DELETE RESTRICT,
+      FOREIGN KEY (proposal_id) REFERENCES issue_proposal(id) ON DELETE RESTRICT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_existing_candidate_repo_sha ON development_existing_candidate(repository, source_sha);
+    CREATE INDEX IF NOT EXISTS idx_existing_candidate_issue ON development_existing_candidate(issue_id, id);
+    CREATE TRIGGER IF NOT EXISTS existing_candidate_no_update BEFORE UPDATE ON development_existing_candidate
+      BEGIN SELECT RAISE(ABORT, 'development_existing_candidate is append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS existing_candidate_no_delete BEFORE DELETE ON development_existing_candidate
+      BEGIN SELECT RAISE(ABORT, 'development_existing_candidate is append-only'); END;
+  `);
 }
 
 // CREATE TRIGGER IF NOT EXISTS 不會升級已存在的舊 trigger；每次開庫重裝全欄位不可變。

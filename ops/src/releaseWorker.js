@@ -14,7 +14,7 @@ export function createReleaseCandidatesForEligible(db, { repo, env = process.env
     `SELECT t.id FROM development_coding_task t
      JOIN development_qa_current qc ON qc.coding_task_id=t.id AND qc.final_result='PASS'
      JOIN development_staging_current sc ON sc.coding_task_id=t.id AND sc.validation_result='PASS'
-     WHERE t.status='changes_ready'
+     WHERE t.status IN ('changes_ready','adopted_pending_qa')
        AND NOT EXISTS (SELECT 1 FROM development_release_candidate r WHERE r.coding_task_id=t.id AND r.head_sha=t.head_sha AND r.status!='cancelled')
      ORDER BY t.id ASC LIMIT ?`,
   ).all(Math.max(1, limit));

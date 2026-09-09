@@ -154,6 +154,12 @@ export function createCodingTask(db, { issueId, authorizationId = null, provider
     // idempotency：同 fingerprint 已有未取消 task → 回傳現有（不重複建立/推分支）。
     const existing = db.prepare("SELECT * FROM development_coding_task WHERE task_fingerprint=? AND status!='cancelled' ORDER BY id DESC LIMIT 1").get(fingerprint);
     if (existing) return { idempotent: true, task: publicCodingTask(existing) };
+    const adopted = db.prepare(
+      `SELECT 1 FROM development_existing_candidate c
+       JOIN development_coding_task t ON t.id=c.coding_task_id
+       WHERE c.development_authorization_id=? AND t.status!='cancelled'`,
+    ).get(Number(auth.id));
+    if (adopted) throw httpError("authorization already has an adopted existing candidate", 409);
 
     const snapshot = buildApprovedSnapshot(proposal);
     const res = db.prepare(
@@ -226,6 +232,7 @@ export async function executeCodingTask(db, taskRow, { provider, repo, pr, selfT
   const task = db.prepare("SELECT * FROM development_coding_task WHERE id=?").get(Number(taskRow.id));
   if (!task) return { skipped: true, reason: "task_missing" };
   if (task.status === "changes_ready") return { idempotent: true, task: publicCodingTask(task) };
+  if (task.status === "adopted_pending_qa") return { skipped: true, reason: "existing_candidate_not_executable" };
   if (task.status === "cancelled") return { skipped: true, reason: "cancelled" };
 
   // 授權失效 → 不啟動 coding（記錄 authorization_invalidated，標記需取消）。
@@ -372,8 +379,8 @@ export function cancelCodingTask(db, taskId, { actor = "owner", reason = null, n
     const task = db.prepare("SELECT * FROM development_coding_task WHERE id=?").get(Number(taskId));
     if (!task) throw httpError("coding task not found", 404);
     if (task.status === "cancelled") return { idempotent: true, task: publicCodingTask(task) };
-    if (task.status === "changes_ready") {
-      // 已產出變更後取消：標記需 superseded review，不刪除 PR/歷史。
+    if (task.status === "changes_ready" || task.status === "adopted_pending_qa") {
+      // 已產出變更／已收編後取消：標記需 superseded review，不刪除 PR/歷史。
       db.prepare("UPDATE development_coding_task SET error_code=? WHERE id=?").run(`owner_cancelled_after_changes:${reason ? String(reason).slice(0, 200) : ""}`, Number(task.id));
     }
     db.prepare("UPDATE development_coding_task SET status='cancelled' WHERE id=?").run(Number(task.id));
@@ -395,11 +402,26 @@ export function getIssueCodingView(db, issueId) {
   const auth = db.prepare("SELECT * FROM development_authorization WHERE issue_id=? AND status='active' ORDER BY id DESC LIMIT 1").get(Number(issueId)) || null;
   const tasks = listCodingTasks(db, { issueId });
   const snapshotIdentity = auth ? { proposal_id: Number(auth.proposal_id), proposal_version: Number(auth.proposal_version), proposal_hash: auth.proposal_hash } : null;
+  const existingRow = db.prepare("SELECT * FROM development_existing_candidate WHERE issue_id=? ORDER BY id DESC LIMIT 1").get(Number(issueId));
+  const existing_candidate = existingRow ? {
+    id: Number(existingRow.id),
+    coding_task_id: Number(existingRow.coding_task_id),
+    repository: existingRow.repository,
+    source_type: existingRow.source_type,
+    source_sha: existingRow.source_sha,
+    source_tree_sha: existingRow.source_tree_sha,
+    pr_number: existingRow.pr_number == null ? null : Number(existingRow.pr_number),
+    pr_state: existingRow.pr_state,
+    pr_merged: existingRow.pr_merged == null ? null : Number(existingRow.pr_merged) === 1,
+    adopted_by: existingRow.adopted_by,
+    adopted_at: existingRow.adopted_at,
+  } : null;
   return {
     issue_id: Number(issueId),
     active_authorization: auth ? { id: Number(auth.id), proposal_id: Number(auth.proposal_id), proposal_version: Number(auth.proposal_version), proposal_hash: auth.proposal_hash, status: auth.status, approved_by: auth.approved_by, approved_at: auth.approved_at } : null,
     approved_snapshot_identity: snapshotIdentity,
     tasks,
     latest_task: tasks[0] || null,
+    existing_candidate,
   };
 }

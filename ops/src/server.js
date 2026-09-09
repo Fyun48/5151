@@ -37,6 +37,8 @@ import { proposalWorkerConfigFromEnv, startProposalLoop } from "./proposalWorker
 import { getReevaluationView, ownerManualReevaluate, ownerUnblock } from "./reevaluation.js";
 import { reevaluationWorkerConfigFromEnv, startReevaluationLoop } from "./reevaluationWorker.js";
 import { getIssueCodingView, getCodingTask, cancelCodingTask } from "./codingTask.js";
+import { adoptExistingCandidate } from "./adoptExistingCandidate.js";
+import { makeGithubRead } from "./coding/githubRead.js";
 import { codingWorkerConfigFromEnv, startCodingLoop } from "./codingWorker.js";
 import { makeCodingProvider } from "./coding/provider.js";
 import { makeCodingRepo } from "./coding/gitRepo.js";
@@ -175,8 +177,9 @@ function runGuard(mw, req, reply) {
   return passed;
 }
 
-export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret = process.env.OPS_INGEST_SECRET || "", storage = null, scanner = null, codingRepo = null, productionReleaseProvider = null }) {
+export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret = process.env.OPS_INGEST_SECRET || "", storage = null, scanner = null, codingRepo = null, githubRead = null, productionReleaseProvider = null }) {
   const releaseRepo = codingRepo || makeCodingRepo();
+  const adoptGithub = githubRead || makeGithubRead();
   const releaseProvider = productionReleaseProvider || makeProductionReleaseProvider();
   if (!db) throw new Error("createHandler requires db");
   if (!auth) throw new Error("createHandler requires auth");
@@ -677,6 +680,37 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
         return;
       }
+      const codingAdopt = pathname.match(/^\/ops\/api\/issues\/(\d+)\/coding\/adopt$/);
+      if (codingAdopt && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {};
+        try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          const r = await adoptExistingCandidate(db, {
+            issueId: Number(codingAdopt[1]),
+            authorizationId: b.authorization_id ?? null,
+            sourceType: b.source_type,
+            prNumber: b.pr_number ?? null,
+            sourceSha: b.source_sha ?? null,
+            actor: `owner:${req.owner.email}`,
+            githubRead: adoptGithub,
+            repo: releaseRepo,
+          });
+          sendJson(res, r.idempotent ? 200 : 201, {
+            ok: true,
+            candidate_id: r.candidate?.id ?? null,
+            coding_task_id: r.coding_task?.id ?? null,
+            source_sha: r.candidate?.source_sha ?? r.coding_task?.head_sha ?? null,
+            state: r.state,
+            next_required_gate: r.next_required_gate,
+            verified_provenance: r.provenance,
+            candidate: r.candidate,
+            coding_task: r.coding_task,
+            idempotent: !!r.idempotent,
+          });
+        } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
 
       // ── Phase 11：獨立自動化 QA（Owner 檢視 + 重跑；不 merge、不部署） ──
       const qaGet = pathname.match(/^\/ops\/api\/coding-tasks\/(\d+)\/qa$/);
@@ -919,8 +953,8 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
 }
 
 // 相容舊測試/呼叫：createApp 回傳一個 { listen } 介面（用 node:http 包裝 handler）。
-export function createApp({ db, auth, publicDir = PUBLIC_DIR, ingestSecret = process.env.OPS_INGEST_SECRET || "", storage = null, scanner = null, codingRepo = null, productionReleaseProvider = null }) {
-  const handler = createHandler({ db, auth, publicDir, ingestSecret, storage, scanner, codingRepo, productionReleaseProvider });
+export function createApp({ db, auth, publicDir = PUBLIC_DIR, ingestSecret = process.env.OPS_INGEST_SECRET || "", storage = null, scanner = null, codingRepo = null, githubRead = null, productionReleaseProvider = null }) {
+  const handler = createHandler({ db, auth, publicDir, ingestSecret, storage, scanner, codingRepo, githubRead, productionReleaseProvider });
   return {
     handler,
     listen(...args) {

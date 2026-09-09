@@ -133,6 +133,61 @@ $("verifyBtn").addEventListener("click", async () => {
     : `鏈異常 ✗  在 #${data.brokenAt}（${data.reason}）`;
 });
 
+$("adoptSourceType").addEventListener("change", () => {
+  const pr = $("adoptSourceType").value === "existing_pr";
+  $("adoptPrWrap").hidden = !pr;
+  $("adoptShaWrap").hidden = pr;
+});
+
+$("adoptForm").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const msg = $("adoptMsg");
+  const box = $("adoptResult");
+  msg.textContent = "查證並收編中…";
+  msg.className = "msg";
+  box.hidden = true;
+  const issueId = String($("adoptIssueId").value || "").trim();
+  if (!/^\d+$/.test(issueId)) {
+    msg.textContent = "請輸入有效的 Issue ID";
+    msg.className = "msg err";
+    return;
+  }
+  const sourceType = $("adoptSourceType").value;
+  const body = { source_type: sourceType };
+  const authId = String($("adoptAuthId").value || "").trim();
+  if (authId) body.authorization_id = Number(authId);
+  if (sourceType === "existing_pr") body.pr_number = Number($("adoptPrNumber").value);
+  else body.source_sha = String($("adoptSha").value || "").trim().toLowerCase();
+  const { res, data } = await api(`/ops/api/issues/${issueId}/coding/adopt`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    msg.textContent = data.error || "Adoption 失敗";
+    msg.className = "msg err";
+    return;
+  }
+  msg.textContent = data.idempotent
+    ? "已存在相同 Candidate（冪等回傳）。Pending Independent QA"
+    : "Adoption 完成。Pending Independent QA";
+  msg.className = "msg ok";
+  const p = data.verified_provenance || {};
+  box.hidden = false;
+  box.textContent = [
+    `repository=${p.repository || data.candidate?.repository || ""}`,
+    `source_type=${p.source_type || data.candidate?.source_type || ""}`,
+    `source_sha=${data.source_sha || ""}`,
+    `pr_number=${p.pr_number == null ? "—" : p.pr_number}`,
+    `pr_state=${p.pr_state || "—"}`,
+    `pr_merged=${p.pr_merged == null ? "—" : p.pr_merged}`,
+    `candidate_id=${data.candidate_id}`,
+    `state=${data.state}`,
+    `next_required_gate=${data.next_required_gate}`,
+    "Pending Independent QA",
+  ].join("\n");
+});
+
 $("checkpointBtn").addEventListener("click", async () => {
   const { res, data } = await api("/ops/api/audit/checkpoint", { method: "POST" });
   if (res.ok && data.checkpoint) {

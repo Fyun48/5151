@@ -38,6 +38,7 @@ main { max-width: 1000px; margin: 0 auto; padding: 20px; display: grid; gap: 16p
 .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .grow { flex: 1; }
 label { display: block; font-size: 13px; margin: 10px 0 4px; }
+select,
 input {
   width: 100%;
   padding: 9px 11px;

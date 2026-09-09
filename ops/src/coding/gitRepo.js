@@ -171,6 +171,33 @@ export function makeGitRepo(repoPath, opts = {}) {
         return false;
       }
     },
+
+    objectExists(sha) {
+      if (!sha) return false;
+      try {
+        git(["cat-file", "-e", `${sha}^{commit}`]);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+
+    parentSha(sha) {
+      if (!sha) return null;
+      try { return git(["rev-parse", `${sha}^`]); } catch { return null; }
+    },
+
+    // 只為取得 immutable object；取得後仍以 exact SHA 驗證，不用 branch tip 當 identity。
+    fetchSha(sha, { pullNumber = null } = {}) {
+      if (!sha) return false;
+      if (this.objectExists(sha)) return true;
+      if (pullNumber) {
+        try { git(["fetch", "-q", remote, `pull/${Number(pullNumber)}/head`]); } catch { /* noop */ }
+        if (this.objectExists(sha)) return true;
+      }
+      try { git(["fetch", "-q", remote, sha]); } catch { /* noop */ }
+      return this.objectExists(sha);
+    },
   };
 }
 

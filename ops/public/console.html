@@ -41,6 +41,33 @@
       </section>
 
       <section class="card">
+        <h2>Existing Candidate Adoption</h2>
+        <p class="hint">將既有 GitHub PR 或 exact commit 納入治理。Server 會查證 Fyun48/5151；收編後只進入 Pending Independent QA，不會因此通過任何後續 gate。</p>
+        <form id="adoptForm" autocomplete="off">
+          <label for="adoptIssueId">Issue ID</label>
+          <input id="adoptIssueId" name="issue_id" inputmode="numeric" required />
+          <label for="adoptAuthId">Development Authorization ID（可選；預設使用該 issue 的 active 授權）</label>
+          <input id="adoptAuthId" name="authorization_id" inputmode="numeric" />
+          <label for="adoptSourceType">來源</label>
+          <select id="adoptSourceType" name="source_type">
+            <option value="existing_pr">Existing PR</option>
+            <option value="existing_commit">Existing commit</option>
+          </select>
+          <div id="adoptPrWrap">
+            <label for="adoptPrNumber">PR number</label>
+            <input id="adoptPrNumber" name="pr_number" inputmode="numeric" />
+          </div>
+          <div id="adoptShaWrap" hidden>
+            <label for="adoptSha">Exact commit SHA（40 字元）</label>
+            <input id="adoptSha" name="source_sha" maxlength="40" spellcheck="false" />
+          </div>
+          <button type="submit" class="primary">確認 Adoption</button>
+          <p class="msg" id="adoptMsg"></p>
+          <div id="adoptResult" class="kv" hidden></div>
+        </form>
+      </section>
+
+      <section class="card">
         <div class="row">
           <h2>稽核鏈（Audit Log）</h2>
           <span class="grow"></span>

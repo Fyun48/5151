@@ -12,7 +12,7 @@ export function createQaForReadyTasks(db, { repo, env = process.env, now = new D
   if (!repo || !repo.available) return [];
   const rows = db.prepare(
     `SELECT t.* FROM development_coding_task t
-     WHERE t.status='changes_ready'
+     WHERE t.status IN ('changes_ready','adopted_pending_qa')
        AND NOT EXISTS (SELECT 1 FROM development_qa_run q WHERE q.coding_task_id=t.id AND q.head_sha=t.head_sha AND q.status!='cancelled')
      ORDER BY t.id ASC LIMIT ?`,
   ).all(Math.max(1, limit));

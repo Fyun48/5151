@@ -12,6 +12,7 @@ export const QA_CLAIM_STALE_MS = 15 * 60 * 1000;
 const BACKOFF_BASE_MS = 5000;
 const BACKOFF_CAP_MS = 30 * 60 * 1000;
 const CODING_READY = "changes_ready";
+export const QA_ELIGIBLE_CODING_STATUSES = new Set(["changes_ready", "adopted_pending_qa"]);
 
 function iso(now) { return (now instanceof Date ? now : new Date(now || Date.now())).toISOString(); }
 function backoffMs(attempt) { return Math.min(BACKOFF_BASE_MS * 2 ** Math.max(0, attempt - 1), BACKOFF_CAP_MS); }
@@ -26,7 +27,7 @@ export function validateCodingTaskForQa(db, codingTaskId) {
   const task = db.prepare("SELECT * FROM development_coding_task WHERE id=?").get(Number(codingTaskId));
   if (!task) throw httpError("coding task not found", 404);
   if (task.status === "cancelled") throw httpError("coding task cancelled; no fresh QA", 409);
-  if (task.status !== CODING_READY) throw httpError(`coding task not eligible for QA (status=${task.status})`, 409);
+  if (!QA_ELIGIBLE_CODING_STATUSES.has(task.status)) throw httpError(`coding task not eligible for QA (status=${task.status})`, 409);
   for (const f of ["development_authorization_id", "proposal_id", "proposal_version", "proposal_hash", "base_sha", "head_sha", "coding_branch", "result_hash"]) {
     if (task[f] == null || task[f] === "") throw httpError(`coding task missing ${f}`, 409);
   }
