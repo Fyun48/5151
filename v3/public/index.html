@@ -635,8 +635,10 @@
       z-index: 117;
       transition: opacity 0.2s ease, transform 0.2s ease;
     }
-    body.panel-collapsed:not(:has(.list-head-sticky.filter-compact)) .mobile-help-dock {
-      right: calc(18px + var(--touch) + 4px);
+    @media (min-width: 881px) {
+      body.panel-collapsed:not(:has(.list-head-sticky.filter-compact)) .mobile-help-dock {
+        right: calc(18px + var(--touch) + 4px);
+      }
     }
     .mobile-help-dock.is-idle-hidden {
       opacity: 0;
@@ -1404,11 +1406,15 @@
     body.panel-collapsed .list-head-sticky:not(.filter-compact) {
       padding-bottom: 16px;
     }
-    body.search-bar-hidden .list-head-sticky {
-      max-height: 0;
+    body.search-bar-hidden .list-head-sticky,
+    body.search-bar-hidden.panel-collapsed .list-head-sticky,
+    body.search-bar-hidden.panel-collapsed .list-head-sticky.filter-compact,
+    body.search-bar-hidden.panel-collapsed .list-head-sticky:not(.filter-compact) {
+      max-height: 0 !important;
       margin: 0 !important;
       padding: 0 !important;
       border: 0 !important;
+      overflow: hidden !important;
       pointer-events: none;
     }
     body.search-bar-hidden .list-head-sticky .filter-mini-btn {
@@ -2420,7 +2426,8 @@
         gap: 4px;
         position: fixed;
         left: 8px;
-        right: auto;
+        right: auto !important;
+        width: max-content;
         bottom: calc(58px + env(safe-area-inset-bottom, 0px));
         z-index: 117;
         opacity: 1;
@@ -9101,9 +9108,13 @@
       const reduced = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       function hide() { document.body.classList.add("search-bar-hidden"); }
       function show() { document.body.classList.remove("search-bar-hidden"); }
-      function onScroll() {
+      function onScroll(ev) {
+        const t = ev && ev.target;
+        if (t && t !== document && t !== document.documentElement && t !== document.body) {
+          if (typeof t.closest === "function" && t.closest("#listHeadSticky")) return;
+        }
         const active = document.activeElement;
-        if (active && (active.id === "q" || (active.closest?.("#listHeadSticky") && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")))) {
+        if (active && active.closest?.("#listHeadSticky")) {
           show();
           return;
         }

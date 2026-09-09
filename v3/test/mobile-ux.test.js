@@ -17,8 +17,8 @@ test("A: mobile help dock exists, reuses existing dialogs, hidden on desktop/gue
   assert.match(html, /\$\("mobileFeedbackBtn"\)\?\.addEventListener\("click", openFeedbackDialog\)/);
   // 桌面橫排在 × 左側 4px；手機直排靠左、距底欄 1px；guest/no-session 隱藏
   assert.match(html, /\.mobile-help-dock \{[\s\S]*?flex-direction: row;[\s\S]*?gap: 4px;[\s\S]*?bottom: 28px;/);
-  assert.match(html, /right: calc\(18px \+ var\(--touch\) \+ 4px\)/);
-  assert.match(html, /flex-direction: column;[\s\S]*?left: 8px;[\s\S]*?bottom: calc\(58px \+ env\(safe-area-inset-bottom, 0px\)\);/);
+  assert.match(html, /@media \(min-width: 881px\) \{[\s\S]*?right: calc\(18px \+ var\(--touch\) \+ 4px\)/);
+  assert.match(html, /flex-direction: column;[\s\S]*?left: 8px;[\s\S]*?right: auto !important;[\s\S]*?bottom: calc\(58px \+ env\(safe-area-inset-bottom, 0px\)\);/);
   assert.match(html, /bottom: calc\(58px \+ env\(safe-area-inset-bottom, 0px\)\);/);
   assert.match(html, /html\.no-session \.mobile-help-dock,\s*\n\s*body\.role-guest \.mobile-help-dock \{ display: none !important; \}/);
   assert.match(html, /bindSearchBarScrollHide/);

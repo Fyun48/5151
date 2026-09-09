@@ -42,7 +42,8 @@ test("mobile help dock stays left of bottom nav; desktop dock sits left of filte
   assert.match(html, /setTimeout\(hideDock, 1000\)/);
   assert.match(html, /bindSearchBarScrollHide/);
   assert.match(html, /search-bar-hidden/);
-  assert.match(html, /body\.search-bar-hidden \.list-head-sticky/);
+  assert.match(html, /body\.search-bar-hidden\.panel-collapsed \.list-head-sticky:not\(\.filter-compact\)/);
+  assert.match(html, /t\.closest\("#listHeadSticky"\)/);
   assert.match(html, /prefers-reduced-motion: reduce/);
   assert.match(html, /is-compact/);
   assert.match(html, /aria-label="常見問題 Q&amp;A"/);
