@@ -11,7 +11,8 @@ process.env.DATA_DIR = mkdtempSync(path.join(os.tmpdir(), "mm-data-"));
 import {
   ensureMemberMediaSchema, saveMemberMedia, listMemberMedia, deleteMemberMedia, getOwnedMedia,
   ownsMediaUrl, isMemberMediaUrl, mediaKeyFromUrl, mediaQuotaForPlan, isMediaReferenced,
-  memberMediaDiskName, memberMediaFilePath, countActiveMedia, memberMediaDir,
+  memberMediaDiskName, memberMediaFilePath, memberMediaPublicFilePath,
+  memberMediaInternalOriginalName, countActiveMedia, memberMediaDir,
 } from "../src/memberMedia.js";
 
 const fakeProcessor = async (buf) => ({
@@ -86,6 +87,9 @@ test("url helpers reject spoofed/traversal names", () => {
   assert.equal(memberMediaDiskName("../secret.jpg"), "");
   assert.equal(memberMediaDiskName("/etc/passwd"), "");
   assert.equal(memberMediaFilePath("../../etc/passwd"), "");
+  assert.equal(memberMediaDiskName(`${"a".repeat(32)}_o.jpg`), "");
+  assert.equal(memberMediaPublicFilePath(`${"a".repeat(32)}_o.jpg`), "");
+  assert.equal(memberMediaInternalOriginalName(`${"a".repeat(32)}.jpg`), "");
 });
 
 test("processing failure leaves no DB row and no orphan files", async () => {
@@ -125,6 +129,7 @@ test("listMemberMedia returns quota + used + items (active only)", async () => {
   assert.equal(view.used, 2);
   assert.equal(view.items.length, 2);
   assert.ok(view.items[0].thumb_url.endsWith("_t.jpg"));
+  assert.equal(view.items.some((item) => "original_key" in item), false);
 });
 
 test.after(() => { try { rmSync(process.env.DATA_DIR, { recursive: true, force: true }); } catch { /* ignore */ } });

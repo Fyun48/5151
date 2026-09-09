@@ -18,6 +18,9 @@ import {
   saveMemberMedia,
   reprocessMemberMediaDisplay,
   memberMediaDir,
+  memberMediaFilePath,
+  memberMediaPublicFilePath,
+  memberMediaInternalOriginalPath,
 } from "../src/memberMedia.js";
 
 const jpeg = () => Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(24, 2)]);
@@ -83,11 +86,40 @@ test("save + retry keeps a single watermark and preserves original bytes", async
   };
   const item = await saveMemberMedia(db, 3, jpeg(), { processor: fakeProcessor, watermarker });
   assert.equal(item.watermarked, true);
-  const display = readFileSync(path.join(memberMediaDir(), item.url.replace("/media/lib/", "")));
-  const original = readFileSync(path.join(memberMediaDir(), item.url.replace("/media/lib/", "").replace(".jpg", "_o.jpg")));
+  assert.equal("original_key" in item, false);
+  const displayName = item.url.replace("/media/lib/", "");
+  const originalName = displayName.replace(".jpg", "_o.jpg");
+  const thumbName = displayName.replace(".jpg", "_t.jpg");
+  const display = readFileSync(path.join(memberMediaDir(), displayName));
+  const original = readFileSync(path.join(memberMediaDir(), originalName));
+  const thumb = readFileSync(path.join(memberMediaDir(), thumbName));
   assert.equal(original.toString(), "MAIN-RAW-IMAGE");
   assert.ok(display.includes(Buffer.from("-W")));
+  assert.ok(bufferHasWatermarkMarker(display));
+  assert.ok(thumb.includes(Buffer.from("-W")));
+  assert.ok(bufferHasWatermarkMarker(thumb));
+  assert.ok(memberMediaPublicFilePath(displayName));
+  assert.ok(memberMediaPublicFilePath(thumbName));
+  assert.equal(memberMediaFilePath(originalName), "");
+  assert.equal(memberMediaPublicFilePath(originalName), "");
+  assert.ok(memberMediaInternalOriginalPath(originalName));
   const retry = await reprocessMemberMediaDisplay(db, 3, item.id, { watermarker });
   assert.equal(retry.skipped, true);
-  assert.equal(overlays, 1);
+  assert.equal("original_key" in retry, false);
+  assert.equal(overlays, 2);
+});
+
+test("reprocess reads the private original and omits original_key", async () => {
+  const db = open();
+  const watermarker = async (buf) => ({
+    buffer: Buffer.concat([buf, Buffer.from("-W"), Buffer.from(`\n${WATERMARK_MARKER}\n`)]),
+    watermarked: 1,
+    skipped: false,
+  });
+  const item = await saveMemberMedia(db, 4, jpeg(), { processor: fakeProcessor, watermarker });
+  db.prepare("UPDATE member_media SET watermarked=0 WHERE id=?").run(item.id);
+  const again = await reprocessMemberMediaDisplay(db, 4, item.id, { watermarker });
+  assert.equal(again.skipped, false);
+  assert.equal("original_key" in again, false);
+  assert.ok(bufferHasWatermarkMarker(readFileSync(path.join(memberMediaDir(), item.url.replace("/media/lib/", "")))));
 });

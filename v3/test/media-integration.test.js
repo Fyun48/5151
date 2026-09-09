@@ -8,6 +8,7 @@ import { listingPhotoUrls } from "../src/selfListings.js";
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const read = (p) => readFileSync(path.join(dir, "..", p), "utf8");
 const server = read("src/server.js");
+const memberMedia = read("src/memberMedia.js");
 const auth = read("src/auth.js");
 const html = read("public/index.html");
 const listingHtml = read("public/listing.html");
@@ -28,15 +29,17 @@ test("server exposes media library + public sharing routes with ownership check"
   assert.match(server, /app\.get\("\/api\/media"/);
   assert.match(server, /app\.post\("\/api\/media"/);
   assert.match(server, /app\.delete\("\/api\/media\/:id"/);
-  assert.match(server, /app\.get\("\/media\/lib\/:file"/);
+  assert.match(server, /app\.get\("\/media\/lib\/:file", servePublicMemberMedia\)/);
   assert.match(server, /app\.get\("\/api\/public\/self-listing\/:id"/);
   assert.match(server, /app\.get\("\/l\/:id"/);
   // 刊登時驗證素材所有權（擋盜連他人 media）
   assert.match(server, /assertOwnsMemberMediaUrls\(session\.userId/);
-  // 內容定址檔可長快取
-  assert.match(server, /max-age=31536000, immutable/);
-  // DATA_DIR 相對路徑時 sendFile 仍需絕對路徑
-  assert.match(server, /sendFile\(path\.resolve\(full\)\)/);
+  assert.match(memberMedia, /export function servePublicMemberMedia/);
+  assert.match(memberMedia, /memberMediaPublicFilePath\(req\.params\.file\)/);
+  assert.match(memberMedia, /max-age=31536000, immutable/);
+  assert.match(memberMedia, /sendFile\(path\.resolve\(full\)\)/);
+  assert.match(memberMedia, /PUBLIC_KEY_RE = \/\^\[a-f0-9\]\{32\}\(_t\)\?\\.jpg\$\//);
+  assert.doesNotMatch(memberMedia, /PUBLIC_KEY_RE = \/\^\[a-f0-9\]\{32\}\(_t\|_o\)\?\\.jpg\$\//);
 });
 
 test("public paths allow media/lib, public API, and /l share page (no login wall)", () => {

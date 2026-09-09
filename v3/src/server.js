@@ -211,7 +211,7 @@ import {
   selfPhotoFilePath,
 } from "./selfPhotos.js";
 import { IMAGE_MAX_UPLOAD_BYTES } from "./imageProcess.js";
-import { memberMediaFilePath } from "./memberMedia.js";
+import { servePublicMemberMedia } from "./memberMedia.js";
 import { CITIES } from "./regions.js";
 import { mailConfigured, sendMail } from "./mail.js";
 import { queueAccountMail } from "./systemMail.js";
@@ -1652,14 +1652,8 @@ app.delete("/api/media/:id", (req, res) => {
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
 
-// 素材庫檔案（本站上傳、已正規化、內容定址）。公開可讀（供公開分享頁顯示照片）。
-app.get("/media/lib/:file", (req, res) => {
-  const full = memberMediaFilePath(req.params.file);
-  if (!full) { res.status(404).end(); return; }
-  res.setHeader("Content-Type", "image/jpeg");
-  res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-  res.sendFile(path.resolve(full));
-});
+// 素材庫公開顯示檔（主圖／已浮水印縮圖）。未浮水印 original 不經此路由解析。
+app.get("/media/lib/:file", servePublicMemberMedia);
 
 // ── 公開分享：站內會員刊登（未登入可看主要內容；只輸出白名單公開欄位） ──
 app.get("/api/public/self-listing/:id", (req, res) => {

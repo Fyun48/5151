@@ -65,10 +65,30 @@ export function ensureMemberMediaSchema(db) {
   }
 }
 
-const KEY_RE = /^[a-f0-9]{32}(_t|_o)?\.jpg$/;
-export function memberMediaDiskName(name) {
+const PUBLIC_KEY_RE = /^[a-f0-9]{32}(_t)?\.jpg$/;
+const INTERNAL_ORIGINAL_RE = /^[a-f0-9]{32}_o\.jpg$/;
+
+function safeMediaName(name, re) {
   const base = String(name || "").split(/[/\\]/).pop() || "";
-  return KEY_RE.test(base) ? base : "";
+  return re.test(base) ? base : "";
+}
+
+function resolveMediaFile(name, re) {
+  const file = safeMediaName(name, re);
+  if (!file) return "";
+  const full = path.join(memberMediaDir(), file);
+  return existsSync(full) ? full : "";
+}
+
+// 公開可服務的顯示檔（主圖／縮圖）。不含未浮水印 original。
+export function memberMediaDiskName(name) {
+  return safeMediaName(name, PUBLIC_KEY_RE);
+}
+export function memberMediaPublicName(name) {
+  return memberMediaDiskName(name);
+}
+export function memberMediaInternalOriginalName(name) {
+  return safeMediaName(name, INTERNAL_ORIGINAL_RE);
 }
 export function isMemberMediaUrl(value) {
   return /^\/media\/lib\/[a-f0-9]{32}\.jpg$/.test(String(value || "").trim());
@@ -77,12 +97,26 @@ export function mediaKeyFromUrl(url) {
   const m = String(url || "").trim().match(/^\/media\/lib\/([a-f0-9]{32}\.jpg)$/);
   return m ? m[1] : "";
 }
-export function memberMediaFilePath(name) {
-  const file = memberMediaDiskName(name);
-  if (!file) return "";
-  const full = path.join(memberMediaDir(), file);
-  return existsSync(full) ? full : "";
+export function memberMediaPublicFilePath(name) {
+  return resolveMediaFile(name, PUBLIC_KEY_RE);
 }
+// 公開路由專用；與 memberMediaPublicFilePath 相同，絕不解析 *_o.jpg。
+export function memberMediaFilePath(name) {
+  return memberMediaPublicFilePath(name);
+}
+// 僅供內部重處理讀取未浮水印 original；不得接到公開路由。
+export function memberMediaInternalOriginalPath(name) {
+  return resolveMediaFile(name, INTERNAL_ORIGINAL_RE);
+}
+
+export function servePublicMemberMedia(req, res) {
+  const full = memberMediaPublicFilePath(req.params.file);
+  if (!full) { res.status(404).end(); return; }
+  res.setHeader("Content-Type", "image/jpeg");
+  res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+  res.sendFile(path.resolve(full));
+}
+
 function mediaTagsFor(db, mediaId) {
   return db.prepare(
     `SELECT t.id, t.name FROM media_tag_map m
@@ -93,7 +127,8 @@ function mediaTagsFor(db, mediaId) {
 }
 
 function publicMedia(row, db = null) {
-  const key = row.storage_key;
+  const key = memberMediaPublicName(row.storage_key);
+  if (!key) return null;
   const id = String(key).replace(/\.jpg$/, "");
   return {
     id: Number(row.id),
@@ -124,7 +159,7 @@ export function listMemberMedia(db, userId, { plan = "free", tagIds = [] } = {})
     );
     rows = rows.filter((row) => matched.has(Number(row.id)));
   }
-  return { quota: mediaQuotaForPlan(plan), used: countActiveMedia(db, uid), items: rows.map((row) => publicMedia(row, db)) };
+  return { quota: mediaQuotaForPlan(plan), used: countActiveMedia(db, uid), items: rows.map((row) => publicMedia(row, db)).filter(Boolean) };
 }
 
 export function getOwnedMedia(db, userId, id) {
@@ -163,17 +198,11 @@ export async function saveMemberMedia(db, userId, buffer, {
     e.code = "watermark_failed";
     throw e;
   }
-  const marked = await watermarker(processed.main.buffer, {
+  const marked = await watermarkPublicDerivative(watermarker, processed.main.buffer, {
     width: processed.main.width,
     height: processed.main.height,
-    watermarked: 0,
   });
-  if (!marked?.buffer?.length) {
-    const e = new Error("顯示圖處理失敗，未寫入損壞檔案");
-    e.status = 500;
-    e.code = "watermark_failed";
-    throw e;
-  }
+  const markedThumb = await watermarkPublicDerivative(watermarker, processed.thumb.buffer);
   const key = randomBytes(16).toString("hex");
   const mainName = `${key}.jpg`;
   const thumbName = `${key}_t.jpg`;
@@ -194,7 +223,7 @@ export async function saveMemberMedia(db, userId, buffer, {
     }
     writeFileSync(path.join(dir, originalNameKey), processed.main.buffer);
     writeFileSync(path.join(dir, mainName), marked.buffer);
-    writeFileSync(path.join(dir, thumbName), processed.thumb.buffer);
+    writeFileSync(path.join(dir, thumbName), markedThumb.buffer);
     const res = db.prepare(
       `INSERT INTO member_media(user_id, storage_key, thumb_key, original_key, original_name, mime, format, width, height, bytes, digest, watermarked, created_at)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -218,18 +247,18 @@ export async function reprocessMemberMediaDisplay(db, userId, id, { watermarker 
   const row = db.prepare("SELECT * FROM member_media WHERE id=? AND user_id=? AND deleted_at IS NULL").get(Number(id), Number(userId));
   if (!row) { const e = new Error("找不到照片或無權限"); e.status = 404; throw e; }
   if (Number(row.watermarked) === 1) return { ...publicMedia(row, db), skipped: true };
-  const srcName = row.original_key || row.storage_key;
-  const srcPath = memberMediaFilePath(srcName);
+  const srcPath = resolveInternalOriginalSource(row);
   if (!srcPath) { const e = new Error("找不到原始檔，無法重試"); e.status = 404; throw e; }
   const src = readFileSync(srcPath);
-  const marked = await watermarker(src, { width: row.width, height: row.height, watermarked: 0 });
-  if (!marked?.buffer?.length) {
-    const e = new Error("顯示圖處理失敗，未寫入損壞檔案");
-    e.status = 500;
-    e.code = "watermark_failed";
-    throw e;
-  }
-  writeFileSync(path.join(memberMediaDir(), row.storage_key), marked.buffer);
+  const marked = await watermarkPublicDerivative(watermarker, src, { width: row.width, height: row.height });
+  const thumbKey = memberMediaPublicName(row.thumb_key) || "";
+  const existingThumb = thumbKey ? memberMediaPublicFilePath(thumbKey) : "";
+  const markedThumb = existingThumb
+    ? await watermarkPublicDerivative(watermarker, readFileSync(existingThumb))
+    : null;
+  const dir = memberMediaDir();
+  writeFileSync(path.join(dir, row.storage_key), marked.buffer);
+  if (thumbKey && markedThumb) writeFileSync(path.join(dir, thumbKey), markedThumb.buffer);
   db.prepare("UPDATE member_media SET watermarked=1, bytes=? WHERE id=? AND user_id=?").run(marked.buffer.length, Number(id), Number(userId));
   return { ...getOwnedMedia(db, userId, id), skipped: false };
 }
@@ -245,7 +274,11 @@ export function deleteMemberMedia(db, userId, id, { now = new Date() } = {}) {
   db.prepare("UPDATE member_media SET deleted_at=? WHERE id=? AND user_id=?").run(ts, Number(id), Number(userId));
   db.prepare("DELETE FROM media_tag_map WHERE media_id=?").run(Number(id));
   if (!referenced) {
-    for (const n of [row.storage_key, row.thumb_key, row.original_key].filter(Boolean)) {
+    for (const n of [
+      memberMediaPublicName(row.storage_key),
+      memberMediaPublicName(row.thumb_key),
+      memberMediaInternalOriginalName(row.original_key),
+    ].filter(Boolean)) {
       try { const p = path.join(memberMediaDir(), n); if (existsSync(p)) unlinkSync(p); } catch { /* ignore */ }
     }
   }
@@ -327,3 +360,21 @@ export function mediaUrlsForTagIds(db, userId, tagIds = []) {
 function safeName(name) {
   return String(name || "").replace(/[\r\n\t]/g, " ").replace(/[^\w.\-\u4e00-\u9fff ]/g, "").slice(0, 120);
 }
+
+async function watermarkPublicDerivative(watermarker, buffer, dims = {}) {
+  const marked = await watermarker(buffer, { ...dims, watermarked: 0 });
+  if (!marked?.buffer?.length) {
+    const e = new Error("顯示圖處理失敗，未寫入損壞檔案");
+    e.status = 500;
+    e.code = "watermark_failed";
+    throw e;
+  }
+  return marked;
+}
+
+function resolveInternalOriginalSource(row) {
+  const fromPrivate = memberMediaInternalOriginalPath(row.original_key);
+  if (fromPrivate) return fromPrivate;
+  return memberMediaPublicFilePath(row.storage_key);
+}
+
