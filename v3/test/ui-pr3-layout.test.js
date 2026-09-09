@@ -11,7 +11,7 @@ test("desktop expanded filters stay in flow; only compact summary is sticky", ()
   assert.match(html, /body\.panel-collapsed \.list-head-sticky \{\s*\n\s*position: static;/);
   assert.match(html, /body\.panel-collapsed \.list-head-sticky\.filter-compact \{\s*\n\s*position: sticky;/);
   assert.match(html, /body\.panel-collapsed \.filter-mini-btn \{[\s\S]*?bottom: 28px;/);
-  assert.match(html, /#scrollTopBtn \{[\s\S]*bottom:\s*158px/);
+  assert.match(html, /#scrollTopBtn \{[\s\S]*bottom:\s*80px/);
 });
 
 test("scroll-top stays available on other desktop views once scrolled", () => {
@@ -36,13 +36,19 @@ test("same-house fold renders collapsed sources without dropping them", () => {
   assert.match(html, /另有 \$\{house\.hidden_count/);
 });
 
-test("mobile help dock stays left of bottom nav; desktop dock stacks under scroll-top", () => {
+test("mobile help dock stays left of bottom nav; desktop dock sits left of filter X", () => {
   assert.match(html, /function bindHelpDockMotion/);
+  assert.match(html, /is-idle-hidden/);
+  assert.match(html, /setTimeout\(hideDock, 1000\)/);
   assert.match(html, /bindSearchBarScrollHide/);
   assert.match(html, /search-bar-hidden/);
+  assert.match(html, /body\.search-bar-hidden\.panel-collapsed \.list-head-sticky:not\(\.filter-compact\)/);
+  assert.match(html, /t\.closest\("#listHeadSticky"\)/);
   assert.match(html, /prefers-reduced-motion: reduce/);
   assert.match(html, /is-compact/);
   assert.match(html, /aria-label="常見問題 Q&amp;A"/);
+  assert.match(html, /\.mobile-help-dock \{[\s\S]*?flex-direction: row;[\s\S]*?gap: 4px;[\s\S]*?bottom: 28px;/);
+  assert.match(html, /right: calc\(18px \+ var\(--touch\) \+ 4px\)/);
 });
 
 test("media tags and watermarked listing compose controls exist", () => {

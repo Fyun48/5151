@@ -582,8 +582,8 @@ test("panel toggle sits above scroll-top and uses expand/collapse glyphs", () =>
   const expandIdx = html.indexOf('id="expandPanelBtn"');
   const topIdx = html.indexOf('id="scrollTopBtn"');
   assert.ok(expandIdx > 0 && topIdx > expandIdx);
-  assert.match(html, /#expandPanelBtn \{[\s\S]*bottom:\s*140px/);
-  assert.match(html, /#scrollTopBtn \{[\s\S]*bottom:\s*158px/);
+  assert.match(html, /#expandPanelBtn \{[\s\S]*bottom:\s*132px/);
+  assert.match(html, /#scrollTopBtn \{[\s\S]*bottom:\s*80px/);
   assert.match(html, /#scrollTopBtn \{[\s\S]*z-index:\s*119/);
   assert.match(html, /#scrollTopBtn[\s\S]*<svg /);
   assert.match(html, /#scrollTopBtn\.on/);
