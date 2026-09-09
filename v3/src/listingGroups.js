@@ -104,21 +104,14 @@ function migrateGroupBindings(db, loserIds, winnerId) {
   const losers = [...new Set((loserIds || []).filter((id) => id && id !== winnerId))];
   if (!winnerId || !losers.length) return;
   const marks = losers.map(() => "?").join(",");
-  try {
-    db.prepare(
-      `UPDATE user_listing_flags SET watch_group_id = ? WHERE watched = 1 AND watch_group_id IN (${marks})`,
-    ).run(winnerId, ...losers);
-  } catch {
-    // isolated fixtures may omit watch_group_id
-  }
-  try {
-    // 事件的 group_id 改成 canonical，去重不再依賴已刪除的舊 id。
-    db.prepare(
-      `UPDATE user_events SET group_id = ? WHERE group_id IN (${marks})`,
-    ).run(winnerId, ...losers);
-  } catch {
-    // isolated fixtures may omit user_events.group_id
-  }
+  // Required on the production schema. Failures must propagate so the
+  // enclosing merge transaction rolls back member moves and loser deletes.
+  db.prepare(
+    `UPDATE user_listing_flags SET watch_group_id = ? WHERE watched = 1 AND watch_group_id IN (${marks})`,
+  ).run(winnerId, ...losers);
+  db.prepare(
+    `UPDATE user_events SET group_id = ? WHERE group_id IN (${marks})`,
+  ).run(winnerId, ...losers);
 }
 
 export function bindListingsToGroup(db, listings, { evidence = {}, confidence = 0.8, now = new Date() } = {}) {

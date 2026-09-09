@@ -165,6 +165,60 @@ test("merging groups migrates active watches to the deterministic canonical id",
   db.close();
 });
 
+function groupMergeSnapshot(db) {
+  return {
+    groups: db.prepare("SELECT group_id, primary_post_id FROM listing_groups ORDER BY group_id").all(),
+    members: db.prepare("SELECT post_id, group_id FROM listing_group_members ORDER BY post_id").all(),
+    flags: db.prepare("SELECT user_id, post_id, watched, watch_group_id FROM user_listing_flags ORDER BY user_id, post_id").all(),
+    events: db.prepare("SELECT user_id, post_id, type, detail, group_id FROM user_events ORDER BY id").all(),
+  };
+}
+
+test("failed binding migration rolls back the whole group merge", () => {
+  const db = open();
+  const early = [
+    { post_id: 41, title: "A1", url: "https://a1", price_num: 20000, source: "591" },
+    { post_id: 42, title: "A2", url: "https://a2", price_num: 21000, source: "sinyi" },
+  ];
+  const late = [
+    { post_id: 51, title: "B1", url: "https://b1", price_num: 20500, source: "housefun" },
+    { post_id: 52, title: "B2", url: "https://b2", price_num: 21500, source: "rakuya" },
+  ];
+  early.forEach((row) => insert(db, row));
+  late.forEach((row) => insert(db, row));
+  const groupA = bindListingsToGroup(db, early, { now: "2026-01-01T00:00:00.000Z" });
+  const groupB = bindListingsToGroup(db, late, { now: "2026-06-01T00:00:00.000Z" });
+  db.prepare("INSERT INTO user_listing_flags(user_id, post_id, watched, watch_group_id) VALUES (3, 51, 1, ?)").run(groupB);
+  db.prepare("INSERT INTO user_events(user_id, post_id, type, detail, group_id) VALUES (3, 51, 'price_drop', '21000 → 20500', ?)").run(groupB);
+  const before = groupMergeSnapshot(db);
+
+  const originalPrepare = db.prepare.bind(db);
+  db.prepare = (sql) => {
+    if (String(sql).includes("UPDATE user_listing_flags SET watch_group_id") && String(sql).includes("watched = 1")) {
+      return { run: () => { throw new Error("forced watch migrate failure"); } };
+    }
+    return originalPrepare(sql);
+  };
+
+  assert.throws(
+    () => bindListingsToGroup(db, [late[0], early[0]], { now: "2026-09-01T00:00:00.000Z" }),
+    /forced watch migrate failure/,
+  );
+  assert.deepEqual(groupMergeSnapshot(db), before);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM listing_groups WHERE group_id = ?").get(groupB).n, 1);
+  assert.equal(groupIdForPost(db, 51), groupB);
+  assert.equal(groupIdForPost(db, 41), groupA);
+  assert.equal(
+    db.prepare("SELECT watch_group_id FROM user_listing_flags WHERE user_id = 3 AND post_id = 51").get().watch_group_id,
+    groupB,
+  );
+  assert.equal(
+    db.prepare("SELECT group_id FROM user_events WHERE user_id = 3 AND type = 'price_drop'").get().group_id,
+    groupB,
+  );
+  db.close();
+});
+
 test("mutable group events dedupe by semantic detail, not forever by type", () => {
   const db = open();
   const gid = "lg_price";
