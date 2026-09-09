@@ -304,6 +304,10 @@ test("manual owner writer rejects Phase 15 mode and missing identity", () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+function trustedCheckoutStep(text) {
+  return namedStep(text, "Checkout workflow-definition SHA");
+}
+
 for (const name of CANDIDATE_CHECKOUT_WORKFLOWS) {
   test(`${name} stages trusted evidence writers before candidate checkout and invokes the copies afterward`, () => {
     const text = wf(name);
@@ -327,6 +331,22 @@ for (const name of CANDIDATE_CHECKOUT_WORKFLOWS) {
     assert.doesNotMatch(after, /python3 \.github\/scripts\/write-manual-owner-workflow-evidence\.py/);
     assert.doesNotMatch(after, /python3 \.github\/scripts\/write-phase15-workflow-evidence\.py/);
   });
+
+  test(`${name} binds trusted writers to exact github.sha, not a moving master tip`, () => {
+    const text = wf(name);
+    const checkout = trustedCheckoutStep(text);
+    const staging = namedStep(text, "Stage trusted workflow-definition evidence writers");
+    const ancestry = namedStep(text, "Validate SHA reachable from origin/master, then check it out");
+    assert.match(checkout, /ref:\s*\$\{\{\s*github\.sha\s*\}\}/);
+    assert.doesNotMatch(checkout, /ref:\s*master\b/);
+    assert.match(authorizeScript(text), /"\$WF_REF"\s*!=\s*"refs\/heads\/master"/);
+    assert.match(staging, /EXPECTED_WF_SHA:\s*\$\{\{\s*github\.sha\s*\}\}/);
+    assert.match(staging, /git rev-parse HEAD/);
+    assert.match(staging, /HEAD_SHA" != "\$EXPECTED_WF_SHA"/);
+    assert.doesNotMatch(pipeRunScript(staging), /\$\{\{\s*github\.sha/);
+    assert.match(ancestry, /git fetch origin master/);
+    assert.match(ancestry, /merge-base --is-ancestor "\$(?:BUILD|DEPLOY)_SHA" origin\/master/);
+  });
 }
 
 test("predeploy stays on master and does not lose workflow-definition scripts to a candidate checkout", () => {
@@ -334,9 +354,25 @@ test("predeploy stays on master and does not lose workflow-definition scripts to
   assert.equal(candidateCheckoutIndex(text), -1);
   assert.doesNotMatch(text, /git checkout --force/);
   assert.match(text, /workflow scripts only; do not deploy this tree/);
+  assert.match(text, /ref:\s*master/);
+  assert.doesNotMatch(text, /Stage trusted workflow-definition evidence writers/);
   assert.match(text, /python3 \.github\/scripts\/write-manual-owner-workflow-evidence\.py/);
   assert.match(text, /python3 \.github\/scripts\/write-phase15-workflow-evidence\.py/);
 });
+
+function initTrustedWriterRepo(workspace) {
+  const scriptsDir = path.join(workspace, ".github", "scripts");
+  mkdirSync(scriptsDir, { recursive: true });
+  copyFileSync(MANUAL_OWNER_WRITER, path.join(scriptsDir, MANUAL_OWNER_WRITER_NAME));
+  copyFileSync(PHASE15_WRITER, path.join(scriptsDir, PHASE15_WRITER_NAME));
+  execFileSync("git", ["init"], { cwd: workspace, encoding: "utf8" });
+  execFileSync("git", ["add", ".github/scripts"], { cwd: workspace, encoding: "utf8" });
+  execFileSync("git", ["-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "-m", "trusted-writers"], {
+    cwd: workspace,
+    encoding: "utf8",
+  });
+  return execFileSync("git", ["rev-parse", "HEAD"], { cwd: workspace, encoding: "utf8" }).trim();
+}
 
 test("trusted workflow-definition copies still write manual_owner and Phase 15 evidence after an old candidate deletes the scripts", () => {
   const buildStaging = pipeRunScript(namedStep(wf("build-production-image.yml"), "Stage trusted workflow-definition evidence writers"));
@@ -344,16 +380,28 @@ test("trusted workflow-definition copies still write manual_owner and Phase 15 e
   assert.equal(buildStaging, deployStaging);
   assert.match(buildStaging, /mkdir -p "\$TRUSTED_SCRIPT_DIR"/);
   assert.match(buildStaging, /cp -f/);
+  assert.match(buildStaging, /EXPECTED_WF_SHA/);
 
   const workspace = mkdtempSync(path.join(tmpdir(), "trusted-wf-master-"));
   const runnerTemp = mkdtempSync(path.join(tmpdir(), "trusted-wf-runner-"));
   const githubEnv = path.join(runnerTemp, "github.env");
   const trustedDir = path.join(runnerTemp, "trusted-workflow-scripts");
   const scriptsDir = path.join(workspace, ".github", "scripts");
-  mkdirSync(scriptsDir, { recursive: true });
-  copyFileSync(MANUAL_OWNER_WRITER, path.join(scriptsDir, MANUAL_OWNER_WRITER_NAME));
-  copyFileSync(PHASE15_WRITER, path.join(scriptsDir, PHASE15_WRITER_NAME));
+  const exactSha = initTrustedWriterRepo(workspace);
+  assert.match(exactSha, /^[0-9a-f]{40}$/);
   writeFileSync(githubEnv, "");
+
+  assert.throws(() => execFileSync("bash", ["-c", buildStaging], {
+    cwd: workspace,
+    env: {
+      ...process.env,
+      TRUSTED_SCRIPT_DIR: path.join(runnerTemp, "trusted-mismatch"),
+      GITHUB_ENV: githubEnv,
+      EXPECTED_WF_SHA: "0".repeat(40),
+    },
+    encoding: "utf8",
+  }), /trusted checkout HEAD .* != workflow execution SHA/);
+  assert.equal(existsSync(path.join(runnerTemp, "trusted-mismatch", MANUAL_OWNER_WRITER_NAME)), false);
 
   execFileSync("bash", ["-c", buildStaging], {
     cwd: workspace,
@@ -361,6 +409,7 @@ test("trusted workflow-definition copies still write manual_owner and Phase 15 e
       ...process.env,
       TRUSTED_SCRIPT_DIR: trustedDir,
       GITHUB_ENV: githubEnv,
+      EXPECTED_WF_SHA: exactSha,
     },
     encoding: "utf8",
   });

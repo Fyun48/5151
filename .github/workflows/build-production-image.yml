@@ -78,18 +78,23 @@ jobs:
           if [ "${RELEASE_MODE:-}" = "manual_owner" ] && [ -n "${RELEASE_INTENT_ID:-}" ]; then
             echo "::error::manual_owner forbids a non-empty release_intent_id; stale Phase 15 callers must set release_mode=ops_phase15"; exit 1
           fi
-      - name: Checkout master (for ancestry validation)
+      - name: Checkout workflow-definition SHA
         uses: actions/checkout@v4
         with:
-          ref: master
+          ref: ${{ github.sha }}
           fetch-depth: 0
       - name: Stage trusted workflow-definition evidence writers
         env:
           TRUSTED_SCRIPT_DIR: ${{ runner.temp }}/trusted-workflow-scripts
+          EXPECTED_WF_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          # Writers must come from the trusted master workflow definition, not from
-          # a later candidate checkout that may predate these scripts (e.g. #217).
+          # Writers must come from this exact workflow-definition commit (github.sha),
+          # not a moving master tip and not a later candidate checkout (e.g. #217).
+          HEAD_SHA="$(git rev-parse HEAD)"
+          if [ "$HEAD_SHA" != "$EXPECTED_WF_SHA" ]; then
+            echo "::error::trusted checkout HEAD $HEAD_SHA != workflow execution SHA $EXPECTED_WF_SHA"; exit 1
+          fi
           mkdir -p "$TRUSTED_SCRIPT_DIR"
           cp -f \
             .github/scripts/write-manual-owner-workflow-evidence.py \
