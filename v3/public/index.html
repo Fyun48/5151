@@ -1544,6 +1544,9 @@
       line-height: 1.55;
       color: var(--muted);
     }
+    .filter-head .status.is-alert {
+      color: var(--rose-deep);
+    }
     .list-meta {
       font-size: 12px;
       color: var(--accent-deep);
@@ -2475,6 +2478,9 @@
         -webkit-box-orient: vertical;
         overflow: hidden;
       }
+      .filter-head .status.is-alert {
+        -webkit-line-clamp: 3;
+      }
       .filter-head-actions {
         margin-left: 0;
         width: 100%;
@@ -2938,7 +2944,7 @@
     <main class="card">
       <div class="list-head-sticky" id="listHeadSticky">
         <div class="filter-head">
-          <div class="status" id="status">準備就緒</div>
+          <div class="status" id="status" role="status" aria-live="polite" aria-atomic="true">準備就緒</div>
           <div class="filter-head-actions">
           <button type="button" class="ghost mobile-only" id="openFilterSheetBtn">搜尋設定</button>
           <button type="button" class="filter-restore-btn ghost" id="filterRestoreBtn" title="展開類型與排序">更多條件</button>
@@ -2982,7 +2988,7 @@
           </div>
           </div>
           <div class="chip-row view-checks" data-chip-row="display">
-            <label class="view-check"><input type="checkbox" id="excludeRooftop" checked /> 排除頂樓加蓋</label>
+            <label class="view-check"><input type="checkbox" id="excludeRooftop" checked title="含頂樓加蓋、違蓋、違建住家與標題／標籤出現加蓋者" /> 排除頂樓加蓋／違蓋</label>
             <label class="view-check"><input type="checkbox" id="excludeLowFloors" checked /> 排除 1F 及地下室</label>
             <label class="view-check"><input type="checkbox" id="hasParking" /> 有車位</label>
           </div>
@@ -4186,8 +4192,18 @@
     }
     function watchLimitText() {
       return mePlan === "sponsor"
-        ? `贊助會員最多特別關注 ${SPONSOR_MAX_WATCHED} 筆。請先取消一筆再加。`
-        : `一般會員最多特別關注 ${MEMBER_MAX_WATCHED} 筆，贊助會員可到 ${SPONSOR_MAX_WATCHED} 筆。請先取消一筆再加。`;
+        ? `已達特別關注上限（${SPONSOR_MAX_WATCHED} 筆）。請先取消一筆再加。`
+        : `已達特別關注上限（${MEMBER_MAX_WATCHED} 筆）。贊助會員可到 ${SPONSOR_MAX_WATCHED} 筆，請先取消一筆再加。`;
+    }
+    function paintWatchChip() {
+      const chip = document.querySelector('[data-filter="watched"]');
+      if (!chip) return;
+      const n = watchedCount();
+      const cap = watchLimit();
+      chip.textContent = cap > 0 ? `特別關注 ${n}/${cap}` : "特別關注";
+      chip.title = cap > 0
+        ? `一般會員最多 ${MEMBER_MAX_WATCHED} 筆，贊助會員最多 ${SPONSOR_MAX_WATCHED} 筆`
+        : "特別關注的物件會優先更新狀態與公司距離";
     }
     function listingSpecLine(item) {
       return [
@@ -4954,9 +4970,16 @@
       return applyListView(out);
     }
 
-    function flash(msg) {
-      $("saveMsg").textContent = msg;
-      if ($("status")) $("status").textContent = msg;
+    function flash(msg, opts = {}) {
+      const alert = Boolean(opts.alert);
+      if ($("saveMsg")) $("saveMsg").textContent = msg;
+      const status = $("status");
+      if (!status) return;
+      status.textContent = msg;
+      status.classList.toggle("is-alert", alert);
+      status.setAttribute("role", alert ? "alert" : "status");
+      status.setAttribute("aria-live", alert ? "assertive" : "polite");
+      status.setAttribute("aria-atomic", "true");
     }
     const bootQuery = new URLSearchParams(location.search);
     if (bootQuery.get("verified") === "1" || bootQuery.get("welcome") === "1") {
@@ -5666,6 +5689,7 @@
     }
 
     function renderStats(st) {
+      lastStats = { ...lastStats, ...(st || {}) };
       $("stats").innerHTML = [
         ["全部", st.total],
         ["有電梯", st.elevator],
@@ -5675,6 +5699,7 @@
         ["疑似", st.suspected],
         ...(st.filteredOut ? [["列表另排除", st.filteredOut]] : []),
       ].map(([k, v]) => `<div class="stat"><b>${v || 0}</b><span>${k}</span></div>`).join("");
+      paintWatchChip();
     }
 
     function formatCostWhen(iso) {
@@ -6134,25 +6159,30 @@
       listCache = (Array.isArray(items) ? items : []).map(normalizeListingText);
       items = listCache;
       lastStats = st || {};
+      paintWatchChip();
       updateListMeta(items, st);
       if (!items.length) {
         const q = $("q").value.trim();
         let msg = "目前沒有符合條件的物件。請勾選行政區並按儲存，之後會自動抓取與篩選。";
         if (q) msg = `沒有符合「${q}」的物件。試試較短關鍵字，或清掉搜尋看全部列表。`;
-        else if (viewDistricts.size) {
+        else if (filter === "watched") {
+          msg = "目前沒有特別關注的物件。在卡片按「特別關注」或左滑即可加入；一般會員最多 6 筆，贊助會員最多 15 筆。";
+        } else if (filter === "hidden") {
+          msg = "目前沒有已隱藏的物件。";
+        } else if (filter === "suspected") {
+          msg = "目前沒有被判成同一屋源的重刊。隱藏或已瀏覽的舊屋若再上架，會出現在這裡。";
+        } else if (filter === "offline") {
+          msg = "目前沒有正在確認中的下架物件。591 關閉或刪除的刊登會先列在這裡核對；滿設定天數仍找不到就改成確認已下架，並從「全部」與這個篩選的數量扣除。";
+        } else if (viewDistricts.size) {
           msg = "這個行政區篩選目前沒有物件。可點「全部」或再勾其他區。";
         } else if (kinds.length || sources.length || $("excludeLowFloors")?.checked || $("excludeRooftop")?.checked || $("hasParking")?.checked) {
           const bits = [];
           if (kinds.length) bits.push("房屋類型");
           if (sources.length) bits.push("來源");
           if ($("excludeLowFloors")?.checked) bits.push("樓層");
-          if ($("excludeRooftop")?.checked) bits.push("頂加");
+          if ($("excludeRooftop")?.checked) bits.push("頂加／違蓋");
           if ($("hasParking")?.checked) bits.push("車位");
           msg = `目前沒有符合列表上方${bits.join("／")}過濾的物件。可取消勾選或關掉晶片再看。`;
-        } else if (filter === "suspected") {
-          msg = "目前沒有被判成同一屋源的重刊。隱藏或已瀏覽的舊屋若再上架，會出現在這裡。";
-        } else if (filter === "offline") {
-          msg = "目前沒有正在確認中的下架物件。591 關閉或刪除的刊登會先列在這裡核對；滿設定天數仍找不到就改成確認已下架，並從「全部」與這個篩選的數量扣除。";
         } else if (st.missingGeo > 0) {
           msg = `正在從 591 物件地圖補 ${st.missingGeo} 筆座標（就是網頁上點地址看到的那個），完成後會自動計算${commuteModeLabel()}路線。`;
         } else if (st.missingRoute > 0) {
@@ -6220,7 +6250,7 @@
               ? `<button class="primary btn-card-action btn-watch" data-watched="${id}">取消關注</button>`
               : draftWatch.has(String(id))
                 ? `<button class="primary btn-card-action btn-watch" data-watch-draft-commit="${id}">加入</button><button class="ghost btn-card-action btn-watch" data-watch-draft-cancel="${id}">取消</button>`
-                : `<button class="ghost btn-card-action btn-watch" data-watched="${id}">特別關注</button>`}
+                : `<button class="ghost btn-card-action btn-watch" data-watched="${id}"${watchLimitReached() ? ` disabled aria-disabled="true" title="${esc(watchLimitText())}"` : ""}>特別關注</button>`}
             ${item.watched || draftWatch.has(String(id)) ? "" : `<label class="hide-box">
               <input type="checkbox" data-hidden="${id}" ${item.hidden ? "checked" : ""} />
               不再顯示
@@ -6331,12 +6361,13 @@
 
     function beginWatchDraft(id) {
       if (watchLimitReached()) {
-        flash(watchLimitText());
-        return;
+        flash(watchLimitText(), { alert: true });
+        return false;
       }
       draftWatch.add(String(id));
       pendingNoteFocus = id;
       renderList(listCache, lastStats);
+      return true;
     }
 
     async function hideListing(id, card) {
@@ -6381,7 +6412,6 @@
         suppressClick = Date.now();
         const thresh = Math.min(110, Math.max(72, card.offsetWidth * 0.26));
         if (dx < -thresh) {
-          card.style.transform = `translateX(${-card.offsetWidth}px)`;
           if (isGuest) {
             resetCard(card);
             remindGuest();
@@ -6392,7 +6422,10 @@
             resetCard(card);
             return;
           }
-          beginWatchDraft(id);
+          if (!beginWatchDraft(id)) {
+            resetCard(card);
+            return;
+          }
           return;
         }
         if (dx > thresh) {
@@ -6463,7 +6496,7 @@
       if (watchLimitReached()) {
         draftWatch.delete(key);
         noteDrafts.delete(key);
-        flash(watchLimitText());
+        flash(watchLimitText(), { alert: true });
         renderList(listCache, lastStats);
         return;
       }
@@ -6481,7 +6514,7 @@
       if (!res.ok) {
         let data = {};
         try { data = await res.json(); } catch { data = {}; }
-        flash(data.error || watchLimitText());
+        flash(data.error || watchLimitText(), { alert: true });
         if (card) card.style.visibility = "";
         renderList(listCache, lastStats);
         return;
@@ -6600,6 +6633,7 @@
       window.__ME_SPONSOR = me.sponsor || null;
       document.body.classList.toggle("role-admin", meIsAdmin);
       document.body.classList.toggle("plan-sponsor", mePlan === "sponsor");
+      paintWatchChip();
       syncImportAccess();
       syncSourceFilterAccess();
       paintSponsorOffer(me.sponsor);
