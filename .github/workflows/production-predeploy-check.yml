@@ -86,11 +86,22 @@ jobs:
           if [ "${RELEASE_MODE:-}" = "manual_owner" ] && [ -n "${RELEASE_INTENT_ID:-}" ]; then
             echo "::error::manual_owner forbids a non-empty release_intent_id; stale Phase 15 callers must set release_mode=ops_phase15"; exit 1
           fi
-      - name: Checkout master (workflow scripts only; do not deploy this tree)
+      - name: Checkout workflow-definition SHA
         uses: actions/checkout@v4
         with:
-          ref: master
+          ref: ${{ github.sha }}
           fetch-depth: 0
+      - name: Verify trusted workflow-definition SHA
+        env:
+          EXPECTED_WF_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Helpers and evidence writers must come from this exact workflow-definition
+          # commit (github.sha), not a moving master tip that advanced after dispatch.
+          HEAD_SHA="$(git rev-parse HEAD)"
+          if [ "$HEAD_SHA" != "$EXPECTED_WF_SHA" ]; then
+            echo "::error::trusted checkout HEAD $HEAD_SHA != workflow execution SHA $EXPECTED_WF_SHA"; exit 1
+          fi
       - name: Write Phase 15 run identity
         if: ${{ always() && inputs.release_mode == 'ops_phase15' }}
         env:

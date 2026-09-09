@@ -349,15 +349,61 @@ for (const name of CANDIDATE_CHECKOUT_WORKFLOWS) {
   });
 }
 
-test("predeploy stays on master and does not lose workflow-definition scripts to a candidate checkout", () => {
+for (const name of WORKFLOWS) {
+  test(`${name} binds trusted workflow-definition code to exact github.sha before helpers or evidence`, () => {
+    const text = wf(name);
+    const checkout = trustedCheckoutStep(text);
+    assert.match(checkout, /ref:\s*\$\{\{\s*github\.sha\s*\}\}/);
+    assert.doesNotMatch(checkout, /ref:\s*master\b/);
+    assert.match(authorizeScript(text), /"\$WF_REF"\s*!=\s*"refs\/heads\/master"/);
+    assert.match(text, /EXPECTED_WF_SHA:\s*\$\{\{\s*github\.sha\s*\}\}/);
+    assert.match(text, /git rev-parse HEAD/);
+    assert.match(text, /HEAD_SHA" != "\$EXPECTED_WF_SHA"/);
+    assert.match(text, /git fetch origin master/);
+    assert.match(text, /merge-base --is-ancestor/);
+    const checkoutIdx = text.indexOf("Checkout workflow-definition SHA");
+    const expectedIdx = text.indexOf("EXPECTED_WF_SHA:");
+    const firstEvidence = text.indexOf("Write Phase 15 run identity");
+    const nasCopy = text.indexOf("Copy inspect/backup helpers");
+    assert.ok(checkoutIdx >= 0 && expectedIdx > checkoutIdx);
+    assert.ok(firstEvidence < 0 || expectedIdx < firstEvidence);
+    assert.ok(nasCopy < 0 || expectedIdx < nasCopy);
+  });
+}
+
+test("predeploy never checks out the candidate and verifies workflow SHA before writers or NAS helpers", () => {
   const text = wf("production-predeploy-check.yml");
+  const verify = namedStep(text, "Verify trusted workflow-definition SHA");
+  const ancestry = namedStep(text, "Validate SHA reachable from origin/master (no checkout of that SHA onto NAS)");
   assert.equal(candidateCheckoutIndex(text), -1);
   assert.doesNotMatch(text, /git checkout --force/);
-  assert.match(text, /workflow scripts only; do not deploy this tree/);
-  assert.match(text, /ref:\s*master/);
   assert.doesNotMatch(text, /Stage trusted workflow-definition evidence writers/);
+  assert.match(verify, /EXPECTED_WF_SHA:\s*\$\{\{\s*github\.sha\s*\}\}/);
+  assert.match(verify, /git rev-parse HEAD/);
+  assert.match(verify, /HEAD_SHA" != "\$EXPECTED_WF_SHA"/);
+  assert.doesNotMatch(pipeRunScript(verify), /\$\{\{\s*github\.sha/);
+  assert.match(ancestry, /git fetch origin master/);
+  assert.match(ancestry, /merge-base --is-ancestor "\$CHECK_SHA" origin\/master/);
+  assert.doesNotMatch(ancestry, /git checkout --force/);
   assert.match(text, /python3 \.github\/scripts\/write-manual-owner-workflow-evidence\.py/);
   assert.match(text, /python3 \.github\/scripts\/write-phase15-workflow-evidence\.py/);
+});
+
+test("predeploy SHA verify fails closed when HEAD is not the workflow execution SHA", () => {
+  const verify = pipeRunScript(namedStep(wf("production-predeploy-check.yml"), "Verify trusted workflow-definition SHA"));
+  const workspace = mkdtempSync(path.join(tmpdir(), "predeploy-wf-sha-"));
+  const exactSha = initTrustedWriterRepo(workspace);
+  assert.throws(() => execFileSync("bash", ["-c", verify], {
+    cwd: workspace,
+    env: { ...process.env, EXPECTED_WF_SHA: "0".repeat(40) },
+    encoding: "utf8",
+  }), /trusted checkout HEAD .* != workflow execution SHA/);
+  execFileSync("bash", ["-c", verify], {
+    cwd: workspace,
+    env: { ...process.env, EXPECTED_WF_SHA: exactSha },
+    encoding: "utf8",
+  });
+  rmSync(workspace, { recursive: true, force: true });
 });
 
 function initTrustedWriterRepo(workspace) {
