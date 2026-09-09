@@ -111,6 +111,52 @@ function stripTags(html) {
   return decodeEntities(String(html || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
 }
 
+const HP_FIELD_LABELS = "地址|社區|樓層|坪數|型態|格局|用途|車位|現況|管理費|押金";
+
+/** 5168「樓層 / 22 / 24樓」＝出租 22、總樓高 24。 */
+export function normalizeHpFloorName(value) {
+  const raw = String(value || "").replace(/樓\s*$/, "").replace(/[／]/g, "/").replace(/\s+/g, "").trim();
+  if (!raw || raw === "--" || raw === "-") return "";
+  const range = raw.match(/^(\d+)(?:-(\d+))?\/(\d+)$/);
+  if (range) {
+    const low = range[2] && range[2] !== range[1] ? `${range[1]}-${range[2]}` : range[1];
+    return `${low}/${range[3]}`;
+  }
+  const pair = String(value || "").match(/(\d+)\s*[\/／]\s*(\d+)\s*樓?/);
+  if (pair) return `${pair[1]}/${pair[2]}`;
+  const only = raw.match(/^(\d+)$/);
+  return only ? only[1] : raw;
+}
+
+export function floorNameLooksComplete(value) {
+  return /\d+\s*[\/／]\s*\d+/.test(String(value || ""));
+}
+
+function cleanCommunityName(value) {
+  const v = String(value || "").trim().replace(/^社區\s*[\/：:]\s*/, "");
+  if (!v || /^[-–—]$/.test(v) || v === "無" || v === "無社區" || v === "--") return "";
+  return v;
+}
+
+/** 內頁常見「標籤 / 值」或「標籤：值」，含「樓層 / 22 / 24樓」。 */
+export function parseHpLabeledPlain(text) {
+  const source = String(text || "");
+  const fields = {};
+  const re = new RegExp(`(?:^|[\\s>])(${HP_FIELD_LABELS})\\s*[\\/：:]\\s*([^\\n<]+?)(?=\\s+(?:${HP_FIELD_LABELS})\\s*[\\/：:]|$)`, "g");
+  let m;
+  while ((m = re.exec(source))) {
+    const label = m[1];
+    let value = stripTags(m[2]).trim();
+    if (label === "樓層") {
+      const extra = String(value).match(/(\d+)\s*[\/／]\s*(\d+)\s*樓?/)
+        || source.slice(m.index, m.index + 48).match(/樓層\s*[\/：:]\s*(\d+)\s*[\/／]\s*(\d+)\s*樓?/);
+      if (extra) value = `${extra[1]} / ${extra[2]}樓`;
+    }
+    if (label && value && !(label in fields)) fields[label] = value;
+  }
+  return fields;
+}
+
 /** 有門牌號的地址才能精準地理編碼；用它決定要不要用明細頁地址覆蓋列表頁的粗略地址。 */
 export function addressHasHouseNumber(address) {
   return /\d+(?:之\d+)?號/.test(String(address || "").replace(/\s+/g, ""));
@@ -180,26 +226,34 @@ export function parseHpListHtml(html) {
     if (!idMatch) continue;
     const cover = pickHpCover(card);
     const title = titleFromHpCard(card);
+    const labeled = parseHpLabeledPlain(stripTags(card));
     const addressMatch = card.match(/location-filled[\s\S]{0,180}?<span>\s*([^<]+)\s*<\/span>/i)
+      || card.match(/台北市[^<]{2,80}區[^<]{0,60}\d[^<]{0,20}號/)
+      || card.match(/新北市[^<]{2,80}區[^<]{0,60}\d[^<]{0,20}號/)
       || card.match(/台北市[^<]{2,40}區[^<]{0,40}/)
       || card.match(/新北市[^<]{2,40}區[^<]{0,40}/);
-    const communityMatch = card.match(/building-fill[\s\S]{0,180}?<span>\s*([^<]+)\s*<\/span>/i);
+    const communityMatch = card.match(/building-fill[\s\S]{0,180}?<span>\s*([^<]+)\s*<\/span>/i)
+      || card.match(/【([^【】]{1,20})】/);
     const priceMatch = card.match(/>(\d{3,})\s*<\/span>\s*<span[^>]*>元\/月/);
     const kind = kindFromHpText(card);
     const areaMatch = stripTags(card).match(/([\d.]+)\s*坪/);
     const layoutMatch = stripTags(card).match(/(\d+\s*房[\d廳衛陽台\s]*)/);
-    const floorMatch = stripTags(card).match(/(\d+\s*\/\s*\d+)\s*樓/);
+    const floorMatch = stripTags(card).match(/(\d+\s*[\/／]\s*\d+)\s*樓/)
+      || String(labeled["樓層"] || "").match(/(\d+\s*[\/／]\s*\d+)/);
     items.push({
       id: idMatch[1],
       title,
-      address: decodeEntities(String(addressMatch?.[1] || addressMatch?.[0] || "").trim()),
-      community: decodeEntities(String(communityMatch?.[1] || "").trim()),
+      address: pickBestAddress([
+        labeled["地址"],
+        decodeEntities(String(addressMatch?.[1] || addressMatch?.[0] || "").trim()),
+      ]),
+      community: cleanCommunityName(communityMatch?.[1] || labeled["社區"]),
       cover,
       price: Number(priceMatch?.[1]) || 0,
       kind,
-      areaName: areaMatch ? `${areaMatch[1].replace(/\.0$/, "")}坪` : "",
-      layout: layoutMatch ? layoutMatch[1].replace(/\s+/g, "") : "",
-      floorName: floorMatch ? floorMatch[1].replace(/\s+/g, "") : "",
+      areaName: areaMatch ? `${areaMatch[1].replace(/\.0$/, "")}坪` : String(labeled["坪數"] || "").replace(/\s+/g, ""),
+      layout: layoutMatch ? layoutMatch[1].replace(/\s+/g, "") : String(labeled["格局"] || "").replace(/\s+/g, ""),
+      floorName: normalizeHpFloorName(floorMatch?.[1] || labeled["樓層"] || ""),
       text: stripTags(card),
     });
   }
@@ -219,12 +273,11 @@ export function parseHpDetailHtml(html) {
     const value = stripTags(m[2]).trim();
     if (label && !(label in fields)) fields[label] = value;
   }
-  const cleanCommunity = (value) => {
-    const v = String(value || "").trim();
-    if (!v || /^[-–—]$/.test(v) || v === "無" || v === "無社區") return "";
-    return v;
-  };
-  const floorName = String(fields["樓層"] || "").replace(/樓\s*$/, "").replace(/\s+/g, "").trim();
+  const labeled = parseHpLabeledPlain(stripTags(source));
+  for (const [key, value] of Object.entries(labeled)) {
+    if (!(key in fields)) fields[key] = value;
+  }
+  const floorName = normalizeHpFloorName(fields["樓層"]);
   // 部分（多為 591 轉入的純數字 id）明細頁沒有 label span，只有 meta description，用它補地址／坪數／格局／現況。
   const descMatch = source.match(/<meta[^>]*name="description"[^>]*content="([^"]*)"/i);
   const desc = descMatch ? decodeEntities(descMatch[1]) : "";
@@ -249,7 +302,7 @@ export function parseHpDetailHtml(html) {
   const address = pickBestAddress([fields["地址"], mapAddress, addrMeta ? addrMeta[1] : ""]);
   return {
     floorName,
-    community: cleanCommunity(fields["社區"]),
+    community: cleanCommunityName(fields["社區"]),
     areaName,
     layout,
     kind: kindFromHpText(fields["現況"] || "") || kindFromHpText(fields["型態"] || "") || kindFromHpText(desc),
@@ -277,20 +330,15 @@ export function parseHpDetailJson(payload) {
     const n = Number(value);
     return Number.isFinite(n) ? n : null;
   };
-  const cleanCommunity = (value) => {
-    const v = str(value);
-    if (!v || /^[-–—]$/.test(v) || v === "無" || v === "無社區") return "";
-    return v;
-  };
-  const toFloor = str(det.toFloor);
-  const upFloor = str(det.upFloor);
-  const fromFloor = str(det.fromFloor);
+  const toFloor = str(det.toFloor ?? det.to_floor ?? det.rentFloor ?? det.floor);
+  const upFloor = str(det.upFloor ?? det.up_floor ?? det.totalFloor ?? det.total_floor);
+  const fromFloor = str(det.fromFloor ?? det.from_floor);
   let floorName = "";
   if (upFloor) {
     const low = fromFloor && fromFloor !== toFloor ? `${fromFloor}-${toFloor}` : toFloor;
-    floorName = low ? `${low}/${upFloor}` : upFloor;
+    floorName = normalizeHpFloorName(low ? `${low}/${upFloor}` : upFloor);
   } else if (toFloor) {
-    floorName = toFloor;
+    floorName = normalizeHpFloorName(toFloor);
   }
   const rm = str(det.rm);
   const livingRm = str(det.livingRm);
@@ -308,11 +356,17 @@ export function parseHpDetailJson(payload) {
   const lat = num(det.lat);
   const lng = num(det.lng);
   const cityRoad = [str(det.city), str(det.district), str(det.road)].filter(Boolean).join("");
-  const address = str(det.simpAddress) || str(det.address) || cityRoad;
+  const address = pickBestAddress([
+    str(det.simpAddress),
+    str(det.address),
+    str(det.fullAddress),
+    str(det.doorplate),
+    cityRoad,
+  ]);
   const conditionTags = Array.isArray(det.conditionTags) ? det.conditionTags.map(str).filter(Boolean) : [];
   return {
     floorName,
-    community: cleanCommunity(det.communityName),
+    community: cleanCommunityName(det.communityName || det.community || det.buildName),
     areaName,
     layout,
     kind: kindFromHpText(usage) || kindFromHpText(buildingType) || kindFromHpText(str(det.caseName)),
@@ -329,7 +383,7 @@ export function parseHpDetailJson(payload) {
       坪數: areaName,
       樓層: floorName ? `${floorName}樓` : "",
       格局: layout,
-      社區: cleanCommunity(det.communityName),
+      社區: cleanCommunityName(det.communityName || det.community || det.buildName),
       用途: usage,
       地址: address,
     },
@@ -356,7 +410,10 @@ export function enrichHpListingFromDetail(row, detail, { regionId, sectionId } =
   if (!row || !detail) return row;
   const next = { ...row };
   let changed = false;
-  if (!next.floor_name && detail.floorName) { next.floor_name = detail.floorName; changed = true; }
+  if (detail.floorName && (!next.floor_name || (!floorNameLooksComplete(next.floor_name) && floorNameLooksComplete(detail.floorName)))) {
+    next.floor_name = detail.floorName;
+    changed = true;
+  }
   if (!next.area_name && detail.areaName) { next.area_name = detail.areaName; }
   if (!next.layout && detail.layout) { next.layout = detail.layout; }
   if ((!next.kind_name || next.kind_name === "") && detail.kind) { next.kind_name = detail.kind; }
@@ -583,7 +640,7 @@ export async function fetchHpCoveringListings(jobs, options = {}) {
           })) continue;
           seen.add(id);
           // 缺樓層／社區要補明細；缺座標也要補（明細頁地圖連結才有精準經緯度，通勤與捷運距離都靠它）。
-          const needDetail = !row.floor_name || !row.community_name || row.lat == null;
+          const needDetail = !row.floor_name || !floorNameLooksComplete(row.floor_name) || !row.community_name || !addressHasHouseNumber(row.address) || row.lat == null;
           const alreadyGeo = typeof options.hasGeo === "function" && options.hasGeo(row.post_id);
           if (detailBudget > 0 && needDetail && !alreadyGeo) {
             const detail = await fetchHpDetail(id, getHtml);

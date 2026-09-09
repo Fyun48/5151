@@ -1,4 +1,4 @@
-/** 5168（rent.houseprice.tw）公開物件頁 adapter：只解析公開 HTML，不走未授權的內部 API。 */
+/** 5168（rent.houseprice.tw）公開物件頁 adapter：公開 HTML 與公開明細 JSON。 */
 
 import { decodeEntities } from "./htmlEntities.js";
 import {
@@ -8,6 +8,12 @@ import {
   sanitizeImportedTitle,
   uniqueUrls,
 } from "./importSanitize.js";
+import {
+  hpDetailApiUrl,
+  hpIdFromUrl,
+  parseHpDetailHtml,
+  parseHpDetailJson,
+} from "./houseprice.js";
 import { FETCH_LIMITS } from "./safeFetch.js";
 
 const PLACEHOLDER_RE = /default_cover|no[_-]?photo|placeholder|noimage|nopic|logo_default|rent_1200x628_5168/i;
@@ -72,10 +78,25 @@ function extractText(html) {
 
 export function parse5168Listing(html, pageUrl = "") {
   const document = String(html || "");
+  const detail = parseHpDetailHtml(document);
+  const bits = [
+    extractText(document),
+    detail.community ? `社區 ${detail.community}` : "",
+    detail.floorName ? `樓層 ${detail.floorName}` : "",
+    detail.address ? `地址 ${detail.address}` : "",
+    detail.layout,
+    detail.areaName,
+  ].filter(Boolean);
   return {
     title: extractTitle(document),
-    text: extractText(document),
+    text: bits.filter((row, idx, all) => all.indexOf(row) === idx).join("\n"),
     photos: collectImgUrls(document, pageUrl),
+    address: detail.address || "",
+    floor_name: detail.floorName || "",
+    community: detail.community || "",
+    layout: detail.layout || "",
+    area_name: detail.areaName || "",
+    kind: detail.kind || "",
   };
 }
 
@@ -108,6 +129,30 @@ export async function fetchPublic5168Listing(url, { fetchText } = {}) {
     throw err;
   }
   const parsed = parse5168Listing(got.text, got.url || url);
+  const id = hpIdFromUrl(got.url || url);
+  if (id && typeof fetchText === "function") {
+    try {
+      const api = await fetchText(hpDetailApiUrl(id));
+      const detail = parseHpDetailJson(api.text || api);
+      if (detail) {
+        parsed.address = detail.address || parsed.address;
+        parsed.floor_name = detail.floorName || parsed.floor_name;
+        parsed.community = detail.community || parsed.community;
+        parsed.layout = detail.layout || parsed.layout;
+        parsed.area_name = detail.areaName || parsed.area_name;
+        parsed.kind = detail.kind || parsed.kind;
+        const extra = [
+          parsed.text,
+          detail.community ? `社區 ${detail.community}` : "",
+          detail.floorName ? `樓層 ${detail.floorName}` : "",
+          detail.address ? `地址 ${detail.address}` : "",
+        ].filter(Boolean);
+        parsed.text = extra.filter((row, idx, all) => all.indexOf(row) === idx).join("\n");
+      }
+    } catch {
+      // 明細 JSON 失敗仍用公開 HTML
+    }
+  }
   if (!parsed.title && !parsed.text) {
     const err = new Error("無法從 5168 公開頁解析物件內容");
     err.status = 400;
@@ -119,6 +164,12 @@ export async function fetchPublic5168Listing(url, { fetchText } = {}) {
     title: parsed.title,
     text: parsed.text,
     photos: parsed.photos.slice(0, FETCH_LIMITS.maxPhotos),
+    address: parsed.address || "",
+    floor_name: parsed.floor_name || "",
+    community: parsed.community || "",
+    layout: parsed.layout || "",
+    area_name: parsed.area_name || "",
+    kind: parsed.kind || "",
     fetched_url: got.url || url,
   };
 }

@@ -231,10 +231,13 @@ export function parseHfSearchHtml(html) {
     const geoMatch = card.match(/LatLng=([0-9.]+)\s*,\s*([0-9.]+)/);
     const agencyMatch = card.match(/仲介[^<]{0,40}/);
     const refreshMatch = card.match(/更新：[\s\S]{0,40}?class="infos">([^<]+)/);
+    const communityMatch = String(titleMatch?.[1] || "").match(/【([^【】]{1,20})】/)
+      || stripTags(card).match(/社區[：:／/]\s*([^\s<]{1,20})/);
     items.push({
       id: idMatch[1],
       title: String(titleMatch?.[1] || "").trim(),
       address: String(addrMatch?.[1] || "").trim(),
+      community: String(communityMatch?.[1] || "").trim(),
       layout: String(levelMatch?.[1] || "").replace(/\(室\)/g, "").trim(),
       floorName: String(floorMatch?.[1] || "").replace(/\s+/g, "").replace("／", "/"),
       price: Number(String(priceMatch?.[1] || "").replace(/,/g, "")) || 0,
@@ -297,8 +300,8 @@ export function normalizeHfItem(item, { regionId, sectionId } = {}) {
     role_name: item.agency || "好房網",
     cover: String(item.cover || "").trim(),
     community_id: 0,
-    community_name: "",
-    tags: JSON.stringify(tags),
+    community_name: String(item.community || "").trim(),
+    tags: JSON.stringify([...tags, item.community].filter((row) => String(row || "").trim())),
     refresh_time: String(item.refresh || "").trim(),
     lat: Number.isFinite(lat) ? lat : null,
     lng: Number.isFinite(lng) ? lng : null,

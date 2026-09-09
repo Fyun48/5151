@@ -119,7 +119,9 @@ export function normalizeDdItem(item, { regionId, sectionId } = {}) {
     || [item.address?.city, item.address?.area, item.address?.road].filter(Boolean).join("");
   const areaName = areaNameFromItem(item);
   const layout = layoutFromItem(item);
-  const floorName = item.floor != null && item.floor !== "" ? String(item.floor) : "";
+  const floor = item.floor != null && item.floor !== "" ? String(item.floor).trim() : "";
+  const totalFloor = item.total_floor ?? item.totalFloor ?? item.floor_total ?? item.pattern?.total_floor;
+  const floorName = floor && totalFloor ? `${floor}/${totalFloor}` : floor;
   const priceNum = Number(item.rent) || 0;
   const cover = item.covers?.[0]?.image?.sm || item.covers?.[0]?.image?.md || "";
   const tags = ["租租通", ...(Array.isArray(item.themes) ? item.themes.slice(0, 4) : [])].filter((row) => String(row || "").trim());
@@ -151,8 +153,8 @@ export function normalizeDdItem(item, { regionId, sectionId } = {}) {
     role_name: roleFromItem(item),
     cover: String(cover || "").trim(),
     community_id: 0,
-    community_name: "",
-    tags: JSON.stringify(tags),
+    community_name: String(item.community?.name || item.community_name || item.building?.name || item.community || "").trim(),
+    tags: JSON.stringify([...tags, item.community?.name || item.community_name || item.building?.name].filter((row) => String(row || "").trim())),
     refresh_time: String(item.published_date || "").trim(),
     lat: null,
     lng: null,

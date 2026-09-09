@@ -307,6 +307,12 @@ export async function startListingImport(db, userId, input = {}, opts = {}) {
         title,
         body: text,
         photos: photoResult.items.map((item) => item.url),
+        address: parsedListing.address || "",
+        floor_name: parsedListing.floor_name || "",
+        community: parsedListing.community || "",
+        layout: parsedListing.layout || "",
+        area_name: parsedListing.area_name || "",
+        kind: parsedListing.kind || "",
       }, now);
     } catch (error) {
       await cleanupImportedMedia(db, uid, photoResult.items.map((item) => item.id));
