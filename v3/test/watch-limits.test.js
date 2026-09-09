@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import {
   MEMBER_MAX_WATCHED,
@@ -37,6 +38,12 @@ test("watch limits are 6 for members, 15 for sponsors, unlimited for admin", () 
   assert.match(watchLimitMessage(MEMBER_MAX_WATCHED), /一般會員最多特別關注 6 筆/);
   assert.doesNotMatch(watchLimitMessage(MEMBER_MAX_WATCHED), /管理員/);
   assert.doesNotMatch(watchLimitMessage(SPONSOR_MAX_WATCHED), /管理員/);
+});
+
+test("stats counts personal watches even when listings are pending offline", () => {
+  const src = readFileSync(new URL("../src/db.js", import.meta.url), "utf8");
+  assert.match(src, /import \{ canAddWatch, countWatched \} from "\.\/watchLimits\.js"/);
+  assert.match(src, /watched: countWatched\(db, uid\)/);
 });
 
 test("member cannot add a 7th watch", () => {

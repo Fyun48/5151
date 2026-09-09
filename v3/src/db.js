@@ -19,7 +19,7 @@ import {
 import { sameSearch } from "./client591.js";
 import { CITIES, districtNameFromListing, districtsFromSearchUrls, lookupDistrict, normalizeWatchDistricts } from "./regions.js";
 import { matchFocusHints, preferPrimaryListing } from "./match.js";
-import { canAddWatch } from "./watchLimits.js";
+import { canAddWatch, countWatched } from "./watchLimits.js";
 import {
   alreadyNotifiedGroup,
   bindListingsToGroup,
@@ -3902,7 +3902,7 @@ export function stats(searchKeys, userId, settingsOverride) {
   const out = {
     total: browse.length,
     unseen: browse.filter((row) => !row.viewed).length,
-    watched: base.filter((row) => row.watched).length,
+    watched: countWatched(db, uid) || base.filter((row) => row.watched).length,
     same_source: browse.filter((row) => ["same_source", "update", "price_drop", "title_update"].includes(row.last_event)).length,
     hidden: attrRows.filter((row) => row.hidden).length,
     offline: raw.filter((row) => isPendingOffline(row)).length,
