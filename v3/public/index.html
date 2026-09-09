@@ -8468,6 +8468,7 @@
         if ($("importStatus")) $("importStatus").textContent = error.message;
       }
     });
+    const SELF_EMOJIS = ["😊","🏠","☀️","🌿","🛁","🍳","🅿️","🛗","🚇","🚲","🐕","🐱","👶","✅","❗"];
     $("selfBodyEditor")?.addEventListener("input", syncSelfBodyFromEditor);
     $("selfBodyEditorWrap")?.addEventListener("click", (ev) => {
       const btn = ev.target.closest("[data-rich]");
@@ -8603,7 +8604,6 @@
       renderSelfPhotoDraftAndGrid();
       if ($("selfPledge")) $("selfPledge").checked = false;
     }
-    const SELF_EMOJIS = ["😊","🏠","☀️","🌿","🛁","🍳","🅿️","🛗","🚇","🚲","🐕","🐱","👶","✅","❗"];
     function syncSelfBodyEditor(html) {
       const ed = $("selfBodyEditor");
       if (ed) ed.innerHTML = safeListingHtml(html || "");

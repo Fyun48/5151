@@ -30,6 +30,13 @@ test("index.html inline script parses", () => {
   }
 });
 
+test("SELF_EMOJIS is declared before the emoji bar paints", () => {
+  const html = pub("index.html");
+  const decl = html.indexOf("const SELF_EMOJIS");
+  const use = html.indexOf("SELF_EMOJIS.map");
+  assert.ok(decl > 0 && use > decl, "emoji list must be declared before paintEmojis runs");
+});
+
 test("boot watchdog still runs if the main page script never parses", () => {
   const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
   assert.match(html, /id="bootFail"/);
