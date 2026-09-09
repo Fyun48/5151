@@ -105,6 +105,29 @@ test("parseHpDetailJson reads full detail (address+coords) from the SPA JSON API
   assert.equal(parseHpDetailJson("<html>shell</html>"), null);
 });
 
+test("5168 JSON 16699854 keeps 民權路 address, 南加州 community, 22/24 floors", () => {
+  const live = readFileSync(path.join(dir, "fixtures/houseprice-detail-16699854.json"), "utf8");
+  const detail = parseHpDetailJson(live);
+  assert.equal(detail.address, "新北市淡水區民權路19號");
+  assert.equal(detail.floorName, "22/24");
+  assert.equal(detail.community, "南加州");
+  assert.equal(detail.layout, "2房2廳2衛");
+  assert.equal(detail.areaName, "30.8坪");
+  const fallback = parseHpDetailJson({
+    webRentCaseGroupingDetail: {
+      caseName: "竹圍捷運【南加州】高樓帝王海景戶",
+      simpAddress: "新北市淡水區民權路19號",
+      fromFloor: "22",
+      toFloor: "22",
+      upFloor: 24,
+      communityTag: "",
+      conditionTags: ["南加州"],
+    },
+  });
+  assert.equal(fallback.community, "南加州");
+  assert.equal(fallback.floorName, "22/24");
+});
+
 test("fetchHpCoveringListings enriches from the JSON API (address + geo pin)", async () => {
   const jobs = [{ regionId: 1, sectionIds: [8], priceMin: 0, priceMax: 0, searchUrl: "x" }];
   const batches = await fetchHpCoveringListings(jobs, {

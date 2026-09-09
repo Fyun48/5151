@@ -1003,10 +1003,7 @@
     }
     .who { color: var(--muted); font-size: 13px; }
     #helpQaBtn, #feedbackBtn {
-      padding: 5px 10px;
-      font-size: 12px;
-      font-weight: 700;
-      letter-spacing: 0.04em;
+      display: none;
     }
     .feedback-panel { width: min(560px, 100%); }
     .feedback-kinds { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -2405,7 +2402,7 @@
         position: fixed;
         left: 8px;
         right: auto;
-        bottom: calc(57px + env(safe-area-inset-bottom, 0px));
+        bottom: calc(58px + env(safe-area-inset-bottom, 0px));
         z-index: 117;
         opacity: 1;
         pointer-events: auto;
@@ -3333,6 +3330,7 @@
       <div class="listing-tools" id="listingTools">
         <h3>刊登幫手</h3>
         <p class="copy-draft-banner" id="copyDraftBanner" hidden>這是複製來的未刊登草稿，原物件沒有被改。請檢查後再勾選聲明並送出，不會自動刊登。</p>
+        <p class="hint" id="descTemplateHint">一般會員可存 2 則說明範本；贊助會員可存到 5 則。</p>
         <div class="listing-tools-row">
           <label class="visually-hidden" for="descTemplatePick">說明範本</label>
           <select id="descTemplatePick"><option value="">選擇說明範本</option></select>
@@ -8468,6 +8466,7 @@
         if ($("importStatus")) $("importStatus").textContent = error.message;
       }
     });
+    const SELF_EMOJIS = ["😊","🏠","☀️","🌿","🛁","🍳","🅿️","🛗","🚇","🚲","🐕","🐱","👶","✅","❗"];
     $("selfBodyEditor")?.addEventListener("input", syncSelfBodyFromEditor);
     $("selfBodyEditorWrap")?.addEventListener("click", (ev) => {
       const btn = ev.target.closest("[data-rich]");
@@ -8603,7 +8602,6 @@
       renderSelfPhotoDraftAndGrid();
       if ($("selfPledge")) $("selfPledge").checked = false;
     }
-    const SELF_EMOJIS = ["😊","🏠","☀️","🌿","🛁","🍳","🅿️","🛗","🚇","🚲","🐕","🐱","👶","✅","❗"];
     function syncSelfBodyEditor(html) {
       const ed = $("selfBodyEditor");
       if (ed) ed.innerHTML = safeListingHtml(html || "");
@@ -8634,12 +8632,12 @@
       sel.innerHTML = `<option value="">選擇聯絡人</option>` + contactProfiles.map((item) => (
         `<option value="${item.id}">${esc(item.label)}${item.is_account ? "（不可刪）" : ""}</option>`
       )).join("");
-      if ([...sel.options].some((opt) => opt.value === keep)) sel.value = keep;
+      if (keep && [...sel.options].some((opt) => opt.value === keep)) sel.value = keep;
       else {
         const account = contactProfiles.find((item) => item.is_account);
         if (account) {
           sel.value = String(account.id);
-          if (!$("selfContactName")?.value) applyContactProfile(account.id);
+          applyContactProfile(account.id);
         }
       }
     }
@@ -9026,19 +9024,7 @@
     (function bindHelpDockMotion() {
       const dock = $("mobileHelpDock");
       if (!dock) return;
-      let idleTimer = 0;
-      const desktop = () => window.matchMedia("(min-width: 881px)").matches;
-      const reduced = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      function bumpDesktopDock() {
-        if (!desktop()) return;
-        dock.classList.remove("is-compact");
-        if (idleTimer) window.clearTimeout(idleTimer);
-        idleTimer = window.setTimeout(() => dock.classList.add("is-compact"), reduced() ? 0 : 3200);
-      }
-      window.addEventListener("scroll", bumpDesktopDock, { passive: true });
-      document.addEventListener("scroll", bumpDesktopDock, { passive: true, capture: true });
-      dock.addEventListener("pointerdown", bumpDesktopDock);
-      bumpDesktopDock();
+      dock.classList.remove("is-compact");
     })();
     (function bindSearchBarScrollHide() {
       let idle = 0;
