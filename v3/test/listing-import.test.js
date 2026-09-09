@@ -15,6 +15,7 @@ import { countActiveMedia, ensureMemberMediaSchema } from "../src/memberMedia.js
 import { ensureSelfListingSchema, getSelfListing, publicListingView } from "../src/selfListings.js";
 import {
   assertSponsorMember,
+  canUseListingImport,
   cancelListingImport,
   confirmListingImport,
   ensureListingImportSchema,
@@ -152,6 +153,7 @@ async function start591(db, userId, extra = {}) {
   const url = extra.url || "https://rent.591.com.tw/15801234";
   return startListingImport(db, userId, { url }, {
     plan: extra.plan || "sponsor",
+    role: extra.role || "",
     processor: fakeProcessor,
     lookupImpl: publicLookup(),
     fetchImpl: mockFetch({
@@ -167,7 +169,11 @@ async function start591(db, userId, extra = {}) {
 test("sponsor helper and URL allowlist", () => {
   assert.equal(isSponsorPlan("sponsor"), true);
   assert.equal(isSponsorPlan("free"), false);
+  assert.equal(canUseListingImport({ plan: "sponsor" }), true);
+  assert.equal(canUseListingImport({ plan: "free", role: "admin" }), true);
+  assert.equal(canUseListingImport({ plan: "free", role: "member" }), false);
   assert.throws(() => assertSponsorMember("free"), (e) => e.status === 403 && e.code === "sponsor_required");
+  assert.doesNotThrow(() => assertSponsorMember("free", "admin"));
   assert.equal(canHandleImportUrl("https://rent.591.com.tw/15801234"), true);
   assert.equal(canHandleImportUrl("https://rent.houseprice.tw/house/16705651"), true);
   assert.equal(canHandleImportUrl("https://example.com/x"), false);
@@ -533,6 +539,35 @@ test("failed fetch leaves no fake listing", async () => {
     (e) => e.code === "SOURCE_UNAVAILABLE",
   );
   assert.equal(db.prepare("SELECT COUNT(*) n FROM listings").get().n, 0);
+  db.close();
+});
+
+test("admin can import without sponsor plan but cannot skip declaration or validation", async () => {
+  const db = open();
+  addUser(db, { id: 3, email: "admin@example.com", plan: "free" });
+  await assert.rejects(
+    () => startListingImport(db, 3, { url: "https://rent.591.com.tw/15801234" }, { plan: "free" }),
+    (e) => e.status === 403,
+  );
+  await assert.rejects(
+    () => startListingImport(db, 3, { url: "https://example.com/not-allowed" }, { plan: "free", role: "admin" }),
+    /支援|HTTPS|來源/,
+  );
+  const row = await start591(db, 3, { plan: "free", role: "admin" });
+  assert.equal(row.status, "ready_for_review");
+  assert.equal(row.provider, "591");
+  assert.match(row.original_source_url, /591/);
+  assert.throws(() => confirmListingImport(db, 3, row.id, { accept: false }), /勾選/);
+  const doc = getEffectiveDocument(db, "external_import_declaration");
+  const ok = confirmListingImport(db, 3, row.id, {
+    accept: true,
+    document_id: doc.id,
+    version: doc.version,
+    content_hash: doc.content_hash,
+  });
+  assert.equal(ok.status, "confirmed");
+  assert.equal(ok.declaration_content_hash, doc.content_hash);
+  assert.ok(listMemberConsents(db, 3).some((c) => c.source === "import"));
   db.close();
 });
 

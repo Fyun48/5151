@@ -2,7 +2,7 @@
 
 import { decodeEntities } from "./htmlEntities.js";
 import { extraMonthlyAmount, listingCompareCost, parseJsonFees, rentAmount } from "./listingCost.js";
-import { preferPrimaryListing } from "./match.js";
+import { preferPrimaryListing, sortGroupListings } from "./match.js";
 
 function normFeeText(value) {
   return String(value ?? "")
@@ -275,10 +275,20 @@ export function sameHouseBundle(listing, peers = []) {
   const primary = uniq.reduce((best, row) => preferPrimaryListing(best, row), uniq[0]);
   const primaryId = Number(primary.post_id);
   const mineId = Number(listing.post_id);
-  const others = uniq
-    .filter((row) => Number(row.post_id) !== mineId)
-    .sort((a, b) => listingCompareCost(b, { includeExtras: true }) - listingCompareCost(a, { includeExtras: true }))
+  const ordered = sortGroupListings(uniq);
+  const visibleIds = new Set(ordered.slice(0, 3).map((row) => Number(row.post_id)));
+  const others = ordered
+    .filter((row) => Number(row.post_id) !== mineId && visibleIds.has(Number(row.post_id)))
     .slice(0, 2);
+  const collapsed = ordered
+    .filter((row) => !visibleIds.has(Number(row.post_id)))
+    .map((row) => ({
+      post_id: Number(row.post_id),
+      title: decodeEntities(row.title || ""),
+      source: String(row.source || "591"),
+      source_label: row.source_label || "",
+      url: row.url || "",
+    }));
   const mineSnap = listingCostSnapshot(listing);
   const primarySnap = listingCostSnapshot(primary);
   const cheaperGap = mineSnap.total > 0 && primarySnap.total > 0 ? mineSnap.total - primarySnap.total : 0;
@@ -290,7 +300,10 @@ export function sameHouseBundle(listing, peers = []) {
     cheaper_gap: cheaperGap > 0 ? cheaperGap : 0,
     mine_total: mineSnap.total,
     primary_total: primarySnap.total,
-    peer_count: others.length,
+    peer_count: Math.max(0, uniq.length - 1),
+    hidden_count: collapsed.length,
+    fold_label: collapsed.length ? `另有 ${collapsed.length} 筆同物件來源` : "",
+    collapsed,
     compare: compareHouseGroup([listing, ...others]),
     peers: others.map((row) => {
       const pub = publicSameHousePeer(row);

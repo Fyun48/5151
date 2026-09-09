@@ -1,5 +1,6 @@
 import {
   enqueueListingEvent,
+  bindNotifyJobSnapshots,
   coveringPlan,
   findBySourceKey,
   getCommunityCache,
@@ -51,6 +52,7 @@ import { fetchSinyiCoveringListings } from "./sinyi.js";
 import { fetchHpCoveringListings } from "./houseprice.js";
 import { fetchDdCoveringListings } from "./ddroom.js";
 import { fetchHfCoveringListings } from "./housefun.js";
+import { fetchRakuyaCoveringListings } from "./rakuya.js";
 import { commuteWorkJobs, hasWorkPoint, needsListingGeo, normalizeCommuteMode } from "./geo.js";
 import { isTrustedGeoSource, listingCommunityId } from "./location.js";
 import { decideNotifyDelivery } from "./floors.js";
@@ -280,6 +282,7 @@ async function resolveListingRoute(listing, settings) {
 }
 
 export async function flushPendingNotifications(settings = getSettings(), { silent = false } = {}) {
+  bindNotifyJobSnapshots();
   const pending = pendingNotifyEvents(80);
   const dockByUser = new Map();
   const hookByUser = new Map();
@@ -447,7 +450,8 @@ export async function runWatch(options = {}) {
   const wantHp = isCrawlSourceEnabled("houseprice");
   const wantDd = isCrawlSourceEnabled("ddroom");
   const wantHf = isCrawlSourceEnabled("housefun");
-  if (!want591 && !wantHb && !wantSinyi && !wantHp && !wantDd && !wantHf) {
+  const wantRakuya = isCrawlSourceEnabled("rakuya");
+  if (!want591 && !wantHb && !wantSinyi && !wantHp && !wantDd && !wantHf && !wantRakuya) {
     return {
       checked_at: nowIso(),
       searches: [],
@@ -472,6 +476,7 @@ export async function runWatch(options = {}) {
     throw new Error("請先選行政區或貼上至少一組 591 搜尋網址");
   }
   replaceCrawlCovers(db, jobs);
+  bindNotifyJobSnapshots();
 
   const isBaseline = settings.hasBaseline !== true && listingCount() === 0;
   const pages = CRAWL_PAGES_591;
@@ -551,6 +556,13 @@ export async function runWatch(options = {}) {
       ...fetchOptions,
       pages: hbPages,
       postForm: options.hfPostForm,
+    }));
+  }
+  if (wantRakuya) {
+    await collectExternal("樂屋網", () => fetchRakuyaCoveringListings(jobs, {
+      ...fetchOptions,
+      pages: hbPages,
+      fetchText: options.rakuyaFetchText,
     }));
   }
 
