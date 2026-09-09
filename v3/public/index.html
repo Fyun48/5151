@@ -205,8 +205,10 @@
     body.compare-open #scrollTopBtn,
     body.compare-open #expandPanelBtn,
     body.compare-open #ownerFab,
+    body.compare-open .mobile-help-dock,
     body.guest-toast-open #scrollTopBtn,
-    body.guest-toast-open #expandPanelBtn { visibility: hidden; pointer-events: none; }
+    body.guest-toast-open #expandPanelBtn,
+    body.guest-toast-open .mobile-help-dock { visibility: hidden; pointer-events: none; }
     .hub-overlay {
       position: fixed;
       inset: 0;
@@ -479,7 +481,7 @@
       display: inline-flex;
       position: fixed;
       right: 18px;
-      bottom: 140px;
+      bottom: 132px;
       width: 44px;
       height: 44px;
       padding: 0;
@@ -620,17 +622,26 @@
     .push-danger { border-color: var(--rose-line, #e2b3b0); color: var(--rose-ink, #b4453f); }
     .push-danger:hover:not(:disabled) { background: var(--rose-soft, #fbeceb); border-color: var(--rose-line, #e2b3b0); }
     button:disabled { opacity: 0.55; cursor: not-allowed; }
-    /* 桌面：右下浮動 dock；閒置縮成 compact tab。手機樣式在 880 斷點覆寫。 */
+    /* 桌面：Q&A／意見橫排在 × 左側（4px）；閒置約 1 秒後淡出。手機樣式在 880 斷點覆寫。 */
     .mobile-help-dock {
       display: flex;
-      flex-direction: column;
-      align-items: stretch;
-      gap: 6px;
+      flex-direction: row;
+      align-items: center;
+      gap: 4px;
       position: fixed;
       right: 18px;
-      bottom: 80px;
+      bottom: 28px;
       left: auto;
       z-index: 117;
+      transition: opacity 0.2s ease, transform 0.2s ease;
+    }
+    body.panel-collapsed:not(:has(.list-head-sticky.filter-compact)) .mobile-help-dock {
+      right: calc(18px + var(--touch) + 4px);
+    }
+    .mobile-help-dock.is-idle-hidden {
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(4px);
     }
     .mobile-help-dock.is-compact button {
       padding: 6px 8px;
@@ -668,14 +679,22 @@
       width: min(240px, 100%);
       margin-left: auto;
       min-height: 44px;
-      transition: opacity 0.35s ease;
     }
-    body.search-bar-hidden .list-search {
-      opacity: 0;
+    body.search-bar-hidden .list-head-sticky {
+      max-height: 0;
+      margin-top: 0 !important;
+      margin-bottom: 0 !important;
+      padding-top: 0 !important;
+      padding-bottom: 0 !important;
+      border-width: 0;
       pointer-events: none;
     }
+    body.search-bar-hidden .list-head-sticky .filter-mini-btn {
+      pointer-events: auto;
+    }
     @media (prefers-reduced-motion: reduce) {
-      .list-search { transition: none; }
+      .list-head-sticky { transition: none; }
+      .mobile-help-dock { transition: none; }
     }
     .item-title {
       margin: 6px 0 0;
@@ -1380,6 +1399,8 @@
       overflow: hidden;
       min-width: 0;
       max-width: 100%;
+      max-height: 2400px;
+      transition: max-height 0.32s ease, margin 0.32s ease, padding 0.32s ease, border-width 0.2s ease;
     }
     body.panel-collapsed .list-head-sticky {
       position: static;
@@ -1554,7 +1575,7 @@
     #scrollTopBtn {
       position: fixed;
       right: 18px;
-      bottom: 158px;
+      bottom: 80px;
       z-index: 119;
       width: 44px;
       height: 44px;
@@ -2021,7 +2042,7 @@
     #ownerFab {
       position: fixed;
       right: 18px;
-      bottom: 196px;
+      bottom: 184px;
       z-index: 118;
       min-height: 44px;
       padding: 10px 14px;
@@ -2392,7 +2413,7 @@
         right: 12px;
         bottom: calc(76px + env(safe-area-inset-bottom, 0px));
       }
-      /* 手機 Q&A／意見：直排靠左，距底欄 1px */
+      /* 手機 Q&A／意見：直排靠左，距底欄 1px，常駐可見 */
       .mobile-help-dock {
         display: flex;
         flex-direction: column;
@@ -2409,7 +2430,8 @@
         transform: none;
         transition: opacity 0.2s ease, transform 0.2s ease;
       }
-      .mobile-help-dock.is-visible {
+      .mobile-help-dock.is-visible,
+      .mobile-help-dock.is-idle-hidden {
         opacity: 1;
         pointer-events: auto;
         transform: none;
@@ -9051,7 +9073,30 @@
     (function bindHelpDockMotion() {
       const dock = $("mobileHelpDock");
       if (!dock) return;
-      dock.classList.remove("is-compact");
+      let idleTimer = 0;
+      const desktop = () => window.matchMedia("(min-width: 881px)").matches;
+      const reduced = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      function showDock() {
+        dock.classList.remove("is-idle-hidden", "is-compact");
+      }
+      function hideDock() {
+        if (!desktop()) return;
+        if (dock.matches(":hover") || dock.contains(document.activeElement)) return;
+        dock.classList.add("is-idle-hidden");
+      }
+      function bump() {
+        showDock();
+        if (idleTimer) window.clearTimeout(idleTimer);
+        if (!desktop() || reduced()) return;
+        idleTimer = window.setTimeout(hideDock, 1000);
+      }
+      window.addEventListener("scroll", bump, { passive: true });
+      document.addEventListener("scroll", bump, { passive: true, capture: true });
+      document.addEventListener("pointermove", bump, { passive: true });
+      dock.addEventListener("pointerenter", showDock);
+      dock.addEventListener("focusin", showDock);
+      dock.addEventListener("pointerleave", bump);
+      bump();
     })();
     (function bindSearchBarScrollHide() {
       let idle = 0;
@@ -9059,6 +9104,11 @@
       function hide() { document.body.classList.add("search-bar-hidden"); }
       function show() { document.body.classList.remove("search-bar-hidden"); }
       function onScroll() {
+        const active = document.activeElement;
+        if (active && (active.id === "q" || (active.closest?.("#listHeadSticky") && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")))) {
+          show();
+          return;
+        }
         hide();
         if (idle) window.clearTimeout(idle);
         idle = window.setTimeout(show, reduced() ? 0 : 700);
