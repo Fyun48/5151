@@ -374,7 +374,7 @@ export function decorateSelfListing(row, { viewerId = 0 } = {}) {
     role_name: String(row.role_name || ""),
     cover: String(row.cover || ""),
     photos: listingPhotoUrls(row),
-    body: String(row.self_body || ""),
+    body: sanitizeListingBodyHtml(String(row.self_body || ""), SELF_BODY_MAX),
     traits: (() => {
       try {
         return normalizeSelfTraits(JSON.parse(row.self_traits || "[]"));
@@ -809,7 +809,7 @@ export function updateImportedDraftListing(db, userId, postId, input = {}) {
   if (Number(row.listed_by_user_id) !== uid) throw httpError("只能改自己的匯入草稿", 403);
   if (String(row.self_status || "") !== "draft") throw httpError("只有草稿可以修改匯入內容", 409);
   const title = input.title != null ? String(input.title || "").trim().slice(0, SELF_TITLE_MAX) : row.title;
-  const body = input.body != null ? String(input.body || "").trim().slice(0, SELF_BODY_MAX) : String(row.self_body || "");
+  const body = sanitizeListingBodyHtml(input.body != null ? input.body : row.self_body || "", SELF_BODY_MAX);
   const photos = input.photos != null ? normalizePhotoList(input.photos) : listingPhotoUrls(row);
   db.prepare(
     "UPDATE listings SET title=?, self_body=?, self_photos=?, cover=? WHERE post_id=?",
