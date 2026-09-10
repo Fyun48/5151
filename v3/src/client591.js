@@ -1,5 +1,6 @@
-import { passesAttributeFilters, passesGeoFilters } from "./floors.js";
+import { passesAttributeFilters, passesGeoFilters, sanitizeFloorName } from "./floors.js";
 import { decodeEntities } from "./htmlEntities.js";
+import { listingKitFields } from "./listingKit.js";
 import { feeRowMonthlyAmount, parseTwdAmount } from "./listingCost.js";
 import { allDistricts } from "./regions.js";
 import { coordsFrom591Detail, coordsFromListing, isExcludedByKeyword } from "./geo.js";
@@ -250,7 +251,15 @@ export function normalizeListing(item) {
     address: item.address || "",
     area_name: item.area_name || "",
     layout: item.layoutStr || "",
-    floor_name: item.floor_name || "",
+    floor_name: sanitizeFloorName(item.floor_name),
+    ...listingKitFields({
+      title: item.title,
+      tags: item.tags,
+      address: item.address,
+      kind_name: item.kind_name,
+      extra_fee_text: item.extra_fee_text,
+      price_contain_text: item.price_contain_text,
+    }),
     kind_name: item.kind_name || "",
     role_name: item.role_name || item.linkman || "",
     cover: item.cover || (item.photoList && item.photoList[0]) || "",

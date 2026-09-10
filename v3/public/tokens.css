@@ -29,6 +29,10 @@
   --hermes-deep: #C2410C;
   --hermes-light: #F47A2A;
   --shezi-red: #DC2626;
+  /* 列表「此屋家俱家電狀態」專用漸層，不套 webhook 通知色 */
+  --kit-mint: #6ee7b7;
+  --kit-sky: #7dd3fc;
+  --kit-rose: #f9a8d4;
   /* webhook／站內通知 dock 專用，禁止套到找房列表內文 */
   --notify-new: #7dd3fc;
   --notify-new-fg: #075985;

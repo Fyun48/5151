@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { shouldKeepListing, passesAttributeFilters, passesDisplayFilters, listingHasElevator, matchesHousingKind, matchesListingSources, normalizeListQuery, housingTypeLabel, formatFloorDisplay } from "./floors.js";
+import { shouldKeepListing, passesAttributeFilters, passesDisplayFilters, listingHasElevator, matchesHousingKind, matchesListingSources, normalizeListQuery, housingTypeLabel, formatFloorDisplay, sanitizeFloorName } from "./floors.js";
+import { listingKitFrom, parseStoredFurnish } from "./listingKit.js";
 import { addressPrecision, isTrustedGeoSource, listingCommunityId, preferListingAddress, sourceCommunityLinked, sqlTrustedGeoSource } from "./location.js";
 import { makeRouteKey } from "./route.js";
 import {
@@ -564,6 +565,16 @@ try {
 }
 try {
   db.exec("ALTER TABLE listings ADD COLUMN alive_checked_at TEXT");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN has_natural_gas INTEGER NOT NULL DEFAULT 0");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN furnish_items TEXT NOT NULL DEFAULT '[]'");
 } catch {
   // already migrated
 }
@@ -2108,6 +2119,11 @@ function decorateListingLite(row, settings, userId) {
     commute_min_pm: Number.isFinite(Number(row.rush_pm_min)) && Number(row.rush_pm_min) > 0 ? Math.round(Number(row.rush_pm_min)) : null,
     district: districtNameFromListing(row),
     floor_display: formatFloorDisplay(row.floor_name),
+    has_natural_gas: Number(row.has_natural_gas) === 1 || listingKitFrom(row).has_natural_gas,
+    furnish_items: (() => {
+      const stored = parseStoredFurnish(row.furnish_items);
+      return stored.length ? stored : listingKitFrom(row).furnish_items;
+    })(),
     community_linked: Number(row.community_linked) === 1 || Number(row.community_id) > 0,
     source,
     source_label: selfSourceLabel(source),
@@ -2660,8 +2676,14 @@ export function upsertListing(listing) {
   const costChangedAt = String(listing.cost_changed_at || "").trim();
   const costChangeType = String(listing.cost_change_type || "").trim();
   const costChangeDetail = String(listing.cost_change_detail || "").trim();
-  const existing = db.prepare("SELECT address, geo_source FROM listings WHERE post_id = ?").get(listing.post_id);
+  let existing = null;
+  try {
+    existing = db.prepare("SELECT address, geo_source, floor_name, has_natural_gas, furnish_items FROM listings WHERE post_id = ?").get(listing.post_id);
+  } catch {
+    existing = db.prepare("SELECT address, geo_source, floor_name FROM listings WHERE post_id = ?").get(listing.post_id);
+  }
   const address = preferListingAddress(listing.address, existing?.address, existing?.geo_source);
+  const floorName = sanitizeFloorName(listing.floor_name) || sanitizeFloorName(existing?.floor_name) || "";
   db.prepare(`
     INSERT INTO listings (
       post_id, source_key, search_key, title, url, price, price_num, extra_fee, extra_fee_text,
@@ -2754,7 +2776,7 @@ export function upsertListing(listing) {
     address,
     listing.area_name,
     listing.layout,
-    listing.floor_name,
+    floorName,
     listing.kind_name,
     listing.role_name,
     listing.cover,
@@ -2780,6 +2802,22 @@ export function upsertListing(listing) {
       .run(origin, originId, listing.post_id);
   } catch {
     // ignore
+  }
+  const kit = listingKitFrom({
+    ...listing,
+    has_natural_gas: listing.has_natural_gas || existing?.has_natural_gas,
+    furnish_items: listing.furnish_items || existing?.furnish_items,
+    tags: listing.tags,
+  });
+  try {
+    db.prepare(`
+      UPDATE listings
+         SET has_natural_gas = CASE WHEN ? = 1 THEN 1 ELSE has_natural_gas END,
+             furnish_items = CASE WHEN ? != '[]' THEN ? ELSE furnish_items END
+       WHERE post_id = ?
+    `).run(kit.has_natural_gas ? 1 : 0, JSON.stringify(kit.furnish_items), JSON.stringify(kit.furnish_items), listing.post_id);
+  } catch {
+    // older isolated fixtures without kit columns
   }
   const geoSource = String(listing.geo_source || "").trim();
   if (geoSource) {

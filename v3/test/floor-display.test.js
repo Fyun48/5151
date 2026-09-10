@@ -12,4 +12,8 @@ test("floor display unifies to ( 3F / 8F )", () => {
   assert.equal(formatFloorDisplay("B1/5F"), "( B1 / 5F )");
   assert.equal(formatFloorDisplay("4F"), "( 4F )");
   assert.equal(formatFloorDisplay(""), "");
+  assert.equal(formatFloorDisplay("-1"), "");
+  assert.equal(formatFloorDisplay("-1/5"), "");
+  assert.equal(formatFloorDisplay("--"), "");
+  assert.equal(formatFloorDisplay("0"), "");
 });

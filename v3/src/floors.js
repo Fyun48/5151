@@ -166,9 +166,24 @@ function floorToken(token) {
   return raw;
 }
 
+/** 來源常用 -1／--／0 當「樓層不明」，不是地下室或 1F。 */
+export function isPlaceholderFloor(floorName) {
+  const raw = String(floorName || "").trim().replace(/\s+/g, "").replace(/[／]/g, "/");
+  if (!raw) return true;
+  if (/^[-–—]+$/.test(raw) || raw === "--/--" || raw === "-/-") return true;
+  if (/^-?\d+(?:F|樓)?$/i.test(raw) && Number(String(raw).replace(/[F樓]/i, "")) <= 0) return true;
+  const pair = raw.match(/^(-?\d+)(?:F|樓)?\/(-?\d+)(?:F|樓)?$/i);
+  if (pair && Number(pair[1]) <= 0) return true;
+  return false;
+}
+
+export function sanitizeFloorName(floorName) {
+  return isPlaceholderFloor(floorName) ? "" : String(floorName || "").trim();
+}
+
 /** 列表／詳情／比較統一顯示：( 3F / 8F ) */
 export function formatFloorDisplay(floorName) {
-  const original = String(floorName || "").trim();
+  const original = sanitizeFloorName(floorName);
   if (!original) return "";
   if (/^\(\s*.+\s*\/\s*.+\s*\)$/.test(original)) return original.replace(/\s+/g, " ");
   const raw = original.replace(/\s+/g, "").replace(/[／]/g, "/");

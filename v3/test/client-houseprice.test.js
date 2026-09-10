@@ -345,3 +345,49 @@ test("fetchHpCoveringListings uses injected HTML", async () => {
   assert.ok(batches[0].listings.every((row) => row.source === "houseprice"));
 });
 
+test("5168 16692013 keeps 福華路141巷 and 3/4 floors", () => {
+  const live = readFileSync(path.join(dir, "fixtures/houseprice-detail-16692013.json"), "utf8");
+  const detail = parseHpDetailJson(live);
+  assert.equal(detail.address, "台北市士林區福華路141巷");
+  assert.equal(detail.floorName, "3/4");
+  const list = normalizeHpItem({
+    id: "16692013", kind: "整層住家", title: "芝山捷運l兩房採光通風佳l生活機能佳l交通便利", price: 32000,
+    areaName: "17坪", layout: "2房2廳1衛", floorName: "", address: "台北市士林區福華路", community: "",
+  }, { regionId: 1, sectionId: 8 });
+  assert.equal(list.address, "台北市士林區福華路");
+  assert.equal(list.floor_name, "");
+  const enriched = enrichHpListingFromDetail(list, detail, { regionId: 1, sectionId: 8 });
+  assert.equal(enriched.address, "台北市士林區福華路141巷");
+  assert.equal(enriched.floor_name, "3/4");
+});
+
+test("5168 16546414 keeps 福國路, 鑽石大樓 and 5/8 floors", () => {
+  const live = readFileSync(path.join(dir, "fixtures/houseprice-detail-16546414.json"), "utf8");
+  const detail = parseHpDetailJson(live);
+  assert.equal(detail.address, "台北市士林區福國路");
+  assert.equal(detail.floorName, "5/8");
+  assert.equal(detail.community, "鑽石大樓");
+  const list = normalizeHpItem({
+    id: "16546414", kind: "整層住家", title: "", price: 20000,
+    areaName: "8.94坪", layout: "1房1廳1衛", floorName: "", address: "台北市士林區福國路", community: "鑽石大樓",
+  }, { regionId: 1, sectionId: 8 });
+  const enriched = enrichHpListingFromDetail(list, detail, { regionId: 1, sectionId: 8 });
+  assert.equal(enriched.address, "台北市士林區福國路");
+  assert.equal(enriched.floor_name, "5/8");
+  assert.equal(enriched.community_name, "鑽石大樓");
+});
+
+test("5168 JSON -1 floor is unknown and does not become a floor label", () => {
+  const detail = parseHpDetailJson({
+    webRentCaseGroupingDetail: {
+      caseName: "測試",
+      simpAddress: "台北市士林區福華路141巷",
+      fromFloor: "-1",
+      toFloor: "-1",
+      upFloor: 5,
+    },
+  });
+  assert.equal(detail.address, "台北市士林區福華路141巷");
+  assert.equal(detail.floorName, "");
+});
+

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { passesAttributeFilters } from "./floors.js";
+import { passesAttributeFilters, sanitizeFloorName } from "./floors.js";
+import { listingKitFields } from "./listingKit.js";
 import { decodeEntities } from "./htmlEntities.js";
 import { isExcludedByKeyword } from "./geo.js";
 import { addressHasPrecisePart, addressPrecision, extractTaiwanStreetAddress, isTaiwanMapPin, pickRicherAddress, sourceCommunityLinked } from "./location.js";
@@ -116,7 +117,7 @@ const HP_FIELD_LABELS = "地址|社區|樓層|坪數|型態|格局|用途|車位
 /** 5168「樓層 / 22 / 24樓」＝出租 22、總樓高 24。 */
 export function normalizeHpFloorName(value) {
   const raw = String(value || "").replace(/樓\s*$/, "").replace(/[／]/g, "/").replace(/\s+/g, "").trim();
-  if (!raw || raw === "--" || raw === "-") return "";
+  if (!raw || raw === "--" || raw === "-" || Number(raw) <= 0) return "";
   const range = raw.match(/^(\d+)(?:-(\d+))?\/(\d+)$/);
   if (range) {
     const low = range[2] && range[2] !== range[1] ? `${range[1]}-${range[2]}` : range[1];
@@ -341,13 +342,13 @@ export function parseHpDetailJson(payload) {
     const n = Number(value);
     return Number.isFinite(n) ? n : null;
   };
-  const toFloor = str(det.toFloor ?? det.to_floor ?? det.rentFloor ?? det.floor);
-  const upFloor = str(det.upFloor ?? det.up_floor ?? det.totalFloor ?? det.total_floor);
-  const fromFloor = str(det.fromFloor ?? det.from_floor);
+  const toFloor = sanitizeFloorName(str(det.toFloor ?? det.to_floor ?? det.rentFloor ?? det.floor));
+  const upFloor = sanitizeFloorName(str(det.upFloor ?? det.up_floor ?? det.totalFloor ?? det.total_floor));
+  const fromFloor = sanitizeFloorName(str(det.fromFloor ?? det.from_floor));
   let floorName = "";
-  if (upFloor) {
+  if (toFloor && upFloor) {
     const low = fromFloor && fromFloor !== toFloor ? `${fromFloor}-${toFloor}` : toFloor;
-    floorName = normalizeHpFloorName(low ? `${low}/${upFloor}` : upFloor);
+    floorName = normalizeHpFloorName(`${low}/${upFloor}`);
   } else if (toFloor) {
     floorName = normalizeHpFloorName(toFloor);
   }
@@ -439,8 +440,9 @@ export function enrichHpListingFromDetail(row, detail, { regionId, sectionId } =
   if (!row || !detail) return row;
   const next = { ...row };
   let changed = false;
-  if (detail.floorName && (!next.floor_name || (!floorNameLooksComplete(next.floor_name) && floorNameLooksComplete(detail.floorName)))) {
-    next.floor_name = detail.floorName;
+  const detailFloor = sanitizeFloorName(detail.floorName);
+  if (detailFloor && (!next.floor_name || (!floorNameLooksComplete(next.floor_name) && floorNameLooksComplete(detailFloor)))) {
+    next.floor_name = detailFloor;
     changed = true;
   }
   if (!next.area_name && detail.areaName) { next.area_name = detail.areaName; }
@@ -494,6 +496,14 @@ export function enrichHpListingFromDetail(row, detail, { regionId, sectionId } =
     }
   }
   if (tags) next.tags = JSON.stringify(tags);
+  Object.assign(next, listingKitFields({
+    title: next.title,
+    tags: next.tags,
+    text: `${next.address || ""} ${detail.usage || ""}`,
+    conditionTags: detail.conditionTags,
+    has_natural_gas: next.has_natural_gas,
+    furnish_items: next.furnish_items,
+  }));
   if (changed) {
     next.source_key = listingSourceKey({
       regionId: Number(regionId) || 0,
@@ -516,7 +526,7 @@ export function normalizeHpItem(item, { regionId, sectionId } = {}) {
   const address = String(item.address || "").trim();
   const areaName = String(item.areaName || "").trim();
   const layout = String(item.layout || "").trim();
-  const floorName = String(item.floorName || "").trim();
+  const floorName = sanitizeFloorName(item.floorName);
   const priceNum = Number(item.price) || 0;
   const tags = ["5168", item.community].filter((row) => String(row || "").trim());
   return {
@@ -541,6 +551,7 @@ export function normalizeHpItem(item, { regionId, sectionId } = {}) {
     area_name: areaName,
     layout,
     floor_name: floorName,
+    ...listingKitFields({ title: item.title, tags, text: item.text, conditionTags: item.conditionTags }),
     kind_name: kindName,
     role_name: "5168租屋",
     cover: String(item.cover || "").trim(),
@@ -641,8 +652,8 @@ export async function fetchHpCoveringListings(jobs, options = {}) {
   const getHtml = options.getHtml || defaultGetHtml;
   const batches = [];
   const seen = new Set();
-  let detailBudget = Math.max(0, Number(options.detailLimit ?? 30));
-  let addressBudget = Math.max(0, Number(options.addressDetailLimit ?? 80));
+  let detailBudget = Math.max(0, Number(options.detailLimit ?? 80));
+  let addressBudget = Math.max(0, Number(options.addressDetailLimit ?? 200));
 
   for (const job of jobs || []) {
     const regionId = Number(job.regionId) || 0;
@@ -679,11 +690,13 @@ export async function fetchHpCoveringListings(jobs, options = {}) {
           })) continue;
           seen.add(id);
           // 缺樓層／社區要補明細；缺座標也要補（明細頁地圖連結才有精準經緯度，通勤與捷運距離都靠它）。
-          const needDetail = !row.floor_name || !floorNameLooksComplete(row.floor_name) || !row.community_name || !addressHasPrecisePart(row.address) || row.lat == null;
+          const missingFloor = !row.floor_name || !floorNameLooksComplete(row.floor_name);
+          const missingAddr = !addressHasPrecisePart(row.address);
           const alreadyGeo = typeof options.hasGeo === "function" && options.hasGeo(row.post_id);
-          const forceAddress = !addressHasPrecisePart(row.address);
-          const canFetchAddress = forceAddress && addressBudget > 0;
-          const canFetchOther = needDetail && !alreadyGeo && detailBudget > 0;
+          const missingGeo = row.lat == null && !alreadyGeo;
+          const needDetail = missingFloor || missingAddr || !row.community_name || missingGeo;
+          const canFetchAddress = missingAddr && addressBudget > 0;
+          const canFetchOther = needDetail && !canFetchAddress && detailBudget > 0;
           if (canFetchAddress || canFetchOther) {
             const detail = await fetchHpDetail(id, getHtml);
             if (detail) row = enrichHpListingFromDetail(row, detail, { regionId, sectionId });

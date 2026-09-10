@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { passesAttributeFilters } from "./floors.js";
+import { passesAttributeFilters, sanitizeFloorName } from "./floors.js";
 import { isExcludedByKeyword } from "./geo.js";
+import { listingKitFields } from "./listingKit.js";
 import { feeFieldsFromBlob } from "./listingCost.js";
 import { zipForDistrict, districtKeyForZip } from "./hbhousing.js";
 import { lookupDistrict } from "./regions.js";
@@ -126,7 +127,7 @@ export function normalizeSinyiItem(item, { regionId, sectionId } = {}) {
     : door;
   const areaName = areaNameFromItem(item);
   const layout = layoutFromItem(item);
-  const floorName = String(item.floor || "").trim();
+  const floorName = sanitizeFloorName(item.floor);
   const priceNum = priceTwdFromSinyi(item.price);
   const lat = Number(item.lat);
   const lng = Number(item.lng);
@@ -154,6 +155,11 @@ export function normalizeSinyiItem(item, { regionId, sectionId } = {}) {
     area_name: areaName,
     layout,
     floor_name: floorName,
+    ...listingKitFields({
+      title: item.name,
+      tags,
+      text: `${item.community || ""} ${item.use || ""} ${item.address || ""}`,
+    }),
     kind_name: kindName,
     role_name: "信義房屋",
     cover: String(item.img || item.imgDefault || "").trim(),

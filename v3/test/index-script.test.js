@@ -244,6 +244,13 @@ test("member profiles cap districts and include usable ping in notify copy", () 
   assert.match(html, /MEMBER_MAX_WATCHED = 6/);
   assert.match(html, /SPONSOR_MAX_WATCHED = 15/);
   assert.match(html, /function formatFloorDisplay/);
+  assert.match(html, /function isPlaceholderFloor/);
+  assert.match(html, /function kitLine/);
+  assert.match(html, /此屋家俱家電狀態/);
+  assert.match(html, /有天然瓦斯/);
+  assert.match(html, /data-kit-furnish/);
+  assert.match(html, /\.kit-furnish/);
+  assert.match(html, /hover: hover\) and \(pointer: fine\)/);
   assert.match(html, /\( \$\{floorToken\(pair\[1\]\)\} \/ \$\{floorToken\(pair\[2\]\)\} \)/);
   assert.doesNotMatch(html, /出租 \$\{m\[1\]\}樓／共/);
   assert.match(html, /每個設定檔最多選/);
@@ -442,13 +449,13 @@ test("product name is 吉比租房物件追蹤 without v2 開發版 copy", () =>
   assert.equal(html.includes("v2 開發版"), false);
   assert.equal(html.includes("v3 開發版"), false);
   assert.equal(html.includes("與線上版分開的資料庫"), false);
-  assert.match(html, /ver\. 3\.51/);
+  assert.match(html, /ver\. 3\.52/);
   assert.doesNotMatch(html, /<h1>[^<]*v3/i);
   assert.match(login, /<h1>吉比租房物件追蹤<\/h1>/);
   assert.equal(login.includes("v2 開發版"), false);
   assert.equal(login.includes("v3 開發版"), false);
   assert.equal(login.includes("資料與線上版分開"), false);
-  assert.match(login, /ver\. 3\.51/);
+  assert.match(login, /ver\. 3\.52/);
 });
 
 test("MRT is admin-only and guest tour is in the page", () => {

@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
-import { passesAttributeFilters } from "./floors.js";
+import { passesAttributeFilters, sanitizeFloorName } from "./floors.js";
 import { isExcludedByKeyword } from "./geo.js";
 import { feeFieldsFromBlob } from "./listingCost.js";
-import { pickRicherAddress } from "./location.js";
+import { listingKitFields, parseFurnishItems } from "./listingKit.js";
+import { addressHasPrecisePart, pickRicherAddress } from "./location.js";
 import { lookupDistrict } from "./regions.js";
 
 export const DD_SOURCE = "ddroom";
@@ -11,6 +12,12 @@ export const DD_POST_ID_END = 2_600_000_000;
 export const DD_PAGE_ROWS = 20;
 export const DD_LIST_URL = "https://api.dd-room.com/api/v1/search";
 export const DD_SITE = "https://www.dd-room.com";
+export const DD_API = "https://api.dd-room.com/api/v1";
+
+export function ddObjectUrl(objectId) {
+  const id = String(objectId || "").trim();
+  return id ? `${DD_API}/objects/${encodeURIComponent(id)}` : `${DD_API}/objects/`;
+}
 
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -124,8 +131,8 @@ export function normalizeDdItem(item, { regionId, sectionId } = {}) {
   ]);
   const areaName = areaNameFromItem(item);
   const layout = layoutFromItem(item);
-  const floor = item.floor != null && item.floor !== "" ? String(item.floor).trim() : "";
-  const totalFloor = item.total_floor ?? item.totalFloor ?? item.floor_total ?? item.pattern?.total_floor;
+  const floor = sanitizeFloorName(item.floor != null && item.floor !== "" ? String(item.floor).trim() : "");
+  const totalFloor = sanitizeFloorName(item.total_floor ?? item.totalFloor ?? item.floor_total ?? item.pattern?.total_floor);
   const floorName = floor && totalFloor ? `${floor}/${totalFloor}` : floor;
   const priceNum = Number(item.rent) || 0;
   const cover = item.covers?.[0]?.image?.sm || item.covers?.[0]?.image?.md || "";
@@ -154,6 +161,14 @@ export function normalizeDdItem(item, { regionId, sectionId } = {}) {
     area_name: areaName,
     layout,
     floor_name: floorName,
+    ...listingKitFields({
+      title: item.title,
+      tags: item.themes,
+      themes: item.themes,
+      furnish: item.tags?.furnish,
+      include: item.tags?.include,
+      html: item.html,
+    }),
     kind_name: kindName,
     role_name: roleFromItem(item),
     cover: String(cover || "").trim(),
@@ -175,6 +190,51 @@ function inPriceRange(listing, priceMin, priceMax) {
   if (Number(priceMin) > 0 && n < Number(priceMin)) return false;
   if (Number(priceMax) > 0 && n > Number(priceMax)) return false;
   return true;
+}
+
+export function enrichDdListingFromObject(row, object) {
+  if (!row || !object) return row;
+  const next = { ...row };
+  const addr = object.address || {};
+  const address = pickRicherAddress([
+    next.address,
+    addr.complete,
+    [addr.city, addr.area, addr.road, addr.lane || addr.alley, addr.number || addr.no].filter(Boolean).join(""),
+  ]);
+  if (address) next.address = address;
+  const floor = sanitizeFloorName(object.floor);
+  const total = sanitizeFloorName(object.total_floor ?? object.totalFloor ?? object.story);
+  // story 在租租通是總樓高；出租樓層仍是 -1 時不要把總樓高當成所在樓層。
+  if (floor && total) next.floor_name = `${floor}/${total}`;
+  else if (floor) next.floor_name = floor;
+  const furnish = parseFurnishItems({
+    title: object.title,
+    themes: object.themes,
+    furnish: object.tags?.furnish,
+    include: object.tags?.include,
+    html: object.html,
+    furnish_items: next.furnish_items,
+  });
+  Object.assign(next, listingKitFields({
+    title: object.title || next.title,
+    themes: object.themes,
+    furnish,
+    include: object.tags?.include,
+    html: object.html,
+    has_natural_gas: next.has_natural_gas,
+  }));
+  return next;
+}
+
+export async function fetchDdObject(objectId, getJson = defaultGetJson) {
+  const id = String(objectId || "").trim();
+  if (!id) return null;
+  try {
+    const body = await getJson(ddObjectUrl(id));
+    return body?.data?.object && typeof body.data.object === "object" ? body.data.object : null;
+  } catch {
+    return null;
+  }
 }
 
 export function keepDdListing(listing, options = {}) {
@@ -214,6 +274,7 @@ export async function fetchDdCoveringListings(jobs, options = {}) {
   const getJson = options.getJson || defaultGetJson;
   const batches = [];
   const seen = new Set();
+  let objectBudget = Math.max(0, Number(options.objectDetailLimit ?? 80));
 
   for (const job of jobs || []) {
     const regionId = Number(job.regionId) || 0;
@@ -239,8 +300,18 @@ export async function fetchDdCoveringListings(jobs, options = {}) {
         for (const item of result.items) {
           const id = String(item.object_id || "");
           if (!id || seen.has(id)) continue;
-          const row = normalizeDdItem(item, { regionId, sectionId });
+          let row = normalizeDdItem(item, { regionId, sectionId });
           if (!row) continue;
+          const wantObject = options.objectDetail === true || (options.objectDetail !== false && getJson === defaultGetJson);
+          const needObject = wantObject && objectBudget > 0
+            && (!row.floor_name || !addressHasPrecisePart(row.address) || !parseFurnishItems(row).length);
+          if (needObject) {
+            const detail = await fetchDdObject(id, getJson);
+            if (detail) row = enrichDdListingFromObject(row, detail);
+            objectBudget -= 1;
+            const gap = options.detailGapMs ?? options.gapMs ?? 250;
+            if (gap > 0) await new Promise((resolve) => setTimeout(resolve, gap));
+          }
           if (!keepDdListing(row, {
             ...options,
             priceMin: job.priceMin,
