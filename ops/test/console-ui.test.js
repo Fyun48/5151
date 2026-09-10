@@ -23,6 +23,7 @@ test("console covers inbox, issues, gates and webhook test", () => {
 
 test("tab panes honor the hidden attribute (display:grid must not override it)", () => {
   assert.match(css, /\.tabpane\[hidden\]\s*\{[^}]*display:\s*none\s*!important/);
+  assert.match(css, /#ownerArea\[hidden\]\s*\{[^}]*display:\s*none\s*!important/);
   assert.match(js, /pane\.hidden = pane\.id !== `tab-\$\{name\}`/);
   assert.match(html, /id="tab-inbox"[^>]*hidden/);
   assert.match(html, /id="tab-issues"[^>]*hidden/);

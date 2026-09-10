@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex,nofollow" />
   <title>Ops Console · 吉比租房維運</title>
-  <link rel="stylesheet" href="/console.css?v=20260910-products" />
+  <link rel="stylesheet" href="/console.css?v=20260910-products2" />
 </head>
 <body>
   <header class="topbar">
@@ -112,7 +112,7 @@
           <p class="hint">穩定 <code>product_id</code> 之後不要改。顯示名可以之後再調。</p>
           <form id="createProductForm" autocomplete="off">
             <label for="newProductId">product_id</label>
-            <input id="newProductId" name="id" required maxlength="32" pattern="[a-z][a-z0-9_-]{0,31}" placeholder="例如 shop" />
+            <input id="newProductId" name="id" required maxlength="32" pattern="[a-z][-a-z0-9_]{0,31}" placeholder="例如 shop" />
             <label for="newProductName">顯示名</label>
             <input id="newProductName" name="display_name" maxlength="80" placeholder="例如 商店站" />
             <button type="submit" class="primary" id="createProductBtn">建立並產生密鑰</button>
