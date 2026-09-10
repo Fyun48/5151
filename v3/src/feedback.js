@@ -26,7 +26,7 @@ export const FEEDBACK_MAX_PER_HOUR = 10;
 export const FEEDBACK_MAX_PER_DAY = 30;
 
 export const FEEDBACK_LEGAL =
-  "回饋內容（含系統自動附上的目前畫面、篩選條件、裝置與版本）只給站方看，用來修 bug 與改功能。請不要在這裡填寫密碼或其他機密。";
+  "回饋內容（含系統自動附上的目前畫面、篩選條件、裝置與版本）只給站方看，用來修 bug 與改功能。這份授權不含會員名單、行銷用途、CRM 同步或跨站分析。請不要在這裡填寫密碼或其他機密。";
 
 function httpError(message, status = 400) {
   const err = new Error(message);

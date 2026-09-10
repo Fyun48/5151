@@ -8,6 +8,9 @@ import { exportHandoff } from "../../ops/src/exitDrill.js";
 import { ensureFeedbackSchema, createFeedbackWithOutbox, listFeedback } from "../src/feedback.js";
 import { ensureFeedbackOutboxSchema, outboxStats } from "../src/feedbackOutbox.js";
 import { importHandoffFeedback } from "../src/handoffImport.js";
+import { ensureCrmSchema, listContacts } from "../src/crm.js";
+import { updateProductCapabilities } from "../../ops/src/products.js";
+import { ingestCrmSnapshot } from "../../ops/src/crmReplica.js";
 import { deliveryControl } from "../src/opsDelivery.js";
 
 function openLocal() {
@@ -16,6 +19,7 @@ function openLocal() {
   db.exec("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)");
   ensureFeedbackSchema(db);
   ensureFeedbackOutboxSchema(db);
+  ensureCrmSchema(db);
   return db;
 }
 
@@ -48,5 +52,37 @@ test("example station restores from handoff with OPS unreachable", () => {
   const extra = createFeedbackWithOutbox(local, 0, { kind: "idea", body: "沒有 OPS 也能新收回饋" }, { now: new Date(Date.now() + 30_000) });
   assert.ok(extra.id > 0);
   assert.equal(outboxStats(local).pending, 2);
+  local.close();
+});
+
+test("handoff restore brings CRM contacts back after replica purge", () => {
+  const ops = openOpsDb(":memory:");
+  createProduct(ops, { id: "drill", displayName: "演練站" });
+  updateProductCapabilities(ops, "drill", { crm_sync: true });
+  ingestCrmSnapshot(ops, {
+    deliveryId: "crm-1",
+    productId: "drill",
+    payload: {
+      delivery_id: "crm-1",
+      idempotency_key: "crm:9:crm-1",
+      external_contact_id: 9,
+      snapshot: {
+        contact: { id: 9, display_name: "還原林小姐", company_name: "演練", email: "restore@example.com", tags: ["vip"] },
+        cases: [{ id: 1, title: "漏水", handling_state: "doing" }],
+        notes: [{ id: 2, body: "本站主本要回來" }],
+        todos: [{ id: 3, title: "回訪" }],
+      },
+    },
+  });
+  const pack = exportHandoff(ops, "drill", { actor: "test" });
+  assert.equal(pack.payload.crm_contacts.length, 1);
+  assert.equal(pack.payload.crm_contacts[0].display_name, "還原林小姐");
+  ops.close();
+
+  const local = openLocal();
+  const imported = importHandoffFeedback(local, pack.payload);
+  assert.equal(imported.crm_imported, 1);
+  const contacts = listContacts(local);
+  assert.equal(contacts.some((row) => row.display_name === "還原林小姐"), true);
   local.close();
 });

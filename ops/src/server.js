@@ -21,7 +21,14 @@ import {
   resolveIngestAuth,
   resumeProduct,
   rotateCredential,
+  updateProductCapabilities,
 } from "./products.js";
+import {
+  ingestCrmSnapshot,
+  crmDashboard,
+  upsertOwnerNote,
+  setCrmModule,
+} from "./crmReplica.js";
 import {
   beginUnsubscribeExit,
   exportHandoff,
@@ -293,6 +300,43 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         return;
       }
 
+      if (pathname === "/ops/api/ingest/crm" && method === "POST") {
+        const raw = await readRawBody(req);
+        const check = resolveIngestAuth(db, {
+          method: "POST",
+          path: "/ops/api/ingest/crm",
+          headers: req.headers,
+          rawBody: raw,
+          envSecret: ingestSecret,
+        });
+        if (!check.ok) {
+          sendJson(res, check.status || 401, { error: check.error || "unauthorized" });
+          return;
+        }
+        let payload;
+        try {
+          payload = JSON.parse(raw || "{}");
+        } catch {
+          sendJson(res, 400, { error: "invalid JSON" });
+          return;
+        }
+        if (String(payload.delivery_id || "") !== check.deliveryId) {
+          sendJson(res, 400, { error: "delivery_id mismatch" });
+          return;
+        }
+        try {
+          const result = ingestCrmSnapshot(db, {
+            deliveryId: check.deliveryId,
+            payload,
+            productId: check.productId,
+          });
+          sendJson(res, 200, { ok: true, id: result.id, duplicate: result.duplicate, product_id: check.productId });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
+
       if (pathname === "/ops/api/login" && method === "POST") {
         const body = await readBody(req).catch((e) => { throw e; });
         const email = body?.email;
@@ -513,6 +557,47 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         }));
         return;
       }
+      if (pathname === "/ops/api/crm" && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        sendJson(res, 200, crmDashboard(db, { productId: url.searchParams.get("productId") || null }));
+        return;
+      }
+      if (pathname === "/ops/api/crm/notes" && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          const body = await readBody(req);
+          sendJson(res, 200, {
+            ok: true,
+            note: upsertOwnerNote(db, {
+              productId: body?.product_id || url.searchParams.get("productId"),
+              subjectKind: body?.subject_kind || "contact",
+              subjectKey: body?.subject_key,
+              body: body?.body,
+              actor: `owner:${req.owner.email}`,
+            }),
+          });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
+      if (pathname === "/ops/api/crm/module" && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          const body = await readBody(req);
+          sendJson(res, 200, {
+            ok: true,
+            module: setCrmModule(db, body?.product_id, {
+              enabled: body?.enabled,
+              siteAdminUrl: body?.site_admin_url,
+              actor: `owner:${req.owner.email}`,
+            }),
+          });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
       if (pathname === "/ops/api/products" && method === "GET") {
         if (!runGuard(auth.requireOwner, req, reply)) return;
         sendJson(res, 200, { items: listProducts(db) });
@@ -528,6 +613,20 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
             actor: `owner:${req.owner.email}`,
           });
           sendJson(res, 201, { ok: true, ...created });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
+      const productCaps = pathname.match(/^\/ops\/api\/products\/([a-z0-9_-]+)\/capabilities$/);
+      if (productCaps && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          const body = await readBody(req);
+          sendJson(res, 200, {
+            ok: true,
+            product: updateProductCapabilities(db, productCaps[1], body || {}, { actor: `owner:${req.owner.email}` }),
+          });
         } catch (err) {
           sendJson(res, err.status || 400, { error: err.message });
         }

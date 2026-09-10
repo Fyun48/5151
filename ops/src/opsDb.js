@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { ensureCrmReplicaSchema } from "./crmReplica.js";
 
 // Ops 專用資料庫（與產品 v3 的 v3.db 完全分離）。
 // 只放維運自動化系統的狀態機與稽核；Phase 1 尚無 feedback / AI / coding 相關資料。
@@ -1193,7 +1194,12 @@ export function applyOpsSchema(db) {
   upgradeProductionReleaseImmutability(db);
   upgradeProductIsolation(db);
   upgradeExitDrill(db);
+  upgradeCrmReplica(db);
   return db;
+}
+
+export function upgradeCrmReplica(db) {
+  ensureCrmReplicaSchema(db);
 }
 
 export function upgradeExitDrill(db) {
@@ -1360,7 +1366,7 @@ export function upgradeProductIsolation(db) {
   `).run(ts, ts);
   db.prepare(`
     INSERT INTO product_subscription(product_id, generation, status, capabilities, started_at, updated_at)
-    VALUES ('v3', 1, 'connected', '{"feedback_copy":true}', ?, ?)
+    VALUES ('v3', 1, 'connected', '{"feedback_copy":true,"crm_sync":false,"stats":false,"cross_site_insight":false,"followup_service":false,"retain_after_exit":false}', ?, ?)
     ON CONFLICT(product_id) DO NOTHING
   `).run(ts, ts);
 

@@ -7,6 +7,48 @@ import { verifyIngestRequest } from "./ingestSignature.js";
 export const DEFAULT_PRODUCT_ID = "v3";
 export const DEFAULT_PRODUCT_NAME = "吉比租房";
 
+export const DEFAULT_CAPABILITIES = Object.freeze({
+  feedback_copy: true,
+  crm_sync: false,
+  stats: false,
+  cross_site_insight: false,
+  followup_service: false,
+  retain_after_exit: false,
+});
+
+export const CONSENT_KEYS = Object.freeze(Object.keys(DEFAULT_CAPABILITIES));
+
+export function ensureConsentEventSchema(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS product_consent_event (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id TEXT NOT NULL,
+      capability_key TEXT NOT NULL,
+      granted INTEGER NOT NULL,
+      actor TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_consent_product ON product_consent_event(product_id, id);
+  `);
+}
+
+export function listConsentEvents(db, productId, { limit = 8 } = {}) {
+  ensureConsentEventSchema(db);
+  const id = String(productId || "");
+  if (!id) return [];
+  return db.prepare(`
+    SELECT id, product_id, capability_key, granted, actor, created_at
+      FROM product_consent_event WHERE product_id=? ORDER BY id DESC LIMIT ?
+  `).all(id, Number(limit) || 8).map((row) => ({
+    id: Number(row.id),
+    product_id: row.product_id,
+    capability_key: row.capability_key,
+    granted: Number(row.granted) === 1,
+    actor: row.actor,
+    created_at: row.created_at,
+  }));
+}
+
 export const PRODUCT_STATUSES = Object.freeze(["active", "paused", "exiting", "exited"]);
 export const SUBSCRIPTION_STATUSES = Object.freeze([
   "connecting", "connected", "paused", "exiting", "exited", "reconnecting",
@@ -39,7 +81,7 @@ export function ensureDefaultProduct(db, { now = new Date() } = {}) {
     INSERT INTO product_subscription(product_id, generation, status, capabilities, started_at, updated_at)
     VALUES (?, 1, 'connected', ?, ?, ?)
     ON CONFLICT(product_id) DO NOTHING
-  `).run(DEFAULT_PRODUCT_ID, JSON.stringify({ feedback_copy: true }), ts, ts);
+  `).run(DEFAULT_PRODUCT_ID, JSON.stringify({ ...DEFAULT_CAPABILITIES }), ts, ts);
 }
 
 export function ensureLegacyIngestSecret(db, secret, { productId = DEFAULT_PRODUCT_ID, now = new Date() } = {}) {
@@ -61,7 +103,10 @@ export function listProducts(db) {
       LEFT JOIN product_subscription s ON s.product_id = p.id
      ORDER BY p.id ASC
   `).all();
-  return rows.map(publicProduct);
+  return rows.map((row) => {
+    const product = publicProduct(row);
+    return { ...product, consent_events: listConsentEvents(db, product.id) };
+  });
 }
 
 export function getProduct(db, productId) {
@@ -109,7 +154,7 @@ export function createProduct(db, { id, displayName, actor = "owner", now = new 
     db.prepare(`
       INSERT INTO product_subscription(product_id, generation, status, capabilities, started_at, updated_at)
       VALUES (?, 1, 'connected', ?, ?, ?)
-    `).run(productId, JSON.stringify({ feedback_copy: true }), ts, ts);
+    `).run(productId, JSON.stringify({ ...DEFAULT_CAPABILITIES }), ts, ts);
     const cred = issueCredential(db, { productId, label: "initial", now });
     appendAuditRow(db, {
       actor,
@@ -266,6 +311,40 @@ export function listActiveCredentials(db) {
      WHERE status='active'
      ORDER BY id ASC
   `).all();
+}
+
+export function updateProductCapabilities(db, productId, patch = {}, { actor = "owner", now = new Date() } = {}) {
+  const product = getProduct(db, productId);
+  if (!product) throw httpError("not found", 404);
+  const current = parseCaps(product.capabilities);
+  const next = { ...DEFAULT_CAPABILITIES, ...current };
+  for (const key of CONSENT_KEYS) {
+    if (patch[key] === true || patch[key] === false) next[key] = patch[key];
+  }
+  if (next.crm_sync && !next.feedback_copy) {
+    throw httpError("CRM 同步不能代替回饋複製授權；兩者要分開勾。", 400);
+  }
+  const ts = iso(now);
+  ensureConsentEventSchema(db);
+  db.prepare("UPDATE product_subscription SET capabilities=?, updated_at=? WHERE product_id=?")
+    .run(JSON.stringify(next), ts, product.id);
+  for (const key of CONSENT_KEYS) {
+    if (Boolean(current[key]) === Boolean(next[key])) continue;
+    db.prepare(`
+      INSERT INTO product_consent_event(product_id, capability_key, granted, actor, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(product.id, key, next[key] ? 1 : 0, String(actor || "owner").slice(0, 80), ts);
+  }
+  appendAuditRow(db, {
+    actor,
+    action: "product.capabilities.updated",
+    entityType: "ops_product",
+    entityId: product.id,
+    data: next,
+    now,
+  });
+  const updated = publicProduct(getProduct(db, product.id));
+  return { ...updated, consent_events: listConsentEvents(db, product.id) };
 }
 
 export function productAcceptsIngest(product) {

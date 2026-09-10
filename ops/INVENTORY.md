@@ -1,9 +1,9 @@
 # OPS／v3 現況對照表（ChatGPT 審查後）
 
-盤點對象：本分支 `cursor/ops-complete-ed3f`（第 0–3 包）。  
-ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契約、Deploy OPS、產品卡與退出演練。**不以那次抽查當現況。**
+盤點對象：本分支 `cursor/ops-crm-ed3f`（第 0–4 包）。  
+ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契約、Deploy OPS、產品卡、退出演練與站內 CRM。**不以那次抽查當現況。**
 
-本次是第 3 包（訂閱／退出／移交最小演練），**不是部署指令**，不 Deploy v3，也不擅自跑 Deploy OPS。
+本次是第 4 包（站內 CRM → OPS CRM 檢視），**不是部署指令**，不 Deploy v3，也不擅自跑 Deploy OPS。
 
 圖例：`存在`＝可承接；`需改`＝有程式但契約不足；`待做`＝尚未實作。
 
@@ -31,7 +31,7 @@ ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契�
 | 站內「停止傳送至 OPS」 | 已做 | `v3/src/opsDelivery.js`、`v3/public/admin.html` | 本機 `settings.ops_feedback_stop`，不依賴 OPS 在線 |
 | Deploy OPS 工作流 | 本輪已做 | `.github/workflows/deploy-ops.yml` | 確認字 `DEPLOY-OPS`；只 SCP `ops/`、只重建 `5151-ops`；並發鎖 `ops-deploy` |
 | 四種退出／移交演練 | 本輪已做 | `ops/src/exitDrill.js`、`ops/public/console.js`、`v3/src/handoffImport.js` | 暫停／解除訂閱／移交／刪複本分開；交接包可在無 OPS 環境還原回饋；outbox 警戒 |
-| 站內 CRM／OPS CRM 檢視 | 待做 | — | 第 4 包；關 CRM ≠ DROP |
+| 站內 CRM／OPS CRM 檢視 | 本輪已做 | `v3/src/crm.js`、`ops/src/crmReplica.js`、後台 `#crm`、Console CRM 檢視 | 第 4 包；四欄分開；關 CRM ≠ DROP；`crm_sync` 不隨回饋複製自動開啟 |
 | 隔離 staging UI | 待做 | `ops/src/stagingDeploy.js` 骨架關著 | 第 5 包 |
 | BudgetGuard 先保留再呼叫 | 待做 | `v3/PLAN-integrations.md` 舊虛擬碼是先 SUM | 第 6 包 |
 | pHash 附屬表、同屋源／爬蟲 AI | 待做 | 規劃曾寫 `listings.image_phash` 單欄 | 第 7 包改附屬表 |

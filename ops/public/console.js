@@ -1,5 +1,16 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
+const CRM_HANDLING_LABEL = Object.freeze({
+  new: "待看",
+  planned: "已排入",
+  doing: "處理中",
+  done: "已完成",
+  declined: "暫不處理",
+});
+function crmHandlingLabel(id) {
+  const key = String(id || "").trim();
+  return CRM_HANDLING_LABEL[key] || key;
+}
 let CSRF = "";
 let selectedIssueId = null;
 let selectedProductId = "";
@@ -22,7 +33,11 @@ async function api(path, opts) {
 
 function esc(v) {
   return String(v == null ? "" : v)
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function fmtTime(v) {
@@ -171,11 +186,12 @@ function hideConfirm() {
   if (back && typeof back.focus === "function") back.focus();
 }
 
-function showConfirm({ title, body, confirmLabel, onConfirm }) {
+function showConfirm({ title, body, confirmLabel, onConfirm, danger = true }) {
   confirmReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   $("confirmTitle").textContent = title;
   $("confirmBody").textContent = body;
   $("confirmOk").textContent = confirmLabel || "確定";
+  $("confirmOk").classList.toggle("danger", danger !== false);
   confirmAction = onConfirm;
   $("confirmDlg").hidden = false;
   for (const el of confirmChrome()) el.inert = true;
@@ -219,6 +235,7 @@ function renderProductCards() {
     const exited = p.status === "exited" || sub.status === "exited";
     const paused = p.status === "paused" || sub.status === "paused";
     const name = p.display_name || p.id;
+    const caps = sub.capabilities || {};
     return `<article class="product-card">
       <div class="row">
         <h3>${esc(p.display_name)}</h3>
@@ -226,11 +243,17 @@ function renderProductCards() {
         ${statusChip(p.status)}
       </div>
       <p class="hint"><code>${esc(p.id)}</code> · 訂閱世代 ${esc(sub.generation ?? "—")} · ${statusChip(sub.status)}</p>
+      <p class="hint">授權：回饋複製 ${caps.feedback_copy ? "開" : "關"} · CRM 同步 ${caps.crm_sync ? "開" : "關"} · 跨站分析 ${caps.cross_site_insight ? "開" : "關"}</p>
+      ${Array.isArray(p.consent_events) && p.consent_events.length
+        ? `<p class="hint">授權紀錄：${p.consent_events.slice(0, 4).map((ev) => `${esc(ev.capability_key)} ${ev.granted ? "開" : "撤回"}`).join(" · ")}</p>`
+        : `<p class="hint">授權紀錄：尚無撤回或新開紀錄。</p>`}
       <p class="hint">訂閱：暫停或恢復傳送；輪替密鑰不會解除訂閱。</p>
       <div class="row actions">
         ${exited ? `<button type="button" class="primary" data-pid="${esc(p.id)}" data-pact="reconnect" aria-label="重新連接 ${esc(name)}">重新連接</button>` : ""}
         ${!exited && paused ? `<button type="button" class="primary" data-pid="${esc(p.id)}" data-pact="resume" aria-label="恢復 ${esc(name)}">恢復</button>` : ""}
         ${!exited && !paused ? `<button type="button" data-pid="${esc(p.id)}" data-pact="pause" aria-label="暫停 ${esc(name)}">暫停</button>` : ""}
+        ${!exited && !caps.crm_sync ? `<button type="button" data-pid="${esc(p.id)}" data-pact="grant-crm-sync" aria-label="允許 ${esc(name)} 的 CRM 同步">允許 CRM 同步</button>` : ""}
+        ${!exited && caps.crm_sync ? `<button type="button" data-pid="${esc(p.id)}" data-pact="revoke-crm-sync" aria-label="撤回 ${esc(name)} 的 CRM 同步">撤回 CRM 同步</button>` : ""}
         ${!exited ? `<button type="button" data-pid="${esc(p.id)}" data-pact="rotate-credential" aria-label="輪替 ${esc(name)} 的密鑰">輪替密鑰</button>` : ""}
         ${!exited ? `<button type="button" class="danger" data-pid="${esc(p.id)}" data-pact="unsubscribe" aria-label="解除訂閱 ${esc(name)}">解除訂閱</button>` : ""}
       </div>
@@ -373,6 +396,27 @@ async function runProductAction(id, action) {
   }
 }
 
+async function setProductCapability(id, patch) {
+  if (productBusy) return;
+  setProductBusy(true);
+  setStatus($("productMsg"), "處理中…");
+  try {
+    const { res, data } = await api(`/ops/api/products/${encodeURIComponent(id)}/capabilities`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch || {}),
+    });
+    if (!res.ok) {
+      setStatus($("productMsg"), humanError(data.error), "err");
+      return;
+    }
+    setStatus($("productMsg"), patch.crm_sync ? "已允許 CRM 同步" : "已撤回 CRM 同步", "ok");
+    await Promise.all([refreshProducts(), refreshCrm()]);
+  } finally {
+    setProductBusy(false);
+  }
+}
+
 async function createProduct(ev) {
   ev.preventDefault();
   if (productBusy) return;
@@ -460,6 +504,25 @@ function requestProductAction(id, action) {
       body: `移交「${name}」（${id}）會匯出可驗證交接包。不含金鑰與其它站資料。本機主本仍在對方站。`,
       confirmLabel: "確定移交",
       onConfirm: () => runProductAction(id, "handoff"),
+    });
+    return;
+  }
+  if (action === "grant-crm-sync") {
+    showConfirm({
+      title: "確認允許 CRM 同步",
+      body: `允許「${name}」（${id}）把 CRM 欄位同步到 OPS？這與回饋複製分開，不會自動包含會員名單或行銷用途。`,
+      confirmLabel: "確定允許",
+      danger: false,
+      onConfirm: () => setProductCapability(id, { crm_sync: true }),
+    });
+    return;
+  }
+  if (action === "revoke-crm-sync") {
+    showConfirm({
+      title: "確認撤回 CRM 同步",
+      body: `撤回「${name}」（${id}）的 CRM 同步授權？既有複本仍保留，不會再收新處理。這不是 DROP。`,
+      confirmLabel: "確定撤回",
+      onConfirm: () => setProductCapability(id, { crm_sync: false }),
     });
     return;
   }
@@ -652,11 +715,147 @@ async function refreshTransitions() {
     </tr>`).join("") || `<tr><td colspan="6" class="hint">尚無狀態轉移</td></tr>`;
 }
 
+let crmCache = { module: { enabled: true }, items: [] };
+
+function crmLagText(item) {
+  if (!item.last_synced_at) return "尚未同步";
+  const mins = Math.round((item.sync_lag_ms || 0) / 60000);
+  return item.sync_stale ? `上次同步已超過 ${mins} 分鐘` : `上次同步 ${mins} 分鐘前`;
+}
+
+function publicSiteAdminHref(url) {
+  const s = String(url || "").trim();
+  return /^https?:\/\//i.test(s) ? s : "";
+}
+
+function bindCrmSiteUrlForm(pid) {
+  $("crmSiteUrlForm")?.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const url = new FormData(ev.target).get("site_admin_url");
+    const { res, data } = await api("/ops/api/crm/module", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ product_id: pid, site_admin_url: url }),
+    });
+    if (!res.ok) {
+      setStatus($("crmMsg"), data.error || "儲存本站連結失敗", "err");
+      return;
+    }
+    await refreshCrm();
+    setStatus($("crmMsg"), "已儲存本站後台網址", "ok");
+  });
+}
+
+function renderCrm() {
+  const box = $("crmList");
+  const hint = $("crmHint");
+  const toggle = $("crmModuleToggle");
+  if (!box) return;
+  const enabled = crmCache.module?.enabled !== false;
+  if (toggle) {
+    toggle.textContent = enabled ? "關閉 CRM 模組" : "重新開啟 CRM 模組";
+    const needProduct = !selectedProductId;
+    toggle.disabled = needProduct;
+    toggle.title = needProduct ? "請先選單一站台再開關模組" : "";
+  }
+  const grant = $("crmGrantSync");
+  if (grant) {
+    grant.disabled = !selectedProductId;
+    grant.title = selectedProductId ? "" : "請先選單一站台再授權";
+  }
+  if (hint) {
+    hint.textContent = enabled
+      ? (crmCache.hint || "四欄分開顯示。")
+      : "CRM 模組已關閉：不再收新處理，複本仍保留。";
+  }
+  const items = crmCache.items || [];
+  const pid = selectedProductId || crmCache.product?.id || "v3";
+  const adminUrl = publicSiteAdminHref(crmCache.module?.site_admin_url || (items[0] && items[0].site_admin_url));
+  const setup = `<form id="crmSiteUrlForm" class="row crm-url-form">
+    <label>本站後台網址 <input name="site_admin_url" value="${esc(adminUrl)}" placeholder="https://example.com/admin.html#crm" maxlength="400" /></label>
+    <button type="submit">儲存本站連結</button>
+  </form>`;
+  if (!items.length) {
+    const grantHint = selectedProductId
+      ? "還沒有站方 CRM 複本。先在本站後台建立聯絡人，再按「允許 CRM 同步授權」。"
+      : "還沒有站方 CRM 複本。請先選單一站台，再到本站後台建立聯絡人並授權同步。";
+    box.innerHTML = `${setup}<p class="hint">${grantHint}</p>`;
+    bindCrmSiteUrlForm(pid);
+    return;
+  }
+  box.innerHTML = setup + items.map((item) => {
+    const c = item.columns || {};
+    const site = c.site_crm || {};
+    const contact = site.contact || {};
+    const handle = c.site_handling || {};
+    const ops = c.ops_progress || {};
+    const owner = c.owner_notes || {};
+    const href = publicSiteAdminHref(item.site_admin_url);
+    return `<article class="crm-card">
+      <div class="row">
+        <strong>${esc(contact.display_name || "未命名聯絡人")}</strong>
+        <span class="chip">${esc(item.product_id)}</span>
+        <span class="grow"></span>
+        ${href ? `<a href="${esc(href)}" target="_blank" rel="noopener">前往本站處理</a>` : `<span class="hint">尚未設定本站後台網址</span>`}
+      </div>
+      <p class="hint">${esc(crmLagText(item))} · 來源連結：站方聯絡人 ${esc(contact.external_contact_id || "")}</p>
+      <div class="crm-cols">
+        <section class="crm-col">
+          <h3>${esc(site.label || "站方客戶／客服往來")}</h3>
+          <p class="src">站方複本</p>
+          <p>${esc(contact.company_name || "—")}<br>${esc([contact.phone, contact.email, contact.line_id].filter(Boolean).join(" / ") || "無聯絡欄")}</p>
+          <p class="hint">標籤：${esc((contact.tags || []).join("、") || "—")}</p>
+          <p>案件：${(site.cases || []).length
+            ? (site.cases || []).map((row) => esc(`${row.title || "未命名"} · ${crmHandlingLabel(row.handling_state)}`)).join("；")
+            : "尚未有案件"}</p>
+          <p class="hint">備註 ${(site.notes || []).length} 則 · 待辦 ${(site.todos || []).length} 則</p>
+        </section>
+        <section class="crm-col">
+          <h3>${esc(handle.label || "站方處理進度")}</h3>
+          <p class="src">由站方事件傳入</p>
+          <p>${esc(handle.text || "尚未同步")}</p>
+        </section>
+        <section class="crm-col">
+          <h3>${esc(ops.label || "OPS 開發進度")}</h3>
+          <p class="src">與站方客服進度分開</p>
+          <p>${esc(ops.text || "尚未連到議題")}</p>
+        </section>
+        <section class="crm-col owner">
+          <h3>${esc(owner.label || "Owner 商務備註")}</h3>
+          <p class="src">OPS 自己的資料，不是站方複本</p>
+          <p>${esc(owner.body || "尚未填寫")}</p>
+          ${enabled ? `<form class="crm-note-form" data-product="${esc(item.product_id)}" data-subject="${esc(contact.external_contact_id || "")}">
+            <label class="sr-only" for="ownernote-${esc(contact.external_contact_id || "x")}">商務備註</label>
+            <input id="ownernote-${esc(contact.external_contact_id || "x")}" name="body" maxlength="2000" placeholder="只給 Owner 看" />
+            <button type="submit">儲存備註</button>
+          </form>` : `<p class="hint">模組已關閉，不能新增商務備註。</p>`}
+        </section>
+      </div>
+    </article>`;
+  }).join("");
+  bindCrmSiteUrlForm(pid);
+}
+
+async function refreshCrm() {
+  const box = $("crmList");
+  if (box) box.setAttribute("aria-busy", "true");
+  const { res, data } = await api(`/ops/api/crm${productQuery()}`);
+  if (box) box.setAttribute("aria-busy", "false");
+  if (!res.ok) {
+    setStatus($("crmMsg"), data.error || "載入 CRM 失敗", "err");
+    return;
+  }
+  crmCache = data;
+  renderCrm();
+  setStatus($("crmMsg"), `${(data.items || []).length} 筆複本`, "ok");
+}
+
 async function refreshAll() {
   await Promise.all([
     refreshProducts(),
     refreshDashboard(),
     refreshInbox(),
+    refreshCrm(),
     refreshIssues(),
     refreshAudit(),
     refreshTransitions(),
@@ -705,6 +904,56 @@ document.querySelectorAll(".tab").forEach((btn) => {
 });
 
 $("refreshBtn").addEventListener("click", refreshAll);
+$("crmGrantSync")?.addEventListener("click", async () => {
+  const pid = selectedProductId;
+  if (!pid) {
+    setStatus($("crmMsg"), "請先選單一站台再授權", "err");
+    return;
+  }
+  showConfirm({
+    title: "確認允許 CRM 同步",
+    body: `允許「${pid}」把 CRM 欄位同步到 OPS？這與回饋複製分開，不會自動包含會員名單或行銷用途。`,
+    confirmLabel: "確定允許",
+    danger: false,
+    onConfirm: () => setProductCapability(pid, { crm_sync: true }),
+  });
+});
+$("crmRefresh")?.addEventListener("click", refreshCrm);
+$("crmModuleToggle")?.addEventListener("click", async () => {
+  const next = crmCache.module?.enabled === false;
+  const pid = selectedProductId || crmCache.product?.id || "v3";
+  const { res, data } = await api("/ops/api/crm/module", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ product_id: pid, enabled: next }),
+  });
+  if (!res.ok) {
+    setStatus($("crmMsg"), data.error || "切換失敗", "err");
+    return;
+  }
+  await refreshCrm();
+});
+$("crmList")?.addEventListener("submit", async (ev) => {
+  const form = ev.target.closest(".crm-note-form");
+  if (!form) return;
+  ev.preventDefault();
+  const body = form.body?.value || "";
+  const { res, data } = await api("/ops/api/crm/notes", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      product_id: form.dataset.product,
+      subject_kind: "contact",
+      subject_key: form.dataset.subject,
+      body,
+    }),
+  });
+  if (!res.ok) {
+    setStatus($("crmMsg"), data.error || "備註儲存失敗", "err");
+    return;
+  }
+  await refreshCrm();
+});
 $("inboxRefresh").addEventListener("click", refreshInbox);
 $("issuesRefresh").addEventListener("click", refreshIssues);
 $("productsRefresh").addEventListener("click", refreshProducts);
@@ -716,7 +965,7 @@ $("productSwitch").addEventListener("click", async (ev) => {
   if (!btn) return;
   selectedProductId = btn.dataset.product || "";
   renderProductSwitcher();
-  await Promise.all([refreshDashboard(), refreshInbox()]);
+  await Promise.all([refreshDashboard(), refreshInbox(), refreshCrm()]);
 });
 
 $("productCards").addEventListener("click", (ev) => {

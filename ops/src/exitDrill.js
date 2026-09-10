@@ -8,6 +8,7 @@ import {
   unsubscribeProduct,
   normalizeProductId,
 } from "./products.js";
+import { redactCrmReplicas, listCrmHandoff } from "./crmReplica.js";
 
 export const EXIT_ACTIONS = Object.freeze(["pause", "unsubscribe", "handoff", "purge_replica"]);
 export const HANDOFF_SCHEMA = 1;
@@ -102,6 +103,18 @@ export function listPendingWork(db, productId) {
         blocking: row.status === "running" || row.status === "claimed",
         unscoped: true,
         note: "製作任務尚未綁 product_id；退出時列出但不能宣稱已取消外部呼叫",
+      });
+    }
+  }
+  if (tableExists(db, "ingested_crm_contact")) {
+    const crmN = Number(db.prepare("SELECT COUNT(*) n FROM ingested_crm_contact WHERE product_id=?").get(id)?.n || 0);
+    if (crmN) {
+      items.push({
+        kind: "crm_replica",
+        id: id,
+        state: "replica",
+        blocking: false,
+        note: `OPS 有 ${crmN} 筆站方 CRM 複本；刪複本才清除，關模組不會 DROP`,
       });
     }
   }
@@ -211,10 +224,22 @@ export function beginUnsubscribeExit(db, productId, { actor = "owner", now = new
   };
 }
 
+export function pendingForHandoff(pendingAll) {
+  const items = (pendingAll?.items || []).filter((it) => !it.unscoped);
+  const blocking = (pendingAll?.blocking || []).filter((it) => !it.unscoped);
+  return {
+    items,
+    blocking,
+    site_delivery_unconfirmed: true,
+    omitted_unscoped: (pendingAll?.items || []).filter((it) => it.unscoped).length,
+  };
+}
+
 export function exportHandoff(db, productId, { actor = "owner", now = new Date() } = {}) {
   const product = getProduct(db, productId);
   if (!product) throw httpError("not found", 404);
-  const pending = listPendingWork(db, product.id);
+  const pending = pendingForHandoff(listPendingWork(db, product.id));
+  const crmContacts = tableExists(db, "ingested_crm_contact") ? listCrmHandoff(db, product.id) : [];
   const feedback = db.prepare(`
     SELECT id, product_id, kind, content, app_version, received_at, submitted_at, source
       FROM ingested_feedback WHERE product_id=? ORDER BY id ASC
@@ -234,10 +259,12 @@ export function exportHandoff(db, productId, { actor = "owner", now = new Date()
     product: publicProduct(product),
     exported_at: iso(now),
     feedback,
+    crm_contacts: crmContacts,
     pending,
     checklist: {
       code: { included: false, note: "同一 repo；分家時另交該站程式與 lockfile，不在本包" },
       operations_data: { included: true, count: feedback.length, note: "OPS 複本回饋（不含聯絡方式）" },
+      crm: { included: true, count: crmContacts.length, note: "站方 CRM 複本摘要；Owner 商務備註不當作站方資料匯出" },
       accounts: { included: false, note: "本機管理員帳號在站方庫，不在 OPS" },
       infrastructure: { included: false, note: "網域／Tunnel／CI 另列經營者" },
       external_services: { included: false, note: "金鑰不匯出；對方自備憑證" },
@@ -302,13 +329,14 @@ export function purgeReplica(db, productId, { actor = "owner", now = new Date(),
          SET content='[purged]', contact=NULL, context=NULL, user_ref=NULL
        WHERE product_id=?
     `).run(product.id);
+    const crmPurged = tableExists(db, "ingested_crm_contact") ? redactCrmReplicas(db, product.id) : 0;
     const record = insertExitRecord(db, {
       productId: product.id,
       generation: product.subscription_generation,
       action: "purge_replica",
       exitStatus: "completed",
       pending,
-      notes: `已清除 ${before} 筆 OPS 複本內容；產品卡與稽核保留。本機主本不在此庫。`,
+      notes: `已清除 ${before} 筆回饋複本、${crmPurged} 筆 CRM 複本；產品卡與稽核保留。本機主本不在此庫。`,
       actor,
       now,
     });
