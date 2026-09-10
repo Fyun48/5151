@@ -49,4 +49,4 @@ Cloud Agent 環境由 `.cursor/environment.json` 自動 `npm ci` 並啟動 v3 �
    - `.github/workflows/deploy-v3.yml`
 3. 確認字串（`DEPLOY-PRODUCTION` / `PREDEPLOY-PRODUCTION`）由代理人代填。Cursor 雲端身分可以觸發這三條。
 4. Ops Phase 15「不 merge、不部署」只約束 Ops 機器人自己的任務，**不約束**使用者直接交代 Cursor Agent 的改碼＋合併部署。
-5. 不要另開 tunnel、不要改 v1/v2。Deploy OPS（只重建 `5151-ops`）是獨立工作流，不是 v3 的第四條路徑。
+5. 不要另開 tunnel、不要改 v1/v2。Deploy OPS（`.github/workflows/deploy-ops.yml`，確認字 `DEPLOY-OPS`，只重建 `5151-ops`）是獨立工作流，不是 v3 的第四條路徑。
