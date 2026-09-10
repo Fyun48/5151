@@ -4996,10 +4996,14 @@
       return null;
     }
 
+    function listRefreshBarEnabled() {
+      return settings.showListRefreshBar === true;
+    }
+
     function setListBusy(busy, text) {
       const box = $("list");
       if (box) {
-        box.classList.toggle("is-refreshing", Boolean(busy));
+        box.classList.toggle("is-refreshing", Boolean(busy) && listRefreshBarEnabled());
         box.setAttribute("aria-busy", busy ? "true" : "false");
       }
       if (busy && text && $("status")) $("status").textContent = text;
@@ -10823,7 +10827,7 @@
             $("status").textContent = `自動檢查完成，通知 ${n} 則 · ${new Date(data.result.checked_at).toLocaleString()}`;
             pushDock(data.result.events || []);
             if (n) showLocalNotice("吉比租房物件追蹤", `自動檢查完成，通知 ${n} 則`);
-            loadList();
+            loadList({ silent: true, keep: true });
           }
           if (data.type === "notify") {
             const n = data.events?.length || 0;
@@ -10832,7 +10836,7 @@
               pushDock(data.events || []);
               showLocalNotice("吉比租房物件追蹤", `篩選後通知 ${n} 則`);
             }
-            loadList();
+            loadList({ silent: true, keep: true });
           }
           if (data.type === "geo") {
             if (data.routeBackfill?.located) {
@@ -10842,7 +10846,7 @@
             } else if (data.mrtBackfill?.located) {
               $("status").textContent = `已計算 ${data.mrtBackfill.located} 筆捷運步行距離，列表已更新`;
             }
-            loadList();
+            loadList({ silent: true, keep: true });
           }
         };
         es.onerror = () => {
