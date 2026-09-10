@@ -111,6 +111,13 @@ import {
   demandMeta,
 } from "./demand.js";
 import {
+  DEFAULT_WISH_CONDITIONS,
+  mergeWishConditions,
+  normalizeWishConditionItems,
+  publicWishConditions,
+  setWishConditionCatalog,
+} from "./wishConditions.js";
+import {
   ensureFeedbackSchema,
   createFeedback as createFeedbackOn,
   createFeedbackWithOutbox as createFeedbackWithOutboxOn,
@@ -1224,6 +1231,23 @@ export function getHelpQa() {
   return publicHelpQa(items);
 }
 
+export function getWishConditions() {
+  const stored = settingKey("wishConditions");
+  const items = stored == null ? DEFAULT_WISH_CONDITIONS : mergeWishConditions(stored);
+  setWishConditionCatalog(items);
+  return publicWishConditions(items);
+}
+
+export function saveWishConditions(partial = {}) {
+  const src = partial && typeof partial === "object" ? partial : {};
+  if (src.reset === true) {
+    writeSettingKey("wishConditions", { items: normalizeWishConditionItems(DEFAULT_WISH_CONDITIONS) });
+    return getWishConditions();
+  }
+  writeSettingKey("wishConditions", { items: normalizeWishConditionItems(src.items) });
+  return getWishConditions();
+}
+
 export function saveHelpQa(partial = {}) {
   const src = partial && typeof partial === "object" ? partial : {};
   if (src.reset === true) {
@@ -1357,14 +1381,17 @@ export function isCrawlSourceEnabled(id) {
 }
 
 export function listDemand(opts = {}) {
+  getWishConditions();
   return listDemandPostsOn(db, opts);
 }
 
 export function getDemand(postId, opts = {}) {
+  getWishConditions();
   return getDemandPostOn(db, postId, opts);
 }
 
 export function createDemand(userId, input) {
+  getWishConditions();
   return createDemandPostOn(db, userId, input);
 }
 
@@ -1381,14 +1408,17 @@ export function reportDemandItem(userId, input) {
 }
 
 export function updateWishRoomFor(userId, postId, input) {
+  getWishConditions();
   return updateWishRoomOn(db, userId, postId, input);
 }
 
 export function publishWishRoomFor(userId, postId, input) {
+  getWishConditions();
   return publishWishRoomOn(db, userId, postId, input);
 }
 
 export function reopenWishRoomFor(userId, postId) {
+  getWishConditions();
   return reopenWishRoomOn(db, userId, postId);
 }
 
@@ -1397,6 +1427,7 @@ export function getWishExampleFor(userId) {
 }
 
 export function saveWishExampleFor(userId, input) {
+  getWishConditions();
   return saveWishExampleOn(db, userId, input);
 }
 
@@ -1801,27 +1832,48 @@ function withSystemCrawl(settings) {
   return { ...settings, systemCrawlIntervalMinutes: getSystemCrawl().intervalMinutes };
 }
 
+const settingsMemo = new Map();
+
+function rememberSettings(uid, value) {
+  const key = Number(uid) || 0;
+  settingsMemo.set(key, value);
+  queueMicrotask(() => {
+    if (settingsMemo.get(key) === value) settingsMemo.delete(key);
+  });
+  return value;
+}
+
+function forgetSettings(uid) {
+  if (uid == null) {
+    settingsMemo.clear();
+    return;
+  }
+  settingsMemo.delete(Number(uid) || 0);
+}
+
 export function getSettings(userId) {
+  const uid = Number(userId) || 0;
+  if (settingsMemo.has(uid)) return settingsMemo.get(uid);
   const rows = db.prepare("SELECT key, value FROM settings").all();
   const global = hydrateSettings(omitSiteMail(parseSettingRows(rows)), DEFAULTS, { admin: true, plan: "free" });
-  const uid = Number(userId) || 0;
-  if (!uid) return withSystemCrawl(global);
+  if (!uid) return rememberSettings(0, withSystemCrawl(global));
   const userRows = db.prepare("SELECT key, value FROM user_settings WHERE user_id = ?").all(uid);
   const user = getUserById(uid);
   const admin = user?.role === "admin";
   const plan = user?.plan || "free";
   if (!userRows.length) {
-    if (user?.role === "admin") return withSystemCrawl(global);
-    return withSystemCrawl(hydrateSettings({
+    if (user?.role === "admin") return rememberSettings(uid, withSystemCrawl(global));
+    return rememberSettings(uid, withSystemCrawl(hydrateSettings({
       dataEpoch: global.dataEpoch,
       hasBaseline: global.hasBaseline,
-    }, DEFAULTS, { admin: false, plan }));
+    }, DEFAULTS, { admin: false, plan })));
   }
-  return withSystemCrawl(hydrateSettings(omitSiteMail({ ...global, ...parseSettingRows(userRows) }), DEFAULTS, { admin, plan }));
+  return rememberSettings(uid, withSystemCrawl(hydrateSettings(omitSiteMail({ ...global, ...parseSettingRows(userRows) }), DEFAULTS, { admin, plan })));
 }
 
 export function saveSettings(partial, userId, { forceAdmin = false } = {}) {
   const uid = userId == null ? defaultUserId() : Number(userId) || defaultUserId();
+  forgetSettings(uid);
   const current = getSettings(uid);
   const user = getUserById(uid);
   const admin = forceAdmin || user?.role === "admin";
@@ -1861,6 +1913,7 @@ export function saveSettings(partial, userId, { forceAdmin = false } = {}) {
     throw error;
   }
   persistSearchProfileFromSettings(uid, next);
+  rememberSettings(uid, next);
   return next;
 }
 

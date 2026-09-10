@@ -2421,6 +2421,14 @@
     }
     .hide-box input { width: 16px; height: 16px; accent-color: var(--accent); }
     .list { display: grid; gap: 14px; padding: 14px 16px 16px; overflow-x: hidden; }
+    .list.is-refreshing { pointer-events: none; }
+    .list.is-refreshing::before {
+      content: "";
+      display: block;
+      height: 2px;
+      margin: 0 0 8px;
+      background: var(--accent);
+    }
     .empty { padding: 24px 16px; color: var(--muted); text-align: center; font-size: var(--text-md); line-height: 1.6; }
     #bootFail {
       display: none;
@@ -3132,24 +3140,10 @@
         <button type="button" class="ghost" id="wishLoadExampleBtn" hidden>載入範例</button>
         <button type="button" class="ghost" id="wishDeleteExampleBtn" hidden>刪除範例</button>
       </div>
-      <div class="wish-filters" id="wishFilters">
-        <label for="wishFilterCity">縣市</label>
-        <select id="wishFilterCity"><option value="">不限縣市</option></select>
-        <label for="wishFilterRentMin">預算</label>
-        <input type="number" id="wishFilterRentMin" min="0" step="500" placeholder="最低" inputmode="numeric" />
-        <input type="number" id="wishFilterRentMax" min="0" step="500" placeholder="最高" inputmode="numeric" />
-        <label for="wishFilterHousing">類型</label>
-        <select id="wishFilterHousing"><option value="any">不限類型</option></select>
-        <button type="button" class="ghost" id="wishFilterApply">篩選</button>
-      </div>
       <div class="list" id="demandList" style="padding-top:4px"><div class="empty">載入許願房…</div></div>
       <div id="wishFormWrap" hidden>
         <form id="demandForm">
           <div class="self-grid">
-            <div>
-              <label for="wishCity">希望縣市</label>
-              <select id="wishCity"></select>
-            </div>
             <div>
               <label for="demandHousing">房屋類型</label>
               <select id="demandHousing">
@@ -3164,11 +3158,7 @@
               </select>
             </div>
             <div>
-              <label for="demandRentMin">最低月租</label>
-              <input type="number" id="demandRentMin" min="0" step="500" placeholder="例如 18000" />
-            </div>
-            <div>
-              <label for="demandRentMax">最高月租</label>
+              <label for="demandRentMax">房租上限</label>
               <input type="number" id="demandRentMax" min="0" step="500" placeholder="例如 28000" />
             </div>
             <div class="span-all">
@@ -3202,23 +3192,11 @@
               </select>
             </div>
             <div class="span-all">
-              <label for="wishLocationNote">補充地點</label>
-              <input type="text" id="wishLocationNote" maxlength="80" placeholder="例如近士林夜市、可接受鄰近行政區" />
-            </div>
-            <div>
-              <label for="wishTransit">捷運／車站</label>
+              <label for="wishTransit">希望1公里內有之捷運／車站名稱</label>
               <input type="text" id="wishTransit" maxlength="80" placeholder="例如劍潭站、士林站" />
             </div>
-            <div>
-              <label for="wishDestination">常去地點</label>
-              <input type="text" id="wishDestination" maxlength="80" placeholder="公司、學校或其他" />
-            </div>
-            <div>
-              <label for="wishCommute">可接受通勤（分鐘）</label>
-              <input type="number" id="wishCommute" min="0" max="180" placeholder="選填" />
-            </div>
             <div class="span-all">
-              <label class="pledge-row"><input type="checkbox" id="demandMrt" /> <span>需要可步行捷運（未滿 1.5 公里）</span></label>
+              <label class="pledge-row"><input type="checkbox" id="demandMrt" /> <span>需要可步行捷運（1 公里內）</span></label>
             </div>
             <div class="span-all">
               <label>行政區</label>
@@ -3242,23 +3220,6 @@
             <div class="span-all">
               <label for="demandBody">補充說明（最多 800 字）</label>
               <textarea id="demandBody" maxlength="800" placeholder="用自己的話說明找房需要。請只寫房屋與通勤條件。"></textarea>
-            </div>
-            <div>
-              <label for="wishContactName">公開稱呼（選填）</label>
-              <input type="text" id="wishContactName" maxlength="80" placeholder="例如 小陳" />
-            </div>
-            <div>
-              <label for="wishContactPhone">公開電話（選填）</label>
-              <input type="text" id="wishContactPhone" maxlength="40" inputmode="tel" />
-            </div>
-            <div class="span-all">
-              <label for="wishContactLine">LINE 連結（選填）</label>
-              <input type="text" id="wishContactLine" maxlength="300" placeholder="https://line.me/…" />
-            </div>
-            <div class="span-all row">
-              <label class="visually-hidden" for="wishContactPick">套用已存聯絡人</label>
-              <select id="wishContactPick"><option value="">套用我的聯絡人</option></select>
-              <button type="button" class="ghost" id="wishContactApply">套用快選</button>
             </div>
           </div>
           <div class="row" style="margin-top:10px">
@@ -4107,6 +4068,7 @@
     const draftWatch = new Set();
     const noteDrafts = new Map();
     let listCache = [];
+    let listingPool = [];
     const sameHouseOpen = new Set();
     const sameHouseClosed = new Set();
     let guestListings = [];
@@ -5014,6 +4976,46 @@
 
     function applyListView(items) {
       return applyViewFilters(applyDistrictView(items));
+    }
+
+    function rememberListings(items) {
+      const map = new Map(listingPool.map((row) => [String(row.post_id), row]));
+      for (const item of items || []) {
+        if (item?.post_id != null) map.set(String(item.post_id), item);
+      }
+      listingPool = [...map.values()];
+    }
+
+    function listingIdKey(items) {
+      return (items || []).map((row) => String(row.post_id)).join(",");
+    }
+
+    function previewListForFilter(key) {
+      const rows = listingPool.filter((item) => guestFilterMatch(item, key));
+      if (rows.length) return rows;
+      return null;
+    }
+
+    function setListBusy(busy, text) {
+      const box = $("list");
+      if (box) {
+        box.classList.toggle("is-refreshing", Boolean(busy));
+        box.setAttribute("aria-busy", busy ? "true" : "false");
+      }
+      if (busy && text && $("status")) $("status").textContent = text;
+    }
+
+    function detachListingCard(id, patch = {}) {
+      const key = String(id);
+      listingPool = listingPool.map((row) => (String(row.post_id) === key ? { ...row, ...patch } : row));
+      listCache = listCache.filter((row) => String(row.post_id) !== key);
+      const wrap = document.querySelector(`[data-card="${key}"]`)?.closest(".item-swipe-wrap");
+      if (wrap) wrap.remove();
+      else document.querySelector(`[data-card="${key}"]`)?.remove();
+      paintWatchChip();
+      updateBulkBar();
+      updateListMeta(listCache, lastStats);
+      if (!listCache.length) renderList([], lastStats);
     }
 
     function guestKindMatch(item, keys) {
@@ -6075,7 +6077,11 @@
       const tel = item.mobile || item.phone || "";
       const bits = [];
       if (item.avatar) {
-        bits.push(`<div class="contact-id"><img class="avatar" src="${esc(item.avatar)}" alt="" title="點頭像看大圖" data-avatar-zoom="${esc(item.avatar)}" /><div class="who-name">${esc([role, name].filter(Boolean).join(" · ") || "聯絡人")}</div></div>`);
+        const exLabel = agentExcludeLabel(item);
+        const excludeAttrs = !isGuest && exLabel && item.source !== "self"
+          ? ` data-exclude-face="${item.post_id}" data-agent="${esc(exLabel)}" data-uid="${item.contact_uid || ""}" title="點頭像排除此聯絡人，並寫入目前設定檔"`
+          : ` title="點頭像看大圖" data-avatar-zoom="${esc(item.avatar)}"`;
+        bits.push(`<div class="contact-id"><img class="avatar" src="${esc(item.avatar)}" alt=""${excludeAttrs} /><div class="who-name">${esc([role, name].filter(Boolean).join(" · ") || "聯絡人")}</div></div>`);
       } else if (name || role) {
         bits.push(`<div class="who-name">${esc([role, name].filter(Boolean).join(" · "))}</div>`);
       }
@@ -6746,13 +6752,12 @@
         return;
       }
       maybeAskPush();
+      detachListingCard(key, { watched: 1 });
       if (watchNoteBusy()) {
         listRefreshQueued = true;
-        listCache = listCache.filter((item) => String(item.post_id) !== key);
-        renderList(listCache, lastStats);
         return;
       }
-      await loadList({ force: true });
+      await loadList({ keep: true, silent: true });
     }
 
     async function loadList(options = {}) {
@@ -6768,33 +6773,51 @@
       }
       const gen = ++listLoadGen;
       if (!options.force) listRefreshQueued = false;
-      if (listCache.length && !options.force) {
+      if (options.paintPreview) {
+        renderDistrictChips(settings);
+        renderList(applyListView(options.paintPreview), lastStats);
+      } else if (listCache.length && !options.force && !options.silent && !options.keep) {
         renderDistrictChips(settings);
         renderList(applyListView(listCache), lastStats);
       }
+      if (!options.silent) setListBusy(true, options.busyText || "正在更新列表…");
       const q = $("q").value.trim();
       const districts = [...viewDistricts].map(encodeURIComponent).join(",");
       const paintStart = performance.now();
-      const res = await fetch(
-        `/api/listings?filter=${encodeURIComponent(filter)}&kind=${encodeURIComponent(kinds.join(","))}&sources=${encodeURIComponent(canFilterSources() ? sources.join(",") : "")}&sort=${encodeURIComponent(sort)}&q=${encodeURIComponent(q)}&limit=500&districts=${districts}`,
-      );
-      const data = await res.json();
-      if (gen !== listLoadGen) return;
-      if (!options.force && watchNoteBusy()) {
-        listRefreshQueued = true;
-        return;
+      try {
+        const res = await fetch(
+          `/api/listings?filter=${encodeURIComponent(filter)}&kind=${encodeURIComponent(kinds.join(","))}&sources=${encodeURIComponent(canFilterSources() ? sources.join(",") : "")}&sort=${encodeURIComponent(sort)}&q=${encodeURIComponent(q)}&limit=500&districts=${districts}`,
+        );
+        const data = await res.json();
+        if (gen !== listLoadGen) return;
+        if (!options.force && watchNoteBusy()) {
+          listRefreshQueued = true;
+          return;
+        }
+        renderStats(data.stats);
+        renderDistrictChips(settings);
+        lastStats = data.stats || {};
+        lastStats.timing = data.timing || {};
+        lastStats.paint_ms = Math.round(performance.now() - paintStart);
+        const next = applyListView(data.listings);
+        rememberListings(next);
+        if (options.keep && listCache.length && listingIdKey(listCache) === listingIdKey(next)) {
+          listCache = next.map(normalizeListingText);
+          updateListMeta(listCache, lastStats);
+          paintWatchChip();
+          updateBulkBar();
+          return;
+        }
+        renderList(next, lastStats);
+      } finally {
+        if (gen === listLoadGen) setListBusy(false);
       }
-      renderStats(data.stats);
-      renderDistrictChips(settings);
-      // 伺服器已依行政區／整層／1F 篩過再排序截取；前端再套一次防呆
-      lastStats = data.stats || {};
-      lastStats.timing = data.timing || {};
-      lastStats.paint_ms = Math.round(performance.now() - paintStart);
-      renderList(applyListView(data.listings), lastStats);
     }
 
     async function loadState() {
       $("status").textContent = "正在載入設定…";
+      const settingsReq = fetch("/api/settings", { cache: "no-store", signal: AbortSignal.timeout(8000) });
+      settingsReq.catch(() => {});
       let me = null;
       let lastError = "";
       for (let attempt = 1; attempt <= 2; attempt += 1) {
@@ -6868,7 +6891,7 @@
       setSettingsReady(false, "正在載入已存設定…完成前請不要按儲存。");
       lastError = "";
       try {
-        const res = await fetch("/api/state", { cache: "no-store", signal: AbortSignal.timeout(18000) });
+        const res = await settingsReq;
         const data = await readApi(res);
         if (!res.ok) throw new Error(data.error || "載入失敗");
         if (data.settings) {
@@ -6876,14 +6899,9 @@
           fillSettings(data.settings);
         }
         loadMemberMail().catch(() => {});
-        renderStats(data.stats || {});
-        renderList(applyListView(data.listings || []), data.stats || {});
-        if (data.lastRun?.checked_at) {
-          const extra = data.lastRun.baseline ? "（第一次只建立基準，不推播）" : "";
-          $("status").textContent = `上次檢查 ${new Date(data.lastRun.checked_at).toLocaleString()}，抓到 ${data.lastRun.fetched || 0} 筆${extra}`;
-        } else {
-          $("status").textContent = "設定已載入";
-        }
+        $("status").textContent = "設定已載入，正在載入物件…";
+        await loadList({ busyText: "正在載入物件…" });
+        $("status").textContent = "設定已載入";
       } catch (error) {
         lastError = error.name === "TimeoutError" || error.name === "AbortError"
           ? "載入逾時，伺服器可能正在檢查物件"
@@ -7873,12 +7891,9 @@
       }
     }
     function wishBudgetText(post) {
-      const min = Number(post.rent_min) || 0;
       const max = Number(post.rent_max) || 0;
-      if (!min && !max) return "預算不限";
-      if (min && max) return `${min.toLocaleString("zh-TW")}–${max.toLocaleString("zh-TW")} 元/月`;
-      if (max) return `最高 ${max.toLocaleString("zh-TW")} 元/月`;
-      return `最低 ${min.toLocaleString("zh-TW")} 元/月`;
+      if (!max) return "房租上限不限";
+      return `房租上限 ${max.toLocaleString("zh-TW")} 元/月`;
     }
     function wishAreaText(post) {
       return (post.district_labels || []).join("、") || post.city || "未填區域";
@@ -7918,7 +7933,8 @@
       const paint = (hostId, set) => {
         const host = $(hostId);
         if (!host) return;
-        host.innerHTML = WISH_CONDITIONS.map((row) => (
+        const catalog = (wishMeta?.conditions?.length ? wishMeta.conditions : WISH_CONDITIONS);
+        host.innerHTML = catalog.map((row) => (
           `<button type="button" class="wish-cond-btn" data-wish-cond="${esc(row.id)}" aria-pressed="${set.has(row.id) ? "true" : "false"}">${esc(row.label)}</button>`
         )).join("");
       };
@@ -7934,29 +7950,13 @@
         avoid: take("wishAvoid"),
       };
     }
-    function fillWishCitySelects() {
-      const cities = (typeof selfCityList === "function" ? selfCityList() : []) || [];
-      const options = `<option value="">不限縣市</option>` + cities.map((city) => `<option value="${esc(city.name)}">${esc(city.name)}</option>`).join("");
-      if ($("wishFilterCity") && !$("wishFilterCity").dataset.ready) {
-        $("wishFilterCity").innerHTML = options;
-        $("wishFilterCity").dataset.ready = "1";
-      }
-      if ($("wishCity") && !$("wishCity").dataset.ready) {
-        $("wishCity").innerHTML = `<option value="">先選縣市</option>` + cities.map((city) => `<option value="${esc(city.name)}">${esc(city.name)}</option>`).join("");
-        $("wishCity").dataset.ready = "1";
-      }
-      if ($("wishFilterHousing") && !$("wishFilterHousing").dataset.ready && wishMeta?.housingTypes) {
-        $("wishFilterHousing").innerHTML = wishMeta.housingTypes.map((row) => `<option value="${esc(row.id)}">${esc(row.label)}</option>`).join("");
-        $("wishFilterHousing").dataset.ready = "1";
-      }
-    }
     function collectWishForm() {
       const cond = collectWishConditions();
       return {
-        city: $("wishCity")?.value || "",
+        city: "",
         districts: demandDistrictKeys(),
-        location_note: $("wishLocationNote")?.value || "",
-        rent_min: Number($("demandRentMin")?.value) || 0,
+        location_note: "",
+        rent_min: 0,
         rent_max: Number($("demandRentMax")?.value) || 0,
         includes_management: Boolean($("wishIncludesFee")?.checked),
         housing_type: $("demandHousing")?.value || "any",
@@ -7965,21 +7965,18 @@
         move_in_date: $("wishMoveIn")?.value || "",
         lease_duration: $("wishLease")?.value || "",
         transit_note: $("wishTransit")?.value || "",
-        destination_note: $("wishDestination")?.value || "",
-        commute_minutes: Number($("wishCommute")?.value) || 0,
+        destination_note: "",
+        commute_minutes: 0,
         mrt_walk: Boolean($("demandMrt")?.checked),
         ...cond,
         body: $("demandBody")?.value || "",
-        contact_name: $("wishContactName")?.value || "",
-        phone: $("wishContactPhone")?.value || "",
-        line_url: $("wishContactLine")?.value || "",
-        contact_profile_id: Number($("wishContactPick")?.value) || 0,
+        contact_name: "",
+        phone: "",
+        line_url: "",
+        contact_profile_id: 0,
       };
     }
     function applyWishForm(row = {}) {
-      if ($("wishCity")) $("wishCity").value = row.city || "";
-      if ($("wishLocationNote")) $("wishLocationNote").value = row.location_note || "";
-      if ($("demandRentMin")) $("demandRentMin").value = row.rent_min || "";
       if ($("demandRentMax")) $("demandRentMax").value = row.rent_max || "";
       if ($("wishIncludesFee")) $("wishIncludesFee").checked = Boolean(row.includes_management);
       if ($("demandHousing")) $("demandHousing").value = row.housing_type || "any";
@@ -7988,13 +7985,8 @@
       if ($("wishMoveIn")) $("wishMoveIn").value = row.move_in_date || "";
       if ($("wishLease")) $("wishLease").value = row.lease_duration || "";
       if ($("wishTransit")) $("wishTransit").value = row.transit_note || "";
-      if ($("wishDestination")) $("wishDestination").value = row.destination_note || "";
-      if ($("wishCommute")) $("wishCommute").value = row.commute_minutes || "";
       if ($("demandMrt")) $("demandMrt").checked = Boolean(row.mrt_walk);
       if ($("demandBody")) $("demandBody").value = row.body || "";
-      if ($("wishContactName")) $("wishContactName").value = row.contact_name || row.contact?.contact_name || "";
-      if ($("wishContactPhone")) $("wishContactPhone").value = row.phone || row.contact?.phone || "";
-      if ($("wishContactLine")) $("wishContactLine").value = row.line_url || row.contact?.line_url || "";
       fillDemandDistricts();
       const wanted = new Set(row.districts || []);
       document.querySelectorAll("#demandDistricts [data-demand-district]").forEach((el) => {
@@ -8022,9 +8014,7 @@
       if ($("wishFormWrap")) $("wishFormWrap").hidden = !show;
       if (show) {
         fillDemandDistricts();
-        fillWishCitySelects();
         if (!$("wishMust")?.children.length) renderWishConditionGroups();
-        refreshWishContacts();
       }
       syncWishOwnerBar();
     }
@@ -8034,20 +8024,15 @@
         ["希望有", post.nice_to_have_labels, "nice"],
         ["不接受", post.avoid_labels, "avoid"],
       ].filter((row) => (row[1] || []).length);
-      const contact = post.contact && (post.contact.contact_name || post.contact.phone || post.contact.line_url)
-        ? `<p>${esc(post.contact.contact_name || "")} ${esc(post.contact.phone || "")}${post.contact.line_url ? ` · <a href="${esc(post.contact.line_url)}" rel="noopener noreferrer">LINE</a>` : ""}</p>`
-        : `<p class="muted">沒有公開聯絡摘要。</p>`;
       return `
         <p class="rent-price">${esc(wishBudgetText(post))}${post.includes_management ? " · 含水電管理費" : ""}</p>
-        <p class="muted">${esc(wishAreaText(post))}${post.location_note ? ` · ${esc(post.location_note)}` : ""}</p>
+        <p class="muted">${esc(wishAreaText(post))}</p>
         <p class="muted">${esc(post.housing_label || "不限類型")}${post.layout_label ? ` · ${esc(post.layout_label)}` : ""}${post.ping_min ? ` · ${esc(post.ping_min)} 坪以上` : ""}</p>
         <p class="muted">${post.move_in_date ? `希望 ${esc(post.move_in_date)} 入住` : "入住時間面議"}${post.lease_label ? ` · ${esc(post.lease_label)}` : ""}</p>
-        ${post.transit_note ? `<p class="muted">交通：${esc(post.transit_note)}</p>` : ""}
-        ${post.destination_note ? `<p class="muted">常去：${esc(post.destination_note)}</p>` : ""}
-        ${post.commute_minutes ? `<p class="muted">可接受通勤約 ${esc(post.commute_minutes)} 分鐘</p>` : ""}
+        ${post.transit_note ? `<p class="muted">希望1公里內有之捷運／車站：${esc(post.transit_note)}</p>` : ""}
+        ${post.mrt_walk ? `<p class="muted">需要可步行捷運（1 公里內）</p>` : ""}
         ${post.body ? `<p>${esc(post.body)}</p>` : ""}
         ${groups.map(([title, labels, cls]) => `<div><div class="muted">${title}</div><div class="wish-chips">${labels.map((label) => `<span class="wish-chip ${cls}">${esc(label)}</span>`).join("")}</div></div>`).join("")}
-        ${contact}
         <p class="muted"><a href="${esc(post.public_path || `/w/${post.id}`)}">開啟公開頁</a></p>
       `;
     }
@@ -8059,34 +8044,14 @@
       if ($("wishDetailBody")) $("wishDetailBody").innerHTML = wishDetailHtml(data);
       if ($("wishDetailOverlay")) $("wishDetailOverlay").hidden = false;
     }
-    async function refreshWishContacts() {
-      const sel = $("wishContactPick");
-      if (!sel || isGuest) return;
-      try {
-        const res = await fetch("/api/listing-contact-profiles");
-        const data = await readApi(res);
-        const items = data.items || [];
-        sel.innerHTML = `<option value="">套用我的聯絡人</option>` + items.map((item) => (
-          `<option value="${item.id}">${esc(item.label || item.contact_name || "聯絡人")}</option>`
-        )).join("");
-      } catch {
-        /* 沒有聯絡人快選也可以手動填 */
-      }
-    }
     async function loadDemand() {
       fillDemandDistricts();
-      fillWishCitySelects();
       const box = $("demandList");
       if (!box) return;
-      const qs = new URLSearchParams();
-      if ($("wishFilterCity")?.value) qs.set("city", $("wishFilterCity").value);
-      if ($("wishFilterRentMin")?.value) qs.set("rent_min", $("wishFilterRentMin").value);
-      if ($("wishFilterRentMax")?.value) qs.set("rent_max", $("wishFilterRentMax").value);
-      if ($("wishFilterHousing")?.value && $("wishFilterHousing").value !== "any") qs.set("housing_type", $("wishFilterHousing").value);
-      const res = await fetch(`/api/wish-rooms?${qs.toString()}`);
+      const res = await fetch("/api/wish-rooms");
       const data = await res.json();
       wishMeta = data;
-      fillWishCitySelects();
+      if (!$("wishFormWrap")?.hidden) renderWishConditionGroups(collectWishConditions());
       const posts = data.rooms || data.posts || [];
       box.innerHTML = posts.length
         ? posts.map(demandCardHtml).join("")
@@ -8377,7 +8342,6 @@
         if (turningOn) btn.setAttribute("aria-pressed", "true");
       });
     });
-    $("wishFilterApply")?.addEventListener("click", () => loadDemand().catch(() => {}));
     $("wishCreateBtn")?.addEventListener("click", () => {
       if (isGuest) { remindGuest(); return; }
       if (wishMine.active) { if ($("demandMsg")) $("demandMsg").textContent = "已有一則公開許願房"; return; }
@@ -8441,16 +8405,6 @@
     $("wishCancelEdit")?.addEventListener("click", () => {
       wishEditingId = 0;
       showWishForm(false);
-    });
-    $("wishContactApply")?.addEventListener("click", async () => {
-      const id = $("wishContactPick")?.value;
-      if (!id) return;
-      const res = await fetch(`/api/listing-contact-profiles/${id}`);
-      const data = await readApi(res);
-      if (!res.ok) return;
-      if ($("wishContactName")) $("wishContactName").value = data.contact_name || "";
-      if ($("wishContactPhone")) $("wishContactPhone").value = data.phone || "";
-      if ($("wishContactLine")) $("wishContactLine").value = data.line_url || "";
     });
     $("wishDetailClose")?.addEventListener("click", () => { if ($("wishDetailOverlay")) $("wishDetailOverlay").hidden = true; });
     document.querySelector("[data-close-wish]")?.addEventListener("click", () => { if ($("wishDetailOverlay")) $("wishDetailOverlay").hidden = true; });
@@ -9930,7 +9884,12 @@
         document.querySelectorAll("[data-filter]").forEach((b) => b.classList.remove("on"));
         btn.classList.add("on");
         filter = btn.dataset.filter;
-        loadList();
+        const preview = previewListForFilter(filter);
+        loadList({
+          keep: !preview,
+          paintPreview: preview || undefined,
+          busyText: filter === "watched" ? "正在載入特別關注…" : filter === "hidden" ? "正在載入已隱藏物件…" : "正在更新列表…",
+        });
       };
     });
 
@@ -10071,12 +10030,29 @@
       }
       const hiddenId = ev.target.dataset.hidden;
       if (!hiddenId) return;
-      await fetch(`/api/listings/${hiddenId}/flags`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ hidden: ev.target.checked }),
-      });
-      loadList();
+      const hiding = ev.target.checked;
+      if (hiding) {
+        const card = document.querySelector(`[data-card="${hiddenId}"]`);
+        flyCardToChip(card, "hidden");
+        detachListingCard(hiddenId, { hidden: 1 });
+      }
+      try {
+        const res = await fetch(`/api/listings/${hiddenId}/flags`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ hidden: hiding }),
+        });
+        if (!res.ok) throw new Error("不再顯示失敗");
+      } catch {
+        flash("不再顯示失敗，已還原。請再試一次。");
+        await loadList({ force: true });
+        return;
+      }
+      if (watchNoteBusy()) {
+        listRefreshQueued = true;
+        return;
+      }
+      loadList({ keep: true, silent: true });
     });
 
     $("list").addEventListener("click", async (ev) => {
@@ -10093,17 +10069,30 @@
       if (face) {
         ev.preventDefault();
         ev.stopPropagation();
+        if (isGuest) {
+          remindGuest();
+          return;
+        }
+        if (!settingsLoaded) {
+          $("saveMsg").textContent = "設定還在載入，請稍候再排除";
+          return;
+        }
         const label = faceBtn.dataset.agent || "";
         const uid = Number(faceBtn.dataset.uid);
-        if (label && !$("excludeAgents").value.split(/[\n,，]/).map((s) => s.trim()).includes(label)) {
-          $("excludeAgents").value = [$("excludeAgents").value.trim(), label].filter(Boolean).join("\n");
+        const current = clipLines($("excludeAgents").value, MEMBER_MAX_EXCLUDE_AGENTS);
+        if (label && !current.includes(label)) {
+          if (current.length >= MEMBER_MAX_EXCLUDE_AGENTS) {
+            $("saveMsg").textContent = `排除房仲最多 ${MEMBER_MAX_EXCLUDE_AGENTS} 個，請先刪一筆再排除`;
+            return;
+          }
+          $("excludeAgents").value = [...current, label].join("\n");
         }
         if (uid) {
           settings.excludeAgentIds = [...new Set([...(settings.excludeAgentIds || []), uid])];
         }
-        $("saveMsg").textContent = label ? `已排除 ${label}` : "已排除此聯絡人";
+        $("saveMsg").textContent = label ? `已排除 ${label}，並寫入目前設定檔` : "已排除此聯絡人，並寫入目前設定檔";
         await saveSettings(collectSettings());
-        await loadList();
+        await loadList({ keep: true, silent: true });
         return;
       }
       const sameToggle = ev.target.closest("[data-same-toggle]")?.dataset.sameToggle;
@@ -10252,8 +10241,7 @@
         ev.target.disabled = true;
         const waitMs = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 280;
         if (waitMs) await new Promise((resolve) => setTimeout(resolve, waitMs));
-        listCache = listCache.filter((item) => String(item.post_id) !== key);
-        renderList(listCache, lastStats);
+        detachListingCard(key, { watched: 0 });
         try {
           const res = await fetch(`/api/listings/${watched}/flags`, {
             method: "POST",
@@ -10271,7 +10259,7 @@
           listRefreshQueued = true;
           return;
         }
-        await loadList({ force: true });
+        await loadList({ keep: true, silent: true });
         return;
       }
       if (!viewed) return;

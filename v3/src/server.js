@@ -76,6 +76,8 @@ import {
   saveMemberMailSettings,
   getHelpQa,
   saveHelpQa,
+  getWishConditions,
+  saveWishConditions,
   getLegalCopy,
   saveLegalCopy,
   getSpirit,
@@ -514,6 +516,7 @@ function wishListQuery(req) {
 function wishListPayload(req) {
   const session = readSession(req);
   const query = wishListQuery(req);
+  getWishConditions();
   const posts = listDemand(query);
   return {
     ...demandMeta(),
@@ -1206,6 +1209,18 @@ app.get("/api/admin/help-qa", requireAdminApi, (_req, res) => {
 app.put("/api/admin/help-qa", requireAdminApi, (req, res) => {
   try {
     res.json(saveHelpQa(req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/admin/wish-conditions", requireAdminApi, (_req, res) => {
+  res.json(getWishConditions());
+});
+
+app.put("/api/admin/wish-conditions", requireAdminApi, (req, res) => {
+  try {
+    res.json(saveWishConditions(req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
