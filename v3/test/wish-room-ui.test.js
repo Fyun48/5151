@@ -27,7 +27,8 @@ test("navigation and empty/owner copy use 許願房", () => {
 });
 
 test("form has renter fields, priority groups, and no long legal wall or 適合對象", () => {
-  assert.match(html, /id="demandRentMin"/);
+  assert.match(html, /id="demandRentMax"/);
+  assert.match(html, /房租上限/);
   assert.match(html, /id="wishIncludesFee"/);
   assert.match(html, /id="wishMoveIn"/);
   assert.match(html, /id="wishLease"/);
@@ -37,13 +38,25 @@ test("form has renter fields, priority groups, and no long legal wall or 適合�
   assert.match(html, /需要可開伙/);
   assert.match(html, /需要可養寵物/);
   assert.match(html, /需要可申請租補／報稅/);
+  assert.match(html, /需要可步行捷運（1 公里內）/);
+  assert.match(html, /希望1公里內有之捷運／車站名稱/);
   assert.match(html, /terms\.html\?type=wish_room_rules/);
   assert.doesNotMatch(html, /需求牆是公開留言板/);
   assert.doesNotMatch(html, /同時最多 2 則未過期需求/);
   const demandView = html.slice(html.indexOf('id="demandView"'), html.indexOf('id="notifyView"'));
   assert.doesNotMatch(demandView, /適合對象/);
   assert.doesNotMatch(demandView, /限女性|限男性|國籍|外籍/);
-  assert.match(html, /id="wishContactPick"/);
+  assert.doesNotMatch(demandView, /id="wishFilters"/);
+  assert.doesNotMatch(demandView, /id="wishCity"/);
+  assert.doesNotMatch(demandView, /id="demandRentMin"/);
+  assert.doesNotMatch(demandView, /id="wishLocationNote"/);
+  assert.doesNotMatch(demandView, /id="wishDestination"/);
+  assert.doesNotMatch(demandView, /id="wishCommute"/);
+  assert.doesNotMatch(demandView, /id="wishContactName"/);
+  assert.doesNotMatch(demandView, /id="wishContactPhone"/);
+  assert.doesNotMatch(demandView, /id="wishContactLine"/);
+  assert.doesNotMatch(demandView, /id="wishContactPick"/);
+  assert.doesNotMatch(demandView, /未滿 1\.5 公里/);
 });
 
 test("public share page and routes exist; guests can read", () => {
@@ -69,4 +82,14 @@ test("server-side one-active and example APIs are present", () => {
   assert.match(server, /app\.put\("\/api\/wish-rooms\/example"/);
   assert.match(server, /app\.post\("\/api\/wish-rooms\/:id\/reopen"/);
   assert.match(server, /app\.post\("\/api\/wish-rooms\/:id\/publish"/);
+  assert.match(server, /app\.get\("\/api\/admin\/wish-conditions"/);
+  assert.match(server, /app\.put\("\/api\/admin\/wish-conditions"/);
+});
+
+test("admin can edit Wish Room condition catalog", () => {
+  const admin = read("public/admin.html");
+  assert.match(admin, /id="wishConditionsCard"/);
+  assert.match(admin, /許願房條件選單/);
+  assert.match(admin, /id="wishCondSave"/);
+  assert.match(admin, /\/api\/admin\/wish-conditions/);
 });

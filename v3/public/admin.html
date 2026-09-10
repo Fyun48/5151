@@ -567,6 +567,17 @@
       <p class="hint">「立即更新開放資料」會抓內政部戶政司等來源，把雙北與全國戶籍人口等以「自動更新」標記寫入（系統每天也會自動跑一次）。</p>
       <p class="msg" id="housingMsg"></p>
     </section>
+<section class="card" id="wishConditionsCard">
+      <h2>許願房條件選單</h2>
+      <p class="hint">前台許願房「必須有／希望有／不接受」共用這份選單。可新增、改名稱、關閉或刪除。關閉後新刊登選不到，已刊登仍保留原文字。請不要用性別、國籍等歧視條件。</p>
+      <div id="wishCondRows"></div>
+      <div class="row" style="margin-top:10px">
+        <button type="button" class="ghost" id="wishCondAdd">新增一則</button>
+        <button type="button" class="ghost" id="wishCondReset">還原預設</button>
+        <button type="button" class="primary" id="wishCondSave">儲存條件選單</button>
+      </div>
+      <p class="msg" id="wishCondMsg"></p>
+    </section>
       </div>
       <div id="qa" class="admin-panel" data-admin-panel="qa">
 <section class="card">
@@ -1229,6 +1240,48 @@
         question: row.querySelector("[data-qa-q]")?.value || "",
         answer: row.querySelector("[data-qa-a]")?.value || "",
       }));
+    }
+
+    function wishCondRowHtml(row = {}) {
+      return `
+        <div class="qa-edit" data-wish-cond-row>
+          <div class="grid-2">
+            <div>
+              <label>條件名稱</label>
+              <input data-wish-cond-label value="${escapeHtml(row.label || "")}" maxlength="40" placeholder="例如 可開伙" />
+            </div>
+            <div>
+              <label>識別碼（可空白，新增時自動產生）</label>
+              <input data-wish-cond-id value="${escapeHtml(row.id || "")}" maxlength="40" placeholder="need_cook" />
+            </div>
+          </div>
+          <div class="row" style="margin:8px 0 16px">
+            <label class="checks"><input type="checkbox" data-wish-cond-on ${row.enabled === false ? "" : "checked"} /> 顯示在前台選單</label>
+            <button type="button" class="ghost" data-wish-cond-del>刪除此則</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderWishCondEditor(items) {
+      const list = Array.isArray(items) && items.length ? items : [{ label: "", id: "", enabled: true }];
+      $("wishCondRows").innerHTML = list.map((row) => wishCondRowHtml(row)).join("");
+    }
+
+    function collectWishConditions() {
+      return [...document.querySelectorAll("[data-wish-cond-row]")].map((row) => ({
+        id: row.querySelector("[data-wish-cond-id]")?.value || "",
+        label: row.querySelector("[data-wish-cond-label]")?.value || "",
+        enabled: row.querySelector("[data-wish-cond-on]")?.checked !== false,
+      }));
+    }
+
+    async function loadWishConditions() {
+      const res = await fetch("/api/admin/wish-conditions", { cache: "no-store" });
+      const data = await readApi(res);
+      if (!res.ok) throw new Error(data.error || "載入許願房條件失敗");
+      renderWishCondEditor(data.items || []);
+      setMsg("wishCondMsg", `共 ${(data.items || []).length} 則`, true);
     }
 
     function fillBrand(data) {
@@ -2414,7 +2467,7 @@
       if (me.role !== "admin") { location.replace("/"); return; }
       meEmail = me.email || "";
       $("who").textContent = meEmail;
-      await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadAnnouncements(), loadCommsAdmin(), loadMaps(), loadHelpQa(), loadLegalCopy(), loadContentCms(), loadListingImports(), loadSpirit(), loadHousing(), loadCrawlSources(), loadSystemCrawl(), loadBrand(), loadFeedback()]);
+      await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadAnnouncements(), loadCommsAdmin(), loadMaps(), loadHelpQa(), loadWishConditions(), loadLegalCopy(), loadContentCms(), loadListingImports(), loadSpirit(), loadHousing(), loadCrawlSources(), loadSystemCrawl(), loadBrand(), loadFeedback()]);
       $("brandForm").onsubmit = async (ev) => {
         ev.preventDefault();
         $("brandSave").disabled = true;
@@ -2485,6 +2538,54 @@
           setMsg("helpQaMsg", error.message);
         } finally {
           $("helpQaSave").disabled = false;
+        }
+      };
+      $("wishCondAdd").onclick = () => {
+        renderWishCondEditor([...collectWishConditions(), { label: "", id: "", enabled: true }]);
+      };
+      $("wishCondRows").addEventListener("click", (ev) => {
+        const btn = ev.target.closest("[data-wish-cond-del]");
+        if (!btn) return;
+        btn.closest("[data-wish-cond-row]")?.remove();
+        if (!$("wishCondRows").children.length) renderWishCondEditor([{ label: "", id: "", enabled: true }]);
+      });
+      $("wishCondSave").onclick = async () => {
+        $("wishCondSave").disabled = true;
+        setMsg("wishCondMsg", "儲存中…");
+        try {
+          const res = await fetch("/api/admin/wish-conditions", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ items: collectWishConditions() }),
+          });
+          const data = await readApi(res);
+          if (!res.ok) throw new Error(data.error || "儲存失敗");
+          renderWishCondEditor(data.items || []);
+          setMsg("wishCondMsg", "條件選單已儲存", true);
+        } catch (error) {
+          setMsg("wishCondMsg", error.message);
+        } finally {
+          $("wishCondSave").disabled = false;
+        }
+      };
+      $("wishCondReset").onclick = async () => {
+        if (!confirm("還原成系統預設的許願房條件？你改過的選項會被蓋掉。")) return;
+        $("wishCondReset").disabled = true;
+        setMsg("wishCondMsg", "還原中…");
+        try {
+          const res = await fetch("/api/admin/wish-conditions", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reset: true }),
+          });
+          const data = await readApi(res);
+          if (!res.ok) throw new Error(data.error || "還原失敗");
+          renderWishCondEditor(data.items || []);
+          setMsg("wishCondMsg", "已還原預設", true);
+        } catch (error) {
+          setMsg("wishCondMsg", error.message);
+        } finally {
+          $("wishCondReset").disabled = false;
         }
       };
       $("helpQaReset").onclick = async () => {

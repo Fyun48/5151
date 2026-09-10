@@ -315,12 +315,27 @@ export function applySettingPatch(current, partial = {}, { admin = false, plan =
     next.activeProfileId = "";
   }
   const syncActiveProfile = PROFILE_FIELDS.some((key) => Object.prototype.hasOwnProperty.call(patch, key));
-  if (syncActiveProfile && next.activeProfileId) {
-    next.settingProfiles = next.settingProfiles.map((profile) =>
-      profile.id === next.activeProfileId
-        ? { ...profile, saved_at: new Date().toISOString(), data: snapshotSettings(next) }
-        : profile,
-    );
+  const excludeTouched = ["excludeAgents", "excludeAgentIds"].some((key) => Object.prototype.hasOwnProperty.call(patch, key));
+  if (syncActiveProfile) {
+    if (!next.activeProfileId && next.settingProfiles[0]) {
+      next.activeProfileId = next.settingProfiles[0].id;
+    }
+    if (!next.activeProfileId && excludeTouched) {
+      next.settingProfiles = [{
+        id: "live",
+        name: "目前搜尋",
+        saved_at: new Date().toISOString(),
+        data: {},
+      }];
+      next.activeProfileId = "live";
+    }
+    if (next.activeProfileId) {
+      next.settingProfiles = next.settingProfiles.map((profile) =>
+        profile.id === next.activeProfileId
+          ? { ...profile, saved_at: new Date().toISOString(), data: snapshotSettings(next) }
+          : profile,
+      );
+    }
   }
   return next;
 }
