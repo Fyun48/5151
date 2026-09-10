@@ -3,7 +3,7 @@
 給 **Owner** 用的內網系統：把各站使用者回饋累積成議題，評估後再決定要不要開發。  
 **Owner 直接下令改程式並部署，不必走這條線。**
 
-完整藍圖（雙向、不打死結、工作包）見 [`BLUEPRINT.md`](BLUEPRINT.md)；短表見 [`PLAN.md`](PLAN.md)。  
+完整藍圖見 [`BLUEPRINT.md`](BLUEPRINT.md)；短表見 [`PLAN.md`](PLAN.md)；現況對照見 [`INVENTORY.md`](INVENTORY.md)。  
 v3 外掛／預算熔斷／進階比對見 [`../v3/PLAN-integrations.md`](../v3/PLAN-integrations.md)。
 
 Console：本機 `http://127.0.0.1:5154`；正式機走同一條 Tunnel → `https://jibbyrentops.reversalplay.me`（容器只綁 `127.0.0.1:5154`）。
@@ -22,8 +22,11 @@ Console：本機 `http://127.0.0.1:5154`；正式機走同一條 Tunnel → `htt
 ```
 OPS_FEEDBACK_DELIVERY=1
 OPS_INGEST_URL=http://127.0.0.1:5154/ops/api/ingest/feedback
-OPS_INGEST_SECRET=<與 OPS 相同的密鑰>
+OPS_INGEST_SECRET=<該站專用密鑰；OPS 用憑證決定 product，不信 body 自填>
+OPS_PRODUCT_ID=v3
 ```
+
+站內後台「使用者回饋」可另按「停止傳送至 OPS」，立刻生效，不必等 OPS 在線或重啟才能停。`OPS_PRODUCT_ID` 只供本機紀錄；歸屬以 OPS 端憑證為準。
 
 正式 v3 映像預設 `OPS_FEEDBACK_DELIVERY=0`，避免未就緒的 OPS 吃正式流量。要接到正式回饋時，在 NAS／CasaOS 的 v3 環境變數打開上述三項，並讓容器能連到 OPS。
 
