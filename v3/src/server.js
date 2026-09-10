@@ -228,6 +228,12 @@ import { probeListingAliveBySource } from "./probe.js";
 import { deliveryConfigFromEnv, startDeliveryLoop } from "./opsDelivery.js";
 import { opsDeliveryDb } from "./db.js";
 import { refreshHousingData } from "./housingFetch.js";
+import {
+  TICK_BUDGET_MS,
+  createTickGate,
+  humanTimeoutMessage,
+  withBudget,
+} from "./crawlWatchdog.js";
 import { APP_NAME, APP_VERSION } from "./brand.js";
 import { profileNameOrDraft } from "./settingsState.js";
 import {
@@ -1923,7 +1929,7 @@ app.use(express.static(path.join(__dirname, "../public")));
 
 let timer = null;
 let lastRun = null;
-let tickBusy = false;
+const tickGate = createTickGate({ budgetMs: TICK_BUDGET_MS });
 const clients = new Set();
 
 function broadcast(payload, userId) {
@@ -2052,10 +2058,22 @@ function queueGeoBackfill(settings = getSettings()) {
 }
 
 async function tick(reason = "schedule") {
-  if (tickBusy && reason === "schedule") {
-    return lastRun || { skipped: "busy", reason, checked_at: new Date().toISOString(), searches: [], events: [] };
+  if (tickGate.isBusy() && reason === "schedule") {
+    if (!tickGate.isStale()) {
+      return lastRun || { skipped: "busy", reason, checked_at: new Date().toISOString(), searches: [], events: [] };
+    }
+    tickGate.abandon();
+    lastRun = {
+      skipped: "stale",
+      error: humanTimeoutMessage("上一輪抓取", TICK_BUDGET_MS),
+      reason,
+      checked_at: new Date().toISOString(),
+      searches: [],
+      events: [],
+    };
+    console.warn(lastRun.error);
   }
-  tickBusy = true;
+  const tickGen = tickGate.begin();
   try {
     expireStaleVerifyTokens({
       onExpire: (user) => {
@@ -2098,22 +2116,31 @@ async function tick(reason = "schedule") {
         events: [],
       };
     }
-    lastRun = await runWatch({
-      skipHeavyGeo: true,
-      jobs: plan.jobs,
-      includedUserIds: plan.includedUserIds,
-      includeSystem: plan.includeSystem,
-    });
+    const result = await withBudget(
+      () => runWatch({
+        skipHeavyGeo: true,
+        jobs: plan.jobs,
+        includedUserIds: plan.includedUserIds,
+        includeSystem: plan.includeSystem,
+      }),
+      TICK_BUDGET_MS,
+      "這輪抓取",
+    );
+    if (!tickGate.isCurrent(tickGen)) return result;
+    lastRun = result;
     lastRun.reason = reason;
     broadcastWatch(lastRun);
     if (reason !== "startup") queueGeoBackfill();
     return lastRun;
   } catch (error) {
+    if (!tickGate.isCurrent(tickGen)) {
+      return lastRun || { error: error.message, checked_at: new Date().toISOString(), reason };
+    }
     lastRun = { error: error.message, checked_at: new Date().toISOString(), reason };
     broadcast({ type: "error", error: error.message });
     throw error;
   } finally {
-    tickBusy = false;
+    tickGate.end(tickGen);
   }
 }
 

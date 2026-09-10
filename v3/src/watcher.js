@@ -50,6 +50,7 @@ import {
 } from "./db.js";
 import { replaceCrawlCovers, touchCrawlCoversRun } from "./crawlCovers.js";
 import { CRAWL_PAGES_591, CRAWL_PAGES_EXTERNAL } from "./crawlPolicy.js";
+import { noteConsecutiveTimeout } from "./crawlWatchdog.js";
 import { fetchCommunityLocation, fetchListingDetail, fetchListings, isListingGoneError, LIST_PAGE_SIZE, mergeFeeRows, probeListingAlive } from "./client591.js";
 import { probeListingAliveBySource } from "./probe.js";
 import { fetchHbCoveringListings } from "./hbhousing.js";
@@ -505,15 +506,23 @@ export async function runWatch(options = {}) {
   };
 
   if (want591) {
+    let consecutiveTimeouts = 0;
     for (const job of jobs) {
       try {
         const result = await fetchListings(job.searchUrl, pages, fetchOptions);
         collected.push(result);
+        consecutiveTimeouts = 0;
         if (result.total > 0 && result.listings.length === 0) {
           errors.push(`${result.parsed.label}：591 有 ${result.total} 筆，但都被目前篩選排除了`);
         }
       } catch (error) {
         errors.push(`${job.searchUrl} → ${error.message}`);
+        const skip = noteConsecutiveTimeout(consecutiveTimeouts, error);
+        consecutiveTimeouts = skip.consecutive;
+        if (skip.skipRest) {
+          errors.push("591 連續逾時，其餘縣市本輪跳過");
+          break;
+        }
       }
     }
   }
