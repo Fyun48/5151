@@ -105,6 +105,9 @@ export function formatListingAddress(address, communityName) {
 export function communityMapsQuery(communityName, address = "") {
   const name = String(communityName || "").trim().replace(/[／/]+/g, " ").replace(/\s+/g, " ").trim();
   if (!name) return "";
+  const street = extractTaiwanStreetAddress(address) || String(address || "").replace(/\s+/g, "").trim();
+  // 有門牌時用地址搜，避免社區別名被 Google 對成附近同名店家／建案。
+  if (hasHouseNumber(street)) return street;
   const loc = String(address || "").replace(/\s+/g, "");
   const city = (loc.match(/^(台北市|臺北市|新北市|桃園市|基隆市|新竹市|[^市縣]{1,3}[市縣])/) || [])[0] || "";
   const district = (loc.match(/[市縣]([^\d市縣]{1,4}[區鄉鎮市])/) || [])[1] || "";
