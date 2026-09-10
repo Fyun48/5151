@@ -81,6 +81,27 @@ const STATUS_LABEL = {
   connected: "已連接（可收件）",
   connecting: "連接中",
   reconnecting: "重新連接中",
+  pending: "等候中",
+  processing: "執行中",
+  claimed: "已領取",
+  running: "執行中",
+  changes_ready: "變更待收",
+  failed_retry: "失敗可重試",
+  completed: "已完成",
+};
+
+const EXIT_ACTION_LABEL = {
+  pause: "暫停",
+  unsubscribe: "解除訂閱",
+  handoff: "移交整站",
+  purge_replica: "刪除 OPS 複本",
+};
+
+const PENDING_KIND_LABEL = {
+  credential: "憑證",
+  analysis: "分析工作",
+  coding: "製作任務",
+  release_notification: "發布通知",
 };
 
 const ACTION_ERROR = {
@@ -227,10 +248,12 @@ function showExitDetail(id, data) {
   const items = pending.items || [];
   lines.push(items.length ? `未決 ${items.length} 項` : "沒有未決工作");
   for (const it of items) {
-    lines.push(`- ${it.kind} #${it.id} ${it.state}${it.blocking ? "（阻擋）" : ""}${it.unscoped ? "（尚未分站）" : ""} ${it.note || ""}`);
+    lines.push(`- ${PENDING_KIND_LABEL[it.kind] || it.kind} #${it.id} ${STATUS_LABEL[it.state] || it.state}${it.blocking ? "（阻擋）" : ""}${it.unscoped ? "（尚未分站）" : ""} ${it.note || ""}`);
   }
   $("exitDetailTitle").textContent = `${id} · 退出／移交`;
-  $("exitDetailHint").textContent = data.exit?.action ? `最近動作：${data.exit.action}（${data.exit.exit_status}）` : "未決與交接摘要";
+  $("exitDetailHint").textContent = data.exit?.action
+    ? `最近動作：${EXIT_ACTION_LABEL[data.exit.action] || data.exit.action}（${STATUS_LABEL[data.exit.exit_status] || data.exit.exit_status}）`
+    : "未決與交接摘要";
   $("exitDetailBody").textContent = lines.join("\n");
   box.scrollIntoView({ block: "nearest" });
 }

@@ -161,7 +161,7 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 .msg { min-height: 18px; font-size: 13px; margin: 8px 0 0; }
 .msg.err { color: var(--danger); }
 .msg.ok { color: var(--ok); }
-.kv { font-size: 13px; color: var(--muted); white-space: pre-wrap; word-break: break-word; }
+.kv { font-size: 13px; color: var(--muted); white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
 .tbl { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
 .tbl th, .tbl td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
 .tbl th { color: var(--muted); font-weight: 700; }
