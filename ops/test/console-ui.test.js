@@ -45,9 +45,17 @@ test("console has product cards, switcher, and one-time secret", () => {
   assert.match(js, /\/ops\/api\/products/);
   assert.match(js, /\/ops\/api\/products\/\$\{encodeURIComponent\(id\)\}\/\$\{action\}/);
   assert.match(js, /pause|resume|unsubscribe|reconnect|rotate-credential/);
+  assert.match(js, /確定暫停/);
+  assert.match(js, /確定恢復/);
   assert.match(js, /確定解除/);
   assert.match(js, /確定輪替/);
   assert.match(js, /確定重連/);
+  assert.match(js, /確定移交/);
+  assert.match(js, /confirmChrome/);
+  assert.match(js, /trapConfirmTab/);
+  assert.match(js, /confirmReturnFocus/);
+  assert.match(js, /aria-busy/);
+  assert.match(js, /role.*alert/);
   assert.match(js, /使用中/);
   assert.match(js, /aria-label/);
   assert.match(js, /productId=/);
@@ -59,4 +67,6 @@ test("console has product cards, switcher, and one-time secret", () => {
   assert.match(js, /移交整站/);
   assert.match(js, /PURGE-\$/);
   assert.match(css, /overflow-x:\s*hidden/);
+  assert.match(css, /:focus-visible/);
+  assert.match(html, /aria-live="polite"/);
 });

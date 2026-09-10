@@ -157,6 +157,10 @@ button {
   font-weight: 700;
 }
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button:focus-visible, .chip-btn:focus-visible, .tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 #loginForm button.primary { margin-top: 14px; }
 .msg { min-height: 18px; font-size: 13px; margin: 8px 0 0; }
 .msg.err { color: var(--danger); }

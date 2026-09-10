@@ -6,6 +6,7 @@ let selectedProductId = "";
 let productsCache = [];
 let productBusy = false;
 let confirmAction = null;
+let confirmReturnFocus = null;
 
 async function api(path, opts) {
   const o = { cache: "no-store", ...(opts || {}) };
@@ -34,6 +35,7 @@ function setStatus(el, text, kind) {
   if (!el) return;
   el.textContent = text || "";
   el.className = kind === "err" ? "msg err" : kind === "ok" ? "msg ok" : "msg";
+  el.setAttribute("role", kind === "err" ? "alert" : "status");
 }
 
 function productQuery(prefix = "?") {
@@ -49,6 +51,12 @@ function showLoggedOut(configured) {
   $("who").textContent = "未登入";
   hideConfirm();
   hideSecret();
+  const exit = $("exitDetail");
+  if (exit) {
+    exit.hidden = true;
+    exit.removeAttribute("aria-busy");
+  }
+  if ($("productMsg")) setStatus($("productMsg"), "");
   if (!configured) {
     $("loginMsg").textContent = "Owner 身分尚未設定（AUTH_EMAIL / AUTH_PASSWORD）。";
     $("loginMsg").className = "msg err";
@@ -145,20 +153,47 @@ function showSecret(secret, context) {
   $("copySecretBtn")?.focus();
 }
 
+function confirmChrome() {
+  return [document.querySelector(".topbar"), $("ownerArea")].filter(Boolean);
+}
+
 function hideConfirm() {
-  $("confirmDlg").hidden = true;
+  const dlg = $("confirmDlg");
+  if (!dlg || dlg.hidden) {
+    confirmAction = null;
+    return;
+  }
+  dlg.hidden = true;
   confirmAction = null;
-  if ($("ownerArea")) $("ownerArea").inert = false;
+  for (const el of confirmChrome()) el.inert = false;
+  const back = confirmReturnFocus;
+  confirmReturnFocus = null;
+  if (back && typeof back.focus === "function") back.focus();
 }
 
 function showConfirm({ title, body, confirmLabel, onConfirm }) {
+  confirmReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   $("confirmTitle").textContent = title;
   $("confirmBody").textContent = body;
   $("confirmOk").textContent = confirmLabel || "確定";
   confirmAction = onConfirm;
   $("confirmDlg").hidden = false;
-  if ($("ownerArea")) $("ownerArea").inert = true;
+  for (const el of confirmChrome()) el.inert = true;
   $("confirmCancel").focus();
+}
+
+function trapConfirmTab(ev) {
+  if (ev.key !== "Tab" || $("confirmDlg").hidden) return;
+  const cancel = $("confirmCancel");
+  const ok = $("confirmOk");
+  if (!cancel || !ok) return;
+  if (ev.shiftKey && document.activeElement === cancel) {
+    ev.preventDefault();
+    ok.focus();
+  } else if (!ev.shiftKey && document.activeElement === ok) {
+    ev.preventDefault();
+    cancel.focus();
+  }
 }
 
 function renderProductSwitcher() {
@@ -191,6 +226,7 @@ function renderProductCards() {
         ${statusChip(p.status)}
       </div>
       <p class="hint"><code>${esc(p.id)}</code> · 訂閱世代 ${esc(sub.generation ?? "—")} · ${statusChip(sub.status)}</p>
+      <p class="hint">訂閱：暫停或恢復傳送；輪替密鑰不會解除訂閱。</p>
       <div class="row actions">
         ${exited ? `<button type="button" class="primary" data-pid="${esc(p.id)}" data-pact="reconnect" aria-label="重新連接 ${esc(name)}">重新連接</button>` : ""}
         ${!exited && paused ? `<button type="button" class="primary" data-pid="${esc(p.id)}" data-pact="resume" aria-label="恢復 ${esc(name)}">恢復</button>` : ""}
@@ -198,10 +234,12 @@ function renderProductCards() {
         ${!exited ? `<button type="button" data-pid="${esc(p.id)}" data-pact="rotate-credential" aria-label="輪替 ${esc(name)} 的密鑰">輪替密鑰</button>` : ""}
         ${!exited ? `<button type="button" class="danger" data-pid="${esc(p.id)}" data-pact="unsubscribe" aria-label="解除訂閱 ${esc(name)}">解除訂閱</button>` : ""}
       </div>
-      <p class="hint">退出四件事：暫停功能、解除訂閱、移交交接包、刪除 OPS 複本。</p>
+      <p class="hint">${exited
+        ? "已退出：可查看未決清單、移交整站或刪除 OPS 複本。要恢復傳送請重新連接。"
+        : "退出四件事：暫停、解除訂閱、移交整站、刪除 OPS 複本。"}</p>
       <div class="row actions exit-actions">
         <button type="button" data-pid="${esc(p.id)}" data-pact="pending" aria-label="查看 ${esc(name)} 的未決清單">未決清單</button>
-        <button type="button" data-pid="${esc(p.id)}" data-pact="handoff" aria-label="匯出 ${esc(name)} 交接包">移交整站</button>
+        <button type="button" data-pid="${esc(p.id)}" data-pact="handoff" aria-label="移交 ${esc(name)} 整站">移交整站</button>
         <button type="button" class="danger" data-pid="${esc(p.id)}" data-pact="purge-replica" aria-label="刪除 ${esc(name)} 的 OPS 複本">刪除 OPS 複本</button>
       </div>
     </article>`;
@@ -228,29 +266,45 @@ async function refreshProducts() {
   if (selectedProductId && !productsCache.some((p) => p.id === selectedProductId)) {
     selectedProductId = "";
   }
+  if ($("productMsg")?.classList.contains("err")) setStatus($("productMsg"), "");
   renderProductSwitcher();
   renderProductCards();
+}
+
+function productName(id) {
+  return productsCache.find((p) => p.id === id)?.display_name || id;
 }
 
 function showExitDetail(id, data) {
   const box = $("exitDetail");
   if (!box) return;
   box.hidden = false;
+  box.removeAttribute("aria-busy");
   const pending = data.pending || data.exit?.pending || { items: [] };
   const lines = [];
-  if (data.manifest) {
-    lines.push(`交接包 sha256=${data.sha256 || data.manifest.sha256}`);
-    lines.push(`回饋 ${data.manifest.feedback_count ?? data.payload?.feedback?.length ?? 0} 筆`);
+  const sha = data.sha256 || data.manifest?.sha256 || "";
+  if (data.manifest || sha) {
+    lines.push(sha ? `交接包 sha256` : "交接包");
+    if (sha) lines.push(sha);
+    lines.push(`回饋 ${data.manifest?.feedback_count ?? data.payload?.feedback?.length ?? 0} 筆`);
   }
   if (data.purged != null) lines.push(`已清除 OPS 複本 ${data.purged} 筆內容`);
-  if (data.exit?.notes) lines.push(data.exit.notes);
+  const notes = String(data.exit?.notes || "").trim();
+  if (notes && !/^交接包 [a-f0-9]+$/i.test(notes)) lines.push(notes);
   if (data.site_delivery_unconfirmed) lines.push("OPS 權限已撤銷；本站停止遞送尚未由此畫面確認。");
   const items = pending.items || [];
   lines.push(items.length ? `未決 ${items.length} 項` : "沒有未決工作");
   for (const it of items) {
     lines.push(`- ${PENDING_KIND_LABEL[it.kind] || it.kind} #${it.id} ${STATUS_LABEL[it.state] || it.state}${it.blocking ? "（阻擋）" : ""}${it.unscoped ? "（尚未分站）" : ""} ${it.note || ""}`);
   }
-  $("exitDetailTitle").textContent = `${id} · 退出／移交`;
+  const product = productsCache.find((p) => p.id === id);
+  const exited = product?.status === "exited" || product?.subscription?.status === "exited";
+  if (!items.length) {
+    lines.push(exited
+      ? "下一步：移交整站帶走複本，或重新連接恢復傳送。"
+      : "下一步：解除訂閱前可先移交整站。");
+  }
+  $("exitDetailTitle").textContent = `${productName(id)} · 退出／移交`;
   $("exitDetailHint").textContent = data.exit?.action
     ? `最近動作：${EXIT_ACTION_LABEL[data.exit.action] || data.exit.action}（${STATUS_LABEL[data.exit.exit_status] || data.exit.exit_status}）`
     : "未決與交接摘要";
@@ -259,9 +313,23 @@ function showExitDetail(id, data) {
 }
 
 async function loadPending(id) {
+  const box = $("exitDetail");
+  if (box) {
+    box.hidden = false;
+    box.setAttribute("aria-busy", "true");
+    $("exitDetailTitle").textContent = `${productName(id)} · 退出／移交`;
+    $("exitDetailHint").textContent = "載入未決清單…";
+    $("exitDetailBody").textContent = "";
+  }
+  setStatus($("productMsg"), "載入未決清單…");
   const { res, data } = await api(`/ops/api/products/${encodeURIComponent(id)}/pending`);
+  if (box) box.removeAttribute("aria-busy");
   if (!res.ok) {
     setStatus($("productMsg"), humanError(data.error), "err");
+    if (box) {
+      $("exitDetailHint").textContent = "無法載入未決清單";
+      $("exitDetailBody").textContent = humanError(data.error);
+    }
     return;
   }
   showExitDetail(id, data);
@@ -337,6 +405,24 @@ async function createProduct(ev) {
 function requestProductAction(id, action) {
   const product = productsCache.find((p) => p.id === id);
   const name = product?.display_name || id;
+  if (action === "pause") {
+    showConfirm({
+      title: "確認暫停",
+      body: `暫停「${name}」（${id}）後，此站停止傳送。產品卡仍在，可再恢復。這不是解除訂閱，密鑰不會撤銷。`,
+      confirmLabel: "確定暫停",
+      onConfirm: () => runProductAction(id, "pause"),
+    });
+    return;
+  }
+  if (action === "resume") {
+    showConfirm({
+      title: "確認恢復",
+      body: `恢復「${name}」（${id}）的傳送？密鑰沿用，不開新的訂閱世代。`,
+      confirmLabel: "確定恢復",
+      onConfirm: () => runProductAction(id, "resume"),
+    });
+    return;
+  }
   if (action === "unsubscribe") {
     showConfirm({
       title: "確認解除訂閱",
@@ -370,9 +456,9 @@ function requestProductAction(id, action) {
   }
   if (action === "handoff") {
     showConfirm({
-      title: "確認匯出交接包",
-      body: `匯出「${name}」（${id}）的可驗證交接包。不含金鑰與其它站資料。本機主本仍在對方站。`,
-      confirmLabel: "匯出",
+      title: "確認移交整站",
+      body: `移交「${name}」（${id}）會匯出可驗證交接包。不含金鑰與其它站資料。本機主本仍在對方站。`,
+      confirmLabel: "確定移交",
       onConfirm: () => runProductAction(id, "handoff"),
     });
     return;
@@ -658,7 +744,13 @@ $("confirmOk").addEventListener("click", async () => {
   if (fn) await fn();
 });
 document.addEventListener("keydown", (ev) => {
-  if (ev.key === "Escape" && !$("confirmDlg").hidden) hideConfirm();
+  if ($("confirmDlg").hidden) return;
+  if (ev.key === "Escape") {
+    ev.preventDefault();
+    hideConfirm();
+    return;
+  }
+  trapConfirmTab(ev);
 });
 
 $("inboxTable").addEventListener("click", (ev) => {
