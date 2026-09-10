@@ -65,7 +65,11 @@ test("OPS CRM four columns stay separate and close is not DROP", () => {
   assert.equal(listCrmViews(db, { productId: "v3" })[0].columns.site_crm.contact.display_name, "林小姐");
 
   redactCrmReplicas(db, "v3");
-  assert.equal(listCrmViews(db, { productId: "v3" })[0].columns.site_crm.contact.display_name, "[purged]");
+  const purged = listCrmViews(db, { productId: "v3" })[0];
+  assert.equal(purged.columns.site_crm.contact.display_name, "[purged]");
+  assert.equal(purged.columns.site_crm.cases[0].title, "[purged]");
+  assert.equal(purged.columns.site_crm.todos[0].title, "[purged]");
+  assert.equal(purged.columns.owner_notes.body, "[purged]");
   db.close();
 });
 

@@ -90,8 +90,14 @@
     .primary { background: var(--accent); color: var(--primary-foreground); }
     .ghost { background: var(--paper); color: var(--ink); border: 1px solid var(--line); }
     button:disabled { opacity: 0.5; cursor: wait; }
+    #crm button:focus-visible, #crm input:focus-visible, #crm select:focus-visible, #crm a:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
     .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .crm-table-wrap { margin-top: 14px; overflow-x: auto; }
+    .crm-table-wrap table { min-width: 560px; }
     th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
     th { color: var(--muted); font-weight: 600; }
     .member-interval { width: 72px; }
@@ -1003,10 +1009,10 @@
         <button type="button" class="ghost" id="crmSyncToggle">停止同步至 OPS</button>
         <span class="hint" id="crmSyncStatus">正在讀取同步狀態…</span>
       </div>
-      <form id="crmContactForm" autocomplete="off">
+      <form id="crmContactForm" autocomplete="off" novalidate>
         <div id="crmErrorSummary" class="msg err" role="alert" tabindex="-1" hidden></div>
         <div class="grid-2">
-          <label>名稱 <input id="crmName" name="display_name" required maxlength="80" /></label>
+          <label>名稱 <input id="crmName" name="display_name" maxlength="80" /></label>
           <label>公司 <input id="crmCompany" name="company_name" maxlength="80" /></label>
           <label>Email <input id="crmEmail" name="email" maxlength="200" /></label>
           <label>電話 <input id="crmPhone" name="phone" maxlength="40" /></label>
@@ -1018,11 +1024,12 @@
         </div>
       </form>
       <div class="row" style="margin-top:12px;flex-wrap:wrap;gap:8px;align-items:center">
-        <label>搜尋 <input id="crmQuery" placeholder="名稱／公司／電話" style="max-width:240px" /></label>
+        <label>搜尋 <input id="crmQuery" placeholder="名稱／公司／電話／Email" style="max-width:240px" /></label>
+        <button type="button" class="ghost" id="crmSearchBtn">查詢</button>
         <button type="button" class="ghost" id="crmReload">重新整理</button>
       </div>
       <p class="msg" id="crmMsg" role="status"></p>
-      <div class="crm-table-wrap" style="margin-top:14px;overflow-x:auto">
+      <div class="crm-table-wrap">
         <div id="crmList" aria-busy="false"></div>
       </div>
       <div id="crmDetail" hidden></div>
@@ -2620,17 +2627,25 @@
       const box = $("crmList");
       if (!box) return;
       const rows = crmState.contacts || [];
+      const q = $("crmQuery")?.value.trim() || "";
       if (!rows.length) {
-        box.innerHTML = `<p class="hint">還沒有聯絡人。先新增一位，不必先有會員帳號。</p>`;
+        if (q) {
+          box.innerHTML = `<p class="hint">沒有符合「${escapeHtml(q)}」的聯絡人。可清掉搜尋再看全部。</p>`;
+          if (crmState.selected) { crmState.selected = null; renderCrmDetail(null); }
+        } else if (crmState.module?.enabled === false) {
+          box.innerHTML = `<p class="hint">還沒有聯絡人。CRM 已關閉，重新開啟後才能新增。</p>`;
+        } else {
+          box.innerHTML = `<p class="hint">還沒有聯絡人。先新增一位，不必先有會員帳號。</p>`;
+        }
         return;
       }
-      box.innerHTML = `<table><thead><tr><th>名稱</th><th>公司</th><th>聯絡</th><th>標籤</th><th></th></tr></thead><tbody>${
+      box.innerHTML = `<table><thead><tr><th>名稱</th><th>公司</th><th>聯絡</th><th>標籤</th><th>操作</th></tr></thead><tbody>${
         rows.map((row) => `<tr>
           <td>${escapeHtml(row.display_name)}</td>
           <td>${escapeHtml(row.company_name || "—")}</td>
           <td>${escapeHtml([row.phone, row.email].filter(Boolean).join(" / ") || "—")}</td>
           <td>${escapeHtml((row.tags || []).join("、") || "—")}</td>
-          <td><button type="button" class="ghost" data-crm-open="${row.id}">開啟</button></td>
+          <td><button type="button" class="ghost" data-crm-open="${row.id}" aria-label="開啟${escapeHtml(row.display_name)}">開啟</button></td>
         </tr>`).join("")
       }</tbody></table>`;
     }
@@ -2648,22 +2663,22 @@
         <div class="crm-table-wrap" style="overflow-x:auto">
           <p><strong>案件</strong></p>
           ${(snap.cases || []).length ? `<ul>${snap.cases.map((row) => `<li>${escapeHtml(row.title)} · ${escapeHtml(crmHandlingLabel(row.handling_state))}${row.feedback_id ? ` · 回饋 #${row.feedback_id}` : ""}</li>`).join("")}</ul>` : `<p class="hint">還沒有案件。</p>`}
-          ${writable ? `<form id="crmCaseForm" class="row" style="flex-wrap:wrap;gap:8px">
-            <label>案件標題 <input name="title" required maxlength="80" /></label>
+          ${writable ? `<form id="crmCaseForm" class="row" style="flex-wrap:wrap;gap:8px" novalidate>
+            <label>案件標題 <input name="title" maxlength="80" /></label>
             <label>回饋編號 <input name="feedback_id" placeholder="可空" inputmode="numeric" /></label>
             <label>處理進度 <select name="handling_state">${handlingOpts}</select></label>
             <button type="submit" class="ghost">新增案件</button>
           </form>` : ""}
           <p><strong>備註</strong></p>
           ${(snap.notes || []).length ? `<ul>${snap.notes.map((row) => `<li>${escapeHtml(row.body)}</li>`).join("")}</ul>` : `<p class="hint">還沒有備註。</p>`}
-          ${writable ? `<form id="crmNoteForm" class="row" style="flex-wrap:wrap;gap:8px">
-            <label style="flex:1;min-width:180px">備註 <input name="body" required maxlength="2000" /></label>
+          ${writable ? `<form id="crmNoteForm" class="row" style="flex-wrap:wrap;gap:8px" novalidate>
+            <label style="flex:1;min-width:180px">備註 <input name="body" maxlength="2000" /></label>
             <button type="submit" class="ghost">新增備註</button>
           </form>` : ""}
           <p><strong>待辦</strong></p>
           ${(snap.todos || []).length ? `<ul>${snap.todos.map((row) => `<li>${escapeHtml(row.title)}${row.done_at ? "（完成）" : ""} ${writable ? `<button type="button" class="ghost" data-crm-todo="${row.id}" data-done="${row.done_at ? "0" : "1"}">${row.done_at ? "標成未完成" : "完成"}</button>` : ""}</li>`).join("")}</ul>` : `<p class="hint">還沒有待辦。</p>`}
-          ${writable ? `<form id="crmTodoForm" class="row" style="flex-wrap:wrap;gap:8px">
-            <label>待辦 <input name="title" required maxlength="200" /></label>
+          ${writable ? `<form id="crmTodoForm" class="row" style="flex-wrap:wrap;gap:8px" novalidate>
+            <label>待辦 <input name="title" maxlength="200" /></label>
             <button type="submit" class="ghost">新增待辦</button>
           </form>` : ""}
         </div>
@@ -2671,6 +2686,7 @@
       $("crmCaseForm")?.addEventListener("submit", async (ev) => {
         ev.preventDefault();
         const fd = new FormData(ev.target);
+        if (!String(fd.get("title") || "").trim()) { setMsg("crmMsg", "請填案件標題"); return; }
         const res = await fetch(`/api/admin/crm/contacts/${c.id}/cases`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -2685,6 +2701,7 @@
       $("crmNoteForm")?.addEventListener("submit", async (ev) => {
         ev.preventDefault();
         const fd = new FormData(ev.target);
+        if (!String(fd.get("body") || "").trim()) { setMsg("crmMsg", "請填備註"); return; }
         const res = await fetch(`/api/admin/crm/contacts/${c.id}/notes`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -2699,6 +2716,7 @@
       $("crmTodoForm")?.addEventListener("submit", async (ev) => {
         ev.preventDefault();
         const fd = new FormData(ev.target);
+        if (!String(fd.get("title") || "").trim()) { setMsg("crmMsg", "請填待辦"); return; }
         const res = await fetch(`/api/admin/crm/contacts/${c.id}/todos`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -2740,7 +2758,9 @@
       setMsg("crmMsg", crmState.contacts.length ? `共 ${crmState.contacts.length} 位聯絡人` : "", true);
     }
     $("crmReload")?.addEventListener("click", loadCrm);
+    $("crmSearchBtn")?.addEventListener("click", loadCrm);
     $("crmQuery")?.addEventListener("change", loadCrm);
+    $("crmQuery")?.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); loadCrm(); } });
     $("crmContactForm")?.addEventListener("submit", async (ev) => {
       ev.preventDefault();
       const errors = [];

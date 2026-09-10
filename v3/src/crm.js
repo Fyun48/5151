@@ -1,5 +1,6 @@
 // 第 4 包：站內 CRM 主本。客戶不一定有會員帳號。關閉模組只停介面與新處理，不 DROP。
 import { enqueueCrmOutbox } from "./crmOutbox.js";
+import { crmDeliveryControl } from "./crmDelivery.js";
 
 export const CRM_ENABLED_KEY = "crm_enabled";
 export const CRM_NAME_MAX = 80;
@@ -240,6 +241,7 @@ export function snapshotContact(db, contactId) {
 
 function enqueueSnapshot(db, contactId, now) {
   try {
+    if (!crmDeliveryControl(db).effective) return;
     enqueueCrmOutbox(db, { contactId, data: snapshotContact(db, contactId), now });
   } catch {
     // outbox 未建或不應擋住本機寫入

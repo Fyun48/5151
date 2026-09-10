@@ -37,7 +37,7 @@ test("site CRM works without OPS and close keeps data", () => {
   addNote(db, created.contact.id, { body: "已回電" });
   addTodo(db, created.contact.id, { title: "回訪" });
   assert.equal(listContacts(db).length, 1);
-  assert.equal(crmOutboxStats(db).pending, 4);
+  assert.equal(crmOutboxStats(db).pending, 0);
 
   setCrmEnabled(db, false);
   assert.equal(isCrmEnabled(db), false);
@@ -71,4 +71,29 @@ test("admin.html has CRM panel and close-is-not-drop copy", () => {
   const formHtml = html.slice(formStart, formEnd);
   assert.doesNotMatch(formHtml, /id="crmQuery"/);
   assert.match(html, /id="crmQuery"/);
+  assert.match(html, /id="crmSearchBtn"/);
+  assert.match(html, /novalidate/);
+  assert.match(html, /沒有符合/);
+  assert.match(html, /min-width: 560px/);
+});
+
+test("CRM outbox only fills when delivery is effective", () => {
+  const db = open();
+  const prev = {
+    d: process.env.OPS_CRM_DELIVERY,
+    u: process.env.OPS_INGEST_URL,
+    s: process.env.OPS_INGEST_SECRET,
+  };
+  process.env.OPS_CRM_DELIVERY = "1";
+  process.env.OPS_INGEST_URL = "http://127.0.0.1:9";
+  process.env.OPS_INGEST_SECRET = "secret";
+  try {
+    createContact(db, { display_name: "同步" });
+    assert.equal(crmOutboxStats(db).pending, 1);
+  } finally {
+    process.env.OPS_CRM_DELIVERY = prev.d;
+    process.env.OPS_INGEST_URL = prev.u;
+    process.env.OPS_INGEST_SECRET = prev.s;
+    db.close();
+  }
 });

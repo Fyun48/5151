@@ -22,7 +22,11 @@ async function api(path, opts) {
 
 function esc(v) {
   return String(v == null ? "" : v)
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function fmtTime(v) {
@@ -691,7 +695,17 @@ function renderCrm() {
   const toggle = $("crmModuleToggle");
   if (!box) return;
   const enabled = crmCache.module?.enabled !== false;
-  if (toggle) toggle.textContent = enabled ? "關閉 CRM 模組" : "重新開啟 CRM 模組";
+  if (toggle) {
+    toggle.textContent = enabled ? "關閉 CRM 模組" : "重新開啟 CRM 模組";
+    const needProduct = !selectedProductId;
+    toggle.disabled = needProduct;
+    toggle.title = needProduct ? "請先選單一站台再開關模組" : "";
+  }
+  const grant = $("crmGrantSync");
+  if (grant) {
+    grant.disabled = !selectedProductId;
+    grant.title = selectedProductId ? "" : "請先選單一站台再授權";
+  }
   if (hint) {
     hint.textContent = enabled
       ? (crmCache.hint || "四欄分開顯示。")
@@ -700,12 +714,12 @@ function renderCrm() {
   const items = crmCache.items || [];
   const pid = selectedProductId || crmCache.product?.id || "v3";
   const adminUrl = publicSiteAdminHref(crmCache.module?.site_admin_url || (items[0] && items[0].site_admin_url));
-  const setup = `<form id="crmSiteUrlForm" class="row" style="flex-wrap:wrap;gap:8px;align-items:end;margin:8px 0">
+  const setup = `<form id="crmSiteUrlForm" class="row crm-url-form">
     <label>本站後台網址 <input name="site_admin_url" value="${esc(adminUrl)}" placeholder="https://example.com/admin.html#crm" maxlength="400" /></label>
     <button type="submit">儲存本站連結</button>
   </form>`;
   if (!items.length) {
-    box.innerHTML = `${setup}<p class="hint">還沒有站方 CRM 複本。先在本站後台建立聯絡人，並另外開啟 crm_sync 授權。</p>`;
+    box.innerHTML = `${setup}<p class="hint">還沒有站方 CRM 複本。先在本站後台建立聯絡人，並另外按「允許 CRM 同步授權」。</p>`;
     bindCrmSiteUrlForm(pid);
     return;
   }
@@ -745,11 +759,11 @@ function renderCrm() {
           <h3>${esc(owner.label || "Owner 商務備註")}</h3>
           <p class="src">OPS 自己的資料，不是站方複本</p>
           <p>${esc(owner.body || "尚未填寫")}</p>
-          <form class="crm-note-form" data-product="${esc(item.product_id)}" data-subject="${esc(contact.external_contact_id || "")}">
+          ${enabled ? `<form class="crm-note-form" data-product="${esc(item.product_id)}" data-subject="${esc(contact.external_contact_id || "")}">
             <label class="sr-only" for="ownernote-${esc(contact.external_contact_id || "x")}">商務備註</label>
             <input id="ownernote-${esc(contact.external_contact_id || "x")}" name="body" maxlength="2000" placeholder="只給 Owner 看" />
             <button type="submit">儲存備註</button>
-          </form>
+          </form>` : `<p class="hint">模組已關閉，不能新增商務備註。</p>`}
         </section>
       </div>
     </article>`;

@@ -420,7 +420,10 @@ export function redactCrmReplicas(db, productId) {
      WHERE product_id=?
   `).run(id);
   db.prepare("UPDATE ingested_crm_note SET body='[purged]' WHERE product_id=?").run(id);
+  db.prepare("UPDATE ingested_crm_case SET title='[purged]' WHERE product_id=?").run(id);
+  db.prepare("UPDATE ingested_crm_todo SET title='[purged]' WHERE product_id=?").run(id);
   db.prepare("UPDATE ingested_crm_feedback_handling SET admin_note=NULL WHERE product_id=?").run(id);
+  db.prepare("UPDATE owner_crm_note SET body='[purged]' WHERE product_id=?").run(id);
   return before;
 }
 

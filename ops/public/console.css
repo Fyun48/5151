@@ -181,6 +181,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   white-space: nowrap;
   border: 0;
 }
+.crm-url-form { margin: 8px 0; align-items: end; }
 .crm-list { display: grid; gap: 12px; }
 .crm-card {
   border: 1px solid var(--line);
