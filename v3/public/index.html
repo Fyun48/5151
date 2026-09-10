@@ -6373,7 +6373,7 @@
         }],
         ["fees", "費用說明", (row) => String(row.extra_fee_text || row.price_contain_text || "").trim()],
         ["area", "坪數", (row) => String(row.area_name || "").trim()],
-        ["floor", "樓層", (row) => floorDisplay(row) || String(row.floor_name || "").trim()],
+        ["floor", "樓層", (row) => floorDisplay(row)],
         ["layout", "格局", (row) => String(row.layout || "").trim()],
         ["title", "標題", (row) => String(row.title || "").trim()],
         ["source", "來源", (row) => listingSourceLabel(row)],

@@ -253,6 +253,8 @@ test("member profiles cap districts and include usable ping in notify copy", () 
   assert.match(html, /aria-describedby/);
   assert.match(html, /hover: hover\) and \(pointer: fine\)/);
   assert.match(html, /<\/div>\s*\$\{kitLine\(item, id\)\}/);
+  assert.match(html, /\["floor", "樓層", \(row\) => floorDisplay\(row\)\]/);
+  assert.doesNotMatch(html, /floorDisplay\(row\) \|\| String\(row\.floor_name/);
   assert.match(html, /isPlaceholderFloor\(bit\)/);
   assert.match(html, /\( \$\{floorToken\(pair\[1\]\)\} \/ \$\{floorToken\(pair\[2\]\)\} \)/);
   assert.doesNotMatch(html, /出租 \$\{m\[1\]\}樓／共/);
