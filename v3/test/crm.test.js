@@ -14,6 +14,8 @@ import {
   isCrmEnabled,
   listContacts,
   getContact,
+  createCaseFromFeedback,
+  restoreContactsFromHandoff,
   CRM_LEGAL,
 } from "../src/crm.js";
 import { ensureCrmOutboxSchema, crmOutboxStats } from "../src/crmOutbox.js";
@@ -52,6 +54,42 @@ test("site CRM works without OPS and close keeps data", () => {
   db.close();
 });
 
+test("feedback becomes a CRM case and handoff restore keeps closed data", () => {
+  const db = open();
+  const fb = db.prepare(`
+    INSERT INTO feedback(user_id, kind, body, contact, context, status, admin_note, created_at, updated_at)
+    VALUES (0, 'bug', '浴室漏水要修', 'a@example.com', '', 'doing', '', '2026-09-10T12:00:00.000Z', '2026-09-10T12:00:00.000Z')
+  `);
+  fb.run();
+  const id = Number(db.prepare("SELECT id FROM feedback ORDER BY id DESC LIMIT 1").get().id);
+  const first = createCaseFromFeedback(db, id);
+  assert.equal(first.reused, false);
+  assert.equal(first.contact.email, "a@example.com");
+  assert.equal(first.cases[0].feedback_id, id);
+  assert.equal(first.cases[0].handling_state, "doing");
+  const again = createCaseFromFeedback(db, id);
+  assert.equal(again.reused, true);
+  assert.equal(again.cases.length, 1);
+
+  setCrmEnabled(db, false);
+  const restored = restoreContactsFromHandoff(db, {
+    product: { id: "drill" },
+    crm_contacts: [{
+      display_name: "還原客戶",
+      company_name: "分家站",
+      email: "c@example.com",
+      tags: ["vip"],
+      cases: [{ title: "漏水", handling_state: "done", feedback_id: 8 }],
+      notes: [{ body: "已交還本站" }],
+      todos: [{ title: "回訪" }],
+    }],
+  });
+  assert.equal(restored.imported, 1);
+  assert.equal(listContacts(db).some((row) => row.display_name === "還原客戶"), true);
+  assert.equal(isCrmEnabled(db), false);
+  db.close();
+});
+
 test("admin.html has CRM panel and close-is-not-drop copy", () => {
   const html = readFileSync(
     path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/admin.html"),
@@ -75,6 +113,8 @@ test("admin.html has CRM panel and close-is-not-drop copy", () => {
   assert.match(html, /novalidate/);
   assert.match(html, /沒有符合/);
   assert.match(html, /min-width: 560px/);
+  assert.match(html, /data-fb-crm/);
+  assert.match(html, /\/api\/admin\/crm\/from-feedback\//);
 });
 
 test("CRM outbox only fills when delivery is effective", () => {

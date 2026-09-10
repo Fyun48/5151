@@ -232,11 +232,16 @@ function renderProductCards() {
       </div>
       <p class="hint"><code>${esc(p.id)}</code> · 訂閱世代 ${esc(sub.generation ?? "—")} · ${statusChip(sub.status)}</p>
       <p class="hint">授權：回饋複製 ${caps.feedback_copy ? "開" : "關"} · CRM 同步 ${caps.crm_sync ? "開" : "關"} · 跨站分析 ${caps.cross_site_insight ? "開" : "關"}</p>
+      ${Array.isArray(p.consent_events) && p.consent_events.length
+        ? `<p class="hint">授權紀錄：${p.consent_events.slice(0, 4).map((ev) => `${esc(ev.capability_key)} ${ev.granted ? "開" : "撤回"}`).join(" · ")}</p>`
+        : `<p class="hint">授權紀錄：尚無撤回或新開紀錄。</p>`}
       <p class="hint">訂閱：暫停或恢復傳送；輪替密鑰不會解除訂閱。</p>
       <div class="row actions">
         ${exited ? `<button type="button" class="primary" data-pid="${esc(p.id)}" data-pact="reconnect" aria-label="重新連接 ${esc(name)}">重新連接</button>` : ""}
         ${!exited && paused ? `<button type="button" class="primary" data-pid="${esc(p.id)}" data-pact="resume" aria-label="恢復 ${esc(name)}">恢復</button>` : ""}
         ${!exited && !paused ? `<button type="button" data-pid="${esc(p.id)}" data-pact="pause" aria-label="暫停 ${esc(name)}">暫停</button>` : ""}
+        ${!exited && !caps.crm_sync ? `<button type="button" data-pid="${esc(p.id)}" data-pact="grant-crm-sync" aria-label="允許 ${esc(name)} 的 CRM 同步">允許 CRM 同步</button>` : ""}
+        ${!exited && caps.crm_sync ? `<button type="button" data-pid="${esc(p.id)}" data-pact="revoke-crm-sync" aria-label="撤回 ${esc(name)} 的 CRM 同步">撤回 CRM 同步</button>` : ""}
         ${!exited ? `<button type="button" data-pid="${esc(p.id)}" data-pact="rotate-credential" aria-label="輪替 ${esc(name)} 的密鑰">輪替密鑰</button>` : ""}
         ${!exited ? `<button type="button" class="danger" data-pid="${esc(p.id)}" data-pact="unsubscribe" aria-label="解除訂閱 ${esc(name)}">解除訂閱</button>` : ""}
       </div>
@@ -379,6 +384,27 @@ async function runProductAction(id, action) {
   }
 }
 
+async function setProductCapability(id, patch) {
+  if (productBusy) return;
+  setProductBusy(true);
+  setStatus($("productMsg"), "處理中…");
+  try {
+    const { res, data } = await api(`/ops/api/products/${encodeURIComponent(id)}/capabilities`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch || {}),
+    });
+    if (!res.ok) {
+      setStatus($("productMsg"), humanError(data.error), "err");
+      return;
+    }
+    setStatus($("productMsg"), patch.crm_sync ? "已允許 CRM 同步" : "已撤回 CRM 同步", "ok");
+    await Promise.all([refreshProducts(), refreshCrm()]);
+  } finally {
+    setProductBusy(false);
+  }
+}
+
 async function createProduct(ev) {
   ev.preventDefault();
   if (productBusy) return;
@@ -466,6 +492,24 @@ function requestProductAction(id, action) {
       body: `移交「${name}」（${id}）會匯出可驗證交接包。不含金鑰與其它站資料。本機主本仍在對方站。`,
       confirmLabel: "確定移交",
       onConfirm: () => runProductAction(id, "handoff"),
+    });
+    return;
+  }
+  if (action === "grant-crm-sync") {
+    showConfirm({
+      title: "確認允許 CRM 同步",
+      body: `允許「${name}」（${id}）把 CRM 欄位同步到 OPS？這與回饋複製分開，不會自動包含會員名單或行銷用途。`,
+      confirmLabel: "確定允許",
+      onConfirm: () => setProductCapability(id, { crm_sync: true }),
+    });
+    return;
+  }
+  if (action === "revoke-crm-sync") {
+    showConfirm({
+      title: "確認撤回 CRM 同步",
+      body: `撤回「${name}」（${id}）的 CRM 同步授權？既有複本仍保留，不會再收新處理。這不是 DROP。`,
+      confirmLabel: "確定撤回",
+      onConfirm: () => setProductCapability(id, { crm_sync: false }),
     });
     return;
   }

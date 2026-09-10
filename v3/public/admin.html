@@ -2459,6 +2459,7 @@
             </label>
             <input data-fb-note value="${escapeHtml(row.admin_note || "")}" placeholder="內部備註（會員看不到）" style="flex:1;min-width:180px" />
             <button type="button" class="ghost" data-fb-save>儲存</button>
+            <button type="button" class="ghost" data-fb-crm>開立 CRM 案件</button>
           </div>
         </div>
       `).join("");
@@ -2835,6 +2836,32 @@
     $("feedbackFilterStatus")?.addEventListener("change", loadFeedback);
     $("feedbackFilterKind")?.addEventListener("change", loadFeedback);
     $("feedbackList")?.addEventListener("click", async (ev) => {
+      const crmBtn = ev.target.closest("[data-fb-crm]");
+      if (crmBtn) {
+        const card = crmBtn.closest("[data-fb-id]");
+        if (!card) return;
+        const id = card.dataset.fbId;
+        crmBtn.disabled = true;
+        setMsg("feedbackMsg", "開立 CRM 案件中…");
+        try {
+          const res = await fetch(`/api/admin/crm/from-feedback/${id}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+          });
+          const data = await readApi(res);
+          if (!res.ok) throw new Error(data.error || "開立失敗");
+          setMsg("feedbackMsg", data.reused ? `#${id} 已有對應案件` : `#${id} 已開立 CRM 案件`, true);
+          location.hash = "#crm";
+          await loadCrm();
+          crmState.selected = data;
+          renderCrmDetail(data);
+        } catch (error) {
+          setMsg("feedbackMsg", error.message);
+        } finally {
+          crmBtn.disabled = false;
+        }
+        return;
+      }
       const btn = ev.target.closest("[data-fb-save]");
       if (!btn) return;
       const card = btn.closest("[data-fb-id]");

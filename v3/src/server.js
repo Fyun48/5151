@@ -130,6 +130,7 @@ import {
   setCrmModuleEnabled,
   getCrmDeliveryControl,
   setCrmDeliveryStop,
+  createCrmFromFeedback,
   feedbackMeta,
   listMineSelfListings,
   getSelfListing,
@@ -1349,6 +1350,14 @@ app.post("/api/admin/crm/contacts/:id/todos", requireAdminApi, (req, res) => {
 app.post("/api/admin/crm/todos/:id/done", requireAdminApi, (req, res) => {
   try {
     res.json(setCrmTodoDone(req.params.id, req.body?.done !== false));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/admin/crm/from-feedback/:id", requireAdminApi, (req, res) => {
+  try {
+    res.status(201).json(createCrmFromFeedback(req.params.id));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }

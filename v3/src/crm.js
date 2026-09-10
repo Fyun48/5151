@@ -461,6 +461,113 @@ export function enqueueCrmFromFeedback(db, feedbackId, { now = new Date() } = {}
   return cases.length;
 }
 
+function guessContactFromFeedback(fb) {
+  const raw = String(fb.contact || "").trim();
+  let display_name = raw;
+  let email = "";
+  let phone = "";
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) {
+    email = raw.slice(0, CRM_CONTACT_MAX);
+    display_name = raw.split("@")[0];
+  } else if (/^[\d+\-\s]{8,20}$/.test(raw)) {
+    phone = raw.replace(/\s+/g, "").slice(0, 40);
+    display_name = phone;
+  }
+  if (!display_name) display_name = `回饋 #${fb.id}`;
+  return {
+    display_name: clip(display_name, CRM_NAME_MAX),
+    email,
+    phone,
+    user_id: fb.user_id ? Number(fb.user_id) : null,
+  };
+}
+
+export function createCaseFromFeedback(db, feedbackId, { now = new Date() } = {}) {
+  assertCrmOpen(db);
+  const fb = db.prepare("SELECT * FROM feedback WHERE id=?").get(Number(feedbackId) || 0);
+  if (!fb) throw httpError("找不到這則回饋", 404);
+  const existing = db.prepare("SELECT * FROM crm_cases WHERE feedback_id=?").get(fb.id);
+  if (existing) {
+    return { reused: true, ...getContact(db, existing.contact_id) };
+  }
+  const guessed = guessContactFromFeedback(fb);
+  let contact = guessed.email
+    ? db.prepare("SELECT * FROM crm_contacts WHERE email=?").get(guessed.email)
+    : null;
+  if (!contact && guessed.phone) {
+    contact = db.prepare("SELECT * FROM crm_contacts WHERE phone=?").get(guessed.phone);
+  }
+  if (!contact) {
+    const created = createContact(db, guessed, { now });
+    contact = created.contact;
+  }
+  const title = clip(fb.body, 40) || `回饋 #${fb.id}`;
+  return {
+    reused: false,
+    ...createCase(db, contact.id, {
+      title,
+      feedback_id: fb.id,
+      handling_state: normalizeHandling(fb.status),
+    }, { now }),
+  };
+}
+
+export function restoreContactsFromHandoff(db, payload, { now = new Date() } = {}) {
+  const rows = Array.isArray(payload?.crm_contacts) ? payload.crm_contacts : [];
+  const ts = iso(now);
+  let imported = 0;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const row of rows) {
+      const name = clip(row.display_name, CRM_NAME_MAX);
+      if (!name || name === "[purged]") continue;
+      const company = clip(row.company_name, CRM_COMPANY_MAX);
+      let existing = db.prepare("SELECT id FROM crm_contacts WHERE display_name=? AND company_name=?").get(name, company);
+      let contactId = existing ? Number(existing.id) : 0;
+      if (!contactId) {
+        const res = db.prepare(`
+          INSERT INTO crm_contacts(display_name, company_name, user_id, email, phone, line_id, assigned_to, created_at, updated_at)
+          VALUES (?, ?, NULL, ?, ?, ?, NULL, ?, ?)
+        `).run(name, company, clip(row.email, CRM_CONTACT_MAX), clip(row.phone, 40), clip(row.line_id, 80), ts, ts);
+        contactId = Number(res.lastInsertRowid);
+        replaceTags(db, contactId, row.tags);
+        imported += 1;
+      }
+      for (const item of row.cases || []) {
+        const title = clip(item.title, CRM_NAME_MAX);
+        if (!title || title === "[purged]") continue;
+        const has = db.prepare("SELECT id FROM crm_cases WHERE contact_id=? AND title=?").get(contactId, title);
+        if (has) continue;
+        db.prepare(`
+          INSERT INTO crm_cases(contact_id, feedback_id, title, handling_state, assigned_to, created_at, updated_at)
+          VALUES (?, ?, ?, ?, NULL, ?, ?)
+        `).run(contactId, item.feedback_id ? Number(item.feedback_id) : null, title, normalizeHandling(item.handling_state), ts, ts);
+      }
+      for (const item of row.notes || []) {
+        const body = clip(item.body, CRM_NOTE_MAX);
+        if (body.length < 2 || body === "[purged]") continue;
+        db.prepare(`
+          INSERT INTO crm_notes(contact_id, case_id, body, author_user_id, created_at)
+          VALUES (?, NULL, ?, NULL, ?)
+        `).run(contactId, body, item.created_at || ts);
+      }
+      for (const item of row.todos || []) {
+        const title = clip(item.title, CRM_TODO_MAX);
+        if (!title || title === "[purged]") continue;
+        db.prepare(`
+          INSERT INTO crm_todos(contact_id, case_id, title, due_at, done_at, assigned_to, created_at)
+          VALUES (?, NULL, ?, ?, ?, NULL, ?)
+        `).run(contactId, title, item.due_at || null, item.done_at || null, item.created_at || ts);
+      }
+    }
+    db.exec("COMMIT");
+  } catch (err) {
+    try { db.exec("ROLLBACK"); } catch { /* keep */ }
+    throw err;
+  }
+  return { imported, product_id: payload?.product?.id || null };
+}
+
 export function crmOverview(db, { q = "" } = {}) {
   return {
     module: crmModule(db),

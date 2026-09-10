@@ -99,6 +99,15 @@ export function ensureCrmReplicaSchema(db) {
       updated_at TEXT NOT NULL,
       UNIQUE(product_id, subject_kind, subject_key)
     );
+    CREATE TABLE IF NOT EXISTS product_consent_event (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id TEXT NOT NULL,
+      capability_key TEXT NOT NULL,
+      granted INTEGER NOT NULL,
+      actor TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_consent_product ON product_consent_event(product_id, id);
   `);
 }
 
@@ -429,12 +438,44 @@ export function redactCrmReplicas(db, productId) {
 
 export function listCrmHandoff(db, productId) {
   return db.prepare(`
-    SELECT external_contact_id, display_name, company_name, last_synced_at
-      FROM ingested_crm_contact WHERE product_id=? ORDER BY id ASC
-  `).all(productId).map((row) => ({
-    external_contact_id: row.external_contact_id,
-    display_name: row.display_name,
-    company_name: row.company_name,
-    last_synced_at: row.last_synced_at,
-  }));
+    SELECT * FROM ingested_crm_contact WHERE product_id=? ORDER BY id ASC
+  `).all(productId).map((row) => {
+    const tags = (() => { try { return JSON.parse(row.tags_json || "[]"); } catch { return []; } })();
+    const cases = db.prepare("SELECT * FROM ingested_crm_case WHERE product_id=? AND external_contact_id=? ORDER BY id ASC")
+      .all(productId, row.external_contact_id)
+      .map((item) => ({
+        id: item.external_case_id,
+        title: item.title,
+        handling_state: item.handling_state,
+        feedback_id: item.external_feedback_id,
+      }));
+    const notes = db.prepare("SELECT * FROM ingested_crm_note WHERE product_id=? AND external_contact_id=? ORDER BY id ASC")
+      .all(productId, row.external_contact_id)
+      .map((item) => ({
+        id: item.external_note_id,
+        body: item.body,
+        created_at: item.created_at,
+      }));
+    const todos = db.prepare("SELECT * FROM ingested_crm_todo WHERE product_id=? AND external_contact_id=? ORDER BY id ASC")
+      .all(productId, row.external_contact_id)
+      .map((item) => ({
+        id: item.external_todo_id,
+        title: item.title,
+        due_at: item.due_at,
+        done_at: item.done_at,
+      }));
+    return {
+      external_contact_id: row.external_contact_id,
+      display_name: row.display_name,
+      company_name: row.company_name,
+      email: row.email,
+      phone: row.phone,
+      line_id: row.line_id,
+      tags,
+      last_synced_at: row.last_synced_at,
+      cases,
+      notes,
+      todos,
+    };
+  });
 }

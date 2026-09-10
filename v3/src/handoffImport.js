@@ -1,4 +1,5 @@
 import { createFeedbackWithOutbox } from "./feedback.js";
+import { restoreContactsFromHandoff } from "./crm.js";
 
 export const LOCAL_HANDOFF_SCHEMA = 1;
 
@@ -17,8 +18,10 @@ export function importHandoffFeedback(db, payload, { userId = 0 } = {}) {
     });
     if (res.id > 0) imported.push(res.id);
   }
+  const crm = restoreContactsFromHandoff(db, payload);
   return {
     imported: imported.length,
+    crm_imported: crm.imported,
     product_id: payload.product?.id || null,
     sha256_in_manifest: payload.sha256 || null,
   };

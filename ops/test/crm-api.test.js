@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { openOpsDb } from "../src/opsDb.js";
-import { createProduct, updateProductCapabilities, ensureDefaultProduct } from "../src/products.js";
+import { createProduct, updateProductCapabilities, ensureDefaultProduct, listConsentEvents } from "../src/products.js";
 import {
   ingestCrmSnapshot,
   listCrmViews,
@@ -70,6 +70,17 @@ test("OPS CRM four columns stay separate and close is not DROP", () => {
   assert.equal(purged.columns.site_crm.cases[0].title, "[purged]");
   assert.equal(purged.columns.site_crm.todos[0].title, "[purged]");
   assert.equal(purged.columns.owner_notes.body, "[purged]");
+  db.close();
+});
+
+test("granting then revoking CRM sync writes consent events", () => {
+  const db = openOpsDb(":memory:");
+  createProduct(db, { id: "shop", displayName: "商店" });
+  updateProductCapabilities(db, "shop", { crm_sync: true });
+  updateProductCapabilities(db, "shop", { crm_sync: false });
+  const events = listConsentEvents(db, "shop", { limit: 10 });
+  assert.ok(events.some((row) => row.capability_key === "crm_sync" && row.granted === true));
+  assert.ok(events.some((row) => row.capability_key === "crm_sync" && row.granted === false));
   db.close();
 });
 

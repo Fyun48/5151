@@ -41,6 +41,9 @@ test("tab panes honor the hidden attribute (display:grid must not override it)",
   assert.match(css, /\.crm-url-form/);
   assert.match(js, /Owner 商務備註/);
   assert.match(js, /crm_sync/);
+  assert.match(js, /revoke-crm-sync/);
+  assert.match(js, /setProductCapability/);
+  assert.match(js, /授權紀錄/);
   assert.match(css, /\.crm-cols/);
   assert.match(css, /@media \(max-width: 520px\)/);
   assert.match(html, /console\.css\?v=/);

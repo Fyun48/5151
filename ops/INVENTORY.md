@@ -1,9 +1,9 @@
 # OPS／v3 現況對照表（ChatGPT 審查後）
 
-盤點對象：本分支 `cursor/ops-complete-ed3f`（第 0–3 包）。  
-ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契約、Deploy OPS、產品卡與退出演練。**不以那次抽查當現況。**
+盤點對象：本分支 `cursor/ops-crm-ed3f`（第 0–4 包）。  
+ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契約、Deploy OPS、產品卡、退出演練與站內 CRM。**不以那次抽查當現況。**
 
-本次是第 3 包（訂閱／退出／移交最小演練），**不是部署指令**，不 Deploy v3，也不擅自跑 Deploy OPS。
+本次是第 4 包（站內 CRM → OPS CRM 檢視），**不是部署指令**，不 Deploy v3，也不擅自跑 Deploy OPS。
 
 圖例：`存在`＝可承接；`需改`＝有程式但契約不足；`待做`＝尚未實作。
 

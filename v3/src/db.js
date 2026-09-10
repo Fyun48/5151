@@ -146,6 +146,7 @@ import {
   setCrmEnabled as setCrmEnabledOn,
   crmModule as crmModuleOn,
   enqueueCrmFromFeedback,
+  createCaseFromFeedback as createCaseFromFeedbackOn,
 } from "./crm.js";
 import { ensureCrmOutboxSchema } from "./crmOutbox.js";
 import { crmDeliveryControl, setLocalCrmSyncStopped } from "./crmDelivery.js";
@@ -1539,6 +1540,10 @@ export function getCrmDeliveryControl() {
 
 export function setCrmDeliveryStop(stopped) {
   return setLocalCrmSyncStopped(db, Boolean(stopped));
+}
+
+export function createCrmFromFeedback(feedbackId) {
+  return createCaseFromFeedbackOn(db, feedbackId);
 }
 
 export function getFeedbackStats() {
