@@ -4,7 +4,7 @@
 
 - v1：已停用。原始碼仍在 `src/` + `public/`，埠 5151／`https://a5151.reversalplay.me` 不再是正式站；資料 `591.db` 可只讀匯入
 - v2：`v2/`，埠 5152，`https://b5151.reversalplay.me`，資料 `data-v2/v2.db`（不再改功能）
-- 本目錄：埠 5153，`https://c5151.reversalplay.me`，資料 `data-v3/v3.db`
+- 本目錄：埠 5153，`https://c5151.reversalplay.me` 與 `https://jibbyrenth.reversalplay.me`，資料 `data-v3/v3.db`
 
 之後功能只做這份。畫面上的產品名仍是「吉比租房物件追蹤」，版本只在頁尾寫 `ver. 3.51`。
 
