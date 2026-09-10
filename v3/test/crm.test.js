@@ -64,4 +64,11 @@ test("admin.html has CRM panel and close-is-not-drop copy", () => {
   assert.match(html, /role="alert"/);
   assert.match(html, /關閉模組只停新處理，資料保留/);
   assert.match(html, /"crm"/);
+  assert.match(html, /function crmHandlingLabel/);
+  assert.match(html, /CRM 已關閉，只能看既有資料/);
+  const formStart = html.indexOf('id="crmContactForm"');
+  const formEnd = html.indexOf("</form>", formStart);
+  const formHtml = html.slice(formStart, formEnd);
+  assert.doesNotMatch(formHtml, /id="crmQuery"/);
+  assert.match(html, /id="crmQuery"/);
 });

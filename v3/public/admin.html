@@ -1015,11 +1015,13 @@
         </div>
         <div class="row" style="margin-top:12px">
           <button type="submit" class="primary" id="crmCreateBtn">新增聯絡人</button>
-          <input id="crmQuery" placeholder="搜尋名稱／公司／電話" style="max-width:240px" />
-          <button type="button" class="ghost" id="crmReload">重新整理</button>
         </div>
-        <p class="msg" id="crmMsg" role="status"></p>
       </form>
+      <div class="row" style="margin-top:12px;flex-wrap:wrap;gap:8px;align-items:center">
+        <label>搜尋 <input id="crmQuery" placeholder="名稱／公司／電話" style="max-width:240px" /></label>
+        <button type="button" class="ghost" id="crmReload">重新整理</button>
+      </div>
+      <p class="msg" id="crmMsg" role="status"></p>
       <div class="crm-table-wrap" style="margin-top:14px;overflow-x:auto">
         <div id="crmList" aria-busy="false"></div>
       </div>
@@ -2611,6 +2613,9 @@
         }
       }
     }
+    function crmHandlingLabel(id) {
+      return (crmState.module?.handling || []).find((h) => h.id === id)?.label || id;
+    }
     function renderCrmList() {
       const box = $("crmList");
       if (!box) return;
@@ -2634,32 +2639,33 @@
       if (!box) return;
       if (!snap) { box.hidden = true; box.innerHTML = ""; return; }
       const c = snap.contact;
+      const writable = crmState.module?.enabled !== false;
       const handlingOpts = (crmState.module?.handling || []).map((h) => `<option value="${h.id}">${escapeHtml(h.label)}</option>`).join("");
       box.hidden = false;
       box.innerHTML = `
         <h3 style="margin-top:18px">${escapeHtml(c.display_name)}</h3>
-        <p class="hint">來源在本站。若要對應回饋，在案件填回饋編號。</p>
+        <p class="hint">來源在本站。若要對應回饋，在案件填回饋編號。${writable ? "" : "CRM 已關閉，只能看既有資料。"}</p>
         <div class="crm-table-wrap" style="overflow-x:auto">
           <p><strong>案件</strong></p>
-          ${(snap.cases || []).length ? `<ul>${snap.cases.map((row) => `<li>${escapeHtml(row.title)} · ${escapeHtml(row.handling_state)}${row.feedback_id ? ` · 回饋 #${row.feedback_id}` : ""}</li>`).join("")}</ul>` : `<p class="hint">還沒有案件。</p>`}
-          <form id="crmCaseForm" class="row" style="flex-wrap:wrap;gap:8px">
-            <input name="title" placeholder="案件標題" required maxlength="80" />
-            <input name="feedback_id" placeholder="回饋編號（可空）" inputmode="numeric" />
-            <select name="handling_state">${handlingOpts}</select>
+          ${(snap.cases || []).length ? `<ul>${snap.cases.map((row) => `<li>${escapeHtml(row.title)} · ${escapeHtml(crmHandlingLabel(row.handling_state))}${row.feedback_id ? ` · 回饋 #${row.feedback_id}` : ""}</li>`).join("")}</ul>` : `<p class="hint">還沒有案件。</p>`}
+          ${writable ? `<form id="crmCaseForm" class="row" style="flex-wrap:wrap;gap:8px">
+            <label>案件標題 <input name="title" required maxlength="80" /></label>
+            <label>回饋編號 <input name="feedback_id" placeholder="可空" inputmode="numeric" /></label>
+            <label>處理進度 <select name="handling_state">${handlingOpts}</select></label>
             <button type="submit" class="ghost">新增案件</button>
-          </form>
+          </form>` : ""}
           <p><strong>備註</strong></p>
           ${(snap.notes || []).length ? `<ul>${snap.notes.map((row) => `<li>${escapeHtml(row.body)}</li>`).join("")}</ul>` : `<p class="hint">還沒有備註。</p>`}
-          <form id="crmNoteForm" class="row" style="flex-wrap:wrap;gap:8px">
-            <input name="body" placeholder="備註" required maxlength="2000" style="flex:1;min-width:180px" />
+          ${writable ? `<form id="crmNoteForm" class="row" style="flex-wrap:wrap;gap:8px">
+            <label style="flex:1;min-width:180px">備註 <input name="body" required maxlength="2000" /></label>
             <button type="submit" class="ghost">新增備註</button>
-          </form>
+          </form>` : ""}
           <p><strong>待辦</strong></p>
-          ${(snap.todos || []).length ? `<ul>${snap.todos.map((row) => `<li>${escapeHtml(row.title)}${row.done_at ? "（完成）" : ""} <button type="button" class="ghost" data-crm-todo="${row.id}" data-done="${row.done_at ? "0" : "1"}">${row.done_at ? "標成未完成" : "完成"}</button></li>`).join("")}</ul>` : `<p class="hint">還沒有待辦。</p>`}
-          <form id="crmTodoForm" class="row" style="flex-wrap:wrap;gap:8px">
-            <input name="title" placeholder="待辦" required maxlength="200" />
+          ${(snap.todos || []).length ? `<ul>${snap.todos.map((row) => `<li>${escapeHtml(row.title)}${row.done_at ? "（完成）" : ""} ${writable ? `<button type="button" class="ghost" data-crm-todo="${row.id}" data-done="${row.done_at ? "0" : "1"}">${row.done_at ? "標成未完成" : "完成"}</button>` : ""}</li>`).join("")}</ul>` : `<p class="hint">還沒有待辦。</p>`}
+          ${writable ? `<form id="crmTodoForm" class="row" style="flex-wrap:wrap;gap:8px">
+            <label>待辦 <input name="title" required maxlength="200" /></label>
             <button type="submit" class="ghost">新增待辦</button>
-          </form>
+          </form>` : ""}
         </div>
       `;
       $("crmCaseForm")?.addEventListener("submit", async (ev) => {
@@ -2791,6 +2797,7 @@
       if (!res.ok) { setMsg("crmMsg", data.error || "切換失敗"); return; }
       crmState.module = data.module;
       renderCrmBanner();
+      if (crmState.selected) renderCrmDetail(crmState.selected);
       setMsg("crmMsg", next ? "已重新開啟 CRM" : "已關閉 CRM，資料仍在", true);
     });
     $("crmSyncToggle")?.addEventListener("click", async () => {
