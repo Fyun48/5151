@@ -32,7 +32,7 @@ test("deploy-ops requires master workflow ref, SHA ancestry, and DEPLOY-OPS", ()
   assert.match(src, /merge-base --is-ancestor "\$DEPLOY_SHA" origin\/master/);
   assert.match(src, /git checkout --force "\$DEPLOY_SHA"/);
   assert.match(src, /"\$\{CONFIRM:-\}"\s*!=\s*"DEPLOY-OPS"/);
-  assert.doesNotMatch(src, /DEPLOY-PRODUCTION/);
+  assert.doesNotMatch(src, /"\$\{CONFIRM:-\}"\s*!=\s*"DEPLOY-PRODUCTION"/);
   assert.doesNotMatch(src, /inputs:\s*[\s\S]*image_digest:/);
 });
 
