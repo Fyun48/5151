@@ -1,5 +1,16 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
+const CRM_HANDLING_LABEL = Object.freeze({
+  new: "待看",
+  planned: "已排入",
+  doing: "處理中",
+  done: "已完成",
+  declined: "暫不處理",
+});
+function crmHandlingLabel(id) {
+  const key = String(id || "").trim();
+  return CRM_HANDLING_LABEL[key] || key;
+}
 let CSRF = "";
 let selectedIssueId = null;
 let selectedProductId = "";
@@ -795,7 +806,7 @@ function renderCrm() {
           <p>${esc(contact.company_name || "—")}<br>${esc([contact.phone, contact.email, contact.line_id].filter(Boolean).join(" / ") || "無聯絡欄")}</p>
           <p class="hint">標籤：${esc((contact.tags || []).join("、") || "—")}</p>
           <p>案件：${(site.cases || []).length
-            ? (site.cases || []).map((row) => esc(`${row.title || "未命名"} · ${row.handling_state || ""}`)).join("；")
+            ? (site.cases || []).map((row) => esc(`${row.title || "未命名"} · ${crmHandlingLabel(row.handling_state)}`)).join("；")
             : "尚未有案件"}</p>
           <p class="hint">備註 ${(site.notes || []).length} 則 · 待辦 ${(site.todos || []).length} 則</p>
         </section>
