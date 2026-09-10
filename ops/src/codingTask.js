@@ -387,6 +387,10 @@ export function listCodingTasks(db, { issueId, limit = 50 } = {}) {
   const cap = Math.max(1, Math.min(Number(limit) || 50, 200));
   return db.prepare("SELECT * FROM development_coding_task WHERE issue_id=? ORDER BY id DESC LIMIT ?").all(Number(issueId), cap).map(publicCodingTask);
 }
+export function listRecentCodingTasks(db, { limit = 40 } = {}) {
+  const cap = Math.max(1, Math.min(Number(limit) || 40, 200));
+  return db.prepare("SELECT * FROM development_coding_task ORDER BY id DESC LIMIT ?").all(cap).map(publicCodingTask);
+}
 export function getCodingTask(db, taskId) {
   const row = db.prepare("SELECT * FROM development_coding_task WHERE id=?").get(Number(taskId));
   return row ? publicCodingTask(row) : null;

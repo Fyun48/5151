@@ -211,3 +211,23 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 @media (max-width: 520px) {
   .crm-cols { grid-template-columns: 1fr; }
 }
+.dev-pipeline {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+.dev-col {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  min-width: 0;
+  background: var(--paper);
+}
+.dev-col h3 { margin: 0 0 6px; font-size: 13px; }
+.dev-col p { margin: 0 0 6px; font-size: 13px; word-break: break-word; }
+.dev-col .src { color: var(--muted); font-size: 11px; }
+#devActions.wrap, #gate2Row.wrap, .row.wrap { flex-wrap: wrap; }
+@media (max-width: 800px) {
+  .dev-pipeline { grid-template-columns: 1fr; }
+}

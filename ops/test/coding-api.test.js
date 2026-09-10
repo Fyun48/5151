@@ -141,3 +141,16 @@ test("unknown issue/task returns 404 for owner", async () => {
     assert.equal((await fetch(`${base}/ops/api/coding-tasks/99999`, { headers: { cookie } })).status, 404);
   });
 });
+
+test("owner can list recent coding tasks", async () => {
+  await withServer(async ({ base, db }) => {
+    const { taskId } = await seedTask(db);
+    assert.equal((await fetch(`${base}/ops/api/coding-tasks`)).status, 401);
+    const { cookie } = await login(base);
+    const res = await fetch(`${base}/ops/api/coding-tasks?limit=10`, { headers: { cookie } });
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.ok(Array.isArray(data.items));
+    assert.ok(data.items.some((t) => Number(t.id) === Number(taskId)));
+  });
+});

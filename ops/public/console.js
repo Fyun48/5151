@@ -111,6 +111,11 @@ const STATUS_LABEL = {
   changes_ready: "變更待收",
   failed_retry: "失敗可重試",
   completed: "已完成",
+  ready: "就緒",
+  building: "建置中",
+  deploying: "佈署中",
+  validating: "驗證中",
+  cancelled: "已取消",
 };
 
 const EXIT_ACTION_LABEL = {
@@ -850,6 +855,104 @@ async function refreshCrm() {
   setStatus($("crmMsg"), `${(data.items || []).length} 筆複本`, "ok");
 }
 
+let devCache = { items: [] };
+let devOpen = { taskId: 0, issueId: 0, stagingId: 0, release: null };
+
+function shortSha(sha) {
+  return String(sha || "").slice(0, 12) || "—";
+}
+
+async function refreshDev() {
+  const { res, data } = await api("/ops/api/coding-tasks?limit=40");
+  if (!res.ok) {
+    setStatus($("devMsg"), data.error || "無法讀取製作任務", "err");
+    return;
+  }
+  devCache = data;
+  const items = data.items || [];
+  setStatus($("devMsg"), items.length ? `${items.length} 筆製作任務` : "目前沒有製作任務。核准開發後才會出現。", items.length ? "ok" : "");
+  const body = $("devTable").querySelector("tbody");
+  body.innerHTML = items.length
+    ? items.map((t) => `
+      <tr data-tid="${t.id}" data-iid="${t.issue_id}">
+        <td>${t.id}</td>
+        <td>#${t.issue_id}</td>
+        <td>${statusChip(t.status)}</td>
+        <td>${esc(t.coding_branch || "—")}</td>
+        <td>${t.pr_url ? `<a href="${esc(t.pr_url)}" target="_blank" rel="noopener noreferrer">#${esc(t.pr_number || "")}</a>` : "—"}</td>
+      </tr>`).join("")
+    : `<tr><td colspan="5" class="hint">尚無隔離開發任務。</td></tr>`;
+}
+
+async function openCodingTask(taskId) {
+  const id = Number(taskId);
+  if (!id) return;
+  $("devDetailCard").hidden = false;
+  $("devDetailTitle").textContent = `製作任務 #${id}`;
+  $("devDetailHint").textContent = "載入製作、隔離 staging 與發行候選…";
+  $("devPipeline").innerHTML = "";
+  $("devActions").hidden = true;
+  $("gate2Row").hidden = true;
+  const [taskRes, stgRes, relRes] = await Promise.all([
+    api(`/ops/api/coding-tasks/${id}`),
+    api(`/ops/api/coding-tasks/${id}/staging`),
+    api(`/ops/api/coding-tasks/${id}/release`),
+  ]);
+  const task = taskRes.res.ok ? taskRes.data : null;
+  const stg = stgRes.res.ok ? stgRes.data : null;
+  const rel = relRes.res.ok ? relRes.data : null;
+  if (!task) {
+    $("devDetailHint").textContent = taskRes.data.error || "找不到這筆任務";
+    return;
+  }
+  const currentStg = stg?.current || (stg?.deployments || [])[0] || null;
+  const currentRel = rel?.current || null;
+  devOpen = {
+    taskId: id,
+    issueId: Number(task.issue_id),
+    stagingId: Number(currentStg?.id || 0),
+    release: currentRel && currentRel.id ? {
+      manifest_id: Number(currentRel.id),
+      manifest_version: Number(currentRel.manifest_version),
+      manifest_hash: currentRel.manifest_hash,
+      artifact_digest: currentRel.artifact_digest,
+      head_sha: currentRel.head_sha,
+    } : null,
+  };
+  const qa = stg?.current_qa;
+  $("devDetailHint").textContent = `議題 #${task.issue_id} · 分支 ${task.coding_branch || "—"} · head ${shortSha(task.head_sha)}。隔離環境與正式站分開。`;
+  $("devPipeline").innerHTML = `
+    <div class="dev-col">
+      <h3>製作任務</h3>
+      <p class="src">coding task #${task.id}</p>
+      <p>${statusChip(task.status)}</p>
+      <p>head ${esc(shortSha(task.head_sha))}</p>
+      <p>${task.pr_url ? `<a href="${esc(task.pr_url)}" target="_blank" rel="noopener noreferrer">開啟 PR</a>` : "尚無 PR"}</p>
+    </div>
+    <div class="dev-col">
+      <h3>隔離 staging</h3>
+      <p class="src">測試容器，不是正式站</p>
+      <p>${currentStg ? statusChip(currentStg.status) : "尚未建立"}</p>
+      <p>驗證 ${esc(currentStg?.validation_result || "—")}${currentStg?.fresh === false ? " · 已過期" : ""}</p>
+      <p>${currentStg?.staging_url || currentStg?.endpoint
+        ? `<a href="${esc(currentStg.staging_url || currentStg.endpoint)}" target="_blank" rel="noopener noreferrer">開啟隔離網址</a>`
+        : "尚無隔離網址"}</p>
+      <p>環境 ${esc(currentStg?.staging_environment_class || "—")} / ${esc(currentStg?.staging_environment_id || "—")}</p>
+      <p>QA ${esc(qa?.final_result || "—")}${qa?.fresh === false ? " · 需重跑" : ""}</p>
+    </div>
+    <div class="dev-col">
+      <h3>發行候選</h3>
+      <p class="src">Gate #2 只寫授權</p>
+      <p>${currentRel ? statusChip(currentRel.status) : "尚未組候選"}</p>
+      <p>manifest #${currentRel?.id || "—"} v${currentRel?.manifest_version || "—"}</p>
+      <p>digest ${esc(shortSha(currentRel?.artifact_digest))}</p>
+      <p>${currentRel?.fresh === false ? `已過期：${esc((currentRel.stale_reasons || []).join("、") || "—")}` : (currentRel ? "新鮮度足夠才能核准" : "QA 與 staging 都 PASS 才會出現")}</p>
+    </div>`;
+  $("devActions").hidden = false;
+  $("gate2Row").hidden = !(currentRel && currentRel.id && currentRel.fresh !== false && !currentRel.current_decision);
+  setStatus($("devDetailMsg"), "", "");
+}
+
 async function refreshAll() {
   await Promise.all([
     refreshProducts(),
@@ -857,6 +960,7 @@ async function refreshAll() {
     refreshInbox(),
     refreshCrm(),
     refreshIssues(),
+    refreshDev(),
     refreshAudit(),
     refreshTransitions(),
   ]);
@@ -956,7 +1060,100 @@ $("crmList")?.addEventListener("submit", async (ev) => {
 });
 $("inboxRefresh").addEventListener("click", refreshInbox);
 $("issuesRefresh").addEventListener("click", refreshIssues);
+$("devRefresh").addEventListener("click", refreshDev);
 $("productsRefresh").addEventListener("click", refreshProducts);
+$("devTable").addEventListener("click", (ev) => {
+  const tr = ev.target.closest("tr[data-tid]");
+  if (tr) openCodingTask(tr.dataset.tid);
+});
+$("devCancelTask").addEventListener("click", () => {
+  if (!devOpen.taskId) return;
+  showConfirm({
+    title: "確認取消製作任務",
+    body: `取消製作任務 #${devOpen.taskId}？不會部署、也不會動正式站。`,
+    confirmLabel: "確定取消任務",
+    onConfirm: async () => {
+      const { res, data } = await api(`/ops/api/coding-tasks/${devOpen.taskId}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "owner_console" }),
+      });
+      setStatus($("devDetailMsg"), res.ok ? "已取消製作任務" : (data.error || "取消失敗"), res.ok ? "ok" : "err");
+      await refreshDev();
+      if (res.ok) await openCodingTask(devOpen.taskId);
+    },
+  });
+});
+$("devRedeploy").addEventListener("click", async () => {
+  if (!devOpen.taskId) return;
+  const { res, data } = await api(`/ops/api/coding-tasks/${devOpen.taskId}/staging/redeploy`, { method: "POST" });
+  setStatus($("devDetailMsg"), res.ok ? "已要求重佈隔離 staging" : (data.error || "重佈失敗"), res.ok ? "ok" : "err");
+  if (res.ok) await openCodingTask(devOpen.taskId);
+});
+$("devCancelStg").addEventListener("click", () => {
+  if (!devOpen.stagingId) return;
+  showConfirm({
+    title: "確認取消隔離 staging",
+    body: `取消 staging #${devOpen.stagingId}？只影響測試容器，正式站無感。`,
+    confirmLabel: "確定取消 staging",
+    onConfirm: async () => {
+      const { res, data } = await api(`/ops/api/staging-deployments/${devOpen.stagingId}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "owner_console" }),
+      });
+      setStatus($("devDetailMsg"), res.ok ? "已取消隔離 staging" : (data.error || "取消失敗"), res.ok ? "ok" : "err");
+      if (res.ok) await openCodingTask(devOpen.taskId);
+    },
+  });
+});
+$("devCleanupStg").addEventListener("click", () => {
+  if (!devOpen.stagingId) return;
+  showConfirm({
+    title: "確認停止測試容器",
+    body: `停止並清理 staging #${devOpen.stagingId} 的測試容器？這是反悔隔離環境的方式，正式站不會被碰到。`,
+    confirmLabel: "確定停止容器",
+    onConfirm: async () => {
+      const { res, data } = await api(`/ops/api/staging-deployments/${devOpen.stagingId}/cleanup`, { method: "POST" });
+      setStatus($("devDetailMsg"), res.ok ? "已要求停止測試容器" : (data.error || "清理失敗"), res.ok ? "ok" : "err");
+      if (res.ok) await openCodingTask(devOpen.taskId);
+    },
+  });
+});
+$("gate2Row").addEventListener("click", (ev) => {
+  const btn = ev.target.closest("[data-gate2]");
+  if (!btn || !devOpen.taskId || !devOpen.release) return;
+  const action = btn.dataset.gate2;
+  const rel = devOpen.release;
+  const labels = {
+    APPROVE_RELEASE: "核准發布授權（不會部署正式機）",
+    REQUEST_CHANGES: "要求修改發行候選",
+    CANCEL_RELEASE: "取消發行候選",
+  };
+  showConfirm({
+    title: "確認 Gate #2",
+    body: `${labels[action] || action}。manifest #${rel.manifest_id} v${rel.manifest_version}。這一步不會 Deploy v3／Deploy OPS。`,
+    confirmLabel: action === "APPROVE_RELEASE" ? "確定寫入授權" : "確定",
+    danger: action !== "APPROVE_RELEASE",
+    onConfirm: async () => {
+      const { res, data } = await api(`/ops/api/coding-tasks/${devOpen.taskId}/release/decision`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action,
+          manifest_id: rel.manifest_id,
+          manifest_version: rel.manifest_version,
+          manifest_hash: rel.manifest_hash,
+          artifact_digest: rel.artifact_digest,
+          head_sha: rel.head_sha,
+          reason: "owner_console",
+        }),
+      });
+      setStatus($("devDetailMsg"), res.ok ? "Gate #2 已送出" : (data.error || "決策失敗"), res.ok ? "ok" : "err");
+      if (res.ok) await openCodingTask(devOpen.taskId);
+    },
+  });
+});
 $("showContact").addEventListener("change", refreshInbox);
 $("createProductForm").addEventListener("submit", createProduct);
 

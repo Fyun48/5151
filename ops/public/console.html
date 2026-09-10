@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex,nofollow" />
   <title>Ops Console · 吉比租房維運</title>
-  <link rel="stylesheet" href="/console.css?v=20260910-crm6" />
+  <link rel="stylesheet" href="/console.css?v=20260910-stg1" />
 </head>
 <body>
   <header class="topbar">
@@ -49,6 +49,7 @@
         <button type="button" class="tab" data-tab="crm" role="tab" aria-selected="false">CRM 檢視</button>
         <button type="button" class="tab" data-tab="products" role="tab" aria-selected="false">產品</button>
         <button type="button" class="tab" data-tab="issues" role="tab" aria-selected="false">議題與投票</button>
+        <button type="button" class="tab" data-tab="dev" role="tab" aria-selected="false">開發發行</button>
         <button type="button" class="tab" data-tab="audit" role="tab" aria-selected="false">稽核</button>
       </nav>
 
@@ -169,6 +170,39 @@
         </section>
       </section>
 
+      <section id="tab-dev" class="tabpane" hidden>
+        <section class="card">
+          <div class="row">
+            <h2>隔離開發與發行</h2>
+            <span class="grow"></span>
+            <button type="button" id="devRefresh">重新整理</button>
+          </div>
+          <p class="hint">製作任務 → 獨立 QA → 隔離 staging → 發行候選。Gate #2 只寫授權，<strong>不會部署正式機</strong>。反悔隔離環境＝停止測試容器，正式站無感。</p>
+          <p class="msg" id="devMsg" role="status"></p>
+          <table class="tbl" id="devTable">
+            <thead><tr><th>#</th><th>議題</th><th>任務狀態</th><th>分支</th><th>PR</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </section>
+        <section class="card" id="devDetailCard" hidden>
+          <h2 id="devDetailTitle">任務詳情</h2>
+          <p class="hint" id="devDetailHint">尚未選取。</p>
+          <div id="devPipeline" class="dev-pipeline" aria-live="polite"></div>
+          <div class="row wrap" id="devActions" hidden>
+            <button type="button" id="devCancelTask">取消製作任務</button>
+            <button type="button" id="devRedeploy">重佈隔離 staging</button>
+            <button type="button" id="devCancelStg">取消 staging</button>
+            <button type="button" id="devCleanupStg">停止測試容器</button>
+          </div>
+          <div class="row wrap" id="gate2Row" hidden>
+            <button type="button" class="primary" data-gate2="APPROVE_RELEASE">核准發布授權</button>
+            <button type="button" data-gate2="REQUEST_CHANGES">要求修改</button>
+            <button type="button" data-gate2="CANCEL_RELEASE">取消發行候選</button>
+          </div>
+          <p class="msg" id="devDetailMsg" role="status"></p>
+        </section>
+      </section>
+
       <section id="tab-audit" class="tabpane" hidden>
         <section class="card">
           <div class="row">
@@ -206,6 +240,6 @@
     </div>
   </div>
 
-  <script src="/console.js?v=20260910-crm6"></script>
+  <script src="/console.js?v=20260910-stg1"></script>
 </body>
 </html>

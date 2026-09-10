@@ -64,7 +64,7 @@ import { makeProposalProvider } from "./ai/proposalProvider.js";
 import { proposalWorkerConfigFromEnv, startProposalLoop } from "./proposalWorker.js";
 import { getReevaluationView, ownerManualReevaluate, ownerUnblock } from "./reevaluation.js";
 import { reevaluationWorkerConfigFromEnv, startReevaluationLoop } from "./reevaluationWorker.js";
-import { getIssueCodingView, getCodingTask, cancelCodingTask } from "./codingTask.js";
+import { getIssueCodingView, getCodingTask, cancelCodingTask, listRecentCodingTasks } from "./codingTask.js";
 import { codingWorkerConfigFromEnv, startCodingLoop } from "./codingWorker.js";
 import { makeCodingProvider } from "./coding/provider.js";
 import { makeCodingRepo } from "./coding/gitRepo.js";
@@ -882,6 +882,12 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         const iid = Number(codingGet[1]);
         if (!db.prepare("SELECT id FROM issue_candidate WHERE id=?").get(iid)) { sendJson(res, 404, { error: "not found" }); return; }
         sendJson(res, 200, getIssueCodingView(db, iid));
+        return;
+      }
+      if (pathname === "/ops/api/coding-tasks" && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        const limit = Number(url.searchParams.get("limit") || 40);
+        sendJson(res, 200, { items: listRecentCodingTasks(db, { limit }) });
         return;
       }
       const codingTaskGet = pathname.match(/^\/ops\/api\/coding-tasks\/(\d+)$/);
