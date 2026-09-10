@@ -71,7 +71,24 @@ function countIssuesForProduct(db, productId, { openOnly = false } = {}) {
 }
 
 export function getDashboard(db, env = process.env, { productId = null } = {}) {
+  const raw = productId == null ? "" : String(productId).trim();
   const scoped = scopedProductId(productId);
+  if (raw && !scoped) {
+    const cfg = notifyConfig(env);
+    return {
+      phase: OPS_PHASE,
+      selected_product_id: null,
+      feedback_total: 0,
+      issues_total: 0,
+      issues_open: 0,
+      lifecycle: {},
+      waiting_owner_approval: 0,
+      waiting_release_approval: 0,
+      pending_release_notifications: 0,
+      webhook: { configured: cfg.configured, channel: cfg.configured ? cfg.channel : null, on_ingest: cfg.onIngest },
+      invalid_product_filter: true,
+    };
+  }
   const lifecycle = {};
   if (scoped) {
     for (const row of db.prepare(`

@@ -46,6 +46,10 @@ test("console has product cards, switcher, and one-time secret", () => {
   assert.match(js, /\/ops\/api\/products\/\$\{encodeURIComponent\(id\)\}\/\$\{action\}/);
   assert.match(js, /pause|resume|unsubscribe|reconnect|rotate-credential/);
   assert.match(js, /確定解除/);
+  assert.match(js, /確定輪替/);
+  assert.match(js, /確定重連/);
+  assert.match(js, /使用中/);
+  assert.match(js, /aria-label/);
   assert.match(js, /productId=/);
   assert.match(css, /overflow-x:\s*hidden/);
 });

@@ -73,15 +73,38 @@ function setTab(name) {
   });
 }
 
+const STATUS_LABEL = {
+  active: "使用中",
+  paused: "已暫停",
+  exiting: "退出中",
+  exited: "已退出",
+  connected: "已連接（可收件）",
+  connecting: "連接中",
+  reconnecting: "重新連接中",
+};
+
+const ACTION_ERROR = {
+  "product exists": "這個 product_id 已存在",
+  "invalid product_id": "product_id 格式不正確（小寫英文開頭）",
+  "not found": "找不到這個產品",
+  "reconnect required": "已退出，請先重新連接",
+  "subscription_inactive": "訂閱未接通，無法輪替密鑰",
+};
+
+function humanError(err) {
+  const key = String(err || "").trim();
+  return ACTION_ERROR[key] || key || "操作失敗";
+}
+
 function chipClass(status) {
   if (status === "active" || status === "connected") return "ok";
   if (status === "exited") return "danger";
-  if (status === "paused" || status === "exiting" || status === "reconnecting") return "warn";
+  if (status === "paused" || status === "exiting" || status === "reconnecting" || status === "connecting") return "warn";
   return "";
 }
 
 function statusChip(status) {
-  return `<span class="chip ${chipClass(status)}">${esc(status || "—")}</span>`;
+  return `<span class="chip ${chipClass(status)}">${esc(STATUS_LABEL[status] || status || "—")}</span>`;
 }
 
 function hideSecret() {
@@ -97,11 +120,14 @@ function showSecret(secret, context) {
   $("secretOnceText").textContent = secret;
   $("secretOnceHint").textContent = `${context}：此密鑰只顯示一次，請立刻複製到該站 OPS_INGEST_SECRET。`;
   setTab("products");
+  box.scrollIntoView({ block: "nearest" });
+  $("copySecretBtn")?.focus();
 }
 
 function hideConfirm() {
   $("confirmDlg").hidden = true;
   confirmAction = null;
+  if ($("ownerArea")) $("ownerArea").inert = false;
 }
 
 function showConfirm({ title, body, confirmLabel, onConfirm }) {
@@ -110,7 +136,8 @@ function showConfirm({ title, body, confirmLabel, onConfirm }) {
   $("confirmOk").textContent = confirmLabel || "確定";
   confirmAction = onConfirm;
   $("confirmDlg").hidden = false;
-  $("confirmOk").focus();
+  if ($("ownerArea")) $("ownerArea").inert = true;
+  $("confirmCancel").focus();
 }
 
 function renderProductSwitcher() {
@@ -135,6 +162,7 @@ function renderProductCards() {
     const sub = p.subscription || {};
     const exited = p.status === "exited" || sub.status === "exited";
     const paused = p.status === "paused" || sub.status === "paused";
+    const name = p.display_name || p.id;
     return `<article class="product-card">
       <div class="row">
         <h3>${esc(p.display_name)}</h3>
@@ -143,11 +171,11 @@ function renderProductCards() {
       </div>
       <p class="hint"><code>${esc(p.id)}</code> · 訂閱世代 ${esc(sub.generation ?? "—")} · ${statusChip(sub.status)}</p>
       <div class="row actions">
-        ${exited ? `<button type="button" class="primary" data-pid="${esc(p.id)}" data-pact="reconnect">重新連接</button>` : ""}
-        ${!exited && paused ? `<button type="button" class="primary" data-pid="${esc(p.id)}" data-pact="resume">恢復</button>` : ""}
-        ${!exited && !paused ? `<button type="button" data-pid="${esc(p.id)}" data-pact="pause">暫停</button>` : ""}
-        ${!exited ? `<button type="button" data-pid="${esc(p.id)}" data-pact="rotate-credential">輪替密鑰</button>` : ""}
-        ${!exited ? `<button type="button" class="danger" data-pid="${esc(p.id)}" data-pact="unsubscribe">解除訂閱</button>` : ""}
+        ${exited ? `<button type="button" class="primary" data-pid="${esc(p.id)}" data-pact="reconnect" aria-label="重新連接 ${esc(name)}">重新連接</button>` : ""}
+        ${!exited && paused ? `<button type="button" class="primary" data-pid="${esc(p.id)}" data-pact="resume" aria-label="恢復 ${esc(name)}">恢復</button>` : ""}
+        ${!exited && !paused ? `<button type="button" data-pid="${esc(p.id)}" data-pact="pause" aria-label="暫停 ${esc(name)}">暫停</button>` : ""}
+        ${!exited ? `<button type="button" data-pid="${esc(p.id)}" data-pact="rotate-credential" aria-label="輪替 ${esc(name)} 的密鑰">輪替密鑰</button>` : ""}
+        ${!exited ? `<button type="button" class="danger" data-pid="${esc(p.id)}" data-pact="unsubscribe" aria-label="解除訂閱 ${esc(name)}">解除訂閱</button>` : ""}
       </div>
     </article>`;
   }).join("");
@@ -161,12 +189,15 @@ function setProductBusy(on) {
 }
 
 async function refreshProducts() {
+  const box = $("productCards");
+  if (box && !box.dataset.loaded) box.innerHTML = `<p class="hint">載入中…</p>`;
   const { res, data } = await api("/ops/api/products");
   if (!res.ok) {
     setStatus($("productMsg"), data.error || "無法讀取產品", "err");
     return;
   }
   productsCache = data.items || [];
+  if (box) box.dataset.loaded = "1";
   if (selectedProductId && !productsCache.some((p) => p.id === selectedProductId)) {
     selectedProductId = "";
   }
@@ -181,7 +212,7 @@ async function runProductAction(id, action) {
   try {
     const { res, data } = await api(`/ops/api/products/${encodeURIComponent(id)}/${action}`, { method: "POST" });
     if (!res.ok) {
-      setStatus($("productMsg"), data.error || "操作失敗", "err");
+      setStatus($("productMsg"), humanError(data.error), "err");
       return;
     }
     const labels = {
@@ -215,9 +246,12 @@ async function createProduct(ev) {
       body: JSON.stringify({ id, display_name: name }),
     });
     if (!res.ok) {
-      setStatus($("productMsg"), data.error || "建立失敗", "err");
+      setStatus($("productMsg"), humanError(data.error), "err");
+      $("newProductId").setAttribute("aria-invalid", "true");
+      $("newProductId").focus();
       return;
     }
+    $("newProductId").removeAttribute("aria-invalid");
     $("createProductForm").reset();
     setStatus($("productMsg"), `已建立 ${data.product?.display_name || id}`, "ok");
     if (data.ingest_secret) showSecret(data.ingest_secret, "新建產品");
@@ -236,6 +270,24 @@ function requestProductAction(id, action) {
       body: `確定解除「${name}」（${id}）的訂閱？此站將停止傳送，現有密鑰立即失效。產品卡會留下摘要，之後可重新連接。`,
       confirmLabel: "確定解除",
       onConfirm: () => runProductAction(id, "unsubscribe"),
+    });
+    return;
+  }
+  if (action === "rotate-credential") {
+    showConfirm({
+      title: "確認輪替密鑰",
+      body: `確定輪替「${name}」（${id}）的 ingest 密鑰？舊密鑰會立刻失效，新密鑰只顯示一次。`,
+      confirmLabel: "確定輪替",
+      onConfirm: () => runProductAction(id, "rotate-credential"),
+    });
+    return;
+  }
+  if (action === "reconnect") {
+    showConfirm({
+      title: "確認重新連接",
+      body: `確定重新連接「${name}」（${id}）？會開新的訂閱世代並發出新密鑰，舊密鑰失效。`,
+      confirmLabel: "確定重連",
+      onConfirm: () => runProductAction(id, "reconnect"),
     });
     return;
   }

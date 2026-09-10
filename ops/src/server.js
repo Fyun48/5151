@@ -75,7 +75,7 @@ import {
   retryProductionRelease,
 } from "./release/productionRelease.js";
 import { makeProductionReleaseProvider } from "./release/productionReleaseProvider.js";
-import { getDashboard, listFeedbackInbox, listIssuesWithLifecycle, OPS_PHASE } from "./dashboard.js";
+import { getDashboard, listFeedbackInbox, listIssuesWithLifecycle, OPS_PHASE, publicFeedback } from "./dashboard.js";
 import { notifyConfig, sendOpsNotification } from "./notify/webhook.js";
 
 // 刻意不使用 express：ops 服務維持「零外部相依」，與本 repo 的 CI（不跑 npm install）相容，
@@ -457,7 +457,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         if (!fb) { sendJson(res, 404, { error: "not found" }); return; }
         const currentId = currentAnalysisId(db, fid);
         sendJson(res, 200, {
-          feedback: fb,
+          feedback: publicFeedback(fb),
           current_analysis_id: currentId,
           current: getCurrentFeedbackAnalysis(db, fid),
           analyses: listAnalyses(db, { feedbackId: fid }).map((row) => ({ ...publicAnalysis(row), is_current: Number(row.id) === currentId })),

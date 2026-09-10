@@ -64,6 +64,10 @@ test("owner lists ingested feedback without leaking contact by default", async (
     assert.equal(dash.feedback_total, 1);
     assert.equal(dash.selected_product_id, null);
     assert.equal(dash.webhook.configured, false);
+
+    const analysis = await (await fetch(`${base}/ops/api/feedback/${inbox.items[0].id}/analysis`, { headers: { cookie } })).json();
+    assert.equal(analysis.feedback.contact, undefined);
+    assert.doesNotMatch(JSON.stringify(analysis.feedback), /leak@example\.com/);
   });
 });
 
@@ -104,6 +108,10 @@ test("dashboard and inbox accept productId scope", async () => {
     assert.equal(inbox.total, 1);
     assert.equal(inbox.items[0].product_id, "shop");
     assert.equal(inbox.items[0].content, "shop only");
+    const bad = await (await fetch(`${base}/ops/api/dashboard?productId=9shop`, { headers: { cookie } })).json();
+    assert.equal(bad.feedback_total, 0);
+    assert.equal(bad.invalid_product_filter, true);
+    assert.equal(bad.selected_product_id, null);
   });
 });
 

@@ -126,7 +126,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   .topbar { flex-direction: column; align-items: flex-start; gap: 8px; }
   .tbl { font-size: 12px; }
   .product-card .actions { flex-direction: column; align-items: stretch; }
-  .product-card .actions button { width: 100%; }
+  .product-card .actions button { width: 100%; min-height: 44px; }
   main { padding: 16px 12px; overflow-x: hidden; }
 }
 .card {
