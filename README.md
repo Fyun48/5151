@@ -1,4 +1,13 @@
-# 591 物件追蹤
+# 5151
+
+同一個 GitHub 專案、同一條 Cloudflare Tunnel，兩套獨立上線物（程式目錄與資料都不共用）：
+
+| 上線物 | 目錄 | 容器 | 公開網址 | 怎麼部署 |
+| --- | --- | --- | --- | --- |
+| 吉比租房（v3） | `v3/` | `591-tracker-v3` | https://c5151.reversalplay.me | GitHub **Deploy v3** |
+| OPS 維運台 | `ops/` | `5151-ops` | https://jibbyrentops.reversalplay.me | 目前尚無 Deploy OPS；規劃見 [`ops/PLAN.md`](ops/PLAN.md) |
+
+## 吉比租房物件追蹤（v3）
 
 官方電子報只能每天或每週寄一次，也無法標記「已瀏覽」、「特別關注」或「同屋源更新」。這個本機小工具會依你在 591 設好的搜尋條件定期檢查，把新刊登、改價、同一屋源重新上架分開處理，並依你的開關決定要不要通知。
 
