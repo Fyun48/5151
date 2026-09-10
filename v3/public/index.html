@@ -773,7 +773,7 @@
     }
     body.merge-selecting #mergeDock,
     #mergeDock.on { display: flex; }
-    #mergeDock button { min-height: var(--touch); }
+    #mergeDock button { min-height: var(--touch); min-width: var(--touch); padding: 0 14px; }
     .bulk-bar .compare-hint {
       width: 100%;
       margin: 0;
@@ -898,6 +898,9 @@
     }
     .item.swiping { transition: none; }
     .item:has(.item-cover.empty) {
+      grid-template-columns: 44px 112px minmax(0, 1fr) 120px 148px;
+    }
+    body.merge-selecting .item:has(.item-cover.empty) {
       grid-template-columns: 44px 112px minmax(0, 1fr) 120px 148px;
     }
     .item.picked { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
@@ -2601,7 +2604,18 @@
         padding: 12px;
       }
       .item .pick-hit { display: none !important; }
-      body.merge-selecting .item .pick-hit { display: inline-flex !important; }
+      body.merge-selecting .item {
+        grid-template-columns: 44px 84px minmax(0, 1fr);
+      }
+      body.merge-selecting .item .pick-hit {
+        display: inline-flex !important;
+        grid-column: 1;
+        grid-row: 1;
+        align-items: center;
+        padding: 8px 0 0;
+      }
+      body.merge-selecting .item-cover { grid-column: 2; }
+      body.merge-selecting .item-main { grid-column: 3; }
       .item-copy { display: contents; }
       .item-main { grid-column: 2; grid-row: 1; min-width: 0; }
       .item-details,
@@ -2642,6 +2656,10 @@
       }
       body.role-guest .item:has(.item-cover.empty) {
         grid-template-columns: 92px minmax(0, 1fr);
+      }
+      body.merge-selecting .item:has(.item-cover.empty),
+      body.merge-selecting.role-guest .item:has(.item-cover.empty) {
+        grid-template-columns: 44px 84px minmax(0, 1fr);
       }
       .item .contact,
       .item .actions {
@@ -3596,7 +3614,7 @@
         </ol>
         <label>Discord Webhook（選填）</label>
         <input type="url" id="discordWebhook" placeholder="https://discord.com/api/webhooks/..." />
-        <p class="hint">此通知預設只會訊息已是特別關注之物件。要改事件種類請切到「通知種類」。</p>
+        <p class="hint">Webhook 同房源多筆只送主物件。全新物件依搜尋設定檔；其餘種類都只有特別關注才會推。要改通道請切到「通知種類」。</p>
       </section>
       <section class="hub-pane" data-hub-pane="mail" hidden>
         <p class="hint">這組 SMTP <strong>只寄物件／屋源提醒</strong>到你註冊的信箱，請用你自己的帳號寄給自己。註冊歡迎、忘記密碼、變更密碼、贊助通知由站方管理員 SMTP 寄出，不會用這裡的密碼。</p>
@@ -3644,7 +3662,7 @@
         <p class="msg" id="memberMailMsg"></p>
       </section>
       <section class="hub-pane" data-hub-pane="events">
-        <p class="hint">全新物件只通知符合目前設定檔的篩選（例如只看整層、排除 1F 及地下室、行政區、租金）。頻道勾選也存在同一個設定檔。</p>
+        <p class="hint">全新物件只通知符合目前設定檔的篩選（例如只看整層、排除 1F 及地下室、行政區、租金）。價格、費用、下架、重新上架與同屋源重刊都只有特別關注才會發。頻道勾選也存在同一個設定檔。</p>
         <div class="notify-matrix-wrap">
         <table class="notify-matrix" id="notifyMatrix">
           <thead>
@@ -4924,7 +4942,7 @@
       const extras = commsInboxHtml(commsInboxItems());
       if (!extras) {
         if (!inbox.querySelector(".dock-item") && !inbox.querySelector(".notify-empty")) {
-          inbox.innerHTML = `<div class="notify-empty">還沒有待看更新。條件按儲存後，全新物件、價格變動與下架會出現在這裡，也可按「允許系統推播」。</div>`;
+          inbox.innerHTML = `<div class="notify-empty">還沒有待看更新。全新物件會依你儲存的搜尋設定檔進來；價格、費用、下架與重新上架只打特別關注。也可按「允許系統推播」。</div>`;
         }
         return;
       }
@@ -6075,7 +6093,7 @@
       const dock = $("mergeDock");
       if (!dock) return;
       const n = selected.size;
-      const show = mergeSelectMode && n >= 1;
+      const show = (mergeSelectMode && n >= 1) || n >= 2;
       dock.hidden = !show;
       dock.classList.toggle("on", show);
       document.body.classList.toggle("merge-selecting", mergeSelectMode);
@@ -7250,7 +7268,10 @@
       document.querySelectorAll("#bottomNav [data-nav]").forEach((btn) => {
         btn.setAttribute("aria-current", btn.dataset.nav === view ? "page" : "false");
       });
-      if (view !== "listings") closeFilterSheet();
+      if (view !== "listings") {
+        closeFilterSheet();
+        if (mergeSelectMode || selected.size) exitMergeSelect();
+      }
       if (view === "demand") {
         if (location.hash !== "#demand") history.replaceState({}, "", `${location.pathname}${location.search}#demand`);
         loadDemand().catch(() => {});
@@ -9569,6 +9590,10 @@
           return;
         }
       }
+      if (ev.key === "Escape" && (mergeSelectMode || selected.size)) {
+        exitMergeSelect();
+        return;
+      }
       if (ev.key === "Escape" && $("ownerOverlay") && !$("ownerOverlay").hidden) closeOwnerOverlay();
     });
     $("selectPageBtn").onclick = () => {
@@ -10116,7 +10141,7 @@
       if (!items.length) {
         dock.classList.remove("open");
         $("dockList").innerHTML = "";
-        if (inbox) inbox.innerHTML = `<div class="notify-empty">還沒有待看更新。條件按儲存後，全新物件、價格變動與下架會出現在這裡，也可按「允許系統推播」。</div>`;
+        if (inbox) inbox.innerHTML = `<div class="notify-empty">還沒有待看更新。全新物件會依你儲存的搜尋設定檔進來；價格、費用、下架與重新上架只打特別關注。也可按「允許系統推播」。</div>`;
         if (hint) hint.textContent = "尚無待看更新。";
         mergeCommsIntoInbox();
         return;
