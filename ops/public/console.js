@@ -175,11 +175,12 @@ function hideConfirm() {
   if (back && typeof back.focus === "function") back.focus();
 }
 
-function showConfirm({ title, body, confirmLabel, onConfirm }) {
+function showConfirm({ title, body, confirmLabel, onConfirm, danger = true }) {
   confirmReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   $("confirmTitle").textContent = title;
   $("confirmBody").textContent = body;
   $("confirmOk").textContent = confirmLabel || "確定";
+  $("confirmOk").classList.toggle("danger", danger !== false);
   confirmAction = onConfirm;
   $("confirmDlg").hidden = false;
   for (const el of confirmChrome()) el.inert = true;
@@ -500,6 +501,7 @@ function requestProductAction(id, action) {
       title: "確認允許 CRM 同步",
       body: `允許「${name}」（${id}）把 CRM 欄位同步到 OPS？這與回饋複製分開，不會自動包含會員名單或行銷用途。`,
       confirmLabel: "確定允許",
+      danger: false,
       onConfirm: () => setProductCapability(id, { crm_sync: true }),
     });
     return;
@@ -763,7 +765,10 @@ function renderCrm() {
     <button type="submit">儲存本站連結</button>
   </form>`;
   if (!items.length) {
-    box.innerHTML = `${setup}<p class="hint">還沒有站方 CRM 複本。先在本站後台建立聯絡人，並另外按「允許 CRM 同步授權」。</p>`;
+    const grantHint = selectedProductId
+      ? "還沒有站方 CRM 複本。先在本站後台建立聯絡人，再按「允許 CRM 同步授權」。"
+      : "還沒有站方 CRM 複本。請先選單一站台，再到本站後台建立聯絡人並授權同步。";
+    box.innerHTML = `${setup}<p class="hint">${grantHint}</p>`;
     bindCrmSiteUrlForm(pid);
     return;
   }
@@ -787,7 +792,12 @@ function renderCrm() {
         <section class="crm-col">
           <h3>${esc(site.label || "站方客戶／客服往來")}</h3>
           <p class="src">站方複本</p>
-          <p>${esc(contact.company_name || "—")}<br>${esc([contact.phone, contact.email].filter(Boolean).join(" / ") || "無聯絡欄")}</p>
+          <p>${esc(contact.company_name || "—")}<br>${esc([contact.phone, contact.email, contact.line_id].filter(Boolean).join(" / ") || "無聯絡欄")}</p>
+          <p class="hint">標籤：${esc((contact.tags || []).join("、") || "—")}</p>
+          <p>案件：${(site.cases || []).length
+            ? (site.cases || []).map((row) => esc(`${row.title || "未命名"} · ${row.handling_state || ""}`)).join("；")
+            : "尚未有案件"}</p>
+          <p class="hint">備註 ${(site.notes || []).length} 則 · 待辦 ${(site.todos || []).length} 則</p>
         </section>
         <section class="crm-col">
           <h3>${esc(handle.label || "站方處理進度")}</h3>
@@ -884,18 +894,18 @@ document.querySelectorAll(".tab").forEach((btn) => {
 
 $("refreshBtn").addEventListener("click", refreshAll);
 $("crmGrantSync")?.addEventListener("click", async () => {
-  const pid = selectedProductId || crmCache.product?.id || "v3";
-  const { res, data } = await api(`/ops/api/products/${encodeURIComponent(pid)}/capabilities`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ crm_sync: true }),
-  });
-  if (!res.ok) {
-    setStatus($("crmMsg"), data.error || "授權失敗", "err");
+  const pid = selectedProductId;
+  if (!pid) {
+    setStatus($("crmMsg"), "請先選單一站台再授權", "err");
     return;
   }
-  await Promise.all([refreshProducts(), refreshCrm()]);
-  setStatus($("crmMsg"), `已允許 ${pid} 的 CRM 同步（與回饋複製分開）`, "ok");
+  showConfirm({
+    title: "確認允許 CRM 同步",
+    body: `允許「${pid}」把 CRM 欄位同步到 OPS？這與回饋複製分開，不會自動包含會員名單或行銷用途。`,
+    confirmLabel: "確定允許",
+    danger: false,
+    onConfirm: () => setProductCapability(pid, { crm_sync: true }),
+  });
 });
 $("crmRefresh")?.addEventListener("click", refreshCrm);
 $("crmModuleToggle")?.addEventListener("click", async () => {

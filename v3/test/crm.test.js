@@ -115,6 +115,8 @@ test("admin.html has CRM panel and close-is-not-drop copy", () => {
   assert.match(html, /min-width: 560px/);
   assert.match(html, /data-fb-crm/);
   assert.match(html, /\/api\/admin\/crm\/from-feedback\//);
+  assert.match(html, /data-crm-focus/);
+  assert.doesNotMatch(html, /href="#crmName"/);
 });
 
 test("CRM outbox only fills when delivery is effective", () => {

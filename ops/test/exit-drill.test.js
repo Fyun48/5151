@@ -5,6 +5,7 @@ import { makeAuth } from "../src/auth.js";
 import { createApp } from "../src/server.js";
 import { ingestFeedback } from "../src/ingest.js";
 import { createProduct } from "../src/products.js";
+import { exportHandoff, pendingForHandoff } from "../src/exitDrill.js";
 
 const AUTH = { ownerEmail: "owner@example.com", ownerPassword: "pw", sessionSecret: "s" };
 
@@ -108,4 +109,34 @@ test("purge replica redacts OPS copies and leaves the product card", async () =>
     const card = db.prepare("SELECT id FROM ops_product WHERE id='drill'").get();
     assert.ok(card);
   });
+});
+
+test("handoff pending omits unscoped coding tasks from other work", () => {
+  const filtered = pendingForHandoff({
+    items: [
+      { kind: "credential", id: 1 },
+      { kind: "coding", id: 2, unscoped: true, state: "pending" },
+      { kind: "release_notification", id: 3, unscoped: true, state: "pending" },
+    ],
+    blocking: [{ kind: "coding", id: 2, unscoped: true, state: "running" }],
+  });
+  assert.deepEqual(filtered.items.map((item) => item.kind), ["credential"]);
+  assert.equal(filtered.blocking.length, 0);
+  assert.equal(filtered.omitted_unscoped, 2);
+
+  const db = openOpsDb(":memory:");
+  createProduct(db, { id: "drill", displayName: "演練站" });
+  db.exec("PRAGMA foreign_keys = OFF");
+  db.prepare(`
+    INSERT INTO development_coding_task(
+      issue_id, development_authorization_id, proposal_id, proposal_version,
+      proposal_hash, task_fingerprint, base_branch, base_sha, status,
+      next_attempt_at, created_at
+    ) VALUES (1, 1, 1, 1, 'hash', 'fp-handoff-unscoped', 'master', 'deadbeef', 'pending', 't', 't')
+  `).run();
+  const pack = exportHandoff(db, "drill", { actor: "test" });
+  assert.equal(pack.payload.pending.items.some((item) => item.kind === "coding"), false);
+  assert.equal(pack.payload.pending.items.every((item) => !item.unscoped), true);
+  assert.ok(pack.payload.pending.omitted_unscoped >= 1);
+  db.close();
 });

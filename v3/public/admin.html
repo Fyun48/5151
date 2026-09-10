@@ -1003,7 +1003,7 @@
       <div id="crm" class="admin-panel" data-admin-panel="crm">
 <section class="card">
       <h2>站內 CRM</h2>
-      <p class="hint">聯絡人、案件、備註、指派、標籤與待辦寫在本站。客戶不一定有會員帳號。關閉模組只停新處理，資料保留。回饋授權不含這份名單。</p>
+      <p class="hint">聯絡人、案件、備註、標籤與待辦寫在本站。客戶不一定有會員帳號。關閉模組只停新處理，資料保留。回饋授權不含這份名單。</p>
       <p class="msg" id="crmModuleBanner" role="status"></p>
       <div class="row" style="gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
         <button type="button" class="ghost" id="crmModuleToggle">關閉 CRM</button>
@@ -2592,9 +2592,15 @@
         return;
       }
       box.hidden = false;
-      box.innerHTML = `<strong id="crmErrorTitle">請先修正</strong><ul>${items.map((item) => `<li><a href="#${item.id}">${escapeHtml(item.text)}</a></li>`).join("")}</ul>`;
+      box.innerHTML = `<strong id="crmErrorTitle">請先修正</strong><ul>${items.map((item) => `<li><a href="#crm" data-crm-focus="${item.id}">${escapeHtml(item.text)}</a></li>`).join("")}</ul>`;
       box.focus();
     }
+    $("crmErrorSummary")?.addEventListener("click", (ev) => {
+      const link = ev.target.closest("[data-crm-focus]");
+      if (!link) return;
+      ev.preventDefault();
+      $(link.getAttribute("data-crm-focus"))?.focus();
+    });
     function renderCrmBanner() {
       const banner = $("crmModuleBanner");
       const toggle = $("crmModuleToggle");
@@ -2666,7 +2672,7 @@
           <p><strong>案件</strong></p>
           ${(snap.cases || []).length ? `<ul>${snap.cases.map((row) => `<li>${escapeHtml(row.title)} · ${escapeHtml(crmHandlingLabel(row.handling_state))}${row.feedback_id ? ` · 回饋 #${row.feedback_id}` : ""}</li>`).join("")}</ul>` : `<p class="hint">還沒有案件。</p>`}
           ${writable ? `<form id="crmCaseForm" class="row" style="flex-wrap:wrap;gap:8px" novalidate>
-            <label>案件標題 <input name="title" maxlength="80" /></label>
+            <label>案件標題 <input id="crmCaseTitle" name="title" maxlength="80" /></label>
             <label>回饋編號 <input name="feedback_id" placeholder="可空" inputmode="numeric" /></label>
             <label>處理進度 <select name="handling_state">${handlingOpts}</select></label>
             <button type="submit" class="ghost">新增案件</button>
@@ -2674,13 +2680,13 @@
           <p><strong>備註</strong></p>
           ${(snap.notes || []).length ? `<ul>${snap.notes.map((row) => `<li>${escapeHtml(row.body)}</li>`).join("")}</ul>` : `<p class="hint">還沒有備註。</p>`}
           ${writable ? `<form id="crmNoteForm" class="row" style="flex-wrap:wrap;gap:8px" novalidate>
-            <label style="flex:1;min-width:180px">備註 <input name="body" maxlength="2000" /></label>
+            <label style="flex:1;min-width:180px">備註 <input id="crmNoteBody" name="body" maxlength="2000" /></label>
             <button type="submit" class="ghost">新增備註</button>
           </form>` : ""}
           <p><strong>待辦</strong></p>
           ${(snap.todos || []).length ? `<ul>${snap.todos.map((row) => `<li>${escapeHtml(row.title)}${row.done_at ? "（完成）" : ""} ${writable ? `<button type="button" class="ghost" data-crm-todo="${row.id}" data-done="${row.done_at ? "0" : "1"}">${row.done_at ? "標成未完成" : "完成"}</button>` : ""}</li>`).join("")}</ul>` : `<p class="hint">還沒有待辦。</p>`}
           ${writable ? `<form id="crmTodoForm" class="row" style="flex-wrap:wrap;gap:8px" novalidate>
-            <label>待辦 <input name="title" maxlength="200" /></label>
+            <label>待辦 <input id="crmTodoTitle" name="title" maxlength="200" /></label>
             <button type="submit" class="ghost">新增待辦</button>
           </form>` : ""}
         </div>
@@ -2688,7 +2694,8 @@
       $("crmCaseForm")?.addEventListener("submit", async (ev) => {
         ev.preventDefault();
         const fd = new FormData(ev.target);
-        if (!String(fd.get("title") || "").trim()) { setMsg("crmMsg", "請填案件標題"); return; }
+        if (!String(fd.get("title") || "").trim()) { showCrmErrors([{ id: "crmCaseTitle", text: "請填案件標題" }]); return; }
+        showCrmErrors([]);
         const res = await fetch(`/api/admin/crm/contacts/${c.id}/cases`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -2703,7 +2710,8 @@
       $("crmNoteForm")?.addEventListener("submit", async (ev) => {
         ev.preventDefault();
         const fd = new FormData(ev.target);
-        if (!String(fd.get("body") || "").trim()) { setMsg("crmMsg", "請填備註"); return; }
+        if (!String(fd.get("body") || "").trim()) { showCrmErrors([{ id: "crmNoteBody", text: "請填備註" }]); return; }
+        showCrmErrors([]);
         const res = await fetch(`/api/admin/crm/contacts/${c.id}/notes`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -2718,7 +2726,8 @@
       $("crmTodoForm")?.addEventListener("submit", async (ev) => {
         ev.preventDefault();
         const fd = new FormData(ev.target);
-        if (!String(fd.get("title") || "").trim()) { setMsg("crmMsg", "請填待辦"); return; }
+        if (!String(fd.get("title") || "").trim()) { showCrmErrors([{ id: "crmTodoTitle", text: "請填待辦" }]); return; }
+        showCrmErrors([]);
         const res = await fetch(`/api/admin/crm/contacts/${c.id}/todos`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },

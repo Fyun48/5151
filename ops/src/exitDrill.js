@@ -224,10 +224,21 @@ export function beginUnsubscribeExit(db, productId, { actor = "owner", now = new
   };
 }
 
+export function pendingForHandoff(pendingAll) {
+  const items = (pendingAll?.items || []).filter((it) => !it.unscoped);
+  const blocking = (pendingAll?.blocking || []).filter((it) => !it.unscoped);
+  return {
+    items,
+    blocking,
+    site_delivery_unconfirmed: true,
+    omitted_unscoped: (pendingAll?.items || []).filter((it) => it.unscoped).length,
+  };
+}
+
 export function exportHandoff(db, productId, { actor = "owner", now = new Date() } = {}) {
   const product = getProduct(db, productId);
   if (!product) throw httpError("not found", 404);
-  const pending = listPendingWork(db, product.id);
+  const pending = pendingForHandoff(listPendingWork(db, product.id));
   const crmContacts = tableExists(db, "ingested_crm_contact") ? listCrmHandoff(db, product.id) : [];
   const feedback = db.prepare(`
     SELECT id, product_id, kind, content, app_version, received_at, submitted_at, source
