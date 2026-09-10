@@ -11,7 +11,7 @@
 
 - **v3**：埠 `5153`，程式在 `v3/src`、`v3/public`，資料 `data-v3/v3.db`。
 - **公開站**：`https://c5151.reversalplay.me`（Cloudflare Tunnel → `http://127.0.0.1:5153`）。
-- **OPS Console**：`https://jibbyrentops.reversalplay.me`（同一條 Tunnel → `http://127.0.0.1:5154`，獨立容器 `5151-ops`）。規劃見 `ops/PLAN.md`。
+- **OPS Console**：`https://jibbyrentops.reversalplay.me`（同一條 Tunnel → `http://127.0.0.1:5154`，獨立容器 `5151-ops`）。規劃見 `ops/BLUEPRINT.md`。
 - 規劃見 `v3/ARCHITECTURE.md` 與 `v3/DESIGN.md`；外掛／熔斷見 `v3/PLAN-integrations.md`。
 - **v1 已停用**（root 的 `src/`、`public/` 只留作歷史，只讀匯入）；**v2 只維護、不再加功能**。
 
