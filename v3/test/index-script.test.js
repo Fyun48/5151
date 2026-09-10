@@ -706,6 +706,10 @@ test("self listing form and in-site detail stay on this site", () => {
   assert.doesNotMatch(html, /data-confirm-match/);
   assert.doesNotMatch(html, />是同一間</);
   assert.match(html, /不是同一間/);
+  assert.match(html, /併入同房源/);
+  assert.match(html, /function mergeSelectedListings/);
+  assert.match(html, /確認下架中/);
+  assert.match(html, /listing-status off-sure/);
   assert.match(html, /先只從你的列表拆開/);
   assert.match(html, /function sameHouseOf\(/);
   assert.doesNotMatch(html, /function sameHouseCompareHtml\(/);

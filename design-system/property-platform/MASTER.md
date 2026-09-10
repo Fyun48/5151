@@ -65,6 +65,7 @@ CasaOS 只同步 `v3/src` 與 `v3/public`。前端是 Express 靜態頁，**不�
 | `--tag-strong-bg` / `--tag-strong-fg` | ink / paper | 確定隱藏 |
 | `--hermes` | `#E65326` | 贊助／例外，少用 |
 | `--shezi-red` | `#DC2626` | 例外標記 |
+| `--notify-new` / `--notify-relist` / `--notify-fee` / `--offline-sure` | 淺藍／淺綠／粉紅／紅 | 全新、重刊、費用變更、確認已下架 |
 | `--radius` / `--radius-lg` | `8px` / `10px` | 控制項／卡片 |
 | `--shadow` | `none` | 不要再加玻璃陰影 |
 | `--text-xs` … `--text-price` | 12 / 13 / 14 / 16 / 20px | 輔助／正文／租金 |

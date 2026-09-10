@@ -65,6 +65,7 @@ import { fetchRoadRoutes, fetchRoadRouteTable, fetchRushRoadRoutes } from "./rou
 import { fetchMrtAccess } from "./mrt.js";
 import { googleDirectionsAllowed } from "./mapsBilling.js";
 import { bestMatch } from "./match.js";
+import { collapseSameHouseNotifyEvents } from "./userSameHouse.js";
 import { classifyExistingUpdate, eventLabel, listingLastEvent, notify, shouldDockNotify, shouldMailNotify, shouldNotify, shouldPushNotify, shouldWebhookNotify } from "./notify.js";
 import { feeChangeDetail, feeFieldsChanged, incomingHasFeePayload, isCostChangeType } from "./listingCompare.js";
 import { rentAmount } from "./listingCost.js";
@@ -344,7 +345,9 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
   const userIds = new Set([...dockByUser.keys(), ...hookByUser.keys(), ...mailByUser.keys(), ...pushByUser.keys()]);
   for (const userId of userIds) {
     const dock = dockByUser.get(userId) || [];
-    const hook = hookByUser.get(userId) || [];
+    const hook = collapseSameHouseNotifyEvents(hookByUser.get(userId) || [], (event) => (
+      Number(event?.same_house_primary_id) || Number(event?.post_id) || 0
+    ));
     const mail = mailByUser.get(userId) || [];
     const push = pushByUser.get(userId) || [];
     const mailBundle = userId ? getMemberMailBundle(userId) : { smtp: null, templates: getMailTemplates() };

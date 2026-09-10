@@ -19,6 +19,15 @@ import {
 import { sameSearch } from "./client591.js";
 import { CITIES, districtNameFromListing, districtsFromSearchUrls, lookupDistrict, normalizeWatchDistricts } from "./regions.js";
 import { matchFocusHints, preferPrimaryListing } from "./match.js";
+import {
+  ensureUserSameHouseSchema,
+  loadPersonalSameHouseIds,
+  mergePersonalSameHouse,
+  normalizeMergeIds,
+  personalGroupAgrees,
+  personalGroupKeyFor,
+  splitPersonalSameHouse,
+} from "./userSameHouse.js";
 import { canAddWatch, countWatched } from "./watchLimits.js";
 import {
   alreadyNotifiedGroup,
@@ -629,6 +638,7 @@ try {
   // older fixtures
 }
 ensurePersonalSchema(db);
+ensureUserSameHouseSchema(db);
 ensureListingGroupSchema(db);
 ensureSearchProfileSchema(db);
 ensureGeoCacheSchema(db);
@@ -1963,10 +1973,11 @@ function decorateSameHousePeer(raw) {
   };
 }
 
-function loadSameHousePeers(row) {
+function loadSameHousePeers(row, userId) {
   const selfId = Number(row?.post_id) || 0;
   if (!selfId) return [];
   const seed = new Set([selfId, Number(row.match_post_id) || 0].filter(Boolean));
+  for (const id of loadPersonalSameHouseIds(db, userId, selfId)) seed.add(id);
   const found = new Map();
   for (let hop = 0; hop < 2 && seed.size; hop += 1) {
     const ids = [...seed];
@@ -2071,6 +2082,11 @@ function attachSameHouseRoles(rows, voteUserId) {
     if (String(row.match_verdict || "") === "no") continue;
     const mid = Number(row.match_post_id) || 0;
     if (mid && !byId.has(mid)) missing.add(mid);
+    if (voteUserId) {
+      for (const pid of loadPersonalSameHouseIds(db, voteUserId, row.post_id)) {
+        if (!byId.has(pid)) missing.add(pid);
+      }
+    }
   }
   const extras = new Map();
   if (missing.size) {
@@ -2108,6 +2124,39 @@ function attachSameHouseRoles(rows, voteUserId) {
     assignRole(row);
     assignRole(byId.get(mid));
   }
+  if (voteUserId) {
+    const grouped = new Map();
+    for (const row of list) {
+      const key = personalGroupKeyFor(db, voteUserId, row.post_id);
+      if (!key) continue;
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key).push(row);
+    }
+    for (const members of grouped.values()) {
+      const pool = [];
+      const seen = new Set();
+      const add = (item) => {
+        const id = Number(item?.post_id) || 0;
+        if (!id || seen.has(id) || item.same_house_split) return;
+        seen.add(id);
+        pool.push(item);
+      };
+      for (const row of members) {
+        add(row);
+        for (const pid of loadPersonalSameHouseIds(db, voteUserId, row.post_id)) add(resolve(pid));
+      }
+      if (pool.length < 2) continue;
+      const primary = pool.reduce((best, item) => preferPrimaryListing(best, item), pool[0]);
+      const primaryId = Number(primary.post_id);
+      const primaryOffline = Number(primary.offline) === 1;
+      for (const target of pool) {
+        target.same_house_role = Number(target.post_id) === primaryId ? "primary" : "affiliate";
+        target.same_house_primary_id = primaryId;
+        target.same_house_primary_offline = primaryOffline;
+        target.same_house_personal = true;
+      }
+    }
+  }
   return list;
 }
 
@@ -2115,7 +2164,7 @@ function attachListingPeers(row, settings, voteUserId) {
   if (!row) return row;
   const splits = loadUserSplitPairSet(voteUserId);
   const selfId = Number(row.post_id) || 0;
-  const sameHousePeers = loadSameHousePeers(row).filter((peer) => (
+  const sameHousePeers = loadSameHousePeers(row, voteUserId).filter((peer) => (
     peer.match_verdict !== "no" && !splits.has(votePairKey(selfId, peer.post_id))
   ));
   const matchPostId = Number(row.match_post_id) || 0;
@@ -2134,6 +2183,11 @@ function attachListingPeers(row, settings, voteUserId) {
   const same_house = (row.match_verdict === "no" || Number(row.match_rejected) === 1 || splitFromMatch)
     ? null
     : sameHouseBundle(decoratedSelf, sameHousePeers);
+  if (same_house && voteUserId && personalGroupKeyFor(db, voteUserId, selfId)) {
+    same_house.personal_only = true;
+    same_house.system_agrees = personalGroupAgrees(db, voteUserId, selfId);
+    if (!same_house.system_agrees) same_house.status = "personal";
+  }
   return { ...row, match_peer: matchPeer || null, same_house };
 }
 
@@ -2335,6 +2389,7 @@ export function rejectSuspectedMatch(postId, userId, { peerId } = {}) {
       created_at: now,
       notified: 1,
     });
+    try { splitPersonalSameHouse(db, uid, postId, otherId); } catch { /* 個人併入表可能尚未建立 */ }
   }
 
   const peer = db.prepare("SELECT match_level FROM listings WHERE post_id = ?").get(otherId);
@@ -2361,39 +2416,27 @@ export function rejectSuspectedMatch(postId, userId, { peerId } = {}) {
   };
 }
 
+export function mergeSameHouseForUser(userId, postIds) {
+  const ids = normalizeMergeIds(postIds);
+  const listings = ids
+    .map((id) => db.prepare("SELECT * FROM listings WHERE post_id = ?").get(id))
+    .filter(Boolean);
+  const result = mergePersonalSameHouse(db, userId, listings);
+  if (!result.ok) return result;
+  return {
+    ...result,
+    listing: getListing(ids[0], userId),
+  };
+}
+
+/** 舊 API 改走個人併入，不再寫全站 match_verdict，避免把使用者判斷分享出去。 */
 export function confirmSuspectedMatch(postId, userId) {
-  const listing = getListing(postId, userId);
-  if (!listing?.match_post_id) return null;
-  const peer = getListing(listing.match_post_id, userId);
-  if (!peer) return null;
-  const primary = preferPrimaryListing(listing, peer);
-  const duplicate = Number(primary.post_id) === Number(listing.post_id) ? peer : listing;
-  const now = new Date().toISOString();
-  db.exec("BEGIN");
-  try {
-    db.prepare(
-      `UPDATE listings
-       SET match_verdict = 'yes', match_rejected = 0, hidden = 1,
-           match_post_id = ?, hidden_at = COALESCE(hidden_at, ?)
-       WHERE post_id = ?`,
-    ).run(primary.post_id, now, duplicate.post_id);
-    db.prepare(
-      `UPDATE listings
-       SET match_verdict = '', match_rejected = 0, hidden = 0, match_level = NULL,
-           match_detail = ?, match_post_id = ?
-       WHERE post_id = ?`,
-    ).run(
-      `已確認同一間，主卡留較低總月費，隱藏 #${duplicate.post_id}；較貴的可從同屋源按鈕展開`,
-      duplicate.post_id,
-      primary.post_id,
-    );
-    mergeFlagsOnConfirmOn(db, primary.post_id, duplicate.post_id);
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
-  return getListing(postId, userId);
+  const listing = db.prepare("SELECT * FROM listings WHERE post_id = ?").get(postId);
+  if (!listing) return null;
+  const peerId = Number(listing.match_post_id) || 0;
+  if (!peerId) return null;
+  const result = mergeSameHouseForUser(userId, [postId, peerId]);
+  return result?.ok ? result.listing : null;
 }
 
 export function coveringJobsFromAllUsers(opts = {}) {
@@ -3817,6 +3860,10 @@ export function eventPayloadFromListing(event, listing) {
     tags: row.tags || event.tags,
     source: row.source || event.source || "591",
     source_label: selfSourceLabel(row.source || event.source || "591"),
+    offline: row.offline,
+    offline_confirmed: row.offline_confirmed,
+    same_house_primary_id: row.same_house_primary_id || row.same_house?.primary_id || 0,
+    same_house_role: row.same_house_role || "",
     cover: row.cover,
     commute_km: row.commute_km,
     commute_mode: row.commute_mode,

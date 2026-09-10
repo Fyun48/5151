@@ -29,6 +29,13 @@
   --hermes-deep: #C2410C;
   --hermes-light: #F47A2A;
   --shezi-red: #DC2626;
+  --notify-new: #7dd3fc;
+  --notify-new-fg: #075985;
+  --notify-relist: #86efac;
+  --notify-relist-fg: #166534;
+  --notify-fee: #f9a8d4;
+  --notify-fee-fg: #9d174d;
+  --offline-sure: #dc2626;
   --radius: 8px;
   --radius-lg: 10px;
   --shadow: none;

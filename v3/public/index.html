@@ -206,6 +206,7 @@
     body.compare-open #expandPanelBtn,
     body.compare-open #ownerFab,
     body.compare-open .mobile-help-dock,
+    body.compare-open #mergeDock,
     body.guest-toast-open #scrollTopBtn,
     body.guest-toast-open #expandPanelBtn,
     body.guest-toast-open .mobile-help-dock { visibility: hidden; pointer-events: none; }
@@ -738,6 +739,41 @@
       padding: 8px 0 0;
     }
     .bulk-bar.on { display: flex; }
+    .listing-status.off-sure { color: var(--offline-sure, #dc2626); font-weight: 700; }
+    .listing-status.off { color: var(--muted); }
+    .listing-status.relist { color: var(--notify-relist-fg, #166534); }
+    .listing-status.new { color: var(--notify-new-fg, #075985); }
+    .item.drag-source { opacity: 0.55; }
+    .item.drag-over { box-shadow: 0 0 0 2px var(--accent); }
+    .merge-drag-ghost {
+      position: fixed;
+      z-index: 160;
+      pointer-events: none;
+      max-width: min(420px, 86vw);
+      padding: 10px 12px;
+      background: var(--paper);
+      border: 1px solid var(--accent);
+      border-radius: var(--radius-lg);
+      font-size: var(--text-sm);
+      color: var(--ink);
+    }
+    #mergeDock {
+      display: none;
+      position: fixed;
+      left: 50%;
+      transform: translateX(-50%);
+      bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+      z-index: 95;
+      gap: 8px;
+      align-items: center;
+      padding: 8px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+    }
+    body.merge-selecting #mergeDock,
+    #mergeDock.on { display: flex; }
+    #mergeDock button { min-height: var(--touch); }
     .bulk-bar .compare-hint {
       width: 100%;
       margin: 0;
@@ -1117,7 +1153,7 @@
     .cost-change-note {
       margin: 6px 0 0;
       font-size: var(--text-xs, 12px);
-      color: var(--same);
+      color: var(--notify-fee-fg, #9d174d);
       font-weight: 700;
       line-height: 1.45;
       font-variant-numeric: tabular-nums;
@@ -1269,7 +1305,8 @@
       min-height: var(--touch, 44px);
       margin-top: 2px;
     }
-    .tag.new { background: var(--accent-mist); color: var(--accent-deep); }
+    .tag.new { background: #e0f2fe; color: var(--notify-new-fg, #075985); }
+    .tag.relist { background: #dcfce7; color: var(--notify-relist-fg, #166534); }
     .tag.same { background: var(--same-soft); color: var(--same); }
     .tag.watch { background: var(--rose-soft); color: var(--watch); }
     .watch-note-label { margin: 8px 0 4px; font-size: 12px; color: var(--rose-deep); font-weight: 700; }
@@ -1309,7 +1346,7 @@
     }
     .tag.lift { background: var(--tag-on-bg); color: var(--tag-on-fg); }
     .tag.off { background: var(--tag-off-bg); color: var(--tag-off-fg); }
-    .tag.off-sure { background: var(--tag-strong-bg); color: var(--tag-strong-fg); }
+    .tag.off-sure { background: #fee2e2; color: var(--offline-sure, #dc2626); }
     .tag.verdict-yes { background: var(--tag-strong-bg); color: var(--tag-strong-fg); font-weight: 700; }
     .tag.verdict-no { background: var(--tag-on-bg); color: var(--tag-on-fg); font-weight: 700; }
     .tag.self-src { background: var(--accent-mist); color: var(--accent-deep); font-weight: 800; }
@@ -2564,6 +2601,7 @@
         padding: 12px;
       }
       .item .pick-hit { display: none !important; }
+      body.merge-selecting .item .pick-hit { display: inline-flex !important; }
       .item-copy { display: contents; }
       .item-main { grid-column: 2; grid-row: 1; min-width: 0; }
       .item-details,
@@ -3015,6 +3053,7 @@
             <button type="button" class="ghost" id="clearSelectBtn">取消勾選</button>
             <button type="button" class="ghost" id="compareSelectedBtn" disabled>比較（0／3）</button>
             <button type="button" class="primary" id="hideSelectedBtn">不再顯示已選</button>
+            <button type="button" class="primary" id="mergeSelectedBtn" hidden>併入同房源</button>
             <p class="compare-hint" id="compareHint" hidden>自選 2～3 筆比較（可跨屋源），只列有差異的欄。</p>
           </div>
         </div>
@@ -3806,6 +3845,10 @@
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
   </button>
+  <div id="mergeDock" role="toolbar" aria-label="併入同房源" hidden>
+    <button type="button" class="ghost" id="mergeCancelBtn">取消</button>
+    <button type="button" class="primary" id="mergeConfirmBtn" hidden>併入同房源</button>
+  </div>
   <button type="button" class="primary" id="ownerFab" hidden>我刊登的房子</button>
   <!-- 手機版：捲動後仍能就地開 Q&A／意見（低干擾、左下角、避開右下的回頂與刊登 FAB）。開啟後保留目前頁面位置。 -->
   <div class="mobile-help-dock" id="mobileHelpDock" aria-label="求助與意見">
@@ -4004,6 +4047,10 @@
     const DEFAULT_COMMUTE_KM = 25;
     let settings = {};
     let selected = new Set();
+    let mergeSelectMode = false;
+    let mergePressTimer = 0;
+    let mergeDrag = null;
+    let mergeLastTap = { id: "", at: 0 };
     let excludeBoxes = [];
     let map, drawing = false, startLatLng = null, previewRect = null, boxLayers = [];
     let editingIdx = null;
@@ -4631,8 +4678,16 @@
     }
     function listingStatusLabel(item) {
       if (Number(item?.offline_confirmed) === 1 || item?.offline_confirmed === true) return "確認已下架";
-      if (Number(item?.offline) === 1 || item?.offline === true || item?.last_event === "offline") return "下架確認中";
+      if (Number(item?.offline) === 1 || item?.offline === true || item?.last_event === "offline") return "確認下架中";
+      if (item?.last_event === "relist" || (item?.last_event === "same_source" && item?.offline === 0)) return "重新上架";
       return "刊登中";
+    }
+    function listingStatusClass(item) {
+      if (Number(item?.offline_confirmed) === 1 || item?.offline_confirmed === true) return "off-sure";
+      if (Number(item?.offline) === 1 || item?.offline === true || item?.last_event === "offline") return "off";
+      if (item?.last_event === "relist") return "relist";
+      if (item?.last_event === "new") return "new";
+      return "";
     }
     function rentStatusLine(item) {
       const rent = parseClientRent(item);
@@ -4643,7 +4698,11 @@
         ? `租金 ${rent.toLocaleString("zh-TW")} 元/月`
         : `租金 ${item.price || ""} ${item.price_unit || "元/月"}`.trim());
       if (extra > 0 && total > 0) bits.push(`總月費 ${total.toLocaleString("zh-TW")} 元/月`);
-      bits.push(`狀態：${listingStatusLabel(item)}`);
+      const status = listingStatusLabel(item);
+      const cls = listingStatusClass(item);
+      bits.push(cls
+        ? `狀態：<span class="listing-status ${cls}">${esc(status)}</span>`
+        : `狀態：${esc(status)}`);
       return bits.join(" · ");
     }
     function feeTextClient(item) {
@@ -5802,11 +5861,14 @@
 
     function sameHouseWarn(item) {
       const house = sameHouseOf(item);
-      if (!house?.cheaper_exists) return "";
+      const personalNote = house?.personal_only && house.system_agrees === false
+        ? `<div class="same-house-warn">系統判定不是同屋源。已依你的操作併入，此記錄只留在你的帳號，不會分享給其他使用者。</div>`
+        : "";
+      if (!house?.cheaper_exists) return personalNote;
       const primary = house.peers.find((peer) => peer.role === "primary") || house.peers[0];
       const total = Number(primary?.total) || 0;
       const src = primary?.source_label || "";
-      return `<div class="same-house-warn">同屋源另有較低總月費${total ? ` ${total.toLocaleString("zh-TW")}` : ""}${src ? `（${esc(src)}）` : ""} · 這則貴 ${Number(house.cheaper_gap).toLocaleString("zh-TW")} 元，先別打這則</div>`;
+      return `${personalNote}<div class="same-house-warn">同屋源另有較低總月費${total ? ` ${total.toLocaleString("zh-TW")}` : ""}${src ? `（${esc(src)}）` : ""} · 這則貴 ${Number(house.cheaper_gap).toLocaleString("zh-TW")} 元，先別打這則</div>`;
     }
 
     function sameHousePeerRole(item, peer, idx) {
@@ -5933,9 +5995,9 @@
       if (!item.offline) return "";
       const day = item.offline_at ? String(item.offline_at).slice(0, 10) : "";
       if (item.offline_confirmed) {
-        return ` · 確認已下架${day ? `（自 ${esc(day)} 起找不到）` : ""}`;
+        return ` · <span class="listing-status off-sure">確認已下架</span>${day ? `（自 ${esc(day)} 起找不到）` : ""}`;
       }
-      return ` · 下架確認中${day ? `（${esc(day)} 起）` : ""}`;
+      return ` · 確認下架中${day ? `（${esc(day)} 起）` : ""}`;
     }
 
     function tags(item) {
@@ -5944,13 +6006,14 @@
         bits.push(`<span class="tag fit" title="依你的租金、樓層與通勤估算，不是成交預測">${esc(item.fit_label)} ${esc(item.fit_score)}</span>`);
       }
       if (item.last_event === "new") bits.push('<span class="tag new">全新物件</span>');
+      if (item.last_event === "relist") bits.push('<span class="tag relist">重新上架</span>');
       if (item.last_event === "same_source" && !item.match_level && !item.same_house) bits.push('<span class="tag same">同屋源更新</span>');
       if (sameHouseOf(item)) bits.push(sameHouseTag(item));
       else if (item.match_verdict === "yes") bits.push('<span class="tag verdict-yes">已確認：同一間</span>');
       if (item.match_verdict === "no") bits.push('<span class="tag verdict-no">已確認：不同物件</span>');
       if (item.last_event === "update" && !item.cost_change) bits.push('<span class="tag same">內容更新</span>');
       if (item.offline_confirmed) bits.push('<span class="tag off-sure">確認已下架</span>');
-      else if (item.offline || item.last_event === "offline") bits.push('<span class="tag off">正在確認中的下架</span>');
+      else if (item.offline || item.last_event === "offline") bits.push('<span class="tag off">確認下架中</span>');
       if (item.has_elevator) bits.push('<span class="tag lift">有電梯</span>');
       if (item.watched) bits.push('<span class="tag watch">特別關注</span>');
       if (item.viewed) bits.push('<span class="tag viewed">已瀏覽</span>');
@@ -6005,12 +6068,112 @@
       return `<div class="contact${deferContact ? " contact-defer" : ""}">${bits.join("")}</div>`;
     }
 
+    function isCoarsePointer() {
+      return window.matchMedia("(pointer: coarse), (max-width: 767px)").matches;
+    }
+    function paintMergeDock() {
+      const dock = $("mergeDock");
+      if (!dock) return;
+      const n = selected.size;
+      const show = mergeSelectMode && n >= 1;
+      dock.hidden = !show;
+      dock.classList.toggle("on", show);
+      document.body.classList.toggle("merge-selecting", mergeSelectMode);
+      const confirm = $("mergeConfirmBtn");
+      if (confirm) confirm.hidden = n < 2;
+    }
+    function exitMergeSelect() {
+      mergeSelectMode = false;
+      selected.clear();
+      document.querySelectorAll("[data-pick]").forEach((el) => {
+        el.checked = false;
+        el.closest(".item")?.classList.remove("picked");
+      });
+      updateBulkBar();
+    }
+    async function mergeSelectedListings(ids) {
+      const postIds = (ids || [...selected]).map((id) => Number(id)).filter(Boolean);
+      if (postIds.length < 2) {
+        $("status").textContent = "請至少選 2 筆才能併入同房源";
+        return;
+      }
+      if (isGuest) {
+        remindGuest();
+        return;
+      }
+      $("status").textContent = "正在併入同房源…";
+      try {
+        const res = await fetch("/api/listings/merge-same-house", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids: postIds }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "併入失敗");
+        exitMergeSelect();
+        $("status").textContent = data.message || "已併入同房源";
+        await loadList();
+      } catch (error) {
+        $("status").textContent = error.message;
+      }
+    }
+    function mergeInteractiveTarget(el) {
+      return Boolean(el?.closest?.("a, button, input, label, textarea, select, .pick-hit, .actions, .contact, .same-house-panel"));
+    }
+    function cardIdFromPoint(x, y) {
+      const node = document.elementFromPoint(x, y);
+      return node?.closest?.("[data-card]")?.dataset?.card || "";
+    }
+    function clearMergeDrag() {
+      if (mergePressTimer) {
+        clearTimeout(mergePressTimer);
+        mergePressTimer = 0;
+      }
+      document.querySelectorAll(".item.drag-source, .item.drag-over").forEach((el) => {
+        el.classList.remove("drag-source", "drag-over");
+      });
+      document.querySelector(".merge-drag-ghost")?.remove();
+      mergeDrag = null;
+    }
+    function mergeAutoScroll(clientY) {
+      const viewH = window.innerHeight || 1;
+      let delta = 0;
+      if (clientY < 0) delta = -Math.min(48, 8 + Math.abs(clientY) * 0.2);
+      else if (clientY > viewH) delta = Math.min(48, 8 + (clientY - viewH) * 0.2);
+      else if (clientY < 72) delta = -((72 - clientY) / 72) * 28;
+      else if (clientY > viewH - 72) delta = ((clientY - (viewH - 72)) / 72) * 28;
+      if (delta) window.scrollBy(0, delta);
+    }
+    function startMergeDrag(card, ev) {
+      const id = card?.dataset?.card;
+      if (!id) return;
+      mergeDrag = { id, ghost: document.createElement("div") };
+      mergeDrag.ghost.className = "merge-drag-ghost";
+      mergeDrag.ghost.textContent = card.querySelector(".item-title")?.innerText || "併入同房源";
+      document.body.appendChild(mergeDrag.ghost);
+      card.classList.add("drag-source");
+      moveMergeDrag(ev.clientX, ev.clientY);
+    }
+    function moveMergeDrag(x, y) {
+      if (!mergeDrag?.ghost) return;
+      mergeDrag.ghost.style.left = `${x + 12}px`;
+      mergeDrag.ghost.style.top = `${y + 12}px`;
+      document.querySelectorAll(".item.drag-over").forEach((el) => el.classList.remove("drag-over"));
+      const overId = cardIdFromPoint(x, y);
+      if (overId && overId !== mergeDrag.id) {
+        document.querySelector(`[data-card="${overId}"]`)?.classList.add("drag-over");
+      }
+      mergeAutoScroll(y);
+    }
     function updateBulkBar() {
       const n = selected.size;
       $("bulkBar").classList.toggle("on", n > 0);
       $("selectedCount").textContent = `已選 ${n} 筆`;
       const compareBtn = $("compareSelectedBtn");
       const hint = $("compareHint");
+      const mergeBtn = $("mergeSelectedBtn");
+      if (mergeBtn) mergeBtn.hidden = n < 2;
+      paintMergeDock();
       if (compareBtn) {
         compareBtn.textContent = `比較（${n}／3）`;
         compareBtn.disabled = n < 2 || n > 3;
@@ -6252,7 +6415,7 @@
             ${costChangeLine(item)}
             ${sameHouseWarn(item)}
             ${sameHousePriceList(item)}
-            <div class="rent-price">${esc(rentStatusLine(item))}</div>
+            <div class="rent-price">${rentStatusLine(item)}</div>
             <div class="meta">
               ${listingSpecLine(item)}
               <br>${esc(item.address || "")}${commuteText(item)}${offlineLine(item)}
@@ -9449,6 +9612,56 @@
         $("hideSelectedBtn").disabled = false;
       }
     };
+    $("mergeSelectedBtn")?.addEventListener("click", () => mergeSelectedListings());
+    $("mergeConfirmBtn")?.addEventListener("click", () => mergeSelectedListings());
+    $("mergeCancelBtn")?.addEventListener("click", () => exitMergeSelect());
+    $("list")?.addEventListener("pointerdown", (ev) => {
+      const card = ev.target.closest?.("[data-card]");
+      if (!card || mergeInteractiveTarget(ev.target)) return;
+      const id = card.dataset.card;
+      if (isCoarsePointer()) {
+        const now = Date.now();
+        if (mergeLastTap.id === id && now - mergeLastTap.at < 380) {
+          ev.preventDefault();
+          mergeSelectMode = true;
+          selected.add(id);
+          card.classList.add("picked");
+          const box = card.querySelector("[data-pick]");
+          if (box) box.checked = true;
+          updateBulkBar();
+          mergeLastTap = { id: "", at: 0 };
+        } else {
+          mergeLastTap = { id, at: now };
+        }
+        return;
+      }
+      mergePressTimer = window.setTimeout(() => startMergeDrag(card, ev), 1000);
+    });
+    document.addEventListener("pointermove", (ev) => {
+      if (mergePressTimer && !mergeDrag) {
+        const card = ev.target.closest?.("[data-card]");
+        if (!card || Math.hypot(ev.movementX || 0, ev.movementY || 0) > 8) {
+          clearTimeout(mergePressTimer);
+          mergePressTimer = 0;
+        }
+      }
+      if (mergeDrag) {
+        ev.preventDefault();
+        moveMergeDrag(ev.clientX, ev.clientY);
+      }
+    }, { passive: false });
+    document.addEventListener("pointerup", (ev) => {
+      if (mergePressTimer) {
+        clearTimeout(mergePressTimer);
+        mergePressTimer = 0;
+      }
+      if (!mergeDrag) return;
+      const overId = cardIdFromPoint(ev.clientX, ev.clientY);
+      const fromId = mergeDrag.id;
+      clearMergeDrag();
+      if (overId && overId !== fromId) mergeSelectedListings([fromId, overId]);
+    });
+    document.addEventListener("pointercancel", () => clearMergeDrag());
     $("q").addEventListener("input", () => {
       clearTimeout(window.__q);
       window.__q = setTimeout(loadList, 250);
