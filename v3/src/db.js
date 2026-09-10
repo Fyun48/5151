@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { shouldKeepListing, passesAttributeFilters, passesDisplayFilters, listingHasElevator, matchesHousingKind, matchesListingSources, normalizeListQuery, housingTypeLabel, formatFloorDisplay } from "./floors.js";
-import { addressPrecision, isTrustedGeoSource, listingCommunityId, preferListingAddress, sqlTrustedGeoSource } from "./location.js";
+import { addressPrecision, isTrustedGeoSource, listingCommunityId, preferListingAddress, sourceCommunityLinked, sqlTrustedGeoSource } from "./location.js";
 import { makeRouteKey } from "./route.js";
 import {
   bindGoogleDirectionsEnabled,
@@ -606,6 +606,19 @@ try {
   db.exec("ALTER TABLE listings ADD COLUMN cost_change_type TEXT");
 } catch {
   // already migrated
+}
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN community_linked INTEGER NOT NULL DEFAULT 0");
+} catch {
+  // already migrated
+}
+try {
+  db.exec(`UPDATE listings SET community_linked = 1
+    WHERE IFNULL(community_linked, 0) = 0
+      AND community_id > 0
+      AND IFNULL(community_name, '') != ''`);
+} catch {
+  // optional backfill
 }
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_match_peer ON listings(match_post_id)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_list_scan ON listings(search_key, offline, match_verdict, hidden)");
@@ -2026,6 +2039,7 @@ function decorateListingLite(row, settings, userId) {
     commute_min_pm: Number.isFinite(Number(row.rush_pm_min)) && Number(row.rush_pm_min) > 0 ? Math.round(Number(row.rush_pm_min)) : null,
     district: districtNameFromListing(row),
     floor_display: formatFloorDisplay(row.floor_name),
+    community_linked: Number(row.community_linked) === 1 || Number(row.community_id) > 0,
     source,
     source_label: selfSourceLabel(source),
     mine: uid > 0 && listedBy === uid,
@@ -2538,6 +2552,10 @@ export function upsertListing(listing) {
       : JSON.stringify(listing.extra_fees || []);
   const communityId = Number(listing.community_id) || listingCommunityId(listing) || 0;
   const communityName = String(listing.community_name || "").trim();
+  const communityLinked = sourceCommunityLinked({
+    communityId,
+    hasAnchor: Number(listing.community_linked) === 1,
+  }) ? 1 : 0;
   const costChangedAt = String(listing.cost_changed_at || "").trim();
   const costChangeType = String(listing.cost_change_type || "").trim();
   const costChangeDetail = String(listing.cost_change_detail || "").trim();
@@ -2549,8 +2567,8 @@ export function upsertListing(listing) {
       price_contain_text, extra_fees, extra_fees_fetched, address, area_name,
       layout, floor_name, kind_name, role_name, cover, tags, refresh_time,
       first_seen_at, last_seen_at, last_event, viewed, watched, lat, lng,
-      community_id, community_name, cost_changed_at, cost_change_type, cost_change_detail
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?)
+      community_id, community_name, community_linked, cost_changed_at, cost_change_type, cost_change_detail
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(post_id) DO UPDATE SET
       source_key = excluded.source_key,
       search_key = excluded.search_key,
@@ -2567,8 +2585,6 @@ export function upsertListing(listing) {
         ELSE excluded.extra_fees
       END,
       address = CASE
-        WHEN IFNULL(listings.geo_source, '') = 'community' AND IFNULL(listings.address, '') != ''
-        THEN listings.address
         WHEN IFNULL(excluded.address, '') != '' THEN excluded.address
         ELSE listings.address
       END,
@@ -2604,6 +2620,10 @@ export function upsertListing(listing) {
       community_name = CASE
         WHEN IFNULL(excluded.community_name, '') != '' THEN excluded.community_name
         ELSE listings.community_name
+      END,
+      community_linked = CASE
+        WHEN excluded.community_linked > 0 OR excluded.community_id > 0 THEN 1
+        ELSE listings.community_linked
       END,
       cost_changed_at = CASE
         WHEN IFNULL(excluded.cost_changed_at, '') != '' THEN excluded.cost_changed_at
@@ -2646,6 +2666,7 @@ export function upsertListing(listing) {
     listing.lng ?? null,
     communityId,
     communityName,
+    communityLinked,
     costChangedAt,
     costChangeType,
     costChangeDetail,
@@ -2675,7 +2696,7 @@ export function setListingFees(postId, extraFees, fetched = 1) {
   return setListingDetail(postId, { extraFees, fetched });
 }
 
-export function setListingDetail(postId, { extraFees, contact, fetched = 1, lat, lng, address, community_id, community_name, geo_source } = {}) {
+export function setListingDetail(postId, { extraFees, contact, fetched = 1, lat, lng, address, community_id, community_name, community_linked, geo_source } = {}) {
   const listing = getListing(postId);
   if (!listing) return null;
   const fees =
@@ -2699,10 +2720,14 @@ export function setListingDetail(postId, { extraFees, contact, fetched = 1, lat,
   const keepCommunity = listing.geo_source === "community" && !upgradingToCommunity;
   const applyCoords = hasCoords && !keepCommunity;
   const source = applyCoords ? (geo_source === "community" ? "community" : "591") : null;
-  const nextAddress = String(address || "").trim();
-  const keepAddress = !nextAddress || keepCommunity;
+  const nextAddress = preferListingAddress(address, listing.address, listing.geo_source);
+  const keepAddress = !String(address || "").trim();
   const nextCommunityId = Number(community_id) || listing.community_id || 0;
   const nextCommunityName = String(community_name || listing.community_name || "").trim();
+  const nextCommunityLinked = sourceCommunityLinked({
+    communityId: nextCommunityId,
+    hasAnchor: Number(community_linked) === 1 || Number(listing.community_linked) === 1,
+  }) ? 1 : Number(listing.community_linked) || 0;
   // 有實際帶入聯絡資料（非只補社區座標）才更新 contact_fetched_at，供之後「過期重抓聯絡人」判斷。
   const contactRefreshed = Boolean(fetched) && contact != null;
   const contactStamp = new Date().toISOString();
@@ -2717,7 +2742,8 @@ export function setListingDetail(postId, { extraFees, contact, fetched = 1, lat,
       geo_source = CASE WHEN ? IS NOT NULL THEN ? ELSE geo_source END,
       address = CASE WHEN ? THEN listings.address ELSE ? END,
       community_id = CASE WHEN ? > 0 THEN ? ELSE community_id END,
-      community_name = CASE WHEN ? != '' THEN ? ELSE community_name END
+      community_name = CASE WHEN ? != '' THEN ? ELSE community_name END,
+      community_linked = CASE WHEN ? > 0 THEN 1 ELSE community_linked END
      WHERE post_id = ?`,
   ).run(
     fees,
@@ -2745,6 +2771,7 @@ export function setListingDetail(postId, { extraFees, contact, fetched = 1, lat,
     nextCommunityId,
     nextCommunityName,
     nextCommunityName,
+    nextCommunityLinked,
     postId,
   );
   if (
@@ -3251,7 +3278,7 @@ export function listingsNeedingAddressEnrich(limit = 12) {
        FROM listings
        WHERE IFNULL(hidden, 0) = 0
          AND IFNULL(offline, 0) = 0
-         AND source IN ('houseprice', 'ddroom')
+         AND source IN ('houseprice', '591', 'ddroom', 'rakuya')
        ORDER BY ${sqlWatchedFirst()}, last_seen_at DESC
        LIMIT 400`,
     )

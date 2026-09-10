@@ -934,6 +934,16 @@
     .item-main { min-width: 0; }
     .item-details { min-width: 0; }
     .meta { color: var(--muted); font-size: 13px; margin: 6px 0; line-height: 1.55; }
+    .community-map-link {
+      color: var(--accent-deep);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    .community-map-link:hover { color: var(--accent); }
+    .community-map-link:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
     .fees { color: var(--accent-deep); font-size: 13px; margin-top: 4px; line-height: 1.55; }
     .contact {
       display: flex;
@@ -4205,14 +4215,30 @@
         ? `一般會員最多 ${MEMBER_MAX_WATCHED} 筆，贊助會員最多 ${SPONSOR_MAX_WATCHED} 筆`
         : "特別關注的物件會優先更新狀態與公司距離";
     }
+    function communityMapsHref(name, address) {
+      const n = String(name || "").trim().replace(/[／/]+/g, " ").replace(/\s+/g, " ").trim();
+      if (!n) return "";
+      const loc = String(address || "").replace(/\s+/g, "");
+      if (/\d+(?:之\d+)?號/.test(loc)) {
+        return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(loc)}`;
+      }
+      const city = (loc.match(/^(台北市|臺北市|新北市|桃園市|基隆市|新竹市|[^市縣]{1,3}[市縣])/) || [])[0] || "";
+      const district = (loc.match(/[市縣]([^\d市縣]{1,4}[區鄉鎮市])/) || [])[1] || "";
+      return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${city}${district}${n}`)}`;
+    }
     function listingSpecLine(item) {
-      return [
-        item?.community_name ? `社區 ${item.community_name}` : "",
-        item?.kind_name || "",
-        item?.layout || "",
-        item?.area_name || "",
-        floorDisplay(item),
-      ].filter(Boolean).join(" · ");
+      const community = String(item?.community_name || "").trim();
+      const linked = community && (item?.community_linked === true || Number(item?.community_linked) === 1 || Number(item?.community_id) > 0);
+      const communityHtml = !community
+        ? ""
+        : linked
+          ? `社區 <a class="community-map-link" href="${esc(communityMapsHref(community, item.address))}" target="_blank" rel="noopener noreferrer" aria-label="在 Google 地圖查看社區 ${esc(community)}">${esc(community)}</a>`
+          : `社區 ${esc(community)}`;
+      const rest = [item?.kind_name || "", item?.layout || "", item?.area_name || "", floorDisplay(item)]
+        .filter(Boolean)
+        .map((bit) => esc(bit))
+        .join(" · ");
+      return [communityHtml, rest].filter(Boolean).join(" · ");
     }
     function safeListingHtml(value) {
       const allowed = new Set(["b", "strong", "i", "em", "u", "br", "p", "span", "div"]);
@@ -6228,7 +6254,7 @@
             ${sameHousePriceList(item)}
             <div class="rent-price">${esc(rentStatusLine(item))}</div>
             <div class="meta">
-              ${esc(listingSpecLine(item))}
+              ${listingSpecLine(item)}
               <br>${esc(item.address || "")}${commuteText(item)}${offlineLine(item)}
               ${mrtText(item) ? `<div class="mrt-line">${mrtText(item)}</div>` : ""}
               ${item.match_detail && !sameHouseOf(item) ? `<br>比對：${esc(item.match_detail)}${item.match_post_id ? ` · <a href="${listingUrl(item.match_post_id)}" target="_blank" rel="noopener noreferrer">舊刊登 #${item.match_post_id}</a>` : ""}` : ""}

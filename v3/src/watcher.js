@@ -59,7 +59,7 @@ import { fetchDdCoveringListings } from "./ddroom.js";
 import { fetchHfCoveringListings } from "./housefun.js";
 import { fetchRakuyaCoveringListings } from "./rakuya.js";
 import { commuteWorkJobs, geocodeAddress, hasWorkPoint, needsListingGeo, normalizeCommuteMode } from "./geo.js";
-import { isTrustedGeoSource, listingCommunityId } from "./location.js";
+import { isTrustedGeoSource, listingCommunityId, pickRicherAddress } from "./location.js";
 import { decideNotifyDelivery } from "./floors.js";
 import { fetchRoadRoutes, fetchRoadRouteTable, fetchRushRoadRoutes } from "./route.js";
 import { fetchMrtAccess } from "./mrt.js";
@@ -194,6 +194,7 @@ function applyFetchedDetail(listing, detail) {
     address: detail.address,
     community_id: detail.community_id,
     community_name: detail.community_name,
+    community_linked: detail.community_id ? 1 : detail.community_linked,
     geo_source: detail.geo_source,
   });
 }
@@ -209,9 +210,10 @@ async function applyCommunityPin(listing, community) {
     fetched: listing.extra_fees_fetched,
     lat: community.lat,
     lng: community.lng,
-    address: community.address || listing.address,
+    address: pickRicherAddress([listing.address, community.address]) || community.address || listing.address,
     community_id: community.id || listing.community_id,
     community_name: community.name || listing.community_name,
+    community_linked: 1,
     geo_source: "community",
   }) || listing;
 }
@@ -790,17 +792,25 @@ export async function backfillIncompleteAddresses({ limit = 8 } = {}) {
   let attempted = 0;
   let located = 0;
   for (const row of rows) {
-    if (row.source !== "houseprice") continue;
     attempted += 1;
     try {
-      const detail = await fetchHpDetail(row.source_id || row.url);
-      if (!detail?.address) continue;
       const current = listingForWatch(row.post_id);
       if (!current) continue;
-      const next = enrichHpListingFromDetail(current, detail);
-      if (next.address && next.address !== current.address) {
-        upsertListing({ ...next, last_seen_at: current.last_seen_at || nowIso() });
-        located += 1;
+      if (row.source === "houseprice") {
+        const detail = await fetchHpDetail(row.source_id || row.url);
+        if (!detail?.address) continue;
+        const next = enrichHpListingFromDetail(current, detail);
+        if (next.address && next.address !== current.address) {
+          upsertListing({ ...next, last_seen_at: current.last_seen_at || nowIso() });
+          located += 1;
+        }
+        continue;
+      }
+      if (row.source === "591") {
+        const detail = await fetchListingDetail(row.source_id || row.post_id, detailOptions());
+        if (!detail?.address) continue;
+        const updated = applyFetchedDetail(current, detail);
+        if (updated?.address && updated.address !== current.address) located += 1;
       }
     } catch {
       // 明細暫時抓不到就下一輪
