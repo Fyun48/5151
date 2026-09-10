@@ -10,8 +10,42 @@ const DEFAULT_TIMEOUT_MS = 8000;
 const DEFAULT_BATCH = 20;
 const DEFAULT_CONCURRENCY = 4;
 const INGEST_PATH = "/ops/api/ingest/feedback";
+export const OPS_DELIVERY_STOP_KEY = "ops_feedback_stop";
+
+export function isLocalDeliveryStopped(db) {
+  if (!db) return false;
+  try {
+    const row = db.prepare("SELECT value FROM settings WHERE key=?").get(OPS_DELIVERY_STOP_KEY);
+    return String(row?.value || "") === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function setLocalDeliveryStopped(db, stopped) {
+  db.prepare(
+    "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+  ).run(OPS_DELIVERY_STOP_KEY, stopped ? "1" : "0");
+  return isLocalDeliveryStopped(db);
+}
+
+export function deliveryControl(db, env = process.env) {
+  const url = env.OPS_INGEST_URL || "";
+  const secret = env.OPS_INGEST_SECRET || "";
+  const envAllowed = env.OPS_FEEDBACK_DELIVERY === "1";
+  const configured = Boolean(url && secret);
+  const localStopped = isLocalDeliveryStopped(db);
+  return {
+    env_allowed: envAllowed,
+    configured,
+    local_stopped: localStopped,
+    product_id: env.OPS_PRODUCT_ID || "v3",
+    effective: Boolean(envAllowed && configured && !localStopped),
+  };
+}
 
 // 從環境變數讀設定；未設定 URL/SECRET → 遞送停用（feature flag）。
+// 本機 settings.ops_feedback_stop=1 可在不重啟、OPS 不在線時立刻停送。
 export function deliveryConfigFromEnv(env = process.env) {
   const enabled = env.OPS_FEEDBACK_DELIVERY === "1";
   const url = env.OPS_INGEST_URL || "";
@@ -20,6 +54,7 @@ export function deliveryConfigFromEnv(env = process.env) {
     enabled: Boolean(enabled && url && secret),
     url,
     secret,
+    productId: env.OPS_PRODUCT_ID || "v3",
     intervalMs: Number(env.OPS_DELIVERY_INTERVAL_MS || 15000),
     timeoutMs: Number(env.OPS_DELIVERY_TIMEOUT_MS || DEFAULT_TIMEOUT_MS),
     batchSize: Number(env.OPS_DELIVERY_BATCH || DEFAULT_BATCH),
@@ -89,6 +124,7 @@ export async function deliverOutboxOnce(db, {
 } = {}) {
   if (!url || !secret) return { claimed: 0, sent: 0, failed: 0, dead: 0, skipped: "not_configured" };
   if (typeof fetchImpl !== "function") return { claimed: 0, sent: 0, failed: 0, dead: 0, skipped: "no_fetch" };
+  if (isLocalDeliveryStopped(db)) return { claimed: 0, sent: 0, failed: 0, dead: 0, skipped: "local_stopped" };
   const claimed = claimOutboxBatch(db, { limit: batchSize, now: now() });
   if (!claimed.length) return { claimed: 0, sent: 0, failed: 0, dead: 0 };
   const results = await runPool(claimed, concurrency, (row) =>
@@ -110,6 +146,7 @@ export function startDeliveryLoop(db, config, { fetchImpl = globalThis.fetch, lo
     if (running) return; // 不重入
     running = true;
     try {
+      if (isLocalDeliveryStopped(db)) return;
       const summary = await deliverOutboxOnce(db, {
         url: config.url,
         secret: config.secret,

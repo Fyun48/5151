@@ -13,7 +13,7 @@ import {
   backoffMs,
   OUTBOX_DEFAULT_MAX_ATTEMPTS,
 } from "../src/feedbackOutbox.js";
-import { deliverOutboxOnce } from "../src/opsDelivery.js";
+import { deliverOutboxOnce, setLocalDeliveryStopped } from "../src/opsDelivery.js";
 
 function open() {
   const db = new DatabaseSync(":memory:");
@@ -74,6 +74,23 @@ test("honeypot creates neither feedback nor outbox", () => {
   assert.equal(res.id, 0);
   assert.equal(db.prepare("SELECT COUNT(*) n FROM feedback").get().n, 0);
   assert.equal(db.prepare("SELECT COUNT(*) n FROM feedback_outbox").get().n, 0);
+  db.close();
+});
+
+test("local stop prevents delivery without rolling back feedback", async () => {
+  const db = open();
+  db.exec("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+  const res = createFeedbackWithOutbox(db, 1, { kind: "bug", body: "keep me local" });
+  assert.ok(res.id > 0);
+  setLocalDeliveryStopped(db, true);
+  const summary = await deliverOutboxOnce(db, { ...cfg, fetchImpl: okFetch });
+  assert.equal(summary.skipped, "local_stopped");
+  assert.equal(summary.claimed, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM feedback").get().n, 1);
+  assert.equal(outboxStats(db).pending, 1);
+  setLocalDeliveryStopped(db, false);
+  const again = await deliverOutboxOnce(db, { ...cfg, fetchImpl: okFetch });
+  assert.equal(again.sent, 1);
   db.close();
 });
 
