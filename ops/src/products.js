@@ -7,6 +7,17 @@ import { verifyIngestRequest } from "./ingestSignature.js";
 export const DEFAULT_PRODUCT_ID = "v3";
 export const DEFAULT_PRODUCT_NAME = "吉比租房";
 
+export const DEFAULT_CAPABILITIES = Object.freeze({
+  feedback_copy: true,
+  crm_sync: false,
+  stats: false,
+  cross_site_insight: false,
+  followup_service: false,
+  retain_after_exit: false,
+});
+
+export const CONSENT_KEYS = Object.freeze(Object.keys(DEFAULT_CAPABILITIES));
+
 export const PRODUCT_STATUSES = Object.freeze(["active", "paused", "exiting", "exited"]);
 export const SUBSCRIPTION_STATUSES = Object.freeze([
   "connecting", "connected", "paused", "exiting", "exited", "reconnecting",
@@ -39,7 +50,7 @@ export function ensureDefaultProduct(db, { now = new Date() } = {}) {
     INSERT INTO product_subscription(product_id, generation, status, capabilities, started_at, updated_at)
     VALUES (?, 1, 'connected', ?, ?, ?)
     ON CONFLICT(product_id) DO NOTHING
-  `).run(DEFAULT_PRODUCT_ID, JSON.stringify({ feedback_copy: true }), ts, ts);
+  `).run(DEFAULT_PRODUCT_ID, JSON.stringify({ ...DEFAULT_CAPABILITIES }), ts, ts);
 }
 
 export function ensureLegacyIngestSecret(db, secret, { productId = DEFAULT_PRODUCT_ID, now = new Date() } = {}) {
@@ -109,7 +120,7 @@ export function createProduct(db, { id, displayName, actor = "owner", now = new 
     db.prepare(`
       INSERT INTO product_subscription(product_id, generation, status, capabilities, started_at, updated_at)
       VALUES (?, 1, 'connected', ?, ?, ?)
-    `).run(productId, JSON.stringify({ feedback_copy: true }), ts, ts);
+    `).run(productId, JSON.stringify({ ...DEFAULT_CAPABILITIES }), ts, ts);
     const cred = issueCredential(db, { productId, label: "initial", now });
     appendAuditRow(db, {
       actor,
@@ -266,6 +277,31 @@ export function listActiveCredentials(db) {
      WHERE status='active'
      ORDER BY id ASC
   `).all();
+}
+
+export function updateProductCapabilities(db, productId, patch = {}, { actor = "owner", now = new Date() } = {}) {
+  const product = getProduct(db, productId);
+  if (!product) throw httpError("not found", 404);
+  const current = parseCaps(product.capabilities);
+  const next = { ...DEFAULT_CAPABILITIES, ...current };
+  for (const key of CONSENT_KEYS) {
+    if (patch[key] === true || patch[key] === false) next[key] = patch[key];
+  }
+  if (next.crm_sync && !next.feedback_copy) {
+    throw httpError("CRM 同步不能代替回饋複製授權；兩者要分開勾。", 400);
+  }
+  const ts = iso(now);
+  db.prepare("UPDATE product_subscription SET capabilities=?, updated_at=? WHERE product_id=?")
+    .run(JSON.stringify(next), ts, product.id);
+  appendAuditRow(db, {
+    actor,
+    action: "product.capabilities.updated",
+    entityType: "ops_product",
+    entityId: product.id,
+    data: next,
+    now,
+  });
+  return publicProduct(getProduct(db, product.id));
 }
 
 export function productAcceptsIngest(product) {

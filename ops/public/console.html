@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex,nofollow" />
   <title>Ops Console · 吉比租房維運</title>
-  <link rel="stylesheet" href="/console.css?v=20260910-exit5" />
+  <link rel="stylesheet" href="/console.css?v=20260910-crm1" />
 </head>
 <body>
   <header class="topbar">
@@ -46,6 +46,7 @@
       <nav class="tabs" role="tablist" aria-label="OPS 區塊">
         <button type="button" class="tab on" data-tab="overview" role="tab" aria-selected="true">總覽</button>
         <button type="button" class="tab" data-tab="inbox" role="tab" aria-selected="false">回饋收件匣</button>
+        <button type="button" class="tab" data-tab="crm" role="tab" aria-selected="false">CRM 檢視</button>
         <button type="button" class="tab" data-tab="products" role="tab" aria-selected="false">產品</button>
         <button type="button" class="tab" data-tab="issues" role="tab" aria-selected="false">議題與投票</button>
         <button type="button" class="tab" data-tab="audit" role="tab" aria-selected="false">稽核</button>
@@ -84,6 +85,22 @@
             <tbody></tbody>
           </table>
           <div id="feedbackDetail" class="detail" hidden></div>
+        </section>
+      </section>
+
+      <section id="tab-crm" class="tabpane" hidden>
+        <section class="card">
+          <div class="row">
+            <h2>站內 CRM → OPS 檢視</h2>
+            <span class="grow"></span>
+            <button type="button" id="crmRefresh">重新整理</button>
+            <button type="button" id="crmModuleToggle">關閉 CRM 模組</button>
+            <button type="button" id="crmGrantSync">允許 CRM 同步授權</button>
+          </div>
+          <p class="hint">四欄分開，不要看成同一種狀態。第一欄是站方複本；第四欄是 Owner 自己的商務備註，不是站方資料。關模組不是 DROP。</p>
+          <p class="msg" id="crmMsg" role="status"></p>
+          <p class="hint" id="crmHint">尚未載入。</p>
+          <div id="crmList" class="crm-list" aria-busy="false"></div>
         </section>
       </section>
 
@@ -189,6 +206,6 @@
     </div>
   </div>
 
-  <script src="/console.js?v=20260910-exit5"></script>
+  <script src="/console.js?v=20260910-crm1"></script>
 </body>
 </html>

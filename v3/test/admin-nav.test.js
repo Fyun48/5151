@@ -26,6 +26,8 @@ test("admin settings are grouped into clickable categories", () => {
   assert.match(html, /贊助曝光/);
   assert.match(html, /站內小廣告/);
   assert.match(html, /系統信件/);
+  assert.match(html, /data-admin-nav="feedback"/);
+  assert.match(html, /data-admin-nav="crm"/);
   assert.match(html, /function showAdminPanel/);
   assert.match(html, /admin-shell\.is-ready \.admin-panel \{ display: none; \}/);
 
@@ -65,7 +67,7 @@ test("admin settings are grouped into clickable categories", () => {
   assert.match(ads, /id="adsForm"/);
   assert.doesNotMatch(ads, /id="sponsorForm"/);
 
-  const mail = html.slice(html.indexOf('data-admin-panel="mail"'));
+  const mail = html.slice(html.indexOf('data-admin-panel="mail"'), html.indexOf('data-admin-panel="feedback"'));
   assert.match(mail, /寄信 SMTP/);
   assert.match(mail, /社群登入/);
   assert.match(mail, /id="oauthForm"/);

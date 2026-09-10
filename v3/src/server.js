@@ -118,6 +118,18 @@ import {
   getOpsDeliveryControl,
   setOpsDeliveryStop,
   compactOpsOutbox,
+  getCrmOverview,
+  getCrmContact,
+  createCrmContact,
+  updateCrmContact,
+  createCrmCase,
+  updateCrmCase,
+  addCrmNote,
+  addCrmTodo,
+  setCrmTodoDone,
+  setCrmModuleEnabled,
+  getCrmDeliveryControl,
+  setCrmDeliveryStop,
   feedbackMeta,
   listMineSelfListings,
   getSelfListing,
@@ -229,6 +241,7 @@ import { LIST_PAGE_SIZE, isListingGoneError, probeListingAlive } from "./client5
 import { probeHpListingAlive } from "./houseprice.js";
 import { probeListingAliveBySource } from "./probe.js";
 import { deliveryConfigFromEnv, startDeliveryLoop } from "./opsDelivery.js";
+import { startCrmDeliveryLoop } from "./crmDelivery.js";
 import { opsDeliveryDb } from "./db.js";
 import { refreshHousingData } from "./housingFetch.js";
 import { APP_NAME, APP_VERSION } from "./brand.js";
@@ -1258,6 +1271,87 @@ app.put("/api/admin/ops-delivery", requireAdminApi, (req, res) => {
 app.post("/api/admin/ops-delivery/compact-outbox", requireAdminApi, (req, res) => {
   const olderThanMs = Number(req.body?.older_than_ms);
   res.json({ ok: true, ...compactOpsOutbox({ olderThanMs: Number.isFinite(olderThanMs) && olderThanMs >= 0 ? olderThanMs : undefined }) });
+});
+
+app.get("/api/admin/crm", requireAdminApi, (req, res) => {
+  res.json({
+    ...getCrmOverview({ q: req.query?.q }),
+    sync: getCrmDeliveryControl(),
+  });
+});
+
+app.put("/api/admin/crm/module", requireAdminApi, (req, res) => {
+  const enabled = !(req.body?.enabled === false || req.body?.enabled === 0 || req.body?.enabled === "0");
+  res.json({ module: setCrmModuleEnabled(enabled), sync: getCrmDeliveryControl() });
+});
+
+app.put("/api/admin/crm/sync", requireAdminApi, (req, res) => {
+  const stop = req.body?.stop === true || req.body?.stop === 1 || req.body?.stop === "1";
+  res.json(setCrmDeliveryStop(stop));
+});
+
+app.get("/api/admin/crm/contacts/:id", requireAdminApi, (req, res) => {
+  try {
+    res.json(getCrmContact(req.params.id));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/admin/crm/contacts", requireAdminApi, (req, res) => {
+  try {
+    res.status(201).json(createCrmContact(req.body || {}, { actorUserId: actorUserId(req) }));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.patch("/api/admin/crm/contacts/:id", requireAdminApi, (req, res) => {
+  try {
+    res.json(updateCrmContact(req.params.id, req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/admin/crm/contacts/:id/cases", requireAdminApi, (req, res) => {
+  try {
+    res.status(201).json(createCrmCase(req.params.id, req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.patch("/api/admin/crm/cases/:id", requireAdminApi, (req, res) => {
+  try {
+    res.json(updateCrmCase(req.params.id, req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/admin/crm/contacts/:id/notes", requireAdminApi, (req, res) => {
+  try {
+    res.status(201).json(addCrmNote(req.params.id, req.body || {}, { actorUserId: actorUserId(req) }));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/admin/crm/contacts/:id/todos", requireAdminApi, (req, res) => {
+  try {
+    res.status(201).json(addCrmTodo(req.params.id, req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/admin/crm/todos/:id/done", requireAdminApi, (req, res) => {
+  try {
+    res.json(setCrmTodoDone(req.params.id, req.body?.done !== false));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
 });
 
 app.get("/api/spirit", (_req, res) => {
@@ -2657,6 +2751,7 @@ app.listen(PORT, HOST, () => {
     startDeliveryLoop(opsDeliveryDb(), opsDelivery, { log: (tag, info) => console.log(tag, JSON.stringify(info)) });
     console.log(`Ops feedback 遞送已啟用：每 ${opsDelivery.intervalMs}ms 一次 → ${opsDelivery.url}`);
   }
+  startCrmDeliveryLoop(opsDeliveryDb(), process.env, { log: (tag, info) => console.log(tag, JSON.stringify(info)) });
   console.log(`${APP_NAME}：http://${HOST}:${PORT}`);
   if (envAdminConfigured()) {
     console.log(`管理員帳號：${adminEmail()}（也可註冊新會員）`);

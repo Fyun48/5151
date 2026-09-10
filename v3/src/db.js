@@ -133,6 +133,23 @@ import {
 } from "./feedbackOutbox.js";
 import { deliveryControl, setLocalDeliveryStopped, compactLocalOutbox } from "./opsDelivery.js";
 import {
+  ensureCrmSchema,
+  crmOverview as crmOverviewOn,
+  getContact as getContactOn,
+  createContact as createContactOn,
+  updateContact as updateContactOn,
+  createCase as createCaseOn,
+  updateCase as updateCaseOn,
+  addNote as addNoteOn,
+  addTodo as addTodoOn,
+  setTodoDone as setTodoDoneOn,
+  setCrmEnabled as setCrmEnabledOn,
+  crmModule as crmModuleOn,
+  enqueueCrmFromFeedback,
+} from "./crm.js";
+import { ensureCrmOutboxSchema } from "./crmOutbox.js";
+import { crmDeliveryControl, setLocalCrmSyncStopped } from "./crmDelivery.js";
+import {
   closeSelfListing as closeSelfListingOn,
   createSelfListing as createSelfListingOn,
   createImportedDraftListing as createImportedDraftListingOn,
@@ -669,6 +686,8 @@ try {
 ensureDemandSchema(db);
 ensureFeedbackSchema(db);
 ensureFeedbackOutboxSchema(db);
+ensureCrmSchema(db);
+ensureCrmOutboxSchema(db);
 ensureSelfListingSchema(db);
 ensureMemberMediaSchema(db);
 ensureContentDocumentSchema(db);
@@ -1465,7 +1484,61 @@ export function listFeedbackItems(opts = {}) {
 }
 
 export function updateFeedbackItem(id, patch) {
-  return updateFeedbackOn(db, id, patch);
+  const row = updateFeedbackOn(db, id, patch);
+  try { enqueueCrmFromFeedback(db, id); } catch { /* CRM 連結是可選 */ }
+  return row;
+}
+
+export function getCrmOverview(query = {}) {
+  return crmOverviewOn(db, query);
+}
+
+export function getCrmContact(id) {
+  return getContactOn(db, id);
+}
+
+export function createCrmContact(input, opts) {
+  return createContactOn(db, input, opts);
+}
+
+export function updateCrmContact(id, input) {
+  return updateContactOn(db, id, input);
+}
+
+export function createCrmCase(contactId, input) {
+  return createCaseOn(db, contactId, input);
+}
+
+export function updateCrmCase(caseId, input) {
+  return updateCaseOn(db, caseId, input);
+}
+
+export function addCrmNote(contactId, input, opts) {
+  return addNoteOn(db, contactId, input, opts);
+}
+
+export function addCrmTodo(contactId, input) {
+  return addTodoOn(db, contactId, input);
+}
+
+export function setCrmTodoDone(todoId, done) {
+  return setTodoDoneOn(db, todoId, done);
+}
+
+export function getCrmModule() {
+  return crmModuleOn(db);
+}
+
+export function setCrmModuleEnabled(enabled) {
+  return setCrmEnabledOn(db, enabled);
+}
+
+export function getCrmDeliveryControl() {
+  return crmDeliveryControl(db);
+}
+
+export function setCrmDeliveryStop(stopped) {
+  return setLocalCrmSyncStopped(db, Boolean(stopped));
 }
 
 export function getFeedbackStats() {
