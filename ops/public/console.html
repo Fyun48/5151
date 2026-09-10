@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex,nofollow" />
   <title>Ops Console · 吉比租房維運</title>
-  <link rel="stylesheet" href="/console.css?v=20260910-tabfix" />
+  <link rel="stylesheet" href="/console.css?v=20260910-products" />
 </head>
 <body>
   <header class="topbar">
@@ -34,9 +34,19 @@
     </section>
 
     <div id="ownerArea" hidden>
+      <section class="card switch-card" aria-label="目前檢視的站">
+        <div class="row">
+          <h2>檢視站台</h2>
+          <span class="grow"></span>
+          <p class="hint switch-hint">全部或單一產品；總覽與收件匣會跟著過濾。</p>
+        </div>
+        <div id="productSwitch" class="product-switch" role="group" aria-label="選擇產品"></div>
+      </section>
+
       <nav class="tabs" role="tablist" aria-label="OPS 區塊">
         <button type="button" class="tab on" data-tab="overview" role="tab" aria-selected="true">總覽</button>
         <button type="button" class="tab" data-tab="inbox" role="tab" aria-selected="false">回饋收件匣</button>
+        <button type="button" class="tab" data-tab="products" role="tab" aria-selected="false">產品</button>
         <button type="button" class="tab" data-tab="issues" role="tab" aria-selected="false">議題與投票</button>
         <button type="button" class="tab" data-tab="audit" role="tab" aria-selected="false">稽核</button>
       </nav>
@@ -51,7 +61,7 @@
           </div>
           <p class="hint">一般使用者在正式站送「意見回饋」；累積成議題並完成評估後，這裡會出現待核准項目。Owner 直接下令的功能不必走這條線。</p>
           <div id="dashBox" class="statgrid" aria-live="polite"></div>
-          <p class="msg" id="dashMsg"></p>
+          <p class="msg" id="dashMsg" role="status"></p>
         </section>
         <section class="card">
           <h2>待 Owner 處理</h2>
@@ -70,10 +80,43 @@
           </div>
           <p class="hint" id="inboxHint">尚未載入。</p>
           <table class="tbl" id="inboxTable">
-            <thead><tr><th>#</th><th>類型</th><th>內容</th><th>議題</th><th>版本</th><th>時間</th></tr></thead>
+            <thead><tr><th>#</th><th>站台</th><th>類型</th><th>內容</th><th>議題</th><th>版本</th><th>時間</th></tr></thead>
             <tbody></tbody>
           </table>
           <div id="feedbackDetail" class="detail" hidden></div>
+        </section>
+      </section>
+
+      <section id="tab-products" class="tabpane" hidden>
+        <section class="card">
+          <div class="row">
+            <h2>產品卡</h2>
+            <span class="grow"></span>
+            <button type="button" id="productsRefresh">重新整理</button>
+          </div>
+          <p class="hint">每張卡是一個可掛可卸的站。暫停只停新回饋；解除訂閱會立刻撤銷密鑰。密鑰只在建立／重連／輪替後顯示一次。</p>
+          <p class="msg" id="productMsg" role="status"></p>
+          <section id="secretOnce" class="secret-card" hidden>
+            <h3>新 ingest 密鑰（只顯示一次）</h3>
+            <p class="hint" id="secretOnceHint">請立刻複製到該站 <code>OPS_INGEST_SECRET</code>。</p>
+            <p class="secret-value"><code id="secretOnceText"></code></p>
+            <div class="row">
+              <button type="button" id="copySecretBtn">複製</button>
+              <button type="button" id="dismissSecretBtn">我已複製</button>
+            </div>
+          </section>
+          <div id="productCards" class="product-grid"></div>
+        </section>
+        <section class="card">
+          <h2>新增產品</h2>
+          <p class="hint">穩定 <code>product_id</code> 之後不要改。顯示名可以之後再調。</p>
+          <form id="createProductForm" autocomplete="off">
+            <label for="newProductId">product_id</label>
+            <input id="newProductId" name="id" required maxlength="32" pattern="[a-z][a-z0-9_-]{0,31}" placeholder="例如 shop" />
+            <label for="newProductName">顯示名</label>
+            <input id="newProductName" name="display_name" maxlength="80" placeholder="例如 商店站" />
+            <button type="submit" class="primary" id="createProductBtn">建立並產生密鑰</button>
+          </form>
         </section>
       </section>
 
@@ -130,6 +173,17 @@
     </div>
   </main>
 
-  <script src="/console.js?v=20260910-tabfix"></script>
+  <div id="confirmDlg" class="dlg" hidden role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+    <div class="dlg-card">
+      <h3 id="confirmTitle">確認解除訂閱</h3>
+      <p id="confirmBody"></p>
+      <div class="row">
+        <button type="button" id="confirmCancel">取消</button>
+        <button type="button" id="confirmOk" class="danger">確定解除</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/console.js?v=20260910-products"></script>
 </body>
 </html>

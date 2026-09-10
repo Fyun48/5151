@@ -1,9 +1,9 @@
 # OPS／v3 現況對照表（ChatGPT 審查後）
 
-盤點對象：本分支 HEAD `46b5d531ad467d96fd8c9a04e43769ec984ce78c`（`cursor/ops-complete-ed3f`）。  
-ChatGPT 抽查的是 master `b57dbdd3a70dcbd55ba68375d091a87e5d14c696`。本分支已比該 SHA 多 OPS Console、`ops/BLUEPRINT.md`、`ops/PLAN.md`、`v3/PLAN-integrations.md`、compose 的 `5151-ops` 與分頁 CSS 修正。**不以那次抽查當現況。**
+盤點對象：本分支 `cursor/ops-complete-ed3f`（第 0–2 包）。  
+ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契約、Deploy OPS 與產品卡。**不以那次抽查當現況。**
 
-本次是規格修訂與第 1 包契約落地，**不是部署指令**，不 Deploy v3。
+本次是第 2 包（可重現部署＋產品卡），**不是部署指令**，不 Deploy v3，也不擅自跑 Deploy OPS。
 
 圖例：`存在`＝可承接；`需改`＝有程式但契約不足；`待做`＝尚未實作。
 
@@ -26,10 +26,10 @@ ChatGPT 抽查的是 master `b57dbdd3a70dcbd55ba68375d091a87e5d14c696`。本分�
 | `RELEASED → ROLLED_BACK → EVALUATING` | 需改 | `ops/src/stateMachine.js` guarded `ROLLED_BACK → EVALUATING` | 第 5 包改為已發布事實不變，再開發用 follow-up／revision |
 | 議題狀態機其餘出口 | 存在 | `ops/src/stateMachine.js` | 前期取消／拒絕／封鎖可留 |
 | OPS／v3 分容器分庫 | 存在 | `docker-compose.yml`、`ops/src/opsDb.js`、`v3/src/db.js` | 維持 |
-| Console 收件匣／總覽 | 存在／需改 | `ops/src/dashboard.js`、`ops/public/` | 第 1 包加 `product_id`；產品卡 UI 第 2 包 |
-| 產品／訂閱／每站憑證 | 本輪已做 | `ops/src/products.js`、`ops/src/ingest.js`、`ops/src/opsDb.js` | A／B `feedback:1` 不撞號；憑證定站；暫停／解除訂閱 |
-| 站內「停止傳送至 OPS」 | 本輪已做 | `v3/src/opsDelivery.js`、`v3/public/admin.html` | 本機 `settings.ops_feedback_stop`，不依賴 OPS 在線 |
-| Deploy OPS 工作流 | 待做 | — | 第 2 包；現況仍可 SSH 同步，非常態 |
+| Console 收件匣／總覽 | 本輪已做 | `ops/src/dashboard.js`、`ops/public/` | 可依 `productId` 過濾；產品卡分頁可暫停／退出／重連／輪替 |
+| 產品／訂閱／每站憑證 | 已做 | `ops/src/products.js`、`ops/src/ingest.js`、`ops/src/opsDb.js` | A／B `feedback:1` 不撞號；憑證定站；暫停／解除訂閱 |
+| 站內「停止傳送至 OPS」 | 已做 | `v3/src/opsDelivery.js`、`v3/public/admin.html` | 本機 `settings.ops_feedback_stop`，不依賴 OPS 在線 |
+| Deploy OPS 工作流 | 本輪已做 | `.github/workflows/deploy-ops.yml` | 確認字 `DEPLOY-OPS`；只 SCP `ops/`、只重建 `5151-ops`；並發鎖 `ops-deploy` |
 | 四種退出／移交演練 | 待做 | — | 第 3 包 |
 | 站內 CRM／OPS CRM 檢視 | 待做 | — | 第 4 包；關 CRM ≠ DROP |
 | 隔離 staging UI | 待做 | `ops/src/stagingDeploy.js` 骨架關著 | 第 5 包 |

@@ -2,6 +2,10 @@
 const $ = (id) => document.getElementById(id);
 let CSRF = "";
 let selectedIssueId = null;
+let selectedProductId = "";
+let productsCache = [];
+let productBusy = false;
+let confirmAction = null;
 
 async function api(path, opts) {
   const o = { cache: "no-store", ...(opts || {}) };
@@ -26,11 +30,25 @@ function fmtTime(v) {
   return Number.isNaN(d.getTime()) ? esc(v) : d.toLocaleString("zh-TW");
 }
 
+function setStatus(el, text, kind) {
+  if (!el) return;
+  el.textContent = text || "";
+  el.className = kind === "err" ? "msg err" : kind === "ok" ? "msg ok" : "msg";
+}
+
+function productQuery(prefix = "?") {
+  if (!selectedProductId) return "";
+  const join = prefix.includes("?") && prefix !== "?" ? "&" : prefix === "?" ? "?" : "&";
+  return `${join}productId=${encodeURIComponent(selectedProductId)}`;
+}
+
 function showLoggedOut(configured) {
   $("loginCard").hidden = false;
   $("ownerArea").hidden = true;
   $("logoutBtn").hidden = true;
   $("who").textContent = "未登入";
+  hideConfirm();
+  hideSecret();
   if (!configured) {
     $("loginMsg").textContent = "Owner 身分尚未設定（AUTH_EMAIL / AUTH_PASSWORD）。";
     $("loginMsg").className = "msg err";
@@ -55,13 +73,177 @@ function setTab(name) {
   });
 }
 
-async function refreshHealth() {
-  const { data } = await api("/ops/api/health");
-  return data;
+function chipClass(status) {
+  if (status === "active" || status === "connected") return "ok";
+  if (status === "exited") return "danger";
+  if (status === "paused" || status === "exiting" || status === "reconnecting") return "warn";
+  return "";
+}
+
+function statusChip(status) {
+  return `<span class="chip ${chipClass(status)}">${esc(status || "—")}</span>`;
+}
+
+function hideSecret() {
+  const box = $("secretOnce");
+  if (box) box.hidden = true;
+  if ($("secretOnceText")) $("secretOnceText").textContent = "";
+}
+
+function showSecret(secret, context) {
+  const box = $("secretOnce");
+  if (!box) return;
+  box.hidden = false;
+  $("secretOnceText").textContent = secret;
+  $("secretOnceHint").textContent = `${context}：此密鑰只顯示一次，請立刻複製到該站 OPS_INGEST_SECRET。`;
+  setTab("products");
+}
+
+function hideConfirm() {
+  $("confirmDlg").hidden = true;
+  confirmAction = null;
+}
+
+function showConfirm({ title, body, confirmLabel, onConfirm }) {
+  $("confirmTitle").textContent = title;
+  $("confirmBody").textContent = body;
+  $("confirmOk").textContent = confirmLabel || "確定";
+  confirmAction = onConfirm;
+  $("confirmDlg").hidden = false;
+  $("confirmOk").focus();
+}
+
+function renderProductSwitcher() {
+  const box = $("productSwitch");
+  if (!box) return;
+  const items = [{ id: "", display_name: "全部" }, ...productsCache];
+  box.innerHTML = items.map((p) => {
+    const id = p.id || "";
+    const on = selectedProductId === id;
+    return `<button type="button" class="chip-btn${on ? " on" : ""}" data-product="${esc(id)}" aria-pressed="${on ? "true" : "false"}">${esc(p.display_name || "全部")}</button>`;
+  }).join("");
+}
+
+function renderProductCards() {
+  const box = $("productCards");
+  if (!box) return;
+  if (!productsCache.length) {
+    box.innerHTML = `<p class="hint">尚無產品卡。</p>`;
+    return;
+  }
+  box.innerHTML = productsCache.map((p) => {
+    const sub = p.subscription || {};
+    const exited = p.status === "exited" || sub.status === "exited";
+    const paused = p.status === "paused" || sub.status === "paused";
+    return `<article class="product-card">
+      <div class="row">
+        <h3>${esc(p.display_name)}</h3>
+        <span class="grow"></span>
+        ${statusChip(p.status)}
+      </div>
+      <p class="hint"><code>${esc(p.id)}</code> · 訂閱世代 ${esc(sub.generation ?? "—")} · ${statusChip(sub.status)}</p>
+      <div class="row actions">
+        ${exited ? `<button type="button" class="primary" data-pid="${esc(p.id)}" data-pact="reconnect">重新連接</button>` : ""}
+        ${!exited && paused ? `<button type="button" class="primary" data-pid="${esc(p.id)}" data-pact="resume">恢復</button>` : ""}
+        ${!exited && !paused ? `<button type="button" data-pid="${esc(p.id)}" data-pact="pause">暫停</button>` : ""}
+        ${!exited ? `<button type="button" data-pid="${esc(p.id)}" data-pact="rotate-credential">輪替密鑰</button>` : ""}
+        ${!exited ? `<button type="button" class="danger" data-pid="${esc(p.id)}" data-pact="unsubscribe">解除訂閱</button>` : ""}
+      </div>
+    </article>`;
+  }).join("");
+}
+
+function setProductBusy(on) {
+  productBusy = on;
+  document.querySelectorAll("#productCards button, #createProductBtn").forEach((btn) => {
+    btn.disabled = on;
+  });
+}
+
+async function refreshProducts() {
+  const { res, data } = await api("/ops/api/products");
+  if (!res.ok) {
+    setStatus($("productMsg"), data.error || "無法讀取產品", "err");
+    return;
+  }
+  productsCache = data.items || [];
+  if (selectedProductId && !productsCache.some((p) => p.id === selectedProductId)) {
+    selectedProductId = "";
+  }
+  renderProductSwitcher();
+  renderProductCards();
+}
+
+async function runProductAction(id, action) {
+  if (productBusy) return;
+  setProductBusy(true);
+  setStatus($("productMsg"), "處理中…");
+  try {
+    const { res, data } = await api(`/ops/api/products/${encodeURIComponent(id)}/${action}`, { method: "POST" });
+    if (!res.ok) {
+      setStatus($("productMsg"), data.error || "操作失敗", "err");
+      return;
+    }
+    const labels = {
+      pause: "已暫停訂閱",
+      resume: "已恢復訂閱",
+      unsubscribe: "已解除訂閱，密鑰已撤銷",
+      reconnect: "已重新連接",
+      "rotate-credential": "已輪替密鑰",
+    };
+    setStatus($("productMsg"), labels[action] || "已完成", "ok");
+    if (data.ingest_secret) {
+      showSecret(data.ingest_secret, action === "reconnect" ? "重新連接" : "輪替密鑰");
+    }
+    await refreshProducts();
+  } finally {
+    setProductBusy(false);
+  }
+}
+
+async function createProduct(ev) {
+  ev.preventDefault();
+  if (productBusy) return;
+  const id = $("newProductId").value.trim();
+  const name = $("newProductName").value.trim();
+  setProductBusy(true);
+  setStatus($("productMsg"), "建立中…");
+  try {
+    const { res, data } = await api("/ops/api/products", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, display_name: name }),
+    });
+    if (!res.ok) {
+      setStatus($("productMsg"), data.error || "建立失敗", "err");
+      return;
+    }
+    $("createProductForm").reset();
+    setStatus($("productMsg"), `已建立 ${data.product?.display_name || id}`, "ok");
+    if (data.ingest_secret) showSecret(data.ingest_secret, "新建產品");
+    await refreshProducts();
+  } finally {
+    setProductBusy(false);
+  }
+}
+
+function requestProductAction(id, action) {
+  const product = productsCache.find((p) => p.id === id);
+  const name = product?.display_name || id;
+  if (action === "unsubscribe") {
+    showConfirm({
+      title: "確認解除訂閱",
+      body: `確定解除「${name}」（${id}）的訂閱？此站將停止傳送，現有密鑰立即失效。產品卡會留下摘要，之後可重新連接。`,
+      confirmLabel: "確定解除",
+      onConfirm: () => runProductAction(id, "unsubscribe"),
+    });
+    return;
+  }
+  runProductAction(id, action);
 }
 
 async function refreshDashboard() {
-  const { res, data } = await api("/ops/api/dashboard");
+  const { res, data } = await api(`/ops/api/dashboard${productQuery("?")}`);
   if (!res.ok) {
     $("dashMsg").textContent = data.error || "無法讀取總覽";
     $("dashMsg").className = "msg err";
@@ -78,7 +260,8 @@ async function refreshDashboard() {
   const hook = data.webhook?.configured
     ? `Webhook 已設定（${data.webhook.channel}）${data.webhook.on_ingest ? "，入庫也會通知" : ""}`
     : "尚未設定 OPS_NOTIFY_WEBHOOK_URL，核准／發布通知不會外送";
-  $("dashMsg").textContent = `Phase ${data.phase} · ${hook}`;
+  const scope = data.selected_product_id ? `站台 ${data.selected_product_id}` : "全部站台";
+  $("dashMsg").textContent = `Phase ${data.phase} · ${scope} · ${hook}`;
   $("dashMsg").className = "msg";
 
   const issues = await api("/ops/api/issues?limit=80");
@@ -91,26 +274,28 @@ async function refreshDashboard() {
 
 async function refreshInbox() {
   const include = $("showContact")?.checked ? "1" : "0";
-  const { res, data } = await api(`/ops/api/feedback?limit=80&includeContact=${include}`);
+  const { res, data } = await api(`/ops/api/feedback?limit=80&includeContact=${include}${productQuery("&")}`);
   if (!res.ok) {
     $("inboxHint").textContent = data.error || "無法讀取收件匣";
     return;
   }
-  $("inboxHint").textContent = `共 ${data.total} 筆，顯示最新 ${data.items.length} 筆。`;
+  const scope = selectedProductId ? `（${selectedProductId}）` : "";
+  $("inboxHint").textContent = `共 ${data.total} 筆${scope}，顯示最新 ${data.items.length} 筆。`;
   const body = $("inboxTable").querySelector("tbody");
   body.innerHTML = (data.items || []).map((r) => `
     <tr data-fid="${r.id}">
       <td>${r.id}</td>
+      <td>${esc(r.product_id || "—")}</td>
       <td>${esc(r.kind)}</td>
       <td>${esc(String(r.content || "").slice(0, 120))}</td>
       <td>${r.issue_id ? "#" + r.issue_id : "—"}</td>
       <td>${esc(r.app_version || "—")}</td>
       <td>${fmtTime(r.received_at || r.submitted_at)}</td>
-    </tr>`).join("") || `<tr><td colspan="6" class="hint">尚無回饋。請確認正式站已開 OPS_FEEDBACK_DELIVERY=1。</td></tr>`;
+    </tr>`).join("") || `<tr><td colspan="7" class="hint">尚無回饋。請確認正式站已開 OPS_FEEDBACK_DELIVERY=1。</td></tr>`;
 }
 
 async function openFeedback(id) {
-  const { res, data } = await api(`/ops/api/feedback/${id}/analysis`);
+  const { res, data } = await api(`/ops/api/feedback/${id}/analysis${productQuery("?")}`);
   const box = $("feedbackDetail");
   if (!res.ok) {
     box.hidden = false;
@@ -121,7 +306,7 @@ async function openFeedback(id) {
   const cur = data.current || {};
   box.hidden = false;
   box.textContent = [
-    `回饋 #${fb.id} · ${fb.kind || ""} · ${fb.source || ""}`,
+    `回饋 #${fb.id} · ${fb.kind || ""} · ${fb.source || ""} · ${fb.product_id || ""}`,
     fb.content || "",
     "",
     `分析：${cur.category || "尚未分析"} / ${cur.severity_hint || "—"}`,
@@ -235,7 +420,14 @@ async function refreshTransitions() {
 }
 
 async function refreshAll() {
-  await Promise.all([refreshDashboard(), refreshInbox(), refreshIssues(), refreshAudit(), refreshTransitions()]);
+  await Promise.all([
+    refreshProducts(),
+    refreshDashboard(),
+    refreshInbox(),
+    refreshIssues(),
+    refreshAudit(),
+    refreshTransitions(),
+  ]);
 }
 
 async function init() {
@@ -282,7 +474,45 @@ document.querySelectorAll(".tab").forEach((btn) => {
 $("refreshBtn").addEventListener("click", refreshAll);
 $("inboxRefresh").addEventListener("click", refreshInbox);
 $("issuesRefresh").addEventListener("click", refreshIssues);
+$("productsRefresh").addEventListener("click", refreshProducts);
 $("showContact").addEventListener("change", refreshInbox);
+$("createProductForm").addEventListener("submit", createProduct);
+
+$("productSwitch").addEventListener("click", async (ev) => {
+  const btn = ev.target.closest("[data-product]");
+  if (!btn) return;
+  selectedProductId = btn.dataset.product || "";
+  renderProductSwitcher();
+  await Promise.all([refreshDashboard(), refreshInbox()]);
+});
+
+$("productCards").addEventListener("click", (ev) => {
+  const btn = ev.target.closest("[data-pact]");
+  if (!btn || btn.disabled) return;
+  requestProductAction(btn.dataset.pid, btn.dataset.pact);
+});
+
+$("copySecretBtn").addEventListener("click", async () => {
+  const text = $("secretOnceText").textContent || "";
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    setStatus($("productMsg"), "密鑰已複製", "ok");
+  } catch {
+    setStatus($("productMsg"), "無法自動複製，請手動選取", "err");
+  }
+});
+$("dismissSecretBtn").addEventListener("click", hideSecret);
+
+$("confirmCancel").addEventListener("click", hideConfirm);
+$("confirmOk").addEventListener("click", async () => {
+  const fn = confirmAction;
+  hideConfirm();
+  if (fn) await fn();
+});
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape" && !$("confirmDlg").hidden) hideConfirm();
+});
 
 $("inboxTable").addEventListener("click", (ev) => {
   const tr = ev.target.closest("tr[data-fid]");

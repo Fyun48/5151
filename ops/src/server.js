@@ -552,7 +552,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
       }
       if (pathname === "/ops/api/dashboard" && method === "GET") {
         if (!runGuard(auth.requireOwner, req, reply)) return;
-        sendJson(res, 200, getDashboard(db));
+        sendJson(res, 200, getDashboard(db, process.env, { productId: url.searchParams.get("productId") || null }));
         return;
       }
       if (pathname === "/ops/api/notify/test" && method === "POST") {

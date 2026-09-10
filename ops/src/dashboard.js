@@ -47,18 +47,61 @@ export function listFeedbackInbox(db, { limit = 50, offset = 0, includeContact =
   };
 }
 
-export function getDashboard(db, env = process.env) {
-  const lifecycle = {};
-  for (const row of db.prepare("SELECT state, COUNT(*) AS n FROM state_entity WHERE entity_type IN ('issue','lifecycle') GROUP BY state").all()) {
-    lifecycle[row.state] = Number(row.n) || 0;
+function scopedProductId(value) {
+  const id = String(value || "").trim().toLowerCase();
+  return /^[a-z][a-z0-9_-]{0,31}$/.test(id) ? id : "";
+}
+
+function countIssuesForProduct(db, productId, { openOnly = false } = {}) {
+  if (!productId) {
+    const sql = openOnly
+      ? "SELECT COUNT(*) AS n FROM issue_candidate WHERE status='open'"
+      : "SELECT COUNT(*) AS n FROM issue_candidate";
+    return Number(db.prepare(sql).get()?.n) || 0;
   }
-  const issues = Number(db.prepare("SELECT COUNT(*) AS n FROM issue_candidate").get()?.n) || 0;
-  const openIssues = Number(db.prepare("SELECT COUNT(*) AS n FROM issue_candidate WHERE status='open'").get()?.n) || 0;
+  const extra = openOnly ? " AND i.status='open'" : "";
+  return Number(db.prepare(`
+    SELECT COUNT(*) AS n FROM issue_candidate i
+     WHERE EXISTS (
+       SELECT 1 FROM issue_feedback_link l
+       JOIN ingested_feedback f ON f.id = l.feedback_id
+       WHERE l.issue_id = i.id AND l.active = 1 AND f.product_id = ?
+     )${extra}
+  `).get(productId)?.n) || 0;
+}
+
+export function getDashboard(db, env = process.env, { productId = null } = {}) {
+  const scoped = scopedProductId(productId);
+  const lifecycle = {};
+  if (scoped) {
+    for (const row of db.prepare(`
+      SELECT se.state, COUNT(*) AS n
+        FROM state_entity se
+       WHERE se.entity_type IN ('issue','lifecycle')
+         AND EXISTS (
+           SELECT 1 FROM issue_feedback_link l
+           JOIN ingested_feedback f ON f.id = l.feedback_id
+           WHERE l.active = 1
+             AND se.id = 'issue:' || CAST(l.issue_id AS TEXT)
+             AND f.product_id = ?
+         )
+       GROUP BY se.state
+    `).all(scoped)) {
+      lifecycle[row.state] = Number(row.n) || 0;
+    }
+  } else {
+    for (const row of db.prepare("SELECT state, COUNT(*) AS n FROM state_entity WHERE entity_type IN ('issue','lifecycle') GROUP BY state").all()) {
+      lifecycle[row.state] = Number(row.n) || 0;
+    }
+  }
+  const issues = countIssuesForProduct(db, scoped);
+  const openIssues = countIssuesForProduct(db, scoped, { openOnly: true });
   const pendingNotifs = Number(db.prepare("SELECT COUNT(*) AS n FROM release_notification WHERE status='pending'").get()?.n) || 0;
   const cfg = notifyConfig(env);
   return {
     phase: OPS_PHASE,
-    feedback_total: countIngested(db),
+    selected_product_id: scoped || null,
+    feedback_total: countIngested(db, { productId: scoped || null }),
     issues_total: issues,
     issues_open: openIssues,
     lifecycle,

@@ -34,12 +34,14 @@ OPS_PRODUCT_ID=v3
 
 1. `npm run dev:ops`（或正式機跑 `npm run start:ops`）
 2. 用 `AUTH_EMAIL` / `AUTH_PASSWORD` 登入
-3. **總覽**：看回饋數、待核准開發／發布、webhook 狀態
-4. **回饋收件匣**：逐筆看內容與分析
-5. **議題與投票**：同類回饋會聚成議題；影響力夠高後做五角色評估（PROPOSE / WAIT / IGNORE / ESCALATE），再產生提案
-6. 評估結果是 **PROPOSE** 時，對提案按「核准開發」（Gate #1）
-7. Coding / QA / Staging 通過後，用 API 或後續畫面做 Gate #2 核准發布
-8. **正式機仍要走 CasaOS Deploy v3**，OPS Phase 15 預設不會自己部署
+3. **總覽**：看回饋數、待核准開發／發布、webhook 狀態；頂部可切到單一站
+4. **回饋收件匣**：逐筆看內容與分析（可依站過濾）
+5. **產品**：列舉產品卡，暫停／恢復／解除訂閱（需確認）／重新連接／輪替密鑰；新密鑰只顯示一次
+6. **議題與投票**：同類回饋會聚成議題；影響力夠高後做五角色評估（PROPOSE / WAIT / IGNORE / ESCALATE），再產生提案
+7. 評估結果是 **PROPOSE** 時，對提案按「核准開發」（Gate #1）
+8. Coding / QA / Staging 通過後，用 API 或後續畫面做 Gate #2 核准發布
+9. **正式機仍要走 CasaOS Deploy v3**，OPS Phase 15 預設不會自己部署
+10. **更新 OPS 本身**走 `.github/workflows/deploy-ops.yml`（確認字 `DEPLOY-OPS`，只重建 `5151-ops`），不是 v3 的第四條路徑
 
 ## Webhook 通知
 

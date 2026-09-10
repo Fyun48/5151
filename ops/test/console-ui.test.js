@@ -27,6 +27,24 @@ test("tab panes honor the hidden attribute (display:grid must not override it)",
   assert.match(html, /id="tab-inbox"[^>]*hidden/);
   assert.match(html, /id="tab-issues"[^>]*hidden/);
   assert.match(html, /id="tab-audit"[^>]*hidden/);
+  assert.match(html, /id="tab-products"[^>]*hidden/);
   assert.match(html, /console\.css\?v=/);
   assert.match(html, /console\.js\?v=/);
+});
+
+test("console has product cards, switcher, and one-time secret", () => {
+  assert.match(html, /data-tab="products"/);
+  assert.match(html, /產品卡/);
+  assert.match(html, /id="productCards"/);
+  assert.match(html, /id="productSwitch"/);
+  assert.match(html, /id="secretOnce"[^>]*hidden/);
+  assert.match(html, /只顯示一次/);
+  assert.match(html, /id="confirmDlg"[^>]*hidden/);
+  assert.match(html, /role="status"/);
+  assert.match(js, /\/ops\/api\/products/);
+  assert.match(js, /\/ops\/api\/products\/\$\{encodeURIComponent\(id\)\}\/\$\{action\}/);
+  assert.match(js, /pause|resume|unsubscribe|reconnect|rotate-credential/);
+  assert.match(js, /確定解除/);
+  assert.match(js, /productId=/);
+  assert.match(css, /overflow-x:\s*hidden/);
 });
