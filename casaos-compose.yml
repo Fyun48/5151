@@ -72,6 +72,6 @@ x-casaos:
     zh_tw: 591 物件追蹤
   description:
     en_us: Track 591 rental listings with viewed, watched, and hidden flags.
-    zh_tw: 591 租屋新物件追蹤。v1 已停用；v2 在 5152／b5151，目前在 5153／c5151。
+    zh_tw: 591 租屋新物件追蹤。v1 已停用；v2 在 5152／b5151，目前在 5153／c5151 與 jibbyrenth。
   category: Utility
   port_map: "5153"

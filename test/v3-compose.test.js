@@ -24,6 +24,7 @@ test("v3 docker service binds 5153 and mounts v2 db read-only", () => {
   assert.match(v3, /V2_DB_PATH: \/v2-data\/v2\.db/);
   assert.match(v3, /\.\/v3\/src:\/app\/src/);
   assert.match(v3, /c5151\.reversalplay\.me/);
+  assert.match(readFileSync(path.join(root, "README.md"), "utf8"), /jibbyrenth\.reversalplay\.me/);
 });
 
 test("CasaOS compose lists v3 as main on port 5153", () => {
@@ -32,6 +33,7 @@ test("CasaOS compose lists v3 as main on port 5153", () => {
   assert.match(casaos, /591-tracker-v3:/);
   assert.match(casaos, /port_map: "5153"/);
   assert.match(casaos, /c5151\.reversalplay\.me/);
+  assert.match(casaos, /jibbyrenth/);
 });
 
 test("deploy-v3 workflow recreates only the v3 container (manual dispatch after Phase 3.5)", () => {

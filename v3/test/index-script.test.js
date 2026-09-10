@@ -383,7 +383,7 @@ test("guest demo is read-only and work prompt can be skipped", () => {
 
 test("member settings copy hides advanced hints and locks schedule defaults", () => {
   const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
-  assert.match(html, /此通知預設只會訊息已是特別關注之物件/);
+  assert.match(html, /其餘種類都只有特別關注才會推/);
   assert.match(html, /物件／屋源提醒若要用信/);
   assert.match(html, /站方管理員 SMTP/);
   assert.match(html, /data-notify-ch="mail"/);
@@ -706,6 +706,16 @@ test("self listing form and in-site detail stay on this site", () => {
   assert.doesNotMatch(html, /data-confirm-match/);
   assert.doesNotMatch(html, />是同一間</);
   assert.match(html, /不是同一間/);
+  assert.match(html, /併入同房源/);
+  assert.match(html, /function mergeSelectedListings/);
+  assert.match(html, /確認下架中/);
+  assert.match(html, /只打特別關注/);
+  assert.match(html, /body.merge-selecting .item:has\(\.item-cover.empty\)/);
+  assert.doesNotMatch(html, /listing-status off-sure/);
+  assert.match(html, /\.tag\.new \{ background: var\(--accent-mist\)/);
+  assert.match(html, /\.cost-change-note \{[\s\S]*?color: var\(--same\)/);
+  assert.match(html, /function dockEventClass/);
+  assert.match(html, /\.dock-item \.tag\.notify-new/);
   assert.match(html, /先只從你的列表拆開/);
   assert.match(html, /function sameHouseOf\(/);
   assert.doesNotMatch(html, /function sameHouseCompareHtml\(/);

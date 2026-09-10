@@ -57,7 +57,7 @@ npm run start:v2
 
 - v1（已停用）：`https://a5151.reversalplay.me` → `127.0.0.1:5151`，資料 `/DATA/AppData/591-tracker`
 - v2：`https://b5151.reversalplay.me` → `127.0.0.1:5152`，資料 `/DATA/AppData/591-tracker-v2`（檔名 `v2.db`）
-- 目前版：`https://c5151.reversalplay.me` → `127.0.0.1:5153`，資料 `/DATA/AppData/591-tracker-v3`
+- 目前版：`https://c5151.reversalplay.me` 與 `https://jibbyrenth.reversalplay.me` → `127.0.0.1:5153`，資料 `/DATA/AppData/591-tracker-v3`
 
 同一個 GitHub repo、同一張 Docker 映像、同一條 Cloudflare Tunnel。v2／目前版各是一個容器。不必新開 GitHub 專案。
 
@@ -65,6 +65,7 @@ Cloudflare Zero Trust → Networks → Tunnels → 現有 tunnel → Public Host
 
 1. Subdomain `b5151`，Domain `reversalplay.me` → Type `HTTP`，URL `http://127.0.0.1:5152`
 2. Subdomain `c5151`，Domain `reversalplay.me` → Type `HTTP`，URL `http://127.0.0.1:5153`
+3. Subdomain `jibbyrenth`，Domain `reversalplay.me` → Type `HTTP`，URL `http://127.0.0.1:5153`（與 c5151 同一條 tunnel、同一台 v3）
 3. `a5151` 不必再當正式站；v1 容器預設不會起來。
 
 CasaOS 上 `docker compose up`／應用預設只跑 v2 與目前版。v1 服務定義留著，但掛了 `profiles: ["v1"]`，沒加 profile 不會啟動。第一次請確認 v1 已停：
@@ -86,7 +87,7 @@ SQLite 與設定會寫進 `DATA_DIR`（容器內預設 `/data`）。CasaOS 請�
 
 Linux 容器沒有 Windows 氣泡通知。預設用站內待看視窗與系統推播（PWA）。第一次若要鎖定畫面推播，可在資料目錄的 `auth.env` 放 `VAPID_PUBLIC_KEY`／`VAPID_PRIVATE_KEY`；沒填時容器會自行寫入 `vapid.json`。郵件與 Discord Webhook 仍是選用。
 
-Cloudflare Zero Trust 請為目前版加 Public Hostname：Subdomain `c5151`，Domain `reversalplay.me`，Type `HTTP`，URL `http://127.0.0.1:5153`。
+Cloudflare Zero Trust 請為目前版加 Public Hostname：Subdomain `c5151` 與 `jibbyrenth`，Domain `reversalplay.me`，Type `HTTP`，URL `http://127.0.0.1:5153`。同一條 tunnel，不要另開第二條。
 
 ### 方式一：CasaOS 匯入 Compose（建議，拉 GitHub 映像）
 
@@ -123,6 +124,6 @@ docker compose --profile tunnel up -d
 公開網址：
 
 - v2：`https://b5151.reversalplay.me` → `http://127.0.0.1:5152`
-- 目前版：`https://c5151.reversalplay.me` → `http://127.0.0.1:5153`
+- 目前版：`https://c5151.reversalplay.me`、`https://jibbyrenth.reversalplay.me` → `http://127.0.0.1:5153`
 
 CasaOS 本機埠只綁 loopback。

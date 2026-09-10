@@ -62,11 +62,13 @@ export function parseNotifyChanges(detail) {
   return out;
 }
 
-export function eventLabel(type) {
+export function eventLabel(type, event = {}) {
   if (type === "new") return "全新物件";
   if (type === "same_source") return "同屋源更新";
   if (type === "relist") return "重新上架";
-  if (type === "offline") return "591 已下架";
+  if (type === "offline") {
+    return Number(event.offline_confirmed) === 1 ? "確認已下架" : "確認下架中";
+  }
   if (type === "price_drop") return "價格調降";
   if (type === "price_update") return "價格變更";
   if (type === "title_update") return "標題更新";
@@ -77,15 +79,16 @@ export function eventLabel(type) {
   return type;
 }
 
-function embedColor(type) {
-  if (type === "new") return 0x1d4ed8;
-  if (type === "relist") return 0x0369a1;
-  if (type === "offline") return 0x475569;
+/** webhook 色：全新淺藍、重刊淺綠、費用粉紅、確認已下架才紅、確認下架中不紅。 */
+export function embedColor(type, event = {}) {
+  if (type === "new") return 0x7dd3fc;
+  if (type === "relist") return 0x86efac;
+  if (type === "offline") return Number(event.offline_confirmed) === 1 ? 0xdc2626 : 0x9ca3af;
   if (type === "same_source") return 0x7c3aed;
   if (type === "price_drop") return 0x15803d;
   if (type === "price_update") return 0x15803d;
   if (type === "title_update") return 0xb45309;
-  if (type === "fee_update") return 0xb45309;
+  if (type === "fee_update") return 0xf9a8d4;
   return 0xb45309;
 }
 
@@ -269,7 +272,7 @@ export function shouldDeliverNotify(settings, listing, event, opts = {}) {
 export function listingNotifyVars(event, extra = {}) {
   const price = String(event?.price || "").trim();
   return {
-    event: eventLabel(event?.type),
+    event: eventLabel(event?.type, event),
     title: String(event?.title || "").trim(),
     price: price ? (/元/.test(price) ? price : `${price} 元/月`) : "",
     facts: formatNotifyFacts(event || {}),
@@ -328,9 +331,9 @@ async function postDiscord(webhook, title, events) {
   const embeds = events.slice(0, 8).map((event) => ({
     title: String(event.title || "591 物件").slice(0, 250),
     url: trackedListingUrl(event.post_id, event.url),
-    color: embedColor(event.type),
+    color: embedColor(event.type, event),
     description: [
-      `**${eventLabel(event.type)}**${event.detail ? ` · ${event.detail}` : ""}`,
+      `**${eventLabel(event.type, event)}**${event.detail ? ` · ${event.detail}` : ""}`,
       event.price ? `${event.price} 元/月` : "",
       formatFeeLine(event),
       formatNotifyFacts(event),

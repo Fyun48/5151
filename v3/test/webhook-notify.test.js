@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   classifyExistingUpdate,
+  embedColor,
+  eventLabel,
   formatNotifyFacts,
   formatUsableArea,
   isSameNotifyDetail,
@@ -335,4 +337,23 @@ test("listing mail keeps the member smtp on the payload", async () => {
   });
   assert.equal(sent.length, 1);
   assert.equal(sent[0].smtp.host, "smtp.member.test");
+});
+
+test("webhook colors and offline labels", () => {
+  assert.equal(embedColor("new"), 0x7dd3fc);
+  assert.equal(embedColor("relist"), 0x86efac);
+  assert.equal(embedColor("fee_update"), 0xf9a8d4);
+  assert.equal(embedColor("offline", { offline_confirmed: 0 }), 0x9ca3af);
+  assert.equal(embedColor("offline", { offline_confirmed: 1 }), 0xdc2626);
+  assert.equal(eventLabel("offline", { offline_confirmed: 0 }), "確認下架中");
+  assert.equal(eventLabel("offline", { offline_confirmed: 1 }), "確認已下架");
+});
+
+test("only watched listings get non-new notifications", () => {
+  assert.equal(shouldNotify(hookSettings, listing, { type: "new" }), true);
+  assert.equal(shouldNotify(hookSettings, listing, { type: "offline" }), false);
+  assert.equal(shouldNotify(hookSettings, listing, { type: "relist" }), false);
+  assert.equal(shouldNotify(hookSettings, listing, { type: "fee_update" }), false);
+  assert.equal(shouldNotify(hookSettings, watched, { type: "offline" }), true);
+  assert.equal(shouldNotify(hookSettings, watched, { type: "fee_update" }), true);
 });

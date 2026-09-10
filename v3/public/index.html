@@ -206,6 +206,7 @@
     body.compare-open #expandPanelBtn,
     body.compare-open #ownerFab,
     body.compare-open .mobile-help-dock,
+    body.compare-open #mergeDock,
     body.guest-toast-open #scrollTopBtn,
     body.guest-toast-open #expandPanelBtn,
     body.guest-toast-open .mobile-help-dock { visibility: hidden; pointer-events: none; }
@@ -738,6 +739,37 @@
       padding: 8px 0 0;
     }
     .bulk-bar.on { display: flex; }
+    .item.drag-source { opacity: 0.55; }
+    .item.drag-over { box-shadow: 0 0 0 2px var(--accent); }
+    .merge-drag-ghost {
+      position: fixed;
+      z-index: 160;
+      pointer-events: none;
+      max-width: min(420px, 86vw);
+      padding: 10px 12px;
+      background: var(--paper);
+      border: 1px solid var(--accent);
+      border-radius: var(--radius-lg);
+      font-size: var(--text-sm);
+      color: var(--ink);
+    }
+    #mergeDock {
+      display: none;
+      position: fixed;
+      left: 50%;
+      transform: translateX(-50%);
+      bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+      z-index: 95;
+      gap: 8px;
+      align-items: center;
+      padding: 8px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+    }
+    body.merge-selecting #mergeDock,
+    #mergeDock.on { display: flex; }
+    #mergeDock button { min-height: var(--touch); min-width: var(--touch); padding: 0 14px; }
     .bulk-bar .compare-hint {
       width: 100%;
       margin: 0;
@@ -864,6 +896,9 @@
     .item:has(.item-cover.empty) {
       grid-template-columns: 44px 112px minmax(0, 1fr) 120px 148px;
     }
+    body.merge-selecting .item:has(.item-cover.empty) {
+      grid-template-columns: 44px 112px minmax(0, 1fr) 120px 148px;
+    }
     .item.picked { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
     .item.shezidao {
       border: 2px solid var(--shezi-red);
@@ -934,6 +969,16 @@
     .item-main { min-width: 0; }
     .item-details { min-width: 0; }
     .meta { color: var(--muted); font-size: 13px; margin: 6px 0; line-height: 1.55; }
+    .community-map-link {
+      color: var(--accent-deep);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    .community-map-link:hover { color: var(--accent); }
+    .community-map-link:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
     .fees { color: var(--accent-deep); font-size: 13px; margin-top: 4px; line-height: 1.55; }
     .contact {
       display: flex;
@@ -2177,6 +2222,15 @@
     .support-benefits { margin: 6px 0 0; padding-left: 1.1em; color: var(--muted); font-size: var(--text-xs); }
     .dock-item.system .tag.system { background: var(--accent-soft); color: var(--accent-deep); }
     .dock-item.sponsored .tag.sponsored { background: var(--line); color: var(--ink); }
+    /* 通知文字色對齊 webhook embed；只套站內通知 dock／通知設定，不用在找房列表 */
+    .dock-item .tag.notify-new { background: #e0f2fe; color: var(--notify-new-fg); }
+    .dock-item .tag.notify-relist { background: #dcfce7; color: var(--notify-relist-fg); }
+    .dock-item .tag.notify-fee { background: #fce7f3; color: var(--notify-fee-fg); }
+    .dock-item .tag.notify-off { background: var(--tag-off-bg); color: var(--tag-off-fg); }
+    .dock-item .tag.notify-off-sure { background: #fee2e2; color: var(--offline-sure); }
+    .notify-matrix .notify-event.new { color: var(--notify-new-fg); font-weight: 700; }
+    .notify-matrix .notify-event.relist { color: var(--notify-relist-fg); font-weight: 700; }
+    .notify-matrix .notify-event.off { color: var(--muted); font-weight: 700; }
     .owner-list { display: grid; gap: 10px; margin-top: 12px; }
     body:not(.role-admin) .admin-only { display: none !important; }
     body.role-admin .member-only { display: none !important; }
@@ -2554,6 +2608,18 @@
         padding: 12px;
       }
       .item .pick-hit { display: none !important; }
+      body.merge-selecting .item {
+        grid-template-columns: 44px 84px minmax(0, 1fr);
+      }
+      body.merge-selecting .item .pick-hit {
+        display: inline-flex !important;
+        grid-column: 1;
+        grid-row: 1;
+        align-items: center;
+        padding: 8px 0 0;
+      }
+      body.merge-selecting .item-cover { grid-column: 2; }
+      body.merge-selecting .item-main { grid-column: 3; }
       .item-copy { display: contents; }
       .item-main { grid-column: 2; grid-row: 1; min-width: 0; }
       .item-details,
@@ -2594,6 +2660,10 @@
       }
       body.role-guest .item:has(.item-cover.empty) {
         grid-template-columns: 92px minmax(0, 1fr);
+      }
+      body.merge-selecting .item:has(.item-cover.empty),
+      body.merge-selecting.role-guest .item:has(.item-cover.empty) {
+        grid-template-columns: 44px 84px minmax(0, 1fr);
       }
       .item .contact,
       .item .actions {
@@ -3005,6 +3075,7 @@
             <button type="button" class="ghost" id="clearSelectBtn">取消勾選</button>
             <button type="button" class="ghost" id="compareSelectedBtn" disabled>比較（0／3）</button>
             <button type="button" class="primary" id="hideSelectedBtn">不再顯示已選</button>
+            <button type="button" class="primary" id="mergeSelectedBtn" hidden>併入同房源</button>
             <p class="compare-hint" id="compareHint" hidden>自選 2～3 筆比較（可跨屋源），只列有差異的欄。</p>
           </div>
         </div>
@@ -3547,7 +3618,7 @@
         </ol>
         <label>Discord Webhook（選填）</label>
         <input type="url" id="discordWebhook" placeholder="https://discord.com/api/webhooks/..." />
-        <p class="hint">此通知預設只會訊息已是特別關注之物件。要改事件種類請切到「通知種類」。</p>
+        <p class="hint">Webhook 同房源多筆只送主物件。全新物件依搜尋設定檔；其餘種類都只有特別關注才會推。要改通道請切到「通知種類」。</p>
       </section>
       <section class="hub-pane" data-hub-pane="mail" hidden>
         <p class="hint">這組 SMTP <strong>只寄物件／屋源提醒</strong>到你註冊的信箱，請用你自己的帳號寄給自己。註冊歡迎、忘記密碼、變更密碼、贊助通知由站方管理員 SMTP 寄出，不會用這裡的密碼。</p>
@@ -3595,7 +3666,7 @@
         <p class="msg" id="memberMailMsg"></p>
       </section>
       <section class="hub-pane" data-hub-pane="events">
-        <p class="hint">全新物件只通知符合目前設定檔的篩選（例如只看整層、排除 1F 及地下室、行政區、租金）。頻道勾選也存在同一個設定檔。</p>
+        <p class="hint">全新物件只通知符合目前設定檔的篩選（例如只看整層、排除 1F 及地下室、行政區、租金）。價格、費用、下架、重新上架與同屋源重刊都只有特別關注才會發。頻道勾選也存在同一個設定檔。</p>
         <div class="notify-matrix-wrap">
         <table class="notify-matrix" id="notifyMatrix">
           <thead>
@@ -3609,7 +3680,7 @@
           </thead>
           <tbody>
             <tr>
-              <td>全新物件</td>
+              <td class="notify-event new">全新物件</td>
               <td><input type="checkbox" data-notify-row="new" data-notify-ch="dock" checked /></td>
               <td><input type="checkbox" data-notify-row="new" data-notify-ch="push" checked /></td>
               <td><input type="checkbox" data-notify-row="new" data-notify-ch="webhook" /></td>
@@ -3644,14 +3715,14 @@
               <td><input type="checkbox" data-notify-row="update" data-notify-ch="mail" /></td>
             </tr>
             <tr>
-              <td>591 下架</td>
+              <td class="notify-event off">591 下架</td>
               <td><input type="checkbox" data-notify-row="offline" data-notify-ch="dock" checked /></td>
               <td><input type="checkbox" data-notify-row="offline" data-notify-ch="push" checked /></td>
               <td><input type="checkbox" data-notify-row="offline" data-notify-ch="webhook" /></td>
               <td><input type="checkbox" data-notify-row="offline" data-notify-ch="mail" /></td>
             </tr>
             <tr>
-              <td>重新上架</td>
+              <td class="notify-event relist">重新上架</td>
               <td><input type="checkbox" data-notify-row="relist" data-notify-ch="dock" checked /></td>
               <td><input type="checkbox" data-notify-row="relist" data-notify-ch="push" checked /></td>
               <td><input type="checkbox" data-notify-row="relist" data-notify-ch="webhook" /></td>
@@ -3796,6 +3867,10 @@
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
   </button>
+  <div id="mergeDock" role="toolbar" aria-label="併入同房源" hidden>
+    <button type="button" class="ghost" id="mergeCancelBtn">取消</button>
+    <button type="button" class="primary" id="mergeConfirmBtn" hidden>併入同房源</button>
+  </div>
   <button type="button" class="primary" id="ownerFab" hidden>我刊登的房子</button>
   <!-- 手機版：捲動後仍能就地開 Q&A／意見（低干擾、左下角、避開右下的回頂與刊登 FAB）。開啟後保留目前頁面位置。 -->
   <div class="mobile-help-dock" id="mobileHelpDock" aria-label="求助與意見">
@@ -3994,6 +4069,10 @@
     const DEFAULT_COMMUTE_KM = 25;
     let settings = {};
     let selected = new Set();
+    let mergeSelectMode = false;
+    let mergePressTimer = 0;
+    let mergeDrag = null;
+    let mergeLastTap = { id: "", at: 0 };
     let excludeBoxes = [];
     let map, drawing = false, startLatLng = null, previewRect = null, boxLayers = [];
     let editingIdx = null;
@@ -4205,14 +4284,30 @@
         ? `一般會員最多 ${MEMBER_MAX_WATCHED} 筆，贊助會員最多 ${SPONSOR_MAX_WATCHED} 筆`
         : "特別關注的物件會優先更新狀態與公司距離";
     }
+    function communityMapsHref(name, address) {
+      const n = String(name || "").trim().replace(/[／/]+/g, " ").replace(/\s+/g, " ").trim();
+      if (!n) return "";
+      const loc = String(address || "").replace(/\s+/g, "");
+      if (/\d+(?:之\d+)?號/.test(loc)) {
+        return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(loc)}`;
+      }
+      const city = (loc.match(/^(台北市|臺北市|新北市|桃園市|基隆市|新竹市|[^市縣]{1,3}[市縣])/) || [])[0] || "";
+      const district = (loc.match(/[市縣]([^\d市縣]{1,4}[區鄉鎮市])/) || [])[1] || "";
+      return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${city}${district}${n}`)}`;
+    }
     function listingSpecLine(item) {
-      return [
-        item?.community_name ? `社區 ${item.community_name}` : "",
-        item?.kind_name || "",
-        item?.layout || "",
-        item?.area_name || "",
-        floorDisplay(item),
-      ].filter(Boolean).join(" · ");
+      const community = String(item?.community_name || "").trim();
+      const linked = community && (item?.community_linked === true || Number(item?.community_linked) === 1 || Number(item?.community_id) > 0);
+      const communityHtml = !community
+        ? ""
+        : linked
+          ? `社區 <a class="community-map-link" href="${esc(communityMapsHref(community, item.address))}" target="_blank" rel="noopener noreferrer" aria-label="在 Google 地圖查看社區 ${esc(community)}">${esc(community)}</a>`
+          : `社區 ${esc(community)}`;
+      const rest = [item?.kind_name || "", item?.layout || "", item?.area_name || "", floorDisplay(item)]
+        .filter(Boolean)
+        .map((bit) => esc(bit))
+        .join(" · ");
+      return [communityHtml, rest].filter(Boolean).join(" · ");
     }
     function safeListingHtml(value) {
       const allowed = new Set(["b", "strong", "i", "em", "u", "br", "p", "span", "div"]);
@@ -4605,7 +4700,8 @@
     }
     function listingStatusLabel(item) {
       if (Number(item?.offline_confirmed) === 1 || item?.offline_confirmed === true) return "確認已下架";
-      if (Number(item?.offline) === 1 || item?.offline === true || item?.last_event === "offline") return "下架確認中";
+      if (Number(item?.offline) === 1 || item?.offline === true || item?.last_event === "offline") return "確認下架中";
+      if (item?.last_event === "relist" || (item?.last_event === "same_source" && item?.offline === 0)) return "重新上架";
       return "刊登中";
     }
     function rentStatusLine(item) {
@@ -4839,7 +4935,7 @@
       const extras = commsInboxHtml(commsInboxItems());
       if (!extras) {
         if (!inbox.querySelector(".dock-item") && !inbox.querySelector(".notify-empty")) {
-          inbox.innerHTML = `<div class="notify-empty">還沒有待看更新。條件按儲存後，全新物件、價格變動與下架會出現在這裡，也可按「允許系統推播」。</div>`;
+          inbox.innerHTML = `<div class="notify-empty">還沒有待看更新。全新物件會依你儲存的搜尋設定檔進來；價格、費用、下架與重新上架只打特別關注。也可按「允許系統推播」。</div>`;
         }
         return;
       }
@@ -5776,11 +5872,14 @@
 
     function sameHouseWarn(item) {
       const house = sameHouseOf(item);
-      if (!house?.cheaper_exists) return "";
+      const personalNote = house?.personal_only && house.system_agrees === false
+        ? `<div class="same-house-warn">系統判定不是同屋源。已依你的操作併入，此記錄只留在你的帳號，不會分享給其他使用者。</div>`
+        : "";
+      if (!house?.cheaper_exists) return personalNote;
       const primary = house.peers.find((peer) => peer.role === "primary") || house.peers[0];
       const total = Number(primary?.total) || 0;
       const src = primary?.source_label || "";
-      return `<div class="same-house-warn">同屋源另有較低總月費${total ? ` ${total.toLocaleString("zh-TW")}` : ""}${src ? `（${esc(src)}）` : ""} · 這則貴 ${Number(house.cheaper_gap).toLocaleString("zh-TW")} 元，先別打這則</div>`;
+      return `${personalNote}<div class="same-house-warn">同屋源另有較低總月費${total ? ` ${total.toLocaleString("zh-TW")}` : ""}${src ? `（${esc(src)}）` : ""} · 這則貴 ${Number(house.cheaper_gap).toLocaleString("zh-TW")} 元，先別打這則</div>`;
     }
 
     function sameHousePeerRole(item, peer, idx) {
@@ -5909,7 +6008,7 @@
       if (item.offline_confirmed) {
         return ` · 確認已下架${day ? `（自 ${esc(day)} 起找不到）` : ""}`;
       }
-      return ` · 下架確認中${day ? `（${esc(day)} 起）` : ""}`;
+      return ` · 確認下架中${day ? `（${esc(day)} 起）` : ""}`;
     }
 
     function tags(item) {
@@ -5918,13 +6017,14 @@
         bits.push(`<span class="tag fit" title="依你的租金、樓層與通勤估算，不是成交預測">${esc(item.fit_label)} ${esc(item.fit_score)}</span>`);
       }
       if (item.last_event === "new") bits.push('<span class="tag new">全新物件</span>');
+      if (item.last_event === "relist") bits.push('<span class="tag relist">重新上架</span>');
       if (item.last_event === "same_source" && !item.match_level && !item.same_house) bits.push('<span class="tag same">同屋源更新</span>');
       if (sameHouseOf(item)) bits.push(sameHouseTag(item));
       else if (item.match_verdict === "yes") bits.push('<span class="tag verdict-yes">已確認：同一間</span>');
       if (item.match_verdict === "no") bits.push('<span class="tag verdict-no">已確認：不同物件</span>');
       if (item.last_event === "update" && !item.cost_change) bits.push('<span class="tag same">內容更新</span>');
       if (item.offline_confirmed) bits.push('<span class="tag off-sure">確認已下架</span>');
-      else if (item.offline || item.last_event === "offline") bits.push('<span class="tag off">正在確認中的下架</span>');
+      else if (item.offline || item.last_event === "offline") bits.push('<span class="tag off">確認下架中</span>');
       if (item.has_elevator) bits.push('<span class="tag lift">有電梯</span>');
       if (item.watched) bits.push('<span class="tag watch">特別關注</span>');
       if (item.viewed) bits.push('<span class="tag viewed">已瀏覽</span>');
@@ -5979,12 +6079,112 @@
       return `<div class="contact${deferContact ? " contact-defer" : ""}">${bits.join("")}</div>`;
     }
 
+    function isCoarsePointer() {
+      return window.matchMedia("(pointer: coarse), (max-width: 767px)").matches;
+    }
+    function paintMergeDock() {
+      const dock = $("mergeDock");
+      if (!dock) return;
+      const n = selected.size;
+      const show = (mergeSelectMode && n >= 1) || n >= 2;
+      dock.hidden = !show;
+      dock.classList.toggle("on", show);
+      document.body.classList.toggle("merge-selecting", mergeSelectMode);
+      const confirm = $("mergeConfirmBtn");
+      if (confirm) confirm.hidden = n < 2;
+    }
+    function exitMergeSelect() {
+      mergeSelectMode = false;
+      selected.clear();
+      document.querySelectorAll("[data-pick]").forEach((el) => {
+        el.checked = false;
+        el.closest(".item")?.classList.remove("picked");
+      });
+      updateBulkBar();
+    }
+    async function mergeSelectedListings(ids) {
+      const postIds = (ids || [...selected]).map((id) => Number(id)).filter(Boolean);
+      if (postIds.length < 2) {
+        $("status").textContent = "請至少選 2 筆才能併入同房源";
+        return;
+      }
+      if (isGuest) {
+        remindGuest();
+        return;
+      }
+      $("status").textContent = "正在併入同房源…";
+      try {
+        const res = await fetch("/api/listings/merge-same-house", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids: postIds }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "併入失敗");
+        exitMergeSelect();
+        $("status").textContent = data.message || "已併入同房源";
+        await loadList();
+      } catch (error) {
+        $("status").textContent = error.message;
+      }
+    }
+    function mergeInteractiveTarget(el) {
+      return Boolean(el?.closest?.("a, button, input, label, textarea, select, .pick-hit, .actions, .contact, .same-house-panel"));
+    }
+    function cardIdFromPoint(x, y) {
+      const node = document.elementFromPoint(x, y);
+      return node?.closest?.("[data-card]")?.dataset?.card || "";
+    }
+    function clearMergeDrag() {
+      if (mergePressTimer) {
+        clearTimeout(mergePressTimer);
+        mergePressTimer = 0;
+      }
+      document.querySelectorAll(".item.drag-source, .item.drag-over").forEach((el) => {
+        el.classList.remove("drag-source", "drag-over");
+      });
+      document.querySelector(".merge-drag-ghost")?.remove();
+      mergeDrag = null;
+    }
+    function mergeAutoScroll(clientY) {
+      const viewH = window.innerHeight || 1;
+      let delta = 0;
+      if (clientY < 0) delta = -Math.min(48, 8 + Math.abs(clientY) * 0.2);
+      else if (clientY > viewH) delta = Math.min(48, 8 + (clientY - viewH) * 0.2);
+      else if (clientY < 72) delta = -((72 - clientY) / 72) * 28;
+      else if (clientY > viewH - 72) delta = ((clientY - (viewH - 72)) / 72) * 28;
+      if (delta) window.scrollBy(0, delta);
+    }
+    function startMergeDrag(card, ev) {
+      const id = card?.dataset?.card;
+      if (!id) return;
+      mergeDrag = { id, ghost: document.createElement("div") };
+      mergeDrag.ghost.className = "merge-drag-ghost";
+      mergeDrag.ghost.textContent = card.querySelector(".item-title")?.innerText || "併入同房源";
+      document.body.appendChild(mergeDrag.ghost);
+      card.classList.add("drag-source");
+      moveMergeDrag(ev.clientX, ev.clientY);
+    }
+    function moveMergeDrag(x, y) {
+      if (!mergeDrag?.ghost) return;
+      mergeDrag.ghost.style.left = `${x + 12}px`;
+      mergeDrag.ghost.style.top = `${y + 12}px`;
+      document.querySelectorAll(".item.drag-over").forEach((el) => el.classList.remove("drag-over"));
+      const overId = cardIdFromPoint(x, y);
+      if (overId && overId !== mergeDrag.id) {
+        document.querySelector(`[data-card="${overId}"]`)?.classList.add("drag-over");
+      }
+      mergeAutoScroll(y);
+    }
     function updateBulkBar() {
       const n = selected.size;
       $("bulkBar").classList.toggle("on", n > 0);
       $("selectedCount").textContent = `已選 ${n} 筆`;
       const compareBtn = $("compareSelectedBtn");
       const hint = $("compareHint");
+      const mergeBtn = $("mergeSelectedBtn");
+      if (mergeBtn) mergeBtn.hidden = n < 2;
+      paintMergeDock();
       if (compareBtn) {
         compareBtn.textContent = `比較（${n}／3）`;
         compareBtn.disabled = n < 2 || n > 3;
@@ -6226,9 +6426,9 @@
             ${costChangeLine(item)}
             ${sameHouseWarn(item)}
             ${sameHousePriceList(item)}
-            <div class="rent-price">${esc(rentStatusLine(item))}</div>
+            <div class="rent-price">${rentStatusLine(item)}</div>
             <div class="meta">
-              ${esc(listingSpecLine(item))}
+              ${listingSpecLine(item)}
               <br>${esc(item.address || "")}${commuteText(item)}${offlineLine(item)}
               ${mrtText(item) ? `<div class="mrt-line">${mrtText(item)}</div>` : ""}
               ${item.match_detail && !sameHouseOf(item) ? `<br>比對：${esc(item.match_detail)}${item.match_post_id ? ` · <a href="${listingUrl(item.match_post_id)}" target="_blank" rel="noopener noreferrer">舊刊登 #${item.match_post_id}</a>` : ""}` : ""}
@@ -7061,7 +7261,10 @@
       document.querySelectorAll("#bottomNav [data-nav]").forEach((btn) => {
         btn.setAttribute("aria-current", btn.dataset.nav === view ? "page" : "false");
       });
-      if (view !== "listings") closeFilterSheet();
+      if (view !== "listings") {
+        closeFilterSheet();
+        if (mergeSelectMode || selected.size) exitMergeSelect();
+      }
       if (view === "demand") {
         if (location.hash !== "#demand") history.replaceState({}, "", `${location.pathname}${location.search}#demand`);
         loadDemand().catch(() => {});
@@ -9380,6 +9583,10 @@
           return;
         }
       }
+      if (ev.key === "Escape" && (mergeSelectMode || selected.size)) {
+        exitMergeSelect();
+        return;
+      }
       if (ev.key === "Escape" && $("ownerOverlay") && !$("ownerOverlay").hidden) closeOwnerOverlay();
     });
     $("selectPageBtn").onclick = () => {
@@ -9423,6 +9630,56 @@
         $("hideSelectedBtn").disabled = false;
       }
     };
+    $("mergeSelectedBtn")?.addEventListener("click", () => mergeSelectedListings());
+    $("mergeConfirmBtn")?.addEventListener("click", () => mergeSelectedListings());
+    $("mergeCancelBtn")?.addEventListener("click", () => exitMergeSelect());
+    $("list")?.addEventListener("pointerdown", (ev) => {
+      const card = ev.target.closest?.("[data-card]");
+      if (!card || mergeInteractiveTarget(ev.target)) return;
+      const id = card.dataset.card;
+      if (isCoarsePointer()) {
+        const now = Date.now();
+        if (mergeLastTap.id === id && now - mergeLastTap.at < 380) {
+          ev.preventDefault();
+          mergeSelectMode = true;
+          selected.add(id);
+          card.classList.add("picked");
+          const box = card.querySelector("[data-pick]");
+          if (box) box.checked = true;
+          updateBulkBar();
+          mergeLastTap = { id: "", at: 0 };
+        } else {
+          mergeLastTap = { id, at: now };
+        }
+        return;
+      }
+      mergePressTimer = window.setTimeout(() => startMergeDrag(card, ev), 1000);
+    });
+    document.addEventListener("pointermove", (ev) => {
+      if (mergePressTimer && !mergeDrag) {
+        const card = ev.target.closest?.("[data-card]");
+        if (!card || Math.hypot(ev.movementX || 0, ev.movementY || 0) > 8) {
+          clearTimeout(mergePressTimer);
+          mergePressTimer = 0;
+        }
+      }
+      if (mergeDrag) {
+        ev.preventDefault();
+        moveMergeDrag(ev.clientX, ev.clientY);
+      }
+    }, { passive: false });
+    document.addEventListener("pointerup", (ev) => {
+      if (mergePressTimer) {
+        clearTimeout(mergePressTimer);
+        mergePressTimer = 0;
+      }
+      if (!mergeDrag) return;
+      const overId = cardIdFromPoint(ev.clientX, ev.clientY);
+      const fromId = mergeDrag.id;
+      clearMergeDrag();
+      if (overId && overId !== fromId) mergeSelectedListings([fromId, overId]);
+    });
+    document.addEventListener("pointercancel", () => clearMergeDrag());
     $("q").addEventListener("input", () => {
       clearTimeout(window.__q);
       window.__q = setTimeout(loadList, 250);
@@ -9827,6 +10084,22 @@
       }
       return out;
     }
+    function dockEventLabel(item) {
+      if (item.type === "offline") {
+        return Number(item.offline_confirmed) === 1 ? "確認已下架" : "確認下架中";
+      }
+      if (item.type === "fee_update") return "費用變更";
+      return eventText[item.type] || item.type_label || item.type;
+    }
+    function dockEventClass(item) {
+      if (item.type === "new") return "notify-new";
+      if (item.type === "relist") return "notify-relist";
+      if (item.type === "fee_update") return "notify-fee";
+      if (item.type === "offline") {
+        return Number(item.offline_confirmed) === 1 ? "notify-off-sure" : "notify-off";
+      }
+      return "same";
+    }
     function dockChangeHtml(item) {
       const changes = parseNotifyChanges(item.detail);
       if (!changes.length) return "";
@@ -9859,7 +10132,7 @@
       const dock = $("alertDock");
       const inboxHtml = (list) => list.map((item) => `
         <div class="dock-item" data-dock-key="${esc(dockItemKey(item))}">
-          <div class="tags">${sourceTagHtml(item)}<span class="tag ${item.type === "new" ? "new" : "same"}">${eventText[item.type] || item.type_label || item.type}</span></div>
+          <div class="tags">${sourceTagHtml(item)}<span class="tag ${dockEventClass(item)}">${esc(dockEventLabel(item))}</span></div>
           <h3 style="margin:6px 0 4px;font-size:16px">
             <a href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-dock-open="${item.post_id}">${esc(item.title || "物件")}</a>
           </h3>
@@ -9877,7 +10150,7 @@
       if (!items.length) {
         dock.classList.remove("open");
         $("dockList").innerHTML = "";
-        if (inbox) inbox.innerHTML = `<div class="notify-empty">還沒有待看更新。條件按儲存後，全新物件、價格變動與下架會出現在這裡，也可按「允許系統推播」。</div>`;
+        if (inbox) inbox.innerHTML = `<div class="notify-empty">還沒有待看更新。全新物件會依你儲存的搜尋設定檔進來；價格、費用、下架與重新上架只打特別關注。也可按「允許系統推播」。</div>`;
         if (hint) hint.textContent = "尚無待看更新。";
         mergeCommsIntoInbox();
         return;
