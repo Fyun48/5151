@@ -49,7 +49,9 @@ test("self listing form uses helper templates, required title, and bidirectional
   assert.doesNotMatch(html, /一般會員最多 2 則，贊助會員可存到 5 則/);
   assert.doesNotMatch(html, /從下拉選單選到就會套用；若說明已有字/);
   assert.match(post, /for="selfTitle">標題</);
-  assert.match(html, /id="selfTitle"[^>]*minlength="5"/);
+  assert.match(html, /id="selfTitle"/);
+  assert.match(html, /novalidate/);
+  assert.match(html, /id="contactTemplateApplied"/);
   assert.match(html, /標題至少 5 個字/);
   assert.match(post, /欲出租物件地址/);
   assert.match(post, />出租樓層</);

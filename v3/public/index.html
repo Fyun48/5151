@@ -1577,6 +1577,7 @@
     .rich-toolbar { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; border-bottom: 1px solid var(--line); }
     .rich-toolbar button { min-height: 32px; padding: 4px 10px; }
     .rich-emoji { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; border-bottom: 1px solid var(--line); }
+    .rich-emoji[hidden] { display: none; }
     .rich-emoji button { min-width: 36px; min-height: 36px; padding: 0; font-size: 18px; }
     .rich-area {
       min-height: 120px;
@@ -3413,7 +3414,7 @@
         <h3>從 591 / 5168 匯入</h3>
         <p class="hint import-locked" id="importLockedHint">贊助會員可使用 591 / 5168 物件匯入</p>
         <div id="importSponsorTools" hidden>
-          <p class="hint">貼上公開物件網址。系統只複製標題、說明與照片成草稿；聯絡方式、設施與刊登聲明仍須你自己填。</p>
+          <p class="hint">貼上公開物件網址。系統只複製標題、說明與照片成草稿；聯絡方式請用刊登幫手的聯絡人範本，設施與刊登聲明仍須你自己填。</p>
           <div class="import-row">
             <label class="visually-hidden" for="importUrl">物件網址</label>
             <input type="url" id="importUrl" placeholder="https://rent.591.com.tw/… 或 https://rent.houseprice.tw/house/…" autocomplete="off" />
@@ -3455,11 +3456,12 @@
           <select id="contactProfilePick"><option value="">選擇聯絡人</option></select>
           <button type="button" class="ghost" id="contactProfileManage">新增聯絡人</button>
         </div>
+        <p class="hint" id="contactTemplateApplied" hidden></p>
       </div>
-      <form id="selfListingForm">
+      <form id="selfListingForm" novalidate>
         <div class="self-title-block">
           <label for="selfTitle">標題</label>
-          <input id="selfTitle" maxlength="80" minlength="5" required placeholder="至少 5 個字" />
+          <input id="selfTitle" maxlength="80" placeholder="至少 5 個字" />
         </div>
         <div class="self-grid">
           <div>
@@ -3550,7 +3552,7 @@
         </label>
         <div class="row" style="margin-top:10px">
           <button type="submit" class="primary" id="selfSubmit">刊登物件</button>
-          <span class="save-msg" id="selfMsg"></span>
+          <span class="save-msg" id="selfMsg" role="status" aria-live="polite"></span>
         </div>
       </form>
       <div class="list" id="selfMineList" style="padding-top:12px"></div>
@@ -3949,6 +3951,7 @@
         <button type="button" class="ghost" id="descTplEditNo">取消</button>
       </div>
       <div class="listing-tools-row">
+        <label class="visually-hidden" for="descTemplateName">範本名稱</label>
         <input type="text" id="descTemplateName" maxlength="40" placeholder="範本名稱" />
       </div>
       <div class="rich-editor" id="descBodyEditorWrap">
@@ -3983,11 +3986,15 @@
         <button type="button" class="ghost" id="contactProfileClose">關閉</button>
       </div>
       <div class="listing-tools-row">
+        <label class="visually-hidden" for="contactProfileLabel">聯絡人名稱</label>
         <input type="text" id="contactProfileLabel" maxlength="40" placeholder="例如 屋主本人" />
+        <label class="visually-hidden" for="contactProfileName">稱呼</label>
         <input type="text" id="contactProfileName" maxlength="80" placeholder="稱呼" />
       </div>
       <div class="listing-tools-row">
+        <label class="visually-hidden" for="contactProfilePhone">公開電話</label>
         <input type="text" id="contactProfilePhone" maxlength="40" inputmode="tel" placeholder="公開電話" />
+        <label class="visually-hidden" for="contactProfileLine">LINE 連結</label>
         <input type="text" id="contactProfileLine" maxlength="300" placeholder="https://line.me/…" />
       </div>
       <div class="row" style="margin-top:8px">
@@ -8798,7 +8805,7 @@
     function applyImportToForm(row) {
       if ($("selfTitle")) $("selfTitle").value = row.imported_title || "";
       if ($("selfBody")) $("selfBody").value = row.imported_text || "";
-      setDescTemplateApplied(row.imported_text ? "已套用匯入說明" : "");
+      setDescTemplateApplied(row.imported_text ? "已套用匯入說明" : "", row.imported_text || "");
       selfPhotoDraft = [...(row.photos || row.listing?.photos || [])];
       renderSelfPhotoDraftAndGrid();
     }
@@ -8941,8 +8948,11 @@
         const title = String($("selfTitle")?.value || "").trim();
         if (title.length < 5) {
           fail("標題至少 5 個字");
+          $("selfTitle")?.setAttribute("aria-invalid", "true");
+          $("selfTitle")?.focus();
           return;
         }
+        $("selfTitle")?.removeAttribute("aria-invalid");
         if (!$("selfDistrict")?.value) {
           fail("請選縣市與行政區，或在地址寫上完整縣市行政區");
           return;
@@ -8954,6 +8964,8 @@
         const body = String($("selfBody")?.value || "").trim();
         if (!body) {
           fail("請先從刊登幫手選擇或新增說明範本");
+          $("listingTools")?.scrollIntoView({ behavior: "smooth", block: "start" });
+          $("descTemplatePick")?.focus();
           return;
         }
         const photoUrls = [...selfPhotoDraft];
@@ -9002,6 +9014,7 @@
         if ($("importDeclaration")) $("importDeclaration").checked = false;
         if ($("selfBody")) $("selfBody").value = "";
         setDescTemplateApplied("");
+        setContactTemplateApplied(null);
         if ($("selfPhotos")) $("selfPhotos").value = "";
         selfPhotoDraft = [];
         renderSelfPhotoDraft();
@@ -9017,16 +9030,36 @@
     let descTemplates = [];
     let contactProfiles = [];
     let editingDescTemplateId = null;
-    function setDescTemplateApplied(name) {
+    function listingPlainPreview(html) {
+      const box = document.createElement("div");
+      box.innerHTML = html || "";
+      return String(box.textContent || "").replace(/\s+/g, " ").trim();
+    }
+    function setDescTemplateApplied(name, body) {
       const el = $("descTemplateApplied");
       if (!el) return;
       if (name) {
+        const preview = listingPlainPreview(body);
+        const snippet = preview ? `（${preview.slice(0, 36)}${preview.length > 36 ? "…" : ""}）` : "";
         el.hidden = false;
-        el.textContent = String(name).startsWith("已套用") ? name : `已套用說明範本：${name}`;
+        el.textContent = String(name).startsWith("已套用") ? `${name}${snippet}` : `已套用說明範本：${name}${snippet}`;
       } else {
         el.hidden = true;
         el.textContent = "";
       }
+    }
+    function setContactTemplateApplied(item) {
+      const el = $("contactTemplateApplied");
+      if (!el) return;
+      if (!item) {
+        el.hidden = true;
+        el.textContent = "";
+        return;
+      }
+      const bits = [item.label || item.contact_name || "聯絡人", item.contact_name, item.phone, item.line_url].filter(Boolean);
+      const uniq = [...new Set(bits)];
+      el.hidden = false;
+      el.textContent = `已套用聯絡人：${uniq.join(" · ")}`;
     }
     function applyListingForm(form) {
       if (!form) return;
@@ -9054,7 +9087,13 @@
       if ($("selfPhone")) $("selfPhone").value = form.phone || "";
       if ($("selfLine")) $("selfLine").value = form.line_url || "";
       if ($("selfBody")) $("selfBody").value = form.body || "";
-      setDescTemplateApplied(form.body ? "已套用目前刊登說明" : "");
+      setDescTemplateApplied(form.body ? "已套用目前刊登說明" : "", form.body || "");
+      setContactTemplateApplied(form.contact_name || form.phone || form.line_url ? {
+        label: form.contact_name || "",
+        contact_name: form.contact_name || "",
+        phone: form.phone || "",
+        line_url: form.line_url || "",
+      } : null);
       document.querySelectorAll('#selfTraitGroups input[name="selfTrait"]').forEach((el) => {
         el.checked = (form.traits || []).includes(el.value);
       });
@@ -9158,7 +9197,7 @@
       const current = $("selfBody")?.value || "";
       if (current.trim() && current.trim() !== String(item.body || "").trim() && !window.confirm("套用並取代目前內容？")) return;
       if ($("selfBody")) $("selfBody").value = item.body;
-      setDescTemplateApplied(item.name || "未命名");
+      setDescTemplateApplied(item.name || "未命名", item.body);
       const msg = $("selfMsg");
       if (msg) msg.textContent = "已套用說明範本，尚未刊登。";
     }
@@ -9168,6 +9207,7 @@
       if ($("selfContactName")) $("selfContactName").value = item.contact_name || "";
       if ($("selfPhone")) $("selfPhone").value = item.phone || "";
       if ($("selfLine")) $("selfLine").value = item.line_url || "";
+      setContactTemplateApplied(item);
       const msg = $("selfMsg");
       if (msg) msg.textContent = "已套用聯絡人到這則草稿，尚未刊登。";
     }
@@ -9230,6 +9270,7 @@
     function openDescTemplateOverlay() {
       if ($("descTemplateEditConfirm")) $("descTemplateEditConfirm").hidden = true;
       if ($("descTemplateOverlay")) $("descTemplateOverlay").hidden = false;
+      $("descTemplateName")?.focus();
     }
     function closeDescTemplateOverlay() {
       if ($("descTemplateOverlay")) $("descTemplateOverlay").hidden = true;
@@ -9274,7 +9315,7 @@
         await loadListingTools();
         if (data.id && $("descTemplatePick")) $("descTemplatePick").value = String(data.id);
         if ($("selfBody")) $("selfBody").value = data.body || body;
-        setDescTemplateApplied(data.name || name || "未命名");
+        setDescTemplateApplied(data.name || name || "未命名", data.body || body);
       } catch (error) {
         if (msg) msg.textContent = error.message;
       }
@@ -9299,10 +9340,32 @@
         });
         if (msg) msg.textContent = "已新增。";
         await loadListingTools();
-        if (data.id && $("contactProfilePick")) $("contactProfilePick").value = String(data.id);
+        if (data.id && $("contactProfilePick")) {
+          $("contactProfilePick").value = String(data.id);
+          applyContactProfile(data.id);
+        }
       } catch (error) {
         if (msg) msg.textContent = error.message;
       }
+    });
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Escape") return;
+      const overlay = $("descTemplateOverlay");
+      if (!overlay || overlay.hidden) return;
+      if ($("descTemplateEditConfirm") && !$("descTemplateEditConfirm").hidden) {
+        editingDescTemplateId = null;
+        $("descTemplateEditConfirm").hidden = true;
+        return;
+      }
+      closeDescTemplateOverlay();
+    });
+    $("descTemplateList")?.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Enter" && ev.key !== " ") return;
+      if (ev.target.closest("[data-tpl-del]")) return;
+      const card = ev.target.closest("[data-tpl-edit]");
+      if (!card) return;
+      ev.preventDefault();
+      card.click();
     });
     $("descTemplateList")?.addEventListener("click", async (ev) => {
       const delId = ev.target.closest("[data-tpl-del]")?.dataset.tplDel;
@@ -9327,7 +9390,11 @@
       if (!item) return;
       editingDescTemplateId = item.id;
       if ($("descTplEditName")) $("descTplEditName").textContent = item.name || "未命名";
-      if ($("descTemplateEditConfirm")) $("descTemplateEditConfirm").hidden = false;
+      if ($("descTemplateEditConfirm")) {
+        $("descTemplateEditConfirm").hidden = false;
+        $("descTemplateEditConfirm").scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+      $("descTplEditYes")?.focus();
     });
     $("contactProfileList")?.addEventListener("click", async (ev) => {
       const delId = ev.target.closest("[data-contact-del]")?.dataset.contactDel;
