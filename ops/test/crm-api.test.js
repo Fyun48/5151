@@ -52,6 +52,10 @@ test("OPS CRM four columns stay separate and close is not DROP", () => {
   const afterNote = listCrmViews(db, { productId: "v3" })[0];
   assert.match(afterNote.columns.owner_notes.body, /續約/);
   assert.equal(afterNote.columns.site_crm.contact.display_name, "林小姐");
+  assert.equal(afterNote.site_admin_url, null);
+  assert.throws(() => setCrmModule(db, "v3", { siteAdminUrl: "/admin.html#crm" }), /完整網址/);
+  setCrmModule(db, "v3", { siteAdminUrl: "http://127.0.0.1:5153/admin.html#crm" });
+  assert.equal(listCrmViews(db, { productId: "v3" })[0].site_admin_url, "http://127.0.0.1:5153/admin.html#crm");
 
   setCrmModule(db, "v3", { enabled: false });
   assert.throws(

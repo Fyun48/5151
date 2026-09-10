@@ -662,6 +662,29 @@ function crmLagText(item) {
   return item.sync_stale ? `上次同步已超過 ${mins} 分鐘` : `上次同步 ${mins} 分鐘前`;
 }
 
+function publicSiteAdminHref(url) {
+  const s = String(url || "").trim();
+  return /^https?:\/\//i.test(s) ? s : "";
+}
+
+function bindCrmSiteUrlForm(pid) {
+  $("crmSiteUrlForm")?.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const url = new FormData(ev.target).get("site_admin_url");
+    const { res, data } = await api("/ops/api/crm/module", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ product_id: pid, site_admin_url: url }),
+    });
+    if (!res.ok) {
+      setStatus($("crmMsg"), data.error || "儲存本站連結失敗", "err");
+      return;
+    }
+    await refreshCrm();
+    setStatus($("crmMsg"), "已儲存本站後台網址", "ok");
+  });
+}
+
 function renderCrm() {
   const box = $("crmList");
   const hint = $("crmHint");
@@ -675,24 +698,31 @@ function renderCrm() {
       : "CRM 模組已關閉：不再收新處理，複本仍保留。";
   }
   const items = crmCache.items || [];
+  const pid = selectedProductId || crmCache.product?.id || "v3";
+  const adminUrl = publicSiteAdminHref(crmCache.module?.site_admin_url || (items[0] && items[0].site_admin_url));
+  const setup = `<form id="crmSiteUrlForm" class="row" style="flex-wrap:wrap;gap:8px;align-items:end;margin:8px 0">
+    <label>本站後台網址 <input name="site_admin_url" value="${esc(adminUrl)}" placeholder="https://example.com/admin.html#crm" maxlength="400" /></label>
+    <button type="submit">儲存本站連結</button>
+  </form>`;
   if (!items.length) {
-    box.innerHTML = `<p class="hint">還沒有站方 CRM 複本。先在本站後台建立聯絡人，並另外開啟 crm_sync 授權。</p>`;
+    box.innerHTML = `${setup}<p class="hint">還沒有站方 CRM 複本。先在本站後台建立聯絡人，並另外開啟 crm_sync 授權。</p>`;
+    bindCrmSiteUrlForm(pid);
     return;
   }
-  box.innerHTML = items.map((item) => {
+  box.innerHTML = setup + items.map((item) => {
     const c = item.columns || {};
     const site = c.site_crm || {};
     const contact = site.contact || {};
     const handle = c.site_handling || {};
     const ops = c.ops_progress || {};
     const owner = c.owner_notes || {};
-    const href = item.site_admin_url || "/admin.html#crm";
+    const href = publicSiteAdminHref(item.site_admin_url);
     return `<article class="crm-card">
       <div class="row">
         <strong>${esc(contact.display_name || "未命名聯絡人")}</strong>
         <span class="chip">${esc(item.product_id)}</span>
         <span class="grow"></span>
-        <a href="${esc(href)}" target="_blank" rel="noopener">前往本站處理</a>
+        ${href ? `<a href="${esc(href)}" target="_blank" rel="noopener">前往本站處理</a>` : `<span class="hint">尚未設定本站後台網址</span>`}
       </div>
       <p class="hint">${esc(crmLagText(item))} · 來源連結：站方聯絡人 ${esc(contact.external_contact_id || "")}</p>
       <div class="crm-cols">
@@ -724,6 +754,7 @@ function renderCrm() {
       </div>
     </article>`;
   }).join("");
+  bindCrmSiteUrlForm(pid);
 }
 
 async function refreshCrm() {

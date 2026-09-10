@@ -116,6 +116,19 @@ function parseCaps(raw) {
   try { return raw ? JSON.parse(raw) : {}; } catch { return {}; }
 }
 
+export function publicSiteAdminUrl(value) {
+  const url = String(value || "").trim();
+  return /^https?:\/\//i.test(url) ? clip(url, 400) : null;
+}
+
+export function normalizeSiteAdminUrl(value) {
+  const url = String(value || "").trim();
+  if (!url) return null;
+  const ok = publicSiteAdminUrl(url);
+  if (!ok) throw httpError("本站後台網址必須是 http 或 https 開頭的完整網址", 400);
+  return ok;
+}
+
 export function crmModuleFor(db, productId) {
   const id = String(productId || DEFAULT_PRODUCT_ID);
   const row = db.prepare("SELECT * FROM product_crm_module WHERE product_id=?").get(id);
@@ -134,7 +147,7 @@ export function setCrmModule(db, productId, { enabled, siteAdminUrl, actor = "ow
   const ts = iso(now);
   const current = crmModuleFor(db, product.id);
   const nextState = enabled === false ? "disabled" : (enabled === true ? "enabled" : current.module_state);
-  const url = siteAdminUrl == null ? current.site_admin_url : clip(siteAdminUrl, 400);
+  const url = siteAdminUrl == null ? current.site_admin_url : normalizeSiteAdminUrl(siteAdminUrl);
   db.prepare(`
     INSERT INTO product_crm_module(product_id, module_state, site_admin_url, updated_at)
     VALUES (?, ?, ?, ?)
@@ -349,7 +362,7 @@ export function listCrmViews(db, { productId = null, now = new Date() } = {}) {
       last_synced_at: contact.last_synced_at,
       sync_lag_ms: lag,
       sync_stale: lag > SYNC_STALE_MS,
-      site_admin_url: module.site_admin_url || "/admin.html#crm",
+      site_admin_url: publicSiteAdminUrl(module.site_admin_url),
       columns: {
         site_crm: {
           label: "站方客戶／客服往來",
