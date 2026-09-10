@@ -125,8 +125,8 @@ function open() {
   return db;
 }
 
-function addUser(db, { id, email, plan = "free", createdAt = OLD }) {
-  db.prepare("INSERT INTO users(id, email, plan, created_at, nickname) VALUES (?,?,?,?,?)").run(id, email, plan, createdAt, "暱稱");
+function addUser(db, { id, email, plan = "free", createdAt = OLD, nickname = "暱稱" }) {
+  db.prepare("INSERT INTO users(id, email, plan, created_at, nickname) VALUES (?,?,?,?,?)").run(id, email, plan, createdAt, nickname);
 }
 
 function sampleInput(extra = {}) {
@@ -289,15 +289,15 @@ test("double copy with the same idempotency key reuses one draft", () => {
 test("copied draft publishes through normal pledge flow without changing the original", () => {
   const db = open();
   addUser(db, { id: 1, email: "a@example.com" });
-  const original = createSelfListing(db, 1, sampleInput({ title: "原刊登" }));
+  const original = createSelfListing(db, 1, sampleInput({ title: "原來的刊登標題" }));
   const copied = copyOwnListing(db, 1, original.post_id);
   const published = publishOwnedDraftListing(db, 1, copied.listing.post_id, {
-    ...sampleInput({ title: "複製後刊登", phone: "0987654321" }),
+    ...sampleInput({ title: "複製後刊登草稿", phone: "0987654321" }),
   });
   assert.equal(published.status, "open");
-  assert.equal(published.title, "複製後刊登");
+  assert.equal(published.title, "複製後刊登草稿");
   assert.equal(published.phone, "0987654321");
-  assert.equal(getSelfListing(db, original.post_id, { viewerId: 1 }).title, "原刊登");
+  assert.equal(getSelfListing(db, original.post_id, { viewerId: 1 }).title, "原來的刊登標題");
   assert.equal(getSelfListing(db, original.post_id, { viewerId: 1 }).phone, "0912345678");
   db.close();
 });
@@ -307,6 +307,10 @@ test("description templates: free limit 2, sponsor 5, ownership, sanitization, c
   addUser(db, { id: 1, email: "a@example.com" });
   addUser(db, { id: 2, email: "b@example.com" });
   const one = createDescriptionTemplate(db, 1, { name: "家庭", body: "採光佳，近市場。" });
+  const overwritten = createDescriptionTemplate(db, 1, { name: "家庭", body: "覆蓋後的家庭說明內容。" });
+  assert.equal(overwritten.id, one.id);
+  assert.match(overwritten.body, /覆蓋後的家庭說明內容/);
+  assert.equal(listDescriptionTemplates(db, 1).length, 1);
   createDescriptionTemplate(db, 1, { name: "套房", body: "獨立衛浴。" });
   assert.throws(() => createDescriptionTemplate(db, 1, { name: "雅房", body: "公共衛浴。" }), (e) => e.status === 409);
   const sponsorDb = open();
@@ -386,8 +390,14 @@ test("account contact stays unique under concurrent ensure", async () => {
   ]);
   const accounts = listContactProfiles(db, 1).filter((row) => row.is_account);
   assert.equal(accounts.length, 1);
-  assert.equal(accounts[0].label, "此帳號");
+  assert.equal(accounts[0].label, "吉比");
+  assert.doesNotMatch(accounts[0].label, /不可刪/);
   assert.equal(results.filter(Boolean).length, 3);
+  const noNick = open();
+  addUser(noNick, { id: 2, email: "nonick@example.com", nickname: "" });
+  const fallback = listContactProfiles(noNick, 2).find((row) => row.is_account);
+  assert.equal(fallback.label, "此帳號");
+  noNick.close();
   db.close();
 });
 

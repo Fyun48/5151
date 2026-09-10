@@ -178,16 +178,23 @@ function publicTemplate(row) {
   };
 }
 
+function accountDisplayLabel(row) {
+  const nick = String(row?.contact_name || "").trim();
+  if (nick && !nick.includes("@")) return nick.slice(0, CONTACT_LABEL_MAX);
+  return ACCOUNT_CONTACT_LABEL;
+}
+
 function publicContact(row) {
   if (!row) return null;
+  const isAccount = Number(row.is_account) === 1;
   return {
     id: Number(row.id),
-    label: row.label,
+    label: isAccount ? accountDisplayLabel(row) : row.label,
     contact_name: row.contact_name || "",
     phone: row.phone || "",
     line_url: row.line_url || "",
-    is_account: Number(row.is_account) === 1,
-    locked: Number(row.is_account) === 1,
+    is_account: isAccount,
+    locked: isAccount,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -362,6 +369,15 @@ export function createDescriptionTemplate(db, userId, input = {}, now = new Date
   const stamp = iso(now);
   const limit = descriptionTemplateLimit(opts);
   return withImmediate(db, () => {
+    const same = db.prepare(
+      "SELECT * FROM listing_description_template WHERE user_id=? AND name=?",
+    ).get(uid, name);
+    if (same) {
+      db.prepare(
+        "UPDATE listing_description_template SET body=?, updated_at=? WHERE id=? AND user_id=?",
+      ).run(body, stamp, same.id, uid);
+      return publicTemplate(db.prepare("SELECT * FROM listing_description_template WHERE id=?").get(same.id));
+    }
     const n = Number(db.prepare(
       "SELECT COUNT(*) AS n FROM listing_description_template WHERE user_id=?",
     ).get(uid)?.n) || 0;
@@ -389,9 +405,19 @@ export function updateDescriptionTemplate(db, userId, id, input = {}, now = new 
   const body = input.body != null ? sanitizeListingBodyHtml(input.body, SELF_BODY_MAX) : row.body;
   if (!name) throw httpError("請填範本名稱");
   if (!listingBodyPlain(body)) throw httpError("請填範本內容");
+  const stamp = iso(now);
+  const sameName = db.prepare(
+    "SELECT * FROM listing_description_template WHERE user_id=? AND name=? AND id!=?",
+  ).get(Number(userId), name, row.id);
+  if (sameName) {
+    db.prepare(
+      "UPDATE listing_description_template SET body=?, updated_at=? WHERE id=? AND user_id=?",
+    ).run(body, stamp, sameName.id, Number(userId));
+    return publicTemplate(db.prepare("SELECT * FROM listing_description_template WHERE id=?").get(sameName.id));
+  }
   db.prepare(
     "UPDATE listing_description_template SET name=?, body=?, updated_at=? WHERE id=? AND user_id=?",
-  ).run(name, body, iso(now), row.id, Number(userId));
+  ).run(name, body, stamp, row.id, Number(userId));
   return publicTemplate(db.prepare("SELECT * FROM listing_description_template WHERE id=?").get(row.id));
 }
 

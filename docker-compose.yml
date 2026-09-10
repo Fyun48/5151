@@ -52,6 +52,7 @@ services:
       DATA_DIR: /data
       TZ: Asia/Taipei
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL_V3:-https://c5151.reversalplay.me}
+      # 別名 jibbyrenth.reversalplay.me 走同一條 tunnel → 127.0.0.1:5153
       V1_DB_PATH: /v1-data/591.db
       V2_DB_PATH: /v2-data/v2.db
     volumes:

@@ -93,6 +93,17 @@ export function ensurePersonalSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_user_match_votes_pair ON user_match_votes(post_id, peer_id, vote);
     CREATE INDEX IF NOT EXISTS idx_user_match_signals_user ON user_match_signals(user_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_user_match_signals_pair ON user_match_signals(post_id, peer_id, type);
+
+    CREATE TABLE IF NOT EXISTS user_same_house_members (
+      user_id INTEGER NOT NULL,
+      group_key TEXT NOT NULL,
+      post_id INTEGER NOT NULL,
+      system_agrees INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, post_id),
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_user_same_house_group ON user_same_house_members(user_id, group_key);
   `);
   for (const sql of [
     "ALTER TABLE users ADD COLUMN accepted_disclaimer_at TEXT",
@@ -125,6 +136,16 @@ export function ensurePersonalSchema(db) {
     "ALTER TABLE users ADD COLUMN gender TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE users ADD COLUMN residence TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE user_events ADD COLUMN source_key TEXT NOT NULL DEFAULT ''",
+    `CREATE TABLE IF NOT EXISTS user_same_house_members (
+      user_id INTEGER NOT NULL,
+      group_key TEXT NOT NULL,
+      post_id INTEGER NOT NULL,
+      system_agrees INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, post_id),
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    )`,
+    "CREATE INDEX IF NOT EXISTS idx_user_same_house_group ON user_same_house_members(user_id, group_key)",
   ]) {
     try {
       db.exec(sql);

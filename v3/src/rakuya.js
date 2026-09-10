@@ -95,7 +95,10 @@ export function parseRakuyaListHtml(html) {
     const layout = textOf((block.match(/\d+\s*房(?:\d+\s*廳)?/) || [])[0] || "");
     const floor = textOf((block.match(/\d+\s*[FfＦ層](?:\s*\/\s*\d+)?/) || [])[0] || "");
     const cover = decodeEntities((block.match(/<img[^>]+(?:src|data-src)=["']([^"']+)["']/i) || [])[1] || "");
-    const community = textOf((block.match(/class=["'][^"']*community[^"']*["'][^>]*>([\s\S]*?)</i) || [])[1] || "");
+    const communityEl = block.match(/<([a-z0-9]+)[^>]*class=["'][^"']*community[^"']*["'][^>]*>([\s\S]*?)</i);
+    const community = textOf(communityEl?.[2] || "");
+    const communityLinked = String(communityEl?.[1] || "").toLowerCase() === "a"
+      || /<a[^>]*class=["'][^"']*community/i.test(block);
     const refresh = textOf((block.match(/更新[：:]\s*([^<]+)/) || [])[1] || "");
     items.push({
       ehid,
@@ -107,6 +110,7 @@ export function parseRakuyaListHtml(html) {
       floorName: floor,
       cover,
       community,
+      communityLinked,
       refresh,
       field_status: {
         title: title ? "parsed" : "missing",
@@ -130,7 +134,8 @@ export function parseRakuyaDetailHtml(html, pageUrl = "") {
   const floorName = sanitize((html.match(/樓層[：:]\s*([^<]+)/) || [])[1] || "");
   const areaName = sanitize((html.match(/坪數[：:]\s*([^<]+)/) || [])[1] || "");
   const layout = sanitize((html.match(/格局[：:]\s*([^<]+)/) || [])[1] || "");
-  const community = sanitize((html.match(/社區[：:]\s*([^<]+)/) || [])[1] || "");
+  const communityHtml = (html.match(/社區[：:]\s*(<a[\s\S]*?<\/a>|[^<]+)/i) || [])[1] || "";
+  const community = sanitize(communityHtml);
   const age = sanitize((html.match(/屋齡[：:]\s*([^<]+)/) || [])[1] || "");
   const parking = sanitize((html.match(/車位[：:]\s*([^<]+)/) || [])[1] || "");
   const elevator = sanitize((html.match(/電梯[：:]\s*([^<]+)/) || [])[1] || "");
@@ -150,6 +155,7 @@ export function parseRakuyaDetailHtml(html, pageUrl = "") {
     areaName,
     layout,
     community,
+    communityLinked: /<a\b/i.test(communityHtml),
     age,
     parking,
     elevator,
@@ -204,6 +210,7 @@ export function normalizeRakuyaItem(item, { regionId = "", sectionId = "" } = {}
     cover: String(item.cover || item.photos?.[0] || "").trim(),
     community_id: 0,
     community_name: String(item.community || ""),
+    community_linked: item.communityLinked ? 1 : 0,
     tags: JSON.stringify([]),
     refresh_time: String(item.refresh || ""),
     lat: null,

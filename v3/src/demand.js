@@ -1,6 +1,13 @@
 import { lookupDistrict, normalizeWatchDistricts } from "./regions.js";
 import { containsUnsafeMarkup, sanitizeDocumentText } from "./safeContent.js";
 import { digitsPhone, normalizeLineUrl, SELF_CONTACT_MAX } from "./selfListings.js";
+import {
+  DEFAULT_WISH_CONDITIONS,
+  WISH_FORBIDDEN_CONDITION_IDS,
+  activeWishConditions,
+  allWishConditions,
+  conditionMap,
+} from "./wishConditions.js";
 
 export const DEMAND_MAX_OPEN = 1;
 export const DEMAND_TTL_DAYS = 14;
@@ -44,33 +51,8 @@ export const WISH_LEASE_DURATIONS = [
   { id: "long", label: "一年以上" },
 ];
 
-/**
- * 租客意向條件。id 刻意不用刊登端否定 id（nocook/nopet/notax），
- * 避免「需要可開伙」被解讀成「要不可開伙」。
- */
-export const WISH_CONDITIONS = [
-  { id: "need_cook", label: "需要可開伙", listing_incompatible: ["nocook"], listing_legacy_positive: ["cook"] },
-  { id: "need_pet", label: "需要可養寵物", listing_incompatible: ["nopet"], listing_legacy_positive: ["pet"] },
-  { id: "need_tax", label: "需要可申請租補／報稅", listing_incompatible: ["notax"], listing_legacy_positive: ["tax"] },
-  { id: "elevator", label: "電梯", listing_compatible: ["elevator", "community"] },
-  { id: "trash", label: "定時垃圾處理", listing_compatible: ["trash"] },
-  { id: "trash24", label: "24H 垃圾回收", listing_compatible: ["trash24"] },
-  { id: "parcel", label: "包裹代收", listing_compatible: ["parcel"] },
-  { id: "parking_car", label: "汽車位", listing_compatible: ["parking"] },
-  { id: "parking_scooter", label: "機車位" },
-  { id: "manage", label: "門衛管理", listing_compatible: ["manage"] },
-  { id: "short_ok", label: "可短租", listing_compatible: ["short"] },
-];
-
-export const WISH_FORBIDDEN_CONDITION_IDS = Object.freeze([
-  "nocook", "nopet", "notax",
-  "anygender", "female", "male", "student", "worker",
-  "gender", "nationality", "race", "ethnicity", "religion",
-  "marital", "orientation", "disability", "age", "migrant",
-  "who", "suitable",
-]);
-
-const CONDITION_MAP = new Map(WISH_CONDITIONS.map((row) => [row.id, row]));
+export const WISH_CONDITIONS = DEFAULT_WISH_CONDITIONS;
+export { WISH_FORBIDDEN_CONDITION_IDS };
 
 export function ensureDemandSchema(db) {
   db.exec(`
@@ -266,17 +248,19 @@ function cityFromDistricts(keys) {
 
 function conditionIds(input) {
   const raw = Array.isArray(input) ? input : parseJsonArray(input);
+  const allowed = conditionMap(allWishConditions());
   const ids = [];
   for (const item of raw) {
     const id = String(item || "").trim();
-    if (WISH_FORBIDDEN_CONDITION_IDS.includes(id)) continue;
-    if (CONDITION_MAP.has(id) && !ids.includes(id)) ids.push(id);
+    if (!id || WISH_FORBIDDEN_CONDITION_IDS.includes(id)) continue;
+    if (allowed.has(id) && !ids.includes(id)) ids.push(id);
   }
   return ids.slice(0, 16);
 }
 
 function conditionLabels(ids) {
-  return conditionIds(ids).map((id) => CONDITION_MAP.get(id)?.label || id);
+  const map = conditionMap(allWishConditions());
+  return conditionIds(ids).map((id) => map.get(id)?.label || id);
 }
 
 function splitPriorityGroups(must, nice, avoid) {
@@ -290,11 +274,12 @@ function splitPriorityGroups(must, nice, avoid) {
 
 export function listingCompatibilityForWish(mustHave = []) {
   const ids = conditionIds(mustHave);
+  const map = conditionMap(allWishConditions());
   const incompatible = [];
   const compatible = [];
   const inverted = [];
   for (const id of ids) {
-    const row = CONDITION_MAP.get(id);
+    const row = map.get(id);
     if (!row) continue;
     for (const trait of row.listing_incompatible || []) incompatible.push(trait);
     for (const trait of row.listing_compatible || []) compatible.push(trait);
@@ -987,7 +972,7 @@ export function demandMeta() {
     housingTypes: DEMAND_HOUSING_TYPES,
     layouts: WISH_LAYOUTS,
     leaseDurations: WISH_LEASE_DURATIONS,
-    conditions: WISH_CONDITIONS.map((row) => ({ id: row.id, label: row.label })),
+    conditions: activeWishConditions().map((row) => ({ id: row.id, label: row.label })),
     bodyMax: DEMAND_BODY_MAX,
     forbidden_fields: ["適合對象", ...WISH_FORBIDDEN_CONDITION_IDS],
   };

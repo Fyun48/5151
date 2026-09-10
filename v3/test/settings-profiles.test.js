@@ -326,6 +326,33 @@ test("same-name save overwrites without a confirm action", () => {
   assert.equal(resolveSaveAsProfileAction(one, "蘆洲", { overwrite: false }).action, "overwrite");
 });
 
+test("excluding an agent writes into the current setting profile", () => {
+  const current = hydrateSettings(
+    {
+      settingProfiles: [{ id: "p-1", name: "士林北投", data: { excludeAgents: ["舊仲介"] } }],
+      activeProfileId: "p-1",
+      watchDistricts: ["1-8"],
+      excludeAgents: ["舊仲介"],
+    },
+    defaults,
+  );
+  const next = applySettingPatch(current, { excludeAgents: ["舊仲介", "美樂房屋"], excludeAgentIds: [123] });
+  assert.deepEqual(next.excludeAgents, ["舊仲介", "美樂房屋"]);
+  assert.equal(next.activeProfileId, "p-1");
+  assert.deepEqual(next.settingProfiles[0].data.excludeAgents, ["舊仲介", "美樂房屋"]);
+  assert.deepEqual(next.settingProfiles[0].data.excludeAgentIds, [123]);
+});
+
+test("exclude without a named profile creates 目前搜尋 so the record is kept", () => {
+  const next = applySettingPatch(
+    { ...defaults, settingProfiles: [], activeProfileId: "" },
+    { excludeAgents: ["美樂房屋"] },
+  );
+  assert.equal(next.activeProfileId, "live");
+  assert.equal(next.settingProfiles[0].name, "目前搜尋");
+  assert.deepEqual(next.settingProfiles[0].data.excludeAgents, ["美樂房屋"]);
+});
+
 test("commute km keeps one decimal and exclude lists are capped", () => {
   const next = applySettingPatch(
     { ...defaults, watchDistricts: ["1-8"] },

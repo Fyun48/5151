@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { shouldKeepListing, passesAttributeFilters, passesDisplayFilters, listingHasElevator, matchesHousingKind, matchesListingSources, normalizeListQuery, housingTypeLabel, formatFloorDisplay } from "./floors.js";
-import { addressPrecision, isTrustedGeoSource, listingCommunityId, preferListingAddress, sqlTrustedGeoSource } from "./location.js";
+import { addressPrecision, isTrustedGeoSource, listingCommunityId, preferListingAddress, sourceCommunityLinked, sqlTrustedGeoSource } from "./location.js";
 import { makeRouteKey } from "./route.js";
 import {
   bindGoogleDirectionsEnabled,
@@ -19,6 +19,15 @@ import {
 import { sameSearch } from "./client591.js";
 import { CITIES, districtNameFromListing, districtsFromSearchUrls, lookupDistrict, normalizeWatchDistricts } from "./regions.js";
 import { matchFocusHints, preferPrimaryListing } from "./match.js";
+import {
+  ensureUserSameHouseSchema,
+  loadPersonalSameHouseIds,
+  mergePersonalSameHouse,
+  normalizeMergeIds,
+  personalGroupAgrees,
+  personalGroupKeyFor,
+  splitPersonalSameHouse,
+} from "./userSameHouse.js";
 import { canAddWatch, countWatched } from "./watchLimits.js";
 import {
   alreadyNotifiedGroup,
@@ -101,6 +110,13 @@ import {
   publicWishRoomView,
   demandMeta,
 } from "./demand.js";
+import {
+  DEFAULT_WISH_CONDITIONS,
+  mergeWishConditions,
+  normalizeWishConditionItems,
+  publicWishConditions,
+  setWishConditionCatalog,
+} from "./wishConditions.js";
 import {
   ensureFeedbackSchema,
   createFeedback as createFeedbackOn,
@@ -608,6 +624,19 @@ try {
 } catch {
   // already migrated
 }
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN community_linked INTEGER NOT NULL DEFAULT 0");
+} catch {
+  // already migrated
+}
+try {
+  db.exec(`UPDATE listings SET community_linked = 1
+    WHERE IFNULL(community_linked, 0) = 0
+      AND community_id > 0
+      AND IFNULL(community_name, '') != ''`);
+} catch {
+  // optional backfill
+}
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_match_peer ON listings(match_post_id)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_list_scan ON listings(search_key, offline, match_verdict, hidden)");
 try {
@@ -617,6 +646,7 @@ try {
   // older fixtures
 }
 ensurePersonalSchema(db);
+ensureUserSameHouseSchema(db);
 ensureListingGroupSchema(db);
 ensureSearchProfileSchema(db);
 ensureGeoCacheSchema(db);
@@ -1202,6 +1232,23 @@ export function getHelpQa() {
   return publicHelpQa(items);
 }
 
+export function getWishConditions() {
+  const stored = settingKey("wishConditions");
+  const items = stored == null ? DEFAULT_WISH_CONDITIONS : mergeWishConditions(stored);
+  setWishConditionCatalog(items);
+  return publicWishConditions(items);
+}
+
+export function saveWishConditions(partial = {}) {
+  const src = partial && typeof partial === "object" ? partial : {};
+  if (src.reset === true) {
+    writeSettingKey("wishConditions", { items: normalizeWishConditionItems(DEFAULT_WISH_CONDITIONS) });
+    return getWishConditions();
+  }
+  writeSettingKey("wishConditions", { items: normalizeWishConditionItems(src.items) });
+  return getWishConditions();
+}
+
 export function saveHelpQa(partial = {}) {
   const src = partial && typeof partial === "object" ? partial : {};
   if (src.reset === true) {
@@ -1335,14 +1382,17 @@ export function isCrawlSourceEnabled(id) {
 }
 
 export function listDemand(opts = {}) {
+  getWishConditions();
   return listDemandPostsOn(db, opts);
 }
 
 export function getDemand(postId, opts = {}) {
+  getWishConditions();
   return getDemandPostOn(db, postId, opts);
 }
 
 export function createDemand(userId, input) {
+  getWishConditions();
   return createDemandPostOn(db, userId, input);
 }
 
@@ -1359,14 +1409,17 @@ export function reportDemandItem(userId, input) {
 }
 
 export function updateWishRoomFor(userId, postId, input) {
+  getWishConditions();
   return updateWishRoomOn(db, userId, postId, input);
 }
 
 export function publishWishRoomFor(userId, postId, input) {
+  getWishConditions();
   return publishWishRoomOn(db, userId, postId, input);
 }
 
 export function reopenWishRoomFor(userId, postId) {
+  getWishConditions();
   return reopenWishRoomOn(db, userId, postId);
 }
 
@@ -1375,6 +1428,7 @@ export function getWishExampleFor(userId) {
 }
 
 export function saveWishExampleFor(userId, input) {
+  getWishConditions();
   return saveWishExampleOn(db, userId, input);
 }
 
@@ -1785,30 +1839,56 @@ function omitSiteMail(stored) {
 
 function withSystemCrawl(settings) {
   if (!settings) return settings;
-  return { ...settings, systemCrawlIntervalMinutes: getSystemCrawl().intervalMinutes };
+  const system = getSystemCrawl();
+  return {
+    ...settings,
+    systemCrawlIntervalMinutes: system.intervalMinutes,
+    showListRefreshBar: system.showListRefreshBar === true,
+  };
+}
+
+const settingsMemo = new Map();
+
+function rememberSettings(uid, value) {
+  const key = Number(uid) || 0;
+  settingsMemo.set(key, value);
+  queueMicrotask(() => {
+    if (settingsMemo.get(key) === value) settingsMemo.delete(key);
+  });
+  return value;
+}
+
+function forgetSettings(uid) {
+  if (uid == null) {
+    settingsMemo.clear();
+    return;
+  }
+  settingsMemo.delete(Number(uid) || 0);
 }
 
 export function getSettings(userId) {
+  const uid = Number(userId) || 0;
+  if (settingsMemo.has(uid)) return settingsMemo.get(uid);
   const rows = db.prepare("SELECT key, value FROM settings").all();
   const global = hydrateSettings(omitSiteMail(parseSettingRows(rows)), DEFAULTS, { admin: true, plan: "free" });
-  const uid = Number(userId) || 0;
-  if (!uid) return withSystemCrawl(global);
+  if (!uid) return rememberSettings(0, withSystemCrawl(global));
   const userRows = db.prepare("SELECT key, value FROM user_settings WHERE user_id = ?").all(uid);
   const user = getUserById(uid);
   const admin = user?.role === "admin";
   const plan = user?.plan || "free";
   if (!userRows.length) {
-    if (user?.role === "admin") return withSystemCrawl(global);
-    return withSystemCrawl(hydrateSettings({
+    if (user?.role === "admin") return rememberSettings(uid, withSystemCrawl(global));
+    return rememberSettings(uid, withSystemCrawl(hydrateSettings({
       dataEpoch: global.dataEpoch,
       hasBaseline: global.hasBaseline,
-    }, DEFAULTS, { admin: false, plan }));
+    }, DEFAULTS, { admin: false, plan })));
   }
-  return withSystemCrawl(hydrateSettings(omitSiteMail({ ...global, ...parseSettingRows(userRows) }), DEFAULTS, { admin, plan }));
+  return rememberSettings(uid, withSystemCrawl(hydrateSettings(omitSiteMail({ ...global, ...parseSettingRows(userRows) }), DEFAULTS, { admin, plan })));
 }
 
 export function saveSettings(partial, userId, { forceAdmin = false } = {}) {
   const uid = userId == null ? defaultUserId() : Number(userId) || defaultUserId();
+  forgetSettings(uid);
   const current = getSettings(uid);
   const user = getUserById(uid);
   const admin = forceAdmin || user?.role === "admin";
@@ -1848,6 +1928,7 @@ export function saveSettings(partial, userId, { forceAdmin = false } = {}) {
     throw error;
   }
   persistSearchProfileFromSettings(uid, next);
+  rememberSettings(uid, next);
   return next;
 }
 
@@ -1960,10 +2041,11 @@ function decorateSameHousePeer(raw) {
   };
 }
 
-function loadSameHousePeers(row) {
+function loadSameHousePeers(row, userId) {
   const selfId = Number(row?.post_id) || 0;
   if (!selfId) return [];
   const seed = new Set([selfId, Number(row.match_post_id) || 0].filter(Boolean));
+  for (const id of loadPersonalSameHouseIds(db, userId, selfId)) seed.add(id);
   const found = new Map();
   for (let hop = 0; hop < 2 && seed.size; hop += 1) {
     const ids = [...seed];
@@ -2036,6 +2118,7 @@ function decorateListingLite(row, settings, userId) {
     commute_min_pm: Number.isFinite(Number(row.rush_pm_min)) && Number(row.rush_pm_min) > 0 ? Math.round(Number(row.rush_pm_min)) : null,
     district: districtNameFromListing(row),
     floor_display: formatFloorDisplay(row.floor_name),
+    community_linked: Number(row.community_linked) === 1 || Number(row.community_id) > 0,
     source,
     source_label: selfSourceLabel(source),
     mine: uid > 0 && listedBy === uid,
@@ -2067,6 +2150,11 @@ function attachSameHouseRoles(rows, voteUserId) {
     if (String(row.match_verdict || "") === "no") continue;
     const mid = Number(row.match_post_id) || 0;
     if (mid && !byId.has(mid)) missing.add(mid);
+    if (voteUserId) {
+      for (const pid of loadPersonalSameHouseIds(db, voteUserId, row.post_id)) {
+        if (!byId.has(pid)) missing.add(pid);
+      }
+    }
   }
   const extras = new Map();
   if (missing.size) {
@@ -2104,6 +2192,39 @@ function attachSameHouseRoles(rows, voteUserId) {
     assignRole(row);
     assignRole(byId.get(mid));
   }
+  if (voteUserId) {
+    const grouped = new Map();
+    for (const row of list) {
+      const key = personalGroupKeyFor(db, voteUserId, row.post_id);
+      if (!key) continue;
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key).push(row);
+    }
+    for (const members of grouped.values()) {
+      const pool = [];
+      const seen = new Set();
+      const add = (item) => {
+        const id = Number(item?.post_id) || 0;
+        if (!id || seen.has(id) || item.same_house_split) return;
+        seen.add(id);
+        pool.push(item);
+      };
+      for (const row of members) {
+        add(row);
+        for (const pid of loadPersonalSameHouseIds(db, voteUserId, row.post_id)) add(resolve(pid));
+      }
+      if (pool.length < 2) continue;
+      const primary = pool.reduce((best, item) => preferPrimaryListing(best, item), pool[0]);
+      const primaryId = Number(primary.post_id);
+      const primaryOffline = Number(primary.offline) === 1;
+      for (const target of pool) {
+        target.same_house_role = Number(target.post_id) === primaryId ? "primary" : "affiliate";
+        target.same_house_primary_id = primaryId;
+        target.same_house_primary_offline = primaryOffline;
+        target.same_house_personal = true;
+      }
+    }
+  }
   return list;
 }
 
@@ -2111,7 +2232,7 @@ function attachListingPeers(row, settings, voteUserId) {
   if (!row) return row;
   const splits = loadUserSplitPairSet(voteUserId);
   const selfId = Number(row.post_id) || 0;
-  const sameHousePeers = loadSameHousePeers(row).filter((peer) => (
+  const sameHousePeers = loadSameHousePeers(row, voteUserId).filter((peer) => (
     peer.match_verdict !== "no" && !splits.has(votePairKey(selfId, peer.post_id))
   ));
   const matchPostId = Number(row.match_post_id) || 0;
@@ -2130,6 +2251,11 @@ function attachListingPeers(row, settings, voteUserId) {
   const same_house = (row.match_verdict === "no" || Number(row.match_rejected) === 1 || splitFromMatch)
     ? null
     : sameHouseBundle(decoratedSelf, sameHousePeers);
+  if (same_house && voteUserId && personalGroupKeyFor(db, voteUserId, selfId)) {
+    same_house.personal_only = true;
+    same_house.system_agrees = personalGroupAgrees(db, voteUserId, selfId);
+    if (!same_house.system_agrees) same_house.status = "personal";
+  }
   return { ...row, match_peer: matchPeer || null, same_house };
 }
 
@@ -2331,6 +2457,7 @@ export function rejectSuspectedMatch(postId, userId, { peerId } = {}) {
       created_at: now,
       notified: 1,
     });
+    try { splitPersonalSameHouse(db, uid, postId, otherId); } catch { /* 個人併入表可能尚未建立 */ }
   }
 
   const peer = db.prepare("SELECT match_level FROM listings WHERE post_id = ?").get(otherId);
@@ -2357,39 +2484,27 @@ export function rejectSuspectedMatch(postId, userId, { peerId } = {}) {
   };
 }
 
+export function mergeSameHouseForUser(userId, postIds) {
+  const ids = normalizeMergeIds(postIds);
+  const listings = ids
+    .map((id) => db.prepare("SELECT * FROM listings WHERE post_id = ?").get(id))
+    .filter(Boolean);
+  const result = mergePersonalSameHouse(db, userId, listings);
+  if (!result.ok) return result;
+  return {
+    ...result,
+    listing: getListing(ids[0], userId),
+  };
+}
+
+/** 舊 API 改走個人併入，不再寫全站 match_verdict，避免把使用者判斷分享出去。 */
 export function confirmSuspectedMatch(postId, userId) {
-  const listing = getListing(postId, userId);
-  if (!listing?.match_post_id) return null;
-  const peer = getListing(listing.match_post_id, userId);
-  if (!peer) return null;
-  const primary = preferPrimaryListing(listing, peer);
-  const duplicate = Number(primary.post_id) === Number(listing.post_id) ? peer : listing;
-  const now = new Date().toISOString();
-  db.exec("BEGIN");
-  try {
-    db.prepare(
-      `UPDATE listings
-       SET match_verdict = 'yes', match_rejected = 0, hidden = 1,
-           match_post_id = ?, hidden_at = COALESCE(hidden_at, ?)
-       WHERE post_id = ?`,
-    ).run(primary.post_id, now, duplicate.post_id);
-    db.prepare(
-      `UPDATE listings
-       SET match_verdict = '', match_rejected = 0, hidden = 0, match_level = NULL,
-           match_detail = ?, match_post_id = ?
-       WHERE post_id = ?`,
-    ).run(
-      `已確認同一間，主卡留較低總月費，隱藏 #${duplicate.post_id}；較貴的可從同屋源按鈕展開`,
-      duplicate.post_id,
-      primary.post_id,
-    );
-    mergeFlagsOnConfirmOn(db, primary.post_id, duplicate.post_id);
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
-  return getListing(postId, userId);
+  const listing = db.prepare("SELECT * FROM listings WHERE post_id = ?").get(postId);
+  if (!listing) return null;
+  const peerId = Number(listing.match_post_id) || 0;
+  if (!peerId) return null;
+  const result = mergeSameHouseForUser(userId, [postId, peerId]);
+  return result?.ok ? result.listing : null;
 }
 
 export function coveringJobsFromAllUsers(opts = {}) {
@@ -2548,6 +2663,10 @@ export function upsertListing(listing) {
       : JSON.stringify(listing.extra_fees || []);
   const communityId = Number(listing.community_id) || listingCommunityId(listing) || 0;
   const communityName = String(listing.community_name || "").trim();
+  const communityLinked = sourceCommunityLinked({
+    communityId,
+    hasAnchor: Number(listing.community_linked) === 1,
+  }) ? 1 : 0;
   const costChangedAt = String(listing.cost_changed_at || "").trim();
   const costChangeType = String(listing.cost_change_type || "").trim();
   const costChangeDetail = String(listing.cost_change_detail || "").trim();
@@ -2559,8 +2678,8 @@ export function upsertListing(listing) {
       price_contain_text, extra_fees, extra_fees_fetched, address, area_name,
       layout, floor_name, kind_name, role_name, cover, tags, refresh_time,
       first_seen_at, last_seen_at, last_event, viewed, watched, lat, lng,
-      community_id, community_name, cost_changed_at, cost_change_type, cost_change_detail
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?)
+      community_id, community_name, community_linked, cost_changed_at, cost_change_type, cost_change_detail
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(post_id) DO UPDATE SET
       source_key = excluded.source_key,
       search_key = excluded.search_key,
@@ -2577,8 +2696,6 @@ export function upsertListing(listing) {
         ELSE excluded.extra_fees
       END,
       address = CASE
-        WHEN IFNULL(listings.geo_source, '') = 'community' AND IFNULL(listings.address, '') != ''
-        THEN listings.address
         WHEN IFNULL(excluded.address, '') != '' THEN excluded.address
         ELSE listings.address
       END,
@@ -2614,6 +2731,10 @@ export function upsertListing(listing) {
       community_name = CASE
         WHEN IFNULL(excluded.community_name, '') != '' THEN excluded.community_name
         ELSE listings.community_name
+      END,
+      community_linked = CASE
+        WHEN excluded.community_linked > 0 OR excluded.community_id > 0 THEN 1
+        ELSE listings.community_linked
       END,
       cost_changed_at = CASE
         WHEN IFNULL(excluded.cost_changed_at, '') != '' THEN excluded.cost_changed_at
@@ -2656,6 +2777,7 @@ export function upsertListing(listing) {
     listing.lng ?? null,
     communityId,
     communityName,
+    communityLinked,
     costChangedAt,
     costChangeType,
     costChangeDetail,
@@ -2685,7 +2807,7 @@ export function setListingFees(postId, extraFees, fetched = 1) {
   return setListingDetail(postId, { extraFees, fetched });
 }
 
-export function setListingDetail(postId, { extraFees, contact, fetched = 1, lat, lng, address, community_id, community_name, geo_source } = {}) {
+export function setListingDetail(postId, { extraFees, contact, fetched = 1, lat, lng, address, community_id, community_name, community_linked, geo_source } = {}) {
   const listing = getListing(postId);
   if (!listing) return null;
   const fees =
@@ -2709,10 +2831,14 @@ export function setListingDetail(postId, { extraFees, contact, fetched = 1, lat,
   const keepCommunity = listing.geo_source === "community" && !upgradingToCommunity;
   const applyCoords = hasCoords && !keepCommunity;
   const source = applyCoords ? (geo_source === "community" ? "community" : "591") : null;
-  const nextAddress = String(address || "").trim();
-  const keepAddress = !nextAddress || keepCommunity;
+  const nextAddress = preferListingAddress(address, listing.address, listing.geo_source);
+  const keepAddress = !String(address || "").trim();
   const nextCommunityId = Number(community_id) || listing.community_id || 0;
   const nextCommunityName = String(community_name || listing.community_name || "").trim();
+  const nextCommunityLinked = sourceCommunityLinked({
+    communityId: nextCommunityId,
+    hasAnchor: Number(community_linked) === 1 || Number(listing.community_linked) === 1,
+  }) ? 1 : Number(listing.community_linked) || 0;
   // 有實際帶入聯絡資料（非只補社區座標）才更新 contact_fetched_at，供之後「過期重抓聯絡人」判斷。
   const contactRefreshed = Boolean(fetched) && contact != null;
   const contactStamp = new Date().toISOString();
@@ -2727,7 +2853,8 @@ export function setListingDetail(postId, { extraFees, contact, fetched = 1, lat,
       geo_source = CASE WHEN ? IS NOT NULL THEN ? ELSE geo_source END,
       address = CASE WHEN ? THEN listings.address ELSE ? END,
       community_id = CASE WHEN ? > 0 THEN ? ELSE community_id END,
-      community_name = CASE WHEN ? != '' THEN ? ELSE community_name END
+      community_name = CASE WHEN ? != '' THEN ? ELSE community_name END,
+      community_linked = CASE WHEN ? > 0 THEN 1 ELSE community_linked END
      WHERE post_id = ?`,
   ).run(
     fees,
@@ -2755,6 +2882,7 @@ export function setListingDetail(postId, { extraFees, contact, fetched = 1, lat,
     nextCommunityId,
     nextCommunityName,
     nextCommunityName,
+    nextCommunityLinked,
     postId,
   );
   if (
@@ -3202,6 +3330,7 @@ export function getSystemCrawl() {
       ? clampIntervalMinutes(intervalRaw, { admin: true, fallback: SYSTEM_CRAWL_INTERVAL_MINUTES })
       : SYSTEM_CRAWL_INTERVAL_MINUTES,
     showMrt: stored.systemShowMrt !== false,
+    showListRefreshBar: stored.systemShowListRefreshBar === true,
     cities: CITIES,
   };
 }
@@ -3220,9 +3349,13 @@ export function saveSystemCrawl(partial = {}) {
   const showMrt = Object.prototype.hasOwnProperty.call(partial, "showMrt")
     ? partial.showMrt !== false
     : current.showMrt !== false;
+  const showListRefreshBar = Object.prototype.hasOwnProperty.call(partial, "showListRefreshBar")
+    ? partial.showListRefreshBar === true
+    : current.showListRefreshBar === true;
   upsert.run("systemWatchDistricts", JSON.stringify(watchDistricts));
   upsert.run("systemCrawlIntervalMinutes", JSON.stringify(intervalMinutes));
   upsert.run("systemShowMrt", JSON.stringify(showMrt));
+  upsert.run("systemShowListRefreshBar", JSON.stringify(showListRefreshBar));
   return getSystemCrawl();
 }
 
@@ -3261,7 +3394,7 @@ export function listingsNeedingAddressEnrich(limit = 12) {
        FROM listings
        WHERE IFNULL(hidden, 0) = 0
          AND IFNULL(offline, 0) = 0
-         AND source IN ('houseprice', 'ddroom')
+         AND source IN ('houseprice', '591', 'ddroom', 'rakuya')
        ORDER BY ${sqlWatchedFirst()}, last_seen_at DESC
        LIMIT 400`,
     )
@@ -3800,6 +3933,10 @@ export function eventPayloadFromListing(event, listing) {
     tags: row.tags || event.tags,
     source: row.source || event.source || "591",
     source_label: selfSourceLabel(row.source || event.source || "591"),
+    offline: row.offline,
+    offline_confirmed: row.offline_confirmed,
+    same_house_primary_id: row.same_house_primary_id || row.same_house?.primary_id || 0,
+    same_house_role: row.same_house_role || "",
     cover: row.cover,
     commute_km: row.commute_km,
     commute_mode: row.commute_mode,

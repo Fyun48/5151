@@ -29,6 +29,7 @@ import {
   expireStaleVerifyTokens,
   rejectSuspectedMatch,
   confirmSuspectedMatch,
+  mergeSameHouseForUser,
   resetListings,
   resetAllData,
   saveAsProfile,
@@ -75,6 +76,8 @@ import {
   saveMemberMailSettings,
   getHelpQa,
   saveHelpQa,
+  getWishConditions,
+  saveWishConditions,
   getLegalCopy,
   saveLegalCopy,
   getSpirit,
@@ -515,6 +518,7 @@ function wishListQuery(req) {
 function wishListPayload(req) {
   const session = readSession(req);
   const query = wishListQuery(req);
+  getWishConditions();
   const posts = listDemand(query);
   return {
     ...demandMeta(),
@@ -1207,6 +1211,18 @@ app.get("/api/admin/help-qa", requireAdminApi, (_req, res) => {
 app.put("/api/admin/help-qa", requireAdminApi, (req, res) => {
   try {
     res.json(saveHelpQa(req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/admin/wish-conditions", requireAdminApi, (_req, res) => {
+  res.json(getWishConditions());
+});
+
+app.put("/api/admin/wish-conditions", requireAdminApi, (req, res) => {
+  try {
+    res.json(saveWishConditions(req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -2455,13 +2471,41 @@ app.post("/api/listings/:id/reject-match", (req, res) => {
 });
 
 app.post("/api/listings/:id/confirm-match", (req, res) => {
-  const uid = actorUserId(req);
-  const updated = confirmSuspectedMatch(Number(req.params.id), uid);
+  const session = readSession(req);
+  if (!session?.userId) {
+    res.status(401).json({ error: "請先登入才能併入同房源" });
+    return;
+  }
+  const updated = confirmSuspectedMatch(Number(req.params.id), session.userId);
   if (!updated) {
     res.status(404).json({ error: "找不到這筆物件或缺少比對對象" });
     return;
   }
-  res.json({ listing: updated, stats: stats(undefined, uid) });
+  res.json({ listing: updated, stats: stats(undefined, session.userId), personal: true, shared: false });
+});
+
+app.post("/api/listings/merge-same-house", (req, res) => {
+  const session = readSession(req);
+  if (!session?.userId) {
+    res.status(401).json({ error: "請先登入才能併入同房源" });
+    return;
+  }
+  const result = mergeSameHouseForUser(session.userId, req.body?.ids || req.body?.post_ids);
+  if (!result?.ok) {
+    const status = result?.code === "guest" ? 401 : 400;
+    res.status(status).json({ error: result?.error || "無法併入同房源" });
+    return;
+  }
+  res.json({
+    ok: true,
+    personal: true,
+    shared: false,
+    system_agrees: result.systemAgrees,
+    message: result.message,
+    post_ids: result.post_ids,
+    listing: result.listing,
+    stats: stats(undefined, session.userId),
+  });
 });
 
 async function persistSettings(body = {}, userId) {

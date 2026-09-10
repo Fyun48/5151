@@ -157,8 +157,10 @@ export function normalizeSinyiItem(item, { regionId, sectionId } = {}) {
     kind_name: kindName,
     role_name: "信義房屋",
     cover: String(item.img || item.imgDefault || "").trim(),
-    community_id: 0,
+    community_id: Number(item.communityId || item.community_id) || 0,
     community_name: String(item.community || "").trim(),
+    community_linked: Number(item.communityId || item.community_id) > 0
+      || Boolean(item.communityUrl || item.community_url),
     tags: JSON.stringify(tags),
     refresh_time: String(item.updatedate || "").trim(),
     lat: Number.isFinite(lat) ? lat : null,

@@ -206,6 +206,7 @@
     body.compare-open #expandPanelBtn,
     body.compare-open #ownerFab,
     body.compare-open .mobile-help-dock,
+    body.compare-open #mergeDock,
     body.guest-toast-open #scrollTopBtn,
     body.guest-toast-open #expandPanelBtn,
     body.guest-toast-open .mobile-help-dock { visibility: hidden; pointer-events: none; }
@@ -738,6 +739,37 @@
       padding: 8px 0 0;
     }
     .bulk-bar.on { display: flex; }
+    .item.drag-source { opacity: 0.55; }
+    .item.drag-over { box-shadow: 0 0 0 2px var(--accent); }
+    .merge-drag-ghost {
+      position: fixed;
+      z-index: 160;
+      pointer-events: none;
+      max-width: min(420px, 86vw);
+      padding: 10px 12px;
+      background: var(--paper);
+      border: 1px solid var(--accent);
+      border-radius: var(--radius-lg);
+      font-size: var(--text-sm);
+      color: var(--ink);
+    }
+    #mergeDock {
+      display: none;
+      position: fixed;
+      left: 50%;
+      transform: translateX(-50%);
+      bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+      z-index: 95;
+      gap: 8px;
+      align-items: center;
+      padding: 8px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+    }
+    body.merge-selecting #mergeDock,
+    #mergeDock.on { display: flex; }
+    #mergeDock button { min-height: var(--touch); min-width: var(--touch); padding: 0 14px; }
     .bulk-bar .compare-hint {
       width: 100%;
       margin: 0;
@@ -864,6 +896,9 @@
     .item:has(.item-cover.empty) {
       grid-template-columns: 44px 112px minmax(0, 1fr) 120px 148px;
     }
+    body.merge-selecting .item:has(.item-cover.empty) {
+      grid-template-columns: 44px 112px minmax(0, 1fr) 120px 148px;
+    }
     .item.picked { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
     .item.shezidao {
       border: 2px solid var(--shezi-red);
@@ -934,6 +969,16 @@
     .item-main { min-width: 0; }
     .item-details { min-width: 0; }
     .meta { color: var(--muted); font-size: 13px; margin: 6px 0; line-height: 1.55; }
+    .community-map-link {
+      color: var(--accent-deep);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    .community-map-link:hover { color: var(--accent); }
+    .community-map-link:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
     .fees { color: var(--accent-deep); font-size: 13px; margin-top: 4px; line-height: 1.55; }
     .contact {
       display: flex;
@@ -945,6 +990,15 @@
       color: var(--ink);
       min-width: 0;
     }
+    .contact-id {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-width: 0;
+      text-align: left;
+    }
+    .contact-id .who-name { min-width: 0; }
     .contact .avatar {
       width: 52px;
       height: 52px;
@@ -1523,6 +1577,7 @@
     .rich-toolbar { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; border-bottom: 1px solid var(--line); }
     .rich-toolbar button { min-height: 32px; padding: 4px 10px; }
     .rich-emoji { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; border-bottom: 1px solid var(--line); }
+    .rich-emoji[hidden] { display: none; }
     .rich-emoji button { min-width: 36px; min-height: 36px; padding: 0; font-size: 18px; }
     .rich-area {
       min-height: 120px;
@@ -1951,6 +2006,23 @@
       background: var(--accent-mist);
     }
     .tool-mgr-item .row { margin-top: 8px; }
+    .tool-mgr-item[data-tpl-edit] { cursor: pointer; }
+    .tool-mgr-item[data-tpl-edit]:hover,
+    .tool-mgr-item[data-tpl-edit]:focus-visible { border-color: var(--accent); }
+    .self-title-block { margin: 0 0 14px; }
+    .self-title-block label { font-weight: 700; }
+    #descTemplateEditConfirm {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      margin: 0 0 12px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--accent-soft);
+    }
+    #descTemplateEditConfirm[hidden] { display: none; }
     .import-photos { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
     .import-photo {
       position: relative;
@@ -2177,6 +2249,15 @@
     .support-benefits { margin: 6px 0 0; padding-left: 1.1em; color: var(--muted); font-size: var(--text-xs); }
     .dock-item.system .tag.system { background: var(--accent-soft); color: var(--accent-deep); }
     .dock-item.sponsored .tag.sponsored { background: var(--line); color: var(--ink); }
+    /* 通知文字色對齊 webhook embed；只套站內通知 dock／通知設定，不用在找房列表 */
+    .dock-item .tag.notify-new { background: #e0f2fe; color: var(--notify-new-fg); }
+    .dock-item .tag.notify-relist { background: #dcfce7; color: var(--notify-relist-fg); }
+    .dock-item .tag.notify-fee { background: #fce7f3; color: var(--notify-fee-fg); }
+    .dock-item .tag.notify-off { background: var(--tag-off-bg); color: var(--tag-off-fg); }
+    .dock-item .tag.notify-off-sure { background: #fee2e2; color: var(--offline-sure); }
+    .notify-matrix .notify-event.new { color: var(--notify-new-fg); font-weight: 700; }
+    .notify-matrix .notify-event.relist { color: var(--notify-relist-fg); font-weight: 700; }
+    .notify-matrix .notify-event.off { color: var(--muted); font-weight: 700; }
     .owner-list { display: grid; gap: 10px; margin-top: 12px; }
     body:not(.role-admin) .admin-only { display: none !important; }
     body.role-admin .member-only { display: none !important; }
@@ -2340,6 +2421,14 @@
     }
     .hide-box input { width: 16px; height: 16px; accent-color: var(--accent); }
     .list { display: grid; gap: 14px; padding: 14px 16px 16px; overflow-x: hidden; }
+    .list.is-refreshing { pointer-events: none; }
+    .list.is-refreshing::before {
+      content: "";
+      display: block;
+      height: 2px;
+      margin: 0 0 8px;
+      background: var(--accent);
+    }
     .empty { padding: 24px 16px; color: var(--muted); text-align: center; font-size: var(--text-md); line-height: 1.6; }
     #bootFail {
       display: none;
@@ -2554,6 +2643,18 @@
         padding: 12px;
       }
       .item .pick-hit { display: none !important; }
+      body.merge-selecting .item {
+        grid-template-columns: 44px 84px minmax(0, 1fr);
+      }
+      body.merge-selecting .item .pick-hit {
+        display: inline-flex !important;
+        grid-column: 1;
+        grid-row: 1;
+        align-items: center;
+        padding: 8px 0 0;
+      }
+      body.merge-selecting .item-cover { grid-column: 2; }
+      body.merge-selecting .item-main { grid-column: 3; }
       .item-copy { display: contents; }
       .item-main { grid-column: 2; grid-row: 1; min-width: 0; }
       .item-details,
@@ -2594,6 +2695,10 @@
       }
       body.role-guest .item:has(.item-cover.empty) {
         grid-template-columns: 92px minmax(0, 1fr);
+      }
+      body.merge-selecting .item:has(.item-cover.empty),
+      body.merge-selecting.role-guest .item:has(.item-cover.empty) {
+        grid-template-columns: 44px 84px minmax(0, 1fr);
       }
       .item .contact,
       .item .actions {
@@ -3005,6 +3110,7 @@
             <button type="button" class="ghost" id="clearSelectBtn">取消勾選</button>
             <button type="button" class="ghost" id="compareSelectedBtn" disabled>比較（0／3）</button>
             <button type="button" class="primary" id="hideSelectedBtn">不再顯示已選</button>
+            <button type="button" class="primary" id="mergeSelectedBtn" hidden>併入同房源</button>
             <p class="compare-hint" id="compareHint" hidden>自選 2～3 筆比較（可跨屋源），只列有差異的欄。</p>
           </div>
         </div>
@@ -3034,24 +3140,10 @@
         <button type="button" class="ghost" id="wishLoadExampleBtn" hidden>載入範例</button>
         <button type="button" class="ghost" id="wishDeleteExampleBtn" hidden>刪除範例</button>
       </div>
-      <div class="wish-filters" id="wishFilters">
-        <label for="wishFilterCity">縣市</label>
-        <select id="wishFilterCity"><option value="">不限縣市</option></select>
-        <label for="wishFilterRentMin">預算</label>
-        <input type="number" id="wishFilterRentMin" min="0" step="500" placeholder="最低" inputmode="numeric" />
-        <input type="number" id="wishFilterRentMax" min="0" step="500" placeholder="最高" inputmode="numeric" />
-        <label for="wishFilterHousing">類型</label>
-        <select id="wishFilterHousing"><option value="any">不限類型</option></select>
-        <button type="button" class="ghost" id="wishFilterApply">篩選</button>
-      </div>
       <div class="list" id="demandList" style="padding-top:4px"><div class="empty">載入許願房…</div></div>
       <div id="wishFormWrap" hidden>
         <form id="demandForm">
           <div class="self-grid">
-            <div>
-              <label for="wishCity">希望縣市</label>
-              <select id="wishCity"></select>
-            </div>
             <div>
               <label for="demandHousing">房屋類型</label>
               <select id="demandHousing">
@@ -3066,11 +3158,7 @@
               </select>
             </div>
             <div>
-              <label for="demandRentMin">最低月租</label>
-              <input type="number" id="demandRentMin" min="0" step="500" placeholder="例如 18000" />
-            </div>
-            <div>
-              <label for="demandRentMax">最高月租</label>
+              <label for="demandRentMax">房租上限</label>
               <input type="number" id="demandRentMax" min="0" step="500" placeholder="例如 28000" />
             </div>
             <div class="span-all">
@@ -3104,23 +3192,11 @@
               </select>
             </div>
             <div class="span-all">
-              <label for="wishLocationNote">補充地點</label>
-              <input type="text" id="wishLocationNote" maxlength="80" placeholder="例如近士林夜市、可接受鄰近行政區" />
-            </div>
-            <div>
-              <label for="wishTransit">捷運／車站</label>
+              <label for="wishTransit">希望1公里內有之捷運／車站名稱</label>
               <input type="text" id="wishTransit" maxlength="80" placeholder="例如劍潭站、士林站" />
             </div>
-            <div>
-              <label for="wishDestination">常去地點</label>
-              <input type="text" id="wishDestination" maxlength="80" placeholder="公司、學校或其他" />
-            </div>
-            <div>
-              <label for="wishCommute">可接受通勤（分鐘）</label>
-              <input type="number" id="wishCommute" min="0" max="180" placeholder="選填" />
-            </div>
             <div class="span-all">
-              <label class="pledge-row"><input type="checkbox" id="demandMrt" /> <span>需要可步行捷運（未滿 1.5 公里）</span></label>
+              <label class="pledge-row"><input type="checkbox" id="demandMrt" /> <span>需要可步行捷運（1 公里內）</span></label>
             </div>
             <div class="span-all">
               <label>行政區</label>
@@ -3144,23 +3220,6 @@
             <div class="span-all">
               <label for="demandBody">補充說明（最多 800 字）</label>
               <textarea id="demandBody" maxlength="800" placeholder="用自己的話說明找房需要。請只寫房屋與通勤條件。"></textarea>
-            </div>
-            <div>
-              <label for="wishContactName">公開稱呼（選填）</label>
-              <input type="text" id="wishContactName" maxlength="80" placeholder="例如 小陳" />
-            </div>
-            <div>
-              <label for="wishContactPhone">公開電話（選填）</label>
-              <input type="text" id="wishContactPhone" maxlength="40" inputmode="tel" />
-            </div>
-            <div class="span-all">
-              <label for="wishContactLine">LINE 連結（選填）</label>
-              <input type="text" id="wishContactLine" maxlength="300" placeholder="https://line.me/…" />
-            </div>
-            <div class="span-all row">
-              <label class="visually-hidden" for="wishContactPick">套用已存聯絡人</label>
-              <select id="wishContactPick"><option value="">套用我的聯絡人</option></select>
-              <button type="button" class="ghost" id="wishContactApply">套用快選</button>
             </div>
           </div>
           <div class="row" style="margin-top:10px">
@@ -3192,7 +3251,7 @@
       <form id="profileForm">
         <div class="profile-card">
           <button type="button" class="media-hit" id="profileAvatarHit" title="點擊拍照或上傳頭像" aria-label="拍照或上傳頭像">
-            <img class="profile-avatar" id="profileAvatarImg" alt="頭像" hidden />
+            <img class="profile-avatar" id="profileAvatarImg" alt="頭像" data-avatar-zoom hidden />
             <div class="profile-avatar empty" id="profileAvatarFallback">頭像</div>
             <span class="media-x" id="profileAvatarClear" hidden>×</span>
           </button>
@@ -3316,7 +3375,7 @@
         <h3>從 591 / 5168 匯入</h3>
         <p class="hint import-locked" id="importLockedHint">贊助會員可使用 591 / 5168 物件匯入</p>
         <div id="importSponsorTools" hidden>
-          <p class="hint">貼上公開物件網址。系統只複製標題、說明與照片成草稿；聯絡方式、設施與刊登聲明仍須你自己填。</p>
+          <p class="hint">貼上公開物件網址。系統只複製標題、說明與照片成草稿；聯絡方式請用刊登幫手的聯絡人範本，設施與刊登聲明仍須你自己填。</p>
           <div class="import-row">
             <label class="visually-hidden" for="importUrl">物件網址</label>
             <input type="url" id="importUrl" placeholder="https://rent.591.com.tw/… 或 https://rent.houseprice.tw/house/…" autocomplete="off" />
@@ -3346,19 +3405,25 @@
       <div class="listing-tools" id="listingTools">
         <h3>刊登幫手</h3>
         <p class="copy-draft-banner" id="copyDraftBanner" hidden>這是複製來的未刊登草稿，原物件沒有被改。請檢查後再勾選聲明並送出，不會自動刊登。</p>
-        <p class="hint" id="descTemplateHint">一般會員可存 2 則說明範本；贊助會員可存到 5 則。</p>
+        <p class="hint" id="descTemplateHint">說明範本贊助會員可存到 5 則。</p>
         <div class="listing-tools-row">
           <label class="visually-hidden" for="descTemplatePick">說明範本</label>
           <select id="descTemplatePick"><option value="">選擇說明範本</option></select>
-          <button type="button" class="ghost" id="descTemplateManage">新增說明範本</button>
+          <button type="button" class="ghost" id="descTemplateManage">新增/修改 說明範本</button>
         </div>
+        <p class="hint" id="descTemplateApplied" hidden></p>
         <div class="listing-tools-row">
           <label class="visually-hidden" for="contactProfilePick">聯絡人</label>
           <select id="contactProfilePick"><option value="">選擇聯絡人</option></select>
           <button type="button" class="ghost" id="contactProfileManage">新增聯絡人</button>
         </div>
+        <p class="hint" id="contactTemplateApplied" hidden></p>
       </div>
-      <form id="selfListingForm">
+      <form id="selfListingForm" novalidate>
+        <div class="self-title-block">
+          <label for="selfTitle">標題</label>
+          <input id="selfTitle" maxlength="80" placeholder="至少 5 個字" />
+        </div>
         <div class="self-grid">
           <div>
             <label>縣市</label>
@@ -3387,19 +3452,19 @@
           </div>
           <div>
             <label>每月租金</label>
-            <input type="number" id="selfRent" min="1000" max="200000" step="500" placeholder="例如 25000" />
+            <input type="number" id="selfRent" min="1000" max="200000" step="500" />
           </div>
           <div>
             <label>可用坪數</label>
             <input type="number" id="selfPing" min="1" max="500" step="0.5" placeholder="扣除公設" />
           </div>
           <div>
-            <label>所在樓層</label>
-            <input type="number" id="selfFloor" min="1" max="80" placeholder="例如 3" />
+            <label>出租樓層</label>
+            <input type="number" id="selfFloor" min="1" max="80" />
           </div>
           <div>
             <label>總樓層</label>
-            <input type="number" id="selfTotalFloors" min="1" max="80" placeholder="選填" />
+            <input type="number" id="selfTotalFloors" min="1" max="80" />
           </div>
           <div>
             <label>房</label>
@@ -3422,28 +3487,12 @@
               <option value="talk">面議</option>
             </select>
           </div>
-          <div class="span-2">
-            <label>聯絡人稱呼</label>
-            <input id="selfContactName" maxlength="80" placeholder="例如 林先生" />
-          </div>
-          <div class="span-2">
-            <label>標題（選填）</label>
-            <input id="selfTitle" maxlength="80" placeholder="空白則用行政區與租金" />
-          </div>
           <div class="span-all">
-            <label>路名地址</label>
-            <div class="addr-combo">
-              <p class="addr-prefix" id="selfAddressPrefix">請先選縣市與行政區</p>
-              <input id="selfAddress" maxlength="80" placeholder="例如 中正路 100 號" />
-            </div>
-          </div>
-          <div class="span-2">
-            <label>公開電話（選填）</label>
-            <input id="selfPhone" maxlength="40" inputmode="tel" placeholder="09xxxxxxxx" />
-          </div>
-          <div class="span-2">
-            <label>LINE 連結（選填）</label>
-            <input id="selfLine" maxlength="300" placeholder="https://line.me/..." />
+            <label for="selfAddress">欲出租物件地址</label>
+            <input id="selfAddress" maxlength="80" placeholder="例如 台北市士林區中正路 100 號" />
+            <input id="selfContactName" type="hidden" />
+            <input id="selfPhone" type="hidden" />
+            <input id="selfLine" type="hidden" />
           </div>
           <div class="span-all">
             <label>物件照片</label>
@@ -3457,28 +3506,14 @@
         <div class="self-photo-tray" id="selfPhotoPreview" hidden></div>
         <div id="selfTraitGroups"></div>
         <p class="hint" id="selfTraitNudge" hidden>電梯大樓的話，中庭與陽台常常是租客想先知道的。有的話點一下就好。</p>
-        <label>說明（最多 500 字）</label>
-        <div class="rich-editor" id="selfBodyEditorWrap">
-          <div class="rich-toolbar" role="toolbar" aria-label="說明格式">
-            <button type="button" class="ghost" data-rich="bold">粗體</button>
-            <button type="button" class="ghost" data-rich="italic">斜體</button>
-            <button type="button" class="ghost" data-rich="size" data-size="18px">大</button>
-            <button type="button" class="ghost" data-rich="size" data-size="14px">中</button>
-            <button type="button" class="ghost" data-rich="color" data-color="#0f6f6a">綠</button>
-            <button type="button" class="ghost" data-rich="color" data-color="#1c1917">黑</button>
-            <button type="button" class="ghost" id="selfEmojiToggle">表情</button>
-          </div>
-          <div class="rich-emoji" id="selfEmojiBar" hidden></div>
-          <div class="rich-area" id="selfBodyEditor" contenteditable="true" role="textbox" aria-label="物件說明" data-placeholder="格局、設備、可入住日。"></div>
-          <textarea id="selfBody" maxlength="2500" hidden></textarea>
-        </div>
+        <textarea id="selfBody" maxlength="2500" hidden></textarea>
         <label class="pledge-row">
           <input type="checkbox" id="selfPledge" />
           <span id="selfPledgeText">我是這間房子的屋主，或已取得屋主授權的代理人。我確認刊登內容屬實，了解平台會抽查，不實刊登會被下架並暫停上傳。平台不驗證權狀、不保證真實，法律責任由我自行負擔。</span>
         </label>
         <div class="row" style="margin-top:10px">
           <button type="submit" class="primary" id="selfSubmit">刊登物件</button>
-          <span class="save-msg" id="selfMsg"></span>
+          <span class="save-msg" id="selfMsg" role="status" aria-live="polite"></span>
         </div>
       </form>
       <div class="list" id="selfMineList" style="padding-top:12px"></div>
@@ -3547,7 +3582,7 @@
         </ol>
         <label>Discord Webhook（選填）</label>
         <input type="url" id="discordWebhook" placeholder="https://discord.com/api/webhooks/..." />
-        <p class="hint">此通知預設只會訊息已是特別關注之物件。要改事件種類請切到「通知種類」。</p>
+        <p class="hint">Webhook 同房源多筆只送主物件。全新物件依搜尋設定檔；其餘種類都只有特別關注才會推。要改通道請切到「通知種類」。</p>
       </section>
       <section class="hub-pane" data-hub-pane="mail" hidden>
         <p class="hint">這組 SMTP <strong>只寄物件／屋源提醒</strong>到你註冊的信箱，請用你自己的帳號寄給自己。註冊歡迎、忘記密碼、變更密碼、贊助通知由站方管理員 SMTP 寄出，不會用這裡的密碼。</p>
@@ -3595,7 +3630,7 @@
         <p class="msg" id="memberMailMsg"></p>
       </section>
       <section class="hub-pane" data-hub-pane="events">
-        <p class="hint">全新物件只通知符合目前設定檔的篩選（例如只看整層、排除 1F 及地下室、行政區、租金）。頻道勾選也存在同一個設定檔。</p>
+        <p class="hint">全新物件只通知符合目前設定檔的篩選（例如只看整層、排除 1F 及地下室、行政區、租金）。價格、費用、下架、重新上架與同屋源重刊都只有特別關注才會發。頻道勾選也存在同一個設定檔。</p>
         <div class="notify-matrix-wrap">
         <table class="notify-matrix" id="notifyMatrix">
           <thead>
@@ -3609,7 +3644,7 @@
           </thead>
           <tbody>
             <tr>
-              <td>全新物件</td>
+              <td class="notify-event new">全新物件</td>
               <td><input type="checkbox" data-notify-row="new" data-notify-ch="dock" checked /></td>
               <td><input type="checkbox" data-notify-row="new" data-notify-ch="push" checked /></td>
               <td><input type="checkbox" data-notify-row="new" data-notify-ch="webhook" /></td>
@@ -3644,14 +3679,14 @@
               <td><input type="checkbox" data-notify-row="update" data-notify-ch="mail" /></td>
             </tr>
             <tr>
-              <td>591 下架</td>
+              <td class="notify-event off">591 下架</td>
               <td><input type="checkbox" data-notify-row="offline" data-notify-ch="dock" checked /></td>
               <td><input type="checkbox" data-notify-row="offline" data-notify-ch="push" checked /></td>
               <td><input type="checkbox" data-notify-row="offline" data-notify-ch="webhook" /></td>
               <td><input type="checkbox" data-notify-row="offline" data-notify-ch="mail" /></td>
             </tr>
             <tr>
-              <td>重新上架</td>
+              <td class="notify-event relist">重新上架</td>
               <td><input type="checkbox" data-notify-row="relist" data-notify-ch="dock" checked /></td>
               <td><input type="checkbox" data-notify-row="relist" data-notify-ch="push" checked /></td>
               <td><input type="checkbox" data-notify-row="relist" data-notify-ch="webhook" /></td>
@@ -3796,6 +3831,10 @@
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
   </button>
+  <div id="mergeDock" role="toolbar" aria-label="併入同房源" hidden>
+    <button type="button" class="ghost" id="mergeCancelBtn">取消</button>
+    <button type="button" class="primary" id="mergeConfirmBtn" hidden>併入同房源</button>
+  </div>
   <button type="button" class="primary" id="ownerFab" hidden>我刊登的房子</button>
   <!-- 手機版：捲動後仍能就地開 Q&A／意見（低干擾、左下角、避開右下的回頂與刊登 FAB）。開啟後保留目前頁面位置。 -->
   <div class="mobile-help-dock" id="mobileHelpDock" aria-label="求助與意見">
@@ -3863,17 +3902,35 @@
     <div class="hub-panel" role="dialog" aria-modal="true" aria-labelledby="descTemplateTitle">
       <div class="hub-head">
         <div>
-          <h2 id="descTemplateTitle">新增說明範本</h2>
-          <p class="hint" style="margin:6px 0 0">一般會員最多 2 則，贊助會員可存到 5 則。從下拉選單選到就會套用；若說明已有字，會先問你要不要取代。</p>
+          <h2 id="descTemplateTitle">新增/修改 說明範本</h2>
         </div>
         <button type="button" class="ghost" id="descTemplateClose">關閉</button>
       </div>
+      <div id="descTemplateEditConfirm" class="pledge-row" hidden>
+        <span>要修改「<strong id="descTplEditName"></strong>」嗎？確認後會把名稱與內容帶回表單。</span>
+        <button type="button" class="primary" id="descTplEditYes">確認修改</button>
+        <button type="button" class="ghost" id="descTplEditNo">取消</button>
+      </div>
       <div class="listing-tools-row">
+        <label class="visually-hidden" for="descTemplateName">範本名稱</label>
         <input type="text" id="descTemplateName" maxlength="40" placeholder="範本名稱" />
       </div>
-      <textarea id="descTemplateBody" maxlength="2500" placeholder="說明內容（可粗體／表情，不能放連結）"></textarea>
+      <div class="rich-editor" id="descBodyEditorWrap">
+        <div class="rich-toolbar" role="toolbar" aria-label="說明範本格式">
+          <button type="button" class="ghost" data-rich="bold">粗體</button>
+          <button type="button" class="ghost" data-rich="italic">斜體</button>
+          <button type="button" class="ghost" data-rich="size" data-size="18px">大</button>
+          <button type="button" class="ghost" data-rich="size" data-size="14px">中</button>
+          <button type="button" class="ghost" data-rich="color" data-color="#0f6f6a">綠</button>
+          <button type="button" class="ghost" data-rich="color" data-color="#1c1917">黑</button>
+          <button type="button" class="ghost" id="descEmojiToggle">表情</button>
+        </div>
+        <div class="rich-emoji" id="descEmojiBar" hidden></div>
+        <div class="rich-area" id="descBodyEditor" contenteditable="true" role="textbox" aria-label="說明範本內容" data-placeholder="格局、設備、可入住日。"></div>
+        <textarea id="descTemplateBody" maxlength="2500" hidden></textarea>
+      </div>
       <div class="row" style="margin-top:8px">
-        <button type="button" class="primary" id="descTemplateSave">新增範本</button>
+        <button type="button" class="primary" id="descTemplateSave">儲存範本</button>
         <span class="save-msg" id="descTemplateMsg"></span>
       </div>
       <div class="tool-mgr-list" id="descTemplateList"></div>
@@ -3890,11 +3947,15 @@
         <button type="button" class="ghost" id="contactProfileClose">關閉</button>
       </div>
       <div class="listing-tools-row">
+        <label class="visually-hidden" for="contactProfileLabel">聯絡人名稱</label>
         <input type="text" id="contactProfileLabel" maxlength="40" placeholder="例如 屋主本人" />
+        <label class="visually-hidden" for="contactProfileName">稱呼</label>
         <input type="text" id="contactProfileName" maxlength="80" placeholder="稱呼" />
       </div>
       <div class="listing-tools-row">
+        <label class="visually-hidden" for="contactProfilePhone">公開電話</label>
         <input type="text" id="contactProfilePhone" maxlength="40" inputmode="tel" placeholder="公開電話" />
+        <label class="visually-hidden" for="contactProfileLine">LINE 連結</label>
         <input type="text" id="contactProfileLine" maxlength="300" placeholder="https://line.me/…" />
       </div>
       <div class="row" style="margin-top:8px">
@@ -3994,6 +4055,10 @@
     const DEFAULT_COMMUTE_KM = 25;
     let settings = {};
     let selected = new Set();
+    let mergeSelectMode = false;
+    let mergePressTimer = 0;
+    let mergeDrag = null;
+    let mergeLastTap = { id: "", at: 0 };
     let excludeBoxes = [];
     let map, drawing = false, startLatLng = null, previewRect = null, boxLayers = [];
     let editingIdx = null;
@@ -4003,6 +4068,7 @@
     const draftWatch = new Set();
     const noteDrafts = new Map();
     let listCache = [];
+    let listingPool = [];
     const sameHouseOpen = new Set();
     const sameHouseClosed = new Set();
     let guestListings = [];
@@ -4205,14 +4271,30 @@
         ? `一般會員最多 ${MEMBER_MAX_WATCHED} 筆，贊助會員最多 ${SPONSOR_MAX_WATCHED} 筆`
         : "特別關注的物件會優先更新狀態與公司距離";
     }
+    function communityMapsHref(name, address) {
+      const n = String(name || "").trim().replace(/[／/]+/g, " ").replace(/\s+/g, " ").trim();
+      if (!n) return "";
+      const loc = String(address || "").replace(/\s+/g, "");
+      if (/\d+(?:之\d+)?號/.test(loc)) {
+        return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(loc)}`;
+      }
+      const city = (loc.match(/^(台北市|臺北市|新北市|桃園市|基隆市|新竹市|[^市縣]{1,3}[市縣])/) || [])[0] || "";
+      const district = (loc.match(/[市縣]([^\d市縣]{1,4}[區鄉鎮市])/) || [])[1] || "";
+      return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${city}${district}${n}`)}`;
+    }
     function listingSpecLine(item) {
-      return [
-        item?.community_name ? `社區 ${item.community_name}` : "",
-        item?.kind_name || "",
-        item?.layout || "",
-        item?.area_name || "",
-        floorDisplay(item),
-      ].filter(Boolean).join(" · ");
+      const community = String(item?.community_name || "").trim();
+      const linked = community && (item?.community_linked === true || Number(item?.community_linked) === 1 || Number(item?.community_id) > 0);
+      const communityHtml = !community
+        ? ""
+        : linked
+          ? `社區 <a class="community-map-link" href="${esc(communityMapsHref(community, item.address))}" target="_blank" rel="noopener noreferrer" aria-label="在 Google 地圖查看社區 ${esc(community)}">${esc(community)}</a>`
+          : `社區 ${esc(community)}`;
+      const rest = [item?.kind_name || "", item?.layout || "", item?.area_name || "", floorDisplay(item)]
+        .filter(Boolean)
+        .map((bit) => esc(bit))
+        .join(" · ");
+      return [communityHtml, rest].filter(Boolean).join(" · ");
     }
     function safeListingHtml(value) {
       const allowed = new Set(["b", "strong", "i", "em", "u", "br", "p", "span", "div"]);
@@ -4605,7 +4687,8 @@
     }
     function listingStatusLabel(item) {
       if (Number(item?.offline_confirmed) === 1 || item?.offline_confirmed === true) return "確認已下架";
-      if (Number(item?.offline) === 1 || item?.offline === true || item?.last_event === "offline") return "下架確認中";
+      if (Number(item?.offline) === 1 || item?.offline === true || item?.last_event === "offline") return "確認下架中";
+      if (item?.last_event === "relist" || (item?.last_event === "same_source" && item?.offline === 0)) return "重新上架";
       return "刊登中";
     }
     function rentStatusLine(item) {
@@ -4839,7 +4922,7 @@
       const extras = commsInboxHtml(commsInboxItems());
       if (!extras) {
         if (!inbox.querySelector(".dock-item") && !inbox.querySelector(".notify-empty")) {
-          inbox.innerHTML = `<div class="notify-empty">還沒有待看更新。條件按儲存後，全新物件、價格變動與下架會出現在這裡，也可按「允許系統推播」。</div>`;
+          inbox.innerHTML = `<div class="notify-empty">還沒有待看更新。全新物件會依你儲存的搜尋設定檔進來；價格、費用、下架與重新上架只打特別關注。也可按「允許系統推播」。</div>`;
         }
         return;
       }
@@ -4893,6 +4976,50 @@
 
     function applyListView(items) {
       return applyViewFilters(applyDistrictView(items));
+    }
+
+    function rememberListings(items) {
+      const map = new Map(listingPool.map((row) => [String(row.post_id), row]));
+      for (const item of items || []) {
+        if (item?.post_id != null) map.set(String(item.post_id), item);
+      }
+      listingPool = [...map.values()];
+    }
+
+    function listingIdKey(items) {
+      return (items || []).map((row) => String(row.post_id)).join(",");
+    }
+
+    function previewListForFilter(key) {
+      const rows = listingPool.filter((item) => guestFilterMatch(item, key));
+      if (rows.length) return rows;
+      return null;
+    }
+
+    function listRefreshBarEnabled() {
+      return settings.showListRefreshBar === true;
+    }
+
+    function setListBusy(busy, text) {
+      const box = $("list");
+      if (box) {
+        box.classList.toggle("is-refreshing", Boolean(busy) && listRefreshBarEnabled());
+        box.setAttribute("aria-busy", busy ? "true" : "false");
+      }
+      if (busy && text && $("status")) $("status").textContent = text;
+    }
+
+    function detachListingCard(id, patch = {}) {
+      const key = String(id);
+      listingPool = listingPool.map((row) => (String(row.post_id) === key ? { ...row, ...patch } : row));
+      listCache = listCache.filter((row) => String(row.post_id) !== key);
+      const wrap = document.querySelector(`[data-card="${key}"]`)?.closest(".item-swipe-wrap");
+      if (wrap) wrap.remove();
+      else document.querySelector(`[data-card="${key}"]`)?.remove();
+      paintWatchChip();
+      updateBulkBar();
+      updateListMeta(listCache, lastStats);
+      if (!listCache.length) renderList([], lastStats);
     }
 
     function guestKindMatch(item, keys) {
@@ -5776,11 +5903,14 @@
 
     function sameHouseWarn(item) {
       const house = sameHouseOf(item);
-      if (!house?.cheaper_exists) return "";
+      const personalNote = house?.personal_only && house.system_agrees === false
+        ? `<div class="same-house-warn">系統判定不是同屋源。已依你的操作併入，此記錄只留在你的帳號，不會分享給其他使用者。</div>`
+        : "";
+      if (!house?.cheaper_exists) return personalNote;
       const primary = house.peers.find((peer) => peer.role === "primary") || house.peers[0];
       const total = Number(primary?.total) || 0;
       const src = primary?.source_label || "";
-      return `<div class="same-house-warn">同屋源另有較低總月費${total ? ` ${total.toLocaleString("zh-TW")}` : ""}${src ? `（${esc(src)}）` : ""} · 這則貴 ${Number(house.cheaper_gap).toLocaleString("zh-TW")} 元，先別打這則</div>`;
+      return `${personalNote}<div class="same-house-warn">同屋源另有較低總月費${total ? ` ${total.toLocaleString("zh-TW")}` : ""}${src ? `（${esc(src)}）` : ""} · 這則貴 ${Number(house.cheaper_gap).toLocaleString("zh-TW")} 元，先別打這則</div>`;
     }
 
     function sameHousePeerRole(item, peer, idx) {
@@ -5909,7 +6039,7 @@
       if (item.offline_confirmed) {
         return ` · 確認已下架${day ? `（自 ${esc(day)} 起找不到）` : ""}`;
       }
-      return ` · 下架確認中${day ? `（${esc(day)} 起）` : ""}`;
+      return ` · 確認下架中${day ? `（${esc(day)} 起）` : ""}`;
     }
 
     function tags(item) {
@@ -5918,13 +6048,14 @@
         bits.push(`<span class="tag fit" title="依你的租金、樓層與通勤估算，不是成交預測">${esc(item.fit_label)} ${esc(item.fit_score)}</span>`);
       }
       if (item.last_event === "new") bits.push('<span class="tag new">全新物件</span>');
+      if (item.last_event === "relist") bits.push('<span class="tag relist">重新上架</span>');
       if (item.last_event === "same_source" && !item.match_level && !item.same_house) bits.push('<span class="tag same">同屋源更新</span>');
       if (sameHouseOf(item)) bits.push(sameHouseTag(item));
       else if (item.match_verdict === "yes") bits.push('<span class="tag verdict-yes">已確認：同一間</span>');
       if (item.match_verdict === "no") bits.push('<span class="tag verdict-no">已確認：不同物件</span>');
       if (item.last_event === "update" && !item.cost_change) bits.push('<span class="tag same">內容更新</span>');
       if (item.offline_confirmed) bits.push('<span class="tag off-sure">確認已下架</span>');
-      else if (item.offline || item.last_event === "offline") bits.push('<span class="tag off">正在確認中的下架</span>');
+      else if (item.offline || item.last_event === "offline") bits.push('<span class="tag off">確認下架中</span>');
       if (item.has_elevator) bits.push('<span class="tag lift">有電梯</span>');
       if (item.watched) bits.push('<span class="tag watch">特別關注</span>');
       if (item.viewed) bits.push('<span class="tag viewed">已瀏覽</span>');
@@ -5950,9 +6081,14 @@
       const tel = item.mobile || item.phone || "";
       const bits = [];
       if (item.avatar) {
-        bits.push(`<img class="avatar" src="${esc(item.avatar)}" alt="" title="點頭像排除此人" data-exclude-face="${item.post_id}" data-uid="${item.contact_uid || ""}" data-agent="${esc(agency || name)}" />`);
+        const exLabel = agentExcludeLabel(item);
+        const excludeAttrs = !isGuest && exLabel && item.source !== "self"
+          ? ` data-exclude-face="${item.post_id}" data-agent="${esc(exLabel)}" data-uid="${item.contact_uid || ""}" title="點頭像排除此聯絡人，並寫入目前設定檔"`
+          : ` title="點頭像看大圖" data-avatar-zoom="${esc(item.avatar)}"`;
+        bits.push(`<div class="contact-id"><img class="avatar" src="${esc(item.avatar)}" alt=""${excludeAttrs} /><div class="who-name">${esc([role, name].filter(Boolean).join(" · ") || "聯絡人")}</div></div>`);
+      } else if (name || role) {
+        bits.push(`<div class="who-name">${esc([role, name].filter(Boolean).join(" · "))}</div>`);
       }
-      if (name || role) bits.push(`<div class="who-name">${esc([role, name].filter(Boolean).join(" · "))}</div>`);
       if (agency) bits.push(`<div class="agency">${esc(agency)}</div>`);
       const deferContact = Boolean(sameHouseOf(item)?.cheaper_exists);
       if (deferContact) {
@@ -5973,18 +6109,118 @@
         else bits.push(`<div class="agency">聯絡資料抓取中</div>`);
       }
       const exLabel = agentExcludeLabel(item);
-      if (!isGuest && !item.avatar && exLabel && item.source !== "self") {
+      if (!isGuest && exLabel && item.source !== "self") {
         bits.push(`<button type="button" class="ghost exclude-agent-btn" data-exclude-face="${item.post_id}" data-agent="${esc(exLabel)}" data-uid="${item.contact_uid || ""}" title="不再顯示這個仲介／聯絡人的物件">排除 ${esc(exLabel)}</button>`);
       }
       return `<div class="contact${deferContact ? " contact-defer" : ""}">${bits.join("")}</div>`;
     }
 
+    function isCoarsePointer() {
+      return window.matchMedia("(pointer: coarse), (max-width: 767px)").matches;
+    }
+    function paintMergeDock() {
+      const dock = $("mergeDock");
+      if (!dock) return;
+      const n = selected.size;
+      const show = (mergeSelectMode && n >= 1) || n >= 2;
+      dock.hidden = !show;
+      dock.classList.toggle("on", show);
+      document.body.classList.toggle("merge-selecting", mergeSelectMode);
+      const confirm = $("mergeConfirmBtn");
+      if (confirm) confirm.hidden = n < 2;
+    }
+    function exitMergeSelect() {
+      mergeSelectMode = false;
+      selected.clear();
+      document.querySelectorAll("[data-pick]").forEach((el) => {
+        el.checked = false;
+        el.closest(".item")?.classList.remove("picked");
+      });
+      updateBulkBar();
+    }
+    async function mergeSelectedListings(ids) {
+      const postIds = (ids || [...selected]).map((id) => Number(id)).filter(Boolean);
+      if (postIds.length < 2) {
+        $("status").textContent = "請至少選 2 筆才能併入同房源";
+        return;
+      }
+      if (isGuest) {
+        remindGuest();
+        return;
+      }
+      $("status").textContent = "正在併入同房源…";
+      try {
+        const res = await fetch("/api/listings/merge-same-house", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids: postIds }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "併入失敗");
+        exitMergeSelect();
+        $("status").textContent = data.message || "已併入同房源";
+        await loadList();
+      } catch (error) {
+        $("status").textContent = error.message;
+      }
+    }
+    function mergeInteractiveTarget(el) {
+      return Boolean(el?.closest?.("a, button, input, label, textarea, select, .pick-hit, .actions, .contact, .same-house-panel"));
+    }
+    function cardIdFromPoint(x, y) {
+      const node = document.elementFromPoint(x, y);
+      return node?.closest?.("[data-card]")?.dataset?.card || "";
+    }
+    function clearMergeDrag() {
+      if (mergePressTimer) {
+        clearTimeout(mergePressTimer);
+        mergePressTimer = 0;
+      }
+      document.querySelectorAll(".item.drag-source, .item.drag-over").forEach((el) => {
+        el.classList.remove("drag-source", "drag-over");
+      });
+      document.querySelector(".merge-drag-ghost")?.remove();
+      mergeDrag = null;
+    }
+    function mergeAutoScroll(clientY) {
+      const viewH = window.innerHeight || 1;
+      let delta = 0;
+      if (clientY < 0) delta = -Math.min(48, 8 + Math.abs(clientY) * 0.2);
+      else if (clientY > viewH) delta = Math.min(48, 8 + (clientY - viewH) * 0.2);
+      else if (clientY < 72) delta = -((72 - clientY) / 72) * 28;
+      else if (clientY > viewH - 72) delta = ((clientY - (viewH - 72)) / 72) * 28;
+      if (delta) window.scrollBy(0, delta);
+    }
+    function startMergeDrag(card, ev) {
+      const id = card?.dataset?.card;
+      if (!id) return;
+      mergeDrag = { id, ghost: document.createElement("div") };
+      mergeDrag.ghost.className = "merge-drag-ghost";
+      mergeDrag.ghost.textContent = card.querySelector(".item-title")?.innerText || "併入同房源";
+      document.body.appendChild(mergeDrag.ghost);
+      card.classList.add("drag-source");
+      moveMergeDrag(ev.clientX, ev.clientY);
+    }
+    function moveMergeDrag(x, y) {
+      if (!mergeDrag?.ghost) return;
+      mergeDrag.ghost.style.left = `${x + 12}px`;
+      mergeDrag.ghost.style.top = `${y + 12}px`;
+      document.querySelectorAll(".item.drag-over").forEach((el) => el.classList.remove("drag-over"));
+      const overId = cardIdFromPoint(x, y);
+      if (overId && overId !== mergeDrag.id) {
+        document.querySelector(`[data-card="${overId}"]`)?.classList.add("drag-over");
+      }
+      mergeAutoScroll(y);
+    }
     function updateBulkBar() {
       const n = selected.size;
       $("bulkBar").classList.toggle("on", n > 0);
       $("selectedCount").textContent = `已選 ${n} 筆`;
       const compareBtn = $("compareSelectedBtn");
       const hint = $("compareHint");
+      const mergeBtn = $("mergeSelectedBtn");
+      if (mergeBtn) mergeBtn.hidden = n < 2;
+      paintMergeDock();
       if (compareBtn) {
         compareBtn.textContent = `比較（${n}／3）`;
         compareBtn.disabled = n < 2 || n > 3;
@@ -6226,9 +6462,9 @@
             ${costChangeLine(item)}
             ${sameHouseWarn(item)}
             ${sameHousePriceList(item)}
-            <div class="rent-price">${esc(rentStatusLine(item))}</div>
+            <div class="rent-price">${rentStatusLine(item)}</div>
             <div class="meta">
-              ${esc(listingSpecLine(item))}
+              ${listingSpecLine(item)}
               <br>${esc(item.address || "")}${commuteText(item)}${offlineLine(item)}
               ${mrtText(item) ? `<div class="mrt-line">${mrtText(item)}</div>` : ""}
               ${item.match_detail && !sameHouseOf(item) ? `<br>比對：${esc(item.match_detail)}${item.match_post_id ? ` · <a href="${listingUrl(item.match_post_id)}" target="_blank" rel="noopener noreferrer">舊刊登 #${item.match_post_id}</a>` : ""}` : ""}
@@ -6520,13 +6756,12 @@
         return;
       }
       maybeAskPush();
+      detachListingCard(key, { watched: 1 });
       if (watchNoteBusy()) {
         listRefreshQueued = true;
-        listCache = listCache.filter((item) => String(item.post_id) !== key);
-        renderList(listCache, lastStats);
         return;
       }
-      await loadList({ force: true });
+      await loadList({ keep: true, silent: true });
     }
 
     async function loadList(options = {}) {
@@ -6542,33 +6777,51 @@
       }
       const gen = ++listLoadGen;
       if (!options.force) listRefreshQueued = false;
-      if (listCache.length && !options.force) {
+      if (options.paintPreview) {
+        renderDistrictChips(settings);
+        renderList(applyListView(options.paintPreview), lastStats);
+      } else if (listCache.length && !options.force && !options.silent && !options.keep) {
         renderDistrictChips(settings);
         renderList(applyListView(listCache), lastStats);
       }
+      if (!options.silent) setListBusy(true, options.busyText || "正在更新列表…");
       const q = $("q").value.trim();
       const districts = [...viewDistricts].map(encodeURIComponent).join(",");
       const paintStart = performance.now();
-      const res = await fetch(
-        `/api/listings?filter=${encodeURIComponent(filter)}&kind=${encodeURIComponent(kinds.join(","))}&sources=${encodeURIComponent(canFilterSources() ? sources.join(",") : "")}&sort=${encodeURIComponent(sort)}&q=${encodeURIComponent(q)}&limit=500&districts=${districts}`,
-      );
-      const data = await res.json();
-      if (gen !== listLoadGen) return;
-      if (!options.force && watchNoteBusy()) {
-        listRefreshQueued = true;
-        return;
+      try {
+        const res = await fetch(
+          `/api/listings?filter=${encodeURIComponent(filter)}&kind=${encodeURIComponent(kinds.join(","))}&sources=${encodeURIComponent(canFilterSources() ? sources.join(",") : "")}&sort=${encodeURIComponent(sort)}&q=${encodeURIComponent(q)}&limit=500&districts=${districts}`,
+        );
+        const data = await res.json();
+        if (gen !== listLoadGen) return;
+        if (!options.force && watchNoteBusy()) {
+          listRefreshQueued = true;
+          return;
+        }
+        renderStats(data.stats);
+        renderDistrictChips(settings);
+        lastStats = data.stats || {};
+        lastStats.timing = data.timing || {};
+        lastStats.paint_ms = Math.round(performance.now() - paintStart);
+        const next = applyListView(data.listings);
+        rememberListings(next);
+        if (options.keep && listCache.length && listingIdKey(listCache) === listingIdKey(next)) {
+          listCache = next.map(normalizeListingText);
+          updateListMeta(listCache, lastStats);
+          paintWatchChip();
+          updateBulkBar();
+          return;
+        }
+        renderList(next, lastStats);
+      } finally {
+        if (gen === listLoadGen) setListBusy(false);
       }
-      renderStats(data.stats);
-      renderDistrictChips(settings);
-      // 伺服器已依行政區／整層／1F 篩過再排序截取；前端再套一次防呆
-      lastStats = data.stats || {};
-      lastStats.timing = data.timing || {};
-      lastStats.paint_ms = Math.round(performance.now() - paintStart);
-      renderList(applyListView(data.listings), lastStats);
     }
 
     async function loadState() {
       $("status").textContent = "正在載入設定…";
+      const settingsReq = fetch("/api/settings", { cache: "no-store", signal: AbortSignal.timeout(8000) });
+      settingsReq.catch(() => {});
       let me = null;
       let lastError = "";
       for (let attempt = 1; attempt <= 2; attempt += 1) {
@@ -6642,7 +6895,7 @@
       setSettingsReady(false, "正在載入已存設定…完成前請不要按儲存。");
       lastError = "";
       try {
-        const res = await fetch("/api/state", { cache: "no-store", signal: AbortSignal.timeout(18000) });
+        const res = await settingsReq;
         const data = await readApi(res);
         if (!res.ok) throw new Error(data.error || "載入失敗");
         if (data.settings) {
@@ -6650,14 +6903,9 @@
           fillSettings(data.settings);
         }
         loadMemberMail().catch(() => {});
-        renderStats(data.stats || {});
-        renderList(applyListView(data.listings || []), data.stats || {});
-        if (data.lastRun?.checked_at) {
-          const extra = data.lastRun.baseline ? "（第一次只建立基準，不推播）" : "";
-          $("status").textContent = `上次檢查 ${new Date(data.lastRun.checked_at).toLocaleString()}，抓到 ${data.lastRun.fetched || 0} 筆${extra}`;
-        } else {
-          $("status").textContent = "設定已載入";
-        }
+        $("status").textContent = "設定已載入，正在載入物件…";
+        await loadList({ busyText: "正在載入物件…" });
+        $("status").textContent = "設定已載入";
       } catch (error) {
         lastError = error.name === "TimeoutError" || error.name === "AbortError"
           ? "載入逾時，伺服器可能正在檢查物件"
@@ -7061,7 +7309,10 @@
       document.querySelectorAll("#bottomNav [data-nav]").forEach((btn) => {
         btn.setAttribute("aria-current", btn.dataset.nav === view ? "page" : "false");
       });
-      if (view !== "listings") closeFilterSheet();
+      if (view !== "listings") {
+        closeFilterSheet();
+        if (mergeSelectMode || selected.size) exitMergeSelect();
+      }
       if (view === "demand") {
         if (location.hash !== "#demand") history.replaceState({}, "", `${location.pathname}${location.search}#demand`);
         loadDemand().catch(() => {});
@@ -7297,16 +7548,77 @@
         `<option value="${esc(String(city.id))}-${esc(String(row.id))}">${esc(row.name)}</option>`
       )).join("");
       if ([...distSel.options].some((opt) => opt.value === keep)) distSel.value = keep;
-      syncSelfAddressPrefix();
     }
-    function syncSelfAddressPrefix() {
+    function compactTwAddress(value) {
+      return String(value || "").replace(/\s+/g, "");
+    }
+    function selfSelectedRegionNames() {
+      const cityName = $("selfCity")?.selectedOptions?.[0]?.textContent?.trim() || "";
+      const distName = $("selfDistrict")?.selectedOptions?.[0]?.textContent?.trim() || "";
+      const cityOk = Boolean($("selfCity")?.value) && cityName && cityName !== "縣市";
+      const distOk = Boolean($("selfDistrict")?.value) && distName && distName !== "行政區";
+      return { cityName: cityOk ? cityName : "", distName: distOk ? distName : "" };
+    }
+    function stripKnownRegionPrefix(value) {
+      let rest = compactTwAddress(value);
+      let bestCity = "";
+      for (const city of selfCityList()) {
+        const name = compactTwAddress(city.name);
+        if (name && rest.startsWith(name) && name.length > bestCity.length) bestCity = name;
+      }
+      if (bestCity) {
+        rest = rest.slice(bestCity.length);
+        const city = selfCityList().find((row) => compactTwAddress(row.name) === bestCity);
+        let bestDist = "";
+        for (const row of city?.districts || []) {
+          const name = compactTwAddress(row.name);
+          if (name && rest.startsWith(name) && name.length > bestDist.length) bestDist = name;
+        }
+        if (bestDist) rest = rest.slice(bestDist.length);
+      }
+      return rest;
+    }
+    function applySelectsToAddress() {
+      const addr = $("selfAddress");
+      if (!addr) return;
+      const { cityName, distName } = selfSelectedRegionNames();
+      const rest = stripKnownRegionPrefix(addr.value);
+      addr.value = cityName && distName ? `${cityName}${distName}${rest}` : rest || addr.value;
+    }
+    function applyAddressToSelects() {
+      const addr = $("selfAddress");
       const citySel = $("selfCity");
       const distSel = $("selfDistrict");
-      const prefix = $("selfAddressPrefix");
-      if (!prefix) return;
-      const cityName = citySel?.selectedOptions?.[0]?.textContent?.trim() || "";
-      const distName = distSel?.selectedOptions?.[0]?.textContent?.trim() || "";
-      prefix.textContent = citySel?.value && distSel?.value ? `${cityName}${distName}`.replace(/\s+/g, "") : "請先選縣市與行政區";
+      if (!addr || !citySel) return;
+      const compact = compactTwAddress(addr.value);
+      if (!compact) return;
+      let matchedCity = null;
+      for (const city of selfCityList()) {
+        const name = compactTwAddress(city.name);
+        if (name && compact.startsWith(name) && (!matchedCity || name.length > compactTwAddress(matchedCity.name).length)) {
+          matchedCity = city;
+        }
+      }
+      if (!matchedCity) return;
+      if (String(citySel.value) !== String(matchedCity.id)) {
+        citySel.value = String(matchedCity.id);
+        fillSelfDistrictOptions();
+      }
+      const rest = compact.slice(compactTwAddress(matchedCity.name).length);
+      let matchedDist = null;
+      for (const row of matchedCity.districts || []) {
+        const name = compactTwAddress(row.name);
+        if (name && rest.startsWith(name) && (!matchedDist || name.length > compactTwAddress(matchedDist.name).length)) {
+          matchedDist = row;
+        }
+      }
+      if (matchedDist && distSel) {
+        const value = `${matchedCity.id}-${matchedDist.id}`;
+        if ([...distSel.options].some((opt) => opt.value === value)) distSel.value = value;
+      }
+    }
+    function syncSelfAddressPrefix() {
+      applySelectsToAddress();
     }
     const SELF_TRAIT_GROUPS = [
       { id: "living", label: "生活條件", items: [
@@ -7494,11 +7806,14 @@
       const url = me?.avatar_url || "";
       if (img && url) {
         img.src = url;
+        img.setAttribute("data-avatar-zoom", url);
         img.hidden = false;
         img.classList.remove("empty");
         if (fallback) fallback.hidden = true;
         if ($("profileAvatarClear")) $("profileAvatarClear").hidden = false;
       } else if (img) {
+        img.removeAttribute("data-avatar-zoom");
+        img.removeAttribute("src");
         img.hidden = true;
         if (fallback) fallback.hidden = false;
         if ($("profileAvatarClear")) $("profileAvatarClear").hidden = true;
@@ -7580,12 +7895,9 @@
       }
     }
     function wishBudgetText(post) {
-      const min = Number(post.rent_min) || 0;
       const max = Number(post.rent_max) || 0;
-      if (!min && !max) return "預算不限";
-      if (min && max) return `${min.toLocaleString("zh-TW")}–${max.toLocaleString("zh-TW")} 元/月`;
-      if (max) return `最高 ${max.toLocaleString("zh-TW")} 元/月`;
-      return `最低 ${min.toLocaleString("zh-TW")} 元/月`;
+      if (!max) return "房租上限不限";
+      return `房租上限 ${max.toLocaleString("zh-TW")} 元/月`;
     }
     function wishAreaText(post) {
       return (post.district_labels || []).join("、") || post.city || "未填區域";
@@ -7625,7 +7937,8 @@
       const paint = (hostId, set) => {
         const host = $(hostId);
         if (!host) return;
-        host.innerHTML = WISH_CONDITIONS.map((row) => (
+        const catalog = (wishMeta?.conditions?.length ? wishMeta.conditions : WISH_CONDITIONS);
+        host.innerHTML = catalog.map((row) => (
           `<button type="button" class="wish-cond-btn" data-wish-cond="${esc(row.id)}" aria-pressed="${set.has(row.id) ? "true" : "false"}">${esc(row.label)}</button>`
         )).join("");
       };
@@ -7641,29 +7954,13 @@
         avoid: take("wishAvoid"),
       };
     }
-    function fillWishCitySelects() {
-      const cities = (typeof selfCityList === "function" ? selfCityList() : []) || [];
-      const options = `<option value="">不限縣市</option>` + cities.map((city) => `<option value="${esc(city.name)}">${esc(city.name)}</option>`).join("");
-      if ($("wishFilterCity") && !$("wishFilterCity").dataset.ready) {
-        $("wishFilterCity").innerHTML = options;
-        $("wishFilterCity").dataset.ready = "1";
-      }
-      if ($("wishCity") && !$("wishCity").dataset.ready) {
-        $("wishCity").innerHTML = `<option value="">先選縣市</option>` + cities.map((city) => `<option value="${esc(city.name)}">${esc(city.name)}</option>`).join("");
-        $("wishCity").dataset.ready = "1";
-      }
-      if ($("wishFilterHousing") && !$("wishFilterHousing").dataset.ready && wishMeta?.housingTypes) {
-        $("wishFilterHousing").innerHTML = wishMeta.housingTypes.map((row) => `<option value="${esc(row.id)}">${esc(row.label)}</option>`).join("");
-        $("wishFilterHousing").dataset.ready = "1";
-      }
-    }
     function collectWishForm() {
       const cond = collectWishConditions();
       return {
-        city: $("wishCity")?.value || "",
+        city: "",
         districts: demandDistrictKeys(),
-        location_note: $("wishLocationNote")?.value || "",
-        rent_min: Number($("demandRentMin")?.value) || 0,
+        location_note: "",
+        rent_min: 0,
         rent_max: Number($("demandRentMax")?.value) || 0,
         includes_management: Boolean($("wishIncludesFee")?.checked),
         housing_type: $("demandHousing")?.value || "any",
@@ -7672,21 +7969,18 @@
         move_in_date: $("wishMoveIn")?.value || "",
         lease_duration: $("wishLease")?.value || "",
         transit_note: $("wishTransit")?.value || "",
-        destination_note: $("wishDestination")?.value || "",
-        commute_minutes: Number($("wishCommute")?.value) || 0,
+        destination_note: "",
+        commute_minutes: 0,
         mrt_walk: Boolean($("demandMrt")?.checked),
         ...cond,
         body: $("demandBody")?.value || "",
-        contact_name: $("wishContactName")?.value || "",
-        phone: $("wishContactPhone")?.value || "",
-        line_url: $("wishContactLine")?.value || "",
-        contact_profile_id: Number($("wishContactPick")?.value) || 0,
+        contact_name: "",
+        phone: "",
+        line_url: "",
+        contact_profile_id: 0,
       };
     }
     function applyWishForm(row = {}) {
-      if ($("wishCity")) $("wishCity").value = row.city || "";
-      if ($("wishLocationNote")) $("wishLocationNote").value = row.location_note || "";
-      if ($("demandRentMin")) $("demandRentMin").value = row.rent_min || "";
       if ($("demandRentMax")) $("demandRentMax").value = row.rent_max || "";
       if ($("wishIncludesFee")) $("wishIncludesFee").checked = Boolean(row.includes_management);
       if ($("demandHousing")) $("demandHousing").value = row.housing_type || "any";
@@ -7695,13 +7989,8 @@
       if ($("wishMoveIn")) $("wishMoveIn").value = row.move_in_date || "";
       if ($("wishLease")) $("wishLease").value = row.lease_duration || "";
       if ($("wishTransit")) $("wishTransit").value = row.transit_note || "";
-      if ($("wishDestination")) $("wishDestination").value = row.destination_note || "";
-      if ($("wishCommute")) $("wishCommute").value = row.commute_minutes || "";
       if ($("demandMrt")) $("demandMrt").checked = Boolean(row.mrt_walk);
       if ($("demandBody")) $("demandBody").value = row.body || "";
-      if ($("wishContactName")) $("wishContactName").value = row.contact_name || row.contact?.contact_name || "";
-      if ($("wishContactPhone")) $("wishContactPhone").value = row.phone || row.contact?.phone || "";
-      if ($("wishContactLine")) $("wishContactLine").value = row.line_url || row.contact?.line_url || "";
       fillDemandDistricts();
       const wanted = new Set(row.districts || []);
       document.querySelectorAll("#demandDistricts [data-demand-district]").forEach((el) => {
@@ -7729,9 +8018,7 @@
       if ($("wishFormWrap")) $("wishFormWrap").hidden = !show;
       if (show) {
         fillDemandDistricts();
-        fillWishCitySelects();
         if (!$("wishMust")?.children.length) renderWishConditionGroups();
-        refreshWishContacts();
       }
       syncWishOwnerBar();
     }
@@ -7741,20 +8028,15 @@
         ["希望有", post.nice_to_have_labels, "nice"],
         ["不接受", post.avoid_labels, "avoid"],
       ].filter((row) => (row[1] || []).length);
-      const contact = post.contact && (post.contact.contact_name || post.contact.phone || post.contact.line_url)
-        ? `<p>${esc(post.contact.contact_name || "")} ${esc(post.contact.phone || "")}${post.contact.line_url ? ` · <a href="${esc(post.contact.line_url)}" rel="noopener noreferrer">LINE</a>` : ""}</p>`
-        : `<p class="muted">沒有公開聯絡摘要。</p>`;
       return `
         <p class="rent-price">${esc(wishBudgetText(post))}${post.includes_management ? " · 含水電管理費" : ""}</p>
-        <p class="muted">${esc(wishAreaText(post))}${post.location_note ? ` · ${esc(post.location_note)}` : ""}</p>
+        <p class="muted">${esc(wishAreaText(post))}</p>
         <p class="muted">${esc(post.housing_label || "不限類型")}${post.layout_label ? ` · ${esc(post.layout_label)}` : ""}${post.ping_min ? ` · ${esc(post.ping_min)} 坪以上` : ""}</p>
         <p class="muted">${post.move_in_date ? `希望 ${esc(post.move_in_date)} 入住` : "入住時間面議"}${post.lease_label ? ` · ${esc(post.lease_label)}` : ""}</p>
-        ${post.transit_note ? `<p class="muted">交通：${esc(post.transit_note)}</p>` : ""}
-        ${post.destination_note ? `<p class="muted">常去：${esc(post.destination_note)}</p>` : ""}
-        ${post.commute_minutes ? `<p class="muted">可接受通勤約 ${esc(post.commute_minutes)} 分鐘</p>` : ""}
+        ${post.transit_note ? `<p class="muted">希望1公里內有之捷運／車站：${esc(post.transit_note)}</p>` : ""}
+        ${post.mrt_walk ? `<p class="muted">需要可步行捷運（1 公里內）</p>` : ""}
         ${post.body ? `<p>${esc(post.body)}</p>` : ""}
         ${groups.map(([title, labels, cls]) => `<div><div class="muted">${title}</div><div class="wish-chips">${labels.map((label) => `<span class="wish-chip ${cls}">${esc(label)}</span>`).join("")}</div></div>`).join("")}
-        ${contact}
         <p class="muted"><a href="${esc(post.public_path || `/w/${post.id}`)}">開啟公開頁</a></p>
       `;
     }
@@ -7766,34 +8048,14 @@
       if ($("wishDetailBody")) $("wishDetailBody").innerHTML = wishDetailHtml(data);
       if ($("wishDetailOverlay")) $("wishDetailOverlay").hidden = false;
     }
-    async function refreshWishContacts() {
-      const sel = $("wishContactPick");
-      if (!sel || isGuest) return;
-      try {
-        const res = await fetch("/api/listing-contact-profiles");
-        const data = await readApi(res);
-        const items = data.items || [];
-        sel.innerHTML = `<option value="">套用我的聯絡人</option>` + items.map((item) => (
-          `<option value="${item.id}">${esc(item.label || item.contact_name || "聯絡人")}</option>`
-        )).join("");
-      } catch {
-        /* 沒有聯絡人快選也可以手動填 */
-      }
-    }
     async function loadDemand() {
       fillDemandDistricts();
-      fillWishCitySelects();
       const box = $("demandList");
       if (!box) return;
-      const qs = new URLSearchParams();
-      if ($("wishFilterCity")?.value) qs.set("city", $("wishFilterCity").value);
-      if ($("wishFilterRentMin")?.value) qs.set("rent_min", $("wishFilterRentMin").value);
-      if ($("wishFilterRentMax")?.value) qs.set("rent_max", $("wishFilterRentMax").value);
-      if ($("wishFilterHousing")?.value && $("wishFilterHousing").value !== "any") qs.set("housing_type", $("wishFilterHousing").value);
-      const res = await fetch(`/api/wish-rooms?${qs.toString()}`);
+      const res = await fetch("/api/wish-rooms");
       const data = await res.json();
       wishMeta = data;
-      fillWishCitySelects();
+      if (!$("wishFormWrap")?.hidden) renderWishConditionGroups(collectWishConditions());
       const posts = data.rooms || data.posts || [];
       box.innerHTML = posts.length
         ? posts.map(demandCardHtml).join("")
@@ -7853,8 +8115,12 @@
       openNotifyHub("events");
       $("notifyHub")?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
-    $("selfCity")?.addEventListener("change", fillSelfDistrictOptions);
-    $("selfDistrict")?.addEventListener("change", syncSelfAddressPrefix);
+    $("selfCity")?.addEventListener("change", () => {
+      fillSelfDistrictOptions();
+      applySelectsToAddress();
+    });
+    $("selfDistrict")?.addEventListener("change", applySelectsToAddress);
+    $("selfAddress")?.addEventListener("blur", applyAddressToSelects);
     $("profileNickname")?.addEventListener("input", () => { $("profileNickname").dataset.dirty = "1"; });
     let pendingClearAvatar = false;
     let pendingClearQr = false;
@@ -7864,6 +8130,13 @@
         pendingClearAvatar = true;
         if ($("profileAvatar")) $("profileAvatar").value = "";
         $("profileForm")?.requestSubmit();
+        return;
+      }
+      const img = $("profileAvatarImg");
+      const zoom = ev.target.closest("[data-avatar-zoom]");
+      if (zoom && img && !img.hidden && img.src) {
+        ev.preventDefault();
+        openAppLightbox([img.src], 0);
         return;
       }
       const pick = $("avatarPick");
@@ -8073,7 +8346,6 @@
         if (turningOn) btn.setAttribute("aria-pressed", "true");
       });
     });
-    $("wishFilterApply")?.addEventListener("click", () => loadDemand().catch(() => {}));
     $("wishCreateBtn")?.addEventListener("click", () => {
       if (isGuest) { remindGuest(); return; }
       if (wishMine.active) { if ($("demandMsg")) $("demandMsg").textContent = "已有一則公開許願房"; return; }
@@ -8137,16 +8409,6 @@
     $("wishCancelEdit")?.addEventListener("click", () => {
       wishEditingId = 0;
       showWishForm(false);
-    });
-    $("wishContactApply")?.addEventListener("click", async () => {
-      const id = $("wishContactPick")?.value;
-      if (!id) return;
-      const res = await fetch(`/api/listing-contact-profiles/${id}`);
-      const data = await readApi(res);
-      if (!res.ok) return;
-      if ($("wishContactName")) $("wishContactName").value = data.contact_name || "";
-      if ($("wishContactPhone")) $("wishContactPhone").value = data.phone || "";
-      if ($("wishContactLine")) $("wishContactLine").value = data.line_url || "";
     });
     $("wishDetailClose")?.addEventListener("click", () => { if ($("wishDetailOverlay")) $("wishDetailOverlay").hidden = true; });
     document.querySelector("[data-close-wish]")?.addEventListener("click", () => { if ($("wishDetailOverlay")) $("wishDetailOverlay").hidden = true; });
@@ -8501,7 +8763,7 @@
     function applyImportToForm(row) {
       if ($("selfTitle")) $("selfTitle").value = row.imported_title || "";
       if ($("selfBody")) $("selfBody").value = row.imported_text || "";
-      syncSelfBodyEditor(row.imported_text || "");
+      setDescTemplateApplied(row.imported_text ? "已套用匯入說明" : "", row.imported_text || "");
       selfPhotoDraft = [...(row.photos || row.listing?.photos || [])];
       renderSelfPhotoDraftAndGrid();
     }
@@ -8598,12 +8860,12 @@
       }
     });
     const SELF_EMOJIS = ["😊","🏠","☀️","🌿","🛁","🍳","🅿️","🛗","🚇","🚲","🐕","🐱","👶","✅","❗"];
-    $("selfBodyEditor")?.addEventListener("input", syncSelfBodyFromEditor);
-    $("selfBodyEditorWrap")?.addEventListener("click", (ev) => {
+    $("descBodyEditor")?.addEventListener("input", syncDescBodyFromEditor);
+    $("descBodyEditorWrap")?.addEventListener("click", (ev) => {
       const btn = ev.target.closest("[data-rich]");
       if (!btn) return;
       ev.preventDefault();
-      const ed = $("selfBodyEditor");
+      const ed = $("descBodyEditor");
       if (!ed) return;
       ed.focus();
       const cmd = btn.dataset.rich;
@@ -8611,25 +8873,25 @@
       else if (cmd === "italic") document.execCommand("italic");
       else if (cmd === "size") document.execCommand("fontSize", false, "4");
       else if (cmd === "color") document.execCommand("foreColor", false, btn.dataset.color || "#1c1917");
-      syncSelfBodyFromEditor();
+      syncDescBodyFromEditor();
     });
     (function paintEmojis() {
-      const bar = $("selfEmojiBar");
+      const bar = $("descEmojiBar");
       if (!bar) return;
       bar.innerHTML = SELF_EMOJIS.map((mark) => `<button type="button" data-emoji="${mark}" aria-label="插入表情">${mark}</button>`).join("");
     })();
-    $("selfEmojiToggle")?.addEventListener("click", () => {
-      const bar = $("selfEmojiBar");
+    $("descEmojiToggle")?.addEventListener("click", () => {
+      const bar = $("descEmojiBar");
       if (bar) bar.hidden = !bar.hidden;
     });
-    $("selfEmojiBar")?.addEventListener("click", (ev) => {
+    $("descEmojiBar")?.addEventListener("click", (ev) => {
       const mark = ev.target.closest("[data-emoji]")?.dataset.emoji;
       if (!mark) return;
-      const ed = $("selfBodyEditor");
+      const ed = $("descBodyEditor");
       if (!ed) return;
       ed.focus();
       document.execCommand("insertText", false, mark);
-      syncSelfBodyFromEditor();
+      syncDescBodyFromEditor();
     });
     $("selfListingForm")?.addEventListener("submit", async (ev) => {
       ev.preventDefault();
@@ -8638,7 +8900,32 @@
         return;
       }
       const msg = $("selfMsg");
+      const fail = (text) => { if (msg) msg.textContent = text; };
       try {
+        applyAddressToSelects();
+        const title = String($("selfTitle")?.value || "").trim();
+        if (title.length < 5) {
+          fail("標題至少 5 個字");
+          $("selfTitle")?.setAttribute("aria-invalid", "true");
+          $("selfTitle")?.focus();
+          return;
+        }
+        $("selfTitle")?.removeAttribute("aria-invalid");
+        if (!$("selfDistrict")?.value) {
+          fail("請選縣市與行政區，或在地址寫上完整縣市行政區");
+          return;
+        }
+        if (!String($("selfContactName")?.value || "").trim()) {
+          fail("請先從刊登幫手選擇聯絡人");
+          return;
+        }
+        const body = String($("selfBody")?.value || "").trim();
+        if (!body) {
+          fail("請先從刊登幫手選擇或新增說明範本");
+          $("listingTools")?.scrollIntoView({ behavior: "smooth", block: "start" });
+          $("descTemplatePick")?.focus();
+          return;
+        }
         const photoUrls = [...selfPhotoDraft];
         const payload = {
           district: $("selfDistrict")?.value || "",
@@ -8656,8 +8943,8 @@
           phone: $("selfPhone")?.value || "",
           line_url: $("selfLine")?.value || "",
           photos: photoUrls,
-          title: $("selfTitle")?.value || "",
-          body: (syncSelfBodyFromEditor(), $("selfBody")?.value || ""),
+          title,
+          body,
           traits: collectedSelfTraits(),
           deposit: $("selfDeposit")?.value || "",
           accept_pledge: $("selfPledge")?.checked === true,
@@ -8684,7 +8971,8 @@
         paintImportReview(null);
         if ($("importDeclaration")) $("importDeclaration").checked = false;
         if ($("selfBody")) $("selfBody").value = "";
-        syncSelfBodyEditor("");
+        setDescTemplateApplied("");
+        setContactTemplateApplied(null);
         if ($("selfPhotos")) $("selfPhotos").value = "";
         selfPhotoDraft = [];
         renderSelfPhotoDraft();
@@ -8699,6 +8987,38 @@
     let copyInFlight = false;
     let descTemplates = [];
     let contactProfiles = [];
+    let editingDescTemplateId = null;
+    function listingPlainPreview(html) {
+      const box = document.createElement("div");
+      box.innerHTML = html || "";
+      return String(box.textContent || "").replace(/\s+/g, " ").trim();
+    }
+    function setDescTemplateApplied(name, body) {
+      const el = $("descTemplateApplied");
+      if (!el) return;
+      if (name) {
+        const preview = listingPlainPreview(body);
+        const snippet = preview ? `（${preview.slice(0, 36)}${preview.length > 36 ? "…" : ""}）` : "";
+        el.hidden = false;
+        el.textContent = String(name).startsWith("已套用") ? `${name}${snippet}` : `已套用說明範本：${name}${snippet}`;
+      } else {
+        el.hidden = true;
+        el.textContent = "";
+      }
+    }
+    function setContactTemplateApplied(item) {
+      const el = $("contactTemplateApplied");
+      if (!el) return;
+      if (!item) {
+        el.hidden = true;
+        el.textContent = "";
+        return;
+      }
+      const bits = [item.label || item.contact_name || "聯絡人", item.contact_name, item.phone, item.line_url].filter(Boolean);
+      const uniq = [...new Set(bits)];
+      el.hidden = false;
+      el.textContent = `已套用聯絡人：${uniq.join(" · ")}`;
+    }
     function applyListingForm(form) {
       if (!form) return;
       const district = String(form.district || "");
@@ -8708,7 +9028,6 @@
         fillSelfDistrictOptions();
       }
       if ($("selfDistrict") && district) $("selfDistrict").value = district;
-      syncSelfAddressPrefix();
       if ($("selfKind") && form.kind) $("selfKind").value = form.kind;
       if ($("selfRole") && form.role) $("selfRole").value = form.role;
       if ($("selfRent")) $("selfRent").value = form.rent || "";
@@ -8722,10 +9041,17 @@
       if ($("selfContactName")) $("selfContactName").value = form.contact_name || "";
       if ($("selfTitle")) $("selfTitle").value = form.title || "";
       if ($("selfAddress")) $("selfAddress").value = form.street || "";
+      applySelectsToAddress();
       if ($("selfPhone")) $("selfPhone").value = form.phone || "";
       if ($("selfLine")) $("selfLine").value = form.line_url || "";
       if ($("selfBody")) $("selfBody").value = form.body || "";
-      syncSelfBodyEditor(form.body || "");
+      setDescTemplateApplied(form.body ? "已套用目前刊登說明" : "", form.body || "");
+      setContactTemplateApplied(form.contact_name || form.phone || form.line_url ? {
+        label: form.contact_name || "",
+        contact_name: form.contact_name || "",
+        phone: form.phone || "",
+        line_url: form.line_url || "",
+      } : null);
       document.querySelectorAll('#selfTraitGroups input[name="selfTrait"]').forEach((el) => {
         el.checked = (form.traits || []).includes(el.value);
       });
@@ -8733,14 +9059,21 @@
       renderSelfPhotoDraftAndGrid();
       if ($("selfPledge")) $("selfPledge").checked = false;
     }
-    function syncSelfBodyEditor(html) {
-      const ed = $("selfBodyEditor");
+    function syncDescBodyEditor(html) {
+      const ed = $("descBodyEditor");
       if (ed) ed.innerHTML = safeListingHtml(html || "");
+      if ($("descTemplateBody")) $("descTemplateBody").value = html || "";
     }
-    function syncSelfBodyFromEditor() {
-      const ed = $("selfBodyEditor");
-      const ta = $("selfBody");
+    function syncDescBodyFromEditor() {
+      const ed = $("descBodyEditor");
+      const ta = $("descTemplateBody");
       if (ed && ta) ta.value = ed.innerHTML;
+    }
+    function resetDescTemplateForm() {
+      editingDescTemplateId = null;
+      if ($("descTemplateName")) $("descTemplateName").value = "";
+      syncDescBodyEditor("");
+      if ($("descTemplateEditConfirm")) $("descTemplateEditConfirm").hidden = true;
     }
     function paintCopyDraftBanner(on) {
       const banner = $("copyDraftBanner");
@@ -8761,7 +9094,7 @@
       if (!sel) return;
       const keep = sel.value;
       sel.innerHTML = `<option value="">選擇聯絡人</option>` + contactProfiles.map((item) => (
-        `<option value="${item.id}">${esc(item.label)}${item.is_account ? "（不可刪）" : ""}</option>`
+        `<option value="${item.id}">${esc(item.label)}</option>`
       )).join("");
       if (keep && [...sel.options].some((opt) => opt.value === keep)) sel.value = keep;
       else {
@@ -8796,7 +9129,7 @@
       const box = $("descTemplateList");
       if (!box) return;
       box.innerHTML = descTemplates.length ? descTemplates.map((item) => `
-        <article class="tool-mgr-item">
+        <article class="tool-mgr-item" data-tpl-edit="${item.id}" role="button" tabindex="0" aria-label="修改範本 ${esc(item.name)}">
           <strong>${esc(item.name)}</strong>
           <p class="hint">${esc(item.body)}</p>
           <div class="row">
@@ -8820,9 +9153,9 @@
       const item = descTemplates.find((row) => String(row.id) === String(id));
       if (!item) return;
       const current = $("selfBody")?.value || "";
-      if (current.trim() && !window.confirm("套用並取代目前內容？")) return;
+      if (current.trim() && current.trim() !== String(item.body || "").trim() && !window.confirm("套用並取代目前內容？")) return;
       if ($("selfBody")) $("selfBody").value = item.body;
-      syncSelfBodyEditor(item.body);
+      setDescTemplateApplied(item.name || "未命名", item.body);
       const msg = $("selfMsg");
       if (msg) msg.textContent = "已套用說明範本，尚未刊登。";
     }
@@ -8832,6 +9165,7 @@
       if ($("selfContactName")) $("selfContactName").value = item.contact_name || "";
       if ($("selfPhone")) $("selfPhone").value = item.phone || "";
       if ($("selfLine")) $("selfLine").value = item.line_url || "";
+      setContactTemplateApplied(item);
       const msg = $("selfMsg");
       if (msg) msg.textContent = "已套用聯絡人到這則草稿，尚未刊登。";
     }
@@ -8891,27 +9225,55 @@
       const id = $("contactProfilePick")?.value;
       if (id) applyContactProfile(id);
     });
-    $("descTemplateManage")?.addEventListener("click", () => { if ($("descTemplateOverlay")) $("descTemplateOverlay").hidden = false; });
+    function openDescTemplateOverlay() {
+      if ($("descTemplateEditConfirm")) $("descTemplateEditConfirm").hidden = true;
+      if ($("descTemplateOverlay")) $("descTemplateOverlay").hidden = false;
+      $("descTemplateName")?.focus();
+    }
+    function closeDescTemplateOverlay() {
+      if ($("descTemplateOverlay")) $("descTemplateOverlay").hidden = true;
+    }
+    $("descTemplateManage")?.addEventListener("click", openDescTemplateOverlay);
     $("contactProfileManage")?.addEventListener("click", () => { if ($("contactProfileOverlay")) $("contactProfileOverlay").hidden = false; });
-    $("descTemplateClose")?.addEventListener("click", () => { if ($("descTemplateOverlay")) $("descTemplateOverlay").hidden = true; });
+    $("descTemplateClose")?.addEventListener("click", closeDescTemplateOverlay);
     $("contactProfileClose")?.addEventListener("click", () => { if ($("contactProfileOverlay")) $("contactProfileOverlay").hidden = true; });
-    document.querySelector("[data-close-desc-tpl]")?.addEventListener("click", () => { if ($("descTemplateOverlay")) $("descTemplateOverlay").hidden = true; });
+    document.querySelector("[data-close-desc-tpl]")?.addEventListener("click", closeDescTemplateOverlay);
     document.querySelector("[data-close-contact-profile]")?.addEventListener("click", () => { if ($("contactProfileOverlay")) $("contactProfileOverlay").hidden = true; });
+    $("descTplEditYes")?.addEventListener("click", () => {
+      const item = descTemplates.find((row) => String(row.id) === String(editingDescTemplateId));
+      if (!item) return;
+      if ($("descTemplateName")) $("descTemplateName").value = item.name || "";
+      syncDescBodyEditor(item.body || "");
+      if ($("descTemplateEditConfirm")) $("descTemplateEditConfirm").hidden = true;
+      if ($("descTemplateMsg")) $("descTemplateMsg").textContent = "已帶回表單，改完後按儲存。名稱相同會覆蓋原範本。";
+    });
+    $("descTplEditNo")?.addEventListener("click", () => {
+      editingDescTemplateId = null;
+      if ($("descTemplateEditConfirm")) $("descTemplateEditConfirm").hidden = true;
+    });
     $("descTemplateSave")?.addEventListener("click", async () => {
       const msg = $("descTemplateMsg");
       try {
-        const res = await fetch("/api/listing-description-templates", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: $("descTemplateName")?.value || "", body: $("descTemplateBody")?.value || "" }),
-        });
+        syncDescBodyFromEditor();
+        const name = $("descTemplateName")?.value || "";
+        const body = $("descTemplateBody")?.value || "";
+        const editingId = editingDescTemplateId;
+        const res = await fetch(
+          editingId ? `/api/listing-description-templates/${editingId}` : "/api/listing-description-templates",
+          {
+            method: editingId ? "PATCH" : "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name, body }),
+          },
+        );
         const data = await readApi(res);
         if (!res.ok) throw new Error(data.error || "儲存失敗");
-        if ($("descTemplateName")) $("descTemplateName").value = "";
-        if ($("descTemplateBody")) $("descTemplateBody").value = "";
-        if (msg) msg.textContent = "已新增。";
+        resetDescTemplateForm();
+        if (msg) msg.textContent = editingId ? "已更新。" : "已新增。";
         await loadListingTools();
         if (data.id && $("descTemplatePick")) $("descTemplatePick").value = String(data.id);
+        if ($("selfBody")) $("selfBody").value = data.body || body;
+        setDescTemplateApplied(data.name || name || "未命名", data.body || body);
       } catch (error) {
         if (msg) msg.textContent = error.message;
       }
@@ -8936,22 +9298,61 @@
         });
         if (msg) msg.textContent = "已新增。";
         await loadListingTools();
-        if (data.id && $("contactProfilePick")) $("contactProfilePick").value = String(data.id);
+        if (data.id && $("contactProfilePick")) {
+          $("contactProfilePick").value = String(data.id);
+          applyContactProfile(data.id);
+        }
       } catch (error) {
         if (msg) msg.textContent = error.message;
       }
     });
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Escape") return;
+      const overlay = $("descTemplateOverlay");
+      if (!overlay || overlay.hidden) return;
+      if ($("descTemplateEditConfirm") && !$("descTemplateEditConfirm").hidden) {
+        editingDescTemplateId = null;
+        $("descTemplateEditConfirm").hidden = true;
+        return;
+      }
+      closeDescTemplateOverlay();
+    });
+    $("descTemplateList")?.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Enter" && ev.key !== " ") return;
+      if (ev.target.closest("[data-tpl-del]")) return;
+      const card = ev.target.closest("[data-tpl-edit]");
+      if (!card) return;
+      ev.preventDefault();
+      card.click();
+    });
     $("descTemplateList")?.addEventListener("click", async (ev) => {
       const delId = ev.target.closest("[data-tpl-del]")?.dataset.tplDel;
-      if (!delId) return;
-      if (!window.confirm("刪除這個說明範本？已刊登的物件不會被改。")) return;
-      const gone = descTemplates.find((row) => String(row.id) === String(delId));
-      await fetch(`/api/listing-description-templates/${delId}`, { method: "DELETE" });
-      if ($("descTemplatePick")?.value === String(delId)) {
-        $("descTemplatePick").value = "";
-        if (gone && $("selfBody") && $("selfBody").value === gone.body) $("selfBody").value = "";
+      if (delId) {
+        if (!window.confirm("刪除這個說明範本？已刊登的物件不會被改。")) return;
+        const gone = descTemplates.find((row) => String(row.id) === String(delId));
+        await fetch(`/api/listing-description-templates/${delId}`, { method: "DELETE" });
+        if ($("descTemplatePick")?.value === String(delId)) {
+          $("descTemplatePick").value = "";
+          if (gone && $("selfBody") && $("selfBody").value === gone.body) {
+            $("selfBody").value = "";
+            setDescTemplateApplied("");
+          }
+        }
+        if (String(editingDescTemplateId) === String(delId)) resetDescTemplateForm();
+        await loadListingTools();
+        return;
       }
-      await loadListingTools();
+      const editId = ev.target.closest("[data-tpl-edit]")?.dataset.tplEdit;
+      if (!editId) return;
+      const item = descTemplates.find((row) => String(row.id) === String(editId));
+      if (!item) return;
+      editingDescTemplateId = item.id;
+      if ($("descTplEditName")) $("descTplEditName").textContent = item.name || "未命名";
+      if ($("descTemplateEditConfirm")) {
+        $("descTemplateEditConfirm").hidden = false;
+        $("descTemplateEditConfirm").scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+      $("descTplEditYes")?.focus();
     });
     $("contactProfileList")?.addEventListener("click", async (ev) => {
       const delId = ev.target.closest("[data-contact-del]")?.dataset.contactDel;
@@ -9380,6 +9781,10 @@
           return;
         }
       }
+      if (ev.key === "Escape" && (mergeSelectMode || selected.size)) {
+        exitMergeSelect();
+        return;
+      }
       if (ev.key === "Escape" && $("ownerOverlay") && !$("ownerOverlay").hidden) closeOwnerOverlay();
     });
     $("selectPageBtn").onclick = () => {
@@ -9423,6 +9828,56 @@
         $("hideSelectedBtn").disabled = false;
       }
     };
+    $("mergeSelectedBtn")?.addEventListener("click", () => mergeSelectedListings());
+    $("mergeConfirmBtn")?.addEventListener("click", () => mergeSelectedListings());
+    $("mergeCancelBtn")?.addEventListener("click", () => exitMergeSelect());
+    $("list")?.addEventListener("pointerdown", (ev) => {
+      const card = ev.target.closest?.("[data-card]");
+      if (!card || mergeInteractiveTarget(ev.target)) return;
+      const id = card.dataset.card;
+      if (isCoarsePointer()) {
+        const now = Date.now();
+        if (mergeLastTap.id === id && now - mergeLastTap.at < 380) {
+          ev.preventDefault();
+          mergeSelectMode = true;
+          selected.add(id);
+          card.classList.add("picked");
+          const box = card.querySelector("[data-pick]");
+          if (box) box.checked = true;
+          updateBulkBar();
+          mergeLastTap = { id: "", at: 0 };
+        } else {
+          mergeLastTap = { id, at: now };
+        }
+        return;
+      }
+      mergePressTimer = window.setTimeout(() => startMergeDrag(card, ev), 1000);
+    });
+    document.addEventListener("pointermove", (ev) => {
+      if (mergePressTimer && !mergeDrag) {
+        const card = ev.target.closest?.("[data-card]");
+        if (!card || Math.hypot(ev.movementX || 0, ev.movementY || 0) > 8) {
+          clearTimeout(mergePressTimer);
+          mergePressTimer = 0;
+        }
+      }
+      if (mergeDrag) {
+        ev.preventDefault();
+        moveMergeDrag(ev.clientX, ev.clientY);
+      }
+    }, { passive: false });
+    document.addEventListener("pointerup", (ev) => {
+      if (mergePressTimer) {
+        clearTimeout(mergePressTimer);
+        mergePressTimer = 0;
+      }
+      if (!mergeDrag) return;
+      const overId = cardIdFromPoint(ev.clientX, ev.clientY);
+      const fromId = mergeDrag.id;
+      clearMergeDrag();
+      if (overId && overId !== fromId) mergeSelectedListings([fromId, overId]);
+    });
+    document.addEventListener("pointercancel", () => clearMergeDrag());
     $("q").addEventListener("input", () => {
       clearTimeout(window.__q);
       window.__q = setTimeout(loadList, 250);
@@ -9433,7 +9888,12 @@
         document.querySelectorAll("[data-filter]").forEach((b) => b.classList.remove("on"));
         btn.classList.add("on");
         filter = btn.dataset.filter;
-        loadList();
+        const preview = previewListForFilter(filter);
+        loadList({
+          keep: !preview,
+          paintPreview: preview || undefined,
+          busyText: filter === "watched" ? "正在載入特別關注…" : filter === "hidden" ? "正在載入已隱藏物件…" : "正在更新列表…",
+        });
       };
     });
 
@@ -9574,30 +10034,69 @@
       }
       const hiddenId = ev.target.dataset.hidden;
       if (!hiddenId) return;
-      await fetch(`/api/listings/${hiddenId}/flags`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ hidden: ev.target.checked }),
-      });
-      loadList();
+      const hiding = ev.target.checked;
+      if (hiding) {
+        const card = document.querySelector(`[data-card="${hiddenId}"]`);
+        flyCardToChip(card, "hidden");
+        detachListingCard(hiddenId, { hidden: 1 });
+      }
+      try {
+        const res = await fetch(`/api/listings/${hiddenId}/flags`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ hidden: hiding }),
+        });
+        if (!res.ok) throw new Error("不再顯示失敗");
+      } catch {
+        flash("不再顯示失敗，已還原。請再試一次。");
+        await loadList({ force: true });
+        return;
+      }
+      if (watchNoteBusy()) {
+        listRefreshQueued = true;
+        return;
+      }
+      loadList({ keep: true, silent: true });
     });
 
     $("list").addEventListener("click", async (ev) => {
-      const face = ev.target.dataset.excludeFace;
+      const avatarZoom = ev.target.closest("[data-avatar-zoom]");
+      if (avatarZoom && $("list").contains(avatarZoom)) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const src = avatarZoom.getAttribute("data-avatar-zoom") || avatarZoom.getAttribute("src") || "";
+        if (src) openAppLightbox([src], 0);
+        return;
+      }
+      const faceBtn = ev.target.closest("[data-exclude-face]");
+      const face = faceBtn?.dataset.excludeFace;
       if (face) {
         ev.preventDefault();
         ev.stopPropagation();
-        const label = ev.target.dataset.agent || "";
-        const uid = Number(ev.target.dataset.uid);
-        if (label && !$("excludeAgents").value.split(/[\n,，]/).map((s) => s.trim()).includes(label)) {
-          $("excludeAgents").value = [$("excludeAgents").value.trim(), label].filter(Boolean).join("\n");
+        if (isGuest) {
+          remindGuest();
+          return;
+        }
+        if (!settingsLoaded) {
+          $("saveMsg").textContent = "設定還在載入，請稍候再排除";
+          return;
+        }
+        const label = faceBtn.dataset.agent || "";
+        const uid = Number(faceBtn.dataset.uid);
+        const current = clipLines($("excludeAgents").value, MEMBER_MAX_EXCLUDE_AGENTS);
+        if (label && !current.includes(label)) {
+          if (current.length >= MEMBER_MAX_EXCLUDE_AGENTS) {
+            $("saveMsg").textContent = `排除房仲最多 ${MEMBER_MAX_EXCLUDE_AGENTS} 個，請先刪一筆再排除`;
+            return;
+          }
+          $("excludeAgents").value = [...current, label].join("\n");
         }
         if (uid) {
           settings.excludeAgentIds = [...new Set([...(settings.excludeAgentIds || []), uid])];
         }
-        $("saveMsg").textContent = label ? `已排除 ${label}` : "已排除此聯絡人";
+        $("saveMsg").textContent = label ? `已排除 ${label}，並寫入目前設定檔` : "已排除此聯絡人，並寫入目前設定檔";
         await saveSettings(collectSettings());
-        await loadList();
+        await loadList({ keep: true, silent: true });
         return;
       }
       const sameToggle = ev.target.closest("[data-same-toggle]")?.dataset.sameToggle;
@@ -9746,8 +10245,7 @@
         ev.target.disabled = true;
         const waitMs = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 280;
         if (waitMs) await new Promise((resolve) => setTimeout(resolve, waitMs));
-        listCache = listCache.filter((item) => String(item.post_id) !== key);
-        renderList(listCache, lastStats);
+        detachListingCard(key, { watched: 0 });
         try {
           const res = await fetch(`/api/listings/${watched}/flags`, {
             method: "POST",
@@ -9765,7 +10263,7 @@
           listRefreshQueued = true;
           return;
         }
-        await loadList({ force: true });
+        await loadList({ keep: true, silent: true });
         return;
       }
       if (!viewed) return;
@@ -9827,6 +10325,22 @@
       }
       return out;
     }
+    function dockEventLabel(item) {
+      if (item.type === "offline") {
+        return Number(item.offline_confirmed) === 1 ? "確認已下架" : "確認下架中";
+      }
+      if (item.type === "fee_update") return "費用變更";
+      return eventText[item.type] || item.type_label || item.type;
+    }
+    function dockEventClass(item) {
+      if (item.type === "new") return "notify-new";
+      if (item.type === "relist") return "notify-relist";
+      if (item.type === "fee_update") return "notify-fee";
+      if (item.type === "offline") {
+        return Number(item.offline_confirmed) === 1 ? "notify-off-sure" : "notify-off";
+      }
+      return "same";
+    }
     function dockChangeHtml(item) {
       const changes = parseNotifyChanges(item.detail);
       if (!changes.length) return "";
@@ -9859,7 +10373,7 @@
       const dock = $("alertDock");
       const inboxHtml = (list) => list.map((item) => `
         <div class="dock-item" data-dock-key="${esc(dockItemKey(item))}">
-          <div class="tags">${sourceTagHtml(item)}<span class="tag ${item.type === "new" ? "new" : "same"}">${eventText[item.type] || item.type_label || item.type}</span></div>
+          <div class="tags">${sourceTagHtml(item)}<span class="tag ${dockEventClass(item)}">${esc(dockEventLabel(item))}</span></div>
           <h3 style="margin:6px 0 4px;font-size:16px">
             <a href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-dock-open="${item.post_id}">${esc(item.title || "物件")}</a>
           </h3>
@@ -9877,7 +10391,7 @@
       if (!items.length) {
         dock.classList.remove("open");
         $("dockList").innerHTML = "";
-        if (inbox) inbox.innerHTML = `<div class="notify-empty">還沒有待看更新。條件按儲存後，全新物件、價格變動與下架會出現在這裡，也可按「允許系統推播」。</div>`;
+        if (inbox) inbox.innerHTML = `<div class="notify-empty">還沒有待看更新。全新物件會依你儲存的搜尋設定檔進來；價格、費用、下架與重新上架只打特別關注。也可按「允許系統推播」。</div>`;
         if (hint) hint.textContent = "尚無待看更新。";
         mergeCommsIntoInbox();
         return;
@@ -10313,7 +10827,7 @@
             $("status").textContent = `自動檢查完成，通知 ${n} 則 · ${new Date(data.result.checked_at).toLocaleString()}`;
             pushDock(data.result.events || []);
             if (n) showLocalNotice("吉比租房物件追蹤", `自動檢查完成，通知 ${n} 則`);
-            loadList();
+            loadList({ silent: true, keep: true });
           }
           if (data.type === "notify") {
             const n = data.events?.length || 0;
@@ -10322,7 +10836,7 @@
               pushDock(data.events || []);
               showLocalNotice("吉比租房物件追蹤", `篩選後通知 ${n} 則`);
             }
-            loadList();
+            loadList({ silent: true, keep: true });
           }
           if (data.type === "geo") {
             if (data.routeBackfill?.located) {
@@ -10332,7 +10846,7 @@
             } else if (data.mrtBackfill?.located) {
               $("status").textContent = `已計算 ${data.mrtBackfill.located} 筆捷運步行距離，列表已更新`;
             }
-            loadList();
+            loadList({ silent: true, keep: true });
           }
         };
         es.onerror = () => {

@@ -21,6 +21,8 @@ run-name: "${{ inputs.release_mode == 'ops_phase15' && format('phase15-intent:{0
 # release_mode=ops_phase15：維持既有 Phase 15 綁定（run-name phase15-intent:<id>）。
 #
 # 【必要前提】master branch protection / ruleset 為必要（防止直接改本 workflow 繞過授權）。
+# Owner 已書面授權：Cursor Agent（actor `cursor` / `cursor[bot]`）在使用者要求合併部署時
+# 可從 master 觸發本檔；見 AGENTS.md 與 .cursor/rules/owner-merge-deploy.mdc。不套用 Ops Phase 15 停手規則。
 on:
   workflow_dispatch:
     inputs:
@@ -80,10 +82,16 @@ jobs:
           if [ -z "${ALLOWED_ACTOR:-}" ]; then
             echo "::error::PRODUCTION_DEPLOY_ALLOWED_ACTOR is not configured; refusing (fail-closed)"; exit 1
           fi
-          if [ "$ACTOR" != "$ALLOWED_ACTOR" ]; then
+          CURSOR_DEPLOY=0
+          if [ "$ACTOR" = "cursor" ] || [ "$ACTOR" = "cursor[bot]" ]; then
+            if [ "$TRIGGERING_ACTOR" = "cursor" ] || [ "$TRIGGERING_ACTOR" = "cursor[bot]" ]; then
+              CURSOR_DEPLOY=1
+            fi
+          fi
+          if [ "$CURSOR_DEPLOY" != 1 ] && [ "$ACTOR" != "$ALLOWED_ACTOR" ]; then
             echo "::error::actor '$ACTOR' is not the authorized deployer"; exit 1
           fi
-          if [ "$TRIGGERING_ACTOR" != "$ALLOWED_ACTOR" ]; then
+          if [ "$CURSOR_DEPLOY" != 1 ] && [ "$TRIGGERING_ACTOR" != "$ALLOWED_ACTOR" ]; then
             echo "::error::triggering actor '$TRIGGERING_ACTOR' is not the authorized deployer (re-run by another user is refused)"; exit 1
           fi
           if [ "${CONFIRM:-}" != "DEPLOY-PRODUCTION" ]; then

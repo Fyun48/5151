@@ -107,6 +107,7 @@ function sampleInput(extra = {}) {
     contact_name: "林先生",
     address: "台北市士林區中正路100號",
     phone: "0912345678",
+    title: "士林整層可看屋",
     body: "近捷運、可入住、有洗衣機。",
     accept_pledge: true,
     ...extra,
@@ -127,6 +128,11 @@ test("self listing ids stay above the reserved range and require login", () => {
   addUser(db, { id: 1, email: "a@example.com", createdAt: OLD });
   assert.throws(() => createSelfListing(db, 0, sampleInput()), /請先登入/);
   const row = createSelfListing(db, 1, sampleInput());
+  assert.equal(row.title, "士林整層可看屋");
+  assert.throws(
+    () => createSelfListing(db, 1, sampleInput({ title: "短標", address: "台北市士林區中正路102號" })),
+    /標題至少/,
+  );
   assert.ok(row.post_id > SELF_POST_ID_BASE);
   assert.equal(row.source, "self");
   assert.equal(row.source_label, "吉比本站");
