@@ -990,6 +990,15 @@
       color: var(--ink);
       min-width: 0;
     }
+    .contact-id {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-width: 0;
+      text-align: left;
+    }
+    .contact-id .who-name { min-width: 0; }
     .contact .avatar {
       width: 52px;
       height: 52px;
@@ -1996,6 +2005,23 @@
       background: var(--accent-mist);
     }
     .tool-mgr-item .row { margin-top: 8px; }
+    .tool-mgr-item[data-tpl-edit] { cursor: pointer; }
+    .tool-mgr-item[data-tpl-edit]:hover,
+    .tool-mgr-item[data-tpl-edit]:focus-visible { border-color: var(--accent); }
+    .self-title-block { margin: 0 0 14px; }
+    .self-title-block label { font-weight: 700; }
+    #descTemplateEditConfirm {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      margin: 0 0 12px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--accent-soft);
+    }
+    #descTemplateEditConfirm[hidden] { display: none; }
     .import-photos { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
     .import-photo {
       position: relative;
@@ -3263,7 +3289,7 @@
       <form id="profileForm">
         <div class="profile-card">
           <button type="button" class="media-hit" id="profileAvatarHit" title="點擊拍照或上傳頭像" aria-label="拍照或上傳頭像">
-            <img class="profile-avatar" id="profileAvatarImg" alt="頭像" hidden />
+            <img class="profile-avatar" id="profileAvatarImg" alt="頭像" data-avatar-zoom hidden />
             <div class="profile-avatar empty" id="profileAvatarFallback">頭像</div>
             <span class="media-x" id="profileAvatarClear" hidden>×</span>
           </button>
@@ -3417,12 +3443,13 @@
       <div class="listing-tools" id="listingTools">
         <h3>刊登幫手</h3>
         <p class="copy-draft-banner" id="copyDraftBanner" hidden>這是複製來的未刊登草稿，原物件沒有被改。請檢查後再勾選聲明並送出，不會自動刊登。</p>
-        <p class="hint" id="descTemplateHint">一般會員可存 2 則說明範本；贊助會員可存到 5 則。</p>
+        <p class="hint" id="descTemplateHint">說明範本贊助會員可存到 5 則。</p>
         <div class="listing-tools-row">
           <label class="visually-hidden" for="descTemplatePick">說明範本</label>
           <select id="descTemplatePick"><option value="">選擇說明範本</option></select>
-          <button type="button" class="ghost" id="descTemplateManage">新增說明範本</button>
+          <button type="button" class="ghost" id="descTemplateManage">新增/修改 說明範本</button>
         </div>
+        <p class="hint" id="descTemplateApplied" hidden></p>
         <div class="listing-tools-row">
           <label class="visually-hidden" for="contactProfilePick">聯絡人</label>
           <select id="contactProfilePick"><option value="">選擇聯絡人</option></select>
@@ -3430,6 +3457,10 @@
         </div>
       </div>
       <form id="selfListingForm">
+        <div class="self-title-block">
+          <label for="selfTitle">標題</label>
+          <input id="selfTitle" maxlength="80" minlength="5" required placeholder="至少 5 個字" />
+        </div>
         <div class="self-grid">
           <div>
             <label>縣市</label>
@@ -3458,19 +3489,19 @@
           </div>
           <div>
             <label>每月租金</label>
-            <input type="number" id="selfRent" min="1000" max="200000" step="500" placeholder="例如 25000" />
+            <input type="number" id="selfRent" min="1000" max="200000" step="500" />
           </div>
           <div>
             <label>可用坪數</label>
             <input type="number" id="selfPing" min="1" max="500" step="0.5" placeholder="扣除公設" />
           </div>
           <div>
-            <label>所在樓層</label>
-            <input type="number" id="selfFloor" min="1" max="80" placeholder="例如 3" />
+            <label>出租樓層</label>
+            <input type="number" id="selfFloor" min="1" max="80" />
           </div>
           <div>
             <label>總樓層</label>
-            <input type="number" id="selfTotalFloors" min="1" max="80" placeholder="選填" />
+            <input type="number" id="selfTotalFloors" min="1" max="80" />
           </div>
           <div>
             <label>房</label>
@@ -3493,28 +3524,12 @@
               <option value="talk">面議</option>
             </select>
           </div>
-          <div class="span-2">
-            <label>聯絡人稱呼</label>
-            <input id="selfContactName" maxlength="80" placeholder="例如 林先生" />
-          </div>
-          <div class="span-2">
-            <label>標題（選填）</label>
-            <input id="selfTitle" maxlength="80" placeholder="空白則用行政區與租金" />
-          </div>
           <div class="span-all">
-            <label>路名地址</label>
-            <div class="addr-combo">
-              <p class="addr-prefix" id="selfAddressPrefix">請先選縣市與行政區</p>
-              <input id="selfAddress" maxlength="80" placeholder="例如 中正路 100 號" />
-            </div>
-          </div>
-          <div class="span-2">
-            <label>公開電話（選填）</label>
-            <input id="selfPhone" maxlength="40" inputmode="tel" placeholder="09xxxxxxxx" />
-          </div>
-          <div class="span-2">
-            <label>LINE 連結（選填）</label>
-            <input id="selfLine" maxlength="300" placeholder="https://line.me/..." />
+            <label for="selfAddress">欲出租物件地址</label>
+            <input id="selfAddress" maxlength="80" placeholder="例如 台北市士林區中正路 100 號" />
+            <input id="selfContactName" type="hidden" />
+            <input id="selfPhone" type="hidden" />
+            <input id="selfLine" type="hidden" />
           </div>
           <div class="span-all">
             <label>物件照片</label>
@@ -3528,21 +3543,7 @@
         <div class="self-photo-tray" id="selfPhotoPreview" hidden></div>
         <div id="selfTraitGroups"></div>
         <p class="hint" id="selfTraitNudge" hidden>電梯大樓的話，中庭與陽台常常是租客想先知道的。有的話點一下就好。</p>
-        <label>說明（最多 500 字）</label>
-        <div class="rich-editor" id="selfBodyEditorWrap">
-          <div class="rich-toolbar" role="toolbar" aria-label="說明格式">
-            <button type="button" class="ghost" data-rich="bold">粗體</button>
-            <button type="button" class="ghost" data-rich="italic">斜體</button>
-            <button type="button" class="ghost" data-rich="size" data-size="18px">大</button>
-            <button type="button" class="ghost" data-rich="size" data-size="14px">中</button>
-            <button type="button" class="ghost" data-rich="color" data-color="#0f6f6a">綠</button>
-            <button type="button" class="ghost" data-rich="color" data-color="#1c1917">黑</button>
-            <button type="button" class="ghost" id="selfEmojiToggle">表情</button>
-          </div>
-          <div class="rich-emoji" id="selfEmojiBar" hidden></div>
-          <div class="rich-area" id="selfBodyEditor" contenteditable="true" role="textbox" aria-label="物件說明" data-placeholder="格局、設備、可入住日。"></div>
-          <textarea id="selfBody" maxlength="2500" hidden></textarea>
-        </div>
+        <textarea id="selfBody" maxlength="2500" hidden></textarea>
         <label class="pledge-row">
           <input type="checkbox" id="selfPledge" />
           <span id="selfPledgeText">我是這間房子的屋主，或已取得屋主授權的代理人。我確認刊登內容屬實，了解平台會抽查，不實刊登會被下架並暫停上傳。平台不驗證權狀、不保證真實，法律責任由我自行負擔。</span>
@@ -3938,17 +3939,34 @@
     <div class="hub-panel" role="dialog" aria-modal="true" aria-labelledby="descTemplateTitle">
       <div class="hub-head">
         <div>
-          <h2 id="descTemplateTitle">新增說明範本</h2>
-          <p class="hint" style="margin:6px 0 0">一般會員最多 2 則，贊助會員可存到 5 則。從下拉選單選到就會套用；若說明已有字，會先問你要不要取代。</p>
+          <h2 id="descTemplateTitle">新增/修改 說明範本</h2>
         </div>
         <button type="button" class="ghost" id="descTemplateClose">關閉</button>
+      </div>
+      <div id="descTemplateEditConfirm" class="pledge-row" hidden>
+        <span>要修改「<strong id="descTplEditName"></strong>」嗎？確認後會把名稱與內容帶回表單。</span>
+        <button type="button" class="primary" id="descTplEditYes">確認修改</button>
+        <button type="button" class="ghost" id="descTplEditNo">取消</button>
       </div>
       <div class="listing-tools-row">
         <input type="text" id="descTemplateName" maxlength="40" placeholder="範本名稱" />
       </div>
-      <textarea id="descTemplateBody" maxlength="2500" placeholder="說明內容（可粗體／表情，不能放連結）"></textarea>
+      <div class="rich-editor" id="descBodyEditorWrap">
+        <div class="rich-toolbar" role="toolbar" aria-label="說明範本格式">
+          <button type="button" class="ghost" data-rich="bold">粗體</button>
+          <button type="button" class="ghost" data-rich="italic">斜體</button>
+          <button type="button" class="ghost" data-rich="size" data-size="18px">大</button>
+          <button type="button" class="ghost" data-rich="size" data-size="14px">中</button>
+          <button type="button" class="ghost" data-rich="color" data-color="#0f6f6a">綠</button>
+          <button type="button" class="ghost" data-rich="color" data-color="#1c1917">黑</button>
+          <button type="button" class="ghost" id="descEmojiToggle">表情</button>
+        </div>
+        <div class="rich-emoji" id="descEmojiBar" hidden></div>
+        <div class="rich-area" id="descBodyEditor" contenteditable="true" role="textbox" aria-label="說明範本內容" data-placeholder="格局、設備、可入住日。"></div>
+        <textarea id="descTemplateBody" maxlength="2500" hidden></textarea>
+      </div>
       <div class="row" style="margin-top:8px">
-        <button type="button" class="primary" id="descTemplateSave">新增範本</button>
+        <button type="button" class="primary" id="descTemplateSave">儲存範本</button>
         <span class="save-msg" id="descTemplateMsg"></span>
       </div>
       <div class="tool-mgr-list" id="descTemplateList"></div>
@@ -6050,9 +6068,10 @@
       const tel = item.mobile || item.phone || "";
       const bits = [];
       if (item.avatar) {
-        bits.push(`<img class="avatar" src="${esc(item.avatar)}" alt="" title="點頭像排除此人" data-exclude-face="${item.post_id}" data-uid="${item.contact_uid || ""}" data-agent="${esc(agency || name)}" />`);
+        bits.push(`<div class="contact-id"><img class="avatar" src="${esc(item.avatar)}" alt="" title="點頭像看大圖" data-avatar-zoom="${esc(item.avatar)}" /><div class="who-name">${esc([role, name].filter(Boolean).join(" · ") || "聯絡人")}</div></div>`);
+      } else if (name || role) {
+        bits.push(`<div class="who-name">${esc([role, name].filter(Boolean).join(" · "))}</div>`);
       }
-      if (name || role) bits.push(`<div class="who-name">${esc([role, name].filter(Boolean).join(" · "))}</div>`);
       if (agency) bits.push(`<div class="agency">${esc(agency)}</div>`);
       const deferContact = Boolean(sameHouseOf(item)?.cheaper_exists);
       if (deferContact) {
@@ -6073,7 +6092,7 @@
         else bits.push(`<div class="agency">聯絡資料抓取中</div>`);
       }
       const exLabel = agentExcludeLabel(item);
-      if (!isGuest && !item.avatar && exLabel && item.source !== "self") {
+      if (!isGuest && exLabel && item.source !== "self") {
         bits.push(`<button type="button" class="ghost exclude-agent-btn" data-exclude-face="${item.post_id}" data-agent="${esc(exLabel)}" data-uid="${item.contact_uid || ""}" title="不再顯示這個仲介／聯絡人的物件">排除 ${esc(exLabel)}</button>`);
       }
       return `<div class="contact${deferContact ? " contact-defer" : ""}">${bits.join("")}</div>`;
@@ -7500,16 +7519,77 @@
         `<option value="${esc(String(city.id))}-${esc(String(row.id))}">${esc(row.name)}</option>`
       )).join("");
       if ([...distSel.options].some((opt) => opt.value === keep)) distSel.value = keep;
-      syncSelfAddressPrefix();
     }
-    function syncSelfAddressPrefix() {
+    function compactTwAddress(value) {
+      return String(value || "").replace(/\s+/g, "");
+    }
+    function selfSelectedRegionNames() {
+      const cityName = $("selfCity")?.selectedOptions?.[0]?.textContent?.trim() || "";
+      const distName = $("selfDistrict")?.selectedOptions?.[0]?.textContent?.trim() || "";
+      const cityOk = Boolean($("selfCity")?.value) && cityName && cityName !== "縣市";
+      const distOk = Boolean($("selfDistrict")?.value) && distName && distName !== "行政區";
+      return { cityName: cityOk ? cityName : "", distName: distOk ? distName : "" };
+    }
+    function stripKnownRegionPrefix(value) {
+      let rest = compactTwAddress(value);
+      let bestCity = "";
+      for (const city of selfCityList()) {
+        const name = compactTwAddress(city.name);
+        if (name && rest.startsWith(name) && name.length > bestCity.length) bestCity = name;
+      }
+      if (bestCity) {
+        rest = rest.slice(bestCity.length);
+        const city = selfCityList().find((row) => compactTwAddress(row.name) === bestCity);
+        let bestDist = "";
+        for (const row of city?.districts || []) {
+          const name = compactTwAddress(row.name);
+          if (name && rest.startsWith(name) && name.length > bestDist.length) bestDist = name;
+        }
+        if (bestDist) rest = rest.slice(bestDist.length);
+      }
+      return rest;
+    }
+    function applySelectsToAddress() {
+      const addr = $("selfAddress");
+      if (!addr) return;
+      const { cityName, distName } = selfSelectedRegionNames();
+      const rest = stripKnownRegionPrefix(addr.value);
+      addr.value = cityName && distName ? `${cityName}${distName}${rest}` : rest || addr.value;
+    }
+    function applyAddressToSelects() {
+      const addr = $("selfAddress");
       const citySel = $("selfCity");
       const distSel = $("selfDistrict");
-      const prefix = $("selfAddressPrefix");
-      if (!prefix) return;
-      const cityName = citySel?.selectedOptions?.[0]?.textContent?.trim() || "";
-      const distName = distSel?.selectedOptions?.[0]?.textContent?.trim() || "";
-      prefix.textContent = citySel?.value && distSel?.value ? `${cityName}${distName}`.replace(/\s+/g, "") : "請先選縣市與行政區";
+      if (!addr || !citySel) return;
+      const compact = compactTwAddress(addr.value);
+      if (!compact) return;
+      let matchedCity = null;
+      for (const city of selfCityList()) {
+        const name = compactTwAddress(city.name);
+        if (name && compact.startsWith(name) && (!matchedCity || name.length > compactTwAddress(matchedCity.name).length)) {
+          matchedCity = city;
+        }
+      }
+      if (!matchedCity) return;
+      if (String(citySel.value) !== String(matchedCity.id)) {
+        citySel.value = String(matchedCity.id);
+        fillSelfDistrictOptions();
+      }
+      const rest = compact.slice(compactTwAddress(matchedCity.name).length);
+      let matchedDist = null;
+      for (const row of matchedCity.districts || []) {
+        const name = compactTwAddress(row.name);
+        if (name && rest.startsWith(name) && (!matchedDist || name.length > compactTwAddress(matchedDist.name).length)) {
+          matchedDist = row;
+        }
+      }
+      if (matchedDist && distSel) {
+        const value = `${matchedCity.id}-${matchedDist.id}`;
+        if ([...distSel.options].some((opt) => opt.value === value)) distSel.value = value;
+      }
+    }
+    function syncSelfAddressPrefix() {
+      applySelectsToAddress();
     }
     const SELF_TRAIT_GROUPS = [
       { id: "living", label: "生活條件", items: [
@@ -7697,11 +7777,14 @@
       const url = me?.avatar_url || "";
       if (img && url) {
         img.src = url;
+        img.setAttribute("data-avatar-zoom", url);
         img.hidden = false;
         img.classList.remove("empty");
         if (fallback) fallback.hidden = true;
         if ($("profileAvatarClear")) $("profileAvatarClear").hidden = false;
       } else if (img) {
+        img.removeAttribute("data-avatar-zoom");
+        img.removeAttribute("src");
         img.hidden = true;
         if (fallback) fallback.hidden = false;
         if ($("profileAvatarClear")) $("profileAvatarClear").hidden = true;
@@ -8056,8 +8139,12 @@
       openNotifyHub("events");
       $("notifyHub")?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
-    $("selfCity")?.addEventListener("change", fillSelfDistrictOptions);
-    $("selfDistrict")?.addEventListener("change", syncSelfAddressPrefix);
+    $("selfCity")?.addEventListener("change", () => {
+      fillSelfDistrictOptions();
+      applySelectsToAddress();
+    });
+    $("selfDistrict")?.addEventListener("change", applySelectsToAddress);
+    $("selfAddress")?.addEventListener("blur", applyAddressToSelects);
     $("profileNickname")?.addEventListener("input", () => { $("profileNickname").dataset.dirty = "1"; });
     let pendingClearAvatar = false;
     let pendingClearQr = false;
@@ -8067,6 +8154,13 @@
         pendingClearAvatar = true;
         if ($("profileAvatar")) $("profileAvatar").value = "";
         $("profileForm")?.requestSubmit();
+        return;
+      }
+      const img = $("profileAvatarImg");
+      const zoom = ev.target.closest("[data-avatar-zoom]");
+      if (zoom && img && !img.hidden && img.src) {
+        ev.preventDefault();
+        openAppLightbox([img.src], 0);
         return;
       }
       const pick = $("avatarPick");
@@ -8704,7 +8798,7 @@
     function applyImportToForm(row) {
       if ($("selfTitle")) $("selfTitle").value = row.imported_title || "";
       if ($("selfBody")) $("selfBody").value = row.imported_text || "";
-      syncSelfBodyEditor(row.imported_text || "");
+      setDescTemplateApplied(row.imported_text ? "已套用匯入說明" : "");
       selfPhotoDraft = [...(row.photos || row.listing?.photos || [])];
       renderSelfPhotoDraftAndGrid();
     }
@@ -8801,12 +8895,12 @@
       }
     });
     const SELF_EMOJIS = ["😊","🏠","☀️","🌿","🛁","🍳","🅿️","🛗","🚇","🚲","🐕","🐱","👶","✅","❗"];
-    $("selfBodyEditor")?.addEventListener("input", syncSelfBodyFromEditor);
-    $("selfBodyEditorWrap")?.addEventListener("click", (ev) => {
+    $("descBodyEditor")?.addEventListener("input", syncDescBodyFromEditor);
+    $("descBodyEditorWrap")?.addEventListener("click", (ev) => {
       const btn = ev.target.closest("[data-rich]");
       if (!btn) return;
       ev.preventDefault();
-      const ed = $("selfBodyEditor");
+      const ed = $("descBodyEditor");
       if (!ed) return;
       ed.focus();
       const cmd = btn.dataset.rich;
@@ -8814,25 +8908,25 @@
       else if (cmd === "italic") document.execCommand("italic");
       else if (cmd === "size") document.execCommand("fontSize", false, "4");
       else if (cmd === "color") document.execCommand("foreColor", false, btn.dataset.color || "#1c1917");
-      syncSelfBodyFromEditor();
+      syncDescBodyFromEditor();
     });
     (function paintEmojis() {
-      const bar = $("selfEmojiBar");
+      const bar = $("descEmojiBar");
       if (!bar) return;
       bar.innerHTML = SELF_EMOJIS.map((mark) => `<button type="button" data-emoji="${mark}" aria-label="插入表情">${mark}</button>`).join("");
     })();
-    $("selfEmojiToggle")?.addEventListener("click", () => {
-      const bar = $("selfEmojiBar");
+    $("descEmojiToggle")?.addEventListener("click", () => {
+      const bar = $("descEmojiBar");
       if (bar) bar.hidden = !bar.hidden;
     });
-    $("selfEmojiBar")?.addEventListener("click", (ev) => {
+    $("descEmojiBar")?.addEventListener("click", (ev) => {
       const mark = ev.target.closest("[data-emoji]")?.dataset.emoji;
       if (!mark) return;
-      const ed = $("selfBodyEditor");
+      const ed = $("descBodyEditor");
       if (!ed) return;
       ed.focus();
       document.execCommand("insertText", false, mark);
-      syncSelfBodyFromEditor();
+      syncDescBodyFromEditor();
     });
     $("selfListingForm")?.addEventListener("submit", async (ev) => {
       ev.preventDefault();
@@ -8841,7 +8935,27 @@
         return;
       }
       const msg = $("selfMsg");
+      const fail = (text) => { if (msg) msg.textContent = text; };
       try {
+        applyAddressToSelects();
+        const title = String($("selfTitle")?.value || "").trim();
+        if (title.length < 5) {
+          fail("標題至少 5 個字");
+          return;
+        }
+        if (!$("selfDistrict")?.value) {
+          fail("請選縣市與行政區，或在地址寫上完整縣市行政區");
+          return;
+        }
+        if (!String($("selfContactName")?.value || "").trim()) {
+          fail("請先從刊登幫手選擇聯絡人");
+          return;
+        }
+        const body = String($("selfBody")?.value || "").trim();
+        if (!body) {
+          fail("請先從刊登幫手選擇或新增說明範本");
+          return;
+        }
         const photoUrls = [...selfPhotoDraft];
         const payload = {
           district: $("selfDistrict")?.value || "",
@@ -8859,8 +8973,8 @@
           phone: $("selfPhone")?.value || "",
           line_url: $("selfLine")?.value || "",
           photos: photoUrls,
-          title: $("selfTitle")?.value || "",
-          body: (syncSelfBodyFromEditor(), $("selfBody")?.value || ""),
+          title,
+          body,
           traits: collectedSelfTraits(),
           deposit: $("selfDeposit")?.value || "",
           accept_pledge: $("selfPledge")?.checked === true,
@@ -8887,7 +9001,7 @@
         paintImportReview(null);
         if ($("importDeclaration")) $("importDeclaration").checked = false;
         if ($("selfBody")) $("selfBody").value = "";
-        syncSelfBodyEditor("");
+        setDescTemplateApplied("");
         if ($("selfPhotos")) $("selfPhotos").value = "";
         selfPhotoDraft = [];
         renderSelfPhotoDraft();
@@ -8902,6 +9016,18 @@
     let copyInFlight = false;
     let descTemplates = [];
     let contactProfiles = [];
+    let editingDescTemplateId = null;
+    function setDescTemplateApplied(name) {
+      const el = $("descTemplateApplied");
+      if (!el) return;
+      if (name) {
+        el.hidden = false;
+        el.textContent = String(name).startsWith("已套用") ? name : `已套用說明範本：${name}`;
+      } else {
+        el.hidden = true;
+        el.textContent = "";
+      }
+    }
     function applyListingForm(form) {
       if (!form) return;
       const district = String(form.district || "");
@@ -8911,7 +9037,6 @@
         fillSelfDistrictOptions();
       }
       if ($("selfDistrict") && district) $("selfDistrict").value = district;
-      syncSelfAddressPrefix();
       if ($("selfKind") && form.kind) $("selfKind").value = form.kind;
       if ($("selfRole") && form.role) $("selfRole").value = form.role;
       if ($("selfRent")) $("selfRent").value = form.rent || "";
@@ -8925,10 +9050,11 @@
       if ($("selfContactName")) $("selfContactName").value = form.contact_name || "";
       if ($("selfTitle")) $("selfTitle").value = form.title || "";
       if ($("selfAddress")) $("selfAddress").value = form.street || "";
+      applySelectsToAddress();
       if ($("selfPhone")) $("selfPhone").value = form.phone || "";
       if ($("selfLine")) $("selfLine").value = form.line_url || "";
       if ($("selfBody")) $("selfBody").value = form.body || "";
-      syncSelfBodyEditor(form.body || "");
+      setDescTemplateApplied(form.body ? "已套用目前刊登說明" : "");
       document.querySelectorAll('#selfTraitGroups input[name="selfTrait"]').forEach((el) => {
         el.checked = (form.traits || []).includes(el.value);
       });
@@ -8936,14 +9062,21 @@
       renderSelfPhotoDraftAndGrid();
       if ($("selfPledge")) $("selfPledge").checked = false;
     }
-    function syncSelfBodyEditor(html) {
-      const ed = $("selfBodyEditor");
+    function syncDescBodyEditor(html) {
+      const ed = $("descBodyEditor");
       if (ed) ed.innerHTML = safeListingHtml(html || "");
+      if ($("descTemplateBody")) $("descTemplateBody").value = html || "";
     }
-    function syncSelfBodyFromEditor() {
-      const ed = $("selfBodyEditor");
-      const ta = $("selfBody");
+    function syncDescBodyFromEditor() {
+      const ed = $("descBodyEditor");
+      const ta = $("descTemplateBody");
       if (ed && ta) ta.value = ed.innerHTML;
+    }
+    function resetDescTemplateForm() {
+      editingDescTemplateId = null;
+      if ($("descTemplateName")) $("descTemplateName").value = "";
+      syncDescBodyEditor("");
+      if ($("descTemplateEditConfirm")) $("descTemplateEditConfirm").hidden = true;
     }
     function paintCopyDraftBanner(on) {
       const banner = $("copyDraftBanner");
@@ -8964,7 +9097,7 @@
       if (!sel) return;
       const keep = sel.value;
       sel.innerHTML = `<option value="">選擇聯絡人</option>` + contactProfiles.map((item) => (
-        `<option value="${item.id}">${esc(item.label)}${item.is_account ? "（不可刪）" : ""}</option>`
+        `<option value="${item.id}">${esc(item.label)}</option>`
       )).join("");
       if (keep && [...sel.options].some((opt) => opt.value === keep)) sel.value = keep;
       else {
@@ -8999,7 +9132,7 @@
       const box = $("descTemplateList");
       if (!box) return;
       box.innerHTML = descTemplates.length ? descTemplates.map((item) => `
-        <article class="tool-mgr-item">
+        <article class="tool-mgr-item" data-tpl-edit="${item.id}" role="button" tabindex="0" aria-label="修改範本 ${esc(item.name)}">
           <strong>${esc(item.name)}</strong>
           <p class="hint">${esc(item.body)}</p>
           <div class="row">
@@ -9023,9 +9156,9 @@
       const item = descTemplates.find((row) => String(row.id) === String(id));
       if (!item) return;
       const current = $("selfBody")?.value || "";
-      if (current.trim() && !window.confirm("套用並取代目前內容？")) return;
+      if (current.trim() && current.trim() !== String(item.body || "").trim() && !window.confirm("套用並取代目前內容？")) return;
       if ($("selfBody")) $("selfBody").value = item.body;
-      syncSelfBodyEditor(item.body);
+      setDescTemplateApplied(item.name || "未命名");
       const msg = $("selfMsg");
       if (msg) msg.textContent = "已套用說明範本，尚未刊登。";
     }
@@ -9094,27 +9227,54 @@
       const id = $("contactProfilePick")?.value;
       if (id) applyContactProfile(id);
     });
-    $("descTemplateManage")?.addEventListener("click", () => { if ($("descTemplateOverlay")) $("descTemplateOverlay").hidden = false; });
+    function openDescTemplateOverlay() {
+      if ($("descTemplateEditConfirm")) $("descTemplateEditConfirm").hidden = true;
+      if ($("descTemplateOverlay")) $("descTemplateOverlay").hidden = false;
+    }
+    function closeDescTemplateOverlay() {
+      if ($("descTemplateOverlay")) $("descTemplateOverlay").hidden = true;
+    }
+    $("descTemplateManage")?.addEventListener("click", openDescTemplateOverlay);
     $("contactProfileManage")?.addEventListener("click", () => { if ($("contactProfileOverlay")) $("contactProfileOverlay").hidden = false; });
-    $("descTemplateClose")?.addEventListener("click", () => { if ($("descTemplateOverlay")) $("descTemplateOverlay").hidden = true; });
+    $("descTemplateClose")?.addEventListener("click", closeDescTemplateOverlay);
     $("contactProfileClose")?.addEventListener("click", () => { if ($("contactProfileOverlay")) $("contactProfileOverlay").hidden = true; });
-    document.querySelector("[data-close-desc-tpl]")?.addEventListener("click", () => { if ($("descTemplateOverlay")) $("descTemplateOverlay").hidden = true; });
+    document.querySelector("[data-close-desc-tpl]")?.addEventListener("click", closeDescTemplateOverlay);
     document.querySelector("[data-close-contact-profile]")?.addEventListener("click", () => { if ($("contactProfileOverlay")) $("contactProfileOverlay").hidden = true; });
+    $("descTplEditYes")?.addEventListener("click", () => {
+      const item = descTemplates.find((row) => String(row.id) === String(editingDescTemplateId));
+      if (!item) return;
+      if ($("descTemplateName")) $("descTemplateName").value = item.name || "";
+      syncDescBodyEditor(item.body || "");
+      if ($("descTemplateEditConfirm")) $("descTemplateEditConfirm").hidden = true;
+      if ($("descTemplateMsg")) $("descTemplateMsg").textContent = "已帶回表單，改完後按儲存。名稱相同會覆蓋原範本。";
+    });
+    $("descTplEditNo")?.addEventListener("click", () => {
+      editingDescTemplateId = null;
+      if ($("descTemplateEditConfirm")) $("descTemplateEditConfirm").hidden = true;
+    });
     $("descTemplateSave")?.addEventListener("click", async () => {
       const msg = $("descTemplateMsg");
       try {
-        const res = await fetch("/api/listing-description-templates", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: $("descTemplateName")?.value || "", body: $("descTemplateBody")?.value || "" }),
-        });
+        syncDescBodyFromEditor();
+        const name = $("descTemplateName")?.value || "";
+        const body = $("descTemplateBody")?.value || "";
+        const editingId = editingDescTemplateId;
+        const res = await fetch(
+          editingId ? `/api/listing-description-templates/${editingId}` : "/api/listing-description-templates",
+          {
+            method: editingId ? "PATCH" : "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name, body }),
+          },
+        );
         const data = await readApi(res);
         if (!res.ok) throw new Error(data.error || "儲存失敗");
-        if ($("descTemplateName")) $("descTemplateName").value = "";
-        if ($("descTemplateBody")) $("descTemplateBody").value = "";
-        if (msg) msg.textContent = "已新增。";
+        resetDescTemplateForm();
+        if (msg) msg.textContent = editingId ? "已更新。" : "已新增。";
         await loadListingTools();
         if (data.id && $("descTemplatePick")) $("descTemplatePick").value = String(data.id);
+        if ($("selfBody")) $("selfBody").value = data.body || body;
+        setDescTemplateApplied(data.name || name || "未命名");
       } catch (error) {
         if (msg) msg.textContent = error.message;
       }
@@ -9146,15 +9306,28 @@
     });
     $("descTemplateList")?.addEventListener("click", async (ev) => {
       const delId = ev.target.closest("[data-tpl-del]")?.dataset.tplDel;
-      if (!delId) return;
-      if (!window.confirm("刪除這個說明範本？已刊登的物件不會被改。")) return;
-      const gone = descTemplates.find((row) => String(row.id) === String(delId));
-      await fetch(`/api/listing-description-templates/${delId}`, { method: "DELETE" });
-      if ($("descTemplatePick")?.value === String(delId)) {
-        $("descTemplatePick").value = "";
-        if (gone && $("selfBody") && $("selfBody").value === gone.body) $("selfBody").value = "";
+      if (delId) {
+        if (!window.confirm("刪除這個說明範本？已刊登的物件不會被改。")) return;
+        const gone = descTemplates.find((row) => String(row.id) === String(delId));
+        await fetch(`/api/listing-description-templates/${delId}`, { method: "DELETE" });
+        if ($("descTemplatePick")?.value === String(delId)) {
+          $("descTemplatePick").value = "";
+          if (gone && $("selfBody") && $("selfBody").value === gone.body) {
+            $("selfBody").value = "";
+            setDescTemplateApplied("");
+          }
+        }
+        if (String(editingDescTemplateId) === String(delId)) resetDescTemplateForm();
+        await loadListingTools();
+        return;
       }
-      await loadListingTools();
+      const editId = ev.target.closest("[data-tpl-edit]")?.dataset.tplEdit;
+      if (!editId) return;
+      const item = descTemplates.find((row) => String(row.id) === String(editId));
+      if (!item) return;
+      editingDescTemplateId = item.id;
+      if ($("descTplEditName")) $("descTplEditName").textContent = item.name || "未命名";
+      if ($("descTemplateEditConfirm")) $("descTemplateEditConfirm").hidden = false;
     });
     $("contactProfileList")?.addEventListener("click", async (ev) => {
       const delId = ev.target.closest("[data-contact-del]")?.dataset.contactDel;
@@ -9840,12 +10013,21 @@
     });
 
     $("list").addEventListener("click", async (ev) => {
-      const face = ev.target.dataset.excludeFace;
+      const avatarZoom = ev.target.closest("[data-avatar-zoom]");
+      if (avatarZoom && $("list").contains(avatarZoom)) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const src = avatarZoom.getAttribute("data-avatar-zoom") || avatarZoom.getAttribute("src") || "";
+        if (src) openAppLightbox([src], 0);
+        return;
+      }
+      const faceBtn = ev.target.closest("[data-exclude-face]");
+      const face = faceBtn?.dataset.excludeFace;
       if (face) {
         ev.preventDefault();
         ev.stopPropagation();
-        const label = ev.target.dataset.agent || "";
-        const uid = Number(ev.target.dataset.uid);
+        const label = faceBtn.dataset.agent || "";
+        const uid = Number(faceBtn.dataset.uid);
         if (label && !$("excludeAgents").value.split(/[\n,，]/).map((s) => s.trim()).includes(label)) {
           $("excludeAgents").value = [$("excludeAgents").value.trim(), label].filter(Boolean).join("\n");
         }
