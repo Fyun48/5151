@@ -22,6 +22,7 @@ test("furnish items come from source tags and never invent extras", () => {
   assert.deepEqual(parseFurnishItems({ title: "附冰箱與洗衣機，可開伙" }), ["冰箱", "洗衣機"]);
   assert.deepEqual(parseStoredFurnish('["沙發","電視"]'), ["沙發", "電視"]);
   assert.deepEqual(parseStoredFurnish("not-json"), []);
+  assert.deepEqual(parseFurnishItems({ furnish_items: '["冰箱","冷氣"]' }), ["冰箱", "冷氣"]);
 });
 
 test("listingKitFields persist captured kit and stay empty when unknown", () => {

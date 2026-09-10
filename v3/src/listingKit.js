@@ -52,7 +52,11 @@ export function parseFurnishItems(input = {}) {
       found.push(name);
     }
   };
-  for (const item of [...asList(input.furnish), ...asList(input.furnish_items), ...asList(input.include)]) {
+  for (const item of [
+    ...parseStoredFurnish(input.furnish_items),
+    ...asList(input.furnish),
+    ...asList(input.include),
+  ]) {
     push(item);
   }
   const hay = hayFrom(input);
