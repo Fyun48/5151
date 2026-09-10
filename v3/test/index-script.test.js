@@ -250,7 +250,10 @@ test("member profiles cap districts and include usable ping in notify copy", () 
   assert.match(html, /有天然瓦斯/);
   assert.match(html, /data-kit-furnish/);
   assert.match(html, /\.kit-furnish/);
+  assert.match(html, /aria-describedby/);
   assert.match(html, /hover: hover\) and \(pointer: fine\)/);
+  assert.match(html, /<\/div>\s*\$\{kitLine\(item, id\)\}/);
+  assert.match(html, /isPlaceholderFloor\(bit\)/);
   assert.match(html, /\( \$\{floorToken\(pair\[1\]\)\} \/ \$\{floorToken\(pair\[2\]\)\} \)/);
   assert.doesNotMatch(html, /出租 \$\{m\[1\]\}樓／共/);
   assert.match(html, /每個設定檔最多選/);

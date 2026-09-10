@@ -68,8 +68,8 @@ test("admin manages announcements, campaigns, and support presentation separatel
   assertScriptsParse(html);
 });
 
-test("service worker cache bumped to v6 with prefix cleanup intact", () => {
-  assert.match(sw, /const CACHE_VERSION = "v6";/);
+test("service worker cache bumped to v7 with prefix cleanup intact", () => {
+  assert.match(sw, /const CACHE_VERSION = "v7";/);
   assert.match(sw, /startsWith\(CACHE_PREFIX\)/);
   assert.match(sw, /self\.skipWaiting\(\)/);
   assert.match(sw, /self\.clients\.claim\(\)/);

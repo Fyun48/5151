@@ -2,7 +2,7 @@
 // Cache 版本集中管理：換版時只需 bump CACHE_VERSION。CACHE 名稱一律以 CACHE_PREFIX 開頭，
 // activate 時只清除「本站、本 Service Worker 管理」的舊版本 cache，不動其它來源/其它前綴的 cache。
 const CACHE_PREFIX = "jibi-shell-";
-const CACHE_VERSION = "v6";
+const CACHE_VERSION = "v7";
 const CACHE = CACHE_PREFIX + CACHE_VERSION;
 
 self.addEventListener("install", (event) => {

@@ -2122,7 +2122,10 @@ function decorateListingLite(row, settings, userId) {
     has_natural_gas: Number(row.has_natural_gas) === 1 || listingKitFrom(row).has_natural_gas,
     furnish_items: (() => {
       const stored = parseStoredFurnish(row.furnish_items);
-      return stored.length ? stored : listingKitFrom(row).furnish_items;
+      return listingKitFrom({
+        ...row,
+        furnish_items: stored.length ? stored : row.furnish_items,
+      }).furnish_items;
     })(),
     community_linked: Number(row.community_linked) === 1 || Number(row.community_id) > 0,
     source,

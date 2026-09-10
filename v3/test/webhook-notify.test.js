@@ -233,6 +233,14 @@ test("notify facts add usable ping and housing type instead of 整層住家", ()
   assert.match(car, /汽車路線約 18.5 公里/);
   const selfFacts = formatNotifyFacts({ source: "self", kind_name: "整層住家", area_name: "20坪" });
   assert.match(selfFacts, /^吉比本站 · /);
+  const unknownFloor = formatNotifyFacts({
+    address: "士林區德行東路",
+    floor_name: "-1",
+    kind_name: "整層住家",
+    tags: ["公寓"],
+  });
+  assert.doesNotMatch(unknownFloor, /-1/);
+  assert.doesNotMatch(unknownFloor, /\( /);
 });
 
 test("mail notify uses registered address and can be unchecked", () => {

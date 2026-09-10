@@ -84,15 +84,23 @@
     }
     .kit-line {
       position: relative;
+      z-index: 2;
       margin-top: 6px;
       font-size: var(--text-sm);
       line-height: 1.5;
+      overflow: visible;
     }
+    .item:has(.kit-line:hover),
+    .item:has(.kit-furnish[aria-expanded="true"]) { z-index: 4; }
+    .kit-line:hover,
+    .kit-line:has(.kit-furnish[aria-expanded="true"]) { z-index: 8; }
     .kit-gas { color: var(--ink); }
     .kit-furnish {
-      display: inline;
+      display: inline-flex;
+      align-items: center;
+      min-height: var(--touch);
       margin: 0;
-      padding: 0;
+      padding: 0 2px;
       border: 0;
       background: none;
       font: inherit;
@@ -119,8 +127,8 @@
       display: none;
       position: absolute;
       left: 0;
-      top: calc(100% + 4px);
-      z-index: 5;
+      top: calc(100% - 2px);
+      z-index: 9;
       max-width: min(280px, 100%);
       padding: 8px 10px;
       border: 1px solid var(--line);
@@ -130,8 +138,17 @@
       font-size: var(--text-xs);
       box-shadow: none;
     }
+    .kit-tip::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: -10px;
+      height: 10px;
+    }
     @media (hover: hover) and (pointer: fine) {
-      .kit-furnish:hover + .kit-tip,
+      .kit-furnish { min-height: 0; }
+      .kit-line:hover .kit-tip,
       .kit-furnish:focus-visible + .kit-tip { display: block; }
     }
     .kit-furnish[aria-expanded="true"] + .kit-tip { display: block; }
@@ -882,6 +899,10 @@
       position: relative;
       overflow: hidden;
       border-radius: var(--radius, 8px);
+    }
+    .item-swipe-wrap:has(.kit-line:hover),
+    .item-swipe-wrap:has(.kit-furnish[aria-expanded="true"]) {
+      overflow: visible;
     }
     .swipe-rail {
       position: absolute;
@@ -4376,7 +4397,7 @@
       const items = Array.isArray(item?.furnish_items) ? item.furnish_items : [];
       const tip = items.length ? items.join("、") : "無";
       const gasHtml = gas ? `<span class="kit-gas">有天然瓦斯</span> ` : "";
-      return `<div class="kit-line">${gasHtml}<button type="button" class="kit-furnish" data-kit-furnish="${esc(cardId)}" aria-expanded="false" aria-controls="kit-tip-${esc(cardId)}" aria-label="此屋家俱家電狀態">${esc("此屋家俱家電狀態")}<sup class="kit-q" aria-hidden="true">?</sup></button><span class="kit-tip" id="kit-tip-${esc(cardId)}" role="tooltip">${esc(tip)}</span></div>`;
+      return `<div class="kit-line">${gasHtml}<button type="button" class="kit-furnish" data-kit-furnish="${esc(cardId)}" aria-expanded="false" aria-controls="kit-tip-${esc(cardId)}" aria-describedby="kit-tip-${esc(cardId)}">${esc("此屋家俱家電狀態")}<sup class="kit-q" aria-hidden="true">?</sup></button><span class="kit-tip" id="kit-tip-${esc(cardId)}" role="tooltip">${esc(tip)}</span></div>`;
     }
     function safeListingHtml(value) {
       const allowed = new Set(["b", "strong", "i", "em", "u", "br", "p", "span", "div"]);
@@ -6031,7 +6052,7 @@
         const peerSource = peer.source_label || listingSourceLabel(peer);
         const peerWhen = formatListingWhen(peer);
         const whenLine = peerWhen ? `更新 ${peerWhen} · 來源 ${peerSource}` : `來源 ${peerSource}`;
-        const metaBits = [peer.layout || "", peer.area_name || "", peer.floor_display || formatFloorDisplay(peer.floor_name) || peer.floor_name || ""].filter(Boolean).join(" · ");
+        const metaBits = [peer.layout || "", peer.area_name || "", peer.floor_display || formatFloorDisplay(peer.floor_name) || ""].filter(Boolean).join(" · ");
         const split = peer.role === "affiliate"
           ? `<button type="button" class="ghost same-split-btn" data-reject-match="${peer.post_id}" data-reject-peer="${item.post_id}">不是同一間</button>`
           : "";
@@ -6548,10 +6569,10 @@
             <div class="meta">
               ${listingSpecLine(item)}
               <br>${esc(item.address || "")}${commuteText(item)}${offlineLine(item)}
-              ${kitLine(item, id)}
-              ${mrtText(item) ? `<div class="mrt-line">${mrtText(item)}</div>` : ""}
               ${item.match_detail && !sameHouseOf(item) ? `<br>比對：${esc(item.match_detail)}${item.match_post_id ? ` · <a href="${listingUrl(item.match_post_id)}" target="_blank" rel="noopener noreferrer">舊刊登 #${item.match_post_id}</a>` : ""}` : ""}
             </div>
+            ${kitLine(item, id)}
+            ${mrtText(item) ? `<div class="mrt-line">${mrtText(item)}</div>` : ""}
               ${item.self_body ? `<div class="meta">${safeListingHtml(item.self_body)}</div>` : ""}
             ${(() => {
               const fees = feeLines(item, { includeTotal: Boolean($("priceMaxIncludesExtras")?.checked) });
@@ -9914,19 +9935,25 @@
     $("mergeSelectedBtn")?.addEventListener("click", () => mergeSelectedListings());
     $("mergeConfirmBtn")?.addEventListener("click", () => mergeSelectedListings());
     $("mergeCancelBtn")?.addEventListener("click", () => exitMergeSelect());
+    function closeKitTips() {
+      document.querySelectorAll("[data-kit-furnish][aria-expanded='true']").forEach((el) => el.setAttribute("aria-expanded", "false"));
+    }
     $("list")?.addEventListener("click", (ev) => {
       const btn = ev.target.closest?.("[data-kit-furnish]");
       const hoverFine = window.matchMedia("(hover: hover) and (pointer: fine)").matches;
       if (!btn) {
-        document.querySelectorAll("[data-kit-furnish][aria-expanded='true']").forEach((el) => el.setAttribute("aria-expanded", "false"));
+        closeKitTips();
         return;
       }
       ev.preventDefault();
       ev.stopPropagation();
       if (hoverFine) return;
       const open = btn.getAttribute("aria-expanded") === "true";
-      document.querySelectorAll("[data-kit-furnish][aria-expanded='true']").forEach((el) => el.setAttribute("aria-expanded", "false"));
+      closeKitTips();
       btn.setAttribute("aria-expanded", open ? "false" : "true");
+    });
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape") closeKitTips();
     });
     $("list")?.addEventListener("pointerdown", (ev) => {
       const card = ev.target.closest?.("[data-card]");
@@ -10474,7 +10501,7 @@
           <h3 style="margin:6px 0 4px;font-size:16px">
             <a href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-dock-open="${item.post_id}">${esc(item.title || "物件")}</a>
           </h3>
-          <div class="meta">${esc([item.price ? `${item.price} 元/月` : "", item.notify_facts ? String(item.notify_facts).split(" · ").map((bit) => formatFloorDisplay(bit) || bit).join(" · ") : [item.address, item.layout, floorDisplay(item), item.area_name, item.housing_type].filter(Boolean).join(" · "), item.extra_fee_text].filter(Boolean).join(" · "))}</div>
+          <div class="meta">${esc([item.price ? `${item.price} 元/月` : "", item.notify_facts ? String(item.notify_facts).split(" · ").map((bit) => formatFloorDisplay(bit) || (isPlaceholderFloor(bit) ? "" : bit)).filter(Boolean).join(" · ") : [item.address, item.layout, floorDisplay(item), item.area_name, item.housing_type].filter(Boolean).join(" · "), item.extra_fee_text].filter(Boolean).join(" · "))}</div>
           ${dockChangeHtml(item)}
           <div class="row" style="margin-top:8px">
             <button type="button" class="ghost" data-dock-read="${esc(dockItemKey(item))}">已讀</button>
