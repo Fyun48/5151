@@ -862,19 +862,31 @@ function shortSha(sha) {
   return String(sha || "").slice(0, 12) || "—";
 }
 
+function syncDevActionButtons() {
+  const hasStg = Number(devOpen.stagingId) > 0;
+  if ($("devCancelStg")) $("devCancelStg").disabled = !hasStg;
+  if ($("devCleanupStg")) $("devCleanupStg").disabled = !hasStg;
+  if ($("devRedeploy")) $("devRedeploy").disabled = !devOpen.taskId;
+}
+
 async function refreshDev() {
+  const table = $("devTable");
+  if (table) table.setAttribute("aria-busy", "true");
   const { res, data } = await api("/ops/api/coding-tasks?limit=40");
+  if (table) table.setAttribute("aria-busy", "false");
   if (!res.ok) {
     setStatus($("devMsg"), data.error || "無法讀取製作任務", "err");
+    $("devMsg")?.setAttribute("role", "alert");
     return;
   }
+  $("devMsg")?.setAttribute("role", "status");
   devCache = data;
   const items = data.items || [];
   setStatus($("devMsg"), items.length ? `${items.length} 筆製作任務` : "目前沒有製作任務。核准開發後才會出現。", items.length ? "ok" : "");
   const body = $("devTable").querySelector("tbody");
   body.innerHTML = items.length
     ? items.map((t) => `
-      <tr data-tid="${t.id}" data-iid="${t.issue_id}">
+      <tr data-tid="${t.id}" data-iid="${t.issue_id}" tabindex="0" role="button" aria-selected="${Number(devOpen.taskId) === Number(t.id) ? "true" : "false"}">
         <td>${t.id}</td>
         <td>#${t.issue_id}</td>
         <td>${statusChip(t.status)}</td>
@@ -888,25 +900,35 @@ async function openCodingTask(taskId) {
   const id = Number(taskId);
   if (!id) return;
   $("devDetailCard").hidden = false;
+  $("devDetailCard").setAttribute("aria-busy", "true");
   $("devDetailTitle").textContent = `製作任務 #${id}`;
   $("devDetailHint").textContent = "載入製作、隔離 staging 與發行候選…";
   $("devPipeline").innerHTML = "";
   $("devActions").hidden = true;
   $("gate2Row").hidden = true;
+  document.querySelectorAll("#devTable tr[data-tid]").forEach((row) => {
+    row.setAttribute("aria-selected", Number(row.dataset.tid) === id ? "true" : "false");
+    row.classList.toggle("on", Number(row.dataset.tid) === id);
+  });
   const [taskRes, stgRes, relRes] = await Promise.all([
     api(`/ops/api/coding-tasks/${id}`),
     api(`/ops/api/coding-tasks/${id}/staging`),
     api(`/ops/api/coding-tasks/${id}/release`),
   ]);
+  $("devDetailCard").setAttribute("aria-busy", "false");
   const task = taskRes.res.ok ? taskRes.data : null;
   const stg = stgRes.res.ok ? stgRes.data : null;
   const rel = relRes.res.ok ? relRes.data : null;
   if (!task) {
     $("devDetailHint").textContent = taskRes.data.error || "找不到這筆任務";
+    setStatus($("devDetailMsg"), taskRes.data.error || "找不到這筆任務", "err");
+    $("devDetailMsg")?.setAttribute("role", "alert");
     return;
   }
-  const currentStg = stg?.current || (stg?.deployments || [])[0] || null;
-  const currentRel = rel?.current || null;
+  const stgErr = !stgRes.res.ok;
+  const relErr = !relRes.res.ok;
+  const currentStg = !stgErr ? (stg?.current || (stg?.deployments || [])[0] || null) : null;
+  const currentRel = !relErr ? (rel?.current || null) : null;
   devOpen = {
     taskId: id,
     issueId: Number(task.issue_id),
@@ -932,7 +954,7 @@ async function openCodingTask(taskId) {
     <div class="dev-col">
       <h3>隔離 staging</h3>
       <p class="src">測試容器，不是正式站</p>
-      <p>${currentStg ? statusChip(currentStg.status) : "尚未建立"}</p>
+      <p>${stgErr ? `<span class="chip danger">讀取失敗</span>` : (currentStg ? statusChip(currentStg.status) : "尚未建立")}</p>
       <p>驗證 ${esc(currentStg?.validation_result || "—")}${currentStg?.fresh === false ? " · 已過期" : ""}</p>
       <p>${currentStg?.staging_url || currentStg?.endpoint
         ? `<a href="${esc(currentStg.staging_url || currentStg.endpoint)}" target="_blank" rel="noopener noreferrer">開啟隔離網址</a>`
@@ -943,14 +965,22 @@ async function openCodingTask(taskId) {
     <div class="dev-col">
       <h3>發行候選</h3>
       <p class="src">Gate #2 只寫授權</p>
-      <p>${currentRel ? statusChip(currentRel.status) : "尚未組候選"}</p>
+      <p>${relErr ? `<span class="chip danger">讀取失敗</span>` : (currentRel ? statusChip(currentRel.status) : "尚未組候選")}</p>
       <p>manifest #${currentRel?.id || "—"} v${currentRel?.manifest_version || "—"}</p>
       <p>digest ${esc(shortSha(currentRel?.artifact_digest))}</p>
       <p>${currentRel?.fresh === false ? `已過期：${esc((currentRel.stale_reasons || []).join("、") || "—")}` : (currentRel ? "新鮮度足夠才能核准" : "QA 與 staging 都 PASS 才會出現")}</p>
     </div>`;
   $("devActions").hidden = false;
+  syncDevActionButtons();
   $("gate2Row").hidden = !(currentRel && currentRel.id && currentRel.fresh !== false && !currentRel.current_decision);
-  setStatus($("devDetailMsg"), "", "");
+  const loadErr = [stgErr ? (stgRes.data.error || "隔離 staging 讀取失敗") : "", relErr ? (relRes.data.error || "發行候選讀取失敗") : ""].filter(Boolean).join("；");
+  if (loadErr) {
+    setStatus($("devDetailMsg"), loadErr, "err");
+    $("devDetailMsg")?.setAttribute("role", "alert");
+  } else {
+    $("devDetailMsg")?.setAttribute("role", "status");
+    setStatus($("devDetailMsg"), "", "");
+  }
 }
 
 async function refreshAll() {
@@ -1063,8 +1093,17 @@ $("issuesRefresh").addEventListener("click", refreshIssues);
 $("devRefresh").addEventListener("click", refreshDev);
 $("productsRefresh").addEventListener("click", refreshProducts);
 $("devTable").addEventListener("click", (ev) => {
+  if (ev.target.closest("a")) return;
   const tr = ev.target.closest("tr[data-tid]");
   if (tr) openCodingTask(tr.dataset.tid);
+});
+$("devTable").addEventListener("keydown", (ev) => {
+  if (ev.target.closest("a")) return;
+  if (ev.key !== "Enter" && ev.key !== " ") return;
+  const tr = ev.target.closest("tr[data-tid]");
+  if (!tr) return;
+  ev.preventDefault();
+  openCodingTask(tr.dataset.tid);
 });
 $("devCancelTask").addEventListener("click", () => {
   if (!devOpen.taskId) return;
@@ -1084,11 +1123,19 @@ $("devCancelTask").addEventListener("click", () => {
     },
   });
 });
-$("devRedeploy").addEventListener("click", async () => {
+$("devRedeploy").addEventListener("click", () => {
   if (!devOpen.taskId) return;
-  const { res, data } = await api(`/ops/api/coding-tasks/${devOpen.taskId}/staging/redeploy`, { method: "POST" });
-  setStatus($("devDetailMsg"), res.ok ? "已要求重佈隔離 staging" : (data.error || "重佈失敗"), res.ok ? "ok" : "err");
-  if (res.ok) await openCodingTask(devOpen.taskId);
+  showConfirm({
+    title: "確認重佈隔離 staging",
+    body: `重佈製作任務 #${devOpen.taskId} 的隔離 staging？只動測試容器，正式站無感。`,
+    confirmLabel: "確定重佈",
+    danger: false,
+    onConfirm: async () => {
+      const { res, data } = await api(`/ops/api/coding-tasks/${devOpen.taskId}/staging/redeploy`, { method: "POST" });
+      setStatus($("devDetailMsg"), res.ok ? "已要求重佈隔離 staging" : (data.error || "重佈失敗"), res.ok ? "ok" : "err");
+      if (res.ok) await openCodingTask(devOpen.taskId);
+    },
+  });
 });
 $("devCancelStg").addEventListener("click", () => {
   if (!devOpen.stagingId) return;
