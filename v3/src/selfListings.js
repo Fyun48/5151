@@ -22,6 +22,7 @@ export const SELF_MAX_OPEN = 10;
 export const SELF_TTL_DAYS = 30;
 export const SELF_NEW_ACCOUNT_WAIT_MS = 24 * 60 * 60 * 1000;
 export const SELF_TITLE_MAX = 80;
+export const SELF_TITLE_MIN = 5;
 export const SELF_BODY_MAX = 500;
 export const SELF_BAN_DAYS = 14;
 export const SELF_BODY_MIN = 8;
@@ -254,6 +255,31 @@ export function nextSelfPostId(db) {
   const next = Math.max(SELF_POST_ID_BASE, current) + 1;
   if (next >= SELF_POST_ID_END) throw httpError("站內刊登編號已滿", 500);
   return next;
+}
+
+function publisherAvatar(db, uid) {
+  try {
+    return String(db.prepare("SELECT avatar_url FROM users WHERE id=?").get(uid)?.avatar_url || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function setPublisherFace(db, postId, uid) {
+  const avatar = publisherAvatar(db, uid);
+  try {
+    db.prepare("UPDATE listings SET avatar = ?, contact_uid = ? WHERE post_id = ?").run(avatar, String(uid), postId);
+  } catch {
+    try {
+      db.prepare("UPDATE listings SET avatar = ? WHERE post_id = ?").run(avatar, postId);
+    } catch { /* test schema may omit these columns */ }
+  }
+}
+
+function requireListingTitle(raw, fallback = "") {
+  const title = String(raw || fallback || "").trim().slice(0, SELF_TITLE_MAX);
+  if (title.length < SELF_TITLE_MIN) throw httpError(`標題至少 ${SELF_TITLE_MIN} 個字`);
+  return title;
 }
 
 export function composeSelfAddress(district, streetOrFull) {
@@ -493,7 +519,7 @@ export function createSelfListing(db, userId, input = {}, now = new Date(), { ma
   const role = roleId(input.role);
   const layout = layoutText(input);
   const floorName = floorText(input);
-  if (!floorName) throw httpError("請填所在樓層");
+  if (!floorName) throw httpError("請填出租樓層");
 
   let contactName = String(input.contact_name || "").trim().slice(0, SELF_CONTACT_MAX);
   if (!contactName) {
@@ -516,8 +542,7 @@ export function createSelfListing(db, userId, input = {}, now = new Date(), { ma
   const kindName = kindLabel(kind);
   const roleName = roleLabel(role);
   const areaName = `${String(Math.round(ping * 10) / 10).replace(/\.0$/, "")}坪`;
-  const title = String(input.title || "").trim().slice(0, SELF_TITLE_MAX)
-    || `${district.city}${district.name} ${kindName} ${rent}元`;
+  const title = requireListingTitle(input.title);
 
   const created = iso(now);
   const expires = new Date(nowMs(now) + SELF_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString();
@@ -595,6 +620,7 @@ export function createSelfListing(db, userId, input = {}, now = new Date(), { ma
     lineUrl,
     postId,
   );
+  setPublisherFace(db, postId, uid);
 
   const listing = db.prepare("SELECT * FROM listings WHERE post_id = ?").get(postId);
   const candidates = typeof matchCandidates === "function"
@@ -858,7 +884,7 @@ export function publishImportedDraftListing(db, userId, postId, input = {}, now 
   const role = roleId(input.role);
   const layout = layoutText(input);
   const floorName = floorText(input);
-  if (!floorName) throw httpError("請填所在樓層");
+  if (!floorName) throw httpError("請填出租樓層");
   let contactName = String(input.contact_name || "").trim().slice(0, SELF_CONTACT_MAX);
   if (!contactName) {
     try {
@@ -876,8 +902,7 @@ export function publishImportedDraftListing(db, userId, postId, input = {}, now 
   const kindName = kindLabel(kind);
   const roleName = roleLabel(role);
   const areaName = `${String(Math.round(ping * 10) / 10).replace(/\.0$/, "")}坪`;
-  const title = String(input.title != null ? input.title : row.title || "").trim().slice(0, SELF_TITLE_MAX)
-    || `${district.city}${district.name} ${kindName} ${rent}元`;
+  const title = requireListingTitle(input.title != null ? input.title : row.title);
   const created = iso(now);
   const expires = new Date(nowMs(now) + SELF_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString();
   const sourceKey = selfSourceKey({
@@ -927,6 +952,7 @@ export function publishImportedDraftListing(db, userId, postId, input = {}, now 
     created,
     row.post_id,
   );
+  setPublisherFace(db, row.post_id, uid);
   const listing = db.prepare("SELECT * FROM listings WHERE post_id = ?").get(row.post_id);
   const candidates = typeof matchCandidates === "function" ? matchCandidates(listing) : [];
   const hit = bestMatch(listing, candidates);
