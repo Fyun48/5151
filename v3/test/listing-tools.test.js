@@ -289,15 +289,15 @@ test("double copy with the same idempotency key reuses one draft", () => {
 test("copied draft publishes through normal pledge flow without changing the original", () => {
   const db = open();
   addUser(db, { id: 1, email: "a@example.com" });
-  const original = createSelfListing(db, 1, sampleInput({ title: "原刊登" }));
+  const original = createSelfListing(db, 1, sampleInput({ title: "原來的刊登標題" }));
   const copied = copyOwnListing(db, 1, original.post_id);
   const published = publishOwnedDraftListing(db, 1, copied.listing.post_id, {
-    ...sampleInput({ title: "複製後刊登", phone: "0987654321" }),
+    ...sampleInput({ title: "複製後刊登草稿", phone: "0987654321" }),
   });
   assert.equal(published.status, "open");
-  assert.equal(published.title, "複製後刊登");
+  assert.equal(published.title, "複製後刊登草稿");
   assert.equal(published.phone, "0987654321");
-  assert.equal(getSelfListing(db, original.post_id, { viewerId: 1 }).title, "原刊登");
+  assert.equal(getSelfListing(db, original.post_id, { viewerId: 1 }).title, "原來的刊登標題");
   assert.equal(getSelfListing(db, original.post_id, { viewerId: 1 }).phone, "0912345678");
   db.close();
 });
