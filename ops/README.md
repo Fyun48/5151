@@ -3,7 +3,8 @@
 給 **Owner** 用的內網系統：把各站使用者回饋累積成議題，評估後再決定要不要開發。  
 **Owner 直接下令改程式並部署，不必走這條線。**
 
-目標藍圖（可換 AI、測試站、Gate #2、退回、多站、設計模組）見 [`PLAN.md`](PLAN.md)。
+目標藍圖（可換 AI、測試站、Gate #2、退回、多站、分家退出、CRM、設計模組）見 [`PLAN.md`](PLAN.md)。  
+v3 外掛／預算熔斷／進階比對見 [`../v3/PLAN-integrations.md`](../v3/PLAN-integrations.md)。
 
 Console：本機 `http://127.0.0.1:5154`；正式機走同一條 Tunnel → `https://jibbyrentops.reversalplay.me`（容器只綁 `127.0.0.1:5154`）。
 

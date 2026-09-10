@@ -5,7 +5,7 @@
 | 上線物 | 目錄 | 容器 | 公開網址 | 怎麼部署 |
 | --- | --- | --- | --- | --- |
 | 吉比租房（v3） | `v3/` | `591-tracker-v3` | https://c5151.reversalplay.me | GitHub **Deploy v3** |
-| OPS 維運台 | `ops/` | `5151-ops` | https://jibbyrentops.reversalplay.me | 目前尚無 Deploy OPS；規劃見 [`ops/PLAN.md`](ops/PLAN.md) |
+| OPS 維運台 | `ops/` | `5151-ops` | https://jibbyrentops.reversalplay.me | 目前尚無 Deploy OPS；多站／分家／CRM 見 [`ops/PLAN.md`](ops/PLAN.md) |
 
 ## 吉比租房物件追蹤（v3）
 

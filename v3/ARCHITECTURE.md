@@ -6,7 +6,8 @@
 - v2：`v2/`，埠 5152，`https://b5151.reversalplay.me`，資料 `data-v2/v2.db`（不再改功能）
 - 本目錄：埠 5153，`https://c5151.reversalplay.me`，資料 `data-v3/v3.db`
 
-之後功能只做這份。畫面上的產品名仍是「吉比租房物件追蹤」，版本只在頁尾寫 `ver. 3.51`。
+之後功能只做這份。畫面上的產品名仍是「吉比租房物件追蹤」，版本只在頁尾寫 `ver. 3.51`。  
+外掛、預算硬熔斷、pHash／LLM 比對規劃見 `PLAN-integrations.md`（不依賴 OPS 在線）。
 
 ## 這版多了什麼
 
