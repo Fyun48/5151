@@ -177,6 +177,12 @@ function renderProductCards() {
         ${!exited ? `<button type="button" data-pid="${esc(p.id)}" data-pact="rotate-credential" aria-label="輪替 ${esc(name)} 的密鑰">輪替密鑰</button>` : ""}
         ${!exited ? `<button type="button" class="danger" data-pid="${esc(p.id)}" data-pact="unsubscribe" aria-label="解除訂閱 ${esc(name)}">解除訂閱</button>` : ""}
       </div>
+      <p class="hint">退出四件事：暫停功能、解除訂閱、移交交接包、刪除 OPS 複本。</p>
+      <div class="row actions exit-actions">
+        <button type="button" data-pid="${esc(p.id)}" data-pact="pending" aria-label="查看 ${esc(name)} 的未決清單">未決清單</button>
+        <button type="button" data-pid="${esc(p.id)}" data-pact="handoff" aria-label="匯出 ${esc(name)} 交接包">移交整站</button>
+        <button type="button" class="danger" data-pid="${esc(p.id)}" data-pact="purge-replica" aria-label="刪除 ${esc(name)} 的 OPS 複本">刪除 OPS 複本</button>
+      </div>
     </article>`;
   }).join("");
 }
@@ -205,12 +211,51 @@ async function refreshProducts() {
   renderProductCards();
 }
 
+function showExitDetail(id, data) {
+  const box = $("exitDetail");
+  if (!box) return;
+  box.hidden = false;
+  const pending = data.pending || data.exit?.pending || { items: [] };
+  const lines = [];
+  if (data.manifest) {
+    lines.push(`交接包 sha256=${data.sha256 || data.manifest.sha256}`);
+    lines.push(`回饋 ${data.manifest.feedback_count ?? data.payload?.feedback?.length ?? 0} 筆`);
+  }
+  if (data.purged != null) lines.push(`已清除 OPS 複本 ${data.purged} 筆內容`);
+  if (data.exit?.notes) lines.push(data.exit.notes);
+  if (data.site_delivery_unconfirmed) lines.push("OPS 權限已撤銷；本站停止遞送尚未由此畫面確認。");
+  const items = pending.items || [];
+  lines.push(items.length ? `未決 ${items.length} 項` : "沒有未決工作");
+  for (const it of items) {
+    lines.push(`- ${it.kind} #${it.id} ${it.state}${it.blocking ? "（阻擋）" : ""}${it.unscoped ? "（尚未分站）" : ""} ${it.note || ""}`);
+  }
+  $("exitDetailTitle").textContent = `${id} · 退出／移交`;
+  $("exitDetailHint").textContent = data.exit?.action ? `最近動作：${data.exit.action}（${data.exit.exit_status}）` : "未決與交接摘要";
+  $("exitDetailBody").textContent = lines.join("\n");
+  box.scrollIntoView({ block: "nearest" });
+}
+
+async function loadPending(id) {
+  const { res, data } = await api(`/ops/api/products/${encodeURIComponent(id)}/pending`);
+  if (!res.ok) {
+    setStatus($("productMsg"), humanError(data.error), "err");
+    return;
+  }
+  showExitDetail(id, data);
+  setStatus($("productMsg"), "已載入未決清單", "ok");
+}
+
 async function runProductAction(id, action) {
   if (productBusy) return;
   setProductBusy(true);
   setStatus($("productMsg"), "處理中…");
   try {
-    const { res, data } = await api(`/ops/api/products/${encodeURIComponent(id)}/${action}`, { method: "POST" });
+    const opts = { method: "POST" };
+    if (action === "purge-replica") {
+      opts.headers = { "Content-Type": "application/json" };
+      opts.body = JSON.stringify({ confirm: `PURGE-${id}` });
+    }
+    const { res, data } = await api(`/ops/api/products/${encodeURIComponent(id)}/${action}`, opts);
     if (!res.ok) {
       setStatus($("productMsg"), humanError(data.error), "err");
       return;
@@ -221,10 +266,15 @@ async function runProductAction(id, action) {
       unsubscribe: "已解除訂閱，密鑰已撤銷",
       reconnect: "已重新連接",
       "rotate-credential": "已輪替密鑰",
+      handoff: "已匯出交接包",
+      "purge-replica": "已刪除 OPS 複本內容",
     };
     setStatus($("productMsg"), labels[action] || "已完成", "ok");
     if (data.ingest_secret) {
       showSecret(data.ingest_secret, action === "reconnect" ? "重新連接" : "輪替密鑰");
+    }
+    if (data.pending || data.exit || data.manifest) {
+      showExitDetail(id, data);
     }
     await refreshProducts();
   } finally {
@@ -288,6 +338,28 @@ function requestProductAction(id, action) {
       body: `確定重新連接「${name}」（${id}）？會開新的訂閱世代並發出新密鑰，舊密鑰失效。`,
       confirmLabel: "確定重連",
       onConfirm: () => runProductAction(id, "reconnect"),
+    });
+    return;
+  }
+  if (action === "pending") {
+    loadPending(id);
+    return;
+  }
+  if (action === "handoff") {
+    showConfirm({
+      title: "確認匯出交接包",
+      body: `匯出「${name}」（${id}）的可驗證交接包。不含金鑰與其它站資料。本機主本仍在對方站。`,
+      confirmLabel: "匯出",
+      onConfirm: () => runProductAction(id, "handoff"),
+    });
+    return;
+  }
+  if (action === "purge-replica") {
+    showConfirm({
+      title: "確認刪除 OPS 複本",
+      body: `確定清除「${name}」（${id}）在 OPS 的回饋複本內容？本機主本不會動。這不是暫停，也不能靠這一步還原複本。`,
+      confirmLabel: "確定清除",
+      onConfirm: () => runProductAction(id, "purge-replica"),
     });
     return;
   }

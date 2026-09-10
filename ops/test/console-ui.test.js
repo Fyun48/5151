@@ -51,5 +51,9 @@ test("console has product cards, switcher, and one-time secret", () => {
   assert.match(js, /使用中/);
   assert.match(js, /aria-label/);
   assert.match(js, /productId=/);
+  assert.match(html, /移交整站/);
+  assert.match(html, /刪除 OPS 複本/);
+  assert.match(js, /handoff|purge-replica|pending/);
+  assert.match(js, /PURGE-\$/);
   assert.match(css, /overflow-x:\s*hidden/);
 });

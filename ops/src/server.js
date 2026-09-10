@@ -24,6 +24,14 @@ import {
   unsubscribeProduct,
 } from "./products.js";
 import {
+  beginUnsubscribeExit,
+  exportHandoff,
+  latestHandoff,
+  listExits,
+  listPendingWork,
+  purgeReplica,
+} from "./exitDrill.js";
+import {
   acceptAttachment,
   getAttachmentRow,
   publicAttachmentMeta,
@@ -526,7 +534,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         }
         return;
       }
-      const productAction = pathname.match(/^\/ops\/api\/products\/([a-z0-9_-]+)\/(pause|resume|unsubscribe|reconnect|rotate-credential)$/);
+      const productAction = pathname.match(/^\/ops\/api\/products\/([a-z0-9_-]+)\/(pause|resume|unsubscribe|reconnect|rotate-credential|handoff|purge-replica)$/);
       if (productAction && method === "POST") {
         if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
         const [, productId, action] = productAction;
@@ -534,12 +542,32 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         try {
           if (action === "pause") sendJson(res, 200, { ok: true, product: pauseProduct(db, productId, { actor }) });
           else if (action === "resume") sendJson(res, 200, { ok: true, product: resumeProduct(db, productId, { actor }) });
-          else if (action === "unsubscribe") sendJson(res, 200, { ok: true, product: unsubscribeProduct(db, productId, { actor }) });
+          else if (action === "unsubscribe") sendJson(res, 200, { ok: true, ...beginUnsubscribeExit(db, productId, { actor }) });
           else if (action === "reconnect") sendJson(res, 200, { ok: true, ...reconnectProduct(db, productId, { actor }) });
-          else sendJson(res, 200, { ok: true, ...rotateCredential(db, productId, { actor }) });
+          else if (action === "handoff") sendJson(res, 200, { ok: true, ...exportHandoff(db, productId, { actor }) });
+          else if (action === "purge-replica") {
+            const body = await readBody(req);
+            sendJson(res, 200, { ok: true, ...purgeReplica(db, productId, { actor, confirm: body?.confirm }) });
+          } else sendJson(res, 200, { ok: true, ...rotateCredential(db, productId, { actor }) });
         } catch (err) {
           sendJson(res, err.status || 400, { error: err.message });
         }
+        return;
+      }
+      const productPending = pathname.match(/^\/ops\/api\/products\/([a-z0-9_-]+)\/pending$/);
+      if (productPending && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        const row = getProduct(db, productPending[1]);
+        if (!row) { sendJson(res, 404, { error: "not found" }); return; }
+        sendJson(res, 200, { product: publicProduct(row), pending: listPendingWork(db, row.id), exits: listExits(db, row.id) });
+        return;
+      }
+      const productHandoffGet = pathname.match(/^\/ops\/api\/products\/([a-z0-9_-]+)\/handoff$/);
+      if (productHandoffGet && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        const pack = latestHandoff(db, productHandoffGet[1]);
+        if (!pack) { sendJson(res, 404, { error: "not found" }); return; }
+        sendJson(res, 200, pack);
         return;
       }
       const productGet = pathname.match(/^\/ops\/api\/products\/([a-z0-9_-]+)$/);
@@ -547,7 +575,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         if (!runGuard(auth.requireOwner, req, reply)) return;
         const row = getProduct(db, productGet[1]);
         if (!row) { sendJson(res, 404, { error: "not found" }); return; }
-        sendJson(res, 200, publicProduct(row));
+        sendJson(res, 200, { ...publicProduct(row), pending: listPendingWork(db, row.id), latest_exit: listExits(db, row.id)[0] || null });
         return;
       }
       if (pathname === "/ops/api/dashboard" && method === "GET") {

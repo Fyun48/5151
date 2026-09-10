@@ -88,6 +88,32 @@ export function applyOpsSchema(db) {
     );
     CREATE INDEX IF NOT EXISTS idx_product_cred_active ON product_ingest_credential(product_id, status);
 
+    -- 第 3 包：退出紀錄與交接包（exit_status 不是議題 lifecycle）。
+    CREATE TABLE IF NOT EXISTS product_exit_record (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id TEXT NOT NULL,
+      generation INTEGER NOT NULL DEFAULT 1,
+      action TEXT NOT NULL,
+      exit_status TEXT NOT NULL,
+      pending_json TEXT,
+      notes TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT,
+      FOREIGN KEY (product_id) REFERENCES ops_product(id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS idx_exit_record_product ON product_exit_record(product_id, id);
+    CREATE TABLE IF NOT EXISTS product_handoff_export (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id TEXT NOT NULL,
+      exit_record_id INTEGER,
+      manifest_json TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      sha256 TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (product_id) REFERENCES ops_product(id) ON DELETE RESTRICT
+    );
+
     -- Phase 2：從 Product 非同步遞送進來的 feedback。
     -- 去重範圍是 (product_id, delivery_id) / (product_id, idempotency_key)，避免 A、B 各送 feedback:1 撞號。
     -- trust_level 一律 untrusted；Phase 2 只儲存與傳輸，不執行任何內容。
@@ -1166,7 +1192,35 @@ export function applyOpsSchema(db) {
   upgradeMigrationSafetyImmutability(db);
   upgradeProductionReleaseImmutability(db);
   upgradeProductIsolation(db);
+  upgradeExitDrill(db);
   return db;
+}
+
+export function upgradeExitDrill(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS product_exit_record (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id TEXT NOT NULL,
+      generation INTEGER NOT NULL DEFAULT 1,
+      action TEXT NOT NULL,
+      exit_status TEXT NOT NULL,
+      pending_json TEXT,
+      notes TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_exit_record_product ON product_exit_record(product_id, id);
+    CREATE TABLE IF NOT EXISTS product_handoff_export (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id TEXT NOT NULL,
+      exit_record_id INTEGER,
+      manifest_json TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      sha256 TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+  `);
 }
 
 // CREATE TRIGGER IF NOT EXISTS 不會升級已存在的舊 trigger；每次開庫重裝全欄位不可變。
