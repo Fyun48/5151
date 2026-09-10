@@ -29,6 +29,7 @@
   --hermes-deep: #C2410C;
   --hermes-light: #F47A2A;
   --shezi-red: #DC2626;
+  /* webhook／站內通知 dock 專用，禁止套到找房列表內文 */
   --notify-new: #7dd3fc;
   --notify-new-fg: #075985;
   --notify-relist: #86efac;

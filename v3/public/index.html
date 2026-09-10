@@ -739,10 +739,6 @@
       padding: 8px 0 0;
     }
     .bulk-bar.on { display: flex; }
-    .listing-status.off-sure { color: var(--offline-sure, #dc2626); font-weight: 700; }
-    .listing-status.off { color: var(--muted); }
-    .listing-status.relist { color: var(--notify-relist-fg, #166534); }
-    .listing-status.new { color: var(--notify-new-fg, #075985); }
     .item.drag-source { opacity: 0.55; }
     .item.drag-over { box-shadow: 0 0 0 2px var(--accent); }
     .merge-drag-ghost {
@@ -1156,7 +1152,7 @@
     .cost-change-note {
       margin: 6px 0 0;
       font-size: var(--text-xs, 12px);
-      color: var(--notify-fee-fg, #9d174d);
+      color: var(--same);
       font-weight: 700;
       line-height: 1.45;
       font-variant-numeric: tabular-nums;
@@ -1308,8 +1304,7 @@
       min-height: var(--touch, 44px);
       margin-top: 2px;
     }
-    .tag.new { background: #e0f2fe; color: var(--notify-new-fg, #075985); }
-    .tag.relist { background: #dcfce7; color: var(--notify-relist-fg, #166534); }
+    .tag.new { background: var(--accent-mist); color: var(--accent-deep); }
     .tag.same { background: var(--same-soft); color: var(--same); }
     .tag.watch { background: var(--rose-soft); color: var(--watch); }
     .watch-note-label { margin: 8px 0 4px; font-size: 12px; color: var(--rose-deep); font-weight: 700; }
@@ -1349,7 +1344,7 @@
     }
     .tag.lift { background: var(--tag-on-bg); color: var(--tag-on-fg); }
     .tag.off { background: var(--tag-off-bg); color: var(--tag-off-fg); }
-    .tag.off-sure { background: #fee2e2; color: var(--offline-sure, #dc2626); }
+    .tag.off-sure { background: var(--tag-strong-bg); color: var(--tag-strong-fg); }
     .tag.verdict-yes { background: var(--tag-strong-bg); color: var(--tag-strong-fg); font-weight: 700; }
     .tag.verdict-no { background: var(--tag-on-bg); color: var(--tag-on-fg); font-weight: 700; }
     .tag.self-src { background: var(--accent-mist); color: var(--accent-deep); font-weight: 800; }
@@ -2227,6 +2222,15 @@
     .support-benefits { margin: 6px 0 0; padding-left: 1.1em; color: var(--muted); font-size: var(--text-xs); }
     .dock-item.system .tag.system { background: var(--accent-soft); color: var(--accent-deep); }
     .dock-item.sponsored .tag.sponsored { background: var(--line); color: var(--ink); }
+    /* 通知文字色對齊 webhook embed；只套站內通知 dock／通知設定，不用在找房列表 */
+    .dock-item .tag.notify-new { background: #e0f2fe; color: var(--notify-new-fg); }
+    .dock-item .tag.notify-relist { background: #dcfce7; color: var(--notify-relist-fg); }
+    .dock-item .tag.notify-fee { background: #fce7f3; color: var(--notify-fee-fg); }
+    .dock-item .tag.notify-off { background: var(--tag-off-bg); color: var(--tag-off-fg); }
+    .dock-item .tag.notify-off-sure { background: #fee2e2; color: var(--offline-sure); }
+    .notify-matrix .notify-event.new { color: var(--notify-new-fg); font-weight: 700; }
+    .notify-matrix .notify-event.relist { color: var(--notify-relist-fg); font-weight: 700; }
+    .notify-matrix .notify-event.off { color: var(--muted); font-weight: 700; }
     .owner-list { display: grid; gap: 10px; margin-top: 12px; }
     body:not(.role-admin) .admin-only { display: none !important; }
     body.role-admin .member-only { display: none !important; }
@@ -3676,7 +3680,7 @@
           </thead>
           <tbody>
             <tr>
-              <td>全新物件</td>
+              <td class="notify-event new">全新物件</td>
               <td><input type="checkbox" data-notify-row="new" data-notify-ch="dock" checked /></td>
               <td><input type="checkbox" data-notify-row="new" data-notify-ch="push" checked /></td>
               <td><input type="checkbox" data-notify-row="new" data-notify-ch="webhook" /></td>
@@ -3711,14 +3715,14 @@
               <td><input type="checkbox" data-notify-row="update" data-notify-ch="mail" /></td>
             </tr>
             <tr>
-              <td>591 下架</td>
+              <td class="notify-event off">591 下架</td>
               <td><input type="checkbox" data-notify-row="offline" data-notify-ch="dock" checked /></td>
               <td><input type="checkbox" data-notify-row="offline" data-notify-ch="push" checked /></td>
               <td><input type="checkbox" data-notify-row="offline" data-notify-ch="webhook" /></td>
               <td><input type="checkbox" data-notify-row="offline" data-notify-ch="mail" /></td>
             </tr>
             <tr>
-              <td>重新上架</td>
+              <td class="notify-event relist">重新上架</td>
               <td><input type="checkbox" data-notify-row="relist" data-notify-ch="dock" checked /></td>
               <td><input type="checkbox" data-notify-row="relist" data-notify-ch="push" checked /></td>
               <td><input type="checkbox" data-notify-row="relist" data-notify-ch="webhook" /></td>
@@ -4700,13 +4704,6 @@
       if (item?.last_event === "relist" || (item?.last_event === "same_source" && item?.offline === 0)) return "重新上架";
       return "刊登中";
     }
-    function listingStatusClass(item) {
-      if (Number(item?.offline_confirmed) === 1 || item?.offline_confirmed === true) return "off-sure";
-      if (Number(item?.offline) === 1 || item?.offline === true || item?.last_event === "offline") return "off";
-      if (item?.last_event === "relist") return "relist";
-      if (item?.last_event === "new") return "new";
-      return "";
-    }
     function rentStatusLine(item) {
       const rent = parseClientRent(item);
       const extra = extraClientMonthly(item);
@@ -4716,11 +4713,7 @@
         ? `租金 ${rent.toLocaleString("zh-TW")} 元/月`
         : `租金 ${item.price || ""} ${item.price_unit || "元/月"}`.trim());
       if (extra > 0 && total > 0) bits.push(`總月費 ${total.toLocaleString("zh-TW")} 元/月`);
-      const status = listingStatusLabel(item);
-      const cls = listingStatusClass(item);
-      bits.push(cls
-        ? `狀態：<span class="listing-status ${cls}">${esc(status)}</span>`
-        : `狀態：${esc(status)}`);
+      bits.push(`狀態：${listingStatusLabel(item)}`);
       return bits.join(" · ");
     }
     function feeTextClient(item) {
@@ -6013,7 +6006,7 @@
       if (!item.offline) return "";
       const day = item.offline_at ? String(item.offline_at).slice(0, 10) : "";
       if (item.offline_confirmed) {
-        return ` · <span class="listing-status off-sure">確認已下架</span>${day ? `（自 ${esc(day)} 起找不到）` : ""}`;
+        return ` · 確認已下架${day ? `（自 ${esc(day)} 起找不到）` : ""}`;
       }
       return ` · 確認下架中${day ? `（${esc(day)} 起）` : ""}`;
     }
@@ -10091,6 +10084,22 @@
       }
       return out;
     }
+    function dockEventLabel(item) {
+      if (item.type === "offline") {
+        return Number(item.offline_confirmed) === 1 ? "確認已下架" : "確認下架中";
+      }
+      if (item.type === "fee_update") return "費用變更";
+      return eventText[item.type] || item.type_label || item.type;
+    }
+    function dockEventClass(item) {
+      if (item.type === "new") return "notify-new";
+      if (item.type === "relist") return "notify-relist";
+      if (item.type === "fee_update") return "notify-fee";
+      if (item.type === "offline") {
+        return Number(item.offline_confirmed) === 1 ? "notify-off-sure" : "notify-off";
+      }
+      return "same";
+    }
     function dockChangeHtml(item) {
       const changes = parseNotifyChanges(item.detail);
       if (!changes.length) return "";
@@ -10123,7 +10132,7 @@
       const dock = $("alertDock");
       const inboxHtml = (list) => list.map((item) => `
         <div class="dock-item" data-dock-key="${esc(dockItemKey(item))}">
-          <div class="tags">${sourceTagHtml(item)}<span class="tag ${item.type === "new" ? "new" : "same"}">${eventText[item.type] || item.type_label || item.type}</span></div>
+          <div class="tags">${sourceTagHtml(item)}<span class="tag ${dockEventClass(item)}">${esc(dockEventLabel(item))}</span></div>
           <h3 style="margin:6px 0 4px;font-size:16px">
             <a href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-dock-open="${item.post_id}">${esc(item.title || "物件")}</a>
           </h3>
