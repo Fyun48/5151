@@ -96,8 +96,9 @@
     }
     .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    #crm.admin-panel, #crm .card, .crm-table-wrap { min-width: 0; max-width: 100%; }
     .crm-table-wrap { margin-top: 14px; overflow-x: auto; }
-    .crm-table-wrap table { min-width: 560px; }
+    .crm-table-wrap table { min-width: 560px; width: max-content; }
     th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
     th { color: var(--muted); font-weight: 600; }
     .member-interval { width: 72px; }
