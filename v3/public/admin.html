@@ -84,6 +84,9 @@
       display: inline-flex;
       align-items: center;
     }
+    button[hidden], a.ghost[hidden], a.primary[hidden] {
+      display: none !important;
+    }
     .primary { background: var(--accent); color: var(--primary-foreground); }
     .ghost { background: var(--paper); color: var(--ink); border: 1px solid var(--line); }
     button:disabled { opacity: 0.5; cursor: wait; }
