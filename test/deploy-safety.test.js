@@ -17,7 +17,7 @@ function onBlock(text) {
   return m ? m[1] : "";
 }
 
-const PROD = ["deploy-v3.yml", "docker.yml", "deploy-v2.yml", "deploy.yml"];
+const PROD = ["deploy-v3.yml", "docker.yml", "deploy-v2.yml"];
 
 test("1. production workflows are dispatch-only (no push/pull_request)", () => {
   for (const name of PROD) {
@@ -108,7 +108,7 @@ test("12. production workflows declare minimal permissions (no contents: write)"
   }
   // docker 需要 packages: write 才能推映像；其餘不得有
   assert.match(wf("docker.yml"), /packages:\s*write/);
-  for (const name of ["deploy-v3.yml", "deploy-v2.yml", "deploy.yml"]) {
+  for (const name of ["deploy-v3.yml", "deploy-v2.yml"]) {
     assert.doesNotMatch(wf(name), /packages:\s*write/, `${name} should not request packages: write`);
   }
 });

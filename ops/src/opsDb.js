@@ -57,13 +57,71 @@ export function applyOpsSchema(db) {
       created_at TEXT NOT NULL
     );
 
+    -- 多站身分：穩定 product_id，不以顯示名／目錄當安全識別。
+    CREATE TABLE IF NOT EXISTS ops_product (
+      id TEXT PRIMARY KEY,
+      display_name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS product_subscription (
+      product_id TEXT PRIMARY KEY,
+      generation INTEGER NOT NULL DEFAULT 1,
+      status TEXT NOT NULL DEFAULT 'connected',
+      capabilities TEXT,
+      started_at TEXT,
+      ended_at TEXT,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (product_id) REFERENCES ops_product(id) ON DELETE RESTRICT
+    );
+    CREATE TABLE IF NOT EXISTS product_ingest_credential (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id TEXT NOT NULL,
+      generation INTEGER NOT NULL DEFAULT 1,
+      secret TEXT NOT NULL,
+      label TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL,
+      revoked_at TEXT,
+      FOREIGN KEY (product_id) REFERENCES ops_product(id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS idx_product_cred_active ON product_ingest_credential(product_id, status);
+
+    -- 第 3 包：退出紀錄與交接包（exit_status 不是議題 lifecycle）。
+    CREATE TABLE IF NOT EXISTS product_exit_record (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id TEXT NOT NULL,
+      generation INTEGER NOT NULL DEFAULT 1,
+      action TEXT NOT NULL,
+      exit_status TEXT NOT NULL,
+      pending_json TEXT,
+      notes TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT,
+      FOREIGN KEY (product_id) REFERENCES ops_product(id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS idx_exit_record_product ON product_exit_record(product_id, id);
+    CREATE TABLE IF NOT EXISTS product_handoff_export (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id TEXT NOT NULL,
+      exit_record_id INTEGER,
+      manifest_json TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      sha256 TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (product_id) REFERENCES ops_product(id) ON DELETE RESTRICT
+    );
+
     -- Phase 2：從 Product 非同步遞送進來的 feedback。
-    -- delivery_id / idempotency_key 皆唯一 → 重複遞送只會有一筆邏輯紀錄（冪等）。
+    -- 去重範圍是 (product_id, delivery_id) / (product_id, idempotency_key)，避免 A、B 各送 feedback:1 撞號。
     -- trust_level 一律 untrusted；Phase 2 只儲存與傳輸，不執行任何內容。
     CREATE TABLE IF NOT EXISTS ingested_feedback (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      delivery_id TEXT NOT NULL UNIQUE,
-      idempotency_key TEXT NOT NULL UNIQUE,
+      product_id TEXT NOT NULL DEFAULT 'v3',
+      delivery_id TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
       source TEXT NOT NULL DEFAULT 'unknown',
       external_feedback_id TEXT,
       user_ref TEXT,
@@ -75,7 +133,9 @@ export function applyOpsSchema(db) {
       submitted_at TEXT,
       trust_level TEXT NOT NULL DEFAULT 'untrusted',
       payload_hash TEXT,
-      received_at TEXT NOT NULL
+      received_at TEXT NOT NULL,
+      UNIQUE(product_id, delivery_id),
+      UNIQUE(product_id, idempotency_key)
     );
 
     -- Phase 3：附件 metadata。內容存於 Storage Provider；此處只存不透明 object_key。
@@ -1092,7 +1152,7 @@ export function applyOpsSchema(db) {
     );
 
     CREATE TABLE IF NOT EXISTS production_stable_current (
-      id INTEGER PRIMARY KEY CHECK (id = 1),
+      product_id TEXT PRIMARY KEY,
       release_run_id INTEGER,
       source_sha TEXT,
       artifact_digest TEXT,
@@ -1131,7 +1191,36 @@ export function applyOpsSchema(db) {
   `);
   upgradeMigrationSafetyImmutability(db);
   upgradeProductionReleaseImmutability(db);
+  upgradeProductIsolation(db);
+  upgradeExitDrill(db);
   return db;
+}
+
+export function upgradeExitDrill(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS product_exit_record (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id TEXT NOT NULL,
+      generation INTEGER NOT NULL DEFAULT 1,
+      action TEXT NOT NULL,
+      exit_status TEXT NOT NULL,
+      pending_json TEXT,
+      notes TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_exit_record_product ON product_exit_record(product_id, id);
+    CREATE TABLE IF NOT EXISTS product_handoff_export (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id TEXT NOT NULL,
+      exit_record_id INTEGER,
+      manifest_json TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      sha256 TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+  `);
 }
 
 // CREATE TRIGGER IF NOT EXISTS 不會升級已存在的舊 trigger；每次開庫重裝全欄位不可變。
@@ -1229,6 +1318,143 @@ function ensureProductionReleaseBindingColumns(db) {
   addIfMissing("production_stable_current", [
     ["provenance_fingerprint", "TEXT"],
   ]);
+}
+
+// 舊庫：ingest 去重是全域 UNIQUE；穩定版是 id=1。既有列明確歸入 v3，不猜「目前選取站」。
+export function upgradeProductIsolation(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ops_product (
+      id TEXT PRIMARY KEY,
+      display_name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS product_subscription (
+      product_id TEXT PRIMARY KEY,
+      generation INTEGER NOT NULL DEFAULT 1,
+      status TEXT NOT NULL DEFAULT 'connected',
+      capabilities TEXT,
+      started_at TEXT,
+      ended_at TEXT,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS product_ingest_credential (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id TEXT NOT NULL,
+      generation INTEGER NOT NULL DEFAULT 1,
+      secret TEXT NOT NULL,
+      label TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL,
+      revoked_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_product_cred_active ON product_ingest_credential(product_id, status);
+  `);
+
+  const ts = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO ops_product(id, display_name, status, created_at, updated_at)
+    VALUES ('v3', '吉比租房', 'active', ?, ?)
+    ON CONFLICT(id) DO NOTHING
+  `).run(ts, ts);
+  db.prepare(`
+    INSERT INTO product_subscription(product_id, generation, status, capabilities, started_at, updated_at)
+    VALUES ('v3', 1, 'connected', '{"feedback_copy":true}', ?, ?)
+    ON CONFLICT(product_id) DO NOTHING
+  `).run(ts, ts);
+
+  migrateIngestedFeedbackProductScope(db);
+  migrateProductionStableProductScope(db);
+
+  const envSecret = process.env.OPS_INGEST_SECRET || "";
+  if (envSecret) {
+    const exists = db.prepare(
+      "SELECT id FROM product_ingest_credential WHERE product_id='v3' AND status='active' AND secret=?",
+    ).get(envSecret);
+    if (!exists) {
+      db.prepare(`
+        INSERT INTO product_ingest_credential(product_id, generation, secret, label, status, created_at)
+        VALUES ('v3', 1, ?, 'legacy-env', 'active', ?)
+      `).run(envSecret, ts);
+    }
+  }
+}
+
+function migrateIngestedFeedbackProductScope(db) {
+  let cols = [];
+  try { cols = tableColumns(db, "ingested_feedback"); } catch { return; }
+  if (!cols.length) return;
+  if (cols.includes("product_id")) {
+    db.exec("CREATE INDEX IF NOT EXISTS idx_ingested_product ON ingested_feedback(product_id, id)");
+    return;
+  }
+  db.exec("PRAGMA foreign_keys = OFF");
+  db.exec(`
+    CREATE TABLE ingested_feedback_v2 (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id TEXT NOT NULL DEFAULT 'v3',
+      delivery_id TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'unknown',
+      external_feedback_id TEXT,
+      user_ref TEXT,
+      kind TEXT,
+      content TEXT,
+      contact TEXT,
+      context TEXT,
+      app_version TEXT,
+      submitted_at TEXT,
+      trust_level TEXT NOT NULL DEFAULT 'untrusted',
+      payload_hash TEXT,
+      received_at TEXT NOT NULL,
+      UNIQUE(product_id, delivery_id),
+      UNIQUE(product_id, idempotency_key)
+    );
+    INSERT INTO ingested_feedback_v2 (
+      id, product_id, delivery_id, idempotency_key, source, external_feedback_id, user_ref, kind,
+      content, contact, context, app_version, submitted_at, trust_level, payload_hash, received_at
+    )
+    SELECT id, 'v3', delivery_id, idempotency_key, source, external_feedback_id, user_ref, kind,
+           content, contact, context, app_version, submitted_at, trust_level, payload_hash, received_at
+      FROM ingested_feedback;
+    DROP TABLE ingested_feedback;
+    ALTER TABLE ingested_feedback_v2 RENAME TO ingested_feedback;
+    CREATE INDEX IF NOT EXISTS idx_ingested_product ON ingested_feedback(product_id, id);
+  `);
+  db.exec("PRAGMA foreign_keys = ON");
+}
+
+function migrateProductionStableProductScope(db) {
+  let cols = [];
+  try { cols = tableColumns(db, "production_stable_current"); } catch { return; }
+  if (!cols.length) return;
+  if (cols.includes("product_id") && !cols.includes("id")) return;
+  if (cols.includes("product_id") && cols.includes("id")) {
+    // 極少見的半遷移：已有 product_id 但仍用 id。維持現況，讀寫層改查 product_id。
+    return;
+  }
+  db.exec(`
+    CREATE TABLE production_stable_current_v2 (
+      product_id TEXT PRIMARY KEY,
+      release_run_id INTEGER,
+      source_sha TEXT,
+      artifact_digest TEXT,
+      workflow_run_id TEXT,
+      provenance_json TEXT,
+      provenance_fingerprint TEXT,
+      updated_at TEXT NOT NULL
+    );
+    INSERT INTO production_stable_current_v2 (
+      product_id, release_run_id, source_sha, artifact_digest, workflow_run_id,
+      provenance_json, provenance_fingerprint, updated_at
+    )
+    SELECT 'v3', release_run_id, source_sha, artifact_digest, workflow_run_id,
+           provenance_json, provenance_fingerprint, updated_at
+      FROM production_stable_current;
+    DROP TABLE production_stable_current;
+    ALTER TABLE production_stable_current_v2 RENAME TO production_stable_current;
+  `);
 }
 
 // 開一個 ops 資料庫。dbPath = ":memory:" 供測試使用。

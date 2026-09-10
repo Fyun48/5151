@@ -1,4 +1,5 @@
 import { findEntity } from "./stateMachine.js";
+import { sendOpsNotification } from "./notify/webhook.js";
 import {
   computeProposalInput, enqueueProposalRow, claimProposalBatch, executeProposalGeneration,
   isProposalStale, currentProposalId,
@@ -72,7 +73,19 @@ export async function runProposalOnce(db, { provider, config = {}, now = () => n
   const claimed = claimProposalBatch(db, { limit: claimLimit, now: now() });
   summary.claimed = claimed.length;
   if (!claimed.length) return summary;
-  const results = await runPool(claimed, concurrency, (row) => executeProposalGeneration(db, row, { provider, timeoutMs, now, env, random }));
+  const results = await runPool(claimed, concurrency, async (row) => {
+    const status = await executeProposalGeneration(db, row, { provider, timeoutMs, now, env, random });
+    if (status === "completed") {
+      sendOpsNotification({
+        event: "ops.proposal.ready",
+        title: "議題等待 Owner 核准開發",
+        text: `議題 #${row.issue_id} 已累積回饋並完成評估／提案，請到 OPS Console 做 Gate #1。`,
+        fields: [{ name: "issue", value: row.issue_id }],
+        env,
+      }).catch(() => {});
+    }
+    return status;
+  });
   for (const r of results) {
     if (r === "completed") summary.completed += 1;
     else if (r === "failed") summary.failed += 1;

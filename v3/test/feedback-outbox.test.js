@@ -9,11 +9,13 @@ import {
   ensureFeedbackOutboxSchema,
   listOutbox,
   outboxStats,
+  outboxCapacityAlert,
+  compactSentOutboxPayloads,
   claimOutboxBatch,
   backoffMs,
   OUTBOX_DEFAULT_MAX_ATTEMPTS,
 } from "../src/feedbackOutbox.js";
-import { deliverOutboxOnce } from "../src/opsDelivery.js";
+import { deliverOutboxOnce, setLocalDeliveryStopped } from "../src/opsDelivery.js";
 
 function open() {
   const db = new DatabaseSync(":memory:");
@@ -74,6 +76,23 @@ test("honeypot creates neither feedback nor outbox", () => {
   assert.equal(res.id, 0);
   assert.equal(db.prepare("SELECT COUNT(*) n FROM feedback").get().n, 0);
   assert.equal(db.prepare("SELECT COUNT(*) n FROM feedback_outbox").get().n, 0);
+  db.close();
+});
+
+test("local stop prevents delivery without rolling back feedback", async () => {
+  const db = open();
+  db.exec("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+  const res = createFeedbackWithOutbox(db, 1, { kind: "bug", body: "keep me local" });
+  assert.ok(res.id > 0);
+  setLocalDeliveryStopped(db, true);
+  const summary = await deliverOutboxOnce(db, { ...cfg, fetchImpl: okFetch });
+  assert.equal(summary.skipped, "local_stopped");
+  assert.equal(summary.claimed, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM feedback").get().n, 1);
+  assert.equal(outboxStats(db).pending, 1);
+  setLocalDeliveryStopped(db, false);
+  const again = await deliverOutboxOnce(db, { ...cfg, fetchImpl: okFetch });
+  assert.equal(again.sent, 1);
   db.close();
 });
 
@@ -268,4 +287,28 @@ test("two independent connections claim 30 rows with no loss and no overlap", ()
   for (const suffix of ["", "-wal", "-shm"]) {
     try { rmSync(file + suffix, { force: true }); } catch { /* ignore */ }
   }
+});
+
+test("outbox capacity alert fires on backlog and compact drops sent payloads", () => {
+  const db = open();
+  const T0 = Date.parse("2026-01-01T00:00:00.000Z");
+  for (let i = 0; i < 3; i++) {
+    createFeedbackWithOutbox(db, i + 1, { kind: "bug", body: `payload body ${i}` }, { now: new Date(T0 + i * 1000) });
+  }
+  db.prepare("UPDATE feedback_outbox SET status='sent', sent_at=created_at").run();
+  const quiet = outboxCapacityAlert(db, { backlogWarn: 50, deadWarn: 10 });
+  assert.equal(quiet.warn, false);
+  const noisy = outboxCapacityAlert(db, { backlogWarn: 1, deadWarn: 10 });
+  assert.equal(noisy.warn, false); // sent 不算堆積
+  db.prepare("UPDATE feedback_outbox SET status='pending' WHERE id=1").run();
+  const warn = outboxCapacityAlert(db, { backlogWarn: 1, deadWarn: 10 });
+  assert.equal(warn.warn, true);
+  assert.ok(warn.backlog >= 1);
+  const compact = compactSentOutboxPayloads(db, { olderThanMs: 0, now: new Date() });
+  assert.equal(compact.compacted, 2);
+  const slim = db.prepare("SELECT payload FROM feedback_outbox WHERE status='sent'").all();
+  assert.equal(slim.every((r) => JSON.parse(r.payload).compacted === true), true);
+  const kept = db.prepare("SELECT COUNT(*) n FROM feedback").get().n;
+  assert.equal(kept, 3);
+  db.close();
 });

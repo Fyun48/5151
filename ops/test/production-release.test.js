@@ -256,11 +256,11 @@ test("Production workflows remain workflow_dispatch only; merge/push does not de
     assert.match(text, /name: manual-owner-run-identity/);
   }
   const ciPath = path.join(ROOT, ".github/workflows/test.yml");
-  if (existsSync(ciPath)) {
-    const ci = readFileSync(ciPath, "utf8");
-    assert.doesNotMatch(ci, /workflow_dispatch:[\s\S]*deploy-v3/);
-    assert.doesNotMatch(ci, /gh pr merge/i);
-  }
+  assert.ok(existsSync(ciPath), "Tests workflow must exist");
+  const ci = readFileSync(ciPath, "utf8");
+  assert.doesNotMatch(ci, /workflow_dispatch:[\s\S]*deploy-v3/);
+  assert.doesNotMatch(ci, /DEPLOY-PRODUCTION/);
+  assert.match(ci, /ai-dev\//);
 });
 
 test("A→H isolated stub release succeeds only after health/smoke and updates current stable", async () => {
@@ -911,7 +911,7 @@ function driftManifest(db, codingTaskId) {
 }
 
 function driftProvenanceOnly(db) {
-  db.prepare("UPDATE production_stable_current SET provenance_fingerprint=? WHERE id=1")
+  db.prepare("UPDATE production_stable_current SET provenance_fingerprint=? WHERE product_id='v3'")
     .run("f".repeat(64));
 }
 

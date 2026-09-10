@@ -158,4 +158,7 @@ test("admin.html exposes feedback inbox", () => {
   assert.match(html, /async function loadFeedback/);
   assert.match(html, /\/api\/admin\/feedback/);
   assert.match(html, /data-fb-save/);
+  assert.match(html, /id="opsOutboxCompact"[^>]*hidden/);
+  assert.match(html, /button\[hidden\], a\.ghost\[hidden\], a\.primary\[hidden\]/);
+  assert.match(html, /display:\s*none\s*!important/);
 });

@@ -2,6 +2,7 @@ import { withImmediateTx } from "./tx.js";
 import { appendAuditRow } from "./audit.js";
 import { httpError } from "./errors.js";
 import { enqueueAnalysisRow } from "./feedbackAnalysis.js";
+import { DEFAULT_PRODUCT_ID } from "./products.js";
 
 // Ops ingest：儲存從 Product 遞送進來的 feedback，並以 delivery_id / idempotency_key 冪等去重。
 // 只儲存與傳輸；不執行任何 feedback 內容。trust_level 一律 untrusted。
@@ -35,10 +36,11 @@ function classifyExisting({ byDelivery, byIdem, deliveryId, idempotencyKey, payl
 
 // payload：已解析的物件（含 delivery_id / idempotency_key 與 feedback 欄位）。
 // 回傳：{duplicate:false,id} | {duplicate:true,id} | {conflict:true,reason,id}
-export function ingestFeedback(db, { deliveryId, payload, payloadHash, now = new Date() }) {
+export function ingestFeedback(db, { deliveryId, payload, payloadHash, productId = DEFAULT_PRODUCT_ID, now = new Date() }) {
   const idempotencyKey = String(payload?.idempotency_key || "").trim();
   if (!deliveryId) throw httpError("missing delivery_id", 400);
   if (!idempotencyKey) throw httpError("missing idempotency_key", 400);
+  const pid = String(productId || DEFAULT_PRODUCT_ID);
   const ts = (now instanceof Date ? now : new Date(now)).toISOString();
 
   const conflictAudit = (verdict) => {
@@ -48,15 +50,15 @@ export function ingestFeedback(db, { deliveryId, payload, payloadHash, now = new
       action: "feedback.ingest.conflict",
       entityType: "ingested_feedback",
       entityId: String(verdict.id),
-      data: { delivery_id: deliveryId, reason: verdict.reason, incoming_payload_hash: payloadHash || null },
+      data: { product_id: pid, delivery_id: deliveryId, reason: verdict.reason, incoming_payload_hash: payloadHash || null },
       now,
     });
   };
 
   return withImmediateTx(db, () => {
     const lookup = () => ({
-      byDelivery: db.prepare("SELECT * FROM ingested_feedback WHERE delivery_id = ?").get(deliveryId),
-      byIdem: db.prepare("SELECT * FROM ingested_feedback WHERE idempotency_key = ?").get(idempotencyKey),
+      byDelivery: db.prepare("SELECT * FROM ingested_feedback WHERE product_id = ? AND delivery_id = ?").get(pid, deliveryId),
+      byIdem: db.prepare("SELECT * FROM ingested_feedback WHERE product_id = ? AND idempotency_key = ?").get(pid, idempotencyKey),
     });
 
     let { byDelivery, byIdem } = lookup();
@@ -72,9 +74,10 @@ export function ingestFeedback(db, { deliveryId, payload, payloadHash, now = new
     try {
       const res = db.prepare(
         `INSERT INTO ingested_feedback
-           (delivery_id, idempotency_key, source, external_feedback_id, user_ref, kind, content, contact, context, app_version, submitted_at, trust_level, payload_hash, received_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'untrusted', ?, ?)`,
+           (product_id, delivery_id, idempotency_key, source, external_feedback_id, user_ref, kind, content, contact, context, app_version, submitted_at, trust_level, payload_hash, received_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'untrusted', ?, ?)`,
       ).run(
+        pid,
         deliveryId,
         idempotencyKey,
         clip(payload.source, 64) || "unknown",
@@ -96,7 +99,7 @@ export function ingestFeedback(db, { deliveryId, payload, payloadHash, now = new
         entityType: "ingested_feedback",
         entityId: String(id),
         // 稽核只記中繼資料，不記完整內容（避免落地大量未信任文字）。
-        data: { delivery_id: deliveryId, source: payload.source || "unknown", kind: payload.kind || null, external_feedback_id: payload.external_feedback_id ?? null },
+        data: { product_id: pid, delivery_id: deliveryId, source: payload.source || "unknown", kind: payload.kind || null, external_feedback_id: payload.external_feedback_id ?? null },
         now,
       });
       // Phase 4：新 feedback 入庫的同一交易內，排入一筆待 AI 分析 job（不依賴 AI 可用性）。
@@ -118,11 +121,17 @@ export function ingestFeedback(db, { deliveryId, payload, payloadHash, now = new
   });
 }
 
-export function listIngested(db, { limit = 100 } = {}) {
+export function listIngested(db, { limit = 100, productId = null } = {}) {
   const cap = Math.max(1, Math.min(Number(limit) || 100, 500));
+  if (productId) {
+    return db.prepare("SELECT * FROM ingested_feedback WHERE product_id=? ORDER BY id DESC LIMIT ?").all(productId, cap);
+  }
   return db.prepare("SELECT * FROM ingested_feedback ORDER BY id DESC LIMIT ?").all(cap);
 }
 
-export function countIngested(db) {
+export function countIngested(db, { productId = null } = {}) {
+  if (productId) {
+    return Number(db.prepare("SELECT COUNT(*) AS n FROM ingested_feedback WHERE product_id=?").get(productId).n) || 0;
+  }
   return Number(db.prepare("SELECT COUNT(*) AS n FROM ingested_feedback").get().n) || 0;
 }

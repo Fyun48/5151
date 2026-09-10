@@ -1,4 +1,4 @@
-import { createReleaseCandidate, validateReleaseChain } from "./releaseCandidate.js";
+import { createReleaseCandidate, validateReleaseChain, retryReleaseNotification } from "./releaseCandidate.js";
 import { releaseConfigFromEnv } from "./release/releasePolicy.js";
 import { makeCodingRepo } from "./coding/gitRepo.js";
 
@@ -29,7 +29,13 @@ export function createReleaseCandidatesForEligible(db, { repo, env = process.env
 export async function runReleaseOnce(db, { repo, config = releaseWorkerConfigFromEnv(), now = () => new Date() } = {}) {
   const at = typeof now === "function" ? now() : now;
   const created = createReleaseCandidatesForEligible(db, { repo, env: process.env, now: at });
-  return { created: created.length };
+  const pending = db.prepare("SELECT id FROM release_notification WHERE status='pending' ORDER BY id ASC LIMIT 20").all();
+  let notified = 0;
+  for (const n of pending) {
+    const r = await retryReleaseNotification(db, n.id, { actor: "system", now: at });
+    if (r.status === "sent") notified += 1;
+  }
+  return { created: created.length, notified };
 }
 
 export function startReleaseLoop(db, { repo = makeCodingRepo(), config = releaseWorkerConfigFromEnv(), log = () => {} } = {}) {

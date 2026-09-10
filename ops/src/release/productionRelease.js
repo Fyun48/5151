@@ -30,6 +30,7 @@ import {
   workflowIdempotencyKey,
 } from "./productionReleasePolicy.js";
 import { makeProductionReleaseProvider, newDispatchRequestId } from "./productionReleaseProvider.js";
+import { DEFAULT_PRODUCT_ID } from "../products.js";
 
 const PII_OR_SECRET_KEY = /(pass(word|wd)?|secret|token|cookie|authorization|auth[-_]?header|api[-_]?key|access[-_]?key|private[-_]?key|credential|session|bearer|otp|ssh|email|contact|user_ref|phone|reporter|connection_string|dsn|database_url|prod(uction)?[-_]?(host|db|user|password|secret|token|key)|nas[-_]?(host|user|key|password))/i;
 
@@ -237,8 +238,8 @@ export function listReleaseEvents(db, releaseRunId) {
   }));
 }
 
-export function getProductionStable(db) {
-  const row = db.prepare("SELECT * FROM production_stable_current WHERE id=1").get();
+export function getProductionStable(db, productId = DEFAULT_PRODUCT_ID) {
+  const row = db.prepare("SELECT * FROM production_stable_current WHERE product_id=?").get(productId);
   if (!row) return null;
   return {
     release_run_id: row.release_run_id == null ? null : Number(row.release_run_id),
@@ -251,14 +252,14 @@ export function getProductionStable(db) {
   };
 }
 
-export function seedProductionStable(db, { sourceSha, artifactDigest, workflowRunId, releaseRunId = null, provenance = {}, now = new Date() } = {}) {
+export function seedProductionStable(db, { sourceSha, artifactDigest, workflowRunId, releaseRunId = null, provenance = {}, productId = DEFAULT_PRODUCT_ID, now = new Date() } = {}) {
   const ts = iso(now);
   const clean = sanitizeReleaseEvidence(provenance) || {};
   const fp = stableProvenanceFingerprint(clean);
-  db.prepare(`INSERT INTO production_stable_current(id, release_run_id, source_sha, artifact_digest, workflow_run_id, provenance_json, provenance_fingerprint, updated_at)
-              VALUES (1,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET release_run_id=excluded.release_run_id, source_sha=excluded.source_sha, artifact_digest=excluded.artifact_digest, workflow_run_id=excluded.workflow_run_id, provenance_json=excluded.provenance_json, provenance_fingerprint=excluded.provenance_fingerprint, updated_at=excluded.updated_at`)
-    .run(releaseRunId, sourceSha, artifactDigest, workflowRunId, JSON.stringify(clean), fp, ts);
-  return getProductionStable(db);
+  db.prepare(`INSERT INTO production_stable_current(product_id, release_run_id, source_sha, artifact_digest, workflow_run_id, provenance_json, provenance_fingerprint, updated_at)
+              VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(product_id) DO UPDATE SET release_run_id=excluded.release_run_id, source_sha=excluded.source_sha, artifact_digest=excluded.artifact_digest, workflow_run_id=excluded.workflow_run_id, provenance_json=excluded.provenance_json, provenance_fingerprint=excluded.provenance_fingerprint, updated_at=excluded.updated_at`)
+    .run(productId, releaseRunId, sourceSha, artifactDigest, workflowRunId, JSON.stringify(clean), fp, ts);
+  return getProductionStable(db, productId);
 }
 
 function snapshotPreviousStable(db) {
@@ -417,19 +418,19 @@ function requireStableUnchanged(db, observed) {
   return cur;
 }
 
-function casWriteProductionStable(db, { next, casFrom = null, now }) {
+function casWriteProductionStable(db, { next, casFrom = null, now, productId = DEFAULT_PRODUCT_ID }) {
   const ts = iso(now);
   const clean = sanitizeReleaseEvidence(next.provenance || {}) || {};
   const payload = JSON.stringify(clean);
   const nextFp = stableProvenanceFingerprint(clean);
   if (!casFrom || !casFrom.source_sha) {
-    const cur = getProductionStable(db);
+    const cur = getProductionStable(db, productId);
     if (cur && cur.source_sha) throw httpError("production stable identity drifted or superseded", 409);
-    db.prepare(`INSERT INTO production_stable_current(id, release_run_id, source_sha, artifact_digest, workflow_run_id, provenance_json, provenance_fingerprint, updated_at)
-                VALUES (1,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET release_run_id=excluded.release_run_id, source_sha=excluded.source_sha, artifact_digest=excluded.artifact_digest, workflow_run_id=excluded.workflow_run_id, provenance_json=excluded.provenance_json, provenance_fingerprint=excluded.provenance_fingerprint, updated_at=excluded.updated_at
+    db.prepare(`INSERT INTO production_stable_current(product_id, release_run_id, source_sha, artifact_digest, workflow_run_id, provenance_json, provenance_fingerprint, updated_at)
+                VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(product_id) DO UPDATE SET release_run_id=excluded.release_run_id, source_sha=excluded.source_sha, artifact_digest=excluded.artifact_digest, workflow_run_id=excluded.workflow_run_id, provenance_json=excluded.provenance_json, provenance_fingerprint=excluded.provenance_fingerprint, updated_at=excluded.updated_at
                 WHERE production_stable_current.source_sha IS NULL OR production_stable_current.source_sha=''`)
-      .run(next.releaseRunId, next.sourceSha, next.artifactDigest, next.workflowRunId, payload, nextFp, ts);
-    const written = getProductionStable(db);
+      .run(productId, next.releaseRunId, next.sourceSha, next.artifactDigest, next.workflowRunId, payload, nextFp, ts);
+    const written = getProductionStable(db, productId);
     if (!written || !same(written.source_sha, next.sourceSha) || !same(written.artifact_digest, next.artifactDigest) || !sameNum(written.release_run_id, next.releaseRunId)) {
       throw httpError("production stable compare-and-swap failed", 409);
     }
@@ -437,13 +438,13 @@ function casWriteProductionStable(db, { next, casFrom = null, now }) {
   }
   const res = db.prepare(
     `UPDATE production_stable_current SET release_run_id=?, source_sha=?, artifact_digest=?, workflow_run_id=?, provenance_json=?, provenance_fingerprint=?, updated_at=?
-     WHERE id=1 AND source_sha=? AND artifact_digest=? AND IFNULL(workflow_run_id,'')=? AND IFNULL(release_run_id,0)=? AND IFNULL(provenance_fingerprint,'')=?`,
+     WHERE product_id=? AND source_sha=? AND artifact_digest=? AND IFNULL(workflow_run_id,'')=? AND IFNULL(release_run_id,0)=? AND IFNULL(provenance_fingerprint,'')=?`,
   ).run(
     next.releaseRunId, next.sourceSha, next.artifactDigest, next.workflowRunId, payload, nextFp, ts,
-    casFrom.source_sha, casFrom.artifact_digest, casFrom.workflow_run_id || "", Number(casFrom.release_run_id || 0), casFrom.provenance_fingerprint || "",
+    productId, casFrom.source_sha, casFrom.artifact_digest, casFrom.workflow_run_id || "", Number(casFrom.release_run_id || 0), casFrom.provenance_fingerprint || "",
   );
   if (res.changes !== 1) throw httpError("production stable compare-and-swap failed", 409);
-  return getProductionStable(db);
+  return getProductionStable(db, productId);
 }
 
 function rollbackObservedFrom(db, run) {

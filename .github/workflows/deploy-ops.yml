@@ -1,0 +1,128 @@
+name: Deploy OPS to CasaOS (manual)
+run-name: "manual-owner-ops:${{ inputs.sha }}"
+
+# 只同步 ops/ 並重建 5151-ops。這不是 v3 的第四條部署路徑：
+# 不 SCP v3/、不重建 591-tracker-v3、不佔 production-deploy 並發鎖。
+# 合併／push 到 master 不會自動跑；必須明確 workflow_dispatch，且從 master 定義啟動。
+#
+# 確認字串是 DEPLOY-OPS（不是 DEPLOY-PRODUCTION）。
+# OPS 靠 bind-mount ./ops，不要求 image digest pin。
+#
+# Owner 已書面授權：Cursor Agent（actor cursor / cursor[bot]）在使用者要求時
+# 可從 master 觸發本檔。見 AGENTS.md。
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "要部署的完整 40 碼 commit SHA（必須可從 origin/master 追溯）"
+        required: true
+      confirmation:
+        description: "輸入 DEPLOY-OPS 以確認只部署 OPS Console"
+        required: true
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ops-deploy
+  cancel-in-progress: false
+
+jobs:
+  sync-nas-ops:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 15
+    steps:
+      - name: Authorize OPS deployment (fail-closed)
+        env:
+          WF_REF: ${{ github.ref }}
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          ALLOWED_ACTOR: ${{ vars.PRODUCTION_DEPLOY_ALLOWED_ACTOR }}
+          CONFIRM: ${{ inputs.confirmation }}
+          DEPLOY_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$WF_REF" != "refs/heads/master" ]; then
+            echo "::error::OPS deploy must run from the master workflow definition (got $WF_REF)"; exit 1
+          fi
+          if [ -z "${ALLOWED_ACTOR:-}" ]; then
+            echo "::error::PRODUCTION_DEPLOY_ALLOWED_ACTOR is not configured; refusing (fail-closed)"; exit 1
+          fi
+          CURSOR_DEPLOY=0
+          if [ "$ACTOR" = "cursor" ] || [ "$ACTOR" = "cursor[bot]" ]; then
+            if [ "$TRIGGERING_ACTOR" = "cursor" ] || [ "$TRIGGERING_ACTOR" = "cursor[bot]" ]; then
+              CURSOR_DEPLOY=1
+            fi
+          fi
+          if [ "$CURSOR_DEPLOY" != 1 ] && [ "$ACTOR" != "$ALLOWED_ACTOR" ]; then
+            echo "::error::actor '$ACTOR' is not the authorized deployer"; exit 1
+          fi
+          if [ "$CURSOR_DEPLOY" != 1 ] && [ "$TRIGGERING_ACTOR" != "$ALLOWED_ACTOR" ]; then
+            echo "::error::triggering actor '$TRIGGERING_ACTOR' is not the authorized deployer (re-run by another user is refused)"; exit 1
+          fi
+          if [ "${CONFIRM:-}" != "DEPLOY-OPS" ]; then
+            echo "::error::confirmation must be exactly DEPLOY-OPS"; exit 1
+          fi
+          if ! printf '%s' "${DEPLOY_SHA:-}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::sha must be a full 40-character commit SHA"; exit 1
+          fi
+      - name: Checkout workflow-definition SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Validate SHA reachable from origin/master, then check it out
+        env:
+          DEPLOY_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin master
+          if ! git merge-base --is-ancestor "$DEPLOY_SHA" origin/master; then
+            echo "::error::commit $DEPLOY_SHA is not reachable from origin/master; refusing"; exit 1
+          fi
+          git checkout --force "$DEPLOY_SHA"
+          test -d ops/src
+          test -f ops/src/server.js
+          test -f ops/public/console.html
+      - name: Copy ops source only
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.NAS_HOST }}
+          port: ${{ secrets.NAS_PORT }}
+          username: ${{ secrets.NAS_USER }}
+          key: ${{ secrets.NAS_SSH_KEY }}
+          source: "ops"
+          target: /mnt/Storage1/apps/5151
+          overwrite: true
+      - name: Recreate 5151-ops only
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.NAS_HOST }}
+          port: ${{ secrets.NAS_PORT }}
+          username: ${{ secrets.NAS_USER }}
+          key: ${{ secrets.NAS_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            DEPLOY_SHA='${{ inputs.sha }}'
+            mkdir -p /DATA/AppData/5151-ops
+            cd /mnt/Storage1/apps/5151
+            test -d ops/src
+            test -f ops/src/server.js
+            # 只用主 compose，避免誤觸 v3 digest override 的重建範圍。
+            docker compose -f docker-compose.yml up -d --no-build --no-deps --force-recreate 5151-ops
+            ok=0
+            for _ in $(seq 1 40); do
+              if curl -fsS http://127.0.0.1:5154/ops/api/health | grep -q '"ok":true'; then
+                ok=1
+                break
+              fi
+              sleep 1
+            done
+            [ "$ok" = 1 ] || { docker logs 5151-ops || true; echo "OPS health did not become ready"; exit 1; }
+            RUNNING="$(docker inspect -f '{{.State.Status}}' 5151-ops)"
+            [ "$RUNNING" = "running" ]
+            echo "DEPLOY_OPS_OK source=$DEPLOY_SHA container=5151-ops"

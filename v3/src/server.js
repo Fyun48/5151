@@ -115,6 +115,9 @@ import {
   listFeedbackItems,
   updateFeedbackItem,
   getFeedbackStats,
+  getOpsDeliveryControl,
+  setOpsDeliveryStop,
+  compactOpsOutbox,
   feedbackMeta,
   listMineSelfListings,
   getSelfListing,
@@ -1231,6 +1234,7 @@ app.get("/api/admin/feedback", requireAdminApi, (req, res) => {
     ...feedbackMeta(),
     stats: getFeedbackStats(),
     items: listFeedbackItems({ status: req.query?.status, kind: req.query?.kind }),
+    ops_delivery: getOpsDeliveryControl(),
   });
 });
 
@@ -1240,6 +1244,20 @@ app.patch("/api/admin/feedback/:id", requireAdminApi, (req, res) => {
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
+});
+
+app.get("/api/admin/ops-delivery", requireAdminApi, (_req, res) => {
+  res.json(getOpsDeliveryControl());
+});
+
+app.put("/api/admin/ops-delivery", requireAdminApi, (req, res) => {
+  const stop = req.body?.stop === true || req.body?.stop === 1 || req.body?.stop === "1";
+  res.json(setOpsDeliveryStop(stop));
+});
+
+app.post("/api/admin/ops-delivery/compact-outbox", requireAdminApi, (req, res) => {
+  const olderThanMs = Number(req.body?.older_than_ms);
+  res.json({ ok: true, ...compactOpsOutbox({ olderThanMs: Number.isFinite(olderThanMs) && olderThanMs >= 0 ? olderThanMs : undefined }) });
 });
 
 app.get("/api/spirit", (_req, res) => {

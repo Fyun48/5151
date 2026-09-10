@@ -4,14 +4,14 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex,nofollow" />
-  <title>Ops Console · 維運自動化（Phase 1）</title>
-  <link rel="stylesheet" href="/console.css" />
+  <title>Ops Console · 吉比租房維運</title>
+  <link rel="stylesheet" href="/console.css?v=20260910-exit5" />
 </head>
 <body>
   <header class="topbar">
     <div>
       <h1>Ops Console</h1>
-      <p class="sub">維運自動化系統 · Phase 1（骨架 / Owner / Audit / State Machine）</p>
+      <p class="sub">使用者回饋累積 → 評估投票 → Owner 核准 → 開發／發布</p>
     </div>
     <div class="who">
       <span id="who">未登入</span>
@@ -22,7 +22,7 @@
   <main>
     <section id="loginCard" class="card" hidden>
       <h2>Owner 登入</h2>
-      <p class="hint">使用既有管理者帳號（AUTH_EMAIL / AUTH_PASSWORD）。此系統預設只在內網存取，不對外公開。</p>
+      <p class="hint">使用管理者帳號（AUTH_EMAIL / AUTH_PASSWORD）。此系統預設只在內網，不對外公開。</p>
       <form id="loginForm" autocomplete="off">
         <label for="email">Email</label>
         <input id="email" name="email" type="email" autocomplete="username" />
@@ -34,39 +34,161 @@
     </section>
 
     <div id="ownerArea" hidden>
-      <section class="card">
-        <h2>系統狀態</h2>
-        <p class="hint">Phase 1 只包含基礎設施。Feedback 擷取、AI、Coding Agent 皆尚未啟用。</p>
-        <div id="healthBox" class="kv"></div>
-      </section>
-
-      <section class="card">
+      <section class="card switch-card" aria-label="目前檢視的站">
         <div class="row">
-          <h2>稽核鏈（Audit Log）</h2>
+          <h2>檢視站台</h2>
           <span class="grow"></span>
-          <button type="button" id="verifyBtn">驗證鏈完整性</button>
-          <button type="button" id="checkpointBtn">建立 Checkpoint</button>
-          <button type="button" id="refreshBtn">重新整理</button>
+          <p class="hint switch-hint">全部或單一產品；總覽與收件匣會跟著過濾。</p>
         </div>
-        <p class="msg" id="auditMsg"></p>
-        <div id="verifyBox" class="kv"></div>
-        <table class="tbl" id="auditTable">
-          <thead><tr><th>#</th><th>時間</th><th>actor</th><th>action</th><th>entity</th><th>hash（前12）</th></tr></thead>
-          <tbody></tbody>
-        </table>
+        <div id="productSwitch" class="product-switch" role="group" aria-label="選擇產品"></div>
       </section>
 
-      <section class="card">
-        <h2>狀態轉移紀錄（State Transitions）</h2>
-        <p class="hint">目前尚無業務實體；此區在後續 Phase 會顯示 proposal / release 等 lifecycle 轉移。</p>
-        <table class="tbl" id="stateTable">
-          <thead><tr><th>#</th><th>時間</th><th>entity</th><th>from → to</th><th>ver</th><th>actor</th></tr></thead>
-          <tbody></tbody>
-        </table>
+      <nav class="tabs" role="tablist" aria-label="OPS 區塊">
+        <button type="button" class="tab on" data-tab="overview" role="tab" aria-selected="true">總覽</button>
+        <button type="button" class="tab" data-tab="inbox" role="tab" aria-selected="false">回饋收件匣</button>
+        <button type="button" class="tab" data-tab="products" role="tab" aria-selected="false">產品</button>
+        <button type="button" class="tab" data-tab="issues" role="tab" aria-selected="false">議題與投票</button>
+        <button type="button" class="tab" data-tab="audit" role="tab" aria-selected="false">稽核</button>
+      </nav>
+
+      <section id="tab-overview" class="tabpane">
+        <section class="card">
+          <div class="row">
+            <h2>系統狀態</h2>
+            <span class="grow"></span>
+            <button type="button" id="refreshBtn">重新整理</button>
+            <button type="button" id="webhookTestBtn">測試 webhook</button>
+          </div>
+          <p class="hint">一般使用者在正式站送「意見回饋」；累積成議題並完成評估後，這裡會出現待核准項目。Owner 直接下令的功能不必走這條線。</p>
+          <div id="dashBox" class="statgrid" aria-live="polite"></div>
+          <p class="msg" id="dashMsg" role="status"></p>
+        </section>
+        <section class="card">
+          <h2>待 Owner 處理</h2>
+          <p class="hint">Gate #1：核准開發。Gate #2：核准發布。兩者都不會自動上正式機。</p>
+          <div id="queueBox" class="kv">載入中…</div>
+        </section>
+      </section>
+
+      <section id="tab-inbox" class="tabpane" hidden>
+        <section class="card">
+          <div class="row">
+            <h2>回饋收件匣</h2>
+            <span class="grow"></span>
+            <label class="inline"><input type="checkbox" id="showContact" /> 顯示聯絡方式</label>
+            <button type="button" id="inboxRefresh">重新整理</button>
+          </div>
+          <p class="hint" id="inboxHint">尚未載入。</p>
+          <table class="tbl" id="inboxTable">
+            <thead><tr><th>#</th><th>站台</th><th>類型</th><th>內容</th><th>議題</th><th>版本</th><th>時間</th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <div id="feedbackDetail" class="detail" hidden></div>
+        </section>
+      </section>
+
+      <section id="tab-products" class="tabpane" hidden>
+        <section class="card">
+          <div class="row">
+            <h2>產品卡</h2>
+            <span class="grow"></span>
+            <button type="button" id="productsRefresh">重新整理</button>
+          </div>
+          <p class="hint">四種退出動作不同：暫停、解除訂閱、移交整站、刪除 OPS 複本。解除訂閱會撤銷密鑰並留下未決清單；本機主本不在這裡。</p>
+          <p class="msg" id="productMsg" role="status"></p>
+          <section id="secretOnce" class="secret-card" hidden>
+            <h3>新 ingest 密鑰（只顯示一次）</h3>
+            <p class="hint" id="secretOnceHint">請立刻複製到該站 <code>OPS_INGEST_SECRET</code>。</p>
+            <p class="secret-value"><code id="secretOnceText"></code></p>
+            <div class="row">
+              <button type="button" id="copySecretBtn">複製</button>
+              <button type="button" id="dismissSecretBtn">我已複製</button>
+            </div>
+          </section>
+          <div id="productCards" class="product-grid"></div>
+          <section id="exitDetail" class="secret-card" hidden aria-live="polite">
+            <h3 id="exitDetailTitle">未決清單</h3>
+            <p class="hint" id="exitDetailHint"></p>
+            <pre id="exitDetailBody" class="kv"></pre>
+          </section>
+        </section>
+        <section class="card">
+          <h2>新增產品</h2>
+          <p class="hint">穩定 <code>product_id</code> 之後不要改。顯示名可以之後再調。</p>
+          <form id="createProductForm" autocomplete="off">
+            <label for="newProductId">product_id</label>
+            <input id="newProductId" name="id" required maxlength="32" pattern="[a-z][-a-z0-9_]{0,31}" placeholder="例如 shop" />
+            <label for="newProductName">顯示名</label>
+            <input id="newProductName" name="display_name" maxlength="80" placeholder="例如 商店站" />
+            <button type="submit" class="primary" id="createProductBtn">建立並產生密鑰</button>
+          </form>
+        </section>
+      </section>
+
+      <section id="tab-issues" class="tabpane" hidden>
+        <section class="card">
+          <div class="row">
+            <h2>議題管線</h2>
+            <span class="grow"></span>
+            <button type="button" id="issuesRefresh">重新整理</button>
+          </div>
+          <p class="hint">同一類回饋會聚成議題；影響力夠高後進行五角色評估投票（PROPOSE / WAIT / IGNORE / ESCALATE），再產生提案等你核准。</p>
+          <table class="tbl" id="issueTable">
+            <thead><tr><th>#</th><th>標題</th><th>生命週期</th><th>票數／影響</th><th>評估</th><th>成員</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </section>
+        <section class="card" id="issueDetailCard" hidden>
+          <h2 id="issueDetailTitle">議題詳情</h2>
+          <div id="issueDetail" class="detail"></div>
+          <div class="row" id="gate1Row" hidden>
+            <button type="button" class="primary" data-gate1="APPROVE_DEVELOPMENT">核准開發</button>
+            <button type="button" data-gate1="REQUEST_CHANGES">要求修改</button>
+            <button type="button" data-gate1="DEFER">暫緩</button>
+            <button type="button" data-gate1="REJECT">拒絕</button>
+            <button type="button" data-gate1="BLOCK">封鎖</button>
+          </div>
+          <p class="msg" id="issueMsg"></p>
+        </section>
+      </section>
+
+      <section id="tab-audit" class="tabpane" hidden>
+        <section class="card">
+          <div class="row">
+            <h2>稽核鏈（Audit Log）</h2>
+            <span class="grow"></span>
+            <button type="button" id="verifyBtn">驗證鏈完整性</button>
+            <button type="button" id="checkpointBtn">建立 Checkpoint</button>
+          </div>
+          <p class="msg" id="auditMsg"></p>
+          <div id="verifyBox" class="kv"></div>
+          <table class="tbl" id="auditTable">
+            <thead><tr><th>#</th><th>時間</th><th>actor</th><th>action</th><th>entity</th><th>hash（前12）</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </section>
+        <section class="card">
+          <h2>狀態轉移紀錄</h2>
+          <table class="tbl" id="stateTable">
+            <thead><tr><th>#</th><th>時間</th><th>entity</th><th>from → to</th><th>ver</th><th>actor</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </section>
       </section>
     </div>
   </main>
 
-  <script src="/console.js"></script>
+  <div id="confirmDlg" class="dlg" hidden role="dialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmBody">
+    <div class="dlg-card">
+      <h3 id="confirmTitle">確認解除訂閱</h3>
+      <p id="confirmBody"></p>
+      <div class="row">
+        <button type="button" id="confirmCancel">取消</button>
+        <button type="button" id="confirmOk" class="danger">確定解除</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/console.js?v=20260910-exit5"></script>
 </body>
 </html>

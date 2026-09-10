@@ -63,6 +63,23 @@ services:
       - ./v3/public:/app/public:ro
     command: ["node", "--watch-path=src", "--watch-path=public", "src/server.js"]
 
+  5151-ops:
+    container_name: 5151-ops
+    image: ghcr.io/fyun48/5151:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5154:5154"
+    environment:
+      OPS_HOST: "0.0.0.0"
+      OPS_PORT: "5154"
+      OPS_DATA_DIR: /data
+      TZ: Asia/Taipei
+      COOKIE_SECURE: "1"
+    volumes:
+      - ${DATA_ROOT:-/DATA}/AppData/5151-ops:/data
+      - ./ops:/app/ops:ro
+    command: ["node", "ops/src/server.js"]
+
   cloudflared:
     profiles: ["tunnel"]
     image: cloudflare/cloudflared:latest

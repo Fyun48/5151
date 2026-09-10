@@ -84,6 +84,9 @@
       display: inline-flex;
       align-items: center;
     }
+    button[hidden], a.ghost[hidden], a.primary[hidden] {
+      display: none !important;
+    }
     .primary { background: var(--accent); color: var(--primary-foreground); }
     .ghost { background: var(--paper); color: var(--ink); border: 1px solid var(--line); }
     button:disabled { opacity: 0.5; cursor: wait; }
@@ -964,7 +967,13 @@
       <div id="feedback" class="admin-panel" data-admin-panel="feedback">
 <section class="card">
       <h2>使用者回饋</h2>
-      <p class="hint">前台會員在「意見」按鈕送出的 bug 回報／功能建議。每則都自動附上當時的畫面、篩選條件、裝置與版本，方便重現與分類；未來可作為自動化分析的來源。</p>
+      <p class="hint">前台會員在「意見」按鈕送出的 bug 回報／功能建議。每則都自動附上當時的畫面、篩選條件、裝置與版本，方便重現與分類。回饋先寫進本站；送到 OPS 是可關的訂閱。</p>
+      <div class="row" id="opsDeliveryBox" style="gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+        <span class="hint" id="opsDeliveryStatus">正在讀取 OPS 傳送狀態…</span>
+        <button type="button" class="ghost" id="opsDeliveryToggle">停止傳送至 OPS</button>
+        <button type="button" class="ghost" id="opsOutboxCompact" hidden>精簡已送出的傳輸複本</button>
+      </div>
+      <p class="msg" id="opsOutboxAlert" role="status"></p>
       <div class="row" id="feedbackStats" style="gap:8px;flex-wrap:wrap;margin-bottom:10px"></div>
       <div class="row" style="gap:8px;flex-wrap:wrap;align-items:center">
         <label style="margin:0">狀態
@@ -2431,6 +2440,102 @@
       renderFeedbackList(data.items || []);
       setMsg("feedbackMsg", `共 ${(data.items || []).length} 則`, true);
     }
+    let opsDeliveryState = null;
+    function renderOpsDelivery() {
+      const status = $("opsDeliveryStatus");
+      const btn = $("opsDeliveryToggle");
+      if (!status || !btn) return;
+      const s = opsDeliveryState;
+      if (!s) {
+        status.textContent = "無法讀取 OPS 傳送狀態。";
+        btn.hidden = true;
+        return;
+      }
+      btn.hidden = false;
+      if (!s.configured) {
+        status.textContent = "本機尚未設定 OPS 位址／密鑰。回饋只留在本站。";
+        btn.disabled = true;
+        btn.textContent = "停止傳送至 OPS";
+        return;
+      }
+      btn.disabled = false;
+      if (s.local_stopped) {
+        status.textContent = s.env_allowed
+          ? "已在本機停止傳送至 OPS（立刻生效，不必等 OPS 在線）。環境仍允許遞送，可再恢復。"
+          : "已在本機停止傳送。環境變數目前也未允許遞送。";
+        btn.textContent = "恢復傳送至 OPS";
+        return;
+      }
+      if (!s.env_allowed) {
+        status.textContent = "環境未允許遞送（OPS_FEEDBACK_DELIVERY≠1）。本機停送開關可先設好，重啟並開啟環境後才會送出。";
+        btn.textContent = "預先停止傳送至 OPS";
+        return;
+      }
+      status.textContent = `目前會把回饋複本送到 OPS（產品 ${s.product_id || "v3"}）。`;
+      btn.textContent = "停止傳送至 OPS";
+    }
+    function renderOutboxAlert(state) {
+      const alert = $("opsOutboxAlert");
+      const compactBtn = $("opsOutboxCompact");
+      if (!alert) return;
+      const box = state && state.outbox;
+      if (box && box.warn) {
+        alert.textContent = box.message || `傳輸佇列堆積 ${box.backlog || 0} 筆。`;
+        alert.className = "msg err";
+        if (compactBtn) compactBtn.hidden = false;
+        return;
+      }
+      if (box && (box.dead || 0) > 0) {
+        alert.textContent = `有 ${box.dead} 筆傳輸失敗（dead）。回饋主本仍在本機。`;
+        alert.className = "msg";
+        if (compactBtn) compactBtn.hidden = false;
+        return;
+      }
+      alert.textContent = "";
+      alert.className = "msg";
+      if (compactBtn) compactBtn.hidden = true;
+    }
+    async function loadOpsDelivery() {
+      try {
+        const res = await fetch("/api/admin/ops-delivery", { cache: "no-store" });
+        opsDeliveryState = res.ok ? await res.json() : null;
+      } catch {
+        opsDeliveryState = null;
+      }
+      renderOpsDelivery();
+      renderOutboxAlert(opsDeliveryState);
+    }
+    $("opsOutboxCompact")?.addEventListener("click", async () => {
+      const btn = $("opsOutboxCompact");
+      btn.disabled = true;
+      try {
+        const res = await fetch("/api/admin/ops-delivery/compact-outbox", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ older_than_ms: 0 }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "精簡失敗");
+        $("opsOutboxAlert").textContent = `已精簡 ${data.compacted || 0} 筆傳輸複本。回饋主本未動。`;
+        $("opsOutboxAlert").className = "msg ok";
+        await loadOpsDelivery();
+      } catch (error) {
+        $("opsOutboxAlert").textContent = error.message;
+        $("opsOutboxAlert").className = "msg err";
+      } finally {
+        btn.disabled = false;
+      }
+    });
+    $("opsDeliveryToggle")?.addEventListener("click", async () => {
+      const nextStop = !(opsDeliveryState && opsDeliveryState.local_stopped);
+      const res = await fetch("/api/admin/ops-delivery", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stop: nextStop }),
+      });
+      if (res.ok) opsDeliveryState = await res.json();
+      renderOpsDelivery();
+    });
     $("feedbackReload")?.addEventListener("click", loadFeedback);
     $("feedbackFilterStatus")?.addEventListener("change", loadFeedback);
     $("feedbackFilterKind")?.addEventListener("change", loadFeedback);
@@ -2469,7 +2574,7 @@
       if (me.role !== "admin") { location.replace("/"); return; }
       meEmail = me.email || "";
       $("who").textContent = meEmail;
-      await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadAnnouncements(), loadCommsAdmin(), loadMaps(), loadHelpQa(), loadWishConditions(), loadLegalCopy(), loadContentCms(), loadListingImports(), loadSpirit(), loadHousing(), loadCrawlSources(), loadSystemCrawl(), loadBrand(), loadFeedback()]);
+      await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadAnnouncements(), loadCommsAdmin(), loadMaps(), loadHelpQa(), loadWishConditions(), loadLegalCopy(), loadContentCms(), loadListingImports(), loadSpirit(), loadHousing(), loadCrawlSources(), loadSystemCrawl(), loadBrand(), loadFeedback(), loadOpsDelivery()]);
       $("brandForm").onsubmit = async (ev) => {
         ev.preventDefault();
         $("brandSave").disabled = true;

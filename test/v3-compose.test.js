@@ -27,6 +27,20 @@ test("v3 docker service binds 5153 and mounts v2 db read-only", () => {
   assert.match(readFileSync(path.join(root, "README.md"), "utf8"), /jibbyrenth\.reversalplay\.me/);
 });
 
+test("OPS console is a separate loopback service on 5154", () => {
+  const compose = readFileSync(path.join(root, "docker-compose.yml"), "utf8");
+  const ops = serviceBlock(compose, "5151-ops");
+  assert.match(ops, /127\.0\.0\.1:5154:5154/);
+  assert.match(ops, /5151-ops:\/data/);
+  assert.match(ops, /\.\/ops:\/app\/ops:ro/);
+  assert.match(ops, /node", "ops\/src\/server\.js/);
+  assert.equal(ops.includes("5153:5153"), false);
+  const casaos = readFileSync(path.join(root, "casaos-compose.yml"), "utf8");
+  const casaOps = serviceBlock(casaos, "5151-ops");
+  assert.match(casaOps, /127\.0\.0\.1:5154:5154/);
+  assert.match(casaos, /^  main: 591-tracker-v3\s*$/m);
+});
+
 test("CasaOS compose lists v3 as main on port 5153", () => {
   const casaos = readFileSync(path.join(root, "casaos-compose.yml"), "utf8");
   assert.match(casaos, /^  main: 591-tracker-v3\s*$/m);

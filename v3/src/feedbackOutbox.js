@@ -139,6 +139,49 @@ export function outboxStats(db) {
   return out;
 }
 
+export const OUTBOX_BACKLOG_WARN = 50;
+export const OUTBOX_DEAD_WARN = 10;
+export const OUTBOX_COMPACT_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
+
+export function outboxCapacityAlert(db, { backlogWarn = OUTBOX_BACKLOG_WARN, deadWarn = OUTBOX_DEAD_WARN } = {}) {
+  const stats = outboxStats(db);
+  const backlog = (stats.pending || 0) + (stats.failed || 0) + (stats.sending || 0);
+  const warn = backlog >= backlogWarn || (stats.dead || 0) >= deadWarn;
+  return {
+    ...stats,
+    backlog,
+    warn,
+    backlog_warn: backlogWarn,
+    dead_warn: deadWarn,
+    message: warn
+      ? `傳輸佇列堆積 ${backlog} 筆、dead ${stats.dead || 0} 筆。回饋主本仍在本機；可精簡已送出的傳輸複本。`
+      : "",
+  };
+}
+
+export function compactSentOutboxPayloads(db, { olderThanMs = OUTBOX_COMPACT_AFTER_MS, now = new Date(), limit = 500 } = {}) {
+  const cutoff = iso(new Date((now instanceof Date ? now.getTime() : now) - olderThanMs));
+  const rows = db.prepare(`
+    SELECT id, payload, feedback_id FROM feedback_outbox
+     WHERE status IN ('sent','dead')
+       AND created_at <= ?
+       AND payload NOT LIKE '{"compacted":true%'
+     ORDER BY id ASC
+     LIMIT ?
+  `).all(cutoff, Math.max(1, Math.min(Number(limit) || 500, 2000)));
+  let compacted = 0;
+  for (const row of rows) {
+    const slim = JSON.stringify({
+      compacted: true,
+      feedback_id: row.feedback_id,
+      payload_sha256: payloadHashHex(row.payload),
+    });
+    db.prepare("UPDATE feedback_outbox SET payload=? WHERE id=?").run(slim, row.id);
+    compacted += 1;
+  }
+  return { compacted, scanned: rows.length };
+}
+
 export function payloadHashHex(payload) {
   return createHash("sha256").update(Buffer.from(String(payload), "utf8")).digest("hex");
 }

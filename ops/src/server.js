@@ -7,8 +7,29 @@ import { openOpsDb, defaultDataDir, defaultDbPath } from "./opsDb.js";
 import { makeAuth } from "./auth.js";
 import { appendAudit, listAudit, verifyAuditChain, createCheckpoint, listCheckpoints } from "./audit.js";
 import { listTransitions } from "./stateMachine.js";
-import { verifyIngestRequest, bodyHashHex } from "./ingestSignature.js";
 import { ingestFeedback } from "./ingest.js";
+import {
+  createProduct,
+  ensureDefaultProduct,
+  ensureLegacyIngestSecret,
+  getFeedbackForProduct,
+  getProduct,
+  listProducts,
+  pauseProduct,
+  publicProduct,
+  reconnectProduct,
+  resolveIngestAuth,
+  resumeProduct,
+  rotateCredential,
+} from "./products.js";
+import {
+  beginUnsubscribeExit,
+  exportHandoff,
+  latestHandoff,
+  listExits,
+  listPendingWork,
+  purgeReplica,
+} from "./exitDrill.js";
 import {
   acceptAttachment,
   getAttachmentRow,
@@ -22,7 +43,7 @@ import { makeScanner } from "./malwareScan.js";
 import { listAnalyses, publicAnalysis, reprocessAnalysis, analysisStats, currentAnalysisId, getCurrentFeedbackAnalysis } from "./feedbackAnalysis.js";
 import { makeProvider } from "./ai/provider.js";
 import { analysisConfigFromEnv, startAnalysisLoop } from "./analysisWorker.js";
-import { listIssues, getIssueWithMembers, mergeIssues, splitIssue, moveFeedback } from "./clustering.js";
+import { getIssueWithMembers, mergeIssues, splitIssue, moveFeedback } from "./clustering.js";
 import { makeEmbeddingProvider } from "./ai/embeddingProvider.js";
 import { clusteringConfigFromEnv, startClusteringLoop } from "./clusteringWorker.js";
 import { getCurrentIssueImpact, listAssessments, isImpactStale, calculateAndStoreImpact, currentImpactId } from "./impact.js";
@@ -61,6 +82,8 @@ import {
   retryProductionRelease,
 } from "./release/productionRelease.js";
 import { makeProductionReleaseProvider } from "./release/productionReleaseProvider.js";
+import { getDashboard, listFeedbackInbox, listIssuesWithLifecycle, OPS_PHASE, publicFeedback } from "./dashboard.js";
+import { notifyConfig, sendOpsNotification } from "./notify/webhook.js";
 
 // 刻意不使用 express：ops 服務維持「零外部相依」，與本 repo 的 CI（不跑 npm install）相容，
 // 也縮小攻擊面。所有路由用 node:http 手刻的極小 router。
@@ -180,6 +203,8 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
   const releaseProvider = productionReleaseProvider || makeProductionReleaseProvider();
   if (!db) throw new Error("createHandler requires db");
   if (!auth) throw new Error("createHandler requires auth");
+  ensureDefaultProduct(db);
+  ensureLegacyIngestSecret(db, ingestSecret);
   const store = storage || new LocalPersistentStorage(defaultAttachmentDir(process.env.OPS_DATA_DIR || process.cwd()));
   const scan = scanner || makeScanner();
 
@@ -197,7 +222,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         const full = path.join(publicDir, entry.file);
         try {
           const buf = readFileSync(full);
-          res.writeHead(200, { "Content-Type": entry.type });
+          res.writeHead(200, { "Content-Type": entry.type, "Cache-Control": "no-store" });
           res.end(buf);
         } catch {
           sendJson(res, 404, { error: "not found" });
@@ -207,28 +232,22 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
 
       // ── 公開 API ──
       if (pathname === "/ops/api/health" && method === "GET") {
-        sendJson(res, 200, { ok: true, service: "ops", phase: "13", configured: auth.configured });
+        sendJson(res, 200, { ok: true, service: "ops", phase: OPS_PHASE, configured: auth.configured, webhook: notifyConfig().configured });
         return;
       }
 
       // ── Ingest（HMAC 認證，非 Owner session） ──
       if (pathname === "/ops/api/ingest/feedback" && method === "POST") {
-        if (!ingestSecret) {
-          sendJson(res, 503, { error: "ingest not configured" });
-          return;
-        }
         const raw = await readRawBody(req);
-        const check = verifyIngestRequest({
+        const check = resolveIngestAuth(db, {
           method: "POST",
           path: "/ops/api/ingest/feedback",
           headers: req.headers,
           rawBody: raw,
-          secret: ingestSecret,
+          envSecret: ingestSecret,
         });
         if (!check.ok) {
-          // 不外洩簽章細節；只回通用錯誤（reason 僅供內部推斷）。
-          const status = check.reason === "expired_timestamp" ? 401 : 401;
-          sendJson(res, status, { error: "unauthorized" });
+          sendJson(res, check.status || 401, { error: check.error || "unauthorized" });
           return;
         }
         let payload;
@@ -244,13 +263,30 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
           return;
         }
         try {
-          const result = ingestFeedback(db, { deliveryId: check.deliveryId, payload, payloadHash: check.bodyHash });
+          // 歸屬由憑證決定；body.product_id 不得改寫到另一站。
+          const result = ingestFeedback(db, {
+            deliveryId: check.deliveryId,
+            payload,
+            payloadHash: check.bodyHash,
+            productId: check.productId,
+          });
           if (result.conflict) {
-            // delivery_id / idempotency_key 被重用於不同內容 → 409，不覆寫原紀錄。
             sendJson(res, 409, { error: "conflict", reason: result.reason });
             return;
           }
-          sendJson(res, 200, { ok: true, id: result.id, duplicate: result.duplicate });
+          sendJson(res, 200, { ok: true, id: result.id, duplicate: result.duplicate, product_id: check.productId });
+          if (!result.duplicate && !result.conflict && notifyConfig().onIngest) {
+            sendOpsNotification({
+              event: "ops.feedback.ingested",
+              title: "新的使用者回饋",
+              text: "正式站有一筆新回饋進入 OPS 收件匣。",
+              fields: [
+                { name: "id", value: result.id },
+                { name: "product_id", value: check.productId },
+                { name: "kind", value: payload.kind || "other" },
+              ],
+            }).catch(() => {});
+          }
         } catch (err) {
           sendJson(res, err.status || 400, { error: err.message });
         }
@@ -423,11 +459,12 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
       if (analysisListMatch && method === "GET") {
         if (!runGuard(auth.requireOwner, req, reply)) return;
         const fid = Number(analysisListMatch[1]);
-        const fb = db.prepare("SELECT id, source, kind, content, app_version, submitted_at, received_at, trust_level FROM ingested_feedback WHERE id = ?").get(fid);
+        const scoped = url.searchParams.get("productId");
+        const fb = getFeedbackForProduct(db, fid, scoped || null);
         if (!fb) { sendJson(res, 404, { error: "not found" }); return; }
         const currentId = currentAnalysisId(db, fid);
         sendJson(res, 200, {
-          feedback: fb,
+          feedback: publicFeedback(fb),
           current_analysis_id: currentId,
           current: getCurrentFeedbackAnalysis(db, fid),
           analyses: listAnalyses(db, { feedbackId: fid }).map((row) => ({ ...publicAnalysis(row), is_current: Number(row.id) === currentId })),
@@ -463,7 +500,97 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
       // ── Phase 5：Issue Candidate 檢視（Owner） ──
       if (pathname === "/ops/api/issues" && method === "GET") {
         if (!runGuard(auth.requireOwner, req, reply)) return;
-        sendJson(res, 200, { items: listIssues(db, { limit: url.searchParams.get("limit") }) });
+        sendJson(res, 200, { items: listIssuesWithLifecycle(db, { limit: url.searchParams.get("limit") }) });
+        return;
+      }
+      if (pathname === "/ops/api/feedback" && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        sendJson(res, 200, listFeedbackInbox(db, {
+          limit: url.searchParams.get("limit"),
+          offset: url.searchParams.get("offset"),
+          includeContact: url.searchParams.get("includeContact") === "1",
+          productId: url.searchParams.get("productId") || null,
+        }));
+        return;
+      }
+      if (pathname === "/ops/api/products" && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        sendJson(res, 200, { items: listProducts(db) });
+        return;
+      }
+      if (pathname === "/ops/api/products" && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          const body = await readBody(req);
+          const created = createProduct(db, {
+            id: body?.id,
+            displayName: body?.display_name || body?.displayName,
+            actor: `owner:${req.owner.email}`,
+          });
+          sendJson(res, 201, { ok: true, ...created });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
+      const productAction = pathname.match(/^\/ops\/api\/products\/([a-z0-9_-]+)\/(pause|resume|unsubscribe|reconnect|rotate-credential|handoff|purge-replica)$/);
+      if (productAction && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        const [, productId, action] = productAction;
+        const actor = `owner:${req.owner.email}`;
+        try {
+          if (action === "pause") sendJson(res, 200, { ok: true, product: pauseProduct(db, productId, { actor }) });
+          else if (action === "resume") sendJson(res, 200, { ok: true, product: resumeProduct(db, productId, { actor }) });
+          else if (action === "unsubscribe") sendJson(res, 200, { ok: true, ...beginUnsubscribeExit(db, productId, { actor }) });
+          else if (action === "reconnect") sendJson(res, 200, { ok: true, ...reconnectProduct(db, productId, { actor }) });
+          else if (action === "handoff") sendJson(res, 200, { ok: true, ...exportHandoff(db, productId, { actor }) });
+          else if (action === "purge-replica") {
+            const body = await readBody(req);
+            sendJson(res, 200, { ok: true, ...purgeReplica(db, productId, { actor, confirm: body?.confirm }) });
+          } else sendJson(res, 200, { ok: true, ...rotateCredential(db, productId, { actor }) });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
+      const productPending = pathname.match(/^\/ops\/api\/products\/([a-z0-9_-]+)\/pending$/);
+      if (productPending && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        const row = getProduct(db, productPending[1]);
+        if (!row) { sendJson(res, 404, { error: "not found" }); return; }
+        sendJson(res, 200, { product: publicProduct(row), pending: listPendingWork(db, row.id), exits: listExits(db, row.id) });
+        return;
+      }
+      const productHandoffGet = pathname.match(/^\/ops\/api\/products\/([a-z0-9_-]+)\/handoff$/);
+      if (productHandoffGet && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        const pack = latestHandoff(db, productHandoffGet[1]);
+        if (!pack) { sendJson(res, 404, { error: "not found" }); return; }
+        sendJson(res, 200, pack);
+        return;
+      }
+      const productGet = pathname.match(/^\/ops\/api\/products\/([a-z0-9_-]+)$/);
+      if (productGet && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        const row = getProduct(db, productGet[1]);
+        if (!row) { sendJson(res, 404, { error: "not found" }); return; }
+        sendJson(res, 200, { ...publicProduct(row), pending: listPendingWork(db, row.id), latest_exit: listExits(db, row.id)[0] || null });
+        return;
+      }
+      if (pathname === "/ops/api/dashboard" && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        sendJson(res, 200, getDashboard(db, process.env, { productId: url.searchParams.get("productId") || null }));
+        return;
+      }
+      if (pathname === "/ops/api/notify/test" && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        const sent = await sendOpsNotification({
+          event: "ops.notify.test",
+          title: "OPS webhook 測試",
+          text: "這是 Owner 從 Console 送出的測試通知。",
+          fields: [{ name: "actor", value: req.owner.email }],
+        });
+        sendJson(res, sent.ok ? 200 : 503, { ok: sent.ok, ...sent });
         return;
       }
       const issueGet = pathname.match(/^\/ops\/api\/issues\/(\d+)$/);
@@ -900,7 +1027,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
       const rcNotifRetry = pathname.match(/^\/ops\/api\/release-notifications\/(\d+)\/retry$/);
       if (rcNotifRetry && method === "POST") {
         if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
-        try { sendJson(res, 200, { ok: true, ...retryReleaseNotification(db, Number(rcNotifRetry[1]), { actor: `owner:${req.owner.email}` }) }); }
+        try { sendJson(res, 200, { ok: true, ...await retryReleaseNotification(db, Number(rcNotifRetry[1]), { actor: `owner:${req.owner.email}` }) }); }
         catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
         return;
       }
@@ -929,6 +1056,22 @@ export function createApp({ db, auth, publicDir = PUBLIC_DIR, ingestSecret = pro
   };
 }
 
+function loadEnvFile(file) {
+  if (!existsSync(file)) return;
+  for (const line of readFileSync(file, "utf8").split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) continue;
+    const i = t.indexOf("=");
+    if (i <= 0) continue;
+    const key = t.slice(0, i).trim();
+    let value = t.slice(i + 1);
+    if ((value.startsWith("\"") && value.endsWith("\"")) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    if (process.env[key] == null || process.env[key] === "") process.env[key] = value;
+  }
+}
+
 function resolveSessionSecret(dataDir) {
   // 必須與 v3 的 SESSION_SECRET 分離：只吃 OPS_SESSION_SECRET，否則自行產生並持久化。
   if (process.env.OPS_SESSION_SECRET) return process.env.OPS_SESSION_SECRET;
@@ -946,6 +1089,7 @@ function resolveSessionSecret(dataDir) {
 
 export function startServer() {
   const dataDir = defaultDataDir();
+  loadEnvFile(path.join(dataDir, "auth.env"));
   const db = openOpsDb(defaultDbPath());
   const auth = makeAuth({
     ownerEmail: process.env.OPS_OWNER_EMAIL || process.env.AUTH_EMAIL,
@@ -1023,7 +1167,7 @@ export function startServer() {
   }
   http.createServer(handler).listen(port, host, () => {
     // eslint-disable-next-line no-console
-    console.log(`Ops console (Phase 13)：http://${host}:${port}  owner=${auth.configured ? auth.ownerEmail : "(未設定)"}  ingest=${process.env.OPS_INGEST_SECRET ? "on" : "off"}  ai=${aiProvider.available ? aiProvider.name : "off"}  embed=${embProvider.available ? embProvider.name : "off"}  impact=${impactCfg.enabled ? "on" : "off"}  eval=${evalProvider.available ? evalProvider.name : "off"}  proposal=${proposalProvider.available ? proposalProvider.name : "off"}  reeval=${reevalCfg.enabled ? "on" : "off"}  coding=${codingProvider.available && codingRepo.available ? codingProvider.name : "off"}  qa=${qaCfg.enabled && qaRepo.available ? "on" : "off"}  staging=${stagingCfg.enabled && stagingProvider.available && stagingRepo.available ? stagingProvider.name : "off"}  release=${releaseCfg.enabled && releaseRepo.available ? "on" : "off"}`);
+    console.log(`Ops console (Phase ${OPS_PHASE})：http://${host}:${port}  owner=${auth.configured ? auth.ownerEmail : "(未設定)"}  ingest=${process.env.OPS_INGEST_SECRET ? "on" : "off"}  webhook=${notifyConfig().configured ? notifyConfig().channel : "off"}  ai=${aiProvider.available ? aiProvider.name : "off"}  embed=${embProvider.available ? embProvider.name : "off"}  impact=${impactCfg.enabled ? "on" : "off"}  eval=${evalProvider.available ? evalProvider.name : "off"}  proposal=${proposalProvider.available ? proposalProvider.name : "off"}  reeval=${reevalCfg.enabled ? "on" : "off"}  coding=${codingProvider.available && codingRepo.available ? codingProvider.name : "off"}  qa=${qaCfg.enabled && qaRepo.available ? "on" : "off"}  staging=${stagingCfg.enabled && stagingProvider.available && stagingRepo.available ? stagingProvider.name : "off"}  release=${releaseCfg.enabled && releaseRepo.available ? "on" : "off"}`);
   });
   return { db, auth };
 }

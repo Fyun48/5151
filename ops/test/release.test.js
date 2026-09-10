@@ -319,8 +319,15 @@ test("50+51+52. notification queued idempotently; no adapter → no fake deliver
     assert.equal(notifs.length, 1);
     assert.equal(notifs[0].status, "pending");
     assert.doesNotMatch(JSON.stringify(notifs[0]), /leak@example\.com|reporter-\d/);
-    const retry = retryReleaseNotification(db, notifs[0].id, { actor: "owner", now: NOW });
+    const retry = await retryReleaseNotification(db, notifs[0].id, { actor: "owner", now: NOW });
     assert.equal(retry.status, "pending"); // 未設 adapter → 不假造送達
+    const sent = await retryReleaseNotification(db, notifs[0].id, {
+      actor: "owner",
+      now: NOW,
+      sender: async () => ({ ok: true, status: 204 }),
+    });
+    assert.equal(sent.status, "sent");
+    assert.equal(listReleaseNotifications(db, codingTaskId)[0].status, "sent");
     void rc;
   } finally { git.cleanup(); db.close(); }
 });

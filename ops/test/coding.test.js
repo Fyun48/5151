@@ -420,10 +420,12 @@ test("27+28+32+33. successful coding opens Draft PR base=master with provenance 
 
 test("29. coding PR cannot auto-merge under existing CI policy (draft + ai-dev/ excluded)", () => {
   const wfPath = path.join(ROOT, ".github", "workflows", "test.yml");
-  if (!existsSync(wfPath)) return;
+  assert.ok(existsSync(wfPath), "Tests workflow must exist");
   const wf = readFileSync(wfPath, "utf8");
-  assert.doesNotMatch(wf, /gh pr merge|ENABLE_AUTO_MERGE/i);
-  assert.match(wf, /auto-merge|Tests only/i);
+  assert.match(wf, /ai-dev\//);
+  assert.match(wf, /draft == false/);
+  assert.match(wf, /npm test/);
+  assert.doesNotMatch(wf, /gh workflow run deploy|DEPLOY-PRODUCTION|appleboy\/(scp|ssh)-action/i);
 });
 
 test("30. coding PR gateway cannot merge its own PR (no merge capability)", () => {

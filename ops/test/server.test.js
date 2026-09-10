@@ -37,7 +37,7 @@ test("health is public and reports phase 1.1", async () => {
     const data = await (await fetch(`${base}/ops/api/health`)).json();
     assert.equal(data.ok, true);
     assert.equal(data.service, "ops");
-    assert.equal(data.phase, "13");
+    assert.equal(data.phase, "15");
   });
 });
 
@@ -125,6 +125,10 @@ test("static console loads and unknown api is 404", async () => {
     const html = await fetch(`${base}/`);
     assert.equal(html.status, 200);
     assert.match(html.headers.get("content-type") || "", /text\/html/);
+    assert.equal(html.headers.get("cache-control"), "no-store");
+    const css = await fetch(`${base}/console.css`);
+    assert.equal(css.status, 200);
+    assert.equal(css.headers.get("cache-control"), "no-store");
     const nf = await fetch(`${base}/ops/api/nope`);
     assert.equal(nf.status, 404);
   });

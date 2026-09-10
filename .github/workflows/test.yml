@@ -1,0 +1,61 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  pull_request:
+    branches:
+      - master
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
+# Tests gate merge. No production deploy.
+# OPS：ai-dev/*（Coding Agent 草稿 PR）與 cursor/ops-*（維運規則變更）不自動合併。
+# Owner 一般功能 PR（cursor/* 等）測試通過後 squash merge，與 Production 部署分離。
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run Test Suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm test
+
+      # 合併與部署分離：通過測試只合併，絕不觸發 CasaOS / Production deploy。
+      - name: Auto-merge owner PRs (no production deploy)
+        if: github.event_name == 'pull_request' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository && !startsWith(github.event.pull_request.head.ref, 'cursor/ops-') && !startsWith(github.event.pull_request.head.ref, 'ai-dev/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh pr merge "${{ github.event.pull_request.number }}" --squash --delete-branch

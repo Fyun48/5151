@@ -11,7 +11,8 @@
 
 - **v3**：埠 `5153`，程式在 `v3/src`、`v3/public`，資料 `data-v3/v3.db`。
 - **公開站**：`https://c5151.reversalplay.me` 與 `https://jibbyrenth.reversalplay.me`（同一條 Cloudflare Tunnel → `http://127.0.0.1:5153`）。
-- 規劃見 `v3/ARCHITECTURE.md` 與 `v3/DESIGN.md`。
+- **OPS Console**：`https://jibbyrentops.reversalplay.me`（同一條 Tunnel → `http://127.0.0.1:5154`，獨立容器 `5151-ops`）。規劃見 `ops/BLUEPRINT.md`。
+- 規劃見 `v3/ARCHITECTURE.md` 與 `v3/DESIGN.md`；外掛／熔斷見 `v3/PLAN-integrations.md`。
 - **v1 已停用**（root 的 `src/`、`public/` 只留作歷史，只讀匯入）；**v2 只維護、不再加功能**。
 
 ## 本機開發
@@ -19,6 +20,7 @@
 Cloud Agent 環境由 `.cursor/environment.json` 自動 `npm ci` 並啟動 v3 開發伺服器（`npm run dev:v3`，埠 5153，預設管理員 `demo@example.com` / `demopass123`，可用 `AUTH_EMAIL` / `AUTH_PASSWORD` secrets 覆寫）。
 
 - 啟動 v3：`npm run dev:v3`（開 http://localhost:5153 ）
+- 啟動 OPS：`npm run dev:ops`（開 http://127.0.0.1:5154 ，見 `ops/README.md`）
 - 測試：`npm test`
 
 ## 開發工具（務必使用專案自訂的 rules / skills / plugins / agents）
@@ -34,13 +36,17 @@ Cloud Agent 環境由 `.cursor/environment.json` 自動 `npm ci` 並啟動 v3 �
 
 做完工作後請開**非草稿** PR（`draft: false`）。
 
-**當使用者要求合併、部署、或「改完就上 v3」時，必須立刻合併並部署，不要再問、不要等 Ops、不要等已刪除的 `test.yml` 自動 squash。** 這條已重覆交代，寫在 `.cursor/rules/owner-merge-deploy.mdc`。
+- **Tests**（`.github/workflows/test.yml`）：`npm test` 通過後，一般非草稿 PR 會 squash merge。
+- **不自動合併**：`ai-dev/*`（OPS Coding Agent 草稿 PR）、`cursor/ops-*`（OPS 規則／管線變更，需 Owner 看過）。
+- **不自動部署**：Tests 通過只合併。V3 正式機一律走 CasaOS 三步（Build → Predeploy → Deploy v3）。
 
-1. 合併目前的 PR 進 `master`（squash 即可）。
+**當使用者要求合併、部署、或「改完就上 v3」時，必須立刻合併並部署，不要再問、不要等 Ops。** 這條已重覆交代，寫在 `.cursor/rules/owner-merge-deploy.mdc`。
+
+1. 合併目前的 PR 進 `master`（squash 即可）。`cursor/ops-*` 仍需 Owner 看過再合，除非使用者當次明確要求合併。
 2. 部署 v3 **只走這三個** workflow，依序從 `master` 做 `workflow_dispatch`：
    - `.github/workflows/build-production-image.yml`
    - `.github/workflows/production-predeploy-check.yml`
    - `.github/workflows/deploy-v3.yml`
 3. 確認字串（`DEPLOY-PRODUCTION` / `PREDEPLOY-PRODUCTION`）由代理人代填。Cursor 雲端身分可以觸發這三條。
 4. Ops Phase 15「不 merge、不部署」只約束 Ops 機器人自己的任務，**不約束**使用者直接交代 Cursor Agent 的改碼＋合併部署。
-5. 不要另開 tunnel、不要改 v1/v2、不要發明第四條部署路徑。
+5. 不要另開 tunnel、不要改 v1/v2。Deploy OPS（`.github/workflows/deploy-ops.yml`，確認字 `DEPLOY-OPS`，只重建 `5151-ops`）是獨立工作流，不是 v3 的第四條路徑。
