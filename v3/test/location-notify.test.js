@@ -63,6 +63,25 @@ test("prefers community building coordinates over listing street pin", () => {
   assert.equal(chosen.community_id, 101675);
 });
 
+test("keeps a more precise listing alley when community address is only the street", () => {
+  const chosen = preferCommunityLocation(
+    {
+      address: "台北市士林區中山北路六段172巷22弄",
+      lat: 25.1073,
+      lng: 121.526,
+      community_name: "",
+    },
+    {
+      id: 0,
+      name: "",
+      address: "台北市士林區中山北路六段",
+      lat: null,
+      lng: null,
+    },
+  );
+  assert.equal(chosen.address, "台北市士林區中山北路六段172巷22弄");
+});
+
 test("falls back to listing pin when community has no coordinates", () => {
   const chosen = preferCommunityLocation(
     { address: "淡水區淡金路二段", lat: 25.18, lng: 121.44, community_id: 9, community_name: "將捷之森" },

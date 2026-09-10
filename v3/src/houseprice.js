@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { passesAttributeFilters } from "./floors.js";
 import { decodeEntities } from "./htmlEntities.js";
 import { isExcludedByKeyword } from "./geo.js";
-import { addressHasPrecisePart, addressPrecision, isTaiwanMapPin, pickRicherAddress } from "./location.js";
+import { addressHasPrecisePart, addressPrecision, extractTaiwanStreetAddress, isTaiwanMapPin, pickRicherAddress, sourceCommunityLinked } from "./location.js";
 import { feeFieldsFromBlob } from "./listingCost.js";
 import { zipForDistrict } from "./hbhousing.js";
 import { lookupDistrict } from "./regions.js";
@@ -226,15 +226,12 @@ export function parseHpListHtml(html) {
     const cover = pickHpCover(card);
     const title = titleFromHpCard(card);
     const labeled = parseHpLabeledPlain(stripTags(card));
-    const addressMatch = card.match(/location-filled[\s\S]{0,180}?<span>\s*([^<]+)\s*<\/span>/i)
-      || card.match(/台北市[^<]{2,80}區[^<]{0,80}\d[^<]{0,24}號/)
-      || card.match(/新北市[^<]{2,80}區[^<]{0,80}\d[^<]{0,24}號/)
-      || card.match(/台北市[^<]{2,80}區[^<]{0,80}\d[^<]{0,16}巷/)
-      || card.match(/新北市[^<]{2,80}區[^<]{0,80}\d[^<]{0,16}巷/)
-      || card.match(/台北市[^<]{2,40}區[^<]{0,40}/)
-      || card.match(/新北市[^<]{2,40}區[^<]{0,40}/);
-    const communityMatch = card.match(/building-fill[\s\S]{0,180}?<span>\s*([^<]+)\s*<\/span>/i)
-      || card.match(/【([^【】]{1,20})】/);
+    const locationSpan = card.match(/location-filled[\s\S]{0,180}?<span>\s*([^<]+)\s*<\/span>/i);
+    const communityBlock = card.match(/building-fill[\s\S]{0,240}?<span>([\s\S]*?)<\/span>/i);
+    const communityHtml = communityBlock?.[1] || "";
+    const communityMatch = communityHtml
+      || (card.match(/【([^【】]{1,20})】/) || [])[1]
+      || "";
     const priceMatch = card.match(/>(\d{3,})\s*<\/span>\s*<span[^>]*>元\/月/);
     const kind = kindFromHpText(card);
     const areaMatch = stripTags(card).match(/([\d.]+)\s*坪/);
@@ -246,9 +243,11 @@ export function parseHpListHtml(html) {
       title,
       address: pickBestAddress([
         labeled["地址"],
-        decodeEntities(String(addressMatch?.[1] || addressMatch?.[0] || "").trim()),
+        decodeEntities(String(locationSpan?.[1] || "").trim()),
+        extractTaiwanStreetAddress(stripTags(card)),
       ]),
-      community: cleanCommunityName(communityMatch?.[1] || labeled["社區"]),
+      community: cleanCommunityName(stripTags(communityMatch) || labeled["社區"]),
+      communityLinked: sourceCommunityLinked({ hasAnchor: /<a\b/i.test(communityHtml) }),
       cover,
       price: Number(priceMatch?.[1]) || 0,
       kind,
@@ -279,6 +278,10 @@ export function parseHpDetailHtml(html) {
     if (!(key in fields)) fields[key] = value;
   }
   const floorName = normalizeHpFloorName(fields["樓層"]);
+  let communityLinked = false;
+  const communityRe = /<span class="mr-3 text-c-dark-300">社區<\/span\s*>\s*<span class="text-c-dark-900"[^>]*>([\s\S]*?)<\/span>/i;
+  const communityHtml = source.match(communityRe)?.[1] || "";
+  if (/<a\b/i.test(communityHtml)) communityLinked = true;
   // 部分（多為 591 轉入的純數字 id）明細頁沒有 label span，只有 meta description，用它補地址／坪數／格局／現況。
   const descMatch = source.match(/<meta[^>]*name="description"[^>]*content="([^"]*)"/i);
   const desc = descMatch ? decodeEntities(descMatch[1]) : "";
@@ -300,10 +303,17 @@ export function parseHpDetailHtml(html) {
     lat = Number(coordMatch[1]);
     lng = Number(coordMatch[2]);
   }
-  const address = pickBestAddress([fields["地址"], mapAddress, addrMeta ? addrMeta[1] : ""]);
+  const address = pickBestAddress([
+    fields["地址"],
+    mapAddress,
+    addrMeta ? addrMeta[1] : "",
+    extractTaiwanStreetAddress(stripTags(source)),
+  ]);
   return {
     floorName,
     community: cleanCommunityName(fields["社區"]),
+    communityId: 0,
+    communityLinked,
     areaName,
     layout,
     kind: kindFromHpText(fields["現況"] || "") || kindFromHpText(fields["型態"] || "") || kindFromHpText(desc),
@@ -370,12 +380,19 @@ export function parseHpDetailJson(payload) {
     .map((row) => str(row.name))
     .find(Boolean);
   const titleCommunity = str(det.caseName).match(/【([^】]{1,20})】/)?.[1] || "";
+  const communityId = Number(det.communityId || det.community_id) || 0;
   const community = cleanCommunityName(
     det.communityName || det.community || det.communityTag || det.buildName || tagCommunity || titleCommunity,
   );
+  const communityLinked = sourceCommunityLinked({
+    communityId,
+    href: det.communityUrl || det.community_url || "",
+  });
   return {
     floorName,
     community,
+    communityId,
+    communityLinked,
     areaName,
     layout,
     kind: kindFromHpText(usage) || kindFromHpText(buildingType) || kindFromHpText(str(det.caseName)),
@@ -400,15 +417,18 @@ export function parseHpDetailJson(payload) {
 }
 
 /** 先試 JSON API 取完整明細（含經緯度），失敗才退回舊 SSR HTML 解析。 */
-export async function fetchHpDetail(id, getHtml) {
+export async function fetchHpDetail(id, getHtml = defaultGetHtml) {
+  const key = hpIdFromUrl(id) || String(id || "").trim();
+  if (!key) return null;
+  const load = typeof getHtml === "function" ? getHtml : defaultGetHtml;
   try {
-    const detail = parseHpDetailJson(await getHtml(hpDetailApiUrl(id)));
+    const detail = parseHpDetailJson(await load(hpDetailApiUrl(key)));
     if (detail && (detail.lat != null || detail.floorName || detail.community || detail.address || detail.layout)) {
       return detail;
     }
   } catch { /* JSON API 不可用就退回 HTML */ }
   try {
-    return parseHpDetailHtml(await getHtml(hpDetailUrl(id)));
+    return parseHpDetailHtml(await load(hpDetailUrl(key)));
   } catch {
     return null;
   }
@@ -444,6 +464,13 @@ export function enrichHpListingFromDetail(row, detail, { regionId, sectionId } =
     if (!Array.isArray(tags)) tags = [];
     return tags;
   };
+  if (Number(detail.communityId) > 0) {
+    next.community_id = Number(detail.communityId);
+    changed = true;
+  }
+  if (detail.communityLinked || Number(detail.communityId) > 0) {
+    next.community_linked = 1;
+  }
   if (!next.community_name && detail.community) {
     next.community_name = detail.community;
     const t = ensureTags();
@@ -517,8 +544,9 @@ export function normalizeHpItem(item, { regionId, sectionId } = {}) {
     kind_name: kindName,
     role_name: "5168租屋",
     cover: String(item.cover || "").trim(),
-    community_id: 0,
+    community_id: Number(item.communityId) || 0,
     community_name: String(item.community || "").trim(),
+    community_linked: item.communityLinked || Number(item.communityId) > 0 ? 1 : 0,
     tags: JSON.stringify(tags),
     refresh_time: "",
     lat: null,
@@ -587,10 +615,11 @@ export async function probeHpListingAlive(url) {
 }
 
 async function defaultGetHtml(url) {
+  const isJson = /\/ws\//.test(String(url || ""));
   const res = await fetch(url, {
     headers: {
       "User-Agent": USER_AGENT,
-      Accept: "text/html,application/xhtml+xml",
+      Accept: isJson ? "application/json, text/plain, */*" : "text/html,application/xhtml+xml",
       Referer: `${HP_SITE}/`,
     },
     signal: AbortSignal.timeout(15000),
@@ -613,6 +642,7 @@ export async function fetchHpCoveringListings(jobs, options = {}) {
   const batches = [];
   const seen = new Set();
   let detailBudget = Math.max(0, Number(options.detailLimit ?? 30));
+  let addressBudget = Math.max(0, Number(options.addressDetailLimit ?? 80));
 
   for (const job of jobs || []) {
     const regionId = Number(job.regionId) || 0;
@@ -652,10 +682,13 @@ export async function fetchHpCoveringListings(jobs, options = {}) {
           const needDetail = !row.floor_name || !floorNameLooksComplete(row.floor_name) || !row.community_name || !addressHasPrecisePart(row.address) || row.lat == null;
           const alreadyGeo = typeof options.hasGeo === "function" && options.hasGeo(row.post_id);
           const forceAddress = !addressHasPrecisePart(row.address);
-          if (detailBudget > 0 && needDetail && (!alreadyGeo || forceAddress)) {
+          const canFetchAddress = forceAddress && addressBudget > 0;
+          const canFetchOther = needDetail && !alreadyGeo && detailBudget > 0;
+          if (canFetchAddress || canFetchOther) {
             const detail = await fetchHpDetail(id, getHtml);
             if (detail) row = enrichHpListingFromDetail(row, detail, { regionId, sectionId });
-            detailBudget -= 1;
+            if (canFetchAddress) addressBudget -= 1;
+            else detailBudget -= 1;
             const gap = options.detailGapMs ?? options.gapMs ?? 300;
             if (gap > 0) await new Promise((resolve) => setTimeout(resolve, gap));
           }

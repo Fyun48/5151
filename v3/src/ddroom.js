@@ -157,8 +157,10 @@ export function normalizeDdItem(item, { regionId, sectionId } = {}) {
     kind_name: kindName,
     role_name: roleFromItem(item),
     cover: String(cover || "").trim(),
-    community_id: 0,
+    community_id: Number(item.community?.id || item.community_id) || 0,
     community_name: String(item.community?.name || item.community_name || item.building?.name || item.community || "").trim(),
+    community_linked: Number(item.community?.id || item.community_id) > 0
+      || Boolean(item.community?.url || item.community?.link || item.community_url),
     tags: JSON.stringify([...tags, item.community?.name || item.community_name || item.building?.name].filter((row) => String(row || "").trim())),
     refresh_time: String(item.published_date || "").trim(),
     lat: null,

@@ -8,6 +8,7 @@ import {
   HP_SOURCE,
   enrichHpListingFromDetail,
   fetchHpCoveringListings,
+  fetchHpDetail,
   probeHpListingAlive,
   hpDetailApiUrl,
   hpDetailUrl,
@@ -74,10 +75,17 @@ test("5168 labeled 樓層 / 22 / 24樓 means rental 22 and building 24", () => {
   assert.match(html.address, /民權路19號/);
 });
 
+test("parseHpDetailHtml treats a community anchor as a linked community", () => {
+  const html = parseHpDetailHtml(`<div><span class="mr-3 text-c-dark-300">社區</span><span class="text-c-dark-900"><a href="https://community.houseprice.tw/x">御陽明</a></span></div><p>地址 / 台北市士林區格致路1號</p>`);
+  assert.equal(html.community, "御陽明");
+  assert.equal(html.communityLinked, true);
+});
+
 test("parseHpDetailHtml reads total/rental floor and community from the detail page", () => {
   const detail = parseHpDetailHtml(detailFixture);
   assert.equal(detail.floorName, "4/4");
   assert.equal(detail.community, "御陽明");
+  assert.equal(detail.communityLinked, false);
   assert.equal(detail.areaName, "64.73坪");
   assert.equal(detail.layout, "4房2廳4衛2陽台");
   assert.equal(detail.kind, "整層住家");
@@ -111,6 +119,7 @@ test("5168 JSON 16699854 keeps 民權路 address, 南加州 community, 22/24 flo
   assert.equal(detail.address, "新北市淡水區民權路19號");
   assert.equal(detail.floorName, "22/24");
   assert.equal(detail.community, "南加州");
+  assert.equal(detail.communityLinked, true);
   assert.equal(detail.layout, "2房2廳2衛");
   assert.equal(detail.areaName, "30.8坪");
   const fallback = parseHpDetailJson({
@@ -217,6 +226,56 @@ test("fetchHpCoveringListings still fetches detail when pin exists but address h
   assert.ok(detailHits > 0);
   const suite = batches[0].listings.find((row) => row.source_id === "16512158_1170048");
   assert.ok(suite);
+});
+
+test("5168 16714357 keeps 中山北路六段172巷22弄 and has no community link", () => {
+  const live = readFileSync(path.join(dir, "fixtures/houseprice-detail-16714357.json"), "utf8");
+  const detail = parseHpDetailJson(live);
+  assert.equal(detail.address, "台北市士林區中山北路六段172巷22弄");
+  assert.equal(detail.floorName, "2/4");
+  assert.equal(detail.community, "");
+  assert.equal(detail.communityLinked, false);
+  const list = normalizeHpItem({
+    id: "16714357", kind: "整層住家", title: "中山北路六段靜巷公寓2樓", price: 32000,
+    areaName: "23.1坪", layout: "2房2廳1衛", floorName: "2/4", address: "台北市士林區中山北路六段", community: "",
+  }, { regionId: 1, sectionId: 8 });
+  assert.equal(list.address, "台北市士林區中山北路六段");
+  const enriched = enrichHpListingFromDetail(list, detail, { regionId: 1, sectionId: 8 });
+  assert.equal(enriched.address, "台北市士林區中山北路六段172巷22弄");
+});
+
+test("5168 communityId from JSON marks the community as linked", () => {
+  const detail = parseHpDetailJson(detailApiFixture);
+  assert.equal(detail.community, "城市山水/永樂大廈");
+  assert.equal(detail.communityId, 28702);
+  assert.equal(detail.communityLinked, true);
+});
+
+test("5168 list parser keeps 巷弄 and does not stop at 巷", () => {
+  const html = `<a href=https://rent.houseprice.tw/house/16714357 class="group"><section>
+    <h2>中山北路六段靜巷公寓2樓</h2>
+    <Icon icon="weui:location-filled"></Icon><span>台北市士林區中山北路六段172巷22弄</span>
+    <span>整層住家</span><span>23.1 坪</span><span>2房2廳1衛</span><span>2/4樓</span>
+    <span>32000</span><span>元/月</span>
+  </section>`;
+  const parsed = parseHpListHtml(html);
+  assert.equal(parsed.items[0].address, "台北市士林區中山北路六段172巷22弄");
+  assert.equal(parsed.items[0].communityLinked, false);
+});
+
+test("fetchHpDetail uses the default JSON client when getHtml is omitted", async () => {
+  const orig = globalThis.fetch;
+  const live = readFileSync(path.join(dir, "fixtures/houseprice-detail-16714357.json"), "utf8");
+  try {
+    globalThis.fetch = async (url) => {
+      assert.match(String(url), /\/ws\/detail\/16714357$/);
+      return { ok: true, status: 200, text: async () => live };
+    };
+    const detail = await fetchHpDetail("https://rent.houseprice.tw/house/16714357");
+    assert.equal(detail.address, "台北市士林區中山北路六段172巷22弄");
+  } finally {
+    globalThis.fetch = orig;
+  }
 });
 
 test("5168 alley-only detail address upgrades a street-only list address", () => {

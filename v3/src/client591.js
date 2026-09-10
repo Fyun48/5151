@@ -255,6 +255,7 @@ export function normalizeListing(item) {
     cover: item.cover || (item.photoList && item.photoList[0]) || "",
     community_id: item.community_id && Number(item.community_id) !== 0 ? Number(item.community_id) : 0,
     community_name: String(item.community_name || item.community || "").trim(),
+    community_linked: item.community_id && Number(item.community_id) !== 0 ? 1 : 0,
     tags: JSON.stringify(item.tags || []),
     refresh_time: item.refresh_time || "",
     lat: coords.lat,
@@ -452,6 +453,7 @@ export async function fetchListingDetail(postId, options = {}) {
     geo_source: chosen.geo_source,
     community_id: chosen.community_id || ref.id || 0,
     community_name: chosen.community_name || ref.name || "",
+    community_linked: chosen.community_id || ref.id ? 1 : 0,
   };
 }
 

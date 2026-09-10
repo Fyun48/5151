@@ -71,10 +71,9 @@ export function pickRicherAddress(candidates) {
   })[0];
 }
 
-export function preferListingAddress(incoming, stored, geoSource = "") {
+export function preferListingAddress(incoming, stored, _geoSource = "") {
   const next = String(incoming || "").trim();
   const prev = String(stored || "").trim();
-  if (String(geoSource || "") === "community" && prev) return prev;
   return pickRicherAddress([next, prev]) || next || prev || "";
 }
 
@@ -100,6 +99,30 @@ export function formatListingAddress(address, communityName) {
   if (!addr) return name;
   if (addr.includes(name)) return addr;
   return `${name} ${addr}`;
+}
+
+/** 來源平台社區名有超連結時，本站改連到該社區的 Google 地圖搜尋。 */
+export function communityMapsQuery(communityName, address = "") {
+  const name = String(communityName || "").trim();
+  if (!name) return "";
+  const loc = String(address || "").replace(/\s+/g, "");
+  const city = (loc.match(/^(台北市|臺北市|新北市|桃園市|基隆市|新竹市|[^市縣]{1,3}[市縣])/) || [])[0] || "";
+  const district = (loc.match(/[市縣]([^\d市縣]{1,4}[區鄉鎮市])/) || [])[1] || "";
+  return `${city}${district}${name}`;
+}
+
+export function communityMapsUrl(communityName, address = "") {
+  const query = communityMapsQuery(communityName, address);
+  if (!query) return "";
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+}
+
+/** 來源有社區頁／社區超連結才算 linked；標題括號或純文字社區名不算。 */
+export function sourceCommunityLinked({ communityId = 0, href = "", hasAnchor = false } = {}) {
+  if (Number(communityId) > 0) return true;
+  if (hasAnchor) return true;
+  const link = String(href || "").trim();
+  return Boolean(link) && /^https?:\/\//i.test(link);
 }
 
 export function communityRefFromDetail(data) {
@@ -162,7 +185,7 @@ export function preferCommunityLocation(listingLoc = {}, communityLoc = null) {
   const communityLat = parseCoord(communityLoc?.lat);
   const communityLng = parseCoord(communityLoc?.lng);
   const useCommunityCoords = communityLat != null && communityLng != null;
-  const chosenAddress = communityAddress || listingAddress;
+  const chosenAddress = pickRicherAddress([listingAddress, communityAddress]) || listingAddress || communityAddress;
   return {
     address: formatListingAddress(chosenAddress, communityName),
     lat: useCommunityCoords ? communityLat : listingLat,
