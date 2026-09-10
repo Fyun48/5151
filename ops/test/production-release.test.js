@@ -911,7 +911,7 @@ function driftManifest(db, codingTaskId) {
 }
 
 function driftProvenanceOnly(db) {
-  db.prepare("UPDATE production_stable_current SET provenance_fingerprint=? WHERE id=1")
+  db.prepare("UPDATE production_stable_current SET provenance_fingerprint=? WHERE product_id='v3'")
     .run("f".repeat(64));
 }
 

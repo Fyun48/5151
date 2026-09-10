@@ -7,6 +7,7 @@ export function publicFeedback(row, { includeContact = false } = {}) {
   if (!row) return null;
   return {
     id: Number(row.id),
+    product_id: row.product_id || "v3",
     source: row.source || "unknown",
     kind: row.kind || "other",
     content: row.content || "",
@@ -20,16 +21,24 @@ export function publicFeedback(row, { includeContact = false } = {}) {
   };
 }
 
-export function listFeedbackInbox(db, { limit = 50, offset = 0, includeContact = false } = {}) {
+export function listFeedbackInbox(db, { limit = 50, offset = 0, includeContact = false, productId = null } = {}) {
   const cap = Math.max(1, Math.min(Number(limit) || 50, 200));
   const skip = Math.max(0, Number(offset) || 0);
-  const total = countIngested(db);
-  const rows = db.prepare(
-    `SELECT f.*, l.issue_id AS issue_id
-       FROM ingested_feedback f
-       LEFT JOIN issue_feedback_link l ON l.feedback_id = f.id AND l.active = 1
-      ORDER BY f.id DESC LIMIT ? OFFSET ?`,
-  ).all(cap, skip);
+  const total = countIngested(db, { productId });
+  const rows = productId
+    ? db.prepare(
+      `SELECT f.*, l.issue_id AS issue_id
+         FROM ingested_feedback f
+         LEFT JOIN issue_feedback_link l ON l.feedback_id = f.id AND l.active = 1
+        WHERE f.product_id = ?
+        ORDER BY f.id DESC LIMIT ? OFFSET ?`,
+    ).all(productId, cap, skip)
+    : db.prepare(
+      `SELECT f.*, l.issue_id AS issue_id
+         FROM ingested_feedback f
+         LEFT JOIN issue_feedback_link l ON l.feedback_id = f.id AND l.active = 1
+        ORDER BY f.id DESC LIMIT ? OFFSET ?`,
+    ).all(cap, skip);
   return {
     total,
     limit: cap,

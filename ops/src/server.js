@@ -7,8 +7,22 @@ import { openOpsDb, defaultDataDir, defaultDbPath } from "./opsDb.js";
 import { makeAuth } from "./auth.js";
 import { appendAudit, listAudit, verifyAuditChain, createCheckpoint, listCheckpoints } from "./audit.js";
 import { listTransitions } from "./stateMachine.js";
-import { verifyIngestRequest, bodyHashHex } from "./ingestSignature.js";
 import { ingestFeedback } from "./ingest.js";
+import {
+  createProduct,
+  ensureDefaultProduct,
+  ensureLegacyIngestSecret,
+  getFeedbackForProduct,
+  getProduct,
+  listProducts,
+  pauseProduct,
+  publicProduct,
+  reconnectProduct,
+  resolveIngestAuth,
+  resumeProduct,
+  rotateCredential,
+  unsubscribeProduct,
+} from "./products.js";
 import {
   acceptAttachment,
   getAttachmentRow,
@@ -182,6 +196,8 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
   const releaseProvider = productionReleaseProvider || makeProductionReleaseProvider();
   if (!db) throw new Error("createHandler requires db");
   if (!auth) throw new Error("createHandler requires auth");
+  ensureDefaultProduct(db);
+  ensureLegacyIngestSecret(db, ingestSecret);
   const store = storage || new LocalPersistentStorage(defaultAttachmentDir(process.env.OPS_DATA_DIR || process.cwd()));
   const scan = scanner || makeScanner();
 
@@ -215,22 +231,16 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
 
       // ── Ingest（HMAC 認證，非 Owner session） ──
       if (pathname === "/ops/api/ingest/feedback" && method === "POST") {
-        if (!ingestSecret) {
-          sendJson(res, 503, { error: "ingest not configured" });
-          return;
-        }
         const raw = await readRawBody(req);
-        const check = verifyIngestRequest({
+        const check = resolveIngestAuth(db, {
           method: "POST",
           path: "/ops/api/ingest/feedback",
           headers: req.headers,
           rawBody: raw,
-          secret: ingestSecret,
+          envSecret: ingestSecret,
         });
         if (!check.ok) {
-          // 不外洩簽章細節；只回通用錯誤（reason 僅供內部推斷）。
-          const status = check.reason === "expired_timestamp" ? 401 : 401;
-          sendJson(res, status, { error: "unauthorized" });
+          sendJson(res, check.status || 401, { error: check.error || "unauthorized" });
           return;
         }
         let payload;
@@ -246,13 +256,18 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
           return;
         }
         try {
-          const result = ingestFeedback(db, { deliveryId: check.deliveryId, payload, payloadHash: check.bodyHash });
+          // 歸屬由憑證決定；body.product_id 不得改寫到另一站。
+          const result = ingestFeedback(db, {
+            deliveryId: check.deliveryId,
+            payload,
+            payloadHash: check.bodyHash,
+            productId: check.productId,
+          });
           if (result.conflict) {
-            // delivery_id / idempotency_key 被重用於不同內容 → 409，不覆寫原紀錄。
             sendJson(res, 409, { error: "conflict", reason: result.reason });
             return;
           }
-          sendJson(res, 200, { ok: true, id: result.id, duplicate: result.duplicate });
+          sendJson(res, 200, { ok: true, id: result.id, duplicate: result.duplicate, product_id: check.productId });
           if (!result.duplicate && !result.conflict && notifyConfig().onIngest) {
             sendOpsNotification({
               event: "ops.feedback.ingested",
@@ -260,6 +275,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
               text: "正式站有一筆新回饋進入 OPS 收件匣。",
               fields: [
                 { name: "id", value: result.id },
+                { name: "product_id", value: check.productId },
                 { name: "kind", value: payload.kind || "other" },
               ],
             }).catch(() => {});
@@ -436,7 +452,8 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
       if (analysisListMatch && method === "GET") {
         if (!runGuard(auth.requireOwner, req, reply)) return;
         const fid = Number(analysisListMatch[1]);
-        const fb = db.prepare("SELECT id, source, kind, content, app_version, submitted_at, received_at, trust_level FROM ingested_feedback WHERE id = ?").get(fid);
+        const scoped = url.searchParams.get("productId");
+        const fb = getFeedbackForProduct(db, fid, scoped || null);
         if (!fb) { sendJson(res, 404, { error: "not found" }); return; }
         const currentId = currentAnalysisId(db, fid);
         sendJson(res, 200, {
@@ -485,7 +502,52 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
           limit: url.searchParams.get("limit"),
           offset: url.searchParams.get("offset"),
           includeContact: url.searchParams.get("includeContact") === "1",
+          productId: url.searchParams.get("productId") || null,
         }));
+        return;
+      }
+      if (pathname === "/ops/api/products" && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        sendJson(res, 200, { items: listProducts(db) });
+        return;
+      }
+      if (pathname === "/ops/api/products" && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          const body = await readBody(req);
+          const created = createProduct(db, {
+            id: body?.id,
+            displayName: body?.display_name || body?.displayName,
+            actor: `owner:${req.owner.email}`,
+          });
+          sendJson(res, 201, { ok: true, ...created });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
+      const productAction = pathname.match(/^\/ops\/api\/products\/([a-z0-9_-]+)\/(pause|resume|unsubscribe|reconnect|rotate-credential)$/);
+      if (productAction && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        const [, productId, action] = productAction;
+        const actor = `owner:${req.owner.email}`;
+        try {
+          if (action === "pause") sendJson(res, 200, { ok: true, product: pauseProduct(db, productId, { actor }) });
+          else if (action === "resume") sendJson(res, 200, { ok: true, product: resumeProduct(db, productId, { actor }) });
+          else if (action === "unsubscribe") sendJson(res, 200, { ok: true, product: unsubscribeProduct(db, productId, { actor }) });
+          else if (action === "reconnect") sendJson(res, 200, { ok: true, ...reconnectProduct(db, productId, { actor }) });
+          else sendJson(res, 200, { ok: true, ...rotateCredential(db, productId, { actor }) });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
+      const productGet = pathname.match(/^\/ops\/api\/products\/([a-z0-9_-]+)$/);
+      if (productGet && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        const row = getProduct(db, productGet[1]);
+        if (!row) { sendJson(res, 404, { error: "not found" }); return; }
+        sendJson(res, 200, publicProduct(row));
         return;
       }
       if (pathname === "/ops/api/dashboard" && method === "GET") {

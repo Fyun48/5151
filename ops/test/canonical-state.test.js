@@ -39,7 +39,9 @@ test("only state_entity holds a lifecycle state column", () => {
   // Phase 15：production_release_run 無 status（衍生自 append-only events）；
   //   production_release_run_event 使用 to_status；production_release_current 使用 current_status；
   //   production_release_workflow_binding 使用 binding_status。皆非中央 lifecycle。
-  const ALLOWED = new Set(["state_entity", "feedback_analysis", "embedding", "issue_candidate", "issue_evaluation_run", "issue_role_evaluation", "issue_proposal", "development_authorization", "development_coding_task", "development_qa_run", "development_qa_check", "development_staging_deployment", "development_staging_check", "development_release_candidate", "production_release_authorization", "release_notification"]);
+  // ops_product.status / product_subscription.status / product_ingest_credential.status
+  //   = 多站訂閱與憑證狀態（active/paused/exited、connected、revoked），不是議題 lifecycle。
+  const ALLOWED = new Set(["state_entity", "feedback_analysis", "embedding", "issue_candidate", "issue_evaluation_run", "issue_role_evaluation", "issue_proposal", "development_authorization", "development_coding_task", "development_qa_run", "development_qa_check", "development_staging_deployment", "development_staging_check", "development_release_candidate", "production_release_authorization", "release_notification", "ops_product", "product_subscription", "product_ingest_credential"]);
   const offenders = [];
 
   for (const table of tables) {
