@@ -62,6 +62,23 @@ services:
       - /mnt/Storage1/apps/5151/v3/public:/app/public:ro
     command: ["node", "--watch-path=src", "--watch-path=public", "src/server.js"]
 
+  5151-ops:
+    image: ghcr.io/fyun48/5151:latest
+    container_name: 5151-ops
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5154:5154"
+    environment:
+      OPS_HOST: "0.0.0.0"
+      OPS_PORT: "5154"
+      OPS_DATA_DIR: /data
+      TZ: Asia/Taipei
+      COOKIE_SECURE: "1"
+    volumes:
+      - /DATA/AppData/5151-ops:/data
+      - /mnt/Storage1/apps/5151/ops:/app/ops:ro
+    command: ["node", "ops/src/server.js"]
+
 x-casaos:
   architectures:
     - amd64
@@ -72,6 +89,6 @@ x-casaos:
     zh_tw: 591 物件追蹤
   description:
     en_us: Track 591 rental listings with viewed, watched, and hidden flags.
-    zh_tw: 591 租屋新物件追蹤。v1 已停用；v2 在 5152／b5151，目前在 5153／c5151。
+    zh_tw: 591 租屋新物件追蹤。v1 已停用；v2 在 5152／b5151，目前在 5153／c5151；OPS 在 5154／jibbyrentops。
   category: Utility
   port_map: "5153"

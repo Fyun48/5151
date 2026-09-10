@@ -967,6 +967,22 @@ export function createApp({ db, auth, publicDir = PUBLIC_DIR, ingestSecret = pro
   };
 }
 
+function loadEnvFile(file) {
+  if (!existsSync(file)) return;
+  for (const line of readFileSync(file, "utf8").split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) continue;
+    const i = t.indexOf("=");
+    if (i <= 0) continue;
+    const key = t.slice(0, i).trim();
+    let value = t.slice(i + 1);
+    if ((value.startsWith("\"") && value.endsWith("\"")) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    if (process.env[key] == null || process.env[key] === "") process.env[key] = value;
+  }
+}
+
 function resolveSessionSecret(dataDir) {
   // 必須與 v3 的 SESSION_SECRET 分離：只吃 OPS_SESSION_SECRET，否則自行產生並持久化。
   if (process.env.OPS_SESSION_SECRET) return process.env.OPS_SESSION_SECRET;
@@ -984,6 +1000,7 @@ function resolveSessionSecret(dataDir) {
 
 export function startServer() {
   const dataDir = defaultDataDir();
+  loadEnvFile(path.join(dataDir, "auth.env"));
   const db = openOpsDb(defaultDbPath());
   const auth = makeAuth({
     ownerEmail: process.env.OPS_OWNER_EMAIL || process.env.AUTH_EMAIL,
