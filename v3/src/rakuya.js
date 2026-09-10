@@ -1,8 +1,10 @@
 /** 樂屋網公開頁 adapter：只解析公開 HTML／JSON-LD，不繞過 Cloudflare、登入或驗證碼。 */
 
 import { createHash } from "node:crypto";
+import { sanitizeFloorName } from "./floors.js";
 import { decodeEntities } from "./htmlEntities.js";
 import { looksLikeCaptchaOrLogin, looksLikeUnavailable } from "./importSanitize.js";
+import { listingKitFields } from "./listingKit.js";
 import { feeFieldsFromBlob } from "./listingCost.js";
 
 export const RAKUYA_SOURCE = "rakuya";
@@ -179,7 +181,7 @@ export function normalizeRakuyaItem(item, { regionId = "", sectionId = "" } = {}
   const postId = rakuyaPostIdFromEhid(ehid);
   if (!postId) return null;
   const priceNum = Number(String(item.price || "").replace(/[^\d.]/g, ""));
-  const floor = String(item.floorName || item.floor_name || "");
+  const floor = sanitizeFloorName(item.floorName || item.floor_name);
   const area = String(item.areaName || item.area_name || "");
   const layout = String(item.layout || "");
   const address = String(item.address || "");
@@ -205,6 +207,11 @@ export function normalizeRakuyaItem(item, { regionId = "", sectionId = "" } = {}
     area_name: area,
     layout,
     floor_name: floor,
+    ...listingKitFields({
+      title: item.title,
+      tags: item.tags,
+      text: `${item.address || ""} ${item.community || ""}`,
+    }),
     kind_name: String(item.kind || "整層住家"),
     role_name: "樂屋網",
     cover: String(item.cover || item.photos?.[0] || "").trim(),

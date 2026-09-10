@@ -319,7 +319,7 @@ export function formatNotifyFacts(event) {
     selfSourceLabel(event?.source || "591"),
     event.address,
     event.layout,
-    formatFloorDisplay(event.floor_name) || event.floor_name,
+    formatFloorDisplay(event.floor_name),
     formatUsableArea(event),
     housingTypeLabel(event),
     formatNotifyCommute(event),

@@ -1,0 +1,44 @@
+{
+  "data": {
+    "object": {
+      "object_id": "7eomdjwxiceohvsd",
+      "title": "芝山國小【超值4房2衛】補助入籍★養寵物★合租首選",
+      "rent": 25499,
+      "floor": -1,
+      "story": 5,
+      "ping": 33,
+      "type_space": "whole",
+      "type_space_name": "整層住家",
+      "address": {
+        "city": "臺北市",
+        "area": "士林區",
+        "road": "德行東路",
+        "other": "",
+        "is_hide": "N",
+        "complete": "臺北市士林區德行東路"
+      },
+      "themes": [
+        "租金補貼",
+        "可入籍"
+      ],
+      "tags": {
+        "parking": [],
+        "condition": [],
+        "include": [],
+        "furnish": [
+          "冰箱",
+          "冷氣",
+          "熱水器"
+        ]
+      },
+      "pattern": {
+        "living_room": 2,
+        "bedroom": 4,
+        "bathroom": 2,
+        "kitchen": 0,
+        "balcony": 0
+      },
+      "html": "<p align=\"center\"><span style=\"color:#333399;\"><span style=\"font-size:18px;\"><b>【歡迎預約看屋】</b></span></span></p><p align=\"center\"><span style=\"font-family:\\'新細明體\\',&amp;\"><span style=\"color:#000099;\"><span style=\"font-size:18px;\"><b>黃先生<u>0937880079</u><br /></b></span></span></span></p><p align=\"center\"><span style=\"color:#000099;\"><span style=\"font-size:18px;\"><b>→未接請先傳簡訊，謝謝!!</b></span></span></p><p align=\"center\"><span style=\"color:#000099;\"><span style=\"font-size:18px;\"><b>案件編號:【<u>K4A42</u>】</b></span></span><br /><br /></p><p align=\"center\"><span style=\"font-size:18px;\"><b><span style=\"font-family:&amp;\"><span style=\"color:red;\">LINE&nbsp;ID</span></span><span style=\"font-family:&amp;\"><span style=\"color:red;\">：【</span></span><span style=\"font-family:&amp;\"><span style=\"color:red;\">@r"
+    }
+  }
+}

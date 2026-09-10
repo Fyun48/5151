@@ -10,6 +10,7 @@ import {
   ddDetailUrl,
   ddPostIdFromObject,
   ddSearchParams,
+  enrichDdListingFromObject,
   fetchDdCoveringListings,
   isDdListingId,
   kindFromDdItem,
@@ -49,6 +50,28 @@ test("normalize 租租通 studio vs whole, keep shop", () => {
   assert.equal(whole.kind_name, "整層住家");
   assert.equal(kindFromDdItem({ type_space: "shop", type_space_name: "店面" }), "店面");
   assert.equal(kindFromDdItem({ type_space: "office", type_space_name: "辦公" }), "");
+});
+
+test("租租通 floor -1 is unknown, object furnish is kept", () => {
+  const object = JSON.parse(readFileSync(path.join(dir, "fixtures/ddroom-object-7eomdjwxiceohvsd.json"), "utf8")).data.object;
+  const row = normalizeDdItem({
+    object_id: object.object_id,
+    type_space: object.type_space,
+    type_space_name: "整層住家",
+    title: object.title,
+    rent: object.rent,
+    floor: object.floor,
+    ping: object.ping,
+    address: object.address,
+    themes: object.themes,
+  }, { regionId: 1, sectionId: 8 });
+  assert.equal(row.floor_name, "");
+  assert.match(row.address, /德行東路/);
+  const enriched = enrichDdListingFromObject(row, object);
+  assert.equal(enriched.floor_name, "");
+  assert.match(enriched.furnish_items, /冰箱/);
+  assert.match(enriched.furnish_items, /冷氣/);
+  assert.match(enriched.furnish_items, /熱水器/);
 });
 
 test("fetchDdCoveringListings uses injected GET JSON", async () => {

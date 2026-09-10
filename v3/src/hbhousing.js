@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { passesAttributeFilters } from "./floors.js";
+import { passesAttributeFilters, sanitizeFloorName } from "./floors.js";
 import { isExcludedByKeyword } from "./geo.js";
+import { listingKitFields } from "./listingKit.js";
 import { feeFieldsFromBlob } from "./listingCost.js";
 import { lookupDistrict } from "./regions.js";
 
@@ -201,8 +202,8 @@ export function kindFromHbItem(item) {
 }
 
 function floorNameFromItem(item) {
-  const floor = String(item.floor || "").trim();
-  const total = String(item.floorTotal || "").trim();
+  const floor = sanitizeFloorName(item.floor);
+  const total = sanitizeFloorName(item.floorTotal);
   if (floor && total) return `${floor}/${total}`;
   return floor;
 }
@@ -265,6 +266,11 @@ export function normalizeHbItem(item, { regionId, sectionId } = {}) {
     area_name: areaName,
     layout,
     floor_name: floorName,
+    ...listingKitFields({
+      title: item.objName,
+      tags,
+      text: `${item.emphasis1 || ""} ${item.special || ""} ${item.parking || ""}`,
+    }),
     kind_name: kindName,
     role_name: item.storeID ? `住商 ${item.storeID}` : "住商不動產",
     cover: String(item.photo1 || "").trim(),

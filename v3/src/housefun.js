@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { passesAttributeFilters } from "./floors.js";
+import { passesAttributeFilters, sanitizeFloorName } from "./floors.js";
 import { isExcludedByKeyword } from "./geo.js";
+import { listingKitFields } from "./listingKit.js";
 import { feeFieldsFromBlob } from "./listingCost.js";
 import { hpSidForDistrict } from "./houseprice.js";
 import { lookupDistrict } from "./regions.js";
@@ -269,7 +270,7 @@ export function normalizeHfItem(item, { regionId, sectionId } = {}) {
   const address = String(item.address || "").trim();
   const areaName = String(item.areaName || "").trim();
   const layout = String(item.layout || "").trim();
-  const floorName = String(item.floorName || "").trim();
+  const floorName = sanitizeFloorName(item.floorName);
   const priceNum = Number(item.price) || 0;
   const lat = Number(item.lat);
   const lng = Number(item.lng);
@@ -296,6 +297,11 @@ export function normalizeHfItem(item, { regionId, sectionId } = {}) {
     area_name: areaName,
     layout,
     floor_name: floorName,
+    ...listingKitFields({
+      title: item.title,
+      tags,
+      text: item.text,
+    }),
     kind_name: kindName,
     role_name: item.agency || "好房網",
     cover: String(item.cover || "").trim(),

@@ -82,6 +82,90 @@
       color: var(--muted);
       font-size: 13px;
     }
+    .kit-line {
+      position: relative;
+      z-index: 2;
+      margin-top: 6px;
+      font-size: var(--text-sm);
+      line-height: 1.5;
+      overflow: visible;
+    }
+    .item:has(.kit-line:hover),
+    .item:has(.kit-furnish[aria-expanded="true"]) { z-index: 4; }
+    .kit-line:hover,
+    .kit-line:has(.kit-furnish[aria-expanded="true"]) { z-index: 8; }
+    .kit-gas { color: var(--ink); }
+    .kit-furnish {
+      display: inline-flex;
+      align-items: center;
+      min-height: var(--touch);
+      margin: 0;
+      padding: 0 2px;
+      border: 0;
+      background: none;
+      font: inherit;
+      cursor: help;
+      touch-action: manipulation;
+      background-image: linear-gradient(90deg, var(--kit-mint), var(--kit-sky), var(--kit-rose), var(--kit-mint));
+      background-size: 240% 100%;
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      animation: kit-shift 7s ease-in-out infinite;
+    }
+    .kit-furnish:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    .kit-q {
+      font-size: 0.5em;
+      line-height: 1;
+      vertical-align: super;
+      margin-left: 1px;
+    }
+    .kit-tip {
+      display: none;
+      position: absolute;
+      left: 0;
+      top: calc(100% - 2px);
+      z-index: 9;
+      max-width: min(280px, 100%);
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--paper);
+      color: var(--ink);
+      font-size: var(--text-xs);
+      box-shadow: none;
+    }
+    .kit-tip::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: -10px;
+      height: 10px;
+    }
+    @media (hover: hover) and (pointer: fine) {
+      .kit-furnish { min-height: 0; }
+      .kit-line:hover .kit-tip,
+      .kit-furnish:focus-visible + .kit-tip { display: block; }
+    }
+    .kit-furnish[aria-expanded="true"] + .kit-tip { display: block; }
+    @keyframes kit-shift {
+      0% { background-position: 0% 50%; }
+      50% { background-position: 100% 50%; }
+      100% { background-position: 0% 50%; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .kit-furnish {
+        animation: none;
+        background: none;
+        color: var(--accent-deep);
+        -webkit-background-clip: unset;
+        background-clip: unset;
+      }
+    }
     .mrt-chip {
       display: inline-block;
       padding: 1px 7px;
@@ -815,6 +899,10 @@
       position: relative;
       overflow: hidden;
       border-radius: var(--radius, 8px);
+    }
+    .item-swipe-wrap:has(.kit-line:hover),
+    .item-swipe-wrap:has(.kit-furnish[aria-expanded="true"]) {
+      overflow: visible;
     }
     .swipe-rail {
       position: absolute;
@@ -3826,7 +3914,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> · <a href="/data.html">居住數據</a> · <a href="#me" id="supportFooterLink">支持本站</a> · <a href="#" id="feedbackFooterLink">意見回饋</a> <span class="site-ver">ver. 3.51</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> · <a href="/data.html">居住數據</a> · <a href="#me" id="supportFooterLink">支持本站</a> · <a href="#" id="feedbackFooterLink">意見回饋</a> <span class="site-ver">ver. 3.52</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -4231,8 +4319,16 @@
       if (/^\d+(?:-\d+)?F$/i.test(raw)) return raw.toUpperCase();
       return raw;
     }
+    function isPlaceholderFloor(floorName) {
+      const raw = String(floorName || "").trim().replace(/\s+/g, "").replace(/[／]/g, "/");
+      if (!raw) return true;
+      if (/^[-–—]+$/.test(raw) || raw === "--/--" || raw === "-/-") return true;
+      if (/^-?\d+(?:F|樓)?$/i.test(raw) && Number(String(raw).replace(/[F樓]/i, "")) <= 0) return true;
+      const pair = raw.match(/^(-?\d+)(?:F|樓)?\/(-?\d+)(?:F|樓)?$/i);
+      return Boolean(pair && Number(pair[1]) <= 0);
+    }
     function formatFloorDisplay(floorName) {
-      const original = String(floorName || "").trim();
+      const original = isPlaceholderFloor(floorName) ? "" : String(floorName || "").trim();
       if (!original) return "";
       if (/^\(\s*.+\s*\/\s*.+\s*\)$/.test(original)) return original.replace(/\s+/g, " ");
       const raw = original.replace(/\s+/g, "").replace(/[／]/g, "/");
@@ -4295,6 +4391,13 @@
         .map((bit) => esc(bit))
         .join(" · ");
       return [communityHtml, rest].filter(Boolean).join(" · ");
+    }
+    function kitLine(item, cardId) {
+      const gas = item?.has_natural_gas === true || Number(item?.has_natural_gas) === 1;
+      const items = Array.isArray(item?.furnish_items) ? item.furnish_items : [];
+      const tip = items.length ? items.join("、") : "無";
+      const gasHtml = gas ? `<span class="kit-gas">有天然瓦斯</span> ` : "";
+      return `<div class="kit-line">${gasHtml}<button type="button" class="kit-furnish" data-kit-furnish="${esc(cardId)}" aria-expanded="false" aria-controls="kit-tip-${esc(cardId)}" aria-describedby="kit-tip-${esc(cardId)}">${esc("此屋家俱家電狀態")}<sup class="kit-q" aria-hidden="true">?</sup></button><span class="kit-tip" id="kit-tip-${esc(cardId)}" role="tooltip">${esc(tip)}</span></div>`;
     }
     function safeListingHtml(value) {
       const allowed = new Set(["b", "strong", "i", "em", "u", "br", "p", "span", "div"]);
@@ -5949,7 +6052,7 @@
         const peerSource = peer.source_label || listingSourceLabel(peer);
         const peerWhen = formatListingWhen(peer);
         const whenLine = peerWhen ? `更新 ${peerWhen} · 來源 ${peerSource}` : `來源 ${peerSource}`;
-        const metaBits = [peer.layout || "", peer.area_name || "", peer.floor_display || formatFloorDisplay(peer.floor_name) || peer.floor_name || ""].filter(Boolean).join(" · ");
+        const metaBits = [peer.layout || "", peer.area_name || "", peer.floor_display || formatFloorDisplay(peer.floor_name) || ""].filter(Boolean).join(" · ");
         const split = peer.role === "affiliate"
           ? `<button type="button" class="ghost same-split-btn" data-reject-match="${peer.post_id}" data-reject-peer="${item.post_id}">不是同一間</button>`
           : "";
@@ -6270,7 +6373,7 @@
         }],
         ["fees", "費用說明", (row) => String(row.extra_fee_text || row.price_contain_text || "").trim()],
         ["area", "坪數", (row) => String(row.area_name || "").trim()],
-        ["floor", "樓層", (row) => floorDisplay(row) || String(row.floor_name || "").trim()],
+        ["floor", "樓層", (row) => floorDisplay(row)],
         ["layout", "格局", (row) => String(row.layout || "").trim()],
         ["title", "標題", (row) => String(row.title || "").trim()],
         ["source", "來源", (row) => listingSourceLabel(row)],
@@ -6466,9 +6569,10 @@
             <div class="meta">
               ${listingSpecLine(item)}
               <br>${esc(item.address || "")}${commuteText(item)}${offlineLine(item)}
-              ${mrtText(item) ? `<div class="mrt-line">${mrtText(item)}</div>` : ""}
               ${item.match_detail && !sameHouseOf(item) ? `<br>比對：${esc(item.match_detail)}${item.match_post_id ? ` · <a href="${listingUrl(item.match_post_id)}" target="_blank" rel="noopener noreferrer">舊刊登 #${item.match_post_id}</a>` : ""}` : ""}
             </div>
+            ${kitLine(item, id)}
+            ${mrtText(item) ? `<div class="mrt-line">${mrtText(item)}</div>` : ""}
               ${item.self_body ? `<div class="meta">${safeListingHtml(item.self_body)}</div>` : ""}
             ${(() => {
               const fees = feeLines(item, { includeTotal: Boolean($("priceMaxIncludesExtras")?.checked) });
@@ -9831,6 +9935,26 @@
     $("mergeSelectedBtn")?.addEventListener("click", () => mergeSelectedListings());
     $("mergeConfirmBtn")?.addEventListener("click", () => mergeSelectedListings());
     $("mergeCancelBtn")?.addEventListener("click", () => exitMergeSelect());
+    function closeKitTips() {
+      document.querySelectorAll("[data-kit-furnish][aria-expanded='true']").forEach((el) => el.setAttribute("aria-expanded", "false"));
+    }
+    $("list")?.addEventListener("click", (ev) => {
+      const btn = ev.target.closest?.("[data-kit-furnish]");
+      const hoverFine = window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+      if (!btn) {
+        closeKitTips();
+        return;
+      }
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (hoverFine) return;
+      const open = btn.getAttribute("aria-expanded") === "true";
+      closeKitTips();
+      btn.setAttribute("aria-expanded", open ? "false" : "true");
+    });
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape") closeKitTips();
+    });
     $("list")?.addEventListener("pointerdown", (ev) => {
       const card = ev.target.closest?.("[data-card]");
       if (!card || mergeInteractiveTarget(ev.target)) return;
@@ -10377,7 +10501,7 @@
           <h3 style="margin:6px 0 4px;font-size:16px">
             <a href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-dock-open="${item.post_id}">${esc(item.title || "物件")}</a>
           </h3>
-          <div class="meta">${esc([item.price ? `${item.price} 元/月` : "", item.notify_facts ? String(item.notify_facts).split(" · ").map((bit) => formatFloorDisplay(bit) || bit).join(" · ") : [item.address, item.layout, floorDisplay(item), item.area_name, item.housing_type].filter(Boolean).join(" · "), item.extra_fee_text].filter(Boolean).join(" · "))}</div>
+          <div class="meta">${esc([item.price ? `${item.price} 元/月` : "", item.notify_facts ? String(item.notify_facts).split(" · ").map((bit) => formatFloorDisplay(bit) || (isPlaceholderFloor(bit) ? "" : bit)).filter(Boolean).join(" · ") : [item.address, item.layout, floorDisplay(item), item.area_name, item.housing_type].filter(Boolean).join(" · "), item.extra_fee_text].filter(Boolean).join(" · "))}</div>
           ${dockChangeHtml(item)}
           <div class="row" style="margin-top:8px">
             <button type="button" class="ghost" data-dock-read="${esc(dockItemKey(item))}">已讀</button>

@@ -168,6 +168,16 @@ test("same-house bundle folds the 4th source into a collapsed row", () => {
   assert.equal(bundle.peer_count, 3);
 });
 
+test("placeholder floors do not appear as -1 in compare diffs", () => {
+  const unknown = { ...cheap, floor_name: "-1" };
+  const known = { ...pricey, floor_name: "5/8" };
+  const diffs = compareListingDiffs(unknown, known);
+  const floor = diffs.find((row) => row.field === "floor");
+  assert.equal(floor.mine, "—");
+  assert.equal(floor.theirs, "( 5F / 8F )");
+  assert.equal(compareListingDiffs(unknown, { ...known, floor_name: "--" }).some((row) => row.field === "floor"), false);
+});
+
 test("preferPrimaryListing still prefers lower total monthly cost", () => {
   assert.equal(preferPrimaryListing(cheap, pricey).post_id, 11);
   assert.equal(preferPrimaryListing(pricey, cheap).post_id, 11);
