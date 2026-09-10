@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const html = readFileSync(path.join(dir, "../public/console.html"), "utf8");
 const js = readFileSync(path.join(dir, "../public/console.js"), "utf8");
+const css = readFileSync(path.join(dir, "../public/console.css"), "utf8");
 
 test("console covers inbox, issues, gates and webhook test", () => {
   assert.match(html, /回饋收件匣/);
@@ -18,4 +19,12 @@ test("console covers inbox, issues, gates and webhook test", () => {
   assert.match(js, /\/ops\/api\/feedback/);
   assert.match(js, /\/ops\/api\/notify\/test/);
   assert.match(html, /APPROVE_DEVELOPMENT/);
+});
+
+test("tab panes honor the hidden attribute (display:grid must not override it)", () => {
+  assert.match(css, /\.tabpane\[hidden\]\s*\{[^}]*display:\s*none\s*!important/);
+  assert.match(js, /pane\.hidden = pane\.id !== `tab-\$\{name\}`/);
+  assert.match(html, /id="tab-inbox"[^>]*hidden/);
+  assert.match(html, /id="tab-issues"[^>]*hidden/);
+  assert.match(html, /id="tab-audit"[^>]*hidden/);
 });

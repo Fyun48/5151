@@ -92,7 +92,10 @@ async function refreshDashboard() {
 async function refreshInbox() {
   const include = $("showContact")?.checked ? "1" : "0";
   const { res, data } = await api(`/ops/api/feedback?limit=80&includeContact=${include}`);
-  if (!res.ok) return;
+  if (!res.ok) {
+    $("inboxHint").textContent = data.error || "無法讀取收件匣";
+    return;
+  }
   $("inboxHint").textContent = `共 ${data.total} 筆，顯示最新 ${data.items.length} 筆。`;
   const body = $("inboxTable").querySelector("tbody");
   body.innerHTML = (data.items || []).map((r) => `
@@ -128,7 +131,11 @@ async function openFeedback(id) {
 
 async function refreshIssues() {
   const { res, data } = await api("/ops/api/issues?limit=80");
-  if (!res.ok) return;
+  if (!res.ok) {
+    const body = $("issueTable").querySelector("tbody");
+    body.innerHTML = `<tr><td colspan="6" class="hint">${esc(data.error || "無法讀取議題")}</td></tr>`;
+    return;
+  }
   const body = $("issueTable").querySelector("tbody");
   body.innerHTML = (data.items || []).map((it) => `
     <tr data-iid="${it.id}" class="${Number(it.id) === Number(selectedIssueId) ? "on" : ""}">
@@ -191,7 +198,11 @@ async function decideGate1(action) {
 
 async function refreshAudit() {
   const { res, data } = await api("/ops/api/audit?limit=100");
-  if (!res.ok) return;
+  if (!res.ok) {
+    $("auditMsg").textContent = data.error || "無法讀取稽核";
+    $("auditMsg").className = "msg err";
+    return;
+  }
   const body = $("auditTable").querySelector("tbody");
   const rows = data.items || [];
   body.innerHTML = rows.map((r) => `

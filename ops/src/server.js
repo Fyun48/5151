@@ -199,7 +199,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         const full = path.join(publicDir, entry.file);
         try {
           const buf = readFileSync(full);
-          res.writeHead(200, { "Content-Type": entry.type });
+          res.writeHead(200, { "Content-Type": entry.type, "Cache-Control": "no-store" });
           res.end(buf);
         } catch {
           sendJson(res, 404, { error: "not found" });
