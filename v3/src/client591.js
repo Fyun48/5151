@@ -10,6 +10,7 @@ import {
   parseCommunityPayload,
   preferCommunityLocation,
 } from "./location.js";
+import { LIST_FETCH_TIMEOUT_MS, abortSignalTimeout, humanTimeoutMessage, isAbortError } from "./crawlWatchdog.js";
 
 const LIST_URL = "https://bff-house.591.com.tw/v3/web/rent/list";
 export const LIST_PAGE_SIZE = 30;
@@ -457,16 +458,24 @@ export async function fetchListingDetail(postId, options = {}) {
   };
 }
 
-async function fetchPage(query, firstRow) {
+async function fetchPage(query, firstRow, timeoutMs = LIST_FETCH_TIMEOUT_MS) {
   const params = new URLSearchParams(query);
   params.set("firstRow", String(firstRow));
-  const res = await fetch(`${LIST_URL}?${params}`, {
-    headers: {
-      "User-Agent": USER_AGENT,
-      Accept: "application/json, text/plain, */*",
-      Referer: "https://rent.591.com.tw/",
-    },
-  });
+  const wait = Math.max(1, Number(timeoutMs) || LIST_FETCH_TIMEOUT_MS);
+  let res;
+  try {
+    res = await fetch(`${LIST_URL}?${params}`, {
+      headers: {
+        "User-Agent": USER_AGENT,
+        Accept: "application/json, text/plain, */*",
+        Referer: "https://rent.591.com.tw/",
+      },
+      signal: abortSignalTimeout(wait),
+    });
+  } catch (error) {
+    if (isAbortError(error)) throw new Error(humanTimeoutMessage("591 搜尋", wait));
+    throw error;
+  }
   if (!res.ok) {
     throw new Error(`591 回應 ${res.status}`);
   }
@@ -487,7 +496,7 @@ export async function fetchListings(searchUrl, pages = 40, options = {}) {
   let total = 0;
   const maxPages = Math.max(1, Math.min(Number(pages) || MAX_LIST_PAGES, MAX_LIST_PAGES));
   for (let page = 0; page < maxPages; page += 1) {
-    const { total: t, items } = await fetchPage(parsed.query, page * LIST_PAGE_SIZE);
+    const { total: t, items } = await fetchPage(parsed.query, page * LIST_PAGE_SIZE, options.timeoutMs);
     total = t;
     listings.push(
       ...(await mapKeptListings(items, options)),

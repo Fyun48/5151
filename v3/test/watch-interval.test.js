@@ -24,4 +24,5 @@ test("member save does not crawl immediately; admin immediate check still forces
   assert.match(server, /req.body\?\.force === true \? "force" : "manual"/);
   assert.match(server, /skipped: "interval"/);
   assert.match(server, /isSystemCoveringDue/);
+  assert.match(server, /skipped: "stale"/);
 });
