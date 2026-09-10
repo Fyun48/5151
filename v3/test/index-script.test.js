@@ -829,6 +829,9 @@ test("logged-in boot loads settings without waiting for /api/state listings", ()
   assert.match(html, /function previewListForFilter/);
   assert.match(html, /keep: !preview/);
   assert.match(html, /loadList\(\{ keep: true, silent: true \}\)/);
+  assert.match(html, /function listRefreshBarEnabled/);
+  assert.match(html, /showListRefreshBar === true/);
+  assert.match(html, /loadList\(\{ silent: true, keep: true \}\)/);
   assert.doesNotMatch(html, /fetch\("\/api\/state"/);
 });
 

@@ -1829,7 +1829,12 @@ function omitSiteMail(stored) {
 
 function withSystemCrawl(settings) {
   if (!settings) return settings;
-  return { ...settings, systemCrawlIntervalMinutes: getSystemCrawl().intervalMinutes };
+  const system = getSystemCrawl();
+  return {
+    ...settings,
+    systemCrawlIntervalMinutes: system.intervalMinutes,
+    showListRefreshBar: system.showListRefreshBar === true,
+  };
 }
 
 const settingsMemo = new Map();
@@ -3315,6 +3320,7 @@ export function getSystemCrawl() {
       ? clampIntervalMinutes(intervalRaw, { admin: true, fallback: SYSTEM_CRAWL_INTERVAL_MINUTES })
       : SYSTEM_CRAWL_INTERVAL_MINUTES,
     showMrt: stored.systemShowMrt !== false,
+    showListRefreshBar: stored.systemShowListRefreshBar === true,
     cities: CITIES,
   };
 }
@@ -3333,9 +3339,13 @@ export function saveSystemCrawl(partial = {}) {
   const showMrt = Object.prototype.hasOwnProperty.call(partial, "showMrt")
     ? partial.showMrt !== false
     : current.showMrt !== false;
+  const showListRefreshBar = Object.prototype.hasOwnProperty.call(partial, "showListRefreshBar")
+    ? partial.showListRefreshBar === true
+    : current.showListRefreshBar === true;
   upsert.run("systemWatchDistricts", JSON.stringify(watchDistricts));
   upsert.run("systemCrawlIntervalMinutes", JSON.stringify(intervalMinutes));
   upsert.run("systemShowMrt", JSON.stringify(showMrt));
+  upsert.run("systemShowListRefreshBar", JSON.stringify(showListRefreshBar));
   return getSystemCrawl();
 }
 
