@@ -131,7 +131,7 @@ import {
   listOutbox as listOutboxOn,
   outboxStats as outboxStatsOn,
 } from "./feedbackOutbox.js";
-import { deliveryControl, setLocalDeliveryStopped } from "./opsDelivery.js";
+import { deliveryControl, setLocalDeliveryStopped, compactLocalOutbox } from "./opsDelivery.js";
 import {
   closeSelfListing as closeSelfListingOn,
   createSelfListing as createSelfListingOn,
@@ -1479,6 +1479,10 @@ export function getOpsDeliveryControl() {
 export function setOpsDeliveryStop(stopped) {
   setLocalDeliveryStopped(db, Boolean(stopped));
   return deliveryControl(db);
+}
+
+export function compactOpsOutbox(opts = {}) {
+  return compactLocalOutbox(db, opts);
 }
 
 export { feedbackMeta };

@@ -1,4 +1,4 @@
-import { claimOutboxBatch, markOutboxSent, markOutboxFailure } from "./feedbackOutbox.js";
+import { claimOutboxBatch, markOutboxSent, markOutboxFailure, outboxCapacityAlert, compactSentOutboxPayloads } from "./feedbackOutbox.js";
 import { signIngestRequest } from "./opsSignature.js";
 
 // 背景遞送 worker（Product 端）。不阻塞使用者請求路徑；由 server 以 setInterval 週期驅動。
@@ -35,13 +35,20 @@ export function deliveryControl(db, env = process.env) {
   const envAllowed = env.OPS_FEEDBACK_DELIVERY === "1";
   const configured = Boolean(url && secret);
   const localStopped = isLocalDeliveryStopped(db);
+  let outbox = { warn: false, backlog: 0, pending: 0, dead: 0, total: 0 };
+  try { outbox = outboxCapacityAlert(db); } catch { /* 測試庫可能還沒建 outbox */ }
   return {
     env_allowed: envAllowed,
     configured,
     local_stopped: localStopped,
     product_id: env.OPS_PRODUCT_ID || "v3",
     effective: Boolean(envAllowed && configured && !localStopped),
+    outbox,
   };
+}
+
+export function compactLocalOutbox(db, opts = {}) {
+  return compactSentOutboxPayloads(db, opts);
 }
 
 // 從環境變數讀設定；未設定 URL/SECRET → 遞送停用（feature flag）。

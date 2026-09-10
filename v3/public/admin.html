@@ -968,7 +968,9 @@
       <div class="row" id="opsDeliveryBox" style="gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
         <span class="hint" id="opsDeliveryStatus">正在讀取 OPS 傳送狀態…</span>
         <button type="button" class="ghost" id="opsDeliveryToggle">停止傳送至 OPS</button>
+        <button type="button" class="ghost" id="opsOutboxCompact" hidden>精簡已送出的傳輸複本</button>
       </div>
+      <p class="msg" id="opsOutboxAlert" role="status"></p>
       <div class="row" id="feedbackStats" style="gap:8px;flex-wrap:wrap;margin-bottom:10px"></div>
       <div class="row" style="gap:8px;flex-wrap:wrap;align-items:center">
         <label style="margin:0">狀態
@@ -2469,6 +2471,27 @@
       status.textContent = `目前會把回饋複本送到 OPS（產品 ${s.product_id || "v3"}）。`;
       btn.textContent = "停止傳送至 OPS";
     }
+    function renderOutboxAlert(state) {
+      const alert = $("opsOutboxAlert");
+      const compactBtn = $("opsOutboxCompact");
+      if (!alert) return;
+      const box = state && state.outbox;
+      if (box && box.warn) {
+        alert.textContent = box.message || `傳輸佇列堆積 ${box.backlog || 0} 筆。`;
+        alert.className = "msg err";
+        if (compactBtn) compactBtn.hidden = false;
+        return;
+      }
+      if (box && (box.dead || 0) > 0) {
+        alert.textContent = `有 ${box.dead} 筆傳輸失敗（dead）。回饋主本仍在本機。`;
+        alert.className = "msg";
+        if (compactBtn) compactBtn.hidden = false;
+        return;
+      }
+      alert.textContent = "";
+      alert.className = "msg";
+      if (compactBtn) compactBtn.hidden = true;
+    }
     async function loadOpsDelivery() {
       try {
         const res = await fetch("/api/admin/ops-delivery", { cache: "no-store" });
@@ -2477,7 +2500,29 @@
         opsDeliveryState = null;
       }
       renderOpsDelivery();
+      renderOutboxAlert(opsDeliveryState);
     }
+    $("opsOutboxCompact")?.addEventListener("click", async () => {
+      const btn = $("opsOutboxCompact");
+      btn.disabled = true;
+      try {
+        const res = await fetch("/api/admin/ops-delivery/compact-outbox", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ older_than_ms: 0 }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "精簡失敗");
+        $("opsOutboxAlert").textContent = `已精簡 ${data.compacted || 0} 筆傳輸複本。回饋主本未動。`;
+        $("opsOutboxAlert").className = "msg ok";
+        await loadOpsDelivery();
+      } catch (error) {
+        $("opsOutboxAlert").textContent = error.message;
+        $("opsOutboxAlert").className = "msg err";
+      } finally {
+        btn.disabled = false;
+      }
+    });
     $("opsDeliveryToggle")?.addEventListener("click", async () => {
       const nextStop = !(opsDeliveryState && opsDeliveryState.local_stopped);
       const res = await fetch("/api/admin/ops-delivery", {

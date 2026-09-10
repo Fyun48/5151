@@ -21,7 +21,6 @@ import {
   resolveIngestAuth,
   resumeProduct,
   rotateCredential,
-  unsubscribeProduct,
 } from "./products.js";
 import {
   beginUnsubscribeExit,

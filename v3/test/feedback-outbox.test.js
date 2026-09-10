@@ -9,6 +9,8 @@ import {
   ensureFeedbackOutboxSchema,
   listOutbox,
   outboxStats,
+  outboxCapacityAlert,
+  compactSentOutboxPayloads,
   claimOutboxBatch,
   backoffMs,
   OUTBOX_DEFAULT_MAX_ATTEMPTS,
@@ -285,4 +287,28 @@ test("two independent connections claim 30 rows with no loss and no overlap", ()
   for (const suffix of ["", "-wal", "-shm"]) {
     try { rmSync(file + suffix, { force: true }); } catch { /* ignore */ }
   }
+});
+
+test("outbox capacity alert fires on backlog and compact drops sent payloads", () => {
+  const db = open();
+  const T0 = Date.parse("2026-01-01T00:00:00.000Z");
+  for (let i = 0; i < 3; i++) {
+    createFeedbackWithOutbox(db, i + 1, { kind: "bug", body: `payload body ${i}` }, { now: new Date(T0 + i * 1000) });
+  }
+  db.prepare("UPDATE feedback_outbox SET status='sent', sent_at=created_at").run();
+  const quiet = outboxCapacityAlert(db, { backlogWarn: 50, deadWarn: 10 });
+  assert.equal(quiet.warn, false);
+  const noisy = outboxCapacityAlert(db, { backlogWarn: 1, deadWarn: 10 });
+  assert.equal(noisy.warn, false); // sent 不算堆積
+  db.prepare("UPDATE feedback_outbox SET status='pending' WHERE id=1").run();
+  const warn = outboxCapacityAlert(db, { backlogWarn: 1, deadWarn: 10 });
+  assert.equal(warn.warn, true);
+  assert.ok(warn.backlog >= 1);
+  const compact = compactSentOutboxPayloads(db, { olderThanMs: 0, now: new Date() });
+  assert.equal(compact.compacted, 2);
+  const slim = db.prepare("SELECT payload FROM feedback_outbox WHERE status='sent'").all();
+  assert.equal(slim.every((r) => JSON.parse(r.payload).compacted === true), true);
+  const kept = db.prepare("SELECT COUNT(*) n FROM feedback").get().n;
+  assert.equal(kept, 3);
+  db.close();
 });
