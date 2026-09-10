@@ -103,7 +103,7 @@ export function formatListingAddress(address, communityName) {
 
 /** 來源平台社區名有超連結時，本站改連到該社區的 Google 地圖搜尋。 */
 export function communityMapsQuery(communityName, address = "") {
-  const name = String(communityName || "").trim();
+  const name = String(communityName || "").trim().replace(/[／/]+/g, " ").replace(/\s+/g, " ").trim();
   if (!name) return "";
   const loc = String(address || "").replace(/\s+/g, "");
   const city = (loc.match(/^(台北市|臺北市|新北市|桃園市|基隆市|新竹市|[^市縣]{1,3}[市縣])/) || [])[0] || "";

@@ -46,6 +46,7 @@ test("alley plus lane beats street-only and is not truncated at 巷", () => {
 
 test("community Google Maps query uses city plus district plus name", () => {
   assert.equal(communityMapsQuery("御陽明", "台北市士林區格致路"), "台北市士林區御陽明");
+  assert.equal(communityMapsQuery("城市山水/永樂大廈", "新北市淡水區中山路93號"), "新北市淡水區城市山水 永樂大廈");
   assert.match(communityMapsUrl("御陽明", "台北市士林區格致路"), /maps\/search/);
   assert.equal(sourceCommunityLinked({ communityId: 28702 }), true);
   assert.equal(sourceCommunityLinked({ hasAnchor: true }), true);

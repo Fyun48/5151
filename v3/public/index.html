@@ -4216,7 +4216,7 @@
         : "特別關注的物件會優先更新狀態與公司距離";
     }
     function communityMapsHref(name, address) {
-      const n = String(name || "").trim();
+      const n = String(name || "").trim().replace(/[／/]+/g, " ").replace(/\s+/g, " ").trim();
       if (!n) return "";
       const loc = String(address || "").replace(/\s+/g, "");
       const city = (loc.match(/^(台北市|臺北市|新北市|桃園市|基隆市|新竹市|[^市縣]{1,3}[市縣])/) || [])[0] || "";
