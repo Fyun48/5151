@@ -47,3 +47,40 @@ test("stale contact 591 listings are re-queued for detail (bounded), fresh ones 
     rmSync(dataDir, { recursive: true, force: true });
   }
 });
+
+test("kit backfill with empty 591 contact does not wipe stored phone", () => {
+  const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-kit-contact-keep-"));
+  const script = `
+    import { db, upsertListing, setListingDetail } from ${JSON.stringify(path.join(dir, "../src/db.js"))};
+    const stamp = "2026-09-06T00:00:00.000Z";
+    upsertListing({ post_id: 21952442, source: "591", source_key: "1|8|||", search_key: "https://example.test",
+      title: "芝山兩房", url: "https://rent.591.com.tw/21952442", price: "32000元", price_num: 32000, extra_fees: [],
+      address: "士林區福華路141巷", area_name: "17坪", layout: "2房1廳", floor_name: "3/4",
+      kind_name: "整層住家", role_name: "屋主", cover: "", tags: "[]", refresh_time: "", first_seen_at: stamp, last_seen_at: stamp, last_event: "new" });
+    setListingDetail(21952442, { extraFees: [{ name: "水費", value: "臺水繳費" }], contact: { contact_name: "游小姐", mobile: "0972-528-577" }, fetched: 1, lat: 25.1, lng: 121.5, geo_source: "591", kit_fetched: 0 });
+    setListingDetail(21952442, {
+      extraFees: [{ name: "水費", value: "臺水繳費" }],
+      contact: { contact_name: "", mobile: "", phone: "", line_url: "" },
+      fetched: 1,
+      has_natural_gas: 1,
+      has_balcony: 1,
+      furnish_items: ["洗衣機", "冷氣"],
+      kit_fetched: 1,
+    });
+    const row = db.prepare("SELECT contact_name, mobile, phone, kit_fetched, has_natural_gas, has_balcony FROM listings WHERE post_id=?").get(21952442);
+    console.log(JSON.stringify(row));
+  `;
+  try {
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", env: { ...process.env, DATA_DIR: dataDir } });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const line = result.stdout.trim().split("\n").filter((r) => r.startsWith("{")).at(-1);
+    const row = JSON.parse(line);
+    assert.equal(row.contact_name, "游小姐");
+    assert.equal(row.mobile, "0972-528-577");
+    assert.equal(row.kit_fetched, 1);
+    assert.equal(row.has_natural_gas, 1);
+    assert.equal(row.has_balcony, 1);
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});

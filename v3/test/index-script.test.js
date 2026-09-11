@@ -255,6 +255,10 @@ test("member profiles cap districts and include usable ping in notify copy", () 
   assert.match(html, /hover: hover\) and \(pointer: fine\)/);
   assert.match(html, /\.kit-furnish:hover \+ \.kit-tip/);
   assert.doesNotMatch(html, /\.kit-line:hover \.kit-tip/);
+  assert.match(html, /kit-dismissed/);
+  assert.match(html, /kit-tip-up/);
+  assert.match(html, /function placeKitTip/);
+  assert.match(html, /function closeKitTips/);
   assert.match(html, /<\/div>\s*\$\{kitLine\(item, id\)\}/);
   assert.match(html, /\["floor", "樓層", \(row\) => floorDisplay\(row\)\]/);
   assert.doesNotMatch(html, /floorDisplay\(row\) \|\| String\(row\.floor_name/);
