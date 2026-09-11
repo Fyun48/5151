@@ -692,13 +692,13 @@ export async function runWatch(options = {}) {
     await new Promise((resolve) => setTimeout(resolve, 400));
   }
 
-  let skipRakuyaKit = false;
+  const skipBlockedKit = new Set();
   const pendingSourceKit = listingsNeedingSourceKit(8);
   for (const row of pendingSourceKit) {
     try {
       const listing = listingForWatch(row.post_id);
       if (!listing) continue;
-      if (listing.source === "rakuya" && skipRakuyaKit) continue;
+      if (skipBlockedKit.has(listing.source)) continue;
       const kit = await fetchSourceKit(listing);
       setListingDetail(listing.post_id, {
         extraFees: listing.extra_fees,
@@ -709,8 +709,8 @@ export async function runWatch(options = {}) {
         kit_fetched: 1,
       });
     } catch (error) {
-      if (error?.code === "FETCH_BLOCKED" && row.source === "rakuya") skipRakuyaKit = true;
-      // 詳情失敗下次再試；不把空聯絡寫回
+      if (error?.code === "FETCH_BLOCKED") skipBlockedKit.add(row.source);
+      // 詳情失敗下次再試；不把空聯絡寫回、不標 kit_fetched
     }
     await new Promise((resolve) => setTimeout(resolve, 400));
   }

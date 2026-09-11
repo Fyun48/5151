@@ -293,24 +293,19 @@ export async function fetchRakuyaListPage({ fetchText, url } = {}) {
 }
 
 export async function fetchRakuyaDetailKit(listing, options = {}) {
-  const url = String(listing?.url || rakuyaDetailUrl(listing?.source_id) || "").trim();
-  if (!url) return listingKitFrom({});
-  const fetchText = options.fetchText || (async (href) => {
-    const res = await fetch(href, {
-      headers: { "User-Agent": USER_AGENT, Accept: "text/html" },
-      signal: AbortSignal.timeout(12000),
-    });
-    return { status: res.status, text: await res.text() };
+  const { fetchSourceKitPage } = await import("./sourceKit.js");
+  const page = await fetchSourceKitPage(listing, {
+    ...options,
+    fallbackUrl: rakuyaDetailUrl(listing?.source_id),
   });
-  const got = await fetchText(url);
-  const judged = interpretRakuyaResponse({ status: got.status, text: got.text || got.body });
+  const judged = interpretRakuyaResponse({ status: page.status, text: page.text });
   if (!judged.ok) {
     throw Object.assign(new Error(judged.message || "樂屋網詳情無法抓取"), {
       code: judged.code,
       retryable: judged.retryable,
     });
   }
-  const detail = parseRakuyaDetailHtml(got.text || got.body || "", url);
+  const detail = parseRakuyaDetailHtml(page.text, page.url);
   if (!detail.title && !detail.address) {
     throw Object.assign(new Error("樂屋網詳情無法解析房屋資訊"), { code: "KIT_PARSE_EMPTY" });
   }

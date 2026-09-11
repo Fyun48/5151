@@ -8,7 +8,7 @@ import { parseHfDetailHtml } from "../src/housefun.js";
 import { kitFromActiveNames } from "../src/listingKit.js";
 import { parseRakuyaDetailHtml } from "../src/rakuya.js";
 import { parseSinyiDetailHtml } from "../src/sinyi.js";
-import { fetchSourceKit, isSourceKitSource } from "../src/sourceKit.js";
+import { fetchSourceKit, isSourceKitSource, resolveSourceKitUrl } from "../src/sourceKit.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const readFix = (name) => readFileSync(path.join(dir, "fixtures", name), "utf8");
@@ -59,6 +59,20 @@ test("empty source pages do not count as fetched kit", () => {
   assert.throws(() => parseHbDetailHtml("<html></html>"), { code: "KIT_PARSE_EMPTY" });
   assert.throws(() => parseSinyiDetailHtml("<html></html>"), { code: "KIT_PARSE_EMPTY" });
   assert.throws(() => parseHfDetailHtml("<html></html>"), { code: "KIT_PARSE_EMPTY" });
+});
+
+test("source kit URL must stay on the listing host", () => {
+  assert.throws(
+    () => resolveSourceKitUrl({ source: "sinyi", url: "https://127.0.0.1/steal" }, "https://evil.example/x"),
+    { code: "KIT_PARSE_EMPTY" },
+  );
+  assert.equal(
+    resolveSourceKitUrl(
+      { source: "housefun", url: "https://evil.example/x" },
+      "https://rent.housefun.com.tw/rent/house/1/",
+    ),
+    "https://rent.housefun.com.tw/rent/house/1/",
+  );
 });
 
 test("fetchSourceKit routes four sources and skips 591／5168／租租通", async () => {

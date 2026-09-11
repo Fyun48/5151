@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { passesAttributeFilters, sanitizeFloorName } from "./floors.js";
 import { isExcludedByKeyword } from "./geo.js";
-import { kitFromActiveNames, listingKitFrom, listingKitFields } from "./listingKit.js";
+import { listingKitFrom, listingKitFields } from "./listingKit.js";
 import { feeFieldsFromBlob } from "./listingCost.js";
 import { lookupDistrict } from "./regions.js";
 
@@ -464,18 +464,10 @@ export function parseHbNuxtHouse(html) {
 }
 
 export async function fetchHbDetailKit(listing, options = {}) {
-  const url = String(listing?.url || hbDetailUrl(listing?.source_id) || "").trim();
-  if (!url) return kitFromActiveNames([]);
-  const fetchText = options.fetchText || defaultFetchHtml;
-  const got = await fetchText(url);
-  if (Number(got?.status) >= 400) throw new Error(`住商詳情 ${got.status}`);
-  return parseHbDetailHtml(got?.text || "");
-}
-
-async function defaultFetchHtml(url) {
-  const res = await fetch(url, {
-    headers: { "User-Agent": USER_AGENT, Accept: "text/html" },
-    signal: AbortSignal.timeout(12000),
+  const { fetchSourceKitPage } = await import("./sourceKit.js");
+  const page = await fetchSourceKitPage(listing, {
+    ...options,
+    fallbackUrl: hbDetailUrl(listing?.source_id),
   });
-  return { status: res.status, text: await res.text() };
+  return parseHbDetailHtml(page.text);
 }

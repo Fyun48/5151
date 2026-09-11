@@ -135,7 +135,7 @@
       padding: 8px 10px;
       border: 1px solid var(--line);
       border-radius: var(--radius);
-      background: var(--paper);
+      background: var(--accent-mist);
       color: var(--ink);
       font-size: var(--text-xs);
       box-shadow: none;
@@ -10000,6 +10000,11 @@
         btn.closest(".kit-line")?.classList.remove("kit-tip-up");
       }
     }, true);
+    $("list")?.addEventListener("focusout", (ev) => {
+      const btn = ev.target.closest?.("[data-kit-furnish]");
+      if (!btn) return;
+      btn.classList.remove("kit-dismissed");
+    });
     document.addEventListener("keydown", (ev) => {
       if (ev.key === "Escape") closeKitTips();
     });

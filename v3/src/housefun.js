@@ -453,18 +453,10 @@ export function parseHfDetailHtml(html) {
 }
 
 export async function fetchHfDetailKit(listing, options = {}) {
-  const url = String(listing?.url || hfDetailUrl(listing?.source_id) || "").trim();
-  if (!url) return kitFromActiveNames([]);
-  const fetchText = options.fetchText || defaultFetchHtml;
-  const got = await fetchText(url);
-  if (Number(got?.status) >= 400) throw new Error(`好房網詳情 ${got.status}`);
-  return parseHfDetailHtml(got?.text || "");
-}
-
-async function defaultFetchHtml(url) {
-  const res = await fetch(url, {
-    headers: { "User-Agent": USER_AGENT, Accept: "text/html" },
-    signal: AbortSignal.timeout(12000),
+  const { fetchSourceKitPage } = await import("./sourceKit.js");
+  const page = await fetchSourceKitPage(listing, {
+    ...options,
+    fallbackUrl: hfDetailUrl(listing?.source_id),
   });
-  return { status: res.status, text: await res.text() };
+  return parseHfDetailHtml(page.text);
 }
