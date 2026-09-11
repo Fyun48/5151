@@ -29,6 +29,7 @@ test("住商 YR205190 讀提供家具與提供設備", () => {
   assert.ok(kit.furnish_items.includes("冰箱"));
   assert.ok(kit.furnish_items.includes("冷氣"));
   assert.ok(kit.furnish_items.includes("電視"));
+  assert.ok(kit.furnish_items.includes("書架"));
 });
 
 test("住商明細讀 NUXT 家俱、瓦斯與陽台", () => {

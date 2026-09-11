@@ -247,7 +247,9 @@ test("member profiles cap districts and include usable ping in notify copy", () 
   assert.match(html, /function isPlaceholderFloor/);
   assert.match(html, /function kitLine/);
   assert.match(html, /此屋家俱家電狀態/);
-  assert.match(html, /此屋家俱家電：\$\{items\.join\("、"\)\}/);
+  assert.match(html, /kit-items/);
+  assert.match(html, /items\.join\("、"\)/);
+  assert.doesNotMatch(html, /此屋家俱家電：\$\{items\.join\("、"\)\}/);
   assert.match(html, /有天然瓦斯/);
   assert.match(html, /有陽台/);
   assert.match(html, /data-kit-furnish/);

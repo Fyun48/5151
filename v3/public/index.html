@@ -96,7 +96,7 @@
     .kit-line:has(.kit-furnish:hover),
     .kit-line:has(.kit-furnish[aria-expanded="true"]),
     .kit-line.kit-tip-up { z-index: 8; }
-    .kit-gas, .kit-balcony { color: var(--ink); }
+    .kit-gas, .kit-balcony, .kit-items { color: var(--ink); }
     .kit-furnish {
       display: inline-flex;
       align-items: center;
@@ -4418,13 +4418,13 @@
       const balcony = item?.has_balcony === true || Number(item?.has_balcony) === 1;
       const items = Array.isArray(item?.furnish_items) ? item.furnish_items : [];
       const tip = items.length ? items.join("、") : "無";
-      const furnishLabel = items.length ? `此屋家俱家電：${items.join("、")}` : "此屋家俱家電狀態";
+      const itemsHtml = items.length ? `<span class="kit-items">${esc(items.join("、"))}</span> ` : "";
       const flags = [
         gas ? `<span class="kit-gas">有天然瓦斯</span>` : "",
         balcony ? `<span class="kit-balcony">有陽台</span>` : "",
       ].filter(Boolean).join(" ");
       const flagHtml = flags ? `${flags} ` : "";
-      return `<div class="kit-line">${flagHtml}<button type="button" class="kit-furnish" data-kit-furnish="${esc(cardId)}" aria-expanded="false" aria-controls="kit-tip-${esc(cardId)}" aria-describedby="kit-tip-${esc(cardId)}">${esc(furnishLabel)}<sup class="kit-q" aria-hidden="true">?</sup></button><span class="kit-tip" id="kit-tip-${esc(cardId)}" role="tooltip">${esc(tip)}</span></div>`;
+      return `<div class="kit-line">${flagHtml}${itemsHtml}<button type="button" class="kit-furnish" data-kit-furnish="${esc(cardId)}" aria-expanded="false" aria-controls="kit-tip-${esc(cardId)}" aria-describedby="kit-tip-${esc(cardId)}">此屋家俱家電狀態<sup class="kit-q" aria-hidden="true">?</sup></button><span class="kit-tip" id="kit-tip-${esc(cardId)}" role="tooltip">${esc(tip)}</span></div>`;
     }
     function safeListingHtml(value) {
       const allowed = new Set(["b", "strong", "i", "em", "u", "br", "p", "span", "div"]);
