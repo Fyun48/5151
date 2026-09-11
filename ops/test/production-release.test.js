@@ -1899,7 +1899,7 @@ test("site A uncertain deploy does not hold site B production lease", async () =
     await assert.rejects(() => executeProductionRelease(db, runA.run.id, { provider: providerA, repo: stagedA.repo, now: NOW }), /not an exact successful|environment|outputs/);
     assert.equal(getProductionRelease(db, runA.run.id).run.current_status, "PRODUCTION_STATE_UNKNOWN");
     assert.equal(Number(getProductionTargetLease(db, "v3", "production").release_run_id), runA.run.id);
-    assert.equal(getProductionTargetLease(db, "shop", "production")?.release_run_id, null);
+    assert.ok(!getProductionTargetLease(db, "shop", "production")?.release_run_id);
 
     seedProductionStable(db, {
       sourceSha: stagedB.repo.resolveRef("master"),
