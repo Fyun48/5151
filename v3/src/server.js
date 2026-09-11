@@ -74,6 +74,9 @@ import {
   saveAdminProviderSettings,
   saveAdminSiteBudget,
   testAdminProvider,
+  getAdminSimilaritySettings,
+  saveAdminPhashSettings,
+  reviewAdminSimilarity,
   settingsForGeoBackfill,
   getMemberMailSettings,
   getMemberSmtp,
@@ -1506,6 +1509,30 @@ app.post("/api/admin/providers/test", requireAdminApi, async (req, res) => {
 
 app.get("/api/admin/providers/usage", requireAdminApi, (_req, res) => {
   res.json(getAdminProviderSettings());
+});
+
+app.get("/api/admin/similarity", requireAdminApi, (_req, res) => {
+  res.json(getAdminSimilaritySettings());
+});
+
+app.put("/api/admin/phash", requireAdminApi, (req, res) => {
+  try {
+    res.json({ ok: true, ...saveAdminPhashSettings(req.body || {}), overview: getAdminSimilaritySettings() });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/admin/similarity/:id/review", requireAdminApi, (req, res) => {
+  try {
+    res.json({
+      ok: true,
+      item: reviewAdminSimilarity(req.params.id, req.body || {}, actorUserId(req)),
+      overview: getAdminSimilaritySettings(),
+    });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
 });
 
 app.get("/api/admin/maps", requireAdminApi, (_req, res) => {
