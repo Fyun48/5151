@@ -92,6 +92,54 @@ export function listPendingWork(db, productId) {
       note: "未送出的分析可取消；已在跑的不宣稱撤回。訂閱世代已換或已退出的晚到結果不會開新議題。",
     });
   }
+  if (tableExists(db, "issue_evaluation_run")) {
+    const evals = safeAll(db, `
+      SELECT r.id, r.status FROM issue_evaluation_run r
+       JOIN issue_candidate i ON i.id = r.issue_id
+      WHERE r.status IN ('pending','processing')
+        AND (
+          i.product_id=?
+          OR EXISTS (
+            SELECT 1 FROM issue_feedback_link l
+             JOIN ingested_feedback f ON f.id = l.feedback_id
+            WHERE l.issue_id = i.id AND l.active = 1 AND f.product_id = ?
+          )
+        )
+    `, [id, id]);
+    for (const row of evals) {
+      items.push({
+        kind: "evaluation",
+        id: row.id,
+        state: row.status,
+        blocking: row.status === "processing",
+        note: "未送出的評估可取消；已在跑的不宣稱撤回。訂閱世代已換或已退出的晚到評估不會寫入新結果。",
+      });
+    }
+  }
+  if (tableExists(db, "issue_proposal")) {
+    const props = safeAll(db, `
+      SELECT p.id, p.status FROM issue_proposal p
+       JOIN issue_candidate i ON i.id = p.issue_id
+      WHERE p.status IN ('pending','processing')
+        AND (
+          i.product_id=?
+          OR EXISTS (
+            SELECT 1 FROM issue_feedback_link l
+             JOIN ingested_feedback f ON f.id = l.feedback_id
+            WHERE l.issue_id = i.id AND l.active = 1 AND f.product_id = ?
+          )
+        )
+    `, [id, id]);
+    for (const row of props) {
+      items.push({
+        kind: "proposal",
+        id: row.id,
+        state: row.status,
+        blocking: row.status === "processing",
+        note: "未送出的提案可取消；已在跑的不宣稱撤回。訂閱世代已換或已退出的晚到提案不會寫入或送 webhook。",
+      });
+    }
+  }
   if (tableExists(db, "development_coding_task")) {
     const tasks = safeAll(db, `
       SELECT id, status FROM development_coding_task

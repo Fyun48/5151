@@ -400,6 +400,7 @@ export function applyOpsSchema(db) {
       started_at TEXT,
       completed_at TEXT,
       created_at TEXT NOT NULL,
+      subscription_generation INTEGER,
       FOREIGN KEY (issue_id) REFERENCES issue_candidate(id) ON DELETE RESTRICT,
       FOREIGN KEY (source_impact_assessment_id) REFERENCES issue_impact_assessment(id) ON DELETE RESTRICT
     );
@@ -495,6 +496,7 @@ export function applyOpsSchema(db) {
       claimed_at TEXT,
       generated_at TEXT,
       created_at TEXT NOT NULL,
+      subscription_generation INTEGER,
       FOREIGN KEY (issue_id) REFERENCES issue_candidate(id) ON DELETE RESTRICT,
       FOREIGN KEY (source_evaluation_run_id) REFERENCES issue_evaluation_run(id) ON DELETE RESTRICT
     );
@@ -1309,6 +1311,12 @@ export function upgradeIssueFollowUp(db) {
     ["product_id", "TEXT"],
   ]);
   addIfMissing("feedback_analysis", [
+    ["subscription_generation", "INTEGER"],
+  ]);
+  addIfMissing("issue_evaluation_run", [
+    ["subscription_generation", "INTEGER"],
+  ]);
+  addIfMissing("issue_proposal", [
     ["subscription_generation", "INTEGER"],
   ]);
   db.exec("CREATE INDEX IF NOT EXISTS idx_issue_parent ON issue_candidate(parent_issue_id, id)");

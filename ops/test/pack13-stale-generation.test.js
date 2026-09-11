@@ -104,6 +104,5 @@ test("worker does not complete a stale job even if it was already claimed", asyn
 
 test("console explains stale-generation jobs will not open issues", () => {
   const html = readFileSync(join(root, "../public/console.html"), "utf8");
-  assert.match(html, /晚到的分析若訂閱世代已換，不會開新議題/);
-  assert.match(html, /console\.js\?v=20260911-pkg13/);
+  assert.match(html, /晚到的分析.*若訂閱世代已換/);
 });

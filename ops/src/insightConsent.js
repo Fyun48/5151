@@ -28,6 +28,55 @@ export function currentSubscriptionGeneration(db, productId) {
   return Number(row?.subscription_generation || 1);
 }
 
+export function inferIssueProductId(db, issueId) {
+  if (!db || issueId == null) return null;
+  const own = db.prepare("SELECT product_id FROM issue_candidate WHERE id=?").get(Number(issueId));
+  if (own?.product_id) return own.product_id;
+  if (!tableExists(db, "issue_feedback_link") || !tableExists(db, "ingested_feedback")) return null;
+  const row = db.prepare(`
+    SELECT f.product_id FROM issue_feedback_link l
+    JOIN ingested_feedback f ON f.id = l.feedback_id
+    WHERE l.issue_id=? AND l.active=1
+    ORDER BY l.id DESC LIMIT 1
+  `).get(Number(issueId));
+  return row?.product_id || null;
+}
+
+export function productAllowsIssuePipeline(product) {
+  if (!product) return false;
+  const pStatus = product.status;
+  const sStatus = product.subscription_status || product.subscription?.status;
+  return pStatus === "active" && (sStatus === "connected" || sStatus === "connecting");
+}
+
+export function issueWriteDecision(db, issueId, { expectedGeneration = null } = {}) {
+  const productId = inferIssueProductId(db, issueId);
+  if (!productId) return { ok: true, unbound: true };
+  const product = loadProductConsent(db, productId);
+  if (!product) return { ok: false, reason: "subscription_revoked" };
+  const currentGen = Number(product.subscription_generation || 1);
+  if (expectedGeneration != null && Number(expectedGeneration) !== currentGen) {
+    return { ok: false, reason: "stale_generation", current_generation: currentGen, product_id: productId };
+  }
+  if (!productAllowsIssuePipeline(product)) {
+    return { ok: false, reason: "subscription_revoked", current_generation: currentGen, product_id: productId };
+  }
+  return { ok: true, generation: currentGen, product_id: productId };
+}
+
+export function productNotifyDecision(db, productId, { expectedGeneration = null } = {}) {
+  const product = loadProductConsent(db, productId);
+  if (!product) return { ok: false, reason: "subscription_revoked" };
+  const currentGen = Number(product.subscription_generation || 1);
+  if (expectedGeneration != null && Number(expectedGeneration) !== currentGen) {
+    return { ok: false, reason: "stale_generation", current_generation: currentGen };
+  }
+  if (!productAllowsIssuePipeline(product)) {
+    return { ok: false, reason: "subscription_revoked", current_generation: currentGen };
+  }
+  return { ok: true, generation: currentGen };
+}
+
 export function workerWriteDecision(db, feedbackId, { expectedGeneration = null } = {}) {
   const row = db.prepare("SELECT product_id FROM ingested_feedback WHERE id=?").get(Number(feedbackId) || 0);
   if (!row?.product_id) return { ok: false, reason: "subscription_revoked" };

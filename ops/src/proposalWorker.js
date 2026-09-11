@@ -4,6 +4,7 @@ import {
   computeProposalInput, enqueueProposalRow, claimProposalBatch, executeProposalGeneration,
   isProposalStale, currentProposalId,
 } from "./proposal.js";
+import { issueWriteDecision } from "./insightConsent.js";
 
 // Phase 8 提案生成背景 worker：非同步、bounded concurrency、retry/backoff、stale 復原、provider timeout。
 // - feedback / clustering / impact / evaluation 不等待。
@@ -60,6 +61,7 @@ export async function runProposalOnce(db, { provider, config = {}, now = () => n
     if (entity && !ELIGIBLE_STATES.has(entity.state)) continue; // 決策後/等待審批狀態不自動再生成
     const input = computeProposalInput(db, it.id, { now: now(), env, provider });
     if (!input.ok) continue; // 非 PROPOSE / 尚未 fresh → 不 enqueue
+    if (!issueWriteDecision(db, it.id).ok) continue;
     // 冪等：已有相同證據的 fresh current 提案 → 略過
     const curId = currentProposalId(db, it.id);
     if (curId) {
@@ -76,13 +78,16 @@ export async function runProposalOnce(db, { provider, config = {}, now = () => n
   const results = await runPool(claimed, concurrency, async (row) => {
     const status = await executeProposalGeneration(db, row, { provider, timeoutMs, now, env, random });
     if (status === "completed") {
-      sendOpsNotification({
-        event: "ops.proposal.ready",
-        title: "議題等待 Owner 核准開發",
-        text: `議題 #${row.issue_id} 已累積回饋並完成評估／提案，請到 OPS Console 做 Gate #1。`,
-        fields: [{ name: "issue", value: row.issue_id }],
-        env,
-      }).catch(() => {});
+      const notify = issueWriteDecision(db, row.issue_id, { expectedGeneration: row.subscription_generation });
+      if (notify.ok) {
+        sendOpsNotification({
+          event: "ops.proposal.ready",
+          title: "議題等待 Owner 核准開發",
+          text: `議題 #${row.issue_id} 已累積回饋並完成評估／提案，請到 OPS Console 做 Gate #1。`,
+          fields: [{ name: "issue", value: row.issue_id }],
+          env,
+        }).catch(() => {});
+      }
     }
     return status;
   });
