@@ -3043,6 +3043,20 @@ export function listingsNeedingFeeDetail(limit = 12) {
   return out;
 }
 
+export function listingsNeedingSourceKit(limit = 8) {
+  const cap = Math.max(1, Number(limit) || 8);
+  return db
+    .prepare(
+      `SELECT post_id, source, source_id, url FROM listings
+       WHERE IFNULL(hidden, 0) = 0 AND IFNULL(offline, 0) = 0
+         AND source IN ('hbhousing', 'sinyi', 'housefun', 'rakuya')
+         AND IFNULL(kit_fetched, 0) = 0
+       ORDER BY last_seen_at DESC
+       LIMIT ?`,
+    )
+    .all(cap);
+}
+
 export function listingsNeeding591Geo(limit = 20) {
   const cap = Math.max(1, Number(limit) || 20);
   const rows = db

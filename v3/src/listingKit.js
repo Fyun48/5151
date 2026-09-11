@@ -10,6 +10,10 @@ export const FURNISH_LABELS = Object.freeze([
 const FURNISH_ALIASES = Object.freeze({
   桌椅: "桌子",
   餐桌椅: "餐桌",
+  床組: "床",
+  單人床: "床",
+  雙人床: "床",
+  寬頻網路: "網路",
 });
 
 const GAS_RE = /天然瓦斯|有瓦斯(?!費)|瓦斯：\s*有|瓦斯:\s*有/;
@@ -128,6 +132,19 @@ export function active591Facilities(service) {
 }
 
 /** 591 明細：只採「提供設備」有勾的項目，不把未勾的冰箱／床寫進來。 */
+/** 各站「有勾／has」的設備名；瓦斯／陽台不當家俱。 */
+export function kitFromActiveNames(names = []) {
+  const labels = (Array.isArray(names) ? names : asList(names))
+    .map((name) => String(name || "").trim())
+    .filter(Boolean);
+  return listingKitFrom({
+    furnish: labels.filter((name) => !KIT_SKIP_RE.test(name)),
+    facility: labels,
+    tags: labels,
+    text: labels.join(" "),
+  });
+}
+
 export function kitFrom591Detail(data = {}) {
   let names = active591Facilities(data.service);
   if (!names.length) {

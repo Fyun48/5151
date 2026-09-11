@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { passesAttributeFilters, sanitizeFloorName } from "./floors.js";
 import { isExcludedByKeyword } from "./geo.js";
-import { listingKitFields } from "./listingKit.js";
+import { kitFromActiveNames, listingKitFields } from "./listingKit.js";
 import { feeFieldsFromBlob } from "./listingCost.js";
 import { hpSidForDistrict } from "./houseprice.js";
 import { lookupDistrict } from "./regions.js";
@@ -431,4 +431,40 @@ export async function fetchHfCoveringListings(jobs, options = {}) {
   }
 
   return batches;
+}
+
+const HF_KIT_SKIP = /無隔間|傳統市場|夜市|百貨|便利商店|公園|學校|醫療|警察|休閒設施|滅火器|緩降梯|緊急照明|監視系統/;
+
+export function parseHfDetailHtml(html) {
+  const body = String(html || "");
+  if (!/<span class="tableData (?:has|nohas)"/i.test(body)) {
+    throw Object.assign(new Error("好房詳情沒有設備表"), { code: "KIT_PARSE_EMPTY" });
+  }
+  const names = [];
+  const re = /<span class="tableData (has|nohas)"[^>]*>([^<]+)<\/span>/gi;
+  let m;
+  while ((m = re.exec(body))) {
+    if (m[1] !== "has") continue;
+    const name = String(m[2] || "").trim();
+    if (!name || HF_KIT_SKIP.test(name)) continue;
+    names.push(name);
+  }
+  return kitFromActiveNames(names);
+}
+
+export async function fetchHfDetailKit(listing, options = {}) {
+  const url = String(listing?.url || hfDetailUrl(listing?.source_id) || "").trim();
+  if (!url) return kitFromActiveNames([]);
+  const fetchText = options.fetchText || defaultFetchHtml;
+  const got = await fetchText(url);
+  if (Number(got?.status) >= 400) throw new Error(`好房網詳情 ${got.status}`);
+  return parseHfDetailHtml(got?.text || "");
+}
+
+async function defaultFetchHtml(url) {
+  const res = await fetch(url, {
+    headers: { "User-Agent": USER_AGENT, Accept: "text/html" },
+    signal: AbortSignal.timeout(12000),
+  });
+  return { status: res.status, text: await res.text() };
 }

@@ -53,6 +53,7 @@ export const SOURCE_FIELD_MATRIX = [
       source_id: "parsed",
       latlng: "parsed",
       contact: "not_provided",
+      kit: "parsed",
     },
   },
   {
@@ -74,6 +75,7 @@ export const SOURCE_FIELD_MATRIX = [
       source_id: "parsed",
       latlng: "parsed",
       contact: "not_provided",
+      kit: "parsed",
     },
   },
   {
@@ -137,6 +139,7 @@ export const SOURCE_FIELD_MATRIX = [
       source_id: "parsed",
       latlng: "parsed",
       contact: "partial",
+      kit: "parsed",
     },
   },
   {
@@ -182,8 +185,9 @@ export const SOURCE_FIELD_MATRIX = [
       source_id: "parsed",
       latlng: "partial",
       contact: "not_provided",
+      kit: "parsed",
     },
-    notes: "公開 HTML／JSON-LD。Cloudflare／驗證視為 FETCH_BLOCKED，不繞過。JSON-LD／地圖有座標才寫入。",
+    notes: "公開 HTML／JSON-LD。Cloudflare／驗證視為 FETCH_BLOCKED，不繞過。JSON-LD／地圖有座標才寫入。明細有設備／瓦斯／陽台才寫 kit。591／5168／租租通內頁這次不重抓。",
   },
 ];
 

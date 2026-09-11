@@ -15,6 +15,7 @@ import {
   listingsNeeding591Geo,
   listingHasTrustedGeo,
   listingsNeedingFeeDetail,
+  listingsNeedingSourceKit,
   listingsNeedingRoute,
   listingsNeedingAddressGeo,
   listingsNeedingAddressEnrich,
@@ -59,6 +60,7 @@ import { enrichHpListingFromDetail, fetchHpCoveringListings, fetchHpDetail } fro
 import { fetchDdCoveringListings } from "./ddroom.js";
 import { fetchHfCoveringListings } from "./housefun.js";
 import { fetchRakuyaCoveringListings } from "./rakuya.js";
+import { fetchSourceKit } from "./sourceKit.js";
 import { commuteWorkJobs, geocodeAddress, hasWorkPoint, needsListingGeo, normalizeCommuteMode } from "./geo.js";
 import { isTrustedGeoSource, listingCommunityId, pickRicherAddress } from "./location.js";
 import { decideNotifyDelivery, isStalePendingNotify } from "./floors.js";
@@ -686,6 +688,29 @@ export async function runWatch(options = {}) {
         await markOfflineAndNotify(row.post_id, { wasOnline: !listing?.offline });
       }
       // 詳情失敗下次再試，不中斷本輪追蹤
+    }
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  }
+
+  let skipRakuyaKit = false;
+  const pendingSourceKit = listingsNeedingSourceKit(8);
+  for (const row of pendingSourceKit) {
+    try {
+      const listing = listingForWatch(row.post_id);
+      if (!listing) continue;
+      if (listing.source === "rakuya" && skipRakuyaKit) continue;
+      const kit = await fetchSourceKit(listing);
+      setListingDetail(listing.post_id, {
+        extraFees: listing.extra_fees,
+        fetched: listing.extra_fees_fetched,
+        has_natural_gas: kit.has_natural_gas,
+        has_balcony: kit.has_balcony,
+        furnish_items: kit.furnish_items,
+        kit_fetched: 1,
+      });
+    } catch (error) {
+      if (error?.code === "FETCH_BLOCKED" && row.source === "rakuya") skipRakuyaKit = true;
+      // 詳情失敗下次再試；不把空聯絡寫回
     }
     await new Promise((resolve) => setTimeout(resolve, 400));
   }
