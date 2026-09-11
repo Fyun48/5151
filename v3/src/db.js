@@ -4392,13 +4392,22 @@ export function stats(searchKeys, userId, settingsOverride) {
     missingRoute: attrRows.filter((row) => {
       if (row.hidden || isPendingOffline(row) || isConfirmedOffline(row) || row.watched || row.match_verdict === "yes") return false;
       const geo = applyCachedCoords(row, settings);
-      return (
+      if (!(
         Number(settings.commuteKm) > 0 &&
         isTrustedGeoSource(geo.geo_source) &&
         Number.isFinite(Number(geo.lat)) &&
         Number.isFinite(Number(geo.lng)) &&
         !(Array.isArray(geo.route_kms) && geo.route_kms.length)
-      );
+      )) return false;
+      const job = getRouteJob(makeRouteJobKey(
+        row.post_id,
+        "to_work",
+        "distance",
+        settings.commuteMode,
+        settings.workLat,
+        settings.workLng,
+      ));
+      return String(job?.job_state || "") !== "failed";
     }).length,
     dbTotal: listingCount(),
   };

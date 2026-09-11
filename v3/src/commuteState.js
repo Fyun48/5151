@@ -77,6 +77,7 @@ export function shouldPaintCommute({ fieldChanged = false, htmlChanged = false }
 
 export function isPendingCommuteState(item = {}, commuteEnabled = false) {
   const state = String(item.commute_state || "");
+  if (state === "failed" || state === "done") return false;
   if (["wait_geo", "wait_route", "computing", "retry"].includes(state)) return true;
   if (commuteEnabled && (item.commute_km == null || item.commute_km === "")) return true;
   return false;

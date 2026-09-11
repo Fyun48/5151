@@ -276,9 +276,16 @@ test("index keeps local commute patch hooks and reconnect snapshot", () => {
   assert.match(html, /稍後重試/);
   assert.match(html, /無法計算/);
   assert.match(html, /汽車路網估算/);
+  assert.match(html, /不是專用機車道路/);
+  assert.doesNotMatch(html, /路線計算中/);
+  assert.doesNotMatch(html, /尚未取得地圖座標/);
   const src = readFileSync(path.join(dir, "../src/server.js"), "utf8");
   const backfillFn = src.slice(src.indexOf("function queueGeoBackfill"), src.indexOf("async function tick"));
   assert.match(backfillFn, /rememberBackfillRequest/);
   assert.match(backfillFn, /finishBackfillRequest/);
+  assert.match(backfillFn, /delete routes\.listings/);
+  assert.match(backfillFn, /delete routes\.fingerprint/);
+  assert.match(backfillFn, /broadcast\(\{ type: "geo", routeBackfill: routes \}\)/);
+  assert.ok(backfillFn.indexOf("delete routes.listings") < backfillFn.indexOf("broadcast({ type: \"geo\", routeBackfill: routes })"));
   assert.ok(backfillFn.indexOf("backfillListingRoutes") < backfillFn.indexOf("backfillListingCoords"));
 });

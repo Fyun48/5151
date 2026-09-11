@@ -55,6 +55,7 @@ test("same listing ids still merge kilometer patches and ignore stale settings",
   assert.equal(shouldPaintCommute({ fieldChanged: false, htmlChanged: false }), false);
   assert.equal(isPendingCommuteState({ commute_state: "", commute_km: null }, true), true);
   assert.equal(isPendingCommuteState({ commute_state: "done", commute_km: 3.4 }, true), false);
+  assert.equal(isPendingCommuteState({ commute_state: "failed", commute_km: null }, true), false);
 });
 
 test("busy backfill remembers the next run instead of dropping it", () => {

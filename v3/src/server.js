@@ -2016,6 +2016,8 @@ function queueGeoBackfill(settings = getSettings()) {
     async function runRoutes() {
       const routes = await backfillListingRoutes(settings, { limit: 20, priorityIds: visibleFocusIds() });
       if (routes.attempted || (routes.listings && routes.listings.length)) {
+        delete routes.listings;
+        delete routes.fingerprint;
         broadcast({ type: "geo", routeBackfill: routes });
       }
       const notified = await flushPendingNotifications(settings);
