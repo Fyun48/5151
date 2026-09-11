@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex,nofollow" />
   <title>Ops Console · 吉比租房維運</title>
-  <link rel="stylesheet" href="/console.css?v=20260911-stg6" />
+  <link rel="stylesheet" href="/console.css?v=20260911-stg7" />
 </head>
 <body>
   <header class="topbar">
@@ -166,6 +166,9 @@
             <button type="button" data-gate1="REJECT">拒絕</button>
             <button type="button" data-gate1="BLOCK">封鎖</button>
           </div>
+          <div class="row wrap" id="followUpRow" hidden>
+            <button type="button" id="issueFollowUp">建立後續開發</button>
+          </div>
           <p class="msg" id="issueMsg"></p>
         </section>
       </section>
@@ -236,6 +239,11 @@
     <div class="dlg-card">
       <h3 id="confirmTitle">確認解除訂閱</h3>
       <p id="confirmBody"></p>
+      <label id="confirmReasonWrap" class="confirm-reason" hidden>
+        <span id="confirmReasonLabel">請說明要改什麼</span>
+        <textarea id="confirmReason" rows="3" maxlength="1000"></textarea>
+      </label>
+      <p class="msg" id="confirmReasonErr" hidden></p>
       <div class="row">
         <button type="button" id="confirmCancel">取消</button>
         <button type="button" id="confirmOk" class="danger">確定解除</button>
@@ -243,6 +251,6 @@
     </div>
   </div>
 
-  <script src="/console.js?v=20260911-stg6"></script>
+  <script src="/console.js?v=20260911-stg7"></script>
 </body>
 </html>

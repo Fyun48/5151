@@ -169,7 +169,7 @@ test("10-17+24. fresh QA+Staging PASS creates RC bound to exact evidence; canoni
     assert.equal(candidate.head_sha, coding.head_sha);
     assert.ok(candidate.artifact_digest.startsWith("sha256:"));
     assert.ok(candidate.manifest_hash.length === 64);
-    const curr = getCurrentReleaseCandidate(db, codingTaskId, { repo });
+    const curr = getCurrentReleaseCandidate(db, codingTaskId, { repo, now: NOW });
     assert.equal(curr.id, candidate.id);
     assert.equal(curr.fresh, true);
     assert.equal(curr.source_base_drift, false);
@@ -194,10 +194,10 @@ test("26+27+29. QA/staging/policy change makes RC stale", async () => {
   const { codingTaskId, repo, git } = await makeStagedTask(db);
   try {
     createReleaseCandidate(db, { codingTaskId, repo, now: NOW });
-    assert.equal(getCurrentReleaseCandidate(db, codingTaskId, { repo }).fresh, true);
-    assert.ok(getCurrentReleaseCandidate(db, codingTaskId, { repo, env: { ...process.env, QA_MAX_DIFF_LINES: "10" } }).stale_reasons.includes("qa_not_fresh_pass"));
-    assert.ok(getCurrentReleaseCandidate(db, codingTaskId, { repo, env: { ...process.env, STAGING_TTL_MS: "999" } }).stale_reasons.includes("staging_not_fresh_pass"));
-    assert.ok(getCurrentReleaseCandidate(db, codingTaskId, { repo, env: { ...process.env, RELEASE_ALLOW_BASE_DRIFT: "1" } }).stale_reasons.includes("release_policy_changed"));
+    assert.equal(getCurrentReleaseCandidate(db, codingTaskId, { repo, now: NOW }).fresh, true);
+    assert.ok(getCurrentReleaseCandidate(db, codingTaskId, { repo, env: { ...process.env, QA_MAX_DIFF_LINES: "10" }, now: NOW }).stale_reasons.includes("qa_not_fresh_pass"));
+    assert.ok(getCurrentReleaseCandidate(db, codingTaskId, { repo, env: { ...process.env, STAGING_TTL_MS: "999" }, now: NOW }).stale_reasons.includes("staging_not_fresh_pass"));
+    assert.ok(getCurrentReleaseCandidate(db, codingTaskId, { repo, env: { ...process.env, RELEASE_ALLOW_BASE_DRIFT: "1" }, now: NOW }).stale_reasons.includes("release_policy_changed"));
   } finally { git.cleanup(); db.close(); }
 });
 test("28. artifact digest change makes RC stale (synthetic current)", async () => {
@@ -210,7 +210,7 @@ test("28. artifact digest change makes RC stale (synthetic current)", async () =
     const newStg = Number(db.prepare(`INSERT INTO development_staging_deployment(issue_id, coding_task_id, development_authorization_id, proposal_id, proposal_version, proposal_hash, qa_run_id, qa_input_fingerprint, qa_policy_fingerprint, base_sha, head_sha, coding_result_hash, diff_hash, source_tree_hash, artifact_id, artifact_digest, staging_provider, staging_environment_id, staging_environment_class, staging_url, staging_policy_version, staging_policy_fingerprint, config_fingerprint, config_snapshot, input_fingerprint, status, validation_result, attempt_count, max_attempts, next_attempt_at, created_at, completed_at) SELECT issue_id, coding_task_id, development_authorization_id, proposal_id, proposal_version, proposal_hash, qa_run_id, qa_input_fingerprint, qa_policy_fingerprint, base_sha, head_sha, coding_result_hash, diff_hash, source_tree_hash, artifact_id, 'sha256:different', staging_provider, staging_environment_id, staging_environment_class, staging_url, staging_policy_version, staging_policy_fingerprint, config_fingerprint, config_snapshot, 'stg-fp-2', 'ready', 'PASS', attempt_count, max_attempts, next_attempt_at, created_at, completed_at FROM development_staging_deployment WHERE id=?`).run(st.staging_deployment_id).lastInsertRowid);
     db.prepare("UPDATE development_staging_current SET staging_deployment_id=?, input_fingerprint='stg-fp-2' WHERE coding_task_id=?").run(newStg, codingTaskId);
     void candidate;
-    assert.ok(getCurrentReleaseCandidate(db, codingTaskId, { repo }).stale_reasons.includes("artifact_digest_changed"));
+    assert.ok(getCurrentReleaseCandidate(db, codingTaskId, { repo, now: NOW }).stale_reasons.includes("artifact_digest_changed"));
   } finally { git.cleanup(); db.close(); }
 });
 test("25. head SHA change makes RC stale (synthetic current)", async () => {
@@ -221,7 +221,7 @@ test("25. head SHA change makes RC stale (synthetic current)", async () => {
     const ts = NOW.toISOString();
     const oldId = Number(db.prepare(`INSERT INTO development_release_candidate(issue_id, coding_task_id, development_authorization_id, proposal_id, proposal_version, proposal_hash, qa_run_id, staging_deployment_id, manifest_version, release_manifest_version, release_policy_version, base_sha, head_sha, current_master_sha, coding_result_hash, diff_hash, artifact_digest, release_policy_fingerprint, release_input_fingerprint, manifest_hash, manifest_content, source_base_drift, status, generated_at, created_at) SELECT issue_id, coding_task_id, development_authorization_id, proposal_id, proposal_version, proposal_hash, qa_run_id, staging_deployment_id, 99, release_manifest_version, release_policy_version, base_sha, 'oldhead', current_master_sha, coding_result_hash, diff_hash, artifact_digest, release_policy_fingerprint, 'inp-old', 'hash-old', manifest_content, 0, 'completed', ?, ? FROM development_release_candidate WHERE id=?`).run(ts, ts, candidate.id).lastInsertRowid);
     db.prepare("UPDATE development_release_current SET release_manifest_id=?, manifest_version=99, manifest_hash='hash-old' WHERE coding_task_id=?").run(oldId, codingTaskId);
-    assert.ok(getCurrentReleaseCandidate(db, codingTaskId, { repo }).stale_reasons.includes("head_sha_changed"));
+    assert.ok(getCurrentReleaseCandidate(db, codingTaskId, { repo, now: NOW }).stale_reasons.includes("head_sha_changed"));
   } finally { git.cleanup(); db.close(); }
 });
 test("30+31. source base drift blocks fresh RC / approval", async () => {
@@ -231,11 +231,11 @@ test("30+31. source base drift blocks fresh RC / approval", async () => {
     advanceMaster(git.dir); // master 前進 → drift
     const { candidate } = createReleaseCandidate(db, { codingTaskId, repo, now: NOW });
     assert.equal(candidate.source_base_drift, true);
-    const curr = getCurrentReleaseCandidate(db, codingTaskId, { repo });
+    const curr = getCurrentReleaseCandidate(db, codingTaskId, { repo, now: NOW });
     assert.equal(curr.fresh, false);
     assert.ok(curr.stale_reasons.includes("source_base_drift"));
     // 無法核准（stale）
-    assert.throws(() => submitOwnerReleaseDecision(db, { codingTaskId, action: "APPROVE_RELEASE", manifestId: candidate.id, manifestVersion: candidate.manifest_version, manifestHash: candidate.manifest_hash, artifactDigest: candidate.artifact_digest, headSha: candidate.head_sha, repo }), /stale/);
+    assert.throws(() => submitOwnerReleaseDecision(db, { codingTaskId, action: "APPROVE_RELEASE", manifestId: candidate.id, manifestVersion: candidate.manifest_version, manifestHash: candidate.manifest_hash, artifactDigest: candidate.artifact_digest, headSha: candidate.head_sha, repo, now: NOW }), /stale/);
   } finally { git.cleanup(); db.close(); }
 });
 
@@ -245,7 +245,7 @@ test("34+35+36+39+40+45+46. APPROVE requires exact identity; creates one immutab
   const { codingTaskId, repo, git } = await makeStagedTask(db);
   try {
     const { candidate: rc } = createReleaseCandidate(db, { codingTaskId, repo, now: NOW });
-    const good = { codingTaskId, action: "APPROVE_RELEASE", manifestId: rc.id, manifestVersion: rc.manifest_version, manifestHash: rc.manifest_hash, artifactDigest: rc.artifact_digest, headSha: rc.head_sha, repo };
+    const good = { codingTaskId, action: "APPROVE_RELEASE", manifestId: rc.id, manifestVersion: rc.manifest_version, manifestHash: rc.manifest_hash, artifactDigest: rc.artifact_digest, headSha: rc.head_sha, repo, now: NOW };
     assert.throws(() => submitOwnerReleaseDecision(db, { ...good, manifestHash: "wrong" }), /manifest_hash mismatch/);
     assert.throws(() => submitOwnerReleaseDecision(db, { ...good, artifactDigest: "wrong" }), /artifact_digest mismatch/);
     assert.throws(() => submitOwnerReleaseDecision(db, { ...good, headSha: "wrong" }), /head_sha mismatch/);
@@ -267,14 +267,41 @@ test("37+38+41. TOCTOU: old/new manifest version cannot win; new version superse
   const { codingTaskId, repo, git } = await makeStagedTask(db);
   try {
     const { candidate: v1 } = createReleaseCandidate(db, { codingTaskId, repo, now: NOW });
-    submitOwnerReleaseDecision(db, { codingTaskId, action: "APPROVE_RELEASE", manifestId: v1.id, manifestVersion: v1.manifest_version, manifestHash: v1.manifest_hash, artifactDigest: v1.artifact_digest, headSha: v1.head_sha, repo });
+    submitOwnerReleaseDecision(db, { codingTaskId, action: "APPROVE_RELEASE", manifestId: v1.id, manifestVersion: v1.manifest_version, manifestHash: v1.manifest_hash, artifactDigest: v1.artifact_digest, headSha: v1.head_sha, repo, now: NOW });
     assert.equal(db.prepare("SELECT status FROM production_release_authorization WHERE release_manifest_id=?").get(v1.id).status, "active");
     // master 前進 → 新 RC v2 → v1 授權 superseded；對 v1 再核准被拒（非 current）。
     advanceMaster(git.dir);
     const { candidate: v2 } = createReleaseCandidate(db, { codingTaskId, repo, now: NOW });
     assert.equal(v2.manifest_version, 2);
     assert.equal(db.prepare("SELECT status FROM production_release_authorization WHERE release_manifest_id=?").get(v1.id).status, "superseded");
-    assert.throws(() => submitOwnerReleaseDecision(db, { codingTaskId, action: "APPROVE_RELEASE", manifestId: v1.id, manifestVersion: v1.manifest_version, manifestHash: v1.manifest_hash, artifactDigest: v1.artifact_digest, headSha: v1.head_sha, repo }), /not current/);
+    assert.throws(() => submitOwnerReleaseDecision(db, { codingTaskId, action: "APPROVE_RELEASE", manifestId: v1.id, manifestVersion: v1.manifest_version, manifestHash: v1.manifest_hash, artifactDigest: v1.artifact_digest, headSha: v1.head_sha, repo, now: NOW }), /not current/);
+  } finally { git.cleanup(); db.close(); }
+});
+test("REQUEST_CHANGES without a written reason is rejected", async () => {
+  const db = openOpsDb(":memory:");
+  const { codingTaskId, repo, git } = await makeStagedTask(db);
+  try {
+    const { candidate: rc } = createReleaseCandidate(db, { codingTaskId, repo, now: NOW });
+    assert.throws(
+      () => submitOwnerReleaseDecision(db, { codingTaskId, action: "REQUEST_CHANGES", manifestId: rc.id, manifestVersion: rc.manifest_version, manifestHash: rc.manifest_hash, repo, now: NOW }),
+      /written reason/,
+    );
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM release_owner_decision WHERE coding_task_id=?").get(codingTaskId).n, 0);
+  } finally { git.cleanup(); db.close(); }
+});
+test("payload owner_direct flag cannot mint a Gate #2 approval", async () => {
+  const db = openOpsDb(":memory:");
+  const { codingTaskId, repo, git } = await makeStagedTask(db);
+  try {
+    const { candidate: rc } = createReleaseCandidate(db, { codingTaskId, repo, now: NOW });
+    assert.throws(
+      () => submitOwnerReleaseDecision(db, {
+        codingTaskId, action: "APPROVE_RELEASE", manifestId: rc.id, manifestVersion: rc.manifest_version, manifestHash: rc.manifest_hash,
+        artifactDigest: rc.artifact_digest, headSha: rc.head_sha, repo, owner_direct: true,
+      }),
+      /verified session/,
+    );
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM production_release_authorization").get().n, 0);
   } finally { git.cleanup(); db.close(); }
 });
 test("42+43. REQUEST_CHANGES creates no authorization and invokes no coding provider", async () => {
@@ -282,7 +309,7 @@ test("42+43. REQUEST_CHANGES creates no authorization and invokes no coding prov
   const { codingTaskId, repo, git } = await makeStagedTask(db);
   try {
     const { candidate: rc } = createReleaseCandidate(db, { codingTaskId, repo, now: NOW });
-    submitOwnerReleaseDecision(db, { codingTaskId, action: "REQUEST_CHANGES", manifestId: rc.id, manifestVersion: rc.manifest_version, manifestHash: rc.manifest_hash, reason: "please adjust", repo });
+    submitOwnerReleaseDecision(db, { codingTaskId, action: "REQUEST_CHANGES", manifestId: rc.id, manifestVersion: rc.manifest_version, manifestHash: rc.manifest_hash, reason: "please adjust", repo, now: NOW });
     assert.equal(db.prepare("SELECT COUNT(*) n FROM production_release_authorization WHERE coding_task_id=?").get(codingTaskId).n, 0);
     assert.equal(currentReleaseDecision(db, codingTaskId).label, "changes_requested");
   } finally { git.cleanup(); db.close(); }
@@ -292,8 +319,8 @@ test("44. CANCEL_RELEASE creates no production deployment; supersedes any auth; 
   const { codingTaskId, repo, git } = await makeStagedTask(db);
   try {
     const { candidate: rc } = createReleaseCandidate(db, { codingTaskId, repo, now: NOW });
-    submitOwnerReleaseDecision(db, { codingTaskId, action: "APPROVE_RELEASE", manifestId: rc.id, manifestVersion: rc.manifest_version, manifestHash: rc.manifest_hash, artifactDigest: rc.artifact_digest, headSha: rc.head_sha, repo });
-    submitOwnerReleaseDecision(db, { codingTaskId, action: "CANCEL_RELEASE", manifestId: rc.id, manifestVersion: rc.manifest_version, manifestHash: rc.manifest_hash, reason: "not now", repo });
+    submitOwnerReleaseDecision(db, { codingTaskId, action: "APPROVE_RELEASE", manifestId: rc.id, manifestVersion: rc.manifest_version, manifestHash: rc.manifest_hash, artifactDigest: rc.artifact_digest, headSha: rc.head_sha, repo, now: NOW });
+    submitOwnerReleaseDecision(db, { codingTaskId, action: "CANCEL_RELEASE", manifestId: rc.id, manifestVersion: rc.manifest_version, manifestHash: rc.manifest_hash, reason: "not now", repo, now: NOW });
     assert.equal(db.prepare("SELECT status FROM production_release_authorization WHERE release_manifest_id=?").get(rc.id).status, "superseded");
     assert.ok(db.prepare("SELECT id FROM development_release_candidate WHERE id=?").get(rc.id)); // 證據保留
   } finally { git.cleanup(); db.close(); }
@@ -303,7 +330,7 @@ test("58. failed approval leaves no partial authorization/decision", async () =>
   const { codingTaskId, repo, git } = await makeStagedTask(db);
   try {
     const { candidate: rc } = createReleaseCandidate(db, { codingTaskId, repo, now: NOW });
-    assert.throws(() => submitOwnerReleaseDecision(db, { codingTaskId, action: "APPROVE_RELEASE", manifestId: rc.id, manifestVersion: rc.manifest_version, manifestHash: "wrong", artifactDigest: rc.artifact_digest, headSha: rc.head_sha, repo }));
+    assert.throws(() => submitOwnerReleaseDecision(db, { codingTaskId, action: "APPROVE_RELEASE", manifestId: rc.id, manifestVersion: rc.manifest_version, manifestHash: "wrong", artifactDigest: rc.artifact_digest, headSha: rc.head_sha, repo, now: NOW }));
     assert.equal(db.prepare("SELECT COUNT(*) n FROM production_release_authorization").get().n, 0);
     assert.equal(db.prepare("SELECT COUNT(*) n FROM release_owner_decision").get().n, 0);
   } finally { git.cleanup(); db.close(); }
@@ -336,7 +363,7 @@ test("30(audit). audit is metadata-only", async () => {
   const { codingTaskId, repo, git } = await makeStagedTask(db);
   try {
     const { candidate: rc } = createReleaseCandidate(db, { codingTaskId, repo, now: NOW });
-    submitOwnerReleaseDecision(db, { codingTaskId, action: "APPROVE_RELEASE", manifestId: rc.id, manifestVersion: rc.manifest_version, manifestHash: rc.manifest_hash, artifactDigest: rc.artifact_digest, headSha: rc.head_sha, repo });
+    submitOwnerReleaseDecision(db, { codingTaskId, action: "APPROVE_RELEASE", manifestId: rc.id, manifestVersion: rc.manifest_version, manifestHash: rc.manifest_hash, artifactDigest: rc.artifact_digest, headSha: rc.head_sha, repo, now: NOW });
     const rows = db.prepare("SELECT action, data FROM audit_log WHERE action LIKE 'issue.release%'").all();
     assert.ok(rows.some((r) => r.action === "issue.release_candidate.created"));
     assert.ok(rows.some((r) => r.action === "issue.release.approved"));

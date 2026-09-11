@@ -62,12 +62,15 @@ function countIssuesForProduct(db, productId, { openOnly = false } = {}) {
   const extra = openOnly ? " AND i.status='open'" : "";
   return Number(db.prepare(`
     SELECT COUNT(*) AS n FROM issue_candidate i
-     WHERE EXISTS (
-       SELECT 1 FROM issue_feedback_link l
-       JOIN ingested_feedback f ON f.id = l.feedback_id
-       WHERE l.issue_id = i.id AND l.active = 1 AND f.product_id = ?
+     WHERE (
+       i.product_id = ?
+       OR EXISTS (
+         SELECT 1 FROM issue_feedback_link l
+         JOIN ingested_feedback f ON f.id = l.feedback_id
+         WHERE l.issue_id = i.id AND l.active = 1 AND f.product_id = ?
+       )
      )${extra}
-  `).get(productId)?.n) || 0;
+  `).get(productId, productId)?.n) || 0;
 }
 
 export function getDashboard(db, env = process.env, { productId = null } = {}) {
@@ -95,15 +98,22 @@ export function getDashboard(db, env = process.env, { productId = null } = {}) {
       SELECT se.state, COUNT(*) AS n
         FROM state_entity se
        WHERE se.entity_type IN ('issue','lifecycle')
-         AND EXISTS (
-           SELECT 1 FROM issue_feedback_link l
-           JOIN ingested_feedback f ON f.id = l.feedback_id
-           WHERE l.active = 1
-             AND se.id = 'issue:' || CAST(l.issue_id AS TEXT)
-             AND f.product_id = ?
+         AND (
+           EXISTS (
+             SELECT 1 FROM issue_feedback_link l
+             JOIN ingested_feedback f ON f.id = l.feedback_id
+             WHERE l.active = 1
+               AND se.id = 'issue:' || CAST(l.issue_id AS TEXT)
+               AND f.product_id = ?
+           )
+           OR EXISTS (
+             SELECT 1 FROM issue_candidate i
+              WHERE se.id = 'issue:' || CAST(i.id AS TEXT)
+                AND i.product_id = ?
+           )
          )
        GROUP BY se.state
-    `).all(scoped)) {
+    `).all(scoped, scoped)) {
       lifecycle[row.state] = Number(row.n) || 0;
     }
   } else {
@@ -152,7 +162,9 @@ export function listIssuesWithLifecycle(db, { limit = 80 } = {}) {
     return {
       id: Number(r.id),
       title: r.title,
-      product_id: prod?.product_id || null,
+      product_id: prod?.product_id || r.product_id || null,
+      parent_issue_id: r.parent_issue_id ? Number(r.parent_issue_id) : null,
+      issue_kind: r.issue_kind || "normal",
       summary: r.summary,
       category: r.category,
       status: r.status,

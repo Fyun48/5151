@@ -31,7 +31,7 @@ import { stagingEnvironmentConfig, buildStagingPolicy, stagingPolicyFingerprint,
 import {
   createStagingDeployment, claimStagingBatch, executeStagingDeployment, validateCodingTaskForStaging,
   getCurrentCodingStaging, getStagingDeployment, getCodingStagingView, cancelStagingDeployment,
-  cleanupStagingDeployment, stagingInputFingerprint,
+  cleanupStagingDeployment, stagingInputFingerprint, requestStagingRedeploy,
 } from "../src/stagingDeploy.js";
 
 const NOW = new Date("2026-06-01T00:00:00.000Z");
@@ -214,7 +214,7 @@ test("6-10+20+21+33. fresh QA PASS creates staging; deploy PASS binds exact iden
     assert.equal(detail.checks.find((c) => c.check_type === "SOURCE_IDENTITY").status, "PASS");
     assert.equal(detail.checks.find((c) => c.check_type === "ARTIFACT_INTEGRITY").status, "PASS");
     assert.equal(detail.checks.find((c) => c.check_type === "HEALTH").status, "PASS");
-    const curr = getCurrentCodingStaging(db, codingTaskId, { env: SAFE_ENV });
+    const curr = getCurrentCodingStaging(db, codingTaskId, { env: SAFE_ENV, now: NOW });
     assert.equal(curr.id, out.deployment.id);
     assert.equal(curr.fresh, true);
     assert.equal(curr.validation_result, "PASS");
@@ -307,11 +307,11 @@ test("34+35+36+37+38+39. freshness/staleness of canonical staging", async () => 
     createStagingDeployment(db, { codingTaskId, repo, env: SAFE_ENV, now: NOW });
     const [claimed] = claimStagingBatch(db, { now: NOW, limit: 5 });
     const out = await executeStagingDeployment(db, claimed, { repo, provider: makeStubStagingProvider(), env: SAFE_ENV, now: NOW });
-    assert.equal(getCurrentCodingStaging(db, codingTaskId, { env: SAFE_ENV }).fresh, true);
+    assert.equal(getCurrentCodingStaging(db, codingTaskId, { env: SAFE_ENV, now: NOW }).fresh, true);
     // 37 staging policy change / 38 config change / 36 QA change → stale
-    assert.ok(getCurrentCodingStaging(db, codingTaskId, { env: { ...SAFE_ENV, STAGING_TTL_MS: "999" } }).stale_reasons.includes("staging_policy_changed"));
-    assert.ok(getCurrentCodingStaging(db, codingTaskId, { env: { ...SAFE_ENV, STAGING_ENV_ID: "other" } }).stale_reasons.includes("config_changed"));
-    assert.ok(getCurrentCodingStaging(db, codingTaskId, { env: { ...SAFE_ENV, QA_MAX_DIFF_LINES: "10" } }).stale_reasons.includes("qa_not_fresh_pass"));
+    assert.ok(getCurrentCodingStaging(db, codingTaskId, { env: { ...SAFE_ENV, STAGING_TTL_MS: "999" }, now: NOW }).stale_reasons.includes("staging_policy_changed"));
+    assert.ok(getCurrentCodingStaging(db, codingTaskId, { env: { ...SAFE_ENV, STAGING_ENV_ID: "other" }, now: NOW }).stale_reasons.includes("config_changed"));
+    assert.ok(getCurrentCodingStaging(db, codingTaskId, { env: { ...SAFE_ENV, QA_MAX_DIFF_LINES: "10" }, now: NOW }).stale_reasons.includes("qa_not_fresh_pass"));
     // 34+35 失敗的新嘗試不取代成功 canonical：合成綁定不同 head 的部署 → 執行 superseded，不更新 current。
     const ts = NOW.toISOString();
     const badId = Number(db.prepare(`INSERT INTO development_staging_deployment(issue_id, coding_task_id, development_authorization_id, proposal_id, proposal_version, proposal_hash, qa_run_id, base_sha, head_sha, coding_result_hash, staging_policy_version, staging_policy_fingerprint, config_fingerprint, input_fingerprint, status, attempt_count, max_attempts, next_attempt_at, created_at) SELECT issue_id, coding_task_id, development_authorization_id, proposal_id, proposal_version, proposal_hash, qa_run_id, base_sha, 'deadbeef', coding_result_hash, staging_policy_version, staging_policy_fingerprint, config_fingerprint, 'inp-bad', 'pending', 0, 3, ?, ? FROM development_staging_deployment WHERE id=?`).run(ts, ts, out.deployment.id).lastInsertRowid);
@@ -319,7 +319,7 @@ test("34+35+36+37+38+39. freshness/staleness of canonical staging", async () => 
     assert.equal(db.prepare("SELECT staging_deployment_id FROM development_staging_current WHERE coding_task_id=?").get(codingTaskId).staging_deployment_id, out.deployment.id);
     // 39 coding task cancel → stale
     db.prepare("UPDATE development_coding_task SET status='cancelled' WHERE id=?").run(codingTaskId);
-    assert.ok(getCurrentCodingStaging(db, codingTaskId, { env: SAFE_ENV }).stale_reasons.includes("coding_task_cancelled"));
+    assert.ok(getCurrentCodingStaging(db, codingTaskId, { env: SAFE_ENV, now: NOW }).stale_reasons.includes("coding_task_cancelled"));
   } finally { git.cleanup(); db.close(); }
 });
 test("40+41(e2e). cleanup refuses production/ambiguous; operates only on staging-class", async () => {
@@ -352,6 +352,59 @@ test("48. audit is metadata-only (no PII/secrets)", async () => {
 });
 
 // ================= 靜態：不 merge / 不部署 Production / PR 保持 draft =================
+test("TTL expiry marks staging stale and same-version redeploy is allowed", async () => {
+  const db = openOpsDb(":memory:");
+  const { codingTaskId, repo, git } = await makeQaTask(db);
+  try {
+    createStagingDeployment(db, { codingTaskId, repo, env: SAFE_ENV, now: NOW });
+    const [claimed] = claimStagingBatch(db, { now: NOW, limit: 5 });
+    await executeStagingDeployment(db, claimed, { repo, provider: makeStubStagingProvider(), env: SAFE_ENV, now: NOW });
+    const live = getCurrentCodingStaging(db, codingTaskId, { env: SAFE_ENV, now: NOW });
+    assert.equal(live.fresh, true);
+    assert.equal(live.ttl_expired, false);
+    assert.equal(live.live_preview, true);
+    const expiredAt = new Date(NOW.getTime() + 25 * 60 * 60 * 1000);
+    const expired = getCurrentCodingStaging(db, codingTaskId, { env: SAFE_ENV, now: expiredAt });
+    assert.equal(expired.fresh, false);
+    assert.ok(expired.stale_reasons.includes("ttl_expired"));
+    assert.equal(expired.ttl_expired, true);
+    assert.equal(expired.live_preview, false);
+    assert.equal(expired.rebuildable_same_version, true);
+    const redo = requestStagingRedeploy(db, codingTaskId, { now: expiredAt, env: SAFE_ENV });
+    assert.equal(redo.redeploy_requested, true);
+    const [again] = claimStagingBatch(db, { now: expiredAt, limit: 5 });
+    await executeStagingDeployment(db, again, { repo, provider: makeStubStagingProvider(), env: SAFE_ENV, now: expiredAt });
+    const rebuilt = getCurrentCodingStaging(db, codingTaskId, { env: SAFE_ENV, now: expiredAt });
+    assert.equal(rebuilt.fresh, true);
+    assert.equal(rebuilt.ttl_expired, false);
+  } finally { git.cleanup(); db.close(); }
+});
+
+test("shared staging slot marks the covered candidate as occupied", async () => {
+  const db = openOpsDb(":memory:");
+  const a = await makeQaTask(db);
+  const b = await makeQaTask(db);
+  try {
+    createStagingDeployment(db, { codingTaskId: a.codingTaskId, repo: a.repo, env: SAFE_ENV, now: NOW });
+    const [claimA] = claimStagingBatch(db, { now: NOW, limit: 5 });
+    await executeStagingDeployment(db, claimA, { repo: a.repo, provider: makeStubStagingProvider(), env: SAFE_ENV, now: NOW });
+    assert.equal(getCurrentCodingStaging(db, a.codingTaskId, { env: SAFE_ENV, now: NOW }).fresh, true);
+    createStagingDeployment(db, { codingTaskId: b.codingTaskId, repo: b.repo, env: SAFE_ENV, now: NOW });
+    const [claimB] = claimStagingBatch(db, { now: NOW, limit: 5 });
+    await executeStagingDeployment(db, claimB, { repo: b.repo, provider: makeStubStagingProvider(), env: SAFE_ENV, now: NOW });
+    const covered = getCurrentCodingStaging(db, a.codingTaskId, { env: SAFE_ENV, now: NOW });
+    const holder = getCurrentCodingStaging(db, b.codingTaskId, { env: SAFE_ENV, now: NOW });
+    assert.equal(holder.fresh, true);
+    assert.equal(holder.slot_occupied, false);
+    assert.equal(holder.live_preview, true);
+    assert.equal(covered.fresh, true);
+    assert.ok(covered.stale_reasons.includes("environment_occupied"));
+    assert.equal(covered.slot_occupied, true);
+    assert.equal(covered.occupying_coding_task_id, b.codingTaskId);
+    assert.equal(covered.live_preview, false);
+  } finally { a.git.cleanup(); b.git.cleanup(); db.close(); }
+});
+
 test("42-45. staging modules never merge, un-draft PR, or deploy production (static)", () => {
   for (const f of ["stagingDeploy.js", "stagingWorker.js", "staging/checks.js", "staging/provider.js", "staging/stagingPolicy.js"]) {
     const txt = readFileSync(path.join(ROOT, "ops", "src", f), "utf8");

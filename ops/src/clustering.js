@@ -319,7 +319,24 @@ export function getIssueWithMembers(db, issueId) {
   if (!issue) return null;
   const members = db.prepare("SELECT feedback_id, analysis_id, similarity_score, coherence_score, embedding_id, embedding_model, clustering_version, added_by, membership_status, review_flag, review_reason, reason, created_at FROM issue_feedback_link WHERE issue_id=? AND active=1 ORDER BY id ASC").all(Number(issueId));
   const history = db.prepare("SELECT op, from_issue, to_issue, feedback_ids, actor, reason, created_at FROM cluster_operation WHERE issue_id=? OR from_issue=? OR to_issue=? ORDER BY id ASC").all(Number(issueId), Number(issueId), Number(issueId));
-  return { issue, members, history };
+  const entity = db.prepare("SELECT state FROM state_entity WHERE id=?").get(`issue:${Number(issueId)}`);
+  const followUps = db.prepare(
+    "SELECT id, title, issue_kind, product_id, created_at FROM issue_candidate WHERE parent_issue_id=? ORDER BY id DESC",
+  ).all(Number(issueId)).map((r) => ({
+    id: Number(r.id), title: r.title || "", issue_kind: r.issue_kind || "followup", product_id: r.product_id || null, created_at: r.created_at,
+  }));
+  return {
+    issue: {
+      ...issue,
+      parent_issue_id: issue.parent_issue_id ? Number(issue.parent_issue_id) : null,
+      issue_kind: issue.issue_kind || "normal",
+      product_id: issue.product_id || null,
+    },
+    lifecycle_state: entity?.state || "COLLECTING",
+    follow_ups: followUps,
+    members,
+    history,
+  };
 }
 
 export function feedbackIssue(db, feedbackId) {

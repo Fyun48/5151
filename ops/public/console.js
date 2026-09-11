@@ -18,6 +18,7 @@ let productsCache = [];
 let productBusy = false;
 let confirmAction = null;
 let confirmReturnFocus = null;
+let confirmNeedsReason = false;
 
 async function api(path, opts) {
   const o = { cache: "no-store", ...(opts || {}) };
@@ -184,39 +185,62 @@ function hideConfirm() {
   const dlg = $("confirmDlg");
   if (!dlg || dlg.hidden) {
     confirmAction = null;
+    confirmNeedsReason = false;
     return;
   }
   dlg.hidden = true;
   confirmAction = null;
+  confirmNeedsReason = false;
+  if ($("confirmReasonWrap")) $("confirmReasonWrap").hidden = true;
+  if ($("confirmReason")) $("confirmReason").value = "";
+  if ($("confirmReasonErr")) {
+    $("confirmReasonErr").hidden = true;
+    $("confirmReasonErr").textContent = "";
+  }
   for (const el of confirmChrome()) el.inert = false;
   const back = confirmReturnFocus;
   confirmReturnFocus = null;
   if (back && typeof back.focus === "function") back.focus();
 }
 
-function showConfirm({ title, body, confirmLabel, onConfirm, danger = true }) {
+function showConfirm({ title, body, confirmLabel, onConfirm, danger = true, reasonRequired = false, reasonLabel = "請說明要改什麼" }) {
   confirmReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   $("confirmTitle").textContent = title;
   $("confirmBody").textContent = body;
   $("confirmOk").textContent = confirmLabel || "確定";
   $("confirmOk").classList.toggle("danger", danger !== false);
   confirmAction = onConfirm;
+  confirmNeedsReason = !!reasonRequired;
+  if ($("confirmReasonWrap")) $("confirmReasonWrap").hidden = !reasonRequired;
+  if ($("confirmReasonLabel") && reasonLabel) $("confirmReasonLabel").textContent = reasonLabel;
+  if ($("confirmReason")) $("confirmReason").value = "";
+  if ($("confirmReasonErr")) {
+    $("confirmReasonErr").hidden = true;
+    $("confirmReasonErr").textContent = "";
+  }
   $("confirmDlg").hidden = false;
   for (const el of confirmChrome()) el.inert = true;
-  $("confirmCancel").focus();
+  if (reasonRequired && $("confirmReason")) $("confirmReason").focus();
+  else $("confirmCancel").focus();
+}
+
+function confirmFocusables() {
+  const nodes = [$("confirmReason"), $("confirmCancel"), $("confirmOk")].filter((el) => el && !el.hidden && !el.closest("[hidden]"));
+  return nodes;
 }
 
 function trapConfirmTab(ev) {
   if (ev.key !== "Tab" || $("confirmDlg").hidden) return;
-  const cancel = $("confirmCancel");
-  const ok = $("confirmOk");
-  if (!cancel || !ok) return;
-  if (ev.shiftKey && document.activeElement === cancel) {
+  const list = confirmFocusables();
+  if (list.length < 2) return;
+  const first = list[0];
+  const last = list[list.length - 1];
+  if (ev.shiftKey && document.activeElement === first) {
     ev.preventDefault();
-    ok.focus();
-  } else if (!ev.shiftKey && document.activeElement === ok) {
+    last.focus();
+  } else if (!ev.shiftKey && document.activeElement === last) {
     ev.preventDefault();
-    cancel.focus();
+    first.focus();
   }
 }
 
@@ -733,9 +757,14 @@ async function openIssue(id) {
   $("issueDetailTitle").textContent = `議題 #${id}`;
   const members = issue.data.members || [];
   const cur = proposal.data.current;
+  const parentId = issue.data.issue?.parent_issue_id;
+  const followUps = issue.data.follow_ups || [];
   const lines = [
     issue.data.issue?.title || "",
     issue.data.issue?.summary || "",
+    issue.data.lifecycle_state ? `生命週期 ${issue.data.lifecycle_state}` : "",
+    parentId ? `後續開發自議題 #${parentId}，不重用已發布授權` : "",
+    followUps.length ? `已建立後續：${followUps.map((f) => `#${f.id}`).join("、")}` : "",
     `成員 ${members.length} 筆回饋`,
     cur ? `提案 v${cur.proposal_version} · ${cur.title || ""}` : "尚無提案",
     cur?.problem_statement || "",
@@ -748,6 +777,9 @@ async function openIssue(id) {
     proposal_version: cur.proposal_version,
     proposal_hash: cur.proposal_hash,
   }) : "";
+  const life = issue.data.lifecycle_state || "";
+  const canFollow = life === "RELEASED" || life === "ROLLED_BACK";
+  if ($("followUpRow")) $("followUpRow").hidden = !canFollow;
   $("issueMsg").textContent = "";
   await refreshIssues();
 }
@@ -951,6 +983,34 @@ function shortSha(sha) {
   return String(sha || "").slice(0, 12) || "—";
 }
 
+function stagingFreshnessLine(stg) {
+  if (!stg) return "製作完成後才會建立";
+  const reasons = stg.stale_reasons || [];
+  if (stg.ttl_expired || reasons.includes("ttl_expired")) {
+    return "測試站已到期，可重建相同版本";
+  }
+  if (stg.slot_occupied || reasons.includes("environment_occupied")) {
+    const other = stg.occupying_coding_task_id ? `任務 #${stg.occupying_coding_task_id}` : "另一個候選";
+    return `此網址目前是 ${esc(other)} 的版本，不是本任務`;
+  }
+  if (stg.fresh === false) return `已過期：${esc(reasons.join("、") || "需重佈")}`;
+  return `驗證 ${esc(stg.validation_result || "—")}`;
+}
+
+function stagingUrlLine(stg) {
+  const url = stg?.live_preview ? (stg.staging_url || stg.endpoint) : "";
+  if (url) {
+    return `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">開啟隔離網址</a>`;
+  }
+  if (stg?.ttl_expired || (stg?.stale_reasons || []).includes("ttl_expired")) {
+    return "已到期網址不當作本任務預覽";
+  }
+  if (stg?.slot_occupied || (stg?.stale_reasons || []).includes("environment_occupied")) {
+    return "共用測試站已被覆蓋，請重佈後再點";
+  }
+  return stg?.staging_url ? "隔離網址目前不可當作本任務預覽" : "尚無隔離網址";
+}
+
 function syncDevActionButtons() {
   const hasStg = Number(devOpen.stagingId) > 0;
   if ($("devCancelStg")) $("devCancelStg").disabled = !hasStg;
@@ -1059,10 +1119,8 @@ async function openCodingTask(taskId) {
       <h3>隔離 staging</h3>
       <p class="src">測試容器，不是正式站</p>
       <p>${stgErr ? `<span class="chip danger">讀取失敗</span>` : (currentStg ? statusChip(currentStg.status) : "尚未建立")}</p>
-      <p>驗證 ${esc(currentStg?.validation_result || "—")}${currentStg?.fresh === false ? " · 已過期" : ""}</p>
-      <p>${currentStg?.staging_url || currentStg?.endpoint
-        ? `<a href="${esc(currentStg.staging_url || currentStg.endpoint)}" target="_blank" rel="noopener noreferrer">開啟隔離網址</a>`
-        : "尚無隔離網址"}</p>
+      <p>${stagingFreshnessLine(currentStg)}</p>
+      <p>${stagingUrlLine(currentStg)}</p>
       <p>環境 ${esc(currentStg?.staging_environment_class || "—")} / ${esc(currentStg?.staging_environment_id || "—")}</p>
     </div>
     <div class="dev-col">
@@ -1308,7 +1366,9 @@ $("gate2Row").addEventListener("click", (ev) => {
     body: `${labels[action] || action}。manifest #${rel.manifest_id} v${rel.manifest_version}。這一步不會 Deploy v3／Deploy OPS。`,
     confirmLabel: action === "APPROVE_RELEASE" ? "確定寫入授權" : "確定",
     danger: action !== "APPROVE_RELEASE",
-    onConfirm: async () => {
+    reasonRequired: action === "REQUEST_CHANGES",
+    reasonLabel: "請說明要改什麼（會寫進決策紀錄）",
+    onConfirm: async (note) => {
       const { res, data } = await api(`/ops/api/coding-tasks/${devOpen.taskId}/release/decision`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1319,7 +1379,7 @@ $("gate2Row").addEventListener("click", (ev) => {
           manifest_hash: rel.manifest_hash,
           artifact_digest: rel.artifact_digest,
           head_sha: rel.head_sha,
-          reason: "owner_console",
+          reason: note || (action === "REQUEST_CHANGES" ? "" : "owner_console"),
         }),
       });
       setStatus($("devDetailMsg"), res.ok ? "Gate #2 已送出" : (data.error || "決策失敗"), res.ok ? "ok" : "err");
@@ -1361,9 +1421,19 @@ $("dismissSecretBtn").addEventListener("click", hideSecret);
 
 $("confirmCancel").addEventListener("click", hideConfirm);
 $("confirmOk").addEventListener("click", async () => {
+  const note = ($("confirmReason")?.value || "").trim();
+  if (confirmNeedsReason && !note) {
+    if ($("confirmReasonErr")) {
+      $("confirmReasonErr").hidden = false;
+      $("confirmReasonErr").textContent = "請先寫說明再送出";
+      $("confirmReasonErr").className = "msg err";
+    }
+    $("confirmReason")?.focus();
+    return;
+  }
   const fn = confirmAction;
   hideConfirm();
-  if (fn) await fn();
+  if (fn) await fn(note);
 });
 document.addEventListener("keydown", (ev) => {
   if ($("confirmDlg").hidden) return;
@@ -1386,6 +1456,26 @@ $("issueTable").addEventListener("click", (ev) => {
 $("gate1Row").addEventListener("click", (ev) => {
   const btn = ev.target.closest("[data-gate1]");
   if (btn) decideGate1(btn.dataset.gate1);
+});
+$("issueFollowUp")?.addEventListener("click", () => {
+  if (!selectedIssueId) return;
+  showConfirm({
+    title: "確認建立後續開發",
+    body: `從已發布議題 #${selectedIssueId} 另開一張後續議題。不會重用已發布的開發執行或授權，正式站無感。`,
+    confirmLabel: "確定建立後續",
+    danger: false,
+    reasonRequired: true,
+    reasonLabel: "後續要做什麼",
+    onConfirm: async (note) => {
+      const { res, data } = await api(`/ops/api/issues/${selectedIssueId}/follow-up`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: note }),
+      });
+      setStatus($("issueMsg"), res.ok ? `已建立後續議題 #${data.issue_id}` : (data.error || "建立失敗"), res.ok ? "ok" : "err");
+      if (res.ok && data.issue_id) await openIssue(data.issue_id);
+    },
+  });
 });
 
 $("webhookTestBtn").addEventListener("click", async () => {

@@ -253,6 +253,7 @@ export function publicStaging(db, row, { withChecks = false } = {}) {
     status: row.status, validation_result: row.validation_result, blocking_checks: parse(row.blocking_checks), warning_count: row.warning_count,
     attempt_count: Number(row.attempt_count), error_code: row.error_code, expires_at: row.expires_at, cleanup_status: row.cleanup_status,
     created_at: row.created_at, started_at: row.started_at, deployed_at: row.deployed_at, completed_at: row.completed_at,
+    ttl_expired: false, slot_occupied: false, occupying_coding_task_id: null, occupying_deployment_id: null, live_preview: false,
   };
   if (withChecks && db) out.checks = db.prepare("SELECT * FROM development_staging_check WHERE staging_deployment_id=? ORDER BY id ASC").all(Number(row.id)).map(publicStagingCheck);
   return out;
@@ -266,7 +267,24 @@ export function listStagingDeployments(db, { codingTaskId, limit = 50 } = {}) {
   return db.prepare("SELECT * FROM development_staging_deployment WHERE coding_task_id=? ORDER BY id DESC LIMIT ?").all(Number(codingTaskId), cap).map((r) => publicStaging(db, r));
 }
 
-export function getCurrentCodingStaging(db, codingTaskId, { env = process.env } = {}) {
+export function stagingSlotOccupant(db, environmentId) {
+  const envId = String(environmentId || "").trim();
+  if (!envId) return null;
+  const row = db.prepare(
+    `SELECT * FROM development_staging_deployment
+      WHERE staging_environment_id=? AND status='ready' AND validation_result='PASS'
+      ORDER BY COALESCE(completed_at, created_at) DESC, id DESC LIMIT 1`,
+  ).get(envId);
+  return row || null;
+}
+
+function nowMs(now) {
+  if (now instanceof Date) return now.getTime();
+  const parsed = Date.parse(now);
+  return Number.isFinite(parsed) ? parsed : Date.now();
+}
+
+export function getCurrentCodingStaging(db, codingTaskId, { env = process.env, now = new Date() } = {}) {
   const cur = db.prepare("SELECT * FROM development_staging_current WHERE coding_task_id=?").get(Number(codingTaskId));
   if (!cur) return null;
   const dep = db.prepare("SELECT * FROM development_staging_deployment WHERE id=?").get(Number(cur.staging_deployment_id));
@@ -284,14 +302,36 @@ export function getCurrentCodingStaging(db, codingTaskId, { env = process.env } 
   else if (Number(qa.id) !== Number(dep.qa_run_id)) reasons.push("qa_run_changed");
   if (effectiveStagingPolicyFingerprint(env) !== dep.staging_policy_fingerprint) reasons.push("staging_policy_changed");
   if (configFingerprint(stagingEnvironmentConfig(env)) !== dep.config_fingerprint) reasons.push("config_changed");
-  return { ...publicStaging(db, dep, { withChecks: true }), fresh: reasons.length === 0, stale: reasons.length > 0, stale_reasons: reasons, validation_result: dep.validation_result, artifact_digest: dep.artifact_digest, endpoint: dep.staging_url };
+  const expiresMs = dep.expires_at ? Date.parse(dep.expires_at) : NaN;
+  const ttlExpired = Number.isFinite(expiresMs) && expiresMs <= nowMs(now);
+  if (ttlExpired) reasons.push("ttl_expired");
+  const occupant = stagingSlotOccupant(db, dep.staging_environment_id);
+  const occupied = !!(occupant && Number(occupant.id) !== Number(dep.id));
+  if (occupied) reasons.push("environment_occupied");
+  const evidenceReasons = reasons.filter((r) => r !== "environment_occupied");
+  const livePreview = evidenceReasons.length === 0 && !ttlExpired && !occupied && Boolean(dep.staging_url);
+  return {
+    ...publicStaging(db, dep, { withChecks: true }),
+    fresh: evidenceReasons.length === 0,
+    stale: evidenceReasons.length > 0,
+    stale_reasons: reasons,
+    validation_result: dep.validation_result,
+    artifact_digest: dep.artifact_digest,
+    endpoint: livePreview ? dep.staging_url : null,
+    ttl_expired: ttlExpired,
+    slot_occupied: occupied,
+    occupying_coding_task_id: occupied ? Number(occupant.coding_task_id) : null,
+    occupying_deployment_id: occupied ? Number(occupant.id) : null,
+    live_preview: livePreview,
+    rebuildable_same_version: ttlExpired && !!task && task.status !== "cancelled",
+  };
 }
 
-export function getCodingStagingView(db, codingTaskId, { env = process.env } = {}) {
+export function getCodingStagingView(db, codingTaskId, { env = process.env, now = new Date() } = {}) {
   const task = db.prepare("SELECT * FROM development_coding_task WHERE id=?").get(Number(codingTaskId));
   if (!task) throw httpError("coding task not found", 404);
   let qa = null; try { qa = getCurrentCodingQA(db, codingTaskId, { env }); } catch { qa = null; }
-  return { coding_task_id: Number(codingTaskId), issue_id: Number(task.issue_id), coding_task_status: task.status, current_qa: qa, current: getCurrentCodingStaging(db, codingTaskId, { env }), deployments: listStagingDeployments(db, { codingTaskId }) };
+  return { coding_task_id: Number(codingTaskId), issue_id: Number(task.issue_id), coding_task_status: task.status, current_qa: qa, current: getCurrentCodingStaging(db, codingTaskId, { env, now }), deployments: listStagingDeployments(db, { codingTaskId }) };
 }
 
 // ── Owner mutations ──

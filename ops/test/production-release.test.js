@@ -41,7 +41,7 @@ import {
   retryProductionRelease, sanitizeReleaseEvidence, seedProductionStable,
 } from "../src/release/productionRelease.js";
 
-const NOW = new Date("2026-06-01T00:00:00.000Z");
+const NOW = new Date(); // 與 getCurrent* 的真實時鐘對齊，避免 TTL 被測成已到期
 const GITHUB_ACTOR = "Fyun48";
 let seq = 1;
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");

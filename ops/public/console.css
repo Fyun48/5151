@@ -123,6 +123,18 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 }
 .dlg-card h3 { margin: 0 0 8px; font-size: 16px; }
 .dlg-card p { margin: 0 0 14px; color: var(--ink); font-size: 14px; line-height: 1.5; }
+.confirm-reason { display: grid; gap: 6px; margin: 0 0 12px; font-size: 13px; color: var(--ink); }
+.confirm-reason[hidden] { display: none !important; }
+.confirm-reason textarea {
+  width: 100%;
+  min-height: 72px;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  font: inherit;
+}
+#confirmReasonErr[hidden] { display: none !important; }
 @media (max-width: 640px) {
   .topbar { flex-direction: column; align-items: flex-start; gap: 8px; }
   .tbl { font-size: 12px; }

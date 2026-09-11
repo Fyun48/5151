@@ -123,6 +123,8 @@ function scopedProductId(value) {
 }
 
 function inferredIssueProductId(db, issueId) {
+  const own = db.prepare("SELECT product_id FROM issue_candidate WHERE id=?").get(Number(issueId));
+  if (own?.product_id) return own.product_id;
   const row = db.prepare(`
     SELECT f.product_id FROM issue_feedback_link l
     JOIN ingested_feedback f ON f.id = l.feedback_id
@@ -421,13 +423,17 @@ export function listRecentCodingTasks(db, { limit = 40, productId = null } = {})
   const rows = scoped
     ? db.prepare(`
         SELECT t.* FROM development_coding_task t
-         WHERE EXISTS (
-           SELECT 1 FROM issue_feedback_link l
-           JOIN ingested_feedback f ON f.id = l.feedback_id
-           WHERE l.issue_id = t.issue_id AND l.active = 1 AND f.product_id = ?
+         JOIN issue_candidate i ON i.id = t.issue_id
+         WHERE (
+           i.product_id = ?
+           OR EXISTS (
+             SELECT 1 FROM issue_feedback_link l
+             JOIN ingested_feedback f ON f.id = l.feedback_id
+             WHERE l.issue_id = t.issue_id AND l.active = 1 AND f.product_id = ?
+           )
          )
          ORDER BY t.id DESC LIMIT ?
-      `).all(scoped, cap)
+      `).all(scoped, scoped, cap)
     : db.prepare("SELECT * FROM development_coding_task ORDER BY id DESC LIMIT ?").all(cap);
   return rows.map((row) => withIssueMeta(db, row));
 }
