@@ -56,6 +56,8 @@ test("default product v3 is seeded and listed", async () => {
     assert.equal(data.items[0].id, "v3");
     assert.equal(data.items[0].status, "active");
     assert.equal(data.items[0].subscription.status, "connected");
+    assert.equal(data.items[0].environments[0].environment_key, "production");
+    assert.equal(data.items[0].environments[0].container_name, "591-tracker-v3");
   });
 });
 

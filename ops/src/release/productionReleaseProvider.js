@@ -36,6 +36,7 @@ function unavailable(name, setup) {
     async mergePullRequest() { err(); },
     async healthSmoke() { err(); },
     async restoreDatabase() { err(); },
+    async observeLiveIdentity() { return null; },
   };
 }
 
@@ -229,6 +230,8 @@ export function makeStubProductionReleaseProvider(opts = {}) {
           digest: mapped.digest || digest,
           oci_revision: mapped.oci_revision || null,
           oci_source: mapped.oci_source || REQUIRED_OCI_SOURCE,
+          static_tree_hash: mapped.static_tree_hash || null,
+          schema_compat: mapped.schema_compat || null,
         };
       }
       return {
@@ -319,6 +322,10 @@ export function makeStubProductionReleaseProvider(opts = {}) {
     async restoreDatabase() {
       restoreCallCount += 1;
       throw Object.assign(new Error("automatic production DB restore is forbidden"), { code: "db_restore_forbidden", status: 409 });
+    },
+
+    async observeLiveIdentity() {
+      return opts.liveIdentity || null;
     },
   };
   return self;

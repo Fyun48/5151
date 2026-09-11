@@ -91,7 +91,10 @@ Owner 直接下令改程式並部署，永遠不必走這條線。
 | `product_subscription` | 每站一列：`generation`、訂閱狀態、能力 JSON、起訖 |
 | `product_ingest_credential` | HMAC 密鑰（API 不回傳）、世代、active／revoked |
 | `ingested_feedback.product_id` | 去重改 `(product_id, delivery_id)`、`(product_id, idempotency_key)` |
-| `production_stable_current.product_id` | 取代 `id=1`；環境拆分第 8 包再加 |
+| `production_stable_current` | `(product_id, environment_key)`；含 static_tree_hash／schema_compat |
+| `product_environment_binding` | 每站／每環境的 repo／workflow／container／資料位置／部署身分；顯示名不能當鍵 |
+| `production_release_target_lease` | 每站／每環境部署互斥 |
+| `instruction_record` | 已驗證 session／workflow actor 的指令紀錄（append-only） |
 
 ### 4.2 訂閱生命週期
 

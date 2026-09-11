@@ -275,6 +275,9 @@ function renderProductCards() {
         ${statusChip(p.status)}
       </div>
       <p class="hint"><code>${esc(p.id)}</code> · 訂閱世代 ${esc(sub.generation ?? "—")} · ${statusChip(sub.status)}</p>
+      ${Array.isArray(p.environments) && p.environments.length
+        ? `<p class="hint">部署目標：${p.environments.map((e) => `<code>${esc(e.environment_key)}</code>${e.container_name ? ` → ${esc(e.container_name)}` : ""}${e.workflow_file ? ` · ${esc(e.workflow_file.split("/").pop())}` : ""}`).join(" · ")}</p>`
+        : `<p class="hint">部署目標：尚未登記環境。顯示名不能當安全識別。</p>`}
       <p class="hint">授權：回饋複製 ${caps.feedback_copy ? "開" : "關"} · CRM 同步 ${caps.crm_sync ? "開" : "關"} · 跨站分析 ${caps.cross_site_insight ? "開" : "關"}</p>
       ${Array.isArray(p.consent_events) && p.consent_events.length
         ? `<p class="hint">授權紀錄：${p.consent_events.slice(0, 4).map((ev) => `${esc(ev.capability_key)} ${ev.granted ? "開" : "撤回"}`).join(" · ")}</p>`

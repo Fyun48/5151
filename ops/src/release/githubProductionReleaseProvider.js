@@ -274,6 +274,7 @@ function unavailable(setup) {
     async mergePullRequest() { err(); },
     async healthSmoke() { err(); },
     async restoreDatabase() { err(); },
+    async observeLiveIdentity() { return null; },
   };
 }
 
@@ -670,6 +671,10 @@ export function makeGithubProductionReleaseProvider(env = process.env, deps = {}
     async restoreDatabase() {
       restoreCallCount += 1;
       throw Object.assign(new Error("automatic production DB restore is forbidden"), { code: "db_restore_forbidden", status: 409 });
+    },
+
+    async observeLiveIdentity() {
+      return null;
     },
   };
 }

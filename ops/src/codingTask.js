@@ -122,7 +122,7 @@ function scopedProductId(value) {
   return /^[a-z][a-z0-9_-]{0,31}$/.test(id) ? id : "";
 }
 
-function inferredIssueProductId(db, issueId) {
+export function inferredIssueProductId(db, issueId) {
   const own = db.prepare("SELECT product_id FROM issue_candidate WHERE id=?").get(Number(issueId));
   if (own?.product_id) return own.product_id;
   const row = db.prepare(`

@@ -25,6 +25,7 @@ import { createQaRun, executeQaRun } from "../src/qaRun.js";
 import { createStagingDeployment, claimStagingBatch, executeStagingDeployment } from "../src/stagingDeploy.js";
 import { makeStubStagingProvider } from "../src/staging/provider.js";
 import { createReleaseCandidate, submitOwnerReleaseDecision } from "../src/releaseCandidate.js";
+import { createProduct } from "../src/products.js";
 import { createMigrationSafetyAssessment } from "../src/release/migrationSafety.js";
 import { MIGRATION_CLASSIFICATIONS } from "../src/qa/migrationEvidence.js";
 import {
@@ -37,7 +38,7 @@ import { makeStubProductionReleaseProvider, makeProductionReleaseProvider, makeG
 import { sealPhase15Evidence, PHASE15_EVIDENCE_SCHEMA } from "../src/release/githubProductionReleaseProvider.js";
 import {
   createProductionReleaseRun, executeProductionRelease, getProductionRelease, getProductionReleaseView,
-  getProductionStable, parseProductionWorkflowTriggers, reconcileProductionRelease, requestCodeRollback,
+  getProductionStable, getProductionTargetLease, parseProductionWorkflowTriggers, reconcileProductionRelease, requestCodeRollback,
   retryProductionRelease, sanitizeReleaseEvidence, seedProductionStable,
 } from "../src/release/productionRelease.js";
 
@@ -46,9 +47,9 @@ const GITHUB_ACTOR = "Fyun48";
 let seq = 1;
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-function seedProposeIssue(db) {
+function seedProposeIssue(db, { productId = null } = {}) {
   const ts = NOW.toISOString();
-  const iid = Number(db.prepare("INSERT INTO issue_candidate(title,summary,category,clustering_version,status,created_at,updated_at) VALUES('t','s','BUG','cluster-v1','open',?,?)").run(ts, ts).lastInsertRowid);
+  const iid = Number(db.prepare("INSERT INTO issue_candidate(title,summary,category,clustering_version,status,product_id,created_at,updated_at) VALUES('t','s','BUG','cluster-v1','open',?,?,?)").run(productId, ts, ts).lastInsertRowid);
   for (let k = 0; k < 8; k++) {
     const i = seq++;
     db.prepare("INSERT INTO ingested_feedback(delivery_id, idempotency_key, source, kind, content, contact, user_ref, app_version, received_at) VALUES (?, ?, 'v3', 'bug', ?, 'leak@example.com', ?, '3.47', ?)").run(`d${i}`, `k${i}`, `content ${i}`, `reporter-${i}`, ts);
@@ -77,8 +78,8 @@ function initGitRepo() {
   git(["push", "-q", "-u", "origin", "master"]);
   return { dir, remote, cleanup() { try { rmSync(dir, { recursive: true, force: true }); } catch {} try { rmSync(remote, { recursive: true, force: true }); } catch {} } };
 }
-async function makeStagedTask(db) {
-  const iid = seedProposeIssue(db);
+async function makeStagedTask(db, { productId = null } = {}) {
+  const iid = seedProposeIssue(db, { productId });
   await runEvaluationOnce(db, { provider: makeStubEvaluationProvider(), config: { concurrency: 1 }, now: () => NOW });
   await runProposalOnce(db, { provider: makeStubProposalProvider(), config: { concurrency: 1 }, now: () => NOW });
   const cur = getCurrentIssueProposal(db, iid, { now: NOW });
@@ -161,6 +162,8 @@ function seedPrev(db, repo) {
     sourceSha: repo.resolveRef("master"),
     artifactDigest: "sha256:" + "11".repeat(32),
     workflowRunId: "33999999999",
+    staticTreeHash: "aa".repeat(32),
+    schemaCompat: "compatible",
     provenance: { kind: "seeded_previous_stable", workflow_file: PRODUCTION_WORKFLOWS.DEPLOY, workflow_ref: REQUIRED_WORKFLOW_REF },
     now: NOW,
   });
@@ -1460,7 +1463,7 @@ test("uncertain mutating deploy holds lease so a second release cannot dispatch 
     await assert.rejects(() => executeProductionRelease(db, runA.run.id, { provider: providerA, repo: stagedA.repo, now: NOW }), /not an exact successful|environment|outputs/);
     assert.equal(getProductionRelease(db, runA.run.id).run.current_status, "PRODUCTION_STATE_UNKNOWN");
     assert.equal(deployA.count, 1);
-    const lease = db.prepare("SELECT * FROM production_release_global_lease WHERE id=1").get();
+    const lease = getProductionTargetLease(db);
     assert.equal(Number(lease.release_run_id), runA.run.id);
     await assert.rejects(() => executeProductionRelease(db, runA.run.id, { provider: providerA, repo: stagedA.repo, now: NOW }), /not an exact successful|environment|outputs/);
     assert.equal(getProductionRelease(db, runA.run.id).run.current_status, "PRODUCTION_STATE_UNKNOWN");
@@ -1473,7 +1476,7 @@ test("uncertain mutating deploy holds lease so a second release cannot dispatch 
     assert.equal(countsB.predeploy, 0);
     assert.equal(countsB.deploy, 0);
     assert.ok(!getProductionRelease(db, runB.run.id).bindings.some((x) => ["predeploy", "deploy", "rollback"].includes(x.workflow_kind) && (x.workflow_run_id || x.dispatch_submitted_at)));
-    assert.equal(Number(db.prepare("SELECT release_run_id FROM production_release_global_lease WHERE id=1").get().release_run_id), runA.run.id);
+    assert.equal(Number(db.prepare("SELECT release_run_id FROM production_release_target_lease").get().release_run_id), runA.run.id);
     stripDeployEvidence = false;
     const reconciled = await executeProductionRelease(db, runA.run.id, { provider: providerA, repo: stagedA.repo, now: NOW });
     assert.equal(reconciled.run.current_status, "SUCCEEDED");
@@ -1509,7 +1512,7 @@ test("accepted deploy without final artifact still correlates by durable intent 
     await assert.rejects(() => executeProductionRelease(db, created.run.id, { provider, repo, now: NOW }), /not an exact successful|environment|outputs/);
     assert.equal(deploy.count, 1);
     assert.equal(getProductionRelease(db, created.run.id).run.current_status, "PRODUCTION_STATE_UNKNOWN");
-    assert.equal(Number(db.prepare("SELECT release_run_id FROM production_release_global_lease WHERE id=1").get().release_run_id), created.run.id);
+    assert.equal(Number(db.prepare("SELECT release_run_id FROM production_release_target_lease").get().release_run_id), created.run.id);
   } finally { git.cleanup(); db.close(); }
 });
 
@@ -1525,7 +1528,7 @@ test("first-live bootstrap uses independently inspected predeploy current produc
     const provider = makeStubProductionReleaseProvider({
       currentProduction: { digest: liveDigest, image_ref: `ghcr.io/fyun48/5151@${liveDigest}` },
       inspectByDigest: {
-        [liveDigest]: { digest: liveDigest, oci_revision: liveSha, oci_source: "https://github.com/Fyun48/5151" },
+        [liveDigest]: { digest: liveDigest, oci_revision: liveSha, oci_source: "https://github.com/Fyun48/5151", static_tree_hash: "bb".repeat(32), schema_compat: "compatible" },
       },
     });
     const out = await executeProductionRelease(db, created.run.id, {
@@ -1631,7 +1634,7 @@ test("first-live SUCCEEDED rollback uses immutable verified bootstrap target", a
     const provider = makeStubProductionReleaseProvider({
       currentProduction: { digest: liveDigest, image_ref: `ghcr.io/fyun48/5151@${liveDigest}` },
       inspectByDigest: {
-        [liveDigest]: { digest: liveDigest, oci_revision: liveSha, oci_source: "https://github.com/Fyun48/5151" },
+        [liveDigest]: { digest: liveDigest, oci_revision: liveSha, oci_source: "https://github.com/Fyun48/5151", static_tree_hash: "bb".repeat(32), schema_compat: "compatible" },
       },
     });
     const out = await executeProductionRelease(db, created.run.id, { provider, repo, now: NOW });
@@ -1677,7 +1680,7 @@ test("definitive deploy rejection blocks and releases the global Production leas
     const providerA = makeStubProductionReleaseProvider({ rejectWorkflows: [PRODUCTION_WORKFLOWS.DEPLOY] });
     await assert.rejects(() => executeProductionRelease(db, runA.run.id, { provider: providerA, repo: stagedA.repo, now: NOW }), /dispatch rejected/);
     assert.equal(getProductionRelease(db, runA.run.id).run.current_status, "BLOCKED");
-    const lease = db.prepare("SELECT * FROM production_release_global_lease WHERE id=1").get();
+    const lease = db.prepare("SELECT * FROM production_release_target_lease").get();
     assert.ok(!lease?.release_run_id);
     const b = await cleared(db, stagedB.codingTaskId, stagedB.repo);
     seedPrev(db, stagedB.repo);
@@ -1701,7 +1704,7 @@ test("timeout deploy send keeps the Production lease and never redispatches", as
     await assert.rejects(() => executeProductionRelease(db, runA.run.id, { provider: providerA, repo: stagedA.repo, now: NOW }), /still queued|in_progress/);
     assert.equal(deployA.count, 1);
     assert.equal(getProductionRelease(db, runA.run.id).run.current_status, "DEPLOY_DISPATCHED");
-    assert.equal(Number(db.prepare("SELECT release_run_id FROM production_release_global_lease WHERE id=1").get().release_run_id), runA.run.id);
+    assert.equal(Number(db.prepare("SELECT release_run_id FROM production_release_target_lease").get().release_run_id), runA.run.id);
     await assert.rejects(() => reconcileProductionRelease(db, runA.run.id, { provider: providerA, repo: stagedA.repo, now: NOW }), /still queued|reconcile/);
     assert.equal(deployA.count, 1);
     const b = await cleared(db, stagedB.codingTaskId, stagedB.repo);
@@ -1828,7 +1831,7 @@ test("live GitHub transport exception after accepted deploy is not REJECTED and 
     const deployBinding = getProductionRelease(db, runA.run.id).bindings.find((b) => b.workflow_kind === "deploy");
     assert.notEqual(deployBinding.binding_status, "rejected");
     assert.equal(api.dispatchHttp.deploy, 1);
-    assert.equal(Number(db.prepare("SELECT release_run_id FROM production_release_global_lease WHERE id=1").get().release_run_id), runA.run.id);
+    assert.equal(Number(db.prepare("SELECT release_run_id FROM production_release_target_lease").get().release_run_id), runA.run.id);
     const found = await providerA.findWorkflowRunByIdempotency({
       workflowFile: PRODUCTION_WORKFLOWS.DEPLOY,
       dispatchIntentId: deployBinding.dispatch_intent_id || deployBinding.dispatch_request_id,
@@ -1838,7 +1841,7 @@ test("live GitHub transport exception after accepted deploy is not REJECTED and 
     await assert.rejects(() => reconcileProductionRelease(db, runA.run.id, { provider: providerA, repo: stagedA.repo, now: NOW }), /still queued|reconcile|not an exact|evidence|health/);
     assert.equal(api.dispatchHttp.deploy, 1);
     assert.notEqual(getProductionRelease(db, runA.run.id).bindings.find((b) => b.workflow_kind === "deploy").binding_status, "rejected");
-    assert.equal(Number(db.prepare("SELECT release_run_id FROM production_release_global_lease WHERE id=1").get().release_run_id), runA.run.id);
+    assert.equal(Number(db.prepare("SELECT release_run_id FROM production_release_target_lease").get().release_run_id), runA.run.id);
     const b = await cleared(db, stagedB.codingTaskId, stagedB.repo);
     const runB = createProductionReleaseRun(db, execBody(stagedB.codingTaskId, b.authorization, b.assessment, { expectedMasterHead: stagedB.repo.resolveRemoteRef("master") }), { repo: stagedB.repo, now: NOW });
     const providerB = makeStubProductionReleaseProvider();
@@ -1867,7 +1870,7 @@ test("live GitHub HTTP 4xx/5xx deploy rejection releases the Production lease", 
     assert.equal(getProductionRelease(db, runA.run.id).run.current_status, "BLOCKED");
     assert.equal(getProductionRelease(db, runA.run.id).bindings.find((b) => b.workflow_kind === "deploy").binding_status, "rejected");
     assert.equal(api.dispatchHttp.deploy, 1);
-    assert.ok(!db.prepare("SELECT * FROM production_release_global_lease WHERE id=1").get()?.release_run_id);
+    assert.ok(!db.prepare("SELECT * FROM production_release_target_lease").get()?.release_run_id);
     const b = await cleared(db, stagedB.codingTaskId, stagedB.repo);
     seedPrev(db, stagedB.repo);
     const runB = createProductionReleaseRun(db, execBody(stagedB.codingTaskId, b.authorization, b.assessment, { expectedMasterHead: stagedB.repo.resolveRemoteRef("master") }), { repo: stagedB.repo, now: NOW });
@@ -1875,5 +1878,104 @@ test("live GitHub HTTP 4xx/5xx deploy rejection releases the Production lease", 
     const outB = await executeProductionRelease(db, runB.run.id, { provider: providerB, repo: stagedB.repo, now: NOW });
     assert.equal(outB.run.current_status, "SUCCEEDED");
   } finally { stagedA.git.cleanup(); stagedB.git.cleanup(); db.close(); }
+});
+
+test("site A uncertain deploy does not hold site B production lease", async () => {
+  const db = openOpsDb(":memory:");
+  createProduct(db, { id: "shop", displayName: "商店站" });
+  const stagedA = await makeStagedTask(db, { productId: "v3" });
+  const stagedB = await makeStagedTask(db, { productId: "shop" });
+  try {
+    const a = await cleared(db, stagedA.codingTaskId, stagedA.repo);
+    seedPrev(db, stagedA.repo);
+    const runA = createProductionReleaseRun(db, execBody(stagedA.codingTaskId, a.authorization, a.assessment, { expectedMasterHead: stagedA.repo.resolveRemoteRef("master") }), { repo: stagedA.repo, now: NOW });
+    assert.equal(runA.run.product_id, "v3");
+    const providerA = makeStubProductionReleaseProvider();
+    let stripDeployEvidence = true;
+    wrapGetWorkflowRun(providerA, (wf) => {
+      if (!stripDeployEvidence || wf.workflow_file !== PRODUCTION_WORKFLOWS.DEPLOY) return wf;
+      return { ...wf, outputs: {}, environment: null };
+    });
+    await assert.rejects(() => executeProductionRelease(db, runA.run.id, { provider: providerA, repo: stagedA.repo, now: NOW }), /not an exact successful|environment|outputs/);
+    assert.equal(getProductionRelease(db, runA.run.id).run.current_status, "PRODUCTION_STATE_UNKNOWN");
+    assert.equal(Number(getProductionTargetLease(db, "v3", "production").release_run_id), runA.run.id);
+    assert.ok(!getProductionTargetLease(db, "shop", "production")?.release_run_id);
+
+    seedProductionStable(db, {
+      sourceSha: stagedB.repo.resolveRef("master"),
+      artifactDigest: "sha256:" + "11".repeat(32),
+      workflowRunId: "33999999998",
+      staticTreeHash: "aa".repeat(32),
+      schemaCompat: "compatible",
+      provenance: { kind: "seeded_previous_stable", workflow_file: PRODUCTION_WORKFLOWS.DEPLOY, workflow_ref: REQUIRED_WORKFLOW_REF },
+      productId: "shop",
+      now: NOW,
+    });
+    const b = await cleared(db, stagedB.codingTaskId, stagedB.repo);
+    const runB = createProductionReleaseRun(db, execBody(stagedB.codingTaskId, b.authorization, b.assessment, { expectedMasterHead: stagedB.repo.resolveRemoteRef("master") }), { repo: stagedB.repo, now: NOW });
+    assert.equal(runB.run.product_id, "shop");
+    const providerB = makeStubProductionReleaseProvider();
+    const outB = await executeProductionRelease(db, runB.run.id, { provider: providerB, repo: stagedB.repo, now: NOW });
+    assert.equal(outB.run.current_status, "SUCCEEDED");
+    assert.equal(Number(getProductionTargetLease(db, "v3", "production").release_run_id), runA.run.id);
+  } finally { stagedA.git.cleanup(); stagedB.git.cleanup(); db.close(); }
+});
+
+test("observed owner-direct live identity blocks an old OPS candidate", async () => {
+  const db = openOpsDb(":memory:");
+  const { codingTaskId, repo, git } = await makeStagedTask(db);
+  try {
+    const { authorization, assessment } = await cleared(db, codingTaskId, repo);
+    seedPrev(db, repo);
+    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW });
+    const provider = makeStubProductionReleaseProvider({
+      liveIdentity: {
+        source_sha: "d".repeat(40),
+        artifact_digest: "sha256:" + "dd".repeat(32),
+      },
+    });
+    await assert.rejects(
+      () => executeProductionRelease(db, created.run.id, { provider, repo, now: NOW }),
+      /live production identity superseded|re-check required/,
+    );
+    assert.equal(getProductionRelease(db, created.run.id).run.current_status, "BLOCKED");
+    assert.equal(getProductionStable(db, "v3", "production").source_sha, "d".repeat(40));
+    assert.ok(!getProductionRelease(db, created.run.id).bindings.some((b) => b.workflow_kind === "deploy" && (b.workflow_run_id || b.dispatch_submitted_at)));
+  } finally { git.cleanup(); db.close(); }
+});
+
+test("digest-only previous stable is not a complete rollback contract", async () => {
+  const db = openOpsDb(":memory:");
+  const { codingTaskId, repo, git } = await makeStagedTask(db);
+  try {
+    const { authorization, assessment } = await cleared(db, codingTaskId, repo);
+    seedProductionStable(db, {
+      sourceSha: repo.resolveRef("master"),
+      artifactDigest: "sha256:" + "11".repeat(32),
+      workflowRunId: "33999999999",
+      provenance: { kind: "seeded_previous_stable", workflow_file: PRODUCTION_WORKFLOWS.DEPLOY, workflow_ref: REQUIRED_WORKFLOW_REF },
+      now: NOW,
+    });
+    const created = createProductionReleaseRun(db, execBody(codingTaskId, authorization, assessment, { expectedMasterHead: expectedMaster(repo) }), { repo, now: NOW });
+    const provider = makeStubProductionReleaseProvider();
+    const out = await executeProductionRelease(db, created.run.id, { provider, repo, now: NOW });
+    assert.equal(out.run.current_status, "SUCCEEDED");
+    await assert.rejects(() => requestCodeRollback(db, {
+      releaseRunId: created.run.id,
+      previousStableSha: created.run.previous_stable_sha,
+      previousStableDigest: created.run.previous_stable_digest,
+      previousStableWorkflowRunId: created.run.previous_stable_workflow_run_id,
+      provider, repo, now: NOW,
+    }), /static tree hash|compatible schema|complete rollback/);
+    assert.equal(provider.restoreCallCount, 0);
+    await assert.rejects(() => requestCodeRollback(db, {
+      releaseRunId: created.run.id,
+      previousStableSha: created.run.previous_stable_sha,
+      previousStableDigest: created.run.previous_stable_digest,
+      previousStableWorkflowRunId: created.run.previous_stable_workflow_run_id,
+      confirmDbRestore: "RESTORE-PRODUCTION-DB",
+      provider, repo, now: NOW,
+    }), /separate confirmation|not performed by code rollback/);
+  } finally { git.cleanup(); db.close(); }
 });
 
