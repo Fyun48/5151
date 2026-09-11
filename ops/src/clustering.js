@@ -2,7 +2,7 @@ import { withImmediateTx } from "./tx.js";
 import { appendAuditRow } from "./audit.js";
 import { httpError } from "./errors.js";
 import { cosineSimilarity, areComparable } from "./ai/embeddingProvider.js";
-import { feedbackAllowsNewInsight } from "./insightConsent.js";
+import { workerWriteDecision } from "./insightConsent.js";
 
 export const CLUSTERING_VERSION = "cluster-v1";
 
@@ -68,7 +68,8 @@ export function bestMatch(db, embRow, { excludeFeedbackId = null } = {}) {
   ).all();
   let best = { issueId: null, score: 0 };
   for (const m of members) {
-    if (!feedbackAllowsNewInsight(db, m.feedback_id)) continue;
+    const matchGen = db.prepare("SELECT subscription_generation FROM feedback_analysis WHERE id=?").get(m.analysis_id)?.subscription_generation;
+    if (!workerWriteDecision(db, m.feedback_id, { expectedGeneration: matchGen }).ok) continue;
     if (excludeFeedbackId != null && Number(m.feedback_id) === Number(excludeFeedbackId)) continue;
     if (!areComparable(meta, embMeta(m))) continue; // 不比較不相容向量空間
     const s = cosineSimilarity(vec, parseVector(m));
@@ -135,6 +136,8 @@ export function issueRepresentative(db, issueId, meta, { excludeFeedbackId = nul
 
 // 自動分群（保守）：需同時滿足 nearest>=auto 且 coherence(對群 centroid)>=coherence 才連既有 issue；否則另建新 issue。
 export function autoClusterFeedback(db, { feedbackId, currentAnalysis, actor = "system", now = new Date(), config = clusteringConfig() }) {
+  const gate = workerWriteDecision(db, feedbackId, { expectedGeneration: currentAnalysis?.subscription_generation });
+  if (!gate.ok) return { action: "subscription_blocked", reason: gate.reason };
   return withImmediateTx(db, () => {
     const already = db.prepare("SELECT id FROM issue_feedback_link WHERE feedback_id=? AND active=1").get(Number(feedbackId));
     if (already) return { action: "already_linked" };
