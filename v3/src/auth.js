@@ -176,6 +176,7 @@ export function publicPath(req) {
     p === "/api/housing-data" ||
     p === "/api/help-qa" ||
     p === "/api/feedback/meta" ||
+    p === "/api/ops/commands/apply" ||
     p === "/api/ads" ||
     p === "/api/brand" ||
     p === "/api/broadcasts" ||

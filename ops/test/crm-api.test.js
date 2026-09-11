@@ -89,6 +89,7 @@ test("crm_sync capability is not implied by feedback_copy", () => {
   const created = createProduct(db, { id: "shop", displayName: "商店" });
   assert.equal(created.product.subscription.capabilities.feedback_copy, true);
   assert.equal(created.product.subscription.capabilities.crm_sync, false);
+  assert.equal(created.product.subscription.capabilities.remote_cs, false);
   assert.throws(
     () => ingestCrmSnapshot(db, { deliveryId: "x", payload: snap("x"), productId: "shop" }),
     /crm_sync not granted/,

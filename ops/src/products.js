@@ -4,6 +4,7 @@ import { appendAuditRow } from "./audit.js";
 import { httpError } from "./errors.js";
 import { verifyIngestRequest } from "./ingestSignature.js";
 import { ensureDefaultEnvironmentBindings, listProductEnvironments } from "./productEnvironment.js";
+import { ensureCommandCredential, revokeCommandCredentials } from "./siteCommand.js";
 
 export const DEFAULT_PRODUCT_ID = "v3";
 export const DEFAULT_PRODUCT_NAME = "吉比租房";
@@ -11,6 +12,7 @@ export const DEFAULT_PRODUCT_NAME = "吉比租房";
 export const DEFAULT_CAPABILITIES = Object.freeze({
   feedback_copy: true,
   crm_sync: false,
+  remote_cs: false,
   stats: false,
   cross_site_insight: false,
   followup_service: false,
@@ -237,6 +239,7 @@ export function unsubscribeProduct(db, productId, { actor = "owner", now = new D
   const ts = iso(now);
   return withImmediateTx(db, () => {
     revokeCredentials(db, product.id, { now, actor });
+    revokeCommandCredentials(db, product.id, { now });
     db.prepare("UPDATE ops_product SET status=?, updated_at=? WHERE id=?").run("exited", ts, product.id);
     db.prepare("UPDATE product_subscription SET status=?, ended_at=?, updated_at=? WHERE product_id=?")
       .run("exited", ts, ts, product.id);
@@ -357,7 +360,15 @@ export function updateProductCapabilities(db, productId, patch = {}, { actor = "
     now,
   });
   const updated = publicProduct(getProduct(db, product.id));
-  return { ...updated, consent_events: listConsentEvents(db, product.id) };
+  const out = { ...updated, consent_events: listConsentEvents(db, product.id) };
+  if (next.remote_cs && !current.remote_cs) {
+    const cred = ensureCommandCredential(db, product.id, { now });
+    if (cred.created) out.command_secret = cred.secret;
+  }
+  if (!next.remote_cs && current.remote_cs) {
+    revokeCommandCredentials(db, product.id, { now });
+  }
+  return out;
 }
 
 export function productAcceptsIngest(product) {

@@ -95,6 +95,7 @@ import {
 } from "./release/productionRelease.js";
 import { makeProductionReleaseProvider } from "./release/productionReleaseProvider.js";
 import { kitFilePath, resolveKitStatic } from "./designKitStatic.js";
+import { deliverSiteCommand, enqueueAndMaybeDeliver, listSiteCommands } from "./siteCommand.js";
 import { getDashboard, listFeedbackInbox, listIssuesWithLifecycle, OPS_PHASE, publicFeedback } from "./dashboard.js";
 import { notifyConfig, sendOpsNotification } from "./notify/webhook.js";
 
@@ -211,7 +212,7 @@ function runGuard(mw, req, reply) {
   return passed;
 }
 
-export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret = process.env.OPS_INGEST_SECRET || "", storage = null, scanner = null, codingRepo = null, productionReleaseProvider = null }) {
+export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret = process.env.OPS_INGEST_SECRET || "", storage = null, scanner = null, codingRepo = null, productionReleaseProvider = null, siteCommandFetch = fetch, siteCommandApplyUrl = process.env.V3_OPS_COMMAND_APPLY_URL || "" }) {
   const releaseRepo = codingRepo || makeCodingRepo();
   const releaseProvider = productionReleaseProvider || makeProductionReleaseProvider();
   if (!db) throw new Error("createHandler requires db");
@@ -599,6 +600,42 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         }
         return;
       }
+      if (pathname === "/ops/api/site-commands" && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        sendJson(res, 200, { items: listSiteCommands(db, { productId: url.searchParams.get("productId") || "" }) });
+        return;
+      }
+      if (pathname === "/ops/api/site-commands" && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          const body = await readBody(req);
+          const result = await enqueueAndMaybeDeliver(db, body || {}, {
+            actor: `owner:${req.owner.email}`,
+            fetchImpl: siteCommandFetch,
+            applyUrl: siteCommandApplyUrl,
+          });
+          sendJson(res, result.duplicate ? 200 : 201, { ok: true, ...result });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
+      const commandDeliver = pathname.match(/^\/ops\/api\/site-commands\/([a-z0-9-]+)\/deliver$/);
+      if (commandDeliver && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          sendJson(res, 200, {
+            ok: true,
+            job: await deliverSiteCommand(db, commandDeliver[1], {
+              fetchImpl: siteCommandFetch,
+              applyUrl: siteCommandApplyUrl,
+            }),
+          });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
       if (pathname === "/ops/api/crm/module" && method === "POST") {
         if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
         try {
@@ -657,10 +694,8 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
         try {
           const body = await readBody(req);
-          sendJson(res, 200, {
-            ok: true,
-            product: updateProductCapabilities(db, productCaps[1], body || {}, { actor: `owner:${req.owner.email}` }),
-          });
+          const product = updateProductCapabilities(db, productCaps[1], body || {}, { actor: `owner:${req.owner.email}` });
+          sendJson(res, 200, { ok: true, product, command_secret: product.command_secret || "" });
         } catch (err) {
           sendJson(res, err.status || 400, { error: err.message });
         }
@@ -1269,8 +1304,8 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
 }
 
 // 相容舊測試/呼叫：createApp 回傳一個 { listen } 介面（用 node:http 包裝 handler）。
-export function createApp({ db, auth, publicDir = PUBLIC_DIR, ingestSecret = process.env.OPS_INGEST_SECRET || "", storage = null, scanner = null, codingRepo = null, productionReleaseProvider = null }) {
-  const handler = createHandler({ db, auth, publicDir, ingestSecret, storage, scanner, codingRepo, productionReleaseProvider });
+export function createApp({ db, auth, publicDir = PUBLIC_DIR, ingestSecret = process.env.OPS_INGEST_SECRET || "", storage = null, scanner = null, codingRepo = null, productionReleaseProvider = null, siteCommandFetch = fetch, siteCommandApplyUrl = process.env.V3_OPS_COMMAND_APPLY_URL || "" }) {
+  const handler = createHandler({ db, auth, publicDir, ingestSecret, storage, scanner, codingRepo, productionReleaseProvider, siteCommandFetch, siteCommandApplyUrl });
   return {
     handler,
     listen(...args) {

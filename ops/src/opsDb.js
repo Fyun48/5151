@@ -1208,7 +1208,44 @@ export function applyOpsSchema(db) {
   upgradeIssueFollowUp(db);
   upgradeProviderDrawer(db);
   upgradeLiveTargets(db);
+  upgradeSiteCommand(db);
   return db;
+}
+
+export function upgradeSiteCommand(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS product_command_credential (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id TEXT NOT NULL,
+      generation INTEGER NOT NULL DEFAULT 1,
+      secret TEXT NOT NULL,
+      cred_state TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL,
+      revoked_at TEXT,
+      FOREIGN KEY (product_id) REFERENCES ops_product(id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS idx_command_cred_product ON product_command_credential(product_id, cred_state);
+    CREATE TABLE IF NOT EXISTS site_command_job (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id TEXT NOT NULL,
+      command_id TEXT NOT NULL UNIQUE,
+      idempotency_key TEXT NOT NULL,
+      command_kind TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      job_state TEXT NOT NULL,
+      apply_state TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      next_attempt_at TEXT,
+      last_error TEXT,
+      site_result_json TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      applied_at TEXT,
+      UNIQUE(product_id, idempotency_key),
+      FOREIGN KEY (product_id) REFERENCES ops_product(id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS idx_site_command_product ON site_command_job(product_id, id);
+  `);
 }
 
 export function upgradeLiveTargets(db) {

@@ -132,6 +132,7 @@ import {
   outboxStats as outboxStatsOn,
 } from "./feedbackOutbox.js";
 import { deliveryControl, setLocalDeliveryStopped, compactLocalOutbox } from "./opsDelivery.js";
+import { handleApplyRequest, remoteCsAcceptControl, setRemoteCsStopped } from "./siteCommandApply.js";
 import {
   ensureCrmSchema,
   crmOverview as crmOverviewOn,
@@ -1636,6 +1637,19 @@ export function getOpsDeliveryControl() {
 export function setOpsDeliveryStop(stopped) {
   setLocalDeliveryStopped(db, Boolean(stopped));
   return deliveryControl(db);
+}
+
+export function applyOpsSiteCommand(headers, rawBody) {
+  return handleApplyRequest(db, { headers, rawBody });
+}
+
+export function getRemoteCsControl() {
+  return remoteCsAcceptControl(db);
+}
+
+export function setRemoteCsStop(stopped) {
+  setRemoteCsStopped(db, Boolean(stopped));
+  return remoteCsAcceptControl(db);
 }
 
 export function compactOpsOutbox(opts = {}) {

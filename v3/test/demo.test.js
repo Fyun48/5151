@@ -149,6 +149,8 @@ test("guest commute template ignores the source member work address", () => {
 test("demo API is a public path and is rate-limited per IP", () => {
   assert.equal(publicPath({ path: "/tokens.css" }), true);
   assert.equal(publicPath({ path: "/kit/tokens.css" }), true);
+  assert.equal(publicPath({ path: "/api/ops/commands/apply" }), true);
+  assert.equal(publicPath({ path: "/api/ops/commands" }), false);
   assert.equal(publicPath({ path: "/kit/../admin.html" }), false);
   assert.equal(publicPath({ path: "/api/brand" }), true);
   assert.equal(publicPath({ path: "/brand/mark.png" }), true);

@@ -53,3 +53,25 @@ export function verifyIngestRequest({ method, path, headers = {}, rawBody, secre
   if (!safeEqualHex(signature, expected)) return { ok: false, reason: "bad_signature" };
   return { ok: true, deliveryId, bodyHash: bh };
 }
+
+export function signIngestRequest({ method, path, deliveryId, rawBody, secret, now = Date.now() }) {
+  if (!secret) throw new Error("signIngestRequest requires secret");
+  const timestamp = String(now instanceof Date ? now.getTime() : now);
+  const bh = bodyHashHex(rawBody);
+  const mac = createHmac("sha256", secret).update(
+    buildSigningString({ method, path, timestamp, deliveryId, bodyHash: bh }),
+  ).digest("hex");
+  const signature = `${SIG_VERSION}=${mac}`;
+  return {
+    signature,
+    timestamp,
+    deliveryId,
+    bodyHash: bh,
+    headers: {
+      "Content-Type": "application/json",
+      "X-Ops-Signature": signature,
+      "X-Ops-Timestamp": timestamp,
+      "X-Ops-Delivery": deliveryId,
+    },
+  };
+}

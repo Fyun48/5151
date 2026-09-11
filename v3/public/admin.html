@@ -995,6 +995,8 @@
       <div class="row" id="opsDeliveryBox" style="gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
         <span class="hint" id="opsDeliveryStatus">正在讀取 OPS 傳送狀態…</span>
         <button type="button" class="ghost" id="opsDeliveryToggle">停止傳送至 OPS</button>
+        <span class="hint" id="remoteCsStatus">遠端客服：讀取中…</span>
+        <button type="button" class="ghost" id="remoteCsToggle">停止接受 OPS 客服指令</button>
         <button type="button" class="ghost" id="opsOutboxCompact" hidden>精簡已送出的傳輸複本</button>
       </div>
       <p class="msg" id="opsOutboxAlert" role="status"></p>
@@ -2676,6 +2678,48 @@
       if (res.ok) opsDeliveryState = await res.json();
       renderOpsDelivery();
     });
+    let remoteCsState = null;
+    function renderRemoteCs() {
+      const status = $("remoteCsStatus");
+      const btn = $("remoteCsToggle");
+      if (!status || !btn) return;
+      const s = remoteCsState;
+      if (!s) {
+        status.textContent = "遠端客服：無法讀取。";
+        return;
+      }
+      if (s.local_stopped) {
+        status.textContent = "遠端客服：本機已拒絕 OPS 客服指令。已寫入的處理仍保留。";
+        btn.textContent = "恢復接受 OPS 客服指令";
+        return;
+      }
+      if (!s.env_allowed || !s.configured) {
+        status.textContent = "遠端客服：預設關（需 V3_OPS_COMMAND_ACCEPT=1 與命令密鑰）。";
+        btn.textContent = "預先停止接受 OPS 客服指令";
+        return;
+      }
+      status.textContent = "遠端客服：本站會驗證後寫入。";
+      btn.textContent = "停止接受 OPS 客服指令";
+    }
+    async function loadRemoteCs() {
+      try {
+        const res = await fetch("/api/admin/remote-cs", { cache: "no-store" });
+        remoteCsState = res.ok ? await res.json() : null;
+      } catch {
+        remoteCsState = null;
+      }
+      renderRemoteCs();
+    }
+    $("remoteCsToggle")?.addEventListener("click", async () => {
+      const nextStop = !(remoteCsState && remoteCsState.local_stopped);
+      const res = await fetch("/api/admin/remote-cs", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stop: nextStop }),
+      });
+      if (res.ok) remoteCsState = await res.json();
+      renderRemoteCs();
+    });
     let crmState = { module: { enabled: true }, contacts: [], sync: null, selected: null };
     function showCrmErrors(items) {
       const box = $("crmErrorSummary");
@@ -3333,7 +3377,7 @@
       if (me.role !== "admin") { location.replace("/"); return; }
       meEmail = me.email || "";
       $("who").textContent = meEmail;
-      await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadAnnouncements(), loadCommsAdmin(), loadMaps(), loadHelpQa(), loadWishConditions(), loadLegalCopy(), loadContentCms(), loadListingImports(), loadSpirit(), loadHousing(), loadCrawlSources(), loadSystemCrawl(), loadBrand(), loadFeedback(), loadOpsDelivery(), loadCrm(), loadPlugins()]);
+      await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadAnnouncements(), loadCommsAdmin(), loadMaps(), loadHelpQa(), loadWishConditions(), loadLegalCopy(), loadContentCms(), loadListingImports(), loadSpirit(), loadHousing(), loadCrawlSources(), loadSystemCrawl(), loadBrand(), loadFeedback(), loadOpsDelivery(), loadRemoteCs(), loadCrm(), loadPlugins()]);
       $("brandForm").onsubmit = async (ev) => {
         ev.preventDefault();
         $("brandSave").disabled = true;
