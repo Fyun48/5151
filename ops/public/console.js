@@ -282,7 +282,7 @@ function renderProductCards() {
       ${Array.isArray(p.environments) && p.environments.length
         ? `<p class="hint">部署目標：${p.environments.map((e) => `<code>${esc(e.environment_key)}</code>${e.container_name ? ` → ${esc(e.container_name)}` : ""}${e.workflow_file ? ` · ${esc(e.workflow_file.split("/").pop())}` : ""}`).join(" · ")}</p>`
         : `<p class="hint">部署目標：尚未登記環境。顯示名不能當安全識別。</p>`}
-      <p class="hint">授權：回饋複製 ${caps.feedback_copy ? "開" : "關"} · CRM 同步 ${caps.crm_sync ? "開" : "關"} · 遠端客服 ${caps.remote_cs ? "開" : "關"} · 跨站分析 ${caps.cross_site_insight ? "開" : "關"} · 退出後保留 ${caps.retain_after_exit ? "開" : "關"}</p>
+      <p class="hint">授權：回饋複製 ${caps.feedback_copy ? "開" : "關"} · CRM 同步 ${caps.crm_sync ? "開" : "關"} · 遠端客服 ${caps.remote_cs ? "開" : "關"} · 跨站分析 ${caps.cross_site_insight ? "開" : "關"} · 統計指標 ${caps.stats ? "開" : "關"} · 後續服務 ${caps.followup_service ? "開" : "關"} · 退出後保留 ${caps.retain_after_exit ? "開" : "關"}</p>
       ${Array.isArray(p.consent_events) && p.consent_events.length
         ? `<p class="hint">授權紀錄：${p.consent_events.slice(0, 4).map((ev) => `${esc(ev.capability_key)} ${ev.granted ? "開" : "撤回"}`).join(" · ")}</p>`
         : `<p class="hint">授權紀錄：尚無撤回或新開紀錄。</p>`}
@@ -299,6 +299,10 @@ function renderProductCards() {
         ${!exited && caps.cross_site_insight ? `<button type="button" data-pid="${esc(p.id)}" data-pact="revoke-insight" aria-label="撤回 ${esc(name)} 的跨站分析">撤回跨站分析</button>` : ""}
         ${!exited && caps.cross_site_insight && !caps.retain_after_exit ? `<button type="button" data-pid="${esc(p.id)}" data-pact="grant-retain" aria-label="允許 ${esc(name)} 退出後保留用途">允許退出後保留</button>` : ""}
         ${!exited && caps.retain_after_exit ? `<button type="button" data-pid="${esc(p.id)}" data-pact="revoke-retain" aria-label="撤回 ${esc(name)} 的退出後保留用途">撤回退出後保留</button>` : ""}
+        ${!exited && !caps.stats ? `<button type="button" data-pid="${esc(p.id)}" data-pact="grant-stats" aria-label="允許 ${esc(name)} 的統計指標">允許統計指標</button>` : ""}
+        ${!exited && caps.stats ? `<button type="button" data-pid="${esc(p.id)}" data-pact="revoke-stats" aria-label="撤回 ${esc(name)} 的統計指標">撤回統計指標</button>` : ""}
+        ${!exited && !caps.followup_service ? `<button type="button" data-pid="${esc(p.id)}" data-pact="grant-followup" aria-label="允許 ${esc(name)} 的後續服務使用">允許後續服務</button>` : ""}
+        ${!exited && caps.followup_service ? `<button type="button" data-pid="${esc(p.id)}" data-pact="revoke-followup" aria-label="撤回 ${esc(name)} 的後續服務使用">撤回後續服務</button>` : ""}
         ${!exited ? `<button type="button" data-pid="${esc(p.id)}" data-pact="rotate-credential" aria-label="輪替 ${esc(name)} 的密鑰">輪替密鑰</button>` : ""}
         ${!exited ? `<button type="button" class="danger" data-pid="${esc(p.id)}" data-pact="unsubscribe" aria-label="解除訂閱 ${esc(name)}">解除訂閱</button>` : ""}
       </div>
@@ -462,7 +466,11 @@ async function setProductCapability(id, patch) {
           : patch.cross_site_insight === false ? "已撤回跨站分析"
             : patch.retain_after_exit === true ? "已允許退出後保留用途"
               : patch.retain_after_exit === false ? "已撤回退出後保留用途"
-                : patch.crm_sync ? "已允許 CRM 同步" : "已撤回 CRM 同步";
+                : patch.stats === true ? "已允許統計指標"
+                  : patch.stats === false ? "已撤回統計指標"
+                    : patch.followup_service === true ? "已允許後續服務使用"
+                      : patch.followup_service === false ? "已撤回後續服務使用"
+                        : patch.crm_sync ? "已允許 CRM 同步" : "已撤回 CRM 同步";
     setStatus($("productMsg"), msg, "ok");
     await Promise.all([refreshProducts(), refreshCrm()]);
   } finally {
@@ -636,6 +644,44 @@ function requestProductAction(id, action) {
     });
     return;
   }
+  if (action === "grant-stats") {
+    showConfirm({
+      title: "確認允許統計指標",
+      body: `允許用「${name}」（${id}）的 OPS 複本列入跨站／未標站指標？這不是新報表。回饋複製與跨站分析都不會自動包含這一項。作業用收件匣計數仍看得到複本。`,
+      confirmLabel: "確定允許",
+      danger: false,
+      onConfirm: () => setProductCapability(id, { stats: true }),
+    });
+    return;
+  }
+  if (action === "revoke-stats") {
+    showConfirm({
+      title: "確認撤回統計指標",
+      body: `撤回「${name}」（${id}）的統計指標？該站複本不再列入未標站指標。收件匣與單站作業數字仍在。`,
+      confirmLabel: "確定撤回",
+      onConfirm: () => setProductCapability(id, { stats: false }),
+    });
+    return;
+  }
+  if (action === "grant-followup") {
+    showConfirm({
+      title: "確認允許後續服務使用",
+      body: `允許用「${name}」（${id}）的 OPS 複本做後續通知（例如入庫 webhook）？這不是客服命令，也不會發明新的行銷流程。回饋複製不會自動包含。`,
+      confirmLabel: "確定允許",
+      danger: false,
+      onConfirm: () => setProductCapability(id, { followup_service: true }),
+    });
+    return;
+  }
+  if (action === "revoke-followup") {
+    showConfirm({
+      title: "確認撤回後續服務使用",
+      body: `撤回「${name}」（${id}）的後續服務？新的入庫通知不會再送。已寫入的複本與已送出的通知仍在。`,
+      confirmLabel: "確定撤回",
+      onConfirm: () => setProductCapability(id, { followup_service: false }),
+    });
+    return;
+  }
   if (action === "purge-replica") {
     showConfirm({
       title: "確認刪除 OPS 複本",
@@ -700,7 +746,10 @@ async function refreshDashboard() {
     ? `Webhook 已設定（${data.webhook.channel}）${data.webhook.on_ingest ? "，入庫也會通知" : ""}`
     : "尚未設定 OPS_NOTIFY_WEBHOOK_URL，核准／發布通知不會外送";
   const scope = data.selected_product_id ? `站台 ${data.selected_product_id}` : "全部站台";
-  $("dashMsg").textContent = `Phase ${data.phase} · ${scope} · ${hook}`;
+  const withheld = Array.isArray(data.stats_withheld_product_ids) && data.stats_withheld_product_ids.length
+    ? ` · 指標不含未授權站 ${data.stats_withheld_product_ids.join("、")}（作業計數仍含複本）`
+    : (data.selected_product_id && data.stats_consent === false ? " · 此站未授權統計指標" : "");
+  $("dashMsg").textContent = `Phase ${data.phase} · ${scope} · ${hook}${withheld}`;
   $("dashMsg").className = "msg";
 
   const issues = await api("/ops/api/issues?limit=80");

@@ -151,6 +151,8 @@ test("index.html exposes feedback entry, modal and context capture", () => {
   assert.match(html, /"\/api\/feedback"/);
   // honeypot field present and visually hidden
   assert.match(html, /id="feedbackHp"/);
+  assert.match(html, /id="feedbackLegal"/);
+  assert.match(html, /\/api\/feedback\/meta/);
 });
 
 test("admin.html exposes feedback inbox", () => {
