@@ -247,6 +247,9 @@ test("member profiles cap districts and include usable ping in notify copy", () 
   assert.match(html, /function isPlaceholderFloor/);
   assert.match(html, /function kitLine/);
   assert.match(html, /此屋家俱家電狀態/);
+  assert.match(html, /kit-items/);
+  assert.match(html, /items\.join\("、"\)/);
+  assert.doesNotMatch(html, /此屋家俱家電：\$\{items\.join\("、"\)\}/);
   assert.match(html, /有天然瓦斯/);
   assert.match(html, /有陽台/);
   assert.match(html, /data-kit-furnish/);
@@ -466,13 +469,13 @@ test("product name is 吉比租房物件追蹤 without v2 開發版 copy", () =>
   assert.equal(html.includes("v2 開發版"), false);
   assert.equal(html.includes("v3 開發版"), false);
   assert.equal(html.includes("與線上版分開的資料庫"), false);
-  assert.match(html, /ver\. 3\.56/);
+  assert.match(html, /ver\. 3\.57/);
   assert.doesNotMatch(html, /<h1>[^<]*v3/i);
   assert.match(login, /<h1>吉比租房物件追蹤<\/h1>/);
   assert.equal(login.includes("v2 開發版"), false);
   assert.equal(login.includes("v3 開發版"), false);
   assert.equal(login.includes("資料與線上版分開"), false);
-  assert.match(login, /ver\. 3\.56/);
+  assert.match(login, /ver\. 3\.57/);
 });
 
 test("MRT is admin-only and guest tour is in the page", () => {
@@ -505,6 +508,7 @@ test("listing commute copy is kilometers only and does not show rush minutes", (
   assert.ok(start > 0 && end > start);
   const fn = html.slice(start, end);
   assert.match(fn, /到公司約 \$\{item\.commute_km\} 公里/);
+  assert.doesNotMatch(fn, /返回約/);
   assert.doesNotMatch(fn, /上約/);
   assert.doesNotMatch(fn, /下約/);
   assert.doesNotMatch(fn, /commute_min_am/);

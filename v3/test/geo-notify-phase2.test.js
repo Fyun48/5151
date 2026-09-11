@@ -307,6 +307,10 @@ test("U 文案區分等待、概略與行政區，不靠 hover", () => {
   assert.equal(commutePrecisionText({ geo_job_state: "querying" }), "正在查詢位置");
   assert.match(commutePrecisionText({ location_class: "street" }, null), /概略位置/);
   assert.match(commutePrecisionText({ location_class: "street" }, 8.2), /到公司約 8.2 公里/);
+  assert.equal(commutePrecisionText({ location_class: "source" }, 7.4), "到公司約 7.4 公里");
+  assert.equal(commutePrecisionText({ location_class: "community" }, 8), "到公司約 8 公里");
+  assert.doesNotMatch(commutePrecisionText({ location_class: "source" }, 7.4), /依來源地圖/);
+  assert.doesNotMatch(commutePrecisionText({ location_class: "community" }, 8), /依社區位置/);
   assert.match(commutePrecisionText({ location_class: "admin" }), /行政區/);
   assert.match(commutePrecisionText({ geo_error: "busy", commute_state: "retry" }), /暫時忙碌/);
 });

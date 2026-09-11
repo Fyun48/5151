@@ -269,7 +269,9 @@ export function normalizeHbItem(item, { regionId, sectionId } = {}) {
     ...listingKitFields({
       title: item.objName,
       tags,
-      text: `${item.emphasis1 || ""} ${item.special || ""} ${item.parking || ""}`,
+      furnish: [...asKitList(item.furniture), ...asKitList(item.equipment)],
+      facility: [...asKitList(item.furniture), ...asKitList(item.equipment)],
+      text: `${item.emphasis1 || ""} ${item.special || ""} ${item.parking || ""} ${item.furniture || ""} ${item.equipment || ""}`,
     }),
     kind_name: kindName,
     role_name: item.storeID ? `住商 ${item.storeID}` : "住商不動產",

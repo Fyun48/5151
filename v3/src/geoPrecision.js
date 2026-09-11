@@ -296,6 +296,7 @@ export function commutePrecisionText(item = {}, km) {
     return job === "wait_data" ? LOCATION_CLASS_LABELS.unknown : "等待定位";
   }
   if (km != null && km !== "" && canUseForRoadDistance(cls)) {
+    if (cls === "source" || cls === "community") return `到公司約 ${km} 公里`;
     return `到公司約 ${km} 公里，${locationClassLabel(cls)}`;
   }
   if (cls === "street" || (canUseForRoadDistance(cls) && (km == null || km === ""))) {
