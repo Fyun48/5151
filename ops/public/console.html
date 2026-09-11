@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex,nofollow" />
   <title>Ops Console · 吉比租房維運</title>
-  <link rel="stylesheet" href="/console.css?v=20260910-crm6" />
+  <link rel="stylesheet" href="/console.css?v=20260911-stg7" />
 </head>
 <body>
   <header class="topbar">
@@ -38,7 +38,7 @@
         <div class="row">
           <h2>檢視站台</h2>
           <span class="grow"></span>
-          <p class="hint switch-hint">全部或單一產品；總覽與收件匣會跟著過濾。</p>
+          <p class="hint switch-hint">全部或單一產品；總覽、收件匣與開發發行會跟著過濾。</p>
         </div>
         <div id="productSwitch" class="product-switch" role="group" aria-label="選擇產品"></div>
       </section>
@@ -49,6 +49,7 @@
         <button type="button" class="tab" data-tab="crm" role="tab" aria-selected="false">CRM 檢視</button>
         <button type="button" class="tab" data-tab="products" role="tab" aria-selected="false">產品</button>
         <button type="button" class="tab" data-tab="issues" role="tab" aria-selected="false">議題與投票</button>
+        <button type="button" class="tab" data-tab="dev" role="tab" aria-selected="false" aria-controls="tab-dev" id="tabbtn-dev">開發發行</button>
         <button type="button" class="tab" data-tab="audit" role="tab" aria-selected="false">稽核</button>
       </nav>
 
@@ -66,8 +67,8 @@
         </section>
         <section class="card">
           <h2>待 Owner 處理</h2>
-          <p class="hint">Gate #1：核准開發。Gate #2：核准發布。兩者都不會自動上正式機。</p>
-          <div id="queueBox" class="kv">載入中…</div>
+          <p class="hint">Gate #1：核准開發。Gate #2：核准發布。兩者都不會自動上正式機。點一列會開到對應分頁。</p>
+          <div id="queueBox" class="queue-box" aria-busy="true">載入中…</div>
         </section>
       </section>
 
@@ -156,7 +157,7 @@
           </table>
         </section>
         <section class="card" id="issueDetailCard" hidden>
-          <h2 id="issueDetailTitle">議題詳情</h2>
+          <h2 id="issueDetailTitle" tabindex="-1">議題詳情</h2>
           <div id="issueDetail" class="detail"></div>
           <div class="row" id="gate1Row" hidden>
             <button type="button" class="primary" data-gate1="APPROVE_DEVELOPMENT">核准開發</button>
@@ -165,7 +166,46 @@
             <button type="button" data-gate1="REJECT">拒絕</button>
             <button type="button" data-gate1="BLOCK">封鎖</button>
           </div>
+          <div class="row wrap" id="followUpRow" hidden>
+            <button type="button" id="issueFollowUp">建立後續開發</button>
+          </div>
           <p class="msg" id="issueMsg"></p>
+        </section>
+      </section>
+
+      <section id="tab-dev" class="tabpane" hidden role="tabpanel" aria-labelledby="tabbtn-dev">
+        <section class="card">
+          <div class="row">
+            <h2>隔離開發與發行</h2>
+            <span class="grow"></span>
+            <button type="button" id="devRefresh">重新整理</button>
+          </div>
+          <p class="hint">製作任務 → 獨立 QA → 隔離 staging → 發行候選。Gate #2 只寫授權，<strong>不會部署正式機</strong>。反悔隔離環境＝停止測試容器，正式站無感。</p>
+          <p class="msg" id="devMsg" role="status" tabindex="-1"></p>
+          <div class="tbl-wrap">
+            <table class="tbl" id="devTable" aria-busy="false">
+              <thead><tr><th>#</th><th>議題</th><th>任務狀態</th><th>分支</th><th>PR</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+        <section class="card" id="devDetailCard" hidden>
+          <h2 id="devDetailTitle" tabindex="-1">任務詳情</h2>
+          <p class="hint" id="devDetailHint">尚未選取。</p>
+          <div id="devPipeline" class="dev-pipeline" aria-live="polite"></div>
+          <div class="row wrap" id="devActions" hidden>
+            <button type="button" id="devCancelTask">取消製作任務</button>
+            <button type="button" id="devRerunQa">重跑獨立 QA</button>
+            <button type="button" id="devRedeploy">重佈隔離 staging</button>
+            <button type="button" id="devCancelStg">取消 staging</button>
+            <button type="button" id="devCleanupStg">停止測試容器</button>
+          </div>
+          <div class="row wrap" id="gate2Row" hidden>
+            <button type="button" class="primary" data-gate2="APPROVE_RELEASE">核准發布授權</button>
+            <button type="button" data-gate2="REQUEST_CHANGES">要求修改</button>
+            <button type="button" data-gate2="CANCEL_RELEASE">取消發行候選</button>
+          </div>
+          <p class="msg" id="devDetailMsg" role="status"></p>
         </section>
       </section>
 
@@ -199,6 +239,11 @@
     <div class="dlg-card">
       <h3 id="confirmTitle">確認解除訂閱</h3>
       <p id="confirmBody"></p>
+      <label id="confirmReasonWrap" class="confirm-reason" hidden>
+        <span id="confirmReasonLabel">請說明要改什麼</span>
+        <textarea id="confirmReason" rows="3" maxlength="1000"></textarea>
+      </label>
+      <p class="msg" id="confirmReasonErr" hidden></p>
       <div class="row">
         <button type="button" id="confirmCancel">取消</button>
         <button type="button" id="confirmOk" class="danger">確定解除</button>
@@ -206,6 +251,6 @@
     </div>
   </div>
 
-  <script src="/console.js?v=20260910-crm6"></script>
+  <script src="/console.js?v=20260911-stg7"></script>
 </body>
 </html>

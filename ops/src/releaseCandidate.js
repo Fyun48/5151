@@ -7,20 +7,21 @@ import { getCurrentCodingStaging } from "./stagingDeploy.js";
 import { releaseConfigFromEnv, buildReleasePolicy, releasePolicyFingerprint, effectiveReleasePolicyFingerprint } from "./release/releasePolicy.js";
 import { buildManifestContent, computeManifestHash, releaseInputFingerprint } from "./release/manifest.js";
 import { notifyConfig, buildWebhookPayload, deliverWebhook } from "./notify/webhook.js";
+import { rejectSpoofedOwnerDirect } from "./instructionSource.js";
 
 export const RELEASE_OWNER_ACTIONS = ["APPROVE_RELEASE", "REQUEST_CHANGES", "CANCEL_RELEASE"];
 function iso(now) { return (now instanceof Date ? now : new Date(now || Date.now())).toISOString(); }
 function parse(v) { try { return v ? JSON.parse(v) : null; } catch { return null; } }
 
 // 只有「確切、fresh 的 QA PASS + Staging PASS + 對應同一 QA run」的鏈可組 RC。source base drift 另行標記（不擋建立，但擋核准）。
-export function validateReleaseChain(db, codingTaskId, { repo = null, env = process.env } = {}) {
+export function validateReleaseChain(db, codingTaskId, { repo = null, env = process.env, now = new Date() } = {}) {
   const cfg = releaseConfigFromEnv(env);
   const { task, auth } = validateCodingTaskForQa(db, codingTaskId); // 涵蓋：coding task 合格、未取消、授權 active、proposal 相符
   const qa = getCurrentCodingQA(db, codingTaskId, { env });
   if (!qa) throw httpError("no current QA", 409);
   if (!qa.fresh) throw httpError(`QA stale (${(qa.stale_reasons || []).join(",")})`, 409);
   if (qa.final_result !== "PASS") throw httpError(`QA result ${qa.final_result} != PASS`, 409);
-  const staging = getCurrentCodingStaging(db, codingTaskId, { env });
+  const staging = getCurrentCodingStaging(db, codingTaskId, { env, now });
   if (!staging) throw httpError("no current staging", 409);
   if (!staging.fresh) throw httpError(`staging stale (${(staging.stale_reasons || []).join(",")})`, 409);
   if (staging.validation_result !== "PASS") throw httpError(`staging result ${staging.validation_result} != PASS`, 409);
@@ -38,7 +39,7 @@ export function createReleaseCandidate(db, { codingTaskId, repo, env = process.e
   const policy = buildReleasePolicy(cfg);
   const policyFp = releasePolicyFingerprint(policy);
   const ts = iso(now);
-  const { task, auth, qa, staging, currentMaster, drift, artifactDigest } = validateReleaseChain(db, codingTaskId, { repo, env });
+  const { task, auth, qa, staging, currentMaster, drift, artifactDigest } = validateReleaseChain(db, codingTaskId, { repo, env, now });
   const inputFp = releaseInputFingerprint({
     codingTaskId: Number(task.id), authorizationId: Number(auth.id), proposalId: Number(task.proposal_id), proposalVersion: Number(task.proposal_version), proposalHash: String(task.proposal_hash),
     baseSha: task.base_sha, headSha: task.head_sha, currentMaster, codingResultHash: task.result_hash, diffHash: qa.diff_hash,
@@ -117,7 +118,7 @@ export function publicDecision(row) { return row ? { id: Number(row.id), release
 export function publicAuthorization(row) { return row ? { id: Number(row.id), release_manifest_id: Number(row.release_manifest_id), release_manifest_version: Number(row.release_manifest_version), manifest_hash: row.manifest_hash, head_sha: row.head_sha, artifact_digest: row.artifact_digest, approved_by: row.approved_by, approved_at: row.approved_at, status: row.status, authorization_hash: row.authorization_hash } : null; }
 
 // canonical 當前 RC + 新鮮度（Phase 14/15 不需以時間猜測）。
-export function getCurrentReleaseCandidate(db, codingTaskId, { repo = null, env = process.env } = {}) {
+export function getCurrentReleaseCandidate(db, codingTaskId, { repo = null, env = process.env, now = new Date() } = {}) {
   const cur = db.prepare("SELECT * FROM development_release_current WHERE coding_task_id=?").get(Number(codingTaskId));
   if (!cur) return null;
   const rc = db.prepare("SELECT * FROM development_release_candidate WHERE id=?").get(Number(cur.release_manifest_id));
@@ -137,7 +138,7 @@ export function getCurrentReleaseCandidate(db, codingTaskId, { repo = null, env 
   if (!qa || !qa.fresh || qa.final_result !== "PASS") reasons.push("qa_not_fresh_pass");
   else if (Number(qa.id) !== Number(rc.qa_run_id)) reasons.push("qa_run_changed");
   else if (String(qa.diff_hash) !== String(rc.diff_hash)) reasons.push("diff_hash_changed");
-  const staging = getCurrentCodingStaging(db, codingTaskId, { env });
+  const staging = getCurrentCodingStaging(db, codingTaskId, { env, now });
   if (!staging || !staging.fresh || staging.validation_result !== "PASS") reasons.push("staging_not_fresh_pass");
   else {
     if (Number(staging.id) !== Number(rc.staging_deployment_id)) reasons.push("staging_changed");
@@ -155,10 +156,10 @@ export function getCurrentReleaseCandidate(db, codingTaskId, { repo = null, env 
   return { ...publicRC(db, rc, { withManifest: true }), fresh: reasons.length === 0, stale: reasons.length > 0, stale_reasons: reasons, current_decision: currentReleaseDecision(db, codingTaskId) };
 }
 
-export function getReleaseCandidateView(db, codingTaskId, { repo = null, env = process.env } = {}) {
+export function getReleaseCandidateView(db, codingTaskId, { repo = null, env = process.env, now = new Date() } = {}) {
   const task = db.prepare("SELECT * FROM development_coding_task WHERE id=?").get(Number(codingTaskId));
   if (!task) throw httpError("coding task not found", 404);
-  const current = getCurrentReleaseCandidate(db, codingTaskId, { repo, env });
+  const current = getCurrentReleaseCandidate(db, codingTaskId, { repo, env, now });
   const history = db.prepare("SELECT * FROM development_release_candidate WHERE coding_task_id=? ORDER BY id DESC LIMIT 50").all(Number(codingTaskId)).map((r) => publicRC(db, r));
   const decisions = db.prepare("SELECT * FROM release_owner_decision WHERE coding_task_id=? ORDER BY id DESC LIMIT 100").all(Number(codingTaskId)).map(publicDecision);
   return { coding_task_id: Number(codingTaskId), issue_id: Number(task.issue_id), current, history, decisions };
@@ -169,7 +170,9 @@ export function getReleaseManifest(db, manifestId) {
 }
 
 // ── Owner Gate #2 ──
-export function submitOwnerReleaseDecision(db, { codingTaskId, action, manifestId, manifestVersion, manifestHash, artifactDigest, headSha, actor = "owner", reason = null, repo = null, env = process.env, now = new Date() }) {
+export function submitOwnerReleaseDecision(db, opts) {
+  rejectSpoofedOwnerDirect(opts);
+  const { codingTaskId, action, manifestId, manifestVersion, manifestHash, artifactDigest, headSha, actor = "owner", reason = null, repo = null, env = process.env, now = new Date() } = opts || {};
   const act = String(action || "").toUpperCase();
   if (!RELEASE_OWNER_ACTIONS.includes(act)) throw httpError(`invalid action: ${action}`, 400);
   const ts = iso(now);
@@ -190,7 +193,7 @@ export function submitOwnerReleaseDecision(db, { codingTaskId, action, manifestI
       const existing = db.prepare("SELECT * FROM production_release_authorization WHERE release_manifest_id=? AND manifest_hash=? AND status='active'").get(Number(rc.id), String(rc.manifest_hash));
       if (existing) return { idempotent: true, authorization: publicAuthorization(existing) };
       // 交易內再驗新鮮度（QA/Staging fresh PASS、無 drift、master 有效）。
-      const fresh = getCurrentReleaseCandidate(db, codingTaskId, { repo, env });
+      const fresh = getCurrentReleaseCandidate(db, codingTaskId, { repo, env, now });
       if (!fresh || !fresh.fresh) throw httpError(`cannot approve stale release candidate: ${(fresh?.stale_reasons || ["unknown"]).join(",")}`, 409);
       const authHash = createHash("sha256").update(JSON.stringify({ manifest_id: Number(rc.id), manifest_version: Number(rc.manifest_version), manifest_hash: rc.manifest_hash, head_sha: rc.head_sha, artifact_digest: rc.artifact_digest, coding_task_id: Number(codingTaskId) })).digest("hex");
       recordDecision(db, { rc, action: act, actor, reason, ts });
@@ -208,6 +211,8 @@ export function submitOwnerReleaseDecision(db, { codingTaskId, action, manifestI
 
     recordDecision(db, { rc, action: act, actor, reason, ts });
     if (act === "REQUEST_CHANGES") {
+      const note = reason ? String(reason).trim() : "";
+      if (!note) throw httpError("REQUEST_CHANGES requires a written reason", 400);
       appendAuditRow(db, { actor, action: "issue.release.changes_requested", entityType: "development_release_candidate", entityId: String(rc.id), data: { issue_id: Number(rc.issue_id), coding_task_id: Number(codingTaskId), manifest_id: Number(rc.id), manifest_version: Number(rc.manifest_version) }, now });
       return { changes_requested: true };
     }

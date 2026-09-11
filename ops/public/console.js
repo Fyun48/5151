@@ -18,6 +18,7 @@ let productsCache = [];
 let productBusy = false;
 let confirmAction = null;
 let confirmReturnFocus = null;
+let confirmNeedsReason = false;
 
 async function api(path, opts) {
   const o = { cache: "no-store", ...(opts || {}) };
@@ -111,6 +112,14 @@ const STATUS_LABEL = {
   changes_ready: "變更待收",
   failed_retry: "失敗可重試",
   completed: "已完成",
+  PASS: "通過",
+  FAIL: "未通過",
+  WARN: "有警告",
+  ready: "就緒",
+  building: "建置中",
+  deploying: "佈署中",
+  validating: "驗證中",
+  cancelled: "已取消",
 };
 
 const EXIT_ACTION_LABEL = {
@@ -141,9 +150,9 @@ function humanError(err) {
 }
 
 function chipClass(status) {
-  if (status === "active" || status === "connected") return "ok";
-  if (status === "exited") return "danger";
-  if (status === "paused" || status === "exiting" || status === "reconnecting" || status === "connecting") return "warn";
+  if (status === "active" || status === "connected" || status === "PASS" || status === "changes_ready" || status === "completed") return "ok";
+  if (status === "exited" || status === "FAIL" || status === "failed" || status === "cancelled") return "danger";
+  if (status === "paused" || status === "exiting" || status === "reconnecting" || status === "connecting" || status === "failed_retry") return "warn";
   return "";
 }
 
@@ -176,39 +185,62 @@ function hideConfirm() {
   const dlg = $("confirmDlg");
   if (!dlg || dlg.hidden) {
     confirmAction = null;
+    confirmNeedsReason = false;
     return;
   }
   dlg.hidden = true;
   confirmAction = null;
+  confirmNeedsReason = false;
+  if ($("confirmReasonWrap")) $("confirmReasonWrap").hidden = true;
+  if ($("confirmReason")) $("confirmReason").value = "";
+  if ($("confirmReasonErr")) {
+    $("confirmReasonErr").hidden = true;
+    $("confirmReasonErr").textContent = "";
+  }
   for (const el of confirmChrome()) el.inert = false;
   const back = confirmReturnFocus;
   confirmReturnFocus = null;
   if (back && typeof back.focus === "function") back.focus();
 }
 
-function showConfirm({ title, body, confirmLabel, onConfirm, danger = true }) {
+function showConfirm({ title, body, confirmLabel, onConfirm, danger = true, reasonRequired = false, reasonLabel = "請說明要改什麼" }) {
   confirmReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   $("confirmTitle").textContent = title;
   $("confirmBody").textContent = body;
   $("confirmOk").textContent = confirmLabel || "確定";
   $("confirmOk").classList.toggle("danger", danger !== false);
   confirmAction = onConfirm;
+  confirmNeedsReason = !!reasonRequired;
+  if ($("confirmReasonWrap")) $("confirmReasonWrap").hidden = !reasonRequired;
+  if ($("confirmReasonLabel") && reasonLabel) $("confirmReasonLabel").textContent = reasonLabel;
+  if ($("confirmReason")) $("confirmReason").value = "";
+  if ($("confirmReasonErr")) {
+    $("confirmReasonErr").hidden = true;
+    $("confirmReasonErr").textContent = "";
+  }
   $("confirmDlg").hidden = false;
   for (const el of confirmChrome()) el.inert = true;
-  $("confirmCancel").focus();
+  if (reasonRequired && $("confirmReason")) $("confirmReason").focus();
+  else $("confirmCancel").focus();
+}
+
+function confirmFocusables() {
+  const nodes = [$("confirmReason"), $("confirmCancel"), $("confirmOk")].filter((el) => el && !el.hidden && !el.closest("[hidden]"));
+  return nodes;
 }
 
 function trapConfirmTab(ev) {
   if (ev.key !== "Tab" || $("confirmDlg").hidden) return;
-  const cancel = $("confirmCancel");
-  const ok = $("confirmOk");
-  if (!cancel || !ok) return;
-  if (ev.shiftKey && document.activeElement === cancel) {
+  const list = confirmFocusables();
+  if (list.length < 2) return;
+  const first = list[0];
+  const last = list[list.length - 1];
+  if (ev.shiftKey && document.activeElement === first) {
     ev.preventDefault();
-    ok.focus();
-  } else if (!ev.shiftKey && document.activeElement === ok) {
+    last.focus();
+  } else if (!ev.shiftKey && document.activeElement === last) {
     ev.preventDefault();
-    cancel.focus();
+    first.focus();
   }
 }
 
@@ -538,11 +570,44 @@ function requestProductAction(id, action) {
   runProductAction(id, action);
 }
 
+function hasLatestDecision(block) {
+  return Boolean(block && block.latest_decision);
+}
+
+function focusHeading(id) {
+  const el = $(id);
+  if (!el) return;
+  if (!el.hasAttribute("tabindex")) el.setAttribute("tabindex", "-1");
+  el.focus({ preventScroll: true });
+}
+
+function closeDevDetail() {
+  devOpen = { taskId: 0, issueId: 0, stagingId: 0, release: null };
+  if ($("devDetailCard")) $("devDetailCard").hidden = true;
+  if ($("devActions")) $("devActions").hidden = true;
+  if ($("gate2Row")) $("gate2Row").hidden = true;
+  if ($("devPipeline")) $("devPipeline").innerHTML = "";
+  document.querySelectorAll("#devTable tr[data-tid]").forEach((row) => {
+    row.setAttribute("aria-selected", "false");
+    row.classList.remove("on");
+  });
+}
+
 async function refreshDashboard() {
+  const queue = $("queueBox");
+  if (queue) {
+    queue.setAttribute("aria-busy", "true");
+    queue.removeAttribute("role");
+  }
   const { res, data } = await api(`/ops/api/dashboard${productQuery("?")}`);
   if (!res.ok) {
     $("dashMsg").textContent = data.error || "無法讀取總覽";
     $("dashMsg").className = "msg err";
+    if (queue) {
+      queue.setAttribute("role", "alert");
+      queue.textContent = data.error || "待辦無法載入。請再整理。";
+      queue.setAttribute("aria-busy", "false");
+    }
     return;
   }
   const stats = [
@@ -561,11 +626,64 @@ async function refreshDashboard() {
   $("dashMsg").className = "msg";
 
   const issues = await api("/ops/api/issues?limit=80");
-  const waiting = (issues.data.items || []).filter((it) =>
-    it.lifecycle_state === "WAITING_OWNER_APPROVAL" || it.lifecycle_state === "WAITING_RELEASE_APPROVAL");
-  $("queueBox").innerHTML = waiting.length
-    ? waiting.map((it) => `#${it.id} ${esc(it.title || "（無標題）")} · ${esc(it.lifecycle_state)} · 評估 ${esc(it.evaluation || "—")}`).join("\n")
-    : "目前沒有等待 Owner 核准的項目。";
+  if (!issues.res.ok) {
+    if (queue) {
+      queue.setAttribute("role", "alert");
+      queue.textContent = issues.data.error || "待辦無法載入。請再整理。";
+      queue.setAttribute("aria-busy", "false");
+    }
+    return;
+  }
+  const waiting = (issues.data.items || []).filter((it) => {
+    const gate = it.lifecycle_state === "WAITING_OWNER_APPROVAL" || it.lifecycle_state === "WAITING_RELEASE_APPROVAL";
+    if (!gate) return false;
+    if (selectedProductId && it.product_id !== selectedProductId) return false;
+    return true;
+  });
+  const dashWaiting = Number(data.waiting_owner_approval || 0) + Number(data.waiting_release_approval || 0);
+  if (queue) queue.setAttribute("aria-busy", "false");
+  if (!waiting.length) {
+    if (queue) {
+      queue.removeAttribute("role");
+      queue.textContent = dashWaiting > 0
+        ? `數字顯示還有 ${dashWaiting} 筆待核准，但目前列表沒列到。請到議題或開發發行分頁查看。`
+        : "目前沒有等待 Owner 核准的項目。";
+    }
+    return;
+  }
+  if (queue) queue.setAttribute("role", "list");
+  $("queueBox").innerHTML = waiting.map((it) => {
+    const gate2 = it.lifecycle_state === "WAITING_RELEASE_APPROVAL";
+    const label = gate2 ? "Gate #2 待核准發布" : "Gate #1 待核准開發";
+    const product = it.product_id || "（無站台）";
+    return `<button type="button" class="queue-item" data-iid="${it.id}" data-gate="${gate2 ? "2" : "1"}" aria-label="${esc(label)}：#${it.id} ${esc(it.title || "（無標題）")} ${esc(product)}">
+      <strong>#${it.id} ${esc(it.title || "（無標題）")}</strong>
+      <span>${esc(label)} · ${esc(product)} · 評估 ${esc(it.evaluation || "—")}</span>
+    </button>`;
+  }).join("");
+}
+
+async function openOwnerQueueItem(issueId, gate) {
+  const iid = Number(issueId);
+  if (!iid) return;
+  if (String(gate) === "2") {
+    setTab("dev");
+    await refreshDev();
+    const task = (devCache.items || []).find((t) => Number(t.issue_id) === iid);
+    if (task) {
+      await openCodingTask(task.id);
+      $("devDetailCard")?.scrollIntoView({ block: "nearest" });
+      focusHeading("devDetailTitle");
+      return;
+    }
+    setStatus($("devMsg"), `議題 #${iid} 尚無製作任務。核准開發後才會出現。`, "");
+    $("devMsg")?.focus?.();
+    return;
+  }
+  setTab("issues");
+  await openIssue(iid);
+  $("issueDetailCard")?.scrollIntoView({ block: "nearest" });
+  focusHeading("issueDetailTitle");
 }
 
 async function refreshInbox() {
@@ -639,21 +757,29 @@ async function openIssue(id) {
   $("issueDetailTitle").textContent = `議題 #${id}`;
   const members = issue.data.members || [];
   const cur = proposal.data.current;
+  const parentId = issue.data.issue?.parent_issue_id;
+  const followUps = issue.data.follow_ups || [];
   const lines = [
     issue.data.issue?.title || "",
     issue.data.issue?.summary || "",
+    issue.data.lifecycle_state ? `生命週期 ${issue.data.lifecycle_state}` : "",
+    parentId ? `後續開發自議題 #${parentId}，不重用已發布授權` : "",
+    followUps.length ? `已建立後續：${followUps.map((f) => `#${f.id}`).join("、")}` : "",
     `成員 ${members.length} 筆回饋`,
     cur ? `提案 v${cur.proposal_version} · ${cur.title || ""}` : "尚無提案",
     cur?.problem_statement || "",
     cur?.proposed_change || "",
   ].filter(Boolean);
   $("issueDetail").textContent = lines.join("\n\n");
-  $("gate1Row").hidden = !cur || proposal.data.current_decision;
+  $("gate1Row").hidden = !cur || hasLatestDecision(proposal.data.current_decision);
   $("gate1Row").dataset.proposal = cur ? JSON.stringify({
     proposal_id: cur.id,
     proposal_version: cur.proposal_version,
     proposal_hash: cur.proposal_hash,
   }) : "";
+  const life = issue.data.lifecycle_state || "";
+  const canFollow = life === "RELEASED" || life === "ROLLED_BACK";
+  if ($("followUpRow")) $("followUpRow").hidden = !canFollow;
   $("issueMsg").textContent = "";
   await refreshIssues();
 }
@@ -850,6 +976,178 @@ async function refreshCrm() {
   setStatus($("crmMsg"), `${(data.items || []).length} 筆複本`, "ok");
 }
 
+let devCache = { items: [] };
+let devOpen = { taskId: 0, issueId: 0, stagingId: 0, release: null };
+
+function shortSha(sha) {
+  return String(sha || "").slice(0, 12) || "—";
+}
+
+function stagingFreshnessLine(stg) {
+  if (!stg) return "製作完成後才會建立";
+  const reasons = stg.stale_reasons || [];
+  if (stg.ttl_expired || reasons.includes("ttl_expired")) {
+    return "測試站已到期，可重建相同版本";
+  }
+  if (stg.slot_occupied || reasons.includes("environment_occupied")) {
+    const other = stg.occupying_coding_task_id ? `任務 #${stg.occupying_coding_task_id}` : "另一個候選";
+    return `此網址目前是 ${esc(other)} 的版本，不是本任務`;
+  }
+  if (stg.fresh === false) return `已過期：${esc(reasons.join("、") || "需重佈")}`;
+  return `驗證 ${esc(stg.validation_result || "—")}`;
+}
+
+function stagingUrlLine(stg) {
+  const url = stg?.live_preview ? (stg.staging_url || stg.endpoint) : "";
+  if (url) {
+    return `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">開啟隔離網址</a>`;
+  }
+  if (stg?.ttl_expired || (stg?.stale_reasons || []).includes("ttl_expired")) {
+    return "已到期網址不當作本任務預覽";
+  }
+  if (stg?.slot_occupied || (stg?.stale_reasons || []).includes("environment_occupied")) {
+    return "共用測試站已被覆蓋，請重佈後再點";
+  }
+  return stg?.staging_url ? "隔離網址目前不可當作本任務預覽" : "尚無隔離網址";
+}
+
+function syncDevActionButtons() {
+  const hasStg = Number(devOpen.stagingId) > 0;
+  if ($("devCancelStg")) $("devCancelStg").disabled = !hasStg;
+  if ($("devCleanupStg")) $("devCleanupStg").disabled = !hasStg;
+  if ($("devRedeploy")) $("devRedeploy").disabled = !devOpen.taskId;
+  if ($("devRerunQa")) $("devRerunQa").disabled = !devOpen.taskId;
+}
+
+async function refreshDev() {
+  const table = $("devTable");
+  if (table) table.setAttribute("aria-busy", "true");
+  const { res, data } = await api(`/ops/api/coding-tasks?limit=40${productQuery("&")}`);
+  if (table) table.setAttribute("aria-busy", "false");
+  if (!res.ok) {
+    setStatus($("devMsg"), data.error || "無法讀取製作任務", "err");
+    $("devMsg")?.setAttribute("role", "alert");
+    return;
+  }
+  $("devMsg")?.setAttribute("role", "status");
+  devCache = data;
+  const items = data.items || [];
+  setStatus($("devMsg"), items.length ? `${items.length} 筆製作任務` : "目前沒有製作任務。核准開發後才會出現。", items.length ? "ok" : "");
+  const body = $("devTable").querySelector("tbody");
+  body.innerHTML = items.length
+    ? items.map((t) => `
+      <tr data-tid="${t.id}" data-iid="${t.issue_id}" tabindex="0" aria-selected="${Number(devOpen.taskId) === Number(t.id) ? "true" : "false"}">
+        <td>${t.id}</td>
+        <td>#${t.issue_id} ${esc(t.issue_title || "（無標題）")}${t.product_id ? ` <span class="src">${esc(t.product_id)}</span>` : ""}</td>
+        <td>${statusChip(t.status)}</td>
+        <td>${esc(t.coding_branch || "—")}</td>
+        <td>${t.pr_url ? `<a href="${esc(t.pr_url)}" target="_blank" rel="noopener noreferrer">#${esc(t.pr_number || "")}</a>` : "—"}</td>
+      </tr>`).join("")
+    : `<tr><td colspan="5" class="hint">尚無隔離開發任務。</td></tr>`;
+}
+
+async function openCodingTask(taskId) {
+  const id = Number(taskId);
+  if (!id) return;
+  $("devDetailCard").hidden = false;
+  $("devDetailCard").setAttribute("aria-busy", "true");
+  $("devDetailTitle").textContent = `製作任務 #${id}`;
+  $("devDetailHint").textContent = "載入製作、隔離 staging 與發行候選…";
+  $("devPipeline").innerHTML = "";
+  $("devActions").hidden = true;
+  $("gate2Row").hidden = true;
+  document.querySelectorAll("#devTable tr[data-tid]").forEach((row) => {
+    row.setAttribute("aria-selected", Number(row.dataset.tid) === id ? "true" : "false");
+    row.classList.toggle("on", Number(row.dataset.tid) === id);
+  });
+  const [taskRes, qaRes, stgRes, relRes] = await Promise.all([
+    api(`/ops/api/coding-tasks/${id}`),
+    api(`/ops/api/coding-tasks/${id}/qa`),
+    api(`/ops/api/coding-tasks/${id}/staging`),
+    api(`/ops/api/coding-tasks/${id}/release`),
+  ]);
+  $("devDetailCard").setAttribute("aria-busy", "false");
+  const task = taskRes.res.ok ? taskRes.data : null;
+  const qaView = qaRes.res.ok ? qaRes.data : null;
+  const stg = stgRes.res.ok ? stgRes.data : null;
+  const rel = relRes.res.ok ? relRes.data : null;
+  if (!task) {
+    $("devDetailHint").textContent = taskRes.data.error || "找不到這筆任務";
+    setStatus($("devDetailMsg"), taskRes.data.error || "找不到這筆任務", "err");
+    $("devDetailMsg")?.setAttribute("role", "alert");
+    return;
+  }
+  const qaErr = !qaRes.res.ok;
+  const stgErr = !stgRes.res.ok;
+  const relErr = !relRes.res.ok;
+  const currentStg = !stgErr ? (stg?.current || (stg?.deployments || [])[0] || null) : null;
+  const currentRel = !relErr ? (rel?.current || null) : null;
+  const qa = !qaErr ? (qaView?.current || null) : null;
+  const qaLatest = !qaErr ? (qa || (qaView?.runs || [])[0] || null) : null;
+  devOpen = {
+    taskId: id,
+    issueId: Number(task.issue_id),
+    stagingId: Number(currentStg?.id || 0),
+    release: currentRel && currentRel.id ? {
+      manifest_id: Number(currentRel.id),
+      manifest_version: Number(currentRel.manifest_version),
+      manifest_hash: currentRel.manifest_hash,
+      artifact_digest: currentRel.artifact_digest,
+      head_sha: currentRel.head_sha,
+    } : null,
+  };
+  $("devDetailTitle").textContent = task.issue_title
+    ? `製作任務 #${id} · ${task.issue_title}`
+    : `製作任務 #${id}`;
+  $("devDetailHint").textContent = `議題 #${task.issue_id}${task.issue_title ? ` ${task.issue_title}` : ""} · 分支 ${task.coding_branch || "—"} · head ${shortSha(task.head_sha)}。隔離環境與正式站分開。`;
+  $("devPipeline").innerHTML = `
+    <div class="dev-col">
+      <h3>製作任務</h3>
+      <p class="src">coding task #${task.id}</p>
+      <p>${statusChip(task.status)}</p>
+      <p>head ${esc(shortSha(task.head_sha))}</p>
+      <p>${task.pr_url ? `<a href="${esc(task.pr_url)}" target="_blank" rel="noopener noreferrer">開啟 PR</a>` : "尚無 PR"}</p>
+    </div>
+    <div class="dev-col">
+      <h3>獨立 QA</h3>
+      <p class="src">不 merge、不部署</p>
+      <p>${qaErr ? `<span class="chip danger">讀取失敗</span>` : (qaLatest ? statusChip(qaLatest.final_result || qaLatest.status) : "尚未跑")}</p>
+      <p>${qa && qa.fresh === false ? `已過期：${esc((qa.stale_reasons || []).join("、") || "需重跑")}` : (qa ? "與目前 head 對得上" : "製作完成後才會跑")}</p>
+      <p>阻擋 ${esc((Array.isArray(qaLatest?.blocking_checks) ? qaLatest.blocking_checks : []).join("、") || "無")}</p>
+    </div>
+    <div class="dev-col">
+      <h3>隔離 staging</h3>
+      <p class="src">測試容器，不是正式站</p>
+      <p>${stgErr ? `<span class="chip danger">讀取失敗</span>` : (currentStg ? statusChip(currentStg.status) : "尚未建立")}</p>
+      <p>${stagingFreshnessLine(currentStg)}</p>
+      <p>${stagingUrlLine(currentStg)}</p>
+      <p>環境 ${esc(currentStg?.staging_environment_class || "—")} / ${esc(currentStg?.staging_environment_id || "—")}</p>
+    </div>
+    <div class="dev-col">
+      <h3>發行候選</h3>
+      <p class="src">Gate #2 只寫授權</p>
+      <p>${relErr ? `<span class="chip danger">讀取失敗</span>` : (currentRel ? statusChip(currentRel.status) : "尚未組候選")}</p>
+      <p>manifest #${currentRel?.id || "—"} v${currentRel?.manifest_version || "—"}</p>
+      <p>digest ${esc(shortSha(currentRel?.artifact_digest))}</p>
+      <p>${currentRel?.fresh === false ? `已過期：${esc((currentRel.stale_reasons || []).join("、") || "—")}` : (currentRel ? "新鮮度足夠才能核准" : "QA 與 staging 都 PASS 才會出現")}</p>
+    </div>`;
+  $("devActions").hidden = false;
+  syncDevActionButtons();
+  $("gate2Row").hidden = !(currentRel && currentRel.id && currentRel.fresh !== false && !hasLatestDecision(currentRel.current_decision));
+  const loadErr = [
+    qaErr ? (qaRes.data.error || "獨立 QA 讀取失敗") : "",
+    stgErr ? (stgRes.data.error || "隔離 staging 讀取失敗") : "",
+    relErr ? (relRes.data.error || "發行候選讀取失敗") : "",
+  ].filter(Boolean).join("；");
+  if (loadErr) {
+    setStatus($("devDetailMsg"), loadErr, "err");
+    $("devDetailMsg")?.setAttribute("role", "alert");
+  } else {
+    $("devDetailMsg")?.setAttribute("role", "status");
+    setStatus($("devDetailMsg"), "", "");
+  }
+}
+
 async function refreshAll() {
   await Promise.all([
     refreshProducts(),
@@ -857,6 +1155,7 @@ async function refreshAll() {
     refreshInbox(),
     refreshCrm(),
     refreshIssues(),
+    refreshDev(),
     refreshAudit(),
     refreshTransitions(),
   ]);
@@ -956,7 +1255,138 @@ $("crmList")?.addEventListener("submit", async (ev) => {
 });
 $("inboxRefresh").addEventListener("click", refreshInbox);
 $("issuesRefresh").addEventListener("click", refreshIssues);
+$("devRefresh").addEventListener("click", refreshDev);
+$("queueBox")?.addEventListener("click", (ev) => {
+  const btn = ev.target.closest("[data-iid][data-gate]");
+  if (!btn) return;
+  openOwnerQueueItem(btn.dataset.iid, btn.dataset.gate);
+});
+$("devRerunQa")?.addEventListener("click", () => {
+  if (!devOpen.taskId) return;
+  showConfirm({
+    title: "確認重跑獨立 QA",
+    body: `重跑製作任務 #${devOpen.taskId} 的獨立 QA？不會 merge，也不會部署正式站。`,
+    confirmLabel: "確定重跑",
+    danger: false,
+    onConfirm: async () => {
+      const { res, data } = await api(`/ops/api/coding-tasks/${devOpen.taskId}/qa/rerun`, { method: "POST" });
+      setStatus($("devDetailMsg"), res.ok ? "已要求重跑獨立 QA" : (data.error || "重跑失敗"), res.ok ? "ok" : "err");
+      if (res.ok) await openCodingTask(devOpen.taskId);
+    },
+  });
+});
 $("productsRefresh").addEventListener("click", refreshProducts);
+$("devTable").addEventListener("click", (ev) => {
+  if (ev.target.closest("a")) return;
+  const tr = ev.target.closest("tr[data-tid]");
+  if (tr) openCodingTask(tr.dataset.tid);
+});
+$("devTable").addEventListener("keydown", (ev) => {
+  if (ev.target.closest("a")) return;
+  if (ev.key !== "Enter" && ev.key !== " ") return;
+  const tr = ev.target.closest("tr[data-tid]");
+  if (!tr) return;
+  ev.preventDefault();
+  openCodingTask(tr.dataset.tid);
+});
+$("devCancelTask").addEventListener("click", () => {
+  if (!devOpen.taskId) return;
+  showConfirm({
+    title: "確認取消製作任務",
+    body: `取消製作任務 #${devOpen.taskId}？不會部署、也不會動正式站。`,
+    confirmLabel: "確定取消任務",
+    onConfirm: async () => {
+      const { res, data } = await api(`/ops/api/coding-tasks/${devOpen.taskId}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "owner_console" }),
+      });
+      setStatus($("devDetailMsg"), res.ok ? "已取消製作任務" : (data.error || "取消失敗"), res.ok ? "ok" : "err");
+      await refreshDev();
+      if (res.ok) await openCodingTask(devOpen.taskId);
+    },
+  });
+});
+$("devRedeploy").addEventListener("click", () => {
+  if (!devOpen.taskId) return;
+  showConfirm({
+    title: "確認重佈隔離 staging",
+    body: `重佈製作任務 #${devOpen.taskId} 的隔離 staging？只動測試容器，正式站無感。`,
+    confirmLabel: "確定重佈",
+    danger: false,
+    onConfirm: async () => {
+      const { res, data } = await api(`/ops/api/coding-tasks/${devOpen.taskId}/staging/redeploy`, { method: "POST" });
+      setStatus($("devDetailMsg"), res.ok ? "已要求重佈隔離 staging" : (data.error || "重佈失敗"), res.ok ? "ok" : "err");
+      if (res.ok) await openCodingTask(devOpen.taskId);
+    },
+  });
+});
+$("devCancelStg").addEventListener("click", () => {
+  if (!devOpen.stagingId) return;
+  showConfirm({
+    title: "確認取消隔離 staging",
+    body: `取消 staging #${devOpen.stagingId}？只影響測試容器，正式站無感。`,
+    confirmLabel: "確定取消 staging",
+    onConfirm: async () => {
+      const { res, data } = await api(`/ops/api/staging-deployments/${devOpen.stagingId}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "owner_console" }),
+      });
+      setStatus($("devDetailMsg"), res.ok ? "已取消隔離 staging" : (data.error || "取消失敗"), res.ok ? "ok" : "err");
+      if (res.ok) await openCodingTask(devOpen.taskId);
+    },
+  });
+});
+$("devCleanupStg").addEventListener("click", () => {
+  if (!devOpen.stagingId) return;
+  showConfirm({
+    title: "確認停止測試容器",
+    body: `停止並清理 staging #${devOpen.stagingId} 的測試容器？這是反悔隔離環境的方式，正式站不會被碰到。`,
+    confirmLabel: "確定停止容器",
+    onConfirm: async () => {
+      const { res, data } = await api(`/ops/api/staging-deployments/${devOpen.stagingId}/cleanup`, { method: "POST" });
+      setStatus($("devDetailMsg"), res.ok ? "已要求停止測試容器" : (data.error || "清理失敗"), res.ok ? "ok" : "err");
+      if (res.ok) await openCodingTask(devOpen.taskId);
+    },
+  });
+});
+$("gate2Row").addEventListener("click", (ev) => {
+  const btn = ev.target.closest("[data-gate2]");
+  if (!btn || !devOpen.taskId || !devOpen.release) return;
+  const action = btn.dataset.gate2;
+  const rel = devOpen.release;
+  const labels = {
+    APPROVE_RELEASE: "核准發布授權（不會部署正式機）",
+    REQUEST_CHANGES: "要求修改發行候選",
+    CANCEL_RELEASE: "取消發行候選",
+  };
+  showConfirm({
+    title: "確認 Gate #2",
+    body: `${labels[action] || action}。manifest #${rel.manifest_id} v${rel.manifest_version}。這一步不會 Deploy v3／Deploy OPS。`,
+    confirmLabel: action === "APPROVE_RELEASE" ? "確定寫入授權" : "確定",
+    danger: action !== "APPROVE_RELEASE",
+    reasonRequired: action === "REQUEST_CHANGES",
+    reasonLabel: "請說明要改什麼（會寫進決策紀錄）",
+    onConfirm: async (note) => {
+      const { res, data } = await api(`/ops/api/coding-tasks/${devOpen.taskId}/release/decision`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action,
+          manifest_id: rel.manifest_id,
+          manifest_version: rel.manifest_version,
+          manifest_hash: rel.manifest_hash,
+          artifact_digest: rel.artifact_digest,
+          head_sha: rel.head_sha,
+          reason: note || (action === "REQUEST_CHANGES" ? "" : "owner_console"),
+        }),
+      });
+      setStatus($("devDetailMsg"), res.ok ? "Gate #2 已送出" : (data.error || "決策失敗"), res.ok ? "ok" : "err");
+      if (res.ok) await openCodingTask(devOpen.taskId);
+    },
+  });
+});
 $("showContact").addEventListener("change", refreshInbox);
 $("createProductForm").addEventListener("submit", createProduct);
 
@@ -965,7 +1395,10 @@ $("productSwitch").addEventListener("click", async (ev) => {
   if (!btn) return;
   selectedProductId = btn.dataset.product || "";
   renderProductSwitcher();
-  await Promise.all([refreshDashboard(), refreshInbox(), refreshCrm()]);
+  await Promise.all([refreshDashboard(), refreshInbox(), refreshCrm(), refreshIssues(), refreshDev()]);
+  if (devOpen.taskId && !(devCache.items || []).some((t) => Number(t.id) === Number(devOpen.taskId))) {
+    closeDevDetail();
+  }
 });
 
 $("productCards").addEventListener("click", (ev) => {
@@ -988,9 +1421,19 @@ $("dismissSecretBtn").addEventListener("click", hideSecret);
 
 $("confirmCancel").addEventListener("click", hideConfirm);
 $("confirmOk").addEventListener("click", async () => {
+  const note = ($("confirmReason")?.value || "").trim();
+  if (confirmNeedsReason && !note) {
+    if ($("confirmReasonErr")) {
+      $("confirmReasonErr").hidden = false;
+      $("confirmReasonErr").textContent = "請先寫說明再送出";
+      $("confirmReasonErr").className = "msg err";
+    }
+    $("confirmReason")?.focus();
+    return;
+  }
   const fn = confirmAction;
   hideConfirm();
-  if (fn) await fn();
+  if (fn) await fn(note);
 });
 document.addEventListener("keydown", (ev) => {
   if ($("confirmDlg").hidden) return;
@@ -1013,6 +1456,26 @@ $("issueTable").addEventListener("click", (ev) => {
 $("gate1Row").addEventListener("click", (ev) => {
   const btn = ev.target.closest("[data-gate1]");
   if (btn) decideGate1(btn.dataset.gate1);
+});
+$("issueFollowUp")?.addEventListener("click", () => {
+  if (!selectedIssueId) return;
+  showConfirm({
+    title: "確認建立後續開發",
+    body: `從已發布議題 #${selectedIssueId} 另開一張後續議題。不會重用已發布的開發執行或授權，正式站無感。`,
+    confirmLabel: "確定建立後續",
+    danger: false,
+    reasonRequired: true,
+    reasonLabel: "後續要做什麼",
+    onConfirm: async (note) => {
+      const { res, data } = await api(`/ops/api/issues/${selectedIssueId}/follow-up`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: note }),
+      });
+      setStatus($("issueMsg"), res.ok ? `已建立後續議題 #${data.issue_id}` : (data.error || "建立失敗"), res.ok ? "ok" : "err");
+      if (res.ok && data.issue_id) await openIssue(data.issue_id);
+    },
+  });
 });
 
 $("webhookTestBtn").addEventListener("click", async () => {

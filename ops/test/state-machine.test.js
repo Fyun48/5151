@@ -96,8 +96,29 @@ test("RELEASED cannot reopen the old development lifecycle", () => {
   for (const to of ["DEVELOPING", "TESTING", "EVALUATING", "APPROVED_FOR_DEVELOPMENT"]) {
     assert.throws(() => transition(db, { id: "e1", to }), (e) => e.status === 422 || e.status === 403);
   }
-  // 只允許 ROLLED_BACK（運維）
+  // 只允許 ROLLED_BACK（運維）；不能走 reevaluation 回到 EVALUATING
   assert.equal(transition(db, { id: "e1", to: "ROLLED_BACK" }).to, "ROLLED_BACK");
+  assert.throws(
+    () => transition(db, { id: "e1", to: "EVALUATING", authorization: "reevaluation" }),
+    (e) => e.status === 422 || e.status === 403,
+  );
+  db.close();
+});
+
+test("ROLLED_BACK cannot reopen EVALUATING; follow-up is a new entity", () => {
+  const db = openOpsDb(":memory:");
+  createEntity(db, { id: "e1", entityType: "issue" });
+  drive(db, "e1", [
+    "EVALUATING", "WAITING_OWNER_APPROVAL", "APPROVED_FOR_DEVELOPMENT",
+    "DEVELOPING", "TESTING", "STAGING", "WAITING_RELEASE_APPROVAL", "RELEASING", "RELEASED", "ROLLED_BACK",
+  ]);
+  const map = allowedTransitionsByEntityType("issue");
+  assert.equal(map.ROLLED_BACK.guarded.EVALUATING, undefined);
+  assert.deepEqual(map.ROLLED_BACK.normal, ["CANCELLED"]);
+  assert.throws(() => transition(db, { id: "e1", to: "EVALUATING" }), (e) => e.status === 422);
+  const follow = createEntity(db, { id: "issue:follow-1", entityType: "issue" });
+  assert.equal(follow.state, "COLLECTING");
+  assert.equal(getEntity(db, "e1").state, "ROLLED_BACK");
   db.close();
 });
 
@@ -187,5 +208,6 @@ test("allowedTransitionsByEntityType exposes normal + guarded per state", () => 
   assert.deepEqual(map.COLLECTING.normal, ["EVALUATING", "DEFERRED", "CANCELLED"]);
   assert.equal(map.DEFERRED.guarded.EVALUATING, "reevaluation");
   assert.equal(map.BLOCKED.guarded.EVALUATING, "owner_unblock");
+  assert.equal(map.ROLLED_BACK.guarded.EVALUATING, undefined);
   assert.deepEqual(allowedTransitions("issue", "RELEASED"), ["ROLLED_BACK"]);
 });

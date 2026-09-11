@@ -141,3 +141,25 @@ test("unknown issue/task returns 404 for owner", async () => {
     assert.equal((await fetch(`${base}/ops/api/coding-tasks/99999`, { headers: { cookie } })).status, 404);
   });
 });
+
+test("owner can list recent coding tasks", async () => {
+  await withServer(async ({ base, db }) => {
+    const { taskId } = await seedTask(db);
+    assert.equal((await fetch(`${base}/ops/api/coding-tasks`)).status, 401);
+    const { cookie } = await login(base);
+    const res = await fetch(`${base}/ops/api/coding-tasks?limit=10`, { headers: { cookie } });
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.ok(Array.isArray(data.items));
+    const item = data.items.find((t) => Number(t.id) === Number(taskId));
+    assert.ok(item);
+    assert.equal(item.issue_title, "t");
+    assert.equal(item.product_id, "v3");
+    const other = await (await fetch(`${base}/ops/api/coding-tasks?productId=other`, { headers: { cookie } })).json();
+    assert.equal(other.items.length, 0);
+    const v3 = await (await fetch(`${base}/ops/api/coding-tasks?productId=v3`, { headers: { cookie } })).json();
+    assert.ok(v3.items.some((t) => Number(t.id) === Number(taskId)));
+    const invalid = await (await fetch(`${base}/ops/api/coding-tasks?productId=!!!`, { headers: { cookie } })).json();
+    assert.equal(invalid.items.length, 0);
+  });
+});

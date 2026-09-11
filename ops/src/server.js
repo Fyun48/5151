@@ -51,6 +51,8 @@ import { listAnalyses, publicAnalysis, reprocessAnalysis, analysisStats, current
 import { makeProvider } from "./ai/provider.js";
 import { analysisConfigFromEnv, startAnalysisLoop } from "./analysisWorker.js";
 import { getIssueWithMembers, mergeIssues, splitIssue, moveFeedback } from "./clustering.js";
+import { createFollowUpIssue } from "./followUp.js";
+import { rejectSpoofedOwnerDirect } from "./instructionSource.js";
 import { makeEmbeddingProvider } from "./ai/embeddingProvider.js";
 import { clusteringConfigFromEnv, startClusteringLoop } from "./clusteringWorker.js";
 import { getCurrentIssueImpact, listAssessments, isImpactStale, calculateAndStoreImpact, currentImpactId } from "./impact.js";
@@ -64,7 +66,7 @@ import { makeProposalProvider } from "./ai/proposalProvider.js";
 import { proposalWorkerConfigFromEnv, startProposalLoop } from "./proposalWorker.js";
 import { getReevaluationView, ownerManualReevaluate, ownerUnblock } from "./reevaluation.js";
 import { reevaluationWorkerConfigFromEnv, startReevaluationLoop } from "./reevaluationWorker.js";
-import { getIssueCodingView, getCodingTask, cancelCodingTask } from "./codingTask.js";
+import { getIssueCodingView, getCodingTask, cancelCodingTask, listRecentCodingTasks } from "./codingTask.js";
 import { codingWorkerConfigFromEnv, startCodingLoop } from "./codingWorker.js";
 import { makeCodingProvider } from "./coding/provider.js";
 import { makeCodingRepo } from "./coding/gitRepo.js";
@@ -700,6 +702,25 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         sendJson(res, 200, data);
         return;
       }
+      const issueFollowUp = pathname.match(/^\/ops\/api\/issues\/(\d+)\/follow-up$/);
+      if (issueFollowUp && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {};
+        try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          rejectSpoofedOwnerDirect(b);
+          const created = createFollowUpIssue(db, {
+            parentIssueId: Number(issueFollowUp[1]),
+            title: b.title,
+            reason: b.reason,
+            actor: `owner:${req.owner.email}`,
+          });
+          sendJson(res, 201, { ok: true, ...created });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
 
       // ── Phase 5：Owner 可逆修正（需 CSRF） ──
       async function body() { try { return JSON.parse(await readRawBody(req) || "{}"); } catch { return {}; } }
@@ -830,6 +851,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         let b = {};
         try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
         try {
+          rejectSpoofedOwnerDirect(b);
           const r = submitOwnerDecision(db, Number(proposalDecide[1]), {
             action: b.action,
             proposalId: Number(b.proposal_id),
@@ -882,6 +904,12 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         const iid = Number(codingGet[1]);
         if (!db.prepare("SELECT id FROM issue_candidate WHERE id=?").get(iid)) { sendJson(res, 404, { error: "not found" }); return; }
         sendJson(res, 200, getIssueCodingView(db, iid));
+        return;
+      }
+      if (pathname === "/ops/api/coding-tasks" && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        const limit = Number(url.searchParams.get("limit") || 40);
+        sendJson(res, 200, { items: listRecentCodingTasks(db, { limit, productId: url.searchParams.get("productId") }) });
         return;
       }
       const codingTaskGet = pathname.match(/^\/ops\/api\/coding-tasks\/(\d+)$/);
@@ -994,6 +1022,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
         let b = {}; try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
         try {
+          rejectSpoofedOwnerDirect(b);
           const r = submitOwnerReleaseDecision(db, { codingTaskId: Number(rcDecision[1]), action: b.action, manifestId: b.manifest_id, manifestVersion: b.manifest_version, manifestHash: b.manifest_hash, artifactDigest: b.artifact_digest, headSha: b.head_sha, actor: `owner:${req.owner.email}`, reason: b.reason, repo: releaseRepo });
           if (r.authorization) {
             try { r.migration_safety = assessApprovedReleaseIfNeeded(db, { codingTaskId: Number(rcDecision[1]), authorization: r.authorization, repo: releaseRepo, actor: `owner:${req.owner.email}` }); }
@@ -1064,6 +1093,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
         let b = {}; try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
         try {
+          rejectSpoofedOwnerDirect(b);
           const created = createProductionReleaseRun(db, {
             codingTaskId: Number(prodRelExec[1]),
             releaseAuthorizationId: b.release_authorization_id,

@@ -117,6 +117,34 @@ export function validateAuthorizationForCoding(db, { issueId, authorizationId = 
   return { auth, proposal, entity };
 }
 
+function scopedProductId(value) {
+  const id = String(value || "").trim().toLowerCase();
+  return /^[a-z][a-z0-9_-]{0,31}$/.test(id) ? id : "";
+}
+
+function inferredIssueProductId(db, issueId) {
+  const own = db.prepare("SELECT product_id FROM issue_candidate WHERE id=?").get(Number(issueId));
+  if (own?.product_id) return own.product_id;
+  const row = db.prepare(`
+    SELECT f.product_id FROM issue_feedback_link l
+    JOIN ingested_feedback f ON f.id = l.feedback_id
+    WHERE l.issue_id=? AND l.active=1
+    ORDER BY l.id DESC LIMIT 1
+  `).get(Number(issueId));
+  return row?.product_id || null;
+}
+
+function withIssueMeta(db, row) {
+  const pub = publicCodingTask(row);
+  if (!pub) return null;
+  const issue = db.prepare("SELECT title FROM issue_candidate WHERE id=?").get(pub.issue_id);
+  return {
+    ...pub,
+    issue_title: issue?.title || null,
+    product_id: inferredIssueProductId(db, pub.issue_id),
+  };
+}
+
 export function publicCodingTask(row) {
   if (!row) return null;
   const arr = (v) => { try { return v ? JSON.parse(v) : null; } catch { return null; } };
@@ -385,11 +413,33 @@ export function cancelCodingTask(db, taskId, { actor = "owner", reason = null, n
 // ── Owner 檢視 ──
 export function listCodingTasks(db, { issueId, limit = 50 } = {}) {
   const cap = Math.max(1, Math.min(Number(limit) || 50, 200));
-  return db.prepare("SELECT * FROM development_coding_task WHERE issue_id=? ORDER BY id DESC LIMIT ?").all(Number(issueId), cap).map(publicCodingTask);
+  return db.prepare("SELECT * FROM development_coding_task WHERE issue_id=? ORDER BY id DESC LIMIT ?").all(Number(issueId), cap).map((row) => withIssueMeta(db, row));
+}
+export function listRecentCodingTasks(db, { limit = 40, productId = null } = {}) {
+  const cap = Math.max(1, Math.min(Number(limit) || 40, 200));
+  const raw = productId == null ? "" : String(productId).trim();
+  const scoped = scopedProductId(productId);
+  if (raw && !scoped) return [];
+  const rows = scoped
+    ? db.prepare(`
+        SELECT t.* FROM development_coding_task t
+         JOIN issue_candidate i ON i.id = t.issue_id
+         WHERE (
+           i.product_id = ?
+           OR EXISTS (
+             SELECT 1 FROM issue_feedback_link l
+             JOIN ingested_feedback f ON f.id = l.feedback_id
+             WHERE l.issue_id = t.issue_id AND l.active = 1 AND f.product_id = ?
+           )
+         )
+         ORDER BY t.id DESC LIMIT ?
+      `).all(scoped, scoped, cap)
+    : db.prepare("SELECT * FROM development_coding_task ORDER BY id DESC LIMIT ?").all(cap);
+  return rows.map((row) => withIssueMeta(db, row));
 }
 export function getCodingTask(db, taskId) {
   const row = db.prepare("SELECT * FROM development_coding_task WHERE id=?").get(Number(taskId));
-  return row ? publicCodingTask(row) : null;
+  return row ? withIssueMeta(db, row) : null;
 }
 export function getIssueCodingView(db, issueId) {
   const auth = db.prepare("SELECT * FROM development_authorization WHERE issue_id=? AND status='active' ORDER BY id DESC LIMIT 1").get(Number(issueId)) || null;

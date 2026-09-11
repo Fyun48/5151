@@ -1,9 +1,9 @@
 # OPS／v3 現況對照表（ChatGPT 審查後）
 
-盤點對象：本分支 `cursor/ops-crm-ed3f`（第 0–4 包）。  
-ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契約、Deploy OPS、產品卡、退出演練與站內 CRM。**不以那次抽查當現況。**
+盤點對象：本分支 `cursor/ops-staging-ed3f`（第 0–5 包）。  
+ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契約、Deploy OPS、產品卡、退出演練、站內 CRM、隔離 staging 與開發發行檢視。**不以那次抽查當現況。**
 
-本次是第 4 包（站內 CRM → OPS CRM 檢視），**不是部署指令**，不 Deploy v3，也不擅自跑 Deploy OPS。
+本次是第 5 包（隔離 staging＋任務／發行 UI），**不是部署指令**，不 Deploy v3，也不擅自跑 Deploy OPS。
 
 圖例：`存在`＝可承接；`需改`＝有程式但契約不足；`待做`＝尚未實作。
 
@@ -23,7 +23,7 @@ ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契�
 | Owner 直達 Deploy | 存在 | `.github/workflows/deploy-v3.yml`（`manual_owner`／`ops_phase15`） | 藍圖承接；不得退化成人人必走 Gate #2 |
 | Owner 規則檔 | 需改 | 本 checkout 無 `.cursor/rules/owner-merge-deploy.mdc` | 契約寫進藍圖與 AGENTS.md；不另造批准儀式 |
 | 版本退回＝只換 digest | 需改 | `docker-compose.yml` bind-mount `v3/src`＋`v3/public`；`deploy-v3.yml` | 完整退回還要 source SHA／靜態檔／schema 相容（第 8 包） |
-| `RELEASED → ROLLED_BACK → EVALUATING` | 需改 | `ops/src/stateMachine.js` guarded `ROLLED_BACK → EVALUATING` | 第 5 包改為已發布事實不變，再開發用 follow-up／revision |
+| `RELEASED → ROLLED_BACK → EVALUATING` | 本輪已改 | `ops/src/stateMachine.js`、`ops/src/followUp.js` | 已發布事實不變；再開發用 follow-up，不重用已發布授權 |
 | 議題狀態機其餘出口 | 存在 | `ops/src/stateMachine.js` | 前期取消／拒絕／封鎖可留 |
 | OPS／v3 分容器分庫 | 存在 | `docker-compose.yml`、`ops/src/opsDb.js`、`v3/src/db.js` | 維持 |
 | Console 收件匣／總覽 | 本輪已做 | `ops/src/dashboard.js`、`ops/public/` | 可依 `productId` 過濾；產品卡分頁可暫停／退出／重連／輪替 |
@@ -32,7 +32,7 @@ ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契�
 | Deploy OPS 工作流 | 本輪已做 | `.github/workflows/deploy-ops.yml` | 確認字 `DEPLOY-OPS`；只 SCP `ops/`、只重建 `5151-ops`；並發鎖 `ops-deploy` |
 | 四種退出／移交演練 | 本輪已做 | `ops/src/exitDrill.js`、`ops/public/console.js`、`v3/src/handoffImport.js` | 暫停／解除訂閱／移交／刪複本分開；交接包可在無 OPS 環境還原回饋；outbox 警戒 |
 | 站內 CRM／OPS CRM 檢視 | 本輪已做 | `v3/src/crm.js`、`ops/src/crmReplica.js`、後台 `#crm`、Console CRM 檢視 | 第 4 包；四欄分開；關 CRM ≠ DROP；`crm_sync` 不隨回饋複製自動開啟 |
-| 隔離 staging UI | 待做 | `ops/src/stagingDeploy.js` 骨架關著 | 第 5 包 |
+| 隔離 staging UI | 本輪已做 | `ops/src/stagingDeploy.js`、`ops/public/console.js` | 開發發行四欄；TTL 到期可重建；共用測試站被覆寫會標示；真容器 provider 仍關 |
 | BudgetGuard 先保留再呼叫 | 待做 | `v3/PLAN-integrations.md` 舊虛擬碼是先 SUM | 第 6 包 |
 | pHash 附屬表、同屋源／爬蟲 AI | 待做 | 規劃曾寫 `listings.image_phash` 單欄 | 第 7 包改附屬表 |
 | OPS live 串既有部署 | 待做 | Phase 15 預設關 | 第 8 包 |
@@ -49,10 +49,10 @@ ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契�
 | A 憑證冒稱 B／查 B 的 ID | **第 1 包**：伺服器用憑證定站；跨站查詢回同一 404 |
 | 本機送出與 OPS 同時故障 | 已有 outbox 測試；保持 |
 | Owner 直達部署、OPS 停機 | 已有 workflow；第 8 包只接 OPS 線，不拆直達線 |
-| AI 自稱 Owner 直達 | 第 5／8 包：來源＝已驗證身分，不信 payload 旗標 |
+| AI 自稱 Owner 直達 | **第 5 包已擋 payload 旗標**；第 8 包再接完整指令來源 |
 | Owner 已上新版、OPS 舊候選 | 第 8 包：互斥＋重核對正式版 |
 | 站 A 退回、B 繼續 | 第 1 包先拆穩定版鍵；第 8 包做完整退回 |
-| 已發布後再開發 | 第 5 包：follow-up，不重用已發布授權 |
+| 已發布後再開發 | **第 5 包已做**：follow-up 新議題，不重用已發布授權 |
 | 退出時 AI／部署未決 | 第 3 包 |
 | 站 C 分家還原 | 第 3 包最小演練 |
 | 關 CRM 再開／刪複本再還原 | 第 4／7 包 |
@@ -61,6 +61,6 @@ ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契�
 | 付費爬蟲失敗不誤下架 | 第 6／7 包 |
 | pHash 不鏈式誤併 | 第 7 包 |
 | 關付費／AI＝舊路徑 | 第 6／7 包；基準 SHA 寫在該包，不寫死 3.51 |
-| staging 被蓋或 TTL | 第 5 包 |
+| staging 被蓋或 TTL | **第 5 包已做**：`ttl_expired`／`environment_occupied`；已到期可重建相同版本 |
 
 完成後要交真實結果（測試、還原演練、並行預算），不以按鈕存在或 CI 綠燈取代。

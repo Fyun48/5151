@@ -261,6 +261,9 @@ export function applyOpsSchema(db) {
       clustering_version TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'open',
       merged_into INTEGER,
+      parent_issue_id INTEGER,
+      issue_kind TEXT NOT NULL DEFAULT 'normal',
+      product_id TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -1195,7 +1198,25 @@ export function applyOpsSchema(db) {
   upgradeProductIsolation(db);
   upgradeExitDrill(db);
   upgradeCrmReplica(db);
+  upgradeIssueFollowUp(db);
   return db;
+}
+
+export function upgradeIssueFollowUp(db) {
+  const addIfMissing = (table, columns) => {
+    let cols = [];
+    try { cols = tableColumns(db, table); } catch { return; }
+    if (!cols.length) return;
+    for (const [name, decl] of columns) {
+      if (!cols.includes(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${decl}`);
+    }
+  };
+  addIfMissing("issue_candidate", [
+    ["parent_issue_id", "INTEGER"],
+    ["issue_kind", "TEXT NOT NULL DEFAULT 'normal'"],
+    ["product_id", "TEXT"],
+  ]);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_issue_parent ON issue_candidate(parent_issue_id, id)");
 }
 
 export function upgradeCrmReplica(db) {
