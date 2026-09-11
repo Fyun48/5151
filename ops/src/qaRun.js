@@ -6,6 +6,7 @@ import { qaConfigFromEnv, buildQaPolicy, qaPolicyFingerprint, effectiveQaPolicyF
 import { runAllChecks, diffHash } from "./qa/qaChecks.js";
 import { aggregateQa } from "./qa/aggregate.js";
 import { makeCommandRunner } from "./qa/commandRunner.js";
+import { issueWriteDecision } from "./insightConsent.js";
 
 export const QA_MAX_ATTEMPTS = 3;
 export const QA_CLAIM_STALE_MS = 15 * 60 * 1000;
@@ -60,6 +61,13 @@ export function createQaRun(db, { codingTaskId, repo, env = process.env, now = n
   const policyFp = qaPolicyFingerprint(policy);
   const ts = iso(now);
   const { task, auth } = validateCodingTaskForQa(db, codingTaskId);
+  const gate = issueWriteDecision(db, task.issue_id, { expectedGeneration: task.subscription_generation });
+  if (!gate.ok) {
+    const err = httpError(gate.reason === "stale_generation" ? "訂閱世代已換，晚到 QA 不入隊。" : "訂閱已退出，晚到 QA 不入隊。", 409);
+    err.code = gate.reason || "subscription_revoked";
+    throw err;
+  }
+  const generation = gate.unbound ? null : (task.subscription_generation ?? gate.generation);
   const diff = repo.numstatRange(task.base_sha, task.head_sha);
   const dHash = diffHash(diff);
   const inputFp = qaInputFingerprint({
@@ -73,22 +81,32 @@ export function createQaRun(db, { codingTaskId, repo, env = process.env, now = n
     const res = db.prepare(
       `INSERT INTO development_qa_run(issue_id, coding_task_id, development_authorization_id, proposal_id, proposal_version, proposal_hash,
         base_sha, head_sha, coding_result_hash, diff_hash, qa_version, qa_policy_fingerprint, qa_policy_snapshot, input_fingerprint,
-        status, attempt_count, max_attempts, next_attempt_at, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'pending', 0, ?, ?, ?)`,
+        status, attempt_count, max_attempts, next_attempt_at, created_at, subscription_generation)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'pending', 0, ?, ?, ?, ?)`,
     ).run(
       Number(task.issue_id), Number(task.id), Number(auth.id), Number(task.proposal_id), Number(task.proposal_version), String(task.proposal_hash),
       task.base_sha, task.head_sha, task.result_hash, dHash, cfg.qaVersion, policyFp, JSON.stringify(policy), inputFp,
-      cfg.maxAttempts, ts, ts,
+      cfg.maxAttempts, ts, ts, generation,
     );
     const id = Number(res.lastInsertRowid);
     return { run: publicQaRun(db, db.prepare("SELECT * FROM development_qa_run WHERE id=?").get(id)) };
   });
 }
 
+function abandonQaRun(db, run, reason) {
+  db.prepare("UPDATE development_qa_run SET status='failed', error_code=? WHERE id=? AND status IN ('pending','failed_retry','claimed','running')")
+    .run(String(reason || "subscription_revoked").slice(0, 64), Number(run.id));
+}
+
 export function claimQaBatch(db, { now = new Date(), staleMs = QA_CLAIM_STALE_MS, limit = 1 } = {}) {
   const ts = iso(now);
   const staleBefore = iso(new Date((now instanceof Date ? now.getTime() : Date.now()) - staleMs));
   return withImmediateTx(db, () => {
+    const inflight = db.prepare("SELECT * FROM development_qa_run WHERE status IN ('pending','failed_retry','claimed','running')").all();
+    for (const row of inflight) {
+      const decision = issueWriteDecision(db, row.issue_id, { expectedGeneration: row.subscription_generation });
+      if (!decision.ok) abandonQaRun(db, row, decision.reason);
+    }
     const rows = db.prepare(
       `SELECT * FROM development_qa_run
        WHERE ( (status IN ('pending','failed_retry') AND next_attempt_at <= ?)
@@ -97,6 +115,11 @@ export function claimQaBatch(db, { now = new Date(), staleMs = QA_CLAIM_STALE_MS
     ).all(ts, staleBefore, Math.max(1, limit));
     const claimed = [];
     for (const r of rows) {
+      const decision = issueWriteDecision(db, r.issue_id, { expectedGeneration: r.subscription_generation });
+      if (!decision.ok) {
+        abandonQaRun(db, r, decision.reason);
+        continue;
+      }
       const upd = db.prepare("UPDATE development_qa_run SET status='claimed', claimed_at=? WHERE id=? AND status=?").run(ts, r.id, r.status);
       if (upd.changes === 1) claimed.push(db.prepare("SELECT * FROM development_qa_run WHERE id=?").get(r.id));
     }
@@ -121,6 +144,14 @@ export async function executeQaRun(db, runRow, { repo, reviewProvider = null, en
   if (!run) return { skipped: true, reason: "run_missing" };
   if (run.status === "completed") return { idempotent: true, run: publicQaRun(db, run) };
   if (run.status === "cancelled") return { skipped: true, reason: "cancelled" };
+
+  const gate = issueWriteDecision(db, run.issue_id, { expectedGeneration: run.subscription_generation });
+  if (!gate.ok) {
+    return withImmediateTx(db, () => {
+      abandonQaRun(db, run, gate.reason);
+      return { failed: true, error_code: gate.reason, status: "failed" };
+    });
+  }
 
   // 重新驗證 coding task 仍合格（TOCTOU）。
   let task, auth;
@@ -190,6 +221,11 @@ function safeSnapshot(task) {
 
 function finalizeQa(db, run, { checks, agg, reviewer, now }) {
   return withImmediateTx(db, () => {
+    const again = issueWriteDecision(db, run.issue_id, { expectedGeneration: run.subscription_generation });
+    if (!again.ok) {
+      abandonQaRun(db, run, again.reason);
+      return { failed: true, error_code: again.reason, status: "failed" };
+    }
     // 冪等/重跑：清掉此 run 既有 checks 再寫入。
     db.prepare("DELETE FROM development_qa_check WHERE qa_run_id=?").run(Number(run.id));
     const ins = db.prepare(`INSERT INTO development_qa_check(qa_run_id, issue_id, coding_task_id, check_type, status, severity, finding, evidence, command, tool, tool_version, started_at, completed_at, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);

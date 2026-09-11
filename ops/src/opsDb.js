@@ -656,6 +656,7 @@ export function applyOpsSchema(db) {
       started_at TEXT,
       completed_at TEXT,
       created_at TEXT NOT NULL,
+      subscription_generation INTEGER,
       FOREIGN KEY (issue_id) REFERENCES issue_candidate(id) ON DELETE RESTRICT,
       FOREIGN KEY (development_authorization_id) REFERENCES development_authorization(id) ON DELETE RESTRICT,
       FOREIGN KEY (proposal_id) REFERENCES issue_proposal(id) ON DELETE RESTRICT
@@ -707,6 +708,7 @@ export function applyOpsSchema(db) {
       started_at TEXT,
       completed_at TEXT,
       created_at TEXT NOT NULL,
+      subscription_generation INTEGER,
       FOREIGN KEY (issue_id) REFERENCES issue_candidate(id) ON DELETE RESTRICT,
       FOREIGN KEY (coding_task_id) REFERENCES development_coding_task(id) ON DELETE RESTRICT,
       FOREIGN KEY (development_authorization_id) REFERENCES development_authorization(id) ON DELETE RESTRICT,
@@ -1317,6 +1319,12 @@ export function upgradeIssueFollowUp(db) {
     ["subscription_generation", "INTEGER"],
   ]);
   addIfMissing("issue_proposal", [
+    ["subscription_generation", "INTEGER"],
+  ]);
+  addIfMissing("development_coding_task", [
+    ["subscription_generation", "INTEGER"],
+  ]);
+  addIfMissing("development_qa_run", [
     ["subscription_generation", "INTEGER"],
   ]);
   db.exec("CREATE INDEX IF NOT EXISTS idx_issue_parent ON issue_candidate(parent_issue_id, id)");

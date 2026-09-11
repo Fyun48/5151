@@ -1,9 +1,9 @@
 # OPS／v3 現況對照表（ChatGPT 審查後）
 
-盤點對象：本分支 `cursor/ops-late-ai-ed3f`（第 0–14 包，疊在 stale-gen 上）。  
-ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契約、Deploy OPS、產品卡、退出演練、站內 CRM、隔離 staging、開發發行檢視、OPS 供應商抽屜、v3 BudgetGuard、pHash 附屬表與兩個 LLM 開關、第 8 包 live 契約、第 9 包可打包設計套件、第 10 包遠端客服、第 11 包跨站洞察與清除、第 12 包統計指標／後續服務門、第 13 包 worker 重驗訂閱世代、以及第 14 包晚到評估／提案／webhook。**不以那次抽查當現況。**
+盤點對象：本分支 `cursor/ops-coding-gen-ed3f`（第 0–15 包，疊在 late-ai 上）。  
+ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契約、Deploy OPS、產品卡、退出演練、站內 CRM、隔離 staging、開發發行檢視、OPS 供應商抽屜、v3 BudgetGuard、pHash 附屬表與兩個 LLM 開關、第 8 包 live 契約、第 9 包可打包設計套件、第 10 包遠端客服、第 11 包跨站洞察與清除、第 12 包統計指標／後續服務門、第 13 包 worker 重驗訂閱世代、第 14 包晚到評估／提案／webhook、以及第 15 包製作／QA 重驗訂閱世代。**不以那次抽查當現況。**
 
-本次是第 14 包（晚到評估／提案／webhook），**不是部署指令**，不 Deploy v3，也不擅自跑 Deploy OPS。`PRODUCTION_RELEASE_ALLOW_LIVE` 維持預設 0。`stats`、`followup_service`、`cross_site_insight` 與 `retain_after_exit` 維持預設關。
+本次是第 15 包（製作／QA 重驗訂閱世代），**不是部署指令**，不 Deploy v3，也不擅自跑 Deploy OPS。`PRODUCTION_RELEASE_ALLOW_LIVE` 維持預設 0。`stats`、`followup_service`、`cross_site_insight` 與 `retain_after_exit` 維持預設關。Cursor 製作仍標未整合。
 
 圖例：`存在`＝可承接；`需改`＝有程式但契約不足；`待做`＝尚未實作。
 
@@ -43,7 +43,8 @@ ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契�
 | 跨站洞察與清除 | 已做 | `ops/src/insightConsent.js`、`ops/src/exitDrill.js`、Console 產品卡 | 第 11 包；`cross_site_insight`／`retain_after_exit` 預設關；撤回停新洞察；刪複本才清向量／匯出 |
 | 統計指標／後續服務門 | 已做 | `ops/src/usageConsent.js`、`ops/src/purgeLedger.js`、Console 產品卡 | 第 12 包；預設關；未授權不列入指標、不送入庫 webhook；清除帳本還原後重套；不發明報表 |
 | Worker 重驗訂閱世代 | 已做 | `ops/src/insightConsent.js` `workerWriteDecision`、分析／分群 worker | 第 13 包；晚到結果不開單、不寫入、不復活已退出訂閱 |
-| 晚到評估／提案／webhook | 本輪已做 | `ops/src/insightConsent.js` `issueWriteDecision`、評估／提案／impact worker、入庫通知 | 第 14 包；世代已換不寫入新評估／提案、不送 webhook；未綁 product 的舊議題相容 |
+| 晚到評估／提案／webhook | 已做 | `ops/src/insightConsent.js` `issueWriteDecision`、評估／提案／impact worker、入庫通知 | 第 14 包；世代已換不寫入新評估／提案、不送 webhook；未綁 product 的舊議題相容 |
+| 製作／QA 重驗訂閱世代 | 本輪已做 | `ops/src/codingTask.js`、`ops/src/qaRun.js`、未決清單 | 第 15 包；能推到產品才戳世代；晚到不開 PR、不寫 QA；未綁產品仍相容 |
 
 ## 2. 第 14 節驗收情境的實作安排
 
