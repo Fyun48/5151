@@ -3931,7 +3931,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> · <a href="/data.html">居住數據</a> · <a href="#me" id="supportFooterLink">支持本站</a> · <a href="#" id="feedbackFooterLink">意見回饋</a> <span class="site-ver">ver. 3.56</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> · <a href="/data.html">居住數據</a> · <a href="#me" id="supportFooterLink">支持本站</a> · <a href="#" id="feedbackFooterLink">意見回饋</a> <span class="site-ver">ver. 3.57</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -4418,12 +4418,13 @@
       const balcony = item?.has_balcony === true || Number(item?.has_balcony) === 1;
       const items = Array.isArray(item?.furnish_items) ? item.furnish_items : [];
       const tip = items.length ? items.join("、") : "無";
+      const furnishLabel = items.length ? `此屋家俱家電：${items.join("、")}` : "此屋家俱家電狀態";
       const flags = [
         gas ? `<span class="kit-gas">有天然瓦斯</span>` : "",
         balcony ? `<span class="kit-balcony">有陽台</span>` : "",
       ].filter(Boolean).join(" ");
       const flagHtml = flags ? `${flags} ` : "";
-      return `<div class="kit-line">${flagHtml}<button type="button" class="kit-furnish" data-kit-furnish="${esc(cardId)}" aria-expanded="false" aria-controls="kit-tip-${esc(cardId)}" aria-describedby="kit-tip-${esc(cardId)}">${esc("此屋家俱家電狀態")}<sup class="kit-q" aria-hidden="true">?</sup></button><span class="kit-tip" id="kit-tip-${esc(cardId)}" role="tooltip">${esc(tip)}</span></div>`;
+      return `<div class="kit-line">${flagHtml}<button type="button" class="kit-furnish" data-kit-furnish="${esc(cardId)}" aria-expanded="false" aria-controls="kit-tip-${esc(cardId)}" aria-describedby="kit-tip-${esc(cardId)}">${esc(furnishLabel)}<sup class="kit-q" aria-hidden="true">?</sup></button><span class="kit-tip" id="kit-tip-${esc(cardId)}" role="tooltip">${esc(tip)}</span></div>`;
     }
     function safeListingHtml(value) {
       const allowed = new Set(["b", "strong", "i", "em", "u", "br", "p", "span", "div"]);
@@ -4463,11 +4464,8 @@
       if (item.commute_km != null) {
         const routes = Array.isArray(item.commute_routes) ? item.commute_routes.filter((n) => Number.isFinite(Number(n))) : [];
         const extra = routes.length > 1 ? `（${routes.map((n) => `${n}`).join(" / ")} 公里）` : "";
-        const ret = Number.isFinite(Number(item.commute_return_km)) && Number(item.commute_return_km) !== Number(item.commute_km)
-          ? ` · 返回約 ${item.commute_return_km} 公里`
-          : "";
         const label = precision || `到公司約 ${item.commute_km} 公里`;
-        return wrap(routeChip(`${label}${extra}`) + (ret ? `<span class="meta-quiet">${esc(ret)}</span>` : ""));
+        return wrap(routeChip(`${label}${extra}`));
       }
       if (isGuest || !commuteOn()) return "";
       if (precision) return wrap(` · ${esc(precision)}`);

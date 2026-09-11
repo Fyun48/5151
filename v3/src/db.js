@@ -648,6 +648,19 @@ try {
   // already migrated
 }
 try {
+  db.exec("ALTER TABLE listings ADD COLUMN kit_refetch_v1 INTEGER NOT NULL DEFAULT 0");
+} catch {
+  // already migrated
+}
+try {
+  db.exec(`UPDATE listings SET kit_fetched = 0, kit_refetch_v1 = 1
+    WHERE source = 'hbhousing'
+      AND IFNULL(kit_refetch_v1, 0) = 0
+      AND IFNULL(furnish_items, '[]') IN ('[]', '')`);
+} catch {
+  // ignore
+}
+try {
   db.exec("ALTER TABLE listings ADD COLUMN match_verdict TEXT");
 } catch {
   // already migrated

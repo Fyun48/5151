@@ -57,6 +57,16 @@ test("normalize 住商 items converts 萬元、保留店面、套房不標整層
   assert.equal(suite.price_num, 8500);
   assert.equal(suite.has_balcony, 1);
 
+  const withKit = normalizeHbItem({
+    ...parsed.items.find((row) => row.sn === "ZR204342"),
+    furniture: "衣櫃,雙人床",
+    equipment: "洗衣機,液晶電視,冰箱,冷氣,天然瓦斯",
+  }, { regionId: 1, sectionId: 5 });
+  assert.match(String(withKit.furnish_items), /衣櫃/);
+  assert.match(String(withKit.furnish_items), /床/);
+  assert.match(String(withKit.furnish_items), /電視/);
+  assert.equal(withKit.has_natural_gas, 1);
+
   const shop = parsed.items.find((row) => row.type === "店面");
   assert.equal(kindFromHbItem(shop), "店面");
   assert.equal(normalizeHbItem(shop, { regionId: 1, sectionId: 5 })?.kind_name, "店面");

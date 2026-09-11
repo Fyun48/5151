@@ -20,6 +20,17 @@ test("kitFromActiveNames keeps ticked items and maps 床組", () => {
   assert.deepEqual(kit.furnish_items, ["洗衣機", "床", "冰箱"]);
 });
 
+test("住商 YR205190 讀提供家具與提供設備", () => {
+  const kit = parseHbDetailHtml(readFix("hbhousing-yr205190-kit.html"));
+  assert.equal(kit.has_natural_gas, true);
+  assert.ok(kit.furnish_items.includes("衣櫃"));
+  assert.ok(kit.furnish_items.includes("床"));
+  assert.ok(kit.furnish_items.includes("洗衣機"));
+  assert.ok(kit.furnish_items.includes("冰箱"));
+  assert.ok(kit.furnish_items.includes("冷氣"));
+  assert.ok(kit.furnish_items.includes("電視"));
+});
+
 test("住商明細讀 NUXT 家俱、瓦斯與陽台", () => {
   const kit = parseHbDetailHtml(readFix("hbhousing-detail-kit.html"));
   assert.equal(kit.has_natural_gas, true);
