@@ -546,11 +546,40 @@ function requestProductAction(id, action) {
   runProductAction(id, action);
 }
 
+function focusHeading(id) {
+  const el = $(id);
+  if (!el) return;
+  if (!el.hasAttribute("tabindex")) el.setAttribute("tabindex", "-1");
+  el.focus({ preventScroll: true });
+}
+
+function closeDevDetail() {
+  devOpen = { taskId: 0, issueId: 0, stagingId: 0, release: null };
+  if ($("devDetailCard")) $("devDetailCard").hidden = true;
+  if ($("devActions")) $("devActions").hidden = true;
+  if ($("gate2Row")) $("gate2Row").hidden = true;
+  if ($("devPipeline")) $("devPipeline").innerHTML = "";
+  document.querySelectorAll("#devTable tr[data-tid]").forEach((row) => {
+    row.setAttribute("aria-selected", "false");
+    row.classList.remove("on");
+  });
+}
+
 async function refreshDashboard() {
+  const queue = $("queueBox");
+  if (queue) {
+    queue.setAttribute("aria-busy", "true");
+    queue.removeAttribute("role");
+  }
   const { res, data } = await api(`/ops/api/dashboard${productQuery("?")}`);
   if (!res.ok) {
     $("dashMsg").textContent = data.error || "無法讀取總覽";
     $("dashMsg").className = "msg err";
+    if (queue) {
+      queue.setAttribute("role", "alert");
+      queue.textContent = data.error || "待辦無法載入。請再整理。";
+      queue.setAttribute("aria-busy", "false");
+    }
     return;
   }
   const stats = [
@@ -569,22 +598,41 @@ async function refreshDashboard() {
   $("dashMsg").className = "msg";
 
   const issues = await api("/ops/api/issues?limit=80");
+  if (!issues.res.ok) {
+    if (queue) {
+      queue.setAttribute("role", "alert");
+      queue.textContent = issues.data.error || "待辦無法載入。請再整理。";
+      queue.setAttribute("aria-busy", "false");
+    }
+    return;
+  }
   const waiting = (issues.data.items || []).filter((it) => {
     const gate = it.lifecycle_state === "WAITING_OWNER_APPROVAL" || it.lifecycle_state === "WAITING_RELEASE_APPROVAL";
     if (!gate) return false;
-    if (selectedProductId && it.product_id && it.product_id !== selectedProductId) return false;
+    if (selectedProductId && it.product_id !== selectedProductId) return false;
     return true;
   });
-  $("queueBox").innerHTML = waiting.length
-    ? waiting.map((it) => {
-      const gate2 = it.lifecycle_state === "WAITING_RELEASE_APPROVAL";
-      const label = gate2 ? "Gate #2 待核准發布" : "Gate #1 待核准開發";
-      return `<button type="button" class="queue-item" data-iid="${it.id}" data-gate="${gate2 ? "2" : "1"}" aria-label="${esc(label)}：#${it.id} ${esc(it.title || "（無標題）")}">
-        <strong>#${it.id} ${esc(it.title || "（無標題）")}</strong>
-        <span>${esc(label)} · 評估 ${esc(it.evaluation || "—")}</span>
-      </button>`;
-    }).join("")
-    : "目前沒有等待 Owner 核准的項目。";
+  const dashWaiting = Number(data.waiting_owner_approval || 0) + Number(data.waiting_release_approval || 0);
+  if (queue) queue.setAttribute("aria-busy", "false");
+  if (!waiting.length) {
+    if (queue) {
+      queue.removeAttribute("role");
+      queue.textContent = dashWaiting > 0
+        ? `數字顯示還有 ${dashWaiting} 筆待核准，但目前列表沒列到。請到議題或開發發行分頁查看。`
+        : "目前沒有等待 Owner 核准的項目。";
+    }
+    return;
+  }
+  if (queue) queue.setAttribute("role", "list");
+  $("queueBox").innerHTML = waiting.map((it) => {
+    const gate2 = it.lifecycle_state === "WAITING_RELEASE_APPROVAL";
+    const label = gate2 ? "Gate #2 待核准發布" : "Gate #1 待核准開發";
+    const product = it.product_id || "（無站台）";
+    return `<button type="button" class="queue-item" data-iid="${it.id}" data-gate="${gate2 ? "2" : "1"}" aria-label="${esc(label)}：#${it.id} ${esc(it.title || "（無標題）")} ${esc(product)}">
+      <strong>#${it.id} ${esc(it.title || "（無標題）")}</strong>
+      <span>${esc(label)} · ${esc(product)} · 評估 ${esc(it.evaluation || "—")}</span>
+    </button>`;
+  }).join("");
 }
 
 async function openOwnerQueueItem(issueId, gate) {
@@ -597,14 +645,17 @@ async function openOwnerQueueItem(issueId, gate) {
     if (task) {
       await openCodingTask(task.id);
       $("devDetailCard")?.scrollIntoView({ block: "nearest" });
+      focusHeading("devDetailTitle");
       return;
     }
     setStatus($("devMsg"), `議題 #${iid} 尚無製作任務。核准開發後才會出現。`, "");
+    $("devMsg")?.focus?.();
     return;
   }
   setTab("issues");
   await openIssue(iid);
   $("issueDetailCard")?.scrollIntoView({ block: "nearest" });
+  focusHeading("issueDetailTitle");
 }
 
 async function refreshInbox() {
@@ -921,7 +972,7 @@ async function refreshDev() {
   const body = $("devTable").querySelector("tbody");
   body.innerHTML = items.length
     ? items.map((t) => `
-      <tr data-tid="${t.id}" data-iid="${t.issue_id}" tabindex="0" role="button" aria-selected="${Number(devOpen.taskId) === Number(t.id) ? "true" : "false"}">
+      <tr data-tid="${t.id}" data-iid="${t.issue_id}" tabindex="0" aria-selected="${Number(devOpen.taskId) === Number(t.id) ? "true" : "false"}">
         <td>${t.id}</td>
         <td>#${t.issue_id} ${esc(t.issue_title || "（無標題）")}${t.product_id ? ` <span class="src">${esc(t.product_id)}</span>` : ""}</td>
         <td>${statusChip(t.status)}</td>
@@ -1281,6 +1332,9 @@ $("productSwitch").addEventListener("click", async (ev) => {
   selectedProductId = btn.dataset.product || "";
   renderProductSwitcher();
   await Promise.all([refreshDashboard(), refreshInbox(), refreshCrm(), refreshIssues(), refreshDev()]);
+  if (devOpen.taskId && !(devCache.items || []).some((t) => Number(t.id) === Number(devOpen.taskId))) {
+    closeDevDetail();
+  }
 });
 
 $("productCards").addEventListener("click", (ev) => {
