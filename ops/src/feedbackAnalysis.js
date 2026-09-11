@@ -3,6 +3,7 @@ import { withImmediateTx } from "./tx.js";
 import { httpError } from "./errors.js";
 import { ANALYSIS_TYPE_CLASSIFICATION, CLASSIFICATION_PROMPT_VERSION } from "./ai/prompt.js";
 import { feedbackAllowsNewInsight } from "./insightConsent.js";
+import { analysisStatsForConsent } from "./usageConsent.js";
 
 // feedback_analysis 的資料/狀態機。狀態：pending → processing → completed | failed。
 //
@@ -165,7 +166,7 @@ export function analysisStats(db) {
     out[r.status] = Number(r.n) || 0;
     out.total += Number(r.n) || 0;
   }
-  return out;
+  return analysisStatsForConsent(db, out);
 }
 
 export function publicAnalysis(row) {

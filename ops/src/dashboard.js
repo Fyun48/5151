@@ -1,5 +1,6 @@
 import { countIngested } from "./ingest.js";
 import { notifyConfig } from "./notify/webhook.js";
+import { countIngestedForStats, listProductConsentRows, productAllowsStats, productIdsWithheldFromStats } from "./usageConsent.js";
 
 export const OPS_PHASE = "15";
 
@@ -89,6 +90,9 @@ export function getDashboard(db, env = process.env, { productId = null } = {}) {
       waiting_release_approval: 0,
       pending_release_notifications: 0,
       webhook: { configured: cfg.configured, channel: cfg.configured ? cfg.channel : null, on_ingest: cfg.onIngest },
+      stats_consented_feedback_total: 0,
+      stats_withheld_product_ids: [],
+      stats_consent: false,
       invalid_product_filter: true,
     };
   }
@@ -136,6 +140,9 @@ export function getDashboard(db, env = process.env, { productId = null } = {}) {
     waiting_release_approval: lifecycle.WAITING_RELEASE_APPROVAL || 0,
     pending_release_notifications: pendingNotifs,
     webhook: { configured: cfg.configured, channel: cfg.configured ? cfg.channel : null, on_ingest: cfg.onIngest },
+    stats_consented_feedback_total: countIngestedForStats(db, { productId: scoped || null }),
+    stats_withheld_product_ids: scoped ? [] : productIdsWithheldFromStats(db),
+    stats_consent: scoped ? productAllowsStats(listProductConsentRows(db).find((row) => row.id === scoped)) : null,
   };
 }
 

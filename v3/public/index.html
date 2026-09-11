@@ -3819,6 +3819,7 @@
           <summary>系統會一起送出的資訊（點開看）</summary>
           <pre id="feedbackContextView" style="white-space:pre-wrap;word-break:break-word;margin:8px 0 0;font-size:12px"></pre>
         </details>
+        <p class="hint" id="feedbackLegal" style="margin-top:12px"></p>
         <div class="row" style="margin-top:14px">
           <button type="submit" class="primary" id="feedbackSubmit">送出回饋</button>
         </div>
@@ -9532,6 +9533,20 @@
       if (ctx.errors && ctx.errors.length) lines.push("最近錯誤：\n" + ctx.errors.join("\n"));
       if ($("feedbackContextView")) $("feedbackContextView").textContent = lines.join("\n") || "（沒有可附加的資訊）";
     }
+    let feedbackLegalCache = "";
+    async function loadFeedbackLegal() {
+      if ($("feedbackLegal") && feedbackLegalCache) $("feedbackLegal").textContent = feedbackLegalCache;
+      if (feedbackLegalCache) return feedbackLegalCache;
+      try {
+        const res = await fetch("/api/feedback/meta", { cache: "no-store" });
+        const data = await res.json();
+        feedbackLegalCache = data.legal || "";
+      } catch {
+        feedbackLegalCache = "";
+      }
+      if ($("feedbackLegal")) $("feedbackLegal").textContent = feedbackLegalCache;
+      return feedbackLegalCache;
+    }
     function openFeedbackDialog() {
       const box = $("feedbackDialog");
       if (!box) return;
@@ -9544,6 +9559,7 @@
       renderFeedbackContext();
       if ($("feedbackForm")) $("feedbackForm").reset();
       if ($("feedbackMsg")) { $("feedbackMsg").textContent = ""; $("feedbackMsg").className = "msg"; }
+      loadFeedbackLegal();
       box.hidden = false;
       setTimeout(() => $("feedbackBody")?.focus(), 40);
     }

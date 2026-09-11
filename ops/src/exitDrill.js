@@ -10,6 +10,7 @@ import {
 } from "./products.js";
 import { redactCrmReplicas, listCrmHandoff } from "./crmReplica.js";
 import { redactInsightDerivatives } from "./insightConsent.js";
+import { recordPurgeEvent, redactExclusiveIssues } from "./purgeLedger.js";
 
 export const EXIT_ACTIONS = Object.freeze(["pause", "unsubscribe", "handoff", "purge_replica"]);
 export const HANDOFF_SCHEMA = 1;
@@ -348,16 +349,23 @@ export function purgeReplica(db, productId, { actor = "owner", now = new Date(),
     `).run(product.id);
     const crmPurged = tableExists(db, "ingested_crm_contact") ? redactCrmReplicas(db, product.id) : 0;
     const insight = redactInsightDerivatives(db, product.id);
+    const issues = redactExclusiveIssues(db, product.id);
+    recordPurgeEvent(db, {
+      productId: product.id,
+      actor,
+      counts: { feedback: before, crm: crmPurged, ...insight, issues },
+      now,
+    });
     const record = insertExitRecord(db, {
       productId: product.id,
       generation: product.subscription_generation,
       action: "purge_replica",
       exitStatus: "completed",
       pending,
-      notes: `已清除 ${before} 筆回饋複本、${crmPurged} 筆 CRM 複本、分析 ${insight.analysis}、向量 ${insight.embeddings}、附件 ${insight.attachments}、匯出 ${insight.exports}。去掉聯絡方式不是匿名化。產品卡與稽核保留。本機主本不在此庫。`,
+      notes: `已清除 ${before} 筆回饋複本、${crmPurged} 筆 CRM 複本、分析 ${insight.analysis}、向量 ${insight.embeddings}、附件 ${insight.attachments}、匯出 ${insight.exports}、專屬議題 ${issues}。去掉聯絡方式不是匿名化。產品卡、稽核與清除帳本保留，還原後會再套用。本機主本不在此庫。`,
       actor,
       now,
     });
-    return { product: publicProduct(getProduct(db, product.id)), purged: before, insight, exit: record };
+    return { product: publicProduct(getProduct(db, product.id)), purged: before, insight, issues, exit: record };
   });
 }

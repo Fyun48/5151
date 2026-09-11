@@ -98,6 +98,7 @@ import { kitFilePath, resolveKitStatic } from "./designKitStatic.js";
 import { deliverSiteCommand, enqueueAndMaybeDeliver, listSiteCommands } from "./siteCommand.js";
 import { getDashboard, listFeedbackInbox, listIssuesWithLifecycle, OPS_PHASE, publicFeedback } from "./dashboard.js";
 import { notifyConfig, sendOpsNotification } from "./notify/webhook.js";
+import { productAllowsFollowup } from "./usageConsent.js";
 
 // 刻意不使用 express：ops 服務維持「零外部相依」，與本 repo 的 CI（不跑 npm install）相容，
 // 也縮小攻擊面。所有路由用 node:http 手刻的極小 router。
@@ -302,16 +303,19 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
           }
           sendJson(res, 200, { ok: true, id: result.id, duplicate: result.duplicate, product_id: check.productId });
           if (!result.duplicate && !result.conflict && notifyConfig().onIngest) {
-            sendOpsNotification({
-              event: "ops.feedback.ingested",
-              title: "新的使用者回饋",
-              text: "正式站有一筆新回饋進入 OPS 收件匣。",
-              fields: [
-                { name: "id", value: result.id },
-                { name: "product_id", value: check.productId },
-                { name: "kind", value: payload.kind || "other" },
-              ],
-            }).catch(() => {});
+            const product = getProduct(db, check.productId);
+            if (productAllowsFollowup(product)) {
+              sendOpsNotification({
+                event: "ops.feedback.ingested",
+                title: "新的使用者回饋",
+                text: "正式站有一筆新回饋進入 OPS 收件匣。",
+                fields: [
+                  { name: "id", value: result.id },
+                  { name: "product_id", value: check.productId },
+                  { name: "kind", value: payload.kind || "other" },
+                ],
+              }).catch(() => {});
+            }
           }
         } catch (err) {
           sendJson(res, err.status || 400, { error: err.message });

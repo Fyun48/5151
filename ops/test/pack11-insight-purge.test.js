@@ -120,5 +120,5 @@ test("console exposes grant/revoke insight and retain; legal text excludes LLM",
   assert.match(js, /允許跨站分析/);
   assert.match(js, /退出後保留/);
   assert.match(js, /去掉 email 不是匿名化/);
-  assert.match(html, /跨站分析預設關/);
+  assert.match(html, /跨站分析、統計指標、後續服務預設關/);
 });
