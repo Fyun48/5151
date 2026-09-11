@@ -1,6 +1,7 @@
 import { buildSearchUrls, districtsFromSearchUrls, normalizeWatchDistricts, priceFromSearchUrls } from "./regions.js";
 import { normalizeHiddenCityIds } from "./cityPrefs.js";
-import { normalizeBoxes, normalizeCommuteMode, normalizeKeywords, parseWorkCoord } from "./geo.js";
+import { hasWorkPoint, normalizeBoxes, normalizeCommuteMode, normalizeKeywords, parseWorkCoord } from "./geo.js";
+import { isTaiwanCoord, normalizeWorkLocationClass } from "./geoPrecision.js";
 import { normalizeNotifyMatrix } from "./notifyMatrix.js";
 
 export const MEMBER_MAX_PROFILE_DISTRICTS = 10;
@@ -222,8 +223,42 @@ export function hydrateSettings(stored, defaults, { admin = false, plan = "free"
   next.priceMaxIncludesExtras = next.priceMaxIncludesExtras === true;
   next.hasParking = next.hasParking === true;
   next.notifyIncludeStreetEstimate = next.notifyIncludeStreetEstimate === true;
-  next.workLocationClass = String(next.workLocationClass || "").trim();
+  next.workLocationClass = normalizeWorkLocationClass(next.workLocationClass);
   return next;
+}
+
+export function resolveWorkPointForSave(current = {}, { workAddress, commuteKm } = {}) {
+  const address = String(workAddress || "").trim();
+  const km = Number(commuteKm);
+  const trusted = hasWorkPoint(current) && isTaiwanCoord(current.workLat, current.workLng);
+  const sameAddress =
+    trusted && String(current.workAddress || "").replace(/\s+/g, "") === address.replace(/\s+/g, "");
+  if (Number.isFinite(km) && km > 0) {
+    if (!address) return { error: "請先填上班地址，才能篩通勤距離" };
+    if (sameAddress) {
+      return {
+        workAddress: address,
+        workLat: current.workLat,
+        workLng: current.workLng,
+        workLocationClass: normalizeWorkLocationClass(current.workLocationClass),
+        reuse: true,
+      };
+    }
+    return { workAddress: address, needsGeocode: true };
+  }
+  if (!address) {
+    return { workAddress: "", workLat: null, workLng: null, workLocationClass: "" };
+  }
+  if (sameAddress) {
+    return {
+      workAddress: address,
+      workLat: current.workLat,
+      workLng: current.workLng,
+      workLocationClass: normalizeWorkLocationClass(current.workLocationClass),
+      reuse: true,
+    };
+  }
+  return { workAddress: address, workLat: null, workLng: null, workLocationClass: "", dropClientCoords: true };
 }
 
 export function applySettingPatch(current, partial = {}, { admin = false, plan = "free" } = {}) {
@@ -256,7 +291,11 @@ export function applySettingPatch(current, partial = {}, { admin = false, plan =
   next.workAddress = String(next.workAddress || "").trim().slice(0, 120);
   next.workLat = parseWorkCoord(next.workLat);
   next.workLng = parseWorkCoord(next.workLng);
-  next.workLocationClass = String(next.workLocationClass || "").trim();
+  next.workLocationClass = normalizeWorkLocationClass(
+    Object.prototype.hasOwnProperty.call(patch, "workLocationClass")
+      ? patch.workLocationClass
+      : current.workLocationClass,
+  );
   next.notifyIncludeStreetEstimate = next.notifyIncludeStreetEstimate === true;
   next.watchDistricts = limitWatchDistricts(next.watchDistricts, { admin });
   next.hiddenCityIds = normalizeHiddenCityIds(next.hiddenCityIds);

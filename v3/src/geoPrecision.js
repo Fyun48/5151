@@ -347,3 +347,8 @@ export function isTaiwanCoord(lat, lng) {
   const b = Number(lng);
   return Number.isFinite(a) && Number.isFinite(b) && a > 21.5 && a < 26.5 && b > 118 && b < 123;
 }
+
+export function normalizeWorkLocationClass(value) {
+  const raw = String(value || "").trim();
+  return LOCATION_CLASS_RANK[raw] != null ? raw : "";
+}

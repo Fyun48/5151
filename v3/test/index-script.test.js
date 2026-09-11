@@ -377,6 +377,7 @@ test("guest demo is read-only and work prompt can be skipped", () => {
   assert.match(html, /這是示範列表/);
   assert.match(html, /id="workAddress"/);
   assert.match(html, /id="notifyIncludeStreetEstimate"/);
+  assert.match(html, /\.check-inline \{[\s\S]*min-height: var\(--touch\);/);
   assert.match(html, /notifyIncludeStreetEstimate: \$\("notifyIncludeStreetEstimate"\) \? \$\("notifyIncludeStreetEstimate"\)\.checked : false/);
   assert.doesNotMatch(html, /id="workPrompt"/);
   assert.doesNotMatch(html, /591_v3_work_prompt_skip/);

@@ -17,7 +17,7 @@ import {
 } from "../src/geoPrecision.js";
 import { geocodeAddress, parseTaiwanAddress, resetGeoMetrics, snapshotGeoMetrics } from "../src/geo.js";
 import { decideNotifyDelivery, decideNotifyDecision, isStalePendingNotify, listingCanResolveNotifyGeo, passesGeoFilters, PENDING_NOTIFY_MAX_MS } from "../src/floors.js";
-import { hydrateSettings } from "../src/settingsState.js";
+import { applySettingPatch, hydrateSettings, resolveWorkPointForSave } from "../src/settingsState.js";
 
 const commute = { commuteKm: 10, workLat: 25.05, workLng: 121.52 };
 
@@ -264,6 +264,42 @@ test("N8 N9 通道狀態可分開且逾時記 unknown", () => {
     { job_state: "skipped" },
   ]), true);
   assert.equal(eventFullyHandled([{ job_state: "legacy_handled_unknown" }]), true);
+});
+
+test("公司座標只沿用台灣範圍，客戶端精度不能升級", () => {
+  const current = {
+    workAddress: "新北市淡水區淡金路二段173號",
+    workLat: 25.18252,
+    workLng: 121.44921,
+    workLocationClass: "street",
+    commuteKm: 10,
+  };
+  const reuse = resolveWorkPointForSave(current, {
+    workAddress: current.workAddress,
+    commuteKm: 10,
+  });
+  assert.equal(reuse.reuse, true);
+  assert.equal(reuse.workLocationClass, "street");
+
+  const forged = resolveWorkPointForSave({
+    ...current,
+    workLat: 40.7,
+    workLng: -74.0,
+    workLocationClass: "source",
+  }, { workAddress: current.workAddress, commuteKm: 10 });
+  assert.equal(forged.needsGeocode, true);
+
+  const switched = resolveWorkPointForSave(current, {
+    workAddress: "高雄市鳳山區中山路12-1號",
+    commuteKm: 0,
+  });
+  assert.equal(switched.dropClientCoords, true);
+  assert.equal(switched.workLat, null);
+
+  const patched = applySettingPatch(current, { workLocationClass: "not-a-class" });
+  assert.equal(patched.workLocationClass, "");
+  const kept = applySettingPatch(current, { notifyNew: false });
+  assert.equal(kept.workLocationClass, "street");
 });
 
 test("U 文案區分等待、概略與行政區，不靠 hover", () => {

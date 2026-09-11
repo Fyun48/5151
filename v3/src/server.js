@@ -205,6 +205,7 @@ import {
 import { renderSafeContent } from "./safeContent.js";
 import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requireAuth, sessionCookie, verifyLogin } from "./auth.js";
 import { boxFromRoadDescription, geocodeAddress, needsListingGeo, hasWorkPoint } from "./geo.js";
+import { isTaiwanCoord } from "./geoPrecision.js";
 import { listingRedirectTarget } from "./openLink.js";
 import { publicListingView } from "./selfListings.js";
 import { authorizedListingSources } from "./floors.js";
@@ -237,7 +238,7 @@ import {
 } from "./crawlWatchdog.js";
 import { APP_NAME, APP_VERSION } from "./brand.js";
 import { commuteSettingsFingerprint, finishBackfillRequest, rememberBackfillRequest } from "./commuteState.js";
-import { profileNameOrDraft } from "./settingsState.js";
+import { profileNameOrDraft, resolveWorkPointForSave } from "./settingsState.js";
 import {
   OAUTH_PROVIDERS,
   OAUTH_STATE_COOKIE,
@@ -1988,7 +1989,7 @@ async function ensureWorkCoords() {
   const current = getSettings(uid);
   if (!(Number(current.commuteKm) > 0)) return current;
   const workAddress = String(current.workAddress || "").trim();
-  if (!workAddress || hasWorkPoint(current)) return current;
+  if (!workAddress || (hasWorkPoint(current) && isTaiwanCoord(current.workLat, current.workLng))) return current;
   try {
     const geo = await geocodeAddress(workAddress, getCachedGeo, { strict: false, maxAttempts: 2, allowAdmin: false });
     if (!geo) return current;
@@ -2579,33 +2580,30 @@ app.post("/api/listings/merge-same-house", (req, res) => {
 
 async function persistSettings(body = {}, userId) {
   const uid = userId || defaultUserId();
+  delete body.workLat;
+  delete body.workLng;
+  delete body.workLocationClass;
   const workAddress = String(body.workAddress || "").trim();
-  if (Number(body.commuteKm) > 0) {
-    if (!workAddress) throw new Error("請先填上班地址，才能篩通勤距離");
+  if (body.workAddress !== undefined || Number(body.commuteKm) > 0) {
     const current = getSettings(uid);
-    const sameAddress =
-      String(current.workAddress || "").replace(/\s+/g, "") === workAddress.replace(/\s+/g, "") &&
-      hasWorkPoint(current);
-    if (sameAddress) {
-      body.workAddress = workAddress;
-      body.workLat = current.workLat;
-      body.workLng = current.workLng;
-      body.workLocationClass = current.workLocationClass || "";
-    } else {
-      const geo = await geocodeAddress(workAddress, getCachedGeo, { strict: true, maxAttempts: 2 });
+    const resolved = resolveWorkPointForSave(current, {
+      workAddress: body.workAddress !== undefined ? workAddress : current.workAddress,
+      commuteKm: body.commuteKm !== undefined ? body.commuteKm : current.commuteKm,
+    });
+    if (resolved.error) throw new Error(resolved.error);
+    if (resolved.needsGeocode) {
+      const geo = await geocodeAddress(resolved.workAddress, getCachedGeo, { strict: true, maxAttempts: 2 });
       if (!geo) throw new Error("找不到這個上班地址，請再寫詳細一點");
-      body.workAddress = workAddress;
+      body.workAddress = resolved.workAddress;
       body.workLat = geo.lat;
       body.workLng = geo.lng;
       body.workLocationClass = geo.location_class || "";
-      setCachedGeo(workAddress, geo.lat, geo.lng, geo);
-    }
-  } else if (body.workAddress !== undefined) {
-    body.workAddress = workAddress;
-    if (!workAddress) {
-      body.workLat = null;
-      body.workLng = null;
-      body.workLocationClass = "";
+      setCachedGeo(resolved.workAddress, geo.lat, geo.lng, geo);
+    } else if (resolved.workAddress !== undefined) {
+      body.workAddress = resolved.workAddress;
+      body.workLat = resolved.workLat;
+      body.workLng = resolved.workLng;
+      body.workLocationClass = resolved.workLocationClass || "";
     }
   }
   const pausing = Object.prototype.hasOwnProperty.call(body, "notificationsPaused");

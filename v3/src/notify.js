@@ -375,7 +375,7 @@ async function postDiscord(webhook, title, events) {
 async function postListingMail({ to, events, templates, send, email, smtp }) {
   const toAddr = String(to || "").trim();
   const list = Array.isArray(events) ? events : [];
-  if (!toAddr || !list.length) return;
+  if (!toAddr || !list.length) return { ok: false, job_state: "skipped", shown_ids: [] };
   const shown = list.slice(0, 8);
   const mail = composeListingNotifyMail(
     templates,
@@ -422,7 +422,10 @@ export async function notify(settings, events, {
         send: send || ((payload) => sendMail({ ...payload, smtp: memberSmtp })),
         email: mailTo,
         smtp: memberSmtp,
-      }) || { job_state: "accepted", shown_ids: mail.slice(0, 8).map((event) => event.event_id || event.id) };
+      });
+      if (!result.mail || typeof result.mail.job_state !== "string") {
+        result.mail = { job_state: "retry", shown_ids: [], fail_reason: "no_result" };
+      }
     } catch (error) {
       result.mail = { job_state: "retry", fail_reason: String(error.message || error), shown_ids: [] };
     }
