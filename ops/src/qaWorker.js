@@ -1,6 +1,7 @@
 import { createQaRun, claimQaBatch, executeQaRun, qaRunConfigFromEnv, validateCodingTaskForQa } from "./qaRun.js";
 import { makeCodingRepo } from "./coding/gitRepo.js";
 import { makeQaReviewProvider } from "./qa/reviewProvider.js";
+import { issueWriteDecision } from "./insightConsent.js";
 
 // Phase 11 背景 worker：為 CHANGES_READY 的 Coding Task 建立 QA run，並 claim/執行。
 // 決定性檢核預設就跑；optional AI reviewer 預設關閉。安全預設：repo 不可用（OPS_CODING_REPO_PATH 未設）→ 不建/不跑。
@@ -18,6 +19,7 @@ export function createQaForReadyTasks(db, { repo, env = process.env, now = new D
   ).all(Math.max(1, limit));
   const created = [];
   for (const t of rows) {
+    if (!issueWriteDecision(db, t.issue_id, { expectedGeneration: t.subscription_generation }).ok) continue;
     try { validateCodingTaskForQa(db, t.id); created.push(createQaRun(db, { codingTaskId: t.id, repo, env, now })); }
     catch { /* 個別不合格不影響其它 */ }
   }

@@ -9,7 +9,7 @@ import {
   normalizeProductId,
 } from "./products.js";
 import { redactCrmReplicas, listCrmHandoff } from "./crmReplica.js";
-import { redactInsightDerivatives } from "./insightConsent.js";
+import { inferIssueProductId, redactInsightDerivatives } from "./insightConsent.js";
 import { recordPurgeEvent, redactExclusiveIssues } from "./purgeLedger.js";
 
 export const EXIT_ACTIONS = Object.freeze(["pause", "unsubscribe", "handoff", "purge_replica"]);
@@ -142,17 +142,41 @@ export function listPendingWork(db, productId) {
   }
   if (tableExists(db, "development_coding_task")) {
     const tasks = safeAll(db, `
-      SELECT id, status FROM development_coding_task
+      SELECT id, issue_id, status FROM development_coding_task
        WHERE status IN ('pending','claimed','running','changes_ready','failed_retry')
     `);
     for (const row of tasks) {
+      const scoped = inferIssueProductId(db, row.issue_id);
+      if (scoped && scoped !== id) continue;
       items.push({
         kind: "coding",
         id: row.id,
         state: row.status,
         blocking: row.status === "running" || row.status === "claimed",
-        unscoped: true,
-        note: "製作任務尚未綁 product_id；退出時列出但不能宣稱已取消外部呼叫",
+        unscoped: !scoped,
+        note: scoped
+          ? "未送出的製作可取消；已在跑的不宣稱撤回外部呼叫。訂閱世代已換或已退出的晚到結果不會開 PR 或寫入。"
+          : "製作任務尚未綁 product_id；退出時列出但不能宣稱已取消外部呼叫",
+      });
+    }
+  }
+  if (tableExists(db, "development_qa_run")) {
+    const runs = safeAll(db, `
+      SELECT id, issue_id, status FROM development_qa_run
+       WHERE status IN ('pending','claimed','running','failed_retry')
+    `);
+    for (const row of runs) {
+      const scoped = inferIssueProductId(db, row.issue_id);
+      if (scoped && scoped !== id) continue;
+      items.push({
+        kind: "qa",
+        id: row.id,
+        state: row.status,
+        blocking: row.status === "running" || row.status === "claimed",
+        unscoped: !scoped,
+        note: scoped
+          ? "未送出的 QA 可取消；已在跑的不宣稱撤回。訂閱世代已換或已退出的晚到 QA 不會寫入結果。"
+          : "QA 尚未綁 product_id；退出時列出但不能宣稱已取消外部呼叫",
       });
     }
   }
