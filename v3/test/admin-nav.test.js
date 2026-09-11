@@ -37,9 +37,11 @@ test("admin settings are grouped into clickable categories", () => {
   assert.match(html, /不另設全站上限/);
   assert.match(html, /id="pluginSiteSave"/);
   assert.match(html, /id="phashForm"/);
+  assert.match(html, /id="insightApplyForm"/);
   assert.match(html, /id="similarityRows"/);
   assert.match(html, /id="insightRows"/);
   assert.match(html, /不會自動併戶/);
+  assert.match(html, /指紋關閉中/);
   assert.doesNotMatch(html, /第 7 包才接 LLM/);
   assert.match(html, /data-plugin-focus/);
   assert.match(html, /function showAdminPanel/);

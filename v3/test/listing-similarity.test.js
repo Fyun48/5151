@@ -253,6 +253,11 @@ test("llm payload only sends title, fuzzy address, tags and unstructured note", 
   assert.doesNotMatch(JSON.stringify(payload), /<html|0911222333|@example.com/);
   assertSafeLlmPayload(payload);
   assert.throws(() => assertSafeLlmPayload({ note: "<html>secret</html>" }), /unsafe llm payload/);
+  const intl = sanitizeSameHousePayload({
+    title: "測試",
+    extra_fee_text: "請加 LINE 或 +886912345678 / agent @ mail.com",
+  }, { title: "B" });
+  assert.doesNotMatch(JSON.stringify(intl), /\+886|912345678|mail\.com/);
 });
 
 test("llm and crawl insight are independent switches", async () => {
@@ -365,6 +370,9 @@ test("disallowed image urls are skipped", () => {
   assert.equal(isAllowedImageUrl("javascript:alert(1)"), false);
   assert.equal(isAllowedImageUrl("file:///etc/passwd"), false);
   assert.equal(isAllowedImageUrl("http://127.0.0.1/x.jpg"), false);
+  assert.equal(isAllowedImageUrl("https://192.168.0.10/x.jpg"), false);
+  assert.equal(isAllowedImageUrl("https://169.254.169.254/latest/meta-data/"), false);
+  assert.equal(isAllowedImageUrl("http://img.591.com.tw/a.jpg"), false);
   assert.equal(isAllowedImageUrl("https://img.591.com.tw/a.jpg"), true);
 });
 

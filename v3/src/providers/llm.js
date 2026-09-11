@@ -26,9 +26,12 @@ function stripHtml(text) {
 
 export function stripPii(text) {
   return stripHtml(text)
-    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "")
-    .replace(/09\d{8}/g, "")
+    .replace(/[Ａ-Ｚａ-ｚ０-９．＿％＋－]+＠[Ａ-Ｚａ-ｚ０-９．－]+．[Ａ-Ｚａ-ｚ]{2,}/g, "")
+    .replace(/[A-Z0-9._%+-]+\s*@\s*[A-Z0-9.-]+\s*\.\s*[A-Z]{2,}/gi, "")
+    .replace(/\+?886[-.\s]?0?9[\d\s-]{8,}/g, "")
+    .replace(/09[\s-]?\d{2,4}[\s-]?\d{3,4}/g, "")
     .replace(/0\d{1,2}[-\s]?\d{6,8}/g, "")
+    .replace(/[０-９]{8,}/g, "")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -74,7 +77,11 @@ export function assertSafeLlmPayload(payload) {
     err.code = "unsafe_payload";
     throw err;
   }
-  if (/09\d{8}/.test(text) || /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(text)) {
+  if (
+    /\+?886[-.\s]?0?9[\d\s-]{8,}/.test(text)
+    || /09[\s-]?\d{2,4}[\s-]?\d{3,4}/.test(text)
+    || /[A-Z0-9._%+-]+\s*@\s*[A-Z0-9.-]+\s*\.\s*[A-Z]{2,}/i.test(text)
+  ) {
     const err = new Error("pii in llm payload");
     err.code = "pii_payload";
     throw err;

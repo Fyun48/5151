@@ -1,6 +1,7 @@
 // 圖片感知雜湊。失敗當沒有指紋，不擋入庫。漢明距離是相似證據，不是同戶判決。
 
 import { coverKey } from "./match.js";
+import { isBlockedHostname, isIpLiteral, safeFetchBuffer } from "./safeFetch.js";
 
 export const PHASH_ALGO = "phash-dct-8-v1";
 export const PHASH_SIMILAR_MAX = 10;
@@ -115,17 +116,44 @@ export function imageKeyFromUrl(url) {
   return coverKey(url);
 }
 
+const IMAGE_HOST_FAMILIES = [
+  "591.com.tw",
+  "houseprice.tw",
+  "rakuya.com.tw",
+  "sinyi.com.tw",
+  "housefun.com.tw",
+  "hbhousing.com.tw",
+  "dd-room.com",
+];
+
+function hostnameOf(value) {
+  return String(value || "").trim().toLowerCase().replace(/\.$/, "");
+}
+
+export function imageHostsForUrl(url) {
+  try {
+    const host = hostnameOf(new URL(String(url || "")).hostname);
+    const family = IMAGE_HOST_FAMILIES.find((root) => host === root || host.endsWith(`.${root}`));
+    if (!family) return [];
+    if (family === "591.com.tw") {
+      return ["img.591.com.tw", "img1.591.com.tw", "img2.591.com.tw", "hp1.591.com.tw", "hp2.591.com.tw"];
+    }
+    return [host, family, `img.${family}`, `static.${family}`, `image.${family}`, `cdn.${family}`];
+  } catch {
+    return [];
+  }
+}
+
 export function isAllowedImageUrl(url) {
   const raw = String(url || "").trim();
   if (!raw || raw.length > 2000) return false;
-  if (/^(javascript|data|file|blob):/i.test(raw)) return false;
   try {
-    const parsed = new URL(raw, "https://example.invalid");
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
-    const host = String(parsed.hostname || "").toLowerCase();
-    if (!host || host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0" || host === "::1") return false;
-    if (host.endsWith(".localhost") || host.endsWith(".local")) return false;
-    return true;
+    const parsed = new URL(raw);
+    if (parsed.protocol !== "https:") return false;
+    if (parsed.username || parsed.password) return false;
+    const host = hostnameOf(parsed.hostname);
+    if (!host || isBlockedHostname(host) || isIpLiteral(host)) return false;
+    return imageHostsForUrl(raw).includes(host);
   } catch {
     return false;
   }
@@ -167,23 +195,22 @@ async function withImageSlot(fn) {
   }
 }
 
-export async function fetchImageBuffer(url, { fetchImpl = fetch, timeoutMs = PHASH_TIMEOUT_MS } = {}) {
+export async function fetchImageBuffer(url, { fetchImpl = fetch, timeoutMs = PHASH_TIMEOUT_MS, lookupImpl } = {}) {
   if (!isAllowedImageUrl(url)) return null;
   return withImageSlot(async () => {
     try {
-      const res = await fetchImpl(url, {
-        redirect: "follow",
-        signal: AbortSignal.timeout(timeoutMs),
-        headers: { Accept: "image/*,*/*;q=0.8" },
+      const got = await safeFetchBuffer(url, {
+        allowedHosts: imageHostsForUrl(url),
+        maxBytes: PHASH_MAX_BYTES,
+        timeoutMs,
+        accept: "image/*,*/*;q=0.8",
+        fetchImpl,
+        lookupImpl,
       });
-      if (!res.ok) return null;
-      const mime = String(res.headers.get("content-type") || "").toLowerCase();
+      const mime = String(got.headers?.get?.("content-type") || "").toLowerCase();
       if (mime && !mime.startsWith("image/") && !mime.includes("octet-stream")) return null;
-      const length = Number(res.headers.get("content-length") || 0);
-      if (length > PHASH_MAX_BYTES) return null;
-      const buf = Buffer.from(await res.arrayBuffer());
-      if (buf.byteLength === 0 || buf.byteLength > PHASH_MAX_BYTES) return null;
-      return buf;
+      if (!got.body?.byteLength || got.body.byteLength > PHASH_MAX_BYTES) return null;
+      return got.body;
     } catch {
       return null;
     }
