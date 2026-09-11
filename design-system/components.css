@@ -1,0 +1,169 @@
+/* jibby-kit layer 2 — 共用元件
+   按鈕、輸入、分頁、表格、底欄、對話框、空狀態、錯誤。
+   找房卡片／許願房／關注配額不在這裡。
+   class 以 .ds- 開頭；站方可並存既有 class。 */
+
+.ds-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-height: var(--touch);
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  cursor: pointer;
+}
+.ds-btn:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.ds-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.ds-btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--primary-foreground);
+}
+.ds-btn-primary:hover:not(:disabled) {
+  background: var(--accent-deep);
+}
+.ds-btn-ghost {
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.ds-field {
+  display: grid;
+  gap: var(--space-1);
+}
+.ds-field > label {
+  font-size: var(--text-sm);
+  color: var(--ink);
+}
+.ds-field input,
+.ds-field textarea,
+.ds-field select {
+  width: 100%;
+  min-height: var(--btn-height);
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+}
+.ds-field input:focus-visible,
+.ds-field textarea:focus-visible,
+.ds-field select:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.ds-pager {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+.ds-pager .ds-btn,
+.ds-pager button {
+  min-height: var(--touch);
+}
+
+.ds-table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.ds-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+.ds-table th,
+.ds-table td {
+  text-align: left;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+.ds-table th {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.ds-bottom-nav {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 80;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  background: var(--paper);
+  border-top: 1px solid var(--line);
+}
+.ds-bottom-nav button,
+.ds-bottom-nav a {
+  min-height: var(--touch);
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+}
+.ds-bottom-nav [aria-current="page"] {
+  background: var(--accent-mist);
+  color: var(--accent-deep);
+}
+
+.ds-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+  background: rgba(28, 25, 23, 0.45);
+}
+.ds-dialog[hidden] {
+  display: none !important;
+}
+.ds-dialog-card {
+  width: 100%;
+  max-width: 420px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 18px;
+}
+
+.ds-empty,
+.ds-error {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  background: var(--paper);
+}
+.ds-empty p,
+.ds-error p {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.ds-error {
+  border-color: var(--rose);
+  background: var(--rose-soft);
+}
+.ds-error[role="alert"] {
+  color: var(--ink);
+}

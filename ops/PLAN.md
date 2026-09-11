@@ -151,8 +151,8 @@ Console 頂部加產品切換。收件匣／議題／稽核都帶產品標。總
 
 | 層 | 現在 | 以後 |
 | --- | --- | --- |
-| ① | 寫在 `v3/public/tokens.css`，名字還是租屋站 | 抽成 `design-system/tokens.css`；每站一個主題檔只覆寫 `--accent`、`--bg`、`--paper` |
-| ② | v3 頁面裡各寫各的 | 抽成共用元件說明 + 同一套 class／行為；OPS Console 也改吃這套（現在 Console 是另一套灰綠） |
+| ① | 已抽成 `design-system/tokens.css`；v3 仍保留內建 `tokens.css` | 每站一個主題檔只覆寫 `--accent`、`--bg`、`--paper` |
+| ② | 已抽 `design-system/components.css`（`.ds-*`）；OPS Console 吃同一套 token 名 | 找房卡片不要整包貼到別的產業 |
 | ③ | `design-system/property-platform/` | 繼續只服務吉比租房；新站另開 `design-system/<產品>/` |
 
 新站啟動清單：
