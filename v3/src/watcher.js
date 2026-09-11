@@ -17,6 +17,9 @@ import {
   listingsNeedingFeeDetail,
   listingsNeedingSourceKit,
   listingsNeedingRoute,
+  listingCommutePatch,
+  upsertRouteJob,
+  getRouteJob,
   listingsNeedingAddressGeo,
   listingsNeedingAddressEnrich,
   listingsNeedingAliveCheck,
@@ -65,6 +68,7 @@ import { commuteWorkJobs, geocodeAddress, hasWorkPoint, needsListingGeo, normali
 import { isTrustedGeoSource, listingCommunityId, pickRicherAddress } from "./location.js";
 import { decideNotifyDelivery, isStalePendingNotify } from "./floors.js";
 import { fetchRoadRoutes, fetchRoadRouteTable, fetchRushRoadRoutes } from "./route.js";
+import { COMMUTE_STATES, commuteSettingsFingerprint, routeRetryDecision } from "./commuteState.js";
 import { fetchMrtAccess } from "./mrt.js";
 import { googleDirectionsAllowed } from "./mapsBilling.js";
 import { bestMatch } from "./match.js";
@@ -756,10 +760,36 @@ export async function backfillListingCoords(settings = getSettings(), { limit = 
   return ingestListingGeoBatch(rows.map((row) => row.post_id));
 }
 
-async function writeCachedRoute(lat, lng, workLat, workLng, distances, rush, mode) {
+const routeInflight = new Set();
+
+function routeJobKey(row, direction, kind) {
+  return [
+    Number(row.post_id) || 0,
+    direction,
+    kind,
+    normalizeCommuteMode(row.commuteMode),
+    `${Math.round(Number(row.workLat) * 1e5) / 1e5},${Math.round(Number(row.workLng) * 1e5) / 1e5}`,
+  ].join("|");
+}
+
+function markRouteJob(row, direction, kind, patch) {
+  const prev = getRouteJob(routeJobKey(row, direction, kind));
+  upsertRouteJob({
+    post_id: row.post_id,
+    direction,
+    kind,
+    commuteMode: row.commuteMode,
+    workLat: row.workLat,
+    workLng: row.workLng,
+    attempts: Number(prev?.attempts) || 0,
+    ...patch,
+  });
+}
+
+async function writeCachedRoute(fromLat, fromLng, toLat, toLng, distances, rush, mode, direction = "to_work") {
   for (let tryNo = 0; tryNo < 4; tryNo += 1) {
     try {
-      setCachedRoute(lat, lng, workLat, workLng, distances, rush, mode);
+      setCachedRoute(fromLat, fromLng, toLat, toLng, distances, rush, mode, direction);
       return true;
     } catch (error) {
       if (!String(error.message || "").includes("locked") || tryNo === 3) throw error;
@@ -769,49 +799,121 @@ async function writeCachedRoute(lat, lng, workLat, workLng, distances, rush, mod
   return false;
 }
 
-export async function backfillListingRoutes(settings = getSettings(), { limit = 20 } = {}) {
+function finishRouteAttempt(row, direction, kind, reason) {
+  const key = routeJobKey(row, direction, kind);
+  routeInflight.delete(key);
+  const prev = getRouteJob(key);
+  const attempts = (Number(prev?.attempts) || 0) + 1;
+  const decision = routeRetryDecision(reason, attempts);
+  upsertRouteJob({
+    post_id: row.post_id,
+    direction,
+    kind,
+    commuteMode: row.commuteMode,
+    workLat: row.workLat,
+    workLng: row.workLng,
+    attempts,
+    ...decision,
+  });
+}
+
+export async function backfillListingRoutes(settings = getSettings(), { limit = 20, priorityIds = [] } = {}) {
   const fallback = commuteWorkJobs([settings, ...collectCommuteSettings()])[0];
-  if (limit <= 0) return { attempted: 0, located: 0 };
-  const rows = listingsNeedingRoute(limit);
+  if (limit <= 0) return { attempted: 0, located: 0, listings: [], postIds: [] };
+  const rows = listingsNeedingRoute(limit, { priorityIds }).filter((row) => {
+    const key = routeJobKey(row, "to_work", "distance");
+    return !routeInflight.has(key);
+  });
   if (!rows.length && !(fallback || (Number(settings.commuteKm) > 0 && hasWorkPoint(settings)))) {
-    return { attempted: 0, located: 0 };
+    return { attempted: 0, located: 0, listings: [], postIds: [] };
   }
   let attempted = 0;
   let located = 0;
+  const locatedIds = [];
   const wantRush = commuteRushEnabled() && googleDirectionsAllowed();
   const groups = new Map();
   for (const row of rows) {
     const workLat = Number(row.workLat || settings.workLat || fallback?.workLat);
     const workLng = Number(row.workLng || settings.workLng || fallback?.workLng);
     const mode = normalizeCommuteMode(row.commuteMode || settings.commuteMode || fallback?.commuteMode);
-    if (!Number.isFinite(workLat) || !Number.isFinite(workLng)) continue;
-    const key = `${workLat}|${workLng}|${mode}`;
-    if (!groups.has(key)) groups.set(key, { workLat, workLng, mode, rows: [] });
-    groups.get(key).rows.push(row);
-  }
-  for (const group of groups.values()) {
-    if (wantRush) {
-      for (const row of group.rows) {
-        attempted += 1;
-        const rush = await fetchRushRoadRoutes(row.lat, row.lng, group.workLat, group.workLng, { mode: group.mode });
-        const distances = rush?.distances?.length
-          ? rush.distances
-          : await fetchRoadRoutes(row.lat, row.lng, group.workLat, group.workLng, { mode: group.mode });
-        if (distances?.length && await writeCachedRoute(row.lat, row.lng, group.workLat, group.workLng, distances, rush, group.mode)) {
-          located += 1;
-        }
-      }
+    if (!Number.isFinite(workLat) || !Number.isFinite(workLng)) {
+      finishRouteAttempt({ ...row, workLat, workLng, commuteMode: mode }, "to_work", "distance", "no_coords");
       continue;
     }
-    const hits = await fetchRoadRouteTable(group.workLat, group.workLng, group.rows);
-    for (const hit of hits) {
-      attempted += 1;
-      if (hit.distances?.length && await writeCachedRoute(hit.lat, hit.lng, group.workLat, group.workLng, hit.distances, null, group.mode)) {
-        located += 1;
+    const next = { ...row, workLat, workLng, commuteMode: mode };
+    const key = `${workLat}|${workLng}|${mode}`;
+    if (!groups.has(key)) groups.set(key, { workLat, workLng, mode, rows: [] });
+    groups.get(key).rows.push(next);
+  }
+  for (const group of groups.values()) {
+    const basics = group.rows.filter((row) => row.needBasic !== false);
+    for (const row of basics) {
+      const key = routeJobKey(row, "to_work", "distance");
+      routeInflight.add(key);
+      markRouteJob(row, "to_work", "distance", { job_state: COMMUTE_STATES.COMPUTING });
+    }
+    if (basics.length) {
+      const hits = await fetchRoadRouteTable(group.workLat, group.workLng, basics, { direction: "to_work" });
+      for (const hit of hits) {
+        attempted += 1;
+        const row = { ...hit, workLat: group.workLat, workLng: group.workLng, commuteMode: group.mode };
+        if (hit.busy) {
+          finishRouteAttempt(row, "to_work", "distance", "busy");
+          continue;
+        }
+        if (hit.distances?.length && await writeCachedRoute(hit.lat, hit.lng, group.workLat, group.workLng, hit.distances, null, group.mode, "to_work")) {
+          routeInflight.delete(routeJobKey(row, "to_work", "distance"));
+          markRouteJob(row, "to_work", "distance", { job_state: COMMUTE_STATES.DONE, fail_reason: "", next_retry_at: "" });
+          located += 1;
+          locatedIds.push(row.post_id);
+        } else if (hit.distances?.length) {
+          finishRouteAttempt(row, "to_work", "distance", "error");
+        } else {
+          finishRouteAttempt(row, "to_work", "distance", "no_route");
+        }
+      }
+    }
+    const returns = group.rows.filter((row) => row.needReturn !== false);
+    if (returns.length) {
+      const hits = await fetchRoadRouteTable(group.workLat, group.workLng, returns, { direction: "from_work" });
+      for (const hit of hits) {
+        if (hit.distances?.length) {
+          await writeCachedRoute(group.workLat, group.workLng, hit.lat, hit.lng, hit.distances, null, group.mode, "from_work");
+          if (!locatedIds.includes(hit.post_id)) locatedIds.push(hit.post_id);
+        }
+      }
+    }
+    if (wantRush) {
+      for (const row of group.rows) {
+        if (row.needRush === false) continue;
+        const rushKey = routeJobKey(row, "to_work", "rush");
+        if (routeInflight.has(rushKey)) continue;
+        routeInflight.add(rushKey);
+        markRouteJob(row, "to_work", "rush", { job_state: COMMUTE_STATES.COMPUTING });
+        const rush = await fetchRushRoadRoutes(row.lat, row.lng, group.workLat, group.workLng, { mode: group.mode });
+        routeInflight.delete(rushKey);
+        if (rush && (rush.distances?.length || rush.rushAm != null || rush.rushPm != null)) {
+          await writeCachedRoute(row.lat, row.lng, group.workLat, group.workLng, rush.distances || [row.route_km].filter(Boolean), rush, group.mode, "to_work");
+          markRouteJob(row, "to_work", "rush", { job_state: COMMUTE_STATES.DONE, fail_reason: "", next_retry_at: "" });
+          if (!locatedIds.includes(row.post_id)) locatedIds.push(row.post_id);
+        } else {
+          finishRouteAttempt(row, "to_work", "rush", "busy");
+        }
       }
     }
   }
-  return { attempted, located };
+  const patchSettings = {
+    ...settings,
+    commuteKm: Number(settings.commuteKm) > 0 ? settings.commuteKm : 1,
+  };
+  const listings = [...new Set(locatedIds)].map((id) => listingCommutePatch(id, 0, patchSettings)).filter(Boolean);
+  return {
+    attempted,
+    located,
+    listings,
+    postIds: [...new Set(locatedIds)],
+    fingerprint: commuteSettingsFingerprint(patchSettings),
+  };
 }
 
 export async function backfillAddressGeo(settings = getSettings(), { limit = 12 } = {}) {

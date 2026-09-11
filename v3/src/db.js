@@ -4,7 +4,13 @@ import { DatabaseSync } from "node:sqlite";
 import { shouldKeepListing, passesAttributeFilters, passesDisplayFilters, listingHasElevator, matchesHousingKind, matchesListingSources, normalizeListQuery, housingTypeLabel, formatFloorDisplay, sanitizeFloorName } from "./floors.js";
 import { listingKitFrom, parseStoredFurnish } from "./listingKit.js";
 import { addressPrecision, isTrustedGeoSource, listingCommunityId, preferListingAddress, sourceCommunityLinked, sqlTrustedGeoSource } from "./location.js";
-import { makeRouteKey } from "./route.js";
+import { commuteNetworkHint, makeRouteKey } from "./route.js";
+import {
+  COMMUTE_STATES,
+  commuteSettingsFingerprint,
+  commuteStateLabel,
+  resolveCommuteState,
+} from "./commuteState.js";
 import {
   bindGoogleDirectionsEnabled,
   bindMapsUsageSink,
@@ -438,6 +444,23 @@ try {
 } catch {
   // already migrated
 }
+db.exec(`
+  CREATE TABLE IF NOT EXISTS route_jobs (
+    job_key TEXT PRIMARY KEY,
+    post_id INTEGER NOT NULL,
+    direction TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    commute_mode TEXT NOT NULL,
+    work_lat REAL,
+    work_lng REAL,
+    job_state TEXT NOT NULL,
+    fail_reason TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_retry_at TEXT,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_route_jobs_post ON route_jobs(post_id, job_state, next_retry_at);
+`);
 try {
   db.exec("ALTER TABLE listings ADD COLUMN match_post_id INTEGER");
 } catch {
@@ -2113,17 +2136,30 @@ function decorateListingLite(row, settings, userId) {
   }
   const commute = Number.isFinite(Number(row.route_km)) ? Number(row.route_km) : null;
   const commuteKm = commute == null ? null : Math.round(commute * 10) / 10;
+  const returnKm = Number.isFinite(Number(row.route_return_km)) ? Math.round(Number(row.route_return_km) * 10) / 10 : null;
   const extraFees = Array.isArray(row.extra_fees) ? row.extra_fees : parseJson(row.extra_fees, []);
   const source = String(row.source || "591") || "591";
   const uid = Number(userId) || 0;
   const listedBy = Number(row.listed_by_user_id) || 0;
+  const commuteOn = Number(settings.commuteKm) > 0 && hasWorkPoint(settings);
+  const hasCoords = isTrustedGeoSource(row.geo_source)
+    && Number.isFinite(Number(row.lat))
+    && Number.isFinite(Number(row.lng));
+  const job = commuteOn && commuteKm == null
+    ? getRouteJob(makeRouteJobKey(row.post_id, "to_work", "distance", settings.commuteMode, settings.workLat, settings.workLng))
+    : null;
+  const commuteState = resolveCommuteState({ commuteOn, hasCoords, commuteKm, job });
   const fit = listingFitFields({ ...row, extra_fees: extraFees, commute_km: commuteKm }, settings);
   const out = {
     ...row,
     extra_fees: extraFees,
     has_elevator: listingHasElevator(row),
     commute_km: commuteKm,
+    commute_return_km: returnKm,
+    commute_state: commuteState,
+    commute_state_label: commuteStateLabel(commuteState),
     commute_mode: normalizeCommuteMode(settings.commuteMode),
+    commute_hint: commuteOn ? commuteNetworkHint(settings.commuteMode) : "",
     commute_routes: Array.isArray(row.route_kms) ? row.route_kms : [],
     commute_min_am: Number.isFinite(Number(row.rush_am_min)) && Number(row.rush_am_min) > 0 ? Math.round(Number(row.rush_am_min)) : null,
     commute_min_pm: Number.isFinite(Number(row.rush_pm_min)) && Number(row.rush_pm_min) > 0 ? Math.round(Number(row.rush_pm_min)) : null,
@@ -3547,14 +3583,16 @@ export function applyCachedCoords(row, settings) {
     Number.isFinite(Number(row.lat)) &&
     Number.isFinite(Number(row.lng))
   ) {
-    const route = getCachedRoute(row.lat, row.lng, workLat, workLng, conf.commuteMode);
-    if (route) {
+    const toWork = getCachedRoute(row.lat, row.lng, workLat, workLng, conf.commuteMode, "to_work");
+    const fromWork = getCachedRoute(workLat, workLng, row.lat, row.lng, conf.commuteMode, "from_work");
+    if (toWork || fromWork) {
       return {
         ...row,
-        route_kms: route.distances,
-        route_km: route.min_km,
-        rush_am_min: route.rush_am_min,
-        rush_pm_min: route.rush_pm_min,
+        route_kms: toWork?.distances || row.route_kms,
+        route_km: toWork?.min_km ?? row.route_km,
+        route_return_km: fromWork?.min_km ?? row.route_return_km,
+        rush_am_min: toWork?.rush_am_min ?? fromWork?.rush_am_min ?? row.rush_am_min,
+        rush_pm_min: toWork?.rush_pm_min ?? fromWork?.rush_pm_min ?? row.rush_pm_min,
       };
     }
   }
@@ -3589,8 +3627,8 @@ export function warmRouteCache() {
   return routeCacheMemo;
 }
 
-export function getCachedRoute(fromLat, fromLng, toLat, toLng, mode = "scooter") {
-  const key = makeRouteKey(fromLat, fromLng, toLat, toLng, mode);
+export function getCachedRoute(fromLat, fromLng, toLat, toLng, mode = "scooter", direction = "to_work") {
+  const key = makeRouteKey(fromLat, fromLng, toLat, toLng, mode, direction);
   const stamp = Date.now();
   if (!routeCacheMemo || stamp - routeCacheMemoAt >= ROUTE_CACHE_MEMO_MS) {
     routeCacheMemo = new Map();
@@ -3700,10 +3738,10 @@ function mrtFields(row, settings) {
   };
 }
 
-export function setCachedRoute(fromLat, fromLng, toLat, toLng, distances, rush = null, mode = "scooter") {
+export function setCachedRoute(fromLat, fromLng, toLat, toLng, distances, rush = null, mode = "scooter", direction = "to_work") {
   const list = (Array.isArray(distances) ? distances : []).map(Number).filter((n) => Number.isFinite(n) && n > 0);
   if (!list.length) return;
-  const key = makeRouteKey(fromLat, fromLng, toLat, toLng, mode);
+  const key = makeRouteKey(fromLat, fromLng, toLat, toLng, mode, direction);
   const minKm = Math.min(...list);
   const stamp = new Date().toISOString();
   const rushAm = Number(rush?.rushAm ?? rush?.am);
@@ -3743,33 +3781,215 @@ export function setCachedRoute(fromLat, fromLng, toLat, toLng, distances, rush =
   }
 }
 
-export function listingsNeedingRoute(limit = 40) {
+function makeRouteJobKey(postId, direction, kind, mode, workLat, workLng) {
+  return [
+    Number(postId) || 0,
+    String(direction || "to_work"),
+    String(kind || "distance"),
+    normalizeCommuteMode(mode),
+    `${Math.round(Number(workLat) * 1e5) / 1e5},${Math.round(Number(workLng) * 1e5) / 1e5}`,
+  ].join("|");
+}
+
+export function getRouteJob(jobKey) {
+  if (!jobKey) return null;
+  try {
+    return db.prepare("SELECT * FROM route_jobs WHERE job_key = ?").get(jobKey) || null;
+  } catch {
+    return null;
+  }
+}
+
+export function upsertRouteJob(partial = {}) {
+  const postId = Number(partial.post_id) || 0;
+  const direction = String(partial.direction || "to_work");
+  const kind = String(partial.kind || "distance");
+  const mode = normalizeCommuteMode(partial.commuteMode || partial.commute_mode);
+  const workLat = Number(partial.workLat ?? partial.work_lat);
+  const workLng = Number(partial.workLng ?? partial.work_lng);
+  const jobKey = partial.job_key || makeRouteJobKey(postId, direction, kind, mode, workLat, workLng);
+  const stamp = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO route_jobs(job_key, post_id, direction, kind, commute_mode, work_lat, work_lng, job_state, fail_reason, attempts, next_retry_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(job_key) DO UPDATE SET
+       job_state = excluded.job_state,
+       fail_reason = excluded.fail_reason,
+       attempts = excluded.attempts,
+       next_retry_at = excluded.next_retry_at,
+       updated_at = excluded.updated_at,
+       work_lat = excluded.work_lat,
+       work_lng = excluded.work_lng`,
+  ).run(
+    jobKey,
+    postId,
+    direction,
+    kind,
+    mode,
+    Number.isFinite(workLat) ? workLat : null,
+    Number.isFinite(workLng) ? workLng : null,
+    String(partial.job_state || COMMUTE_STATES.WAIT_ROUTE),
+    String(partial.fail_reason || ""),
+    Number(partial.attempts) || 0,
+    partial.next_retry_at || "",
+    stamp,
+  );
+  return getRouteJob(jobKey);
+}
+
+function routeJobBlocks(row, job, kind, now) {
+  const rec = getRouteJob(makeRouteJobKey(row.post_id, "to_work", kind, job.commuteMode, job.workLat, job.workLng));
+  if (!rec) return false;
+  if (rec.job_state === COMMUTE_STATES.COMPUTING) return true;
+  if (rec.job_state === COMMUTE_STATES.FAILED) return kind === "distance";
+  if (rec.job_state === COMMUTE_STATES.RETRY && rec.next_retry_at && Date.parse(rec.next_retry_at) > now) return true;
+  return false;
+}
+
+function listingNeedsRoute(row, job, wantRush, now) {
+  if (routeJobBlocks(row, job, "distance", now)) return null;
+  const toWork = getCachedRoute(row.lat, row.lng, job.workLat, job.workLng, job.commuteMode, "to_work");
+  const fromWork = getCachedRoute(job.workLat, job.workLng, row.lat, row.lng, job.commuteMode, "from_work");
+  const needBasic = !toWork;
+  const needReturn = !fromWork;
+  const needRush = wantRush && (!toWork || !Number.isFinite(toWork.rush_am_min) || !Number.isFinite(toWork.rush_pm_min));
+  if (needRush && routeJobBlocks(row, job, "rush", now) && !needBasic && !needReturn) return null;
+  if (!needBasic && !needReturn && !needRush) return null;
+  return {
+    ...row,
+    workLat: job.workLat,
+    workLng: job.workLng,
+    commuteMode: job.commuteMode,
+    needBasic,
+    needReturn,
+    needRush,
+  };
+}
+
+export function listingsNeedingRoute(limit = 40, options = {}) {
+  const cap = Math.max(1, Math.min(Number(limit) || 40, 80));
   const jobs = commuteWorkJobs(collectCommuteSettings());
-  if (!jobs.length) return [];
-  const rows = db
-    .prepare(
+  if (!jobs.length) {
+    listingsNeedingRoute.lastCursor = 0;
+    return [];
+  }
+  const wantRush = commuteRushEnabled() && googleDirectionsAllowed();
+  const now = Number(options.now) || Date.now();
+  const priorityIds = [...new Set((options.priorityIds || []).map(Number).filter((id) => id > 0))];
+  const cursor = Number(options.cursor ?? listingsNeedingRoute.lastCursor) || 0;
+  const out = [];
+  const seen = new Set();
+
+  const pushRow = (row) => {
+    for (const job of jobs) {
+      const key = `${row.post_id}|${job.workLat}|${job.workLng}|${job.commuteMode}`;
+      if (seen.has(key)) continue;
+      const need = listingNeedsRoute(row, job, wantRush, now);
+      if (!need) continue;
+      seen.add(key);
+      out.push(need);
+      if (out.length >= cap) return true;
+    }
+    return false;
+  };
+
+  if (priorityIds.length) {
+    const placeholders = priorityIds.map(() => "?").join(",");
+    const priorityRows = db.prepare(
+      `SELECT post_id, lat, lng FROM listings
+       WHERE post_id IN (${placeholders})
+         AND lat IS NOT NULL AND lng IS NOT NULL
+         AND ${sqlTrustedGeoSource()}
+         AND IFNULL(hidden, 0) = 0
+         AND IFNULL(offline, 0) = 0`,
+    ).all(...priorityIds);
+    const order = new Map(priorityIds.map((id, index) => [id, index]));
+    priorityRows.sort((a, b) => (order.get(a.post_id) ?? 1e9) - (order.get(b.post_id) ?? 1e9));
+    for (const row of priorityRows) {
+      if (pushRow(row)) {
+        listingsNeedingRoute.lastCursor = cursor;
+        return out;
+      }
+    }
+  }
+
+  const watched = db.prepare(
+    `SELECT l.post_id, l.lat, l.lng FROM listings l
+     WHERE l.lat IS NOT NULL AND l.lng IS NOT NULL
+       AND ${sqlTrustedGeoSource("l.geo_source")}
+       AND IFNULL(l.hidden, 0) = 0
+       AND IFNULL(l.offline, 0) = 0
+       AND EXISTS (SELECT 1 FROM user_listing_flags f WHERE f.post_id = l.post_id AND f.watched = 1)
+     ORDER BY l.last_seen_at DESC
+     LIMIT ?`,
+  ).all(Math.max(cap, 40));
+  for (const row of watched) {
+    if (pushRow(row)) {
+      listingsNeedingRoute.lastCursor = cursor;
+      return out;
+    }
+  }
+
+  let scanCursor = cursor;
+  const pageSize = 250;
+  let scanned = 0;
+  while (out.length < cap && scanned < 20) {
+    const rows = db.prepare(
       `SELECT post_id, lat, lng FROM listings
        WHERE lat IS NOT NULL AND lng IS NOT NULL
          AND ${sqlTrustedGeoSource()}
          AND IFNULL(hidden, 0) = 0
          AND IFNULL(offline, 0) = 0
-       ORDER BY ${sqlWatchedFirst()}, last_seen_at DESC
-       LIMIT 2000`,
-    )
-    .all();
-  const out = [];
-  const wantRush = commuteRushEnabled() && googleDirectionsAllowed();
-  for (const row of rows) {
-    for (const job of jobs) {
-      const cached = getCachedRoute(row.lat, row.lng, job.workLat, job.workLng, job.commuteMode);
-      if (cached && (!wantRush || (Number.isFinite(cached.rush_am_min) && Number.isFinite(cached.rush_pm_min)))) {
-        continue;
+         AND post_id > ?
+       ORDER BY post_id ASC
+       LIMIT ?`,
+    ).all(scanCursor, pageSize);
+    if (!rows.length) {
+      scanCursor = 0;
+      break;
+    }
+    scanCursor = Number(rows[rows.length - 1].post_id) || scanCursor;
+    scanned += 1;
+    for (const row of rows) {
+      if (pushRow(row)) {
+        listingsNeedingRoute.lastCursor = scanCursor;
+        return out;
       }
-      out.push({ ...row, workLat: job.workLat, workLng: job.workLng, commuteMode: job.commuteMode });
-      if (out.length >= limit) return out;
+    }
+    if (rows.length < pageSize) {
+      scanCursor = 0;
+      break;
     }
   }
+  listingsNeedingRoute.lastCursor = scanCursor;
   return out;
+}
+listingsNeedingRoute.lastCursor = 0;
+
+export function listingCommutePatch(postId, userId, settingsOverride) {
+  const uid = userId == null ? defaultUserId() : Number(userId) || 0;
+  const row = db.prepare("SELECT * FROM listings WHERE post_id = ?").get(Number(postId));
+  if (!row) return null;
+  const settings = settingsOverride || getSettings(uid);
+  const lite = decorateListing(withPersonal(row, uid), settings, uid, { sameHouse: false });
+  return {
+    post_id: lite.post_id,
+    lat: lite.lat,
+    lng: lite.lng,
+    geo_source: lite.geo_source,
+    commute_km: lite.commute_km,
+    commute_return_km: lite.commute_return_km,
+    commute_state: lite.commute_state,
+    commute_state_label: lite.commute_state_label,
+    commute_mode: lite.commute_mode,
+    commute_hint: lite.commute_hint,
+    commute_routes: lite.commute_routes,
+    commute_min_am: lite.commute_min_am,
+    commute_min_pm: lite.commute_min_pm,
+    mrt_station: lite.mrt_station,
+    mrt_walk_km: lite.mrt_walk_km,
+    fingerprint: commuteSettingsFingerprint(settings),
+  };
 }
 
 function applyListingFilter(rows, settings = getSettings()) {

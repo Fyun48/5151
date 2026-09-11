@@ -3119,6 +3119,7 @@
         <label><input type="radio" name="commuteMode" value="scooter" checked /> 機車</label>
         <label><input type="radio" name="commuteMode" value="car" /> 汽車</label>
       </div>
+      <p class="hint">機車與汽車目前都用汽車路網估算。機車會避開高速公路，但不是專用機車道路。</p>
       <label>物件與公司距離上限（公里，0 表示不篩）</label>
       <input type="number" id="commuteKm" min="0" max="80" step="0.1" />
       <p class="hint" data-tour="mrt">步行路線未滿 1.5 公里的最近捷運站會顯示在列表。這個開關只在後台統一設定。</p>
@@ -3927,7 +3928,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> · <a href="/data.html">居住數據</a> · <a href="#me" id="supportFooterLink">支持本站</a> · <a href="#" id="feedbackFooterLink">意見回饋</a> <span class="site-ver">ver. 3.54</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> · <a href="/data.html">居住數據</a> · <a href="#me" id="supportFooterLink">支持本站</a> · <a href="#" id="feedbackFooterLink">意見回饋</a> <span class="site-ver">ver. 3.55</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -4170,6 +4171,10 @@
     const noteDrafts = new Map();
     let listCache = [];
     let listingPool = [];
+    let pendingGeoEvents = [];
+    let geoRefreshTimer = 0;
+    let commutePollTimer = 0;
+    let commuteFocusTimer = 0;
     const sameHouseOpen = new Set();
     const sameHouseClosed = new Set();
     let guestListings = [];
@@ -4451,15 +4456,25 @@
     }
     function commuteText(item) {
       const label = commuteModeLabel(item.commute_mode || settings.commuteMode);
+      const wrap = (inner) => `<span data-commute="${esc(String(item.post_id || ""))}">${inner}</span>`;
       if (item.commute_km != null) {
         const routes = Array.isArray(item.commute_routes) ? item.commute_routes.filter((n) => Number.isFinite(Number(n))) : [];
         const extra = routes.length > 1 ? `（${routes.map((n) => `${n}`).join(" / ")} 公里）` : "";
-        return routeChip(`${label}路線約 ${item.commute_km} 公里${extra}`);
+        const ret = Number.isFinite(Number(item.commute_return_km)) && Number(item.commute_return_km) !== Number(item.commute_km)
+          ? ` · 返回約 ${item.commute_return_km} 公里`
+          : "";
+        return wrap(routeChip(`${label}路線約 ${item.commute_km} 公里${extra}`) + (ret ? `<span class="meta-quiet">${esc(ret)}</span>` : ""));
       }
       if (isGuest || !commuteOn()) return "";
+      const state = String(item.commute_state || "");
       const src = String(item.geo_source || "");
       const hasPin = Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lng)) && trustedPinSource(src);
-      return hasPin ? ` · ${esc(label)}路線計算中` : " · 尚未取得地圖座標";
+      if (state === "failed") return wrap(` · ${esc(label)}無法計算`);
+      if (state === "retry") return wrap(` · ${esc(label)}稍後重試`);
+      if (state === "wait_geo") return wrap(" · 等待定位");
+      if (state === "wait_route") return wrap(` · ${esc(label)}等待計算`);
+      if (state === "computing") return wrap(` · ${esc(label)}計算中`);
+      return wrap(hasPin ? ` · ${esc(label)}路線計算中` : " · 尚未取得地圖座標");
     }
 
     function mrtChip(name) {
@@ -5109,6 +5124,180 @@
 
     function listingIdKey(items) {
       return (items || []).map((row) => String(row.post_id)).join(",");
+    }
+
+    function commuteSettingsFingerprint(s = settings) {
+      const lat = Number(s.workLat);
+      const lng = Number(s.workLng);
+      const mode = String(s.commuteMode || "").trim() === "car" ? "car" : "scooter";
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return "";
+      return `${Math.round(lat * 1e5) / 1e5},${Math.round(lng * 1e5) / 1e5}|${mode}`;
+    }
+
+    function commuteFieldKey(item) {
+      return [
+        item?.commute_km,
+        item?.commute_return_km,
+        item?.commute_state,
+        (item?.commute_routes || []).join(","),
+        item?.lat,
+        item?.lng,
+        item?.mrt_station,
+        item?.mrt_walk_km,
+      ].join("|");
+    }
+
+    function pickCommuteFields(row) {
+      return {
+        commute_km: row.commute_km,
+        commute_return_km: row.commute_return_km,
+        commute_state: row.commute_state,
+        commute_mode: row.commute_mode,
+        commute_routes: row.commute_routes,
+        commute_hint: row.commute_hint,
+        lat: row.lat,
+        lng: row.lng,
+        geo_source: row.geo_source,
+        mrt_station: row.mrt_station,
+        mrt_walk_km: row.mrt_walk_km,
+        route_km: row.route_km,
+        route_kms: row.route_kms,
+      };
+    }
+
+    function visibleListingIds() {
+      return [...document.querySelectorAll("[data-card]")].map((el) => Number(el.dataset.card)).filter((id) => id > 0);
+    }
+
+    function cardIsBusy(id) {
+      const key = String(id);
+      if (selected.has(key) || draftWatch.has(key) || noteDrafts.has(key)) return true;
+      const card = document.querySelector(`[data-card="${key}"]`);
+      if (!card) return false;
+      if (card.contains(document.activeElement)) return true;
+      try { if (card.matches(":hover")) return true; } catch { /* ignore */ }
+      return false;
+    }
+
+    function listHasBusyCard() {
+      return listCache.some((row) => cardIsBusy(row.post_id));
+    }
+
+    function applyCommutePatches(patches, { fingerprint = "" } = {}) {
+      const currentFp = commuteSettingsFingerprint(settings);
+      if (fingerprint && currentFp && fingerprint !== currentFp) return false;
+      const byId = new Map((patches || []).map((row) => [String(row.post_id), row]));
+      if (!byId.size) return false;
+      let changed = false;
+      listCache = listCache.map((old) => {
+        const patch = byId.get(String(old.post_id));
+        if (!patch) return old;
+        const next = { ...old, ...pickCommuteFields(patch) };
+        if (commuteFieldKey(old) === commuteFieldKey(next)) return old;
+        changed = true;
+        return next;
+      });
+      if (!changed) return false;
+      for (const item of listCache) {
+        if (!byId.has(String(item.post_id))) continue;
+        const el = document.querySelector(`[data-commute="${item.post_id}"]`);
+        if (el) el.outerHTML = commuteText(item);
+        const card = document.querySelector(`[data-card="${item.post_id}"]`);
+        const mrt = mrtText(item);
+        const mrtEl = card?.querySelector(".mrt-line");
+        if (mrt && mrtEl) mrtEl.innerHTML = mrt;
+      }
+      rememberListings(listCache);
+      updateListMeta(listCache, lastStats);
+      paintWatchChip();
+      updateBulkBar();
+      return true;
+    }
+
+    function pendingCommuteWork() {
+      return listCache.some((item) => ["wait_geo", "wait_route", "computing", "retry"].includes(String(item.commute_state || "")));
+    }
+
+    function syncCommutePoll() {
+      const need = !isGuest && !document.hidden && commuteOn() && pendingCommuteWork();
+      if (!need) {
+        if (commutePollTimer) {
+          clearInterval(commutePollTimer);
+          commutePollTimer = 0;
+        }
+        return;
+      }
+      if (commutePollTimer) return;
+      commutePollTimer = setInterval(() => {
+        if (document.hidden || !pendingCommuteWork()) {
+          syncCommutePoll();
+          return;
+        }
+        refreshCommuteSnapshot();
+      }, 12000);
+    }
+
+    function reportCommuteFocus() {
+      if (isGuest) return;
+      clearTimeout(commuteFocusTimer);
+      commuteFocusTimer = setTimeout(() => {
+        const ids = visibleListingIds().slice(0, 80);
+        if (!ids.length) return;
+        fetch("/api/commute/focus", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids }),
+        }).catch(() => {});
+      }, 400);
+    }
+
+    async function refreshCommuteSnapshot() {
+      if (isGuest) return;
+      const ids = visibleListingIds().slice(0, 80);
+      if (!ids.length) return;
+      try {
+        const res = await fetch(`/api/commute/snapshot?ids=${ids.join(",")}`, { cache: "no-store" });
+        const data = await res.json();
+        if (applyCommutePatches(data.listings || [], { fingerprint: data.fingerprint || "" })) {
+          $("status").textContent = "列表已更新";
+        }
+      } catch { /* 略過 */ }
+      syncCommutePoll();
+    }
+
+    function queueGeoRefresh(data) {
+      pendingGeoEvents.push(data || {});
+      clearTimeout(geoRefreshTimer);
+      geoRefreshTimer = setTimeout(flushGeoRefresh, 350);
+    }
+
+    function flushGeoRefresh() {
+      const batch = pendingGeoEvents.splice(0, pendingGeoEvents.length);
+      if (!batch.length) return;
+      const listings = [];
+      let fingerprint = "";
+      for (const data of batch) {
+        if (Array.isArray(data.listings)) listings.push(...data.listings);
+        if (Array.isArray(data.routeBackfill?.listings)) listings.push(...data.routeBackfill.listings);
+        if (data.fingerprint || data.routeBackfill?.fingerprint) fingerprint = data.fingerprint || data.routeBackfill.fingerprint;
+      }
+      const last = batch[batch.length - 1] || {};
+      const finish = (applied) => {
+        if (!applied) return;
+        if (last.routeBackfill?.located) {
+          $("status").textContent = `已計算 ${last.routeBackfill.located} 筆${commuteModeLabel()}路線，列表已更新`;
+        } else if (last.geoBackfill?.located || last.geoBackfill?.attempted) {
+          $("status").textContent = `已從 591 地圖補 ${last.geoBackfill.located || 0} 筆座標，列表已更新`;
+        } else if (last.mrtBackfill?.located) {
+          $("status").textContent = `已計算 ${last.mrtBackfill.located} 筆捷運步行距離，列表已更新`;
+        }
+        syncCommutePoll();
+      };
+      if (listings.length) {
+        finish(applyCommutePatches(listings, { fingerprint }));
+        return;
+      }
+      loadList({ silent: true, keep: true }).then(() => finish(true)).catch(() => {});
     }
 
     function previewListForFilter(key) {
@@ -6927,14 +7116,35 @@
         lastStats.paint_ms = Math.round(performance.now() - paintStart);
         const next = applyListView(data.listings);
         rememberListings(next);
-        if (options.keep && listCache.length && listingIdKey(listCache) === listingIdKey(next)) {
-          listCache = next.map(normalizeListingText);
-          updateListMeta(listCache, lastStats);
-          paintWatchChip();
-          updateBulkBar();
-          return;
+        if (options.keep && listCache.length) {
+          const sameIds = listingIdKey(listCache) === listingIdKey(next);
+          if (sameIds || listHasBusyCard()) {
+            const applied = applyCommutePatches(sameIds ? next : data.listings);
+            if (sameIds) {
+              const byId = new Map(next.map((row) => [String(row.post_id), normalizeListingText(row)]));
+              listCache = listCache.map((row) => byId.get(String(row.post_id)) || row);
+              updateListMeta(listCache, lastStats);
+              paintWatchChip();
+              updateBulkBar();
+              if (applied) $("status").textContent = "列表已更新";
+              syncCommutePoll();
+              reportCommuteFocus();
+              return;
+            }
+            if (listHasBusyCard()) {
+              updateListMeta(listCache, lastStats);
+              paintWatchChip();
+              updateBulkBar();
+              if (applied) $("status").textContent = "列表已更新";
+              syncCommutePoll();
+              reportCommuteFocus();
+              return;
+            }
+          }
         }
         renderList(next, lastStats);
+        syncCommutePoll();
+        reportCommuteFocus();
       } finally {
         if (gen === listLoadGen) setListBusy(false);
       }
@@ -10997,6 +11207,7 @@
       if (!window.__watchStream && !isGuest) {
         const es = new EventSource("/api/events/stream");
         window.__watchStream = es;
+        es.onopen = () => { refreshCommuteSnapshot(); };
         es.onmessage = (msg) => {
           const data = JSON.parse(msg.data);
           if (data.type === "watch") {
@@ -11016,14 +11227,7 @@
             loadList({ silent: true, keep: true });
           }
           if (data.type === "geo") {
-            if (data.routeBackfill?.located) {
-              $("status").textContent = `已計算 ${data.routeBackfill.located} 筆${commuteModeLabel()}路線，列表已更新`;
-            } else if (data.geoBackfill?.located || data.geoBackfill?.attempted) {
-              $("status").textContent = `已從 591 地圖補 ${data.geoBackfill.located || 0} 筆座標，列表已更新`;
-            } else if (data.mrtBackfill?.located) {
-              $("status").textContent = `已計算 ${data.mrtBackfill.located} 筆捷運步行距離，列表已更新`;
-            }
-            loadList({ silent: true, keep: true });
+            queueGeoRefresh(data);
           }
         };
         es.onerror = () => {
@@ -11031,6 +11235,12 @@
             if (!data.ok && !isGuest) location.replace("/login.html");
           }).catch(() => {});
         };
+        window.addEventListener("online", () => { refreshCommuteSnapshot(); });
+        document.addEventListener("visibilitychange", () => {
+          if (!document.hidden) refreshCommuteSnapshot();
+          syncCommutePoll();
+        });
+        $("list")?.addEventListener("scroll", () => reportCommuteFocus(), { passive: true });
       }
     });
     window.__APP_BOOTED = true;

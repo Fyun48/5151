@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { commuteModeLabel, normalizeCommuteMode } from "../src/geo.js";
-import { fetchRoadRoutes, fetchRoadRouteTable, fetchRushRoadRoutes, makeRouteKey } from "../src/route.js";
+import { commuteNetworkHint, fetchRoadRoutes, fetchRoadRouteTable, fetchRushRoadRoutes, makeRouteKey } from "../src/route.js";
 import { bindGoogleDirectionsEnabled, resetGoogleDirectionsBlock } from "../src/mapsBilling.js";
 
 test("commute mode is scooter unless the user picks car", () => {
@@ -16,10 +16,13 @@ test("commute mode is scooter unless the user picks car", () => {
 test("car and scooter routes keep separate cache keys", () => {
   const scooter = makeRouteKey(25.05, 121.52, 25.06, 121.61);
   const car = makeRouteKey(25.05, 121.52, 25.06, 121.61, "car");
-  assert.equal(scooter, "25.05,121.52>25.06,121.61");
-  assert.equal(car, "car:25.05,121.52>25.06,121.61");
+  assert.equal(scooter, "v2:to_work:scooter:25.05,121.52>25.06,121.61");
+  assert.equal(car, "v2:to_work:car:25.05,121.52>25.06,121.61");
   assert.notEqual(scooter, car);
   assert.equal(makeRouteKey(25.05, 121.52, 25.06, 121.61, "scooter"), scooter);
+  assert.notEqual(makeRouteKey(25.05, 121.52, 25.06, 121.61, "scooter", "from_work"), scooter);
+  assert.match(commuteNetworkHint("scooter"), /汽車路網估算/);
+  assert.match(commuteNetworkHint("car"), /汽車路網計算/);
 });
 
 test("fetchRoadRoutes does not call Google when the admin switch is off", async () => {
@@ -112,11 +115,28 @@ test("OSRM table calculates many destinations in one request", async () => {
     const hits = await fetchRoadRouteTable(25.093, 121.525, [
       { post_id: 1, lat: 25.11, lng: 121.529 },
       { post_id: 2, lat: 25.12, lng: 121.53 },
-    ]);
+    ], { direction: "from_work" });
     assert.equal(urls.length, 1);
     assert.match(urls[0], /table\/v1\/driving/);
+    assert.match(urls[0], /sources=0/);
     assert.deepEqual(hits[0].distances, [0.8]);
     assert.deepEqual(hits[1].distances, [1.6]);
+    urls.length = 0;
+    globalThis.fetch = async (input) => {
+      urls.push(String(input));
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ code: "Ok", distances: [[800], [1600]] }),
+      };
+    };
+    const toWork = await fetchRoadRouteTable(25.093, 121.525, [
+      { post_id: 1, lat: 25.11, lng: 121.529 },
+      { post_id: 2, lat: 25.12, lng: 121.53 },
+    ], { direction: "to_work" });
+    assert.match(urls[0], /destinations=0/);
+    assert.deepEqual(toWork[0].distances, [0.8]);
+    assert.deepEqual(toWork[1].distances, [1.6]);
   } finally {
     globalThis.fetch = orig;
   }

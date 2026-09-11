@@ -71,6 +71,7 @@ import {
   getAdminMapsSettings,
   saveAdminMapsSettings,
   settingsForGeoBackfill,
+  listingCommutePatch,
   getMemberMailSettings,
   getMemberSmtp,
   saveMemberMailSettings,
@@ -235,6 +236,7 @@ import {
   withBudget,
 } from "./crawlWatchdog.js";
 import { APP_NAME, APP_VERSION } from "./brand.js";
+import { commuteSettingsFingerprint, finishBackfillRequest, rememberBackfillRequest } from "./commuteState.js";
 import { profileNameOrDraft } from "./settingsState.js";
 import {
   OAUTH_PROVIDERS,
@@ -1966,6 +1968,19 @@ function broadcastNotify(events) {
   }
 }
 
+const geoBackfillState = { busy: false, queued: false };
+const commuteFocusByUser = new Map();
+
+function visibleFocusIds() {
+  const now = Date.now();
+  const ids = [];
+  for (const rec of commuteFocusByUser.values()) {
+    if (!rec || now - rec.at > 120_000) continue;
+    ids.push(...(rec.ids || []));
+  }
+  return [...new Set(ids.map(Number).filter((id) => id > 0))];
+}
+
 let geoBackfillBusy = false;
 
 async function ensureWorkCoords() {
@@ -1987,7 +2002,7 @@ async function ensureWorkCoords() {
 
 function queueGeoBackfill(settings = getSettings()) {
   settings = settingsForGeoBackfill(settings);
-  if (geoBackfillBusy) return;
+  if (rememberBackfillRequest(geoBackfillState) === "queued") return;
   const needCommute = needsListingGeo(settings);
   geoBackfillBusy = true;
   holdStatsCache(20_000);
@@ -1998,14 +2013,22 @@ function queueGeoBackfill(settings = getSettings()) {
     } catch (error) {
       console.warn("補完整地址失敗：", error.message);
     }
+    async function runRoutes() {
+      const routes = await backfillListingRoutes(settings, { limit: 20, priorityIds: visibleFocusIds() });
+      if (routes.attempted) broadcast({ type: "geo", routeBackfill: routes });
+      const notified = await flushPendingNotifications(settings);
+      if (notified.length) broadcastNotify(notified);
+      return routes;
+    }
     if (needCommute) {
-      for (let round = 0; round < 200; round += 1) {
+      let emptyRouteRounds = 0;
+      for (let round = 0; round < 80; round += 1) {
         try {
-          const routes = await backfillListingRoutes(settings, { limit: 20 });
-          if (routes.attempted) broadcast({ type: "geo", routeBackfill: routes });
-          const notified = await flushPendingNotifications(settings);
-          if (notified.length) broadcastNotify(notified);
+          const routes = await runRoutes();
           if (!routes.attempted) break;
+          if (routes.located > 0) emptyRouteRounds = 0;
+          else emptyRouteRounds += 1;
+          if (emptyRouteRounds >= 3) break;
         } catch (error) {
           console.warn("補路線失敗：", error.message);
           await new Promise((resolve) => setTimeout(resolve, 1500));
@@ -2017,6 +2040,7 @@ function queueGeoBackfill(settings = getSettings()) {
           if (geo.attempted) broadcast({ type: "geo", geoBackfill: geo });
           const notified = await flushPendingNotifications(settings);
           if (notified.length) broadcastNotify(notified);
+          if (geo.located) await runRoutes();
           if (!geo.attempted) break;
         } catch (error) {
           console.warn("補定位失敗：", error.message);
@@ -2029,6 +2053,7 @@ function queueGeoBackfill(settings = getSettings()) {
           if (geo.attempted) broadcast({ type: "geo", addressGeo: geo });
           const notified = await flushPendingNotifications(settings);
           if (notified.length) broadcastNotify(notified);
+          if (geo.located) await runRoutes();
           if (!geo.attempted) break;
         } catch (error) {
           console.warn("補地址定位失敗：", error.message);
@@ -2054,6 +2079,9 @@ function queueGeoBackfill(settings = getSettings()) {
   })()
     .finally(() => {
       geoBackfillBusy = false;
+      if (finishBackfillRequest(geoBackfillState) === "restart") {
+        queueGeoBackfill();
+      }
     });
 }
 
@@ -2264,6 +2292,28 @@ app.get("/api/state", async (req, res) => {
     listings,
     events,
     cities: CITIES,
+  });
+});
+
+app.post("/api/commute/focus", (req, res) => {
+  const uid = actorUserId(req);
+  const ids = (Array.isArray(req.body?.ids) ? req.body.ids : []).map(Number).filter((id) => id > 0).slice(0, 80);
+  commuteFocusByUser.set(uid, { ids, at: Date.now() });
+  queueGeoBackfill(getSettings(uid));
+  res.json({ ok: true, count: ids.length });
+});
+
+app.get("/api/commute/snapshot", (req, res) => {
+  const uid = actorUserId(req);
+  const settings = getSettings(uid);
+  const ids = String(req.query.ids || "")
+    .split(",")
+    .map(Number)
+    .filter((id) => id > 0)
+    .slice(0, 80);
+  res.json({
+    listings: ids.map((id) => listingCommutePatch(id, uid)).filter(Boolean),
+    fingerprint: commuteSettingsFingerprint(settings),
   });
 });
 
