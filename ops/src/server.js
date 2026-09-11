@@ -49,6 +49,7 @@ import { LocalPersistentStorage, defaultAttachmentDir } from "./storage/localSto
 import { makeScanner } from "./malwareScan.js";
 import { listAnalyses, publicAnalysis, reprocessAnalysis, analysisStats, currentAnalysisId, getCurrentFeedbackAnalysis } from "./feedbackAnalysis.js";
 import { makeProvider } from "./ai/provider.js";
+import { drawersAdminView, resolveDrawerKind, saveDrawer } from "./providerDrawer.js";
 import { analysisConfigFromEnv, startAnalysisLoop } from "./analysisWorker.js";
 import { getIssueWithMembers, mergeIssues, splitIssue, moveFeedback } from "./clustering.js";
 import { createFollowUpIssue } from "./followUp.js";
@@ -595,6 +596,22 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
               actor: `owner:${req.owner.email}`,
             }),
           });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
+      if (pathname === "/ops/api/providers" && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        sendJson(res, 200, drawersAdminView(db));
+        return;
+      }
+      const drawerSave = pathname.match(/^\/ops\/api\/providers\/([a-z0-9_-]+)$/);
+      if (drawerSave && method === "PUT") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          const body = await readBody(req);
+          sendJson(res, 200, { ok: true, item: saveDrawer(db, drawerSave[1], body), overview: drawersAdminView(db) });
         } catch (err) {
           sendJson(res, err.status || 400, { error: err.message });
         }
@@ -1230,14 +1247,16 @@ export function startServer() {
   const host = process.env.OPS_HOST || "127.0.0.1";
   const port = Number(process.env.OPS_PORT || 5154);
   // Phase 4：AI 分析背景 worker。provider 未設定（AI_PROVIDER 未設）→ 不啟動、feedback 仍正常入庫。
-  const aiProvider = makeProvider();
-  const aiConfig = analysisConfigFromEnv();
+  const analysisKind = resolveDrawerKind(db, "analysis", "AI_PROVIDER");
+  const aiProvider = makeProvider(process.env, { kind: analysisKind });
+  const aiConfig = analysisConfigFromEnv(process.env, { kind: analysisKind });
   if (aiProvider.available && aiConfig.enabled) {
     startAnalysisLoop(db, { provider: aiProvider, config: aiConfig, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
   }
   // Phase 5：embedding + 分群 worker。EMBEDDING_PROVIDER 未設定 → 不啟動、feedback 照常入庫。
-  const embProvider = makeEmbeddingProvider();
-  const clusterCfg = clusteringConfigFromEnv();
+  const clusteringKind = resolveDrawerKind(db, "clustering", "EMBEDDING_PROVIDER");
+  const embProvider = makeEmbeddingProvider(process.env, { kind: clusteringKind });
+  const clusterCfg = clusteringConfigFromEnv(process.env, { kind: clusteringKind });
   if (embProvider.available && clusterCfg.enabled) {
     startClusteringLoop(db, { provider: embProvider, config: clusterCfg, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
   }
@@ -1247,14 +1266,16 @@ export function startServer() {
     startImpactLoop(db, { config: impactCfg, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
   }
   // Phase 7：角色制評估 worker。EVALUATION_PROVIDER 未設定 → 不啟動；feedback/clustering/impact 照常。
-  const evalProvider = makeEvaluationProvider();
-  const evalCfg = evaluationWorkerConfigFromEnv();
+  const evaluationKind = resolveDrawerKind(db, "evaluation", "EVALUATION_PROVIDER");
+  const evalProvider = makeEvaluationProvider(process.env, { kind: evaluationKind });
+  const evalCfg = evaluationWorkerConfigFromEnv(process.env, { kind: evaluationKind });
   if (evalProvider.available && evalCfg.enabled) {
     startEvaluationLoop(db, { provider: evalProvider, config: evalCfg, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
   }
   // Phase 8：提案生成 worker。PROPOSAL_PROVIDER 未設定 → 不啟動；前面各階段照常。生成提案不寫程式、不部署。
-  const proposalProvider = makeProposalProvider();
-  const proposalCfg = proposalWorkerConfigFromEnv();
+  const proposalKind = resolveDrawerKind(db, "proposal", "PROPOSAL_PROVIDER");
+  const proposalProvider = makeProposalProvider(process.env, { kind: proposalKind });
+  const proposalCfg = proposalWorkerConfigFromEnv(process.env, { kind: proposalKind });
   if (proposalProvider.available && proposalCfg.enabled) {
     startProposalLoop(db, { provider: proposalProvider, config: proposalCfg, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
   }
@@ -1265,7 +1286,8 @@ export function startServer() {
   }
   // Phase 10：Coding worker。唯一會呼叫 coding provider 的階段，且僅在 ACTIVE 授權存在時。
   // 成本控制 + 安全預設：CODING_PROVIDER 未設 → provider 不可用；OPS_CODING_REPO_PATH 未設 → repo 不可用 → 不建/不跑。
-  const codingProvider = makeCodingProvider();
+  const codingKind = resolveDrawerKind(db, "coding", "CODING_PROVIDER");
+  const codingProvider = makeCodingProvider(process.env, { kind: codingKind });
   const codingRepo = makeCodingRepo();
   const codingPr = makePrGateway();
   const codingCfg = codingWorkerConfigFromEnv();
@@ -1275,7 +1297,8 @@ export function startServer() {
   // Phase 11：獨立 QA worker（決定性檢核為主；optional AI reviewer 預設關）。
   // 安全預設：repo 不可用（OPS_CODING_REPO_PATH 未設）→ 不建/不跑；QA 絕不 merge/部署。
   const qaRepo = makeCodingRepo();
-  const qaReviewer = makeQaReviewProvider();
+  const reviewKind = resolveDrawerKind(db, "review", "QA_REVIEW_PROVIDER");
+  const qaReviewer = makeQaReviewProvider(process.env, { kind: reviewKind });
   const qaCfg = qaWorkerConfigFromEnv();
   if (qaCfg.enabled && qaRepo.available) {
     startQaLoop(db, { repo: qaRepo, reviewProvider: qaReviewer, config: qaCfg, log: (tag, info) => console.log(tag, JSON.stringify(info)) });

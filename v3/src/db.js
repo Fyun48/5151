@@ -151,6 +151,14 @@ import {
 import { ensureCrmOutboxSchema } from "./crmOutbox.js";
 import { crmDeliveryControl, setLocalCrmSyncStopped } from "./crmDelivery.js";
 import {
+  bindBudgetDb,
+  ensureBudgetSchema,
+  listProviderAdmin,
+  saveProviderConfig,
+  getProviderConfig,
+} from "./budgetGuard.js";
+import { executeWithProvider } from "./providers/executeWithProvider.js";
+import {
   closeSelfListing as closeSelfListingOn,
   createSelfListing as createSelfListingOn,
   createImportedDraftListing as createImportedDraftListingOn,
@@ -689,6 +697,8 @@ ensureFeedbackSchema(db);
 ensureFeedbackOutboxSchema(db);
 ensureCrmSchema(db);
 ensureCrmOutboxSchema(db);
+ensureBudgetSchema(db);
+bindBudgetDb(db);
 ensureSelfListingSchema(db);
 ensureMemberMediaSchema(db);
 ensureContentDocumentSchema(db);
@@ -943,9 +953,52 @@ export function getAdminMapsSettings() {
     googleBlockReason: block.reason,
     googleBlockUntil: block.until,
     provider: googleDirectionsAllowed() ? "google" : "osrm",
-    warning: mapsAdminWarning({ googleEnabled, rushEnabled: enabled, hasKey, block }),
+    warning: mapsDistanceWarning(mapsAdminWarning({ googleEnabled, rushEnabled: enabled, hasKey, block })),
     usage,
   };
+}
+
+function mapsDistanceWarning(base) {
+  const cfg = getProviderConfig(db, "distance_matrix");
+  if (googleDirectionsEnabled() && Number(cfg?.daily_limit_minor || 0) <= 0) {
+    return `${base} 外掛日預算為 0，BudgetGuard 不准花付費額度，Google Directions 不會送出。請到「外掛與預算」填日預算（建議 NT$50）。`;
+  }
+  return base;
+}
+
+export function getAdminProviderSettings() {
+  return listProviderAdmin(db);
+}
+
+export function saveAdminProviderSettings(partial = {}) {
+  return saveProviderConfig(db, partial);
+}
+
+export async function testAdminProvider(partial = {}) {
+  const category = String(partial.category || "").trim();
+  const cfg = getProviderConfig(db, category);
+  if (!cfg) {
+    const err = new Error("unknown category");
+    err.status = 400;
+    throw err;
+  }
+  const result = await executeWithProvider({
+    db,
+    category,
+    actionWithProvider: async (row) => {
+      if (row.provider_code === "stub_paid") {
+        return { value: { ping: "stub_paid" }, usage: { costMinor: Number(row.ceiling_minor) || 0 } };
+      }
+      if (row.provider_code === "google_routes") {
+        if (!hasGoogleMapsKey()) throw new Error("no google key");
+        return { value: { ping: "google_configured" }, usage: { costMinor: 0 } };
+      }
+      if (!row.credential_ref) throw new Error("no credential");
+      return { value: { ping: "configured" }, usage: { costMinor: 0 } };
+    },
+    fallbackAction: async () => ({ fallback: true, ping: "free_path" }),
+  });
+  return { ok: Boolean(result) && result.fallback !== true, result, ceiling_twd: Number(cfg.ceiling_minor || 0) / 1_000_000 };
 }
 
 export function saveAdminMapsSettings(partial = {}) {

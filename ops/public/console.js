@@ -1148,6 +1148,53 @@ async function openCodingTask(taskId) {
   }
 }
 
+async function refreshProviders() {
+  const host = $("providerDrawers");
+  if (!host) return;
+  const { res, data } = await api("/ops/api/providers");
+  if (!res.ok) {
+    setStatus($("providerMsg"), data.error || "載入供應商失敗", "err");
+    return;
+  }
+  setStatus($("providerMsg"), data.legal || "", "");
+  host.innerHTML = (data.items || []).map((item) => {
+    const options = (item.codes || []).map((code) => `<option value="${esc(code)}" ${code === item.provider_code ? "selected" : ""}>${esc(code)}</option>`).join("");
+    return `<form class="drawer-card" data-drawer="${esc(item.id)}">
+      <h3>${esc(item.label)}</h3>
+      <p class="hint">環境變數 ${esc(item.env_key)}＝${esc(item.env_kind)}；目前決議 ${esc(item.resolved_kind)}。${item.has_credential ? "金鑰已設定。" : "尚未貼金鑰。"}</p>
+      <label class="inline"><input type="checkbox" data-drawer-on ${item.is_enabled ? "checked" : ""} /> 開啟此抽屜</label>
+      <label>供應商 <select data-drawer-code>${options}</select></label>
+      <label>金鑰或授權（空白則保留）<input type="password" autocomplete="new-password" data-drawer-key placeholder="${item.has_credential ? "已設定，空白則保留" : "貼上後只存在 OPS"}" /></label>
+      <div class="row" style="margin-top:10px">
+        <button type="submit" class="primary">儲存</button>
+      </div>
+      <p class="msg" data-drawer-msg role="status"></p>
+    </form>`;
+  }).join("");
+  host.querySelectorAll("form.drawer-card").forEach((form) => {
+    form.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const id = form.dataset.drawer;
+      const payload = {
+        is_enabled: form.querySelector("[data-drawer-on]")?.checked === true,
+        provider_code: form.querySelector("[data-drawer-code]")?.value,
+        credential: form.querySelector("[data-drawer-key]")?.value || "",
+      };
+      const { res: saveRes, data: saveData } = await api(`/ops/api/providers/${encodeURIComponent(id)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const msg = form.querySelector("[data-drawer-msg]");
+      if (!saveRes.ok) {
+        if (msg) msg.textContent = saveData.error || "儲存失敗";
+        return;
+      }
+      await refreshProviders();
+    });
+  });
+}
+
 async function refreshAll() {
   await Promise.all([
     refreshProducts(),
@@ -1156,6 +1203,7 @@ async function refreshAll() {
     refreshCrm(),
     refreshIssues(),
     refreshDev(),
+    refreshProviders(),
     refreshAudit(),
     refreshTransitions(),
   ]);
@@ -1199,7 +1247,10 @@ $("logoutBtn").addEventListener("click", async () => {
 });
 
 document.querySelectorAll(".tab").forEach((btn) => {
-  btn.addEventListener("click", () => setTab(btn.dataset.tab));
+  btn.addEventListener("click", () => {
+    setTab(btn.dataset.tab);
+    if (btn.dataset.tab === "providers") refreshProviders();
+  });
 });
 
 $("refreshBtn").addEventListener("click", refreshAll);

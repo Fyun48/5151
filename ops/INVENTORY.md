@@ -1,9 +1,9 @@
 # OPS／v3 現況對照表（ChatGPT 審查後）
 
-盤點對象：本分支 `cursor/ops-staging-ed3f`（第 0–5 包）。  
-ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契約、Deploy OPS、產品卡、退出演練、站內 CRM、隔離 staging 與開發發行檢視。**不以那次抽查當現況。**
+盤點對象：本分支 `cursor/ops-budget-ed3f`（第 0–6 包，疊在 staging 上）。  
+ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契約、Deploy OPS、產品卡、退出演練、站內 CRM、隔離 staging、開發發行檢視、OPS 供應商抽屜與 v3 BudgetGuard。**不以那次抽查當現況。**
 
-本次是第 5 包（隔離 staging＋任務／發行 UI），**不是部署指令**，不 Deploy v3，也不擅自跑 Deploy OPS。
+本次是第 6 包（OPS 供應商與 v3 BudgetGuard），**不是部署指令**，不 Deploy v3，也不擅自跑 Deploy OPS。
 
 圖例：`存在`＝可承接；`需改`＝有程式但契約不足；`待做`＝尚未實作。
 
@@ -33,7 +33,8 @@ ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契�
 | 四種退出／移交演練 | 本輪已做 | `ops/src/exitDrill.js`、`ops/public/console.js`、`v3/src/handoffImport.js` | 暫停／解除訂閱／移交／刪複本分開；交接包可在無 OPS 環境還原回饋；outbox 警戒 |
 | 站內 CRM／OPS CRM 檢視 | 本輪已做 | `v3/src/crm.js`、`ops/src/crmReplica.js`、後台 `#crm`、Console CRM 檢視 | 第 4 包；四欄分開；關 CRM ≠ DROP；`crm_sync` 不隨回饋複製自動開啟 |
 | 隔離 staging UI | 本輪已做 | `ops/src/stagingDeploy.js`、`ops/public/console.js` | 開發發行四欄；TTL 到期可重建；共用測試站被覆寫會標示；真容器 provider 仍關 |
-| BudgetGuard 先保留再呼叫 | 待做 | `v3/PLAN-integrations.md` 舊虛擬碼是先 SUM | 第 6 包 |
+| BudgetGuard 先保留再呼叫 | 本輪已做 | `v3/src/budgetGuard.js`、`v3/src/providers/executeWithProvider.js` | 先保留再呼叫；0 元不准花；逾時標 unknown 不釋放 |
+| OPS 供應商抽屜 | 本輪已做 | `ops/src/providerDrawer.js`、Console「供應商」 | 預設關；金鑰只在 OPS；cursor 製作仍標未整合 |
 | pHash 附屬表、同屋源／爬蟲 AI | 待做 | 規劃曾寫 `listings.image_phash` 單欄 | 第 7 包改附屬表 |
 | OPS live 串既有部署 | 待做 | Phase 15 預設關 | 第 8 包 |
 | 共用設計元件可打包 | 待做 | `v3/public/tokens.css` | 第 9 包；runtime 不回抓 OPS |
@@ -56,11 +57,11 @@ ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契�
 | 退出時 AI／部署未決 | 第 3 包 |
 | 站 C 分家還原 | 第 3 包最小演練 |
 | 關 CRM 再開／刪複本再還原 | 第 4／7 包 |
-| 20 元＋並行 10 個 1 元 | 第 6 包必測 |
-| 逾時不釋放已送出額度 | 第 6 包 |
-| 付費爬蟲失敗不誤下架 | 第 6／7 包 |
+| 20 元＋並行 10 個 1 元 | **第 6 包已測**：已結算 18 時最多再核准 2 個 |
+| 逾時不釋放已送出額度 | **第 6 包已測**：`unknown` 不釋放 |
+| 付費爬蟲失敗不誤下架 | 第 6 包 fallback 到直連；下架語意見第 7 包 |
 | pHash 不鏈式誤併 | 第 7 包 |
-| 關付費／AI＝舊路徑 | 第 6／7 包；基準 SHA 寫在該包，不寫死 3.51 |
+| 關付費／AI＝舊路徑 | **第 6 包已測**；基準 `pack6-budget-guard-v1`／`pack6-ops-provider-drawer-v1` |
 | staging 被蓋或 TTL | **第 5 包已做**：`ttl_expired`／`environment_occupied`；已到期可重建相同版本 |
 
 完成後要交真實結果（測試、還原演練、並行預算），不以按鈕存在或 CI 綠燈取代。

@@ -2,6 +2,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { ensureCrmReplicaSchema } from "./crmReplica.js";
+import { ensureProviderDrawerSchema } from "./providerDrawer.js";
 
 // Ops 專用資料庫（與產品 v3 的 v3.db 完全分離）。
 // 只放維運自動化系統的狀態機與稽核；Phase 1 尚無 feedback / AI / coding 相關資料。
@@ -1199,7 +1200,12 @@ export function applyOpsSchema(db) {
   upgradeExitDrill(db);
   upgradeCrmReplica(db);
   upgradeIssueFollowUp(db);
+  upgradeProviderDrawer(db);
   return db;
+}
+
+export function upgradeProviderDrawer(db) {
+  ensureProviderDrawerSchema(db);
 }
 
 export function upgradeIssueFollowUp(db) {

@@ -32,6 +32,8 @@ test("tab panes honor the hidden attribute (display:grid must not override it)",
   assert.match(html, /id="tab-crm"[^>]*hidden/);
   assert.match(html, /id="tab-dev"[^>]*hidden/);
   assert.match(html, /data-tab="dev"/);
+  assert.match(html, /data-tab="providers"/);
+  assert.match(html, /id="tab-providers"[^>]*hidden/);
   assert.match(html, /aria-controls="tab-dev"/);
   assert.match(html, /id="tab-dev"[^>]*role="tabpanel"/);
   assert.match(js, /tabindex="0"/);

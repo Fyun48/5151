@@ -1,5 +1,6 @@
 import { normalizeCommuteMode } from "./geo.js";
 import { googleDirectionsAllowed, isBillableDirectionsStatus, nextWeekdayTaipeiUnix, recordMapsUsage, secondsToMinutes, tripGoogleDirections } from "./mapsBilling.js";
+import { getBoundBudgetDb, getProviderConfig, reserveBudget, settleBudget, releaseBudget, holdBudget } from "./budgetGuard.js";
 
 const GEO_UA = "591-tracker/1.0 (personal rental watcher; acefengyun@gmail.com)";
 
@@ -38,7 +39,7 @@ function routeTrafficSeconds(route) {
   }, 0);
 }
 
-async function googleDirections(fromLat, fromLng, toLat, toLng, { departureTime = 0, mode = "scooter" } = {}) {
+async function googleDirectionsRaw(fromLat, fromLng, toLat, toLng, { departureTime = 0, mode = "scooter" } = {}) {
   if (!googleDirectionsAllowed()) return null;
   const key = String(process.env.GOOGLE_MAPS_API_KEY || "").trim();
   if (!key) return null;
@@ -71,6 +72,37 @@ async function googleDirections(fromLat, fromLng, toLat, toLng, { departureTime 
   const distances = uniqueDistances(routes.map(routeMeters));
   const durationMin = secondsToMinutes(Math.min(...routes.map(routeTrafficSeconds).filter((n) => n > 0)));
   return { distances, durationMin };
+}
+
+async function googleDirections(fromLat, fromLng, toLat, toLng, opts = {}) {
+  if (!googleDirectionsAllowed()) return null;
+  const db = getBoundBudgetDb();
+  if (!db) return googleDirectionsRaw(fromLat, fromLng, toLat, toLng, opts);
+  const cfg = getProviderConfig(db, "distance_matrix");
+  const reserved = reserveBudget(db, {
+    category: "distance_matrix",
+    ceilingMinor: Number(cfg?.ceiling_minor || 0) || Math.round(0.2 * 1_000_000),
+    configId: cfg?.id,
+    now: opts.now || new Date(),
+  });
+  if (!reserved.ok) return null;
+  try {
+    const value = await googleDirectionsRaw(fromLat, fromLng, toLat, toLng, opts);
+    if (value) {
+      settleBudget(db, reserved.reservation, reserved.reservation.ceiling_minor, { category: "distance_matrix", now: opts.now || new Date() });
+    } else {
+      releaseBudget(db, reserved.reservation, { category: "distance_matrix", now: opts.now || new Date() });
+    }
+    return value;
+  } catch (error) {
+    const uncertain = error?.uncertainCharge || error?.name === "AbortError" || error?.name === "TimeoutError"
+      || String(error?.message || "").toLowerCase().includes("timeout");
+    if (uncertain) holdBudget(db, reserved.reservation, { category: "distance_matrix", note: error?.message || "timeout" });
+    else {
+      try { releaseBudget(db, reserved.reservation, { category: "distance_matrix" }); } catch { /* already held */ }
+    }
+    return null;
+  }
 }
 
 async function waitRouteSlot(minGapMs = 350) {
