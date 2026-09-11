@@ -7,8 +7,8 @@ import { parseHbDetailHtml } from "../src/hbhousing.js";
 import { parseHfDetailHtml } from "../src/housefun.js";
 import { kitFromActiveNames } from "../src/listingKit.js";
 import { parseRakuyaDetailHtml } from "../src/rakuya.js";
-import { parseSinyiDetailHtml } from "../src/sinyi.js";
-import { fetchSourceKit, isSourceKitSource, resolveSourceKitUrl } from "../src/sourceKit.js";
+import { parseSinyiDetailExtras, parseSinyiDetailHtml } from "../src/sinyi.js";
+import { fetchSourceKit, isSourceKitSource, looksLikeBlockedKitPage, resolveSourceKitUrl } from "../src/sourceKit.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const readFix = (name) => readFileSync(path.join(dir, "fixtures", name), "utf8");
@@ -28,6 +28,26 @@ test("住商明細讀 NUXT 家俱、瓦斯與陽台", () => {
   assert.ok(kit.furnish_items.includes("洗衣機"));
   assert.ok(kit.furnish_items.includes("沙發"));
   assert.equal(kit.furnish_items.includes("陽台"), false);
+});
+
+test("信義 C361629 真實內頁讀已勾冷氣熱水器瓦斯，cdnjs 不當擋", async () => {
+  const html = readFix("sinyi-c361629-kit.html");
+  assert.equal(looksLikeBlockedKitPage(html, 200), null);
+  const kit = parseSinyiDetailHtml(html);
+  assert.equal(kit.has_natural_gas, true);
+  assert.ok(kit.furnish_items.includes("冷氣"));
+  assert.ok(kit.furnish_items.includes("熱水器"));
+  assert.equal(kit.furnish_items.includes("沙發"), false);
+  assert.equal(kit.furnish_items.includes("電視"), false);
+  assert.equal(kit.furnish_items.includes("冰箱"), false);
+  const extras = parseSinyiDetailExtras(html);
+  assert.equal(extras.extra_fees[0]?.name, "管理費");
+  const fetched = await fetchSourceKit(
+    { source: "sinyi", url: "https://www.sinyi.com.tw/rent/houseno/C361629" },
+    { fetchText: async () => ({ status: 200, text: html }) },
+  );
+  assert.equal(fetched.has_natural_gas, true);
+  assert.ok(fetched.furnish_items.includes("冷氣"));
 });
 
 test("信義明細只採已勾傢俱，未勾電視冰箱不寫", () => {
@@ -53,6 +73,15 @@ test("樂屋明細讀設備瓦斯陽台", () => {
   assert.equal(detail.has_balcony, true);
   assert.ok(detail.furnish_items.includes("洗衣機"));
   assert.ok(detail.furnish_items.includes("冷氣"));
+});
+
+test("challenge pages stay blocked; cdnjs.cloudflare.com alone does not", () => {
+  assert.equal(
+    looksLikeBlockedKitPage("<html><script src=\"https://cdnjs.cloudflare.com/ajax/libs/x.js\"></script></html>", 200),
+    null,
+  );
+  const blocked = looksLikeBlockedKitPage("<html>Just a moment... cf-browser-verification</html>", 200);
+  assert.equal(blocked?.code, "FETCH_BLOCKED");
 });
 
 test("empty source pages do not count as fetched kit", () => {

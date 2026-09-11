@@ -45,7 +45,11 @@ export function resolveSourceKitUrl(listing, fallbackUrl = "") {
 export function looksLikeBlockedKitPage(html, status) {
   const body = String(html || "");
   if (Number(status) === 429) return { code: "RATE_LIMITED", message: "來源要求降低抓取頻率" };
-  if (/just a moment|cf-browser-verification|cloudflare/i.test(body)) {
+  // 只認挑戰頁，不要把 cdnjs.cloudflare.com 這種腳本 CDN 當成被擋。
+  if (
+    /just a moment/i.test(body)
+    || /cf-browser-verification|cf-challenge-running|cdn-cgi\/challenge-platform/i.test(body)
+  ) {
     return { code: "FETCH_BLOCKED", message: "來源被 Cloudflare 或驗證擋住，不繞過" };
   }
   return null;

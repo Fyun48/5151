@@ -48,7 +48,7 @@ export function interpretRakuyaResponse({ status, text } = {}) {
   if (Number(status) === 429) {
     return { ok: false, code: "RATE_LIMITED", retryable: true, message: "樂屋網要求降低抓取頻率" };
   }
-  if (looksLikeCaptchaOrLogin(body) || /just a moment|cf-browser-verification|cloudflare/i.test(body)) {
+  if (looksLikeCaptchaOrLogin(body) || /just a moment|cf-browser-verification|cf-challenge-running|cdn-cgi\/challenge-platform/i.test(body)) {
     return { ok: false, code: "FETCH_BLOCKED", retryable: false, message: "樂屋網被 Cloudflare 或驗證擋住，不繞過" };
   }
   if (looksLikeUnavailable(body, status) || Number(status) === 404) {

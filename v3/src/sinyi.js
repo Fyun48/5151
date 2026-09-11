@@ -297,17 +297,25 @@ export function parseSinyiDetailHtml(html) {
   const blocks = body.matchAll(/<ul class="furniture">([\s\S]*?)<\/ul>/gi);
   for (const block of blocks) {
     for (const li of block[1].matchAll(/<li>([\s\S]*?)<\/li>/gi)) {
-      const inp = li[1].match(/<input[^>]+class="hook-red"[^>]*>/);
-      if (!inp || !/\schecked/.test(inp[0])) continue;
+      const inp = li[1].match(/<input[^>]+class="hook-red"[^>]*>/i);
+      if (!inp || !/\bchecked\b/i.test(inp[0])) continue;
       const label = li[1].match(/<label[^>]*>([\s\S]*?)<\/label>/);
       const name = String(label?.[1] || "")
-        .replace(/<span[^>]*>/g, "")
-        .replace(/<\/span>/g, "")
+        .replace(/<[^>]+>/g, "")
         .replace(/\s+/g, "");
       if (name) names.push(name);
     }
   }
   return kitFromActiveNames(names);
+}
+
+export function parseSinyiDetailExtras(html) {
+  const body = String(html || "");
+  const fees = [];
+  if (/管理費/.test(body) && /已含租金內|含[：:]\s*管理費/.test(body)) {
+    fees.push({ name: "管理費", value: "已含租金內", key: "contain", amount: 0, included: true });
+  }
+  return { extra_fees: fees };
 }
 
 export async function fetchSinyiDetailKit(listing, options = {}) {
@@ -316,5 +324,8 @@ export async function fetchSinyiDetailKit(listing, options = {}) {
     ...options,
     fallbackUrl: sinyiDetailUrl(listing?.source_id),
   });
-  return parseSinyiDetailHtml(page.text);
+  return {
+    ...parseSinyiDetailHtml(page.text),
+    ...parseSinyiDetailExtras(page.text),
+  };
 }
