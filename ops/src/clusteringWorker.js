@@ -10,8 +10,8 @@ import { storeEmbedding, autoClusterFeedback, feedbackIssue, clusteringConfig, r
 const DEFAULT_TIMEOUT_MS = 20000;
 const DEFAULT_BATCH = 20;
 
-export function clusteringConfigFromEnv(env = process.env) {
-  const provider = String(env.EMBEDDING_PROVIDER || "").toLowerCase();
+export function clusteringConfigFromEnv(env = process.env, opts = {}) {
+  const provider = String(opts.kind || env.EMBEDDING_PROVIDER || "").toLowerCase();
   return {
     enabled: provider === "local" || provider === "stub",
     intervalMs: Number(env.CLUSTERING_INTERVAL_MS || 20000),

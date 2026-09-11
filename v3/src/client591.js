@@ -10,6 +10,7 @@ import {
   parseCommunityPayload,
   preferCommunityLocation,
 } from "./location.js";
+import { fetchHtmlDirect, fetchListingPage } from "./providers/scraping.js";
 
 const LIST_URL = "https://bff-house.591.com.tw/v3/web/rent/list";
 export const LIST_PAGE_SIZE = 30;
@@ -338,16 +339,15 @@ export async function fetchCommunityLocation(communityId) {
 }
 
 async function fetchHtml(url) {
-  const res = await fetch(url, {
-    headers: {
-      "User-Agent": USER_AGENT,
-      Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
-      Referer: "https://rent.591.com.tw/",
-    },
-    signal: AbortSignal.timeout(8000),
+  const headers = {
+    "User-Agent": USER_AGENT,
+    Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+    Referer: "https://rent.591.com.tw/",
+  };
+  return fetchListingPage(url, {
+    headers,
+    fallback: () => fetchHtmlDirect(url, { headers }),
   });
-  if (!res.ok) return "";
-  return res.text();
 }
 
 export async function fetchCommunityPageLocation(communityId) {

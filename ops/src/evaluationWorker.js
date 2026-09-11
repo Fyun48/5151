@@ -15,8 +15,8 @@ const DEFAULT_BATCH = 20;
 const DEFAULT_CLAIM = 5;
 const DEFAULT_CONCURRENCY = 2;
 
-export function evaluationWorkerConfigFromEnv(env = process.env) {
-  const provider = String(env.EVALUATION_PROVIDER || "").toLowerCase();
+export function evaluationWorkerConfigFromEnv(env = process.env, opts = {}) {
+  const provider = String(opts.kind || env.EVALUATION_PROVIDER || "").toLowerCase();
   return {
     enabled: provider === "local" || provider === "stub",
     intervalMs: Number(env.EVAL_INTERVAL_MS || 20000),

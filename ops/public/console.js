@@ -1148,6 +1148,74 @@ async function openCodingTask(taskId) {
   }
 }
 
+const DRAWER_CODE_LABEL = {
+  none: "不使用",
+  stub: "測試用 stub",
+  local: "本機／Ollama",
+  openai: "OpenAI 相容",
+  anthropic: "Anthropic",
+  gemini: "Gemini",
+  cursor: "Cursor（尚未整合）",
+};
+
+async function refreshProviders() {
+  const host = $("providerDrawers");
+  if (!host) return;
+  host.setAttribute("aria-busy", "true");
+  if (!host.querySelector(".drawer-card")) host.textContent = "載入中…";
+  const { res, data } = await api("/ops/api/providers");
+  if (!res.ok) {
+    host.innerHTML = `<p class="msg err">${esc(data.error || "載入供應商失敗")}</p><button type="button" class="ghost" id="providerRetry">重試</button>`;
+    $("providerRetry")?.addEventListener("click", refreshProviders);
+    host.setAttribute("aria-busy", "false");
+    setStatus($("providerMsg"), data.error || "載入供應商失敗", "err");
+    return;
+  }
+  setStatus($("providerMsg"), data.legal || "", "");
+  host.innerHTML = (data.items || []).map((item) => {
+    const options = (item.codes || []).map((code) => `<option value="${esc(code)}" ${code === item.provider_code ? "selected" : ""}>${esc(DRAWER_CODE_LABEL[code] || code)}</option>`).join("");
+    return `<form class="drawer-card" data-drawer="${esc(item.id)}">
+      <h3>${esc(item.label)}</h3>
+      <p class="hint">環境變數 ${esc(item.env_key)}＝${esc(DRAWER_CODE_LABEL[item.env_kind] || item.env_kind)}；目前決議 ${esc(DRAWER_CODE_LABEL[item.resolved_kind] || item.resolved_kind)}。${item.has_credential ? "金鑰已設定。" : "尚未貼金鑰。"}</p>
+      <label class="inline"><input type="checkbox" data-drawer-on ${item.is_enabled ? "checked" : ""} /> 開啟此抽屜</label>
+      <label>供應商 <select data-drawer-code>${options}</select></label>
+      <label>金鑰或授權（空白則保留）<input type="password" autocomplete="new-password" data-drawer-key placeholder="${item.has_credential ? "已設定，空白則保留" : "貼上後只存在 OPS"}" /></label>
+      <div class="row" style="margin-top:10px">
+        <button type="submit" class="primary">儲存</button>
+      </div>
+      <p class="msg" data-drawer-msg role="status"></p>
+    </form>`;
+  }).join("");
+  host.setAttribute("aria-busy", "false");
+  host.querySelectorAll("form.drawer-card").forEach((form) => {
+    form.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const id = form.dataset.drawer;
+      const payload = {
+        is_enabled: form.querySelector("[data-drawer-on]")?.checked === true,
+        provider_code: form.querySelector("[data-drawer-code]")?.value,
+        credential: form.querySelector("[data-drawer-key]")?.value || "",
+      };
+      const msg = form.querySelector("[data-drawer-msg]");
+      const btn = form.querySelector("button[type=submit]");
+      if (msg) { msg.textContent = "儲存中…"; msg.className = "msg"; }
+      if (btn) btn.disabled = true;
+      const { res: saveRes, data: saveData } = await api(`/ops/api/providers/${encodeURIComponent(id)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!saveRes.ok) {
+        if (msg) { msg.textContent = saveData.error || "儲存失敗"; msg.className = "msg err"; }
+        if (btn) btn.disabled = false;
+        return;
+      }
+      await refreshProviders();
+      setStatus($("providerMsg"), `「${id}」已儲存。付費供應商需重啟 OPS 才會啟動 worker。`, "ok");
+    });
+  });
+}
+
 async function refreshAll() {
   await Promise.all([
     refreshProducts(),
@@ -1156,6 +1224,7 @@ async function refreshAll() {
     refreshCrm(),
     refreshIssues(),
     refreshDev(),
+    refreshProviders(),
     refreshAudit(),
     refreshTransitions(),
   ]);
@@ -1199,7 +1268,10 @@ $("logoutBtn").addEventListener("click", async () => {
 });
 
 document.querySelectorAll(".tab").forEach((btn) => {
-  btn.addEventListener("click", () => setTab(btn.dataset.tab));
+  btn.addEventListener("click", () => {
+    setTab(btn.dataset.tab);
+    if (btn.dataset.tab === "providers") refreshProviders();
+  });
 });
 
 $("refreshBtn").addEventListener("click", refreshAll);

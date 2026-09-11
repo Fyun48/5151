@@ -78,8 +78,8 @@ function stubUsage() {
 }
 
 // 依環境變數選 provider（與 AI 分析分開設定）。未設定 → Null（worker 略過、不消耗 attempts）。
-export function makeEvaluationProvider(env = process.env) {
-  const kind = String(env.EVALUATION_PROVIDER || "").toLowerCase();
+export function makeEvaluationProvider(env = process.env, opts = {}) {
+  const kind = String(opts.kind || env.EVALUATION_PROVIDER || "").toLowerCase();
   if (kind === "stub") return makeStubEvaluationProvider();
   if (kind === "local") return makeLocalProvider(env);
   return makeNullProvider();

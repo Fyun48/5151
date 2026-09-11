@@ -17,8 +17,8 @@ const DEFAULT_CONCURRENCY = 2;
 
 const ELIGIBLE_STATES = new Set([null, undefined, "COLLECTING", "EVALUATING", "PROPOSAL_CHANGES_REQUESTED"]);
 
-export function proposalWorkerConfigFromEnv(env = process.env) {
-  const provider = String(env.PROPOSAL_PROVIDER || "").toLowerCase();
+export function proposalWorkerConfigFromEnv(env = process.env, opts = {}) {
+  const provider = String(opts.kind || env.PROPOSAL_PROVIDER || "").toLowerCase();
   return {
     enabled: provider === "local" || provider === "stub",
     intervalMs: Number(env.PROPOSAL_INTERVAL_MS || 20000),

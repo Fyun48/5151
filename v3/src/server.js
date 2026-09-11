@@ -70,6 +70,10 @@ import {
   publicBroadcastsSettings,
   getAdminMapsSettings,
   saveAdminMapsSettings,
+  getAdminProviderSettings,
+  saveAdminProviderSettings,
+  saveAdminSiteBudget,
+  testAdminProvider,
   settingsForGeoBackfill,
   getMemberMailSettings,
   getMemberSmtp,
@@ -1470,6 +1474,38 @@ app.post("/api/admin/documents/:id/new-version", requireAdminApi, (req, res) => 
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
+});
+
+app.get("/api/admin/providers", requireAdminApi, (_req, res) => {
+  res.json(getAdminProviderSettings());
+});
+
+app.put("/api/admin/providers/site-budget", requireAdminApi, (req, res) => {
+  try {
+    res.json({ ok: true, ...saveAdminSiteBudget(req.body || {}), overview: getAdminProviderSettings() });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.put("/api/admin/providers", requireAdminApi, (req, res) => {
+  try {
+    res.json({ ok: true, item: saveAdminProviderSettings(req.body || {}), overview: getAdminProviderSettings() });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/admin/providers/test", requireAdminApi, async (req, res) => {
+  try {
+    res.json(await testAdminProvider(req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/admin/providers/usage", requireAdminApi, (_req, res) => {
+  res.json(getAdminProviderSettings());
 });
 
 app.get("/api/admin/maps", requireAdminApi, (_req, res) => {

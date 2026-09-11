@@ -40,9 +40,10 @@ export function makeLocalQaReviewProvider(env = process.env) {
   return unavailable("local", { status: "opt_in_runtime_only", required: ["Local reviewer execution is opt-in at runtime and not exercised by tests/CI."] });
 }
 
-export function makeQaReviewProvider(env = process.env) {
-  if (env.QA_REVIEWER !== "1" && env.QA_REVIEWER !== "on") return unavailable("none", { status: "disabled", required: ["QA optional AI reviewer disabled; deterministic QA still runs."] });
-  const kind = String(env.QA_REVIEW_PROVIDER || "").toLowerCase();
+export function makeQaReviewProvider(env = process.env, opts = {}) {
+  const kind = String(opts.kind || env.QA_REVIEW_PROVIDER || "").toLowerCase();
+  if (!kind && env.QA_REVIEWER !== "1" && env.QA_REVIEWER !== "on") return unavailable("none", { status: "disabled", required: ["QA optional AI reviewer disabled; deterministic QA still runs."] });
+  if (!kind) return unavailable("none", { status: "disabled", required: ["QA optional AI reviewer disabled; deterministic QA still runs."] });
   if (kind === "stub") return makeStubQaReviewProvider({ model: env.QA_REVIEW_MODEL });
   if (kind === "cursor") return makeCursorQaReviewProvider();
   if (kind === "local") return makeLocalQaReviewProvider(env);

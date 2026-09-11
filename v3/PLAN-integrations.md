@@ -162,10 +162,10 @@ API 掛在現有 `requireAdminApi` 下，例如 `/api/admin/providers`、`/api/a
 
 ## 6. 實作切片（仍只做 v3）
 
-1. Migration + 讀寫設定（金鑰加密、0 元＝不呼叫付費）。
-2. `executeWithProvider` + **保留／結算／unknown 對帳** + 並行超支測試（20 元已結算 18、同時 10 個上界 1 元 → 最多再核准 2 個）。
-3. 只包 `client591.fetchHtml` 一處當樣板，證明 fallback。
-4. 距離納入守門（接到 `mapsBilling`，不要第二套 Google 帳）。
+1. Migration + 讀寫設定（金鑰加密、0 元＝不呼叫付費）。**第 6 包已做。**
+2. `executeWithProvider` + **保留／結算／unknown 對帳** + 並行超支測試（20 元已結算 18、同時 10 個上界 1 元 → 最多再核准 2 個）。**第 6 包已做。**
+3. 只包 `client591.fetchHtml` 一處當樣板，證明 fallback。**第 6 包已做。**
+4. 距離納入守門（接到 `mapsBilling`，不要第二套 Google 帳）。**第 6 包已做。**
 5. pHash 欄位與比對加分（預設關或只算不阻擋）。
 6. LLM 同源與爬蟲洞察兩個獨立開關。
 7. 後台卡片與用量列表。

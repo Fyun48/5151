@@ -55,8 +55,8 @@ function stubUsage() {
   return { input_tokens: null, output_tokens: null, latency_ms: 1, estimated_cost: null };
 }
 
-export function makeProposalProvider(env = process.env) {
-  const kind = String(env.PROPOSAL_PROVIDER || "").toLowerCase();
+export function makeProposalProvider(env = process.env, opts = {}) {
+  const kind = String(opts.kind || env.PROPOSAL_PROVIDER || "").toLowerCase();
   if (kind === "stub") return makeStubProposalProvider();
   if (kind === "local") return makeLocalProvider(env);
   return makeNullProvider();

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex,nofollow" />
   <title>Ops Console · 吉比租房維運</title>
-  <link rel="stylesheet" href="/console.css?v=20260911-stg7" />
+  <link rel="stylesheet" href="/console.css?v=20260911-pkg6b" />
 </head>
 <body>
   <header class="topbar">
@@ -50,6 +50,7 @@
         <button type="button" class="tab" data-tab="products" role="tab" aria-selected="false">產品</button>
         <button type="button" class="tab" data-tab="issues" role="tab" aria-selected="false">議題與投票</button>
         <button type="button" class="tab" data-tab="dev" role="tab" aria-selected="false" aria-controls="tab-dev" id="tabbtn-dev">開發發行</button>
+        <button type="button" class="tab" data-tab="providers" role="tab" aria-selected="false" aria-controls="tab-providers" id="tabbtn-providers">供應商</button>
         <button type="button" class="tab" data-tab="audit" role="tab" aria-selected="false">稽核</button>
       </nav>
 
@@ -209,6 +210,15 @@
         </section>
       </section>
 
+      <section id="tab-providers" class="tabpane" hidden role="tabpanel" aria-labelledby="tabbtn-providers">
+        <section class="card">
+          <h2>供應商抽屜</h2>
+          <p class="hint">分析、分群、評估、提案、製作、審查各自獨立。預設全關。金鑰只存在 OPS，不進 v3。關閉＝該關停住，前面的回饋照常進。製作端不能 push master、不能自己合 PR。付費供應商需重啟 OPS 行程才會啟動 worker。</p>
+          <p class="msg" id="providerMsg" role="status"></p>
+          <div id="providerDrawers" class="drawer-grid"></div>
+        </section>
+      </section>
+
       <section id="tab-audit" class="tabpane" hidden>
         <section class="card">
           <div class="row">
@@ -251,6 +261,6 @@
     </div>
   </div>
 
-  <script src="/console.js?v=20260911-stg7"></script>
+  <script src="/console.js?v=20260911-pkg6b"></script>
 </body>
 </html>

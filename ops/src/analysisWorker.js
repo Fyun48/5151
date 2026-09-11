@@ -13,8 +13,8 @@ const DEFAULT_TIMEOUT_MS = 20000;
 const DEFAULT_BATCH = 10;
 const DEFAULT_CONCURRENCY = 2;
 
-export function analysisConfigFromEnv(env = process.env) {
-  const provider = String(env.AI_PROVIDER || "").toLowerCase();
+export function analysisConfigFromEnv(env = process.env, opts = {}) {
+  const provider = String(opts.kind || env.AI_PROVIDER || "").toLowerCase();
   return {
     enabled: provider === "local" || provider === "stub",
     intervalMs: Number(env.AI_ANALYSIS_INTERVAL_MS || 15000),
