@@ -256,7 +256,7 @@ test("failed route results leave computing and still patch the card", () => {
   assert.equal(out.located, 0);
   assert.equal(out.km, null);
   assert.equal(out.state, "failed");
-  assert.equal(out.label, "無法計算");
+  assert.equal(out.label, "尚未取得足夠位置資料");
 });
 
 test("index keeps local commute patch hooks and reconnect snapshot", () => {
@@ -273,8 +273,10 @@ test("index keeps local commute patch hooks and reconnect snapshot", () => {
   assert.match(html, /visibilitychange/);
   assert.match(html, /等待定位/);
   assert.match(html, /等待計算/);
-  assert.match(html, /稍後重試/);
-  assert.match(html, /無法計算/);
+  assert.match(html, /定位服務暫時忙碌，稍後重試/);
+  assert.match(html, /尚未取得足夠位置資料/);
+  assert.match(html, /notifyIncludeStreetEstimate/);
+  assert.match(html, /依路段位置估算/);
   assert.match(html, /汽車路網估算/);
   assert.match(html, /不是專用機車道路/);
   assert.doesNotMatch(html, /路線計算中/);

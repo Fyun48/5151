@@ -19,8 +19,8 @@ test("commute states map to the on-screen labels", () => {
   assert.equal(commuteStateLabel(COMMUTE_STATES.WAIT_GEO), "等待定位");
   assert.equal(commuteStateLabel(COMMUTE_STATES.WAIT_ROUTE), "等待計算");
   assert.equal(commuteStateLabel(COMMUTE_STATES.COMPUTING), "計算中");
-  assert.equal(commuteStateLabel(COMMUTE_STATES.RETRY), "稍後重試");
-  assert.equal(commuteStateLabel(COMMUTE_STATES.FAILED), "無法計算");
+  assert.equal(commuteStateLabel(COMMUTE_STATES.RETRY), "定位服務暫時忙碌，稍後重試");
+  assert.equal(commuteStateLabel(COMMUTE_STATES.FAILED), "尚未取得足夠位置資料");
   assert.equal(resolveCommuteState({ commuteOn: true, hasCoords: false }), "wait_geo");
   assert.equal(resolveCommuteState({ commuteOn: true, hasCoords: true, commuteKm: 4.2 }), "done");
   assert.equal(resolveCommuteState({ commuteOn: true, hasCoords: true, job: { job_state: "failed" } }), "failed");

@@ -51,6 +51,15 @@ import {
   notifySnapshotFromProfile,
 } from "./searchProfiles.js";
 import { addressVersion, ensureGeoCacheSchema, inferGeoQuality } from "./geoQueue.js";
+import {
+  canUseForRoadDistance,
+  commutePrecisionText,
+  effectiveNotifyLocationClass,
+  eventFullyHandled,
+  kmListToMinMeters,
+  resolveLocationClass,
+  shouldAcceptGeoUpdate,
+} from "./geoPrecision.js";
 import { listingCompareCost, passesPriceFilter } from "./listingCost.js";
 import {
   costChangePayload,
@@ -444,6 +453,33 @@ try {
 } catch {
   // already migrated
 }
+try {
+  db.exec("ALTER TABLE route_cache ADD COLUMN min_m INTEGER");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE route_cache ADD COLUMN location_class TEXT");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE route_cache ADD COLUMN route_version INTEGER");
+} catch {
+  // already migrated
+}
+for (const sql of [
+  "ALTER TABLE listings ADD COLUMN location_class TEXT",
+  "ALTER TABLE listings ADD COLUMN address_norm TEXT",
+  "ALTER TABLE listings ADD COLUMN address_raw TEXT",
+  "ALTER TABLE listings ADD COLUMN coord_version INTEGER",
+  "ALTER TABLE listings ADD COLUMN geo_provider TEXT",
+  "ALTER TABLE listings ADD COLUMN geo_approx INTEGER",
+  "ALTER TABLE listings ADD COLUMN geo_error TEXT",
+  "ALTER TABLE listings ADD COLUMN geo_job_state TEXT",
+]) {
+  try { db.exec(sql); } catch { /* already migrated */ }
+}
 db.exec(`
   CREATE TABLE IF NOT EXISTS route_jobs (
     job_key TEXT PRIMARY KEY,
@@ -693,6 +729,7 @@ ensureUserSameHouseSchema(db);
 ensureListingGroupSchema(db);
 ensureSearchProfileSchema(db);
 ensureGeoCacheSchema(db);
+try { markLegacyNotifiedUnknown(); } catch { /* user_events columns arrive with personal schema */ }
 try {
   const already = db.prepare("SELECT value FROM settings WHERE key = 'profileOnboardedBackfill'").get();
   if (!already) {
@@ -1839,6 +1876,8 @@ const DEFAULTS = {
   showMrt: true,
   workLat: null,
   workLng: null,
+  workLocationClass: "",
+  notifyIncludeStreetEstimate: false,
   settingProfiles: [],
   activeProfileId: "",
   watchDistricts: [],
@@ -2134,9 +2173,11 @@ function decorateListingLite(row, settings, userId) {
   if (!Array.isArray(row.route_kms) && !Number.isFinite(Number(row.route_km))) {
     row = applyCachedCoords(row, settings);
   }
-  const commute = Number.isFinite(Number(row.route_km)) ? Number(row.route_km) : null;
+  const locationClass = effectiveNotifyLocationClass(row, settings);
+  const showRoadKm = canUseForRoadDistance(locationClass);
+  const commute = showRoadKm && Number.isFinite(Number(row.route_km)) ? Number(row.route_km) : null;
   const commuteKm = commute == null ? null : Math.round(commute * 10) / 10;
-  const returnKm = Number.isFinite(Number(row.route_return_km)) ? Math.round(Number(row.route_return_km) * 10) / 10 : null;
+  const returnKm = showRoadKm && Number.isFinite(Number(row.route_return_km)) ? Math.round(Number(row.route_return_km) * 10) / 10 : null;
   const extraFees = Array.isArray(row.extra_fees) ? row.extra_fees : parseJson(row.extra_fees, []);
   const source = String(row.source || "591") || "591";
   const uid = Number(userId) || 0;
@@ -2144,11 +2185,13 @@ function decorateListingLite(row, settings, userId) {
   const commuteOn = Number(settings.commuteKm) > 0 && hasWorkPoint(settings);
   const hasCoords = isTrustedGeoSource(row.geo_source)
     && Number.isFinite(Number(row.lat))
-    && Number.isFinite(Number(row.lng));
+    && Number.isFinite(Number(row.lng))
+    && showRoadKm;
   const job = commuteOn && commuteKm == null
     ? getRouteJob(makeRouteJobKey(row.post_id, "to_work", "distance", settings.commuteMode, settings.workLat, settings.workLng))
     : null;
   const commuteState = resolveCommuteState({ commuteOn, hasCoords, commuteKm, job });
+  const routeMinM = showRoadKm ? kmListToMinMeters(row.route_kms, row.route_min_m ?? row.min_m) : null;
   const fit = listingFitFields({ ...row, extra_fees: extraFees, commute_km: commuteKm }, settings);
   const out = {
     ...row,
@@ -2161,6 +2204,11 @@ function decorateListingLite(row, settings, userId) {
     commute_mode: normalizeCommuteMode(settings.commuteMode),
     commute_hint: commuteOn ? commuteNetworkHint(settings.commuteMode) : "",
     commute_routes: Array.isArray(row.route_kms) ? row.route_kms : [],
+    location_class: locationClass,
+    commute_precision: commuteOn ? commutePrecisionText({ ...row, location_class: locationClass, commute_state: commuteState }, commuteKm) : "",
+    commute_approx: locationClass === "street" || settings.workLocationClass === "street",
+    route_min_m: routeMinM,
+    work_location_class: settings.workLocationClass || "",
     commute_min_am: Number.isFinite(Number(row.rush_am_min)) && Number(row.rush_am_min) > 0 ? Math.round(Number(row.rush_am_min)) : null,
     commute_min_pm: Number.isFinite(Number(row.rush_pm_min)) && Number(row.rush_pm_min) > 0 ? Math.round(Number(row.rush_pm_min)) : null,
     district: districtNameFromListing(row),
@@ -3030,6 +3078,16 @@ export function setListingDetail(postId, { extraFees, contact, fetched = 1, lat,
     const saved = getListing(postId);
     if (saved) enqueueListingEvent(saved, { type: "fee_update", detail, created_at: stamp });
   }
+  if (applyCoords) {
+    applyListingLocation(postId, {
+      lat: latNum,
+      lng: lngNum,
+      geo_source: source,
+      location_class: source === "community" ? "community" : "source",
+      coord_version: Date.now(),
+      geo_job_state: "done",
+    });
+  }
   return getListing(postId);
 }
 
@@ -3590,6 +3648,7 @@ export function applyCachedCoords(row, settings) {
         ...row,
         route_kms: toWork?.distances || row.route_kms,
         route_km: toWork?.min_km ?? row.route_km,
+        route_min_m: toWork?.min_m ?? row.route_min_m,
         route_return_km: fromWork?.min_km ?? row.route_return_km,
         rush_am_min: toWork?.rush_am_min ?? fromWork?.rush_am_min ?? row.rush_am_min,
         rush_pm_min: toWork?.rush_pm_min ?? fromWork?.rush_pm_min ?? row.rush_pm_min,
@@ -3613,6 +3672,7 @@ function parseRouteCacheRow(row) {
   return {
     distances: distances.map(Number).filter(Number.isFinite),
     min_km: Number(row.min_km),
+    min_m: Number.isFinite(Number(row.min_m)) ? Number(row.min_m) : kmListToMinMeters(distances, null),
     rush_am_min: Number.isFinite(rushAm) ? rushAm : null,
     rush_pm_min: Number.isFinite(rushPm) ? rushPm : null,
     rush_updated_at: row.rush_updated_at || "",
@@ -3637,7 +3697,7 @@ export function getCachedRoute(fromLat, fromLng, toLat, toLng, mode = "scooter",
   if (routeCacheMemo.has(key)) return routeCacheMemo.get(key);
   if (!routeByKeyStmt) {
     routeByKeyStmt = db.prepare(
-      "SELECT distances, min_km, rush_am_min, rush_pm_min, rush_updated_at FROM route_cache WHERE route_key = ?",
+      "SELECT distances, min_km, min_m, rush_am_min, rush_pm_min, rush_updated_at FROM route_cache WHERE route_key = ?",
     );
   }
   const parsed = parseRouteCacheRow(routeByKeyStmt.get(key));
@@ -3743,37 +3803,41 @@ export function setCachedRoute(fromLat, fromLng, toLat, toLng, distances, rush =
   if (!list.length) return;
   const key = makeRouteKey(fromLat, fromLng, toLat, toLng, mode, direction);
   const minKm = Math.min(...list);
+  const minM = kmListToMinMeters(list, null);
   const stamp = new Date().toISOString();
   const rushAm = Number(rush?.rushAm ?? rush?.am);
   const rushPm = Number(rush?.rushPm ?? rush?.pm);
   const hasRush = Number.isFinite(rushAm) && Number.isFinite(rushPm);
   if (hasRush) {
     db.prepare(
-      `INSERT INTO route_cache(route_key, distances, min_km, updated_at, rush_am_min, rush_pm_min, rush_updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO route_cache(route_key, distances, min_km, min_m, updated_at, rush_am_min, rush_pm_min, rush_updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(route_key) DO UPDATE SET
          distances = excluded.distances,
          min_km = excluded.min_km,
+         min_m = excluded.min_m,
          updated_at = excluded.updated_at,
          rush_am_min = excluded.rush_am_min,
          rush_pm_min = excluded.rush_pm_min,
          rush_updated_at = excluded.rush_updated_at`,
-    ).run(key, JSON.stringify(list), minKm, stamp, rushAm, rushPm, stamp);
+    ).run(key, JSON.stringify(list), minKm, minM, stamp, rushAm, rushPm, stamp);
   } else {
     db.prepare(
-      `INSERT INTO route_cache(route_key, distances, min_km, updated_at)
-       VALUES (?, ?, ?, ?)
+      `INSERT INTO route_cache(route_key, distances, min_km, min_m, updated_at)
+       VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(route_key) DO UPDATE SET
          distances = excluded.distances,
          min_km = excluded.min_km,
+         min_m = excluded.min_m,
          updated_at = excluded.updated_at`,
-    ).run(key, JSON.stringify(list), minKm, stamp);
+    ).run(key, JSON.stringify(list), minKm, minM, stamp);
   }
   if (routeCacheMemo && Date.now() - routeCacheMemoAt < ROUTE_CACHE_MEMO_MS) {
     const prev = routeCacheMemo.get(key);
     routeCacheMemo.set(key, {
       distances: list,
       min_km: minKm,
+      min_m: minM,
       rush_am_min: hasRush ? rushAm : prev?.rush_am_min ?? null,
       rush_pm_min: hasRush ? rushPm : prev?.rush_pm_min ?? null,
       rush_updated_at: hasRush ? stamp : prev?.rush_updated_at || "",
@@ -3986,6 +4050,10 @@ export function listingCommutePatch(postId, userId, settingsOverride) {
     commute_routes: lite.commute_routes,
     commute_min_am: lite.commute_min_am,
     commute_min_pm: lite.commute_min_pm,
+    location_class: lite.location_class,
+    commute_precision: lite.commute_precision,
+    commute_approx: lite.commute_approx,
+    route_min_m: lite.route_min_m,
     mrt_station: lite.mrt_station,
     mrt_walk_km: lite.mrt_walk_km,
     fingerprint: commuteSettingsFingerprint(settings),
@@ -4014,20 +4082,39 @@ export function addressesMissingGeo() {
     .all();
 }
 
-export function updateListingsGeoByAddress(address, lat, lng) {
-  setCachedGeo(address, lat, lng);
-  const key = String(address || "").replace(/\s+/g, "").replace(/-/g, "");
-  if (!key || !Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return;
-  db.prepare(
-    `UPDATE listings
-     SET lat = ?,
-         lng = ?,
-         geo_source = CASE
-           WHEN ${sqlTrustedGeoSource()} THEN geo_source
-           ELSE 'geocode'
-         END
-     WHERE replace(replace(IFNULL(address, ''), ' ', ''), '-', '') = ?`,
-  ).run(Number(lat), Number(lng), key);
+export function updateListingsGeoByAddress(address, lat, lng, meta = {}) {
+  setCachedGeo(address, lat, lng, meta);
+  const key = String(address || "").replace(/\s+/g, "");
+  if (!key || !Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return 0;
+  let rows = [];
+  try {
+    rows = db.prepare(
+      `SELECT post_id, address, lat, lng, geo_source, location_class, coord_version
+       FROM listings
+       WHERE replace(IFNULL(address, ''), ' ', '') = ?
+          OR replace(IFNULL(address_norm, ''), ' ', '') = ?`,
+    ).all(key, key);
+  } catch {
+    rows = db.prepare(
+      `SELECT post_id, address, lat, lng, geo_source
+       FROM listings
+       WHERE replace(IFNULL(address, ''), ' ', '') = ?`,
+    ).all(key);
+  }
+  let updated = 0;
+  for (const row of rows) {
+    if (applyListingLocation(row.post_id, {
+      lat,
+      lng,
+      geo_source: meta.geo_source || "geocode",
+      location_class: meta.location_class,
+      address_norm: meta.address_used || address,
+      coord_version: (Number(row.coord_version) || 0) + 1,
+      provider: meta.provider || "",
+      geo_job_state: "done",
+    }, row)) updated += 1;
+  }
+  return updated;
 }
 
 function listingCommuteKm(row) {
@@ -4237,10 +4324,167 @@ export function recentEvents(limit = 40, userId) {
   return db.prepare("SELECT * FROM user_events WHERE user_id = ? ORDER BY id DESC LIMIT ?").all(uid, Math.max(1, Number(limit) || 40));
 }
 
-export function pendingNotifyEvents(limit = 80) {
-  return db
-    .prepare("SELECT * FROM user_events WHERE IFNULL(notified, 0) = 0 ORDER BY id ASC LIMIT ?")
-    .all(Math.max(1, Number(limit) || 80));
+export function pendingNotifyEvents(limit = 80, now = Date.now()) {
+  const cap = Math.max(1, Number(limit) || 80);
+  const stamp = Number(now) || Date.now();
+  try {
+    return db.prepare(`
+      SELECT e.*
+      FROM user_events e
+      LEFT JOIN listings l ON l.post_id = e.post_id
+      WHERE IFNULL(e.notified, 0) = 0
+        AND IFNULL(e.notify_decide, '') NOT IN ('cancelled', 'superseded')
+        AND (e.notify_next_at IS NULL OR e.notify_next_at <= ?)
+      ORDER BY
+        CASE
+          WHEN IFNULL(e.notify_decide, '') = 'ready' THEN 0
+          WHEN IFNULL(e.line_job_state, '') IN ('retry', 'unknown')
+            OR IFNULL(e.email_job_state, '') IN ('retry', 'unknown')
+            OR IFNULL(e.push_job_state, '') IN ('retry', 'unknown') THEN 1
+          WHEN l.lat IS NOT NULL AND IFNULL(l.location_class, '') NOT IN ('admin', 'unknown') THEN 2
+          ELSE 3
+        END,
+        COALESCE(e.notify_next_at, 0) ASC,
+        e.id ASC
+      LIMIT ?
+    `).all(stamp, cap);
+  } catch {
+    return db.prepare("SELECT * FROM user_events WHERE IFNULL(notified, 0) = 0 ORDER BY id ASC LIMIT ?").all(cap);
+  }
+}
+
+const CHANNEL_DONE = new Set(["accepted", "skipped", "legacy_handled_unknown"]);
+
+export function channelJobDone(state) {
+  return CHANNEL_DONE.has(String(state || ""));
+}
+
+export function updateEventNotify(id, patch = {}) {
+  const row = db.prepare("SELECT * FROM user_events WHERE id = ?").get(Number(id));
+  if (!row) return null;
+  const next = { ...row, ...patch };
+  try {
+    db.prepare(`
+      UPDATE user_events SET
+        notify_decide = ?,
+        notify_reason = ?,
+        notify_retry_count = ?,
+        notify_last_error = ?,
+        notify_next_at = ?,
+        notify_ready_at = ?,
+        notify_coord_version = ?,
+        dock_job_state = ?,
+        line_job_state = ?,
+        email_job_state = ?,
+        push_job_state = ?,
+        notified = ?
+      WHERE id = ?
+    `).run(
+      String(next.notify_decide || ""),
+      String(next.notify_reason || ""),
+      Number(next.notify_retry_count) || 0,
+      String(next.notify_last_error || ""),
+      next.notify_next_at == null ? null : Number(next.notify_next_at),
+      next.notify_ready_at == null ? null : Number(next.notify_ready_at),
+      Number(next.notify_coord_version) || 0,
+      String(next.dock_job_state || ""),
+      String(next.line_job_state || ""),
+      String(next.email_job_state || ""),
+      String(next.push_job_state || ""),
+      Number(next.notified) || 0,
+      Number(id),
+    );
+  } catch {
+    if (Number(next.notified) === 1) markEventNotified(id);
+  }
+  return { ...next, id: Number(id) };
+}
+
+export function markLegacyNotifiedUnknown() {
+  try {
+    db.prepare(`
+      UPDATE user_events
+      SET dock_job_state = CASE WHEN IFNULL(dock_job_state, '') = '' THEN 'legacy_handled_unknown' ELSE dock_job_state END,
+          line_job_state = CASE WHEN IFNULL(line_job_state, '') = '' THEN 'legacy_handled_unknown' ELSE line_job_state END,
+          email_job_state = CASE WHEN IFNULL(email_job_state, '') = '' THEN 'legacy_handled_unknown' ELSE email_job_state END,
+          notify_decide = CASE WHEN IFNULL(notify_decide, '') = '' THEN 'legacy_handled_unknown' ELSE notify_decide END
+      WHERE IFNULL(notified, 0) = 1
+        AND IFNULL(dock_job_state, '') = ''
+        AND IFNULL(line_job_state, '') = ''
+        AND IFNULL(email_job_state, '') = ''
+    `).run();
+  } catch {
+    // older fixtures
+  }
+}
+
+export function eventChannelsHandled(event = {}, needed = {}) {
+  const jobs = [];
+  if (needed.dock) jobs.push({ job_state: event.dock_job_state });
+  if (needed.hook) jobs.push({ job_state: event.line_job_state });
+  if (needed.mail) jobs.push({ job_state: event.email_job_state });
+  if (needed.push) jobs.push({ job_state: event.push_job_state });
+  if (!jobs.length) return true;
+  return eventFullyHandled(jobs);
+}
+
+export function applyListingLocation(postId, next = {}, prev = null) {
+  const current = prev || db.prepare("SELECT lat, lng, geo_source, location_class, coord_version, address FROM listings WHERE post_id = ?").get(Number(postId));
+  if (!current) return false;
+  if (!shouldAcceptGeoUpdate(current, next)) return false;
+  const cls = resolveLocationClass({ ...current, ...next });
+  const version = Number(next.coord_version || current.coord_version || 0) || Date.now();
+  try {
+    db.prepare(`
+      UPDATE listings SET
+        lat = COALESCE(?, lat),
+        lng = COALESCE(?, lng),
+        geo_source = COALESCE(?, geo_source),
+        location_class = ?,
+        address_norm = COALESCE(?, address_norm),
+        coord_version = ?,
+        geo_provider = COALESCE(?, geo_provider),
+        geo_approx = ?,
+        geo_error = ?,
+        geo_job_state = COALESCE(?, geo_job_state)
+      WHERE post_id = ?
+    `).run(
+      next.lat ?? null,
+      next.lng ?? null,
+      next.geo_source || null,
+      cls,
+      next.address_norm || null,
+      version,
+      next.provider || next.geo_provider || null,
+      cls === "street" || cls === "admin" ? 1 : 0,
+      next.geo_error || "",
+      next.geo_job_state || null,
+      Number(postId),
+    );
+  } catch {
+    return false;
+  }
+  reopenNotifyAfterGeo(postId, { ...current, ...next, coord_version: version });
+  return true;
+}
+
+export function reopenNotifyAfterGeo(postId, listing = {}) {
+  try {
+    db.prepare(`
+      UPDATE user_events
+      SET notified = 0,
+          notify_decide = CASE WHEN notify_decide IN ('skip_distance', 'wait_precision') THEN 'wait_route' ELSE notify_decide END
+      WHERE post_id = ?
+        AND type = 'new'
+        AND IFNULL(notified, 0) = 1
+        AND notify_decide IN ('skip_distance', 'wait_precision')
+        AND IFNULL(line_job_state, '') NOT IN ('accepted', 'legacy_handled_unknown')
+        AND IFNULL(dock_job_state, '') NOT IN ('accepted', 'legacy_handled_unknown')
+        AND IFNULL(notify_coord_version, 0) < ?
+    `).run(Number(postId), Number(listing.coord_version) || 0);
+  } catch {
+    // older fixtures
+  }
 }
 
 export function eventPayloadFromListing(event, listing) {
@@ -4269,6 +4513,9 @@ export function eventPayloadFromListing(event, listing) {
     cover: row.cover,
     commute_km: row.commute_km,
     commute_mode: row.commute_mode,
+    location_class: row.location_class,
+    commute_approx: row.commute_approx,
+    notify_note: row.notify_note || (row.location_class === "street" || row.commute_approx ? "依路段位置估算，實際距離可能不同" : ""),
     commute_min_am: row.commute_min_am,
     commute_min_pm: row.commute_min_pm,
     commute_routes: row.commute_routes,
@@ -4440,10 +4687,16 @@ export function getCachedGeo(address) {
   if (!key) return null;
   try {
     return db.prepare(
-      "SELECT lat, lng, quality, geo_source, address_used, address_version, updated_at FROM geo_cache WHERE address = ?",
+      "SELECT lat, lng, quality, geo_source, address_used, address_version, location_class, city, district, cache_kind, provider, updated_at FROM geo_cache WHERE address = ?",
     ).get(key) || null;
   } catch {
-    return db.prepare("SELECT lat, lng FROM geo_cache WHERE address = ?").get(key) || null;
+    try {
+      return db.prepare(
+        "SELECT lat, lng, quality, geo_source, address_used, address_version, updated_at FROM geo_cache WHERE address = ?",
+      ).get(key) || null;
+    } catch {
+      return db.prepare("SELECT lat, lng FROM geo_cache WHERE address = ?").get(key) || null;
+    }
   }
 }
 
@@ -4454,10 +4707,15 @@ export function setCachedGeo(address, lat, lng, meta = {}) {
   const source = String(meta.geo_source || meta.source || "");
   const used = String(meta.address_used || address || "");
   const stamp = new Date().toISOString();
+  const locationClass = String(meta.location_class || "");
+  const city = String(meta.city || "");
+  const district = String(meta.district || "");
+  const cacheKind = String(meta.cache_kind || (locationClass === "street" ? "street" : locationClass === "address" ? "house" : quality));
+  const provider = String(meta.provider || "");
   try {
     db.prepare(
-      `INSERT INTO geo_cache(address, lat, lng, updated_at, quality, geo_source, address_used, address_version)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO geo_cache(address, lat, lng, updated_at, quality, geo_source, address_used, address_version, location_class, city, district, cache_kind, provider)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(address) DO UPDATE SET
          lat = excluded.lat,
          lng = excluded.lng,
@@ -4465,8 +4723,13 @@ export function setCachedGeo(address, lat, lng, meta = {}) {
          quality = excluded.quality,
          geo_source = excluded.geo_source,
          address_used = excluded.address_used,
-         address_version = excluded.address_version`,
-    ).run(key, Number(lat), Number(lng), stamp, quality, source, used, key);
+         address_version = excluded.address_version,
+         location_class = excluded.location_class,
+         city = excluded.city,
+         district = excluded.district,
+         cache_kind = excluded.cache_kind,
+         provider = excluded.provider`,
+    ).run(key, Number(lat), Number(lng), stamp, quality, source, used, key, locationClass, city, district, cacheKind, provider);
   } catch {
     db.prepare(
       "INSERT INTO geo_cache(address, lat, lng, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(address) DO UPDATE SET lat = excluded.lat, lng = excluded.lng, updated_at = excluded.updated_at",

@@ -325,6 +325,19 @@ test("notify digest packs several listings into one mail", async () => {
   assert.match(sent[0].text, /乙物件/);
 });
 
+test("listing mail failure stays retry not accepted", async () => {
+  const result = await notify({}, [], {
+    mailEvents: [{ type: "new", title: "甲物件", price: "20000", post_id: 1 }],
+    mailTo: "member@example.com",
+    mailTemplates: defaultMailTemplates(),
+    send: async () => {
+      throw new Error("smtp timeout");
+    },
+  });
+  assert.equal(result.mail.job_state, "retry");
+  assert.match(String(result.mail.fail_reason || ""), /smtp timeout/);
+});
+
 test("listing mail without member SMTP is skipped", async () => {
   await notify({}, [], {
     mailEvents: [{ type: "new", title: "甲物件", price: "20000", post_id: 1 }],

@@ -12,8 +12,8 @@ export const COMMUTE_STATE_LABELS = {
   wait_route: "等待計算",
   computing: "計算中",
   done: "",
-  retry: "稍後重試",
-  failed: "無法計算",
+  retry: "定位服務暫時忙碌，稍後重試",
+  failed: "尚未取得足夠位置資料",
 };
 
 export function commuteStateLabel(state) {
@@ -42,6 +42,8 @@ export function commuteFieldKey(item = {}) {
     routes,
     item.lat,
     item.lng,
+    item.location_class,
+    item.commute_precision,
     item.mrt_station,
     item.mrt_walk_km,
   ].join("|");
@@ -55,6 +57,10 @@ export function pickCommuteFields(row = {}) {
     commute_mode: row.commute_mode || "",
     commute_routes: Array.isArray(row.commute_routes) ? row.commute_routes : [],
     commute_hint: row.commute_hint || "",
+    location_class: row.location_class || "",
+    commute_precision: row.commute_precision || "",
+    commute_approx: Boolean(row.commute_approx),
+    route_min_m: row.route_min_m ?? null,
     lat: row.lat,
     lng: row.lng,
     geo_source: row.geo_source,

@@ -274,7 +274,7 @@ test("member profiles cap districts and include usable ping in notify copy", () 
   assert.match(html, /已存 \$\{list\.length\}／\$\{cap\}/);
   assert.match(html, /再新增會提示最多 3 個；同名儲存會覆蓋/);
   assert.match(html, /function setSettingsReady/);
-  assert.match(html, /\$\{label\}路線約 \$\{item\.commute_km\} 公里/);
+  assert.match(html, /到公司約 \$\{item\.commute_km\} 公里/);
   assert.doesNotMatch(html, /上約/);
   assert.doesNotMatch(html, /下約/);
   assert.doesNotMatch(html, /確定要覆蓋嗎？/);
@@ -376,6 +376,9 @@ test("guest demo is read-only and work prompt can be skipped", () => {
   assert.match(html, /reversal play tech \| 逆遊科技/);
   assert.match(html, /這是示範列表/);
   assert.match(html, /id="workAddress"/);
+  assert.match(html, /id="notifyIncludeStreetEstimate"/);
+  assert.match(html, /\.check-inline \{[\s\S]*min-height: var\(--touch\);/);
+  assert.match(html, /notifyIncludeStreetEstimate: \$\("notifyIncludeStreetEstimate"\) \? \$\("notifyIncludeStreetEstimate"\)\.checked : false/);
   assert.doesNotMatch(html, /id="workPrompt"/);
   assert.doesNotMatch(html, /591_v3_work_prompt_skip/);
   assert.doesNotMatch(html, /請至少選一個行政區/);
@@ -463,13 +466,13 @@ test("product name is 吉比租房物件追蹤 without v2 開發版 copy", () =>
   assert.equal(html.includes("v2 開發版"), false);
   assert.equal(html.includes("v3 開發版"), false);
   assert.equal(html.includes("與線上版分開的資料庫"), false);
-  assert.match(html, /ver\. 3\.55/);
+  assert.match(html, /ver\. 3\.56/);
   assert.doesNotMatch(html, /<h1>[^<]*v3/i);
   assert.match(login, /<h1>吉比租房物件追蹤<\/h1>/);
   assert.equal(login.includes("v2 開發版"), false);
   assert.equal(login.includes("v3 開發版"), false);
   assert.equal(login.includes("資料與線上版分開"), false);
-  assert.match(login, /ver\. 3\.55/);
+  assert.match(login, /ver\. 3\.56/);
 });
 
 test("MRT is admin-only and guest tour is in the page", () => {
@@ -501,7 +504,7 @@ test("listing commute copy is kilometers only and does not show rush minutes", (
   const end = html.indexOf("function mrtChip");
   assert.ok(start > 0 && end > start);
   const fn = html.slice(start, end);
-  assert.match(fn, /\$\{label\}路線約 \$\{item\.commute_km\} 公里/);
+  assert.match(fn, /到公司約 \$\{item\.commute_km\} 公里/);
   assert.doesNotMatch(fn, /上約/);
   assert.doesNotMatch(fn, /下約/);
   assert.doesNotMatch(fn, /commute_min_am/);

@@ -32,6 +32,9 @@ import {
   markListingAlive,
   pendingNotifyEvents,
   eventPayloadFromListing,
+  updateEventNotify,
+  eventChannelsHandled,
+  channelJobDone,
   db,
   saveSettings,
   setCachedRoute,
@@ -64,9 +67,11 @@ import { fetchDdCoveringListings } from "./ddroom.js";
 import { fetchHfCoveringListings } from "./housefun.js";
 import { fetchRakuyaCoveringListings } from "./rakuya.js";
 import { fetchSourceKit } from "./sourceKit.js";
-import { commuteWorkJobs, geocodeAddress, hasWorkPoint, needsListingGeo, normalizeCommuteMode } from "./geo.js";
+import { commuteWorkJobs, geocodeAddress, geoFailReason, hasWorkPoint, needsListingGeo, normalizeCommuteMode } from "./geo.js";
+import { parseTaiwanAddressParts, streetCacheKey } from "./geoPrecision.js";
 import { isTrustedGeoSource, listingCommunityId, pickRicherAddress } from "./location.js";
-import { decideNotifyDelivery, isStalePendingNotify } from "./floors.js";
+import { decideNotifyDelivery, decideNotifyDecision, isStalePendingNotify } from "./floors.js";
+import { NOTIFY_BACKOFF_MS } from "./geoPrecision.js";
 import { fetchRoadRoutes, fetchRoadRouteTable, fetchRushRoadRoutes } from "./route.js";
 import { COMMUTE_STATES, commuteSettingsFingerprint, routeRetryDecision } from "./commuteState.js";
 import { fetchMrtAccess } from "./mrt.js";
@@ -307,6 +312,7 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
   const hookByUser = new Map();
   const mailByUser = new Map();
   const pushByUser = new Map();
+  const neededByEvent = new Map();
   for (const event of pending) {
     const userId = Number(event.user_id) || 0;
     const userSettings = userId ? getSettings(userId) : settings;
@@ -314,45 +320,84 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
     const mailTo = String(getUserById(userId)?.email || "").trim();
     const mailBundle = userId ? getMemberMailBundle(userId) : { configured: false, smtp: null, templates: getMailTemplates() };
     const mailReady = Boolean(mailBundle.configured);
-    const forDock = listing ? shouldDockNotify(userSettings, listing, event) : false;
-    const forHook = listing ? shouldWebhookNotify(userSettings, listing, event) : false;
-    const forMail = listing ? shouldMailNotify(userSettings, listing, event, { to: mailTo, configured: mailReady }) : false;
-    const forPush = listing ? shouldPushNotify(userSettings, listing, event) : false;
-    if (!listing || (!forDock && !forHook && !forMail && !forPush)) {
-      markEventNotified(event.id);
+    if (!listing) {
+      updateEventNotify(event.id, { notify_decide: "cancelled", notify_reason: "missing", notified: 1 });
       continue;
     }
-    const delivery = decideNotifyDelivery(listing, {
-      ...userSettings,
-      waitRushMinutes: commuteRushEnabled() && googleDirectionsAllowed(),
+    if (userSettings.notificationsPaused === true) {
+      updateEventNotify(event.id, { notify_reason: "paused" });
+      continue;
+    }
+    const forDock = shouldDockNotify(userSettings, listing, event);
+    const forHook = shouldWebhookNotify(userSettings, listing, event);
+    const forMail = shouldMailNotify(userSettings, listing, event, { to: mailTo, configured: mailReady });
+    const forPush = shouldPushNotify(userSettings, listing, event);
+    const decision = decideNotifyDecision(listing, userSettings);
+    updateEventNotify(event.id, {
+      notify_decide: decision.decide,
+      notify_reason: decision.reason,
+      notify_coord_version: Number(listing.coord_version) || 0,
+      notify_ready_at: decision.verdict === "send" ? Date.now() : event.notify_ready_at,
     });
-    if (delivery === "pending") {
-      if (isStalePendingNotify(event)) markEventNotified(event.id);
+    if (decision.verdict === "pending") {
+      if (isStalePendingNotify(event)) {
+        updateEventNotify(event.id, {
+          notify_decide: "wait_data",
+          notify_reason: "backoff",
+          notify_next_at: Date.now() + NOTIFY_BACKOFF_MS,
+          notify_retry_count: (Number(event.notify_retry_count) || 0) + 1,
+        });
+      }
       continue;
     }
-    markEventNotified(event.id);
-    if (delivery === "send") {
-      const payload = { ...eventPayloadFromListing(event, listing), user_id: userId };
-      if (forDock) {
-        const list = dockByUser.get(userId) || [];
-        list.push(payload);
-        dockByUser.set(userId, list);
-      }
-      if (forHook) {
-        const list = hookByUser.get(userId) || [];
-        list.push(payload);
-        hookByUser.set(userId, list);
-      }
-      if (forMail) {
-        const list = mailByUser.get(userId) || [];
-        list.push(payload);
-        mailByUser.set(userId, list);
-      }
-      if (forPush) {
-        const list = pushByUser.get(userId) || [];
-        list.push(payload);
-        pushByUser.set(userId, list);
-      }
+    if (decision.verdict !== "send") {
+      updateEventNotify(event.id, { notified: 1, notify_decide: decision.decide || "skip_distance", notify_reason: decision.reason });
+      continue;
+    }
+    if (!forDock && !forHook && !forMail && !forPush) {
+      updateEventNotify(event.id, {
+        dock_job_state: "skipped",
+        line_job_state: "skipped",
+        email_job_state: "skipped",
+        push_job_state: "skipped",
+        notified: 1,
+        notify_reason: "channels_off",
+      });
+      continue;
+    }
+    const created = Date.parse(event.created_at || "");
+    const delayNote = Number.isFinite(created) && Date.now() - created > 10 * 60 * 1000
+      ? "延後確認符合條件的新物件"
+      : "";
+    const payload = {
+      ...eventPayloadFromListing(event, listing),
+      user_id: userId,
+      event_id: event.id,
+      notify_note: decision.notify_note || "",
+      notify_delay_note: delayNote,
+      location_class: decision.location_class || listing.location_class,
+      commute_approx: Boolean(decision.approximate || listing.commute_approx),
+    };
+    neededByEvent.set(event.id, { dock: forDock, hook: forHook, mail: forMail, push: forPush, userId });
+    if (forDock && !channelJobDone(event.dock_job_state)) {
+      const list = dockByUser.get(userId) || [];
+      list.push(payload);
+      dockByUser.set(userId, list);
+    }
+    if (forHook && !channelJobDone(event.line_job_state)) {
+      const list = hookByUser.get(userId) || [];
+      list.push(payload);
+      hookByUser.set(userId, list);
+    }
+    if (forMail && !channelJobDone(event.email_job_state)) {
+      const list = mailByUser.get(userId) || [];
+      list.push(payload);
+      mailByUser.set(userId, list);
+    }
+    if (forPush && !channelJobDone(event.push_job_state)) {
+      const list = pushByUser.get(userId) || [];
+      list.push(payload);
+      pushByUser.set(userId, list);
     }
   }
   const ready = [];
@@ -365,21 +410,66 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
     const mail = mailByUser.get(userId) || [];
     const push = pushByUser.get(userId) || [];
     const mailBundle = userId ? getMemberMailBundle(userId) : { smtp: null, templates: getMailTemplates() };
+    let result = { webhook: { job_state: "skipped" }, mail: { job_state: "skipped", shown_ids: [] } };
     if (!silent && (dock.length || hook.length || mail.length)) {
-      await notify(getSettings(userId), dock, {
+      result = await notify(getSettings(userId), dock, {
         webhookEvents: hook,
         mailEvents: mail,
         mailTo: String(getUserById(userId)?.email || "").trim(),
         mailTemplates: mailBundle.templates,
         smtp: mailBundle.smtp || null,
-      });
+      }) || result;
     }
+    let pushState = "skipped";
     if (!silent && push.length) {
       try {
         await sendUserWebPush(userId, pushPayloadFromEvents(push));
+        pushState = "accepted";
       } catch {
-        // 推播失敗不中斷追蹤
+        pushState = "retry";
       }
+    }
+    const hookState = hook.length ? (result.webhook?.job_state || "retry") : "";
+    const mailState = result.mail?.job_state || "retry";
+    const mailShown = new Set(result.mail?.shown_ids || mail.slice(0, 8).map((event) => event.event_id || event.id));
+    for (const payload of dock) {
+      updateEventNotify(payload.event_id, { dock_job_state: silent ? "accepted" : "accepted" });
+    }
+    for (const payload of hook) {
+      updateEventNotify(payload.event_id, {
+        line_job_state: hookState || "retry",
+        notify_last_error: result.webhook?.fail_reason || "",
+      });
+    }
+    for (const payload of mail) {
+      const id = payload.event_id || payload.id;
+      updateEventNotify(id, {
+        email_job_state: mailShown.has(id) ? mailState : "retry",
+        notify_last_error: mailShown.has(id) ? (result.mail?.fail_reason || "") : "batch_overflow",
+      });
+    }
+    for (const payload of push) {
+      updateEventNotify(payload.event_id, { push_job_state: pushState });
+    }
+    const touched = new Set([
+      ...dock.map((event) => event.event_id),
+      ...hook.map((event) => event.event_id),
+      ...mail.map((event) => event.event_id),
+      ...push.map((event) => event.event_id),
+    ]);
+    for (const id of touched) {
+      const needed = neededByEvent.get(id);
+      const latest = pending.find((row) => row.id === id) || {};
+      const merged = {
+        ...latest,
+        dock_job_state: dock.some((event) => event.event_id === id) ? "accepted" : latest.dock_job_state,
+        line_job_state: hook.some((event) => event.event_id === id) ? (hookState || latest.line_job_state) : latest.line_job_state,
+        email_job_state: mail.some((event) => event.event_id === id)
+          ? (mailShown.has(id) ? mailState : "retry")
+          : latest.email_job_state,
+        push_job_state: push.some((event) => event.event_id === id) ? pushState : latest.push_job_state,
+      };
+      if (needed && eventChannelsHandled(merged, needed)) markEventNotified(id);
     }
     ready.push(...dock.map((event) => ({ ...event, type_label: eventLabel(event.type), user_id: userId })));
   }
@@ -926,10 +1016,16 @@ export async function backfillAddressGeo(settings = getSettings(), { limit = 12 
   for (const row of rows) {
     attempted += 1;
     try {
-      const hit = await geocodeAddress(row.address, getCachedGeo, { strict: false, maxAttempts: 2 });
+      if (geoFailReason(row.address)) continue;
+      const hit = await geocodeAddress(row.address, getCachedGeo, { fast: true, budgetMs: 5000, maxExternal: 1, strict: false });
+      if (hit?.busy) continue;
       if (hit && Number.isFinite(Number(hit.lat)) && Number.isFinite(Number(hit.lng))) {
-        setCachedGeo(row.address, hit.lat, hit.lng);
-        updateListingsGeoByAddress(row.address, hit.lat, hit.lng);
+        setCachedGeo(row.address, hit.lat, hit.lng, hit);
+        if (hit.location_class === "street") {
+          const streetKey = streetCacheKey(parseTaiwanAddressParts(row.address));
+          if (streetKey) setCachedGeo(streetKey, hit.lat, hit.lng, { ...hit, cache_kind: "street" });
+        }
+        updateListingsGeoByAddress(row.address, hit.lat, hit.lng, hit);
         located += 1;
       }
     } catch {
