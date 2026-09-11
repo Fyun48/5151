@@ -132,6 +132,8 @@ const EXIT_ACTION_LABEL = {
 const PENDING_KIND_LABEL = {
   credential: "憑證",
   analysis: "分析工作",
+  evaluation: "評估工作",
+  proposal: "提案工作",
   insight_embedding: "洞察向量",
   crm_replica: "CRM 複本",
   coding: "製作任務",

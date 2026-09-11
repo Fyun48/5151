@@ -10,6 +10,7 @@ import { buildProposalPrompt, PROPOSAL_PROMPT_VERSION } from "./proposalPrompt.j
 import { parseAndValidateProposal, canonicalProposalContent, PROPOSAL_SCHEMA_VERSION } from "./proposalSchema.js";
 import { buildProposalPolicy, proposalPolicyFingerprint, effectiveProposalPolicyFingerprint, PROPOSAL_GENERATION_VERSION } from "./proposalPolicy.js";
 import { createEntityRow, transitionRow, findEntity, getEntity } from "./stateMachine.js";
+import { issueWriteDecision } from "./insightConsent.js";
 
 export const PROPOSAL_MAX_RETRIES = 5;
 export const PROPOSAL_SCHEMA_MAX_RETRIES = 2;
@@ -115,22 +116,39 @@ export function computeProposalInput(db, issueId, { now = new Date(), env = proc
 
 // 建立一個 pending 生成 job（新的 proposal_version）。無自帶交易版本供交易內組合。
 export function enqueueProposalRow(db, { issueId, revisionInstruction = null, now = new Date() }) {
+  const gate = issueWriteDecision(db, issueId);
+  if (!gate.ok) {
+    const err = httpError(gate.reason === "stale_generation" ? "訂閱世代已換，晚到提案不入隊。" : "訂閱已退出，晚到提案不入隊。", 409);
+    err.code = gate.reason || "subscription_revoked";
+    throw err;
+  }
   const prev = db.prepare("SELECT MAX(proposal_version) AS m FROM issue_proposal WHERE issue_id=?").get(Number(issueId));
   const version = (Number(prev?.m) || 0) + 1;
   const ts = iso(now);
+  const generation = gate.unbound ? null : gate.generation;
   const res = db.prepare(
-    `INSERT INTO issue_proposal(issue_id, proposal_version, generation_version, revision_instruction, status, retry_count, max_retries, next_attempt_at, created_at)
-     VALUES (?, ?, ?, ?, 'pending', 0, ?, ?, ?)`,
-  ).run(Number(issueId), version, PROPOSAL_GENERATION_VERSION, revisionInstruction ? String(revisionInstruction).slice(0, REASON_MAX) : null, PROPOSAL_MAX_RETRIES, ts, ts);
-  return { id: Number(res.lastInsertRowid), version };
+    `INSERT INTO issue_proposal(issue_id, proposal_version, generation_version, revision_instruction, status, retry_count, max_retries, next_attempt_at, created_at, subscription_generation)
+     VALUES (?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?)`,
+  ).run(Number(issueId), version, PROPOSAL_GENERATION_VERSION, revisionInstruction ? String(revisionInstruction).slice(0, REASON_MAX) : null, PROPOSAL_MAX_RETRIES, ts, ts, generation);
+  return { id: Number(res.lastInsertRowid), version, subscription_generation: generation };
 }
 export function enqueueProposalGeneration(db, opts) {
   return withImmediateTx(db, () => enqueueProposalRow(db, opts));
 }
 
+function abandonProposalRow(db, row, reason) {
+  db.prepare("UPDATE issue_proposal SET status='failed', error_code=? WHERE id=? AND status IN ('pending','failed_retry','processing')")
+    .run(String(reason || "subscription_revoked").slice(0, 64), row.id);
+}
+
 export function claimProposalBatch(db, { limit = 5, now = new Date(), staleMs = PROPOSAL_CLAIM_STALE_MS } = {}) {
   const nowIso = iso(now);
   const staleBefore = iso(new Date((now instanceof Date ? now.getTime() : now) - staleMs));
+  const inflight = db.prepare("SELECT * FROM issue_proposal WHERE status IN ('pending','failed_retry','processing')").all();
+  for (const row of inflight) {
+    const decision = issueWriteDecision(db, row.issue_id, { expectedGeneration: row.subscription_generation });
+    if (!decision.ok) abandonProposalRow(db, row, decision.reason);
+  }
   const candidates = db.prepare(
     `SELECT * FROM issue_proposal
      WHERE (status IN ('pending','failed_retry') AND next_attempt_at <= ?)
@@ -139,6 +157,11 @@ export function claimProposalBatch(db, { limit = 5, now = new Date(), staleMs = 
   ).all(nowIso, staleBefore, Math.max(1, Math.min(Number(limit) || 5, 50)));
   const claimed = [];
   for (const row of candidates) {
+    const decision = issueWriteDecision(db, row.issue_id, { expectedGeneration: row.subscription_generation });
+    if (!decision.ok) {
+      abandonProposalRow(db, row, decision.reason);
+      continue;
+    }
     let res;
     if (row.status === "processing") {
       res = db.prepare("UPDATE issue_proposal SET claimed_at=? WHERE id=? AND status='processing' AND (claimed_at IS NULL OR claimed_at <= ?)").run(nowIso, row.id, staleBefore);
@@ -205,6 +228,11 @@ function ensureWaitingApproval(db, issueId, { actor = "system", now = new Date()
 // 執行一個已 claim 的提案生成：provider 呼叫在交易外；完成 + promote current + lifecycle 轉移在單一交易。
 export async function executeProposalGeneration(db, row, { provider, now = () => new Date(), timeoutMs = 30000, env = process.env, random = Math.random } = {}) {
   const nowDate = now();
+  const gate = issueWriteDecision(db, row.issue_id, { expectedGeneration: row.subscription_generation });
+  if (!gate.ok) {
+    withImmediateTx(db, () => abandonProposalRow(db, row, gate.reason));
+    return "failed";
+  }
   const input = computeProposalInput(db, row.issue_id, { now: nowDate, env, provider });
   if (!input.ok) {
     if (input.defer) {
@@ -243,6 +271,11 @@ export async function executeProposalGeneration(db, row, { provider, now = () =>
   const proposalHash = computeProposalHash(content, { issueId: row.issue_id, proposalVersion: row.proposal_version });
   const ts = iso(nowDate);
   return withImmediateTx(db, () => {
+    const again = issueWriteDecision(db, row.issue_id, { expectedGeneration: row.subscription_generation });
+    if (!again.ok) {
+      abandonProposalRow(db, row, again.reason);
+      return "failed";
+    }
     db.prepare(
       `UPDATE issue_proposal SET status='completed', input_fingerprint=?, policy_fingerprint=?, proposal_hash=?,
         source_evaluation_run_id=?, source_impact_assessment_id=?, final_recommendation=?,

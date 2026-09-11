@@ -9,6 +9,7 @@ import { buildRoleEvaluationPrompt, evaluationRolesConfig, ROLE_SET_VERSION, ROL
 import { parseAndValidateRole } from "./evaluationSchema.js";
 import { aggregateVotes, aggregationConfig, EVALUATION_VERSION, AGGREGATION_VERSION } from "./evaluationAggregation.js";
 import { buildEvaluationPolicy, evaluationPolicyFingerprint, effectiveEvaluationPolicyFingerprint } from "./evaluationPolicy.js";
+import { issueWriteDecision } from "./insightConsent.js";
 
 export const EVAL_MAX_RETRIES = 5;
 export const EVAL_SCHEMA_MAX_RETRIES = 2; // 明顯 schema/設定錯誤不無限重試
@@ -126,18 +127,35 @@ export function computeEvaluationInput(db, issueId, { now = new Date(), roles } 
 export function enqueueEvaluationRun(db, { issueId, roles, deliberationEnabled = false, fingerprint = "pending", sourceImpactAssessmentId = null, now = new Date() }) {
   const roleList = roles || evaluationRolesConfig().roles;
   const ts = iso(now);
+  const gate = issueWriteDecision(db, issueId);
+  if (!gate.ok) {
+    const err = httpError(gate.reason === "stale_generation" ? "訂閱世代已換，晚到評估不入隊。" : "訂閱已退出，晚到評估不入隊。", 409);
+    err.code = gate.reason || "subscription_revoked";
+    throw err;
+  }
+  const generation = gate.unbound ? null : gate.generation;
   const res = db.prepare(
     `INSERT INTO issue_evaluation_run
       (issue_id, evaluation_version, aggregation_version, role_set_version, input_fingerprint, source_impact_assessment_id,
-       status, deliberation_enabled, retry_count, max_retries, next_attempt_at, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, 0, ?, ?, ?)`,
-  ).run(Number(issueId), EVALUATION_VERSION, AGGREGATION_VERSION, ROLE_SET_VERSION, fingerprint, sourceImpactAssessmentId, deliberationEnabled ? 1 : 0, EVAL_MAX_RETRIES, ts, ts);
-  return { id: Number(res.lastInsertRowid) };
+       status, deliberation_enabled, retry_count, max_retries, next_attempt_at, created_at, subscription_generation)
+     VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, 0, ?, ?, ?, ?)`,
+  ).run(Number(issueId), EVALUATION_VERSION, AGGREGATION_VERSION, ROLE_SET_VERSION, fingerprint, sourceImpactAssessmentId, deliberationEnabled ? 1 : 0, EVAL_MAX_RETRIES, ts, ts, generation);
+  return { id: Number(res.lastInsertRowid), subscription_generation: generation };
+}
+
+function abandonEvaluationRun(db, run, reason) {
+  db.prepare("UPDATE issue_evaluation_run SET status='failed', error_code=? WHERE id=? AND status IN ('pending','failed_retry','processing')")
+    .run(String(reason || "subscription_revoked").slice(0, 64), run.id);
 }
 
 export function claimEvaluationBatch(db, { limit = 5, now = new Date(), staleMs = EVAL_CLAIM_STALE_MS } = {}) {
   const nowIso = iso(now);
   const staleBefore = iso(new Date((now instanceof Date ? now.getTime() : now) - staleMs));
+  const inflight = db.prepare("SELECT * FROM issue_evaluation_run WHERE status IN ('pending','failed_retry','processing')").all();
+  for (const row of inflight) {
+    const decision = issueWriteDecision(db, row.issue_id, { expectedGeneration: row.subscription_generation });
+    if (!decision.ok) abandonEvaluationRun(db, row, decision.reason);
+  }
   const candidates = db.prepare(
     `SELECT * FROM issue_evaluation_run
      WHERE (status IN ('pending','failed_retry') AND next_attempt_at <= ?)
@@ -146,6 +164,11 @@ export function claimEvaluationBatch(db, { limit = 5, now = new Date(), staleMs 
   ).all(nowIso, staleBefore, Math.max(1, Math.min(Number(limit) || 5, 50)));
   const claimed = [];
   for (const row of candidates) {
+    const decision = issueWriteDecision(db, row.issue_id, { expectedGeneration: row.subscription_generation });
+    if (!decision.ok) {
+      abandonEvaluationRun(db, row, decision.reason);
+      continue;
+    }
     let res;
     if (row.status === "processing") {
       res = db.prepare("UPDATE issue_evaluation_run SET claimed_at=? WHERE id=? AND status='processing' AND (claimed_at IS NULL OR claimed_at <= ?)").run(nowIso, row.id, staleBefore);
@@ -198,6 +221,11 @@ function insertRoleEval(db, { runId, issueId, role, round, result, provider, mod
 // provider 呼叫在交易外；promotion（complete + current pointer）在單一交易。
 export async function executeEvaluationRun(db, run, { provider, aggConfig = aggregationConfig(), roles, timeoutMs = 20000, now = () => new Date(), random = Math.random } = {}) {
   const nowDate = now();
+  const gate = issueWriteDecision(db, run.issue_id, { expectedGeneration: run.subscription_generation });
+  if (!gate.ok) {
+    withImmediateTx(db, () => abandonEvaluationRun(db, run, gate.reason));
+    return "failed";
+  }
   const input = computeEvaluationInput(db, run.issue_id, { now: nowDate, roles });
   if (!input.ok) {
     if (input.defer) {
@@ -263,6 +291,11 @@ export async function executeEvaluationRun(db, run, { provider, aggConfig = aggr
 
     // ── 完成 + promote CURRENT（單一交易）──
     return withImmediateTx(db, () => {
+      const again = issueWriteDecision(db, run.issue_id, { expectedGeneration: run.subscription_generation });
+      if (!again.ok) {
+        abandonEvaluationRun(db, run, again.reason);
+        return "failed";
+      }
       completeRun(db, run, { input, agg, provider, policy, now: nowDate });
       return "completed";
     });
