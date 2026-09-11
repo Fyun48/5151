@@ -1,0 +1,6 @@
+/* OPS Console — 灰綠控制台，不是租屋站皮。只覆寫這三個變數 */
+:root {
+  --accent: #2f6f4f;
+  --bg: #f5f6f8;
+  --paper: #ffffff;
+}

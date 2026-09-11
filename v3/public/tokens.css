@@ -1,5 +1,6 @@
-/* Quiet Luxury Property Intelligence — v3 design tokens
-   單一 source of truth。頁面不要再複製一份 :root。
+/* Quiet Luxury Property Intelligence — v3 內建 tokens（第 9 包反悔路徑）
+   與 kit-v1 :root 對齊。CasaOS 只同步本檔，不回抓 OPS。
+   頁面不要再複製一份 :root。
    禁止主視覺滿版圖／糖果漸層／巨型空白／展示型英文襯線。 */
 :root {
   --bg: #f3efe8;

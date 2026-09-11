@@ -9,6 +9,14 @@ const html = readFileSync(path.join(dir, "../public/console.html"), "utf8");
 const js = readFileSync(path.join(dir, "../public/console.js"), "utf8");
 const css = readFileSync(path.join(dir, "../public/console.css"), "utf8");
 
+test("console eats local kit tokens instead of a remote design host", () => {
+  assert.match(html, /href="\/kit\/tokens\.css"/);
+  assert.match(html, /href="\/kit\/themes\/ops\.css"/);
+  assert.match(html, /href="\/kit\/components\.css"/);
+  assert.doesNotMatch(html, /https?:\/\/[^"']+\/(?:kit|tokens\.css)/);
+  assert.doesNotMatch(css, /localhost:5154/);
+});
+
 test("console covers inbox, issues, gates and webhook test", () => {
   assert.match(html, /回饋收件匣/);
   assert.match(html, /議題與投票/);

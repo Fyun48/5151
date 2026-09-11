@@ -1,0 +1,22 @@
+{
+  "name": "jibby-kit",
+  "version": "1.0.0",
+  "themeOverrideVars": ["--accent", "--bg", "--paper"],
+  "layers": {
+    "1": "tokens.css",
+    "2": "components.css",
+    "3": "property-platform stays in design-system/property-platform/; not packed for other industries"
+  },
+  "files": [
+    "tokens.css",
+    "components.css",
+    "themes/v3.css",
+    "themes/ops.css",
+    "themes/example.css",
+    "VERSION",
+    "README.md",
+    "MANIFEST.json"
+  ],
+  "runtime": "offline-snapshot",
+  "doNotFetch": ["OPS runtime hosts", "remote @import"]
+}

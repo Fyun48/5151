@@ -94,6 +94,7 @@ import {
   retryProductionRelease,
 } from "./release/productionRelease.js";
 import { makeProductionReleaseProvider } from "./release/productionReleaseProvider.js";
+import { kitFilePath, resolveKitStatic } from "./designKitStatic.js";
 import { getDashboard, listFeedbackInbox, listIssuesWithLifecycle, OPS_PHASE, publicFeedback } from "./dashboard.js";
 import { notifyConfig, sendOpsNotification } from "./notify/webhook.js";
 
@@ -235,6 +236,18 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         try {
           const buf = readFileSync(full);
           res.writeHead(200, { "Content-Type": entry.type, "Cache-Control": "no-store" });
+          res.end(buf);
+        } catch {
+          sendJson(res, 404, { error: "not found" });
+        }
+        return;
+      }
+
+      const kit = method === "GET" ? resolveKitStatic(pathname) : null;
+      if (kit) {
+        try {
+          const buf = readFileSync(kitFilePath(publicDir, kit.rel));
+          res.writeHead(200, { "Content-Type": kit.type, "Cache-Control": "no-store" });
           res.end(buf);
         } catch {
           sendJson(res, 404, { error: "not found" });

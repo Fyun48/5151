@@ -129,6 +129,9 @@ test("static console loads and unknown api is 404", async () => {
     const css = await fetch(`${base}/console.css`);
     assert.equal(css.status, 200);
     assert.equal(css.headers.get("cache-control"), "no-store");
+    const kit = await fetch(`${base}/kit/tokens.css`);
+    assert.equal(kit.status, 200);
+    assert.match(await kit.text(), /--bg:\s*#f3efe8/);
     const nf = await fetch(`${base}/ops/api/nope`);
     assert.equal(nf.status, 404);
   });

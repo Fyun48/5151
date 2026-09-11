@@ -1,18 +1,13 @@
+/* 第 9 包：顏色／字級吃 kit tokens + themes/ops.css。這裡只留控制台專用。 */
 :root {
-  --ink: #1f2933;
-  --muted: #6b7684;
-  --line: #e2e6ea;
-  --paper: #ffffff;
-  --bg: #f5f6f8;
-  --accent: #2f6f4f;
   --danger: #b3261e;
-  --ok: #2f6f4f;
+  --ok: var(--accent);
 }
 * { box-sizing: border-box; }
 html, body { overflow-x: hidden; }
 body {
   margin: 0;
-  font-family: system-ui, -apple-system, "Noto Sans TC", sans-serif;
+  font-family: var(--font-sans, system-ui, -apple-system, "Noto Sans TC", sans-serif);
   color: var(--ink);
   background: var(--bg);
 }
