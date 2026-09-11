@@ -546,6 +546,10 @@ function requestProductAction(id, action) {
   runProductAction(id, action);
 }
 
+function hasLatestDecision(block) {
+  return Boolean(block && block.latest_decision);
+}
+
 function focusHeading(id) {
   const el = $(id);
   if (!el) return;
@@ -738,7 +742,7 @@ async function openIssue(id) {
     cur?.proposed_change || "",
   ].filter(Boolean);
   $("issueDetail").textContent = lines.join("\n\n");
-  $("gate1Row").hidden = !cur || proposal.data.current_decision;
+  $("gate1Row").hidden = !cur || hasLatestDecision(proposal.data.current_decision);
   $("gate1Row").dataset.proposal = cur ? JSON.stringify({
     proposal_id: cur.id,
     proposal_version: cur.proposal_version,
@@ -1071,7 +1075,7 @@ async function openCodingTask(taskId) {
     </div>`;
   $("devActions").hidden = false;
   syncDevActionButtons();
-  $("gate2Row").hidden = !(currentRel && currentRel.id && currentRel.fresh !== false && !currentRel.current_decision);
+  $("gate2Row").hidden = !(currentRel && currentRel.id && currentRel.fresh !== false && !hasLatestDecision(currentRel.current_decision));
   const loadErr = [
     qaErr ? (qaRes.data.error || "獨立 QA 讀取失敗") : "",
     stgErr ? (stgRes.data.error || "隔離 staging 讀取失敗") : "",
