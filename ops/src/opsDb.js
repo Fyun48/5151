@@ -806,6 +806,7 @@ export function applyOpsSchema(db) {
       completed_at TEXT,
       expires_at TEXT,
       cleanup_status TEXT,
+      subscription_generation INTEGER,
       created_at TEXT NOT NULL,
       FOREIGN KEY (issue_id) REFERENCES issue_candidate(id) ON DELETE RESTRICT,
       FOREIGN KEY (coding_task_id) REFERENCES development_coding_task(id) ON DELETE RESTRICT,
@@ -890,6 +891,7 @@ export function applyOpsSchema(db) {
       source_base_drift INTEGER NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'completed',   -- completed|cancelled（manifest 產物狀態；本體不可變）
       generated_at TEXT NOT NULL,
+      subscription_generation INTEGER,
       created_at TEXT NOT NULL,
       FOREIGN KEY (issue_id) REFERENCES issue_candidate(id) ON DELETE RESTRICT,
       FOREIGN KEY (coding_task_id) REFERENCES development_coding_task(id) ON DELETE RESTRICT,
@@ -992,6 +994,7 @@ export function applyOpsSchema(db) {
       attempt_count INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
+      subscription_generation INTEGER,
       FOREIGN KEY (release_manifest_id) REFERENCES development_release_candidate(id) ON DELETE CASCADE
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_relnotif_manifest ON release_notification(release_manifest_id, channel);
@@ -1083,6 +1086,7 @@ export function applyOpsSchema(db) {
       authorized_github_actor TEXT NOT NULL,
       created_by TEXT NOT NULL,
       created_at TEXT NOT NULL,
+      subscription_generation INTEGER,
       FOREIGN KEY (release_authorization_id) REFERENCES production_release_authorization(id) ON DELETE RESTRICT,
       FOREIGN KEY (release_manifest_id) REFERENCES development_release_candidate(id) ON DELETE RESTRICT,
       FOREIGN KEY (migration_safety_assessment_id) REFERENCES production_migration_safety_assessment(id) ON DELETE RESTRICT
@@ -1325,6 +1329,18 @@ export function upgradeIssueFollowUp(db) {
     ["subscription_generation", "INTEGER"],
   ]);
   addIfMissing("development_qa_run", [
+    ["subscription_generation", "INTEGER"],
+  ]);
+  addIfMissing("development_staging_deployment", [
+    ["subscription_generation", "INTEGER"],
+  ]);
+  addIfMissing("development_release_candidate", [
+    ["subscription_generation", "INTEGER"],
+  ]);
+  addIfMissing("release_notification", [
+    ["subscription_generation", "INTEGER"],
+  ]);
+  addIfMissing("production_release_run", [
     ["subscription_generation", "INTEGER"],
   ]);
   db.exec("CREATE INDEX IF NOT EXISTS idx_issue_parent ON issue_candidate(parent_issue_id, id)");

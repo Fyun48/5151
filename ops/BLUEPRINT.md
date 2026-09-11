@@ -335,6 +335,14 @@ Owner 直達部署從現在就保留，不必等第 8 包。OPS 新工作流是�
 - 尚未綁 product 的舊任務維持相容，未決清單仍標尚未分站。
 - 反悔：解除訂閱或重連。不接真 Cursor Cloud Agent，不開 `PRODUCTION_RELEASE_ALLOW_LIVE`。
 
+### 包 16 — staging／發行重驗訂閱世代
+
+- 能推到產品的隔離 staging、發行候選、發布通知與正式發布 run 戳上當時的訂閱世代。
+- claim／execute／重佈／組 RC／核准發布／外送通知／開新 workflow 前重驗世代與訂閱是否仍接通。
+- 世代已換或已退出 → 工作標失敗，不寫入 staging current、不組新 RC、不送通知、不開新正式發布 workflow；已送出的部署不宣稱撤回。
+- 尚未綁 product 的舊任務維持相容，未決清單仍標尚未分站。
+- 反悔：解除訂閱或重連。不開 `PRODUCTION_RELEASE_ALLOW_LIVE`，不合 master。
+
 ---
 
 ## 12. 我堅持的理想（用來審每一個 PR）

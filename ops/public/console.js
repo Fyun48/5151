@@ -138,6 +138,8 @@ const PENDING_KIND_LABEL = {
   insight_embedding: "洞察向量",
   crm_replica: "CRM 複本",
   coding: "製作任務",
+  staging: "隔離 staging",
+  production_release: "正式發布",
   release_notification: "發布通知",
 };
 
