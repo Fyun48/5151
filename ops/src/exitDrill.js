@@ -89,7 +89,7 @@ export function listPendingWork(db, productId) {
       id: row.id,
       state: row.status,
       blocking: row.status === "processing",
-      note: "未送出的分析可取消；已在跑的不宣稱撤回",
+      note: "未送出的分析可取消；已在跑的不宣稱撤回。訂閱世代已換或已退出的晚到結果不會開新議題。",
     });
   }
   if (tableExists(db, "development_coding_task")) {

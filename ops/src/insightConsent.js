@@ -15,11 +15,30 @@ function tableExists(db, name) {
 export function loadProductConsent(db, productId) {
   if (!productId || !db) return null;
   return db.prepare(`
-    SELECT p.id, p.status, s.status AS subscription_status, s.capabilities
+    SELECT p.id, p.status, s.status AS subscription_status, s.capabilities,
+           s.generation AS subscription_generation
       FROM ops_product p
       LEFT JOIN product_subscription s ON s.product_id = p.id
      WHERE p.id=?
   `).get(productId) || null;
+}
+
+export function currentSubscriptionGeneration(db, productId) {
+  const row = loadProductConsent(db, productId);
+  return Number(row?.subscription_generation || 1);
+}
+
+export function workerWriteDecision(db, feedbackId, { expectedGeneration = null } = {}) {
+  const row = db.prepare("SELECT product_id FROM ingested_feedback WHERE id=?").get(Number(feedbackId) || 0);
+  if (!row?.product_id) return { ok: false, reason: "subscription_revoked" };
+  const product = loadProductConsent(db, row.product_id);
+  if (!product) return { ok: false, reason: "subscription_revoked" };
+  const currentGen = Number(product.subscription_generation || 1);
+  if (expectedGeneration != null && Number(expectedGeneration) !== currentGen) {
+    return { ok: false, reason: "stale_generation", current_generation: currentGen };
+  }
+  if (!productAllowsNewInsight(product)) return { ok: false, reason: "subscription_revoked", current_generation: currentGen };
+  return { ok: true, generation: currentGen };
 }
 
 export function productAllowsNewInsight(product) {
@@ -35,9 +54,7 @@ export function productAllowsNewInsight(product) {
 }
 
 export function feedbackAllowsNewInsight(db, feedbackId) {
-  const row = db.prepare("SELECT product_id FROM ingested_feedback WHERE id=?").get(Number(feedbackId) || 0);
-  if (!row?.product_id) return false;
-  return productAllowsNewInsight(loadProductConsent(db, row.product_id));
+  return workerWriteDecision(db, feedbackId).ok;
 }
 
 export function insightPurgeCounts(db, productId) {

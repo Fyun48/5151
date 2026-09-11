@@ -1,7 +1,7 @@
 import { getCurrentFeedbackAnalysis } from "./feedbackAnalysis.js";
 import { buildEmbeddingInput, NORMALIZATION_VERSION } from "./ai/embeddingInput.js";
 import { storeEmbedding, autoClusterFeedback, feedbackIssue, clusteringConfig, reevaluateMembershipOnRefresh } from "./clustering.js";
-import { feedbackAllowsNewInsight } from "./insightConsent.js";
+import { workerWriteDecision } from "./insightConsent.js";
 
 // Phase 5 背景 worker：異步產生 embedding 並保守自動分群。
 // - ingestion 永不等待；provider 未設定（available=false）→ 略過，不影響 feedback 儲存。
@@ -42,9 +42,9 @@ export async function runEmbeddingOnce(db, { provider, now = () => new Date(), t
   const rows = candidates(db, { model, modelVersion, normVersion: NORMALIZATION_VERSION, limit: batchSize });
   const summary = { embedded: 0, clustered: 0, staled: 0, new_issues: 0, linked: 0 };
   for (const c of rows) {
-    if (!feedbackAllowsNewInsight(db, c.feedback_id)) continue;
     const current = getCurrentFeedbackAnalysis(db, c.feedback_id);
     if (!current || current.id !== c.analysis_id) continue; // current 可能又變了
+    if (!workerWriteDecision(db, c.feedback_id, { expectedGeneration: current.subscription_generation }).ok) continue;
     const fb = db.prepare("SELECT id, content FROM ingested_feedback WHERE id=?").get(c.feedback_id);
     if (!fb) continue;
     const input = buildEmbeddingInput(current, fb);

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { withImmediateTx } from "./tx.js";
 import { appendAudit, appendAuditRow } from "./audit.js";
 import { claimAnalysisBatch, completeAnalysis, failAnalysis } from "./feedbackAnalysis.js";
+import { workerWriteDecision } from "./insightConsent.js";
 import { minimizeForAnalysis, buildClassificationPrompt } from "./ai/prompt.js";
 import { parseAndValidate } from "./ai/schema.js";
 
@@ -49,6 +50,16 @@ async function processOne(db, job, { provider, timeoutMs, now = () => new Date()
     return out.status;
   }
 
+  const gate = workerWriteDecision(db, job.feedback_id, { expectedGeneration: job.subscription_generation });
+  if (!gate.ok) {
+    let out;
+    withImmediateTx(db, () => {
+      out = failAnalysis(db, job, { errorCode: gate.reason || "subscription_revoked", transient: false, now: now() });
+      appendAuditRow(db, { actor: "system", action: "feedback.analysis.failed", entityType: "feedback_analysis", entityId: String(job.id), data: { feedback_id: job.feedback_id, error_code: gate.reason || "subscription_revoked", status: out.status } });
+    });
+    return out.status;
+  }
+
   const input = minimizeForAnalysis(fb);
   const { system, user, promptVersion } = buildClassificationPrompt(input);
   appendAudit(db, { actor: "system", action: "feedback.analysis.started", entityType: "feedback_analysis", entityId: String(job.id), data: { feedback_id: job.feedback_id, provider: provider.name, prompt_version: promptVersion, attempt: job.attempt } });
@@ -86,10 +97,11 @@ async function processOne(db, job, { provider, timeoutMs, now = () => new Date()
     return "completed";
   } catch (err) {
     const isSchema = err?.status === 422;
-    const code = isSchema ? "schema_invalid" : (err?.name === "AbortError" ? "timeout" : (err?.name || "provider_error"));
+    const isStale = err?.status === 409;
+    const code = isStale ? (err.code || "stale_generation") : (isSchema ? "schema_invalid" : (err?.name === "AbortError" ? "timeout" : (err?.name || "provider_error")));
     let out;
     withImmediateTx(db, () => {
-      out = failAnalysis(db, job, { errorCode: code, transient: !isSchema, now: now(), random });
+      out = failAnalysis(db, job, { errorCode: code, transient: !isSchema && !isStale, now: now(), random });
       appendAuditRow(db, { actor: "system", action: "feedback.analysis.failed", entityType: "feedback_analysis", entityId: String(job.id), data: { feedback_id: job.feedback_id, revision: job.revision, error_code: code, status: out.status, retry_count: out.retry_count } });
     });
     return out.status;

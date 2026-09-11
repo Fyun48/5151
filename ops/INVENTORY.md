@@ -1,9 +1,9 @@
 # OPS／v3 現況對照表（ChatGPT 審查後）
 
-盤點對象：本分支 `cursor/ops-stats-ed3f`（第 0–12 包，疊在 insight 上）。  
-ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契約、Deploy OPS、產品卡、退出演練、站內 CRM、隔離 staging、開發發行檢視、OPS 供應商抽屜、v3 BudgetGuard、pHash 附屬表與兩個 LLM 開關、第 8 包 live 契約、第 9 包可打包設計套件、第 10 包遠端客服、第 11 包跨站洞察與清除、以及第 12 包統計指標／後續服務門。**不以那次抽查當現況。**
+盤點對象：本分支 `cursor/ops-stale-gen-ed3f`（第 0–13 包，疊在 stats 上）。  
+ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契約、Deploy OPS、產品卡、退出演練、站內 CRM、隔離 staging、開發發行檢視、OPS 供應商抽屜、v3 BudgetGuard、pHash 附屬表與兩個 LLM 開關、第 8 包 live 契約、第 9 包可打包設計套件、第 10 包遠端客服、第 11 包跨站洞察與清除、第 12 包統計指標／後續服務門、以及第 13 包 worker 重驗訂閱世代。**不以那次抽查當現況。**
 
-本次是第 12 包（統計指標與後續服務門），**不是部署指令**，不 Deploy v3，也不擅自跑 Deploy OPS。`PRODUCTION_RELEASE_ALLOW_LIVE` 維持預設 0。`stats`、`followup_service`、`cross_site_insight` 與 `retain_after_exit` 維持預設關。
+本次是第 13 包（worker 重驗訂閱世代），**不是部署指令**，不 Deploy v3，也不擅自跑 Deploy OPS。`PRODUCTION_RELEASE_ALLOW_LIVE` 維持預設 0。`stats`、`followup_service`、`cross_site_insight` 與 `retain_after_exit` 維持預設關。
 
 圖例：`存在`＝可承接；`需改`＝有程式但契約不足；`待做`＝尚未實作。
 
@@ -41,7 +41,8 @@ ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契�
 | 共用設計元件可打包 | 本輪已做 | `design-system/tokens.css`、`design-system/kit/`、`v3/public/kit/`、`ops/public/kit/` | 第 9 包；固定版本可本機打包；runtime 不回抓 OPS；v3 保留內建 `tokens.css` |
 | 遠端客服操作 | 已做 | `ops/src/siteCommand.js`、`v3/src/siteCommandApply.js`、Console CRM、後台 `#feedback` | 第 10 包；capability `remote_cs` 預設關；本站驗證後才寫本機；離線不假成功 |
 | 跨站洞察與清除 | 已做 | `ops/src/insightConsent.js`、`ops/src/exitDrill.js`、Console 產品卡 | 第 11 包；`cross_site_insight`／`retain_after_exit` 預設關；撤回停新洞察；刪複本才清向量／匯出 |
-| 統計指標／後續服務門 | 本輪已做 | `ops/src/usageConsent.js`、`ops/src/purgeLedger.js`、Console 產品卡 | 第 12 包；預設關；未授權不列入指標、不送入庫 webhook；清除帳本還原後重套；不發明報表 |
+| 統計指標／後續服務門 | 已做 | `ops/src/usageConsent.js`、`ops/src/purgeLedger.js`、Console 產品卡 | 第 12 包；預設關；未授權不列入指標、不送入庫 webhook；清除帳本還原後重套；不發明報表 |
+| Worker 重驗訂閱世代 | 本輪已做 | `ops/src/insightConsent.js` `workerWriteDecision`、分析／分群 worker | 第 13 包；晚到結果不開單、不寫入、不復活已退出訂閱 |
 
 ## 2. 第 14 節驗收情境的實作安排
 

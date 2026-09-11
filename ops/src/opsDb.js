@@ -193,6 +193,7 @@ export function applyOpsSchema(db) {
       estimated_cost REAL,
       created_at TEXT NOT NULL,
       completed_at TEXT,
+      subscription_generation INTEGER,
       FOREIGN KEY (feedback_id) REFERENCES ingested_feedback(id) ON DELETE RESTRICT
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_analysis_identity ON feedback_analysis(feedback_id, analysis_type, revision);
@@ -1306,6 +1307,9 @@ export function upgradeIssueFollowUp(db) {
     ["parent_issue_id", "INTEGER"],
     ["issue_kind", "TEXT NOT NULL DEFAULT 'normal'"],
     ["product_id", "TEXT"],
+  ]);
+  addIfMissing("feedback_analysis", [
+    ["subscription_generation", "INTEGER"],
   ]);
   db.exec("CREATE INDEX IF NOT EXISTS idx_issue_parent ON issue_candidate(parent_issue_id, id)");
 }

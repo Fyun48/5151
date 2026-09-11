@@ -2,7 +2,7 @@ import { appendAuditRow } from "./audit.js";
 import { withImmediateTx } from "./tx.js";
 import { httpError } from "./errors.js";
 import { ANALYSIS_TYPE_CLASSIFICATION, CLASSIFICATION_PROMPT_VERSION } from "./ai/prompt.js";
-import { feedbackAllowsNewInsight } from "./insightConsent.js";
+import { currentSubscriptionGeneration, feedbackAllowsNewInsight, workerWriteDecision } from "./insightConsent.js";
 import { analysisStatsForConsent } from "./usageConsent.js";
 
 // feedback_analysis 的資料/狀態機。狀態：pending → processing → completed | failed。
@@ -38,11 +38,13 @@ export function enqueueAnalysisRow(db, { feedbackId, analysisType = ANALYSIS_TYP
   ).get(Number(feedbackId), analysisType);
   const revision = (Number(prev?.m) || 0) + 1;
   const ts = iso(now);
+  const productId = db.prepare("SELECT product_id FROM ingested_feedback WHERE id=?").get(Number(feedbackId))?.product_id;
+  const generation = currentSubscriptionGeneration(db, productId);
   const res = db.prepare(
-    `INSERT INTO feedback_analysis(feedback_id, analysis_type, revision, retry_count, max_retries, prompt_version, status, next_attempt_at, created_at)
-     VALUES (?, ?, ?, 0, ?, ?, 'pending', ?, ?)`,
-  ).run(Number(feedbackId), analysisType, revision, maxRetries, promptVersion, ts, ts);
-  return { id: Number(res.lastInsertRowid), revision };
+    `INSERT INTO feedback_analysis(feedback_id, analysis_type, revision, retry_count, max_retries, prompt_version, status, next_attempt_at, created_at, subscription_generation)
+     VALUES (?, ?, ?, 0, ?, ?, 'pending', ?, ?, ?)`,
+  ).run(Number(feedbackId), analysisType, revision, maxRetries, promptVersion, ts, ts, generation);
+  return { id: Number(res.lastInsertRowid), revision, subscription_generation: generation };
 }
 
 // Owner 手動 reprocess：建立新的 revision（可指定新的 prompt_version）。永不覆寫舊結果。
@@ -69,6 +71,13 @@ export function reprocessAnalysis(db, feedbackId, { analysisType = ANALYSIS_TYPE
 export function claimAnalysisBatch(db, { limit = 10, now = new Date(), staleMs = ANALYSIS_CLAIM_STALE_MS } = {}) {
   const nowIso = iso(now);
   const staleBefore = iso(new Date((now instanceof Date ? now.getTime() : now) - staleMs));
+  const inflight = db.prepare("SELECT * FROM feedback_analysis WHERE status IN ('pending','failed_retry','processing')").all();
+  for (const row of inflight) {
+    const decision = workerWriteDecision(db, row.feedback_id, { expectedGeneration: row.subscription_generation });
+    if (decision.ok) continue;
+    db.prepare("UPDATE feedback_analysis SET status='failed', error_code=? WHERE id=? AND status IN ('pending','failed_retry','processing')")
+      .run(decision.reason || "subscription_revoked", row.id);
+  }
   const candidates = db.prepare(
     `SELECT * FROM feedback_analysis
      WHERE (status IN ('pending','failed_retry') AND next_attempt_at <= ?)
@@ -77,7 +86,12 @@ export function claimAnalysisBatch(db, { limit = 10, now = new Date(), staleMs =
   ).all(nowIso, staleBefore, Math.max(1, Math.min(Number(limit) || 10, 100)));
   const claimed = [];
   for (const row of candidates) {
-    if (!feedbackAllowsNewInsight(db, row.feedback_id)) continue;
+    const decision = workerWriteDecision(db, row.feedback_id, { expectedGeneration: row.subscription_generation });
+    if (!decision.ok) {
+      db.prepare("UPDATE feedback_analysis SET status='failed', error_code=? WHERE id=? AND status IN ('pending','failed_retry','processing')")
+        .run(decision.reason || "subscription_revoked", row.id);
+      continue;
+    }
     let res;
     if (row.status === "processing") {
       res = db.prepare("UPDATE feedback_analysis SET claimed_at=? WHERE id=? AND status='processing' AND (claimed_at IS NULL OR claimed_at <= ?)").run(nowIso, row.id, staleBefore);
@@ -93,8 +107,14 @@ export function claimAnalysisBatch(db, { limit = 10, now = new Date(), staleMs =
 // 呼叫端須在同一交易內（worker 已用 withImmediateTx 包住）。
 export function completeAnalysis(db, id, { provider, model, modelVersion = null, result, rawOutputHash, usage = {}, now = new Date() }) {
   const ts = iso(now);
-  const row = db.prepare("SELECT feedback_id, analysis_type FROM feedback_analysis WHERE id = ?").get(Number(id));
+  const row = db.prepare("SELECT feedback_id, analysis_type, subscription_generation FROM feedback_analysis WHERE id = ?").get(Number(id));
   if (!row) throw httpError("analysis not found", 404);
+  const decision = workerWriteDecision(db, row.feedback_id, { expectedGeneration: row.subscription_generation });
+  if (!decision.ok) {
+    const err = httpError(decision.reason === "stale_generation" ? "訂閱世代已換，晚到結果不寫入。" : "訂閱已退出或未授權，晚到結果不寫入。", 409);
+    err.code = decision.reason || "subscription_revoked";
+    throw err;
+  }
   db.prepare(
     `UPDATE feedback_analysis SET status='completed', provider=?, model=?, model_version=?,
        category=?, summary=?, severity_hint=?, confidence=?, language=?, raw_output_hash=?,
@@ -188,6 +208,7 @@ export function publicAnalysis(row) {
     model_version: row.model_version,
     prompt_version: row.prompt_version,
     raw_output_hash: row.raw_output_hash,
+    subscription_generation: row.subscription_generation == null ? null : Number(row.subscription_generation),
     error_code: row.error_code,
     usage: {
       input_tokens: row.usage_input_tokens,
