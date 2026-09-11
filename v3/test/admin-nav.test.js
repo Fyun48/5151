@@ -33,6 +33,10 @@ test("admin settings are grouped into clickable categories", () => {
   assert.match(html, /data-admin-panel="plugins"/);
   assert.match(html, /id="pluginCards"/);
   assert.match(html, /id="pluginsErrorSummary"/);
+  assert.match(html, /id="pluginSiteForm"/);
+  assert.match(html, /不另設全站上限/);
+  assert.match(html, /id="pluginSiteSave"/);
+  assert.match(html, /data-plugin-focus/);
   assert.match(html, /function showAdminPanel/);
   assert.match(html, /admin-shell\.is-ready \.admin-panel \{ display: none; \}/);
 

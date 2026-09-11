@@ -101,10 +101,15 @@
     .plugin-card h3 { margin: 0 0 6px; font-size: 16px; }
     .fuse-bar { height: 8px; background: var(--line); border-radius: 999px; overflow: hidden; margin: 8px 0; }
     .fuse-bar > span { display: block; height: 100%; background: var(--accent); }
-    .fuse-bar.is-warn > span { background: #b08989; }
+    .fuse-bar.is-warn > span { background: var(--rose, #b08989); }
     .fuse-bar.is-trip > span { background: var(--shezi-red, #DC2626); }
     .plugin-log-wrap { overflow-x: auto; }
     .plugin-log-wrap table { min-width: 560px; }
+    #plugins button:focus-visible, #plugins input:focus-visible, #plugins select:focus-visible, #plugins a:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    #plugins button.primary, #plugins button.ghost { min-height: var(--touch, 44px); }
     .crm-table-wrap { margin-top: 14px; overflow-x: auto; }
     .crm-table-wrap table { min-width: 560px; width: max-content; }
     th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
@@ -1048,14 +1053,22 @@
       <div id="plugins" class="admin-panel" data-admin-panel="plugins">
 <section class="card">
       <h2>外掛與預算</h2>
-      <p class="hint">金鑰與每日預算只寫在本站。預設全關；日預算 0 元＝不准花錢，不是無限。先保留額度才呼叫外網。逾時不釋放已送出的保留。關掉開關會回到原本的免費爬蟲／直線距離／現有同源規則。</p>
+      <p class="hint">金鑰與每日預算只寫在本站。預設全關。各卡「每日預算 0」＝該類不准花錢，不是無限。本站總預算 0＝不另設全站上限，仍以各卡日預算為準。先保留額度才呼叫外網。逾時不釋放已送出的保留。關掉開關會回到原本的免費爬蟲／直線距離／現有同源規則。</p>
       <div id="pluginsErrorSummary" class="msg err" role="alert" tabindex="-1" hidden></div>
       <p class="msg" id="pluginsMsg" role="status"></p>
-      <div class="grid-2" style="margin-bottom:12px">
-        <label>本站每日總預算（TWD）<input id="pluginSiteDaily" type="number" min="0" step="1" inputmode="decimal" /></label>
-        <label>本站每月總預算（TWD）<input id="pluginSiteMonthly" type="number" min="0" step="1" inputmode="decimal" /></label>
-      </div>
-      <div id="pluginCards"></div>
+      <form id="pluginSiteForm" class="plugin-card" autocomplete="off">
+        <h3>本站總預算（選填）</h3>
+        <p class="hint">填大於 0 才加一道全站上限，換供應商也算進去。留 0＝不另設全站上限。各卡日預算仍獨立計算。</p>
+        <div class="grid-2">
+          <label>本站每日總預算（TWD，0＝不另設上限）<input id="pluginSiteDaily" type="number" min="0" step="1" inputmode="decimal" /></label>
+          <label>本站每月總預算（TWD，0＝不另設上限）<input id="pluginSiteMonthly" type="number" min="0" step="1" inputmode="decimal" /></label>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button type="submit" class="primary" id="pluginSiteSave">儲存本站總預算</button>
+        </div>
+        <p class="msg" id="pluginSiteMsg" role="status"></p>
+      </form>
+      <div id="pluginCards" aria-busy="false"></div>
       <h3>最近 50 筆用量</h3>
       <p class="hint">已結算、保留中與 fallback 分開列。不顯示金鑰或供應商原始錯誤。</p>
       <div class="plugin-log-wrap">
@@ -2831,17 +2844,20 @@
         const pct = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
         const options = (item.codes || []).map((code) => `<option value="${code}" ${code === item.provider_code ? "selected" : ""}>${PLUGIN_CODE_LABEL[code] || code}</option>`).join("");
         const packNote = item.pack === 7 ? `<p class="hint">第 7 包才接 LLM；現在可先登記，預設關閉。</p>` : "";
+        const credHint = item.category === "distance_matrix"
+          ? "地圖距離沿用「抓取底庫」的 Google 金鑰，不必再貼一組。"
+          : (item.has_credential ? "已設定" : "尚未設定");
         return `<form class="plugin-card" data-plugin="${item.category}">
           <h3>${item.label}</h3>
           ${packNote}
           <div class="fuse-bar ${pluginFuseClass(item.fuse)}" aria-hidden="true"><span style="width:${pct}%"></span></div>
-          <p class="hint">今日 ${used}／${limit || 0} 元（已結算 ${item.today_settled_twd || 0}、保留中 ${item.today_reserved_twd || 0}）${item.fuse === "tripped" ? " · 已熔斷" : item.fuse === "warn" ? " · 已超過 80%" : ""}</p>
+          <p class="hint">今日 ${used}／${limit || 0} 元（已結算 ${item.today_settled_twd || 0}、保留中 ${item.today_reserved_twd || 0}）${item.fuse === "tripped" ? " · 已熔斷" : item.fuse === "warn" ? " · 已超過 80%" : ""}。建議每日 NT$${item.suggested_daily_twd || 0}。</p>
           <label class="checks"><input type="checkbox" data-plugin-enabled ${item.is_enabled ? "checked" : ""} /> 開啟付費路徑（預設關）</label>
           <label>供應商 <select data-plugin-code>${options}</select></label>
-          <label>每日預算（TWD，0＝不准花）<input data-plugin-daily type="number" min="0" step="1" value="${item.daily_budget_twd || 0}" /></label>
-          <label>每月預算（TWD）<input data-plugin-monthly type="number" min="0" step="1" value="${item.monthly_budget_twd || 0}" /></label>
+          <label>每日預算（TWD，0＝此類不准花）<input id="plugin-daily-${item.category}" data-plugin-daily type="number" min="0" step="1" value="${item.daily_budget_twd || 0}" /></label>
+          <label>每月預算（TWD，0＝不另設月上限）<input data-plugin-monthly type="number" min="0" step="1" value="${item.monthly_budget_twd || 0}" /></label>
           <label>單次估價上限（TWD）<input data-plugin-ceiling type="number" min="0" step="0.1" value="${item.ceiling_twd || 0}" /></label>
-          <label>憑證（空白則保留）${item.has_credential ? "已設定" : "尚未設定"}<input data-plugin-key type="password" autocomplete="new-password" placeholder="${item.has_credential ? "已設定，空白則保留" : "貼上金鑰"}" /></label>
+          <label>憑證（空白則保留）${escapeHtml(credHint)}<input data-plugin-key type="password" autocomplete="new-password" placeholder="${item.has_credential ? "已設定，空白則保留" : "貼上金鑰"}" /></label>
           <div class="row" style="margin-top:10px;flex-wrap:wrap;gap:8px">
             <button type="submit" class="primary">儲存此卡</button>
             <button type="button" class="ghost" data-plugin-test>測試連線</button>
@@ -2850,7 +2866,7 @@
         </form>`;
       }).join("");
       $("pluginLogs").innerHTML = (overview.logs || []).length
-        ? overview.logs.map((row) => `<tr><td>${escapeHtml(row.created_at || "")}</td><td>${escapeHtml(row.category || "")}</td><td>${escapeHtml(row.event_kind || "")}</td><td>${row.amount_twd == null ? "—" : row.amount_twd}</td><td>${escapeHtml(row.job_state || "")}</td></tr>`).join("")
+        ? overview.logs.map((row) => `<tr><td>${escapeHtml(formatPluginTime(row.created_at))}</td><td>${escapeHtml(row.category_label || row.category || "")}</td><td>${escapeHtml(row.event_label || row.event_kind || "")}</td><td>${row.amount_twd == null ? "—" : row.amount_twd}</td><td>${escapeHtml(row.state_label || row.job_state || "—")}</td></tr>`).join("")
         : `<tr><td colspan="5">還沒有用量紀錄。</td></tr>`;
       $("pluginCards").querySelectorAll("form.plugin-card").forEach((form) => {
         form.addEventListener("submit", (ev) => { ev.preventDefault(); savePluginCard(form); });
@@ -2866,24 +2882,39 @@
         monthly_budget_twd: Number(form.querySelector("[data-plugin-monthly]")?.value || 0),
         ceiling_twd: Number(form.querySelector("[data-plugin-ceiling]")?.value || 0),
         credential: form.querySelector("[data-plugin-key]")?.value || "",
-        site_daily_budget_twd: Number($("pluginSiteDaily")?.value || 0),
-        site_monthly_budget_twd: Number($("pluginSiteMonthly")?.value || 0),
       };
     }
     function showPluginErrors(items) {
       const box = $("pluginsErrorSummary");
       if (!items.length) { box.hidden = true; box.innerHTML = ""; return; }
       box.hidden = false;
-      box.innerHTML = `<strong>請先修正</strong><ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`;
+      box.innerHTML = `<strong id="pluginsErrorTitle">請先修正</strong><ul>${items.map((item) => `<li><a href="#plugins" data-plugin-focus="${item.id}">${escapeHtml(item.text)}</a></li>`).join("")}</ul>`;
+      box.querySelectorAll("[data-plugin-focus]").forEach((link) => {
+        link.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          const field = document.getElementById(link.dataset.pluginFocus);
+          field?.focus();
+          field?.scrollIntoView({ block: "center" });
+        });
+      });
       box.focus();
+    }
+    function formatPluginTime(value) {
+      const t = Date.parse(String(value || ""));
+      if (!Number.isFinite(t)) return String(value || "");
+      return new Date(t).toLocaleString("zh-TW", { hour12: false });
     }
     async function savePluginCard(form) {
       const payload = pluginFormPayload(form);
       const errors = [];
-      if (payload.is_enabled && payload.daily_budget_twd <= 0) errors.push(`${payload.category}：已開啟但日預算為 0，仍不准花錢。`);
-      showPluginErrors(errors);
+      if (payload.is_enabled && payload.daily_budget_twd <= 0) {
+        errors.push({ id: `plugin-daily-${payload.category}`, text: `${payload.category} 已開啟但日預算為 0，儲存後此類仍不准花錢。` });
+      }
+      showPluginErrors([]);
       const msg = form.querySelector("[data-plugin-msg]");
       if (msg) { msg.textContent = "儲存中…"; msg.className = "msg"; }
+      const btn = form.querySelector("button[type=submit]");
+      if (btn) btn.disabled = true;
       try {
         const res = await fetch("/api/admin/providers", {
           method: "PUT",
@@ -2893,10 +2924,15 @@
         const data = await readApi(res);
         if (!res.ok) throw new Error(data.error || "儲存失敗");
         renderPluginCards(data.overview);
-        setMsg("pluginsMsg", "已儲存。關掉開關＝回到免費路徑，已送出的保留額度不會撤銷。", true);
+        setMsg("pluginsMsg", errors.length
+          ? `已儲存。${errors[0].text}`
+          : "已儲存。關掉開關＝回到免費路徑，已送出的保留額度不會撤銷。", true);
       } catch (error) {
         if (msg) { msg.textContent = error.message; msg.className = "msg err"; }
         setMsg("pluginsMsg", error.message);
+        showPluginErrors([{ id: `plugin-daily-${payload.category}`, text: error.message }]);
+      } finally {
+        if (btn) btn.disabled = false;
       }
     }
     async function testPluginCard(form) {
@@ -2920,12 +2956,48 @@
       }
     }
     async function loadPlugins() {
-      const res = await fetch("/api/admin/providers", { cache: "no-store" });
-      const data = await readApi(res);
-      if (!res.ok) { setMsg("pluginsMsg", data.error || "載入外掛失敗"); return; }
-      renderPluginCards(data);
-      setMsg("pluginsMsg", data.legal || "", true);
+      const host = $("pluginCards");
+      if (host) {
+        host.setAttribute("aria-busy", "true");
+        if (!host.querySelector(".plugin-card")) host.textContent = "載入中…";
+      }
+      try {
+        const res = await fetch("/api/admin/providers", { cache: "no-store" });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "載入外掛失敗");
+        renderPluginCards(data);
+        setMsg("pluginsMsg", data.legal || "", true);
+      } catch (error) {
+        if (host) host.innerHTML = `<p class="msg err">${escapeHtml(error.message)}</p><button type="button" class="ghost" id="pluginRetry">重試</button>`;
+        $("pluginRetry")?.addEventListener("click", loadPlugins);
+        setMsg("pluginsMsg", error.message);
+      } finally {
+        host?.setAttribute("aria-busy", "false");
+      }
     }
+    $("pluginSiteForm")?.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      $("pluginSiteSave").disabled = true;
+      setMsg("pluginSiteMsg", "儲存中…");
+      try {
+        const res = await fetch("/api/admin/providers/site-budget", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            site_daily_budget_twd: Number($("pluginSiteDaily")?.value || 0),
+            site_monthly_budget_twd: Number($("pluginSiteMonthly")?.value || 0),
+          }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "儲存失敗");
+        renderPluginCards(data.overview);
+        setMsg("pluginSiteMsg", "本站總預算已儲存。0＝不另設全站上限。", true);
+      } catch (error) {
+        setMsg("pluginSiteMsg", error.message);
+      } finally {
+        $("pluginSiteSave").disabled = false;
+      }
+    });
     $("crmReload")?.addEventListener("click", loadCrm);
     $("crmSearchBtn")?.addEventListener("click", loadCrm);
     $("crmQuery")?.addEventListener("change", loadCrm);

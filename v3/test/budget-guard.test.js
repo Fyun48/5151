@@ -166,5 +166,6 @@ test("admin view never returns raw credentials", () => {
   const scraping = view.items.find((row) => row.category === "scraping_api");
   assert.equal(scraping.has_credential, true);
   assert.equal(JSON.stringify(view).includes("secret-zenrows-key"), false);
+  assert.equal(view.logs.every((row) => !("note" in row)), true);
   db.close();
 });

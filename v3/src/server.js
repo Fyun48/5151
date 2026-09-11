@@ -72,6 +72,7 @@ import {
   saveAdminMapsSettings,
   getAdminProviderSettings,
   saveAdminProviderSettings,
+  saveAdminSiteBudget,
   testAdminProvider,
   settingsForGeoBackfill,
   getMemberMailSettings,
@@ -1477,6 +1478,14 @@ app.post("/api/admin/documents/:id/new-version", requireAdminApi, (req, res) => 
 
 app.get("/api/admin/providers", requireAdminApi, (_req, res) => {
   res.json(getAdminProviderSettings());
+});
+
+app.put("/api/admin/providers/site-budget", requireAdminApi, (req, res) => {
+  try {
+    res.json({ ok: true, ...saveAdminSiteBudget(req.body || {}), overview: getAdminProviderSettings() });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
 });
 
 app.put("/api/admin/providers", requireAdminApi, (req, res) => {

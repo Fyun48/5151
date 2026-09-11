@@ -235,7 +235,8 @@ export function loadEnabledProvider(db, category) {
 
 export function hasCredentials(db, cfg) {
   if (!cfg) return false;
-  if (cfg.provider_code === "stub_paid" || cfg.provider_code === "google_routes") return true;
+  if (cfg.provider_code === "stub_paid") return true;
+  if (cfg.provider_code === "google_routes") return true;
   if (!cfg.credential_ref) return false;
   const secret = db.prepare("SELECT credential_ref FROM provider_secrets WHERE credential_ref = ?").get(cfg.credential_ref);
   return Boolean(secret);
@@ -551,10 +552,23 @@ export function saveProviderConfig(db, input = {}, { now = new Date() } = {}) {
   if (input.site_daily_budget_twd != null) {
     upsertSetting(db, "budget_site_daily_minor", twdToMinor(input.site_daily_budget_twd));
   }
+  if (input.site_daily_budget_twd != null || input.site_monthly_budget_twd != null) {
+    saveSiteBudget(db, input);
+  }
+  return publicProviderConfig(db, category);
+}
+
+export function saveSiteBudget(db, input = {}) {
+  if (input.site_daily_budget_twd != null) {
+    upsertSetting(db, "budget_site_daily_minor", twdToMinor(input.site_daily_budget_twd));
+  }
   if (input.site_monthly_budget_twd != null) {
     upsertSetting(db, "budget_site_monthly_minor", twdToMinor(input.site_monthly_budget_twd));
   }
-  return publicProviderConfig(db, category);
+  return {
+    site_daily_budget_twd: minorToTwd(settingNumber(db, "budget_site_daily_minor", 0)),
+    site_monthly_budget_twd: minorToTwd(settingNumber(db, "budget_site_monthly_minor", 0)),
+  };
 }
 
 export function publicProviderConfig(db, category) {
@@ -567,7 +581,7 @@ export function publicProviderConfig(db, category) {
     label: meta?.label || row.category,
     provider_code: row.provider_code,
     is_enabled: Number(row.is_enabled) === 1,
-    has_credential: hasCredentials(db, row),
+    has_credential: Boolean(row.credential_ref),
     daily_budget_twd: minorToTwd(row.daily_limit_minor),
     monthly_budget_twd: minorToTwd(row.monthly_limit_minor),
     ceiling_twd: minorToTwd(row.ceiling_minor),
@@ -577,6 +591,23 @@ export function publicProviderConfig(db, category) {
     codes: meta?.codes || [],
   };
 }
+
+const USAGE_EVENT_LABEL = Object.freeze({
+  reserved: "已保留",
+  settled: "已結算",
+  released: "已釋放",
+  unknown: "未確認（不釋放）",
+  fallback: "改走免費路徑",
+  budget_exceeded: "超過預算",
+  error: "呼叫失敗",
+});
+
+const RESERVATION_LABEL = Object.freeze({
+  reserved: "保留中",
+  settled: "已結算",
+  released: "已釋放",
+  unknown: "未確認",
+});
 
 export function listProviderAdmin(db, { now = new Date() } = {}) {
   const day = taipeiYmd(now);
@@ -607,12 +638,19 @@ export function listProviderAdmin(db, { now = new Date() } = {}) {
     };
   });
   const logs = db.prepare(`
-    SELECT id, created_at, category, provider_code, event_kind, amount_minor, job_state, note
+    SELECT id, created_at, category, provider_code, event_kind, amount_minor, job_state
     FROM provider_usage_logs
     ORDER BY id DESC
     LIMIT 50
   `).all().map((row) => ({
-    ...row,
+    id: row.id,
+    created_at: row.created_at,
+    category: row.category,
+    category_label: categoryMeta(row.category)?.label || row.category,
+    event_kind: row.event_kind,
+    event_label: USAGE_EVENT_LABEL[row.event_kind] || row.event_kind,
+    job_state: row.job_state,
+    state_label: RESERVATION_LABEL[row.job_state] || row.job_state || "—",
     amount_twd: row.amount_minor == null ? null : minorToTwd(row.amount_minor),
   }));
   return {
@@ -620,6 +658,7 @@ export function listProviderAdmin(db, { now = new Date() } = {}) {
     legal: "金鑰與每日預算只存在本站資料庫。關掉開關會回到原本的免費路徑，不會撤銷已送出的保留額度。",
     site_daily_budget_twd: minorToTwd(settingNumber(db, "budget_site_daily_minor", 0)),
     site_monthly_budget_twd: minorToTwd(settingNumber(db, "budget_site_monthly_minor", 0)),
+    site_zero_means: "uncapped",
     items,
     logs,
   };

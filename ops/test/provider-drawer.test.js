@@ -58,4 +58,6 @@ test("console has provider drawer tab", () => {
   assert.match(html, /供應商抽屜/);
   assert.match(js, /\/ops\/api\/providers/);
   assert.match(js, /refreshProviders/);
+  assert.match(js, /DRAWER_CODE_LABEL/);
+  assert.match(js, /儲存中…/);
 });

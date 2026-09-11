@@ -155,6 +155,7 @@ import {
   ensureBudgetSchema,
   listProviderAdmin,
   saveProviderConfig,
+  saveSiteBudget,
   getProviderConfig,
 } from "./budgetGuard.js";
 import { executeWithProvider } from "./providers/executeWithProvider.js";
@@ -972,6 +973,10 @@ export function getAdminProviderSettings() {
 
 export function saveAdminProviderSettings(partial = {}) {
   return saveProviderConfig(db, partial);
+}
+
+export function saveAdminSiteBudget(partial = {}) {
+  return saveSiteBudget(db, partial);
 }
 
 export async function testAdminProvider(partial = {}) {
