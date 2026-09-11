@@ -21,7 +21,7 @@ test("stale contact 591 listings are re-queued for detail (bounded), fresh ones 
         address: "台北市士林區中正路" + post_id + "號", area_name: "20坪", layout: "2房1廳", floor_name: "5/12",
         kind_name: "整層住家", role_name: "", cover: "", tags: "[]", refresh_time: "", first_seen_at: stamp, last_seen_at: stamp, last_event: "new" });
       // 帶入聯絡資料 + 座標 => contact_fetched=1, extra_fees_fetched=1, lat/lng 齊 => 不在 needy 內
-      setListingDetail(post_id, { extraFees: [{ name: "管理費", amount: 100 }], contact: { contact_name: "王先生", mobile: "0911-000-000" }, fetched: 1, lat: 25.0, lng: 121.5, geo_source: "591" });
+      setListingDetail(post_id, { extraFees: [{ name: "管理費", amount: 100 }], contact: { contact_name: "王先生", mobile: "0911-000-000" }, fetched: 1, lat: 25.0, lng: 121.5, geo_source: "591", kit_fetched: 1 });
     }
     seedFetched(700001);
     const afterSet = db.prepare("SELECT contact_fetched_at FROM listings WHERE post_id=?").get(700001);

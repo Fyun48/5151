@@ -198,6 +198,10 @@ function applyFetchedDetail(listing, detail) {
     community_name: detail.community_name,
     community_linked: detail.community_id ? 1 : detail.community_linked,
     geo_source: detail.geo_source,
+    has_natural_gas: detail.has_natural_gas,
+    has_balcony: detail.has_balcony,
+    furnish_items: detail.furnish_items,
+    kit_fetched: 1,
   });
 }
 

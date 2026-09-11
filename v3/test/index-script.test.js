@@ -248,10 +248,13 @@ test("member profiles cap districts and include usable ping in notify copy", () 
   assert.match(html, /function kitLine/);
   assert.match(html, /此屋家俱家電狀態/);
   assert.match(html, /有天然瓦斯/);
+  assert.match(html, /有陽台/);
   assert.match(html, /data-kit-furnish/);
   assert.match(html, /\.kit-furnish/);
   assert.match(html, /aria-describedby/);
   assert.match(html, /hover: hover\) and \(pointer: fine\)/);
+  assert.match(html, /\.kit-furnish:hover \+ \.kit-tip/);
+  assert.doesNotMatch(html, /\.kit-line:hover \.kit-tip/);
   assert.match(html, /<\/div>\s*\$\{kitLine\(item, id\)\}/);
   assert.match(html, /\["floor", "樓層", \(row\) => floorDisplay\(row\)\]/);
   assert.doesNotMatch(html, /floorDisplay\(row\) \|\| String\(row\.floor_name/);
