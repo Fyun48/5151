@@ -2015,7 +2015,9 @@ function queueGeoBackfill(settings = getSettings()) {
     }
     async function runRoutes() {
       const routes = await backfillListingRoutes(settings, { limit: 20, priorityIds: visibleFocusIds() });
-      if (routes.attempted) broadcast({ type: "geo", routeBackfill: routes });
+      if (routes.attempted || (routes.listings && routes.listings.length)) {
+        broadcast({ type: "geo", routeBackfill: routes });
+      }
       const notified = await flushPendingNotifications(settings);
       if (notified.length) broadcastNotify(notified);
       return routes;

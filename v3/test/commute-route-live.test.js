@@ -238,10 +238,33 @@ test("simulated batch: coords-ready, missing-geo, and cache-hit request counts",
   assert.equal(out.missingNeed, false);
 });
 
+test("failed route results leave computing and still patch the card", () => {
+  const out = runIsolated(`
+    ${seedPrelude}
+    seed(960001, { lat: 25.093, lng: 121.525, geo_source: "591" });
+    globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ code: "Ok", distances: [[null]] }) });
+    const result = await backfillListingRoutes(settings, { limit: 5, priorityIds: [960001] });
+    console.log(JSON.stringify({
+      attempted: result.attempted,
+      located: result.located,
+      state: result.listings?.[0]?.commute_state,
+      label: result.listings?.[0]?.commute_state_label,
+      km: result.listings?.[0]?.commute_km,
+    }));
+  `);
+  assert.ok(out.attempted >= 1);
+  assert.equal(out.located, 0);
+  assert.equal(out.km, null);
+  assert.equal(out.state, "failed");
+  assert.equal(out.label, "無法計算");
+});
+
 test("index keeps local commute patch hooks and reconnect snapshot", () => {
   const html = readFileSync(path.join(dir, "../public/index.html"), "utf8");
   assert.match(html, /data-commute=/);
   assert.match(html, /function applyCommutePatches/);
+  assert.match(html, /el\.outerHTML !== html/);
+  assert.match(html, /pendingCommuteWork\(\)\) refreshCommuteSnapshot/);
   assert.match(html, /function queueGeoRefresh/);
   assert.match(html, /function refreshCommuteSnapshot/);
   assert.match(html, /\/api\/commute\/snapshot/);

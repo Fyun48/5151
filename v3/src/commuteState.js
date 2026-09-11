@@ -71,6 +71,17 @@ export function mergeCommutePatch(cacheItem, patch, { fingerprint = "", currentF
   return { ...cacheItem, ...pickCommuteFields(patch) };
 }
 
+export function shouldPaintCommute({ fieldChanged = false, htmlChanged = false } = {}) {
+  return Boolean(fieldChanged || htmlChanged);
+}
+
+export function isPendingCommuteState(item = {}, commuteEnabled = false) {
+  const state = String(item.commute_state || "");
+  if (["wait_geo", "wait_route", "computing", "retry"].includes(state)) return true;
+  if (commuteEnabled && (item.commute_km == null || item.commute_km === "")) return true;
+  return false;
+}
+
 export function shouldHoldListLayout({ sameIds = false, busy = false, filterChanged = false } = {}) {
   if (sameIds && !filterChanged) return true;
   if (busy && filterChanged) return true;

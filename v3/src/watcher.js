@@ -906,7 +906,9 @@ export async function backfillListingRoutes(settings = getSettings(), { limit = 
     ...settings,
     commuteKm: Number(settings.commuteKm) > 0 ? settings.commuteKm : 1,
   };
-  const listings = [...new Set(locatedIds)].map((id) => listingCommutePatch(id, 0, patchSettings)).filter(Boolean);
+  const listings = [...new Set([...locatedIds, ...rows.map((row) => row.post_id)])]
+    .map((id) => listingCommutePatch(id, null, patchSettings))
+    .filter(Boolean);
   return {
     attempted,
     located,

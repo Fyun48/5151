@@ -6,11 +6,13 @@ import {
   commuteSettingsFingerprint,
   commuteStateLabel,
   finishBackfillRequest,
+  isPendingCommuteState,
   mergeCommutePatch,
   rememberBackfillRequest,
   resolveCommuteState,
   routeRetryDecision,
   shouldHoldListLayout,
+  shouldPaintCommute,
 } from "../src/commuteState.js";
 
 test("commute states map to the on-screen labels", () => {
@@ -22,6 +24,19 @@ test("commute states map to the on-screen labels", () => {
   assert.equal(resolveCommuteState({ commuteOn: true, hasCoords: false }), "wait_geo");
   assert.equal(resolveCommuteState({ commuteOn: true, hasCoords: true, commuteKm: 4.2 }), "done");
   assert.equal(resolveCommuteState({ commuteOn: true, hasCoords: true, job: { job_state: "failed" } }), "failed");
+});
+
+test("same listing ids still paint kilometers when only the commute node is stale", () => {
+  const cache = { post_id: 11, commute_km: 4.2, commute_state: "done" };
+  const patch = { post_id: 11, commute_km: 4.2, commute_state: "done" };
+  const next = mergeCommutePatch(cache, patch);
+  assert.equal(commuteFieldKey(cache), commuteFieldKey(next));
+  const staleHtml = `<span data-commute="11"> · 機車等待計算</span>`;
+  const nextHtml = `<span data-commute="11">機車路線約 4.2 公里</span>`;
+  assert.equal(shouldPaintCommute({
+    fieldChanged: commuteFieldKey(cache) !== commuteFieldKey(next),
+    htmlChanged: staleHtml !== nextHtml,
+  }), true);
 });
 
 test("same listing ids still merge kilometer patches and ignore stale settings", () => {
@@ -36,6 +51,10 @@ test("same listing ids still merge kilometer patches and ignore stale settings",
   assert.equal(stale.commute_km, null);
   assert.equal(shouldHoldListLayout({ sameIds: true, filterChanged: false }), true);
   assert.equal(shouldHoldListLayout({ sameIds: false, busy: true, filterChanged: true }), true);
+  assert.equal(shouldPaintCommute({ fieldChanged: false, htmlChanged: true }), true);
+  assert.equal(shouldPaintCommute({ fieldChanged: false, htmlChanged: false }), false);
+  assert.equal(isPendingCommuteState({ commute_state: "", commute_km: null }, true), true);
+  assert.equal(isPendingCommuteState({ commute_state: "done", commute_km: 3.4 }, true), false);
 });
 
 test("busy backfill remembers the next run instead of dropping it", () => {

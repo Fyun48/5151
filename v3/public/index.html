@@ -5188,25 +5188,33 @@
       if (fingerprint && currentFp && fingerprint !== currentFp) return false;
       const byId = new Map((patches || []).map((row) => [String(row.post_id), row]));
       if (!byId.size) return false;
-      let changed = false;
+      let fieldChanged = false;
       listCache = listCache.map((old) => {
         const patch = byId.get(String(old.post_id));
         if (!patch) return old;
         const next = { ...old, ...pickCommuteFields(patch) };
         if (commuteFieldKey(old) === commuteFieldKey(next)) return old;
-        changed = true;
+        fieldChanged = true;
         return next;
       });
-      if (!changed) return false;
+      let htmlChanged = false;
       for (const item of listCache) {
         if (!byId.has(String(item.post_id))) continue;
+        const html = commuteText(item);
         const el = document.querySelector(`[data-commute="${item.post_id}"]`);
-        if (el) el.outerHTML = commuteText(item);
+        if (el && el.outerHTML !== html) {
+          el.outerHTML = html;
+          htmlChanged = true;
+        }
         const card = document.querySelector(`[data-card="${item.post_id}"]`);
         const mrt = mrtText(item);
         const mrtEl = card?.querySelector(".mrt-line");
-        if (mrt && mrtEl) mrtEl.innerHTML = mrt;
+        if (mrt && mrtEl && mrtEl.innerHTML !== mrt) {
+          mrtEl.innerHTML = mrt;
+          htmlChanged = true;
+        }
       }
+      if (!fieldChanged && !htmlChanged) return false;
       rememberListings(listCache);
       updateListMeta(listCache, lastStats);
       paintWatchChip();
@@ -5215,7 +5223,11 @@
     }
 
     function pendingCommuteWork() {
-      return listCache.some((item) => ["wait_geo", "wait_route", "computing", "retry"].includes(String(item.commute_state || "")));
+      return listCache.some((item) => {
+        const state = String(item.commute_state || "");
+        if (["wait_geo", "wait_route", "computing", "retry"].includes(state)) return true;
+        return commuteOn() && (item.commute_km == null || item.commute_km === "");
+      });
     }
 
     function syncCommutePoll() {
@@ -5252,17 +5264,21 @@
     }
 
     async function refreshCommuteSnapshot() {
-      if (isGuest) return;
+      if (isGuest) return false;
       const ids = visibleListingIds().slice(0, 80);
-      if (!ids.length) return;
+      if (!ids.length) {
+        syncCommutePoll();
+        return false;
+      }
+      let applied = false;
       try {
         const res = await fetch(`/api/commute/snapshot?ids=${ids.join(",")}`, { cache: "no-store" });
         const data = await res.json();
-        if (applyCommutePatches(data.listings || [], { fingerprint: data.fingerprint || "" })) {
-          $("status").textContent = "列表已更新";
-        }
+        applied = applyCommutePatches(data.listings || [], { fingerprint: data.fingerprint || "" });
+        if (applied) $("status").textContent = "列表已更新";
       } catch { /* 略過 */ }
       syncCommutePoll();
+      return applied;
     }
 
     function queueGeoRefresh(data) {
@@ -5294,7 +5310,22 @@
         syncCommutePoll();
       };
       if (listings.length) {
-        finish(applyCommutePatches(listings, { fingerprint }));
+        const applied = applyCommutePatches(listings, { fingerprint });
+        if (applied) {
+          finish(true);
+          return;
+        }
+        if (pendingCommuteWork()) {
+          refreshCommuteSnapshot().then((ok) => finish(ok)).catch(() => {});
+          return;
+        }
+        return;
+      }
+      if (pendingCommuteWork()) {
+        refreshCommuteSnapshot().then((ok) => {
+          if (ok) finish(true);
+          else loadList({ silent: true, keep: true }).then(() => finish(true)).catch(() => {});
+        }).catch(() => {});
         return;
       }
       loadList({ silent: true, keep: true }).then(() => finish(true)).catch(() => {});
@@ -7129,6 +7160,7 @@
               if (applied) $("status").textContent = "列表已更新";
               syncCommutePoll();
               reportCommuteFocus();
+              if (!applied && pendingCommuteWork()) refreshCommuteSnapshot();
               return;
             }
             if (listHasBusyCard()) {
@@ -7138,6 +7170,7 @@
               if (applied) $("status").textContent = "列表已更新";
               syncCommutePoll();
               reportCommuteFocus();
+              if (!applied && pendingCommuteWork()) refreshCommuteSnapshot();
               return;
             }
           }
@@ -7145,6 +7178,7 @@
         renderList(next, lastStats);
         syncCommutePoll();
         reportCommuteFocus();
+        if (pendingCommuteWork()) refreshCommuteSnapshot();
       } finally {
         if (gen === listLoadGen) setListBusy(false);
       }
