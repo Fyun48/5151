@@ -124,6 +124,9 @@ import {
   getFeedbackStats,
   getOpsDeliveryControl,
   setOpsDeliveryStop,
+  applyOpsSiteCommand,
+  getRemoteCsControl,
+  setRemoteCsStop,
   compactOpsOutbox,
   getCrmOverview,
   getCrmContact,
@@ -295,7 +298,14 @@ function yieldEventLoop() {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({
+  limit: "1mb",
+  verify(req, _res, buf) {
+    if ((req.originalUrl || req.url || "").startsWith("/api/ops/commands/apply")) {
+      req.rawBody = buf.toString("utf8");
+    }
+  },
+}));
 
 app.use((req, res, next) => {
   if (req.path === "/" || req.path.endsWith(".html")) {
@@ -921,6 +931,11 @@ app.get("/logout", (req, res) => {
   res.redirect(303, "/login.html?logout=1");
 });
 
+app.post("/api/ops/commands/apply", (req, res) => {
+  const result = applyOpsSiteCommand(req.headers, req.rawBody || JSON.stringify(req.body || {}));
+  res.status(result.httpStatus).json(result.body);
+});
+
 app.use(requireAuth);
 
 function requireAdminApi(req, res, next) {
@@ -1274,6 +1289,15 @@ app.get("/api/admin/ops-delivery", requireAdminApi, (_req, res) => {
 app.put("/api/admin/ops-delivery", requireAdminApi, (req, res) => {
   const stop = req.body?.stop === true || req.body?.stop === 1 || req.body?.stop === "1";
   res.json(setOpsDeliveryStop(stop));
+});
+
+app.get("/api/admin/remote-cs", requireAdminApi, (_req, res) => {
+  res.json(getRemoteCsControl());
+});
+
+app.put("/api/admin/remote-cs", requireAdminApi, (req, res) => {
+  const stop = req.body?.stop === true || req.body?.stop === 1 || req.body?.stop === "1";
+  res.json(setRemoteCsStop(stop));
 });
 
 app.post("/api/admin/ops-delivery/compact-outbox", requireAdminApi, (req, res) => {

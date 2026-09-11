@@ -171,7 +171,9 @@ function showSecret(secret, context) {
   if (!box) return;
   box.hidden = false;
   $("secretOnceText").textContent = secret;
-  $("secretOnceHint").textContent = `${context}：此密鑰只顯示一次，請立刻複製到該站 OPS_INGEST_SECRET。`;
+  $("secretOnceHint").textContent = String(context || "").includes("遠端客服")
+    ? `${context}：只顯示一次，請複製到該站 V3_OPS_COMMAND_SECRET。`
+    : `${context}：此密鑰只顯示一次，請立刻複製到該站 OPS_INGEST_SECRET。`;
   setTab("products");
   box.scrollIntoView({ block: "nearest" });
   $("copySecretBtn")?.focus();
@@ -278,7 +280,7 @@ function renderProductCards() {
       ${Array.isArray(p.environments) && p.environments.length
         ? `<p class="hint">部署目標：${p.environments.map((e) => `<code>${esc(e.environment_key)}</code>${e.container_name ? ` → ${esc(e.container_name)}` : ""}${e.workflow_file ? ` · ${esc(e.workflow_file.split("/").pop())}` : ""}`).join(" · ")}</p>`
         : `<p class="hint">部署目標：尚未登記環境。顯示名不能當安全識別。</p>`}
-      <p class="hint">授權：回饋複製 ${caps.feedback_copy ? "開" : "關"} · CRM 同步 ${caps.crm_sync ? "開" : "關"} · 跨站分析 ${caps.cross_site_insight ? "開" : "關"}</p>
+      <p class="hint">授權：回饋複製 ${caps.feedback_copy ? "開" : "關"} · CRM 同步 ${caps.crm_sync ? "開" : "關"} · 遠端客服 ${caps.remote_cs ? "開" : "關"} · 跨站分析 ${caps.cross_site_insight ? "開" : "關"}</p>
       ${Array.isArray(p.consent_events) && p.consent_events.length
         ? `<p class="hint">授權紀錄：${p.consent_events.slice(0, 4).map((ev) => `${esc(ev.capability_key)} ${ev.granted ? "開" : "撤回"}`).join(" · ")}</p>`
         : `<p class="hint">授權紀錄：尚無撤回或新開紀錄。</p>`}
@@ -289,6 +291,8 @@ function renderProductCards() {
         ${!exited && !paused ? `<button type="button" data-pid="${esc(p.id)}" data-pact="pause" aria-label="暫停 ${esc(name)}">暫停</button>` : ""}
         ${!exited && !caps.crm_sync ? `<button type="button" data-pid="${esc(p.id)}" data-pact="grant-crm-sync" aria-label="允許 ${esc(name)} 的 CRM 同步">允許 CRM 同步</button>` : ""}
         ${!exited && caps.crm_sync ? `<button type="button" data-pid="${esc(p.id)}" data-pact="revoke-crm-sync" aria-label="撤回 ${esc(name)} 的 CRM 同步">撤回 CRM 同步</button>` : ""}
+        ${!exited && !caps.remote_cs ? `<button type="button" data-pid="${esc(p.id)}" data-pact="grant-remote-cs" aria-label="允許 ${esc(name)} 的遠端客服">允許遠端客服</button>` : ""}
+        ${!exited && caps.remote_cs ? `<button type="button" data-pid="${esc(p.id)}" data-pact="revoke-remote-cs" aria-label="撤回 ${esc(name)} 的遠端客服">撤回遠端客服</button>` : ""}
         ${!exited ? `<button type="button" data-pid="${esc(p.id)}" data-pact="rotate-credential" aria-label="輪替 ${esc(name)} 的密鑰">輪替密鑰</button>` : ""}
         ${!exited ? `<button type="button" class="danger" data-pid="${esc(p.id)}" data-pact="unsubscribe" aria-label="解除訂閱 ${esc(name)}">解除訂閱</button>` : ""}
       </div>
@@ -445,7 +449,11 @@ async function setProductCapability(id, patch) {
       setStatus($("productMsg"), humanError(data.error), "err");
       return;
     }
-    setStatus($("productMsg"), patch.crm_sync ? "已允許 CRM 同步" : "已撤回 CRM 同步", "ok");
+    if (data.command_secret) showSecret(data.command_secret, "遠端客服命令密鑰");
+    const msg = patch.remote_cs === true ? "已允許遠端客服"
+      : patch.remote_cs === false ? "已撤回遠端客服"
+        : patch.crm_sync ? "已允許 CRM 同步" : "已撤回 CRM 同步";
+    setStatus($("productMsg"), msg, "ok");
     await Promise.all([refreshProducts(), refreshCrm()]);
   } finally {
     setProductBusy(false);
@@ -558,6 +566,25 @@ function requestProductAction(id, action) {
       body: `撤回「${name}」（${id}）的 CRM 同步授權？既有複本仍保留，不會再收新處理。這不是 DROP。`,
       confirmLabel: "確定撤回",
       onConfirm: () => setProductCapability(id, { crm_sync: false }),
+    });
+    return;
+  }
+  if (action === "grant-remote-cs") {
+    showConfirm({
+      title: "確認允許遠端客服",
+      body: `允許從 OPS 對「${name}」（${id}）送客服命令？本站驗證後才寫本機；本站不在線不會假裝已回覆。預設仍關遞送。`,
+      confirmLabel: "確定允許",
+      danger: false,
+      onConfirm: () => setProductCapability(id, { remote_cs: true }),
+    });
+    return;
+  }
+  if (action === "revoke-remote-cs") {
+    showConfirm({
+      title: "確認撤回遠端客服",
+      body: `撤回「${name}」（${id}）的遠端客服？新命令會被拒絕，已寫進本站的處理紀錄仍保留。`,
+      confirmLabel: "確定撤回",
+      onConfirm: () => setProductCapability(id, { remote_cs: false }),
     });
     return;
   }
@@ -857,6 +884,26 @@ function publicSiteAdminHref(url) {
   return /^https?:\/\//i.test(s) ? s : "";
 }
 
+function productHasRemoteCs(productId) {
+  const p = (productsCache || []).find((x) => x.id === productId);
+  return Boolean(p && p.subscription && p.subscription.capabilities && p.subscription.capabilities.remote_cs);
+}
+
+function remoteCsFormHtml(item, handle) {
+  if (!productHasRemoteCs(item.product_id)) {
+    return `<p class="hint">遠端客服關閉。請前往本站處理，不要在這裡假裝已回覆。</p>`;
+  }
+  const fb = handle.feedback_id || "";
+  const contactId = (item.columns && item.columns.site_crm && item.columns.site_crm.contact && item.columns.site_crm.contact.external_contact_id) || "";
+  return `<form class="remote-cs-form" data-product="${esc(item.product_id)}" data-feedback="${esc(fb)}" data-contact="${esc(contactId)}">
+    <p class="hint">送出後只有本站套用成功才算回覆。本站離線會顯示失敗。</p>
+    ${fb ? `<label>處理進度 <select name="handling_state"><option value="doing">處理中</option><option value="done">已完成</option><option value="declined">暫不處理</option></select></label>
+    <label>內部備註 <input name="admin_note" maxlength="500" /></label>` : `<p class="hint">這個聯絡人還沒有對應回饋編號，只能加站內備註。</p>`}
+    <label>站內 CRM 備註 <input name="crm_note" maxlength="500" placeholder="寫進本站 CRM（可選）" /></label>
+    <button type="submit">送出遠端客服命令</button>
+  </form>`;
+}
+
 function bindCrmSiteUrlForm(pid) {
   $("crmSiteUrlForm")?.addEventListener("submit", async (ev) => {
     ev.preventDefault();
@@ -943,6 +990,7 @@ function renderCrm() {
           <h3>${esc(handle.label || "站方處理進度")}</h3>
           <p class="src">由站方事件傳入</p>
           <p>${esc(handle.text || "尚未同步")}</p>
+          ${remoteCsFormHtml(item, handle)}
         </section>
         <section class="crm-col">
           <h3>${esc(ops.label || "OPS 開發進度")}</h3>
@@ -1308,6 +1356,51 @@ $("crmModuleToggle")?.addEventListener("click", async () => {
   await refreshCrm();
 });
 $("crmList")?.addEventListener("submit", async (ev) => {
+  const remote = ev.target.closest(".remote-cs-form");
+  if (remote) {
+    ev.preventDefault();
+    const jobs = [];
+    if (remote.dataset.feedback && (remote.handling_state || remote.admin_note)) {
+      jobs.push({
+        product_id: remote.dataset.product,
+        command_kind: "feedback.patch_handling",
+        idempotency_key: `remote_cs:feedback:${remote.dataset.feedback}:${Date.now()}`,
+        payload: {
+          feedback_id: Number(remote.dataset.feedback),
+          handling_state: remote.handling_state?.value || "doing",
+          admin_note: remote.admin_note?.value || "",
+        },
+      });
+    }
+    if (remote.crm_note?.value && remote.dataset.contact) {
+      jobs.push({
+        product_id: remote.dataset.product,
+        command_kind: "crm.add_note",
+        idempotency_key: `remote_cs:note:${remote.dataset.contact}:${Date.now()}`,
+        payload: { contact_id: Number(remote.dataset.contact), body: remote.crm_note.value },
+      });
+    }
+    if (!jobs.length) {
+      setStatus($("crmMsg"), "請填處理進度、內部備註或 CRM 備註", "err");
+      return;
+    }
+    const results = [];
+    for (const body of jobs) {
+      const { res, data } = await api("/ops/api/site-commands", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        setStatus($("crmMsg"), data.error || "遠端客服命令失敗", "err");
+        return;
+      }
+      const applied = data.job?.apply_state === "applied";
+      results.push(applied ? "本站已套用" : `尚未套用（${data.reason || data.job?.job_state || "pending"}）`);
+    }
+    setStatus($("crmMsg"), results.join(" · "), results.every((x) => x.includes("已套用")) ? "ok" : "err");
+    return;
+  }
   const form = ev.target.closest(".crm-note-form");
   if (!form) return;
   ev.preventDefault();
