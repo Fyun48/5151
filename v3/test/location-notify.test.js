@@ -4,12 +4,14 @@ import {
   communityRefFromDetail,
   extractTaiwanStreetAddress,
   formatListingAddress,
+  isTrustedGeoSource,
   listingAddressFromDetail,
   parseCommunityIdFromSourceKey,
   parseCommunityPayload,
   preferCommunityLocation,
+  sourceMapPin,
 } from "../src/location.js";
-import { decideNotifyDelivery, hasTrustedCoords, isGeoReady, listingIsApartment, listingIsSuite, listingIsShop, listingIsWarehouse, listingHasElevator, matchesHousingKind, matchesListingSources, authorizedListingSources, canUseListingSourceFilter, normalizeListQuery, toggleHousingKind, passesGeoFilters, housingTypeLabel } from "../src/floors.js";
+import { decideNotifyDelivery, hasTrustedCoords, isGeoReady, isStalePendingNotify, listingCanResolveNotifyGeo, listingIsApartment, listingIsSuite, listingIsShop, listingIsWarehouse, listingHasElevator, matchesHousingKind, matchesListingSources, authorizedListingSources, canUseListingSourceFilter, normalizeListQuery, toggleHousingKind, passesGeoFilters, housingTypeLabel, PENDING_NOTIFY_MAX_MS } from "../src/floors.js";
 import { hasWorkPoint, needsListingGeo, commuteWorkJobs } from "../src/geo.js";
 
 test("extracts the house-number address from a community page line", () => {
@@ -174,6 +176,32 @@ test("webhook-bound filter also skips listings without trusted coordinates once 
   assert.equal(
     decideNotifyDelivery({ ...listingBase, geo_source: "", route_kms: [8] }, commuteSettings),
     "pending",
+  );
+});
+
+test("樂屋／租租通沒有可信座標時不要永遠 pending，避免堵住整條通知", () => {
+  const noPin = { ...listingBase, lat: null, lng: null, geo_source: "", route_kms: [] };
+  assert.equal(listingCanResolveNotifyGeo({ ...noPin, source: "591" }), true);
+  assert.equal(listingCanResolveNotifyGeo({ ...noPin, source: "rakuya" }), false);
+  assert.equal(listingCanResolveNotifyGeo({ ...noPin, source: "ddroom" }), false);
+  assert.equal(decideNotifyDelivery({ ...noPin, source: "591" }, commuteSettings), "pending");
+  assert.equal(decideNotifyDelivery({ ...noPin, source: "rakuya" }, commuteSettings), "skip");
+  assert.equal(decideNotifyDelivery({ ...noPin, source: "ddroom" }, commuteSettings), "skip");
+  assert.equal(isTrustedGeoSource("rakuya"), true);
+  assert.equal(isTrustedGeoSource("ddroom"), true);
+  assert.equal(hasTrustedCoords({ ...listingBase, source: "rakuya", geo_source: "rakuya" }), true);
+  assert.equal(
+    decideNotifyDelivery({ ...listingBase, source: "rakuya", geo_source: "rakuya", route_kms: [8] }, commuteSettings),
+    "send",
+  );
+  const pin = sourceMapPin("rakuya", 25.18252, 121.44921);
+  assert.equal(pin.geo_source, "rakuya");
+  assert.equal(sourceMapPin("rakuya", 0, 0).lat, null);
+  const now = Date.parse("2026-09-11T01:00:00.000Z");
+  assert.equal(isStalePendingNotify({ created_at: "2026-09-11T00:00:00.000Z" }, now), false);
+  assert.equal(
+    isStalePendingNotify({ created_at: new Date(now - PENDING_NOTIFY_MAX_MS - 1).toISOString() }, now),
+    true,
   );
 });
 

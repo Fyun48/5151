@@ -34,12 +34,16 @@ test("rakuya detail fixture keeps raw and normalized fields", () => {
   assert.equal(detail.community, "河岸花園");
   assert.equal(detail.age, "8年");
   assert.equal(detail.elevator, "有");
+  assert.equal(detail.lat, 25.18252);
+  assert.equal(detail.lng, 121.44921);
   assert.ok(detail.photos.some((url) => /detail-a/.test(url)));
   const row = normalizeRakuyaItem({ ...detail, cover: detail.photos[0], refresh: "2026-09-01" }, { regionId: 3, sectionId: 50 });
   assert.equal(row.source, "rakuya");
   assert.equal(row.source_id, "rk001");
   assert.equal(row.address_raw, row.address);
   assert.equal(row.price_num, 18000);
+  assert.equal(row.geo_source, "rakuya");
+  assert.equal(row.lat, 25.18252);
   assert.equal(isRakuyaListingId(row.post_id), true);
   assert.equal(row.post_id, rakuyaPostIdFromEhid("rk001"));
 });

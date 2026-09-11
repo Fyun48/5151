@@ -320,6 +320,19 @@ export function hasTrustedCoords(listing) {
   return isTrustedGeoSource(listing.geo_source);
 }
 
+/** 591 之後還能抓社區／詳情座標；其他來源沒有可信座標就不要永遠 pending。 */
+export function listingCanResolveNotifyGeo(listing) {
+  if (hasTrustedCoords(listing)) return true;
+  return listingSourceKey(listing) === "591";
+}
+
+export const PENDING_NOTIFY_MAX_MS = 6 * 60 * 60 * 1000;
+
+export function isStalePendingNotify(event, now = Date.now()) {
+  const created = Date.parse(event?.created_at || "");
+  return Number.isFinite(created) && now - created > PENDING_NOTIFY_MAX_MS;
+}
+
 export function isGeoReady(listing, settings = {}) {
   if (!needsListingGeo(settings)) return true;
   if (!hasTrustedCoords(listing)) return false;
@@ -339,7 +352,9 @@ export function isGeoReady(listing, settings = {}) {
 export function decideNotifyDelivery(listing, settings = {}) {
   if (!passesAttributeFilters(listing, settings)) return "skip";
   if (!passesDisplayFilters(listing, settings)) return "skip";
-  if (!isGeoReady(listing, settings)) return "pending";
+  if (!isGeoReady(listing, settings)) {
+    return listingCanResolveNotifyGeo(listing) ? "pending" : "skip";
+  }
   if (!passesGeoFilters(listing, settings, { strict: true })) return "skip";
   return "send";
 }

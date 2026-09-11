@@ -168,10 +168,31 @@ export function listingCommunityId(listing) {
   return parseCommunityIdFromSourceKey(listing?.source_key);
 }
 
-export const TRUSTED_GEO_SOURCES = ["591", "community", "hbhousing", "sinyi", "housefun", "houseprice", "geocode"];
+export const TRUSTED_GEO_SOURCES = [
+  "591",
+  "community",
+  "hbhousing",
+  "sinyi",
+  "housefun",
+  "houseprice",
+  "ddroom",
+  "rakuya",
+  "geocode",
+];
 
 export function isTrustedGeoSource(source) {
   return TRUSTED_GEO_SOURCES.includes(String(source || ""));
+}
+
+/** 來源自己給的台灣座標才寫入；沒有就不猜。 */
+export function sourceMapPin(source, lat, lng) {
+  if (!isTaiwanMapPin(lat, lng)) return { lat: null, lng: null, geo_source: "" };
+  const geoSource = String(source || "").trim();
+  return {
+    lat: Number(lat),
+    lng: Number(lng),
+    geo_source: isTrustedGeoSource(geoSource) ? geoSource : "",
+  };
 }
 
 export function sqlTrustedGeoSource(column = "geo_source") {
