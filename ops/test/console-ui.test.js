@@ -58,6 +58,7 @@ test("tab panes honor the hidden attribute (display:grid must not override it)",
   assert.match(html, /獨立 QA/);
   assert.match(css, /\.queue-item/);
   assert.match(css, /\.tbl-wrap/);
+  assert.match(css, /\[hidden\]\s*\{[^}]*display:\s*none\s*!important/);
   assert.match(js, /APPROVE_RELEASE/);
   assert.match(js, /cleanup/);
   assert.match(js, /正式站無感/);
