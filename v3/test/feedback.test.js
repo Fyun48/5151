@@ -64,6 +64,8 @@ test("createFeedback stores structured feedback and rejects too-short body", () 
   const db = open();
   assert.match(feedbackMeta().legal, /只給站方看/);
   assert.match(FEEDBACK_LEGAL, /修 bug/);
+  assert.match(FEEDBACK_LEGAL, /跨站洞察要另授權/);
+  assert.match(FEEDBACK_LEGAL, /對外 LLM/);
   assert.throws(() => createFeedback(db, 1, { kind: "bug", body: "短" }), /至少/);
   const created = createFeedback(db, 1, {
     kind: "bug",

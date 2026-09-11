@@ -340,6 +340,13 @@ export function updateProductCapabilities(db, productId, patch = {}, { actor = "
   if (next.crm_sync && !next.feedback_copy) {
     throw httpError("CRM 同步不能代替回饋複製授權；兩者要分開勾。", 400);
   }
+  if (next.cross_site_insight && !next.feedback_copy) {
+    throw httpError("跨站分析不能代替回饋複製授權；兩者要分開勾。", 400);
+  }
+  if (!next.cross_site_insight) next.retain_after_exit = false;
+  if (next.retain_after_exit && !next.cross_site_insight) {
+    throw httpError("退出後保留用途不能單獨開；要先有跨站分析授權。", 400);
+  }
   const ts = iso(now);
   ensureConsentEventSchema(db);
   db.prepare("UPDATE product_subscription SET capabilities=?, updated_at=? WHERE product_id=?")

@@ -2,6 +2,7 @@ import { withImmediateTx } from "./tx.js";
 import { appendAuditRow } from "./audit.js";
 import { httpError } from "./errors.js";
 import { cosineSimilarity, areComparable } from "./ai/embeddingProvider.js";
+import { feedbackAllowsNewInsight } from "./insightConsent.js";
 
 export const CLUSTERING_VERSION = "cluster-v1";
 
@@ -67,6 +68,7 @@ export function bestMatch(db, embRow, { excludeFeedbackId = null } = {}) {
   ).all();
   let best = { issueId: null, score: 0 };
   for (const m of members) {
+    if (!feedbackAllowsNewInsight(db, m.feedback_id)) continue;
     if (excludeFeedbackId != null && Number(m.feedback_id) === Number(excludeFeedbackId)) continue;
     if (!areComparable(meta, embMeta(m))) continue; // 不比較不相容向量空間
     const s = cosineSimilarity(vec, parseVector(m));

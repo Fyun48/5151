@@ -9,6 +9,7 @@ import {
   normalizeProductId,
 } from "./products.js";
 import { redactCrmReplicas, listCrmHandoff } from "./crmReplica.js";
+import { redactInsightDerivatives } from "./insightConsent.js";
 
 export const EXIT_ACTIONS = Object.freeze(["pause", "unsubscribe", "handoff", "purge_replica"]);
 export const HANDOFF_SCHEMA = 1;
@@ -103,6 +104,22 @@ export function listPendingWork(db, productId) {
         blocking: row.status === "running" || row.status === "claimed",
         unscoped: true,
         note: "製作任務尚未綁 product_id；退出時列出但不能宣稱已取消外部呼叫",
+      });
+    }
+  }
+  if (tableExists(db, "embedding")) {
+    const embN = Number(db.prepare(`
+      SELECT COUNT(*) n FROM embedding e
+       JOIN ingested_feedback f ON f.id = e.feedback_id
+      WHERE f.product_id=? AND e.status='active'
+    `).get(id)?.n || 0);
+    if (embN) {
+      items.push({
+        kind: "insight_embedding",
+        id,
+        state: "replica",
+        blocking: false,
+        note: `OPS 有 ${embN} 筆向量；刪複本才清除。去掉 email 不是匿名化。撤回跨站分析只停新洞察。`,
       });
     }
   }
@@ -330,16 +347,17 @@ export function purgeReplica(db, productId, { actor = "owner", now = new Date(),
        WHERE product_id=?
     `).run(product.id);
     const crmPurged = tableExists(db, "ingested_crm_contact") ? redactCrmReplicas(db, product.id) : 0;
+    const insight = redactInsightDerivatives(db, product.id);
     const record = insertExitRecord(db, {
       productId: product.id,
       generation: product.subscription_generation,
       action: "purge_replica",
       exitStatus: "completed",
       pending,
-      notes: `已清除 ${before} 筆回饋複本、${crmPurged} 筆 CRM 複本；產品卡與稽核保留。本機主本不在此庫。`,
+      notes: `已清除 ${before} 筆回饋複本、${crmPurged} 筆 CRM 複本、分析 ${insight.analysis}、向量 ${insight.embeddings}、附件 ${insight.attachments}、匯出 ${insight.exports}。去掉聯絡方式不是匿名化。產品卡與稽核保留。本機主本不在此庫。`,
       actor,
       now,
     });
-    return { product: publicProduct(getProduct(db, product.id)), purged: before, exit: record };
+    return { product: publicProduct(getProduct(db, product.id)), purged: before, insight, exit: record };
   });
 }

@@ -2,6 +2,7 @@ import { appendAuditRow } from "./audit.js";
 import { withImmediateTx } from "./tx.js";
 import { httpError } from "./errors.js";
 import { ANALYSIS_TYPE_CLASSIFICATION, CLASSIFICATION_PROMPT_VERSION } from "./ai/prompt.js";
+import { feedbackAllowsNewInsight } from "./insightConsent.js";
 
 // feedback_analysis 的資料/狀態機。狀態：pending → processing → completed | failed。
 //
@@ -47,6 +48,9 @@ export function enqueueAnalysisRow(db, { feedbackId, analysisType = ANALYSIS_TYP
 export function reprocessAnalysis(db, feedbackId, { analysisType = ANALYSIS_TYPE_CLASSIFICATION, promptVersion = CLASSIFICATION_PROMPT_VERSION, actor = "owner", now = new Date() } = {}) {
   const exists = db.prepare("SELECT id FROM ingested_feedback WHERE id = ?").get(Number(feedbackId) || 0);
   if (!exists) throw httpError("feedback not found", 404);
+  if (!feedbackAllowsNewInsight(db, feedbackId)) {
+    throw httpError("跨站分析未授權或已退出且未約定保留。不會產生新洞察。", 403);
+  }
   return withImmediateTx(db, () => {
     const row = enqueueAnalysisRow(db, { feedbackId, analysisType, promptVersion, now });
     appendAuditRow(db, {
@@ -72,6 +76,7 @@ export function claimAnalysisBatch(db, { limit = 10, now = new Date(), staleMs =
   ).all(nowIso, staleBefore, Math.max(1, Math.min(Number(limit) || 10, 100)));
   const claimed = [];
   for (const row of candidates) {
+    if (!feedbackAllowsNewInsight(db, row.feedback_id)) continue;
     let res;
     if (row.status === "processing") {
       res = db.prepare("UPDATE feedback_analysis SET claimed_at=? WHERE id=? AND status='processing' AND (claimed_at IS NULL OR claimed_at <= ?)").run(nowIso, row.id, staleBefore);

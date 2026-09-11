@@ -2,6 +2,7 @@ import { withImmediateTx } from "./tx.js";
 import { appendAuditRow } from "./audit.js";
 import { httpError } from "./errors.js";
 import { enqueueAnalysisRow } from "./feedbackAnalysis.js";
+import { loadProductConsent, productAllowsNewInsight } from "./insightConsent.js";
 import { DEFAULT_PRODUCT_ID } from "./products.js";
 
 // Ops ingest：儲存從 Product 遞送進來的 feedback，並以 delivery_id / idempotency_key 冪等去重。
@@ -102,8 +103,10 @@ export function ingestFeedback(db, { deliveryId, payload, payloadHash, productId
         data: { product_id: pid, delivery_id: deliveryId, source: payload.source || "unknown", kind: payload.kind || null, external_feedback_id: payload.external_feedback_id ?? null },
         now,
       });
-      // Phase 4：新 feedback 入庫的同一交易內，排入一筆待 AI 分析 job（不依賴 AI 可用性）。
-      enqueueAnalysisRow(db, { feedbackId: id, now });
+      // 第 11 包：回饋複製只存複本。沒有跨站分析授權就不排新洞察。
+      if (productAllowsNewInsight(loadProductConsent(db, pid))) {
+        enqueueAnalysisRow(db, { feedbackId: id, now });
+      }
       return { id, duplicate: false };
     } catch (err) {
       // 併發下另一寫入者先插入（UNIQUE 撞號）→ 重新分類：相同邏輯=冪等；否則=衝突。
