@@ -12,6 +12,7 @@ import {
   checkStorageIsolation, checkExternalSideEffectSafety, checkMigration, checkConfig, checkFromProviderResult,
   aggregateStaging, isProductionIdentity, isStagingClass,
 } from "./staging/checks.js";
+import { issueWriteDecision } from "./insightConsent.js";
 
 const BACKOFF_BASE_MS = 5000;
 const BACKOFF_CAP_MS = 30 * 60 * 1000;
@@ -51,6 +52,13 @@ export function createStagingDeployment(db, { codingTaskId, repo, env = process.
   const configFp = configFingerprint(config);
   const ts = iso(now);
   const { task, auth, qa } = validateCodingTaskForStaging(db, codingTaskId, { env });
+  const gate = issueWriteDecision(db, task.issue_id, { expectedGeneration: task.subscription_generation });
+  if (!gate.ok) {
+    const err = httpError(gate.reason === "stale_generation" ? "訂閱世代已換，晚到 staging 不入隊。" : "訂閱已退出，晚到 staging 不入隊。", 409);
+    err.code = gate.reason || "subscription_revoked";
+    throw err;
+  }
+  const generation = gate.unbound ? null : (task.subscription_generation ?? gate.generation);
   const inputFp = stagingInputFingerprint({
     codingTaskId: Number(task.id), authorizationId: Number(auth.id), proposalId: Number(task.proposal_id),
     proposalVersion: Number(task.proposal_version), proposalHash: String(task.proposal_hash),
@@ -65,13 +73,13 @@ export function createStagingDeployment(db, { codingTaskId, repo, env = process.
       `INSERT INTO development_staging_deployment(issue_id, coding_task_id, development_authorization_id, proposal_id, proposal_version, proposal_hash,
         qa_run_id, qa_input_fingerprint, qa_policy_fingerprint, base_sha, head_sha, coding_result_hash, diff_hash,
         staging_provider, staging_policy_version, staging_policy_fingerprint, config_fingerprint, config_snapshot, input_fingerprint,
-        status, attempt_count, max_attempts, next_attempt_at, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'pending', 0, ?, ?, ?)`,
+        status, attempt_count, max_attempts, next_attempt_at, created_at, subscription_generation)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'pending', 0, ?, ?, ?, ?)`,
     ).run(
       Number(task.issue_id), Number(task.id), Number(auth.id), Number(task.proposal_id), Number(task.proposal_version), String(task.proposal_hash),
       Number(qa.id), qa.input_fingerprint, qa.qa_policy_fingerprint, task.base_sha, task.head_sha, task.result_hash, qa.diff_hash,
       cfg.provider, policy.policy_version, policyFp, configFp, JSON.stringify(config), inputFp,
-      cfg.maxAttempts, ts, ts,
+      cfg.maxAttempts, ts, ts, generation,
     );
     const id = Number(res.lastInsertRowid);
     appendAuditRow(db, { actor: "system", action: "issue.staging.created", entityType: "development_staging_deployment", entityId: String(id), data: { issue_id: Number(task.issue_id), coding_task_id: Number(task.id), qa_run_id: Number(qa.id), staging_deployment_id: id, head_sha: task.head_sha, staging_policy_fingerprint: policyFp }, now });
@@ -79,10 +87,20 @@ export function createStagingDeployment(db, { codingTaskId, repo, env = process.
   });
 }
 
+function abandonStaging(db, dep, reason) {
+  db.prepare("UPDATE development_staging_deployment SET status='failed', error_code=? WHERE id=? AND status IN ('pending','failed_retry','claimed','building','deploying','validating')")
+    .run(String(reason || "subscription_revoked").slice(0, 64), Number(dep.id));
+}
+
 export function claimStagingBatch(db, { now = new Date(), staleMs = 15 * 60 * 1000, limit = 1 } = {}) {
   const ts = iso(now);
   const staleBefore = iso(new Date((now instanceof Date ? now.getTime() : Date.now()) - staleMs));
   return withImmediateTx(db, () => {
+    const inflight = db.prepare("SELECT * FROM development_staging_deployment WHERE status IN ('pending','failed_retry','claimed','building','deploying','validating')").all();
+    for (const row of inflight) {
+      const decision = issueWriteDecision(db, row.issue_id, { expectedGeneration: row.subscription_generation });
+      if (!decision.ok) abandonStaging(db, row, decision.reason);
+    }
     const rows = db.prepare(
       `SELECT * FROM development_staging_deployment
        WHERE ( (status IN ('pending','failed_retry') AND next_attempt_at <= ?)
@@ -91,6 +109,11 @@ export function claimStagingBatch(db, { now = new Date(), staleMs = 15 * 60 * 10
     ).all(ts, staleBefore, Math.max(1, limit));
     const claimed = [];
     for (const r of rows) {
+      const decision = issueWriteDecision(db, r.issue_id, { expectedGeneration: r.subscription_generation });
+      if (!decision.ok) {
+        abandonStaging(db, r, decision.reason);
+        continue;
+      }
       const upd = db.prepare("UPDATE development_staging_deployment SET status='claimed', claimed_at=? WHERE id=? AND status=?").run(ts, r.id, r.status);
       if (upd.changes === 1) claimed.push(db.prepare("SELECT * FROM development_staging_deployment WHERE id=?").get(r.id));
     }
@@ -117,6 +140,14 @@ export async function executeStagingDeployment(db, depRow, { repo, provider, env
   if (!dep) return { skipped: true, reason: "missing" };
   if (dep.status === "ready") return { idempotent: true, deployment: publicStaging(db, dep) };
   if (dep.status === "cancelled") return { skipped: true, reason: "cancelled" };
+
+  const gate = issueWriteDecision(db, dep.issue_id, { expectedGeneration: dep.subscription_generation });
+  if (!gate.ok) {
+    return withImmediateTx(db, () => {
+      abandonStaging(db, dep, gate.reason);
+      return { failed: true, error_code: gate.reason, status: "failed" };
+    });
+  }
 
   // recheck：資格 / fresh QA PASS / head 不變。
   let task, auth, qa;
@@ -205,6 +236,11 @@ function stamp(check, now) { return { ...check, started_at: iso(now), completed_
 function finalize(db, dep, { checks, meta, provider, now, cfg }) {
   const agg = aggregateStaging(checks);
   return withImmediateTx(db, () => {
+    const again = issueWriteDecision(db, dep.issue_id, { expectedGeneration: dep.subscription_generation });
+    if (!again.ok) {
+      abandonStaging(db, dep, again.reason);
+      return { failed: true, error_code: again.reason, status: "failed" };
+    }
     db.prepare("DELETE FROM development_staging_check WHERE staging_deployment_id=?").run(Number(dep.id));
     const ins = db.prepare(`INSERT INTO development_staging_check(staging_deployment_id, issue_id, coding_task_id, check_type, status, severity, finding, evidence, started_at, completed_at, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
     for (const c of checks) ins.run(Number(dep.id), Number(dep.issue_id), Number(dep.coding_task_id), c.check_type, c.status, c.severity, String(c.finding || "").slice(0, 1000), JSON.stringify(c.evidence || {}), c.started_at, c.completed_at, iso(now));
@@ -254,6 +290,7 @@ export function publicStaging(db, row, { withChecks = false } = {}) {
     attempt_count: Number(row.attempt_count), error_code: row.error_code, expires_at: row.expires_at, cleanup_status: row.cleanup_status,
     created_at: row.created_at, started_at: row.started_at, deployed_at: row.deployed_at, completed_at: row.completed_at,
     ttl_expired: false, slot_occupied: false, occupying_coding_task_id: null, occupying_deployment_id: null, live_preview: false,
+    subscription_generation: row.subscription_generation == null ? null : Number(row.subscription_generation),
   };
   if (withChecks && db) out.checks = db.prepare("SELECT * FROM development_staging_check WHERE staging_deployment_id=? ORDER BY id ASC").all(Number(row.id)).map(publicStagingCheck);
   return out;
@@ -338,6 +375,8 @@ export function getCodingStagingView(db, codingTaskId, { env = process.env, now 
 export function requestStagingRedeploy(db, codingTaskId, { actor = "owner", now = new Date(), env = process.env } = {}) {
   return withImmediateTx(db, () => {
     const { task } = validateCodingTaskForStaging(db, codingTaskId, { env });
+    const gate = issueWriteDecision(db, task.issue_id, { expectedGeneration: task.subscription_generation });
+    if (!gate.ok) throw httpError(gate.reason === "stale_generation" ? "訂閱世代已換，晚到 staging 不重佈。" : "訂閱已退出，晚到 staging 不重佈。", 409);
     const dep = db.prepare("SELECT * FROM development_staging_deployment WHERE coding_task_id=? AND head_sha=? AND status!='cancelled' ORDER BY id DESC LIMIT 1").get(Number(codingTaskId), task.head_sha);
     let id = null;
     if (dep && !["pending", "claimed", "building", "deploying", "validating"].includes(dep.status)) {

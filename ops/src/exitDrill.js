@@ -180,6 +180,49 @@ export function listPendingWork(db, productId) {
       });
     }
   }
+  if (tableExists(db, "development_staging_deployment")) {
+    const deps = safeAll(db, `
+      SELECT id, issue_id, status FROM development_staging_deployment
+       WHERE status IN ('pending','claimed','building','deploying','validating','failed_retry')
+    `);
+    for (const row of deps) {
+      const scoped = inferIssueProductId(db, row.issue_id);
+      if (scoped && scoped !== id) continue;
+      items.push({
+        kind: "staging",
+        id: row.id,
+        state: row.status,
+        blocking: ["claimed", "building", "deploying", "validating"].includes(row.status),
+        unscoped: !scoped,
+        note: scoped
+          ? "未送出的隔離 staging 可取消；已在跑的不宣稱撤回。訂閱世代已換或已退出的晚到部署不會寫入 current。"
+          : "隔離 staging 尚未綁 product_id；退出時列出但不能宣稱已取消外部呼叫",
+      });
+    }
+  }
+  if (tableExists(db, "production_release_run")) {
+    const runs = safeAll(db, `
+      SELECT r.id, r.issue_id FROM production_release_run r
+       WHERE NOT EXISTS (
+         SELECT 1 FROM production_release_run_event e
+          WHERE e.release_run_id = r.id AND e.to_status IN ('SUCCEEDED','ROLLED_BACK','BLOCKED')
+       )
+    `);
+    for (const row of runs) {
+      const scoped = inferIssueProductId(db, row.issue_id);
+      if (scoped && scoped !== id) continue;
+      items.push({
+        kind: "production_release",
+        id: row.id,
+        state: "pending",
+        blocking: true,
+        unscoped: !scoped,
+        note: scoped
+          ? "未送出的正式發布可取消；已受理的部署不宣稱撤回。訂閱世代已換或已退出的晚到發布不開新 workflow。"
+          : "正式發布尚未綁 product_id；退出時列出但不能宣稱已取消外部呼叫",
+      });
+    }
+  }
   if (tableExists(db, "embedding")) {
     const embN = Number(db.prepare(`
       SELECT COUNT(*) n FROM embedding e
@@ -209,15 +252,19 @@ export function listPendingWork(db, productId) {
     }
   }
   if (tableExists(db, "release_notification")) {
-    const notes = safeAll(db, "SELECT id, status FROM release_notification WHERE status='pending'");
+    const notes = safeAll(db, "SELECT id, issue_id, status FROM release_notification WHERE status='pending'");
     for (const row of notes) {
+      const scoped = inferIssueProductId(db, row.issue_id);
+      if (scoped && scoped !== id) continue;
       items.push({
         kind: "release_notification",
         id: row.id,
         state: row.status,
         blocking: false,
-        unscoped: true,
-        note: "發布通知佇列尚未分站",
+        unscoped: !scoped,
+        note: scoped
+          ? "未送出的發布通知可取消。訂閱世代已換或已退出的晚到通知不會外送。"
+          : "發布通知佇列尚未分站",
       });
     }
   }

@@ -32,6 +32,7 @@ import {
 import { makeProductionReleaseProvider, newDispatchRequestId } from "./productionReleaseProvider.js";
 import { DEFAULT_PRODUCT_ID } from "../products.js";
 import { inferredIssueProductId } from "../codingTask.js";
+import { issueWriteDecision } from "../insightConsent.js";
 import {
   DEFAULT_ENVIRONMENT_KEY,
   normalizeEnvironmentKey,
@@ -1042,6 +1043,11 @@ export function createProductionReleaseRun(db, body, {
   if (auth.status !== "active") throw httpError("release authorization superseded", 409);
   const a = elig.assessment;
   if (!sameNum(body.migrationSafetyAssessmentId, a.id)) throw httpError("migration_safety_assessment_id mismatch", 409);
+  const gate = issueWriteDecision(db, task.issue_id, { expectedGeneration: task.subscription_generation });
+  if (!gate.ok) {
+    throw httpError(gate.reason === "stale_generation" ? "訂閱世代已換，晚到正式發布不入隊。" : "訂閱已退出，晚到正式發布不入隊。", 409);
+  }
+  const generation = gate.unbound ? null : (task.subscription_generation ?? gate.generation);
   const productId = inferredIssueProductId(db, task.issue_id) || DEFAULT_PRODUCT_ID;
   const environmentKey = normalizeEnvironmentKey(body.targetEnvironment, { fallback: DEFAULT_ENVIRONMENT_KEY });
   resolveProductionTarget(db, { productId, environmentKey, displayName: body.displayName || body.display_name });
@@ -1063,8 +1069,8 @@ export function createProductionReleaseRun(db, body, {
         previous_stable_sha, previous_stable_digest, previous_stable_workflow_run_id, previous_stable_release_run_id, previous_stable_provenance,
         authorized_github_actor, created_by, created_at,
         product_id, environment_key, instruction_source, instruction_actor,
-        previous_stable_static_tree_hash, previous_stable_schema_compat)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        previous_stable_static_tree_hash, previous_stable_schema_compat, subscription_generation)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     ).run(
       Number(task.issue_id), Number(task.id), Number(auth.id), auth.authorization_hash, Number(rc.id), Number(rc.manifest_version), rc.manifest_hash,
       Number(a.id), a.policy_fingerprint, a.input_fingerprint, a.clearance_result,
@@ -1075,7 +1081,7 @@ export function createProductionReleaseRun(db, body, {
       prev.provenance ? JSON.stringify(sanitizeReleaseEvidence(prev.provenance)) : null,
       serverActor, actor, ts,
       productId, environmentKey, resolvedInstruction.source, resolvedInstruction.actor,
-      prev.static_tree_hash, prev.schema_compat,
+      prev.static_tree_hash, prev.schema_compat, generation,
     );
     const id = Number(res.lastInsertRowid);
     recordInstruction(db, {
@@ -1532,6 +1538,30 @@ export async function executeProductionRelease(db, releaseRunId, {
   if (!row) throw httpError("production release run not found", 404);
   let run = row;
   const status = latestStatus(db, run.id) || RELEASE_STATUSES.CREATED;
+  const gate = issueWriteDecision(db, run.issue_id, { expectedGeneration: run.subscription_generation });
+  if (!gate.ok && !isTerminalReleaseStatus(status)) {
+    const bindings = db.prepare(
+      "SELECT dispatch_submitted_at, workflow_run_id FROM production_release_workflow_binding WHERE release_run_id=?",
+    ).all(Number(run.id));
+    const alreadySent = bindings.some((b) => b.dispatch_submitted_at || b.workflow_run_id);
+    if (isFrozenReleaseStatus(status) || alreadySent) {
+      if (isFrozenReleaseStatus(status)) {
+        const owner = randomUUID();
+        const observedStable = observedStableForRun(db, run);
+        return await reconcileUnknownOwningRelease(db, run, {
+          provider: prov, repo, env, now, actor, owner, hooks, observedStable,
+        });
+      }
+      throw httpError("訂閱世代已換；已送出的正式發布不宣稱撤回。", 409);
+    }
+    withImmediateTx(db, () => {
+      appendEvent(db, {
+        releaseRunId: run.id, toStatus: RELEASE_STATUSES.BLOCKED, eventType: "subscription_generation_blocked",
+        reason: gate.reason, errorCode: gate.reason, now, actor,
+      });
+    });
+    throw httpError(gate.reason === "stale_generation" ? "訂閱世代已換，晚到正式發布不外送。" : "訂閱已退出，晚到正式發布不外送。", 409);
+  }
   if (isTerminalReleaseStatus(status)) {
     releaseLeaseIfSafe(db, run.id);
     return { run: publicReleaseRun(db, run), current_status: status, idempotent: true };

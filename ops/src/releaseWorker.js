@@ -1,6 +1,7 @@
 import { createReleaseCandidate, validateReleaseChain, retryReleaseNotification } from "./releaseCandidate.js";
 import { releaseConfigFromEnv } from "./release/releasePolicy.js";
 import { makeCodingRepo } from "./coding/gitRepo.js";
+import { issueWriteDecision } from "./insightConsent.js";
 
 // Phase 13 背景 worker：為「fresh QA PASS + fresh Staging PASS」的 coding task 決定性組裝 Release Candidate + 排通知。
 // 不用 LLM（不可變 provenance 由本地決定性組裝）。安全預設：repo 不可用 → 不建。不部署、不 merge、不呼叫 coding provider。
@@ -20,7 +21,11 @@ export function createReleaseCandidatesForEligible(db, { repo, env = process.env
   ).all(Math.max(1, limit));
   const created = [];
   for (const r of rows) {
-    try { validateReleaseChain(db, r.id, { repo, env }); created.push(createReleaseCandidate(db, { codingTaskId: r.id, repo, env, now })); }
+    try {
+      const { task } = validateReleaseChain(db, r.id, { repo, env });
+      if (!issueWriteDecision(db, task.issue_id, { expectedGeneration: task.subscription_generation }).ok) continue;
+      created.push(createReleaseCandidate(db, { codingTaskId: r.id, repo, env, now }));
+    }
     catch { /* 不合格（QA/Staging 非 fresh PASS 等）→ 跳過 */ }
   }
   return created;

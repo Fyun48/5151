@@ -8,6 +8,7 @@ import { releaseConfigFromEnv, buildReleasePolicy, releasePolicyFingerprint, eff
 import { buildManifestContent, computeManifestHash, releaseInputFingerprint } from "./release/manifest.js";
 import { notifyConfig, buildWebhookPayload, deliverWebhook } from "./notify/webhook.js";
 import { rejectSpoofedOwnerDirect } from "./instructionSource.js";
+import { issueWriteDecision } from "./insightConsent.js";
 
 export const RELEASE_OWNER_ACTIONS = ["APPROVE_RELEASE", "REQUEST_CHANGES", "CANCEL_RELEASE"];
 function iso(now) { return (now instanceof Date ? now : new Date(now || Date.now())).toISOString(); }
@@ -40,6 +41,13 @@ export function createReleaseCandidate(db, { codingTaskId, repo, env = process.e
   const policyFp = releasePolicyFingerprint(policy);
   const ts = iso(now);
   const { task, auth, qa, staging, currentMaster, drift, artifactDigest } = validateReleaseChain(db, codingTaskId, { repo, env, now });
+  const gate = issueWriteDecision(db, task.issue_id, { expectedGeneration: task.subscription_generation });
+  if (!gate.ok) {
+    const err = httpError(gate.reason === "stale_generation" ? "訂閱世代已換，晚到發行候選不組裝。" : "訂閱已退出，晚到發行候選不組裝。", 409);
+    err.code = gate.reason || "subscription_revoked";
+    throw err;
+  }
+  const generation = gate.unbound ? null : (task.subscription_generation ?? gate.generation);
   const inputFp = releaseInputFingerprint({
     codingTaskId: Number(task.id), authorizationId: Number(auth.id), proposalId: Number(task.proposal_id), proposalVersion: Number(task.proposal_version), proposalHash: String(task.proposal_hash),
     baseSha: task.base_sha, headSha: task.head_sha, currentMaster, codingResultHash: task.result_hash, diffHash: qa.diff_hash,
@@ -65,23 +73,23 @@ export function createReleaseCandidate(db, { codingTaskId, repo, env = process.e
         qa_run_id, staging_deployment_id, manifest_version, release_manifest_version, release_policy_version, base_sha, head_sha, current_master_sha,
         source_tree_hash, coding_result_hash, diff_hash, artifact_id, artifact_digest, qa_input_fingerprint, qa_policy_fingerprint,
         staging_input_fingerprint, staging_policy_fingerprint, staging_config_fingerprint, release_policy_fingerprint, release_input_fingerprint,
-        manifest_hash, manifest_content, source_base_drift, status, generated_at, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'completed', ?, ?)`,
+        manifest_hash, manifest_content, source_base_drift, status, generated_at, created_at, subscription_generation)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'completed', ?, ?, ?)`,
     ).run(
       Number(task.issue_id), Number(task.id), Number(auth.id), Number(task.proposal_id), Number(task.proposal_version), String(task.proposal_hash),
       Number(qa.id), Number(staging.id), version, cfg.manifestVersion, cfg.policyVersion, task.base_sha, task.head_sha, currentMaster,
       staging.source_tree_hash || null, task.result_hash, qa.diff_hash, staging.artifact_id || null, artifactDigest, qa.input_fingerprint, qa.qa_policy_fingerprint,
       staging.input_fingerprint, staging.staging_policy_fingerprint, staging.config_fingerprint, policyFp, inputFp,
-      manifestHash, JSON.stringify(content), drift ? 1 : 0, ts, ts,
+      manifestHash, JSON.stringify(content), drift ? 1 : 0, ts, ts, generation,
     );
     const id = Number(res.lastInsertRowid);
     db.prepare(`INSERT INTO development_release_current(coding_task_id, release_manifest_id, manifest_version, manifest_hash, updated_at)
                 VALUES (?,?,?,?,?) ON CONFLICT(coding_task_id) DO UPDATE SET release_manifest_id=excluded.release_manifest_id, manifest_version=excluded.manifest_version, manifest_hash=excluded.manifest_hash, updated_at=excluded.updated_at`)
       .run(Number(task.id), id, version, manifestHash, ts);
     // 通知 outbox（idempotent；未設 adapter → pending，不假造送達）。
-    db.prepare(`INSERT OR IGNORE INTO release_notification(issue_id, coding_task_id, release_manifest_id, manifest_version, channel, status, payload, created_at, updated_at)
-                VALUES (?,?,?,?, 'internal', 'pending', ?, ?, ?)`)
-      .run(Number(task.issue_id), Number(task.id), id, version, JSON.stringify({ title: snapshot.title || "", manifest_version: version, head_sha: task.head_sha, artifact_digest: artifactDigest, qa_result: qa.final_result, staging_result: staging.validation_result, review_ref: `/ops/api/coding-tasks/${task.id}/release` }), ts, ts);
+    db.prepare(`INSERT OR IGNORE INTO release_notification(issue_id, coding_task_id, release_manifest_id, manifest_version, channel, status, payload, created_at, updated_at, subscription_generation)
+                VALUES (?,?,?,?, 'internal', 'pending', ?, ?, ?, ?)`)
+      .run(Number(task.issue_id), Number(task.id), id, version, JSON.stringify({ title: snapshot.title || "", manifest_version: version, head_sha: task.head_sha, artifact_digest: artifactDigest, qa_result: qa.final_result, staging_result: staging.validation_result, review_ref: `/ops/api/coding-tasks/${task.id}/release` }), ts, ts, generation);
     appendAuditRow(db, { actor: "system", action: "issue.release_candidate.created", entityType: "development_release_candidate", entityId: String(id), data: { issue_id: Number(task.issue_id), coding_task_id: Number(task.id), manifest_id: id, manifest_version: version, manifest_hash: manifestHash, head_sha: task.head_sha, artifact_digest: artifactDigest, qa_run_id: Number(qa.id), staging_deployment_id: Number(staging.id), source_base_drift: drift }, now });
     appendAuditRow(db, { actor: "system", action: "issue.release_candidate.current_changed", entityType: "development_release_current", entityId: String(task.id), data: { issue_id: Number(task.issue_id), coding_task_id: Number(task.id), manifest_id: id, manifest_version: version } });
     appendAuditRow(db, { actor: "system", action: "issue.release.notification_queued", entityType: "development_release_candidate", entityId: String(id), data: { issue_id: Number(task.issue_id), coding_task_id: Number(task.id), manifest_id: id, manifest_version: version } });
@@ -101,6 +109,7 @@ export function publicRC(db, row, { withManifest = false } = {}) {
     artifact_id: row.artifact_id, artifact_digest: row.artifact_digest, release_policy_fingerprint: row.release_policy_fingerprint,
     release_input_fingerprint: row.release_input_fingerprint, manifest_hash: row.manifest_hash,
     source_base_drift: !!row.source_base_drift, status: row.status, generated_at: row.generated_at, created_at: row.created_at,
+    subscription_generation: row.subscription_generation == null ? null : Number(row.subscription_generation),
   };
   if (withManifest) out.manifest = parse(row.manifest_content);
   return out;
@@ -153,6 +162,8 @@ export function getCurrentReleaseCandidate(db, codingTaskId, { repo = null, env 
   } else if (cfg.sourceBaseDriftPolicy === "fail_closed") {
     reasons.push("source_base_unverified");
   }
+  const gate = issueWriteDecision(db, rc.issue_id, { expectedGeneration: rc.subscription_generation });
+  if (!gate.ok) reasons.push(gate.reason || "subscription_revoked");
   return { ...publicRC(db, rc, { withManifest: true }), fresh: reasons.length === 0, stale: reasons.length > 0, stale_reasons: reasons, current_decision: currentReleaseDecision(db, codingTaskId) };
 }
 
@@ -239,6 +250,16 @@ export async function retryReleaseNotification(db, notificationId, {
   const n = db.prepare("SELECT * FROM release_notification WHERE id=?").get(Number(notificationId));
   if (!n) throw httpError("notification not found", 404);
   if (n.status === "sent") return { idempotent: true, status: "sent" };
+  if (n.status === "failed") return { idempotent: true, status: "failed" };
+
+  const notifyGate = issueWriteDecision(db, n.issue_id, { expectedGeneration: n.subscription_generation });
+  if (!notifyGate.ok) {
+    return withImmediateTx(db, () => {
+      db.prepare("UPDATE release_notification SET status='failed', updated_at=? WHERE id=? AND status='pending'").run(iso(now), Number(n.id));
+      appendAuditRow(db, { actor, action: "issue.release.notification_failed", entityType: "release_notification", entityId: String(n.id), data: { issue_id: Number(n.issue_id), coding_task_id: Number(n.coding_task_id), manifest_id: Number(n.release_manifest_id), reason: notifyGate.reason }, now });
+      return { failed: true, status: "failed", reason: notifyGate.reason };
+    });
+  }
 
   const cfg = notifyConfig(env);
   const deliver = sender || (cfg.configured
