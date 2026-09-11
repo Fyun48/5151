@@ -160,6 +160,14 @@ import {
 } from "./budgetGuard.js";
 import { executeWithProvider } from "./providers/executeWithProvider.js";
 import {
+  ensureListingSimilaritySchema,
+  enqueueListingSimilarity,
+  getSimilarityAdmin,
+  reviewSimilarity,
+  savePhashSettings,
+  shouldEnqueueSimilarity,
+} from "./listingSimilarity.js";
+import {
   closeSelfListing as closeSelfListingOn,
   createSelfListing as createSelfListingOn,
   createImportedDraftListing as createImportedDraftListingOn,
@@ -700,6 +708,7 @@ ensureCrmSchema(db);
 ensureCrmOutboxSchema(db);
 ensureBudgetSchema(db);
 bindBudgetDb(db);
+ensureListingSimilaritySchema(db);
 ensureSelfListingSchema(db);
 ensureMemberMediaSchema(db);
 ensureContentDocumentSchema(db);
@@ -977,6 +986,18 @@ export function saveAdminProviderSettings(partial = {}) {
 
 export function saveAdminSiteBudget(partial = {}) {
   return saveSiteBudget(db, partial);
+}
+
+export function getAdminSimilaritySettings() {
+  return getSimilarityAdmin(db);
+}
+
+export function saveAdminPhashSettings(partial = {}) {
+  return savePhashSettings(db, partial);
+}
+
+export function reviewAdminSimilarity(id, partial = {}, userId = 0) {
+  return reviewSimilarity(db, id, partial, userId);
 }
 
 export async function testAdminProvider(partial = {}) {
@@ -2940,6 +2961,18 @@ export function upsertListing(listing) {
     } catch {
       // ignore
     }
+  }
+  enqueueSimilaritySafe(listing);
+}
+
+function enqueueSimilaritySafe(listing) {
+  try {
+    if (!listing?.post_id || !shouldEnqueueSimilarity(db)) return;
+    queueMicrotask(() => {
+      Promise.resolve(enqueueListingSimilarity(db, listing)).catch(() => {});
+    });
+  } catch {
+    // 指紋失敗不擋入庫
   }
 }
 

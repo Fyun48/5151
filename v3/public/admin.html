@@ -117,9 +117,11 @@
     .member-interval { width: 72px; }
     .msg { font-size: 13px; color: var(--muted); min-height: 1.4em; margin: 8px 0 0; }
     .ok { color: var(--accent-deep); }
-    .err { color: #9f6b6b; }
-    .checks { display: flex; align-items: center; gap: 8px; margin: 12px 0; font-size: 14px; }
-    .checks input { width: auto; }
+    .err { color: #7a2e2e; }
+    .msg.warn { color: #7a4a12; }
+    .checks { display: flex; align-items: center; gap: 8px; margin: 12px 0; font-size: 14px; min-height: var(--touch, 44px); }
+    .checks input { width: auto; min-width: 18px; min-height: 18px; }
+    #plugins .plugin-log-wrap.is-empty table { min-width: 0; width: 100%; }
     .provider {
       border: 1px solid var(--line);
       border-radius: 14px;
@@ -277,7 +279,7 @@
       <a href="#mail" data-admin-nav="mail"><strong>系統信件</strong><span>SMTP、信件範本</span></a>
       <a href="#feedback" data-admin-nav="feedback"><strong>使用者回饋</strong><span>bug、建議、處理狀態</span></a>
       <a href="#crm" data-admin-nav="crm"><strong>站內 CRM</strong><span>聯絡人、案件、待辦</span></a>
-      <a href="#plugins" data-admin-nav="plugins"><strong>外掛與預算</strong><span>代爬、距離、熔斷</span></a>
+      <a href="#plugins" data-admin-nav="plugins"><strong>外掛與預算</strong><span>指紋、待審、代爬、熔斷</span></a>
     </nav>
     <div class="admin-main">
       <div id="members" class="admin-panel" data-admin-panel="members">
@@ -1053,7 +1055,7 @@
       <div id="plugins" class="admin-panel" data-admin-panel="plugins">
 <section class="card">
       <h2>外掛與預算</h2>
-      <p class="hint">金鑰與每日預算只寫在本站。預設全關。各卡「每日預算 0」＝該類不准花錢，不是無限。本站總預算 0＝不另設全站上限，仍以各卡日預算為準。先保留額度才呼叫外網。逾時不釋放已送出的保留。關掉開關會回到原本的免費爬蟲／直線距離／現有同源規則。</p>
+      <p class="hint">金鑰與每日預算只寫在本站。預設全關。各卡「每日預算 0」＝該類不准花錢，不是無限。本站總預算 0＝不另設全站上限，仍以各卡日預算為準。先保留額度才呼叫外網。逾時不釋放已送出的保留。關掉開關會回到原本的免費爬蟲／直線距離／現有同源規則。圖片指紋是本機計算，不花錢；漢明距離只當相似證據，不會自動併戶，A≈B、B≈C 也不會當成 A=C。</p>
       <div id="pluginsErrorSummary" class="msg err" role="alert" tabindex="-1" hidden></div>
       <p class="msg" id="pluginsMsg" role="status"></p>
       <form id="pluginSiteForm" class="plugin-card" autocomplete="off">
@@ -1068,6 +1070,47 @@
         </div>
         <p class="msg" id="pluginSiteMsg" role="status"></p>
       </form>
+      <form id="phashForm" class="plugin-card" autocomplete="off">
+        <h3>圖片指紋（本機）</h3>
+        <p class="hint">不花錢、不擋入庫。關掉＝不算指紋、不產生建議，現有同源規則不變。已算過的指紋與建議會保留。</p>
+        <label class="checks"><input id="phashEnabled" type="checkbox" /> 開啟背景計算封面指紋</label>
+        <div class="row" style="margin-top:10px">
+          <button type="submit" class="primary" id="phashSave">儲存指紋設定</button>
+        </div>
+        <p class="msg" id="phashMsg" role="status"></p>
+      </form>
+      <div class="plugin-card" id="similarityBox">
+        <h3>同源建議（待審）</h3>
+        <p class="hint">人工判定優先。通過或駁回只改建議狀態，不會覆寫會員手動併入或拆分。</p>
+        <p class="msg" id="similarityMsg" role="status"></p>
+        <div class="plugin-log-wrap" id="similarityWrap">
+          <table>
+            <caption class="hint">待審的封面相似成對建議</caption>
+            <thead>
+              <tr><th scope="col">物件</th><th scope="col">證據</th><th scope="col">操作</th></tr>
+            </thead>
+            <tbody id="similarityRows"></tbody>
+          </table>
+        </div>
+        <h3 style="margin-top:16px">爬蟲洞察（提示）</h3>
+        <p class="hint">只顯示抽出的樓層／車位／頂加／費用提示。預設不寫回物件欄位。寫回開關在這張卡，不在指紋卡。</p>
+        <form id="insightApplyForm" autocomplete="off">
+          <label class="checks"><input id="insightApplyEnabled" type="checkbox" /> 允許補「原本空白」的樓層（仍不覆寫已填欄位）</label>
+          <div class="row" style="margin-top:10px">
+            <button type="submit" class="primary" id="insightApplySave">儲存洞察寫回</button>
+          </div>
+          <p class="msg" id="insightApplyMsg" role="status"></p>
+        </form>
+        <div class="plugin-log-wrap" id="insightWrap">
+          <table>
+            <caption class="hint">最近抽出的提示，不是同戶判決</caption>
+            <thead>
+              <tr><th scope="col">物件</th><th scope="col">提示</th><th scope="col">寫入</th></tr>
+            </thead>
+            <tbody id="insightRows"></tbody>
+          </table>
+        </div>
+      </div>
       <div id="pluginCards" aria-busy="false"></div>
       <h3>最近 50 筆用量</h3>
       <p class="hint">已結算、保留中與 fallback 分開列。不顯示金鑰或供應商原始錯誤。</p>
@@ -2819,6 +2862,13 @@
       renderCrmList();
       setMsg("crmMsg", crmState.contacts.length ? `共 ${crmState.contacts.length} 位聯絡人` : "", true);
     }
+    const PLUGIN_CATEGORY_LABEL = {
+      scraping_api: "網頁代爬",
+      residential_proxy: "住宅代理",
+      llm: "LLM 同源",
+      llm_crawl_insight: "爬蟲洞察",
+      distance_matrix: "地圖距離",
+    };
     const PLUGIN_CODE_LABEL = {
       none: "不使用",
       stub_paid: "測試用 stub（會走保留）",
@@ -2843,7 +2893,11 @@
         const limit = Number(item.today_limit_twd || item.daily_budget_twd || 0);
         const pct = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
         const options = (item.codes || []).map((code) => `<option value="${code}" ${code === item.provider_code ? "selected" : ""}>${PLUGIN_CODE_LABEL[code] || code}</option>`).join("");
-        const packNote = item.pack === 7 ? `<p class="hint">第 7 包才接 LLM；現在可先登記，預設關閉。</p>` : "";
+        const packNote = item.pack === 7
+          ? `<p class="hint">${item.category === "llm_crawl_insight"
+            ? "與「LLM 同源」分開開關。只從標題、模糊地址、標籤與非結構說明抽提示，不覆寫已填欄位，也不送整頁或會員個資。"
+            : "與「爬蟲洞察」分開開關。只送標題、模糊地址、標籤與非結構說明；門牌／樓層衝突不能被 AI 蓋過。失敗就略過，沿用現有同源規則。"}</p>`
+          : "";
         const credHint = item.category === "distance_matrix"
           ? "地圖距離沿用「抓取底庫」的 Google 金鑰，不必再貼一組。"
           : (item.has_credential ? "已設定" : "尚未設定");
@@ -2908,7 +2962,10 @@
       const payload = pluginFormPayload(form);
       const errors = [];
       if (payload.is_enabled && payload.daily_budget_twd <= 0) {
-        errors.push({ id: `plugin-daily-${payload.category}`, text: `${payload.category} 已開啟但日預算為 0，儲存後此類仍不准花錢。` });
+        errors.push({
+          id: `plugin-daily-${payload.category}`,
+          text: `${PLUGIN_CATEGORY_LABEL[payload.category] || payload.category} 已開啟但日預算為 0，儲存後此類仍不准花錢。`,
+        });
       }
       showPluginErrors([]);
       const msg = form.querySelector("[data-plugin-msg]");
@@ -2924,9 +2981,14 @@
         const data = await readApi(res);
         if (!res.ok) throw new Error(data.error || "儲存失敗");
         renderPluginCards(data.overview);
-        setMsg("pluginsMsg", errors.length
-          ? `已儲存。${errors[0].text}`
-          : "已儲存。關掉開關＝回到免費路徑，已送出的保留額度不會撤銷。", true);
+        if (errors.length) {
+          showPluginErrors(errors);
+          setMsg("pluginsMsg", `已儲存，但有提醒：${errors[0].text}`);
+          const top = $("pluginsMsg");
+          if (top) top.className = "msg warn";
+        } else {
+          setMsg("pluginsMsg", "已儲存。關掉開關＝回到免費路徑，已送出的保留額度不會撤銷。", true);
+        }
       } catch (error) {
         if (msg) { msg.textContent = error.message; msg.className = "msg err"; }
         setMsg("pluginsMsg", error.message);
@@ -2955,15 +3017,107 @@
         if (msg) { msg.textContent = error.message; msg.className = "msg err"; }
       }
     }
+    function similarityEvidence(row) {
+      const bits = [];
+      if (row.hamming != null) bits.push(`漢明距離 ${row.hamming}`);
+      if (row.match_level) bits.push(`規則 ${row.match_level}`);
+      if ((row.blocked_by_veto || []).length) bits.push(`門牌／樓層衝突，AI 不可蓋過`);
+      else if ((row.veto || []).length) bits.push(`規則否決：${row.veto.join("、")}`);
+      if (row.llm?.verdict) bits.push(`LLM ${row.llm.verdict}`);
+      return bits.join(" · ") || "封面指紋相近";
+    }
+    function renderSimilarity(overview) {
+      if ($("phashEnabled")) $("phashEnabled").checked = overview.phash_enabled === true;
+      if ($("insightApplyEnabled")) $("insightApplyEnabled").checked = overview.insight_apply_enabled === true;
+      const rows = overview.suggestions || [];
+      $("similarityWrap")?.classList.toggle("is-empty", rows.length === 0);
+      $("similarityRows").innerHTML = rows.length
+        ? rows.map((row) => `<tr>
+            <td>
+              <a href="/go/${row.listing_a}" target="_blank" rel="noopener">#${row.listing_a} ${escapeHtml(row.title_a || "")}</a><br />
+              <a href="/go/${row.listing_b}" target="_blank" rel="noopener">#${row.listing_b} ${escapeHtml(row.title_b || "")}</a>
+            </td>
+            <td>${escapeHtml(similarityEvidence(row))}</td>
+            <td>
+              <div class="row" style="flex-wrap:wrap;gap:8px">
+                <button type="button" class="primary" data-sim-review="${row.id}" data-sim-state="accepted">通過</button>
+                <button type="button" class="ghost" data-sim-review="${row.id}" data-sim-state="rejected">駁回</button>
+              </div>
+            </td>
+          </tr>`).join("")
+        : `<tr><td colspan="3">${overview.phash_enabled
+          ? "目前沒有待審建議。相近封面會成對列在這裡，不會自動併戶。"
+          : "指紋關閉中。開啟上方「背景計算封面指紋」後，相近封面才會出現待審建議。"}</td></tr>`;
+      $("similarityRows").querySelectorAll("[data-sim-review]").forEach((btn) => {
+        btn.addEventListener("click", () => reviewSimilarity(btn.dataset.simReview, btn.dataset.simState, btn));
+      });
+      const insights = overview.insights || [];
+      $("insightWrap")?.classList.toggle("is-empty", insights.length === 0);
+      $("insightRows").innerHTML = insights.length
+        ? insights.map((row) => {
+          const hints = row.hints || {};
+          const text = [
+            hints.floor ? `樓層 ${hints.floor}` : "",
+            hints.parking ? `車位 ${hints.parking}` : "",
+            hints.rooftop ? `頂加 ${hints.rooftop}` : "",
+            hints.fees ? `費用 ${hints.fees}` : "",
+          ].filter(Boolean).join(" · ") || "沒有抽出可用提示";
+          return `<tr><td><a href="/go/${row.post_id}" target="_blank" rel="noopener">#${row.post_id} ${escapeHtml(row.title || "")}</a></td><td>${escapeHtml(text)}</td><td>${escapeHtml(row.apply_state_label || "只當提示")}</td></tr>`;
+        }).join("")
+        : `<tr><td colspan="3">還沒有洞察提示。請到下方「爬蟲洞察」付費卡開啟後才會抽出；預設不寫回物件欄位。</td></tr>`;
+      if (overview.legal) setMsg("similarityMsg", overview.legal, true);
+    }
+    async function reviewSimilarity(id, reviewState, btn) {
+      if (btn) btn.disabled = true;
+      setMsg("similarityMsg", "更新中…");
+      try {
+        const res = await fetch(`/api/admin/similarity/${id}/review`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ review_state: reviewState }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "更新失敗");
+        renderSimilarity(data.overview || {});
+        setMsg("similarityMsg", reviewState === "accepted" ? "已通過。會員手動併入／拆分沒有被改動。" : "已駁回。會員手動併入／拆分沒有被改動。", true);
+      } catch (error) {
+        setMsg("similarityMsg", error.message);
+        showPluginErrors([{ id: "phashEnabled", text: error.message }]);
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+    async function loadSimilarity() {
+      const host = $("similarityRows");
+      const insightHost = $("insightRows");
+      if (host) host.innerHTML = `<tr><td colspan="3">載入中…</td></tr>`;
+      if (insightHost) insightHost.innerHTML = `<tr><td colspan="3">載入中…</td></tr>`;
+      $("similarityBox")?.setAttribute("aria-busy", "true");
+      try {
+        const res = await fetch("/api/admin/similarity", { cache: "no-store" });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "載入同源建議失敗");
+        renderSimilarity(data);
+      } catch (error) {
+        if (host) host.innerHTML = `<tr><td colspan="3">${escapeHtml(error.message)}</td></tr>`;
+        if (insightHost) insightHost.innerHTML = `<tr><td colspan="3">${escapeHtml(error.message)} <button type="button" class="ghost" id="similarityRetry">重試</button></td></tr>`;
+        $("similarityRetry")?.addEventListener("click", loadSimilarity);
+        setMsg("similarityMsg", error.message);
+        showPluginErrors([{ id: "phashEnabled", text: error.message }]);
+      } finally {
+        $("similarityBox")?.setAttribute("aria-busy", "false");
+      }
+    }
     async function loadPlugins() {
       const host = $("pluginCards");
       if (host) {
         host.setAttribute("aria-busy", "true");
         if (!host.querySelector(".plugin-card")) host.textContent = "載入中…";
       }
+      const pending = [fetch("/api/admin/providers", { cache: "no-store" }).then((res) => readApi(res).then((data) => ({ res, data })))];
+      loadSimilarity();
       try {
-        const res = await fetch("/api/admin/providers", { cache: "no-store" });
-        const data = await readApi(res);
+        const { res, data } = await pending[0];
         if (!res.ok) throw new Error(data.error || "載入外掛失敗");
         renderPluginCards(data);
         setMsg("pluginsMsg", data.legal || "", true);
@@ -2975,6 +3129,50 @@
         host?.setAttribute("aria-busy", "false");
       }
     }
+    $("phashForm")?.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      $("phashSave").disabled = true;
+      setMsg("phashMsg", "儲存中…");
+      try {
+        const res = await fetch("/api/admin/phash", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: $("phashEnabled")?.checked === true }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "儲存失敗");
+        renderSimilarity(data.overview || data);
+        setMsg("phashMsg", data.phash_enabled ? "已開啟背景指紋。不會自動併戶。" : "已關閉。現有同源規則不變，已算過的指紋仍保留。", true);
+      } catch (error) {
+        setMsg("phashMsg", error.message);
+        showPluginErrors([{ id: "phashEnabled", text: error.message }]);
+      } finally {
+        $("phashSave").disabled = false;
+      }
+    });
+    $("insightApplyForm")?.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      $("insightApplySave").disabled = true;
+      setMsg("insightApplyMsg", "儲存中…");
+      try {
+        const res = await fetch("/api/admin/phash", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ insight_apply_enabled: $("insightApplyEnabled")?.checked === true }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "儲存失敗");
+        renderSimilarity(data.overview || data);
+        setMsg("insightApplyMsg", data.insight_apply_enabled
+          ? "已允許補空白樓層。已填的樓層仍不會被覆寫。"
+          : "已關閉寫回。洞察只當提示。", true);
+      } catch (error) {
+        setMsg("insightApplyMsg", error.message);
+        showPluginErrors([{ id: "insightApplyEnabled", text: error.message }]);
+      } finally {
+        $("insightApplySave").disabled = false;
+      }
+    });
     $("pluginSiteForm")?.addEventListener("submit", async (ev) => {
       ev.preventDefault();
       $("pluginSiteSave").disabled = true;
