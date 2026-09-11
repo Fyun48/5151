@@ -1,9 +1,9 @@
 # OPS／v3 現況對照表（ChatGPT 審查後）
 
-盤點對象：本分支 `cursor/ops-remote-cs-ed3f`（第 0–10 包，疊在 design 上）。  
-ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契約、Deploy OPS、產品卡、退出演練、站內 CRM、隔離 staging、開發發行檢視、OPS 供應商抽屜、v3 BudgetGuard、pHash 附屬表與兩個 LLM 開關、第 8 包 live 契約、第 9 包可打包設計套件、以及第 10 包遠端客服。**不以那次抽查當現況。**
+盤點對象：本分支 `cursor/ops-insight-ed3f`（第 0–11 包，疊在 remote-cs 上）。  
+ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契約、Deploy OPS、產品卡、退出演練、站內 CRM、隔離 staging、開發發行檢視、OPS 供應商抽屜、v3 BudgetGuard、pHash 附屬表與兩個 LLM 開關、第 8 包 live 契約、第 9 包可打包設計套件、第 10 包遠端客服、以及第 11 包跨站洞察與清除。**不以那次抽查當現況。**
 
-本次是第 10 包（遠端客服操作），**不是部署指令**，不 Deploy v3，也不擅自跑 Deploy OPS。`PRODUCTION_RELEASE_ALLOW_LIVE` 維持預設 0。`OPS_REMOTE_CS_DELIVERY` 與 `V3_OPS_COMMAND_ACCEPT` 維持預設 0。
+本次是第 11 包（跨站洞察與清除），**不是部署指令**，不 Deploy v3，也不擅自跑 Deploy OPS。`PRODUCTION_RELEASE_ALLOW_LIVE` 維持預設 0。`cross_site_insight` 與 `retain_after_exit` 維持預設關。
 
 圖例：`存在`＝可承接；`需改`＝有程式但契約不足；`待做`＝尚未實作。
 
@@ -14,15 +14,15 @@ ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契�
 | 回饋本機主本＋同交易 outbox | 存在 | `v3/src/feedback.js`、`v3/src/feedbackOutbox.js` | `createFeedbackWithOutbox()` 必須保留，不另建第二套 |
 | 非同步遞送、可關 | 存在 | `v3/src/opsDelivery.js`、`v3/src/server.js` | `OPS_FEEDBACK_DELIVERY` 預設 0；失敗不回滾本機回饋 |
 | 站內回饋後台 | 存在 | `v3/public/admin.html`、`v3/src/server.js` | 「使用者回饋」讀本機 |
-| 回饋法律告知 | 存在／需改 | `v3/src/feedback.js` `FEEDBACK_LEGAL` | 目前只授權站方修 bug／改功能；跨站洞察／對外 LLM 要另授權（第 4／7 包） |
-| HMAC ingest | 存在／需改 | `ops/src/ingestSignature.js`、`ops/src/server.js`、`v3/src/opsSignature.js` | 演算法可留；密鑰必須改為每站一把，由伺服器決定 `product_id` |
-| 去重鍵 | 需改 | `v3/src/feedbackOutbox.js`、`ops/src/ingest.js`、`ops/src/opsDb.js` | 本機 `feedback:${id}` 可留；OPS 不可再全域 UNIQUE |
-| 單一 `OPS_INGEST_SECRET` | 需改 | `ops/src/server.js` `createHandler` | 改憑證表＋env 只當 v3 後備 |
+| 回饋法律告知 | 本輪已改 | `v3/src/feedback.js` `FEEDBACK_LEGAL` | 明示不含 CRM／跨站分析／對外 LLM；跨站洞察要另授權 |
+| HMAC ingest | 已做 | `ops/src/ingestSignature.js`、`ops/src/products.js` | 憑證定站；env 只在完全沒有憑證列時當 v3 後備 |
+| 去重鍵 | 已做 | `ops/src/ingest.js`、`ops/src/opsDb.js` | OPS 去重是 `(product_id, delivery_id)`／`(product_id, idempotency_key)` |
+| 單一 `OPS_INGEST_SECRET` | 已做 | `ops/src/products.js` `resolveIngestAuth` | 憑證表為主；env 只當 v3 後備 |
 | `production_stable_current` | 本輪已改鍵 | `ops/src/opsDb.js`、`ops/src/release/productionRelease.js` | 現以 `(product_id, environment_key)` 為鍵；含 static_tree_hash／schema_compat |
 | 每站／每環境部署租約 | 本輪已改 | `ops/src/opsDb.js` `production_release_target_lease` | 站 A 不擋住站 B；同站同環境仍互斥 |
 | Owner 直達 Deploy | 存在 | `.github/workflows/deploy-v3.yml`（`manual_owner`／`ops_phase15`） | 藍圖承接；第 8 包不拆直達線；OPS 只接驗證後的 session／workflow actor |
 | Owner 指令來源完整線 | 本輪已做 | `ops/src/instructionSource.js` `instruction_record` | payload `owner_direct` 仍 403；正式執行寫入 append-only 指令紀錄 |
-| Owner 規則檔 | 需改 | 本 checkout 無 `.cursor/rules/owner-merge-deploy.mdc` | 契約寫進藍圖與 AGENTS.md；不另造批准儀式 |
+| Owner 規則檔 | 存在 | `.cursor/rules/owner-merge-deploy.mdc` | 契約寫進藍圖與 AGENTS.md；不另造批准儀式 |
 | 版本退回契約 | 本輪已改 | `ops/src/release/rollbackContract.js` | 程式退回要 SHA＋digest＋靜態樹雜湊＋schema compatible；DB 還原另要 `RESTORE-PRODUCTION-DB`，且不由 code rollback 執行 |
 | `RELEASED → ROLLED_BACK → EVALUATING` | 本輪已改 | `ops/src/stateMachine.js`、`ops/src/followUp.js` | 已發布事實不變；再開發用 follow-up，不重用已發布授權 |
 | 議題狀態機其餘出口 | 存在 | `ops/src/stateMachine.js` | 前期取消／拒絕／封鎖可留 |
@@ -39,7 +39,8 @@ ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契�
 | pHash 附屬表、同屋源／爬蟲 AI | 本輪已做 | `v3/src/phash.js`、`v3/src/listingSimilarity.js`、`v3/src/providers/llm.js`、後台 `#plugins` | 附屬表；不鏈式合併；人工判定優先；關開關＝舊 `match.js` |
 | OPS live 串既有部署 | 本輪已做 | `ops/src/productEnvironment.js`、`ops/src/instructionSource.js`、Phase 15 | 多站目標、指令來源完整線、每站互斥、正式版重核對；live 預設關；Owner 直達 workflow 不拆 |
 | 共用設計元件可打包 | 本輪已做 | `design-system/tokens.css`、`design-system/kit/`、`v3/public/kit/`、`ops/public/kit/` | 第 9 包；固定版本可本機打包；runtime 不回抓 OPS；v3 保留內建 `tokens.css` |
-| 遠端客服操作 | 本輪已做 | `ops/src/siteCommand.js`、`v3/src/siteCommandApply.js`、Console CRM、後台 `#feedback` | 第 10 包；capability `remote_cs` 預設關；本站驗證後才寫本機；離線不假成功 |
+| 遠端客服操作 | 已做 | `ops/src/siteCommand.js`、`v3/src/siteCommandApply.js`、Console CRM、後台 `#feedback` | 第 10 包；capability `remote_cs` 預設關；本站驗證後才寫本機；離線不假成功 |
+| 跨站洞察與清除 | 本輪已做 | `ops/src/insightConsent.js`、`ops/src/exitDrill.js`、Console 產品卡 | 第 11 包；`cross_site_insight`／`retain_after_exit` 預設關；撤回停新洞察；刪複本才清向量／匯出 |
 
 ## 2. 第 14 節驗收情境的實作安排
 

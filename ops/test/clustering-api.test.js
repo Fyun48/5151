@@ -6,10 +6,12 @@ import { createApp } from "../src/server.js";
 import { makeStubEmbeddingProvider } from "../src/ai/embeddingProvider.js";
 import { runEmbeddingOnce } from "../src/clusteringWorker.js";
 import { listIssues, feedbackIssue } from "../src/clustering.js";
+import { updateProductCapabilities } from "../src/products.js";
 
 const CFG = { ownerEmail: "owner@example.com", ownerPassword: "pw", sessionSecret: "s" };
 let seq = 1;
 function seedAnalyzed(db, content, category = "BUG") {
+  updateProductCapabilities(db, "v3", { cross_site_insight: true });
   const i = seq++;
   const ts = new Date().toISOString();
   db.prepare("INSERT INTO ingested_feedback(delivery_id, idempotency_key, source, kind, content, received_at) VALUES (?, ?, 'v3', 'bug', ?, ?)").run(`d${i}`, `k${i}`, content, ts);

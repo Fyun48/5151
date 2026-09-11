@@ -132,6 +132,8 @@ const EXIT_ACTION_LABEL = {
 const PENDING_KIND_LABEL = {
   credential: "憑證",
   analysis: "分析工作",
+  insight_embedding: "洞察向量",
+  crm_replica: "CRM 複本",
   coding: "製作任務",
   release_notification: "發布通知",
 };
@@ -280,7 +282,7 @@ function renderProductCards() {
       ${Array.isArray(p.environments) && p.environments.length
         ? `<p class="hint">部署目標：${p.environments.map((e) => `<code>${esc(e.environment_key)}</code>${e.container_name ? ` → ${esc(e.container_name)}` : ""}${e.workflow_file ? ` · ${esc(e.workflow_file.split("/").pop())}` : ""}`).join(" · ")}</p>`
         : `<p class="hint">部署目標：尚未登記環境。顯示名不能當安全識別。</p>`}
-      <p class="hint">授權：回饋複製 ${caps.feedback_copy ? "開" : "關"} · CRM 同步 ${caps.crm_sync ? "開" : "關"} · 遠端客服 ${caps.remote_cs ? "開" : "關"} · 跨站分析 ${caps.cross_site_insight ? "開" : "關"}</p>
+      <p class="hint">授權：回饋複製 ${caps.feedback_copy ? "開" : "關"} · CRM 同步 ${caps.crm_sync ? "開" : "關"} · 遠端客服 ${caps.remote_cs ? "開" : "關"} · 跨站分析 ${caps.cross_site_insight ? "開" : "關"} · 退出後保留 ${caps.retain_after_exit ? "開" : "關"}</p>
       ${Array.isArray(p.consent_events) && p.consent_events.length
         ? `<p class="hint">授權紀錄：${p.consent_events.slice(0, 4).map((ev) => `${esc(ev.capability_key)} ${ev.granted ? "開" : "撤回"}`).join(" · ")}</p>`
         : `<p class="hint">授權紀錄：尚無撤回或新開紀錄。</p>`}
@@ -293,6 +295,10 @@ function renderProductCards() {
         ${!exited && caps.crm_sync ? `<button type="button" data-pid="${esc(p.id)}" data-pact="revoke-crm-sync" aria-label="撤回 ${esc(name)} 的 CRM 同步">撤回 CRM 同步</button>` : ""}
         ${!exited && !caps.remote_cs ? `<button type="button" data-pid="${esc(p.id)}" data-pact="grant-remote-cs" aria-label="允許 ${esc(name)} 的遠端客服">允許遠端客服</button>` : ""}
         ${!exited && caps.remote_cs ? `<button type="button" data-pid="${esc(p.id)}" data-pact="revoke-remote-cs" aria-label="撤回 ${esc(name)} 的遠端客服">撤回遠端客服</button>` : ""}
+        ${!exited && !caps.cross_site_insight ? `<button type="button" data-pid="${esc(p.id)}" data-pact="grant-insight" aria-label="允許 ${esc(name)} 的跨站分析">允許跨站分析</button>` : ""}
+        ${!exited && caps.cross_site_insight ? `<button type="button" data-pid="${esc(p.id)}" data-pact="revoke-insight" aria-label="撤回 ${esc(name)} 的跨站分析">撤回跨站分析</button>` : ""}
+        ${!exited && caps.cross_site_insight && !caps.retain_after_exit ? `<button type="button" data-pid="${esc(p.id)}" data-pact="grant-retain" aria-label="允許 ${esc(name)} 退出後保留用途">允許退出後保留</button>` : ""}
+        ${!exited && caps.retain_after_exit ? `<button type="button" data-pid="${esc(p.id)}" data-pact="revoke-retain" aria-label="撤回 ${esc(name)} 的退出後保留用途">撤回退出後保留</button>` : ""}
         ${!exited ? `<button type="button" data-pid="${esc(p.id)}" data-pact="rotate-credential" aria-label="輪替 ${esc(name)} 的密鑰">輪替密鑰</button>` : ""}
         ${!exited ? `<button type="button" class="danger" data-pid="${esc(p.id)}" data-pact="unsubscribe" aria-label="解除訂閱 ${esc(name)}">解除訂閱</button>` : ""}
       </div>
@@ -452,7 +458,11 @@ async function setProductCapability(id, patch) {
     if (data.command_secret) showSecret(data.command_secret, "遠端客服命令密鑰");
     const msg = patch.remote_cs === true ? "已允許遠端客服"
       : patch.remote_cs === false ? "已撤回遠端客服"
-        : patch.crm_sync ? "已允許 CRM 同步" : "已撤回 CRM 同步";
+        : patch.cross_site_insight === true ? "已允許跨站分析"
+          : patch.cross_site_insight === false ? "已撤回跨站分析"
+            : patch.retain_after_exit === true ? "已允許退出後保留用途"
+              : patch.retain_after_exit === false ? "已撤回退出後保留用途"
+                : patch.crm_sync ? "已允許 CRM 同步" : "已撤回 CRM 同步";
     setStatus($("productMsg"), msg, "ok");
     await Promise.all([refreshProducts(), refreshCrm()]);
   } finally {
@@ -588,10 +598,48 @@ function requestProductAction(id, action) {
     });
     return;
   }
+  if (action === "grant-insight") {
+    showConfirm({
+      title: "確認允許跨站分析",
+      body: `允許用「${name}」（${id}）的 OPS 複本產生新洞察（分析／向量／分群）？回饋複製不會自動包含這一項。去掉 email 不是匿名化。`,
+      confirmLabel: "確定允許",
+      danger: false,
+      onConfirm: () => setProductCapability(id, { cross_site_insight: true }),
+    });
+    return;
+  }
+  if (action === "revoke-insight") {
+    showConfirm({
+      title: "確認撤回跨站分析",
+      body: `撤回「${name}」（${id}）的跨站分析？不會再產生新洞察；已寫入的分析／向量仍保留，要清掉請刪 OPS 複本。`,
+      confirmLabel: "確定撤回",
+      onConfirm: () => setProductCapability(id, { cross_site_insight: false, retain_after_exit: false }),
+    });
+    return;
+  }
+  if (action === "grant-retain") {
+    showConfirm({
+      title: "確認允許退出後保留用途",
+      body: `允許「${name}」（${id}）解除訂閱後仍用舊複本產生新洞察？預設是停。`,
+      confirmLabel: "確定允許",
+      danger: false,
+      onConfirm: () => setProductCapability(id, { retain_after_exit: true }),
+    });
+    return;
+  }
+  if (action === "revoke-retain") {
+    showConfirm({
+      title: "確認撤回退出後保留用途",
+      body: `撤回「${name}」（${id}）的退出後保留？解除訂閱後不再用該站複本產生新洞察。`,
+      confirmLabel: "確定撤回",
+      onConfirm: () => setProductCapability(id, { retain_after_exit: false }),
+    });
+    return;
+  }
   if (action === "purge-replica") {
     showConfirm({
       title: "確認刪除 OPS 複本",
-      body: `確定清除「${name}」（${id}）在 OPS 的回饋複本內容？本機主本不會動。這不是暫停，也不能靠這一步還原複本。`,
+      body: `確定清除「${name}」（${id}）在 OPS 的回饋複本、分析摘要、向量、附件與匯出副本？去掉聯絡方式不是匿名化。本機主本不會動。`,
       confirmLabel: "確定清除",
       onConfirm: () => runProductAction(id, "purge-replica"),
     });

@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { openOpsDb } from "../src/opsDb.js";
 import { ingestFeedback } from "../src/ingest.js";
+import { updateProductCapabilities } from "../src/products.js";
 import {
   enqueueAnalysisRow,
   claimAnalysisBatch,
@@ -16,6 +17,7 @@ import { validateAnalysisOutput, parseAndValidate, CATEGORIES } from "../src/ai/
 import { minimizeForAnalysis, buildClassificationPrompt, CLASSIFICATION_PROMPT_VERSION } from "../src/ai/prompt.js";
 
 function seed(db, { content = "hi there", kind = "bug", contact = "user@example.com", app_version = "3.47" } = {}, i = Math.floor(Math.random() * 1e9)) {
+  updateProductCapabilities(db, "v3", { cross_site_insight: true });
   db.prepare(
     `INSERT INTO ingested_feedback(delivery_id, idempotency_key, source, kind, content, contact, context, user_ref, app_version, received_at)
      VALUES (?, ?, 'v3', ?, ?, ?, ?, ?, ?, ?)`,
@@ -56,6 +58,7 @@ test("prompt input is minimized (no contact/user_ref/session/context)", () => {
 // ── enqueue on ingest ──
 test("ingesting new feedback enqueues exactly one pending analysis; duplicate ingest does not", () => {
   const db = openOpsDb(":memory:");
+  updateProductCapabilities(db, "v3", { cross_site_insight: true });
   const payload = { delivery_id: "dx", idempotency_key: "feedback:x", source: "v3", kind: "bug", content: "登入一直轉圈圈" };
   ingestFeedback(db, { deliveryId: "dx", payload, payloadHash: "h1" });
   ingestFeedback(db, { deliveryId: "dx", payload, payloadHash: "h1" }); // duplicate
