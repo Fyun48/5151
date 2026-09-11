@@ -700,9 +700,14 @@ export async function runWatch(options = {}) {
       if (!listing) continue;
       if (skipBlockedKit.has(listing.source)) continue;
       const kit = await fetchSourceKit(listing);
+      const extraFees = Array.isArray(kit.extra_fees)
+        ? mergeFeeRows(listing.extra_fees, kit.extra_fees)
+        : listing.extra_fees;
       setListingDetail(listing.post_id, {
-        extraFees: listing.extra_fees,
-        fetched: listing.extra_fees_fetched,
+        extraFees,
+        fetched: Array.isArray(kit.extra_fees) && kit.extra_fees.length
+          ? 1
+          : listing.extra_fees_fetched,
         has_natural_gas: kit.has_natural_gas,
         has_balcony: kit.has_balcony,
         furnish_items: kit.furnish_items,
