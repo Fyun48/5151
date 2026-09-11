@@ -3,6 +3,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { ensureCrmReplicaSchema } from "./crmReplica.js";
 import { ensureProviderDrawerSchema } from "./providerDrawer.js";
+import { ensureDefaultEnvironmentBindings, ensureProductEnvironmentSchema } from "./productEnvironment.js";
+import { ensureInstructionRecordSchema } from "./instructionSource.js";
 
 // Ops 專用資料庫（與產品 v3 的 v3.db 完全分離）。
 // 只放維運自動化系統的狀態機與稽核；Phase 1 尚無 feedback / AI / coding 相關資料。
@@ -1157,14 +1159,18 @@ export function applyOpsSchema(db) {
     );
 
     CREATE TABLE IF NOT EXISTS production_stable_current (
-      product_id TEXT PRIMARY KEY,
+      product_id TEXT NOT NULL,
+      environment_key TEXT NOT NULL DEFAULT 'production',
       release_run_id INTEGER,
       source_sha TEXT,
       artifact_digest TEXT,
       workflow_run_id TEXT,
       provenance_json TEXT,
       provenance_fingerprint TEXT,
-      updated_at TEXT NOT NULL
+      static_tree_hash TEXT,
+      schema_compat TEXT,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (product_id, environment_key)
     );
 
     CREATE TABLE IF NOT EXISTS production_release_global_lease (
@@ -1201,7 +1207,48 @@ export function applyOpsSchema(db) {
   upgradeCrmReplica(db);
   upgradeIssueFollowUp(db);
   upgradeProviderDrawer(db);
+  upgradeLiveTargets(db);
   return db;
+}
+
+export function upgradeLiveTargets(db) {
+  ensureProductEnvironmentSchema(db);
+  ensureInstructionRecordSchema(db);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS production_release_target_lease (
+      product_id TEXT NOT NULL,
+      environment_key TEXT NOT NULL,
+      release_run_id INTEGER,
+      workflow_kind TEXT,
+      lease_owner TEXT,
+      claimed_at TEXT,
+      updated_at TEXT,
+      PRIMARY KEY (product_id, environment_key)
+    );
+  `);
+  const addIfMissing = (table, columns) => {
+    let cols = [];
+    try { cols = tableColumns(db, table); } catch { return; }
+    if (!cols.length) return;
+    for (const [name, decl] of columns) {
+      if (!cols.includes(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${decl}`);
+    }
+  };
+  addIfMissing("production_release_run", [
+    ["product_id", "TEXT"],
+    ["environment_key", "TEXT"],
+    ["instruction_source", "TEXT"],
+    ["instruction_actor", "TEXT"],
+    ["previous_stable_static_tree_hash", "TEXT"],
+    ["previous_stable_schema_compat", "TEXT"],
+  ]);
+  migrateProductionStableEnvironmentScope(db);
+  migrateGlobalLeaseToTargetLease(db);
+  try {
+    const products = db.prepare("SELECT id FROM ops_product").all();
+    for (const row of products) ensureDefaultEnvironmentBindings(db, row.id);
+  } catch { /* schema may still be mid-upgrade */ }
+  ensureDefaultEnvironmentBindings(db, "v3");
 }
 
 export function upgradeProviderDrawer(db) {
@@ -1456,6 +1503,59 @@ function migrateIngestedFeedbackProductScope(db) {
     CREATE INDEX IF NOT EXISTS idx_ingested_product ON ingested_feedback(product_id, id);
   `);
   db.exec("PRAGMA foreign_keys = ON");
+}
+
+function migrateGlobalLeaseToTargetLease(db) {
+  let oldCols = [];
+  try { oldCols = tableColumns(db, "production_release_global_lease"); } catch { return; }
+  if (!oldCols.length) return;
+  const held = db.prepare("SELECT * FROM production_release_global_lease WHERE id=1").get();
+  if (!held?.release_run_id) return;
+  const ts = held.updated_at || new Date().toISOString();
+  db.prepare(`
+    INSERT INTO production_release_target_lease(
+      product_id, environment_key, release_run_id, workflow_kind, lease_owner, claimed_at, updated_at)
+    VALUES ('v3', 'production', ?, ?, ?, ?, ?)
+    ON CONFLICT(product_id, environment_key) DO UPDATE SET
+      release_run_id=excluded.release_run_id,
+      workflow_kind=excluded.workflow_kind,
+      lease_owner=excluded.lease_owner,
+      claimed_at=excluded.claimed_at,
+      updated_at=excluded.updated_at
+    WHERE production_release_target_lease.release_run_id IS NULL
+  `).run(held.release_run_id, held.workflow_kind || null, held.lease_owner || null, held.claimed_at || null, ts);
+}
+
+function migrateProductionStableEnvironmentScope(db) {
+  let cols = [];
+  try { cols = tableColumns(db, "production_stable_current"); } catch { return; }
+  if (!cols.length) return;
+  if (cols.includes("environment_key") && cols.includes("static_tree_hash") && !cols.includes("id")) return;
+  db.exec(`
+    CREATE TABLE production_stable_current_v3 (
+      product_id TEXT NOT NULL,
+      environment_key TEXT NOT NULL DEFAULT 'production',
+      release_run_id INTEGER,
+      source_sha TEXT,
+      artifact_digest TEXT,
+      workflow_run_id TEXT,
+      provenance_json TEXT,
+      provenance_fingerprint TEXT,
+      static_tree_hash TEXT,
+      schema_compat TEXT,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (product_id, environment_key)
+    );
+    INSERT INTO production_stable_current_v3 (
+      product_id, environment_key, release_run_id, source_sha, artifact_digest, workflow_run_id,
+      provenance_json, provenance_fingerprint, static_tree_hash, schema_compat, updated_at
+    )
+    SELECT COALESCE(product_id, 'v3'), 'production', release_run_id, source_sha, artifact_digest, workflow_run_id,
+           provenance_json, provenance_fingerprint, NULL, NULL, updated_at
+      FROM production_stable_current;
+    DROP TABLE production_stable_current;
+    ALTER TABLE production_stable_current_v3 RENAME TO production_stable_current;
+  `);
 }
 
 function migrateProductionStableProductScope(db) {

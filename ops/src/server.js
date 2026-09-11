@@ -53,7 +53,8 @@ import { drawersAdminView, resolveDrawerKind, saveDrawer } from "./providerDrawe
 import { analysisConfigFromEnv, startAnalysisLoop } from "./analysisWorker.js";
 import { getIssueWithMembers, mergeIssues, splitIssue, moveFeedback } from "./clustering.js";
 import { createFollowUpIssue } from "./followUp.js";
-import { rejectSpoofedOwnerDirect } from "./instructionSource.js";
+import { rejectSpoofedOwnerDirect, resolveVerifiedInstruction } from "./instructionSource.js";
+import { resolveProductionTarget, upsertProductEnvironment } from "./productEnvironment.js";
 import { makeEmbeddingProvider } from "./ai/embeddingProvider.js";
 import { clusteringConfigFromEnv, startClusteringLoop } from "./clusteringWorker.js";
 import { getCurrentIssueImpact, listAssessments, isImpactStale, calculateAndStoreImpact, currentImpactId } from "./impact.js";
@@ -87,6 +88,7 @@ import {
   getProductionRelease,
   getProductionReleaseView,
   getProductionStable,
+  importOwnerDirectObservation,
   reconcileProductionRelease,
   requestCodeRollback,
   retryProductionRelease,
@@ -671,6 +673,62 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         }
         return;
       }
+      const productEnvPut = pathname.match(/^\/ops\/api\/products\/([a-z0-9_-]+)\/environments\/([a-z0-9_-]+)$/);
+      if (productEnvPut && method === "PUT") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          const body = await readBody(req);
+          rejectSpoofedOwnerDirect(body || {});
+          const instruction = resolveVerifiedInstruction({ session: req.owner, body: body || {} });
+          sendJson(res, 200, {
+            ok: true,
+            environment: upsertProductEnvironment(db, {
+              productId: productEnvPut[1],
+              environmentKey: productEnvPut[2],
+              repoUrl: body?.repo_url,
+              workflowFile: body?.workflow_file,
+              containerName: body?.container_name,
+              dataPath: body?.data_path,
+              deployIdentity: body?.deploy_identity,
+              displayLabel: body?.display_label,
+              actor: instruction.actor,
+            }),
+          });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
+      const productLive = pathname.match(/^\/ops\/api\/products\/([a-z0-9_-]+)\/environments\/([a-z0-9_-]+)\/live-identity$/);
+      if (productLive && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          const body = await readBody(req);
+          rejectSpoofedOwnerDirect(body || {});
+          const instruction = resolveVerifiedInstruction({
+            session: req.owner,
+            workflowActor: body?.workflow_actor,
+            body: body || {},
+          });
+          resolveProductionTarget(db, { productId: productLive[1], environmentKey: productLive[2], displayName: body?.display_name });
+          sendJson(res, 200, {
+            ok: true,
+            current_stable: importOwnerDirectObservation(db, {
+              productId: productLive[1],
+              environmentKey: productLive[2],
+              sourceSha: body?.source_sha,
+              artifactDigest: body?.artifact_digest,
+              staticTreeHash: body?.static_tree_hash,
+              schemaCompat: body?.schema_compat,
+              workflowRunId: body?.workflow_run_id,
+              instruction,
+            }),
+          });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
       const productPending = pathname.match(/^\/ops\/api\/products\/([a-z0-9_-]+)\/pending$/);
       if (productPending && method === "GET") {
         if (!runGuard(auth.requireOwner, req, reply)) return;
@@ -1111,6 +1169,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         let b = {}; try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
         try {
           rejectSpoofedOwnerDirect(b);
+          const instruction = resolveVerifiedInstruction({ session: req.owner, body: b });
           const created = createProductionReleaseRun(db, {
             codingTaskId: Number(prodRelExec[1]),
             releaseAuthorizationId: b.release_authorization_id,
@@ -1130,8 +1189,8 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
             workflowRef: b.workflow_ref,
             expectedMasterHead: b.expected_master_head,
             githubActor: "Fyun48",
-          }, { repo: releaseRepo, actor: `owner:${req.owner.email}` });
-          const executed = await executeProductionRelease(db, created.run.id, { provider: releaseProvider, repo: releaseRepo, actor: `owner:${req.owner.email}` });
+          }, { repo: releaseRepo, actor: instruction.actor, session: req.owner, instruction });
+          const executed = await executeProductionRelease(db, created.run.id, { provider: releaseProvider, repo: releaseRepo, actor: instruction.actor });
           sendJson(res, 200, { ok: true, idempotent: created.idempotent === true, ...executed });
         } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
         return;
@@ -1157,14 +1216,19 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
         let b = {}; try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
         try {
+          rejectSpoofedOwnerDirect(b);
+          const instruction = resolveVerifiedInstruction({ session: req.owner, body: b });
           sendJson(res, 200, { ok: true, ...await requestCodeRollback(db, {
             releaseRunId: Number(prodRelRollback[1]),
             previousStableSha: b.previous_stable_sha,
             previousStableDigest: b.previous_stable_digest,
             previousStableWorkflowRunId: b.previous_stable_workflow_run_id,
+            confirmDbRestore: b.confirm_db_restore,
             provider: releaseProvider,
             repo: releaseRepo,
-            actor: `owner:${req.owner.email}`,
+            actor: instruction.actor,
+            session: req.owner,
+            instruction,
           }) });
         } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
         return;

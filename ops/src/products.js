@@ -3,6 +3,7 @@ import { withImmediateTx } from "./tx.js";
 import { appendAuditRow } from "./audit.js";
 import { httpError } from "./errors.js";
 import { verifyIngestRequest } from "./ingestSignature.js";
+import { ensureDefaultEnvironmentBindings, listProductEnvironments } from "./productEnvironment.js";
 
 export const DEFAULT_PRODUCT_ID = "v3";
 export const DEFAULT_PRODUCT_NAME = "吉比租房";
@@ -82,6 +83,7 @@ export function ensureDefaultProduct(db, { now = new Date() } = {}) {
     VALUES (?, 1, 'connected', ?, ?, ?)
     ON CONFLICT(product_id) DO NOTHING
   `).run(DEFAULT_PRODUCT_ID, JSON.stringify({ ...DEFAULT_CAPABILITIES }), ts, ts);
+  ensureDefaultEnvironmentBindings(db, DEFAULT_PRODUCT_ID, { now });
 }
 
 export function ensureLegacyIngestSecret(db, secret, { productId = DEFAULT_PRODUCT_ID, now = new Date() } = {}) {
@@ -105,7 +107,11 @@ export function listProducts(db) {
   `).all();
   return rows.map((row) => {
     const product = publicProduct(row);
-    return { ...product, consent_events: listConsentEvents(db, product.id) };
+    return {
+      ...product,
+      consent_events: listConsentEvents(db, product.id),
+      environments: listProductEnvironments(db, product.id),
+    };
   });
 }
 
@@ -156,6 +162,7 @@ export function createProduct(db, { id, displayName, actor = "owner", now = new 
       VALUES (?, 1, 'connected', ?, ?, ?)
     `).run(productId, JSON.stringify({ ...DEFAULT_CAPABILITIES }), ts, ts);
     const cred = issueCredential(db, { productId, label: "initial", now });
+    ensureDefaultEnvironmentBindings(db, productId, { now });
     appendAuditRow(db, {
       actor,
       action: "product.created",
@@ -164,7 +171,13 @@ export function createProduct(db, { id, displayName, actor = "owner", now = new 
       data: { display_name: name },
       now,
     });
-    return { product: publicProduct(getProduct(db, productId)), ingest_secret: cred.secret };
+    return {
+      product: {
+        ...publicProduct(getProduct(db, productId)),
+        environments: listProductEnvironments(db, productId),
+      },
+      ingest_secret: cred.secret,
+    };
   });
 }
 
