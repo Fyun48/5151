@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { sanitizeFloorName } from "./floors.js";
 import { decodeEntities } from "./htmlEntities.js";
 import { looksLikeCaptchaOrLogin, looksLikeUnavailable } from "./importSanitize.js";
-import { listingKitFields } from "./listingKit.js";
+import { listingKitFields, listingKitFrom } from "./listingKit.js";
 import { extractMapFromHtml, sourceMapPin } from "./location.js";
 import { feeFieldsFromBlob } from "./listingCost.js";
 
@@ -142,6 +142,15 @@ export function parseRakuyaDetailHtml(html, pageUrl = "") {
   const age = sanitize((html.match(/屋齡[：:]\s*([^<]+)/) || [])[1] || "");
   const parking = sanitize((html.match(/車位[：:]\s*([^<]+)/) || [])[1] || "");
   const elevator = sanitize((html.match(/電梯[：:]\s*([^<]+)/) || [])[1] || "");
+  const facility = sanitize((html.match(/設備[：:]\s*([^<]+)/) || [])[1] || "");
+  const gas = sanitize((html.match(/瓦斯[：:]\s*([^<]+)/) || [])[1] || "");
+  const balcony = sanitize((html.match(/陽台[：:]\s*([^<]+)/) || [])[1] || "");
+  const kit = listingKitFrom({
+    title,
+    tags: [facility, gas, balcony],
+    text: `${facility} ${gas} ${balcony} ${textOf(html)}`,
+    facility,
+  });
   const ehid = String(new URL(pageUrl || RAKUYA_SITE, RAKUYA_SITE).searchParams.get("ehid") || "");
   const geo = ld.geo && typeof ld.geo === "object" ? ld.geo : {};
   const map = extractMapFromHtml(html);
@@ -165,6 +174,10 @@ export function parseRakuyaDetailHtml(html, pageUrl = "") {
     age,
     parking,
     elevator,
+    facility,
+    has_natural_gas: kit.has_natural_gas,
+    has_balcony: kit.has_balcony,
+    furnish_items: kit.furnish_items,
     photos: [...new Set(photos)],
     lat: pin.lat,
     lng: pin.lng,
@@ -218,7 +231,11 @@ export function normalizeRakuyaItem(item, { regionId = "", sectionId = "" } = {}
     ...listingKitFields({
       title: item.title,
       tags: item.tags,
-      text: `${item.address || ""} ${item.community || ""}`,
+      text: `${item.address || ""} ${item.community || ""} ${item.facility || ""}`,
+      facility: item.facility,
+      has_natural_gas: item.has_natural_gas,
+      has_balcony: item.has_balcony,
+      furnish_items: item.furnish_items,
     }),
     kind_name: String(item.kind || "整層住家"),
     role_name: "樂屋網",
@@ -273,4 +290,30 @@ export async function fetchRakuyaListPage({ fetchText, url } = {}) {
   const judged = interpretRakuyaResponse({ status: got.status, text: got.text || got.body });
   if (!judged.ok) return { ...judged, items: [] };
   return { ok: true, items: parseRakuyaListHtml(got.text || got.body || "") };
+}
+
+export async function fetchRakuyaDetailKit(listing, options = {}) {
+  const { fetchSourceKitPage } = await import("./sourceKit.js");
+  const page = await fetchSourceKitPage(listing, {
+    ...options,
+    fallbackUrl: rakuyaDetailUrl(listing?.source_id),
+  });
+  const judged = interpretRakuyaResponse({ status: page.status, text: page.text });
+  if (!judged.ok) {
+    throw Object.assign(new Error(judged.message || "樂屋網詳情無法抓取"), {
+      code: judged.code,
+      retryable: judged.retryable,
+    });
+  }
+  const detail = parseRakuyaDetailHtml(page.text, page.url);
+  if (!detail.title && !detail.address) {
+    throw Object.assign(new Error("樂屋網詳情無法解析房屋資訊"), { code: "KIT_PARSE_EMPTY" });
+  }
+  return listingKitFrom({
+    has_natural_gas: detail.has_natural_gas,
+    has_balcony: detail.has_balcony,
+    furnish_items: detail.furnish_items,
+    facility: detail.facility,
+    text: `${detail.facility || ""} ${detail.title || ""}`,
+  });
 }

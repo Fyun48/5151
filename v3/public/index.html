@@ -90,11 +90,13 @@
       line-height: 1.5;
       overflow: visible;
     }
-    .item:has(.kit-line:hover),
-    .item:has(.kit-furnish[aria-expanded="true"]) { z-index: 4; }
-    .kit-line:hover,
-    .kit-line:has(.kit-furnish[aria-expanded="true"]) { z-index: 8; }
-    .kit-gas { color: var(--ink); }
+    .item:has(.kit-furnish:hover),
+    .item:has(.kit-furnish[aria-expanded="true"]),
+    .item:has(.kit-line.kit-tip-up) { z-index: 4; }
+    .kit-line:has(.kit-furnish:hover),
+    .kit-line:has(.kit-furnish[aria-expanded="true"]),
+    .kit-line.kit-tip-up { z-index: 8; }
+    .kit-gas, .kit-balcony { color: var(--ink); }
     .kit-furnish {
       display: inline-flex;
       align-items: center;
@@ -133,7 +135,7 @@
       padding: 8px 10px;
       border: 1px solid var(--line);
       border-radius: var(--radius);
-      background: var(--paper);
+      background: var(--accent-mist);
       color: var(--ink);
       font-size: var(--text-xs);
       box-shadow: none;
@@ -146,10 +148,20 @@
       top: -10px;
       height: 10px;
     }
+    .kit-line.kit-tip-up .kit-tip {
+      top: auto;
+      bottom: calc(100% - 2px);
+    }
+    .kit-line.kit-tip-up .kit-tip::before {
+      top: auto;
+      bottom: -10px;
+    }
+    .kit-furnish.kit-dismissed + .kit-tip { display: none !important; }
     @media (hover: hover) and (pointer: fine) {
       .kit-furnish { min-height: 0; }
-      .kit-line:hover .kit-tip,
-      .kit-furnish:focus-visible + .kit-tip { display: block; }
+      .kit-furnish:hover + .kit-tip,
+      .kit-furnish:focus-visible + .kit-tip,
+      .kit-tip:hover { display: block; }
     }
     .kit-furnish[aria-expanded="true"] + .kit-tip { display: block; }
     @keyframes kit-shift {
@@ -900,8 +912,9 @@
       overflow: hidden;
       border-radius: var(--radius, 8px);
     }
-    .item-swipe-wrap:has(.kit-line:hover),
-    .item-swipe-wrap:has(.kit-furnish[aria-expanded="true"]) {
+    .item-swipe-wrap:has(.kit-furnish:hover),
+    .item-swipe-wrap:has(.kit-furnish[aria-expanded="true"]),
+    .item-swipe-wrap:has(.kit-line.kit-tip-up) {
       overflow: visible;
     }
     .swipe-rail {
@@ -3914,7 +3927,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> · <a href="/data.html">居住數據</a> · <a href="#me" id="supportFooterLink">支持本站</a> · <a href="#" id="feedbackFooterLink">意見回饋</a> <span class="site-ver">ver. 3.52</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> · <a href="/data.html">居住數據</a> · <a href="#me" id="supportFooterLink">支持本站</a> · <a href="#" id="feedbackFooterLink">意見回饋</a> <span class="site-ver">ver. 3.53</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -4394,10 +4407,15 @@
     }
     function kitLine(item, cardId) {
       const gas = item?.has_natural_gas === true || Number(item?.has_natural_gas) === 1;
+      const balcony = item?.has_balcony === true || Number(item?.has_balcony) === 1;
       const items = Array.isArray(item?.furnish_items) ? item.furnish_items : [];
       const tip = items.length ? items.join("、") : "無";
-      const gasHtml = gas ? `<span class="kit-gas">有天然瓦斯</span> ` : "";
-      return `<div class="kit-line">${gasHtml}<button type="button" class="kit-furnish" data-kit-furnish="${esc(cardId)}" aria-expanded="false" aria-controls="kit-tip-${esc(cardId)}" aria-describedby="kit-tip-${esc(cardId)}">${esc("此屋家俱家電狀態")}<sup class="kit-q" aria-hidden="true">?</sup></button><span class="kit-tip" id="kit-tip-${esc(cardId)}" role="tooltip">${esc(tip)}</span></div>`;
+      const flags = [
+        gas ? `<span class="kit-gas">有天然瓦斯</span>` : "",
+        balcony ? `<span class="kit-balcony">有陽台</span>` : "",
+      ].filter(Boolean).join(" ");
+      const flagHtml = flags ? `${flags} ` : "";
+      return `<div class="kit-line">${flagHtml}<button type="button" class="kit-furnish" data-kit-furnish="${esc(cardId)}" aria-expanded="false" aria-controls="kit-tip-${esc(cardId)}" aria-describedby="kit-tip-${esc(cardId)}">${esc("此屋家俱家電狀態")}<sup class="kit-q" aria-hidden="true">?</sup></button><span class="kit-tip" id="kit-tip-${esc(cardId)}" role="tooltip">${esc(tip)}</span></div>`;
     }
     function safeListingHtml(value) {
       const allowed = new Set(["b", "strong", "i", "em", "u", "br", "p", "span", "div"]);
@@ -9935,22 +9953,57 @@
     $("mergeSelectedBtn")?.addEventListener("click", () => mergeSelectedListings());
     $("mergeConfirmBtn")?.addEventListener("click", () => mergeSelectedListings());
     $("mergeCancelBtn")?.addEventListener("click", () => exitMergeSelect());
+    function kitHoverFine() {
+      return window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+    }
+    function placeKitTip(btn) {
+      const line = btn?.closest?.(".kit-line");
+      if (!line) return;
+      const navTop = $("bottomNav")?.getBoundingClientRect().top ?? window.innerHeight;
+      const space = navTop - btn.getBoundingClientRect().bottom;
+      line.classList.toggle("kit-tip-up", space < 56);
+    }
     function closeKitTips() {
-      document.querySelectorAll("[data-kit-furnish][aria-expanded='true']").forEach((el) => el.setAttribute("aria-expanded", "false"));
+      document.querySelectorAll("[data-kit-furnish]").forEach((el) => {
+        el.setAttribute("aria-expanded", "false");
+        if (el.matches(":hover, :focus-visible")) el.classList.add("kit-dismissed");
+        el.closest(".kit-line")?.classList.remove("kit-tip-up");
+      });
     }
     $("list")?.addEventListener("click", (ev) => {
       const btn = ev.target.closest?.("[data-kit-furnish]");
-      const hoverFine = window.matchMedia("(hover: hover) and (pointer: fine)").matches;
       if (!btn) {
         closeKitTips();
         return;
       }
       ev.preventDefault();
       ev.stopPropagation();
-      if (hoverFine) return;
+      if (kitHoverFine()) return;
       const open = btn.getAttribute("aria-expanded") === "true";
       closeKitTips();
+      btn.classList.remove("kit-dismissed");
       btn.setAttribute("aria-expanded", open ? "false" : "true");
+      if (!open) placeKitTip(btn);
+    });
+    $("list")?.addEventListener("pointerenter", (ev) => {
+      const btn = ev.target.closest?.("[data-kit-furnish]");
+      if (!btn || btn.classList.contains("kit-dismissed")) return;
+      placeKitTip(btn);
+    }, true);
+    $("list")?.addEventListener("pointerleave", (ev) => {
+      const btn = ev.target.closest?.("[data-kit-furnish]");
+      if (!btn) return;
+      const tip = btn.nextElementSibling;
+      if (tip && (tip === ev.relatedTarget || tip.contains?.(ev.relatedTarget))) return;
+      btn.classList.remove("kit-dismissed");
+      if (btn.getAttribute("aria-expanded") !== "true") {
+        btn.closest(".kit-line")?.classList.remove("kit-tip-up");
+      }
+    }, true);
+    $("list")?.addEventListener("focusout", (ev) => {
+      const btn = ev.target.closest?.("[data-kit-furnish]");
+      if (!btn) return;
+      btn.classList.remove("kit-dismissed");
     });
     document.addEventListener("keydown", (ev) => {
       if (ev.key === "Escape") closeKitTips();

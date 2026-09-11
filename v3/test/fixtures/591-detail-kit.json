@@ -1,0 +1,26 @@
+{
+  "service": {
+    "title": "提供設備",
+    "active": 1,
+    "facility": [
+      { "key": "fridge", "active": 0, "name": "冰箱" },
+      { "key": "washer", "active": 1, "name": "洗衣機" },
+      { "key": "tv", "active": 0, "name": "電視" },
+      { "key": "cold", "active": 1, "name": "冷氣" },
+      { "key": "heater", "active": 1, "name": "熱水器" },
+      { "key": "bed", "active": 0, "name": "床" },
+      { "key": "closet", "active": 1, "name": "衣櫃" },
+      { "key": "gas", "active": 1, "name": "天然瓦斯" },
+      { "key": "sofa", "active": 1, "name": "沙發" },
+      { "key": "table_chairs", "active": 1, "name": "桌椅" },
+      { "key": "balcony", "active": 1, "name": "1陽台" },
+      { "key": "lift", "active": 0, "name": "電梯" }
+    ]
+  },
+  "gtm_detail_data": {
+    "facility_name": "洗衣機,冷氣,熱水器,衣櫃,天然瓦斯,沙發,桌椅,1陽台"
+  },
+  "information": {
+    "data": [{ "name": "陽台", "value": "1陽台", "key": "balcony" }]
+  }
+}

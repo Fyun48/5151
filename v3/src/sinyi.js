@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { passesAttributeFilters, sanitizeFloorName } from "./floors.js";
 import { isExcludedByKeyword } from "./geo.js";
-import { listingKitFields } from "./listingKit.js";
+import { kitFromActiveNames, listingKitFields } from "./listingKit.js";
 import { feeFieldsFromBlob } from "./listingCost.js";
 import { zipForDistrict, districtKeyForZip } from "./hbhousing.js";
 import { lookupDistrict } from "./regions.js";
@@ -286,4 +286,35 @@ export async function fetchSinyiCoveringListings(jobs, options = {}) {
   }
 
   return batches;
+}
+
+export function parseSinyiDetailHtml(html) {
+  const body = String(html || "");
+  if (!/<ul class="furniture">/i.test(body)) {
+    throw Object.assign(new Error("信義詳情沒有傢俱區塊"), { code: "KIT_PARSE_EMPTY" });
+  }
+  const names = [];
+  const blocks = body.matchAll(/<ul class="furniture">([\s\S]*?)<\/ul>/gi);
+  for (const block of blocks) {
+    for (const li of block[1].matchAll(/<li>([\s\S]*?)<\/li>/gi)) {
+      const inp = li[1].match(/<input[^>]+class="hook-red"[^>]*>/);
+      if (!inp || !/\schecked/.test(inp[0])) continue;
+      const label = li[1].match(/<label[^>]*>([\s\S]*?)<\/label>/);
+      const name = String(label?.[1] || "")
+        .replace(/<span[^>]*>/g, "")
+        .replace(/<\/span>/g, "")
+        .replace(/\s+/g, "");
+      if (name) names.push(name);
+    }
+  }
+  return kitFromActiveNames(names);
+}
+
+export async function fetchSinyiDetailKit(listing, options = {}) {
+  const { fetchSourceKitPage } = await import("./sourceKit.js");
+  const page = await fetchSourceKitPage(listing, {
+    ...options,
+    fallbackUrl: sinyiDetailUrl(listing?.source_id),
+  });
+  return parseSinyiDetailHtml(page.text);
 }

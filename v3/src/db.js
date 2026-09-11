@@ -579,6 +579,16 @@ try {
   // already migrated
 }
 try {
+  db.exec("ALTER TABLE listings ADD COLUMN has_balcony INTEGER NOT NULL DEFAULT 0");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN kit_fetched INTEGER NOT NULL DEFAULT 0");
+} catch {
+  // already migrated
+}
+try {
   db.exec("ALTER TABLE listings ADD COLUMN match_verdict TEXT");
 } catch {
   // already migrated
@@ -2120,6 +2130,7 @@ function decorateListingLite(row, settings, userId) {
     district: districtNameFromListing(row),
     floor_display: formatFloorDisplay(row.floor_name),
     has_natural_gas: Number(row.has_natural_gas) === 1 || listingKitFrom(row).has_natural_gas,
+    has_balcony: Number(row.has_balcony) === 1 || listingKitFrom(row).has_balcony,
     furnish_items: (() => {
       const stored = parseStoredFurnish(row.furnish_items);
       return listingKitFrom({
@@ -2681,7 +2692,7 @@ export function upsertListing(listing) {
   const costChangeDetail = String(listing.cost_change_detail || "").trim();
   let existing = null;
   try {
-    existing = db.prepare("SELECT address, geo_source, floor_name, has_natural_gas, furnish_items FROM listings WHERE post_id = ?").get(listing.post_id);
+    existing = db.prepare("SELECT address, geo_source, floor_name, has_natural_gas, has_balcony, furnish_items FROM listings WHERE post_id = ?").get(listing.post_id);
   } catch {
     existing = db.prepare("SELECT address, geo_source, floor_name FROM listings WHERE post_id = ?").get(listing.post_id);
   }
@@ -2809,6 +2820,7 @@ export function upsertListing(listing) {
   const kit = listingKitFrom({
     ...listing,
     has_natural_gas: listing.has_natural_gas || existing?.has_natural_gas,
+    has_balcony: listing.has_balcony || existing?.has_balcony,
     furnish_items: listing.furnish_items || existing?.furnish_items,
     tags: listing.tags,
   });
@@ -2816,9 +2828,16 @@ export function upsertListing(listing) {
     db.prepare(`
       UPDATE listings
          SET has_natural_gas = CASE WHEN ? = 1 THEN 1 ELSE has_natural_gas END,
+             has_balcony = CASE WHEN ? = 1 THEN 1 ELSE has_balcony END,
              furnish_items = CASE WHEN ? != '[]' THEN ? ELSE furnish_items END
        WHERE post_id = ?
-    `).run(kit.has_natural_gas ? 1 : 0, JSON.stringify(kit.furnish_items), JSON.stringify(kit.furnish_items), listing.post_id);
+    `).run(
+      kit.has_natural_gas ? 1 : 0,
+      kit.has_balcony ? 1 : 0,
+      JSON.stringify(kit.furnish_items),
+      JSON.stringify(kit.furnish_items),
+      listing.post_id,
+    );
   } catch {
     // older isolated fixtures without kit columns
   }
@@ -2838,7 +2857,26 @@ export function setListingFees(postId, extraFees, fetched = 1) {
   return setListingDetail(postId, { extraFees, fetched });
 }
 
-export function setListingDetail(postId, { extraFees, contact, fetched = 1, lat, lng, address, community_id, community_name, community_linked, geo_source } = {}) {
+function preferFilledContact(next, prev) {
+  const incoming = String(next ?? "").trim();
+  return incoming || String(prev ?? "").trim();
+}
+
+function contactPayloadHasValue(contact) {
+  if (!contact || typeof contact !== "object") return false;
+  return [
+    contact.contact_name,
+    contact.contact_role,
+    contact.agency,
+    contact.mobile,
+    contact.phone,
+    contact.line_url,
+    contact.avatar,
+    contact.contact_uid,
+  ].some((value) => String(value ?? "").trim() !== "");
+}
+
+export function setListingDetail(postId, { extraFees, contact, fetched = 1, lat, lng, address, community_id, community_name, community_linked, geo_source, has_natural_gas, has_balcony, furnish_items, kit_fetched } = {}) {
   const listing = getListing(postId);
   if (!listing) return null;
   const fees =
@@ -2846,14 +2884,14 @@ export function setListingDetail(postId, { extraFees, contact, fetched = 1, lat,
       ? JSON.stringify(listing.extra_fees || [])
       : JSON.stringify(extraFees || []);
   const next = {
-    contact_name: contact?.contact_name ?? listing.contact_name ?? "",
-    contact_role: contact?.contact_role ?? listing.contact_role ?? "",
-    agency: contact?.agency ?? listing.agency ?? "",
-    mobile: contact?.mobile ?? listing.mobile ?? "",
-    phone: contact?.phone ?? listing.phone ?? "",
-    line_url: contact?.line_url ?? listing.line_url ?? "",
-    avatar: contact?.avatar ?? listing.avatar ?? "",
-    contact_uid: contact?.contact_uid ?? listing.contact_uid ?? null,
+    contact_name: preferFilledContact(contact?.contact_name, listing.contact_name),
+    contact_role: preferFilledContact(contact?.contact_role, listing.contact_role),
+    agency: preferFilledContact(contact?.agency, listing.agency),
+    mobile: preferFilledContact(contact?.mobile, listing.mobile),
+    phone: preferFilledContact(contact?.phone, listing.phone),
+    line_url: preferFilledContact(contact?.line_url, listing.line_url),
+    avatar: preferFilledContact(contact?.avatar, listing.avatar),
+    contact_uid: contact?.contact_uid || listing.contact_uid || null,
   };
   const latNum = Number(lat);
   const lngNum = Number(lng);
@@ -2870,8 +2908,8 @@ export function setListingDetail(postId, { extraFees, contact, fetched = 1, lat,
     communityId: nextCommunityId,
     hasAnchor: Number(community_linked) === 1 || Number(listing.community_linked) === 1,
   }) ? 1 : Number(listing.community_linked) || 0;
-  // 有實際帶入聯絡資料（非只補社區座標）才更新 contact_fetched_at，供之後「過期重抓聯絡人」判斷。
-  const contactRefreshed = Boolean(fetched) && contact != null;
+  // 有實際帶入非空聯絡資料（非只補社區座標／空字串）才更新 contact_fetched_at。
+  const contactRefreshed = Boolean(fetched) && contactPayloadHasValue(contact);
   const contactStamp = new Date().toISOString();
   db.prepare(
     `UPDATE listings SET
@@ -2916,6 +2954,31 @@ export function setListingDetail(postId, { extraFees, contact, fetched = 1, lat,
     nextCommunityLinked,
     postId,
   );
+  try {
+    const kit = listingKitFrom({
+      ...listing,
+      has_natural_gas: has_natural_gas ?? listing.has_natural_gas,
+      has_balcony: has_balcony ?? listing.has_balcony,
+      furnish_items: furnish_items ?? listing.furnish_items,
+    });
+    db.prepare(`
+      UPDATE listings
+         SET has_natural_gas = CASE WHEN ? = 1 THEN 1 ELSE has_natural_gas END,
+             has_balcony = CASE WHEN ? = 1 THEN 1 ELSE has_balcony END,
+             furnish_items = CASE WHEN ? != '[]' THEN ? ELSE furnish_items END,
+             kit_fetched = CASE WHEN ? = 1 THEN 1 ELSE kit_fetched END
+       WHERE post_id = ?
+    `).run(
+      kit.has_natural_gas ? 1 : 0,
+      kit.has_balcony ? 1 : 0,
+      JSON.stringify(kit.furnish_items),
+      JSON.stringify(kit.furnish_items),
+      Number(kit_fetched) === 1 ? 1 : 0,
+      postId,
+    );
+  } catch {
+    // older isolated fixtures without kit columns
+  }
   if (
     extraFees !== undefined
     && Number(listing.extra_fees_fetched) === 1
@@ -2948,6 +3011,7 @@ export function listingsNeedingFeeDetail(limit = 12) {
          AND ${sql591Source()} AND (
          IFNULL(contact_fetched, 0) = 0
          OR IFNULL(extra_fees_fetched, 0) = 0
+         OR IFNULL(kit_fetched, 0) = 0
          OR lat IS NULL OR lng IS NULL
        )
        ORDER BY CASE WHEN lat IS NULL OR lng IS NULL THEN 0 ELSE 1 END, last_seen_at DESC
@@ -2977,6 +3041,20 @@ export function listingsNeedingFeeDetail(limit = 12) {
     if (!seen.has(Number(r.post_id))) out.push(r);
   }
   return out;
+}
+
+export function listingsNeedingSourceKit(limit = 8) {
+  const cap = Math.max(1, Number(limit) || 8);
+  return db
+    .prepare(
+      `SELECT post_id, source, source_id, url FROM listings
+       WHERE IFNULL(hidden, 0) = 0 AND IFNULL(offline, 0) = 0
+         AND source IN ('hbhousing', 'sinyi', 'housefun', 'rakuya')
+         AND IFNULL(kit_fetched, 0) = 0
+       ORDER BY last_seen_at DESC
+       LIMIT ?`,
+    )
+    .all(cap);
 }
 
 export function listingsNeeding591Geo(limit = 20) {

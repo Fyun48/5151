@@ -1,6 +1,6 @@
 import { passesAttributeFilters, passesGeoFilters, sanitizeFloorName } from "./floors.js";
 import { decodeEntities } from "./htmlEntities.js";
-import { listingKitFields } from "./listingKit.js";
+import { kitFrom591Detail, listingKitFields } from "./listingKit.js";
 import { feeRowMonthlyAmount, parseTwdAmount } from "./listingCost.js";
 import { allDistricts } from "./regions.js";
 import { coordsFrom591Detail, coordsFromListing, isExcludedByKeyword } from "./geo.js";
@@ -259,6 +259,7 @@ export function normalizeListing(item) {
       kind_name: item.kind_name,
       extra_fee_text: item.extra_fee_text,
       price_contain_text: item.price_contain_text,
+      ...kitFrom591Detail(item),
     }),
     kind_name: item.kind_name || "",
     role_name: item.role_name || item.linkman || "",
@@ -454,6 +455,7 @@ export async function fetchListingDetail(postId, options = {}) {
       );
     }
   }
+  const kit = kitFrom591Detail(body.data || {});
   return {
     fees: feesFromDetail(body.data?.cost?.data || []),
     contact: contactFromLink(body.data?.linkInfo || {}),
@@ -464,6 +466,9 @@ export async function fetchListingDetail(postId, options = {}) {
     community_id: chosen.community_id || ref.id || 0,
     community_name: chosen.community_name || ref.name || "",
     community_linked: chosen.community_id || ref.id ? 1 : 0,
+    has_natural_gas: kit.has_natural_gas ? 1 : 0,
+    has_balcony: kit.has_balcony ? 1 : 0,
+    furnish_items: kit.furnish_items,
   };
 }
 

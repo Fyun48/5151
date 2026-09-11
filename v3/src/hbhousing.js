@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { passesAttributeFilters, sanitizeFloorName } from "./floors.js";
 import { isExcludedByKeyword } from "./geo.js";
-import { listingKitFields } from "./listingKit.js";
+import { listingKitFrom, listingKitFields } from "./listingKit.js";
 import { feeFieldsFromBlob } from "./listingCost.js";
 import { lookupDistrict } from "./regions.js";
 
@@ -392,4 +392,82 @@ export async function fetchHbCoveringListings(jobs, options = {}) {
   }
 
   return batches;
+}
+
+export function parseHbDetailHtml(html) {
+  const house = parseHbNuxtHouse(html);
+  if (!house.sn && house.furniture == null && house.equipment == null) {
+    throw Object.assign(new Error("住商詳情無法解析房屋資訊"), { code: "KIT_PARSE_EMPTY" });
+  }
+  const names = [
+    ...asKitList(house.furniture),
+    ...asKitList(house.equipment),
+  ];
+  const affiliated = [];
+  for (const row of Array.isArray(house.affiliatedDetails) ? house.affiliatedDetails : []) {
+    const label = String(row?.name || row || "").trim();
+    if (label) affiliated.push(label);
+  }
+  const text = [
+    house.emphasis1,
+    house.emphasis2,
+    house.emphasis3,
+    house.emphasis4,
+    house.emphasis5,
+    ...affiliated,
+  ].filter(Boolean).join(" ");
+  return listingKitFrom({
+    furnish: names,
+    facility: [...names, ...affiliated],
+    tags: names,
+    text,
+  });
+}
+
+function asKitList(value) {
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => asKitList(item?.name || item)).filter(Boolean);
+  }
+  return String(value || "")
+    .split(/[,，、|]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+export function parseHbNuxtHouse(html) {
+  const match = String(html || "").match(/<script[^>]*id="__NUXT_DATA__"[^>]*>([\s\S]*?)<\/script>/i);
+  if (!match) return {};
+  let payload;
+  try {
+    payload = JSON.parse(match[1]);
+  } catch {
+    return {};
+  }
+  if (!Array.isArray(payload)) return {};
+  for (const node of payload) {
+    if (!node || typeof node !== "object" || Array.isArray(node)) continue;
+    if (!("furniture" in node) || !("sn" in node)) continue;
+    const pick = (key) => resolveNuxt(payload, node[key]);
+    return {
+      sn: pick("sn"),
+      furniture: pick("furniture"),
+      equipment: pick("equipment"),
+      affiliatedDetails: pick("affiliatedDetails"),
+      emphasis1: pick("emphasis1"),
+      emphasis2: pick("emphasis2"),
+      emphasis3: pick("emphasis3"),
+      emphasis4: pick("emphasis4"),
+      emphasis5: pick("emphasis5"),
+    };
+  }
+  return {};
+}
+
+export async function fetchHbDetailKit(listing, options = {}) {
+  const { fetchSourceKitPage } = await import("./sourceKit.js");
+  const page = await fetchSourceKitPage(listing, {
+    ...options,
+    fallbackUrl: hbDetailUrl(listing?.source_id),
+  });
+  return parseHbDetailHtml(page.text);
 }

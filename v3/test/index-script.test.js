@@ -248,10 +248,19 @@ test("member profiles cap districts and include usable ping in notify copy", () 
   assert.match(html, /function kitLine/);
   assert.match(html, /此屋家俱家電狀態/);
   assert.match(html, /有天然瓦斯/);
+  assert.match(html, /有陽台/);
   assert.match(html, /data-kit-furnish/);
   assert.match(html, /\.kit-furnish/);
   assert.match(html, /aria-describedby/);
   assert.match(html, /hover: hover\) and \(pointer: fine\)/);
+  assert.match(html, /\.kit-furnish:hover \+ \.kit-tip/);
+  assert.doesNotMatch(html, /\.kit-line:hover \.kit-tip/);
+  assert.match(html, /kit-dismissed/);
+  assert.match(html, /kit-tip-up/);
+  assert.match(html, /--accent-mist/);
+  assert.match(html, /focusout/);
+  assert.match(html, /function placeKitTip/);
+  assert.match(html, /function closeKitTips/);
   assert.match(html, /<\/div>\s*\$\{kitLine\(item, id\)\}/);
   assert.match(html, /\["floor", "樓層", \(row\) => floorDisplay\(row\)\]/);
   assert.doesNotMatch(html, /floorDisplay\(row\) \|\| String\(row\.floor_name/);
@@ -454,13 +463,13 @@ test("product name is 吉比租房物件追蹤 without v2 開發版 copy", () =>
   assert.equal(html.includes("v2 開發版"), false);
   assert.equal(html.includes("v3 開發版"), false);
   assert.equal(html.includes("與線上版分開的資料庫"), false);
-  assert.match(html, /ver\. 3\.52/);
+  assert.match(html, /ver\. 3\.53/);
   assert.doesNotMatch(html, /<h1>[^<]*v3/i);
   assert.match(login, /<h1>吉比租房物件追蹤<\/h1>/);
   assert.equal(login.includes("v2 開發版"), false);
   assert.equal(login.includes("v3 開發版"), false);
   assert.equal(login.includes("資料與線上版分開"), false);
-  assert.match(login, /ver\. 3\.52/);
+  assert.match(login, /ver\. 3\.53/);
 });
 
 test("MRT is admin-only and guest tour is in the page", () => {
