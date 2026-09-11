@@ -1,5 +1,8 @@
 import { normalizeCommuteMode } from "./geo.js";
+import { normalizeRouteDirection } from "./commuteState.js";
 import { googleDirectionsAllowed, isBillableDirectionsStatus, nextWeekdayTaipeiUnix, recordMapsUsage, secondsToMinutes, tripGoogleDirections } from "./mapsBilling.js";
+
+export const ROUTE_KEY_VERSION = 2;
 
 const GEO_UA = "591-tracker/1.0 (personal rental watcher; acefengyun@gmail.com)";
 
@@ -101,29 +104,53 @@ export function roundCoord(value) {
   return Math.round(Number(value) * 1e5) / 1e5;
 }
 
-export function makeRouteKey(fromLat, fromLng, toLat, toLng, mode = "scooter") {
+export function commuteNetworkHint(mode = "scooter") {
+  return normalizeCommuteMode(mode) === "car"
+    ? "以汽車路網計算"
+    : "以汽車路網估算（避開高速公路；非專用機車道路）";
+}
+
+export function makeRouteKey(fromLat, fromLng, toLat, toLng, mode = "scooter", direction = "to_work") {
+  const opts = direction && typeof direction === "object" ? direction : { direction };
+  const dir = normalizeRouteDirection(opts.direction);
+  const modeNorm = normalizeCommuteMode(mode);
   const base = `${roundCoord(fromLat)},${roundCoord(fromLng)}>${roundCoord(toLat)},${roundCoord(toLng)}`;
-  return normalizeCommuteMode(mode) === "car" ? `car:${base}` : base;
+  return `v2:${dir}:${modeNorm}:${base}`;
 }
 
 function mergeKm(a, b) {
   return [...new Set([...(a || []), ...(b || [])])].sort((x, y) => x - y).slice(0, 3);
 }
 
-export async function fetchRoadRouteTable(fromLat, fromLng, destinations = []) {
+export async function fetchRoadRouteTable(fromLat, fromLng, destinations = [], { direction = "to_work" } = {}) {
   const dests = (destinations || []).filter((row) => (
     Number.isFinite(Number(row?.lat)) && Number.isFinite(Number(row?.lng))
   ));
   if (!dests.length) return [];
   const from = [Number(fromLat), Number(fromLng)];
   if (!from.every(Number.isFinite)) return dests.map((row) => ({ ...row, distances: null }));
+  const dir = normalizeRouteDirection(direction);
+  const unique = [];
+  const indexOf = new Map();
+  for (const row of dests) {
+    const key = `${roundCoord(row.lat)},${roundCoord(row.lng)}`;
+    if (!indexOf.has(key)) {
+      indexOf.set(key, unique.length);
+      unique.push(row);
+    }
+  }
   try {
     await waitRouteSlot(350);
-    const coords = [`${from[1]},${from[0]}`, ...dests.map((row) => `${Number(row.lng)},${Number(row.lat)}`)].join(";");
-    const destIdx = dests.map((_, index) => index + 1).join(";");
+    const coords = [`${from[1]},${from[0]}`, ...unique.map((row) => `${Number(row.lng)},${Number(row.lat)}`)].join(";");
+    const listingIdx = unique.map((_, index) => index + 1).join(";");
     const url = new URL(`https://router.project-osrm.org/table/v1/driving/${coords}`);
-    url.searchParams.set("sources", "0");
-    url.searchParams.set("destinations", destIdx);
+    if (dir === "from_work") {
+      url.searchParams.set("sources", "0");
+      url.searchParams.set("destinations", listingIdx);
+    } else {
+      url.searchParams.set("sources", listingIdx);
+      url.searchParams.set("destinations", "0");
+    }
     url.searchParams.set("annotations", "distance");
     const res = await fetch(url, {
       headers: { Accept: "application/json", "User-Agent": GEO_UA },
@@ -132,11 +159,16 @@ export async function fetchRoadRouteTable(fromLat, fromLng, destinations = []) {
     if (res.status === 429 || !res.ok) return dests.map((row) => ({ ...row, distances: null, busy: res.status === 429 }));
     const body = await res.json();
     if (body.code && body.code !== "Ok") return dests.map((row) => ({ ...row, distances: null }));
-    const row = Array.isArray(body.distances) ? body.distances[0] : [];
-    return dests.map((item, index) => ({
-      ...item,
-      distances: uniqueDistances([row?.[index]]),
-    }));
+    const matrix = Array.isArray(body.distances) ? body.distances : [];
+    const uniqueHits = unique.map((item, index) => {
+      const meters = dir === "from_work" ? matrix[0]?.[index] : matrix[index]?.[0];
+      return { ...item, distances: uniqueDistances([meters]) };
+    });
+    return dests.map((row) => {
+      const key = `${roundCoord(row.lat)},${roundCoord(row.lng)}`;
+      const hit = uniqueHits[indexOf.get(key)];
+      return { ...row, distances: hit?.distances || null };
+    });
   } catch {
     return dests.map((row) => ({ ...row, distances: null }));
   }
@@ -170,7 +202,7 @@ export async function fetchRushRoadRoutes(fromLat, fromLng, toLat, toLng, { now 
     morning = null;
   }
   try {
-    evening = await googleDirections(from[0], from[1], to[0], to[1], { departureTime: pmAt, mode });
+    evening = await googleDirections(to[0], to[1], from[0], from[1], { departureTime: pmAt, mode });
   } catch {
     evening = null;
   }
