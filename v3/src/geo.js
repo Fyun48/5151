@@ -1,4 +1,16 @@
 import { allDistricts } from "./regions.js";
+import {
+  GEO_FAST_BUDGET_MS,
+  GEO_FAST_MAX_EXTERNAL,
+  geoInflightKey,
+  houseCacheKey,
+  inferLocationClassFromAddress,
+  isTaiwanCoord,
+  LOCATION_CLASSES,
+  parseTaiwanAddressParts,
+  providerCityMatches,
+  streetCacheKey,
+} from "./geoPrecision.js";
 
 const MAX_BOXES = 10;
 const MAX_SPAN = 0.5;
@@ -73,7 +85,58 @@ function sleep(ms) {
 }
 
 function geoKey(address) {
-  return String(address || "").replace(/\s+/g, "").replace(/-/g, "");
+  const parts = parseTaiwanAddressParts(address);
+  return houseCacheKey(parts) || streetCacheKey(parts) || String(address || "").replace(/\s+/g, "");
+}
+
+export const geoMetrics = {
+  cache_hits: 0,
+  cache_misses: 0,
+  external_requests: 0,
+  inflight_merged: 0,
+  timeouts: 0,
+  busy: 0,
+  no_match: 0,
+  first_fix_ms: [],
+  provider_ms: [],
+};
+
+export function resetGeoMetrics() {
+  geoMetrics.cache_hits = 0;
+  geoMetrics.cache_misses = 0;
+  geoMetrics.external_requests = 0;
+  geoMetrics.inflight_merged = 0;
+  geoMetrics.timeouts = 0;
+  geoMetrics.busy = 0;
+  geoMetrics.no_match = 0;
+  geoMetrics.first_fix_ms = [];
+  geoMetrics.provider_ms = [];
+}
+
+export function snapshotGeoMetrics() {
+  const times = [...geoMetrics.first_fix_ms].sort((a, b) => a - b);
+  const p = (arr, q) => (arr.length ? arr[Math.min(arr.length - 1, Math.floor((arr.length - 1) * q))] : null);
+  return {
+    ...geoMetrics,
+    first_fix_p50: p(times, 0.5),
+    first_fix_p95: times.length >= 20 ? p(times, 0.95) : null,
+    first_fix_samples: times.length,
+  };
+}
+
+const geocodeInflight = new Map();
+const geoFailUntil = new Map();
+
+export function rememberGeoFail(key, reason, ms = 15 * 60 * 1000) {
+  const id = String(key || "");
+  if (!id) return;
+  geoFailUntil.set(id, { reason: String(reason || "no_match"), until: Date.now() + ms });
+}
+
+export function geoFailReason(key) {
+  const row = geoFailUntil.get(String(key || ""));
+  if (!row || row.until < Date.now()) return "";
+  return row.reason;
 }
 
 export function normalizeKeywords(value, max = 40) {
@@ -297,27 +360,27 @@ function withArabicSections(text) {
   });
 }
 
-function parseTaiwanAddress(address) {
-  let raw = String(address || "")
-    .replace(/\s+/g, "")
-    .replace(/[-－—]/g, "")
-    .replace(/台北/g, "臺北");
-  const cityMatch = raw.match(/^(臺北市|新北市|桃園市|基隆市|新竹市)/);
-  let city = cityMatch?.[1] || "";
-  let rest = city ? raw.slice(city.length) : raw;
-  const districtMatch = rest.match(/^(.{1,3}區)/);
-  const district = districtMatch?.[1] || "";
-  if (district) rest = rest.slice(district.length);
+export function parseTaiwanAddress(address) {
+  const parts = parseTaiwanAddressParts(address);
+  let city = parts.city;
+  const district = parts.district;
   if (!city && district) city = cityForDistrict(district);
-  const numberMatch = rest.match(/(\d+(?:之\d+)?號)$/);
-  const number = numberMatch?.[1] || "";
-  if (number) rest = rest.slice(0, -number.length);
+  const road = [
+    parts.road,
+    parts.section ? `${parts.section}段` : "",
+    parts.lane ? `${parts.lane}巷` : "",
+    parts.alley ? `${parts.alley}弄` : "",
+  ].filter(Boolean).join("");
   return {
-    raw,
+    raw: String(address || ""),
     city,
     district,
-    road: withArabicSections(rest) || raw,
-    number,
+    road: withArabicSections(road) || String(address || ""),
+    number: parts.number,
+    section: parts.section,
+    lane: parts.lane,
+    alley: parts.alley,
+    parts,
   };
 }
 
@@ -341,10 +404,6 @@ function geocodeQueries(address, cityHint = "") {
   }
   push([parsed.road, parsed.number, parsed.district, parsed.city].filter(Boolean).join(", ").replace(/, ,/g, ","));
   if (parsed.road && parsed.city) push(`${parsed.road}${parsed.number}, ${parsed.district}, ${parsed.city}`.replace(/, ,/g, ","));
-  if (parsed.road && !parsed.city) {
-    push(`${parsed.road}, 臺北市`);
-    push(`${parsed.road}, 新北市`);
-  }
   return { parsed, queries: out.filter(Boolean).slice(0, 4) };
 }
 
@@ -364,76 +423,189 @@ function photonQueries(parsed) {
 let lastNominatimAt = 0;
 const GEO_UA = "591-tracker/1.0 (personal rental watcher; acefengyun@gmail.com)";
 
-async function photonSearch(query) {
+function classifyProviderHit(hit, parts) {
+  const type = String(hit.type || hit.addresstype || hit.osm_value || "").toLowerCase();
+  if (["city", "state", "county", "administrative", "suburb", "district", "town", "village", "municipality"].includes(type)) {
+    return LOCATION_CLASSES.ADMIN;
+  }
+  if (["house", "building"].includes(type) && parts.number) return LOCATION_CLASSES.ADDRESS;
+  if (hit.housenumber && parts.number) return LOCATION_CLASSES.ADDRESS;
+  if (parts.road) return LOCATION_CLASSES.STREET;
+  return LOCATION_CLASSES.ADMIN;
+}
+
+function cachedLocationClass(cached, address) {
+  const forced = String(cached?.location_class || "").trim();
+  if (forced) return forced;
+  const quality = String(cached?.quality || "");
+  if (quality === "house") return LOCATION_CLASSES.ADDRESS;
+  if (quality === "street") return LOCATION_CLASSES.STREET;
+  if (quality === "district") return LOCATION_CLASSES.ADMIN;
+  return inferLocationClassFromAddress(cached?.address_used || address);
+}
+
+function acceptGeoHit(hit, parts, options = {}) {
+  if (!hit || !isTaiwanCoord(hit.lat, hit.lng)) return null;
+  const city = hit.city || hit.county || "";
+  const district = hit.district || "";
+  if (!providerCityMatches(parts, city, district)) return null;
+  const locationClass = hit.location_class || classifyProviderHit(hit, parts);
+  if (locationClass === LOCATION_CLASSES.ADMIN && options.allowAdmin !== true) return null;
+  return {
+    lat: Number(hit.lat),
+    lng: Number(hit.lng),
+    location_class: locationClass,
+    geo_source: hit.geo_source || "geocode",
+    provider: hit.provider || "",
+    address_used: hit.address_used || hit.display_name || "",
+    quality: locationClass === LOCATION_CLASSES.ADDRESS ? "house" : locationClass === LOCATION_CLASSES.STREET ? "street" : "district",
+    city: parts.city,
+    district: parts.district,
+  };
+}
+
+async function photonSearch(query, { fetchFn = fetch, timeoutMs = 4000 } = {}) {
+  const started = Date.now();
   const url = new URL("https://photon.komoot.io/api/");
   url.searchParams.set("q", query);
-  url.searchParams.set("limit", "1");
-  const res = await fetch(url, {
+  url.searchParams.set("limit", "5");
+  url.searchParams.set("lang", "default");
+  geoMetrics.external_requests += 1;
+  const res = await fetchFn(url, {
     headers: {
       "User-Agent": GEO_UA,
       Accept: "application/json",
     },
-    signal: AbortSignal.timeout(8000),
+    signal: AbortSignal.timeout(Math.max(500, timeoutMs)),
   });
-  if (res.status === 429 || res.status === 503) return { busy: true };
+  geoMetrics.provider_ms.push({ provider: "photon", ms: Date.now() - started, status: res.status });
+  if (res.status === 429 || res.status === 503) return { busy: true, provider: "photon" };
   if (!res.ok) return null;
   const body = await res.json();
-  const coords = body?.features?.[0]?.geometry?.coordinates;
-  if (!Array.isArray(coords) || coords.length < 2) return null;
-  const lat = Number(coords[1]);
-  const lng = Number(coords[0]);
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-  return { lat, lng };
+  const features = Array.isArray(body?.features) ? body.features : [];
+  const hits = [];
+  for (const feature of features) {
+    const coords = feature?.geometry?.coordinates;
+    if (!Array.isArray(coords) || coords.length < 2) continue;
+    const lat = Number(coords[1]);
+    const lng = Number(coords[0]);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+    const props = feature.properties || {};
+    hits.push({
+      lat,
+      lng,
+      provider: "photon",
+      geo_source: "geocode",
+      type: props.type || props.osm_value || "",
+      osm_value: props.osm_value || "",
+      city: props.city || props.county || props.state || "",
+      district: props.district || props.locality || "",
+      housenumber: props.housenumber || "",
+      address_used: [props.name, props.street, props.housenumber, props.city].filter(Boolean).join(" "),
+      country: props.country || "",
+    });
+  }
+  return hits.length ? { hits } : null;
 }
 
-async function nominatimSearch(params) {
+async function nominatimSearch(params, { fetchFn = fetch, timeoutMs = 4000 } = {}) {
   const wait = 1200 - (Date.now() - lastNominatimAt);
   if (wait > 0) await sleep(wait);
   const url = new URL("https://nominatim.openstreetmap.org/search");
   url.searchParams.set("format", "jsonv2");
-  url.searchParams.set("limit", "1");
+  url.searchParams.set("limit", "5");
   url.searchParams.set("countrycodes", "tw");
-  url.searchParams.set("addressdetails", "0");
+  url.searchParams.set("addressdetails", "1");
   for (const [key, value] of Object.entries(params)) {
     if (value) url.searchParams.set(key, value);
   }
   lastNominatimAt = Date.now();
-  const res = await fetch(url, {
+  geoMetrics.external_requests += 1;
+  const started = Date.now();
+  const res = await fetchFn(url, {
     headers: {
       "User-Agent": GEO_UA,
       Accept: "application/json",
     },
-    signal: AbortSignal.timeout(8000),
+    signal: AbortSignal.timeout(Math.max(500, timeoutMs)),
   });
+  geoMetrics.provider_ms.push({ provider: "nominatim", ms: Date.now() - started, status: res.status });
   return res;
 }
 
-export async function geocodeAddress(address, lookup, options = {}) {
+async function geocodeAddressUnshared(address, lookup, options = {}) {
+  const started = Date.now();
   const text = geoKey(address);
   if (!text) return null;
-  const cached = lookup?.(address) || lookup?.(text);
-  if (cached) return cached;
+  const fail = geoFailReason(text);
+  if (fail && !options.ignoreFailCache) {
+    return fail === "busy" ? null : null;
+  }
+  const parts = parseTaiwanAddressParts(address);
+  const houseKey = houseCacheKey(parts);
+  const streetKey = streetCacheKey(parts);
+  const cached = lookup?.(address) || lookup?.(text) || (houseKey && lookup?.(houseKey)) || (streetKey && lookup?.(streetKey));
+  if (cached && Number.isFinite(Number(cached.lat)) && Number.isFinite(Number(cached.lng))) {
+    const hit = acceptGeoHit({
+      ...cached,
+      location_class: cachedLocationClass(cached, address),
+      city: cached.city || parts.city,
+      district: cached.district || parts.district,
+    }, { ...parts, city: parts.city || cached.city, district: parts.district || cached.district }, options);
+    if (hit) {
+      geoMetrics.cache_hits += 1;
+      geoMetrics.first_fix_ms.push(Date.now() - started);
+      return { ...hit, from_cache: true };
+    }
+  }
+  geoMetrics.cache_misses += 1;
   const { parsed, queries } = geocodeQueries(address, options.cityHint);
+  const budgetMs = Number(options.budgetMs) || (options.fast ? GEO_FAST_BUDGET_MS : 20_000);
+  const maxExternal = Math.max(1, Number(options.maxExternal) || (options.fast ? GEO_FAST_MAX_EXTERNAL : Math.max(1, Number(options.maxAttempts) || 2)));
+  const fetchFn = options.fetch || fetch;
   let busy = false;
+  let usedExternal = 0;
+  const remaining = () => budgetMs - (Date.now() - started);
 
-  for (const query of photonQueries(parsed)) {
+  const finish = (hit, reason = "") => {
+    if (hit) {
+      geoMetrics.first_fix_ms.push(Date.now() - started);
+      return hit;
+    }
+    if (busy) {
+      geoMetrics.busy += 1;
+      rememberGeoFail(text, "busy", 2 * 60 * 1000);
+    } else {
+      geoMetrics.no_match += 1;
+      rememberGeoFail(text, reason || "no_match", 15 * 60 * 1000);
+    }
+    if (options.strict) {
+      if (busy) throw new Error("地圖定位服務暫時忙碌，請稍後再試");
+      if (reason === "http") throw new Error("地圖定位失敗");
+    }
+    return busy ? { busy: true, location_class: LOCATION_CLASSES.UNKNOWN } : null;
+  };
+
+  const photonList = options.fast ? photonQueries(parsed).slice(0, 1) : photonQueries(parsed);
+  for (const query of photonList) {
+    if (usedExternal >= maxExternal || remaining() < 400) break;
+    usedExternal += 1;
     try {
-      const hit = await photonSearch(query);
-      if (hit?.busy) {
+      const result = await photonSearch(query, { fetchFn, timeoutMs: Math.min(8000, remaining()) });
+      if (result?.busy) {
         busy = true;
-        continue;
+        break;
       }
-      if (hit?.lat != null) return hit;
-    } catch {
-      // Photon 逾時就改試下一組
+      for (const candidate of result?.hits || []) {
+        const hit = acceptGeoHit(candidate, parsed.parts || parts, options);
+        if (hit) return finish(hit);
+      }
+    } catch (error) {
+      if (/abort|timeout/i.test(String(error.message || error))) geoMetrics.timeouts += 1;
     }
   }
 
-  if (options.skipNominatim) {
-    if (options.strict && busy) throw new Error("地圖定位服務暫時忙碌，請稍後再試");
-    return null;
-  }
-
+  if (options.skipNominatim) return finish(null);
   const attempts = [];
   if (parsed.road && parsed.number && !/[巷弄]/.test(parsed.road)) {
     attempts.push({
@@ -444,15 +616,17 @@ export async function geocodeAddress(address, lookup, options = {}) {
     });
   }
   for (const query of queries) attempts.push({ q: query });
-  const maxAttempts = Math.max(1, Math.min(Number(options.maxAttempts) || 2, attempts.length));
-
+  const maxAttempts = Math.min(maxExternal - usedExternal, attempts.length);
   let lastStatus = 200;
   for (let i = 0; i < maxAttempts; i += 1) {
+    if (remaining() < 1600) break;
+    usedExternal += 1;
     let res;
     try {
-      res = await nominatimSearch(attempts[i]);
-    } catch {
+      res = await nominatimSearch(attempts[i], { fetchFn, timeoutMs: Math.min(8000, remaining()) });
+    } catch (error) {
       lastStatus = 0;
+      if (/abort|timeout/i.test(String(error.message || error))) geoMetrics.timeouts += 1;
       continue;
     }
     lastStatus = res.status;
@@ -462,14 +636,39 @@ export async function geocodeAddress(address, lookup, options = {}) {
     }
     if (!res.ok) continue;
     const rows = await res.json();
-    const hit = rows?.[0];
-    if (hit) return { lat: Number(hit.lat), lng: Number(hit.lon) };
+    for (const row of rows || []) {
+      const addr = row.address || {};
+      const candidate = {
+        lat: Number(row.lat),
+        lng: Number(row.lon),
+        provider: "nominatim",
+        geo_source: "geocode",
+        type: row.type || row.addresstype || "",
+        city: addr.city || addr.county || addr.state || "",
+        district: addr.suburb || addr.city_district || addr.town || addr.quarter || "",
+        housenumber: addr.house_number || "",
+        address_used: row.display_name || "",
+      };
+      const hit = acceptGeoHit(candidate, parsed.parts || parts, options);
+      if (hit) return finish(hit);
+    }
   }
-  if (options.strict) {
-    if (busy) throw new Error("地圖定位服務暫時忙碌，請稍後再試");
-    if (lastStatus && lastStatus !== 200) throw new Error(`地圖定位失敗（HTTP ${lastStatus}）`);
+  return finish(null, lastStatus && lastStatus !== 200 ? "http" : "no_match");
+}
+
+export async function geocodeAddress(address, lookup, options = {}) {
+  const key = geoInflightKey(address, options.scope || "tw", options.provider || "auto");
+  if (geocodeInflight.has(key)) {
+    geoMetrics.inflight_merged += 1;
+    return geocodeInflight.get(key);
   }
-  return null;
+  const work = Promise.resolve().then(() => geocodeAddressUnshared(address, lookup, options));
+  geocodeInflight.set(key, work);
+  try {
+    return await work;
+  } finally {
+    geocodeInflight.delete(key);
+  }
 }
 
 function cleanRoadName(value) {

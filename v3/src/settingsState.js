@@ -33,6 +33,8 @@ export const PROFILE_FIELDS = [
   "commuteMode",
   "workLat",
   "workLng",
+  "workLocationClass",
+  "notifyIncludeStreetEstimate",
   "watchDistricts",
   "hiddenCityIds",
   "priceMin",
@@ -219,6 +221,8 @@ export function hydrateSettings(stored, defaults, { admin = false, plan = "free"
   next.priceMax = Math.max(0, Number(next.priceMax) || 0);
   next.priceMaxIncludesExtras = next.priceMaxIncludesExtras === true;
   next.hasParking = next.hasParking === true;
+  next.notifyIncludeStreetEstimate = next.notifyIncludeStreetEstimate === true;
+  next.workLocationClass = String(next.workLocationClass || "").trim();
   return next;
 }
 
@@ -252,6 +256,8 @@ export function applySettingPatch(current, partial = {}, { admin = false, plan =
   next.workAddress = String(next.workAddress || "").trim().slice(0, 120);
   next.workLat = parseWorkCoord(next.workLat);
   next.workLng = parseWorkCoord(next.workLng);
+  next.workLocationClass = String(next.workLocationClass || "").trim();
+  next.notifyIncludeStreetEstimate = next.notifyIncludeStreetEstimate === true;
   next.watchDistricts = limitWatchDistricts(next.watchDistricts, { admin });
   next.hiddenCityIds = normalizeHiddenCityIds(next.hiddenCityIds);
   next.priceMin = Math.max(0, Number(next.priceMin) || 0);

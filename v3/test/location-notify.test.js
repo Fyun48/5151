@@ -160,16 +160,9 @@ test("notifications wait for commute distance then skip listings over the limit"
   assert.equal(decideNotifyDelivery({ ...listingBase, route_kms: [8, 10] }, commuteSettings), "send");
 });
 
-test("notifications wait for rush minutes when that flag is on", () => {
+test("kilometers-only commute notify does not wait for rush minutes", () => {
   const withKm = { ...listingBase, route_kms: [8, 10] };
-  assert.equal(decideNotifyDelivery(withKm, { ...commuteSettings, waitRushMinutes: true }), "pending");
-  assert.equal(
-    decideNotifyDelivery(
-      { ...withKm, rush_am_min: 28, rush_pm_min: 35 },
-      { ...commuteSettings, waitRushMinutes: true },
-    ),
-    "send",
-  );
+  assert.equal(decideNotifyDelivery(withKm, { ...commuteSettings, waitRushMinutes: true }), "send");
 });
 
 test("webhook-bound filter also skips listings without trusted coordinates once commute is on", () => {
@@ -179,14 +172,17 @@ test("webhook-bound filter also skips listings without trusted coordinates once 
   );
 });
 
-test("樂屋／租租通沒有可信座標時不要永遠 pending，避免堵住整條通知", () => {
+test("樂屋／租租通沒有地址時不要永遠 pending；有路段地址則等待定位", () => {
   const noPin = { ...listingBase, lat: null, lng: null, geo_source: "", route_kms: [] };
+  const noAddress = { ...noPin, address: "" };
   assert.equal(listingCanResolveNotifyGeo({ ...noPin, source: "591" }), true);
-  assert.equal(listingCanResolveNotifyGeo({ ...noPin, source: "rakuya" }), false);
-  assert.equal(listingCanResolveNotifyGeo({ ...noPin, source: "ddroom" }), false);
+  assert.equal(listingCanResolveNotifyGeo({ ...noAddress, source: "rakuya" }), false);
+  assert.equal(listingCanResolveNotifyGeo({ ...noAddress, source: "ddroom" }), false);
+  assert.equal(listingCanResolveNotifyGeo({ ...noPin, source: "rakuya" }), true);
   assert.equal(decideNotifyDelivery({ ...noPin, source: "591" }, commuteSettings), "pending");
-  assert.equal(decideNotifyDelivery({ ...noPin, source: "rakuya" }, commuteSettings), "skip");
-  assert.equal(decideNotifyDelivery({ ...noPin, source: "ddroom" }, commuteSettings), "skip");
+  assert.equal(decideNotifyDelivery({ ...noAddress, source: "rakuya" }, commuteSettings), "skip");
+  assert.equal(decideNotifyDelivery({ ...noAddress, source: "ddroom" }, commuteSettings), "skip");
+  assert.equal(decideNotifyDelivery({ ...noPin, source: "rakuya" }, commuteSettings), "pending");
   assert.equal(isTrustedGeoSource("rakuya"), true);
   assert.equal(isTrustedGeoSource("ddroom"), true);
   assert.equal(hasTrustedCoords({ ...listingBase, source: "rakuya", geo_source: "rakuya" }), true);

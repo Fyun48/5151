@@ -310,6 +310,12 @@ export function formatNotifyCommute(event = {}) {
   const km = Number(event.commute_km ?? event.route_km);
   if (!Number.isFinite(km) || km <= 0) return "";
   const rounded = Math.round(km * 10) / 10;
+  const note = String(event.notify_note || "").trim()
+    || (event.location_class === "street" || event.commute_approx ? "依路段位置估算，實際距離可能不同" : "");
+  const delay = String(event.notify_delay_note || "").trim();
+  if (note || delay) {
+    return [`到公司約 ${rounded} 公里`, note, delay].filter(Boolean).join("，");
+  }
   const label = commuteModeLabel(event.commute_mode);
   return `${label}路線約 ${rounded} 公里`;
 }
@@ -327,7 +333,7 @@ export function formatNotifyFacts(event) {
 }
 
 async function postDiscord(webhook, title, events) {
-  if (!webhook) return;
+  if (!webhook) return { ok: true, job_state: "skipped" };
   const embeds = events.slice(0, 8).map((event) => ({
     title: String(event.title || "591 物件").slice(0, 250),
     url: trackedListingUrl(event.post_id, event.url),
@@ -342,14 +348,28 @@ async function postDiscord(webhook, title, events) {
       .join("\n")
       .slice(0, 1000),
   }));
-  await fetch(webhook, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      content: `**${title}**\n點標題會先記成已瀏覽再打開 591。${events.length > 8 ? ` 另有 ${events.length - 8} 則未列出。` : ""}`,
-      embeds,
-    }),
-  });
+  try {
+    const res = await fetch(webhook, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        content: `**${title}**\n點標題會先記成已瀏覽再打開 591。${events.length > 8 ? ` 另有 ${events.length - 8} 則未列出。` : ""}`,
+        embeds,
+      }),
+      signal: AbortSignal.timeout(12000),
+    });
+    if (res.ok || res.status === 204) return { ok: true, job_state: "accepted", status: res.status, sent_ids: events.slice(0, 8).map((event) => event.event_id || event.id) };
+    return { ok: false, job_state: "retry", status: res.status, fail_reason: `http_${res.status}` };
+  } catch (error) {
+    const msg = String(error.message || error);
+    const unknown = /abort|timeout|TimeoutError/i.test(msg);
+    return {
+      ok: false,
+      job_state: unknown ? "unknown" : "retry",
+      unknown,
+      fail_reason: unknown ? "timeout_maybe_accepted" : msg,
+    };
+  }
 }
 
 async function postListingMail({ to, events, templates, send, email, smtp }) {
@@ -364,8 +384,9 @@ async function postListingMail({ to, events, templates, send, email, smtp }) {
   if (list.length > 8) {
     mail.text = `${mail.text}\n\n另有 ${list.length - 8} 則未列入此信。`;
   }
-  if (!mail.subject && !String(mail.text || "").trim()) return;
+  if (!mail.subject && !String(mail.text || "").trim()) return { ok: false, job_state: "retry", shown_ids: [] };
   await send({ to: toAddr, subject: mail.subject, text: mail.text, smtp });
+  return { ok: true, job_state: "accepted", shown_ids: shown.map((event) => event.event_id || event.id) };
 }
 
 export async function notify(settings, events, {
@@ -379,27 +400,32 @@ export async function notify(settings, events, {
   const dock = Array.isArray(events) ? events : [];
   const hook = Array.isArray(webhookEvents) ? webhookEvents : [];
   const mail = Array.isArray(mailEvents) ? mailEvents : [];
-  if (!dock.length && !hook.length && !mail.length) return;
+  const result = {
+    webhook: { job_state: hook.length ? "retry" : "skipped" },
+    mail: { job_state: mail.length ? "retry" : "skipped", shown_ids: [] },
+  };
+  if (!dock.length && !hook.length && !mail.length) return result;
   if (hook.length) {
     try {
-      await postDiscord(settings.discordWebhook, `${APP_NAME}有 ${hook.length} 則更新`, hook);
-    } catch {
-      // Discord 失敗不中斷追蹤
+      result.webhook = await postDiscord(settings.discordWebhook, `${APP_NAME}有 ${hook.length} 則更新`, hook);
+    } catch (error) {
+      result.webhook = { job_state: "retry", fail_reason: String(error.message || error) };
     }
   }
   const memberSmtp = listingSmtpReady(smtp) ? smtp : null;
   if (mail.length && mailTo && (memberSmtp || send)) {
     try {
-      await postListingMail({
+      result.mail = await postListingMail({
         to: mailTo,
         events: mail,
         templates: mailTemplates,
         send: send || ((payload) => sendMail({ ...payload, smtp: memberSmtp })),
         email: mailTo,
         smtp: memberSmtp,
-      });
-    } catch {
-      // 寄信失敗不中斷追蹤
+      }) || { job_state: "accepted", shown_ids: mail.slice(0, 8).map((event) => event.event_id || event.id) };
+    } catch (error) {
+      result.mail = { job_state: "retry", fail_reason: String(error.message || error), shown_ids: [] };
     }
   }
+  return result;
 }

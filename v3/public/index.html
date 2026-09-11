@@ -3122,6 +3122,8 @@
       <p class="hint">機車與汽車目前都用汽車路網估算。機車會避開高速公路，但不是專用機車道路。</p>
       <label>物件與公司距離上限（公里，0 表示不篩）</label>
       <input type="number" id="commuteKm" min="0" max="80" step="0.1" />
+      <label class="check-inline"><input type="checkbox" id="notifyIncludeStreetEstimate" /> <span>全新物件通知：也包含依路段位置估算的物件</span></label>
+      <p class="hint">預設關閉。關閉時路段概略距離仍會顯示，但不會只憑路段代表點發送「符合公司距離」的全新物件通知。開啟時通知會註明「依路段位置估算，實際距離可能不同」。行政區或未知位置即使開啟也不會用來發距離通知。</p>
       <p class="hint" data-tour="mrt">步行路線未滿 1.5 公里的最近捷運站會顯示在列表。這個開關只在後台統一設定。</p>
       <div class="notify-shortcuts" data-tour="notify" hidden>
         <p class="hint">Webhook、郵件已移到「我的 → 通知設定」。左側只留常用條件。</p>
@@ -3928,7 +3930,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> · <a href="/data.html">居住數據</a> · <a href="#me" id="supportFooterLink">支持本站</a> · <a href="#" id="feedbackFooterLink">意見回饋</a> <span class="site-ver">ver. 3.55</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> · <a href="/data.html">居住數據</a> · <a href="#me" id="supportFooterLink">支持本站</a> · <a href="#" id="feedbackFooterLink">意見回饋</a> <span class="site-ver">ver. 3.56</span></footer>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -4455,26 +4457,28 @@
       });
     }
     function commuteText(item) {
-      const label = commuteModeLabel(item.commute_mode || settings.commuteMode);
       const wrap = (inner) => `<span data-commute="${esc(String(item.post_id || ""))}">${inner}</span>`;
+      const precision = String(item.commute_precision || "").trim();
       if (item.commute_km != null) {
         const routes = Array.isArray(item.commute_routes) ? item.commute_routes.filter((n) => Number.isFinite(Number(n))) : [];
         const extra = routes.length > 1 ? `（${routes.map((n) => `${n}`).join(" / ")} 公里）` : "";
         const ret = Number.isFinite(Number(item.commute_return_km)) && Number(item.commute_return_km) !== Number(item.commute_km)
           ? ` · 返回約 ${item.commute_return_km} 公里`
           : "";
-        return wrap(routeChip(`${label}路線約 ${item.commute_km} 公里${extra}`) + (ret ? `<span class="meta-quiet">${esc(ret)}</span>` : ""));
+        const label = precision || `到公司約 ${item.commute_km} 公里`;
+        return wrap(routeChip(`${label}${extra}`) + (ret ? `<span class="meta-quiet">${esc(ret)}</span>` : ""));
       }
       if (isGuest || !commuteOn()) return "";
+      if (precision) return wrap(` · ${esc(precision)}`);
       const state = String(item.commute_state || "");
       const src = String(item.geo_source || "");
       const hasPin = Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lng)) && trustedPinSource(src);
-      if (state === "failed") return wrap(" · 無法計算");
-      if (state === "retry") return wrap(" · 稍後重試");
+      if (state === "failed") return wrap(" · 尚未取得足夠位置資料");
+      if (state === "retry") return wrap(" · 定位服務暫時忙碌，稍後重試");
       if (state === "wait_geo") return wrap(" · 等待定位");
-      if (state === "wait_route") return wrap(" · 等待計算");
-      if (state === "computing") return wrap(" · 計算中");
-      return wrap(hasPin ? " · 等待計算" : " · 等待定位");
+      if (state === "wait_route") return wrap(hasPin ? " · 已取得概略位置，正在計算路程" : " · 等待計算");
+      if (state === "computing") return wrap(" · 正在查詢位置");
+      return wrap(hasPin ? " · 已取得概略位置，正在計算路程" : " · 等待定位");
     }
 
     function mrtChip(name) {
@@ -5142,6 +5146,8 @@
         (item?.commute_routes || []).join(","),
         item?.lat,
         item?.lng,
+        item?.location_class,
+        item?.commute_precision,
         item?.mrt_station,
         item?.mrt_walk_km,
       ].join("|");
@@ -5155,6 +5161,10 @@
         commute_mode: row.commute_mode,
         commute_routes: row.commute_routes,
         commute_hint: row.commute_hint,
+        location_class: row.location_class,
+        commute_precision: row.commute_precision,
+        commute_approx: row.commute_approx,
+        route_min_m: row.route_min_m,
         lat: row.lat,
         lng: row.lng,
         geo_source: row.geo_source,
@@ -6132,6 +6142,7 @@
       $("minBuildingFloors").value = s.minBuildingFloors || "";
       $("workAddress").value = s.workAddress || "";
       $("commuteKm").value = s.commuteKm || 0;
+      if ($("notifyIncludeStreetEstimate")) $("notifyIncludeStreetEstimate").checked = s.notifyIncludeStreetEstimate === true;
       setCommuteMode("commuteMode", s.commuteMode);
       syncCommuteSort();
       fillFloorFilters(s);
@@ -7333,6 +7344,7 @@
         workAddress: $("workAddress").value.trim(),
         commuteKm: Number($("commuteKm").value) || 0,
         commuteMode: selectedCommuteMode("commuteMode"),
+        notifyIncludeStreetEstimate: $("notifyIncludeStreetEstimate") ? $("notifyIncludeStreetEstimate").checked : false,
       };
     }
 

@@ -1,5 +1,7 @@
 /** 非同步 geocode：以正規化地址版本快取，特別關注優先，不偽裝不完整地址。 */
 
+import { houseCacheKey, parseTaiwanAddressParts, streetCacheKey } from "./geoPrecision.js";
+
 export const GEO_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 export const GEO_QUALITY_RANK = Object.freeze({
   house: 3,
@@ -9,15 +11,15 @@ export const GEO_QUALITY_RANK = Object.freeze({
 });
 
 export function addressVersion(address) {
-  return String(address || "").replace(/\s+/g, "").replace(/-/g, "");
+  const parts = parseTaiwanAddressParts(address);
+  return houseCacheKey(parts) || streetCacheKey(parts) || String(address || "").replace(/\s+/g, "");
 }
 
 export function inferGeoQuality({ address } = {}) {
   const text = String(address || "").replace(/\s+/g, "");
-  const hasHouse = /\d+(?:之\d+)?號/.test(text);
-  const hasAlley = /\d+巷/.test(text) || /\d+弄/.test(text);
-  const hasStreet = /[路街道大道]/.test(text);
-  if ((hasHouse || hasAlley) && hasStreet) return "house";
+  const hasHouse = /\d+(?:[-－—之]\d+)?號/.test(text);
+  const hasStreet = /[路街道大道]/.test(text) || /\d+巷/.test(text) || /\d+弄/.test(text);
+  if (hasHouse && hasStreet) return "house";
   if (hasStreet) return "street";
   if (/[縣市].*[區鄉鎮]/.test(text) || /[區鄉鎮市]/.test(text)) return "district";
   return "unknown";
@@ -41,6 +43,11 @@ export function ensureGeoCacheSchema(db) {
     "ALTER TABLE geo_cache ADD COLUMN geo_source TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE geo_cache ADD COLUMN address_used TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE geo_cache ADD COLUMN address_version TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE geo_cache ADD COLUMN location_class TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE geo_cache ADD COLUMN city TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE geo_cache ADD COLUMN district TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE geo_cache ADD COLUMN cache_kind TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE geo_cache ADD COLUMN provider TEXT NOT NULL DEFAULT ''",
   ]) {
     try { db.exec(sql); } catch { /* already migrated */ }
   }

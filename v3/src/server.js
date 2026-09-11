@@ -1990,10 +1990,10 @@ async function ensureWorkCoords() {
   const workAddress = String(current.workAddress || "").trim();
   if (!workAddress || hasWorkPoint(current)) return current;
   try {
-    const geo = await geocodeAddress(workAddress, getCachedGeo, { strict: false, maxAttempts: 2 });
+    const geo = await geocodeAddress(workAddress, getCachedGeo, { strict: false, maxAttempts: 2, allowAdmin: false });
     if (!geo) return current;
-    setCachedGeo(workAddress, geo.lat, geo.lng);
-    return saveSettings({ workLat: geo.lat, workLng: geo.lng }, uid);
+    setCachedGeo(workAddress, geo.lat, geo.lng, geo);
+    return saveSettings({ workLat: geo.lat, workLng: geo.lng, workLocationClass: geo.location_class || "" }, uid);
   } catch (error) {
     console.warn("補上班地址座標失敗：", error.message);
     return current;
@@ -2590,19 +2590,22 @@ async function persistSettings(body = {}, userId) {
       body.workAddress = workAddress;
       body.workLat = current.workLat;
       body.workLng = current.workLng;
+      body.workLocationClass = current.workLocationClass || "";
     } else {
       const geo = await geocodeAddress(workAddress, getCachedGeo, { strict: true, maxAttempts: 2 });
       if (!geo) throw new Error("找不到這個上班地址，請再寫詳細一點");
       body.workAddress = workAddress;
       body.workLat = geo.lat;
       body.workLng = geo.lng;
-      setCachedGeo(workAddress, geo.lat, geo.lng);
+      body.workLocationClass = geo.location_class || "";
+      setCachedGeo(workAddress, geo.lat, geo.lng, geo);
     }
   } else if (body.workAddress !== undefined) {
     body.workAddress = workAddress;
     if (!workAddress) {
       body.workLat = null;
       body.workLng = null;
+      body.workLocationClass = "";
     }
   }
   const pausing = Object.prototype.hasOwnProperty.call(body, "notificationsPaused");

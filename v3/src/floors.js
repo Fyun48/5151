@@ -2,6 +2,14 @@ import { hasActiveBoxes, isExcludedByAgent, isExcludedByBox, isExcludedByKeyword
 import { isTrustedGeoSource } from "./location.js";
 import { areaNum } from "./match.js";
 import { passesPriceFilter } from "./listingCost.js";
+import {
+  canUseForRoadDistance,
+  commuteMetersWithinLimit,
+  decideNotifyGeo,
+  kmListToMinMeters,
+  listingHasStreetAddress,
+  resolveLocationClass,
+} from "./geoPrecision.js";
 
 function tagText(listing) {
   let tags = listing.tags;
@@ -320,59 +328,75 @@ export function hasTrustedCoords(listing) {
   return isTrustedGeoSource(listing.geo_source);
 }
 
-/** 591 之後還能抓社區／詳情座標；其他來源沒有可信座標就不要永遠 pending。 */
+/** 有可信座標、可解析路段地址，或 591 仍可能補社區／詳情時才繼續等。沒有地址的外站不要永遠 pending。 */
 export function listingCanResolveNotifyGeo(listing) {
   if (hasTrustedCoords(listing)) return true;
+  if (listingHasStreetAddress(listing)) return true;
   return listingSourceKey(listing) === "591";
 }
 
 export const PENDING_NOTIFY_MAX_MS = 6 * 60 * 60 * 1000;
 
+/** 只表示等待已久，不得再被當成「已送出」。 */
 export function isStalePendingNotify(event, now = Date.now()) {
   const created = Date.parse(event?.created_at || "");
   return Number.isFinite(created) && now - created > PENDING_NOTIFY_MAX_MS;
 }
 
+export function listingNotifyMeters(listing = {}) {
+  return kmListToMinMeters(listing.route_kms, listing.route_min_m ?? listing.min_m);
+}
+
 export function isGeoReady(listing, settings = {}) {
   if (!needsListingGeo(settings)) return true;
-  if (!hasTrustedCoords(listing)) return false;
+  const cls = resolveLocationClass(listing);
+  if (!canUseForRoadDistance(cls) || !hasTrustedCoords(listing)) return false;
   const km = Number(settings.commuteKm);
   const commuteOn = Number.isFinite(km) && km > 0 && hasWorkPoint(settings);
   if (!commuteOn) return true;
-  const routes = Array.isArray(listing.route_kms) ? listing.route_kms.map(Number).filter(Number.isFinite) : [];
-  if (!routes.length) return false;
-  if (settings.waitRushMinutes) {
-    const am = Number(listing.commute_min_am ?? listing.rush_am_min);
-    const pm = Number(listing.commute_min_pm ?? listing.rush_pm_min);
-    return Number.isFinite(am) && Number.isFinite(pm);
-  }
-  return true;
+  return listingNotifyMeters(listing) != null;
 }
 
 export function decideNotifyDelivery(listing, settings = {}) {
   if (!passesAttributeFilters(listing, settings)) return "skip";
   if (!passesDisplayFilters(listing, settings)) return "skip";
-  if (!isGeoReady(listing, settings)) {
+  const decision = decideNotifyGeo(listing, settings);
+  if (decision.verdict === "pending") {
     return listingCanResolveNotifyGeo(listing) ? "pending" : "skip";
   }
+  if (decision.verdict === "skip") return "skip";
   if (!passesGeoFilters(listing, settings, { strict: true })) return "skip";
   return "send";
 }
 
+export function decideNotifyDecision(listing, settings = {}) {
+  if (!passesAttributeFilters(listing, settings)) return { verdict: "skip", decide: "cancelled", reason: "attribute" };
+  if (!passesDisplayFilters(listing, settings)) return { verdict: "skip", decide: "cancelled", reason: "display" };
+  const decision = decideNotifyGeo(listing, settings);
+  if (decision.verdict === "pending" && !listingCanResolveNotifyGeo(listing)) {
+    return { ...decision, verdict: "skip", decide: "wait_data", reason: "no-geo" };
+  }
+  return decision;
+}
+
 export function passesGeoFilters(listing, settings = {}, { strict = true } = {}) {
-  const hasCoords = hasTrustedCoords(listing);
-  if (hasCoords && isExcludedByBox(listing.lat, listing.lng, settings.excludeBoxes)) {
+  const cls = resolveLocationClass(listing);
+  const usableRoad = canUseForRoadDistance(cls) && hasTrustedCoords(listing);
+  if (usableRoad && isExcludedByBox(listing.lat, listing.lng, settings.excludeBoxes)) {
     return false;
   }
   const km = Number(settings.commuteKm);
   const commuteOn = Number.isFinite(km) && km > 0 && hasWorkPoint(settings);
   const boxesOn = hasActiveBoxes(settings.excludeBoxes);
-  if (strict && boxesOn && !hasCoords) return false;
+  if (strict && boxesOn && !usableRoad) return false;
   if (commuteOn) {
-    if (strict && !hasCoords) return false;
-    const routes = Array.isArray(listing.route_kms) ? listing.route_kms.map(Number).filter(Number.isFinite) : [];
-    if (strict && !routes.length) return false;
-    if (routes.length && routes.every((dist) => dist > km)) return false;
+    if (strict && !usableRoad) return false;
+    const meters = listingNotifyMeters(listing);
+    if (strict && meters == null) return false;
+    if (meters != null && !commuteMetersWithinLimit(meters, km)) {
+      if (!strict && cls === "street") return true;
+      return false;
+    }
   }
   return true;
 }
