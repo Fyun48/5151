@@ -887,7 +887,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
       if (pathname === "/ops/api/coding-tasks" && method === "GET") {
         if (!runGuard(auth.requireOwner, req, reply)) return;
         const limit = Number(url.searchParams.get("limit") || 40);
-        sendJson(res, 200, { items: listRecentCodingTasks(db, { limit }) });
+        sendJson(res, 200, { items: listRecentCodingTasks(db, { limit, productId: url.searchParams.get("productId") }) });
         return;
       }
       const codingTaskGet = pathname.match(/^\/ops\/api\/coding-tasks\/(\d+)$/);

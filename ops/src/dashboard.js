@@ -143,9 +143,16 @@ export function listIssuesWithLifecycle(db, { limit = 80 } = {}) {
       "SELECT final_recommendation FROM issue_evaluation_current WHERE issue_id=?",
     ).get(Number(r.id));
     const members = Number(db.prepare("SELECT COUNT(*) n FROM issue_feedback_link WHERE issue_id=? AND active=1").get(r.id).n) || 0;
+    const prod = db.prepare(`
+      SELECT f.product_id FROM issue_feedback_link l
+      JOIN ingested_feedback f ON f.id = l.feedback_id
+      WHERE l.issue_id=? AND l.active=1
+      ORDER BY l.id DESC LIMIT 1
+    `).get(Number(r.id));
     return {
       id: Number(r.id),
       title: r.title,
+      product_id: prod?.product_id || null,
       summary: r.summary,
       category: r.category,
       status: r.status,
