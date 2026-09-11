@@ -50,6 +50,26 @@ test("normalize 租租通 studio vs whole, keep shop", () => {
   assert.equal(whole.kind_name, "整層住家");
   assert.equal(kindFromDdItem({ type_space: "shop", type_space_name: "店面" }), "店面");
   assert.equal(kindFromDdItem({ type_space: "office", type_space_name: "辦公" }), "");
+  const pinned = normalizeDdItem({
+    object_id: "pin-dd-1",
+    type_space: "whole",
+    type_space_name: "整層住家",
+    title: "淡水二房",
+    rent: 18000,
+    floor: 11,
+    ping: 15.5,
+    address: { complete: "新北市淡水區淡金路二段173號" },
+    lat: 25.18252,
+    lng: 121.44921,
+  }, { regionId: 3, sectionId: 50 });
+  assert.equal(pinned.geo_source, DD_SOURCE);
+  assert.equal(pinned.lat, 25.18252);
+  const enriched = enrichDdListingFromObject({ ...pinned, lat: null, lng: null, geo_source: null }, {
+    title: "淡水二房",
+    location: { lat: 25.18252, lng: 121.44921 },
+  });
+  assert.equal(enriched.geo_source, DD_SOURCE);
+  assert.equal(enriched.lat, 25.18252);
 });
 
 test("租租通 floor -1 is unknown, object furnish is kept", () => {

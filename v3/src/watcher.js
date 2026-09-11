@@ -61,7 +61,7 @@ import { fetchHfCoveringListings } from "./housefun.js";
 import { fetchRakuyaCoveringListings } from "./rakuya.js";
 import { commuteWorkJobs, geocodeAddress, hasWorkPoint, needsListingGeo, normalizeCommuteMode } from "./geo.js";
 import { isTrustedGeoSource, listingCommunityId, pickRicherAddress } from "./location.js";
-import { decideNotifyDelivery } from "./floors.js";
+import { decideNotifyDelivery, isStalePendingNotify } from "./floors.js";
 import { fetchRoadRoutes, fetchRoadRouteTable, fetchRushRoadRoutes } from "./route.js";
 import { fetchMrtAccess } from "./mrt.js";
 import { googleDirectionsAllowed } from "./mapsBilling.js";
@@ -292,7 +292,7 @@ async function resolveListingRoute(listing, settings) {
 
 export async function flushPendingNotifications(settings = getSettings(), { silent = false } = {}) {
   bindNotifyJobSnapshots();
-  const pending = pendingNotifyEvents(80);
+  const pending = pendingNotifyEvents(400);
   const dockByUser = new Map();
   const hookByUser = new Map();
   const mailByUser = new Map();
@@ -316,7 +316,10 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
       ...userSettings,
       waitRushMinutes: commuteRushEnabled() && googleDirectionsAllowed(),
     });
-    if (delivery === "pending") continue;
+    if (delivery === "pending") {
+      if (isStalePendingNotify(event)) markEventNotified(event.id);
+      continue;
+    }
     markEventNotified(event.id);
     if (delivery === "send") {
       const payload = { ...eventPayloadFromListing(event, listing), user_id: userId };

@@ -3,7 +3,7 @@ import { passesAttributeFilters, sanitizeFloorName } from "./floors.js";
 import { isExcludedByKeyword } from "./geo.js";
 import { feeFieldsFromBlob } from "./listingCost.js";
 import { listingKitFields, parseFurnishItems } from "./listingKit.js";
-import { addressHasPrecisePart, pickRicherAddress } from "./location.js";
+import { addressHasPrecisePart, pickRicherAddress, sourceMapPin } from "./location.js";
 import { lookupDistrict } from "./regions.js";
 
 export const DD_SOURCE = "ddroom";
@@ -110,6 +110,17 @@ function roleFromItem(item) {
   return "租租通";
 }
 
+function ddItemPin(item) {
+  const loc = item?.location && typeof item.location === "object" ? item.location : {};
+  const addr = item?.address && typeof item.address === "object" ? item.address : {};
+  const map = item?.map && typeof item.map === "object" ? item.map : {};
+  return sourceMapPin(
+    DD_SOURCE,
+    item?.lat ?? item?.latitude ?? loc.lat ?? loc.latitude ?? map.lat ?? addr.lat,
+    item?.lng ?? item?.longitude ?? loc.lng ?? loc.lon ?? loc.longitude ?? map.lng ?? addr.lng,
+  );
+}
+
 function listingSourceKey({ regionId, sectionId, address, floorName, areaName, layout }) {
   const addr = String(address || "").replace(/\s+/g, "").toLowerCase();
   const floor = String(floorName || "").split("/")[0].trim();
@@ -137,6 +148,7 @@ export function normalizeDdItem(item, { regionId, sectionId } = {}) {
   const priceNum = Number(item.rent) || 0;
   const cover = item.covers?.[0]?.image?.sm || item.covers?.[0]?.image?.md || "";
   const tags = ["租租通", ...(Array.isArray(item.themes) ? item.themes.slice(0, 4) : [])].filter((row) => String(row || "").trim());
+  const pin = ddItemPin(item);
   return {
     post_id: ddPostIdFromObject(objectId),
     source: DD_SOURCE,
@@ -178,9 +190,9 @@ export function normalizeDdItem(item, { regionId, sectionId } = {}) {
       || Boolean(item.community?.url || item.community?.link || item.community_url),
     tags: JSON.stringify([...tags, item.community?.name || item.community_name || item.building?.name].filter((row) => String(row || "").trim())),
     refresh_time: String(item.published_date || "").trim(),
-    lat: null,
-    lng: null,
-    geo_source: null,
+    lat: pin.lat,
+    lng: pin.lng,
+    geo_source: pin.geo_source || null,
     contact_fetched: 1,
   };
 }
@@ -223,6 +235,12 @@ export function enrichDdListingFromObject(row, object) {
     html: object.html,
     has_natural_gas: next.has_natural_gas,
   }));
+  const pin = ddItemPin(object);
+  if (pin.lat != null && pin.lng != null) {
+    next.lat = pin.lat;
+    next.lng = pin.lng;
+    next.geo_source = pin.geo_source || next.geo_source || DD_SOURCE;
+  }
   return next;
 }
 

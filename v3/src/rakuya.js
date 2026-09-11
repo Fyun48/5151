@@ -5,6 +5,7 @@ import { sanitizeFloorName } from "./floors.js";
 import { decodeEntities } from "./htmlEntities.js";
 import { looksLikeCaptchaOrLogin, looksLikeUnavailable } from "./importSanitize.js";
 import { listingKitFields } from "./listingKit.js";
+import { extractMapFromHtml, sourceMapPin } from "./location.js";
 import { feeFieldsFromBlob } from "./listingCost.js";
 
 export const RAKUYA_SOURCE = "rakuya";
@@ -142,6 +143,9 @@ export function parseRakuyaDetailHtml(html, pageUrl = "") {
   const parking = sanitize((html.match(/車位[：:]\s*([^<]+)/) || [])[1] || "");
   const elevator = sanitize((html.match(/電梯[：:]\s*([^<]+)/) || [])[1] || "");
   const ehid = String(new URL(pageUrl || RAKUYA_SITE, RAKUYA_SITE).searchParams.get("ehid") || "");
+  const geo = ld.geo && typeof ld.geo === "object" ? ld.geo : {};
+  const map = extractMapFromHtml(html);
+  const pin = sourceMapPin(RAKUYA_SOURCE, geo.latitude ?? geo.lat ?? map?.lat, geo.longitude ?? geo.lng ?? geo.lon ?? map?.lng);
   const photos = [];
   const imgRe = /<(?:img|meta)[^>]+(?:src|content)=["']([^"']+\.(?:jpg|jpeg|png|webp)[^"']*)["']/gi;
   let m;
@@ -162,12 +166,15 @@ export function parseRakuyaDetailHtml(html, pageUrl = "") {
     parking,
     elevator,
     photos: [...new Set(photos)],
+    lat: pin.lat,
+    lng: pin.lng,
     field_status: {
       title: title ? "parsed" : "missing",
       address: address ? "parsed" : "missing",
       price: price ? "parsed" : "missing",
       floor: floorName ? "parsed" : "missing",
       area: areaName ? "parsed" : "missing",
+      latlng: pin.lat != null ? "parsed" : "not_provided",
     },
   };
 }
@@ -185,6 +192,7 @@ export function normalizeRakuyaItem(item, { regionId = "", sectionId = "" } = {}
   const area = String(item.areaName || item.area_name || "");
   const layout = String(item.layout || "");
   const address = String(item.address || "");
+  const pin = sourceMapPin(RAKUYA_SOURCE, item.lat, item.lng);
   return {
     post_id: postId,
     source: RAKUYA_SOURCE,
@@ -220,9 +228,9 @@ export function normalizeRakuyaItem(item, { regionId = "", sectionId = "" } = {}
     community_linked: item.communityLinked ? 1 : 0,
     tags: JSON.stringify([]),
     refresh_time: String(item.refresh || ""),
-    lat: null,
-    lng: null,
-    geo_source: "",
+    lat: pin.lat,
+    lng: pin.lng,
+    geo_source: pin.geo_source,
     field_status: item.field_status || {},
     contact_fetched: 0,
   };

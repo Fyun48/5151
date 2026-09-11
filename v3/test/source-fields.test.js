@@ -15,6 +15,8 @@ test("source-field matrix covers the live source keys", () => {
   const rakuya = SOURCE_FIELD_MATRIX.find((row) => row.source === "rakuya");
   assert.equal(rakuya.fields.address, "parsed");
   assert.equal(rakuya.fields.contact, "not_provided");
+  assert.equal(rakuya.fields.latlng, "partial");
+  assert.equal(SOURCE_FIELD_MATRIX.find((row) => row.source === "ddroom").fields.latlng, "partial");
 });
 
 test("empty incoming values do not wipe richer stored values", () => {

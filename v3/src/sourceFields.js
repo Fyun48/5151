@@ -114,7 +114,7 @@ export const SOURCE_FIELD_MATRIX = [
       fetched_at: "parsed",
       url: "parsed",
       source_id: "parsed",
-      latlng: "not_provided",
+      latlng: "partial",
       contact: "partial",
     },
   },
@@ -180,10 +180,10 @@ export const SOURCE_FIELD_MATRIX = [
       fetched_at: "parsed",
       url: "parsed",
       source_id: "parsed",
-      latlng: "not_provided",
+      latlng: "partial",
       contact: "not_provided",
     },
-    notes: "公開 HTML／JSON-LD。Cloudflare／驗證視為 FETCH_BLOCKED，不繞過。",
+    notes: "公開 HTML／JSON-LD。Cloudflare／驗證視為 FETCH_BLOCKED，不繞過。JSON-LD／地圖有座標才寫入。",
   },
 ];
 
