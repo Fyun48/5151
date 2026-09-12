@@ -2346,7 +2346,8 @@ app.get("/api/listings", async (req, res) => {
   });
   const queryMs = Date.now() - started;
   const statsStarted = Date.now();
-  const listingStats = stats(undefined, uid);
+  const statsDetails = {};
+  const listingStats = stats(undefined, uid, undefined, statsDetails);
   const statsMs = Date.now() - statsStarted;
   res.setHeader("Server-Timing", `list;dur=${queryMs}, stats;dur=${statsMs}`);
   res.json({
@@ -2357,7 +2358,7 @@ app.get("/api/listings", async (req, res) => {
     queryVersion: listed.queryVersion || 2,
     timing: {
       query_ms: queryMs, stats_ms: statsMs, total_ms: Date.now() - started,
-      dataset: listed.totalMatched, stages: listed.queryDetails,
+      dataset: listed.totalMatched, stages: listed.queryDetails, stats_stages: statsDetails,
     },
   });
 });
