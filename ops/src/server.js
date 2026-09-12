@@ -79,7 +79,7 @@ import { makeQaReviewProvider } from "./qa/reviewProvider.js";
 import { getCodingStagingView, getStagingDeployment, requestStagingRedeploy, cancelStagingDeployment, cleanupStagingDeployment } from "./stagingDeploy.js";
 import { stagingWorkerConfigFromEnv, startStagingLoop } from "./stagingWorker.js";
 import { makeStagingProvider } from "./staging/provider.js";
-import { getReleaseCandidateView, getReleaseManifest, submitOwnerReleaseDecision, retryReleaseNotification, listReleaseNotifications } from "./releaseCandidate.js";
+import { getReleaseCandidateView, getReleaseManifest, submitOwnerReleaseDecision, retryReleaseNotification, listReleaseNotifications, cancelReleaseNotification } from "./releaseCandidate.js";
 import { releaseWorkerConfigFromEnv, startReleaseLoop } from "./releaseWorker.js";
 import { getMigrationSafetyView, createMigrationSafetyAssessment, assessApprovedReleaseIfNeeded } from "./release/migrationSafety.js";
 import {
@@ -1352,6 +1352,18 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
         try { sendJson(res, 200, { ok: true, ...await retryReleaseNotification(db, Number(rcNotifRetry[1]), { actor: `owner:${req.owner.email}` }) }); }
         catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+      const rcNotifCancel = pathname.match(/^\/ops\/api\/release-notifications\/(\d+)\/cancel$/);
+      if (rcNotifCancel && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {};
+        try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          sendJson(res, 200, { ok: true, ...cancelReleaseNotification(db, Number(rcNotifCancel[1]), { actor: `owner:${req.owner.email}`, reason: b.reason }) });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
         return;
       }
 

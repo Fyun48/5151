@@ -991,7 +991,7 @@ export function applyOpsSchema(db) {
       release_manifest_id INTEGER NOT NULL,
       manifest_version INTEGER NOT NULL,
       channel TEXT NOT NULL DEFAULT 'internal',
-      status TEXT NOT NULL DEFAULT 'pending',   -- pending|sent|failed
+      status TEXT NOT NULL DEFAULT 'pending',   -- pending|sent|failed|cancelled
       payload TEXT,
       attempt_count INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,

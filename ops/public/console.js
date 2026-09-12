@@ -396,6 +396,15 @@ const PENDING_CANCEL = {
     confirm: "確定取消提案",
     ok: (data) => `已取消提案。${data.in_flight_not_withdrawn ? "已在跑的提案不宣稱撤回外部呼叫。" : ""}`,
   },
+  release_notification: {
+    states: ["pending"],
+    label: "取消未送出的發布通知",
+    path: (id) => `/ops/api/release-notifications/${id}/cancel`,
+    title: "確認取消發布通知",
+    body: (id) => `取消這筆尚未外送的發布通知 #${id}？已送出的 webhook 不宣稱撤回。未送出的通知不會再外送。`,
+    confirm: "確定取消通知",
+    ok: (data) => `已取消發布通知。${data.in_flight_not_withdrawn ? "已在外送的呼叫不宣稱撤回。" : ""}`,
+  },
 };
 
 function pendingItemCancellable(it) {

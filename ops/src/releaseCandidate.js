@@ -251,11 +251,22 @@ export async function retryReleaseNotification(db, notificationId, {
   if (!n) throw httpError("notification not found", 404);
   if (n.status === "sent") return { idempotent: true, status: "sent" };
   if (n.status === "failed") return { idempotent: true, status: "failed" };
+  if (n.status === "cancelled") return { skipped: true, status: "cancelled", reason: "cancelled" };
 
   const notifyGate = issueWriteDecision(db, n.issue_id, { expectedGeneration: n.subscription_generation });
   if (!notifyGate.ok) {
     return withImmediateTx(db, () => {
-      db.prepare("UPDATE release_notification SET status='failed', updated_at=? WHERE id=? AND status='pending'").run(iso(now), Number(n.id));
+      const latest = db.prepare("SELECT * FROM release_notification WHERE id=?").get(Number(n.id));
+      if (latest?.status === "cancelled") return { skipped: true, status: "cancelled", reason: "cancelled" };
+      if (latest?.status === "sent") return { idempotent: true, status: "sent" };
+      if (latest?.status === "failed") return { idempotent: true, status: "failed" };
+      const upd = db.prepare("UPDATE release_notification SET status='failed', updated_at=? WHERE id=? AND status='pending'").run(iso(now), Number(n.id));
+      if (upd.changes !== 1) {
+        const fresh = db.prepare("SELECT * FROM release_notification WHERE id=?").get(Number(n.id));
+        if (fresh?.status === "cancelled") return { skipped: true, status: "cancelled", reason: "cancelled" };
+        if (fresh?.status === "sent") return { idempotent: true, status: "sent" };
+        if (fresh?.status === "failed") return { idempotent: true, status: "failed" };
+      }
       appendAuditRow(db, { actor, action: "issue.release.notification_failed", entityType: "release_notification", entityId: String(n.id), data: { issue_id: Number(n.issue_id), coding_task_id: Number(n.coding_task_id), manifest_id: Number(n.release_manifest_id), reason: notifyGate.reason }, now });
       return { failed: true, status: "failed", reason: notifyGate.reason };
     });
@@ -268,9 +279,11 @@ export async function retryReleaseNotification(db, notificationId, {
 
   if (!deliver) {
     return withImmediateTx(db, () => {
-      db.prepare("UPDATE release_notification SET attempt_count=attempt_count+1, updated_at=? WHERE id=?").run(iso(now), Number(n.id));
+      const latest = db.prepare("SELECT * FROM release_notification WHERE id=?").get(Number(n.id));
+      if (latest?.status === "cancelled") return { skipped: true, status: "cancelled", reason: "cancelled" };
+      db.prepare("UPDATE release_notification SET attempt_count=attempt_count+1, updated_at=? WHERE id=? AND status='pending'").run(iso(now), Number(n.id));
       appendAuditRow(db, { actor, action: "issue.release.notification_failed", entityType: "release_notification", entityId: String(n.id), data: { issue_id: Number(n.issue_id), coding_task_id: Number(n.coding_task_id), manifest_id: Number(n.release_manifest_id), reason: "no_adapter_configured" }, now });
-      return { retried: true, status: "pending", reason: "no_adapter_configured" };
+      return { retried: true, status: latest?.status || "pending", reason: "no_adapter_configured" };
     });
   }
 
@@ -291,9 +304,17 @@ export async function retryReleaseNotification(db, notificationId, {
     const latest = db.prepare("SELECT * FROM release_notification WHERE id=?").get(Number(n.id));
     if (!latest) throw httpError("notification not found", 404);
     if (latest.status === "sent") return { idempotent: true, status: "sent" };
-    db.prepare("UPDATE release_notification SET attempt_count=attempt_count+1, updated_at=? WHERE id=?").run(iso(now), Number(n.id));
+    if (latest.status === "cancelled") {
+      return { skipped: true, status: "cancelled", in_flight_not_withdrawn: true, reason: "cancelled" };
+    }
+    db.prepare("UPDATE release_notification SET attempt_count=attempt_count+1, updated_at=? WHERE id=? AND status='pending'").run(iso(now), Number(n.id));
     if (result.ok) {
-      db.prepare("UPDATE release_notification SET status='sent', updated_at=? WHERE id=?").run(iso(now), Number(n.id));
+      const sent = db.prepare("UPDATE release_notification SET status='sent', updated_at=? WHERE id=? AND status='pending'").run(iso(now), Number(n.id));
+      if (sent.changes !== 1) {
+        const fresh = db.prepare("SELECT * FROM release_notification WHERE id=?").get(Number(n.id));
+        if (fresh?.status === "cancelled") return { skipped: true, status: "cancelled", in_flight_not_withdrawn: true, reason: "cancelled" };
+        if (fresh?.status === "sent") return { idempotent: true, status: "sent" };
+      }
       appendAuditRow(db, { actor, action: "issue.release.notification_sent", entityType: "release_notification", entityId: String(n.id), data: { issue_id: Number(n.issue_id), coding_task_id: Number(n.coding_task_id), manifest_id: Number(n.release_manifest_id), channel: cfg.channel }, now });
       return { retried: true, status: "sent" };
     }
@@ -301,6 +322,65 @@ export async function retryReleaseNotification(db, notificationId, {
     return { retried: true, status: "pending", reason: result.reason || "send_failed" };
   });
 }
+export function publicNotification(n) {
+  if (!n) return null;
+  return {
+    id: Number(n.id),
+    manifest_id: Number(n.release_manifest_id),
+    manifest_version: Number(n.manifest_version),
+    channel: n.channel,
+    status: n.status,
+    attempt_count: Number(n.attempt_count),
+    payload: parse(n.payload),
+  };
+}
+
 export function listReleaseNotifications(db, codingTaskId) {
-  return db.prepare("SELECT * FROM release_notification WHERE coding_task_id=? ORDER BY id DESC").all(Number(codingTaskId)).map((n) => ({ id: Number(n.id), manifest_id: Number(n.release_manifest_id), manifest_version: Number(n.manifest_version), channel: n.channel, status: n.status, attempt_count: Number(n.attempt_count), payload: parse(n.payload) }));
+  return db.prepare("SELECT * FROM release_notification WHERE coding_task_id=? ORDER BY id DESC").all(Number(codingTaskId)).map(publicNotification);
+}
+
+// Owner 取消尚未外送的發布通知（不宣稱撤回已送出的 webhook）。
+export function cancelReleaseNotification(db, notificationId, { actor = "owner", reason = null, now = new Date() } = {}) {
+  return withImmediateTx(db, () => {
+    const n = db.prepare("SELECT * FROM release_notification WHERE id=?").get(Number(notificationId));
+    if (!n) throw httpError("notification not found", 404);
+    if (n.status === "cancelled") {
+      return { idempotent: true, in_flight_not_withdrawn: false, notification: publicNotification(n) };
+    }
+    if (n.status === "sent") {
+      throw httpError("已送出的發布通知不宣稱撤回。Webhook 若已外送，紀錄仍保留。", 409);
+    }
+    if (n.status !== "pending") {
+      throw httpError(`發布通知目前不能取消（status=${n.status}）`, 409);
+    }
+    const ts = iso(now);
+    const upd = db.prepare("UPDATE release_notification SET status='cancelled', updated_at=? WHERE id=? AND status='pending'")
+      .run(ts, Number(n.id));
+    if (upd.changes !== 1) {
+      const fresh = db.prepare("SELECT * FROM release_notification WHERE id=?").get(Number(n.id));
+      if (fresh?.status === "cancelled") return { idempotent: true, in_flight_not_withdrawn: false, notification: publicNotification(fresh) };
+      if (fresh?.status === "sent") throw httpError("已送出的發布通知不宣稱撤回。Webhook 若已外送，紀錄仍保留。", 409);
+      throw httpError("發布通知目前不能取消", 409);
+    }
+    appendAuditRow(db, {
+      actor,
+      action: "issue.release.notification_cancelled",
+      entityType: "release_notification",
+      entityId: String(n.id),
+      data: {
+        issue_id: Number(n.issue_id),
+        coding_task_id: Number(n.coding_task_id),
+        manifest_id: Number(n.release_manifest_id),
+        prev_status: n.status,
+        reason: reason ? String(reason).slice(0, 120) : null,
+        in_flight_not_withdrawn: false,
+      },
+      now,
+    });
+    return {
+      cancelled: true,
+      in_flight_not_withdrawn: false,
+      notification: publicNotification(db.prepare("SELECT * FROM release_notification WHERE id=?").get(Number(n.id))),
+    };
+  });
 }
