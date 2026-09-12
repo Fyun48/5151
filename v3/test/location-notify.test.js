@@ -127,6 +127,14 @@ test("community coordinates count as trusted for commute filters", () => {
   assert.equal(isGeoReady({ ...listingBase, route_kms: [16] }, commuteSettings), true);
   assert.equal(passesGeoFilters({ ...listingBase, route_kms: [16] }, commuteSettings), false);
   assert.equal(passesGeoFilters({ ...listingBase, route_kms: [9, 11] }, commuteSettings), true);
+  assert.equal(passesGeoFilters({
+    ...listingBase,
+    location_class: "street",
+    geo_source: "geocode",
+    commute_km: 17.2,
+    route_km: 17.2,
+    route_kms: [17.2],
+  }, { ...commuteSettings, commuteKm: 12.4 }, { strict: false }), false);
 });
 
 test("commute work jobs come from member settings, not empty global defaults", () => {
