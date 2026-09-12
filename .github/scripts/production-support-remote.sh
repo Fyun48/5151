@@ -51,7 +51,9 @@ def progress(*args):
 source = sqlite3.connect(src.resolve().as_uri() + '?mode=ro', uri=True, timeout=5)
 target = sqlite3.connect(dest)
 try:
-    source.backup(target, pages=256, progress=progress, sleep=0.1)
+    # Match the existing production predeploy backup: copy all pages in one
+    # backup step. Small page batches repeatedly restart under crawler writes.
+    source.backup(target, progress=progress)
     if target.execute('PRAGMA integrity_check').fetchall() != [('ok',)]:
         raise RuntimeError('Snapshot integrity check failed')
 finally:
