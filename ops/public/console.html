@@ -120,7 +120,7 @@
             <span class="grow"></span>
             <button type="button" id="productsRefresh">重新整理</button>
           </div>
-          <p class="hint">四種退出動作不同：暫停、解除訂閱、移交整站、刪除 OPS 複本。跨站分析、統計指標、後續服務預設關，回饋複製不會自動包含。解除訂閱後除非另開「退出後保留」，否則停新洞察。刪複本才清向量與匯出副本；清除帳本在還原後會再套用。晚到的分析、評估、提案、自動重評、製作／QA、遠端客服、隔離 staging、發行或 webhook 若訂閱世代已換，不會開新議題、把舊議題重開、寫入新結果、開 PR、外送客服命令、佈測試站或通知。正式部署狀態不明時，先確認該環境實際結果，再完成移交；已送出的部署不宣稱撤回。</p>
+          <p class="hint">四種退出動作不同：暫停、解除訂閱、移交整站、刪除 OPS 複本。跨站分析、統計指標、後續服務預設關，回饋複製不會自動包含。解除訂閱後除非另開「退出後保留」，否則停新洞察。刪複本才清向量與匯出副本；清除帳本在還原後會再套用。晚到的分析、評估、提案、自動重評、製作／QA、遠端客服、隔離 staging、發行或 webhook 若訂閱世代已換，不會開新議題、把舊議題重開、寫入新結果、開 PR、外送客服命令、佈測試站或通知。測試中的獨立 QA 可取消；已在跑的不宣稱撤回，已完成的結果不改寫。正式部署狀態不明時，先確認該環境實際結果，再完成移交；已送出的部署不宣稱撤回。</p>
           <p class="msg" id="productMsg" role="status"></p>
           <section id="secretOnce" class="secret-card" hidden>
             <h3>新 ingest 密鑰（只顯示一次）</h3>
@@ -188,7 +188,7 @@
             <span class="grow"></span>
             <button type="button" id="devRefresh">重新整理</button>
           </div>
-          <p class="hint">製作任務 → 獨立 QA → 隔離 staging → 發行候選。Gate #2 只寫授權，<strong>不會部署正式機</strong>。反悔隔離環境＝停止測試容器，正式站無感。</p>
+          <p class="hint">製作任務 → 獨立 QA → 隔離 staging → 發行候選。Gate #2 只寫授權，<strong>不會部署正式機</strong>。獨立 QA 可取消尚未完成的檢查；已在跑的不宣稱撤回。反悔隔離環境＝停止測試容器，正式站無感。</p>
           <p class="msg" id="devMsg" role="status" tabindex="-1"></p>
           <div class="tbl-wrap">
             <table class="tbl" id="devTable" aria-busy="false">
@@ -204,6 +204,7 @@
           <div class="row wrap" id="devActions" hidden>
             <button type="button" id="devCancelTask">取消製作任務</button>
             <button type="button" id="devRerunQa">重跑獨立 QA</button>
+            <button type="button" id="devCancelQa">取消獨立 QA</button>
             <button type="button" id="devRedeploy">重佈隔離 staging</button>
             <button type="button" id="devCancelStg">取消 staging</button>
             <button type="button" id="devCleanupStg">停止測試容器</button>
@@ -268,6 +269,6 @@
     </div>
   </div>
 
-  <script src="/console.js?v=20260912-pkg19"></script>
+  <script src="/console.js?v=20260912-pkg20"></script>
 </body>
 </html>

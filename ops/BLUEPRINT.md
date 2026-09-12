@@ -366,6 +366,14 @@ Owner 直達部署從現在就保留，不必等第 8 包。OPS 新工作流是�
 - 未決清單列出未送出／外送中的遠端客服。
 - 反悔：關掉 `remote_cs` 或解除訂閱。不開 live、不合 master。
 
+### 包 20 — 測試中的 QA 取消
+
+- Owner 對尚未完成的獨立 QA 可送取消要求，並看到取消結果。
+- pending／claimed／running／failed_retry 可取消；已完成的結果不改寫。
+- 已在跑的檢查不宣稱撤回 worktree；晚到完成不寫入 `development_qa_current`。
+- 未決清單與開發發行畫面都看得到這扇門。
+- 反悔：不按取消。不開 live、不合 master、不接真 Cursor。
+
 ---
 
 ## 12. 我堅持的理想（用來審每一個 PR）
