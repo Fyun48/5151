@@ -122,6 +122,8 @@ const STATUS_LABEL = {
   cancelled: "已取消",
   unknown: "狀態不明",
   PRODUCTION_STATE_UNKNOWN: "狀態不明",
+  subscription_revoked: "訂閱已撤",
+  stale_generation: "世代已換",
 };
 
 const EXIT_ACTION_LABEL = {
@@ -143,6 +145,7 @@ const PENDING_KIND_LABEL = {
   staging: "隔離 staging",
   production_release: "正式發布",
   release_notification: "發布通知",
+  reevaluation: "自動重評",
 };
 
 const ACTION_ERROR = {
@@ -538,7 +541,7 @@ function requestProductAction(id, action) {
   if (action === "unsubscribe") {
     showConfirm({
       title: "確認解除訂閱",
-      body: `確定解除「${name}」（${id}）的訂閱？此站將停止傳送，現有密鑰立即失效。產品卡會留下摘要，之後可重新連接。`,
+      body: `確定解除「${name}」（${id}）的訂閱？此站將停止傳送，現有密鑰立即失效。自動重評不會把舊議題重開。產品卡會留下摘要，之後可重新連接。`,
       confirmLabel: "確定解除",
       onConfirm: () => runProductAction(id, "unsubscribe"),
     });

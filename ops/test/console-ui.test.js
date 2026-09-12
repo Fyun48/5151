@@ -109,7 +109,7 @@ test("tab panes honor the hidden attribute (display:grid must not override it)",
   assert.match(html, /遠端客服預設關/);
   assert.match(js, /grant-insight/);
   assert.match(html, /跨站分析、統計指標、後續服務預設關/);
-  assert.match(html, /晚到的分析、評估、提案、製作／QA/);
+  assert.match(html, /晚到的分析、評估、提案、自動重評、製作／QA/);
   assert.match(html, /隔離 staging/);
   assert.match(html, /正式部署狀態不明時，先確認該環境實際結果，再完成移交/);
   assert.match(js, /正式部署狀態不明時會拒絕移交/);
