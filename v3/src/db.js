@@ -29,6 +29,7 @@ import { listingRefreshAt, matchFocusHints, preferPrimaryListing } from "./match
 import {
   ensureUserSameHouseSchema,
   loadPersonalSameHouseIds,
+  loadPersonalSameHouseIndex,
   mergePersonalSameHouse,
   normalizeMergeIds,
   personalGroupAgrees,
@@ -1484,6 +1485,20 @@ export function isCrawlSourceEnabled(id) {
   return crawlSourceEnabled(getCrawlSources().items, id);
 }
 
+export function getRakuyaPageCursors() {
+  return settingKey("rakuyaPageCursors") || {};
+}
+
+export function saveRakuyaPageCursors(progress) {
+  const next = { ...getRakuyaPageCursors() };
+  for (const row of progress || []) {
+    if (Number(row.regionId) > 0 && Number.isFinite(Number(row.nextPage))) {
+      next[Number(row.regionId)] = Math.max(2, Math.floor(Number(row.nextPage)));
+    }
+  }
+  writeSettingKey("rakuyaPageCursors", next);
+}
+
 export function listDemand(opts = {}) {
   getWishConditions();
   return listDemandPostsOn(db, opts);
@@ -2148,7 +2163,7 @@ function loadSameHousePeers(row, userId) {
     seed.clear();
     const placeholders = ids.map(() => "?").join(",");
     const rows = db.prepare(
-      `SELECT post_id, title, url, price, price_num, extra_fee, extra_fees, extra_fee_text,
+      `SELECT post_id, source_id, title, url, price, price_num, extra_fee, extra_fees, extra_fee_text,
               price_contain_text, floor_name, area_name, layout, source, offline, offline_confirmed,
               hidden, match_post_id, match_level, match_verdict, match_detail,
               cost_changed_at, cost_change_detail, cost_change_type, last_seen_at, refresh_time
@@ -2168,7 +2183,7 @@ function loadSameHousePeers(row, userId) {
     const gid = groupIdForPost(db, selfId);
     if (gid) {
       const extras = db.prepare(
-        `SELECT l.post_id, l.title, l.url, l.price, l.price_num, l.extra_fee, l.extra_fees, l.extra_fee_text,
+        `SELECT l.post_id, l.source_id, l.title, l.url, l.price, l.price_num, l.extra_fee, l.extra_fees, l.extra_fee_text,
                 l.price_contain_text, l.floor_name, l.area_name, l.layout, l.source, l.offline, l.offline_confirmed,
                 l.hidden, l.match_post_id, l.match_level, l.match_verdict, l.match_detail,
                 l.cost_changed_at, l.cost_change_detail, l.cost_change_type, l.last_seen_at, l.refresh_time
@@ -2271,6 +2286,7 @@ function loadUserSplitPairSet(userId) {
 function attachSameHouseRoles(rows, voteUserId) {
   const list = Array.isArray(rows) ? rows : [];
   if (!list.length) return list;
+  const personal = loadPersonalSameHouseIndex(db, voteUserId);
   const byId = new Map(list.map((row) => [Number(row.post_id), row]));
   const missing = new Set();
   for (const row of list) {
@@ -2278,7 +2294,7 @@ function attachSameHouseRoles(rows, voteUserId) {
     const mid = Number(row.match_post_id) || 0;
     if (mid && !byId.has(mid)) missing.add(mid);
     if (voteUserId) {
-      for (const pid of loadPersonalSameHouseIds(db, voteUserId, row.post_id)) {
+      for (const pid of personal.peers(row.post_id)) {
         if (!byId.has(pid)) missing.add(pid);
       }
     }
@@ -2288,7 +2304,7 @@ function attachSameHouseRoles(rows, voteUserId) {
     const ids = [...missing];
     const placeholders = ids.map(() => "?").join(",");
     const found = db.prepare(
-      `SELECT post_id, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text,
+      `SELECT post_id, source, source_id, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text,
               refresh_time, last_seen_at, hidden, offline, match_verdict, match_level
        FROM listings WHERE post_id IN (${placeholders})`,
     ).all(...ids);
@@ -2322,7 +2338,7 @@ function attachSameHouseRoles(rows, voteUserId) {
   if (voteUserId) {
     const grouped = new Map();
     for (const row of list) {
-      const key = personalGroupKeyFor(db, voteUserId, row.post_id);
+      const key = personal.groupKey(row.post_id);
       if (!key) continue;
       if (!grouped.has(key)) grouped.set(key, []);
       grouped.get(key).push(row);
@@ -2338,7 +2354,7 @@ function attachSameHouseRoles(rows, voteUserId) {
       };
       for (const row of members) {
         add(row);
-        for (const pid of loadPersonalSameHouseIds(db, voteUserId, row.post_id)) add(resolve(pid));
+        for (const pid of personal.peers(row.post_id)) add(resolve(pid));
       }
       if (pool.length < 2) continue;
       const primary = pool.reduce((best, item) => preferPrimaryListing(best, item), pool[0]);
@@ -2769,7 +2785,8 @@ function searchWhere(searchKeys, clauses, params) {
 }
 
 function listingVisibilityClauses(clauses, params) {
-  expireOpenSelfListingsOn(db);
+  // The expiry predicate below is sufficient for reads. An UPDATE here would
+  // wait up to busy_timeout for a crawler/importer even when no row expires.
   const stamp = new Date().toISOString();
   const openSelf = sqlOpenSelfListing(stamp);
   clauses.push(openSelf.sql);
@@ -3922,10 +3939,12 @@ function makeRouteJobKey(postId, direction, kind, mode, workLat, workLng) {
   ].join("|");
 }
 
+let routeJobByKeyStmt;
 export function getRouteJob(jobKey) {
   if (!jobKey) return null;
   try {
-    return db.prepare("SELECT * FROM route_jobs WHERE job_key = ?").get(jobKey) || null;
+    routeJobByKeyStmt ||= db.prepare("SELECT * FROM route_jobs WHERE job_key = ?");
+    return routeJobByKeyStmt.get(jobKey) || null;
   } catch {
     return null;
   }
@@ -4288,16 +4307,19 @@ function commuteMissingLast(a, b, dir = 1) {
 
 export function sortListingsRows(rows, sort = "price_asc", { filter, settings, now = Date.now() } = {}) {
   const list = [...(rows || [])];
+  const updated = new Map(list.map(row => [row, listingEffectiveUpdatedAt(row, now)]));
+  const prices = /^(price_asc|price_desc)$/.test(sort)
+    ? new Map(list.map(row => [row, rentSortValue(row, settings)])) : null;
   const byId = (a, b) => (Number(a.post_id) || 0) - (Number(b.post_id) || 0);
-  const byUpdated = (a, b) => listingEffectiveUpdatedAt(b, now) - listingEffectiveUpdatedAt(a, now) || byId(a, b);
+  const byUpdated = (a, b) => updated.get(b) - updated.get(a) || byId(a, b);
   if (sort === "commute_asc") {
     list.sort((a, b) => commuteMissingLast(a, b, 1) || byUpdated(a, b));
   } else if (sort === "commute_desc") {
     list.sort((a, b) => commuteMissingLast(a, b, -1) || byUpdated(a, b));
   } else if (sort === "price_desc") {
     list.sort((a, b) => {
-      const pa = rentSortValue(a, settings);
-      const pb = rentSortValue(b, settings);
+      const pa = prices.get(a);
+      const pb = prices.get(b);
       if ((pa > 0) !== (pb > 0)) return pa > 0 ? -1 : 1;
       return pb - pa || byUpdated(a, b);
     });
@@ -4313,10 +4335,21 @@ export function sortListingsRows(rows, sort = "price_asc", { filter, settings, n
       return (sb || 0) - (sa || 0) || byUpdated(a, b);
     });
   } else {
-    list.sort((a, b) => priceSortKey(a, settings) - priceSortKey(b, settings) || byUpdated(a, b));
+    const key = row => prices ? prices.get(row) > 0 ? prices.get(row) : Number.MAX_SAFE_INTEGER : priceSortKey(row, settings);
+    list.sort((a, b) => key(a) - key(b) || byUpdated(a, b));
   }
   return list;
 }
+
+// All fields used by profile filters, grouping and sorting. Large bodies, photos,
+// contact details and equipment are loaded only for the selected page.
+const LIST_CANDIDATE_COLUMNS = `post_id, source, source_id, source_key, url, price, price_num,
+  extra_fee, extra_fees, extra_fee_text, price_contain_text,
+  title, address, address_norm, area_name, layout, floor_name, kind_name, tags,
+  role_name, contact_name, contact_role, contact_uid, agency,
+  lat, lng, geo_source, location_class, match_post_id, match_level,
+  match_verdict, match_rejected, offline, offline_confirmed, hidden, hidden_at,
+  last_event, first_seen_at, last_seen_at, refresh_time, listed_by_user_id, self_status`;
 
 export function listListings({
   filter = "all",
@@ -4409,10 +4442,10 @@ export function listListings({
     params.push(like, like, like, uid, like);
   }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-  const raw = db.prepare(`SELECT * FROM listings ${where}`).all(...params);
+  const raw = db.prepare(`SELECT ${LIST_CANDIDATE_COLUMNS} FROM listings ${where}`).all(...params);
   const settings = settingsOverride || getSettings(uid);
   const flagMap = loadFlagMap(db, uid);
-  const overlaid = overlayRowsPersonal(raw, flagMap);
+  const overlaid = overlayRowsPersonal(raw, flagMap, { inPlace: true });
   let rows =
     filter === "offline" || filter === "suspected"
       ? overlaid.filter((row) => passesPriceFilter(row, settings))
@@ -4440,15 +4473,26 @@ export function listListings({
 
   const needFit = sort === "fit_desc";
   if (needFit) {
-    rows = rows.map((row) => decorateListingLite(row, settings, uid));
+    for (const row of rows) {
+      const located = applyCachedCoords(row, settings);
+      const km = canUseForRoadDistance(effectiveNotifyLocationClass(located, settings))
+        && Number.isFinite(Number(located.route_km)) ? Math.round(Number(located.route_km) * 10) / 10 : null;
+      row.fit_score = listingFitFields({ ...located, commute_km: km }, settings).fit_score;
+    }
   }
   rows = sortListingsRows(rows, sort, { filter, settings });
 
   const totalMatched = rows.length;
   const pageSize = Math.max(1, Math.min(Number(limit) || 500, 500));
   const start = Math.max(0, Number(offset) || 0);
-  const listings = rows.slice(start, start + pageSize).map((row) => {
-    const lite = needFit ? row : decorateListingLite(row, settings, uid);
+  const page = rows.slice(start, start + pageSize);
+  const fullRows = page.length ? db.prepare(
+    `SELECT * FROM listings WHERE post_id IN (${page.map(() => "?").join(",")})`,
+  ).all(...page.map(row => row.post_id)) : [];
+  const fullById = new Map(fullRows.map(row => [Number(row.post_id), row]));
+  // A separate importer may remove a row between the candidate and page reads.
+  const listings = page.filter(row => fullById.has(Number(row.post_id))).map((row) => {
+    const lite = decorateListingLite(Object.assign(fullById.get(Number(row.post_id)), row), settings, uid);
     const needPeers = sameHouse !== false && Boolean(row.match_post_id || row.same_house_role);
     return finalizeListingDecorate(lite, settings, uid, { sameHouse: needPeers, matchVoteUserId: voteUid });
   });
@@ -4744,8 +4788,9 @@ export function holdStatsCache(ms = 15000) {
 }
 
 function statsCacheKey(uid, searchKeys, settingsOverride) {
-  if (!settingsOverride) return `${uid}|${JSON.stringify(searchKeys || null)}`;
-  return `${uid}|${JSON.stringify(searchKeys || null)}|${Number(settingsOverride.commuteKm) || 0}|${settingsOverride.workLat || ""}|${settingsOverride.workLng || ""}|${settingsOverride.commuteMode || ""}`;
+  // Settings overrides include prices, exclusions and district scope as well as commute.
+  return JSON.stringify([uid, searchKeys || null, settingsOverride || getSettings(uid),
+    db.prepare("SELECT total_changes() AS n").get().n, db.prepare("PRAGMA data_version").get().data_version]);
 }
 
 export function stats(searchKeys, userId, settingsOverride) {
@@ -4767,14 +4812,15 @@ export function stats(searchKeys, userId, settingsOverride) {
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const raw = db
     .prepare(
-      `SELECT viewed, watched, hidden, offline, offline_confirmed, last_event, floor_name, kind_name, title, address, area_name, lat, lng, geo_source, tags, match_level, match_rejected, match_verdict, post_id, source, source_key, listed_by_user_id, price_num, self_status FROM listings ${where}`,
+      `SELECT ${LIST_CANDIDATE_COLUMNS} FROM listings ${where}`,
     )
     .all(...params);
   const flagMap = loadFlagMap(db, uid);
-  const overlaid = overlayRowsPersonal(raw, flagMap)
+  const overlaid = overlayRowsPersonal(raw, flagMap, { inPlace: true })
     .filter((row) => keepSelfListingForViewer(row, uid, settings, listingInMemberScope));
   const profileRows = applyProfileScope(overlaid, settings);
   const browse = profileRows.filter(countsTowardAllTotal);
+  const failedRouteJobs = new Set(db.prepare("SELECT job_key FROM route_jobs WHERE job_state = 'failed'").all().map(row => row.job_key));
   const out = {
     total: browse.length,
     unseen: browse.filter((row) => !row.viewed).length,
@@ -4800,15 +4846,15 @@ export function stats(searchKeys, userId, settingsOverride) {
         Number.isFinite(Number(geo.lng)) &&
         !(Array.isArray(geo.route_kms) && geo.route_kms.length)
       )) return false;
-      const job = getRouteJob(makeRouteJobKey(
+      const jobKey = makeRouteJobKey(
         row.post_id,
         "to_work",
         "distance",
         settings.commuteMode,
         settings.workLat,
         settings.workLng,
-      ));
-      return String(job?.job_state || "") !== "failed";
+      );
+      return !failedRouteJobs.has(jobKey);
     }).length,
     dbTotal: listingCount(),
   };

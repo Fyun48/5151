@@ -5,14 +5,17 @@ import { sanitizeFloorName } from "./floors.js";
 import { decodeEntities } from "./htmlEntities.js";
 import { hasListingMainContent, looksLikeCaptchaOrLogin, looksLikeChallengePage, looksLikeUnavailable } from "./importSanitize.js";
 import { listingKitFields, listingKitFrom } from "./listingKit.js";
-import { extractMapFromHtml, sourceMapPin } from "./location.js";
+import { hasHouseNumber, extractMapFromHtml, sourceMapPin } from "./location.js";
 import { feeFieldsFromBlob } from "./listingCost.js";
+import { CITIES } from "./regions.js";
+import { coverToListUrl } from "./covering.js";
 
 export const RAKUYA_SOURCE = "rakuya";
 export const RAKUYA_POST_ID_BASE = 2_700_000_000;
 export const RAKUYA_POST_ID_END = 2_800_000_000;
 export const RAKUYA_SITE = "https://www.rakuya.com.tw";
-export const RAKUYA_LIST_PATH = "/rent_search/index";
+export const RAKUYA_RENT_SITE = "https://rent.rakuya.com.tw";
+export const RAKUYA_LIST_PATH = "/result";
 export const RAKUYA_PAGE_GAP_MS = 800;
 export const RAKUYA_MAX_PAGES = 4;
 
@@ -28,28 +31,32 @@ export function rakuyaDetailUrl(ehid, communityId = "") {
   const id = String(ehid || "").trim();
   const community = String(communityId || "").trim();
   if (community && id) return `https://community.rakuya.com.tw/${encodeURIComponent(community)}/rent/${encodeURIComponent(id)}`;
-  if (!id) return `${RAKUYA_SITE}${RAKUYA_LIST_PATH}`;
-  return `${RAKUYA_SITE}/rent_item/info?ehid=${encodeURIComponent(id)}`;
+  if (!id) return `${RAKUYA_RENT_SITE}${RAKUYA_LIST_PATH}`;
+  return `${RAKUYA_RENT_SITE}/item/${encodeURIComponent(id)}`;
 }
 
-export function rakuyaListUrl({ regionId = "", sectionId = "", page = 1 } = {}) {
-  const params = new URLSearchParams({ search: "city", city: String(regionId || "") });
-  if (sectionId) params.set("section", String(sectionId));
+// Verified against the portal's city pages; these are NOT 591 region IDs.
+const RAKUYA_CITY_CODES = { 1: 0, 2: 1, 3: 2 };
+export function rakuyaListUrl({ regionId = "", page = 1 } = {}) {
+  const city = RAKUYA_CITY_CODES[Number(regionId)];
+  if (city == null) return "";
+  const params = new URLSearchParams({ city: String(city) });
   if (Number(page) > 1) params.set("page", String(Number(page) || 1));
-  return `${RAKUYA_SITE}${RAKUYA_LIST_PATH}?${params}`;
+  return `${RAKUYA_RENT_SITE}${RAKUYA_LIST_PATH}?${params}`;
 }
 
 export function ehidFromRakuyaUrl(pageUrl = "") {
   try {
     const url = new URL(String(pageUrl || ""), RAKUYA_SITE);
-    return String(url.searchParams.get("ehid") || (url.pathname.match(/\/rent\/([a-z0-9]+)/i) || [])[1] || "").trim();
+    return String(url.searchParams.get("ehid") || (url.pathname.match(/\/(?:rent|item)\/([a-z0-9]+)/i) || [])[1] || "").trim();
   } catch {
     return "";
   }
 }
 
 export function districtNameFromRakuyaAddress(address = "") {
-  return String((String(address || "").match(/([\u4e00-\u9fff]{1,3}區)/) || [])[1] || "").trim();
+  const hay = String(address || "");
+  return CITIES.flatMap(city => city.districts).find(district => hay.includes(district.name))?.name || "";
 }
 
 function sleep(ms) {
@@ -64,9 +71,11 @@ export function rakuyaPostIdFromEhid(ehid) {
   return RAKUYA_POST_ID_BASE + (digest.readUInt32BE(0) % span);
 }
 
-export function rakuyaSourceKey({ regionId, sectionId, address, floor, area, layout }) {
+export function rakuyaSourceKey({ regionId, sectionId, address, floor, area, layout, ehid }) {
   const addr = String(address || "").replace(/\s+/g, "").toLowerCase();
-  return [regionId || "", sectionId || "", "", addr, floor || "", area || "", layout || ""].join("|");
+  // District/road-only data cannot identify a house or inherit another house's flags.
+  const identity = !hasHouseNumber(address) && ehid ? `rakuya:${ehid}` : "";
+  return [regionId || "", sectionId || "", identity, addr, floor || "", area || "", layout || ""].join("|");
 }
 
 export function interpretRakuyaResponse({ status, text } = {}) {
@@ -149,6 +158,46 @@ export function parseRakuyaListHtml(html) {
         address: address ? "parsed" : "missing",
         price: price ? "parsed" : "missing",
       },
+    });
+  }
+  // Current public result pages link the whole card to /item/:id or a
+  // community /rent/:id page. Keep this fallback scoped to that one link.
+  const linkRe = /<a\b([^>]*\bhref=["']([^"']+)["'][^>]*)>([\s\S]*?)<\/a>/gi;
+  while ((m = linkRe.exec(String(html || "")))) {
+    let url;
+    try { url = new URL(decodeEntities(m[2]), RAKUYA_RENT_SITE); } catch { continue; }
+    if (url.protocol !== "https:" || !["rent.rakuya.com.tw", "community.rakuya.com.tw"].includes(url.hostname)) continue;
+    const ehid = ehidFromRakuyaUrl(url.href);
+    if (!ehid || seen.has(ehid)) continue;
+    const block = m[3];
+    const heading = textOf((block.match(/<h[1-4]\b[^>]*>([\s\S]*?)<\/h[1-4]>/i) || [])[1]
+      || (m[1].match(/\btitle=["']([^"']+)["']/i) || [])[1] || "");
+    if (!heading) continue;
+    const locationText = textOf(block.replace(/<h[1-4]\b[^>]*>[\s\S]*?<\/h[1-4]>/gi, "")
+      .replace(/<(?:del|s)\b[^>]*>[\s\S]*?<\/(?:del|s)>/gi, "")).replace(heading, "");
+    const prices = [...new Set([...locationText.matchAll(/([\d,]+)\s*元(?:\s*\/\s*月)?/g)].map(hit => hit[1]))];
+    const areas = [...new Set([...locationText.matchAll(/(?:主建|建物|使用)?\s*([\d.]+)\s*坪/g)].map(hit => hit[1]))];
+    if (prices.length !== 1 || areas.length !== 1) continue;
+    const [price] = prices;
+    const [areaName] = areas;
+    const names = [...new Set(CITIES.flatMap(city => city.districts).filter(row => locationText.includes(row.name)).map(row => row.name))];
+    const district = names.length === 1 ? names[0] : "";
+    const kind = (locationText.slice(locationText.indexOf(district) + district.length).match(
+      /(整層住家|分租套房|獨立套房|雅房|店面|倉庫|廠房|住辦|商用)(?:\s*[／/]?\s*(電梯大廈|電梯大樓|華廈|公寓|透天厝|別墅|辦公))?/,
+    ) || [])[0] || "";
+    if (!price || !areaName || !district || !kind) continue;
+    const title = heading;
+    if (!title) continue;
+    seen.add(ehid);
+    items.push({
+      ehid, url: url.href, title, price, areaName: `${areaName}坪`, kind,
+      // A community name or road-only label does not establish a street address.
+      address: district,
+      layout: (locationText.match(/\d+房(?:\d+廳)?(?:[\d.]+衛)?|開放式格局/) || [])[0] || "",
+      floorName: (locationText.match(/(?:B?\d+(?:[~～-]\d+)?\/\d+樓|頂樓加蓋)/i) || [])[0] || "",
+      refresh: (locationText.match(/(?:\d+\s*(?:分鐘|小時|天|個月|年)前)更新/) || [])[0]?.replace(/更新$/, "") || "",
+      cover: decodeEntities((block.match(/<img[^>]+(?:data-src|src)=["']([^"']+)["']/i) || [])[1] || ""),
+      field_status: { title: "parsed", price: "parsed", address: "district_only" },
     });
   }
   return items;
@@ -260,9 +309,10 @@ export function normalizeRakuyaItem(item, { regionId = "", sectionId = "" } = {}
       floor,
       area,
       layout,
+      ehid,
     }),
     title: String(item.title || "").trim() || "(無標題)",
-    url: rakuyaDetailUrl(ehid, item.communityId),
+    url: item.url || rakuyaDetailUrl(ehid, item.communityId),
     price: Number.isFinite(priceNum) && priceNum > 0 ? String(Math.round(priceNum)) : "",
     price_num: Number.isFinite(priceNum) && priceNum > 0 ? Math.round(priceNum) : 0,
     ...feeFieldsFromBlob({ blob: String(item.price || "") }),
@@ -297,7 +347,30 @@ export function normalizeRakuyaItem(item, { regionId = "", sectionId = "" } = {}
 }
 
 function looksLikeRakuyaEmptyResult(html) {
-  return /找不到物件|沒有符合|搜尋結果[：:]\s*0|0\s*筆/.test(String(html || ""));
+  return /找不到物件|沒有符合|搜尋結果[：:]\s*0(?:\D|$)|(?:^|[^\d])0\s*筆/.test(String(html || ""));
+}
+
+/** Repair only orphaned Rakuya associations with an explicit, unambiguous address. */
+export function repairRakuyaScopes(conn, jobs) {
+  const rows = conn.prepare("SELECT post_id, source_key, address FROM listings WHERE source = 'rakuya' AND search_key = ''").all();
+  const update = conn.prepare("UPDATE listings SET search_key = ?, source_key = ? WHERE post_id = ? AND source = 'rakuya' AND search_key = ''");
+  let repaired = 0;
+  for (const row of rows) {
+    const address = String(row.address || "").replaceAll("臺", "台");
+    const city = CITIES.find(item => address.includes(item.name.replaceAll("臺", "台")));
+    const district = city?.districts.find(item => address.includes(item.name));
+    if (!city || !district) continue;
+    const job = (jobs || []).find(item => Number(item.regionId) === Number(city.id)
+      && (!item.sectionIds?.length || item.sectionIds.map(Number).includes(Number(district.id))));
+    if (!job) continue;
+    const key = job.searchUrl || coverToListUrl(job);
+    if (!key) continue;
+    const bits = String(row.source_key || "").split("|");
+    bits[0] = String(city.id);
+    bits[1] = String(district.id);
+    repaired += Number(update.run(key, bits.join("|"), row.post_id).changes);
+  }
+  return repaired;
 }
 
 export async function fetchRakuyaCoveringListings(jobs, options = {}) {
@@ -309,53 +382,83 @@ export async function fetchRakuyaCoveringListings(jobs, options = {}) {
     const text = await res.text();
     return { status: res.status, text };
   });
-  const maxPages = Math.max(1, Number(options.maxPages || RAKUYA_MAX_PAGES) || RAKUYA_MAX_PAGES);
+  const maxPages = Math.max(1, Math.min(12, Number(options.maxPages ?? options.pages) || RAKUYA_MAX_PAGES));
   const batches = [];
+  let sourcePaused = false;
   for (const job of jobs || []) {
+    if (sourcePaused) break;
     const regionId = Number(job.regionId) || 0;
     const seen = new Set();
     const listings = [];
-    let stopReason = "complete";
-    for (let page = 1; page <= maxPages; page += 1) {
+    const errors = [];
+    const searchUrl = job.searchUrl || coverToListUrl(job);
+    const city = CITIES.find(row => Number(row.id) === regionId);
+    let stopReason = "page_limit";
+    // Refresh page one every run; spend the remaining budget continuing coverage.
+    const resumePage = Math.max(2, Math.floor(Number(options.startPages?.[regionId]) || 2));
+    const pageNumbers = [1, ...Array.from({ length: maxPages - 1 }, (_, i) => resumePage + i)];
+    let nextPage = resumePage;
+    let headValid = false;
+    let resetReason = "";
+    for (const page of pageNumbers) {
       const url = rakuyaListUrl({ regionId, page });
-      const got = await fetchRakuyaListPage({ fetchText, url });
+      let got;
+      try {
+        got = url ? await fetchRakuyaListPage({ fetchText, url })
+          : { ok: false, code: "UNSUPPORTED_REGION", message: "樂屋網縣市代碼尚未驗證" };
+      } catch (error) {
+        got = { ok: false, code: error.code || "FETCH_FAILED", message: error.message };
+      }
       if (!got.ok) {
-        if (!listings.length) {
-          throw Object.assign(new Error(got.message || "樂屋網無法抓取"), { code: got.code, retryable: got.retryable });
+        errors.push({ code: got.code, message: got.message || "樂屋網無法抓取", page });
+        sourcePaused = ["FETCH_BLOCKED", "RATE_LIMITED"].includes(got.code);
+        if (headValid && page > 1 && got.httpStatus === 404) {
+          nextPage = 2;
+          resetReason = "PAGE_OUT_OF_RANGE";
         }
         stopReason = got.code || "partial";
         break;
       }
       const pageItems = got.items || [];
+      if (page === 1) headValid = true;
       let added = 0;
       for (const item of pageItems) {
         const ehid = String(item.ehid || "").trim();
         if (!ehid || seen.has(ehid)) continue;
         seen.add(ehid);
+        added += 1;
+        const districtName = districtNameFromRakuyaAddress(item.address);
+        const district = city?.districts.find(row => row.name === districtName);
+        // Do not stamp another district/city onto a result from a broad city page.
+        if (!district || (job.sectionIds?.length && !job.sectionIds.map(Number).includes(Number(district.id)))) continue;
         const row = normalizeRakuyaItem(item, {
           regionId,
-          sectionId: districtNameFromRakuyaAddress(item.address),
+          sectionId: district.id,
         });
         if (row) {
           listings.push(row);
-          added += 1;
         }
       }
       if (got.code === "SUCCESS_EMPTY" || !pageItems.length) {
         stopReason = got.code === "SUCCESS_EMPTY" ? "empty" : "end";
+        nextPage = 2;
         break;
       }
       if (!added) {
         stopReason = "duplicate";
+        nextPage = 2;
         break;
       }
-      if (page < maxPages) await sleep(options.pageGapMs ?? RAKUYA_PAGE_GAP_MS);
+      if (page > 1) nextPage = page + 1;
+      if (page !== pageNumbers.at(-1)) await sleep(options.pageGapMs ?? RAKUYA_PAGE_GAP_MS);
     }
-    if (listings.length === 0 && stopReason === "complete") stopReason = "end";
     batches.push({
+      searchUrl,
       listings,
       total: listings.length,
-      parsed: { label: "樂屋網", source: RAKUYA_SOURCE, stopReason },
+      errors,
+      progress: { regionId, nextPage, resetReason },
+      parsed: { label: "樂屋網", source: RAKUYA_SOURCE, href: rakuyaListUrl({ regionId }), stopReason },
     });
   }
   return batches;
@@ -368,7 +471,7 @@ export async function fetchRakuyaListPage({ fetchText, url } = {}) {
   const got = await fetchText(url, { headers: { "User-Agent": USER_AGENT, Accept: "text/html" } });
   const html = got.text || got.body || "";
   const judged = interpretRakuyaResponse({ status: got.status, text: html });
-  if (!judged.ok) return { ...judged, items: [] };
+  if (!judged.ok) return { ...judged, httpStatus: Number(got.status), items: [] };
   const items = parseRakuyaListHtml(html);
   if (!items.length) {
     if (looksLikeRakuyaEmptyResult(html)) {

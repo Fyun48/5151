@@ -65,7 +65,12 @@ export function parseDdApiBody(body) {
   const search = body?.data?.search && typeof body.data.search === "object" ? body.data.search : {};
   const items = Array.isArray(search.items) ? search.items : [];
   const total = Number(search.total);
+  const ok = Array.isArray(search.items) && search.total != null && String(search.total).trim() !== ""
+    && Number.isFinite(total) && total >= 0
+    && (total === 0 || items.length > 0);
   return {
+    ok,
+    code: ok ? items.length ? "SUCCESS" : "SUCCESS_EMPTY" : "PARSE_FAILED",
     total: Number.isFinite(total) ? total : items.length,
     items: items.filter((row) => row && typeof row === "object" && row.object_id),
     lastPage: Number(search.last_page) || 0,
@@ -74,6 +79,9 @@ export function parseDdApiBody(body) {
 
 export function kindFromDdItem(item) {
   const space = String(item?.type_space || "").toLowerCase();
+  const types = { whole: "整層住家", room: "雅房", share: "分租套房", studio: "獨立套房", shop: "店面", warehouse: "倉庫" };
+  if (types[space]) return types[space];
+  if (["office", "parking", "land"].includes(space)) return "";
   const name = String(item?.type_space_name || item?.title || "");
   if (space === "warehouse" || /倉庫|廠房/.test(name)) return "倉庫";
   if (space === "shop" || /店面/.test(name)) return "店面";
@@ -244,13 +252,14 @@ export function enrichDdListingFromObject(row, object) {
   return next;
 }
 
-export async function fetchDdObject(objectId, getJson = defaultGetJson) {
+export async function fetchDdObject(objectId, getJson = defaultGetJson, { throwBlocked = false } = {}) {
   const id = String(objectId || "").trim();
   if (!id) return null;
   try {
     const body = await getJson(ddObjectUrl(id));
     return body?.data?.object && typeof body.data.object === "object" ? body.data.object : null;
-  } catch {
+  } catch (error) {
+    if (throwBlocked && ["FETCH_BLOCKED", "RATE_LIMITED"].includes(error.code)) throw error;
     return null;
   }
 }
@@ -274,7 +283,9 @@ async function defaultGetJson(url) {
     signal: AbortSignal.timeout(15000),
   });
   if (res.status === 403 || res.status === 429 || res.status === 503) {
-    throw new Error(`租租通暫時無法抓取（HTTP ${res.status}）`);
+    throw Object.assign(new Error(`租租通暫時無法抓取（HTTP ${res.status}）`), {
+      code: res.status === 429 ? "RATE_LIMITED" : res.status === 403 ? "FETCH_BLOCKED" : "SOURCE_UNAVAILABLE",
+    });
   }
   if (!res.ok) throw new Error(`租租通搜尋 ${res.status}`);
   return res.json();
@@ -292,25 +303,37 @@ export async function fetchDdCoveringListings(jobs, options = {}) {
   const getJson = options.getJson || defaultGetJson;
   const batches = [];
   const seen = new Set();
+  let sourcePaused = false;
   let objectBudget = Math.max(0, Number(options.objectDetailLimit ?? 80));
 
   for (const job of jobs || []) {
+    if (sourcePaused) break;
     const regionId = Number(job.regionId) || 0;
     const city = ddCityName(regionId);
     const sectionIds = [...new Set((job.sectionIds || []).map(Number).filter((id) => id > 0))];
     if (!city || !sectionIds.length) continue;
 
     const listings = [];
+    const errors = [];
     let total = 0;
     const names = [];
     for (const sectionId of sectionIds) {
+      if (sourcePaused) break;
       const district = lookupDistrict(`${regionId}-${sectionId}`);
       const area = district?.name || "";
       if (!area) continue;
       names.push(area.replace(/區$/, ""));
       let areaTotal = 0;
       for (let page = 1; page <= pages; page += 1) {
-        const result = await fetchDdPage({ city, area, page, pageRows, getJson });
+        let result;
+        try {
+          result = await fetchDdPage({ city, area, page, pageRows, getJson });
+          if (!result.ok) throw Object.assign(new Error("租租通回應格式異常或列表無法解析"), { code: result.code });
+        } catch (error) {
+          errors.push({ code: error.code || "FETCH_FAILED", message: error.message, district: area, page });
+          sourcePaused = ["FETCH_BLOCKED", "RATE_LIMITED"].includes(error.code);
+          break;
+        }
         if (page === 1) {
           areaTotal = Number(result.total) || 0;
           total += areaTotal;
@@ -321,11 +344,16 @@ export async function fetchDdCoveringListings(jobs, options = {}) {
           let row = normalizeDdItem(item, { regionId, sectionId });
           if (!row) continue;
           const wantObject = options.objectDetail === true || (options.objectDetail !== false && getJson === defaultGetJson);
-          const needObject = wantObject && objectBudget > 0
+          const needObject = !sourcePaused && wantObject && objectBudget > 0
             && (!row.floor_name || !addressHasPrecisePart(row.address) || !parseFurnishItems(row).length);
           if (needObject) {
-            const detail = await fetchDdObject(id, getJson);
-            if (detail) row = enrichDdListingFromObject(row, detail);
+            try {
+              const detail = await fetchDdObject(id, getJson, { throwBlocked: true });
+              if (detail) row = enrichDdListingFromObject(row, detail);
+            } catch (error) {
+              sourcePaused = true;
+              errors.push({ code: error.code, message: error.message, district: area, page, stage: "detail" });
+            }
             objectBudget -= 1;
             const gap = options.detailGapMs ?? options.gapMs ?? 250;
             if (gap > 0) await new Promise((resolve) => setTimeout(resolve, gap));
@@ -338,7 +366,7 @@ export async function fetchDdCoveringListings(jobs, options = {}) {
           seen.add(id);
           listings.push(row);
         }
-        if (result.items.length < pageRows || page * pageRows >= areaTotal) break;
+        if (sourcePaused || result.items.length < pageRows || page * pageRows >= areaTotal) break;
         if (page < pages) await new Promise((resolve) => setTimeout(resolve, options.gapMs ?? 400));
       }
     }
@@ -351,6 +379,7 @@ export async function fetchDdCoveringListings(jobs, options = {}) {
       },
       total,
       listings,
+      errors,
     });
   }
 
