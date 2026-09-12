@@ -73,7 +73,7 @@ import { codingWorkerConfigFromEnv, startCodingLoop } from "./codingWorker.js";
 import { makeCodingProvider } from "./coding/provider.js";
 import { makeCodingRepo } from "./coding/gitRepo.js";
 import { makePrGateway } from "./coding/prGateway.js";
-import { getIssueQaView, getQaRunDetail, requestQaRerun } from "./qaRun.js";
+import { getIssueQaView, getQaRunDetail, requestQaRerun, cancelQaRun } from "./qaRun.js";
 import { qaWorkerConfigFromEnv, startQaLoop } from "./qaWorker.js";
 import { makeQaReviewProvider } from "./qa/reviewProvider.js";
 import { getCodingStagingView, getStagingDeployment, requestStagingRedeploy, cancelStagingDeployment, cleanupStagingDeployment } from "./stagingDeploy.js";
@@ -1082,6 +1082,17 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
         try {
           const r = requestQaRerun(db, Number(qaRerun[1]), { actor: `owner:${req.owner.email}` });
+          sendJson(res, 200, { ok: true, ...r });
+        } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+      const qaCancel = pathname.match(/^\/ops\/api\/qa-runs\/(\d+)\/cancel$/);
+      if (qaCancel && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {};
+        try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          const r = cancelQaRun(db, Number(qaCancel[1]), { actor: `owner:${req.owner.email}`, reason: b.reason });
           sendJson(res, 200, { ok: true, ...r });
         } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
         return;

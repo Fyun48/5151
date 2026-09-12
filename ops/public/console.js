@@ -718,7 +718,7 @@ function focusHeading(id) {
 }
 
 function closeDevDetail() {
-  devOpen = { taskId: 0, issueId: 0, stagingId: 0, release: null };
+  devOpen = { taskId: 0, issueId: 0, stagingId: 0, qaRunId: 0, release: null };
   if ($("devDetailCard")) $("devDetailCard").hidden = true;
   if ($("devActions")) $("devActions").hidden = true;
   if ($("gate2Row")) $("gate2Row").hidden = true;
@@ -1137,7 +1137,11 @@ async function refreshCrm() {
 }
 
 let devCache = { items: [] };
-let devOpen = { taskId: 0, issueId: 0, stagingId: 0, release: null };
+let devOpen = { taskId: 0, issueId: 0, stagingId: 0, qaRunId: 0, release: null };
+
+function qaRunCancellable(run) {
+  return !!run && ["pending", "failed_retry", "claimed", "running"].includes(run.status);
+}
 
 function shortSha(sha) {
   return String(sha || "").slice(0, 12) || "—";
@@ -1177,6 +1181,7 @@ function syncDevActionButtons() {
   if ($("devCleanupStg")) $("devCleanupStg").disabled = !hasStg;
   if ($("devRedeploy")) $("devRedeploy").disabled = !devOpen.taskId;
   if ($("devRerunQa")) $("devRerunQa").disabled = !devOpen.taskId;
+  if ($("devCancelQa")) $("devCancelQa").disabled = !devOpen.qaRunId;
 }
 
 async function refreshDev() {
@@ -1244,10 +1249,15 @@ async function openCodingTask(taskId) {
   const currentRel = !relErr ? (rel?.current || null) : null;
   const qa = !qaErr ? (qaView?.current || null) : null;
   const qaLatest = !qaErr ? (qa || (qaView?.runs || [])[0] || null) : null;
+  const qaActive = !qaErr
+    ? (qaView?.runs || []).find((r) => qaRunCancellable(r)) || (qaRunCancellable(qaLatest) ? qaLatest : null)
+    : null;
   devOpen = {
     taskId: id,
     issueId: Number(task.issue_id),
     stagingId: Number(currentStg?.id || 0),
+    qaRunId: Number(qaActive?.id || 0),
+    qaStatus: qaActive?.status || "",
     release: currentRel && currentRel.id ? {
       manifest_id: Number(currentRel.id),
       manifest_version: Number(currentRel.manifest_version),
@@ -1270,7 +1280,7 @@ async function openCodingTask(taskId) {
     </div>
     <div class="dev-col">
       <h3>獨立 QA</h3>
-      <p class="src">不 merge、不部署</p>
+      <p class="src">${qaLatest ? `qa run #${qaLatest.id} · 不 merge、不部署` : "不 merge、不部署"}</p>
       <p>${qaErr ? `<span class="chip danger">讀取失敗</span>` : (qaLatest ? statusChip(qaLatest.final_result || qaLatest.status) : "尚未跑")}</p>
       <p>${qa && qa.fresh === false ? `已過期：${esc((qa.stale_reasons || []).join("、") || "需重跑")}` : (qa ? "與目前 head 對得上" : "製作完成後才會跑")}</p>
       <p>阻擋 ${esc((Array.isArray(qaLatest?.blocking_checks) ? qaLatest.blocking_checks : []).join("、") || "無")}</p>
@@ -1549,6 +1559,24 @@ $("devRerunQa")?.addEventListener("click", () => {
       const { res, data } = await api(`/ops/api/coding-tasks/${devOpen.taskId}/qa/rerun`, { method: "POST" });
       setStatus($("devDetailMsg"), res.ok ? "已要求重跑獨立 QA" : (data.error || "重跑失敗"), res.ok ? "ok" : "err");
       if (res.ok) await openCodingTask(devOpen.taskId);
+    },
+  });
+});
+$("devCancelQa")?.addEventListener("click", () => {
+  if (!devOpen.qaRunId) return;
+  showConfirm({
+    title: "確認取消獨立 QA",
+    body: `取消獨立 QA #${devOpen.qaRunId}？不會 merge，也不會部署正式站。已在跑的檢查不宣稱撤回；已完成的結果不會被這一步改寫。`,
+    confirmLabel: "確定取消 QA",
+    onConfirm: async () => {
+      const { res, data } = await api(`/ops/api/qa-runs/${devOpen.qaRunId}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "owner_console" }),
+      });
+      const extra = data.in_flight_not_withdrawn ? "已在跑的檢查不宣稱撤回。" : "";
+      setStatus($("devDetailMsg"), res.ok ? `已取消獨立 QA。${extra}` : (data.error || "取消失敗"), res.ok ? "ok" : "err");
+      if (res.ok && devOpen.taskId) await openCodingTask(devOpen.taskId);
     },
   });
 });

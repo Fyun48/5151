@@ -196,7 +196,7 @@ export function listPendingWork(db, productId) {
         blocking: row.status === "running" || row.status === "claimed",
         unscoped: !scoped,
         note: scoped
-          ? "未送出的 QA 可取消；已在跑的不宣稱撤回。訂閱世代已換或已退出的晚到 QA 不會寫入結果。"
+          ? "未送出的 QA 可取消；已在跑的取消不宣稱撤回 worktree。已完成的結果不改寫。訂閱世代已換或已退出的晚到 QA 不會寫入結果。"
           : "QA 尚未綁 product_id；退出時列出但不能宣稱已取消外部呼叫",
       });
     }

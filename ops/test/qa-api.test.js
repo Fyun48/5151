@@ -21,7 +21,7 @@ import { makeGitRepo } from "../src/coding/gitRepo.js";
 import { makeStubCodingProvider } from "../src/coding/provider.js";
 import { makeStubPrGateway } from "../src/coding/prGateway.js";
 import { createCodingTask, claimCodingTaskBatch, executeCodingTask } from "../src/codingTask.js";
-import { createQaRun, executeQaRun } from "../src/qaRun.js";
+import { createQaRun, executeQaRun, cancelQaRun } from "../src/qaRun.js";
 
 const CFG = { ownerEmail: "owner@example.com", ownerPassword: "pw", sessionSecret: "s" };
 const NOW = new Date();
@@ -131,6 +131,48 @@ test("QA API exposes no raw PII/secrets", async () => {
     const raw = await (await fetch(`${base}/ops/api/coding-tasks/${codingTaskId}/qa`, { headers: { cookie } })).text();
     assert.doesNotMatch(raw, /leak@example\.com/);
     assert.doesNotMatch(raw, /reporter-\d/);
+  });
+});
+
+test("Owner QA cancel requires CSRF and does not rewrite completed results", async () => {
+  await withServer(async ({ base, db }) => {
+    const { codingTaskId, qaRunId } = await seedCompletedQa(db);
+    assert.equal((await fetch(`${base}/ops/api/qa-runs/${qaRunId}/cancel`, { method: "POST" })).status, 401);
+    const { cookie, csrf } = await login(base);
+    const noCsrf = await fetch(`${base}/ops/api/qa-runs/${qaRunId}/cancel`, {
+      method: "POST",
+      headers: { cookie, "Content-Type": "application/json" },
+      body: "{}",
+    });
+    assert.equal(noCsrf.status, 403);
+    const completed = await fetch(`${base}/ops/api/qa-runs/${qaRunId}/cancel`, {
+      method: "POST",
+      headers: { cookie, "Content-Type": "application/json", "X-CSRF-Token": csrf, Origin: base },
+      body: JSON.stringify({ reason: "owner_api" }),
+    });
+    assert.equal(completed.status, 409);
+    assert.match((await completed.json()).error, /不改寫/);
+    assert.equal(db.prepare("SELECT status FROM development_qa_run WHERE id=?").get(qaRunId).status, "completed");
+
+    const pendingId = Number(db.prepare(`
+      INSERT INTO development_qa_run(
+        issue_id, coding_task_id, development_authorization_id, proposal_id, proposal_version, proposal_hash,
+        base_sha, head_sha, qa_version, qa_policy_fingerprint, input_fingerprint, status, attempt_count, max_attempts,
+        next_attempt_at, created_at)
+      SELECT issue_id, coding_task_id, development_authorization_id, proposal_id, proposal_version, proposal_hash,
+        base_sha, 'pendinghead', qa_version, qa_policy_fingerprint, 'fp-cancel-api', 'pending', 0, 3, created_at, created_at
+        FROM development_qa_run WHERE id=?
+    `).run(qaRunId).lastInsertRowid);
+    const ok = await fetch(`${base}/ops/api/qa-runs/${pendingId}/cancel`, {
+      method: "POST",
+      headers: { cookie, "Content-Type": "application/json", "X-CSRF-Token": csrf, Origin: base },
+      body: JSON.stringify({ reason: "owner_api" }),
+    });
+    assert.equal(ok.status, 200);
+    const body = await ok.json();
+    assert.equal(body.cancelled, true);
+    assert.equal(body.run.status, "cancelled");
+    assert.equal(cancelQaRun(db, pendingId).idempotent, true);
   });
 });
 
