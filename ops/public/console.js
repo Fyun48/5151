@@ -359,6 +359,10 @@ function productName(id) {
   return productsCache.find((p) => p.id === id)?.display_name || id;
 }
 
+function pendingItemCancellable(it) {
+  return it.kind === "site_command" && (it.state === "pending" || it.state === "sending");
+}
+
 function showExitDetail(id, data) {
   const box = $("exitDetail");
   if (!box) return;
@@ -378,9 +382,6 @@ function showExitDetail(id, data) {
   if (data.site_delivery_unconfirmed) lines.push("OPS 權限已撤銷；本站停止遞送尚未由此畫面確認。");
   const items = pending.items || [];
   lines.push(items.length ? `未決 ${items.length} 項` : "沒有未決工作");
-  for (const it of items) {
-    lines.push(`- ${PENDING_KIND_LABEL[it.kind] || it.kind} #${it.id} ${STATUS_LABEL[it.state] || it.state}${it.blocking ? "（阻擋）" : ""}${it.unscoped ? "（尚未分站）" : ""} ${it.note || ""}`);
-  }
   const product = productsCache.find((p) => p.id === id);
   const exited = product?.status === "exited" || product?.subscription?.status === "exited";
   if (!items.length) {
@@ -392,7 +393,15 @@ function showExitDetail(id, data) {
   $("exitDetailHint").textContent = data.exit?.action
     ? `最近動作：${EXIT_ACTION_LABEL[data.exit.action] || data.exit.action}（${STATUS_LABEL[data.exit.exit_status] || data.exit.exit_status}）`
     : "未決與交接摘要";
-  $("exitDetailBody").textContent = lines.join("\n");
+  const blocks = lines.map((line) => `<p>${esc(line)}</p>`);
+  for (const it of items) {
+    const label = `${PENDING_KIND_LABEL[it.kind] || it.kind} #${it.id} ${STATUS_LABEL[it.state] || it.state}${it.blocking ? "（阻擋）" : ""}${it.unscoped ? "（尚未分站）" : ""} ${it.note || ""}`;
+    const btn = pendingItemCancellable(it)
+      ? `<button type="button" data-cancel-cmd="${Number(it.id)}" data-pid="${esc(id)}" data-cmd-state="${esc(it.state)}">取消未送出的遠端客服</button>`
+      : "";
+    blocks.push(`<div class="pending-item"><p>${esc(label)}</p>${btn}</div>`);
+  }
+  $("exitDetailBody").innerHTML = blocks.join("");
   box.scrollIntoView({ block: "nearest" });
 }
 
@@ -1581,6 +1590,29 @@ $("devCancelQa")?.addEventListener("click", () => {
   });
 });
 $("productsRefresh").addEventListener("click", refreshProducts);
+$("exitDetailBody")?.addEventListener("click", (ev) => {
+  const btn = ev.target.closest("[data-cancel-cmd]");
+  if (!btn) return;
+  const jobId = Number(btn.dataset.cancelCmd);
+  const pid = btn.dataset.pid || "";
+  const sending = btn.dataset.cmdState === "sending";
+  if (!jobId) return;
+  showConfirm({
+    title: "確認取消遠端客服",
+    body: `取消這筆尚未套用的遠端客服 #${jobId}？不會假裝本站已回覆。${sending ? "已在外送的呼叫不宣稱撤回。" : "未送出的命令不會再外送。"}`,
+    confirmLabel: "確定取消命令",
+    onConfirm: async () => {
+      const { res, data } = await api(`/ops/api/site-commands/${jobId}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "owner_console" }),
+      });
+      const extra = data.in_flight_not_withdrawn ? "已在外送的呼叫不宣稱撤回。" : "";
+      setStatus($("productMsg"), res.ok ? `已取消遠端客服。${extra}` : (data.error || "取消失敗"), res.ok ? "ok" : "err");
+      if (res.ok && pid) await loadPending(pid);
+    },
+  });
+});
 $("devTable").addEventListener("click", (ev) => {
   if (ev.target.closest("a")) return;
   const tr = ev.target.closest("tr[data-tid]");
