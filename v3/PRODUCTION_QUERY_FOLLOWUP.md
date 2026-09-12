@@ -27,7 +27,7 @@ PR #277 已部署為 `1c8a6acaccf974cf76d08373790f46292fec210d`，部署 run `34
 在 CASAOS 主機終端執行：
 
 ```sh
-docker exec 591-tracker-v3 node v3/diagnose-rakuya.mjs
+docker exec 591-tracker-v3 node src/diagnoseRakuya.js
 ```
 
 此指令以唯讀方式讀取三站入庫數，僅向樂屋台北搜尋首頁發出一次 15 秒上限的公開請求，輸出 HTTP 狀態、解析結果與耗時。不入庫、不發通知、不重試驗證頁。
