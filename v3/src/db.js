@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { shouldKeepListing, passesAttributeFilters, passesDisplayFilters, listingHasElevator, matchesHousingKind, matchesListingSources, normalizeListQuery, housingTypeLabel, formatFloorDisplay, sanitizeFloorName } from "./floors.js";
+import { passesGeoFilters, passesAttributeFilters, passesDisplayFilters, listingHasElevator, matchesHousingKind, matchesListingSources, normalizeListQuery, housingTypeLabel, formatFloorDisplay, sanitizeFloorName } from "./floors.js";
 import { listingKitFrom, mergeKitColumns, parseStoredFurnish } from "./listingKit.js";
 import { addressPrecision, isTrustedGeoSource, listingCommunityId, preferListingAddress, sourceCommunityLinked, sqlTrustedGeoSource } from "./location.js";
 import { commuteNetworkHint, makeRouteKey } from "./route.js";
@@ -4151,8 +4151,11 @@ function applyListingFilter(rows, settings = getSettings()) {
   // 列表用非嚴格通勤：還沒算完路線的先顯示（排在離公司排序末端），避免新北等區整批空白
   const commuteOn = Number(settings.commuteKm) > 0 && hasWorkPoint(settings);
   if (commuteOn) warmRouteCache();
-  const prepared = commuteOn ? rows.map((row) => applyCachedCoords(row, settings)) : rows;
-  return prepared.filter((row) => shouldKeepListing(row, settings, { strict: false }));
+  // Price/keyword/agent/area checks do not depend on routes. Avoid fetching
+  // cached routes and cloning wide rows that these checks already exclude.
+  const candidates = rows.filter((row) => passesAttributeFilters(row, settings));
+  const prepared = commuteOn ? candidates.map((row) => applyCachedCoords(row, settings)) : candidates;
+  return prepared.filter((row) => passesGeoFilters(row, settings, { strict: false }));
 }
 
 function listingDistrictName(row) {
@@ -4793,12 +4796,9 @@ export function setCommunityCache(community) {
 }
 
 let statsHoldUntil = 0;
-let statsHoldValue = null;
-let statsHoldKey = "";
-let statsMemo = null;
-let statsMemoAt = 0;
-let statsMemoKey = "";
-const STATS_MEMO_MS = 4000;
+const statsMemo = new Map();
+const STATS_MEMO_MS = 15_000;
+const STATS_MEMO_LIMIT = 32;
 
 export function holdStatsCache(ms = 15000) {
   statsHoldUntil = Date.now() + Math.max(0, Number(ms) || 0);
@@ -4810,22 +4810,33 @@ function statsCacheKey(uid, searchKeys, settingsOverride) {
     db.prepare("SELECT total_changes() AS n").get().n, db.prepare("PRAGMA data_version").get().data_version]);
 }
 
-export function stats(searchKeys, userId, settingsOverride) {
+export function stats(searchKeys, userId, settingsOverride, diagnostics) {
+  let stageStarted = performance.now();
+  const markStage = (name) => {
+    const now = performance.now();
+    if (diagnostics) diagnostics[name] = Math.round(now - stageStarted);
+    stageStarted = now;
+  };
+  if (diagnostics) Object.assign(diagnostics, { cache_hit: false, cache_age_ms: 0 });
   const uid = resolveUserId(userId);
   const holdKey = statsCacheKey(uid, searchKeys, settingsOverride);
   const now = Date.now();
-  if (now < statsHoldUntil && statsHoldValue && statsHoldKey === holdKey) {
-    return statsHoldValue;
+  const cached = statsMemo.get(holdKey);
+  if (cached && now < cached.expiresAt) {
+    statsMemo.delete(holdKey);
+    statsMemo.set(holdKey, cached);
+    if (diagnostics) Object.assign(diagnostics, { cache_hit: true, cache_age_ms: Math.max(0, now - cached.at) });
+    markStage("prepare_ms");
+    return { ...cached.value };
   }
-  if (statsMemo && statsMemoKey === holdKey && now - statsMemoAt < STATS_MEMO_MS) {
-    return { ...statsMemo };
-  }
+  statsMemo.delete(holdKey);
   const settings = settingsOverride || getSettings(uid);
   if (Number(settings.commuteKm) > 0 && hasWorkPoint(settings)) warmRouteCache();
   const clauses = [];
   const params = [];
   searchWhere(searchKeys, clauses, params);
   listingVisibilityClauses(clauses, params);
+  markStage("prepare_ms");
   // These two counters historically cover the shared search pool, including
   // other districts. Count them in SQL before narrowing profile candidates.
   const statusWhere = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
@@ -4840,10 +4851,13 @@ export function stats(searchKeys, userId, settingsOverride) {
       `SELECT ${LIST_CANDIDATE_COLUMNS} FROM listings ${where}`,
     )
     .all(...params);
+  markStage("sql_ms");
+  if (diagnostics) diagnostics.candidates = raw.length;
   const flagMap = loadFlagMap(db, uid);
   const overlaid = overlayRowsPersonal(raw, flagMap, { inPlace: true })
     .filter((row) => keepSelfListingForViewer(row, uid, settings, listingInMemberScope));
   const profileRows = applyProfileScope(overlaid, settings);
+  markStage("profile_ms");
   const browse = profileRows.filter(countsTowardAllTotal);
   const failedRouteJobs = new Set(db.prepare("SELECT job_key FROM route_jobs WHERE job_state = 'failed'").all().map(row => row.job_key));
   const out = {
@@ -4883,13 +4897,13 @@ export function stats(searchKeys, userId, settingsOverride) {
     }).length,
     dbTotal: listingCount(),
   };
-  statsMemo = out;
-  statsMemoAt = Date.now();
-  statsMemoKey = holdKey;
-  if (Date.now() < statsHoldUntil) {
-    statsHoldValue = out;
-    statsHoldKey = holdKey;
-  }
+  markStage("count_ms");
+  const computedAt = Date.now();
+  // Each entry is scoped to the member/profile AND both SQLite writer versions.
+  // Keep only scalar counters; caller mutations must not alter the cached copy.
+  statsMemo.set(holdKey, { value: { ...out }, at: computedAt,
+    expiresAt: Math.max(computedAt + STATS_MEMO_MS, statsHoldUntil) });
+  while (statsMemo.size > STATS_MEMO_LIMIT) statsMemo.delete(statsMemo.keys().next().value);
   return out;
 }
 

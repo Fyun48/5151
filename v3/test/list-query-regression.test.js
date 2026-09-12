@@ -200,6 +200,91 @@ test("stats cache keys include profile overrides and invalidate for both databas
   `);
 });
 
+test("stats reuse survives alternating members and profiles, then expires without extending on reads", () => {
+  runIsolated(`
+    const alice = app.ensureUser("alice-cache@example.test");
+    const bob = app.ensureUser("bob-cache@example.test");
+    seed(745001, { price: "20000元", price_num: 20000 });
+    const narrow = { ...settings, priceMax: 10000 };
+    const wide = { ...settings, priceMax: 30000 };
+    const realNow = Date.now;
+    let clock = realNow();
+    Date.now = () => clock;
+    const read = (user, profile) => {
+      const details = {};
+      const value = app.stats([], user, profile, details);
+      return { value, details };
+    };
+    try {
+      assert.equal(read(alice, wide).details.cache_hit, false);
+      assert.equal(read(bob, wide).details.cache_hit, false);
+      assert.equal(read(alice, narrow).value.total, 0);
+      clock += 6000;
+      const reused = read(alice, wide);
+      assert.equal(reused.value.total, 1);
+      assert.equal(reused.details.cache_hit, true);
+      assert.equal(reused.details.cache_age_ms, 6000);
+      assert.equal(read(bob, wide).details.cache_hit, true);
+      clock += 8000;
+      assert.equal(read(alice, wide).details.cache_hit, true);
+      clock += 2000;
+      assert.equal(read(alice, wide).details.cache_hit, false);
+      // Settings/profile changes use another entry; personal flags invalidate all versions.
+      app.setFlags(745001, { watched: true }, alice);
+      const changed = read(alice, wide);
+      assert.equal(changed.details.cache_hit, false);
+      assert.equal(changed.value.total, 0);
+      assert.equal(changed.value.watched, 1);
+      assert.equal(read(bob, wide).value.total, 1);
+      clock += 16000;
+      assert.equal(read(alice, wide).details.cache_hit, false);
+    } finally {
+      Date.now = realNow;
+    }
+  `);
+});
+
+test("stats cache returns independent values and evicts old profiles at its memory bound", () => {
+  runIsolated(`
+    seed(746001);
+    const profile = i => ({ ...settings, priceMax: 30000 + i });
+    const read = i => {
+      const details = {};
+      const value = app.stats([], uid, profile(i), details);
+      return { value, details };
+    };
+    read(0).value.total = 999;
+    const cached = read(0);
+    assert.equal(cached.value.total, 1);
+    cached.value.total = 888;
+    assert.equal(read(0).value.total, 1);
+    for (let i = 1; i <= 32; i++) read(i);
+    assert.equal(read(32).details.cache_hit, true);
+    assert.equal(read(0).details.cache_hit, false);
+  `);
+});
+
+test("attribute filtering before route lookup retains pending routes and rejects known distant homes", () => {
+  runIsolated(`
+    const conf = { ...settings, priceMax: 30000, commuteKm: 5,
+      workLat: 25.1, workLng: 121.52, commuteMode: "scooter", excludeKeywords: ["排除樣本"] };
+    seed(747001, { lat: 25.01, lng: 121.51, geo_source: "591" });
+    seed(747002, { lat: 25.02, lng: 121.51, geo_source: "591", price: "40000元", price_num: 40000 });
+    seed(747003, { lat: 25.03, lng: 121.51, geo_source: "591" });
+    seed(747004); // Missing coordinates remain visible in the non-strict list.
+    seed(747005, { title: "排除樣本住宅", lat: 25.05, lng: 121.51, geo_source: "591" });
+    seed(747006, { lat: 25.06, lng: 121.51, geo_source: "591" }); // Route pending.
+    app.setCachedRoute(25.01, 121.51, conf.workLat, conf.workLng, [2]);
+    app.setCachedRoute(25.02, 121.51, conf.workLat, conf.workLng, [2]);
+    app.setCachedRoute(25.03, 121.51, conf.workLat, conf.workLng, [10]);
+    app.setCachedRoute(25.05, 121.51, conf.workLat, conf.workLng, [2]);
+    const listed = query({ settings: conf });
+    assert.deepEqual(ids(listed).sort(), [747001, 747004, 747006]);
+    assert.equal(listed.listings.find(row => row.post_id === 747001).commute_km, 2);
+    assert.equal(app.stats([], uid, conf).total, 3);
+  `);
+});
+
 test("list and stats remain read-only under another writer's lock and exclude expired self listings", () => {
   runIsolated(`
     seed(750001);
