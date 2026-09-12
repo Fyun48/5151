@@ -335,6 +335,9 @@ jobs:
             python3 -c 'import json; d=json.load(open("/tmp/v3-health.json")); assert d.get("ok") is True'
             curl -fsS -o /dev/null http://127.0.0.1:5153/
             curl -fsS -o /dev/null http://127.0.0.1:5153/login.html
+            curl -fsS -o /tmp/v3-alias-health.json http://127.0.0.1:5155/api/health
+            python3 -c 'import json; d=json.load(open("/tmp/v3-alias-health.json")); assert d.get("ok") is True'
+            curl -fsS -o /dev/null http://127.0.0.1:5155/
             RUNNING="$(docker inspect -f '{{.State.Status}}' 591-tracker-v3)"
             [ "$RUNNING" = "running" ]
             CFG_IMAGE="$(docker inspect -f '{{.Config.Image}}' 591-tracker-v3)"

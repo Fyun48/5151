@@ -46,13 +46,14 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:5153:5153"
+      - "127.0.0.1:5155:5153"
     environment:
       HOST: "0.0.0.0"
       PORT: "5153"
       DATA_DIR: /data
       TZ: Asia/Taipei
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL_V3:-https://c5151.reversalplay.me}
-      # 別名 jibbyrenth.reversalplay.me 走同一條 tunnel → 127.0.0.1:5153
+      # 同一容器、同一條 tunnel：c5151 → 127.0.0.1:5153；jibbyrenth → 127.0.0.1:5155
       V1_DB_PATH: /v1-data/591.db
       V2_DB_PATH: /v2-data/v2.db
     volumes:
