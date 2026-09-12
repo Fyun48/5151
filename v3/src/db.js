@@ -4367,6 +4367,13 @@ export function listListings({
   settings: settingsOverride,
   sameHouse = true,
 } = {}) {
+  const queryDetails = {};
+  let stageStarted = performance.now();
+  const markStage = (name) => {
+    const now = performance.now();
+    queryDetails[name] = Math.round(now - stageStarted);
+    stageStarted = now;
+  };
   const uid = resolveUserId(userId);
   const voteUid = matchVoteUserId == null ? uid : Number(matchVoteUserId) || 0;
   ({ filter, kind, sources } = normalizeListQuery(filter, kind, sources));
@@ -4449,15 +4456,20 @@ export function listListings({
     params.push(like, like, like, uid, like);
   }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  markStage("prepare_ms");
   const raw = db.prepare(`SELECT ${LIST_CANDIDATE_COLUMNS} FROM listings ${where}`).all(...params);
+  markStage("sql_ms");
+  queryDetails.candidates = raw.length;
   const flagMap = loadFlagMap(db, uid);
   const overlaid = overlayRowsPersonal(raw, flagMap, { inPlace: true });
   let rows =
     filter === "offline" || filter === "suspected"
       ? overlaid.filter((row) => passesPriceFilter(row, settings))
       : applyListingFilter(overlaid, settings);
+  markStage("profile_ms");
 
   rows = attachSameHouseRoles(rows, voteUid);
+  markStage("relations_ms");
   rows = rows.filter((row) => listingMatchesListFilter(row, filter));
   rows = rows.filter((row) => keepSelfListingForViewer(row, uid, settings, listingInMemberScope));
 
@@ -4471,6 +4483,7 @@ export function listListings({
 
   rows = rows.filter((row) => matchesHousingKind(row, kind));
   rows = rows.filter((row) => matchesListingSources(row, sources));
+  markStage("display_ms");
 
   const needFit = sort === "fit_desc";
   if (needFit) {
@@ -4482,6 +4495,7 @@ export function listListings({
     }
   }
   rows = sortListingsRows(rows, sort, { filter, settings });
+  markStage("sort_ms");
 
   const totalMatched = rows.length;
   const pageSize = Math.max(1, Math.min(Number(limit) || 500, 500));
@@ -4497,12 +4511,14 @@ export function listListings({
     const needPeers = sameHouse !== false && Boolean(row.match_post_id || row.same_house_role);
     return finalizeListingDecorate(lite, settings, uid, { sameHouse: needPeers, matchVoteUserId: voteUid });
   });
+  markStage("hydrate_ms");
   return {
     listings,
     totalMatched,
     hasMore: start + pageSize < totalMatched,
     nextOffset: start + pageSize,
     queryVersion: 2,
+    queryDetails,
   };
 }
 

@@ -18,15 +18,34 @@ export function appendDistrictCandidates(names, clauses, params, { preserveRelat
   const marks = values => values.map(() => "?").join(",");
   const alternatives = [`${prefix} IN (${marks(allowed)})`, `${prefix} NOT IN (${marks(allKeys)})`];
   params.push(...allowed, ...allKeys);
-  // A one-sided match outside the district can assign the in-district card's
-  // role. Personal group members must also retain their overlaid flags.
+  // Keep complete relation components of district candidates, including incoming
+  // one-sided matches and the viewer's personal groups. Unrelated matches in
+  // other districts cannot affect their roles. UNION terminates mutual cycles.
   if (preserveRelationsFor !== undefined) {
-    alternatives.push("COALESCE(match_post_id, 0) != 0");
-    alternatives.push("post_id IN (SELECT match_post_id FROM listings WHERE COALESCE(match_post_id, 0) != 0)");
+    const personal = Number(preserveRelationsFor) > 0 ? `
+      UNION
+      SELECT peer.post_id FROM district_related connected
+      JOIN user_same_house_members member ON member.post_id = connected.post_id AND member.user_id = ?
+      JOIN user_same_house_members peer ON peer.user_id = member.user_id AND peer.group_key = member.group_key
+    ` : "";
     if (Number(preserveRelationsFor) > 0) {
-      alternatives.push("post_id IN (SELECT post_id FROM user_same_house_members WHERE user_id = ?)");
       params.push(Number(preserveRelationsFor));
     }
+    clauses.push(`post_id IN (
+      WITH RECURSIVE district_related(post_id) AS (
+        SELECT post_id FROM listings WHERE (${alternatives.join(" OR ")})
+        UNION
+        SELECT l.match_post_id FROM district_related connected
+        JOIN listings l ON l.post_id = connected.post_id
+        WHERE COALESCE(l.match_post_id, 0) != 0
+        UNION
+        SELECT l.post_id FROM district_related connected
+        JOIN listings l ON l.match_post_id = connected.post_id
+        ${personal}
+      )
+      SELECT post_id FROM district_related
+    )`);
+    return;
   }
   clauses.push(`(${alternatives.join(" OR ")})`);
 }
