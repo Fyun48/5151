@@ -120,6 +120,8 @@ const STATUS_LABEL = {
   deploying: "佈署中",
   validating: "驗證中",
   cancelled: "已取消",
+  unknown: "狀態不明",
+  PRODUCTION_STATE_UNKNOWN: "狀態不明",
 };
 
 const EXIT_ACTION_LABEL = {
@@ -159,7 +161,7 @@ function humanError(err) {
 function chipClass(status) {
   if (status === "active" || status === "connected" || status === "PASS" || status === "changes_ready" || status === "completed") return "ok";
   if (status === "exited" || status === "FAIL" || status === "failed" || status === "cancelled") return "danger";
-  if (status === "paused" || status === "exiting" || status === "reconnecting" || status === "connecting" || status === "failed_retry") return "warn";
+  if (status === "paused" || status === "exiting" || status === "reconnecting" || status === "connecting" || status === "failed_retry" || status === "unknown" || status === "PRODUCTION_STATE_UNKNOWN") return "warn";
   return "";
 }
 
@@ -567,7 +569,7 @@ function requestProductAction(id, action) {
   if (action === "handoff") {
     showConfirm({
       title: "確認移交整站",
-      body: `移交「${name}」（${id}）會匯出可驗證交接包。不含金鑰與其它站資料。本機主本仍在對方站。`,
+      body: `移交「${name}」（${id}）會匯出可驗證交接包。不含金鑰與其它站資料。本機主本仍在對方站。正式部署狀態不明時會拒絕移交，先確認該環境實際結果。`,
       confirmLabel: "確定移交",
       onConfirm: () => runProductAction(id, "handoff"),
     });
