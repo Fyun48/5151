@@ -70,7 +70,7 @@ test("F04 elevator and 華廈 classification", () => {
   assert.equal(listingIsBuilding({ title: "電梯大樓", kind_name: "整層住家", tags: ["電梯大樓"] }), true);
 });
 
-test("unspecified 整層住家 belongs to 大樓/公寓/店面/倉庫 and 大樓+電梯", () => {
+test("unspecified 整層住家 belongs to 大樓/公寓 and 大樓+電梯, not title-less 店面/倉庫", () => {
   const bare = { kind_name: "整層住家" };
   const wholeOnly = { kind_name: "整層" };
   assert.equal(listingIsUnspecifiedWholeFloor(bare), true);
@@ -79,28 +79,50 @@ test("unspecified 整層住家 belongs to 大樓/公寓/店面/倉庫 and 大樓
   assert.equal(listingIsUnspecifiedWholeFloor({ kind_name: "整層住家／大樓" }), false);
   assert.equal(listingIsBuilding(bare), true);
   assert.equal(listingIsApartment(bare), true);
-  assert.equal(listingIsShop(bare) || listingIsUnspecifiedWholeFloor(bare), true);
-  assert.equal(listingIsWarehouse(bare) || listingIsUnspecifiedWholeFloor(bare), true);
+  assert.equal(listingIsShop(bare), false);
+  assert.equal(listingIsWarehouse(bare), false);
   assert.equal(matchesHousingKind(bare, "building"), true);
   assert.equal(matchesHousingKind(bare, "building,elevator"), true);
   assert.equal(matchesHousingKind(bare, "apartment_huaxia"), true);
-  assert.equal(matchesHousingKind(bare, "shop"), true);
-  assert.equal(matchesHousingKind(bare, "warehouse"), true);
+  assert.equal(matchesHousingKind(bare, "shop"), false);
+  assert.equal(matchesHousingKind(bare, "warehouse"), false);
   assert.equal(matchesHousingKind({ kind_name: "整層住家／公寓" }, "building"), false);
   assert.equal(matchesHousingKind({ kind_name: "整層住家／大樓" }, "building"), true);
   assert.equal(matchesHousingKind({ kind_name: "整層住家", tags: ["無電梯"] }, "building,elevator"), false);
   assert.equal(listingIsBuilding({ title: "社區垃圾大樓服務", kind_name: "整層住家／公寓" }), false);
 });
 
-test("F05 elevator is AND; whole and shop can coexist", () => {
+test("only 整層 or only 套房 implies 大樓 OR 公寓/華廈; elevator stays AND", () => {
+  const bareWhole = { kind_name: "整層住家" };
+  const walkup = { title: "無電梯公寓", kind_name: "整層住家／公寓", tags: ["無電梯"] };
+  const suiteBare = { kind_name: "獨立套房" };
+  const villa = { kind_name: "整層住家／透天" };
+  assert.equal(matchesHousingKind(bareWhole, "whole"), true);
+  assert.equal(matchesHousingKind(walkup, "whole"), true);
+  assert.equal(matchesHousingKind(walkup, "whole,elevator"), false);
+  assert.equal(matchesHousingKind(villa, "whole"), false);
+  assert.equal(matchesHousingKind(suiteBare, "suite_shared"), true);
+  assert.equal(matchesHousingKind(suiteBare, "whole"), false);
+  assert.equal(matchesHousingKind(walkup, "whole,building"), false);
+  assert.equal(matchesHousingKind(bareWhole, "whole,building"), true);
+  assert.equal(matchesHousingKind(bareWhole, "whole,apartment_huaxia"), true);
+  assert.deepEqual(toggleHousingKind(["whole"], "suite_shared"), ["suite_shared"]);
+  assert.deepEqual(toggleHousingKind(["building"], "apartment_huaxia"), ["building", "apartment_huaxia"]);
+});
+
+test("F05 elevator is AND; shop and warehouse are title-only and exclusive", () => {
   const walkup = { title: "無電梯公寓", kind_name: "整層住家／公寓", tags: ["無電梯"] };
   assert.equal(matchesHousingKind(walkup, "elevator,apartment_huaxia"), false);
-  assert.equal(matchesHousingKind({ kind_name: "整層住家／店面" }, "whole,shop"), true);
+  assert.equal(matchesHousingKind({ kind_name: "整層住家／店面" }, "whole,shop"), false);
+  assert.equal(matchesHousingKind({ title: "黃金店面", kind_name: "整層住家／店面" }, "whole,shop"), true);
+  assert.equal(matchesHousingKind({ title: "倉庫出租", kind_name: "整層住家" }, "warehouse"), true);
   assert.deepEqual(toggleHousingKind(["whole"], "shop"), ["whole", "shop"]);
-  assert.deepEqual(toggleHousingKind(["suite_shared"], "warehouse"), ["warehouse"]);
-  const afterWarehouse = applyHousingQueryChip(kindsToQuery(["suite_shared"]), "warehouse");
-  assert.equal(afterWarehouse.hint, "已取消套房/分租");
+  assert.deepEqual(toggleHousingKind(["suite_shared"], "warehouse"), ["suite_shared", "warehouse"]);
+  assert.deepEqual(toggleHousingKind(["shop"], "warehouse"), ["warehouse"]);
+  const afterWarehouse = applyHousingQueryChip(kindsToQuery(["shop"]), "warehouse");
+  assert.equal(afterWarehouse.hint, "已取消店面");
   assert.equal(elevatorRequired(kindsToQuery(["building"])), true);
+  assert.equal(elevatorRequired(kindsToQuery(["whole", "elevator"])), true);
   assert.equal(matchesHousingKind({ title: "電梯大樓", kind_name: "整層住家／電梯大樓" }, "elevator,apartment_huaxia"), false);
   assert.equal(matchesHousingKind({ title: "電梯大樓", kind_name: "整層住家／電梯大樓" }, "building"), true);
 });
@@ -108,7 +130,7 @@ test("F05 elevator is AND; whole and shop can coexist", () => {
 test("housing query default and empty are distinct", () => {
   assert.deepEqual(queryToKinds(defaultHousingQuery()), ["whole"]);
   assert.deepEqual(migrateHousingKinds(["suite", "yafang"]), ["suite_shared"]);
-  assert.deepEqual(migrateHousingKinds(["suite_shared", "warehouse"]), ["warehouse"]);
+  assert.deepEqual(migrateHousingKinds(["suite_shared", "warehouse"]), ["suite_shared", "warehouse"]);
   assert.deepEqual(normalizeListQuery("all", "building"), {
     filter: "all",
     kind: "building",

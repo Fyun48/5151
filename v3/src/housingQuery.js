@@ -12,6 +12,8 @@ export const HOUSING_KIND_CHIPS = Object.freeze([
 
 export const LEGACY_RENTAL_KINDS = Object.freeze(["suite", "yafang", "share", "coliving"]);
 export const HOUSING_CATEGORY_KINDS = Object.freeze(["building", "apartment_huaxia", "shop", "warehouse"]);
+export const HOUSING_APPEARANCE_KINDS = Object.freeze(["building", "apartment_huaxia"]);
+export const HOUSING_COMMERCIAL_KINDS = Object.freeze(["shop", "warehouse"]);
 
 export const HOUSING_KINDS = Object.freeze([
   ...HOUSING_KIND_CHIPS,
@@ -93,11 +95,29 @@ export function migrateHousingKinds(kind) {
     q.categories.push("apartment_huaxia");
   }
   q.elevatorManual = keys.includes("elevator");
-  if (q.rentalMode === "suite_shared" && q.categories.includes("warehouse")) {
-    q.rentalMode = "any";
-    q.hint = "型態條件已調整";
+  if (q.categories.includes("shop") && q.categories.includes("warehouse")) {
+    q.categories = q.categories.filter((item) => item !== "shop");
+    q.hint = "已取消店面";
   }
   return queryToKinds(q);
+}
+
+/** 只選整層或套房、沒指定建築樣式或店面／倉庫時，大樓與公寓／華廈都算進去。 */
+export function effectiveAppearanceCategories(query) {
+  const q = query && typeof query === "object" ? query : kindsToQuery(query);
+  const cats = q.categories || [];
+  const appearance = cats.filter((key) => HOUSING_APPEARANCE_KINDS.includes(key));
+  const commercial = cats.filter((key) => HOUSING_COMMERCIAL_KINDS.includes(key));
+  const rentalOn = q.rentalMode === "whole" || q.rentalMode === "suite_shared" || q.rentalMode === "legacy";
+  if (rentalOn && !appearance.length && !commercial.length) {
+    return ["building", "apartment_huaxia"];
+  }
+  return appearance;
+}
+
+export function commercialCategories(query) {
+  const q = query && typeof query === "object" ? query : kindsToQuery(query);
+  return (q.categories || []).filter((key) => HOUSING_COMMERCIAL_KINDS.includes(key));
 }
 
 export function elevatorRequired(query) {
@@ -128,10 +148,6 @@ export function applyHousingQueryChip(query, chip) {
       }
       q.rentalMode = "legacy";
       q.legacyRental = key;
-      if (q.categories.includes("warehouse")) {
-        q.categories = q.categories.filter((item) => item !== "warehouse");
-        q.hint = "已取消倉庫";
-      }
       return q;
     }
     if (q.rentalMode === "suite_shared") {
@@ -139,23 +155,20 @@ export function applyHousingQueryChip(query, chip) {
     } else {
       q.rentalMode = "suite_shared";
       q.legacyRental = "";
-      if (q.categories.includes("warehouse")) {
-        q.categories = q.categories.filter((item) => item !== "warehouse");
-        q.hint = "已取消倉庫";
-      }
     }
     return q;
   }
-  if (key === "warehouse") {
-    if (q.categories.includes("warehouse")) {
-      q.categories = q.categories.filter((item) => item !== "warehouse");
+  if (key === "shop" || key === "warehouse") {
+    if (q.categories.includes(key)) {
+      q.categories = q.categories.filter((item) => item !== key);
     } else {
-      q.categories.push("warehouse");
-      if (q.rentalMode === "suite_shared" || q.rentalMode === "legacy") {
-        q.rentalMode = "any";
-        q.legacyRental = "";
-        q.hint = "已取消套房/分租";
-      }
+      q.categories = q.categories.filter((item) => item !== "shop" && item !== "warehouse");
+      q.categories.push(key);
+      q.hint = key === "warehouse" && query?.categories?.includes("shop")
+        ? "已取消店面"
+        : key === "shop" && query?.categories?.includes("warehouse")
+          ? "已取消倉庫"
+          : "";
     }
     return q;
   }
@@ -168,13 +181,8 @@ export function applyHousingQueryChip(query, chip) {
     return q;
   }
   if (key === "elevator") {
-    if (q.categories.includes("building")) {
-      q.categories = q.categories.filter((item) => item !== "building");
-      q.elevatorManual = false;
-      q.hint = "已取消大樓，不再限制電梯";
-    } else {
-      q.elevatorManual = !q.elevatorManual;
-    }
+    q.elevatorManual = !q.elevatorManual;
+    if (q.categories.includes("building")) q.hint = "大樓一定有電梯";
     return q;
   }
   const category = key === "apartment" ? "apartment_huaxia" : key;
