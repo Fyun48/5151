@@ -12,6 +12,10 @@ on:
       confirmation:
         description: VERIFY-V3-SUPPORT
         required: true
+      include_rakuya:
+        description: Make one Rakuya request; disable when only repeating the snapshot benchmark
+        type: boolean
+        default: true
 permissions:
   contents: read
 concurrency:
@@ -63,15 +67,16 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           git merge-base --is-ancestor "$SOURCE_SHA" HEAD
-          git diff --exit-code "$SOURCE_SHA" -- v3/src
+          git diff --exit-code "$SOURCE_SHA" -- v3/src v3/public
           node --test .github/scripts/production-support-check.test.mjs
           python3 .github/scripts/test-production-support.py
-          tree_hash="$(node .github/scripts/production-support-check.mjs source-hash v3/src)"
+          tree_hash="$(node .github/scripts/production-support-check.mjs source-hash v3)"
           printf 'SOURCE_TREE_SHA256=%s\n' "$tree_hash" >> "$GITHUB_ENV"
       - name: Collect isolated timings and one Rakuya response
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}
           ACCOUNT_HASH: ${{ inputs.account_email_sha256 }}
+          INCLUDE_RAKUYA: ${{ inputs.include_rakuya }}
           NAS_HOST: ${{ secrets.NAS_HOST }}
           NAS_PORT: ${{ secrets.NAS_PORT }}
           NAS_USER: ${{ secrets.NAS_USER }}
@@ -86,7 +91,7 @@ jobs:
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=15 \
             -o ServerAliveInterval=15 -o ServerAliveCountMax=2 -o StrictHostKeyChecking=accept-new \
             -p "$NAS_PORT" -i "$support_tmp/key" "$NAS_USER@$NAS_HOST" \
-            bash -s -- "$SOURCE_SHA" "$SOURCE_TREE_SHA256" "$ACCOUNT_HASH" "$helper_payload" \
+            bash -s -- "$SOURCE_SHA" "$SOURCE_TREE_SHA256" "$ACCOUNT_HASH" "$helper_payload" "$INCLUDE_RAKUYA" \
             < .github/scripts/production-support-remote.sh > production-support.json
       - name: Summarize collected evidence
         id: evidence
@@ -105,7 +110,8 @@ jobs:
               for scenario in ('first_process_query', 'warm', 'data_changed'):
                   rows = [r['total_ms'] for r in snapshot['samples'] if r['scenario'] == scenario]
                   lines.append(f'| {scenario} | {len(rows)} | {statistics.median(rows)} |')
-          lines += ['', rakuya['error_code'] if 'error_code' in rakuya else f"樂屋 HTTP {rakuya['http_status']}；{rakuya['code']}；解析 {rakuya['parsed_records']} 筆。", '', '暫存副本及測試容器已清除，正式服務未重新部署。']
+          rakuya_summary = '本次僅測速，未重送樂屋請求。' if rakuya.get('skipped') else rakuya['error_code'] if 'error_code' in rakuya else f"樂屋 HTTP {rakuya['http_status']}；{rakuya['code']}；解析 {rakuya['parsed_records']} 筆。"
+          lines += ['', rakuya_summary, '', '暫存副本及測試容器已清除，正式服務未重新部署。']
           pathlib.Path(os.environ['GITHUB_STEP_SUMMARY']).write_text('\n'.join(lines) + '\n')
           PY
       - uses: actions/upload-artifact@v4

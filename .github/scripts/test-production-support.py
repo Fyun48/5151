@@ -63,15 +63,16 @@ elif a[0] == 'exec':
     elif a[-1] == 'rakuya-response': print('{"http_status":403,"code":"FETCH_BLOCKED"}')
     else: raise SystemExit('Unexpected production execution')
 elif a[0] == 'cp':
-    assert a[1] == '591-tracker-v3:/app/src'
+    assert a[1] in ('591-tracker-v3:/app/src', '591-tracker-v3:/app/public')
     pathlib.Path(a[2]).mkdir()
 elif a[0] == 'run':
     assert a[a.index('--network') + 1] == 'none' and '--read-only' in a
     assert a[-1] == 'snapshot' and '-p' not in a and '--env-file' not in a
     mounts = [a[i+1] for i, value in enumerate(a) if value == '--mount']
-    assert len(mounts) == 2 and all(os.environ['LIVE'] not in value for value in mounts)
+    assert len(mounts) == 3 and all(os.environ['LIVE'] not in value for value in mounts)
     assert any('dst=/snapshot' in value for value in mounts)
     assert any('dst=/app/src,readonly' in value for value in mounts)
+    assert any('dst=/app/public,readonly' in value for value in mounts)
     sys.stdin.read()
     print('{"http_measured":false,"network":"none"}')
 elif a[0] == 'rm':
@@ -81,7 +82,7 @@ else: raise SystemExit('Unexpected Docker mutation')
             docker.chmod(0o755)
             env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ['PATH'],
                        SOURCE=SOURCE, ACTUAL_TREE=TREE, LIVE=str(live), COMMANDS=str(commands))
-            args = ['bash', str(REMOTE), SOURCE, TREE, 'e' * 64, base64.b64encode(b'// helper').decode()]
+            args = ['bash', str(REMOTE), SOURCE, TREE, 'e' * 64, base64.b64encode(b'// helper').decode(), 'true']
             failed = subprocess.run(args, env={**env, 'ACTUAL_TREE': 'f' * 64}, capture_output=True, text=True)
             self.assertNotEqual(failed.returncode, 0)
             self.assertIn('source differs', failed.stderr)
@@ -96,6 +97,12 @@ else: raise SystemExit('Unexpected Docker mutation')
             calls = [json.loads(line) for line in commands.read_text().splitlines()]
             self.assertEqual(sum(call[0] == 'run' for call in calls), 1)
             self.assertEqual(sum(call[-1] == 'rakuya-response' for call in calls), 1)
+            commands.write_text('')
+            done = subprocess.run([*args[:-1], 'false'], env=env, capture_output=True, text=True)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertEqual(json.loads(done.stdout)['rakuya'], {'skipped': True, 'reason': 'snapshot_only'})
+            calls = [json.loads(line) for line in commands.read_text().splitlines()]
+            self.assertFalse(any(call[-1] == 'rakuya-response' for call in calls))
 
 
 if __name__ == '__main__':
