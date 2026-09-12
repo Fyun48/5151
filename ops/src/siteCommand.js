@@ -6,7 +6,7 @@ import { getProduct, publicProduct } from "./products.js";
 
 export const APPLY_PATH = "/api/ops/commands/apply";
 export const COMMAND_KINDS = Object.freeze(["feedback.patch_handling", "crm.add_note"]);
-export const JOB_STATES = Object.freeze(["pending", "sending", "sent", "failed", "dead"]);
+export const JOB_STATES = Object.freeze(["pending", "sending", "sent", "failed", "dead", "cancelled"]);
 export const APPLY_STATES = Object.freeze(["unknown", "applied", "rejected", "conflict"]);
 
 function iso(now = new Date()) {
@@ -217,6 +217,50 @@ async function withTimeout(fetchImpl, url, options, timeoutMs) {
   }
 }
 
+export function cancelSiteCommand(db, jobId, { actor = "owner", reason = null, now = new Date() } = {}) {
+  ensureSiteCommandSchema(db);
+  const row = db.prepare("SELECT * FROM site_command_job WHERE id=?").get(Number(jobId));
+  if (!row) throw httpError("找不到命令", 404);
+  if (row.job_state === "cancelled") {
+    return { idempotent: true, in_flight_not_withdrawn: false, job: publicCommandJob(row) };
+  }
+  if (row.job_state === "sent") {
+    throw httpError("已送出的遠端客服不宣稱撤回。本站若已套用，處理紀錄仍保留。", 409);
+  }
+  if (!["pending", "sending"].includes(row.job_state)) {
+    throw httpError(`遠端客服目前不能取消（job_state=${row.job_state}）`, 409);
+  }
+  const inFlight = row.job_state === "sending";
+  const code = reason ? `owner_cancelled:${String(reason).slice(0, 120)}` : "owner_cancelled";
+  const ts = iso(now);
+  const upd = db.prepare("UPDATE site_command_job SET job_state='cancelled', last_error=?, updated_at=? WHERE id=? AND job_state IN ('pending','sending')")
+    .run(code, ts, Number(row.id));
+  if (upd.changes !== 1) {
+    const fresh = db.prepare("SELECT * FROM site_command_job WHERE id=?").get(Number(row.id));
+    if (fresh?.job_state === "cancelled") return { idempotent: true, in_flight_not_withdrawn: inFlight, job: publicCommandJob(fresh) };
+    if (fresh?.job_state === "sent") throw httpError("已送出的遠端客服不宣稱撤回。本站若已套用，處理紀錄仍保留。", 409);
+    throw httpError("遠端客服目前不能取消", 409);
+  }
+  appendAuditRow(db, {
+    actor,
+    action: "site_command.cancelled",
+    entityType: "site_command_job",
+    entityId: String(row.id),
+    data: {
+      product_id: row.product_id,
+      command_id: row.command_id,
+      prev_job_state: row.job_state,
+      in_flight_not_withdrawn: inFlight,
+    },
+    now,
+  });
+  return {
+    cancelled: true,
+    in_flight_not_withdrawn: inFlight,
+    job: publicCommandJob(db.prepare("SELECT * FROM site_command_job WHERE id=?").get(Number(row.id))),
+  };
+}
+
 export async function deliverSiteCommand(db, commandId, {
   fetchImpl = fetch,
   applyUrl = "",
@@ -227,11 +271,13 @@ export async function deliverSiteCommand(db, commandId, {
   ensureSiteCommandSchema(db);
   const row = db.prepare("SELECT * FROM site_command_job WHERE command_id=?").get(commandId);
   if (!row) throw httpError("找不到命令", 404);
+  if (row.job_state === "cancelled") return publicCommandJob(row);
+  if (row.job_state === "sent") return publicCommandJob(row);
   const gate = siteCommandWriteDecision(db, row.product_id, { expectedGeneration: row.subscription_generation });
   if (!gate.ok) {
     const ts = iso(now);
     const err = gate.reason === "stale_generation" ? "stale_generation" : "subscription_revoked";
-    db.prepare("UPDATE site_command_job SET job_state='failed', apply_state='unknown', last_error=?, updated_at=? WHERE command_id=?")
+    db.prepare("UPDATE site_command_job SET job_state='failed', apply_state='unknown', last_error=?, updated_at=? WHERE command_id=? AND job_state IN ('pending','sending')")
       .run(err, ts, commandId);
     return publicCommandJob(db.prepare("SELECT * FROM site_command_job WHERE command_id=?").get(commandId));
   }
@@ -239,14 +285,17 @@ export async function deliverSiteCommand(db, commandId, {
   const key = secret || getActiveCommandSecret(db, row.product_id);
   if (!url || !key) {
     const ts = iso(now);
-    db.prepare("UPDATE site_command_job SET job_state='pending', apply_state='unknown', last_error=?, updated_at=? WHERE command_id=?")
+    db.prepare("UPDATE site_command_job SET job_state='pending', apply_state='unknown', last_error=?, updated_at=? WHERE command_id=? AND job_state IN ('pending','sending')")
       .run("delivery_off", ts, commandId);
     return publicCommandJob(db.prepare("SELECT * FROM site_command_job WHERE command_id=?").get(commandId));
   }
 
   const sendingAt = iso(now);
-  db.prepare("UPDATE site_command_job SET job_state='sending', attempts=attempts+1, updated_at=? WHERE command_id=?")
+  const claimed = db.prepare("UPDATE site_command_job SET job_state='sending', attempts=attempts+1, updated_at=? WHERE command_id=? AND job_state IN ('pending','sending')")
     .run(sendingAt, commandId);
+  if (claimed.changes !== 1) {
+    return publicCommandJob(db.prepare("SELECT * FROM site_command_job WHERE command_id=?").get(commandId));
+  }
   const raw = JSON.stringify({
     command_id: row.command_id,
     idempotency_key: row.idempotency_key,
@@ -274,7 +323,7 @@ export async function deliverSiteCommand(db, commandId, {
     db.prepare(`
       UPDATE site_command_job
          SET job_state=?, apply_state=?, last_error=?, site_result_json=?, updated_at=?, applied_at=?
-       WHERE command_id=?
+       WHERE command_id=? AND job_state='sending'
     `).run(
       jobState,
       applyState,
@@ -290,7 +339,7 @@ export async function deliverSiteCommand(db, commandId, {
     db.prepare(`
       UPDATE site_command_job
          SET job_state='failed', apply_state='unknown', last_error=?, updated_at=?
-       WHERE command_id=?
+       WHERE command_id=? AND job_state='sending'
     `).run(String(err.message || "unreachable").slice(0, 200), ts, commandId);
     return publicCommandJob(db.prepare("SELECT * FROM site_command_job WHERE command_id=?").get(commandId));
   }

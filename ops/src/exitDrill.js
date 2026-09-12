@@ -288,7 +288,7 @@ export function listPendingWork(db, productId) {
         blocking: inFlight,
         note: inFlight
           ? "已送出的遠端客服不宣稱撤回。訂閱世代已換或已退出的晚到命令不再重試外送。"
-          : "未送出的遠端客服可取消。訂閱世代已換或已退出的晚到命令不會外送。",
+          : "未送出的遠端客服可取消。已在跑的外送不宣稱撤回。訂閱世代已換或已退出的晚到命令不會外送。",
       });
     }
   }
