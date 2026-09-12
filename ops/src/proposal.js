@@ -408,6 +408,7 @@ export function publicDecision(row) {
     id: Number(row.id), issue_id: Number(row.issue_id), proposal_id: Number(row.proposal_id),
     proposal_version: Number(row.proposal_version), proposal_hash: row.proposal_hash,
     action: row.action, actor: row.actor, reason: row.reason, created_at: row.created_at,
+    subscription_generation: row.subscription_generation == null ? null : Number(row.subscription_generation),
   };
 }
 
@@ -511,10 +512,12 @@ export function submitOwnerDecision(db, issueId, { action, proposalId, proposalV
 }
 
 function recordDecision(db, { issueId, cur, action, actor, reason, ts }) {
+  const gate = issueWriteDecision(db, issueId);
+  const generation = gate.unbound ? null : Number(gate.generation ?? gate.current_generation ?? 1);
   db.prepare(
-    `INSERT INTO proposal_owner_decision(issue_id, proposal_id, proposal_version, proposal_hash, action, actor, reason, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(Number(issueId), Number(cur.proposal_id), Number(cur.proposal_version), String(cur.proposal_hash), action, actor, reason ? String(reason).slice(0, REASON_MAX) : null, ts);
+    `INSERT INTO proposal_owner_decision(issue_id, proposal_id, proposal_version, proposal_hash, action, actor, reason, created_at, subscription_generation)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(Number(issueId), Number(cur.proposal_id), Number(cur.proposal_version), String(cur.proposal_hash), action, actor, reason ? String(reason).slice(0, REASON_MAX) : null, ts, generation);
 }
 
 // Owner 手動請求生成／重生成提案（僅排入 job；不建授權、不寫程式）。

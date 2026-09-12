@@ -114,5 +114,5 @@ test("console explains late coding and QA will not open a PR", () => {
   const html = readFileSync(join(root, "../public/console.html"), "utf8");
   assert.match(html, /製作／QA/);
   assert.match(html, /開 PR/);
-  assert.match(html, /console\.js\?v=20260911-pkg1/);
+  assert.match(html, /console\.js\?v=2026091/);
 });

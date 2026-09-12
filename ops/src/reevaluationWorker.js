@@ -2,6 +2,7 @@ import { reevaluationConfig } from "./reevaluationPolicy.js";
 import { assessReevaluation, authorizeAndReopen } from "./reevaluation.js";
 
 // Phase 9 自動重評 worker：純本地決定性（無外部 AI）。只處理 DEFERRED/REJECTED；BLOCKED 永不自動重啟。
+// 寫入前重驗訂閱世代：解除訂閱或世代已換 → 不把舊議題重開成 EVALUATING。Owner 手動重評／解除 BLOCK 不走這條。
 // - feedback ingestion / 其它階段不受影響。
 // - 冪等：同 baseline+evidence+policy 只授權一次（DB unique + engine 檢查）。
 // - impact stale 時等待（不做自動決策）。cooldown 由 policy 控制，避免 flapping。

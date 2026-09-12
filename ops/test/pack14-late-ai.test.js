@@ -132,5 +132,5 @@ test("pending list explains late eval and proposal will not write", () => {
 test("console explains late eval proposal and webhook will not notify", () => {
   const html = readFileSync(join(root, "../public/console.html"), "utf8");
   assert.match(html, /晚到的分析、評估、提案/);
-  assert.match(html, /console\.js\?v=20260911-pkg1/);
+  assert.match(html, /console\.js\?v=2026091/);
 });

@@ -9,7 +9,7 @@ import {
   normalizeProductId,
 } from "./products.js";
 import { redactCrmReplicas, listCrmHandoff } from "./crmReplica.js";
-import { inferIssueProductId, redactInsightDerivatives } from "./insightConsent.js";
+import { inferIssueProductId, issueWriteDecision, redactInsightDerivatives } from "./insightConsent.js";
 import { recordPurgeEvent, redactExclusiveIssues } from "./purgeLedger.js";
 
 export const EXIT_ACTIONS = Object.freeze(["pause", "unsubscribe", "handoff", "purge_replica"]);
@@ -270,6 +270,33 @@ export function listPendingWork(db, productId) {
         state: "replica",
         blocking: false,
         note: `OPS 有 ${crmN} 筆站方 CRM 複本；刪複本才清除，關模組不會 DROP`,
+      });
+    }
+  }
+  if (tableExists(db, "state_entity") && tableExists(db, "issue_candidate")) {
+    const deferred = safeAll(db, `
+      SELECT i.id AS issue_id, e.state FROM state_entity e
+       JOIN issue_candidate i ON e.id = 'issue:' || i.id
+      WHERE e.entity_type='issue' AND e.state IN ('DEFERRED','REJECTED') AND i.status='open'
+    `);
+    for (const row of deferred) {
+      const scoped = inferIssueProductId(db, row.issue_id);
+      if (scoped && scoped !== id) continue;
+      if (!scoped) continue;
+      const decision = safeAll(db, `
+        SELECT subscription_generation FROM proposal_owner_decision
+         WHERE issue_id=? AND action IN ('DEFER','REJECT')
+         ORDER BY id DESC LIMIT 1
+      `, [row.issue_id])[0];
+      const expected = decision?.subscription_generation == null ? null : Number(decision.subscription_generation);
+      const gate = issueWriteDecision(db, row.issue_id, { expectedGeneration: expected });
+      if (gate.ok) continue;
+      items.push({
+        kind: "reevaluation",
+        id: row.issue_id,
+        state: gate.reason === "stale_generation" ? "stale_generation" : "subscription_revoked",
+        blocking: false,
+        note: "自動重評已停：訂閱已退出或世代已換，不會把舊議題重開成評估中。已送出的外部呼叫不宣稱撤回。Owner 手動重評不在此限。",
       });
     }
   }

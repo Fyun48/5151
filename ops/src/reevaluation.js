@@ -9,6 +9,7 @@ import {
   reevaluationConfig, reevaluationPolicyFingerprint, assessMaterialChange,
   REEVALUATION_POLICY_VERSION, REASON,
 } from "./reevaluationPolicy.js";
+import { issueWriteDecision } from "./insightConsent.js";
 
 const REASON_MAX = 1000;
 const REOPENABLE = new Set(["DEFERRED", "REJECTED"]);
@@ -44,7 +45,13 @@ export function getReevaluationBaseline(db, issueId, decisionType) {
     distinct_reporter_count: impact ? impact.distinct_reporter_count : 0,
     recent_velocity: impact ? (impact.recent_velocity || 0) : 0,
     severity_distribution: impact ? (impact.severity_distribution || {}) : {},
+    subscription_generation: decision.subscription_generation == null ? null : Number(decision.subscription_generation),
   };
+}
+
+export function autoReevaluationDecision(db, issueId, baseline = null) {
+  const expected = baseline?.subscription_generation == null ? null : Number(baseline.subscription_generation);
+  return issueWriteDecision(db, issueId, { expectedGeneration: expected });
 }
 
 export function baselineFingerprint(b) {
@@ -99,6 +106,17 @@ export function assessReevaluation(db, issueId, { now = new Date(), config = ree
   const decisionType = DECISION_FOR_STATE[state];
   const baseline = getReevaluationBaseline(db, issueId, decisionType);
   if (!baseline) return { ...base, applicable: true, eligible: false, reason: "no_baseline" };
+  const gate = autoReevaluationDecision(db, issueId, baseline);
+  if (!gate.ok) {
+    return {
+      ...base,
+      applicable: true,
+      eligible: false,
+      reason: gate.reason,
+      subscription_blocked: true,
+      baseline_fingerprint: baselineFingerprint(baseline),
+    };
+  }
   const baselineFp = baselineFingerprint(baseline);
   const nowMs = now instanceof Date ? now.getTime() : now;
   const decisionAt = ms(baseline.decision_at);
@@ -140,6 +158,15 @@ export function authorizeAndReopen(db, issueId, { triggerType = "auto", authoriz
     const decisionType = DECISION_FOR_STATE[entity.state];
     const baseline = getReevaluationBaseline(db, issueId, decisionType);
     if (!baseline) throw httpError("no owner decision baseline", 409);
+    let generation = null;
+    if (triggerType === "auto") {
+      const gate = autoReevaluationDecision(db, issueId, baseline);
+      if (!gate.ok) throw httpError(gate.reason === "stale_generation" ? "stale_generation" : "subscription_revoked", 409);
+      generation = gate.unbound ? null : gate.generation;
+    } else {
+      const gate = issueWriteDecision(db, issueId);
+      generation = gate.unbound ? null : Number(gate.generation ?? gate.current_generation ?? 1);
+    }
     const impact = getCurrentIssueImpact(db, issueId, { now });
     if (!impact) throw httpError("current impact unavailable", 409);
     if (impact.stale) throw httpError("current impact is stale; wait for recalculation", 409);
@@ -156,11 +183,11 @@ export function authorizeAndReopen(db, issueId, { triggerType = "auto", authoriz
     const res = db.prepare(
       `INSERT INTO issue_reevaluation_authorization
         (issue_id, trigger_type, authorized_by, from_state, source_owner_decision_id, baseline_fingerprint, current_evidence_fingerprint,
-         policy_version, policy_fingerprint, reason_codes, observed_deltas, actor, reason, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         policy_version, policy_fingerprint, reason_codes, observed_deltas, actor, reason, created_at, subscription_generation)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       Number(issueId), triggerType, authorizedBy, entity.state, baseline.owner_decision_id, baselineFp, evidenceFp,
-      config.version, policyFp, JSON.stringify(reasonCodes), JSON.stringify(material.deltas), actor, reason ? String(reason).slice(0, REASON_MAX) : null, ts,
+      config.version, policyFp, JSON.stringify(reasonCodes), JSON.stringify(material.deltas), actor, reason ? String(reason).slice(0, REASON_MAX) : null, ts, generation,
     );
     const authId = Number(res.lastInsertRowid);
     appendAuditRow(db, { actor, action: "issue.reevaluation.authorized", entityType: "issue_reevaluation_authorization", entityId: String(authId), data: { issue_id: Number(issueId), trigger_type: triggerType, authorized_by: authorizedBy, from_state: entity.state, baseline_fingerprint: baselineFp, current_evidence_fingerprint: evidenceFp, policy_version: config.version, reason_codes: reasonCodes } });
@@ -208,6 +235,7 @@ export function publicAuthorization(row) {
     policy_version: row.policy_version, policy_fingerprint: row.policy_fingerprint,
     reason_codes: parseJson(row.reason_codes), observed_deltas: parseJson(row.observed_deltas),
     actor: row.actor, reason: row.reason, created_at: row.created_at,
+    subscription_generation: row.subscription_generation == null ? null : Number(row.subscription_generation),
   };
 }
 export function listReevaluationAuthorizations(db, { issueId, limit = 50 } = {}) {
