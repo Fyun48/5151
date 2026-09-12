@@ -9,8 +9,11 @@
 
 新功能與變更**只做 v3**。畫面產品名是「吉比租房物件追蹤」。
 
-- **v3**：埠 `5153`，程式在 `v3/src`、`v3/public`，資料 `data-v3/v3.db`。
-- **公開站**：`https://c5151.reversalplay.me` 與 `https://jibbyrenth.reversalplay.me`（同一條 Cloudflare Tunnel → `http://127.0.0.1:5153`）。
+- **v3**：容器聽 `5153`，程式在 `v3/src`、`v3/public`，資料 `data-v3/v3.db`。
+- **公開站**（同一條 Cloudflare Tunnel、同一台 v3 容器）：
+  - `https://c5151.reversalplay.me` → `http://127.0.0.1:5153`
+  - `https://jibbyrenth.reversalplay.me` → `http://127.0.0.1:5155`
+- **OPS Console**：`https://jibbyrentops.reversalplay.me` → `http://127.0.0.1:5154`（獨立容器，不是 v3）。
 - 規劃見 `v3/ARCHITECTURE.md` 與 `v3/DESIGN.md`。
 - **v1 已停用**（root 的 `src/`、`public/` 只留作歷史，只讀匯入）；**v2 只維護、不再加功能**。
 
