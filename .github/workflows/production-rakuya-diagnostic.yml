@@ -1,0 +1,121 @@
+name: Production Rakuya diagnostic (read-only)
+run-name: "rakuya-diagnostic:${{ inputs.source_sha }}"
+
+# Runs the diagnostic already deployed in v3. No application copy, image pull,
+# container restart, database migration, import, pagination, or challenge bypass.
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: "Expected deployed v3 source SHA (40 lowercase hexadecimal characters)"
+        required: true
+      confirmation:
+        description: "DIAGNOSE-RAKUYA: read source counts and make one public list request"
+        required: true
+
+permissions:
+  contents: read
+
+# Serialize with the existing release workflows so the inspected image cannot
+# change halfway through collection.
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 5
+    steps:
+      - name: Authorize manual production diagnostic
+        env:
+          ALLOWED_ACTOR: ${{ vars.PRODUCTION_DEPLOY_ALLOWED_ACTOR }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = Fyun48/5151
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/master
+          test -n "$ALLOWED_ACTOR"
+          cursor_allowed=0
+          if [[ "$GITHUB_ACTOR" == cursor || "$GITHUB_ACTOR" == 'cursor[bot]' ]]; then
+            if [[ "$GITHUB_TRIGGERING_ACTOR" == cursor || "$GITHUB_TRIGGERING_ACTOR" == 'cursor[bot]' ]]; then
+              cursor_allowed=1
+            fi
+          fi
+          if [[ "$cursor_allowed" != 1 ]]; then
+            test "$GITHUB_ACTOR" = "$ALLOWED_ACTOR"
+            test "$GITHUB_TRIGGERING_ACTOR" = "$ALLOWED_ACTOR"
+          fi
+          test "$CONFIRMATION" = DIAGNOSE-RAKUYA
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+
+      - name: Checkout exact workflow source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify deployed source and diagnostic script identity
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$SOURCE_SHA" HEAD
+          script_hash="$(git show "$SOURCE_SHA:v3/src/diagnoseRakuya.js" | sha256sum | cut -d ' ' -f 1)"
+          [[ "$script_hash" =~ ^[0-9a-f]{64}$ ]]
+          printf 'DIAGNOSTIC_SCRIPT_SHA256=%s\n' "$script_hash" >> "$GITHUB_ENV"
+
+      - name: Verify diagnostic collection safeguards
+        run: python3 .github/scripts/test-rakuya-diagnostic.py
+
+      - name: Collect one diagnostic from the running v3 container
+        id: collect
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          NAS_HOST: ${{ secrets.NAS_HOST }}
+          NAS_PORT: ${{ secrets.NAS_PORT }}
+          NAS_USER: ${{ secrets.NAS_USER }}
+          NAS_SSH_KEY: ${{ secrets.NAS_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          diagnostic_tmp="$(mktemp -d)"
+          trap 'rm -rf "$diagnostic_tmp"' EXIT
+          printf '%s\n' "$NAS_SSH_KEY" > "$diagnostic_tmp/key"
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=15 \
+            -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
+            -o StrictHostKeyChecking=accept-new \
+            -p "$NAS_PORT" -i "$diagnostic_tmp/key" "$NAS_USER@$NAS_HOST" \
+            bash -s -- "$SOURCE_SHA" "$DIAGNOSTIC_SCRIPT_SHA256" \
+            < .github/scripts/production-rakuya-remote.sh > rakuya-diagnostic-raw.json
+
+      - name: Validate and save diagnostic evidence
+        id: evidence
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: python3 .github/scripts/write-rakuya-diagnostic-evidence.py rakuya-diagnostic-raw.json rakuya-diagnostic.json
+
+      - name: Upload diagnostic evidence
+        if: ${{ always() && steps.evidence.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: rakuya-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: rakuya-diagnostic.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Check Rakuya response after preserving evidence
+        if: ${{ always() && steps.evidence.outcome == 'success' }}
+        run: |
+          python3 - <<'PY'
+          import json
+          report = json.load(open('rakuya-diagnostic.json'))
+          result = report['diagnostic']['rakuya']
+          if not result['ok']:
+              raise SystemExit('Rakuya diagnostic: ' + result['code'] + ' (evidence saved; production unchanged)')
+          PY
