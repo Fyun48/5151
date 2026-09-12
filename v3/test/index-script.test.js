@@ -173,7 +173,9 @@ test("housing kind chips stay independent of 特別關注", () => {
   assert.match(html, /data-kind="warehouse"/);
   assert.match(html, /data-source="591"/);
   assert.match(html, /data-chip-row="source"/);
-  assert.match(html, /房屋類型（可複選）/);
+  assert.match(html, /id="kindRowLabel">房屋類型</);
+  assert.match(html, /id="kindRowHint"/);
+  assert.match(html, /整層與套房是隔局，不能同時選/);
   assert.match(html, /id="sourceRowLabel"/);
   assert.match(html, /aria-pressed/);
   assert.match(html, /function toggleHousingKind/);
@@ -183,8 +185,9 @@ test("housing kind chips stay independent of 特別關注", () => {
   assert.doesNotMatch(html, /data-filter="elevator"/);
   assert.doesNotMatch(html, /data-filter="apartment"/);
   assert.doesNotMatch(html, /data-filter="suite"/);
-  assert.match(html, /const unspecifiedWhole = isWholeFloorHome\(kind\)/);
-  assert.match(html, /const isBuilding = unspecifiedWhole \|\| \/大\[樓廈\]\/\.test\(formHay\)/);
+  assert.match(html, /const unspecifiedAppearance = !\/大樓\|大廈\|公寓\|華廈\|透天\|別墅\|農舍\/\.test\(formHay\)/);
+  assert.match(html, /const isBuilding = unspecifiedAppearance \|\| \/大\[樓廈\]\/\.test\(formHay\)/);
+  assert.match(html, /if \(key === "shop"\) return \/店面\|店舖\|店鋪\/\.test\(title\)/);
 });
 
 test("page defaults to 全部 + 最新", () => {

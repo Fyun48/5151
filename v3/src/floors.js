@@ -12,6 +12,8 @@ import {
 } from "./geoPrecision.js";
 import {
   HOUSING_KINDS,
+  commercialCategories,
+  effectiveAppearanceCategories,
   elevatorRequired,
   kindsToQuery,
   parseHousingKinds,
@@ -42,15 +44,24 @@ function tagText(listing) {
     .join(" ");
 }
 
-/** 型態欄／標籤才算房屋型態；標題不看，避免「社區垃圾大樓」誤判。 */
+/** 建築樣式只看型態欄／標籤，標題不看，避免「社區垃圾大樓」誤判。 */
+const EXPLICIT_APPEARANCE_RE = /大樓|大廈|公寓|華廈|透天|別墅|農舍/;
 const EXPLICIT_HOUSING_FORM_RE = /大樓|大廈|公寓|華廈|店面|店舖|店鋪|倉庫|廠房|套房|雅房|分租|共宅|共居|透天|別墅|農舍/;
 
 function listingFormHay(listing) {
   return `${listing?.kind_name || ""} ${listing?.listing_kind || ""} ${tagText(listing)}`;
 }
 
+function listingTitleText(listing) {
+  return String(listing?.title || "");
+}
+
 export function listingHasExplicitHousingForm(listing) {
   return EXPLICIT_HOUSING_FORM_RE.test(listingFormHay(listing));
+}
+
+export function listingHasExplicitAppearance(listing) {
+  return EXPLICIT_APPEARANCE_RE.test(listingFormHay(listing));
 }
 
 export function listingIsUnspecifiedWholeFloor(listing) {
@@ -58,12 +69,22 @@ export function listingIsUnspecifiedWholeFloor(listing) {
   return isWholeFloorHome(kind) && !listingHasExplicitHousingForm(listing);
 }
 
+export function listingIsUnspecifiedAppearance(listing) {
+  if (listingHasExplicitAppearance(listing)) return false;
+  const kind = String(listing?.kind_name || listing?.listing_kind || "");
+  return isWholeFloorHome(kind) || listingIsSuiteShared(listing);
+}
+
+export function listingIsExplicitBuilding(listing) {
+  return /大[樓廈]/.test(listingFormHay(listing));
+}
+
 export function listingHasElevator(listing) {
   const kind = String(listing.kind_name || "");
   const hay = `${listing.title || ""} ${kind} ${listing.address || ""} ${tagText(listing)}`;
   if (/無電梯|沒有電梯|不含電梯|五樓以下無電梯/.test(hay)) return false;
   if (/有電梯|電梯大樓|電梯大廈|電梯公寓|電梯華廈|貨梯/.test(hay)) return true;
-  if (listingIsBuilding(listing)) return true;
+  if (listingIsExplicitBuilding(listing) || listingIsUnspecifiedAppearance(listing)) return true;
   return false;
 }
 
@@ -74,14 +95,14 @@ export function listingHasParking(listing) {
 }
 
 export function listingIsBuilding(listing) {
-  if (listingIsUnspecifiedWholeFloor(listing)) return true;
-  return /大[樓廈]/.test(listingFormHay(listing));
+  if (listingIsUnspecifiedAppearance(listing)) return true;
+  return listingIsExplicitBuilding(listing);
 }
 
 export function listingIsApartment(listing) {
-  if (listingIsUnspecifiedWholeFloor(listing)) return true;
+  if (listingIsUnspecifiedAppearance(listing)) return true;
   const hay = `${listing.title || ""} ${listing.kind_name || ""} ${tagText(listing)}`;
-  if (/大[樓廈]/.test(listingFormHay(listing)) || /電梯大[樓廈]/.test(hay)) return false;
+  if (listingIsExplicitBuilding(listing) || /電梯大[樓廈]/.test(hay)) return false;
   return /公寓|華廈/.test(hay);
 }
 
@@ -102,19 +123,18 @@ export function listingIsColiving(listing) {
 }
 
 export function listingIsShop(listing) {
-  const hay = `${listing?.kind_name || ""} ${listing?.title || ""}`;
-  return /店面|店鋪/.test(hay);
+  return /店面|店舖|店鋪/.test(listingTitleText(listing));
 }
 
 export function listingIsWarehouse(listing) {
-  const hay = `${listing?.kind_name || ""} ${listing?.title || ""}`;
-  return /倉庫|廠房|倉儲/.test(hay);
+  return /倉庫|廠房|倉儲/.test(listingTitleText(listing));
 }
 
 /** 通知結尾用的房屋類型，不寫「整層住家」。 */
 export function housingTypeLabel(listing) {
-  if (listingIsShop(listing)) return "店面";
-  if (listingIsWarehouse(listing)) return "倉庫";
+  const labelHay = `${listing?.kind_name || ""} ${listingTitleText(listing)}`;
+  if (/店面|店舖|店鋪/.test(labelHay)) return "店面";
+  if (/倉庫|廠房|倉儲/.test(labelHay)) return "倉庫";
   if (listingIsSuite(listing)) return "套房";
   if (listingHasElevator(listing)) return "電梯公寓/大樓";
   return "公寓";
@@ -204,7 +224,6 @@ export function formatFloorDisplay(floorName) {
 }
 
 export function listingIsSuiteShared(listing) {
-  if (listingIsWarehouse(listing)) return false;
   return listingIsSuite(listing) || listingIsYafang(listing) || listingIsShareRental(listing) || listingIsColiving(listing);
 }
 
@@ -219,8 +238,8 @@ export function listingMatchesKindKey(listing, kind) {
   if (key === "coliving") return listingIsColiving(listing);
   if (key === "suite_shared") return listingIsSuiteShared(listing);
   if (key === "whole") return isWholeFloorHome(listing.kind_name);
-  if (key === "shop") return listingIsShop(listing) || listingIsUnspecifiedWholeFloor(listing);
-  if (key === "warehouse") return listingIsWarehouse(listing) || listingIsUnspecifiedWholeFloor(listing);
+  if (key === "shop") return listingIsShop(listing);
+  if (key === "warehouse") return listingIsWarehouse(listing);
   return true;
 }
 
@@ -234,7 +253,12 @@ export function matchesHousingKind(listing, kind) {
   if (query.rentalMode === "legacy" && query.legacyRental && !listingMatchesKindKey(listing, query.legacyRental)) {
     return false;
   }
-  if (query.categories.length && !query.categories.some((key) => listingMatchesKindKey(listing, key))) {
+  const appearance = effectiveAppearanceCategories(query);
+  if (appearance.length && !appearance.some((key) => listingMatchesKindKey(listing, key))) {
+    return false;
+  }
+  const commercial = commercialCategories(query);
+  if (commercial.length && !commercial.some((key) => listingMatchesKindKey(listing, key))) {
     return false;
   }
   if (elevatorRequired(query) && !listingHasElevator(listing)) return false;

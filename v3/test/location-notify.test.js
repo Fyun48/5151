@@ -235,15 +235,18 @@ test("housing kind filters can combine with 特別關注", () => {
     sources: ["591", "sinyi"],
   });
   assert.deepEqual(normalizeListQuery("all", "suite,whole"), { filter: "all", kind: "whole", kinds: ["whole"], sources: [] });
-  assert.equal(listingIsShop({ kind_name: "店面" }), true);
-  assert.equal(listingIsWarehouse({ kind_name: "倉庫" }), true);
+  assert.equal(listingIsShop({ title: "黃金店面", kind_name: "整層住家" }), true);
+  assert.equal(listingIsShop({ kind_name: "店面" }), false);
+  assert.equal(listingIsWarehouse({ title: "倉庫出租", kind_name: "整層住家" }), true);
+  assert.equal(listingIsWarehouse({ kind_name: "倉庫" }), false);
   assert.equal(housingTypeLabel({ kind_name: "店面" }), "店面");
-  assert.equal(matchesHousingKind({ kind_name: "店面" }, "shop"), true);
+  assert.equal(matchesHousingKind({ kind_name: "店面" }, "shop"), false);
+  assert.equal(matchesHousingKind({ title: "黃金店面", kind_name: "整層住家" }, "shop"), true);
   assert.equal(matchesHousingKind({ kind_name: "獨立套房" }, "suite,whole"), false);
   assert.deepEqual(toggleHousingKind(["suite"], "whole"), ["whole"]);
   assert.deepEqual(toggleHousingKind(["whole"], "shop"), ["whole", "shop"]);
   assert.deepEqual(toggleHousingKind(["elevator"], "apartment"), ["apartment_huaxia", "elevator"]);
-  assert.deepEqual(toggleHousingKind(["shop"], "warehouse"), ["shop", "warehouse"]);
+  assert.deepEqual(toggleHousingKind(["shop"], "warehouse"), ["warehouse"]);
   assert.equal(matchesHousingKind({ title: "電梯大樓", kind_name: "整層住家", tags: ["電梯大樓"] }, "elevator,apartment"), false);
   assert.equal(matchesHousingKind({ kind_name: "雅房" }, "yafang"), true);
   assert.equal(matchesHousingKind({ kind_name: "分租套房" }, "share"), true);
