@@ -384,7 +384,7 @@ export function applyOpsSchema(db) {
       policy_fingerprint TEXT,                       -- 決策政策/評估設定指紋（result-affecting config；不含 secrets）
       policy_snapshot TEXT,                          -- 去識別化政策快照（可解釋歷史 run 是用哪些規則產生）
       source_impact_assessment_id INTEGER,
-      status TEXT NOT NULL DEFAULT 'pending',       -- pending|processing|completed|failed|failed_retry
+      status TEXT NOT NULL DEFAULT 'pending',       -- pending|processing|completed|failed|failed_retry|cancelled
       final_recommendation TEXT,                    -- PROPOSE|WAIT|IGNORE|ESCALATE（僅 completed）
       aggregate_confidence REAL,
       agreement REAL,
@@ -486,7 +486,7 @@ export function applyOpsSchema(db) {
       rollback_considerations TEXT,
       evidence_summary TEXT,
       revision_instruction TEXT,
-      status TEXT NOT NULL DEFAULT 'pending',   -- pending|processing|completed|failed|failed_retry
+      status TEXT NOT NULL DEFAULT 'pending',   -- pending|processing|completed|failed|failed_retry|cancelled
       provider TEXT,
       model TEXT,
       retry_count INTEGER NOT NULL DEFAULT 0,

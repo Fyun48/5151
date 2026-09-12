@@ -359,8 +359,47 @@ function productName(id) {
   return productsCache.find((p) => p.id === id)?.display_name || id;
 }
 
+const PENDING_CANCEL = {
+  site_command: {
+    states: ["pending", "sending"],
+    label: "取消未送出的遠端客服",
+    path: (id) => `/ops/api/site-commands/${id}/cancel`,
+    title: "確認取消遠端客服",
+    body: (id, state) => `取消這筆尚未套用的遠端客服 #${id}？不會假裝本站已回覆。${state === "sending" ? "已在外送的呼叫不宣稱撤回。" : "未送出的命令不會再外送。"}`,
+    confirm: "確定取消命令",
+    ok: (data) => `已取消遠端客服。${data.in_flight_not_withdrawn ? "已在外送的呼叫不宣稱撤回。" : ""}`,
+  },
+  analysis: {
+    states: ["pending", "failed_retry", "processing"],
+    label: "取消未送出的分析",
+    path: (id) => `/ops/api/analyses/${id}/cancel`,
+    title: "確認取消分析",
+    body: (id, state) => `取消這筆尚未完成的分析 #${id}？已完成的結果不會被這一步改寫。${state === "processing" ? "已在跑的分析不宣稱撤回外部呼叫。" : "未送出的分析不會再執行。"}`,
+    confirm: "確定取消分析",
+    ok: (data) => `已取消分析。${data.in_flight_not_withdrawn ? "已在跑的分析不宣稱撤回外部呼叫。" : ""}`,
+  },
+  evaluation: {
+    states: ["pending", "failed_retry", "processing"],
+    label: "取消未送出的評估",
+    path: (id) => `/ops/api/evaluation-runs/${id}/cancel`,
+    title: "確認取消評估",
+    body: (id, state) => `取消這筆尚未完成的評估 #${id}？已完成的結果不會被這一步改寫。${state === "processing" ? "已在跑的評估不宣稱撤回外部呼叫。" : "未送出的評估不會再執行。"}`,
+    confirm: "確定取消評估",
+    ok: (data) => `已取消評估。${data.in_flight_not_withdrawn ? "已在跑的評估不宣稱撤回外部呼叫。" : ""}`,
+  },
+  proposal: {
+    states: ["pending", "failed_retry", "processing"],
+    label: "取消未送出的提案",
+    path: (id) => `/ops/api/proposals/${id}/cancel`,
+    title: "確認取消提案",
+    body: (id, state) => `取消這筆尚未完成的提案 #${id}？已完成的結果不會被這一步改寫。${state === "processing" ? "已在跑的提案不宣稱撤回外部呼叫。" : "未送出的提案不會再生成。"}`,
+    confirm: "確定取消提案",
+    ok: (data) => `已取消提案。${data.in_flight_not_withdrawn ? "已在跑的提案不宣稱撤回外部呼叫。" : ""}`,
+  },
+};
+
 function pendingItemCancellable(it) {
-  return it.kind === "site_command" && (it.state === "pending" || it.state === "sending");
+  return Boolean(PENDING_CANCEL[it.kind]?.states.includes(it.state));
 }
 
 function showExitDetail(id, data) {
@@ -396,8 +435,9 @@ function showExitDetail(id, data) {
   const blocks = lines.map((line) => `<p>${esc(line)}</p>`);
   for (const it of items) {
     const label = `${PENDING_KIND_LABEL[it.kind] || it.kind} #${it.id} ${STATUS_LABEL[it.state] || it.state}${it.blocking ? "（阻擋）" : ""}${it.unscoped ? "（尚未分站）" : ""} ${it.note || ""}`;
-    const btn = pendingItemCancellable(it)
-      ? `<button type="button" data-cancel-cmd="${Number(it.id)}" data-pid="${esc(id)}" data-cmd-state="${esc(it.state)}">取消未送出的遠端客服</button>`
+    const spec = pendingItemCancellable(it) ? PENDING_CANCEL[it.kind] : null;
+    const btn = spec
+      ? `<button type="button" data-cancel-kind="${esc(it.kind)}" data-cancel-id="${Number(it.id)}" data-pid="${esc(id)}" data-cancel-state="${esc(it.state)}">${esc(spec.label)}</button>`
       : "";
     blocks.push(`<div class="pending-item"><p>${esc(label)}</p>${btn}</div>`);
   }
@@ -1591,24 +1631,24 @@ $("devCancelQa")?.addEventListener("click", () => {
 });
 $("productsRefresh").addEventListener("click", refreshProducts);
 $("exitDetailBody")?.addEventListener("click", (ev) => {
-  const btn = ev.target.closest("[data-cancel-cmd]");
+  const btn = ev.target.closest("[data-cancel-kind][data-cancel-id]");
   if (!btn) return;
-  const jobId = Number(btn.dataset.cancelCmd);
+  const spec = PENDING_CANCEL[btn.dataset.cancelKind];
+  const itemId = Number(btn.dataset.cancelId);
   const pid = btn.dataset.pid || "";
-  const sending = btn.dataset.cmdState === "sending";
-  if (!jobId) return;
+  const state = btn.dataset.cancelState || "";
+  if (!spec || !itemId) return;
   showConfirm({
-    title: "確認取消遠端客服",
-    body: `取消這筆尚未套用的遠端客服 #${jobId}？不會假裝本站已回覆。${sending ? "已在外送的呼叫不宣稱撤回。" : "未送出的命令不會再外送。"}`,
-    confirmLabel: "確定取消命令",
+    title: spec.title,
+    body: spec.body(itemId, state),
+    confirmLabel: spec.confirm,
     onConfirm: async () => {
-      const { res, data } = await api(`/ops/api/site-commands/${jobId}/cancel`, {
+      const { res, data } = await api(spec.path(itemId), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reason: "owner_console" }),
       });
-      const extra = data.in_flight_not_withdrawn ? "已在外送的呼叫不宣稱撤回。" : "";
-      setStatus($("productMsg"), res.ok ? `已取消遠端客服。${extra}` : (data.error || "取消失敗"), res.ok ? "ok" : "err");
+      setStatus($("productMsg"), res.ok ? spec.ok(data) : (data.error || "取消失敗"), res.ok ? "ok" : "err");
       if (res.ok && pid) await loadPending(pid);
     },
   });

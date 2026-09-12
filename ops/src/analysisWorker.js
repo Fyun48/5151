@@ -68,8 +68,9 @@ async function processOne(db, job, { provider, timeoutMs, now = () => new Date()
     const { rawText, usage } = await provider.analyze({ system, user, timeoutMs });
     const result = parseAndValidate(rawText); // 嚴格驗證；失敗會丟 422
     const rawOutputHash = createHash("sha256").update(String(rawText)).digest("hex");
+    let promo;
     withImmediateTx(db, () => {
-      const promo = completeAnalysis(db, job.id, {
+      promo = completeAnalysis(db, job.id, {
         provider: provider.name,
         model: provider.model || null,
         result,
@@ -77,6 +78,7 @@ async function processOne(db, job, { provider, timeoutMs, now = () => new Date()
         usage: usage || {},
         now: now(),
       });
+      if (promo.skipped) return;
       appendAuditRow(db, {
         actor: "system",
         action: "feedback.analysis.completed",
@@ -94,6 +96,7 @@ async function processOne(db, job, { provider, timeoutMs, now = () => new Date()
         data: { feedback_id: job.feedback_id, analysis_type: job.analysis_type, from_analysis_id: promo.previousCurrentId, to_analysis_id: job.id, revision: job.revision },
       });
     });
+    if (promo?.skipped) return promo.reason === "cancelled" ? "cancelled" : (promo.reason || "skipped");
     return "completed";
   } catch (err) {
     const isSchema = err?.status === 422;
@@ -110,15 +113,16 @@ async function processOne(db, job, { provider, timeoutMs, now = () => new Date()
 
 export async function runAnalysisOnce(db, { provider, now = () => new Date(), timeoutMs = DEFAULT_TIMEOUT_MS, batchSize = DEFAULT_BATCH, concurrency = DEFAULT_CONCURRENCY, random = Math.random } = {}) {
   if (!provider || !provider.available) {
-    return { claimed: 0, completed: 0, failed: 0, failed_retry: 0, skipped: "no_provider" };
+    return { claimed: 0, completed: 0, failed: 0, failed_retry: 0, cancelled: 0, skipped: "no_provider" };
   }
   const claimed = claimAnalysisBatch(db, { limit: batchSize, now: now() });
-  if (!claimed.length) return { claimed: 0, completed: 0, failed: 0, failed_retry: 0 };
+  if (!claimed.length) return { claimed: 0, completed: 0, failed: 0, failed_retry: 0, cancelled: 0 };
   const results = await runPool(claimed, concurrency, (job) => processOne(db, job, { provider, timeoutMs, now, random }));
-  const summary = { claimed: claimed.length, completed: 0, failed: 0, failed_retry: 0 };
+  const summary = { claimed: claimed.length, completed: 0, failed: 0, failed_retry: 0, cancelled: 0 };
   for (const r of results) {
     if (r === "completed") summary.completed += 1;
     else if (r === "failed") summary.failed += 1;
+    else if (r === "cancelled") summary.cancelled += 1;
     else summary.failed_retry += 1;
   }
   return summary;

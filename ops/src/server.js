@@ -47,7 +47,7 @@ import {
 } from "./attachments.js";
 import { LocalPersistentStorage, defaultAttachmentDir } from "./storage/localStorage.js";
 import { makeScanner } from "./malwareScan.js";
-import { listAnalyses, publicAnalysis, reprocessAnalysis, analysisStats, currentAnalysisId, getCurrentFeedbackAnalysis } from "./feedbackAnalysis.js";
+import { listAnalyses, publicAnalysis, reprocessAnalysis, analysisStats, currentAnalysisId, getCurrentFeedbackAnalysis, cancelAnalysis } from "./feedbackAnalysis.js";
 import { makeProvider } from "./ai/provider.js";
 import { drawersAdminView, resolveDrawerKind, saveDrawer } from "./providerDrawer.js";
 import { analysisConfigFromEnv, startAnalysisLoop } from "./analysisWorker.js";
@@ -59,11 +59,11 @@ import { makeEmbeddingProvider } from "./ai/embeddingProvider.js";
 import { clusteringConfigFromEnv, startClusteringLoop } from "./clusteringWorker.js";
 import { getCurrentIssueImpact, listAssessments, isImpactStale, calculateAndStoreImpact, currentImpactId } from "./impact.js";
 import { impactWorkerConfigFromEnv, startImpactLoop } from "./impactWorker.js";
-import { getCurrentIssueEvaluation, getEvaluationRunDetail, listEvaluationRuns, currentEvaluationRunId, isEvaluationStale, requestEvaluationRecalc } from "./evaluation.js";
+import { getCurrentIssueEvaluation, getEvaluationRunDetail, listEvaluationRuns, currentEvaluationRunId, isEvaluationStale, requestEvaluationRecalc, cancelEvaluation } from "./evaluation.js";
 import { makeEvaluationProvider } from "./ai/evaluationProvider.js";
 import { evaluationWorkerConfigFromEnv, startEvaluationLoop } from "./evaluationWorker.js";
 import { evaluationRolesConfig } from "./evaluationRoles.js";
-import { getCurrentIssueProposal, listProposals, listOwnerDecisions, currentOwnerDecision, getActiveAuthorization, submitOwnerDecision, requestProposalGeneration } from "./proposal.js";
+import { getCurrentIssueProposal, listProposals, listOwnerDecisions, currentOwnerDecision, getActiveAuthorization, submitOwnerDecision, requestProposalGeneration, cancelProposal } from "./proposal.js";
 import { makeProposalProvider } from "./ai/proposalProvider.js";
 import { proposalWorkerConfigFromEnv, startProposalLoop } from "./proposalWorker.js";
 import { getReevaluationView, ownerManualReevaluate, ownerUnblock } from "./reevaluation.js";
@@ -565,6 +565,18 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         sendJson(res, 200, analysisStats(db));
         return;
       }
+      const analysisCancel = pathname.match(/^\/ops\/api\/analyses\/(\d+)\/cancel$/);
+      if (analysisCancel && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {};
+        try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          sendJson(res, 200, { ok: true, ...cancelAnalysis(db, Number(analysisCancel[1]), { actor: `owner:${req.owner.email}`, reason: b.reason }) });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
 
       // ── Phase 5：Issue Candidate 檢視（Owner） ──
       if (pathname === "/ops/api/issues" && method === "GET") {
@@ -949,6 +961,18 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         sendJson(res, 200, detail);
         return;
       }
+      const evalCancel = pathname.match(/^\/ops\/api\/evaluation-runs\/(\d+)\/cancel$/);
+      if (evalCancel && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {};
+        try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          sendJson(res, 200, { ok: true, ...cancelEvaluation(db, Number(evalCancel[1]), { actor: `owner:${req.owner.email}`, reason: b.reason }) });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
       const evalRecalc = pathname.match(/^\/ops\/api\/issues\/(\d+)\/evaluation\/recalculate$/);
       if (evalRecalc && method === "POST") {
         if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
@@ -1003,6 +1027,18 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
           });
           sendJson(res, 200, { ok: true, ...r });
         } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+      const proposalCancel = pathname.match(/^\/ops\/api\/proposals\/(\d+)\/cancel$/);
+      if (proposalCancel && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {};
+        try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          sendJson(res, 200, { ok: true, ...cancelProposal(db, Number(proposalCancel[1]), { actor: `owner:${req.owner.email}`, reason: b.reason }) });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
         return;
       }
 

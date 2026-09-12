@@ -382,6 +382,15 @@ Owner 直達部署從現在就保留，不必等第 8 包。OPS 新工作流是�
 - 未決清單可按這扇門。
 - 反悔：不按取消。不開 `remote_cs`、不開 live、不合 master。
 
+### 包 22 — 未送出的分析／評估／提案可取消
+
+- Owner 對尚未完成的分析、評估、提案可送取消要求，並看到取消結果。
+- `pending`／`failed_retry`／`processing` 可取消；已完成的結果不改寫、不動 CURRENT 指標。
+- 已在跑的不宣稱撤回外部呼叫；取消後 claim 不再認領。
+- 晚到的 `completeAnalysis`／`completeRun`／提案完成交易不寫入 completed、不 promote current；`fail*` 也不用 failed 蓋掉 `cancelled`。
+- 未決清單可按這三扇門。
+- 反悔：不按取消。不開 live、不合 master。
+
 ---
 
 ## 12. 我堅持的理想（用來審每一個 PR）

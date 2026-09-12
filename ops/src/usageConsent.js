@@ -61,7 +61,7 @@ export function countIngestedForStats(db, { productId = null } = {}) {
 
 export function analysisStatsForConsent(db, rawStats) {
   const allowed = productIdsAllowingStats(db);
-  const consented = { pending: 0, processing: 0, failed_retry: 0, completed: 0, failed: 0, total: 0 };
+  const consented = { pending: 0, processing: 0, failed_retry: 0, completed: 0, failed: 0, cancelled: 0, total: 0 };
   if (allowed.length) {
     const marks = allowed.map(() => "?").join(",");
     for (const r of db.prepare(`
