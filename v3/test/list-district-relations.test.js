@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { appendDistrictCandidates } from "../src/listDistrictSql.js";
+import { appendDistrictCandidates, ensureDistrictCandidateIndex } from "../src/listDistrictSql.js";
 
 test("district candidates retain complete connected groups without loading unrelated matches or other users' groups", () => {
   const db = new DatabaseSync(":memory:");
@@ -42,6 +42,30 @@ test("district candidates retain complete connected groups without loading unrel
     db.exec("INSERT INTO listings VALUES (14, '1|8|missing-target', 99)");
     assert.deepEqual(query(1), [1, 2, 3, 4, 5, 10, 11, 12, 13, 14]);
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM listings").get().n, 14);
+  } finally {
+    db.close();
+  }
+});
+
+test("district ID lookup uses the derived index and follows source-key edits automatically", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec(`CREATE TABLE listings (post_id INTEGER PRIMARY KEY, source_key TEXT, title TEXT);
+      INSERT INTO listings VALUES (1, '1|8|selected', 'A'), (2, '3|34|foreign', 'B'), (3, 'legacy', 'C')`);
+    ensureDistrictCandidateIndex(db);
+    ensureDistrictCandidateIndex(db);
+    const clauses = [], params = [];
+    appendDistrictCandidates(["士林區"], clauses, params);
+    const sql = `SELECT post_id, title FROM listings WHERE ${clauses.join(" AND ")} ORDER BY post_id`;
+    const read = () => db.prepare(sql).all(...params).map(row => row.post_id);
+    assert.deepEqual(read(), [1, 3]);
+    const plan = db.prepare("EXPLAIN QUERY PLAN " + sql).all(...params).map(row => row.detail);
+    assert.ok(plan.some(row => /USING COVERING INDEX idx_listings_district_prefix/.test(row)), plan.join("\n"));
+    db.exec("UPDATE listings SET source_key = '3|34|moved' WHERE post_id = 1");
+    db.exec("UPDATE listings SET source_key = '1|8|moved' WHERE post_id = 2");
+    assert.deepEqual(read(), [2, 3]);
+    db.exec("INSERT INTO listings VALUES (4, '1|8|new', 'D')");
+    assert.deepEqual(read(), [2, 3, 4]);
   } finally {
     db.close();
   }

@@ -1,5 +1,5 @@
 // Reproducible synthetic benchmark. Always uses a new temporary database.
-// Run: node v3/benchmark-listings.mjs [row count] [mixed|relations|interactive]
+// Run: node v3/benchmark-listings.mjs [row count] [mixed|relations|interactive] [writes]
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -14,6 +14,7 @@ try {
   const app = await import("./src/db.js");
   const uid = app.ensureUser("benchmark@example.test", { role: "admin" });
   const interactive = process.argv[3] === "interactive";
+  const crawlWrites = process.argv[4] === "writes";
   const otherUid = interactive ? app.ensureUser("second-benchmark@example.test", { role: "admin" }) : uid;
   const settings = {
     ...app.getSettings(uid), searchUrls: [], watchDistricts: ["1-8"],
@@ -54,6 +55,10 @@ try {
   if (interactive) Date.now = () => clock;
   const results = [];
   for (const sort of ["newest", "fit_desc", "price_asc", "commute_asc", "newest"]) {
+    // A crawler-style write between requests invalidates stats while leaving
+    // the fixture's visible results unchanged. Measure uncached work explicitly.
+    if (crawlWrites) app.db.prepare("UPDATE listings SET last_checked_at = ? WHERE post_id = ?")
+      .run(new Date(clock).toISOString(), count);
     const member = interactive && results.length % 2 ? otherUid : uid;
     const start = performance.now();
     const page = app.listListings({ userId: member, searchKeys: [], settings, sort, limit: 50 });
@@ -71,7 +76,7 @@ try {
       ]))).digest("hex") });
     clock += 6000;
   }
-  console.log(JSON.stringify({ rows: count, mixed, relations, interactive, results }, null, 2));
+  console.log(JSON.stringify({ rows: count, mixed, relations, interactive, crawlWrites, results }, null, 2));
 } finally {
   Date.now = realNow;
   rmSync(dataDir, { recursive: true, force: true });

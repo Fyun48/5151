@@ -216,7 +216,9 @@ test("stats reuse survives alternating members and profiles, then expires withou
       return { value, details };
     };
     try {
-      assert.equal(read(alice, wide).details.cache_hit, false);
+      const initial = read(alice, wide);
+      assert.equal(initial.details.cache_hit, false);
+      assert.equal(initial.details.cache_miss_reason, "empty");
       assert.equal(read(bob, wide).details.cache_hit, false);
       assert.equal(read(alice, narrow).value.total, 0);
       clock += 6000;
@@ -228,11 +230,14 @@ test("stats reuse survives alternating members and profiles, then expires withou
       clock += 8000;
       assert.equal(read(alice, wide).details.cache_hit, true);
       clock += 2000;
-      assert.equal(read(alice, wide).details.cache_hit, false);
+      const expired = read(alice, wide);
+      assert.equal(expired.details.cache_hit, false);
+      assert.equal(expired.details.cache_miss_reason, "expired");
       // Settings/profile changes use another entry; personal flags invalidate all versions.
       app.setFlags(745001, { watched: true }, alice);
       const changed = read(alice, wide);
       assert.equal(changed.details.cache_hit, false);
+      assert.equal(changed.details.cache_miss_reason, "data_changed");
       assert.equal(changed.value.total, 0);
       assert.equal(changed.value.watched, 1);
       assert.equal(read(bob, wide).value.total, 1);
@@ -343,6 +348,10 @@ test("district narrowing preserves shared-pool offline counters", () => {
     assert.equal(counted.total, 1);
     assert.equal(counted.offline, 1);
     assert.equal(counted.offlineConfirmed, 1);
+    const limited = app.stats([], uid, { ...settings, priceMax: 1000 });
+    assert.equal(limited.total, 0);
+    assert.equal(limited.offline, 1);
+    assert.equal(limited.offlineConfirmed, 1);
   `);
 });
 
