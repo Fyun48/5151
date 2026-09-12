@@ -1,0 +1,125 @@
+name: Production support check (isolated snapshot and Rakuya)
+run-name: "support-check:${{ inputs.source_sha }}"
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Expected deployed source SHA
+        required: true
+      account_email_sha256:
+        description: SHA256 of the existing administrator email (trimmed and lowercase)
+        required: true
+      confirmation:
+        description: VERIFY-V3-SUPPORT
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 7
+    steps:
+      - name: Authorize manual production check
+        env:
+          ALLOWED_ACTOR: ${{ vars.PRODUCTION_DEPLOY_ALLOWED_ACTOR }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          ACCOUNT_HASH: ${{ inputs.account_email_sha256 }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = Fyun48/5151
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/master
+          test -n "$ALLOWED_ACTOR"
+          cursor_allowed=0
+          if [[ "$GITHUB_ACTOR" == cursor || "$GITHUB_ACTOR" == 'cursor[bot]' ]]; then
+            if [[ "$GITHUB_TRIGGERING_ACTOR" == cursor || "$GITHUB_TRIGGERING_ACTOR" == 'cursor[bot]' ]]; then
+              cursor_allowed=1
+            fi
+          fi
+          if [[ "$cursor_allowed" != 1 ]]; then
+            test "$GITHUB_ACTOR" = "$ALLOWED_ACTOR"
+            test "$GITHUB_TRIGGERING_ACTOR" = "$ALLOWED_ACTOR"
+          fi
+          test "$CONFIRMATION" = VERIFY-V3-SUPPORT
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$ACCOUNT_HASH" =~ ^[0-9a-f]{64}$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify source and diagnostic safeguards
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$SOURCE_SHA" HEAD
+          git diff --exit-code "$SOURCE_SHA" -- v3/src
+          node --test .github/scripts/production-support-check.test.mjs
+          python3 .github/scripts/test-production-support.py
+          tree_hash="$(node .github/scripts/production-support-check.mjs source-hash v3/src)"
+          printf 'SOURCE_TREE_SHA256=%s\n' "$tree_hash" >> "$GITHUB_ENV"
+      - name: Collect isolated timings and one Rakuya response
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          ACCOUNT_HASH: ${{ inputs.account_email_sha256 }}
+          NAS_HOST: ${{ secrets.NAS_HOST }}
+          NAS_PORT: ${{ secrets.NAS_PORT }}
+          NAS_USER: ${{ secrets.NAS_USER }}
+          NAS_SSH_KEY: ${{ secrets.NAS_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          support_tmp="$(mktemp -d)"
+          trap 'rm -rf "$support_tmp"' EXIT
+          printf '%s\n' "$NAS_SSH_KEY" > "$support_tmp/key"
+          helper_payload="$(base64 -w0 .github/scripts/production-support-check.mjs)"
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=15 \
+            -o ServerAliveInterval=15 -o ServerAliveCountMax=2 -o StrictHostKeyChecking=accept-new \
+            -p "$NAS_PORT" -i "$support_tmp/key" "$NAS_USER@$NAS_HOST" \
+            bash -s -- "$SOURCE_SHA" "$SOURCE_TREE_SHA256" "$ACCOUNT_HASH" "$helper_payload" \
+            < .github/scripts/production-support-remote.sh > production-support.json
+      - name: Summarize collected evidence
+        id: evidence
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, statistics
+          report = json.loads(pathlib.Path('production-support.json').read_text())
+          snapshot, rakuya = report['snapshot'], report['rakuya']
+          print('PRODUCTION_SUPPORT_RESULT=' + json.dumps(report, separators=(',', ':')))
+          lines = ['正式主機資料副本查詢；不是 HTTP / 瀏覽器端 timing。', '', '| 情境 | 樣本 | total 中位數 ms |', '|---|---:|---:|']
+          if 'error_code' in snapshot:
+              lines += ['', snapshot['error_code']]
+          else:
+              assert snapshot['http_measured'] is False and snapshot['network'] == 'none'
+              assert len(snapshot['samples']) == 9 and snapshot['account_matched'] is True
+              for scenario in ('first_process_query', 'warm', 'data_changed'):
+                  rows = [r['total_ms'] for r in snapshot['samples'] if r['scenario'] == scenario]
+                  lines.append(f'| {scenario} | {len(rows)} | {statistics.median(rows)} |')
+          lines += ['', rakuya['error_code'] if 'error_code' in rakuya else f"樂屋 HTTP {rakuya['http_status']}；{rakuya['code']}；解析 {rakuya['parsed_records']} 筆。", '', '暫存副本及測試容器已清除，正式服務未重新部署。']
+          pathlib.Path(os.environ['GITHUB_STEP_SUMMARY']).write_text('\n'.join(lines) + '\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && steps.evidence.outcome == 'success' }}
+        with:
+          name: production-support-${{ github.run_id }}-${{ github.run_attempt }}
+          path: production-support.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Check diagnostic execution after preserving evidence
+        if: ${{ always() && steps.evidence.outcome == 'success' }}
+        run: |
+          python3 - <<'PY'
+          import json
+          report = json.load(open('production-support.json'))
+          assert all('error_code' not in report[key] for key in ('snapshot', 'rakuya')), 'A diagnostic failed; independent results have been saved'
+          PY
