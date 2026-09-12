@@ -46,11 +46,18 @@ export function ensureSiteCommandSchema(db) {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       applied_at TEXT,
+      subscription_generation INTEGER,
       UNIQUE(product_id, idempotency_key),
       FOREIGN KEY (product_id) REFERENCES ops_product(id) ON DELETE RESTRICT
     );
     CREATE INDEX IF NOT EXISTS idx_site_command_product ON site_command_job(product_id, id);
   `);
+  try {
+    const cols = db.prepare("PRAGMA table_info(site_command_job)").all().map((c) => c.name);
+    if (cols.length && !cols.includes("subscription_generation")) {
+      db.exec("ALTER TABLE site_command_job ADD COLUMN subscription_generation INTEGER");
+    }
+  } catch { /* table just created */ }
 }
 
 export function productAllowsRemoteCs(product) {
@@ -133,7 +140,26 @@ export function publicCommandJob(row) {
     created_at: row.created_at,
     updated_at: row.updated_at,
     applied_at: row.applied_at,
+    subscription_generation: row.subscription_generation == null ? null : Number(row.subscription_generation),
   };
+}
+
+function currentProductGeneration(product) {
+  return Number(product?.subscription_generation || product?.subscription?.generation || 1);
+}
+
+export function siteCommandWriteDecision(db, productId, { expectedGeneration = null } = {}) {
+  const product = getProduct(db, productId);
+  if (!product) return { ok: false, reason: "subscription_revoked" };
+  const currentGen = currentProductGeneration(product);
+  const expected = expectedGeneration == null ? 1 : Number(expectedGeneration);
+  if (Number(expected) !== currentGen) {
+    return { ok: false, reason: "stale_generation", current_generation: currentGen };
+  }
+  if (!productAllowsRemoteCs(product)) {
+    return { ok: false, reason: "subscription_revoked", current_generation: currentGen };
+  }
+  return { ok: true, generation: currentGen };
 }
 
 export function listSiteCommands(db, { productId = "", limit = 40 } = {}) {
@@ -162,12 +188,13 @@ export function enqueueSiteCommand(db, input = {}, { actor = "owner", now = new 
 
   const commandId = String(input.command_id || randomUUID());
   const ts = iso(now);
+  const generation = currentProductGeneration(product);
   const res = db.prepare(`
     INSERT INTO site_command_job(
       product_id, command_id, idempotency_key, command_kind, payload_json,
-      job_state, apply_state, attempts, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, 'pending', 'unknown', 0, ?, ?)
-  `).run(product.id, commandId, idem, kind, JSON.stringify(payload), ts, ts);
+      job_state, apply_state, attempts, created_at, updated_at, subscription_generation
+    ) VALUES (?, ?, ?, ?, ?, 'pending', 'unknown', 0, ?, ?, ?)
+  `).run(product.id, commandId, idem, kind, JSON.stringify(payload), ts, ts, generation);
   appendAuditRow(db, {
     actor,
     action: "site_command.enqueued",
@@ -200,11 +227,12 @@ export async function deliverSiteCommand(db, commandId, {
   ensureSiteCommandSchema(db);
   const row = db.prepare("SELECT * FROM site_command_job WHERE command_id=?").get(commandId);
   if (!row) throw httpError("找不到命令", 404);
-  const product = getProduct(db, row.product_id);
-  if (!productAllowsRemoteCs(product)) {
+  const gate = siteCommandWriteDecision(db, row.product_id, { expectedGeneration: row.subscription_generation });
+  if (!gate.ok) {
     const ts = iso(now);
+    const err = gate.reason === "stale_generation" ? "stale_generation" : "subscription_revoked";
     db.prepare("UPDATE site_command_job SET job_state='failed', apply_state='unknown', last_error=?, updated_at=? WHERE command_id=?")
-      .run("capability_off", ts, commandId);
+      .run(err, ts, commandId);
     return publicCommandJob(db.prepare("SELECT * FROM site_command_job WHERE command_id=?").get(commandId));
   }
   const url = applyUrl || remoteCsDeliveryControl().apply_url;

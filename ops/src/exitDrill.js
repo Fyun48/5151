@@ -273,6 +273,25 @@ export function listPendingWork(db, productId) {
       });
     }
   }
+  if (tableExists(db, "site_command_job")) {
+    const cmds = safeAll(db, `
+      SELECT id, job_state, apply_state FROM site_command_job
+       WHERE product_id=? AND job_state IN ('pending','sending','sent')
+    `, [id]);
+    for (const row of cmds) {
+      if (row.job_state === "sent" && row.apply_state === "applied") continue;
+      const inFlight = row.job_state === "sending";
+      items.push({
+        kind: "site_command",
+        id: row.id,
+        state: row.job_state,
+        blocking: inFlight,
+        note: inFlight
+          ? "已送出的遠端客服不宣稱撤回。訂閱世代已換或已退出的晚到命令不再重試外送。"
+          : "未送出的遠端客服可取消。訂閱世代已換或已退出的晚到命令不會外送。",
+      });
+    }
+  }
   if (tableExists(db, "state_entity") && tableExists(db, "issue_candidate")) {
     const deferred = safeAll(db, `
       SELECT i.id AS issue_id, e.state FROM state_entity e
