@@ -381,7 +381,12 @@ export function isStalePendingNotify(event, now = Date.now()) {
 }
 
 export function listingNotifyMeters(listing = {}) {
-  return kmListToMinMeters(listing.route_kms, listing.route_min_m ?? listing.min_m);
+  const fromList = kmListToMinMeters(listing.route_kms, listing.route_min_m ?? listing.min_m);
+  const shownKm = Number(listing.route_km ?? listing.commute_km);
+  const fromShown = Number.isFinite(shownKm) && shownKm > 0 ? Math.round(shownKm * 1000) : null;
+  const vals = [fromList, fromShown].filter((n) => Number.isFinite(n) && n > 0);
+  if (!vals.length) return null;
+  return Math.max(...vals);
 }
 
 export function isGeoReady(listing, settings = {}) {
@@ -430,10 +435,7 @@ export function passesGeoFilters(listing, settings = {}, { strict = true } = {})
     if (strict && !usableRoad) return false;
     const meters = listingNotifyMeters(listing);
     if (strict && meters == null) return false;
-    if (meters != null && !commuteMetersWithinLimit(meters, km)) {
-      if (!strict && cls === "street") return true;
-      return false;
-    }
+    if (meters != null && !commuteMetersWithinLimit(meters, km)) return false;
   }
   return true;
 }

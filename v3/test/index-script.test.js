@@ -540,6 +540,17 @@ test("listing commute copy is kilometers only and does not show rush minutes", (
   assert.doesNotMatch(fn, /commute_min_am/);
 });
 
+test("list view drops listings whose shown commute exceeds the profile limit", () => {
+  const html = pub("index.html");
+  assert.match(html, /function listingWithinCommuteLimit/);
+  assert.match(html, /listingKm <= km \+ 1e-9/);
+  const viewFn = html.slice(html.indexOf("function applyViewFilters"), html.indexOf("function listingHasParkingClient"));
+  assert.match(viewFn, /listingWithinCommuteLimit\(item\)/);
+  const patchFn = html.slice(html.indexOf("function applyCommutePatches"), html.indexOf("function pendingCommuteWork"));
+  assert.match(patchFn, /listingWithinCommuteLimit\(row\)/);
+  assert.match(patchFn, /dropped\.push\(row\)/);
+});
+
 test("listing chips use Hermes orange and do not escape chip HTML", () => {
   const html = pub("index.html");
   const tokens = pub("tokens.css");

@@ -4604,6 +4604,20 @@
       return Number(s.commuteKm) > 0 && String(s.workAddress || "").trim() !== "";
     }
 
+    function listingCommuteKm(it) {
+      const shown = Number(it?.commute_km ?? it?.route_km);
+      return Number.isFinite(shown) && shown >= 0 ? shown : null;
+    }
+
+    function listingWithinCommuteLimit(it, s = settings) {
+      if (!commuteOn(s)) return true;
+      const km = Number(s.commuteKm);
+      if (!Number.isFinite(km) || km <= 0) return true;
+      const listingKm = listingCommuteKm(it);
+      if (listingKm == null) return true;
+      return listingKm <= km + 1e-9;
+    }
+
     function syncCommuteSort() {
       const on = commuteOn();
       document.querySelectorAll(".commute-sort").forEach((el) => {
@@ -4991,7 +5005,7 @@
     }
 
     function applyViewFilters(items) {
-      let out = items;
+      let out = items.filter((item) => listingWithinCommuteLimit(item));
       if (kinds.length) {
         out = out.filter((item) => guestKindMatch(item, kinds));
       }
@@ -5317,6 +5331,26 @@
         fieldChanged = true;
         return next;
       });
+      const dropped = [];
+      listCache = listCache.filter((row) => {
+        if (listingWithinCommuteLimit(row)) return true;
+        dropped.push(row);
+        return false;
+      });
+      if (dropped.length) {
+        fieldChanged = true;
+        for (const row of dropped) {
+          const key = String(row.post_id);
+          const wrap = document.querySelector(`[data-card="${key}"]`)?.closest(".item-swipe-wrap");
+          if (wrap) wrap.remove();
+          else document.querySelector(`[data-card="${key}"]`)?.remove();
+        }
+        listingPool = listingPool.filter((row) => listingWithinCommuteLimit(row));
+        const matched = Number(lastStats?.matched);
+        if (Number.isFinite(matched) && matched > 0) {
+          lastStats = { ...lastStats, matched: Math.max(listCache.length, matched - dropped.length) };
+        }
+      }
       let htmlChanged = false;
       for (const item of listCache) {
         if (!byId.has(String(item.post_id))) continue;
@@ -5339,6 +5373,7 @@
       updateListMeta(listCache, lastStats);
       paintWatchChip();
       updateBulkBar();
+      if (dropped.length && !listCache.length) renderList([], lastStats);
       return true;
     }
 

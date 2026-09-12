@@ -16,7 +16,7 @@ import {
   streetCacheKey,
 } from "../src/geoPrecision.js";
 import { geocodeAddress, parseTaiwanAddress, resetGeoMetrics, snapshotGeoMetrics } from "../src/geo.js";
-import { decideNotifyDelivery, decideNotifyDecision, isStalePendingNotify, listingCanResolveNotifyGeo, passesGeoFilters, PENDING_NOTIFY_MAX_MS } from "../src/floors.js";
+import { decideNotifyDelivery, decideNotifyDecision, isStalePendingNotify, listingCanResolveNotifyGeo, listingNotifyMeters, passesGeoFilters, PENDING_NOTIFY_MAX_MS } from "../src/floors.js";
 import { applySettingPatch, hydrateSettings, resolveWorkPointForSave } from "../src/settingsState.js";
 
 const commute = { commuteKm: 10, workLat: 25.05, workLng: 121.52 };
@@ -197,7 +197,7 @@ test("N3 路段估算開關預設關；開啟才發帶標記的通知", () => {
   assert.equal(decideNotifyDelivery(street, { ...commute, notifyIncludeStreetEstimate: true }), "send");
 });
 
-test("N4 路段超距不得永久排除，精度改善後可重判", () => {
+test("N4 路段超距列表要排除，通知仍可等精度再重判", () => {
   const farStreet = {
     title: "路段物件",
     kind_name: "整層住家",
@@ -211,9 +211,49 @@ test("N4 路段超距不得永久排除，精度改善後可重判", () => {
     route_min_m: 12000,
   };
   assert.equal(decideNotifyDelivery(farStreet, commute), "pending");
-  assert.equal(passesGeoFilters(farStreet, commute, { strict: false }), true);
+  assert.equal(passesGeoFilters(farStreet, commute, { strict: false }), false);
   const better = { ...farStreet, location_class: "address", route_kms: [8], route_min_m: 8000 };
   assert.equal(decideNotifyDelivery(better, commute), "send");
+});
+
+test("12.4 公里設定檔不列出已標 17.2 公里的物件", () => {
+  const profile = { commuteKm: 12.4, workLat: 25.05, workLng: 121.52 };
+  const streetFar = {
+    title: "路段物件",
+    kind_name: "整層住家",
+    floor_name: "3F/10F",
+    address: "新北市淡水區淡金路二段",
+    lat: 25.18,
+    lng: 121.44,
+    geo_source: "geocode",
+    location_class: "street",
+    route_kms: [17.2],
+    route_km: 17.2,
+    commute_km: 17.2,
+    route_min_m: 17200,
+  };
+  assert.equal(passesGeoFilters(streetFar, profile, { strict: false }), false);
+  assert.equal(passesGeoFilters(streetFar, profile, { strict: true }), false);
+  const shownFarMinSmall = { ...streetFar, route_min_m: 8000, route_kms: [8] };
+  assert.equal(listingNotifyMeters(shownFarMinSmall), 17200);
+  assert.equal(passesGeoFilters(shownFarMinSmall, profile, { strict: false }), false);
+  const within = {
+    ...streetFar,
+    route_kms: [12.4],
+    route_km: 12.4,
+    commute_km: 12.4,
+    route_min_m: 12400,
+  };
+  assert.equal(passesGeoFilters(within, profile, { strict: false }), true);
+  const pending = {
+    ...streetFar,
+    route_kms: [],
+    route_km: null,
+    commute_km: null,
+    route_min_m: null,
+  };
+  assert.equal(listingNotifyMeters(pending), null);
+  assert.equal(passesGeoFilters(pending, profile, { strict: false }), true);
 });
 
 test("N2 超過六小時仍不是已送出", () => {
