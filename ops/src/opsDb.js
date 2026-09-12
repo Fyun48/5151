@@ -1253,11 +1253,16 @@ export function upgradeSiteCommand(db) {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       applied_at TEXT,
+      subscription_generation INTEGER,
       UNIQUE(product_id, idempotency_key),
       FOREIGN KEY (product_id) REFERENCES ops_product(id) ON DELETE RESTRICT
     );
     CREATE INDEX IF NOT EXISTS idx_site_command_product ON site_command_job(product_id, id);
   `);
+  const cols = tableColumns(db, "site_command_job");
+  if (cols.length && !cols.includes("subscription_generation")) {
+    db.exec("ALTER TABLE site_command_job ADD COLUMN subscription_generation INTEGER");
+  }
 }
 
 export function upgradeLiveTargets(db) {

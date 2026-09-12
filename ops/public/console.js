@@ -106,6 +106,7 @@ const STATUS_LABEL = {
   connecting: "連接中",
   reconnecting: "重新連接中",
   pending: "等候中",
+  sending: "外送中",
   processing: "執行中",
   claimed: "已領取",
   running: "執行中",
@@ -146,6 +147,7 @@ const PENDING_KIND_LABEL = {
   production_release: "正式發布",
   release_notification: "發布通知",
   reevaluation: "自動重評",
+  site_command: "遠端客服",
 };
 
 const ACTION_ERROR = {
@@ -541,7 +543,7 @@ function requestProductAction(id, action) {
   if (action === "unsubscribe") {
     showConfirm({
       title: "確認解除訂閱",
-      body: `確定解除「${name}」（${id}）的訂閱？此站將停止傳送，現有密鑰立即失效。自動重評不會把舊議題重開。產品卡會留下摘要，之後可重新連接。`,
+      body: `確定解除「${name}」（${id}）的訂閱？此站將停止傳送，現有密鑰立即失效。自動重評不會把舊議題重開，未送出的遠端客服也不會外送。產品卡會留下摘要，之後可重新連接。`,
       confirmLabel: "確定解除",
       onConfirm: () => runProductAction(id, "unsubscribe"),
     });
