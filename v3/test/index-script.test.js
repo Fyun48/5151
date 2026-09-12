@@ -143,12 +143,11 @@ test("unwatch flies to the all chip before reloading", () => {
 test("housing kind chips stay independent of 特別關注", () => {
   const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
   assert.match(html, /data-kind="elevator"/);
-  assert.match(html, /data-kind="apartment"/);
-  assert.match(html, /data-kind="suite"/);
-  assert.match(html, /data-kind="yafang"/);
-  assert.match(html, /data-kind="share"/);
-  assert.match(html, /data-kind="coliving"/);
-  assert.doesNotMatch(html, /data-kind="building"/);
+  assert.match(html, /data-kind="apartment_huaxia"/);
+  assert.match(html, /data-kind="suite_shared"/);
+  assert.match(html, /data-kind="building"/);
+  assert.doesNotMatch(html, /data-kind="yafang"/);
+  assert.doesNotMatch(html, /data-kind="coliving"/);
   assert.match(html, /kind=\$\{encodeURIComponent\(kinds\.join\(","\)\)\}/);
   assert.match(html, /sources=\$\{encodeURIComponent\(canFilterSources\(\) \? sources\.join\(","\) : ""\)\}/);
   assert.match(html, /data-kind="shop"/);
@@ -247,11 +246,13 @@ test("member profiles cap districts and include usable ping in notify copy", () 
   assert.match(html, /function isPlaceholderFloor/);
   assert.match(html, /function kitLine/);
   assert.match(html, /此屋家俱家電狀態/);
-  assert.match(html, /kit-items/);
+  assert.match(html, /設備資料待補/);
   assert.match(html, /items\.join\("、"\)/);
   assert.doesNotMatch(html, /此屋家俱家電：\$\{items\.join\("、"\)\}/);
-  assert.match(html, /有天然瓦斯/);
-  assert.match(html, /有陽台/);
+  assert.match(html, /kit-gas">天然瓦斯/);
+  assert.match(html, /kit-balcony/);
+  assert.match(html, /listMoreBtn/);
+  assert.match(html, /LIST_PAGE_SIZE = 80/);
   assert.match(html, /data-kit-furnish/);
   assert.match(html, /\.kit-furnish/);
   assert.match(html, /aria-describedby/);

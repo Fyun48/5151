@@ -97,6 +97,7 @@
     .kit-line:has(.kit-furnish[aria-expanded="true"]),
     .kit-line.kit-tip-up { z-index: 8; }
     .kit-gas, .kit-balcony, .kit-items { color: var(--ink); }
+    .list-more-wrap { margin: 12px 0 24px; text-align: center; }
     .kit-furnish {
       display: inline-flex;
       align-items: center;
@@ -3174,15 +3175,13 @@
           </div>
           <p class="chip-row-label" id="kindRowLabel">房屋類型（可複選）</p>
           <div class="chip-row" data-chip-row="kind" role="group" aria-labelledby="kindRowLabel">
-          <button type="button" class="chip" data-kind="elevator" aria-pressed="false">電梯</button>
-          <button type="button" class="chip" data-kind="apartment" aria-pressed="false">公寓</button>
-          <button type="button" class="chip" data-kind="suite" aria-pressed="false">套房</button>
-          <button type="button" class="chip" data-kind="yafang" aria-pressed="false">雅房</button>
-          <button type="button" class="chip" data-kind="share" aria-pressed="false">分租</button>
-          <button type="button" class="chip" data-kind="coliving" aria-pressed="false">共宅</button>
-          <button type="button" class="chip" data-kind="whole" aria-pressed="false">整層住家</button>
+          <button type="button" class="chip on" data-kind="whole" aria-pressed="true">整層住家</button>
+          <button type="button" class="chip" data-kind="suite_shared" aria-pressed="false">套房/分租</button>
+          <button type="button" class="chip" data-kind="building" aria-pressed="false">大樓</button>
+          <button type="button" class="chip" data-kind="apartment_huaxia" aria-pressed="false">公寓/華廈</button>
           <button type="button" class="chip" data-kind="shop" aria-pressed="false">店面</button>
           <button type="button" class="chip" data-kind="warehouse" aria-pressed="false">倉庫</button>
+          <button type="button" class="chip" data-kind="elevator" aria-pressed="false">電梯</button>
           </div>
           <div data-source-filter>
           <p class="chip-row-label" id="sourceRowLabel">來源</p>
@@ -3206,8 +3205,8 @@
           <button class="chip on" data-sort="newest">最新</button>
           <button class="chip" data-sort="fit_desc">較適合</button>
           <button class="chip" id="rentSortBtn" data-sort="price">租金</button>
-          <button class="chip commute-sort" data-sort="commute_asc" hidden>離公司近→遠</button>
-          <button class="chip commute-sort" data-sort="commute_desc" hidden>離公司遠→近</button>
+          <button class="chip commute-sort" data-sort="commute_asc" hidden>離公司近</button>
+          <button class="chip commute-sort" data-sort="commute_desc" hidden>離公司遠</button>
           </div>
           <div class="bulk-bar" id="bulkBar">
             <span id="selectedCount">已選 0 筆</span>
@@ -3228,6 +3227,7 @@
       </div>
       <div class="ad-slot" id="adListings" hidden></div>
       <div class="list" id="list" data-tour="list"><div class="empty">尚未載入列表</div></div>
+      <p class="list-more-wrap" id="listMoreWrap" hidden><button type="button" class="ghost" id="listMoreBtn">載入更多</button></p>
     </main>
   </div>
   <section class="app-view" id="demandView">
@@ -4146,7 +4146,10 @@
     }
     $("status").textContent = "正在載入…";
     let filter = "all";
-    let kinds = [];
+    let kinds = ["whole"];
+    let listOffset = 0;
+    let listHasMore = false;
+    const LIST_PAGE_SIZE = 80;
     let sources = [];
     let sort = "newest";
     let isGuest = true;
@@ -4416,15 +4419,17 @@
     function kitLine(item, cardId) {
       const gas = item?.has_natural_gas === true || Number(item?.has_natural_gas) === 1;
       const balcony = item?.has_balcony === true || Number(item?.has_balcony) === 1;
-      const items = Array.isArray(item?.furnish_items) ? item.furnish_items : [];
-      const tip = items.length ? items.join("、") : "無";
-      const itemsHtml = items.length ? `<span class="kit-items">${esc(items.join("、"))}</span> ` : "";
+      const items = (Array.isArray(item?.furnish_items) ? item.furnish_items : [])
+        .filter((name) => !/^(天然瓦斯|陽台|共用陽台)$/.test(String(name || "")));
+      const tip = items.length
+        ? items.join("、")
+        : (Number(item?.kit_fetched) === 1 ? "來源未提供設備資訊" : "設備資料待補");
       const flags = [
-        gas ? `<span class="kit-gas">有天然瓦斯</span>` : "",
-        balcony ? `<span class="kit-balcony">有陽台</span>` : "",
+        gas ? `<span class="kit-gas">天然瓦斯</span>` : "",
+        balcony ? `<span class="kit-balcony">${item?.balcony_shared ? "共用陽台" : "陽台"}</span>` : "",
       ].filter(Boolean).join(" ");
       const flagHtml = flags ? `${flags} ` : "";
-      return `<div class="kit-line">${flagHtml}${itemsHtml}<button type="button" class="kit-furnish" data-kit-furnish="${esc(cardId)}" aria-expanded="false" aria-controls="kit-tip-${esc(cardId)}" aria-describedby="kit-tip-${esc(cardId)}">此屋家俱家電狀態<sup class="kit-q" aria-hidden="true">?</sup></button><span class="kit-tip" id="kit-tip-${esc(cardId)}" role="tooltip">${esc(tip)}</span></div>`;
+      return `<div class="kit-line">${flagHtml}<button type="button" class="kit-furnish" data-kit-furnish="${esc(cardId)}" aria-expanded="false" aria-controls="kit-tip-${esc(cardId)}" aria-describedby="kit-tip-${esc(cardId)}">此屋家俱家電狀態<sup class="kit-q" aria-hidden="true">?</sup></button><span class="kit-tip" id="kit-tip-${esc(cardId)}" role="tooltip">${esc(tip)}</span></div>`;
     }
     function safeListingHtml(value) {
       const allowed = new Set(["b", "strong", "i", "em", "u", "br", "p", "span", "div"]);
@@ -4681,22 +4686,49 @@
       if (Array.isArray(saved)) viewDistricts = new Set(saved);
     } catch {}
 
-    function housingKindConflicts(a, b) {
-      if (!a || !b || a === b) return false;
-      const home = (key) => key === "suite" || key === "whole" || key === "yafang" || key === "share" || key === "coliving";
-      const commercial = (key) => key === "shop" || key === "warehouse";
-      if (home(a) && home(b)) return true;
-      if ((home(a) && commercial(b)) || (commercial(a) && home(b))) return true;
-      return false;
+    function migrateHousingKinds(list) {
+      const raw = Array.isArray(list) ? list : [];
+      const next = [];
+      for (const key of raw) {
+        if (key === "suite" || key === "yafang" || key === "share" || key === "coliving") {
+          if (!next.includes("suite_shared")) next.push("suite_shared");
+        } else if (key === "apartment") {
+          if (!next.includes("apartment_huaxia")) next.push("apartment_huaxia");
+        } else if (!next.includes(key)) next.push(key);
+      }
+      if (next.includes("suite_shared") && next.includes("warehouse")) {
+        return next.filter((key) => key !== "suite_shared");
+      }
+      return next;
     }
     function toggleHousingKind(selected, next) {
       const current = Array.isArray(selected) ? selected.slice() : [];
-      if (current.includes(next)) return current.filter((item) => item !== next);
-      return [...current.filter((item) => !housingKindConflicts(item, next)), next];
+      const key = String(next || "").trim();
+      const on = current.includes(key);
+      if (key === "whole") return on ? [] : ["whole", ...current.filter((item) => item !== "suite_shared" && item !== "whole")];
+      if (key === "suite_shared") {
+        if (on) return current.filter((item) => item !== "suite_shared");
+        return ["suite_shared", ...current.filter((item) => item !== "whole" && item !== "suite_shared" && item !== "warehouse")];
+      }
+      if (key === "warehouse") {
+        if (on) return current.filter((item) => item !== "warehouse");
+        return [...current.filter((item) => item !== "suite_shared" && item !== "warehouse"), "warehouse"];
+      }
+      if (key === "building") {
+        if (on) return current.filter((item) => item !== "building");
+        return current.includes("building") ? current : [...current, "building"];
+      }
+      if (key === "elevator") {
+        if (current.includes("building")) return current.filter((item) => item !== "building" && item !== "elevator");
+        return on ? current.filter((item) => item !== "elevator") : [...current, "elevator"];
+      }
+      if (on) return current.filter((item) => item !== key);
+      return [...current, key];
     }
     function syncKindChips() {
       document.querySelectorAll("[data-kind]").forEach((b) => {
-        const on = kinds.includes(b.dataset.kind);
+        const derivedElevator = b.dataset.kind === "elevator" && kinds.includes("building");
+        const on = kinds.includes(b.dataset.kind) || derivedElevator;
         b.classList.toggle("on", on);
         b.setAttribute("aria-pressed", on ? "true" : "false");
       });
@@ -4718,7 +4750,7 @@
       syncFilterRestoreLabel();
     }
     function activeFilterSummary() {
-      const kindNames = { elevator: "電梯", apartment: "公寓", suite: "套房", yafang: "雅房", share: "分租", coliving: "共宅", whole: "整層", shop: "店面", warehouse: "倉庫" };
+      const kindNames = { elevator: "電梯", apartment: "公寓", apartment_huaxia: "公寓/華廈", suite: "套房", suite_shared: "套房/分租", yafang: "雅房", share: "分租", coliving: "共宅", whole: "整層住家", building: "大樓", shop: "店面", warehouse: "倉庫" };
       const sourceNames = { "591": "591", self: "吉比本站", hbhousing: "住商", sinyi: "信義", houseprice: "5168", ddroom: "租租通", housefun: "好房", rakuya: "樂屋網" };
       const sourceBits = canFilterSources() ? sources.map((key) => sourceNames[key] || key) : [];
       return [...kinds.map((key) => kindNames[key] || key), ...sourceBits].filter(Boolean);
@@ -4736,7 +4768,12 @@
       if ($("excludeRooftop")) $("excludeRooftop").checked = s.excludeRooftop !== false;
       if ($("excludeLowFloors")) $("excludeLowFloors").checked = s.excludeLowFloors !== false;
       if ($("hasParking")) $("hasParking").checked = s.hasParking === true;
-      if (s.wholeFloorOnly === true && !kinds.length) kinds = ["whole"];
+      if (Object.prototype.hasOwnProperty.call(s, "housing_kinds") && Array.isArray(s.housing_kinds)) {
+        kinds = migrateHousingKinds(s.housing_kinds);
+      } else if (s.wholeFloorOnly === true && !kinds.length) {
+        kinds = ["whole"];
+      }
+      if (Array.isArray(s.listing_sources) && canFilterSources()) sources = s.listing_sources.slice();
       syncKindChips();
       syncSourceChips();
     }
@@ -5376,23 +5413,28 @@
     function guestKindMatch(item, keys) {
       const list = Array.isArray(keys) ? keys.filter(Boolean) : (keys ? [keys] : []);
       if (!list.length) return true;
-      const hay = `${item.title || ""} ${item.kind_name || ""} ${item.address || ""}`;
+      const kind = String(item.kind_name || "");
+      const hay = `${item.title || ""} ${kind} ${item.address || ""} ${item.tags || ""}`;
+      const hasElevator = (/有電梯|電梯大樓|電梯大廈|電梯公寓|電梯華廈|貨梯/.test(hay) || /大[樓廈]/.test(kind)) && !/無電梯|沒有電梯/.test(hay);
       const matchKey = (key) => {
-        if (key === "elevator") return /有電梯|電梯大樓|電梯公寓/.test(hay) && !/無電梯/.test(hay);
-        if (key === "apartment") return /公寓/.test(hay) && !/電梯大樓/.test(hay);
-        if (key === "suite") return /套房|雅房/.test(String(item.kind_name || ""));
-        if (key === "yafang") return /雅房/.test(`${item.kind_name || ""} ${item.title || ""}`);
-        if (key === "share") return /分租/.test(`${item.kind_name || ""} ${item.title || ""}`);
-        if (key === "coliving") return /共生宅|共居宅|共生住宅|共居|共宅/.test(`${item.kind_name || ""} ${item.title || ""} ${item.tags || ""}`);
-        if (key === "whole") return isWholeFloorHome(item.kind_name);
-        if (key === "shop") return /店面|店鋪/.test(`${item.kind_name || ""} ${item.title || ""}`);
-        if (key === "warehouse") return /倉庫|廠房|倉儲/.test(`${item.kind_name || ""} ${item.title || ""}`);
+        if (key === "elevator") return hasElevator;
+        if (key === "building") return /大[樓廈]/.test(kind);
+        if (key === "apartment" || key === "apartment_huaxia") return /公寓|華廈/.test(hay) && !/大[樓廈]/.test(kind);
+        if (key === "suite") return /套房|雅房/.test(kind);
+        if (key === "suite_shared") return /套房|雅房|分租|共宅|共居/.test(`${kind} ${item.title || ""}`) && !/倉庫|廠房/.test(kind);
+        if (key === "yafang") return /雅房/.test(`${kind} ${item.title || ""}`);
+        if (key === "share") return /分租/.test(`${kind} ${item.title || ""}`);
+        if (key === "coliving") return /共生宅|共居宅|共生住宅|共居|共宅/.test(`${kind} ${item.title || ""} ${item.tags || ""}`);
+        if (key === "whole") return isWholeFloorHome(kind);
+        if (key === "shop") return /店面|店鋪/.test(`${kind} ${item.title || ""}`);
+        if (key === "warehouse") return /倉庫|廠房|倉儲/.test(`${kind} ${item.title || ""}`);
         return true;
       };
-      const building = list.filter((key) => key === "elevator" || key === "apartment");
-      const dwelling = list.filter((key) => ["suite", "yafang", "share", "coliving", "whole", "shop", "warehouse"].includes(key));
-      if (building.length && !building.some(matchKey)) return false;
-      if (dwelling.length && !dwelling.some(matchKey)) return false;
+      if (list.includes("whole") && !matchKey("whole")) return false;
+      if (list.includes("suite_shared") && !matchKey("suite_shared")) return false;
+      const categories = list.filter((key) => ["building", "apartment_huaxia", "apartment", "shop", "warehouse"].includes(key));
+      if (categories.length && !categories.some(matchKey)) return false;
+      if ((list.includes("elevator") || list.includes("building")) && !hasElevator) return false;
       return true;
     }
     function guestSourceMatch(item) {
@@ -5433,9 +5475,23 @@
         });
       }
       if (sort === "commute_asc") {
-        out.sort((a, b) => (Number(a.commute_km) || 9999) - (Number(b.commute_km) || 9999) || (Number(a.price_num) || 1e15) - (Number(b.price_num) || 1e15));
+        out.sort((a, b) => {
+          const ka = Number.isFinite(Number(a.commute_km)) ? Number(a.commute_km) : null;
+          const kb = Number.isFinite(Number(b.commute_km)) ? Number(b.commute_km) : null;
+          if (ka == null && kb == null) return 0;
+          if (ka == null) return 1;
+          if (kb == null) return -1;
+          return ka - kb;
+        });
       } else if (sort === "commute_desc") {
-        out.sort((a, b) => (Number(b.commute_km) || 0) - (Number(a.commute_km) || 0));
+        out.sort((a, b) => {
+          const ka = Number.isFinite(Number(a.commute_km)) ? Number(a.commute_km) : null;
+          const kb = Number.isFinite(Number(b.commute_km)) ? Number(b.commute_km) : null;
+          if (ka == null && kb == null) return 0;
+          if (ka == null) return 1;
+          if (kb == null) return -1;
+          return kb - ka;
+        });
       } else if (sort === "price_desc") {
         out.sort((a, b) => (Number(b.price_num) || 0) - (Number(a.price_num) || 0));
       } else if (sort === "newest") {
@@ -5894,6 +5950,7 @@
             if (!viewDistricts.size) viewDistricts = new Set();
           } else {
             viewDistricts.add(name);
+            if (viewDistricts.size === names.length) viewDistricts = new Set();
           }
           sessionStorage.setItem(VIEW_KEY, JSON.stringify([...viewDistricts]));
           renderDistrictChips(settings);
@@ -6698,7 +6755,10 @@
       const matched = Number(st.matched != null ? st.matched : st.total) || 0;
       if (matched > items.length && items.length > 0) {
         el.hidden = false;
-        el.textContent = `目前顯示 ${items.length} / ${matched} 筆。請用搜尋或篩選縮小範圍。`;
+        el.textContent = listHasMore
+          ? `目前顯示 ${items.length} / ${matched} 筆，可繼續載入。`
+          : `目前顯示 ${items.length} / ${matched} 筆。`;
+        syncListMore(matched, items.length);
         return;
       }
       const scooterNote = commuteOn() && commuteModeLabel() !== "汽車"
@@ -6709,7 +6769,7 @@
         if (st.missingGeo > 0) bits.push(`還有 ${st.missingGeo} 筆要從 591 補地圖座標`);
         if (st.missingRoute > 0) bits.push(`${st.missingRoute} 筆正在算${commuteModeLabel()}路線`);
         el.hidden = false;
-        el.textContent = `${bits.join("；")}。有距離的會排在「離公司近→遠」前面，其餘會隨背景計算陸續補上。${scooterNote}`;
+        el.textContent = `${bits.join("；")}。有距離的會排在「離公司近」前面，其餘會隨背景計算陸續補上。${scooterNote}`;
         return;
       }
       if (scooterNote) {
@@ -6719,6 +6779,17 @@
       }
       el.hidden = true;
       el.textContent = "";
+      syncListMore(Number(st.matched) || items.length, items.length);
+    }
+
+    function syncListMore(matched, shown) {
+      const wrap = $("listMoreWrap");
+      const btn = $("listMoreBtn");
+      if (!wrap || !btn) return;
+      const more = listHasMore && shown < (Number(matched) || shown + 1);
+      wrap.hidden = !more;
+      btn.disabled = false;
+      btn.textContent = more ? `載入更多（還有 ${(Number(matched) || 0) - shown} 筆）` : "載入更多";
     }
 
     function captureOpenNotes() {
@@ -7147,11 +7218,13 @@
       }
       if (!options.silent) setListBusy(true, options.busyText || "正在更新列表…");
       const q = $("q").value.trim();
+      const append = options.append === true;
+      if (!append) listOffset = 0;
       const districts = [...viewDistricts].map(encodeURIComponent).join(",");
       const paintStart = performance.now();
       try {
         const res = await fetch(
-          `/api/listings?filter=${encodeURIComponent(filter)}&kind=${encodeURIComponent(kinds.join(","))}&sources=${encodeURIComponent(canFilterSources() ? sources.join(",") : "")}&sort=${encodeURIComponent(sort)}&q=${encodeURIComponent(q)}&limit=500&districts=${districts}`,
+          `/api/listings?filter=${encodeURIComponent(filter)}&kind=${encodeURIComponent(kinds.join(","))}&sources=${encodeURIComponent(canFilterSources() ? sources.join(",") : "")}&sort=${encodeURIComponent(sort)}&q=${encodeURIComponent(q)}&limit=${LIST_PAGE_SIZE}&offset=${append ? listOffset : 0}&districts=${districts}`,
         );
         const data = await res.json();
         if (gen !== listLoadGen) return;
@@ -7164,7 +7237,9 @@
         lastStats = data.stats || {};
         lastStats.timing = data.timing || {};
         lastStats.paint_ms = Math.round(performance.now() - paintStart);
-        const next = applyListView(data.listings);
+        listHasMore = data.hasMore === true;
+        listOffset = Number(data.nextOffset) || ((append ? listOffset : 0) + (data.listings || []).length);
+        const next = applyListView(append && listCache.length ? [...listCache, ...(data.listings || [])] : data.listings);
         rememberListings(next);
         if (options.keep && listCache.length) {
           const sameIds = listingIdKey(listCache) === listingIdKey(next);
@@ -7333,6 +7408,9 @@
         offlineConfirmDays: meIsAdmin ? (Number($("offlineConfirmDays").value) || 7) : 7,
         minBuildingFloors: Number($("minBuildingFloors").value) || 0,
         wholeFloorOnly: kinds.length === 1 && kinds[0] === "whole",
+        housing_kinds: kinds.slice(),
+        listing_sources: canFilterSources() ? sources.slice() : [],
+        query_state_version: 2,
         excludeLowFloors: $("excludeLowFloors") ? $("excludeLowFloors").checked : true,
         excludeKeywords: clipLines($("excludeKeywords").value, MEMBER_MAX_EXCLUDE_KEYWORDS),
         excludeAgents: clipLines($("excludeAgents").value, MEMBER_MAX_EXCLUDE_AGENTS),
@@ -9762,6 +9840,9 @@
       if (isGuest || !settingsLoaded) return;
       const body = {
         wholeFloorOnly: kinds.length === 1 && kinds[0] === "whole",
+        housing_kinds: kinds.slice(),
+        listing_sources: canFilterSources() ? sources.slice() : [],
+        query_state_version: 2,
         excludeRooftop: $("excludeRooftop") ? $("excludeRooftop").checked : true,
         excludeLowFloors: $("excludeLowFloors") ? $("excludeLowFloors").checked : true,
         hasParking: $("hasParking") ? $("hasParking").checked : false,
@@ -10343,13 +10424,22 @@
         const prev = kinds.slice();
         kinds = toggleHousingKind(kinds, btn.dataset.kind);
         const dropped = prev.filter((key) => key !== btn.dataset.kind && !kinds.includes(key));
-        if (dropped.length) {
-          flash("套房與整層／店面／倉庫一次只能選一類，已改成你剛點的那項。");
+        if (btn.dataset.kind === "warehouse" && dropped.includes("suite_shared")) {
+          flash("已取消套房/分租");
+        } else if (btn.dataset.kind === "elevator" && dropped.includes("building")) {
+          flash("已取消大樓，不再限制電梯");
+        } else if (btn.dataset.kind === "suite_shared" && dropped.includes("warehouse")) {
+          flash("已取消倉庫");
         }
         syncKindChips();
         persistDisplayFilters();
         loadList();
       };
+    });
+    $("listMoreBtn")?.addEventListener("click", () => {
+      if (!listHasMore) return;
+      $("listMoreBtn").disabled = true;
+      loadList({ append: true, keep: true, silent: true, busyText: "正在載入更多…" });
     });
     document.querySelectorAll("[data-source]").forEach((btn) => {
       btn.onclick = () => {

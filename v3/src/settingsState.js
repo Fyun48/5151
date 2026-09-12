@@ -3,6 +3,7 @@ import { normalizeHiddenCityIds } from "./cityPrefs.js";
 import { hasWorkPoint, normalizeBoxes, normalizeCommuteMode, normalizeKeywords, parseWorkCoord } from "./geo.js";
 import { isTaiwanCoord, normalizeWorkLocationClass } from "./geoPrecision.js";
 import { normalizeNotifyMatrix } from "./notifyMatrix.js";
+import { parseHousingKinds, parseListingSources } from "./floors.js";
 
 export const MEMBER_MAX_PROFILE_DISTRICTS = 10;
 export const MEMBER_MAX_PROFILES = 3;
@@ -45,6 +46,9 @@ export const PROFILE_FIELDS = [
   "excludeRooftop",
   "hasParking",
   "offlineConfirmDays",
+  "housing_kinds",
+  "listing_sources",
+  "query_state_version",
 ];
 
 export function parseSettingRows(rows) {
@@ -317,6 +321,13 @@ export function applySettingPatch(current, partial = {}, { admin = false, plan =
   next.hasParking = next.hasParking === true;
   next.wholeFloorOnly = next.wholeFloorOnly === true;
   next.excludeLowFloors = next.excludeLowFloors !== false;
+  if (Object.prototype.hasOwnProperty.call(patch, "housing_kinds") || Array.isArray(next.housing_kinds)) {
+    next.housing_kinds = parseHousingKinds(next.housing_kinds);
+    next.query_state_version = 2;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "listing_sources") || Array.isArray(next.listing_sources)) {
+    next.listing_sources = parseListingSources(next.listing_sources);
+  }
   if (!Object.prototype.hasOwnProperty.call(patch, "dataEpoch")) {
     next.dataEpoch = current.dataEpoch;
   }

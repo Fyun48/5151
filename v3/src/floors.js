@@ -10,6 +10,23 @@ import {
   listingHasStreetAddress,
   resolveLocationClass,
 } from "./geoPrecision.js";
+import {
+  HOUSING_KINDS,
+  elevatorRequired,
+  kindsToQuery,
+  parseHousingKinds,
+  resolveHousingKinds,
+} from "./housingQuery.js";
+
+export {
+  HOUSING_CATEGORY_KINDS,
+  HOUSING_KIND_CHIPS,
+  HOUSING_KIND_GROUPS,
+  HOUSING_KINDS,
+  parseHousingKinds,
+  resolveHousingKinds,
+  toggleHousingKind,
+} from "./housingQuery.js";
 
 function tagText(listing) {
   let tags = listing.tags;
@@ -26,9 +43,12 @@ function tagText(listing) {
 }
 
 export function listingHasElevator(listing) {
-  const hay = `${listing.title || ""} ${listing.kind_name || ""} ${listing.address || ""} ${tagText(listing)}`;
-  if (/無電梯/.test(hay)) return false;
-  return /有電梯|電梯大樓|電梯公寓/.test(hay);
+  const kind = String(listing.kind_name || "");
+  const hay = `${listing.title || ""} ${kind} ${listing.address || ""} ${tagText(listing)}`;
+  if (/無電梯|沒有電梯|不含電梯|五樓以下無電梯/.test(hay)) return false;
+  if (/有電梯|電梯大樓|電梯大廈|電梯公寓|電梯華廈|貨梯/.test(hay)) return true;
+  if (listingIsBuilding(listing)) return true;
+  return false;
 }
 
 export function listingHasParking(listing) {
@@ -37,10 +57,15 @@ export function listingHasParking(listing) {
   return /車位|停車位|平面車位|機械車位|坡道車位|含車位|附車位|可停車/.test(hay);
 }
 
+export function listingIsBuilding(listing) {
+  return /大[樓廈]/.test(String(listing.kind_name || ""));
+}
+
 export function listingIsApartment(listing) {
-  const hay = `${listing.title || ""} ${listing.kind_name || ""} ${listing.address || ""} ${tagText(listing)}`;
-  if (/電梯大樓/.test(hay)) return false;
-  return /公寓/.test(hay);
+  const kind = String(listing.kind_name || "");
+  const hay = `${listing.title || ""} ${kind} ${tagText(listing)}`;
+  if (listingIsBuilding(listing) || /電梯大[樓廈]/.test(hay)) return false;
+  return /公寓|華廈/.test(hay);
 }
 
 export function listingIsSuite(listing) {
@@ -78,52 +103,7 @@ export function housingTypeLabel(listing) {
   return "公寓";
 }
 
-export const HOUSING_KINDS = ["elevator", "apartment", "suite", "yafang", "share", "coliving", "whole", "shop", "warehouse"];
-export const HOUSING_KIND_GROUPS = {
-  building: ["elevator", "apartment"],
-  dwelling: ["suite", "yafang", "share", "coliving", "whole", "shop", "warehouse"],
-};
 export const LISTING_SOURCE_KEYS = ["591", "self", "hbhousing", "sinyi", "houseprice", "ddroom", "housefun", "rakuya"];
-
-export function housingKindConflicts(a, b) {
-  if (!a || !b || a === b) return false;
-  const home = (key) => key === "suite" || key === "whole" || key === "yafang" || key === "share" || key === "coliving";
-  const commercial = (key) => key === "shop" || key === "warehouse";
-  if (home(a) && home(b)) return true;
-  if ((home(a) && commercial(b)) || (commercial(a) && home(b))) return true;
-  return false;
-}
-
-export function toggleHousingKind(selected, next) {
-  const key = String(next || "").trim();
-  if (!HOUSING_KINDS.includes(key)) return parseHousingKinds(selected);
-  const current = parseHousingKinds(selected);
-  if (current.includes(key)) return current.filter((item) => item !== key);
-  const nextSet = current.filter((item) => !housingKindConflicts(item, key));
-  nextSet.push(key);
-  return HOUSING_KINDS.filter((item) => nextSet.includes(item));
-}
-
-export function parseHousingKinds(kind) {
-  const raw = Array.isArray(kind) ? kind : String(kind || "").split(/[,|]/);
-  const keys = [];
-  for (const item of raw) {
-    const key = String(item || "").trim();
-    if (HOUSING_KINDS.includes(key) && !keys.includes(key)) keys.push(key);
-  }
-  return keys;
-}
-
-export function resolveHousingKinds(kind) {
-  const resolved = [];
-  for (const key of parseHousingKinds(kind)) {
-    for (let i = resolved.length - 1; i >= 0; i -= 1) {
-      if (housingKindConflicts(resolved[i], key)) resolved.splice(i, 1);
-    }
-    if (!resolved.includes(key)) resolved.push(key);
-  }
-  return resolved;
-}
 
 export function parseListingSources(sources) {
   const raw = Array.isArray(sources) ? sources : String(sources || "").split(/[,|]/);
@@ -206,14 +186,21 @@ export function formatFloorDisplay(floorName) {
   return original;
 }
 
+export function listingIsSuiteShared(listing) {
+  if (listingIsWarehouse(listing)) return false;
+  return listingIsSuite(listing) || listingIsYafang(listing) || listingIsShareRental(listing) || listingIsColiving(listing);
+}
+
 export function listingMatchesKindKey(listing, kind) {
   const key = String(kind || "").trim();
   if (key === "elevator") return listingHasElevator(listing);
-  if (key === "apartment") return listingIsApartment(listing);
+  if (key === "apartment" || key === "apartment_huaxia") return listingIsApartment(listing);
+  if (key === "building") return listingIsBuilding(listing);
   if (key === "suite") return listingIsSuite(listing);
   if (key === "yafang") return listingIsYafang(listing);
   if (key === "share") return listingIsShareRental(listing);
   if (key === "coliving") return listingIsColiving(listing);
+  if (key === "suite_shared") return listingIsSuiteShared(listing);
   if (key === "whole") return isWholeFloorHome(listing.kind_name);
   if (key === "shop") return listingIsShop(listing);
   if (key === "warehouse") return listingIsWarehouse(listing);
@@ -221,12 +208,19 @@ export function listingMatchesKindKey(listing, kind) {
 }
 
 export function matchesHousingKind(listing, kind) {
-  const kinds = resolveHousingKinds(kind);
-  if (!kinds.length) return true;
-  const building = kinds.filter((key) => HOUSING_KIND_GROUPS.building.includes(key));
-  const dwelling = kinds.filter((key) => HOUSING_KIND_GROUPS.dwelling.includes(key));
-  if (building.length && !building.some((key) => listingMatchesKindKey(listing, key))) return false;
-  if (dwelling.length && !dwelling.some((key) => listingMatchesKindKey(listing, key))) return false;
+  const query = kindsToQuery(kind);
+  if (query.rentalMode === "any" && !query.categories.length && !query.elevatorManual && !query.legacyRental) {
+    return true;
+  }
+  if (query.rentalMode === "whole" && !listingMatchesKindKey(listing, "whole")) return false;
+  if (query.rentalMode === "suite_shared" && !listingMatchesKindKey(listing, "suite_shared")) return false;
+  if (query.rentalMode === "legacy" && query.legacyRental && !listingMatchesKindKey(listing, query.legacyRental)) {
+    return false;
+  }
+  if (query.categories.length && !query.categories.some((key) => listingMatchesKindKey(listing, key))) {
+    return false;
+  }
+  if (elevatorRequired(query) && !listingHasElevator(listing)) return false;
   return true;
 }
 
@@ -278,7 +272,9 @@ export function buildingTotalFloors(floorName) {
 }
 
 export function isWholeFloorHome(kindName) {
-  return String(kindName || "").includes("整層住家");
+  const raw = String(kindName || "");
+  if (/獨立套房|分租套房|雅房|共宅|共居/.test(raw)) return false;
+  return /整層住家|整戶出租|整間出租/.test(raw);
 }
 
 /** 列表顯示／通知用：排除頂加、排除 1F 及地下室。不影響抓取。列表 kind 晶片優先於設定檔整層。 */

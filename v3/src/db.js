@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { shouldKeepListing, passesAttributeFilters, passesDisplayFilters, listingHasElevator, matchesHousingKind, matchesListingSources, normalizeListQuery, housingTypeLabel, formatFloorDisplay, sanitizeFloorName } from "./floors.js";
-import { listingKitFrom, parseStoredFurnish } from "./listingKit.js";
+import { listingKitFrom, mergeKitColumns, parseStoredFurnish } from "./listingKit.js";
 import { addressPrecision, isTrustedGeoSource, listingCommunityId, preferListingAddress, sourceCommunityLinked, sqlTrustedGeoSource } from "./location.js";
 import { commuteNetworkHint, makeRouteKey } from "./route.js";
 import {
@@ -25,7 +25,7 @@ import {
 } from "./mapsBilling.js";
 import { sameSearch } from "./client591.js";
 import { CITIES, districtNameFromListing, districtsFromSearchUrls, lookupDistrict, normalizeWatchDistricts } from "./regions.js";
-import { matchFocusHints, preferPrimaryListing } from "./match.js";
+import { listingRefreshAt, matchFocusHints, preferPrimaryListing } from "./match.js";
 import {
   ensureUserSameHouseSchema,
   loadPersonalSameHouseIds,
@@ -649,6 +649,16 @@ try {
 }
 try {
   db.exec("ALTER TABLE listings ADD COLUMN kit_refetch_v1 INTEGER NOT NULL DEFAULT 0");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN kit_error TEXT");
+} catch {
+  // already migrated
+}
+try {
+  db.exec("ALTER TABLE listings ADD COLUMN kit_next_retry_at TEXT");
 } catch {
   // already migrated
 }
@@ -2914,24 +2924,20 @@ export function upsertListing(listing) {
   } catch {
     // ignore
   }
-  const kit = listingKitFrom({
+  const kit = mergeKitColumns(existing || {}, listingKitFrom({
     ...listing,
-    has_natural_gas: listing.has_natural_gas || existing?.has_natural_gas,
-    has_balcony: listing.has_balcony || existing?.has_balcony,
-    furnish_items: listing.furnish_items || existing?.furnish_items,
     tags: listing.tags,
-  });
+  }));
   try {
     db.prepare(`
       UPDATE listings
-         SET has_natural_gas = CASE WHEN ? = 1 THEN 1 ELSE has_natural_gas END,
-             has_balcony = CASE WHEN ? = 1 THEN 1 ELSE has_balcony END,
-             furnish_items = CASE WHEN ? != '[]' THEN ? ELSE furnish_items END
+         SET has_natural_gas = ?,
+             has_balcony = ?,
+             furnish_items = ?
        WHERE post_id = ?
     `).run(
-      kit.has_natural_gas ? 1 : 0,
-      kit.has_balcony ? 1 : 0,
-      JSON.stringify(kit.furnish_items),
+      kit.has_natural_gas,
+      kit.has_balcony,
       JSON.stringify(kit.furnish_items),
       listing.post_id,
     );
@@ -3052,24 +3058,28 @@ export function setListingDetail(postId, { extraFees, contact, fetched = 1, lat,
     postId,
   );
   try {
-    const kit = listingKitFrom({
+    const kit = mergeKitColumns(listing, listingKitFrom({
       ...listing,
       has_natural_gas: has_natural_gas ?? listing.has_natural_gas,
       has_balcony: has_balcony ?? listing.has_balcony,
       furnish_items: furnish_items ?? listing.furnish_items,
-    });
+      kit_complete: Number(kit_fetched) === 1,
+    }));
     db.prepare(`
       UPDATE listings
-         SET has_natural_gas = CASE WHEN ? = 1 THEN 1 ELSE has_natural_gas END,
-             has_balcony = CASE WHEN ? = 1 THEN 1 ELSE has_balcony END,
-             furnish_items = CASE WHEN ? != '[]' THEN ? ELSE furnish_items END,
-             kit_fetched = CASE WHEN ? = 1 THEN 1 ELSE kit_fetched END
+         SET has_natural_gas = ?,
+             has_balcony = ?,
+             furnish_items = ?,
+             kit_fetched = CASE WHEN ? = 1 THEN 1 ELSE kit_fetched END,
+             kit_error = CASE WHEN ? = 1 THEN NULL ELSE kit_error END,
+             kit_next_retry_at = CASE WHEN ? = 1 THEN NULL ELSE kit_next_retry_at END
        WHERE post_id = ?
     `).run(
-      kit.has_natural_gas ? 1 : 0,
-      kit.has_balcony ? 1 : 0,
+      kit.has_natural_gas,
+      kit.has_balcony,
       JSON.stringify(kit.furnish_items),
-      JSON.stringify(kit.furnish_items),
+      Number(kit_fetched) === 1 ? 1 : 0,
+      Number(kit_fetched) === 1 ? 1 : 0,
       Number(kit_fetched) === 1 ? 1 : 0,
       postId,
     );
@@ -3152,16 +3162,58 @@ export function listingsNeedingFeeDetail(limit = 12) {
 
 export function listingsNeedingSourceKit(limit = 8) {
   const cap = Math.max(1, Number(limit) || 8);
-  return db
-    .prepare(
-      `SELECT post_id, source, source_id, url FROM listings
-       WHERE IFNULL(hidden, 0) = 0 AND IFNULL(offline, 0) = 0
-         AND source IN ('hbhousing', 'sinyi', 'housefun', 'rakuya')
-         AND IFNULL(kit_fetched, 0) = 0
-       ORDER BY last_seen_at DESC
-       LIMIT ?`,
-    )
-    .all(cap);
+  const sources = ["hbhousing", "sinyi", "housefun", "rakuya"];
+  const now = new Date().toISOString();
+  const perSource = Math.max(1, Math.ceil(cap / sources.length));
+  const out = [];
+  const seen = new Set();
+  for (const source of sources) {
+    let rows = [];
+    try {
+      rows = db
+        .prepare(
+          `SELECT post_id, source, source_id, url FROM listings
+           WHERE IFNULL(hidden, 0) = 0 AND IFNULL(offline, 0) = 0
+             AND source = ?
+             AND IFNULL(kit_fetched, 0) = 0
+             AND (kit_next_retry_at IS NULL OR kit_next_retry_at <= ?)
+           ORDER BY ${sqlWatchedFirst()}, last_seen_at DESC
+           LIMIT ?`,
+        )
+        .all(source, now, perSource);
+    } catch {
+      rows = db
+        .prepare(
+          `SELECT post_id, source, source_id, url FROM listings
+           WHERE IFNULL(hidden, 0) = 0 AND IFNULL(offline, 0) = 0
+             AND source = ?
+             AND IFNULL(kit_fetched, 0) = 0
+           ORDER BY last_seen_at DESC
+           LIMIT ?`,
+        )
+        .all(source, perSource);
+    }
+    for (const row of rows) {
+      if (seen.has(row.post_id) || out.length >= cap) continue;
+      seen.add(row.post_id);
+      out.push(row);
+    }
+  }
+  return out;
+}
+
+export function markSourceKitRetry(postId, { error = "", delayMs = 15 * 60 * 1000 } = {}) {
+  const next = new Date(Date.now() + Math.max(60_000, Number(delayMs) || 0)).toISOString();
+  try {
+    db.prepare(
+      `UPDATE listings
+          SET kit_error = ?, kit_next_retry_at = ?
+        WHERE post_id = ?`,
+    ).run(String(error || "").slice(0, 200), next, postId);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function listingsNeeding591Geo(limit = 20) {
@@ -4147,40 +4199,58 @@ function priceSortKey(row, settings = {}) {
   return n > 0 ? n : Number.MAX_SAFE_INTEGER;
 }
 
-function descIso(a, b) {
-  const left = String(a || "");
-  const right = String(b || "");
-  if (!left && !right) return 0;
-  if (!left) return 1;
-  if (!right) return -1;
-  return right.localeCompare(left);
+export function listingEffectiveUpdatedAt(row, now = Date.now()) {
+  const sourceUpdated = Date.parse(row?.source_updated_at || "");
+  if (Number.isFinite(sourceUpdated)) return sourceUpdated;
+  const published = Date.parse(row?.source_published_at || "");
+  if (Number.isFinite(published)) return published;
+  const raw = String(row?.refresh_time || "").trim();
+  if (raw && !/剛剛|秒前|分鐘前|小時|今日|今天|昨日|昨天|天前/.test(raw)) {
+    const abs = Date.parse(raw);
+    if (Number.isFinite(abs)) return abs;
+  }
+  const first = Date.parse(row?.first_seen_at || "");
+  if (Number.isFinite(first)) return first;
+  return listingRefreshAt({ ...row, refresh_time: "", last_seen_at: row?.first_seen_at }, now) || 0;
 }
 
-export function sortListingsRows(rows, sort = "price_asc", { filter, settings } = {}) {
+function commuteMissingLast(a, b, dir = 1) {
+  const left = listingCommuteKm(a);
+  const right = listingCommuteKm(b);
+  if (left == null && right == null) return 0;
+  if (left == null) return 1;
+  if (right == null) return -1;
+  return (left - right) * dir;
+}
+
+export function sortListingsRows(rows, sort = "price_asc", { filter, settings, now = Date.now() } = {}) {
   const list = [...(rows || [])];
+  const byId = (a, b) => (Number(a.post_id) || 0) - (Number(b.post_id) || 0);
+  const byUpdated = (a, b) => listingEffectiveUpdatedAt(b, now) - listingEffectiveUpdatedAt(a, now) || byId(a, b);
   if (sort === "commute_asc") {
-    list.sort((a, b) => (listingCommuteKm(a) ?? 9999) - (listingCommuteKm(b) ?? 9999) || priceSortKey(a, settings) - priceSortKey(b, settings));
+    list.sort((a, b) => commuteMissingLast(a, b, 1) || byUpdated(a, b));
   } else if (sort === "commute_desc") {
-    list.sort((a, b) => (listingCommuteKm(b) ?? 0) - (listingCommuteKm(a) ?? 0) || priceSortKey(a, settings) - priceSortKey(b, settings));
+    list.sort((a, b) => commuteMissingLast(a, b, -1) || byUpdated(a, b));
   } else if (sort === "price_desc") {
     list.sort((a, b) => {
       const pa = rentSortValue(a, settings);
       const pb = rentSortValue(b, settings);
       if ((pa > 0) !== (pb > 0)) return pa > 0 ? -1 : 1;
-      return pb - pa || String(b.last_seen_at || "").localeCompare(String(a.last_seen_at || ""));
+      return pb - pa || byUpdated(a, b);
     });
   } else if (sort === "newest") {
-    list.sort((a, b) => {
-      if (filter === "watched") {
-        const byWatch = descIso(a.watched_at, b.watched_at);
-        if (byWatch) return byWatch;
-      }
-      return descIso(a.first_seen_at, b.first_seen_at) || Number(b.post_id) - Number(a.post_id);
-    });
+    list.sort(byUpdated);
   } else if (sort === "fit_desc") {
-    list.sort((a, b) => (Number(b.fit_score) || 0) - (Number(a.fit_score) || 0) || priceSortKey(a, settings) - priceSortKey(b, settings));
+    list.sort((a, b) => {
+      const sa = Number(a.fit_score);
+      const sb = Number(b.fit_score);
+      const aKnown = Number.isFinite(sa) && sa > 0;
+      const bKnown = Number.isFinite(sb) && sb > 0;
+      if (aKnown !== bKnown) return aKnown ? -1 : 1;
+      return (sb || 0) - (sa || 0) || byUpdated(a, b);
+    });
   } else {
-    list.sort((a, b) => priceSortKey(a, settings) - priceSortKey(b, settings) || String(b.last_seen_at || "").localeCompare(String(a.last_seen_at || "")));
+    list.sort((a, b) => priceSortKey(a, settings) - priceSortKey(b, settings) || byUpdated(a, b));
   }
   return list;
 }
@@ -4192,6 +4262,7 @@ export function listListings({
   q = "",
   sort = "price_asc",
   limit = 500,
+  offset = 0,
   searchKeys,
   districts = [],
   userId,
@@ -4311,12 +4382,20 @@ export function listListings({
   rows = sortListingsRows(rows, sort, { filter, settings });
 
   const totalMatched = rows.length;
-  const listings = rows.slice(0, limit).map((row) => {
+  const pageSize = Math.max(1, Math.min(Number(limit) || 500, 500));
+  const start = Math.max(0, Number(offset) || 0);
+  const listings = rows.slice(start, start + pageSize).map((row) => {
     const lite = needFit ? row : decorateListingLite(row, settings, uid);
     const needPeers = sameHouse !== false && Boolean(row.match_post_id || row.same_house_role);
     return finalizeListingDecorate(lite, settings, uid, { sameHouse: needPeers, matchVoteUserId: voteUid });
   });
-  return { listings, totalMatched };
+  return {
+    listings,
+    totalMatched,
+    hasMore: start + pageSize < totalMatched,
+    nextOffset: start + pageSize,
+    queryVersion: 2,
+  };
 }
 
 export function sourceHistory(sourceKey, userId) {

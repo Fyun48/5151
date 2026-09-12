@@ -83,6 +83,7 @@ test("covering fetch uses injected fetcher and normalizes listings", async () =>
     [{ regionId: 3, sectionIds: [50] }],
     {
       fetchText: async () => ({ status: 200, text: readFix("rakuya-list.html") }),
+      pageGapMs: 0,
     },
   );
   assert.equal(batches[0].listings.length, 2);

@@ -227,11 +227,11 @@ test("housing kind filters can combine with 特別關注", () => {
   assert.equal(matchesHousingKind(tower, "elevator"), true);
   assert.deepEqual(normalizeListQuery("watched", "suite"), { filter: "watched", kind: "suite", kinds: ["suite"], sources: [] });
   assert.deepEqual(normalizeListQuery("elevator", ""), { filter: "all", kind: "elevator", kinds: ["elevator"], sources: [] });
-  assert.deepEqual(normalizeListQuery("all", "building"), { filter: "all", kind: "", kinds: [], sources: [] });
+  assert.deepEqual(normalizeListQuery("all", "building"), { filter: "all", kind: "building", kinds: ["building"], sources: [] });
   assert.deepEqual(normalizeListQuery("all", "elevator,whole", "591,sinyi"), {
     filter: "all",
-    kind: "elevator,whole",
-    kinds: ["elevator", "whole"],
+    kind: "whole,elevator",
+    kinds: ["whole", "elevator"],
     sources: ["591", "sinyi"],
   });
   assert.deepEqual(normalizeListQuery("all", "suite,whole"), { filter: "all", kind: "whole", kinds: ["whole"], sources: [] });
@@ -241,10 +241,10 @@ test("housing kind filters can combine with 特別關注", () => {
   assert.equal(matchesHousingKind({ kind_name: "店面" }, "shop"), true);
   assert.equal(matchesHousingKind({ kind_name: "獨立套房" }, "suite,whole"), false);
   assert.deepEqual(toggleHousingKind(["suite"], "whole"), ["whole"]);
-  assert.deepEqual(toggleHousingKind(["whole"], "shop"), ["shop"]);
-  assert.deepEqual(toggleHousingKind(["elevator"], "apartment"), ["elevator", "apartment"]);
+  assert.deepEqual(toggleHousingKind(["whole"], "shop"), ["whole", "shop"]);
+  assert.deepEqual(toggleHousingKind(["elevator"], "apartment"), ["apartment_huaxia", "elevator"]);
   assert.deepEqual(toggleHousingKind(["shop"], "warehouse"), ["shop", "warehouse"]);
-  assert.equal(matchesHousingKind({ title: "電梯大樓", kind_name: "整層住家", tags: ["電梯大樓"] }, "elevator,apartment"), true);
+  assert.equal(matchesHousingKind({ title: "電梯大樓", kind_name: "整層住家", tags: ["電梯大樓"] }, "elevator,apartment"), false);
   assert.equal(matchesHousingKind({ kind_name: "雅房" }, "yafang"), true);
   assert.equal(matchesHousingKind({ kind_name: "分租套房" }, "share"), true);
   assert.equal(matchesHousingKind({ kind_name: "分租套房" }, "yafang"), false);

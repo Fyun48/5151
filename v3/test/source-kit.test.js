@@ -81,7 +81,7 @@ test("好房明細只採 tableData has，略過生活機能", () => {
 
 test("樂屋明細讀設備瓦斯陽台", () => {
   const detail = parseRakuyaDetailHtml(readFix("rakuya-detail.html"), "https://www.rakuya.com.tw/rent_item/info?ehid=rk001");
-  assert.equal(detail.has_natural_gas, true);
+  assert.equal(detail.has_natural_gas, false);
   assert.equal(detail.has_balcony, true);
   assert.ok(detail.furnish_items.includes("洗衣機"));
   assert.ok(detail.furnish_items.includes("冷氣"));

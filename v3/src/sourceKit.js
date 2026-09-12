@@ -9,7 +9,7 @@ export const SOURCE_KIT_HOSTS = Object.freeze({
   hbhousing: Object.freeze(["www.hbhousing.com.tw", "hbhousing.com.tw"]),
   sinyi: Object.freeze(["www.sinyi.com.tw", "rent.sinyi.com.tw"]),
   housefun: Object.freeze(["rent.housefun.com.tw", "housefun.com.tw"]),
-  rakuya: Object.freeze(["www.rakuya.com.tw", "rakuya.com.tw"]),
+  rakuya: Object.freeze(["www.rakuya.com.tw", "rakuya.com.tw", "community.rakuya.com.tw", "rent.rakuya.com.tw"]),
 });
 
 export function isSourceKitSource(source) {

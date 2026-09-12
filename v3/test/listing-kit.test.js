@@ -17,7 +17,8 @@ test("natural gas is only marked when the source says so", () => {
   assert.equal(listingHasNaturalGas({ title: "含瓦斯熱水器" }), false);
   assert.equal(listingHasNaturalGas({ extra_fee_text: "瓦斯費另計" }), false);
   assert.equal(listingHasNaturalGas({ tags: ["天然瓦斯"] }), true);
-  assert.equal(listingHasNaturalGas({ text: "瓦斯：有" }), true);
+  assert.equal(listingHasNaturalGas({ text: "瓦斯：有" }), false);
+  assert.equal(listingHasNaturalGas({ text: "無天然瓦斯" }), false);
   assert.equal(listingHasNaturalGas({ has_natural_gas: 1 }), true);
 });
 
