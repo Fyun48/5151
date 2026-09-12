@@ -93,6 +93,28 @@
     th { color: var(--muted); font-weight: 600; }
     .member-interval { width: 72px; }
     .msg { font-size: 13px; color: var(--muted); min-height: 1.4em; margin: 8px 0 0; }
+    .catalog-stats {
+      margin: 14px 0 0;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--accent-mist);
+    }
+    .catalog-stats h3 { margin: 0 0 6px; font-size: 14px; }
+    .catalog-stats p { margin: 0 0 8px; font-size: 13px; color: var(--muted); line-height: 1.5; }
+    .catalog-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+      gap: 8px;
+    }
+    .catalog-grid div {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 10px;
+    }
+    .catalog-grid b { display: block; font-variant-numeric: tabular-nums; font-size: 18px; }
+    .catalog-grid span { font-size: 12px; color: var(--muted); }
     .ok { color: var(--accent-deep); }
     .err { color: #9f6b6b; }
     .checks { display: flex; align-items: center; gap: 8px; margin: 12px 0; font-size: 14px; }
@@ -325,6 +347,7 @@
           <button type="button" class="ghost" id="systemCrawlSelectNone">取消</button>
         </div>
         <div id="systemCrawlDistricts"></div>
+        <div class="catalog-stats" id="systemCatalogStats" aria-live="polite"></div>
         <div class="row">
           <button type="submit" class="primary" id="systemCrawlSave">儲存底庫與間隔</button>
         </div>
@@ -1668,6 +1691,30 @@
       });
     }
 
+    function renderSystemCatalogStats(catalog) {
+      const host = $("systemCatalogStats");
+      if (!host) return;
+      const snap = catalog && typeof catalog === "object" ? catalog : {};
+      const total = Number(snap.total) || 0;
+      const sources = Number(snap.sources) || 0;
+      const self = Number(snap.self) || 0;
+      const labels = snap.bySourceLabels && typeof snap.bySourceLabels === "object" ? snap.bySourceLabels : {};
+      const when = snap.at ? String(snap.at).replace("T", " ").slice(0, 16) : "";
+      const extras = Object.entries(labels)
+        .filter(([name]) => name !== "吉比本站")
+        .map(([name, n]) => `<div><b>${Number(n) || 0}</b><span>${escapeHtml(name)}</span></div>`)
+        .join("");
+      host.innerHTML = `
+        <h3>本島底庫總計（依上方勾選行政區）</h3>
+        <p>記錄全站所有來源＋本站刊登，不受會員設定檔影響。外島是否列入取決於上面有沒有勾選。最後更新 ${escapeHtml(when || "尚未計算")}。</p>
+        <div class="catalog-grid">
+          <div><b>${total}</b><span>全部來源＋本站</span></div>
+          <div><b>${sources}</b><span>外站來源</span></div>
+          <div><b>${self}</b><span>本站刊登</span></div>
+          ${extras}
+        </div>`;
+    }
+
     function renderSystemCrawlDistricts(cities, selected) {
       const host = $("systemCrawlDistricts");
       if (!host) return;
@@ -1700,6 +1747,7 @@
       if ($("systemShowMrt")) $("systemShowMrt").checked = data.showMrt !== false;
       if ($("systemShowListRefreshBar")) $("systemShowListRefreshBar").checked = data.showListRefreshBar === true;
       renderSystemCrawlDistricts(data.cities || [], data.watchDistricts || []);
+      renderSystemCatalogStats(data.catalog);
     }
 
     $("memberRows").addEventListener("change", (ev) => {
@@ -2947,6 +2995,7 @@
           if ($("systemShowMrt")) $("systemShowMrt").checked = data.showMrt !== false;
           if ($("systemShowListRefreshBar")) $("systemShowListRefreshBar").checked = data.showListRefreshBar === true;
           renderSystemCrawlDistricts(data.cities || [], data.watchDistricts || []);
+          renderSystemCatalogStats(data.catalog);
           setMsg("systemCrawlMsg", "底庫與間隔已儲存。之後會依這個節奏抓共用庫。", true);
         } catch (error) {
           setMsg("systemCrawlMsg", error.message);

@@ -73,8 +73,8 @@ test("self listing form uses helper templates, required title, and bidirectional
   assert.match(html, /確認修改/);
   assert.match(html, /data-tpl-edit/);
   assert.doesNotMatch(html, /item\.is_account \? "（不可刪）"/);
-  assert.match(html, /data-avatar-zoom/);
-  assert.match(html, /openAppLightbox\(\[src\], 0\)/);
+  assert.match(html, /data-avatar-preview/);
+  assert.match(html, /showAvatarPreview\(/);
   assert.ok(html.indexOf('id="listingTools"') < html.indexOf('id="selfTitle"'));
 });
 

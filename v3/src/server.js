@@ -91,6 +91,7 @@ import {
   saveCrawlSources,
   getSystemCrawl,
   saveSystemCrawl,
+  refreshSiteCatalogStats,
   armMemberExternalFetch,
   touchLastLogin,
   resumeIdleIfNeeded,
@@ -1388,7 +1389,7 @@ app.put("/api/admin/crawl-sources", requireAdminApi, (req, res) => {
 });
 
 app.get("/api/admin/system-crawl", requireAdminApi, (_req, res) => {
-  res.json(getSystemCrawl());
+  res.json({ ...getSystemCrawl(), catalog: refreshSiteCatalogStats() });
 });
 
 app.put("/api/admin/system-crawl", requireAdminApi, (req, res) => {
