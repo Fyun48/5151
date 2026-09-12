@@ -1,5 +1,5 @@
 // Reproducible synthetic benchmark. Always uses a new temporary database.
-// Run: node v3/benchmark-listings.mjs [row count] [mixed]
+// Run: node v3/benchmark-listings.mjs [row count] [mixed|relations]
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -25,17 +25,25 @@ try {
     VALUES (?, ?, 'benchmark', ?, ?, ?, ?, ?, '25坪', '2房1廳1衛', '5/12',
             '整層住家/電梯大樓', '[]', ?, ?, 25.09, 121.51, '591', ?)`);
   const count = Math.max(100, Math.min(Number(process.argv[2]) || 64000, 100000));
-  const mixed = process.argv[3] === "mixed";
+  const relations = process.argv[3] === "relations";
+  const mixed = relations || process.argv[3] === "mixed";
   seed.exec("BEGIN");
   for (let i = 1; i <= count; i++) {
     const price = 15000 + (i * 137) % 60000;
-    const selected = !mixed || i % 40 === 0;
+    const selected = !mixed || (relations ? Math.floor((i - 1) / 2) % 40 === 0 : i % 40 === 0);
     const address = `${selected ? "台北市士林區" : "新北市中和區"}測試路${i}號`;
     const stamp = new Date(Date.UTC(2026, 0, 1) + i * 60000).toISOString();
     insert.run(i, `${selected ? "1|8" : "3|38"}||${address}`, `測試住宅${i}`, `https://example.test/${i}`,
       String(price), price, address, stamp, stamp, "合成物件說明。".repeat(100));
   }
   seed.exec("COMMIT");
+  if (relations) {
+    // Many unrelated cross-platform pairs outside the member's districts.
+    // Seed both directions, including cycles; 800 selected pairs yield 800 cards.
+    seed.exec(`UPDATE listings SET
+      match_post_id = CASE WHEN post_id % 2 = 0 THEN post_id - 1 ELSE post_id + 1 END,
+      match_level = 'high' WHERE post_id % 10 < 8`);
+  }
   seed.close();
   const results = [];
   for (const sort of ["newest", "fit_desc", "price_asc", "commute_asc", "newest"]) {
@@ -45,13 +53,14 @@ try {
     const statStart = performance.now();
     const stats = app.stats([], uid, settings);
     results.push({ sort, list_ms: Math.round(listMs), stats_ms: Math.round(performance.now() - statStart),
+      stages: page.queryDetails,
       matched: page.totalMatched, returned: page.listings.length, stats_total: stats.total,
       first_ids: page.listings.slice(0, 3).map(row => row.post_id),
       page_digest: createHash("sha256").update(JSON.stringify(page.listings.map(row => [
         row.post_id, row.fit_score, row.price_num, row.has_elevator, row.commute_km, row.district,
       ]))).digest("hex") });
   }
-  console.log(JSON.stringify({ rows: count, mixed, results }, null, 2));
+  console.log(JSON.stringify({ rows: count, mixed, relations, results }, null, 2));
 } finally {
   rmSync(dataDir, { recursive: true, force: true });
 }

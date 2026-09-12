@@ -2355,7 +2355,10 @@ app.get("/api/listings", async (req, res) => {
     hasMore: listed.hasMore === true,
     nextOffset: listed.nextOffset || 0,
     queryVersion: listed.queryVersion || 2,
-    timing: { query_ms: queryMs, stats_ms: statsMs, total_ms: Date.now() - started, dataset: listed.totalMatched },
+    timing: {
+      query_ms: queryMs, stats_ms: statsMs, total_ms: Date.now() - started,
+      dataset: listed.totalMatched, stages: listed.queryDetails,
+    },
   });
 });
 

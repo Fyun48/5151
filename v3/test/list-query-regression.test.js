@@ -271,3 +271,33 @@ test("a one-sided match in another district still assigns the local affiliate ro
     assert.deepEqual(ids(query({ districts: ["新店區"] })), [780002]);
   `);
 });
+
+test("cross-district personal ranking keeps viewer flags while excluding unrelated match pairs", () => {
+  runIsolated(`
+    const alice = app.ensureUser("alice-related@example.test");
+    const bob = app.ensureUser("bob-related@example.test");
+    seed(790001, { price: "30000元", price_num: 30000 });
+    seed(790002, { price: "20000元", price_num: 20000, source_key: "3|34|foreign",
+      address: "新北市新店區測試路2號" });
+    seed(790003, { source_key: "3|34|unrelated", address: "新北市新店區測試路3號" });
+    seed(790004, { source_key: "3|34|unrelated", address: "新北市新店區測試路4號" });
+    app.setListingMatch(790003, { match_post_id: 790004, match_level: "high" });
+    app.setListingMatch(790004, { match_post_id: 790003, match_level: "high" });
+    assert.equal(app.mergeSameHouseForUser(alice, [790001, 790002]).ok, true);
+    // A foreign primary still suppresses its local affiliate for Alice only.
+    const merged = query({ userId: alice });
+    assert.deepEqual(ids(merged), []);
+    assert.equal(merged.queryDetails.candidates, 2);
+    const independent = query({ userId: bob });
+    assert.deepEqual(ids(independent), [790001]);
+    assert.equal(independent.queryDetails.candidates, 1);
+    for (const [key, value] of Object.entries(independent.queryDetails)) {
+      assert.ok(Number.isFinite(value) && value >= 0, key);
+    }
+    app.setFlags(790002, { hidden: true, watch_note: "Alice only" }, alice);
+    // An excluded peer is resolved using the same existing primary rules;
+    // its private note must never become Bob's card data.
+    assert.deepEqual(ids(query({ userId: alice, filter: "hidden", districts: ["新店區"] })), [790002]);
+    assert.ok(!JSON.stringify(query({ userId: bob })).includes("Alice only"));
+  `);
+});
