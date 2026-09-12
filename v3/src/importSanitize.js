@@ -54,14 +54,32 @@ export function sanitizeImportedText(value) {
   return normalizeImportedPlain(raw, SELF_BODY_MAX);
 }
 
+export function hasListingMainContent(html) {
+  const hay = String(html || "");
+  if (/data-ehid\s*=/.test(hay)) return true;
+  if (/rent_item\/info\?ehid=/.test(hay)) return true;
+  if (/community\.rakuya\.com\.tw\/\d+\/rent\/[a-z0-9]+/i.test(hay)) return true;
+  if (/物件詳情/.test(hay) && /租金/.test(hay)) return true;
+  if (/<h1[\s\S]{0,240}<\/h1>/.test(hay) && /格局|樓層[／\/]樓高|樓層[：:]/.test(hay)) return true;
+  return false;
+}
+
+export function looksLikeChallengePage(html) {
+  const hay = String(html || "");
+  return /just a moment/i.test(hay)
+    || /cf-browser-verification|cf-challenge-running|cdn-cgi\/challenge-platform/i.test(hay);
+}
+
 export function looksLikeCaptchaOrLogin(html) {
   const hay = String(html || "");
+  if (hasListingMainContent(hay)) return false;
   return /recaptcha|hcaptcha|cf-challenge|請先登入|會員登入|login-form|id=["']captcha|name=["']captcha|驗證碼/i.test(hay);
 }
 
 export function looksLikeUnavailable(html, status) {
   if (Number(status) === 404 || Number(status) === 410) return true;
   const hay = String(html || "");
+  if (hasListingMainContent(hay)) return false;
   return /物件不存在|已關閉|已刪除|已下架|找不到此物件|此物件已不存在|page not found/i.test(hay);
 }
 

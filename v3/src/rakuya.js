@@ -3,7 +3,7 @@
 import { createHash } from "node:crypto";
 import { sanitizeFloorName } from "./floors.js";
 import { decodeEntities } from "./htmlEntities.js";
-import { looksLikeCaptchaOrLogin, looksLikeUnavailable } from "./importSanitize.js";
+import { hasListingMainContent, looksLikeCaptchaOrLogin, looksLikeChallengePage, looksLikeUnavailable } from "./importSanitize.js";
 import { listingKitFields, listingKitFrom } from "./listingKit.js";
 import { extractMapFromHtml, sourceMapPin } from "./location.js";
 import { feeFieldsFromBlob } from "./listingCost.js";
@@ -24,10 +24,36 @@ export function isRakuyaListingId(postId) {
   return Number.isFinite(n) && n >= RAKUYA_POST_ID_BASE && n < RAKUYA_POST_ID_END;
 }
 
-export function rakuyaDetailUrl(ehid) {
+export function rakuyaDetailUrl(ehid, communityId = "") {
   const id = String(ehid || "").trim();
+  const community = String(communityId || "").trim();
+  if (community && id) return `https://community.rakuya.com.tw/${encodeURIComponent(community)}/rent/${encodeURIComponent(id)}`;
   if (!id) return `${RAKUYA_SITE}${RAKUYA_LIST_PATH}`;
   return `${RAKUYA_SITE}/rent_item/info?ehid=${encodeURIComponent(id)}`;
+}
+
+export function rakuyaListUrl({ regionId = "", sectionId = "", page = 1 } = {}) {
+  const params = new URLSearchParams({ search: "city", city: String(regionId || "") });
+  if (sectionId) params.set("section", String(sectionId));
+  if (Number(page) > 1) params.set("page", String(Number(page) || 1));
+  return `${RAKUYA_SITE}${RAKUYA_LIST_PATH}?${params}`;
+}
+
+export function ehidFromRakuyaUrl(pageUrl = "") {
+  try {
+    const url = new URL(String(pageUrl || ""), RAKUYA_SITE);
+    return String(url.searchParams.get("ehid") || (url.pathname.match(/\/rent\/([a-z0-9]+)/i) || [])[1] || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+export function districtNameFromRakuyaAddress(address = "") {
+  return String((String(address || "").match(/([\u4e00-\u9fff]{1,3}區)/) || [])[1] || "").trim();
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Number(ms) || 0));
 }
 
 export function rakuyaPostIdFromEhid(ehid) {
@@ -48,7 +74,8 @@ export function interpretRakuyaResponse({ status, text } = {}) {
   if (Number(status) === 429) {
     return { ok: false, code: "RATE_LIMITED", retryable: true, message: "樂屋網要求降低抓取頻率" };
   }
-  if (looksLikeCaptchaOrLogin(body) || /just a moment|cf-browser-verification|cf-challenge-running|cdn-cgi\/challenge-platform/i.test(body)) {
+  const hasTarget = hasListingMainContent(body);
+  if ((looksLikeChallengePage(body) || looksLikeCaptchaOrLogin(body)) && !hasTarget) {
     return { ok: false, code: "FETCH_BLOCKED", retryable: false, message: "樂屋網被 Cloudflare 或驗證擋住，不繞過" };
   }
   if (looksLikeUnavailable(body, status) || Number(status) === 404) {
@@ -57,7 +84,7 @@ export function interpretRakuyaResponse({ status, text } = {}) {
   if (Number(status) >= 400) {
     return { ok: false, code: "SOURCE_UNAVAILABLE", retryable: Number(status) >= 500, message: `樂屋網回傳 ${status}` };
   }
-  return { ok: true };
+  return { ok: true, pageKind: hasTarget ? "listing" : "unknown" };
 }
 
 function textOf(html) {
@@ -103,6 +130,7 @@ export function parseRakuyaListHtml(html) {
     const communityLinked = String(communityEl?.[1] || "").toLowerCase() === "a"
       || /<a[^>]*class=["'][^"']*community/i.test(block);
     const refresh = textOf((block.match(/更新[：:]\s*([^<]+)/) || [])[1] || "");
+    const kind = textOf((block.match(/類型[：:]\s*([^<]+)/) || [])[1] || (block.match(/(整層住家|獨立套房|分租套房|雅房|店面|倉庫)(?:\s*[／/]\s*[^<]*)?/) || [])[0] || "");
     items.push({
       ehid,
       title,
@@ -114,6 +142,7 @@ export function parseRakuyaListHtml(html) {
       cover,
       community,
       communityLinked,
+      kind,
       refresh,
       field_status: {
         title: title ? "parsed" : "missing",
@@ -134,9 +163,18 @@ export function parseRakuyaDetailHtml(html, pageUrl = "") {
     || "",
   );
   const price = sanitize(ld.offers?.price || (html.match(/租金[：:]\s*([^<]+)/) || [])[1] || "");
-  const floorName = sanitize((html.match(/樓層[：:]\s*([^<]+)/) || [])[1] || "");
-  const areaName = sanitize((html.match(/坪數[：:]\s*([^<]+)/) || [])[1] || "");
+  const floorName = sanitize(
+    (html.match(/樓層[／\/]樓高[：:\s]*([^<]+)/) || [])[1]
+    || (html.match(/樓層[：:]\s*([^<]+)/) || [])[1]
+    || "",
+  );
+  const areaName = sanitize(
+    (html.match(/坪數[：:]\s*([^<]+)/) || [])[1]
+    || (html.match(/建物面積[：:]\s*([^<]+)/) || [])[1]
+    || "",
+  );
   const layout = sanitize((html.match(/格局[：:]\s*([^<]+)/) || [])[1] || "");
+  const kind = sanitize((html.match(/類型[：:]\s*([^<]+)/) || [])[1] || "");
   const communityHtml = (html.match(/社區[：:]\s*(<a[\s\S]*?<\/a>|[^<]+)/i) || [])[1] || "";
   const community = sanitize(communityHtml);
   const age = sanitize((html.match(/屋齡[：:]\s*([^<]+)/) || [])[1] || "");
@@ -151,7 +189,7 @@ export function parseRakuyaDetailHtml(html, pageUrl = "") {
     text: `${facility} ${gas} ${balcony} ${textOf(html)}`,
     facility,
   });
-  const ehid = String(new URL(pageUrl || RAKUYA_SITE, RAKUYA_SITE).searchParams.get("ehid") || "");
+  const ehid = ehidFromRakuyaUrl(pageUrl);
   const geo = ld.geo && typeof ld.geo === "object" ? ld.geo : {};
   const map = extractMapFromHtml(html);
   const pin = sourceMapPin(RAKUYA_SOURCE, geo.latitude ?? geo.lat ?? map?.lat, geo.longitude ?? geo.lng ?? geo.lon ?? map?.lng);
@@ -161,6 +199,8 @@ export function parseRakuyaDetailHtml(html, pageUrl = "") {
   while ((m = imgRe.exec(String(html || "")))) {
     try { photos.push(new URL(m[1], pageUrl || RAKUYA_SITE).toString()); } catch { /* skip */ }
   }
+  const photoCountMatch = String(html || "").match(/照片\s*(\d+)\s*\/\s*(\d+)/);
+  const sourcePhotoCount = photoCountMatch ? Number(photoCountMatch[2]) : photos.length;
   return {
     ehid,
     title,
@@ -169,6 +209,7 @@ export function parseRakuyaDetailHtml(html, pageUrl = "") {
     floorName,
     areaName,
     layout,
+    kind,
     community,
     communityLinked: /<a\b/i.test(communityHtml),
     age,
@@ -179,6 +220,8 @@ export function parseRakuyaDetailHtml(html, pageUrl = "") {
     has_balcony: kit.has_balcony,
     furnish_items: kit.furnish_items,
     photos: [...new Set(photos)],
+    sourcePhotoCount,
+    parsedPhotoCount: [...new Set(photos)].length,
     lat: pin.lat,
     lng: pin.lng,
     field_status: {
@@ -219,7 +262,7 @@ export function normalizeRakuyaItem(item, { regionId = "", sectionId = "" } = {}
       layout,
     }),
     title: String(item.title || "").trim() || "(無標題)",
-    url: rakuyaDetailUrl(ehid),
+    url: rakuyaDetailUrl(ehid, item.communityId),
     price: Number.isFinite(priceNum) && priceNum > 0 ? String(Math.round(priceNum)) : "",
     price_num: Number.isFinite(priceNum) && priceNum > 0 ? Math.round(priceNum) : 0,
     ...feeFieldsFromBlob({ blob: String(item.price || "") }),
@@ -237,7 +280,7 @@ export function normalizeRakuyaItem(item, { regionId = "", sectionId = "" } = {}
       has_balcony: item.has_balcony,
       furnish_items: item.furnish_items,
     }),
-    kind_name: String(item.kind || "整層住家"),
+    kind_name: String(item.kind || item.kind_name || "").trim(),
     role_name: "樂屋網",
     cover: String(item.cover || item.photos?.[0] || "").trim(),
     community_id: 0,
@@ -253,6 +296,10 @@ export function normalizeRakuyaItem(item, { regionId = "", sectionId = "" } = {}
   };
 }
 
+function looksLikeRakuyaEmptyResult(html) {
+  return /找不到物件|沒有符合|搜尋結果[：:]\s*0|0\s*筆/.test(String(html || ""));
+}
+
 export async function fetchRakuyaCoveringListings(jobs, options = {}) {
   const fetchText = options.fetchText || (async (url) => {
     const res = await fetch(url, {
@@ -262,21 +309,53 @@ export async function fetchRakuyaCoveringListings(jobs, options = {}) {
     const text = await res.text();
     return { status: res.status, text };
   });
+  const maxPages = Math.max(1, Number(options.maxPages || RAKUYA_MAX_PAGES) || RAKUYA_MAX_PAGES);
   const batches = [];
   for (const job of jobs || []) {
     const regionId = Number(job.regionId) || 0;
-    const url = `${RAKUYA_SITE}${RAKUYA_LIST_PATH}?search=city&city=${encodeURIComponent(regionId)}`;
-    const got = await fetchRakuyaListPage({ fetchText, url });
-    if (!got.ok) {
-      throw Object.assign(new Error(got.message || "樂屋網無法抓取"), { code: got.code, retryable: got.retryable });
+    const seen = new Set();
+    const listings = [];
+    let stopReason = "complete";
+    for (let page = 1; page <= maxPages; page += 1) {
+      const url = rakuyaListUrl({ regionId, page });
+      const got = await fetchRakuyaListPage({ fetchText, url });
+      if (!got.ok) {
+        if (!listings.length) {
+          throw Object.assign(new Error(got.message || "樂屋網無法抓取"), { code: got.code, retryable: got.retryable });
+        }
+        stopReason = got.code || "partial";
+        break;
+      }
+      const pageItems = got.items || [];
+      let added = 0;
+      for (const item of pageItems) {
+        const ehid = String(item.ehid || "").trim();
+        if (!ehid || seen.has(ehid)) continue;
+        seen.add(ehid);
+        const row = normalizeRakuyaItem(item, {
+          regionId,
+          sectionId: districtNameFromRakuyaAddress(item.address),
+        });
+        if (row) {
+          listings.push(row);
+          added += 1;
+        }
+      }
+      if (got.code === "SUCCESS_EMPTY" || !pageItems.length) {
+        stopReason = got.code === "SUCCESS_EMPTY" ? "empty" : "end";
+        break;
+      }
+      if (!added) {
+        stopReason = "duplicate";
+        break;
+      }
+      if (page < maxPages) await sleep(options.pageGapMs ?? RAKUYA_PAGE_GAP_MS);
     }
-    const listings = (got.items || [])
-      .map((item) => normalizeRakuyaItem(item, { regionId, sectionId: job.sectionIds?.[0] || "" }))
-      .filter(Boolean);
+    if (listings.length === 0 && stopReason === "complete") stopReason = "end";
     batches.push({
       listings,
       total: listings.length,
-      parsed: { label: "樂屋網", source: RAKUYA_SOURCE },
+      parsed: { label: "樂屋網", source: RAKUYA_SOURCE, stopReason },
     });
   }
   return batches;
@@ -287,12 +366,20 @@ export async function fetchRakuyaListPage({ fetchText, url } = {}) {
     return { ok: false, code: "FETCH_BLOCKED", items: [], message: "抓取器未提供" };
   }
   const got = await fetchText(url, { headers: { "User-Agent": USER_AGENT, Accept: "text/html" } });
-  const judged = interpretRakuyaResponse({ status: got.status, text: got.text || got.body });
+  const html = got.text || got.body || "";
+  const judged = interpretRakuyaResponse({ status: got.status, text: html });
   if (!judged.ok) return { ...judged, items: [] };
-  return { ok: true, items: parseRakuyaListHtml(got.text || got.body || "") };
+  const items = parseRakuyaListHtml(html);
+  if (!items.length) {
+    if (looksLikeRakuyaEmptyResult(html)) {
+      return { ok: true, code: "SUCCESS_EMPTY", items: [] };
+    }
+    return { ok: false, code: "PARSE_FAILED", items: [], message: "樂屋網列表模板不符或解析失敗" };
+  }
+  return { ok: true, items };
 }
 
-export async function fetchRakuyaDetailKit(listing, options = {}) {
+export async function fetchRakuyaDetail(listing, options = {}) {
   const { fetchSourceKitPage } = await import("./sourceKit.js");
   const page = await fetchSourceKitPage(listing, {
     ...options,
@@ -309,11 +396,17 @@ export async function fetchRakuyaDetailKit(listing, options = {}) {
   if (!detail.title && !detail.address) {
     throw Object.assign(new Error("樂屋網詳情無法解析房屋資訊"), { code: "KIT_PARSE_EMPTY" });
   }
+  return detail;
+}
+
+export async function fetchRakuyaDetailKit(listing, options = {}) {
+  const detail = await fetchRakuyaDetail(listing, options);
   return listingKitFrom({
     has_natural_gas: detail.has_natural_gas,
     has_balcony: detail.has_balcony,
     furnish_items: detail.furnish_items,
     facility: detail.facility,
     text: `${detail.facility || ""} ${detail.title || ""}`,
+    kit_complete: true,
   });
 }

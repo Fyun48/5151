@@ -2336,7 +2336,8 @@ app.get("/api/listings", async (req, res) => {
     sources: authorizedListingSources(req.query.sources || "", readSession(req)).join(","),
     q: req.query.q || "",
     sort: req.query.sort || "newest",
-    limit: Number(req.query.limit) || 500,
+    limit: Number(req.query.limit) || 80,
+    offset: Number(req.query.offset) || 0,
     districts,
     userId: uid,
     matchVoteUserId: readSession(req)?.userId || 0,
@@ -2347,6 +2348,9 @@ app.get("/api/listings", async (req, res) => {
   res.json({
     stats: { ...stats(undefined, uid), matched: listed.totalMatched },
     listings: listed.listings,
+    hasMore: listed.hasMore === true,
+    nextOffset: listed.nextOffset || 0,
+    queryVersion: listed.queryVersion || 2,
     timing: { query_ms: queryMs, dataset: listed.totalMatched },
   });
 });

@@ -16,6 +16,7 @@ import {
   listingHasTrustedGeo,
   listingsNeedingFeeDetail,
   listingsNeedingSourceKit,
+  markSourceKitRetry,
   listingsNeedingRoute,
   listingCommutePatch,
   upsertRouteJob,
@@ -63,9 +64,9 @@ import { probeListingAliveBySource } from "./probe.js";
 import { fetchHbCoveringListings } from "./hbhousing.js";
 import { fetchSinyiCoveringListings } from "./sinyi.js";
 import { enrichHpListingFromDetail, fetchHpCoveringListings, fetchHpDetail } from "./houseprice.js";
-import { fetchDdCoveringListings } from "./ddroom.js";
+import { enrichDdListingFromObject, fetchDdCoveringListings, fetchDdObject } from "./ddroom.js";
 import { fetchHfCoveringListings } from "./housefun.js";
-import { fetchRakuyaCoveringListings } from "./rakuya.js";
+import { fetchRakuyaCoveringListings, fetchRakuyaDetail } from "./rakuya.js";
 import { fetchSourceKit } from "./sourceKit.js";
 import { commuteWorkJobs, geocodeAddress, geoFailReason, hasWorkPoint, needsListingGeo, normalizeCommuteMode } from "./geo.js";
 import { parseTaiwanAddressParts, streetCacheKey } from "./geoPrecision.js";
@@ -809,7 +810,10 @@ export async function runWatch(options = {}) {
       });
     } catch (error) {
       if (error?.code === "FETCH_BLOCKED") skipBlockedKit.add(row.source);
-      // 詳情失敗下次再試；不把空聯絡寫回、不標 kit_fetched
+      markSourceKitRetry(row.post_id, {
+        error: error?.code || error?.message || "kit_failed",
+        delayMs: error?.code === "FETCH_BLOCKED" ? 60 * 60 * 1000 : 15 * 60 * 1000,
+      });
     }
     await new Promise((resolve) => setTimeout(resolve, 400));
   }
@@ -1060,6 +1064,38 @@ export async function backfillIncompleteAddresses({ limit = 8 } = {}) {
         if (!detail?.address) continue;
         const updated = applyFetchedDetail(current, detail);
         if (updated?.address && updated.address !== current.address) located += 1;
+        continue;
+      }
+      if (row.source === "ddroom") {
+        const object = await fetchDdObject(row.source_id || row.url);
+        if (!object) continue;
+        const next = enrichDdListingFromObject(current, object);
+        if (next.address && next.address !== current.address) {
+          upsertListing({ ...next, last_seen_at: current.last_seen_at || nowIso() });
+          located += 1;
+        }
+        continue;
+      }
+      if (row.source === "rakuya") {
+        const detail = await fetchRakuyaDetail(current);
+        if (!detail?.address) continue;
+        const next = {
+          ...current,
+          address: detail.address,
+          floor_name: detail.floorName || current.floor_name,
+          area_name: detail.areaName || current.area_name,
+          layout: detail.layout || current.layout,
+          kind_name: detail.kind || current.kind_name,
+          has_natural_gas: detail.has_natural_gas,
+          has_balcony: detail.has_balcony,
+          furnish_items: detail.furnish_items,
+          lat: detail.lat ?? current.lat,
+          lng: detail.lng ?? current.lng,
+        };
+        if (next.address && next.address !== current.address) {
+          upsertListing({ ...next, last_seen_at: current.last_seen_at || nowIso() });
+          located += 1;
+        }
       }
     } catch {
       // 明細暫時抓不到就下一輪
