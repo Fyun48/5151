@@ -136,7 +136,8 @@ async function snapshotBenchmark() {
 
 const mode = process.argv[2];
 if (["source-hash", "rakuya-response", "snapshot"].includes(mode)) {
-  const result = mode === "source-hash" ? sourceHash(process.argv[3] || "/app/src")
+  const root = process.argv[3] || "/app";
+  const result = mode === "source-hash" ? sha256(sourceHash(path.join(root, "src")) + sourceHash(path.join(root, "public")))
     : mode === "snapshot" ? await snapshotBenchmark() : await rakuyaResponse();
   console.log(typeof result === "string" ? result : JSON.stringify(result));
 }

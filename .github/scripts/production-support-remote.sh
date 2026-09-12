@@ -3,15 +3,17 @@
 set -euo pipefail
 umask 077
 fail() { printf '%s\n' "$1" >&2; exit 1; }
-[[ $# == 4 ]] || fail 'Expected source SHA, source tree hash, account hash, helper payload'
+[[ $# == 5 ]] || fail 'Expected source SHA, application tree hash, account hash, helper payload, Rakuya flag'
 expected_source=$1
 expected_tree=$2
 account_hash=$3
 helper_payload=$4
+include_rakuya=$5
 [[ "$expected_source" =~ ^[0-9a-f]{40}$ ]] || fail 'Invalid source SHA'
 [[ "$expected_tree" =~ ^[0-9a-f]{64}$ ]] || fail 'Invalid source tree hash'
 [[ "$account_hash" =~ ^[0-9a-f]{64}$ ]] || fail 'Invalid account hash'
 [[ "$helper_payload" =~ ^[A-Za-z0-9+/=]+$ ]] || fail 'Invalid helper payload'
+[[ "$include_rakuya" == true || "$include_rakuya" == false ]] || fail 'Invalid Rakuya flag'
 container=591-tracker-v3
 [[ "$(docker inspect --format '{{.State.Status}}' "$container")" == running ]] || fail 'Production v3 is not running'
 image_ref="$(docker inspect --format '{{.Config.Image}}' "$container")"
@@ -57,6 +59,7 @@ finally:
     source.close()
 PY
 docker cp "$container:/app/src" "$diagnostic_tmp/src"
+docker cp "$container:/app/public" "$diagnostic_tmp/public"
 
 # Disposable test container: same local image, verified source copy, no network,
 # no production database mount, no auth.env or media, and no published ports.
@@ -64,6 +67,7 @@ if ! timeout 90 docker run --rm -i --name "$test_container" --network none --rea
   --cap-drop ALL --security-opt no-new-privileges \
   --mount "type=bind,src=$diagnostic_tmp/data,dst=/snapshot" \
   --mount "type=bind,src=$diagnostic_tmp/src,dst=/app/src,readonly" \
+  --mount "type=bind,src=$diagnostic_tmp/public,dst=/app/public,readonly" \
   -e DATA_DIR=/snapshot -e ACCOUNT_EMAIL_SHA256="$account_hash" \
   --entrypoint node "$image_id" --input-type=module - snapshot \
   < "$diagnostic_tmp/check.mjs" > "$diagnostic_tmp/snapshot.json"; then
@@ -72,7 +76,9 @@ fi
 
 # Rakuya uses the running host's existing network and deployed parser. One page,
 # one request, no retry, redirect following, imports or anti-bot bypass.
-if ! timeout 25 docker exec -i -w /app "$container" node --input-type=module - rakuya-response \
+if [[ "$include_rakuya" == false ]]; then
+  printf '{"skipped":true,"reason":"snapshot_only"}\n' > "$diagnostic_tmp/rakuya.json"
+elif ! timeout 25 docker exec -i -w /app "$container" node --input-type=module - rakuya-response \
   < "$diagnostic_tmp/check.mjs" > "$diagnostic_tmp/rakuya.json"; then
   printf '{"error_code":"RAKUYA_DIAGNOSTIC_FAILED"}\n' > "$diagnostic_tmp/rakuya.json"
 fi
