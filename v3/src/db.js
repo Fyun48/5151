@@ -25,7 +25,8 @@ import {
 } from "./mapsBilling.js";
 import { sameSearch } from "./client591.js";
 import { CITIES, districtNameFromListing, districtsFromSearchUrls, lookupDistrict, normalizeWatchDistricts } from "./regions.js";
-import { appendDistrictCandidates } from "./listDistrictSql.js";
+import { appendDistrictCandidates, ensureDistrictCandidateIndex } from "./listDistrictSql.js";
+import { appendPriceCeilingCandidates } from "./listPriceSql.js";
 import { listingRefreshAt, matchFocusHints, preferPrimaryListing } from "./match.js";
 import {
   ensureUserSameHouseSchema,
@@ -743,6 +744,9 @@ try {
 }
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_match_peer ON listings(match_post_id)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_list_scan ON listings(search_key, offline, match_verdict, hidden)");
+ensureDistrictCandidateIndex(db);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_listings_offline_counts
+  ON listings(offline_confirmed) WHERE COALESCE(offline, 0) != 0`);
 try {
   db.exec("CREATE INDEX IF NOT EXISTS idx_user_listing_flags_user_watched ON user_listing_flags(user_id, watched)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_user_listing_flags_user_hidden ON user_listing_flags(user_id, hidden)");
@@ -4390,6 +4394,7 @@ export function listListings({
   searchWhere(searchKeys, clauses, params);
   listingVisibilityClauses(clauses, params);
   appendDistrictCandidates(districtNames, clauses, params, { preserveRelationsFor: voteUid });
+  appendPriceCeilingCandidates(settings, clauses, params);
   if (filter === "suspected") {
     clauses.push("match_level IN ('high', 'medium')");
     clauses.push("IFNULL(offline, 0) = 0");
@@ -4806,8 +4811,10 @@ export function holdStatsCache(ms = 15000) {
 
 function statsCacheKey(uid, searchKeys, settingsOverride) {
   // Settings overrides include prices, exclusions and district scope as well as commute.
-  return JSON.stringify([uid, searchKeys || null, settingsOverride || getSettings(uid),
-    db.prepare("SELECT total_changes() AS n").get().n, db.prepare("PRAGMA data_version").get().data_version]);
+  return {
+    key: JSON.stringify([uid, searchKeys || null, settingsOverride || getSettings(uid)]),
+    revision: `${db.prepare("SELECT total_changes() AS n").get().n}:${db.prepare("PRAGMA data_version").get().data_version}`,
+  };
 }
 
 export function stats(searchKeys, userId, settingsOverride, diagnostics) {
@@ -4817,18 +4824,20 @@ export function stats(searchKeys, userId, settingsOverride, diagnostics) {
     if (diagnostics) diagnostics[name] = Math.round(now - stageStarted);
     stageStarted = now;
   };
-  if (diagnostics) Object.assign(diagnostics, { cache_hit: false, cache_age_ms: 0 });
+  if (diagnostics) Object.assign(diagnostics, { cache_hit: false, cache_age_ms: 0, cache_miss_reason: null });
   const uid = resolveUserId(userId);
-  const holdKey = statsCacheKey(uid, searchKeys, settingsOverride);
+  const { key: holdKey, revision } = statsCacheKey(uid, searchKeys, settingsOverride);
   const now = Date.now();
   const cached = statsMemo.get(holdKey);
-  if (cached && now < cached.expiresAt) {
+  if (cached && cached.revision === revision && now < cached.expiresAt) {
     statsMemo.delete(holdKey);
     statsMemo.set(holdKey, cached);
     if (diagnostics) Object.assign(diagnostics, { cache_hit: true, cache_age_ms: Math.max(0, now - cached.at) });
     markStage("prepare_ms");
     return { ...cached.value };
   }
+  if (diagnostics) diagnostics.cache_miss_reason = !cached ? "empty"
+    : cached.revision !== revision ? "data_changed" : "expired";
   statsMemo.delete(holdKey);
   const settings = settingsOverride || getSettings(uid);
   if (Number(settings.commuteKm) > 0 && hasWorkPoint(settings)) warmRouteCache();
@@ -4839,12 +4848,13 @@ export function stats(searchKeys, userId, settingsOverride, diagnostics) {
   markStage("prepare_ms");
   // These two counters historically cover the shared search pool, including
   // other districts. Count them in SQL before narrowing profile candidates.
-  const statusWhere = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  const statusWhere = `WHERE ${[...clauses, "COALESCE(offline, 0) != 0"].join(" AND ")}`;
   const statusCounts = db.prepare(`SELECT
     SUM(CASE WHEN COALESCE(offline, 0) != 0 AND COALESCE(offline_confirmed, 0) = 0 THEN 1 ELSE 0 END) AS pending,
     SUM(CASE WHEN COALESCE(offline, 0) != 0 AND COALESCE(offline_confirmed, 0) != 0 THEN 1 ELSE 0 END) AS confirmed
     FROM listings ${statusWhere}`).get(...params);
   appendDistrictCandidates(memberRegionDistrictNames(settings), clauses, params);
+  appendPriceCeilingCandidates(settings, clauses, params);
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const raw = db
     .prepare(
@@ -4901,7 +4911,7 @@ export function stats(searchKeys, userId, settingsOverride, diagnostics) {
   const computedAt = Date.now();
   // Each entry is scoped to the member/profile AND both SQLite writer versions.
   // Keep only scalar counters; caller mutations must not alter the cached copy.
-  statsMemo.set(holdKey, { value: { ...out }, at: computedAt,
+  statsMemo.set(holdKey, { value: { ...out }, at: computedAt, revision,
     expiresAt: Math.max(computedAt + STATS_MEMO_MS, statsHoldUntil) });
   while (statsMemo.size > STATS_MEMO_LIMIT) statsMemo.delete(statsMemo.keys().next().value);
   return out;
