@@ -58,6 +58,7 @@ export function hasListingMainContent(html) {
   const hay = String(html || "");
   if (/data-ehid\s*=/.test(hay)) return true;
   if (/rent_item\/info\?ehid=/.test(hay)) return true;
+  if (/href=["'](?:https:\/\/rent\.rakuya\.com\.tw)?\/item\/[a-z0-9]+/i.test(hay) && /[\d,]+\s*元/.test(hay)) return true;
   if (/community\.rakuya\.com\.tw\/\d+\/rent\/[a-z0-9]+/i.test(hay)) return true;
   if (/物件詳情/.test(hay) && /租金/.test(hay)) return true;
   if (/<h1[\s\S]{0,240}<\/h1>/.test(hay) && /格局|樓層[／\/]樓高|樓層[：:]/.test(hay)) return true;

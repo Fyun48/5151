@@ -183,8 +183,12 @@ export function parseHfApiBody(body) {
   const total = Number(String(data.HouseCount || "").replace(/,/g, ""));
   const pageBits = String(data.PageCount || "").split("/");
   const pageCount = Number(pageBits[1] || pageBits[0]) || 0;
+  const ok = String(unwrapped?.Status) === "1" && typeof data.SearchContent === "string"
+    && data.HouseCount != null && String(data.HouseCount).trim() !== ""
+    && Number.isFinite(total) && total >= 0 && (total === 0 || items.length > 0);
   return {
-    ok: String(unwrapped?.Status) === "1",
+    ok,
+    code: ok ? items.length ? "SUCCESS" : "SUCCESS_EMPTY" : "PARSE_FAILED",
     total: Number.isFinite(total) ? total : items.length,
     pageCount,
     items,
@@ -205,13 +209,13 @@ export function kindFromHfText(text) {
   const hay = String(text || "");
   if (/倉庫|廠房/.test(hay)) return "倉庫";
   if (/店面/.test(hay)) return "店面";
-  if (/辦公|車位|土地/.test(hay)) return "";
   if (/雅房/.test(hay)) return "雅房";
   if (/分租/.test(hay)) return "分租套房";
   if (/套房/.test(hay)) return "獨立套房";
   const rooms = hay.match(/(\d+)\s*房/);
   if (rooms && Number(rooms[1]) >= 1) return "整層住家";
-  return "獨立套房";
+  if (/辦公|車位|土地/.test(hay)) return "";
+  return "未分類";
 }
 
 export function parseHfSearchHtml(html) {
@@ -263,7 +267,8 @@ function listingSourceKey({ regionId, sectionId, address, floorName, areaName, l
 
 export function normalizeHfItem(item, { regionId, sectionId } = {}) {
   const id = String(item?.id || "").trim();
-  const kindName = kindFromHfText(`${item?.title || ""} ${item?.layout || ""} ${item?.text || ""}`);
+  // Amenities (e.g. 含車位) must not override the residence's title and layout.
+  const kindName = kindFromHfText(`${item?.title || ""} ${item?.layout || ""}`);
   if (!id || !kindName) return null;
   const region = Number(regionId) || 0;
   const section = Number(sectionId) || 0;
@@ -346,7 +351,9 @@ async function defaultPostForm(url, body) {
     signal: AbortSignal.timeout(15000),
   });
   if (res.status === 403 || res.status === 429 || res.status === 503) {
-    throw new Error(`好房網暫時無法抓取（HTTP ${res.status}）`);
+    throw Object.assign(new Error(`好房網暫時無法抓取（HTTP ${res.status}）`), {
+      code: res.status === 429 ? "RATE_LIMITED" : res.status === 403 ? "FETCH_BLOCKED" : "SOURCE_UNAVAILABLE",
+    });
   }
   if (!res.ok) throw new Error(`好房網搜尋 ${res.status}`);
   return res.json();
@@ -370,8 +377,10 @@ export async function fetchHfCoveringListings(jobs, options = {}) {
   const postForm = options.postForm || defaultPostForm;
   const batches = [];
   const seen = new Set();
+  let sourcePaused = false;
 
   for (const job of jobs || []) {
+    if (sourcePaused) break;
     const regionId = Number(job.regionId) || 0;
     const cityId = hfCityCode(regionId);
     const cityName = hfCityName(regionId);
@@ -379,9 +388,11 @@ export async function fetchHfCoveringListings(jobs, options = {}) {
     if (!cityId || !sectionIds.length) continue;
 
     const listings = [];
+    const errors = [];
     let total = 0;
     const names = [];
     for (const sectionId of sectionIds) {
+      if (sourcePaused) break;
       const sid = hpSidForDistrict(regionId, sectionId);
       const district = lookupDistrict(`${regionId}-${sectionId}`);
       const areaName = district?.name || "";
@@ -389,14 +400,22 @@ export async function fetchHfCoveringListings(jobs, options = {}) {
       names.push(areaName.replace(/區$/, ""));
       let areaTotal = 0;
       for (let page = 1; page <= pages; page += 1) {
-        const result = await fetchHfPage({
+        let result;
+        try {
+          result = await fetchHfPage({
           cityId,
           cityName,
           areaId: String(sid),
           areaName,
           page,
           postForm,
-        });
+          });
+          if (!result.ok) throw Object.assign(new Error("好房網回應格式異常或列表無法解析"), { code: result.code });
+        } catch (error) {
+          errors.push({ code: error.code || "FETCH_FAILED", message: error.message, district: areaName, page });
+          sourcePaused = ["FETCH_BLOCKED", "RATE_LIMITED"].includes(error.code);
+          break;
+        }
         if (page === 1) {
           areaTotal = Number(result.total) || 0;
           total += areaTotal;
@@ -427,6 +446,7 @@ export async function fetchHfCoveringListings(jobs, options = {}) {
       },
       total,
       listings,
+      errors,
     });
   }
 

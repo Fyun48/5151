@@ -194,7 +194,7 @@ export function expireOpenSelfListings(db, now = new Date()) {
     const result = db.prepare(
       `UPDATE listings
        SET self_status = 'expired'
-       WHERE COALESCE(source, '591') = 'self'
+       WHERE source = 'self'
          AND COALESCE(self_status, 'open') = 'open'
          AND IFNULL(self_expires_at, '') != ''
          AND self_expires_at <= ?`,

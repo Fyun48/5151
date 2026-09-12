@@ -33,12 +33,11 @@ export function ensureUser(conn, email, { role } = {}) {
   return Number(result.lastInsertRowid);
 }
 
-export function overlayPersonal(listing, flags) {
+export function overlayPersonal(listing, flags, { inPlace = false } = {}) {
   if (!listing) return listing;
   const f = flags && typeof flags === "object" ? flags : emptyFlags();
   const systemDup = String(listing.match_verdict || "") === "yes";
-  return {
-    ...listing,
+  return Object.assign(inPlace ? listing : { ...listing }, {
     viewed: Number(f.viewed) || 0,
     watched: Number(f.watched) || 0,
     hidden: systemDup ? 1 : Number(f.hidden) || 0,
@@ -46,7 +45,7 @@ export function overlayPersonal(listing, flags) {
     viewed_at: f.viewed_at || null,
     watched_at: f.watched_at || null,
     hidden_at: systemDup ? listing.hidden_at || f.hidden_at || null : f.hidden_at || null,
-  };
+  });
 }
 
 export function loadFlags(conn, userId, postId) {
@@ -84,8 +83,8 @@ export function loadAnyoneFlagMap(conn) {
   return map;
 }
 
-export function overlayRowsPersonal(rows, flagMap) {
-  return (rows || []).map((row) => overlayPersonal(row, flagMap?.get(Number(row.post_id))));
+export function overlayRowsPersonal(rows, flagMap, options) {
+  return (rows || []).map((row) => overlayPersonal(row, flagMap?.get(Number(row.post_id)), options));
 }
 
 export function anyoneWatched(conn, postId) {

@@ -86,7 +86,9 @@ test("covering fetch uses injected fetcher and normalizes listings", async () =>
       pageGapMs: 0,
     },
   );
-  assert.equal(batches[0].listings.length, 2);
+  assert.equal(batches[0].listings.length, 1);
   assert.equal(batches[0].listings[0].source, "rakuya");
-  assert.match(batches[0].listings[0].url, /ehid=rk001/);
+  assert.match(batches[0].listings[0].url, /\/item\/rk001/);
+  assert.match(batches[0].searchUrl, /region=3&section=50/);
+  assert.match(batches[0].listings[0].source_key, /^3\|50\|/);
 });

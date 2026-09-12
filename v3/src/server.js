@@ -2345,14 +2345,17 @@ app.get("/api/listings", async (req, res) => {
     sameHouse: req.query.sameHouse !== "0",
   });
   const queryMs = Date.now() - started;
-  res.setHeader("Server-Timing", `list;dur=${queryMs}`);
+  const statsStarted = Date.now();
+  const listingStats = stats(undefined, uid);
+  const statsMs = Date.now() - statsStarted;
+  res.setHeader("Server-Timing", `list;dur=${queryMs}, stats;dur=${statsMs}`);
   res.json({
-    stats: { ...stats(undefined, uid), matched: listed.totalMatched },
+    stats: { ...listingStats, matched: listed.totalMatched },
     listings: listed.listings,
     hasMore: listed.hasMore === true,
     nextOffset: listed.nextOffset || 0,
     queryVersion: listed.queryVersion || 2,
-    timing: { query_ms: queryMs, dataset: listed.totalMatched },
+    timing: { query_ms: queryMs, stats_ms: statsMs, total_ms: Date.now() - started, dataset: listed.totalMatched },
   });
 });
 
@@ -2754,4 +2757,3 @@ app.listen(PORT, HOST, () => {
       });
   }, 20000);
 });
-

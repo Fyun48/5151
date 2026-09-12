@@ -82,6 +82,27 @@ export function loadPersonalSameHouseIds(db, userId, postId) {
   }
 }
 
+/** Request-local index: one read for the viewer, never one query per candidate. */
+export function loadPersonalSameHouseIndex(db, userId) {
+  const byPost = new Map();
+  const groups = new Map();
+  const uid = Number(userId) || 0;
+  if (uid) {
+    for (const row of db.prepare(
+      "SELECT post_id, group_key FROM user_same_house_members WHERE user_id = ?",
+    ).all(uid)) {
+      const id = Number(row.post_id);
+      byPost.set(id, row.group_key);
+      if (!groups.has(row.group_key)) groups.set(row.group_key, []);
+      groups.get(row.group_key).push(id);
+    }
+  }
+  return {
+    groupKey: (id) => byPost.get(Number(id)) || "",
+    peers: (id) => (groups.get(byPost.get(Number(id))) || []).filter(peer => peer !== Number(id)),
+  };
+}
+
 export function personalGroupAgrees(db, userId, postId) {
   const key = personalGroupKeyFor(db, userId, postId);
   if (!key) return true;

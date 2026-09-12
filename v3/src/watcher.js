@@ -53,6 +53,8 @@ import {
   getCachedGeo,
   setCachedGeo,
   isCrawlSourceEnabled,
+  getRakuyaPageCursors,
+  saveRakuyaPageCursors,
   sendUserWebPush,
   pushPayloadFromEvents,
 } from "./db.js";
@@ -66,7 +68,7 @@ import { fetchSinyiCoveringListings } from "./sinyi.js";
 import { enrichHpListingFromDetail, fetchHpCoveringListings, fetchHpDetail } from "./houseprice.js";
 import { enrichDdListingFromObject, fetchDdCoveringListings, fetchDdObject } from "./ddroom.js";
 import { fetchHfCoveringListings } from "./housefun.js";
-import { fetchRakuyaCoveringListings, fetchRakuyaDetail } from "./rakuya.js";
+import { fetchRakuyaCoveringListings, fetchRakuyaDetail, repairRakuyaScopes } from "./rakuya.js";
 import { fetchSourceKit } from "./sourceKit.js";
 import { commuteWorkJobs, geocodeAddress, geoFailReason, hasWorkPoint, needsListingGeo, normalizeCommuteMode } from "./geo.js";
 import { parseTaiwanAddressParts, streetCacheKey } from "./geoPrecision.js";
@@ -635,6 +637,10 @@ export async function runWatch(options = {}) {
     try {
       const batches = await run();
       for (const batch of batches) {
+        for (const error of batch.errors || []) {
+          errors.push(`${label} ${error.district || ""} 第 ${error.page || 1} 頁 [${error.code || "FETCH_FAILED"}]：${error.message}`);
+        }
+        if (batch.errors?.length && !batch.listings.length && batch.progress?.resetReason !== "PAGE_OUT_OF_RANGE") continue;
         collected.push(batch);
         if (batch.total > 0 && batch.listings.length === 0) {
           errors.push(`${batch.parsed.label}：有資料，但都被目前篩選排除了`);
@@ -682,10 +688,12 @@ export async function runWatch(options = {}) {
     }));
   }
   if (wantRakuya) {
+    repairRakuyaScopes(db, jobs);
     await collectExternal("樂屋網", () => fetchRakuyaCoveringListings(jobs, {
       ...fetchOptions,
       pages: hbPages,
       fetchText: options.rakuyaFetchText,
+      startPages: getRakuyaPageCursors(),
     }));
   }
 
@@ -715,6 +723,9 @@ export async function runWatch(options = {}) {
       total: batch.total,
       fetched: batch.listings.length,
       baseline: isSearchBaseline,
+      source: batch.parsed.source || batch.listings[0]?.source || "",
+      stopReason: batch.parsed.stopReason || "",
+      errors: batch.errors || [],
     });
     let upserts = 0;
     for (const listing of batch.listings) {
@@ -762,6 +773,12 @@ export async function runWatch(options = {}) {
       enqueueListingEvent(saved, evt);
     }
   }
+
+  // Only advance after those pages have been stored successfully.
+  const rakuyaProgress = collected.filter(batch => batch.parsed.source === "rakuya"
+    && (!batch.errors?.length || batch.progress?.resetReason === "PAGE_OUT_OF_RANGE"))
+    .map(batch => batch.progress).filter(Boolean);
+  if (rakuyaProgress.length) saveRakuyaPageCursors(rakuyaProgress);
 
   if (needsListingGeo(settings) && freshIds.length > 0 && freshIds.length <= LIST_PAGE_SIZE) {
     await ingestListingGeoBatch(freshIds);
