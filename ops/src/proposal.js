@@ -136,9 +136,57 @@ export function enqueueProposalGeneration(db, opts) {
   return withImmediateTx(db, () => enqueueProposalRow(db, opts));
 }
 
+const PROPOSAL_WRITABLE = new Set(["pending", "failed_retry", "processing"]);
+const PROPOSAL_CANCELABLE = PROPOSAL_WRITABLE;
+
 function abandonProposalRow(db, row, reason) {
   db.prepare("UPDATE issue_proposal SET status='failed', error_code=? WHERE id=? AND status IN ('pending','failed_retry','processing')")
     .run(String(reason || "subscription_revoked").slice(0, 64), row.id);
+}
+
+// Owner 取消尚未完成的提案生成（保留歷史／CURRENT 不動；不宣稱撤回已在跑的外部呼叫）。
+export function cancelProposal(db, proposalId, { actor = "owner", reason = null, now = new Date() } = {}) {
+  return withImmediateTx(db, () => {
+    const row = db.prepare("SELECT * FROM issue_proposal WHERE id=?").get(Number(proposalId));
+    if (!row) throw httpError("proposal not found", 404);
+    if (row.status === "cancelled") {
+      return { idempotent: true, in_flight_not_withdrawn: false, proposal: publicProposal(row) };
+    }
+    if (row.status === "completed") {
+      throw httpError("已完成的提案不改寫。要改內容請開新版本，不要取消完成事實。", 409);
+    }
+    if (!PROPOSAL_CANCELABLE.has(row.status)) {
+      throw httpError(`提案目前不能取消（status=${row.status}）`, 409);
+    }
+    const inFlight = row.status === "processing";
+    const code = reason ? `owner_cancelled:${String(reason).slice(0, 120)}` : "owner_cancelled";
+    const upd = db.prepare("UPDATE issue_proposal SET status='cancelled', error_code=? WHERE id=? AND status IN ('pending','failed_retry','processing')")
+      .run(code, Number(row.id));
+    if (upd.changes !== 1) {
+      const fresh = db.prepare("SELECT * FROM issue_proposal WHERE id=?").get(Number(row.id));
+      if (fresh?.status === "cancelled") return { idempotent: true, in_flight_not_withdrawn: inFlight, proposal: publicProposal(fresh) };
+      if (fresh?.status === "completed") throw httpError("已完成的提案不改寫。要改內容請開新版本，不要取消完成事實。", 409);
+      throw httpError("提案目前不能取消", 409);
+    }
+    appendAuditRow(db, {
+      actor,
+      action: "issue.proposal.cancelled",
+      entityType: "issue_proposal",
+      entityId: String(row.id),
+      data: {
+        issue_id: Number(row.issue_id),
+        proposal_id: Number(row.id),
+        prev_status: row.status,
+        in_flight_not_withdrawn: inFlight,
+      },
+      now,
+    });
+    return {
+      cancelled: true,
+      in_flight_not_withdrawn: inFlight,
+      proposal: publicProposal(db.prepare("SELECT * FROM issue_proposal WHERE id=?").get(Number(row.id))),
+    };
+  });
 }
 
 export function claimProposalBatch(db, { limit = 5, now = new Date(), staleMs = PROPOSAL_CLAIM_STALE_MS } = {}) {
@@ -174,23 +222,46 @@ export function claimProposalBatch(db, { limit = 5, now = new Date(), staleMs = 
 }
 
 function deferRow(db, row, { errorCode, now = new Date(), random = Math.random }) {
+  const latest = db.prepare("SELECT status FROM issue_proposal WHERE id=?").get(row.id);
+  if (!latest || !PROPOSAL_WRITABLE.has(latest.status)) {
+    return { status: latest?.status || "cancelled", skipped: true, errorCode };
+  }
   const nowMs = now instanceof Date ? now.getTime() : now;
   const next = iso(new Date(nowMs + proposalBackoffMs(1, { random })));
-  db.prepare("UPDATE issue_proposal SET status='failed_retry', next_attempt_at=?, error_code=? WHERE id=?").run(next, String(errorCode).slice(0, 64), row.id);
+  const upd = db.prepare("UPDATE issue_proposal SET status='failed_retry', next_attempt_at=?, error_code=? WHERE id=? AND status IN ('pending','failed_retry','processing')")
+    .run(next, String(errorCode).slice(0, 64), row.id);
+  if (upd.changes !== 1) {
+    const fresh = db.prepare("SELECT status FROM issue_proposal WHERE id=?").get(row.id);
+    return { status: fresh?.status || "cancelled", skipped: true, errorCode };
+  }
   return { status: "deferred", errorCode };
 }
 
 export function failProposal(db, row, { errorCode, transient = true, now = new Date(), random = Math.random }) {
-  const retries = Number(row.retry_count) + 1;
+  const latest = db.prepare("SELECT status, retry_count FROM issue_proposal WHERE id=?").get(row.id);
+  if (!latest || !PROPOSAL_WRITABLE.has(latest.status)) {
+    return { status: latest?.status || "cancelled", skipped: true, retry_count: Number(latest?.retry_count ?? row.retry_count) };
+  }
+  const retries = Number(latest.retry_count) + 1;
   const cap = transient ? Number(row.max_retries || PROPOSAL_MAX_RETRIES) : PROPOSAL_SCHEMA_MAX_RETRIES;
   const code = String(errorCode || "error").slice(0, 64);
   if (retries >= cap) {
-    db.prepare("UPDATE issue_proposal SET status='failed', retry_count=?, error_code=? WHERE id=?").run(retries, code, row.id);
+    const upd = db.prepare("UPDATE issue_proposal SET status='failed', retry_count=?, error_code=? WHERE id=? AND status IN ('pending','failed_retry','processing')")
+      .run(retries, code, row.id);
+    if (upd.changes !== 1) {
+      const fresh = db.prepare("SELECT status, retry_count FROM issue_proposal WHERE id=?").get(row.id);
+      return { status: fresh?.status || "cancelled", skipped: true, retry_count: Number(fresh?.retry_count ?? retries) };
+    }
     return { status: "failed", retry_count: retries };
   }
   const nowMs = now instanceof Date ? now.getTime() : now;
   const next = iso(new Date(nowMs + proposalBackoffMs(retries, { random })));
-  db.prepare("UPDATE issue_proposal SET status='failed_retry', retry_count=?, next_attempt_at=?, error_code=? WHERE id=?").run(retries, next, code, row.id);
+  const upd = db.prepare("UPDATE issue_proposal SET status='failed_retry', retry_count=?, next_attempt_at=?, error_code=? WHERE id=? AND status IN ('pending','failed_retry','processing')")
+    .run(retries, next, code, row.id);
+  if (upd.changes !== 1) {
+    const fresh = db.prepare("SELECT status, retry_count FROM issue_proposal WHERE id=?").get(row.id);
+    return { status: fresh?.status || "cancelled", skipped: true, retry_count: Number(fresh?.retry_count ?? retries) };
+  }
   return { status: "failed_retry", retry_count: retries, next_attempt_at: next };
 }
 
@@ -271,17 +342,19 @@ export async function executeProposalGeneration(db, row, { provider, now = () =>
   const proposalHash = computeProposalHash(content, { issueId: row.issue_id, proposalVersion: row.proposal_version });
   const ts = iso(nowDate);
   return withImmediateTx(db, () => {
+    const fresh = db.prepare("SELECT status FROM issue_proposal WHERE id=?").get(Number(row.id));
+    if (!fresh || fresh.status === "cancelled") return "cancelled";
     const again = issueWriteDecision(db, row.issue_id, { expectedGeneration: row.subscription_generation });
     if (!again.ok) {
       abandonProposalRow(db, row, again.reason);
       return "failed";
     }
-    db.prepare(
+    const upd = db.prepare(
       `UPDATE issue_proposal SET status='completed', input_fingerprint=?, policy_fingerprint=?, proposal_hash=?,
         source_evaluation_run_id=?, source_impact_assessment_id=?, final_recommendation=?,
         title=?, problem_statement=?, proposed_change=?, intended_outcome=?, scope=?, non_goals=?, acceptance_criteria=?,
         known_risks=?, security_considerations=?, compliance_considerations=?, operational_considerations=?, rollback_considerations=?,
-        evidence_summary=?, provider=?, model=?, error_code=NULL, generated_at=? WHERE id=?`,
+        evidence_summary=?, provider=?, model=?, error_code=NULL, generated_at=? WHERE id=? AND status IN ('pending','failed_retry','processing')`,
     ).run(
       input.fingerprint, input.policyFingerprint, proposalHash,
       input.sourceEvaluationRunId, input.sourceImpactAssessmentId, input.finalRecommendation,
@@ -291,6 +364,7 @@ export async function executeProposalGeneration(db, row, { provider, now = () =>
       content.operational_considerations, content.rollback_considerations, content.evidence_summary,
       provider.name, provider.model || null, ts, row.id,
     );
+    if (upd.changes !== 1) return "cancelled";
     const prev = db.prepare("SELECT proposal_id FROM issue_proposal_current WHERE issue_id=?").get(Number(row.issue_id));
     db.prepare(
       `INSERT INTO issue_proposal_current(issue_id, proposal_id, proposal_version, proposal_hash, input_fingerprint, updated_at)

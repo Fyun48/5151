@@ -1,9 +1,9 @@
 # OPS／v3 現況對照表（ChatGPT 審查後）
 
-盤點對象：本分支 `cursor/ops-cmd-cancel-ed3f`（第 0–21 包，疊在 qa-cancel 上）。  
-ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契約、Deploy OPS、產品卡、退出演練、站內 CRM、隔離 staging、開發發行檢視、OPS 供應商抽屜、v3 BudgetGuard、pHash 附屬表與兩個 LLM 開關、第 8 包 live 契約、第 9 包可打包設計套件、第 10 包遠端客服、第 11 包跨站洞察與清除、第 12 包統計指標／後續服務門、第 13 包 worker 重驗訂閱世代、第 14 包晚到評估／提案／webhook、第 15 包製作／QA 重驗訂閱世代、第 16 包 staging／發行重驗訂閱世代、第 17 包移交前確認正式部署狀態、第 18 包自動重評重驗訂閱世代、第 19 包遠端客服重驗訂閱世代、第 20 包測試中的 QA 取消、以及第 21 包未送出的遠端客服可取消。**不以那次抽查當現況。**
+盤點對象：本分支 `cursor/ops-eval-cancel-ed3f`（第 0–22 包，疊在 cmd-cancel 上）。  
+ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契約、Deploy OPS、產品卡、退出演練、站內 CRM、隔離 staging、開發發行檢視、OPS 供應商抽屜、v3 BudgetGuard、pHash 附屬表與兩個 LLM 開關、第 8 包 live 契約、第 9 包可打包設計套件、第 10 包遠端客服、第 11 包跨站洞察與清除、第 12 包統計指標／後續服務門、第 13 包 worker 重驗訂閱世代、第 14 包晚到評估／提案／webhook、第 15 包製作／QA 重驗訂閱世代、第 16 包 staging／發行重驗訂閱世代、第 17 包移交前確認正式部署狀態、第 18 包自動重評重驗訂閱世代、第 19 包遠端客服重驗訂閱世代、第 20 包測試中的 QA 取消、第 21 包未送出的遠端客服可取消、以及第 22 包未送出的分析／評估／提案可取消。**不以那次抽查當現況。**
 
-本次是第 21 包（未送出的遠端客服可取消），**不是部署指令**，不 Deploy v3，也不擅自跑 Deploy OPS。`PRODUCTION_RELEASE_ALLOW_LIVE` 維持預設 0。`stats`、`followup_service`、`cross_site_insight`、`remote_cs` 與 `retain_after_exit` 維持預設關。Cursor 製作仍標未整合。
+本次是第 22 包（未送出的分析／評估／提案可取消），**不是部署指令**，不 Deploy v3，也不擅自跑 Deploy OPS。`PRODUCTION_RELEASE_ALLOW_LIVE` 維持預設 0。`stats`、`followup_service`、`cross_site_insight`、`remote_cs` 與 `retain_after_exit` 維持預設關。Cursor 製作仍標未整合。
 
 圖例：`存在`＝可承接；`需改`＝有程式但契約不足；`待做`＝尚未實作。
 
@@ -50,7 +50,8 @@ ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契�
 | 自動重評重驗訂閱世代 | 已做 | `ops/src/reevaluation.js` `autoReevaluationDecision`、重評 worker、未決清單 | 第 18 包；能推到產品的延後／拒絕決策戳世代；自動重評不把已退出或換世代的舊議題重開；未綁產品仍相容；Owner 手動重評不在此限 |
 | 遠端客服重驗訂閱世代 | 已做 | `ops/src/siteCommand.js` `siteCommandWriteDecision`、未決清單 | 第 19 包；命令戳世代；外送前重驗；解除訂閱或換世代後舊佇列不外送；已送出的不宣稱撤回 |
 | 測試中的 QA 取消 | 已做 | `ops/src/qaRun.js` `cancelQaRun`、開發發行畫面、未決清單 | 第 20 包；Owner 可取消尚未完成的獨立 QA；已在跑的不宣稱撤回；已完成的結果不改寫；晚到完成不寫入 current |
-| 未送出的遠端客服可取消 | 本輪已做 | `ops/src/siteCommand.js` `cancelSiteCommand`、未決清單 | 第 21 包；Owner 可取消 pending／sending 命令；已送出的不宣稱撤回；晚到外送不 fetch、不寫回 sent |
+| 未送出的遠端客服可取消 | 已做 | `ops/src/siteCommand.js` `cancelSiteCommand`、未決清單 | 第 21 包；Owner 可取消 pending／sending 命令；已送出的不宣稱撤回；晚到外送不 fetch、不寫回 sent |
+| 未送出的分析／評估／提案可取消 | 本輪已做 | `ops/src/feedbackAnalysis.js` `cancelAnalysis`、`ops/src/evaluation.js` `cancelEvaluation`、`ops/src/proposal.js` `cancelProposal`、未決清單 | 第 22 包；Owner 可取消 pending／failed_retry／processing；已完成的不改寫；晚到完成不寫入 current |
 
 ## 2. 第 14 節驗收情境的實作安排
 

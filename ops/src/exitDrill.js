@@ -102,7 +102,7 @@ export function listPendingWork(db, productId) {
   const analysis = safeAll(db, `
     SELECT a.id, a.status FROM feedback_analysis a
      JOIN ingested_feedback f ON f.id = a.feedback_id
-    WHERE f.product_id=? AND a.status IN ('pending','processing')
+    WHERE f.product_id=? AND a.status IN ('pending','failed_retry','processing')
   `, [id]);
   for (const row of analysis) {
     items.push({
@@ -117,7 +117,7 @@ export function listPendingWork(db, productId) {
     const evals = safeAll(db, `
       SELECT r.id, r.status FROM issue_evaluation_run r
        JOIN issue_candidate i ON i.id = r.issue_id
-      WHERE r.status IN ('pending','processing')
+      WHERE r.status IN ('pending','failed_retry','processing')
         AND (
           i.product_id=?
           OR EXISTS (
@@ -141,7 +141,7 @@ export function listPendingWork(db, productId) {
     const props = safeAll(db, `
       SELECT p.id, p.status FROM issue_proposal p
        JOIN issue_candidate i ON i.id = p.issue_id
-      WHERE p.status IN ('pending','processing')
+      WHERE p.status IN ('pending','failed_retry','processing')
         AND (
           i.product_id=?
           OR EXISTS (
