@@ -109,9 +109,12 @@ test("listing cards support left swipe watch and right swipe hide", () => {
   assert.match(html, /dx > thresh/);
   assert.match(html, /class="ghost btn-card-action btn-watch"/);
   assert.match(html, /watch-hide-stack/);
+  assert.match(html, /btn-card-action btn-hide/);
+  assert.match(html, /data-hidden="\$\{id\}">\$\{item\.hidden \? "取消隱藏" : "不再顯示"\}/);
+  assert.doesNotMatch(html, /class="hide-box"/);
   const start = html.indexOf("@media (max-width: 880px)");
   const mobile = html.slice(start, start + 12000);
-  assert.match(mobile, /\.item \.hide-box \{\s*display: none;/);
+  assert.match(mobile, /btn-hide/);
 });
 
 test("watch limit flashes and resets the card instead of leaving a swipe off-screen", () => {
@@ -140,6 +143,22 @@ test("unwatch flies to the all chip before reloading", () => {
   assert.match(unwatch, /取消失敗，已還原卡片/);
 });
 
+test("watch draft, LINE add, avatar preview and profile stats copy", () => {
+  const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
+  assert.match(html, /watch-draft-pair/);
+  assert.match(html, /data-watch-draft-cancel="\$\{id\}">取消/);
+  assert.match(html, /\.actions \.btn-watch\.primary/);
+  assert.match(html, /data-line-add=/);
+  assert.match(html, /function openLineContact/);
+  assert.match(html, /line:\/\/ti\/p\//);
+  assert.match(html, /要加入「\$\{who\}」的 LINE/);
+  assert.match(html, /id="whoAvatar"/);
+  assert.match(html, /function showAvatarPreview/);
+  assert.match(html, /function paintWho/);
+  assert.match(html, /watchedTotal/);
+  assert.doesNotMatch(html, /列表另排除/);
+});
+
 test("housing kind chips stay independent of 特別關注", () => {
   const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
   assert.match(html, /data-kind="elevator"/);
@@ -164,6 +183,8 @@ test("housing kind chips stay independent of 特別關注", () => {
   assert.doesNotMatch(html, /data-filter="elevator"/);
   assert.doesNotMatch(html, /data-filter="apartment"/);
   assert.doesNotMatch(html, /data-filter="suite"/);
+  assert.match(html, /const unspecifiedWhole = isWholeFloorHome\(kind\)/);
+  assert.match(html, /const isBuilding = unspecifiedWhole \|\| \/大\[樓廈\]\/\.test\(formHay\)/);
 });
 
 test("page defaults to 全部 + 最新", () => {
@@ -362,7 +383,8 @@ test("guest demo is read-only and work prompt can be skipped", () => {
   assert.match(html, /function showGuestToast/);
   assert.match(html, /function remindGuest/);
   assert.match(html, /成為會員後就能使用這項功能/);
-  assert.match(html, /\$\("who"\)\.textContent = "訪客"/);
+  assert.match(html, /function paintWho/);
+  assert.match(html, /paintWho\(null\)/);
   assert.match(html, /classList\.toggle\("is-guest", isGuest\)/);
   assert.match(html, /DFKai-SB/);
   assert.match(html, /標楷體/);

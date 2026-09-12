@@ -1095,16 +1095,20 @@
     }
     .contact-id {
       display: flex;
+      flex-direction: row;
+      flex-wrap: nowrap;
       align-items: center;
-      justify-content: center;
+      justify-content: flex-start;
       gap: 8px;
       min-width: 0;
+      width: 100%;
       text-align: left;
     }
-    .contact-id .who-name { min-width: 0; }
+    .contact-id .who-name { min-width: 0; flex: 1 1 auto; text-align: left; }
     .contact .avatar {
-      width: 52px;
-      height: 52px;
+      width: 36px;
+      height: 36px;
+      flex: 0 0 auto;
       border-radius: 50%;
       object-fit: cover;
       border: 2px solid var(--line);
@@ -1113,6 +1117,51 @@
     }
     .contact .avatar:hover { border-color: var(--accent); }
     .contact .who-name { font-weight: 700; }
+    .who-avatar {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 1px solid var(--line);
+      background: var(--accent-soft);
+      cursor: pointer;
+      flex: 0 0 auto;
+    }
+    .who-avatar[hidden] { display: none !important; }
+    .avatar-preview {
+      position: fixed;
+      z-index: 80;
+      width: min(420px, 72vw);
+      height: min(420px, 72vw);
+      max-width: calc(100vw - 24px);
+      max-height: min(72vh, calc(100vh - 120px));
+      border-radius: var(--radius-lg, 10px);
+      overflow: hidden;
+      border: 1px solid var(--line);
+      background: var(--paper);
+      box-shadow: 0 8px 24px rgba(28, 25, 23, 0.18);
+      pointer-events: none;
+    }
+    .avatar-preview[hidden] { display: none !important; }
+    .avatar-preview img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .line-add {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+    }
+    .actions .btn-line,
+    .line-add .btn-line {
+      min-height: 36px;
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: 700;
+    }
     .contact .agency { color: var(--muted); line-height: 1.35; }
     .contact a.tel { color: var(--accent-deep); text-decoration: none; font-family: "Noto Sans TC", sans-serif; }
     .exclude-agent-btn {
@@ -2505,24 +2554,29 @@
       box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72), 0 2px 5px rgba(28, 25, 23, 0.1);
       background: linear-gradient(180deg, color-mix(in srgb, var(--paper) 88%, #fff), var(--paper));
     }
+    .actions .btn-card-action.primary,
     .actions .btn-watch.primary {
+      background: var(--accent);
+      color: var(--primary-foreground, var(--paper));
+      border-color: var(--accent);
+      border-bottom-color: var(--accent-deep);
       box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28), 0 2px 6px rgba(28, 25, 23, 0.16);
     }
-    .actions .btn-report-gone {
+    .actions .btn-card-action.primary:hover:not(:disabled),
+    .actions .btn-watch.primary:hover:not(:disabled) {
+      background: var(--accent-deep);
+      color: var(--primary-foreground, var(--paper));
+    }
+    .actions .btn-report-gone,
+    .actions .btn-hide {
       color: var(--muted);
     }
-    .hide-box {
-      font-size: 12px;
-      color: var(--muted);
+    .actions .watch-draft-pair {
       display: flex;
-      gap: 6px;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      min-height: 30px;
-      margin: 0;
+      flex-direction: column;
+      gap: 8px;
+      width: 100%;
     }
-    .hide-box input { width: 16px; height: 16px; accent-color: var(--accent); }
     .list { display: grid; gap: 14px; padding: 14px 16px 16px; overflow-x: hidden; }
     .list.is-refreshing { pointer-events: none; }
     .list.is-refreshing::before {
@@ -2792,7 +2846,7 @@
         -webkit-box-orient: vertical;
         overflow: hidden;
       }
-      body.role-guest .hide-box { display: none; }
+      body.role-guest .btn-hide { display: none; }
       .item:has(.item-cover.empty) {
         grid-template-columns: 92px minmax(0, 1fr);
       }
@@ -2822,13 +2876,19 @@
       }
       .item .actions .btn-watch,
       .item .actions .btn-report-gone,
+      .item .actions .btn-hide,
       .item .actions .btn-card-action {
         flex: 1 1 calc(50% - 8px);
         min-height: 36px;
         max-width: none;
       }
-      .item .hide-box {
-        display: none;
+      .item .actions .watch-draft-pair {
+        flex: 1 1 100%;
+        flex-direction: row;
+        flex-wrap: wrap;
+      }
+      .item .actions .watch-draft-pair .btn-watch {
+        flex: 1 1 calc(50% - 8px);
       }
       .list { padding: 10px 10px 28px; gap: 10px; }
       .guest-toast {
@@ -2884,7 +2944,6 @@
       body.panel-collapsed #settingsPanel { display: none; }
       body.panel-collapsed.filter-sheet-open #settingsPanel { display: block; }
       .notify-shortcuts { display: none; }
-      #settingsPanel .stats { display: none; }
       #demandView, #meView, #notifyView, #postView, #qaView { padding: 0 16px 24px; }
       #notifyView .card.panel,
       #meView .card.panel,
@@ -2993,6 +3052,7 @@
       </div>
       <div class="row">
         <span class="who-cluster">
+          <img class="who-avatar" id="whoAvatar" alt="" hidden data-avatar-preview />
           <span class="who is-guest" id="who" data-tour="guestWho">訪客</span>
           <button type="button" class="ghost" id="helpQaBtn" title="功能說明 Q&amp;A" aria-label="功能說明 Q&amp;A">Q&amp;A</button>
           <button type="button" class="ghost" id="feedbackBtn" title="意見回饋" aria-label="意見回饋">意見</button>
@@ -3356,7 +3416,7 @@
       <form id="profileForm">
         <div class="profile-card">
           <button type="button" class="media-hit" id="profileAvatarHit" title="點擊拍照或上傳頭像" aria-label="拍照或上傳頭像">
-            <img class="profile-avatar" id="profileAvatarImg" alt="頭像" data-avatar-zoom hidden />
+            <img class="profile-avatar" id="profileAvatarImg" alt="頭像" data-avatar-preview hidden />
             <div class="profile-avatar empty" id="profileAvatarFallback">頭像</div>
             <span class="media-x" id="profileAvatarClear" hidden>×</span>
           </button>
@@ -3953,6 +4013,9 @@
     <button type="button" class="lb-next" id="appLbNext" aria-label="下一張">›</button>
     <div class="lb-count" id="appLbCount"></div>
   </div>
+  <div class="avatar-preview" id="avatarPreview" hidden>
+    <img id="avatarPreviewImg" alt="" />
+  </div>
   <div id="ownerOverlay" class="hub-overlay" hidden>
     <div class="hub-backdrop" data-close-owner></div>
     <div class="hub-panel" role="dialog" aria-modal="true" aria-labelledby="ownerOverlayTitle">
@@ -4370,7 +4433,7 @@
       return mePlan === "sponsor" ? SPONSOR_MAX_WATCHED : MEMBER_MAX_WATCHED;
     }
     function watchedCount() {
-      return Number(lastStats?.watched) || 0;
+      return Number(lastStats?.watchedTotal != null ? lastStats.watchedTotal : lastStats?.watched) || 0;
     }
     function watchLimitReached() {
       const cap = watchLimit();
@@ -4779,7 +4842,9 @@
     }
 
     function isWholeFloorHome(kindName) {
-      return String(kindName || "").includes("整層住家");
+      const raw = String(kindName || "");
+      if (/獨立套房|分租套房|雅房|共宅|共居/.test(raw)) return false;
+      return /整層|整戶出租|整間出租/.test(raw);
     }
 
     function listingFilterHay(item) {
@@ -5414,20 +5479,27 @@
       const list = Array.isArray(keys) ? keys.filter(Boolean) : (keys ? [keys] : []);
       if (!list.length) return true;
       const kind = String(item.kind_name || "");
-      const hay = `${item.title || ""} ${kind} ${item.address || ""} ${item.tags || ""}`;
-      const hasElevator = (/有電梯|電梯大樓|電梯大廈|電梯公寓|電梯華廈|貨梯/.test(hay) || /大[樓廈]/.test(kind)) && !/無電梯|沒有電梯/.test(hay);
+      const tags = Array.isArray(item.tags) ? item.tags.join(" ") : String(item.tags || "");
+      const formHay = `${kind} ${tags}`;
+      const hay = `${item.title || ""} ${kind} ${item.address || ""} ${tags}`;
+      const unspecifiedWhole = isWholeFloorHome(kind) && !/大樓|大廈|公寓|華廈|店面|店舖|店鋪|倉庫|廠房|套房|雅房|分租|共宅|共居|透天|別墅|農舍/.test(formHay);
+      const isBuilding = unspecifiedWhole || /大[樓廈]/.test(formHay);
+      const hasElevator = (/有電梯|電梯大樓|電梯大廈|電梯公寓|電梯華廈|貨梯/.test(hay) || isBuilding) && !/無電梯|沒有電梯/.test(hay);
       const matchKey = (key) => {
         if (key === "elevator") return hasElevator;
-        if (key === "building") return /大[樓廈]/.test(kind);
-        if (key === "apartment" || key === "apartment_huaxia") return /公寓|華廈/.test(hay) && !/大[樓廈]/.test(kind);
+        if (key === "building") return isBuilding;
+        if (key === "apartment" || key === "apartment_huaxia") {
+          if (unspecifiedWhole) return true;
+          return /公寓|華廈/.test(hay) && !/大[樓廈]/.test(formHay);
+        }
         if (key === "suite") return /套房|雅房/.test(kind);
         if (key === "suite_shared") return /套房|雅房|分租|共宅|共居/.test(`${kind} ${item.title || ""}`) && !/倉庫|廠房/.test(kind);
         if (key === "yafang") return /雅房/.test(`${kind} ${item.title || ""}`);
         if (key === "share") return /分租/.test(`${kind} ${item.title || ""}`);
-        if (key === "coliving") return /共生宅|共居宅|共生住宅|共居|共宅/.test(`${kind} ${item.title || ""} ${item.tags || ""}`);
+        if (key === "coliving") return /共生宅|共居宅|共生住宅|共居|共宅/.test(`${kind} ${item.title || ""} ${tags}`);
         if (key === "whole") return isWholeFloorHome(kind);
-        if (key === "shop") return /店面|店鋪/.test(`${kind} ${item.title || ""}`);
-        if (key === "warehouse") return /倉庫|廠房|倉儲/.test(`${kind} ${item.title || ""}`);
+        if (key === "shop") return unspecifiedWhole || /店面|店鋪/.test(`${kind} ${item.title || ""}`);
+        if (key === "warehouse") return unspecifiedWhole || /倉庫|廠房|倉儲/.test(`${kind} ${item.title || ""}`);
         return true;
       };
       if (list.includes("whole") && !matchKey("whole")) return false;
@@ -5565,7 +5637,7 @@
       if ($("helpQaBtn")) $("helpQaBtn").hidden = isGuest;
       if ($("who")) $("who").classList.toggle("is-guest", isGuest);
       if (isGuest) {
-        $("who").textContent = "訪客";
+        paintWho(null);
         document.body.classList.remove("role-admin", "plan-sponsor");
         meIsAdmin = false;
         mePlan = "free";
@@ -6233,7 +6305,6 @@
         ["特別關注", st.watched],
         ["已隱藏", st.hidden],
         ["疑似", st.suspected],
-        ...(st.filteredOut ? [["列表另排除", st.filteredOut]] : []),
       ].map(([k, v]) => `<div class="stat"><b>${v || 0}</b><span>${k}</span></div>`).join("");
       paintWatchChip();
     }
@@ -6474,6 +6545,32 @@
     function lineQr(url) {
       return `https://api.qrserver.com/v1/create-qr-code/?size=72x72&margin=2&data=${encodeURIComponent(url)}`;
     }
+    function lineWebUrl(url) {
+      const href = String(url || "").trim();
+      if (/^https:\/\/(line\.me|lin\.ee)\//i.test(href)) return href;
+      return "";
+    }
+    function lineAppUrl(url) {
+      const href = lineWebUrl(url);
+      const m = href.match(/^https:\/\/line\.me\/(?:R\/)?ti\/p\/([^?#]+)/i);
+      if (m) return `line://ti/p/${decodeURIComponent(m[1])}`;
+      return href;
+    }
+    function openLineContact(url) {
+      const web = lineWebUrl(url);
+      if (!web) return;
+      const app = lineAppUrl(web);
+      if (isCoarsePointer() && app && app !== web) {
+        const started = Date.now();
+        const fallback = window.setTimeout(() => {
+          if (Date.now() - started < 1600) window.open(web, "_blank", "noopener,noreferrer");
+        }, 900);
+        window.addEventListener("pagehide", () => window.clearTimeout(fallback), { once: true });
+        window.location.href = app;
+        return;
+      }
+      window.open(web, "_blank", "noopener,noreferrer");
+    }
 
     function agentExcludeLabel(item) {
       const name = item.contact_name || String(item.role_name || "").replace(/^仲介|^屋主|^代理人/, "").trim();
@@ -6490,11 +6587,7 @@
       const tel = item.mobile || item.phone || "";
       const bits = [];
       if (item.avatar) {
-        const exLabel = agentExcludeLabel(item);
-        const excludeAttrs = !isGuest && exLabel && item.source !== "self"
-          ? ` data-exclude-face="${item.post_id}" data-agent="${esc(exLabel)}" data-uid="${item.contact_uid || ""}" title="點頭像排除此聯絡人，並寫入目前設定檔"`
-          : ` title="點頭像看大圖" data-avatar-zoom="${esc(item.avatar)}"`;
-        bits.push(`<div class="contact-id"><img class="avatar" src="${esc(item.avatar)}" alt=""${excludeAttrs} /><div class="who-name">${esc([role, name].filter(Boolean).join(" · ") || "聯絡人")}</div></div>`);
+        bits.push(`<div class="contact-id"><img class="avatar" src="${esc(item.avatar)}" alt="" title="點頭像看大圖" data-avatar-preview="${esc(item.avatar)}" /><div class="who-name">${esc([role, name].filter(Boolean).join(" · ") || "聯絡人")}</div></div>`);
       } else if (name || role) {
         bits.push(`<div class="who-name">${esc([role, name].filter(Boolean).join(" · "))}</div>`);
       }
@@ -6504,7 +6597,10 @@
         bits.push(`<div class="agency">較貴刊登，電話／LINE 已收合。請先點同屋源看較便宜那則。</div>`);
       } else {
         if (tel) bits.push(`<a class="tel" href="tel:${esc(tel.replace(/[^\d+]/g, ""))}">${esc(tel)}</a>`);
-        if (item.line_url) {
+        if (item.line_url && lineWebUrl(item.line_url)) {
+          const who = [role, name].filter(Boolean).join(" · ") || "此聯絡人";
+          bits.push(`<div class="line-add"><button type="button" class="ghost btn-card-action btn-line" data-line-add="${esc(item.line_url)}" data-line-name="${esc(who)}" title="加入 LINE 聯絡人">加入 LINE</button><img class="line-qr" src="${lineQr(item.line_url)}" alt="" /></div>`);
+        } else if (item.line_url) {
           bits.push(`<a href="${esc(item.line_url)}" target="_blank" rel="noopener noreferrer" title="加入 LINE"><img class="line-qr" src="${lineQr(item.line_url)}" alt="LINE QR" /></a>`);
         }
       }
@@ -6854,10 +6950,8 @@
           msg = `正在從 591 物件地圖補 ${st.missingGeo} 筆座標（就是網頁上點地址看到的那個），完成後會自動計算${commuteModeLabel()}路線。`;
         } else if (st.missingRoute > 0) {
           msg = `已有 ${st.missingRoute} 筆 591 地圖座標，正在背景用汽車路網估算${commuteModeLabel()}路線。兩條替代路線都超過上限的不會顯示；算完後列表會自動更新。`;
-        } else if (st.filteredOut > 0) {
-          msg = `資料庫有 ${st.stored} 筆，目前都被${commuteModeLabel()}路線距離或樓層／坪數／路名／地圖框／房仲排除了。`;
         } else if (st.dbTotal > 0) {
-          msg = "這個搜尋網址還沒對到已存的物件。條件儲存後會自動抓取，請稍候再重新整理。";
+          msg = "目前設定檔篩選沒有符合的物件。可放寬行政區、租金或樓層條件，或等系統抓取後再重新整理。";
         }
         replaceListHtml(`<div class="empty">${msg}</div>`);
         updateBulkBar();
@@ -6917,12 +7011,9 @@
             ${item.watched
               ? `<button class="primary btn-card-action btn-watch" data-watched="${id}">取消關注</button>`
               : draftWatch.has(String(id))
-                ? `<button class="primary btn-card-action btn-watch" data-watch-draft-commit="${id}">加入</button><button class="ghost btn-card-action btn-watch" data-watch-draft-cancel="${id}">取消</button>`
+                ? `<div class="watch-draft-pair"><button class="primary btn-card-action btn-watch" data-watch-draft-commit="${id}">加入</button><button class="primary btn-card-action btn-watch" data-watch-draft-cancel="${id}">取消</button></div>`
                 : `<button class="ghost btn-card-action btn-watch" data-watched="${id}"${watchLimitReached() ? ` disabled aria-disabled="true" title="${esc(watchLimitText())}"` : ""}>特別關注</button>`}
-            ${item.watched || draftWatch.has(String(id)) ? "" : `<label class="hide-box">
-              <input type="checkbox" data-hidden="${id}" ${item.hidden ? "checked" : ""} />
-              不再顯示
-            </label>`}
+            ${item.watched || draftWatch.has(String(id)) ? "" : `<button type="button" class="ghost btn-card-action btn-hide" data-hidden="${id}">${item.hidden ? "取消隱藏" : "不再顯示"}</button>`}
             </div>
             ${item.source === "self" && !item.mine && !isGuest ? `<button class="ghost" data-self-report="${id}">檢舉</button>` : ""}
             ${!isGuest && item.source !== "self" && !item.offline && !item.offline_confirmed ? `<button type="button" class="ghost btn-card-action btn-report-gone" data-report-gone="${id}" title="打開後若發現此物件連結已失效／不存在，可回報；系統會主動再確認一次">物件連結失效</button>` : ""}
@@ -7320,7 +7411,7 @@
         return;
       }
       setGuestMode(false);
-      $("who").textContent = me.display_name || me.nickname || me.email || "";
+      paintWho(me);
       meEmail = me.email || "";
       paintProfile(me);
       syncReacceptFromMe(me);
@@ -8246,6 +8337,23 @@
         if ($("reacceptSubmit")) $("reacceptSubmit").disabled = false;
       }
     });
+    function paintWho(me) {
+      const label = $("who");
+      const avatar = $("whoAvatar");
+      const name = me?.display_name || me?.nickname || me?.email || "";
+      if (label) label.textContent = name || "訪客";
+      if (!avatar) return;
+      const url = String(me?.avatar_url || "").trim();
+      if (url) {
+        avatar.src = url;
+        avatar.setAttribute("data-avatar-preview", url);
+        avatar.hidden = false;
+      } else {
+        avatar.removeAttribute("src");
+        avatar.removeAttribute("data-avatar-preview");
+        avatar.hidden = true;
+      }
+    }
     function paintProfile(me) {
       if ($("profileNickname") && me && !$("profileNickname").dataset.dirty) {
         $("profileNickname").value = me.nickname || "";
@@ -8270,13 +8378,13 @@
       const url = me?.avatar_url || "";
       if (img && url) {
         img.src = url;
-        img.setAttribute("data-avatar-zoom", url);
+        img.setAttribute("data-avatar-preview", url);
         img.hidden = false;
         img.classList.remove("empty");
         if (fallback) fallback.hidden = true;
         if ($("profileAvatarClear")) $("profileAvatarClear").hidden = false;
       } else if (img) {
-        img.removeAttribute("data-avatar-zoom");
+        img.removeAttribute("data-avatar-preview");
         img.removeAttribute("src");
         img.hidden = true;
         if (fallback) fallback.hidden = false;
@@ -8597,10 +8705,10 @@
         return;
       }
       const img = $("profileAvatarImg");
-      const zoom = ev.target.closest("[data-avatar-zoom]");
-      if (zoom && img && !img.hidden && img.src) {
+      const preview = ev.target.closest("[data-avatar-preview]");
+      if (preview && img && !img.hidden && img.src) {
         ev.preventDefault();
-        openAppLightbox([img.src], 0);
+        showAvatarPreview(img.src, img);
         return;
       }
       const pick = $("avatarPick");
@@ -8697,7 +8805,7 @@
         pendingClearAvatar = false;
         pendingClearQr = false;
         paintProfile(data);
-        if ($("who")) $("who").textContent = data.display_name || data.nickname || data.email || "";
+        paintWho(data);
         if (msg) msg.textContent = "已儲存個人資料";
       } catch (error) {
         if (msg) msg.textContent = error.message;
@@ -9120,6 +9228,31 @@
     // ── 共用 lightbox（素材庫檢視／已選預覽） ──
     let appLbPhotos = [];
     let appLbIndex = 0;
+    function hideAvatarPreview() {
+      const box = $("avatarPreview");
+      if (box) box.hidden = true;
+    }
+    function showAvatarPreview(src, anchor) {
+      const box = $("avatarPreview");
+      const img = $("avatarPreviewImg");
+      const url = String(src || "").trim();
+      if (!box || !img || !url) return;
+      img.src = url;
+      const thumb = anchor?.getBoundingClientRect?.();
+      const size = thumb
+        ? Math.min(Math.round(Math.max(thumb.width, 28) * 12), 420, Math.round(window.innerWidth * 0.72), Math.round(window.innerHeight * 0.72))
+        : 336;
+      box.style.width = `${size}px`;
+      box.style.height = `${size}px`;
+      let left = thumb ? thumb.right + 8 : 16;
+      let top = thumb ? thumb.top : 16;
+      if (left + size > window.innerWidth - 12) left = Math.max(12, (thumb?.left || 12) - size - 8);
+      if (top + size > window.innerHeight - 12) top = Math.max(12, window.innerHeight - size - 12);
+      if (left < 12) left = 12;
+      box.style.left = `${left}px`;
+      box.style.top = `${top}px`;
+      box.hidden = false;
+    }
     function openAppLightbox(urls, index) {
       appLbPhotos = (urls || []).filter(Boolean);
       if (!appLbPhotos.length) return;
@@ -9140,7 +9273,25 @@
     $("appLbPrev")?.addEventListener("click", () => moveAppLightbox(-1));
     $("appLbNext")?.addEventListener("click", () => moveAppLightbox(1));
     $("appLightbox")?.addEventListener("click", (e) => { if (e.target === $("appLightbox")) closeAppLightbox(); });
+    document.addEventListener("click", (ev) => {
+      const hit = ev.target.closest("[data-avatar-preview]");
+      if (hit && !$("list")?.contains(hit) && !$("profileAvatarHit")?.contains(hit)) {
+        const src = hit.getAttribute("data-avatar-preview") || hit.getAttribute("src") || "";
+        if (src) {
+          ev.preventDefault();
+          showAvatarPreview(src, hit);
+          return;
+        }
+      }
+      if (!$("avatarPreview")?.hidden && !ev.target.closest("#avatarPreview, [data-avatar-preview]")) {
+        hideAvatarPreview();
+      }
+    });
     document.addEventListener("keydown", (e) => {
+      if ($("avatarPreview")?.hidden === false && e.key === "Escape") {
+        hideAvatarPreview();
+        return;
+      }
       if ($("appLightbox")?.hidden !== false) return;
       if (e.key === "Escape") closeAppLightbox();
       else if (e.key === "ArrowLeft") moveAppLightbox(-1);
@@ -10563,40 +10714,60 @@
         updateBulkBar();
         return;
       }
-      const hiddenId = ev.target.dataset.hidden;
-      if (!hiddenId) return;
-      const hiding = ev.target.checked;
-      if (hiding) {
-        const card = document.querySelector(`[data-card="${hiddenId}"]`);
-        flyCardToChip(card, "hidden");
-        detachListingCard(hiddenId, { hidden: 1 });
-      }
-      try {
-        const res = await fetch(`/api/listings/${hiddenId}/flags`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ hidden: hiding }),
-        });
-        if (!res.ok) throw new Error("不再顯示失敗");
-      } catch {
-        flash("不再顯示失敗，已還原。請再試一次。");
-        await loadList({ force: true });
-        return;
-      }
-      if (watchNoteBusy()) {
-        listRefreshQueued = true;
-        return;
-      }
-      loadList({ keep: true, silent: true });
     });
 
     $("list").addEventListener("click", async (ev) => {
-      const avatarZoom = ev.target.closest("[data-avatar-zoom]");
-      if (avatarZoom && $("list").contains(avatarZoom)) {
+      const avatarPreview = ev.target.closest("[data-avatar-preview]");
+      if (avatarPreview && $("list").contains(avatarPreview)) {
         ev.preventDefault();
         ev.stopPropagation();
-        const src = avatarZoom.getAttribute("data-avatar-zoom") || avatarZoom.getAttribute("src") || "";
-        if (src) openAppLightbox([src], 0);
+        const src = avatarPreview.getAttribute("data-avatar-preview") || avatarPreview.getAttribute("src") || "";
+        if (src) showAvatarPreview(src, avatarPreview);
+        return;
+      }
+      const lineAdd = ev.target.closest("[data-line-add]");
+      if (lineAdd && $("list").contains(lineAdd)) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const url = lineAdd.getAttribute("data-line-add") || "";
+        const who = lineAdd.getAttribute("data-line-name") || "此聯絡人";
+        if (!lineWebUrl(url)) return;
+        if (!window.confirm(`要加入「${who}」的 LINE 嗎？${isCoarsePointer() ? "若這台裝置已安裝 LINE，會直接打開 App。" : "電腦版會開啟 LINE 官方加好友頁，不必掃 QR。"}`)) return;
+        openLineContact(url);
+        return;
+      }
+      const hideBtn = ev.target.closest("[data-hidden]");
+      if (hideBtn && hideBtn.matches("button") && $("list").contains(hideBtn)) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (isGuest) {
+          remindGuest();
+          return;
+        }
+        const hiddenId = hideBtn.dataset.hidden;
+        const card = document.querySelector(`[data-card="${hiddenId}"]`);
+        const hiding = hideBtn.textContent.trim() !== "取消隱藏";
+        if (hiding) {
+          flyCardToChip(card, "hidden");
+          detachListingCard(hiddenId, { hidden: 1 });
+        }
+        try {
+          const res = await fetch(`/api/listings/${hiddenId}/flags`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ hidden: hiding }),
+          });
+          if (!res.ok) throw new Error("不再顯示失敗");
+        } catch {
+          flash("不再顯示失敗，已還原。請再試一次。");
+          await loadList({ force: true });
+          return;
+        }
+        if (watchNoteBusy()) {
+          listRefreshQueued = true;
+          return;
+        }
+        loadList({ keep: true, silent: true });
         return;
       }
       const faceBtn = ev.target.closest("[data-exclude-face]");

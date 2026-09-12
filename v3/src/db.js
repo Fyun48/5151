@@ -3624,7 +3624,9 @@ export function saveSystemCrawl(partial = {}) {
   upsert.run("systemCrawlIntervalMinutes", JSON.stringify(intervalMinutes));
   upsert.run("systemShowMrt", JSON.stringify(showMrt));
   upsert.run("systemShowListRefreshBar", JSON.stringify(showListRefreshBar));
-  return getSystemCrawl();
+  const next = getSystemCrawl();
+  next.catalog = refreshSiteCatalogStats();
+  return next;
 }
 
 export function crawlIntervalMinutes() {
@@ -4131,6 +4133,67 @@ function applyListingFilter(rows, settings = getSettings()) {
   if (commuteOn) warmRouteCache();
   const prepared = commuteOn ? rows.map((row) => applyCachedCoords(row, settings)) : rows;
   return prepared.filter((row) => shouldKeepListing(row, settings, { strict: false }));
+}
+
+function listingDistrictName(row) {
+  return row?.district || districtNameFromListing(row);
+}
+
+/** 設定檔結果：租金／關鍵字／通勤／樓層／行政區，與列表「全部」同一套範圍。 */
+function applyProfileScope(rows, settings) {
+  const districtNames = memberRegionDistrictNames(settings);
+  const districtSet = new Set(districtNames);
+  return applyListingFilter(rows, settings).filter((row) => {
+    if (!passesDisplayFilters(row, settings)) return false;
+    if (districtSet.size && !districtSet.has(listingDistrictName(row))) return false;
+    return true;
+  });
+}
+
+function listingMatchesDistrictKeys(row, keySet, nameSet) {
+  if (!keySet.size) return false;
+  const bits = String(row?.source_key || "").split("|");
+  if (bits.length >= 2 && bits[0] !== "" && bits[1] !== "") {
+    if (keySet.has(`${bits[0]}-${bits[1]}`)) return true;
+  }
+  const name = districtNameFromListing(row);
+  return Boolean(name && nameSet.has(name));
+}
+
+export function refreshSiteCatalogStats() {
+  const system = getSystemCrawl();
+  const keys = normalizeWatchDistricts(system.watchDistricts);
+  const keySet = new Set(keys);
+  const nameSet = new Set(keys.map((key) => lookupDistrict(key)?.name).filter(Boolean));
+  const rows = db.prepare("SELECT source, source_key, address, title FROM listings").all();
+  const bySource = {};
+  let total = 0;
+  for (const row of rows) {
+    if (!listingMatchesDistrictKeys(row, keySet, nameSet)) continue;
+    total += 1;
+    const source = String(row.source || "591");
+    bySource[source] = (bySource[source] || 0) + 1;
+  }
+  const self = Number(bySource.self) || 0;
+  const snapshot = {
+    at: new Date().toISOString(),
+    total,
+    self,
+    sources: Math.max(0, total - self),
+    bySource,
+    districtCount: keys.length,
+    bySourceLabels: Object.fromEntries(
+      Object.entries(bySource).map(([id, count]) => [selfSourceLabel(id), count]),
+    ),
+  };
+  writeSettingKey("siteCatalogStats", snapshot);
+  return snapshot;
+}
+
+export function readSiteCatalogStats() {
+  const stored = parseSettingRows(db.prepare("SELECT key, value FROM settings").all());
+  const snap = stored.siteCatalogStats;
+  return snap && typeof snap === "object" ? snap : null;
 }
 
 export function addressesMissingGeo() {
@@ -4710,25 +4773,24 @@ export function stats(searchKeys, userId, settingsOverride) {
   const flagMap = loadFlagMap(db, uid);
   const overlaid = overlayRowsPersonal(raw, flagMap)
     .filter((row) => keepSelfListingForViewer(row, uid, settings, listingInMemberScope));
-  const attrRows = overlaid.filter((row) => passesAttributeFilters(row, settings));
-  const base = attrRows.filter((row) => !row.hidden && !isPendingOffline(row) && !isConfirmedOffline(row) && row.match_verdict !== "yes");
-  const browse = attrRows.filter(countsTowardAllTotal);
-  const geoRows = applyListingFilter(overlaid, settings).filter((row) => !row.hidden && !isPendingOffline(row) && !isConfirmedOffline(row) && row.match_verdict !== "yes" && !row.watched);
+  const profileRows = applyProfileScope(overlaid, settings);
+  const browse = profileRows.filter(countsTowardAllTotal);
   const out = {
     total: browse.length,
     unseen: browse.filter((row) => !row.viewed).length,
-    watched: countWatched(db, uid) || base.filter((row) => row.watched).length,
+    watched: profileRows.filter((row) => row.watched && !isConfirmedOffline(row)).length,
+    watchedTotal: countWatched(db, uid),
     same_source: browse.filter((row) => ["same_source", "update", "price_drop", "title_update"].includes(row.last_event)).length,
-    hidden: attrRows.filter((row) => row.hidden).length,
+    hidden: profileRows.filter((row) => row.hidden).length,
     offline: raw.filter((row) => isPendingOffline(row)).length,
     offlineConfirmed: raw.filter((row) => isConfirmedOffline(row)).length,
-    suspected: attrRows.filter((row) => row.match_level && !row.offline && row.match_verdict !== "yes" && !row.hidden).length,
-    suspectedPending: attrRows.filter((row) => row.match_level && !row.match_verdict && !row.offline && !row.hidden).length,
+    suspected: profileRows.filter((row) => row.match_level && !row.offline && row.match_verdict !== "yes" && !row.hidden).length,
+    suspectedPending: profileRows.filter((row) => row.match_level && !row.match_verdict && !row.offline && !row.hidden).length,
     elevator: browse.filter((row) => listingHasElevator(row)).length,
-    stored: geoRows.length,
-    filteredOut: Math.max(0, browse.length - geoRows.length),
-    missingGeo: attrRows.filter((row) => !row.hidden && !isPendingOffline(row) && !isConfirmedOffline(row) && !row.watched && row.match_verdict !== "yes" && (!isTrustedGeoSource(row.geo_source) || row.lat == null || row.lng == null)).length,
-    missingRoute: attrRows.filter((row) => {
+    stored: browse.length,
+    filteredOut: 0,
+    missingGeo: profileRows.filter((row) => !row.hidden && !isPendingOffline(row) && !isConfirmedOffline(row) && !row.watched && row.match_verdict !== "yes" && (!isTrustedGeoSource(row.geo_source) || row.lat == null || row.lng == null)).length,
+    missingRoute: profileRows.filter((row) => {
       if (row.hidden || isPendingOffline(row) || isConfirmedOffline(row) || row.watched || row.match_verdict === "yes") return false;
       const geo = applyCachedCoords(row, settings);
       if (!(

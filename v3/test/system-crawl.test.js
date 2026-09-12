@@ -26,6 +26,9 @@ test("shared crawl uses fixed page depth and a 15-minute default interval", () =
   assert.match(admin, /會員畫面沒有這個選項/);
   assert.match(admin, /id="systemCrawlSelectAll"/);
   assert.match(admin, /id="systemCrawlSelectNone"/);
+  assert.match(admin, /id="systemCatalogStats"/);
+  assert.match(admin, /本島底庫總計/);
+  assert.match(server, /refreshSiteCatalogStats/);
   assert.match(admin, /data-city-toggle/);
   assert.match(admin, /data-city-all/);
   assert.match(admin, /data-city-none/);

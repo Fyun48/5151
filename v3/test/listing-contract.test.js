@@ -22,6 +22,9 @@ import {
   listingHasElevator,
   listingIsApartment,
   listingIsBuilding,
+  listingIsUnspecifiedWholeFloor,
+  listingIsShop,
+  listingIsWarehouse,
   matchesHousingKind,
   normalizeListQuery,
 } from "../src/floors.js";
@@ -64,6 +67,29 @@ test("F04 elevator and 華廈 classification", () => {
   assert.equal(listingHasElevator({ kind_name: "整層住家／大樓" }), true);
   assert.equal(listingHasElevator({ title: "社區垃圾大樓服務", kind_name: "整層住家／公寓" }), false);
   assert.equal(listingHasElevator({ kind_name: "公寓", tags: ["無電梯"] }), false);
+  assert.equal(listingIsBuilding({ title: "電梯大樓", kind_name: "整層住家", tags: ["電梯大樓"] }), true);
+});
+
+test("unspecified 整層住家 belongs to 大樓/公寓/店面/倉庫 and 大樓+電梯", () => {
+  const bare = { kind_name: "整層住家" };
+  const wholeOnly = { kind_name: "整層" };
+  assert.equal(listingIsUnspecifiedWholeFloor(bare), true);
+  assert.equal(listingIsUnspecifiedWholeFloor(wholeOnly), true);
+  assert.equal(listingIsUnspecifiedWholeFloor({ kind_name: "整層住家／公寓" }), false);
+  assert.equal(listingIsUnspecifiedWholeFloor({ kind_name: "整層住家／大樓" }), false);
+  assert.equal(listingIsBuilding(bare), true);
+  assert.equal(listingIsApartment(bare), true);
+  assert.equal(listingIsShop(bare) || listingIsUnspecifiedWholeFloor(bare), true);
+  assert.equal(listingIsWarehouse(bare) || listingIsUnspecifiedWholeFloor(bare), true);
+  assert.equal(matchesHousingKind(bare, "building"), true);
+  assert.equal(matchesHousingKind(bare, "building,elevator"), true);
+  assert.equal(matchesHousingKind(bare, "apartment_huaxia"), true);
+  assert.equal(matchesHousingKind(bare, "shop"), true);
+  assert.equal(matchesHousingKind(bare, "warehouse"), true);
+  assert.equal(matchesHousingKind({ kind_name: "整層住家／公寓" }, "building"), false);
+  assert.equal(matchesHousingKind({ kind_name: "整層住家／大樓" }, "building"), true);
+  assert.equal(matchesHousingKind({ kind_name: "整層住家", tags: ["無電梯"] }, "building,elevator"), false);
+  assert.equal(listingIsBuilding({ title: "社區垃圾大樓服務", kind_name: "整層住家／公寓" }), false);
 });
 
 test("F05 elevator is AND; whole and shop can coexist", () => {

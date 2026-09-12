@@ -42,6 +42,22 @@ function tagText(listing) {
     .join(" ");
 }
 
+/** 型態欄／標籤才算房屋型態；標題不看，避免「社區垃圾大樓」誤判。 */
+const EXPLICIT_HOUSING_FORM_RE = /大樓|大廈|公寓|華廈|店面|店舖|店鋪|倉庫|廠房|套房|雅房|分租|共宅|共居|透天|別墅|農舍/;
+
+function listingFormHay(listing) {
+  return `${listing?.kind_name || ""} ${listing?.listing_kind || ""} ${tagText(listing)}`;
+}
+
+export function listingHasExplicitHousingForm(listing) {
+  return EXPLICIT_HOUSING_FORM_RE.test(listingFormHay(listing));
+}
+
+export function listingIsUnspecifiedWholeFloor(listing) {
+  const kind = String(listing?.kind_name || listing?.listing_kind || "");
+  return isWholeFloorHome(kind) && !listingHasExplicitHousingForm(listing);
+}
+
 export function listingHasElevator(listing) {
   const kind = String(listing.kind_name || "");
   const hay = `${listing.title || ""} ${kind} ${listing.address || ""} ${tagText(listing)}`;
@@ -58,13 +74,14 @@ export function listingHasParking(listing) {
 }
 
 export function listingIsBuilding(listing) {
-  return /大[樓廈]/.test(String(listing.kind_name || ""));
+  if (listingIsUnspecifiedWholeFloor(listing)) return true;
+  return /大[樓廈]/.test(listingFormHay(listing));
 }
 
 export function listingIsApartment(listing) {
-  const kind = String(listing.kind_name || "");
-  const hay = `${listing.title || ""} ${kind} ${tagText(listing)}`;
-  if (listingIsBuilding(listing) || /電梯大[樓廈]/.test(hay)) return false;
+  if (listingIsUnspecifiedWholeFloor(listing)) return true;
+  const hay = `${listing.title || ""} ${listing.kind_name || ""} ${tagText(listing)}`;
+  if (/大[樓廈]/.test(listingFormHay(listing)) || /電梯大[樓廈]/.test(hay)) return false;
   return /公寓|華廈/.test(hay);
 }
 
@@ -202,8 +219,8 @@ export function listingMatchesKindKey(listing, kind) {
   if (key === "coliving") return listingIsColiving(listing);
   if (key === "suite_shared") return listingIsSuiteShared(listing);
   if (key === "whole") return isWholeFloorHome(listing.kind_name);
-  if (key === "shop") return listingIsShop(listing);
-  if (key === "warehouse") return listingIsWarehouse(listing);
+  if (key === "shop") return listingIsShop(listing) || listingIsUnspecifiedWholeFloor(listing);
+  if (key === "warehouse") return listingIsWarehouse(listing) || listingIsUnspecifiedWholeFloor(listing);
   return true;
 }
 
@@ -274,7 +291,7 @@ export function buildingTotalFloors(floorName) {
 export function isWholeFloorHome(kindName) {
   const raw = String(kindName || "");
   if (/獨立套房|分租套房|雅房|共宅|共居/.test(raw)) return false;
-  return /整層住家|整戶出租|整間出租/.test(raw);
+  return /整層|整戶出租|整間出租/.test(raw);
 }
 
 /** 列表顯示／通知用：排除頂加、排除 1F 及地下室。不影響抓取。列表 kind 晶片優先於設定檔整層。 */
