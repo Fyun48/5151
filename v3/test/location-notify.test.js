@@ -214,7 +214,7 @@ test("apartment and suite view filters do not treat elevator buildings as 公寓
   assert.equal(housingTypeLabel({ kind_name: "整層住家", tags: ["有電梯"] }), "電梯公寓/大樓");
   assert.equal(housingTypeLabel({ kind_name: "整層住家", tags: '["有電梯"]' }), "電梯公寓/大樓");
   assert.equal(housingTypeLabel({ kind_name: "整層住家", tags: ["無電梯", "公寓"] }), "公寓");
-  assert.equal(housingTypeLabel({ kind_name: "整層住家" }), "公寓");
+  assert.equal(housingTypeLabel({ kind_name: "整層住家" }), "電梯公寓/大樓");
 });
 
 test("housing kind filters can combine with 特別關注", () => {

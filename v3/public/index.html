@@ -4842,7 +4842,9 @@
     }
 
     function isWholeFloorHome(kindName) {
-      return String(kindName || "").includes("整層住家");
+      const raw = String(kindName || "");
+      if (/獨立套房|分租套房|雅房|共宅|共居/.test(raw)) return false;
+      return /整層|整戶出租|整間出租/.test(raw);
     }
 
     function listingFilterHay(item) {
@@ -5477,20 +5479,27 @@
       const list = Array.isArray(keys) ? keys.filter(Boolean) : (keys ? [keys] : []);
       if (!list.length) return true;
       const kind = String(item.kind_name || "");
-      const hay = `${item.title || ""} ${kind} ${item.address || ""} ${item.tags || ""}`;
-      const hasElevator = (/有電梯|電梯大樓|電梯大廈|電梯公寓|電梯華廈|貨梯/.test(hay) || /大[樓廈]/.test(kind)) && !/無電梯|沒有電梯/.test(hay);
+      const tags = Array.isArray(item.tags) ? item.tags.join(" ") : String(item.tags || "");
+      const formHay = `${kind} ${tags}`;
+      const hay = `${item.title || ""} ${kind} ${item.address || ""} ${tags}`;
+      const unspecifiedWhole = isWholeFloorHome(kind) && !/大樓|大廈|公寓|華廈|店面|店舖|店鋪|倉庫|廠房|套房|雅房|分租|共宅|共居|透天|別墅|農舍/.test(formHay);
+      const isBuilding = unspecifiedWhole || /大[樓廈]/.test(formHay);
+      const hasElevator = (/有電梯|電梯大樓|電梯大廈|電梯公寓|電梯華廈|貨梯/.test(hay) || isBuilding) && !/無電梯|沒有電梯/.test(hay);
       const matchKey = (key) => {
         if (key === "elevator") return hasElevator;
-        if (key === "building") return /大[樓廈]/.test(kind);
-        if (key === "apartment" || key === "apartment_huaxia") return /公寓|華廈/.test(hay) && !/大[樓廈]/.test(kind);
+        if (key === "building") return isBuilding;
+        if (key === "apartment" || key === "apartment_huaxia") {
+          if (unspecifiedWhole) return true;
+          return /公寓|華廈/.test(hay) && !/大[樓廈]/.test(formHay);
+        }
         if (key === "suite") return /套房|雅房/.test(kind);
         if (key === "suite_shared") return /套房|雅房|分租|共宅|共居/.test(`${kind} ${item.title || ""}`) && !/倉庫|廠房/.test(kind);
         if (key === "yafang") return /雅房/.test(`${kind} ${item.title || ""}`);
         if (key === "share") return /分租/.test(`${kind} ${item.title || ""}`);
-        if (key === "coliving") return /共生宅|共居宅|共生住宅|共居|共宅/.test(`${kind} ${item.title || ""} ${item.tags || ""}`);
+        if (key === "coliving") return /共生宅|共居宅|共生住宅|共居|共宅/.test(`${kind} ${item.title || ""} ${tags}`);
         if (key === "whole") return isWholeFloorHome(kind);
-        if (key === "shop") return /店面|店鋪/.test(`${kind} ${item.title || ""}`);
-        if (key === "warehouse") return /倉庫|廠房|倉儲/.test(`${kind} ${item.title || ""}`);
+        if (key === "shop") return unspecifiedWhole || /店面|店鋪/.test(`${kind} ${item.title || ""}`);
+        if (key === "warehouse") return unspecifiedWhole || /倉庫|廠房|倉儲/.test(`${kind} ${item.title || ""}`);
         return true;
       };
       if (list.includes("whole") && !matchKey("whole")) return false;

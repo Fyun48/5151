@@ -183,6 +183,8 @@ test("housing kind chips stay independent of 特別關注", () => {
   assert.doesNotMatch(html, /data-filter="elevator"/);
   assert.doesNotMatch(html, /data-filter="apartment"/);
   assert.doesNotMatch(html, /data-filter="suite"/);
+  assert.match(html, /const unspecifiedWhole = isWholeFloorHome\(kind\)/);
+  assert.match(html, /const isBuilding = unspecifiedWhole \|\| \/大\[樓廈\]\/\.test\(formHay\)/);
 });
 
 test("page defaults to 全部 + 最新", () => {
