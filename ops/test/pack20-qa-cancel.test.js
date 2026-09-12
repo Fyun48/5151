@@ -161,4 +161,5 @@ test("console exposes Owner QA cancel with confirmation", () => {
   assert.match(html, /console\.js\?v=20260912-pkg20/);
   assert.match(js, /\/ops\/api\/qa-runs\/\$\{devOpen\.qaRunId\}\/cancel/);
   assert.match(js, /已在跑的檢查不宣稱撤回/);
+  assert.match(js, /待取消 qa run/);
 });

@@ -1280,9 +1280,9 @@ async function openCodingTask(taskId) {
     </div>
     <div class="dev-col">
       <h3>獨立 QA</h3>
-      <p class="src">${qaLatest ? `qa run #${qaLatest.id} · 不 merge、不部署` : "不 merge、不部署"}</p>
-      <p>${qaErr ? `<span class="chip danger">讀取失敗</span>` : (qaLatest ? statusChip(qaLatest.final_result || qaLatest.status) : "尚未跑")}</p>
-      <p>${qa && qa.fresh === false ? `已過期：${esc((qa.stale_reasons || []).join("、") || "需重跑")}` : (qa ? "與目前 head 對得上" : "製作完成後才會跑")}</p>
+      <p class="src">${qaActive ? `待取消 qa run #${qaActive.id} · 不 merge、不部署` : (qaLatest ? `qa run #${qaLatest.id} · 不 merge、不部署` : "不 merge、不部署")}</p>
+      <p>${qaErr ? `<span class="chip danger">讀取失敗</span>` : (qaActive ? statusChip(qaActive.status) : (qaLatest ? statusChip(qaLatest.final_result || qaLatest.status) : "尚未跑"))}</p>
+      <p>${qaActive ? "這次檢查尚未完成，可用下方取消。" : (qa && qa.fresh === false ? `已過期：${esc((qa.stale_reasons || []).join("、") || "需重跑")}` : (qa ? "與目前 head 對得上" : "製作完成後才會跑"))}</p>
       <p>阻擋 ${esc((Array.isArray(qaLatest?.blocking_checks) ? qaLatest.blocking_checks : []).join("、") || "無")}</p>
     </div>
     <div class="dev-col">
