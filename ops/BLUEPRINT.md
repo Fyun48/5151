@@ -343,6 +343,13 @@ Owner 直達部署從現在就保留，不必等第 8 包。OPS 新工作流是�
 - 尚未綁 product 的舊任務維持相容，未決清單仍標尚未分站。
 - 反悔：解除訂閱或重連。不開 `PRODUCTION_RELEASE_ALLOW_LIVE`，不合 master。
 
+### 包 17 — 移交前確認正式部署狀態
+
+- 該站若有 `PRODUCTION_STATE_UNKNOWN` 的正式發布，未決清單標「狀態不明」並阻擋移交。
+- 移交 API 回 409；先確認該環境實際結果，再完成交接包。已送出的部署不宣稱撤回。
+- 尚未綁 product 的不明狀態不能擋別站移交。
+- 反悔：不按移交；不開 `PRODUCTION_RELEASE_ALLOW_LIVE`。
+
 ---
 
 ## 12. 我堅持的理想（用來審每一個 PR）

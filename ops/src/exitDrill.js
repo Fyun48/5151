@@ -35,6 +35,27 @@ function safeAll(db, sql, params = []) {
   }
 }
 
+const TERMINAL_PRODUCTION_STATUSES = new Set(["SUCCEEDED", "ROLLED_BACK", "BLOCKED"]);
+export const UNKNOWN_PRODUCTION_STATUS = "PRODUCTION_STATE_UNKNOWN";
+
+function latestProductionStatus(db, runId) {
+  const row = safeAll(db, "SELECT to_status FROM production_release_run_event WHERE release_run_id=? ORDER BY id DESC LIMIT 1", [Number(runId)])[0];
+  return row?.to_status || "CREATED";
+}
+
+function scopedProductionProductId(db, row) {
+  return row.product_id || inferIssueProductId(db, row.issue_id) || null;
+}
+
+export function listUnknownProductionRuns(db, productId) {
+  const id = normalizeProductId(productId);
+  if (!id || !tableExists(db, "production_release_run")) return [];
+  return safeAll(db, "SELECT id, issue_id, product_id FROM production_release_run")
+    .filter((row) => scopedProductionProductId(db, row) === id)
+    .filter((row) => latestProductionStatus(db, row.id) === UNKNOWN_PRODUCTION_STATUS)
+    .map((row) => ({ id: Number(row.id), issue_id: Number(row.issue_id), product_id: id, status: UNKNOWN_PRODUCTION_STATUS }));
+}
+
 export function ensureExitDrillSchema(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS product_exit_record (
@@ -201,25 +222,26 @@ export function listPendingWork(db, productId) {
     }
   }
   if (tableExists(db, "production_release_run")) {
-    const runs = safeAll(db, `
-      SELECT r.id, r.issue_id FROM production_release_run r
-       WHERE NOT EXISTS (
-         SELECT 1 FROM production_release_run_event e
-          WHERE e.release_run_id = r.id AND e.to_status IN ('SUCCEEDED','ROLLED_BACK','BLOCKED')
-       )
-    `);
+    const runs = safeAll(db, "SELECT id, issue_id, product_id FROM production_release_run");
     for (const row of runs) {
-      const scoped = inferIssueProductId(db, row.issue_id);
+      const scoped = scopedProductionProductId(db, row);
       if (scoped && scoped !== id) continue;
+      const status = latestProductionStatus(db, row.id);
+      if (TERMINAL_PRODUCTION_STATUSES.has(status)) continue;
+      const unknown = status === UNKNOWN_PRODUCTION_STATUS;
       items.push({
         kind: "production_release",
         id: row.id,
-        state: "pending",
+        state: unknown ? "unknown" : (status || "pending"),
         blocking: true,
         unscoped: !scoped,
-        note: scoped
-          ? "未送出的正式發布可取消；已受理的部署不宣稱撤回。訂閱世代已換或已退出的晚到發布不開新 workflow。"
-          : "正式發布尚未綁 product_id；退出時列出但不能宣稱已取消外部呼叫",
+        note: unknown
+          ? (scoped
+            ? "正式部署狀態不明；先確認該環境實際結果，再完成移交。已送出的部署不宣稱撤回。"
+            : "正式發布尚未綁 product_id，且狀態不明；不能用這筆擋別站移交")
+          : (scoped
+            ? "未送出的正式發布可取消；已受理的部署不宣稱撤回。訂閱世代已換或已退出的晚到發布不開新 workflow。"
+            : "正式發布尚未綁 product_id；退出時列出但不能宣稱已取消外部呼叫"),
       });
     }
   }
@@ -375,6 +397,10 @@ export function pendingForHandoff(pendingAll) {
 export function exportHandoff(db, productId, { actor = "owner", now = new Date() } = {}) {
   const product = getProduct(db, productId);
   if (!product) throw httpError("not found", 404);
+  const unknown = listUnknownProductionRuns(db, product.id);
+  if (unknown.length) {
+    throw httpError("正式部署狀態不明，先確認該環境實際結果再移交。已送出的部署不宣稱撤回。", 409);
+  }
   const pending = pendingForHandoff(listPendingWork(db, product.id));
   const crmContacts = tableExists(db, "ingested_crm_contact") ? listCrmHandoff(db, product.id) : [];
   const feedback = db.prepare(`

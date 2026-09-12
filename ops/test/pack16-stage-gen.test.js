@@ -132,5 +132,5 @@ test("console explains late staging and release will not deploy", () => {
   const html = readFileSync(join(root, "../public/console.html"), "utf8");
   assert.match(html, /隔離 staging/);
   assert.match(html, /佈測試站/);
-  assert.match(html, /console\.js\?v=20260911-pkg16/);
+  assert.match(html, /console\.js\?v=2026091/);
 });
