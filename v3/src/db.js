@@ -25,6 +25,7 @@ import {
 } from "./mapsBilling.js";
 import { sameSearch } from "./client591.js";
 import { CITIES, districtNameFromListing, districtsFromSearchUrls, lookupDistrict, normalizeWatchDistricts } from "./regions.js";
+import { appendDistrictCandidates } from "./listDistrictSql.js";
 import { listingRefreshAt, matchFocusHints, preferPrimaryListing } from "./match.js";
 import {
   ensureUserSameHouseSchema,
@@ -4162,9 +4163,9 @@ function listingDistrictName(row) {
 function applyProfileScope(rows, settings) {
   const districtNames = memberRegionDistrictNames(settings);
   const districtSet = new Set(districtNames);
-  return applyListingFilter(rows, settings).filter((row) => {
+  const scoped = districtSet.size ? rows.filter(row => districtSet.has(listingDistrictName(row))) : rows;
+  return applyListingFilter(scoped, settings).filter((row) => {
     if (!passesDisplayFilters(row, settings)) return false;
-    if (districtSet.size && !districtSet.has(listingDistrictName(row))) return false;
     return true;
   });
 }
@@ -4369,10 +4370,16 @@ export function listListings({
   const uid = resolveUserId(userId);
   const voteUid = matchVoteUserId == null ? uid : Number(matchVoteUserId) || 0;
   ({ filter, kind, sources } = normalizeListQuery(filter, kind, sources));
+  const settings = settingsOverride || getSettings(uid);
+  const requestedDistricts = (Array.isArray(districts) ? districts : String(districts || "").split(","))
+    .map(name => String(name || "").trim()).filter(Boolean);
+  const districtNames = requestedDistricts.length ? requestedDistricts : memberRegionDistrictNames(settings);
+  const districtSet = new Set(districtNames);
   const clauses = [];
   const params = [];
   searchWhere(searchKeys, clauses, params);
   listingVisibilityClauses(clauses, params);
+  appendDistrictCandidates(districtNames, clauses, params, { preserveRelationsFor: voteUid });
   if (filter === "suspected") {
     clauses.push("match_level IN ('high', 'medium')");
     clauses.push("IFNULL(offline, 0) = 0");
@@ -4443,7 +4450,6 @@ export function listListings({
   }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const raw = db.prepare(`SELECT ${LIST_CANDIDATE_COLUMNS} FROM listings ${where}`).all(...params);
-  const settings = settingsOverride || getSettings(uid);
   const flagMap = loadFlagMap(db, uid);
   const overlaid = overlayRowsPersonal(raw, flagMap, { inPlace: true });
   let rows =
@@ -4457,13 +4463,8 @@ export function listListings({
 
   // 整層／1F、行政區要在 limit 前套用，否則「全庫最便宜 500 筆」再前端篩選會漏掉新北等區
   rows = rows.filter((row) => passesDisplayFilters(row, settings, { skipWholeFloor: Boolean(kind) }));
-  const requestedDistricts = (Array.isArray(districts) ? districts : String(districts || "").split(","))
-    .map((name) => String(name || "").trim())
-    .filter(Boolean);
   // 「全部」（未指定行政區）＝只顯示此使用者自己設定的行政區（watchDistricts ∪ searchUrls），
   // 而不是整個共用資料庫（listings 是跨使用者共用池；否則會看到別人／系統抓的其它縣市，如台中西屯）。
-  const districtNames = requestedDistricts.length ? requestedDistricts : memberRegionDistrictNames(settings);
-  const districtSet = new Set(districtNames);
   if (districtSet.size) {
     rows = rows.filter((row) => districtSet.has(row.district || districtNameFromListing(row)));
   }
@@ -4809,6 +4810,14 @@ export function stats(searchKeys, userId, settingsOverride) {
   const params = [];
   searchWhere(searchKeys, clauses, params);
   listingVisibilityClauses(clauses, params);
+  // These two counters historically cover the shared search pool, including
+  // other districts. Count them in SQL before narrowing profile candidates.
+  const statusWhere = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  const statusCounts = db.prepare(`SELECT
+    SUM(CASE WHEN COALESCE(offline, 0) != 0 AND COALESCE(offline_confirmed, 0) = 0 THEN 1 ELSE 0 END) AS pending,
+    SUM(CASE WHEN COALESCE(offline, 0) != 0 AND COALESCE(offline_confirmed, 0) != 0 THEN 1 ELSE 0 END) AS confirmed
+    FROM listings ${statusWhere}`).get(...params);
+  appendDistrictCandidates(memberRegionDistrictNames(settings), clauses, params);
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const raw = db
     .prepare(
@@ -4828,8 +4837,8 @@ export function stats(searchKeys, userId, settingsOverride) {
     watchedTotal: countWatched(db, uid),
     same_source: browse.filter((row) => ["same_source", "update", "price_drop", "title_update"].includes(row.last_event)).length,
     hidden: profileRows.filter((row) => row.hidden).length,
-    offline: raw.filter((row) => isPendingOffline(row)).length,
-    offlineConfirmed: raw.filter((row) => isConfirmedOffline(row)).length,
+    offline: Number(statusCounts.pending) || 0,
+    offlineConfirmed: Number(statusCounts.confirmed) || 0,
     suspected: profileRows.filter((row) => row.match_level && !row.offline && row.match_verdict !== "yes" && !row.hidden).length,
     suspectedPending: profileRows.filter((row) => row.match_level && !row.match_verdict && !row.offline && !row.hidden).length,
     elevator: browse.filter((row) => listingHasElevator(row)).length,

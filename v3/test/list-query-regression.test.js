@@ -230,3 +230,44 @@ test("list and stats remain read-only under another writer's lock and exclude ex
     external.close();
   `);
 });
+
+test("district candidates preserve legacy keys, address fallback, and explicit district selection", () => {
+  runIsolated(`
+    seed(760001, { source_key: "3|34|foreign", address: "台北市士林區測試路1號" });
+    seed(760002, { source_key: "", address: "士林中正路2號" });
+    seed(760003, { source_key: "01|8", address: "地址待補" });
+    seed(760004, { source_key: "1|8", address: "地址待補" });
+    seed(760005, { source_key: "legacy", address: "新北市新店區測試路5號" });
+    assert.deepEqual(ids(query()).sort(), [760002, 760003, 760004]);
+    assert.equal(app.stats([], uid, settings).total, 3);
+    assert.deepEqual(ids(query({ districts: ["新店區"] })).sort(), [760001, 760005]);
+    assert.equal(query({ settings: { ...settings, watchDistricts: [], searchUrls: [] } }).totalMatched, 5);
+  `);
+});
+
+test("district narrowing preserves shared-pool offline counters", () => {
+  runIsolated(`
+    seed(770001);
+    seed(770002, { source_key: "3|34|foreign", address: "新北市新店區測試路2號" });
+    seed(770003, { source_key: "3|34|foreign2", address: "新北市新店區測試路3號" });
+    const external = new DatabaseSync(path.join(process.env.DATA_DIR, "v3.db"));
+    external.exec("UPDATE listings SET offline = 1 WHERE post_id IN (770002, 770003)");
+    external.exec("UPDATE listings SET offline_confirmed = 1 WHERE post_id = 770003");
+    external.close();
+    const counted = app.stats([], uid, settings);
+    assert.equal(counted.total, 1);
+    assert.equal(counted.offline, 1);
+    assert.equal(counted.offlineConfirmed, 1);
+  `);
+});
+
+test("a one-sided match in another district still assigns the local affiliate role", () => {
+  runIsolated(`
+    seed(780001, { source_id: "zz-property" });
+    seed(780002, { source_id: "z-property", source_key: "3|34|foreign",
+      address: "新北市新店區測試路2號" });
+    app.setListingMatch(780002, { match_post_id: 780001, match_level: "high" });
+    assert.equal(query().totalMatched, 0);
+    assert.deepEqual(ids(query({ districts: ["新店區"] })), [780002]);
+  `);
+});
