@@ -122,11 +122,18 @@ export function claimStagingBatch(db, { now = new Date(), staleMs = 15 * 60 * 10
 }
 
 function markFailure(db, dep, { code, now, cfg }) {
+  const latest = db.prepare("SELECT status FROM development_staging_deployment WHERE id=?").get(Number(dep.id));
+  if (latest?.status === "cancelled") return { skipped: true, reason: "cancelled", status: "cancelled" };
   const attempt = Number(dep.attempt_count) || 0;
   const willRetry = attempt < (Number(dep.max_attempts) || cfg.maxAttempts);
   const status = willRetry ? "failed_retry" : "failed";
   const next = willRetry ? iso(new Date((now instanceof Date ? now.getTime() : Date.now()) + backoffMs(attempt))) : iso(now);
-  db.prepare("UPDATE development_staging_deployment SET status=?, error_code=?, next_attempt_at=? WHERE id=?").run(status, code, next, Number(dep.id));
+  const upd = db.prepare("UPDATE development_staging_deployment SET status=?, error_code=?, next_attempt_at=? WHERE id=? AND status IN ('pending','failed_retry','claimed','building','deploying','validating')")
+    .run(status, code, next, Number(dep.id));
+  if (upd.changes !== 1) {
+    const fresh = db.prepare("SELECT status FROM development_staging_deployment WHERE id=?").get(Number(dep.id));
+    if (fresh?.status === "cancelled") return { skipped: true, reason: "cancelled", status: "cancelled" };
+  }
   appendAuditRow(db, { actor: "system", action: "issue.staging.failed", entityType: "development_staging_deployment", entityId: String(dep.id), data: { issue_id: Number(dep.issue_id), coding_task_id: Number(dep.coding_task_id), staging_deployment_id: Number(dep.id), error_code: code, status }, now });
   return { failed: true, error_code: code, status };
 }
@@ -168,7 +175,7 @@ export async function executeStagingDeployment(db, depRow, { repo, provider, env
   }
 
   withImmediateTx(db, () => {
-    db.prepare("UPDATE development_staging_deployment SET status='building', started_at=COALESCE(started_at,?), attempt_count=attempt_count+1 WHERE id=?").run(iso(now), Number(dep.id));
+    db.prepare("UPDATE development_staging_deployment SET status='building', started_at=COALESCE(started_at,?), attempt_count=attempt_count+1 WHERE id=? AND status IN ('pending','failed_retry','claimed','building','deploying','validating')").run(iso(now), Number(dep.id));
     audit(db, "issue.staging.build_started", dep, { head_sha: dep.head_sha, provider: provider.name }, now);
   });
 
@@ -203,7 +210,7 @@ export async function executeStagingDeployment(db, depRow, { repo, provider, env
     if (preBlock) return finalize(db, dep, { checks, meta, provider, now, cfg });
 
     // 部署到隔離環境。
-    withImmediateTx(db, () => { db.prepare("UPDATE development_staging_deployment SET status='deploying' WHERE id=?").run(Number(dep.id)); audit(db, "issue.staging.deploy_started", dep, {}, now); });
+    withImmediateTx(db, () => { db.prepare("UPDATE development_staging_deployment SET status='deploying' WHERE id=? AND status IN ('pending','failed_retry','claimed','building','deploying','validating')").run(Number(dep.id)); audit(db, "issue.staging.deploy_started", dep, {}, now); });
     const deployRes = await provider.deploy({ artifact, sanitizedConfig: config });
     meta.environment_id = deployRes.environment_id || config.environment_id;
     meta.environment_class = deployRes.environment_class || config.environment_class;
@@ -213,7 +220,7 @@ export async function executeStagingDeployment(db, depRow, { repo, provider, env
     withImmediateTx(db, () => audit(db, "issue.staging.deployed", dep, { environment_id: meta.environment_id, artifact_digest: artifact.artifact_digest }, now));
 
     // 健康 / 冒煙驗證（獨立，不採信 provider 一句「成功」）。
-    withImmediateTx(db, () => db.prepare("UPDATE development_staging_deployment SET status='validating', deployed_at=? WHERE id=?").run(iso(now), Number(dep.id)));
+    withImmediateTx(db, () => db.prepare("UPDATE development_staging_deployment SET status='validating', deployed_at=? WHERE id=? AND status IN ('pending','failed_retry','claimed','building','deploying','validating')").run(iso(now), Number(dep.id)));
     checks.push(stamp(checkFromProviderResult("HEALTH", await provider.health({ endpoint: meta.url })), now));
     checks.push(stamp(checkFromProviderResult("SMOKE", await provider.smoke({ endpoint: meta.url })), now));
 
@@ -236,25 +243,32 @@ function stamp(check, now) { return { ...check, started_at: iso(now), completed_
 function finalize(db, dep, { checks, meta, provider, now, cfg }) {
   const agg = aggregateStaging(checks);
   return withImmediateTx(db, () => {
+    const latest = db.prepare("SELECT status FROM development_staging_deployment WHERE id=?").get(Number(dep.id));
+    if (latest?.status === "cancelled") return { skipped: true, reason: "cancelled" };
     const again = issueWriteDecision(db, dep.issue_id, { expectedGeneration: dep.subscription_generation });
     if (!again.ok) {
       abandonStaging(db, dep, again.reason);
       return { failed: true, error_code: again.reason, status: "failed" };
     }
-    db.prepare("DELETE FROM development_staging_check WHERE staging_deployment_id=?").run(Number(dep.id));
-    const ins = db.prepare(`INSERT INTO development_staging_check(staging_deployment_id, issue_id, coding_task_id, check_type, status, severity, finding, evidence, started_at, completed_at, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
-    for (const c of checks) ins.run(Number(dep.id), Number(dep.issue_id), Number(dep.coding_task_id), c.check_type, c.status, c.severity, String(c.finding || "").slice(0, 1000), JSON.stringify(c.evidence || {}), c.started_at, c.completed_at, iso(now));
     const pass = agg.validation_result === "PASS";
     const expires = pass && cfg.ttlMs ? iso(new Date((now instanceof Date ? now.getTime() : Date.now()) + cfg.ttlMs)) : null;
-    db.prepare(
+    const upd = db.prepare(
       `UPDATE development_staging_deployment SET status=?, validation_result=?, blocking_checks=?, warning_count=?, error_code=?,
         artifact_id=?, artifact_digest=?, source_tree_hash=?, staging_environment_id=?, staging_environment_class=?, staging_url=?,
-        completed_at=?, expires_at=? WHERE id=?`,
+        completed_at=?, expires_at=? WHERE id=? AND status IN ('pending','failed_retry','claimed','building','deploying','validating')`,
     ).run(
       pass ? "ready" : "failed", agg.validation_result, JSON.stringify(agg.blocking_checks), agg.warning_count, pass ? null : agg.validation_result,
       meta.artifact?.artifact_id || null, meta.artifact?.artifact_digest || null, meta.source_tree_hash || null,
       meta.environment_id || null, meta.environment_class || null, meta.url || null, iso(now), expires, Number(dep.id),
     );
+    if (upd.changes !== 1) {
+      const fresh = db.prepare("SELECT status FROM development_staging_deployment WHERE id=?").get(Number(dep.id));
+      if (fresh?.status === "cancelled") return { skipped: true, reason: "cancelled" };
+      if (fresh?.status === "ready") return { idempotent: true, deployment: publicStaging(db, db.prepare("SELECT * FROM development_staging_deployment WHERE id=?").get(Number(dep.id))) };
+    }
+    db.prepare("DELETE FROM development_staging_check WHERE staging_deployment_id=?").run(Number(dep.id));
+    const ins = db.prepare(`INSERT INTO development_staging_check(staging_deployment_id, issue_id, coding_task_id, check_type, status, severity, finding, evidence, started_at, completed_at, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
+    for (const c of checks) ins.run(Number(dep.id), Number(dep.issue_id), Number(dep.coding_task_id), c.check_type, c.status, c.severity, String(c.finding || "").slice(0, 1000), JSON.stringify(c.evidence || {}), c.started_at, c.completed_at, iso(now));
     audit(db, "issue.staging.validation_completed", dep, { validation_result: agg.validation_result, blocking_checks: agg.blocking_checks, warning_count: agg.warning_count, artifact_digest: meta.artifact?.artifact_digest || null }, now);
     if (pass) {
       db.prepare(`INSERT INTO development_staging_current(coding_task_id, staging_deployment_id, head_sha, input_fingerprint, validation_result, updated_at)
@@ -387,14 +401,53 @@ export function requestStagingRedeploy(db, codingTaskId, { actor = "owner", now 
     return { redeploy_requested: true, staging_deployment_id: id };
   });
 }
+const STAGING_CANCELABLE = new Set(["pending", "failed_retry", "claimed", "building", "deploying", "validating"]);
+function stagingCancelableWhere() {
+  return "status IN ('pending','failed_retry','claimed','building','deploying','validating')";
+}
+
 export function cancelStagingDeployment(db, id, { actor = "owner", reason = null, now = new Date() } = {}) {
   return withImmediateTx(db, () => {
     const dep = db.prepare("SELECT * FROM development_staging_deployment WHERE id=?").get(Number(id));
     if (!dep) throw httpError("staging deployment not found", 404);
-    if (dep.status === "cancelled") return { idempotent: true, deployment: publicStaging(db, dep) };
-    db.prepare("UPDATE development_staging_deployment SET status='cancelled', error_code=COALESCE(error_code, ?) WHERE id=?").run(reason ? `owner_cancelled:${String(reason).slice(0, 120)}` : "owner_cancelled", Number(dep.id));
-    audit(db, "issue.staging.cancelled", dep, { prev_status: dep.status }, now);
-    return { cancelled: true, deployment: publicStaging(db, db.prepare("SELECT * FROM development_staging_deployment WHERE id=?").get(Number(dep.id))) };
+    if (dep.status === "cancelled") {
+      return { idempotent: true, in_flight_not_withdrawn: false, deployment: publicStaging(db, dep) };
+    }
+    if (dep.status === "ready") {
+      throw httpError("已完成的隔離 staging 結果不改寫。要重佈請用重佈，不要取消完成事實。", 409);
+    }
+    if (!STAGING_CANCELABLE.has(dep.status)) {
+      throw httpError(`隔離 staging 目前不能取消（status=${dep.status}）`, 409);
+    }
+    const inFlight = ["claimed", "building", "deploying", "validating"].includes(dep.status);
+    const code = reason ? `owner_cancelled:${String(reason).slice(0, 120)}` : "owner_cancelled";
+    const upd = db.prepare(`UPDATE development_staging_deployment SET status='cancelled', error_code=? WHERE id=? AND ${stagingCancelableWhere()}`)
+      .run(code, Number(dep.id));
+    if (upd.changes !== 1) {
+      const fresh = db.prepare("SELECT * FROM development_staging_deployment WHERE id=?").get(Number(dep.id));
+      if (fresh?.status === "cancelled") return { idempotent: true, in_flight_not_withdrawn: inFlight, deployment: publicStaging(db, fresh) };
+      if (fresh?.status === "ready") throw httpError("已完成的隔離 staging 結果不改寫。要重佈請用重佈，不要取消完成事實。", 409);
+      throw httpError("隔離 staging 目前不能取消", 409);
+    }
+    appendAuditRow(db, {
+      actor,
+      action: "issue.staging.cancelled",
+      entityType: "development_staging_deployment",
+      entityId: String(dep.id),
+      data: {
+        issue_id: Number(dep.issue_id),
+        coding_task_id: Number(dep.coding_task_id),
+        staging_deployment_id: Number(dep.id),
+        prev_status: dep.status,
+        in_flight_not_withdrawn: inFlight,
+      },
+      now,
+    });
+    return {
+      cancelled: true,
+      in_flight_not_withdrawn: inFlight,
+      deployment: publicStaging(db, db.prepare("SELECT * FROM development_staging_deployment WHERE id=?").get(Number(dep.id))),
+    };
   });
 }
 // 清理：務必以「明確 staging-class 且非 production」的環境身分護欄，fail-closed。

@@ -237,7 +237,7 @@ test("console exposes pending-list cancel for analysis, evaluation, and proposal
   const html = readFileSync(join(root, "../public/console.html"), "utf8");
   const js = readFileSync(join(root, "../public/console.js"), "utf8");
   assert.match(html, /未送出的分析、評估、提案也可取消/);
-  assert.match(html, /console\.js\?v=20260912-pkg23/);
+  assert.match(html, /console\.js\?v=20260912-pkg24/);
   assert.match(js, /\/ops\/api\/analyses\/\$\{id\}\/cancel/);
   assert.match(js, /\/ops\/api\/evaluation-runs\/\$\{id\}\/cancel/);
   assert.match(js, /\/ops\/api\/proposals\/\$\{id\}\/cancel/);

@@ -400,6 +400,15 @@ Owner 直達部署從現在就保留，不必等第 8 包。OPS 新工作流是�
 - 未決清單可按這扇門。
 - 反悔：不按取消。不開 live、不合 master。
 
+### 包 24 — 未決清單可取消製作／QA／staging
+
+- Owner 對尚未完成的製作、獨立 QA、隔離 staging 可從未決清單送取消要求，並看到取消結果。
+- 製作：`pending`／`claimed`／`running`／`failed_retry`／`changes_ready` 可取消；已失敗的終態不改寫。已在跑的不宣稱撤回外部呼叫。
+- QA：沿用第 20 包契約；未決清單也可按這扇門。
+- staging：`pending`／`claimed`／`building`／`deploying`／`validating`／`failed_retry` 可取消；已 `ready` 的結果不改寫、不宣稱撤回測試容器。
+- 晚到的製作完成／staging finalize 不把 `cancelled` 寫成 `changes_ready`／`ready`，也不寫入 current。
+- 反悔：不按取消。不開 live、不合 master。
+
 ---
 
 ## 12. 我堅持的理想（用來審每一個 PR）
