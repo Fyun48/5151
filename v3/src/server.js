@@ -31,6 +31,7 @@ import {
   confirmSuspectedMatch,
   listPublicListings,
   publicSearchSettings,
+  GUEST_MAX_DISTRICTS,
   runSameHouseBackfill,
   sameHouseBackfillStatus,
   mergeSameHouseForUser,
@@ -347,6 +348,60 @@ app.get("/api/demo", async (req, res) => {
   }
 });
 
+async function resolveGuestWorkPoint(workAddress, commuteKm) {
+  const address = String(workAddress || "").trim().slice(0, 120);
+  const kmRaw = Number(commuteKm);
+  const km = Number.isFinite(kmRaw) ? Math.max(0, Math.min(Math.round(kmRaw * 10) / 10, 80)) : 0;
+  if (!address || !(km > 0)) {
+    return { workAddress: address, commuteKm: km, workLat: null, workLng: null, error: "" };
+  }
+  const cached = getCachedGeo(address);
+  if (cached && isTaiwanCoord(cached.lat, cached.lng)) {
+    return {
+      workAddress: address,
+      commuteKm: km,
+      workLat: Number(cached.lat),
+      workLng: Number(cached.lng),
+      error: "",
+    };
+  }
+  try {
+    const geo = await geocodeAddress(address, getCachedGeo, {
+      strict: false,
+      maxAttempts: 2,
+      allowAdmin: false,
+    });
+    if (geo?.busy) {
+      return {
+        workAddress: address,
+        commuteKm: km,
+        workLat: null,
+        workLng: null,
+        error: "地圖定位服務暫時忙碌，距離篩選這次沒套用。",
+      };
+    }
+    if (geo && isTaiwanCoord(geo.lat, geo.lng)) {
+      setCachedGeo(address, geo.lat, geo.lng, geo);
+      return {
+        workAddress: address,
+        commuteKm: km,
+        workLat: Number(geo.lat),
+        workLng: Number(geo.lng),
+        error: "",
+      };
+    }
+  } catch {
+    /* guest search never throws the member save geocode errors */
+  }
+  return {
+    workAddress: address,
+    commuteKm: km,
+    workLat: null,
+    workLng: null,
+    error: "找不到這個上班地址，距離篩選沒有套用。請改成更完整的地址。",
+  };
+}
+
 app.get("/api/public/listings", async (req, res) => {
   await yieldEventLoop();
   try {
@@ -355,6 +410,12 @@ app.get("/api/public/listings", async (req, res) => {
       .split(",")
       .map((name) => name.trim())
       .filter(Boolean);
+    if (districts.length > GUEST_MAX_DISTRICTS) {
+      const err = new Error(`訪客最多同時選 ${GUEST_MAX_DISTRICTS} 個行政區`);
+      err.status = 400;
+      throw err;
+    }
+    const work = await resolveGuestWorkPoint(req.query.workAddress, req.query.commuteKm);
     const query = {
       districts,
       kind: req.query.kind || "",
@@ -372,6 +433,10 @@ app.get("/api/public/listings", async (req, res) => {
       minBuildingFloors: req.query.minBuildingFloors,
       wholeFloorOnly: req.query.wholeFloorOnly,
       hasParking: req.query.hasParking,
+      workAddress: work.workAddress,
+      commuteKm: work.commuteKm,
+      workLat: work.workLat,
+      workLng: work.workLng,
     };
     const listed = getCachedPublicListings(query, () => listPublicListings({
       ...query,
@@ -386,6 +451,7 @@ app.get("/api/public/listings", async (req, res) => {
       queryVersion: listed.queryVersion || 2,
       cache_hit: listed.cache_hit === true,
       guest: true,
+      commute_error: work.error || undefined,
     });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });

@@ -3,7 +3,7 @@
 import { lookup as dnsLookup } from "node:dns/promises";
 import { isIP } from "node:net";
 
-export const IMPORT_USER_AGENT = "JibbyRentImport/1.0 (+https://c5151.reversalplay.me)";
+export const IMPORT_USER_AGENT = "JibbyRentImport/1.0 (+https://jibbyrenth.reversalplay.me)";
 
 export const FETCH_LIMITS = {
   htmlMaxBytes: 1_500_000,

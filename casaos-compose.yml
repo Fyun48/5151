@@ -1,45 +1,6 @@
 name: 591-tracker
 
 services:
-  591-tracker:
-    profiles: ["v1"]
-    image: ghcr.io/fyun48/5151:latest
-    container_name: 591-tracker
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:5151:5151"
-    environment:
-      HOST: "0.0.0.0"
-      PORT: "5151"
-      DATA_DIR: /data
-      TZ: Asia/Taipei
-      PUBLIC_BASE_URL: https://a5151.reversalplay.me
-    volumes:
-      - /DATA/AppData/591-tracker:/data
-      - /mnt/Storage1/apps/5151/src:/app/src:ro
-      - /mnt/Storage1/apps/5151/public:/app/public:ro
-    command: ["node", "--watch-path=src", "--watch-path=public", "src/server.js"]
-
-  591-tracker-v2:
-    image: ghcr.io/fyun48/5151:latest
-    container_name: 591-tracker-v2
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:5152:5152"
-    environment:
-      HOST: "0.0.0.0"
-      PORT: "5152"
-      DATA_DIR: /data
-      TZ: Asia/Taipei
-      PUBLIC_BASE_URL: https://b5151.reversalplay.me
-      V1_DB_PATH: /v1-data/591.db
-    volumes:
-      - /DATA/AppData/591-tracker-v2:/data
-      - /DATA/AppData/591-tracker:/v1-data:ro
-      - /mnt/Storage1/apps/5151/v2/src:/app/src:ro
-      - /mnt/Storage1/apps/5151/v2/public:/app/public:ro
-    command: ["node", "--watch-path=src", "--watch-path=public", "src/server.js"]
-
   591-tracker-v3:
     image: ghcr.io/fyun48/5151:latest
     container_name: 591-tracker-v3
@@ -52,7 +13,7 @@ services:
       PORT: "5153"
       DATA_DIR: /data
       TZ: Asia/Taipei
-      PUBLIC_BASE_URL: https://c5151.reversalplay.me
+      PUBLIC_BASE_URL: https://jibbyrenth.reversalplay.me
       V1_DB_PATH: /v1-data/591.db
       V2_DB_PATH: /v2-data/v2.db
     volumes:
@@ -73,6 +34,6 @@ x-casaos:
     zh_tw: 591 物件追蹤
   description:
     en_us: Track 591 rental listings with viewed, watched, and hidden flags.
-    zh_tw: 591 租屋新物件追蹤。v1 已停用；v2 在 5152／b5151，目前在 5153／c5151 與 5155／jibbyrenth。
+    zh_tw: 吉比租房物件追蹤。只跑 v3（5153／5155，jibbyrenth）。v1／v2 已拆除。
   category: Utility
   port_map: "5153"

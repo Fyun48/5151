@@ -61,12 +61,12 @@ test("composeAccountMail fills welcome, password, and sponsor templates", () => 
   assert.match(welcome.text, /\{\{verifyUrl\}\}|verifyUrl|自己的 SMTP/);
   const verifyMail = composeAccountMail("welcome", defaultMailTemplates(), {
     email: "a@b.com",
-    verifyUrl: "https://c5151.reversalplay.me/verify-email?token=abc",
+    verifyUrl: "https://jibbyrenth.reversalplay.me/verify-email?token=abc",
   });
   assert.match(verifyMail.text, /verify-email\?token=abc/);
   const verified = composeAccountMail("verified_welcome", defaultMailTemplates(), {
     email: "a@b.com",
-    spiritUrl: "https://c5151.reversalplay.me/spirit.html",
+    spiritUrl: "https://jibbyrenth.reversalplay.me/spirit.html",
   });
   assert.match(verified.subject, /恭喜你加入/);
   assert.match(verified.text, /spirit\.html/);

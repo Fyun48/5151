@@ -1,14 +1,14 @@
 name: Deploy v2 to CasaOS (manual)
 
-# Production 部署一律「明確手動觸發」。合併/push 到 master 不會自動部署 v2。
+# v2 已拆除。檔名保留以免舊連結 404；授權檢查與正式部署護欄仍在，實際步驟一律拒絕。
 on:
   workflow_dispatch:
     inputs:
       sha:
-        description: "要部署的完整 40 碼 commit SHA（必須可從 origin/master 追溯）"
+        description: "v2 已拆除，請改走 Deploy v3。此欄僅為護欄格式。"
         required: true
       confirmation:
-        description: "輸入 DEPLOY-PRODUCTION 以確認正式部署"
+        description: "輸入 DEPLOY-PRODUCTION（仍會被拒絕；請改走 Deploy v3）"
         required: true
         default: ""
 
@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  sync-nas-v2:
+  refuse-retired-v2:
     runs-on: ubuntu-latest
     environment: production
     timeout-minutes: 10
@@ -41,7 +41,6 @@ jobs:
           if [ -z "${ALLOWED_ACTOR:-}" ]; then
             echo "::error::PRODUCTION_DEPLOY_ALLOWED_ACTOR is not configured; refusing (fail-closed)"; exit 1
           fi
-          # re-run 時 github.actor 仍是初始觸發者，github.triggering_actor 才是本次 re-run 的人；兩者都必須是授權部署者。
           if [ "$ACTOR" != "$ALLOWED_ACTOR" ]; then
             echo "::error::actor '$ACTOR' is not the authorized deployer"; exit 1
           fi
@@ -69,34 +68,6 @@ jobs:
             echo "::error::commit $DEPLOY_SHA is not reachable from origin/master; refusing"; exit 1
           fi
           git checkout --force "$DEPLOY_SHA"
-      - name: Copy v2 app and compose files
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.NAS_HOST }}
-          port: ${{ secrets.NAS_PORT }}
-          username: ${{ secrets.NAS_USER }}
-          key: ${{ secrets.NAS_SSH_KEY }}
-          source: "v2/src,v2/public,docker-compose.yml,casaos-compose.yml"
-          target: /mnt/Storage1/apps/5151
-          overwrite: true
-      - name: Start v2 container
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.NAS_HOST }}
-          port: ${{ secrets.NAS_PORT }}
-          username: ${{ secrets.NAS_USER }}
-          key: ${{ secrets.NAS_SSH_KEY }}
-          script_stop: true
-          script: |
-            set -euo pipefail
-            mkdir -p /DATA/AppData/591-tracker-v2
-            copied=0
-            if [ -f /DATA/AppData/591-tracker/auth.env ] && [ ! -f /DATA/AppData/591-tracker-v2/auth.env ]; then
-              cp /DATA/AppData/591-tracker/auth.env /DATA/AppData/591-tracker-v2/auth.env
-              copied=1
-            fi
-            cd /mnt/Storage1/apps/5151
-            docker compose up -d --no-build --no-deps --force-recreate 591-tracker-v2
-            if [ "$copied" = 1 ]; then
-              docker compose restart 591-tracker-v2
-            fi
+      - name: v2 retired
+        run: |
+          echo "::error::v2 已拆除，請改走 Deploy v3 to CasaOS (manual)"; exit 1

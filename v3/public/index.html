@@ -462,6 +462,18 @@
       caret-color: transparent;
       pointer-events: none;
     }
+    body.role-guest #districtPicker input[data-district],
+    body.role-guest #workAddress,
+    body.role-guest #commuteKm {
+      caret-color: auto;
+      pointer-events: auto;
+    }
+    body:not(.role-guest) .guest-only-hint { display: none; }
+    body.role-guest .guest-only-hint { display: block; }
+    body.role-guest [data-city-hide],
+    body.role-guest #manageCitiesBtn,
+    body.role-guest .city-pref-bar,
+    body.role-guest #cityPrefHint { display: none !important; }
     .sponsor-bar {
       margin: 0 32px;
       padding: 12px 16px;
@@ -3184,7 +3196,7 @@
       <label>建物總樓層至少（可空白＝不限）</label>
       <input type="number" id="minBuildingFloors" class="guest-cheap" min="0" max="99" step="1" inputmode="numeric" placeholder="不限" />
       <label data-tour="commute">上班地址（選填）</label>
-      <input type="text" id="workAddress" placeholder="例如：臺北市南港區經貿一路170號" />
+      <input type="text" id="workAddress" class="guest-cheap" placeholder="例如：臺北市南港區經貿一路170號" />
       <label>通勤路徑（同時只能選一種）</label>
       <div class="commute-mode" role="radiogroup" aria-label="通勤路徑">
         <label><input type="radio" name="commuteMode" value="scooter" checked /> 機車</label>
@@ -3192,9 +3204,8 @@
       </div>
       <p class="hint">機車與汽車目前都用汽車路網估算。機車會避開高速公路，但不是專用機車道路。</p>
       <label>物件與公司距離上限（公里，0 表示不篩）</label>
-      <input type="number" id="commuteKm" min="0" max="80" step="0.1" />
-      <label class="check-inline"><input type="checkbox" id="notifyIncludeStreetEstimate" /> <span>全新物件通知：也包含依路段位置估算的物件</span></label>
-      <p class="hint">預設關閉。關閉時路段概略距離仍會顯示，但不會只憑路段代表點發送「符合公司距離」的全新物件通知。開啟時通知會註明「依路段位置估算，實際距離可能不同」。行政區或未知位置即使開啟也不會用來發距離通知。</p>
+      <input type="number" id="commuteKm" class="guest-cheap" min="0" max="80" step="0.1" />
+      <p class="hint guest-only-hint">訪客可用直線距離先篩，最多同時 4 個行政區。找不到地址時會提示，不會默默略過。登入後才會用機車／汽車路線。</p>
       <p class="hint" data-tour="mrt">步行路線未滿 1.5 公里的最近捷運站會顯示在列表。這個開關只在後台統一設定。</p>
       <div class="notify-shortcuts" data-tour="notify" hidden>
         <p class="hint">Webhook、郵件已移到「我的 → 通知設定」。左側只留常用條件。</p>
@@ -4270,6 +4281,7 @@
     let listLoadGen = 0;
     const MAX_BOXES = 10;
     const MEMBER_MAX_DISTRICTS = 10;
+    const GUEST_MAX_DISTRICTS = 4;
     const MEMBER_MAX_PROFILES = 3;
     const MEMBER_MAX_EXCLUDE_KEYWORDS = 30;
     const MEMBER_MAX_EXCLUDE_AGENTS = 15;
@@ -4331,7 +4343,8 @@
     }
 
     function districtLimit() {
-      return meIsAdmin ? 0 : MEMBER_MAX_DISTRICTS;
+      if (meIsAdmin) return 0;
+      return isGuest ? GUEST_MAX_DISTRICTS : MEMBER_MAX_DISTRICTS;
     }
     function profileLimit() {
       return meIsAdmin ? 0 : MEMBER_MAX_PROFILES;
@@ -5680,8 +5693,13 @@
     }
 
     function collectGuestSearch() {
+      const keys = selectedDistrictKeys().slice(0, GUEST_MAX_DISTRICTS);
+      const names = keys.length
+        ? keys.map((key) => districtOptions().get(key)?.name).filter(Boolean)
+        : [...viewDistricts].slice(0, GUEST_MAX_DISTRICTS);
       return {
-        districts: [...viewDistricts],
+        districts: names,
+        watchDistricts: keys,
         priceMin: Number($("priceMin")?.value) || 0,
         priceMax: Number($("priceMax")?.value) || 0,
         kinds: kinds.slice(),
@@ -5694,6 +5712,8 @@
         minBuildingFloors: Number($("minBuildingFloors")?.value) || 0,
         hasParking: $("hasParking") ? $("hasParking").checked : false,
         moreOpen: !$("listHeadSticky")?.classList.contains("filter-compact"),
+        workAddress: ($("workAddress")?.value || "").trim().slice(0, 120),
+        commuteKm: Number($("commuteKm")?.value) || 0,
       };
     }
 
@@ -5716,8 +5736,10 @@
       if ($("excludeLowFloors")) $("excludeLowFloors").checked = state.excludeLowFloors !== false;
       if ($("hasParking")) $("hasParking").checked = state.hasParking === true;
       if (Array.isArray(state.districts) && state.districts.length) {
-        viewDistricts = new Set(state.districts);
+        viewDistricts = new Set(state.districts.slice(0, GUEST_MAX_DISTRICTS));
       }
+      if ($("workAddress") && state.workAddress != null) $("workAddress").value = state.workAddress || "";
+      if ($("commuteKm") && state.commuteKm != null) $("commuteKm").value = state.commuteKm || "";
       settings = {
         ...settings,
         priceMin: Number(state.priceMin) || 0,
@@ -5729,6 +5751,9 @@
         hasParking: state.hasParking === true,
         wholeFloorOnly: kinds.length === 1 && kinds[0] === "whole",
         housing_kinds: kinds.slice(),
+        watchDistricts: Array.isArray(state.watchDistricts) ? state.watchDistricts.slice(0, GUEST_MAX_DISTRICTS) : (settings.watchDistricts || []),
+        workAddress: String(state.workAddress || "").trim(),
+        commuteKm: Number(state.commuteKm) || 0,
       };
     }
 
@@ -5748,6 +5773,8 @@
       if (state.minBuildingFloors) params.set("minBuildingFloors", String(state.minBuildingFloors));
       if (state.hasParking) params.set("hasParking", "1");
       if (state.wholeFloorOnly) params.set("wholeFloorOnly", "1");
+      if (state.workAddress) params.set("workAddress", String(state.workAddress));
+      if (Number(state.commuteKm) > 0) params.set("commuteKm", String(state.commuteKm));
       params.set("limit", String(GUEST_LIST_PAGE_SIZE));
       return params;
     }
@@ -5794,8 +5821,8 @@
 
     const GUEST_TOUR_STEPS = [
       { target: "[data-tour=guestWho]", title: "第 1／7 步", text: "右上角顯示你目前是訪客。你可以先搜尋已抓進資料庫的房源；登入／註冊後才能儲存設定與特別關注。" },
-      { target: "[data-tour=districts]", title: "第 2／7 步", text: "行政區與租金可以先篩。條件只留在這次瀏覽，不會寫進會員設定。登入後仍用你自己的設定檔。" },
-      { target: "[data-tour=commute]", title: "第 3／7 步", text: "公司地址、機車或汽車路徑也無法在示範模式變更。會員才能填自己的上班地址並篩通勤距離。" },
+      { target: "[data-tour=districts]", title: "第 2／7 步", text: "行政區可勾選，最多同時 4 個。租金也可以先篩。條件只留在這次瀏覽，不會寫進會員設定。登入後仍用你自己的設定檔。" },
+      { target: "[data-tour=commute]", title: "第 3／7 步", text: "可填上班地址與距離上限。訪客用直線距離估算，不是會員的機車／汽車路線。找不到地址時會提示，不會默默略過。" },
       { target: "[data-tour=mrt]", title: "第 4／7 步", text: "步行未滿 1.5 公里的最近捷運站會顯示在列表。這個開關由站方後台統一決定。" },
       { target: "[data-tour=notify]", title: "第 5／7 步", text: "系統推播與站內待看是預設通知。郵件與 Webhook 是選用，在「我的 → 通知設定」。示範模式不能改。" },
       { target: "[data-tour=profiles]", title: "第 6／7 步", text: "設定檔的儲存與刪除也鎖定中。註冊後最多可存 3 組自己的條件；同名儲存會覆蓋。" },
@@ -5880,6 +5907,8 @@
     function isGuestLockedTarget(el) {
       if (!el || !isGuest) return false;
       if (el.closest("#collapsePanelBtn, #expandPanelBtn, #reloadBtn, #loginBtn, #registerBtn, #helpQaBtn, #qaView, #guestToast, #guestTour, #listHeadSticky .chip, #q, [data-view-district], [data-open-hub], #notifyHubClose, [data-close-hub], [data-hub-tab]")) return false;
+      if (el.closest("#districtPicker") && !el.closest("[data-city-hide]")) return false;
+      if (el.closest("#workAddress, #commuteKm, label[data-tour=commute]")) return false;
       if (el.closest(".guest-cheap")) return false;
       if (el.closest("#pickCompareOverlay, #compareSelectedBtn, #selectPageBtn, #clearSelectBtn, .pick-hit, .pick")) return false;
       if (el.closest(".item-cover, h3 a, a.tel, .line-qr")) return false;
@@ -5918,6 +5947,10 @@
       const n = selectedDistrictKeys().length;
       if (meIsAdmin) {
         el.textContent = `已選 ${n} 個行政區（管理員不受 10 區／3 檔限制）`;
+        return;
+      }
+      if (isGuest) {
+        el.textContent = `已選 ${n}／${GUEST_MAX_DISTRICTS} 個行政區（訪客最多同時 4 個）`;
         return;
       }
       el.textContent = `已選 ${n}／${MEMBER_MAX_DISTRICTS} 個行政區`;
@@ -5983,7 +6016,7 @@
       const boxes = (city.districts || []).map((district) => {
         const key = `${city.id}-${district.id}`;
         const on = selected.has(key);
-        return `<label class="${on ? "on" : ""}"><input type="checkbox" ${checkboxAttr} value="${esc(key)}" ${on ? "checked" : ""} />${esc(districtChipLabel(district.name))}</label>`;
+        return `<label class="${on ? "on" : ""}"><input type="checkbox" class="guest-cheap" ${checkboxAttr} value="${esc(key)}" ${on ? "checked" : ""} />${esc(districtChipLabel(district.name))}</label>`;
       }).join("");
       return `
         <div class="district-city ${open ? "is-open" : ""}" data-city-block="${city.id}">
@@ -6027,6 +6060,10 @@
     }
 
     async function persistCityPrefs(nextWatch, nextHidden) {
+      if (isGuest) {
+        remindGuest();
+        return;
+      }
       const body = collectSettings();
       body.watchDistricts = nextWatch;
       body.hiddenCityIds = nextHidden;
@@ -6069,11 +6106,11 @@
           const limit = districtLimit();
           if (el.checked && limit && selectedDistrictKeys().length > limit) {
             el.checked = false;
-            flash(`每個設定檔最多選 ${limit} 個行政區`);
+            flash(isGuest ? `訪客最多同時選 ${limit} 個行政區` : `每個設定檔最多選 ${limit} 個行政區`);
             return;
           }
           el.closest("label")?.classList.toggle("on", el.checked);
-          updateDistrictLimitHint();
+          afterDistrictPickerChange();
         };
       });
       $("districtPicker").querySelectorAll("[data-city-all]").forEach((btn) => {
@@ -6107,8 +6144,8 @@
             cityAccordionOpen.add(id);
             cityAccordionClosed.delete(id);
           }
-          updateDistrictLimitHint();
-          if (skipped) flash(`每個設定檔最多選 ${limit} 個行政區`);
+          afterDistrictPickerChange();
+          if (skipped) flash(isGuest ? `訪客最多同時選 ${limit} 個行政區` : `每個設定檔最多選 ${limit} 個行政區`);
         };
       });
       $("districtPicker").querySelectorAll("[data-city-none]").forEach((btn) => {
@@ -6119,13 +6156,37 @@
             el.checked = false;
             el.closest("label")?.classList.remove("on");
           });
-          updateDistrictLimitHint();
+          afterDistrictPickerChange();
         };
       });
       $("districtPicker").querySelectorAll("[data-city-hide]").forEach((btn) => {
         btn.onclick = () => hideVisibleCity(Number(btn.dataset.cityHide));
       });
       updateDistrictLimitHint();
+    }
+
+    function afterDistrictPickerChange() {
+      updateDistrictLimitHint();
+      if (!isGuest) return;
+      const keys = selectedDistrictKeys().slice(0, GUEST_MAX_DISTRICTS);
+      const names = keys.map((key) => districtOptions().get(key)?.name).filter(Boolean);
+      settings = { ...settings, watchDistricts: keys };
+      viewDistricts = new Set(names);
+      scheduleGuestListReload();
+    }
+
+    function districtKeysFromNames(names) {
+      const want = new Set((names || []).filter(Boolean));
+      if (!want.size) return [];
+      const keys = [];
+      for (const city of (cities.length ? cities : CITIES_EMBEDDED)) {
+        for (const district of city.districts || []) {
+          if (!want.has(district.name)) continue;
+          keys.push(`${city.id}-${district.id}`);
+          if (keys.length >= GUEST_MAX_DISTRICTS) return keys;
+        }
+      }
+      return keys;
     }
 
     function watchDistrictNames(s) {
@@ -6412,7 +6473,6 @@
       $("minBuildingFloors").value = s.minBuildingFloors || "";
       $("workAddress").value = s.workAddress || "";
       $("commuteKm").value = s.commuteKm || 0;
-      if ($("notifyIncludeStreetEstimate")) $("notifyIncludeStreetEstimate").checked = s.notifyIncludeStreetEstimate === true;
       setCommuteMode("commuteMode", s.commuteMode);
       syncCommuteSort();
       fillFloorFilters(s);
@@ -7450,7 +7510,12 @@
           renderStats(lastStats);
           renderDistrictChips(settings);
           renderList(applyListView(guestListings), lastStats);
-          $("status").textContent = "訪客搜尋（不需登入）。登入／註冊後可儲存設定與特別關注。";
+          if (data.commute_error) {
+            $("status").textContent = data.commute_error;
+            flash(data.commute_error);
+          } else {
+            $("status").textContent = "訪客搜尋（不需登入）。登入／註冊後可儲存設定與特別關注。";
+          }
         } catch (error) {
           $("status").textContent = error.message || "訪客搜尋失敗";
         } finally {
@@ -7560,7 +7625,14 @@
         cities = CITIES_EMBEDDED;
         const guestState = window.GuestSearchState?.read();
         applyGuestSearch(guestState);
-        renderDistrictPicker({ watchDistricts: [] });
+        const watchKeys = (Array.isArray(guestState.watchDistricts) && guestState.watchDistricts.length
+          ? guestState.watchDistricts
+          : districtKeysFromNames(guestState.districts)).slice(0, GUEST_MAX_DISTRICTS);
+        settings.watchDistricts = watchKeys;
+        if (!viewDistricts.size && watchKeys.length) {
+          viewDistricts = new Set(watchDistrictNames({ watchDistricts: watchKeys }));
+        }
+        renderDistrictPicker({ watchDistricts: watchKeys });
         setSettingsReady(false, "訪客可搜尋已抓進資料庫的房源。登入／註冊後可儲存設定檔與通知。");
         await loadList({ busyText: "正在載入公開房源…" });
         maybeStartGuestTour();
@@ -7671,7 +7743,7 @@
         workAddress: $("workAddress").value.trim(),
         commuteKm: Number($("commuteKm").value) || 0,
         commuteMode: selectedCommuteMode("commuteMode"),
-        notifyIncludeStreetEstimate: $("notifyIncludeStreetEstimate") ? $("notifyIncludeStreetEstimate").checked : false,
+        notifyIncludeStreetEstimate: false,
       };
     }
 
@@ -10181,7 +10253,7 @@
       persistDisplayFilters();
       loadList();
     });
-    ["priceMin", "priceMax", "areaMax", "minBuildingFloors"].forEach((id) => {
+    ["priceMin", "priceMax", "areaMax", "minBuildingFloors", "workAddress", "commuteKm"].forEach((id) => {
       $(id)?.addEventListener("input", () => {
         if (!isGuest) return;
         scheduleGuestListReload();

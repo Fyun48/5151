@@ -189,7 +189,7 @@ test("deploy-v3 still recreates only v3, never :latest, and keeps health/landing
   assert.doesNotMatch(text, /force-recreate 591-tracker-v2/);
   assert.doesNotMatch(text, /up -d[^\n]*591-tracker-v2/);
   assert.match(text, /v3 must not resolve to :latest/);
-  assert.match(text, /v2 must not be digest-replaced/);
+  assert.match(text, /docker compose stop 591-tracker 591-tracker-v2/);
   assert.match(text, /override must not contain :latest/);
   assert.match(text, /\/api\/health/);
   assert.match(text, /login\.html/);

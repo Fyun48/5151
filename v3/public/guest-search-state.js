@@ -17,6 +17,9 @@
       minBuildingFloors: 0,
       hasParking: false,
       moreOpen: false,
+      watchDistricts: [],
+      workAddress: "",
+      commuteKm: 0,
     };
   }
 
@@ -36,6 +39,8 @@
     const store = storage || (typeof sessionStorage === "undefined" ? null : sessionStorage);
     if (!store) return read(store);
     const next = { ...defaults(), ...(state || {}) };
+    next.districts = (Array.isArray(next.districts) ? next.districts : []).filter(Boolean).slice(0, 4);
+    next.watchDistricts = (Array.isArray(next.watchDistricts) ? next.watchDistricts : []).filter(Boolean).slice(0, 4);
     store.setItem(KEY, JSON.stringify(next));
     return next;
   }
@@ -43,7 +48,7 @@
   function toQuery(state) {
     const s = { ...defaults(), ...(state || {}) };
     return {
-      districts: Array.isArray(s.districts) ? s.districts.filter(Boolean) : [],
+      districts: Array.isArray(s.districts) ? s.districts.filter(Boolean).slice(0, 4) : [],
       kind: Array.isArray(s.kinds) ? s.kinds.join(",") : "",
       sort: s.sort || "newest",
       q: s.q || "",
@@ -55,6 +60,9 @@
       minBuildingFloors: Number(s.minBuildingFloors) || 0,
       hasParking: s.hasParking === true,
       wholeFloorOnly: Array.isArray(s.kinds) && s.kinds.length === 1 && s.kinds[0] === "whole",
+      watchDistricts: Array.isArray(s.watchDistricts) ? s.watchDistricts.filter(Boolean).slice(0, 4) : [],
+      workAddress: String(s.workAddress || "").trim().slice(0, 120),
+      commuteKm: Number(s.commuteKm) || 0,
     };
   }
 

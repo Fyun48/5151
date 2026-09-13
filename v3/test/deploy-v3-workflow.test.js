@@ -76,12 +76,12 @@ test("deploy-v3 derives tag from DEPLOY_SHA and verifies digest/revision/sharp b
   assert.doesNotMatch(yml, /docker build |build-push-action|docker push /);
 });
 
-test("deploy-v3 pins Production v3 to digest and does not recreate v2", () => {
+test("deploy-v3 pins Production v3 to digest and stops retired v1/v2", () => {
   assert.match(yml, /docker-compose.override.yml/);
   assert.match(yml, /image: \$\{IMAGE_REPO\}@\$\{IMAGE_DIGEST\}/);
   assert.match(yml, /v3 must not resolve to :latest/);
-  assert.match(yml, /v2 must not be digest-replaced/);
   assert.match(yml, /force-recreate 591-tracker-v3/);
+  assert.match(yml, /docker compose stop 591-tracker 591-tracker-v2/);
   assert.doesNotMatch(yml, /force-recreate 591-tracker-v2/);
   assert.doesNotMatch(yml, /up -d[^\n]*591-tracker-v2/);
   assert.match(yml, /\/api\/health/);
@@ -97,5 +97,4 @@ test("NAS ssh script avoids bash case/;; because drone-ssh joins lines with semi
   assert.doesNotMatch(ssh, /\besac\b/);
   assert.doesNotMatch(ssh, /;;/);
   assert.match(ssh, /grep -Eq ':latest\$'/);
-  assert.match(ssh, /grep -Eq '@sha256:'/);
 });

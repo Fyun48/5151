@@ -164,4 +164,70 @@ test("M: public listing query never queues geo, routes, or crawlers", () => {
   const src = readFileSync(path.join(dir, "../src/db.js"), "utf8");
   const fn = src.slice(src.indexOf("export function listPublicListings"), src.indexOf("export function runSameHouseBackfill"));
   assert.doesNotMatch(fn, /queueGeo|upsertRouteJob|coveringJobs|saveSettings|defaultUserId\(/);
+  assert.doesNotMatch(fn, /geocodeAddress|warmRouteCache/);
+});
+
+test("guest sessionStorage keeps work address and four districts", () => {
+  const src = readFileSync(path.join(dir, "../public/guest-search-state.js"), "utf8");
+  const run = new Function("exports", `${src}; return globalThis.GuestSearchState;`);
+  const store = new Map();
+  const storage = {
+    getItem: (key) => (store.has(key) ? store.get(key) : null),
+    setItem: (key, value) => store.set(key, String(value)),
+  };
+  const api = run({});
+  api.write({
+    districts: ["士林區", "北投區", "大同區", "中山區", "松山區"],
+    watchDistricts: ["1-8", "1-9", "1-10", "1-11", "1-12"],
+    workAddress: "臺北市南港區經貿一路170號",
+    commuteKm: 8,
+  }, storage);
+  const again = api.read(storage);
+  const query = api.toQuery(again);
+  assert.deepEqual(query.districts, ["士林區", "北投區", "大同區", "中山區"]);
+  assert.deepEqual(query.watchDistricts, ["1-8", "1-9", "1-10", "1-11"]);
+  assert.equal(query.workAddress, "臺北市南港區經貿一路170號");
+  assert.equal(query.commuteKm, 8);
+});
+
+test("guest UI unlocks district picker and commute, and drops street-estimate checkbox", () => {
+  const html = readFileSync(path.join(dir, "../public/index.html"), "utf8");
+  assert.match(html, /GUEST_MAX_DISTRICTS = 4/);
+  assert.match(html, /return isGuest \? GUEST_MAX_DISTRICTS : MEMBER_MAX_DISTRICTS/);
+  assert.match(html, /#districtPicker"\) && !el\.closest\("\[data-city-hide\]"\)/);
+  assert.match(html, /#workAddress, #commuteKm/);
+  assert.match(html, /params\.set\("workAddress"/);
+  assert.doesNotMatch(html, /id="notifyIncludeStreetEstimate"/);
+  assert.match(html, /可填上班地址與距離上限/);
+  assert.doesNotMatch(html, /公司地址、機車或汽車路徑也無法/);
+});
+
+test("guest public search filters by straight-line commute and keeps member commuteKm off", () => {
+  runIsolated(`
+    seed(701, { lat: 25.093, lng: 121.525, geo_source: "591", address: "台北市士林區測試路701號" });
+    seed(702, { lat: 24.147, lng: 120.673, geo_source: "591", address: "台中市西區測試路702號" });
+    const query = { commuteKm: 5, workLat: 25.093, workLng: 121.525 };
+    const settings = app.publicSearchSettings(query);
+    assert.equal(settings.commuteKm, 0);
+    assert.equal(settings.guestCommuteKm, 5);
+    assert.equal(settings.workLat, null);
+    const listed = app.listPublicListings({ ...query, settings });
+    const ids = listed.listings.map((row) => Number(row.post_id));
+    assert.equal(ids.includes(701), true);
+    assert.equal(ids.includes(702), false);
+    const near = listed.listings.find((row) => Number(row.post_id) === 701);
+    assert.ok(Number(near.commute_km) <= 5);
+    assert.match(String(near.commute_hint || ""), /直線距離/);
+  `);
+});
+
+test("public listings route rejects more than four guest districts", () => {
+  const src = readFileSync(path.join(dir, "../src/server.js"), "utf8");
+  const route = src.slice(src.indexOf("async function resolveGuestWorkPoint"), src.indexOf("function actorUserId"));
+  assert.match(route, /GUEST_MAX_DISTRICTS/);
+  assert.match(route, /訪客最多同時選/);
+  assert.match(route, /resolveGuestWorkPoint/);
+  assert.match(route, /geocodeAddress/);
+  assert.match(route, /setCachedGeo/);
+  assert.doesNotMatch(route, /upsertRouteJob|saveCrawlSources|runWatch/);
 });
