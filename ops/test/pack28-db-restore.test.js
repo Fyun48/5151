@@ -165,7 +165,7 @@ test("console exposes pending-list DB restore as a distinct exact-confirm door",
   const js = readFileSync(join(root, "../public/console.js"), "utf8");
   assert.match(html, /可另送 DB 還原要求/);
   assert.match(html, /必須輸入確認字 RESTORE-PRODUCTION-DB/);
-  assert.match(html, /console\.js\?v=20260913-pkg31/);
+  assert.match(html, /console\.js\?v=20260913-pkg32/);
   assert.match(js, /\/ops\/api\/production-releases\/\$\{id\}\/restore-db/);
   assert.match(js, /記錄 DB 還原要求/);
   assert.match(js, /reasonExact: "RESTORE-PRODUCTION-DB"/);

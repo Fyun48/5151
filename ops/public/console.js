@@ -140,6 +140,7 @@ const STATUS_LABEL = {
   subscription_revoked: "訂閱已撤",
   stale_generation: "世代已換",
   waiting_approval: "待核准發布",
+  waiting_development: "待核准開發",
 };
 
 const EXIT_ACTION_LABEL = {
@@ -161,6 +162,7 @@ const PENDING_KIND_LABEL = {
   staging: "隔離 staging",
   production_release: "正式發布",
   release_candidate: "發行候選",
+  owner_approval: "開發核准",
   release_notification: "發布通知",
   reevaluation: "自動重評",
   site_command: "遠端客服",
@@ -546,6 +548,57 @@ const PENDING_GATE2 = {
   },
 };
 
+const PENDING_GATE1 = {
+  approvedev: {
+    action: "approvedev",
+    label: "核准開發",
+    title: "確認核准開發",
+    body: (id) => `核准議題 #${id} 進入開發？這一步只寫開發授權，不會開 PR、也不會部署正式機。`,
+    confirm: "確定寫入開發授權",
+    danger: false,
+    gate1Action: "APPROVE_DEVELOPMENT",
+    ok: () => "已寫入開發授權。沒有開 PR，也沒有部署正式機。",
+  },
+  requestchangesdev: {
+    action: "requestchangesdev",
+    label: "要求修改",
+    title: "確認要求修改開發提案",
+    body: (id) => `要求修改議題 #${id} 的開發提案？必須寫明要改什麼。不會開 PR，也不會部署。`,
+    confirm: "確定要求修改",
+    reasonRequired: true,
+    reasonLabel: "請說明要改什麼（會寫進決策紀錄）",
+    gate1Action: "REQUEST_CHANGES",
+    ok: () => "已要求修改開發提案。沒有開 PR，也沒有部署正式機。",
+  },
+  deferdev: {
+    action: "deferdev",
+    label: "暫緩",
+    title: "確認暫緩開發提案",
+    body: (id) => `暫緩議題 #${id}？不會開 PR，也不會部署正式機。`,
+    confirm: "確定暫緩",
+    gate1Action: "DEFER",
+    ok: () => "已暫緩開發提案。沒有開 PR，也沒有部署正式機。",
+  },
+  rejectdev: {
+    action: "rejectdev",
+    label: "拒絕",
+    title: "確認拒絕開發提案",
+    body: (id) => `拒絕議題 #${id}？不會開 PR，也不會部署正式機。`,
+    confirm: "確定拒絕",
+    gate1Action: "REJECT",
+    ok: () => "已拒絕開發提案。沒有開 PR，也沒有部署正式機。",
+  },
+  blockdev: {
+    action: "blockdev",
+    label: "封鎖",
+    title: "確認封鎖開發提案",
+    body: (id) => `封鎖議題 #${id}？只有 Owner 能解除。不會開 PR，也不會部署正式機。`,
+    confirm: "確定封鎖",
+    gate1Action: "BLOCK",
+    ok: () => "已封鎖開發提案。沒有開 PR，也沒有部署正式機。",
+  },
+};
+
 function pendingItemActions(it) {
   const actions = [];
   const unsent = PENDING_CANCEL[it.kind];
@@ -584,6 +637,15 @@ function pendingItemActions(it) {
       { ...PENDING_GATE2.approve, gate2: it.gate2 },
       { ...PENDING_GATE2.requestchanges, gate2: it.gate2 },
       { ...PENDING_GATE2.cancelrelease, gate2: it.gate2 },
+    );
+  }
+  if (it.kind === "owner_approval" && it.state === "waiting_development" && it.gate1?.offered) {
+    actions.push(
+      { ...PENDING_GATE1.approvedev, gate1: it.gate1 },
+      { ...PENDING_GATE1.requestchangesdev, gate1: it.gate1 },
+      { ...PENDING_GATE1.deferdev, gate1: it.gate1 },
+      { ...PENDING_GATE1.rejectdev, gate1: it.gate1 },
+      { ...PENDING_GATE1.blockdev, gate1: it.gate1 },
     );
   }
   return actions;
@@ -634,7 +696,10 @@ function showExitDetail(id, data) {
       const gate2 = spec.gate2
         ? ` data-task-id="${Number(spec.gate2.coding_task_id)}" data-manifest-id="${Number(spec.gate2.manifest_id)}" data-manifest-version="${Number(spec.gate2.manifest_version)}" data-manifest-hash="${esc(spec.gate2.manifest_hash)}" data-artifact-digest="${esc(spec.gate2.artifact_digest)}" data-head-sha="${esc(spec.gate2.head_sha)}"`
         : "";
-      return `<button type="button" data-cancel-kind="${esc(it.kind)}" data-cancel-id="${Number(it.id)}" data-cancel-action="${esc(spec.action)}" data-pid="${esc(id)}" data-cancel-state="${esc(it.state)}"${rollback}${gate2}>${esc(spec.label)}</button>`;
+      const gate1 = spec.gate1
+        ? ` data-proposal-id="${Number(spec.gate1.proposal_id)}" data-proposal-version="${Number(spec.gate1.proposal_version)}" data-proposal-hash="${esc(spec.gate1.proposal_hash)}"`
+        : "";
+      return `<button type="button" data-cancel-kind="${esc(it.kind)}" data-cancel-id="${Number(it.id)}" data-cancel-action="${esc(spec.action)}" data-pid="${esc(id)}" data-cancel-state="${esc(it.state)}"${rollback}${gate2}${gate1}>${esc(spec.label)}</button>`;
     }).join("");
     blocks.push(`<div class="pending-item"><p>${esc(label)}</p>${rollbackRecordHtml(it)}${btn}</div>`);
   }
@@ -1841,7 +1906,8 @@ $("exitDetailBody")?.addEventListener("click", (ev) => {
   const btn = ev.target.closest("[data-cancel-kind][data-cancel-id]");
   if (!btn) return;
   const action = btn.dataset.cancelAction || "cancel";
-  const spec = PENDING_GATE2[action]
+  const spec = PENDING_GATE1[action]
+    || PENDING_GATE2[action]
     || (action === "runner"
       ? PENDING_RUNNER_CANCEL
       : action === "rollback"
@@ -1864,7 +1930,15 @@ $("exitDetailBody")?.addEventListener("click", (ev) => {
     reasonExact: spec.reasonExact || "",
     reasonLabel: spec.reasonLabel,
     onConfirm: async (note) => {
-      const payload = PENDING_GATE2[action]
+      const payload = PENDING_GATE1[action]
+        ? {
+          action: spec.gate1Action,
+          proposal_id: Number(btn.dataset.proposalId),
+          proposal_version: Number(btn.dataset.proposalVersion),
+          proposal_hash: btn.dataset.proposalHash,
+          reason: note || (spec.gate1Action === "REQUEST_CHANGES" ? "" : "owner_console"),
+        }
+        : PENDING_GATE2[action]
         ? {
           action: spec.gate2Action,
           manifest_id: Number(btn.dataset.manifestId),
@@ -1883,7 +1957,9 @@ $("exitDetailBody")?.addEventListener("click", (ev) => {
           : action === "dbrestore"
             ? { confirm_db_restore: note }
             : { reason: "owner_console" };
-      const path = PENDING_GATE2[action]
+      const path = PENDING_GATE1[action]
+        ? `/ops/api/issues/${itemId}/proposal/decision`
+        : PENDING_GATE2[action]
         ? `/ops/api/coding-tasks/${btn.dataset.taskId}/release/decision`
         : spec.path(itemId);
       const { res, data } = await api(path, {

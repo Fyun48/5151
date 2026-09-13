@@ -11,6 +11,7 @@ import { parseAndValidateProposal, canonicalProposalContent, PROPOSAL_SCHEMA_VER
 import { buildProposalPolicy, proposalPolicyFingerprint, effectiveProposalPolicyFingerprint, PROPOSAL_GENERATION_VERSION } from "./proposalPolicy.js";
 import { createEntityRow, transitionRow, findEntity, getEntity } from "./stateMachine.js";
 import { issueWriteDecision } from "./insightConsent.js";
+import { rejectSpoofedOwnerDirect } from "./instructionSource.js";
 
 export const PROPOSAL_MAX_RETRIES = 5;
 export const PROPOSAL_SCHEMA_MAX_RETRIES = 2;
@@ -519,8 +520,33 @@ export function getCurrentIssueProposal(db, issueId, opts = {}) {
   return { ...publicProposal(row), stale: reasons.length > 0, fresh: reasons.length === 0, stale_reasons: reasons, current_decision: currentOwnerDecision(db, issueId) };
 }
 
+export function describeGate1Offer(db, issueId) {
+  const id = Number(issueId);
+  if (!Number.isInteger(id) || id < 1) return { offered: false };
+  const issue = db.prepare("SELECT * FROM issue_candidate WHERE id=?").get(id);
+  if (!issue || issue.status !== "open") return { offered: false };
+  const entity = findEntity(db, issueEntityId(id));
+  if (!entity || entity.state !== "WAITING_OWNER_APPROVAL") return { offered: false };
+  const cur = db.prepare("SELECT * FROM issue_proposal_current WHERE issue_id=?").get(id);
+  if (!cur) return { offered: false };
+  const proposal = db.prepare("SELECT * FROM issue_proposal WHERE id=?").get(Number(cur.proposal_id));
+  if (!proposal || proposal.status !== "completed") return { offered: false };
+  const auth = db.prepare("SELECT id FROM development_authorization WHERE issue_id=? AND status='active'").get(id);
+  if (auth) return { offered: false };
+  return {
+    offered: true,
+    issue_id: id,
+    proposal_id: Number(cur.proposal_id),
+    proposal_version: Number(cur.proposal_version),
+    proposal_hash: String(cur.proposal_hash),
+    decision_label: "pending_review",
+  };
+}
+
 // ── Owner Approval Gate #1（TOCTOU-safe，單一交易） ──
-export function submitOwnerDecision(db, issueId, { action, proposalId, proposalVersion, proposalHash, actor = "owner", reason = null, now = new Date(), env = process.env, provider } = {}) {
+export function submitOwnerDecision(db, issueId, opts = {}) {
+  rejectSpoofedOwnerDirect(opts);
+  const { action, proposalId, proposalVersion, proposalHash, actor = "owner", reason = null, now = new Date(), env = process.env, provider } = opts;
   const act = String(action || "").toUpperCase();
   if (!OWNER_ACTIONS.includes(act)) throw httpError(`invalid action: ${action}`, 400);
   const ts = iso(now);
