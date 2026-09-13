@@ -14,6 +14,7 @@ import { recordPurgeEvent, redactExclusiveIssues } from "./purgeLedger.js";
 import { describeCodeRollbackOffer, describeDbRestoreOffer } from "./release/productionRelease.js";
 import { describeCancelResultOffer, leftoverPendingNote } from "./cancelResult.js";
 import { describeGate2Offer } from "./releaseCandidate.js";
+import { describeGate1Offer } from "./proposal.js";
 import { schemaLooksIncompatible } from "./release/rollbackContract.js";
 
 export const EXIT_ACTIONS = Object.freeze(["pause", "unsubscribe", "handoff", "purge_replica"]);
@@ -238,6 +239,30 @@ export function listPendingWork(db, productId) {
         state: row.status,
         blocking: row.status === "processing",
         note: "未送出的提案可取消；已在跑的不宣稱撤回。訂閱世代已換或已退出的晚到提案不會寫入或送 webhook。",
+      });
+    }
+  }
+  if (tableExists(db, "issue_proposal_current") && tableExists(db, "state_entity")) {
+    const waiting = safeAll(db, `
+      SELECT i.id AS issue_id FROM issue_candidate i
+       JOIN state_entity e ON e.id = 'issue:' || i.id
+      WHERE e.entity_type='issue' AND e.state='WAITING_OWNER_APPROVAL' AND i.status='open'
+    `);
+    for (const row of waiting) {
+      const offer = describeGate1Offer(db, row.issue_id);
+      if (!offer.offered) continue;
+      const scoped = inferIssueProductId(db, row.issue_id);
+      if (scoped && scoped !== id) continue;
+      items.push({
+        kind: "owner_approval",
+        id: offer.issue_id,
+        state: "waiting_development",
+        blocking: false,
+        unscoped: !scoped,
+        gate1: offer,
+        note: scoped
+          ? "待核准的開發提案可核准、要求修改、暫緩、拒絕或封鎖。核准只寫開發授權，不會開 PR、也不會部署。要求修改必須寫原因。已授權 Owner 直達不經這個門。"
+          : "開發核准尚未綁 product_id；退出時列出但不能宣稱已核准或已取消外部工作",
       });
     }
   }
