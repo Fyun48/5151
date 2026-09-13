@@ -40,6 +40,8 @@ test("Quiet Luxury tokens exist and pages do not use classifieds candy", () => {
   assert.doesNotMatch(index, /background:\s*#fff\b/);
   assert.doesNotMatch(index, /#dcfce7/);
   assert.doesNotMatch(index, /#e8f1ff/);
+  assert.match(index, /\.dock-item \.tag\.notify-relist \{ background: var\(--notify-relist-bg\)/);
+  assert.match(tokens, /--notify-relist-bg: #e6efe8/);
   assert.match(index, /\.tag\.lift \{ background: var\(--tag-on-bg\)/);
   assert.match(index, /\.tag\.ext-src \{ background: var\(--same-soft\)/);
   assert.doesNotMatch(index, /滿版/);

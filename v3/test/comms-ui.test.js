@@ -56,14 +56,15 @@ test("admin manages announcements, campaigns, and support presentation separatel
   assert.match(admin, /這是服務資訊，不是廣告/);
   assert.match(admin, /清楚標「贊助內容」/);
   assert.match(admin, /不是第三方廣告/);
-  const notices = admin.slice(admin.indexOf('data-admin-panel="notices"'), admin.indexOf('data-admin-panel="promo"'));
+  const notices = admin.slice(admin.indexOf('data-admin-page="comms/notices"'), admin.indexOf('data-admin-page="comms/news"'));
   assert.match(notices, /id="broadcastsForm"/);
   assert.match(notices, /id="announceForm"/);
   assert.match(notices, /歷史 hop 公告僅供檢視/);
-  const ads = admin.slice(admin.indexOf('data-admin-panel="ads"'), admin.indexOf('data-admin-panel="mail"'));
+  const ads = admin.slice(admin.indexOf('data-admin-page="revenue/ads"'), admin.indexOf('data-admin-page="revenue/campaigns"'));
   assert.match(ads, /id="adsForm"/);
-  assert.match(ads, /id="campaignForm"/);
   assert.match(ads, /歷史版位僅供檢視/);
+  const campaigns = admin.slice(admin.indexOf('data-admin-page="revenue/campaigns"'), admin.indexOf('data-admin-page="comms/smtp"'));
+  assert.match(campaigns, /id="campaignForm"/);
   assertScriptsParse(admin);
   assertScriptsParse(html);
 });

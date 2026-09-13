@@ -180,12 +180,9 @@
 
     .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
     .admin-shell {
-      padding: 0 32px 40px;
-      display: grid;
-      grid-template-columns: 220px minmax(0, 1fr);
-      gap: 20px 28px;
-      max-width: 1280px;
-      align-items: start;
+      padding: 0;
+      display: block;
+      max-width: none;
     }
     .admin-nav {
       position: sticky;
@@ -218,22 +215,6 @@
     .admin-panel { display: grid; gap: 20px; }
     .admin-shell.is-ready .admin-panel { display: none; }
     .admin-shell.is-ready .admin-panel.is-on { display: grid; }
-    @media (max-width: 800px) {
-      .admin-shell { grid-template-columns: 1fr; padding-left: 16px; padding-right: 16px; }
-      .admin-nav {
-        flex-direction: row;
-        overflow-x: auto;
-        top: 0;
-        z-index: 5;
-        gap: 8px;
-        padding: 8px 0 10px;
-        margin: 0 -16px;
-        padding-left: 16px;
-        padding-right: 16px;
-      }
-      .admin-nav a { flex: 0 0 auto; }
-      .admin-nav span { display: none; }
-    }
     .cms-preview {
       min-height: 72px;
       padding: 12px 14px;
@@ -250,13 +231,227 @@
       header { padding-left: 16px; padding-right: 16px; }
       table { font-size: 12px; }
     }
+    .visually-hidden {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      border: 0;
+    }
+    .admin-app {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .admin-top {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 20px;
+      border-bottom: 1px solid var(--line);
+      background: var(--paper);
+      position: sticky;
+      top: 0;
+      z-index: 30;
+    }
+    .admin-top h1 { font-size: 18px; }
+    .admin-menu-btn {
+      display: none;
+      min-width: var(--touch);
+      min-height: var(--touch);
+      justify-content: center;
+    }
+    .admin-search { flex: 1; max-width: 440px; position: relative; }
+    .admin-search input { margin: 0; }
+    .admin-search-results {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: calc(100% + 4px);
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      max-height: 320px;
+      overflow: auto;
+      z-index: 40;
+    }
+    .admin-search-results button {
+      display: block;
+      width: 100%;
+      text-align: left;
+      border-radius: 0;
+      background: transparent;
+      color: var(--ink);
+      padding: 10px 12px;
+    }
+    .admin-search-results button:hover,
+    .admin-search-results button[aria-selected="true"] { background: var(--accent-mist); }
+    .admin-search-results small { display: block; color: var(--muted); font-size: 12px; }
+    .admin-body {
+      display: grid;
+      grid-template-columns: 248px minmax(0, 1fr);
+      align-items: start;
+      flex: 1;
+    }
+    .admin-nav {
+      position: sticky;
+      top: 57px;
+      height: calc(100vh - 57px);
+      overflow: auto;
+      padding: 12px 10px 24px;
+      border-right: 1px solid var(--line);
+      background: var(--bg);
+    }
+    .admin-nav-group { margin: 0 0 8px; }
+    .admin-nav-group > button {
+      width: 100%;
+      justify-content: space-between;
+      background: transparent;
+      color: var(--ink);
+      border: 0;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-weight: 650;
+    }
+    .admin-nav-group > button:hover { background: var(--accent-mist); }
+    .admin-nav-sub { display: none; padding: 0 0 6px 8px; }
+    .admin-nav-group.is-open > .admin-nav-sub { display: block; }
+    .admin-nav a, .admin-favs a {
+      display: block;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      padding: 8px 10px;
+      color: var(--ink);
+      text-decoration: none;
+      font-size: 13px;
+    }
+    .admin-nav a[aria-current="page"], .admin-favs a[aria-current="page"] {
+      background: var(--accent-mist);
+      border-color: var(--line);
+      color: var(--accent-deep);
+    }
+    .admin-favs { margin: 0 0 12px; padding: 0 4px 10px; border-bottom: 1px solid var(--line); }
+    .admin-favs h3 { margin: 0 0 6px; font-size: 12px; color: var(--muted); font-weight: 650; }
+    .admin-main { padding: 16px 24px 88px; min-width: 0; }
+    .admin-crumb { color: var(--muted); font-size: 12px; margin: 0 0 8px; }
+    .admin-page-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin: 0 0 14px; }
+    .admin-page-head h2 { margin: 0; }
+    .admin-fav-btn { min-height: var(--touch); }
+    .admin-shell.is-ready .admin-panel { display: none; }
+    .admin-shell.is-ready .admin-panel.is-on { display: grid; gap: 16px; }
+    .admin-status-grid, .admin-metric-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 8px;
+    }
+    .admin-metric, .source-card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 12px;
+      background: var(--paper);
+    }
+    .admin-metric b, .source-card b { display: block; font-variant-numeric: tabular-nums; font-size: 20px; }
+    .admin-metric span, .source-card .meta { color: var(--muted); font-size: 12px; }
+    .source-card {
+      display: grid;
+      gap: 6px;
+    }
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+    .dot.ok { background: var(--accent); }
+    .dot.off { background: var(--line); }
+    .dot.warn { background: var(--hermes); }
+    .dot.bad { background: var(--shezi-red); }
+    .danger-zone {
+      border: 1px solid var(--shezi-red);
+      background: #fdf6f6;
+      border-radius: var(--radius);
+      padding: 14px;
+    }
+    .danger-zone h3 { margin: 0 0 6px; color: var(--shezi-red); font-size: 15px; }
+    .admin-deprecated {
+      border: 1px dashed var(--line);
+      border-radius: var(--radius);
+      padding: 8px 12px;
+      background: var(--accent-mist);
+    }
+    .admin-deprecated > summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+    .admin-dirty {
+      position: sticky;
+      bottom: 0;
+      z-index: 25;
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      padding: 10px 20px;
+      background: var(--paper);
+      border-top: 1px solid var(--line);
+    }
+    .admin-dirty[hidden] { display: none !important; }
+    .admin-drawer-backdrop, .admin-nav-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(28, 25, 23, 0.28);
+      z-index: 35;
+    }
+    .admin-drawer {
+      position: fixed;
+      top: 0;
+      right: 0;
+      width: min(420px, 96vw);
+      height: 100vh;
+      overflow: auto;
+      background: var(--paper);
+      border-left: 1px solid var(--line);
+      padding: 20px;
+      z-index: 40;
+    }
+    .cap-table td:nth-child(2), .cap-table td:nth-child(3) { font-variant-numeric: tabular-nums; }
+    @media (max-width: 800px) {
+      .admin-top { flex-wrap: wrap; }
+      .admin-menu-btn { display: inline-flex; }
+      .admin-search { flex: 1 1 100%; max-width: none; order: 3; }
+      .admin-body { grid-template-columns: 1fr; }
+      .admin-nav {
+        position: fixed;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        display: flex;
+        flex-direction: column;
+        flex-wrap: nowrap;
+        width: min(86vw, 300px);
+        min-width: 260px;
+        height: 100vh;
+        overflow-x: hidden;
+        overflow-y: auto;
+        writing-mode: horizontal-tb;
+        transform: translateX(-100%);
+        z-index: 40;
+        background: var(--paper);
+        border-right: 1px solid var(--line);
+      }
+      .admin-nav-group, .admin-nav-group > button, .admin-favs { flex: 0 0 auto; width: 100%; }
+      .admin-app.is-nav-open .admin-nav { transform: none; }
+      .admin-app.is-nav-open .admin-nav-backdrop { display: block; }
+      .admin-main { padding: 12px 16px 88px; }
+    }
   </style>
 </head>
-<body>
-  <header>
+<body class="admin-app" id="adminApp">
+  <header class="admin-top">
+    <button type="button" class="ghost admin-menu-btn" id="adminMenuBtn" aria-controls="adminNav" aria-expanded="false">選單</button>
     <div>
-      <h1>後台管理</h1>
-      <div class="sub">用分類點選要改的項目。看不到會員密碼。</div>
+      <h1>吉比後台管理</h1>
+    </div>
+    <div class="admin-search">
+      <label class="visually-hidden" for="adminSearch">搜尋後台功能</label>
+      <input id="adminSearch" type="search" data-admin-transient placeholder="搜尋後台功能…" autocomplete="off" />
+      <div id="adminSearchResults" class="admin-search-results" hidden role="listbox" aria-label="後台功能"></div>
     </div>
     <div class="row">
       <span class="who" id="who"></span>
@@ -264,26 +459,56 @@
       <a class="ghost" href="/logout">登出</a>
     </div>
   </header>
+  <div class="admin-nav-backdrop" id="adminNavBackdrop" hidden></div>
   <div class="admin-shell" id="adminShell">
-    <nav class="admin-nav" aria-label="後台分類">
-      <a href="#members" data-admin-nav="members"><strong>會員</strong><span>帳號、方案、刪除</span></a>
-      <a href="#crawl" data-admin-nav="crawl"><strong>抓取底庫</strong><span>來源、行政區、捷運、通勤</span></a>
-      <a href="#site" data-admin-nav="site"><strong>畫面說明</strong><span>形象、宣告</span></a>
-      <a href="#qa" data-admin-nav="qa"><strong>功能說明 Q&amp;A</strong><span>獨立專區、條目維護</span></a>
-      <a href="#notices" data-admin-nav="notices"><strong>公告專區</strong><span>公告、最新消息、贊助提醒</span></a>
-      <a href="#promo" data-admin-nav="promo"><strong>贊助曝光</strong><span>會員贊助收款連結</span></a>
-      <a href="#ads" data-admin-nav="ads"><strong>站內小廣告</strong><span>列表／登入／卡片曝光</span></a>
-      <a href="#mail" data-admin-nav="mail"><strong>系統信件</strong><span>SMTP、信件範本</span></a>
-      <a href="#feedback" data-admin-nav="feedback"><strong>使用者回饋</strong><span>bug、建議、處理狀態</span></a>
-    </nav>
+    <div class="admin-body">
+    <nav class="admin-nav" id="adminNav" aria-label="後台分類"></nav>
     <div class="admin-main">
-      <div id="members" class="admin-panel" data-admin-panel="members">
+      <div class="admin-page-head">
+        <p class="admin-crumb" id="adminCrumb"></p>
+        <button type="button" class="ghost admin-fav-btn" id="adminFavBtn">☆ 常用</button>
+      </div>
+      <div id="overview" class="admin-panel" data-admin-page="overview">
+        <div class="admin-page-head">
+          <div>
+            <h2>總覽</h2>
+            <p class="hint">只讀狀態。打開這一頁不會啟動抓取、座標補算、路線補算或 reconciliation。</p>
+          </div>
+        </div>
+        <section class="card">
+          <h3>房源狀態</h3>
+          <div class="admin-metric-grid" id="overviewListings"></div>
+        </section>
+        <section class="card">
+          <h3>抓取狀態</h3>
+          <div id="overviewSources"></div>
+        </section>
+        <section class="card">
+          <h3>系統服務</h3>
+          <div id="overviewServices"></div>
+        </section>
+        <section class="card">
+          <h3>待處理</h3>
+          <div class="admin-metric-grid" id="overviewInbox"></div>
+        </section>
+        <section class="card">
+          <h3>快速操作</h3>
+          <div class="row">
+            <a class="primary" href="#inventory/sources">房源來源</a>
+            <a class="ghost" href="#inventory/crawl">抓取範圍</a>
+            <a class="ghost" href="#inventory/same-house">處理疑似同房源</a>
+            <a class="ghost" href="#feedback/inbox">使用者回饋</a>
+            <a class="ghost" href="#comms/notices">發布公告</a>
+          </div>
+        </section>
+      </div>
+      <div id="members" class="admin-panel" data-admin-page="members/users">
 <section class="card">
-      <h2>會員</h2>
-      <p class="hint">一般會員預設每 8 分鐘檢查；已贊助為 5 分鐘。這裡可改方案，也可手動指定間隔（分鐘）。管理員自己不受最短間隔限制。刪除會保留帳號列，避免立刻重註冊；同一 Email 最多再註冊一次。</p>
+      <h2>會員管理</h2>
+      <p class="hint">列表只看身分與狀態。點列開詳情才能改方案、間隔或做危險操作。看不到會員密碼。</p>
       <div class="row" style="margin-bottom:10px">
-        <input id="memberQuery" placeholder="搜尋 Email" style="max-width:260px" />
-        <select id="memberSort" style="max-width:180px">
+        <input id="memberQuery" data-admin-transient placeholder="搜尋 Email" style="max-width:260px" />
+        <select id="memberSort" data-admin-transient style="max-width:180px">
           <option value="created_at:desc">註冊時間（新→舊）</option>
           <option value="created_at:asc">註冊時間（舊→新）</option>
           <option value="id:asc">編號（小→大）</option>
@@ -296,51 +521,102 @@
           <thead>
             <tr>
               <th>Email</th>
-              <th>註冊時間</th>
               <th>身份</th>
               <th>方案</th>
-              <th>間隔（分）</th>
               <th>狀態</th>
-              <th></th>
+              <th>註冊日期</th>
+              <th>最後使用</th>
             </tr>
           </thead>
           <tbody id="memberRows"></tbody>
         </table>
       </div>
-      <div id="deleteMemberBox" class="card" style="margin:16px 0 0;padding:14px;box-shadow:none" hidden>
-        <h3 style="margin:0 0 8px;font-size:16px">確認刪除會員</h3>
-        <p class="hint" id="deleteMemberHint"></p>
-        <label>刪除信件內容</label>
-        <select id="deleteReasonCode"></select>
-        <label>信件說明（可改；自訂內容請寫在這裡）</label>
-        <textarea id="deleteReasonText" style="min-height:90px"></textarea>
-        <div class="row" style="margin-top:10px">
-          <button type="button" class="primary" id="deleteMemberConfirm">確認刪除並寄信</button>
-          <button type="button" class="ghost" id="deleteMemberCancel">取消</button>
-        </div>
-      </div>
     </section>
       </div>
-      <div id="crawl" class="admin-panel" data-admin-panel="crawl">
+      <div id="memberDrawerBackdrop" class="admin-drawer-backdrop" hidden></div>
+      <aside id="memberDrawer" class="admin-drawer" hidden>
+        <div class="row" style="justify-content:space-between">
+          <h2 id="memberDrawerTitle" style="margin:0;font-size:18px">會員詳情</h2>
+          <button type="button" class="ghost" id="memberDrawerClose">關閉</button>
+        </div>
+        <div id="memberDrawerBody"></div>
+        <div id="deleteMemberBox" class="danger-zone" style="margin:16px 0 0" hidden>
+          <h3>危險操作</h3>
+          <p class="hint" id="deleteMemberHint"></p>
+          <label>刪除信件內容</label>
+          <select id="deleteReasonCode"></select>
+          <label>信件說明（可改；自訂內容請寫在這裡）</label>
+          <textarea id="deleteReasonText" style="min-height:90px"></textarea>
+          <div class="row" style="margin-top:10px">
+            <button type="button" class="primary" id="deleteMemberConfirm">確認刪除並寄信</button>
+            <button type="button" class="ghost" id="deleteMemberCancel">取消</button>
+          </div>
+        </div>
+      </aside>
+      <div id="members-plans" class="admin-panel" data-admin-page="members/plans">
+        <section class="card">
+          <h2>方案與限制</h2>
+          <p class="hint">這是現行產品規則，不是另一套可改搜尋語意的開關。個別會員間隔仍在會員詳情調整。</p>
+          <table>
+            <thead><tr><th></th><th>一般會員</th><th>已贊助</th></tr></thead>
+            <tbody>
+              <tr><td>檢查間隔</td><td>8 分鐘</td><td>5 分鐘</td></tr>
+              <tr><td>特別關注</td><td>最多 6 筆</td><td>最多 15 筆</td></tr>
+              <tr><td>搜尋設定檔</td><td>最多 3 個</td><td>最多 3 個</td></tr>
+            </tbody>
+          </table>
+        </section>
+      </div>
+      <div id="members-guest" class="admin-panel" data-admin-page="members/guest">
+        <section class="card">
+          <h2>訪客權限</h2>
+          <p class="hint">對照目前前台實際邊界。這一頁不寫入、也不改會員搜尋設定或更多條件。</p>
+          <table class="cap-table">
+            <thead><tr><th>功能</th><th>訪客</th><th>會員</th></tr></thead>
+            <tbody>
+              <tr><td>允許訪客搜尋</td><td>可以</td><td>可以</td></tr>
+              <tr><td>行政區搜尋</td><td>可以</td><td>可以</td></tr>
+              <tr><td>租金篩選</td><td>可以</td><td>可以</td></tr>
+              <tr><td>房型篩選</td><td>可以</td><td>可以</td></tr>
+              <tr><td>同房源比較</td><td>可以看</td><td>可以；個人合併僅自己看得到</td></tr>
+              <tr><td>儲存設定檔</td><td>必須登入</td><td>可以</td></tr>
+              <tr><td>特別關注</td><td>必須登入</td><td>可以</td></tr>
+              <tr><td>通知</td><td>必須登入</td><td>可以</td></tr>
+              <tr><td>刊登房屋</td><td>必須登入</td><td>可以</td></tr>
+              <tr><td>許願房</td><td>必須登入</td><td>可以</td></tr>
+              <tr><td>使用者回饋</td><td>必須登入</td><td>可以</td></tr>
+            </tbody>
+          </table>
+        </section>
+      </div>
+      <div id="members-login" class="admin-panel" data-admin-page="members/login">
+        <section class="card">
+          <h2>登入政策</h2>
+          <p class="hint">新帳號須完成 Email 開通。社群登入金鑰在「系統與整合 → 社群登入」。這一頁不改前台搜尋。</p>
+          <p>Email 開通：必須完成才能使用會員功能。</p>
+          <p>社群登入設定入口：<a href="#system/oauth">系統與整合 → 社群登入</a></p>
+        </section>
+      </div>
+      <div id="inventory-sources" class="admin-panel" data-admin-page="inventory/sources">
 <section class="card">
-      <h2>物件來源</h2>
-      <p class="hint">591 與站內自行刊登預設開啟。住商、信義、5168、租租通、好房網預設關閉，打開後會用會員行政區抓租屋摘要並連回原站。樂屋被 Cloudflare 擋住，打開也不會抓。列表「較適合」依會員租金、樓層與通勤估算，不是成交預測。已抓到或刊登的物件帶 <code>source</code>／<code>source_id</code>。</p>
+      <h2>房源來源</h2>
+      <p class="hint">物件來源。591 與站內自行刊登預設開啟。先看各站目前狀態，再決定要不要啟用。樂屋網若關閉，原因是 Owner 手動停用。列表「較適合」依會員租金、樓層與通勤估算，不是成交預測。已抓到或刊登的物件帶 <code>source</code>／<code>source_id</code>。</p>
       <form id="crawlForm">
         <div id="crawlSourceList"></div>
         <div class="row" style="margin:14px 0 0">
-          <button type="submit" class="primary" id="crawlSave">儲存來源開關</button>
+          <button type="submit" class="primary" id="crawlSave">儲存物件來源</button>
         </div>
         <p class="msg" id="crawlMsg"></p>
       </form>
     </section>
+      </div>
+      <div id="inventory-crawl" class="admin-panel" data-admin-page="inventory/crawl">
 <section class="card">
-      <h2>系統抓取底庫</h2>
-      <p class="hint">會員抓到的物件會寫進同一份資料庫、互相共用，不會每人各爬一遍。這裡可再指定「底庫行政區」：就算還沒有會員勾這些區，系統仍會定期抓進來給之後的搜尋用。間隔是全站共用節奏（建議 10–15 分鐘），不是每個會員各抓一次。列表捷運站也在這裡統一開關：開啟後，只有步行路線未滿 1.5 公里才顯示站名與距離；會員畫面沒有這個選項。篩選與物件之間的綠色更新細線預設關閉，只有勾選後才會在「手動更新列表」時出現。</p>
+      <h2>抓取範圍與排程</h2>
+      <p class="hint">系統抓取底庫。會員抓到的物件會寫進同一份資料庫、互相共用，不會每人各爬一遍。這裡只處理全站間隔、行政區 coverage 與底庫。捷運站顯示改在「地圖與通勤」；會員畫面沒有這個選項。</p>
       <form id="systemCrawlForm">
         <label>全站檢查間隔（分鐘）</label>
         <input id="systemCrawlInterval" type="number" min="1" max="120" value="15" />
-        <label class="checks" style="display:block;margin:10px 0 0"><input type="checkbox" id="systemShowMrt" checked /> 全站顯示步行未滿 1.5 公里的最近捷運站</label>
-        <label class="checks" style="display:block;margin:8px 0 0"><input type="checkbox" id="systemShowListRefreshBar" /> 顯示列表更新細線（篩選與物件之間；背景自動補算時不會閃）</label>
         <label>底庫行政區</label>
         <div class="district-toolbar">
           <button type="button" class="ghost" id="systemCrawlSelectAll">全選</button>
@@ -349,17 +625,60 @@
         <div id="systemCrawlDistricts"></div>
         <div class="catalog-stats" id="systemCatalogStats" aria-live="polite"></div>
         <div class="row">
-          <button type="submit" class="primary" id="systemCrawlSave">儲存底庫與間隔</button>
+          <button type="submit" class="primary" id="systemCrawlSave">儲存抓取範圍</button>
         </div>
         <p class="msg" id="systemCrawlMsg"></p>
       </form>
     </section>
+      </div>
+      <div id="inventory-same-house" class="admin-panel" data-admin-page="inventory/same-house">
+        <section class="card">
+          <h2>同房源判定</h2>
+          <p class="hint">批次 reconciliation 每次預設 50 筆，不要一次全庫跑。管理員確認等同全站 SYSTEM GLOBAL CONFIRM，不是會員的 personal merge。</p>
+          <div class="admin-metric-grid" id="sameHouseStats"></div>
+        </section>
+        <section class="card">
+          <h3>歷史 reconciliation</h3>
+          <div id="sameHouseHistory" class="hint">尚無批次紀錄。</div>
+          <div class="row" style="margin-top:10px">
+            <label style="margin:0">本批筆數
+              <input id="sameHouseLimit" data-admin-transient type="number" min="1" max="200" value="50" style="width:88px;margin-left:8px" />
+            </label>
+            <button type="button" class="primary" id="sameHouseRun">執行下一批</button>
+          </div>
+          <p class="msg" id="sameHouseMsg"></p>
+        </section>
+        <section class="card">
+          <h3>管理員人工判定</h3>
+          <p class="hint">用物件 ID、標題或地址搜尋，選兩筆以上後確認。<strong>此操作會影響全站所有使用者。</strong></p>
+          <div class="row">
+            <input id="sameHouseQuery" data-admin-transient placeholder="物件 ID、標題或地址" style="max-width:280px" />
+            <button type="button" class="ghost" id="sameHouseSearch">搜尋房源</button>
+          </div>
+          <div id="sameHouseResults" style="margin-top:10px"></div>
+          <div class="row" style="margin-top:10px">
+            <button type="button" class="primary" id="sameHouseConfirm">確認為同一房源</button>
+          </div>
+          <p class="msg" id="sameHouseConfirmMsg"></p>
+        </section>
+      </div>
+      <div id="inventory-health" class="admin-panel" data-admin-page="inventory/health">
+        <section class="card">
+          <h2>資料健康度</h2>
+          <p class="hint">讓管理員知道底庫現在缺什麼，而不是等使用者發現。只讀，不啟動補算。</p>
+          <div class="admin-metric-grid" id="dataHealthGrid"></div>
+        </section>
+      </div>
+      <div id="system-maps" class="admin-panel" data-admin-page="system/maps">
 <section class="card">
-      <h2>通勤路線／Google 計費</h2>
-      <p class="hint">通勤<strong>公里數走免費 OpenStreetMap（OSRM）</strong>。列表與通知目前<strong>只顯示公里</strong>，不上／下班分鐘（OSRM 沒有尖峰路況）。以後若再開 Google Directions，再把分鐘加回畫面。同一組物件座標對同一個公司地址只會查一次。沒有金鑰、沒勾選下面「使用 Google Directions」就不會產生新費用。</p>
+      <h2>地圖與通勤</h2>
+      <p class="hint">通勤<strong>公里數走免費 OpenStreetMap（OSRM）</strong>。列表與通知目前<strong>只顯示公里</strong>，不上／下班分鐘。沒有金鑰、沒勾選「使用 Google Directions」就不會產生新費用。</p>
+      <div id="mapsStatus" class="admin-metric-grid" style="margin-bottom:12px"></div>
       <form id="mapsForm">
         <label class="checks"><input id="googleEnabled" type="checkbox" /> 使用 Google Directions 補還沒有上／下班分鐘的物件（會計費，預設關閉）</label>
         <label class="checks"><input id="mapsEnabled" type="checkbox" /> 允許補查尚未有紀錄的尖峰分鐘（已有快取的不重查；沒金鑰不會打）</label>
+        <label class="checks" style="display:block;margin:10px 0 0"><input type="checkbox" id="systemShowMrt" checked /> 全站顯示步行未滿 1.5 公里的最近捷運站</label>
+        <label class="checks" style="display:block;margin:8px 0 0"><input type="checkbox" id="systemShowListRefreshBar" /> 顯示列表更新細線（篩選與物件之間；背景自動補算時不會閃）</label>
         <label>Google Maps API 金鑰</label>
         <input id="mapsKey" type="password" autocomplete="new-password" placeholder="已設定則可留白" />
         <p class="msg" id="mapsKeyState"></p>
@@ -377,16 +696,20 @@
         <p class="hint" id="mapsLifetime" style="margin:12px 0 0"></p>
         <div class="row" style="margin:14px 0 0">
           <button type="submit" class="primary" id="mapsSave">儲存路線設定</button>
-          <button type="button" class="ghost" id="mapsClearKey">關閉並清除金鑰</button>
         </div>
         <p class="msg" id="mapsMsg"></p>
       </form>
+      <div class="danger-zone" style="margin-top:16px">
+        <h3>危險操作</h3>
+        <p class="hint">停用 Google Directions 並刪除已存 API Key。需再確認。</p>
+        <button type="button" class="ghost" id="mapsClearKey">停用並刪除 API Key</button>
+      </div>
     </section>
       </div>
-      <div id="site" class="admin-panel" data-admin-panel="site">
+      <div id="content-brand" class="admin-panel" data-admin-page="content/brand">
 <section class="card">
-      <h2>吉比形象／Logo</h2>
-      <p class="hint">中文名仍是「吉比租房物件追蹤」。英文名 JibbyRentH 寫在標誌旁邊，圖檔只用動物線稿、不要再疊其他英文品牌字。圓標與歡迎／註冊／贊助／疑惑都可用透明底；頁面不會再墊黑底或白底。</p>
+      <h2>品牌與 Logo</h2>
+      <p class="hint">吉比形象／Logo。中文名仍是「吉比租房物件追蹤」。英文名 JibbyRentH 寫在標誌旁邊，圖檔只用動物線稿、不要再疊其他英文品牌字。圓標與歡迎／註冊／贊助／疑惑都可用透明底；頁面不會再墊黑底或白底。</p>
       <form id="brandForm">
         <label class="checks"><input type="checkbox" id="brandEnabled" checked /> 在站台套用這套形象</label>
         <label class="checks"><input type="checkbox" id="brandHeader" checked /> 頁首顯示圓標</label>
@@ -445,8 +768,10 @@
         <p class="msg" id="brandMsg"></p>
       </form>
     </section>
+      </div>
+      <div id="content-legal" class="admin-panel" data-admin-page="content/legal">
 <section class="card">
-      <h2>宣告／免責／個資</h2>
+      <h2>法律與個資</h2>
       <p class="hint">註冊時必須勾選同意才能下一步。這裡改本文會發布新版本，不會改掉會員當初同意的歷史版本。若要既有會員再同意，請到下方「內容版本庫」勾選要求再同意。</p>
       <form id="legalCopyForm">
         <label>免責聲明本文</label>
@@ -464,6 +789,8 @@
         <p class="msg" id="legalCopyMsg"></p>
       </form>
     </section>
+      </div>
+      <div id="content-cms" class="admin-panel" data-admin-page="content/cms">
 <section class="card" id="contentCms">
       <h2>內容版本庫</h2>
       <p class="hint">管理免責、個資、刊登規則，以及日後匯入／許願房聲明。已發布本文不可原地改寫；請開新版本。只有勾選「要求再同意」才會擋既有會員。</p>
@@ -483,8 +810,9 @@
               <th>類型</th>
               <th>版本</th>
               <th>狀態</th>
+              <th>目前發布</th>
+              <th>最後修改</th>
               <th>再同意</th>
-              <th>雜湊</th>
               <th></th>
             </tr>
           </thead>
@@ -538,10 +866,24 @@
         <div id="cmsHistory" class="hint"></div>
       </form>
     </section>
+      </div>
+      <div id="inventory-imports" class="admin-panel" data-admin-page="inventory/imports">
 <section class="card" id="listingImports">
       <h2>外部物件匯入</h2>
-      <p class="hint">只供辨識來源與聲明版本，不是大型審核後台。記錄匯入 ID、會員、來源網址、草稿／刊登、聲明雜湊與狀態。</p>
-      <button type="button" class="ghost" id="importAdminReload">重新載入</button>
+      <p class="hint">只供辨識來源與聲明版本，記錄匯入 ID、會員、來源網址、草稿／刊登、聲明雜湊與狀態。可依狀態篩選：等待處理、處理中、成功、失敗。</p>
+      <div class="row">
+        <input id="importAdminQuery" data-admin-transient placeholder="搜尋會員或網址" style="max-width:240px" />
+        <select id="importAdminStatus" data-admin-transient style="max-width:160px">
+          <option value="">全部狀態</option>
+          <option value="pending">等待處理</option>
+          <option value="fetching">處理中</option>
+          <option value="ready_for_review">待確認</option>
+          <option value="confirmed">成功</option>
+          <option value="failed">失敗</option>
+          <option value="cancelled">已取消</option>
+        </select>
+        <button type="button" class="ghost" id="importAdminReload">重新載入</button>
+      </div>
       <p class="msg" id="importAdminMsg" role="status"></p>
       <div style="overflow-x:auto">
         <table>
@@ -561,8 +903,10 @@
         </table>
       </div>
     </section>
+      </div>
+      <div id="content-spirit" class="admin-panel" data-admin-page="content/spirit">
 <section class="card">
-      <h2>本站理念（這個站為什麼存在）</h2>
+      <h2>本站理念</h2>
       <p class="hint">前台「本站理念」頁（spirit.html）顯示這份文字。標記：一行 <code>## 小標</code> 為小標題、一行 <code>- 項目</code> 為條列、空一行分段，其餘為段落。存檔即時生效。</p>
       <form id="spiritForm">
         <label>標題</label>
@@ -576,6 +920,8 @@
         <p class="msg" id="spiritMsg"></p>
       </form>
     </section>
+      </div>
+      <div id="content-housing" class="admin-panel" data-admin-page="content/housing">
 <section class="card">
       <h2>居住數據</h2>
       <p class="hint">前台「居住數據」頁（data.html）與 <code>/api/housing-data</code> 讀這份。每筆一個指標；「自動更新」標記的是系統定期抓的開放資料，通常不用手改。可新增／修改／刪除，數值可填「待更新」。</p>
@@ -591,6 +937,8 @@
       <p class="hint">「立即更新開放資料」會抓內政部戶政司等來源，把雙北與全國戶籍人口等以「自動更新」標記寫入（系統每天也會自動跑一次）。</p>
       <p class="msg" id="housingMsg"></p>
     </section>
+      </div>
+      <div id="content-wish" class="admin-panel" data-admin-page="content/wish">
 <section class="card" id="wishConditionsCard">
       <h2>許願房條件選單</h2>
       <p class="hint">前台許願房「必須有／希望有／不接受」共用這份選單。可新增、改名稱、關閉或刪除。關閉後新刊登選不到，已刊登仍保留原文字。請不要用性別、國籍等歧視條件。</p>
@@ -603,7 +951,7 @@
       <p class="msg" id="wishCondMsg"></p>
     </section>
       </div>
-      <div id="qa" class="admin-panel" data-admin-panel="qa">
+      <div id="qa" class="admin-panel" data-admin-page="content/qa">
 <section class="card">
       <h2>功能說明 Q&amp;A</h2>
       <p class="hint">獨立專區。前台帳號旁與設定頁可進入「功能說明 Q&amp;A」分頁。專門說明功能表上看得到與看不到的限制，例如為什麼有的物件有捷運站、有的沒有（看的是可步行路線，不是直線距離）。可改現有題目，也可新增。</p>
@@ -616,56 +964,10 @@
       <p class="msg" id="helpQaMsg"></p>
     </section>
       </div>
-      <div id="notices" class="admin-panel" data-admin-panel="notices">
-<section class="card">
-      <h2>公告／最新消息／贊助提醒</h2>
-      <p class="hint">歷史 hop 公告僅供檢視，不再寫入、也不再對前台投遞。新的服務資訊請用下方「系統公告」（含排程、類型、已讀／關閉）。</p>
-      <form id="broadcastsForm">
-        <div class="grid-2">
-          <div>
-            <h3 style="margin:0 0 8px;font-size:16px">公告</h3>
-            <label class="checks"><input type="checkbox" id="bcAnnouncementEnabled" /> 顯示</label>
-            <label>標題</label>
-            <input id="bcAnnouncementTitle" maxlength="48" />
-            <label>內文</label>
-            <textarea id="bcAnnouncementBody" maxlength="220"></textarea>
-            <label>連結（選填）</label>
-            <input id="bcAnnouncementUrl" maxlength="500" />
-            <label>每隔幾次換頁</label>
-            <input id="bcAnnouncementHops" type="number" min="1" max="20" value="3" />
-          </div>
-          <div>
-            <h3 style="margin:0 0 8px;font-size:16px">最新消息</h3>
-            <label class="checks"><input type="checkbox" id="bcNewsEnabled" /> 顯示</label>
-            <label>標題</label>
-            <input id="bcNewsTitle" maxlength="48" />
-            <label>內文</label>
-            <textarea id="bcNewsBody" maxlength="220"></textarea>
-            <label>連結（選填）</label>
-            <input id="bcNewsUrl" maxlength="500" />
-            <label>每隔幾次換頁</label>
-            <input id="bcNewsHops" type="number" min="1" max="20" value="3" />
-          </div>
-        </div>
-        <h3 style="margin:16px 0 8px;font-size:16px">贊助提醒</h3>
-        <label class="checks"><input type="checkbox" id="bcSponsorEnabled" /> 顯示</label>
-        <label>標題</label>
-        <input id="bcSponsorTitle" maxlength="48" placeholder="贊助能讓本站維持免費比價" />
-        <label>內文</label>
-        <textarea id="bcSponsorBody" maxlength="220" placeholder="不擋找房。寫維護品質即可。"></textarea>
-        <label>連結（選填）</label>
-        <input id="bcSponsorUrl" maxlength="500" />
-        <label>每隔幾次換頁</label>
-        <input id="bcSponsorHops" type="number" min="1" max="20" value="5" />
-        <div class="row" style="margin:14px 0 0">
-          <button type="submit" class="primary" id="broadcastsSave" disabled>已停用（請用系統公告）</button>
-        </div>
-        <p class="msg" id="broadcastsMsg"></p>
-      </form>
-    </section>
+      <div id="notices" class="admin-panel" data-admin-page="comms/notices">
 <section class="card">
       <h2>系統公告</h2>
-      <p class="hint">這是服務資訊，不是廣告。一般公告進「通知」的系統公告；重要／維護才可上頂部細條。草稿不會出現在公開 API。</p>
+      <p class="hint">公告／最新消息／贊助提醒都從這裡管理。這是服務資訊，不是廣告。一般公告進「通知」的系統公告；重要／維護才可上頂部細條。草稿不會出現在公開 API。</p>
       <form id="announceForm">
         <input type="hidden" id="announceId" />
         <label>標題</label>
@@ -710,9 +1012,47 @@
         <p class="msg" id="announceMsg"></p>
       </form>
       <div id="announceList"></div>
+      <details class="admin-deprecated">
+        <summary>已停用／相容功能</summary>
+        <form id="broadcastsForm">
+          <p class="hint">歷史 hop 公告僅供檢視，不再寫入、也不再對前台投遞。</p>
+          <label class="checks"><input type="checkbox" id="bcAnnouncementEnabled" /> 顯示舊公告</label>
+          <input id="bcAnnouncementTitle" maxlength="48" />
+          <textarea id="bcAnnouncementBody" maxlength="220"></textarea>
+          <input id="bcAnnouncementUrl" maxlength="500" />
+          <input id="bcAnnouncementHops" type="number" min="1" max="20" value="3" />
+          <input type="checkbox" id="bcSponsorEnabled" />
+          <input id="bcSponsorTitle" maxlength="48" />
+          <textarea id="bcSponsorBody" maxlength="220"></textarea>
+          <input id="bcSponsorUrl" maxlength="500" />
+          <input id="bcSponsorHops" type="number" min="1" max="20" value="5" />
+          <button type="submit" class="primary" id="broadcastsSave" disabled>已停用（請用系統公告）</button>
+          <p class="msg" id="broadcastsMsg"></p>
+        </form>
+      </details>
     </section>
       </div>
-      <div id="promo" class="admin-panel" data-admin-panel="promo">
+      <div id="comms-news" class="admin-panel" data-admin-page="comms/news">
+        <section class="card">
+          <h2>最新消息</h2>
+          <p class="hint">新的服務資訊請用系統公告。這裡保留歷史 hop 最新消息欄位，方便相容。</p>
+          <form id="newsHopForm">
+            <label class="checks"><input type="checkbox" id="bcNewsEnabled" /> 顯示</label>
+            <label>標題</label>
+            <input id="bcNewsTitle" maxlength="48" />
+            <label>內文</label>
+            <textarea id="bcNewsBody" maxlength="220"></textarea>
+            <label>連結（選填）</label>
+            <input id="bcNewsUrl" maxlength="500" />
+            <label>每隔幾次換頁</label>
+            <input id="bcNewsHops" type="number" min="1" max="20" value="3" />
+            <div class="row" style="margin-top:10px">
+              <button type="submit" class="primary" disabled>已停用（請用系統公告）</button>
+            </div>
+          </form>
+        </section>
+      </div>
+      <div id="promo" class="admin-panel" data-admin-page="revenue/sponsors">
 <section class="card">
       <h2>贊助連結</h2>
       <p class="hint">預設列出免月費、會員能刷卡的方案：歐付寶收款連結、ezPay 簡單付、OEN 幫收 Link、Ko-fi、PayPal.Me、Buy Me a Coffee、GitHub Sponsors。金流仍會從贊助款抽手續費。ezPay 個人會員通過、銀行設好後，請到 ezPay 後台做「收款連結」，把 https 網址貼到該列「你的收款網址」並勾選顯示；銀行帳號本身不會出現在前台。綠界、藍新全方位金流通常要統編或年費，不放在預設清單。付款不會自動改會員方案，收到後請在上方把對方改成「已贊助」。</p>
@@ -732,8 +1072,10 @@
         <p class="msg" id="sponsorMsg"></p>
       </form>
     </section>
+      </div>
+      <div id="revenue-support" class="admin-panel" data-admin-page="revenue/support">
 <section class="card">
-      <h2>支持本站呈現</h2>
+      <h2>支持本站</h2>
       <p class="hint">這是會員自願支持，不是第三方廣告，也不會做成阻擋視窗。權益只列出目前已上線的功能。</p>
       <form id="supportConfigForm">
         <label class="checks"><input type="checkbox" id="supportEntryEnabled" checked /> 顯示支持入口（頁尾／帳號）</label>
@@ -749,11 +1091,14 @@
       </form>
     </section>
       </div>
-      <div id="ads" class="admin-panel" data-admin-panel="ads">
+      <div id="revenue-ads" class="admin-panel" data-admin-page="revenue/ads">
 <section class="card">
-      <h2>站內小廣告</h2>
-      <p class="hint">歷史版位僅供檢視，不再寫入、也不再對前台投遞。不是 Google Ads。新的贊助內容請用下方「贊助活動」（含間隔、排程、頻道與「贊助內容」標籤）。</p>
-      <form id="adsForm">
+      <h2>站內曝光</h2>
+      <p class="hint">站內小廣告的現行路徑是贊助活動插入。不是 Google Ads。歷史版位僅供檢視，不再寫入、也不再對前台投遞。</p>
+      <p><a href="#revenue/campaigns">前往贊助活動</a></p>
+      <details class="admin-deprecated">
+        <summary>已停用／相容功能</summary>
+        <form id="adsForm">
         <div class="grid-2">
           <div>
             <h3 style="margin:0 0 8px;font-size:16px">找房列表</h3>
@@ -817,7 +1162,10 @@
         </div>
         <p class="msg" id="adsMsg"></p>
       </form>
+      </details>
     </section>
+      </div>
+      <div id="revenue-campaigns" class="admin-panel" data-admin-page="revenue/campaigns">
 <section class="card">
       <h2>贊助活動（第一方）</h2>
       <p class="hint">清楚標「贊助內容」。插入間隔可改，不影響找房筆數。頻道要個別勾選；不要把廣告寫成系統公告或重要警示。</p>
@@ -877,10 +1225,11 @@
       <div id="campaignList"></div>
     </section>
       </div>
-      <div id="mail" class="admin-panel" data-admin-panel="mail">
+      <div id="mail" class="admin-panel" data-admin-page="comms/smtp">
 <section class="card">
-      <h2>寄信 SMTP</h2>
+      <h2>郵件服務</h2>
       <p class="hint">這組 SMTP 只寄<strong>系統信</strong>：註冊確認、開通完成歡迎、忘記密碼、變更密碼、贊助後通知。物件／屋源提醒請會員自己在前台填 SMTP，不會用這裡的帳號代寄。密碼只在你新填時才更新，畫面上不會回傳已存密碼。</p>
+      <div id="smtpStatus" class="admin-metric-grid" style="margin-bottom:12px"></div>
       <form id="smtpForm">
         <div class="grid-2">
           <div>
@@ -916,6 +1265,8 @@
         <p class="msg" id="smtpMsg"></p>
       </form>
     </section>
+      </div>
+      <div id="system-oauth" class="admin-panel" data-admin-page="system/oauth">
 <section class="card">
       <h2>社群登入</h2>
       <p class="hint">Google、LINE、Facebook 可帶入 Email 註冊或登入。新帳號仍須完成開通信。LINE 請在 Developers 開啟 email 權限，否則無法註冊。金鑰寫入 auth.env，畫面不會再顯示密鑰。</p>
@@ -941,8 +1292,10 @@
         <p class="msg" id="oauthMsg"></p>
       </form>
     </section>
+      </div>
+      <div id="comms-templates" class="admin-panel" data-admin-page="comms/templates">
 <section class="card">
-      <h2>信件內容</h2>
+      <h2>信件範本</h2>
       <p class="hint">系統信走上面的管理員 SMTP。可用代碼：<code>{{email}}</code>；註冊確認另有 <code>{{verifyUrl}}</code>；忘記密碼另有 <code>{{tempPassword}}</code>。物件通知預設內容只在會員未自訂時使用，實際寄出走會員自己的 SMTP。</p>
       <form id="tplForm">
         <label>註冊確認主旨</label>
@@ -984,19 +1337,26 @@
       </form>
     </section>
       </div>
-      <div id="feedback" class="admin-panel" data-admin-panel="feedback">
+      <div id="feedback" class="admin-panel" data-admin-page="feedback/inbox">
 <section class="card">
       <h2>使用者回饋</h2>
-      <p class="hint">前台會員在「意見」按鈕送出的 bug 回報／功能建議。每則都自動附上當時的畫面、篩選條件、裝置與版本，方便重現與分類；未來可作為自動化分析的來源。</p>
+      <p class="hint">前台會員在「意見」按鈕送出的 bug 回報／功能建議。每則都自動附上當時的畫面、篩選條件、裝置與版本。</p>
       <div class="row" id="feedbackStats" style="gap:8px;flex-wrap:wrap;margin-bottom:10px"></div>
+      <div class="row" id="feedbackQuick" style="gap:8px;flex-wrap:wrap;margin-bottom:8px">
+        <button type="button" class="ghost" data-fb-quick="new">未處理</button>
+        <button type="button" class="ghost" data-fb-quick="doing">處理中</button>
+        <button type="button" class="ghost" data-fb-quick="done">已完成</button>
+        <button type="button" class="ghost" data-fb-quick="declined">不採用</button>
+        <button type="button" class="ghost" data-fb-quick="">全部</button>
+      </div>
       <div class="row" style="gap:8px;flex-wrap:wrap;align-items:center">
         <label style="margin:0">狀態
-          <select id="feedbackFilterStatus" style="margin-left:6px">
+          <select id="feedbackFilterStatus" data-admin-transient style="margin-left:6px">
             <option value="">全部</option>
           </select>
         </label>
         <label style="margin:0">類型
-          <select id="feedbackFilterKind" style="margin-left:6px">
+          <select id="feedbackFilterKind" data-admin-transient style="margin-left:6px">
             <option value="">全部</option>
           </select>
         </label>
@@ -1006,36 +1366,176 @@
       <p class="msg" id="feedbackMsg"></p>
     </section>
       </div>
+      <div id="feedback-audit" class="admin-panel" data-admin-page="feedback/audit">
+        <section class="card">
+          <h2>管理操作紀錄</h2>
+          <p class="hint">記錄誰做了什麼。不記密碼、API secret 或 SMTP password。</p>
+          <div id="auditList" class="hint">載入中…</div>
+        </section>
+      </div>
+      <div id="system-services" class="admin-panel" data-admin-page="system/services">
+        <section class="card">
+          <h2>外部服務</h2>
+          <p class="hint">整合狀態一覽。改設定請到對應頁。</p>
+          <div id="servicesGrid"></div>
+        </section>
+      </div>
+      <div id="system-status" class="admin-panel" data-admin-page="system/status">
+        <section class="card">
+          <h2>系統狀態</h2>
+          <p class="hint">唯讀。打開不會啟動抓取或補算。</p>
+          <div id="systemStatusBox"></div>
+        </section>
+      </div>
+    </div>
+    </div>
+  </div>
+  <div class="admin-dirty" id="adminDirtyBar" hidden>
+    <span id="adminDirtyLabel">你有尚未儲存的變更</span>
+    <div class="row">
+      <button type="button" class="ghost" id="adminDirtyDiscard">放棄變更</button>
+      <button type="button" class="primary" id="adminDirtySave">儲存變更</button>
     </div>
   </div>
   <script src="/mascot.js"></script>
+  <script src="/admin-ia.js"></script>
   <script>
 
     const $ = (id) => document.getElementById(id);
-    const ADMIN_PANELS = ["members", "crawl", "site", "qa", "notices", "promo", "ads", "mail", "feedback"];
+    const IA = window.AdminIA;
     function adminPanelFromHash() {
-      const key = String(location.hash || "").replace(/^#/, "");
-      return ADMIN_PANELS.includes(key) ? key : "members";
+      return IA.normalizeHash(location.hash);
     }
-    function showAdminPanel(id) {
-      const key = ADMIN_PANELS.includes(id) ? id : "members";
-      document.querySelectorAll("[data-admin-panel]").forEach((el) => {
-        el.classList.toggle("is-on", el.dataset.adminPanel === key);
+    function closeAdminNav() {
+      $("adminApp")?.classList.remove("is-nav-open");
+      $("adminMenuBtn")?.setAttribute("aria-expanded", "false");
+      $("adminNavBackdrop")?.setAttribute("hidden", "");
+    }
+    function renderAdminNav(activeId) {
+      const nav = $("adminNav");
+      if (!nav) return;
+      const favs = IA.readFavorites();
+      const favHtml = favs.length
+        ? `<div class="admin-favs"><h3>常用</h3>${favs.map((id) => {
+            const page = IA.pageById(id);
+            return `<a href="#${page.id}" data-admin-nav="${page.id}">★ ${page.label}</a>`;
+          }).join("")}</div>`
+        : `<div class="admin-favs"><h3>常用</h3><p class="hint" style="margin:0">可在各頁按星號收藏。</p></div>`;
+      nav.innerHTML = favHtml + IA.GROUPS.map((group) => {
+        const open = group.pages.includes(activeId) || group.id === "overview";
+        const links = group.pages.map((id) => {
+          const page = IA.pageById(id);
+          if (group.id === "overview") {
+            return `<a href="#${page.id}" data-admin-nav="${page.id}">${page.label}</a>`;
+          }
+          return `<a href="#${page.id}" data-admin-nav="${page.id}">${page.label}</a>`;
+        }).join("");
+        if (group.id === "overview") {
+          return `<div class="admin-nav-group is-open">${links}</div>`;
+        }
+        return `<div class="admin-nav-group ${open ? "is-open" : ""}" data-nav-group="${group.id}">
+          <button type="button" data-nav-toggle="${group.id}">${group.label}<span aria-hidden="true">▾</span></button>
+          <div class="admin-nav-sub">${links}</div>
+        </div>`;
+      }).join("");
+      nav.querySelectorAll("[data-nav-toggle]").forEach((btn) => {
+        btn.onclick = () => btn.closest(".admin-nav-group")?.classList.toggle("is-open");
+      });
+      nav.querySelectorAll("[data-admin-nav]").forEach((el) => {
+        el.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          showAdminPanel(el.dataset.adminNav);
+          closeAdminNav();
+          window.scrollTo(0, 0);
+        });
+      });
+    }
+    let adminFormsReady = false;
+    function showAdminPanel(id, opts = {}) {
+      const fromHash = opts.fromHash === true;
+      const next = IA.normalizeHash(id);
+      const decision = IA.decideNavigation(next);
+      if (decision.prompt) {
+        if (!IA.confirmLeave()) {
+          if (fromHash) history.pushState(null, "", "#" + IA.currentPageId());
+          return;
+        }
+        IA.markClean();
+      }
+      const page = IA.pageById(next);
+      document.querySelectorAll("[data-admin-page]").forEach((el) => {
+        el.classList.toggle("is-on", el.dataset.adminPage === page.id);
       });
       document.querySelectorAll("[data-admin-nav]").forEach((el) => {
-        el.setAttribute("aria-current", el.dataset.adminNav === key ? "page" : "false");
+        el.setAttribute("aria-current", el.dataset.adminNav === page.id ? "page" : "false");
       });
+      if ($("adminCrumb")) {
+        $("adminCrumb").textContent = page.groupLabel === page.label
+          ? page.label
+          : `${page.groupLabel} > ${page.label}`;
+      }
+      const favBtn = $("adminFavBtn");
+      if (favBtn) {
+        favBtn.textContent = IA.readFavorites().includes(page.id) ? "★ 常用" : "☆ 常用";
+        favBtn.onclick = () => {
+          IA.toggleFavorite(page.id);
+          favBtn.textContent = IA.readFavorites().includes(page.id) ? "★ 常用" : "☆ 常用";
+          renderAdminNav(page.id);
+        };
+      }
       $("adminShell")?.classList.add("is-ready");
-      if (location.hash !== "#" + key) history.replaceState(null, "", "#" + key);
+      if ($("adminSearch")) $("adminSearch").value = "";
+      if ($("adminSearchResults")) $("adminSearchResults").hidden = true;
+      renderAdminNav(page.id);
+      IA.beginPage(page.id);
+      if (!fromHash && location.hash !== "#" + page.id) history.pushState(null, "", "#" + page.id);
+      const loaders = [];
+      if (page.id === "overview") loaders.push(loadOverview());
+      if (page.id === "inventory/same-house") loaders.push(loadSameHouse());
+      if (page.id === "inventory/health") loaders.push(loadDataHealth());
+      if (page.id === "feedback/audit") loaders.push(loadAudit());
+      if (page.id === "system/services" || page.id === "system/status") loaders.push(loadOverview());
+      const settle = () => {
+        if (adminFormsReady) IA.finishPageLoad(page.id);
+      };
+      if (loaders.length) Promise.all(loaders).finally(settle);
+      else settle();
     }
-    document.querySelectorAll("[data-admin-nav]").forEach((el) => {
-      el.addEventListener("click", (ev) => {
-        ev.preventDefault();
-        showAdminPanel(el.dataset.adminNav);
-        window.scrollTo(0, 0);
-      });
+    window.addEventListener("hashchange", () => showAdminPanel(adminPanelFromHash(), { fromHash: true }));
+    $("adminMenuBtn")?.addEventListener("click", () => {
+      const open = !$("adminApp").classList.contains("is-nav-open");
+      $("adminApp").classList.toggle("is-nav-open", open);
+      $("adminMenuBtn").setAttribute("aria-expanded", open ? "true" : "false");
+      $("adminNavBackdrop").hidden = !open;
     });
-    window.addEventListener("hashchange", () => showAdminPanel(adminPanelFromHash()));
+    $("adminNavBackdrop")?.addEventListener("click", closeAdminNav);
+    $("adminSearch")?.addEventListener("input", () => {
+      const box = $("adminSearchResults");
+      const hits = IA.searchPages($("adminSearch").value);
+      box.hidden = !hits.length;
+      box.innerHTML = hits.map((row) => `<button type="button" role="option" data-go="${row.id}"><strong>${row.label}</strong><small>${row.groupLabel} > ${row.label}</small></button>`).join("");
+    });
+    $("adminSearchResults")?.addEventListener("click", (ev) => {
+      const btn = ev.target.closest("[data-go]");
+      if (!btn) return;
+      $("adminSearch").value = "";
+      $("adminSearchResults").hidden = true;
+      showAdminPanel(btn.dataset.go);
+    });
+    document.addEventListener("click", (ev) => {
+      if (!ev.target.closest(".admin-search")) $("adminSearchResults").hidden = true;
+    });
+    document.querySelector(".admin-main")?.addEventListener("input", (ev) => IA.noteControlChange(ev.target));
+    document.querySelector(".admin-main")?.addEventListener("change", (ev) => IA.noteControlChange(ev.target));
+    $("adminDirtyDiscard")?.addEventListener("click", () => location.reload());
+    $("adminDirtySave")?.addEventListener("click", () => {
+      if (!IA.runStickySave() && $("adminDirtyLabel")) {
+        $("adminDirtyLabel").textContent = "這個頁面沒有對應的儲存動作，請用頁面上的按鈕。";
+      }
+    });
+    window.addEventListener("beforeunload", (ev) => {
+      if (IA.isDirty()) ev.preventDefault();
+    });
     showAdminPanel(adminPanelFromHash());
     let meEmail = "";
     let sponsorCatalog = [];
@@ -1045,8 +1545,10 @@
 
     function setMsg(id, text, ok) {
       const el = $(id);
+      if (!el) return;
       el.textContent = text || "";
       el.className = "msg " + (ok ? "ok" : text ? "err" : "");
+      if (ok && /已儲存|已發布|已更新|已刪除/.test(text || "")) IA.captureBaseline(IA.currentPageId());
     }
 
     async function readApi(res) {
@@ -1080,25 +1582,17 @@
       return Number(m.signup_count) > 1 ? "使用中（第二次）" : "使用中";
     }
 
+    let memberCache = [];
     function renderMembers(members) {
+      memberCache = members || [];
       $("memberRows").innerHTML = (members || []).map((m) => `
-        <tr data-id="${m.id}" data-role="${escapeHtml(m.role)}" data-email="${escapeHtml(m.email)}">
+        <tr data-id="${m.id}" data-role="${escapeHtml(m.role)}" data-email="${escapeHtml(m.email)}" style="cursor:pointer">
           <td>${escapeHtml(m.email)}</td>
-          <td>${formatTime(m.created_at)}</td>
           <td>${roleLabel(m.role)}</td>
-          <td>
-            <select data-plan ${m.role === "admin" || m.deleted ? "disabled" : ""}>
-              <option value="free" ${m.plan !== "sponsor" ? "selected" : ""}>一般</option>
-              <option value="sponsor" ${m.plan === "sponsor" ? "selected" : ""}>已贊助</option>
-            </select>
-          </td>
-          <td><input class="member-interval" data-interval type="number" min="1" max="120" value="${Number(m.intervalMinutes) || 8}" ${m.deleted ? "disabled" : ""} /></td>
+          <td>${m.plan === "sponsor" ? "已贊助" : "一般"}</td>
           <td>${escapeHtml(memberStatus(m))}</td>
-          <td>
-            ${m.role === "admin" ? "" : m.deleted
-              ? `<button type="button" class="ghost" data-restore>取消刪除</button>`
-              : `<button type="button" class="primary" data-save>儲存</button> <button type="button" class="ghost" data-delete>刪除</button>`}
-          </td>
+          <td>${formatTime(m.created_at)}</td>
+          <td>${formatTime(m.last_login_at)}</td>
         </tr>
       `).join("");
       const blob = JSON.stringify(members || []);
@@ -1160,6 +1654,12 @@
       $("deletedText").value = tpl.account_deleted?.text || "";
       $("notifySubject").value = tpl.listing_notify?.subject || "";
       $("notifyText").value = tpl.listing_notify?.text || "";
+      if ($("smtpStatus")) {
+        $("smtpStatus").innerHTML = `
+          <div class="admin-metric"><span>SMTP</span><b><span class="dot ${data.configured ? "ok" : "off"}"></span> ${data.configured ? "已連線" : "未設定"}</b></div>
+          <div class="admin-metric"><span>寄件人</span><b>${escapeHtml(smtp.from || "—")}</b></div>
+        `;
+      }
     }
 
     async function loadMail() {
@@ -1235,6 +1735,15 @@
       $("mapsMonth").textContent = `計費月 ${usage.month || ""}（${usage.billingTz || "America/Los_Angeles"}）：Directions ${usage.monthEssentials || 0} 次（免額 ${usage.essentialsFree || 10000}）· Advanced ${usage.monthAdvanced || 0} 次（免額 ${usage.advancedFree || 5000}）`;
       $("mapsOfficial").textContent = officialMapsWorksheet(usage);
       $("mapsLifetime").textContent = `累計紀錄 ${usage.lifetimeEssentials || 0} 次 Directions、${usage.lifetimeAdvanced || 0} 次 Advanced；各月官方價目加總約 ${usd(usage.lifetimeUsd)}。實際請款以 Cloud 帳單為準。`;
+      if ($("mapsStatus")) {
+        $("mapsStatus").innerHTML = `
+          <div class="admin-metric"><span>OSRM 距離</span><b><span class="dot warn"></span> 已啟用／未檢查</b></div>
+          <div class="admin-metric"><span>Google Directions</span><b><span class="dot ${data.googleEnabled && data.hasKey ? "warn" : "off"}"></span> ${data.googleEnabled ? (data.hasKey ? "已啟用／未檢查" : "未設定") : "關閉"}</b></div>
+          <div class="admin-metric"><span>API Key</span><b><span class="dot ${data.hasKey ? "warn" : "off"}"></span> ${data.hasKey ? "已設定／未檢查" : "未設定"}</b></div>
+          <div class="admin-metric"><span>今日請求</span><b>${Number(usage.todayEssentials || 0) + Number(usage.todayAdvanced || 0)}</b></div>
+          <div class="admin-metric"><span>本月請求</span><b>${Number(usage.monthEssentials || 0) + Number(usage.monthAdvanced || 0)}</b></div>
+        `;
+      }
       setMsg("mapsMsg", data.warning || "", true);
     }
 
@@ -1433,13 +1942,15 @@
       const host = $("cmsRows");
       if ($("cmsListEmpty")) $("cmsListEmpty").hidden = rows.length > 0;
       if (!host) return;
+      const published = rows.filter((row) => row.status === "published").sort((a, b) => Number(b.version) - Number(a.version))[0];
       host.innerHTML = rows.map((row) => `
         <tr>
           <td>${cmsTypeLabel(row.document_type)}</td>
           <td>v${row.version}</td>
           <td>${row.status === "published" ? "已發布" : "草稿"}${row.enabled ? "" : "／停用"}</td>
+          <td>${published && row.id === published.id ? "目前發布" : "—"}</td>
+          <td>${formatTime(row.published_at || row.created_at)}<br /><span class="hint">#${row.created_by || "—"}</span></td>
           <td>${row.requires_reacceptance ? "是" : "否"}</td>
-          <td><code>${String(row.content_hash || "").slice(0, 10)}</code></td>
           <td><button type="button" class="ghost" data-cms-open="${row.id}">檢視</button></td>
         </tr>
       `).join("");
@@ -1494,10 +2005,17 @@
     }
 
     async function loadListingImports() {
-      const res = await fetch("/api/admin/listing-imports", { cache: "no-store" });
+      const res = await fetch("/api/admin/listing-imports?limit=200", { cache: "no-store" });
       const data = await readApi(res);
       if (!res.ok) throw new Error(data.error || "載入匯入紀錄失敗");
-      const rows = data.items || [];
+      const q = String($("importAdminQuery")?.value || "").trim().toLowerCase();
+      const st = String($("importAdminStatus")?.value || "");
+      const rows = (data.items || []).filter((row) => {
+        if (st && row.status !== st) return false;
+        if (!q) return true;
+        const hay = `${row.member_email || ""} ${row.normalized_source_url || ""} ${row.provider || ""}`.toLowerCase();
+        return hay.includes(q);
+      });
       const box = $("importAdminRows");
       if (box) {
         box.innerHTML = rows.length ? rows.map((row) => `
@@ -1616,15 +2134,39 @@
       fillMaps(data);
     }
 
+    function sourceDot(status) {
+      if (status === "ok" || status === "tested") return "ok";
+      if (status === "disabled" || status === "off" || status === "unset") return "off";
+      if (status === "blocked" || status === "bad") return "bad";
+      return "warn";
+    }
+    function formatAgo(value) {
+      if (!value) return "無";
+      const t = Date.parse(value);
+      if (!Number.isFinite(t)) return escapeHtml(value);
+      const mins = Math.round((Date.now() - t) / 60000);
+      if (mins < 1) return "剛剛";
+      if (mins < 60) return `${mins} 分鐘前`;
+      if (mins < 1440) return `${Math.round(mins / 60)} 小時前`;
+      return formatTime(value);
+    }
     function renderCrawlSources(items) {
       const host = $("crawlSourceList");
       if (!host) return;
-      host.innerHTML = (items || []).map((row) => `
-        <label class="checks">
-          <input type="checkbox" data-crawl-id="${row.id}" ${row.enabled ? "checked" : ""} />
-          ${row.label}${row.stub ? "（尚未實作）" : ""}
-        </label>
-      `).join("");
+      host.innerHTML = (items || []).map((row) => {
+        const status = row.status || (row.enabled ? "enabled" : "disabled");
+        const label = row.statusLabel || (row.enabled ? "啟用" : "已關閉");
+        return `
+        <article class="source-card">
+          <div class="row" style="justify-content:space-between">
+            <strong>${escapeHtml(row.label)}</strong>
+            <span><span class="dot ${sourceDot(status)}"></span> ${escapeHtml(label)}</span>
+          </div>
+          <div class="meta">最近成功：${formatAgo(row.lastSuccess)}　最近錯誤：${escapeHtml(row.lastError || "無")}</div>
+          <div class="meta">今日新增：${Number(row.todayNew) || 0}${row.reason ? `　原因：${escapeHtml(row.reason)}` : ""}</div>
+          <label class="checks"><input type="checkbox" data-crawl-id="${row.id}" ${row.enabled ? "checked" : ""} /> 啟用來源</label>
+        </article>`;
+      }).join("");
     }
 
     async function loadCrawlSources() {
@@ -1750,14 +2292,46 @@
       renderSystemCatalogStats(data.catalog);
     }
 
-    $("memberRows").addEventListener("change", (ev) => {
-      const plan = ev.target.closest("[data-plan]");
-      if (!plan) return;
-      const tr = plan.closest("tr");
-      if (tr?.dataset.role === "admin") return;
-      const interval = tr.querySelector("[data-interval]");
-      if (interval) interval.value = plan.value === "sponsor" ? 5 : 8;
-    });
+    function closeMemberDrawer() {
+      $("memberDrawer").hidden = true;
+      $("memberDrawerBackdrop").hidden = true;
+      $("deleteMemberBox").hidden = true;
+    }
+    function openMemberDrawer(m) {
+      if (!m) return;
+      $("memberDrawerTitle").textContent = m.email;
+      const admin = m.role === "admin";
+      $("memberDrawerBody").innerHTML = `
+        <p class="hint">帳號資料</p>
+        <p>身份：${roleLabel(m.role)}　方案：${m.plan === "sponsor" ? "已贊助" : "一般"}</p>
+        <p>狀態：${escapeHtml(memberStatus(m))}</p>
+        <p>註冊：${formatTime(m.created_at)}　最後使用：${formatTime(m.last_login_at)}</p>
+        <p>刊登數：${Number(m.listingCount) || 0}　關注數：${Number(m.watchCount) || 0}</p>
+        <label>方案</label>
+        <select id="drawerPlan" ${admin || m.deleted ? "disabled" : ""}>
+          <option value="free" ${m.plan !== "sponsor" ? "selected" : ""}>一般</option>
+          <option value="sponsor" ${m.plan === "sponsor" ? "selected" : ""}>已贊助</option>
+        </select>
+        <label>抓取間隔（分）</label>
+        <input id="drawerInterval" class="member-interval" type="number" min="1" max="120" value="${Number(m.intervalMinutes) || 8}" ${m.deleted ? "disabled" : ""} />
+        <div class="row" style="margin-top:12px">
+          ${admin ? "" : m.deleted
+            ? `<button type="button" class="ghost" data-restore>取消刪除</button>`
+            : `<button type="button" class="primary" data-save>儲存會員設定</button>`}
+        </div>
+        ${admin || m.deleted ? "" : `<div class="danger-zone" style="margin-top:16px"><h3>危險操作</h3><p class="hint">刪除會保留帳號列，並寄信給會員。</p><button type="button" class="ghost" data-delete>刪除會員</button></div>`}
+        <p class="msg" id="drawerMemberMsg"></p>
+      `;
+      $("memberDrawer").hidden = false;
+      $("memberDrawerBackdrop").hidden = false;
+      $("memberDrawer").dataset.id = m.id;
+      $("memberDrawer").dataset.email = m.email;
+      $("drawerPlan")?.addEventListener("change", () => {
+        if ($("drawerInterval") && m.role !== "admin") $("drawerInterval").value = $("drawerPlan").value === "sponsor" ? 5 : 8;
+      });
+    }
+    $("memberDrawerClose")?.addEventListener("click", closeMemberDrawer);
+    $("memberDrawerBackdrop")?.addEventListener("click", closeMemberDrawer);
 
     $("memberSearch").onclick = () => loadMembers().catch((error) => setMsg("memberMsg", error.message));
     $("memberSort").onchange = () => loadMembers().catch((error) => setMsg("memberMsg", error.message));
@@ -1794,6 +2368,7 @@
         pendingDeleteId = "";
         $("deleteMemberBox").hidden = true;
         await loadMembers();
+        closeMemberDrawer();
         setMsg("memberMsg", "已刪除並寄信", true);
       } catch (error) {
         setMsg("memberMsg", error.message);
@@ -1802,30 +2377,34 @@
       }
     };
 
-    $("memberRows").addEventListener("click", async (ev) => {
+    $("memberRows").addEventListener("click", (ev) => {
       const tr = ev.target.closest("tr");
       const id = tr?.dataset.id;
+      if (!id) return;
+      openMemberDrawer(memberCache.find((row) => String(row.id) === String(id)));
+    });
+    $("memberDrawer")?.addEventListener("click", async (ev) => {
+      const id = $("memberDrawer")?.dataset.id;
       if (!id) return;
       const del = ev.target.closest("[data-delete]");
       if (del) {
         pendingDeleteId = id;
-        $("deleteMemberHint").textContent = `將刪除 ${tr.dataset.email || ""}。確認後會寄信給會員，帳號列會留下來。`;
+        $("deleteMemberHint").textContent = `將刪除 ${$("memberDrawer").dataset.email || ""}。確認後會寄信給會員，帳號列會留下來。`;
         $("deleteMemberBox").hidden = false;
         const first = deleteReasons[0];
         $("deleteReasonCode").value = first?.id || "multi_ip";
         $("deleteReasonText").value = first?.text || "";
-        $("deleteMemberBox").scrollIntoView({ behavior: "smooth", block: "nearest" });
         return;
       }
       const restore = ev.target.closest("[data-restore]");
       if (restore) {
         restore.disabled = true;
-        setMsg("memberMsg", "還原中…");
         try {
           const res = await fetch(`/api/admin/members/${id}/restore`, { method: "POST" });
           const data = await readApi(res);
           if (!res.ok) throw new Error(data.error || "還原失敗");
           await loadMembers();
+          closeMemberDrawer();
           setMsg("memberMsg", "已取消刪除", true);
         } catch (error) {
           setMsg("memberMsg", error.message);
@@ -1837,20 +2416,20 @@
       const btn = ev.target.closest("[data-save]");
       if (!btn) return;
       btn.disabled = true;
-      setMsg("memberMsg", "儲存中…");
       try {
         const res = await fetch(`/api/admin/members/${id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            plan: tr.querySelector("[data-plan]").value,
-            intervalMinutes: Number(tr.querySelector("[data-interval]").value),
+            plan: $("drawerPlan").value,
+            intervalMinutes: Number($("drawerInterval").value),
           }),
         });
         const data = await readApi(res);
         if (!res.ok) throw new Error(data.error || "儲存失敗");
         await loadMembers();
-        setMsg("memberMsg", "已儲存", true);
+        openMemberDrawer(memberCache.find((row) => String(row.id) === String(id)));
+        setMsg("memberMsg", "已儲存會員設定", true);
       } catch (error) {
         setMsg("memberMsg", error.message);
       } finally {
@@ -2509,6 +3088,155 @@
         btn.disabled = false;
       }
     });
+    $("feedbackQuick")?.addEventListener("click", (ev) => {
+      const btn = ev.target.closest("[data-fb-quick]");
+      if (!btn) return;
+      if ($("feedbackFilterStatus")) $("feedbackFilterStatus").value = btn.dataset.fbQuick || "";
+      loadFeedback();
+    });
+    $("importAdminQuery")?.addEventListener("input", () => loadListingImports().catch(() => {}));
+    $("importAdminStatus")?.addEventListener("change", () => loadListingImports().catch(() => {}));
+
+    function metric(label, value) {
+      return `<div class="admin-metric"><span>${escapeHtml(label)}</span><b>${value}</b></div>`;
+    }
+    async function loadOverview() {
+      const res = await fetch("/api/admin/overview", { cache: "no-store" });
+      const data = await readApi(res);
+      if (!res.ok) return;
+      const L = data.listings || {};
+      if ($("overviewListings")) {
+        $("overviewListings").innerHTML = [
+          metric("全站房源總數", L.total || 0),
+          metric("今日新增", L.todayNew || 0),
+          metric("已確認下架", L.offlineConfirmed || 0),
+          metric("疑似同房源", L.suspectedSameHouse || 0),
+          metric("已建立同房源群組", L.sameHouseGroups || 0),
+          metric("reconciliation 待處理", L.pendingReconcile || 0),
+        ].join("");
+      }
+      if ($("overviewSources")) {
+        $("overviewSources").innerHTML = (data.sources || []).map((row) => `
+          <div class="row" style="justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line)">
+            <span>${escapeHtml(row.label)}</span>
+            <span><span class="dot ${sourceDot(row.status)}"></span> ${escapeHtml(row.statusLabel)}${row.reason ? ` · ${escapeHtml(row.reason)}` : ""}</span>
+          </div>`).join("");
+      }
+      const svc = data.services || {};
+      const oauth = svc.oauth || {};
+      const svcHtml = `
+        <div class="row" style="justify-content:space-between;padding:6px 0"><span>Google Directions</span><span><span class="dot ${sourceDot(svc.googleDirections?.status)}"></span> ${escapeHtml(svc.googleDirections?.statusLabel || "")}</span></div>
+        <div class="row" style="justify-content:space-between;padding:6px 0"><span>OSRM</span><span><span class="dot ${sourceDot(svc.osrm?.status)}"></span> ${escapeHtml(svc.osrm?.statusLabel || "")}</span></div>
+        <div class="row" style="justify-content:space-between;padding:6px 0"><span>SMTP</span><span><span class="dot ${sourceDot(svc.smtp?.status)}"></span> ${escapeHtml(svc.smtp?.statusLabel || "")}${svc.smtp?.lastTestAt ? ` · 最近測試 ${formatTime(svc.smtp.lastTestAt)}` : ""}</span></div>
+        <div class="row" style="justify-content:space-between;padding:6px 0"><span>Google OAuth</span><span><span class="dot ${sourceDot(oauth.google?.status)}"></span> ${escapeHtml(oauth.google?.statusLabel || "")}</span></div>
+        <div class="row" style="justify-content:space-between;padding:6px 0"><span>Facebook OAuth</span><span><span class="dot ${sourceDot(oauth.facebook?.status)}"></span> ${escapeHtml(oauth.facebook?.statusLabel || "")}</span></div>
+      `;
+      if ($("overviewServices")) $("overviewServices").innerHTML = svcHtml;
+      if ($("servicesGrid")) $("servicesGrid").innerHTML = svcHtml;
+      if ($("systemStatusBox")) {
+        $("systemStatusBox").innerHTML = `<p>版本 ${escapeHtml(document.querySelector(".site-ver")?.textContent || "")}</p>` + svcHtml;
+      }
+      const inbox = data.inbox || {};
+      if ($("overviewInbox")) {
+        $("overviewInbox").innerHTML = [
+          metric("使用者回饋", inbox.feedbackNew || 0),
+          metric("外部房源匯入", inbox.importPending || 0),
+          metric("疑似同房源", inbox.suspectedSameHouse || 0),
+          metric("未處理公告草稿", inbox.announcementDrafts || 0),
+        ].join("");
+      }
+      const fbBtn = document.querySelector('[data-admin-nav="feedback/inbox"]');
+      if (fbBtn && inbox.feedbackNew) fbBtn.textContent = `使用者回饋（${inbox.feedbackNew}）`;
+    }
+    async function loadSameHouse() {
+      const [st, ov] = await Promise.all([
+        fetch("/api/admin/same-house/reconcile", { cache: "no-store" }).then((r) => r.json()),
+        fetch("/api/admin/overview", { cache: "no-store" }).then((r) => r.json()),
+      ]);
+      const sh = ov.sameHouse || {};
+      if ($("sameHouseStats")) {
+        $("sameHouseStats").innerHTML = [
+          metric("未分組房源", sh.ungrouped || 0),
+          metric("疑似同房源", sh.suspected || 0),
+          metric("自動確認", sh.autoConfirmed || 0),
+          metric("管理員確認", sh.adminConfirmed || 0),
+          metric("待 reconciliation", sh.pendingReconcile || 0),
+        ].join("");
+      }
+      const last = st.last || sh.backfill?.last || {};
+      if ($("sameHouseHistory")) {
+        $("sameHouseHistory").innerHTML = last.scanned != null
+          ? `掃描 ${last.scanned || last.processed || 0}　候選 ${last.candidate_pairs || last.candidates || 0}　自動合併 ${last.auto_confirmed || 0}　疑似 ${last.suspected || 0}　未配對 ${last.no_match || 0}`
+          : "尚無批次紀錄。";
+      }
+    }
+    async function loadDataHealth() {
+      const res = await fetch("/api/admin/data-health", { cache: "no-store" });
+      const data = await readApi(res);
+      if (!res.ok || !$("dataHealthGrid")) return;
+      $("dataHealthGrid").innerHTML = [
+        metric("缺完整地址", data.missingAddress || 0),
+        metric("缺座標", data.missingCoords || 0),
+        metric("缺樓層", data.missingFloor || 0),
+        metric("缺坪數", data.missingArea || 0),
+        metric("缺格局", data.missingLayout || 0),
+        metric("缺費用資料", data.missingFees || 0),
+        metric("缺設備資料", data.missingFurnish || 0),
+        metric("疑似重複", data.suspectedDuplicate || 0),
+      ].join("");
+    }
+    async function loadAudit() {
+      const res = await fetch("/api/admin/audit", { cache: "no-store" });
+      const data = await readApi(res);
+      if (!res.ok || !$("auditList")) return;
+      const items = data.items || [];
+      $("auditList").innerHTML = items.length ? items.map((row) => `
+        <div style="padding:8px 0;border-bottom:1px solid var(--line)">
+          <strong>${formatTime(row.at)}</strong> ${escapeHtml(row.actorEmail || ("#" + row.actorId))}<br />
+          ${escapeHtml(row.action)} ${escapeHtml(row.target || "")}
+        </div>`).join("") : "尚無管理操作紀錄。";
+    }
+    $("sameHouseRun")?.addEventListener("click", async () => {
+      $("sameHouseRun").disabled = true;
+      setMsg("sameHouseMsg", "執行中…");
+      try {
+        const res = await fetch("/api/admin/same-house/reconcile", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ limit: Number($("sameHouseLimit").value) || 50 }),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "執行失敗");
+        setMsg("sameHouseMsg", `本批掃描 ${data.scanned || data.processed || 0} 筆`, true);
+        await loadSameHouse();
+      } catch (error) {
+        setMsg("sameHouseMsg", error.message);
+      } finally {
+        $("sameHouseRun").disabled = false;
+      }
+    });
+    $("sameHouseSearch")?.addEventListener("click", async () => {
+      const res = await fetch(`/api/admin/listings/search?q=${encodeURIComponent($("sameHouseQuery").value || "")}`);
+      const data = await readApi(res);
+      if (!res.ok) return setMsg("sameHouseConfirmMsg", data.error || "搜尋失敗");
+      $("sameHouseResults").innerHTML = (data.items || []).map((row) => `
+        <label class="checks"><input type="checkbox" data-house-id="${row.post_id}" /> #${row.post_id} ${escapeHtml(row.title)} · ${escapeHtml(row.address || "")}</label>
+      `).join("") || "<p class='hint'>沒有符合的房源。</p>";
+    });
+    $("sameHouseConfirm")?.addEventListener("click", async () => {
+      const ids = [...document.querySelectorAll("[data-house-id]:checked")].map((el) => Number(el.dataset.houseId));
+      if (ids.length < 2) return setMsg("sameHouseConfirmMsg", "請選兩筆以上");
+      if (!confirm("此操作會影響全站所有使用者。確定這幾筆是同一房源？")) return;
+      const res = await fetch("/api/admin/same-house/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ postIds: ids }),
+      });
+      const data = await readApi(res);
+      if (!res.ok) return setMsg("sameHouseConfirmMsg", data.error || "確認失敗");
+      setMsg("sameHouseConfirmMsg", "已全站確認為同一房源", true);
+      await loadSameHouse();
+    });
 
     (async () => {
       const meRes = await fetch("/api/me", { cache: "no-store" });
@@ -2518,6 +3246,8 @@
       meEmail = me.email || "";
       $("who").textContent = meEmail;
       await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadAnnouncements(), loadCommsAdmin(), loadMaps(), loadHelpQa(), loadWishConditions(), loadLegalCopy(), loadContentCms(), loadListingImports(), loadSpirit(), loadHousing(), loadCrawlSources(), loadSystemCrawl(), loadBrand(), loadFeedback()]);
+      adminFormsReady = true;
+      IA.finishPageLoad(IA.currentPageId());
       $("brandForm").onsubmit = async (ev) => {
         ev.preventDefault();
         $("brandSave").disabled = true;
@@ -2921,6 +3651,16 @@
           const data = await readApi(res);
           if (!res.ok) throw new Error(data.error || "儲存失敗");
           fillMaps(data);
+          if (extra.clearKey !== true) {
+            await fetch("/api/admin/system-crawl", {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                showMrt: $("systemShowMrt") ? $("systemShowMrt").checked : true,
+                showListRefreshBar: $("systemShowListRefreshBar") ? $("systemShowListRefreshBar").checked : false,
+              }),
+            });
+          }
           const note = data.googleEnabled
             ? (data.hasKey ? "已允許 Google Directions，之後補算會計費。" : "已允許 Google Directions，但還沒有金鑰，仍走 OSRM。")
             : "已關閉 Google Directions。通勤公里數走免費 OSRM。";
@@ -2937,10 +3677,15 @@
         await saveMaps();
       };
       $("mapsClearKey").onclick = async () => {
+        if (!confirm("確定停用 Google Directions 並刪除 API Key？")) return;
         $("googleEnabled").checked = false;
         $("mapsEnabled").checked = false;
         await saveMaps({ clearKey: true });
       };
+      $("newsHopForm")?.addEventListener("submit", (ev) => {
+        ev.preventDefault();
+        $("broadcastsForm")?.dispatchEvent(new Event("submit", { cancelable: true, bubbles: true }));
+      });
       $("crawlForm").onsubmit = async (ev) => {
         ev.preventDefault();
         $("crawlSave").disabled = true;

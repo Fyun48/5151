@@ -1,74 +1,115 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import path from "node:path";
+import path from "path";
 import { fileURLToPath } from "node:url";
 
 const html = readFileSync(
   path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/admin.html"),
   "utf8",
 );
+const ia = readFileSync(
+  path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/admin-ia.js"),
+  "utf8",
+);
 
-test("admin settings are grouped into clickable categories", () => {
+test("admin settings use named IA groups instead of mixed tabs", () => {
   assert.match(html, /aria-label="後台分類"/);
-  assert.match(html, /data-admin-nav="members"/);
-  assert.match(html, /data-admin-nav="crawl"/);
-  assert.match(html, /data-admin-nav="site"/);
-  assert.match(html, /data-admin-nav="qa"/);
-  assert.match(html, /data-admin-nav="notices"/);
-  assert.match(html, /data-admin-nav="promo"/);
-  assert.match(html, /data-admin-nav="ads"/);
-  assert.match(html, /data-admin-nav="mail"/);
-  assert.match(html, /抓取底庫/);
-  assert.match(html, /畫面說明/);
-  assert.match(html, /功能說明 Q&amp;A/);
-  assert.match(html, /公告專區/);
-  assert.match(html, /贊助曝光/);
-  assert.match(html, /站內小廣告/);
-  assert.match(html, /系統信件/);
+  assert.match(html, /admin-ia\.js/);
+  assert.match(html, /搜尋後台功能/);
+  assert.match(html, /data-admin-page="overview"/);
+  assert.match(html, /data-admin-page="inventory\/sources"/);
+  assert.match(html, /data-admin-page="inventory\/same-house"/);
+  assert.match(html, /data-admin-page="members\/users"/);
+  assert.match(html, /data-admin-page="content\/legal"/);
+  assert.match(html, /data-admin-page="system\/maps"/);
+  assert.match(html, /data-admin-page="feedback\/inbox"/);
   assert.match(html, /function showAdminPanel/);
   assert.match(html, /admin-shell\.is-ready \.admin-panel \{ display: none; \}/);
+  assert.match(html, /\.admin-dirty\[hidden\]/);
+  assert.match(html, /min-width: 260px/);
+  assert.doesNotMatch(html, /flex-direction:\s*row;\s*overflow-x:\s*auto/);
+  assert.doesNotMatch(html, /畫面說明/);
+  assert.doesNotMatch(html, /系統信件/);
+  assert.match(ia, /房源與資料/);
+  assert.match(ia, /會員與權限/);
+  assert.match(ia, /站台內容/);
+  assert.match(ia, /通知與溝通/);
+  assert.match(ia, /收益與曝光/);
+  assert.match(ia, /系統與整合/);
+  assert.match(ia, /意見與治理/);
+});
 
-  const crawl = html.slice(html.indexOf('data-admin-panel="crawl"'), html.indexOf('data-admin-panel="site"'));
-  assert.match(crawl, /物件來源/);
-  assert.match(crawl, /系統抓取底庫/);
-  assert.match(crawl, /通勤路線／Google 計費/);
-  assert.ok(crawl.indexOf("物件來源") < crawl.indexOf("系統抓取底庫"));
-  assert.ok(crawl.indexOf("系統抓取底庫") < crawl.indexOf("通勤路線"));
+test("existing admin forms stay available under the new IA", () => {
+  const sources = html.slice(html.indexOf('data-admin-page="inventory/sources"'), html.indexOf('data-admin-page="inventory/crawl"'));
+  assert.match(sources, /id="crawlForm"/);
+  assert.match(sources, /儲存物件來源/);
+  assert.doesNotMatch(sources, /id="mapsForm"/);
 
-  const site = html.slice(html.indexOf('data-admin-panel="site"'), html.indexOf('data-admin-panel="qa"'));
-  assert.match(site, /吉比形象／Logo/);
-  assert.match(site, /宣告／免責／個資/);
-  assert.match(site, /id="legalCopyForm"/);
-  assert.match(site, /id="contentCms"/);
-  assert.match(site, /內容版本庫/);
-  assert.match(site, /id="cmsReaccept"/);
-  assert.doesNotMatch(site, /id="helpQaRows"/);
-  assert.doesNotMatch(site, /id="broadcastsForm"/);
+  const crawl = html.slice(html.indexOf('data-admin-page="inventory/crawl"'), html.indexOf('data-admin-page="inventory/same-house"'));
+  assert.match(crawl, /id="systemCrawlForm"/);
+  assert.match(crawl, /儲存抓取範圍/);
+  assert.doesNotMatch(crawl, /id="systemShowMrt"/);
 
-  const qa = html.slice(html.indexOf('data-admin-panel="qa"'), html.indexOf('data-admin-panel="notices"'));
-  assert.match(qa, /功能說明 Q&amp;A/);
+  const maps = html.slice(html.indexOf('data-admin-page="system/maps"'), html.indexOf('data-admin-page="content/brand"'));
+  assert.match(maps, /id="mapsForm"/);
+  assert.match(maps, /id="googleEnabled"/);
+  assert.match(maps, /id="systemShowMrt"/);
+  assert.match(maps, /危險操作/);
+  assert.match(maps, /停用並刪除 API Key/);
+
+  const brand = html.slice(html.indexOf('data-admin-page="content/brand"'), html.indexOf('data-admin-page="content/legal"'));
+  assert.match(brand, /id="brandForm"/);
+  assert.doesNotMatch(brand, /id="listingImports"/);
+
+  const legal = html.slice(html.indexOf('data-admin-page="content/legal"'), html.indexOf('data-admin-page="content/cms"'));
+  assert.match(legal, /id="legalCopyForm"/);
+
+  const cms = html.slice(html.indexOf('data-admin-page="content/cms"'), html.indexOf('data-admin-page="inventory/imports"'));
+  assert.match(cms, /id="contentCms"/);
+  assert.match(cms, /id="cmsReaccept"/);
+
+  const imports = html.slice(html.indexOf('data-admin-page="inventory/imports"'), html.indexOf('data-admin-page="content/spirit"'));
+  assert.match(imports, /id="listingImports"/);
+
+  const qa = html.slice(html.indexOf('data-admin-page="content/qa"'), html.indexOf('data-admin-page="comms/notices"'));
   assert.match(qa, /id="helpQaRows"/);
-  assert.doesNotMatch(qa, /吉比形象／Logo/);
 
-  const notices = html.slice(html.indexOf('data-admin-panel="notices"'), html.indexOf('data-admin-panel="promo"'));
-  assert.match(notices, /公告／最新消息／贊助提醒/);
-  assert.match(notices, /id="broadcastsForm"/);
-  assert.doesNotMatch(notices, /吉比形象／Logo/);
+  const smtp = html.slice(html.indexOf('data-admin-page="comms/smtp"'), html.indexOf('data-admin-page="system/oauth"'));
+  assert.match(smtp, /id="smtpForm"/);
+  assert.doesNotMatch(smtp, /id="oauthForm"/);
 
-  const promo = html.slice(html.indexOf('data-admin-panel="promo"'), html.indexOf('data-admin-panel="ads"'));
-  assert.match(promo, /贊助連結/);
-  assert.doesNotMatch(promo, /id="adsForm"/);
+  const oauth = html.slice(html.indexOf('data-admin-page="system/oauth"'), html.indexOf('data-admin-page="comms/templates"'));
+  assert.match(oauth, /id="oauthForm"/);
 
-  const ads = html.slice(html.indexOf('data-admin-panel="ads"'), html.indexOf('data-admin-panel="mail"'));
-  assert.match(ads, /站內小廣告/);
+  const templates = html.slice(html.indexOf('data-admin-page="comms/templates"'), html.indexOf('data-admin-page="feedback/inbox"'));
+  assert.match(templates, /verifiedWelcomeSubject/);
+
+  const ads = html.slice(html.indexOf('data-admin-page="revenue/ads"'), html.indexOf('data-admin-page="revenue/campaigns"'));
   assert.match(ads, /id="adsForm"/);
-  assert.doesNotMatch(ads, /id="sponsorForm"/);
+  assert.match(ads, /已停用／相容功能/);
+});
 
-  const mail = html.slice(html.indexOf('data-admin-panel="mail"'));
-  assert.match(mail, /寄信 SMTP/);
-  assert.match(mail, /社群登入/);
-  assert.match(mail, /id="oauthForm"/);
-  assert.match(mail, /verifiedWelcomeSubject/);
-  assert.match(mail, /信件內容/);
+test("same-house admin UI and command search exist", () => {
+  assert.match(html, /確認為同一房源/);
+  assert.match(html, /此操作會影響全站所有使用者/);
+  assert.match(html, /\/api\/admin\/same-house\/reconcile/);
+  assert.match(html, /\/api\/admin\/same-house\/confirm/);
+  assert.match(html, /\/api\/admin\/overview/);
+  assert.match(ia, /樂屋/);
+  assert.match(ia, /inventory\/same-house/);
+  assert.match(ia, /members: "members\/users"/);
+});
+
+test("dirty navigation uses owner page and mapped save handlers", () => {
+  assert.match(html, /IA\.decideNavigation/);
+  assert.match(html, /fromHash:\s*true/);
+  assert.match(html, /IA\.runStickySave/);
+  assert.match(html, /IA\.noteControlChange/);
+  assert.match(html, /IA\.finishPageLoad/);
+  assert.match(html, /data-admin-transient/);
+  assert.doesNotMatch(html, /addEventListener\("input", \(\) => IA\.setDirty\(true\)\)/);
+  assert.match(ia, /decideNavigation/);
+  assert.match(ia, /SAVE_PAGES/);
+  assert.match(ia, /memberQuery: true/);
 });

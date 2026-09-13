@@ -244,6 +244,8 @@ import {
   withBudget,
 } from "./crawlWatchdog.js";
 import { APP_NAME, APP_VERSION } from "./brand.js";
+import { appendAdminAudit, listAdminAudit } from "./adminAudit.js";
+import { crawlSourceHealth, getAdminDataHealth, getAdminOverview, searchAdminListings } from "./adminOverview.js";
 import { commuteSettingsFingerprint, finishBackfillRequest, rememberBackfillRequest } from "./commuteState.js";
 import { profileNameOrDraft, resolveWorkPointForSave } from "./settingsState.js";
 import {
@@ -1043,6 +1045,22 @@ function requireAdminApi(req, res, next) {
   res.status(403).json({ error: "只有管理員可以做這個" });
 }
 
+function auditReq(req, action, target, before, after) {
+  try {
+    const session = readSession(req);
+    appendAdminAudit({
+      actorId: session?.userId,
+      actorEmail: session?.email,
+      action,
+      target,
+      before,
+      after,
+    });
+  } catch {
+    // 稽核失敗不得擋住管理操作
+  }
+}
+
 app.get("/admin.html", (req, res, next) => {
   if (!actorIsAdmin(req)) {
     res.redirect("/");
@@ -1073,6 +1091,7 @@ app.post("/api/admin/members/:id/delete", requireAdminApi, (req, res) => {
     });
     schedule();
     queueSystemMail("account_deleted", result.member.email, { reason: result.reason.text || result.reason.label });
+    auditReq(req, "member_delete", result.member.email, { id: result.member.id }, { deleted: true });
     res.json({ member: result.member, reason: result.reason });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
@@ -1255,7 +1274,9 @@ app.patch("/api/admin/announcements/:id", requireAdminApi, (req, res) => {
 
 app.post("/api/admin/announcements/:id/publish", requireAdminApi, (req, res) => {
   try {
-    res.json(publishAnnouncement(db, commsActor(req), Number(req.params.id)));
+    const published = publishAnnouncement(db, commsActor(req), Number(req.params.id));
+    auditReq(req, "announcement_publish", published?.title || req.params.id, { status: "draft" }, { status: "published" });
+    res.json(published);
   } catch (error) {
     sendCommsError(res, error);
   }
@@ -1497,8 +1518,16 @@ app.get("/api/admin/maps", requireAdminApi, (_req, res) => {
 app.put("/api/admin/maps", requireAdminApi, (req, res) => {
   try {
     const body = req.body || {};
+    const before = getAdminMapsSettings();
     const settings = saveAdminMapsSettings(body);
     if (settings.enabled && body.clearKey !== true) queueGeoBackfill();
+    auditReq(req, body.clearKey === true ? "maps_clear_key" : "maps_save", "maps", {
+      googleEnabled: before.googleEnabled,
+      hasKey: before.hasKey,
+    }, {
+      googleEnabled: settings.googleEnabled,
+      hasKey: settings.hasKey,
+    });
     res.json(settings);
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
@@ -1506,12 +1535,19 @@ app.put("/api/admin/maps", requireAdminApi, (req, res) => {
 });
 
 app.get("/api/admin/crawl-sources", requireAdminApi, (_req, res) => {
-  res.json(getCrawlSources());
+  const base = getCrawlSources();
+  const health = Object.fromEntries(crawlSourceHealth().map((row) => [row.id, row]));
+  res.json({
+    items: (base.items || []).map((row) => ({ ...health[row.id], ...row, label: row.label })),
+  });
 });
 
 app.put("/api/admin/crawl-sources", requireAdminApi, (req, res) => {
   try {
-    res.json(saveCrawlSources(req.body || {}));
+    const before = getCrawlSources();
+    const saved = saveCrawlSources(req.body || {});
+    auditReq(req, "crawl_sources_save", "crawl-sources", before.items, saved.items);
+    res.json(saved);
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -1538,10 +1574,48 @@ app.get("/api/admin/same-house/reconcile", requireAdminApi, (_req, res) => {
 
 app.post("/api/admin/same-house/reconcile", requireAdminApi, (req, res) => {
   try {
-    res.json(runSameHouseBackfill({
+    const result = runSameHouseBackfill({
       limit: Number(req.body?.limit) || 50,
       cursor: req.body?.cursor,
-    }));
+    });
+    auditReq(req, "same_house_reconcile", `limit=${Number(req.body?.limit) || 50}`, null, {
+      scanned: result.scanned,
+      auto_confirmed: result.auto_confirmed,
+      suspected: result.suspected,
+    });
+    res.json(result);
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/admin/overview", requireAdminApi, (_req, res) => {
+  res.json(getAdminOverview());
+});
+
+app.get("/api/admin/data-health", requireAdminApi, (_req, res) => {
+  res.json(getAdminDataHealth());
+});
+
+app.get("/api/admin/audit", requireAdminApi, (req, res) => {
+  res.json({ items: listAdminAudit({ limit: Number(req.query?.limit) || 80 }) });
+});
+
+app.get("/api/admin/listings/search", requireAdminApi, (req, res) => {
+  res.json({ items: searchAdminListings(req.query?.q, Number(req.query?.limit) || 20) });
+});
+
+app.post("/api/admin/same-house/confirm", requireAdminApi, (req, res) => {
+  try {
+    const session = readSession(req);
+    const ids = req.body?.postIds || req.body?.ids || [];
+    const result = mergeSameHouseForUser(session.userId, ids, { admin: true });
+    auditReq(req, "same_house_confirm", (Array.isArray(ids) ? ids : []).join(","), null, {
+      group_id: result?.group_id,
+      shared: result?.shared,
+      admin_confirmed: result?.admin_confirmed,
+    });
+    res.json(result);
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -2070,6 +2144,7 @@ app.post("/api/admin/mail/test", requireAdminApi, async (req, res) => {
       subject: `${APP_NAME}：測試信`,
       text: `這是後台管理寄出的測試信。若你看得到這封，SMTP 已可用。\n\n——${APP_NAME}\n`,
     });
+    auditReq(req, "smtp_test", to, null, { ok: true });
     res.json({ ok: true, to });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
