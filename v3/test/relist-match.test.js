@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { bestMatch, listingTotalCost, preferPrimaryListing, scoreMatch } from "../src/match.js";
+import { bestMatch, listingTotalCost, matchVeto, preferPrimaryListing, scoreMatch } from "../src/match.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -105,6 +105,27 @@ test("same rent and refresh uses deterministic tie-break", () => {
   const b = { post_id: 20, source: "591", source_id: "a", price_num: 20000, refresh_time: "剛剛" };
   assert.equal(preferPrimaryListing(a, b, now).post_id, preferPrimaryListing(b, a, now).post_id);
   assert.equal(preferPrimaryListing(a, b, now).post_id, 20);
+});
+
+test("cross-source community_id numbers do not veto", () => {
+  const incoming = {
+    ...base,
+    post_id: 91001,
+    source: "sinyi",
+    community_id: 555,
+    source_key: "3|50|c555|新北市淡水區淡金路二段173號|11F|15.5|2房1廳",
+  };
+  const previous = { ...base, source: "591", community_id: 101675 };
+  assert.equal(matchVeto(incoming, previous).includes("community_id_mismatch"), false);
+  const hit = scoreMatch(incoming, previous);
+  assert.ok(hit);
+});
+
+test("same-source different community_id still vetoes", () => {
+  const incoming = { ...base, post_id: 91002, source: "591", community_id: 222, source_key: "x" };
+  const previous = { ...base, source: "591", community_id: 101675 };
+  assert.ok(matchVeto(incoming, previous).includes("community_id_mismatch"));
+  assert.equal(scoreMatch(incoming, previous), null);
 });
 
 test("cross-source listings can still be suspected same house", () => {
@@ -211,7 +232,7 @@ test("suspected peer payload includes source and confirm keeps cheaper listing",
   assert.match(matchFns, /overlayPersonal/);
   assert.doesNotMatch(matchFns, /decorateListing\(/);
   assert.match(dbSrc, /source_label: selfSourceLabel\(source\)/);
-  assert.match(dbSrc, /const primary = preferPrimaryListing\(listing, peer\)/);
+  assert.match(dbSrc, /const primary = preferPrimaryListing\(row, peer\)/);
   // 同源成對關係：兩側都指派角色，避免疑似同源同一對在主列表出現兩次
   assert.match(dbSrc, /assignRole\(row\)/);
   assert.match(dbSrc, /assignRole\(byId\.get\(mid\)\)/);

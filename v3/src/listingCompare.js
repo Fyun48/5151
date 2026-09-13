@@ -97,11 +97,69 @@ export function feeChangeDetail(existing, incoming) {
   return bits.join("；") || "服務費或其它費用有改";
 }
 
+function namedFee(listing, needles) {
+  const rows = parseJsonFees(listing?.extra_fees);
+  for (const row of rows) {
+    const name = normFeeText(row.name);
+    if (needles.some((needle) => name.includes(needle))) {
+      return String(row.value || formatTwMoney(row.amount) || "").trim();
+    }
+  }
+  const blob = `${listing?.extra_fee_text || ""} ${listing?.price_contain_text || ""}`;
+  const blobNeedles = needles.filter((needle) => needle.length >= 2 && !["水", "電"].includes(needle));
+  if (blobNeedles.some((needle) => normFeeText(blob).includes(needle))) {
+    return String(blob).trim();
+  }
+  return "";
+}
+
+function hay(listing) {
+  return `${listing?.title || ""} ${listing?.kind_name || ""} ${listing?.tags || ""} ${listing?.self_body || ""}`;
+}
+
+function yesNoFromHay(listing, yesRe, noRe) {
+  const text = hay(listing);
+  if (noRe.test(text)) return "否";
+  if (yesRe.test(text)) return "是";
+  return "";
+}
+
+function furnishText(listing) {
+  const items = Array.isArray(listing?.furnish_items)
+    ? listing.furnish_items
+    : (() => {
+      try { return JSON.parse(listing?.furnish_items || "[]"); } catch { return []; }
+    })();
+  return (items || []).filter(Boolean).join("、");
+}
+
 const COMPARE_FIELDS = [
   ["price", "租金", (row) => String(row.price || formatTwMoney(rentAmount(row)) || "").trim()],
   ["extra", "額外月費", (row) => formatTwMoney(extraMonthlyAmount(row)) || "0"],
   ["total", "總月費", (row) => formatTwMoney(listingCompareCost(row, { includeExtras: true })) || "0"],
   ["fees", "費用說明", feeRowsText],
+  ["deposit", "押金", (row) => namedFee(row, ["押金"])],
+  ["agency", "仲介／服務費", (row) => namedFee(row, ["仲介", "服務費", "服務費"])],
+  ["mgmt", "管理費", (row) => namedFee(row, ["管理費"])],
+  ["water", "水費", (row) => namedFee(row, ["水費", "水"])],
+  ["electric", "電費", (row) => namedFee(row, ["電費", "電"])],
+  ["internet", "網路費", (row) => namedFee(row, ["網路", "寬頻"])],
+  ["parking_fee", "車位費", (row) => namedFee(row, ["車位費", "停車費"])],
+  ["pet", "可否寵物", (row) => yesNoFromHay(row, /可寵物|寵物友善/, /不可寵物|禁寵|不准寵物/)],
+  ["cook", "可否開伙", (row) => yesNoFromHay(row, /可開伙|開伙/, /不可開伙|禁開伙|不准開伙/)],
+  ["elevator", "電梯", (row) => yesNoFromHay(row, /有電梯|電梯大樓|電梯公寓/, /無電梯|沒有電梯/)],
+  ["gas", "天然瓦斯", (row) => (
+    Number(row.has_natural_gas) === 1 ? "有" : yesNoFromHay(row, /天然瓦斯/, /無瓦斯|沒有瓦斯/)
+  )],
+  ["balcony", "陽台", (row) => (
+    Number(row.has_balcony) === 1 ? "有" : yesNoFromHay(row, /有陽台/, /無陽台|沒有陽台/)
+  )],
+  ["furnish", "家具設備", furnishText],
+  ["restriction", "入住限制", (row) => String(row.move_in_limit || row.restriction || "").trim()],
+  ["subsidy", "租補", (row) => yesNoFromHay(row, /可租補|符合租補/, /不適用租補/)],
+  ["available", "可入住日", (row) => String(row.available_date || row.move_in_date || "").trim()],
+  ["role", "房東／仲介角色", (row) => String(row.role_name || row.contact_role || "").trim()],
+  ["source_note", "來源特殊備註", (row) => String(row.source_note || "").trim()],
   ["area", "坪數", (row) => String(row.area_name || "").trim()],
   ["floor", "樓層", (row) => formatFloorDisplay(row.floor_name)],
   ["layout", "格局", (row) => String(row.layout || "").trim()],
@@ -115,6 +173,8 @@ const COMPARE_FIELDS = [
         : "刊登中"
   )],
 ];
+
+export const SOURCE_CONFLICT_NOTE = "不同來源資訊不一致";
 
 export function compareListingDiffs(mine, other) {
   const diffs = [];
@@ -190,7 +250,13 @@ export function compareHouseGroup(listings = []) {
     const values = group.map((row) => String(pick(row) || "").trim());
     const norms = values.map((value) => normFeeText(value) || "—");
     if (new Set(norms).size <= 1) continue;
-    rows.push({ field, label, values: values.map((value) => value || "—") });
+    rows.push({
+      field,
+      label,
+      values: values.map((value) => value || "—"),
+      conflict: true,
+      note: SOURCE_CONFLICT_NOTE,
+    });
   }
   return {
     headline: compareHouseHeadline(group),
@@ -226,6 +292,10 @@ export function compareListingNotes(mine, other) {
   const srcB = String(other.source || "");
   if (srcA && srcB && srcA !== srcB) {
     notes.push(`來源不同：這則在${mine.source_label || srcA}，另一則在${other.source_label || srcB}`);
+  }
+  const extraDiffs = compareListingDiffs(mine, other).filter((row) => !["price", "extra", "total", "title", "source", "offline"].includes(row.field));
+  if (extraDiffs.length) {
+    notes.push(SOURCE_CONFLICT_NOTE);
   }
   return notes;
 }

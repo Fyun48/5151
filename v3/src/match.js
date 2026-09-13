@@ -3,6 +3,11 @@ import { extraMonthlyAmount, listingCompareCost, rentAmount } from "./listingCos
 export const MATCH_GEO_MAX_METERS = 120;
 export const MATCH_AREA_TIGHT = 0.5;
 export const MATCH_AREA_CLOSE = 1;
+export const MATCHER_VERSION = "same-house-v2";
+
+export function listingSourceName(listing) {
+  return String(listing?.source || "591") || "591";
+}
 
 export function streetKey(address) {
   const text = String(address || "")
@@ -55,11 +60,15 @@ export function layoutRooms(layout) {
 }
 
 export function communityId(listing) {
+  const source = listingSourceName(listing);
   if (listing.community_id && Number(listing.community_id) !== 0) {
-    return `c${listing.community_id}`;
+    return `${source}:${Number(listing.community_id)}`;
   }
   const bit = String(listing.source_key || "").split("|")[2] || "";
-  return bit.startsWith("c") ? bit : "";
+  if (bit.startsWith("c") && /^\d+$/.test(bit.slice(1))) {
+    return `${source}:${bit.slice(1)}`;
+  }
+  return bit.startsWith("c") ? `${source}:${bit}` : "";
 }
 
 export function communityNameKey(listing) {
@@ -97,7 +106,12 @@ export function comparableRent(listing) {
 }
 
 function evidence(signals, extra = {}) {
-  return { signals, ...extra };
+  return {
+    signals,
+    matcher_version: MATCHER_VERSION,
+    evaluated_at: extra.evaluated_at || new Date().toISOString(),
+    ...extra,
+  };
 }
 
 export function matchVeto(incoming, previous) {
@@ -110,9 +124,12 @@ export function matchVeto(incoming, previous) {
   if (floorA && floorB && floorA !== floorB && /^\d+$/.test(floorA) && /^\d+$/.test(floorB)) {
     reasons.push("floor_mismatch");
   }
-  const commA = communityId(incoming);
-  const commB = communityId(previous);
-  if (commA && commB && commA !== commB) reasons.push("community_id_mismatch");
+  const sameSource = listingSourceName(incoming) === listingSourceName(previous);
+  if (sameSource) {
+    const commA = communityId(incoming);
+    const commB = communityId(previous);
+    if (commA && commB && commA !== commB) reasons.push("community_id_mismatch");
+  }
   const roomsA = layoutRooms(incoming.layout);
   const roomsB = layoutRooms(previous.layout);
   if (roomsA != null && roomsB != null && roomsA !== roomsB) reasons.push("layout_mismatch");
@@ -122,6 +139,24 @@ export function matchVeto(incoming, previous) {
   const meters = geoDistanceM(incoming, previous);
   if (meters != null && meters > MATCH_GEO_MAX_METERS) reasons.push("geo_too_far");
   return reasons;
+}
+
+export function evaluateMatch(incoming, previous, { now = new Date() } = {}) {
+  const veto_reasons = incoming && previous ? matchVeto(incoming, previous) : ["missing_listing"];
+  const hit = incoming && previous ? scoreMatch(incoming, previous) : null;
+  const evaluated_at = now instanceof Date ? now.toISOString() : String(now);
+  return {
+    incoming_post_id: Number(incoming?.post_id) || 0,
+    candidate_post_id: Number(previous?.post_id) || 0,
+    candidate_source: listingSourceName(previous),
+    confidence: hit?.confidence || 0,
+    level: hit?.level || "",
+    signals: hit?.evidence?.signals || [],
+    veto_reasons,
+    matcher_version: MATCHER_VERSION,
+    evaluated_at,
+    hit,
+  };
 }
 
 export function scoreMatch(incoming, previous) {

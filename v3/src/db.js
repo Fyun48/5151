@@ -43,10 +43,27 @@ import {
   alreadyNotifiedGroup,
   bindListingsToGroup,
   bindWatchToGroup,
+  CONFIRM_ADMIN,
+  CONFIRM_AUTO,
+  CONFIRM_SUSPECTED,
   ensureListingGroupSchema,
   groupIdForPost,
+  isAdminConfirmedGroup,
+  postConfirmationLevel,
+  unbindListingFromGroup,
   watchedInGroup,
+  writeGroupAudit,
 } from "./listingGroups.js";
+import {
+  BACKFILL_SETTING_KEY,
+  blockMatchCandidates,
+  evaluateListingReconciliation,
+  matchPatchFromEvaluation,
+  nextBackfillBatch,
+  RECONCILE_BATCH,
+  significantListingUpdate,
+  summarizeReconciliationBatch,
+} from "./sameHouseReconcile.js";
 import {
   activateSearchProfile,
   ensureSearchProfileSchema,
@@ -2477,6 +2494,12 @@ function sqlWatchedFirst() {
 export function listMatchCandidates(excludePostId, incoming = null) {
   const anyone = loadAnyoneFlagMap(db);
   const pid = Number(excludePostId) || 0;
+  if (incoming) {
+    const blocked = blockMatchCandidates(db, { ...incoming, post_id: incoming.post_id || pid });
+    if (blocked.length) {
+      return blocked.map((row) => overlayPersonal(row, anyone.get(Number(row.post_id))));
+    }
+  }
   const hints = incoming ? matchFocusHints(incoming) : { street: "", community: "", cover: "" };
   const rows = hints.street || hints.community || hints.cover
     ? db.prepare(
@@ -2506,13 +2529,18 @@ export function setListingMatch(postId, match) {
      WHERE post_id = ?`,
   ).run(match.match_post_id || null, match.match_level || null, match.match_detail || "", postId);
   if (match.match_post_id) {
-    const a = getListing(postId);
-    const b = getListing(match.match_post_id);
+    const a = db.prepare("SELECT * FROM listings WHERE post_id = ?").get(postId);
+    const b = db.prepare("SELECT * FROM listings WHERE post_id = ?").get(match.match_post_id);
     if (a && b) {
       try {
+        const level = match.confirmationLevel
+          || (match.match_level === "high" ? CONFIRM_AUTO : CONFIRM_SUSPECTED);
         bindListingsToGroup(db, [a, b], {
           evidence: match.evidence || { detail: match.match_detail || "" },
-          confidence: match.match_level === "high" ? 0.9 : 0.7,
+          confidence: match.confidence ?? (match.match_level === "high" ? 0.9 : 0.7),
+          confirmationLevel: level,
+          adminUserId: match.adminUserId || 0,
+          allowAdminMerge: match.allowAdminMerge === true,
         });
       } catch {
         // isolated tests without group tables
@@ -2520,6 +2548,23 @@ export function setListingMatch(postId, match) {
     }
   }
   return getListing(postId);
+}
+
+export function reconcileListingById(postId, { reason = "manual" } = {}) {
+  const listing = db.prepare("SELECT * FROM listings WHERE post_id = ?").get(Number(postId) || 0);
+  if (!listing) return { skipped: true, reason: "missing" };
+  const result = evaluateListingReconciliation(db, listing);
+  result.trigger = reason;
+  if (result.skipped || !result.best?.hit) return result;
+  const patch = matchPatchFromEvaluation(result.best);
+  if (patch?.match_post_id) {
+    setListingMatch(listing.post_id, {
+      ...patch,
+      confirmationLevel: result.confirmation_level,
+    });
+    result.applied = true;
+  }
+  return result;
 }
 
 function countPairVotes(lo, hi) {
@@ -2543,7 +2588,7 @@ function dayStartIso(now = new Date()) {
   return start.toISOString();
 }
 
-export function rejectSuspectedMatch(postId, userId, { peerId } = {}) {
+export function rejectSuspectedMatch(postId, userId, { peerId, admin = false } = {}) {
   const uid = Number(userId) || 0;
   if (!uid) {
     return { ok: false, code: "guest", error: "請先登入才能拆開同屋源" };
@@ -2562,6 +2607,9 @@ export function rejectSuspectedMatch(postId, userId, { peerId } = {}) {
   }
   if (!otherId || otherId === Number(postId)) {
     return { ok: false, code: "no_peer", error: "找不到要拆開的同屋源" };
+  }
+  if (admin && isAdminConfirmedGroup(db, groupIdForPost(db, postId))) {
+    return adminSplitSameHouse(uid, postId, otherId);
   }
 
   const [lo, hi] = votePair(postId, otherId);
@@ -2632,8 +2680,93 @@ export function rejectSuspectedMatch(postId, userId, { peerId } = {}) {
   };
 }
 
-export function mergeSameHouseForUser(userId, postIds) {
+export function confirmSameHouseAsAdmin(adminUserId, postIds, { now = new Date() } = {}) {
   const ids = normalizeMergeIds(postIds);
+  const listings = ids
+    .map((id) => db.prepare("SELECT * FROM listings WHERE post_id = ?").get(id))
+    .filter(Boolean);
+  if (listings.length < 2) {
+    return { ok: false, code: "need_two", error: "請至少選 2 筆才能確認同房源" };
+  }
+  const previous = [...new Set(listings.map((row) => groupIdForPost(db, row.post_id)).filter(Boolean))];
+  const stamp = now instanceof Date ? now.toISOString() : String(now);
+  const groupId = bindListingsToGroup(db, listings, {
+    evidence: {
+      signals: ["admin_confirm"],
+      matcher_version: "admin",
+      evaluated_at: stamp,
+      admin_user_id: Number(adminUserId) || 0,
+    },
+    confidence: 1,
+    confirmationLevel: CONFIRM_ADMIN,
+    adminUserId,
+    allowAdminMerge: true,
+    now,
+  });
+  for (let i = 0; i < listings.length; i += 1) {
+    const peer = listings[i === 0 ? 1 : 0];
+    db.prepare(
+      `UPDATE listings
+       SET match_post_id = ?, match_level = 'high', match_detail = ?, match_rejected = 0
+       WHERE post_id = ?`,
+    ).run(peer.post_id, `管理員確認同房源 #${peer.post_id}`, listings[i].post_id);
+  }
+  writeGroupAudit(db, {
+    action: "admin_confirm_same_house",
+    adminUserId,
+    postIds: ids,
+    previousGroupIds: previous,
+    resultingGroupId: groupId,
+    now,
+  });
+  return {
+    ok: true,
+    personal: false,
+    shared: true,
+    admin_confirmed: true,
+    group_id: groupId,
+    post_ids: ids,
+    previous_group_ids: previous,
+    message: `已確認 ${ids.length} 筆為同一房源，全站共用`,
+    listing: getListing(ids[0], adminUserId),
+  };
+}
+
+export function adminSplitSameHouse(adminUserId, postId, peerId, { now = new Date() } = {}) {
+  const a = Number(postId) || 0;
+  const b = Number(peerId) || 0;
+  if (!a || !b) return { ok: false, code: "need_two", error: "缺少要比對的物件" };
+  const gid = groupIdForPost(db, a);
+  if (!gid || !isAdminConfirmedGroup(db, gid)) {
+    return { ok: false, code: "not_admin_group", error: "這組不是管理員確認的同房源" };
+  }
+  const previous = [gid];
+  unbindListingFromGroup(db, a, { now });
+  unbindListingFromGroup(db, b, { now });
+  db.prepare(
+    `UPDATE listings
+     SET match_verdict = 'no', match_rejected = 1
+     WHERE post_id IN (?, ?)`,
+  ).run(a, b);
+  writeGroupAudit(db, {
+    action: "admin_split_same_house",
+    adminUserId,
+    postIds: [a, b],
+    previousGroupIds: previous,
+    resultingGroupId: "",
+    now,
+  });
+  return {
+    ok: true,
+    personal: false,
+    shared: true,
+    listing: getListing(a, adminUserId),
+  };
+}
+
+export function mergeSameHouseForUser(userId, postIds, { admin = false } = {}) {
+  const ids = normalizeMergeIds(postIds);
+  if (admin) return confirmSameHouseAsAdmin(userId, ids);
   const listings = ids
     .map((id) => db.prepare("SELECT * FROM listings WHERE post_id = ?").get(id))
     .filter(Boolean);
@@ -2645,14 +2778,14 @@ export function mergeSameHouseForUser(userId, postIds) {
   };
 }
 
-/** 舊 API 改走個人併入，不再寫全站 match_verdict，避免把使用者判斷分享出去。 */
-export function confirmSuspectedMatch(postId, userId) {
+/** 會員確認仍走個人併入；管理員確認寫全站 listing_group。 */
+export function confirmSuspectedMatch(postId, userId, { admin = false } = {}) {
   const listing = db.prepare("SELECT * FROM listings WHERE post_id = ?").get(postId);
   if (!listing) return null;
   const peerId = Number(listing.match_post_id) || 0;
   if (!peerId) return null;
-  const result = mergeSameHouseForUser(userId, [postId, peerId]);
-  return result?.ok ? result.listing : null;
+  const result = mergeSameHouseForUser(userId, [postId, peerId], { admin });
+  return result?.ok ? result : null;
 }
 
 export function coveringJobsFromAllUsers(opts = {}) {
@@ -3133,7 +3266,16 @@ export function setListingDetail(postId, { extraFees, contact, fetched = 1, lat,
       geo_job_state: "done",
     });
   }
-  return getListing(postId);
+  const saved = getListing(postId);
+  try {
+    if (significantListingUpdate(listing, saved)) {
+      reconcileListingById(postId, { reason: "detail_enrichment" });
+      return getListing(postId);
+    }
+  } catch {
+    // isolated tests without match tables
+  }
+  return saved;
 }
 
 // 聯絡資料過期重抓：591 刊登可能換仲介／換電話，但我們只抓過一次就快取。
@@ -4528,6 +4670,187 @@ export function listListings({
     queryVersion: 2,
     queryDetails,
   };
+}
+
+export function publicSearchSettings(query = {}) {
+  const flag = (value) => value === true || value === "1" || value === 1;
+  const off = (value) => value === false || value === "0" || value === 0;
+  return {
+    searchUrls: [],
+    watchDistricts: [],
+    hiddenCityIds: [],
+    priceMin: Number(query.priceMin) || 0,
+    priceMax: Number(query.priceMax) || 0,
+    priceMaxIncludesExtras: flag(query.priceMaxIncludesExtras),
+    areaMax: Number(query.areaMax) || 0,
+    excludeRooftop: !off(query.excludeRooftop),
+    excludeLowFloors: !off(query.excludeLowFloors),
+    minBuildingFloors: Number(query.minBuildingFloors) || 0,
+    wholeFloorOnly: flag(query.wholeFloorOnly),
+    hasParking: flag(query.hasParking),
+    excludeKeywords: [],
+    excludeAgents: [],
+    excludeAgentIds: [],
+    excludeBoxes: [],
+    commuteKm: 0,
+    workAddress: "",
+    workLat: null,
+    workLng: null,
+    commuteMode: "scooter",
+  };
+}
+
+let publicDecorateCount = 0;
+export function publicListingsDecorateCount() {
+  return publicDecorateCount;
+}
+export function resetPublicListingsDecorateCount() {
+  publicDecorateCount = 0;
+}
+
+/** Guest/public read of the shared listing pool. No user id, flags, events, or jobs. */
+export function listPublicListings({
+  kind = "",
+  sources = "",
+  q = "",
+  sort = "newest",
+  limit = 40,
+  offset = 0,
+  districts = [],
+  settings: settingsOverride,
+} = {}) {
+  const queryDetails = {};
+  let stageStarted = performance.now();
+  const markStage = (name) => {
+    const now = performance.now();
+    queryDetails[name] = Math.round(now - stageStarted);
+    stageStarted = now;
+  };
+  ({ kind, sources } = normalizeListQuery("all", kind, sources));
+  const settings = settingsOverride || publicSearchSettings({});
+  const requestedDistricts = (Array.isArray(districts) ? districts : String(districts || "").split(","))
+    .map((name) => String(name || "").trim()).filter(Boolean);
+  const districtSet = new Set(requestedDistricts);
+  const clauses = [];
+  const params = [];
+  searchWhere([], clauses, params);
+  listingVisibilityClauses(clauses, params);
+  appendDistrictCandidates(requestedDistricts, clauses, params, { preserveRelationsFor: 0 });
+  appendPriceCeilingCandidates(settings, clauses, params);
+  clauses.push("NOT (IFNULL(offline, 0) = 1 AND IFNULL(offline_confirmed, 0) = 1)");
+  clauses.push("(IFNULL(match_verdict, '') != 'yes')");
+  if (q) {
+    const like = `%${q}%`;
+    clauses.push("(title LIKE ? OR address LIKE ? OR CAST(post_id AS TEXT) LIKE ?)");
+    params.push(like, like, like);
+  }
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  markStage("prepare_ms");
+  const raw = db.prepare(`SELECT ${LIST_CANDIDATE_COLUMNS} FROM listings ${where}`).all(...params);
+  markStage("sql_ms");
+  queryDetails.candidates = raw.length;
+  let rows = applyListingFilter(raw, settings);
+  rows = attachSameHouseRoles(rows, 0);
+  rows = rows.filter((row) => listingMatchesListFilter(row, "all"));
+  rows = rows.filter((row) => keepSelfListingForViewer(row, 0, settings, () => true));
+  rows = rows.filter((row) => passesDisplayFilters(row, settings, { skipWholeFloor: Boolean(kind) }));
+  if (districtSet.size) {
+    rows = rows.filter((row) => districtSet.has(row.district || districtNameFromListing(row)));
+  }
+  rows = rows.filter((row) => matchesHousingKind(row, kind));
+  rows = rows.filter((row) => matchesListingSources(row, sources));
+  markStage("display_ms");
+  const needFit = sort === "fit_desc";
+  if (needFit) {
+    for (const row of rows) {
+      row.fit_score = listingFitFields(row, settings, { guest: true }).fit_score;
+    }
+  }
+  rows = sortListingsRows(rows, sort, { filter: "all", settings });
+  markStage("sort_ms");
+  const totalMatched = rows.length;
+  const pageSize = Math.max(1, Math.min(Number(limit) || 40, 50));
+  const start = Math.max(0, Number(offset) || 0);
+  const page = rows.slice(start, start + pageSize);
+  const fullRows = page.length ? db.prepare(
+    `SELECT * FROM listings WHERE post_id IN (${page.map(() => "?").join(",")})`,
+  ).all(...page.map((row) => row.post_id)) : [];
+  const fullById = new Map(fullRows.map((row) => [Number(row.post_id), row]));
+  publicDecorateCount += 1;
+  const listings = page.filter((row) => fullById.has(Number(row.post_id))).map((row) => {
+    const lite = decorateListingLite(Object.assign(fullById.get(Number(row.post_id)), row), settings, 0);
+    lite.fit_score = listingFitFields(lite, settings, { guest: true }).fit_score;
+    lite.fit_label = listingFitFields(lite, settings, { guest: true }).fit_label;
+    const needPeers = Boolean(row.match_post_id || row.same_house_role);
+    return finalizeListingDecorate(lite, settings, 0, { sameHouse: needPeers, matchVoteUserId: 0 });
+  });
+  markStage("hydrate_ms");
+  return {
+    listings,
+    totalMatched,
+    hasMore: start + pageSize < totalMatched,
+    nextOffset: start + pageSize,
+    queryVersion: 2,
+    queryDetails,
+    guest: true,
+  };
+}
+
+const BACKFILL_STATUS_KEY = "sameHouseBackfillStatus";
+
+export function runSameHouseBackfill({ limit = RECONCILE_BATCH, cursor } = {}) {
+  const startCursor = cursor == null ? Number(settingKey(BACKFILL_SETTING_KEY) || 0) : Number(cursor) || 0;
+  const batch = nextBackfillBatch(db, { cursor: startCursor, limit });
+  const results = [];
+  for (const row of batch) {
+    try {
+      results.push({ post_id: row.post_id, ...reconcileListingById(row.post_id, { reason: "backfill" }) });
+    } catch (error) {
+      results.push({ post_id: row.post_id, error: error.message });
+    }
+  }
+  const nextCursor = batch.length ? Number(batch[batch.length - 1].post_id) : startCursor;
+  writeSettingKey(BACKFILL_SETTING_KEY, String(nextCursor));
+  const summary = {
+    ...summarizeReconciliationBatch(results),
+    cursor: startCursor,
+    next_cursor: nextCursor,
+    done: batch.length < (Number(limit) || RECONCILE_BATCH),
+    results: results.map((row) => ({
+      post_id: row.post_id,
+      skipped: row.skipped || false,
+      reason: row.reason || "",
+      level: row.best?.level || "",
+      error: row.error || "",
+    })),
+  };
+  writeSettingKey(BACKFILL_STATUS_KEY, JSON.stringify({
+    cursor: summary.cursor,
+    next_cursor: summary.next_cursor,
+    done: summary.done,
+    scanned: summary.scanned,
+    candidate_pairs: summary.candidate_pairs,
+    auto_confirmed: summary.auto_confirmed,
+    suspected: summary.suspected,
+    no_match: summary.no_match,
+    skipped: summary.skipped,
+    errors: summary.errors,
+  }));
+  return summary;
+}
+
+export function sameHouseBackfillStatus() {
+  const cursor = Number(settingKey(BACKFILL_SETTING_KEY) || 0);
+  try {
+    const last = JSON.parse(settingKey(BACKFILL_STATUS_KEY) || "{}");
+    return {
+      cursor,
+      batch: RECONCILE_BATCH,
+      last: last && typeof last === "object" ? last : {},
+    };
+  } catch {
+    return { cursor, batch: RECONCILE_BATCH, last: {} };
+  }
 }
 
 export function sourceHistory(sourceKey, userId) {

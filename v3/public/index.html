@@ -453,9 +453,9 @@
     body.role-guest #sponsorBar,
     body.role-guest #ownerFab,
     body.role-guest #profileForm { display: none !important; }
-    body.role-guest .panel input,
+    body.role-guest .panel input:not(.guest-cheap),
     body.role-guest .panel textarea,
-    body.role-guest .panel select,
+    body.role-guest .panel select:not(.guest-cheap),
     body.role-guest .header-profiles input,
     body.role-guest .header-profiles select,
     body.role-guest .header-profiles button {
@@ -3100,7 +3100,7 @@
     </div>
   </div>
   <div id="guestToast" class="guest-toast" hidden role="status" aria-live="polite">
-    <p>成為會員後就能使用這項功能：改搜尋條件、儲存設定與特別關注。</p>
+    <p>登入／註冊後可使用這項功能。</p>
     <div class="row">
       <a class="primary" href="/login.html?register=1">前往註冊</a>
       <button type="button" class="ghost" id="guestToastClose">知道了</button>
@@ -3155,16 +3155,16 @@
       <div class="price-row">
         <div>
           <label>租金下限（可空白＝不限）</label>
-          <input type="number" id="priceMin" min="0" step="1" inputmode="numeric" placeholder="不限" />
+          <input type="number" id="priceMin" class="guest-cheap" min="0" step="1" inputmode="numeric" placeholder="不限" />
         </div>
         <div>
           <label>租金上限（可空白＝不限）</label>
-          <input type="number" id="priceMax" min="0" step="1" inputmode="numeric" placeholder="不限" />
+          <input type="number" id="priceMax" class="guest-cheap" min="0" step="1" inputmode="numeric" placeholder="不限" />
         </div>
       </div>
       <label class="check-inline"><input type="checkbox" id="priceMaxIncludesExtras" /> <span>租金上限是包含其它額外需繳的費用</span></label>
       <label>坪數上限（幾坪以內，可空白）</label>
-      <input type="number" id="areaMax" min="0" max="500" step="0.5" placeholder="不限，例如 30" />
+      <input type="number" id="areaMax" class="guest-cheap" min="0" max="500" step="0.5" placeholder="不限，例如 30" />
       <p class="hint">頂樓加蓋、整層住家、一樓與地下室改在物件列表上方過濾顯示，不會讓爬蟲少抓。</p>
       <textarea id="searchUrls" hidden aria-hidden="true"></textarea>
       <div class="admin-only">
@@ -3182,7 +3182,7 @@
         <input type="number" id="offlineConfirmDays" min="1" max="30" />
       </div>
       <label>建物總樓層至少（可空白＝不限）</label>
-      <input type="number" id="minBuildingFloors" min="0" max="99" step="1" inputmode="numeric" placeholder="不限" />
+      <input type="number" id="minBuildingFloors" class="guest-cheap" min="0" max="99" step="1" inputmode="numeric" placeholder="不限" />
       <label data-tour="commute">上班地址（選填）</label>
       <input type="text" id="workAddress" placeholder="例如：臺北市南港區經貿一路170號" />
       <label>通勤路徑（同時只能選一種）</label>
@@ -3267,9 +3267,9 @@
           </div>
           </div>
           <div class="chip-row view-checks" data-chip-row="display">
-            <label class="view-check"><input type="checkbox" id="excludeRooftop" checked title="含頂樓加蓋、違蓋、違建住家與標題／標籤出現加蓋者" /> 排除頂樓加蓋／違蓋</label>
-            <label class="view-check"><input type="checkbox" id="excludeLowFloors" checked /> 排除 1F 及地下室</label>
-            <label class="view-check"><input type="checkbox" id="hasParking" /> 有車位</label>
+            <label class="view-check"><input type="checkbox" id="excludeRooftop" class="guest-cheap" checked title="含頂樓加蓋、違蓋、違建住家與標題／標籤出現加蓋者" /> 排除頂樓加蓋／違蓋</label>
+            <label class="view-check"><input type="checkbox" id="excludeLowFloors" class="guest-cheap" checked /> 排除 1F 及地下室</label>
+            <label class="view-check"><input type="checkbox" id="hasParking" class="guest-cheap" /> 有車位</label>
           </div>
           <div class="chip-row" data-chip-row="sort">
           <button class="chip on" data-sort="newest">最新</button>
@@ -4183,6 +4183,7 @@
     </div>
   </div>
   <script src="/mascot.js"></script>
+  <script src="/guest-search-state.js"></script>
   <script src="/cities-embed.js"></script>
   <script>
     window.__APP_PARSED = true;
@@ -4223,6 +4224,8 @@
     let listOffset = 0;
     let listHasMore = false;
     const LIST_PAGE_SIZE = 80;
+    const GUEST_LIST_PAGE_SIZE = 40;
+    let guestFilterTimer = 0;
     let sources = [];
     let sort = "newest";
     let isGuest = true;
@@ -5667,8 +5670,92 @@
 
     function remindGuest() {
       guestLockClicks += 1;
+      const box = $("guestToast");
+      if (box) {
+        const p = box.querySelector("p");
+        if (p) p.textContent = "登入／註冊後可使用這項功能。";
+      }
       if (guestLockClicks < GUEST_LOCK_TOAST_AFTER) return;
       showGuestToast();
+    }
+
+    function collectGuestSearch() {
+      return {
+        districts: [...viewDistricts],
+        priceMin: Number($("priceMin")?.value) || 0,
+        priceMax: Number($("priceMax")?.value) || 0,
+        kinds: kinds.slice(),
+        sort,
+        filter,
+        q: ($("q")?.value || "").trim(),
+        areaMax: Number($("areaMax")?.value) || 0,
+        excludeRooftop: $("excludeRooftop") ? $("excludeRooftop").checked : true,
+        excludeLowFloors: $("excludeLowFloors") ? $("excludeLowFloors").checked : true,
+        minBuildingFloors: Number($("minBuildingFloors")?.value) || 0,
+        hasParking: $("hasParking") ? $("hasParking").checked : false,
+        moreOpen: !$("listHeadSticky")?.classList.contains("filter-compact"),
+      };
+    }
+
+    function persistGuestSearch() {
+      if (!isGuest || !window.GuestSearchState) return;
+      window.GuestSearchState.write(collectGuestSearch());
+    }
+
+    function applyGuestSearch(state) {
+      if (!state) return;
+      kinds = Array.isArray(state.kinds) && state.kinds.length ? state.kinds.slice() : kinds;
+      sort = state.sort || sort;
+      filter = state.filter || filter;
+      if ($("q") && state.q != null) $("q").value = state.q;
+      if ($("priceMin")) $("priceMin").value = state.priceMin || "";
+      if ($("priceMax")) $("priceMax").value = state.priceMax || "";
+      if ($("areaMax")) $("areaMax").value = state.areaMax || "";
+      if ($("minBuildingFloors")) $("minBuildingFloors").value = state.minBuildingFloors || "";
+      if ($("excludeRooftop")) $("excludeRooftop").checked = state.excludeRooftop !== false;
+      if ($("excludeLowFloors")) $("excludeLowFloors").checked = state.excludeLowFloors !== false;
+      if ($("hasParking")) $("hasParking").checked = state.hasParking === true;
+      if (Array.isArray(state.districts) && state.districts.length) {
+        viewDistricts = new Set(state.districts);
+      }
+      settings = {
+        ...settings,
+        priceMin: Number(state.priceMin) || 0,
+        priceMax: Number(state.priceMax) || 0,
+        areaMax: Number(state.areaMax) || 0,
+        excludeRooftop: state.excludeRooftop !== false,
+        excludeLowFloors: state.excludeLowFloors !== false,
+        minBuildingFloors: Number(state.minBuildingFloors) || 0,
+        hasParking: state.hasParking === true,
+        wholeFloorOnly: kinds.length === 1 && kinds[0] === "whole",
+        housing_kinds: kinds.slice(),
+      };
+    }
+
+    function guestListQuery() {
+      const state = window.GuestSearchState?.toQuery(collectGuestSearch()) || {};
+      const params = new URLSearchParams();
+      const districts = [...viewDistricts].join(",");
+      if (districts) params.set("districts", districts);
+      if (state.kind || kinds.length) params.set("kind", kinds.join(","));
+      params.set("sort", sort || "newest");
+      if (($("q")?.value || "").trim()) params.set("q", ($("q").value || "").trim());
+      if (state.priceMin) params.set("priceMin", String(state.priceMin));
+      if (state.priceMax) params.set("priceMax", String(state.priceMax));
+      if (state.areaMax) params.set("areaMax", String(state.areaMax));
+      params.set("excludeRooftop", state.excludeRooftop === false ? "0" : "1");
+      params.set("excludeLowFloors", state.excludeLowFloors === false ? "0" : "1");
+      if (state.minBuildingFloors) params.set("minBuildingFloors", String(state.minBuildingFloors));
+      if (state.hasParking) params.set("hasParking", "1");
+      if (state.wholeFloorOnly) params.set("wholeFloorOnly", "1");
+      params.set("limit", String(GUEST_LIST_PAGE_SIZE));
+      return params;
+    }
+
+    function scheduleGuestListReload() {
+      persistGuestSearch();
+      if (guestFilterTimer) window.clearTimeout(guestFilterTimer);
+      guestFilterTimer = window.setTimeout(() => loadList({ force: true }), 320);
     }
 
     function goRegister() {
@@ -5696,6 +5783,7 @@
         setOwnerFab([]);
         paintSponsorOffer({ show: false });
         closeHelpQaDialog();
+        document.querySelectorAll(".guest-cheap").forEach((el) => { el.disabled = false; });
       } else {
         hideGuestToast();
         guestLockClicks = 0;
@@ -5705,8 +5793,8 @@
     }
 
     const GUEST_TOUR_STEPS = [
-      { target: "[data-tour=guestWho]", title: "第 1／7 步", text: "右上角顯示你目前是訪客。這是示範列表，左側條件與公司地址目前不能改；註冊成為會員後才能換成你的設定。" },
-      { target: "[data-tour=districts]", title: "第 2／7 步", text: "行政區與租金篩選現在是展示用。註冊後才能勾選你要找的區域並儲存。" },
+      { target: "[data-tour=guestWho]", title: "第 1／7 步", text: "右上角顯示你目前是訪客。你可以先搜尋已抓進資料庫的房源；登入／註冊後才能儲存設定與特別關注。" },
+      { target: "[data-tour=districts]", title: "第 2／7 步", text: "行政區與租金可以先篩。條件只留在這次瀏覽，不會寫進會員設定。登入後仍用你自己的設定檔。" },
       { target: "[data-tour=commute]", title: "第 3／7 步", text: "公司地址、機車或汽車路徑也無法在示範模式變更。會員才能填自己的上班地址並篩通勤距離。" },
       { target: "[data-tour=mrt]", title: "第 4／7 步", text: "步行未滿 1.5 公里的最近捷運站會顯示在列表。這個開關由站方後台統一決定。" },
       { target: "[data-tour=notify]", title: "第 5／7 步", text: "系統推播與站內待看是預設通知。郵件與 Webhook 是選用，在「我的 → 通知設定」。示範模式不能改。" },
@@ -5792,6 +5880,7 @@
     function isGuestLockedTarget(el) {
       if (!el || !isGuest) return false;
       if (el.closest("#collapsePanelBtn, #expandPanelBtn, #reloadBtn, #loginBtn, #registerBtn, #helpQaBtn, #qaView, #guestToast, #guestTour, #listHeadSticky .chip, #q, [data-view-district], [data-open-hub], #notifyHubClose, [data-close-hub], [data-hub-tab]")) return false;
+      if (el.closest(".guest-cheap")) return false;
       if (el.closest("#pickCompareOverlay, #compareSelectedBtn, #selectPageBtn, #clearSelectBtn, .pick-hit, .pick")) return false;
       if (el.closest(".item-cover, h3 a, a.tel, .line-qr")) return false;
       if (el.closest("#notifyHubSave, #memberMailTest, #gmailPresetBtn")) return true;
@@ -6077,6 +6166,7 @@
             if (viewDistricts.size === names.length) viewDistricts = new Set();
           }
           sessionStorage.setItem(VIEW_KEY, JSON.stringify([...viewDistricts]));
+          persistGuestSearch();
           renderDistrictChips(settings);
           loadList();
         };
@@ -7341,9 +7431,31 @@
 
     async function loadList(options = {}) {
       if (isGuest) {
-        renderStats(lastStats);
-        renderDistrictChips(settings);
-        renderList(applyGuestQuery(guestListings), lastStats);
+        persistGuestSearch();
+        const gen = ++listLoadGen;
+        const append = options.append === true;
+        if (!append) listOffset = 0;
+        if (!options.silent) setListBusy(true, options.busyText || "正在搜尋物件…");
+        try {
+          const params = guestListQuery();
+          params.set("offset", String(append ? listOffset : 0));
+          const res = await fetch(`/api/public/listings?${params}`, { cache: "no-store" });
+          const data = await readApi(res);
+          if (gen !== listLoadGen) return;
+          if (!res.ok) throw new Error(data.error || "訪客搜尋失敗");
+          lastStats = { total: data.totalMatched || 0, matched: data.totalMatched || 0 };
+          listHasMore = data.hasMore === true;
+          listOffset = Number(data.nextOffset) || ((append ? listOffset : 0) + (data.listings || []).length);
+          guestListings = append && guestListings.length ? [...guestListings, ...(data.listings || [])] : (data.listings || []);
+          renderStats(lastStats);
+          renderDistrictChips(settings);
+          renderList(applyListView(guestListings), lastStats);
+          $("status").textContent = "訪客搜尋（不需登入）。登入／註冊後可儲存設定與特別關注。";
+        } catch (error) {
+          $("status").textContent = error.message || "訪客搜尋失敗";
+        } finally {
+          if (gen === listLoadGen) setListBusy(false);
+        }
         return;
       }
       if (!options.force && watchNoteBusy()) {
@@ -7423,8 +7535,6 @@
 
     async function loadState() {
       $("status").textContent = "正在載入設定…";
-      const settingsReq = fetch("/api/settings", { cache: "no-store", signal: AbortSignal.timeout(8000) });
-      settingsReq.catch(() => {});
       let me = null;
       let lastError = "";
       for (let attempt = 1; attempt <= 2; attempt += 1) {
@@ -7447,20 +7557,17 @@
       }
       if (!me.ok) {
         setGuestMode(true);
-        setSettingsReady(false, "示範條件不能改。註冊後才能存成你的設定。");
-        const demoRes = await fetch("/api/demo", { cache: "no-store", signal: AbortSignal.timeout(35000) });
-        const demo = await readApi(demoRes);
-        if (!demoRes.ok) throw new Error(demo.error || "示範列表載入失敗");
-        cities = Array.isArray(demo.cities) && demo.cities.length ? demo.cities : CITIES_EMBEDDED;
-        if (demo.settings) fillSettings(demo.settings);
-        setSettingsReady(false, "示範條件不能改。註冊後才能存成你的設定。");
-        guestListings = Array.isArray(demo.listings) ? demo.listings : [];
-        lastStats = demo.stats || {};
-        renderStats(lastStats);
-        renderList(applyGuestQuery(guestListings), lastStats);
-        $("status").textContent = "示範列表（唯讀）。註冊後才能改條件與收到通知。";
+        cities = CITIES_EMBEDDED;
+        const guestState = window.GuestSearchState?.read();
+        applyGuestSearch(guestState);
+        renderDistrictPicker({ watchDistricts: [] });
+        setSettingsReady(false, "訪客可搜尋已抓進資料庫的房源。登入／註冊後可儲存設定檔與通知。");
+        await loadList({ busyText: "正在載入公開房源…" });
         maybeStartGuestTour();
         return;
+      }
+      if (window.GuestSearchState) {
+        /* 會員 active profile 優先：登入後不讀、不套用 guest sessionStorage。 */
       }
       setGuestMode(false);
       paintWho(me);
@@ -7498,7 +7605,7 @@
       setSettingsReady(false, "正在載入已存設定…完成前請不要按儲存。");
       lastError = "";
       try {
-        const res = await settingsReq;
+        const res = await fetch("/api/settings", { cache: "no-store", signal: AbortSignal.timeout(8000) });
         const data = await readApi(res);
         if (!res.ok) throw new Error(data.error || "載入失敗");
         if (data.settings) {
@@ -10040,7 +10147,11 @@
     $("selfListingClose")?.addEventListener("click", closeSelfOverlay);
     document.querySelector("[data-close-self]")?.addEventListener("click", closeSelfOverlay);
     function persistDisplayFilters() {
-      if (isGuest || !settingsLoaded) return;
+      if (isGuest) {
+        persistGuestSearch();
+        return;
+      }
+      if (!settingsLoaded) return;
       const body = {
         wholeFloorOnly: kinds.length === 1 && kinds[0] === "whole",
         housing_kinds: kinds.slice(),
@@ -10069,6 +10180,16 @@
     $("hasParking")?.addEventListener("change", () => {
       persistDisplayFilters();
       loadList();
+    });
+    ["priceMin", "priceMax", "areaMax", "minBuildingFloors"].forEach((id) => {
+      $(id)?.addEventListener("input", () => {
+        if (!isGuest) return;
+        scheduleGuestListReload();
+      });
+    });
+    $("q")?.addEventListener("input", () => {
+      if (!isGuest) return;
+      scheduleGuestListReload();
     });
     document.querySelectorAll("[data-open-hub]").forEach((el) => {
       el.addEventListener("click", () => openNotifyHub(el.dataset.openHub));
