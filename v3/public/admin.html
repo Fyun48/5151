@@ -215,22 +215,6 @@
     .admin-panel { display: grid; gap: 20px; }
     .admin-shell.is-ready .admin-panel { display: none; }
     .admin-shell.is-ready .admin-panel.is-on { display: grid; }
-    @media (max-width: 800px) {
-      .admin-shell { grid-template-columns: 1fr; padding-left: 16px; padding-right: 16px; }
-      .admin-nav {
-        flex-direction: row;
-        overflow-x: auto;
-        top: 0;
-        z-index: 5;
-        gap: 8px;
-        padding: 8px 0 10px;
-        margin: 0 -16px;
-        padding-left: 16px;
-        padding-right: 16px;
-      }
-      .admin-nav a { flex: 0 0 auto; }
-      .admin-nav span { display: none; }
-    }
     .cms-preview {
       min-height: 72px;
       padding: 12px 14px;
@@ -406,6 +390,7 @@
       background: var(--paper);
       border-top: 1px solid var(--line);
     }
+    .admin-dirty[hidden] { display: none !important; }
     .admin-drawer-backdrop, .admin-nav-backdrop {
       display: none;
       position: fixed;
@@ -427,24 +412,33 @@
     }
     .cap-table td:nth-child(2), .cap-table td:nth-child(3) { font-variant-numeric: tabular-nums; }
     @media (max-width: 800px) {
+      .admin-top { flex-wrap: wrap; }
       .admin-menu-btn { display: inline-flex; }
+      .admin-search { flex: 1 1 100%; max-width: none; order: 3; }
       .admin-body { grid-template-columns: 1fr; }
       .admin-nav {
         position: fixed;
         left: 0;
         top: 0;
         bottom: 0;
+        display: flex;
+        flex-direction: column;
+        flex-wrap: nowrap;
         width: min(86vw, 300px);
+        min-width: 260px;
         height: 100vh;
+        overflow-x: hidden;
+        overflow-y: auto;
+        writing-mode: horizontal-tb;
         transform: translateX(-100%);
         z-index: 40;
         background: var(--paper);
         border-right: 1px solid var(--line);
       }
+      .admin-nav-group, .admin-nav-group > button, .admin-favs { flex: 0 0 auto; width: 100%; }
       .admin-app.is-nav-open .admin-nav { transform: none; }
       .admin-app.is-nav-open .admin-nav-backdrop { display: block; }
       .admin-main { padding: 12px 16px 88px; }
-      .admin-search { max-width: none; }
     }
   </style>
 </head>
@@ -1468,7 +1462,11 @@
       document.querySelectorAll("[data-admin-nav]").forEach((el) => {
         el.setAttribute("aria-current", el.dataset.adminNav === page.id ? "page" : "false");
       });
-      if ($("adminCrumb")) $("adminCrumb").textContent = `${page.groupLabel} > ${page.label}`;
+      if ($("adminCrumb")) {
+        $("adminCrumb").textContent = page.groupLabel === page.label
+          ? page.label
+          : `${page.groupLabel} > ${page.label}`;
+      }
       const favBtn = $("adminFavBtn");
       if (favBtn) {
         favBtn.textContent = IA.readFavorites().includes(page.id) ? "★ 常用" : "☆ 常用";
@@ -1479,6 +1477,8 @@
         };
       }
       $("adminShell")?.classList.add("is-ready");
+      if ($("adminSearch")) $("adminSearch").value = "";
+      if ($("adminSearchResults")) $("adminSearchResults").hidden = true;
       renderAdminNav(page.id);
       if (location.hash !== "#" + page.id) history.pushState(null, "", "#" + page.id);
       IA.markClean();
@@ -1513,8 +1513,8 @@
       if (!ev.target.closest(".admin-search")) $("adminSearchResults").hidden = true;
     });
     $("adminMain")?.addEventListener?.("input", () => {});
-    document.querySelector(".admin-main")?.addEventListener("input", () => IA.setDirty(true, 1));
-    document.querySelector(".admin-main")?.addEventListener("change", () => IA.setDirty(true, 1));
+    document.querySelector(".admin-main")?.addEventListener("input", () => IA.setDirty(true));
+    document.querySelector(".admin-main")?.addEventListener("change", () => IA.setDirty(true));
     $("adminDirtyDiscard")?.addEventListener("click", () => location.reload());
     $("adminDirtySave")?.addEventListener("click", () => {
       const on = document.querySelector("[data-admin-page].is-on");

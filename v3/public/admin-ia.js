@@ -327,9 +327,14 @@
   let dirtyCount = 0;
   let allowLeave = false;
 
-  function setDirty(on, count = 1) {
-    dirty = Boolean(on);
-    dirtyCount = dirty ? Math.max(1, Number(count) || 1) : 0;
+  function setDirty(on, count) {
+    if (on) {
+      dirty = true;
+      dirtyCount = count == null ? dirtyCount + 1 : Math.max(1, Number(count) || 1);
+    } else {
+      dirty = false;
+      dirtyCount = 0;
+    }
     document.getElementById("adminDirtyBar")?.toggleAttribute("hidden", !dirty);
     const label = document.getElementById("adminDirtyLabel");
     if (label) label.textContent = dirty ? `你有 ${dirtyCount} 項尚未儲存的變更` : "";

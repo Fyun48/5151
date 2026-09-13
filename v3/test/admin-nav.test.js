@@ -26,6 +26,9 @@ test("admin settings use named IA groups instead of mixed tabs", () => {
   assert.match(html, /data-admin-page="feedback\/inbox"/);
   assert.match(html, /function showAdminPanel/);
   assert.match(html, /admin-shell\.is-ready \.admin-panel \{ display: none; \}/);
+  assert.match(html, /\.admin-dirty\[hidden\]/);
+  assert.match(html, /min-width: 260px/);
+  assert.doesNotMatch(html, /flex-direction:\s*row;\s*overflow-x:\s*auto/);
   assert.doesNotMatch(html, /畫面說明/);
   assert.doesNotMatch(html, /系統信件/);
   assert.match(ia, /房源與資料/);
