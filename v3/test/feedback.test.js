@@ -153,8 +153,7 @@ test("index.html exposes feedback entry, modal and context capture", () => {
 
 test("admin.html exposes feedback inbox", () => {
   const html = readSrc("public/admin.html");
-  assert.match(html, /data-admin-panel="feedback"/);
-  assert.match(html, /data-admin-nav="feedback"/);
+  assert.match(html, /data-admin-page="feedback\/inbox"/);
   assert.match(html, /async function loadFeedback/);
   assert.match(html, /\/api\/admin\/feedback/);
   assert.match(html, /data-fb-save/);

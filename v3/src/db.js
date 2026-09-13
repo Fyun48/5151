@@ -905,8 +905,11 @@ function publicAdminMember(user) {
     deleted_at: user.deleted_at || "",
     deleted_by: user.deleted_by || "",
     deleted_reason: user.deleted_reason || "",
+    last_login_at: user.last_login_at || "",
     intervalMinutes: Number(settings.intervalMinutes) || planIntervalMinutes(user.plan),
     intervalAdminSet: settings.intervalAdminSet === true,
+    watchCount: countWatched(db, user.id),
+    listingCount: countOpenSelfListings(user.id),
   };
 }
 

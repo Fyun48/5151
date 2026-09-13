@@ -28,7 +28,7 @@ export function listUsers(conn, { includeDeleted = true, sort = "id", order = "a
   const needle = String(q || "").trim().toLowerCase();
   const rows = conn.prepare(
     `SELECT id, email, role, plan, created_at, accepted_disclaimer_at, disclaimer_version,
-            signup_count, deleted_at, deleted_by, deleted_reason, deleted_reason_code
+            signup_count, deleted_at, deleted_by, deleted_reason, deleted_reason_code, last_login_at
      FROM users ORDER BY ${sortKey} ${dir}, id ${dir}`,
   ).all();
   return rows.filter((row) => {
