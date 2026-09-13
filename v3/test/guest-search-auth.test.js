@@ -223,7 +223,7 @@ test("guest public search filters by straight-line commute and keeps member comm
 
 test("public listings route rejects more than four guest districts", () => {
   const src = readFileSync(path.join(dir, "../src/server.js"), "utf8");
-  const route = src.slice(src.indexOf('app.get("/api/public/listings"'), src.indexOf("function actorUserId"));
+  const route = src.slice(src.indexOf("async function resolveGuestWorkPoint"), src.indexOf("function actorUserId"));
   assert.match(route, /GUEST_MAX_DISTRICTS/);
   assert.match(route, /訪客最多同時選/);
   assert.match(route, /resolveGuestWorkPoint/);

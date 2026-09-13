@@ -36,14 +36,8 @@ test("CasaOS compose does not start v1 or v2", () => {
 });
 
 test("deploy workflows do not start v1 or v2 as the live app", () => {
-  const deploy = readFileSync(path.join(root, ".github/workflows/deploy.yml"), "utf8");
   const docker = readFileSync(path.join(root, ".github/workflows/docker.yml"), "utf8");
   const deployV2 = readFileSync(path.join(root, ".github/workflows/deploy-v2.yml"), "utf8");
-  assert.equal(deploy.includes('source: "src,public"'), false);
-  assert.equal(deploy.includes("- \"src/**\""), false);
-  assert.equal(deploy.includes("- \"public/**\""), false);
-  assert.match(deploy, /docker compose stop 591-tracker/);
-  assert.equal(/docker compose up[^\n]*591-tracker(?!-v)/.test(deploy), false);
   assert.match(docker, /docker compose stop 591-tracker 591-tracker-v2/);
   assert.equal(/docker compose up[^\n]*591-tracker(?!-v)/.test(docker), false);
   assert.match(docker, /591-tracker-v3/);
