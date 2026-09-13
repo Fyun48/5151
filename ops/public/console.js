@@ -591,7 +591,7 @@ function showExitDetail(id, data) {
         : "";
       return `<button type="button" data-cancel-kind="${esc(it.kind)}" data-cancel-id="${Number(it.id)}" data-cancel-action="${esc(spec.action)}" data-pid="${esc(id)}" data-cancel-state="${esc(it.state)}"${rollback}>${esc(spec.label)}</button>`;
     }).join("");
-    blocks.push(`<div class="pending-item"><p>${esc(label)}</p>${btn}</div>`);
+    blocks.push(`<div class="pending-item"><p>${esc(label)}</p>${rollbackRecordHtml(it)}${btn}</div>`);
   }
   $("exitDetailBody").innerHTML = blocks.join("");
   box.scrollIntoView({ block: "nearest" });
@@ -1346,6 +1346,16 @@ function qaRunCancellable(run) {
 
 function shortSha(sha) {
   return String(sha || "").slice(0, 12) || "—";
+}
+
+function rollbackRecordHtml(it) {
+  const rec = it.record || it.rollback?.record;
+  if (!rec || (!rec.current && !rec.previous)) return "";
+  const cur = rec.current || {};
+  const prev = rec.previous || {};
+  const compose = rec.compose_version || "未記錄";
+  const config = rec.config_version || "未記錄";
+  return `<p class="hint">目前版 SHA ${esc(shortSha(cur.source_sha))} · digest ${esc(shortSha(cur.artifact_digest))} · 靜態樹 ${esc(shortSha(cur.static_tree_hash))} · schema ${esc(cur.schema_compat || "未記錄")}</p><p class="hint">上一可用版 SHA ${esc(shortSha(prev.source_sha))} · digest ${esc(shortSha(prev.artifact_digest))} · 靜態樹 ${esc(shortSha(prev.static_tree_hash))} · schema ${esc(prev.schema_compat || "未記錄")}</p><p class="hint">Compose／設定 ${esc(compose)}／${esc(config)}。bind-mount 不會在這一步還原。</p>`;
 }
 
 function stagingFreshnessLine(stg) {
