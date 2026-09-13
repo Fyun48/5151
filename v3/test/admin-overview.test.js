@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
 import os from "os";
 import path from "path";
 import { fileURLToPath } from "node:url";
@@ -108,4 +109,62 @@ test("pendingReconcile counts remaining post_id > cursor, not listings minus cur
     assert.notEqual(ov.listings.pendingReconcile, 0);
     assert.notEqual(ov.listings.total - 50, ov.listings.pendingReconcile);
   `);
+});
+
+test("legacy adminAudit JSON migrates with BEGIN IMMEDIATE on node:sqlite", () => {
+  runIsolated(`
+    import { lastAuditAction } from ${JSON.stringify(path.join(dir, "../src/adminAudit.js"))};
+    import { ADMIN_AUDIT_LEGACY_KEY, migrateLegacyAdminAudit } from ${JSON.stringify(path.join(dir, "../src/adminAuditSchema.js"))};
+    assert.equal(typeof app.db.transaction, "undefined");
+    const legacy = [
+      { at: "2026-09-01T00:00:00.000Z", actorId: 1, actorEmail: "a@example.test", action: "smtp_test", target: "mail" },
+      { at: "2026-09-02T00:00:00.000Z", actorId: 1, actorEmail: "a@example.test", action: "crawl_sources_save", target: "591" },
+    ];
+    app.db.prepare(
+      "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    ).run(ADMIN_AUDIT_LEGACY_KEY, JSON.stringify(legacy));
+    const before = getAdminOverview();
+    assert.equal(before.readOnly, true);
+    assert.equal(lastAuditAction("smtp_test"), null);
+    assert.ok(app.db.prepare("SELECT value FROM settings WHERE key = ?").get(ADMIN_AUDIT_LEGACY_KEY));
+    const result = migrateLegacyAdminAudit(app.db);
+    assert.equal(result.migrated, 2);
+    assert.equal(app.db.prepare("SELECT value FROM settings WHERE key = ?").get(ADMIN_AUDIT_LEGACY_KEY), undefined);
+    assert.equal(lastAuditAction("smtp_test")?.action, "smtp_test");
+    assert.equal(listAdminAudit({ limit: 10 }).length, 2);
+  `);
+});
+
+test("startup migrates leftover adminAudit JSON without DatabaseSync.transaction", () => {
+  const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-admin-audit-boot-"));
+  mkdirSync(dataDir, { recursive: true });
+  const boot = new DatabaseSync(path.join(dataDir, "v3.db"));
+  boot.exec("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+  boot.prepare("INSERT INTO settings(key, value) VALUES (?, ?)").run(
+    "adminAuditLog",
+    JSON.stringify([
+      { at: "2026-09-03T00:00:00.000Z", actorEmail: "boot@example.test", action: "smtp_test", target: "mail" },
+    ]),
+  );
+  boot.close();
+  const script = `
+    import assert from "node:assert/strict";
+    import { lastAuditAction, listAdminAudit } from ${JSON.stringify(path.join(dir, "../src/adminAudit.js"))};
+    import { ADMIN_AUDIT_LEGACY_KEY } from ${JSON.stringify(path.join(dir, "../src/adminAuditSchema.js"))};
+    import { db } from ${JSON.stringify(path.join(dir, "../src/db.js"))};
+    assert.equal(typeof db.transaction, "undefined");
+    assert.equal(lastAuditAction("smtp_test")?.action, "smtp_test");
+    assert.equal(listAdminAudit({ limit: 5 }).length, 1);
+    assert.equal(db.prepare("SELECT value FROM settings WHERE key = ?").get(ADMIN_AUDIT_LEGACY_KEY), undefined);
+  `;
+  try {
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+      encoding: "utf8",
+      timeout: 30_000,
+      env: { ...process.env, DATA_DIR: dataDir },
+    });
+    assert.equal(result.status, 0, result.error?.message || result.stderr || result.stdout);
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
 });

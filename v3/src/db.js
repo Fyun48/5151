@@ -128,6 +128,7 @@ import {
   normalizeCrawlSources,
   publicCrawlSources,
 } from "./crawlSources.js";
+import { migrateLegacyAdminAudit } from "./adminAuditSchema.js";
 import {
   ensureDemandSchema,
   listDemandPosts as listDemandPostsOn,
@@ -824,6 +825,11 @@ try {
   db.exec("CREATE INDEX IF NOT EXISTS idx_admin_audit_at ON admin_audit(at DESC)");
 } catch {
   // older fixtures
+}
+try {
+  migrateLegacyAdminAudit(db);
+} catch {
+  // 舊 JSON 壞掉不擋開站；之後 append 仍走新表
 }
 
 try {

@@ -1,9 +1,10 @@
 /** 後台管理操作紀錄：append-only 表，避免 settings JSON 併發讀改寫丟紀錄。
- *  單筆 INSERT，不讀改寫整包；超過 500 筆刪最舊。不記密碼／secret。 */
+ *  單筆 INSERT，不讀改寫整包；超過 500 筆刪最舊。不記密碼／secret。
+ *  legacy JSON 遷移只在 startup（db.js）執行，GET 路徑不寫入。 */
 
 import { db } from "./db.js";
+import { ensureAdminAuditTable } from "./adminAuditSchema.js";
 
-const LEGACY_SETTING_KEY = "adminAuditLog";
 const MAX_ENTRIES = 500;
 const SECRET_RE = /password|passwd|secret|api[_-]?key|smtpPass|clientSecret|token|authorization/i;
 
@@ -20,61 +21,6 @@ export function redactAuditValue(value, depth = 0) {
     out[key] = SECRET_RE.test(key) ? (item ? "[redacted]" : "") : redactAuditValue(item, depth + 1);
   }
   return out;
-}
-
-export function ensureAdminAuditSchema(conn = db) {
-  conn.exec(`
-    CREATE TABLE IF NOT EXISTS admin_audit (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      at TEXT NOT NULL,
-      actor_id INTEGER NOT NULL DEFAULT 0,
-      actor_email TEXT NOT NULL DEFAULT '',
-      action TEXT NOT NULL DEFAULT '',
-      target TEXT NOT NULL DEFAULT '',
-      before_json TEXT,
-      after_json TEXT
-    );
-    CREATE INDEX IF NOT EXISTS idx_admin_audit_at ON admin_audit(at DESC);
-  `);
-  migrateLegacyAuditJson(conn);
-}
-
-function migrateLegacyAuditJson(conn) {
-  const row = conn.prepare("SELECT value FROM settings WHERE key = ?").get(LEGACY_SETTING_KEY);
-  if (!row?.value) return;
-  let parsed;
-  try {
-    parsed = JSON.parse(row.value);
-  } catch {
-    conn.prepare("DELETE FROM settings WHERE key = ?").run(LEGACY_SETTING_KEY);
-    return;
-  }
-  if (!Array.isArray(parsed) || !parsed.length) {
-    conn.prepare("DELETE FROM settings WHERE key = ?").run(LEGACY_SETTING_KEY);
-    return;
-  }
-  const existing = Number(conn.prepare("SELECT COUNT(*) AS n FROM admin_audit").get()?.n) || 0;
-  if (existing === 0) {
-    const insert = conn.prepare(
-      `INSERT INTO admin_audit(at, actor_id, actor_email, action, target, before_json, after_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    );
-    const tx = conn.transaction((rows) => {
-      for (const item of [...rows].reverse()) {
-        insert.run(
-          String(item.at || new Date().toISOString()),
-          Number(item.actorId) || 0,
-          String(item.actorEmail || "").slice(0, 200),
-          String(item.action || "").slice(0, 80),
-          String(item.target || "").slice(0, 240),
-          item.before == null ? null : JSON.stringify(item.before),
-          item.after == null ? null : JSON.stringify(item.after),
-        );
-      }
-    });
-    tx(parsed);
-  }
-  conn.prepare("DELETE FROM settings WHERE key = ?").run(LEGACY_SETTING_KEY);
 }
 
 function rowToEntry(row) {
@@ -97,13 +43,29 @@ function rowToEntry(row) {
   };
 }
 
+function readAuditRows(sql, ...params) {
+  try {
+    return db.prepare(sql).all(...params);
+  } catch {
+    return [];
+  }
+}
+
+function readAuditRow(sql, ...params) {
+  try {
+    return db.prepare(sql).get(...params) || null;
+  } catch {
+    return null;
+  }
+}
+
 export function listAdminAudit({ limit = 80 } = {}) {
-  ensureAdminAuditSchema();
   const cap = Math.max(1, Math.min(MAX_ENTRIES, Number(limit) || 80));
-  return db.prepare(
+  return readAuditRows(
     `SELECT at, actor_id, actor_email, action, target, before_json, after_json
      FROM admin_audit ORDER BY id DESC LIMIT ?`,
-  ).all(cap).map(rowToEntry);
+    cap,
+  ).map(rowToEntry);
 }
 
 export function appendAdminAudit({
@@ -115,7 +77,7 @@ export function appendAdminAudit({
   after = null,
   now = new Date(),
 } = {}) {
-  ensureAdminAuditSchema();
+  ensureAdminAuditTable(db);
   const entry = {
     at: (now instanceof Date ? now : new Date(now)).toISOString(),
     actorId: Number(actorId) || 0,
@@ -147,11 +109,11 @@ export function appendAdminAudit({
 }
 
 export function lastAuditAction(action) {
-  ensureAdminAuditSchema();
-  const row = db.prepare(
+  const row = readAuditRow(
     `SELECT at, actor_id, actor_email, action, target, before_json, after_json
      FROM admin_audit WHERE action = ? ORDER BY id DESC LIMIT 1`,
-  ).get(String(action || ""));
+    String(action || ""),
+  );
   return row ? rowToEntry(row) : null;
 }
 
