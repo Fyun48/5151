@@ -150,7 +150,7 @@ test("console exposes pending-list Gate #1 without opening a coding or deploy pa
   assert.match(html, /核准只寫開發授權，不會開 PR、也不會部署/);
   assert.match(html, /要求修改必須寫原因/);
   assert.match(html, /已授權 Owner 直達不經這個門/);
-  assert.match(html, /console\.js\?v=20260913-pkg33/);
+  assert.match(html, /console\.js\?v=20260913-pkg34/);
   assert.match(js, /PENDING_GATE1/);
   assert.match(js, /核准開發/);
   assert.match(js, /請說明要改什麼/);

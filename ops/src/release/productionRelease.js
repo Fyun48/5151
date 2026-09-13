@@ -1448,6 +1448,111 @@ function runnerCancelRequested(db, releaseRunId) {
   return !!row;
 }
 
+export const PRODUCTION_STATE_CONFIRM_EVIDENCE_KIND = "production_state_confirmed";
+export const UNKNOWN_PRODUCTION_OBSERVED_RESULTS = Object.freeze(["succeeded", "failed", "rolled_back"]);
+
+function unknownProductionConfirmed(db, releaseRunId) {
+  return !!db.prepare(
+    `SELECT id FROM production_release_evidence WHERE release_run_id=? AND evidence_kind=? ORDER BY id DESC LIMIT 1`,
+  ).get(Number(releaseRunId), PRODUCTION_STATE_CONFIRM_EVIDENCE_KIND);
+}
+
+export function describeUnknownProductionOffer(db, releaseRunId) {
+  const run = db.prepare("SELECT * FROM production_release_run WHERE id=?").get(Number(releaseRunId));
+  if (!run) return { offered: false, reason: "not_found" };
+  const status = latestStatus(db, run.id) || RELEASE_STATUSES.CREATED;
+  if (status !== RELEASE_STATUSES.PRODUCTION_STATE_UNKNOWN) {
+    return { offered: false, reason: "not_unknown" };
+  }
+  if (unknownProductionConfirmed(db, run.id)) {
+    return { offered: false, reason: "already_confirmed", confirmed: true };
+  }
+  return {
+    offered: true,
+    confirmed: false,
+    release_run_id: Number(run.id),
+    observed_results: UNKNOWN_PRODUCTION_OBSERVED_RESULTS.slice(),
+    rewrite_status: false,
+    deploy_not_withdrawn: true,
+  };
+}
+
+export function confirmUnknownProductionResult(db, releaseRunId, opts = {}) {
+  rejectSpoofedOwnerDirect(opts);
+  const {
+    actor = "owner",
+    reason = null,
+    observedResult = null,
+    provider = null,
+    now = new Date(),
+  } = opts;
+  const observed = String(observedResult || "").trim().toLowerCase();
+  if (!UNKNOWN_PRODUCTION_OBSERVED_RESULTS.includes(observed)) {
+    throw httpError("確認必須寫下實際結果：succeeded、failed 或 rolled_back", 400);
+  }
+  const note = String(reason || "").trim();
+  if (!note) throw httpError("確認必須寫明實際看到的結果", 400);
+  if (typeof provider?.execute === "function" || typeof provider?.dispatch === "function") {
+    // Observation only; deploy / rollback providers are never invoked.
+  }
+  const run = db.prepare("SELECT * FROM production_release_run WHERE id=?").get(Number(releaseRunId));
+  if (!run) throw httpError("production release run not found", 404);
+  const status = latestStatus(db, run.id) || RELEASE_STATUSES.CREATED;
+  if (status !== RELEASE_STATUSES.PRODUCTION_STATE_UNKNOWN) {
+    throw httpError("只有狀態不明的正式發布可確認實際結果。未送出的走取消，執行中的走取消 runner。", 409);
+  }
+  if (unknownProductionConfirmed(db, run.id)) {
+    return {
+      idempotent: true,
+      confirmed: true,
+      rewrite_status: false,
+      deploy_not_withdrawn: true,
+      observed_result: observed,
+      run: publicReleaseRun(db, run),
+    };
+  }
+  withImmediateTx(db, () => {
+    appendEvidence(db, {
+      releaseRunId: run.id,
+      kind: PRODUCTION_STATE_CONFIRM_EVIDENCE_KIND,
+      now,
+      payload: {
+        actor,
+        reason: note.slice(0, 1000),
+        observed_result: observed,
+        rewrite_status: false,
+        deploy_not_withdrawn: true,
+        prev_status: status,
+      },
+    });
+    appendAuditRow(db, {
+      actor,
+      action: "issue.production_release.state_confirmed",
+      entityType: "production_release_run",
+      entityId: String(run.id),
+      data: {
+        issue_id: Number(run.issue_id),
+        coding_task_id: Number(run.coding_task_id),
+        product_id: run.product_id || null,
+        observed_result: observed,
+        reason: note.slice(0, 1000),
+        rewrite_status: false,
+        deploy_not_withdrawn: true,
+        prev_status: status,
+      },
+      now,
+    });
+  });
+  return {
+    confirmed: true,
+    rewrite_status: false,
+    deploy_not_withdrawn: true,
+    observed_result: observed,
+    current_status: latestStatus(db, run.id),
+    run: publicReleaseRun(db, db.prepare("SELECT * FROM production_release_run WHERE id=?").get(Number(run.id))),
+  };
+}
+
 export function observeProductionReleaseProgress(db, releaseRunId) {
   const status = latestStatus(db, releaseRunId) || RELEASE_STATUSES.CREATED;
   const bindings = db.prepare(

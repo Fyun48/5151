@@ -11,7 +11,7 @@ import {
 import { redactCrmReplicas, listCrmHandoff } from "./crmReplica.js";
 import { inferIssueProductId, issueWriteDecision, redactInsightDerivatives } from "./insightConsent.js";
 import { recordPurgeEvent, redactExclusiveIssues } from "./purgeLedger.js";
-import { describeCodeRollbackOffer, describeDbRestoreOffer } from "./release/productionRelease.js";
+import { describeCodeRollbackOffer, describeDbRestoreOffer, describeUnknownProductionOffer } from "./release/productionRelease.js";
 import { describeCancelResultOffer, leftoverPendingNote } from "./cancelResult.js";
 import { describeGate2Offer } from "./releaseCandidate.js";
 import { describeGate1Offer } from "./proposal.js";
@@ -102,7 +102,7 @@ function knownResultPendingNote({ scoped, status, codeOffer, dbOffer }) {
 function productionReleasePendingNote({ scoped, unknown, observation }) {
   if (unknown) {
     return scoped
-      ? "正式部署狀態不明；先確認該環境實際結果，再完成移交。已送出的部署不宣稱撤回。"
+      ? "正式部署狀態不明；先確認該環境實際結果，再完成移交。可從未決清單確認已成功、已失敗或已退回。確認只寫觀察，不改寫終態。已送出的部署不宣稱撤回。"
       : "正式發布尚未綁 product_id，且狀態不明；不能用這筆擋別站移交";
   }
   if (!scoped) {
@@ -135,6 +135,7 @@ export function listUnknownProductionRuns(db, productId) {
   return safeAll(db, "SELECT id, issue_id, product_id FROM production_release_run")
     .filter((row) => scopedProductionProductId(db, row) === id)
     .filter((row) => latestProductionStatus(db, row.id) === UNKNOWN_PRODUCTION_STATUS)
+    .filter((row) => describeUnknownProductionOffer(db, row.id).offered)
     .map((row) => ({ id: Number(row.id), issue_id: Number(row.issue_id), product_id: id, status: UNKNOWN_PRODUCTION_STATUS }));
 }
 
@@ -380,15 +381,31 @@ export function listPendingWork(db, productId) {
         continue;
       }
       const unknown = status === UNKNOWN_PRODUCTION_STATUS;
+      if (unknown) {
+        const offer = describeUnknownProductionOffer(db, row.id);
+        if (offer.confirmed || offer.reason === "already_confirmed") continue;
+        const observation = productionReleaseObservation(db, row.id, status);
+        items.push({
+          kind: "production_release",
+          id: row.id,
+          state: "unknown",
+          blocking: true,
+          unscoped: !scoped,
+          observation,
+          unknown_confirm: offer.offered ? offer : null,
+          note: productionReleasePendingNote({ scoped, unknown: true, observation }),
+        });
+        continue;
+      }
       const observation = productionReleaseObservation(db, row.id, status);
       items.push({
         kind: "production_release",
         id: row.id,
-        state: unknown ? "unknown" : (status || "pending"),
+        state: status || "pending",
         blocking: true,
         unscoped: !scoped,
         observation,
-        note: productionReleasePendingNote({ scoped, unknown, observation }),
+        note: productionReleasePendingNote({ scoped, unknown: false, observation }),
       });
     }
   }

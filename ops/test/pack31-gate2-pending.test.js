@@ -185,7 +185,7 @@ test("console exposes pending-list Gate #2 without opening a deploy path", () =>
   assert.match(html, /核准只寫授權，不會部署正式機/);
   assert.match(html, /要求修改必須寫原因/);
   assert.match(html, /已授權 Owner 直達不經這個門/);
-  assert.match(html, /console\.js\?v=20260913-pkg33/);
+  assert.match(html, /console\.js\?v=20260913-pkg34/);
   assert.match(js, /PENDING_GATE2/);
   assert.match(js, /核准發布授權/);
   assert.match(js, /REQUEST_CHANGES requires a written reason|請說明要改什麼/);

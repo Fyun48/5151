@@ -485,6 +485,16 @@ Owner 直達部署從現在就保留，不必等第 8 包。OPS 新工作流是�
 - 已授權 Owner 直達不經這個門；payload 自稱 `owner_direct` 仍 403。
 - 反悔：不按手動重評／解除封鎖。不開 live、不合 master。
 
+### 包 34 — 未決清單可確認正式發布實際結果，且不改寫終態
+
+- 正式發布停在 `PRODUCTION_STATE_UNKNOWN` 時：未決清單可確認實際已成功、已失敗或已退回。
+- 確認只寫觀察（evidence + audit），不 `appendEvent` 改寫發布終態，不把 UNKNOWN 改成 SUCCEEDED／FAILED／ROLLED_BACK。
+- 不呼叫 deploy／rollback provider，不宣稱撤回已送出的部署。不 Deploy v3、不 Deploy OPS、不開 live、不合 master。
+- 未決清單必須寫原因，且必須選 observed_result ∈ succeeded／failed／rolled_back。缺一 400。
+- 確認後該 run 不再擋移交，未決清單不再列出。已確認則冪等。非 UNKNOWN 是 409（未送出走取消、執行中走取消 runner）。
+- 已授權 Owner 直達不經這個門；payload 自稱 `owner_direct` 仍 403。
+- 反悔：不按確認。不開 live、不合 master。
+
 ---
 
 ## 12. 我堅持的理想（用來審每一個 PR）
