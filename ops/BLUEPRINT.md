@@ -409,6 +409,14 @@ Owner 直達部署從現在就保留，不必等第 8 包。OPS 新工作流是�
 - 晚到的製作完成／staging finalize 不把 `cancelled` 寫成 `changes_ready`／`ready`，也不寫入 current。
 - 反悔：不按取消。不開 live、不合 master。
 
+### 包 25 — 未送出的正式發布可取消
+
+- Owner 對尚未外送 workflow 的正式發布可從未決清單送取消要求，並看到取消結果。
+- `CREATED`／`ELIGIBILITY_VERIFIED`／`MERGED` 且尚未 `dispatch_submitted_at`／`workflow_run_id` 可取消，寫成 `BLOCKED`（`owner_cancelled`）。
+- 已受理的 Build／Predeploy／Deploy、已成功、已退回、狀態不明都不改寫，不宣稱撤回已送出的 workflow。
+- 晚到的 `executeProductionRelease` 若已取消，不外送 workflow、不寫 SUCCEEDED。
+- 反悔：不按取消。不開 live、不合 master、不觸發 CasaOS 三步。
+
 ---
 
 ## 12. 我堅持的理想（用來審每一個 PR）

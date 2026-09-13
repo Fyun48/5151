@@ -158,7 +158,7 @@ test("console exposes Owner QA cancel with confirmation", () => {
   const js = readFileSync(join(root, "../public/console.js"), "utf8");
   assert.match(html, /取消獨立 QA/);
   assert.match(html, /已完成的結果不改寫/);
-  assert.match(html, /console\.js\?v=20260913-pkg24/);
+  assert.match(html, /console\.js\?v=20260913-pkg25/);
   assert.match(js, /\/ops\/api\/qa-runs\/\$\{devOpen\.qaRunId\}\/cancel/);
   assert.match(js, /已在跑的檢查不宣稱撤回/);
   assert.match(js, /待取消 qa run/);
