@@ -466,12 +466,30 @@ const PENDING_RUNNER_CANCEL = {
   ok: (data) => `已要求取消 runner。${data.deploy_not_withdrawn ? "不宣稱撤回部署。" : ""}${data.provider_cancelled ? " GitHub 已接受取消。" : " 供應商若離線，只留下取消要求。"}`,
 };
 
+const PENDING_CODE_ROLLBACK = {
+  kind: "production_release",
+  states: ["SUCCEEDED"],
+  label: "程式退回上一版",
+  path: (id) => `/ops/api/production-releases/${id}/rollback`,
+  title: "確認程式退回",
+  body: (id) => `把正式發布 #${id} 程式退回上一版已知良好映像？這不是取消 runner，也不會還原正式資料庫。DB 還原要另確認 RESTORE-PRODUCTION-DB。`,
+  confirm: "確定程式退回",
+  ok: (data) => `已要求程式退回。${data.db_restore === false ? "沒有執行 DB 還原。" : ""}`,
+};
+
 function pendingItemActions(it) {
   const actions = [];
   const unsent = PENDING_CANCEL[it.kind];
   if (unsent?.states.includes(it.state)) actions.push({ ...unsent, action: "cancel" });
   if (it.kind === PENDING_RUNNER_CANCEL.kind && PENDING_RUNNER_CANCEL.states.includes(it.state)) {
     actions.push({ ...PENDING_RUNNER_CANCEL, action: "runner" });
+  }
+  if (
+    it.kind === PENDING_CODE_ROLLBACK.kind
+    && PENDING_CODE_ROLLBACK.states.includes(it.state)
+    && it.rollback?.contract_complete
+  ) {
+    actions.push({ ...PENDING_CODE_ROLLBACK, action: "rollback", rollback: it.rollback });
   }
   return actions;
 }
@@ -514,9 +532,12 @@ function showExitDetail(id, data) {
   for (const it of items) {
     const label = `${PENDING_KIND_LABEL[it.kind] || it.kind} #${it.id} ${STATUS_LABEL[it.state] || it.state}${it.blocking ? "（阻擋）" : ""}${it.unscoped ? "（尚未分站）" : ""} ${it.note || ""}`;
     const specs = pendingItemActions(it);
-    const btn = specs.map((spec) => (
-      `<button type="button" data-cancel-kind="${esc(it.kind)}" data-cancel-id="${Number(it.id)}" data-cancel-action="${esc(spec.action)}" data-pid="${esc(id)}" data-cancel-state="${esc(it.state)}">${esc(spec.label)}</button>`
-    )).join("");
+    const btn = specs.map((spec) => {
+      const rollback = spec.action === "rollback" && spec.rollback
+        ? ` data-prev-sha="${esc(spec.rollback.previous_stable_sha || "")}" data-prev-digest="${esc(spec.rollback.previous_stable_digest || "")}" data-prev-run="${esc(spec.rollback.previous_stable_workflow_run_id || "")}"`
+        : "";
+      return `<button type="button" data-cancel-kind="${esc(it.kind)}" data-cancel-id="${Number(it.id)}" data-cancel-action="${esc(spec.action)}" data-pid="${esc(id)}" data-cancel-state="${esc(it.state)}"${rollback}>${esc(spec.label)}</button>`;
+    }).join("");
     blocks.push(`<div class="pending-item"><p>${esc(label)}</p>${btn}</div>`);
   }
   $("exitDetailBody").innerHTML = blocks.join("");
@@ -1714,7 +1735,9 @@ $("exitDetailBody")?.addEventListener("click", (ev) => {
   const action = btn.dataset.cancelAction || "cancel";
   const spec = action === "runner"
     ? PENDING_RUNNER_CANCEL
-    : PENDING_CANCEL[btn.dataset.cancelKind];
+    : action === "rollback"
+      ? PENDING_CODE_ROLLBACK
+      : PENDING_CANCEL[btn.dataset.cancelKind];
   const itemId = Number(btn.dataset.cancelId);
   const pid = btn.dataset.pid || "";
   const state = btn.dataset.cancelState || "";
@@ -1724,10 +1747,17 @@ $("exitDetailBody")?.addEventListener("click", (ev) => {
     body: spec.body(itemId, state),
     confirmLabel: spec.confirm,
     onConfirm: async () => {
+      const payload = action === "rollback"
+        ? {
+          previous_stable_sha: btn.dataset.prevSha,
+          previous_stable_digest: btn.dataset.prevDigest,
+          previous_stable_workflow_run_id: btn.dataset.prevRun,
+        }
+        : { reason: "owner_console" };
       const { res, data } = await api(spec.path(itemId), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reason: "owner_console" }),
+        body: JSON.stringify(payload),
       });
       const resultText = res.ok ? spec.ok(data) : (data.error || "取消失敗");
       setStatus($("productMsg"), resultText, res.ok ? "ok" : "err");

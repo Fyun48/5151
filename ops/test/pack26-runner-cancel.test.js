@@ -153,7 +153,7 @@ test("console exposes pending-list runner cancel for accepted in-flight releases
   const js = readFileSync(join(root, "../public/console.js"), "utf8");
   assert.match(html, /尚未結束的 GitHub runner 可取消/);
   assert.match(html, /程式退回與 DB 還原是不同操作/);
-  assert.match(html, /console\.js\?v=20260913-pkg26/);
+  assert.match(html, /console\.js\?v=20260913-pkg27/);
   assert.match(js, /\/ops\/api\/production-releases\/\$\{id\}\/cancel-runner/);
   assert.match(js, /取消尚未結束的 runner/);
   assert.match(js, /不宣稱撤回已受理的部署/);
