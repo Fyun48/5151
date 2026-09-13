@@ -625,6 +625,45 @@ const PENDING_UNBLOCK = {
   ok: () => "已解除封鎖並重開評估。沒有開 PR，也沒有部署正式機。",
 };
 
+const PENDING_UNKNOWN_CONFIRM = {
+  unknownsucceeded: {
+    action: "unknownsucceeded",
+    label: "確認已成功",
+    title: "確認正式發布實際已成功",
+    body: (id) => `確認正式發布 #${id} 在該環境實際已成功？這一步只寫觀察，不改寫狀態不明的終態，也不宣稱撤回已送出的部署。不會 Deploy v3／Deploy OPS。`,
+    confirm: "確定寫入觀察",
+    danger: false,
+    reasonRequired: true,
+    reasonLabel: "請說明實際看到的結果（會寫進觀察紀錄）",
+    observedResult: "succeeded",
+    ok: (data) => `已確認實際結果。${data.rewrite_status === false ? "沒有改寫發布終態。" : ""}${data.deploy_not_withdrawn ? "不宣稱撤回部署。" : ""}`,
+  },
+  unknownfailed: {
+    action: "unknownfailed",
+    label: "確認已失敗",
+    title: "確認正式發布實際已失敗",
+    body: (id) => `確認正式發布 #${id} 在該環境實際已失敗？這一步只寫觀察，不改寫狀態不明的終態，也不宣稱撤回已送出的部署。不會 Deploy v3／Deploy OPS。`,
+    confirm: "確定寫入觀察",
+    danger: true,
+    reasonRequired: true,
+    reasonLabel: "請說明實際看到的結果（會寫進觀察紀錄）",
+    observedResult: "failed",
+    ok: (data) => `已確認實際結果。${data.rewrite_status === false ? "沒有改寫發布終態。" : ""}${data.deploy_not_withdrawn ? "不宣稱撤回部署。" : ""}`,
+  },
+  unknownrolledback: {
+    action: "unknownrolledback",
+    label: "確認已退回",
+    title: "確認正式發布實際已退回",
+    body: (id) => `確認正式發布 #${id} 在該環境實際已退回？這一步只寫觀察，不改寫狀態不明的終態，也不宣稱撤回已送出的部署。不會 Deploy v3／Deploy OPS。`,
+    confirm: "確定寫入觀察",
+    danger: true,
+    reasonRequired: true,
+    reasonLabel: "請說明實際看到的結果（會寫進觀察紀錄）",
+    observedResult: "rolled_back",
+    ok: (data) => `已確認實際結果。${data.rewrite_status === false ? "沒有改寫發布終態。" : ""}${data.deploy_not_withdrawn ? "不宣稱撤回部署。" : ""}`,
+  },
+};
+
 function pendingItemActions(it) {
   const actions = [];
   const unsent = PENDING_CANCEL[it.kind];
@@ -679,6 +718,13 @@ function pendingItemActions(it) {
   }
   if (it.kind === "blocked" && it.state === "blocked" && it.unblock?.offered) {
     actions.push({ ...PENDING_UNBLOCK });
+  }
+  if (it.kind === "production_release" && it.state === "unknown" && it.unknown_confirm?.offered) {
+    actions.push(
+      { ...PENDING_UNKNOWN_CONFIRM.unknownsucceeded, unknown_confirm: it.unknown_confirm },
+      { ...PENDING_UNKNOWN_CONFIRM.unknownfailed, unknown_confirm: it.unknown_confirm },
+      { ...PENDING_UNKNOWN_CONFIRM.unknownrolledback, unknown_confirm: it.unknown_confirm },
+    );
   }
   return actions;
 }
@@ -1940,6 +1986,7 @@ $("exitDetailBody")?.addEventListener("click", (ev) => {
   const action = btn.dataset.cancelAction || "cancel";
   const spec = PENDING_GATE1[action]
     || PENDING_GATE2[action]
+    || PENDING_UNKNOWN_CONFIRM[action]
     || (action === "reeval"
       ? PENDING_REEVAL
       : action === "unblock"
@@ -1984,7 +2031,9 @@ $("exitDetailBody")?.addEventListener("click", (ev) => {
           head_sha: btn.dataset.headSha,
           reason: note || (spec.gate2Action === "REQUEST_CHANGES" ? "" : "owner_console"),
         }
-        : action === "rollback"
+        : PENDING_UNKNOWN_CONFIRM[action]
+          ? { observed_result: spec.observedResult, reason: note }
+          : action === "rollback"
           ? {
             previous_stable_sha: btn.dataset.prevSha,
             previous_stable_digest: btn.dataset.prevDigest,
@@ -1999,7 +2048,9 @@ $("exitDetailBody")?.addEventListener("click", (ev) => {
         ? `/ops/api/issues/${itemId}/proposal/decision`
         : PENDING_GATE2[action]
         ? `/ops/api/coding-tasks/${btn.dataset.taskId}/release/decision`
-        : action === "reeval"
+        : PENDING_UNKNOWN_CONFIRM[action]
+          ? `/ops/api/production-releases/${itemId}/confirm-state`
+          : action === "reeval"
           ? `/ops/api/issues/${itemId}/reevaluation/reopen`
           : action === "unblock"
             ? `/ops/api/issues/${itemId}/unblock`
