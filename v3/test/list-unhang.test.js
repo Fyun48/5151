@@ -29,7 +29,9 @@ test("listListings attaches same-house only on the returned page", () => {
   const script = `
     import { listListings, upsertListing, setListingMatch } from ${JSON.stringify(path.join(dir, "../src/db.js"))};
     const stamp = "2026-09-05T00:00:00.000Z";
+    const newest = "2026-09-06T12:00:00.000Z";
     for (let i = 1; i <= 80; i += 1) {
+      const isPair = i === 1 || i === 2;
       upsertListing({
         post_id: 900000 + i,
         source_key: "1|1",
@@ -48,14 +50,14 @@ test("listListings attaches same-house only on the returned page", () => {
         cover: "",
         tags: '["有電梯"]',
         refresh_time: "",
-        first_seen_at: stamp,
-        last_seen_at: stamp,
+        first_seen_at: isPair ? newest : stamp,
+        last_seen_at: isPair ? newest : stamp,
         last_event: "new",
         source: "591",
       });
     }
-    setListingMatch(900080, { match_post_id: 900079, match_level: "high", match_detail: "同屋源" });
-    setListingMatch(900079, { match_post_id: 900080, match_level: "high", match_detail: "同屋源" });
+    setListingMatch(900001, { match_post_id: 900002, match_level: "high", match_detail: "同屋源" });
+    setListingMatch(900002, { match_post_id: 900001, match_level: "high", match_detail: "同屋源" });
     const t0 = Date.now();
     const listed = listListings({ filter: "guest", sort: "newest", limit: 5 });
     const ms = Date.now() - t0;
