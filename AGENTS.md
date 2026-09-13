@@ -11,11 +11,10 @@
 
 - **v3**：容器聽 `5153`，程式在 `v3/src`、`v3/public`，資料 `data-v3/v3.db`。
 - **公開站**（同一條 Cloudflare Tunnel、同一台 v3 容器）：
-  - `https://c5151.reversalplay.me` → `http://127.0.0.1:5153`
-  - `https://jibbyrenth.reversalplay.me` → `http://127.0.0.1:5155`
+  - `https://jibbyrenth.reversalplay.me` → `http://127.0.0.1:5153`（5155 是同一容器別名）
 - **OPS Console**：`https://jibbyrentops.reversalplay.me` → `http://127.0.0.1:5154`（獨立容器，不是 v3）。
 - 規劃見 `v3/ARCHITECTURE.md` 與 `v3/DESIGN.md`。
-- **v1 已停用**（root 的 `src/`、`public/` 只留作歷史，只讀匯入）；**v2 只維護、不再加功能**。
+- **v1／v2 已拆除**（不再啟動容器）。歷史庫仍可只讀掛給 v3 匯入。不要再用 `https://c5151.reversalplay.me/`。
 
 ## 本機開發
 

@@ -1,45 +1,6 @@
 name: 591-tracker
 
 services:
-  591-tracker:
-    profiles: ["v1"]
-    container_name: 591-tracker
-    image: ghcr.io/fyun48/5151:latest
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:5151:5151"
-    environment:
-      HOST: "0.0.0.0"
-      PORT: "5151"
-      DATA_DIR: /data
-      TZ: Asia/Taipei
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://a5151.reversalplay.me}
-    volumes:
-      - ${DATA_ROOT:-/DATA}/AppData/591-tracker:/data
-      - ./src:/app/src:ro
-      - ./public:/app/public:ro
-    command: ["node", "--watch-path=src", "--watch-path=public", "src/server.js"]
-
-  591-tracker-v2:
-    container_name: 591-tracker-v2
-    image: ghcr.io/fyun48/5151:latest
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:5152:5152"
-    environment:
-      HOST: "0.0.0.0"
-      PORT: "5152"
-      DATA_DIR: /data
-      TZ: Asia/Taipei
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL_V2:-https://b5151.reversalplay.me}
-      V1_DB_PATH: /v1-data/591.db
-    volumes:
-      - ${DATA_ROOT:-/DATA}/AppData/591-tracker-v2:/data
-      - ${DATA_ROOT:-/DATA}/AppData/591-tracker:/v1-data:ro
-      - ./v2/src:/app/src:ro
-      - ./v2/public:/app/public:ro
-    command: ["node", "--watch-path=src", "--watch-path=public", "src/server.js"]
-
   591-tracker-v3:
     container_name: 591-tracker-v3
     image: ghcr.io/fyun48/5151:latest
@@ -52,8 +13,7 @@ services:
       PORT: "5153"
       DATA_DIR: /data
       TZ: Asia/Taipei
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL_V3:-https://c5151.reversalplay.me}
-      # 同一容器、同一條 tunnel：c5151 → 127.0.0.1:5153；jibbyrenth → 127.0.0.1:5155
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL_V3:-https://jibbyrenth.reversalplay.me}
       V1_DB_PATH: /v1-data/591.db
       V2_DB_PATH: /v2-data/v2.db
     volumes:
@@ -72,5 +32,4 @@ services:
     network_mode: host
     command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
     depends_on:
-      - 591-tracker-v2
       - 591-tracker-v3
