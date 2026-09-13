@@ -170,5 +170,6 @@ test("console exposes pending-list DB restore as a distinct exact-confirm door",
   assert.match(js, /記錄 DB 還原要求/);
   assert.match(js, /reasonExact: "RESTORE-PRODUCTION-DB"/);
   assert.match(js, /confirm_db_restore: note/);
+  assert.match(js, /confirmReasonWrap"\)\.hidden = !confirmNeedsReason/);
   assert.doesNotMatch(js, /\/ops\/api\/production-releases\/\$\{id\}\/(execute|retry|reconcile)/);
 });

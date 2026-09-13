@@ -244,7 +244,7 @@ function showConfirm({ title, body, confirmLabel, onConfirm, danger = true, reas
   confirmAction = onConfirm;
   confirmExactPhrase = String(reasonExact || "");
   confirmNeedsReason = !!reasonRequired || !!confirmExactPhrase;
-  if ($("confirmReasonWrap")) $("confirmReasonWrap").hidden = !reasonRequired;
+  if ($("confirmReasonWrap")) $("confirmReasonWrap").hidden = !confirmNeedsReason;
   if ($("confirmReasonLabel") && reasonLabel) $("confirmReasonLabel").textContent = reasonLabel;
   if ($("confirmReason")) $("confirmReason").value = "";
   if ($("confirmReasonErr")) {
