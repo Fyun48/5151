@@ -37,6 +37,20 @@ export function makeGroupId(seed) {
   return `lg_${createHash("sha256").update(raw).digest("hex").slice(0, 20)}`;
 }
 
+export const CONFIRM_ADMIN = "admin_confirmed";
+export const CONFIRM_AUTO = "auto_confirmed";
+export const CONFIRM_SUSPECTED = "suspected";
+
+const CONFIRM_RANK = {
+  [CONFIRM_ADMIN]: 3,
+  [CONFIRM_AUTO]: 2,
+  [CONFIRM_SUSPECTED]: 1,
+};
+
+export function confirmRank(level) {
+  return CONFIRM_RANK[String(level || "")] || 0;
+}
+
 export function ensureListingGroupSchema(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS listing_groups (
@@ -55,12 +69,37 @@ export function ensureListingGroupSchema(db) {
       FOREIGN KEY (group_id) REFERENCES listing_groups(group_id)
     );
     CREATE INDEX IF NOT EXISTS idx_listing_group_members_group ON listing_group_members(group_id);
+    CREATE TABLE IF NOT EXISTS listing_group_audits (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      action TEXT NOT NULL,
+      admin_user_id INTEGER,
+      post_ids TEXT NOT NULL DEFAULT '[]',
+      previous_group_ids TEXT NOT NULL DEFAULT '[]',
+      resulting_group_id TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS listing_match_evaluations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      post_id INTEGER NOT NULL,
+      candidate_post_id INTEGER,
+      candidate_source TEXT NOT NULL DEFAULT '',
+      confidence REAL,
+      level TEXT NOT NULL DEFAULT '',
+      signals TEXT NOT NULL DEFAULT '[]',
+      veto_reasons TEXT NOT NULL DEFAULT '[]',
+      matcher_version TEXT NOT NULL DEFAULT '',
+      evaluated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_listing_match_eval_post ON listing_match_evaluations(post_id, evaluated_at);
   `);
   for (const sql of [
     "ALTER TABLE user_listing_flags ADD COLUMN watch_group_id TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE user_events ADD COLUMN group_id TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE user_events ADD COLUMN notify_profile_id TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE user_events ADD COLUMN notify_profile_version INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE listing_groups ADD COLUMN confirmation_level TEXT NOT NULL DEFAULT 'auto_confirmed'",
+    "ALTER TABLE listing_groups ADD COLUMN confirmed_by INTEGER",
+    "ALTER TABLE listing_groups ADD COLUMN confirmed_at TEXT",
   ]) {
     try { db.exec(sql); } catch { /* already migrated */ }
   }
@@ -69,6 +108,78 @@ export function ensureListingGroupSchema(db) {
 export function groupIdForPost(db, postId) {
   const row = db.prepare("SELECT group_id FROM listing_group_members WHERE post_id = ?").get(Number(postId));
   return row?.group_id || "";
+}
+
+export function groupRecord(db, groupId) {
+  if (!groupId) return null;
+  try {
+    return db.prepare("SELECT * FROM listing_groups WHERE group_id = ?").get(groupId) || null;
+  } catch {
+    return null;
+  }
+}
+
+export function groupConfirmationLevel(db, groupId) {
+  return String(groupRecord(db, groupId)?.confirmation_level || "") || CONFIRM_AUTO;
+}
+
+export function postConfirmationLevel(db, postId) {
+  const gid = groupIdForPost(db, postId);
+  return gid ? groupConfirmationLevel(db, gid) : "";
+}
+
+export function isAdminConfirmedGroup(db, groupId) {
+  return groupConfirmationLevel(db, groupId) === CONFIRM_ADMIN;
+}
+
+export function isTrustedGroup(db, postId) {
+  const level = postConfirmationLevel(db, postId);
+  return level === CONFIRM_ADMIN || level === CONFIRM_AUTO;
+}
+
+export function writeGroupAudit(db, {
+  action,
+  adminUserId = 0,
+  postIds = [],
+  previousGroupIds = [],
+  resultingGroupId = "",
+  now = new Date(),
+} = {}) {
+  db.prepare(`
+    INSERT INTO listing_group_audits(action, admin_user_id, post_ids, previous_group_ids, resulting_group_id, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(
+    String(action || ""),
+    Number(adminUserId) || null,
+    JSON.stringify((postIds || []).map(Number).filter((id) => id > 0)),
+    JSON.stringify((previousGroupIds || []).filter(Boolean)),
+    String(resultingGroupId || ""),
+    stamp(now),
+  );
+}
+
+export function recordMatchEvaluation(db, evaluation) {
+  if (!evaluation) return;
+  try {
+    db.prepare(`
+      INSERT INTO listing_match_evaluations(
+        post_id, candidate_post_id, candidate_source, confidence, level,
+        signals, veto_reasons, matcher_version, evaluated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      Number(evaluation.incoming_post_id) || 0,
+      Number(evaluation.candidate_post_id) || null,
+      String(evaluation.candidate_source || ""),
+      Number(evaluation.confidence) || 0,
+      String(evaluation.level || ""),
+      JSON.stringify(evaluation.signals || []),
+      JSON.stringify(evaluation.veto_reasons || []),
+      String(evaluation.matcher_version || ""),
+      String(evaluation.evaluated_at || new Date().toISOString()),
+    );
+  } catch {
+    // isolated tests without evaluation table
+  }
 }
 
 export function listGroupMembers(db, groupId) {
@@ -114,7 +225,14 @@ function migrateGroupBindings(db, loserIds, winnerId) {
   ).run(winnerId, ...losers);
 }
 
-export function bindListingsToGroup(db, listings, { evidence = {}, confidence = 0.8, now = new Date() } = {}) {
+export function bindListingsToGroup(db, listings, {
+  evidence = {},
+  confidence = 0.8,
+  now = new Date(),
+  confirmationLevel = CONFIRM_AUTO,
+  adminUserId = 0,
+  allowAdminMerge = false,
+} = {}) {
   const rows = (listings || []).filter((row) => Number(row?.post_id));
   if (rows.length < 2) return null;
   return runInTransaction(db, () => {
@@ -124,14 +242,61 @@ export function bindListingsToGroup(db, listings, { evidence = {}, confidence = 
       if (gid) existing.push(gid);
     }
     const unique = [...new Set(existing)];
+    const adminGroups = unique.filter((id) => isAdminConfirmedGroup(db, id));
+    if (adminGroups.length && !allowAdminMerge) {
+      const adminId = pickCanonicalGroupId(db, adminGroups) || adminGroups[0];
+      const created = stamp(now);
+      const ev = JSON.stringify(evidence || {});
+      for (const row of rows) {
+        const current = groupIdForPost(db, row.post_id);
+        if (current && current !== adminId) continue;
+        db.prepare(`
+          INSERT INTO listing_group_members(post_id, group_id, source, match_confidence, match_evidence, joined_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT(post_id) DO UPDATE SET
+            group_id = excluded.group_id,
+            source = CASE WHEN excluded.source != '' THEN excluded.source ELSE listing_group_members.source END,
+            match_confidence = COALESCE(excluded.match_confidence, listing_group_members.match_confidence),
+            match_evidence = excluded.match_evidence
+        `).run(Number(row.post_id), adminId, String(row.source || ""), confidence, ev, created);
+      }
+      db.prepare("UPDATE listing_groups SET updated_at = ? WHERE group_id = ?").run(created, adminId);
+      refreshGroupPrimary(db, adminId, now);
+      return adminId;
+    }
     const groupId = pickCanonicalGroupId(db, unique)
       || makeGroupId(rows.map((r) => Number(r.post_id)).sort((a, b) => a - b).join(":"));
     const created = stamp(now);
+    const nextLevel = confirmationLevel || CONFIRM_AUTO;
     db.prepare(`
-      INSERT INTO listing_groups(group_id, primary_post_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT(group_id) DO UPDATE SET updated_at = excluded.updated_at
-    `).run(groupId, Number(rows[0].post_id), created, created);
+      INSERT INTO listing_groups(group_id, primary_post_id, created_at, updated_at, confirmation_level, confirmed_by, confirmed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(group_id) DO UPDATE SET
+        updated_at = excluded.updated_at,
+        confirmation_level = CASE
+          WHEN listing_groups.confirmation_level = '${CONFIRM_ADMIN}' THEN listing_groups.confirmation_level
+          WHEN excluded.confirmation_level = '${CONFIRM_ADMIN}' THEN excluded.confirmation_level
+          WHEN listing_groups.confirmation_level = '${CONFIRM_AUTO}' AND excluded.confirmation_level = '${CONFIRM_SUSPECTED}'
+            THEN listing_groups.confirmation_level
+          ELSE excluded.confirmation_level
+        END,
+        confirmed_by = CASE
+          WHEN excluded.confirmation_level = '${CONFIRM_ADMIN}' THEN excluded.confirmed_by
+          ELSE listing_groups.confirmed_by
+        END,
+        confirmed_at = CASE
+          WHEN excluded.confirmation_level = '${CONFIRM_ADMIN}' THEN excluded.confirmed_at
+          ELSE listing_groups.confirmed_at
+        END
+    `).run(
+      groupId,
+      Number(rows[0].post_id),
+      created,
+      created,
+      nextLevel,
+      nextLevel === CONFIRM_ADMIN ? (Number(adminUserId) || null) : null,
+      nextLevel === CONFIRM_ADMIN ? created : null,
+    );
     const ev = JSON.stringify(evidence || {});
     for (const row of rows) {
       db.prepare(`
@@ -157,6 +322,26 @@ export function bindListingsToGroup(db, listings, { evidence = {}, confidence = 
     refreshGroupPrimary(db, groupId, now);
     return groupId;
   });
+}
+
+export function unbindListingFromGroup(db, postId, { now = new Date() } = {}) {
+  const pid = Number(postId) || 0;
+  if (!pid) return "";
+  const gid = groupIdForPost(db, pid);
+  if (!gid) return "";
+  db.prepare("DELETE FROM listing_group_members WHERE post_id = ?").run(pid);
+  const left = db.prepare("SELECT COUNT(*) AS n FROM listing_group_members WHERE group_id = ?").get(gid);
+  if (!Number(left?.n)) {
+    db.prepare("DELETE FROM listing_groups WHERE group_id = ?").run(gid);
+    return "";
+  }
+  if (Number(left?.n) === 1) {
+    db.prepare("DELETE FROM listing_group_members WHERE group_id = ?").run(gid);
+    db.prepare("DELETE FROM listing_groups WHERE group_id = ?").run(gid);
+    return "";
+  }
+  refreshGroupPrimary(db, gid, now);
+  return gid;
 }
 
 export function refreshGroupPrimary(db, groupId, now = new Date()) {

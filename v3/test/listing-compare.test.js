@@ -5,6 +5,7 @@ import {
   compareHouseHeadline,
   compareListingDiffs,
   compareListingNotes,
+  SOURCE_CONFLICT_NOTE,
   costChangePayload,
   feeChangeDetail,
   feeFieldsChanged,
@@ -181,6 +182,16 @@ test("placeholder floors do not appear as -1 in compare diffs", () => {
 test("preferPrimaryListing still prefers lower total monthly cost", () => {
   assert.equal(preferPrimaryListing(cheap, pricey).post_id, 11);
   assert.equal(preferPrimaryListing(pricey, cheap).post_id, 11);
+});
+
+test("conflicting source extras keep both values and a conflict note", () => {
+  const a = { ...cheap, extra_fees: [{ name: "押金", value: "兩個月" }], has_natural_gas: 1 };
+  const b = { ...pricey, extra_fees: [{ name: "押金", value: "一個月" }], has_natural_gas: 0 };
+  const diffs = compareListingDiffs(a, b);
+  assert.ok(diffs.some((row) => row.field === "deposit"));
+  const group = compareHouseGroup([a, b]);
+  assert.ok(group.rows.some((row) => row.field === "deposit" && row.note === SOURCE_CONFLICT_NOTE));
+  assert.ok(compareListingNotes(a, b).includes(SOURCE_CONFLICT_NOTE));
 });
 
 test("cost change payload is omitted when nothing was recorded", () => {

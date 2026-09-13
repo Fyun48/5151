@@ -45,6 +45,30 @@ test("fit score rewards in-budget whole-floor homes and penalizes suites over re
   assert.equal(fields.fit_label, listingFitLabel(fields.fit_score));
 });
 
+test("guest fit score uses stored commute only and does not penalize missing km", () => {
+  const member = listingFitScore({
+    price_num: 25000,
+    kind_name: "整層住家",
+    floor_name: "5/10",
+    tags: '["有電梯"]',
+  }, settings);
+  const guest = listingFitScore({
+    price_num: 25000,
+    kind_name: "整層住家",
+    floor_name: "5/10",
+    tags: '["有電梯"]',
+  }, settings, { guest: true });
+  assert.ok(guest > member, `guest ${guest} should not take the missing-commute penalty ${member}`);
+  const guestWithKm = listingFitScore({
+    price_num: 25000,
+    kind_name: "整層住家",
+    floor_name: "5/10",
+    commute_km: 3,
+    tags: '["有電梯"]',
+  }, settings, { guest: true });
+  assert.ok(guestWithKm >= guest);
+});
+
 test("fit_desc sorts higher scores first", () => {
   const rows = sortListingsRows(
     [

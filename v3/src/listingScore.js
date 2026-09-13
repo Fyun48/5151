@@ -7,8 +7,8 @@ import {
 import { hasWorkPoint } from "./geo.js";
 import { extraMonthlyAmount, listingCompareCost } from "./listingCost.js";
 
-/** 依會員條件打的規則分，不是成交預測、也不是仲介評等。 */
-export function listingFitScore(listing, settings = {}) {
+/** 依使用者需求的適合程度，不是平台推薦、仲介排序或付費排名。 */
+export function listingFitScore(listing, settings = {}, { guest = false } = {}) {
   let score = 58;
   const includeExtras = settings.priceMaxIncludesExtras === true;
   const price = listingCompareCost(listing, { includeExtras }) || 0;
@@ -42,10 +42,16 @@ export function listingFitScore(listing, settings = {}) {
   }
 
   const budget = Number(settings.commuteKm);
-  if (hasWorkPoint(settings) && budget > 0) {
-    const km = Number(listing?.commute_km);
-    if (Number.isFinite(km) && km > 0) {
-      if (km <= budget) score += 14;
+  const storedKm = Number(listing?.commute_km);
+  const hasStoredKm = Number.isFinite(storedKm) && storedKm > 0;
+  if (guest) {
+    if (budget > 0 && hasStoredKm) {
+      if (storedKm <= budget) score += 14;
+      else score -= 20;
+    }
+  } else if (hasWorkPoint(settings) && budget > 0) {
+    if (hasStoredKm) {
+      if (storedKm <= budget) score += 14;
       else score -= 20;
     } else {
       score -= 3;
@@ -66,8 +72,8 @@ export function listingFitLabel(score) {
   return "較不合";
 }
 
-export function listingFitFields(listing, settings = {}) {
-  const fit_score = listingFitScore(listing, settings);
+export function listingFitFields(listing, settings = {}, options = {}) {
+  const fit_score = listingFitScore(listing, settings, options);
   return {
     fit_score,
     fit_label: listingFitLabel(fit_score),

@@ -47,6 +47,7 @@ import {
   copyUserFlags,
   setListingDetail,
   setListingMatch,
+  reconcileListingById,
   touchListingChecked,
   upsertListing,
   updateListingsGeoByAddress,
@@ -83,6 +84,7 @@ import { bestMatch } from "./match.js";
 import { collapseSameHouseNotifyEvents } from "./userSameHouse.js";
 import { classifyExistingUpdate, eventLabel, listingLastEvent, notify, shouldDockNotify, shouldMailNotify, shouldNotify, shouldPushNotify, shouldWebhookNotify } from "./notify.js";
 import { feeChangeDetail, feeFieldsChanged, incomingHasFeePayload, isCostChangeType } from "./listingCompare.js";
+import { significantListingUpdate } from "./sameHouseReconcile.js";
 import { rentAmount } from "./listingCost.js";
 import { normalizeOfflineConfirmDays, shouldRecheckOffline } from "./offline.js";
 import { detailConcurrency, mapPool } from "./pool.js";
@@ -201,7 +203,7 @@ function detailOptions() {
 }
 
 function applyFetchedDetail(listing, detail) {
-  return setListingDetail(listing.post_id, {
+  const saved = setListingDetail(listing.post_id, {
     extraFees: mergeFeeRows(listing.extra_fees, detail.fees),
     contact: detail.contact,
     fetched: 1,
@@ -217,6 +219,8 @@ function applyFetchedDetail(listing, detail) {
     furnish_items: detail.furnish_items,
     kit_fetched: 1,
   });
+  try { reconcileListingById(listing.post_id, { reason: "detail_enrichment" }); } catch { /* ignore */ }
+  return saved;
 }
 
 function listingHasTrustedPin(listing) {
@@ -753,6 +757,8 @@ export async function runWatch(options = {}) {
           match_level: level,
           match_detail: detail,
         });
+      } else if (existing && significantListingUpdate(existing, listing)) {
+        try { reconcileListingById(listing.post_id, { reason: "significant_update" }); } catch { /* ignore */ }
       }
       if (!existing && prev) {
         const copied = copyUserFlags(prev.post_id, listing.post_id);
