@@ -11,6 +11,7 @@ import {
 import { redactCrmReplicas, listCrmHandoff } from "./crmReplica.js";
 import { inferIssueProductId, issueWriteDecision, redactInsightDerivatives } from "./insightConsent.js";
 import { recordPurgeEvent, redactExclusiveIssues } from "./purgeLedger.js";
+import { describeCodeRollbackOffer } from "./release/productionRelease.js";
 
 export const EXIT_ACTIONS = Object.freeze(["pause", "unsubscribe", "handoff", "purge_replica"]);
 export const HANDOFF_SCHEMA = 1;
@@ -284,7 +285,31 @@ export function listPendingWork(db, productId) {
       const scoped = scopedProductionProductId(db, row);
       if (scoped && scoped !== id) continue;
       const status = latestProductionStatus(db, row.id);
-      if (TERMINAL_PRODUCTION_STATUSES.has(status)) continue;
+      if (TERMINAL_PRODUCTION_STATUSES.has(status)) {
+        if (status === "SUCCEEDED") {
+          const offer = describeCodeRollbackOffer(db, row.id);
+          if (offer.offered) {
+            items.push({
+              kind: "production_release",
+              id: row.id,
+              state: "SUCCEEDED",
+              blocking: false,
+              unscoped: !scoped,
+              observation: {
+                accepted: true,
+                in_flight: false,
+                known_result: "success",
+                runner_cancel_requested: false,
+              },
+              rollback: offer.rollback,
+              note: scoped
+                ? offer.note
+                : "正式發布尚未綁 product_id；列出已知結果但不能宣稱可退回",
+            });
+          }
+        }
+        continue;
+      }
       const unknown = status === UNKNOWN_PRODUCTION_STATUS;
       const observation = productionReleaseObservation(db, row.id, status);
       items.push({

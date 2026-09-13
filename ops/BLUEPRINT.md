@@ -425,6 +425,15 @@ Owner 直達部署從現在就保留，不必等第 8 包。OPS 新工作流是�
 - 晚到的 `executeProductionRelease` 若已要求取消 runner，不外送新 workflow、不寫 SUCCEEDED。
 - 反悔：不按取消 runner。不開 live、不合 master、不觸發 CasaOS 三步。
 
+### 包 27 — 目前正式版可程式退回，且與取消 runner、DB 還原分開
+
+- 已成功且為目前正式版的發布：未決清單顯示已知結果，不阻擋移交。
+- Owner 可送程式退回上一版；必須回傳伺服器給的上一版 SHA／digest／workflow run，不得猜 latest。
+- 完整退回契約（SHA＋digest＋靜態樹雜湊＋schema compatible）才顯示按鈕。
+- `confirm_db_restore`／`RESTORE-PRODUCTION-DB` 走另一扇門；跟程式退回一起送是 409，且不執行 DB 還原。
+- 未送出的走第 25 包、尚未結束的 runner 走第 26 包、狀態不明先確認實際結果。
+- 反悔：不按程式退回。不開 live、不合 master、不觸發 CasaOS 三步。
+
 ---
 
 ## 12. 我堅持的理想（用來審每一個 PR）

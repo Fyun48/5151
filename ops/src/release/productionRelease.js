@@ -47,6 +47,7 @@ import {
 import {
   assertCompleteRollbackContract,
   assertDbRestoreConfirmation,
+  rollbackContractComplete,
   looksLikeStaticTreeHash,
   SCHEMA_COMPAT_OK,
 } from "./rollbackContract.js";
@@ -1467,6 +1468,34 @@ export function observeProductionReleaseProgress(db, releaseRunId) {
   };
 }
 
+export function describeCodeRollbackOffer(db, releaseRunId) {
+  const run = db.prepare("SELECT * FROM production_release_run WHERE id=?").get(Number(releaseRunId));
+  if (!run) return { offered: false, reason: "not_found" };
+  const status = latestStatus(db, run.id) || RELEASE_STATUSES.CREATED;
+  if (status !== RELEASE_STATUSES.SUCCEEDED) {
+    return { offered: false, reason: "not_succeeded" };
+  }
+  const ids = targetIds(run);
+  const cur = getProductionStable(db, ids.productId, ids.environmentKey);
+  if (!cur || cur.release_run_id == null || Number(cur.release_run_id) !== Number(run.id)) {
+    return { offered: false, reason: "not_current_stable" };
+  }
+  const target = resolveAuthorizedRollbackTarget(db, run);
+  const complete = rollbackContractComplete(target);
+  return {
+    offered: true,
+    rollback: {
+      previous_stable_sha: target.source_sha || null,
+      previous_stable_digest: target.artifact_digest || null,
+      previous_stable_workflow_run_id: target.workflow_run_id || null,
+      contract_complete: complete,
+    },
+    note: complete
+      ? "已知結果：正式發布已成功，此為目前正式版。可程式退回上一版；這不是取消 runner，也不是 DB 還原。"
+      : "已知結果：正式發布已成功，此為目前正式版。上一版身分不完整，不能宣稱可退回。DB 還原是不同操作。",
+  };
+}
+
 function ownerCancelledEvent(db, releaseRunId) {
   const ev = latestEvent(db, releaseRunId);
   return ev?.to_status === RELEASE_STATUSES.BLOCKED && ev?.event_type === "owner_cancelled";
@@ -1943,6 +1972,16 @@ export async function requestCodeRollback(db, {
   if (dbRestore.requested) {
     throw httpError("database restore is a separate confirmation and is not performed by code rollback", 409);
   }
+  const status = latestStatus(db, row.id);
+  if (isFrozenReleaseStatus(status)) {
+    throw httpError("正式部署狀態不明；先確認該環境實際結果。程式退回與 DB 還原是不同操作。", 409);
+  }
+  if (RUNNER_CANCELABLE_STATUSES.has(status)) {
+    throw httpError("尚未結束的 runner 請走取消 runner。程式退回只適用已成功且為目前正式版的發布。", 409);
+  }
+  if (UNSENT_CANCELABLE_STATUSES.has(status) && !anyWorkflowDispatchAccepted(db, row.id)) {
+    throw httpError("未送出的正式發布請取消未送出的發布。程式退回只適用已成功且為目前正式版的發布。", 409);
+  }
   const authorizedTarget = resolveAuthorizedRollbackTarget(db, row);
   if (!previousStableComplete(authorizedTarget)
     || !same(previousStableSha, authorizedTarget.source_sha)
@@ -1951,7 +1990,6 @@ export async function requestCodeRollback(db, {
     throw httpError("previous stable identity mismatch", 409);
   }
   assertCompleteRollbackContract(authorizedTarget);
-  const status = latestStatus(db, row.id);
   if (status === RELEASE_STATUSES.ROLLED_BACK) {
     return { run: publicReleaseRun(db, row), rolled_back: true, db_restore: false, idempotent: true };
   }
