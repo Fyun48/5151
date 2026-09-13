@@ -15,6 +15,7 @@ import { describeCodeRollbackOffer, describeDbRestoreOffer } from "./release/pro
 import { describeCancelResultOffer, leftoverPendingNote } from "./cancelResult.js";
 import { describeGate2Offer } from "./releaseCandidate.js";
 import { describeGate1Offer } from "./proposal.js";
+import { describeOwnerReevalOffer, describeOwnerUnblockOffer } from "./reevaluation.js";
 import { schemaLooksIncompatible } from "./release/rollbackContract.js";
 
 export const EXIT_ACTIONS = Object.freeze(["pause", "unsubscribe", "handoff", "purge_replica"]);
@@ -456,12 +457,38 @@ export function listPendingWork(db, productId) {
       const expected = decision?.subscription_generation == null ? null : Number(decision.subscription_generation);
       const gate = issueWriteDecision(db, row.issue_id, { expectedGeneration: expected });
       if (gate.ok) continue;
+      const offer = describeOwnerReevalOffer(db, row.issue_id);
       items.push({
         kind: "reevaluation",
         id: row.issue_id,
         state: gate.reason === "stale_generation" ? "stale_generation" : "subscription_revoked",
         blocking: false,
-        note: "自動重評已停：訂閱已退出或世代已換，不會把舊議題重開成評估中。已送出的外部呼叫不宣稱撤回。Owner 手動重評不在此限。",
+        reeval: offer,
+        note: offer.offered
+          ? "自動重評已停：訂閱已退出或世代已換，不會把舊議題重開成評估中。Owner 可從未決清單手動重評。只重開評估，不會開 PR、也不會部署。已授權 Owner 直達不經這個門。"
+          : "自動重評已停：訂閱已退出或世代已換，不會把舊議題重開成評估中。已送出的外部呼叫不宣稱撤回。目前影響力不足或過期，手動重評前要先重算。",
+      });
+    }
+    const blocked = safeAll(db, `
+      SELECT i.id AS issue_id FROM state_entity e
+       JOIN issue_candidate i ON e.id = 'issue:' || i.id
+      WHERE e.entity_type='issue' AND e.state='BLOCKED' AND i.status='open'
+    `);
+    for (const row of blocked) {
+      const offer = describeOwnerUnblockOffer(db, row.issue_id);
+      if (!offer.offered) continue;
+      const scoped = inferIssueProductId(db, row.issue_id);
+      if (scoped && scoped !== id) continue;
+      items.push({
+        kind: "blocked",
+        id: offer.issue_id,
+        state: "blocked",
+        blocking: false,
+        unscoped: !scoped,
+        unblock: offer,
+        note: scoped
+          ? "已封鎖的議題只有 Owner 能解除。解除只重開評估，不會開 PR、也不會部署。自動重評不會碰封鎖議題。已授權 Owner 直達不經這個門。"
+          : "封鎖議題尚未綁 product_id；列出但不能宣稱已核准或已取消外部工作",
       });
     }
   }

@@ -141,6 +141,7 @@ const STATUS_LABEL = {
   stale_generation: "世代已換",
   waiting_approval: "待核准發布",
   waiting_development: "待核准開發",
+  blocked: "已封鎖",
 };
 
 const EXIT_ACTION_LABEL = {
@@ -165,6 +166,7 @@ const PENDING_KIND_LABEL = {
   owner_approval: "開發核准",
   release_notification: "發布通知",
   reevaluation: "自動重評",
+  blocked: "封鎖議題",
   site_command: "遠端客服",
 };
 
@@ -599,6 +601,30 @@ const PENDING_GATE1 = {
   },
 };
 
+const PENDING_REEVAL = {
+  action: "reeval",
+  label: "手動重評",
+  title: "確認手動重評",
+  body: (id) => `手動重評議題 #${id}？只重開評估，不會開 PR、也不會部署正式機。自動重評已停時，仍由 Owner 決定要不要重開。`,
+  confirm: "確定重開評估",
+  danger: false,
+  reasonRequired: true,
+  reasonLabel: "請說明為什麼要重評（會寫進授權紀錄）",
+  ok: () => "已手動重開評估。沒有開 PR，也沒有部署正式機。",
+};
+
+const PENDING_UNBLOCK = {
+  action: "unblock",
+  label: "解除封鎖",
+  title: "確認解除封鎖",
+  body: (id) => `解除議題 #${id} 的封鎖？只有 Owner 能做這一步。只重開評估，不會開 PR、也不會部署正式機。`,
+  confirm: "確定解除封鎖",
+  danger: true,
+  reasonRequired: true,
+  reasonLabel: "請說明為什麼要解除封鎖（會寫進授權紀錄）",
+  ok: () => "已解除封鎖並重開評估。沒有開 PR，也沒有部署正式機。",
+};
+
 function pendingItemActions(it) {
   const actions = [];
   const unsent = PENDING_CANCEL[it.kind];
@@ -647,6 +673,12 @@ function pendingItemActions(it) {
       { ...PENDING_GATE1.rejectdev, gate1: it.gate1 },
       { ...PENDING_GATE1.blockdev, gate1: it.gate1 },
     );
+  }
+  if (it.kind === "reevaluation" && it.reeval?.offered) {
+    actions.push({ ...PENDING_REEVAL });
+  }
+  if (it.kind === "blocked" && it.state === "blocked" && it.unblock?.offered) {
+    actions.push({ ...PENDING_UNBLOCK });
   }
   return actions;
 }
@@ -1908,7 +1940,11 @@ $("exitDetailBody")?.addEventListener("click", (ev) => {
   const action = btn.dataset.cancelAction || "cancel";
   const spec = PENDING_GATE1[action]
     || PENDING_GATE2[action]
-    || (action === "runner"
+    || (action === "reeval"
+      ? PENDING_REEVAL
+      : action === "unblock"
+        ? PENDING_UNBLOCK
+        : action === "runner"
       ? PENDING_RUNNER_CANCEL
       : action === "rollback"
         ? PENDING_CODE_ROLLBACK
@@ -1956,12 +1992,18 @@ $("exitDetailBody")?.addEventListener("click", (ev) => {
           }
           : action === "dbrestore"
             ? { confirm_db_restore: note }
-            : { reason: "owner_console" };
+            : action === "reeval" || action === "unblock"
+              ? { reason: note }
+              : { reason: "owner_console" };
       const path = PENDING_GATE1[action]
         ? `/ops/api/issues/${itemId}/proposal/decision`
         : PENDING_GATE2[action]
         ? `/ops/api/coding-tasks/${btn.dataset.taskId}/release/decision`
-        : spec.path(itemId);
+        : action === "reeval"
+          ? `/ops/api/issues/${itemId}/reevaluation/reopen`
+          : action === "unblock"
+            ? `/ops/api/issues/${itemId}/unblock`
+            : spec.path(itemId);
       const { res, data } = await api(path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

@@ -10,6 +10,7 @@ import {
   REEVALUATION_POLICY_VERSION, REASON,
 } from "./reevaluationPolicy.js";
 import { issueWriteDecision } from "./insightConsent.js";
+import { rejectSpoofedOwnerDirect } from "./instructionSource.js";
 
 const REASON_MAX = 1000;
 const REOPENABLE = new Set(["DEFERRED", "REJECTED"]);
@@ -197,13 +198,53 @@ export function authorizeAndReopen(db, issueId, { triggerType = "auto", authoriz
   });
 }
 
+export function describeOwnerReevalOffer(db, issueId, { now = new Date() } = {}) {
+  const id = Number(issueId);
+  if (!Number.isInteger(id) || id < 1) return { offered: false };
+  const issue = db.prepare("SELECT * FROM issue_candidate WHERE id=?").get(id);
+  if (!issue || issue.status !== "open") return { offered: false };
+  const entity = findEntity(db, issueEntityId(id));
+  if (!entity || !REOPENABLE.has(entity.state)) return { offered: false };
+  const auth = db.prepare("SELECT id FROM development_authorization WHERE issue_id=? AND status='active'").get(id);
+  if (auth) return { offered: false };
+  const decisionType = DECISION_FOR_STATE[entity.state];
+  const baseline = getReevaluationBaseline(db, id, decisionType);
+  if (!baseline) return { offered: false };
+  const impact = getCurrentIssueImpact(db, id, { now });
+  if (!impact || impact.stale) return { offered: false, reason: impact?.stale ? "stale_impact" : "no_impact" };
+  return {
+    offered: true,
+    issue_id: id,
+    from_state: entity.state,
+    decision_type: decisionType,
+    owner_decision_id: baseline.owner_decision_id,
+    proposal_id: baseline.proposal_id,
+    proposal_version: baseline.proposal_version,
+    proposal_hash: String(baseline.proposal_hash || ""),
+  };
+}
+
+export function describeOwnerUnblockOffer(db, issueId) {
+  const id = Number(issueId);
+  if (!Number.isInteger(id) || id < 1) return { offered: false };
+  const issue = db.prepare("SELECT * FROM issue_candidate WHERE id=?").get(id);
+  if (!issue || issue.status !== "open") return { offered: false };
+  const entity = findEntity(db, issueEntityId(id));
+  if (!entity || entity.state !== "BLOCKED") return { offered: false };
+  return { offered: true, issue_id: id, from_state: "BLOCKED" };
+}
+
 // Owner 手動重評（DEFERRED/REJECTED）：略過門檻，但不可用於 BLOCKED（狀態檢查會擋）。
-export function ownerManualReevaluate(db, issueId, { actor = "owner", reason = null, now = new Date(), config = reevaluationConfig() } = {}) {
+export function ownerManualReevaluate(db, issueId, opts = {}) {
+  rejectSpoofedOwnerDirect(opts);
+  const { actor = "owner", reason = null, now = new Date(), config = reevaluationConfig() } = opts;
   return authorizeAndReopen(db, issueId, { triggerType: "owner_manual", authorizedBy: "owner", actor, reason, requireMaterial: false, now, config });
 }
 
 // Owner 解除 BLOCK：唯一能讓 BLOCKED 離開的路徑。AI/worker 不得呼叫（僅由已認證 Owner 路由呼叫）。
-export function ownerUnblock(db, issueId, { actor = "owner", reason = null, now = new Date(), config = reevaluationConfig() } = {}) {
+export function ownerUnblock(db, issueId, opts = {}) {
+  rejectSpoofedOwnerDirect(opts);
+  const { actor = "owner", reason = null, now = new Date(), config = reevaluationConfig() } = opts;
   return withImmediateTx(db, () => {
     const entity = getEntity(db, issueEntityId(issueId));
     if (entity.state !== "BLOCKED") throw httpError(`issue is not blocked (state=${entity.state})`, 409);
