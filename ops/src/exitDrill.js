@@ -13,6 +13,7 @@ import { inferIssueProductId, issueWriteDecision, redactInsightDerivatives } fro
 import { recordPurgeEvent, redactExclusiveIssues } from "./purgeLedger.js";
 import { describeCodeRollbackOffer, describeDbRestoreOffer } from "./release/productionRelease.js";
 import { describeCancelResultOffer, leftoverPendingNote } from "./cancelResult.js";
+import { schemaLooksIncompatible } from "./release/rollbackContract.js";
 
 export const EXIT_ACTIONS = Object.freeze(["pause", "unsubscribe", "handoff", "purge_replica"]);
 export const HANDOFF_SCHEMA = 1;
@@ -87,7 +88,10 @@ function knownResultPendingNote({ scoped, status, codeOffer, dbOffer }) {
     return `已知結果：程式已退回。${dbBit}這不是再退回程式，也不是取消 runner。`;
   }
   if (codeOffer?.rollback?.contract_complete) {
-    return `已知結果：正式發布已成功，此為目前正式版。可程式退回上一版。${dbBit}程式退回與 DB 還原是不同操作。`;
+    return `已知結果：正式發布已成功，此為目前正式版。可程式退回上一版。退回身分含 SHA／digest／靜態樹／schema。bind-mount 不會在這一步還原。${dbBit}程式退回與 DB 還原是不同操作。`;
+  }
+  if (codeOffer?.record && schemaLooksIncompatible(codeOffer.record.previous?.schema_compat)) {
+    return `已知結果：正式發布已成功，此為目前正式版。上一版 schema 不相容，不能宣稱直接換映像可救回。${dbBit}`;
   }
   return `已知結果：正式發布已成功，此為目前正式版。上一版身分不完整，不能宣稱可退回。${dbBit}`;
 }
@@ -321,6 +325,7 @@ export function listPendingWork(db, productId) {
               db_restore_requested: !!dbOffer.requested,
             },
             rollback: codeOffer.rollback || null,
+            record: codeOffer.record || null,
             db_restore: dbOffer.offered ? dbOffer : null,
             note: knownResultPendingNote({ scoped, status, codeOffer, dbOffer }),
           });

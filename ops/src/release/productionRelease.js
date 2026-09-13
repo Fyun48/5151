@@ -51,6 +51,8 @@ import {
   looksLikeStaticTreeHash,
   SCHEMA_COMPAT_OK,
   DB_RESTORE_CONFIRMATION,
+  describeRollbackIdentityRecord,
+  schemaLooksIncompatible,
 } from "./rollbackContract.js";
 
 const PII_OR_SECRET_KEY = /(pass(word|wd)?|secret|token|cookie|authorization|auth[-_]?header|api[-_]?key|access[-_]?key|private[-_]?key|credential|session|bearer|otp|ssh|email|contact|user_ref|phone|reporter|connection_string|dsn|database_url|prod(uction)?[-_]?(host|db|user|password|secret|token|key)|nas[-_]?(host|user|key|password))/i;
@@ -1483,6 +1485,11 @@ export function describeCodeRollbackOffer(db, releaseRunId) {
   }
   const target = resolveAuthorizedRollbackTarget(db, run);
   const complete = rollbackContractComplete(target);
+  const record = describeRollbackIdentityRecord({
+    current: cur,
+    previous: target,
+    provenance: cur.provenance,
+  });
   return {
     offered: true,
     rollback: {
@@ -1490,11 +1497,21 @@ export function describeCodeRollbackOffer(db, releaseRunId) {
       previous_stable_digest: target.artifact_digest || null,
       previous_stable_workflow_run_id: target.workflow_run_id || null,
       contract_complete: complete,
+      record,
     },
-    note: complete
-      ? "已知結果：正式發布已成功，此為目前正式版。可程式退回上一版；這不是取消 runner，也不是 DB 還原。"
-      : "已知結果：正式發布已成功，此為目前正式版。上一版身分不完整，不能宣稱可退回。DB 還原是不同操作。",
+    record,
+    note: rollbackIdentityPendingNote({ complete, record }),
   };
+}
+
+function rollbackIdentityPendingNote({ complete, record }) {
+  if (complete) {
+    return "已知結果：正式發布已成功，此為目前正式版。可程式退回上一版；退回身分含 SHA／digest／靜態樹／schema。Compose／設定未記錄則標未記錄。bind-mount 不會在這一步還原。這不是取消 runner，也不是 DB 還原。";
+  }
+  if (schemaLooksIncompatible(record?.previous?.schema_compat)) {
+    return "已知結果：正式發布已成功，此為目前正式版。上一版 schema 不相容，不能宣稱直接換映像可救回。DB 還原是不同操作。";
+  }
+  return "已知結果：正式發布已成功，此為目前正式版。上一版身分不完整，不能宣稱可退回。DB 還原是不同操作。";
 }
 
 export const DB_RESTORE_EVIDENCE_KIND = "db_restore_request";
