@@ -188,5 +188,5 @@ test("console explains auto reevaluation will not reopen after generation change
   assert.match(html, /自動重評/);
   assert.match(html, /把舊議題重開/);
   assert.match(js, /自動重評不會把舊議題重開/);
-  assert.match(html, /console\.js\?v=20260912-pkg1/);
+  assert.match(html, /console\.js\?v=20260913-pkg25/);
 });

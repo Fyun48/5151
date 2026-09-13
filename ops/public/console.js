@@ -121,6 +121,11 @@ const STATUS_LABEL = {
   deploying: "佈署中",
   validating: "驗證中",
   cancelled: "已取消",
+  CREATED: "未送出",
+  ELIGIBILITY_VERIFIED: "資格已核",
+  MERGED: "已合併",
+  BLOCKED: "已擋下",
+  SUCCEEDED: "已成功",
   unknown: "狀態不明",
   PRODUCTION_STATE_UNKNOWN: "狀態不明",
   subscription_revoked: "訂閱已撤",
@@ -431,6 +436,15 @@ const PENDING_CANCEL = {
     body: (id, state) => `取消這筆尚未完成的隔離 staging #${id}？只影響測試容器，正式站無感。已完成的結果不會被這一步改寫。${["claimed", "building", "deploying", "validating"].includes(state) ? "已在跑的不宣稱撤回。" : "未送出的部署不會再佈測試站。"}`,
     confirm: "確定取消 staging",
     ok: (data) => `已取消隔離 staging。${data.in_flight_not_withdrawn ? "已在跑的不宣稱撤回。" : ""}`,
+  },
+  production_release: {
+    states: ["CREATED", "ELIGIBILITY_VERIFIED", "MERGED", "pending"],
+    label: "取消未送出的正式發布",
+    path: (id) => `/ops/api/production-releases/${id}/cancel`,
+    title: "確認取消正式發布",
+    body: (id, state) => `取消這筆尚未外送的正式發布 #${id}？不會部署正式站。${state === "ELIGIBILITY_VERIFIED" || state === "MERGED" ? "已在核對的步驟不宣稱撤回已受理的 workflow。" : "未送出的發布不會再開 Build／Predeploy／Deploy。"}`,
+    confirm: "確定取消正式發布",
+    ok: (data) => `已取消正式發布。${data.in_flight_not_withdrawn ? "已在核對的步驟不宣稱撤回已受理的 workflow。" : ""}`,
   },
 };
 

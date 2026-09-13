@@ -83,6 +83,7 @@ import { getReleaseCandidateView, getReleaseManifest, submitOwnerReleaseDecision
 import { releaseWorkerConfigFromEnv, startReleaseLoop } from "./releaseWorker.js";
 import { getMigrationSafetyView, createMigrationSafetyAssessment, assessApprovedReleaseIfNeeded } from "./release/migrationSafety.js";
 import {
+  cancelProductionReleaseRun,
   createProductionReleaseRun,
   executeProductionRelease,
   getProductionRelease,
@@ -1321,6 +1322,15 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
         try {
           sendJson(res, 200, { ok: true, ...await retryProductionRelease(db, Number(prodRelRetry[1]), { provider: releaseProvider, repo: releaseRepo, actor: `owner:${req.owner.email}` }) });
+        } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+      const prodRelCancel = pathname.match(/^\/ops\/api\/production-releases\/(\d+)\/cancel$/);
+      if (prodRelCancel && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {}; try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          sendJson(res, 200, { ok: true, ...cancelProductionReleaseRun(db, Number(prodRelCancel[1]), { actor: `owner:${req.owner.email}`, reason: b.reason }) });
         } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
         return;
       }

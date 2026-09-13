@@ -117,7 +117,7 @@ test("console exposes pending-list cancel for unsent remote-cs", () => {
   const html = readFileSync(join(root, "../public/console.html"), "utf8");
   const js = readFileSync(join(root, "../public/console.js"), "utf8");
   assert.match(html, /未送出的遠端客服也可取消/);
-  assert.match(html, /console\.js\?v=20260913-pkg24/);
+  assert.match(html, /console\.js\?v=20260913-pkg25/);
   assert.match(js, /\/ops\/api\/site-commands\/\$\{id\}\/cancel/);
   assert.match(js, /取消未送出的遠端客服/);
   assert.match(js, /已在外送的呼叫不宣稱撤回/);

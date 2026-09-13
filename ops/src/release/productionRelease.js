@@ -745,6 +745,9 @@ async function dispatchOrReconcile(db, {
   }
 
     if (role === "dispatch" && !binding.workflow_run_id) {
+    if (ownerCancelledEvent(db, run.id)) {
+      throw httpError("正式發布已取消，晚到 workflow 不外送。", 409, { code: "release_cancelled" });
+    }
     if (isFrozenReleaseStatus(latestStatus(db, run.id)) && PRODUCTION_SCOPED_WORKFLOWS.has(workflowKind)) {
       throw httpError("production state unknown forbids new production dispatch", 409);
     }
@@ -761,6 +764,10 @@ async function dispatchOrReconcile(db, {
         productId: ids.productId, environmentKey: ids.environmentKey,
       });
       try {
+        if (ownerCancelledEvent(db, run.id)) {
+          decisionError = httpError("正式發布已取消，晚到 workflow 不外送。", 409, { code: "release_cancelled" });
+          return;
+        }
         assertIdentitiesUnchanged(db, run, { repo, env, allowMasterMovement: true });
         if (observedStable) requireStableUnchanged(db, observedStable, run);
       } catch (err) {
@@ -1393,15 +1400,103 @@ async function executeCodeRollback(db, run, { provider, repo, env, now, actor, o
   return { rolled_back: true, db_restore: false };
 }
 
+function bindingLooksAccepted(row) {
+  if (row.workflow_run_id) return true;
+  if (!row.dispatch_submitted_at) return false;
+  return row.binding_status !== BINDING_STATUSES.REJECTED;
+}
+
 function mutatingDispatchSubmitted(db, releaseRunId) {
   const rows = db.prepare(
     `SELECT dispatch_submitted_at, workflow_run_id, binding_status FROM production_release_workflow_binding
      WHERE release_run_id=? AND workflow_kind IN (?,?)`,
   ).all(Number(releaseRunId), WORKFLOW_KINDS.DEPLOY, WORKFLOW_KINDS.ROLLBACK);
-  return rows.some((b) => {
-    if (b.workflow_run_id) return true;
-    if (!b.dispatch_submitted_at) return false;
-    return b.binding_status !== BINDING_STATUSES.REJECTED;
+  return rows.some(bindingLooksAccepted);
+}
+
+function anyWorkflowDispatchAccepted(db, releaseRunId) {
+  const rows = db.prepare(
+    `SELECT dispatch_submitted_at, workflow_run_id, binding_status FROM production_release_workflow_binding
+     WHERE release_run_id=?`,
+  ).all(Number(releaseRunId));
+  return rows.some(bindingLooksAccepted);
+}
+
+const UNSENT_CANCELABLE_STATUSES = new Set([
+  RELEASE_STATUSES.CREATED,
+  RELEASE_STATUSES.ELIGIBILITY_VERIFIED,
+  RELEASE_STATUSES.MERGED,
+]);
+
+function ownerCancelledEvent(db, releaseRunId) {
+  const ev = latestEvent(db, releaseRunId);
+  return ev?.to_status === RELEASE_STATUSES.BLOCKED && ev?.event_type === "owner_cancelled";
+}
+
+function skippedIfOwnerCancelled(db, run) {
+  if (!ownerCancelledEvent(db, run.id)) return null;
+  releaseLeaseIfSafe(db, run.id);
+  const row = db.prepare("SELECT * FROM production_release_run WHERE id=?").get(Number(run.id));
+  return {
+    run: publicReleaseRun(db, row),
+    current_status: RELEASE_STATUSES.BLOCKED,
+    skipped: true,
+    reason: "cancelled",
+  };
+}
+
+export function cancelProductionReleaseRun(db, releaseRunId, { actor = "owner", reason = null, now = new Date() } = {}) {
+  return withImmediateTx(db, () => {
+    const run = db.prepare("SELECT * FROM production_release_run WHERE id=?").get(Number(releaseRunId));
+    if (!run) throw httpError("production release run not found", 404);
+    const status = latestStatus(db, run.id) || RELEASE_STATUSES.CREATED;
+    if (ownerCancelledEvent(db, run.id)) {
+      return { idempotent: true, in_flight_not_withdrawn: false, run: publicReleaseRun(db, run) };
+    }
+    if (status === RELEASE_STATUSES.SUCCEEDED || status === RELEASE_STATUSES.ROLLED_BACK) {
+      throw httpError("已完成的正式發布不改寫。", 409);
+    }
+    if (isFrozenReleaseStatus(status)) {
+      throw httpError("正式部署狀態不明；先確認該環境實際結果。已送出的部署不宣稱撤回。", 409);
+    }
+    if (status === RELEASE_STATUSES.BLOCKED) {
+      throw httpError("已擋下的正式發布不改寫。", 409);
+    }
+    const dispatched = anyWorkflowDispatchAccepted(db, run.id);
+    if (dispatched || !UNSENT_CANCELABLE_STATUSES.has(status)) {
+      throw httpError("已受理的部署不宣稱撤回。未送出的正式發布才可取消。", 409);
+    }
+    const inFlight = status === RELEASE_STATUSES.ELIGIBILITY_VERIFIED || status === RELEASE_STATUSES.MERGED;
+    appendEvent(db, {
+      releaseRunId: run.id,
+      toStatus: RELEASE_STATUSES.BLOCKED,
+      eventType: "owner_cancelled",
+      reason: reason ? String(reason).slice(0, 120) : "owner_cancelled",
+      errorCode: "owner_cancelled",
+      now,
+      actor,
+    });
+    releaseLeaseIfSafe(db, run.id);
+    appendAuditRow(db, {
+      actor,
+      action: "issue.production_release.cancelled",
+      entityType: "production_release_run",
+      entityId: String(run.id),
+      data: {
+        issue_id: Number(run.issue_id),
+        coding_task_id: Number(run.coding_task_id),
+        product_id: run.product_id || null,
+        prev_status: status,
+        reason: reason ? String(reason).slice(0, 120) : null,
+        in_flight_not_withdrawn: inFlight,
+      },
+      now,
+    });
+    return {
+      cancelled: true,
+      in_flight_not_withdrawn: inFlight,
+      run: publicReleaseRun(db, db.prepare("SELECT * FROM production_release_run WHERE id=?").get(Number(run.id))),
+    };
   });
 }
 
@@ -1564,7 +1659,13 @@ export async function executeProductionRelease(db, releaseRunId, {
   }
   if (isTerminalReleaseStatus(status)) {
     releaseLeaseIfSafe(db, run.id);
-    return { run: publicReleaseRun(db, run), current_status: status, idempotent: true };
+    const cancelled = ownerCancelledEvent(db, run.id);
+    return {
+      run: publicReleaseRun(db, run),
+      current_status: status,
+      idempotent: true,
+      ...(cancelled ? { skipped: true, reason: "cancelled" } : {}),
+    };
   }
   const owner = randomUUID();
   let observedStable = observedStableForRun(db, run);
@@ -1578,6 +1679,10 @@ export async function executeProductionRelease(db, releaseRunId, {
   }
 
   await ensureMasterAncestry(db, run, { provider: prov, repo, now, actor });
+  {
+    const stopped = skippedIfOwnerCancelled(db, run);
+    if (stopped) return stopped;
+  }
 
   withImmediateTx(db, () => {
     const alreadyOnMaster = !!(repo?.available && repo.isRemoteAncestor?.(run.authorized_head_sha, "master"));
@@ -1587,6 +1692,10 @@ export async function executeProductionRelease(db, releaseRunId, {
     }
   });
 
+  {
+    const stopped = skippedIfOwnerCancelled(db, run);
+    if (stopped) return stopped;
+  }
   const build = await dispatchOrReconcile(db, {
     run, provider: prov, workflowKind: WORKFLOW_KINDS.BUILD, workflowFile: PRODUCTION_WORKFLOWS.BUILD,
     inputs: { sha: run.authorized_head_sha, expected_digest: run.artifact_digest, image_digest: run.artifact_digest },
@@ -1609,6 +1718,10 @@ export async function executeProductionRelease(db, releaseRunId, {
     appendEvent(db, { releaseRunId: run.id, toStatus: RELEASE_STATUSES.BUILD_RECONCILED, eventType: "build_reconciled", now, actor });
   });
 
+  {
+    const stopped = skippedIfOwnerCancelled(db, run);
+    if (stopped) return stopped;
+  }
   const pre = await dispatchOrReconcile(db, {
     run, provider: prov, workflowKind: WORKFLOW_KINDS.PREDEPLOY, workflowFile: PRODUCTION_WORKFLOWS.PREDEPLOY,
     inputs: { sha: run.authorized_head_sha }, environment: REQUIRED_TARGET_ENVIRONMENT, confirmation: "PREDEPLOY-PRODUCTION",
@@ -1639,6 +1752,10 @@ export async function executeProductionRelease(db, releaseRunId, {
     observedStable = stableSnapshot(bootstrapped);
   }
 
+  {
+    const stopped = skippedIfOwnerCancelled(db, run);
+    if (stopped) return stopped;
+  }
   const deploy = await dispatchOrReconcile(db, {
     run, provider: prov, workflowKind: WORKFLOW_KINDS.DEPLOY, workflowFile: PRODUCTION_WORKFLOWS.DEPLOY,
     inputs: { sha: run.authorized_head_sha, image_digest: run.artifact_digest },
@@ -1649,6 +1766,12 @@ export async function executeProductionRelease(db, releaseRunId, {
   return await finishDeployAfterReconcile(db, run, deploy, {
     provider: prov, repo, env, now, actor, owner, hooks, observedStable,
   });
+  } catch (err) {
+    if (err?.code === "release_cancelled") {
+      const stopped = skippedIfOwnerCancelled(db, run);
+      if (stopped) return stopped;
+    }
+    throw err;
   } finally {
     releaseLeaseIfSafe(db, releaseRunId);
   }
