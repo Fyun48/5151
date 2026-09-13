@@ -495,6 +495,22 @@ const PENDING_DB_RESTORE = {
   ok: (data) => `已記錄 DB 還原要求。${data.restore_not_performed ? "沒有執行自動還原。" : ""}`,
 };
 
+function confirmCancelResultPath(kind, id) {
+  if (kind === "coding") return `/ops/api/coding-tasks/${id}/confirm-cancel-result`;
+  if (kind === "qa") return `/ops/api/qa-runs/${id}/confirm-cancel-result`;
+  return `/ops/api/staging-deployments/${id}/confirm-cancel-result`;
+}
+
+const PENDING_CANCEL_RESULT = {
+  kinds: ["coding", "qa", "staging"],
+  states: ["cancelled"],
+  label: "確認取消後的剩餘工作",
+  title: "確認取消後的剩餘工作",
+  body: (id) => `確認 #${id} 取消後仍留下的 branch、PR、測試站或供應商工作？這不會自動關閉 PR、刪分支或拆測試容器，也不宣稱外部工作已撤回。`,
+  confirm: "確定確認結果",
+  ok: (data) => `已確認取消結果。${data.cleanup_not_performed ? "沒有自動清理 branch／PR／測試站。" : ""}`,
+};
+
 function pendingItemActions(it) {
   const actions = [];
   const unsent = PENDING_CANCEL[it.kind];
@@ -515,6 +531,18 @@ function pendingItemActions(it) {
     && it.db_restore?.offered
   ) {
     actions.push({ ...PENDING_DB_RESTORE, action: "dbrestore" });
+  }
+  if (
+    PENDING_CANCEL_RESULT.kinds.includes(it.kind)
+    && PENDING_CANCEL_RESULT.states.includes(it.state)
+    && it.leftover?.offered
+    && !it.leftover?.confirmed
+  ) {
+    actions.push({
+      ...PENDING_CANCEL_RESULT,
+      action: "cancelresult",
+      path: (id) => confirmCancelResultPath(it.kind, id),
+    });
   }
   return actions;
 }
@@ -1764,7 +1792,9 @@ $("exitDetailBody")?.addEventListener("click", (ev) => {
       ? PENDING_CODE_ROLLBACK
       : action === "dbrestore"
         ? PENDING_DB_RESTORE
-        : PENDING_CANCEL[btn.dataset.cancelKind];
+        : action === "cancelresult"
+          ? { ...PENDING_CANCEL_RESULT, path: (id) => confirmCancelResultPath(btn.dataset.cancelKind, id) }
+          : PENDING_CANCEL[btn.dataset.cancelKind];
   const itemId = Number(btn.dataset.cancelId);
   const pid = btn.dataset.pid || "";
   const state = btn.dataset.cancelState || "";
