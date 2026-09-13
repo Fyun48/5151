@@ -275,8 +275,8 @@ test("index keeps local commute patch hooks and reconnect snapshot", () => {
   assert.match(html, /等待計算/);
   assert.match(html, /定位服務暫時忙碌，稍後重試/);
   assert.match(html, /尚未取得足夠位置資料/);
-  assert.match(html, /notifyIncludeStreetEstimate/);
-  assert.match(html, /依路段位置估算/);
+  assert.doesNotMatch(html, /id="notifyIncludeStreetEstimate"/);
+  assert.match(html, /訪客可用直線距離先篩/);
   assert.match(html, /汽車路網估算/);
   assert.match(html, /不是專用機車道路/);
   assert.doesNotMatch(html, /路線計算中/);

@@ -26,6 +26,10 @@ export function normalizePublicQuery(query = {}) {
     minBuildingFloors: Number(query.minBuildingFloors) || 0,
     wholeFloorOnly: query.wholeFloorOnly === true || query.wholeFloorOnly === "1",
     hasParking: query.hasParking === true || query.hasParking === "1",
+    workAddress: String(query.workAddress || "").trim().slice(0, 120),
+    commuteKm: Number(query.commuteKm) || 0,
+    workLat: Number.isFinite(Number(query.workLat)) ? Number(query.workLat) : null,
+    workLng: Number.isFinite(Number(query.workLng)) ? Number(query.workLng) : null,
   });
 }
 

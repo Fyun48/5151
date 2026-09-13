@@ -27,7 +27,7 @@ import { sameSearch } from "./client591.js";
 import { CITIES, districtNameFromListing, districtsFromSearchUrls, lookupDistrict, normalizeWatchDistricts } from "./regions.js";
 import { appendDistrictCandidates, ensureDistrictCandidateIndex } from "./listDistrictSql.js";
 import { appendPriceCeilingCandidates } from "./listPriceSql.js";
-import { listingRefreshAt, matchFocusHints, preferPrimaryListing } from "./match.js";
+import { geoDistanceM, listingRefreshAt, matchFocusHints, preferPrimaryListing } from "./match.js";
 import {
   ensureUserSameHouseSchema,
   loadPersonalSameHouseIds,
@@ -4672,9 +4672,49 @@ export function listListings({
   };
 }
 
+export const GUEST_MAX_DISTRICTS = 4;
+
+function guestFitSettings(settings = {}) {
+  const km = Number(settings.guestCommuteKm);
+  if (!(km > 0)) return settings;
+  return { ...settings, commuteKm: km };
+}
+
+function applyGuestStraightLineFilter(rows, settings = {}) {
+  const km = Number(settings.guestCommuteKm);
+  const work = { lat: Number(settings.guestWorkLat), lng: Number(settings.guestWorkLng) };
+  if (!(km > 0) || !Number.isFinite(work.lat) || !Number.isFinite(work.lng)) return rows;
+  const limitM = km * 1000;
+  const out = [];
+  for (const row of rows) {
+    const meters = geoDistanceM({ lat: row.lat, lng: row.lng }, work);
+    if (meters == null || meters > limitM) continue;
+    row.guest_commute_km = Math.round((meters / 1000) * 10) / 10;
+    out.push(row);
+  }
+  return out;
+}
+
+function attachGuestCommute(lite, row, settings = {}) {
+  if (!lite || !Number.isFinite(Number(row?.guest_commute_km))) return lite;
+  lite.commute_km = Number(row.guest_commute_km);
+  lite.commute_state = COMMUTE_STATES.DONE;
+  lite.commute_state_label = commuteStateLabel(COMMUTE_STATES.DONE);
+  lite.commute_hint = "直線距離（訪客搜尋），不是實際路線。";
+  lite.commute_precision = "直線距離";
+  const fit = listingFitFields(lite, guestFitSettings(settings), { guest: true });
+  lite.fit_score = fit.fit_score;
+  lite.fit_label = fit.fit_label;
+  return lite;
+}
+
 export function publicSearchSettings(query = {}) {
   const flag = (value) => value === true || value === "1" || value === 1;
   const off = (value) => value === false || value === "0" || value === 0;
+  const guestKmRaw = Number(query.commuteKm);
+  const guestKm = Number.isFinite(guestKmRaw) ? Math.max(0, Math.min(Math.round(guestKmRaw * 10) / 10, 80)) : 0;
+  const guestLat = Number(query.workLat);
+  const guestLng = Number(query.workLng);
   return {
     searchUrls: [],
     watchDistricts: [],
@@ -4693,10 +4733,13 @@ export function publicSearchSettings(query = {}) {
     excludeAgentIds: [],
     excludeBoxes: [],
     commuteKm: 0,
-    workAddress: "",
+    workAddress: String(query.workAddress || "").trim().slice(0, 120),
     workLat: null,
     workLng: null,
     commuteMode: "scooter",
+    guestCommuteKm: guestKm,
+    guestWorkLat: Number.isFinite(guestLat) ? guestLat : null,
+    guestWorkLng: Number.isFinite(guestLng) ? guestLng : null,
   };
 }
 
@@ -4729,7 +4772,8 @@ export function listPublicListings({
   ({ kind, sources } = normalizeListQuery("all", kind, sources));
   const settings = settingsOverride || publicSearchSettings({});
   const requestedDistricts = (Array.isArray(districts) ? districts : String(districts || "").split(","))
-    .map((name) => String(name || "").trim()).filter(Boolean);
+    .map((name) => String(name || "").trim()).filter(Boolean)
+    .slice(0, GUEST_MAX_DISTRICTS);
   const districtSet = new Set(requestedDistricts);
   const clauses = [];
   const params = [];
@@ -4750,6 +4794,7 @@ export function listPublicListings({
   markStage("sql_ms");
   queryDetails.candidates = raw.length;
   let rows = applyListingFilter(raw, settings);
+  rows = applyGuestStraightLineFilter(rows, settings);
   rows = attachSameHouseRoles(rows, 0);
   rows = rows.filter((row) => listingMatchesListFilter(row, "all"));
   rows = rows.filter((row) => keepSelfListingForViewer(row, 0, settings, () => true));
@@ -4762,8 +4807,12 @@ export function listPublicListings({
   markStage("display_ms");
   const needFit = sort === "fit_desc";
   if (needFit) {
+    const fitSettings = guestFitSettings(settings);
     for (const row of rows) {
-      row.fit_score = listingFitFields(row, settings, { guest: true }).fit_score;
+      row.fit_score = listingFitFields({
+        ...row,
+        commute_km: row.guest_commute_km ?? row.commute_km,
+      }, fitSettings, { guest: true }).fit_score;
     }
   }
   rows = sortListingsRows(rows, sort, { filter: "all", settings });
@@ -4779,8 +4828,12 @@ export function listPublicListings({
   publicDecorateCount += 1;
   const listings = page.filter((row) => fullById.has(Number(row.post_id))).map((row) => {
     const lite = decorateListingLite(Object.assign(fullById.get(Number(row.post_id)), row), settings, 0);
-    lite.fit_score = listingFitFields(lite, settings, { guest: true }).fit_score;
-    lite.fit_label = listingFitFields(lite, settings, { guest: true }).fit_label;
+    attachGuestCommute(lite, row, settings);
+    if (!Number.isFinite(Number(row.guest_commute_km))) {
+      const fit = listingFitFields(lite, guestFitSettings(settings), { guest: true });
+      lite.fit_score = fit.fit_score;
+      lite.fit_label = fit.fit_label;
+    }
     const needPeers = Boolean(row.match_post_id || row.same_house_role);
     return finalizeListingDecorate(lite, settings, 0, { sameHouse: needPeers, matchVoteUserId: 0 });
   });

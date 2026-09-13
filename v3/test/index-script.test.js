@@ -405,9 +405,13 @@ test("guest demo is read-only and work prompt can be skipped", () => {
   assert.match(html, /reversal play tech \| 逆遊科技/);
   assert.match(html, /你可以先搜尋已抓進資料庫的房源/);
   assert.match(html, /id="workAddress"/);
-  assert.match(html, /id="notifyIncludeStreetEstimate"/);
+  assert.match(html, /class="guest-cheap" placeholder="例如：臺北市南港區經貿一路170號"/);
+  assert.match(html, /id="commuteKm" class="guest-cheap"/);
+  assert.doesNotMatch(html, /id="notifyIncludeStreetEstimate"/);
   assert.match(html, /\.check-inline \{[\s\S]*min-height: var\(--touch\);/);
-  assert.match(html, /notifyIncludeStreetEstimate: \$\("notifyIncludeStreetEstimate"\) \? \$\("notifyIncludeStreetEstimate"\)\.checked : false/);
+  assert.match(html, /notifyIncludeStreetEstimate: false/);
+  assert.match(html, /GUEST_MAX_DISTRICTS = 4/);
+  assert.match(html, /訪客最多同時 4 個/);
   assert.doesNotMatch(html, /id="workPrompt"/);
   assert.doesNotMatch(html, /591_v3_work_prompt_skip/);
   assert.doesNotMatch(html, /請至少選一個行政區/);
