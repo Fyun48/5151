@@ -36,6 +36,7 @@ function unavailable(name, setup) {
     async mergePullRequest() { err(); },
     async healthSmoke() { err(); },
     async restoreDatabase() { err(); },
+    async cancelWorkflowRun() { err(); },
     async observeLiveIdentity() { return null; },
   };
 }
@@ -46,6 +47,7 @@ export function makeStubProductionReleaseProvider(opts = {}) {
   let seq = opts.startRunId || 34000000000;
   let dispatchCount = 0;
   let restoreCallCount = 0;
+  let cancelCount = 0;
 
   function nextId() { seq += 1; return String(seq); }
 
@@ -81,6 +83,7 @@ export function makeStubProductionReleaseProvider(opts = {}) {
     healthFailFor: opts.healthFailFor || null,
     get dispatchCount() { return dispatchCount; },
     get restoreCallCount() { return restoreCallCount; },
+    get cancelCount() { return cancelCount; },
     _runsById: runsById,
     _runsByKey: runsByKey,
 
@@ -322,6 +325,30 @@ export function makeStubProductionReleaseProvider(opts = {}) {
     async restoreDatabase() {
       restoreCallCount += 1;
       throw Object.assign(new Error("automatic production DB restore is forbidden"), { code: "db_restore_forbidden", status: 409 });
+    },
+
+    async cancelWorkflowRun({ workflow_run_id } = {}) {
+      if (!workflow_run_id) return { cancelled: false, reason: "missing_workflow_run_id" };
+      const run = runsById.get(String(workflow_run_id));
+      if (!run) return { cancelled: false, reason: "not_found" };
+      if (run.status === "completed") {
+        return {
+          cancelled: false,
+          reason: "already_completed",
+          workflow_run_id: run.id,
+          status: run.status,
+          conclusion: run.conclusion,
+        };
+      }
+      cancelCount += 1;
+      run.status = "completed";
+      run.conclusion = "cancelled";
+      return {
+        cancelled: true,
+        workflow_run_id: run.id,
+        status: run.status,
+        conclusion: run.conclusion,
+      };
     },
 
     async observeLiveIdentity() {
