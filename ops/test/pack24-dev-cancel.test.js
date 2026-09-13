@@ -182,7 +182,7 @@ test("console exposes pending-list cancel for coding, QA, and staging", () => {
   assert.match(html, /未送出的發布通知也可取消/);
   assert.match(html, /未送出的遠端客服也可取消/);
   assert.match(html, /未送出的分析、評估、提案也可取消/);
-  assert.match(html, /console\.js\?v=20260913-pkg25/);
+  assert.match(html, /console\.js\?v=20260913-pkg26/);
   assert.match(js, /\/ops\/api\/coding-tasks\/\$\{id\}\/cancel/);
   assert.match(js, /\/ops\/api\/qa-runs\/\$\{id\}\/cancel/);
   assert.match(js, /\/ops\/api\/staging-deployments\/\$\{id\}\/cancel/);

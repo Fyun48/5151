@@ -72,5 +72,5 @@ test("console explains unknown production blocks handoff", () => {
   const js = readFileSync(join(root, "../public/console.js"), "utf8");
   assert.match(html, /正式部署狀態不明時，先確認該環境實際結果，再完成移交/);
   assert.match(js, /正式部署狀態不明時會拒絕移交/);
-  assert.match(html, /console\.js\?v=20260913-pkg25/);
+  assert.match(html, /console\.js\?v=20260913-pkg26/);
 });

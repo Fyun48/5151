@@ -417,6 +417,14 @@ Owner 直達部署從現在就保留，不必等第 8 包。OPS 新工作流是�
 - 晚到的 `executeProductionRelease` 若已取消，不外送 workflow、不寫 SUCCEEDED。
 - 反悔：不按取消。不開 live、不合 master、不觸發 CasaOS 三步。
 
+### 包 26 — 已受理正式發布的觀察與取消 runner
+
+- 已受理（有 `dispatch_submitted_at` 或 `workflow_run_id`）的正式發布：未決清單顯示執行中或已知結果。
+- Owner 可對「仍在跑」的 GitHub runner 送取消要求；寫成觀察紀錄，不改寫正式發布終態、不宣稱撤回部署、不觸發程式退回或 DB 還原。
+- 已結束、狀態不明、未受理的不走這扇門（未受理仍走第 25 包）。
+- 晚到的 `executeProductionRelease` 若已要求取消 runner，不外送新 workflow、不寫 SUCCEEDED。
+- 反悔：不按取消 runner。不開 live、不合 master、不觸發 CasaOS 三步。
+
 ---
 
 ## 12. 我堅持的理想（用來審每一個 PR）

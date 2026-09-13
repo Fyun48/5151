@@ -124,6 +124,13 @@ const STATUS_LABEL = {
   CREATED: "未送出",
   ELIGIBILITY_VERIFIED: "資格已核",
   MERGED: "已合併",
+  BUILD_DISPATCHED: "建置執行中",
+  BUILD_RECONCILED: "建置已核對",
+  PREDEPLOY_DISPATCHED: "預檢執行中",
+  PREDEPLOY_RECONCILED: "預檢已核對",
+  DEPLOY_DISPATCHED: "部署執行中",
+  DEPLOY_RECONCILED: "部署已核對",
+  CODE_ROLLBACK_DISPATCHED: "退回執行中",
   BLOCKED: "已擋下",
   SUCCEEDED: "已成功",
   unknown: "狀態不明",
@@ -448,8 +455,29 @@ const PENDING_CANCEL = {
   },
 };
 
+const PENDING_RUNNER_CANCEL = {
+  kind: "production_release",
+  states: ["BUILD_DISPATCHED", "PREDEPLOY_DISPATCHED", "DEPLOY_DISPATCHED", "CODE_ROLLBACK_DISPATCHED"],
+  label: "取消尚未結束的 runner",
+  path: (id) => `/ops/api/production-releases/${id}/cancel-runner`,
+  title: "確認取消 GitHub runner",
+  body: (id) => `取消正式發布 #${id} 尚未結束的 GitHub runner？這不宣稱撤回已受理的部署，也不等於程式退回或 DB 還原。`,
+  confirm: "確定取消 runner",
+  ok: (data) => `已要求取消 runner。${data.deploy_not_withdrawn ? "不宣稱撤回部署。" : ""}${data.provider_cancelled ? " GitHub 已接受取消。" : " 供應商若離線，只留下取消要求。"}`,
+};
+
+function pendingItemActions(it) {
+  const actions = [];
+  const unsent = PENDING_CANCEL[it.kind];
+  if (unsent?.states.includes(it.state)) actions.push({ ...unsent, action: "cancel" });
+  if (it.kind === PENDING_RUNNER_CANCEL.kind && PENDING_RUNNER_CANCEL.states.includes(it.state)) {
+    actions.push({ ...PENDING_RUNNER_CANCEL, action: "runner" });
+  }
+  return actions;
+}
+
 function pendingItemCancellable(it) {
-  return Boolean(PENDING_CANCEL[it.kind]?.states.includes(it.state));
+  return pendingItemActions(it).length > 0;
 }
 
 function showExitDetail(id, data) {
@@ -485,10 +513,10 @@ function showExitDetail(id, data) {
   const blocks = lines.map((line) => `<p>${esc(line)}</p>`);
   for (const it of items) {
     const label = `${PENDING_KIND_LABEL[it.kind] || it.kind} #${it.id} ${STATUS_LABEL[it.state] || it.state}${it.blocking ? "（阻擋）" : ""}${it.unscoped ? "（尚未分站）" : ""} ${it.note || ""}`;
-    const spec = pendingItemCancellable(it) ? PENDING_CANCEL[it.kind] : null;
-    const btn = spec
-      ? `<button type="button" data-cancel-kind="${esc(it.kind)}" data-cancel-id="${Number(it.id)}" data-pid="${esc(id)}" data-cancel-state="${esc(it.state)}">${esc(spec.label)}</button>`
-      : "";
+    const specs = pendingItemActions(it);
+    const btn = specs.map((spec) => (
+      `<button type="button" data-cancel-kind="${esc(it.kind)}" data-cancel-id="${Number(it.id)}" data-cancel-action="${esc(spec.action)}" data-pid="${esc(id)}" data-cancel-state="${esc(it.state)}">${esc(spec.label)}</button>`
+    )).join("");
     blocks.push(`<div class="pending-item"><p>${esc(label)}</p>${btn}</div>`);
   }
   $("exitDetailBody").innerHTML = blocks.join("");
@@ -1683,7 +1711,10 @@ $("productsRefresh").addEventListener("click", refreshProducts);
 $("exitDetailBody")?.addEventListener("click", (ev) => {
   const btn = ev.target.closest("[data-cancel-kind][data-cancel-id]");
   if (!btn) return;
-  const spec = PENDING_CANCEL[btn.dataset.cancelKind];
+  const action = btn.dataset.cancelAction || "cancel";
+  const spec = action === "runner"
+    ? PENDING_RUNNER_CANCEL
+    : PENDING_CANCEL[btn.dataset.cancelKind];
   const itemId = Number(btn.dataset.cancelId);
   const pid = btn.dataset.pid || "";
   const state = btn.dataset.cancelState || "";

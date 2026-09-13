@@ -37,6 +37,63 @@ function safeAll(db, sql, params = []) {
 
 const TERMINAL_PRODUCTION_STATUSES = new Set(["SUCCEEDED", "ROLLED_BACK", "BLOCKED"]);
 export const UNKNOWN_PRODUCTION_STATUS = "PRODUCTION_STATE_UNKNOWN";
+const RUNNER_IN_FLIGHT_STATUSES = new Set([
+  "BUILD_DISPATCHED",
+  "PREDEPLOY_DISPATCHED",
+  "DEPLOY_DISPATCHED",
+  "CODE_ROLLBACK_DISPATCHED",
+]);
+
+function productionReleaseObservation(db, runId, status) {
+  const bindings = tableExists(db, "production_release_workflow_binding")
+    ? safeAll(db, `
+      SELECT workflow_kind, workflow_run_id, dispatch_submitted_at, binding_status
+        FROM production_release_workflow_binding WHERE release_run_id=? ORDER BY id
+    `, [runId])
+    : [];
+  const accepted = bindings.filter((row) => row.workflow_run_id || (row.dispatch_submitted_at && row.binding_status !== "rejected"));
+  const latest = accepted[accepted.length - 1] || null;
+  const evidence = tableExists(db, "production_release_evidence")
+    ? safeAll(db, `
+      SELECT evidence_kind, workflow_run_id, workflow_conclusion
+        FROM production_release_evidence WHERE release_run_id=? ORDER BY id DESC LIMIT 1
+    `, [runId])[0]
+    : null;
+  const cancelN = tableExists(db, "production_release_evidence")
+    ? Number(db.prepare(
+      "SELECT COUNT(*) n FROM production_release_evidence WHERE release_run_id=? AND evidence_kind='runner_cancel'",
+    ).get(runId)?.n || 0)
+    : 0;
+  return {
+    accepted: accepted.length > 0,
+    in_flight: RUNNER_IN_FLIGHT_STATUSES.has(status),
+    runner_cancel_requested: cancelN > 0,
+    workflow_kind: latest?.workflow_kind || null,
+    workflow_run_id: latest?.workflow_run_id || evidence?.workflow_run_id || null,
+    workflow_conclusion: evidence?.workflow_conclusion || null,
+  };
+}
+
+function productionReleasePendingNote({ scoped, unknown, observation }) {
+  if (unknown) {
+    return scoped
+      ? "正式部署狀態不明；先確認該環境實際結果，再完成移交。已送出的部署不宣稱撤回。"
+      : "正式發布尚未綁 product_id，且狀態不明；不能用這筆擋別站移交";
+  }
+  if (!scoped) {
+    return "正式發布尚未綁 product_id；退出時列出但不能宣稱已取消外部呼叫";
+  }
+  if (observation.accepted && observation.in_flight) {
+    return observation.runner_cancel_requested
+      ? "執行中：已要求取消 GitHub runner。不宣稱撤回部署。程式退回與 DB 還原是不同操作。"
+      : "執行中：GitHub runner 尚未結束。可取消 runner，不宣稱撤回部署。程式退回與 DB 還原是不同操作。";
+  }
+  if (observation.accepted) {
+    const result = observation.workflow_conclusion ? `（${observation.workflow_conclusion}）` : "";
+    return `已知結果：已受理的 workflow 有觀察紀錄${result}。取消 runner 只適用尚未結束的檢查。不宣稱撤回部署。`;
+  }
+  return "未送出的正式發布可取消；已受理的部署不宣稱撤回。訂閱世代已換或已退出的晚到發布不開新 workflow。";
+}
 
 function latestProductionStatus(db, runId) {
   const row = safeAll(db, "SELECT to_status FROM production_release_run_event WHERE release_run_id=? ORDER BY id DESC LIMIT 1", [Number(runId)])[0];
@@ -229,19 +286,15 @@ export function listPendingWork(db, productId) {
       const status = latestProductionStatus(db, row.id);
       if (TERMINAL_PRODUCTION_STATUSES.has(status)) continue;
       const unknown = status === UNKNOWN_PRODUCTION_STATUS;
+      const observation = productionReleaseObservation(db, row.id, status);
       items.push({
         kind: "production_release",
         id: row.id,
         state: unknown ? "unknown" : (status || "pending"),
         blocking: true,
         unscoped: !scoped,
-        note: unknown
-          ? (scoped
-            ? "正式部署狀態不明；先確認該環境實際結果，再完成移交。已送出的部署不宣稱撤回。"
-            : "正式發布尚未綁 product_id，且狀態不明；不能用這筆擋別站移交")
-          : (scoped
-            ? "未送出的正式發布可取消；已受理的部署不宣稱撤回。訂閱世代已換或已退出的晚到發布不開新 workflow。"
-            : "正式發布尚未綁 product_id；退出時列出但不能宣稱已取消外部呼叫"),
+        observation,
+        note: productionReleasePendingNote({ scoped, unknown, observation }),
       });
     }
   }

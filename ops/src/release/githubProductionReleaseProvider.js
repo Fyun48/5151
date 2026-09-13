@@ -357,6 +357,15 @@ export function createLiveGithubApi(env = process.env) {
       const jobsJson = jobsRes.ok ? await jobsRes.json() : { jobs: [] };
       return { run, jobs: jobsJson.jobs || [] };
     },
+    async cancelWorkflowRun({ owner, repo, runId }) {
+      let res;
+      try {
+        res = await gh(`/repos/${owner}/${repo}/actions/runs/${runId}/cancel`, { method: "POST" });
+      } catch (err) {
+        return { ok: false, status: null, reason: redactGithubError(err) };
+      }
+      return { ok: res.status === 202, status: res.status };
+    },
     async inspectImage({ digest }) {
       const headers = {
         Authorization: `Bearer ${token}`,
@@ -671,6 +680,23 @@ export function makeGithubProductionReleaseProvider(env = process.env, deps = {}
     async restoreDatabase() {
       restoreCallCount += 1;
       throw Object.assign(new Error("automatic production DB restore is forbidden"), { code: "db_restore_forbidden", status: 409 });
+    },
+
+    async cancelWorkflowRun({ workflow_run_id } = {}) {
+      if (!workflow_run_id) return { cancelled: false, reason: "missing_workflow_run_id" };
+      if (typeof api.cancelWorkflowRun !== "function") {
+        return { cancelled: false, reason: "provider_unavailable" };
+      }
+      const out = await api.cancelWorkflowRun({ owner: repo.owner, repo: repo.repo, runId: workflow_run_id });
+      if (out?.ok) {
+        return { cancelled: true, workflow_run_id: String(workflow_run_id), status: out.status || 202 };
+      }
+      return {
+        cancelled: false,
+        reason: out?.reason || "github_cancel_rejected",
+        workflow_run_id: String(workflow_run_id),
+        status: out?.status || null,
+      };
     },
 
     async observeLiveIdentity() {
