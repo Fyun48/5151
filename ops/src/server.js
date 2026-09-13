@@ -1061,7 +1061,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         let b = {};
         try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
         try {
-          const r = ownerManualReevaluate(db, Number(reevalReopen[1]), { actor: `owner:${req.owner.email}`, reason: b.reason });
+          const r = ownerManualReevaluate(db, Number(reevalReopen[1]), { ...b, actor: `owner:${req.owner.email}`, reason: b.reason });
           sendJson(res, 200, { ok: true, ...r });
         } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
         return;
@@ -1072,7 +1072,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         let b = {};
         try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
         try {
-          const r = ownerUnblock(db, Number(reevalUnblock[1]), { actor: `owner:${req.owner.email}`, reason: b.reason });
+          const r = ownerUnblock(db, Number(reevalUnblock[1]), { ...b, actor: `owner:${req.owner.email}`, reason: b.reason });
           sendJson(res, 200, { ok: true, ...r });
         } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
         return;
