@@ -182,7 +182,7 @@ test("console exposes pending-list cancel for coding, QA, and staging", () => {
   assert.match(html, /未送出的發布通知也可取消/);
   assert.match(html, /未送出的遠端客服也可取消/);
   assert.match(html, /未送出的分析、評估、提案也可取消/);
-  assert.match(html, /console\.js\?v=20260912-pkg24/);
+  assert.match(html, /console\.js\?v=20260913-pkg24/);
   assert.match(js, /\/ops\/api\/coding-tasks\/\$\{id\}\/cancel/);
   assert.match(js, /\/ops\/api\/qa-runs\/\$\{id\}\/cancel/);
   assert.match(js, /\/ops\/api\/staging-deployments\/\$\{id\}\/cancel/);
@@ -190,4 +190,6 @@ test("console exposes pending-list cancel for coding, QA, and staging", () => {
   assert.match(js, /取消未送出的 QA/);
   assert.match(js, /取消未送出的隔離 staging/);
   assert.match(js, /已完成的結果不會被這一步改寫/);
+  assert.match(js, /async function loadPending\(id, statusText\)/);
+  assert.match(js, /await loadPending\(pid, resultText\)/);
 });

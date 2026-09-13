@@ -481,7 +481,7 @@ function showExitDetail(id, data) {
   box.scrollIntoView({ block: "nearest" });
 }
 
-async function loadPending(id) {
+async function loadPending(id, statusText) {
   const box = $("exitDetail");
   if (box) {
     box.hidden = false;
@@ -490,7 +490,7 @@ async function loadPending(id) {
     $("exitDetailHint").textContent = "載入未決清單…";
     $("exitDetailBody").textContent = "";
   }
-  setStatus($("productMsg"), "載入未決清單…");
+  setStatus($("productMsg"), statusText || "載入未決清單…");
   const { res, data } = await api(`/ops/api/products/${encodeURIComponent(id)}/pending`);
   if (box) box.removeAttribute("aria-busy");
   if (!res.ok) {
@@ -502,7 +502,7 @@ async function loadPending(id) {
     return;
   }
   showExitDetail(id, data);
-  setStatus($("productMsg"), "已載入未決清單", "ok");
+  setStatus($("productMsg"), statusText || "已載入未決清單", "ok");
 }
 
 async function runProductAction(id, action) {
@@ -1684,8 +1684,9 @@ $("exitDetailBody")?.addEventListener("click", (ev) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reason: "owner_console" }),
       });
-      setStatus($("productMsg"), res.ok ? spec.ok(data) : (data.error || "取消失敗"), res.ok ? "ok" : "err");
-      if (res.ok && pid) await loadPending(pid);
+      const resultText = res.ok ? spec.ok(data) : (data.error || "取消失敗");
+      setStatus($("productMsg"), resultText, res.ok ? "ok" : "err");
+      if (res.ok && pid) await loadPending(pid, resultText);
     },
   });
 });

@@ -119,5 +119,5 @@ test("console explains late remote-cs commands will not be sent", () => {
   assert.match(html, /遠端客服/);
   assert.match(html, /外送客服命令/);
   assert.match(js, /未送出的遠端客服也不會外送/);
-  assert.match(html, /console\.js\?v=20260912-pkg24/);
+  assert.match(html, /console\.js\?v=20260913-pkg24/);
 });
