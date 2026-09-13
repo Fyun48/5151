@@ -216,6 +216,7 @@ function hideConfirm() {
   if (!dlg || dlg.hidden) {
     confirmAction = null;
     confirmNeedsReason = false;
+    confirmExactPhrase = "";
     return;
   }
   dlg.hidden = true;
