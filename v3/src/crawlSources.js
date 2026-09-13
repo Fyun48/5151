@@ -38,8 +38,12 @@ export function normalizeCrawlSources(input) {
   return CRAWL_SOURCE_CATALOG.map((row) => {
     const cell = incoming[row.id];
     const enabledRaw = cell && typeof cell === "object" ? cell.enabled : cell;
-    const enabled = row.stub ? enabledRaw === true : enabledRaw !== false;
-    return { ...row, enabled: Boolean(enabled) };
+    const fallback = DEFAULT_ENABLED[row.id] === true;
+    let enabled = fallback;
+    if (enabledRaw === undefined || enabledRaw === null) enabled = fallback;
+    else if (row.stub) enabled = enabledRaw === true;
+    else enabled = Boolean(enabledRaw);
+    return { ...row, enabled };
   });
 }
 

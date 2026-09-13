@@ -1,9 +1,10 @@
-/** 後台管理操作紀錄。存在 settings JSON，不必 migration。不記密碼與密鑰明文。 */
+/** 後台管理操作紀錄：append-only 表，避免 settings JSON 併發讀改寫丟紀錄。
+ *  單筆 INSERT，不讀改寫整包；超過 500 筆刪最舊。不記密碼／secret。 */
 
 import { db } from "./db.js";
 
-const SETTING_KEY = "adminAuditLog";
-const MAX_ENTRIES = 200;
+const LEGACY_SETTING_KEY = "adminAuditLog";
+const MAX_ENTRIES = 500;
 const SECRET_RE = /password|passwd|secret|api[_-]?key|smtpPass|clientSecret|token|authorization/i;
 
 export function redactAuditValue(value, depth = 0) {
@@ -21,20 +22,88 @@ export function redactAuditValue(value, depth = 0) {
   return out;
 }
 
-function readRaw() {
-  const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(SETTING_KEY);
-  if (!row?.value) return [];
+export function ensureAdminAuditSchema(conn = db) {
+  conn.exec(`
+    CREATE TABLE IF NOT EXISTS admin_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      at TEXT NOT NULL,
+      actor_id INTEGER NOT NULL DEFAULT 0,
+      actor_email TEXT NOT NULL DEFAULT '',
+      action TEXT NOT NULL DEFAULT '',
+      target TEXT NOT NULL DEFAULT '',
+      before_json TEXT,
+      after_json TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_admin_audit_at ON admin_audit(at DESC);
+  `);
+  migrateLegacyAuditJson(conn);
+}
+
+function migrateLegacyAuditJson(conn) {
+  const row = conn.prepare("SELECT value FROM settings WHERE key = ?").get(LEGACY_SETTING_KEY);
+  if (!row?.value) return;
+  let parsed;
   try {
-    const parsed = JSON.parse(row.value);
-    return Array.isArray(parsed) ? parsed : [];
+    parsed = JSON.parse(row.value);
   } catch {
-    return [];
+    conn.prepare("DELETE FROM settings WHERE key = ?").run(LEGACY_SETTING_KEY);
+    return;
   }
+  if (!Array.isArray(parsed) || !parsed.length) {
+    conn.prepare("DELETE FROM settings WHERE key = ?").run(LEGACY_SETTING_KEY);
+    return;
+  }
+  const existing = Number(conn.prepare("SELECT COUNT(*) AS n FROM admin_audit").get()?.n) || 0;
+  if (existing === 0) {
+    const insert = conn.prepare(
+      `INSERT INTO admin_audit(at, actor_id, actor_email, action, target, before_json, after_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const tx = conn.transaction((rows) => {
+      for (const item of [...rows].reverse()) {
+        insert.run(
+          String(item.at || new Date().toISOString()),
+          Number(item.actorId) || 0,
+          String(item.actorEmail || "").slice(0, 200),
+          String(item.action || "").slice(0, 80),
+          String(item.target || "").slice(0, 240),
+          item.before == null ? null : JSON.stringify(item.before),
+          item.after == null ? null : JSON.stringify(item.after),
+        );
+      }
+    });
+    tx(parsed);
+  }
+  conn.prepare("DELETE FROM settings WHERE key = ?").run(LEGACY_SETTING_KEY);
+}
+
+function rowToEntry(row) {
+  const parse = (text) => {
+    if (text == null || text === "") return null;
+    try {
+      return JSON.parse(text);
+    } catch {
+      return text;
+    }
+  };
+  return {
+    at: row.at,
+    actorId: Number(row.actor_id) || 0,
+    actorEmail: row.actor_email || "",
+    action: row.action || "",
+    target: row.target || "",
+    before: parse(row.before_json),
+    after: parse(row.after_json),
+  };
 }
 
 export function listAdminAudit({ limit = 80 } = {}) {
-  const cap = Math.max(1, Math.min(200, Number(limit) || 80));
-  return readRaw().slice(0, cap);
+  ensureAdminAuditSchema();
+  const cap = Math.max(1, Math.min(MAX_ENTRIES, Number(limit) || 80));
+  return db.prepare(
+    `SELECT at, actor_id, actor_email, action, target, before_json, after_json
+     FROM admin_audit ORDER BY id DESC LIMIT ?`,
+  ).all(cap).map(rowToEntry);
 }
 
 export function appendAdminAudit({
@@ -46,6 +115,7 @@ export function appendAdminAudit({
   after = null,
   now = new Date(),
 } = {}) {
+  ensureAdminAuditSchema();
   const entry = {
     at: (now instanceof Date ? now : new Date(now)).toISOString(),
     actorId: Number(actorId) || 0,
@@ -55,13 +125,34 @@ export function appendAdminAudit({
     before: redactAuditValue(before),
     after: redactAuditValue(after),
   };
-  const next = [entry, ...readRaw()].slice(0, MAX_ENTRIES);
   db.prepare(
-    "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-  ).run(SETTING_KEY, JSON.stringify(next));
+    `INSERT INTO admin_audit(at, actor_id, actor_email, action, target, before_json, after_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    entry.at,
+    entry.actorId,
+    entry.actorEmail,
+    entry.action,
+    entry.target,
+    entry.before == null ? null : JSON.stringify(entry.before),
+    entry.after == null ? null : JSON.stringify(entry.after),
+  );
+  const extra = db.prepare(
+    `SELECT id FROM admin_audit ORDER BY id DESC LIMIT -1 OFFSET ?`,
+  ).get(MAX_ENTRIES);
+  if (extra?.id) {
+    db.prepare("DELETE FROM admin_audit WHERE id <= ?").run(extra.id);
+  }
   return entry;
 }
 
 export function lastAuditAction(action) {
-  return readRaw().find((row) => row.action === action) || null;
+  ensureAdminAuditSchema();
+  const row = db.prepare(
+    `SELECT at, actor_id, actor_email, action, target, before_json, after_json
+     FROM admin_audit WHERE action = ? ORDER BY id DESC LIMIT 1`,
+  ).get(String(action || ""));
+  return row ? rowToEntry(row) : null;
 }
+
+export { MAX_ENTRIES as ADMIN_AUDIT_MAX_ENTRIES };

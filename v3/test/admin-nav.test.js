@@ -100,3 +100,16 @@ test("same-house admin UI and command search exist", () => {
   assert.match(ia, /inventory\/same-house/);
   assert.match(ia, /members: "members\/users"/);
 });
+
+test("dirty navigation uses owner page and mapped save handlers", () => {
+  assert.match(html, /IA\.decideNavigation/);
+  assert.match(html, /fromHash:\s*true/);
+  assert.match(html, /IA\.runStickySave/);
+  assert.match(html, /IA\.noteControlChange/);
+  assert.match(html, /IA\.finishPageLoad/);
+  assert.match(html, /data-admin-transient/);
+  assert.doesNotMatch(html, /addEventListener\("input", \(\) => IA\.setDirty\(true\)\)/);
+  assert.match(ia, /decideNavigation/);
+  assert.match(ia, /SAVE_PAGES/);
+  assert.match(ia, /memberQuery: true/);
+});

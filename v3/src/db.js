@@ -808,6 +808,23 @@ try {
 }
 ensurePushSchema(db);
 ensureCommsSchema(db);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS admin_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at TEXT NOT NULL,
+    actor_id INTEGER NOT NULL DEFAULT 0,
+    actor_email TEXT NOT NULL DEFAULT '',
+    action TEXT NOT NULL DEFAULT '',
+    target TEXT NOT NULL DEFAULT '',
+    before_json TEXT,
+    after_json TEXT
+  );
+`);
+try {
+  db.exec("CREATE INDEX IF NOT EXISTS idx_admin_audit_at ON admin_audit(at DESC)");
+} catch {
+  // older fixtures
+}
 
 try {
   const already = db.prepare("SELECT value FROM settings WHERE key = 'costChangeBackfill'").get();
@@ -1501,8 +1518,21 @@ export function getCrawlSources() {
 
 export function saveCrawlSources(partial = {}) {
   const src = partial && typeof partial === "object" ? partial : {};
-  const next = normalizeCrawlSources(src.items ?? src);
-  writeSettingKey("crawlSources", next);
+  const incoming = src.items ?? src;
+  const incomingMap = Array.isArray(incoming)
+    ? Object.fromEntries(incoming.map((row) => [String(row?.id || ""), row]))
+    : incoming && typeof incoming === "object"
+      ? incoming
+      : {};
+  const current = getCrawlSources().items || [];
+  const merged = current.map((row) => {
+    if (!Object.prototype.hasOwnProperty.call(incomingMap, row.id)) return row;
+    const cell = incomingMap[row.id];
+    const enabledRaw = cell && typeof cell === "object" ? cell.enabled : cell;
+    if (enabledRaw === undefined || enabledRaw === null) return row;
+    return { ...row, enabled: Boolean(enabledRaw) };
+  });
+  writeSettingKey("crawlSources", normalizeCrawlSources(merged));
   return getCrawlSources();
 }
 

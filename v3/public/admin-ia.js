@@ -323,37 +323,202 @@
     return next;
   }
 
+  const TRANSIENT_IDS = {
+    memberQuery: true,
+    memberSort: true,
+    sameHouseLimit: true,
+    sameHouseQuery: true,
+    importAdminQuery: true,
+    importAdminStatus: true,
+    feedbackFilterStatus: true,
+    feedbackFilterKind: true,
+    adminSearch: true,
+  };
+
+  const SAVE_PAGES = {
+    "inventory/sources": { form: "crawlForm", label: "儲存物件來源" },
+    "inventory/crawl": { form: "systemCrawlForm", label: "儲存抓取範圍" },
+    "content/brand": { form: "brandForm", label: "儲存品牌設定" },
+    "content/spirit": { form: "spiritForm", label: "儲存理念文字" },
+    "content/legal": { form: "legalCopyForm", label: "儲存宣告文字" },
+    "content/cms": { form: "cmsEditor", label: "儲存草稿" },
+    "content/qa": { button: "helpQaSave", label: "儲存 Q&A" },
+    "content/housing": { button: "housingSave", label: "儲存居住數據" },
+    "content/wish": { button: "wishCondSave", label: "儲存條件選單" },
+    "comms/notices": { form: "announceForm", label: "儲存公告" },
+    "comms/news": { form: "newsHopForm", label: "儲存最新消息" },
+    "comms/smtp": { form: "smtpForm", label: "儲存 SMTP" },
+    "comms/templates": { form: "tplForm", label: "儲存信件內容" },
+    "revenue/sponsors": { form: "sponsorForm", label: "儲存贊助連結" },
+    "revenue/support": { form: "supportConfigForm", label: "儲存支持呈現" },
+    "revenue/campaigns": { form: "campaignConfigForm", label: "儲存插入設定" },
+    "system/maps": { form: "mapsForm", label: "儲存路線設定" },
+    "system/oauth": { form: "oauthForm", label: "儲存社群登入" },
+  };
+
   let dirty = false;
   let dirtyCount = 0;
-  let allowLeave = false;
+  let dirtyOwner = "";
+  let currentPageId = "overview";
+  const baselines = {};
+
+  function saveSpec(pageId) {
+    return SAVE_PAGES[pageId || currentPageId] || null;
+  }
+
+  function isTransientControl(el) {
+    if (!el) return true;
+    const id = el.id || "";
+    if (TRANSIENT_IDS[id]) return true;
+    if (el.dataset && (el.dataset.adminTransient === "" || el.dataset.adminTransient === "true")) return true;
+    if (el.type === "search" || el.type === "file" || el.type === "button" || el.type === "submit") return true;
+    return false;
+  }
+
+  function changedCount(baseline, current) {
+    const keys = new Set([...Object.keys(baseline || {}), ...Object.keys(current || {})]);
+    let n = 0;
+    for (const key of keys) {
+      if (String(baseline?.[key] ?? "") !== String(current?.[key] ?? "")) n += 1;
+    }
+    return n;
+  }
+
+  function decideNavigation(nextId) {
+    const next = normalizeHash(nextId);
+    if (!dirty || !dirtyOwner || dirtyOwner === next) {
+      return { allow: true, prompt: false, stayOn: currentPageId };
+    }
+    return { allow: false, prompt: true, stayOn: dirtyOwner };
+  }
+
+  function controlKey(el) {
+    return el.name || el.id || el.dataset?.crawlId || el.dataset?.systemDistrict || el.getAttribute("data-admin-key") || "";
+  }
+
+  function snapshotPage(pageId, root) {
+    const spec = saveSpec(pageId);
+    if (!spec) return {};
+    const host = root || (global.document && (
+      (spec.form && global.document.getElementById(spec.form))
+      || global.document.querySelector(`[data-admin-page="${pageId}"]`)
+    ));
+    if (!host || !host.querySelectorAll) return {};
+    const out = {};
+    host.querySelectorAll("input, select, textarea").forEach((el, index) => {
+      if (isTransientControl(el)) return;
+      const key = controlKey(el) || `anon-${index}`;
+      out[key] = el.type === "checkbox" || el.type === "radio" ? String(el.checked) : String(el.value ?? "");
+    });
+    return out;
+  }
+
+  function refreshDirtyFromSnapshot() {
+    if (!saveSpec(currentPageId)) {
+      dirty = false;
+      dirtyCount = 0;
+      dirtyOwner = "";
+      renderDirtyBar();
+      return;
+    }
+    const current = snapshotPage(currentPageId);
+    dirtyCount = changedCount(baselines[currentPageId] || {}, current);
+    dirty = dirtyCount > 0;
+    dirtyOwner = dirty ? currentPageId : "";
+    renderDirtyBar();
+  }
+
+  function renderDirtyBar() {
+    const bar = global.document?.getElementById("adminDirtyBar");
+    const label = global.document?.getElementById("adminDirtyLabel");
+    const saveBtn = global.document?.getElementById("adminDirtySave");
+    const spec = saveSpec(dirtyOwner || currentPageId);
+    bar?.toggleAttribute("hidden", !dirty);
+    if (label) label.textContent = dirty ? `你有 ${dirtyCount} 項尚未儲存的變更` : "";
+    if (saveBtn) {
+      saveBtn.hidden = !spec;
+      if (spec) saveBtn.textContent = spec.label || "儲存變更";
+    }
+  }
 
   function setDirty(on, count) {
     if (on) {
+      if (!saveSpec(currentPageId)) return;
       dirty = true;
-      dirtyCount = count == null ? dirtyCount + 1 : Math.max(1, Number(count) || 1);
+      dirtyOwner = currentPageId;
+      dirtyCount = count == null ? Math.max(1, dirtyCount) : Math.max(1, Number(count) || 1);
     } else {
       dirty = false;
       dirtyCount = 0;
+      dirtyOwner = "";
     }
-    document.getElementById("adminDirtyBar")?.toggleAttribute("hidden", !dirty);
-    const label = document.getElementById("adminDirtyLabel");
-    if (label) label.textContent = dirty ? `你有 ${dirtyCount} 項尚未儲存的變更` : "";
+    renderDirtyBar();
   }
 
   function confirmLeave() {
-    if (!dirty || allowLeave) return true;
+    if (!dirty) return true;
     return global.confirm("這個頁面有尚未儲存的變更。要離開並放棄嗎？");
   }
 
   function markClean() {
-    allowLeave = false;
-    setDirty(false, 0);
+    dirty = false;
+    dirtyCount = 0;
+    dirtyOwner = "";
+    renderDirtyBar();
+  }
+
+  function beginPage(pageId) {
+    currentPageId = normalizeHash(pageId);
+  }
+
+  function captureBaseline(pageId) {
+    const id = normalizeHash(pageId || currentPageId);
+    baselines[id] = snapshotPage(id);
+    if (dirtyOwner === id || !dirty) {
+      markClean();
+      currentPageId = id;
+    }
+  }
+
+  function finishPageLoad(pageId) {
+    const id = normalizeHash(pageId || currentPageId);
+    if (id !== currentPageId) return;
+    if (!dirty || dirtyOwner !== id) captureBaseline(id);
+  }
+
+  function noteControlChange(el) {
+    if (isTransientControl(el)) return false;
+    if (!saveSpec(currentPageId)) return false;
+    refreshDirtyFromSnapshot();
+    return dirty;
+  }
+
+  function runStickySave() {
+    const spec = saveSpec(dirtyOwner || currentPageId);
+    if (!spec) return false;
+    const doc = global.document;
+    if (!doc) return false;
+    if (spec.form) {
+      const form = doc.getElementById(spec.form);
+      if (!form) return false;
+      if (typeof form.requestSubmit === "function") form.requestSubmit();
+      else form.dispatchEvent(new Event("submit", { cancelable: true, bubbles: true }));
+      return true;
+    }
+    if (spec.button) {
+      const btn = doc.getElementById(spec.button);
+      if (!btn) return false;
+      btn.click();
+      return true;
+    }
+    return false;
   }
 
   global.AdminIA = {
     PAGES,
     GROUPS,
     LEGACY,
+    SAVE_PAGES,
     pageById,
     normalizeHash,
     searchPages,
@@ -363,5 +528,17 @@
     confirmLeave,
     markClean,
     isDirty: () => dirty,
+    currentPageId: () => currentPageId,
+    dirtyPageId: () => dirtyOwner,
+    saveSpec,
+    isTransientControl,
+    changedCount,
+    decideNavigation,
+    beginPage,
+    captureBaseline,
+    finishPageLoad,
+    noteControlChange,
+    runStickySave,
+    snapshotPage,
   };
 })(typeof window !== "undefined" ? window : globalThis);

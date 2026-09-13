@@ -13,7 +13,7 @@ function runIsolated(body) {
   const script = `
     import assert from "node:assert/strict";
     import * as app from ${JSON.stringify(path.join(dir, "../src/db.js"))};
-    import { getAdminOverview, getAdminDataHealth, searchAdminListings } from ${JSON.stringify(path.join(dir, "../src/adminOverview.js"))};
+    import { getAdminOverview, getAdminDataHealth, searchAdminListings, remainingSameHouseBackfill } from ${JSON.stringify(path.join(dir, "../src/adminOverview.js"))};
     import { appendAdminAudit, listAdminAudit, redactAuditValue } from ${JSON.stringify(path.join(dir, "../src/adminAudit.js"))};
     function seed(post_id, overrides = {}) {
       app.upsertListing({
@@ -56,6 +56,13 @@ test("overview is read-only status and does not enable rakuya", () => {
     const rakuya = ov.sources.find((row) => row.id === "rakuya");
     assert.equal(rakuya.enabled, false);
     assert.match(rakuya.reason, /Owner 手動停用/);
+    const s591 = ov.sources.find((row) => row.id === "591");
+    assert.equal(s591.enabled, true);
+    assert.equal(s591.status, "unchecked");
+    assert.match(s591.statusLabel, /未檢查/);
+    assert.equal(ov.services.osrm.status, "unchecked");
+    assert.match(ov.services.osrm.statusLabel, /未檢查/);
+    assert.notEqual(ov.services.osrm.statusLabel, "正常");
     const health = getAdminDataHealth();
     assert.ok(health.missingAddress >= 1);
     const hits = searchAdminListings("總覽測試 101");
@@ -64,7 +71,11 @@ test("overview is read-only status and does not enable rakuya", () => {
     assert.equal(secret.smtpPass, "[redacted]");
     assert.equal(secret.host, "smtp.example.com");
     appendAdminAudit({ actorEmail: "jimmy@example.test", action: "crawl_sources_save", target: "rakuya" });
-    assert.equal(listAdminAudit({ limit: 1 })[0].action, "crawl_sources_save");
+    appendAdminAudit({ actorEmail: "jimmy@example.test", action: "same_house_confirm", target: "201,202" });
+    const audit = listAdminAudit({ limit: 10 });
+    assert.equal(audit.some((row) => row.action === "crawl_sources_save"), true);
+    assert.equal(audit.some((row) => row.action === "same_house_confirm"), true);
+    assert.equal(listAdminAudit({ limit: 1 })[0].action, "same_house_confirm");
     const src = app.getCrawlSources().items.find((row) => row.id === "rakuya");
     assert.equal(src.enabled, false);
   `);
@@ -78,5 +89,23 @@ test("admin same-house confirm remains a shared global confirm", () => {
     const result = app.mergeSameHouseForUser(admin, [201, 202], { admin: true });
     assert.equal(result.ok, true);
     assert.equal(result.shared, true);
+  `);
+});
+
+test("pendingReconcile counts remaining post_id > cursor, not listings minus cursor", () => {
+  runIsolated(`
+    seed(10);
+    seed(50);
+    seed(9000);
+    app.db.prepare(
+      "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    ).run("sameHouseBackfillCursor", JSON.stringify("50"));
+    assert.equal(remainingSameHouseBackfill(50), 1);
+    assert.equal(remainingSameHouseBackfill(9), 3);
+    assert.equal(remainingSameHouseBackfill(9000), 0);
+    const ov = getAdminOverview();
+    assert.equal(ov.listings.pendingReconcile, 1);
+    assert.notEqual(ov.listings.pendingReconcile, 0);
+    assert.notEqual(ov.listings.total - 50, ov.listings.pendingReconcile);
   `);
 });

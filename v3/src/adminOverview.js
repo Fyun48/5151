@@ -35,29 +35,27 @@ function sourceHealthFromRow(row, stats = {}) {
   const enabled = row.enabled === true;
   const lastSuccess = stats.lastSeen || "";
   const todayNew = Number(stats.todayNew) || 0;
+  const lastError = stats.lastError || "";
   let status = "disabled";
-  let statusLabel = "停用";
+  let statusLabel = "已關閉";
   let reason = "";
   if (row.id === "rakuya" && !enabled) {
-    status = "disabled";
-    statusLabel = "已關閉";
     reason = RAKUYA_OWNER_OFF;
   } else if (!enabled) {
-    status = "disabled";
-    statusLabel = "已關閉";
+    reason = "";
   } else if (stats.blocked) {
     status = "blocked";
     statusLabel = "來源封鎖";
+    reason = lastError || "來源封鎖";
   } else if (stats.parseFailed) {
     status = "parse_failed";
     statusLabel = "解析失敗";
-  } else if (!lastSuccess) {
-    status = "error";
-    statusLabel = "暫時錯誤";
-    reason = "尚無成功抓取紀錄";
+    reason = lastError || "解析失敗";
   } else {
-    status = "enabled";
-    statusLabel = "啟用";
+    // last_seen 只代表「曾經寫入底庫」，不是現在健康。沒有 runtime probe 就不要標綠色正常。
+    status = "unchecked";
+    statusLabel = "已啟用／未檢查";
+    reason = lastError || "";
   }
   return {
     id: row.id,
@@ -67,7 +65,7 @@ function sourceHealthFromRow(row, stats = {}) {
     statusLabel,
     reason,
     lastSuccess,
-    lastError: stats.lastError || "",
+    lastError,
     todayNew,
   };
 }
@@ -95,6 +93,15 @@ function sourceListingStats() {
   return { lastSeen, todayNew };
 }
 
+export function remainingSameHouseBackfill(cursor) {
+  return countSql(
+    `SELECT COUNT(*) AS n FROM listings
+     WHERE post_id > ?
+       AND IFNULL(offline_confirmed, 0) = 0`,
+    Number(cursor) || 0,
+  );
+}
+
 export function crawlSourceHealth() {
   const items = getCrawlSources().items || [];
   const { lastSeen, todayNew } = sourceListingStats();
@@ -106,7 +113,7 @@ export function crawlSourceHealth() {
 
 function oauthServiceStatus(oauth, id) {
   const row = oauth?.[id] || {};
-  if (row.enabled && row.configured) return { id, status: "ok", statusLabel: "正常" };
+  if (row.enabled && row.configured) return { id, status: "unchecked", statusLabel: "已設定／未檢查" };
   if (row.configured && !row.enabled) return { id, status: "off", statusLabel: "已關閉" };
   return { id, status: "unset", statusLabel: "未設定" };
 }
@@ -128,8 +135,7 @@ function sameHouseCounts() {
       AND NOT EXISTS (SELECT 1 FROM listing_group_members m WHERE m.post_id = l.post_id)
   `);
   const backfill = sameHouseBackfillStatus();
-  const listed = countSql("SELECT COUNT(*) AS n FROM listings");
-  const pending = Math.max(0, listed - Number(backfill.cursor || 0));
+  const pending = remainingSameHouseBackfill(backfill.cursor);
   return {
     ungrouped,
     suspected: groups[CONFIRM_SUSPECTED] || groups.suspected || 0,
@@ -176,17 +182,17 @@ export function getAdminOverview() {
     catalog: catalog && typeof catalog === "object" ? catalog : null,
     sources: crawlSourceHealth(),
     services: {
-      osrm: { status: "ok", statusLabel: "正常" },
+      osrm: { status: "unchecked", statusLabel: "未檢查" },
       googleDirections: {
-        status: maps.googleEnabled ? "ok" : "off",
-        statusLabel: maps.googleEnabled ? "正常" : "關閉",
+        status: maps.googleEnabled ? (maps.hasKey ? "unchecked" : "unset") : "off",
+        statusLabel: maps.googleEnabled ? (maps.hasKey ? "已啟用／未檢查" : "未設定") : "關閉",
         hasKey: Boolean(maps.hasKey),
         todayRequests: Number(usage.todayEssentials || 0) + Number(usage.todayAdvanced || 0),
         monthRequests: Number(usage.monthEssentials || 0) + Number(usage.monthAdvanced || 0),
       },
       smtp: {
-        status: mail.configured ? "ok" : "unset",
-        statusLabel: mail.configured ? "正常" : "未設定",
+        status: mail.configured ? (smtpTest?.at ? "tested" : "unchecked") : "unset",
+        statusLabel: mail.configured ? (smtpTest?.at ? "已測試" : "已設定／未檢查") : "未設定",
         from: mail.smtp?.from || "",
         lastTestAt: smtpTest?.at || "",
       },

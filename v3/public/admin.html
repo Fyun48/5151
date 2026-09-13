@@ -450,7 +450,7 @@
     </div>
     <div class="admin-search">
       <label class="visually-hidden" for="adminSearch">搜尋後台功能</label>
-      <input id="adminSearch" type="search" placeholder="搜尋後台功能…" autocomplete="off" />
+      <input id="adminSearch" type="search" data-admin-transient placeholder="搜尋後台功能…" autocomplete="off" />
       <div id="adminSearchResults" class="admin-search-results" hidden role="listbox" aria-label="後台功能"></div>
     </div>
     <div class="row">
@@ -507,8 +507,8 @@
       <h2>會員管理</h2>
       <p class="hint">列表只看身分與狀態。點列開詳情才能改方案、間隔或做危險操作。看不到會員密碼。</p>
       <div class="row" style="margin-bottom:10px">
-        <input id="memberQuery" placeholder="搜尋 Email" style="max-width:260px" />
-        <select id="memberSort" style="max-width:180px">
+        <input id="memberQuery" data-admin-transient placeholder="搜尋 Email" style="max-width:260px" />
+        <select id="memberSort" data-admin-transient style="max-width:180px">
           <option value="created_at:desc">註冊時間（新→舊）</option>
           <option value="created_at:asc">註冊時間（舊→新）</option>
           <option value="id:asc">編號（小→大）</option>
@@ -642,7 +642,7 @@
           <div id="sameHouseHistory" class="hint">尚無批次紀錄。</div>
           <div class="row" style="margin-top:10px">
             <label style="margin:0">本批筆數
-              <input id="sameHouseLimit" type="number" min="1" max="200" value="50" style="width:88px;margin-left:8px" />
+              <input id="sameHouseLimit" data-admin-transient type="number" min="1" max="200" value="50" style="width:88px;margin-left:8px" />
             </label>
             <button type="button" class="primary" id="sameHouseRun">執行下一批</button>
           </div>
@@ -652,7 +652,7 @@
           <h3>管理員人工判定</h3>
           <p class="hint">用物件 ID、標題或地址搜尋，選兩筆以上後確認。<strong>此操作會影響全站所有使用者。</strong></p>
           <div class="row">
-            <input id="sameHouseQuery" placeholder="物件 ID、標題或地址" style="max-width:280px" />
+            <input id="sameHouseQuery" data-admin-transient placeholder="物件 ID、標題或地址" style="max-width:280px" />
             <button type="button" class="ghost" id="sameHouseSearch">搜尋房源</button>
           </div>
           <div id="sameHouseResults" style="margin-top:10px"></div>
@@ -872,8 +872,8 @@
       <h2>外部物件匯入</h2>
       <p class="hint">只供辨識來源與聲明版本，記錄匯入 ID、會員、來源網址、草稿／刊登、聲明雜湊與狀態。可依狀態篩選：等待處理、處理中、成功、失敗。</p>
       <div class="row">
-        <input id="importAdminQuery" placeholder="搜尋會員或網址" style="max-width:240px" />
-        <select id="importAdminStatus" style="max-width:160px">
+        <input id="importAdminQuery" data-admin-transient placeholder="搜尋會員或網址" style="max-width:240px" />
+        <select id="importAdminStatus" data-admin-transient style="max-width:160px">
           <option value="">全部狀態</option>
           <option value="pending">等待處理</option>
           <option value="fetching">處理中</option>
@@ -1351,12 +1351,12 @@
       </div>
       <div class="row" style="gap:8px;flex-wrap:wrap;align-items:center">
         <label style="margin:0">狀態
-          <select id="feedbackFilterStatus" style="margin-left:6px">
+          <select id="feedbackFilterStatus" data-admin-transient style="margin-left:6px">
             <option value="">全部</option>
           </select>
         </label>
         <label style="margin:0">類型
-          <select id="feedbackFilterKind" style="margin-left:6px">
+          <select id="feedbackFilterKind" data-admin-transient style="margin-left:6px">
             <option value="">全部</option>
           </select>
         </label>
@@ -1450,12 +1450,19 @@
         });
       });
     }
-    function showAdminPanel(id) {
-      if (IA.isDirty() && IA.normalizeHash(location.hash) !== id && !IA.confirmLeave()) {
-        history.pushState(null, "", "#" + IA.normalizeHash(location.hash));
-        return;
+    let adminFormsReady = false;
+    function showAdminPanel(id, opts = {}) {
+      const fromHash = opts.fromHash === true;
+      const next = IA.normalizeHash(id);
+      const decision = IA.decideNavigation(next);
+      if (decision.prompt) {
+        if (!IA.confirmLeave()) {
+          if (fromHash) history.pushState(null, "", "#" + IA.currentPageId());
+          return;
+        }
+        IA.markClean();
       }
-      const page = IA.pageById(IA.normalizeHash(id));
+      const page = IA.pageById(next);
       document.querySelectorAll("[data-admin-page]").forEach((el) => {
         el.classList.toggle("is-on", el.dataset.adminPage === page.id);
       });
@@ -1480,15 +1487,21 @@
       if ($("adminSearch")) $("adminSearch").value = "";
       if ($("adminSearchResults")) $("adminSearchResults").hidden = true;
       renderAdminNav(page.id);
-      if (location.hash !== "#" + page.id) history.pushState(null, "", "#" + page.id);
-      IA.markClean();
-      if (page.id === "overview") loadOverview();
-      if (page.id === "inventory/same-house") loadSameHouse();
-      if (page.id === "inventory/health") loadDataHealth();
-      if (page.id === "feedback/audit") loadAudit();
-      if (page.id === "system/services" || page.id === "system/status") loadOverview();
+      IA.beginPage(page.id);
+      if (!fromHash && location.hash !== "#" + page.id) history.pushState(null, "", "#" + page.id);
+      const loaders = [];
+      if (page.id === "overview") loaders.push(loadOverview());
+      if (page.id === "inventory/same-house") loaders.push(loadSameHouse());
+      if (page.id === "inventory/health") loaders.push(loadDataHealth());
+      if (page.id === "feedback/audit") loaders.push(loadAudit());
+      if (page.id === "system/services" || page.id === "system/status") loaders.push(loadOverview());
+      const settle = () => {
+        if (adminFormsReady) IA.finishPageLoad(page.id);
+      };
+      if (loaders.length) Promise.all(loaders).finally(settle);
+      else settle();
     }
-    window.addEventListener("hashchange", () => showAdminPanel(adminPanelFromHash()));
+    window.addEventListener("hashchange", () => showAdminPanel(adminPanelFromHash(), { fromHash: true }));
     $("adminMenuBtn")?.addEventListener("click", () => {
       const open = !$("adminApp").classList.contains("is-nav-open");
       $("adminApp").classList.toggle("is-nav-open", open);
@@ -1512,13 +1525,13 @@
     document.addEventListener("click", (ev) => {
       if (!ev.target.closest(".admin-search")) $("adminSearchResults").hidden = true;
     });
-    $("adminMain")?.addEventListener?.("input", () => {});
-    document.querySelector(".admin-main")?.addEventListener("input", () => IA.setDirty(true));
-    document.querySelector(".admin-main")?.addEventListener("change", () => IA.setDirty(true));
+    document.querySelector(".admin-main")?.addEventListener("input", (ev) => IA.noteControlChange(ev.target));
+    document.querySelector(".admin-main")?.addEventListener("change", (ev) => IA.noteControlChange(ev.target));
     $("adminDirtyDiscard")?.addEventListener("click", () => location.reload());
     $("adminDirtySave")?.addEventListener("click", () => {
-      const on = document.querySelector("[data-admin-page].is-on");
-      on?.querySelector("form button[type=submit].primary")?.click();
+      if (!IA.runStickySave() && $("adminDirtyLabel")) {
+        $("adminDirtyLabel").textContent = "這個頁面沒有對應的儲存動作，請用頁面上的按鈕。";
+      }
     });
     window.addEventListener("beforeunload", (ev) => {
       if (IA.isDirty()) ev.preventDefault();
@@ -1535,7 +1548,7 @@
       if (!el) return;
       el.textContent = text || "";
       el.className = "msg " + (ok ? "ok" : text ? "err" : "");
-      if (ok && /已儲存|已發布|已更新|已刪除/.test(text || "")) IA.markClean();
+      if (ok && /已儲存|已發布|已更新|已刪除/.test(text || "")) IA.captureBaseline(IA.currentPageId());
     }
 
     async function readApi(res) {
@@ -1724,9 +1737,9 @@
       $("mapsLifetime").textContent = `累計紀錄 ${usage.lifetimeEssentials || 0} 次 Directions、${usage.lifetimeAdvanced || 0} 次 Advanced；各月官方價目加總約 ${usd(usage.lifetimeUsd)}。實際請款以 Cloud 帳單為準。`;
       if ($("mapsStatus")) {
         $("mapsStatus").innerHTML = `
-          <div class="admin-metric"><span>OSRM 距離</span><b><span class="dot ok"></span> 使用中</b></div>
-          <div class="admin-metric"><span>Google Directions</span><b><span class="dot ${data.googleEnabled ? "ok" : "off"}"></span> ${data.googleEnabled ? "正常" : "關閉"}</b></div>
-          <div class="admin-metric"><span>API Key</span><b><span class="dot ${data.hasKey ? "ok" : "off"}"></span> ${data.hasKey ? "已設定" : "未設定"}</b></div>
+          <div class="admin-metric"><span>OSRM 距離</span><b><span class="dot warn"></span> 已啟用／未檢查</b></div>
+          <div class="admin-metric"><span>Google Directions</span><b><span class="dot ${data.googleEnabled && data.hasKey ? "warn" : "off"}"></span> ${data.googleEnabled ? (data.hasKey ? "已啟用／未檢查" : "未設定") : "關閉"}</b></div>
+          <div class="admin-metric"><span>API Key</span><b><span class="dot ${data.hasKey ? "warn" : "off"}"></span> ${data.hasKey ? "已設定／未檢查" : "未設定"}</b></div>
           <div class="admin-metric"><span>今日請求</span><b>${Number(usage.todayEssentials || 0) + Number(usage.todayAdvanced || 0)}</b></div>
           <div class="admin-metric"><span>本月請求</span><b>${Number(usage.monthEssentials || 0) + Number(usage.monthAdvanced || 0)}</b></div>
         `;
@@ -2122,11 +2135,10 @@
     }
 
     function sourceDot(status) {
-      if (status === "enabled" || status === "ok") return "ok";
+      if (status === "ok" || status === "tested") return "ok";
       if (status === "disabled" || status === "off" || status === "unset") return "off";
-      if (status === "error" || status === "parse_failed") return "warn";
       if (status === "blocked" || status === "bad") return "bad";
-      return "";
+      return "warn";
     }
     function formatAgo(value) {
       if (!value) return "無";
@@ -2418,7 +2430,6 @@
         await loadMembers();
         openMemberDrawer(memberCache.find((row) => String(row.id) === String(id)));
         setMsg("memberMsg", "已儲存會員設定", true);
-        IA.markClean();
       } catch (error) {
         setMsg("memberMsg", error.message);
       } finally {
@@ -3235,6 +3246,8 @@
       meEmail = me.email || "";
       $("who").textContent = meEmail;
       await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadAnnouncements(), loadCommsAdmin(), loadMaps(), loadHelpQa(), loadWishConditions(), loadLegalCopy(), loadContentCms(), loadListingImports(), loadSpirit(), loadHousing(), loadCrawlSources(), loadSystemCrawl(), loadBrand(), loadFeedback()]);
+      adminFormsReady = true;
+      IA.finishPageLoad(IA.currentPageId());
       $("brandForm").onsubmit = async (ev) => {
         ev.preventDefault();
         $("brandSave").disabled = true;
