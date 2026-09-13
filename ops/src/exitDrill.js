@@ -11,7 +11,7 @@ import {
 import { redactCrmReplicas, listCrmHandoff } from "./crmReplica.js";
 import { inferIssueProductId, issueWriteDecision, redactInsightDerivatives } from "./insightConsent.js";
 import { recordPurgeEvent, redactExclusiveIssues } from "./purgeLedger.js";
-import { describeCodeRollbackOffer } from "./release/productionRelease.js";
+import { describeCodeRollbackOffer, describeDbRestoreOffer } from "./release/productionRelease.js";
 
 export const EXIT_ACTIONS = Object.freeze(["pause", "unsubscribe", "handoff", "purge_replica"]);
 export const HANDOFF_SCHEMA = 1;
@@ -73,6 +73,22 @@ function productionReleaseObservation(db, runId, status) {
     workflow_run_id: latest?.workflow_run_id || evidence?.workflow_run_id || null,
     workflow_conclusion: evidence?.workflow_conclusion || null,
   };
+}
+
+function knownResultPendingNote({ scoped, status, codeOffer, dbOffer }) {
+  if (!scoped) {
+    return "正式發布尚未綁 product_id；列出已知結果但不能宣稱可退回或還原資料庫";
+  }
+  const dbBit = dbOffer?.requested
+    ? "已記錄 DB 還原要求；自動還原不會執行。"
+    : "可另送 DB 還原要求；自動還原不會執行。";
+  if (status === "ROLLED_BACK") {
+    return `已知結果：程式已退回。${dbBit}這不是再退回程式，也不是取消 runner。`;
+  }
+  if (codeOffer?.rollback?.contract_complete) {
+    return `已知結果：正式發布已成功，此為目前正式版。可程式退回上一版。${dbBit}程式退回與 DB 還原是不同操作。`;
+  }
+  return `已知結果：正式發布已成功，此為目前正式版。上一版身分不完整，不能宣稱可退回。${dbBit}`;
 }
 
 function productionReleasePendingNote({ scoped, unknown, observation }) {
@@ -286,27 +302,26 @@ export function listPendingWork(db, productId) {
       if (scoped && scoped !== id) continue;
       const status = latestProductionStatus(db, row.id);
       if (TERMINAL_PRODUCTION_STATUSES.has(status)) {
-        if (status === "SUCCEEDED") {
-          const offer = describeCodeRollbackOffer(db, row.id);
-          if (offer.offered) {
-            items.push({
-              kind: "production_release",
-              id: row.id,
-              state: "SUCCEEDED",
-              blocking: false,
-              unscoped: !scoped,
-              observation: {
-                accepted: true,
-                in_flight: false,
-                known_result: "success",
-                runner_cancel_requested: false,
-              },
-              rollback: offer.rollback,
-              note: scoped
-                ? offer.note
-                : "正式發布尚未綁 product_id；列出已知結果但不能宣稱可退回",
-            });
-          }
+        const codeOffer = status === "SUCCEEDED" ? describeCodeRollbackOffer(db, row.id) : { offered: false };
+        const dbOffer = describeDbRestoreOffer(db, row.id);
+        if (codeOffer.offered || dbOffer.offered) {
+          items.push({
+            kind: "production_release",
+            id: row.id,
+            state: status,
+            blocking: false,
+            unscoped: !scoped,
+            observation: {
+              accepted: true,
+              in_flight: false,
+              known_result: status === "ROLLED_BACK" ? "rolled_back" : "success",
+              runner_cancel_requested: false,
+              db_restore_requested: !!dbOffer.requested,
+            },
+            rollback: codeOffer.rollback || null,
+            db_restore: dbOffer.offered ? dbOffer : null,
+            note: knownResultPendingNote({ scoped, status, codeOffer, dbOffer }),
+          });
         }
         continue;
       }

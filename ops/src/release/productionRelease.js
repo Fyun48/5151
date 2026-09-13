@@ -50,6 +50,7 @@ import {
   rollbackContractComplete,
   looksLikeStaticTreeHash,
   SCHEMA_COMPAT_OK,
+  DB_RESTORE_CONFIRMATION,
 } from "./rollbackContract.js";
 
 const PII_OR_SECRET_KEY = /(pass(word|wd)?|secret|token|cookie|authorization|auth[-_]?header|api[-_]?key|access[-_]?key|private[-_]?key|credential|session|bearer|otp|ssh|email|contact|user_ref|phone|reporter|connection_string|dsn|database_url|prod(uction)?[-_]?(host|db|user|password|secret|token|key)|nas[-_]?(host|user|key|password))/i;
@@ -1493,6 +1494,115 @@ export function describeCodeRollbackOffer(db, releaseRunId) {
     note: complete
       ? "已知結果：正式發布已成功，此為目前正式版。可程式退回上一版；這不是取消 runner，也不是 DB 還原。"
       : "已知結果：正式發布已成功，此為目前正式版。上一版身分不完整，不能宣稱可退回。DB 還原是不同操作。",
+  };
+}
+
+export const DB_RESTORE_EVIDENCE_KIND = "db_restore_request";
+
+function dbRestoreRequested(db, releaseRunId) {
+  return !!db.prepare(
+    `SELECT id FROM production_release_evidence WHERE release_run_id=? AND evidence_kind=? ORDER BY id DESC LIMIT 1`,
+  ).get(Number(releaseRunId), DB_RESTORE_EVIDENCE_KIND);
+}
+
+function isCurrentStablePointer(db, run) {
+  const ids = targetIds(run);
+  const cur = getProductionStable(db, ids.productId, ids.environmentKey);
+  return !!(cur && cur.release_run_id != null && Number(cur.release_run_id) === Number(run.id));
+}
+
+export function describeDbRestoreOffer(db, releaseRunId) {
+  const run = db.prepare("SELECT * FROM production_release_run WHERE id=?").get(Number(releaseRunId));
+  if (!run) return { offered: false, reason: "not_found" };
+  const status = latestStatus(db, run.id) || RELEASE_STATUSES.CREATED;
+  if (status !== RELEASE_STATUSES.SUCCEEDED && status !== RELEASE_STATUSES.ROLLED_BACK) {
+    return { offered: false, reason: "not_known_result" };
+  }
+  if (!isCurrentStablePointer(db, run)) {
+    return { offered: false, reason: "not_current_stable" };
+  }
+  const requested = dbRestoreRequested(db, run.id);
+  return {
+    offered: true,
+    requested,
+    confirmation: DB_RESTORE_CONFIRMATION,
+    auto_restore: false,
+  };
+}
+
+export function requestProductionDbRestore(db, releaseRunId, {
+  actor = "owner", confirmDbRestore = null, provider = null, now = new Date(),
+} = {}) {
+  const run = db.prepare("SELECT * FROM production_release_run WHERE id=?").get(Number(releaseRunId));
+  if (!run) throw httpError("production release run not found", 404);
+  const confirmed = assertDbRestoreConfirmation({ confirm_db_restore: confirmDbRestore });
+  if (!confirmed.requested) {
+    throw httpError("database restore requires explicit confirmation RESTORE-PRODUCTION-DB", 409);
+  }
+  const status = latestStatus(db, run.id);
+  if (isFrozenReleaseStatus(status)) {
+    throw httpError("正式部署狀態不明；先確認該環境實際結果。程式退回與 DB 還原是不同操作。", 409);
+  }
+  if (RUNNER_CANCELABLE_STATUSES.has(status)) {
+    throw httpError("尚未結束的 runner 請走取消 runner。DB 還原只適用已成功或已退回程式的目前正式版。", 409);
+  }
+  if (UNSENT_CANCELABLE_STATUSES.has(status) && !anyWorkflowDispatchAccepted(db, run.id)) {
+    throw httpError("未送出的正式發布請取消未送出的發布。DB 還原只適用已成功或已退回程式的目前正式版。", 409);
+  }
+  if (status !== RELEASE_STATUSES.SUCCEEDED && status !== RELEASE_STATUSES.ROLLED_BACK) {
+    throw httpError("DB 還原只適用已成功或已退回程式的目前正式版。這不是程式退回，也不是取消 runner。", 409);
+  }
+  if (!isCurrentStablePointer(db, run)) {
+    throw httpError("rollback run is stale or superseded by a newer production release", 409);
+  }
+  if (typeof provider?.restoreDatabase === "function") {
+    // Automatic restore stays forbidden; the provider hook is never invoked.
+  }
+  if (dbRestoreRequested(db, run.id)) {
+    return {
+      idempotent: true,
+      db_restore: false,
+      auto_restore: false,
+      manual_required: true,
+      restore_not_performed: true,
+      run: publicReleaseRun(db, run),
+    };
+  }
+  withImmediateTx(db, () => {
+    appendEvidence(db, {
+      releaseRunId: run.id,
+      kind: DB_RESTORE_EVIDENCE_KIND,
+      now,
+      payload: {
+        actor,
+        confirmation: DB_RESTORE_CONFIRMATION,
+        auto_restore: false,
+        restore_not_performed: true,
+        prev_status: status,
+      },
+    });
+    appendAuditRow(db, {
+      actor,
+      action: "issue.production_release.db_restore_requested",
+      entityType: "production_release_run",
+      entityId: String(run.id),
+      data: {
+        issue_id: Number(run.issue_id),
+        coding_task_id: Number(run.coding_task_id),
+        product_id: run.product_id || null,
+        prev_status: status,
+        auto_restore: false,
+        restore_not_performed: true,
+      },
+      now,
+    });
+  });
+  return {
+    db_restore: false,
+    auto_restore: false,
+    manual_required: true,
+    restore_not_performed: true,
+    run: publicReleaseRun(db, db.prepare("SELECT * FROM production_release_run WHERE id=?").get(Number(run.id))),
   };
 }
 

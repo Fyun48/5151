@@ -117,7 +117,7 @@ test("console exposes pending-list cancel for unsent production releases", () =>
   assert.match(html, /未送出的正式發布也可從未決清單取消/);
   assert.match(html, /未送出的製作、QA、隔離 staging 也可從未決清單取消/);
   assert.match(html, /未送出的發布通知也可取消/);
-  assert.match(html, /console\.js\?v=20260913-pkg27/);
+  assert.match(html, /console\.js\?v=20260913-pkg28/);
   assert.match(js, /\/ops\/api\/production-releases\/\$\{id\}\/cancel/);
   assert.match(js, /取消未送出的正式發布/);
   assert.match(js, /已受理的部署不宣稱撤回|未送出的發布不會再開/);

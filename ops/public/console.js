@@ -19,6 +19,7 @@ let productBusy = false;
 let confirmAction = null;
 let confirmReturnFocus = null;
 let confirmNeedsReason = false;
+let confirmExactPhrase = "";
 
 async function api(path, opts) {
   const o = { cache: "no-store", ...(opts || {}) };
@@ -133,6 +134,7 @@ const STATUS_LABEL = {
   CODE_ROLLBACK_DISPATCHED: "退回執行中",
   BLOCKED: "已擋下",
   SUCCEEDED: "已成功",
+  ROLLED_BACK: "已退回",
   unknown: "狀態不明",
   PRODUCTION_STATE_UNKNOWN: "狀態不明",
   subscription_revoked: "訂閱已撤",
@@ -214,11 +216,13 @@ function hideConfirm() {
   if (!dlg || dlg.hidden) {
     confirmAction = null;
     confirmNeedsReason = false;
+    confirmExactPhrase = "";
     return;
   }
   dlg.hidden = true;
   confirmAction = null;
   confirmNeedsReason = false;
+  confirmExactPhrase = "";
   if ($("confirmReasonWrap")) $("confirmReasonWrap").hidden = true;
   if ($("confirmReason")) $("confirmReason").value = "";
   if ($("confirmReasonErr")) {
@@ -231,15 +235,16 @@ function hideConfirm() {
   if (back && typeof back.focus === "function") back.focus();
 }
 
-function showConfirm({ title, body, confirmLabel, onConfirm, danger = true, reasonRequired = false, reasonLabel = "請說明要改什麼" }) {
+function showConfirm({ title, body, confirmLabel, onConfirm, danger = true, reasonRequired = false, reasonLabel = "請說明要改什麼", reasonExact = "" }) {
   confirmReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   $("confirmTitle").textContent = title;
   $("confirmBody").textContent = body;
   $("confirmOk").textContent = confirmLabel || "確定";
   $("confirmOk").classList.toggle("danger", danger !== false);
   confirmAction = onConfirm;
-  confirmNeedsReason = !!reasonRequired;
-  if ($("confirmReasonWrap")) $("confirmReasonWrap").hidden = !reasonRequired;
+  confirmExactPhrase = String(reasonExact || "");
+  confirmNeedsReason = !!reasonRequired || !!confirmExactPhrase;
+  if ($("confirmReasonWrap")) $("confirmReasonWrap").hidden = !confirmNeedsReason;
   if ($("confirmReasonLabel") && reasonLabel) $("confirmReasonLabel").textContent = reasonLabel;
   if ($("confirmReason")) $("confirmReason").value = "";
   if ($("confirmReasonErr")) {
@@ -477,6 +482,19 @@ const PENDING_CODE_ROLLBACK = {
   ok: (data) => `已要求程式退回。${data.db_restore === false ? "沒有執行 DB 還原。" : ""}`,
 };
 
+const PENDING_DB_RESTORE = {
+  kind: "production_release",
+  states: ["SUCCEEDED", "ROLLED_BACK"],
+  label: "記錄 DB 還原要求",
+  path: (id) => `/ops/api/production-releases/${id}/restore-db`,
+  title: "確認 DB 還原要求",
+  body: (id) => `記錄正式發布 #${id} 的 DB 還原要求？這不會自動還原正式資料庫，也不是程式退回或取消 runner。自動還原被禁止。`,
+  confirm: "確定記錄要求",
+  reasonExact: "RESTORE-PRODUCTION-DB",
+  reasonLabel: "請輸入確認字 RESTORE-PRODUCTION-DB",
+  ok: (data) => `已記錄 DB 還原要求。${data.restore_not_performed ? "沒有執行自動還原。" : ""}`,
+};
+
 function pendingItemActions(it) {
   const actions = [];
   const unsent = PENDING_CANCEL[it.kind];
@@ -490,6 +508,13 @@ function pendingItemActions(it) {
     && it.rollback?.contract_complete
   ) {
     actions.push({ ...PENDING_CODE_ROLLBACK, action: "rollback", rollback: it.rollback });
+  }
+  if (
+    it.kind === PENDING_DB_RESTORE.kind
+    && PENDING_DB_RESTORE.states.includes(it.state)
+    && it.db_restore?.offered
+  ) {
+    actions.push({ ...PENDING_DB_RESTORE, action: "dbrestore" });
   }
   return actions;
 }
@@ -1737,7 +1762,9 @@ $("exitDetailBody")?.addEventListener("click", (ev) => {
     ? PENDING_RUNNER_CANCEL
     : action === "rollback"
       ? PENDING_CODE_ROLLBACK
-      : PENDING_CANCEL[btn.dataset.cancelKind];
+      : action === "dbrestore"
+        ? PENDING_DB_RESTORE
+        : PENDING_CANCEL[btn.dataset.cancelKind];
   const itemId = Number(btn.dataset.cancelId);
   const pid = btn.dataset.pid || "";
   const state = btn.dataset.cancelState || "";
@@ -1746,14 +1773,18 @@ $("exitDetailBody")?.addEventListener("click", (ev) => {
     title: spec.title,
     body: spec.body(itemId, state),
     confirmLabel: spec.confirm,
-    onConfirm: async () => {
+    reasonExact: spec.reasonExact || "",
+    reasonLabel: spec.reasonLabel,
+    onConfirm: async (note) => {
       const payload = action === "rollback"
         ? {
           previous_stable_sha: btn.dataset.prevSha,
           previous_stable_digest: btn.dataset.prevDigest,
           previous_stable_workflow_run_id: btn.dataset.prevRun,
         }
-        : { reason: "owner_console" };
+        : action === "dbrestore"
+          ? { confirm_db_restore: note }
+          : { reason: "owner_console" };
       const { res, data } = await api(spec.path(itemId), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1911,7 +1942,16 @@ $("dismissSecretBtn").addEventListener("click", hideSecret);
 $("confirmCancel").addEventListener("click", hideConfirm);
 $("confirmOk").addEventListener("click", async () => {
   const note = ($("confirmReason")?.value || "").trim();
-  if (confirmNeedsReason && !note) {
+  if (confirmExactPhrase && note !== confirmExactPhrase) {
+    if ($("confirmReasonErr")) {
+      $("confirmReasonErr").hidden = false;
+      $("confirmReasonErr").textContent = `請輸入確認字 ${confirmExactPhrase}`;
+      $("confirmReasonErr").className = "msg err";
+    }
+    $("confirmReason")?.focus();
+    return;
+  }
+  if (confirmNeedsReason && !confirmExactPhrase && !note) {
     if ($("confirmReasonErr")) {
       $("confirmReasonErr").hidden = false;
       $("confirmReasonErr").textContent = "請先寫說明再送出";
