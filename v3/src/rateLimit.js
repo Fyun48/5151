@@ -72,6 +72,46 @@ const demoHits = new Map();
 const DEMO_LIMIT = 40;
 const DEMO_WINDOW_MS = 10 * 60 * 1000;
 
+const publicListHits = new Map();
+export const PUBLIC_LIST_RATE = {
+  burstLimit: 24,
+  burstWindowMs: 10_000,
+  sustainedLimit: 180,
+  sustainedWindowMs: 10 * 60 * 1000,
+};
+
+export function resetPublicListingsRateLimit() {
+  publicListHits.clear();
+}
+
+export function assertPublicListingsReadable(ip, now = Date.now()) {
+  const key = `ip:${ip || "unknown"}`;
+  const row = publicListHits.get(key) || { burstN: 0, burstStart: now, sustainedN: 0, sustainedStart: now };
+  if (now - row.burstStart >= PUBLIC_LIST_RATE.burstWindowMs) {
+    row.burstN = 0;
+    row.burstStart = now;
+  }
+  if (now - row.sustainedStart >= PUBLIC_LIST_RATE.sustainedWindowMs) {
+    row.sustainedN = 0;
+    row.sustainedStart = now;
+  }
+  row.burstN += 1;
+  row.sustainedN += 1;
+  publicListHits.set(key, row);
+  if (row.burstN > PUBLIC_LIST_RATE.burstLimit) {
+    const wait = Math.max(1, Math.ceil((PUBLIC_LIST_RATE.burstWindowMs - (now - row.burstStart)) / 1000));
+    const err = new Error(`搜尋稍快，請 ${wait} 秒後再試`);
+    err.status = 429;
+    throw err;
+  }
+  if (row.sustainedN > PUBLIC_LIST_RATE.sustainedLimit) {
+    const wait = Math.max(1, Math.ceil((PUBLIC_LIST_RATE.sustainedWindowMs - (now - row.sustainedStart)) / 1000));
+    const err = new Error(`訪客搜尋次數稍多，請 ${wait} 秒後再試`);
+    err.status = 429;
+    throw err;
+  }
+}
+
 export function assertDemoReadable(ip, now = Date.now()) {
   const key = `ip:${ip || "unknown"}`;
   const row = demoHits.get(key) || { n: 0, start: now };

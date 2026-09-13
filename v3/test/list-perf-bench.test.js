@@ -6,7 +6,8 @@ import path from "node:path";
 
 process.env.DATA_DIR = mkdtempSync(path.join(os.tmpdir(), "list-perf-"));
 
-const { listListings, upsertListing, listingCount } = await import("../src/db.js");
+const { listListings, listPublicListings, publicSearchSettings, upsertListing, listingCount, resetPublicListingsDecorateCount, publicListingsDecorateCount } = await import("../src/db.js");
+const { getCachedPublicListings, resetPublicListingsCache } = await import("../src/publicListings.js");
 
 function pct(samples, p) {
   const sorted = [...samples].sort((a, b) => a - b);
@@ -69,6 +70,26 @@ function measure(label, sameHouse) {
     samples,
   };
 }
+
+test("guest public listings cache is cheaper than a cold decorate", () => {
+  seed(80);
+  resetPublicListingsCache();
+  resetPublicListingsDecorateCount();
+  const query = { districts: ["士林區"], sort: "price_asc", limit: 40, offset: 0 };
+  const load = () => listPublicListings({ ...query, settings: publicSearchSettings(query) });
+  const coldSamples = [];
+  const t0 = performance.now();
+  const cold = getCachedPublicListings(query, load);
+  coldSamples.push(performance.now() - t0);
+  const t1 = performance.now();
+  const hot = getCachedPublicListings(query, load);
+  const cachedMs = performance.now() - t1;
+  assert.equal(cold.cache_hit, false);
+  assert.equal(hot.cache_hit, true);
+  assert.equal(publicListingsDecorateCount(), 1);
+  assert.ok(cachedMs <= coldSamples[0] + 5, `cached ${cachedMs} should not exceed cold ${coldSamples[0]}`);
+  console.log(JSON.stringify({ guest_cold_ms: coldSamples[0], guest_cached_ms: cachedMs, returned: cold.listings.length }, null, 2));
+});
 
 test("listListings benchmark: skip unused same-house decorate on 400 listings", () => {
   seed(400);

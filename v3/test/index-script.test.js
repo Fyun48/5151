@@ -385,7 +385,7 @@ test("guest demo is read-only and work prompt can be skipped", () => {
   assert.match(html, /GUEST_LOCK_TOAST_AFTER = 1/);
   assert.match(html, /function showGuestToast/);
   assert.match(html, /function remindGuest/);
-  assert.match(html, /成為會員後就能使用這項功能/);
+  assert.match(html, /登入／註冊後可使用這項功能/);
   assert.match(html, /function paintWho/);
   assert.match(html, /paintWho\(null\)/);
   assert.match(html, /classList\.toggle\("is-guest", isGuest\)/);
@@ -403,7 +403,7 @@ test("guest demo is read-only and work prompt can be skipped", () => {
   assert.match(html, /data-tour="guestWho"/);
   assert.match(html, /class="site-footer"/);
   assert.match(html, /reversal play tech \| 逆遊科技/);
-  assert.match(html, /這是示範列表/);
+  assert.match(html, /你可以先搜尋已抓進資料庫的房源/);
   assert.match(html, /id="workAddress"/);
   assert.match(html, /id="notifyIncludeStreetEstimate"/);
   assert.match(html, /\.check-inline \{[\s\S]*min-height: var\(--touch\);/);
@@ -413,7 +413,7 @@ test("guest demo is read-only and work prompt can be skipped", () => {
   assert.doesNotMatch(html, /請至少選一個行政區/);
   assert.match(html, /功能表展開/);
   assert.match(html, /panel-fab-label/);
-  assert.match(html, /\/api\/demo/);
+  assert.match(html, /\/api\/public\/listings/);
   assert.match(html, /function setGuestMode/);
   assert.match(html, /function applyGuestQuery/);
   assert.match(html, /guestListings/);

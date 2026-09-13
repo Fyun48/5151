@@ -29,6 +29,10 @@ import {
   expireStaleVerifyTokens,
   rejectSuspectedMatch,
   confirmSuspectedMatch,
+  listPublicListings,
+  publicSearchSettings,
+  runSameHouseBackfill,
+  sameHouseBackfillStatus,
   mergeSameHouseForUser,
   resetListings,
   resetAllData,
@@ -222,7 +226,8 @@ import { CITIES } from "./regions.js";
 import { mailConfigured, sendMail } from "./mail.js";
 import { queueAccountMail } from "./systemMail.js";
 import { assertHuman, issueCaptcha } from "./captcha.js";
-import { assertCaptchaIssuable, assertDemoReadable, assertImportAllowed, authAttemptKeys, clientIp } from "./rateLimit.js";
+import { assertCaptchaIssuable, assertDemoReadable, assertImportAllowed, assertPublicListingsReadable, authAttemptKeys, clientIp } from "./rateLimit.js";
+import { getCachedPublicListings } from "./publicListings.js";
 import { buildDemoState } from "./demo.js";
 import { backfillAddressGeo, backfillIncompleteAddresses, backfillListingCoords, backfillListingMrt, backfillListingRoutes, flushPendingNotifications, isWatchIntervalPending, runWatch } from "./watcher.js";
 import { LIST_PAGE_SIZE, isListingGoneError, probeListingAlive } from "./client591.js";
@@ -342,10 +347,68 @@ app.get("/api/demo", async (req, res) => {
   }
 });
 
+app.get("/api/public/listings", async (req, res) => {
+  await yieldEventLoop();
+  try {
+    assertPublicListingsReadable(clientIp(req));
+    const districts = String(req.query.districts || "")
+      .split(",")
+      .map((name) => name.trim())
+      .filter(Boolean);
+    const query = {
+      districts,
+      kind: req.query.kind || "",
+      sources: req.query.sources || "",
+      q: req.query.q || "",
+      sort: req.query.sort || "newest",
+      limit: Number(req.query.limit) || 40,
+      offset: Number(req.query.offset) || 0,
+      priceMin: req.query.priceMin,
+      priceMax: req.query.priceMax,
+      priceMaxIncludesExtras: req.query.priceMaxIncludesExtras,
+      areaMax: req.query.areaMax,
+      excludeRooftop: req.query.excludeRooftop,
+      excludeLowFloors: req.query.excludeLowFloors,
+      minBuildingFloors: req.query.minBuildingFloors,
+      wholeFloorOnly: req.query.wholeFloorOnly,
+      hasParking: req.query.hasParking,
+    };
+    const listed = getCachedPublicListings(query, () => listPublicListings({
+      ...query,
+      settings: publicSearchSettings(query),
+    }));
+    res.setHeader("Cache-Control", "public, max-age=15");
+    res.json({
+      listings: listed.listings,
+      hasMore: listed.hasMore === true,
+      nextOffset: listed.nextOffset || 0,
+      totalMatched: listed.totalMatched,
+      queryVersion: listed.queryVersion || 2,
+      cache_hit: listed.cache_hit === true,
+      guest: true,
+    });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
 function actorUserId(req) {
   const session = readSession(req);
   if (session?.userId) return session.userId;
   return defaultUserId();
+}
+
+function sessionUserId(req) {
+  return Number(readSession(req)?.userId) || 0;
+}
+
+function requireMember(req, res) {
+  const session = readSession(req);
+  if (!session?.userId) {
+    res.status(401).json({ error: "請先登入", login: true });
+    return null;
+  }
+  return session;
 }
 
 function actorIsAdmin(req) {
@@ -1400,6 +1463,24 @@ app.put("/api/admin/system-crawl", requireAdminApi, (req, res) => {
   }
 });
 
+app.get("/api/admin/same-house/reconcile", requireAdminApi, (_req, res) => {
+  res.json({
+    ...sameHouseBackfillStatus(),
+    note: "POST 此路徑執行一批歷史 reconciliation，可中斷續跑。",
+  });
+});
+
+app.post("/api/admin/same-house/reconcile", requireAdminApi, (req, res) => {
+  try {
+    res.json(runSameHouseBackfill({
+      limit: Number(req.body?.limit) || 50,
+      cursor: req.body?.cursor,
+    }));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
 app.post("/api/demand", (req, res) => {
   try {
     const session = readSession(req);
@@ -2196,7 +2277,9 @@ function safeStats(userId) {
 
 app.get("/api/settings", (req, res) => {
   try {
-    res.json({ settings: getSettings(actorUserId(req)), cities: CITIES });
+    const session = requireMember(req, res);
+    if (!session) return;
+    res.json({ settings: getSettings(session.userId), cities: CITIES });
   } catch (error) {
     res.status(500).json({ error: error.message || "讀取設定失敗" });
   }
@@ -2204,7 +2287,9 @@ app.get("/api/settings", (req, res) => {
 
 app.get("/api/member-mail", (req, res) => {
   try {
-    res.json(getMemberMailSettings(actorUserId(req)));
+    const session = requireMember(req, res);
+    if (!session) return;
+    res.json(getMemberMailSettings(session.userId));
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || "讀取郵件設定失敗" });
   }
@@ -2228,7 +2313,9 @@ app.post("/api/change-password", (req, res) => {
 
 app.post("/api/member-mail", (req, res) => {
   try {
-    res.json(saveMemberMailSettings(actorUserId(req), req.body || {}));
+    const session = requireMember(req, res);
+    if (!session) return;
+    res.json(saveMemberMailSettings(session.userId, req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message || "儲存郵件設定失敗" });
   }
@@ -2236,8 +2323,9 @@ app.post("/api/member-mail", (req, res) => {
 
 app.post("/api/member-mail/test", async (req, res) => {
   try {
-    const uid = actorUserId(req);
-    const session = readSession(req);
+    const session = requireMember(req, res);
+    if (!session) return;
+    const uid = session.userId;
     const to = String(req.body?.to || session?.email || "").trim();
     if (!to) throw Object.assign(new Error("請先登入並確認信箱"), { status: 400 });
     if (req.body?.smtp && typeof req.body.smtp === "object") {
@@ -2261,7 +2349,9 @@ app.post("/api/member-mail/test", async (req, res) => {
 
 app.get("/api/state", async (req, res) => {
   await yieldEventLoop();
-  const uid = actorUserId(req);
+  const session = requireMember(req, res);
+  if (!session) return;
+  const uid = session.userId;
   let settings;
   try {
     settings = getSettings(uid);
@@ -2279,7 +2369,7 @@ app.get("/api/state", async (req, res) => {
       sort: "newest",
       limit: 500,
       userId: uid,
-      matchVoteUserId: readSession(req)?.userId || 0,
+      matchVoteUserId: uid,
     });
     listings = listed.listings;
     listingStats = { ...listingStats, matched: listed.totalMatched };
@@ -2302,7 +2392,9 @@ app.get("/api/state", async (req, res) => {
 });
 
 app.post("/api/commute/focus", (req, res) => {
-  const uid = actorUserId(req);
+  const session = requireMember(req, res);
+  if (!session) return;
+  const uid = session.userId;
   const ids = (Array.isArray(req.body?.ids) ? req.body.ids : []).map(Number).filter((id) => id > 0).slice(0, 80);
   commuteFocusByUser.set(uid, { ids, at: Date.now() });
   queueGeoBackfill(getSettings(uid));
@@ -2310,7 +2402,9 @@ app.post("/api/commute/focus", (req, res) => {
 });
 
 app.get("/api/commute/snapshot", (req, res) => {
-  const uid = actorUserId(req);
+  const session = requireMember(req, res);
+  if (!session) return;
+  const uid = session.userId;
   const settings = getSettings(uid);
   const ids = String(req.query.ids || "")
     .split(",")
@@ -2325,7 +2419,9 @@ app.get("/api/commute/snapshot", (req, res) => {
 
 app.get("/api/listings", async (req, res) => {
   await yieldEventLoop();
-  const uid = actorUserId(req);
+  const session = requireMember(req, res);
+  if (!session) return;
+  const uid = session.userId;
   const districts = String(req.query.districts || "")
     .split(",")
     .map((name) => name.trim())
@@ -2341,7 +2437,7 @@ app.get("/api/listings", async (req, res) => {
     offset: Number(req.query.offset) || 0,
     districts,
     userId: uid,
-    matchVoteUserId: readSession(req)?.userId || 0,
+    matchVoteUserId: uid,
     sameHouse: req.query.sameHouse !== "0",
   });
   const queryMs = Date.now() - started;
@@ -2364,12 +2460,14 @@ app.get("/api/listings", async (req, res) => {
 });
 
 app.post("/api/listings/hide-many", (req, res) => {
+  const session = requireMember(req, res);
+  if (!session) return;
   const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
   if (!ids.length) {
     res.status(400).json({ error: "請先勾選物件" });
     return;
   }
-  res.json(hideMany(ids, actorUserId(req)));
+  res.json(hideMany(ids, session.userId));
 });
 
 app.post("/api/reset-listings", (req, res) => {
@@ -2383,7 +2481,8 @@ app.post("/api/reset-listings", (req, res) => {
   }
   const settings = resetListings();
   lastRun = null;
-  res.json({ ok: true, settings, stats: stats(undefined, actorUserId(req)) });
+  const session = readSession(req);
+  res.json({ ok: true, settings, stats: stats(undefined, session?.userId) });
 });
 
 app.post("/api/reset-all", (req, res) => {
@@ -2401,7 +2500,9 @@ app.post("/api/reset-all", (req, res) => {
 });
 
 app.get("/api/listings/:id/history", (req, res) => {
-  const uid = actorUserId(req);
+  const session = requireMember(req, res);
+  if (!session) return;
+  const uid = session.userId;
   const listing = getListing(Number(req.params.id), uid);
   if (!listing) {
     res.status(404).json({ error: "找不到這筆物件" });
@@ -2412,7 +2513,9 @@ app.get("/api/listings/:id/history", (req, res) => {
 
 app.post("/api/listings/:id/flags", async (req, res) => {
   try {
-    const uid = actorUserId(req);
+    const session = requireMember(req, res);
+    if (!session) return;
+    const uid = session.userId;
     const updated = setFlags(Number(req.params.id), req.body || {}, uid);
     if (!updated) {
       res.status(404).json({ error: "找不到這筆物件" });
@@ -2537,6 +2640,7 @@ app.post("/api/listings/:id/reject-match", (req, res) => {
   }
   const result = rejectSuspectedMatch(Number(req.params.id), session.userId, {
     peerId: req.body?.peer_id,
+    admin: session.role === "admin",
   });
   if (!result?.ok) {
     const status = result?.code === "not_found" ? 404 : result?.code === "rate_limit" ? 429 : 400;
@@ -2558,12 +2662,22 @@ app.post("/api/listings/:id/confirm-match", (req, res) => {
     res.status(401).json({ error: "請先登入才能併入同房源" });
     return;
   }
-  const updated = confirmSuspectedMatch(Number(req.params.id), session.userId);
-  if (!updated) {
+  const result = confirmSuspectedMatch(Number(req.params.id), session.userId, {
+    admin: session.role === "admin",
+  });
+  if (!result?.ok && !result?.listing) {
     res.status(404).json({ error: "找不到這筆物件或缺少比對對象" });
     return;
   }
-  res.json({ listing: updated, stats: stats(undefined, session.userId), personal: true, shared: false });
+  res.json({
+    listing: result.listing,
+    stats: stats(undefined, session.userId),
+    personal: result.personal !== false && !result.admin_confirmed,
+    shared: result.shared === true,
+    admin_confirmed: result.admin_confirmed === true,
+    group_id: result.group_id || "",
+    message: result.message || "",
+  });
 });
 
 app.post("/api/listings/merge-same-house", (req, res) => {
@@ -2572,7 +2686,9 @@ app.post("/api/listings/merge-same-house", (req, res) => {
     res.status(401).json({ error: "請先登入才能併入同房源" });
     return;
   }
-  const result = mergeSameHouseForUser(session.userId, req.body?.ids || req.body?.post_ids);
+  const result = mergeSameHouseForUser(session.userId, req.body?.ids || req.body?.post_ids, {
+    admin: session.role === "admin",
+  });
   if (!result?.ok) {
     const status = result?.code === "guest" ? 401 : 400;
     res.status(status).json({ error: result?.error || "無法併入同房源" });
@@ -2580,18 +2696,25 @@ app.post("/api/listings/merge-same-house", (req, res) => {
   }
   res.json({
     ok: true,
-    personal: true,
-    shared: false,
+    personal: result.personal !== false && !result.admin_confirmed,
+    shared: result.shared === true,
+    admin_confirmed: result.admin_confirmed === true,
     system_agrees: result.systemAgrees,
     message: result.message,
     post_ids: result.post_ids,
+    group_id: result.group_id || "",
     listing: result.listing,
     stats: stats(undefined, session.userId),
   });
 });
 
 async function persistSettings(body = {}, userId) {
-  const uid = userId || defaultUserId();
+  const uid = Number(userId) || 0;
+  if (!uid) {
+    const err = new Error("請先登入");
+    err.status = 401;
+    throw err;
+  }
   delete body.workLat;
   delete body.workLng;
   delete body.workLocationClass;
@@ -2629,7 +2752,9 @@ async function persistSettings(body = {}, userId) {
 
 app.post("/api/settings", async (req, res) => {
   try {
-    const uid = actorUserId(req);
+    const session = requireMember(req, res);
+    if (!session) return;
+    const uid = session.userId;
     const settings = await persistSettings(req.body || {}, uid);
     res.json({ settings, stats: safeStats(uid) });
     queueGeoBackfill(settings);
@@ -2640,7 +2765,9 @@ app.post("/api/settings", async (req, res) => {
 
 app.post("/api/profiles", async (req, res) => {
   try {
-    const uid = actorUserId(req);
+    const session = requireMember(req, res);
+    if (!session) return;
+    const uid = session.userId;
     const name = profileNameOrDraft(req.body?.name);
     const patch = req.body?.settings;
     if (patch && typeof patch === "object") {
@@ -2656,7 +2783,9 @@ app.post("/api/profiles", async (req, res) => {
 
 app.post("/api/profiles/:id/load", (req, res) => {
   try {
-    const settings = loadProfile(req.params.id, actorUserId(req));
+    const session = requireMember(req, res);
+    if (!session) return;
+    const settings = loadProfile(req.params.id, session.userId);
     schedule();
     res.json({ settings });
   } catch (error) {
@@ -2666,7 +2795,9 @@ app.post("/api/profiles/:id/load", (req, res) => {
 
 app.delete("/api/profiles/:id", (req, res) => {
   try {
-    const settings = deleteProfile(req.params.id, actorUserId(req));
+    const session = requireMember(req, res);
+    if (!session) return;
+    const settings = deleteProfile(req.params.id, session.userId);
     res.json({ settings });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
@@ -2675,6 +2806,7 @@ app.delete("/api/profiles/:id", (req, res) => {
 
 app.post("/api/exclude-region", async (req, res) => {
   try {
+    if (!requireMember(req, res)) return;
     const text = String(req.body?.text || req.body?.description || "").trim();
     if (!text) {
       res.status(400).json({ error: "請輸入範圍描述" });
@@ -2692,7 +2824,9 @@ app.post("/api/exclude-region", async (req, res) => {
 
 app.post("/api/watch", async (req, res) => {
   try {
-    const uid = actorUserId(req);
+    const session = requireMember(req, res);
+    if (!session) return;
+    const uid = session.userId;
     const result = await tick(req.body?.force === true ? "force" : "manual");
     const events = (result.events || []).filter((event) => !event.user_id || event.user_id === uid);
     res.json({ result: { ...result, events }, stats: stats(undefined, uid) });
@@ -2706,7 +2840,12 @@ app.get("/api/events/stream", (req, res) => {
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders?.();
-  const userId = actorUserId(req);
+  const session = readSession(req);
+  if (!session?.userId) {
+    res.status(401).json({ error: "請先登入" });
+    return;
+  }
+  const userId = session.userId;
   const run = lastRun
     ? { ...lastRun, events: (lastRun.events || []).filter((event) => !event.user_id || event.user_id === userId) }
     : lastRun;
