@@ -6,12 +6,14 @@ import { fileURLToPath } from "node:url";
 import { openOpsDb } from "../src/opsDb.js";
 import { createProduct } from "../src/products.js";
 import {
-  describeCodeRollbackOffer,
+  describeDbRestoreOffer,
   requestCodeRollback,
+  requestProductionDbRestore,
   seedProductionStable,
 } from "../src/release/productionRelease.js";
 import { makeStubProductionReleaseProvider } from "../src/release/productionReleaseProvider.js";
 import { listPendingWork } from "../src/exitDrill.js";
+import { DB_RESTORE_CONFIRMATION } from "../src/release/rollbackContract.js";
 
 const root = dirname(fileURLToPath(import.meta.url));
 const PREV_SHA = "b".repeat(40);
@@ -24,7 +26,7 @@ function insertReleaseRun(db, {
   productId,
   issueId = 1,
   authId = 1,
-  fingerprint = "fp-rb-1",
+  fingerprint = "fp-db-1",
   status = "SUCCEEDED",
   authorizedSha = CUR_SHA,
   artifactDigest = CUR_DIGEST,
@@ -58,7 +60,7 @@ function pointCurrentStable(db, runId, productId = "shop") {
     productId,
     sourceSha: CUR_SHA,
     artifactDigest: CUR_DIGEST,
-    workflowRunId: "88027",
+    workflowRunId: "88028",
     releaseRunId: runId,
     staticTreeHash: TREE,
     schemaCompat: "compatible",
@@ -66,7 +68,7 @@ function pointCurrentStable(db, runId, productId = "shop") {
   });
 }
 
-test("succeeded current-stable release appears as a non-blocking known result", () => {
+test("succeeded current-stable release offers a non-blocking DB restore door", () => {
   const db = openOpsDb(":memory:");
   createProduct(db, { id: "shop", displayName: "商店站" });
   createProduct(db, { id: "other", displayName: "別站" });
@@ -74,44 +76,48 @@ test("succeeded current-stable release appears as a non-blocking known result", 
   pointCurrentStable(db, runId);
   const item = listPendingWork(db, "shop").items.find((it) => it.kind === "production_release" && it.id === runId);
   assert.ok(item);
-  assert.equal(item.state, "SUCCEEDED");
   assert.equal(item.blocking, false);
-  assert.equal(item.rollback.contract_complete, true);
-  assert.equal(item.rollback.previous_stable_sha, PREV_SHA);
-  assert.equal(item.rollback.previous_stable_digest, PREV_DIGEST);
-  assert.equal(item.rollback.previous_stable_workflow_run_id, "77001");
-  assert.match(item.note, /程式退回上一版/);
+  assert.equal(item.db_restore.offered, true);
+  assert.equal(item.db_restore.auto_restore, false);
+  assert.equal(item.db_restore.confirmation, DB_RESTORE_CONFIRMATION);
+  assert.match(item.note, /DB 還原要求/);
+  assert.match(item.note, /自動還原不會執行/);
   assert.equal(listPendingWork(db, "other").items.filter((it) => it.kind === "production_release").length, 0);
-  const offer = describeCodeRollbackOffer(db, runId);
-  assert.equal(offer.offered, true);
+  assert.equal(describeDbRestoreOffer(db, runId).offered, true);
   db.close();
 });
 
-test("accepted current-stable rollback uses the existing execute path and never restores the database", async () => {
+test("exact confirmation records observation and never restores the database", () => {
   const db = openOpsDb(":memory:");
   createProduct(db, { id: "shop", displayName: "商店站" });
-  const runId = insertReleaseRun(db, { productId: "shop", fingerprint: "fp-rb-ok" });
+  const runId = insertReleaseRun(db, { productId: "shop", fingerprint: "fp-db-ok" });
   pointCurrentStable(db, runId);
   const provider = makeStubProductionReleaseProvider();
-  await assert.rejects(
-    () => requestCodeRollback(db, {
-      releaseRunId: runId,
-      previousStableSha: PREV_SHA,
-      previousStableDigest: PREV_DIGEST,
-      previousStableWorkflowRunId: "77001",
-      actor: "owner",
-      provider,
-    }),
-    (err) => err.status === 409
-      && /Phase 15 eligibility failed|previous stable|rollback/.test(err.message)
-      && !/取消 runner|取消未送出|狀態不明|database restore/.test(err.message),
-  );
+  const out = requestProductionDbRestore(db, runId, {
+    actor: "owner",
+    confirmDbRestore: DB_RESTORE_CONFIRMATION,
+    provider,
+  });
+  assert.equal(out.db_restore, false);
+  assert.equal(out.auto_restore, false);
+  assert.equal(out.manual_required, true);
+  assert.equal(out.restore_not_performed, true);
+  assert.equal(out.run.current_status, "SUCCEEDED");
+  assert.equal(provider.restoreCallCount, 0);
+  assert.ok(db.prepare("SELECT COUNT(*) n FROM production_release_evidence WHERE release_run_id=? AND evidence_kind='db_restore_request'").get(runId).n >= 1);
+  const replay = requestProductionDbRestore(db, runId, {
+    actor: "owner",
+    confirmDbRestore: DB_RESTORE_CONFIRMATION,
+    provider,
+  });
+  assert.equal(replay.idempotent, true);
+  assert.equal(replay.db_restore, false);
   assert.equal(provider.restoreCallCount, 0);
   assert.equal(db.prepare("SELECT to_status FROM production_release_run_event WHERE release_run_id=? ORDER BY id DESC LIMIT 1").get(runId).to_status, "SUCCEEDED");
   db.close();
 });
 
-test("wrong door, wrong identity, and DB restore confirmation are 409", async () => {
+test("wrong door, missing confirmation, and rollback-with-restore stay 409", async () => {
   const db = openOpsDb(":memory:");
   createProduct(db, { id: "shop", displayName: "商店站" });
   const provider = makeStubProductionReleaseProvider();
@@ -121,55 +127,48 @@ test("wrong door, wrong identity, and DB restore confirmation are 409", async ()
   const unsent = insertReleaseRun(db, { productId: "shop", authId: 3, fingerprint: "fp-unsent", status: "CREATED" });
   const unknown = insertReleaseRun(db, { productId: "shop", authId: 4, fingerprint: "fp-unk", status: "PRODUCTION_STATE_UNKNOWN" });
 
-  await assert.rejects(
-    () => requestCodeRollback(db, {
-      releaseRunId: inflight, previousStableSha: PREV_SHA, previousStableDigest: PREV_DIGEST,
-      previousStableWorkflowRunId: "77001", actor: "owner", provider,
-    }),
+  assert.throws(
+    () => requestProductionDbRestore(db, okId, { actor: "owner", confirmDbRestore: "yes", provider }),
+    (err) => err.status === 409 && /RESTORE-PRODUCTION-DB/.test(err.message),
+  );
+  assert.throws(
+    () => requestProductionDbRestore(db, okId, { actor: "owner", provider }),
+    (err) => err.status === 409 && /RESTORE-PRODUCTION-DB/.test(err.message),
+  );
+  assert.throws(
+    () => requestProductionDbRestore(db, inflight, { actor: "owner", confirmDbRestore: DB_RESTORE_CONFIRMATION, provider }),
     (err) => err.status === 409 && /取消 runner/.test(err.message),
   );
-  await assert.rejects(
-    () => requestCodeRollback(db, {
-      releaseRunId: unsent, previousStableSha: PREV_SHA, previousStableDigest: PREV_DIGEST,
-      previousStableWorkflowRunId: "77001", actor: "owner", provider,
-    }),
+  assert.throws(
+    () => requestProductionDbRestore(db, unsent, { actor: "owner", confirmDbRestore: DB_RESTORE_CONFIRMATION, provider }),
     (err) => err.status === 409 && /取消未送出/.test(err.message),
   );
-  await assert.rejects(
-    () => requestCodeRollback(db, {
-      releaseRunId: unknown, previousStableSha: PREV_SHA, previousStableDigest: PREV_DIGEST,
-      previousStableWorkflowRunId: "77001", actor: "owner", provider,
-    }),
+  assert.throws(
+    () => requestProductionDbRestore(db, unknown, { actor: "owner", confirmDbRestore: DB_RESTORE_CONFIRMATION, provider }),
     (err) => err.status === 409 && /狀態不明/.test(err.message),
   );
   await assert.rejects(
     () => requestCodeRollback(db, {
       releaseRunId: okId, previousStableSha: PREV_SHA, previousStableDigest: PREV_DIGEST,
       previousStableWorkflowRunId: "77001", actor: "owner", provider,
-      confirmDbRestore: "RESTORE-PRODUCTION-DB",
+      confirmDbRestore: DB_RESTORE_CONFIRMATION,
     }),
     (err) => err.status === 409 && /database restore is a separate confirmation/.test(err.message),
   );
-  await assert.rejects(
-    () => requestCodeRollback(db, {
-      releaseRunId: okId, previousStableSha: "d".repeat(40), previousStableDigest: PREV_DIGEST,
-      previousStableWorkflowRunId: "77001", actor: "owner", provider,
-    }),
-    (err) => err.status === 409 && /previous stable identity mismatch/.test(err.message),
-  );
-  assert.equal(describeCodeRollbackOffer(db, inflight).offered, false);
+  assert.equal(describeDbRestoreOffer(db, inflight).offered, false);
+  assert.equal(provider.restoreCallCount, 0);
   db.close();
 });
 
-test("console exposes pending-list code rollback as a distinct door", () => {
+test("console exposes pending-list DB restore as a distinct exact-confirm door", () => {
   const html = readFileSync(join(root, "../public/console.html"), "utf8");
   const js = readFileSync(join(root, "../public/console.js"), "utf8");
-  assert.match(html, /已成功且為目前正式版的發布可程式退回上一版/);
-  assert.match(html, /這不是取消 runner，也不是 DB 還原/);
+  assert.match(html, /可另送 DB 還原要求/);
+  assert.match(html, /必須輸入確認字 RESTORE-PRODUCTION-DB/);
   assert.match(html, /console\.js\?v=20260913-pkg28/);
-  assert.match(js, /\/ops\/api\/production-releases\/\$\{id\}\/rollback/);
-  assert.match(js, /程式退回上一版/);
-  assert.match(js, /RESTORE-PRODUCTION-DB/);
-  assert.match(js, /previous_stable_sha/);
+  assert.match(js, /\/ops\/api\/production-releases\/\$\{id\}\/restore-db/);
+  assert.match(js, /記錄 DB 還原要求/);
+  assert.match(js, /reasonExact: "RESTORE-PRODUCTION-DB"/);
+  assert.match(js, /confirm_db_restore: note/);
   assert.doesNotMatch(js, /\/ops\/api\/production-releases\/\$\{id\}\/(execute|retry|reconcile)/);
 });

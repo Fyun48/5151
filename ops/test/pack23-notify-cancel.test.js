@@ -164,7 +164,7 @@ test("console exposes pending-list cancel for unsent release notifications", () 
   assert.match(html, /未送出的發布通知也可取消/);
   assert.match(html, /未送出的遠端客服也可取消/);
   assert.match(html, /未送出的分析、評估、提案也可取消/);
-  assert.match(html, /console\.js\?v=20260913-pkg27/);
+  assert.match(html, /console\.js\?v=20260913-pkg28/);
   assert.match(js, /\/ops\/api\/release-notifications\/\$\{id\}\/cancel/);
   assert.match(js, /取消未送出的發布通知/);
   assert.match(js, /已送出的 webhook 不宣稱撤回/);

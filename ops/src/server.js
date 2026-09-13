@@ -93,6 +93,7 @@ import {
   importOwnerDirectObservation,
   reconcileProductionRelease,
   requestCodeRollback,
+  requestProductionDbRestore,
   retryProductionRelease,
 } from "./release/productionRelease.js";
 import { makeProductionReleaseProvider } from "./release/productionReleaseProvider.js";
@@ -1345,6 +1346,19 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         let b = {}; try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
         try {
           sendJson(res, 200, { ok: true, ...cancelProductionReleaseRun(db, Number(prodRelCancel[1]), { actor: `owner:${req.owner.email}`, reason: b.reason }) });
+        } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+      const prodRelRestoreDb = pathname.match(/^\/ops\/api\/production-releases\/(\d+)\/restore-db$/);
+      if (prodRelRestoreDb && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {}; try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          sendJson(res, 200, { ok: true, ...requestProductionDbRestore(db, Number(prodRelRestoreDb[1]), {
+            actor: `owner:${req.owner.email}`,
+            confirmDbRestore: b.confirm_db_restore,
+            provider: releaseProvider,
+          }) });
         } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
         return;
       }
