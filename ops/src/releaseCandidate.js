@@ -180,6 +180,31 @@ export function getReleaseManifest(db, manifestId) {
   return row ? publicRC(db, row, { withManifest: true }) : null;
 }
 
+export function describeGate2Offer(db, codingTaskId) {
+  const taskId = Number(codingTaskId);
+  if (!Number.isInteger(taskId) || taskId < 1) return { offered: false };
+  const cur = db.prepare("SELECT * FROM development_release_current WHERE coding_task_id=?").get(taskId);
+  if (!cur) return { offered: false };
+  const rc = db.prepare("SELECT * FROM development_release_candidate WHERE id=?").get(Number(cur.release_manifest_id));
+  if (!rc || rc.status !== "completed") return { offered: false };
+  const task = db.prepare("SELECT * FROM development_coding_task WHERE id=?").get(taskId);
+  if (!task || task.status === "cancelled") return { offered: false };
+  const decision = currentReleaseDecision(db, taskId);
+  if (decision.latest_decision || decision.active_authorization) return { offered: false };
+  return {
+    offered: true,
+    release_candidate_id: Number(rc.id),
+    coding_task_id: taskId,
+    issue_id: Number(rc.issue_id),
+    manifest_id: Number(rc.id),
+    manifest_version: Number(rc.manifest_version),
+    manifest_hash: rc.manifest_hash,
+    artifact_digest: rc.artifact_digest,
+    head_sha: rc.head_sha,
+    decision_label: decision.label,
+  };
+}
+
 // ── Owner Gate #2 ──
 export function submitOwnerReleaseDecision(db, opts) {
   rejectSpoofedOwnerDirect(opts);
