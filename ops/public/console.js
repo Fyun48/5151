@@ -139,6 +139,7 @@ const STATUS_LABEL = {
   PRODUCTION_STATE_UNKNOWN: "狀態不明",
   subscription_revoked: "訂閱已撤",
   stale_generation: "世代已換",
+  waiting_approval: "待核准發布",
 };
 
 const EXIT_ACTION_LABEL = {
@@ -159,6 +160,7 @@ const PENDING_KIND_LABEL = {
   coding: "製作任務",
   staging: "隔離 staging",
   production_release: "正式發布",
+  release_candidate: "發行候選",
   release_notification: "發布通知",
   reevaluation: "自動重評",
   site_command: "遠端客服",
@@ -511,6 +513,39 @@ const PENDING_CANCEL_RESULT = {
   ok: (data) => `已確認取消結果。${data.cleanup_not_performed ? "沒有自動清理 branch／PR／測試站。" : ""}`,
 };
 
+const PENDING_GATE2 = {
+  approve: {
+    action: "approve",
+    label: "核准發布授權",
+    title: "確認核准發布授權",
+    body: (id) => `核准發行候選 #${id} 的發布授權？這一步只寫授權，不會 Deploy v3／Deploy OPS。`,
+    confirm: "確定寫入授權",
+    danger: false,
+    gate2Action: "APPROVE_RELEASE",
+    ok: () => "已寫入發布授權。沒有部署正式機。",
+  },
+  requestchanges: {
+    action: "requestchanges",
+    label: "要求修改",
+    title: "確認要求修改發行候選",
+    body: (id) => `要求修改發行候選 #${id}？必須寫明要改什麼。不會部署正式機，也不會開新製作。`,
+    confirm: "確定要求修改",
+    reasonRequired: true,
+    reasonLabel: "請說明要改什麼（會寫進決策紀錄）",
+    gate2Action: "REQUEST_CHANGES",
+    ok: () => "已要求修改發行候選。沒有部署正式機。",
+  },
+  cancelrelease: {
+    action: "cancelrelease",
+    label: "取消發行候選",
+    title: "確認取消發行候選",
+    body: (id) => `取消發行候選 #${id}？不會部署正式機，也不宣稱撤回已送出的工作。`,
+    confirm: "確定取消候選",
+    gate2Action: "CANCEL_RELEASE",
+    ok: () => "已取消發行候選。沒有部署正式機。",
+  },
+};
+
 function pendingItemActions(it) {
   const actions = [];
   const unsent = PENDING_CANCEL[it.kind];
@@ -543,6 +578,13 @@ function pendingItemActions(it) {
       action: "cancelresult",
       path: (id) => confirmCancelResultPath(it.kind, id),
     });
+  }
+  if (it.kind === "release_candidate" && it.state === "waiting_approval" && it.gate2?.offered) {
+    actions.push(
+      { ...PENDING_GATE2.approve, gate2: it.gate2 },
+      { ...PENDING_GATE2.requestchanges, gate2: it.gate2 },
+      { ...PENDING_GATE2.cancelrelease, gate2: it.gate2 },
+    );
   }
   return actions;
 }
@@ -589,7 +631,10 @@ function showExitDetail(id, data) {
       const rollback = spec.action === "rollback" && spec.rollback
         ? ` data-prev-sha="${esc(spec.rollback.previous_stable_sha || "")}" data-prev-digest="${esc(spec.rollback.previous_stable_digest || "")}" data-prev-run="${esc(spec.rollback.previous_stable_workflow_run_id || "")}"`
         : "";
-      return `<button type="button" data-cancel-kind="${esc(it.kind)}" data-cancel-id="${Number(it.id)}" data-cancel-action="${esc(spec.action)}" data-pid="${esc(id)}" data-cancel-state="${esc(it.state)}"${rollback}>${esc(spec.label)}</button>`;
+      const gate2 = spec.gate2
+        ? ` data-task-id="${Number(spec.gate2.coding_task_id)}" data-manifest-id="${Number(spec.gate2.manifest_id)}" data-manifest-version="${Number(spec.gate2.manifest_version)}" data-manifest-hash="${esc(spec.gate2.manifest_hash)}" data-artifact-digest="${esc(spec.gate2.artifact_digest)}" data-head-sha="${esc(spec.gate2.head_sha)}"`
+        : "";
+      return `<button type="button" data-cancel-kind="${esc(it.kind)}" data-cancel-id="${Number(it.id)}" data-cancel-action="${esc(spec.action)}" data-pid="${esc(id)}" data-cancel-state="${esc(it.state)}"${rollback}${gate2}>${esc(spec.label)}</button>`;
     }).join("");
     blocks.push(`<div class="pending-item"><p>${esc(label)}</p>${rollbackRecordHtml(it)}${btn}</div>`);
   }
@@ -1796,15 +1841,16 @@ $("exitDetailBody")?.addEventListener("click", (ev) => {
   const btn = ev.target.closest("[data-cancel-kind][data-cancel-id]");
   if (!btn) return;
   const action = btn.dataset.cancelAction || "cancel";
-  const spec = action === "runner"
-    ? PENDING_RUNNER_CANCEL
-    : action === "rollback"
-      ? PENDING_CODE_ROLLBACK
-      : action === "dbrestore"
-        ? PENDING_DB_RESTORE
-        : action === "cancelresult"
-          ? { ...PENDING_CANCEL_RESULT, path: (id) => confirmCancelResultPath(btn.dataset.cancelKind, id) }
-          : PENDING_CANCEL[btn.dataset.cancelKind];
+  const spec = PENDING_GATE2[action]
+    || (action === "runner"
+      ? PENDING_RUNNER_CANCEL
+      : action === "rollback"
+        ? PENDING_CODE_ROLLBACK
+        : action === "dbrestore"
+          ? PENDING_DB_RESTORE
+          : action === "cancelresult"
+            ? { ...PENDING_CANCEL_RESULT, path: (id) => confirmCancelResultPath(btn.dataset.cancelKind, id) }
+            : PENDING_CANCEL[btn.dataset.cancelKind]);
   const itemId = Number(btn.dataset.cancelId);
   const pid = btn.dataset.pid || "";
   const state = btn.dataset.cancelState || "";
@@ -1813,19 +1859,34 @@ $("exitDetailBody")?.addEventListener("click", (ev) => {
     title: spec.title,
     body: spec.body(itemId, state),
     confirmLabel: spec.confirm,
+    danger: spec.danger !== false,
+    reasonRequired: !!spec.reasonRequired,
     reasonExact: spec.reasonExact || "",
     reasonLabel: spec.reasonLabel,
     onConfirm: async (note) => {
-      const payload = action === "rollback"
+      const payload = PENDING_GATE2[action]
         ? {
-          previous_stable_sha: btn.dataset.prevSha,
-          previous_stable_digest: btn.dataset.prevDigest,
-          previous_stable_workflow_run_id: btn.dataset.prevRun,
+          action: spec.gate2Action,
+          manifest_id: Number(btn.dataset.manifestId),
+          manifest_version: Number(btn.dataset.manifestVersion),
+          manifest_hash: btn.dataset.manifestHash,
+          artifact_digest: btn.dataset.artifactDigest,
+          head_sha: btn.dataset.headSha,
+          reason: note || (spec.gate2Action === "REQUEST_CHANGES" ? "" : "owner_console"),
         }
-        : action === "dbrestore"
-          ? { confirm_db_restore: note }
-          : { reason: "owner_console" };
-      const { res, data } = await api(spec.path(itemId), {
+        : action === "rollback"
+          ? {
+            previous_stable_sha: btn.dataset.prevSha,
+            previous_stable_digest: btn.dataset.prevDigest,
+            previous_stable_workflow_run_id: btn.dataset.prevRun,
+          }
+          : action === "dbrestore"
+            ? { confirm_db_restore: note }
+            : { reason: "owner_console" };
+      const path = PENDING_GATE2[action]
+        ? `/ops/api/coding-tasks/${btn.dataset.taskId}/release/decision`
+        : spec.path(itemId);
+      const { res, data } = await api(path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),

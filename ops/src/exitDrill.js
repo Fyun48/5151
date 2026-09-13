@@ -13,6 +13,7 @@ import { inferIssueProductId, issueWriteDecision, redactInsightDerivatives } fro
 import { recordPurgeEvent, redactExclusiveIssues } from "./purgeLedger.js";
 import { describeCodeRollbackOffer, describeDbRestoreOffer } from "./release/productionRelease.js";
 import { describeCancelResultOffer, leftoverPendingNote } from "./cancelResult.js";
+import { describeGate2Offer } from "./releaseCandidate.js";
 import { schemaLooksIncompatible } from "./release/rollbackContract.js";
 
 export const EXIT_ACTIONS = Object.freeze(["pause", "unsubscribe", "handoff", "purge_replica"]);
@@ -297,6 +298,26 @@ export function listPendingWork(db, productId) {
         note: scoped
           ? "未送出的隔離 staging 可取消；已在跑的不宣稱撤回。訂閱世代已換或已退出的晚到部署不會寫入 current。"
           : "隔離 staging 尚未綁 product_id；退出時列出但不能宣稱已取消外部呼叫",
+      });
+    }
+  }
+  if (tableExists(db, "development_release_current")) {
+    const currents = safeAll(db, "SELECT coding_task_id FROM development_release_current");
+    for (const row of currents) {
+      const offer = describeGate2Offer(db, row.coding_task_id);
+      if (!offer.offered) continue;
+      const scoped = inferIssueProductId(db, offer.issue_id);
+      if (scoped && scoped !== id) continue;
+      items.push({
+        kind: "release_candidate",
+        id: offer.release_candidate_id,
+        state: "waiting_approval",
+        blocking: false,
+        unscoped: !scoped,
+        gate2: offer,
+        note: scoped
+          ? "待核准的發行候選可核准、要求修改或取消。核准只寫授權，不會部署正式機。要求修改必須寫原因。已授權 Owner 直達不經這個門。"
+          : "發行候選尚未綁 product_id；退出時列出但不能宣稱已核准或已取消外部工作",
       });
     }
   }

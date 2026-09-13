@@ -1,9 +1,9 @@
 # OPS／v3 現況對照表（ChatGPT 審查後）
 
-盤點對象：本分支 `cursor/ops-rollback-record-ed3f`（第 0–30 包，疊在 cancel-result 上）。  
-ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契約、Deploy OPS、產品卡、退出演練、站內 CRM、隔離 staging、開發發行檢視、OPS 供應商抽屜、v3 BudgetGuard、pHash 附屬表與兩個 LLM 開關、第 8 包 live 契約、第 9 包可打包設計套件、第 10 包遠端客服、第 11 包跨站洞察與清除、第 12 包統計指標／後續服務門、第 13 包 worker 重驗訂閱世代、第 14 包晚到評估／提案／webhook、第 15 包製作／QA 重驗訂閱世代、第 16 包 staging／發行重驗訂閱世代、第 17 包移交前確認正式部署狀態、第 18 包自動重評重驗訂閱世代、第 19 包遠端客服重驗訂閱世代、第 20 包測試中的 QA 取消、第 21 包未送出的遠端客服可取消、第 22 包未送出的分析／評估／提案可取消、第 23 包未送出的發布通知可取消、第 24 包未決清單可取消製作／QA／staging、第 25 包未送出的正式發布可取消、第 26 包已受理正式發布的觀察與取消 runner、第 27 包目前正式版可程式退回、第 28 包目前正式版可記錄 DB 還原要求、第 29 包取消後的剩餘工作結果確認、以及第 30 包未決清單露出完整退回身分。**不以那次抽查當現況。**
+盤點對象：本分支 `cursor/ops-gate2-pending-ed3f`（第 0–31 包，疊在 rollback-record 上）。  
+ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契約、Deploy OPS、產品卡、退出演練、站內 CRM、隔離 staging、開發發行檢視、OPS 供應商抽屜、v3 BudgetGuard、pHash 附屬表與兩個 LLM 開關、第 8 包 live 契約、第 9 包可打包設計套件、第 10 包遠端客服、第 11 包跨站洞察與清除、第 12 包統計指標／後續服務門、第 13 包 worker 重驗訂閱世代、第 14 包晚到評估／提案／webhook、第 15 包製作／QA 重驗訂閱世代、第 16 包 staging／發行重驗訂閱世代、第 17 包移交前確認正式部署狀態、第 18 包自動重評重驗訂閱世代、第 19 包遠端客服重驗訂閱世代、第 20 包測試中的 QA 取消、第 21 包未送出的遠端客服可取消、第 22 包未送出的分析／評估／提案可取消、第 23 包未送出的發布通知可取消、第 24 包未決清單可取消製作／QA／staging、第 25 包未送出的正式發布可取消、第 26 包已受理正式發布的觀察與取消 runner、第 27 包目前正式版可程式退回、第 28 包目前正式版可記錄 DB 還原要求、第 29 包取消後的剩餘工作結果確認、第 30 包未決清單露出完整退回身分、以及第 31 包未決清單可按 Gate #2。**不以那次抽查當現況。**
 
-本次是第 30 包（未決清單露出完整退回身分，且 schema 不相容不能宣稱可退回），**不是部署指令**，不 Deploy v3，也不擅自跑 Deploy OPS。`PRODUCTION_RELEASE_ALLOW_LIVE` 維持預設 0。`stats`、`followup_service`、`cross_site_insight`、`remote_cs` 與 `retain_after_exit` 維持預設關。Cursor 製作仍標未整合。
+本次是第 31 包（未決清單可按 Gate #2，且不放寬核准契約），**不是部署指令**，不 Deploy v3，也不擅自跑 Deploy OPS。`PRODUCTION_RELEASE_ALLOW_LIVE` 維持預設 0。`stats`、`followup_service`、`cross_site_insight`、`remote_cs` 與 `retain_after_exit` 維持預設關。Cursor 製作仍標未整合。
 
 圖例：`存在`＝可承接；`需改`＝有程式但契約不足；`待做`＝尚未實作。
 
@@ -59,7 +59,8 @@ ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契�
 | 目前正式版可程式退回 | 已做 | `ops/src/release/productionRelease.js` `describeCodeRollbackOffer` `requestCodeRollback`、未決清單 | 第 27 包；已成功且為目前正式版的發布可程式退回上一版；必須回傳上一版身分；不猜 latest；不執行 DB 還原；未送出／執行中／狀態不明不走這扇門 |
 | 目前正式版可記錄 DB 還原要求 | 已做 | `ops/src/release/productionRelease.js` `describeDbRestoreOffer` `requestProductionDbRestore`、未決清單 | 第 28 包；已成功或已退回程式的目前正式版可記錄 DB 還原要求；必須確認字 `RESTORE-PRODUCTION-DB`；不自動還原、不改寫終態；未送出／執行中／狀態不明不走這扇門 |
 | 取消後的剩餘工作可確認結果 | 已做 | `ops/src/cancelResult.js` `describeCancelResultOffer` `confirmCancelResult`、未決清單 | 第 29 包；已取消且仍有 branch／PR／測試站／供應商工作才列出；確認只寫觀察，不自動清理、不改寫 cancelled；沒有剩餘工作的取消不進未決清單 |
-| 未決清單露出完整退回身分 | 本輪已做 | `ops/src/release/rollbackContract.js` `describeRollbackIdentityRecord`、未決清單 | 第 30 包；目前版與上一可用版列出 SHA／digest／靜態樹／schema；Compose／設定未記錄則標未記錄；bind-mount 不還原；schema 不相容不顯示退回按鈕 |
+| 未決清單露出完整退回身分 | 已做 | `ops/src/release/rollbackContract.js` `describeRollbackIdentityRecord`、未決清單 | 第 30 包；目前版與上一可用版列出 SHA／digest／靜態樹／schema；Compose／設定未記錄則標未記錄；bind-mount 不還原；schema 不相容不顯示退回按鈕 |
+| 未決清單可按 Gate #2 | 本輪已做 | `ops/src/releaseCandidate.js` `describeGate2Offer`、未決清單 | 第 31 包；待核准發行候選可核准／要求修改／取消；核准只寫授權不部署；要求修改必須寫原因；已有決策不再列出；Owner 直達不經此門 |
 
 ## 2. 第 14 節驗收情境的實作安排
 
