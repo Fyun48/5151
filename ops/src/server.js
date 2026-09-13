@@ -69,6 +69,7 @@ import { proposalWorkerConfigFromEnv, startProposalLoop } from "./proposalWorker
 import { getReevaluationView, ownerManualReevaluate, ownerUnblock } from "./reevaluation.js";
 import { reevaluationWorkerConfigFromEnv, startReevaluationLoop } from "./reevaluationWorker.js";
 import { getIssueCodingView, getCodingTask, cancelCodingTask, listRecentCodingTasks } from "./codingTask.js";
+import { confirmCancelResult } from "./cancelResult.js";
 import { codingWorkerConfigFromEnv, startCodingLoop } from "./codingWorker.js";
 import { makeCodingProvider } from "./coding/provider.js";
 import { makeCodingRepo } from "./coding/gitRepo.js";
@@ -1111,6 +1112,14 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
         return;
       }
+      const codingConfirmResult = pathname.match(/^\/ops\/api\/coding-tasks\/(\d+)\/confirm-cancel-result$/);
+      if (codingConfirmResult && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          sendJson(res, 200, { ok: true, ...confirmCancelResult(db, "coding", Number(codingConfirmResult[1]), { actor: `owner:${req.owner.email}` }) });
+        } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
 
       // ── Phase 11：獨立自動化 QA（Owner 檢視 + 重跑；不 merge、不部署） ──
       const qaGet = pathname.match(/^\/ops\/api\/coding-tasks\/(\d+)\/qa$/);
@@ -1148,6 +1157,14 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
         return;
       }
+      const qaConfirmResult = pathname.match(/^\/ops\/api\/qa-runs\/(\d+)\/confirm-cancel-result$/);
+      if (qaConfirmResult && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          sendJson(res, 200, { ok: true, ...confirmCancelResult(db, "qa", Number(qaConfirmResult[1]), { actor: `owner:${req.owner.email}` }) });
+        } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
 
       // ── Phase 12：隔離 Staging（Owner 檢視 + redeploy/cancel/cleanup；不 merge、不部署 Production） ──
       const stgGet = pathname.match(/^\/ops\/api\/coding-tasks\/(\d+)\/staging$/);
@@ -1178,6 +1195,14 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         let b = {}; try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
         try { sendJson(res, 200, { ok: true, ...cancelStagingDeployment(db, Number(stgCancel[1]), { actor: `owner:${req.owner.email}`, reason: b.reason }) }); }
         catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+      const stgConfirmResult = pathname.match(/^\/ops\/api\/staging-deployments\/(\d+)\/confirm-cancel-result$/);
+      if (stgConfirmResult && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          sendJson(res, 200, { ok: true, ...confirmCancelResult(db, "staging", Number(stgConfirmResult[1]), { actor: `owner:${req.owner.email}` }) });
+        } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
         return;
       }
       const stgCleanup = pathname.match(/^\/ops\/api\/staging-deployments\/(\d+)\/cleanup$/);

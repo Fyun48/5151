@@ -6,6 +6,7 @@ import { ensureProviderDrawerSchema } from "./providerDrawer.js";
 import { ensureDefaultEnvironmentBindings, ensureProductEnvironmentSchema } from "./productEnvironment.js";
 import { ensureInstructionRecordSchema } from "./instructionSource.js";
 import { reapplyPurgeLedger } from "./purgeLedger.js";
+import { ensureCancelResultSchema } from "./cancelResult.js";
 
 // Ops 專用資料庫（與產品 v3 的 v3.db 完全分離）。
 // 只放維運自動化系統的狀態機與稽核；Phase 1 尚無 feedback / AI / coding 相關資料。
@@ -1221,7 +1222,12 @@ export function applyOpsSchema(db) {
   upgradeProviderDrawer(db);
   upgradeLiveTargets(db);
   upgradeSiteCommand(db);
+  upgradeCancelResult(db);
   return db;
+}
+
+export function upgradeCancelResult(db) {
+  ensureCancelResultSchema(db);
 }
 
 export function upgradeSiteCommand(db) {

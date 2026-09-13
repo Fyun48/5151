@@ -12,6 +12,7 @@ import { redactCrmReplicas, listCrmHandoff } from "./crmReplica.js";
 import { inferIssueProductId, issueWriteDecision, redactInsightDerivatives } from "./insightConsent.js";
 import { recordPurgeEvent, redactExclusiveIssues } from "./purgeLedger.js";
 import { describeCodeRollbackOffer, describeDbRestoreOffer } from "./release/productionRelease.js";
+import { describeCancelResultOffer, leftoverPendingNote } from "./cancelResult.js";
 
 export const EXIT_ACTIONS = Object.freeze(["pause", "unsubscribe", "handoff", "purge_replica"]);
 export const HANDOFF_SCHEMA = 1;
@@ -295,6 +296,7 @@ export function listPendingWork(db, productId) {
       });
     }
   }
+  pushCancelledLeftovers(db, items, id);
   if (tableExists(db, "production_release_run")) {
     const runs = safeAll(db, "SELECT id, issue_id, product_id FROM production_release_run");
     for (const row of runs) {
@@ -431,6 +433,34 @@ export function listPendingWork(db, productId) {
   }
   const blocking = items.filter((it) => it.blocking);
   return { items, blocking, site_delivery_unconfirmed: true };
+}
+
+const CANCEL_RESULT_TABLES = Object.freeze([
+  ["coding", "development_coding_task"],
+  ["qa", "development_qa_run"],
+  ["staging", "development_staging_deployment"],
+]);
+
+function pushCancelledLeftovers(db, items, productId) {
+  for (const [kind, table] of CANCEL_RESULT_TABLES) {
+    if (!tableExists(db, table)) continue;
+    const rows = safeAll(db, `SELECT id, issue_id FROM ${table} WHERE status='cancelled'`);
+    for (const row of rows) {
+      const offer = describeCancelResultOffer(db, kind, row.id);
+      if (!offer.offered || offer.confirmed) continue;
+      const scoped = inferIssueProductId(db, row.issue_id);
+      if (scoped && scoped !== productId) continue;
+      items.push({
+        kind,
+        id: row.id,
+        state: "cancelled",
+        blocking: false,
+        unscoped: !scoped,
+        leftover: offer,
+        note: leftoverPendingNote(offer.leftovers, { scoped: !!scoped }),
+      });
+    }
+  }
 }
 
 function insertExitRecord(db, { productId, generation, action, exitStatus, pending, notes, actor, now }) {
