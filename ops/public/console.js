@@ -405,6 +405,33 @@ const PENDING_CANCEL = {
     confirm: "確定取消通知",
     ok: (data) => `已取消發布通知。${data.in_flight_not_withdrawn ? "已在外送的呼叫不宣稱撤回。" : ""}`,
   },
+  coding: {
+    states: ["pending", "claimed", "running", "failed_retry", "changes_ready"],
+    label: "取消未送出的製作",
+    path: (id) => `/ops/api/coding-tasks/${id}/cancel`,
+    title: "確認取消製作",
+    body: (id, state) => `取消這筆製作任務 #${id}？不會部署正式站。${state === "claimed" || state === "running" ? "已在跑的不宣稱撤回外部呼叫。" : "未送出的製作不會再開 PR。"}`,
+    confirm: "確定取消製作",
+    ok: (data) => `已取消製作。${data.in_flight_not_withdrawn ? "已在跑的不宣稱撤回外部呼叫。" : ""}`,
+  },
+  qa: {
+    states: ["pending", "claimed", "running", "failed_retry"],
+    label: "取消未送出的 QA",
+    path: (id) => `/ops/api/qa-runs/${id}/cancel`,
+    title: "確認取消 QA",
+    body: (id, state) => `取消這筆尚未完成的獨立 QA #${id}？已完成的結果不會被這一步改寫。${state === "claimed" || state === "running" ? "已在跑的檢查不宣稱撤回 worktree。" : "未送出的 QA 不會再執行。"}`,
+    confirm: "確定取消 QA",
+    ok: (data) => `已取消 QA。${data.in_flight_not_withdrawn ? "已在跑的檢查不宣稱撤回 worktree。" : ""}`,
+  },
+  staging: {
+    states: ["pending", "claimed", "building", "deploying", "validating", "failed_retry"],
+    label: "取消未送出的隔離 staging",
+    path: (id) => `/ops/api/staging-deployments/${id}/cancel`,
+    title: "確認取消隔離 staging",
+    body: (id, state) => `取消這筆尚未完成的隔離 staging #${id}？只影響測試容器，正式站無感。已完成的結果不會被這一步改寫。${["claimed", "building", "deploying", "validating"].includes(state) ? "已在跑的不宣稱撤回。" : "未送出的部署不會再佈測試站。"}`,
+    confirm: "確定取消 staging",
+    ok: (data) => `已取消隔離 staging。${data.in_flight_not_withdrawn ? "已在跑的不宣稱撤回。" : ""}`,
+  },
 };
 
 function pendingItemCancellable(it) {
@@ -454,7 +481,7 @@ function showExitDetail(id, data) {
   box.scrollIntoView({ block: "nearest" });
 }
 
-async function loadPending(id) {
+async function loadPending(id, statusText) {
   const box = $("exitDetail");
   if (box) {
     box.hidden = false;
@@ -463,7 +490,7 @@ async function loadPending(id) {
     $("exitDetailHint").textContent = "載入未決清單…";
     $("exitDetailBody").textContent = "";
   }
-  setStatus($("productMsg"), "載入未決清單…");
+  setStatus($("productMsg"), statusText || "載入未決清單…");
   const { res, data } = await api(`/ops/api/products/${encodeURIComponent(id)}/pending`);
   if (box) box.removeAttribute("aria-busy");
   if (!res.ok) {
@@ -475,7 +502,7 @@ async function loadPending(id) {
     return;
   }
   showExitDetail(id, data);
-  setStatus($("productMsg"), "已載入未決清單", "ok");
+  setStatus($("productMsg"), statusText || "已載入未決清單", "ok");
 }
 
 async function runProductAction(id, action) {
@@ -1657,8 +1684,9 @@ $("exitDetailBody")?.addEventListener("click", (ev) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reason: "owner_console" }),
       });
-      setStatus($("productMsg"), res.ok ? spec.ok(data) : (data.error || "取消失敗"), res.ok ? "ok" : "err");
-      if (res.ok && pid) await loadPending(pid);
+      const resultText = res.ok ? spec.ok(data) : (data.error || "取消失敗");
+      setStatus($("productMsg"), resultText, res.ok ? "ok" : "err");
+      if (res.ok && pid) await loadPending(pid, resultText);
     },
   });
 });
