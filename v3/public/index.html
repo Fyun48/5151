@@ -7535,8 +7535,6 @@
 
     async function loadState() {
       $("status").textContent = "正在載入設定…";
-      const settingsReq = fetch("/api/settings", { cache: "no-store", signal: AbortSignal.timeout(8000) });
-      settingsReq.catch(() => {});
       let me = null;
       let lastError = "";
       for (let attempt = 1; attempt <= 2; attempt += 1) {
@@ -7607,7 +7605,7 @@
       setSettingsReady(false, "正在載入已存設定…完成前請不要按儲存。");
       lastError = "";
       try {
-        const res = await settingsReq;
+        const res = await fetch("/api/settings", { cache: "no-store", signal: AbortSignal.timeout(8000) });
         const data = await readApi(res);
         if (!res.ok) throw new Error(data.error || "載入失敗");
         if (data.settings) {
