@@ -160,6 +160,7 @@ test("console exposes pending-list apply confirm without opening a coding or dep
   assert.match(html, /確認只寫觀察，不改寫命令終態，也不假裝本站已回覆/);
   assert.match(html, /console\.js\?v=20260913-pkg35/);
   assert.match(js, /PENDING_APPLY_CONFIRM/);
+  assert.match(js, /sent:\s*"已送出"/);
   assert.match(js, /確認已套用/);
   assert.match(js, /確認未套用/);
   assert.match(js, /確認套用不明/);

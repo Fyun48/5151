@@ -108,6 +108,7 @@ const STATUS_LABEL = {
   reconnecting: "重新連接中",
   pending: "等候中",
   sending: "外送中",
+  sent: "已送出",
   processing: "執行中",
   claimed: "已領取",
   running: "執行中",
