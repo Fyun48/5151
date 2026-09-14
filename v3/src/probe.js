@@ -57,7 +57,21 @@ export async function probeHtmlListingOutcome(url, { redirectGoneMarkers = [], r
   if (redirectGoneMarkers.some((m) => html.includes(m))) return { outcome: PROBE_GONE, reason: "body_gone_marker" };
   if (GONE_TEXT.test(html)) return { outcome: PROBE_GONE, reason: "gone_text" };
   if (!String(html || "").trim()) return { outcome: PROBE_INCONCLUSIVE, reason: "empty_shell" };
+  if (!htmlLooksLikeListing(html)) return { outcome: PROBE_INCONCLUSIVE, reason: "empty_shell" };
   return { outcome: PROBE_ALIVE, reason: "html_ok" };
+}
+
+function htmlLooksLikeListing(html) {
+  const text = String(html || "");
+  if (!text.trim()) return false;
+  const signals = [
+    /\d+\s*房/,
+    /月租|租金.{0,12}\d{3,}|元\s*\/\s*月/,
+    /\d+(?:\.\d+)?\s*坪/,
+    /樓層|[0-9]+\/[0-9]+\s*樓/,
+    /[市縣].{0,8}[區鄉鎮].{0,20}[路街巷]/,
+  ];
+  return signals.filter((re) => re.test(text)).length >= 1;
 }
 
 export async function probeHtmlListingAlive(url, opts = {}) {

@@ -22,15 +22,23 @@ import {
   claimEnrichJobs,
   enqueueListingEnrich,
   ensureListingPrepSchema,
+  jobStillOwnsRun,
   listingPrepAdminStats,
   processOneEnrichJob,
   reclaimStaleEnrichJobs,
+  recordEnrichMetric,
   requestClickRefresh,
+  summarizeEnrichMetrics,
+  wakeListingEnrichWorker,
+  resetListingEnrichWorkerForTests,
 } from "../src/listingEnrichQueue.js";
 import { inspectHpDetailResponse, parseHpDetailJson } from "../src/houseprice.js";
 import { PROBE_ALIVE, PROBE_GONE, PROBE_INCONCLUSIVE } from "../src/probeOutcomes.js";
 import { shouldNotify } from "../src/notify.js";
 import { passesGeoFilters } from "../src/floors.js";
+import { keptListShouldRerender, listingContentKey } from "../src/listKeep.js";
+import { compareHouseGroup, sameHouseBundle } from "../src/listingCompare.js";
+import { listingIsDisplayable } from "../src/listingPrep.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -316,18 +324,460 @@ test("server and UI keep click-open non-blocking and expose prep admin stats", (
   const server = readFileSync(path.join(dir, "../src/server.js"), "utf8");
   const recheck = server.slice(server.indexOf('"/api/listings/:id/recheck"'), server.indexOf('"/api/listings/:id/report-gone"'));
   assert.match(recheck, /requestClickRefresh/);
-  assert.match(recheck, /queued: true/);
+  assert.match(recheck, /queued: Boolean\(queued\.queued\)/);
+  assert.match(recheck, /wakeWorker/);
   assert.match(recheck, /PROBE_INCONCLUSIVE|inconclusive/);
   assert.match(server, /app\.get\("\/go\/:id"/);
   assert.match(server, /requestClickRefresh\(db, listing, "go"\)/);
+  assert.match(server, /listing_updated/);
+  assert.match(server, /outcome === PROBE_ALIVE && alive === true/);
   const html = readFileSync(path.join(dir, "../public/index.html"), "utf8");
   assert.match(html, /window\.open\(listingUrl/);
   assert.match(html, /\/recheck`/);
-  assert.match(html, /data\.gone\) loadList\(\{ keep: true/);
+  assert.match(html, /refreshCards: true/);
+  assert.match(html, /listingContentKey/);
+  assert.match(html, /listing_updated/);
   assert.match(html, /location_label/);
   assert.match(html, /來源未提供設備資訊/);
   assert.match(html, /href="\/go\/\$\{esc\(item\.post_id\)\}"/);
   const admin = readFileSync(path.join(dir, "../public/admin.html"), "utf8");
   assert.match(admin, /overviewListingPrep/);
   assert.match(admin, /5168 資料準備/);
+  assert.match(admin, /尚未量測/);
+});
+
+function liveDetail(overrides = {}) {
+  const raw = JSON.parse(readFileSync(path.join(dir, "fixtures/houseprice-detail-16470110.json"), "utf8"));
+  Object.assign(raw.webRentCaseGroupingDetail, overrides);
+  return raw;
+}
+
+test("R1 source_limited is not claimed before retry, then completes after expiry", async () => {
+  const conn = memoryQueue();
+  const listing = hpListing({ floor_name: "" });
+  enqueueListingEnrich(conn, listing, { via: "scheduler" });
+  const [job] = claimEnrichJobs(conn, { limit: 1 });
+  const store = new Map([[listing.post_id, listing]]);
+  const limited = await processOneEnrichJob(conn, storeHelpers(store), job, {
+    fetchDetail: async () => inspectHpDetailResponse({
+      status: 200,
+      expectedId: "16470110",
+      json: liveDetail({ fromFloor: "", toFloor: "", upFloor: 8, floor: "" }),
+    }),
+  });
+  assert.equal(limited.evalResult?.status, "source_limited");
+  const pending = conn.prepare("SELECT * FROM listing_enrich_jobs WHERE post_id = ?").get(listing.post_id);
+  assert.equal(pending.status, "source_limited");
+  assert.ok(Date.parse(pending.next_retry_at) > Date.now());
+  assert.equal(claimEnrichJobs(conn, { limit: 4 }).length, 0);
+
+  conn.prepare("UPDATE listing_enrich_jobs SET next_retry_at = ? WHERE id = ?")
+    .run(new Date(Date.now() - 1000).toISOString(), pending.id);
+  const [again] = claimEnrichJobs(conn, { limit: 1 });
+  assert.equal(again.post_id, listing.post_id);
+  store.set(listing.post_id, { ...listing, floor_name: "" });
+  const done = await processOneEnrichJob(conn, storeHelpers(store), again, {
+    fetchDetail: async () => inspectHpDetailResponse({
+      status: 200,
+      expectedId: "16470110",
+      json: liveDetail({ fromFloor: "4", toFloor: "4", upFloor: 4, conditionTags: ["冰箱"] }),
+    }),
+  });
+  assert.equal(done.outcome, PROBE_ALIVE);
+  assert.equal(done.evalResult.displayReady, true);
+});
+
+test("R2 timeout does not hide an already display-ready listing", async () => {
+  const conn = memoryQueue();
+  const listing = hpListing();
+  enqueueListingEnrich(conn, listing, { via: "scheduler" });
+  const store = new Map([[listing.post_id, listing]]);
+  const [job] = claimEnrichJobs(conn, { limit: 1 });
+  await processOneEnrichJob(conn, storeHelpers(store), job, {
+    fetchDetail: async () => inspectHpDetailResponse({
+      status: 200,
+      expectedId: "16470110",
+      json: liveDetail({ conditionTags: ["冰箱"] }),
+    }),
+  });
+  const ready = conn.prepare("SELECT display_ready, prep_status FROM listing_prep WHERE post_id = ?").get(listing.post_id);
+  assert.equal(ready.display_ready, 1);
+  enqueueListingEnrich(conn, listing, { via: "scheduler", missing: ["floor"] });
+  conn.prepare("UPDATE listing_enrich_jobs SET status = 'queued', next_retry_at = NULL WHERE post_id = ?").run(listing.post_id);
+  const [retry] = claimEnrichJobs(conn, { limit: 1 });
+  await processOneEnrichJob(conn, storeHelpers(store), retry, {
+    fetchDetail: async () => ({ outcome: PROBE_INCONCLUSIVE, reason: "timeout", errorClass: "transient" }),
+  });
+  const kept = conn.prepare("SELECT display_ready, prep_status, ready_at FROM listing_prep WHERE post_id = ?").get(listing.post_id);
+  assert.equal(kept.display_ready, 1);
+  assert.equal(kept.prep_status, "ready");
+  assert.ok(kept.ready_at);
+});
+
+test("R3 unready 5168 cannot become group primary or hide a ready 591", () => {
+  const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-hp-group-"));
+  const script = `
+    import assert from "node:assert/strict";
+    import { upsertListing, listListings, mergeSameHouseForUser, db, defaultUserId, getSettings, saveCrawlSources } from ${JSON.stringify(path.join(dir, "../src/db.js"))};
+    saveCrawlSources({ items: [{ id: "houseprice", enabled: true }, { id: "591", enabled: true }] });
+    const uid = defaultUserId();
+    const settings = {
+      ...getSettings(uid), searchUrls: [], watchDistricts: ["1-8"],
+      priceMin: 0, priceMax: 0, commuteKm: 0, wholeFloorOnly: false,
+      excludeLowFloors: false, excludeRooftop: false,
+      excludeKeywords: [], excludeAgents: [], excludeAgentIds: [], excludeBoxes: [],
+    };
+    const stamp = "2026-09-14T00:00:00.000Z";
+    const row591 = {
+      post_id: 591001, source: "591", source_id: "1", source_key: "g-unready",
+      search_key: "https://example.test", url: "https://rent.591.com.tw/1",
+      title: "天玉街 591", price: "28000", price_num: 28000, extra_fees: [],
+      address: "台北市士林區天玉街9巷3號", area_name: "19坪", layout: "1房1廳1衛",
+      floor_name: "4/4", kind_name: "整層住家", role_name: "屋主", cover: "", tags: "[]",
+      lat: 25.1105, lng: 121.529, geo_source: "591",
+      refresh_time: stamp, first_seen_at: stamp, last_seen_at: stamp, last_event: "new",
+    };
+    const rowHp = {
+      post_id: 2400000882, source: "houseprice", source_id: "16470110", source_key: "g-unready",
+      search_key: "https://example.test", url: "https://rent.houseprice.tw/house/16470110",
+      title: "天玉街 5168", price: "24000", price_num: 24000, extra_fees: [],
+      address: "台北市士林區天玉街9巷3號", area_name: "19坪", layout: "1房1廳1衛",
+      floor_name: "", kind_name: "整層住家", role_name: "5168", cover: "", tags: "[]",
+      lat: 25.1105, lng: 121.529, geo_source: "houseprice",
+      refresh_time: stamp, first_seen_at: stamp, last_seen_at: stamp, last_event: "new",
+    };
+    upsertListing(row591);
+    upsertListing(rowHp);
+    const query = () => listListings({ userId: uid, settings, searchKeys: [], filter: "all", sort: "newest", limit: 50 });
+    const before = query();
+    assert.deepEqual(before.listings.map((row) => row.post_id), [591001]);
+    const merged = mergeSameHouseForUser(uid, [591001, 2400000882]);
+    assert.equal(merged.ok, true);
+    const after = query();
+    assert.equal(after.listings.some((row) => row.post_id === 591001), true, JSON.stringify(after.listings.map((row) => row.post_id)));
+    assert.equal(after.totalMatched > 0, true);
+    const card = after.listings.find((row) => row.post_id === 591001);
+    assert.notEqual(card.same_house_role, "affiliate");
+    if (card.same_house?.peers) {
+      assert.equal(card.same_house.peers.some((row) => row.post_id === 2400000882), false);
+    }
+    console.log("ok");
+  `;
+  try {
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+      encoding: "utf8",
+      timeout: 30_000,
+      env: { ...process.env, DATA_DIR: dataDir },
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("R3 automatic compare and bundle drop unready houseprice members", () => {
+  const ready591 = { ...hpListing({ post_id: 591001, source: "591", source_id: "1", price_num: 28000, display_ready: true }), source: "591" };
+  const cheapHp = hpListing({ post_id: 2400000883, price_num: 24000, floor_name: "", display_ready: false });
+  assert.equal(listingIsDisplayable(cheapHp), false);
+  const bundle = sameHouseBundle(ready591, [cheapHp]);
+  assert.equal(bundle, null);
+  const compare = compareHouseGroup([ready591, cheapHp]);
+  assert.equal(compare, null);
+});
+
+test("R4 click does not clear 429 backoff and worker fetch is counted", async () => {
+  resetListingEnrichWorkerForTests();
+  const conn = memoryQueue();
+  const listing = hpListing();
+  let fetches = 0;
+  const store = new Map([[listing.post_id, listing]]);
+  enqueueListingEnrich(conn, listing, { via: "scheduler" });
+  const [job] = claimEnrichJobs(conn, { limit: 1 });
+  await processOneEnrichJob(conn, storeHelpers(store), job, {
+    fetchDetail: async () => {
+      fetches += 1;
+      return { outcome: PROBE_INCONCLUSIVE, reason: "http_429", errorClass: "transient" };
+    },
+  });
+  const paused = conn.prepare("SELECT * FROM listing_enrich_jobs WHERE post_id = ?").get(listing.post_id);
+  assert.ok(Date.parse(paused.next_retry_at) > Date.now());
+  const click = requestClickRefresh(conn, { ...listing, last_checked_at: new Date().toISOString() }, "click");
+  assert.equal(click.sourcePaused, true);
+  assert.equal(click.queued, false);
+  const afterClick = conn.prepare("SELECT next_retry_at, status FROM listing_enrich_jobs WHERE post_id = ?").get(listing.post_id);
+  assert.ok(Date.parse(afterClick.next_retry_at) > Date.now());
+  assert.notEqual(afterClick.status, "queued");
+  const claimed = claimEnrichJobs(conn, { limit: 4 });
+  assert.equal(claimed.length, 0);
+  assert.equal(fetches, 1);
+
+  const listingReady = hpListing({ last_checked_at: new Date().toISOString() });
+  const store2 = new Map([[listingReady.post_id, listingReady]]);
+  const conn2 = memoryQueue();
+  enqueueListingEnrich(conn2, listingReady, { via: "click" });
+  const [okJob] = claimEnrichJobs(conn2, { limit: 1 });
+  await processOneEnrichJob(conn2, storeHelpers(store2), okJob, {
+    fetchDetail: async () => {
+      fetches += 1;
+      return inspectHpDetailResponse({ status: 200, expectedId: "16470110", json: liveDetail({ conditionTags: ["冰箱"] }) });
+    },
+  });
+  const again = requestClickRefresh(conn2, listingReady, "click");
+  assert.equal(again.statusCooldown, true);
+  assert.equal(again.queued, false);
+  assert.equal(claimEnrichJobs(conn2, { limit: 2 }).length, 0);
+});
+
+test("R4 concurrent wakes share one worker", async () => {
+  resetListingEnrichWorkerForTests();
+  let running = 0;
+  let max = 0;
+  let batches = 0;
+  const run = async () => {
+    running += 1;
+    max = Math.max(max, running);
+    batches += 1;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    running -= 1;
+  };
+  const a = wakeListingEnrichWorker(run);
+  const b = wakeListingEnrichWorker(run);
+  assert.equal(a, b);
+  await a;
+  assert.equal(max, 1);
+  assert.ok(batches >= 1);
+});
+
+test("R5 raw detail payload updates title, rent, same-precision address and floor", async () => {
+  const conn = memoryQueue();
+  const listing = hpListing({
+    title: "舊標題",
+    price_num: 28000,
+    price: "28000",
+    address: "台北市士林區天玉街9巷3號",
+    floor_name: "4/4",
+  });
+  enqueueListingEnrich(conn, listing, { via: "scheduler" });
+  const [job] = claimEnrichJobs(conn, { limit: 1 });
+  const store = new Map([[listing.post_id, listing]]);
+  const json = liveDetail({
+    caseName: "新標題景觀大露台",
+    rentPrice: 32000,
+    simpAddress: "台北市士林區天玉街9巷5號",
+    address: "台北市士林區天玉街9巷5號",
+    fromFloor: "6",
+    toFloor: "6",
+    upFloor: 8,
+    conditionTags: ["冰箱"],
+  });
+  const inspected = inspectHpDetailResponse({ status: 200, json, expectedId: "16470110" });
+  const result = await processOneEnrichJob(conn, storeHelpers(store), job, {
+    fetchDetail: async () => inspected,
+  });
+  assert.equal(result.outcome, PROBE_ALIVE);
+  const saved = store.get(listing.post_id);
+  assert.equal(saved.title, "新標題景觀大露台");
+  assert.equal(saved.price_num, 32000);
+  assert.equal(saved.address, "台北市士林區天玉街9巷5號");
+  assert.equal(saved.floor_name, "6/8");
+});
+
+test("R5 persist writes title/rent/address and source_key through SQLite", () => {
+  const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-hp-r5-"));
+  const fixture = path.join(dir, "fixtures/houseprice-detail-16470110.json");
+  const script = `
+    import assert from "node:assert/strict";
+    import { readFileSync } from "node:fs";
+    import { upsertListing, persistHpListingFields, getListing, invalidateListingLocation, db, saveCrawlSources } from ${JSON.stringify(path.join(dir, "../src/db.js"))};
+    import { ensureListingPrepSchema, enqueueListingEnrich, claimEnrichJobs, processOneEnrichJob } from ${JSON.stringify(path.join(dir, "../src/listingEnrichQueue.js"))};
+    import { inspectHpDetailResponse } from ${JSON.stringify(path.join(dir, "../src/houseprice.js"))};
+    saveCrawlSources({ items: [{ id: "houseprice", enabled: true }] });
+    ensureListingPrepSchema(db);
+    const stamp = "2026-09-14T00:00:00.000Z";
+    const row = {
+      post_id: 2400000884, source: "houseprice", source_id: "16470110", source_key: "1|8||台北市士林區天玉街9巷3號|4|19|1房1廳1衛",
+      search_key: "https://example.test", url: "https://rent.houseprice.tw/house/16470110",
+      title: "舊標題", price: "28000", price_num: 28000, extra_fees: [],
+      address: "台北市士林區天玉街9巷3號", area_name: "19坪", layout: "1房1廳1衛",
+      floor_name: "4/4", kind_name: "整層住家", role_name: "5168", cover: "", tags: '["冰箱"]',
+      lat: 25.1105, lng: 121.529, geo_source: "houseprice",
+      refresh_time: stamp, first_seen_at: stamp, last_seen_at: stamp, last_event: "new",
+    };
+    upsertListing(row);
+    enqueueListingEnrich(db, row, { via: "scheduler" });
+    const [job] = claimEnrichJobs(db, { limit: 1 });
+    const json = JSON.parse(readFileSync(${JSON.stringify(fixture)}, "utf8"));
+    Object.assign(json.webRentCaseGroupingDetail, {
+      caseName: "新標題景觀大露台", rentPrice: 32000,
+      simpAddress: "台北市士林區天玉街9巷5號", address: "台北市士林區天玉街9巷5號",
+      fromFloor: "6", toFloor: "6", upFloor: 8, conditionTags: ["冰箱"],
+    });
+    await processOneEnrichJob(db, {
+      loadListing: (id) => getListing(id),
+      persistHpListingFields,
+      invalidateLocation: invalidateListingLocation,
+      markGone: () => {},
+      markAlive: () => {},
+      isSourceEnabled: () => true,
+    }, job, {
+      fetchDetail: async () => inspectHpDetailResponse({ status: 200, json, expectedId: "16470110" }),
+    });
+    const saved = getListing(2400000884);
+    assert.equal(saved.title, "新標題景觀大露台");
+    assert.equal(saved.price_num, 32000);
+    assert.equal(saved.address, "台北市士林區天玉街9巷5號");
+    assert.equal(saved.floor_name, "6/8");
+    assert.notEqual(saved.source_key, row.source_key);
+    console.log("ok");
+  `;
+  try {
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+      encoding: "utf8",
+      timeout: 30_000,
+      env: { ...process.env, DATA_DIR: dataDir },
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("R6 empty conditionTags plus no parking is not explicit facility-absent", async () => {
+  const conn = memoryQueue();
+  const listing = hpListing();
+  enqueueListingEnrich(conn, listing, { via: "scheduler" });
+  const [job] = claimEnrichJobs(conn, { limit: 1 });
+  const store = new Map([[listing.post_id, listing]]);
+  const json = liveDetail({ conditionTags: [], parkingYN: "N" });
+  const inspected = inspectHpDetailResponse({ status: 200, json, expectedId: "16470110" });
+  assert.equal(inspected.facilityAbsent, false);
+  assert.equal(inspected.facilityBlock, false);
+  await processOneEnrichJob(conn, storeHelpers(store), job, {
+    fetchDetail: async () => inspected,
+  });
+  const saved = store.get(listing.post_id);
+  assert.match(String(saved.tags), /冰箱/);
+  assert.equal(Number(saved.has_natural_gas), 1);
+  const prep = conn.prepare("SELECT facility_status FROM listing_prep WHERE post_id = ?").get(listing.post_id);
+  assert.notEqual(prep.facility_status, "absent");
+});
+
+test("R6 confirmed cancelled facilities can replace stored kit", async () => {
+  const conn = memoryQueue();
+  const listing = hpListing();
+  enqueueListingEnrich(conn, listing, { via: "scheduler" });
+  const [job] = claimEnrichJobs(conn, { limit: 1 });
+  const store = new Map([[listing.post_id, listing]]);
+  const json = liveDetail({ conditionTags: [], parkingYN: "N", noFacility: true, facilityRemark: "無設備" });
+  const inspected = inspectHpDetailResponse({ status: 200, json, expectedId: "16470110" });
+  assert.equal(inspected.facilityAbsent, true);
+  await processOneEnrichJob(conn, storeHelpers(store), job, {
+    fetchDetail: async () => inspected,
+  });
+  const prep = conn.prepare("SELECT facility_status FROM listing_prep WHERE post_id = ?").get(listing.post_id);
+  assert.equal(prep.facility_status, "absent");
+});
+
+test("R7 reclaimed worker cannot overwrite a newer run", async () => {
+  const conn = memoryQueue();
+  const listing = hpListing({ floor_name: "" });
+  enqueueListingEnrich(conn, listing, { via: "scheduler" });
+  const [first] = claimEnrichJobs(conn, { limit: 1 });
+  assert.ok(first.run_seq >= 1);
+  conn.prepare("UPDATE listing_enrich_jobs SET lease_until = ? WHERE id = ?").run("2000-01-01T00:00:00.000Z", first.id);
+  assert.equal(reclaimStaleEnrichJobs(conn), 1);
+  const [second] = claimEnrichJobs(conn, { limit: 1 });
+  assert.ok(second.run_seq > first.run_seq);
+  const store = new Map([[listing.post_id, listing]]);
+  const newer = await processOneEnrichJob(conn, storeHelpers(store), second, {
+    fetchDetail: async () => inspectHpDetailResponse({
+      status: 200,
+      expectedId: "16470110",
+      json: liveDetail({ fromFloor: "6", toFloor: "6", upFloor: 8, conditionTags: ["冰箱"] }),
+    }),
+  });
+  assert.equal(newer.outcome, PROBE_ALIVE);
+  assert.equal(store.get(listing.post_id).floor_name, "6/8");
+  const stale = await processOneEnrichJob(conn, storeHelpers(store), first, {
+    fetchDetail: async () => inspectHpDetailResponse({
+      status: 200,
+      expectedId: "16470110",
+      json: liveDetail({ fromFloor: "2", toFloor: "2", upFloor: 8, conditionTags: ["冰箱"] }),
+    }),
+  });
+  assert.equal(stale.stale || stale.superseded, true);
+  assert.equal(store.get(listing.post_id).floor_name, "6/8");
+  assert.equal(jobStillOwnsRun(conn, first), false);
+});
+
+test("R8 mismatched source id is inconclusive and does not write fields", async () => {
+  const conn = memoryQueue();
+  const listing = hpListing({ source_id: "16470110", floor_name: "4/4", offline: 1 });
+  enqueueListingEnrich(conn, listing, { via: "scheduler" });
+  const [job] = claimEnrichJobs(conn, { limit: 1 });
+  const store = new Map([[listing.post_id, listing]]);
+  const other = liveDetail({ sid: 16692013, fromFloor: "3", toFloor: "3", upFloor: 4 });
+  const inspected = inspectHpDetailResponse({ status: 200, json: other, expectedId: "16470110" });
+  assert.equal(inspected.outcome, PROBE_INCONCLUSIVE);
+  assert.equal(inspected.reason, "id_mismatch");
+  const result = await processOneEnrichJob(conn, storeHelpers(store), job, {
+    fetchDetail: async () => inspected,
+  });
+  assert.equal(result.outcome, PROBE_INCONCLUSIVE);
+  assert.equal(store.get(listing.post_id).floor_name, "4/4");
+  assert.equal(store.get(listing.post_id).offline, 1);
+});
+
+test("R9 recommend gone text does not take a live listing down", () => {
+  const json = liveDetail({ conditionTags: ["冰箱"] });
+  json.recommend = { recommends: [{ caseName: "此物件已出租，另有其他推薦" }] };
+  const inspected = inspectHpDetailResponse({ status: 200, json, expectedId: "16470110" });
+  assert.equal(inspected.outcome, PROBE_ALIVE);
+});
+
+test("R10 report-gone keeps inconclusive off markListingAlive", () => {
+  const server = readFileSync(path.join(dir, "../src/server.js"), "utf8");
+  const start = server.indexOf('app.post("/api/listings/:id/report-gone"');
+  const end = server.indexOf('app.post("/api/listings/:id/reject-match"');
+  const body = server.slice(start, end);
+  assert.match(body, /outcome === PROBE_GONE/);
+  assert.match(body, /outcome === PROBE_ALIVE && alive === true/);
+  assert.match(body, /inconclusive: true/);
+  assert.doesNotMatch(body, /if \(alive === false\)/);
+});
+
+test("R11 kept list rerenders when same IDs change content, go offline, or a ready card appears", () => {
+  const a = { post_id: 1, price_num: 28000, floor_name: "4/4", tags: '["冰箱"]', offline: 0, display_ready: true, title: "A" };
+  const updated = { ...a, floor_name: "3/4", tags: '["洗衣機"]' };
+  assert.notEqual(listingContentKey(a), listingContentKey(updated));
+  assert.equal(keptListShouldRerender([a], [updated]), true);
+  assert.equal(keptListShouldRerender([a], [a]), false);
+  assert.equal(keptListShouldRerender([a], [{ ...a, offline: 1 }]), true);
+  assert.equal(keptListShouldRerender([a], [a, { post_id: 2, display_ready: true }]), true);
+  assert.equal(keptListShouldRerender([a], [updated], { refreshCards: true }), true);
+});
+
+test("R12 metrics ignore null stages and split first-ready from unmeasured routes", () => {
+  const conn = memoryQueue();
+  recordEnrichMetric(conn, { post_id: 1, id: 1 }, {
+    queued_ms: 80,
+    start_ms: 4,
+    fetch_ms: 200,
+    parse_ms: 12,
+    locate_ms: 3,
+    route_ms: null,
+    ready_ms: null,
+    first_ready_ms: null,
+    attempt_wait_ms: 80,
+    outcome: "failed",
+  });
+  const summary = summarizeEnrichMetrics(conn);
+  assert.equal(summary.stages.route_ms.n, 0);
+  assert.equal(summary.stages.route_ms.p50, null);
+  assert.equal(summary.stages.first_ready_ms.n, 0);
+  assert.equal(summary.stages.first_ready_ms.p50, null);
+  assert.equal(summary.stages.parse_ms.n, 1);
+  assert.equal(summary.stages.parse_ms.p50, 12);
+  assert.equal(summary.byOutcome.failed.samples, 1);
+  assert.equal(summary.byOutcome.succeeded.samples, 0);
 });

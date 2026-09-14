@@ -391,7 +391,14 @@ export function parseHpDetailJson(payload) {
     communityId,
     href: det.communityUrl || det.community_url || "",
   });
+  const priceNum = num(det.rentPrice ?? det.price ?? det.rent);
+  const title = str(det.caseName || det.title);
+  const sourceId = str(det.sid ?? det.caseId ?? det.id);
   return {
+    title,
+    price_num: priceNum && priceNum > 0 ? priceNum : 0,
+    price: priceNum && priceNum > 0 ? String(priceNum) : "",
+    source_id: sourceId,
     floorName,
     community,
     communityId,
@@ -400,7 +407,7 @@ export function parseHpDetailJson(payload) {
     layout,
     kind: kindFromHpText(usage) || kindFromHpText(buildingType) || kindFromHpText(str(det.caseName)),
     buildingType,
-    parking: str(det.parkingYN) === "Y" ? "有車位" : "",
+    parking: str(det.parkingYN) === "Y" ? "有車位" : (str(det.parkingYN) === "N" ? "無車位" : ""),
     usage,
     address,
     lat: lat != null && lng != null && isTaiwanMapPin(lat, lng) ? lat : null,
@@ -451,13 +458,24 @@ export function enrichHpListingFromDetail(row, detail, { regionId, sectionId, re
     next.floor_name = detailFloor;
     changed = true;
   }
+  if (detail.title && detail.title !== next.title) {
+    next.title = detail.title;
+    changed = true;
+  }
+  if (Number(detail.price_num) > 0 && Number(detail.price_num) !== Number(next.price_num)) {
+    next.price_num = Number(detail.price_num);
+    next.price = detail.price || String(detail.price_num);
+    changed = true;
+  }
   if (!next.area_name && detail.areaName) { next.area_name = detail.areaName; }
   if (!next.layout && detail.layout) { next.layout = detail.layout; }
   if ((!next.kind_name || next.kind_name === "") && detail.kind) { next.kind_name = detail.kind; }
-  // 明細頁地址通常比列表頁完整（含門牌號或巷／弄），精度較高才覆蓋粗略地址。
-  if (detail.address && (!next.address || addressPrecision(detail.address) > addressPrecision(next.address))) {
-    next.address = detail.address;
-    changed = true;
+  // 同精度門牌更正也要寫入；較粗的地址不能覆蓋較精的。
+  if (detail.address && (!next.address || addressPrecision(detail.address) >= addressPrecision(next.address))) {
+    if (detail.address !== next.address) {
+      next.address = detail.address;
+      changed = true;
+    }
   }
   if (detail.lat != null && detail.lng != null && isTaiwanMapPin(detail.lat, detail.lng)) {
     const incomingGeo = { lat: detail.lat, lng: detail.lng, geo_source: "houseprice", address: detail.address || next.address };
@@ -600,6 +618,8 @@ export function hpIdFromUrl(url) {
 }
 
 const HP_GONE_TEXT = /物件已(下架|成交|出租|刪除|結案)|查無(此|該)?(物件|案件)|案件不存在|物件不存在/;
+const HP_STATUS_GONE = /已下架|已成交|已出租|已刪除|已結案|不存在|offshelf|offline/i;
+const HP_FACILITY_TAG = /冷氣|冰箱|洗衣機|烘衣|電視|網路|家具|家俱|陽台|瓦斯|床|衣櫃|沙發/;
 
 function hpDetailObject(body) {
   if (!body || typeof body !== "object") return null;
@@ -607,45 +627,115 @@ function hpDetailObject(body) {
   return det && typeof det === "object" ? det : null;
 }
 
+function hpDetailIdentity(det) {
+  if (!det || typeof det !== "object") return "";
+  return String(det.sid ?? det.caseId ?? det.id ?? "").trim();
+}
+
+function hpApiGoneSignal(json) {
+  if (!json || typeof json !== "object") return false;
+  const msg = String(json.msg || json.message || json.error || json.errMsg || "");
+  if (HP_GONE_TEXT.test(msg)) return true;
+  const code = String(json.code ?? json.status ?? "");
+  if (/^(404|410)$/.test(code)) return true;
+  return false;
+}
+
+function hpCaseStatusGone(det) {
+  if (!det || typeof det !== "object") return false;
+  if (Number(det.isOff) === 1 || det.offShelf === true || det.isDelete === true) return true;
+  const status = String(det.caseStatus || det.rentStatus || det.status || det.caseState || "");
+  return Boolean(status) && HP_STATUS_GONE.test(status);
+}
+
+export function hpFacilityEvidence(det) {
+  if (!det || typeof det !== "object") {
+    return { block: false, absent: false, partial: false, parkingOnly: false };
+  }
+  const tags = Array.isArray(det.conditionTags) ? det.conditionTags.map((item) => String(item || "").trim()).filter(Boolean) : null;
+  const extra = []
+    .concat(Array.isArray(det.facilities) ? det.facilities : [])
+    .concat(Array.isArray(det.equipments) ? det.equipments : [])
+    .concat(Array.isArray(det.devices) ? det.devices : []);
+  const remark = String(det.facilityRemark || det.equipRemark || "");
+  const explicitNone = det.noFacility === true || det.noEquip === true || /無設備|沒有設備|不含設備|不附設備/.test(remark);
+  const hasFacilityItems = (tags && tags.some((tag) => HP_FACILITY_TAG.test(tag)))
+    || extra.some((item) => HP_FACILITY_TAG.test(String(item?.name || item || "")));
+  if (explicitNone && !hasFacilityItems) return { block: true, absent: true, partial: false, parkingOnly: false };
+  if (hasFacilityItems) return { block: true, absent: false, partial: false, parkingOnly: false };
+  const parking = String(det.parkingYN || "");
+  if (tags && tags.length === 0 && parking === "N") return { block: false, absent: false, partial: true, parkingOnly: true };
+  if (Array.isArray(det.conditionTags) || extra.length) return { block: false, absent: false, partial: true, parkingOnly: parking === "N" };
+  return { block: false, absent: false, partial: false, parkingOnly: false };
+}
+
 function detailLooksRecognizable(det) {
   if (!det || typeof det !== "object") return false;
   const keys = Object.keys(det);
   if (!keys.length) return false;
-  return Boolean(det.caseId || det.caseName || det.simpAddress || det.address || det.lat || det.road);
+  return Boolean(det.caseId || det.sid || det.caseName || det.simpAddress || det.address || det.lat || det.road);
 }
 
-export function inspectHpDetailResponse({ status = 0, json = null, text = "", timeout = false, network = false, parse_ms = 0 } = {}) {
-  if (timeout || network) return { outcome: PROBE_INCONCLUSIVE, reason: timeout ? "timeout" : "network", errorClass: "transient", parse_ms };
-  if (status === 404 || status === 410) return { outcome: PROBE_GONE, reason: `http_${status}`, errorClass: "", parse_ms };
+function identitiesMatch(expected, actual) {
+  const a = String(expected || "").trim();
+  const b = String(actual || "").trim();
+  if (!a || !b) return false;
+  return a === b;
+}
+
+export function inspectHpDetailResponse({
+  status = 0,
+  json = null,
+  text = "",
+  timeout = false,
+  network = false,
+  parse_ms = 0,
+  fetch_ms = null,
+  expectedId = "",
+} = {}) {
+  const base = { parse_ms, fetch_ms };
+  if (timeout || network) return { outcome: PROBE_INCONCLUSIVE, reason: timeout ? "timeout" : "network", errorClass: "transient", ...base };
+  if (status === 404 || status === 410) return { outcome: PROBE_GONE, reason: `http_${status}`, errorClass: "", ...base };
   if (status === 403 || status === 429 || status >= 500) {
-    return { outcome: PROBE_INCONCLUSIVE, reason: `http_${status}`, errorClass: "transient", parse_ms };
+    return { outcome: PROBE_INCONCLUSIVE, reason: `http_${status}`, errorClass: "transient", ...base };
   }
-  const blob = `${text || ""} ${JSON.stringify(json || {})}`;
-  if (/驗證碼|captcha|cloudflare|just a moment/i.test(blob)) {
-    return { outcome: PROBE_INCONCLUSIVE, reason: "challenge", errorClass: "transient", parse_ms };
+  const challengeBlob = `${text || ""} ${String(json?.msg || "")}`;
+  if (/驗證碼|captcha|cloudflare|just a moment/i.test(challengeBlob)) {
+    return { outcome: PROBE_INCONCLUSIVE, reason: "challenge", errorClass: "transient", ...base };
   }
-  if (status === 400) {
-    if (HP_GONE_TEXT.test(blob)) return { outcome: PROBE_GONE, reason: "gone_signal", errorClass: "", parse_ms };
-    return { outcome: PROBE_INCONCLUSIVE, reason: "http_400", errorClass: "transient", parse_ms };
-  }
-  if (HP_GONE_TEXT.test(blob)) return { outcome: PROBE_GONE, reason: "gone_signal", errorClass: "", parse_ms };
   const det = hpDetailObject(json);
+  if (status === 400) {
+    if (!det && hpApiGoneSignal(json)) return { outcome: PROBE_GONE, reason: "gone_signal", errorClass: "", ...base };
+    return { outcome: PROBE_INCONCLUSIVE, reason: "http_400", errorClass: "transient", ...base };
+  }
+  if (!det && hpApiGoneSignal(json)) return { outcome: PROBE_GONE, reason: "gone_signal", errorClass: "", ...base };
+  if (hpCaseStatusGone(det)) return { outcome: PROBE_GONE, reason: "case_status_gone", errorClass: "", ...base };
   if (detailLooksRecognizable(det)) {
+    const actualId = hpDetailIdentity(det);
+    const expected = String(expectedId || "").trim();
+    if (expected && !actualId) {
+      return { outcome: PROBE_INCONCLUSIVE, reason: "id_missing", errorClass: "parse_failed", ...base };
+    }
+    if (expected && actualId && !identitiesMatch(expected, actualId)) {
+      return { outcome: PROBE_INCONCLUSIVE, reason: "id_mismatch", errorClass: "parse_failed", ...base };
+    }
     const detail = parseHpDetailJson(json);
+    const evidence = hpFacilityEvidence(det);
     return {
       outcome: PROBE_ALIVE,
       reason: "detail_ok",
       detail,
-      facilityBlock: Array.isArray(det.conditionTags),
-      facilityAbsent: Array.isArray(det.conditionTags) && det.conditionTags.length === 0 && String(det.parkingYN || "") === "N",
+      facilityBlock: evidence.block,
+      facilityAbsent: evidence.absent,
+      facilityPartial: evidence.partial,
       buildingOnly: Boolean(det.upFloor) && !det.fromFloor && !det.toFloor && !det.floor,
-      parse_ms,
+      ...base,
     };
   }
   if (!json || typeof json !== "object" || !Object.keys(json).length) {
-    return { outcome: PROBE_INCONCLUSIVE, reason: "empty_json", errorClass: "parse_failed", parse_ms };
+    return { outcome: PROBE_INCONCLUSIVE, reason: "empty_json", errorClass: "parse_failed", ...base };
   }
-  return { outcome: PROBE_INCONCLUSIVE, reason: "unexpected_payload", errorClass: "parse_failed", parse_ms };
+  return { outcome: PROBE_INCONCLUSIVE, reason: "unexpected_payload", errorClass: "parse_failed", ...base };
 }
 
 export async function fetchHpDetailInspected(id) {
@@ -664,13 +754,15 @@ export async function fetchHpDetailInspected(id) {
       signal: AbortSignal.timeout(15000),
     });
   } catch {
-    return inspectHpDetailResponse({ timeout: true, parse_ms: Date.now() - started });
+    return inspectHpDetailResponse({ timeout: true, fetch_ms: Date.now() - started, parse_ms: 0, expectedId: key });
   }
   let text = "";
   let json = null;
   if (typeof res.text === "function") {
     try { text = await res.text(); } catch { text = ""; }
   }
+  const fetchMs = Date.now() - started;
+  const parseStarted = Date.now();
   if (text) {
     try { json = JSON.parse(text); } catch { json = null; }
   } else if (typeof res.json === "function") {
@@ -680,7 +772,9 @@ export async function fetchHpDetailInspected(id) {
     status: res.status,
     json,
     text,
-    parse_ms: Date.now() - started,
+    expectedId: key,
+    fetch_ms: fetchMs,
+    parse_ms: Date.now() - parseStarted,
   });
 }
 

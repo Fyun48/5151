@@ -5277,6 +5277,25 @@
       return (items || []).map((row) => String(row.post_id)).join(",");
     }
 
+    function listingContentKey(item) {
+      return [
+        item?.post_id,
+        item?.price_num,
+        item?.title,
+        item?.floor_name,
+        item?.address,
+        item?.tags,
+        item?.offline,
+        item?.display_ready,
+        item?.furnish_items,
+        item?.has_natural_gas,
+      ].join("|");
+    }
+
+    function listingsContentKey(items) {
+      return (items || []).map(listingContentKey).join(";;");
+    }
+
     function commuteSettingsFingerprint(s = settings) {
       const lat = Number(s.workLat);
       const lng = Number(s.workLng);
@@ -7568,11 +7587,12 @@
         listOffset = Number(data.nextOffset) || ((append ? listOffset : 0) + (data.listings || []).length);
         const next = applyListView(append && listCache.length ? [...listCache, ...(data.listings || [])] : data.listings);
         rememberListings(next);
-        if (options.keep && listCache.length) {
+        if (options.keep && listCache.length && !options.refreshCards) {
           const sameIds = listingIdKey(listCache) === listingIdKey(next);
-          if (sameIds || listHasBusyCard()) {
+          const sameContent = listingsContentKey(listCache) === listingsContentKey(next);
+          if ((sameIds && sameContent) || (listHasBusyCard() && sameContent)) {
             const applied = applyCommutePatches(sameIds ? next : data.listings);
-            if (sameIds) {
+            if (sameIds && sameContent) {
               const byId = new Map(next.map((row) => [String(row.post_id), normalizeListingText(row)]));
               listCache = listCache.map((row) => byId.get(String(row.post_id)) || row);
               updateListMeta(listCache, lastStats);
@@ -7584,7 +7604,7 @@
               if (!applied && pendingCommuteWork()) refreshCommuteSnapshot();
               return;
             }
-            if (listHasBusyCard()) {
+            if (listHasBusyCard() && sameContent) {
               updateListMeta(listCache, lastStats);
               paintWatchChip();
               updateBulkBar();
@@ -11119,7 +11139,7 @@
             headers: { "Content-Type": "application/json" },
           })
             .then((r) => r.json())
-            .then((data) => { if (data && data.gone) loadList({ keep: true, silent: true }); })
+            .then((data) => { if (data && (data.gone || data.queued)) loadList({ keep: true, silent: true, refreshCards: true }); })
             .catch(() => {});
         }
         return;
@@ -11746,7 +11766,10 @@
             fetch(`/api/listings/${open}/recheck`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-            }).catch(() => {});
+            })
+              .then((r) => r.json())
+              .then((data) => { if (data && (data.gone || data.queued)) loadList({ keep: true, silent: true, refreshCards: true }); })
+              .catch(() => {});
           }
           dismissDock(open);
         }
@@ -11800,6 +11823,9 @@
               showLocalNotice("吉比租房物件追蹤", `篩選後通知 ${n} 則`);
             }
             loadList({ silent: true, keep: true });
+          }
+          if (data.type === "listing_updated") {
+            loadList({ silent: true, keep: true, refreshCards: true });
           }
           if (data.type === "geo") {
             queueGeoRefresh(data);

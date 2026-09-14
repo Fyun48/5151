@@ -41,6 +41,12 @@ test("probeHtmlListingAlive: redirect to a 'gone' marker page → gone (housefun
   restore();
 });
 
+test("probeHtmlListingOutcome: non-empty SPA shell without listing fields is not alive", async () => {
+  const restore = mockFetch(async () => resp({ status: 200, url: "https://x/detail", body: "<html><div id=app>出租中</div></html>" }));
+  assert.equal((await probeHtmlListingOutcome("https://x/detail")).outcome, PROBE_INCONCLUSIVE);
+  restore();
+});
+
 test("probeHtmlListingOutcome: network error/timeout/captcha/empty shell → inconclusive", async () => {
   let restore = mockFetch(async () => { throw new Error("timeout"); });
   assert.equal((await probeHtmlListingOutcome("https://x/detail")).outcome, PROBE_INCONCLUSIVE);
@@ -69,7 +75,7 @@ test("probeListingAliveBySource: external HTML platforms dispatch (404 → gone;
       supported: true, outcome: PROBE_GONE, alive: false,
     }, `${source} 404`);
     restore();
-    restore = mockFetch(async () => resp({ status: 200, url: "https://x/detail", body: "<html>出租中</html>" }));
+    restore = mockFetch(async () => resp({ status: 200, url: "https://x/detail", body: "<html>出租中 3房2廳 25坪 月租18000</html>" }));
     assert.deepEqual(await probeListingAliveBySource({ source, url: "https://x/detail" }), {
       supported: true, outcome: PROBE_ALIVE, alive: true,
     }, `${source} 200`);

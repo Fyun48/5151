@@ -72,7 +72,7 @@ import {
 } from "./searchProfiles.js";
 import { addressVersion, ensureGeoCacheSchema, inferGeoQuality } from "./geoQueue.js";
 import { ensureListingPrepSchema } from "./listingEnrichQueue.js";
-import { classifyAddress, hpDisplayReadySql, isHousepriceListing } from "./listingPrep.js";
+import { classifyAddress, hpDisplayReadySql, isHousepriceListing, listingIsDisplayable } from "./listingPrep.js";
 import {
   canUseForRoadDistance,
   commutePrecisionText,
@@ -2266,6 +2266,7 @@ function loadSameHousePeers(row, userId) {
   }
   return [...found.values()]
     .filter((item) => Number(item.post_id) !== selfId)
+    .filter((item) => !housepriceNotDisplayReady(item))
     .map(decorateSameHousePeer);
 }
 
@@ -2273,7 +2274,7 @@ function housepriceNotDisplayReady(row) {
   if (!isHousepriceListing(row)) return false;
   try {
     const prep = db.prepare("SELECT display_ready FROM listing_prep WHERE post_id = ?").get(row.post_id);
-    return !prep || Number(prep.display_ready) !== 1;
+    return !listingIsDisplayable(row, prep || { display_ready: 0 });
   } catch {
     return true;
   }
@@ -2449,11 +2450,13 @@ function attachSameHouseRoles(rows, voteUserId) {
         add(row);
         for (const pid of personal.peers(row.post_id)) add(resolve(pid));
       }
-      if (pool.length < 2) continue;
-      const primary = pool.reduce((best, item) => preferPrimaryListing(best, item), pool[0]);
+      const visible = pool.filter((item) => !housepriceNotDisplayReady(item));
+      if (visible.length < 2) continue;
+      const primary = visible.reduce((best, item) => preferPrimaryListing(best, item), visible[0]);
       const primaryId = Number(primary.post_id);
       const primaryOffline = Number(primary.offline) === 1;
-      for (const target of pool) {
+      for (const target of visible) {
+        if (!byId.has(Number(target.post_id))) continue;
         target.same_house_role = Number(target.post_id) === primaryId ? "primary" : "affiliate";
         target.same_house_primary_id = primaryId;
         target.same_house_primary_offline = primaryOffline;
@@ -3974,11 +3977,24 @@ export function persistHpListingFields(postId, next, { locationChanged = false, 
     db.prepare(`${sqlCore} WHERE post_id = ?`).run(...values.slice(0, -3), postId);
   }
   try {
-    const kit = mergeKitColumns(row, listingKitFrom({ ...row, ...next, tags }));
+    const kit = next.facility_replace === true
+      ? {
+        has_natural_gas: Number(next.has_natural_gas) === 1 ? 1 : 0,
+        has_balcony: Number(next.has_balcony) === 1 ? 1 : 0,
+        furnish_items: Array.isArray(next.furnish_items)
+          ? next.furnish_items
+          : (() => { try { return JSON.parse(next.furnish_items || "[]"); } catch { return []; } })(),
+      }
+      : mergeKitColumns(row, listingKitFrom({ ...row, ...next, tags }));
     db.prepare(`
       UPDATE listings SET has_natural_gas = ?, has_balcony = ?, furnish_items = ? WHERE post_id = ?
-    `).run(kit.has_natural_gas, kit.has_balcony, JSON.stringify(kit.furnish_items), postId);
+    `).run(kit.has_natural_gas, kit.has_balcony, JSON.stringify(kit.furnish_items || []), postId);
   } catch { /* older fixtures */ }
+  if (next.source_key && next.source_key !== row.source_key) {
+    try {
+      db.prepare("UPDATE listings SET source_key = ? WHERE post_id = ?").run(String(next.source_key), postId);
+    } catch { /* older fixtures */ }
+  }
   invalidateSearchKeyMemo();
   return db.prepare("SELECT * FROM listings WHERE post_id = ?").get(postId);
 }

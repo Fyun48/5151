@@ -234,8 +234,8 @@ import { backfillAddressGeo, backfillIncompleteAddresses, backfillListingCoords,
 import { LIST_PAGE_SIZE, isListingGoneError, probeListingAlive } from "./client591.js";
 import { probeHpListingAlive } from "./houseprice.js";
 import { probeListingAliveBySource } from "./probe.js";
-import { PROBE_ALIVE, PROBE_GONE } from "./probeOutcomes.js";
-import { enqueueListingEnrich, processListingEnrichBatch, requestClickRefresh, WATCH_PRIORITY } from "./listingEnrichQueue.js";
+import { PROBE_ALIVE, PROBE_GONE, PROBE_INCONCLUSIVE } from "./probeOutcomes.js";
+import { enqueueListingEnrich, processListingEnrichBatch, requestClickRefresh, wakeListingEnrichWorker, WATCH_PRIORITY } from "./listingEnrichQueue.js";
 import { deliveryConfigFromEnv, startDeliveryLoop } from "./opsDelivery.js";
 import { opsDeliveryDb } from "./db.js";
 import { refreshHousingData } from "./housingFetch.js";
@@ -490,10 +490,29 @@ function setSession(req, res, email) {
   res.setHeader("Set-Cookie", cookie);
 }
 
+function listingEnrichHelpersWithEvents() {
+  const base = listingEnrichHelpers();
+  return {
+    ...base,
+    onListingUpdated: (listing, meta = {}) => {
+      broadcast({
+        type: "listing_updated",
+        post_id: listing?.post_id,
+        outcome: meta.outcome || "",
+        display_ready: meta.displayReady === true,
+        becoming_ready: meta.becomingReady === true,
+        gone: Number(listing?.offline) === 1,
+      });
+    },
+  };
+}
+
 function kickListingEnrich() {
-  processListingEnrichBatch(db, listingEnrichHelpers(), { limit: 4 }).catch((error) => {
-    console.warn("5168 補抓失敗：", error.message);
-  });
+  return wakeListingEnrichWorker(() =>
+    processListingEnrichBatch(db, listingEnrichHelpersWithEvents(), { limit: 4 }).catch((error) => {
+      console.warn("5168 補抓失敗：", error.message);
+    }),
+  );
 }
 
 /** 點通知／Discord 連結：已登入才標記已瀏覽，再導向原站。站內刊登：會員開站內詳情、訪客開公開分享頁。訪客只轉址、不寫入。 */
@@ -508,8 +527,8 @@ app.get("/go/:id", (req, res) => {
         setFlags(id, { viewed: true }, session.userId);
       }
       if (listing && String(listing.source || "") === "houseprice") {
-        requestClickRefresh(db, listing, "go");
-        kickListingEnrich();
+        const queued = requestClickRefresh(db, listing, "go");
+        if (queued.wakeWorker) kickListingEnrich();
       }
     } catch (error) {
       console.warn("標記已瀏覽失敗：", error.message);
@@ -2716,13 +2735,14 @@ app.post("/api/listings/:id/recheck", async (req, res) => {
     }
     if (source === "houseprice") {
       const queued = requestClickRefresh(db, listing, "click");
-      kickListingEnrich();
+      if (queued.wakeWorker) kickListingEnrich();
       res.json({
         supported: true,
-        queued: true,
+        queued: Boolean(queued.queued),
         merged: Boolean(queued.merged),
         gone: Boolean(Number(listing.offline)),
         statusCooldown: Boolean(queued.statusCooldown),
+        sourcePaused: Boolean(queued.sourcePaused),
       });
       return;
     }
@@ -2788,18 +2808,29 @@ app.post("/api/listings/:id/report-gone", async (req, res) => {
       res.json({ supported: true, gone: false, locked: true, until: new Date(aliveAt + REPORT_GONE_LOCK_MS).toISOString(), message: REPORT_GONE_LOCK_MSG });
       return;
     }
-    const { supported, alive } = await probeListingAliveBySource(listing);
+    const { supported, outcome, alive } = await probeListingAliveBySource(listing);
     if (!supported) {
       res.json({ supported: false });
       return;
     }
-    if (alive === false) {
+    if (outcome === PROBE_GONE || alive === false) {
       markListingOffline(postId);
-      res.json({ supported: true, gone: true, reported: true, message: "已記錄此物件下架，7 日內同屋源若在任一平台重現會自動接手。" });
+      res.json({ supported: true, gone: true, reported: true, outcome: PROBE_GONE, message: "已記錄此物件下架，7 日內同屋源若在任一平台重現會自動接手。" });
       return;
     }
-    markListingAlive(postId);
-    res.json({ supported: true, gone: false, alive: true, locked: true, until: new Date(Date.now() + REPORT_GONE_LOCK_MS).toISOString(), message: REPORT_GONE_LOCK_MSG });
+    if (outcome === PROBE_ALIVE && alive === true) {
+      markListingAlive(postId);
+      res.json({ supported: true, gone: false, alive: true, outcome: PROBE_ALIVE, locked: true, until: new Date(Date.now() + REPORT_GONE_LOCK_MS).toISOString(), message: REPORT_GONE_LOCK_MSG });
+      return;
+    }
+    res.json({
+      supported: true,
+      gone: Boolean(Number(listing.offline)),
+      alive: null,
+      outcome: outcome || PROBE_INCONCLUSIVE,
+      inconclusive: true,
+      message: "本次無法確認上下架，已保留上次狀態。",
+    });
   } catch (error) {
     res.json({ supported: true, gone: false, error: error.message });
   }

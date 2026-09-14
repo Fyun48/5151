@@ -28,6 +28,8 @@ const ENRICH_COOLDOWN_MS = 20_000;
 const TRANSIENT_BACKOFF_MS = [60_000, 5 * 60_000, 15 * 60_000, 60 * 60_000];
 const SOURCE_LIMITED_BACKOFF_MS = 12 * 60 * 60_000;
 const PARSE_FAIL_BACKOFF_MS = 24 * 60 * 60_000;
+const CLAIMABLE_STATUSES = ["queued", "failed", "source_limited", "parse_failed"];
+const SOURCE_PAUSE_CLASSES = ["transient", "source_limited"];
 
 export function ensureListingPrepSchema(conn) {
   conn.exec(`
@@ -85,13 +87,46 @@ export function ensureListingPrepSchema(conn) {
       locate_ms INTEGER,
       route_ms INTEGER,
       ready_ms INTEGER,
+      first_ready_ms INTEGER,
+      attempt_wait_ms INTEGER,
+      outcome TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL
     );
   `);
+  ensureColumn(conn, "listing_enrich_jobs", "last_queued_at", "TEXT");
+  ensureColumn(conn, "listing_enrich_metrics", "first_ready_ms", "INTEGER");
+  ensureColumn(conn, "listing_enrich_metrics", "attempt_wait_ms", "INTEGER");
+  ensureColumn(conn, "listing_enrich_metrics", "outcome", "TEXT NOT NULL DEFAULT ''");
+}
+
+function ensureColumn(conn, table, name, ddl) {
+  const cols = conn.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name);
+  if (!cols.includes(name)) conn.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${ddl}`);
 }
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function metricNumber(value) {
+  if (value == null || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+export function jobStillOwnsRun(conn, job) {
+  if (!job?.id) return false;
+  const latest = conn.prepare("SELECT request_seq, run_seq FROM listing_enrich_jobs WHERE id = ?").get(job.id);
+  if (!latest) return false;
+  if (Number(latest.run_seq) !== Number(job.run_seq)) return false;
+  if (Number(latest.request_seq) > Number(job.request_seq ?? job.run_seq)) return false;
+  return true;
+}
+
+function sourceBackoffActive(job, now = Date.now()) {
+  const retryAt = Date.parse(job?.next_retry_at || "") || 0;
+  if (!retryAt || retryAt <= now) return false;
+  return SOURCE_PAUSE_CLASSES.includes(String(job?.last_error_class || ""));
 }
 
 function parseJson(raw, fallback) {
@@ -174,6 +209,12 @@ export function enqueueListingEnrich(conn, listing, {
   if (existing) {
     const nextPriority = Math.max(Number(existing.priority) || 0, prio);
     const bumpSeq = via === "click" || via === "notify" || via === "go";
+    const keepBackoff = bumpSeq && sourceBackoffActive(existing);
+    const requeue = !keepBackoff && (
+      bumpSeq
+      || existing.status === "failed"
+      || (CLAIMABLE_STATUSES.includes(existing.status) && (!existing.next_retry_at || Date.parse(existing.next_retry_at) <= Date.now()))
+    );
     conn.prepare(`
       UPDATE listing_enrich_jobs
          SET priority = ?,
@@ -181,14 +222,15 @@ export function enqueueListingEnrich(conn, listing, {
              request_seq = request_seq + ?,
              missing_fields = ?,
              status = CASE
-               WHEN status IN ('succeeded', 'source_limited', 'parse_failed') AND ? THEN 'queued'
-               WHEN status IN ('failed') THEN 'queued'
+               WHEN ? THEN 'queued'
                ELSE status
              END,
              next_retry_at = CASE
-               WHEN status IN ('succeeded', 'source_limited', 'parse_failed', 'failed') AND ? THEN NULL
+               WHEN ? THEN next_retry_at
+               WHEN ? THEN NULL
                ELSE next_retry_at
-             END
+             END,
+             last_queued_at = CASE WHEN ? THEN ? ELSE last_queued_at END
        WHERE post_id = ?
     `).run(
       nextPriority,
@@ -197,17 +239,20 @@ export function enqueueListingEnrich(conn, listing, {
       via,
       bumpSeq ? 1 : 0,
       JSON.stringify(missing.length ? missing : parseJson(existing.missing_fields, [])),
-      bumpSeq ? 1 : 0,
-      bumpSeq ? 1 : 0,
+      requeue ? 1 : 0,
+      keepBackoff ? 1 : 0,
+      requeue ? 1 : 0,
+      requeue ? 1 : 0,
+      stamp,
       postId,
     );
     return conn.prepare("SELECT * FROM listing_enrich_jobs WHERE post_id = ?").get(postId);
   }
   conn.prepare(`
     INSERT INTO listing_enrich_jobs(
-      post_id, source, job_kind, status, missing_fields, priority, requested_via, created_at
-    ) VALUES (?, ?, 'enrich', 'queued', ?, ?, ?, ?)
-  `).run(postId, HP_SOURCE, JSON.stringify(missing), prio, via, stamp);
+      post_id, source, job_kind, status, missing_fields, priority, requested_via, created_at, last_queued_at
+    ) VALUES (?, ?, 'enrich', 'queued', ?, ?, ?, ?, ?)
+  `).run(postId, HP_SOURCE, JSON.stringify(missing), prio, via, stamp, stamp);
   return conn.prepare("SELECT * FROM listing_enrich_jobs WHERE post_id = ?").get(postId);
 }
 
@@ -231,7 +276,7 @@ function claimOne(conn, { minPriority = 0, maxPriority = 1000, order = "priority
       : "priority DESC, IFNULL(next_retry_at, created_at) ASC, post_id ASC";
   const row = conn.prepare(`
     SELECT * FROM listing_enrich_jobs
-     WHERE status IN ('queued', 'failed')
+     WHERE status IN ('queued', 'failed', 'source_limited', 'parse_failed')
        AND priority >= ? AND priority <= ?
        AND (next_retry_at IS NULL OR next_retry_at <= ?)
      ORDER BY ${orderSql}
@@ -244,9 +289,9 @@ function claimOne(conn, { minPriority = 0, maxPriority = 1000, order = "priority
            started_at = ?,
            last_attempt_at = ?,
            attempt_count = attempt_count + 1,
-           run_seq = request_seq,
+           run_seq = IFNULL(run_seq, 0) + 1,
            lease_until = ?
-     WHERE id = ? AND status IN ('queued', 'failed')
+     WHERE id = ? AND status IN ('queued', 'failed', 'source_limited', 'parse_failed')
   `).run(stamp, stamp, lease, row.id);
   if (!info.changes) return null;
   return conn.prepare("SELECT * FROM listing_enrich_jobs WHERE id = ?").get(row.id);
@@ -290,7 +335,10 @@ function finishJob(conn, job, {
   const stamp = nowIso();
   const retry = status === "succeeded" ? null : new Date(Date.now() + backoffMs(errorClass || "transient", Number(job.attempt_count) || 1)).toISOString();
   const latest = conn.prepare("SELECT request_seq, run_seq FROM listing_enrich_jobs WHERE id = ?").get(job.id);
-  const superseded = latest && Number(latest.request_seq) > Number(job.run_seq);
+  if (latest && Number(latest.run_seq) !== Number(job.run_seq)) {
+    return { stale: true };
+  }
+  const superseded = latest && Number(latest.request_seq) > Number(job.request_seq ?? job.run_seq);
   const finalStatus = superseded ? "queued" : status;
   const retryAt = finalStatus === "succeeded" || finalStatus === "queued"
     ? null
@@ -323,40 +371,57 @@ function finishJob(conn, job, {
 export function recordEnrichMetric(conn, job, timings = {}) {
   conn.prepare(`
     INSERT INTO listing_enrich_metrics(
-      post_id, job_id, queued_ms, start_ms, fetch_ms, parse_ms, locate_ms, route_ms, ready_ms, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      post_id, job_id, queued_ms, start_ms, fetch_ms, parse_ms, locate_ms, route_ms, ready_ms,
+      first_ready_ms, attempt_wait_ms, outcome, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     job.post_id,
     job.id,
-    timings.queued_ms ?? null,
-    timings.start_ms ?? null,
-    timings.fetch_ms ?? null,
-    timings.parse_ms ?? null,
-    timings.locate_ms ?? null,
-    timings.route_ms ?? null,
-    timings.ready_ms ?? null,
+    metricNumber(timings.queued_ms),
+    metricNumber(timings.start_ms),
+    metricNumber(timings.fetch_ms),
+    metricNumber(timings.parse_ms),
+    metricNumber(timings.locate_ms),
+    metricNumber(timings.route_ms),
+    metricNumber(timings.ready_ms),
+    metricNumber(timings.first_ready_ms),
+    metricNumber(timings.attempt_wait_ms ?? timings.queued_ms),
+    timings.outcome || "",
     nowIso(),
   );
 }
 
+function percentile(list, p) {
+  if (!list.length) return null;
+  const sorted = [...list].sort((a, b) => a - b);
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1));
+  return sorted[idx];
+}
+
+function stageSummary(rows, key) {
+  const vals = rows.map((row) => metricNumber(row[key])).filter((n) => n != null);
+  return { n: vals.length, p50: percentile(vals, 50), p95: percentile(vals, 95) };
+}
+
 export function summarizeEnrichMetrics(conn) {
   const rows = conn.prepare(`
-    SELECT queued_ms, start_ms, fetch_ms, parse_ms, locate_ms, route_ms, ready_ms
+    SELECT queued_ms, start_ms, fetch_ms, parse_ms, locate_ms, route_ms, ready_ms,
+           first_ready_ms, attempt_wait_ms, outcome
       FROM listing_enrich_metrics
      ORDER BY id DESC
      LIMIT 500
   `).all();
-  const stages = ["queued_ms", "start_ms", "fetch_ms", "parse_ms", "locate_ms", "route_ms", "ready_ms"];
-  const pct = (list, p) => {
-    if (!list.length) return null;
-    const sorted = [...list].sort((a, b) => a - b);
-    const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1));
-    return sorted[idx];
-  };
-  const out = { samples: rows.length, stages: {} };
+  const stages = ["queued_ms", "start_ms", "fetch_ms", "parse_ms", "locate_ms", "route_ms", "ready_ms", "first_ready_ms", "attempt_wait_ms"];
+  const out = { samples: rows.length, stages: {}, byOutcome: {} };
   for (const key of stages) {
-    const vals = rows.map((row) => Number(row[key])).filter((n) => Number.isFinite(n));
-    out.stages[key] = { n: vals.length, p50: pct(vals, 50), p95: pct(vals, 95) };
+    out.stages[key] = stageSummary(rows, key);
+  }
+  for (const outcome of ["succeeded", "failed", "waiting"]) {
+    const subset = rows.filter((row) => String(row.outcome || "") === outcome);
+    out.byOutcome[outcome] = { samples: subset.length, stages: {} };
+    for (const key of stages) {
+      out.byOutcome[outcome].stages[key] = stageSummary(subset, key);
+    }
   }
   return out;
 }
@@ -366,7 +431,7 @@ export function listingPrepAdminStats(conn) {
   const ready = conn.prepare("SELECT COUNT(*) AS n FROM listing_prep WHERE display_ready = 1 AND source = 'houseprice'").get()?.n || 0;
   const jobs = conn.prepare(`
     SELECT
-      SUM(CASE WHEN status IN ('queued', 'failed') THEN 1 ELSE 0 END) AS waiting,
+      SUM(CASE WHEN status IN ('queued', 'failed', 'source_limited', 'parse_failed') THEN 1 ELSE 0 END) AS waiting,
       SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running,
       MIN(CASE WHEN status IN ('queued', 'failed', 'running') THEN created_at END) AS oldest,
       MAX(last_success_at) AS last_success
@@ -412,9 +477,8 @@ export function seedHousepriceEnrichJobs(conn, { limit = 80, isEnabled = () => t
   return n;
 }
 
-export function applyHpListingPatch(conn, helpers, current, next, { locationChanged = false } = {}) {
-  const stale = conn.prepare("SELECT request_seq, run_seq FROM listing_enrich_jobs WHERE post_id = ?").get(current.post_id);
-  if (stale && Number(stale.run_seq) < Number(stale.request_seq)) {
+export function applyHpListingPatch(conn, helpers, current, next, { locationChanged = false, job = null } = {}) {
+  if (job && !jobStillOwnsRun(conn, job)) {
     return { applied: false, stale: true };
   }
   helpers.persistHpListingFields(current.post_id, next, { locationChanged, previous: current });
@@ -434,7 +498,8 @@ export async function processOneEnrichJob(conn, helpers, job, {
     finishJob(conn, job, { status: "failed", error: "source_disabled", errorClass: "source_limited" });
     return { skipped: true };
   }
-  const queuedMs = Math.max(0, t0 - (Date.parse(job.created_at || "") || t0));
+  const attemptWaitMs = Math.max(0, t0 - (Date.parse(job.last_queued_at || job.started_at || job.created_at || "") || t0));
+  const queuedMs = attemptWaitMs;
   const startMs = Math.max(0, t0 - (Date.parse(job.started_at || job.last_attempt_at || "") || t0));
   const fetchStarted = Date.now();
   let inspected;
@@ -445,37 +510,60 @@ export async function processOneEnrichJob(conn, helpers, job, {
     finishJob(conn, job, { status: "failed", error: message.slice(0, 240), errorClass: "transient" });
     return { outcome: PROBE_INCONCLUSIVE, errorClass: "transient" };
   }
-  const fetchMs = Date.now() - fetchStarted;
-  const parseMs = Number(inspected.parse_ms) || 0;
-  const currentSeq = conn.prepare("SELECT request_seq, run_seq FROM listing_enrich_jobs WHERE id = ?").get(job.id);
-  if (currentSeq && Number(currentSeq.request_seq) > Number(job.run_seq)) {
+  const fetchMs = metricNumber(inspected.fetch_ms) ?? Math.max(0, Date.now() - fetchStarted);
+  const parseMs = metricNumber(inspected.parse_ms);
+  if (!jobStillOwnsRun(conn, job)) {
     finishJob(conn, job, { status: "queued", error: "superseded", errorClass: "" });
-    return { superseded: true };
+    return { superseded: true, stale: true };
   }
+  const timingBase = { queued_ms: queuedMs, start_ms: startMs, fetch_ms: fetchMs, parse_ms: parseMs, attempt_wait_ms: attemptWaitMs };
   if (inspected.outcome === PROBE_GONE) {
     helpers.markGone(listing.post_id);
-    finishJob(conn, job, { status: "succeeded", timings: { queued_ms: queuedMs, start_ms: startMs, fetch_ms: fetchMs, parse_ms: parseMs } });
+    finishJob(conn, job, { status: "succeeded", timings: { ...timingBase, outcome: "succeeded" } });
+    helpers.onListingUpdated?.(helpers.loadListing(job.post_id) || { ...listing, offline: 1 }, { outcome: PROBE_GONE, displayReady: false });
     return { outcome: PROBE_GONE };
   }
   if (inspected.outcome === PROBE_INCONCLUSIVE) {
-    const evalPending = evaluateHpPrep(listing, { fetched: false });
-    upsertListingPrep(conn, listing.post_id, listing, evalPending);
-    finishJob(conn, job, {
-      status: "failed",
-      error: inspected.reason || "inconclusive",
-      errorClass: inspected.errorClass || "transient",
-      missing: evalPending.missing,
-      timings: { queued_ms: queuedMs, start_ms: startMs, fetch_ms: fetchMs, parse_ms: parseMs },
-    });
+    const existingPrep = getListingPrep(conn, listing.post_id);
+    if (!existingPrep || Number(existingPrep.display_ready) !== 1) {
+      const evalPending = evaluateHpPrep(listing, { fetched: false });
+      upsertListingPrep(conn, listing.post_id, listing, evalPending);
+      finishJob(conn, job, {
+        status: "failed",
+        error: inspected.reason || "inconclusive",
+        errorClass: inspected.errorClass || "transient",
+        missing: evalPending.missing,
+        timings: { ...timingBase, outcome: "failed" },
+      });
+    } else {
+      conn.prepare("UPDATE listing_prep SET checked_at = ? WHERE post_id = ?").run(nowIso(), listing.post_id);
+      finishJob(conn, job, {
+        status: "failed",
+        error: inspected.reason || "inconclusive",
+        errorClass: inspected.errorClass || "transient",
+        missing: parseJson(existingPrep.missing_fields, []),
+        timings: { ...timingBase, outcome: "failed" },
+      });
+    }
+    recordEnrichMetric(conn, job, { ...timingBase, outcome: "failed" });
     return { outcome: PROBE_INCONCLUSIVE };
   }
   helpers.markAlive(listing.post_id);
   const locateStarted = Date.now();
   const enriched = enrichHpListingFromDetail(listing, inspected.detail, { allowFieldFill: true, replaceBetterGeo: true });
+  if (inspected.facilityAbsent === true) enriched.facility_replace = true;
+  else if (inspected.facilityBlock === true) enriched.facility_replace = true;
   const merged = mergeHpListingFields(listing, enriched, { allowCorrection: true });
-  const patched = applyHpListingPatch(conn, helpers, listing, merged.listing, { locationChanged: merged.locationChanged });
+  const patched = applyHpListingPatch(conn, helpers, listing, merged.listing, {
+    locationChanged: merged.locationChanged,
+    job,
+  });
   const locateMs = Date.now() - locateStarted;
   if (patched.stale) {
+    finishJob(conn, job, { status: "queued", error: "stale_write", errorClass: "" });
+    return { stale: true };
+  }
+  if (!jobStillOwnsRun(conn, job)) {
     finishJob(conn, job, { status: "queued", error: "stale_write", errorClass: "" });
     return { stale: true };
   }
@@ -491,15 +579,15 @@ export async function processOneEnrichJob(conn, helpers, job, {
   });
   const readyInfo = upsertListingPrep(conn, listing.post_id, stored, evalResult);
   if (readyInfo.becomingReady) helpers.onFirstReady?.(stored, readyInfo);
-  const readyMs = Date.now() - t0;
+  const firstQueuedAt = Date.parse(job.created_at || "") || t0;
+  const firstReadyMs = readyInfo.becomingReady ? Math.max(0, Date.now() - firstQueuedAt) : null;
   const timings = {
-    queued_ms: queuedMs,
-    start_ms: startMs,
-    fetch_ms: fetchMs,
-    parse_ms: parseMs,
+    ...timingBase,
     locate_ms: locateMs,
     route_ms: null,
-    ready_ms: evalResult.displayReady ? readyMs : null,
+    ready_ms: firstReadyMs,
+    first_ready_ms: firstReadyMs,
+    outcome: evalResult.displayReady ? "succeeded" : "failed",
   };
   recordEnrichMetric(conn, job, timings);
   const jobStatus = evalResult.displayReady
@@ -515,6 +603,11 @@ export async function processOneEnrichJob(conn, helpers, job, {
     errorClass: jobStatus === "succeeded" ? "" : (jobStatus === "parse_failed" ? "parse_failed" : (jobStatus === "source_limited" ? "source_limited" : "transient")),
     missing: evalResult.missing,
     timings,
+  });
+  helpers.onListingUpdated?.(stored, {
+    outcome: PROBE_ALIVE,
+    displayReady: evalResult.displayReady,
+    becomingReady: readyInfo.becomingReady,
   });
   return { outcome: PROBE_ALIVE, evalResult, merged };
 }
@@ -554,19 +647,60 @@ export function requestClickRefresh(conn, listing, via = "click") {
   if (!listing?.post_id || !isHousepriceListing(listing)) return { queued: false };
   const prep = getListingPrep(conn, listing.post_id);
   const missing = parseJson(prep?.missing_fields, []) || evaluateHpPrep(listing, { fetched: Boolean(prep) }).missing;
-  const job = enqueueListingEnrich(conn, listing, { via, priority: CLICK_PRIORITY, missing });
+  const existing = conn.prepare("SELECT * FROM listing_enrich_jobs WHERE post_id = ?").get(listing.post_id);
+  const sourcePaused = sourceBackoffActive(existing);
+  const statusCooldown = (Date.parse(listing.last_checked_at || "") || 0) > Date.now() - STATUS_COOLDOWN_MS;
+  const recentlySucceeded = existing?.status === "succeeded"
+    && (Date.parse(existing.last_success_at || "") || 0) > Date.now() - STATUS_COOLDOWN_MS
+    && !missing.length;
+  const job = recentlySucceeded && !sourcePaused
+    ? existing
+    : enqueueListingEnrich(conn, listing, { via, priority: CLICK_PRIORITY, missing });
+  const runnableNow = !recentlySucceeded && !sourcePaused && job && (job.status === "queued" || job.status === "failed")
+    && (!job.next_retry_at || Date.parse(job.next_retry_at) <= Date.now());
   return {
-    queued: true,
-    jobId: job?.id || 0,
+    queued: Boolean(runnableNow),
     merged: true,
+    jobId: job?.id || 0,
     requestSeq: job?.request_seq || 0,
-    statusCooldown: (Date.parse(listing.last_checked_at || "") || 0) > Date.now() - STATUS_COOLDOWN_MS,
+    statusCooldown,
+    sourcePaused,
+    missingFields: missing,
+    wakeWorker: Boolean(runnableNow),
   };
+}
+
+let enrichWorker = null;
+let enrichWake = false;
+
+export function wakeListingEnrichWorker(runBatch) {
+  enrichWake = true;
+  if (enrichWorker) return enrichWorker;
+  enrichWorker = Promise.resolve()
+    .then(async () => {
+      try {
+        while (enrichWake) {
+          enrichWake = false;
+          await runBatch();
+        }
+      } finally {
+        const again = enrichWake;
+        enrichWorker = null;
+        if (again) wakeListingEnrichWorker(runBatch);
+      }
+    });
+  return enrichWorker;
+}
+
+export function resetListingEnrichWorkerForTests() {
+  enrichWorker = null;
+  enrichWake = false;
 }
 
 export {
   CLICK_PRIORITY,
   WATCH_PRIORITY,
+  CLAIMABLE_STATUSES,
   FIELD_NOT_FETCHED,
   FIELD_NOT_PROVIDED,
   FIELD_PARSE_FAILED,

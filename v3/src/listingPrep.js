@@ -28,6 +28,17 @@ export function isHousepriceListing(listing) {
   return String(listing?.source || "") === HP_PREP_SOURCE;
 }
 
+/** 畫面／群組只用目前可展示的成員；資料庫關係仍保留。 */
+export function listingIsDisplayable(row, prep = null) {
+  if (!isHousepriceListing(row)) return true;
+  if (prep && Object.prototype.hasOwnProperty.call(prep, "display_ready")) {
+    return Number(prep.display_ready) === 1;
+  }
+  if (row?.display_ready === true || Number(row?.display_ready) === 1) return true;
+  if (row?.display_ready === false || Number(row?.display_ready) === 0) return false;
+  return false;
+}
+
 export function hasValidRent(listing) {
   return Number(listing?.price_num) > 0;
 }
@@ -216,7 +227,7 @@ export function mergeHpListingFields(current, incoming = {}, { allowCorrection =
     }
     if (allowCorrection && value !== prev) {
       if (key === "address") {
-        if (addressPrecision(value) >= addressPrecision(prev)) {
+        if (addressPrecision(value) >= addressPrecision(prev) && value !== prev) {
           next[key] = value;
           changes.push(key);
         }
@@ -237,6 +248,10 @@ export function mergeHpListingFields(current, incoming = {}, { allowCorrection =
   };
 
   takeText("title");
+  if (incoming.source_key && incoming.source_key !== current.source_key) {
+    next.source_key = incoming.source_key;
+    changes.push("source_key");
+  }
   if (Number(incoming.price_num) > 0 && Number(incoming.price_num) !== Number(current.price_num)) {
     next.price_num = Number(incoming.price_num);
     next.price = incoming.price || String(incoming.price_num);
@@ -276,21 +291,35 @@ export function mergeHpListingFields(current, incoming = {}, { allowCorrection =
   }
 
   const extraTags = parseTags(incoming.tags);
-  if (extraTags.length) {
-    const merged = mergeTagList(current.tags, extraTags);
-    if (JSON.stringify(merged) !== JSON.stringify(parseTags(current.tags))) {
-      next.tags = JSON.stringify(merged);
+  if (incoming.facility_replace === true) {
+    const replaced = typeof incoming.tags === "string" ? incoming.tags : JSON.stringify(extraTags);
+    if (replaced !== (typeof current.tags === "string" ? current.tags : JSON.stringify(parseTags(current.tags)))) {
+      next.tags = replaced;
       changes.push("tags");
     }
-  } else if (typeof incoming.tags === "string" && incoming.tags && incoming.tags !== current.tags) {
-    next.tags = incoming.tags;
-    changes.push("tags");
-  }
-
-  for (const key of ["has_natural_gas", "has_balcony", "furnish_items"]) {
-    if (incoming[key] != null && incoming[key] !== current[key]) {
-      next[key] = incoming[key];
-      changes.push(key);
+    next.facility_replace = true;
+    for (const key of ["has_natural_gas", "has_balcony", "furnish_items"]) {
+      if (incoming[key] != null && incoming[key] !== current[key]) {
+        next[key] = incoming[key];
+        changes.push(key);
+      }
+    }
+  } else {
+    if (extraTags.length) {
+      const merged = mergeTagList(current.tags, extraTags);
+      if (JSON.stringify(merged) !== JSON.stringify(parseTags(current.tags))) {
+        next.tags = JSON.stringify(merged);
+        changes.push("tags");
+      }
+    } else if (typeof incoming.tags === "string" && incoming.tags && incoming.tags !== current.tags) {
+      next.tags = incoming.tags;
+      changes.push("tags");
+    }
+    for (const key of ["has_natural_gas", "has_balcony", "furnish_items"]) {
+      if (incoming[key] != null && incoming[key] !== current[key]) {
+        next[key] = incoming[key];
+        changes.push(key);
+      }
     }
   }
 

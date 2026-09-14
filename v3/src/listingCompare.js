@@ -4,6 +4,11 @@ import { decodeEntities } from "./htmlEntities.js";
 import { extraMonthlyAmount, listingCompareCost, parseJsonFees, rentAmount } from "./listingCost.js";
 import { preferPrimaryListing, sortGroupListings } from "./match.js";
 import { formatFloorDisplay } from "./floors.js";
+import { listingIsDisplayable } from "./listingPrep.js";
+
+function displayableGroupMembers(listings = []) {
+  return (listings || []).filter((row) => listingIsDisplayable(row));
+}
 
 function normFeeText(value) {
   return String(value ?? "")
@@ -232,7 +237,7 @@ export function compareHouseHeadline(listings = []) {
 export function compareHouseGroup(listings = []) {
   const uniq = [];
   const seen = new Set();
-  for (const row of listings || []) {
+  for (const row of displayableGroupMembers(listings)) {
     const id = Number(row?.post_id);
     if (!id || seen.has(id)) continue;
     seen.add(id);
@@ -330,7 +335,7 @@ export function publicSameHousePeer(row) {
 }
 
 export function sameHouseBundle(listing, peers = []) {
-  const group = [listing, ...peers].filter(Boolean);
+  const group = displayableGroupMembers([listing, ...peers].filter(Boolean));
   const uniq = [];
   const seen = new Set();
   for (const row of group) {
