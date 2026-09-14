@@ -277,6 +277,8 @@ test("member profiles cap districts and include usable ping in notify copy", () 
   assert.match(html, /kit-gas">天然瓦斯/);
   assert.match(html, /kit-balcony/);
   assert.match(html, /listMoreBtn/);
+  assert.match(html, /loadList\(\{ append: true, keep: true, silent: false, busyText: "正在載入更多…" \}\)/);
+  assert.match(html, /function mergeAppendedListings/);
   assert.match(html, /LIST_PAGE_SIZE = 80/);
   assert.match(html, /data-kit-furnish/);
   assert.match(html, /\.kit-furnish/);

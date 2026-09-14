@@ -417,3 +417,22 @@ test("list API whole+building+elevator drops walk-up 公寓 without shape tags",
     assert.ok(!ids(apt).includes(810002));
   `);
 });
+
+test("watched list pages keep hasMore and return the next offset", () => {
+  runIsolated(`
+    for (let i = 0; i < 12; i++) {
+      seed(820000 + i, { title: "特別關注 " + i });
+      app.setFlags(820000 + i, { watched: true }, uid);
+    }
+    const first = query({ filter: "watched", limit: 8, offset: 0 });
+    assert.equal(first.totalMatched, 12);
+    assert.equal(first.listings.length, 8);
+    assert.equal(first.hasMore, true);
+    assert.equal(first.nextOffset, 8);
+    const second = query({ filter: "watched", limit: 8, offset: first.nextOffset });
+    assert.equal(second.listings.length, 4);
+    assert.equal(second.hasMore, false);
+    assert.equal(ids(first).some((id) => ids(second).includes(id)), false);
+    assert.equal(new Set([...ids(first), ...ids(second)]).size, 12);
+  `);
+});

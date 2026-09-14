@@ -54,8 +54,24 @@ export function listRefreshLimit({ pageSize = 80, loadedCount = 0, keep = false,
   return Math.min(max, Math.max(pageSize, need));
 }
 
-export function keptListShouldRerender(prev, next, { refreshCards = false, busy = false } = {}) {
-  if (refreshCards) return true;
+export function listLoadBlockedByNotes({ force = false, append = false, noteBusy = false } = {}) {
+  return Boolean(noteBusy) && !force && !append;
+}
+
+export function mergeAppendedListings(prev, incoming) {
+  const out = [];
+  const seen = new Set();
+  for (const row of [...(prev || []), ...(incoming || [])]) {
+    const id = String(row?.post_id ?? "");
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(row);
+  }
+  return out;
+}
+
+export function keptListShouldRerender(prev, next, { refreshCards = false, busy = false, append = false } = {}) {
+  if (append || refreshCards) return true;
   if (listingIdKey(prev) !== listingIdKey(next)) return true;
   if (listingsContentKey(prev) !== listingsContentKey(next)) return true;
   return false && busy;

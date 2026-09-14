@@ -5277,6 +5277,18 @@
       return (items || []).map((row) => String(row.post_id)).join(",");
     }
 
+    function mergeAppendedListings(prev, incoming) {
+      const out = [];
+      const seen = new Set();
+      for (const row of [...(prev || []), ...(incoming || [])]) {
+        const id = String(row?.post_id ?? "");
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        out.push(row);
+      }
+      return out;
+    }
+
     function listingGroupContentKey(item) {
       const peers = item?.same_house?.peers || [];
       const match = item?.match_peer;
@@ -7563,7 +7575,9 @@
           lastStats = { total: data.totalMatched || 0, matched: data.totalMatched || 0 };
           listHasMore = data.hasMore === true;
           listOffset = Number(data.nextOffset) || ((append ? listOffset : 0) + (data.listings || []).length);
-          guestListings = append && guestListings.length ? [...guestListings, ...(data.listings || [])] : (data.listings || []);
+          guestListings = append && guestListings.length
+            ? mergeAppendedListings(guestListings, data.listings || [])
+            : (data.listings || []);
           renderStats(lastStats);
           renderDistrictChips(settings);
           renderList(applyListView(guestListings), lastStats);
@@ -7580,7 +7594,7 @@
         }
         return;
       }
-      if (!options.force && watchNoteBusy()) {
+      if (!options.force && !options.append && watchNoteBusy()) {
         listRefreshQueued = true;
         return;
       }
@@ -7613,7 +7627,7 @@
         );
         const data = await res.json();
         if (gen !== listLoadGen) return;
-        if (!options.force && watchNoteBusy()) {
+        if (!options.force && !append && watchNoteBusy()) {
           listRefreshQueued = true;
           return;
         }
@@ -7624,9 +7638,11 @@
         lastStats.paint_ms = Math.round(performance.now() - paintStart);
         listHasMore = data.hasMore === true;
         listOffset = Number(data.nextOffset) || ((append ? listOffset : 0) + (data.listings || []).length);
-        const next = applyListView(append && listCache.length ? [...listCache, ...(data.listings || [])] : data.listings);
+        const next = applyListView(append && listCache.length
+          ? mergeAppendedListings(listCache, data.listings || [])
+          : data.listings);
         rememberListings(next);
-        if (options.keep && listCache.length && !options.refreshCards) {
+        if (options.keep && !append && listCache.length && !options.refreshCards) {
           const sameIds = listingIdKey(listCache) === listingIdKey(next);
           const sameContent = listingsContentKey(listCache) === listingsContentKey(next);
           if ((sameIds && sameContent) || (listHasBusyCard() && sameContent)) {
@@ -7667,7 +7683,10 @@
         reportCommuteFocus();
         if (pendingCommuteWork()) refreshCommuteSnapshot();
       } finally {
-        if (gen === listLoadGen) setListBusy(false);
+        if (gen === listLoadGen) {
+          setListBusy(false);
+          if (append) syncListMore(Number(lastStats.matched) || 0, listCache.length);
+        }
       }
     }
 
@@ -10906,9 +10925,9 @@
       };
     });
     $("listMoreBtn")?.addEventListener("click", () => {
-      if (!listHasMore) return;
+      if (!listHasMore || $("listMoreBtn").disabled) return;
       $("listMoreBtn").disabled = true;
-      loadList({ append: true, keep: true, silent: true, busyText: "正在載入更多…" });
+      loadList({ append: true, keep: true, silent: false, busyText: "正在載入更多…" });
     });
     document.querySelectorAll("[data-source]").forEach((btn) => {
       btn.onclick = () => {
