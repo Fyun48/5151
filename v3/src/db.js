@@ -111,7 +111,7 @@ import {
   emptyCommsConfig,
 } from "./comms.js";
 import { DATA_EPOCH, shouldResetForEpoch } from "./dataEpoch.js";
-import { countsTowardAllTotal, isConfirmedOffline, isPendingOffline } from "./offline.js";
+import { countsTowardAllTotal, isConfirmedOffline, isPendingOffline, normalizeOfflineConfirmDays } from "./offline.js";
 import { coveringJobsFromMembers, coversFromMemberSettings, coversFromWatchDistricts, listingInMemberScope } from "./covering.js";
 import { listCrawlCovers } from "./crawlCovers.js";
 import { SYSTEM_CRAWL_INTERVAL_MINUTES } from "./crawlPolicy.js";
@@ -2020,6 +2020,7 @@ function withSystemCrawl(settings) {
     ...settings,
     systemCrawlIntervalMinutes: system.intervalMinutes,
     showListRefreshBar: system.showListRefreshBar === true,
+    offlineConfirmDays: system.offlineConfirmDays,
   };
 }
 
@@ -2092,6 +2093,8 @@ export function saveSettings(partial, userId, { forceAdmin = false } = {}) {
         || key === "systemWatchDistricts"
         || key === "systemCrawlIntervalMinutes"
         || key === "systemCrawlIntervalMinutesDisplay"
+        || key === "offlineConfirmDays"
+        || key === "systemOfflineConfirmDays"
         || key === "brandMascot"
       ) continue;
       const encoded = JSON.stringify(value);
@@ -3882,11 +3885,13 @@ export function enqueueListingEvent(listing, event) {
 export function getSystemCrawl() {
   const stored = parseSettingRows(db.prepare("SELECT key, value FROM settings").all());
   const intervalRaw = Number(stored.systemCrawlIntervalMinutes);
+  const offlineRaw = stored.systemOfflineConfirmDays ?? stored.offlineConfirmDays;
   return {
     watchDistricts: normalizeWatchDistricts(stored.systemWatchDistricts),
     intervalMinutes: Number.isFinite(intervalRaw) && intervalRaw > 0
       ? clampIntervalMinutes(intervalRaw, { admin: true, fallback: SYSTEM_CRAWL_INTERVAL_MINUTES })
       : SYSTEM_CRAWL_INTERVAL_MINUTES,
+    offlineConfirmDays: normalizeOfflineConfirmDays(offlineRaw),
     showMrt: stored.systemShowMrt !== false,
     showListRefreshBar: stored.systemShowListRefreshBar === true,
     cities: CITIES,
@@ -3901,6 +3906,9 @@ export function saveSystemCrawl(partial = {}) {
   const intervalMinutes = Object.prototype.hasOwnProperty.call(partial, "intervalMinutes")
     ? clampIntervalMinutes(partial.intervalMinutes, { admin: true, fallback: current.intervalMinutes })
     : current.intervalMinutes;
+  const offlineConfirmDays = Object.prototype.hasOwnProperty.call(partial, "offlineConfirmDays")
+    ? normalizeOfflineConfirmDays(partial.offlineConfirmDays)
+    : current.offlineConfirmDays;
   const upsert = db.prepare(
     "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
   );
@@ -3912,8 +3920,10 @@ export function saveSystemCrawl(partial = {}) {
     : current.showListRefreshBar === true;
   upsert.run("systemWatchDistricts", JSON.stringify(watchDistricts));
   upsert.run("systemCrawlIntervalMinutes", JSON.stringify(intervalMinutes));
+  upsert.run("systemOfflineConfirmDays", JSON.stringify(offlineConfirmDays));
   upsert.run("systemShowMrt", JSON.stringify(showMrt));
   upsert.run("systemShowListRefreshBar", JSON.stringify(showListRefreshBar));
+  forgetSettings();
   const next = getSystemCrawl();
   next.catalog = refreshSiteCatalogStats();
   return next;
