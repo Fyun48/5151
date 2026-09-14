@@ -230,10 +230,12 @@ import { assertHuman, issueCaptcha } from "./captcha.js";
 import { assertCaptchaIssuable, assertDemoReadable, assertImportAllowed, assertPublicListingsReadable, authAttemptKeys, clientIp } from "./rateLimit.js";
 import { getCachedPublicListings } from "./publicListings.js";
 import { buildDemoState } from "./demo.js";
-import { backfillAddressGeo, backfillIncompleteAddresses, backfillListingCoords, backfillListingMrt, backfillListingRoutes, flushPendingNotifications, isWatchIntervalPending, runWatch } from "./watcher.js";
+import { backfillAddressGeo, backfillIncompleteAddresses, backfillListingCoords, backfillListingMrt, backfillListingRoutes, flushPendingNotifications, isWatchIntervalPending, listingEnrichHelpers, runWatch } from "./watcher.js";
 import { LIST_PAGE_SIZE, isListingGoneError, probeListingAlive } from "./client591.js";
 import { probeHpListingAlive } from "./houseprice.js";
 import { probeListingAliveBySource } from "./probe.js";
+import { PROBE_ALIVE, PROBE_GONE } from "./probeOutcomes.js";
+import { enqueueListingEnrich, processListingEnrichBatch, requestClickRefresh, WATCH_PRIORITY } from "./listingEnrichQueue.js";
 import { deliveryConfigFromEnv, startDeliveryLoop } from "./opsDelivery.js";
 import { opsDeliveryDb } from "./db.js";
 import { refreshHousingData } from "./housingFetch.js";
@@ -488,6 +490,12 @@ function setSession(req, res, email) {
   res.setHeader("Set-Cookie", cookie);
 }
 
+function kickListingEnrich() {
+  processListingEnrichBatch(db, listingEnrichHelpers(), { limit: 4 }).catch((error) => {
+    console.warn("5168 補抓失敗：", error.message);
+  });
+}
+
 /** 點通知／Discord 連結：已登入才標記已瀏覽，再導向原站。站內刊登：會員開站內詳情、訪客開公開分享頁。訪客只轉址、不寫入。 */
 app.get("/go/:id", (req, res) => {
   const id = Number(req.params.id);
@@ -498,6 +506,10 @@ app.get("/go/:id", (req, res) => {
       listing = getListing(id);
       if (session?.userId && getListing(id, session.userId)) {
         setFlags(id, { viewed: true }, session.userId);
+      }
+      if (listing && String(listing.source || "") === "houseprice") {
+        requestClickRefresh(db, listing, "go");
+        kickListingEnrich();
       }
     } catch (error) {
       console.warn("標記已瀏覽失敗：", error.message);
@@ -2664,6 +2676,10 @@ app.post("/api/listings/:id/flags", async (req, res) => {
     }
     if (req.body?.watched === true || req.body?.watched === 1) {
       queueGeoBackfill();
+      if (updated && String(updated.source || "") === "houseprice") {
+        enqueueListingEnrich(db, updated, { via: "watch", priority: WATCH_PRIORITY });
+        kickListingEnrich();
+      }
       try { await probeListingAliveBySource(updated); } catch { /* 關注後狀態探測失敗不擋回寫 */ }
     }
     res.json({ listing: updated, stats: stats(undefined, uid) });
@@ -2698,25 +2714,41 @@ app.post("/api/listings/:id/recheck", async (req, res) => {
       res.json({ supported: true, gone: true, confirmed: true });
       return;
     }
+    if (source === "houseprice") {
+      const queued = requestClickRefresh(db, listing, "click");
+      kickListingEnrich();
+      res.json({
+        supported: true,
+        queued: true,
+        merged: Boolean(queued.merged),
+        gone: Boolean(Number(listing.offline)),
+        statusCooldown: Boolean(queued.statusCooldown),
+      });
+      return;
+    }
     const lastCheck = Date.parse(listing.last_checked_at || "") || 0;
     if (lastCheck && Date.now() - lastCheck < 60_000) {
       res.json({ supported: true, gone: Boolean(Number(listing.offline)), cooldown: true });
       return;
     }
-    const { supported, alive } = await probeListingAliveBySource(listing);
+    const { supported, outcome, alive } = await probeListingAliveBySource(listing);
     if (!supported) {
       res.json({ supported: false, gone: false });
       return;
     }
-    if (alive === false) {
+    if (outcome === PROBE_GONE || alive === false) {
       markListingOffline(postId);
-      res.json({ supported: true, gone: true });
+      res.json({ supported: true, gone: true, outcome: PROBE_GONE });
       return;
     }
-    markListingAlive(postId);
-    res.json({ supported: true, gone: false });
+    if (outcome === PROBE_ALIVE || alive === true) {
+      markListingAlive(postId);
+      res.json({ supported: true, gone: false, outcome: PROBE_ALIVE });
+      return;
+    }
+    res.json({ supported: true, gone: Boolean(Number(listing.offline)), outcome: "inconclusive" });
   } catch (error) {
-    res.json({ supported: true, gone: false, error: error.message });
+    res.json({ supported: true, gone: false, outcome: "inconclusive", error: error.message });
   }
 });
 

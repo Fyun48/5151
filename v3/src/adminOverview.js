@@ -14,6 +14,7 @@ import {
 import { lastAuditAction } from "./adminAudit.js";
 import { CONFIRM_ADMIN, CONFIRM_AUTO, CONFIRM_SUSPECTED } from "./listingGroups.js";
 import { IMPORT_STATUSES } from "./listingImport.js";
+import { listingPrepAdminStats } from "./listingEnrichQueue.js";
 
 const RAKUYA_OWNER_OFF = "Owner 手動停用";
 
@@ -209,6 +210,7 @@ export function getAdminOverview() {
       announcementDrafts,
     },
     sameHouse,
+    listingPrep: listingPrepAdminStats(db),
     crawl: {
       intervalMinutes: getSystemCrawl().intervalMinutes,
       districtCount: (getSystemCrawl().watchDistricts || []).length,
@@ -256,6 +258,7 @@ export function getAdminDataHealth() {
     missingFees: Number(row.missing_fees) || 0,
     missingFurnish: Number(row.missing_furnish) || 0,
     suspectedDuplicate: suspected,
+    listingPrep: listingPrepAdminStats(db),
   };
 }
 

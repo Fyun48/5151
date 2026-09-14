@@ -4,6 +4,8 @@ import { listingKitFields } from "./listingKit.js";
 import { decodeEntities } from "./htmlEntities.js";
 import { isExcludedByKeyword } from "./geo.js";
 import { addressHasPrecisePart, addressPrecision, extractTaiwanStreetAddress, isTaiwanMapPin, pickRicherAddress, sourceCommunityLinked } from "./location.js";
+import { shouldAcceptGeoUpdate } from "./geoPrecision.js";
+import { PROBE_ALIVE, PROBE_GONE, PROBE_INCONCLUSIVE } from "./probeOutcomes.js";
 import { feeFieldsFromBlob } from "./listingCost.js";
 import { zipForDistrict } from "./hbhousing.js";
 import { lookupDistrict } from "./regions.js";
@@ -436,12 +438,16 @@ export async function fetchHpDetail(id, getHtml = defaultGetHtml) {
 }
 
 /** 用明細頁補齊列表頁缺的樓層／社區／坪數／格局／現況，並重算同屋源指紋 source_key。 */
-export function enrichHpListingFromDetail(row, detail, { regionId, sectionId } = {}) {
+export function enrichHpListingFromDetail(row, detail, { regionId, sectionId, replaceBetterGeo = true } = {}) {
   if (!row || !detail) return row;
   const next = { ...row };
   let changed = false;
   const detailFloor = sanitizeFloorName(detail.floorName);
-  if (detailFloor && (!next.floor_name || (!floorNameLooksComplete(next.floor_name) && floorNameLooksComplete(detailFloor)))) {
+  if (detailFloor && (
+    !next.floor_name
+    || (!floorNameLooksComplete(next.floor_name) && floorNameLooksComplete(detailFloor))
+    || (floorNameLooksComplete(detailFloor) && detailFloor !== next.floor_name)
+  )) {
     next.floor_name = detailFloor;
     changed = true;
   }
@@ -453,11 +459,13 @@ export function enrichHpListingFromDetail(row, detail, { regionId, sectionId } =
     next.address = detail.address;
     changed = true;
   }
-  // 明細頁地圖連結帶精準座標：直接寫入 lat/lng 並標記 geo_source，之後才會被通勤／捷運距離回填採用。
-  if (detail.lat != null && detail.lng != null && (next.lat == null || next.lng == null)) {
-    next.lat = detail.lat;
-    next.lng = detail.lng;
-    next.geo_source = "houseprice";
+  if (detail.lat != null && detail.lng != null && isTaiwanMapPin(detail.lat, detail.lng)) {
+    const incomingGeo = { lat: detail.lat, lng: detail.lng, geo_source: "houseprice", address: detail.address || next.address };
+    if (next.lat == null || next.lng == null || (replaceBetterGeo && shouldAcceptGeoUpdate(next, incomingGeo))) {
+      next.lat = detail.lat;
+      next.lng = detail.lng;
+      next.geo_source = "houseprice";
+    }
   }
   let tags = null;
   const ensureTags = () => {
@@ -591,38 +599,98 @@ export function hpIdFromUrl(url) {
   return /^https?:/i.test(raw) ? "" : raw;
 }
 
-/** 點擊時即時確認 5168 物件是否還在。
- *  內頁已改為 SPA（HTML 殼恆回 200），故改打明細 JSON API /ws/detail/{id} 判斷：
- *  400/404/410 或回應內沒有物件明細（webRentCaseGroupingDetail 空）＝已下架；
- *  其它錯誤（403/429/5xx／逾時／非 JSON）保守不當作下架。 */
-export async function probeHpListingAlive(url) {
-  const id = hpIdFromUrl(url);
-  if (!id) return true;
+const HP_GONE_TEXT = /物件已(下架|成交|出租|刪除|結案)|查無(此|該)?(物件|案件)|案件不存在|物件不存在/;
+
+function hpDetailObject(body) {
+  if (!body || typeof body !== "object") return null;
+  const det = body.webRentCaseGroupingDetail || body.webRentCaseGroupingDet || body.caseDetail;
+  return det && typeof det === "object" ? det : null;
+}
+
+function detailLooksRecognizable(det) {
+  if (!det || typeof det !== "object") return false;
+  const keys = Object.keys(det);
+  if (!keys.length) return false;
+  return Boolean(det.caseId || det.caseName || det.simpAddress || det.address || det.lat || det.road);
+}
+
+export function inspectHpDetailResponse({ status = 0, json = null, text = "", timeout = false, network = false, parse_ms = 0 } = {}) {
+  if (timeout || network) return { outcome: PROBE_INCONCLUSIVE, reason: timeout ? "timeout" : "network", errorClass: "transient", parse_ms };
+  if (status === 404 || status === 410) return { outcome: PROBE_GONE, reason: `http_${status}`, errorClass: "", parse_ms };
+  if (status === 403 || status === 429 || status >= 500) {
+    return { outcome: PROBE_INCONCLUSIVE, reason: `http_${status}`, errorClass: "transient", parse_ms };
+  }
+  const blob = `${text || ""} ${JSON.stringify(json || {})}`;
+  if (/驗證碼|captcha|cloudflare|just a moment/i.test(blob)) {
+    return { outcome: PROBE_INCONCLUSIVE, reason: "challenge", errorClass: "transient", parse_ms };
+  }
+  if (status === 400) {
+    if (HP_GONE_TEXT.test(blob)) return { outcome: PROBE_GONE, reason: "gone_signal", errorClass: "", parse_ms };
+    return { outcome: PROBE_INCONCLUSIVE, reason: "http_400", errorClass: "transient", parse_ms };
+  }
+  if (HP_GONE_TEXT.test(blob)) return { outcome: PROBE_GONE, reason: "gone_signal", errorClass: "", parse_ms };
+  const det = hpDetailObject(json);
+  if (detailLooksRecognizable(det)) {
+    const detail = parseHpDetailJson(json);
+    return {
+      outcome: PROBE_ALIVE,
+      reason: "detail_ok",
+      detail,
+      facilityBlock: Array.isArray(det.conditionTags),
+      facilityAbsent: Array.isArray(det.conditionTags) && det.conditionTags.length === 0 && String(det.parkingYN || "") === "N",
+      buildingOnly: Boolean(det.upFloor) && !det.fromFloor && !det.toFloor && !det.floor,
+      parse_ms,
+    };
+  }
+  if (!json || typeof json !== "object" || !Object.keys(json).length) {
+    return { outcome: PROBE_INCONCLUSIVE, reason: "empty_json", errorClass: "parse_failed", parse_ms };
+  }
+  return { outcome: PROBE_INCONCLUSIVE, reason: "unexpected_payload", errorClass: "parse_failed", parse_ms };
+}
+
+export async function fetchHpDetailInspected(id) {
+  const key = hpIdFromUrl(id) || String(id || "").trim();
+  if (!key) return { outcome: PROBE_INCONCLUSIVE, reason: "missing_id", errorClass: "parse_failed" };
+  const started = Date.now();
   let res;
   try {
-    res = await fetch(hpDetailApiUrl(id), {
+    res = await fetch(hpDetailApiUrl(key), {
       headers: {
         "User-Agent": USER_AGENT,
         Accept: "application/json",
-        Referer: hpDetailUrl(id),
+        Referer: hpDetailUrl(key),
       },
       redirect: "follow",
       signal: AbortSignal.timeout(15000),
     });
   } catch {
-    return true;
+    return inspectHpDetailResponse({ timeout: true, parse_ms: Date.now() - started });
   }
-  if (res.status === 400 || res.status === 404 || res.status === 410) return false;
-  if (!res.ok) return true;
-  let body;
-  try {
-    body = await res.json();
-  } catch {
-    return true;
+  let text = "";
+  let json = null;
+  if (typeof res.text === "function") {
+    try { text = await res.text(); } catch { text = ""; }
   }
-  const det = body?.webRentCaseGroupingDetail || body?.webRentCaseGroupingDet || body?.caseDetail;
-  const hasDetail = det && typeof det === "object" && Object.keys(det).length > 0;
-  return hasDetail ? true : false;
+  if (text) {
+    try { json = JSON.parse(text); } catch { json = null; }
+  } else if (typeof res.json === "function") {
+    try { json = await res.json(); } catch { json = null; }
+  }
+  return inspectHpDetailResponse({
+    status: res.status,
+    json,
+    text,
+    parse_ms: Date.now() - started,
+  });
+}
+
+export async function probeHpListingOutcome(url) {
+  return fetchHpDetailInspected(url);
+}
+
+export async function probeHpListingAlive(url) {
+  const { outcome } = await probeHpListingOutcome(url);
+  return outcome === PROBE_ALIVE;
 }
 
 async function defaultGetHtml(url) {

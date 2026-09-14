@@ -10,6 +10,8 @@ import {
   fetchHpCoveringListings,
   fetchHpDetail,
   probeHpListingAlive,
+  probeHpListingOutcome,
+  inspectHpDetailResponse,
   hpDetailApiUrl,
   hpDetailUrl,
   hpListUrl,
@@ -292,34 +294,43 @@ test("5168 alley-only detail address upgrades a street-only list address", () =>
   assert.equal(enriched.address, "台北市士林區天玉街9巷");
 });
 
-test("probeHpListingAlive uses the JSON API: 400/404/empty gone, live detail alive", async () => {
+test("probeHpListingOutcome: 404 gone; 400/empty/timeout/503/challenge inconclusive; recognizable detail alive", async () => {
   const orig = globalThis.fetch;
   const calls = [];
   try {
-    // 400（不存在的 case id）＝已下架
     globalThis.fetch = async (u) => { calls.push(String(u)); return { ok: false, status: 400, json: async () => ({}) }; };
+    assert.equal((await probeHpListingOutcome("https://rent.houseprice.tw/house/9999999999")).outcome, "inconclusive");
     assert.equal(await probeHpListingAlive("https://rent.houseprice.tw/house/9999999999"), false);
     assert.match(calls.at(-1), /\/ws\/detail\/9999999999$/);
-    // 404 ＝已下架
+
     globalThis.fetch = async () => ({ ok: false, status: 404, json: async () => ({}) });
-    assert.equal(await probeHpListingAlive("https://rent.houseprice.tw/house/a"), false);
-    // 200 但沒有物件明細 ＝已下架
+    assert.equal((await probeHpListingOutcome("https://rent.houseprice.tw/house/a")).outcome, "gone");
+
     globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ code: 200, webRentCaseGroupingDetail: {} }) });
-    assert.equal(await probeHpListingAlive("https://rent.houseprice.tw/house/b"), false);
-    // 200 且有物件明細 ＝仍在
-    globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ code: 200, webRentCaseGroupingDetail: { simpAddress: "新北市淡水區中山路93號", lat: 25.1696, lng: 121.442 } }) });
+    assert.equal((await probeHpListingOutcome("https://rent.houseprice.tw/house/b")).outcome, "inconclusive");
+
+    globalThis.fetch = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ code: 200, webRentCaseGroupingDetail: { caseId: 16705651, simpAddress: "新北市淡水區中山路93號", lat: 25.1696, lng: 121.442 } }),
+    });
+    assert.equal((await probeHpListingOutcome("https://rent.houseprice.tw/house/16705651")).outcome, "alive");
     assert.equal(await probeHpListingAlive("https://rent.houseprice.tw/house/16705651"), true);
-    // 200 但非 JSON（保守視為仍在）
+
     globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => { throw new Error("not json"); } });
-    assert.equal(await probeHpListingAlive("https://rent.houseprice.tw/house/c"), true);
-    // 503 暫時錯誤（保守視為仍在）
+    assert.equal((await probeHpListingOutcome("https://rent.houseprice.tw/house/c")).outcome, "inconclusive");
+
     globalThis.fetch = async () => ({ ok: false, status: 503, json: async () => ({}) });
-    assert.equal(await probeHpListingAlive("https://rent.houseprice.tw/house/d"), true);
-    // fetch 逾時／擲錯（保守視為仍在）
+    assert.equal((await probeHpListingOutcome("https://rent.houseprice.tw/house/d")).outcome, "inconclusive");
+
     globalThis.fetch = async () => { throw new Error("timeout"); };
-    assert.equal(await probeHpListingAlive("https://rent.houseprice.tw/house/e"), true);
-    // 空網址
-    assert.equal(await probeHpListingAlive(""), true);
+    assert.equal((await probeHpListingOutcome("https://rent.houseprice.tw/house/e")).outcome, "inconclusive");
+
+    assert.equal((await probeHpListingOutcome("")).outcome, "inconclusive");
+    assert.equal(await probeHpListingAlive(""), false);
+
+    assert.equal(inspectHpDetailResponse({ status: 400, json: { msg: "物件已下架" } }).outcome, "gone");
+    assert.equal(inspectHpDetailResponse({ status: 200, text: "請輸入驗證碼 captcha" }).outcome, "inconclusive");
   } finally {
     globalThis.fetch = orig;
   }

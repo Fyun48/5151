@@ -71,6 +71,8 @@ import {
   notifySnapshotFromProfile,
 } from "./searchProfiles.js";
 import { addressVersion, ensureGeoCacheSchema, inferGeoQuality } from "./geoQueue.js";
+import { ensureListingPrepSchema } from "./listingEnrichQueue.js";
+import { classifyAddress, hpDisplayReadySql, isHousepriceListing } from "./listingPrep.js";
 import {
   canUseForRoadDistance,
   commutePrecisionText,
@@ -776,6 +778,7 @@ ensureUserSameHouseSchema(db);
 ensureListingGroupSchema(db);
 ensureSearchProfileSchema(db);
 ensureGeoCacheSchema(db);
+ensureListingPrepSchema(db);
 try { markLegacyNotifiedUnknown(); } catch { /* user_events columns arrive with personal schema */ }
 try {
   const already = db.prepare("SELECT value FROM settings WHERE key = 'profileOnboardedBackfill'").get();
@@ -2266,6 +2269,33 @@ function loadSameHousePeers(row, userId) {
     .map(decorateSameHousePeer);
 }
 
+function housepriceNotDisplayReady(row) {
+  if (!isHousepriceListing(row)) return false;
+  try {
+    const prep = db.prepare("SELECT display_ready FROM listing_prep WHERE post_id = ?").get(row.post_id);
+    return !prep || Number(prep.display_ready) !== 1;
+  } catch {
+    return true;
+  }
+}
+
+function hpPrepFields(row) {
+  if (!isHousepriceListing(row)) return {};
+  try {
+    const prep = db.prepare("SELECT * FROM listing_prep WHERE post_id = ?").get(row.post_id);
+    if (!prep) return { prep_status: "pending", display_ready: false, location_label: "", geo_precision: "unknown", facility_status: "not_fetched" };
+    return {
+      prep_status: prep.prep_status,
+      display_ready: Number(prep.display_ready) === 1,
+      location_label: prep.location_label || "",
+      geo_precision: prep.geo_precision || "unknown",
+      facility_status: prep.facility_status || "",
+    };
+  } catch {
+    return {};
+  }
+}
+
 function decorateListingLite(row, settings, userId) {
   if (!row) return row;
   settings = settings || getSettings();
@@ -2322,6 +2352,7 @@ function decorateListingLite(row, settings, userId) {
       }).furnish_items;
     })(),
     community_linked: Number(row.community_linked) === 1 || Number(row.community_id) > 0,
+    ...hpPrepFields(row),
     source,
     source_label: selfSourceLabel(source),
     mine: uid > 0 && listedBy === uid,
@@ -2378,6 +2409,7 @@ function attachSameHouseRoles(rows, voteUserId) {
     if (!mid || String(row.match_verdict || "") === "no") continue;
     const peer = resolve(mid);
     if (!peer || String(peer.match_verdict || "") === "no") continue;
+    if (housepriceNotDisplayReady(peer) || housepriceNotDisplayReady(row)) continue;
     if (splits.has(votePairKey(row.post_id, mid))) {
       row.same_house_split = true;
       continue;
@@ -2975,6 +3007,7 @@ function listingVisibilityClauses(clauses, params) {
     clauses.push(`COALESCE(source, '591') NOT IN (${disabled.map(() => "?").join(",")})`);
     params.push(...disabled);
   }
+  clauses.push(hpDisplayReadySql("listings"));
 }
 
 export function upsertListing(listing) {
@@ -3865,14 +3898,98 @@ export function listingsNeedingAddressEnrich(limit = 12) {
     .prepare(
       `SELECT post_id, source, source_id, address, url
        FROM listings
-       WHERE IFNULL(hidden, 0) = 0
-         AND IFNULL(offline, 0) = 0
-         AND source IN ('houseprice', '591', 'ddroom', 'rakuya')
-       ORDER BY ${sqlWatchedFirst()}, last_seen_at DESC
+       WHERE IFNULL(offline, 0) = 0
+         AND source IN ('591', 'ddroom', 'rakuya')
+       ORDER BY ${sqlWatchedFirst()}, IFNULL(last_checked_at, first_seen_at) ASC, post_id ASC
        LIMIT 400`,
     )
     .all();
   return rows.filter((row) => addressPrecision(row.address) < 25).slice(0, cap);
+}
+
+export function persistHpListingFields(postId, next, { locationChanged = false, previous = null } = {}) {
+  const row = db.prepare("SELECT * FROM listings WHERE post_id = ?").get(postId);
+  if (!row) return null;
+  const text = (value, fallback = "") => {
+    const raw = value == null || value === "" ? fallback : value;
+    return raw == null ? "" : String(raw);
+  };
+  const address = text(next.address, row.address);
+  const floorName = sanitizeFloorName(next.floor_name) || text(row.floor_name);
+  const tags = typeof next.tags === "string" ? next.tags : JSON.stringify(next.tags || []);
+  const approx = classifyAddress({ ...row, ...next, address }).mark === "approx" ? 1 : 0;
+  const title = text(next.title, row.title);
+  const url = text(next.url, row.url);
+  const price = text(next.price, row.price);
+  const areaName = text(next.area_name, row.area_name);
+  const layout = text(next.layout, row.layout);
+  const kindName = text(next.kind_name, row.kind_name);
+  const communityName = text(next.community_name, row.community_name);
+  const geoSource = text(next.geo_source, row.geo_source);
+  const values = [
+    title, title,
+    url, url,
+    price, price,
+    Number(next.price_num) || 0, Number(next.price_num) || 0,
+    address, address,
+    areaName, areaName,
+    layout, layout,
+    floorName, floorName,
+    kindName, kindName,
+    communityName, communityName,
+    Number(next.community_id) || 0, Number(next.community_id) || 0,
+    Number(next.community_linked) || 0,
+    tags, tags,
+    next.lat ?? null, next.lat ?? null,
+    next.lng ?? null, next.lng ?? null,
+    geoSource, geoSource,
+    approx,
+    locationChanged ? 1 : 0,
+    postId,
+  ];
+  const sqlCore = `
+    UPDATE listings SET
+      title = CASE WHEN IFNULL(?, '') != '' THEN ? ELSE title END,
+      url = CASE WHEN IFNULL(?, '') != '' THEN ? ELSE url END,
+      price = CASE WHEN IFNULL(?, '') != '' THEN ? ELSE price END,
+      price_num = CASE WHEN ? > 0 THEN ? ELSE price_num END,
+      address = CASE WHEN IFNULL(?, '') != '' THEN ? ELSE address END,
+      area_name = CASE WHEN IFNULL(?, '') != '' THEN ? ELSE area_name END,
+      layout = CASE WHEN IFNULL(?, '') != '' THEN ? ELSE layout END,
+      floor_name = CASE WHEN IFNULL(?, '') != '' THEN ? ELSE floor_name END,
+      kind_name = CASE WHEN IFNULL(?, '') != '' THEN ? ELSE kind_name END,
+      community_name = CASE WHEN IFNULL(?, '') != '' THEN ? ELSE community_name END,
+      community_id = CASE WHEN ? > 0 THEN ? ELSE community_id END,
+      community_linked = CASE WHEN ? > 0 THEN 1 ELSE community_linked END,
+      tags = CASE WHEN IFNULL(?, '') != '' THEN ? ELSE tags END,
+      lat = CASE WHEN ? IS NOT NULL THEN ? ELSE lat END,
+      lng = CASE WHEN ? IS NOT NULL THEN ? ELSE lng END,
+      geo_source = CASE WHEN IFNULL(?, '') != '' THEN ? ELSE geo_source END`;
+  try {
+    db.prepare(`${sqlCore},
+      geo_approx = ?,
+      coord_version = CASE WHEN ? THEN IFNULL(coord_version, 0) + 1 ELSE coord_version END
+     WHERE post_id = ?`).run(...values);
+  } catch {
+    db.prepare(`${sqlCore} WHERE post_id = ?`).run(...values.slice(0, -3), postId);
+  }
+  try {
+    const kit = mergeKitColumns(row, listingKitFrom({ ...row, ...next, tags }));
+    db.prepare(`
+      UPDATE listings SET has_natural_gas = ?, has_balcony = ?, furnish_items = ? WHERE post_id = ?
+    `).run(kit.has_natural_gas, kit.has_balcony, JSON.stringify(kit.furnish_items), postId);
+  } catch { /* older fixtures */ }
+  invalidateSearchKeyMemo();
+  return db.prepare("SELECT * FROM listings WHERE post_id = ?").get(postId);
+}
+
+export function invalidateListingLocation(previous, next) {
+  const postId = Number(next?.post_id || previous?.post_id);
+  if (!postId) return;
+  try {
+    db.prepare("DELETE FROM route_jobs WHERE post_id = ?").run(postId);
+  } catch { /* ignore */ }
+  routeCacheMemo = null;
 }
 
 export function setFlags(postId, flags, userId) {
@@ -4340,7 +4457,7 @@ function applyListingFilter(rows, settings = getSettings()) {
   // cached routes and cloning wide rows that these checks already exclude.
   const candidates = rows.filter((row) => passesAttributeFilters(row, settings));
   const prepared = commuteOn ? candidates.map((row) => applyCachedCoords(row, settings)) : candidates;
-  return prepared.filter((row) => passesGeoFilters(row, settings, { strict: false }));
+  return prepared.filter((row) => passesGeoFilters(row, settings, { strict: commuteOn }));
 }
 
 function listingDistrictName(row) {

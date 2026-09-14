@@ -276,17 +276,17 @@ test("attribute filtering before route lookup retains pending routes and rejects
     seed(747001, { lat: 25.01, lng: 121.51, geo_source: "591" });
     seed(747002, { lat: 25.02, lng: 121.51, geo_source: "591", price: "40000元", price_num: 40000 });
     seed(747003, { lat: 25.03, lng: 121.51, geo_source: "591" });
-    seed(747004); // Missing coordinates remain visible in the non-strict list.
+    seed(747004); // Missing coordinates: commute filter must not treat them as a match.
     seed(747005, { title: "排除樣本住宅", lat: 25.05, lng: 121.51, geo_source: "591" });
-    seed(747006, { lat: 25.06, lng: 121.51, geo_source: "591" }); // Route pending.
+    seed(747006, { lat: 25.06, lng: 121.51, geo_source: "591" }); // Route pending: not a match.
     app.setCachedRoute(25.01, 121.51, conf.workLat, conf.workLng, [2]);
     app.setCachedRoute(25.02, 121.51, conf.workLat, conf.workLng, [2]);
     app.setCachedRoute(25.03, 121.51, conf.workLat, conf.workLng, [10]);
     app.setCachedRoute(25.05, 121.51, conf.workLat, conf.workLng, [2]);
     const listed = query({ settings: conf });
-    assert.deepEqual(ids(listed).sort(), [747001, 747004, 747006]);
+    assert.deepEqual(ids(listed).sort(), [747001]);
     assert.equal(listed.listings.find(row => row.post_id === 747001).commute_km, 2);
-    assert.equal(app.stats([], uid, conf).total, 3);
+    assert.equal(app.stats([], uid, conf).total, 1);
   `);
 });
 

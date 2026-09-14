@@ -4510,9 +4510,16 @@
       const balcony = item?.has_balcony === true || Number(item?.has_balcony) === 1;
       const items = (Array.isArray(item?.furnish_items) ? item.furnish_items : [])
         .filter((name) => !/^(天然瓦斯|陽台|共用陽台)$/.test(String(name || "")));
+      const facilityStatus = String(item?.facility_status || "");
       const tip = items.length
         ? items.join("、")
-        : (Number(item?.kit_fetched) === 1 ? "來源未提供設備資訊" : "設備資料待補");
+        : facilityStatus === "absent"
+          ? "來源明確沒有設備"
+          : facilityStatus === "not_provided" || Number(item?.kit_fetched) === 1
+            ? "來源未提供設備資訊"
+            : facilityStatus === "parse_failed"
+              ? "設備資料解析失敗，將再檢查"
+              : "設備資料待補";
       const flags = [
         gas ? `<span class="kit-gas">天然瓦斯</span>` : "",
         balcony ? `<span class="kit-balcony">${item?.balcony_shared ? "共用陽台" : "陽台"}</span>` : "",
@@ -7192,7 +7199,7 @@
             <div class="rent-price">${rentStatusLine(item)}</div>
             <div class="meta">
               ${listingSpecLine(item)}
-              <br>${esc(item.address || "")}${commuteText(item)}${offlineLine(item)}
+              <br>${esc(item.address || "")}${item.location_label ? ` · ${esc(item.location_label)}` : ""}${commuteText(item)}${offlineLine(item)}
               ${item.match_detail && !sameHouseOf(item) ? `<br>比對：${esc(item.match_detail)}${item.match_post_id ? ` · <a href="${listingUrl(item.match_post_id)}" target="_blank" rel="noopener noreferrer">舊刊登 #${item.match_post_id}</a>` : ""}` : ""}
             </div>
             ${kitLine(item, id)}
@@ -7589,7 +7596,9 @@
             }
           }
         }
+        const keepY = options.keep ? (window.scrollY || document.documentElement.scrollTop || 0) : 0;
         renderList(next, lastStats);
+        if (options.keep) window.scrollTo(0, keepY);
         syncCommutePoll();
         reportCommuteFocus();
         if (pendingCommuteWork()) refreshCommuteSnapshot();
@@ -11103,14 +11112,14 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ viewed: true }),
-        }).then(loadList);
+        }).then(() => loadList({ keep: true, silent: true }));
         if (!isGuest && item && !isSelfSource(item)) {
           fetch(`/api/listings/${open}/recheck`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
           })
             .then((r) => r.json())
-            .then((data) => { if (data && data.gone) loadList(); })
+            .then((data) => { if (data && data.gone) loadList({ keep: true, silent: true }); })
             .catch(() => {});
         }
         return;
@@ -11322,13 +11331,13 @@
         <div class="dock-item" data-dock-key="${esc(dockItemKey(item))}">
           <div class="tags">${sourceTagHtml(item)}<span class="tag ${dockEventClass(item)}">${esc(dockEventLabel(item))}</span></div>
           <h3 style="margin:6px 0 4px;font-size:16px">
-            <a href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-dock-open="${item.post_id}">${esc(item.title || "物件")}</a>
+            <a href="/go/${esc(item.post_id)}" target="_blank" rel="noopener noreferrer" data-dock-open="${item.post_id}">${esc(item.title || "物件")}</a>
           </h3>
           <div class="meta">${esc([item.price ? `${item.price} 元/月` : "", item.notify_facts ? String(item.notify_facts).split(" · ").map((bit) => formatFloorDisplay(bit) || (isPlaceholderFloor(bit) ? "" : bit)).filter(Boolean).join(" · ") : [item.address, item.layout, floorDisplay(item), item.area_name, item.housing_type].filter(Boolean).join(" · "), item.extra_fee_text].filter(Boolean).join(" · "))}</div>
           ${dockChangeHtml(item)}
           <div class="row" style="margin-top:8px">
             <button type="button" class="ghost" data-dock-read="${esc(dockItemKey(item))}">已讀</button>
-            <a class="primary" href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-dock-open="${item.post_id}" style="display:inline-flex;align-items:center;text-decoration:none">${esc(openListingCta(item))}</a>
+            <a class="primary" href="/go/${esc(item.post_id)}" target="_blank" rel="noopener noreferrer" data-dock-open="${item.post_id}" style="display:inline-flex;align-items:center;text-decoration:none">${esc(openListingCta(item))}</a>
             <button type="button" class="ghost" data-dock-hide="${item.post_id}">不再顯示</button>
           </div>
         </div>
@@ -11732,7 +11741,13 @@
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ viewed: true }),
-          }).then(loadList);
+          }).then(() => loadList({ keep: true, silent: true }));
+          if (!isGuest) {
+            fetch(`/api/listings/${open}/recheck`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+            }).catch(() => {});
+          }
           dismissDock(open);
         }
       }

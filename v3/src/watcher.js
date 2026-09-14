@@ -54,6 +54,8 @@ import {
   getCachedGeo,
   setCachedGeo,
   isCrawlSourceEnabled,
+  persistHpListingFields,
+  invalidateListingLocation,
   getRakuyaPageCursors,
   saveRakuyaPageCursors,
   sendUserWebPush,
@@ -64,9 +66,11 @@ import { CRAWL_PAGES_591, CRAWL_PAGES_EXTERNAL } from "./crawlPolicy.js";
 import { noteConsecutiveTimeout } from "./crawlWatchdog.js";
 import { fetchCommunityLocation, fetchListingDetail, fetchListings, isListingGoneError, LIST_PAGE_SIZE, mergeFeeRows, probeListingAlive } from "./client591.js";
 import { probeListingAliveBySource } from "./probe.js";
+import { PROBE_ALIVE, PROBE_GONE } from "./probeOutcomes.js";
+import { enqueueListingEnrich, processListingEnrichBatch } from "./listingEnrichQueue.js";
 import { fetchHbCoveringListings } from "./hbhousing.js";
 import { fetchSinyiCoveringListings } from "./sinyi.js";
-import { enrichHpListingFromDetail, fetchHpCoveringListings, fetchHpDetail } from "./houseprice.js";
+import { fetchHpCoveringListings } from "./houseprice.js";
 import { enrichDdListingFromObject, fetchDdCoveringListings, fetchDdObject } from "./ddroom.js";
 import { fetchHfCoveringListings } from "./housefun.js";
 import { fetchRakuyaCoveringListings, fetchRakuyaDetail, repairRakuyaScopes } from "./rakuya.js";
@@ -95,6 +99,26 @@ function nowIso() {
 
 function listingForWatch(postId, userId) {
   return getListing(postId, userId, { sameHouse: false });
+}
+
+export function listingEnrichHelpers() {
+  return {
+    loadListing: (id) => listingForWatch(id),
+    persistHpListingFields,
+    invalidateLocation: invalidateListingLocation,
+    markGone: (id) => markListingOffline(id),
+    markAlive: (id) => markListingAlive(id),
+    isSourceEnabled: isCrawlSourceEnabled,
+    onFirstReady: (listing) => {
+      const age = Date.now() - (Date.parse(listing.first_seen_at || "") || 0);
+      if (age > 2 * 60 * 60 * 1000) return;
+      enqueueListingEvent({ ...listing, display_ready: true }, {
+        type: "new",
+        detail: "5168 資料已補齊，開始展示",
+        created_at: nowIso(),
+      });
+    },
+  };
 }
 
 function listingEventPayload(listing, type, detail, stamp = nowIso()) {
@@ -524,12 +548,12 @@ async function sweepOfflineListings(seenIds, { limit = 20 } = {}) {
     if (!listing) continue;
     checked += 1;
     try {
-      const { supported, alive } = await probeListingAliveBySource(listing);
+      const { supported, outcome, alive } = await probeListingAliveBySource(listing);
       if (!supported) { checked -= 1; continue; }
-      if (alive === false) {
+      if (outcome === PROBE_GONE || alive === false) {
         await markOfflineAndNotify(row.post_id, { wasOnline: !listing.offline });
         gone += 1;
-      } else {
+      } else if (outcome === PROBE_ALIVE || alive === true) {
         markListingAlive(row.post_id);
       }
     } catch {
@@ -546,8 +570,8 @@ async function sweepOfflineListings(seenIds, { limit = 20 } = {}) {
     if (!listing) continue;
     rechecked += 1;
     try {
-      const { supported, alive } = await probeListingAliveBySource(listing);
-      if (supported && alive === true) { restoreListingOnline(row.post_id); restored += 1; }
+      const { supported, outcome, alive } = await probeListingAliveBySource(listing);
+      if (supported && (outcome === PROBE_ALIVE || alive === true)) { restoreListingOnline(row.post_id); restored += 1; }
       else touchListingChecked(row.post_id);
     } catch {
       touchListingChecked(row.post_id);
@@ -749,6 +773,9 @@ export async function runWatch(options = {}) {
       });
       upserts += 1;
       if (!existing) freshIds.push(listing.post_id);
+      if (String(listing.source || "") === "houseprice") {
+        enqueueListingEnrich(db, listingForWatch(listing.post_id) || listing, { via: "scheduler" });
+      }
       if (upserts % 20 === 0) await yieldEventLoop();
 
       if (!existing && prev && (level === "high" || level === "medium")) {
@@ -775,6 +802,8 @@ export async function runWatch(options = {}) {
 
       // 非特別關注的內容微差（地址補齊來回等）不要進通知佇列
       const saved = listingForWatch(listing.post_id) || listing;
+      // 5168 全新房源等資料準備完成再通知，避免舊庫回填大量「全新」
+      if (type === "new" && String(saved.source || listing.source || "") === "houseprice") continue;
       const evt = { type, detail };
       enqueueListingEvent(saved, evt);
     }
@@ -1063,48 +1092,44 @@ export async function backfillAddressGeo(settings = getSettings(), { limit = 12 
 }
 
 export async function backfillIncompleteAddresses({ limit = 8 } = {}) {
-  const rows = listingsNeedingAddressEnrich(limit);
-  if (!rows.length) return { attempted: 0, located: 0 };
-  let attempted = 0;
-  let located = 0;
+  const hp = await processListingEnrichBatch(db, listingEnrichHelpers(), { limit: Math.min(8, limit) });
+  const rows = listingsNeedingAddressEnrich(Math.max(0, limit - (hp.processed || 0)));
+  if (!rows.length && !hp.attempted) return { attempted: 0, located: 0, processed: 0, updated: 0 };
+  let attempted = hp.attempted || 0;
+  let located = hp.located || 0;
+  let updated = hp.updated || 0;
   for (const row of rows) {
     attempted += 1;
     try {
       const current = listingForWatch(row.post_id);
       if (!current) continue;
-      if (row.source === "houseprice") {
-        const detail = await fetchHpDetail(row.source_id || row.url);
-        if (!detail?.address) continue;
-        const next = enrichHpListingFromDetail(current, detail);
-        if (next.address && next.address !== current.address) {
-          upsertListing({ ...next, last_seen_at: current.last_seen_at || nowIso() });
-          located += 1;
-        }
-        continue;
-      }
       if (row.source === "591") {
         const detail = await fetchListingDetail(row.source_id || row.post_id, detailOptions());
         if (!detail?.address) continue;
-        const updated = applyFetchedDetail(current, detail);
-        if (updated?.address && updated.address !== current.address) located += 1;
+        const saved591 = applyFetchedDetail(current, detail);
+        if (saved591?.address && saved591.address !== current.address) {
+          located += 1;
+          updated += 1;
+        }
         continue;
       }
       if (row.source === "ddroom") {
         const object = await fetchDdObject(row.source_id || row.url);
         if (!object) continue;
         const next = enrichDdListingFromObject(current, object);
-        if (next.address && next.address !== current.address) {
+        if (next.address !== current.address || next.floor_name !== current.floor_name || next.lat !== current.lat) {
           upsertListing({ ...next, last_seen_at: current.last_seen_at || nowIso() });
-          located += 1;
+          updated += 1;
+          if (next.lat != null && next.lng != null) located += 1;
         }
         continue;
       }
       if (row.source === "rakuya") {
         const detail = await fetchRakuyaDetail(current);
-        if (!detail?.address) continue;
+        if (!detail) continue;
         const next = {
           ...current,
-          address: detail.address,
+          address: detail.address || current.address,
           floor_name: detail.floorName || current.floor_name,
           area_name: detail.areaName || current.area_name,
           layout: detail.layout || current.layout,
@@ -1115,16 +1140,17 @@ export async function backfillIncompleteAddresses({ limit = 8 } = {}) {
           lat: detail.lat ?? current.lat,
           lng: detail.lng ?? current.lng,
         };
-        if (next.address && next.address !== current.address) {
+        if (next.address !== current.address || next.floor_name !== current.floor_name || next.lat !== current.lat) {
           upsertListing({ ...next, last_seen_at: current.last_seen_at || nowIso() });
-          located += 1;
+          updated += 1;
+          if (next.lat != null && next.lng != null) located += 1;
         }
       }
     } catch {
       // 明細暫時抓不到就下一輪
     }
   }
-  return { attempted, located };
+  return { attempted, located, processed: attempted, updated, hp };
 }
 
 export async function backfillListingMrt({ limit = 20 } = {}) {
