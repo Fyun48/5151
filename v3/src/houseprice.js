@@ -827,7 +827,9 @@ function identitiesMatch(expected, actual) {
   const a = String(expected || "").trim();
   const b = String(actual || "").trim();
   if (!a || !b) return false;
-  return a === b;
+  if (a === b) return true;
+  const main = (value) => String(value).split("_")[0];
+  return Boolean(main(a)) && main(a) === main(b);
 }
 
 export function inspectHpDetailResponse({

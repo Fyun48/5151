@@ -157,7 +157,14 @@ test("fetchHpCoveringListings enriches from the JSON API (address + geo pin)", a
   const batches = await fetchHpCoveringListings(jobs, {
     pages: 1,
     detailGapMs: 0,
-    getHtml: async (url) => (String(url).includes("/ws/detail/") ? detailApiFixture : fixture),
+    getHtml: async (url) => {
+      if (!String(url).includes("/ws/detail/")) return fixture;
+      const key = decodeURIComponent(String(url).split("/ws/detail/")[1] || "").replace(/\/$/, "");
+      const json = JSON.parse(detailApiFixture);
+      json.webRentCaseGroupingDetail.sid = Number(String(key).split("_")[0]) || json.webRentCaseGroupingDetail.sid;
+      json.webRentCaseGroupingDetail.caseId = key;
+      return JSON.stringify(json);
+    },
   });
   const suite = batches[0].listings.find((row) => row.source_id === "16512158_1170048");
   assert.ok(suite);
