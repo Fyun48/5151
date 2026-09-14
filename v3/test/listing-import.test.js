@@ -380,6 +380,68 @@ test("S7 wrong 5168 HTML plus matching JSON does not mix the other listing text"
   db.close();
 });
 
+test("S7 matching 5168 HTML plus matching JSON keeps verified HTML text and photos", async () => {
+  const db = open();
+  addUser(db, { id: 2, email: "vip@example.com", plan: "sponsor" });
+  const url = "https://rent.houseprice.tw/house/16149174";
+  const row = await start5168Import(db, 2, {
+    url,
+    html: readFix("import-5168-public.html"),
+    json: {
+      webRentCaseGroupingDetail: {
+        sid: 16149174,
+        caseName: "近士林捷運整層住家",
+        simpAddress: "台北市士林區大南路88號",
+        fromFloor: "5",
+        toFloor: "5",
+        upFloor: 7,
+      },
+    },
+    images: {
+      "https://static.houseprice.tw/house/demo-1.jpg": jpeg(),
+      "https://rent.houseprice.tw/images/house/demo-2.jpg": jpeg(),
+    },
+  });
+  assert.equal(row.status, "ready_for_review");
+  assert.equal(row.failure_code || "", "");
+  assert.deepEqual(row.photo_errors || [], []);
+  assert.match(row.imported_title, /近士林捷運整層住家/);
+  assert.match(row.imported_text, /近士林夜市，生活機能好。可養寵物。/);
+  assert.match(row.imported_text, /大南路88號/);
+  assert.doesNotMatch(`${row.imported_title}\n${row.imported_text}`, /御陽明|格致路/);
+
+  const listing = db.prepare(
+    "SELECT title, self_body, self_photos, cover FROM listings WHERE post_id=?",
+  ).get(row.listing_id);
+  assert.equal(listing.title, "近士林捷運整層住家");
+  assert.match(listing.self_body, /近士林夜市，生活機能好。可養寵物。/);
+  assert.match(listing.self_body, /大南路88號/);
+  assert.doesNotMatch(`${listing.title}\n${listing.self_body}`, /御陽明|格致路/);
+  const photos = JSON.parse(listing.self_photos || "[]");
+  assert.equal(photos.length, 2);
+  assert.equal(Boolean(listing.cover), true);
+  assert.equal(listing.cover, photos[0]);
+
+  const media = db.prepare(
+    "SELECT id, watermarked, deleted_at FROM member_media WHERE user_id=2 ORDER BY id",
+  ).all();
+  assert.equal(media.length, 2);
+  assert.equal(media.every((item) => Number(item.watermarked) === 1 && !item.deleted_at), true);
+  assert.equal(countActiveMedia(db, 2), 2);
+
+  const imp = db.prepare(
+    "SELECT status, imported_text, media_ids, failure_code, photo_errors FROM listing_import WHERE id=?",
+  ).get(row.id);
+  const mediaIds = JSON.parse(imp.media_ids || "[]");
+  assert.equal(imp.status, "ready_for_review");
+  assert.match(imp.imported_text, /近士林夜市，生活機能好。可養寵物。/);
+  assert.equal(mediaIds.length, 2);
+  assert.deepEqual(mediaIds, media.map((item) => item.id));
+  assert.equal(imp.failure_code || "", "");
+  assert.deepEqual(JSON.parse(imp.photo_errors || "[]"), []);
+  db.close();
+});
+
 test("591 and 5168 fixtures extract title/text/photos and strip contact", () => {
   const a = parse591Listing(readFix("import-591-public.html"), "https://rent.591.com.tw/15801234");
   assert.match(a.title, /信義安和/);

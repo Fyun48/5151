@@ -131,6 +131,21 @@ function listingFieldsFromVerifiedDetail(detail, extras = {}) {
   };
 }
 
+function chooseVerified5168Listing(parsed, jsonDetail) {
+  if (jsonDetail && parsed?.htmlVerified) {
+    const jsonTitle = sanitizeImportedTitle(jsonDetail.title || "");
+    return listingFieldsFromVerifiedDetail(jsonDetail, {
+      title: jsonTitle || parsed.title,
+      text: parsed.text,
+      photos: parsed.photos,
+      htmlVerified: true,
+    });
+  }
+  if (jsonDetail) return listingFieldsFromVerifiedDetail(jsonDetail);
+  if (parsed?.htmlVerified) return parsed;
+  return null;
+}
+
 function identityError(reason) {
   const err = new Error(
     reason === "id_mismatch"
@@ -195,12 +210,9 @@ export async function fetchPublic5168Listing(url, { fetchText } = {}) {
       jsonDetail = null;
     }
   }
-  // 已驗證 JSON 只採用該份可信內容，不與錯誤／未驗證 HTML 混用。
-  const chosen = jsonDetail
-    ? listingFieldsFromVerifiedDetail(jsonDetail)
-    : parsed.htmlVerified
-      ? parsed
-      : null;
+  // HTML、JSON 各自核對請求物件。兩者都相符時保留 JSON 未提供的可信 HTML 描述與照片；
+  // 錯誤或未驗證 HTML 不得參與補充，此時只採用已驗證 JSON。
+  const chosen = chooseVerified5168Listing(parsed, jsonDetail);
   if (!chosen) throw identityError(parsed.identityReason);
   if (!chosen.title && !chosen.text) {
     const err = new Error("無法從 5168 公開頁解析物件內容");
