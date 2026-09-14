@@ -185,8 +185,9 @@ test("housing kind chips stay independent of 特別關注", () => {
   assert.doesNotMatch(html, /data-filter="elevator"/);
   assert.doesNotMatch(html, /data-filter="apartment"/);
   assert.doesNotMatch(html, /data-filter="suite"/);
-  assert.match(html, /const unspecifiedAppearance = !\/大樓\|大廈\|公寓\|華廈\|透天\|別墅\|農舍\/\.test\(formHay\)/);
-  assert.match(html, /const isBuilding = unspecifiedAppearance \|\| \/大\[樓廈\]\/\.test\(formHay\)/);
+  assert.match(html, /const explicitAppearance = \/大樓\|大廈\|公寓\|華廈\|透天\|別墅\|農舍\/\.test\(appearHay\)/);
+  assert.match(html, /const inferredWalkup = !explicitAppearance && \(isWholeFloorHome\(kind\) \|\| suiteShared\) && totalFloors > 0 && totalFloors <= 6/);
+  assert.match(html, /const isBuilding = !inferredWalkup && \(unspecifiedAppearance \|\| \/大\[樓廈\]\/\.test\(formHay\)\)/);
   assert.match(html, /if \(key === "shop"\) return \/店面\|店舖\|店鋪\/\.test\(title\)/);
 });
 
