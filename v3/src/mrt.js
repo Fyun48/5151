@@ -162,5 +162,5 @@ export function formatMrtAccess(row = {}) {
   const name = String(row.mrt_station || row.station || "").trim();
   const walkKm = Number(row.mrt_walk_km ?? row.walk_km);
   if (!name || !isWalkableMrtDistance(walkKm)) return "";
-  return `捷運${name.replace(/站$/, "")}站 · 步行約 ${walkKm} 公里`;
+  return `捷運${name.replace(/站$/, "")}站 約 ${walkKm} 公里`;
 }

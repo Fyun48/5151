@@ -69,7 +69,9 @@ test("formatMrtAccess shows only station and walking kilometers", () => {
     ride_km: 0.6,
     ride_min: 2,
   });
-  assert.equal(text, "捷運南港展覽館站 · 步行約 0.5 公里");
+  assert.equal(text, "捷運南港展覽館站 約 0.5 公里");
+  assert.doesNotMatch(text, /步行/);
+  assert.doesNotMatch(text, /·/);
   assert.doesNotMatch(text, /分/);
   assert.doesNotMatch(text, /騎車/);
   assert.equal(formatMrtAccess({ station: "南港展覽館", walk_km: 1.5 }), "");

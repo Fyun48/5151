@@ -518,7 +518,8 @@ test("MRT is admin-only and guest tour is in the page", () => {
   assert.match(html, /html\.no-session #helpQaBtn/);
   assert.match(html, /這個開關只在後台統一設定/);
   assert.match(html, /function mrtText/);
-  assert.match(html, /步行約 \$\{esc\(walkKm\)\} 公里/);
+  assert.match(html, /\} 約 \$\{esc\(walkKm\)\} 公里/);
+  assert.doesNotMatch(html, /· 步行約 \$\{esc\(walkKm\)\} 公里/);
   assert.doesNotMatch(html, /騎車約/);
   assert.match(html, /walkKm < 1\.5/);
   assert.match(html, /id="guestTour"/);

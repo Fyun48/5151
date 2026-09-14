@@ -4588,7 +4588,7 @@
       const name = String(item.mrt_station || "").trim();
       const walkKm = Number(item.mrt_walk_km);
       if (name && Number.isFinite(walkKm) && walkKm > 0 && walkKm < 1.5) {
-        return `${mrtChip(`捷運${name.replace(/站$/, "")}站`)} · 步行約 ${esc(walkKm)} 公里`;
+        return `${mrtChip(`捷運${name.replace(/站$/, "")}站`)} 約 ${esc(walkKm)} 公里`;
       }
       if (item.mrt_station == null) return "";
       const src = String(item.geo_source || "");
