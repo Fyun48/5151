@@ -233,7 +233,7 @@ import { buildDemoState } from "./demo.js";
 import { backfillAddressGeo, backfillIncompleteAddresses, backfillListingCoords, backfillListingMrt, backfillListingRoutes, flushPendingNotifications, isWatchIntervalPending, listingEnrichHelpers, runWatch } from "./watcher.js";
 import { LIST_PAGE_SIZE, isListingGoneError, probeListingAlive } from "./client591.js";
 import { probeListingAliveBySource } from "./probe.js";
-import { PROBE_ALIVE, PROBE_GONE, PROBE_INCONCLUSIVE } from "./probeOutcomes.js";
+import { PROBE_ALIVE, PROBE_GONE, PROBE_INCONCLUSIVE, classifyListingProbeWrite } from "./probeOutcomes.js";
 import { enqueueListingEnrich, processListingEnrichBatch, requestClickRefresh, wakeListingEnrichWorker, WATCH_PRIORITY } from "./listingEnrichQueue.js";
 import { deliveryConfigFromEnv, startDeliveryLoop } from "./opsDelivery.js";
 import { opsDeliveryDb } from "./db.js";
@@ -2755,17 +2755,18 @@ app.post("/api/listings/:id/recheck", async (req, res) => {
       res.json({ supported: false, gone: false });
       return;
     }
-    if (outcome === PROBE_GONE || alive === false) {
+    const decision = classifyListingProbeWrite({ outcome, alive });
+    if (decision.write === "gone") {
       markListingOffline(postId);
       res.json({ supported: true, gone: true, outcome: PROBE_GONE });
       return;
     }
-    if (outcome === PROBE_ALIVE || alive === true) {
+    if (decision.write === "alive") {
       markListingAlive(postId);
       res.json({ supported: true, gone: false, outcome: PROBE_ALIVE });
       return;
     }
-    res.json({ supported: true, gone: Boolean(Number(listing.offline)), outcome: "inconclusive" });
+    res.json({ supported: true, gone: Boolean(Number(listing.offline)), outcome: PROBE_INCONCLUSIVE });
   } catch (error) {
     res.json({ supported: true, gone: false, outcome: "inconclusive", error: error.message });
   }
@@ -2812,12 +2813,13 @@ app.post("/api/listings/:id/report-gone", async (req, res) => {
       res.json({ supported: false });
       return;
     }
-    if (outcome === PROBE_GONE || alive === false) {
+    const decision = classifyListingProbeWrite({ outcome, alive });
+    if (decision.write === "gone") {
       markListingOffline(postId);
       res.json({ supported: true, gone: true, reported: true, outcome: PROBE_GONE, message: "已記錄此物件下架，7 日內同屋源若在任一平台重現會自動接手。" });
       return;
     }
-    if (outcome === PROBE_ALIVE && alive === true) {
+    if (decision.write === "alive") {
       markListingAlive(postId);
       res.json({ supported: true, gone: false, alive: true, outcome: PROBE_ALIVE, locked: true, until: new Date(Date.now() + REPORT_GONE_LOCK_MS).toISOString(), message: REPORT_GONE_LOCK_MSG });
       return;
@@ -2826,7 +2828,7 @@ app.post("/api/listings/:id/report-gone", async (req, res) => {
       supported: true,
       gone: Boolean(Number(listing.offline)),
       alive: null,
-      outcome: outcome || PROBE_INCONCLUSIVE,
+      outcome: decision.outcome,
       inconclusive: true,
       message: "本次無法確認上下架，已保留上次狀態。",
     });

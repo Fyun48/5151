@@ -27,7 +27,7 @@ test("probeHtmlListingOutcome: 404/410 → gone; 403/429/5xx/timeout → inconcl
 });
 
 test("probeHtmlListingAlive: normal 200 → alive; explicit gone text → gone", async () => {
-  let restore = mockFetch(async () => resp({ status: 200, url: "https://x/detail", body: "<html>正常出租物件 3房2廳</html>" }));
+  let restore = mockFetch(async () => resp({ status: 200, url: "https://x/detail", body: "<html>正常出租物件 3房2廳 19坪 月租28000</html>" }));
   assert.equal(await probeHtmlListingAlive("https://x/detail"), true);
   restore();
   restore = mockFetch(async () => resp({ status: 200, url: "https://x/detail", body: "<html>物件已下架</html>" }));
@@ -43,6 +43,16 @@ test("probeHtmlListingAlive: redirect to a 'gone' marker page → gone (housefun
 
 test("probeHtmlListingOutcome: non-empty SPA shell without listing fields is not alive", async () => {
   const restore = mockFetch(async () => resp({ status: 200, url: "https://x/detail", body: "<html><div id=app>出租中</div></html>" }));
+  assert.equal((await probeHtmlListingOutcome("https://x/detail")).outcome, PROBE_INCONCLUSIVE);
+  restore();
+});
+
+test("probeHtmlListingOutcome: a lone rent word in SPA chrome is not alive", async () => {
+  const restore = mockFetch(async () => resp({
+    status: 200,
+    url: "https://x/detail",
+    body: "<html><nav>租金</nav><div id=app></div></html>",
+  }));
   assert.equal((await probeHtmlListingOutcome("https://x/detail")).outcome, PROBE_INCONCLUSIVE);
   restore();
 });

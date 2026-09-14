@@ -33,7 +33,7 @@ import {
   resetListingEnrichWorkerForTests,
 } from "../src/listingEnrichQueue.js";
 import { inspectHpDetailResponse, parseHpDetailJson } from "../src/houseprice.js";
-import { PROBE_ALIVE, PROBE_GONE, PROBE_INCONCLUSIVE } from "../src/probeOutcomes.js";
+import { PROBE_ALIVE, PROBE_GONE, PROBE_INCONCLUSIVE, classifyListingProbeWrite } from "../src/probeOutcomes.js";
 import { shouldNotify } from "../src/notify.js";
 import { passesGeoFilters } from "../src/floors.js";
 import { keptListShouldRerender, listingContentKey } from "../src/listKeep.js";
@@ -330,7 +330,7 @@ test("server and UI keep click-open non-blocking and expose prep admin stats", (
   assert.match(server, /app\.get\("\/go\/:id"/);
   assert.match(server, /requestClickRefresh\(db, listing, "go"\)/);
   assert.match(server, /listing_updated/);
-  assert.match(server, /outcome === PROBE_ALIVE && alive === true/);
+  assert.match(server, /classifyListingProbeWrite/);
   const html = readFileSync(path.join(dir, "../public/index.html"), "utf8");
   assert.match(html, /window\.open\(listingUrl/);
   assert.match(html, /\/recheck`/);
@@ -408,10 +408,15 @@ test("R2 timeout does not hide an already display-ready listing", async () => {
   await processOneEnrichJob(conn, storeHelpers(store), retry, {
     fetchDetail: async () => ({ outcome: PROBE_INCONCLUSIVE, reason: "timeout", errorClass: "transient" }),
   });
-  const kept = conn.prepare("SELECT display_ready, prep_status, ready_at FROM listing_prep WHERE post_id = ?").get(listing.post_id);
+  const kept = conn.prepare("SELECT display_ready, prep_status, ready_at, withhold_reason FROM listing_prep WHERE post_id = ?").get(listing.post_id);
   assert.equal(kept.display_ready, 1);
   assert.equal(kept.prep_status, "ready");
   assert.ok(kept.ready_at);
+  assert.equal(kept.withhold_reason, "timeout");
+  const failed = conn.prepare("SELECT last_error, last_error_class, next_retry_at FROM listing_enrich_jobs WHERE post_id = ?").get(listing.post_id);
+  assert.equal(failed.last_error, "timeout");
+  assert.equal(failed.last_error_class, "transient");
+  assert.ok(Date.parse(failed.next_retry_at) > Date.now());
 });
 
 test("R3 unready 5168 cannot become group primary or hide a ready 591", () => {
@@ -458,6 +463,7 @@ test("R3 unready 5168 cannot become group primary or hide a ready 591", () => {
     assert.equal(after.totalMatched > 0, true);
     const card = after.listings.find((row) => row.post_id === 591001);
     assert.notEqual(card.same_house_role, "affiliate");
+    assert.notEqual(Number(card.match_peer?.post_id), 2400000882);
     if (card.same_house?.peers) {
       assert.equal(card.same_house.peers.some((row) => row.post_id === 2400000882), false);
     }
@@ -676,6 +682,10 @@ test("R6 confirmed cancelled facilities can replace stored kit", async () => {
   });
   const prep = conn.prepare("SELECT facility_status FROM listing_prep WHERE post_id = ?").get(listing.post_id);
   assert.equal(prep.facility_status, "absent");
+  const saved = store.get(listing.post_id);
+  assert.doesNotMatch(String(saved.tags), /冰箱/);
+  assert.equal(Number(saved.has_natural_gas), 0);
+  assert.deepEqual(saved.furnish_items, []);
 });
 
 test("R7 reclaimed worker cannot overwrite a newer run", async () => {
@@ -740,10 +750,14 @@ test("R10 report-gone keeps inconclusive off markListingAlive", () => {
   const start = server.indexOf('app.post("/api/listings/:id/report-gone"');
   const end = server.indexOf('app.post("/api/listings/:id/reject-match"');
   const body = server.slice(start, end);
-  assert.match(body, /outcome === PROBE_GONE/);
-  assert.match(body, /outcome === PROBE_ALIVE && alive === true/);
+  assert.match(body, /classifyListingProbeWrite/);
   assert.match(body, /inconclusive: true/);
-  assert.doesNotMatch(body, /if \(alive === false\)/);
+  const watcher = readFileSync(path.join(dir, "../src/watcher.js"), "utf8");
+  assert.match(watcher, /classifyListingProbeWrite/);
+  assert.equal(classifyListingProbeWrite({ outcome: PROBE_INCONCLUSIVE, alive: null }).write, "none");
+  assert.equal(classifyListingProbeWrite({ outcome: PROBE_INCONCLUSIVE, alive: true }).write, "none");
+  assert.equal(classifyListingProbeWrite({ outcome: PROBE_ALIVE, alive: true }).write, "alive");
+  assert.equal(classifyListingProbeWrite({ outcome: PROBE_GONE, alive: false }).write, "gone");
 });
 
 test("R11 kept list rerenders when same IDs change content, go offline, or a ready card appears", () => {

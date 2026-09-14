@@ -2473,7 +2473,10 @@ function attachListingPeers(row, settings, voteUserId) {
   const selfId = Number(row.post_id) || 0;
   const sameHousePeers = loadSameHousePeers(row, voteUserId).filter((peer) => (
     peer.match_verdict !== "no" && !splits.has(votePairKey(selfId, peer.post_id))
-  ));
+  )).map((peer) => ({
+    ...peer,
+    display_ready: !housepriceNotDisplayReady(peer),
+  })).filter((peer) => peer.display_ready);
   const matchPostId = Number(row.match_post_id) || 0;
   const splitFromMatch = matchPostId > 0 && splits.has(votePairKey(selfId, matchPostId));
   const matchPeer = splitFromMatch

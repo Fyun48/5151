@@ -66,7 +66,7 @@ import { CRAWL_PAGES_591, CRAWL_PAGES_EXTERNAL } from "./crawlPolicy.js";
 import { noteConsecutiveTimeout } from "./crawlWatchdog.js";
 import { fetchCommunityLocation, fetchListingDetail, fetchListings, isListingGoneError, LIST_PAGE_SIZE, mergeFeeRows, probeListingAlive } from "./client591.js";
 import { probeListingAliveBySource } from "./probe.js";
-import { PROBE_ALIVE, PROBE_GONE } from "./probeOutcomes.js";
+import { classifyListingProbeWrite } from "./probeOutcomes.js";
 import { enqueueListingEnrich, processListingEnrichBatch } from "./listingEnrichQueue.js";
 import { fetchHbCoveringListings } from "./hbhousing.js";
 import { fetchSinyiCoveringListings } from "./sinyi.js";
@@ -550,10 +550,11 @@ async function sweepOfflineListings(seenIds, { limit = 20 } = {}) {
     try {
       const { supported, outcome, alive } = await probeListingAliveBySource(listing);
       if (!supported) { checked -= 1; continue; }
-      if (outcome === PROBE_GONE || alive === false) {
+      const decision = classifyListingProbeWrite({ outcome, alive });
+      if (decision.write === "gone") {
         await markOfflineAndNotify(row.post_id, { wasOnline: !listing.offline });
         gone += 1;
-      } else if (outcome === PROBE_ALIVE || alive === true) {
+      } else if (decision.write === "alive") {
         markListingAlive(row.post_id);
       }
     } catch {
@@ -571,7 +572,7 @@ async function sweepOfflineListings(seenIds, { limit = 20 } = {}) {
     rechecked += 1;
     try {
       const { supported, outcome, alive } = await probeListingAliveBySource(listing);
-      if (supported && (outcome === PROBE_ALIVE || alive === true)) { restoreListingOnline(row.post_id); restored += 1; }
+      if (supported && classifyListingProbeWrite({ outcome, alive }).write === "alive") { restoreListingOnline(row.post_id); restored += 1; }
       else touchListingChecked(row.post_id);
     } catch {
       touchListingChecked(row.post_id);

@@ -71,7 +71,7 @@ function htmlLooksLikeListing(html) {
     /樓層|[0-9]+\/[0-9]+\s*樓/,
     /[市縣].{0,8}[區鄉鎮].{0,20}[路街巷]/,
   ];
-  return signals.filter((re) => re.test(text)).length >= 1;
+  return signals.filter((re) => re.test(text)).length >= 2;
 }
 
 export async function probeHtmlListingAlive(url, opts = {}) {

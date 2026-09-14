@@ -433,7 +433,7 @@ export function listingPrepAdminStats(conn) {
     SELECT
       SUM(CASE WHEN status IN ('queued', 'failed', 'source_limited', 'parse_failed') THEN 1 ELSE 0 END) AS waiting,
       SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running,
-      MIN(CASE WHEN status IN ('queued', 'failed', 'running') THEN created_at END) AS oldest,
+      MIN(CASE WHEN status IN ('queued', 'failed', 'running', 'source_limited', 'parse_failed') THEN created_at END) AS oldest,
       MAX(last_success_at) AS last_success
     FROM listing_enrich_jobs
   `).get() || {};
@@ -536,7 +536,12 @@ export async function processOneEnrichJob(conn, helpers, job, {
         timings: { ...timingBase, outcome: "failed" },
       });
     } else {
-      conn.prepare("UPDATE listing_prep SET checked_at = ? WHERE post_id = ?").run(nowIso(), listing.post_id);
+      conn.prepare(`
+        UPDATE listing_prep
+           SET checked_at = ?,
+               withhold_reason = ?
+         WHERE post_id = ?
+      `).run(nowIso(), inspected.reason || "inconclusive", listing.post_id);
       finishJob(conn, job, {
         status: "failed",
         error: inspected.reason || "inconclusive",
@@ -551,8 +556,25 @@ export async function processOneEnrichJob(conn, helpers, job, {
   helpers.markAlive(listing.post_id);
   const locateStarted = Date.now();
   const enriched = enrichHpListingFromDetail(listing, inspected.detail, { allowFieldFill: true, replaceBetterGeo: true });
-  if (inspected.facilityAbsent === true) enriched.facility_replace = true;
-  else if (inspected.facilityBlock === true) enriched.facility_replace = true;
+  if (inspected.facilityAbsent === true) {
+    const keptTags = (() => {
+      try {
+        return JSON.parse(enriched.tags || "[]").filter((tag) => {
+          const label = String(tag || "").trim();
+          return label && !/冷氣|冰箱|洗衣機|烘衣|電視|網路|家具|家俱|陽台|瓦斯|床|衣櫃|沙發|無設備/.test(label);
+        });
+      } catch {
+        return [];
+      }
+    })();
+    enriched.tags = JSON.stringify(keptTags);
+    enriched.has_natural_gas = 0;
+    enriched.has_balcony = 0;
+    enriched.furnish_items = [];
+    enriched.facility_replace = true;
+  } else if (inspected.facilityBlock === true) {
+    enriched.facility_replace = true;
+  }
   const merged = mergeHpListingFields(listing, enriched, { allowCorrection: true });
   const patched = applyHpListingPatch(conn, helpers, listing, merged.listing, {
     locationChanged: merged.locationChanged,
