@@ -4510,9 +4510,16 @@
       const balcony = item?.has_balcony === true || Number(item?.has_balcony) === 1;
       const items = (Array.isArray(item?.furnish_items) ? item.furnish_items : [])
         .filter((name) => !/^(天然瓦斯|陽台|共用陽台)$/.test(String(name || "")));
+      const facilityStatus = String(item?.facility_status || "");
       const tip = items.length
         ? items.join("、")
-        : (Number(item?.kit_fetched) === 1 ? "來源未提供設備資訊" : "設備資料待補");
+        : facilityStatus === "absent"
+          ? "來源明確沒有設備"
+          : facilityStatus === "not_provided" || Number(item?.kit_fetched) === 1
+            ? "來源未提供設備資訊"
+            : facilityStatus === "parse_failed"
+              ? "設備資料解析失敗，將再檢查"
+              : "設備資料待補";
       const flags = [
         gas ? `<span class="kit-gas">天然瓦斯</span>` : "",
         balcony ? `<span class="kit-balcony">${item?.balcony_shared ? "共用陽台" : "陽台"}</span>` : "",
@@ -5268,6 +5275,50 @@
 
     function listingIdKey(items) {
       return (items || []).map((row) => String(row.post_id)).join(",");
+    }
+
+    function listingGroupContentKey(item) {
+      const peers = item?.same_house?.peers || [];
+      const match = item?.match_peer;
+      return [
+        item?.same_house_role || "",
+        item?.same_house_primary_id || "",
+        match?.post_id || "",
+        match?.price_num ?? "",
+        match?.display_ready ?? "",
+        match?.floor_name || "",
+        match?.offline ?? "",
+        peers.map((peer) => [
+          peer?.post_id,
+          peer?.price_num,
+          peer?.display_ready,
+          peer?.offline,
+          peer?.floor_name || "",
+          peer?.address || "",
+          peer?.layout || "",
+          peer?.area_name || "",
+        ].join(":")).join(","),
+      ].join("/");
+    }
+
+    function listingContentKey(item) {
+      return [
+        item?.post_id,
+        item?.price_num,
+        item?.title,
+        item?.floor_name,
+        item?.address,
+        item?.tags,
+        item?.offline,
+        item?.display_ready,
+        item?.furnish_items,
+        item?.has_natural_gas,
+        listingGroupContentKey(item),
+      ].join("|");
+    }
+
+    function listingsContentKey(items) {
+      return (items || []).map(listingContentKey).join(";;");
     }
 
     function commuteSettingsFingerprint(s = settings) {
@@ -7192,7 +7243,7 @@
             <div class="rent-price">${rentStatusLine(item)}</div>
             <div class="meta">
               ${listingSpecLine(item)}
-              <br>${esc(item.address || "")}${commuteText(item)}${offlineLine(item)}
+              <br>${esc(item.address || "")}${item.location_label ? ` · ${esc(item.location_label)}` : ""}${commuteText(item)}${offlineLine(item)}
               ${item.match_detail && !sameHouseOf(item) ? `<br>比對：${esc(item.match_detail)}${item.match_post_id ? ` · <a href="${listingUrl(item.match_post_id)}" target="_blank" rel="noopener noreferrer">舊刊登 #${item.match_post_id}</a>` : ""}` : ""}
             </div>
             ${kitLine(item, id)}
@@ -7271,7 +7322,7 @@
     function flushQueuedListRefresh() {
       if (!listRefreshQueued || watchNoteBusy()) return;
       listRefreshQueued = false;
-      loadList({ force: true });
+      loadList({ silent: true, keep: true, refreshCards: true });
     }
 
     function flyCardToChip(card, filterKey) {
@@ -7539,12 +7590,20 @@
       if (!options.silent) setListBusy(true, options.busyText || "正在更新列表…");
       const q = $("q").value.trim();
       const append = options.append === true;
+      const loadedCount = listCache.length;
+      const fetchLimit = append
+        ? LIST_PAGE_SIZE
+        : Math.min(500, Math.max(LIST_PAGE_SIZE, options.keep && loadedCount ? loadedCount : 0));
+      const fetchOffset = append ? listOffset : 0;
+      const listAnchorId = options.keep
+        ? (document.activeElement?.closest?.("[data-card]")?.dataset?.card || "")
+        : "";
       if (!append) listOffset = 0;
       const districts = [...viewDistricts].map(encodeURIComponent).join(",");
       const paintStart = performance.now();
       try {
         const res = await fetch(
-          `/api/listings?filter=${encodeURIComponent(filter)}&kind=${encodeURIComponent(kinds.join(","))}&sources=${encodeURIComponent(canFilterSources() ? sources.join(",") : "")}&sort=${encodeURIComponent(sort)}&q=${encodeURIComponent(q)}&limit=${LIST_PAGE_SIZE}&offset=${append ? listOffset : 0}&districts=${districts}`,
+          `/api/listings?filter=${encodeURIComponent(filter)}&kind=${encodeURIComponent(kinds.join(","))}&sources=${encodeURIComponent(canFilterSources() ? sources.join(",") : "")}&sort=${encodeURIComponent(sort)}&q=${encodeURIComponent(q)}&limit=${fetchLimit}&offset=${fetchOffset}&districts=${districts}`,
         );
         const data = await res.json();
         if (gen !== listLoadGen) return;
@@ -7561,11 +7620,12 @@
         listOffset = Number(data.nextOffset) || ((append ? listOffset : 0) + (data.listings || []).length);
         const next = applyListView(append && listCache.length ? [...listCache, ...(data.listings || [])] : data.listings);
         rememberListings(next);
-        if (options.keep && listCache.length) {
+        if (options.keep && listCache.length && !options.refreshCards) {
           const sameIds = listingIdKey(listCache) === listingIdKey(next);
-          if (sameIds || listHasBusyCard()) {
+          const sameContent = listingsContentKey(listCache) === listingsContentKey(next);
+          if ((sameIds && sameContent) || (listHasBusyCard() && sameContent)) {
             const applied = applyCommutePatches(sameIds ? next : data.listings);
-            if (sameIds) {
+            if (sameIds && sameContent) {
               const byId = new Map(next.map((row) => [String(row.post_id), normalizeListingText(row)]));
               listCache = listCache.map((row) => byId.get(String(row.post_id)) || row);
               updateListMeta(listCache, lastStats);
@@ -7577,7 +7637,7 @@
               if (!applied && pendingCommuteWork()) refreshCommuteSnapshot();
               return;
             }
-            if (listHasBusyCard()) {
+            if (listHasBusyCard() && sameContent) {
               updateListMeta(listCache, lastStats);
               paintWatchChip();
               updateBulkBar();
@@ -7589,7 +7649,14 @@
             }
           }
         }
+        const keepY = options.keep ? (window.scrollY || document.documentElement.scrollTop || 0) : 0;
         renderList(next, lastStats);
+        if (options.keep) {
+          window.scrollTo(0, keepY);
+          if (listAnchorId) {
+            document.querySelector(`[data-card="${listAnchorId}"]`)?.focus?.({ preventScroll: true });
+          }
+        }
         syncCommutePoll();
         reportCommuteFocus();
         if (pendingCommuteWork()) refreshCommuteSnapshot();
@@ -11103,14 +11170,14 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ viewed: true }),
-        }).then(loadList);
+        }).then(() => loadList({ keep: true, silent: true }));
         if (!isGuest && item && !isSelfSource(item)) {
           fetch(`/api/listings/${open}/recheck`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
           })
             .then((r) => r.json())
-            .then((data) => { if (data && data.gone) loadList(); })
+            .then((data) => { if (data && (data.gone || data.queued)) loadList({ keep: true, silent: true, refreshCards: true }); })
             .catch(() => {});
         }
         return;
@@ -11322,13 +11389,13 @@
         <div class="dock-item" data-dock-key="${esc(dockItemKey(item))}">
           <div class="tags">${sourceTagHtml(item)}<span class="tag ${dockEventClass(item)}">${esc(dockEventLabel(item))}</span></div>
           <h3 style="margin:6px 0 4px;font-size:16px">
-            <a href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-dock-open="${item.post_id}">${esc(item.title || "物件")}</a>
+            <a href="/go/${esc(item.post_id)}" target="_blank" rel="noopener noreferrer" data-dock-open="${item.post_id}">${esc(item.title || "物件")}</a>
           </h3>
           <div class="meta">${esc([item.price ? `${item.price} 元/月` : "", item.notify_facts ? String(item.notify_facts).split(" · ").map((bit) => formatFloorDisplay(bit) || (isPlaceholderFloor(bit) ? "" : bit)).filter(Boolean).join(" · ") : [item.address, item.layout, floorDisplay(item), item.area_name, item.housing_type].filter(Boolean).join(" · "), item.extra_fee_text].filter(Boolean).join(" · "))}</div>
           ${dockChangeHtml(item)}
           <div class="row" style="margin-top:8px">
             <button type="button" class="ghost" data-dock-read="${esc(dockItemKey(item))}">已讀</button>
-            <a class="primary" href="${listingUrl(item)}" target="_blank" rel="noopener noreferrer" data-dock-open="${item.post_id}" style="display:inline-flex;align-items:center;text-decoration:none">${esc(openListingCta(item))}</a>
+            <a class="primary" href="/go/${esc(item.post_id)}" target="_blank" rel="noopener noreferrer" data-dock-open="${item.post_id}" style="display:inline-flex;align-items:center;text-decoration:none">${esc(openListingCta(item))}</a>
             <button type="button" class="ghost" data-dock-hide="${item.post_id}">不再顯示</button>
           </div>
         </div>
@@ -11732,7 +11799,16 @@
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ viewed: true }),
-          }).then(loadList);
+          }).then(() => loadList({ keep: true, silent: true }));
+          if (!isGuest) {
+            fetch(`/api/listings/${open}/recheck`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+            })
+              .then((r) => r.json())
+              .then((data) => { if (data && (data.gone || data.queued)) loadList({ keep: true, silent: true, refreshCards: true }); })
+              .catch(() => {});
+          }
           dismissDock(open);
         }
       }
@@ -11785,6 +11861,9 @@
               showLocalNotice("吉比租房物件追蹤", `篩選後通知 ${n} 則`);
             }
             loadList({ silent: true, keep: true });
+          }
+          if (data.type === "listing_updated") {
+            loadList({ silent: true, keep: true, refreshCards: true });
           }
           if (data.type === "geo") {
             queueGeoRefresh(data);

@@ -4,6 +4,8 @@ import { listingKitFields } from "./listingKit.js";
 import { decodeEntities } from "./htmlEntities.js";
 import { isExcludedByKeyword } from "./geo.js";
 import { addressHasPrecisePart, addressPrecision, extractTaiwanStreetAddress, isTaiwanMapPin, pickRicherAddress, sourceCommunityLinked } from "./location.js";
+import { shouldAcceptGeoUpdate } from "./geoPrecision.js";
+import { PROBE_ALIVE, PROBE_GONE, PROBE_INCONCLUSIVE } from "./probeOutcomes.js";
 import { feeFieldsFromBlob } from "./listingCost.js";
 import { zipForDistrict } from "./hbhousing.js";
 import { lookupDistrict } from "./regions.js";
@@ -131,6 +133,24 @@ export function normalizeHpFloorName(value) {
 
 export function floorNameLooksComplete(value) {
   return /\d+\s*[\/／]\s*\d+/.test(String(value || ""));
+}
+
+export function rentalFloorProvided(value) {
+  const normalized = normalizeHpFloorName(value) || String(value || "").trim();
+  if (!normalized) return false;
+  if (floorNameLooksComplete(normalized)) return true;
+  return /^(?:B\d+|地下\d*|\d+)(?:F|樓)?$/i.test(normalized.replace(/\s+/g, ""));
+}
+
+export function parseRetryAfterMs(value) {
+  if (value == null || value === "") return 0;
+  const raw = String(value).trim();
+  if (/^\d+(\.\d+)?$/.test(raw)) {
+    return Math.min(24 * 60 * 60 * 1000, Math.max(0, Math.round(Number(raw) * 1000)));
+  }
+  const at = Date.parse(raw);
+  if (Number.isFinite(at)) return Math.min(24 * 60 * 60 * 1000, Math.max(0, at - Date.now()));
+  return 0;
 }
 
 function cleanCommunityName(value) {
@@ -310,7 +330,10 @@ export function parseHpDetailHtml(html) {
     addrMeta ? addrMeta[1] : "",
     extractTaiwanStreetAddress(stripTags(source)),
   ]);
+  const sourceId = extractHpIdFromHtml(source);
   return {
+    source_id: sourceId,
+    id: sourceId,
     floorName,
     community: cleanCommunityName(fields["社區"]),
     communityId: 0,
@@ -375,7 +398,14 @@ export function parseHpDetailJson(payload) {
     str(det.doorplate),
     cityRoad,
   ]);
+  const namesFrom = (list) => (Array.isArray(list) ? list : [])
+    .map((item) => str(item?.name || item?.label || item))
+    .filter(Boolean);
   const conditionTags = Array.isArray(det.conditionTags) ? det.conditionTags.map(str).filter(Boolean) : [];
+  const facilities = namesFrom(det.facilities);
+  const equipments = namesFrom(det.equipments);
+  const devices = namesFrom(det.devices);
+  const facilityRemark = str(det.facilityRemark || det.equipRemark || det.facility_text);
   const tagCommunity = (Array.isArray(det.tags) ? det.tags : [])
     .filter((row) => row && (Number(row.type) === 2 || row.communityId))
     .map((row) => str(row.name))
@@ -389,7 +419,14 @@ export function parseHpDetailJson(payload) {
     communityId,
     href: det.communityUrl || det.community_url || "",
   });
+  const priceNum = num(det.rentPrice ?? det.price ?? det.rent);
+  const title = str(det.caseName || det.title);
+  const sourceId = str(det.sid ?? det.caseId ?? det.id);
   return {
+    title,
+    price_num: priceNum && priceNum > 0 ? priceNum : 0,
+    price: priceNum && priceNum > 0 ? String(priceNum) : "",
+    source_id: sourceId,
     floorName,
     community,
     communityId,
@@ -398,12 +435,16 @@ export function parseHpDetailJson(payload) {
     layout,
     kind: kindFromHpText(usage) || kindFromHpText(buildingType) || kindFromHpText(str(det.caseName)),
     buildingType,
-    parking: str(det.parkingYN) === "Y" ? "有車位" : "",
+    parking: str(det.parkingYN) === "Y" ? "有車位" : (str(det.parkingYN) === "N" ? "無車位" : ""),
     usage,
     address,
     lat: lat != null && lng != null && isTaiwanMapPin(lat, lng) ? lat : null,
     lng: lat != null && lng != null && isTaiwanMapPin(lat, lng) ? lng : null,
     conditionTags,
+    facilities,
+    equipments,
+    devices,
+    facilityRemark,
     fields: {
       現況: usage,
       型態: buildingType,
@@ -418,46 +459,78 @@ export function parseHpDetailJson(payload) {
 }
 
 /** 先試 JSON API 取完整明細（含經緯度），失敗才退回舊 SSR HTML 解析。 */
+function detailMatchesExpectedId(detail, expectedId) {
+  return hpDetailMatchesExpectedId(detail, expectedId);
+}
+
 export async function fetchHpDetail(id, getHtml = defaultGetHtml) {
   const key = hpIdFromUrl(id) || String(id || "").trim();
   if (!key) return null;
   const load = typeof getHtml === "function" ? getHtml : defaultGetHtml;
   try {
     const detail = parseHpDetailJson(await load(hpDetailApiUrl(key)));
-    if (detail && (detail.lat != null || detail.floorName || detail.community || detail.address || detail.layout)) {
+    if (detail && detailMatchesExpectedId(detail, key)
+      && (detail.lat != null || detail.floorName || detail.community || detail.address || detail.layout)) {
       return detail;
     }
-  } catch { /* JSON API 不可用就退回 HTML */ }
+  } catch { /* JSON API 不可用或身分不符就退回 HTML */ }
   try {
-    return parseHpDetailHtml(await load(hpDetailUrl(key)));
+    const htmlDetail = parseHpDetailHtml(await load(hpDetailUrl(key)));
+    if (htmlDetail && detailMatchesExpectedId(htmlDetail, key)) return htmlDetail;
+    return null;
   } catch {
     return null;
   }
 }
 
 /** 用明細頁補齊列表頁缺的樓層／社區／坪數／格局／現況，並重算同屋源指紋 source_key。 */
-export function enrichHpListingFromDetail(row, detail, { regionId, sectionId } = {}) {
+export function enrichHpListingFromDetail(row, detail, { regionId, sectionId, replaceBetterGeo = true } = {}) {
   if (!row || !detail) return row;
+  const expectedId = String(row.source_id || "").trim();
+  if (expectedId && !detailMatchesExpectedId(detail, expectedId)) return row;
   const next = { ...row };
   let changed = false;
   const detailFloor = sanitizeFloorName(detail.floorName);
-  if (detailFloor && (!next.floor_name || (!floorNameLooksComplete(next.floor_name) && floorNameLooksComplete(detailFloor)))) {
+  if (detailFloor && rentalFloorProvided(detailFloor) && (
+    !next.floor_name
+    || !rentalFloorProvided(next.floor_name)
+    || detailFloor !== next.floor_name
+  )) {
     next.floor_name = detailFloor;
+    changed = true;
+  }
+  if (detail.title && detail.title !== next.title) {
+    next.title = detail.title;
+    changed = true;
+  }
+  if (Number(detail.price_num) > 0 && Number(detail.price_num) !== Number(next.price_num)) {
+    next.price_num = Number(detail.price_num);
+    next.price = detail.price || String(detail.price_num);
     changed = true;
   }
   if (!next.area_name && detail.areaName) { next.area_name = detail.areaName; }
   if (!next.layout && detail.layout) { next.layout = detail.layout; }
   if ((!next.kind_name || next.kind_name === "") && detail.kind) { next.kind_name = detail.kind; }
-  // 明細頁地址通常比列表頁完整（含門牌號或巷／弄），精度較高才覆蓋粗略地址。
-  if (detail.address && (!next.address || addressPrecision(detail.address) > addressPrecision(next.address))) {
-    next.address = detail.address;
-    changed = true;
+  // 同精度門牌更正也要寫入；較粗的地址不能覆蓋較精的。
+  if (detail.address && (!next.address || addressPrecision(detail.address) >= addressPrecision(next.address))) {
+    if (detail.address !== next.address) {
+      next.address = detail.address;
+      changed = true;
+    }
   }
-  // 明細頁地圖連結帶精準座標：直接寫入 lat/lng 並標記 geo_source，之後才會被通勤／捷運距離回填採用。
-  if (detail.lat != null && detail.lng != null && (next.lat == null || next.lng == null)) {
-    next.lat = detail.lat;
-    next.lng = detail.lng;
-    next.geo_source = "houseprice";
+  if (detail.lat != null && detail.lng != null && isTaiwanMapPin(detail.lat, detail.lng)) {
+    const incomingGeo = { lat: detail.lat, lng: detail.lng, geo_source: "houseprice", address: detail.address || next.address };
+    if (next.lat == null || next.lng == null || (replaceBetterGeo && shouldAcceptGeoUpdate(next, incomingGeo))) {
+      next.lat = detail.lat;
+      next.lng = detail.lng;
+      next.geo_source = "houseprice";
+      next.clear_coords = false;
+    }
+  } else if (changed && next.address !== row.address) {
+    next.lat = null;
+    next.lng = null;
+    next.geo_source = "";
+    next.clear_coords = true;
   }
   let tags = null;
   const ensureTags = () => {
@@ -487,23 +560,33 @@ export function enrichHpListingFromDetail(row, detail, { regionId, sectionId } =
     const t = ensureTags();
     if (!t.includes(detail.usage)) t.push(detail.usage);
   }
+  const facilityPatch = applyHpFacilityEvidence(next, detail);
   if (Array.isArray(detail.conditionTags)) {
     for (const tag of detail.conditionTags) {
       const label = String(tag || "").trim();
-      if (!label) continue;
+      if (!label || /^無|^沒有/.test(label)) continue;
       const t = ensureTags();
       if (!t.includes(label)) t.push(label);
     }
   }
   if (tags) next.tags = JSON.stringify(tags);
-  Object.assign(next, listingKitFields({
-    title: next.title,
-    tags: next.tags,
-    text: `${next.address || ""} ${detail.usage || ""}`,
-    conditionTags: detail.conditionTags,
-    has_natural_gas: next.has_natural_gas,
-    furnish_items: next.furnish_items,
-  }));
+  if (facilityPatch.replace) {
+    next.tags = facilityPatch.tags;
+    next.has_natural_gas = facilityPatch.has_natural_gas;
+    next.has_balcony = facilityPatch.has_balcony;
+    next.furnish_items = facilityPatch.furnish_items;
+    next.facility_replace = true;
+  } else {
+    Object.assign(next, listingKitFields({
+      title: next.title,
+      tags: next.tags,
+      text: `${next.address || ""} ${detail.usage || ""} ${detail.facilityRemark || ""}`,
+      conditionTags: detail.conditionTags,
+      furnish: [...(detail.facilities || []), ...(detail.equipments || []), ...(detail.devices || [])],
+      has_natural_gas: next.has_natural_gas,
+      furnish_items: next.furnish_items,
+    }));
+  }
   if (changed) {
     next.source_key = listingSourceKey({
       regionId: Number(regionId) || 0,
@@ -591,38 +674,323 @@ export function hpIdFromUrl(url) {
   return /^https?:/i.test(raw) ? "" : raw;
 }
 
-/** 點擊時即時確認 5168 物件是否還在。
- *  內頁已改為 SPA（HTML 殼恆回 200），故改打明細 JSON API /ws/detail/{id} 判斷：
- *  400/404/410 或回應內沒有物件明細（webRentCaseGroupingDetail 空）＝已下架；
- *  其它錯誤（403/429/5xx／逾時／非 JSON）保守不當作下架。 */
-export async function probeHpListingAlive(url) {
-  const id = hpIdFromUrl(url);
-  if (!id) return true;
+const HP_GONE_TEXT = /物件已(下架|成交|出租|刪除|結案)|查無(此|該)?(物件|案件)|案件不存在|物件不存在/;
+const HP_STATUS_GONE = /已下架|已成交|已出租|已刪除|已結案|不存在|offshelf|offline/i;
+const HP_FACILITY_TAG = /冷氣|冰箱|洗衣機|烘衣|電視|網路|家具|家俱|陽台|瓦斯|床|衣櫃|沙發/;
+
+function hpDetailObject(body) {
+  if (!body || typeof body !== "object") return null;
+  const det = body.webRentCaseGroupingDetail || body.webRentCaseGroupingDet || body.caseDetail;
+  return det && typeof det === "object" ? det : null;
+}
+
+function hpDetailIdentity(det) {
+  if (!det || typeof det !== "object") return "";
+  return String(det.sid ?? det.caseId ?? det.id ?? "").trim();
+}
+
+function hpApiGoneSignal(json) {
+  if (!json || typeof json !== "object") return false;
+  const msg = String(json.msg || json.message || json.error || json.errMsg || "");
+  if (HP_GONE_TEXT.test(msg)) return true;
+  const code = String(json.code ?? json.status ?? "");
+  if (/^(404|410)$/.test(code)) return true;
+  return false;
+}
+
+function hpCaseStatusGone(det) {
+  if (!det || typeof det !== "object") return false;
+  if (Number(det.isOff) === 1 || det.offShelf === true || det.isDelete === true) return true;
+  const status = String(det.caseStatus || det.rentStatus || det.status || det.caseState || "");
+  return Boolean(status) && HP_STATUS_GONE.test(status);
+}
+
+const FACILITY_ITEM_RE = /冷氣|冰箱|洗衣機|烘衣|電視|網路|家具|家俱|陽台|瓦斯|床|衣櫃|沙發/;
+const FACILITY_CANCEL_RE = /^(?:無|沒有|不含|不附|未提供)/;
+
+function facilityNameList(list) {
+  return (Array.isArray(list) ? list : [])
+    .map((item) => String(item?.name || item?.label || item || "").trim())
+    .filter(Boolean);
+}
+
+function splitFacilityTokens(text) {
+  return String(text || "")
+    .split(/[,，、;；\s]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+export function parseHpFacilityTokens(det = {}) {
+  const raw = [
+    ...facilityNameList(det.conditionTags),
+    ...facilityNameList(det.facilities),
+    ...facilityNameList(det.equipments),
+    ...facilityNameList(det.devices),
+    ...splitFacilityTokens(det.facilityRemark || det.equipRemark || det.facility_text),
+  ];
+  const present = [];
+  const cancelled = [];
+  for (const label of raw) {
+    if (!label || /無設備|沒有設備|不含設備|不附設備/.test(label)) continue;
+    const cancelledItem = FACILITY_CANCEL_RE.test(label)
+      ? label.replace(FACILITY_CANCEL_RE, "").replace(/^的/, "").trim()
+      : "";
+    if (cancelledItem) {
+      if (!cancelled.includes(cancelledItem)) cancelled.push(cancelledItem);
+      continue;
+    }
+    if (!present.includes(label)) present.push(label);
+  }
+  return { present, cancelled };
+}
+
+export function applyHpFacilityEvidence(listing = {}, detail = {}) {
+  const det = {
+    conditionTags: detail.conditionTags,
+    facilities: detail.facilities,
+    equipments: detail.equipments,
+    devices: detail.devices,
+    facilityRemark: detail.facilityRemark,
+    noFacility: detail.noFacility,
+    noEquip: detail.noEquip,
+  };
+  const evidence = hpFacilityEvidence({ ...detail, ...det });
+  const tokens = parseHpFacilityTokens({ ...detail, ...det });
+  const remark = String(detail.facilityRemark || detail.equipRemark || "");
+  const hasSource = evidence.block || evidence.absent || tokens.present.length || tokens.cancelled.length || remark;
+  if (!hasSource && !evidence.partial) {
+    return { replace: false, partial: false };
+  }
+  const kit = listingKitFields({
+    title: listing.title,
+    text: `${detail.usage || ""} ${remark}`,
+    conditionTags: tokens.present,
+    furnish: tokens.present,
+    facility: tokens.present,
+    tags: tokens.present,
+    has_natural_gas: tokens.cancelled.some((item) => /瓦斯/.test(item)) ? 0 : undefined,
+    gas_state: tokens.cancelled.some((item) => /瓦斯/.test(item)) || tokens.present.some((item) => /天然瓦斯/.test(item))
+      ? "known"
+      : undefined,
+    kit_complete: evidence.block || evidence.absent,
+  });
+  let furnish = [];
+  try { furnish = JSON.parse(kit.furnish_items || "[]"); } catch { furnish = []; }
+  furnish = furnish.filter((item) => !tokens.cancelled.some((gone) => String(item).includes(gone) || gone.includes(item)));
+  const tags = tokens.present.filter((item) => !tokens.cancelled.some((gone) => item.includes(gone) || gone.includes(item)));
+  const gasCancelled = tokens.cancelled.some((item) => /瓦斯/.test(item));
+  const gasPresent = tokens.present.some((item) => /天然瓦斯/.test(item));
+  // 部分回應不得整組替換：可開伙／車位等殘缺欄位不能清掉已確認設備。
+  const replace = !evidence.partial && (evidence.block || evidence.absent || tokens.present.length > 0 || tokens.cancelled.length > 0);
+  return {
+    replace,
+    partial: evidence.partial === true,
+    tags: JSON.stringify(tags),
+    has_natural_gas: gasCancelled ? 0 : (gasPresent ? 1 : Number(kit.has_natural_gas) || 0),
+    has_balcony: Number(kit.has_balcony) || 0,
+    furnish_items: furnish,
+  };
+}
+
+export function hpFacilityEvidence(det) {
+  if (!det || typeof det !== "object") {
+    return { block: false, absent: false, partial: false, parkingOnly: false };
+  }
+  const tags = Array.isArray(det.conditionTags) ? det.conditionTags.map((item) => String(item || "").trim()).filter(Boolean) : null;
+  const extra = []
+    .concat(Array.isArray(det.facilities) ? det.facilities : [])
+    .concat(Array.isArray(det.equipments) ? det.equipments : [])
+    .concat(Array.isArray(det.devices) ? det.devices : []);
+  const remark = String(det.facilityRemark || det.equipRemark || det.facility_text || "");
+  const tokens = parseHpFacilityTokens(det);
+  const explicitNone = det.noFacility === true || det.noEquip === true || /無設備|沒有設備|不含設備|不附設備/.test(remark);
+  const hasFacilityItems = (tags && tags.some((tag) => HP_FACILITY_TAG.test(tag)))
+    || extra.some((item) => HP_FACILITY_TAG.test(String(item?.name || item || "")))
+    || tokens.present.some((item) => FACILITY_ITEM_RE.test(item))
+    || tokens.cancelled.length > 0
+    || FACILITY_ITEM_RE.test(remark);
+  if (explicitNone && !tokens.present.length) return { block: true, absent: true, partial: false, parkingOnly: false };
+  if (hasFacilityItems) return { block: true, absent: false, partial: false, parkingOnly: false };
+  const parking = String(det.parkingYN || "");
+  if (tags && tags.length === 0 && parking === "N") return { block: false, absent: false, partial: true, parkingOnly: true };
+  if (Array.isArray(det.conditionTags) || extra.length) return { block: false, absent: false, partial: true, parkingOnly: parking === "N" };
+  return { block: false, absent: false, partial: false, parkingOnly: false };
+}
+
+function detailLooksRecognizable(det) {
+  if (!det || typeof det !== "object") return false;
+  const keys = Object.keys(det);
+  if (!keys.length) return false;
+  return Boolean(det.caseId || det.sid || det.caseName || det.simpAddress || det.address || det.lat || det.road);
+}
+
+function identitiesMatch(expected, actual) {
+  return hpIdentitiesMatch(expected, actual);
+}
+
+function attrFromTag(tag, name) {
+  const match = String(tag || "").match(new RegExp(`\\b${name}\\s*=\\s*["']([^"']+)["']`, "i"));
+  return match ? decodeEntities(match[1]) : "";
+}
+
+/** 從 HTML 的 canonical／og:url 取出 5168 物件 ID；沒有則空字串。 */
+export function extractHpIdFromHtml(html) {
+  const source = String(html || "");
+  const tags = [];
+  const linkRe = /<link\b[^>]*>/gi;
+  const metaRe = /<meta\b[^>]*>/gi;
+  let match;
+  while ((match = linkRe.exec(source))) {
+    if (/rel\s*=\s*["']canonical["']/i.test(match[0])) tags.push(attrFromTag(match[0], "href"));
+  }
+  while ((match = metaRe.exec(source))) {
+    if (/property\s*=\s*["']og:url["']/i.test(match[0])) tags.push(attrFromTag(match[0], "content"));
+  }
+  for (const href of tags) {
+    const id = hpIdFromUrl(href);
+    if (id) return id;
+  }
+  return "";
+}
+
+export function hpDetailIdentityValue(detail) {
+  if (!detail || typeof detail !== "object") return "";
+  return String(detail.source_id || detail.sid || detail.caseId || detail.id || "").trim();
+}
+
+/** 5168 複合 ID（sid_group）可比對主號；任一邊缺 ID 不能視為相符。 */
+export function hpIdentitiesMatch(expected, actual) {
+  const a = String(expected || "").trim();
+  const b = String(actual || "").trim();
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const main = (value) => String(value).split("_")[0];
+  return Boolean(main(a)) && main(a) === main(b);
+}
+
+export function hpDetailMatchesExpectedId(detail, expectedId) {
+  const expected = String(expectedId || "").trim();
+  if (!expected || !detail) return false;
+  const actual = hpDetailIdentityValue(detail);
+  if (!actual) return false;
+  return hpIdentitiesMatch(expected, actual);
+}
+
+export function inspectHpDetailResponse({
+  status = 0,
+  json = null,
+  text = "",
+  timeout = false,
+  network = false,
+  parse_ms = 0,
+  fetch_ms = null,
+  expectedId = "",
+  retryAfter = "",
+} = {}) {
+  const retryAfterMs = parseRetryAfterMs(retryAfter);
+  const base = { parse_ms, fetch_ms, retryAfterMs };
+  if (timeout || network) return { outcome: PROBE_INCONCLUSIVE, reason: timeout ? "timeout" : "network", errorClass: "transient", ...base };
+  if (status === 404 || status === 410) return { outcome: PROBE_GONE, reason: `http_${status}`, errorClass: "", ...base };
+  if (status === 403 || status === 429 || status >= 500) {
+    return { outcome: PROBE_INCONCLUSIVE, reason: `http_${status}`, errorClass: "transient", ...base };
+  }
+  const challengeBlob = `${text || ""} ${String(json?.msg || "")}`;
+  if (/驗證碼|captcha|cloudflare|just a moment/i.test(challengeBlob)) {
+    return { outcome: PROBE_INCONCLUSIVE, reason: "challenge", errorClass: "transient", ...base };
+  }
+  const det = hpDetailObject(json);
+  const expected = String(expectedId || "").trim();
+  const actualId = hpDetailIdentity(det);
+  if (expected && (detailLooksRecognizable(det) || actualId || hpCaseStatusGone(det))) {
+    if (!actualId) {
+      return { outcome: PROBE_INCONCLUSIVE, reason: "id_missing", errorClass: "parse_failed", ...base };
+    }
+    if (!identitiesMatch(expected, actualId)) {
+      return { outcome: PROBE_INCONCLUSIVE, reason: "id_mismatch", errorClass: "parse_failed", ...base };
+    }
+  }
+  if (status === 400) {
+    if (!det && hpApiGoneSignal(json)) return { outcome: PROBE_GONE, reason: "gone_signal", errorClass: "", ...base };
+    return { outcome: PROBE_INCONCLUSIVE, reason: "http_400", errorClass: "transient", ...base };
+  }
+  if (!det && hpApiGoneSignal(json)) return { outcome: PROBE_GONE, reason: "gone_signal", errorClass: "", ...base };
+  if (hpCaseStatusGone(det)) return { outcome: PROBE_GONE, reason: "case_status_gone", errorClass: "", ...base };
+  if (detailLooksRecognizable(det)) {
+    const detail = parseHpDetailJson(json);
+    const evidence = hpFacilityEvidence(det);
+    return {
+      outcome: PROBE_ALIVE,
+      reason: "detail_ok",
+      detail,
+      facilityBlock: evidence.block,
+      facilityAbsent: evidence.absent,
+      facilityPartial: evidence.partial,
+      facilityEvidence: applyHpFacilityEvidence({}, detail),
+      buildingOnly: Boolean(det.upFloor) && !det.fromFloor && !det.toFloor && !det.floor,
+      ...base,
+    };
+  }
+  if (!json || typeof json !== "object" || !Object.keys(json).length) {
+    return { outcome: PROBE_INCONCLUSIVE, reason: "empty_json", errorClass: "parse_failed", ...base };
+  }
+  return { outcome: PROBE_INCONCLUSIVE, reason: "unexpected_payload", errorClass: "parse_failed", ...base };
+}
+
+export async function fetchHpDetailInspected(id) {
+  const key = hpIdFromUrl(id) || String(id || "").trim();
+  if (!key) return { outcome: PROBE_INCONCLUSIVE, reason: "missing_id", errorClass: "parse_failed" };
+  const started = Date.now();
   let res;
   try {
-    res = await fetch(hpDetailApiUrl(id), {
+    res = await fetch(hpDetailApiUrl(key), {
       headers: {
         "User-Agent": USER_AGENT,
         Accept: "application/json",
-        Referer: hpDetailUrl(id),
+        Referer: hpDetailUrl(key),
       },
       redirect: "follow",
       signal: AbortSignal.timeout(15000),
     });
   } catch {
-    return true;
+    return inspectHpDetailResponse({ timeout: true, fetch_ms: Date.now() - started, parse_ms: 0, expectedId: key });
   }
-  if (res.status === 400 || res.status === 404 || res.status === 410) return false;
-  if (!res.ok) return true;
-  let body;
+  let text = "";
+  let json = null;
+  if (typeof res.text === "function") {
+    try { text = await res.text(); } catch { text = ""; }
+  }
+  const fetchMs = Date.now() - started;
+  const parseStarted = Date.now();
+  if (text) {
+    try { json = JSON.parse(text); } catch { json = null; }
+  } else if (typeof res.json === "function") {
+    try { json = await res.json(); } catch { json = null; }
+  }
+  let retryAfter = "";
   try {
-    body = await res.json();
+    retryAfter = res.headers?.get?.("retry-after") || res.headers?.get?.("Retry-After") || "";
   } catch {
-    return true;
+    retryAfter = "";
   }
-  const det = body?.webRentCaseGroupingDetail || body?.webRentCaseGroupingDet || body?.caseDetail;
-  const hasDetail = det && typeof det === "object" && Object.keys(det).length > 0;
-  return hasDetail ? true : false;
+  return inspectHpDetailResponse({
+    status: res.status,
+    json,
+    text,
+    expectedId: key,
+    retryAfter,
+    fetch_ms: fetchMs,
+    parse_ms: Date.now() - parseStarted,
+  });
+}
+
+export async function probeHpListingOutcome(url) {
+  return fetchHpDetailInspected(url);
+}
+
+export async function probeHpListingAlive(url) {
+  const { outcome } = await probeHpListingOutcome(url);
+  return outcome === PROBE_ALIVE;
 }
 
 async function defaultGetHtml(url) {

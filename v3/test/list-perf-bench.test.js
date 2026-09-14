@@ -46,20 +46,19 @@ function seed(n) {
   }
 }
 
-function measure(label, sameHouse) {
-  const samples = [];
-  let last = { matched: 0, returned: 0 };
-  for (let i = 0; i < 6; i += 1) {
-    const t0 = performance.now();
-    last = listListings({
-      filter: "all",
-      sort: "price_asc",
-      limit: 500,
-      userId: 1,
-      sameHouse,
-    });
-    samples.push(performance.now() - t0);
-  }
+function timeList(sameHouse) {
+  const t0 = performance.now();
+  const last = listListings({
+    filter: "all",
+    sort: "price_asc",
+    limit: 500,
+    userId: 1,
+    sameHouse,
+  });
+  return { ms: performance.now() - t0, last };
+}
+
+function summarize(label, samples, last) {
   return {
     label,
     dataset: listingCount(),
@@ -93,9 +92,41 @@ test("guest public listings cache is cheaper than a cold decorate", () => {
 
 test("listListings benchmark: skip unused same-house decorate on 400 listings", () => {
   seed(400);
-  const before = measure("sameHouse-all", true);
-  const after = measure("sameHouse-needed-only", false);
+  assert.equal(listingCount(), 400);
+
+  // 合成 400 筆沒有 match_post_id／same_house_role，兩條路徑 decorate 工作量相同。
+  // 先暖機再交錯取樣，避免「先量 true、再量 false」把 JIT／GC 波動算成退化。
+  for (let i = 0; i < 4; i += 1) {
+    timeList(true);
+    timeList(false);
+  }
+
+  const beforeSamples = [];
+  const afterSamples = [];
+  let lastBefore = { totalMatched: 0, listings: [] };
+  let lastAfter = { totalMatched: 0, listings: [] };
+  for (let i = 0; i < 15; i += 1) {
+    const beforeRun = timeList(true);
+    const afterRun = timeList(false);
+    beforeSamples.push(beforeRun.ms);
+    afterSamples.push(afterRun.ms);
+    lastBefore = beforeRun.last;
+    lastAfter = afterRun.last;
+  }
+
+  const before = summarize("sameHouse-all", beforeSamples, lastBefore);
+  const after = summarize("sameHouse-needed-only", afterSamples, lastAfter);
+  const paired = afterSamples.map((ms, i) => ms - beforeSamples[i]);
+  const pairedP50 = pct(paired, 0.5);
   assert.equal(before.dataset, 400);
-  assert.ok(after.p50 <= before.p50 + 5, `after p50 ${after.p50} should not regress vs ${before.p50}`);
-  console.log(JSON.stringify({ before, after }, null, 2));
+  assert.equal(after.dataset, 400);
+  assert.ok(
+    after.p50 <= before.p50 + 5,
+    `after p50 ${after.p50} should not regress vs ${before.p50}`,
+  );
+  assert.ok(
+    pairedP50 <= 5,
+    `paired p50 delta ${pairedP50} should not exceed +5ms`,
+  );
+  console.log(JSON.stringify({ before, after, paired_p50_ms: pairedP50 }, null, 2));
 });

@@ -225,7 +225,12 @@ export function shouldNotify(settings, listing, event) {
   const watched = isWatchedListing(listing);
   // 房仲刪掉重刊會變成新 post_id；已判成同屋源時不要當「全新物件」吵
   if (type === "same_source") return watched;
-  if (type === "new") return true;
+  if (type === "new") {
+    if (String(listing?.source || "") === "houseprice" && listing?.display_ready !== true && Number(listing?.display_ready) !== 1) {
+      return false;
+    }
+    return true;
+  }
   // 內容／價格／標題更新：只有特別關注才通知
   if (type === "price_drop" || type === "price_update" || type === "title_update" || type === "fee_update" || type === "update") {
     return watched;

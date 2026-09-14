@@ -10,6 +10,8 @@ import {
 } from "./importSanitize.js";
 import {
   hpDetailApiUrl,
+  hpDetailIdentityValue,
+  hpDetailMatchesExpectedId,
   hpIdFromUrl,
   parseHpDetailHtml,
   parseHpDetailJson,
@@ -76,28 +78,114 @@ function extractText(html) {
   return fromBlocks[0] || sanitizeImportedText(og || desc);
 }
 
-export function parse5168Listing(html, pageUrl = "") {
-  const document = String(html || "");
-  const detail = parseHpDetailHtml(document);
-  const bits = [
-    extractText(document),
+function verifiedHpDetail(detail, expectedId) {
+  if (!detail) return null;
+  const expected = String(expectedId || "").trim();
+  if (!expected) return null;
+  return hpDetailMatchesExpectedId(detail, expected) ? detail : null;
+}
+
+function emptyParsedListing(reason = "id_missing") {
+  return {
+    title: "",
+    description: "",
+    text: "",
+    photos: [],
+    address: "",
+    floor_name: "",
+    community: "",
+    layout: "",
+    area_name: "",
+    kind: "",
+    htmlVerified: false,
+    identityReason: reason,
+  };
+}
+
+function identityReasonFor(detail, expectedId) {
+  const expected = String(expectedId || "").trim();
+  if (!expected) return "id_missing";
+  return hpDetailIdentityValue(detail) ? "id_mismatch" : "id_missing";
+}
+
+function structureSummaryLines(detail) {
+  return [
     detail.community ? `社區 ${detail.community}` : "",
     detail.floorName ? `樓層 ${detail.floorName}` : "",
     detail.address ? `地址 ${detail.address}` : "",
-    detail.layout,
-    detail.areaName,
+    detail.layout || "",
+    detail.areaName || "",
   ].filter(Boolean);
+}
+
+function formatListingText(description, detail) {
+  const descLines = String(description || "").split(/\n+/).map((row) => row.trim()).filter(Boolean);
+  const seen = new Set(descLines);
+  const lines = [...descLines];
+  for (const row of structureSummaryLines(detail)) {
+    if (seen.has(row)) continue;
+    seen.add(row);
+    lines.push(row);
+  }
+  return lines.join("\n");
+}
+
+function listingFieldsFromVerifiedDetail(detail, extras = {}) {
+  const description = extras.description || "";
   return {
-    title: extractTitle(document),
-    text: bits.filter((row, idx, all) => all.indexOf(row) === idx).join("\n"),
-    photos: collectImgUrls(document, pageUrl),
+    title: extras.title || sanitizeImportedTitle(detail.title || ""),
+    description,
+    text: formatListingText(description, detail),
+    photos: extras.photos || [],
     address: detail.address || "",
     floor_name: detail.floorName || "",
     community: detail.community || "",
     layout: detail.layout || "",
     area_name: detail.areaName || "",
     kind: detail.kind || "",
+    htmlVerified: extras.htmlVerified === true,
+    identityReason: "",
   };
+}
+
+function chooseVerified5168Listing(parsed, jsonDetail) {
+  if (jsonDetail && parsed?.htmlVerified) {
+    const jsonTitle = sanitizeImportedTitle(jsonDetail.title || "");
+    return listingFieldsFromVerifiedDetail(jsonDetail, {
+      title: jsonTitle || parsed.title,
+      description: parsed.description,
+      photos: parsed.photos,
+      htmlVerified: true,
+    });
+  }
+  if (jsonDetail) return listingFieldsFromVerifiedDetail(jsonDetail);
+  if (parsed?.htmlVerified) return parsed;
+  return null;
+}
+
+function identityError(reason) {
+  const err = new Error(
+    reason === "id_mismatch"
+      ? "公開頁物件身分與請求不符，無法匯入"
+      : "無法確認公開頁物件身分，無法匯入",
+  );
+  err.status = 400;
+  err.code = reason === "id_mismatch" ? "IDENTITY_MISMATCH" : "IDENTITY_MISSING";
+  return err;
+}
+
+export function parse5168Listing(html, pageUrl = "") {
+  const document = String(html || "");
+  const expectedId = hpIdFromUrl(pageUrl);
+  const parsedDetail = parseHpDetailHtml(document);
+  const detail = verifiedHpDetail(parsedDetail, expectedId);
+  if (!detail) return emptyParsedListing(identityReasonFor(parsedDetail, expectedId));
+  return listingFieldsFromVerifiedDetail(detail, {
+    title: extractTitle(document),
+    description: extractText(document),
+    photos: collectImgUrls(document, pageUrl),
+    htmlVerified: true,
+  });
 }
 
 export function interpret5168Response({ status, text }) {
@@ -130,30 +218,20 @@ export async function fetchPublic5168Listing(url, { fetchText } = {}) {
   }
   const parsed = parse5168Listing(got.text, got.url || url);
   const id = hpIdFromUrl(got.url || url);
-  if (id && typeof fetchText === "function") {
+  let jsonDetail = null;
+  if (id) {
     try {
       const api = await fetchText(hpDetailApiUrl(id));
-      const detail = parseHpDetailJson(api.text || api);
-      if (detail) {
-        parsed.address = detail.address || parsed.address;
-        parsed.floor_name = detail.floorName || parsed.floor_name;
-        parsed.community = detail.community || parsed.community;
-        parsed.layout = detail.layout || parsed.layout;
-        parsed.area_name = detail.areaName || parsed.area_name;
-        parsed.kind = detail.kind || parsed.kind;
-        const extra = [
-          parsed.text,
-          detail.community ? `社區 ${detail.community}` : "",
-          detail.floorName ? `樓層 ${detail.floorName}` : "",
-          detail.address ? `地址 ${detail.address}` : "",
-        ].filter(Boolean);
-        parsed.text = extra.filter((row, idx, all) => all.indexOf(row) === idx).join("\n");
-      }
+      jsonDetail = verifiedHpDetail(parseHpDetailJson(api.text || api), id);
     } catch {
-      // 明細 JSON 失敗仍用公開 HTML
+      jsonDetail = null;
     }
   }
-  if (!parsed.title && !parsed.text) {
+  // HTML、JSON 各自核對請求物件。兩者都相符時保留 JSON 未提供的可信 HTML 描述與照片；
+  // 錯誤或未驗證 HTML 不得參與補充，此時只採用已驗證 JSON。
+  const chosen = chooseVerified5168Listing(parsed, jsonDetail);
+  if (!chosen) throw identityError(parsed.identityReason);
+  if (!chosen.title && !chosen.text) {
     const err = new Error("無法從 5168 公開頁解析物件內容");
     err.status = 400;
     err.code = "PARSE_FAILED";
@@ -161,15 +239,15 @@ export async function fetchPublic5168Listing(url, { fetchText } = {}) {
   }
   return {
     provider: "5168",
-    title: parsed.title,
-    text: parsed.text,
-    photos: parsed.photos.slice(0, FETCH_LIMITS.maxPhotos),
-    address: parsed.address || "",
-    floor_name: parsed.floor_name || "",
-    community: parsed.community || "",
-    layout: parsed.layout || "",
-    area_name: parsed.area_name || "",
-    kind: parsed.kind || "",
+    title: chosen.title,
+    text: chosen.text,
+    photos: (chosen.photos || []).slice(0, FETCH_LIMITS.maxPhotos),
+    address: chosen.address || "",
+    floor_name: chosen.floor_name || "",
+    community: chosen.community || "",
+    layout: chosen.layout || "",
+    area_name: chosen.area_name || "",
+    kind: chosen.kind || "",
     fetched_url: got.url || url,
   };
 }

@@ -9,7 +9,12 @@ import {
   enrichHpListingFromDetail,
   fetchHpCoveringListings,
   fetchHpDetail,
+  extractHpIdFromHtml,
+  hpDetailMatchesExpectedId,
+  hpIdentitiesMatch,
   probeHpListingAlive,
+  probeHpListingOutcome,
+  inspectHpDetailResponse,
   hpDetailApiUrl,
   hpDetailUrl,
   hpListUrl,
@@ -28,6 +33,9 @@ const dir = path.dirname(fileURLToPath(import.meta.url));
 const fixture = readFileSync(path.join(dir, "fixtures/houseprice-list.html"), "utf8");
 const detailFixture = readFileSync(path.join(dir, "fixtures/houseprice-detail.html"), "utf8");
 const detailApiFixture = readFileSync(path.join(dir, "fixtures/houseprice-detail-api.json"), "utf8");
+function detailHtmlFor(id) {
+  return detailFixture.replaceAll("1447592_285879", String(id));
+}
 
 test("5168 maps 591 districts onto list path and reserved ids", () => {
   assert.equal(hpSidForDistrict(1, 8), 8);
@@ -155,7 +163,14 @@ test("fetchHpCoveringListings enriches from the JSON API (address + geo pin)", a
   const batches = await fetchHpCoveringListings(jobs, {
     pages: 1,
     detailGapMs: 0,
-    getHtml: async (url) => (String(url).includes("/ws/detail/") ? detailApiFixture : fixture),
+    getHtml: async (url) => {
+      if (!String(url).includes("/ws/detail/")) return fixture;
+      const key = decodeURIComponent(String(url).split("/ws/detail/")[1] || "").replace(/\/$/, "");
+      const json = JSON.parse(detailApiFixture);
+      json.webRentCaseGroupingDetail.sid = Number(String(key).split("_")[0]) || json.webRentCaseGroupingDetail.sid;
+      json.webRentCaseGroupingDetail.caseId = key;
+      return JSON.stringify(json);
+    },
   });
   const suite = batches[0].listings.find((row) => row.source_id === "16512158_1170048");
   assert.ok(suite);
@@ -177,7 +192,7 @@ test("parseHpDetailHtml falls back to meta description when label spans are abse
 
 test("enrichHpListingFromDetail fills missing floor and community and rebuilds the fingerprint", () => {
   const bare = normalizeHpItem({
-    id: "9999_1", kind: "獨立套房", title: "測試套房", price: 20000,
+    id: "1447592_285879", kind: "獨立套房", title: "測試套房", price: 20000,
     areaName: "7坪", layout: "1房1衛", floorName: "", address: "台北市士林區格致路", community: "",
   }, { regionId: 1, sectionId: 8 });
   assert.equal(bare.floor_name, "");
@@ -198,7 +213,13 @@ test("fetchHpCoveringListings enriches suite listings from the detail page", asy
   const batches = await fetchHpCoveringListings(jobs, {
     pages: 1,
     detailGapMs: 0,
-    getHtml: async (url) => (String(url).includes("/house/") ? detailFixture : fixture),
+    getHtml: async (url) => {
+      if (String(url).includes("/house/")) {
+        const key = decodeURIComponent(String(url).split("/house/")[1] || "").replace(/\/$/, "");
+        return detailHtmlFor(key);
+      }
+      return fixture;
+    },
   });
   const suite = batches[0].listings.find((row) => row.source_id === "16512158_1170048");
   assert.ok(suite);
@@ -218,7 +239,8 @@ test("fetchHpCoveringListings still fetches detail when pin exists but address h
     getHtml: async (url) => {
       if (String(url).includes("/house/") || String(url).includes("/ws/detail/")) {
         detailHits += 1;
-        return detailFixture;
+        const key = decodeURIComponent(String(url).split("/").pop() || "").replace(/\/$/, "");
+        return detailHtmlFor(key);
       }
       return fixture;
     },
@@ -263,6 +285,63 @@ test("5168 list parser keeps 巷弄 and does not stop at 巷", () => {
   assert.equal(parsed.items[0].communityLinked, false);
 });
 
+test("S7 identity contract matches, rejects wrong id, and rejects missing id", () => {
+  assert.equal(hpIdentitiesMatch("16470110", "16470110"), true);
+  assert.equal(hpIdentitiesMatch("1447592_285879", "1447592"), true);
+  assert.equal(hpIdentitiesMatch("16470110", "1447592_285879"), false);
+  assert.equal(hpIdentitiesMatch("16470110", ""), false);
+  assert.equal(hpDetailMatchesExpectedId({ source_id: "16470110" }, "16470110"), true);
+  assert.equal(hpDetailMatchesExpectedId({ sid: "1447592_285879" }, "16470110"), false);
+  assert.equal(hpDetailMatchesExpectedId({ address: "台北市中正區重慶南路1號" }, "16470110"), false);
+  assert.equal(hpDetailMatchesExpectedId({}, "16470110"), false);
+  assert.equal(extractHpIdFromHtml(detailFixture), "1447592_285879");
+});
+
+test("S7 HTML fallback and missing-sid JSON are not adopted for another listing", async () => {
+  const htmlDetail = parseHpDetailHtml(detailFixture);
+  assert.equal(htmlDetail.source_id, "1447592_285879");
+  const skipped = enrichHpListingFromDetail(
+    normalizeHpItem({
+      id: "16470110", kind: "整層住家", title: "天玉街套房", price: 28000,
+      areaName: "19坪", layout: "1房1廳1衛", floorName: "2/4", address: "台北市士林區天玉街9巷", community: "",
+    }, { regionId: 1, sectionId: 8 }),
+    htmlDetail,
+    { regionId: 1, sectionId: 8 },
+  );
+  assert.equal(skipped.floor_name, "2/4");
+  assert.notEqual(skipped.community_name, "御陽明");
+
+  const missingSid = await fetchHpDetail("16470110", async (url) => {
+    if (String(url).includes("/ws/detail/")) {
+      return JSON.stringify({
+        webRentCaseGroupingDetail: {
+          simpAddress: "台北市中正區重慶南路1號",
+          fromFloor: "8",
+          toFloor: "8",
+          upFloor: 12,
+          lat: 25.03,
+          lng: 121.51,
+        },
+      });
+    }
+    return detailFixture;
+  });
+  assert.equal(missingSid, null);
+
+  const wrongHtml = await fetchHpDetail("16470110", async (url) => {
+    if (String(url).includes("/ws/detail/")) throw new Error("json down");
+    return detailFixture;
+  });
+  assert.equal(wrongHtml, null);
+
+  const matchedHtml = await fetchHpDetail("1447592_285879", async (url) => {
+    if (String(url).includes("/ws/detail/")) throw new Error("json down");
+    return detailFixture;
+  });
+  assert.equal(matchedHtml.floorName, "4/4");
+  assert.ok(Number.isFinite(matchedHtml.lat));
+});
+
 test("fetchHpDetail uses the default JSON client when getHtml is omitted", async () => {
   const orig = globalThis.fetch;
   const live = readFileSync(path.join(dir, "fixtures/houseprice-detail-16714357.json"), "utf8");
@@ -292,34 +371,43 @@ test("5168 alley-only detail address upgrades a street-only list address", () =>
   assert.equal(enriched.address, "台北市士林區天玉街9巷");
 });
 
-test("probeHpListingAlive uses the JSON API: 400/404/empty gone, live detail alive", async () => {
+test("probeHpListingOutcome: 404 gone; 400/empty/timeout/503/challenge inconclusive; recognizable detail alive", async () => {
   const orig = globalThis.fetch;
   const calls = [];
   try {
-    // 400（不存在的 case id）＝已下架
     globalThis.fetch = async (u) => { calls.push(String(u)); return { ok: false, status: 400, json: async () => ({}) }; };
+    assert.equal((await probeHpListingOutcome("https://rent.houseprice.tw/house/9999999999")).outcome, "inconclusive");
     assert.equal(await probeHpListingAlive("https://rent.houseprice.tw/house/9999999999"), false);
     assert.match(calls.at(-1), /\/ws\/detail\/9999999999$/);
-    // 404 ＝已下架
+
     globalThis.fetch = async () => ({ ok: false, status: 404, json: async () => ({}) });
-    assert.equal(await probeHpListingAlive("https://rent.houseprice.tw/house/a"), false);
-    // 200 但沒有物件明細 ＝已下架
+    assert.equal((await probeHpListingOutcome("https://rent.houseprice.tw/house/a")).outcome, "gone");
+
     globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ code: 200, webRentCaseGroupingDetail: {} }) });
-    assert.equal(await probeHpListingAlive("https://rent.houseprice.tw/house/b"), false);
-    // 200 且有物件明細 ＝仍在
-    globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ code: 200, webRentCaseGroupingDetail: { simpAddress: "新北市淡水區中山路93號", lat: 25.1696, lng: 121.442 } }) });
+    assert.equal((await probeHpListingOutcome("https://rent.houseprice.tw/house/b")).outcome, "inconclusive");
+
+    globalThis.fetch = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ code: 200, webRentCaseGroupingDetail: { caseId: 16705651, simpAddress: "新北市淡水區中山路93號", lat: 25.1696, lng: 121.442 } }),
+    });
+    assert.equal((await probeHpListingOutcome("https://rent.houseprice.tw/house/16705651")).outcome, "alive");
     assert.equal(await probeHpListingAlive("https://rent.houseprice.tw/house/16705651"), true);
-    // 200 但非 JSON（保守視為仍在）
+
     globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => { throw new Error("not json"); } });
-    assert.equal(await probeHpListingAlive("https://rent.houseprice.tw/house/c"), true);
-    // 503 暫時錯誤（保守視為仍在）
+    assert.equal((await probeHpListingOutcome("https://rent.houseprice.tw/house/c")).outcome, "inconclusive");
+
     globalThis.fetch = async () => ({ ok: false, status: 503, json: async () => ({}) });
-    assert.equal(await probeHpListingAlive("https://rent.houseprice.tw/house/d"), true);
-    // fetch 逾時／擲錯（保守視為仍在）
+    assert.equal((await probeHpListingOutcome("https://rent.houseprice.tw/house/d")).outcome, "inconclusive");
+
     globalThis.fetch = async () => { throw new Error("timeout"); };
-    assert.equal(await probeHpListingAlive("https://rent.houseprice.tw/house/e"), true);
-    // 空網址
-    assert.equal(await probeHpListingAlive(""), true);
+    assert.equal((await probeHpListingOutcome("https://rent.houseprice.tw/house/e")).outcome, "inconclusive");
+
+    assert.equal((await probeHpListingOutcome("")).outcome, "inconclusive");
+    assert.equal(await probeHpListingAlive(""), false);
+
+    assert.equal(inspectHpDetailResponse({ status: 400, json: { msg: "物件已下架" } }).outcome, "gone");
+    assert.equal(inspectHpDetailResponse({ status: 200, text: "請輸入驗證碼 captcha" }).outcome, "inconclusive");
   } finally {
     globalThis.fetch = orig;
   }

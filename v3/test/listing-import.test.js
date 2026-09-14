@@ -29,7 +29,8 @@ import {
 } from "../src/listingImport.js";
 import { canHandleImportUrl, normalizeImportUrl } from "../src/importProviders.js";
 import { parse591Listing } from "../src/import591.js";
-import { parse5168Listing } from "../src/import5168.js";
+import { fetchPublic5168Listing, parse5168Listing } from "../src/import5168.js";
+import { hpDetailApiUrl, hpDetailMatchesExpectedId, hpIdFromUrl } from "../src/houseprice.js";
 import { sanitizeImportedText, sanitizeImportedTitle } from "../src/importSanitize.js";
 import {
   FETCH_LIMITS,
@@ -241,6 +242,263 @@ test("SSRF rejects localhost, private, metadata, raw IP, and bad schemes", async
     /內部或 IP/,
   );
   assert.throws(() => parseHttpsUrl("https://8.8.8.8/"), /IP/);
+});
+
+test("S7 5168 import keeps the requested listing and rejects another or missing sid", async () => {
+  const pageUrl = "https://rent.houseprice.tw/house/16470110";
+  const html = `<html><link rel="canonical" href="${pageUrl}"><h1>天玉街本物件</h1><p>近士林</p></html>`;
+  const fetchText = (payload) => async (url) => {
+    if (String(url).includes("/ws/detail/")) return { status: 200, text: payload, url };
+    return { status: 200, text: html, url: pageUrl };
+  };
+  const wrong = JSON.stringify({
+    webRentCaseGroupingDetail: {
+      sid: 1447592,
+      simpAddress: "台北市中正區重慶南路1號",
+      fromFloor: "8",
+      toFloor: "8",
+      upFloor: 12,
+    },
+  });
+  const missing = JSON.stringify({
+    webRentCaseGroupingDetail: {
+      simpAddress: "台北市中正區重慶南路1號",
+      fromFloor: "8",
+      toFloor: "8",
+      upFloor: 12,
+    },
+  });
+  const matched = JSON.stringify({
+    webRentCaseGroupingDetail: {
+      sid: 16470110,
+      simpAddress: "台北市士林區天玉街9巷3號",
+      fromFloor: "4",
+      toFloor: "4",
+      upFloor: 4,
+    },
+  });
+  assert.equal(hpDetailMatchesExpectedId({ sid: 1447592 }, "16470110"), false);
+  assert.equal(hpDetailMatchesExpectedId({ sid: "" }, "16470110"), false);
+  const rejected = await fetchPublic5168Listing(pageUrl, { fetchText: fetchText(wrong) });
+  assert.doesNotMatch(rejected.address || "", /重慶南路/);
+  const noId = await fetchPublic5168Listing(pageUrl, { fetchText: fetchText(missing) });
+  assert.doesNotMatch(noId.address || "", /重慶南路/);
+  const ok = await fetchPublic5168Listing(pageUrl, { fetchText: fetchText(matched) });
+  assert.match(ok.address, /天玉街9巷3號/);
+  assert.equal(ok.floor_name, "4/4");
+  const htmlWrong = parse5168Listing(
+    `<html><link rel="canonical" href="https://rent.houseprice.tw/house/1447592_285879"><h1>御陽明</h1><p>地址 / 台北市中正區重慶南路1號</p></html>`,
+    pageUrl,
+  );
+  assert.equal(htmlWrong.htmlVerified, false);
+  assert.equal(htmlWrong.title, "");
+  assert.equal(htmlWrong.text, "");
+  assert.equal(htmlWrong.photos.length, 0);
+  assert.doesNotMatch(htmlWrong.address || "", /重慶南路/);
+  assert.match(hpDetailApiUrl("16470110"), /16470110/);
+});
+
+function start5168Import(db, userId, { url, html, json, images = {} }) {
+  const pages = { [url]: { text: html } };
+  const detailUrl = hpDetailApiUrl(hpIdFromUrl(url) || url.replace(/.*\/house\//, ""));
+  if (json !== undefined) pages[detailUrl] = { text: typeof json === "string" ? json : JSON.stringify(json) };
+  return startListingImport(db, userId, { url }, {
+    plan: "sponsor",
+    processor: fakeProcessor,
+    lookupImpl: publicLookup(),
+    fetchImpl: mockFetch(pages, images),
+  });
+}
+
+test("S7 matching 5168 HTML imports a ready_for_review draft", async () => {
+  const db = open();
+  addUser(db, { id: 2, email: "vip@example.com", plan: "sponsor" });
+  const url = "https://rent.houseprice.tw/house/16149174";
+  const row = await start5168Import(db, 2, {
+    url,
+    html: readFix("import-5168-public.html"),
+    images: {
+      "https://static.houseprice.tw/house/demo-1.jpg": jpeg(),
+      "https://rent.houseprice.tw/images/house/demo-2.jpg": jpeg(),
+    },
+  });
+  assert.equal(row.status, "ready_for_review");
+  assert.match(row.imported_title, /設計師自住裝潢/);
+  assert.match(row.imported_text, /士林夜市/);
+  const listing = db.prepare("SELECT title, self_body FROM listings WHERE post_id=?").get(row.listing_id);
+  assert.match(listing.title, /設計師自住裝潢/);
+  assert.match(listing.self_body, /士林夜市/);
+  assert.doesNotMatch(`${listing.title}\n${listing.self_body}`, /御陽明/);
+  db.close();
+});
+
+test("S7 wrong 5168 HTML plus empty JSON does not create a ready_for_review draft", async () => {
+  const db = open();
+  addUser(db, { id: 2, email: "vip@example.com", plan: "sponsor" });
+  const url = "https://rent.houseprice.tw/house/16470110";
+  await assert.rejects(
+    () => start5168Import(db, 2, { url, html: readFix("houseprice-detail.html"), json: {} }),
+    (e) => e.status === 400 && (e.code === "IDENTITY_MISMATCH" || e.code === "IDENTITY_MISSING"),
+  );
+  const imp = db.prepare("SELECT status, listing_id, imported_title, imported_text, failure_code, failure_reason FROM listing_import WHERE user_id=2").get();
+  assert.equal(imp.status, "failed");
+  assert.notEqual(imp.status, "ready_for_review");
+  assert.equal(imp.listing_id, null);
+  assert.equal(imp.imported_title == null || imp.imported_title === "", true);
+  assert.match(String(imp.failure_reason || imp.failure_code), /身分|不符|IDENTITY/i);
+  const drafts = db.prepare("SELECT title, self_body FROM listings WHERE listed_by_user_id=2").all();
+  assert.equal(drafts.length, 0);
+  db.close();
+});
+
+test("S7 wrong 5168 HTML plus matching JSON does not mix the other listing text", async () => {
+  const db = open();
+  addUser(db, { id: 2, email: "vip@example.com", plan: "sponsor" });
+  const url = "https://rent.houseprice.tw/house/16470110";
+  const row = await start5168Import(db, 2, {
+    url,
+    html: readFix("houseprice-detail.html"),
+    json: {
+      webRentCaseGroupingDetail: {
+        sid: 16470110,
+        caseName: "天玉街套房",
+        simpAddress: "台北市士林區天玉街9巷3號",
+        fromFloor: "4",
+        toFloor: "4",
+        upFloor: 4,
+      },
+    },
+  });
+  assert.equal(row.status, "ready_for_review");
+  assert.match(row.imported_title, /天玉街套房/);
+  assert.match(row.imported_text, /天玉街9巷3號/);
+  assert.doesNotMatch(`${row.imported_title}\n${row.imported_text}`, /御陽明|格致路/);
+  const listing = db.prepare("SELECT title, self_body FROM listings WHERE post_id=?").get(row.listing_id);
+  assert.equal(listing.title, "天玉街套房");
+  assert.match(listing.self_body, /天玉街9巷3號/);
+  assert.doesNotMatch(`${listing.title}\n${listing.self_body}`, /御陽明|格致路|200000/);
+  db.close();
+});
+
+test("S7 matching 5168 HTML plus matching JSON keeps verified HTML text and photos", async () => {
+  const db = open();
+  addUser(db, { id: 2, email: "vip@example.com", plan: "sponsor" });
+  const url = "https://rent.houseprice.tw/house/16149174";
+  const row = await start5168Import(db, 2, {
+    url,
+    html: readFix("import-5168-public.html"),
+    json: {
+      webRentCaseGroupingDetail: {
+        sid: 16149174,
+        caseName: "近士林捷運整層住家",
+        simpAddress: "台北市士林區大南路88號",
+        fromFloor: "5",
+        toFloor: "5",
+        upFloor: 7,
+      },
+    },
+    images: {
+      "https://static.houseprice.tw/house/demo-1.jpg": jpeg(),
+      "https://rent.houseprice.tw/images/house/demo-2.jpg": jpeg(),
+    },
+  });
+  assert.equal(row.status, "ready_for_review");
+  assert.equal(row.failure_code || "", "");
+  assert.deepEqual(row.photo_errors || [], []);
+  assert.match(row.imported_title, /近士林捷運整層住家/);
+  assert.match(row.imported_text, /近士林夜市，生活機能好。可養寵物。/);
+  assert.match(row.imported_text, /大南路88號/);
+  assert.doesNotMatch(`${row.imported_title}\n${row.imported_text}`, /御陽明|格致路/);
+
+  const listing = db.prepare(
+    "SELECT title, self_body, self_photos, cover FROM listings WHERE post_id=?",
+  ).get(row.listing_id);
+  assert.equal(listing.title, "近士林捷運整層住家");
+  assert.match(listing.self_body, /近士林夜市，生活機能好。可養寵物。/);
+  assert.match(listing.self_body, /大南路88號/);
+  assert.doesNotMatch(`${listing.title}\n${listing.self_body}`, /御陽明|格致路/);
+  const photos = JSON.parse(listing.self_photos || "[]");
+  assert.equal(photos.length, 2);
+  assert.equal(Boolean(listing.cover), true);
+  assert.equal(listing.cover, photos[0]);
+
+  const media = db.prepare(
+    "SELECT id, watermarked, deleted_at FROM member_media WHERE user_id=2 ORDER BY id",
+  ).all();
+  assert.equal(media.length, 2);
+  assert.equal(media.every((item) => Number(item.watermarked) === 1 && !item.deleted_at), true);
+  assert.equal(countActiveMedia(db, 2), 2);
+
+  const imp = db.prepare(
+    "SELECT status, imported_text, media_ids, failure_code, photo_errors FROM listing_import WHERE id=?",
+  ).get(row.id);
+  const mediaIds = JSON.parse(imp.media_ids || "[]");
+  assert.equal(imp.status, "ready_for_review");
+  assert.match(imp.imported_text, /近士林夜市，生活機能好。可養寵物。/);
+  assert.equal(mediaIds.length, 2);
+  assert.deepEqual(mediaIds, media.map((item) => item.id));
+  assert.equal(imp.failure_code || "", "");
+  assert.deepEqual(JSON.parse(imp.photo_errors || "[]"), []);
+  db.close();
+});
+
+test("S7 matching HTML plus correcting JSON keeps one final structure summary", async () => {
+  const db = open();
+  addUser(db, { id: 2, email: "vip@example.com", plan: "sponsor" });
+  const url = "https://rent.houseprice.tw/house/1447592_285879";
+  const html = readFix("houseprice-detail.html").replace(/<script\b[\s\S]*?<\/script>/gi, "");
+  const parsedHtml = parse5168Listing(html, url);
+  assert.equal(parsedHtml.htmlVerified, true);
+  assert.equal(parsedHtml.floor_name, "4/4");
+  assert.match(parsedHtml.address, /格致路/);
+  assert.doesNotMatch(parsedHtml.description || "", /樓層 4\/4/);
+
+  const row = await start5168Import(db, 2, {
+    url,
+    html,
+    json: {
+      webRentCaseGroupingDetail: {
+        sid: "1447592_285879",
+        caseName: "御陽明樓層更正",
+        simpAddress: "台北市士林區格致路99號",
+        fromFloor: "6",
+        toFloor: "6",
+        upFloor: 8,
+        rm: 3,
+        livingRm: 1,
+        bathRm: 2,
+        buildPin: 50,
+      },
+    },
+  });
+  assert.equal(row.status, "ready_for_review");
+  assert.equal(row.failure_code || "", "");
+  assert.deepEqual(row.photo_errors || [], []);
+  assert.match(row.imported_title, /御陽明樓層更正/);
+  assert.match(row.imported_text, /樓層 6\/8/);
+  assert.match(row.imported_text, /地址 台北市士林區格致路99號/);
+  assert.match(row.imported_text, /3房1廳2衛/);
+  assert.match(row.imported_text, /50坪/);
+  assert.doesNotMatch(row.imported_text, /樓層 4\/4/);
+  assert.doesNotMatch(row.imported_text, /4房2廳4衛2陽台/);
+  assert.doesNotMatch(row.imported_text, /64\.73坪/);
+  assert.equal((row.imported_text.match(/^樓層 /gm) || []).length, 1);
+  assert.equal((row.imported_text.match(/^地址 /gm) || []).length, 1);
+
+  const listing = db.prepare(
+    "SELECT title, self_body, address, floor_name, layout, area_name FROM listings WHERE post_id=?",
+  ).get(row.listing_id);
+  assert.equal(listing.title, "御陽明樓層更正");
+  assert.equal(listing.floor_name, "6/8");
+  assert.equal(listing.address, "台北市士林區格致路99號");
+  assert.equal(listing.layout, "3房1廳2衛");
+  assert.equal(listing.area_name, "50坪");
+  assert.equal(listing.self_body, row.imported_text);
+  assert.match(listing.self_body, /樓層 6\/8/);
+  assert.doesNotMatch(listing.self_body, /樓層 4\/4|4房2廳4衛2陽台|64\.73坪/);
+  assert.equal((listing.self_body.match(/^樓層 /gm) || []).length, 1);
+  assert.equal((listing.self_body.match(/^地址 /gm) || []).length, 1);
+  db.close();
 });
 
 test("591 and 5168 fixtures extract title/text/photos and strip contact", () => {

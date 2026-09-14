@@ -492,6 +492,11 @@
           <div class="admin-metric-grid" id="overviewInbox"></div>
         </section>
         <section class="card">
+          <h3>5168 資料準備</h3>
+          <p class="hint">待補數量、最久等待、最近成功與失敗原因。時間為本機後台處理紀錄，不是外站實測達標。</p>
+          <div class="admin-metric-grid" id="overviewListingPrep"></div>
+        </section>
+        <section class="card">
           <h3>快速操作</h3>
           <div class="row">
             <a class="primary" href="#inventory/sources">房源來源</a>
@@ -3115,6 +3120,27 @@
           metric("reconciliation 待處理", L.pendingReconcile || 0),
         ].join("");
       }
+      const prep = data.listingPrep || {};
+      if ($("overviewListingPrep")) {
+        const oldest = prep.oldestWaitAt ? formatTime(prep.oldestWaitAt) : "無";
+        const lastOk = prep.lastSuccessAt ? formatTime(prep.lastSuccessAt) : "尚無";
+        const err = (prep.errors || []).map((row) => `${row.reason || "unknown"} ${row.n}`).join("、") || "無";
+        const stages = prep.metrics?.stages || {};
+        const ready = stages.first_ready_ms || stages.ready_ms || {};
+        const route = stages.route_ms || {};
+        const fmt = (row) => (row?.n ? `${row.p50} / ${row.p95} ms（n=${row.n}）` : "尚未量測");
+        $("overviewListingPrep").innerHTML = [
+          metric("待補展示", prep.pendingPrep || 0),
+          metric("已可展示", prep.readyPrep || 0),
+          metric("等待中工作", prep.waitingJobs || 0),
+          metric("執行中工作", prep.runningJobs || 0),
+          metric("最久等待", oldest),
+          metric("最近成功", lastOk),
+          metric("失敗原因", err),
+          metric("首次可展示 n／p50／p95", ready.n ? `${ready.n}／${ready.p50}／${ready.p95} ms` : "尚未量測"),
+          metric("路線量測", route.n ? fmt(route) : "尚未量測"),
+        ].join("");
+      }
       if ($("overviewSources")) {
         $("overviewSources").innerHTML = (data.sources || []).map((row) => `
           <div class="row" style="justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line)">
@@ -3183,6 +3209,9 @@
         metric("缺費用資料", data.missingFees || 0),
         metric("缺設備資料", data.missingFurnish || 0),
         metric("疑似重複", data.suspectedDuplicate || 0),
+        metric("5168 待補展示", data.listingPrep?.pendingPrep || 0),
+        metric("5168 最久等待", data.listingPrep?.oldestWaitAt ? formatTime(data.listingPrep.oldestWaitAt) : "無"),
+        metric("5168 最近成功", data.listingPrep?.lastSuccessAt ? formatTime(data.listingPrep.lastSuccessAt) : "尚無"),
       ].join("");
     }
     async function loadAudit() {

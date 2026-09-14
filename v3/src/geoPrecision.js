@@ -215,11 +215,16 @@ export function betterLocationClass(nextClass, prevClass) {
 export function shouldAcceptGeoUpdate(prev = {}, next = {}) {
   const nextCls = resolveLocationClass(next);
   const prevCls = resolveLocationClass(prev);
+  const nextHasLocalVer = Object.prototype.hasOwnProperty.call(next, "coord_version")
+    || Object.prototype.hasOwnProperty.call(next, "address_version");
   const nextVer = Number(next.coord_version || next.address_version || 0);
   const prevVer = Number(prev.coord_version || prev.address_version || 0);
-  if (nextVer && prevVer && nextVer < prevVer) return false;
+  if (nextHasLocalVer && nextVer && prevVer && nextVer < prevVer) return false;
   if (betterLocationClass(nextCls, prevCls)) return true;
-  if (nextCls === prevCls && nextVer >= prevVer) return true;
+  if (nextCls === prevCls) {
+    if (!nextHasLocalVer) return true;
+    return nextVer >= prevVer;
+  }
   return false;
 }
 
