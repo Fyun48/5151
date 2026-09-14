@@ -10,6 +10,7 @@ import {
 } from "./importSanitize.js";
 import {
   hpDetailApiUrl,
+  hpDetailMatchesExpectedId,
   hpIdFromUrl,
   parseHpDetailHtml,
   parseHpDetailJson,
@@ -76,9 +77,18 @@ function extractText(html) {
   return fromBlocks[0] || sanitizeImportedText(og || desc);
 }
 
+function verifiedHpDetail(detail, expectedId) {
+  if (!detail) return null;
+  const expected = String(expectedId || "").trim();
+  if (!expected) return null;
+  return hpDetailMatchesExpectedId(detail, expected) ? detail : null;
+}
+
 export function parse5168Listing(html, pageUrl = "") {
   const document = String(html || "");
-  const detail = parseHpDetailHtml(document);
+  const expectedId = hpIdFromUrl(pageUrl);
+  const parsedDetail = parseHpDetailHtml(document);
+  const detail = verifiedHpDetail(parsedDetail, expectedId) || {};
   const bits = [
     extractText(document),
     detail.community ? `社區 ${detail.community}` : "",
@@ -133,7 +143,7 @@ export async function fetchPublic5168Listing(url, { fetchText } = {}) {
   if (id && typeof fetchText === "function") {
     try {
       const api = await fetchText(hpDetailApiUrl(id));
-      const detail = parseHpDetailJson(api.text || api);
+      const detail = verifiedHpDetail(parseHpDetailJson(api.text || api), id);
       if (detail) {
         parsed.address = detail.address || parsed.address;
         parsed.floor_name = detail.floorName || parsed.floor_name;

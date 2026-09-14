@@ -9,6 +9,9 @@ import {
   enrichHpListingFromDetail,
   fetchHpCoveringListings,
   fetchHpDetail,
+  extractHpIdFromHtml,
+  hpDetailMatchesExpectedId,
+  hpIdentitiesMatch,
   probeHpListingAlive,
   probeHpListingOutcome,
   inspectHpDetailResponse,
@@ -30,6 +33,9 @@ const dir = path.dirname(fileURLToPath(import.meta.url));
 const fixture = readFileSync(path.join(dir, "fixtures/houseprice-list.html"), "utf8");
 const detailFixture = readFileSync(path.join(dir, "fixtures/houseprice-detail.html"), "utf8");
 const detailApiFixture = readFileSync(path.join(dir, "fixtures/houseprice-detail-api.json"), "utf8");
+function detailHtmlFor(id) {
+  return detailFixture.replaceAll("1447592_285879", String(id));
+}
 
 test("5168 maps 591 districts onto list path and reserved ids", () => {
   assert.equal(hpSidForDistrict(1, 8), 8);
@@ -186,7 +192,7 @@ test("parseHpDetailHtml falls back to meta description when label spans are abse
 
 test("enrichHpListingFromDetail fills missing floor and community and rebuilds the fingerprint", () => {
   const bare = normalizeHpItem({
-    id: "9999_1", kind: "獨立套房", title: "測試套房", price: 20000,
+    id: "1447592_285879", kind: "獨立套房", title: "測試套房", price: 20000,
     areaName: "7坪", layout: "1房1衛", floorName: "", address: "台北市士林區格致路", community: "",
   }, { regionId: 1, sectionId: 8 });
   assert.equal(bare.floor_name, "");
@@ -207,7 +213,13 @@ test("fetchHpCoveringListings enriches suite listings from the detail page", asy
   const batches = await fetchHpCoveringListings(jobs, {
     pages: 1,
     detailGapMs: 0,
-    getHtml: async (url) => (String(url).includes("/house/") ? detailFixture : fixture),
+    getHtml: async (url) => {
+      if (String(url).includes("/house/")) {
+        const key = decodeURIComponent(String(url).split("/house/")[1] || "").replace(/\/$/, "");
+        return detailHtmlFor(key);
+      }
+      return fixture;
+    },
   });
   const suite = batches[0].listings.find((row) => row.source_id === "16512158_1170048");
   assert.ok(suite);
@@ -227,7 +239,8 @@ test("fetchHpCoveringListings still fetches detail when pin exists but address h
     getHtml: async (url) => {
       if (String(url).includes("/house/") || String(url).includes("/ws/detail/")) {
         detailHits += 1;
-        return detailFixture;
+        const key = decodeURIComponent(String(url).split("/").pop() || "").replace(/\/$/, "");
+        return detailHtmlFor(key);
       }
       return fixture;
     },
@@ -270,6 +283,63 @@ test("5168 list parser keeps 巷弄 and does not stop at 巷", () => {
   const parsed = parseHpListHtml(html);
   assert.equal(parsed.items[0].address, "台北市士林區中山北路六段172巷22弄");
   assert.equal(parsed.items[0].communityLinked, false);
+});
+
+test("S7 identity contract matches, rejects wrong id, and rejects missing id", () => {
+  assert.equal(hpIdentitiesMatch("16470110", "16470110"), true);
+  assert.equal(hpIdentitiesMatch("1447592_285879", "1447592"), true);
+  assert.equal(hpIdentitiesMatch("16470110", "1447592_285879"), false);
+  assert.equal(hpIdentitiesMatch("16470110", ""), false);
+  assert.equal(hpDetailMatchesExpectedId({ source_id: "16470110" }, "16470110"), true);
+  assert.equal(hpDetailMatchesExpectedId({ sid: "1447592_285879" }, "16470110"), false);
+  assert.equal(hpDetailMatchesExpectedId({ address: "台北市中正區重慶南路1號" }, "16470110"), false);
+  assert.equal(hpDetailMatchesExpectedId({}, "16470110"), false);
+  assert.equal(extractHpIdFromHtml(detailFixture), "1447592_285879");
+});
+
+test("S7 HTML fallback and missing-sid JSON are not adopted for another listing", async () => {
+  const htmlDetail = parseHpDetailHtml(detailFixture);
+  assert.equal(htmlDetail.source_id, "1447592_285879");
+  const skipped = enrichHpListingFromDetail(
+    normalizeHpItem({
+      id: "16470110", kind: "整層住家", title: "天玉街套房", price: 28000,
+      areaName: "19坪", layout: "1房1廳1衛", floorName: "2/4", address: "台北市士林區天玉街9巷", community: "",
+    }, { regionId: 1, sectionId: 8 }),
+    htmlDetail,
+    { regionId: 1, sectionId: 8 },
+  );
+  assert.equal(skipped.floor_name, "2/4");
+  assert.notEqual(skipped.community_name, "御陽明");
+
+  const missingSid = await fetchHpDetail("16470110", async (url) => {
+    if (String(url).includes("/ws/detail/")) {
+      return JSON.stringify({
+        webRentCaseGroupingDetail: {
+          simpAddress: "台北市中正區重慶南路1號",
+          fromFloor: "8",
+          toFloor: "8",
+          upFloor: 12,
+          lat: 25.03,
+          lng: 121.51,
+        },
+      });
+    }
+    return detailFixture;
+  });
+  assert.equal(missingSid, null);
+
+  const wrongHtml = await fetchHpDetail("16470110", async (url) => {
+    if (String(url).includes("/ws/detail/")) throw new Error("json down");
+    return detailFixture;
+  });
+  assert.equal(wrongHtml, null);
+
+  const matchedHtml = await fetchHpDetail("1447592_285879", async (url) => {
+    if (String(url).includes("/ws/detail/")) throw new Error("json down");
+    return detailFixture;
+  });
+  assert.equal(matchedHtml.floorName, "4/4");
+  assert.ok(Number.isFinite(matchedHtml.lat));
 });
 
 test("fetchHpDetail uses the default JSON client when getHtml is omitted", async () => {

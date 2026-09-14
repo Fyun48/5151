@@ -61,15 +61,68 @@ export async function probeHtmlListingOutcome(url, { redirectGoneMarkers = [], r
   return { outcome: PROBE_ALIVE, reason: "html_ok" };
 }
 
+function findMatchingClose(html, from, tagName) {
+  const open = new RegExp(`<${tagName}\\b[^>]*>`, "gi");
+  const close = new RegExp(`</${tagName}\\s*>`, "gi");
+  let depth = 1;
+  let i = from;
+  while (i < html.length && depth > 0) {
+    open.lastIndex = i;
+    close.lastIndex = i;
+    const opened = open.exec(html);
+    const closed = close.exec(html);
+    if (!closed) return html.length;
+    if (opened && opened.index < closed.index) {
+      depth += 1;
+      i = opened.index + opened[0].length;
+    } else {
+      depth -= 1;
+      i = closed.index + closed[0].length;
+    }
+  }
+  return i;
+}
+
+function firstElementInner(html, tagName) {
+  const open = new RegExp(`<${tagName}\\b[^>]*>`, "i");
+  const match = String(html || "").match(open);
+  if (!match) return null;
+  const start = match.index + match[0].length;
+  const end = findMatchingClose(html, start, tagName);
+  return String(html).slice(start, end);
+}
+
+function stripClassedSubtrees(html, classRe) {
+  let text = String(html || "");
+  const openRe = /<(section|div|aside|article)(\s[^>]*)?>/gi;
+  for (let guard = 0; guard < 40; guard += 1) {
+    openRe.lastIndex = 0;
+    let found = null;
+    let match;
+    while ((match = openRe.exec(text))) {
+      if (classRe.test(match[2] || "")) {
+        found = { start: match.index, tag: match[1], after: match.index + match[0].length };
+        break;
+      }
+    }
+    if (!found) break;
+    const end = findMatchingClose(text, found.after, found.tag);
+    text = `${text.slice(0, found.start)} ${text.slice(end)}`;
+  }
+  return text;
+}
+
 function listingMainText(html) {
-  return String(html || "")
+  const source = String(html || "");
+  const mainInner = firstElementInner(source, "main");
+  const body = mainInner != null ? mainInner : source;
+  return stripClassedSubtrees(body, /\b(?:recommend|related|search|suggest)\b/i)
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
     .replace(/<template[\s\S]*?<\/template>/gi, " ")
     .replace(/<form[\s\S]*?<\/form>/gi, " ")
     .replace(/<(aside|nav|footer|header)[\s\S]*?<\/\1>/gi, " ")
     .replace(/<!--[\s\S]*?-->/g, " ")
-    .replace(/<(?:section|div)[^>]*(?:recommend|related|search|suggest)[^>]*>[\s\S]*?<\/(?:section|div)>/gi, " ")
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim();

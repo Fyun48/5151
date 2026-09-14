@@ -47,6 +47,33 @@ test("probeHtmlListingOutcome: non-empty SPA shell without listing fields is not
   restore();
 });
 
+test("S8 nested recommend card is not treated as the main listing", async () => {
+  const restore = mockFetch(async () => resp({
+    status: 200,
+    url: "https://x/detail",
+    body: `<html><main></main><section class="recommend"><div class="heading">推薦</div><article><p>3房、19坪、月租28000</p></article></section></html>`,
+  }));
+  assert.equal((await probeHtmlListingOutcome("https://x/detail")).outcome, PROBE_INCONCLUSIVE);
+  restore();
+});
+
+test("S8 empty template remains inconclusive and a normal main listing stays alive", async () => {
+  let restore = mockFetch(async () => resp({
+    status: 200,
+    url: "https://x/detail",
+    body: "<html><main></main><template>月租 樓層 搜尋 3房 19坪</template></html>",
+  }));
+  assert.equal((await probeHtmlListingOutcome("https://x/detail")).outcome, PROBE_INCONCLUSIVE);
+  restore();
+  restore = mockFetch(async () => resp({
+    status: 200,
+    url: "https://x/detail",
+    body: "<html><main>正常出租物件 3房2廳 19坪 月租28000</main></html>",
+  }));
+  assert.equal((await probeHtmlListingOutcome("https://x/detail")).outcome, PROBE_ALIVE);
+  restore();
+});
+
 test("S8 empty main with template labels is not alive", async () => {
   const restore = mockFetch(async () => resp({
     status: 200,

@@ -3521,15 +3521,28 @@ export function markListingOffline(postId) {
   const listing = getListing(postId);
   if (!listing) return null;
   const now = new Date().toISOString();
-  db.prepare(
-    `UPDATE listings
-     SET offline = 1,
-         offline_at = COALESCE(offline_at, ?),
-         offline_confirmed = 0,
-         last_event = 'offline',
-         last_checked_at = ?
-     WHERE post_id = ?`,
-  ).run(now, now, postId);
+  try {
+    db.prepare(
+      `UPDATE listings
+       SET offline = 1,
+           offline_at = COALESCE(offline_at, ?),
+           offline_confirmed = 0,
+           last_event = 'offline',
+           last_checked_at = ?,
+           content_seq = IFNULL(content_seq, 0) + 1
+       WHERE post_id = ?`,
+    ).run(now, now, postId);
+  } catch {
+    db.prepare(
+      `UPDATE listings
+       SET offline = 1,
+           offline_at = COALESCE(offline_at, ?),
+           offline_confirmed = 0,
+           last_event = 'offline',
+           last_checked_at = ?
+       WHERE post_id = ?`,
+    ).run(now, now, postId);
+  }
   return getListing(postId);
 }
 
@@ -3537,14 +3550,26 @@ export function restoreListingOnline(postId) {
   const listing = getListing(postId);
   if (!listing) return null;
   const now = new Date().toISOString();
-  db.prepare(
-    `UPDATE listings
-     SET offline = 0,
-         offline_at = NULL,
-         offline_confirmed = 0,
-         last_checked_at = ?
-     WHERE post_id = ?`,
-  ).run(now, postId);
+  try {
+    db.prepare(
+      `UPDATE listings
+       SET offline = 0,
+           offline_at = NULL,
+           offline_confirmed = 0,
+           last_checked_at = ?,
+           content_seq = IFNULL(content_seq, 0) + 1
+       WHERE post_id = ?`,
+    ).run(now, postId);
+  } catch {
+    db.prepare(
+      `UPDATE listings
+       SET offline = 0,
+           offline_at = NULL,
+           offline_confirmed = 0,
+           last_checked_at = ?
+       WHERE post_id = ?`,
+    ).run(now, postId);
+  }
   return getListing(postId);
 }
 
@@ -3554,15 +3579,28 @@ export function markListingAlive(postId) {
   if (!listing) return null;
   const now = new Date().toISOString();
   const wasOffline = Number(listing.offline) === 1;
-  db.prepare(
-    `UPDATE listings
-     SET alive_checked_at = ?,
-         last_checked_at = ?,
-         offline = CASE WHEN offline = 1 THEN 0 ELSE offline END,
-         offline_at = CASE WHEN offline = 1 THEN NULL ELSE offline_at END,
-         offline_confirmed = 0
-     WHERE post_id = ?`,
-  ).run(now, now, postId);
+  try {
+    db.prepare(
+      `UPDATE listings
+       SET alive_checked_at = ?,
+           last_checked_at = ?,
+           offline = CASE WHEN offline = 1 THEN 0 ELSE offline END,
+           offline_at = CASE WHEN offline = 1 THEN NULL ELSE offline_at END,
+           offline_confirmed = 0,
+           content_seq = IFNULL(content_seq, 0) + 1
+       WHERE post_id = ?`,
+    ).run(now, now, postId);
+  } catch {
+    db.prepare(
+      `UPDATE listings
+       SET alive_checked_at = ?,
+           last_checked_at = ?,
+           offline = CASE WHEN offline = 1 THEN 0 ELSE offline END,
+           offline_at = CASE WHEN offline = 1 THEN NULL ELSE offline_at END,
+           offline_confirmed = 0
+       WHERE post_id = ?`,
+    ).run(now, now, postId);
+  }
   return { listing: getListing(postId), restored: wasOffline };
 }
 

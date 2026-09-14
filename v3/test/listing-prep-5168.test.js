@@ -24,6 +24,7 @@ import {
   ensureListingPrepSchema,
   jobStillOwnsRun,
   listingPrepAdminStats,
+  getListingPrep,
   processOneEnrichJob,
   reclaimStaleEnrichJobs,
   recordEnrichMetric,
@@ -33,7 +34,13 @@ import {
   wakeListingEnrichWorker,
   resetListingEnrichWorkerForTests,
 } from "../src/listingEnrichQueue.js";
-import { inspectHpDetailResponse, parseHpDetailJson, parseRetryAfterMs, enrichHpListingFromDetail } from "../src/houseprice.js";
+import {
+  applyHpFacilityEvidence,
+  enrichHpListingFromDetail,
+  inspectHpDetailResponse,
+  parseHpDetailJson,
+  parseRetryAfterMs,
+} from "../src/houseprice.js";
 import { PROBE_ALIVE, PROBE_GONE, PROBE_INCONCLUSIVE, classifyListingProbeWrite } from "../src/probeOutcomes.js";
 import { shouldNotify } from "../src/notify.js";
 import { passesGeoFilters } from "../src/floors.js";
@@ -83,11 +90,20 @@ function storeHelpers(store) {
     invalidateLocation: () => {},
     markGone: (id) => {
       const row = store.get(Number(id));
-      if (row) store.set(Number(id), { ...row, offline: 1 });
+      if (row) {
+        store.set(Number(id), { ...row, offline: 1, content_seq: (Number(row.content_seq) || 0) + 1 });
+      }
     },
     markAlive: (id) => {
       const row = store.get(Number(id));
-      if (row) store.set(Number(id), { ...row, offline: 0, last_checked_at: new Date().toISOString() });
+      if (row) {
+        store.set(Number(id), {
+          ...row,
+          offline: 0,
+          last_checked_at: new Date().toISOString(),
+          content_seq: (Number(row.content_seq) || 0) + 1,
+        });
+      }
     },
     isSourceEnabled: () => true,
     onFirstReady: () => {},
@@ -1115,6 +1131,91 @@ test("S4 source geo correction without local version writes; address change with
   }
 });
 
+test("S5 first incomplete facility response still withholds display", () => {
+  const first = evaluateHpPrep(hpListing({
+    tags: "[]",
+    has_natural_gas: 0,
+    furnish_items: "[]",
+  }), {
+    fetched: true,
+    detailRecognized: true,
+    facilityPartial: true,
+  });
+  assert.equal(first.displayReady, false);
+  assert.equal(first.missing.includes("facility"), true);
+});
+
+test("S5 ready listing keeps confirmed facilities after a partial response then a full one", async () => {
+  const conn = memoryQueue();
+  const listing = hpListing({
+    tags: "[]",
+    has_natural_gas: 0,
+    furnish_items: "[]",
+    content_seq: 0,
+  });
+  enqueueListingEnrich(conn, listing, { via: "scheduler" });
+  const [job1] = claimEnrichJobs(conn, { limit: 1 });
+  const store = new Map([[listing.post_id, { ...listing }]]);
+  const full = liveDetail({
+    conditionTags: ["冰箱", "洗衣機", "天然瓦斯"],
+    facilities: [{ name: "冰箱" }, { name: "洗衣機" }],
+    equipments: [],
+    devices: [],
+    parkingYN: "N",
+  });
+  const first = await processOneEnrichJob(conn, storeHelpers(store), job1, {
+    fetchDetail: async () => inspectHpDetailResponse({ status: 200, json: full, expectedId: "16470110" }),
+  });
+  assert.equal(first.evalResult.displayReady, true);
+  const ready = store.get(listing.post_id);
+  assert.match(String(ready.tags), /冰箱/);
+  assert.match(String(ready.tags), /洗衣機/);
+  assert.equal(Number(ready.has_natural_gas), 1);
+  assert.equal(Number(getListingPrep(conn, listing.post_id).display_ready), 1);
+
+  enqueueListingEnrich(conn, store.get(listing.post_id), { via: "click" });
+  const [job2] = claimEnrichJobs(conn, { limit: 1 });
+  const partialJson = liveDetail({
+    conditionTags: ["可開伙"],
+    facilities: [],
+    equipments: [],
+    devices: [],
+    parkingYN: "N",
+  });
+  const partialInspected = inspectHpDetailResponse({ status: 200, json: partialJson, expectedId: "16470110" });
+  assert.equal(partialInspected.facilityPartial, true);
+  assert.equal(partialInspected.facilityBlock, false);
+  assert.equal(partialInspected.facilityEvidence.replace, false);
+  const evidence = applyHpFacilityEvidence(ready, parseHpDetailJson(partialJson));
+  assert.equal(evidence.replace, false);
+  const second = await processOneEnrichJob(conn, storeHelpers(store), job2, {
+    fetchDetail: async () => partialInspected,
+  });
+  assert.equal(second.evalResult.displayReady, true);
+  assert.equal(second.evalResult.status, PREP_SOURCE_LIMITED);
+  const afterPartial = store.get(listing.post_id);
+  assert.match(String(afterPartial.tags), /冰箱/);
+  assert.match(String(afterPartial.tags), /洗衣機/);
+  assert.equal(Number(afterPartial.has_natural_gas), 1);
+  const prep = getListingPrep(conn, listing.post_id);
+  assert.equal(Number(prep.display_ready), 1);
+  assert.match(String(prep.missing_fields), /facility/);
+
+  conn.prepare("UPDATE listing_enrich_jobs SET next_retry_at = ? WHERE post_id = ?")
+    .run(new Date(Date.now() - 1000).toISOString(), listing.post_id);
+  enqueueListingEnrich(conn, afterPartial, { via: "click" });
+  const [job3] = claimEnrichJobs(conn, { limit: 1 });
+  assert.ok(job3, "third enrich job should be claimable after partial-facility backoff expires");
+  const third = await processOneEnrichJob(conn, storeHelpers(store), job3, {
+    fetchDetail: async () => inspectHpDetailResponse({ status: 200, json: full, expectedId: "16470110" }),
+  });
+  assert.equal(third.evalResult.displayReady, true);
+  assert.equal(third.evalResult.status, PREP_READY);
+  const afterFull = store.get(listing.post_id);
+  assert.match(String(afterFull.tags), /冰箱/);
+  assert.equal(Number(afterFull.has_natural_gas), 1);
+});
+
 test("S5 source evidence cancels fridge and gas while keeping washer", async () => {
   const conn = memoryQueue();
   const listing = hpListing();
@@ -1141,6 +1242,114 @@ test("S5 source evidence cancels fridge and gas while keeping washer", async () 
   const items = Array.isArray(saved.furnish_items) ? saved.furnish_items : JSON.parse(saved.furnish_items || "[]");
   assert.equal(items.includes("洗衣機"), true);
   assert.equal(items.includes("冰箱"), false);
+});
+
+test("S6 late alive or gone cannot change a newer offline write", async () => {
+  const conn = memoryQueue();
+  const listing = hpListing({ offline: 0, content_seq: 1 });
+  enqueueListingEnrich(conn, listing, { via: "scheduler" });
+  const [aliveJob] = claimEnrichJobs(conn, { limit: 1 });
+  const store = new Map([[listing.post_id, { ...listing }]]);
+  const helpers = storeHelpers(store);
+  const lateAlive = await processOneEnrichJob(conn, helpers, aliveJob, {
+    fetchDetail: async () => {
+      helpers.markGone(listing.post_id);
+      return inspectHpDetailResponse({
+        status: 200,
+        expectedId: "16470110",
+        json: liveDetail({ conditionTags: ["冰箱"] }),
+      });
+    },
+  });
+  assert.equal(lateAlive.stale || lateAlive.superseded, true);
+  assert.equal(Number(store.get(listing.post_id).offline), 1);
+
+  enqueueListingEnrich(conn, store.get(listing.post_id), { via: "click" });
+  const [goneJob] = claimEnrichJobs(conn, { limit: 1 });
+  const lateGone = await processOneEnrichJob(conn, helpers, goneJob, {
+    fetchDetail: async () => {
+      helpers.markAlive(listing.post_id);
+      return inspectHpDetailResponse({
+        status: 200,
+        expectedId: "16470110",
+        json: liveDetail({ isOff: 1, caseStatus: "已出租" }),
+      });
+    },
+  });
+  assert.equal(lateGone.stale || lateGone.superseded, true);
+  assert.equal(Number(store.get(listing.post_id).offline), 0);
+});
+
+test("S6 real DB late alive/gone interleave cannot rewrite offline", async () => {
+  const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-hp-s6-"));
+  const script = `
+    import assert from "node:assert/strict";
+    import { readFileSync } from "node:fs";
+    import path from "node:path";
+    import {
+      upsertListing, getListing, markListingOffline, markListingAlive,
+      persistHpListingFields, invalidateListingLocation, db,
+    } from ${JSON.stringify(path.join(dir, "../src/db.js"))};
+    import {
+      ensureListingPrepSchema, enqueueListingEnrich, claimEnrichJobs, processOneEnrichJob,
+    } from ${JSON.stringify(path.join(dir, "../src/listingEnrichQueue.js"))};
+    import { inspectHpDetailResponse } from ${JSON.stringify(path.join(dir, "../src/houseprice.js"))};
+    const live = JSON.parse(readFileSync(${JSON.stringify(path.join(dir, "fixtures/houseprice-detail-16470110.json"))}, "utf8"));
+    ensureListingPrepSchema(db);
+    const stamp = "2026-09-14T00:00:00.000Z";
+    const row = {
+      post_id: 2400001991, source: "houseprice", source_id: "16470110", source_key: "g-s6",
+      search_key: "https://example.test", url: "https://rent.houseprice.tw/house/16470110",
+      title: "天玉街 5168", price: "28000", price_num: 28000, extra_fees: [],
+      address: "台北市士林區天玉街9巷3號", area_name: "19坪", layout: "1房1廳1衛",
+      floor_name: "4/4", kind_name: "整層住家", role_name: "5168", cover: "", tags: '["冰箱"]',
+      lat: 25.1105, lng: 121.529, geo_source: "houseprice", has_natural_gas: 1, furnish_items: '["冰箱"]',
+      refresh_time: stamp, first_seen_at: stamp, last_seen_at: stamp, last_event: "new",
+    };
+    upsertListing(row);
+    const helpers = {
+      loadListing: (id) => getListing(id),
+      persistHpListingFields,
+      invalidateLocation: invalidateListingLocation,
+      markGone: (id) => markListingOffline(id),
+      markAlive: (id) => markListingAlive(id),
+      isSourceEnabled: () => true,
+    };
+    enqueueListingEnrich(db, getListing(row.post_id), { via: "scheduler" });
+    const [aliveJob] = claimEnrichJobs(db, { limit: 1 });
+    const lateAlive = await processOneEnrichJob(db, helpers, aliveJob, {
+      fetchDetail: async () => {
+        markListingOffline(row.post_id);
+        return inspectHpDetailResponse({ status: 200, json: live, expectedId: "16470110" });
+      },
+    });
+    assert.equal(lateAlive.stale || lateAlive.superseded, true);
+    assert.equal(Number(getListing(row.post_id).offline), 1);
+    enqueueListingEnrich(db, getListing(row.post_id), { via: "click" });
+    const [goneJob] = claimEnrichJobs(db, { limit: 1 });
+    const lateGone = await processOneEnrichJob(db, helpers, goneJob, {
+      fetchDetail: async () => {
+        markListingAlive(row.post_id);
+        const gone = JSON.parse(JSON.stringify(live));
+        gone.webRentCaseGroupingDetail.isOff = 1;
+        gone.webRentCaseGroupingDetail.caseStatus = "已出租";
+        return inspectHpDetailResponse({ status: 200, json: gone, expectedId: "16470110" });
+      },
+    });
+    assert.equal(lateGone.stale || lateGone.superseded, true);
+    assert.equal(Number(getListing(row.post_id).offline), 0);
+    console.log("ok");
+  `;
+  try {
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+      encoding: "utf8",
+      timeout: 30_000,
+      env: { ...process.env, DATA_DIR: dataDir },
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
 });
 
 test("S6 late enrich cannot overwrite a newer crawler floor write", async () => {
@@ -1173,6 +1382,28 @@ test("S7 other listing gone is not adopted as this listing gone", () => {
   assert.equal(skipped.floor_name, "4/4");
 });
 
+test("S9 same ids still rerender when only a peer floor is corrected", () => {
+  const page = pageListingFns();
+  const before = {
+    post_id: 591001, price_num: 28000, title: "591", floor_name: "4/4", address: "巷3號",
+    tags: "[]", offline: 0, display_ready: true, furnish_items: [], has_natural_gas: 0,
+    match_peer: { post_id: 2400001886, price_num: 32000, display_ready: true, floor_name: "4/4", offline: 0 },
+    same_house: { peers: [{ post_id: 2400001886, price_num: 32000, display_ready: true, offline: 0, floor_name: "4/4" }] },
+  };
+  const after = {
+    ...before,
+    match_peer: { ...before.match_peer, floor_name: "3/4" },
+    same_house: { peers: [{ ...before.same_house.peers[0], floor_name: "3/4" }] },
+  };
+  assert.equal(page.listingIdKey([before]), page.listingIdKey([after]));
+  assert.notEqual(page.listingGroupContentKey(before), page.listingGroupContentKey(after));
+  assert.notEqual(page.listingContentKey(before), page.listingContentKey(after));
+  assert.notEqual(listingContentKey(before), listingContentKey(after));
+  let renderCalls = 0;
+  if (page.listingsContentKey([before]) !== page.listingsContentKey([after])) renderCalls += 1;
+  assert.equal(renderCalls, 1);
+});
+
 test("S9 page listingContentKey includes group peers so a ready member rerenders", () => {
   const page = pageListingFns();
   const primary = {
@@ -1193,6 +1424,38 @@ test("S9 page listingContentKey includes group peers so a ready member rerenders
   let renderCalls = 0;
   if (!(sameIds && sameContent)) renderCalls += 1;
   assert.equal(renderCalls, 1);
+});
+
+test("S10 two loaded pages then a queued note-edit refresh keep the window", () => {
+  const html = readFileSync(path.join(dir, "../public/index.html"), "utf8");
+  assert.match(html, /function flushQueuedListRefresh\(\)[\s\S]*?loadList\(\{\s*silent:\s*true,\s*keep:\s*true,\s*refreshCards:\s*true\s*\}\)/);
+  const run = new Function(`
+    const calls = [];
+    let listRefreshQueued = true;
+    function watchNoteBusy() { return false; }
+    function loadList(options) { calls.push(options); }
+    ${pageFn("flushQueuedListRefresh")}
+    flushQueuedListRefresh();
+    return { queued: listRefreshQueued, calls };
+  `);
+  const result = run();
+  assert.equal(result.queued, false);
+  assert.equal(result.calls.length, 1);
+  assert.equal(result.calls[0].keep, true);
+  assert.equal(result.calls[0].silent, true);
+  assert.equal(result.calls[0].refreshCards, true);
+  assert.notEqual(result.calls[0].force, true);
+  const loaded = Array.from({ length: 160 }, (_, i) => ({ post_id: i + 1 }));
+  const limit = listRefreshLimit({
+    pageSize: 80,
+    loadedCount: loaded.length,
+    keep: result.calls[0].keep,
+    append: false,
+  });
+  assert.equal(limit, 160);
+  const restored = loaded.slice(0, limit);
+  assert.equal(restored.length, 160);
+  assert.equal(restored[159].post_id, 160);
 });
 
 test("S10 refresh of a 100-card list keeps the loaded window", () => {

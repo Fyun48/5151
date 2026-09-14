@@ -29,7 +29,8 @@ import {
 } from "../src/listingImport.js";
 import { canHandleImportUrl, normalizeImportUrl } from "../src/importProviders.js";
 import { parse591Listing } from "../src/import591.js";
-import { parse5168Listing } from "../src/import5168.js";
+import { fetchPublic5168Listing, parse5168Listing } from "../src/import5168.js";
+import { hpDetailApiUrl, hpDetailMatchesExpectedId } from "../src/houseprice.js";
 import { sanitizeImportedText, sanitizeImportedTitle } from "../src/importSanitize.js";
 import {
   FETCH_LIMITS,
@@ -241,6 +242,56 @@ test("SSRF rejects localhost, private, metadata, raw IP, and bad schemes", async
     /內部或 IP/,
   );
   assert.throws(() => parseHttpsUrl("https://8.8.8.8/"), /IP/);
+});
+
+test("S7 5168 import keeps the requested listing and rejects another or missing sid", async () => {
+  const pageUrl = "https://rent.houseprice.tw/house/16470110";
+  const html = `<html><link rel="canonical" href="${pageUrl}"><h1>天玉街本物件</h1><p>近士林</p></html>`;
+  const fetchText = (payload) => async (url) => {
+    if (String(url).includes("/ws/detail/")) return { status: 200, text: payload, url };
+    return { status: 200, text: html, url: pageUrl };
+  };
+  const wrong = JSON.stringify({
+    webRentCaseGroupingDetail: {
+      sid: 1447592,
+      simpAddress: "台北市中正區重慶南路1號",
+      fromFloor: "8",
+      toFloor: "8",
+      upFloor: 12,
+    },
+  });
+  const missing = JSON.stringify({
+    webRentCaseGroupingDetail: {
+      simpAddress: "台北市中正區重慶南路1號",
+      fromFloor: "8",
+      toFloor: "8",
+      upFloor: 12,
+    },
+  });
+  const matched = JSON.stringify({
+    webRentCaseGroupingDetail: {
+      sid: 16470110,
+      simpAddress: "台北市士林區天玉街9巷3號",
+      fromFloor: "4",
+      toFloor: "4",
+      upFloor: 4,
+    },
+  });
+  assert.equal(hpDetailMatchesExpectedId({ sid: 1447592 }, "16470110"), false);
+  assert.equal(hpDetailMatchesExpectedId({ sid: "" }, "16470110"), false);
+  const rejected = await fetchPublic5168Listing(pageUrl, { fetchText: fetchText(wrong) });
+  assert.doesNotMatch(rejected.address || "", /重慶南路/);
+  const noId = await fetchPublic5168Listing(pageUrl, { fetchText: fetchText(missing) });
+  assert.doesNotMatch(noId.address || "", /重慶南路/);
+  const ok = await fetchPublic5168Listing(pageUrl, { fetchText: fetchText(matched) });
+  assert.match(ok.address, /天玉街9巷3號/);
+  assert.equal(ok.floor_name, "4/4");
+  const htmlWrong = parse5168Listing(
+    `<html><link rel="canonical" href="https://rent.houseprice.tw/house/1447592_285879"><p>地址 / 台北市中正區重慶南路1號</p></html>`,
+    pageUrl,
+  );
+  assert.doesNotMatch(htmlWrong.address || "", /重慶南路/);
+  assert.match(hpDetailApiUrl("16470110"), /16470110/);
 });
 
 test("591 and 5168 fixtures extract title/text/photos and strip contact", () => {

@@ -9,7 +9,18 @@ export function listingGroupContentKey(item) {
     match?.post_id || "",
     match?.price_num ?? "",
     match?.display_ready ?? "",
-    peers.map((peer) => `${peer?.post_id}:${peer?.price_num}:${peer?.display_ready}:${peer?.offline}`).join(","),
+    match?.floor_name || "",
+    match?.offline ?? "",
+    peers.map((peer) => [
+      peer?.post_id,
+      peer?.price_num,
+      peer?.display_ready,
+      peer?.offline,
+      peer?.floor_name || "",
+      peer?.address || "",
+      peer?.layout || "",
+      peer?.area_name || "",
+    ].join(":")).join(","),
   ].join("/");
 }
 

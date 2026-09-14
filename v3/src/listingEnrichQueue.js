@@ -483,17 +483,36 @@ export function seedHousepriceEnrichJobs(conn, { limit = 80, isEnabled = () => t
   return n;
 }
 
+export function listingWriteIsFresh(job, listing) {
+  if (!listing) return false;
+  const baseSeq = Number(job?.listing_seq ?? 0);
+  const nowSeq = Number(listing.content_seq ?? 0);
+  return !(Number.isFinite(baseSeq) && Number.isFinite(nowSeq) && nowSeq > baseSeq);
+}
+
+function syncJobListingSeq(job, listing) {
+  if (job && listing && listing.content_seq != null) {
+    job.listing_seq = Number(listing.content_seq || 0);
+  }
+}
+
+function refreshFreshListing(conn, helpers, job) {
+  if (job && !jobStillOwnsRun(conn, job)) return null;
+  const listing = helpers.loadListing?.(job.post_id);
+  if (!listingWriteIsFresh(job, listing)) return null;
+  return listing;
+}
+
 export function applyHpListingPatch(conn, helpers, current, next, { locationChanged = false, job = null } = {}) {
   if (job && !jobStillOwnsRun(conn, job)) {
     return { applied: false, stale: true };
   }
   const latest = helpers.loadListing?.(current.post_id) || current;
-  const baseSeq = Number(job?.listing_seq ?? current.content_seq ?? 0);
-  const nowSeq = Number(latest?.content_seq ?? current.content_seq ?? 0);
-  if (job && nowSeq > baseSeq) {
+  if (job && !listingWriteIsFresh(job, latest)) {
     return { applied: false, stale: true };
   }
   helpers.persistHpListingFields(current.post_id, next, { locationChanged, previous: current });
+  syncJobListingSeq(job, helpers.loadListing?.(current.post_id) || next);
   return { applied: true, stale: false };
 }
 
@@ -525,18 +544,31 @@ export async function processOneEnrichJob(conn, helpers, job, {
   }
   const fetchMs = metricNumber(inspected.fetch_ms) ?? Math.max(0, Date.now() - fetchStarted);
   const parseMs = metricNumber(inspected.parse_ms);
-  if (!jobStillOwnsRun(conn, job)) {
-    finishJob(conn, job, { status: "queued", error: "superseded", errorClass: "" });
-    return { superseded: true, stale: true };
+  const staleWrite = () => {
+    finishJob(conn, job, { status: "queued", error: "stale_write", errorClass: "" });
+    return { stale: true };
+  };
+  if (!refreshFreshListing(conn, helpers, job)) {
+    if (!jobStillOwnsRun(conn, job)) {
+      finishJob(conn, job, { status: "queued", error: "superseded", errorClass: "" });
+      return { superseded: true, stale: true };
+    }
+    return staleWrite();
   }
   const timingBase = { queued_ms: queuedMs, start_ms: startMs, fetch_ms: fetchMs, parse_ms: parseMs, attempt_wait_ms: attemptWaitMs };
   if (inspected.outcome === PROBE_GONE) {
+    if (!refreshFreshListing(conn, helpers, job)) return staleWrite();
     helpers.markGone(listing.post_id);
+    syncJobListingSeq(job, helpers.loadListing(job.post_id));
+    if (!refreshFreshListing(conn, helpers, job)) return staleWrite();
     finishJob(conn, job, { status: "succeeded", timings: { ...timingBase, outcome: "succeeded" } });
-    helpers.onListingUpdated?.(helpers.loadListing(job.post_id) || { ...listing, offline: 1 }, { outcome: PROBE_GONE, displayReady: false });
+    const goneRow = helpers.loadListing(job.post_id) || { ...listing, offline: 1 };
+    if (!refreshFreshListing(conn, helpers, job)) return staleWrite();
+    helpers.onListingUpdated?.(goneRow, { outcome: PROBE_GONE, displayReady: false });
     return { outcome: PROBE_GONE };
   }
   if (inspected.outcome === PROBE_INCONCLUSIVE) {
+    if (!refreshFreshListing(conn, helpers, job)) return staleWrite();
     const existingPrep = getListingPrep(conn, listing.post_id);
     if (!existingPrep || Number(existingPrep.display_ready) !== 1) {
       const evalPending = evaluateHpPrep(listing, { fetched: false });
@@ -568,7 +600,9 @@ export async function processOneEnrichJob(conn, helpers, job, {
     recordEnrichMetric(conn, job, { ...timingBase, outcome: "failed" });
     return { outcome: PROBE_INCONCLUSIVE };
   }
+  if (!refreshFreshListing(conn, helpers, job)) return staleWrite();
   helpers.markAlive(listing.post_id);
+  syncJobListingSeq(job, helpers.loadListing(job.post_id));
   const locateStarted = Date.now();
   const enriched = enrichHpListingFromDetail(listing, inspected.detail, { allowFieldFill: true, replaceBetterGeo: true });
   if (inspected.facilityAbsent === true) {
@@ -587,7 +621,10 @@ export async function processOneEnrichJob(conn, helpers, job, {
     enriched.has_balcony = 0;
     enriched.furnish_items = [];
     enriched.facility_replace = true;
-  } else if (inspected.facilityEvidence?.replace === true || inspected.facilityBlock === true) {
+  } else if (
+    inspected.facilityPartial !== true
+    && (inspected.facilityEvidence?.replace === true || inspected.facilityBlock === true)
+  ) {
     if (inspected.facilityEvidence?.replace === true) {
       enriched.facility_replace = true;
       if (inspected.facilityEvidence.tags != null) enriched.tags = inspected.facilityEvidence.tags;
@@ -614,10 +651,13 @@ export async function processOneEnrichJob(conn, helpers, job, {
   }
   if (merged.locationChanged) helpers.invalidateLocation(listing, merged.listing);
   const stored = helpers.loadListing(job.post_id) || merged.listing;
+  if (!refreshFreshListing(conn, helpers, job)) return staleWrite();
+  const existingPrep = getListingPrep(conn, listing.post_id);
   const evalResult = evaluateHpPrep(stored, {
     fetched: true,
     parseFailed: false,
     detailRecognized: true,
+    alreadyReady: Number(existingPrep?.display_ready) === 1,
     facilityBlock: inspected.facilityBlock === true,
     facilityAbsent: inspected.facilityAbsent === true,
     facilityPartial: inspected.facilityPartial === true,
@@ -636,7 +676,7 @@ export async function processOneEnrichJob(conn, helpers, job, {
     outcome: evalResult.displayReady ? "succeeded" : "failed",
   };
   recordEnrichMetric(conn, job, timings);
-  const jobStatus = evalResult.displayReady
+  const jobStatus = evalResult.displayReady && evalResult.status === PREP_READY
     ? "succeeded"
     : evalResult.status === PREP_PARSE_FAILED
       ? "parse_failed"
@@ -650,6 +690,7 @@ export async function processOneEnrichJob(conn, helpers, job, {
     missing: evalResult.missing,
     timings,
   });
+  if (!refreshFreshListing(conn, helpers, job)) return staleWrite();
   helpers.onListingUpdated?.(stored, {
     outcome: PROBE_ALIVE,
     displayReady: evalResult.displayReady,

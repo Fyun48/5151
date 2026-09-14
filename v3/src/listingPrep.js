@@ -133,6 +133,9 @@ export function classifyAddress(listing) {
 export function evaluateHpPrep(listing, meta = {}) {
   const fetched = meta.fetched === true;
   const parseFailed = meta.parseFailed === true;
+  const alreadyReady = meta.alreadyReady === true
+    || Number(listing?.display_ready) === 1
+    || listing?.display_ready === true;
   const detailRecognized = meta.detailRecognized === true || (fetched && !parseFailed && hasListingIdentity(listing));
   const identity = hasListingIdentity(listing);
   const address = classifyAddress(listing);
@@ -158,15 +161,22 @@ export function evaluateHpPrep(listing, meta = {}) {
   }
   let status = PREP_PENDING;
   let withholdReason = "";
-  const facilityOk = [FIELD_PROVIDED, FIELD_ABSENT, FIELD_NOT_PROVIDED].includes(facility.status)
+  const facilityComplete = [FIELD_PROVIDED, FIELD_ABSENT, FIELD_NOT_PROVIDED].includes(facility.status)
     && facility.basis !== "inferred";
+  // 已就緒房源遇到部分設備回應：保留展示，記錄缺漏並重試；首次不完整仍不展示。
+  const facilityOk = facilityComplete || (alreadyReady && meta.facilityPartial === true && meta.facilityAbsent !== true);
+  const keepVisible = alreadyReady && identity && detailRecognized && address.usable
+    && floor.status === FIELD_PROVIDED && facilityOk;
   if (parseFailed && missing.includes("detail")) {
     status = PREP_PARSE_FAILED;
     withholdReason = "detail_parse_failed";
-  } else if (identity && detailRecognized && address.usable && floor.status === FIELD_PROVIDED && facilityOk) {
+  } else if (identity && detailRecognized && address.usable && floor.status === FIELD_PROVIDED && facilityOk && !missing.includes("facility")) {
     status = PREP_READY;
     missing.length = 0;
     withholdReason = "";
+  } else if (keepVisible && meta.facilityPartial === true && missing.includes("facility")) {
+    status = PREP_SOURCE_LIMITED;
+    withholdReason = facility.reason || "facility_partial";
   } else if (fetched && !parseFailed && identity) {
     if (floor.status === FIELD_NOT_PROVIDED) {
       status = PREP_SOURCE_LIMITED;
@@ -179,7 +189,7 @@ export function evaluateHpPrep(listing, meta = {}) {
   if (status === PREP_PENDING && missing.length) withholdReason = withholdReason || missing.join(",");
   return {
     status,
-    displayReady: status === PREP_READY,
+    displayReady: status === PREP_READY || keepVisible,
     identity,
     detailRecognized,
     address,
@@ -187,7 +197,7 @@ export function evaluateHpPrep(listing, meta = {}) {
     facility,
     missing,
     withholdReason,
-    sourceLimitedReason: address.sourceLimited ? address.reason : (meta.limitedReason || ""),
+    sourceLimitedReason: address.sourceLimited ? address.reason : (meta.limitedReason || (keepVisible && meta.facilityPartial ? "facility_partial" : "")),
     geoPrecision: address.mark,
     locationLabel: address.label,
   };

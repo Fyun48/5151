@@ -330,7 +330,10 @@ export function parseHpDetailHtml(html) {
     addrMeta ? addrMeta[1] : "",
     extractTaiwanStreetAddress(stripTags(source)),
   ]);
+  const sourceId = extractHpIdFromHtml(source);
   return {
+    source_id: sourceId,
+    id: sourceId,
     floorName,
     community: cleanCommunityName(fields["社區"]),
     communityId: 0,
@@ -457,11 +460,7 @@ export function parseHpDetailJson(payload) {
 
 /** 先試 JSON API 取完整明細（含經緯度），失敗才退回舊 SSR HTML 解析。 */
 function detailMatchesExpectedId(detail, expectedId) {
-  const expected = String(expectedId || "").trim();
-  if (!expected || !detail) return !expected;
-  const actual = String(detail.source_id || detail.sid || detail.caseId || detail.id || "").trim();
-  if (!actual) return true;
-  return identitiesMatch(expected, actual);
+  return hpDetailMatchesExpectedId(detail, expectedId);
 }
 
 export async function fetchHpDetail(id, getHtml = defaultGetHtml) {
@@ -470,15 +469,15 @@ export async function fetchHpDetail(id, getHtml = defaultGetHtml) {
   const load = typeof getHtml === "function" ? getHtml : defaultGetHtml;
   try {
     const detail = parseHpDetailJson(await load(hpDetailApiUrl(key)));
-    if (detail && !detailMatchesExpectedId(detail, key)) return null;
-    if (detail && (detail.lat != null || detail.floorName || detail.community || detail.address || detail.layout)) {
+    if (detail && detailMatchesExpectedId(detail, key)
+      && (detail.lat != null || detail.floorName || detail.community || detail.address || detail.layout)) {
       return detail;
     }
-  } catch { /* JSON API 不可用就退回 HTML */ }
+  } catch { /* JSON API 不可用或身分不符就退回 HTML */ }
   try {
     const htmlDetail = parseHpDetailHtml(await load(hpDetailUrl(key)));
-    if (htmlDetail && !detailMatchesExpectedId(htmlDetail, key)) return null;
-    return htmlDetail;
+    if (htmlDetail && detailMatchesExpectedId(htmlDetail, key)) return htmlDetail;
+    return null;
   } catch {
     return null;
   }
@@ -761,7 +760,7 @@ export function applyHpFacilityEvidence(listing = {}, detail = {}) {
   const remark = String(detail.facilityRemark || detail.equipRemark || "");
   const hasSource = evidence.block || evidence.absent || tokens.present.length || tokens.cancelled.length || remark;
   if (!hasSource && !evidence.partial) {
-    return { replace: false };
+    return { replace: false, partial: false };
   }
   const kit = listingKitFields({
     title: listing.title,
@@ -782,8 +781,11 @@ export function applyHpFacilityEvidence(listing = {}, detail = {}) {
   const tags = tokens.present.filter((item) => !tokens.cancelled.some((gone) => item.includes(gone) || gone.includes(item)));
   const gasCancelled = tokens.cancelled.some((item) => /瓦斯/.test(item));
   const gasPresent = tokens.present.some((item) => /天然瓦斯/.test(item));
+  // 部分回應不得整組替換：可開伙／車位等殘缺欄位不能清掉已確認設備。
+  const replace = !evidence.partial && (evidence.block || evidence.absent || tokens.present.length > 0 || tokens.cancelled.length > 0);
   return {
-    replace: evidence.block || evidence.absent || tokens.present.length > 0 || tokens.cancelled.length > 0,
+    replace,
+    partial: evidence.partial === true,
     tags: JSON.stringify(tags),
     has_natural_gas: gasCancelled ? 0 : (gasPresent ? 1 : Number(kit.has_natural_gas) || 0),
     has_balcony: Number(kit.has_balcony) || 0,
@@ -824,12 +826,55 @@ function detailLooksRecognizable(det) {
 }
 
 function identitiesMatch(expected, actual) {
+  return hpIdentitiesMatch(expected, actual);
+}
+
+function attrFromTag(tag, name) {
+  const match = String(tag || "").match(new RegExp(`\\b${name}\\s*=\\s*["']([^"']+)["']`, "i"));
+  return match ? decodeEntities(match[1]) : "";
+}
+
+/** 從 HTML 的 canonical／og:url 取出 5168 物件 ID；沒有則空字串。 */
+export function extractHpIdFromHtml(html) {
+  const source = String(html || "");
+  const tags = [];
+  const linkRe = /<link\b[^>]*>/gi;
+  const metaRe = /<meta\b[^>]*>/gi;
+  let match;
+  while ((match = linkRe.exec(source))) {
+    if (/rel\s*=\s*["']canonical["']/i.test(match[0])) tags.push(attrFromTag(match[0], "href"));
+  }
+  while ((match = metaRe.exec(source))) {
+    if (/property\s*=\s*["']og:url["']/i.test(match[0])) tags.push(attrFromTag(match[0], "content"));
+  }
+  for (const href of tags) {
+    const id = hpIdFromUrl(href);
+    if (id) return id;
+  }
+  return "";
+}
+
+export function hpDetailIdentityValue(detail) {
+  if (!detail || typeof detail !== "object") return "";
+  return String(detail.source_id || detail.sid || detail.caseId || detail.id || "").trim();
+}
+
+/** 5168 複合 ID（sid_group）可比對主號；任一邊缺 ID 不能視為相符。 */
+export function hpIdentitiesMatch(expected, actual) {
   const a = String(expected || "").trim();
   const b = String(actual || "").trim();
   if (!a || !b) return false;
   if (a === b) return true;
   const main = (value) => String(value).split("_")[0];
   return Boolean(main(a)) && main(a) === main(b);
+}
+
+export function hpDetailMatchesExpectedId(detail, expectedId) {
+  const expected = String(expectedId || "").trim();
+  if (!expected || !detail) return false;
+  const actual = hpDetailIdentityValue(detail);
+  if (!actual) return false;
+  return hpIdentitiesMatch(expected, actual);
 }
 
 export function inspectHpDetailResponse({
