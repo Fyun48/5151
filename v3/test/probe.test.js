@@ -47,6 +47,16 @@ test("probeHtmlListingOutcome: non-empty SPA shell without listing fields is not
   restore();
 });
 
+test("S8 empty main with template labels is not alive", async () => {
+  const restore = mockFetch(async () => resp({
+    status: 200,
+    url: "https://x/detail",
+    body: "<html><main></main><template>月租 樓層 搜尋</template></html>",
+  }));
+  assert.equal((await probeHtmlListingOutcome("https://x/detail")).outcome, PROBE_INCONCLUSIVE);
+  restore();
+});
+
 test("probeHtmlListingOutcome: a lone rent word in SPA chrome is not alive", async () => {
   const restore = mockFetch(async () => resp({
     status: 200,

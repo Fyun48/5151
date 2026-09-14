@@ -135,6 +135,24 @@ export function floorNameLooksComplete(value) {
   return /\d+\s*[\/／]\s*\d+/.test(String(value || ""));
 }
 
+export function rentalFloorProvided(value) {
+  const normalized = normalizeHpFloorName(value) || String(value || "").trim();
+  if (!normalized) return false;
+  if (floorNameLooksComplete(normalized)) return true;
+  return /^(?:B\d+|地下\d*|\d+)(?:F|樓)?$/i.test(normalized.replace(/\s+/g, ""));
+}
+
+export function parseRetryAfterMs(value) {
+  if (value == null || value === "") return 0;
+  const raw = String(value).trim();
+  if (/^\d+(\.\d+)?$/.test(raw)) {
+    return Math.min(24 * 60 * 60 * 1000, Math.max(0, Math.round(Number(raw) * 1000)));
+  }
+  const at = Date.parse(raw);
+  if (Number.isFinite(at)) return Math.min(24 * 60 * 60 * 1000, Math.max(0, at - Date.now()));
+  return 0;
+}
+
 function cleanCommunityName(value) {
   const v = String(value || "").trim().replace(/^社區\s*[\/：:]\s*/, "");
   if (!v || /^[-–—]$/.test(v) || v === "無" || v === "無社區" || v === "--") return "";
@@ -377,7 +395,14 @@ export function parseHpDetailJson(payload) {
     str(det.doorplate),
     cityRoad,
   ]);
+  const namesFrom = (list) => (Array.isArray(list) ? list : [])
+    .map((item) => str(item?.name || item?.label || item))
+    .filter(Boolean);
   const conditionTags = Array.isArray(det.conditionTags) ? det.conditionTags.map(str).filter(Boolean) : [];
+  const facilities = namesFrom(det.facilities);
+  const equipments = namesFrom(det.equipments);
+  const devices = namesFrom(det.devices);
+  const facilityRemark = str(det.facilityRemark || det.equipRemark || det.facility_text);
   const tagCommunity = (Array.isArray(det.tags) ? det.tags : [])
     .filter((row) => row && (Number(row.type) === 2 || row.communityId))
     .map((row) => str(row.name))
@@ -413,6 +438,10 @@ export function parseHpDetailJson(payload) {
     lat: lat != null && lng != null && isTaiwanMapPin(lat, lng) ? lat : null,
     lng: lat != null && lng != null && isTaiwanMapPin(lat, lng) ? lng : null,
     conditionTags,
+    facilities,
+    equipments,
+    devices,
+    facilityRemark,
     fields: {
       現況: usage,
       型態: buildingType,
@@ -427,18 +456,29 @@ export function parseHpDetailJson(payload) {
 }
 
 /** 先試 JSON API 取完整明細（含經緯度），失敗才退回舊 SSR HTML 解析。 */
+function detailMatchesExpectedId(detail, expectedId) {
+  const expected = String(expectedId || "").trim();
+  if (!expected || !detail) return !expected;
+  const actual = String(detail.source_id || detail.sid || detail.caseId || detail.id || "").trim();
+  if (!actual) return true;
+  return identitiesMatch(expected, actual);
+}
+
 export async function fetchHpDetail(id, getHtml = defaultGetHtml) {
   const key = hpIdFromUrl(id) || String(id || "").trim();
   if (!key) return null;
   const load = typeof getHtml === "function" ? getHtml : defaultGetHtml;
   try {
     const detail = parseHpDetailJson(await load(hpDetailApiUrl(key)));
+    if (detail && !detailMatchesExpectedId(detail, key)) return null;
     if (detail && (detail.lat != null || detail.floorName || detail.community || detail.address || detail.layout)) {
       return detail;
     }
   } catch { /* JSON API 不可用就退回 HTML */ }
   try {
-    return parseHpDetailHtml(await load(hpDetailUrl(key)));
+    const htmlDetail = parseHpDetailHtml(await load(hpDetailUrl(key)));
+    if (htmlDetail && !detailMatchesExpectedId(htmlDetail, key)) return null;
+    return htmlDetail;
   } catch {
     return null;
   }
@@ -447,13 +487,15 @@ export async function fetchHpDetail(id, getHtml = defaultGetHtml) {
 /** 用明細頁補齊列表頁缺的樓層／社區／坪數／格局／現況，並重算同屋源指紋 source_key。 */
 export function enrichHpListingFromDetail(row, detail, { regionId, sectionId, replaceBetterGeo = true } = {}) {
   if (!row || !detail) return row;
+  const expectedId = String(row.source_id || "").trim();
+  if (expectedId && !detailMatchesExpectedId(detail, expectedId)) return row;
   const next = { ...row };
   let changed = false;
   const detailFloor = sanitizeFloorName(detail.floorName);
-  if (detailFloor && (
+  if (detailFloor && rentalFloorProvided(detailFloor) && (
     !next.floor_name
-    || (!floorNameLooksComplete(next.floor_name) && floorNameLooksComplete(detailFloor))
-    || (floorNameLooksComplete(detailFloor) && detailFloor !== next.floor_name)
+    || !rentalFloorProvided(next.floor_name)
+    || detailFloor !== next.floor_name
   )) {
     next.floor_name = detailFloor;
     changed = true;
@@ -483,7 +525,13 @@ export function enrichHpListingFromDetail(row, detail, { regionId, sectionId, re
       next.lat = detail.lat;
       next.lng = detail.lng;
       next.geo_source = "houseprice";
+      next.clear_coords = false;
     }
+  } else if (changed && next.address !== row.address) {
+    next.lat = null;
+    next.lng = null;
+    next.geo_source = "";
+    next.clear_coords = true;
   }
   let tags = null;
   const ensureTags = () => {
@@ -513,23 +561,33 @@ export function enrichHpListingFromDetail(row, detail, { regionId, sectionId, re
     const t = ensureTags();
     if (!t.includes(detail.usage)) t.push(detail.usage);
   }
+  const facilityPatch = applyHpFacilityEvidence(next, detail);
   if (Array.isArray(detail.conditionTags)) {
     for (const tag of detail.conditionTags) {
       const label = String(tag || "").trim();
-      if (!label) continue;
+      if (!label || /^無|^沒有/.test(label)) continue;
       const t = ensureTags();
       if (!t.includes(label)) t.push(label);
     }
   }
   if (tags) next.tags = JSON.stringify(tags);
-  Object.assign(next, listingKitFields({
-    title: next.title,
-    tags: next.tags,
-    text: `${next.address || ""} ${detail.usage || ""}`,
-    conditionTags: detail.conditionTags,
-    has_natural_gas: next.has_natural_gas,
-    furnish_items: next.furnish_items,
-  }));
+  if (facilityPatch.replace) {
+    next.tags = facilityPatch.tags;
+    next.has_natural_gas = facilityPatch.has_natural_gas;
+    next.has_balcony = facilityPatch.has_balcony;
+    next.furnish_items = facilityPatch.furnish_items;
+    next.facility_replace = true;
+  } else {
+    Object.assign(next, listingKitFields({
+      title: next.title,
+      tags: next.tags,
+      text: `${next.address || ""} ${detail.usage || ""} ${detail.facilityRemark || ""}`,
+      conditionTags: detail.conditionTags,
+      furnish: [...(detail.facilities || []), ...(detail.equipments || []), ...(detail.devices || [])],
+      has_natural_gas: next.has_natural_gas,
+      furnish_items: next.furnish_items,
+    }));
+  }
   if (changed) {
     next.source_key = listingSourceKey({
       regionId: Number(regionId) || 0,
@@ -648,6 +706,91 @@ function hpCaseStatusGone(det) {
   return Boolean(status) && HP_STATUS_GONE.test(status);
 }
 
+const FACILITY_ITEM_RE = /冷氣|冰箱|洗衣機|烘衣|電視|網路|家具|家俱|陽台|瓦斯|床|衣櫃|沙發/;
+const FACILITY_CANCEL_RE = /^(?:無|沒有|不含|不附|未提供)/;
+
+function facilityNameList(list) {
+  return (Array.isArray(list) ? list : [])
+    .map((item) => String(item?.name || item?.label || item || "").trim())
+    .filter(Boolean);
+}
+
+function splitFacilityTokens(text) {
+  return String(text || "")
+    .split(/[,，、;；\s]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+export function parseHpFacilityTokens(det = {}) {
+  const raw = [
+    ...facilityNameList(det.conditionTags),
+    ...facilityNameList(det.facilities),
+    ...facilityNameList(det.equipments),
+    ...facilityNameList(det.devices),
+    ...splitFacilityTokens(det.facilityRemark || det.equipRemark || det.facility_text),
+  ];
+  const present = [];
+  const cancelled = [];
+  for (const label of raw) {
+    if (!label || /無設備|沒有設備|不含設備|不附設備/.test(label)) continue;
+    const cancelledItem = FACILITY_CANCEL_RE.test(label)
+      ? label.replace(FACILITY_CANCEL_RE, "").replace(/^的/, "").trim()
+      : "";
+    if (cancelledItem) {
+      if (!cancelled.includes(cancelledItem)) cancelled.push(cancelledItem);
+      continue;
+    }
+    if (!present.includes(label)) present.push(label);
+  }
+  return { present, cancelled };
+}
+
+export function applyHpFacilityEvidence(listing = {}, detail = {}) {
+  const det = {
+    conditionTags: detail.conditionTags,
+    facilities: detail.facilities,
+    equipments: detail.equipments,
+    devices: detail.devices,
+    facilityRemark: detail.facilityRemark,
+    noFacility: detail.noFacility,
+    noEquip: detail.noEquip,
+  };
+  const evidence = hpFacilityEvidence({ ...detail, ...det });
+  const tokens = parseHpFacilityTokens({ ...detail, ...det });
+  const remark = String(detail.facilityRemark || detail.equipRemark || "");
+  const hasSource = evidence.block || evidence.absent || tokens.present.length || tokens.cancelled.length || remark;
+  if (!hasSource && !evidence.partial) {
+    return { replace: false };
+  }
+  const kit = listingKitFields({
+    title: listing.title,
+    text: `${detail.usage || ""} ${remark}`,
+    conditionTags: tokens.present,
+    furnish: tokens.present,
+    facility: tokens.present,
+    tags: tokens.present,
+    has_natural_gas: tokens.cancelled.some((item) => /瓦斯/.test(item)) ? 0 : undefined,
+    gas_state: tokens.cancelled.some((item) => /瓦斯/.test(item)) || tokens.present.some((item) => /天然瓦斯/.test(item))
+      ? "known"
+      : undefined,
+    kit_complete: evidence.block || evidence.absent,
+  });
+  let furnish = [];
+  try { furnish = JSON.parse(kit.furnish_items || "[]"); } catch { furnish = []; }
+  furnish = furnish.filter((item) => !tokens.cancelled.some((gone) => String(item).includes(gone) || gone.includes(item)));
+  const tags = tokens.present.filter((item) => !tokens.cancelled.some((gone) => item.includes(gone) || gone.includes(item)));
+  const gasCancelled = tokens.cancelled.some((item) => /瓦斯/.test(item));
+  const gasPresent = tokens.present.some((item) => /天然瓦斯/.test(item));
+  return {
+    replace: evidence.block || evidence.absent || tokens.present.length > 0 || tokens.cancelled.length > 0,
+    tags: JSON.stringify(tags),
+    has_natural_gas: gasCancelled ? 0 : (gasPresent ? 1 : Number(kit.has_natural_gas) || 0),
+    has_balcony: Number(kit.has_balcony) || 0,
+    furnish_items: furnish,
+  };
+}
+
 export function hpFacilityEvidence(det) {
   if (!det || typeof det !== "object") {
     return { block: false, absent: false, partial: false, parkingOnly: false };
@@ -657,11 +800,15 @@ export function hpFacilityEvidence(det) {
     .concat(Array.isArray(det.facilities) ? det.facilities : [])
     .concat(Array.isArray(det.equipments) ? det.equipments : [])
     .concat(Array.isArray(det.devices) ? det.devices : []);
-  const remark = String(det.facilityRemark || det.equipRemark || "");
+  const remark = String(det.facilityRemark || det.equipRemark || det.facility_text || "");
+  const tokens = parseHpFacilityTokens(det);
   const explicitNone = det.noFacility === true || det.noEquip === true || /無設備|沒有設備|不含設備|不附設備/.test(remark);
   const hasFacilityItems = (tags && tags.some((tag) => HP_FACILITY_TAG.test(tag)))
-    || extra.some((item) => HP_FACILITY_TAG.test(String(item?.name || item || "")));
-  if (explicitNone && !hasFacilityItems) return { block: true, absent: true, partial: false, parkingOnly: false };
+    || extra.some((item) => HP_FACILITY_TAG.test(String(item?.name || item || "")))
+    || tokens.present.some((item) => FACILITY_ITEM_RE.test(item))
+    || tokens.cancelled.length > 0
+    || FACILITY_ITEM_RE.test(remark);
+  if (explicitNone && !tokens.present.length) return { block: true, absent: true, partial: false, parkingOnly: false };
   if (hasFacilityItems) return { block: true, absent: false, partial: false, parkingOnly: false };
   const parking = String(det.parkingYN || "");
   if (tags && tags.length === 0 && parking === "N") return { block: false, absent: false, partial: true, parkingOnly: true };
@@ -692,8 +839,10 @@ export function inspectHpDetailResponse({
   parse_ms = 0,
   fetch_ms = null,
   expectedId = "",
+  retryAfter = "",
 } = {}) {
-  const base = { parse_ms, fetch_ms };
+  const retryAfterMs = parseRetryAfterMs(retryAfter);
+  const base = { parse_ms, fetch_ms, retryAfterMs };
   if (timeout || network) return { outcome: PROBE_INCONCLUSIVE, reason: timeout ? "timeout" : "network", errorClass: "transient", ...base };
   if (status === 404 || status === 410) return { outcome: PROBE_GONE, reason: `http_${status}`, errorClass: "", ...base };
   if (status === 403 || status === 429 || status >= 500) {
@@ -704,6 +853,16 @@ export function inspectHpDetailResponse({
     return { outcome: PROBE_INCONCLUSIVE, reason: "challenge", errorClass: "transient", ...base };
   }
   const det = hpDetailObject(json);
+  const expected = String(expectedId || "").trim();
+  const actualId = hpDetailIdentity(det);
+  if (expected && (detailLooksRecognizable(det) || actualId || hpCaseStatusGone(det))) {
+    if (!actualId) {
+      return { outcome: PROBE_INCONCLUSIVE, reason: "id_missing", errorClass: "parse_failed", ...base };
+    }
+    if (!identitiesMatch(expected, actualId)) {
+      return { outcome: PROBE_INCONCLUSIVE, reason: "id_mismatch", errorClass: "parse_failed", ...base };
+    }
+  }
   if (status === 400) {
     if (!det && hpApiGoneSignal(json)) return { outcome: PROBE_GONE, reason: "gone_signal", errorClass: "", ...base };
     return { outcome: PROBE_INCONCLUSIVE, reason: "http_400", errorClass: "transient", ...base };
@@ -711,14 +870,6 @@ export function inspectHpDetailResponse({
   if (!det && hpApiGoneSignal(json)) return { outcome: PROBE_GONE, reason: "gone_signal", errorClass: "", ...base };
   if (hpCaseStatusGone(det)) return { outcome: PROBE_GONE, reason: "case_status_gone", errorClass: "", ...base };
   if (detailLooksRecognizable(det)) {
-    const actualId = hpDetailIdentity(det);
-    const expected = String(expectedId || "").trim();
-    if (expected && !actualId) {
-      return { outcome: PROBE_INCONCLUSIVE, reason: "id_missing", errorClass: "parse_failed", ...base };
-    }
-    if (expected && actualId && !identitiesMatch(expected, actualId)) {
-      return { outcome: PROBE_INCONCLUSIVE, reason: "id_mismatch", errorClass: "parse_failed", ...base };
-    }
     const detail = parseHpDetailJson(json);
     const evidence = hpFacilityEvidence(det);
     return {
@@ -728,6 +879,7 @@ export function inspectHpDetailResponse({
       facilityBlock: evidence.block,
       facilityAbsent: evidence.absent,
       facilityPartial: evidence.partial,
+      facilityEvidence: applyHpFacilityEvidence({}, detail),
       buildingOnly: Boolean(det.upFloor) && !det.fromFloor && !det.toFloor && !det.floor,
       ...base,
     };
@@ -768,11 +920,18 @@ export async function fetchHpDetailInspected(id) {
   } else if (typeof res.json === "function") {
     try { json = await res.json(); } catch { json = null; }
   }
+  let retryAfter = "";
+  try {
+    retryAfter = res.headers?.get?.("retry-after") || res.headers?.get?.("Retry-After") || "";
+  } catch {
+    retryAfter = "";
+  }
   return inspectHpDetailResponse({
     status: res.status,
     json,
     text,
     expectedId: key,
+    retryAfter,
     fetch_ms: fetchMs,
     parse_ms: Date.now() - parseStarted,
   });

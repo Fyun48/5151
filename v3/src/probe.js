@@ -61,17 +61,31 @@ export async function probeHtmlListingOutcome(url, { redirectGoneMarkers = [], r
   return { outcome: PROBE_ALIVE, reason: "html_ok" };
 }
 
+function listingMainText(html) {
+  return String(html || "")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<template[\s\S]*?<\/template>/gi, " ")
+    .replace(/<form[\s\S]*?<\/form>/gi, " ")
+    .replace(/<(aside|nav|footer|header)[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<(?:section|div)[^>]*(?:recommend|related|search|suggest)[^>]*>[\s\S]*?<\/(?:section|div)>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function htmlLooksLikeListing(html) {
-  const text = String(html || "");
-  if (!text.trim()) return false;
-  const signals = [
+  const text = listingMainText(html);
+  if (!text) return false;
+  const valueSignals = [
     /\d+\s*房/,
-    /月租|租金.{0,12}\d{3,}|元\s*\/\s*月/,
+    /(?:月租|租金)\s*\d{3,}|元\s*\/\s*月/,
     /\d+(?:\.\d+)?\s*坪/,
-    /樓層|[0-9]+\/[0-9]+\s*樓/,
-    /[市縣].{0,8}[區鄉鎮].{0,20}[路街巷]/,
+    /[0-9]+\/[0-9]+\s*樓|\d+\s*樓/,
+    /[市縣].{0,8}[區鄉鎮].{0,20}[路街巷].{0,16}\d*/,
   ];
-  return signals.filter((re) => re.test(text)).length >= 2;
+  return valueSignals.filter((re) => re.test(text)).length >= 2;
 }
 
 export async function probeHtmlListingAlive(url, opts = {}) {

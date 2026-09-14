@@ -209,12 +209,14 @@ export function enqueueListingEnrich(conn, listing, {
   if (existing) {
     const nextPriority = Math.max(Number(existing.priority) || 0, prio);
     const bumpSeq = via === "click" || via === "notify" || via === "go";
-    const keepBackoff = bumpSeq && sourceBackoffActive(existing);
-    const requeue = !keepBackoff && (
+    const running = existing.status === "running";
+    const retryBlocked = Boolean(existing.next_retry_at && Date.parse(existing.next_retry_at) > Date.now());
+    const keepBackoff = sourceBackoffActive(existing) || retryBlocked;
+    const requeue = !running && !keepBackoff && (
       bumpSeq
-      || existing.status === "failed"
-      || (CLAIMABLE_STATUSES.includes(existing.status) && (!existing.next_retry_at || Date.parse(existing.next_retry_at) <= Date.now()))
+      || (CLAIMABLE_STATUSES.includes(existing.status) && !retryBlocked)
     );
+    const setQueuedAt = requeue && existing.status !== "queued";
     conn.prepare(`
       UPDATE listing_enrich_jobs
          SET priority = ?,
@@ -237,12 +239,12 @@ export function enqueueListingEnrich(conn, listing, {
       prio,
       Number(existing.priority) || 0,
       via,
-      bumpSeq ? 1 : 0,
+      running ? 0 : (bumpSeq ? 1 : 0),
       JSON.stringify(missing.length ? missing : parseJson(existing.missing_fields, [])),
       requeue ? 1 : 0,
-      keepBackoff ? 1 : 0,
+      (keepBackoff || running) ? 1 : 0,
       requeue ? 1 : 0,
-      requeue ? 1 : 0,
+      setQueuedAt ? 1 : 0,
       stamp,
       postId,
     );
@@ -260,9 +262,11 @@ export function reclaimStaleEnrichJobs(conn, now = Date.now()) {
   const cut = new Date(now).toISOString();
   const info = conn.prepare(`
     UPDATE listing_enrich_jobs
-       SET status = 'queued', lease_until = NULL
+       SET status = 'queued',
+           lease_until = NULL,
+           last_queued_at = ?
      WHERE status = 'running' AND lease_until IS NOT NULL AND lease_until < ?
-  `).run(cut);
+  `).run(cut, cut);
   return Number(info.changes) || 0;
 }
 
@@ -331,9 +335,11 @@ function finishJob(conn, job, {
   errorClass = "",
   missing = [],
   timings = {},
+  retryAfterMs = 0,
 }) {
   const stamp = nowIso();
-  const retry = status === "succeeded" ? null : new Date(Date.now() + backoffMs(errorClass || "transient", Number(job.attempt_count) || 1)).toISOString();
+  const waitMs = Math.max(backoffMs(errorClass || "transient", Number(job.attempt_count) || 1), Number(retryAfterMs) || 0);
+  const retry = status === "succeeded" ? null : new Date(Date.now() + waitMs).toISOString();
   const latest = conn.prepare("SELECT request_seq, run_seq FROM listing_enrich_jobs WHERE id = ?").get(job.id);
   if (latest && Number(latest.run_seq) !== Number(job.run_seq)) {
     return { stale: true };
@@ -481,6 +487,12 @@ export function applyHpListingPatch(conn, helpers, current, next, { locationChan
   if (job && !jobStillOwnsRun(conn, job)) {
     return { applied: false, stale: true };
   }
+  const latest = helpers.loadListing?.(current.post_id) || current;
+  const baseSeq = Number(job?.listing_seq ?? current.content_seq ?? 0);
+  const nowSeq = Number(latest?.content_seq ?? current.content_seq ?? 0);
+  if (job && nowSeq > baseSeq) {
+    return { applied: false, stale: true };
+  }
   helpers.persistHpListingFields(current.post_id, next, { locationChanged, previous: current });
   return { applied: true, stale: false };
 }
@@ -494,6 +506,7 @@ export async function processOneEnrichJob(conn, helpers, job, {
     finishJob(conn, job, { status: "failed", error: "listing_missing", errorClass: "parse_failed" });
     return { skipped: true };
   }
+  job.listing_seq = Number(listing.content_seq || 0);
   if (helpers.isSourceEnabled && !helpers.isSourceEnabled("houseprice")) {
     finishJob(conn, job, { status: "failed", error: "source_disabled", errorClass: "source_limited" });
     return { skipped: true };
@@ -534,6 +547,7 @@ export async function processOneEnrichJob(conn, helpers, job, {
         errorClass: inspected.errorClass || "transient",
         missing: evalPending.missing,
         timings: { ...timingBase, outcome: "failed" },
+        retryAfterMs: inspected.retryAfterMs,
       });
     } else {
       conn.prepare(`
@@ -548,6 +562,7 @@ export async function processOneEnrichJob(conn, helpers, job, {
         errorClass: inspected.errorClass || "transient",
         missing: parseJson(existingPrep.missing_fields, []),
         timings: { ...timingBase, outcome: "failed" },
+        retryAfterMs: inspected.retryAfterMs,
       });
     }
     recordEnrichMetric(conn, job, { ...timingBase, outcome: "failed" });
@@ -572,8 +587,16 @@ export async function processOneEnrichJob(conn, helpers, job, {
     enriched.has_balcony = 0;
     enriched.furnish_items = [];
     enriched.facility_replace = true;
-  } else if (inspected.facilityBlock === true) {
-    enriched.facility_replace = true;
+  } else if (inspected.facilityEvidence?.replace === true || inspected.facilityBlock === true) {
+    if (inspected.facilityEvidence?.replace === true) {
+      enriched.facility_replace = true;
+      if (inspected.facilityEvidence.tags != null) enriched.tags = inspected.facilityEvidence.tags;
+      if (inspected.facilityEvidence.has_natural_gas != null) enriched.has_natural_gas = inspected.facilityEvidence.has_natural_gas;
+      if (inspected.facilityEvidence.has_balcony != null) enriched.has_balcony = inspected.facilityEvidence.has_balcony;
+      if (inspected.facilityEvidence.furnish_items != null) enriched.furnish_items = inspected.facilityEvidence.furnish_items;
+    } else {
+      enriched.facility_replace = true;
+    }
   }
   const merged = mergeHpListingFields(listing, enriched, { allowCorrection: true });
   const patched = applyHpListingPatch(conn, helpers, listing, merged.listing, {
@@ -597,6 +620,7 @@ export async function processOneEnrichJob(conn, helpers, job, {
     detailRecognized: true,
     facilityBlock: inspected.facilityBlock === true,
     facilityAbsent: inspected.facilityAbsent === true,
+    facilityPartial: inspected.facilityPartial === true,
     buildingOnly: inspected.buildingOnly === true,
   });
   const readyInfo = upsertListingPrep(conn, listing.post_id, stored, evalResult);

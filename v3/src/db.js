@@ -500,6 +500,7 @@ for (const sql of [
   "ALTER TABLE listings ADD COLUMN geo_approx INTEGER",
   "ALTER TABLE listings ADD COLUMN geo_error TEXT",
   "ALTER TABLE listings ADD COLUMN geo_job_state TEXT",
+  "ALTER TABLE listings ADD COLUMN content_seq INTEGER NOT NULL DEFAULT 0",
 ]) {
   try { db.exec(sql); } catch { /* already migrated */ }
 }
@@ -2213,6 +2214,7 @@ function decorateSameHousePeer(raw) {
     extra_fees: Array.isArray(raw.extra_fees) ? raw.extra_fees : parseJson(raw.extra_fees, []),
     source,
     source_label: selfSourceLabel(source),
+    source_enabled: isCrawlSourceEnabled(source),
   };
 }
 
@@ -2271,10 +2273,12 @@ function loadSameHousePeers(row, userId) {
 }
 
 function housepriceNotDisplayReady(row) {
+  const source = String(row?.source || "591") || "591";
+  if (!isCrawlSourceEnabled(source)) return true;
   if (!isHousepriceListing(row)) return false;
   try {
     const prep = db.prepare("SELECT display_ready FROM listing_prep WHERE post_id = ?").get(row.post_id);
-    return !listingIsDisplayable(row, prep || { display_ready: 0 });
+    return !listingIsDisplayable({ ...row, source_enabled: true }, prep || { display_ready: 0 });
   } catch {
     return true;
   }
@@ -2356,6 +2360,7 @@ function decorateListingLite(row, settings, userId) {
     ...hpPrepFields(row),
     source,
     source_label: selfSourceLabel(source),
+    source_enabled: isCrawlSourceEnabled(source),
     mine: uid > 0 && listedBy === uid,
     ...fit,
   };
@@ -3177,6 +3182,11 @@ export function upsertListing(listing) {
   } catch {
     // older isolated fixtures without kit columns
   }
+  try {
+    db.prepare("UPDATE listings SET content_seq = IFNULL(content_seq, 0) + 1 WHERE post_id = ?").run(listing.post_id);
+  } catch {
+    // older fixtures without content_seq
+  }
   const geoSource = String(listing.geo_source || "").trim();
   if (geoSource) {
     try {
@@ -3923,7 +3933,14 @@ export function persistHpListingFields(postId, next, { locationChanged = false, 
   const address = text(next.address, row.address);
   const floorName = sanitizeFloorName(next.floor_name) || text(row.floor_name);
   const tags = typeof next.tags === "string" ? next.tags : JSON.stringify(next.tags || []);
-  const approx = classifyAddress({ ...row, ...next, address }).mark === "approx" ? 1 : 0;
+  const clearCoords = next.clear_coords === true;
+  const approx = classifyAddress({
+    ...row,
+    ...next,
+    address,
+    lat: clearCoords ? null : (next.lat ?? row.lat),
+    lng: clearCoords ? null : (next.lng ?? row.lng),
+  }).mark === "approx" ? 1 : 0;
   const title = text(next.title, row.title);
   const url = text(next.url, row.url);
   const price = text(next.price, row.price);
@@ -3946,11 +3963,11 @@ export function persistHpListingFields(postId, next, { locationChanged = false, 
     Number(next.community_id) || 0, Number(next.community_id) || 0,
     Number(next.community_linked) || 0,
     tags, tags,
-    next.lat ?? null, next.lat ?? null,
-    next.lng ?? null, next.lng ?? null,
-    geoSource, geoSource,
+    clearCoords ? 1 : 0, next.lat ?? null, next.lat ?? null,
+    clearCoords ? 1 : 0, next.lng ?? null, next.lng ?? null,
+    clearCoords ? 1 : 0, geoSource, geoSource,
     approx,
-    locationChanged ? 1 : 0,
+    (locationChanged || clearCoords) ? 1 : 0,
     postId,
   ];
   const sqlCore = `
@@ -3968,17 +3985,33 @@ export function persistHpListingFields(postId, next, { locationChanged = false, 
       community_id = CASE WHEN ? > 0 THEN ? ELSE community_id END,
       community_linked = CASE WHEN ? > 0 THEN 1 ELSE community_linked END,
       tags = CASE WHEN IFNULL(?, '') != '' THEN ? ELSE tags END,
-      lat = CASE WHEN ? IS NOT NULL THEN ? ELSE lat END,
-      lng = CASE WHEN ? IS NOT NULL THEN ? ELSE lng END,
-      geo_source = CASE WHEN IFNULL(?, '') != '' THEN ? ELSE geo_source END`;
+      lat = CASE WHEN ? = 1 THEN NULL WHEN ? IS NOT NULL THEN ? ELSE lat END,
+      lng = CASE WHEN ? = 1 THEN NULL WHEN ? IS NOT NULL THEN ? ELSE lng END,
+      geo_source = CASE WHEN ? = 1 THEN '' WHEN IFNULL(?, '') != '' THEN ? ELSE geo_source END`;
   try {
     db.prepare(`${sqlCore},
       geo_approx = ?,
-      coord_version = CASE WHEN ? THEN IFNULL(coord_version, 0) + 1 ELSE coord_version END
+      coord_version = CASE WHEN ? THEN IFNULL(coord_version, 0) + 1 ELSE coord_version END,
+      content_seq = IFNULL(content_seq, 0) + 1
      WHERE post_id = ?`).run(...values);
   } catch {
-    db.prepare(`${sqlCore} WHERE post_id = ?`).run(...values.slice(0, -3), postId);
+    try {
+      db.prepare(`${sqlCore},
+        geo_approx = ?,
+        coord_version = CASE WHEN ? THEN IFNULL(coord_version, 0) + 1 ELSE coord_version END
+       WHERE post_id = ?`).run(...values);
+    } catch {
+      db.prepare(`${sqlCore} WHERE post_id = ?`).run(...values.slice(0, -3), postId);
+    }
   }
+  if (locationChanged || clearCoords) {
+    try {
+      db.prepare("UPDATE listings SET coord_version = IFNULL(coord_version, 0) + 1 WHERE post_id = ?").run(postId);
+    } catch { /* older fixtures */ }
+  }
+  try {
+    db.prepare("UPDATE listings SET content_seq = IFNULL(content_seq, 0) + 1 WHERE post_id = ?").run(postId);
+  } catch { /* older fixtures */ }
   try {
     const kit = next.facility_replace === true
       ? {

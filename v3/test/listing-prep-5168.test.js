@@ -28,15 +28,16 @@ import {
   reclaimStaleEnrichJobs,
   recordEnrichMetric,
   requestClickRefresh,
+  seedHousepriceEnrichJobs,
   summarizeEnrichMetrics,
   wakeListingEnrichWorker,
   resetListingEnrichWorkerForTests,
 } from "../src/listingEnrichQueue.js";
-import { inspectHpDetailResponse, parseHpDetailJson } from "../src/houseprice.js";
+import { inspectHpDetailResponse, parseHpDetailJson, parseRetryAfterMs, enrichHpListingFromDetail } from "../src/houseprice.js";
 import { PROBE_ALIVE, PROBE_GONE, PROBE_INCONCLUSIVE, classifyListingProbeWrite } from "../src/probeOutcomes.js";
 import { shouldNotify } from "../src/notify.js";
 import { passesGeoFilters } from "../src/floors.js";
-import { keptListShouldRerender, listingContentKey } from "../src/listKeep.js";
+import { keptListShouldRerender, listingContentKey, listRefreshLimit } from "../src/listKeep.js";
 import { compareHouseGroup, sameHouseBundle } from "../src/listingCompare.js";
 import { listingIsDisplayable } from "../src/listingPrep.js";
 
@@ -75,8 +76,9 @@ function storeHelpers(store) {
   return {
     loadListing: (id) => store.get(Number(id)) || null,
     persistHpListingFields: (id, next) => {
-      store.set(Number(id), { ...store.get(Number(id)), ...next });
-      return next;
+      const prev = store.get(Number(id)) || {};
+      store.set(Number(id), { ...prev, ...next, content_seq: (Number(prev.content_seq) || 0) + 1 });
+      return store.get(Number(id));
     },
     invalidateLocation: () => {},
     markGone: (id) => {
@@ -794,4 +796,441 @@ test("R12 metrics ignore null stages and split first-ready from unmeasured route
   assert.equal(summary.stages.parse_ms.p50, 12);
   assert.equal(summary.byOutcome.failed.samples, 1);
   assert.equal(summary.byOutcome.succeeded.samples, 0);
+});
+
+function pageFn(name) {
+  const html = readFileSync(path.join(dir, "../public/index.html"), "utf8");
+  const start = html.indexOf(`function ${name}(`);
+  assert.notEqual(start, -1, `index.html missing ${name}`);
+  let depth = 0;
+  let end = start;
+  for (let i = start; i < html.length; i += 1) {
+    if (html[i] === "{") depth += 1;
+    if (html[i] === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        end = i + 1;
+        break;
+      }
+    }
+  }
+  return html.slice(start, end);
+}
+
+function pageListingFns() {
+  const src = [
+    pageFn("listingGroupContentKey"),
+    pageFn("listingContentKey"),
+    pageFn("listingsContentKey"),
+    pageFn("listingIdKey"),
+  ].join("\n");
+  return new Function(`${src}; return { listingContentKey, listingsContentKey, listingIdKey, listingGroupContentKey };`)();
+}
+
+test("S1 disabled 5168 does not hide a cheaper-ready 591 or linger as match_peer", () => {
+  const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-hp-s1-"));
+  const script = `
+    import assert from "node:assert/strict";
+    import { upsertListing, listListings, mergeSameHouseForUser, db, defaultUserId, getSettings, saveCrawlSources } from ${JSON.stringify(path.join(dir, "../src/db.js"))};
+    import { ensureListingPrepSchema, upsertListingPrep } from ${JSON.stringify(path.join(dir, "../src/listingEnrichQueue.js"))};
+    import { evaluateHpPrep } from ${JSON.stringify(path.join(dir, "../src/listingPrep.js"))};
+    saveCrawlSources({ items: [{ id: "houseprice", enabled: true }, { id: "591", enabled: true }] });
+    ensureListingPrepSchema(db);
+    const uid = defaultUserId();
+    const settings = {
+      ...getSettings(uid), searchUrls: [], watchDistricts: ["1-8"],
+      priceMin: 0, priceMax: 0, commuteKm: 0, wholeFloorOnly: false,
+      excludeLowFloors: false, excludeRooftop: false,
+      excludeKeywords: [], excludeAgents: [], excludeAgentIds: [], excludeBoxes: [],
+    };
+    const stamp = "2026-09-14T00:00:00.000Z";
+    const row591 = {
+      post_id: 591101, source: "591", source_id: "1", source_key: "g-s1-cheap",
+      search_key: "https://example.test", url: "https://rent.591.com.tw/1",
+      title: "天玉街 591", price: "28000", price_num: 28000, extra_fees: [],
+      address: "台北市士林區天玉街9巷3號", area_name: "19坪", layout: "1房1廳1衛",
+      floor_name: "4/4", kind_name: "整層住家", role_name: "屋主", cover: "", tags: "[]",
+      lat: 25.1105, lng: 121.529, geo_source: "591",
+      refresh_time: stamp, first_seen_at: stamp, last_seen_at: stamp, last_event: "new",
+    };
+    const rowHp = {
+      post_id: 2400001882, source: "houseprice", source_id: "16470110", source_key: "g-s1-cheap",
+      search_key: "https://example.test", url: "https://rent.houseprice.tw/house/16470110",
+      title: "天玉街 5168", price: "24000", price_num: 24000, extra_fees: [],
+      address: "台北市士林區天玉街9巷3號", area_name: "19坪", layout: "1房1廳1衛",
+      floor_name: "4/4", kind_name: "整層住家", role_name: "5168", cover: "", tags: '["冰箱"]',
+      lat: 25.1105, lng: 121.529, geo_source: "houseprice", has_natural_gas: 1, furnish_items: '["冰箱"]',
+      refresh_time: stamp, first_seen_at: stamp, last_seen_at: stamp, last_event: "new",
+    };
+    upsertListing(row591);
+    upsertListing(rowHp);
+    const ready = evaluateHpPrep(rowHp, { fetched: true, detailRecognized: true, facilityBlock: true });
+    upsertListingPrep(db, rowHp.post_id, rowHp, ready);
+    mergeSameHouseForUser(uid, [591101, 2400001882]);
+    const query = () => listListings({ userId: uid, settings, searchKeys: [], filter: "all", sort: "newest", limit: 50 });
+    saveCrawlSources({ items: [{ id: "houseprice", enabled: false }, { id: "591", enabled: true }] });
+    const after = query();
+    assert.equal(after.listings.length > 0, true, JSON.stringify(after.listings.map((row) => row.post_id)));
+    assert.equal(after.listings.some((row) => row.post_id === 591101), true);
+    assert.equal(after.listings.some((row) => row.post_id === 2400001882), false);
+    const card = after.listings.find((row) => row.post_id === 591101);
+    assert.notEqual(card.same_house_role, "affiliate");
+    assert.notEqual(Number(card.match_peer?.post_id), 2400001882);
+    assert.equal(card.same_house?.peers?.some((row) => row.post_id === 2400001882) || false, false);
+    console.log("ok");
+  `;
+  try {
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+      encoding: "utf8",
+      timeout: 30_000,
+      env: { ...process.env, DATA_DIR: dataDir },
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("S1 expensive disabled 5168 leaves peers and match_peer", () => {
+  const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-hp-s1b-"));
+  const script = `
+    import assert from "node:assert/strict";
+    import { upsertListing, listListings, mergeSameHouseForUser, db, defaultUserId, getSettings, saveCrawlSources } from ${JSON.stringify(path.join(dir, "../src/db.js"))};
+    import { ensureListingPrepSchema, upsertListingPrep } from ${JSON.stringify(path.join(dir, "../src/listingEnrichQueue.js"))};
+    import { evaluateHpPrep } from ${JSON.stringify(path.join(dir, "../src/listingPrep.js"))};
+    saveCrawlSources({ items: [{ id: "houseprice", enabled: true }, { id: "591", enabled: true }] });
+    ensureListingPrepSchema(db);
+    const uid = defaultUserId();
+    const settings = {
+      ...getSettings(uid), searchUrls: [], watchDistricts: ["1-8"],
+      priceMin: 0, priceMax: 0, commuteKm: 0, wholeFloorOnly: false,
+      excludeLowFloors: false, excludeRooftop: false,
+      excludeKeywords: [], excludeAgents: [], excludeAgentIds: [], excludeBoxes: [],
+    };
+    const stamp = "2026-09-14T00:00:00.000Z";
+    const row591 = {
+      post_id: 591102, source: "591", source_id: "2", source_key: "g-s1-dear",
+      search_key: "https://example.test", url: "https://rent.591.com.tw/2",
+      title: "天玉街 591", price: "24000", price_num: 24000, extra_fees: [],
+      address: "台北市士林區天玉街9巷3號", area_name: "19坪", layout: "1房1廳1衛",
+      floor_name: "4/4", kind_name: "整層住家", role_name: "屋主", cover: "", tags: "[]",
+      lat: 25.1105, lng: 121.529, geo_source: "591",
+      refresh_time: stamp, first_seen_at: stamp, last_seen_at: stamp, last_event: "new",
+    };
+    const rowHp = {
+      post_id: 2400001883, source: "houseprice", source_id: "16470110", source_key: "g-s1-dear",
+      search_key: "https://example.test", url: "https://rent.houseprice.tw/house/16470110",
+      title: "天玉街 5168", price: "28000", price_num: 28000, extra_fees: [],
+      address: "台北市士林區天玉街9巷3號", area_name: "19坪", layout: "1房1廳1衛",
+      floor_name: "4/4", kind_name: "整層住家", role_name: "5168", cover: "", tags: '["冰箱"]',
+      lat: 25.1105, lng: 121.529, geo_source: "houseprice", has_natural_gas: 1, furnish_items: '["冰箱"]',
+      refresh_time: stamp, first_seen_at: stamp, last_seen_at: stamp, last_event: "new",
+    };
+    upsertListing(row591);
+    upsertListing(rowHp);
+    upsertListingPrep(db, rowHp.post_id, rowHp, evaluateHpPrep(rowHp, { fetched: true, detailRecognized: true, facilityBlock: true }));
+    mergeSameHouseForUser(uid, [591102, 2400001883]);
+    saveCrawlSources({ items: [{ id: "houseprice", enabled: false }, { id: "591", enabled: true }] });
+    const after = listListings({ userId: uid, settings, searchKeys: [], filter: "all", sort: "newest", limit: 50 });
+    const card = after.listings.find((row) => row.post_id === 591102);
+    assert.ok(card);
+    assert.notEqual(Number(card.match_peer?.post_id), 2400001883);
+    assert.equal(card.same_house?.peers?.some((row) => row.post_id === 2400001883) || false, false);
+    console.log("ok");
+  `;
+  try {
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+      encoding: "utf8",
+      timeout: 30_000,
+      env: { ...process.env, DATA_DIR: dataDir },
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("S2 seed and click keep 429 backoff; running is not reclaimed; Retry-After 3600 waits an hour", async () => {
+  const conn = memoryQueue();
+  const listing = hpListing();
+  const store = new Map([[listing.post_id, listing]]);
+  enqueueListingEnrich(conn, listing, { via: "scheduler" });
+  const [job] = claimEnrichJobs(conn, { limit: 1 });
+  await processOneEnrichJob(conn, storeHelpers(store), job, {
+    fetchDetail: async () => inspectHpDetailResponse({ status: 429, retryAfter: "3600" }),
+  });
+  const paused = conn.prepare("SELECT * FROM listing_enrich_jobs WHERE post_id = ?").get(listing.post_id);
+  assert.equal(paused.status, "failed");
+  assert.ok(Date.parse(paused.next_retry_at) >= Date.now() + 50 * 60 * 1000, paused.next_retry_at);
+  const retryAt = paused.next_retry_at;
+  enqueueListingEnrich(conn, listing, { via: "scheduler" });
+  const afterSeed = conn.prepare("SELECT status, next_retry_at FROM listing_enrich_jobs WHERE post_id = ?").get(listing.post_id);
+  assert.equal(afterSeed.status, "failed");
+  assert.equal(afterSeed.next_retry_at, retryAt);
+  assert.equal(parseRetryAfterMs("3600"), 3600_000);
+
+  const listing2 = hpListing({ post_id: 2400000991 });
+  enqueueListingEnrich(conn, listing2, { via: "click" });
+  const [running] = claimEnrichJobs(conn, { limit: 1 });
+  assert.equal(running.status, "running");
+  const click = requestClickRefresh(conn, listing2, "click");
+  assert.equal(click.queued, false);
+  const still = conn.prepare("SELECT status, next_retry_at, request_seq FROM listing_enrich_jobs WHERE post_id = ?").get(listing2.post_id);
+  assert.equal(still.status, "running");
+  assert.equal(Number(still.request_seq), Number(running.request_seq));
+  assert.equal(claimEnrichJobs(conn, { limit: 4 }).some((row) => row.post_id === listing2.post_id), false);
+});
+
+test("S3 single rental floor without building height writes through SQLite", () => {
+  const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-hp-s3-"));
+  const fixture = path.join(dir, "fixtures/houseprice-detail-16470110.json");
+  const script = `
+    import assert from "node:assert/strict";
+    import { readFileSync } from "node:fs";
+    import { upsertListing, persistHpListingFields, getListing, invalidateListingLocation, db, saveCrawlSources } from ${JSON.stringify(path.join(dir, "../src/db.js"))};
+    import { ensureListingPrepSchema, enqueueListingEnrich, claimEnrichJobs, processOneEnrichJob } from ${JSON.stringify(path.join(dir, "../src/listingEnrichQueue.js"))};
+    import { inspectHpDetailResponse } from ${JSON.stringify(path.join(dir, "../src/houseprice.js"))};
+    saveCrawlSources({ items: [{ id: "houseprice", enabled: true }] });
+    ensureListingPrepSchema(db);
+    const stamp = "2026-09-14T00:00:00.000Z";
+    const row = {
+      post_id: 2400001884, source: "houseprice", source_id: "16470110", source_key: "s3",
+      search_key: "https://example.test", url: "https://rent.houseprice.tw/house/16470110",
+      title: "天玉街套房", price: "28000", price_num: 28000, extra_fees: [],
+      address: "台北市士林區天玉街9巷3號", area_name: "19坪", layout: "1房1廳1衛",
+      floor_name: "4/4", kind_name: "整層住家", role_name: "5168", cover: "", tags: '["冰箱"]',
+      lat: 25.1105, lng: 121.529, geo_source: "houseprice",
+      refresh_time: stamp, first_seen_at: stamp, last_seen_at: stamp, last_event: "new",
+    };
+    upsertListing(row);
+    enqueueListingEnrich(db, row, { via: "scheduler" });
+    const [job] = claimEnrichJobs(db, { limit: 1 });
+    const json = JSON.parse(readFileSync(${JSON.stringify(fixture)}, "utf8"));
+    Object.assign(json.webRentCaseGroupingDetail, {
+      fromFloor: "", toFloor: "6", upFloor: "", floor: "6", conditionTags: ["冰箱"],
+    });
+    await processOneEnrichJob(db, {
+      loadListing: (id) => getListing(id),
+      persistHpListingFields,
+      invalidateLocation: invalidateListingLocation,
+      markGone: () => {},
+      markAlive: () => {},
+      isSourceEnabled: () => true,
+    }, job, {
+      fetchDetail: async () => inspectHpDetailResponse({ status: 200, json, expectedId: "16470110" }),
+    });
+    const saved = getListing(2400001884);
+    assert.equal(saved.floor_name, "6");
+    console.log("ok");
+  `;
+  try {
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+      encoding: "utf8",
+      timeout: 30_000,
+      env: { ...process.env, DATA_DIR: dataDir },
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("S4 source geo correction without local version writes; address change without coords clears pin", () => {
+  const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-hp-s4-"));
+  const fixture = path.join(dir, "fixtures/houseprice-detail-16470110.json");
+  const script = `
+    import assert from "node:assert/strict";
+    import { readFileSync } from "node:fs";
+    import { upsertListing, persistHpListingFields, getListing, invalidateListingLocation, db, saveCrawlSources } from ${JSON.stringify(path.join(dir, "../src/db.js"))};
+    import { ensureListingPrepSchema, enqueueListingEnrich, claimEnrichJobs, processOneEnrichJob } from ${JSON.stringify(path.join(dir, "../src/listingEnrichQueue.js"))};
+    import { inspectHpDetailResponse } from ${JSON.stringify(path.join(dir, "../src/houseprice.js"))};
+    import { classifyAddress } from ${JSON.stringify(path.join(dir, "../src/listingPrep.js"))};
+    saveCrawlSources({ items: [{ id: "houseprice", enabled: true }] });
+    ensureListingPrepSchema(db);
+    const stamp = "2026-09-14T00:00:00.000Z";
+    const row = {
+      post_id: 2400001885, source: "houseprice", source_id: "16470110", source_key: "s4",
+      search_key: "https://example.test", url: "https://rent.houseprice.tw/house/16470110",
+      title: "天玉街套房", price: "28000", price_num: 28000, extra_fees: [],
+      address: "台北市士林區天玉街9巷3號", area_name: "19坪", layout: "1房1廳1衛",
+      floor_name: "4/4", kind_name: "整層住家", role_name: "5168", cover: "", tags: '["冰箱"]',
+      lat: 25.1105, lng: 121.529, geo_source: "houseprice",
+      refresh_time: stamp, first_seen_at: stamp, last_seen_at: stamp, last_event: "new",
+    };
+    upsertListing(row);
+    persistHpListingFields(2400001885, { ...row, lat: 25.111, lng: 121.53 }, { locationChanged: true, previous: row });
+    const firstRaw = db.prepare("SELECT coord_version, lat FROM listings WHERE post_id = ?").get(2400001885);
+    assert.equal(Number(firstRaw.coord_version) >= 1, true, JSON.stringify(firstRaw));
+    const first = getListing(2400001885);
+    enqueueListingEnrich(db, first, { via: "scheduler" });
+    const [job] = claimEnrichJobs(db, { limit: 1 });
+    const json = JSON.parse(readFileSync(${JSON.stringify(fixture)}, "utf8"));
+    Object.assign(json.webRentCaseGroupingDetail, {
+      lat: 25.12, lng: 121.54, simpAddress: "台北市士林區天玉街9巷3號", address: "台北市士林區天玉街9巷3號",
+      fromFloor: "4", toFloor: "4", upFloor: 4, conditionTags: ["冰箱"],
+    });
+    await processOneEnrichJob(db, {
+      loadListing: (id) => getListing(id),
+      persistHpListingFields,
+      invalidateLocation: invalidateListingLocation,
+      markGone: () => {},
+      markAlive: () => {},
+      isSourceEnabled: () => true,
+    }, job, {
+      fetchDetail: async () => inspectHpDetailResponse({ status: 200, json, expectedId: "16470110" }),
+    });
+    const second = getListing(2400001885);
+    assert.equal(Number(second.lat), 25.12);
+    enqueueListingEnrich(db, second, { via: "click" });
+    db.prepare("UPDATE listing_enrich_jobs SET status = 'queued', next_retry_at = NULL WHERE post_id = ?").run(second.post_id);
+    const [job2] = claimEnrichJobs(db, { limit: 1 });
+    Object.assign(json.webRentCaseGroupingDetail, {
+      lat: "", lng: "", simpAddress: "台北市士林區天玉街9巷99號", address: "台北市士林區天玉街9巷99號",
+    });
+    await processOneEnrichJob(db, {
+      loadListing: (id) => getListing(id),
+      persistHpListingFields,
+      invalidateLocation: invalidateListingLocation,
+      markGone: () => {},
+      markAlive: () => {},
+      isSourceEnabled: () => true,
+    }, job2, {
+      fetchDetail: async () => inspectHpDetailResponse({ status: 200, json, expectedId: "16470110" }),
+    });
+    const third = getListing(2400001885);
+    assert.equal(third.address, "台北市士林區天玉街9巷99號");
+    assert.equal(third.lat == null || Number(third.lat) === 0, true);
+    assert.notEqual(classifyAddress(third).mark, "exact");
+    console.log("ok");
+  `;
+  try {
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+      encoding: "utf8",
+      timeout: 30_000,
+      env: { ...process.env, DATA_DIR: dataDir },
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("S5 source evidence cancels fridge and gas while keeping washer", async () => {
+  const conn = memoryQueue();
+  const listing = hpListing();
+  enqueueListingEnrich(conn, listing, { via: "scheduler" });
+  const [job] = claimEnrichJobs(conn, { limit: 1 });
+  const store = new Map([[listing.post_id, listing]]);
+  const json = liveDetail({
+    conditionTags: [],
+    facilities: [{ name: "洗衣機" }, { name: "無冰箱" }],
+    equipments: [],
+    devices: [],
+    facilityRemark: "無冰箱、無天然瓦斯、洗衣機",
+    noFacility: false,
+  });
+  const inspected = inspectHpDetailResponse({ status: 200, json, expectedId: "16470110" });
+  assert.equal(inspected.facilityPartial, false);
+  const result = await processOneEnrichJob(conn, storeHelpers(store), job, {
+    fetchDetail: async () => inspected,
+  });
+  assert.equal(result.outcome, PROBE_ALIVE);
+  const saved = store.get(listing.post_id);
+  assert.doesNotMatch(String(saved.tags), /冰箱/);
+  assert.equal(Number(saved.has_natural_gas), 0);
+  const items = Array.isArray(saved.furnish_items) ? saved.furnish_items : JSON.parse(saved.furnish_items || "[]");
+  assert.equal(items.includes("洗衣機"), true);
+  assert.equal(items.includes("冰箱"), false);
+});
+
+test("S6 late enrich cannot overwrite a newer crawler floor write", async () => {
+  const conn = memoryQueue();
+  const listing = hpListing({ floor_name: "2/8", content_seq: 0 });
+  enqueueListingEnrich(conn, listing, { via: "scheduler" });
+  const [job] = claimEnrichJobs(conn, { limit: 1 });
+  const store = new Map([[listing.post_id, { ...listing }]]);
+  const helpers = storeHelpers(store);
+  const result = await processOneEnrichJob(conn, helpers, job, {
+    fetchDetail: async () => {
+      helpers.persistHpListingFields(listing.post_id, { ...store.get(listing.post_id), floor_name: "6/8" });
+      return inspectHpDetailResponse({
+        status: 200,
+        expectedId: "16470110",
+        json: liveDetail({ fromFloor: "2", toFloor: "2", upFloor: 8, conditionTags: ["冰箱"] }),
+      });
+    },
+  });
+  assert.equal(result.stale || result.superseded, true);
+  assert.equal(store.get(listing.post_id).floor_name, "6/8");
+});
+
+test("S7 other listing gone is not adopted as this listing gone", () => {
+  const otherGone = liveDetail({ sid: 16692013, isOff: 1, caseStatus: "已出租" });
+  const inspected = inspectHpDetailResponse({ status: 200, json: otherGone, expectedId: "16470110" });
+  assert.equal(inspected.outcome, PROBE_INCONCLUSIVE);
+  assert.equal(inspected.reason, "id_mismatch");
+  const skipped = enrichHpListingFromDetail(hpListing(), parseHpDetailJson(otherGone));
+  assert.equal(skipped.floor_name, "4/4");
+});
+
+test("S9 page listingContentKey includes group peers so a ready member rerenders", () => {
+  const page = pageListingFns();
+  const primary = {
+    post_id: 591001, price_num: 28000, title: "591", floor_name: "4/4", address: "巷3號",
+    tags: "[]", offline: 0, display_ready: true, furnish_items: [], has_natural_gas: 0,
+    same_house: { peers: [] }, match_peer: null,
+  };
+  const next = {
+    ...primary,
+    match_peer: { post_id: 2400001886, price_num: 32000, display_ready: true },
+    same_house: { peers: [{ post_id: 2400001886, price_num: 32000, display_ready: true, offline: 0 }] },
+  };
+  assert.notEqual(page.listingContentKey(primary), page.listingContentKey(next));
+  assert.equal(page.listingIdKey([primary]), page.listingIdKey([next]));
+  const sameIds = page.listingIdKey([primary]) === page.listingIdKey([next]);
+  const sameContent = page.listingsContentKey([primary]) === page.listingsContentKey([next]);
+  assert.equal(sameIds && sameContent, false);
+  let renderCalls = 0;
+  if (!(sameIds && sameContent)) renderCalls += 1;
+  assert.equal(renderCalls, 1);
+});
+
+test("S10 refresh of a 100-card list keeps the loaded window", () => {
+  assert.equal(listRefreshLimit({ pageSize: 50, loadedCount: 100, keep: true }), 100);
+  assert.equal(listRefreshLimit({ pageSize: 80, loadedCount: 0, keep: false }), 80);
+  const html = readFileSync(path.join(dir, "../public/index.html"), "utf8");
+  assert.match(html, /fetchLimit/);
+  assert.match(html, /loadedCount/);
+  assert.match(html, /listAnchorId/);
+  const loaded = Array.from({ length: 100 }, (_, i) => ({ post_id: i + 1 }));
+  const limit = listRefreshLimit({ pageSize: 50, loadedCount: loaded.length, keep: true, append: false });
+  const fetched = loaded.slice(0, limit);
+  assert.equal(fetched.length, 100);
+});
+
+test("S11 reseeding a queued job does not reset last_queued_at", async () => {
+  const conn = memoryQueue();
+  const listing = hpListing();
+  enqueueListingEnrich(conn, listing, { via: "scheduler" });
+  conn.prepare("UPDATE listing_enrich_jobs SET last_queued_at = ? WHERE post_id = ?")
+    .run("2026-09-01T00:00:00.000Z", listing.post_id);
+  enqueueListingEnrich(conn, listing, { via: "scheduler", priority: 20 });
+  const row = conn.prepare("SELECT last_queued_at, priority, status FROM listing_enrich_jobs WHERE post_id = ?").get(listing.post_id);
+  assert.equal(row.last_queued_at, "2026-09-01T00:00:00.000Z");
+  assert.equal(row.status, "queued");
+  assert.equal(Number(row.priority), 20);
+  conn.exec(`
+    CREATE TABLE listings (
+      post_id INTEGER PRIMARY KEY, source TEXT, source_id TEXT, url TEXT, title TEXT,
+      price_num INTEGER, address TEXT, floor_name TEXT, lat REAL, lng REAL, tags TEXT,
+      offline INTEGER DEFAULT 0, first_seen_at TEXT
+    )
+  `);
+  conn.prepare(`
+    INSERT INTO listings(post_id, source, source_id, url, title, price_num, address, floor_name, lat, lng, tags, offline, first_seen_at)
+    VALUES (?, 'houseprice', '16470110', 'https://x', 't', 28000, 'addr', '4/4', 25, 121, '[]', 0, ?)
+  `).run(listing.post_id, "2026-09-01T00:00:00.000Z");
+  seedHousepriceEnrichJobs(conn, { limit: 10, isEnabled: () => true });
+  const again = conn.prepare("SELECT last_queued_at FROM listing_enrich_jobs WHERE post_id = ?").get(listing.post_id);
+  assert.equal(again.last_queued_at, "2026-09-01T00:00:00.000Z");
 });

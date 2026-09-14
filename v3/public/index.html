@@ -5277,6 +5277,19 @@
       return (items || []).map((row) => String(row.post_id)).join(",");
     }
 
+    function listingGroupContentKey(item) {
+      const peers = item?.same_house?.peers || [];
+      const match = item?.match_peer;
+      return [
+        item?.same_house_role || "",
+        item?.same_house_primary_id || "",
+        match?.post_id || "",
+        match?.price_num ?? "",
+        match?.display_ready ?? "",
+        peers.map((peer) => `${peer?.post_id}:${peer?.price_num}:${peer?.display_ready}:${peer?.offline}`).join(","),
+      ].join("/");
+    }
+
     function listingContentKey(item) {
       return [
         item?.post_id,
@@ -5289,6 +5302,7 @@
         item?.display_ready,
         item?.furnish_items,
         item?.has_natural_gas,
+        listingGroupContentKey(item),
       ].join("|");
     }
 
@@ -7565,12 +7579,20 @@
       if (!options.silent) setListBusy(true, options.busyText || "正在更新列表…");
       const q = $("q").value.trim();
       const append = options.append === true;
+      const loadedCount = listCache.length;
+      const fetchLimit = append
+        ? LIST_PAGE_SIZE
+        : Math.min(500, Math.max(LIST_PAGE_SIZE, options.keep && loadedCount ? loadedCount : 0));
+      const fetchOffset = append ? listOffset : 0;
+      const listAnchorId = options.keep
+        ? (document.activeElement?.closest?.("[data-card]")?.dataset?.card || "")
+        : "";
       if (!append) listOffset = 0;
       const districts = [...viewDistricts].map(encodeURIComponent).join(",");
       const paintStart = performance.now();
       try {
         const res = await fetch(
-          `/api/listings?filter=${encodeURIComponent(filter)}&kind=${encodeURIComponent(kinds.join(","))}&sources=${encodeURIComponent(canFilterSources() ? sources.join(",") : "")}&sort=${encodeURIComponent(sort)}&q=${encodeURIComponent(q)}&limit=${LIST_PAGE_SIZE}&offset=${append ? listOffset : 0}&districts=${districts}`,
+          `/api/listings?filter=${encodeURIComponent(filter)}&kind=${encodeURIComponent(kinds.join(","))}&sources=${encodeURIComponent(canFilterSources() ? sources.join(",") : "")}&sort=${encodeURIComponent(sort)}&q=${encodeURIComponent(q)}&limit=${fetchLimit}&offset=${fetchOffset}&districts=${districts}`,
         );
         const data = await res.json();
         if (gen !== listLoadGen) return;
@@ -7618,7 +7640,12 @@
         }
         const keepY = options.keep ? (window.scrollY || document.documentElement.scrollTop || 0) : 0;
         renderList(next, lastStats);
-        if (options.keep) window.scrollTo(0, keepY);
+        if (options.keep) {
+          window.scrollTo(0, keepY);
+          if (listAnchorId) {
+            document.querySelector(`[data-card="${listAnchorId}"]`)?.focus?.({ preventScroll: true });
+          }
+        }
         syncCommutePoll();
         reportCommuteFocus();
         if (pendingCommuteWork()) refreshCommuteSnapshot();

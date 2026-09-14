@@ -28,8 +28,9 @@ export function isHousepriceListing(listing) {
   return String(listing?.source || "") === HP_PREP_SOURCE;
 }
 
-/** 畫面／群組只用目前可展示的成員；資料庫關係仍保留。 */
+/** 畫面／群組只用目前可展示的成員；須含來源 enabled。資料庫關係仍保留。 */
 export function listingIsDisplayable(row, prep = null) {
+  if (row?.source_enabled === false) return false;
   if (!isHousepriceListing(row)) return true;
   if (prep && Object.prototype.hasOwnProperty.call(prep, "display_ready")) {
     return Number(prep.display_ready) === 1;
@@ -74,10 +75,14 @@ export function classifyFacilities(listing, {
   parseFailed = false,
   sourceBlock = false,
   sourceAbsent = false,
+  sourcePartial = false,
 } = {}) {
   if (parseFailed) return { status: FIELD_PARSE_FAILED, basis: "none", reason: "facility_parse_failed" };
   if (!fetched) return { status: FIELD_NOT_FETCHED, basis: "none", reason: "facility_not_fetched" };
   if (sourceAbsent) return { status: FIELD_ABSENT, basis: "source_block", reason: "" };
+  if (sourcePartial && !sourceBlock) {
+    return { status: FIELD_NOT_PROVIDED, basis: "inferred", reason: "facility_partial" };
+  }
   const kit = listingKitFrom(listing || {});
   const tags = parseTags(listing?.tags);
   const hay = `${tags.join(" ")} ${listing?.title || ""}`;
@@ -141,6 +146,7 @@ export function evaluateHpPrep(listing, meta = {}) {
     parseFailed: parseFailed && !meta.facilityBlock,
     sourceBlock: meta.facilityBlock === true,
     sourceAbsent: meta.facilityAbsent === true,
+    sourcePartial: meta.facilityPartial === true,
   });
   const missing = [];
   if (!identity) missing.push("identity");
@@ -270,7 +276,7 @@ export function mergeHpListingFields(current, incoming = {}, { allowCorrection =
   }
   if (incoming.community_linked) next.community_linked = 1;
 
-  const incomingCoords = isTaiwanMapPin(incoming.lat, incoming.lng);
+  const incomingCoords = incoming.clear_coords === true ? false : isTaiwanMapPin(incoming.lat, incoming.lng);
   if (incomingCoords) {
     const incomingGeo = {
       lat: incoming.lat,
@@ -286,8 +292,15 @@ export function mergeHpListingFields(current, incoming = {}, { allowCorrection =
       next.lat = incoming.lat;
       next.lng = incoming.lng;
       next.geo_source = incomingGeo.geo_source;
+      next.clear_coords = false;
       if (moved) changes.push("coords");
     }
+  } else if (changes.includes("address") && isTaiwanMapPin(current.lat, current.lng)) {
+    next.lat = null;
+    next.lng = null;
+    next.geo_source = "";
+    next.clear_coords = true;
+    changes.push("coords");
   }
 
   const extraTags = parseTags(incoming.tags);
