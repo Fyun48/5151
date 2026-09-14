@@ -16,6 +16,7 @@ import { describeCancelResultOffer, leftoverPendingNote } from "./cancelResult.j
 import { describeGate2Offer } from "./releaseCandidate.js";
 import { describeGate1Offer } from "./proposal.js";
 import { describeOwnerReevalOffer, describeOwnerUnblockOffer } from "./reevaluation.js";
+import { describeSiteCommandApplyOffer } from "./siteCommand.js";
 import { schemaLooksIncompatible } from "./release/rollbackContract.js";
 
 export const EXIT_ACTIONS = Object.freeze(["pause", "unsubscribe", "handoff", "purge_replica"]);
@@ -444,6 +445,21 @@ export function listPendingWork(db, productId) {
     `, [id]);
     for (const row of cmds) {
       if (row.job_state === "sent" && row.apply_state === "applied") continue;
+      if (row.job_state === "sent") {
+        const offer = describeSiteCommandApplyOffer(db, row.id);
+        if (offer.confirmed || offer.reason === "already_confirmed") continue;
+        items.push({
+          kind: "site_command",
+          id: row.id,
+          state: row.job_state,
+          blocking: false,
+          apply_confirm: offer.offered ? offer : null,
+          note: offer.offered
+            ? "已送出的遠端客服不宣稱撤回。可從未決清單確認本站套用結果。確認只寫觀察，不改寫命令終態，也不假裝本站已回覆。"
+            : "已送出的遠端客服不宣稱撤回。訂閱世代已換或已退出的晚到命令不再重試外送。",
+        });
+        continue;
+      }
       const inFlight = row.job_state === "sending";
       items.push({
         kind: "site_command",

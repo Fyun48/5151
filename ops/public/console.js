@@ -108,6 +108,7 @@ const STATUS_LABEL = {
   reconnecting: "重新連接中",
   pending: "等候中",
   sending: "外送中",
+  sent: "已送出",
   processing: "執行中",
   claimed: "已領取",
   running: "執行中",
@@ -625,6 +626,45 @@ const PENDING_UNBLOCK = {
   ok: () => "已解除封鎖並重開評估。沒有開 PR，也沒有部署正式機。",
 };
 
+const PENDING_APPLY_CONFIRM = {
+  applyapplied: {
+    action: "applyapplied",
+    label: "確認已套用",
+    title: "確認遠端客服實際已套用",
+    body: (id) => `確認遠端客服 #${id} 在本站實際已套用？這一步只寫觀察，不改寫命令終態，也不假裝本站已回覆。不會 Deploy v3／Deploy OPS。`,
+    confirm: "確定寫入觀察",
+    danger: false,
+    reasonRequired: true,
+    reasonLabel: "請說明實際看到的套用結果（會寫進觀察紀錄）",
+    observedApply: "applied",
+    ok: (data) => `已確認套用觀察。${data.rewrite_apply === false ? "沒有改寫命令終態。" : ""}${data.site_not_claimed ? "不假裝本站已回覆。" : ""}`,
+  },
+  applynotapplied: {
+    action: "applynotapplied",
+    label: "確認未套用",
+    title: "確認遠端客服實際未套用",
+    body: (id) => `確認遠端客服 #${id} 在本站實際未套用？這一步只寫觀察，不改寫命令終態，也不假裝本站已回覆。不會 Deploy v3／Deploy OPS。`,
+    confirm: "確定寫入觀察",
+    danger: true,
+    reasonRequired: true,
+    reasonLabel: "請說明實際看到的套用結果（會寫進觀察紀錄）",
+    observedApply: "not_applied",
+    ok: (data) => `已確認套用觀察。${data.rewrite_apply === false ? "沒有改寫命令終態。" : ""}${data.site_not_claimed ? "不假裝本站已回覆。" : ""}`,
+  },
+  applyunknown: {
+    action: "applyunknown",
+    label: "確認套用不明",
+    title: "確認遠端客服套用狀態不明",
+    body: (id) => `確認遠端客服 #${id} 套用結果仍不明？這一步只寫觀察，不改寫命令終態，也不假裝本站已回覆。不會 Deploy v3／Deploy OPS。`,
+    confirm: "確定寫入觀察",
+    danger: true,
+    reasonRequired: true,
+    reasonLabel: "請說明實際看到的套用結果（會寫進觀察紀錄）",
+    observedApply: "unknown",
+    ok: (data) => `已確認套用觀察。${data.rewrite_apply === false ? "沒有改寫命令終態。" : ""}${data.site_not_claimed ? "不假裝本站已回覆。" : ""}`,
+  },
+};
+
 const PENDING_UNKNOWN_CONFIRM = {
   unknownsucceeded: {
     action: "unknownsucceeded",
@@ -724,6 +764,13 @@ function pendingItemActions(it) {
       { ...PENDING_UNKNOWN_CONFIRM.unknownsucceeded, unknown_confirm: it.unknown_confirm },
       { ...PENDING_UNKNOWN_CONFIRM.unknownfailed, unknown_confirm: it.unknown_confirm },
       { ...PENDING_UNKNOWN_CONFIRM.unknownrolledback, unknown_confirm: it.unknown_confirm },
+    );
+  }
+  if (it.kind === "site_command" && it.state === "sent" && it.apply_confirm?.offered) {
+    actions.push(
+      { ...PENDING_APPLY_CONFIRM.applyapplied, apply_confirm: it.apply_confirm },
+      { ...PENDING_APPLY_CONFIRM.applynotapplied, apply_confirm: it.apply_confirm },
+      { ...PENDING_APPLY_CONFIRM.applyunknown, apply_confirm: it.apply_confirm },
     );
   }
   return actions;
@@ -1987,6 +2034,7 @@ $("exitDetailBody")?.addEventListener("click", (ev) => {
   const spec = PENDING_GATE1[action]
     || PENDING_GATE2[action]
     || PENDING_UNKNOWN_CONFIRM[action]
+    || PENDING_APPLY_CONFIRM[action]
     || (action === "reeval"
       ? PENDING_REEVAL
       : action === "unblock"
@@ -2033,6 +2081,8 @@ $("exitDetailBody")?.addEventListener("click", (ev) => {
         }
         : PENDING_UNKNOWN_CONFIRM[action]
           ? { observed_result: spec.observedResult, reason: note }
+          : PENDING_APPLY_CONFIRM[action]
+            ? { observed_apply: spec.observedApply, reason: note }
           : action === "rollback"
           ? {
             previous_stable_sha: btn.dataset.prevSha,
@@ -2050,6 +2100,8 @@ $("exitDetailBody")?.addEventListener("click", (ev) => {
         ? `/ops/api/coding-tasks/${btn.dataset.taskId}/release/decision`
         : PENDING_UNKNOWN_CONFIRM[action]
           ? `/ops/api/production-releases/${itemId}/confirm-state`
+          : PENDING_APPLY_CONFIRM[action]
+            ? `/ops/api/site-commands/${itemId}/confirm-apply`
           : action === "reeval"
           ? `/ops/api/issues/${itemId}/reevaluation/reopen`
           : action === "unblock"

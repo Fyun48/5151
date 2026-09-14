@@ -495,6 +495,16 @@ Owner 直達部署從現在就保留，不必等第 8 包。OPS 新工作流是�
 - 已授權 Owner 直達不經這個門；payload 自稱 `owner_direct` 仍 403。
 - 反悔：不按確認。不開 live、不合 master。
 
+### 包 35 — 未決清單可確認已送出遠端客服的套用結果，且不改寫終態
+
+- 已送出（`job_state=sent`）且本站尚未回報套用成功的遠端客服：未決清單可確認已套用、未套用或套用不明。
+- 確認只寫觀察（observation + audit），不改寫 `job_state`／`apply_state`，不呼叫本站套用端點，不假裝本站已回覆。
+- 不 Deploy v3、不 Deploy OPS、不開 live、不合 master。
+- 未決清單必須寫原因，且必須選 observed_apply ∈ applied／not_applied／unknown。缺一 400。
+- 確認後該命令不再列在未決清單。已確認則冪等。未送出走取消（409）。本站已回報套用成功的不必再確認（409）。
+- 已授權 Owner 直達不經這個門；payload 自稱 `owner_direct` 仍 403。
+- 反悔：不按確認。不開 live、不合 master。
+
 ---
 
 ## 12. 我堅持的理想（用來審每一個 PR）
