@@ -13,6 +13,8 @@ test("default Q&A explains walkable MRT distance not straight-line", () => {
   assert.ok(mrt);
   assert.match(mrt.question, /捷運站/);
   assert.match(mrt.answer, /步行/);
+  assert.match(mrt.answer, /「約 xx 公里」/);
+  assert.doesNotMatch(mrt.answer, /步行約 xx 公里/);
   assert.match(mrt.answer, /1\.5/);
   assert.match(mrt.answer, /不是房子到捷運站的直線距離/);
   assert.match(mrt.answer, /管理員在後台/);
