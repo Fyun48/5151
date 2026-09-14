@@ -44,16 +44,65 @@ function tagText(listing) {
     .join(" ");
 }
 
-/** 建築樣式只看型態欄／標籤，標題不看，避免「社區垃圾大樓」誤判。 */
+/** 建築樣式以型態欄／標籤為準；標題不看「大樓」，避免「社區垃圾大樓」誤判。 */
 const EXPLICIT_APPEARANCE_RE = /大樓|大廈|公寓|華廈|透天|別墅|農舍/;
 const EXPLICIT_HOUSING_FORM_RE = /大樓|大廈|公寓|華廈|店面|店舖|店鋪|倉庫|廠房|套房|雅房|分租|共宅|共居|透天|別墅|農舍/;
+/** 來源沒寫大樓／大廈時，6 樓以下整層／套房視為公寓，不得進只選大樓。 */
+const WALKUP_TOTAL_FLOORS_MAX = 6;
+
+export function appearanceLabelFromText(text) {
+  const match = String(text || "").match(/大樓|大廈|公寓|華廈|透天|別墅|農舍/);
+  return match ? match[0] : "";
+}
+
+function tagLabels(tags) {
+  let list = tags;
+  if (typeof list === "string") {
+    try { list = JSON.parse(list); } catch { list = []; }
+  }
+  return (Array.isArray(list) ? list : []).map((item) => (
+    typeof item === "string" ? item : item?.name || item?.value || ""
+  )).filter(Boolean);
+}
+
+export function appendAppearanceTags(tags, ...values) {
+  const list = Array.isArray(tags) ? [...tags] : [];
+  for (const value of values) {
+    const label = appearanceLabelFromText(value);
+    if (!label) continue;
+    const hay = tagLabels(list).join(" ");
+    if (!hay.includes(label)) list.push(label);
+  }
+  return list;
+}
+
+function listingSourceAppearanceHay(listing) {
+  return [
+    listing?.shape,
+    listing?.shape_name,
+    listing?.building_type,
+    listing?.buildingType,
+    listing?.caseTypeName,
+  ].filter(Boolean).join(" ");
+}
 
 function listingFormHay(listing) {
-  return `${listing?.kind_name || ""} ${listing?.listing_kind || ""} ${tagText(listing)}`;
+  return `${listing?.kind_name || ""} ${listing?.listing_kind || ""} ${tagText(listing)} ${listingSourceAppearanceHay(listing)}`;
 }
 
 function listingTitleText(listing) {
   return String(listing?.title || "");
+}
+
+function listingTitleAppearanceHint(listing) {
+  const title = listingTitleText(listing);
+  if (!/公寓|華廈/.test(title)) return "";
+  if (/大[樓廈]/.test(listingFormHay(listing))) return "";
+  return (title.match(/公寓|華廈/g) || []).join(" ");
+}
+
+function listingAppearanceHay(listing) {
+  return `${listingFormHay(listing)} ${listingTitleAppearanceHint(listing)}`;
 }
 
 export function listingHasExplicitHousingForm(listing) {
@@ -61,7 +110,15 @@ export function listingHasExplicitHousingForm(listing) {
 }
 
 export function listingHasExplicitAppearance(listing) {
-  return EXPLICIT_APPEARANCE_RE.test(listingFormHay(listing));
+  return EXPLICIT_APPEARANCE_RE.test(listingAppearanceHay(listing));
+}
+
+export function listingInferredWalkupApartment(listing) {
+  if (listingHasExplicitAppearance(listing)) return false;
+  const kind = String(listing?.kind_name || listing?.listing_kind || "");
+  if (!isWholeFloorHome(kind) && !listingIsSuiteShared(listing)) return false;
+  const total = buildingTotalFloors(listing?.floor_name);
+  return total > 0 && total <= WALKUP_TOTAL_FLOORS_MAX;
 }
 
 export function listingIsUnspecifiedWholeFloor(listing) {
@@ -70,7 +127,7 @@ export function listingIsUnspecifiedWholeFloor(listing) {
 }
 
 export function listingIsUnspecifiedAppearance(listing) {
-  if (listingHasExplicitAppearance(listing)) return false;
+  if (listingHasExplicitAppearance(listing) || listingInferredWalkupApartment(listing)) return false;
   const kind = String(listing?.kind_name || listing?.listing_kind || "");
   return isWholeFloorHome(kind) || listingIsSuiteShared(listing);
 }
@@ -95,13 +152,15 @@ export function listingHasParking(listing) {
 }
 
 export function listingIsBuilding(listing) {
+  if (listingInferredWalkupApartment(listing)) return false;
   if (listingIsUnspecifiedAppearance(listing)) return true;
   return listingIsExplicitBuilding(listing);
 }
 
 export function listingIsApartment(listing) {
+  if (listingInferredWalkupApartment(listing)) return true;
   if (listingIsUnspecifiedAppearance(listing)) return true;
-  const hay = `${listing.title || ""} ${listing.kind_name || ""} ${tagText(listing)}`;
+  const hay = `${listing.title || ""} ${listing.kind_name || ""} ${tagText(listing)} ${listingSourceAppearanceHay(listing)}`;
   if (listingIsExplicitBuilding(listing) || /電梯大[樓廈]/.test(hay)) return false;
   return /公寓|華廈/.test(hay);
 }

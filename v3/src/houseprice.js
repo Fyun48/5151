@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { passesAttributeFilters, sanitizeFloorName } from "./floors.js";
+import { appendAppearanceTags, appearanceLabelFromText, passesAttributeFilters, sanitizeFloorName } from "./floors.js";
 import { listingKitFields } from "./listingKit.js";
 import { decodeEntities } from "./htmlEntities.js";
 import { isExcludedByKeyword } from "./geo.js";
@@ -259,6 +259,7 @@ export function parseHpListHtml(html) {
     const layoutMatch = stripTags(card).match(/(\d+\s*房[\d廳衛陽台\s]*)/);
     const floorMatch = stripTags(card).match(/(\d+\s*[\/／]\s*\d+)\s*樓/)
       || String(labeled["樓層"] || "").match(/(\d+\s*[\/／]\s*\d+)/);
+    const cardText = stripTags(card);
     items.push({
       id: idMatch[1],
       title,
@@ -275,7 +276,8 @@ export function parseHpListHtml(html) {
       areaName: areaMatch ? `${areaMatch[1].replace(/\.0$/, "")}坪` : String(labeled["坪數"] || "").replace(/\s+/g, ""),
       layout: layoutMatch ? layoutMatch[1].replace(/\s+/g, "") : String(labeled["格局"] || "").replace(/\s+/g, ""),
       floorName: normalizeHpFloorName(floorMatch?.[1] || labeled["樓層"] || ""),
-      text: stripTags(card),
+      buildingType: appearanceLabelFromText(labeled["型態"] || "") || appearanceLabelFromText(cardText),
+      text: cardText,
     });
   }
   return { total: total || items.length, items };
@@ -560,6 +562,9 @@ export function enrichHpListingFromDetail(row, detail, { regionId, sectionId, re
     const t = ensureTags();
     if (!t.includes(detail.usage)) t.push(detail.usage);
   }
+  if (detail.buildingType) {
+    tags = appendAppearanceTags(ensureTags(), detail.buildingType);
+  }
   const facilityPatch = applyHpFacilityEvidence(next, detail);
   if (Array.isArray(detail.conditionTags)) {
     for (const tag of detail.conditionTags) {
@@ -611,7 +616,11 @@ export function normalizeHpItem(item, { regionId, sectionId } = {}) {
   const layout = String(item.layout || "").trim();
   const floorName = sanitizeFloorName(item.floorName);
   const priceNum = Number(item.price) || 0;
-  const tags = ["5168", item.community].filter((row) => String(row || "").trim());
+  const tags = appendAppearanceTags(
+    ["5168", item.community].filter((row) => String(row || "").trim()),
+    item.buildingType,
+    item.text,
+  );
   return {
     post_id: hpPostIdFromCase(id),
     source: HP_SOURCE,

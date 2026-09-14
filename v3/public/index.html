@@ -5595,16 +5595,22 @@
       const formHay = `${kind} ${tags}`;
       const hay = `${title} ${kind} ${item.address || ""} ${tags}`;
       const suiteShared = /套房|雅房|分租|共宅|共居/.test(`${kind} ${title}`);
-      const unspecifiedAppearance = !/大樓|大廈|公寓|華廈|透天|別墅|農舍/.test(formHay) && (isWholeFloorHome(kind) || suiteShared);
-      const isBuilding = unspecifiedAppearance || /大[樓廈]/.test(formHay);
+      const titleHint = /公寓|華廈/.test(title) && !/大[樓廈]/.test(formHay) ? title : "";
+      const appearHay = `${formHay} ${titleHint}`;
+      const explicitAppearance = /大樓|大廈|公寓|華廈|透天|別墅|農舍/.test(appearHay);
+      const floorText = String(item.floor_name || "").replace(/\s+/g, "");
+      const floorParts = floorText.split("/");
+      const totalFloors = floorParts.length >= 2 ? Number((floorParts[1].match(/(\d+)/) || [])[1] || 0) : 0;
+      const inferredWalkup = !explicitAppearance && (isWholeFloorHome(kind) || suiteShared) && totalFloors > 0 && totalFloors <= 6;
+      const unspecifiedAppearance = !explicitAppearance && !inferredWalkup && (isWholeFloorHome(kind) || suiteShared);
+      const isBuilding = !inferredWalkup && (unspecifiedAppearance || /大[樓廈]/.test(formHay));
+      const isApartment = unspecifiedAppearance || inferredWalkup
+        || (/公寓|華廈/.test(`${title} ${kind} ${tags}`) && !/大[樓廈]/.test(formHay));
       const hasElevator = (/有電梯|電梯大樓|電梯大廈|電梯公寓|電梯華廈|貨梯/.test(hay) || isBuilding) && !/無電梯|沒有電梯/.test(hay);
       const matchKey = (key) => {
         if (key === "elevator") return hasElevator;
         if (key === "building") return isBuilding;
-        if (key === "apartment" || key === "apartment_huaxia") {
-          if (unspecifiedAppearance) return true;
-          return /公寓|華廈/.test(hay) && !/大[樓廈]/.test(formHay);
-        }
+        if (key === "apartment" || key === "apartment_huaxia") return isApartment;
         if (key === "suite") return /套房|雅房/.test(kind);
         if (key === "suite_shared") return suiteShared;
         if (key === "yafang") return /雅房/.test(`${kind} ${title}`);

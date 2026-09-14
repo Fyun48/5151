@@ -63,8 +63,10 @@ test("parseHpListHtml reads 5168 SSR cards", () => {
   assert.equal(whole.floor_name, "4/4");
   assert.match(whole.address, /士林區格致路/);
   assert.match(whole.url, /house\/1447592_285879/);
+  assert.match(whole.tags, /大樓/);
   const suite = normalizeHpItem(parsed.items[1], { regionId: 1, sectionId: 8 });
   assert.equal(suite.kind_name, "獨立套房");
+  assert.match(suite.tags, /公寓/);
   assert.equal(suite.price_num, 24999);
   assert.match(suite.cover, /realphoto_800x600/);
   assert.doesNotMatch(suite.cover, /default_cover/);
@@ -206,6 +208,7 @@ test("enrichHpListingFromDetail fills missing floor and community and rebuilds t
   assert.equal(enriched.geo_source, "houseprice");
   assert.ok(Number.isFinite(enriched.lat) && Number.isFinite(enriched.lng));
   assert.match(enriched.tags, /住家用/);
+  assert.match(enriched.tags, /大樓/);
 });
 
 test("fetchHpCoveringListings enriches suite listings from the detail page", async () => {

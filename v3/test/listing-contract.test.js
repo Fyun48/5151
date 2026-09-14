@@ -22,6 +22,7 @@ import {
   listingHasElevator,
   listingIsApartment,
   listingIsBuilding,
+  listingIsUnspecifiedAppearance,
   listingIsUnspecifiedWholeFloor,
   listingIsShop,
   listingIsWarehouse,
@@ -34,6 +35,11 @@ import {
   looksLikeUnavailable,
 } from "../src/importSanitize.js";
 import { interpretRakuyaResponse, normalizeRakuyaItem } from "../src/rakuya.js";
+import { normalizeListing } from "../src/client591.js";
+import { enrichHpListingFromDetail, normalizeHpItem, parseHpDetailJson } from "../src/houseprice.js";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 test("F01 natural gas uses negation and does not treat 有瓦斯 as 天然瓦斯", () => {
   assert.equal(listingHasNaturalGas({ text: "無天然瓦斯" }), false);
@@ -171,6 +177,74 @@ test("F18 login UI on a usable listing page is not a whole-page block", () => {
   const recaptchaContact = "<h1>淡水河岸</h1><p>格局：2房</p><form>recaptcha 聯絡屋主</form>";
   assert.equal(looksLikeCaptchaOrLogin(recaptchaContact), false);
   assert.equal(looksLikeUnavailable(`${usable} 已下架`, 200), false);
+});
+
+test("whole+building+elevator excludes 公寓 even when title omits 公寓", () => {
+  const zhishan = {
+    title: "⭐MRT芝山站❤️超值三房.生活機能佳❤️巷弄寧靜不吵雜",
+    kind_name: "整層住家",
+    floor_name: "4/5",
+    tags: [],
+  };
+  assert.equal(listingIsUnspecifiedAppearance(zhishan), false);
+  assert.equal(listingIsBuilding(zhishan), false);
+  assert.equal(listingIsApartment(zhishan), true);
+  assert.equal(listingHasElevator(zhishan), false);
+  assert.equal(matchesHousingKind(zhishan, "whole,building,elevator"), false);
+  assert.equal(matchesHousingKind(zhishan, "whole,apartment_huaxia"), true);
+  assert.equal(matchesHousingKind({
+    title: zhishan.title,
+    kind_name: "整層住家",
+    tags: ["公寓"],
+  }, "whole,building,elevator"), false);
+  assert.equal(matchesHousingKind({
+    title: "芝山站三房公寓生活機能佳",
+    kind_name: "整層住家",
+  }, "whole,building"), false);
+  assert.equal(listingIsBuilding({
+    title: "社區垃圾大樓服務",
+    kind_name: "整層住家",
+    floor_name: "4/5",
+  }), false);
+  const taggedTower = { title: zhishan.title, kind_name: "整層住家", floor_name: "4/4", tags: ["大樓"] };
+  assert.equal(listingIsBuilding(taggedTower), true);
+  assert.equal(matchesHousingKind(taggedTower, "whole,building,elevator"), true);
+  assert.equal(matchesHousingKind({ kind_name: "整層住家", floor_name: "8/12" }, "whole,building"), true);
+});
+
+test("591 shape and 5168 caseTypeName persist into tags for housing kind", () => {
+  const row = normalizeListing({
+    id: 21960001,
+    title: "⭐MRT芝山站❤️超值三房.生活機能佳❤️巷弄寧靜不吵雜",
+    kind_name: "整層住家",
+    shape: "公寓",
+    tags: ["近捷運"],
+    floor_name: "4F/5F",
+    price: "32000",
+  });
+  assert.match(row.tags, /公寓/);
+  assert.equal(matchesHousingKind(row, "whole,building,elevator"), false);
+  assert.equal(matchesHousingKind(row, "whole,apartment_huaxia"), true);
+  const hp = normalizeHpItem({
+    id: "16692013",
+    kind: "整層住家",
+    title: "⭐MRT芝山站❤️超值三房.生活機能佳❤️巷弄寧靜不吵雜",
+    price: 32000,
+    areaName: "17坪",
+    layout: "2房2廳1衛",
+    floorName: "3/4",
+    address: "台北市士林區福華路",
+    community: "",
+    buildingType: "公寓",
+  }, { regionId: 1, sectionId: 8 });
+  assert.match(hp.tags, /公寓/);
+  const fixture = readFileSync(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures/houseprice-detail-16692013.json"),
+    "utf8",
+  );
+  const enriched = enrichHpListingFromDetail(hp, parseHpDetailJson(fixture), { regionId: 1, sectionId: 8 });
+  assert.match(enriched.tags, /公寓/);
+  assert.equal(matchesHousingKind(enriched, "whole,building,elevator"), false);
 });
 
 test("rakuya list items do not invent whole-floor kind", () => {

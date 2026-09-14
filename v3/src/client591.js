@@ -1,4 +1,4 @@
-import { passesAttributeFilters, passesGeoFilters, sanitizeFloorName } from "./floors.js";
+import { appendAppearanceTags, passesAttributeFilters, passesGeoFilters, sanitizeFloorName } from "./floors.js";
 import { decodeEntities } from "./htmlEntities.js";
 import { kitFrom591Detail, listingKitFields } from "./listingKit.js";
 import { feeRowMonthlyAmount, parseTwdAmount } from "./listingCost.js";
@@ -236,6 +236,7 @@ export function mergeFeeRows(listFees, detailFees) {
 export function normalizeListing(item) {
   const coords = coordsFromListing(item);
   const extraFee = Number(item.extra_fee) || 0;
+  const tags = appendAppearanceTags(item.tags || [], item.shape, item.shape_name);
   return {
     post_id: Number(item.id),
     source_key: sourceKey(item),
@@ -254,7 +255,7 @@ export function normalizeListing(item) {
     floor_name: sanitizeFloorName(item.floor_name),
     ...listingKitFields({
       title: item.title,
-      tags: item.tags,
+      tags,
       address: item.address,
       kind_name: item.kind_name,
       extra_fee_text: item.extra_fee_text,
@@ -267,7 +268,7 @@ export function normalizeListing(item) {
     community_id: item.community_id && Number(item.community_id) !== 0 ? Number(item.community_id) : 0,
     community_name: String(item.community_name || item.community || "").trim(),
     community_linked: item.community_id && Number(item.community_id) !== 0 ? 1 : 0,
-    tags: JSON.stringify(item.tags || []),
+    tags: JSON.stringify(tags),
     refresh_time: item.refresh_time || "",
     lat: coords.lat,
     lng: coords.lng,

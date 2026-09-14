@@ -395,3 +395,25 @@ test("cross-district personal ranking keeps viewer flags while excluding unrelat
     assert.ok(!JSON.stringify(query({ userId: bob })).includes("Alice only"));
   `);
 });
+
+test("list API whole+building+elevator drops walk-up 公寓 without shape tags", () => {
+  runIsolated(`
+    seed(810001, {
+      title: "⭐MRT芝山站❤️超值三房.生活機能佳❤️巷弄寧靜不吵雜",
+      floor_name: "4/5",
+      kind_name: "整層住家",
+      tags: "[]",
+    });
+    seed(810002, {
+      title: "芝山站電梯三房",
+      floor_name: "8/12",
+      kind_name: "整層住家",
+      tags: '["電梯大樓"]',
+    });
+    const building = query({ kind: "whole,building,elevator" });
+    assert.deepEqual(ids(building), [810002]);
+    const apt = query({ kind: "whole,apartment_huaxia" });
+    assert.ok(ids(apt).includes(810001));
+    assert.ok(!ids(apt).includes(810002));
+  `);
+});
