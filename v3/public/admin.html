@@ -618,10 +618,13 @@
       <div id="inventory-crawl" class="admin-panel" data-admin-page="inventory/crawl">
 <section class="card">
       <h2>抓取範圍與排程</h2>
-      <p class="hint">系統抓取底庫。會員抓到的物件會寫進同一份資料庫、互相共用，不會每人各爬一遍。這裡只處理全站間隔、行政區 coverage 與底庫。捷運站顯示改在「地圖與通勤」；會員畫面沒有這個選項。</p>
+      <p class="hint">系統抓取底庫。會員抓到的物件會寫進同一份資料庫、互相共用，不會每人各爬一遍。這裡只處理全站間隔、確認已下架天數、行政區 coverage 與底庫。捷運站顯示改在「地圖與通勤」；會員畫面沒有這些選項。</p>
       <form id="systemCrawlForm">
         <label>全站檢查間隔（分鐘）</label>
         <input id="systemCrawlInterval" type="number" min="1" max="120" value="15" />
+        <label for="systemOfflineConfirmDays">確認已下架天數</label>
+        <input id="systemOfflineConfirmDays" type="number" min="1" max="30" value="7" />
+        <p class="hint">物件進入「確認下架中」後，連續這麼多天都找不到，才改成「確認已下架」。1–30 天，全站共用，不是各會員搜尋設定檔。</p>
         <label>底庫行政區</label>
         <div class="district-toolbar">
           <button type="button" class="ghost" id="systemCrawlSelectAll">全選</button>
@@ -2291,6 +2294,7 @@
       const data = await readApi(res);
       if (!res.ok) throw new Error(data.error || "載入底庫失敗");
       if ($("systemCrawlInterval")) $("systemCrawlInterval").value = data.intervalMinutes || 15;
+      if ($("systemOfflineConfirmDays")) $("systemOfflineConfirmDays").value = data.offlineConfirmDays || 7;
       if ($("systemShowMrt")) $("systemShowMrt").checked = data.showMrt !== false;
       if ($("systemShowListRefreshBar")) $("systemShowListRefreshBar").checked = data.showListRefreshBar === true;
       renderSystemCrawlDistricts(data.cities || [], data.watchDistricts || []);
@@ -3759,6 +3763,7 @@
             body: JSON.stringify({
               watchDistricts,
               intervalMinutes: Number($("systemCrawlInterval").value) || 15,
+              offlineConfirmDays: Number($("systemOfflineConfirmDays").value) || 7,
               showMrt: $("systemShowMrt") ? $("systemShowMrt").checked : true,
               showListRefreshBar: $("systemShowListRefreshBar") ? $("systemShowListRefreshBar").checked : false,
             }),
@@ -3766,11 +3771,12 @@
           const data = await readApi(res);
           if (!res.ok) throw new Error(data.error || "儲存失敗");
           if ($("systemCrawlInterval")) $("systemCrawlInterval").value = data.intervalMinutes || 15;
+          if ($("systemOfflineConfirmDays")) $("systemOfflineConfirmDays").value = data.offlineConfirmDays || 7;
           if ($("systemShowMrt")) $("systemShowMrt").checked = data.showMrt !== false;
           if ($("systemShowListRefreshBar")) $("systemShowListRefreshBar").checked = data.showListRefreshBar === true;
           renderSystemCrawlDistricts(data.cities || [], data.watchDistricts || []);
           renderSystemCatalogStats(data.catalog);
-          setMsg("systemCrawlMsg", "底庫與間隔已儲存。之後會依這個節奏抓共用庫。", true);
+          setMsg("systemCrawlMsg", "底庫、間隔與下架天數已儲存。之後會依這個節奏抓共用庫並判定下架。", true);
         } catch (error) {
           setMsg("systemCrawlMsg", error.message);
         } finally {

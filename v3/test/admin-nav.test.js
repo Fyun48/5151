@@ -48,6 +48,7 @@ test("existing admin forms stay available under the new IA", () => {
 
   const crawl = html.slice(html.indexOf('data-admin-page="inventory/crawl"'), html.indexOf('data-admin-page="inventory/same-house"'));
   assert.match(crawl, /id="systemCrawlForm"/);
+  assert.match(crawl, /id="systemOfflineConfirmDays"/);
   assert.match(crawl, /儲存抓取範圍/);
   assert.doesNotMatch(crawl, /id="systemShowMrt"/);
 

@@ -6,6 +6,7 @@ import {
   getCommunityCache,
   getListing,
   getSettings,
+  getSystemCrawl,
   getUserById,
   getMailTemplates,
   getMemberMailBundle,
@@ -535,8 +536,7 @@ async function resolvePendingNotifyLocations(settings, { withRoute = true } = {}
 }
 
 async function sweepOfflineListings(seenIds, { limit = 20 } = {}) {
-  const settings = getSettings();
-  const confirmDays = normalizeOfflineConfirmDays(settings.offlineConfirmDays);
+  const confirmDays = normalizeOfflineConfirmDays(getSystemCrawl().offlineConfirmDays);
   const confirmed = confirmExpiredOfflineListings(confirmDays);
   const rows = listingsNeedingAliveCheck({ excludeIds: [...seenIds], limit });
   let checked = 0;

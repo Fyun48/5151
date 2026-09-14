@@ -3189,10 +3189,6 @@
         <ul class="support-benefits" id="sponsorSettingsBenefits"></ul>
         <div class="sponsor-links" id="sponsorSettingsLinks"></div>
       </div>
-      <div class="admin-only">
-        <label>確認已下架天數</label>
-        <input type="number" id="offlineConfirmDays" min="1" max="30" />
-      </div>
       <label>建物總樓層至少（可空白＝不限）</label>
       <input type="number" id="minBuildingFloors" class="guest-cheap" min="0" max="99" step="1" inputmode="numeric" placeholder="不限" />
       <label data-tour="commute">上班地址（選填）</label>
@@ -6536,9 +6532,6 @@
         const memberMins = mePlan === "sponsor" ? 5 : 8;
         hint.textContent = `全站底庫約每 ${mins} 分鐘向外抓一次。你儲存設定檔後，會先用站內資料比對，約 ${memberMins} 分鐘後才第一次向外抓取（一般會員 8 分鐘、贊助會員 5 分鐘）。會員不能改這些間隔。`;
       }
-      $("offlineConfirmDays").value = s.offlineConfirmDays || 7;
-      $("offlineConfirmDays").disabled = !meIsAdmin;
-      $("offlineConfirmDays").classList.toggle("schedule-readonly", !meIsAdmin);
       $("minBuildingFloors").value = s.minBuildingFloors || "";
       $("workAddress").value = s.workAddress || "";
       $("commuteKm").value = s.commuteKm || 0;
@@ -7819,7 +7812,7 @@
         areaMax: Number($("areaMax").value) || 0,
         excludeRooftop: $("excludeRooftop") ? $("excludeRooftop").checked : true,
         hasParking: $("hasParking") ? $("hasParking").checked : false,
-        offlineConfirmDays: meIsAdmin ? (Number($("offlineConfirmDays").value) || 7) : 7,
+        offlineConfirmDays: 7,
         minBuildingFloors: Number($("minBuildingFloors").value) || 0,
         wholeFloorOnly: kinds.length === 1 && kinds[0] === "whole",
         housing_kinds: kinds.slice(),

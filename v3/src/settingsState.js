@@ -45,7 +45,6 @@ export const PROFILE_FIELDS = [
   "areaMax",
   "excludeRooftop",
   "hasParking",
-  "offlineConfirmDays",
   "housing_kinds",
   "listing_sources",
   "query_state_version",
@@ -308,7 +307,7 @@ export function applySettingPatch(current, partial = {}, { admin = false, plan =
   next.priceMaxIncludesExtras = next.priceMaxIncludesExtras === true;
   next.areaMax = Math.max(0, Math.min(Number(next.areaMax) || 0, 500));
   next.minBuildingFloors = Math.max(0, Math.min(Math.round(Number(next.minBuildingFloors) || 0), 99));
-  next.offlineConfirmDays = Math.max(1, Math.min(Math.round(Number(next.offlineConfirmDays) || 7), 30));
+  next.offlineConfirmDays = Math.max(1, Math.min(Math.round(Number(current.offlineConfirmDays) || 7), 30));
   next.notificationsPaused = next.notificationsPaused === true;
   next.inactivityPaused = next.inactivityPaused === true;
   if (Object.prototype.hasOwnProperty.call(patch, "notificationsPaused") && !Object.prototype.hasOwnProperty.call(patch, "inactivityPaused")) {

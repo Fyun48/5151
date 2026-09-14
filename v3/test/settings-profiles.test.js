@@ -276,7 +276,7 @@ test("blank profile names become 暫存 before save", () => {
   assert.equal(resolveSaveAsProfileAction([], profileNameOrDraft("")).action, "create");
 });
 
-test("members cannot change interval, pages, or offline days; admins can", () => {
+test("members cannot change interval or pages; offline days stay site-wide", () => {
   const stored = {
     watchDistricts: ["1-8"],
     intervalMinutes: 2,
@@ -317,7 +317,7 @@ test("members cannot change interval, pages, or offline days; admins can", () =>
   );
   assert.equal(adminPatched.intervalMinutes, 1);
   assert.equal(adminPatched.pagesPerWatch, 8);
-  assert.equal(adminPatched.offlineConfirmDays, 21);
+  assert.equal(adminPatched.offlineConfirmDays, 7);
 });
 
 test("same-name save overwrites without a confirm action", () => {
