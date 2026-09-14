@@ -442,6 +442,65 @@ test("S7 matching 5168 HTML plus matching JSON keeps verified HTML text and phot
   db.close();
 });
 
+test("S7 matching HTML plus correcting JSON keeps one final structure summary", async () => {
+  const db = open();
+  addUser(db, { id: 2, email: "vip@example.com", plan: "sponsor" });
+  const url = "https://rent.houseprice.tw/house/1447592_285879";
+  const html = readFix("houseprice-detail.html").replace(/<script\b[\s\S]*?<\/script>/gi, "");
+  const parsedHtml = parse5168Listing(html, url);
+  assert.equal(parsedHtml.htmlVerified, true);
+  assert.equal(parsedHtml.floor_name, "4/4");
+  assert.match(parsedHtml.address, /格致路/);
+  assert.doesNotMatch(parsedHtml.description || "", /樓層 4\/4/);
+
+  const row = await start5168Import(db, 2, {
+    url,
+    html,
+    json: {
+      webRentCaseGroupingDetail: {
+        sid: "1447592_285879",
+        caseName: "御陽明樓層更正",
+        simpAddress: "台北市士林區格致路99號",
+        fromFloor: "6",
+        toFloor: "6",
+        upFloor: 8,
+        rm: 3,
+        livingRm: 1,
+        bathRm: 2,
+        buildPin: 50,
+      },
+    },
+  });
+  assert.equal(row.status, "ready_for_review");
+  assert.equal(row.failure_code || "", "");
+  assert.deepEqual(row.photo_errors || [], []);
+  assert.match(row.imported_title, /御陽明樓層更正/);
+  assert.match(row.imported_text, /樓層 6\/8/);
+  assert.match(row.imported_text, /地址 台北市士林區格致路99號/);
+  assert.match(row.imported_text, /3房1廳2衛/);
+  assert.match(row.imported_text, /50坪/);
+  assert.doesNotMatch(row.imported_text, /樓層 4\/4/);
+  assert.doesNotMatch(row.imported_text, /4房2廳4衛2陽台/);
+  assert.doesNotMatch(row.imported_text, /64\.73坪/);
+  assert.equal((row.imported_text.match(/^樓層 /gm) || []).length, 1);
+  assert.equal((row.imported_text.match(/^地址 /gm) || []).length, 1);
+
+  const listing = db.prepare(
+    "SELECT title, self_body, address, floor_name, layout, area_name FROM listings WHERE post_id=?",
+  ).get(row.listing_id);
+  assert.equal(listing.title, "御陽明樓層更正");
+  assert.equal(listing.floor_name, "6/8");
+  assert.equal(listing.address, "台北市士林區格致路99號");
+  assert.equal(listing.layout, "3房1廳2衛");
+  assert.equal(listing.area_name, "50坪");
+  assert.equal(listing.self_body, row.imported_text);
+  assert.match(listing.self_body, /樓層 6\/8/);
+  assert.doesNotMatch(listing.self_body, /樓層 4\/4|4房2廳4衛2陽台|64\.73坪/);
+  assert.equal((listing.self_body.match(/^樓層 /gm) || []).length, 1);
+  assert.equal((listing.self_body.match(/^地址 /gm) || []).length, 1);
+  db.close();
+});
+
 test("591 and 5168 fixtures extract title/text/photos and strip contact", () => {
   const a = parse591Listing(readFix("import-591-public.html"), "https://rent.591.com.tw/15801234");
   assert.match(a.title, /信義安和/);

@@ -88,6 +88,7 @@ function verifiedHpDetail(detail, expectedId) {
 function emptyParsedListing(reason = "id_missing") {
   return {
     title: "",
+    description: "",
     text: "",
     photos: [],
     address: "",
@@ -107,18 +108,34 @@ function identityReasonFor(detail, expectedId) {
   return hpDetailIdentityValue(detail) ? "id_mismatch" : "id_missing";
 }
 
-function listingFieldsFromVerifiedDetail(detail, extras = {}) {
-  const bits = [
-    extras.text || "",
+function structureSummaryLines(detail) {
+  return [
     detail.community ? `社區 ${detail.community}` : "",
     detail.floorName ? `樓層 ${detail.floorName}` : "",
     detail.address ? `地址 ${detail.address}` : "",
-    detail.layout,
-    detail.areaName,
+    detail.layout || "",
+    detail.areaName || "",
   ].filter(Boolean);
+}
+
+function formatListingText(description, detail) {
+  const descLines = String(description || "").split(/\n+/).map((row) => row.trim()).filter(Boolean);
+  const seen = new Set(descLines);
+  const lines = [...descLines];
+  for (const row of structureSummaryLines(detail)) {
+    if (seen.has(row)) continue;
+    seen.add(row);
+    lines.push(row);
+  }
+  return lines.join("\n");
+}
+
+function listingFieldsFromVerifiedDetail(detail, extras = {}) {
+  const description = extras.description || "";
   return {
     title: extras.title || sanitizeImportedTitle(detail.title || ""),
-    text: bits.filter((row, idx, all) => all.indexOf(row) === idx).join("\n"),
+    description,
+    text: formatListingText(description, detail),
     photos: extras.photos || [],
     address: detail.address || "",
     floor_name: detail.floorName || "",
@@ -136,7 +153,7 @@ function chooseVerified5168Listing(parsed, jsonDetail) {
     const jsonTitle = sanitizeImportedTitle(jsonDetail.title || "");
     return listingFieldsFromVerifiedDetail(jsonDetail, {
       title: jsonTitle || parsed.title,
-      text: parsed.text,
+      description: parsed.description,
       photos: parsed.photos,
       htmlVerified: true,
     });
@@ -165,7 +182,7 @@ export function parse5168Listing(html, pageUrl = "") {
   if (!detail) return emptyParsedListing(identityReasonFor(parsedDetail, expectedId));
   return listingFieldsFromVerifiedDetail(detail, {
     title: extractTitle(document),
-    text: extractText(document),
+    description: extractText(document),
     photos: collectImgUrls(document, pageUrl),
     htmlVerified: true,
   });
