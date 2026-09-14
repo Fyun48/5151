@@ -787,6 +787,7 @@ test("R11 kept list rerenders when same IDs change content, go offline, or a rea
   assert.equal(keptListShouldRerender([a], [{ ...a, offline: 1 }]), true);
   assert.equal(keptListShouldRerender([a], [a, { post_id: 2, display_ready: true }]), true);
   assert.equal(keptListShouldRerender([a], [updated], { refreshCards: true }), true);
+  assert.equal(keptListShouldRerender([a], [a], { append: true }), true);
 });
 
 test("R12 metrics ignore null stages and split first-ready from unmeasured routes", () => {
