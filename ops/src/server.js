@@ -100,7 +100,7 @@ import {
 } from "./release/productionRelease.js";
 import { makeProductionReleaseProvider } from "./release/productionReleaseProvider.js";
 import { kitFilePath, resolveKitStatic } from "./designKitStatic.js";
-import { cancelSiteCommand, deliverSiteCommand, enqueueAndMaybeDeliver, listSiteCommands } from "./siteCommand.js";
+import { cancelSiteCommand, confirmSiteCommandApplyObservation, deliverSiteCommand, enqueueAndMaybeDeliver, listSiteCommands } from "./siteCommand.js";
 import { getDashboard, listFeedbackInbox, listIssuesWithLifecycle, OPS_PHASE, publicFeedback } from "./dashboard.js";
 import { notifyConfig, sendOpsNotification } from "./notify/webhook.js";
 import { productAllowsFollowup } from "./usageConsent.js";
@@ -666,6 +666,23 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
         try {
           sendJson(res, 200, { ok: true, ...cancelSiteCommand(db, Number(commandCancel[1]), { actor: `owner:${req.owner.email}`, reason: b.reason }) });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
+      const commandConfirmApply = pathname.match(/^\/ops\/api\/site-commands\/(\d+)\/confirm-apply$/);
+      if (commandConfirmApply && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {};
+        try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          sendJson(res, 200, { ok: true, ...confirmSiteCommandApplyObservation(db, Number(commandConfirmApply[1]), {
+            ...b,
+            actor: `owner:${req.owner.email}`,
+            reason: b.reason,
+            observedApply: b.observed_apply || b.observedApply,
+          }) });
         } catch (err) {
           sendJson(res, err.status || 400, { error: err.message });
         }

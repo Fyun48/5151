@@ -3,11 +3,15 @@ import { signIngestRequest } from "./ingestSignature.js";
 import { appendAuditRow } from "./audit.js";
 import { httpError } from "./errors.js";
 import { getProduct, publicProduct } from "./products.js";
+import { withImmediateTx } from "./tx.js";
+import { rejectSpoofedOwnerDirect } from "./instructionSource.js";
 
 export const APPLY_PATH = "/api/ops/commands/apply";
 export const COMMAND_KINDS = Object.freeze(["feedback.patch_handling", "crm.add_note"]);
 export const JOB_STATES = Object.freeze(["pending", "sending", "sent", "failed", "dead", "cancelled"]);
 export const APPLY_STATES = Object.freeze(["unknown", "applied", "rejected", "conflict"]);
+export const SITE_COMMAND_APPLY_EVIDENCE_KIND = "site_command_apply_confirmed";
+export const SITE_COMMAND_OBSERVED_APPLY = Object.freeze(["applied", "not_applied", "unknown"]);
 
 function iso(now = new Date()) {
   return (now instanceof Date ? now : new Date(now)).toISOString();
@@ -51,6 +55,19 @@ export function ensureSiteCommandSchema(db) {
       FOREIGN KEY (product_id) REFERENCES ops_product(id) ON DELETE RESTRICT
     );
     CREATE INDEX IF NOT EXISTS idx_site_command_product ON site_command_job(product_id, id);
+    CREATE TABLE IF NOT EXISTS site_command_observation (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_id INTEGER NOT NULL,
+      evidence_kind TEXT NOT NULL,
+      observed_apply TEXT NOT NULL,
+      reason TEXT,
+      actor TEXT,
+      rewrite_apply INTEGER NOT NULL DEFAULT 0,
+      site_not_claimed INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (job_id) REFERENCES site_command_job(id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS idx_site_command_observation_job ON site_command_observation(job_id, evidence_kind);
   `);
   try {
     const cols = db.prepare("PRAGMA table_info(site_command_job)").all().map((c) => c.name);
@@ -375,5 +392,106 @@ export async function enqueueAndMaybeDeliver(db, input, {
     delivered: job.apply_state === "applied",
     reason: job.apply_state === "applied" ? "" : (job.last_error || "not_applied"),
     product: publicProduct(getProduct(db, job.product_id)),
+  };
+}
+
+function siteCommandApplyConfirmed(db, jobId) {
+  ensureSiteCommandSchema(db);
+  return !!db.prepare(
+    `SELECT id FROM site_command_observation WHERE job_id=? AND evidence_kind=? ORDER BY id DESC LIMIT 1`,
+  ).get(Number(jobId), SITE_COMMAND_APPLY_EVIDENCE_KIND);
+}
+
+export function describeSiteCommandApplyOffer(db, jobId) {
+  ensureSiteCommandSchema(db);
+  const row = db.prepare("SELECT * FROM site_command_job WHERE id=?").get(Number(jobId));
+  if (!row) return { offered: false, reason: "not_found" };
+  if (row.job_state !== "sent") {
+    return { offered: false, reason: "not_sent" };
+  }
+  if (row.apply_state === "applied") {
+    return { offered: false, reason: "already_applied" };
+  }
+  if (siteCommandApplyConfirmed(db, row.id)) {
+    return { offered: false, reason: "already_confirmed", confirmed: true };
+  }
+  return {
+    offered: true,
+    confirmed: false,
+    job_id: Number(row.id),
+    observed_apply: SITE_COMMAND_OBSERVED_APPLY.slice(),
+    rewrite_apply: false,
+    site_not_claimed: true,
+  };
+}
+
+export function confirmSiteCommandApplyObservation(db, jobId, opts = {}) {
+  rejectSpoofedOwnerDirect(opts);
+  const {
+    actor = "owner",
+    reason = null,
+    observedApply = null,
+    fetchImpl = null,
+    now = new Date(),
+  } = opts;
+  const observed = String(observedApply || "").trim().toLowerCase();
+  if (!SITE_COMMAND_OBSERVED_APPLY.includes(observed)) {
+    throw httpError("確認必須寫下套用結果：applied、not_applied 或 unknown", 400);
+  }
+  const note = String(reason || "").trim();
+  if (!note) throw httpError("確認必須寫明實際看到的套用結果", 400);
+  if (typeof fetchImpl === "function") {
+    // Observation only; the site apply endpoint is never called.
+  }
+  ensureSiteCommandSchema(db);
+  const row = db.prepare("SELECT * FROM site_command_job WHERE id=?").get(Number(jobId));
+  if (!row) throw httpError("找不到命令", 404);
+  if (row.job_state !== "sent") {
+    throw httpError("只有已送出且尚未確認套用的遠端客服可寫觀察。未送出的走取消。", 409);
+  }
+  if (row.apply_state === "applied") {
+    throw httpError("本站已回報套用成功的遠端客服不必再確認。確認只寫觀察，不改寫終態。", 409);
+  }
+  if (siteCommandApplyConfirmed(db, row.id)) {
+    return {
+      idempotent: true,
+      confirmed: true,
+      rewrite_apply: false,
+      site_not_claimed: true,
+      observed_apply: observed,
+      job: publicCommandJob(row),
+    };
+  }
+  withImmediateTx(db, () => {
+    db.prepare(`
+      INSERT INTO site_command_observation(
+        job_id, evidence_kind, observed_apply, reason, actor, rewrite_apply, site_not_claimed, created_at)
+      VALUES (?, ?, ?, ?, ?, 0, 1, ?)
+    `).run(Number(row.id), SITE_COMMAND_APPLY_EVIDENCE_KIND, observed, note.slice(0, 1000), actor, iso(now));
+    appendAuditRow(db, {
+      actor,
+      action: "site_command.apply_observed",
+      entityType: "site_command_job",
+      entityId: String(row.id),
+      data: {
+        product_id: row.product_id,
+        command_id: row.command_id,
+        observed_apply: observed,
+        reason: note.slice(0, 1000),
+        rewrite_apply: false,
+        site_not_claimed: true,
+        prev_job_state: row.job_state,
+        prev_apply_state: row.apply_state,
+      },
+      now,
+    });
+  });
+  const fresh = db.prepare("SELECT * FROM site_command_job WHERE id=?").get(Number(row.id));
+  return {
+    confirmed: true,
+    rewrite_apply: false,
+    site_not_claimed: true,
+    observed_apply: observed,
+    job: publicCommandJob(fresh),
   };
 }

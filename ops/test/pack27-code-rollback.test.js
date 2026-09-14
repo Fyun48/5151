@@ -166,7 +166,7 @@ test("console exposes pending-list code rollback as a distinct door", () => {
   const js = readFileSync(join(root, "../public/console.js"), "utf8");
   assert.match(html, /已成功且為目前正式版的發布可程式退回上一版/);
   assert.match(html, /這不是取消 runner，也不是 DB 還原/);
-  assert.match(html, /console\.js\?v=20260913-pkg34/);
+  assert.match(html, /console\.js\?v=20260913-pkg35/);
   assert.match(js, /\/ops\/api\/production-releases\/\$\{id\}\/rollback/);
   assert.match(js, /程式退回上一版/);
   assert.match(js, /RESTORE-PRODUCTION-DB/);

@@ -173,7 +173,7 @@ test("console exposes pending-list reeval and unblock without opening a coding o
   assert.match(html, /已封鎖的議題可解除封鎖/);
   assert.match(html, /只重開評估，不會開 PR、也不會部署/);
   assert.match(html, /已授權 Owner 直達不經這個門/);
-  assert.match(html, /console\.js\?v=20260913-pkg34/);
+  assert.match(html, /console\.js\?v=20260913-pkg35/);
   assert.match(js, /PENDING_REEVAL/);
   assert.match(js, /PENDING_UNBLOCK/);
   assert.match(js, /手動重評/);
