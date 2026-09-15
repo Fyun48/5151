@@ -53,6 +53,9 @@ test("site entries and CTA stay out of the way of search chrome", () => {
   assert.match(cta, /dismissedUntil/);
   assert.match(cta, /data-support-dismiss/);
   assert.match(cta, /Escape/);
+  assert.match(cta, /if \(data\?\.state\) writeJson\(STORAGE_KEY, \{ \.\.\.clientState, \.\.\.data\.state \}\)/);
+  assert.doesNotMatch(cta, /kind:\s*"support_cta_shown"/);
+  assert.doesNotMatch(cta, /shownCount = \(Number\(state\.shownCount\)/);
   assert.doesNotMatch(cta, /buymeacoffee\.com/);
   assertScriptsParse(html);
 });

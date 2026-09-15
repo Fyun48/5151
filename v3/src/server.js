@@ -256,8 +256,8 @@ import {
   createSupportSponsor,
   createSupportTier,
   dismissSupportCta,
-  evaluateSupportCta,
   getSupportFlags,
+  handleSupportCtaRequest,
   initSupportDomain,
   listCtaRules,
   listSupportCosts,
@@ -265,7 +265,6 @@ import {
   listSupportSponsors,
   listSupportTiers,
   listSupportTransactions,
-  markSupportCtaShown,
   previewSupportConfig,
   publicSupportConfig,
   publishSupportConfig,
@@ -1486,21 +1485,11 @@ app.post("/api/support/checkout", async (req, res) => {
 app.post("/api/support/cta", (req, res) => {
   try {
     const session = readSession(req);
-    const result = evaluateSupportCta(db, {
+    const result = handleSupportCtaRequest(db, {
       userId: session?.userId || null,
       usage: req.body?.usage,
       clientState: req.body?.clientState,
     });
-    if (result.show) {
-      markSupportCtaShown(db, {
-        userId: session?.userId || null,
-        clientState: result.state,
-      });
-      recordSupportEvent(db, "support_cta_shown", {
-        userId: session?.userId || null,
-        meta: { ruleId: result.ruleId },
-      });
-    }
     res.json(result);
   } catch {
     res.json({ show: false, reason: "unavailable" });

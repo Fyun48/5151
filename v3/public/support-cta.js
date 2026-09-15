@@ -97,15 +97,6 @@
     msg.textContent = payload.message || "如果本站真的幫你省下時間，可以自願支持網站維護。";
     card.hidden = false;
     releaseFocus = trapFocus(card);
-    const state = readJson(STORAGE_KEY, {});
-    state.lastShownAt = new Date().toISOString();
-    state.shownCount = (Number(state.shownCount) || 0) + 1;
-    writeJson(STORAGE_KEY, state);
-    fetch("/api/support/event", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "support_cta_shown", meta: { ruleId: payload.ruleId } }),
-    }).catch(() => {});
   }
 
   async function boot() {
@@ -147,8 +138,8 @@
         body: JSON.stringify({ usage, clientState }),
       });
       const data = await res.json();
-      if (data?.show) showCard(data);
       if (data?.state) writeJson(STORAGE_KEY, { ...clientState, ...data.state });
+      if (data?.show) showCard(data);
     } catch {
       // 失敗不得影響找房
     }

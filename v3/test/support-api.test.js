@@ -14,6 +14,7 @@ import {
   createSupportTier,
   dismissSupportCta,
   evaluateSupportCta,
+  handleSupportCtaRequest,
   initSupportDomain,
   listCtaRules,
   listSupportProviders,
@@ -190,6 +191,35 @@ test("CTA evaluate respects flags, threshold and dismiss cooldown", () => {
   db.close();
 });
 
+test("anonymous CTA uses post-show state so the next evaluation stays in cooldown", () => {
+  const db = open();
+  saveSupportConfig(db, { flags: { enabled: true, cta_enabled: true } });
+  const viewRule = listCtaRules(db).find((row) => row.rule_type === "view_listing");
+  updateCtaRule(db, viewRule.id, { enabled: true, threshold: 20, cooldown_days: 7 });
+  const now = new Date("2026-09-15T00:00:00.000Z");
+  const first = handleSupportCtaRequest(db, {
+    userId: null,
+    usage: { views: 30 },
+    clientState: {},
+    now,
+  });
+  assert.equal(first.show, true);
+  assert.ok(first.state.lastShownAt);
+  assert.equal(first.state.shownCount, 1);
+  const shown = db.prepare("SELECT COUNT(*) AS n FROM support_event WHERE kind='support_cta_shown'").get();
+  assert.equal(shown.n, 1);
+  const again = handleSupportCtaRequest(db, {
+    userId: null,
+    usage: { views: 30 },
+    clientState: first.state,
+    now: new Date("2026-09-16T00:00:00.000Z"),
+  });
+  assert.equal(again.show, false);
+  const stillOne = db.prepare("SELECT COUNT(*) AS n FROM support_event WHERE kind='support_cta_shown'").get();
+  assert.equal(stillOne.n, 1);
+  db.close();
+});
+
 test("checkout stays abstract and reports unavailable without an active URL", async () => {
   const db = open();
   saveSupportConfig(db, { flags: { enabled: true } });
@@ -228,4 +258,11 @@ test("admin support routes stay behind requireAdminApi and public paths are allo
   assert.match(serverSrc, /app\.post\("\/api\/support\/checkout"/);
   assert.match(authSrc, /p === "\/support.html"/);
   assert.match(authSrc, /p.startsWith\("\/api\/support\/"\)/);
+  const ctaRoute = serverSrc.slice(
+    serverSrc.indexOf('app.post("/api/support/cta"'),
+    serverSrc.indexOf('app.post("/api/support/cta/dismiss"'),
+  );
+  assert.match(ctaRoute, /handleSupportCtaRequest/);
+  assert.doesNotMatch(ctaRoute, /markSupportCtaShown/);
+  assert.doesNotMatch(ctaRoute, /recordSupportEvent/);
 });

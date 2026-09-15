@@ -808,6 +808,23 @@ export function markSupportCtaShown(db, { userId = null, clientState = {}, now =
   return next;
 }
 
+export function handleSupportCtaRequest(db, {
+  userId = null,
+  usage = {},
+  clientState = {},
+  now = new Date(),
+} = {}) {
+  const result = evaluateSupportCta(db, { userId, usage, clientState, now });
+  if (!result.show) return result;
+  const state = markSupportCtaShown(db, { userId, clientState: result.state, now });
+  recordSupportEvent(db, "support_cta_shown", {
+    userId,
+    meta: { ruleId: result.ruleId },
+    now,
+  });
+  return { ...result, state };
+}
+
 export function dismissSupportCta(db, {
   userId = null,
   days = 7,
