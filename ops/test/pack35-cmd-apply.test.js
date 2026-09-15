@@ -158,7 +158,7 @@ test("console exposes pending-list apply confirm without opening a coding or dep
   const js = readFileSync(join(root, "../public/console.js"), "utf8");
   assert.match(html, /已送出且尚未確認套用的遠端客服可從未決清單確認已套用、未套用或套用不明/);
   assert.match(html, /確認只寫觀察，不改寫命令終態，也不假裝本站已回覆/);
-  assert.match(html, /console\.js\?v=20260915-pkg36/);
+  assert.match(html, /console\.js\?v=20260915-pkg37/);
   assert.match(js, /PENDING_APPLY_CONFIRM/);
   assert.match(js, /sent:\s*"已送出"/);
   assert.match(js, /確認已套用/);

@@ -239,7 +239,7 @@ test("console exposes pending-list delivery confirm without opening a coding or 
   const js = readFileSync(join(root, "../public/console.js"), "utf8");
   assert.match(html, /解除訂閱後，本站停止遞送尚未確認時可從未決清單確認已停送、仍在送或停送不明/);
   assert.match(html, /確認只寫觀察，不改寫訂閱終態，也不假裝本站已停送/);
-  assert.match(html, /console\.js\?v=20260915-pkg36/);
+  assert.match(html, /console\.js\?v=20260915-pkg37/);
   assert.match(js, /PENDING_DELIVERY_CONFIRM/);
   assert.match(js, /確認已停送/);
   assert.match(js, /確認仍在送/);

@@ -213,7 +213,7 @@ test("console exposes leftover cancel-result as a distinct pending-list door", (
   const js = readFileSync(join(root, "../public/console.js"), "utf8");
   assert.match(html, /已取消的製作、QA、隔離 staging 若仍留下 branch、PR、測試站或供應商工作/);
   assert.match(html, /不自動關閉 PR、不刪分支、不拆測試容器/);
-  assert.match(html, /console\.js\?v=20260915-pkg36/);
+  assert.match(html, /console\.js\?v=20260915-pkg37/);
   assert.match(js, /\/ops\/api\/coding-tasks\/\$\{id\}\/confirm-cancel-result/);
   assert.match(js, /\/ops\/api\/qa-runs\/\$\{id\}\/confirm-cancel-result/);
   assert.match(js, /\/ops\/api\/staging-deployments\/\$\{id\}\/confirm-cancel-result/);

@@ -155,7 +155,7 @@ test("console exposes pending-list unknown confirm without opening a coding or d
   assert.match(html, /正式部署狀態不明時，先確認該環境實際結果，再完成移交/);
   assert.match(html, /狀態不明可從未決清單確認已成功、已失敗或已退回/);
   assert.match(html, /確認只寫觀察，不改寫終態，也不宣稱撤回/);
-  assert.match(html, /console\.js\?v=20260915-pkg36/);
+  assert.match(html, /console\.js\?v=20260915-pkg37/);
   assert.match(js, /PENDING_UNKNOWN_CONFIRM/);
   assert.match(js, /確認已成功/);
   assert.match(js, /確認已失敗/);
