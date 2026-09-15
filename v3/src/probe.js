@@ -26,7 +26,7 @@ function asProbeResult(supported, outcome) {
 const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
 // 僅保留「非常明確」的下架字樣，避免把導覽/推薦區塊的字誤判。
-const GONE_TEXT = /物件已(下架|成交|出租|刪除|結案|售出)|此(物件|案件|房屋|刊登|頁面)已(下架|不存在|刪除|成交|出租)|查無(此|該)?(物件|房屋|刊登)|物件不存在|找不到.{0,6}(物件|房屋|刊登|頁面)/;
+const GONE_TEXT = /物件已(下架|成交|出租|刪除|結案|售出|關閉)|此(物件|案件|房屋|刊登|頁面)已(下架|不存在|刪除|成交|出租|關閉)|查無(此|該)?(物件|房屋|刊登)|物件不存在|找不到.{0,6}(物件|房屋|刊登|頁面)/;
 
 // 通用 HTML 明細探測：404/410 或轉址到「查無物件」頁或明確下架字樣 → gone；其它保守 → alive。
 export async function probeHtmlListingOutcome(url, { redirectGoneMarkers = [], referer = "" } = {}) {
@@ -147,13 +147,18 @@ export async function probeHtmlListingAlive(url, opts = {}) {
 }
 
 // 依來源分派探測。回傳 { supported, alive }：supported=false 表示此來源不支援即時探測（如自刊 self）。
-export async function probeListingAliveBySource(listing) {
+export async function probeListingAliveBySource(listing, { thorough = false } = {}) {
   const source = String(listing?.source || "591") || "591";
   const url = String(listing?.url || "");
+  const rentUrl = url || (listing?.post_id ? `https://rent.591.com.tw/${listing.post_id}` : "");
   if (source === "self") return asProbeResult(false, null);
   try {
     if (source === "591" || source === "") {
       await probe591Body(listing.post_id);
+      if (thorough && rentUrl) {
+        const html = await probeHtmlListingOutcome(rentUrl);
+        if (html.outcome === PROBE_GONE) return asProbeResult(true, PROBE_GONE);
+      }
       return asProbeResult(true, PROBE_ALIVE);
     }
     if (source === "houseprice") {
@@ -171,6 +176,10 @@ export async function probeListingAliveBySource(listing) {
     return asProbeResult(false, null);
   } catch (error) {
     if ((source === "591" || source === "") && isListingGoneError(error)) return asProbeResult(true, PROBE_GONE);
+    if (thorough && (source === "591" || source === "") && rentUrl) {
+      const html = await probeHtmlListingOutcome(rentUrl);
+      if (html.outcome === PROBE_GONE) return asProbeResult(true, PROBE_GONE);
+    }
     return asProbeResult(true, PROBE_INCONCLUSIVE);
   }
 }

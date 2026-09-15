@@ -358,13 +358,13 @@ export function sameHouseBundle(listing, peers = []) {
     .slice(0, 2);
   const collapsed = ordered
     .filter((row) => !visibleIds.has(Number(row.post_id)))
-    .map((row) => ({
-      post_id: Number(row.post_id),
-      title: decodeEntities(row.title || ""),
-      source: String(row.source || "591"),
-      source_label: row.source_label || "",
-      url: row.url || "",
-    }));
+    .map((row) => {
+      const pub = publicSameHousePeer(row);
+      return {
+        ...pub,
+        role: Number(row.post_id) === primaryId ? "primary" : "affiliate",
+      };
+    });
   const mineSnap = listingCostSnapshot(listing);
   const primarySnap = listingCostSnapshot(primary);
   const cheaperGap = mineSnap.total > 0 && primarySnap.total > 0 ? mineSnap.total - primarySnap.total : 0;

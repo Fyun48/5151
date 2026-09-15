@@ -40,7 +40,7 @@ test("click-time recheck endpoint and client trigger are wired", () => {
   assert.match(server, /probeListingAliveBySource/);
   assert.match(server, /markListingOffline\(postId\)/);
   const index = readFileSync(path.join(dir, "../public/index.html"), "utf8");
-  assert.match(index, /\/recheck`/);
+  assert.match(index, /\/recheck\?fresh=1`/);
   assert.match(index, /if \(data && \(data\.gone \|\| data\.queued\)\) loadList\(\{ keep: true/);
   assert.match(index, /refreshCards: true/);
 });

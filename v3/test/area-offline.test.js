@@ -92,6 +92,16 @@ test("excludeRooftop hides 頂加 only as a display filter", async () => {
   assert.equal(passesDisplayFilters({ kind_name: "整層住家", floor_name: "5F/12F" }, prefs), true);
 });
 
+test("confirms offline after 7 days even if offline_at is missing", () => {
+  const now = new Date("2026-08-31T00:00:00.000Z");
+  const listing = {
+    offline: 1,
+    offline_confirmed: 0,
+    last_checked_at: "2026-08-24T00:00:00.000Z",
+  };
+  assert.equal(shouldConfirmOffline(listing, { days: 7, now }), true);
+});
+
 test("confirms offline after 7 days from first not-found", () => {
   const now = new Date("2026-08-31T00:00:00.000Z");
   const listing = {

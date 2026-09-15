@@ -3623,7 +3623,7 @@ export function confirmListingOffline(postId) {
 }
 
 export function confirmExpiredOfflineListings(days = 7) {
-  const n = Math.max(1, Math.min(Number(days) || 7, 30));
+  const n = normalizeOfflineConfirmDays(days);
   const cutoff = new Date(Date.now() - n * 86_400_000).toISOString();
   const now = new Date().toISOString();
   const info = db
@@ -3634,11 +3634,16 @@ export function confirmExpiredOfflineListings(days = 7) {
            last_checked_at = ?
        WHERE IFNULL(offline, 0) = 1
          AND IFNULL(offline_confirmed, 0) = 0
-         AND IFNULL(offline_at, '') != ''
-         AND offline_at <= ?`,
+         AND COALESCE(NULLIF(offline_at, ''), last_checked_at, last_seen_at) != ''
+         AND COALESCE(NULLIF(offline_at, ''), last_checked_at, last_seen_at) <= ?`,
     )
     .run(now, cutoff);
   return Number(info.changes) || 0;
+}
+
+/** 列表載入時補 sweep：用全站（後台）天數，不看會員自己的 7 日覆寫。 */
+export function confirmExpiredOfflineFromSettings(settings = getSettings()) {
+  return confirmExpiredOfflineListings(normalizeOfflineConfirmDays(settings?.offlineConfirmDays));
 }
 
 export function touchListingChecked(postId) {

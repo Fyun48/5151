@@ -26,6 +26,12 @@ test("probeHtmlListingOutcome: 404/410 → gone; 403/429/5xx/timeout → inconcl
   }
 });
 
+test("probeHtmlListingAlive: closed listing copy is gone", async () => {
+  const restore = mockFetch(async () => resp({ status: 200, url: "https://rent.591.com.tw/1", body: "<html><main>此物件已關閉 查無資料</main></html>" }));
+  assert.equal(await probeHtmlListingAlive("https://rent.591.com.tw/1"), false);
+  restore();
+});
+
 test("probeHtmlListingAlive: normal 200 → alive; explicit gone text → gone", async () => {
   let restore = mockFetch(async () => resp({ status: 200, url: "https://x/detail", body: "<html>正常出租物件 3房2廳 19坪 月租28000</html>" }));
   assert.equal(await probeHtmlListingAlive("https://x/detail"), true);
@@ -140,5 +146,27 @@ test("probeListingAliveBySource: housefun redirect to noobject → gone", async 
   assert.deepEqual(await probeListingAliveBySource({ source: "housefun", url: "https://rent.housefun.com.tw/rent/house/1/" }), {
     supported: true, outcome: PROBE_GONE, alive: false,
   });
+  restore();
+});
+
+test("thorough 591 probe trusts HTML gone after JSON still looks alive", async () => {
+  const restore = mockFetch(async (url) => {
+    if (String(url).includes("bff-house.591.com.tw")) {
+      return {
+        status: 200,
+        ok: true,
+        url,
+        json: async () => ({ status: 1, data: { title: "still listed" } }),
+        text: async () => "",
+      };
+    }
+    return resp({ status: 200, url: "https://rent.591.com.tw/99", body: "<html>物件不存在</html>" });
+  });
+  const listing = { source: "591", post_id: 99, url: "https://rent.591.com.tw/99" };
+  const shallow = await probeListingAliveBySource(listing);
+  assert.equal(shallow.alive, true);
+  const thorough = await probeListingAliveBySource(listing, { thorough: true });
+  assert.equal(thorough.alive, false);
+  assert.equal(thorough.outcome, PROBE_GONE);
   restore();
 });
