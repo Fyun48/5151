@@ -1426,6 +1426,32 @@
       align-items: center;
     }
     .same-house-fold a { display: block; margin: 6px 0 0; font-size: 13px; }
+    .same-house-fold-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .same-house-fold-row a {
+      margin: 0;
+      flex: 1 1 12rem;
+      min-height: var(--touch, 44px);
+      display: inline-flex;
+      align-items: center;
+    }
+    .same-house-row-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .same-house-fold-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .same-house-fold .same-split-btn { margin-top: 0; }
     .same-house-row {
       padding: 10px 12px;
       border: 1px solid var(--line);
@@ -6670,6 +6696,17 @@
       if (feeTextNorm(theirs) === feeTextNorm(mine)) return "（無差別）";
       return theirs || "（無標示）";
     }
+    function sameHousePeerLive(peer) {
+      return Boolean(peer?.post_id) && peer.source !== "self" && !peer.offline && !peer.offline_confirmed;
+    }
+    function sameHouseSplitBtn(peer, item) {
+      if (!peer?.post_id || Number(peer.post_id) === Number(item?.post_id)) return "";
+      return `<button type="button" class="ghost same-split-btn" data-reject-match="${peer.post_id}" data-reject-peer="${item.post_id}">不是同一間</button>`;
+    }
+    function sameHouseGoneBtn(peer) {
+      if (isGuest || !sameHousePeerLive(peer)) return "";
+      return `<button type="button" class="ghost same-split-btn btn-report-gone" data-report-gone="${peer.post_id}" title="打開後若發現此物件連結已失效／不存在，可回報；系統會主動再確認一次">物件連結失效</button>`;
+    }
     function sameHousePanel(item) {
       const house = sameHouseOf(item);
       if (!house?.peers?.length) return "";
@@ -6694,9 +6731,6 @@
         const peerWhen = formatListingWhen(peer);
         const whenLine = peerWhen ? `更新 ${peerWhen} · 來源 ${peerSource}` : `來源 ${peerSource}`;
         const metaBits = [peer.layout || "", peer.area_name || "", peer.floor_display || formatFloorDisplay(peer.floor_name) || ""].filter(Boolean).join(" · ");
-        const split = peer.role === "affiliate"
-          ? `<button type="button" class="ghost same-split-btn" data-reject-match="${peer.post_id}" data-reject-peer="${item.post_id}">不是同一間</button>`
-          : "";
         return `<div class="same-house-row">
           <div class="same-house-role">${esc(role)}${peer.offline ? " · 可能空號" : ""}</div>
           <a href="${esc(href)}" ${String(peer.source || "") === "self" ? "" : 'target="_blank" rel="noopener noreferrer"'} data-open="${peer.post_id}" title="${esc(cheapWarn || "打開原站")}">${esc(peer.title || `刊登 #${peer.post_id}`)}</a>
@@ -6704,15 +6738,21 @@
           <div class="same-house-cost">租金 ${esc(peer.price || (peer.price_num ? peer.price_num.toLocaleString("zh-TW") : "—"))} · 總月費 ${(peerTotal || 0).toLocaleString("zh-TW")} · 狀態：${esc(listingStatusLabel(peer))}${cheapWarn ? ` · <strong>${esc(cheapWarn)}</strong>` : ""}</div>
           <div class="same-house-fee">費用說明：${esc(feeDiff)}</div>
           <div class="same-house-meta">${esc(metaBits)}${costChange ? ` · ${esc(costChange)}` : ""}</div>
+          <div class="same-house-row-actions">
           <a class="same-house-open" href="${esc(href)}" ${String(peer.source || "") === "self" ? "" : 'target="_blank" rel="noopener noreferrer"'} data-open="${peer.post_id}">${esc(openListingCta(peer))}</a>
-          ${split}
+          ${sameHouseSplitBtn(peer, item)}
+          ${sameHouseGoneBtn(peer)}
+          </div>
         </div>`;
       }).join("");
       const fold = (house.collapsed || []).length
         ? `<details class="same-house-fold same-house-span"><summary>${esc(house.fold_label || `另有 ${house.hidden_count || house.collapsed.length} 筆同物件來源`)}</summary>${house.collapsed.map((row) => {
             const href = row.url || peerSourceHref(row);
             const src = row.source_label || listingSourceLabel(row) || row.source || "";
-            return `<a href="${esc(href)}" ${String(row.source || "") === "self" ? "" : 'target="_blank" rel="noopener noreferrer"'} data-open="${row.post_id || ""}">${esc(row.title || "同物件來源")} · ${esc(src)}</a>`;
+            return `<div class="same-house-fold-row">
+              <a href="${esc(href)}" ${String(row.source || "") === "self" ? "" : 'target="_blank" rel="noopener noreferrer"'} data-open="${row.post_id || ""}">${esc(row.title || "同物件來源")} · ${esc(src)}</a>
+              <div class="same-house-fold-actions">${sameHouseSplitBtn(row, item)}${sameHouseGoneBtn(row)}</div>
+            </div>`;
           }).join("")}</details>`
         : "";
       return `<div class="same-house-panel same-house-span" id="same-house-panel-${item.post_id}" ${open ? "" : "hidden"}>${rows}${fold}</div>`;
@@ -11158,22 +11198,39 @@
         const sure = window.confirm("先只從你的列表拆開這則。其他人仍會看到捆綁；多人這樣說，才會對大家拆開。若其實是同一間，請不要按。確定？");
         if (!sure) return;
         const peerId = rejectBtn.dataset.rejectPeer || "";
-        const res = await fetch(`/api/listings/${rejectMatch}/reject-match`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(peerId ? { peer_id: Number(peerId) } : {}),
-        });
-        const data = await res.json().catch(() => ({}));
-        const note = data.error || (data.promoted
-          ? "已拆開。多人這樣說，現在大家的列表都分開了。"
-          : "已從你的列表拆開。其他人仍可能看到捆綁。");
-        if ($("listMeta")) {
-          $("listMeta").hidden = false;
-          $("listMeta").textContent = note;
+        const orig = rejectBtn.textContent;
+        rejectBtn.disabled = true;
+        rejectBtn.setAttribute("aria-busy", "true");
+        rejectBtn.textContent = "拆開中…";
+        try {
+          const res = await fetch(`/api/listings/${rejectMatch}/reject-match`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(peerId ? { peer_id: Number(peerId) } : {}),
+          });
+          const data = await res.json().catch(() => ({}));
+          const note = data.error || (data.promoted
+            ? "已拆開。多人這樣說，現在大家的列表都分開了。"
+            : "已從你的列表拆開。其他人仍可能看到捆綁。");
+          if ($("status")) $("status").textContent = note;
+          if ($("listMeta")) {
+            $("listMeta").hidden = false;
+            $("listMeta").textContent = note;
+          }
+          if ($("saveMsg")) $("saveMsg").textContent = note;
+          if (!res.ok) {
+            rejectBtn.disabled = false;
+            rejectBtn.removeAttribute("aria-busy");
+            rejectBtn.textContent = orig;
+            return;
+          }
+          loadList();
+        } catch {
+          rejectBtn.disabled = false;
+          rejectBtn.removeAttribute("aria-busy");
+          rejectBtn.textContent = orig;
+          if ($("status")) $("status").textContent = "拆開失敗，請再試一次。";
         }
-        if ($("saveMsg")) $("saveMsg").textContent = note;
-        if (!res.ok) return;
-        loadList();
         return;
       }
       const viewed = ev.target.dataset.viewed;
@@ -11189,8 +11246,8 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ viewed: true }),
         }).then(() => loadList({ keep: true, silent: true }));
-        if (!isGuest && item && !isSelfSource(item)) {
-          fetch(`/api/listings/${open}/recheck`, {
+        if (!isGuest && !isSelfSource(item)) {
+          fetch(`/api/listings/${open}/recheck?fresh=1`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
           })
@@ -11210,14 +11267,16 @@
         }).then(() => loadList());
         return;
       }
-      const reportGone = ev.target.dataset.reportGone;
+      const reportGoneBtn = ev.target.closest("[data-report-gone]");
+      const reportGone = reportGoneBtn?.dataset.reportGone;
       if (reportGone) {
         ev.preventDefault();
         ev.stopPropagation();
         if (isGuest) { remindGuest(); return; }
-        const btn = ev.target;
+        const btn = reportGoneBtn;
         const orig = btn.textContent;
         btn.disabled = true;
+        btn.setAttribute("aria-busy", "true");
         btn.textContent = "確認中…";
         try {
           const res = await fetch(`/api/listings/${reportGone}/report-gone`, { method: "POST", headers: { "Content-Type": "application/json" } });
@@ -11238,7 +11297,9 @@
           if ($("status")) $("status").textContent = data.supported === false ? "此來源暫不支援即時確認。" : "已送出，稍後再試。";
         } catch {
           btn.disabled = false;
+          btn.removeAttribute("aria-busy");
           btn.textContent = orig;
+          if ($("status")) $("status").textContent = "確認失敗，請再試一次。";
         }
         return;
       }
@@ -11819,7 +11880,7 @@
             body: JSON.stringify({ viewed: true }),
           }).then(() => loadList({ keep: true, silent: true }));
           if (!isGuest) {
-            fetch(`/api/listings/${open}/recheck`, {
+            fetch(`/api/listings/${open}/recheck?fresh=1`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
             })

@@ -3623,7 +3623,7 @@ export function confirmListingOffline(postId) {
 }
 
 export function confirmExpiredOfflineListings(days = 7) {
-  const n = Math.max(1, Math.min(Number(days) || 7, 30));
+  const n = normalizeOfflineConfirmDays(days);
   const cutoff = new Date(Date.now() - n * 86_400_000).toISOString();
   const now = new Date().toISOString();
   const info = db
@@ -3634,11 +3634,22 @@ export function confirmExpiredOfflineListings(days = 7) {
            last_checked_at = ?
        WHERE IFNULL(offline, 0) = 1
          AND IFNULL(offline_confirmed, 0) = 0
-         AND IFNULL(offline_at, '') != ''
-         AND offline_at <= ?`,
+         AND COALESCE(NULLIF(offline_at, ''), last_checked_at, last_seen_at) != ''
+         AND COALESCE(NULLIF(offline_at, ''), last_checked_at, last_seen_at) <= ?`,
     )
     .run(now, cutoff);
   return Number(info.changes) || 0;
+}
+
+const EXPIRED_OFFLINE_SWEEP_MS = 60_000;
+let lastExpiredOfflineSweepAt = 0;
+
+/** 列表載入時補 sweep：用全站（後台）天數；60 秒內只跑一次，避免每次 GET 拿寫鎖。 */
+export function confirmExpiredOfflineFromSettings(settings = getSettings()) {
+  const now = Date.now();
+  if (now - lastExpiredOfflineSweepAt < EXPIRED_OFFLINE_SWEEP_MS) return 0;
+  lastExpiredOfflineSweepAt = now;
+  return confirmExpiredOfflineListings(normalizeOfflineConfirmDays(settings?.offlineConfirmDays));
 }
 
 export function touchListingChecked(postId) {

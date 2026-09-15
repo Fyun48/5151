@@ -13,6 +13,7 @@ import {
   getCachedGeo,
   getListing,
   markListingOffline,
+  confirmExpiredOfflineFromSettings,
   restoreListingOnline,
   markListingAlive,
   touchListingChecked,
@@ -2535,6 +2536,7 @@ app.get("/api/state", async (req, res) => {
   let events = [];
   try {
     listingStats = stats(undefined, uid);
+    confirmExpiredOfflineFromSettings();
     const listed = listListings({
       filter: "all",
       sort: "newest",
@@ -2598,6 +2600,7 @@ app.get("/api/listings", async (req, res) => {
     .map((name) => name.trim())
     .filter(Boolean);
   const started = Date.now();
+  confirmExpiredOfflineFromSettings();
   const listed = listListings({
     filter: req.query.filter || "all",
     kind: req.query.kind || "",
@@ -2710,6 +2713,28 @@ app.post("/api/listings/:id/flags", async (req, res) => {
   }
 });
 
+const FRESH_RECHECK_WINDOW_MS = 60_000;
+const FRESH_RECHECK_LIMIT = 8;
+const FRESH_RECHECK_MIN_MS = 10_000;
+const freshRecheckHits = new Map();
+const freshRecheckLast = new Map();
+
+function allowFreshRecheck(userId, postId) {
+  const uid = Number(userId) || 0;
+  const id = Number(postId) || 0;
+  if (!uid || !id) return false;
+  const now = Date.now();
+  const pairKey = `${uid}:${id}`;
+  const last = Number(freshRecheckLast.get(pairKey)) || 0;
+  if (now - last < FRESH_RECHECK_MIN_MS) return false;
+  const hits = (freshRecheckHits.get(uid) || []).filter((ts) => now - ts < FRESH_RECHECK_WINDOW_MS);
+  if (hits.length >= FRESH_RECHECK_LIMIT) return false;
+  hits.push(now);
+  freshRecheckHits.set(uid, hits);
+  freshRecheckLast.set(pairKey, now);
+  return true;
+}
+
 app.post("/api/listings/:id/recheck", async (req, res) => {
   try {
     const session = readSession(req);
@@ -2745,12 +2770,17 @@ app.post("/api/listings/:id/recheck", async (req, res) => {
       });
       return;
     }
+    const fresh = req.query.fresh === "1" || req.body?.fresh === true || req.body?.fresh === 1;
     const lastCheck = Date.parse(listing.last_checked_at || "") || 0;
-    if (lastCheck && Date.now() - lastCheck < 60_000) {
+    if (!fresh && lastCheck && Date.now() - lastCheck < 60_000) {
       res.json({ supported: true, gone: Boolean(Number(listing.offline)), cooldown: true });
       return;
     }
-    const { supported, outcome, alive } = await probeListingAliveBySource(listing);
+    if (fresh && !allowFreshRecheck(session.userId, postId)) {
+      res.json({ supported: true, gone: Boolean(Number(listing.offline)), cooldown: true, limited: true });
+      return;
+    }
+    const { supported, outcome, alive } = await probeListingAliveBySource(listing, { thorough: Boolean(fresh) });
     if (!supported) {
       res.json({ supported: false, gone: false });
       return;
@@ -2808,7 +2838,7 @@ app.post("/api/listings/:id/report-gone", async (req, res) => {
       res.json({ supported: true, gone: false, locked: true, until: new Date(aliveAt + REPORT_GONE_LOCK_MS).toISOString(), message: REPORT_GONE_LOCK_MSG });
       return;
     }
-    const { supported, outcome, alive } = await probeListingAliveBySource(listing);
+    const { supported, outcome, alive } = await probeListingAliveBySource(listing, { thorough: true });
     if (!supported) {
       res.json({ supported: false });
       return;

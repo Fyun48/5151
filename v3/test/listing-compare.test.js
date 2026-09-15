@@ -166,7 +166,16 @@ test("same-house bundle folds the 4th source into a collapsed row", () => {
   assert.equal(bundle.collapsed[0].title, "第四則來源");
   assert.equal(bundle.collapsed[0].source, "housefun");
   assert.equal(bundle.collapsed[0].url, "https://housefun.tw/44");
+  assert.equal(bundle.collapsed[0].post_id, 44);
+  assert.equal(bundle.collapsed[0].role, "affiliate");
   assert.equal(bundle.peer_count, 3);
+});
+
+test("same-house bundle from an affiliate still exposes the primary peer for split", () => {
+  const bundle = sameHouseBundle(pricey, [cheap]);
+  assert.equal(bundle.is_primary, false);
+  assert.equal(bundle.peers[0].role, "primary");
+  assert.equal(bundle.peers[0].post_id, 11);
 });
 
 test("placeholder floors do not appear as -1 in compare diffs", () => {

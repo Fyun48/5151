@@ -351,7 +351,7 @@ test("server and UI keep click-open non-blocking and expose prep admin stats", (
   assert.match(server, /classifyListingProbeWrite/);
   const html = readFileSync(path.join(dir, "../public/index.html"), "utf8");
   assert.match(html, /window\.open\(listingUrl/);
-  assert.match(html, /\/recheck`/);
+  assert.match(html, /\/recheck\?fresh=1`/);
   assert.match(html, /refreshCards: true/);
   assert.match(html, /listingContentKey/);
   assert.match(html, /listing_updated/);

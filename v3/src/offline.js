@@ -43,7 +43,8 @@ export function countsTowardAllTotal(listing) {
 
 export function shouldConfirmOffline(listing, { days = OFFLINE_CONFIRM_DAYS_DEFAULT, now = new Date() } = {}) {
   if (!listing?.offline || listing.offline_confirmed) return false;
-  return daysSince(listing.offline_at, now) >= normalizeOfflineConfirmDays(days);
+  const from = listing.offline_at || listing.last_checked_at || listing.last_seen_at;
+  return daysSince(from, now) >= normalizeOfflineConfirmDays(days);
 }
 
 export function shouldRecheckOffline(listing, { hours = OFFLINE_RECHECK_HOURS, days = OFFLINE_CONFIRM_DAYS_DEFAULT, now = new Date() } = {}) {

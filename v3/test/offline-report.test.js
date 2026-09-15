@@ -32,6 +32,13 @@ test("server exposes report-gone with a 30-min site-wide lock and uses the all-p
   const recheck = server.slice(server.indexOf('"/api/listings/:id/recheck"'), server.indexOf('"/api/listings/:id/report-gone"'));
   assert.match(recheck, /probeListingAliveBySource/);
   assert.match(recheck, /markListingAlive/);
+  assert.match(recheck, /fresh/);
+  assert.match(recheck, /thorough/);
+  assert.match(recheck, /allowFreshRecheck/);
+  assert.match(server, /FRESH_RECHECK_LIMIT/);
+  assert.match(server, /confirmExpiredOfflineFromSettings/);
+  const db = read("src/db.js");
+  assert.match(db, /EXPIRED_OFFLINE_SWEEP_MS/);
 });
 
 test("all-platform conservative probe dispatcher exists and offline sweep uses it", () => {
