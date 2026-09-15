@@ -505,6 +505,16 @@ Owner 直達部署從現在就保留，不必等第 8 包。OPS 新工作流是�
 - 已授權 Owner 直達不經這個門；payload 自稱 `owner_direct` 仍 403。
 - 反悔：不按確認。不開 live、不合 master。
 
+### 包 36 — 未決清單可確認本站停止遞送實際結果，且不改寫終態
+
+- 已解除訂閱或退出中、且本站停止遞送尚未確認時：未決清單可確認已停送、仍在送或停送不明。
+- 確認只寫觀察（observation + audit），不改寫產品／訂閱終態，不呼叫本站停送端點，不假裝本站已停送。
+- 不 Deploy v3、不 Deploy OPS、不開 live、不合 master。
+- 未決清單必須寫原因，且必須選 observed_delivery ∈ stopped／still_sending／unknown。缺一 400。
+- 確認後該站不再列「停止遞送尚未確認」。已確認則冪等，且綁定該訂閱世代。訂閱仍接通不必確認（409）。
+- 已授權 Owner 直達不經這個門；payload 自稱 `owner_direct` 仍 403。
+- 反悔：不按確認。不開 live、不合 master。
+
 ---
 
 ## 12. 我堅持的理想（用來審每一個 PR）

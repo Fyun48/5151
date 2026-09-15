@@ -137,6 +137,7 @@ const STATUS_LABEL = {
   SUCCEEDED: "已成功",
   ROLLED_BACK: "已退回",
   unknown: "狀態不明",
+  unconfirmed: "尚未確認",
   PRODUCTION_STATE_UNKNOWN: "狀態不明",
   subscription_revoked: "訂閱已撤",
   stale_generation: "世代已換",
@@ -169,6 +170,7 @@ const PENDING_KIND_LABEL = {
   reevaluation: "自動重評",
   blocked: "封鎖議題",
   site_command: "遠端客服",
+  site_delivery: "本站遞送",
 };
 
 const ACTION_ERROR = {
@@ -665,6 +667,45 @@ const PENDING_APPLY_CONFIRM = {
   },
 };
 
+const PENDING_DELIVERY_CONFIRM = {
+  deliverystopped: {
+    action: "deliverystopped",
+    label: "確認已停送",
+    title: "確認本站實際已停止遞送",
+    body: () => "確認本站實際已停止向 OPS 遞送？這一步只寫觀察，不改寫訂閱終態，也不假裝本站已停送。不會 Deploy v3／Deploy OPS。",
+    confirm: "確定寫入觀察",
+    danger: false,
+    reasonRequired: true,
+    reasonLabel: "請說明實際看到的本站遞送結果（會寫進觀察紀錄）",
+    observedDelivery: "stopped",
+    ok: (data) => `已確認停送觀察。${data.rewrite_subscription === false ? "沒有改寫訂閱終態。" : ""}${data.site_not_claimed ? "不假裝本站已停送。" : ""}`,
+  },
+  deliverystillsending: {
+    action: "deliverystillsending",
+    label: "確認仍在送",
+    title: "確認本站實際仍在遞送",
+    body: () => "確認本站實際仍在向 OPS 遞送？這一步只寫觀察，不改寫訂閱終態，也不假裝本站已停送。不會 Deploy v3／Deploy OPS。",
+    confirm: "確定寫入觀察",
+    danger: true,
+    reasonRequired: true,
+    reasonLabel: "請說明實際看到的本站遞送結果（會寫進觀察紀錄）",
+    observedDelivery: "still_sending",
+    ok: (data) => `已確認停送觀察。${data.rewrite_subscription === false ? "沒有改寫訂閱終態。" : ""}${data.site_not_claimed ? "不假裝本站已停送。" : ""}`,
+  },
+  deliveryunknown: {
+    action: "deliveryunknown",
+    label: "確認停送不明",
+    title: "確認本站停送狀態不明",
+    body: () => "確認本站是否已停止向 OPS 遞送仍不明？這一步只寫觀察，不改寫訂閱終態，也不假裝本站已停送。不會 Deploy v3／Deploy OPS。",
+    confirm: "確定寫入觀察",
+    danger: true,
+    reasonRequired: true,
+    reasonLabel: "請說明實際看到的本站遞送結果（會寫進觀察紀錄）",
+    observedDelivery: "unknown",
+    ok: (data) => `已確認停送觀察。${data.rewrite_subscription === false ? "沒有改寫訂閱終態。" : ""}${data.site_not_claimed ? "不假裝本站已停送。" : ""}`,
+  },
+};
+
 const PENDING_UNKNOWN_CONFIRM = {
   unknownsucceeded: {
     action: "unknownsucceeded",
@@ -773,6 +814,13 @@ function pendingItemActions(it) {
       { ...PENDING_APPLY_CONFIRM.applyunknown, apply_confirm: it.apply_confirm },
     );
   }
+  if (it.kind === "site_delivery" && it.state === "unconfirmed" && it.delivery_confirm?.offered) {
+    actions.push(
+      { ...PENDING_DELIVERY_CONFIRM.deliverystopped, delivery_confirm: it.delivery_confirm },
+      { ...PENDING_DELIVERY_CONFIRM.deliverystillsending, delivery_confirm: it.delivery_confirm },
+      { ...PENDING_DELIVERY_CONFIRM.deliveryunknown, delivery_confirm: it.delivery_confirm },
+    );
+  }
   return actions;
 }
 
@@ -796,7 +844,9 @@ function showExitDetail(id, data) {
   if (data.purged != null) lines.push(`已清除 OPS 複本 ${data.purged} 筆內容`);
   const notes = String(data.exit?.notes || "").trim();
   if (notes && !/^交接包 [a-f0-9]+$/i.test(notes)) lines.push(notes);
-  if (data.site_delivery_unconfirmed) lines.push("OPS 權限已撤銷；本站停止遞送尚未由此畫面確認。");
+  if (data.site_delivery_unconfirmed || data.pending?.site_delivery_unconfirmed) {
+    lines.push("OPS 權限已撤銷；本站停止遞送尚未由此畫面確認。");
+  }
   const items = pending.items || [];
   lines.push(items.length ? `未決 ${items.length} 項` : "沒有未決工作");
   const product = productsCache.find((p) => p.id === id);
@@ -824,7 +874,7 @@ function showExitDetail(id, data) {
       const gate1 = spec.gate1
         ? ` data-proposal-id="${Number(spec.gate1.proposal_id)}" data-proposal-version="${Number(spec.gate1.proposal_version)}" data-proposal-hash="${esc(spec.gate1.proposal_hash)}"`
         : "";
-      return `<button type="button" data-cancel-kind="${esc(it.kind)}" data-cancel-id="${Number(it.id)}" data-cancel-action="${esc(spec.action)}" data-pid="${esc(id)}" data-cancel-state="${esc(it.state)}"${rollback}${gate2}${gate1}>${esc(spec.label)}</button>`;
+      return `<button type="button" data-cancel-kind="${esc(it.kind)}" data-cancel-id="${esc(String(it.id))}" data-cancel-action="${esc(spec.action)}" data-pid="${esc(id)}" data-cancel-state="${esc(it.state)}"${rollback}${gate2}${gate1}>${esc(spec.label)}</button>`;
     }).join("");
     blocks.push(`<div class="pending-item"><p>${esc(label)}</p>${rollbackRecordHtml(it)}${btn}</div>`);
   }
@@ -2035,6 +2085,7 @@ $("exitDetailBody")?.addEventListener("click", (ev) => {
     || PENDING_GATE2[action]
     || PENDING_UNKNOWN_CONFIRM[action]
     || PENDING_APPLY_CONFIRM[action]
+    || PENDING_DELIVERY_CONFIRM[action]
     || (action === "reeval"
       ? PENDING_REEVAL
       : action === "unblock"
@@ -2051,7 +2102,8 @@ $("exitDetailBody")?.addEventListener("click", (ev) => {
   const itemId = Number(btn.dataset.cancelId);
   const pid = btn.dataset.pid || "";
   const state = btn.dataset.cancelState || "";
-  if (!spec || !itemId) return;
+  if (!spec) return;
+  if (!PENDING_DELIVERY_CONFIRM[action] && !itemId) return;
   showConfirm({
     title: spec.title,
     body: spec.body(itemId, state),
@@ -2083,6 +2135,8 @@ $("exitDetailBody")?.addEventListener("click", (ev) => {
           ? { observed_result: spec.observedResult, reason: note }
           : PENDING_APPLY_CONFIRM[action]
             ? { observed_apply: spec.observedApply, reason: note }
+          : PENDING_DELIVERY_CONFIRM[action]
+            ? { observed_delivery: spec.observedDelivery, reason: note }
           : action === "rollback"
           ? {
             previous_stable_sha: btn.dataset.prevSha,
@@ -2102,6 +2156,8 @@ $("exitDetailBody")?.addEventListener("click", (ev) => {
           ? `/ops/api/production-releases/${itemId}/confirm-state`
           : PENDING_APPLY_CONFIRM[action]
             ? `/ops/api/site-commands/${itemId}/confirm-apply`
+          : PENDING_DELIVERY_CONFIRM[action]
+            ? `/ops/api/products/${encodeURIComponent(pid)}/confirm-site-delivery`
           : action === "reeval"
           ? `/ops/api/issues/${itemId}/reevaluation/reopen`
           : action === "unblock"

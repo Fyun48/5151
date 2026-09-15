@@ -17,6 +17,7 @@ import { describeGate2Offer } from "./releaseCandidate.js";
 import { describeGate1Offer } from "./proposal.js";
 import { describeOwnerReevalOffer, describeOwnerUnblockOffer } from "./reevaluation.js";
 import { describeSiteCommandApplyOffer } from "./siteCommand.js";
+import { describeSiteDeliveryOffer } from "./siteDelivery.js";
 import { schemaLooksIncompatible } from "./release/rollbackContract.js";
 
 export const EXIT_ACTIONS = Object.freeze(["pause", "unsubscribe", "handoff", "purge_replica"]);
@@ -542,8 +543,23 @@ export function listPendingWork(db, productId) {
       });
     }
   }
+  const delivery = describeSiteDeliveryOffer(db, id);
+  if (delivery.offered) {
+    items.push({
+      kind: "site_delivery",
+      id,
+      state: "unconfirmed",
+      blocking: false,
+      delivery_confirm: delivery,
+      note: "OPS 權限已撤銷；本站停止遞送尚未由此畫面確認。可從未決清單確認已停送、仍在送或停送不明。確認只寫觀察，不改寫訂閱終態，也不假裝本站已停送。",
+    });
+  }
   const blocking = items.filter((it) => it.blocking);
-  return { items, blocking, site_delivery_unconfirmed: true };
+  return {
+    items,
+    blocking,
+    site_delivery_unconfirmed: delivery.offered === true,
+  };
 }
 
 const CANCEL_RESULT_TABLES = Object.freeze([
@@ -640,9 +656,10 @@ export function publicExit(row) {
 export function beginUnsubscribeExit(db, productId, { actor = "owner", now = new Date() } = {}) {
   const before = getProduct(db, productId);
   if (!before) throw httpError("not found", 404);
-  const pending = listPendingWork(db, before.id);
+  const beforePending = listPendingWork(db, before.id);
   const product = unsubscribeProduct(db, before.id, { actor, now });
-  const blocked = pending.blocking.length > 0;
+  const pending = listPendingWork(db, before.id);
+  const blocked = beforePending.blocking.length > 0 || pending.blocking.length > 0;
   const record = withImmediateTx(db, () => insertExitRecord(db, {
     productId: before.id,
     generation: before.subscription_generation,
@@ -659,7 +676,7 @@ export function beginUnsubscribeExit(db, productId, { actor = "owner", now = new
     product,
     exit: record,
     pending,
-    site_delivery_unconfirmed: true,
+    site_delivery_unconfirmed: pending.site_delivery_unconfirmed === true,
   };
 }
 
@@ -669,7 +686,7 @@ export function pendingForHandoff(pendingAll) {
   return {
     items,
     blocking,
-    site_delivery_unconfirmed: true,
+    site_delivery_unconfirmed: pendingAll?.site_delivery_unconfirmed === true,
     omitted_unscoped: (pendingAll?.items || []).filter((it) => it.unscoped).length,
   };
 }

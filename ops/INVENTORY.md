@@ -1,9 +1,9 @@
 # OPS／v3 現況對照表（ChatGPT 審查後）
 
-盤點對象：本分支 `cursor/ops-cmd-apply-ed3f`（第 0–35 包，疊在 unknown-confirm 上）。  
-ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契約、Deploy OPS、產品卡、退出演練、站內 CRM、隔離 staging、開發發行檢視、OPS 供應商抽屜、v3 BudgetGuard、pHash 附屬表與兩個 LLM 開關、第 8 包 live 契約、第 9 包可打包設計套件、第 10 包遠端客服、第 11 包跨站洞察與清除、第 12 包統計指標／後續服務門、第 13 包 worker 重驗訂閱世代、第 14 包晚到評估／提案／webhook、第 15 包製作／QA 重驗訂閱世代、第 16 包 staging／發行重驗訂閱世代、第 17 包移交前確認正式部署狀態、第 18 包自動重評重驗訂閱世代、第 19 包遠端客服重驗訂閱世代、第 20 包測試中的 QA 取消、第 21 包未送出的遠端客服可取消、第 22 包未送出的分析／評估／提案可取消、第 23 包未送出的發布通知可取消、第 24 包未決清單可取消製作／QA／staging、第 25 包未送出的正式發布可取消、第 26 包已受理正式發布的觀察與取消 runner、第 27 包目前正式版可程式退回、第 28 包目前正式版可記錄 DB 還原要求、第 29 包取消後的剩餘工作結果確認、第 30 包未決清單露出完整退回身分、第 31 包未決清單可按 Gate #2、第 32 包未決清單可按 Gate #1、第 33 包未決清單可按 Owner 手動重評／解除封鎖、第 34 包未決清單可確認正式發布實際結果、以及第 35 包未決清單可確認已送出遠端客服套用結果。**不以那次抽查當現況。**
+盤點對象：本分支 `cursor/ops-delivery-confirm-ed3f`（第 0–36 包，疊在 cmd-apply 上）。  
+ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契約、Deploy OPS、產品卡、退出演練、站內 CRM、隔離 staging、開發發行檢視、OPS 供應商抽屜、v3 BudgetGuard、pHash 附屬表與兩個 LLM 開關、第 8 包 live 契約、第 9 包可打包設計套件、第 10 包遠端客服、第 11 包跨站洞察與清除、第 12 包統計指標／後續服務門、第 13 包 worker 重驗訂閱世代、第 14 包晚到評估／提案／webhook、第 15 包製作／QA 重驗訂閱世代、第 16 包 staging／發行重驗訂閱世代、第 17 包移交前確認正式部署狀態、第 18 包自動重評重驗訂閱世代、第 19 包遠端客服重驗訂閱世代、第 20 包測試中的 QA 取消、第 21 包未送出的遠端客服可取消、第 22 包未送出的分析／評估／提案可取消、第 23 包未送出的發布通知可取消、第 24 包未決清單可取消製作／QA／staging、第 25 包未送出的正式發布可取消、第 26 包已受理正式發布的觀察與取消 runner、第 27 包目前正式版可程式退回、第 28 包目前正式版可記錄 DB 還原要求、第 29 包取消後的剩餘工作結果確認、第 30 包未決清單露出完整退回身分、第 31 包未決清單可按 Gate #2、第 32 包未決清單可按 Gate #1、第 33 包未決清單可按 Owner 手動重評／解除封鎖、第 34 包未決清單可確認正式發布實際結果、第 35 包未決清單可確認已送出遠端客服套用結果、以及第 36 包未決清單可確認本站停止遞送實際結果。**不以那次抽查當現況。**
 
-本次是第 35 包（未決清單可確認已送出遠端客服套用結果，且不改寫終態），**不是部署指令**，不 Deploy v3，也不擅自跑 Deploy OPS。`PRODUCTION_RELEASE_ALLOW_LIVE` 維持預設 0。`stats`、`followup_service`、`cross_site_insight`、`remote_cs` 與 `retain_after_exit` 維持預設關。Cursor 製作仍標未整合。
+本次是第 36 包（未決清單可確認本站停止遞送實際結果，且不改寫終態），**不是部署指令**，不 Deploy v3，也不擅自跑 Deploy OPS。`PRODUCTION_RELEASE_ALLOW_LIVE` 維持預設 0。`stats`、`followup_service`、`cross_site_insight`、`remote_cs` 與 `retain_after_exit` 維持預設關。Cursor 製作仍標未整合。
 
 圖例：`存在`＝可承接；`需改`＝有程式但契約不足；`待做`＝尚未實作。
 
@@ -64,7 +64,8 @@ ChatGPT 抽查的是較早的 master；本分支已多 OPS Console、多站契�
 | 未決清單可按 Gate #1 | 已做 | `ops/src/proposal.js` `describeGate1Offer`、未決清單 | 第 32 包；待核准開發提案可核准／要求修改／暫緩／拒絕／封鎖；核准只寫開發授權不開 PR、不部署；要求修改必須寫原因；已有決策不再列出；Owner 直達不經此門 |
 | 未決清單可按 Owner 手動重評／解除封鎖 | 已做 | `ops/src/reevaluation.js` `describeOwnerReevalOffer` `describeOwnerUnblockOffer`、未決清單 | 第 33 包；自動重評已停的暫緩／拒絕可手動重評；已封鎖可解除；只重開評估不開 PR、不部署；必須寫原因；已重開不再列出；Owner 直達不經此門 |
 | 未決清單可確認正式發布實際結果 | 已做 | `ops/src/release/productionRelease.js` `describeUnknownProductionOffer` `confirmUnknownProductionResult`、未決清單 | 第 34 包；狀態不明可確認已成功／已失敗／已退回；只寫觀察不改寫終態、不宣稱撤回；必須寫原因與 observed_result；確認後不再擋移交；Owner 直達不經此門 |
-| 未決清單可確認已送出遠端客服套用結果 | 本輪已做 | `ops/src/siteCommand.js` `describeSiteCommandApplyOffer` `confirmSiteCommandApplyObservation`、未決清單 | 第 35 包；已送出且尚未套用成功可確認已套用／未套用／套用不明；只寫觀察不改寫終態、不假裝本站已回覆；必須寫原因與 observed_apply；確認後不再列出；Owner 直達不經此門 |
+| 未決清單可確認已送出遠端客服套用結果 | 已做 | `ops/src/siteCommand.js` `describeSiteCommandApplyOffer` `confirmSiteCommandApplyObservation`、未決清單 | 第 35 包；已送出且尚未套用成功可確認已套用／未套用／套用不明；只寫觀察不改寫終態、不假裝本站已回覆；必須寫原因與 observed_apply；確認後不再列出；Owner 直達不經此門 |
+| 未決清單可確認本站停止遞送實際結果 | 本輪已做 | `ops/src/siteDelivery.js` `describeSiteDeliveryOffer` `confirmSiteDeliveryObservation`、未決清單 | 第 36 包；解除訂閱或退出中可確認已停送／仍在送／停送不明；只寫觀察不改寫訂閱終態、不假裝本站已停送；必須寫原因與 observed_delivery；確認後不再列出；Owner 直達不經此門 |
 
 ## 2. 第 14 節驗收情境的實作安排
 
