@@ -21,11 +21,26 @@ export function countWatched(conn, userId) {
   try {
     return Number(
       conn.prepare(
-        "SELECT COUNT(*) AS n FROM user_listing_flags WHERE user_id = ? AND watched = 1",
+        `SELECT COUNT(*) AS n
+         FROM user_listing_flags f
+         WHERE f.user_id = ? AND f.watched = 1
+           AND EXISTS (
+             SELECT 1 FROM listings l
+             WHERE l.post_id = f.post_id
+               AND IFNULL(l.offline_confirmed, 0) = 0
+           )`,
       ).get(uid)?.n,
     ) || 0;
   } catch {
-    return 0;
+    try {
+      return Number(
+        conn.prepare(
+          "SELECT COUNT(*) AS n FROM user_listing_flags WHERE user_id = ? AND watched = 1",
+        ).get(uid)?.n,
+      ) || 0;
+    } catch {
+      return 0;
+    }
   }
 }
 

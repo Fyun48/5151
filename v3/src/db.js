@@ -4803,9 +4803,11 @@ export function listListings({
   const clauses = [];
   const params = [];
   searchWhere(searchKeys, clauses, params);
-  listingVisibilityClauses(clauses, params);
-  appendDistrictCandidates(districtNames, clauses, params, { preserveRelationsFor: voteUid });
-  appendPriceCeilingCandidates(settings, clauses, params);
+  if (filter !== "watched") {
+    listingVisibilityClauses(clauses, params);
+    appendDistrictCandidates(districtNames, clauses, params, { preserveRelationsFor: voteUid });
+    appendPriceCeilingCandidates(settings, clauses, params);
+  }
   if (filter === "suspected") {
     clauses.push("match_level IN ('high', 'medium')");
     clauses.push("IFNULL(offline, 0) = 0");
@@ -4822,6 +4824,12 @@ export function listListings({
         SELECT 1 FROM user_listing_flags f
         WHERE f.post_id = listings.post_id AND f.user_id = ? AND f.hidden = 1
       )
+    )`);
+    params.push(uid);
+  } else if (filter === "watched") {
+    clauses.push(`EXISTS (
+      SELECT 1 FROM user_listing_flags f
+      WHERE f.post_id = listings.post_id AND f.user_id = ? AND f.watched = 1
     )`);
     params.push(uid);
   } else {
@@ -4855,13 +4863,6 @@ export function listListings({
     ), 0) = 1`);
     params.push(uid);
   }
-  if (filter === "watched") {
-    clauses.push(`IFNULL((
-      SELECT watched FROM user_listing_flags f
-      WHERE f.post_id = listings.post_id AND f.user_id = ?
-    ), 0) = 1`);
-    params.push(uid);
-  }
   if (filter === "same_source") clauses.push("last_event IN ('same_source', 'update', 'price_drop', 'title_update')");
   if (q) {
     const like = `%${q}%`;
@@ -4882,9 +4883,11 @@ export function listListings({
   const flagMap = loadFlagMap(db, uid);
   const overlaid = overlayRowsPersonal(raw, flagMap, { inPlace: true });
   let rows =
-    filter === "offline" || filter === "suspected"
-      ? overlaid.filter((row) => passesPriceFilter(row, settings))
-      : applyListingFilter(overlaid, settings);
+    filter === "watched"
+      ? overlaid
+      : filter === "offline" || filter === "suspected"
+        ? overlaid.filter((row) => passesPriceFilter(row, settings))
+        : applyListingFilter(overlaid, settings);
   markStage("profile_ms");
 
   rows = attachSameHouseRoles(rows, voteUid);
@@ -4892,16 +4895,19 @@ export function listListings({
   rows = rows.filter((row) => listingMatchesListFilter(row, filter));
   rows = rows.filter((row) => keepSelfListingForViewer(row, uid, settings, listingInMemberScope));
 
-  // 整層／1F、行政區要在 limit 前套用，否則「全庫最便宜 500 筆」再前端篩選會漏掉新北等區
-  rows = rows.filter((row) => passesDisplayFilters(row, settings, { skipWholeFloor: Boolean(kind) }));
-  // 「全部」（未指定行政區）＝只顯示此使用者自己設定的行政區（watchDistricts ∪ searchUrls），
-  // 而不是整個共用資料庫（listings 是跨使用者共用池；否則會看到別人／系統抓的其它縣市，如台中西屯）。
-  if (districtSet.size) {
-    rows = rows.filter((row) => districtSet.has(row.district || districtNameFromListing(row)));
-  }
+  // 特別關注是配額管理清單，不被行政區／類型／樓層／來源再篩空，否則會滿額卻看不到、也無法取消。
+  if (filter !== "watched") {
+    // 整層／1F、行政區要在 limit 前套用，否則「全庫最便宜 500 筆」再前端篩選會漏掉新北等區
+    rows = rows.filter((row) => passesDisplayFilters(row, settings, { skipWholeFloor: Boolean(kind) }));
+    // 「全部」（未指定行政區）＝只顯示此使用者自己設定的行政區（watchDistricts ∪ searchUrls），
+    // 而不是整個共用資料庫（listings 是跨使用者共用池；否則會看到別人／系統抓的其它縣市，如台中西屯）。
+    if (districtSet.size) {
+      rows = rows.filter((row) => districtSet.has(row.district || districtNameFromListing(row)));
+    }
 
-  rows = rows.filter((row) => matchesHousingKind(row, kind));
-  rows = rows.filter((row) => matchesListingSources(row, sources));
+    rows = rows.filter((row) => matchesHousingKind(row, kind));
+    rows = rows.filter((row) => matchesListingSources(row, sources));
+  }
   markStage("display_ms");
 
   const needFit = sort === "fit_desc";

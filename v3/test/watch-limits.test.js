@@ -74,9 +74,11 @@ test("stats counts personal watches even when listings are pending offline", () 
     db.prepare("UPDATE listings SET offline = 1, offline_confirmed = 0 WHERE post_id = 702").run();
     db.prepare("UPDATE listings SET offline = 1, offline_confirmed = 1 WHERE post_id = 703").run();
     const st = stats([], uid);
-    assert.equal(countWatched(db, uid), 3);
-    assert.equal(st.watchedTotal, 3);
-    assert.equal(st.watched, 2, "pending offline stays in watched; confirmed offline does not");
+    assert.equal(countWatched(db, uid), 2, 'confirmed offline no longer occupies the quota');
+    assert.equal(st.watchedTotal, 2);
+    assert.equal(st.watched, 2, 'pending offline stays in watched; confirmed offline does not');
+    db.prepare('DELETE FROM listings WHERE post_id = 701').run();
+    assert.equal(countWatched(db, uid), 1, 'orphan watch flags do not occupy quota');
   `;
   try {
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {

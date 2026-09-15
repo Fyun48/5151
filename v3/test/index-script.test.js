@@ -129,6 +129,7 @@ test("watch limit flashes and resets the card instead of leaving a swipe off-scr
   assert.match(html, /disabled aria-disabled="true" title="\$\{esc\(watchLimitText\(\)\)\}"/);
   assert.match(html, /role="status" aria-live="polite" aria-atomic="true"/);
   assert.match(html, /目前沒有特別關注的物件/);
+  assert.match(html, /if \(filter === "watched"\) return Array.isArray\(items\) \? items : \[\];/);
   assert.match(html, /排除頂樓加蓋／違蓋/);
   assert.doesNotMatch(html, /管理員最多特別關注/);
   assert.doesNotMatch(html.slice(html.indexOf("function watchLimitText"), html.indexOf("function paintWatchChip")), /管理員/);

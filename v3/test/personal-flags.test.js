@@ -100,6 +100,17 @@ test("confirmed same-house duplicates leave the suspected filter", () => {
   assert.equal(listingMatchesListFilter(hiddenDup, "all"), false);
 });
 
+test("watched filter keeps confirmed-offline, hidden, and same-house affiliates", () => {
+  const confirmed = { watched: 1, offline: 1, offline_confirmed: 1, hidden: 0, match_verdict: "" };
+  const hiddenWatch = { watched: 1, hidden: 1, offline: 0, match_verdict: "" };
+  const affiliate = { watched: 1, same_house_role: "affiliate", hidden: 0, offline: 0, match_verdict: "" };
+  assert.equal(listingMatchesListFilter(confirmed, "watched"), true);
+  assert.equal(listingMatchesListFilter(hiddenWatch, "watched"), true);
+  assert.equal(listingIsMainListAffiliate(affiliate, "watched"), false);
+  assert.equal(listingMatchesListFilter(affiliate, "watched"), true);
+  assert.equal(listingMatchesListFilter({ ...confirmed, watched: 0 }, "watched"), false);
+});
+
 test("relist copies each member's flags onto the new post_id", () => {
   const db = memoryDb();
   const alice = ensureUser(db, "alice@example.com");
