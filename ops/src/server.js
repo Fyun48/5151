@@ -101,6 +101,7 @@ import {
 import { makeProductionReleaseProvider } from "./release/productionReleaseProvider.js";
 import { kitFilePath, resolveKitStatic } from "./designKitStatic.js";
 import { cancelSiteCommand, confirmSiteCommandApplyObservation, deliverSiteCommand, enqueueAndMaybeDeliver, listSiteCommands } from "./siteCommand.js";
+import { confirmSiteDeliveryObservation } from "./siteDelivery.js";
 import { getDashboard, listFeedbackInbox, listIssuesWithLifecycle, OPS_PHASE, publicFeedback } from "./dashboard.js";
 import { notifyConfig, sendOpsNotification } from "./notify/webhook.js";
 import { productAllowsFollowup } from "./usageConsent.js";
@@ -829,12 +830,35 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         }
         return;
       }
+      const productConfirmDelivery = pathname.match(/^\/ops\/api\/products\/([a-z0-9_-]+)\/confirm-site-delivery$/);
+      if (productConfirmDelivery && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {};
+        try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          sendJson(res, 200, { ok: true, ...confirmSiteDeliveryObservation(db, productConfirmDelivery[1], {
+            ...b,
+            actor: `owner:${req.owner.email}`,
+            reason: b.reason,
+            observedDelivery: b.observed_delivery || b.observedDelivery,
+          }) });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
       const productPending = pathname.match(/^\/ops\/api\/products\/([a-z0-9_-]+)\/pending$/);
       if (productPending && method === "GET") {
         if (!runGuard(auth.requireOwner, req, reply)) return;
         const row = getProduct(db, productPending[1]);
         if (!row) { sendJson(res, 404, { error: "not found" }); return; }
-        sendJson(res, 200, { product: publicProduct(row), pending: listPendingWork(db, row.id), exits: listExits(db, row.id) });
+        const pending = listPendingWork(db, row.id);
+        sendJson(res, 200, {
+          product: publicProduct(row),
+          pending,
+          exits: listExits(db, row.id),
+          site_delivery_unconfirmed: pending.site_delivery_unconfirmed === true,
+        });
         return;
       }
       const productHandoffGet = pathname.match(/^\/ops\/api\/products\/([a-z0-9_-]+)\/handoff$/);
