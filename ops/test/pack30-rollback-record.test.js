@@ -128,7 +128,7 @@ test("console exposes rollback identity on the pending list", () => {
   assert.match(html, /未決清單會列出目前版與上一可用版的 SHA、digest、靜態樹與 schema/);
   assert.match(html, /bind-mount 不會在這一步還原/);
   assert.match(html, /不能宣稱直接換映像可救回/);
-  assert.match(html, /console\.js\?v=20260915-pkg36/);
+  assert.match(html, /console\.js\?v=20260915-pkg37/);
   assert.match(js, /function rollbackRecordHtml/);
   assert.match(js, /上一可用版 SHA/);
   assert.match(js, /Compose／設定/);

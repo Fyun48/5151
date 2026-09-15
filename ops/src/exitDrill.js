@@ -18,6 +18,7 @@ import { describeGate1Offer } from "./proposal.js";
 import { describeOwnerReevalOffer, describeOwnerUnblockOffer } from "./reevaluation.js";
 import { describeSiteCommandApplyOffer } from "./siteCommand.js";
 import { describeSiteDeliveryOffer } from "./siteDelivery.js";
+import { describeExitRetryOffer } from "./exitRetry.js";
 import { schemaLooksIncompatible } from "./release/rollbackContract.js";
 
 export const EXIT_ACTIONS = Object.freeze(["pause", "unsubscribe", "handoff", "purge_replica"]);
@@ -554,11 +555,23 @@ export function listPendingWork(db, productId) {
       note: "OPS 權限已撤銷；本站停止遞送尚未由此畫面確認。可從未決清單確認已停送、仍在送或停送不明。確認只寫觀察，不改寫訂閱終態，也不假裝本站已停送。",
     });
   }
+  const retry = describeExitRetryOffer(db, id);
+  if (retry.offered) {
+    items.push({
+      kind: "exit_record",
+      id: retry.exit_record_id,
+      state: "exit_blocked",
+      blocking: false,
+      exit_retry: retry,
+      note: "退出紀錄被未決工作擋住。可從未決清單重試：只重拍未決快照，阻擋解除才標完成。不改寫訂閱終態，也不假裝未決已消失。",
+    });
+  }
   const blocking = items.filter((it) => it.blocking);
   return {
     items,
     blocking,
     site_delivery_unconfirmed: delivery.offered === true,
+    exit_retry_blocked: retry.offered === true,
   };
 }
 
@@ -672,11 +685,13 @@ export function beginUnsubscribeExit(db, productId, { actor = "owner", now = new
     actor,
     now,
   }));
+  const pendingAfter = blocked ? listPendingWork(db, before.id) : pending;
   return {
     product,
     exit: record,
-    pending,
-    site_delivery_unconfirmed: pending.site_delivery_unconfirmed === true,
+    pending: pendingAfter,
+    site_delivery_unconfirmed: pendingAfter.site_delivery_unconfirmed === true,
+    exit_retry_blocked: pendingAfter.exit_retry_blocked === true,
   };
 }
 
@@ -687,6 +702,7 @@ export function pendingForHandoff(pendingAll) {
     items,
     blocking,
     site_delivery_unconfirmed: pendingAll?.site_delivery_unconfirmed === true,
+    exit_retry_blocked: pendingAll?.exit_retry_blocked === true,
     omitted_unscoped: (pendingAll?.items || []).filter((it) => it.unscoped).length,
   };
 }

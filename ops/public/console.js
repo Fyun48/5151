@@ -138,6 +138,7 @@ const STATUS_LABEL = {
   ROLLED_BACK: "已退回",
   unknown: "狀態不明",
   unconfirmed: "尚未確認",
+  exit_blocked: "退出已阻擋",
   PRODUCTION_STATE_UNKNOWN: "狀態不明",
   subscription_revoked: "訂閱已撤",
   stale_generation: "世代已換",
@@ -171,6 +172,12 @@ const PENDING_KIND_LABEL = {
   blocked: "封鎖議題",
   site_command: "遠端客服",
   site_delivery: "本站遞送",
+  exit_record: "退出紀錄",
+};
+
+const EXIT_STATUS_LABEL = {
+  blocked: "已阻擋",
+  completed: "已完成",
 };
 
 const ACTION_ERROR = {
@@ -706,6 +713,22 @@ const PENDING_DELIVERY_CONFIRM = {
   },
 };
 
+const PENDING_EXIT_RETRY = {
+  retriedexit: {
+    action: "retriedexit",
+    label: "重試退出紀錄",
+    title: "重試已阻擋的退出紀錄",
+    body: (_id, _state, name) => `重試「${name || "本站"}」被未決工作擋住的退出紀錄？這一步只重拍未決快照，阻擋解除才標完成。不改寫訂閱終態，也不假裝未決已消失。不會 Deploy v3／Deploy OPS。`,
+    confirm: "確定重試",
+    danger: false,
+    reasonRequired: true,
+    reasonLabel: "請說明目前看到的未決情況（會寫進退出紀錄）",
+    ok: (data) => data.completed
+      ? `已重試退出紀錄，未決阻擋已解除。${data.rewrite_subscription === false ? "沒有改寫訂閱終態。" : ""}${data.pending_not_claimed ? "不假裝未決已消失。" : ""}`
+      : `已重試退出紀錄，仍有未決阻擋。${data.rewrite_subscription === false ? "沒有改寫訂閱終態。" : ""}${data.pending_not_claimed ? "不假裝未決已消失。" : ""}`,
+  },
+};
+
 const PENDING_UNKNOWN_CONFIRM = {
   unknownsucceeded: {
     action: "unknownsucceeded",
@@ -821,6 +844,9 @@ function pendingItemActions(it) {
       { ...PENDING_DELIVERY_CONFIRM.deliveryunknown, delivery_confirm: it.delivery_confirm },
     );
   }
+  if (it.kind === "exit_record" && it.state === "exit_blocked" && it.exit_retry?.offered) {
+    actions.push({ ...PENDING_EXIT_RETRY.retriedexit, exit_retry: it.exit_retry });
+  }
   return actions;
 }
 
@@ -847,6 +873,9 @@ function showExitDetail(id, data) {
   if (data.site_delivery_unconfirmed || data.pending?.site_delivery_unconfirmed) {
     lines.push("OPS 權限已撤銷；本站停止遞送尚未由此畫面確認。");
   }
+  if (data.exit_retry_blocked || data.pending?.exit_retry_blocked) {
+    lines.push("退出紀錄被未決工作擋住；可從未決清單重試。重試只重拍未決快照，不改寫訂閱終態，也不假裝未決已消失。");
+  }
   const items = pending.items || [];
   lines.push(items.length ? `未決 ${items.length} 項` : "沒有未決工作");
   const product = productsCache.find((p) => p.id === id);
@@ -858,7 +887,7 @@ function showExitDetail(id, data) {
   }
   $("exitDetailTitle").textContent = `${productName(id)} · 退出／移交`;
   $("exitDetailHint").textContent = data.exit?.action
-    ? `最近動作：${EXIT_ACTION_LABEL[data.exit.action] || data.exit.action}（${STATUS_LABEL[data.exit.exit_status] || data.exit.exit_status}）`
+    ? `最近動作：${EXIT_ACTION_LABEL[data.exit.action] || data.exit.action}（${EXIT_STATUS_LABEL[data.exit.exit_status] || STATUS_LABEL[data.exit.exit_status] || data.exit.exit_status}）`
     : "未決與交接摘要";
   const blocks = lines.map((line) => `<p>${esc(line)}</p>`);
   for (const it of items) {
@@ -2086,6 +2115,7 @@ $("exitDetailBody")?.addEventListener("click", (ev) => {
     || PENDING_UNKNOWN_CONFIRM[action]
     || PENDING_APPLY_CONFIRM[action]
     || PENDING_DELIVERY_CONFIRM[action]
+    || PENDING_EXIT_RETRY[action]
     || (action === "reeval"
       ? PENDING_REEVAL
       : action === "unblock"
@@ -2103,7 +2133,7 @@ $("exitDetailBody")?.addEventListener("click", (ev) => {
   const pid = btn.dataset.pid || "";
   const state = btn.dataset.cancelState || "";
   if (!spec) return;
-  if (!PENDING_DELIVERY_CONFIRM[action] && !itemId) return;
+  if (!PENDING_DELIVERY_CONFIRM[action] && !PENDING_EXIT_RETRY[action] && !itemId) return;
   showConfirm({
     title: spec.title,
     body: spec.body(itemId, state, productName(pid)),
@@ -2137,6 +2167,8 @@ $("exitDetailBody")?.addEventListener("click", (ev) => {
             ? { observed_apply: spec.observedApply, reason: note }
           : PENDING_DELIVERY_CONFIRM[action]
             ? { observed_delivery: spec.observedDelivery, reason: note }
+          : PENDING_EXIT_RETRY[action]
+            ? { reason: note }
           : action === "rollback"
           ? {
             previous_stable_sha: btn.dataset.prevSha,
@@ -2158,6 +2190,8 @@ $("exitDetailBody")?.addEventListener("click", (ev) => {
             ? `/ops/api/site-commands/${itemId}/confirm-apply`
           : PENDING_DELIVERY_CONFIRM[action]
             ? `/ops/api/products/${encodeURIComponent(pid)}/confirm-site-delivery`
+          : PENDING_EXIT_RETRY[action]
+            ? `/ops/api/products/${encodeURIComponent(pid)}/retry-exit`
           : action === "reeval"
           ? `/ops/api/issues/${itemId}/reevaluation/reopen`
           : action === "unblock"
