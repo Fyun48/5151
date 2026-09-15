@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  DEFAULT_PAGE_COPY,
   ctaCooldownOpen,
   ctaRuleEligible,
   dashboardTotals,
@@ -15,6 +16,13 @@ import {
   transactionDedupeKey,
 } from "../src/supportDomain.js";
 import { getSupportPaymentProvider, resolveSupportCheckout, SupportPaymentUnavailable } from "../src/supportProviders.js";
+
+test("default support copy uses 吉比租房 names, not 5151", () => {
+  assert.equal(DEFAULT_PAGE_COPY.hero_title, "讓吉比租房追蹤持續免費");
+  assert.match(DEFAULT_PAGE_COPY.hero_description, /^吉比租房物件追蹤免費提供/);
+  assert.equal(DEFAULT_PAGE_COPY.wall_title, "感謝支持吉比租房追蹤");
+  assert.doesNotMatch(JSON.stringify(DEFAULT_PAGE_COPY), /5151/);
+});
 
 test("yearly cost converts to monthly", () => {
   assert.equal(monthlyCostAmount(4260, "monthly"), 4260);

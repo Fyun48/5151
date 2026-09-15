@@ -1,5 +1,7 @@
 /** Support / Sponsorship 純計算層。不得被 listing 排序或 fit score 引用。 */
 
+import { APP_NAME, APP_NAME_SHORT } from "./brand.js";
+
 export const SUPPORT_PROVIDER_KINDS = Object.freeze([
   "buy_me_a_coffee",
   "external_url",
@@ -66,9 +68,9 @@ export const DEFAULT_SUPPORT_FLAGS = Object.freeze({
 });
 
 export const DEFAULT_PAGE_COPY = Object.freeze({
-  hero_title: "讓 5151 持續免費",
+  hero_title: `讓${APP_NAME_SHORT}持續免費`,
   hero_description:
-    "5151 免費提供租屋搜尋、整理與比較工具。如果它曾經幫你少開一些分頁、少花一些找房時間，你可以自願支持網站持續維護。沒有支持也不會減少任何功能。",
+    `${APP_NAME}免費提供租屋搜尋、整理與比較工具。如果它曾經幫你少開一些分頁、少花一些找房時間，你可以自願支持網站持續維護。沒有支持也不會減少任何功能。`,
   free_statement: "本站免費使用，支持完全自願，不支持也不會減少任何功能。",
   cost_section_title: "這些錢用在哪裡",
   support_section_title: "支持方式",
@@ -76,7 +78,7 @@ export const DEFAULT_PAGE_COPY = Object.freeze({
   cta_label: "支持本站",
   secondary_label: "繼續找房",
   goal_title: "本月維運",
-  wall_title: "感謝支持 5151",
+  wall_title: `感謝支持${APP_NAME_SHORT}`,
 });
 
 export const DEFAULT_SEED_TIERS = Object.freeze([

@@ -23,12 +23,17 @@ function assertScriptsParse(source) {
 }
 
 test("support page uses CMS copy, abstract checkout, and free-site language", () => {
-  assert.match(support, /讓 5151 持續免費/);
+  assert.match(support, /讓吉比租房追蹤持續免費/);
+  assert.match(support, /吉比租房物件追蹤免費提供/);
+  assert.doesNotMatch(support, /讓 5151 持續免費/);
   assert.match(support, /不支持也不會減少任何功能/);
   assert.match(support, /rel="canonical"/);
   assert.match(support, /og:title/);
   assert.doesNotMatch(support, /buymeacoffee\.com/);
   assert.doesNotMatch(support, /急需資金|救救本站|Donate|捐款給我們/);
+  assert.match(supportPage, /讓吉比租房追蹤持續免費/);
+  assert.match(supportPage, /感謝支持吉比租房追蹤/);
+  assert.doesNotMatch(supportPage, /5151/);
   assert.match(supportPage, /\/api\/support\/checkout/);
   assert.match(supportPage, /checkoutType|available/);
   assert.match(supportPage, /visualPercent/);

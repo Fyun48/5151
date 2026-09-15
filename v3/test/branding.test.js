@@ -3,12 +3,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { APP_NAME, APP_VERSION } from "../src/brand.js";
+import { APP_NAME, APP_NAME_SHORT, APP_VERSION } from "../src/brand.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 
 test("branding stays 吉比租房物件追蹤 with inconspicuous ver. 3.57", () => {
   assert.equal(APP_NAME, "吉比租房物件追蹤");
+  assert.equal(APP_NAME_SHORT, "吉比租房追蹤");
   assert.equal(APP_VERSION, "3.57");
   for (const rel of ["../public/index.html", "../public/login.html", "../public/admin.html"]) {
     const html = readFileSync(path.join(dir, rel), "utf8");

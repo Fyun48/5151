@@ -24,14 +24,14 @@
       return;
     }
     const copy = data.copy || {};
-    text($("heroTitle"), copy.hero_title || "讓 5151 持續免費");
+    text($("heroTitle"), copy.hero_title || "讓吉比租房追蹤持續免費");
     text($("heroDesc"), copy.hero_description || "");
     text($("freeStatement"), copy.free_statement || data.free_statement || "");
     text($("heroCta"), copy.cta_label || "支持本站");
     text($("costTitle"), copy.cost_section_title || "這些錢用在哪裡");
     text($("tierTitle"), copy.support_section_title || "支持方式");
     text($("footerNote"), copy.footer_note || "");
-    text($("wallTitle"), copy.wall_title || "感謝支持 5151");
+    text($("wallTitle"), copy.wall_title || "感謝支持吉比租房追蹤");
     text($("goalTitle"), copy.goal_title || "本月維運");
 
     const goal = data.goal || {};
