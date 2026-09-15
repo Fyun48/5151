@@ -44,5 +44,6 @@
 - 自行刊登可上傳照片（本機檔，最多 100 張，自動壓縮），也可改貼封面網址
 - 預設通知：站內 + 系統推播；郵件／Webhook 選用
 - 系統公告、第一方贊助內容、支持本站分開管理（各一條可寫入／可投遞路徑）；贊助卡插入不改真實物件筆數；SW 殼層快取 v7
+- **Support / Sponsorship domain**（`v3/src/support*.js`）管自願支持、維運成本、企業贊助與 CTA。Feature flags 預設關閉。前端只打 `/api/support/*`，不寫死 Buy Me a Coffee URL。`listingScore.js`、`match.js` 的 `preferPrimaryListing`、`sortListingsRows` **不得 import Support**；企業 Sponsor 也不得進入搜尋／推薦／熱門／距離／價格／fit score／同源主物件／通知優先序。未來房仲付費曝光必須另做 Advertisement domain，不能重用 Sponsor 偷塞自然搜尋。
 
 啟動時若掛得到 v2 的 `v2.db`（容器 `/v2-data/v2.db`），會只讀補尚未存在的刊登與快取，不寫回 v2。

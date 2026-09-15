@@ -117,6 +117,17 @@
     .catalog-grid span { font-size: 12px; color: var(--muted); }
     .ok { color: var(--accent-deep); }
     .err { color: #9f6b6b; }
+    .support-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 14px; }
+    .support-tabs button[aria-selected="true"] { background: var(--accent); color: var(--primary-foreground); }
+    .support-metrics { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+    .support-metric { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: var(--paper); }
+    .support-metric span { display: block; font-size: 12px; color: var(--muted); }
+    .support-metric strong { font-variant-numeric: tabular-nums; font-size: 18px; }
+    .support-bars { display: flex; align-items: flex-end; gap: 4px; height: 72px; margin-top: 10px; }
+    .support-bar { flex: 1; display: flex; align-items: flex-end; height: 72px; }
+    .support-bar i { display: block; width: 100%; background: var(--accent); border-radius: 2px 2px 0 0; }
+    .support-preview { width: 100%; max-width: 100%; height: 640px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+    .support-provider { border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin: 0 0 10px; }
     .checks { display: flex; align-items: center; gap: 8px; margin: 12px 0; font-size: 14px; }
     .checks input { width: auto; }
     .provider {
@@ -1082,21 +1093,195 @@
     </section>
       </div>
       <div id="revenue-support" class="admin-panel" data-admin-page="revenue/support">
-<section class="card">
+<section class="card" id="supportAdminRoot">
       <h2>支持本站</h2>
-      <p class="hint">這是會員自願支持，不是第三方廣告，也不會做成阻擋視窗。權益只列出目前已上線的功能。</p>
-      <form id="supportConfigForm">
-        <label class="checks"><input type="checkbox" id="supportEntryEnabled" checked /> 顯示支持入口（頁尾／帳號）</label>
-        <label class="checks"><input type="checkbox" id="supportCardEnabled" /> 偶爾在列表插入「支持本站」卡</label>
-        <label>支持卡間隔（幾筆物件出現一次，建議 20 以上）</label>
-        <input id="supportCardInterval" type="number" min="8" max="80" value="24" />
-        <label>支持說明</label>
-        <textarea id="supportCopy" maxlength="280"></textarea>
+      <p class="hint">自願支持與企業贊助。預設功能旗標關閉，不會影響搜尋排序。權限沿用管理員角色（support.read / support.manage 對應既有 admin）。</p>
+      <div class="support-tabs" role="tablist" aria-label="支持本站分頁">
+        <button type="button" class="ghost" data-support-tab="dash" aria-selected="true">總覽</button>
+        <button type="button" class="ghost" data-support-tab="present">前台呈現</button>
+        <button type="button" class="ghost" data-support-tab="tiers">支持方案</button>
+        <button type="button" class="ghost" data-support-tab="pay">收款設定</button>
+        <button type="button" class="ghost" data-support-tab="tx">支持紀錄</button>
+        <button type="button" class="ghost" data-support-tab="sponsors">企業贊助</button>
+        <button type="button" class="ghost" data-support-tab="costs">維運成本</button>
+        <button type="button" class="ghost" data-support-tab="wall">感謝牆</button>
+        <button type="button" class="ghost" data-support-tab="rules">顯示規則</button>
+        <button type="button" class="ghost" data-support-tab="audit">稽核紀錄</button>
+      </div>
+
+      <div data-support-panel="dash">
+        <label>期間</label>
+        <select id="supportPeriod">
+          <option value="7d">最近 7 日</option>
+          <option value="30d">最近 30 日</option>
+          <option value="month" selected>本月</option>
+          <option value="last_month">上月</option>
+        </select>
+        <div class="support-metrics" id="supportDashCards"></div>
+        <div id="supportFunnel"></div>
+        <div class="support-bars" id="supportBars" aria-hidden="true"></div>
+      </div>
+
+      <div data-support-panel="present" hidden>
+        <label class="checks"><input type="checkbox" id="supportFlagEnabled" /> 啟用 support.enabled（前台入口／/support）</label>
+        <label class="checks"><input type="checkbox" id="supportFlagCta" /> 啟用智慧 CTA</label>
+        <label class="checks"><input type="checkbox" id="supportFlagSponsor" /> 啟用企業贊助呈現</label>
+        <label class="checks"><input type="checkbox" id="supportFlagCost" /> 公開維運成本</label>
+        <label>Hero 標題</label>
+        <input id="supportHeroTitle" maxlength="80" />
+        <label>Hero 說明</label>
+        <textarea id="supportHeroDesc" maxlength="800"></textarea>
+        <label>免費聲明</label>
+        <textarea id="supportFreeStatement" maxlength="240"></textarea>
+        <label>成本區塊標題</label>
+        <input id="supportCostTitle" maxlength="40" />
+        <label>支持方式標題</label>
+        <input id="supportSectionTitle" maxlength="40" />
+        <label>頁尾備註</label>
+        <input id="supportFooterNote" maxlength="160" />
+        <label class="checks"><input type="checkbox" id="supportShowGoal" checked /> 顯示目標</label>
+        <label class="checks"><input type="checkbox" id="supportShowCost" checked /> 顯示成本</label>
+        <label class="checks"><input type="checkbox" id="supportShowSupporters" checked /> 顯示感謝牆</label>
+        <label class="checks"><input type="checkbox" id="supportShowSponsors" checked /> 顯示企業贊助</label>
+        <label>目標金額</label>
+        <input id="supportGoalAmount" type="number" min="0" step="1" />
+        <label>目標說明</label>
+        <input id="supportGoalLabel" maxlength="80" />
+        <label>目標顯示</label>
+        <select id="supportGoalDisplay">
+          <option value="exact">顯示精確金額</option>
+          <option value="percent">只顯示百分比</option>
+          <option value="hidden">完全不顯示</option>
+        </select>
+        <label class="checks"><input type="checkbox" id="supportWallEnabled" /> 啟用感謝牆</label>
         <div class="row" style="margin-top:10px">
-          <button type="submit" class="primary" id="supportConfigSave">儲存支持呈現</button>
+          <button type="button" class="primary" id="supportConfigSaveBtn">儲存草稿</button>
+          <button type="button" class="ghost" id="supportConfigPublishBtn">發布前台文案</button>
+          <button type="button" class="ghost" id="supportPreviewDesk">預覽桌面</button>
+          <button type="button" class="ghost" id="supportPreviewMobile">預覽手機</button>
         </div>
-        <p class="msg" id="supportConfigMsg"></p>
-      </form>
+        <p class="msg" id="supportCmsMsg"></p>
+        <p class="hint">Preview 讀草稿，不必先發布。含支持頁、CTA 文案與企業贊助卡。</p>
+        <iframe class="support-preview" id="supportPreviewFrame" title="支持本站預覽" src="about:blank"></iframe>
+        <h3 style="margin:20px 0 8px;font-size:16px">舊版列表支持卡</h3>
+        <p class="hint">這是會員自願支持，不是第三方廣告，也不會做成阻擋視窗。權益只列出目前已上線的功能。</p>
+        <form id="supportConfigForm">
+          <label class="checks"><input type="checkbox" id="supportEntryEnabled" checked /> 顯示支持入口（頁尾／帳號）</label>
+          <label class="checks"><input type="checkbox" id="supportCardEnabled" /> 偶爾在列表插入「支持本站」卡</label>
+          <label>支持卡間隔（幾筆物件出現一次，建議 20 以上）</label>
+          <input id="supportCardInterval" type="number" min="8" max="80" value="24" />
+          <label>支持說明</label>
+          <textarea id="supportCopy" maxlength="280"></textarea>
+          <div class="row" style="margin-top:10px">
+            <button type="submit" class="primary" id="supportConfigSave">儲存支持呈現</button>
+          </div>
+          <p class="msg" id="supportConfigMsg"></p>
+        </form>
+      </div>
+
+      <div data-support-panel="tiers" hidden>
+        <form id="supportTierForm">
+          <input type="hidden" id="supportTierId" />
+          <label>名稱</label><input id="supportTierTitle" required maxlength="40" />
+          <label>說明</label><input id="supportTierDesc" maxlength="160" />
+          <label>金額（0＝自訂）</label><input id="supportTierAmount" type="number" min="0" />
+          <label>圖示</label><input id="supportTierIcon" maxlength="16" />
+          <label>排序</label><input id="supportTierOrder" type="number" />
+          <label class="checks"><input type="checkbox" id="supportTierActive" checked /> 啟用</label>
+          <label class="checks"><input type="checkbox" id="supportTierDefault" /> 預設</label>
+          <button type="submit" class="primary">儲存方案</button>
+          <p class="msg" id="supportTierMsg"></p>
+        </form>
+        <table><thead><tr><th>方案</th><th>金額</th><th>狀態</th><th></th></tr></thead><tbody id="supportTierRows"></tbody></table>
+      </div>
+
+      <div data-support-panel="pay" hidden>
+        <p class="hint">第一版只做外部導向。不要把 API key 填到會回傳到瀏覽器的欄位。藍新／綠界僅預留，尚未串接。</p>
+        <div id="supportProviderRows"></div>
+        <p class="msg" id="supportProviderMsg"></p>
+      </div>
+
+      <div data-support-panel="tx" hidden>
+        <form id="supportTxForm">
+          <label>來源</label>
+          <select id="supportTxProvider">
+            <option value="buy_me_a_coffee">Buy Me a Coffee</option>
+            <option value="external_url">外部連結</option>
+          </select>
+          <label>金額</label><input id="supportTxAmount" type="number" min="1" required />
+          <label>手續費</label><input id="supportTxFee" type="number" min="0" value="0" />
+          <label>日期</label><input id="supportTxDate" type="date" />
+          <label>公開名稱</label><input id="supportTxName" maxlength="40" />
+          <label class="checks"><input type="checkbox" id="supportTxAnon" checked /> 匿名</label>
+          <label>備註（不會顯示 Email／付款 ID）</label><input id="supportTxNote" maxlength="160" />
+          <button type="submit" class="primary">新增外部支持紀錄</button>
+          <p class="msg" id="supportTxMsg"></p>
+        </form>
+        <table><thead><tr><th>日期</th><th>來源</th><th>金額</th><th>狀態</th></tr></thead><tbody id="supportTxRows"></tbody></table>
+      </div>
+
+      <div data-support-panel="sponsors" hidden>
+        <p class="hint">企業贊助必須標示「贊助」。此資料禁止進入 listing ranking。未來房仲付費曝光必須另做 Advertisement domain。</p>
+        <form id="supportSpForm">
+          <input type="hidden" id="supportSpId" />
+          <label>名稱</label><input id="supportSpName" required maxlength="60" />
+          <label>網站</label><input id="supportSpUrl" placeholder="https://" />
+          <label>說明</label><input id="supportSpDesc" maxlength="200" />
+          <label>狀態</label>
+          <select id="supportSpStatus">
+            <option value="draft">draft</option>
+            <option value="scheduled">scheduled</option>
+            <option value="active">active</option>
+            <option value="expired">expired</option>
+            <option value="disabled">disabled</option>
+          </select>
+          <label>開始</label><input id="supportSpStart" type="date" />
+          <label>結束</label><input id="supportSpEnd" type="date" />
+          <button type="submit" class="primary">儲存企業贊助</button>
+          <p class="msg" id="supportSpMsg"></p>
+        </form>
+        <table><thead><tr><th>名稱</th><th>狀態</th><th></th></tr></thead><tbody id="supportSponsorRows"></tbody></table>
+      </div>
+
+      <div data-support-panel="costs" hidden>
+        <form id="supportCostForm">
+          <input type="hidden" id="supportCostId" />
+          <label>名稱</label><input id="supportCostName" required maxlength="80" />
+          <label>分類</label>
+          <select id="supportCostCategory">
+            <option>GCP / Server</option><option>Database</option><option>Google Maps API</option>
+            <option>Geocoding API</option><option>Email</option><option>SMS</option>
+            <option>Monitoring</option><option>Domain</option><option>Cloud Storage</option>
+            <option>Proxy / crawler</option><option>第三方 API</option><option>Other</option>
+          </select>
+          <label>金額</label><input id="supportCostAmount" type="number" min="0" required />
+          <label>週期</label>
+          <select id="supportCostCycle">
+            <option value="monthly">monthly</option>
+            <option value="yearly">yearly</option>
+            <option value="one_time">one_time</option>
+            <option value="custom">custom</option>
+          </select>
+          <label class="checks"><input type="checkbox" id="supportCostPublic" /> 列入公開成本</label>
+          <label>備註（前台不顯示敏感細節）</label><input id="supportCostNote" maxlength="240" />
+          <button type="submit" class="primary">儲存成本</button>
+          <p class="msg" id="supportCostMsg"></p>
+        </form>
+        <table><thead><tr><th>項目</th><th>金額</th><th>公開</th><th></th></tr></thead><tbody id="supportCostRows"></tbody></table>
+      </div>
+
+      <div data-support-panel="wall" hidden>
+        <p class="hint">感謝牆只顯示公開名稱或匿名，不顯示 Email、電話或付款 ID。請在「前台呈現」勾選啟用。</p>
+      </div>
+
+      <div data-support-panel="rules" hidden>
+        <p class="hint">CTA 只在使用者已取得價值後出現，且遵守冷卻。不要做成進站就跳的阻擋視窗。</p>
+        <table><thead><tr><th>條件</th><th>訊息</th><th>狀態</th><th></th></tr></thead><tbody id="supportRuleRows"></tbody></table>
+      </div>
+
+      <div data-support-panel="audit" hidden>
+        <table><thead><tr><th>時間</th><th>操作者</th><th>動作</th><th>對象</th></tr></thead><tbody id="supportAuditRows"></tbody></table>
+      </div>
     </section>
       </div>
       <div id="revenue-ads" class="admin-panel" data-admin-page="revenue/ads">
@@ -1407,6 +1592,7 @@
   </div>
   <script src="/mascot.js"></script>
   <script src="/admin-ia.js"></script>
+  <script src="/admin-support.js"></script>
   <script>
 
     const $ = (id) => document.getElementById(id);
@@ -3278,7 +3464,7 @@
       if (me.role !== "admin") { location.replace("/"); return; }
       meEmail = me.email || "";
       $("who").textContent = meEmail;
-      await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadAnnouncements(), loadCommsAdmin(), loadMaps(), loadHelpQa(), loadWishConditions(), loadLegalCopy(), loadContentCms(), loadListingImports(), loadSpirit(), loadHousing(), loadCrawlSources(), loadSystemCrawl(), loadBrand(), loadFeedback()]);
+      await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadAnnouncements(), loadCommsAdmin(), loadMaps(), loadHelpQa(), loadWishConditions(), loadLegalCopy(), loadContentCms(), loadListingImports(), loadSpirit(), loadHousing(), loadCrawlSources(), loadSystemCrawl(), loadBrand(), loadFeedback(), typeof loadSupportAdmin === "function" ? loadSupportAdmin() : Promise.resolve()]);
       adminFormsReady = true;
       IA.finishPageLoad(IA.currentPageId());
       $("brandForm").onsubmit = async (ev) => {

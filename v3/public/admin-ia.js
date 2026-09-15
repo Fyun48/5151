@@ -184,8 +184,8 @@
       group: "revenue",
       groupLabel: "收益與曝光",
       label: "支持本站",
-      blurb: "頁尾與列表支持卡呈現。",
-      aliases: ["支持本站", "支持呈現"],
+      blurb: "支持總覽、前台呈現、方案、收款、企業贊助與維運成本。",
+      aliases: ["支持本站", "支持呈現", "支持總覽", "收款設定", "感謝牆", "維運成本", "Buy Me a Coffee"],
     },
     {
       id: "revenue/campaigns",

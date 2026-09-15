@@ -110,6 +110,7 @@ import {
   normalizeCommsConfig,
   emptyCommsConfig,
 } from "./comms.js";
+import { ensureSupportSchema } from "./supportSchema.js";
 import { DATA_EPOCH, shouldResetForEpoch } from "./dataEpoch.js";
 import { countsTowardAllTotal, isConfirmedOffline, isPendingOffline, normalizeOfflineConfirmDays } from "./offline.js";
 import { coveringJobsFromMembers, coversFromMemberSettings, coversFromWatchDistricts, listingInMemberScope } from "./covering.js";
@@ -813,6 +814,7 @@ try {
 }
 ensurePushSchema(db);
 ensureCommsSchema(db);
+ensureSupportSchema(db);
 db.exec(`
   CREATE TABLE IF NOT EXISTS admin_audit (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

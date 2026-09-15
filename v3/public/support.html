@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>支持本站 · 吉比租房物件追蹤</title>
+  <meta name="description" content="吉比租房物件追蹤免費提供租屋搜尋與整理。支持完全自願，不支持也不會減少任何功能。" />
+  <link rel="canonical" href="/support.html" />
+  <meta property="og:title" content="支持本站 · 吉比租房物件追蹤" />
+  <meta property="og:description" content="本站免費使用。支持完全自願，不會改變搜尋結果。" />
+  <meta property="og:type" content="website" />
+  <link rel="stylesheet" href="/tokens.css" />
+  <link rel="icon" href="/brand/favicon-32.png" />
+  <style>
+    * { box-sizing: border-box; }
+    html, body { max-width: 100%; overflow-x: clip; }
+    body {
+      margin: 0;
+      font-family: var(--font-sans);
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.7;
+    }
+    main {
+      width: min(720px, calc(100% - 32px));
+      margin: 28px auto 96px;
+    }
+    h1 {
+      margin: 0 0 12px;
+      font-family: var(--font-serif);
+      font-size: 26px;
+      font-weight: 600;
+    }
+    h2 {
+      margin: 28px 0 8px;
+      font-size: 18px;
+      font-weight: 700;
+    }
+    p, li { color: var(--ink); font-size: 15px; }
+    .muted { color: var(--muted); }
+    a { color: var(--accent-deep); }
+    .back { display: inline-block; margin-bottom: 18px; }
+    .free-note {
+      margin: 16px 0;
+      padding: 12px 14px;
+      background: var(--accent-soft);
+      border-radius: var(--radius);
+      color: var(--accent-deep);
+      font-size: 14px;
+    }
+    .goal-box, .tier, .sponsor-card, .thanks-item {
+      border: 1px solid var(--line);
+      background: var(--paper);
+      border-radius: var(--radius-lg);
+      padding: 14px 16px;
+    }
+    .goal-nums {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin: 8px 0 12px;
+    }
+    .goal-nums strong { display: block; font-variant-numeric: tabular-nums; font-size: 20px; }
+    .bar {
+      height: 8px;
+      background: var(--line);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+    .bar > span {
+      display: block;
+      height: 100%;
+      background: var(--accent);
+      width: 0;
+    }
+    .tiers {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .tier {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-height: 132px;
+    }
+    .tier button, .actions a, .actions button {
+      min-height: var(--touch);
+      cursor: pointer;
+    }
+    .tier .amt { font-variant-numeric: tabular-nums; font-weight: 700; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
+    .primary, .ghost {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 0;
+      border-radius: 999px;
+      padding: 9px 16px;
+      text-decoration: none;
+      font: 14px/1.4 var(--font-sans);
+    }
+    .primary { background: var(--accent); color: #fff; }
+    .ghost { background: var(--paper); color: var(--ink); border: 1px solid var(--line); }
+    .primary:focus-visible, .ghost:focus-visible, .tier button:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    .sponsors, .thanks { display: grid; gap: 8px; }
+    .sponsor-card small, .kicker {
+      display: inline-block;
+      font-size: 12px;
+      color: var(--muted);
+      letter-spacing: 0.04em;
+    }
+    .fallback {
+      padding: 12px 14px;
+      border: 1px dashed var(--line);
+      border-radius: var(--radius);
+      color: var(--muted);
+    }
+    @media (max-width: 700px) {
+      .tiers, .goal-nums { grid-template-columns: 1fr; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      * { transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <a class="back" href="/">← 回找房</a>
+    <p class="kicker" id="supportKicker">支持本站</p>
+    <h1 id="heroTitle">讓吉比租房追蹤持續免費</h1>
+    <p id="heroDesc">吉比租房物件追蹤免費提供租屋搜尋、整理與比較工具。如果它曾經幫你少開一些分頁、少花一些找房時間，你可以自願支持網站持續維護。沒有支持也不會減少任何功能。</p>
+    <p class="free-note" id="freeStatement">本站免費使用，支持完全自願，不支持也不會減少任何功能。</p>
+    <div class="actions">
+      <a class="primary" id="heroCta" href="#supportWays">支持本站</a>
+      <a class="ghost" href="/">繼續找房</a>
+    </div>
+
+    <section id="goalSection" hidden>
+      <h2 id="goalTitle">本月維運</h2>
+      <div class="goal-box">
+        <div class="goal-nums">
+          <div>
+            <span class="muted">本月維運成本</span>
+            <strong id="goalCost">—</strong>
+          </div>
+          <div>
+            <span class="muted">已收到支持</span>
+            <strong id="goalGot">—</strong>
+          </div>
+        </div>
+        <div class="bar" role="progressbar" id="goalBar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="支持進度">
+          <span id="goalFill"></span>
+        </div>
+        <p class="muted" id="goalPct"></p>
+      </div>
+    </section>
+
+    <section id="costSection" hidden>
+      <h2 id="costTitle">這些錢用在哪裡</h2>
+      <ul id="costList"></ul>
+    </section>
+
+    <section id="supportWays">
+      <h2 id="tierTitle">支持方式</h2>
+      <div class="tiers" id="tierList"></div>
+      <p class="fallback" id="checkoutFallback" hidden>目前支持付款服務暫時無法使用，稍後再試即可。</p>
+    </section>
+
+    <section id="sponsorSection" hidden>
+      <h2>企業支持</h2>
+      <div class="sponsors" id="sponsorList"></div>
+    </section>
+
+    <section id="thanksSection" hidden>
+      <h2 id="wallTitle">感謝支持吉比租房追蹤</h2>
+      <div class="thanks" id="thanksList"></div>
+    </section>
+
+    <p class="muted" id="footerNote">支持不會改變搜尋結果、推薦或排序。</p>
+  </main>
+  <script src="/support-page.js"></script>
+</body>
+</html>

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { APP_NAME, APP_NAME_EN, APP_VERSION } from "../src/brand.js";
+import { APP_NAME, APP_NAME_EN, APP_NAME_SHORT, APP_VERSION } from "../src/brand.js";
 import {
   defaultBrandMascot,
   isSafeBrandUrl,
@@ -16,6 +16,7 @@ const publicDir = path.join(dir, "../public");
 
 test("bundled mark exists without Pawprints filename and English name is JibbyRentH", () => {
   assert.equal(APP_NAME, "吉比租房物件追蹤");
+  assert.equal(APP_NAME_SHORT, "吉比租房追蹤");
   assert.equal(APP_NAME_EN, "JibbyRentH");
   assert.equal(APP_VERSION, "3.57");
   assert.equal(existsSync(path.join(publicDir, "brand/mark.png")), true);
