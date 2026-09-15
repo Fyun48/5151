@@ -3641,8 +3641,14 @@ export function confirmExpiredOfflineListings(days = 7) {
   return Number(info.changes) || 0;
 }
 
-/** 列表載入時補 sweep：用全站（後台）天數，不看會員自己的 7 日覆寫。 */
+const EXPIRED_OFFLINE_SWEEP_MS = 60_000;
+let lastExpiredOfflineSweepAt = 0;
+
+/** 列表載入時補 sweep：用全站（後台）天數；60 秒內只跑一次，避免每次 GET 拿寫鎖。 */
 export function confirmExpiredOfflineFromSettings(settings = getSettings()) {
+  const now = Date.now();
+  if (now - lastExpiredOfflineSweepAt < EXPIRED_OFFLINE_SWEEP_MS) return 0;
+  lastExpiredOfflineSweepAt = now;
   return confirmExpiredOfflineListings(normalizeOfflineConfirmDays(settings?.offlineConfirmDays));
 }
 

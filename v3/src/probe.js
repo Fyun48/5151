@@ -147,10 +147,16 @@ export async function probeHtmlListingAlive(url, opts = {}) {
 }
 
 // 依來源分派探測。回傳 { supported, alive }：supported=false 表示此來源不支援即時探測（如自刊 self）。
+function rent591HtmlUrl(listing) {
+  const id = Number(listing?.post_id);
+  if (!id) return "";
+  return `https://rent.591.com.tw/${id}`;
+}
+
 export async function probeListingAliveBySource(listing, { thorough = false } = {}) {
   const source = String(listing?.source || "591") || "591";
   const url = String(listing?.url || "");
-  const rentUrl = url || (listing?.post_id ? `https://rent.591.com.tw/${listing.post_id}` : "");
+  const rentUrl = source === "591" || source === "" ? rent591HtmlUrl(listing) : "";
   if (source === "self") return asProbeResult(false, null);
   try {
     if (source === "591" || source === "") {

@@ -781,6 +781,8 @@ test("self listing form and in-site detail stay on this site", () => {
   assert.match(html, /不是同一間/);
   assert.match(html, /function sameHouseSplitBtn/);
   assert.match(html, /function sameHouseGoneBtn/);
+  assert.match(html, /same-house-row-actions/);
+  assert.match(html, /拆開中/);
   assert.doesNotMatch(html, /peer\.role === "affiliate"/);
   assert.match(html, /recheck\?fresh=1/);
   assert.match(html, /併入同房源/);

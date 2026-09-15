@@ -150,7 +150,9 @@ test("probeListingAliveBySource: housefun redirect to noobject → gone", async 
 });
 
 test("thorough 591 probe trusts HTML gone after JSON still looks alive", async () => {
+  const seen = [];
   const restore = mockFetch(async (url) => {
+    seen.push(String(url));
     if (String(url).includes("bff-house.591.com.tw")) {
       return {
         status: 200,
@@ -160,13 +162,15 @@ test("thorough 591 probe trusts HTML gone after JSON still looks alive", async (
         text: async () => "",
       };
     }
-    return resp({ status: 200, url: "https://rent.591.com.tw/99", body: "<html>物件不存在</html>" });
+    return resp({ status: 200, url: String(url), body: "<html>物件不存在</html>" });
   });
-  const listing = { source: "591", post_id: 99, url: "https://rent.591.com.tw/99" };
+  const listing = { source: "591", post_id: 99, url: "https://evil.example/ssrf" };
   const shallow = await probeListingAliveBySource(listing);
   assert.equal(shallow.alive, true);
   const thorough = await probeListingAliveBySource(listing, { thorough: true });
   assert.equal(thorough.alive, false);
   assert.equal(thorough.outcome, PROBE_GONE);
+  assert.equal(seen.some((url) => url.includes("evil.example")), false);
+  assert.equal(seen.some((url) => url.includes("https://rent.591.com.tw/99")), true);
   restore();
 });

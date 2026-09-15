@@ -2713,6 +2713,28 @@ app.post("/api/listings/:id/flags", async (req, res) => {
   }
 });
 
+const FRESH_RECHECK_WINDOW_MS = 60_000;
+const FRESH_RECHECK_LIMIT = 8;
+const FRESH_RECHECK_MIN_MS = 10_000;
+const freshRecheckHits = new Map();
+const freshRecheckLast = new Map();
+
+function allowFreshRecheck(userId, postId) {
+  const uid = Number(userId) || 0;
+  const id = Number(postId) || 0;
+  if (!uid || !id) return false;
+  const now = Date.now();
+  const pairKey = `${uid}:${id}`;
+  const last = Number(freshRecheckLast.get(pairKey)) || 0;
+  if (now - last < FRESH_RECHECK_MIN_MS) return false;
+  const hits = (freshRecheckHits.get(uid) || []).filter((ts) => now - ts < FRESH_RECHECK_WINDOW_MS);
+  if (hits.length >= FRESH_RECHECK_LIMIT) return false;
+  hits.push(now);
+  freshRecheckHits.set(uid, hits);
+  freshRecheckLast.set(pairKey, now);
+  return true;
+}
+
 app.post("/api/listings/:id/recheck", async (req, res) => {
   try {
     const session = readSession(req);
@@ -2752,6 +2774,10 @@ app.post("/api/listings/:id/recheck", async (req, res) => {
     const lastCheck = Date.parse(listing.last_checked_at || "") || 0;
     if (!fresh && lastCheck && Date.now() - lastCheck < 60_000) {
       res.json({ supported: true, gone: Boolean(Number(listing.offline)), cooldown: true });
+      return;
+    }
+    if (fresh && !allowFreshRecheck(session.userId, postId)) {
+      res.json({ supported: true, gone: Boolean(Number(listing.offline)), cooldown: true, limited: true });
       return;
     }
     const { supported, outcome, alive } = await probeListingAliveBySource(listing, { thorough: Boolean(fresh) });
