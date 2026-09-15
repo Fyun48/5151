@@ -5316,6 +5316,7 @@
     }
 
     function applyListView(items) {
+      if (filter === "watched") return Array.isArray(items) ? items : [];
       return applyViewFilters(applyDistrictView(items));
     }
 
@@ -7266,7 +7267,10 @@
         let msg = "目前沒有符合條件的物件。請勾選行政區並按儲存，之後會自動抓取與篩選。";
         if (q) msg = `沒有符合「${q}」的物件。試試較短關鍵字，或清掉搜尋看全部列表。`;
         else if (filter === "watched") {
-          msg = "目前沒有特別關注的物件。在卡片按「特別關注」或左滑即可加入；一般會員最多 6 筆，贊助會員最多 15 筆。";
+          const used = watchedCount();
+          msg = used
+            ? `特別關注配額仍佔 ${used} 筆，但目前清單沒有可顯示的物件。已確認下架的不佔名額；若按鈕仍鎖住，請重新整理後再取消一筆。`
+            : "目前沒有特別關注的物件。在卡片按「特別關注」或左滑即可加入；一般會員最多 6 筆，贊助會員最多 15 筆。";
         } else if (filter === "hidden") {
           msg = "目前沒有已隱藏的物件。";
         } else if (filter === "suspected") {

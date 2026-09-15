@@ -289,7 +289,7 @@ export function migrateListingFlagsIfNeeded(conn, userId) {
 }
 
 export function listingIsMainListAffiliate(row, filter) {
-  if (filter === "hidden") return false;
+  if (filter === "hidden" || filter === "watched") return false;
   if (row?.same_house_split) return false;
   if (row?.same_house_role !== "affiliate") return false;
   if (row?.same_house_primary_offline && Number(row.offline) !== 1) return false;
@@ -307,12 +307,13 @@ export function listingMatchesListFilter(row, filter) {
   if (filter === "hidden") return hidden || dup;
   if (filter === "offline") return offline && !confirmed;
   if (filter === "suspected") return Boolean(row?.match_level) && !confirmed && !dup && !hidden;
+  // 特別關注是配額管理清單：已下架、已隱藏、同屋源次要刊登都要看得見才能取消。
+  if (filter === "watched") return watched;
   // 「下架確認中」（pending）留在一般列表（灰階）；只有「確認已下架」才排除。
   if (dup || confirmed || hidden) return false;
   if (filter === "all") return !watched;
   if (filter === "unseen") return !viewed;
   if (filter === "viewed") return viewed === true || viewed === 1;
-  if (filter === "watched") return watched;
   if (filter === "same_source") {
     return ["same_source", "update", "price_drop", "title_update"].includes(row?.last_event);
   }

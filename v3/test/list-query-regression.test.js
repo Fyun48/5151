@@ -418,6 +418,41 @@ test("list API whole+building+elevator drops walk-up 公寓 without shape tags",
   `);
 });
 
+test("watched list keeps listings outside district, kind, and confirmed offline", () => {
+  runIsolated(`
+    seed(830001, {
+      title: "關注士林",
+      address: "台北市士林區測試路1號",
+      source_key: "1|8|830001",
+      kind_name: "整層住家",
+    });
+    seed(830002, {
+      title: "關注中和套房",
+      address: "新北市中和區景平路2號",
+      source_key: "3|26|830002",
+      kind_name: "獨立套房",
+    });
+    seed(830003, {
+      title: "關注已下架",
+      address: "台北市士林區測試路3號",
+      source_key: "1|8|830003",
+    });
+    app.setFlags(830001, { watched: true }, uid);
+    app.setFlags(830002, { watched: true }, uid);
+    app.setFlags(830003, { watched: true }, uid);
+    app.db.prepare("UPDATE listings SET offline = 1, offline_confirmed = 1 WHERE post_id = 830003").run();
+    const watched = query({
+      filter: "watched",
+      kind: "whole",
+      districts: ["士林區"],
+      settings: { ...settings, watchDistricts: ["1-8"], priceMax: 15000 },
+    });
+    const got = ids(watched).sort((a, b) => a - b);
+    assert.deepEqual(got, [830001, 830002, 830003]);
+    assert.equal(app.stats([], uid).watchedTotal, 2);
+  `);
+});
+
 test("watched list pages keep hasMore and return the next offset", () => {
   runIsolated(`
     for (let i = 0; i < 12; i++) {
