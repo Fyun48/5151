@@ -151,6 +151,11 @@ export function publicPath(req) {
     p === "/disclaimer.html" ||
     p === "/terms.html" ||
     p === "/data.html" ||
+    p === "/support" ||
+    p === "/support.html" ||
+    p === "/support-page.js" ||
+    p === "/support-cta.js" ||
+    p.startsWith("/api/support/") ||
     p === "/logout" ||
     p === "/api/login" ||
     p === "/api/register" ||

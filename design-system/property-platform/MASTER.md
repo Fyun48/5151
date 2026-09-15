@@ -86,7 +86,7 @@ shadcn 別名（`--foreground`、`--primary`、`--border`、`--ring`）指向同
  └─ 條件抽屜（行政區、租金、通勤；不得擋住列表掃讀）
 ```
 
-其它頁：`login.html`、`reset.html`、`disclaimer.html`、`admin.html`。Q&A 由帳號旁與設定頁進入，不是第六個底欄。
+其它頁：`login.html`、`reset.html`、`disclaimer.html`、`admin.html`、`support.html`（見 `pages/support.md`）。Q&A 由帳號旁與設定頁進入，不是第六個底欄。
 
 ## 元件
 

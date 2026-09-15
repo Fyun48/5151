@@ -247,6 +247,39 @@ import {
 } from "./crawlWatchdog.js";
 import { APP_NAME, APP_VERSION } from "./brand.js";
 import { appendAdminAudit, listAdminAudit } from "./adminAudit.js";
+import {
+  adminSupportConfig,
+  assertSupportCheckoutAllowed,
+  createManualTransaction,
+  createSupportCheckout,
+  createSupportCost,
+  createSupportSponsor,
+  createSupportTier,
+  dismissSupportCta,
+  evaluateSupportCta,
+  getSupportFlags,
+  initSupportDomain,
+  listCtaRules,
+  listSupportCosts,
+  listSupportProviders,
+  listSupportSponsors,
+  listSupportTiers,
+  listSupportTransactions,
+  markSupportCtaShown,
+  previewSupportConfig,
+  publicSupportConfig,
+  publishSupportConfig,
+  recordSupportEvent,
+  saveSupportConfig,
+  supportDashboard,
+  updateCtaRule,
+  updateSupportCost,
+  updateSupportProvider,
+  updateSupportSponsor,
+  updateSupportTier,
+  updateSupportTransaction,
+  verifySupportWebhook,
+} from "./support.js";
 import { crawlSourceHealth, getAdminDataHealth, getAdminOverview, searchAdminListings } from "./adminOverview.js";
 import { commuteSettingsFingerprint, finishBackfillRequest, rememberBackfillRequest } from "./commuteState.js";
 import { profileNameOrDraft, resolveWorkPointForSave } from "./settingsState.js";
@@ -272,6 +305,7 @@ import {
 } from "./brandMascot.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+initSupportDomain(db);
 const app = express();
 app.set("trust proxy", 1);
 const PORT = Number(process.env.PORT || 5153);
@@ -302,6 +336,10 @@ app.use((req, res, next) => {
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, version: APP_VERSION });
+});
+
+app.get("/support", (_req, res) => {
+  res.redirect(302, "/support.html");
 });
 
 app.get("/manifest.webmanifest", (_req, res) => {
@@ -1391,6 +1429,298 @@ app.get("/api/comms", (req, res) => {
     sponsorOffer: session ? publicSponsorSettings(session) : {},
     user: session ? { id: session.userId, plan: session.plan, role: session.role } : {},
   }));
+});
+
+function sendSupportError(res, error) {
+  res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
+}
+
+function publicSupportFallback() {
+  return {
+    enabled: false,
+    flags: getSupportFlags(db),
+    entry: { show: false, label: "支持本站", href: "/support.html" },
+    cta: { enabled: false },
+  };
+}
+
+app.get("/api/support/public", (_req, res) => {
+  try {
+    res.json(publicSupportConfig(db));
+  } catch {
+    res.json(publicSupportFallback());
+  }
+});
+
+app.get("/api/support/tiers", (_req, res) => {
+  try {
+    const pub = publicSupportConfig(db);
+    res.json({ items: pub.tiers || [] });
+  } catch {
+    res.json({ items: [] });
+  }
+});
+
+app.post("/api/support/checkout", async (req, res) => {
+  try {
+    assertSupportCheckoutAllowed(clientIp(req));
+    const result = await createSupportCheckout(db, {
+      tierId: req.body?.tierId,
+      amount: req.body?.amount,
+    });
+    const session = readSession(req);
+    recordSupportEvent(db, "support_checkout_opened", {
+      userId: session?.userId || null,
+      meta: { tierId: req.body?.tierId },
+    });
+    res.json(result);
+  } catch (error) {
+    if (error.code === "RATE_LIMITED") {
+      res.status(429).json({ available: false, message: error.message, code: error.code });
+      return;
+    }
+    res.json({ available: false, message: "目前支持付款服務暫時無法使用，稍後再試即可。" });
+  }
+});
+
+app.post("/api/support/cta", (req, res) => {
+  try {
+    const session = readSession(req);
+    const result = evaluateSupportCta(db, {
+      userId: session?.userId || null,
+      usage: req.body?.usage,
+      clientState: req.body?.clientState,
+    });
+    if (result.show) {
+      markSupportCtaShown(db, {
+        userId: session?.userId || null,
+        clientState: result.state,
+      });
+      recordSupportEvent(db, "support_cta_shown", {
+        userId: session?.userId || null,
+        meta: { ruleId: result.ruleId },
+      });
+    }
+    res.json(result);
+  } catch {
+    res.json({ show: false, reason: "unavailable" });
+  }
+});
+
+app.post("/api/support/cta/dismiss", (req, res) => {
+  try {
+    const session = readSession(req);
+    const state = dismissSupportCta(db, {
+      userId: session?.userId || null,
+      days: req.body?.days,
+      clientState: req.body?.clientState,
+    });
+    recordSupportEvent(db, "support_cta_dismissed", {
+      userId: session?.userId || null,
+      meta: { days: req.body?.days },
+    });
+    res.json({ ok: true, state });
+  } catch {
+    res.json({ ok: true, state: req.body?.clientState || {} });
+  }
+});
+
+app.post("/api/support/event", (req, res) => {
+  try {
+    const session = readSession(req);
+    res.json(recordSupportEvent(db, String(req.body?.kind || ""), {
+      userId: session?.userId || null,
+      guestKey: String(req.body?.guestKey || "").slice(0, 80),
+      meta: req.body?.meta,
+    }));
+  } catch {
+    res.json({ ok: false });
+  }
+});
+
+app.post("/api/support/webhook/:provider", async (req, res) => {
+  try {
+    const result = await verifySupportWebhook(req.params.provider, req.body, req.headers);
+    res.status(result.ok ? 200 : 501).json(result);
+  } catch (error) {
+    sendSupportError(res, error);
+  }
+});
+
+app.get("/api/admin/support/dashboard", requireAdminApi, (req, res) => {
+  try {
+    res.json(supportDashboard(db, {
+      period: String(req.query.period || "month"),
+      from: req.query.from,
+      to: req.query.to,
+    }));
+  } catch (error) {
+    sendSupportError(res, error);
+  }
+});
+
+app.get("/api/admin/support/config", requireAdminApi, (_req, res) => {
+  res.json(adminSupportConfig(db));
+});
+
+app.get("/api/admin/support/preview", requireAdminApi, (_req, res) => {
+  res.json(previewSupportConfig(db));
+});
+
+app.put("/api/admin/support/config", requireAdminApi, (req, res) => {
+  try {
+    const before = adminSupportConfig(db);
+    const after = saveSupportConfig(db, req.body || {});
+    auditReq(req, "support.config.update", "support_page_config", before, after);
+    res.json(after);
+  } catch (error) {
+    sendSupportError(res, error);
+  }
+});
+
+app.post("/api/admin/support/config/publish", requireAdminApi, (req, res) => {
+  try {
+    const before = adminSupportConfig(db);
+    const after = publishSupportConfig(db);
+    auditReq(req, "support.page.publish", "support_page_config", before, after);
+    res.json(after);
+  } catch (error) {
+    sendSupportError(res, error);
+  }
+});
+
+app.get("/api/admin/support/costs", requireAdminApi, (_req, res) => {
+  res.json({ items: listSupportCosts(db) });
+});
+
+app.post("/api/admin/support/costs", requireAdminApi, (req, res) => {
+  try {
+    const row = createSupportCost(db, req.body || {});
+    auditReq(req, "support.cost.create", `support_operating_cost:${row.id}`, null, row);
+    res.json(row);
+  } catch (error) {
+    sendSupportError(res, error);
+  }
+});
+
+app.put("/api/admin/support/costs/:id", requireAdminApi, (req, res) => {
+  try {
+    const before = listSupportCosts(db).find((row) => Number(row.id) === Number(req.params.id));
+    const row = updateSupportCost(db, Number(req.params.id), req.body || {});
+    auditReq(req, "support.cost.update", `support_operating_cost:${row.id}`, before, row);
+    res.json(row);
+  } catch (error) {
+    sendSupportError(res, error);
+  }
+});
+
+app.get("/api/admin/support/tiers", requireAdminApi, (_req, res) => {
+  res.json({ items: listSupportTiers(db) });
+});
+
+app.post("/api/admin/support/tiers", requireAdminApi, (req, res) => {
+  try {
+    const row = createSupportTier(db, req.body || {});
+    auditReq(req, "support.tier.create", `support_tier:${row.id}`, null, row);
+    res.json(row);
+  } catch (error) {
+    sendSupportError(res, error);
+  }
+});
+
+app.put("/api/admin/support/tiers/:id", requireAdminApi, (req, res) => {
+  try {
+    const before = listSupportTiers(db).find((row) => Number(row.id) === Number(req.params.id));
+    const row = updateSupportTier(db, Number(req.params.id), req.body || {});
+    auditReq(req, "support.tier.update", `support_tier:${row.id}`, before, row);
+    res.json(row);
+  } catch (error) {
+    sendSupportError(res, error);
+  }
+});
+
+app.get("/api/admin/support/providers", requireAdminApi, (_req, res) => {
+  res.json({ items: listSupportProviders(db) });
+});
+
+app.put("/api/admin/support/providers/:id", requireAdminApi, (req, res) => {
+  try {
+    const before = listSupportProviders(db).find((row) => Number(row.id) === Number(req.params.id));
+    const row = updateSupportProvider(db, Number(req.params.id), req.body || {});
+    auditReq(req, before?.page_url !== row.page_url ? "support.checkout_url.update" : "support.provider.update", `support_provider:${row.id}`, before, row);
+    res.json(row);
+  } catch (error) {
+    sendSupportError(res, error);
+  }
+});
+
+app.get("/api/admin/support/transactions", requireAdminApi, (req, res) => {
+  res.json({
+    items: listSupportTransactions(db, { from: req.query.from, to: req.query.to }),
+  });
+});
+
+app.post("/api/admin/support/transactions/manual", requireAdminApi, (req, res) => {
+  try {
+    const row = createManualTransaction(db, req.body || {});
+    auditReq(req, "support.transaction.manual", `support_transaction:${row.id}`, null, row);
+    res.json(row);
+  } catch (error) {
+    sendSupportError(res, error);
+  }
+});
+
+app.put("/api/admin/support/transactions/:id", requireAdminApi, (req, res) => {
+  try {
+    const before = listSupportTransactions(db).find((row) => Number(row.id) === Number(req.params.id));
+    const row = updateSupportTransaction(db, Number(req.params.id), req.body || {});
+    const action = row.status === "refunded" ? "support.transaction.refund" : "support.transaction.update";
+    auditReq(req, action, `support_transaction:${row.id}`, before, row);
+    res.json(row);
+  } catch (error) {
+    sendSupportError(res, error);
+  }
+});
+
+app.get("/api/admin/support/sponsors", requireAdminApi, (_req, res) => {
+  res.json({ items: listSupportSponsors(db) });
+});
+
+app.post("/api/admin/support/sponsors", requireAdminApi, (req, res) => {
+  try {
+    const row = createSupportSponsor(db, req.body || {});
+    auditReq(req, "support.sponsor.create", `support_sponsor:${row.id}`, null, row);
+    res.json(row);
+  } catch (error) {
+    sendSupportError(res, error);
+  }
+});
+
+app.put("/api/admin/support/sponsors/:id", requireAdminApi, (req, res) => {
+  try {
+    const before = listSupportSponsors(db).find((row) => Number(row.id) === Number(req.params.id));
+    const row = updateSupportSponsor(db, Number(req.params.id), req.body || {});
+    const action = ["active", "disabled"].includes(row.status) ? "support.sponsor.publish" : "support.sponsor.update";
+    auditReq(req, action, `support_sponsor:${row.id}`, before, row);
+    res.json(row);
+  } catch (error) {
+    sendSupportError(res, error);
+  }
+});
+
+app.get("/api/admin/support/cta-rules", requireAdminApi, (_req, res) => {
+  res.json({ items: listCtaRules(db) });
+});
+
+app.put("/api/admin/support/cta-rules/:id", requireAdminApi, (req, res) => {
+  try {
+    const before = listCtaRules(db).find((row) => Number(row.id) === Number(req.params.id));
+    const row = updateCtaRule(db, Number(req.params.id), req.body || {});
+    auditReq(req, "support.cta.update", `support_cta_rule:${row.id}`, before, row);
+    res.json(row);
+  } catch (error) {
+    sendSupportError(res, error);
+  }
 });
 
 app.get("/api/admin/help-qa", requireAdminApi, (_req, res) => {

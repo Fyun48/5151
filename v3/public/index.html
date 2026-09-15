@@ -539,6 +539,25 @@
       margin-right: auto;
     }
     body { padding-bottom: 88px; }
+    .support-cta-card {
+      position: fixed;
+      left: 16px;
+      right: 16px;
+      bottom: 88px;
+      z-index: 90;
+      max-width: 420px;
+      margin: 0 auto;
+      padding: 14px 16px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+    }
+    .support-cta-card[hidden] { display: none; }
+    .support-cta-card .support-kicker { font-size: 12px; color: var(--muted); margin: 0 0 6px; }
+    .support-cta-card p { margin: 0 0 10px; font-size: 14px; }
+    @media (max-width: 880px) {
+      .support-cta-card { bottom: calc(64px + env(safe-area-inset-bottom, 0px)); }
+    }
     .bottom-nav {
       display: grid;
       grid-template-columns: repeat(5, 1fr);
@@ -3104,6 +3123,7 @@
           <button type="button" class="ghost" id="helpQaBtn" title="功能說明 Q&amp;A" aria-label="功能說明 Q&amp;A">Q&amp;A</button>
           <button type="button" class="ghost" id="feedbackBtn" title="意見回饋" aria-label="意見回饋">意見</button>
         </span>
+        <a class="ghost header-desk-only" id="supportHeaderLink" href="/support.html" hidden>支持本站</a>
         <a class="ghost" id="loginBtn" href="/login.html">登入</a>
         <a class="primary" id="registerBtn" href="/login.html?register=1">註冊</a>
         <button type="button" class="ghost header-desk-only" id="changePasswordBtn">變更密碼</button>
@@ -3554,6 +3574,7 @@
     <div class="card panel" id="supportAccountCard">
       <h2 style="margin:0 0 8px">支持本站</h2>
       <p class="hint" id="supportAccountCopy">支持是自願的。沒贊助也能繼續找房與看許願房。</p>
+      <p hidden id="supportMeLinkWrap"><a id="supportMeLink" href="/support.html">支持本站</a></p>
       <ul class="support-benefits" id="supportAccountBenefits"></ul>
       <div class="sponsor-links" id="supportAccountLinks"></div>
     </div>
@@ -4035,6 +4056,19 @@
     </div>
   </div>
       <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> · <a href="/data.html">居住數據</a> · <a href="#me" id="supportFooterLink">支持本站</a> · <a href="#" id="feedbackFooterLink">意見回饋</a> <span class="site-ver">ver. 3.57</span></footer>
+  <aside id="supportCtaCard" class="support-cta-card" hidden role="dialog" aria-modal="true" aria-labelledby="supportCtaTitle">
+    <p class="support-kicker" id="supportCtaTitle">支持本站</p>
+    <p id="supportCtaMessage">如果本站真的幫你省下時間，可以請開發者喝杯咖啡。</p>
+    <div class="row">
+      <button type="button" class="primary" id="supportCtaGo">支持本站</button>
+      <button type="button" class="ghost" id="supportCtaLater">繼續找房</button>
+    </div>
+    <p class="hint">暫時不要再提醒：
+      <button type="button" class="ghost" data-support-dismiss="7">7 天</button>
+      <button type="button" class="ghost" data-support-dismiss="14">14 天</button>
+      <button type="button" class="ghost" data-support-dismiss="30">30 天</button>
+    </p>
+  </aside>
   <button type="button" class="primary" id="expandPanelBtn" title="功能表展開" aria-label="功能表展開">
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
@@ -6968,6 +7002,7 @@
         if (!res.ok) throw new Error(data.error || "併入失敗");
         exitMergeSelect();
         $("status").textContent = data.message || "已併入同房源";
+        window.SupportCtaUsage?.bumpSameHouse?.();
         await loadList();
       } catch (error) {
         $("status").textContent = error.message;
@@ -7592,6 +7627,7 @@
     }
 
     async function loadList(options = {}) {
+      if (!options.silent && !options.append) window.SupportCtaUsage?.bumpSearch?.();
       if (isGuest) {
         persistGuestSearch();
         const gen = ++listLoadGen;
@@ -8154,6 +8190,7 @@
       }
     });
     $("supportFooterLink")?.addEventListener("click", (ev) => {
+      if ($("supportFooterLink").getAttribute("href") === "/support.html") return;
       ev.preventDefault();
       setAppView("me");
       $("supportAccountCard")?.scrollIntoView({ block: "nearest" });
@@ -11241,6 +11278,7 @@
         const item = listingById(open);
         if (isSelfSource(item)) openSelfDetail(item);
         else window.open(listingUrl(item || open), "_blank", "noopener,noreferrer");
+        window.SupportCtaUsage?.bumpView?.();
         fetch(`/api/listings/${open}/flags`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -11326,6 +11364,7 @@
       if (watched) {
         const turningOn = ev.target.textContent.includes("特別");
         if (turningOn) {
+          window.SupportCtaUsage?.bumpWatch?.();
           beginWatchDraft(watched);
           return;
         }
@@ -11970,5 +12009,6 @@
   </script>
   <div id="watchFlyLayer" aria-hidden="true"></div>
   <script src="/vendor/leaflet/leaflet.js" defer></script>
+  <script src="/support-cta.js"></script>
 </body>
 </html>
