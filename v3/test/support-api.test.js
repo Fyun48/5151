@@ -65,6 +65,27 @@ test("seeded tiers exist and providers start disabled without a live URL", () =>
   db.close();
 });
 
+test("init remaps published 5151 default copy to 吉比租房 names", () => {
+  const db = open();
+  saveSupportConfig(db, {
+    flags: { enabled: true },
+    draft: {
+      copy: {
+        hero_title: "讓 5151 持續免費",
+        hero_description: "5151 免費提供租屋搜尋、整理與比較工具。如果它曾經幫你少開一些分頁、少花一些找房時間，你可以自願支持網站持續維護。沒有支持也不會減少任何功能。",
+        wall_title: "感謝支持 5151",
+      },
+    },
+  });
+  publishSupportConfig(db);
+  initSupportDomain(db);
+  const pub = publicSupportConfig(db);
+  assert.equal(pub.copy.hero_title, "讓吉比租房追蹤持續免費");
+  assert.match(pub.copy.hero_description, /^吉比租房物件追蹤免費提供/);
+  assert.equal(pub.copy.wall_title, "感謝支持吉比租房追蹤");
+  db.close();
+});
+
 test("draft copy does not appear on the public page until publish", () => {
   const db = open();
   saveSupportConfig(db, {

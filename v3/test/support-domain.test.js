@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   DEFAULT_PAGE_COPY,
+  LEGACY_5151_PAGE_COPY,
+  remapLegacy5151PageCopy,
   ctaCooldownOpen,
   ctaRuleEligible,
   dashboardTotals,
@@ -22,6 +24,20 @@ test("default support copy uses 吉比租房 names, not 5151", () => {
   assert.match(DEFAULT_PAGE_COPY.hero_description, /^吉比租房物件追蹤免費提供/);
   assert.equal(DEFAULT_PAGE_COPY.wall_title, "感謝支持吉比租房追蹤");
   assert.doesNotMatch(JSON.stringify(DEFAULT_PAGE_COPY), /5151/);
+});
+
+test("legacy 5151 default copy remaps, custom copy stays", () => {
+  const remapped = remapLegacy5151PageCopy({ ...LEGACY_5151_PAGE_COPY, cta_label: "支持本站" });
+  assert.equal(remapped.hero_title, DEFAULT_PAGE_COPY.hero_title);
+  assert.equal(remapped.hero_description, DEFAULT_PAGE_COPY.hero_description);
+  assert.equal(remapped.wall_title, DEFAULT_PAGE_COPY.wall_title);
+  const custom = remapLegacy5151PageCopy({
+    hero_title: "自訂標題",
+    hero_description: "5151 免費提供租屋搜尋、整理與比較工具。如果它曾經幫你少開一些分頁、少花一些找房時間，你可以自願支持網站持續維護。沒有支持也不會減少任何功能。",
+    wall_title: "感謝支持 5151",
+  });
+  assert.equal(custom.hero_title, "自訂標題");
+  assert.equal(custom.wall_title, DEFAULT_PAGE_COPY.wall_title);
 });
 
 test("yearly cost converts to monthly", () => {

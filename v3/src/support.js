@@ -28,6 +28,7 @@ import {
   normalizeGoalDisplay,
   normalizePageCopy,
   normalizeSupportFlags,
+  remapLegacy5151PageCopy,
   pickEligibleCtaRule,
   publicProviderView,
   resolveSponsorStatus,
@@ -156,6 +157,24 @@ function seedIfEmpty(db, now = new Date()) {
 export function initSupportDomain(db, now = new Date()) {
   ensureSupportSchema(db);
   seedIfEmpty(db, now);
+  remapStoredLegacyProductNames(db, now);
+}
+
+function remapStoredLegacyProductNames(db, now = new Date()) {
+  const row = configRow(db);
+  if (!row) return;
+  const draft = parseJson(row.draft_json, defaultDraft());
+  const published = parseJson(row.published_json, defaultDraft());
+  const nextDraft = { ...draft, copy: remapLegacy5151PageCopy(draft.copy || {}) };
+  const nextPublished = { ...published, copy: remapLegacy5151PageCopy(published.copy || {}) };
+  if (JSON.stringify(nextDraft) === JSON.stringify(draft) && JSON.stringify(nextPublished) === JSON.stringify(published)) {
+    return;
+  }
+  db.prepare(`
+    UPDATE support_page_config
+    SET draft_json=?, published_json=?, updated_at=?
+    WHERE id=1
+  `).run(JSON.stringify(nextDraft), JSON.stringify(nextPublished), iso(now));
 }
 
 function configRow(db) {

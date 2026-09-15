@@ -81,6 +81,24 @@ export const DEFAULT_PAGE_COPY = Object.freeze({
   wall_title: `感謝支持${APP_NAME_SHORT}`,
 });
 
+export const LEGACY_5151_PAGE_COPY = Object.freeze({
+  hero_title: "讓 5151 持續免費",
+  hero_description:
+    "5151 免費提供租屋搜尋、整理與比較工具。如果它曾經幫你少開一些分頁、少花一些找房時間，你可以自願支持網站持續維護。沒有支持也不會減少任何功能。",
+  wall_title: "感謝支持 5151",
+});
+
+export function remapLegacy5151PageCopy(copy) {
+  if (!copy || typeof copy !== "object") return copy;
+  const next = { ...copy };
+  if (next.hero_title === LEGACY_5151_PAGE_COPY.hero_title) next.hero_title = DEFAULT_PAGE_COPY.hero_title;
+  if (next.hero_description === LEGACY_5151_PAGE_COPY.hero_description) {
+    next.hero_description = DEFAULT_PAGE_COPY.hero_description;
+  }
+  if (next.wall_title === LEGACY_5151_PAGE_COPY.wall_title) next.wall_title = DEFAULT_PAGE_COPY.wall_title;
+  return next;
+}
+
 export const DEFAULT_SEED_TIERS = Object.freeze([
   { title: "請喝杯咖啡", description: "請開發者喝杯咖啡", amount: 30, icon: "☕", sort_order: 10, is_default: 1 },
   { title: "讓伺服器多活一下", description: "支持一次伺服器費用", amount: 60, icon: "☕☕", sort_order: 20, is_default: 0 },
