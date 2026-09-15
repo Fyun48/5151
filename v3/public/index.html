@@ -555,9 +555,6 @@
     .support-cta-card[hidden] { display: none; }
     .support-cta-card .support-kicker { font-size: 12px; color: var(--muted); margin: 0 0 6px; }
     .support-cta-card p { margin: 0 0 10px; font-size: 14px; }
-    @media (max-width: 880px) {
-      .support-cta-card { bottom: calc(64px + env(safe-area-inset-bottom, 0px)); }
-    }
     .bottom-nav {
       display: grid;
       grid-template-columns: repeat(5, 1fr);
@@ -2679,6 +2676,7 @@
       .sponsor-bar { margin-left: 16px; margin-right: 16px; }
     }
     @media (max-width: 880px) {
+      .support-cta-card { bottom: calc(64px + env(safe-area-inset-bottom, 0px)); }
       .announce-banner { margin: 0 16px 8px; }
       .sponsored-card { grid-template-columns: 1fr auto; }
       .sponsored-card img { display: none; }

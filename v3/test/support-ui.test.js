@@ -42,7 +42,7 @@ test("site entries and CTA stay out of the way of search chrome", () => {
   assert.match(html, /id="supportCtaCard"/);
   assert.match(html, /id="supportMeLink"/);
   assert.match(html, /support-cta-card/);
-  assert.match(html, /bottom: calc\(64px \+ env\(safe-area-inset-bottom/);
+  assert.match(html, /\.support-cta-card \{ bottom: calc\(64px \+ env\(safe-area-inset-bottom/);
   assert.match(html, /z-index: 90/);
   assert.match(html, /src="\/support-cta.js"/);
   assert.match(cta, /dismissedUntil/);
