@@ -47,10 +47,56 @@ export function assertCatalogConditionAllowed(label, aliases = []) {
   }
 }
 
+export function conditionIdentityTokens(row = {}) {
+  const tokens = [];
+  const seen = new Set();
+  const add = (value) => {
+    const key = normalizeConditionLabel(value);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    tokens.push(key);
+  };
+  add(row?.label);
+  for (const alias of Array.isArray(row?.aliases) ? row.aliases : []) add(alias);
+  return tokens;
+}
+
+export function findCatalogTokenClash(catalog, { tokens = [], excludeId = "" } = {}) {
+  const wanted = new Set((Array.isArray(tokens) ? tokens : []).map((item) => normalizeConditionLabel(item)).filter(Boolean));
+  if (!wanted.size) return null;
+  const rows = Array.isArray(catalog?.conditions) ? catalog.conditions : [];
+  for (const row of rows) {
+    if (!row || (excludeId && row.id === excludeId)) continue;
+    for (const token of conditionIdentityTokens(row)) {
+      if (wanted.has(token)) return { row, token };
+    }
+  }
+  return null;
+}
+
+export function assertCatalogTokenUniqueness(catalog) {
+  const used = new Map();
+  const rows = Array.isArray(catalog?.conditions) ? catalog.conditions : [];
+  for (const row of rows) {
+    if (!row) continue;
+    for (const token of conditionIdentityTokens(row)) {
+      const owner = used.get(token);
+      if (owner && owner !== row.id) {
+        throw catalogError("已有相同名稱的條件，請用別名而不是再建一筆");
+      }
+      used.set(token, row.id);
+    }
+  }
+}
+
 export function assertCatalogSafe(catalog) {
-  for (const row of normalizeCatalog(catalog).conditions) {
+  const normalized = normalizeCatalog(catalog);
+  for (const row of normalized.conditions) {
     assertCatalogConditionAllowed(row.label, row.aliases);
   }
+  const source = catalog && typeof catalog === "object" ? catalog : {};
+  const raw = Array.isArray(source.conditions) ? source.conditions : normalized.conditions;
+  assertCatalogTokenUniqueness({ conditions: raw });
   return catalog;
 }
 
@@ -242,7 +288,7 @@ export function normalizeCondition(input = {}, index = 0, { existingIds = [], ex
     wish_allow_want: src.wish_allow_want !== false,
     wish_allow_avoid: src.wish_allow_avoid !== false,
     value_type: valueType,
-    aliases: cleanAliases(src.aliases),
+    aliases: cleanAliases(src.aliases, label),
     listing_positive: cleanIds(src.listing_positive),
     listing_negative: String(src.listing_negative || "").trim().slice(0, ID_MAX),
     listing_legacy: String(src.listing_legacy || "").trim().slice(0, ID_MAX),
@@ -256,14 +302,15 @@ function slugId(value, fallback) {
   return fallback;
 }
 
-function cleanAliases(value) {
+function cleanAliases(value, selfLabel = "") {
   const raw = Array.isArray(value) ? value : [];
   const out = [];
   const seen = new Set();
+  const selfKey = normalizeConditionLabel(selfLabel);
   for (const item of raw) {
     const label = String(item || "").trim().slice(0, LABEL_MAX);
     const key = normalizeConditionLabel(label);
-    if (!label || !key || seen.has(key)) continue;
+    if (!label || !key || seen.has(key) || (selfKey && key === selfKey)) continue;
     seen.add(key);
     out.push(label);
   }
@@ -364,15 +411,10 @@ export function upsertCondition(catalog, input = {}) {
   const next = normalizeCatalog(catalog);
   const label = String(input.label || "").trim().slice(0, LABEL_MAX);
   if (!label) throw catalogError("請填條件名稱");
-  const aliases = cleanAliases(input.aliases);
+  const aliases = cleanAliases(input.aliases, label);
   assertCatalogConditionAllowed(label, aliases);
-  const key = normalizeConditionLabel(label);
-  const clash = next.conditions.find((row) => {
-    if (input.id && row.id === input.id) return false;
-    if (normalizeConditionLabel(row.label) === key) return true;
-    return row.aliases.some((alias) => normalizeConditionLabel(alias) === key)
-      || aliases.some((alias) => normalizeConditionLabel(alias) === normalizeConditionLabel(row.label));
-  });
+  const tokens = conditionIdentityTokens({ label, aliases });
+  const clash = findCatalogTokenClash(next, { tokens, excludeId: input.id || "" });
   if (clash) throw catalogError("已有相同名稱的條件，請用別名而不是再建一筆");
   if (input.id) {
     const row = next.conditions.find((item) => item.id === input.id);

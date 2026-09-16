@@ -9,6 +9,7 @@ import {
   catalogAsSelfTraitGroups,
   catalogAsWishConditions,
   catalogDiff,
+  assertCatalogSafe,
   compatibilityForChoice,
   defaultCatalog,
   defaultTemplates,
@@ -65,6 +66,70 @@ test("duplicate labels are rejected", () => {
   const catalog = defaultCatalog();
   assert.throws(() => upsertCondition(catalog, { label: "冰箱" }), /相同名稱/);
   assert.throws(() => upsertCondition(catalog, { label: "電冰箱" }), /相同名稱/);
+});
+
+test("normalized identity tokens are unique across labels and aliases", () => {
+  const seed = defaultCatalog();
+  const withCooler = upsertCondition(seed, {
+    label: "冷藏設備",
+    category_id: "appliance",
+    aliases: ["小冰箱"],
+  });
+  assert.throws(
+    () => upsertCondition(withCooler, { label: "迷你冰箱", category_id: "appliance", aliases: ["小冰箱"] }),
+    /相同名稱/,
+  );
+  assert.throws(
+    () => upsertCondition(withCooler, { label: "展示櫃", category_id: "appliance", aliases: ["冷藏設備"] }),
+    /相同名稱/,
+  );
+  assert.throws(
+    () => upsertCondition(withCooler, { label: "小冰箱", category_id: "appliance" }),
+    /相同名稱/,
+  );
+  const fridge = seed.conditions.find((row) => row.id === "fridge");
+  const renamed = upsertCondition(withCooler, {
+    id: fridge.id,
+    label: "雙門冰箱",
+    aliases: fridge.aliases,
+  });
+  assert.equal(renamed.conditions.find((row) => row.id === "fridge")?.label, "雙門冰箱");
+  const kept = upsertCondition(withCooler, {
+    id: withCooler.conditions.find((row) => row.label === "冷藏設備").id,
+    label: "冷藏設備",
+    aliases: ["小冰箱", "迷你冷藏"],
+  });
+  assert.ok(kept.conditions.find((row) => row.label === "冷藏設備").aliases.includes("小冰箱"));
+  assert.throws(
+    () => upsertCondition(seed, { label: "冰 箱", category_id: "appliance" }),
+    /相同名稱/,
+  );
+  assert.throws(
+    () => upsertCondition(seed, { label: "冰　箱", category_id: "appliance" }),
+    /相同名稱/,
+  );
+  assert.throws(
+    () => upsertCondition(withCooler, { label: "展示冰櫃", aliases: ["冰 箱"] }),
+    /相同名稱/,
+  );
+  const selfAlias = upsertCondition(seed, {
+    id: "fridge",
+    label: "冰箱",
+    aliases: ["冰箱", "電冰箱"],
+  });
+  const fridgeAliases = selfAlias.conditions.find((row) => row.id === "fridge").aliases.map((item) => normalizeConditionLabel(item));
+  assert.ok(!fridgeAliases.includes(normalizeConditionLabel("冰箱")));
+  assert.ok(fridgeAliases.includes(normalizeConditionLabel("電冰箱")));
+  const dirty = {
+    ...seed,
+    conditions: [
+      ...seed.conditions,
+      { id: "mini_fridge", label: "迷你冰箱", category_id: "appliance", aliases: ["小冰箱"] },
+      { id: "cooler_box", label: "冷藏設備", category_id: "appliance", aliases: ["小冰箱"] },
+    ],
+  };
+  assert.throws(() => assertCatalogSafe(dirty), /相同名稱/);
+  assert.doesNotThrow(() => assertCatalogSafe(seed));
 });
 
 test("seed keeps legacy wish and self trait ids", () => {
