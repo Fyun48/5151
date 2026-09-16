@@ -237,6 +237,9 @@ export function ensureSelfListingSchema(db) {
       created_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_listings_self ON listings(source, self_status, listed_by_user_id);
+    CREATE INDEX IF NOT EXISTS idx_listings_self_owner_open
+      ON listings(listed_by_user_id, self_status, post_id)
+      WHERE COALESCE(source, '591') = 'self';
     CREATE INDEX IF NOT EXISTS idx_listing_reports_post ON listing_reports(post_id, user_id);
   `);
   ensureSelfListingIdempotencySchema(db);

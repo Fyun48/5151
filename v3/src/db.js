@@ -175,6 +175,16 @@ import {
   normalizeRentalMarketplaceFlags,
   publicRentalMarketplaceFlags,
 } from "./rentalMarketplaceFlags.js";
+import {
+  aggregateDemand as aggregateDemandOn,
+  attachOwnerMatchSummaries as attachOwnerMatchSummariesOn,
+  homepageDemandExposure as homepageDemandExposureOn,
+  matchRulesForAdmin,
+  ownerListingMatches as ownerListingMatchesOn,
+  ownerListingMatchSummary as ownerListingMatchSummaryOn,
+  ownerMatchingMeta,
+  setRentalMatchHydrate,
+} from "./rentalMatchQuery.js";
 import { runWishLifecycleTick } from "./wishLifecycleLoop.js";
 import {
   DEFAULT_WISH_CONDITIONS,
@@ -1432,6 +1442,7 @@ function hydrateRentalMarketplace() {
   setRentalMarketplaceFlags(flags);
   setRentalCatalogCache(catalog);
   setSelfListingCatalog(catalog, flags);
+  setRentalMatchHydrate(catalog, flags);
 }
 
 export function getRentalMarketplaceFlags() {
@@ -1899,7 +1910,39 @@ export function getFeedbackStats() {
 export { feedbackMeta };
 
 export function listMineSelfListings(userId) {
-  return listMineSelfListingsOn(db, userId);
+  hydrateRentalMarketplace();
+  const rows = listMineSelfListingsOn(db, userId);
+  return attachOwnerMatchSummariesOn(db, rows, userId);
+}
+
+export function ownerListingMatchSummary(postId, userId) {
+  hydrateRentalMarketplace();
+  return ownerListingMatchSummaryOn(db, postId, userId);
+}
+
+export function ownerListingMatches(postId, userId, opts = {}) {
+  hydrateRentalMarketplace();
+  return ownerListingMatchesOn(db, postId, userId, opts);
+}
+
+export function aggregateDemand(filters = {}) {
+  hydrateRentalMarketplace();
+  return aggregateDemandOn(db, filters);
+}
+
+export function homepageDemandExposure() {
+  hydrateRentalMarketplace();
+  return homepageDemandExposureOn(db);
+}
+
+export function rentalMatchAdminRules() {
+  hydrateRentalMarketplace();
+  return matchRulesForAdmin();
+}
+
+export function rentalMatchOwnerMeta() {
+  hydrateRentalMarketplace();
+  return ownerMatchingMeta();
 }
 
 export function getSelfListing(postId, opts = {}) {

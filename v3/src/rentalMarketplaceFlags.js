@@ -43,6 +43,10 @@ export function isWishLifecycleEnabled(flags = {}) {
   return normalizeRentalMarketplaceFlags(flags).wish.lifecycle_enabled === true;
 }
 
+export function isWishOwnerMatchingEnabled(flags = {}) {
+  return normalizeRentalMarketplaceFlags(flags).wish.owner_matching_enabled === true;
+}
+
 export function publicRentalMarketplaceFlags(flags = {}) {
   const row = normalizeRentalMarketplaceFlags(flags);
   return {

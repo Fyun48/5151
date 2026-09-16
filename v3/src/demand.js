@@ -160,6 +160,11 @@ export function ensureDemandSchema(db) {
       ON demand_posts(status, updated_at, id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_demand_public_token
       ON demand_posts(public_token) WHERE public_token IS NOT NULL AND public_token != '';
+    CREATE INDEX IF NOT EXISTS idx_demand_match_open
+      ON demand_posts(status, lifecycle, rent_max, id)
+      WHERE status = 'open';
+    CREATE INDEX IF NOT EXISTS idx_demand_match_lifecycle
+      ON demand_posts(lifecycle, status, id);
   `);
 }
 
