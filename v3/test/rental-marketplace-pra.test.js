@@ -5,7 +5,9 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  addDemandReply,
   applyWishLifecycleAction,
+  collectWishActivitySignals,
   createDemandPost,
   ensureDemandSchema,
   expireOpenPosts,
@@ -16,10 +18,10 @@ import {
   setRentalCatalogCache,
   setRentalMarketplaceFlags,
 } from "../src/demand.js";
-import { ttlExpiresAt } from "../src/wishLifecycle.js";
+import { activityScoreFromSignals, ttlExpiresAt } from "../src/wishLifecycle.js";
+import { defaultCatalog, upsertCondition } from "../src/rentalCatalog.js";
 import { listingFitScore } from "../src/listingScore.js";
 import { preferPrimaryListing } from "../src/match.js";
-import { defaultCatalog } from "../src/rentalCatalog.js";
 import { publicRentalMarketplaceFlags } from "../src/rentalMarketplaceFlags.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
@@ -114,6 +116,9 @@ test("publicWishRoomView never reintroduces contact or author", () => {
   });
   assert.equal("author" in view, false);
   assert.equal("contact" in view, false);
+  assert.equal("location_note" in view, false);
+  assert.equal("destination_note" in view, false);
+  assert.equal("replies" in view, false);
   assert.equal(view.headline, "租屋需求");
   assert.equal(view.label_want, "必須有");
   assert.equal(view.label_nice, "希望有");
@@ -146,11 +151,15 @@ test("new wish public API is token-only; legacy numeric still resolves", () => {
   assert.equal(Number(db.prepare("SELECT legacy_numeric_share FROM demand_posts WHERE id = ?").get(post.id).legacy_numeric_share), 0);
   assert.throws(() => getDemandPost(db, String(post.id), { publicOnly: true }), /找不到/);
   assert.throws(() => getDemandPost(db, String(post.id), { viewerId: 0 }), /找不到/);
+  db.prepare("INSERT INTO users(id, email, nickname, created_at) VALUES (2, 'b@example.com', '會員乙', '2026-01-01T00:00:00.000Z')").run();
+  assert.throws(() => getDemandPost(db, String(post.id), { viewerId: 2 }), /找不到/);
   const byToken = getDemandPost(db, post.public_token, { publicOnly: true });
   assert.equal(byToken.id, post.id);
   assert.equal("author" in byToken, false);
   const owner = getDemandPost(db, post.id, { viewerId: 1 });
   assert.equal(owner.id, post.id);
+  const otherByToken = getDemandPost(db, post.public_token, { viewerId: 2 });
+  assert.equal(otherByToken.id, post.id);
   db.prepare("UPDATE demand_posts SET legacy_numeric_share = 1 WHERE id = ?").run(post.id);
   const legacy = getDemandPost(db, String(post.id), { publicOnly: true });
   assert.equal(legacy.id, post.id);
@@ -220,10 +229,10 @@ test("publish TTL goes to confirmation then expires after grace", () => {
   assert.equal(duringGrace.lifecycle, "needs_confirmation");
 
   expireOpenPosts(db, new Date(Date.parse(stored.expires_at) + 7 * 86400000));
-  const expired = db.prepare("SELECT status, lifecycle, closed_reason FROM demand_posts WHERE id = ?").get(post.id);
-  assert.equal(expired.status, "expired");
-  assert.equal(expired.lifecycle, "expired");
-  assert.equal(expired.closed_reason, "expired");
+  const paused = db.prepare("SELECT status, lifecycle, closed_reason FROM demand_posts WHERE id = ?").get(post.id);
+  assert.equal(paused.status, "closed");
+  assert.equal(paused.lifecycle, "paused");
+  assert.equal(paused.closed_reason, "paused");
   setRentalMarketplaceFlags({});
   db.close();
 });
@@ -249,6 +258,83 @@ test("60-day confirm action completes and resets continuous window", () => {
   assert.equal(row.last_confirmed_at, now.toISOString());
   assert.equal(row.expires_at, ttlExpiresAt(now, 14));
   setRentalMarketplaceFlags({});
+  db.close();
+});
+
+test("14-day confirm does not reset the 60-day continuous window", () => {
+  const db = open();
+  setRentalMarketplaceFlags({ wish: { lifecycle_enabled: true } });
+  const started = new Date("2026-09-16T00:00:00.000Z");
+  const post = createDemandPost(db, 1, sample(), started);
+  const day14 = new Date("2026-09-30T00:00:00.000Z");
+  const stay = applyWishLifecycleAction(db, 1, post.id, "confirm", day14);
+  assert.equal(stay.lifecycle, "active");
+  const row = db.prepare("SELECT continuous_active_from, last_confirmed_at FROM demand_posts WHERE id = ?").get(post.id);
+  assert.equal(row.continuous_active_from, started.toISOString());
+  assert.equal(row.last_confirmed_at, day14.toISOString());
+  const day60 = new Date("2026-11-16T00:00:00.000Z");
+  const gated = applyWishLifecycleAction(db, 1, post.id, "extend", day60);
+  assert.equal(gated.require_reconfirm, true);
+  setRentalMarketplaceFlags({});
+  db.close();
+});
+
+test("admin catalog-only condition survives wish save reload and edit payload", () => {
+  const db = open();
+  setRentalMarketplaceFlags({ rental_catalog_v2: { enabled: true } });
+  const catalog = upsertCondition(defaultCatalog(), { label: "烘衣機", category_id: "appliance" });
+  const dryer = catalog.conditions.find((row) => row.label === "烘衣機");
+  assert.ok(dryer?.id);
+  setRentalCatalogCache(catalog);
+  const post = createDemandPost(db, 1, sample({
+    choices: { [dryer.id]: "want", need_cook: "want" },
+  }));
+  assert.equal(post.choices[dryer.id], "want");
+  assert.ok(post.must_have.includes(dryer.id));
+  assert.ok(post.must_have_labels.includes("烘衣機"));
+  const reloaded = getDemandPost(db, post.id, { viewerId: 1 });
+  assert.equal(reloaded.choices[dryer.id], "want");
+  assert.ok(reloaded.must_have.includes(dryer.id));
+  assert.ok(reloaded.must_have_labels.includes("烘衣機"));
+  setRentalMarketplaceFlags({});
+  setRentalCatalogCache(null);
+  db.close();
+});
+
+test("public wish API strips work address and reply identity", () => {
+  const db = open();
+  db.prepare("INSERT INTO users(id, email, nickname, created_at) VALUES (2, 'b@example.com', '屋主乙暱稱', '2026-01-01T00:00:00.000Z')").run();
+  const post = createDemandPost(db, 1, sample({
+    destination_note: "台北市信義區松仁路100號某某公司",
+    location_note: "天母東路88號",
+  }));
+  addDemandReply(db, 2, post.id, "我看到一間可以參考");
+  const pub = getDemandPost(db, post.public_token, { publicOnly: true });
+  const json = JSON.stringify(pub);
+  assert.doesNotMatch(json, /松仁路|某某公司|天母東路|屋主乙暱稱/);
+  assert.equal("destination_note" in pub, false);
+  assert.equal("location_note" in pub, false);
+  assert.equal("replies" in pub, false);
+  assert.equal("author" in pub, false);
+  const owner = getDemandPost(db, post.id, { viewerId: 1 });
+  assert.match(owner.destination_note, /松仁路/);
+  setRentalMarketplaceFlags({});
+  db.close();
+});
+
+test("existing login signal updates owner activity bucket", () => {
+  const db = open();
+  try { db.exec("ALTER TABLE users ADD COLUMN last_login_at TEXT"); } catch { /* already present */ }
+  db.prepare("UPDATE users SET last_login_at = ? WHERE id = 1").run(new Date().toISOString());
+  const post = createDemandPost(db, 1, sample());
+  const signals = collectWishActivitySignals(db, 1, post);
+  assert.ok(signals.last_login_at);
+  const scored = activityScoreFromSignals(signals, new Date());
+  assert.equal(scored.activity_bucket, "today");
+  const owner = getDemandPost(db, post.id, { viewerId: 1 });
+  assert.equal(owner.activity_bucket, "today");
+  const pub = getDemandPost(db, post.public_token, { publicOnly: true });
+  assert.equal("activity_bucket" in pub, false);
   db.close();
 });
 

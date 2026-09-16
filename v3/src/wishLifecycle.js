@@ -138,7 +138,8 @@ export function transitionLifecycle(row, action, now = new Date(), { ttlDays = W
         updated_at: stamp,
       };
     }
-    const resetWindow = action === "confirm" || action === "resume" || action === "publish" || !row.continuous_active_from;
+    const fullReconfirm = action === "confirm" && continuous >= continuousDays;
+    const resetWindow = fullReconfirm || action === "resume" || action === "publish" || !row.continuous_active_from;
     return {
       lifecycle: "active",
       status: "open",
@@ -174,9 +175,6 @@ export function planLifecycleTick(row, now = new Date(), {
     return { lifecycle: "needs_confirmation", status: "open", updated_at: stamp };
   }
   if (lifecycle === "needs_confirmation" && (ttlPastGrace || idle >= confirmAfterDays + graceDays)) {
-    if (ttlPastGrace) {
-      return { lifecycle: "expired", status: "expired", closed_at: stamp, closed_reason: "expired", updated_at: stamp };
-    }
     return { lifecycle: "paused", status: "closed", closed_at: stamp, closed_reason: "paused", updated_at: stamp };
   }
   return null;

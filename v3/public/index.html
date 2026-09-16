@@ -8963,8 +8963,15 @@
       const host = $("wishCatalogGroups");
       if (!host) return;
       const catalog = wishMeta?.catalog || { categories: [], conditions: [] };
-      const want = new Set(selected.must_have || []);
-      const avoid = new Set(selected.avoid || []);
+      const choiceMap = selected.choices && typeof selected.choices === "object" ? selected.choices : {};
+      const want = new Set([
+        ...Object.entries(choiceMap).filter(([, action]) => action === "want").map(([id]) => id),
+        ...(selected.must_have || []),
+      ]);
+      const avoid = new Set([
+        ...Object.entries(choiceMap).filter(([, action]) => action === "avoid").map(([id]) => id),
+        ...(selected.avoid || []),
+      ]);
       const cats = (catalog.categories || []).filter((row) => row.enabled !== false);
       const conds = (catalog.conditions || []).filter((row) => row.enabled !== false && row.wish_enabled !== false);
       host.innerHTML = cats.map((cat) => {
@@ -9507,16 +9514,15 @@
       if (bulk) {
         const cat = bulk.dataset.wishCat;
         const action = bulk.dataset.wishBulk;
-        document.querySelectorAll(`[data-wish-cat="${cat}"] [data-wish-v2]`).forEach((btn) => {
-          const allow = action === "clear" || action === "unspecified"
-            || (action === "want" && btn.dataset.wishAction === "want")
-            || (action === "avoid" && btn.dataset.wishAction === "avoid");
-          if (action === "clear") btn.setAttribute("aria-pressed", btn.dataset.wishAction === "unspecified" ? "true" : "false");
-          else if (btn.dataset.wishAction === action && btn.dataset.wishAction !== "unspecified") btn.setAttribute("aria-pressed", "true");
-          else if (action !== "clear" && btn.dataset.wishAction === "unspecified") btn.setAttribute("aria-pressed", "false");
-          else if (action !== "clear") btn.setAttribute("aria-pressed", btn.dataset.wishAction === action ? "true" : "false");
-          if (!allow && action !== "clear" && btn.dataset.wishAction === action) return;
-        });
+        const section = bulk.closest("[data-wish-cat]") || document;
+        const ids = [...new Set([...section.querySelectorAll("[data-wish-v2]")].map((btn) => btn.dataset.wishV2))];
+        for (const id of ids) {
+          const btns = [...section.querySelectorAll(`[data-wish-v2="${id}"]`)];
+          const target = action === "clear" ? "unspecified" : action;
+          const hasTarget = btns.some((btn) => btn.dataset.wishAction === target);
+          const next = hasTarget ? target : "unspecified";
+          btns.forEach((btn) => btn.setAttribute("aria-pressed", btn.dataset.wishAction === next ? "true" : "false"));
+        }
         return;
       }
       const btn = ev.target.closest("[data-wish-v2]");

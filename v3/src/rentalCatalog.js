@@ -266,6 +266,7 @@ export function normalizeCatalog(input = {}) {
   });
   return {
     version: Math.max(1, Number(src.version) || 1),
+    removed_ids: cleanIds(src.removed_ids),
     categories: categories.sort((a, b) => a.sort_order - b.sort_order || a.id.localeCompare(b.id)),
     conditions: conditions.sort((a, b) => a.sort_order - b.sort_order || a.id.localeCompare(b.id)),
   };
@@ -275,12 +276,19 @@ export function mergeDefaultCatalog(stored) {
   const current = normalizeCatalog(stored);
   const have = new Set(current.conditions.map((row) => row.id));
   const haveCat = new Set(current.categories.map((row) => row.id));
+  const removed = new Set(current.removed_ids || []);
   const seed = defaultCatalog();
   for (const cat of seed.categories) {
     if (!haveCat.has(cat.id)) current.categories.push(cat);
   }
   for (const row of seed.conditions) {
-    if (!have.has(row.id)) current.conditions.push(row);
+    if (have.has(row.id) || removed.has(row.id)) continue;
+    current.conditions.push({
+      ...row,
+      enabled: false,
+      wish_enabled: false,
+      listing_enabled: false,
+    });
   }
   return normalizeCatalog(current);
 }
@@ -364,6 +372,10 @@ export function deleteOrDisableCondition(catalog, conditionId, references = {}) 
     return { catalog: normalizeCatalog(next), action: "disabled" };
   }
   next.conditions.splice(idx, 1);
+  const seedIds = new Set(defaultCatalog().conditions.map((row) => row.id));
+  if (seedIds.has(conditionId)) {
+    next.removed_ids = [...new Set([...(next.removed_ids || []), conditionId])];
+  }
   return { catalog: normalizeCatalog(next), action: "deleted" };
 }
 
@@ -413,9 +425,13 @@ function publicCondition(row) {
   };
 }
 
+export const SUITE_LITE_CONDITION_IDS = Object.freeze([
+  "need_cook", "need_pet", "short_ok", "elevator", "fridge", "washer", "ac", "bed", "net",
+]);
+
 export function defaultTemplates() {
   const full = defaultCatalog();
-  const liteIds = new Set(["need_cook", "need_pet", "short_ok", "elevator", "fridge", "washer", "ac", "bed", "net"]);
+  const liteIds = new Set(SUITE_LITE_CONDITION_IDS);
   return [
     { id: "jibby_full", label: "吉比完整租屋條件", catalog: full },
     {
@@ -423,7 +439,11 @@ export function defaultTemplates() {
       label: "套房精簡版",
       catalog: normalizeCatalog({
         ...full,
-        conditions: full.conditions.filter((row) => liteIds.has(row.id)),
+        conditions: full.conditions.map((row) => (
+          liteIds.has(row.id)
+            ? row
+            : { ...row, enabled: false, wish_enabled: false, listing_enabled: false }
+        )),
       }),
     },
   ];

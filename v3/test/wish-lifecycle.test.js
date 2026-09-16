@@ -150,8 +150,37 @@ test("TTL due enters confirmation; grace then expires not skip confirmation", ()
     last_confirmed_at: published,
     expires_at: expires,
   }, new Date(Date.parse(expires) + 7 * 86400000));
-  assert.equal(afterGrace.lifecycle, "expired");
-  assert.equal(afterGrace.status, "expired");
+  assert.equal(afterGrace.lifecycle, "paused");
+  assert.equal(afterGrace.status, "closed");
+});
+
+test("14-day confirm keeps continuous window; 60-day confirm resets it", () => {
+  const started = "2026-09-16T00:00:00.000Z";
+  const day14 = new Date("2026-09-30T00:00:00.000Z");
+  const stay = transitionLifecycle({
+    status: "open",
+    lifecycle: "needs_confirmation",
+    continuous_active_from: started,
+    last_confirmed_at: started,
+  }, "confirm", day14);
+  assert.equal(stay.lifecycle, "active");
+  assert.equal(stay.continuous_active_from, started);
+  assert.equal(stay.last_confirmed_at, day14.toISOString());
+  const day60 = new Date("2026-11-16T00:00:00.000Z");
+  const gated = transitionLifecycle({
+    ...stay,
+    continuous_active_from: started,
+    last_confirmed_at: stay.last_confirmed_at,
+  }, "extend", day60);
+  assert.equal(gated.require_reconfirm, true);
+  const full = transitionLifecycle({
+    status: "open",
+    lifecycle: "needs_confirmation",
+    continuous_active_from: started,
+    last_confirmed_at: stay.last_confirmed_at,
+  }, "confirm", day60);
+  assert.equal(full.lifecycle, "active");
+  assert.equal(full.continuous_active_from, day60.toISOString());
 });
 
 test("double tick is idempotent", () => {

@@ -18,6 +18,7 @@ import { catalogAsWishConditions, sanitizeWishChoices, wishChoicesFromLegacy, le
 import {
   activityBucket,
   activityBucketLabel,
+  activityScoreFromSignals,
   createPublicToken,
   daysBetween,
   mapLegacyLifecycle,
@@ -362,9 +363,16 @@ function cityFromDistricts(keys) {
   return "";
 }
 
+function activeConditionMap() {
+  if (isRentalCatalogV2Enabled(marketplaceFlags) && catalogCacheV2) {
+    return new Map(catalogAsWishConditions(catalogCacheV2).map((row) => [row.id, row]));
+  }
+  return conditionMap(allWishConditions());
+}
+
 function conditionIds(input) {
   const raw = Array.isArray(input) ? input : parseJsonArray(input);
-  const allowed = conditionMap(allWishConditions());
+  const allowed = activeConditionMap();
   const ids = [];
   for (const item of raw) {
     const id = String(item || "").trim();
@@ -375,8 +383,28 @@ function conditionIds(input) {
 }
 
 function conditionLabels(ids) {
-  const map = conditionMap(allWishConditions());
+  const map = activeConditionMap();
   return conditionIds(ids).map((id) => map.get(id)?.label || id);
+}
+
+export function collectWishActivitySignals(db, userId, row = {}) {
+  const signals = {
+    last_confirmed_at: row.last_confirmed_at,
+    wish_edited_at: row.updated_at,
+  };
+  try {
+    const user = db.prepare("SELECT last_login_at FROM users WHERE id = ?").get(userId);
+    if (user?.last_login_at) signals.last_login_at = user.last_login_at;
+  } catch { /* isolated tests may lack the column */ }
+  try {
+    const flags = db.prepare(
+      `SELECT MAX(viewed_at) AS viewed_at, MAX(watched_at) AS watched_at
+       FROM user_listing_flags WHERE user_id = ?`,
+    ).get(userId);
+    if (flags?.viewed_at) signals.listing_viewed_at = flags.viewed_at;
+    if (flags?.watched_at) signals.watched_at = flags.watched_at;
+  } catch { /* isolated tests may lack flags */ }
+  return signals;
 }
 
 function splitPriorityGroups(must, nice, avoid) {
@@ -463,15 +491,15 @@ export function expireOpenPosts(db, now = new Date()) {
          AND expires_at <= ? AND expires_at < ?`,
     ).run(stamp, stamp, WISH_FAR_EXPIRE);
     const graceCutoff = new Date(nowMs(now) - WISH_CONFIRM_GRACE_DAYS * 86400000).toISOString();
-    const expired = db.prepare(
+    const paused = db.prepare(
       `UPDATE demand_posts
-       SET status = 'expired', lifecycle = 'expired', closed_at = COALESCE(closed_at, ?),
-           closed_reason = 'expired', updated_at = ?
+       SET status = 'closed', lifecycle = 'paused', closed_at = COALESCE(closed_at, ?),
+           closed_reason = 'paused', updated_at = ?
        WHERE status = 'open'
          AND lifecycle = 'needs_confirmation'
          AND expires_at <= ? AND expires_at < ?`,
     ).run(stamp, stamp, graceCutoff, WISH_FAR_EXPIRE);
-    return (Number(confirm.changes) || 0) + (Number(expired.changes) || 0);
+    return (Number(confirm.changes) || 0) + (Number(paused.changes) || 0);
   }
   const result = db.prepare(
     `UPDATE demand_posts SET status = 'expired', closed_at = COALESCE(closed_at, ?)
@@ -604,7 +632,23 @@ function recencyStamp(row) {
 
 function decoratePost(db, row, { viewerId = 0, includeHiddenReplies = false, owner = false } = {}) {
   const districts = normalizeWatchDistricts(parseJsonArray(row.districts));
-  const groups = splitPriorityGroups(parseJsonArray(row.must_have), parseJsonArray(row.nice_to_have), parseJsonArray(row.avoid));
+  const storedChoices = parseJsonObject(row.condition_choices);
+  let groups;
+  let choices;
+  if (isRentalCatalogV2Enabled(marketplaceFlags) && storedChoices && Object.keys(storedChoices).length) {
+    choices = catalogCacheV2 ? sanitizeWishChoices(catalogCacheV2, storedChoices) : storedChoices;
+    groups = legacyGroupsFromChoices(choices, parseJsonArray(row.nice_to_have));
+    groups = {
+      must_have: conditionIds(groups.must_have),
+      nice_to_have: conditionIds(groups.nice_to_have),
+      avoid: conditionIds(groups.avoid),
+    };
+  } else {
+    groups = splitPriorityGroups(parseJsonArray(row.must_have), parseJsonArray(row.nice_to_have), parseJsonArray(row.avoid));
+    choices = storedChoices && Object.keys(storedChoices).length
+      ? storedChoices
+      : wishChoicesFromLegacy(groups.must_have, groups.nice_to_have, groups.avoid).choices;
+  }
   const replies = db.prepare(
     `SELECT r.id, r.user_id, r.body, r.created_at, r.hidden
      FROM demand_replies r
@@ -621,8 +665,12 @@ function decoratePost(db, row, { viewerId = 0, includeHiddenReplies = false, own
   const hasContact = Boolean(publicContact.contact_name || publicContact.phone || publicContact.line_url);
   const token = String(row.public_token || "") || ensurePublicToken(db, row.id);
   const lifecycle = mapLegacyLifecycle(row);
-  const lastActive = row.last_active_at || row.last_confirmed_at || row.updated_at || row.created_at;
-  const bucket = activityBucket(lastActive);
+  const activitySignals = mine
+    ? collectWishActivitySignals(db, row.user_id, row)
+    : { last_confirmed_at: row.last_confirmed_at, wish_edited_at: row.updated_at };
+  const scored = activityScoreFromSignals(activitySignals);
+  const lastActive = scored.last_active_at || row.last_active_at || row.last_confirmed_at || row.updated_at || row.created_at;
+  const bucket = scored.activity_bucket || activityBucket(lastActive);
   const out = {
     id: Number(row.id),
     product: WISH_PRODUCT_NAME,
@@ -667,12 +715,13 @@ function decoratePost(db, row, { viewerId = 0, includeHiddenReplies = false, own
     lifecycle,
     last_confirmed_at: row.last_confirmed_at || null,
     last_active_at: lastActive || null,
+    activity_score: scored.activity_score,
     activity_bucket: bucket,
     activity_label: activityBucketLabel(bucket),
     remaining_days: remainingTtlDays(row.expires_at),
     require_reconfirm: lifecycle === "needs_confirmation"
       && daysBetween(row.continuous_active_from || row.published_at || row.created_at) >= WISH_CONTINUOUS_ACTIVE_DAYS,
-    choices: parseJsonObject(row.condition_choices) || wishChoicesFromLegacy(groups.must_have, groups.nice_to_have, groups.avoid).choices,
+    choices,
     closed_reason: row.closed_reason || "",
     contact: hasContact ? publicContact : null,
     replies: visible.map((item) => ({
@@ -697,7 +746,6 @@ export function publicWishRoomView(post) {
     city: post.city,
     districts: post.districts,
     district_labels: post.district_labels,
-    location_note: post.location_note,
     rent_min: post.rent_min,
     rent_max: post.rent_max,
     includes_management: post.includes_management,
@@ -710,7 +758,6 @@ export function publicWishRoomView(post) {
     lease_duration: post.lease_duration,
     lease_label: post.lease_label,
     transit_note: post.transit_note,
-    destination_note: post.destination_note,
     commute_minutes: post.commute_minutes,
     mrt_walk: post.mrt_walk,
     must_have: post.must_have,
@@ -728,20 +775,12 @@ export function publicWishRoomView(post) {
     updated_at: post.updated_at,
     published_at: post.published_at,
     public_path: post.public_path,
-    activity_bucket: post.activity_bucket,
-    activity_label: post.activity_label,
     remaining_days: post.remaining_days,
-    replies: (post.replies || []).map((item) => ({
-      id: item.id,
-      author: item.author,
-      body: item.body,
-      created_at: item.created_at,
-    })),
   };
 }
 
 function assertPublicFields(view) {
-  const banned = ["user_id", "email", "contact_profile_id", "example", "ip", "consent", "admin", "author", "contact", "phone", "line_url"];
+  const banned = ["user_id", "email", "contact_profile_id", "example", "ip", "consent", "admin", "author", "contact", "phone", "line_url", "location_note", "destination_note", "replies"];
   for (const key of banned) {
     if (Object.prototype.hasOwnProperty.call(view, key)) {
       throw httpError("公開欄位含有不該出現的資料", 500);
@@ -810,14 +849,13 @@ export function listPublicWishRooms(db, filters = {}) {
   return listDemandPosts(db, { ...filters, mine: false, viewerId: 0 });
 }
 
-export function getDemandPost(db, postId, { viewerId = 0, publicOnly = false } = {}) {
+export function getDemandPost(db, postId, { viewerId = 0, publicOnly = false, allowNumeric = false, includeActorReplies = false } = {}) {
   expireOpenPosts(db);
   const row = rowByRef(db, postId);
   if (!row) throw httpError("找不到這則許願房", 404);
   const mine = Number(row.user_id) === Number(viewerId);
   const numeric = /^\d+$/.test(String(postId || "").trim());
-  const guestLookup = publicOnly || !Number(viewerId);
-  if (numeric && guestLookup && hasWishColumn(db, "legacy_numeric_share") && !Number(row.legacy_numeric_share)) {
+  if (numeric && !allowNumeric && (publicOnly || !mine) && hasWishColumn(db, "legacy_numeric_share") && !Number(row.legacy_numeric_share)) {
     throw httpError("找不到這則許願房", 404);
   }
   if (row.status === "hidden" && !mine) throw httpError("這則許願房已隱藏", 404);
@@ -834,7 +872,11 @@ export function getDemandPost(db, postId, { viewerId = 0, publicOnly = false } =
   }
   if (!mine && row.status !== "open") throw httpError("找不到這則許願房", 404);
   const decorated = decoratePost(db, row, { viewerId });
-  if (!mine || publicOnly) return assertPublicFields(publicWishRoomView(decorated));
+  if (!mine || publicOnly) {
+    const view = assertPublicFields(publicWishRoomView(decorated));
+    if (includeActorReplies) return { ...view, replies: decorated.replies };
+    return view;
+  }
   return decorated;
 }
 
@@ -1149,7 +1191,7 @@ export function addDemandReply(db, userId, postId, body, now = new Date()) {
   db.prepare(
     "INSERT INTO demand_replies(post_id, user_id, body, created_at, hidden) VALUES (?, ?, ?, ?, 0)",
   ).run(post.id, uid, text, iso(now));
-  return getDemandPost(db, post.id, { viewerId: uid });
+  return getDemandPost(db, post.id, { viewerId: uid, allowNumeric: true, includeActorReplies: true });
 }
 
 export function reportDemand(db, userId, { targetType, targetId, reason } = {}, now = new Date()) {

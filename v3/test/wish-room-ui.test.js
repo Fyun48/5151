@@ -74,6 +74,8 @@ test("public share page and routes exist; guests can read", () => {
   assert.match(server, /app\.get\("\/api\/public\/wish-room\/:id"/);
   assert.match(server, /"extend", "pause", "resume", "complete", "confirm"/);
   assert.match(html, /id="wishCatalogV2"/);
+  assert.match(html, /selected\.choices/);
+  assert.match(html, /hasTarget \? target : "unspecified"/);
   assert.match(html, /id="wishLifecycleBar"/);
   assert.match(html, /id="wishStatus"/);
   assert.match(wish, /label_want|nice_to_have_labels/);

@@ -8,9 +8,12 @@ import { listingInMemberScope } from "../src/covering.js";
 import {
   closeSelfListing,
   composeSelfAddress,
+  createImportedDraftListing,
   createSelfListing,
   ensureSelfListingSchema,
   getSelfListing,
+  publishImportedDraftListing,
+  setSelfListingCatalog,
   isSelfListingId,
   keepSelfListingForViewer,
   listMineSelfListings,
@@ -23,6 +26,8 @@ import {
   selfSourceLabel,
 } from "../src/selfListings.js";
 import { lookupDistrict } from "../src/regions.js";
+import { defaultCatalog, upsertCondition } from "../src/rentalCatalog.js";
+import { setRentalMarketplaceFlags } from "../src/demand.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const OLD = "2026-01-01T00:00:00.000Z";
@@ -332,5 +337,32 @@ test("public share view strips private fields; closed listings 404 for guests", 
   assert.throws(() => getSelfListing(db, row.post_id, { viewerId: 0 }), (e) => e.status === 404);
   const owner = getSelfListing(db, row.post_id, { viewerId: 1 });
   assert.equal(owner.status, "closed");
+  db.close();
+});
+
+test("catalog-only listing trait survives create, publish-update and read-back", () => {
+  const db = open();
+  addUser(db, { id: 1, email: "a@example.com", createdAt: OLD });
+  const catalog = upsertCondition(defaultCatalog(), { label: "烘衣機", category_id: "appliance" });
+  const dryer = catalog.conditions.find((row) => row.label === "烘衣機");
+  setRentalMarketplaceFlags({ rental_catalog_v2: { enabled: true } });
+  setSelfListingCatalog(catalog, { rental_catalog_v2: { enabled: true } });
+  const created = createSelfListing(db, 1, sampleInput({ traits: ["elevator", dryer.id] }));
+  assert.ok(created.traits.includes(dryer.id));
+  assert.ok(created.trait_labels.includes("烘衣機"));
+  const read = getSelfListing(db, created.post_id, { viewerId: 1 });
+  assert.ok(read.traits.includes(dryer.id));
+  const draft = createImportedDraftListing(db, 1, { title: "士林整層可看屋草稿標題", body: "近捷運、可入住、有洗衣機。" });
+  const published = publishImportedDraftListing(db, 1, draft.post_id, sampleInput({
+    address: "台北市士林區中正路166號",
+    traits: [dryer.id, "fridge"],
+  }));
+  assert.ok(published.traits.includes(dryer.id));
+  assert.ok(published.traits.includes("fridge"));
+  setRentalMarketplaceFlags({});
+  setSelfListingCatalog(null, { rental_catalog_v2: { enabled: false } });
+  const dropped = createSelfListing(db, 1, sampleInput({ address: "台北市士林區中正路167號", traits: [dryer.id, "elevator"] }));
+  assert.ok(!dropped.traits.includes(dryer.id));
+  assert.ok(dropped.traits.includes("elevator"));
   db.close();
 });

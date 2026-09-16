@@ -209,6 +209,7 @@ import {
   publishOwnedDraftListing as publishOwnedDraftListingOn,
   reportSelfListing as reportSelfListingOn,
   selfListingMeta,
+  setSelfListingCatalog,
   selfSourceLabel,
   sqlNotSelfSource,
   sql591Source,
@@ -1422,8 +1423,11 @@ export function getWishConditions() {
 }
 
 function hydrateRentalMarketplace() {
-  setRentalMarketplaceFlags(getRentalMarketplaceFlags());
-  setRentalCatalogCache(getRentalCatalog());
+  const flags = getRentalMarketplaceFlags();
+  const catalog = getRentalCatalog();
+  setRentalMarketplaceFlags(flags);
+  setRentalCatalogCache(catalog);
+  setSelfListingCatalog(catalog, flags);
 }
 
 export function getRentalMarketplaceFlags() {
@@ -1451,6 +1455,7 @@ export function getRentalCatalog() {
   const stored = settingKey("rentalCatalog");
   const catalog = stored == null ? defaultCatalog() : mergeDefaultCatalog(stored);
   setRentalCatalogCache(catalog);
+  setSelfListingCatalog(catalog, getRentalMarketplaceFlags());
   return catalog;
 }
 
@@ -1463,6 +1468,7 @@ export function saveRentalCatalog(partial = {}) {
   writeSettingKey("rentalCatalog", next);
   writeSettingKey("rentalCatalogDraft", null);
   setRentalCatalogCache(next);
+  setSelfListingCatalog(next, getRentalMarketplaceFlags());
   return publicAdminCatalog(next);
 }
 
@@ -1487,6 +1493,7 @@ export function publishRentalCatalogDraft() {
   writeSettingKey("rentalCatalog", draft);
   writeSettingKey("rentalCatalogDraft", null);
   setRentalCatalogCache(draft);
+  setSelfListingCatalog(draft, getRentalMarketplaceFlags());
   return publicAdminCatalog(draft);
 }
 

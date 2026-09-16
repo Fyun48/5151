@@ -12,6 +12,7 @@ import {
   compatibilityForChoice,
   defaultCatalog,
   defaultTemplates,
+  SUITE_LITE_CONDITION_IDS,
   deleteOrDisableCondition,
   generateSystemId,
   listingValuesFromTraits,
@@ -123,9 +124,25 @@ test("template apply is draft plus diff", () => {
   const lite = templates.find((row) => row.id === "suite_lite");
   const applied = applyTemplateDraft(defaultCatalog(), lite);
   assert.ok(applied.diff.disabled > 0);
-  assert.ok(applied.draft.conditions.every((row) => ["need_cook", "need_pet", "short_ok", "elevator", "fridge", "washer", "ac", "bed", "net"].includes(row.id)));
-  const published = defaultCatalog();
-  assert.notEqual(published.conditions.length, applied.draft.conditions.length);
+  const liteIds = new Set(SUITE_LITE_CONDITION_IDS);
+  assert.ok(applied.draft.conditions.some((row) => liteIds.has(row.id) && row.enabled !== false));
+  assert.ok(applied.draft.conditions.some((row) => !liteIds.has(row.id) && row.enabled === false));
+  const reloaded = mergeDefaultCatalog(applied.draft);
+  assert.equal(reloaded.conditions.find((row) => !liteIds.has(row.id))?.enabled, false);
+  assert.ok(reloaded.conditions.filter((row) => !liteIds.has(row.id)).every((row) => row.enabled === false));
+});
+
+test("hard-deleted unused default does not resurrect on merge", () => {
+  const fresh = upsertCondition(defaultCatalog(), { label: "全新測試條件乙" });
+  const created = fresh.conditions.find((row) => row.label === "全新測試條件乙");
+  const gone = deleteOrDisableCondition(fresh, created.id, {});
+  assert.equal(gone.action, "deleted");
+  const unusedDefault = defaultCatalog().conditions.find((row) => row.id === "sofa");
+  const deletedDefault = deleteOrDisableCondition(defaultCatalog(), unusedDefault.id, {});
+  assert.equal(deletedDefault.action, "deleted");
+  assert.ok(deletedDefault.catalog.removed_ids.includes("sofa"));
+  const merged = mergeDefaultCatalog(deletedDefault.catalog);
+  assert.equal(merged.conditions.some((row) => row.id === "sofa"), false);
 });
 
 test("category sort disable and move", () => {
@@ -149,7 +166,9 @@ test("merge keeps stored disable and fills missing defaults", () => {
   });
   const merged = mergeDefaultCatalog(stored);
   assert.equal(merged.conditions.find((row) => row.id === "fridge")?.enabled, false);
-  assert.ok(merged.conditions.some((row) => row.id === "washer"));
+  const washer = merged.conditions.find((row) => row.id === "washer");
+  assert.ok(washer);
+  assert.equal(washer.enabled, false);
 });
 
 test("catalog module never changes listing fit score inputs", () => {
@@ -169,4 +188,15 @@ test("catalogDiff counts add change disable", () => {
 
 test("seed condition count covers spec first-wave", () => {
   assert.ok(DEFAULT_CATALOG_CONDITIONS.length >= 20);
+});
+
+test("bulk avoid leaves disallow-avoid conditions unspecified", () => {
+  const catalog = upsertCondition(defaultCatalog(), {
+    label: "法定用途",
+    category_id: "living_lease",
+    wish_allow_avoid: false,
+  });
+  const row = catalog.conditions.find((item) => item.label === "法定用途");
+  const next = applyBulkWishActions(catalog, row.category_id, "avoid", {});
+  assert.equal(next[row.id], undefined);
 });
