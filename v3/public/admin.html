@@ -2125,6 +2125,17 @@
       if (pick) {
         pick.innerHTML = (catalogState.templates || []).map((row) => `<option value="${esc(row.id)}">${esc(row.label)}</option>`).join("");
       }
+      const diffEl = $("catalogDiff");
+      if (diffEl) {
+        if (catalogState.draft) {
+          const d = catalogState.diff || {};
+          diffEl.hidden = false;
+          diffEl.textContent = `這是草稿，尚未改前台。新增 ${d.added ?? "—"}、修改 ${d.changed ?? "—"}、停用 ${d.disabled ?? "—"}。確認後才發布。`;
+        } else {
+          diffEl.hidden = true;
+          diffEl.textContent = "";
+        }
+      }
       const listingHost = $("listingCatalogPreview");
       if (listingHost) {
         const listingRows = (catalog.conditions || []).filter((row) => row.enabled !== false && row.listing_enabled !== false);
@@ -3760,6 +3771,7 @@
         const data = await readApi(res);
         if (!res.ok) { setMsg("catalogMsg", data.error || "新增失敗"); return; }
         catalogState.draft = data.catalog;
+        catalogState.diff = data.diff;
         renderCatalogAdmin();
         setMsg("catalogMsg", "已寫入草稿", true);
       });
@@ -3781,6 +3793,7 @@
         const data = await readApi(res);
         if (!res.ok) { setMsg("catalogMsg", data.error || "寫入失敗"); return; }
         catalogState.draft = data.catalog;
+        catalogState.diff = data.diff;
         $("catalogDrawer").hidden = true;
         renderCatalogAdmin();
         if (data.diff) setMsg("catalogMsg", `草稿：新增 ${data.diff.added}、修改 ${data.diff.changed}、停用 ${data.diff.disabled}`, true);
@@ -3810,6 +3823,7 @@
         const data = await readApi(res);
         if (!res.ok) { setMsg("catalogTplMsg", data.error || "套用失敗"); return; }
         catalogState.draft = data.draft;
+        catalogState.diff = data.diff;
         renderCatalogAdmin();
         setMsg("catalogTplMsg", `已套用為草稿：新增 ${data.diff.added}、修改 ${data.diff.changed}、停用 ${data.diff.disabled}`, true);
       });

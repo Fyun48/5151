@@ -692,7 +692,7 @@
     main.card { overflow: visible; min-width: 0; max-width: 100%; }
     .panel { padding: 18px; }
     label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 6px; }
-    textarea, select, input[type="number"], input[type="text"], input[type="url"], input[type="password"] {
+    textarea, select, input[type="number"], input[type="text"], input[type="url"], input[type="password"], input[type="date"] {
       width: 100%;
       border: 1px solid var(--line);
       border-radius: 10px;
@@ -3385,6 +3385,7 @@
         <button type="button" class="ghost" id="wishDeleteExampleBtn" hidden>刪除範例</button>
       </div>
       <div id="wishLifecycleBar" class="wish-life" hidden></div>
+      <p class="save-msg" id="wishStatus" role="status" aria-live="polite"></p>
       <div class="list" id="demandList" style="padding-top:4px"><div class="empty">載入許願房…</div></div>
       <div id="wishFormWrap" hidden>
         <form id="demandForm">
@@ -9128,12 +9129,21 @@
       if ($("wishDetailBody")) $("wishDetailBody").innerHTML = wishDetailHtml(data);
       if ($("wishDetailOverlay")) $("wishDetailOverlay").hidden = false;
     }
+    function setWishStatus(text) {
+      if ($("wishStatus")) $("wishStatus").textContent = text || "";
+      if ($("demandMsg")) $("demandMsg").textContent = text || "";
+    }
     async function loadDemand() {
       fillDemandDistricts();
       const box = $("demandList");
       if (!box) return;
       const res = await fetch("/api/wish-rooms");
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        box.innerHTML = `<div class="empty wish-empty">${esc(data.error || "許願房載入失敗，請稍後再試。")}</div>`;
+        setWishStatus(data.error || "許願房載入失敗");
+        return;
+      }
       wishMeta = data;
       if (!$("wishFormWrap")?.hidden) renderWishConditionGroups(collectWishConditions());
       const posts = data.rooms || data.posts || [];
@@ -9151,6 +9161,7 @@
         } catch { /* ignore */ }
       }
       syncWishOwnerBar();
+      paintWishLifecycleBar();
     }
     $("collapsePanelBtn").onclick = () => {
       if (window.matchMedia("(max-width: 880px)").matches) closeFilterSheet();
@@ -9401,19 +9412,19 @@
         }
         const data = await readApi(res);
         if (!res.ok) throw new Error(data.error || "刊登失敗");
-        if (msg) msg.textContent = "已公開許願房";
+        setWishStatus("已公開許願房");
         wishEditingId = 0;
         showWishForm(false);
         await loadDemand();
         maybeAskPush("公開許願房後可允許系統推播。");
       } catch (error) {
-        if (msg) msg.textContent = error.message;
+        setWishStatus(error.message);
       }
     });
     $("demandList")?.addEventListener("click", async (ev) => {
       const openId = ev.target.closest("[data-wish-open]")?.dataset.wishOpen;
       if (openId) {
-        try { await openWishDetail(openId); } catch (error) { if ($("demandMsg")) $("demandMsg").textContent = error.message; }
+        try { await openWishDetail(openId); } catch (error) { setWishStatus(error.message); }
       }
     });
     document.querySelectorAll("#wishMust, #wishNice, #wishAvoid").forEach((host) => {
@@ -9428,7 +9439,7 @@
     });
     $("wishCreateBtn")?.addEventListener("click", () => {
       if (isGuest) { remindGuest(); return; }
-      if (wishMine.active) { if ($("demandMsg")) $("demandMsg").textContent = "已有一則公開許願房"; return; }
+      if (wishMine.active) { setWishStatus("已有一則公開許願房"); return; }
       wishEditingId = wishMine.draft?.id || 0;
       applyWishForm(wishMine.draft || {});
       showWishForm(true);
@@ -9446,7 +9457,7 @@
       if (!wishMine.active) return;
       const res = await fetch(`/api/demand/${wishMine.active.id}/close`, { method: "POST" });
       const data = await readApi(res);
-      if (!res.ok) { if ($("demandMsg")) $("demandMsg").textContent = data.error || "下架失敗"; return; }
+      if (!res.ok) { setWishStatus(data.error || "下架失敗"); return; }
       showWishForm(false);
       await loadDemand();
     });
@@ -9455,15 +9466,15 @@
       if (!closed) return;
       const res = await fetch(`/api/wish-rooms/${closed.id}/reopen`, { method: "POST" });
       const data = await readApi(res);
-      if (!res.ok) { if ($("demandMsg")) $("demandMsg").textContent = data.error || "重開失敗"; return; }
+      if (!res.ok) { setWishStatus(data.error || "重開失敗"); return; }
       await loadDemand();
     });
     async function wishLifeAction(id, action, fail) {
       const res = await fetch(`/api/wish-rooms/${id}/${action}`, { method: "POST" });
       const data = await readApi(res);
-      if (!res.ok) { if ($("demandMsg")) $("demandMsg").textContent = data.error || fail; return data; }
+      if (!res.ok) { setWishStatus(data.error || fail); return data; }
       if (data.require_reconfirm) {
-        if ($("demandMsg")) $("demandMsg").textContent = "你已找房一段時間，請確認需求是否仍相同。";
+        setWishStatus("你已找房一段時間，請確認需求是否仍相同。");
       }
       await loadDemand();
       return data;
@@ -9481,7 +9492,7 @@
     $("wishCompleteBtn")?.addEventListener("click", async () => {
       if (!wishMine.active) return;
       await wishLifeAction(wishMine.active.id, "complete", "更新失敗");
-      if ($("demandMsg")) $("demandMsg").textContent = "恭喜找到房子。你的許願房已停止曝光。之後再次找房時可以沿用這次條件。";
+      setWishStatus("恭喜找到房子。你的許願房已停止曝光。之後再次找房時可以沿用這次條件。");
     });
     $("wishLifecycleBar")?.addEventListener("click", async (ev) => {
       const id = wishMine.active?.id;
@@ -9526,25 +9537,25 @@
         body: JSON.stringify(payload),
       });
       const data = await readApi(res);
-      if (!res.ok) { if ($("demandMsg")) $("demandMsg").textContent = data.error || "儲存失敗"; return; }
+      if (!res.ok) { setWishStatus(data.error || "儲存失敗"); return; }
       wishMine.has_example = true;
-      if ($("demandMsg")) $("demandMsg").textContent = "已更新範例副本（尚未公開）";
+      setWishStatus("已更新範例副本（尚未公開）");
       syncWishOwnerBar();
     });
     $("wishLoadExampleBtn")?.addEventListener("click", async () => {
       const res = await fetch("/api/wish-rooms/example");
       const data = await readApi(res);
-      if (!res.ok || !data.example) { if ($("demandMsg")) $("demandMsg").textContent = "沒有已存範例"; return; }
+      if (!res.ok || !data.example) { setWishStatus("沒有已存範例"); return; }
       if (wishMine.active) wishEditingId = wishMine.active.id;
       applyWishForm(data.example);
       showWishForm(true);
-      if ($("demandMsg")) $("demandMsg").textContent = "已載入範例，尚未公開";
+      setWishStatus("已載入範例，尚未公開");
     });
     $("wishDeleteExampleBtn")?.addEventListener("click", async () => {
       await fetch("/api/wish-rooms/example", { method: "DELETE" });
       wishMine.has_example = false;
       syncWishOwnerBar();
-      if ($("demandMsg")) $("demandMsg").textContent = "已刪除範例";
+      setWishStatus("已刪除範例");
     });
     $("wishCancelEdit")?.addEventListener("click", () => {
       wishEditingId = 0;

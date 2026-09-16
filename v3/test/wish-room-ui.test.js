@@ -75,6 +75,8 @@ test("public share page and routes exist; guests can read", () => {
   assert.match(server, /"extend", "pause", "resume", "complete", "confirm"/);
   assert.match(html, /id="wishCatalogV2"/);
   assert.match(html, /id="wishLifecycleBar"/);
+  assert.match(html, /id="wishStatus"/);
+  assert.match(wish, /label_want|nice_to_have_labels/);
   assert.match(auth, /p\.startsWith\("\/w\/"\)/);
   assert.match(auth, /p === "\/api\/wish-rooms"/);
 });

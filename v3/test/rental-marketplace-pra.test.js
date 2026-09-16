@@ -113,6 +113,8 @@ test("publicWishRoomView never reintroduces contact or author", () => {
   assert.equal("author" in view, false);
   assert.equal("contact" in view, false);
   assert.equal(view.headline, "租屋需求");
+  assert.equal(view.label_want, "必須有");
+  assert.equal(view.label_nice, "希望有");
 });
 
 test("catalog v2 persists choices and does not upgrade leftover nice_to_have", () => {

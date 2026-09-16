@@ -250,7 +250,7 @@ import { PROBE_ALIVE, PROBE_GONE, PROBE_INCONCLUSIVE, classifyListingProbeWrite 
 import { enqueueListingEnrich, processListingEnrichBatch, requestClickRefresh, wakeListingEnrichWorker, WATCH_PRIORITY } from "./listingEnrichQueue.js";
 import { deliveryConfigFromEnv, startDeliveryLoop } from "./opsDelivery.js";
 import { startWishLifecycleLoop } from "./wishLifecycleLoop.js";
-import { publicAdminCatalog } from "./rentalCatalog.js";
+import { catalogDiff, publicAdminCatalog } from "./rentalCatalog.js";
 import { isRentalCatalogV2Enabled, publicRentalMarketplaceFlags } from "./rentalMarketplaceFlags.js";
 import { opsDeliveryDb } from "./db.js";
 import { refreshHousingData } from "./housingFetch.js";
@@ -1752,9 +1752,12 @@ app.put("/api/admin/wish-conditions", requireAdminApi, (req, res) => {
 });
 
 app.get("/api/admin/rental-catalog", requireAdminApi, (_req, res) => {
+  const published = getRentalCatalog();
+  const draft = getRentalCatalogDraft();
   res.json({
-    published: publicAdminCatalog(getRentalCatalog(), { revealIds: true }),
-    draft: getRentalCatalogDraft(),
+    published: publicAdminCatalog(published, { revealIds: true }),
+    draft,
+    diff: draft ? catalogDiff(published, draft) : null,
     templates: getRentalCatalogTemplates().map((row) => ({ id: row.id, label: row.label })),
     flags: publicRentalMarketplaceFlags(getRentalMarketplaceFlags()),
   });
