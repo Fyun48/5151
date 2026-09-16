@@ -1,0 +1,166 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  applyWishLifecycleAction,
+  createDemandPost,
+  ensureDemandSchema,
+  getDemandPost,
+  listDemandPosts,
+  publicWishRoomView,
+  publishWishRoom,
+  setRentalCatalogCache,
+  setRentalMarketplaceFlags,
+} from "../src/demand.js";
+import { listingFitScore } from "../src/listingScore.js";
+import { preferPrimaryListing } from "../src/match.js";
+import { defaultCatalog } from "../src/rentalCatalog.js";
+import { publicRentalMarketplaceFlags } from "../src/rentalMarketplaceFlags.js";
+
+const dir = path.dirname(fileURLToPath(import.meta.url));
+
+function open() {
+  const db = new DatabaseSync(":memory:");
+  db.exec("PRAGMA foreign_keys = ON");
+  db.exec(`
+    CREATE TABLE users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT NOT NULL UNIQUE,
+      nickname TEXT,
+      created_at TEXT NOT NULL
+    );
+  `);
+  ensureDemandSchema(db);
+  db.prepare("INSERT INTO users(id, email, nickname, created_at) VALUES (1, 'a@example.com', '阿花', '2026-01-01T00:00:00.000Z')").run();
+  return db;
+}
+
+function sample(extra = {}) {
+  return {
+    districts: ["1-8"],
+    rent_max: 28000,
+    housing_type: "whole",
+    layout: "2",
+    body: "士林兩房可開伙找屋",
+    must_have: ["need_cook"],
+    ...extra,
+  };
+}
+
+test("public projection drops PII and uses opaque token path", () => {
+  const db = open();
+  const post = createDemandPost(db, 1, sample({ phone: "0912345678", contact_name: "阿花", line_url: "https://line.me/ti/p/x" }));
+  assert.equal(post.contact.phone, "0912345678");
+  assert.ok(post.public_token);
+  assert.match(post.public_path, /^\/w\/[a-f0-9]{32}$/);
+  const pub = listDemandPosts(db)[0];
+  assert.equal("author" in pub, false);
+  assert.equal("contact" in pub, false);
+  assert.doesNotMatch(JSON.stringify(pub), /0912345678|line\.me|阿花@|a@example.com/);
+  const byToken = getDemandPost(db, post.public_token, { publicOnly: true });
+  assert.equal(byToken.id, post.id);
+  assert.equal("contact" in byToken, false);
+  db.close();
+});
+
+test("lifecycle flag off blocks new actions; on uses real TTL and complete", () => {
+  const db = open();
+  setRentalMarketplaceFlags({ wish: { lifecycle_enabled: false } });
+  const post = createDemandPost(db, 1, sample());
+  assert.equal(post.expires_at.startsWith("9999"), true);
+  assert.throws(() => applyWishLifecycleAction(db, 1, post.id, "extend"), /尚未啟用/);
+  setRentalMarketplaceFlags({ wish: { lifecycle_enabled: true } });
+  const published = publishWishRoom(db, 1, post.id);
+  assert.equal(published.expires_at.startsWith("9999"), false);
+  const done = applyWishLifecycleAction(db, 1, post.id, "complete");
+  assert.equal(done.lifecycle, "completed");
+  assert.throws(() => applyWishLifecycleAction(db, 1, post.id, "resume"), /另開新的/);
+  const inactive = getDemandPost(db, post.id, { publicOnly: true });
+  assert.equal(inactive.inactive, true);
+  assert.equal(inactive.noindex, true);
+  setRentalMarketplaceFlags({});
+  db.close();
+});
+
+test("blocked wish cannot self-resume", () => {
+  const db = open();
+  setRentalMarketplaceFlags({ wish: { lifecycle_enabled: true } });
+  const post = createDemandPost(db, 1, sample());
+  db.prepare("UPDATE demand_posts SET status='hidden', lifecycle='blocked' WHERE id=?").run(post.id);
+  assert.throws(() => applyWishLifecycleAction(db, 1, post.id, "resume"), /封鎖/);
+  setRentalMarketplaceFlags({});
+  db.close();
+});
+
+test("publicWishRoomView never reintroduces contact or author", () => {
+  const view = publicWishRoomView({
+    id: 1,
+    author: "阿花",
+    contact: { phone: "0912", contact_name: "x", line_url: "y" },
+    city: "台北市",
+    districts: [],
+    district_labels: ["士林區"],
+    must_have: [],
+    nice_to_have: [],
+    avoid: [],
+    replies: [],
+    body: "找房",
+    status: "open",
+  });
+  assert.equal("author" in view, false);
+  assert.equal("contact" in view, false);
+  assert.equal(view.headline, "租屋需求");
+});
+
+test("catalog v2 persists choices and does not upgrade leftover nice_to_have", () => {
+  const db = open();
+  setRentalMarketplaceFlags({ rental_catalog_v2: { enabled: true } });
+  setRentalCatalogCache(defaultCatalog());
+  const post = createDemandPost(db, 1, sample({
+    must_have: ["need_cook"],
+    nice_to_have: ["fridge"],
+    avoid: ["parking_car"],
+    choices: { need_cook: "want", fridge: "unspecified", parking_car: "avoid" },
+  }));
+  assert.equal(post.choices.need_cook, "want");
+  assert.equal(post.choices.fridge, undefined);
+  assert.equal(post.choices.parking_car, "avoid");
+  assert.ok(post.nice_to_have.includes("fridge") || post.must_have.includes("need_cook"));
+  const stored = db.prepare("SELECT condition_choices FROM demand_posts WHERE id = ?").get(post.id);
+  assert.match(String(stored.condition_choices || ""), /need_cook/);
+  setRentalMarketplaceFlags({});
+  setRentalCatalogCache(null);
+  db.close();
+});
+
+test("old numeric public URL still resolves and reserved flags stay off", () => {
+  const db = open();
+  const post = createDemandPost(db, 1, sample());
+  const byId = getDemandPost(db, String(post.id), { publicOnly: true });
+  assert.equal(byId.id, post.id);
+  assert.equal("author" in byId, false);
+  const flags = publicRentalMarketplaceFlags({
+    wish: { public_share_v2_enabled: true, owner_matching_enabled: true, offer_enabled: true },
+  });
+  assert.equal(flags.wish.public_share_v2_enabled, false);
+  assert.equal(flags.wish.owner_matching_enabled, false);
+  assert.equal(flags.wish.offer_enabled, false);
+  db.close();
+});
+
+test("catalog and wish modules stay out of listing ranking", () => {
+  const scoreSrc = readFileSync(path.join(dir, "../src/listingScore.js"), "utf8");
+  const sortSrc = readFileSync(path.join(dir, "../src/db.js"), "utf8");
+  const matchSrc = readFileSync(path.join(dir, "../src/match.js"), "utf8");
+  for (const src of [scoreSrc, matchSrc]) {
+    assert.doesNotMatch(src, /rentalCatalog|wishLifecycle|demand\.js/);
+  }
+  const start = sortSrc.indexOf("export function sortListingsRows");
+  const end = sortSrc.indexOf("const LIST_CANDIDATE_COLUMNS");
+  assert.doesNotMatch(sortSrc.slice(start, end), /rentalCatalog|wishLifecycle|demand_posts/);
+  assert.ok(Number.isFinite(listingFitScore({ rent: 18000 }, { maxRent: 25000 })));
+  assert.ok(preferPrimaryListing);
+});

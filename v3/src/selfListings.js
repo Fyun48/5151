@@ -15,6 +15,7 @@ import {
 } from "./selfTraits.js";
 import { ensureProfileSchema } from "./profile.js";
 import { listingBodyPlain, sanitizeListingBodyHtml } from "./listingBody.js";
+import { catalogAsSelfTraitGroups } from "./rentalCatalog.js";
 
 export const SELF_POST_ID_BASE = 2_100_000_000;
 export const SELF_POST_ID_END = 2_200_000_000;
@@ -73,14 +74,14 @@ export function selfSourceLabel(source) {
   return id;
 }
 
-export function selfListingMeta() {
+export function selfListingMeta(options = {}) {
   return {
     legal: `${SELF_LEGAL} ${SELF_AUDIT}`,
     max_open: SELF_MAX_OPEN,
     ttl_days: SELF_TTL_DAYS,
     kinds: SELF_KINDS,
     roles: SELF_ROLES,
-    traits: SELF_TRAIT_GROUPS,
+    traits: options.catalog ? catalogAsSelfTraitGroups(options.catalog) : SELF_TRAIT_GROUPS,
     deposits: SELF_DEPOSIT_OPTIONS,
     templates: SELF_BODY_TEMPLATES,
     body_max: SELF_BODY_MAX,

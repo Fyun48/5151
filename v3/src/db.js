@@ -149,7 +149,30 @@ import {
   wishRoomOwnerSummary as wishRoomOwnerSummaryOn,
   publicWishRoomView,
   demandMeta,
+  applyWishLifecycleAction as applyWishLifecycleActionOn,
+  setRentalMarketplaceFlags,
+  setRentalCatalogCache,
 } from "./demand.js";
+import {
+  defaultCatalog,
+  defaultTemplates,
+  mergeDefaultCatalog,
+  normalizeCatalog,
+  normalizeTemplate,
+  applyTemplateDraft,
+  upsertCategory,
+  upsertCondition,
+  moveCondition,
+  deleteOrDisableCondition,
+  publicAdminCatalog,
+  catalogDiff,
+} from "./rentalCatalog.js";
+import {
+  normalizeRentalMarketplaceFlags,
+  publicRentalMarketplaceFlags,
+} from "./rentalMarketplaceFlags.js";
+import { runWishLifecycleTick } from "./wishLifecycleLoop.js";
+import { migrateOpenWishOnActivation } from "./wishLifecycle.js";
 import {
   DEFAULT_WISH_CONDITIONS,
   mergeWishConditions,
@@ -1394,7 +1417,164 @@ export function getWishConditions() {
   const stored = settingKey("wishConditions");
   const items = stored == null ? DEFAULT_WISH_CONDITIONS : mergeWishConditions(stored);
   setWishConditionCatalog(items);
+  hydrateRentalMarketplace();
   return publicWishConditions(items);
+}
+
+function hydrateRentalMarketplace() {
+  setRentalMarketplaceFlags(getRentalMarketplaceFlags());
+  setRentalCatalogCache(getRentalCatalog());
+}
+
+export function getRentalMarketplaceFlags() {
+  return normalizeRentalMarketplaceFlags(settingKey("rentalMarketplaceFlags") || {});
+}
+
+export function saveRentalMarketplaceFlags(partial = {}) {
+  const prev = getRentalMarketplaceFlags();
+  const src = partial && typeof partial === "object" ? partial : {};
+  const next = normalizeRentalMarketplaceFlags({
+    ...prev,
+    ...src,
+    rental_catalog_v2: { ...prev.rental_catalog_v2, ...(src.rental_catalog_v2 || {}) },
+    wish: { ...prev.wish, ...(src.wish || {}) },
+  });
+  writeSettingKey("rentalMarketplaceFlags", next);
+  if (next.wish.lifecycle_enabled === true && prev.wish.lifecycle_enabled !== true) {
+    migrateOpenWishesOnActivation();
+  }
+  setRentalMarketplaceFlags(next);
+  return publicRentalMarketplaceFlags(next);
+}
+
+export function getRentalCatalog() {
+  const stored = settingKey("rentalCatalog");
+  const catalog = stored == null ? defaultCatalog() : mergeDefaultCatalog(stored);
+  setRentalCatalogCache(catalog);
+  return catalog;
+}
+
+export function saveRentalCatalog(partial = {}) {
+  const src = partial && typeof partial === "object" ? partial : {};
+  if (src.reset === true) {
+    return saveRentalCatalogDraft(defaultCatalog());
+  }
+  const next = normalizeCatalog(src.catalog || src);
+  writeSettingKey("rentalCatalog", next);
+  writeSettingKey("rentalCatalogDraft", null);
+  setRentalCatalogCache(next);
+  return publicAdminCatalog(next);
+}
+
+export function getRentalCatalogDraft() {
+  const stored = settingKey("rentalCatalogDraft");
+  return stored ? normalizeCatalog(stored) : null;
+}
+
+export function saveRentalCatalogDraft(catalog) {
+  const next = normalizeCatalog(catalog);
+  writeSettingKey("rentalCatalogDraft", next);
+  return { draft: next, diff: catalogDiff(getRentalCatalog(), next) };
+}
+
+export function publishRentalCatalogDraft() {
+  const draft = getRentalCatalogDraft();
+  if (!draft) {
+    const err = new Error("沒有待確認的目錄草稿");
+    err.status = 400;
+    throw err;
+  }
+  writeSettingKey("rentalCatalog", draft);
+  writeSettingKey("rentalCatalogDraft", null);
+  setRentalCatalogCache(draft);
+  return publicAdminCatalog(draft);
+}
+
+export function getRentalCatalogTemplates() {
+  const stored = settingKey("rentalCatalogTemplates");
+  const list = Array.isArray(stored?.items) ? stored.items : defaultTemplates();
+  return list.map((row, index) => normalizeTemplate(row, list.map((item) => item.id).filter((_, i) => i !== index)));
+}
+
+export function saveRentalCatalogTemplate(input = {}) {
+  const items = getRentalCatalogTemplates();
+  const next = normalizeTemplate(input, items.map((row) => row.id));
+  const idx = items.findIndex((row) => row.id === next.id);
+  if (idx >= 0) items[idx] = next;
+  else items.push(next);
+  writeSettingKey("rentalCatalogTemplates", { items });
+  return next;
+}
+
+export function applyRentalCatalogTemplate(templateId) {
+  const template = getRentalCatalogTemplates().find((row) => row.id === templateId);
+  if (!template) {
+    const err = new Error("找不到這個範本");
+    err.status = 404;
+    throw err;
+  }
+  const applied = applyTemplateDraft(getRentalCatalog(), template);
+  writeSettingKey("rentalCatalogDraft", applied.draft);
+  return applied;
+}
+
+export function mutateRentalCatalog(action, payload = {}) {
+  let catalog = getRentalCatalogDraft() || getRentalCatalog();
+  if (action === "upsert_category") catalog = upsertCategory(catalog, payload);
+  else if (action === "upsert_condition") catalog = upsertCondition(catalog, payload);
+  else if (action === "move_condition") catalog = moveCondition(catalog, payload.id, payload.category_id);
+  else if (action === "delete_condition") {
+    const result = deleteOrDisableCondition(catalog, payload.id, catalogConditionReferences(payload.id));
+    writeSettingKey("rentalCatalogDraft", result.catalog);
+    return { ...result, draft: true, diff: catalogDiff(getRentalCatalog(), result.catalog) };
+  } else {
+    const err = new Error("不支援的目錄操作");
+    err.status = 400;
+    throw err;
+  }
+  writeSettingKey("rentalCatalogDraft", catalog);
+  return { catalog, draft: true, diff: catalogDiff(getRentalCatalog(), catalog) };
+}
+
+export function catalogConditionReferences(conditionId) {
+  const id = String(conditionId || "");
+  let wish = 0;
+  let listing = 0;
+  try {
+    wish = Number(db.prepare(
+      `SELECT COUNT(*) AS n FROM demand_posts
+       WHERE must_have LIKE ? OR nice_to_have LIKE ? OR avoid LIKE ? OR IFNULL(condition_choices,'') LIKE ?`,
+    ).get(`%${id}%`, `%${id}%`, `%${id}%`, `%${id}%`)?.n) || 0;
+  } catch { /* isolated tests without column */ }
+  try {
+    listing = Number(db.prepare(
+      `SELECT COUNT(*) AS n FROM listings WHERE IFNULL(self_traits,'') LIKE ?`,
+    ).get(`%${id}%`)?.n) || 0;
+  } catch { /* no listings table */ }
+  return { wish, listing, historical: wish + listing };
+}
+
+function migrateOpenWishesOnActivation() {
+  const now = new Date();
+  const rows = db.prepare("SELECT * FROM demand_posts WHERE status = 'open'").all();
+  for (const row of rows) {
+    const patch = migrateOpenWishOnActivation(row, now);
+    if (!patch) continue;
+    db.prepare(
+      `UPDATE demand_posts SET expires_at = ?, last_confirmed_at = COALESCE(last_confirmed_at, ?),
+       last_active_at = COALESCE(last_active_at, ?), continuous_active_from = COALESCE(continuous_active_from, ?),
+       lifecycle = 'active', updated_at = ? WHERE id = ?`,
+    ).run(patch.expires_at, patch.last_confirmed_at, patch.last_active_at, patch.continuous_active_from, patch.updated_at, row.id);
+  }
+}
+
+export function applyWishLifecycleFor(userId, postId, action) {
+  hydrateRentalMarketplace();
+  return applyWishLifecycleActionOn(db, userId, postId, action);
+}
+
+export function runWishLifecycleWorkerTick(now = new Date()) {
+  return runWishLifecycleTick(db, now, { flags: getRentalMarketplaceFlags() });
 }
 
 export function saveWishConditions(partial = {}) {

@@ -132,12 +132,44 @@
       aliases: ["居住數據", "戶籍", "開放資料"],
     },
     {
-      id: "content/wish",
-      group: "content",
-      groupLabel: "站台內容",
-      label: "許願房條件",
-      blurb: "許願房必須有／希望有／不接受選單。",
-      aliases: ["許願房", "許願", "條件選單"],
+      id: "rental/catalog",
+      group: "rental",
+      groupLabel: "租屋與配對",
+      label: "共用條件目錄",
+      blurb: "刊登與求租條件共用的分類與名稱。",
+      aliases: ["條件目錄", "catalog", "共用條件"],
+    },
+    {
+      id: "rental/listing",
+      group: "rental",
+      groupLabel: "租屋與配對",
+      label: "有房刊登設定",
+      blurb: "哪些共用條件出現在有房刊登表單。",
+      aliases: ["刊登條件", "self traits", "房屋條件"],
+    },
+    {
+      id: "rental/wish",
+      group: "rental",
+      groupLabel: "租屋與配對",
+      label: "許願房設定",
+      blurb: "許願房可選條件、生命週期與相容選單。",
+      aliases: ["許願房", "許願", "條件選單", "必須有"],
+    },
+    {
+      id: "rental/rules",
+      group: "rental",
+      groupLabel: "租屋與配對",
+      label: "配對規則",
+      blurb: "正式配對引擎尚未開放，這裡只是預留位置。",
+      aliases: ["配對", "match", "matching"],
+    },
+    {
+      id: "rental/templates",
+      group: "rental",
+      groupLabel: "租屋與配對",
+      label: "條件範本",
+      blurb: "套用目錄範本會先變成草稿，確認後才發布。",
+      aliases: ["範本", "template", "吉比標準版"],
     },
     {
       id: "comms/notices",
@@ -255,6 +287,7 @@
 
   const LEGACY = {
     members: "members/users",
+    "content/wish": "rental/wish",
     crawl: "inventory/crawl",
     site: "content/brand",
     qa: "content/qa",
@@ -269,7 +302,8 @@
     { id: "overview", label: "總覽", pages: ["overview"] },
     { id: "inventory", label: "房源與資料", pages: ["inventory/sources", "inventory/crawl", "inventory/same-house", "inventory/imports", "inventory/health"] },
     { id: "members", label: "會員與權限", pages: ["members/users", "members/plans", "members/guest", "members/login"] },
-    { id: "content", label: "站台內容", pages: ["content/brand", "content/spirit", "content/legal", "content/cms", "content/qa", "content/housing", "content/wish"] },
+    { id: "rental", label: "租屋與配對", pages: ["rental/catalog", "rental/listing", "rental/wish", "rental/rules", "rental/templates"] },
+    { id: "content", label: "站台內容", pages: ["content/brand", "content/spirit", "content/legal", "content/cms", "content/qa", "content/housing"] },
     { id: "comms", label: "通知與溝通", pages: ["comms/notices", "comms/news", "comms/smtp", "comms/templates"] },
     { id: "revenue", label: "收益與曝光", pages: ["revenue/sponsors", "revenue/support", "revenue/campaigns", "revenue/ads"] },
     { id: "system", label: "系統與整合", pages: ["system/maps", "system/oauth", "system/services", "system/status"] },
@@ -291,12 +325,20 @@
   function searchPages(query) {
     const q = String(query || "").trim().toLowerCase();
     if (!q) return [];
-    return PAGES.filter((row) => {
-      const hay = [row.label, row.groupLabel, row.blurb, row.id, ...(row.aliases || [])]
-        .join(" ")
-        .toLowerCase();
-      return hay.includes(q);
-    }).slice(0, 8);
+    return PAGES.map((row) => {
+      const aliases = (row.aliases || []).map((item) => String(item).toLowerCase());
+      const label = String(row.label || "").toLowerCase();
+      const id = String(row.id || "").toLowerCase();
+      const blurb = String(row.blurb || "").toLowerCase();
+      const group = String(row.groupLabel || "").toLowerCase();
+      const hay = [label, group, blurb, id, ...aliases].join(" ");
+      if (!hay.includes(q)) return null;
+      let score = 1;
+      if (aliases.includes(q) || label === q || id === q) score = 100;
+      else if (aliases.some((item) => item.startsWith(q)) || label.startsWith(q)) score = 80;
+      else if (aliases.some((item) => item.includes(q)) || label.includes(q) || id.includes(q)) score = 40;
+      return { row, score };
+    }).filter(Boolean).sort((a, b) => b.score - a.score || a.row.id.localeCompare(b.row.id)).slice(0, 8).map((item) => item.row);
   }
 
   function readFavorites() {
@@ -345,6 +387,9 @@
     "content/qa": { button: "helpQaSave", label: "儲存 Q&A" },
     "content/housing": { button: "housingSave", label: "儲存居住數據" },
     "content/wish": { button: "wishCondSave", label: "儲存條件選單" },
+    "rental/wish": { button: "wishCondSave", label: "儲存條件選單" },
+    "rental/catalog": { button: "catalogPublishDraft", label: "發布目錄草稿" },
+    "rental/templates": { button: "catalogApplyTemplate", label: "套用範本為草稿" },
     "comms/notices": { form: "announceForm", label: "儲存公告" },
     "comms/news": { form: "newsHopForm", label: "儲存最新消息" },
     "comms/smtp": { form: "smtpForm", label: "儲存 SMTP" },

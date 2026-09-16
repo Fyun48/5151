@@ -40,7 +40,7 @@
   <script>
     const $ = (id) => document.getElementById(id);
     const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-    const idMatch = location.pathname.match(/\/w\/(\d+)/);
+    const idMatch = location.pathname.match(/\/w\/([A-Za-z0-9]+)/);
     const wishId = idMatch ? idMatch[1] : "";
 
     function chips(labels, cls) {
@@ -61,30 +61,41 @@
         return;
       }
       try {
-        const res = await fetch(`/api/public/wish-room/${wishId}`);
+        const res = await fetch(`/api/public/wish-room/${encodeURIComponent(wishId)}`);
         const row = await res.json();
         if (!res.ok) throw new Error(row.error || "載入失敗");
+        if (row.inactive) {
+          document.title = "這個租屋需求目前已停止";
+          const robots = document.createElement("meta");
+          robots.name = "robots";
+          robots.content = "noindex";
+          document.head.appendChild(robots);
+          main.innerHTML = `<p class="err">${esc(row.message || "這個租屋需求目前已停止。")}</p>`;
+          return;
+        }
         const areas = (row.district_labels || []).join("、") || row.city || "未填區域";
         main.innerHTML = `
-          <p class="muted">許願房</p>
+          <p class="muted">${esc(row.headline || "租屋需求")}</p>
           <h1>${esc(areas)}</h1>
           <p class="price">${esc(budget(row))}${row.includes_management ? " · 含水電管理費" : ""}</p>
           <p class="meta">${esc(row.housing_label || "不限類型")}${row.layout_label ? ` · ${esc(row.layout_label)}` : ""}${row.ping_min ? ` · ${esc(row.ping_min)} 坪以上` : ""}</p>
-          <p class="meta">${row.move_in_date ? `希望 ${esc(row.move_in_date)} 入住` : "入住時間面議"}${row.lease_label ? ` · ${esc(row.lease_label)}` : ""}</p>
+          <p class="meta">${row.move_in_date ? `預計 ${esc(row.move_in_date)} 入住` : "入住時間面議"}${row.lease_label ? ` · ${esc(row.lease_label)}` : ""}</p>
           <div class="card">
-            ${row.transit_note ? `<p class="meta">希望1公里內有之捷運／車站：${esc(row.transit_note)}</p>` : ""}
+            ${row.transit_note ? `<p class="meta">捷運／車站：${esc(row.transit_note)}</p>` : ""}
             ${row.mrt_walk ? `<p class="meta">需要可步行捷運（1 公里內）</p>` : ""}
             ${row.body ? `<p class="body">${esc(row.body)}</p>` : ""}
           </div>
-          ${row.must_have_labels?.length ? `<h2>必須有</h2><div class="chips">${chips(row.must_have_labels)}</div>` : ""}
-          ${row.nice_to_have_labels?.length ? `<h2>希望有</h2><div class="chips">${chips(row.nice_to_have_labels, "nice")}</div>` : ""}
-          ${row.avoid_labels?.length ? `<h2>不接受</h2><div class="chips">${chips(row.avoid_labels, "avoid")}</div>` : ""}
+          ${row.must_have_labels?.length ? `<h2>要有</h2><div class="chips">${chips(row.must_have_labels)}</div>` : ""}
+          ${row.avoid_labels?.length ? `<h2>不要</h2><div class="chips">${chips(row.avoid_labels, "avoid")}</div>` : ""}
           <p class="muted">更新 ${esc(String(row.updated_at || row.published_at || "").replace("T", " ").slice(0, 16))}</p>
           <div class="cta">
             <span class="muted">回找房列表繼續看物件</span>
             <a class="btn" href="/">回吉比租房</a>
           </div>
         `;
+        if (row.public_path && row.public_path !== location.pathname) {
+          history.replaceState({}, "", row.public_path);
+        }
         document.title = `${areas} · 許願房`;
       } catch (error) {
         main.innerHTML = `<p class="err">${esc(error.message || "這則許願房目前未公開。")}</p>`;
