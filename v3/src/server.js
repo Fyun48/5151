@@ -834,7 +834,8 @@ app.get("/api/demand/:id", (req, res) => {
 app.get("/api/wish-rooms/:id", (req, res) => {
   try {
     const session = readSession(req);
-    res.json(getDemand(req.params.id, { viewerId: session?.userId || 0 }));
+    const viewerId = session?.userId || 0;
+    res.json(getDemand(req.params.id, { viewerId, publicOnly: !viewerId }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }

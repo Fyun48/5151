@@ -816,7 +816,8 @@ export function getDemandPost(db, postId, { viewerId = 0, publicOnly = false } =
   if (!row) throw httpError("找不到這則許願房", 404);
   const mine = Number(row.user_id) === Number(viewerId);
   const numeric = /^\d+$/.test(String(postId || "").trim());
-  if (numeric && (publicOnly || !mine) && hasWishColumn(db, "legacy_numeric_share") && !Number(row.legacy_numeric_share)) {
+  const guestLookup = publicOnly || !Number(viewerId);
+  if (numeric && guestLookup && hasWishColumn(db, "legacy_numeric_share") && !Number(row.legacy_numeric_share)) {
     throw httpError("找不到這則許願房", 404);
   }
   if (row.status === "hidden" && !mine) throw httpError("這則許願房已隱藏", 404);
