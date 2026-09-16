@@ -85,6 +85,20 @@ import {
   saveHelpQa,
   getWishConditions,
   saveWishConditions,
+  getRentalCatalog,
+  saveRentalCatalog,
+  getRentalCatalogDraft,
+  publishRentalCatalogDraft,
+  getRentalCatalogTemplates,
+  saveRentalCatalogTemplate,
+  renameRentalCatalogTemplate,
+  deleteRentalCatalogTemplate,
+  applyRentalCatalogTemplate,
+  mutateRentalCatalog,
+  getRentalMarketplaceFlags,
+  saveRentalMarketplaceFlags,
+  applyWishLifecycleFor,
+  runWishLifecycleWorkerTick,
   getLegalCopy,
   saveLegalCopy,
   getSpirit,
@@ -237,6 +251,9 @@ import { probeListingAliveBySource } from "./probe.js";
 import { PROBE_ALIVE, PROBE_GONE, PROBE_INCONCLUSIVE, classifyListingProbeWrite } from "./probeOutcomes.js";
 import { enqueueListingEnrich, processListingEnrichBatch, requestClickRefresh, wakeListingEnrichWorker, WATCH_PRIORITY } from "./listingEnrichQueue.js";
 import { deliveryConfigFromEnv, startDeliveryLoop } from "./opsDelivery.js";
+import { startWishLifecycleLoop } from "./wishLifecycleLoop.js";
+import { catalogDiff, isSystemCatalogTemplate, publicAdminCatalog } from "./rentalCatalog.js";
+import { isRentalCatalogV2Enabled, publicRentalMarketplaceFlags } from "./rentalMarketplaceFlags.js";
 import { opsDeliveryDb } from "./db.js";
 import { refreshHousingData } from "./housingFetch.js";
 import {
@@ -819,7 +836,8 @@ app.get("/api/demand/:id", (req, res) => {
 app.get("/api/wish-rooms/:id", (req, res) => {
   try {
     const session = readSession(req);
-    res.json(getDemand(req.params.id, { viewerId: session?.userId || 0 }));
+    const viewerId = session?.userId || 0;
+    res.json(getDemand(req.params.id, { viewerId, publicOnly: !viewerId }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -1736,6 +1754,90 @@ app.put("/api/admin/wish-conditions", requireAdminApi, (req, res) => {
   }
 });
 
+app.get("/api/admin/rental-catalog", requireAdminApi, (_req, res) => {
+  const published = getRentalCatalog();
+  const draft = getRentalCatalogDraft();
+  res.json({
+    published: publicAdminCatalog(published, { revealIds: true }),
+    draft,
+    diff: draft ? catalogDiff(published, draft) : null,
+    templates: getRentalCatalogTemplates().map((row) => ({
+      id: row.id,
+      label: row.label,
+      system: isSystemCatalogTemplate(row.id),
+    })),
+    flags: publicRentalMarketplaceFlags(getRentalMarketplaceFlags()),
+  });
+});
+
+app.put("/api/admin/rental-catalog", requireAdminApi, (req, res) => {
+  try {
+    res.json(saveRentalCatalog(req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/admin/rental-catalog/mutate", requireAdminApi, (req, res) => {
+  try {
+    res.json(mutateRentalCatalog(req.body?.action, req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/admin/rental-catalog/templates", requireAdminApi, (req, res) => {
+  try {
+    res.json(saveRentalCatalogTemplate(req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.patch("/api/admin/rental-catalog/templates/:id", requireAdminApi, (req, res) => {
+  try {
+    res.json(renameRentalCatalogTemplate(req.params.id, req.body?.label));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.delete("/api/admin/rental-catalog/templates/:id", requireAdminApi, (req, res) => {
+  try {
+    res.json(deleteRentalCatalogTemplate(req.params.id));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/admin/rental-catalog/templates/:id/apply", requireAdminApi, (req, res) => {
+  try {
+    res.json(applyRentalCatalogTemplate(req.params.id));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/admin/rental-catalog/draft/publish", requireAdminApi, (_req, res) => {
+  try {
+    res.json(publishRentalCatalogDraft());
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/admin/rental-marketplace-flags", requireAdminApi, (_req, res) => {
+  res.json(publicRentalMarketplaceFlags(getRentalMarketplaceFlags()));
+});
+
+app.put("/api/admin/rental-marketplace-flags", requireAdminApi, (req, res) => {
+  try {
+    res.json(saveRentalMarketplaceFlags(req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
 app.get("/api/admin/feedback", requireAdminApi, (req, res) => {
   res.json({
     ...feedbackMeta(),
@@ -2036,6 +2138,21 @@ app.post("/api/wish-rooms/:id/reopen", (req, res) => {
   }
 });
 
+["extend", "pause", "resume", "complete", "confirm", "full_reconfirm"].forEach((action) => {
+  app.post(`/api/wish-rooms/:id/${action}`, (req, res) => {
+    try {
+      const session = readSession(req);
+      if (!session?.userId) {
+        res.status(401).json({ error: "請先登入" });
+        return;
+      }
+      res.json(applyWishLifecycleFor(session.userId, req.params.id, action));
+    } catch (error) {
+      res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
+    }
+  });
+});
+
 app.post("/api/demand/:id/reply", (req, res) => {
   try {
     const session = readSession(req);
@@ -2109,7 +2226,11 @@ app.get("/api/self-listings", (req, res) => {
       return;
     }
     res.json({
-      ...selfListingMeta(),
+      ...selfListingMeta(
+        isRentalCatalogV2Enabled(getRentalMarketplaceFlags())
+          ? { catalog: getRentalCatalog() }
+          : {},
+      ),
       tools: listingToolsInfo(session.userId),
       listings: listMineSelfListings(session.userId),
     });
@@ -3426,6 +3547,7 @@ app.listen(PORT, HOST, () => {
     startDeliveryLoop(opsDeliveryDb(), opsDelivery, { log: (tag, info) => console.log(tag, JSON.stringify(info)) });
     console.log(`Ops feedback 遞送已啟用：每 ${opsDelivery.intervalMs}ms 一次 → ${opsDelivery.url}`);
   }
+  startWishLifecycleLoop(() => runWishLifecycleWorkerTick(), { intervalMs: 5 * 60 * 1000, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
   console.log(`${APP_NAME}：http://${HOST}:${PORT}`);
   if (envAdminConfigured()) {
     console.log(`管理員帳號：${adminEmail()}（也可註冊新會員）`);

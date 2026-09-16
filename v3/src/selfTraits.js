@@ -90,34 +90,38 @@ const ALL_TRAITS = new Map([...ACTIVE_TRAITS, ...Object.entries(LEGACY_TRAIT_LAB
 const TRAIT_CAP = 40;
 
 // 顯示用正規化：接受「所有已知 id」（含 legacy），保序去重、上限。歷史刊登不會遺失標籤。
-export function normalizeSelfTraits(input) {
+export function normalizeSelfTraits(input, extraAllowed = []) {
   const raw = Array.isArray(input) ? input : [];
+  const allowed = new Set([...ALL_TRAITS.keys(), ...extraAllowed]);
   const ids = [];
   for (const item of raw) {
     const id = String(item || "").trim();
-    if (ALL_TRAITS.has(id) && !ids.includes(id)) ids.push(id);
+    if (allowed.has(id) && !ids.includes(id)) ids.push(id);
   }
   return ids.slice(0, TRAIT_CAP);
 }
 
 // 新刊登輸入正規化：只接受「目前表單提供的有效 id」；停用/歧視性/已移除 id 一律丟棄，避免寫入新資料。
-export function normalizeSelfTraitsInput(input) {
+export function normalizeSelfTraitsInput(input, extraAllowed = []) {
   const raw = Array.isArray(input) ? input : [];
+  const allowed = new Set([...ACTIVE_TRAITS.keys(), ...extraAllowed]);
   const ids = [];
   for (const item of raw) {
     const id = String(item || "").trim();
-    if (ACTIVE_TRAITS.has(id) && !ids.includes(id)) ids.push(id);
+    if (allowed.has(id) && !ids.includes(id)) ids.push(id);
   }
   return ids.slice(0, TRAIT_CAP);
 }
 
-export function selfTraitLabels(ids) {
+export function selfTraitLabels(ids, extraLabels = {}) {
   const raw = Array.isArray(ids) ? ids : [];
+  const extra = extraLabels instanceof Map ? extraLabels : new Map(Object.entries(extraLabels || {}));
   const out = [];
   const seen = new Set();
   for (const item of raw) {
     const id = String(item || "").trim();
-    if (ALL_TRAITS.has(id) && !seen.has(id)) { seen.add(id); out.push(ALL_TRAITS.get(id)); }
+    const label = ALL_TRAITS.get(id) || extra.get(id);
+    if (label && !seen.has(id)) { seen.add(id); out.push(label); }
   }
   return out.slice(0, TRAIT_CAP);
 }

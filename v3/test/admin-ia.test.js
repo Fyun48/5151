@@ -40,6 +40,11 @@ test("admin command search finds destinations by alias", () => {
   assert.equal(IA.searchPages("免責")[0].id, "content/legal");
   assert.equal(IA.searchPages("刪除會員")[0].id, "members/users");
   assert.equal(IA.searchPages("同房源")[0].id, "inventory/same-house");
+  assert.equal(IA.normalizeHash("content/wish"), "rental/wish");
+  assert.equal(IA.searchPages("許願房")[0].id, "rental/wish");
+  assert.equal(IA.searchPages("許願房設定")[0].id, "rental/wish");
+  assert.equal(IA.searchPages("條件目錄")[0].id, "rental/catalog");
+  assert.ok(IA.searchPages("許願房").every((row) => row.id !== "rental/catalog"));
 });
 
 test("browser back/forward uses dirty owner, not the already-updated location.hash", () => {

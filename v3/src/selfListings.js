@@ -15,6 +15,115 @@ import {
 } from "./selfTraits.js";
 import { ensureProfileSchema } from "./profile.js";
 import { listingBodyPlain, sanitizeListingBodyHtml } from "./listingBody.js";
+import {
+  catalogAsSelfTraitGroups,
+  listingValuesFromKnownTraits,
+  mergeListingConditionValues,
+  traitsFromListingValues,
+} from "./rentalCatalog.js";
+import { isRentalCatalogV2Enabled } from "./rentalMarketplaceFlags.js";
+
+let listingCatalog = null;
+let listingFlags = {};
+
+export function setSelfListingCatalog(catalog, flags) {
+  listingCatalog = catalog || null;
+  if (flags) listingFlags = flags;
+}
+
+export function setSelfListingHydrate(catalog, flags) {
+  if (catalog && typeof catalog === "object" && !Array.isArray(catalog.categories) && (catalog.catalog || catalog.flags)) {
+    setSelfListingCatalog(catalog.catalog || listingCatalog, catalog.flags || flags);
+    return;
+  }
+  setSelfListingCatalog(catalog, flags);
+}
+
+function catalogTraitExtras({ includeInactive = false } = {}) {
+  if (!listingCatalog || !isRentalCatalogV2Enabled(listingFlags)) return { ids: [], labels: {} };
+  const ids = [];
+  const labels = {};
+  for (const group of catalogAsSelfTraitGroups(listingCatalog, { includeInactive })) {
+    for (const item of group.items) {
+      ids.push(item.id);
+      labels[item.id] = item.label;
+      if (item.canonical_id) {
+        ids.push(item.canonical_id);
+        labels[item.canonical_id] = item.label;
+      }
+      if (item.listing_negative) {
+        ids.push(item.listing_negative);
+        labels[item.listing_negative] = item.label;
+      }
+      if (item.listing_legacy) {
+        ids.push(item.listing_legacy);
+        labels[item.listing_legacy] = item.label;
+      }
+    }
+  }
+  return { ids, labels };
+}
+
+function parseListingValues(row) {
+  try {
+    const raw = row?.listing_condition_values;
+    return raw && typeof raw === "object" ? raw : JSON.parse(raw || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function resolveListingTraits(input = {}, previous = {}) {
+  if (!listingCatalog || !isRentalCatalogV2Enabled(listingFlags)) {
+    return {
+      traitIds: normalizeSelfTraitsInput(input.traits, catalogTraitExtras().ids),
+      listingValues: {},
+    };
+  }
+  const previousTraits = (() => {
+    try { return JSON.parse(previous.self_traits || "[]"); } catch { return []; }
+  })();
+  const listingValues = mergeListingConditionValues(
+    listingCatalog,
+    input.listing_values || {},
+    input.traits || [],
+    parseListingValues(previous),
+    previousTraits,
+  );
+  const extraActive = catalogTraitExtras({ includeInactive: false });
+  const extraAll = catalogTraitExtras({ includeInactive: true });
+  const fromValues = traitsFromListingValues(listingValues, listingCatalog);
+  const incoming = normalizeSelfTraitsInput(input.traits, extraActive.ids)
+    .filter((id) => extraActive.ids.includes(id));
+  const historical = normalizeSelfTraits(previousTraits, extraAll.ids);
+  const inactive = new Set(
+    catalogAsSelfTraitGroups(listingCatalog, { includeInactive: true })
+      .flatMap((group) => group.items)
+      .filter((item) => item.enabled === false)
+      .flatMap((item) => [item.id, item.canonical_id, item.listing_negative, item.listing_legacy].filter(Boolean)),
+  );
+  const traitIds = [];
+  const push = (id) => {
+    const key = String(id || "").trim();
+    if (key && !traitIds.includes(key)) traitIds.push(key);
+  };
+  fromValues.forEach(push);
+  incoming.forEach(push);
+  for (const id of historical) {
+    if (inactive.has(id)) push(id);
+  }
+  return { traitIds: traitIds.slice(0, 40), listingValues };
+}
+
+function persistListingValues(db, postId, listingValues) {
+  if (!listingCatalog || !isRentalCatalogV2Enabled(listingFlags)) return;
+  try {
+    db.prepare("UPDATE listings SET listing_condition_values = ? WHERE post_id = ?")
+      .run(JSON.stringify(listingValues || {}), postId);
+  } catch {
+    // column missing in isolated tests before ensureSelfListingSchema
+  }
+}
 
 export const SELF_POST_ID_BASE = 2_100_000_000;
 export const SELF_POST_ID_END = 2_200_000_000;
@@ -73,14 +182,14 @@ export function selfSourceLabel(source) {
   return id;
 }
 
-export function selfListingMeta() {
+export function selfListingMeta(options = {}) {
   return {
     legal: `${SELF_LEGAL} ${SELF_AUDIT}`,
     max_open: SELF_MAX_OPEN,
     ttl_days: SELF_TTL_DAYS,
     kinds: SELF_KINDS,
     roles: SELF_ROLES,
-    traits: SELF_TRAIT_GROUPS,
+    traits: options.catalog ? catalogAsSelfTraitGroups(options.catalog) : SELF_TRAIT_GROUPS,
     deposits: SELF_DEPOSIT_OPTIONS,
     templates: SELF_BODY_TEMPLATES,
     body_max: SELF_BODY_MAX,
@@ -106,6 +215,7 @@ export function ensureSelfListingSchema(db) {
     "ALTER TABLE listings ADD COLUMN self_traits TEXT",
     "ALTER TABLE listings ADD COLUMN self_pledge_at TEXT",
     "ALTER TABLE listings ADD COLUMN self_deposit TEXT",
+    "ALTER TABLE listings ADD COLUMN listing_condition_values TEXT",
   ]) {
     try {
       db.exec(sql);
@@ -403,16 +513,26 @@ export function decorateSelfListing(row, { viewerId = 0 } = {}) {
     body: sanitizeListingBodyHtml(String(row.self_body || ""), SELF_BODY_MAX),
     traits: (() => {
       try {
-        return normalizeSelfTraits(JSON.parse(row.self_traits || "[]"));
+        return normalizeSelfTraits(JSON.parse(row.self_traits || "[]"), catalogTraitExtras({ includeInactive: true }).ids);
       } catch {
         return [];
       }
     })(),
     trait_labels: (() => {
       try {
-        return selfTraitLabels(JSON.parse(row.self_traits || "[]"));
+        return selfTraitLabels(JSON.parse(row.self_traits || "[]"), catalogTraitExtras({ includeInactive: true }).labels);
       } catch {
         return [];
+      }
+    })(),
+    listing_values: (() => {
+      const stored = parseListingValues(row);
+      if (stored && Object.keys(stored).length) return stored;
+      if (!listingCatalog || !isRentalCatalogV2Enabled(listingFlags)) return {};
+      try {
+        return listingValuesFromKnownTraits(JSON.parse(row.self_traits || "[]"), listingCatalog);
+      } catch {
+        return {};
       }
     })(),
     deposit: String(row.self_deposit || ""),
@@ -532,7 +652,9 @@ export function createSelfListing(db, userId, input = {}, now = new Date(), { ma
   const phone = digitsPhone(input.phone || input.mobile);
   const lineUrl = normalizeLineUrl(input.line_url);
   if (phone && phone.replace(/\D/g, "").length < 8) throw httpError("電話號碼太短");
-  const traitIds = normalizeSelfTraitsInput(input.traits);
+  const extra = catalogTraitExtras({ includeInactive: true });
+  const resolved = resolveListingTraits(input);
+  const traitIds = resolved.traitIds;
   const deposit = normalizeDeposit(input.deposit);
 
   const photos = normalizePhotoList(input.photos || input.photo_urls);
@@ -580,7 +702,7 @@ export function createSelfListing(db, userId, input = {}, now = new Date(), { ma
     kindName,
     roleName,
     storedPhotos[0] || cover,
-    JSON.stringify(["吉比本站", ...selfTraitLabels(traitIds), depositLabel(deposit)].filter(Boolean)),
+    JSON.stringify(["吉比本站", ...selfTraitLabels(traitIds, extra.labels), depositLabel(deposit)].filter(Boolean)),
     created,
     created,
   );
@@ -640,6 +762,7 @@ export function createSelfListing(db, userId, input = {}, now = new Date(), { ma
     );
   }
 
+  persistListingValues(db, postId, resolved.listingValues);
   return getSelfListing(db, postId, { viewerId: uid });
 }
 
@@ -709,7 +832,7 @@ export function insertSelfDraftListing(db, userId, fields = {}, now = new Date()
   const floorName = String(fields.floor_name || "").trim().slice(0, 20);
   const kindName = String(fields.kind_name || "").trim().slice(0, 20);
   const roleName = String(fields.role_name || "").trim().slice(0, 20);
-  const traits = normalizeSelfTraits(fields.traits);
+  const traits = normalizeSelfTraits(fields.traits, catalogTraitExtras({ includeInactive: true }).ids);
   const deposit = normalizeDeposit(fields.deposit);
   const contactName = String(fields.contact_name || "").trim().slice(0, SELF_CONTACT_MAX);
   const phone = digitsPhone(fields.phone || fields.mobile);
@@ -818,8 +941,9 @@ export function listingFormFields(row) {
     traits: Array.isArray(decorated?.traits)
       ? decorated.traits
       : (() => {
-        try { return normalizeSelfTraits(JSON.parse(row.self_traits || "[]")); } catch { return []; }
+        try { return normalizeSelfTraits(JSON.parse(row.self_traits || "[]"), catalogTraitExtras({ includeInactive: true }).ids); } catch { return []; }
       })(),
+    listing_values: decorated?.listing_values || parseListingValues(row),
     contact_name: String(decorated?.contact_name || row.contact_name || ""),
     phone: String(decorated?.phone || row.phone || row.mobile || ""),
     line_url: String(decorated?.line_url || row.line_url || ""),
@@ -896,7 +1020,9 @@ export function publishImportedDraftListing(db, userId, postId, input = {}, now 
   const phone = digitsPhone(input.phone || input.mobile);
   const lineUrl = normalizeLineUrl(input.line_url);
   if (phone && phone.replace(/\D/g, "").length < 8) throw httpError("電話號碼太短");
-  const traitIds = normalizeSelfTraitsInput(input.traits);
+  const extra = catalogTraitExtras({ includeInactive: true });
+  const resolved = resolveListingTraits(input, row);
+  const traitIds = resolved.traitIds;
   const deposit = normalizeDeposit(input.deposit);
   const photos = normalizePhotoList(input.photos != null ? input.photos : listingPhotoUrls(row));
   const kindName = kindLabel(kind);
@@ -937,7 +1063,7 @@ export function publishImportedDraftListing(db, userId, postId, input = {}, now 
     kindName,
     roleName,
     photos[0] || "",
-    JSON.stringify(["吉比本站", ...selfTraitLabels(traitIds), depositLabel(deposit)].filter(Boolean)),
+    JSON.stringify(["吉比本站", ...selfTraitLabels(traitIds, extra.labels), depositLabel(deposit)].filter(Boolean)),
     expires,
     body,
     JSON.stringify(photos.slice(0, SELF_PHOTO_MAX_COUNT)),
@@ -961,6 +1087,7 @@ export function publishImportedDraftListing(db, userId, postId, input = {}, now 
       `UPDATE listings SET match_post_id=?, match_level=?, match_detail=?, match_rejected=0 WHERE post_id=?`,
     ).run(hit.listing.post_id, hit.level, hit.detail, row.post_id);
   }
+  persistListingValues(db, row.post_id, resolved.listingValues);
   return getSelfListing(db, row.post_id, { viewerId: uid });
 }
 
