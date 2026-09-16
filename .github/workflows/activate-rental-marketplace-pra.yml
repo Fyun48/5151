@@ -1,0 +1,236 @@
+name: Activate PR A rental marketplace flags (manual)
+run-name: "activate-pra:${{ inputs.source_sha }}"
+
+# 只啟用 Production 上已部署的 PR A flags。不部署、不重建 image、不 restart。
+# 必須從 refs/heads/master 做 workflow_dispatch。
+# Owner 已書面授權：Cursor Agent（actor `cursor` / `cursor[bot]`）可從 master 觸發本檔。
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: "目前 Production source 的完整 40 碼 commit SHA"
+        required: true
+      image_digest:
+        description: "目前 running image digest，格式必須是 sha256: 加 64 碼小寫 hex"
+        required: true
+      backup_id:
+        description: "啟用前已驗證 backup 路徑，必須是 /DATA/AppData/591-tracker-v3-backups/predeploy-YYYYMMDD-HHMMSS"
+        required: true
+      backup_hash:
+        description: "啟用前已驗證 backup sha256，格式必須是 sha256: 加 64 碼小寫 hex"
+        required: true
+      confirmation:
+        description: "輸入 ACTIVATE-PRA-PRODUCTION 以確認只啟用 PR A flags"
+        required: true
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  activate-pra:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
+    steps:
+      - name: Authorize PR A production activation (fail-closed)
+        env:
+          WF_REF: ${{ github.ref }}
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          ALLOWED_ACTOR: ${{ vars.PRODUCTION_DEPLOY_ALLOWED_ACTOR }}
+          CONFIRM: ${{ inputs.confirmation }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+          BACKUP_ID: ${{ inputs.backup_id }}
+          BACKUP_HASH: ${{ inputs.backup_hash }}
+        run: |
+          set -euo pipefail
+          if [ "$WF_REF" != "refs/heads/master" ]; then
+            echo "::error::PR A activation must run from the master workflow definition (got $WF_REF)"; exit 1
+          fi
+          if [ -z "${ALLOWED_ACTOR:-}" ]; then
+            echo "::error::PRODUCTION_DEPLOY_ALLOWED_ACTOR is not configured; refusing (fail-closed)"; exit 1
+          fi
+          CURSOR_DEPLOY=0
+          if [ "$ACTOR" = "cursor" ] || [ "$ACTOR" = "cursor[bot]" ]; then
+            if [ "$TRIGGERING_ACTOR" = "cursor" ] || [ "$TRIGGERING_ACTOR" = "cursor[bot]" ]; then
+              CURSOR_DEPLOY=1
+            fi
+          fi
+          if [ "$CURSOR_DEPLOY" != 1 ] && [ "$ACTOR" != "$ALLOWED_ACTOR" ]; then
+            echo "::error::actor '$ACTOR' is not the authorized deployer"; exit 1
+          fi
+          if [ "$CURSOR_DEPLOY" != 1 ] && [ "$TRIGGERING_ACTOR" != "$ALLOWED_ACTOR" ]; then
+            echo "::error::triggering actor '$TRIGGERING_ACTOR' is not the authorized deployer"; exit 1
+          fi
+          if [ "${CONFIRM:-}" != "ACTIVATE-PRA-PRODUCTION" ]; then
+            echo "::error::confirmation must be exactly ACTIVATE-PRA-PRODUCTION"; exit 1
+          fi
+          if ! printf '%s' "${SOURCE_SHA:-}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::source_sha must be a full 40-character commit SHA"; exit 1
+          fi
+          if ! printf '%s' "${IMAGE_DIGEST:-}" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo "::error::image_digest must be exactly sha256: plus 64 lowercase hex characters"; exit 1
+          fi
+          if ! printf '%s' "${BACKUP_ID:-}" | grep -Eq '^/DATA/AppData/591-tracker-v3-backups/predeploy-[0-9]{8}-[0-9]{6}$'; then
+            echo "::error::backup_id must be /DATA/AppData/591-tracker-v3-backups/predeploy-YYYYMMDD-HHMMSS"; exit 1
+          fi
+          case "$BACKUP_ID" in
+            *..*) echo "::error::backup_id must not contain path traversal"; exit 1 ;;
+          esac
+          if ! printf '%s' "${BACKUP_HASH:-}" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo "::error::backup_hash must be exactly sha256: plus 64 lowercase hex characters"; exit 1
+          fi
+      - name: Checkout workflow-definition SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Verify trusted workflow-definition SHA
+        env:
+          EXPECTED_WF_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          HEAD_SHA="$(git rev-parse HEAD)"
+          if [ "$HEAD_SHA" != "$EXPECTED_WF_SHA" ]; then
+            echo "::error::trusted checkout HEAD $HEAD_SHA != workflow execution SHA $EXPECTED_WF_SHA"; exit 1
+          fi
+      - name: Validate source SHA reachable from origin/master
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin master
+          if ! git merge-base --is-ancestor "$SOURCE_SHA" origin/master; then
+            echo "::error::commit $SOURCE_SHA is not reachable from origin/master; refusing"; exit 1
+          fi
+          echo "Activation source SHA $SOURCE_SHA is on origin/master ancestry."
+      - name: Copy PR A activation helpers to NAS /tmp
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.NAS_HOST }}
+          port: ${{ secrets.NAS_PORT }}
+          username: ${{ secrets.NAS_USER }}
+          key: ${{ secrets.NAS_SSH_KEY }}
+          source: ".github/scripts/activate-rental-marketplace-pra-remote.sh,.github/scripts/activate-rental-marketplace-pra-domain.mjs"
+          target: /tmp/5151-pra-activate-helpers
+          overwrite: true
+      - name: Activate PR A flags on running v3
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.NAS_HOST }}
+          port: ${{ secrets.NAS_PORT }}
+          username: ${{ secrets.NAS_USER }}
+          key: ${{ secrets.NAS_SSH_KEY }}
+          script_stop: true
+          command_timeout: 15m
+          script: |
+            set -euo pipefail
+            export SOURCE_SHA='${{ inputs.source_sha }}'
+            export IMAGE_DIGEST='${{ inputs.image_digest }}'
+            export BACKUP_ID='${{ inputs.backup_id }}'
+            export BACKUP_HASH='${{ inputs.backup_hash }}'
+            export DOMAIN_SCRIPT=/tmp/5151-pra-activate-helpers/.github/scripts/activate-rental-marketplace-pra-domain.mjs
+            chmod +x /tmp/5151-pra-activate-helpers/.github/scripts/activate-rental-marketplace-pra-remote.sh
+            /tmp/5151-pra-activate-helpers/.github/scripts/activate-rental-marketplace-pra-remote.sh
+      - name: Pull NAS activation evidence
+        env:
+          NAS_HOST: ${{ secrets.NAS_HOST }}
+          NAS_PORT: ${{ secrets.NAS_PORT }}
+          NAS_USER: ${{ secrets.NAS_USER }}
+          NAS_SSH_KEY: ${{ secrets.NAS_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          key="$(mktemp)"
+          printf '%s\n' "$NAS_SSH_KEY" > "$key"
+          chmod 600 "$key"
+          scp -o StrictHostKeyChecking=accept-new -P "$NAS_PORT" -i "$key" \
+            "$NAS_USER@$NAS_HOST:/tmp/pra-activation-core.json" ./nas-activation-core.json
+          rm -f "$key"
+          python3 - <<'PY'
+          import json
+          nas = json.load(open("nas-activation-core.json"))
+          required = (
+              "source_sha", "image_digest", "backup_id", "backup_hash",
+              "before_raw_flags", "after_raw_flags", "before_counts", "after_counts",
+              "runtime_public_flags", "auto_expire", "catalog_present", "condition_count",
+              "health", "landing", "login", "final_digest", "final_oci_revision",
+          )
+          if not all(nas.get(k) for k in required):
+              raise SystemExit("activation NAS evidence incomplete")
+          if nas.get("backup_verified") is not True or nas.get("ACTIVATION_OK") is not True:
+              raise SystemExit("activation NAS evidence is not verified")
+          if nas["backup_hash"][:7] != "sha256:" or len(nas["backup_hash"]) != 71:
+              raise SystemExit("activation backup_hash is not immutable")
+          if nas["final_digest"][:7] != "sha256:" or len(nas["final_digest"]) != 71:
+              raise SystemExit("activation final_digest is not immutable")
+          PY
+      - name: Write PR A activation evidence
+        env:
+          WF_FILE: .github/workflows/activate-rental-marketplace-pra.yml
+          WF_REF: ${{ github.ref }}
+          WF_RUN_ID: ${{ github.run_id }}
+          WF_ATTEMPT: ${{ github.run_attempt }}
+          WF_HEAD_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+          WF_ACTOR: ${{ github.actor }}
+          WF_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          nas = json.load(open("nas-activation-core.json"))
+          doc = {
+              "schema": "pra-activation-evidence-v1",
+              "workflow_file": os.environ["WF_FILE"],
+              "workflow_ref": os.environ["WF_REF"],
+              "workflow_run_id": os.environ["WF_RUN_ID"],
+              "workflow_attempt": int(os.environ.get("WF_ATTEMPT") or "0"),
+              "workflow_sha": os.environ["WF_HEAD_SHA"],
+              "head_sha": os.environ["WF_HEAD_SHA"],
+              "source_sha": os.environ["SOURCE_SHA"],
+              "image_digest": os.environ["IMAGE_DIGEST"],
+              "actor": os.environ["WF_ACTOR"],
+              "triggering_actor": os.environ["WF_TRIGGERING_ACTOR"],
+              "confirmation": os.environ["CONFIRMATION"],
+              "backup_id": nas["backup_id"],
+              "backup_hash": nas["backup_hash"],
+              "backup_verified": True,
+              "before_raw_flags": nas["before_raw_flags"],
+              "after_raw_flags": nas["after_raw_flags"],
+              "before_counts": nas["before_counts"],
+              "after_counts": nas["after_counts"],
+              "runtime_public_flags": nas["runtime_public_flags"],
+              "auto_expire": nas["auto_expire"],
+              "catalog_present": nas["catalog_present"],
+              "condition_count": nas["condition_count"],
+              "posts_before": nas.get("posts_before"),
+              "posts_after": nas.get("posts_after"),
+              "health": nas["health"] is True,
+              "landing": nas["landing"] is True,
+              "login": nas["login"] is True,
+              "final_digest": nas["final_digest"],
+              "final_oci_revision": nas["final_oci_revision"],
+              "ACTIVATION_OK": True,
+          }
+          if doc["health"] is not True or doc["landing"] is not True or doc["login"] is not True:
+              raise SystemExit("activation evidence health/landing/login is not true")
+          blob = json.dumps(doc)
+          for token in ("SESSION_SECRET", "NAS_SSH_KEY", "AUTH_PASSWORD", "auth.env"):
+              if token in blob:
+                  raise SystemExit("activation evidence must not contain secrets")
+          open("pra-activation-evidence.json", "w").write(json.dumps(doc, indent=2) + "\n")
+          PY
+      - name: Upload PR A activation evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: pra-activation-evidence
+          path: pra-activation-evidence.json
+          if-no-files-found: error
