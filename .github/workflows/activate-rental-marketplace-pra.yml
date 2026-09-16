@@ -175,7 +175,7 @@ jobs:
           nas = json.load(open("nas-activation-core.json"))
           required = (
               "source_sha", "image_digest", "backup_id", "backup_hash",
-              "src_mount", "src_tree_sha256",
+              "src_mount", "src_tree_sha256", "receipt_path",
               "before_raw_flags", "after_raw_flags", "before_counts", "after_counts",
               "runtime_public_flags", "auto_expire", "catalog_present", "condition_count",
               "health", "landing", "login", "final_digest", "final_oci_revision",
@@ -186,6 +186,10 @@ jobs:
               raise SystemExit("activation NAS evidence is not verified")
           if nas.get("ACTIVATION_OK") is not True or nas.get("rollback_used") is not False:
               raise SystemExit("activation NAS evidence is not verified")
+          if nas.get("durable_receipt") is not True or nas.get("verify_only") not in (True, False):
+              raise SystemExit("activation receipt metadata is incomplete")
+          if "/pra-activation-receipt.json" not in str(nas.get("receipt_path") or ""):
+              raise SystemExit("activation receipt_path is not durable")
           if nas["backup_hash"][:7] != "sha256:" or len(nas["backup_hash"]) != 71:
               raise SystemExit("activation backup_hash is not immutable")
           if nas["final_digest"][:7] != "sha256:" or len(nas["final_digest"]) != 71:
@@ -227,6 +231,9 @@ jobs:
               "src_mount": nas["src_mount"],
               "src_manifest_verified": True,
               "src_tree_sha256": nas["src_tree_sha256"],
+              "receipt_path": nas["receipt_path"],
+              "durable_receipt": True,
+              "verify_only": nas["verify_only"] is True,
               "rollback_used": False,
               "before_raw_flags": nas["before_raw_flags"],
               "after_raw_flags": nas["after_raw_flags"],

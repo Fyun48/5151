@@ -172,7 +172,11 @@ test("PR A activation uses domain getters/savers and forbids raw SQL flag writes
   assert.match(domain, /lifecycle_enabled:\s*true/);
   assert.match(domain, /PRA_DOMAIN_MODE/);
   assert.match(domain, /must be exact 0\/0/);
+  assert.match(domain, /mode === "inspect"/);
   assert.match(domain, /mode === "rollback"/);
+  assert.match(domain, /phase: "after-save"/);
+  assert.match(domain, /rolled-back-in-process/);
+  assert.match(domain, /PRODUCTION_STATE_UNKNOWN/);
   assert.match(domain, /rental_catalog_v2:\s*\{\s*enabled:\s*false\s*\}/);
   assert.match(domain, /lifecycle_enabled:\s*false/);
   assert.match(domain, /owner_matching_enabled/);
@@ -206,6 +210,12 @@ test("PR A activation remote guards running digest, OCI revision, backup hash an
   assert.match(remote, /--from-docker/);
   assert.match(remote, /fail-before-save/);
   assert.match(remote, /compensate_and_fail/);
+  assert.match(remote, /compensate_if_mutated/);
+  assert.match(remote, /verify_runtime_off/);
+  assert.match(remote, /verify-only/);
+  assert.match(remote, /pra-activation-receipt\.json/);
+  assert.match(remote, /rollback runtime catalog is not null|rollback catalog is not null/);
+  assert.match(remote, /rollback auto_expire is not false/);
   assert.match(remote, /rollback_pra_flags/);
   assert.match(remote, /PRA_DOMAIN_MODE/);
   assert.match(remote, /exact 0\/0/);
@@ -216,8 +226,13 @@ test("PR A activation remote guards running digest, OCI revision, backup hash an
   const postIdx = remote.indexOf("=== running server hydrate + post-check");
   assert.ok(postIdx >= 0, "post-check section missing");
   assert.ok(
-    remote.indexOf('compensate_and_fail "post-activation /api/demand failed"', postIdx) > postIdx,
+    remote.indexOf('compensate_and_fail "runtime hydrate/public flag post-check failed"', postIdx) > postIdx,
     "post-check failure must call domain rollback",
+  );
+  assert.ok(
+    remote.indexOf("compensate_if_mutated") >= 0
+      && remote.indexOf("if ! run_domain activate") >= 0,
+    "activate process failure after save must compensate",
   );
   assert.match(remote, /http:\/\/127\.0\.0\.1:5153\/api\/demand/);
   assert.match(remote, /http:\/\/127\.0\.0\.1:5153\/api\/health/);
@@ -240,6 +255,23 @@ test("PR A activation remote guards running digest, OCI revision, backup hash an
   }
   assert.doesNotMatch(remote, /rm\s+-rf\s+"\$BACKUP_ID"/);
   assert.doesNotMatch(remote, /rm\s+-rf\s+\/DATA\/AppData\/591-tracker-v3-backups/);
+});
+
+test("PR A activation compensates post-save failures, re-hydrates runtime off, and uses durable receipt recovery", () => {
+  const domain = readFileSync(DOMAIN, "utf8");
+  const remote = readFileSync(REMOTE, "utf8");
+  assert.match(domain, /writeStatus\(\{ phase: "after-save", mutated: true \}\)/);
+  assert.match(domain, /activate-in-process-rollback/);
+  assert.match(remote, /pra-domain-status\.json/);
+  assert.match(remote, /failed before mutation/);
+  assert.match(remote, /RUNTIME_ROLLBACK_HYDRATE_OK/);
+  assert.match(remote, /GET \/api\/demand to refresh long-lived server/);
+  assert.match(remote, /durable receipt is missing; STOP/);
+  assert.match(remote, /receipt .* does not match; STOP/);
+  assert.match(remote, /verify-only recovery \(no mutation/);
+  assert.match(remote, /\$BACKUP_ID\/\$RECEIPT_NAME|pra-activation-receipt\.json/);
+  assert.doesNotMatch(remote, /\/tmp\/pra-activation-receipt\.json/);
+  assert.match(remote, /if ! run_domain activate; then\n  compensate_if_mutated/);
 });
 
 test("PR A src manifest matches git tree and fails closed when mounted db.js is tampered", () => {

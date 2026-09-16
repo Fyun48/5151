@@ -18,6 +18,7 @@ DOMAIN_SCRIPT="${DOMAIN_SCRIPT:-}"
 EXPECTED_SRC_MANIFEST="${EXPECTED_SRC_MANIFEST:-}"
 SRC_MANIFEST_PY="${SRC_MANIFEST_PY:-}"
 EXPECTED_SRC_MOUNT="${EXPECTED_SRC_MOUNT:-/mnt/Storage1/apps/5151/v3/src}"
+RECEIPT_NAME="pra-activation-receipt.json"
 
 printf '%s' "$SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$' || fail "source_sha is not a 40-character lowercase hex SHA"
 printf '%s' "$IMAGE_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$' || fail "image_digest is not sha256: plus 64 lowercase hex"
@@ -30,6 +31,7 @@ printf '%s' "$BACKUP_HASH" | grep -Eq '^sha256:[0-9a-f]{64}$' || fail "backup_ha
 [ -n "$EXPECTED_SRC_MANIFEST" ] && [ -f "$EXPECTED_SRC_MANIFEST" ] || fail "expected v3/src manifest is missing"
 [ -n "$SRC_MANIFEST_PY" ] && [ -f "$SRC_MANIFEST_PY" ] || fail "src manifest helper is missing"
 [ "$EXPECTED_SRC_MOUNT" = "/mnt/Storage1/apps/5151/v3/src" ] || fail "expected src mount path is not the Production v3 src path"
+RECEIPT_PATH="$BACKUP_ID/$RECEIPT_NAME"
 
 docker inspect "$CONTAINER" >/dev/null 2>&1 || fail "v3 container '$CONTAINER' is missing"
 STATE="$(docker inspect -f '{{.State.Status}}' "$CONTAINER")"
@@ -60,6 +62,11 @@ SRC_MOUNT="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/src"
 [ "$SRC_MOUNT" = "$EXPECTED_SRC_MOUNT" ] || fail "container /app/src mount is '$SRC_MOUNT', expected $EXPECTED_SRC_MOUNT"
 python3 "$SRC_MANIFEST_PY" --from-docker "$CONTAINER" --docker-src /app/src --out /tmp/pra-src-actual.json
 python3 "$SRC_MANIFEST_PY" --compare "$EXPECTED_SRC_MANIFEST" /tmp/pra-src-actual.json || fail "running /app/src does not match source_sha v3/src manifest (fail-before-save)"
+TREE_SHA="$(python3 - <<'PY'
+import json
+print(json.load(open("/tmp/pra-src-actual.json"))["tree_sha256"])
+PY
+)"
 echo "SRC_RUNTIME_MATCH_OK"
 
 [ -f "$BACKUP_ID/v3.db" ] || fail "backup db missing at $BACKUP_ID/v3.db"
@@ -67,34 +74,27 @@ ACTUAL_HASH="$(sha256sum "$BACKUP_ID/v3.db" | awk '{print $1}')"
 EXPECTED_HASH="${BACKUP_HASH#sha256:}"
 [ "$ACTUAL_HASH" = "$EXPECTED_HASH" ] || fail "backup db sha256 does not match input backup_hash"
 
-echo "=== pre-activation running-server snapshot ==="
-curl -fsS -o /tmp/pra-demand-before.json http://127.0.0.1:5153/api/demand || fail "pre-activation /api/demand failed"
-POSTS_BEFORE="$(python3 - <<'PY'
-import json
-doc = json.load(open("/tmp/pra-demand-before.json"))
-print(len(doc.get("posts") or []))
-PY
-)"
-
 run_domain() {
   local mode="$1"
-  docker exec "$CONTAINER" rm -f /tmp/pra-activate-domain.mjs /tmp/pra-domain-result.json
+  docker exec "$CONTAINER" rm -f /tmp/pra-activate-domain.mjs /tmp/pra-domain-result.json /tmp/pra-domain-status.json
   docker cp "$DOMAIN_SCRIPT" "$CONTAINER:/tmp/pra-activate-domain.mjs"
   set +e
   docker exec -w /app -e PRA_DOMAIN_MODE="$mode" "$CONTAINER" node /tmp/pra-activate-domain.mjs >/tmp/pra-activate-domain.out 2>/tmp/pra-activate-domain.err
   local rc=$?
   set -e
+  docker cp "$CONTAINER:/tmp/pra-domain-status.json" /tmp/pra-domain-status.json 2>/dev/null || true
   if [ "$rc" -ne 0 ]; then
     echo "domain $mode stderr (no secrets expected):"
     cat /tmp/pra-activate-domain.err || true
-    docker exec "$CONTAINER" rm -f /tmp/pra-activate-domain.mjs /tmp/pra-domain-result.json || true
+    docker cp "$CONTAINER:/tmp/pra-domain-result.json" /tmp/pra-domain.json 2>/dev/null || true
+    docker exec "$CONTAINER" rm -f /tmp/pra-activate-domain.mjs /tmp/pra-domain-result.json /tmp/pra-domain-status.json || true
     return 1
   fi
   if ! docker cp "$CONTAINER:/tmp/pra-domain-result.json" /tmp/pra-domain.json; then
-    docker exec "$CONTAINER" rm -f /tmp/pra-activate-domain.mjs /tmp/pra-domain-result.json || true
+    docker exec "$CONTAINER" rm -f /tmp/pra-activate-domain.mjs /tmp/pra-domain-result.json /tmp/pra-domain-status.json || true
     return 1
   fi
-  docker exec "$CONTAINER" rm -f /tmp/pra-activate-domain.mjs /tmp/pra-domain-result.json || true
+  docker exec "$CONTAINER" rm -f /tmp/pra-activate-domain.mjs /tmp/pra-domain-result.json /tmp/pra-domain-status.json || true
   return 0
 }
 
@@ -125,17 +125,254 @@ print("DOMAIN_ROLLBACK_OK")
 PY
 }
 
+verify_runtime_off() {
+  echo "=== rollback hydrate: GET /api/demand to refresh long-lived server ==="
+  curl -fsS -o /tmp/pra-demand-rollback.json http://127.0.0.1:5153/api/demand || return 1
+  curl -fsS -o /tmp/pra-health-rollback.json http://127.0.0.1:5153/api/health || return 1
+  python3 - <<'PY'
+import json
+demand = json.load(open("/tmp/pra-demand-rollback.json"))
+health = json.load(open("/tmp/pra-health-rollback.json"))
+flags = demand.get("flags") or {}
+wish = flags.get("wish") or {}
+reserved = (
+    "owner_matching_enabled",
+    "offer_enabled",
+    "public_share_v2_enabled",
+    "owner_notifications_enabled",
+)
+if health.get("ok") is not True:
+    raise SystemExit("rollback health is not ok")
+if (flags.get("rental_catalog_v2") or {}).get("enabled") is not False:
+    raise SystemExit("rollback runtime rental_catalog_v2.enabled is not false")
+if wish.get("lifecycle_enabled") is not False:
+    raise SystemExit("rollback runtime wish.lifecycle_enabled is not false")
+if any(wish.get(key) is not False for key in reserved):
+    raise SystemExit("rollback runtime reserved public flag is not false")
+if demand.get("auto_expire") is not False:
+    raise SystemExit("rollback auto_expire is not false")
+if demand.get("catalog") is not None:
+    raise SystemExit("rollback catalog is not null")
+if len(demand.get("posts") or []) != 0:
+    raise SystemExit("rollback runtime posts are not 0")
+print("RUNTIME_ROLLBACK_HYDRATE_OK")
+PY
+}
+
 compensate_and_fail() {
   local reason="$1"
   echo "PRA_POSTCHECK_FAIL: $reason"
   if ! rollback_pra_flags; then
     fail "post-check failed ($reason) and domain rollback failed (PRODUCTION_STATE_UNKNOWN; no raw SQL repair)"
   fi
-  fail "post-check failed ($reason); PR A flags rolled back via domain API"
+  if ! verify_runtime_off; then
+    fail "domain rollback succeeded but running server hydrate is inconsistent (PRODUCTION_STATE_UNKNOWN)"
+  fi
+  fail "post-check failed ($reason); PR A flags rolled back via domain API and runtime re-hydrated"
 }
 
+compensate_if_mutated() {
+  local reason="$1"
+  local phase="unknown"
+  if [ -f /tmp/pra-domain-status.json ]; then
+    phase="$(python3 - <<'PY'
+import json
+print(json.load(open("/tmp/pra-domain-status.json")).get("phase") or "unknown")
+PY
+)"
+  fi
+  echo "PRA_ACTIVATE_PROCESS_FAIL phase=$phase reason=$reason"
+  if [ "$phase" = "before-save" ]; then
+    fail "domain activate failed before mutation ($reason)"
+  fi
+  compensate_and_fail "$reason"
+}
+
+write_core_and_receipt() {
+  local verify_only="$1"
+  python3 - "$SOURCE_SHA" "$IMAGE_DIGEST" "$BACKUP_ID" "$BACKUP_HASH" "$PIN" "$SOURCE_SHA" "$SRC_MOUNT" "$TREE_SHA" "$RECEIPT_PATH" "$verify_only" <<'PY'
+import json, os, sys
+source_sha, image_digest, backup_id, backup_hash, final_image, final_rev, src_mount, tree_sha, receipt_path, verify_only = sys.argv[1:]
+domain = json.load(open("/tmp/pra-domain.json"))
+runtime = json.load(open("/tmp/pra-runtime.env"))
+if domain.get("mode") not in ("activate", "inspect"):
+    raise SystemExit("core evidence domain mode is not activate/inspect")
+before = domain.get("before_raw_flags") or domain.get("raw_flags")
+after = domain.get("after_raw_flags") or domain.get("raw_flags")
+before_counts = domain.get("before_counts") or domain.get("counts")
+after_counts = domain.get("after_counts") or domain.get("counts")
+if verify_only == "true" and os.path.isfile(receipt_path):
+    prev = json.load(open(receipt_path))
+    before = prev.get("before_raw_flags") or before
+    after = prev.get("after_raw_flags") or after
+    before_counts = prev.get("before_counts") or before_counts
+    after_counts = prev.get("after_counts") or after_counts
+doc = {
+    "schema": "pra-activation-receipt-v1",
+    "source_sha": source_sha,
+    "image_digest": image_digest,
+    "backup_id": backup_id,
+    "backup_hash": backup_hash,
+    "backup_verified": True,
+    "src_mount": src_mount,
+    "src_manifest_verified": True,
+    "src_tree_sha256": tree_sha,
+    "receipt_path": receipt_path,
+    "durable_receipt": True,
+    "verify_only": verify_only == "true",
+    "before_raw_flags": before,
+    "after_raw_flags": after,
+    "before_counts": before_counts,
+    "after_counts": after_counts,
+    "runtime_public_flags": runtime["runtime_public_flags"],
+    "auto_expire": runtime["auto_expire"],
+    "catalog_present": runtime["catalog_present"],
+    "condition_count": runtime["condition_count"],
+    "posts_before": runtime["posts_before"],
+    "posts_after": runtime["posts_after"],
+    "health": True,
+    "landing": True,
+    "login": True,
+    "final_digest": image_digest,
+    "final_image": final_image,
+    "final_oci_revision": final_rev,
+    "rollback_used": False,
+    "ACTIVATION_OK": True,
+}
+blob = json.dumps(doc)
+for token in ("SESSION_SECRET", "NAS_SSH_KEY", "AUTH_PASSWORD", "auth.env"):
+    if token in blob:
+        raise SystemExit("activation receipt must not contain secrets")
+os.makedirs(os.path.dirname(receipt_path), exist_ok=True)
+open(receipt_path, "w").write(json.dumps(doc, indent=2) + "\n")
+open("/tmp/pra-activation-core.json", "w").write(json.dumps(doc, indent=2) + "\n")
+print("DURABLE_RECEIPT_OK")
+print("CORE_EVIDENCE_OK")
+PY
+}
+
+hydrate_runtime_on() {
+  curl -fsS -o /tmp/pra-demand-after.json http://127.0.0.1:5153/api/demand || return 1
+  curl -fsS -o /tmp/pra-health.json http://127.0.0.1:5153/api/health || return 1
+  curl -fsS -o /dev/null http://127.0.0.1:5153/ || return 1
+  curl -fsS -o /dev/null http://127.0.0.1:5153/login.html || return 1
+  python3 - <<'PY'
+import json
+demand = json.load(open("/tmp/pra-demand-after.json"))
+health = json.load(open("/tmp/pra-health.json"))
+flags = demand.get("flags") or {}
+wish = flags.get("wish") or {}
+reserved = (
+    "owner_matching_enabled",
+    "offer_enabled",
+    "public_share_v2_enabled",
+    "owner_notifications_enabled",
+)
+if health.get("ok") is not True:
+    raise SystemExit("health is not ok")
+if (flags.get("rental_catalog_v2") or {}).get("enabled") is not True:
+    raise SystemExit("runtime rental_catalog_v2.enabled is not true")
+if wish.get("lifecycle_enabled") is not True:
+    raise SystemExit("runtime wish.lifecycle_enabled is not true")
+if any(wish.get(key) is not False for key in reserved):
+    raise SystemExit("runtime reserved public flag is not false")
+if demand.get("auto_expire") is not True:
+    raise SystemExit("auto_expire is not true")
+if demand.get("catalog") is None:
+    raise SystemExit("catalog is null")
+conditions = demand.get("conditions") or []
+if not conditions:
+    raise SystemExit("canonical conditions are empty")
+posts = len(demand.get("posts") or [])
+if posts != 0:
+    raise SystemExit("runtime posts are not 0")
+open("/tmp/pra-runtime.env", "w").write(
+    json.dumps({
+        "runtime_public_flags": flags,
+        "auto_expire": True,
+        "catalog_present": True,
+        "condition_count": len(conditions),
+        "posts_before": 0,
+        "posts_after": posts,
+        "health": True,
+        "landing": True,
+        "login": True,
+    })
+    + "\n"
+)
+print("RUNTIME_HYDRATE_OK")
+PY
+}
+
+echo "=== inspect current raw flags (no mutation) ==="
+run_domain inspect || fail "domain inspect failed before mutation"
+PATH_KIND="$(python3 - "$RECEIPT_PATH" "$SOURCE_SHA" "$IMAGE_DIGEST" "$BACKUP_ID" "$BACKUP_HASH" "$TREE_SHA" <<'PY'
+import json, os, sys
+receipt_path, source_sha, image_digest, backup_id, backup_hash, tree_sha = sys.argv[1:]
+doc = json.load(open("/tmp/pra-domain.json"))
+flags = doc["raw_flags"]
+counts = doc["counts"]
+reserved = (
+    "owner_matching_enabled",
+    "offer_enabled",
+    "public_share_v2_enabled",
+    "owner_notifications_enabled",
+)
+if doc.get("mode") != "inspect":
+    raise SystemExit("inspect result mode is not inspect")
+if any(flags["wish"].get(key) is not False for key in reserved):
+    raise SystemExit("reserved flag is already true; STOP")
+catalog = flags["rental_catalog_v2"]["enabled"]
+life = flags["wish"]["lifecycle_enabled"]
+if catalog is False and life is False:
+    if counts != {"total_posts": 0, "total_open": 0}:
+        raise SystemExit("demand_posts total/open are not exact 0/0; stop and redo backup/review")
+    print("activate")
+    raise SystemExit
+if catalog is True and life is True:
+    if not os.path.isfile(receipt_path):
+        raise SystemExit("flags already true but durable receipt is missing; STOP")
+    receipt = json.load(open(receipt_path))
+    identity = {
+        "source_sha": source_sha,
+        "image_digest": image_digest,
+        "backup_id": backup_id,
+        "backup_hash": backup_hash,
+        "src_tree_sha256": tree_sha,
+    }
+    for key, value in identity.items():
+        if receipt.get(key) != value:
+            raise SystemExit(f"flags already true but receipt {key} does not match; STOP")
+    if receipt.get("ACTIVATION_OK") is not True:
+        raise SystemExit("flags already true but receipt is not ACTIVATION_OK; STOP")
+    print("verify-only")
+    raise SystemExit
+raise SystemExit("raw flags are inconsistent with a completed PR A activation; STOP")
+PY
+)"
+
+echo "=== pre-activation running-server snapshot ==="
+curl -fsS -o /tmp/pra-demand-before.json http://127.0.0.1:5153/api/demand || fail "pre-activation /api/demand failed"
+
+if [ "$PATH_KIND" = "verify-only" ]; then
+  echo "=== verify-only recovery (no mutation; durable receipt identity matched) ==="
+  hydrate_runtime_on || fail "verify-only runtime checks failed; STOP without mutation"
+  AFTER_IMAGE="$(docker inspect -f '{{.Config.Image}}' "$CONTAINER")"
+  AFTER_ID="$(docker inspect -f '{{.Image}}' "$CONTAINER")"
+  AFTER_REV="$(docker image inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$AFTER_ID")"
+  [ "$AFTER_IMAGE" = "$PIN" ] || fail "verify-only running image digest changed"
+  [ "$AFTER_REV" = "$SOURCE_SHA" ] || fail "verify-only OCI revision changed"
+  write_core_and_receipt true || fail "verify-only durable receipt refresh failed"
+  echo "PRA_ACTIVATION_OK verify-only source=$SOURCE_SHA digest=$IMAGE_DIGEST receipt=$RECEIPT_PATH"
+  exit 0
+fi
+
+[ "$PATH_KIND" = "activate" ] || fail "unsupported activation path $PATH_KIND"
+
 echo "=== domain activation (single node process, no raw SQL flag write) ==="
-run_domain activate || fail "domain get/saveRentalMarketplaceFlags process failed (fail-closed; no raw SQL repair)"
+if ! run_domain activate; then
+  compensate_if_mutated "domain get/saveRentalMarketplaceFlags process failed"
+fi
 python3 - <<'PY'
 import json
 doc = json.load(open("/tmp/pra-domain.json"))
@@ -169,63 +406,7 @@ print("DOMAIN_ACTIVATION_OK")
 PY
 
 echo "=== running server hydrate + post-check (no restart) ==="
-curl -fsS -o /tmp/pra-demand-after.json http://127.0.0.1:5153/api/demand || compensate_and_fail "post-activation /api/demand failed"
-curl -fsS -o /tmp/pra-health.json http://127.0.0.1:5153/api/health || compensate_and_fail "post-activation /api/health failed"
-curl -fsS -o /dev/null http://127.0.0.1:5153/ || compensate_and_fail "post-activation landing failed"
-curl -fsS -o /dev/null http://127.0.0.1:5153/login.html || compensate_and_fail "post-activation login failed"
-
-if ! python3 - "$POSTS_BEFORE" <<'PY'
-import json, sys
-before_posts = int(sys.argv[1])
-demand = json.load(open("/tmp/pra-demand-after.json"))
-health = json.load(open("/tmp/pra-health.json"))
-flags = demand.get("flags") or {}
-wish = flags.get("wish") or {}
-reserved = (
-    "owner_matching_enabled",
-    "offer_enabled",
-    "public_share_v2_enabled",
-    "owner_notifications_enabled",
-)
-if health.get("ok") is not True:
-    raise SystemExit("health is not ok")
-if (flags.get("rental_catalog_v2") or {}).get("enabled") is not True:
-    raise SystemExit("runtime rental_catalog_v2.enabled is not true")
-if wish.get("lifecycle_enabled") is not True:
-    raise SystemExit("runtime wish.lifecycle_enabled is not true")
-if any(wish.get(key) is not False for key in reserved):
-    raise SystemExit("runtime reserved public flag is not false")
-if demand.get("auto_expire") is not True:
-    raise SystemExit("auto_expire is not true")
-if demand.get("catalog") is None:
-    raise SystemExit("catalog is null")
-conditions = demand.get("conditions") or []
-if not conditions:
-    raise SystemExit("canonical conditions are empty")
-posts = len(demand.get("posts") or [])
-if posts != before_posts:
-    raise SystemExit(f"runtime posts changed: before={before_posts} after={posts}")
-if before_posts != 0 or posts != 0:
-    raise SystemExit("runtime posts are not 0 after 0/0 activation")
-open("/tmp/pra-runtime.env", "w").write(
-    json.dumps({
-        "runtime_public_flags": flags,
-        "auto_expire": True,
-        "catalog_present": True,
-        "condition_count": len(conditions),
-        "posts_before": before_posts,
-        "posts_after": posts,
-        "health": True,
-        "landing": True,
-        "login": True,
-    })
-    + "\n"
-)
-print("RUNTIME_HYDRATE_OK")
-PY
-then
-  compensate_and_fail "runtime hydrate/public flag post-check failed"
-fi
+hydrate_runtime_on || compensate_and_fail "runtime hydrate/public flag post-check failed"
 
 AFTER_IMAGE="$(docker inspect -f '{{.Config.Image}}' "$CONTAINER")"
 AFTER_ID="$(docker inspect -f '{{.Image}}' "$CONTAINER")"
@@ -235,47 +416,6 @@ AFTER_REV="$(docker image inspect -f '{{ index .Config.Labels "org.opencontainer
 AFTER_MOUNT="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/src"}}{{.Source}}{{end}}{{end}}' "$CONTAINER")"
 [ "$AFTER_MOUNT" = "$EXPECTED_SRC_MOUNT" ] || compensate_and_fail "container /app/src mount changed after activation"
 
-TREE_SHA="$(python3 - <<'PY'
-import json
-print(json.load(open("/tmp/pra-src-actual.json"))["tree_sha256"])
-PY
-)"
+write_core_and_receipt false || compensate_and_fail "durable receipt write failed after mutation"
 
-python3 - "$SOURCE_SHA" "$IMAGE_DIGEST" "$BACKUP_ID" "$BACKUP_HASH" "$AFTER_IMAGE" "$AFTER_REV" "$SRC_MOUNT" "$TREE_SHA" <<'PY'
-import json, sys
-source_sha, image_digest, backup_id, backup_hash, final_image, final_rev, src_mount, tree_sha = sys.argv[1:]
-domain = json.load(open("/tmp/pra-domain.json"))
-runtime = json.load(open("/tmp/pra-runtime.env"))
-doc = {
-    "source_sha": source_sha,
-    "image_digest": image_digest,
-    "backup_id": backup_id,
-    "backup_hash": backup_hash,
-    "backup_verified": True,
-    "src_mount": src_mount,
-    "src_manifest_verified": True,
-    "src_tree_sha256": tree_sha,
-    "before_raw_flags": domain["before_raw_flags"],
-    "after_raw_flags": domain["after_raw_flags"],
-    "before_counts": domain["before_counts"],
-    "after_counts": domain["after_counts"],
-    "runtime_public_flags": runtime["runtime_public_flags"],
-    "auto_expire": runtime["auto_expire"],
-    "catalog_present": runtime["catalog_present"],
-    "condition_count": runtime["condition_count"],
-    "posts_before": runtime["posts_before"],
-    "posts_after": runtime["posts_after"],
-    "health": True,
-    "landing": True,
-    "login": True,
-    "final_digest": image_digest,
-    "final_image": final_image,
-    "final_oci_revision": final_rev,
-    "rollback_used": False,
-    "ACTIVATION_OK": True,
-}
-open("/tmp/pra-activation-core.json", "w").write(json.dumps(doc, indent=2) + "\n")
-print("CORE_EVIDENCE_OK")
-PY
-
-echo "PRA_ACTIVATION_OK source=$SOURCE_SHA digest=$IMAGE_DIGEST"
+echo "PRA_ACTIVATION_OK source=$SOURCE_SHA digest=$IMAGE_DIGEST receipt=$RECEIPT_PATH"
