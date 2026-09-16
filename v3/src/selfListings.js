@@ -15,6 +15,30 @@ import {
 } from "./selfTraits.js";
 import { ensureProfileSchema } from "./profile.js";
 import { listingBodyPlain, sanitizeListingBodyHtml } from "./listingBody.js";
+import { catalogAsSelfTraitGroups } from "./rentalCatalog.js";
+import { isRentalCatalogV2Enabled } from "./rentalMarketplaceFlags.js";
+
+let listingCatalog = null;
+let listingFlags = {};
+
+export function setSelfListingCatalog(catalog, flags) {
+  listingCatalog = catalog || null;
+  if (flags) listingFlags = flags;
+}
+
+function catalogTraitExtras() {
+  if (!listingCatalog || !isRentalCatalogV2Enabled(listingFlags)) return { ids: [], labels: {} };
+  const ids = [];
+  const labels = {};
+  for (const group of catalogAsSelfTraitGroups(listingCatalog)) {
+    for (const item of group.items) {
+      ids.push(item.id);
+      labels[item.id] = item.label;
+      if (item.canonical_id) ids.push(item.canonical_id);
+    }
+  }
+  return { ids, labels };
+}
 
 export const SELF_POST_ID_BASE = 2_100_000_000;
 export const SELF_POST_ID_END = 2_200_000_000;
@@ -73,14 +97,14 @@ export function selfSourceLabel(source) {
   return id;
 }
 
-export function selfListingMeta() {
+export function selfListingMeta(options = {}) {
   return {
     legal: `${SELF_LEGAL} ${SELF_AUDIT}`,
     max_open: SELF_MAX_OPEN,
     ttl_days: SELF_TTL_DAYS,
     kinds: SELF_KINDS,
     roles: SELF_ROLES,
-    traits: SELF_TRAIT_GROUPS,
+    traits: options.catalog ? catalogAsSelfTraitGroups(options.catalog) : SELF_TRAIT_GROUPS,
     deposits: SELF_DEPOSIT_OPTIONS,
     templates: SELF_BODY_TEMPLATES,
     body_max: SELF_BODY_MAX,
@@ -403,14 +427,14 @@ export function decorateSelfListing(row, { viewerId = 0 } = {}) {
     body: sanitizeListingBodyHtml(String(row.self_body || ""), SELF_BODY_MAX),
     traits: (() => {
       try {
-        return normalizeSelfTraits(JSON.parse(row.self_traits || "[]"));
+        return normalizeSelfTraits(JSON.parse(row.self_traits || "[]"), catalogTraitExtras().ids);
       } catch {
         return [];
       }
     })(),
     trait_labels: (() => {
       try {
-        return selfTraitLabels(JSON.parse(row.self_traits || "[]"));
+        return selfTraitLabels(JSON.parse(row.self_traits || "[]"), catalogTraitExtras().labels);
       } catch {
         return [];
       }
@@ -532,7 +556,8 @@ export function createSelfListing(db, userId, input = {}, now = new Date(), { ma
   const phone = digitsPhone(input.phone || input.mobile);
   const lineUrl = normalizeLineUrl(input.line_url);
   if (phone && phone.replace(/\D/g, "").length < 8) throw httpError("電話號碼太短");
-  const traitIds = normalizeSelfTraitsInput(input.traits);
+  const extra = catalogTraitExtras();
+  const traitIds = normalizeSelfTraitsInput(input.traits, extra.ids);
   const deposit = normalizeDeposit(input.deposit);
 
   const photos = normalizePhotoList(input.photos || input.photo_urls);
@@ -580,7 +605,7 @@ export function createSelfListing(db, userId, input = {}, now = new Date(), { ma
     kindName,
     roleName,
     storedPhotos[0] || cover,
-    JSON.stringify(["吉比本站", ...selfTraitLabels(traitIds), depositLabel(deposit)].filter(Boolean)),
+    JSON.stringify(["吉比本站", ...selfTraitLabels(traitIds, extra.labels), depositLabel(deposit)].filter(Boolean)),
     created,
     created,
   );
@@ -709,7 +734,7 @@ export function insertSelfDraftListing(db, userId, fields = {}, now = new Date()
   const floorName = String(fields.floor_name || "").trim().slice(0, 20);
   const kindName = String(fields.kind_name || "").trim().slice(0, 20);
   const roleName = String(fields.role_name || "").trim().slice(0, 20);
-  const traits = normalizeSelfTraits(fields.traits);
+  const traits = normalizeSelfTraits(fields.traits, catalogTraitExtras().ids);
   const deposit = normalizeDeposit(fields.deposit);
   const contactName = String(fields.contact_name || "").trim().slice(0, SELF_CONTACT_MAX);
   const phone = digitsPhone(fields.phone || fields.mobile);
@@ -818,7 +843,7 @@ export function listingFormFields(row) {
     traits: Array.isArray(decorated?.traits)
       ? decorated.traits
       : (() => {
-        try { return normalizeSelfTraits(JSON.parse(row.self_traits || "[]")); } catch { return []; }
+        try { return normalizeSelfTraits(JSON.parse(row.self_traits || "[]"), catalogTraitExtras().ids); } catch { return []; }
       })(),
     contact_name: String(decorated?.contact_name || row.contact_name || ""),
     phone: String(decorated?.phone || row.phone || row.mobile || ""),
@@ -896,7 +921,8 @@ export function publishImportedDraftListing(db, userId, postId, input = {}, now 
   const phone = digitsPhone(input.phone || input.mobile);
   const lineUrl = normalizeLineUrl(input.line_url);
   if (phone && phone.replace(/\D/g, "").length < 8) throw httpError("電話號碼太短");
-  const traitIds = normalizeSelfTraitsInput(input.traits);
+  const extra = catalogTraitExtras();
+  const traitIds = normalizeSelfTraitsInput(input.traits, extra.ids);
   const deposit = normalizeDeposit(input.deposit);
   const photos = normalizePhotoList(input.photos != null ? input.photos : listingPhotoUrls(row));
   const kindName = kindLabel(kind);
@@ -937,7 +963,7 @@ export function publishImportedDraftListing(db, userId, postId, input = {}, now 
     kindName,
     roleName,
     photos[0] || "",
-    JSON.stringify(["吉比本站", ...selfTraitLabels(traitIds), depositLabel(deposit)].filter(Boolean)),
+    JSON.stringify(["吉比本站", ...selfTraitLabels(traitIds, extra.labels), depositLabel(deposit)].filter(Boolean)),
     expires,
     body,
     JSON.stringify(photos.slice(0, SELF_PHOTO_MAX_COUNT)),

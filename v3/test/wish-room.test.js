@@ -253,7 +253,8 @@ test("budget validates min <= max and public payload stays private", () => {
   assert.doesNotMatch(post.body, /<script>/);
   assert.match(post.body, /士林兩房/);
   const pub = listDemandPosts(db)[0];
-  assert.equal(pub.author, "阿花");
+  assert.equal("author" in pub, false);
+  assert.equal(pub.headline, "租屋需求");
   assert.equal("user_id" in pub, false);
   assert.equal("email" in pub, false);
   assert.equal("contact_profile_id" in pub, false);
@@ -307,7 +308,8 @@ test("contact snapshot publishes; later profile edit does not mutate Wish Room",
   assert.equal(post.contact.contact_name, "林先生");
   assert.equal(post.contact.phone, "0911111111");
   const pub = listDemandPosts(db)[0];
-  assert.equal(pub.contact.phone, "0911111111");
+  assert.equal(pub.contact, undefined);
+  assert.equal("contact" in pub, false);
   assert.equal("contact_profile_id" in pub, false);
   db.prepare("UPDATE listing_contact_profile SET phone='0988888888' WHERE id=?").run(profile.id);
   const still = getDemandPost(db, post.id, { viewerId: 1 });

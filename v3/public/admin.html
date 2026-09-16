@@ -64,6 +64,13 @@
     }
     h2 { margin: 0 0 8px; font-size: 18px; }
     .hint { font-size: 13px; color: var(--muted); line-height: 1.55; margin: 0 0 14px; }
+    .catalog-layout { display: grid; grid-template-columns: 220px 1fr; gap: 16px; }
+    @media (max-width: 768px) { .catalog-layout { grid-template-columns: 1fr; } }
+    .catalog-list { display: grid; gap: 6px; margin-top: 8px; }
+    .catalog-item, .catalog-drawer { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--paper); }
+    .catalog-item { min-height: 44px; text-align: left; cursor: pointer; }
+    .catalog-item.on { background: var(--accent-mist); }
+    .catalog-drawer { margin-top: 12px; }
     label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 6px; }
     input, select, textarea {
       width: 100%;
@@ -957,10 +964,10 @@
       <p class="msg" id="housingMsg"></p>
     </section>
       </div>
-      <div id="content-wish" class="admin-panel" data-admin-page="content/wish">
+      <div id="content-wish" class="admin-panel" data-admin-page="rental/wish">
 <section class="card" id="wishConditionsCard">
       <h2>許願房條件選單</h2>
-      <p class="hint">前台許願房「必須有／希望有／不接受」共用這份選單。可新增、改名稱、關閉或刪除。關閉後新刊登選不到，已刊登仍保留原文字。請不要用性別、國籍等歧視條件。</p>
+      <p class="hint">相容選單：旗標關閉時前台仍用必須有／希望有／不接受。正式共用目錄在「共用條件目錄」。請不要用性別、國籍等歧視條件。</p>
       <div id="wishCondRows"></div>
       <div class="row" style="margin-top:10px">
         <button type="button" class="ghost" id="wishCondAdd">新增一則</button>
@@ -969,6 +976,86 @@
       </div>
       <p class="msg" id="wishCondMsg"></p>
     </section>
+      </div>
+      <div id="rental-catalog" class="admin-panel" data-admin-page="rental/catalog">
+        <section class="card" id="rentalCatalogCard">
+          <h2>共用條件目錄</h2>
+          <p class="hint">分類在左、條件在右。一般只改顯示名稱與開關；System ID 收在進階。套用範本或編輯會先成草稿，確認後才發布到前台。</p>
+          <div class="catalog-layout">
+            <div>
+              <div class="row" style="justify-content:space-between">
+                <strong>分類</strong>
+                <button type="button" class="ghost" id="catalogAddCat">新增分類</button>
+              </div>
+              <div id="catalogCats" class="catalog-list"></div>
+            </div>
+            <div>
+              <div class="row" style="justify-content:space-between">
+                <strong id="catalogCondTitle">條件</strong>
+                <button type="button" class="ghost" id="catalogAddCond">新增條件</button>
+              </div>
+              <div id="catalogConds" class="catalog-list"></div>
+            </div>
+          </div>
+          <div id="catalogDrawer" class="catalog-drawer" hidden>
+            <h3 id="catalogDrawerTitle">編輯條件</h3>
+            <input type="hidden" id="catalogEditId" />
+            <label for="catalogEditLabel">條件名稱</label>
+            <input id="catalogEditLabel" maxlength="40" />
+            <label for="catalogEditCategory">分類</label>
+            <select id="catalogEditCategory"></select>
+            <label class="checks"><input type="checkbox" id="catalogEditListing" /> 有房刊登使用</label>
+            <label class="checks"><input type="checkbox" id="catalogEditWish" /> 許願房使用</label>
+            <label class="checks"><input type="checkbox" id="catalogEditMatch" /> 參與配對（供後續 PR B）</label>
+            <label class="checks"><input type="checkbox" id="catalogEditWant" /> 許願房可以選「要有」</label>
+            <label class="checks"><input type="checkbox" id="catalogEditAvoid" /> 許願房可以選「不要」</label>
+            <label class="checks"><input type="checkbox" id="catalogEditEnabled" /> 啟用</label>
+            <label for="catalogEditAliases">別名（逗號分隔）</label>
+            <input id="catalogEditAliases" maxlength="120" placeholder="例如 電冰箱、冷藏冰箱" />
+            <details>
+              <summary>進階技術資訊</summary>
+              <p class="hint" id="catalogEditTech">System ID 建立後不能改。</p>
+            </details>
+            <div class="row">
+              <button type="button" class="primary" id="catalogDrawerSave">寫入草稿</button>
+              <button type="button" class="ghost" id="catalogDrawerClose">關閉</button>
+            </div>
+          </div>
+          <p class="hint" id="catalogDiff" hidden></p>
+          <div class="row" style="margin-top:10px">
+            <button type="button" class="ghost" id="catalogReset">還原預設到草稿</button>
+            <button type="button" class="primary" id="catalogPublishDraft">確認並發布</button>
+          </div>
+          <p class="msg" id="catalogMsg"></p>
+        </section>
+      </div>
+      <div id="rental-listing" class="admin-panel" data-admin-page="rental/listing">
+        <section class="card">
+          <h2>有房刊登設定</h2>
+          <p class="hint">刊登表單仍讀共用目錄裡「有房刊登使用」的條件。房屋標題、地址、聯絡方式不進目錄。改開關請到共用條件目錄。</p>
+          <p class="hint">配對語意：可開伙／可養寵物／可報稅在刊登端可以是允許、不允許或未指定；與許願房「要有」不同，正式比對在後續 PR B。</p>
+          <div id="listingCatalogPreview" class="catalog-list"></div>
+        </section>
+      </div>
+      <div id="rental-rules" class="admin-panel" data-admin-page="rental/rules">
+        <section class="card">
+          <h2>配對規則</h2>
+          <p class="hint">正式 Match Engine 尚未開放。這個頁面只是預留位置，不會影響找房排序或同房源判定。</p>
+          <p><button type="button" class="ghost" disabled>即將推出</button></p>
+        </section>
+      </div>
+      <div id="rental-templates" class="admin-panel" data-admin-page="rental/templates">
+        <section class="card">
+          <h2>條件範本</h2>
+          <p class="hint">套用後先進入草稿，顯示新增／修改／停用數量，確認後才會改前台目錄。</p>
+          <label for="catalogTemplatePick">範本</label>
+          <select id="catalogTemplatePick"></select>
+          <div class="row" style="margin-top:10px">
+            <button type="button" class="primary" id="catalogApplyTemplate">套用為草稿</button>
+            <button type="button" class="ghost" id="catalogSaveTemplate">另存目前草稿為範本</button>
+          </div>
+          <p class="msg" id="catalogTplMsg"></p>
+        </section>
       </div>
       <div id="qa" class="admin-panel" data-admin-page="content/qa">
 <section class="card">
@@ -2009,6 +2096,79 @@
       if (!res.ok) throw new Error(data.error || "載入許願房條件失敗");
       renderWishCondEditor(data.items || []);
       setMsg("wishCondMsg", `共 ${(data.items || []).length} 則`, true);
+    }
+
+    const esc = escapeHtml;
+    let catalogState = { published: { categories: [], conditions: [] }, draft: null, templates: [] };
+    let catalogCatId = "";
+    function catalogWorking() {
+      return catalogState.draft || catalogState.published;
+    }
+    function renderCatalogAdmin() {
+      const catalog = catalogWorking();
+      const cats = catalog.categories || [];
+      if (!catalogCatId || !cats.some((row) => row.id === catalogCatId)) catalogCatId = cats[0]?.id || "";
+      const catHost = $("catalogCats");
+      if (catHost) {
+        catHost.innerHTML = cats.map((row) => (
+          `<button type="button" class="catalog-item${row.id === catalogCatId ? " on" : ""}" data-cat="${esc(row.id)}">${esc(row.label)}${row.enabled === false ? "（停用）" : ""}</button>`
+        )).join("");
+      }
+      const conds = (catalog.conditions || []).filter((row) => row.category_id === catalogCatId);
+      const condHost = $("catalogConds");
+      if (condHost) {
+        condHost.innerHTML = conds.map((row) => (
+          `<button type="button" class="catalog-item" data-cond="${esc(row.id)}">${esc(row.label)}${row.enabled === false ? "（停用）" : ""}</button>`
+        )).join("") || `<p class="hint">這個分類還沒有條件。</p>`;
+      }
+      const pick = $("catalogTemplatePick");
+      if (pick) {
+        pick.innerHTML = (catalogState.templates || []).map((row) => `<option value="${esc(row.id)}">${esc(row.label)}</option>`).join("");
+      }
+      const diffEl = $("catalogDiff");
+      if (diffEl) {
+        if (catalogState.draft) {
+          const d = catalogState.diff || {};
+          diffEl.hidden = false;
+          diffEl.textContent = `這是草稿，尚未改前台。新增 ${d.added ?? "—"}、修改 ${d.changed ?? "—"}、停用 ${d.disabled ?? "—"}。確認後才發布。`;
+        } else {
+          diffEl.hidden = true;
+          diffEl.textContent = "";
+        }
+      }
+      const listingHost = $("listingCatalogPreview");
+      if (listingHost) {
+        const listingRows = (catalog.conditions || []).filter((row) => row.enabled !== false && row.listing_enabled !== false);
+        listingHost.innerHTML = listingRows.length
+          ? listingRows.map((row) => `<div class="catalog-item">${esc(row.label)}</div>`).join("")
+          : `<p class="hint">目前沒有啟用的刊登條件。</p>`;
+      }
+    }
+    function openCatalogDrawer(row) {
+      const catalog = catalogWorking();
+      $("catalogEditId").value = row?.id || "";
+      $("catalogEditLabel").value = row?.label || "";
+      $("catalogEditCategory").innerHTML = (catalog.categories || []).map((cat) => (
+        `<option value="${esc(cat.id)}"${cat.id === (row?.category_id || catalogCatId) ? " selected" : ""}>${esc(cat.label)}</option>`
+      )).join("");
+      $("catalogEditListing").checked = row?.listing_enabled !== false;
+      $("catalogEditWish").checked = row?.wish_enabled !== false;
+      $("catalogEditMatch").checked = row?.matching_enabled !== false;
+      $("catalogEditWant").checked = row?.wish_allow_want !== false;
+      $("catalogEditAvoid").checked = row?.wish_allow_avoid !== false;
+      $("catalogEditEnabled").checked = row?.enabled !== false;
+      if ($("catalogEditAliases")) $("catalogEditAliases").value = (row?.aliases || []).join("、");
+      $("catalogEditTech").textContent = row?.id ? `System ID：${row.id}（建立後不能改）` : "儲存後系統會產生固定 ID。";
+      $("catalogEditLabel")?.focus();
+      $("catalogDrawerTitle").textContent = row?.id ? "編輯條件" : "新增條件";
+      $("catalogDrawer").hidden = false;
+    }
+    async function loadRentalCatalog() {
+      const res = await fetch("/api/admin/rental-catalog", { cache: "no-store" });
+      const data = await readApi(res);
+      if (!res.ok) throw new Error(data.error || "載入條件目錄失敗");
+      catalogState = data;
+      renderCatalogAdmin();
     }
 
     function fillBrand(data) {
@@ -3464,7 +3624,7 @@
       if (me.role !== "admin") { location.replace("/"); return; }
       meEmail = me.email || "";
       $("who").textContent = meEmail;
-      await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadAnnouncements(), loadCommsAdmin(), loadMaps(), loadHelpQa(), loadWishConditions(), loadLegalCopy(), loadContentCms(), loadListingImports(), loadSpirit(), loadHousing(), loadCrawlSources(), loadSystemCrawl(), loadBrand(), loadFeedback(), typeof loadSupportAdmin === "function" ? loadSupportAdmin() : Promise.resolve()]);
+      await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadAnnouncements(), loadCommsAdmin(), loadMaps(), loadHelpQa(), loadWishConditions(), loadRentalCatalog(), loadLegalCopy(), loadContentCms(), loadListingImports(), loadSpirit(), loadHousing(), loadCrawlSources(), loadSystemCrawl(), loadBrand(), loadFeedback(), typeof loadSupportAdmin === "function" ? loadSupportAdmin() : Promise.resolve()]);
       adminFormsReady = true;
       IA.finishPageLoad(IA.currentPageId());
       $("brandForm").onsubmit = async (ev) => {
@@ -3587,6 +3747,95 @@
           $("wishCondReset").disabled = false;
         }
       };
+      $("catalogCats")?.addEventListener("click", (ev) => {
+        const id = ev.target.closest("[data-cat]")?.dataset.cat;
+        if (!id) return;
+        catalogCatId = id;
+        renderCatalogAdmin();
+      });
+      $("catalogConds")?.addEventListener("click", (ev) => {
+        const id = ev.target.closest("[data-cond]")?.dataset.cond;
+        if (!id) return;
+        const row = (catalogWorking().conditions || []).find((item) => item.id === id);
+        openCatalogDrawer(row);
+      });
+      $("catalogAddCond")?.addEventListener("click", () => openCatalogDrawer({ category_id: catalogCatId }));
+      $("catalogDrawerClose")?.addEventListener("click", () => { $("catalogDrawer").hidden = true; });
+      document.addEventListener("keydown", (ev) => {
+        if (ev.key === "Escape" && $("catalogDrawer") && !$("catalogDrawer").hidden) $("catalogDrawer").hidden = true;
+      });
+      $("catalogAddCat")?.addEventListener("click", async () => {
+        const label = prompt("分類名稱");
+        if (!label) return;
+        const res = await fetch("/api/admin/rental-catalog/mutate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "upsert_category", label }) });
+        const data = await readApi(res);
+        if (!res.ok) { setMsg("catalogMsg", data.error || "新增失敗"); return; }
+        catalogState.draft = data.catalog;
+        catalogState.diff = data.diff;
+        renderCatalogAdmin();
+        setMsg("catalogMsg", "已寫入草稿", true);
+      });
+      $("catalogDrawerSave")?.addEventListener("click", async () => {
+        const payload = {
+          action: "upsert_condition",
+          id: $("catalogEditId").value || undefined,
+          label: $("catalogEditLabel").value,
+          category_id: $("catalogEditCategory").value,
+          listing_enabled: $("catalogEditListing").checked,
+          wish_enabled: $("catalogEditWish").checked,
+          matching_enabled: $("catalogEditMatch").checked,
+          wish_allow_want: $("catalogEditWant").checked,
+          wish_allow_avoid: $("catalogEditAvoid").checked,
+          enabled: $("catalogEditEnabled").checked,
+          aliases: ($("catalogEditAliases")?.value || "").split(/[,，、]/).map((item) => item.trim()).filter(Boolean),
+        };
+        const res = await fetch("/api/admin/rental-catalog/mutate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+        const data = await readApi(res);
+        if (!res.ok) { setMsg("catalogMsg", data.error || "寫入失敗"); return; }
+        catalogState.draft = data.catalog;
+        catalogState.diff = data.diff;
+        $("catalogDrawer").hidden = true;
+        renderCatalogAdmin();
+        if (data.diff) setMsg("catalogMsg", `草稿：新增 ${data.diff.added}、修改 ${data.diff.changed}、停用 ${data.diff.disabled}`, true);
+      });
+      $("catalogPublishDraft")?.addEventListener("click", async () => {
+        if (!confirm("確認發布目錄草稿？前台會改成這份條件。")) return;
+        const res = await fetch("/api/admin/rental-catalog/draft/publish", { method: "POST" });
+        const data = await readApi(res);
+        if (!res.ok) { setMsg("catalogMsg", data.error || "發布失敗"); return; }
+        await loadRentalCatalog();
+        setMsg("catalogMsg", "目錄已發布", true);
+      });
+      $("catalogReset")?.addEventListener("click", async () => {
+        if (!confirm("把預設目錄寫成草稿？不會立刻改前台。")) return;
+        const res = await fetch("/api/admin/rental-catalog", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reset: true }) });
+        const data = await readApi(res);
+        if (!res.ok) { setMsg("catalogMsg", data.error || "還原失敗"); return; }
+        await loadRentalCatalog();
+        catalogState.draft = data.draft || data.catalog || catalogState.draft;
+        renderCatalogAdmin();
+        setMsg("catalogMsg", "已把預設目錄寫入草稿，確認後才會發布", true);
+      });
+      $("catalogApplyTemplate")?.addEventListener("click", async () => {
+        const id = $("catalogTemplatePick")?.value;
+        if (!id) return;
+        const res = await fetch(`/api/admin/rental-catalog/templates/${encodeURIComponent(id)}/apply`, { method: "POST" });
+        const data = await readApi(res);
+        if (!res.ok) { setMsg("catalogTplMsg", data.error || "套用失敗"); return; }
+        catalogState.draft = data.draft;
+        catalogState.diff = data.diff;
+        renderCatalogAdmin();
+        setMsg("catalogTplMsg", `已套用為草稿：新增 ${data.diff.added}、修改 ${data.diff.changed}、停用 ${data.diff.disabled}`, true);
+      });
+      $("catalogSaveTemplate")?.addEventListener("click", async () => {
+        const label = prompt("範本名稱", "自訂正式版");
+        if (!label) return;
+        const res = await fetch("/api/admin/rental-catalog/templates", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ label, catalog: catalogWorking() }) });
+        const data = await readApi(res);
+        if (!res.ok) { setMsg("catalogTplMsg", data.error || "儲存失敗"); return; }
+        await loadRentalCatalog();
+        setMsg("catalogTplMsg", "已另存範本", true);
+      });
       $("helpQaReset").onclick = async () => {
         if (!confirm("還原成系統預設的功能說明？你改過的題目會被蓋掉。")) return;
         $("helpQaReset").disabled = true;

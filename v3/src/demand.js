@@ -8,6 +8,27 @@ import {
   allWishConditions,
   conditionMap,
 } from "./wishConditions.js";
+import {
+  isRentalCatalogV2Enabled,
+  isWishLifecycleEnabled,
+  normalizeRentalMarketplaceFlags,
+  publicRentalMarketplaceFlags,
+} from "./rentalMarketplaceFlags.js";
+import { catalogAsWishConditions, sanitizeWishChoices, wishChoicesFromLegacy, legacyGroupsFromChoices } from "./rentalCatalog.js";
+import {
+  activityBucket,
+  activityBucketLabel,
+  activityScoreFromSignals,
+  createPublicToken,
+  daysBetween,
+  mapLegacyLifecycle,
+  publicInactiveWishView,
+  remainingTtlDays,
+  transitionLifecycle,
+  ttlExpiresAt,
+  WISH_CONFIRM_GRACE_DAYS,
+  WISH_CONTINUOUS_ACTIVE_DAYS,
+} from "./wishLifecycle.js";
 
 export const DEMAND_MAX_OPEN = 1;
 export const DEMAND_TTL_DAYS = 14;
@@ -53,6 +74,23 @@ export const WISH_LEASE_DURATIONS = [
 
 export const WISH_CONDITIONS = DEFAULT_WISH_CONDITIONS;
 export { WISH_FORBIDDEN_CONDITION_IDS };
+
+let marketplaceFlags = normalizeRentalMarketplaceFlags({});
+let catalogCacheV2 = null;
+
+export function setRentalMarketplaceFlags(flags) {
+  marketplaceFlags = normalizeRentalMarketplaceFlags(flags);
+  return marketplaceFlags;
+}
+
+export function currentRentalMarketplaceFlags() {
+  return marketplaceFlags;
+}
+
+export function setRentalCatalogCache(catalog) {
+  catalogCacheV2 = catalog || null;
+  return catalogCacheV2;
+}
 
 export function ensureDemandSchema(db) {
   db.exec(`
@@ -105,11 +143,69 @@ export function ensureDemandSchema(db) {
       ON demand_posts(user_id) WHERE status = 'open';
     CREATE INDEX IF NOT EXISTS idx_demand_posts_updated
       ON demand_posts(status, updated_at, id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_demand_public_token
+      ON demand_posts(public_token) WHERE public_token IS NOT NULL AND public_token != '';
   `);
 }
 
 function tableColumns(db, table) {
   return new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name));
+}
+
+function hasWishColumn(db, name) {
+  try {
+    return tableColumns(db, "demand_posts").has(name);
+  } catch {
+    return false;
+  }
+}
+
+function ensurePublicToken(db, id) {
+  if (!hasWishColumn(db, "public_token")) return "";
+  const row = db.prepare("SELECT public_token FROM demand_posts WHERE id = ?").get(id);
+  if (row?.public_token) return String(row.public_token);
+  for (let i = 0; i < 5; i += 1) {
+    const token = createPublicToken();
+    try {
+      db.prepare("UPDATE demand_posts SET public_token = ? WHERE id = ?").run(token, id);
+      return token;
+    } catch {
+      /* unique collision, retry */
+    }
+  }
+  return "";
+}
+
+function rowByRef(db, ref) {
+  const raw = String(ref || "").trim();
+  if (!raw) return null;
+  if (/^\d+$/.test(raw)) return rowById(db, raw);
+  if (!hasWishColumn(db, "public_token")) return null;
+  return db.prepare("SELECT * FROM demand_posts WHERE public_token = ?").get(raw) || null;
+}
+
+function publishExpiry(now) {
+  return isWishLifecycleEnabled(marketplaceFlags) ? ttlExpiresAt(now) : WISH_FAR_EXPIRE;
+}
+
+function writeLifecycle(db, id, patch = {}) {
+  if (!hasWishColumn(db, "lifecycle")) return;
+  db.prepare(
+    `UPDATE demand_posts SET
+      lifecycle = COALESCE(?, lifecycle),
+      last_confirmed_at = COALESCE(?, last_confirmed_at),
+      last_active_at = COALESCE(?, last_active_at),
+      continuous_active_from = COALESCE(?, continuous_active_from),
+      closed_reason = COALESCE(?, closed_reason)
+     WHERE id = ?`,
+  ).run(
+    patch.lifecycle || null,
+    patch.last_confirmed_at || null,
+    patch.last_active_at || null,
+    patch.continuous_active_from || null,
+    patch.closed_reason || null,
+    id,
+  );
 }
 
 function addWishColumns(db) {
@@ -134,9 +230,21 @@ function addWishColumns(db) {
     ["line_url", "TEXT NOT NULL DEFAULT ''"],
     ["updated_at", "TEXT"],
     ["published_at", "TEXT"],
+    ["public_token", "TEXT"],
+    ["lifecycle", "TEXT"],
+    ["last_confirmed_at", "TEXT"],
+    ["last_active_at", "TEXT"],
+    ["activity_score", "REAL"],
+    ["continuous_active_from", "TEXT"],
+    ["condition_choices", "TEXT"],
+    ["closed_reason", "TEXT"],
   ];
   for (const [name, def] of additions) {
     if (!cols.has(name)) db.exec(`ALTER TABLE demand_posts ADD COLUMN ${name} ${def}`);
+  }
+  if (!cols.has("legacy_numeric_share")) {
+    db.exec("ALTER TABLE demand_posts ADD COLUMN legacy_numeric_share INTEGER NOT NULL DEFAULT 0");
+    db.exec("UPDATE demand_posts SET legacy_numeric_share = 1");
   }
 }
 
@@ -175,6 +283,15 @@ function parseJsonArray(raw) {
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
+  }
+}
+
+function parseJsonObject(raw) {
+  try {
+    const parsed = typeof raw === "object" && raw ? raw : JSON.parse(raw || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
   }
 }
 
@@ -246,9 +363,16 @@ function cityFromDistricts(keys) {
   return "";
 }
 
+function activeConditionMap() {
+  if (isRentalCatalogV2Enabled(marketplaceFlags) && catalogCacheV2) {
+    return new Map(catalogAsWishConditions(catalogCacheV2).map((row) => [row.id, row]));
+  }
+  return conditionMap(allWishConditions());
+}
+
 function conditionIds(input) {
   const raw = Array.isArray(input) ? input : parseJsonArray(input);
-  const allowed = conditionMap(allWishConditions());
+  const allowed = activeConditionMap();
   const ids = [];
   for (const item of raw) {
     const id = String(item || "").trim();
@@ -259,8 +383,28 @@ function conditionIds(input) {
 }
 
 function conditionLabels(ids) {
-  const map = conditionMap(allWishConditions());
+  const map = activeConditionMap();
   return conditionIds(ids).map((id) => map.get(id)?.label || id);
+}
+
+export function collectWishActivitySignals(db, userId, row = {}) {
+  const signals = {
+    last_confirmed_at: row.last_confirmed_at,
+    wish_edited_at: row.updated_at,
+  };
+  try {
+    const user = db.prepare("SELECT last_login_at FROM users WHERE id = ?").get(userId);
+    if (user?.last_login_at) signals.last_login_at = user.last_login_at;
+  } catch { /* isolated tests may lack the column */ }
+  try {
+    const flags = db.prepare(
+      `SELECT MAX(viewed_at) AS viewed_at, MAX(watched_at) AS watched_at
+       FROM user_listing_flags WHERE user_id = ?`,
+    ).get(userId);
+    if (flags?.viewed_at) signals.listing_viewed_at = flags.viewed_at;
+    if (flags?.watched_at) signals.watched_at = flags.watched_at;
+  } catch { /* isolated tests may lack flags */ }
+  return signals;
 }
 
 function splitPriorityGroups(must, nice, avoid) {
@@ -338,6 +482,25 @@ function userCreatedAt(db, userId) {
 
 export function expireOpenPosts(db, now = new Date()) {
   const stamp = iso(now);
+  if (isWishLifecycleEnabled(marketplaceFlags) && hasWishColumn(db, "lifecycle")) {
+    const confirm = db.prepare(
+      `UPDATE demand_posts
+       SET lifecycle = 'needs_confirmation', updated_at = ?
+       WHERE status = 'open'
+         AND (lifecycle IS NULL OR lifecycle = '' OR lifecycle = 'active')
+         AND expires_at <= ? AND expires_at < ?`,
+    ).run(stamp, stamp, WISH_FAR_EXPIRE);
+    const graceCutoff = new Date(nowMs(now) - WISH_CONFIRM_GRACE_DAYS * 86400000).toISOString();
+    const paused = db.prepare(
+      `UPDATE demand_posts
+       SET status = 'closed', lifecycle = 'paused', closed_at = COALESCE(closed_at, ?),
+           closed_reason = 'paused', updated_at = ?
+       WHERE status = 'open'
+         AND lifecycle = 'needs_confirmation'
+         AND expires_at <= ? AND expires_at < ?`,
+    ).run(stamp, stamp, graceCutoff, WISH_FAR_EXPIRE);
+    return (Number(confirm.changes) || 0) + (Number(paused.changes) || 0);
+  }
   const result = db.prepare(
     `UPDATE demand_posts SET status = 'expired', closed_at = COALESCE(closed_at, ?)
      WHERE status = 'open' AND expires_at <= ? AND expires_at < ?`,
@@ -413,11 +576,23 @@ function normalizeWishInput(db, userId, input = {}, fallback = {}) {
     WISH_TRANSIT_MAX,
   );
   const commute = Math.max(0, Math.min(Math.round(Number(input.commute_minutes != null ? input.commute_minutes : fallback.commute_minutes) || 0), 180));
-  const groups = splitPriorityGroups(
-    input.must_have ?? fallback.must_have,
-    input.nice_to_have ?? fallback.nice_to_have,
-    input.avoid ?? fallback.avoid,
-  );
+  let groups;
+  let conditionChoices = {};
+  if (input.choices && catalogCacheV2) {
+    conditionChoices = sanitizeWishChoices(catalogCacheV2, input.choices);
+    groups = legacyGroupsFromChoices(conditionChoices, input.nice_to_have_legacy || fallback.nice_to_have || []);
+  } else {
+    groups = splitPriorityGroups(
+      input.must_have ?? fallback.must_have,
+      input.nice_to_have ?? fallback.nice_to_have,
+      input.avoid ?? fallback.avoid,
+    );
+    if (isRentalCatalogV2Enabled(marketplaceFlags)) {
+      const mapped = wishChoicesFromLegacy(groups.must_have, groups.nice_to_have, groups.avoid);
+      conditionChoices = mapped.choices;
+      groups = { ...legacyGroupsFromChoices(mapped.choices, mapped.nice_to_have_legacy) };
+    }
+  }
   const mrtWalk = input.mrt_walk != null
     ? (input.mrt_walk === true || input.mrt_walk === 1 ? 1 : 0)
     : (Number(fallback.mrt_walk) === 1 ? 1 : 0);
@@ -440,6 +615,7 @@ function normalizeWishInput(db, userId, input = {}, fallback = {}) {
     commute_minutes: commute,
     mrt_walk: mrtWalk,
     ...groups,
+    condition_choices: conditionChoices,
     body,
     ...contact,
   };
@@ -456,7 +632,23 @@ function recencyStamp(row) {
 
 function decoratePost(db, row, { viewerId = 0, includeHiddenReplies = false, owner = false } = {}) {
   const districts = normalizeWatchDistricts(parseJsonArray(row.districts));
-  const groups = splitPriorityGroups(parseJsonArray(row.must_have), parseJsonArray(row.nice_to_have), parseJsonArray(row.avoid));
+  const storedChoices = parseJsonObject(row.condition_choices);
+  let groups;
+  let choices;
+  if (isRentalCatalogV2Enabled(marketplaceFlags) && storedChoices && Object.keys(storedChoices).length) {
+    choices = catalogCacheV2 ? sanitizeWishChoices(catalogCacheV2, storedChoices) : storedChoices;
+    groups = legacyGroupsFromChoices(choices, parseJsonArray(row.nice_to_have));
+    groups = {
+      must_have: conditionIds(groups.must_have),
+      nice_to_have: conditionIds(groups.nice_to_have),
+      avoid: conditionIds(groups.avoid),
+    };
+  } else {
+    groups = splitPriorityGroups(parseJsonArray(row.must_have), parseJsonArray(row.nice_to_have), parseJsonArray(row.avoid));
+    choices = storedChoices && Object.keys(storedChoices).length
+      ? storedChoices
+      : wishChoicesFromLegacy(groups.must_have, groups.nice_to_have, groups.avoid).choices;
+  }
   const replies = db.prepare(
     `SELECT r.id, r.user_id, r.body, r.created_at, r.hidden
      FROM demand_replies r
@@ -471,9 +663,18 @@ function decoratePost(db, row, { viewerId = 0, includeHiddenReplies = false, own
     line_url: String(row.line_url || ""),
   };
   const hasContact = Boolean(publicContact.contact_name || publicContact.phone || publicContact.line_url);
+  const token = String(row.public_token || "") || ensurePublicToken(db, row.id);
+  const lifecycle = mapLegacyLifecycle(row);
+  const activitySignals = mine
+    ? collectWishActivitySignals(db, row.user_id, row)
+    : { last_confirmed_at: row.last_confirmed_at, wish_edited_at: row.updated_at };
+  const scored = activityScoreFromSignals(activitySignals);
+  const lastActive = scored.last_active_at || row.last_active_at || row.last_confirmed_at || row.updated_at || row.created_at;
+  const bucket = scored.activity_bucket || activityBucket(lastActive);
   const out = {
     id: Number(row.id),
     product: WISH_PRODUCT_NAME,
+    headline: "租屋需求",
     author: userAuthorName(db, row.user_id),
     mine,
     city: String(row.city || "") || cityFromDistricts(districts),
@@ -508,7 +709,20 @@ function decoratePost(db, row, { viewerId = 0, includeHiddenReplies = false, own
     published_at: row.published_at || (row.status === "open" ? row.created_at : null),
     expires_at: row.expires_at,
     closed_at: row.closed_at || null,
-    public_path: `/w/${row.id}`,
+    public_path: token ? `/w/${token}` : `/w/${row.id}`,
+    legacy_path: `/w/${row.id}`,
+    public_token: token || undefined,
+    lifecycle,
+    last_confirmed_at: row.last_confirmed_at || null,
+    last_active_at: lastActive || null,
+    activity_score: scored.activity_score,
+    activity_bucket: bucket,
+    activity_label: activityBucketLabel(bucket),
+    remaining_days: remainingTtlDays(row.expires_at),
+    require_reconfirm: lifecycle === "needs_confirmation"
+      && daysBetween(row.continuous_active_from || row.published_at || row.created_at) >= WISH_CONTINUOUS_ACTIVE_DAYS,
+    choices,
+    closed_reason: row.closed_reason || "",
     contact: hasContact ? publicContact : null,
     replies: visible.map((item) => ({
       id: Number(item.id),
@@ -519,22 +733,19 @@ function decoratePost(db, row, { viewerId = 0, includeHiddenReplies = false, own
       hidden: Number(item.hidden) === 1,
     })),
   };
-  if (mine || owner) {
-    out.lifecycle = row.status === "open" ? "active" : row.status;
-  }
   return out;
 }
 
 export function publicWishRoomView(post) {
   if (!post) return null;
+  if (post.inactive) return { ...publicInactiveWishView(), id: post.id, public_path: post.public_path };
   return {
     id: post.id,
     product: WISH_PRODUCT_NAME,
-    author: post.author,
+    headline: "租屋需求",
     city: post.city,
     districts: post.districts,
     district_labels: post.district_labels,
-    location_note: post.location_note,
     rent_min: post.rent_min,
     rent_max: post.rent_max,
     includes_management: post.includes_management,
@@ -547,7 +758,6 @@ export function publicWishRoomView(post) {
     lease_duration: post.lease_duration,
     lease_label: post.lease_label,
     transit_note: post.transit_note,
-    destination_note: post.destination_note,
     commute_minutes: post.commute_minutes,
     mrt_walk: post.mrt_walk,
     must_have: post.must_have,
@@ -556,24 +766,21 @@ export function publicWishRoomView(post) {
     nice_to_have_labels: post.nice_to_have_labels,
     avoid: post.avoid,
     avoid_labels: post.avoid_labels,
+    label_want: isRentalCatalogV2Enabled(marketplaceFlags) ? "要有" : "必須有",
+    label_nice: isRentalCatalogV2Enabled(marketplaceFlags) ? "" : "希望有",
+    label_avoid: isRentalCatalogV2Enabled(marketplaceFlags) ? "不要" : "不接受",
     body: post.body,
     status: post.status,
     created_at: post.created_at,
     updated_at: post.updated_at,
     published_at: post.published_at,
-    contact: post.contact,
     public_path: post.public_path,
-    replies: (post.replies || []).map((item) => ({
-      id: item.id,
-      author: item.author,
-      body: item.body,
-      created_at: item.created_at,
-    })),
+    remaining_days: post.remaining_days,
   };
 }
 
 function assertPublicFields(view) {
-  const banned = ["user_id", "email", "contact_profile_id", "example", "ip", "consent", "admin"];
+  const banned = ["user_id", "email", "contact_profile_id", "example", "ip", "consent", "admin", "author", "contact", "phone", "line_url", "location_note", "destination_note", "replies"];
   for (const key of banned) {
     if (Object.prototype.hasOwnProperty.call(view, key)) {
       throw httpError("公開欄位含有不該出現的資料", 500);
@@ -642,17 +849,34 @@ export function listPublicWishRooms(db, filters = {}) {
   return listDemandPosts(db, { ...filters, mine: false, viewerId: 0 });
 }
 
-export function getDemandPost(db, postId, { viewerId = 0, publicOnly = false } = {}) {
+export function getDemandPost(db, postId, { viewerId = 0, publicOnly = false, allowNumeric = false, includeActorReplies = false } = {}) {
   expireOpenPosts(db);
-  const row = rowById(db, postId);
+  const row = rowByRef(db, postId);
   if (!row) throw httpError("找不到這則許願房", 404);
   const mine = Number(row.user_id) === Number(viewerId);
+  const numeric = /^\d+$/.test(String(postId || "").trim());
+  if (numeric && !allowNumeric && (publicOnly || !mine) && hasWishColumn(db, "legacy_numeric_share") && !Number(row.legacy_numeric_share)) {
+    throw httpError("找不到這則許願房", 404);
+  }
   if (row.status === "hidden" && !mine) throw httpError("這則許願房已隱藏", 404);
   if (row.status === "draft" && !mine) throw httpError("找不到這則許願房", 404);
+  if (publicOnly && row.status !== "open") {
+    if (isWishLifecycleEnabled(marketplaceFlags) || row.status !== "draft") {
+      return assertPublicFields({
+        ...publicInactiveWishView(),
+        id: Number(row.id),
+        public_path: row.public_token ? `/w/${row.public_token}` : `/w/${row.id}`,
+      });
+    }
+    throw httpError("找不到這則許願房", 404);
+  }
   if (!mine && row.status !== "open") throw httpError("找不到這則許願房", 404);
-  if (publicOnly && row.status !== "open") throw httpError("找不到這則許願房", 404);
   const decorated = decoratePost(db, row, { viewerId });
-  if (!mine || publicOnly) return assertPublicFields(publicWishRoomView(decorated));
+  if (!mine || publicOnly) {
+    const view = assertPublicFields(publicWishRoomView(decorated));
+    if (includeActorReplies) return { ...view, replies: decorated.replies };
+    return view;
+  }
   return decorated;
 }
 
@@ -665,8 +889,8 @@ function insertRow(db, uid, fields, status, now) {
       user_id, districts, rent_max, housing_type, mrt_walk, body, status, created_at, expires_at,
       city, location_note, rent_min, includes_management, ping_min, layout, move_in_date, lease_duration,
       transit_note, destination_note, commute_minutes, must_have, nice_to_have, avoid,
-      contact_name, phone, line_url, updated_at, published_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      contact_name, phone, line_url, updated_at, published_at, condition_choices
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     uid,
     JSON.stringify(fields.districts),
@@ -696,8 +920,24 @@ function insertRow(db, uid, fields, status, now) {
     fields.line_url,
     created,
     published,
+    JSON.stringify(fields.condition_choices || {}),
   );
-  return Number(result.lastInsertRowid);
+  const id = Number(result.lastInsertRowid);
+  ensurePublicToken(db, id);
+  if (status === "open") {
+    writeLifecycle(db, id, {
+      lifecycle: "active",
+      last_confirmed_at: created,
+      last_active_at: created,
+      continuous_active_from: created,
+    });
+    if (isWishLifecycleEnabled(marketplaceFlags)) {
+      db.prepare("UPDATE demand_posts SET expires_at = ? WHERE id = ?").run(publishExpiry(now), id);
+    }
+  } else if (status === "draft") {
+    writeLifecycle(db, id, { lifecycle: "draft" });
+  }
+  return id;
 }
 
 function writeRow(db, id, fields, extra = {}) {
@@ -708,7 +948,8 @@ function writeRow(db, id, fields, extra = {}) {
       move_in_date=?, lease_duration=?, transit_note=?, destination_note=?, commute_minutes=?,
       must_have=?, nice_to_have=?, avoid=?, contact_name=?, phone=?, line_url=?,
       updated_at=?, status=COALESCE(?, status), expires_at=COALESCE(?, expires_at),
-      published_at=COALESCE(?, published_at), closed_at=COALESCE(?, closed_at)
+      published_at=COALESCE(?, published_at), closed_at=COALESCE(?, closed_at),
+      condition_choices=COALESCE(?, condition_choices)
      WHERE id=?`,
   ).run(
     JSON.stringify(fields.districts),
@@ -738,6 +979,7 @@ function writeRow(db, id, fields, extra = {}) {
     extra.expires_at || null,
     extra.published_at || null,
     extra.closed_at === undefined ? null : extra.closed_at,
+    fields.condition_choices ? JSON.stringify(fields.condition_choices) : null,
     id,
   );
 }
@@ -788,17 +1030,25 @@ export function publishWishRoom(db, userId, postId, input = {}, now = new Date()
       throw httpError("同時只能有一則公開的許願房", 409, "wish_active_limit");
     }
     const stamp = iso(now);
+    const expires = publishExpiry(now);
     writeRow(db, row.id, fields, {
       updated_at: stamp,
       status: "open",
-      expires_at: WISH_FAR_EXPIRE,
+      expires_at: expires,
       published_at: row.published_at || stamp,
       closed_at: null,
     });
     if (!row.published_at) {
       db.prepare("UPDATE demand_posts SET published_at = ? WHERE id = ? AND published_at IS NULL").run(stamp, row.id);
     }
-    db.prepare("UPDATE demand_posts SET closed_at = NULL, status = 'open', expires_at = ? WHERE id = ?").run(WISH_FAR_EXPIRE, row.id);
+    db.prepare("UPDATE demand_posts SET closed_at = NULL, status = 'open', expires_at = ? WHERE id = ?").run(expires, row.id);
+    writeLifecycle(db, row.id, {
+      lifecycle: "active",
+      last_confirmed_at: stamp,
+      last_active_at: stamp,
+      continuous_active_from: row.continuous_active_from || stamp,
+      closed_reason: "",
+    });
     return getDemandPost(db, row.id, { viewerId: uid });
   });
 }
@@ -811,6 +1061,7 @@ export function closeDemandPost(db, userId, postId, { admin = false } = {}, now 
   db.prepare(
     "UPDATE demand_posts SET status = 'closed', closed_at = ?, updated_at = ? WHERE id = ?",
   ).run(stamp, stamp, row.id);
+  writeLifecycle(db, row.id, { lifecycle: "paused", closed_reason: "paused" });
   return getDemandPost(db, row.id, { viewerId: userId });
 }
 
@@ -831,15 +1082,27 @@ export function reopenWishRoom(db, userId, postId, now = new Date()) {
     }
     const fields = normalizeWishInput(db, uid, {}, row);
     assertPublishable(fields);
+    if (mapLegacyLifecycle(row) === "completed" && isWishLifecycleEnabled(marketplaceFlags)) {
+      throw httpError("已找到房的許願房請另開新的一則", 400, "wish_completed");
+    }
+    if (mapLegacyLifecycle(row) === "blocked") throw httpError("已封鎖的許願房不能重開", 400, "wish_blocked");
     const stamp = iso(now);
+    const expires = publishExpiry(now);
     writeRow(db, row.id, fields, {
       updated_at: stamp,
       status: "open",
-      expires_at: WISH_FAR_EXPIRE,
+      expires_at: expires,
       published_at: row.published_at || stamp,
       closed_at: null,
     });
     db.prepare("UPDATE demand_posts SET closed_at = NULL, status = 'open' WHERE id = ?").run(row.id);
+    writeLifecycle(db, row.id, {
+      lifecycle: "active",
+      last_confirmed_at: stamp,
+      last_active_at: stamp,
+      continuous_active_from: stamp,
+      closed_reason: "",
+    });
     return getDemandPost(db, row.id, { viewerId: uid });
   });
 }
@@ -928,7 +1191,7 @@ export function addDemandReply(db, userId, postId, body, now = new Date()) {
   db.prepare(
     "INSERT INTO demand_replies(post_id, user_id, body, created_at, hidden) VALUES (?, ?, ?, ?, 0)",
   ).run(post.id, uid, text, iso(now));
-  return getDemandPost(db, post.id, { viewerId: uid });
+  return getDemandPost(db, post.id, { viewerId: uid, allowNumeric: true, includeActorReplies: true });
 }
 
 export function reportDemand(db, userId, { targetType, targetId, reason } = {}, now = new Date()) {
@@ -956,23 +1219,71 @@ export function reportDemand(db, userId, { targetType, targetId, reason } = {}, 
       db.prepare("UPDATE demand_replies SET hidden = 1 WHERE id = ?").run(id);
     } else {
       db.prepare("UPDATE demand_posts SET status = 'hidden', closed_at = COALESCE(closed_at, ?) WHERE id = ?").run(iso(now), id);
+      writeLifecycle(db, id, { lifecycle: "blocked", closed_reason: "blocked" });
     }
   }
   return { ok: true, hidden: count >= DEMAND_REPORT_HIDE_AFTER };
 }
 
+export function applyWishLifecycleAction(db, userId, postId, action, now = new Date()) {
+  const uid = Number(userId) || 0;
+  if (!uid) throw httpError("請先登入", 401);
+  if (!isWishLifecycleEnabled(marketplaceFlags)) throw httpError("尚未啟用許願房生命週期", 503, "wish_lifecycle_off");
+  return withImmediate(db, () => {
+    const row = rowByRef(db, postId);
+    if (!row) throw httpError("找不到這則許願房", 404);
+    if (Number(row.user_id) !== uid) throw httpError("只能操作自己的許願房", 403);
+    const patch = transitionLifecycle(row, action, now);
+    if (patch.require_reconfirm) {
+      writeLifecycle(db, row.id, { lifecycle: "needs_confirmation" });
+      db.prepare("UPDATE demand_posts SET updated_at = ? WHERE id = ?").run(patch.updated_at, row.id);
+      const post = getDemandPost(db, row.id, { viewerId: uid });
+      return { ...post, require_reconfirm: true };
+    }
+    if (patch.status) {
+      db.prepare(
+        `UPDATE demand_posts SET status = ?, expires_at = COALESCE(?, expires_at),
+         closed_at = ?, updated_at = ?, published_at = COALESCE(?, published_at) WHERE id = ?`,
+      ).run(patch.status, patch.expires_at || null, patch.closed_at ?? null, patch.updated_at, patch.published_at || null, row.id);
+    }
+    writeLifecycle(db, row.id, patch);
+    return getDemandPost(db, row.id, { viewerId: uid });
+  });
+}
+
 export function demandMeta() {
+  const catalogOn = isRentalCatalogV2Enabled(marketplaceFlags);
+  const lifeOn = isWishLifecycleEnabled(marketplaceFlags);
+  const catalogItems = catalogOn && catalogCacheV2
+    ? catalogAsWishConditions(catalogCacheV2)
+    : activeWishConditions();
   return {
     product: WISH_PRODUCT_NAME,
     legal: DEMAND_LEGAL,
     rules_type: "wish_room_rules",
     maxOpen: DEMAND_MAX_OPEN,
     ttlDays: DEMAND_TTL_DAYS,
-    auto_expire: false,
+    auto_expire: lifeOn,
     housingTypes: DEMAND_HOUSING_TYPES,
     layouts: WISH_LAYOUTS,
     leaseDurations: WISH_LEASE_DURATIONS,
-    conditions: activeWishConditions().map((row) => ({ id: row.id, label: row.label })),
+    conditions: catalogItems.map((row) => ({
+      id: row.id,
+      label: row.label,
+      wish_allow_want: row.wish_allow_want !== false,
+      wish_allow_avoid: row.wish_allow_avoid !== false,
+    })),
+    catalog: catalogOn ? catalogCacheV2 : null,
+    flags: publicRentalMarketplaceFlags(marketplaceFlags),
+    copy: {
+      layout: "格局",
+      move_in: "預計入住",
+      lease: "租期",
+      transit: "捷運／車站",
+      want: "要有",
+      avoid: "不要",
+      unspecified: "未指定",
+    },
     bodyMax: DEMAND_BODY_MAX,
     forbidden_fields: ["適合對象", ...WISH_FORBIDDEN_CONDITION_IDS],
   };
