@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -14,6 +15,7 @@ const UNTOUCHED = [
 ];
 const DOMAIN = path.join(root, ".github/scripts/activate-rental-marketplace-pra-domain.mjs");
 const REMOTE = path.join(root, ".github/scripts/activate-rental-marketplace-pra-remote.sh");
+const MANIFEST = path.join(root, ".github/scripts/pra-src-manifest.py");
 
 function wf(name) {
   return readFileSync(path.join(root, ".github/workflows", name), "utf8");
@@ -152,6 +154,11 @@ test("PR A activation pins workflow-definition SHA and does not checkout the can
   assert.match(verify, /HEAD_SHA" != "\$EXPECTED_WF_SHA"/);
   assert.doesNotMatch(text, /git checkout --force/);
   assert.doesNotMatch(pipeRunScript(verify), /\$\{\{\s*github\.sha/);
+  const manifest = namedStep(text, "Build expected v3/src manifest from source SHA");
+  assert.match(manifest, /pra-src-manifest\.py --from-git "\$SOURCE_SHA"/);
+  assert.doesNotMatch(manifest, /git checkout/);
+  assert.match(text, /pra-src-expected\.json/);
+  assert.match(text, /pra-src-manifest\.py/);
 });
 
 test("PR A activation uses domain getters/savers and forbids raw SQL flag writes", () => {
@@ -163,8 +170,13 @@ test("PR A activation uses domain getters/savers and forbids raw SQL flag writes
   assert.match(domain, /from "\/app\/src\/db\.js"/);
   assert.match(domain, /rental_catalog_v2:\s*\{\s*enabled:\s*true\s*\}/);
   assert.match(domain, /lifecycle_enabled:\s*true/);
+  assert.match(domain, /PRA_DOMAIN_MODE/);
+  assert.match(domain, /must be exact 0\/0/);
+  assert.match(domain, /mode === "rollback"/);
+  assert.match(domain, /rental_catalog_v2:\s*\{\s*enabled:\s*false\s*\}/);
+  assert.match(domain, /lifecycle_enabled:\s*false/);
   assert.match(domain, /owner_matching_enabled/);
-  assert.match(domain, /must stay false/);
+  assert.match(domain, /must be false/);
   assert.doesNotMatch(domain, /owner_matching_enabled:\s*true/);
   assert.doesNotMatch(domain, /offer_enabled:\s*true/);
   assert.doesNotMatch(domain, /public_share_v2_enabled:\s*true/);
@@ -190,6 +202,23 @@ test("PR A activation remote guards running digest, OCI revision, backup hash an
   assert.match(remote, /org\.opencontainers\.image\.revision/);
   assert.match(remote, /predeploy-\[0-9\]\{8\}-\[0-9\]\{6\}/);
   assert.match(remote, /sha256sum "\$BACKUP_ID\/v3\.db"/);
+  assert.match(remote, /\/mnt\/Storage1\/apps\/5151\/v3\/src/);
+  assert.match(remote, /--from-docker/);
+  assert.match(remote, /fail-before-save/);
+  assert.match(remote, /compensate_and_fail/);
+  assert.match(remote, /rollback_pra_flags/);
+  assert.match(remote, /PRA_DOMAIN_MODE/);
+  assert.match(remote, /exact 0\/0/);
+  assert.match(remote, /PRODUCTION_STATE_UNKNOWN/);
+  const manifestIdx = remote.indexOf("fail-before-save");
+  const activateIdx = remote.indexOf("run_domain activate");
+  assert.ok(manifestIdx >= 0 && activateIdx > manifestIdx, "src manifest must run before domain save");
+  const postIdx = remote.indexOf("=== running server hydrate + post-check");
+  assert.ok(postIdx >= 0, "post-check section missing");
+  assert.ok(
+    remote.indexOf('compensate_and_fail "post-activation /api/demand failed"', postIdx) > postIdx,
+    "post-check failure must call domain rollback",
+  );
   assert.match(remote, /http:\/\/127\.0\.0\.1:5153\/api\/demand/);
   assert.match(remote, /http:\/\/127\.0\.0\.1:5153\/api\/health/);
   assert.match(remote, /http:\/\/127\.0\.0\.1:5153\/login\.html/);
@@ -211,6 +240,25 @@ test("PR A activation remote guards running digest, OCI revision, backup hash an
   }
   assert.doesNotMatch(remote, /rm\s+-rf\s+"\$BACKUP_ID"/);
   assert.doesNotMatch(remote, /rm\s+-rf\s+\/DATA\/AppData\/591-tracker-v3-backups/);
+});
+
+test("PR A src manifest matches git tree and fails closed when mounted db.js is tampered", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "pra-src-"));
+  const expected = path.join(dir, "expected.json");
+  const actual = path.join(dir, "actual.json");
+  const gitExpected = path.join(dir, "git.json");
+  execFileSync("python3", [MANIFEST, "--from-dir", path.join(root, "v3/src"), "--out", expected], { cwd: root });
+  execFileSync("python3", [MANIFEST, "--from-git", execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(), "--out", gitExpected], { cwd: root });
+  execFileSync("python3", [MANIFEST, "--compare", expected, gitExpected], { cwd: root });
+  const copy = path.join(dir, "src");
+  cpSync(path.join(root, "v3/src"), copy, { recursive: true });
+  writeFileSync(path.join(copy, "db.js"), `${readFileSync(path.join(copy, "db.js"), "utf8")}\n// tampered\n`);
+  execFileSync("python3", [MANIFEST, "--from-dir", copy, "--out", actual], { cwd: root });
+  assert.throws(
+    () => execFileSync("python3", [MANIFEST, "--compare", expected, actual], { cwd: root, encoding: "utf8" }),
+    /v3\/src manifest mismatch[\s\S]*db\.js/,
+  );
+  rmSync(dir, { recursive: true, force: true });
 });
 
 test("PR A activation does not change build, predeploy or deploy workflows", () => {

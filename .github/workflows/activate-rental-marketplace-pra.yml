@@ -110,6 +110,21 @@ jobs:
             echo "::error::commit $SOURCE_SHA is not reachable from origin/master; refusing"; exit 1
           fi
           echo "Activation source SHA $SOURCE_SHA is on origin/master ancestry."
+      - name: Build expected v3/src manifest from source SHA
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          EXPECTED_WF_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          HEAD_SHA="$(git rev-parse HEAD)"
+          if [ "$HEAD_SHA" != "$EXPECTED_WF_SHA" ]; then
+            echo "::error::trusted checkout HEAD $HEAD_SHA != workflow execution SHA $EXPECTED_WF_SHA"; exit 1
+          fi
+          python3 .github/scripts/pra-src-manifest.py --from-git "$SOURCE_SHA" --out pra-src-expected.json
+          AFTER_HEAD="$(git rev-parse HEAD)"
+          if [ "$AFTER_HEAD" != "$EXPECTED_WF_SHA" ]; then
+            echo "::error::manifest step moved HEAD $AFTER_HEAD off workflow SHA $EXPECTED_WF_SHA"; exit 1
+          fi
       - name: Copy PR A activation helpers to NAS /tmp
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -117,7 +132,7 @@ jobs:
           port: ${{ secrets.NAS_PORT }}
           username: ${{ secrets.NAS_USER }}
           key: ${{ secrets.NAS_SSH_KEY }}
-          source: ".github/scripts/activate-rental-marketplace-pra-remote.sh,.github/scripts/activate-rental-marketplace-pra-domain.mjs"
+          source: ".github/scripts/activate-rental-marketplace-pra-remote.sh,.github/scripts/activate-rental-marketplace-pra-domain.mjs,.github/scripts/pra-src-manifest.py,pra-src-expected.json"
           target: /tmp/5151-pra-activate-helpers
           overwrite: true
       - name: Activate PR A flags on running v3
@@ -136,6 +151,9 @@ jobs:
             export BACKUP_ID='${{ inputs.backup_id }}'
             export BACKUP_HASH='${{ inputs.backup_hash }}'
             export DOMAIN_SCRIPT=/tmp/5151-pra-activate-helpers/.github/scripts/activate-rental-marketplace-pra-domain.mjs
+            export SRC_MANIFEST_PY=/tmp/5151-pra-activate-helpers/.github/scripts/pra-src-manifest.py
+            export EXPECTED_SRC_MANIFEST=/tmp/5151-pra-activate-helpers/pra-src-expected.json
+            export EXPECTED_SRC_MOUNT=/mnt/Storage1/apps/5151/v3/src
             chmod +x /tmp/5151-pra-activate-helpers/.github/scripts/activate-rental-marketplace-pra-remote.sh
             /tmp/5151-pra-activate-helpers/.github/scripts/activate-rental-marketplace-pra-remote.sh
       - name: Pull NAS activation evidence
@@ -157,13 +175,16 @@ jobs:
           nas = json.load(open("nas-activation-core.json"))
           required = (
               "source_sha", "image_digest", "backup_id", "backup_hash",
+              "src_mount", "src_tree_sha256",
               "before_raw_flags", "after_raw_flags", "before_counts", "after_counts",
               "runtime_public_flags", "auto_expire", "catalog_present", "condition_count",
               "health", "landing", "login", "final_digest", "final_oci_revision",
           )
           if not all(nas.get(k) for k in required):
               raise SystemExit("activation NAS evidence incomplete")
-          if nas.get("backup_verified") is not True or nas.get("ACTIVATION_OK") is not True:
+          if nas.get("backup_verified") is not True or nas.get("src_manifest_verified") is not True:
+              raise SystemExit("activation NAS evidence is not verified")
+          if nas.get("ACTIVATION_OK") is not True or nas.get("rollback_used") is not False:
               raise SystemExit("activation NAS evidence is not verified")
           if nas["backup_hash"][:7] != "sha256:" or len(nas["backup_hash"]) != 71:
               raise SystemExit("activation backup_hash is not immutable")
@@ -203,6 +224,10 @@ jobs:
               "backup_id": nas["backup_id"],
               "backup_hash": nas["backup_hash"],
               "backup_verified": True,
+              "src_mount": nas["src_mount"],
+              "src_manifest_verified": True,
+              "src_tree_sha256": nas["src_tree_sha256"],
+              "rollback_used": False,
               "before_raw_flags": nas["before_raw_flags"],
               "after_raw_flags": nas["after_raw_flags"],
               "before_counts": nas["before_counts"],
