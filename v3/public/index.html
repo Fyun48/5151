@@ -8456,8 +8456,19 @@
     ];
     let wishMine = { active: null, draft: null, has_example: false, can_create: true };
     let wishEditingId = 0;
-    let wishPendingFullReconfirm = false;
+    let wishFullReconfirm = { id: 0 };
     let wishMeta = null;
+    function beginWishFullReconfirm(id) {
+      wishFullReconfirm = { id: Number(id) || 0 };
+      if ($("demandSubmit")) $("demandSubmit").textContent = "核對後繼續曝光";
+    }
+    function clearWishFullReconfirm() {
+      wishFullReconfirm = { id: 0 };
+      if ($("demandSubmit")) $("demandSubmit").textContent = "公開許願房";
+    }
+    function isWishFullReconfirm(id) {
+      return Number(wishFullReconfirm.id) > 0 && Number(wishFullReconfirm.id) === Number(id);
+    }
     function wishCatalogOn() { return wishMeta?.flags?.rental_catalog_v2?.enabled === true; }
     function wishLifeOn() { return wishMeta?.flags?.wish?.lifecycle_enabled === true; }
     function demandDistrictKeys() {
@@ -9163,7 +9174,7 @@
     }
     function showWishForm(show) {
       if ($("wishFormWrap")) $("wishFormWrap").hidden = !show;
-      if (!show && $("demandSubmit") && !wishPendingFullReconfirm) $("demandSubmit").textContent = "公開許願房";
+      if (!show) clearWishFullReconfirm();
       if (show) {
         fillDemandDistricts();
         if (!$("wishMust")?.children.length) renderWishConditionGroups();
@@ -9501,17 +9512,16 @@
         }
         const data = await readApi(res);
         if (!res.ok) throw new Error(data.error || "刊登失敗");
-        if (wishPendingFullReconfirm && pendingId) {
+        const pendingFull = isWishFullReconfirm(pendingId);
+        if (pendingFull) {
           const lifeRes = await fetch(`/api/wish-rooms/${pendingId}/full_reconfirm`, { method: "POST" });
           const lifeData = await readApi(lifeRes);
           if (!lifeRes.ok) throw new Error(lifeData.error || "完整確認失敗");
-          wishPendingFullReconfirm = false;
           setWishStatus("已核對條件並繼續曝光");
         } else {
           setWishStatus("已公開許願房");
         }
         wishEditingId = 0;
-        if ($("demandSubmit")) $("demandSubmit").textContent = "公開許願房";
         showWishForm(false);
         await loadDemand();
         maybeAskPush("公開許願房後可允許系統推播。");
@@ -9539,6 +9549,7 @@
     $("wishCreateBtn")?.addEventListener("click", () => {
       if (isGuest) { remindGuest(); return; }
       if (wishMine.active) { setWishStatus("已有一則公開許願房"); return; }
+      clearWishFullReconfirm();
       wishEditingId = wishMine.draft?.id || 0;
       applyWishForm(wishMine.draft || {});
       showWishForm(true);
@@ -9548,6 +9559,7 @@
     });
     $("wishEditBtn")?.addEventListener("click", () => {
       if (!wishMine.active) return;
+      clearWishFullReconfirm();
       wishEditingId = wishMine.active.id;
       applyWishForm(wishMine.active);
       showWishForm(true);
@@ -9569,6 +9581,7 @@
       await loadDemand();
     });
     async function wishLifeAction(id, action, fail) {
+      clearWishFullReconfirm();
       const res = await fetch(`/api/wish-rooms/${id}/${action}`, { method: "POST" });
       const data = await readApi(res);
       if (!res.ok) { setWishStatus(data.error || fail); return data; }
@@ -9598,20 +9611,20 @@
       if (!id) return;
       if (ev.target.id === "wishConfirmStay") await wishLifeAction(id, "confirm", "確認失敗");
       if (ev.target.id === "wishConfirmReview") {
-        wishPendingFullReconfirm = true;
         wishEditingId = id;
         applyWishForm(wishMine.active);
         showWishForm(true);
-        if ($("demandSubmit")) $("demandSubmit").textContent = "核對後繼續曝光";
+        beginWishFullReconfirm(id);
         setWishStatus("請核對預算、行政區、格局與關鍵條件後再繼續曝光。");
         return;
       }
       if (ev.target.id === "wishConfirmDone") await wishLifeAction(id, "complete", "更新失敗");
       if (ev.target.id === "wishConfirmPause") await wishLifeAction(id, "pause", "暫停失敗");
       if (ev.target.id === "wishConfirmEdit") {
-        wishPendingFullReconfirm = Boolean(wishMine.active?.require_reconfirm);
-        $("wishEditBtn")?.click();
-        if (wishPendingFullReconfirm && $("demandSubmit")) $("demandSubmit").textContent = "核對後繼續曝光";
+        wishEditingId = id;
+        applyWishForm(wishMine.active);
+        showWishForm(true);
+        beginWishFullReconfirm(id);
       }
     });
     $("wishCatalogGroups")?.addEventListener("click", (ev) => {
@@ -9657,6 +9670,7 @@
       const res = await fetch("/api/wish-rooms/example");
       const data = await readApi(res);
       if (!res.ok || !data.example) { setWishStatus("沒有已存範例"); return; }
+      clearWishFullReconfirm();
       if (wishMine.active) wishEditingId = wishMine.active.id;
       applyWishForm(data.example);
       showWishForm(true);
@@ -9670,6 +9684,7 @@
     });
     $("wishCancelEdit")?.addEventListener("click", () => {
       wishEditingId = 0;
+      clearWishFullReconfirm();
       showWishForm(false);
     });
     $("wishDetailClose")?.addEventListener("click", () => { if ($("wishDetailOverlay")) $("wishDetailOverlay").hidden = true; });

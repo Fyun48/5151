@@ -108,6 +108,21 @@ test("server-side one-active and example APIs are present", () => {
   assert.match(server, /app\.put\("\/api\/admin\/wish-conditions"/);
 });
 
+test("full reconfirm intent is scoped and cancel returns to ordinary edit", () => {
+  assert.match(html, /function beginWishFullReconfirm/);
+  assert.match(html, /function clearWishFullReconfirm/);
+  assert.match(html, /function isWishFullReconfirm/);
+  assert.match(html, /wishFullReconfirm = \{ id: 0 \}/);
+  assert.match(html, /id="wishCancelEdit"/);
+  assert.match(html, /\$\("wishCancelEdit"\)[\s\S]*?clearWishFullReconfirm\(\)/);
+  assert.match(html, /\$\("wishEditBtn"\)\?\.addEventListener\("click"[\s\S]*?clearWishFullReconfirm\(\)/);
+  assert.match(html, /\$\("wishCreateBtn"\)\?\.addEventListener\("click"[\s\S]*?clearWishFullReconfirm\(\)/);
+  assert.match(html, /const pendingFull = isWishFullReconfirm\(pendingId\)/);
+  assert.match(html, /if \(!show\) clearWishFullReconfirm\(\)/);
+  assert.match(html, /\$\("demandSubmit"\)\.textContent = "公開許願房"/);
+  assert.doesNotMatch(html, /wishPendingFullReconfirm/);
+});
+
 test("admin can edit Wish Room condition catalog", () => {
   const admin = read("public/admin.html");
   assert.match(admin, /id="wishConditionsCard"/);
