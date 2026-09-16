@@ -2,9 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  applyWishLifecycleAction,
   createDemandPost,
   ensureDemandSchema,
   listDemandPosts,
@@ -177,4 +179,111 @@ test("index.html exposes 儲存草稿 without using it on the publish path", () 
   assert.match(html, /PraHelpers\.wishCreateButtonLabel/);
   assert.match(readFileSync(path.join(dir, "../public/pra-helpers.js"), "utf8"), /繼續編輯草稿/);
   assert.match(html, /你的許願房正在曝光/);
+});
+
+function mutableCount(db, userId = 1) {
+  return db.prepare(
+    "SELECT COUNT(*) n FROM demand_posts WHERE user_id=? AND status IN ('open','draft')",
+  ).get(userId).n;
+}
+
+test("stale open create publishes the existing draft instead of open+draft", () => {
+  const db = open();
+  setRentalMarketplaceFlags({ wish: { lifecycle_enabled: true } });
+  const draft = createDemandPost(db, 1, { ...sample(), draft: true });
+  const published = createDemandPost(db, 1, sample({ body: "【PR-A-UAT】過期分頁誤送公開" }));
+  assert.equal(published.id, draft.id);
+  assert.equal(published.status, "open");
+  assert.equal(published.lifecycle, "active");
+  assert.equal(mutableCount(db), 1);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM demand_posts WHERE user_id=1 AND status='draft'").get().n, 0);
+  setRentalMarketplaceFlags({});
+  db.close();
+});
+
+test("stale draft create while open exists is 409 and stays open-only", () => {
+  const db = open();
+  const openWish = createDemandPost(db, 1, sample());
+  assert.throws(
+    () => createDemandPost(db, 1, { ...sample({ body: "【PR-A-UAT】過期分頁誤存草稿" }), draft: true }),
+    (e) => e.status === 409 && e.code === "wish_mutable_limit",
+  );
+  assert.equal(mutableCount(db), 1);
+  assert.equal(db.prepare("SELECT status FROM demand_posts WHERE id=?").get(openWish.id).status, "open");
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM demand_posts WHERE user_id=1 AND status='draft'").get().n, 0);
+  db.close();
+});
+
+test("concurrent draft save vs publish across two connections leaves one mutable row", async () => {
+  const file = path.join(os.tmpdir(), `wish-mutable-${process.pid}-${Date.now()}.db`);
+  const seed = new DatabaseSync(file);
+  seed.exec("PRAGMA journal_mode=WAL");
+  seed.exec("PRAGMA busy_timeout=5000");
+  seed.exec("PRAGMA foreign_keys = ON");
+  seed.exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT, created_at TEXT);`);
+  seed.prepare("INSERT INTO users(id, email, created_at) VALUES (1, 'a@example.com', '2026-01-01T00:00:00.000Z')").run();
+  ensureDemandSchema(seed);
+  const draft = createDemandPost(seed, 1, { ...sample(), draft: true });
+  seed.close();
+
+  const a = new DatabaseSync(file);
+  const b = new DatabaseSync(file);
+  a.exec("PRAGMA busy_timeout=5000");
+  b.exec("PRAGMA busy_timeout=5000");
+  await Promise.allSettled([
+    Promise.resolve().then(() => createDemandPost(a, 1, { ...sample({ body: "【PR-A-UAT】併發再存草稿" }), draft: true })),
+    Promise.resolve().then(() => publishWishRoom(b, 1, draft.id)),
+  ]);
+  const check = new DatabaseSync(file);
+  assert.equal(mutableCount(check), 1);
+  const openN = check.prepare("SELECT COUNT(*) n FROM demand_posts WHERE user_id=1 AND status='open'").get().n;
+  const draftN = check.prepare("SELECT COUNT(*) n FROM demand_posts WHERE user_id=1 AND status='draft'").get().n;
+  assert.equal(openN + draftN, 1);
+  a.close();
+  b.close();
+  check.close();
+});
+
+test("normal draft publish still keeps the same id after mutable invariant", () => {
+  const db = open();
+  setRentalMarketplaceFlags({ wish: { lifecycle_enabled: true } });
+  const draft = createDemandPost(db, 1, { ...sample(), draft: true });
+  const published = publishWishRoom(db, 1, draft.id);
+  assert.equal(published.id, draft.id);
+  assert.equal(published.status, "open");
+  assert.equal(mutableCount(db), 1);
+  setRentalMarketplaceFlags({});
+  db.close();
+});
+
+test("startup collapse retires leftover draft beside open without paused resume", () => {
+  const db = open();
+  setRentalMarketplaceFlags({ wish: { lifecycle_enabled: true } });
+  db.exec("DROP INDEX IF EXISTS idx_demand_one_mutable");
+  db.exec("DROP INDEX IF EXISTS idx_demand_one_open");
+  db.exec("DROP INDEX IF EXISTS idx_demand_one_draft");
+  db.prepare(`
+    INSERT INTO demand_posts(id, user_id, body, status, created_at, expires_at, lifecycle)
+    VALUES (11, 1, '【PR-A-UAT】既有公開', 'open', '2026-01-01T00:00:00.000Z', '9999-12-31T00:00:00.000Z', 'active')
+  `).run();
+  db.prepare(`
+    INSERT INTO demand_posts(id, user_id, body, status, created_at, expires_at, lifecycle)
+    VALUES (12, 1, '【PR-A-UAT】leftover draft', 'draft', '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z', 'draft')
+  `).run();
+  ensureDemandSchema(db);
+  const leftover = db.prepare("SELECT status, lifecycle, closed_reason FROM demand_posts WHERE id=12").get();
+  assert.equal(leftover.status, "closed");
+  assert.equal(leftover.lifecycle, "draft");
+  assert.notEqual(leftover.lifecycle, "paused");
+  assert.equal(leftover.closed_reason, "legacy_collapsed");
+  assert.equal(db.prepare("SELECT status FROM demand_posts WHERE id=11").get().status, "open");
+  assert.equal(mutableCount(db), 1);
+  assert.throws(
+    () => applyWishLifecycleAction(db, 1, 12, "resume"),
+    (e) => e.status === 400,
+  );
+  const indexes = db.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_demand_one_mutable'").get();
+  assert.match(String(indexes?.sql || ""), /status IN \('open', 'draft'\)/);
+  setRentalMarketplaceFlags({});
+  db.close();
 });

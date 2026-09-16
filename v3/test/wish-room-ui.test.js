@@ -102,6 +102,8 @@ test("index script still parses and keeps demand view id", () => {
 
 test("server-side one-active and example APIs are present", () => {
   assert.match(demand, /idx_demand_one_open/);
+  assert.match(demand, /idx_demand_one_mutable/);
+  assert.match(demand, /status IN \('open', 'draft'\)/);
   assert.match(demand, /wish_room_example/);
   assert.match(server, /app\.put\("\/api\/wish-rooms\/example"/);
   assert.match(server, /app\.post\("\/api\/wish-rooms\/:id\/reopen"/);
