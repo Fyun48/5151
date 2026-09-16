@@ -1587,6 +1587,67 @@
     .self-mine-card .row { margin-top: 8px; }
     .self-mine-card .share-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
     .self-mine-card .row input[type="text"] { flex: 1 1 12rem; width: auto; min-width: 0; }
+    .self-mine-card .match-count {
+      margin: 8px 0 0;
+      padding: 8px 10px;
+      background: var(--accent-mist);
+      color: var(--accent-deep);
+      border-radius: var(--radius);
+      font-size: var(--text-sm);
+    }
+    .demand-exposure {
+      margin: 0 0 12px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background: var(--accent-mist);
+    }
+    .demand-exposure[hidden] { display: none; }
+    .demand-exposure p { margin: 0; font-size: var(--text-sm); color: var(--ink); }
+    .demand-exposure .muted { color: var(--muted); }
+    .demand-chip-row, .match-explain {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .demand-chip, .match-explain span {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 0 8px;
+      border-radius: 999px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      font-size: var(--text-xs);
+      color: var(--ink);
+    }
+    .match-explain span[data-kind="unknown"] { color: var(--muted); }
+    .match-explain span[data-kind="unmet"] { color: var(--muted); }
+    .aggregate-panel { margin: 16px 0 8px; }
+    .aggregate-panel h3 { margin: 0 0 8px; font-size: var(--text-md); }
+    .aggregate-grid {
+      display: grid;
+      gap: 8px;
+    }
+    .wish-match-card {
+      margin: 8px 0 0;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background: var(--paper);
+    }
+    .wish-match-card .rent-price {
+      font-size: var(--text-price);
+      font-variant-numeric: tabular-nums;
+      font-weight: 700;
+    }
+    .match-cta, .aggregate-panel button, [data-self-matches] {
+      min-height: var(--touch);
+    }
+    @media (max-width: 767px) {
+      .demand-chip-row, .match-explain { overflow: visible; }
+    }
     #demandPanel .self-grid .pledge-row { margin: 0; align-items: center; }
     #demandPanel .self-grid .pledge-row input { margin-top: 0; }
     .wish-toolbar, .wish-filters {
@@ -3367,6 +3428,10 @@
         <button type="button" class="filter-mini-btn ghost" id="filterMiniBtn" title="收合篩選" aria-label="收合篩選">×</button>
       </div>
       <div class="ad-slot" id="adListings" hidden></div>
+      <aside class="demand-exposure" id="demandExposure" hidden aria-live="polite">
+        <p id="demandExposureTitle">目前活躍租屋需求</p>
+        <div class="demand-chip-row" id="demandExposureChips"></div>
+      </aside>
       <div class="list" id="list" data-tour="list"><div class="empty">尚未載入列表</div></div>
       <p class="list-more-wrap" id="listMoreWrap" hidden><button type="button" class="ghost" id="listMoreBtn">載入更多</button></p>
     </main>
@@ -3773,6 +3838,29 @@
           <span class="save-msg" id="selfMsg" role="status" aria-live="polite"></span>
         </div>
       </form>
+      <section class="aggregate-panel" id="aggregateDemandPanel" hidden>
+        <h3>區域需求概況</h3>
+        <p class="hint">還沒刊房也可以看活躍需求統計。只顯示匿名加總，不會露出租客身分。</p>
+        <div class="wish-filters" id="aggregateFilters">
+          <label for="aggregateDistrict">行政區
+            <select id="aggregateDistrict" aria-label="需求統計行政區">
+              <option value="">不限行政區</option>
+            </select>
+          </label>
+          <label for="aggregateLayout">格局
+            <select id="aggregateLayout" aria-label="需求統計格局">
+              <option value="">不限格局</option>
+              <option value="1">1 房</option>
+              <option value="2">2 房</option>
+              <option value="3">3 房</option>
+              <option value="4plus">4 房以上</option>
+            </select>
+          </label>
+          <button type="button" class="ghost" id="aggregateRefreshBtn">查看需求</button>
+        </div>
+        <p class="msg" id="aggregateMsg" role="status" aria-live="polite"></p>
+        <div class="aggregate-grid" id="aggregateResults"></div>
+      </section>
       <div class="list" id="selfMineList" style="padding-top:12px"></div>
     </div>
   </section>
@@ -4132,6 +4220,23 @@
         <button type="button" class="ghost" id="ownerOverlayClose">關閉</button>
       </div>
       <div class="owner-list" id="ownerOverlayList"></div>
+    </div>
+  </div>
+  <div id="ownerMatchOverlay" class="hub-overlay" hidden>
+    <div class="hub-backdrop" data-close-owner-match></div>
+    <div class="hub-panel" role="dialog" aria-modal="true" aria-labelledby="ownerMatchTitle">
+      <div class="hub-head">
+        <div>
+          <h2 id="ownerMatchTitle">符合這間房的需求</h2>
+          <p class="hint" id="ownerMatchHint" style="margin:6px 0 0">只顯示匿名租屋條件與配對說明，不含姓名、電話或精確地址。</p>
+        </div>
+        <button type="button" class="ghost" id="ownerMatchClose">關閉</button>
+      </div>
+      <p class="msg" id="ownerMatchMsg" role="status" aria-live="polite"></p>
+      <div class="owner-list" id="ownerMatchList"></div>
+      <div class="row" style="margin-top:12px">
+        <button type="button" class="ghost" id="ownerMatchMore" hidden>載入更多</button>
+      </div>
     </div>
   </div>
   <div id="mediaLibOverlay" class="hub-overlay" hidden>
@@ -8298,7 +8403,8 @@
         if (location.hash !== "#demand") history.replaceState({}, "", `${location.pathname}${location.search}#demand`);
         loadDemand().catch(() => {});
       }
-      if (view === "post") { loadMineSelfListings().catch(() => {}); loadMediaLibrary().catch(() => {}); }
+      if (view === "listings") loadDemandExposure().catch(() => {});
+      if (view === "post") { loadMineSelfListings().then(() => { if (ownerMatchingOn) loadAggregateDemand(); }).catch(() => {}); loadMediaLibrary().catch(() => {}); }
       if (view === "qa") loadHelpQa();
       if (view === "notify") {
         // 桌機保留較寬的浮動 dock；手機不強制展開「待看更新」浮層（通知內容已在 #notifyInbox）。
@@ -8473,6 +8579,8 @@
     }
     function wishCatalogOn() { return wishMeta?.flags?.rental_catalog_v2?.enabled === true; }
     function wishLifeOn() { return wishMeta?.flags?.wish?.lifecycle_enabled === true; }
+    let ownerMatchingOn = false;
+    let ownerMatchState = { listingId: "", cursor: "", loading: false };
     function demandDistrictKeys() {
       return [...document.querySelectorAll("#demandDistricts [data-demand-district]:checked")].map((el) => el.value);
     }
@@ -8906,13 +9014,22 @@
       fab.textContent = open.length ? `我刊登的房子（${open.length}）` : "我刊登的房子";
     }
     function ownerCardHtml(item) {
+      const summary = ownerMatchingOn && item.status === "open" ? item.match_summary : null;
+      const matchLine = summary
+        ? `<p class="match-count" aria-live="polite">${esc(summary.label || (summary.count ? `目前可能符合 ${summary.count} 個活躍需求` : "目前沒有符合的活躍需求"))}</p>`
+        : "";
+      const matchBtn = summary
+        ? `<button type="button" class="primary" data-self-matches="${item.post_id}">查看符合需求</button>`
+        : "";
       return `
         <article class="self-mine-card">
           <strong>${esc(item.title)}</strong>
           ${(item.photos || item.cover) ? `<div class="self-photos">${(item.photos || [item.cover]).filter(Boolean).slice(0, 24).map((url) => `<img src="${esc(url)}" alt="" />`).join("")}</div>` : ""}
           <div class="muted">${esc(item.price || "")} 元 · ${esc(item.address || "")} · ${esc(item.status === "draft" ? "草稿（未刊登）" : item.status || "")}</div>
           ${(item.trait_labels || []).length ? `<div class="muted">${esc((item.trait_labels || []).join("、"))}</div>` : ""}
+          ${matchLine}
           <div class="share-row">
+            ${matchBtn}
             ${item.status === "open" ? `<a class="ghost" href="/l/${encodeURIComponent(item.post_id)}">公開分享頁</a>
             <button type="button" class="ghost" data-self-close="${item.post_id}">關閉刊登</button>` : ""}
             ${item.status === "cancelled" ? "" : `<button type="button" class="ghost" data-self-copy="${item.post_id}">複製刊登</button>`}
@@ -8930,6 +9047,9 @@
       }
       const res = await fetch("/api/self-listings");
       const data = await res.json().catch(() => ({}));
+      ownerMatchingOn = data.owner_matching?.enabled === true;
+      if ($("aggregateDemandPanel")) $("aggregateDemandPanel").hidden = !ownerMatchingOn;
+      if (ownerMatchingOn) fillAggregateDistricts();
       paintSelfTraits(Array.isArray(data.traits) && data.traits.length ? data.traits : SELF_TRAIT_GROUPS);
       if (data.legal && $("selfLegal")) $("selfLegal").textContent = data.legal;
       if (data.audit && $("selfAudit")) $("selfAudit").textContent = data.audit;
@@ -10603,7 +10723,136 @@
         copyInFlight = false;
       }
     }
+    function wishMatchCardHtml(item) {
+      const budget = Number(item.rent_max) ? `房租上限 ${Number(item.rent_max).toLocaleString("zh-TW")} 元` : "房租上限不限";
+      const chips = (item.explanation || []).map((row) => (
+        `<span data-kind="${esc(row.kind || "matched")}">${esc(row.kind === "unknown" ? "? " : "✓ ")}${esc(row.label || "")}</span>`
+      )).join("");
+      return `
+        <article class="wish-match-card">
+          <p class="rent-price">${esc(budget)}</p>
+          <p class="muted">${esc((item.district_labels || []).join("、") || item.city || "區域未填")} · ${esc(item.layout_label || item.housing_label || "格局不限")}</p>
+          <p class="muted">${esc(item.activity_label || "最近活動較少")} · 符合 ${Number(item.matched_count) || 0} 項需求</p>
+          <div class="match-explain" aria-label="配對說明">${chips}</div>
+          <div class="share-row">
+            <button type="button" class="ghost match-cta" disabled aria-disabled="true">${esc(item.offer_cta || "提供房源（即將推出）")}</button>
+          </div>
+        </article>`;
+    }
+    function closeOwnerMatchOverlay() {
+      const box = $("ownerMatchOverlay");
+      if (box) box.hidden = true;
+      ownerMatchState = { listingId: "", cursor: "", loading: false };
+    }
+    async function openOwnerMatches(listingId, { append = false } = {}) {
+      const box = $("ownerMatchOverlay");
+      const list = $("ownerMatchList");
+      const msg = $("ownerMatchMsg");
+      const more = $("ownerMatchMore");
+      if (!box || !list) return;
+      box.hidden = false;
+      if (!append) {
+        ownerMatchState = { listingId: String(listingId), cursor: "", loading: false };
+        list.innerHTML = `<div class="empty">載入符合需求…</div>`;
+        if (msg) msg.textContent = "";
+      }
+      if (ownerMatchState.loading) return;
+      ownerMatchState.loading = true;
+      try {
+        const q = new URLSearchParams({ limit: "20" });
+        if (append && ownerMatchState.cursor) q.set("cursor", ownerMatchState.cursor);
+        const res = await fetch(`/api/self-listings/${encodeURIComponent(listingId)}/matches?${q}`);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "讀取配對失敗");
+        const items = Array.isArray(data.items) ? data.items : [];
+        const html = items.map(wishMatchCardHtml).join("");
+        if (append) list.insertAdjacentHTML("beforeend", html);
+        else list.innerHTML = html || `<div class="empty">目前沒有符合的活躍需求。</div>`;
+        ownerMatchState.cursor = data.next_cursor || "";
+        if (more) more.hidden = !ownerMatchState.cursor;
+        if (msg) msg.textContent = data.total ? `共 ${data.total} 個可能符合的需求` : "目前沒有符合的活躍需求";
+      } catch (error) {
+        if (!append) list.innerHTML = `<div class="empty">${esc(error.message)}</div>`;
+        if (msg) msg.textContent = error.message;
+      } finally {
+        ownerMatchState.loading = false;
+      }
+    }
+    function fillAggregateDistricts() {
+      const sel = $("aggregateDistrict");
+      if (!sel || sel.dataset.ready === "1") return;
+      const opts = [`<option value="">不限行政區</option>`];
+      for (const city of selfCityList()) {
+        for (const row of city.districts || []) {
+          opts.push(`<option value="${esc(String(city.id))}-${esc(String(row.id))}">${esc(city.name)}${esc(row.name)}</option>`);
+        }
+      }
+      sel.innerHTML = opts.join("");
+      sel.dataset.ready = "1";
+    }
+    function aggregateGroupHtml(title, rows) {
+      if (!rows || !rows.length) return `<p class="muted">${esc(title)}：需求樣本不足</p>`;
+      return `<div><strong>${esc(title)}</strong><div class="demand-chip-row">${rows.map((row) => (
+        `<span class="demand-chip">${esc(row.label || row.id)} ${Number(row.count) || 0}</span>`
+      )).join("")}</div></div>`;
+    }
+    async function loadAggregateDemand() {
+      const msg = $("aggregateMsg");
+      const box = $("aggregateResults");
+      if (!ownerMatchingOn || !box) return;
+      if (msg) msg.textContent = "載入需求統計…";
+      try {
+        const q = new URLSearchParams();
+        const district = $("aggregateDistrict")?.value;
+        const layout = $("aggregateLayout")?.value;
+        if (district) q.set("district", district);
+        if (layout) q.set("layout", layout);
+        const res = await fetch(`/api/demand/aggregate?${q}`);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "讀取需求統計失敗");
+        if (data.suppressed) {
+          box.innerHTML = `<p class="muted">${esc(data.message || "需求樣本不足")}</p>`;
+          if (msg) msg.textContent = data.message || "需求樣本不足";
+          return;
+        }
+        box.innerHTML = [
+          aggregateGroupHtml("行政區", data.districts),
+          aggregateGroupHtml("預算帶", data.budget_bands),
+          aggregateGroupHtml("格局", data.layouts),
+          aggregateGroupHtml("常見條件", data.conditions),
+        ].join("");
+        if (msg) msg.textContent = data.total ? `統計 ${data.total} 個活躍需求` : "需求樣本不足";
+      } catch (error) {
+        box.innerHTML = "";
+        if (msg) msg.textContent = error.message;
+      }
+    }
+    async function loadDemandExposure() {
+      const box = $("demandExposure");
+      const chips = $("demandExposureChips");
+      if (!box || !chips) return;
+      try {
+        const res = await fetch("/api/demand/exposure");
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.enabled !== true || data.suppressed || !(data.districts || []).length) {
+          box.hidden = true;
+          return;
+        }
+        chips.innerHTML = data.districts.map((row) => (
+          `<span class="demand-chip">${esc(row.label || row.id)} ${Number(row.count) || 0}</span>`
+        )).join("");
+        box.hidden = false;
+      } catch {
+        box.hidden = true;
+      }
+    }
     async function onSelfMineClick(ev) {
+      const matchId = ev.target.closest("[data-self-matches]")?.dataset.selfMatches;
+      if (matchId) {
+        ev.preventDefault();
+        await openOwnerMatches(matchId);
+        return;
+      }
       const copyId = ev.target.closest("[data-self-copy]")?.dataset.selfCopy;
       if (copyId) {
         ev.preventDefault();
@@ -10625,6 +10874,14 @@
     }
     $("selfMineList")?.addEventListener("click", onSelfMineClick);
     $("ownerOverlayList")?.addEventListener("click", onSelfMineClick);
+    $("ownerMatchClose")?.addEventListener("click", closeOwnerMatchOverlay);
+    $("ownerMatchOverlay")?.addEventListener("click", (ev) => {
+      if (ev.target?.dataset?.closeOwnerMatch != null) closeOwnerMatchOverlay();
+    });
+    $("ownerMatchMore")?.addEventListener("click", () => {
+      if (ownerMatchState.listingId) openOwnerMatches(ownerMatchState.listingId, { append: true });
+    });
+    $("aggregateRefreshBtn")?.addEventListener("click", () => loadAggregateDemand());
     $("descTemplatePick")?.addEventListener("change", () => {
       const id = $("descTemplatePick")?.value;
       if (id) applyDescTemplate(id);
@@ -11211,6 +11468,7 @@
         return;
       }
       if (ev.key === "Escape" && $("ownerOverlay") && !$("ownerOverlay").hidden) closeOwnerOverlay();
+      if (ev.key === "Escape" && $("ownerMatchOverlay") && !$("ownerMatchOverlay").hidden) closeOwnerMatchOverlay();
     });
     $("selectPageBtn").onclick = () => {
       document.querySelectorAll("[data-pick]").forEach((el) => {
@@ -12348,6 +12606,7 @@
       fillSelfDistricts();
       paintSelfTraits();
       loadMineSelfListings().catch(() => {});
+      loadDemandExposure().catch(() => {});
       loadPublicAds().catch(() => {});
       loadBroadcasts().catch(() => {});
       loadComms().catch(() => {});
