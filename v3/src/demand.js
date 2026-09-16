@@ -147,9 +147,12 @@ export function ensureDemandSchema(db) {
   `);
   addWishColumns(db);
   closeLegacyExtraOpenPosts(db);
+  closeLegacyExtraDraftPosts(db);
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_demand_one_open
       ON demand_posts(user_id) WHERE status = 'open';
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_demand_one_draft
+      ON demand_posts(user_id) WHERE status = 'draft';
     CREATE INDEX IF NOT EXISTS idx_demand_posts_updated
       ON demand_posts(status, updated_at, id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_demand_public_token
@@ -270,6 +273,31 @@ function closeLegacyExtraOpenPosts(db, now = new Date()) {
   `).all();
   const upd = db.prepare("UPDATE demand_posts SET status = 'closed', closed_at = COALESCE(closed_at, ?) WHERE id = ?");
   for (const row of extras) upd.run(stamp, row.id);
+}
+
+function closeLegacyExtraDraftPosts(db, now = new Date()) {
+  const stamp = iso(now);
+  let extras = [];
+  try {
+    extras = db.prepare(`
+      SELECT id FROM demand_posts
+      WHERE status = 'draft'
+        AND id NOT IN (
+          SELECT MAX(id) FROM demand_posts WHERE status = 'draft' GROUP BY user_id
+        )
+    `).all();
+  } catch {
+    return;
+  }
+  const upd = db.prepare("UPDATE demand_posts SET status = 'closed', closed_at = COALESCE(closed_at, ?) WHERE id = ?");
+  for (const row of extras) upd.run(stamp, row.id);
+}
+
+function existingDraftId(db, uid) {
+  const row = db.prepare(
+    "SELECT id FROM demand_posts WHERE user_id = ? AND status = 'draft' ORDER BY id DESC LIMIT 1",
+  ).get(uid);
+  return Number(row?.id) || 0;
 }
 
 function httpError(message, status = 400, code = "") {
@@ -1046,11 +1074,29 @@ export function createDemandPost(db, userId, input = {}, now = new Date()) {
   if (!asDraft) assertPublishable(fields);
   else if (fields.body && fields.body.length && fields.body.length < 4) throw httpError("請寫一點找房條件（至少 4 個字）");
   return withImmediate(db, () => {
+    if (asDraft) {
+      const draftId = existingDraftId(db, uid);
+      if (draftId) {
+        writeRow(db, draftId, fields, { updated_at: iso(now) });
+        return getDemandPost(db, draftId, { viewerId: uid });
+      }
+    }
     if (!asDraft && countOpen(db, uid) >= DEMAND_MAX_OPEN) {
       throw httpError("同時只能有一則公開的許願房", 409, "wish_active_limit");
     }
-    const id = insertRow(db, uid, fields, asDraft ? "draft" : "open", now);
-    return getDemandPost(db, id, { viewerId: uid });
+    try {
+      const id = insertRow(db, uid, fields, asDraft ? "draft" : "open", now);
+      return getDemandPost(db, id, { viewerId: uid });
+    } catch (error) {
+      if (asDraft && /UNIQUE/i.test(String(error.message || ""))) {
+        const draftId = existingDraftId(db, uid);
+        if (draftId) {
+          writeRow(db, draftId, fields, { updated_at: iso(now) });
+          return getDemandPost(db, draftId, { viewerId: uid });
+        }
+      }
+      throw error;
+    }
   });
 }
 

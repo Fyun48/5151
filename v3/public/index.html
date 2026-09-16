@@ -4278,6 +4278,7 @@
     </div>
   </div>
   <script src="/mascot.js"></script>
+  <script src="/pra-helpers.js"></script>
   <script src="/guest-search-state.js"></script>
   <script src="/cities-embed.js"></script>
   <script>
@@ -9161,7 +9162,7 @@
         && row.closed_reason !== "completed"
       ));
       $("wishCreateBtn").hidden = Boolean(active);
-      if ($("wishCreateBtn")) $("wishCreateBtn").textContent = !active && wishMine.draft ? "繼續編輯草稿" : "建立我的許願房";
+      if ($("wishCreateBtn")) $("wishCreateBtn").textContent = PraHelpers.wishCreateButtonLabel({ active, draft: wishMine.draft });
       $("wishViewBtn").hidden = !active;
       $("wishEditBtn").hidden = !active;
       $("wishCloseBtn").hidden = !active || wishLifeOn();
@@ -9175,14 +9176,30 @@
       $("wishDeleteExampleBtn").hidden = !wishMine.has_example;
     }
     function isWishDraftContext() {
-      if (isWishFullReconfirm(wishEditingId)) return false;
-      if (wishMine.active && Number(wishEditingId) === Number(wishMine.active.id)) return false;
-      return true;
+      return PraHelpers.isWishDraftContext({
+        editingId: wishEditingId,
+        activeId: wishMine.active?.id || 0,
+        fullReconfirm: isWishFullReconfirm(wishEditingId),
+      });
     }
     function syncWishDraftAction() {
       const btn = $("wishSaveDraft");
       if (!btn) return;
       btn.hidden = !isWishDraftContext();
+    }
+    let wishFormGate = { inFlight: false };
+    function beginWishFormBusy() {
+      const next = PraHelpers.beginWishFormMutation(wishFormGate);
+      if (!next.allowed) return false;
+      wishFormGate = next.state;
+      if ($("wishSaveDraft")) $("wishSaveDraft").disabled = wishFormGate.draftDisabled;
+      if ($("demandSubmit")) $("demandSubmit").disabled = wishFormGate.publishDisabled;
+      return true;
+    }
+    function endWishFormBusy() {
+      wishFormGate = PraHelpers.endWishFormMutation(wishFormGate);
+      if ($("wishSaveDraft")) $("wishSaveDraft").disabled = wishFormGate.draftDisabled;
+      if ($("demandSubmit")) $("demandSubmit").disabled = wishFormGate.publishDisabled;
     }
     function showWishForm(show) {
       if ($("wishFormWrap")) $("wishFormWrap").hidden = !show;
@@ -9494,21 +9511,29 @@
         remindGuest();
         return;
       }
+      if (!beginWishFormBusy()) return;
       const msg = $("demandMsg");
       try {
         const payload = collectWishForm();
         const pendingId = wishEditingId;
+        const plan = PraHelpers.planWishPublish({
+          editingId: wishEditingId,
+          activeId: wishMine.active?.id || 0,
+        });
         let res;
-        if (wishEditingId) {
+        if (plan.create) {
+          res = await fetch("/api/wish-rooms", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+        } else {
           res = await fetch(`/api/wish-rooms/${wishEditingId}`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
           });
-          const current = wishMine.active;
-          if (res.ok && current && Number(current.id) === Number(wishEditingId) && current.status === "open") {
-            /* 已公開的直接就地更新 */
-          } else if (res.ok) {
+          if (res.ok && plan.publish) {
             const published = await fetch(`/api/wish-rooms/${wishEditingId}/publish`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -9516,12 +9541,6 @@
             });
             if (published.ok) res = published;
           }
-        } else {
-          res = await fetch("/api/wish-rooms", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          });
         }
         const data = await readApi(res);
         if (!res.ok) throw new Error(data.error || "刊登失敗");
@@ -9540,6 +9559,8 @@
         maybeAskPush("公開許願房後可允許系統推播。");
       } catch (error) {
         setWishStatus(error.message);
+      } finally {
+        endWishFormBusy();
       }
     });
     $("wishSaveDraft")?.addEventListener("click", async () => {
@@ -9547,26 +9568,23 @@
         remindGuest();
         return;
       }
-      if (!isWishDraftContext()) {
+      const plan = PraHelpers.planWishDraftSave({
+        editingId: wishEditingId,
+        activeId: wishMine.active?.id || 0,
+        fullReconfirm: isWishFullReconfirm(wishEditingId),
+      });
+      if (!plan.allowed) {
         setWishStatus("已公開的許願房請用「公開許願房」更新");
         return;
       }
+      if (!beginWishFormBusy()) return;
       try {
-        const payload = { ...collectWishForm(), draft: true };
-        let res;
-        if (wishEditingId) {
-          res = await fetch(`/api/wish-rooms/${wishEditingId}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          });
-        } else {
-          res = await fetch("/api/wish-rooms", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          });
-        }
+        const payload = { ...collectWishForm(), ...plan.body };
+        const res = await fetch(plan.url, {
+          method: plan.method,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
         const data = await readApi(res);
         if (!res.ok) throw new Error(data.error || "草稿儲存失敗");
         wishEditingId = Number(data.id || wishEditingId) || wishEditingId;
@@ -9575,6 +9593,8 @@
         syncWishDraftAction();
       } catch (error) {
         setWishStatus(error.message);
+      } finally {
+        endWishFormBusy();
       }
     });
     $("demandList")?.addEventListener("click", async (ev) => {
@@ -9678,17 +9698,9 @@
     $("wishCatalogGroups")?.addEventListener("click", (ev) => {
       const bulk = ev.target.closest("[data-wish-bulk]");
       if (bulk) {
-        const action = bulk.dataset.wishBulk;
-        const section = bulk.closest(".wish-v2-cat");
+        const section = PraHelpers.findWishBulkSection(bulk);
         if (!section) return;
-        const ids = [...new Set([...section.querySelectorAll("[data-wish-v2]")].map((btn) => btn.dataset.wishV2))];
-        for (const id of ids) {
-          const btns = [...section.querySelectorAll(`[data-wish-v2="${id}"]`)];
-          const target = action === "clear" ? "unspecified" : action;
-          const hasTarget = btns.some((btn) => btn.dataset.wishAction === target);
-          const next = hasTarget ? target : "unspecified";
-          btns.forEach((btn) => btn.setAttribute("aria-pressed", btn.dataset.wishAction === next ? "true" : "false"));
-        }
+        PraHelpers.applyWishBulkToSection(section, bulk.dataset.wishBulk);
         return;
       }
       const btn = ev.target.closest("[data-wish-v2]");
@@ -10261,17 +10273,16 @@
       document.execCommand("insertText", false, mark);
       syncDescBodyFromEditor();
     });
-    let selfListingInFlight = false;
-    let selfListingCreateKey = "";
-    let selfListingCreateFingerprint = "";
-    function newSelfListingIdempotencyKey() {
-      if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
-      return `slc-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-    }
+    let selfListingGate = { inFlight: false, key: "", fingerprint: "" };
     $("selfListingForm")?.addEventListener("submit", async (ev) => {
       ev.preventDefault();
-      if (selfListingInFlight) return;
+      const started = PraHelpers.beginSelfListingSubmit(selfListingGate);
+      if (!started.allowed) return;
+      selfListingGate = started.state;
+      if ($("selfSubmit")) $("selfSubmit").disabled = selfListingGate.submitDisabled;
       if (isGuest) {
+        selfListingGate = PraHelpers.endSelfListingSubmit(selfListingGate, { success: false });
+        if ($("selfSubmit")) $("selfSubmit").disabled = selfListingGate.submitDisabled;
         remindGuest();
         return;
       }
@@ -10331,15 +10342,13 @@
         const publishDraft = !publishFromImport && editingDraftId;
         const isCreate = !publishFromImport && !publishDraft;
         if (isCreate) {
-          const fingerprint = JSON.stringify(payload);
-          if (!selfListingCreateKey || selfListingCreateFingerprint !== fingerprint) {
-            selfListingCreateKey = newSelfListingIdempotencyKey();
-            selfListingCreateFingerprint = fingerprint;
-          }
-          payload.idempotency_key = selfListingCreateKey;
+          selfListingGate = PraHelpers.resolveSelfListingCreateKey(
+            selfListingGate,
+            PraHelpers.selfListingClientFingerprint(payload),
+            PraHelpers.newSelfListingIdempotencyKey,
+          );
+          payload.idempotency_key = selfListingGate.key;
         }
-        selfListingInFlight = true;
-        if (submitBtn) submitBtn.disabled = true;
         const res = await fetch(
           publishFromImport
             ? `/api/listing-imports/${currentImport.id}/publish`
@@ -10354,8 +10363,7 @@
         const data = await readApi(res);
         if (!res.ok) throw new Error(data.error || "刊登失敗");
         if (isCreate) {
-          selfListingCreateKey = "";
-          selfListingCreateFingerprint = "";
+          selfListingGate = PraHelpers.endSelfListingSubmit(selfListingGate, { success: true });
         }
         if (msg) msg.textContent = "已刊登。資料寫得越清楚，來看的人越少再問一遍。";
         currentImport = null;
@@ -10375,8 +10383,10 @@
       } catch (error) {
         if (msg) msg.textContent = error.message;
       } finally {
-        selfListingInFlight = false;
-        if (submitBtn) submitBtn.disabled = false;
+        if (selfListingGate.inFlight) {
+          selfListingGate = PraHelpers.endSelfListingSubmit(selfListingGate, { success: false });
+        }
+        if (submitBtn) submitBtn.disabled = selfListingGate.submitDisabled;
       }
     });
     let editingDraftId = null;

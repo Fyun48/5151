@@ -177,6 +177,33 @@ test("legacy caller without key keeps old create behavior", () => {
   db.close();
 });
 
+test("same key + changed layout or floor_name fails closed", () => {
+  const db = open();
+  addUser(db, { id: 1, email: "a@example.com" });
+  const base = sample({
+    idempotency_key: KEY,
+    rooms: 0,
+    living: 0,
+    bath: 0,
+    floor: 0,
+    total_floors: 0,
+    layout: "1房0廳1衛",
+    floor_name: "3F",
+    address: "台北市士林區中正路108號",
+  });
+  createSelfListing(db, 1, base);
+  assert.throws(
+    () => createSelfListing(db, 1, { ...base, layout: "2房1廳1衛" }),
+    (err) => err.status === 409 && err.code === "IDEMPOTENCY_CONFLICT",
+  );
+  assert.throws(
+    () => createSelfListing(db, 1, { ...base, floor_name: "5F" }),
+    (err) => err.status === 409 && err.code === "IDEMPOTENCY_CONFLICT",
+  );
+  assert.equal(countListings(db, 1), 1);
+  db.close();
+});
+
 test("invalid key is rejected and never interpolated as SQL", () => {
   const db = open();
   addUser(db, { id: 1, email: "a@example.com" });
@@ -259,14 +286,17 @@ test("frontend submit guard blocks a second in-flight create and keeps key on fa
   assert.equal(done.key, "");
 });
 
-test("index.html create path is single-flight and sends idempotency_key", () => {
-  assert.match(html, /let selfListingInFlight = false/);
-  assert.match(html, /if \(selfListingInFlight\) return/);
-  assert.match(html, /selfListingInFlight = true/);
-  assert.match(html, /submitBtn\.disabled = true/);
-  assert.match(html, /selfListingInFlight = false/);
-  assert.match(html, /submitBtn\.disabled = false/);
-  assert.match(html, /payload\.idempotency_key = selfListingCreateKey/);
-  assert.match(html, /crypto\.randomUUID/);
-  assert.match(html, /if \(isCreate\) \{\s*selfListingCreateKey = ""/);
+test("index.html create path uses the shared PraHelpers submit guard", () => {
+  const handler = html.slice(
+    html.indexOf('$("selfListingForm")?.addEventListener("submit"'),
+    html.indexOf("let editingDraftId = null"),
+  );
+  assert.match(html, /src="\/pra-helpers\.js"/);
+  assert.match(handler, /PraHelpers\.beginSelfListingSubmit\(selfListingGate\)/);
+  assert.match(handler, /PraHelpers\.resolveSelfListingCreateKey/);
+  assert.match(handler, /PraHelpers\.newSelfListingIdempotencyKey/);
+  assert.match(handler, /PraHelpers\.endSelfListingSubmit/);
+  assert.match(handler, /payload\.idempotency_key = selfListingGate\.key/);
+  assert.doesNotMatch(handler, /Math\.random/);
+  assert.doesNotMatch(html, /slc-\$\{Date\.now\(\)\}/);
 });

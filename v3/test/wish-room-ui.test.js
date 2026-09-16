@@ -76,8 +76,8 @@ test("public share page and routes exist; guests can read", () => {
   assert.match(server, /"extend", "pause", "resume", "complete", "confirm", "full_reconfirm"/);
   assert.match(html, /id="wishCatalogV2"/);
   assert.match(html, /selected\.choices/);
-  assert.match(html, /hasTarget \? target : "unspecified"/);
-  assert.match(html, /bulk\.closest\("\.wish-v2-cat"\)/);
+  assert.match(html, /PraHelpers\.applyWishBulkToSection/);
+  assert.match(html, /PraHelpers\.findWishBulkSection/);
   assert.match(html, /\/api\/public\/wish-room\//);
   assert.match(html, /wishPublicRef/);
   assert.match(html, /data-wish-public/);

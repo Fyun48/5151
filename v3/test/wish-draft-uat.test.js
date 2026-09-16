@@ -16,7 +16,7 @@ import {
   wishRoomOwnerSummary,
 } from "../src/demand.js";
 import { defaultCatalog } from "../src/rentalCatalog.js";
-import { isWishDraftContext, planWishDraftSave, planWishPublish, wishCreateButtonLabel } from "../src/wishDraftUi.js";
+import { beginWishFormMutation, endWishFormMutation, isWishDraftContext, planWishDraftSave, planWishPublish, wishCreateButtonLabel } from "../src/wishDraftUi.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const html = readFileSync(path.join(dir, "../public/index.html"), "utf8");
@@ -59,6 +59,26 @@ test("create draft stays draft and is absent from public list", () => {
   assert.equal(listDemandPosts(db).length, 0);
   assert.equal(listPublicWishRooms(db).length, 0);
   db.close();
+});
+
+test("double create draft keeps a single user draft id", () => {
+  const db = open();
+  const first = createDemandPost(db, 1, { ...sample(), draft: true });
+  const again = createDemandPost(db, 1, { ...sample({ body: "【PR-A-UAT】第二次點儲存草稿" }), draft: true });
+  assert.equal(again.id, first.id);
+  assert.equal(again.status, "draft");
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM demand_posts WHERE user_id=1 AND status='draft'").get().n, 1);
+  db.close();
+});
+
+test("wish form single-flight blocks save-vs-publish race", () => {
+  let gate = { inFlight: false };
+  const first = beginWishFormMutation(gate);
+  assert.equal(first.allowed, true);
+  gate = first.state;
+  assert.equal(beginWishFormMutation(gate).allowed, false);
+  gate = endWishFormMutation(gate);
+  assert.equal(beginWishFormMutation(gate).allowed, true);
 });
 
 test("owner summary can reload the same draft after save", () => {
@@ -133,19 +153,28 @@ test("draft UI action is hidden on active edit and create draft posts draft:true
 });
 
 test("index.html exposes 儲存草稿 without using it on the publish path", () => {
-  assert.match(html, /id="wishSaveDraft"/);
-  assert.match(html, />儲存草稿</);
-  assert.match(html, /id="demandSubmit">公開許願房</);
-  assert.match(html, /id="wishCancelEdit">取消</);
-  assert.match(html, /function isWishDraftContext/);
-  assert.match(html, /draft: true/);
-  assert.match(html, /\$\("wishSaveDraft"\)\?\.addEventListener\("click"/);
-  assert.match(html, /if \(!isWishDraftContext\(\)\)/);
   const draftHandler = html.slice(
     html.indexOf('$("wishSaveDraft")?.addEventListener("click"'),
     html.indexOf('$("wishCancelEdit")?.addEventListener("click"'),
   );
+  const publishHandler = html.slice(
+    html.indexOf('$("demandForm")?.addEventListener("submit"'),
+    html.indexOf('$("wishSaveDraft")?.addEventListener("click"'),
+  );
+  assert.match(html, /src="\/pra-helpers\.js"/);
+  assert.match(html, /id="wishSaveDraft"/);
+  assert.match(html, />儲存草稿</);
+  assert.match(html, /id="demandSubmit">公開許願房</);
+  assert.match(html, /id="wishCancelEdit">取消</);
+  assert.match(html, /PraHelpers\.planWishDraftSave/);
+  assert.match(html, /PraHelpers\.planWishPublish/);
+  assert.match(html, /beginWishFormBusy\(\)/);
+  assert.match(draftHandler, /PraHelpers\.planWishDraftSave/);
+  assert.match(draftHandler, /beginWishFormBusy\(\)/);
   assert.doesNotMatch(draftHandler, /\/publish/);
-  assert.match(html, /繼續編輯草稿/);
+  assert.match(publishHandler, /PraHelpers\.planWishPublish/);
+  assert.match(publishHandler, /beginWishFormBusy\(\)/);
+  assert.match(html, /PraHelpers\.wishCreateButtonLabel/);
+  assert.match(readFileSync(path.join(dir, "../public/pra-helpers.js"), "utf8"), /繼續編輯草稿/);
   assert.match(html, /你的許願房正在曝光/);
 });

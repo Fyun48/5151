@@ -28,19 +28,22 @@ function stableValue(value) {
   return String(value ?? "");
 }
 
-export function selfListingCreateFingerprint(input = {}) {
-  const canon = stableValue({
+export function canonicalSelfListingCreatePayload(input = {}) {
+  return {
     district: input.district || "",
     districts: Array.isArray(input.districts) ? input.districts : [],
     rent: input.rent ?? input.price_num ?? 0,
     ping: input.ping ?? input.area ?? "",
     kind: input.kind || input.housing_type || "",
+    housing_type: input.housing_type || input.kind || "",
     role: input.role || "",
     floor: input.floor ?? 0,
     total_floors: input.total_floors ?? 0,
     rooms: input.rooms ?? 0,
     living: input.living ?? 0,
     bath: input.bath ?? 0,
+    layout: input.layout || "",
+    floor_name: input.floor_name || "",
     contact_name: input.contact_name || "",
     street: input.street || input.address || "",
     phone: input.phone || input.mobile || "",
@@ -53,8 +56,11 @@ export function selfListingCreateFingerprint(input = {}) {
     listing_values: input.listing_values || {},
     deposit: input.deposit || "",
     accept_pledge: input.accept_pledge === true,
-  });
-  return createHash("sha256").update(JSON.stringify(canon)).digest("hex");
+  };
+}
+
+export function selfListingCreateFingerprint(input = {}) {
+  return createHash("sha256").update(JSON.stringify(stableValue(canonicalSelfListingCreatePayload(input)))).digest("hex");
 }
 
 export function ensureSelfListingIdempotencySchema(db) {

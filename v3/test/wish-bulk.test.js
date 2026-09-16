@@ -103,6 +103,17 @@ function makeCatalog() {
   return { pets, building, petsBulk };
 }
 
+test("production handler snippet applies bulk via PraHelpers", () => {
+  const { pets, petsBulk, building } = makeCatalog();
+  petsBulk.dataset.wishBulk = "want";
+  const ev = { target: { closest(sel) { return sel === "[data-wish-bulk]" ? petsBulk : null; } } };
+  const bulk = ev.target.closest("[data-wish-bulk]");
+  const section = findWishBulkSection(bulk);
+  applyWishBulkToSection(section, bulk.dataset.wishBulk);
+  assert.equal(wishBulkConditionRowsFromSection(pets).find((row) => row.id === "need_cook").current, "want");
+  assert.equal(wishBulkConditionRowsFromSection(building).find((row) => row.id === "elevator").current, "want");
+});
+
 test("old closest([data-wish-cat]) hits the bulk button and would no-op", () => {
   const { pets, petsBulk } = makeCatalog();
   const buggy = petsBulk.closest("[data-wish-cat]");
@@ -152,10 +163,17 @@ test("bulk on one category does not rewrite another category", () => {
   assert.equal(buildingRows.find((row) => row.id === "manage").current, "unspecified");
 });
 
-test("index.html uses section selector and keeps 375 tri-state markup", () => {
+test("production click handler uses the same PraHelpers bulk functions", () => {
+  const handler = html.slice(
+    html.indexOf('$("wishCatalogGroups")?.addEventListener("click"'),
+    html.indexOf('$("wishClearAll")'),
+  );
+  assert.match(html, /src="\/pra-helpers\.js"/);
+  assert.match(handler, /PraHelpers\.findWishBulkSection\(bulk\)/);
+  assert.match(handler, /PraHelpers\.applyWishBulkToSection\(section, bulk\.dataset\.wishBulk\)/);
+  assert.doesNotMatch(handler, /bulk\.closest\("\[data-wish-cat\]"\)/);
+  assert.doesNotMatch(handler, /querySelectorAll\("\[data-wish-v2\]"\)/);
   assert.match(html, /class="wish-v2-cat"/);
-  assert.match(html, /bulk\.closest\("\.wish-v2-cat"\)/);
-  assert.doesNotMatch(html, /bulk\.closest\("\[data-wish-cat\]"\)/);
   assert.match(html, /data-wish-bulk="want"/);
   assert.match(html, /data-wish-bulk="avoid"/);
   assert.match(html, /data-wish-bulk="clear"/);
