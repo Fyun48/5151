@@ -838,10 +838,10 @@ try {
   // ignore
 }
 ensureDemandSchema(db);
-ensureRentalMatchIndexes(db);
 ensureFeedbackSchema(db);
 ensureFeedbackOutboxSchema(db);
 ensureSelfListingSchema(db);
+ensureRentalMatchIndexes(db);
 ensureMemberMediaSchema(db);
 ensureContentDocumentSchema(db);
 ensureMemberConsentSchema(db);

@@ -71,10 +71,14 @@ export function ensureRentalMatchIndexes(db) {
       ON demand_posts(rent_max, id)
       WHERE status = 'open'
         AND COALESCE(NULLIF(lifecycle, ''), 'active') IN ('active', 'needs_confirmation');
-    CREATE INDEX IF NOT EXISTS idx_listings_self_owner_open
-      ON listings(listed_by_user_id, self_status, post_id)
-      WHERE COALESCE(source, '591') = 'self';
   `);
+  try {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_listings_self_owner_open
+        ON listings(listed_by_user_id, self_status, post_id)
+        WHERE COALESCE(source, '591') = 'self';
+    `);
+  } catch { /* listings schema may still be migrating in isolated tests */ }
   try {
     const indexed = db.prepare("SELECT COUNT(DISTINCT wish_id) AS n FROM demand_match_districts").get()?.n || 0;
     const open = db.prepare("SELECT COUNT(*) AS n FROM demand_posts WHERE status = 'open'").get()?.n || 0;
