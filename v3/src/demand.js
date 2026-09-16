@@ -14,7 +14,15 @@ import {
   normalizeRentalMarketplaceFlags,
   publicRentalMarketplaceFlags,
 } from "./rentalMarketplaceFlags.js";
-import { catalogAsWishConditions, sanitizeWishChoices, wishChoicesFromLegacy, legacyGroupsFromChoices } from "./rentalCatalog.js";
+import {
+  catalogAsWishConditions,
+  catalogConditionLookup,
+  mergeHistoricalWishChoices,
+  resolveWishChoices,
+  sanitizeWishChoices,
+  wishChoicesFromLegacy,
+  legacyGroupsFromChoices,
+} from "./rentalCatalog.js";
 import {
   activityBucket,
   activityBucketLabel,
@@ -370,9 +378,16 @@ function activeConditionMap() {
   return conditionMap(allWishConditions());
 }
 
-function conditionIds(input) {
+function historicalConditionMap() {
+  if (isRentalCatalogV2Enabled(marketplaceFlags) && catalogCacheV2) {
+    return new Map(catalogConditionLookup(catalogCacheV2, { includeInactive: true }).map((row) => [row.id, row]));
+  }
+  return activeConditionMap();
+}
+
+function conditionIds(input, { includeInactive = false } = {}) {
   const raw = Array.isArray(input) ? input : parseJsonArray(input);
-  const allowed = activeConditionMap();
+  const allowed = includeInactive ? historicalConditionMap() : activeConditionMap();
   const ids = [];
   for (const item of raw) {
     const id = String(item || "").trim();
@@ -383,8 +398,8 @@ function conditionIds(input) {
 }
 
 function conditionLabels(ids) {
-  const map = activeConditionMap();
-  return conditionIds(ids).map((id) => map.get(id)?.label || id);
+  const map = historicalConditionMap();
+  return conditionIds(ids, { includeInactive: true }).map((id) => map.get(id)?.label || id);
 }
 
 export function collectWishActivitySignals(db, userId, row = {}) {
@@ -580,6 +595,10 @@ function normalizeWishInput(db, userId, input = {}, fallback = {}) {
   let conditionChoices = {};
   if (input.choices && catalogCacheV2) {
     conditionChoices = sanitizeWishChoices(catalogCacheV2, input.choices);
+    const previousChoices = parseJsonObject(fallback.condition_choices);
+    if (previousChoices && Object.keys(previousChoices).length) {
+      conditionChoices = mergeHistoricalWishChoices(catalogCacheV2, conditionChoices, previousChoices);
+    }
     groups = legacyGroupsFromChoices(conditionChoices, input.nice_to_have_legacy || fallback.nice_to_have || []);
   } else {
     groups = splitPriorityGroups(
@@ -589,8 +608,10 @@ function normalizeWishInput(db, userId, input = {}, fallback = {}) {
     );
     if (isRentalCatalogV2Enabled(marketplaceFlags)) {
       const mapped = wishChoicesFromLegacy(groups.must_have, groups.nice_to_have, groups.avoid);
-      conditionChoices = mapped.choices;
-      groups = { ...legacyGroupsFromChoices(mapped.choices, mapped.nice_to_have_legacy) };
+      conditionChoices = catalogCacheV2
+        ? mergeHistoricalWishChoices(catalogCacheV2, mapped.choices, parseJsonObject(fallback.condition_choices))
+        : mapped.choices;
+      groups = { ...legacyGroupsFromChoices(conditionChoices, mapped.nice_to_have_legacy) };
     }
   }
   const mrtWalk = input.mrt_walk != null
@@ -636,12 +657,12 @@ function decoratePost(db, row, { viewerId = 0, includeHiddenReplies = false, own
   let groups;
   let choices;
   if (isRentalCatalogV2Enabled(marketplaceFlags) && storedChoices && Object.keys(storedChoices).length) {
-    choices = catalogCacheV2 ? sanitizeWishChoices(catalogCacheV2, storedChoices) : storedChoices;
+    choices = catalogCacheV2 ? resolveWishChoices(catalogCacheV2, storedChoices) : storedChoices;
     groups = legacyGroupsFromChoices(choices, parseJsonArray(row.nice_to_have));
     groups = {
-      must_have: conditionIds(groups.must_have),
-      nice_to_have: conditionIds(groups.nice_to_have),
-      avoid: conditionIds(groups.avoid),
+      must_have: conditionIds(groups.must_have, { includeInactive: true }),
+      nice_to_have: conditionIds(groups.nice_to_have, { includeInactive: true }),
+      avoid: conditionIds(groups.avoid, { includeInactive: true }),
     };
   } else {
     groups = splitPriorityGroups(parseJsonArray(row.must_have), parseJsonArray(row.nice_to_have), parseJsonArray(row.avoid));
@@ -775,6 +796,8 @@ export function publicWishRoomView(post) {
     updated_at: post.updated_at,
     published_at: post.published_at,
     public_path: post.public_path,
+    public_token: post.public_token,
+    public_ref: post.public_token || String(post.public_path || "").replace(/^\/w\//, "") || undefined,
     remaining_days: post.remaining_days,
   };
 }

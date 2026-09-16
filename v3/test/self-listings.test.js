@@ -26,7 +26,7 @@ import {
   selfSourceLabel,
 } from "../src/selfListings.js";
 import { lookupDistrict } from "../src/regions.js";
-import { defaultCatalog, upsertCondition } from "../src/rentalCatalog.js";
+import { defaultCatalog, deleteOrDisableCondition, upsertCondition } from "../src/rentalCatalog.js";
 import { setRentalMarketplaceFlags } from "../src/demand.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
@@ -285,6 +285,9 @@ test("index, server and admin expose self listing surfaces", () => {
   assert.match(html, /pledge-row/);
   assert.doesNotMatch(html, /id="meFilterBtn"/);
   assert.match(html, /id: "courtyard"/);
+  assert.match(html, /paintSelfTraits\(Array\.isArray\(data\.traits\)/);
+  assert.match(html, /data-listing-polar/);
+  assert.match(html, /listing_values: collectedListingValues\(\)/);
   assert.match(html, /id: "balcony"/);
   assert.match(html, /電梯大樓/);
   assert.match(html, /有中庭/);
@@ -364,5 +367,57 @@ test("catalog-only listing trait survives create, publish-update and read-back",
   const dropped = createSelfListing(db, 1, sampleInput({ address: "台北市士林區中正路167號", traits: [dryer.id, "elevator"] }));
   assert.ok(!dropped.traits.includes(dryer.id));
   assert.ok(dropped.traits.includes("elevator"));
+  db.close();
+});
+
+test("disabled catalog-only listing trait survives reload and republish", () => {
+  const db = open();
+  addUser(db, { id: 1, email: "a@example.com", createdAt: OLD });
+  const catalog = upsertCondition(defaultCatalog(), { label: "烘衣機", category_id: "appliance" });
+  const dryer = catalog.conditions.find((row) => row.label === "烘衣機");
+  setRentalMarketplaceFlags({ rental_catalog_v2: { enabled: true } });
+  setSelfListingCatalog(catalog, { rental_catalog_v2: { enabled: true } });
+  const created = createSelfListing(db, 1, sampleInput({ traits: ["elevator", dryer.id] }));
+  const disabled = deleteOrDisableCondition(catalog, dryer.id, { listing: 1 });
+  setSelfListingCatalog(disabled.catalog, { rental_catalog_v2: { enabled: true } });
+  const reloaded = getSelfListing(db, created.post_id, { viewerId: 1 });
+  assert.ok(reloaded.traits.includes(dryer.id));
+  assert.ok(reloaded.trait_labels.includes("烘衣機"));
+  const draft = createImportedDraftListing(db, 1, { title: "士林整層可看屋草稿標題", body: "近捷運、可入住、有洗衣機。" });
+  db.prepare("UPDATE listings SET self_traits = ? WHERE post_id = ?").run(JSON.stringify([dryer.id, "elevator"]), draft.post_id);
+  const published = publishImportedDraftListing(db, 1, draft.post_id, sampleInput({
+    address: "台北市士林區中正路188號",
+    traits: ["fridge"],
+  }));
+  assert.ok(published.traits.includes(dryer.id));
+  assert.ok(published.trait_labels.includes("烘衣機"));
+  setRentalMarketplaceFlags({});
+  setSelfListingCatalog(null, { rental_catalog_v2: { enabled: false } });
+  db.close();
+});
+
+test("listing polarity can store allowed without treating unchecked as allowed", () => {
+  const db = open();
+  addUser(db, { id: 1, email: "a@example.com", createdAt: OLD });
+  setRentalMarketplaceFlags({ rental_catalog_v2: { enabled: true } });
+  setSelfListingCatalog(defaultCatalog(), { rental_catalog_v2: { enabled: true } });
+  const blank = createSelfListing(db, 1, sampleInput({ address: "台北市士林區中正路201號", traits: ["elevator"] }));
+  assert.equal(blank.listing_values.need_pet, undefined);
+  const allowed = createSelfListing(db, 1, sampleInput({
+    address: "台北市士林區中正路202號",
+    traits: ["elevator"],
+    listing_values: { need_pet: "allowed", need_cook: "not_allowed" },
+  }));
+  assert.equal(allowed.listing_values.need_pet, "allowed");
+  assert.equal(allowed.listing_values.need_cook, "not_allowed");
+  assert.ok(allowed.traits.includes("pet"));
+  assert.ok(allowed.traits.includes("nocook"));
+  const read = getSelfListing(db, allowed.post_id, { viewerId: 1 });
+  assert.equal(read.listing_values.need_pet, "allowed");
+  assert.equal(read.listing_values.need_cook, "not_allowed");
+  const meta = selfListingMeta({ catalog: defaultCatalog() });
+  assert.ok(meta.traits.flatMap((group) => group.items).some((item) => item.input === "polarity" && item.id === "need_pet"));
+  setRentalMarketplaceFlags({});
+  setSelfListingCatalog(null, { rental_catalog_v2: { enabled: false } });
   db.close();
 });

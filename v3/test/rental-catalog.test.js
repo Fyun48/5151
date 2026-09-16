@@ -15,12 +15,17 @@ import {
   SUITE_LITE_CONDITION_IDS,
   deleteOrDisableCondition,
   generateSystemId,
+  isProtectedPersonalAttribute,
   listingValuesFromTraits,
+  mergeHistoricalWishChoices,
+  mergeListingConditionValues,
+  resolveWishChoices,
   mergeDefaultCatalog,
   moveCondition,
   normalizeCatalog,
   normalizeConditionLabel,
   sanitizeWishChoices,
+  traitsFromListingValues,
   upsertCategory,
   upsertCondition,
   wishChoicesFromLegacy,
@@ -188,6 +193,46 @@ test("catalogDiff counts add change disable", () => {
 
 test("seed condition count covers spec first-wave", () => {
   assert.ok(DEFAULT_CATALOG_CONDITIONS.length >= 20);
+});
+
+test("catalog rejects protected personal-attribute labels and aliases", () => {
+  assert.equal(isProtectedPersonalAttribute("限女性"), true);
+  assert.equal(isProtectedPersonalAttribute("國籍"), true);
+  assert.equal(isProtectedPersonalAttribute("宗教"), true);
+  assert.equal(isProtectedPersonalAttribute("無障礙設施"), false);
+  assert.equal(isProtectedPersonalAttribute("冰箱"), false);
+  assert.throws(() => upsertCondition(defaultCatalog(), { label: "限女性" }), /敏感屬性/);
+  assert.throws(() => upsertCondition(defaultCatalog(), { label: "社區門禁", aliases: ["限本國人"] }), /敏感屬性/);
+});
+
+test("sanitize keeps disabled historical choices only when resolving", () => {
+  const created = upsertCondition(defaultCatalog(), { label: "烘衣機", category_id: "appliance" });
+  const dryer = created.conditions.find((row) => row.label === "烘衣機");
+  const disabled = deleteOrDisableCondition(created, dryer.id, { wish: 1 });
+  const dropped = sanitizeWishChoices(disabled.catalog, { [dryer.id]: "want", fridge: "want" });
+  assert.equal(dropped[dryer.id], undefined);
+  assert.equal(dropped.fridge, "want");
+  const kept = resolveWishChoices(disabled.catalog, { [dryer.id]: "want", fridge: "want" });
+  assert.equal(kept[dryer.id], "want");
+  const merged = mergeHistoricalWishChoices(disabled.catalog, { fridge: "want" }, { [dryer.id]: "want" });
+  assert.equal(merged[dryer.id], "want");
+  assert.equal(merged.fridge, "want");
+});
+
+test("listing polarity values persist allowed separately from not_allowed", () => {
+  const catalog = defaultCatalog();
+  const groups = catalogAsSelfTraitGroups(catalog);
+  const cook = groups.flatMap((group) => group.items).find((item) => item.canonical_id === "need_cook");
+  assert.equal(cook.input, "polarity");
+  assert.equal(cook.id, "need_cook");
+  const allowed = mergeListingConditionValues(catalog, { need_pet: "allowed" }, [], {}, []);
+  assert.equal(allowed.need_pet, "allowed");
+  assert.ok(traitsFromListingValues(allowed, catalog).includes("pet"));
+  const denied = mergeListingConditionValues(catalog, { need_pet: "not_allowed" }, [], {}, []);
+  assert.equal(denied.need_pet, "not_allowed");
+  assert.ok(traitsFromListingValues(denied, catalog).includes("nopet"));
+  const unknown = listingValuesFromTraits([], catalog);
+  assert.equal(unknown.need_pet, "unknown");
 });
 
 test("bulk avoid leaves disallow-avoid conditions unspecified", () => {

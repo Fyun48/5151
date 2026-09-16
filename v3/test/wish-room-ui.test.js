@@ -76,6 +76,12 @@ test("public share page and routes exist; guests can read", () => {
   assert.match(html, /id="wishCatalogV2"/);
   assert.match(html, /selected\.choices/);
   assert.match(html, /hasTarget \? target : "unspecified"/);
+  assert.match(html, /\/api\/public\/wish-room\//);
+  assert.match(html, /wishPublicRef/);
+  assert.match(html, /data-wish-public/);
+  assert.match(html, /lifecycle !== "completed"/);
+  assert.match(html, /paintSelfTraits\(Array\.isArray\(data\.traits\)/);
+  assert.match(html, /data-listing-polar/);
   assert.match(html, /id="wishLifecycleBar"/);
   assert.match(html, /id="wishStatus"/);
   assert.match(wish, /label_want|nice_to_have_labels/);

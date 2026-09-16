@@ -2134,6 +2134,12 @@
     }
     .trait-group { margin: 10px 0; }
     .trait-group h3 { margin: 0 0 6px; font-size: 13px; color: var(--muted); font-weight: 700; }
+    .trait-polar { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
+    .trait-polar strong { font-size: 14px; }
+    .trait-historical { margin-top: 8px; }
+    @media (max-width: 480px) {
+      .trait-polar { flex-direction: column; align-items: stretch; }
+    }
     .trait-chips { display: flex; flex-wrap: wrap; gap: 6px; }
     .trait-chips label {
       margin: 0;
@@ -8606,19 +8612,58 @@
         { id: "ac", label: "冷氣" }, { id: "washer", label: "洗衣機" }, { id: "fridge", label: "冰箱" }, { id: "net", label: "網路" }, { id: "cable", label: "第四台" }, { id: "heater", label: "瓦斯熱水器" }, { id: "heater_e", label: "電熱水器" }, { id: "bed", label: "床" }, { id: "closet", label: "衣櫃" }, { id: "sofa", label: "沙發" }, { id: "dining", label: "餐桌" },
       ] },
     ];
-    function paintSelfTraits() {
+    let selfTraitRuntime = SELF_TRAIT_GROUPS;
+    function paintSelfTraits(groups, selected = {}) {
       const host = $("selfTraitGroups");
-      if (!host || host.dataset.ready === "1") return;
-      host.innerHTML = SELF_TRAIT_GROUPS.map((group) => `
-        <div class="trait-group">
-          <h3>${esc(group.label)}</h3>
-          <div class="trait-chips">
-            ${group.items.map((item) => `<label><input type="checkbox" name="selfTrait" value="${esc(item.id)}" /> ${esc(item.label)}</label>`).join("")}
-          </div>
-        </div>
-      `).join("");
+      if (!host) return;
+      const rows = Array.isArray(groups) && groups.length ? groups : SELF_TRAIT_GROUPS;
+      selfTraitRuntime = rows;
+      const selectedTraits = new Set(selected.traits || []);
+      const selectedValues = selected.listing_values && typeof selected.listing_values === "object" ? selected.listing_values : {};
+      const painted = new Set();
+      const polarValue = (item) => {
+        const canonical = item.canonical_id || item.id;
+        if (selectedValues[canonical]) return selectedValues[canonical];
+        if (item.listing_negative && selectedTraits.has(item.listing_negative)) return "not_allowed";
+        if (item.listing_legacy && selectedTraits.has(item.listing_legacy)) return "allowed";
+        return "unknown";
+      };
+      host.innerHTML = rows.map((group) => {
+        const polar = [];
+        const chips = [];
+        for (const item of group.items || []) {
+          painted.add(item.id);
+          if (item.canonical_id) painted.add(item.canonical_id);
+          if (item.listing_negative) painted.add(item.listing_negative);
+          if (item.listing_legacy) painted.add(item.listing_legacy);
+          if (item.input === "polarity") {
+            const value = polarValue(item);
+            const btn = (key, label) => `<button type="button" data-listing-polar="${esc(item.canonical_id || item.id)}" data-listing-value="${key}" aria-pressed="${value === key ? "true" : "false"}">${label}</button>`;
+            polar.push(`<div class="trait-polar"><strong>${esc(item.label)}</strong><div class="wish-seg" role="group" aria-label="${esc(item.label)}">${btn("unknown", "未指定")}${btn("allowed", "允許")}${btn("not_allowed", "不允許")}</div></div>`);
+          } else {
+            chips.push(`<label><input type="checkbox" name="selfTrait" value="${esc(item.id)}" ${selectedTraits.has(item.id) || selectedTraits.has(item.canonical_id) ? "checked" : ""} /> ${esc(item.label)}</label>`);
+          }
+        }
+        return `<div class="trait-group"><h3>${esc(group.label)}</h3>${polar.join("")}${chips.length ? `<div class="trait-chips">${chips.join("")}</div>` : ""}</div>`;
+      }).join("");
+      const leftover = [...selectedTraits].filter((id) => id && !painted.has(id));
+      if (leftover.length) {
+        const labels = selected.trait_labels || [];
+        host.insertAdjacentHTML("beforeend", `<div class="trait-group trait-historical"><h3>已停用但仍保留</h3><div class="trait-chips">${leftover.map((id, index) => `<label><input type="checkbox" name="selfTrait" value="${esc(id)}" checked disabled /> ${esc(labels[index] || id)}</label><input type="hidden" name="selfTrait" value="${esc(id)}" />`).join("")}</div></div>`);
+      }
+      if (host.dataset.bound !== "1") {
+        host.dataset.bound = "1";
+        host.addEventListener("change", syncCommunityNudge);
+        host.addEventListener("click", (ev) => {
+          const btn = ev.target.closest("[data-listing-polar]");
+          if (!btn || !host.contains(btn)) return;
+          const id = btn.dataset.listingPolar;
+          host.querySelectorAll(`[data-listing-polar="${id}"]`).forEach((el) => {
+            el.setAttribute("aria-pressed", el === btn ? "true" : "false");
+          });
+        });
+      }
       host.dataset.ready = "1";
-      host.addEventListener("change", syncCommunityNudge);
       syncCommunityNudge();
     }
     function syncCommunityNudge() {
@@ -8627,7 +8672,21 @@
       if (box) box.hidden = !community?.checked;
     }
     function collectedSelfTraits() {
-      return [...document.querySelectorAll('#selfTraitGroups input[name="selfTrait"]:checked')].map((el) => el.value);
+      const ids = [...document.querySelectorAll('#selfTraitGroups input[name="selfTrait"]:checked, #selfTraitGroups input[name="selfTrait"][type="hidden"]')].map((el) => el.value);
+      document.querySelectorAll("#selfTraitGroups [data-listing-polar][aria-pressed='true']").forEach((btn) => {
+        const item = selfTraitRuntime.flatMap((group) => group.items).find((row) => (row.canonical_id || row.id) === btn.dataset.listingPolar);
+        if (!item) return;
+        if (btn.dataset.listingValue === "not_allowed" && item.listing_negative) ids.push(item.listing_negative);
+        if (btn.dataset.listingValue === "allowed" && item.listing_legacy) ids.push(item.listing_legacy);
+      });
+      return [...new Set(ids)];
+    }
+    function collectedListingValues() {
+      const values = {};
+      document.querySelectorAll("#selfTraitGroups [data-listing-polar][aria-pressed='true']").forEach((btn) => {
+        values[btn.dataset.listingPolar] = btn.dataset.listingValue || "unknown";
+      });
+      return values;
     }
     function closeSelfOverlay() {
       const box = $("selfListingOverlay");
@@ -8848,15 +8907,16 @@
     }
     async function loadMineSelfListings() {
       fillSelfDistricts();
-      paintSelfTraits();
       const box = $("selfMineList");
       if (!box || isGuest) {
+        paintSelfTraits(SELF_TRAIT_GROUPS);
         if (box) box.innerHTML = "";
         setOwnerFab([]);
         return;
       }
       const res = await fetch("/api/self-listings");
       const data = await res.json().catch(() => ({}));
+      paintSelfTraits(Array.isArray(data.traits) && data.traits.length ? data.traits : SELF_TRAIT_GROUPS);
       if (data.legal && $("selfLegal")) $("selfLegal").textContent = data.legal;
       if (data.audit && $("selfAudit")) $("selfAudit").textContent = data.audit;
       if (data.pledge && $("selfPledgeText")) $("selfPledgeText").textContent = data.pledge;
@@ -8894,9 +8954,14 @@
     function wishAreaText(post) {
       return (post.district_labels || []).join("、") || post.city || "未填區域";
     }
+    function wishPublicRef(post) {
+      return post.public_ref || post.public_token || String(post.public_path || "").replace(/^\/w\//, "") || String(post.id || "");
+    }
     function demandCardHtml(post) {
       const must = (post.must_have_labels || []).slice(0, 3).map((label) => `<span class="wish-chip">${esc(label)}</span>`).join("");
       const when = String(post.updated_at || post.published_at || post.created_at || "").replace("T", " ").slice(0, 16);
+      const ref = wishPublicRef(post);
+      const publicLookup = Boolean(post.public_ref || post.public_token || (post.public_path || "").startsWith("/w/"));
       return `
         <article class="wish-card" data-demand-id="${post.id}">
           <strong>${esc(wishAreaText(post))}</strong>
@@ -8905,7 +8970,7 @@
           ${must ? `<div class="wish-chips">${must}</div>` : ""}
           <div class="muted">更新 ${esc(when)}</div>
           <div class="row">
-            <button type="button" class="ghost" data-wish-open="${post.id}">查看詳情</button>
+            <button type="button" class="ghost" data-wish-open="${esc(ref)}" data-wish-public="${publicLookup ? "1" : ""}">查看詳情</button>
             ${post.public_path ? `<a class="ghost" href="${esc(post.public_path)}">公開頁</a>` : ""}
           </div>
         </article>
@@ -8974,6 +9039,9 @@
       ]);
       const cats = (catalog.categories || []).filter((row) => row.enabled !== false);
       const conds = (catalog.conditions || []).filter((row) => row.enabled !== false && row.wish_enabled !== false);
+      const historical = (catalog.conditions || []).filter((row) => (
+        (row.enabled === false || row.wish_enabled === false) && (want.has(row.id) || avoid.has(row.id))
+      ));
       host.innerHTML = cats.map((cat) => {
         const rows = conds.filter((row) => row.category_id === cat.id);
         if (!rows.length) return "";
@@ -8998,7 +9066,10 @@
             return `<div class="wish-v2-row"><strong>${esc(row.label)}</strong><div class="wish-seg" role="group" aria-label="${esc(row.label)}">${btn("unspecified", "未指定")}${btn("want", "要有")}${btn("avoid", "不要")}</div></div>`;
           }).join("")}
         </section>`;
-      }).join("");
+      }).join("") + (historical.length ? `<section class="wish-v2-cat"><div class="wish-v2-head"><strong>已停用但仍保留</strong></div>${historical.map((row) => {
+        const action = want.has(row.id) ? "want" : "avoid";
+        return `<div class="wish-v2-row"><strong>${esc(row.label)}</strong><div class="wish-seg" role="group" aria-label="${esc(row.label)}"><button type="button" data-wish-v2="${esc(row.id)}" data-wish-action="${action}" aria-pressed="true" disabled>${action === "want" ? "要有" : "不要"}</button></div></div>`;
+      }).join("")}</section>` : "");
     }
     function syncWishFormMode() {
       const v2 = wishCatalogOn();
@@ -9070,13 +9141,18 @@
       bar.hidden = isGuest;
       const active = wishMine.active;
       const closed = (wishMine.posts || []).find((row) => row.status === "closed");
+      const paused = (wishMine.posts || []).find((row) => (
+        row.status === "closed"
+        && row.lifecycle !== "completed"
+        && row.closed_reason !== "completed"
+      ));
       $("wishCreateBtn").hidden = Boolean(active);
       $("wishViewBtn").hidden = !active;
       $("wishEditBtn").hidden = !active;
       $("wishCloseBtn").hidden = !active || wishLifeOn();
       $("wishPauseBtn").hidden = !active || !wishLifeOn();
       $("wishReopenBtn").hidden = Boolean(active) || !closed || wishLifeOn();
-      $("wishResumeBtn").hidden = Boolean(active) || !closed || !wishLifeOn();
+      $("wishResumeBtn").hidden = Boolean(active) || !paused || !wishLifeOn();
       $("wishExtendBtn").hidden = !active || !wishLifeOn();
       $("wishCompleteBtn").hidden = !active || !wishLifeOn();
       $("wishSaveExampleBtn").hidden = isGuest || (!active && $("wishFormWrap")?.hidden);
@@ -9128,8 +9204,10 @@
         <p class="muted"><a href="${esc(post.public_path || `/w/${post.id}`)}">開啟公開頁</a></p>
       `;
     }
-    async function openWishDetail(id) {
-      const res = await fetch(`/api/wish-rooms/${id}`);
+    async function openWishDetail(id, publicOnly = false) {
+      const ref = String(id || "").replace(/^\/w\//, "");
+      const usePublic = publicOnly || !/^\d+$/.test(ref);
+      const res = await fetch(usePublic ? `/api/public/wish-room/${encodeURIComponent(ref)}` : `/api/wish-rooms/${encodeURIComponent(ref)}`);
       const data = await readApi(res);
       if (!res.ok) throw new Error(data.error || "載入失敗");
       if ($("wishDetailTitle")) $("wishDetailTitle").textContent = wishAreaText(data);
@@ -9429,9 +9507,10 @@
       }
     });
     $("demandList")?.addEventListener("click", async (ev) => {
-      const openId = ev.target.closest("[data-wish-open]")?.dataset.wishOpen;
+      const btn = ev.target.closest("[data-wish-open]");
+      const openId = btn?.dataset.wishOpen;
       if (openId) {
-        try { await openWishDetail(openId); } catch (error) { setWishStatus(error.message); }
+        try { await openWishDetail(openId, btn.dataset.wishPublic === "1"); } catch (error) { setWishStatus(error.message); }
       }
     });
     document.querySelectorAll("#wishMust, #wishNice, #wishAvoid").forEach((host) => {
@@ -10146,6 +10225,7 @@
           title,
           body,
           traits: collectedSelfTraits(),
+          listing_values: collectedListingValues(),
           deposit: $("selfDeposit")?.value || "",
           accept_pledge: $("selfPledge")?.checked === true,
         };
@@ -10252,8 +10332,10 @@
         phone: form.phone || "",
         line_url: form.line_url || "",
       } : null);
-      document.querySelectorAll('#selfTraitGroups input[name="selfTrait"]').forEach((el) => {
-        el.checked = (form.traits || []).includes(el.value);
+      paintSelfTraits(selfTraitRuntime, {
+        traits: form.traits || [],
+        listing_values: form.listing_values || {},
+        trait_labels: form.trait_labels || [],
       });
       selfPhotoDraft = [...(form.photos || [])];
       renderSelfPhotoDraftAndGrid();

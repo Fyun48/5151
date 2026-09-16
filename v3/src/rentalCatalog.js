@@ -9,6 +9,50 @@ import { DEFAULT_WISH_CONDITIONS, WISH_FORBIDDEN_CONDITION_IDS } from "./wishCon
 export const CATALOG_VALUE_TYPES = Object.freeze(["boolean", "enum", "number", "range", "date"]);
 export const WISH_ACTIONS = Object.freeze(["unspecified", "want", "avoid"]);
 export const LISTING_VALUES = Object.freeze(["unknown", "present", "absent", "allowed", "not_allowed"]);
+export const POLARITY_CONDITION_IDS = Object.freeze(["need_cook", "need_pet", "need_tax"]);
+
+const PROTECTED_PERSONAL_EXACT = Object.freeze([
+  "女性", "男性", "男女", "小姐", "男生", "女生", "gender",
+  "國籍", "種族", "族群", "宗教", "年齡", "婚姻", "性向", "性傾向",
+]);
+const PROTECTED_PERSONAL_PATTERNS = Object.freeze([
+  /限女|限男|女性專|男性專|只限女|只限男|onlyfemale|onlymale|gender|性別限制|限性別/,
+  /國籍|種族|族群|外籍|本國人|外國人|ethnic|nationalit|族裔|限本國|不收外/,
+  /宗教|佛教徒|基督教|天主教|伊斯蘭|回教|道教|信仰|religion/,
+  /性向|性傾向|同志|同性戀|lgbt|orientation/,
+  /婚姻|已婚|未婚|限單身|夫妻限定|marital/,
+  /限年齡|年齡限制|歲以上|歲以下|年輕人限定|不收老人|agelimit/,
+  /移工|外勞|看護工|migrantworker/,
+  /適合對象|限學生|上班族佳/,
+]);
+
+export function isAccessibilityHousingFeature(label) {
+  const text = normalizeConditionLabel(label);
+  return /無障礙|輪椅通行|斜坡道|accessible/.test(text);
+}
+
+export function isProtectedPersonalAttribute(label) {
+  const text = normalizeConditionLabel(label);
+  if (!text || isAccessibilityHousingFeature(text)) return false;
+  if (PROTECTED_PERSONAL_EXACT.includes(text)) return true;
+  return PROTECTED_PERSONAL_PATTERNS.some((re) => re.test(text));
+}
+
+export function assertCatalogConditionAllowed(label, aliases = []) {
+  const texts = [label, ...(Array.isArray(aliases) ? aliases : [])];
+  for (const item of texts) {
+    if (isProtectedPersonalAttribute(item)) {
+      throw catalogError("這個條件涉及個人敏感屬性，不能加入租屋配對目錄");
+    }
+  }
+}
+
+export function assertCatalogSafe(catalog) {
+  for (const row of normalizeCatalog(catalog).conditions) {
+    assertCatalogConditionAllowed(row.label, row.aliases);
+  }
+  return catalog;
+}
 
 const LABEL_MAX = 40;
 const ID_MAX = 40;
@@ -320,8 +364,9 @@ export function upsertCondition(catalog, input = {}) {
   const next = normalizeCatalog(catalog);
   const label = String(input.label || "").trim().slice(0, LABEL_MAX);
   if (!label) throw catalogError("請填條件名稱");
-  const key = normalizeConditionLabel(label);
   const aliases = cleanAliases(input.aliases);
+  assertCatalogConditionAllowed(label, aliases);
+  const key = normalizeConditionLabel(label);
   const clash = next.conditions.find((row) => {
     if (input.id && row.id === input.id) return false;
     if (normalizeConditionLabel(row.label) === key) return true;
@@ -454,10 +499,12 @@ export function normalizeTemplate(input = {}, existingIds = []) {
   const label = String(src.label || "").trim().slice(0, 40);
   if (!label) throw catalogError("請填範本名稱");
   const id = slugId(src.id, generateSystemId(label, existingIds));
+  const catalog = normalizeCatalog(src.catalog);
+  assertCatalogSafe(catalog);
   return {
     id,
     label,
-    catalog: normalizeCatalog(src.catalog),
+    catalog,
   };
 }
 
@@ -521,15 +568,115 @@ export function applyBulkWishActions(catalog, categoryId, action, current = {}) 
   return next;
 }
 
-export function sanitizeWishChoices(catalog, choices = {}) {
+export function sanitizeWishChoices(catalog, choices = {}, { retainHistorical = false } = {}) {
   const map = new Map(normalizeCatalog(catalog).conditions.map((row) => [row.id, row]));
   const out = {};
   for (const [rawId, action] of Object.entries(choices || {})) {
     const id = canonicalId(rawId);
     const row = map.get(id);
-    if (!row || row.enabled === false || row.wish_enabled === false) continue;
-    if (action === "want" && row.wish_allow_want !== false) out[id] = "want";
-    else if (action === "avoid" && row.wish_allow_avoid !== false) out[id] = "avoid";
+    if (!row) continue;
+    const inactive = row.enabled === false || row.wish_enabled === false;
+    if (inactive && !retainHistorical) continue;
+    if (action === "want" && (row.wish_allow_want !== false || (retainHistorical && inactive))) out[id] = "want";
+    else if (action === "avoid" && (row.wish_allow_avoid !== false || (retainHistorical && inactive))) out[id] = "avoid";
+  }
+  return out;
+}
+
+export function resolveWishChoices(catalog, choices = {}) {
+  return sanitizeWishChoices(catalog, choices, { retainHistorical: true });
+}
+
+export function mergeHistoricalWishChoices(catalog, incoming = {}, previous = {}) {
+  const next = sanitizeWishChoices(catalog, incoming);
+  const historical = resolveWishChoices(catalog, previous);
+  const map = new Map(normalizeCatalog(catalog).conditions.map((row) => [row.id, row]));
+  for (const [id, action] of Object.entries(historical)) {
+    const row = map.get(id);
+    if (!row) continue;
+    if (row.enabled === false || row.wish_enabled === false) next[id] = action;
+  }
+  return next;
+}
+
+export function catalogConditionLookup(catalog, { includeInactive = false } = {}) {
+  return normalizeCatalog(catalog).conditions
+    .filter((row) => includeInactive || (row.enabled !== false && row.wish_enabled !== false))
+    .map((row) => ({
+      id: row.id,
+      label: row.label,
+      enabled: row.enabled !== false,
+      wish_enabled: row.wish_enabled !== false,
+      listing_incompatible: row.listing_negative ? [row.listing_negative] : [],
+      listing_compatible: row.listing_positive || [],
+      listing_legacy_positive: row.listing_legacy ? [row.listing_legacy] : [],
+      wish_allow_want: row.wish_allow_want !== false,
+      wish_allow_avoid: row.wish_allow_avoid !== false,
+    }));
+}
+
+export function isPolarityCondition(row = {}) {
+  return POLARITY_CONDITION_IDS.includes(row.id) || Boolean(row.listing_negative && row.listing_legacy);
+}
+
+export function listingValuesFromKnownTraits(traitIds = [], catalog = defaultCatalog()) {
+  const all = listingValuesFromTraits(traitIds, catalog);
+  const out = {};
+  for (const [id, value] of Object.entries(all)) {
+    if (value && value !== "unknown") out[id] = value;
+  }
+  return out;
+}
+
+export function normalizeListingValues(input = {}, catalog = defaultCatalog()) {
+  const map = new Map(normalizeCatalog(catalog).conditions.map((row) => [row.id, row]));
+  const out = {};
+  for (const [rawId, raw] of Object.entries(input || {})) {
+    const id = canonicalId(rawId);
+    if (!map.has(id)) continue;
+    const value = String(raw || "").trim();
+    if (!LISTING_VALUES.includes(value) || value === "unknown") continue;
+    out[id] = value;
+  }
+  return out;
+}
+
+export function traitsFromListingValues(values = {}, catalog = defaultCatalog(), extraTraitIds = []) {
+  const ids = [];
+  const push = (id) => {
+    const key = String(id || "").trim();
+    if (key && !ids.includes(key)) ids.push(key);
+  };
+  for (const id of extraTraitIds || []) push(id);
+  for (const row of normalizeCatalog(catalog).conditions) {
+    const value = values[row.id];
+    if (value === "not_allowed" && row.listing_negative) push(row.listing_negative);
+    else if (value === "allowed" && row.listing_legacy) push(row.listing_legacy);
+    else if (value === "present") {
+      if ((row.listing_positive || []).length) row.listing_positive.forEach(push);
+      else push(row.id);
+    } else if (value === "absent") {
+      /* polarity/presence absent is represented by omission, not a dedicated trait id */
+    }
+  }
+  return ids.slice(0, 40);
+}
+
+export function mergeListingConditionValues(catalog, inputValues = {}, inputTraits = [], previousValues = {}, previousTraits = []) {
+  const incoming = {
+    ...listingValuesFromKnownTraits(inputTraits, catalog),
+    ...normalizeListingValues(inputValues, catalog),
+  };
+  const previous = {
+    ...listingValuesFromKnownTraits(previousTraits, catalog),
+    ...normalizeListingValues(previousValues, catalog),
+  };
+  const map = new Map(normalizeCatalog(catalog).conditions.map((row) => [row.id, row]));
+  const out = { ...incoming };
+  for (const [id, value] of Object.entries(previous)) {
+    const row = map.get(id);
+    if (!row) continue;
+    if (row.enabled === false || row.listing_enabled === false) out[id] = value;
   }
   return out;
 }
@@ -576,7 +723,7 @@ export function catalogAsWishConditions(catalog) {
     }));
 }
 
-export function catalogAsSelfTraitGroups(catalog) {
+export function catalogAsSelfTraitGroups(catalog, { includeInactive = false } = {}) {
   const cats = normalizeCatalog(catalog);
   return cats.categories
     .filter((cat) => cat.enabled !== false)
@@ -584,14 +731,19 @@ export function catalogAsSelfTraitGroups(catalog) {
       id: cat.id,
       label: cat.label,
       items: cats.conditions
-        .filter((row) => row.category_id === cat.id && row.enabled !== false && row.listing_enabled !== false)
-        .map((row) => ({
-          id: row.listing_negative || row.listing_positive[0] || row.id,
-          label: row.listing_negative
-            ? listingNegativeLabel(row)
-            : row.label,
-          canonical_id: row.id,
-        })),
+        .filter((row) => row.category_id === cat.id && (includeInactive || (row.enabled !== false && row.listing_enabled !== false)))
+        .map((row) => {
+          const polarity = isPolarityCondition(row);
+          return {
+            id: polarity ? row.id : (row.listing_positive[0] || row.id),
+            label: row.label,
+            canonical_id: row.id,
+            input: polarity ? "polarity" : "presence",
+            listing_negative: row.listing_negative || "",
+            listing_legacy: row.listing_legacy || "",
+            enabled: row.enabled !== false && row.listing_enabled !== false,
+          };
+        }),
     }))
     .filter((group) => group.items.length);
 }

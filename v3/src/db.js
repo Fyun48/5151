@@ -166,6 +166,7 @@ import {
   deleteOrDisableCondition,
   publicAdminCatalog,
   catalogDiff,
+  assertCatalogSafe,
 } from "./rentalCatalog.js";
 import {
   normalizeRentalMarketplaceFlags,
@@ -1465,6 +1466,7 @@ export function saveRentalCatalog(partial = {}) {
     return saveRentalCatalogDraft(defaultCatalog());
   }
   const next = normalizeCatalog(src.catalog || src);
+  assertCatalogSafe(next);
   writeSettingKey("rentalCatalog", next);
   writeSettingKey("rentalCatalogDraft", null);
   setRentalCatalogCache(next);
@@ -1479,6 +1481,7 @@ export function getRentalCatalogDraft() {
 
 export function saveRentalCatalogDraft(catalog) {
   const next = normalizeCatalog(catalog);
+  assertCatalogSafe(next);
   writeSettingKey("rentalCatalogDraft", next);
   return { draft: next, diff: catalogDiff(getRentalCatalog(), next) };
 }

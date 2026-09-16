@@ -17,9 +17,10 @@ import {
   publishWishRoom,
   setRentalCatalogCache,
   setRentalMarketplaceFlags,
+  updateWishRoom,
 } from "../src/demand.js";
 import { activityScoreFromSignals, ttlExpiresAt } from "../src/wishLifecycle.js";
-import { defaultCatalog, upsertCondition } from "../src/rentalCatalog.js";
+import { defaultCatalog, deleteOrDisableCondition, upsertCondition } from "../src/rentalCatalog.js";
 import { listingFitScore } from "../src/listingScore.js";
 import { preferPrimaryListing } from "../src/match.js";
 import { publicRentalMarketplaceFlags } from "../src/rentalMarketplaceFlags.js";
@@ -335,6 +336,44 @@ test("existing login signal updates owner activity bucket", () => {
   assert.equal(owner.activity_bucket, "today");
   const pub = getDemandPost(db, post.public_token, { publicOnly: true });
   assert.equal("activity_bucket" in pub, false);
+  db.close();
+});
+
+test("guest can open listed wish via token but numeric API still 404s", () => {
+  const db = open();
+  db.prepare("INSERT INTO users(id, email, nickname, created_at) VALUES (2, 'b@example.com', '會員乙', '2026-01-01T00:00:00.000Z')").run();
+  const post = createDemandPost(db, 1, sample());
+  const listed = listDemandPosts(db);
+  assert.equal(listed.length, 1);
+  assert.ok(listed[0].public_token);
+  assert.equal(listed[0].public_ref, post.public_token);
+  const fromCard = getDemandPost(db, listed[0].public_ref, { publicOnly: true });
+  assert.equal(fromCard.id, post.id);
+  const other = getDemandPost(db, listed[0].public_ref, { viewerId: 2 });
+  assert.equal(other.id, post.id);
+  assert.throws(() => getDemandPost(db, String(post.id), { publicOnly: true }), /找不到/);
+  assert.throws(() => getDemandPost(db, String(post.id), { viewerId: 2 }), /找不到/);
+  db.close();
+});
+
+test("disabled catalog condition stays on wish after reload and unrelated edit", () => {
+  const db = open();
+  setRentalMarketplaceFlags({ rental_catalog_v2: { enabled: true } });
+  const catalog = upsertCondition(defaultCatalog(), { label: "烘衣機", category_id: "appliance" });
+  const dryer = catalog.conditions.find((row) => row.label === "烘衣機");
+  setRentalCatalogCache(catalog);
+  const post = createDemandPost(db, 1, sample({ choices: { [dryer.id]: "want", need_cook: "want" } }));
+  assert.equal(post.choices[dryer.id], "want");
+  const disabled = deleteOrDisableCondition(catalog, dryer.id, { wish: 1 });
+  setRentalCatalogCache(disabled.catalog);
+  const reloaded = getDemandPost(db, post.id, { viewerId: 1 });
+  assert.equal(reloaded.choices[dryer.id], "want");
+  assert.ok(reloaded.must_have_labels.includes("烘衣機"));
+  const edited = updateWishRoom(db, 1, post.id, { body: "改了說明但仍要烘衣機", choices: { need_cook: "want" } });
+  assert.equal(edited.choices[dryer.id], "want");
+  assert.ok(edited.must_have_labels.includes("烘衣機"));
+  setRentalMarketplaceFlags({});
+  setRentalCatalogCache(null);
   db.close();
 });
 
