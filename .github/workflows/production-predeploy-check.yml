@@ -185,6 +185,8 @@ jobs:
           username: ${{ secrets.NAS_USER }}
           key: ${{ secrets.NAS_SSH_KEY }}
           script_stop: true
+          # Live v3.db online backup can exceed appleboy's default 10m; job timeout-minutes stays 30.
+          command_timeout: 20m
           script: |
             set -euo pipefail
             # 不 docker compose up、不 pull、不重啟成新版、不印 secrets。
