@@ -202,8 +202,21 @@ function decoratePublicWish(row) {
     const info = lookupDistrict(key);
     return info ? `${info.city}${info.name}` : key;
   });
+  const catalog = currentMatchCatalog();
+  const condMap = new Map((catalog.conditions || []).map((item) => [item.id, item.label]));
   const must = parseJsonArray(row.must_have);
   const avoid = parseJsonArray(row.avoid);
+  const housingLabels = {
+    any: "不限",
+    whole: "整層住家",
+    suite: "獨立套房",
+    share: "分租套房",
+    room: "雅房",
+    elevator: "電梯大樓",
+    apartment: "公寓",
+    other: "其他",
+  };
+  const layoutLabels = { "1": "1 房", "2": "2 房", "3": "3 房", "4plus": "4 房以上" };
   return publicWishRoomView({
     id: Number(row.id),
     city: String(row.city || "") || (lookupDistrict(districts[0])?.city || ""),
@@ -213,10 +226,10 @@ function decoratePublicWish(row) {
     rent_max: Number(row.rent_max) || 0,
     includes_management: Number(row.includes_management) === 1,
     housing_type: row.housing_type,
-    housing_label: row.housing_type,
+    housing_label: housingLabels[row.housing_type] || row.housing_type,
     ping_min: Number(row.ping_min) || 0,
     layout: row.layout,
-    layout_label: row.layout,
+    layout_label: layoutLabels[row.layout] || row.layout || "格局不限",
     move_in_date: row.move_in_date,
     lease_duration: row.lease_duration,
     lease_label: row.lease_duration,
@@ -224,11 +237,11 @@ function decoratePublicWish(row) {
     commute_minutes: 0,
     mrt_walk: Number(row.mrt_walk) === 1,
     must_have: must,
-    must_have_labels: must,
+    must_have_labels: must.map((id) => condMap.get(id) || id),
     nice_to_have: [],
     nice_to_have_labels: [],
     avoid,
-    avoid_labels: avoid,
+    avoid_labels: avoid.map((id) => condMap.get(id) || id),
     body: "",
     status: row.status,
     created_at: row.created_at,
