@@ -219,11 +219,15 @@ test("close hides from public list and reopen works only without another active"
   const reopened = reopenWishRoom(db, 1, post.id);
   assert.equal(reopened.status, "open");
   assert.equal(listDemandPosts(db).length, 1);
+  assert.throws(
+    () => createDemandPost(db, 1, { ...sample({ body: "這是草稿不會公開" }), draft: true }),
+    (e) => e.status === 409 && e.code === "wish_mutable_limit",
+  );
+  closeDemandPost(db, 1, reopened.id);
   const draft = createDemandPost(db, 1, { ...sample({ body: "這是草稿不會公開" }), draft: true });
   assert.equal(draft.status, "draft");
-  assert.throws(() => publishWishRoom(db, 1, draft.id), /一則公開/);
-  closeDemandPost(db, 1, reopened.id);
   const publishedDraft = publishWishRoom(db, 1, draft.id);
+  assert.equal(publishedDraft.id, draft.id);
   assert.equal(publishedDraft.status, "open");
   db.close();
 });

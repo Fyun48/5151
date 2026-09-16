@@ -147,9 +147,15 @@ export function ensureDemandSchema(db) {
   `);
   addWishColumns(db);
   closeLegacyExtraOpenPosts(db);
+  closeLegacyExtraDraftPosts(db);
+  closeLeftoverDraftsBesideOpen(db);
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_demand_one_open
       ON demand_posts(user_id) WHERE status = 'open';
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_demand_one_draft
+      ON demand_posts(user_id) WHERE status = 'draft';
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_demand_one_mutable
+      ON demand_posts(user_id) WHERE status IN ('open', 'draft');
     CREATE INDEX IF NOT EXISTS idx_demand_posts_updated
       ON demand_posts(status, updated_at, id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_demand_public_token
@@ -258,9 +264,10 @@ function addWishColumns(db) {
   }
 }
 
+const LEGACY_COLLAPSED_REASON = "legacy_collapsed";
+
 /** 舊額度為 2 則 open：保留較新一則為 ACTIVE，其餘改 closed（不刪資料）。 */
 function closeLegacyExtraOpenPosts(db, now = new Date()) {
-  const stamp = iso(now);
   const extras = db.prepare(`
     SELECT id FROM demand_posts
     WHERE status = 'open'
@@ -268,8 +275,124 @@ function closeLegacyExtraOpenPosts(db, now = new Date()) {
         SELECT MAX(id) FROM demand_posts WHERE status = 'open' GROUP BY user_id
       )
   `).all();
-  const upd = db.prepare("UPDATE demand_posts SET status = 'closed', closed_at = COALESCE(closed_at, ?) WHERE id = ?");
-  for (const row of extras) upd.run(stamp, row.id);
+  retireWishRows(db, extras.map((row) => row.id), now, { keepLifecycle: true });
+}
+
+function closeLegacyExtraDraftPosts(db, now = new Date()) {
+  let extras = [];
+  try {
+    extras = db.prepare(`
+      SELECT id FROM demand_posts
+      WHERE status = 'draft'
+        AND id NOT IN (
+          SELECT MAX(id) FROM demand_posts WHERE status = 'draft' GROUP BY user_id
+        )
+    `).all();
+  } catch {
+    return;
+  }
+  retireWishRows(db, extras.map((row) => row.id), now);
+}
+
+/** 同一 user 若已有 open，封存 leftover draft；不得改成可 resume 的 paused。 */
+function closeLeftoverDraftsBesideOpen(db, now = new Date()) {
+  let leftovers = [];
+  try {
+    leftovers = db.prepare(`
+      SELECT d.id FROM demand_posts d
+      WHERE d.status = 'draft'
+        AND EXISTS (
+          SELECT 1 FROM demand_posts o
+          WHERE o.user_id = d.user_id AND o.status = 'open'
+        )
+    `).all();
+  } catch {
+    return;
+  }
+  retireWishRows(db, leftovers.map((row) => row.id), now);
+}
+
+function retireWishRows(db, ids, now = new Date(), { keepLifecycle = false } = {}) {
+  if (!ids.length) return;
+  const stamp = iso(now);
+  const hasLifecycle = hasWishColumn(db, "lifecycle");
+  const hasReason = hasWishColumn(db, "closed_reason");
+  for (const id of ids) {
+    if (keepLifecycle || !hasLifecycle || !hasReason) {
+      db.prepare("UPDATE demand_posts SET status = 'closed', closed_at = COALESCE(closed_at, ?) WHERE id = ?").run(stamp, id);
+      continue;
+    }
+    db.prepare(`
+      UPDATE demand_posts
+      SET status = 'closed',
+          closed_at = COALESCE(closed_at, ?),
+          closed_reason = ?,
+          lifecycle = 'draft'
+      WHERE id = ?
+    `).run(stamp, LEGACY_COLLAPSED_REASON, id);
+  }
+}
+
+function existingDraftId(db, uid) {
+  const row = db.prepare(
+    "SELECT id FROM demand_posts WHERE user_id = ? AND status = 'draft' ORDER BY id DESC LIMIT 1",
+  ).get(uid);
+  return Number(row?.id) || 0;
+}
+
+function existingOpenId(db, uid) {
+  const row = db.prepare(
+    "SELECT id FROM demand_posts WHERE user_id = ? AND status = 'open' ORDER BY id DESC LIMIT 1",
+  ).get(uid);
+  return Number(row?.id) || 0;
+}
+
+function countMutable(db, userId, exceptId = 0) {
+  const row = exceptId
+    ? db.prepare(
+      "SELECT COUNT(*) AS n FROM demand_posts WHERE user_id = ? AND status IN ('open', 'draft') AND id != ?",
+    ).get(userId, exceptId)
+    : db.prepare(
+      "SELECT COUNT(*) AS n FROM demand_posts WHERE user_id = ? AND status IN ('open', 'draft')",
+    ).get(userId);
+  return Number(row?.n) || 0;
+}
+
+function isUniqueUserConstraint(error) {
+  return /UNIQUE constraint failed: demand_posts\.user_id/i.test(String(error?.message || ""));
+}
+
+function throwDraftBesideOpen() {
+  throw httpError("已有公開的許願房時不能再存草稿", 409, "wish_mutable_limit");
+}
+
+function throwActiveLimit() {
+  throw httpError("同時只能有一則公開的許願房", 409, "wish_active_limit");
+}
+
+function assertNotCollapsed(row) {
+  if (String(row?.closed_reason || "") === LEGACY_COLLAPSED_REASON) {
+    throw httpError("這則舊草稿已封存，請另開新的一則", 400, "wish_collapsed");
+  }
+}
+
+/** /publish 只接受 draft；already-open 可 idempotent 回傳，其餘狀態 fail-closed。 */
+function classifyWishPublishState(row) {
+  assertNotCollapsed(row);
+  const status = String(row?.status || "");
+  if (status === "draft") return "draft";
+  if (status === "open") return "already_open";
+  const life = mapLegacyLifecycle(row);
+  if (life === "completed") {
+    throw httpError("已找到房的許願房請另開新的一則", 400, "wish_completed");
+  }
+  if (life === "blocked" || status === "hidden") {
+    throw httpError("已封鎖的許願房不能自己恢復", 400, "wish_blocked");
+  }
+  if (life === "paused" || life === "expired") {
+    throw httpError("已暫停或過期的許願房請改用恢復", 400, "wish_use_resume");
+  }
+  throw httpError("只有草稿可以刊登", 400, "wish_not_draft");
 }
 
 function httpError(message, status = 400, code = "") {
@@ -313,8 +436,8 @@ function withImmediate(db, fn) {
     return result;
   } catch (error) {
     try { db.exec("ROLLBACK"); } catch { /* already rolled back */ }
-    if (String(error?.message || "").includes("UNIQUE constraint failed: demand_posts.user_id")) {
-      throw httpError("同時只能有一則公開的許願房", 409, "wish_active_limit");
+    if (isUniqueUserConstraint(error)) {
+      throwActiveLimit();
     }
     throw error;
   }
@@ -1036,6 +1159,29 @@ function writeRow(db, id, fields, extra = {}) {
   );
 }
 
+function applyPublishInPlace(db, row, fields, now) {
+  const stamp = iso(now);
+  const expires = publishExpiry(now);
+  writeRow(db, row.id, fields, {
+    updated_at: stamp,
+    status: "open",
+    expires_at: expires,
+    published_at: row.published_at || stamp,
+    closed_at: null,
+  });
+  if (!row.published_at) {
+    db.prepare("UPDATE demand_posts SET published_at = ? WHERE id = ? AND published_at IS NULL").run(stamp, row.id);
+  }
+  db.prepare("UPDATE demand_posts SET closed_at = NULL, status = 'open', expires_at = ? WHERE id = ?").run(expires, row.id);
+  writeLifecycle(db, row.id, {
+    lifecycle: "active",
+    last_confirmed_at: stamp,
+    last_active_at: stamp,
+    continuous_active_from: row.continuous_active_from || stamp,
+    closed_reason: "",
+  });
+}
+
 export function createDemandPost(db, userId, input = {}, now = new Date()) {
   const uid = Number(userId) || 0;
   if (!uid) throw httpError("請先登入", 401);
@@ -1046,11 +1192,48 @@ export function createDemandPost(db, userId, input = {}, now = new Date()) {
   if (!asDraft) assertPublishable(fields);
   else if (fields.body && fields.body.length && fields.body.length < 4) throw httpError("請寫一點找房條件（至少 4 個字）");
   return withImmediate(db, () => {
-    if (!asDraft && countOpen(db, uid) >= DEMAND_MAX_OPEN) {
-      throw httpError("同時只能有一則公開的許願房", 409, "wish_active_limit");
+    const draftId = existingDraftId(db, uid);
+    const openId = existingOpenId(db, uid);
+    if (asDraft) {
+      if (openId) throwDraftBesideOpen();
+      if (draftId) {
+        writeRow(db, draftId, fields, { updated_at: iso(now) });
+        return getDemandPost(db, draftId, { viewerId: uid });
+      }
+      try {
+        const id = insertRow(db, uid, fields, "draft", now);
+        return getDemandPost(db, id, { viewerId: uid });
+      } catch (error) {
+        if (isUniqueUserConstraint(error) || /UNIQUE/i.test(String(error.message || ""))) {
+          if (existingOpenId(db, uid)) throwDraftBesideOpen();
+          const racedDraft = existingDraftId(db, uid);
+          if (racedDraft) {
+            writeRow(db, racedDraft, fields, { updated_at: iso(now) });
+            return getDemandPost(db, racedDraft, { viewerId: uid });
+          }
+        }
+        throw error;
+      }
     }
-    const id = insertRow(db, uid, fields, asDraft ? "draft" : "open", now);
-    return getDemandPost(db, id, { viewerId: uid });
+    if (openId) throwActiveLimit();
+    if (draftId) {
+      applyPublishInPlace(db, rowById(db, draftId), fields, now);
+      return getDemandPost(db, draftId, { viewerId: uid });
+    }
+    try {
+      const id = insertRow(db, uid, fields, "open", now);
+      return getDemandPost(db, id, { viewerId: uid });
+    } catch (error) {
+      if (isUniqueUserConstraint(error) || /UNIQUE/i.test(String(error.message || ""))) {
+        const racedDraft = existingDraftId(db, uid);
+        if (racedDraft) {
+          applyPublishInPlace(db, rowById(db, racedDraft), fields, now);
+          return getDemandPost(db, racedDraft, { viewerId: uid });
+        }
+        if (existingOpenId(db, uid)) throwActiveLimit();
+      }
+      throw error;
+    }
   });
 }
 
@@ -1076,31 +1259,16 @@ export function publishWishRoom(db, userId, postId, input = {}, now = new Date()
     const row = rowById(db, postId);
     if (!row) throw httpError("找不到這則許願房", 404);
     if (Number(row.user_id) !== uid) throw httpError("只能刊登自己的許願房", 403);
+    const publishState = classifyWishPublishState(row);
+    if (publishState === "already_open") {
+      return getDemandPost(db, row.id, { viewerId: uid });
+    }
     const fields = Object.keys(input || {}).length ? normalizeWishInput(db, uid, input, row) : normalizeWishInput(db, uid, {}, row);
     assertPublishable(fields);
-    if (row.status !== "open" && countOpen(db, uid, row.id) >= DEMAND_MAX_OPEN) {
-      throw httpError("同時只能有一則公開的許願房", 409, "wish_active_limit");
+    if (countMutable(db, uid, row.id) >= DEMAND_MAX_OPEN) {
+      throwActiveLimit();
     }
-    const stamp = iso(now);
-    const expires = publishExpiry(now);
-    writeRow(db, row.id, fields, {
-      updated_at: stamp,
-      status: "open",
-      expires_at: expires,
-      published_at: row.published_at || stamp,
-      closed_at: null,
-    });
-    if (!row.published_at) {
-      db.prepare("UPDATE demand_posts SET published_at = ? WHERE id = ? AND published_at IS NULL").run(stamp, row.id);
-    }
-    db.prepare("UPDATE demand_posts SET closed_at = NULL, status = 'open', expires_at = ? WHERE id = ?").run(expires, row.id);
-    writeLifecycle(db, row.id, {
-      lifecycle: "active",
-      last_confirmed_at: stamp,
-      last_active_at: stamp,
-      continuous_active_from: row.continuous_active_from || stamp,
-      closed_reason: "",
-    });
+    applyPublishInPlace(db, row, fields, now);
     return getDemandPost(db, row.id, { viewerId: uid });
   });
 }
@@ -1129,8 +1297,9 @@ export function reopenWishRoom(db, userId, postId, now = new Date()) {
     if (row.status === "open") return getDemandPost(db, row.id, { viewerId: uid });
     if (row.status === "hidden") throw httpError("已隱藏的許願房不能重開", 400);
     if (row.status === "draft") throw httpError("草稿請改用刊登", 400);
-    if (countOpen(db, uid, row.id) >= DEMAND_MAX_OPEN) {
-      throw httpError("同時只能有一則公開的許願房", 409, "wish_active_limit");
+    assertNotCollapsed(row);
+    if (countMutable(db, uid, row.id) >= DEMAND_MAX_OPEN) {
+      throwActiveLimit();
     }
     const fields = normalizeWishInput(db, uid, {}, row);
     assertPublishable(fields);

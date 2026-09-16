@@ -188,6 +188,7 @@ export function publicPath(req) {
     p === "/sw.js" ||
     p === "/tokens.css" ||
     p === "/mascot.js" ||
+    p === "/pra-helpers.js" ||
     p === "/guest-search-state.js" ||
     p === "/cities-embed.js" ||
     p === "/cities.json" ||

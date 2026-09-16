@@ -3478,6 +3478,7 @@
             </div>
           </div>
           <div class="row" style="margin-top:10px">
+            <button type="button" class="ghost" id="wishSaveDraft">儲存草稿</button>
             <button type="submit" class="primary" id="demandSubmit">公開許願房</button>
             <button type="button" class="ghost" id="wishCancelEdit">取消</button>
             <span class="save-msg" id="demandMsg" role="status" aria-live="polite"></span>
@@ -4277,6 +4278,7 @@
     </div>
   </div>
   <script src="/mascot.js"></script>
+  <script src="/pra-helpers.js"></script>
   <script src="/guest-search-state.js"></script>
   <script src="/cities-embed.js"></script>
   <script>
@@ -9062,9 +9064,9 @@
           <div class="wish-v2-head">
             <strong>${esc(cat.label)}</strong>
             <span class="wish-seg">
-              <button type="button" class="ghost" data-wish-bulk="want" data-wish-cat="${esc(cat.id)}">全部要有</button>
-              <button type="button" class="ghost" data-wish-bulk="avoid" data-wish-cat="${esc(cat.id)}">全部不要</button>
-              <button type="button" class="ghost" data-wish-bulk="clear" data-wish-cat="${esc(cat.id)}">清除</button>
+              <button type="button" class="ghost" data-wish-bulk="want">全部要有</button>
+              <button type="button" class="ghost" data-wish-bulk="avoid">全部不要</button>
+              <button type="button" class="ghost" data-wish-bulk="clear">清除</button>
             </span>
           </div>
           ${rows.map((row) => {
@@ -9160,6 +9162,7 @@
         && row.closed_reason !== "completed"
       ));
       $("wishCreateBtn").hidden = Boolean(active);
+      if ($("wishCreateBtn")) $("wishCreateBtn").textContent = PraHelpers.wishCreateButtonLabel({ active, draft: wishMine.draft });
       $("wishViewBtn").hidden = !active;
       $("wishEditBtn").hidden = !active;
       $("wishCloseBtn").hidden = !active || wishLifeOn();
@@ -9172,6 +9175,32 @@
       $("wishLoadExampleBtn").hidden = !wishMine.has_example;
       $("wishDeleteExampleBtn").hidden = !wishMine.has_example;
     }
+    function isWishDraftContext() {
+      return PraHelpers.isWishDraftContext({
+        editingId: wishEditingId,
+        activeId: wishMine.active?.id || 0,
+        fullReconfirm: isWishFullReconfirm(wishEditingId),
+      });
+    }
+    function syncWishDraftAction() {
+      const btn = $("wishSaveDraft");
+      if (!btn) return;
+      btn.hidden = !isWishDraftContext();
+    }
+    let wishFormGate = { inFlight: false };
+    function beginWishFormBusy() {
+      const next = PraHelpers.beginWishFormMutation(wishFormGate);
+      if (!next.allowed) return false;
+      wishFormGate = next.state;
+      if ($("wishSaveDraft")) $("wishSaveDraft").disabled = wishFormGate.draftDisabled;
+      if ($("demandSubmit")) $("demandSubmit").disabled = wishFormGate.publishDisabled;
+      return true;
+    }
+    function endWishFormBusy() {
+      wishFormGate = PraHelpers.endWishFormMutation(wishFormGate);
+      if ($("wishSaveDraft")) $("wishSaveDraft").disabled = wishFormGate.draftDisabled;
+      if ($("demandSubmit")) $("demandSubmit").disabled = wishFormGate.publishDisabled;
+    }
     function showWishForm(show) {
       if ($("wishFormWrap")) $("wishFormWrap").hidden = !show;
       if (!show) clearWishFullReconfirm();
@@ -9179,6 +9208,7 @@
         fillDemandDistricts();
         if (!$("wishMust")?.children.length) renderWishConditionGroups();
       }
+      syncWishDraftAction();
       syncWishOwnerBar();
       paintWishLifecycleBar();
     }
@@ -9481,21 +9511,29 @@
         remindGuest();
         return;
       }
+      if (!beginWishFormBusy()) return;
       const msg = $("demandMsg");
       try {
         const payload = collectWishForm();
         const pendingId = wishEditingId;
+        const plan = PraHelpers.planWishPublish({
+          editingId: wishEditingId,
+          activeId: wishMine.active?.id || 0,
+        });
         let res;
-        if (wishEditingId) {
+        if (plan.create) {
+          res = await fetch("/api/wish-rooms", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+        } else {
           res = await fetch(`/api/wish-rooms/${wishEditingId}`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
           });
-          const current = wishMine.active;
-          if (res.ok && current && Number(current.id) === Number(wishEditingId) && current.status === "open") {
-            /* 已公開的直接就地更新 */
-          } else if (res.ok) {
+          if (res.ok && plan.publish) {
             const published = await fetch(`/api/wish-rooms/${wishEditingId}/publish`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -9503,12 +9541,6 @@
             });
             if (published.ok) res = published;
           }
-        } else {
-          res = await fetch("/api/wish-rooms", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          });
         }
         const data = await readApi(res);
         if (!res.ok) throw new Error(data.error || "刊登失敗");
@@ -9527,6 +9559,42 @@
         maybeAskPush("公開許願房後可允許系統推播。");
       } catch (error) {
         setWishStatus(error.message);
+      } finally {
+        endWishFormBusy();
+      }
+    });
+    $("wishSaveDraft")?.addEventListener("click", async () => {
+      if (isGuest) {
+        remindGuest();
+        return;
+      }
+      const plan = PraHelpers.planWishDraftSave({
+        editingId: wishEditingId,
+        activeId: wishMine.active?.id || 0,
+        fullReconfirm: isWishFullReconfirm(wishEditingId),
+      });
+      if (!plan.allowed) {
+        setWishStatus("已公開的許願房請用「公開許願房」更新");
+        return;
+      }
+      if (!beginWishFormBusy()) return;
+      try {
+        const payload = { ...collectWishForm(), ...plan.body };
+        const res = await fetch(plan.url, {
+          method: plan.method,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "草稿儲存失敗");
+        wishEditingId = Number(data.id || wishEditingId) || wishEditingId;
+        setWishStatus("已儲存草稿（尚未公開）");
+        await loadDemand();
+        syncWishDraftAction();
+      } catch (error) {
+        setWishStatus(error.message);
+      } finally {
+        endWishFormBusy();
       }
     });
     $("demandList")?.addEventListener("click", async (ev) => {
@@ -9630,17 +9698,9 @@
     $("wishCatalogGroups")?.addEventListener("click", (ev) => {
       const bulk = ev.target.closest("[data-wish-bulk]");
       if (bulk) {
-        const cat = bulk.dataset.wishCat;
-        const action = bulk.dataset.wishBulk;
-        const section = bulk.closest("[data-wish-cat]") || document;
-        const ids = [...new Set([...section.querySelectorAll("[data-wish-v2]")].map((btn) => btn.dataset.wishV2))];
-        for (const id of ids) {
-          const btns = [...section.querySelectorAll(`[data-wish-v2="${id}"]`)];
-          const target = action === "clear" ? "unspecified" : action;
-          const hasTarget = btns.some((btn) => btn.dataset.wishAction === target);
-          const next = hasTarget ? target : "unspecified";
-          btns.forEach((btn) => btn.setAttribute("aria-pressed", btn.dataset.wishAction === next ? "true" : "false"));
-        }
+        const section = PraHelpers.findWishBulkSection(bulk);
+        if (!section) return;
+        PraHelpers.applyWishBulkToSection(section, bulk.dataset.wishBulk);
         return;
       }
       const btn = ev.target.closest("[data-wish-v2]");
@@ -10213,14 +10273,22 @@
       document.execCommand("insertText", false, mark);
       syncDescBodyFromEditor();
     });
+    let selfListingGate = { inFlight: false, key: "", fingerprint: "" };
     $("selfListingForm")?.addEventListener("submit", async (ev) => {
       ev.preventDefault();
+      const started = PraHelpers.beginSelfListingSubmit(selfListingGate);
+      if (!started.allowed) return;
+      selfListingGate = started.state;
+      if ($("selfSubmit")) $("selfSubmit").disabled = selfListingGate.submitDisabled;
       if (isGuest) {
+        selfListingGate = PraHelpers.endSelfListingSubmit(selfListingGate, { success: false });
+        if ($("selfSubmit")) $("selfSubmit").disabled = selfListingGate.submitDisabled;
         remindGuest();
         return;
       }
       const msg = $("selfMsg");
       const fail = (text) => { if (msg) msg.textContent = text; };
+      const submitBtn = $("selfSubmit");
       try {
         applyAddressToSelects();
         const title = String($("selfTitle")?.value || "").trim();
@@ -10272,6 +10340,15 @@
         };
         const publishFromImport = currentImport?.status === "confirmed" && currentImport?.id;
         const publishDraft = !publishFromImport && editingDraftId;
+        const isCreate = !publishFromImport && !publishDraft;
+        if (isCreate) {
+          selfListingGate = PraHelpers.resolveSelfListingCreateKey(
+            selfListingGate,
+            PraHelpers.selfListingClientFingerprint(payload),
+            PraHelpers.newSelfListingIdempotencyKey,
+          );
+          payload.idempotency_key = selfListingGate.key;
+        }
         const res = await fetch(
           publishFromImport
             ? `/api/listing-imports/${currentImport.id}/publish`
@@ -10285,6 +10362,9 @@
         });
         const data = await readApi(res);
         if (!res.ok) throw new Error(data.error || "刊登失敗");
+        if (isCreate) {
+          selfListingGate = PraHelpers.endSelfListingSubmit(selfListingGate, { success: true });
+        }
         if (msg) msg.textContent = "已刊登。資料寫得越清楚，來看的人越少再問一遍。";
         currentImport = null;
         editingDraftId = null;
@@ -10302,6 +10382,11 @@
         maybeAskPush("刊登物件後可允許系統推播。");
       } catch (error) {
         if (msg) msg.textContent = error.message;
+      } finally {
+        if (selfListingGate.inFlight) {
+          selfListingGate = PraHelpers.endSelfListingSubmit(selfListingGate, { success: false });
+        }
+        if (submitBtn) submitBtn.disabled = selfListingGate.submitDisabled;
       }
     });
     let editingDraftId = null;

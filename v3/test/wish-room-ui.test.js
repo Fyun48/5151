@@ -18,6 +18,7 @@ test("navigation and empty/owner copy use 許願房", () => {
   assert.match(html, /建立我的許願房/);
   assert.match(html, /目前沒有公開的許願房/);
   assert.match(html, /id="wishCreateBtn"/);
+  assert.match(html, /id="wishSaveDraft"/);
   assert.match(html, /id="wishEditBtn"/);
   assert.match(html, /id="wishCloseBtn"/);
   assert.match(html, /id="wishSaveExampleBtn"/);
@@ -75,7 +76,8 @@ test("public share page and routes exist; guests can read", () => {
   assert.match(server, /"extend", "pause", "resume", "complete", "confirm", "full_reconfirm"/);
   assert.match(html, /id="wishCatalogV2"/);
   assert.match(html, /selected\.choices/);
-  assert.match(html, /hasTarget \? target : "unspecified"/);
+  assert.match(html, /PraHelpers\.applyWishBulkToSection/);
+  assert.match(html, /PraHelpers\.findWishBulkSection/);
   assert.match(html, /\/api\/public\/wish-room\//);
   assert.match(html, /wishPublicRef/);
   assert.match(html, /data-wish-public/);
@@ -100,10 +102,17 @@ test("index script still parses and keeps demand view id", () => {
 
 test("server-side one-active and example APIs are present", () => {
   assert.match(demand, /idx_demand_one_open/);
+  assert.match(demand, /idx_demand_one_mutable/);
+  assert.match(demand, /status IN \('open', 'draft'\)/);
   assert.match(demand, /wish_room_example/);
   assert.match(server, /app\.put\("\/api\/wish-rooms\/example"/);
   assert.match(server, /app\.post\("\/api\/wish-rooms\/:id\/reopen"/);
-  assert.match(server, /app\.post\("\/api\/wish-rooms\/:id\/publish"/);
+  const publishRoute = server.slice(
+    server.indexOf('app.post("/api/wish-rooms/:id/publish"'),
+    server.indexOf('app.post("/api/wish-rooms/:id/reopen"'),
+  );
+  assert.match(publishRoute, /publishWishRoomFor/);
+  assert.doesNotMatch(publishRoute, /applyPublishInPlace|status\s*=\s*['"]open['"]/);
   assert.match(server, /app\.get\("\/api\/admin\/wish-conditions"/);
   assert.match(server, /app\.put\("\/api\/admin\/wish-conditions"/);
 });

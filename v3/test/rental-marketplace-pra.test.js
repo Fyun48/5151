@@ -75,13 +75,13 @@ test("public projection drops PII and uses opaque token path", () => {
 test("lifecycle flag off blocks new actions; on uses real TTL and complete", () => {
   const db = open();
   setRentalMarketplaceFlags({ wish: { lifecycle_enabled: false } });
-  const post = createDemandPost(db, 1, sample());
-  assert.equal(post.expires_at.startsWith("9999"), true);
+  const post = createDemandPost(db, 1, { ...sample(), draft: true });
   assert.throws(() => applyWishLifecycleAction(db, 1, post.id, "extend"), /尚未啟用/);
   setRentalMarketplaceFlags({ wish: { lifecycle_enabled: true } });
   const published = publishWishRoom(db, 1, post.id);
+  assert.equal(published.id, post.id);
   assert.equal(published.expires_at.startsWith("9999"), false);
-  const done = applyWishLifecycleAction(db, 1, post.id, "complete");
+  const done = applyWishLifecycleAction(db, 1, published.id, "complete");
   assert.equal(done.lifecycle, "completed");
   assert.throws(() => applyWishLifecycleAction(db, 1, post.id, "resume"), /另開新的/);
   const inactive = getDemandPost(db, post.public_token, { publicOnly: true });

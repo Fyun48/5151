@@ -22,6 +22,11 @@ import {
   traitsFromListingValues,
 } from "./rentalCatalog.js";
 import { isRentalCatalogV2Enabled } from "./rentalMarketplaceFlags.js";
+import {
+  ensureSelfListingIdempotencySchema,
+  normalizeSelfListingIdempotencyKey,
+  selfListingCreateFingerprint,
+} from "./selfListingIdempotency.js";
 
 let listingCatalog = null;
 let listingFlags = {};
@@ -234,6 +239,7 @@ export function ensureSelfListingSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_listings_self ON listings(source, self_status, listed_by_user_id);
     CREATE INDEX IF NOT EXISTS idx_listing_reports_post ON listing_reports(post_id, user_id);
   `);
+  ensureSelfListingIdempotencySchema(db);
   ensureProfileSchema(db);
 }
 
@@ -258,10 +264,35 @@ export function sqlOpenSelfListing(nowIso) {
   };
 }
 
-function httpError(message, status = 400) {
+function httpError(message, status = 400, code = "") {
   const err = new Error(message);
   err.status = status;
+  if (code) err.code = code;
   return err;
+}
+
+function withImmediate(db, fn) {
+  try { db.exec("PRAGMA busy_timeout=5000"); } catch { /* ignore */ }
+  let last;
+  for (let attempt = 0; attempt < 12; attempt++) {
+    try {
+      db.exec("BEGIN IMMEDIATE");
+    } catch (error) {
+      last = error;
+      if (!/locked|busy/i.test(String(error.message || ""))) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20 * (attempt + 1));
+      continue;
+    }
+    try {
+      const result = fn();
+      db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      try { db.exec("ROLLBACK"); } catch { /* already rolled back */ }
+      throw error;
+    }
+  }
+  throw last || new Error("database is locked");
 }
 
 function nowMs(now) {
@@ -607,9 +638,61 @@ export function getSelfListing(db, postId, { viewerId = 0 } = {}) {
   return decorateSelfListing(row, { viewerId });
 }
 
+function readCreateIdempotency(db, uid, key) {
+  return db.prepare(
+    "SELECT payload_hash, post_id FROM self_listing_create_idempotency WHERE user_id=? AND idempotency_key=?",
+  ).get(uid, key);
+}
+
+function insertCreateIdempotency(db, uid, key, payloadHash, postId, now) {
+  db.prepare(
+    `INSERT INTO self_listing_create_idempotency(user_id, idempotency_key, payload_hash, post_id, created_at)
+     VALUES (?,?,?,?,?)`,
+  ).run(uid, key, payloadHash, postId, iso(now));
+}
+
 export function createSelfListing(db, userId, input = {}, now = new Date(), { matchCandidates } = {}) {
   const uid = Number(userId) || 0;
   if (!uid) throw httpError("請先登入才能刊登", 401);
+  const key = normalizeSelfListingIdempotencyKey(input.idempotency_key ?? input.idempotencyKey);
+  const payloadHash = key ? selfListingCreateFingerprint(input) : "";
+  const run = () => {
+    if (key) {
+      const existing = readCreateIdempotency(db, uid, key);
+      if (existing) {
+        if (existing.payload_hash !== payloadHash) {
+          throw httpError("同一操作不能改成不同內容", 409, "IDEMPOTENCY_CONFLICT");
+        }
+        return getSelfListing(db, existing.post_id, { viewerId: uid });
+      }
+    }
+    const created = insertOpenSelfListing(db, uid, input, now, { matchCandidates });
+    if (key) {
+      try {
+        insertCreateIdempotency(db, uid, key, payloadHash, created.post_id, now);
+      } catch (error) {
+        const again = readCreateIdempotency(db, uid, key);
+        if (again) {
+          if (again.payload_hash !== payloadHash) {
+            throw httpError("同一操作不能改成不同內容", 409, "IDEMPOTENCY_CONFLICT");
+          }
+          return getSelfListing(db, again.post_id, { viewerId: uid });
+        }
+        throw error;
+      }
+    }
+    return created;
+  };
+  if (!key) return run();
+  try {
+    return withImmediate(db, run);
+  } catch (error) {
+    if (/transaction|within/i.test(String(error.message || ""))) return run();
+    throw error;
+  }
+}
+
+function insertOpenSelfListing(db, uid, input = {}, now = new Date(), { matchCandidates } = {}) {
   assertCanPublish(db, uid, now);
 
   const districts = normalizeWatchDistricts(
