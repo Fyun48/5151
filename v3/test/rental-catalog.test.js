@@ -275,6 +275,15 @@ test("system catalog templates are readonly identifiers", () => {
   assert.equal(isSystemCatalogTemplate("custom_formal"), false);
 });
 
+test("disabled category listing values are ignored for new input but kept historically", () => {
+  const catalog = upsertCategory(defaultCatalog(), { id: "appliance", label: "家電", enabled: false });
+  const dropped = mergeListingConditionValues(catalog, { fridge: "present" }, ["fridge"], {}, []);
+  assert.equal(dropped.fridge, undefined);
+  const kept = mergeListingConditionValues(catalog, { elevator: "present" }, ["elevator"], { fridge: "present" }, ["fridge"]);
+  assert.equal(kept.fridge, "present");
+  assert.equal(kept.elevator, "present");
+});
+
 test("bulk avoid leaves disallow-avoid conditions unspecified", () => {
   const catalog = upsertCondition(defaultCatalog(), {
     label: "法定用途",

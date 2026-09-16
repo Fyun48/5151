@@ -90,10 +90,12 @@ function resolveListingTraits(input = {}, previous = {}) {
     parseListingValues(previous),
     previousTraits,
   );
-  const extra = catalogTraitExtras({ includeInactive: true });
+  const extraActive = catalogTraitExtras({ includeInactive: false });
+  const extraAll = catalogTraitExtras({ includeInactive: true });
   const fromValues = traitsFromListingValues(listingValues, listingCatalog);
-  const incoming = normalizeSelfTraitsInput(input.traits, extra.ids);
-  const historical = normalizeSelfTraits(previousTraits, extra.ids);
+  const incoming = normalizeSelfTraitsInput(input.traits, extraActive.ids)
+    .filter((id) => extraActive.ids.includes(id));
+  const historical = normalizeSelfTraits(previousTraits, extraAll.ids);
   const inactive = new Set(
     catalogAsSelfTraitGroups(listingCatalog, { includeInactive: true })
       .flatMap((group) => group.items)

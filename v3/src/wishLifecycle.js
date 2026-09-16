@@ -105,7 +105,8 @@ export function canSelfTransition(from, action) {
   if (action === "complete") return lifecycle !== "completed";
   if (action === "pause") return lifecycle === "active" || lifecycle === "needs_confirmation";
   if (action === "resume") return lifecycle === "paused" || lifecycle === "expired";
-  if (action === "extend" || action === "confirm" || action === "full_reconfirm") {
+  if (action === "full_reconfirm") return lifecycle === "needs_confirmation";
+  if (action === "extend" || action === "confirm") {
     return lifecycle === "active" || lifecycle === "needs_confirmation";
   }
   if (action === "publish") return lifecycle === "draft" || lifecycle === "paused";
@@ -127,7 +128,29 @@ export function transitionLifecycle(row, action, now = new Date(), { ttlDays = W
   if (action === "pause") {
     return { lifecycle: "paused", status: "closed", closed_reason: "paused", closed_at: stamp, updated_at: stamp };
   }
-  if (action === "extend" || action === "confirm" || action === "full_reconfirm" || action === "resume" || action === "publish") {
+  if (action === "full_reconfirm") {
+    const started = row.continuous_active_from || row.last_confirmed_at || row.published_at || row.created_at;
+    const continuous = daysBetween(started, now);
+    if (continuous < continuousDays) {
+      const err = new Error("連續曝光未滿期限，請先核對條件後再完整確認");
+      err.status = 409;
+      err.code = "wish_reconfirm_not_due";
+      throw err;
+    }
+    return {
+      lifecycle: "active",
+      status: "open",
+      expires_at: ttlExpiresAt(now, ttlDays),
+      last_confirmed_at: stamp,
+      last_active_at: stamp,
+      continuous_active_from: stamp,
+      closed_at: null,
+      closed_reason: "",
+      updated_at: stamp,
+      published_at: row.published_at || stamp,
+    };
+  }
+  if (action === "extend" || action === "confirm" || action === "resume" || action === "publish") {
     const started = row.continuous_active_from || row.last_confirmed_at || row.published_at || row.created_at;
     const continuous = daysBetween(started, now);
     if ((action === "extend" || action === "confirm") && continuous >= continuousDays) {
@@ -138,7 +161,7 @@ export function transitionLifecycle(row, action, now = new Date(), { ttlDays = W
         updated_at: stamp,
       };
     }
-    const resetWindow = action === "full_reconfirm" || action === "resume" || action === "publish" || !row.continuous_active_from;
+    const resetWindow = action === "resume" || action === "publish" || !row.continuous_active_from;
     return {
       lifecycle: "active",
       status: "open",
@@ -188,8 +211,19 @@ export function shouldApplyLifecyclePlan(freshRow, planned, now = new Date()) {
   return Boolean(still && still.lifecycle === planned.lifecycle);
 }
 
+export function isFarFutureExpire(expiresAt) {
+  const text = String(expiresAt || "");
+  return !text || text >= WISH_FAR_EXPIRE.slice(0, 10);
+}
+
+export function isLegacyWishForActivation(row) {
+  if (String(row?.status || "") !== "open") return false;
+  if (row?.lifecycle_migrated_at) return false;
+  return isFarFutureExpire(row?.expires_at);
+}
+
 export function migrateOpenWishOnActivation(row, now = new Date(), ttlDays = WISH_TTL_DAYS_DEFAULT) {
-  if (String(row?.status || "") !== "open") return null;
+  if (!isLegacyWishForActivation(row)) return null;
   const stamp = iso(now);
   return {
     lifecycle: "active",
@@ -198,6 +232,7 @@ export function migrateOpenWishOnActivation(row, now = new Date(), ttlDays = WIS
     last_confirmed_at: stamp,
     last_active_at: stamp,
     continuous_active_from: stamp,
+    lifecycle_migrated_at: stamp,
     updated_at: stamp,
   };
 }

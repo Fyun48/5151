@@ -26,7 +26,7 @@ import {
   selfSourceLabel,
 } from "../src/selfListings.js";
 import { lookupDistrict } from "../src/regions.js";
-import { defaultCatalog, deleteOrDisableCondition, upsertCondition } from "../src/rentalCatalog.js";
+import { defaultCatalog, deleteOrDisableCondition, upsertCategory, upsertCondition } from "../src/rentalCatalog.js";
 import { setRentalMarketplaceFlags } from "../src/demand.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
@@ -421,3 +421,42 @@ test("listing polarity can store allowed without treating unchecked as allowed",
   setSelfListingCatalog(null, { rental_catalog_v2: { enabled: false } });
   db.close();
 });
+
+test("disabled category new listing input is dropped; historical fridge is kept", () => {
+  const db = open();
+  addUser(db, { id: 1, email: "a@example.com", createdAt: OLD });
+  const catalog = defaultCatalog();
+  setRentalMarketplaceFlags({ rental_catalog_v2: { enabled: true } });
+  setSelfListingCatalog(catalog, { rental_catalog_v2: { enabled: true } });
+  const created = createSelfListing(db, 1, sampleInput({
+    address: "台北市士林區中正路210號",
+    traits: ["elevator", "fridge"],
+  }));
+  assert.ok(created.traits.includes("fridge"));
+  const disabled = upsertCategory(catalog, { id: "appliance", label: "家電", enabled: false });
+  setSelfListingCatalog(disabled, { rental_catalog_v2: { enabled: true } });
+  const rejected = createSelfListing(db, 1, sampleInput({
+    address: "台北市士林區中正路211號",
+    traits: ["elevator", "fridge"],
+    listing_values: { fridge: "present" },
+  }));
+  assert.ok(!rejected.traits.includes("fridge"));
+  assert.equal(rejected.listing_values.fridge, undefined);
+  const draft = createImportedDraftListing(db, 1, { title: "士林整層可看屋草稿標題", body: "近捷運、可入住、有洗衣機。" });
+  db.prepare("UPDATE listings SET self_traits = ?, listing_condition_values = ? WHERE post_id = ?").run(
+    JSON.stringify(["fridge", "elevator"]),
+    JSON.stringify({ fridge: "present" }),
+    draft.post_id,
+  );
+  const published = publishImportedDraftListing(db, 1, draft.post_id, sampleInput({
+    address: "台北市士林區中正路212號",
+    traits: ["elevator"],
+  }));
+  assert.ok(published.traits.includes("fridge"));
+  const reloaded = getSelfListing(db, created.post_id, { viewerId: 1 });
+  assert.ok(reloaded.traits.includes("fridge"));
+  setRentalMarketplaceFlags({});
+  setSelfListingCatalog(null, { rental_catalog_v2: { enabled: false } });
+  db.close();
+});
+

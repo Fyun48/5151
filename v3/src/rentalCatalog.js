@@ -636,21 +636,29 @@ export function isPolarityCondition(row = {}) {
   return POLARITY_CONDITION_IDS.includes(row.id) || Boolean(row.listing_negative && row.listing_legacy);
 }
 
-export function listingValuesFromKnownTraits(traitIds = [], catalog = defaultCatalog()) {
+export function listingValuesFromKnownTraits(traitIds = [], catalog = defaultCatalog(), { includeInactive = false } = {}) {
+  const normalized = normalizeCatalog(catalog);
   const all = listingValuesFromTraits(traitIds, catalog);
   const out = {};
   for (const [id, value] of Object.entries(all)) {
-    if (value && value !== "unknown") out[id] = value;
+    if (!value || value === "unknown") continue;
+    const row = normalized.conditions.find((item) => item.id === id);
+    if (!row) continue;
+    if (!includeInactive && !isListingConditionActive(row, normalized.categories)) continue;
+    out[id] = value;
   }
   return out;
 }
 
-export function normalizeListingValues(input = {}, catalog = defaultCatalog()) {
-  const map = new Map(normalizeCatalog(catalog).conditions.map((row) => [row.id, row]));
+export function normalizeListingValues(input = {}, catalog = defaultCatalog(), { includeInactive = false } = {}) {
+  const normalized = normalizeCatalog(catalog);
+  const map = new Map(normalized.conditions.map((row) => [row.id, row]));
   const out = {};
   for (const [rawId, raw] of Object.entries(input || {})) {
     const id = canonicalId(rawId);
-    if (!map.has(id)) continue;
+    const row = map.get(id);
+    if (!row) continue;
+    if (!includeInactive && !isListingConditionActive(row, normalized.categories)) continue;
     const value = String(raw || "").trim();
     if (!LISTING_VALUES.includes(value) || value === "unknown") continue;
     out[id] = value;
@@ -685,8 +693,8 @@ export function mergeListingConditionValues(catalog, inputValues = {}, inputTrai
     ...normalizeListingValues(inputValues, catalog),
   };
   const previous = {
-    ...listingValuesFromKnownTraits(previousTraits, catalog),
-    ...normalizeListingValues(previousValues, catalog),
+    ...listingValuesFromKnownTraits(previousTraits, catalog, { includeInactive: true }),
+    ...normalizeListingValues(previousValues, catalog, { includeInactive: true }),
   };
   const normalized = normalizeCatalog(catalog);
   const map = new Map(normalized.conditions.map((row) => [row.id, row]));

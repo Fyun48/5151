@@ -6,6 +6,7 @@ import {
   canSelfTransition,
   createPublicToken,
   mapLegacyLifecycle,
+  isLegacyWishForActivation,
   migrateOpenWishOnActivation,
   planLifecycleTick,
   remainingTtlDays,
@@ -88,6 +89,7 @@ test("60 day reconfirm confirm action resets continuous window and returns activ
   const later = transitionLifecycle(confirmed, "extend", new Date("2026-11-20T00:00:00.000Z"));
   assert.equal(later.lifecycle, "active");
   assert.equal(later.require_reconfirm, undefined);
+  assert.equal(canSelfTransition("active", "full_reconfirm"), false);
 });
 
 test("inactivity goes active → needs_confirmation → paused, never completed", () => {
@@ -198,6 +200,19 @@ test("14-day confirm keeps continuous window; 60-day confirm resets it", () => {
   }, "full_reconfirm", day60);
   assert.equal(full.lifecycle, "active");
   assert.equal(full.continuous_active_from, day60.toISOString());
+  const day30 = new Date("2026-10-16T00:00:00.000Z");
+  assert.throws(() => transitionLifecycle({
+    status: "open",
+    lifecycle: "needs_confirmation",
+    continuous_active_from: started,
+    last_confirmed_at: stay.last_confirmed_at,
+  }, "full_reconfirm", day30), /未滿期限|完整確認/);
+  assert.throws(() => transitionLifecycle({
+    status: "open",
+    lifecycle: "active",
+    continuous_active_from: started,
+    last_confirmed_at: stay.last_confirmed_at,
+  }, "full_reconfirm", day14), /狀態|完整確認|不能這樣/);
 });
 
 test("double tick is idempotent", () => {
@@ -236,6 +251,18 @@ test("existing open migration resets TTL from activation time", () => {
   }, now);
   assert.equal(old.last_confirmed_at, now.toISOString());
   assert.equal(old.continuous_active_from, now.toISOString());
+  assert.equal(isLegacyWishForActivation({
+    status: "open",
+    expires_at: ttlExpiresAt(now, 14),
+    last_confirmed_at: now.toISOString(),
+    continuous_active_from: now.toISOString(),
+  }), false);
+  assert.equal(migrateOpenWishOnActivation({
+    status: "open",
+    expires_at: ttlExpiresAt(now, 14),
+    last_confirmed_at: "2026-06-18T00:00:00.000Z",
+    continuous_active_from: "2026-06-18T00:00:00.000Z",
+  }, now), null);
   assert.equal(migrateOpenWishOnActivation({ status: "closed" }, now), null);
 });
 

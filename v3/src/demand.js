@@ -247,6 +247,7 @@ function addWishColumns(db) {
     ["continuous_active_from", "TEXT"],
     ["condition_choices", "TEXT"],
     ["closed_reason", "TEXT"],
+    ["lifecycle_migrated_at", "TEXT"],
   ];
   for (const [name, def] of additions) {
     if (!cols.has(name)) db.exec(`ALTER TABLE demand_posts ADD COLUMN ${name} ${def}`);
@@ -528,13 +529,21 @@ export function migrateOpenWishesOnActivation(db, now = new Date()) {
   if (!hasWishColumn(db, "lifecycle")) return 0;
   const rows = db.prepare("SELECT * FROM demand_posts WHERE status = 'open'").all();
   let n = 0;
+  const hasMarker = hasWishColumn(db, "lifecycle_migrated_at");
   for (const row of rows) {
     const patch = migrateOpenWishOnActivation(row, now);
     if (!patch) continue;
-    db.prepare(
-      `UPDATE demand_posts SET expires_at = ?, last_confirmed_at = ?, last_active_at = ?,
-       continuous_active_from = ?, lifecycle = 'active', updated_at = ? WHERE id = ?`,
-    ).run(patch.expires_at, patch.last_confirmed_at, patch.last_active_at, patch.continuous_active_from, patch.updated_at, row.id);
+    if (hasMarker) {
+      db.prepare(
+        `UPDATE demand_posts SET expires_at = ?, last_confirmed_at = ?, last_active_at = ?,
+         continuous_active_from = ?, lifecycle = 'active', lifecycle_migrated_at = ?, updated_at = ? WHERE id = ?`,
+      ).run(patch.expires_at, patch.last_confirmed_at, patch.last_active_at, patch.continuous_active_from, patch.lifecycle_migrated_at, patch.updated_at, row.id);
+    } else {
+      db.prepare(
+        `UPDATE demand_posts SET expires_at = ?, last_confirmed_at = ?, last_active_at = ?,
+         continuous_active_from = ?, lifecycle = 'active', updated_at = ? WHERE id = ?`,
+      ).run(patch.expires_at, patch.last_confirmed_at, patch.last_active_at, patch.continuous_active_from, patch.updated_at, row.id);
+    }
     n += 1;
   }
   return n;
@@ -973,6 +982,9 @@ function insertRow(db, uid, fields, status, now) {
     });
     if (isWishLifecycleEnabled(marketplaceFlags)) {
       db.prepare("UPDATE demand_posts SET expires_at = ? WHERE id = ?").run(publishExpiry(now), id);
+      if (hasWishColumn(db, "lifecycle_migrated_at")) {
+        db.prepare("UPDATE demand_posts SET lifecycle_migrated_at = COALESCE(lifecycle_migrated_at, ?) WHERE id = ?").run(created, id);
+      }
     }
   } else if (status === "draft") {
     writeLifecycle(db, id, { lifecycle: "draft" });

@@ -307,6 +307,37 @@ test("first lifecycle activation overwrites old open-wish timestamps", () => {
   const afterTick = db.prepare("SELECT lifecycle, status FROM demand_posts WHERE id = ?").get(post.id);
   assert.equal(afterTick.lifecycle, "active");
   assert.equal(afterTick.status, "open");
+  const second = migrateOpenWishesOnActivation(db, new Date("2026-09-20T00:00:00.000Z"));
+  assert.equal(second, 0);
+  const again = db.prepare("SELECT last_confirmed_at, continuous_active_from, expires_at, lifecycle FROM demand_posts WHERE id = ?").get(post.id);
+  assert.equal(again.last_confirmed_at, now.toISOString());
+  assert.equal(again.continuous_active_from, now.toISOString());
+  assert.equal(again.expires_at, ttlExpiresAt(now, 14));
+  db.prepare("UPDATE demand_posts SET lifecycle = 'needs_confirmation' WHERE id = ?").run(post.id);
+  assert.equal(migrateOpenWishesOnActivation(db, new Date("2026-09-21T00:00:00.000Z")), 0);
+  const confirming = db.prepare("SELECT lifecycle, last_confirmed_at FROM demand_posts WHERE id = ?").get(post.id);
+  assert.equal(confirming.lifecycle, "needs_confirmation");
+  assert.equal(confirming.last_confirmed_at, now.toISOString());
+  setRentalMarketplaceFlags({});
+  db.close();
+});
+
+test("full_reconfirm before 60 days is rejected and leaves the continuous window", () => {
+  const db = open();
+  setRentalMarketplaceFlags({ wish: { lifecycle_enabled: true } });
+  const started = new Date("2026-09-16T00:00:00.000Z");
+  const post = createDemandPost(db, 1, sample(), started);
+  const day14 = new Date("2026-09-30T00:00:00.000Z");
+  assert.throws(() => applyWishLifecycleAction(db, 1, post.id, "full_reconfirm", day14), (err) => err.status === 400 || err.status === 409);
+  const day14Row = db.prepare("SELECT continuous_active_from, lifecycle FROM demand_posts WHERE id = ?").get(post.id);
+  assert.equal(day14Row.continuous_active_from, started.toISOString());
+  assert.equal(day14Row.lifecycle, "active");
+  db.prepare("UPDATE demand_posts SET lifecycle = 'needs_confirmation' WHERE id = ?").run(post.id);
+  const day30 = new Date("2026-10-16T00:00:00.000Z");
+  assert.throws(() => applyWishLifecycleAction(db, 1, post.id, "full_reconfirm", day30), (err) => err.status === 409);
+  const day30Row = db.prepare("SELECT continuous_active_from, lifecycle FROM demand_posts WHERE id = ?").get(post.id);
+  assert.equal(day30Row.continuous_active_from, started.toISOString());
+  assert.equal(day30Row.lifecycle, "needs_confirmation");
   setRentalMarketplaceFlags({});
   db.close();
 });

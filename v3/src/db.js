@@ -1447,13 +1447,25 @@ export function saveRentalMarketplaceFlags(partial = {}) {
     rental_catalog_v2: { ...prev.rental_catalog_v2, ...(src.rental_catalog_v2 || {}) },
     wish: { ...prev.wish, ...(src.wish || {}) },
   });
-  writeSettingKey("rentalMarketplaceFlags", next);
-  if (next.wish.lifecycle_enabled === true && prev.wish.lifecycle_enabled !== true) {
-    migrateOpenWishesOnActivation();
+  const persist = () => {
+    writeSettingKey("rentalMarketplaceFlags", next);
+    setRentalMarketplaceFlags(next);
+    const catalog = getRentalCatalog();
+    setSelfListingHydrate(catalog, next);
+  };
+  if (next.wish.lifecycle_enabled === true) {
+    try {
+      db.exec("BEGIN");
+      migrateOpenWishesOnActivation();
+      persist();
+      db.exec("COMMIT");
+    } catch (error) {
+      try { db.exec("ROLLBACK"); } catch { /* already rolled back */ }
+      throw error;
+    }
+  } else {
+    persist();
   }
-  setRentalMarketplaceFlags(next);
-  const catalog = getRentalCatalog();
-  setSelfListingHydrate(catalog, next);
   return publicRentalMarketplaceFlags(next);
 }
 
