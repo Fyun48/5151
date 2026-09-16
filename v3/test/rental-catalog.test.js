@@ -29,6 +29,8 @@ import {
   upsertCategory,
   upsertCondition,
   wishChoicesFromLegacy,
+  countCatalogReferences,
+  isSystemCatalogTemplate,
 } from "../src/rentalCatalog.js";
 import { DEFAULT_WISH_CONDITIONS } from "../src/wishConditions.js";
 import { SELF_TRAIT_GROUPS } from "../src/selfTraits.js";
@@ -233,6 +235,44 @@ test("listing polarity values persist allowed separately from not_allowed", () =
   assert.ok(traitsFromListingValues(denied, catalog).includes("nopet"));
   const unknown = listingValuesFromTraits([], catalog);
   assert.equal(unknown.need_pet, "unknown");
+});
+
+test("disabled category gates new wish and listing input but keeps historical", () => {
+  const catalog = upsertCategory(defaultCatalog(), { id: "appliance", label: "家電", enabled: false });
+  const dropped = sanitizeWishChoices(catalog, { fridge: "want", elevator: "want" });
+  assert.equal(dropped.fridge, undefined);
+  assert.equal(dropped.elevator, "want");
+  const kept = resolveWishChoices(catalog, { fridge: "want", elevator: "want" });
+  assert.equal(kept.fridge, "want");
+  const wishIds = catalogAsWishConditions(catalog).map((row) => row.id);
+  assert.equal(wishIds.includes("fridge"), false);
+  const listing = catalogAsSelfTraitGroups(catalog);
+  assert.equal(listing.some((group) => group.id === "appliance"), false);
+  const historical = catalogAsSelfTraitGroups(catalog, { includeInactive: true });
+  assert.equal(historical.some((group) => group.id === "appliance"), true);
+  const bulk = applyBulkWishActions(catalog, "appliance", "want", {});
+  assert.equal(bulk.fridge, undefined);
+});
+
+test("catalog references count listing_condition_values and legacy polarity tokens", () => {
+  assert.equal(countCatalogReferences([
+    { listing_condition_values: JSON.stringify({ need_pet: "allowed" }) },
+  ], "need_pet"), 1);
+  assert.equal(countCatalogReferences([
+    { self_traits: JSON.stringify(["pet"]) },
+  ], "need_pet"), 1);
+  assert.equal(countCatalogReferences([
+    { self_traits: JSON.stringify(["fridge"]) },
+  ], "need_pet"), 0);
+  assert.equal(countCatalogReferences([
+    { condition_choices: JSON.stringify({ fridge: "want" }) },
+  ], "fridge"), 1);
+});
+
+test("system catalog templates are readonly identifiers", () => {
+  assert.equal(isSystemCatalogTemplate("jibby_full"), true);
+  assert.equal(isSystemCatalogTemplate("suite_lite"), true);
+  assert.equal(isSystemCatalogTemplate("custom_formal"), false);
 });
 
 test("bulk avoid leaves disallow-avoid conditions unspecified", () => {

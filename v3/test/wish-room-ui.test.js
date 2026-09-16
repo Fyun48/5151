@@ -72,7 +72,7 @@ test("public share page and routes exist; guests can read", () => {
   assert.match(server, /app\.get\("\/w\/:id"/);
   assert.match(server, /app\.get\("\/api\/wish-rooms"/);
   assert.match(server, /app\.get\("\/api\/public\/wish-room\/:id"/);
-  assert.match(server, /"extend", "pause", "resume", "complete", "confirm"/);
+  assert.match(server, /"extend", "pause", "resume", "complete", "confirm", "full_reconfirm"/);
   assert.match(html, /id="wishCatalogV2"/);
   assert.match(html, /selected\.choices/);
   assert.match(html, /hasTarget \? target : "unspecified"/);
@@ -83,6 +83,8 @@ test("public share page and routes exist; guests can read", () => {
   assert.match(html, /paintSelfTraits\(Array\.isArray\(data\.traits\)/);
   assert.match(html, /data-listing-polar/);
   assert.match(html, /id="wishLifecycleBar"/);
+  assert.match(html, /id="wishConfirmReview"/);
+  assert.match(html, /full_reconfirm/);
   assert.match(html, /id="wishStatus"/);
   assert.match(wish, /label_want|nice_to_have_labels/);
   assert.match(auth, /p\.startsWith\("\/w\/"\)/);
@@ -112,4 +114,8 @@ test("admin can edit Wish Room condition catalog", () => {
   assert.match(admin, /許願房條件選單/);
   assert.match(admin, /id="wishCondSave"/);
   assert.match(admin, /\/api\/admin\/wish-conditions/);
+  assert.match(admin, /id="catalogCatDrawer"/);
+  assert.match(admin, /data-cat-edit/);
+  assert.match(admin, /id="catalogRenameTemplate"/);
+  assert.match(admin, /id="catalogDeleteTemplate"/);
 });

@@ -65,12 +65,21 @@ test("60 day reconfirm confirm action resets continuous window and returns activ
     last_confirmed_at: "2026-11-01T00:00:00.000Z",
   }, "extend", now);
   assert.equal(gated.require_reconfirm, true);
-  const confirmed = transitionLifecycle({
+  const blocked = transitionLifecycle({
     status: "open",
     lifecycle: "needs_confirmation",
     continuous_active_from: started,
     last_confirmed_at: "2026-11-01T00:00:00.000Z",
   }, "confirm", now);
+  assert.equal(blocked.require_reconfirm, true);
+  assert.equal(blocked.lifecycle, "needs_confirmation");
+  assert.equal(blocked.continuous_active_from, undefined);
+  const confirmed = transitionLifecycle({
+    status: "open",
+    lifecycle: "needs_confirmation",
+    continuous_active_from: started,
+    last_confirmed_at: "2026-11-01T00:00:00.000Z",
+  }, "full_reconfirm", now);
   assert.equal(confirmed.lifecycle, "active");
   assert.equal(confirmed.require_reconfirm, undefined);
   assert.equal(confirmed.continuous_active_from, now.toISOString());
@@ -173,12 +182,20 @@ test("14-day confirm keeps continuous window; 60-day confirm resets it", () => {
     last_confirmed_at: stay.last_confirmed_at,
   }, "extend", day60);
   assert.equal(gated.require_reconfirm, true);
-  const full = transitionLifecycle({
+  const blocked = transitionLifecycle({
     status: "open",
     lifecycle: "needs_confirmation",
     continuous_active_from: started,
     last_confirmed_at: stay.last_confirmed_at,
   }, "confirm", day60);
+  assert.equal(blocked.require_reconfirm, true);
+  assert.equal(blocked.continuous_active_from, undefined);
+  const full = transitionLifecycle({
+    status: "open",
+    lifecycle: "needs_confirmation",
+    continuous_active_from: started,
+    last_confirmed_at: stay.last_confirmed_at,
+  }, "full_reconfirm", day60);
   assert.equal(full.lifecycle, "active");
   assert.equal(full.continuous_active_from, day60.toISOString());
 });
@@ -209,6 +226,16 @@ test("existing open migration resets TTL from activation time", () => {
   }, now);
   assert.equal(migrated.expires_at, ttlExpiresAt(now, 14));
   assert.equal(migrated.last_confirmed_at, now.toISOString());
+  assert.equal(migrated.last_active_at, now.toISOString());
+  assert.equal(migrated.continuous_active_from, now.toISOString());
+  const old = migrateOpenWishOnActivation({
+    status: "open",
+    last_confirmed_at: "2026-06-18T00:00:00.000Z",
+    last_active_at: "2026-06-18T00:00:00.000Z",
+    continuous_active_from: "2026-06-18T00:00:00.000Z",
+  }, now);
+  assert.equal(old.last_confirmed_at, now.toISOString());
+  assert.equal(old.continuous_active_from, now.toISOString());
   assert.equal(migrateOpenWishOnActivation({ status: "closed" }, now), null);
 });
 

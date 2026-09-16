@@ -550,11 +550,25 @@ export function legacyGroupsFromChoices(choices = {}, niceLegacy = []) {
   return { must_have, nice_to_have: [...niceLegacy], avoid };
 }
 
+export function isWishConditionActive(row, categories = []) {
+  if (!row || row.enabled === false || row.wish_enabled === false) return false;
+  const cat = (categories || []).find((item) => item.id === row.category_id);
+  return !cat || cat.enabled !== false;
+}
+
+export function isListingConditionActive(row, categories = []) {
+  if (!row || row.enabled === false || row.listing_enabled === false) return false;
+  const cat = (categories || []).find((item) => item.id === row.category_id);
+  return !cat || cat.enabled !== false;
+}
+
 export function applyBulkWishActions(catalog, categoryId, action, current = {}) {
+  const normalized = normalizeCatalog(catalog);
   const next = { ...current };
-  const rows = normalizeCatalog(catalog).conditions.filter((row) => (
-    row.enabled !== false
-    && row.wish_enabled !== false
+  const cat = normalized.categories.find((row) => row.id === categoryId);
+  if (!cat || cat.enabled === false) return next;
+  const rows = normalized.conditions.filter((row) => (
+    isWishConditionActive(row, normalized.categories)
     && row.category_id === categoryId
   ));
   for (const row of rows) {
@@ -569,13 +583,14 @@ export function applyBulkWishActions(catalog, categoryId, action, current = {}) 
 }
 
 export function sanitizeWishChoices(catalog, choices = {}, { retainHistorical = false } = {}) {
-  const map = new Map(normalizeCatalog(catalog).conditions.map((row) => [row.id, row]));
+  const normalized = normalizeCatalog(catalog);
+  const map = new Map(normalized.conditions.map((row) => [row.id, row]));
   const out = {};
   for (const [rawId, action] of Object.entries(choices || {})) {
     const id = canonicalId(rawId);
     const row = map.get(id);
     if (!row) continue;
-    const inactive = row.enabled === false || row.wish_enabled === false;
+    const inactive = !isWishConditionActive(row, normalized.categories);
     if (inactive && !retainHistorical) continue;
     if (action === "want" && (row.wish_allow_want !== false || (retainHistorical && inactive))) out[id] = "want";
     else if (action === "avoid" && (row.wish_allow_avoid !== false || (retainHistorical && inactive))) out[id] = "avoid";
@@ -590,18 +605,20 @@ export function resolveWishChoices(catalog, choices = {}) {
 export function mergeHistoricalWishChoices(catalog, incoming = {}, previous = {}) {
   const next = sanitizeWishChoices(catalog, incoming);
   const historical = resolveWishChoices(catalog, previous);
-  const map = new Map(normalizeCatalog(catalog).conditions.map((row) => [row.id, row]));
+  const normalized = normalizeCatalog(catalog);
+  const map = new Map(normalized.conditions.map((row) => [row.id, row]));
   for (const [id, action] of Object.entries(historical)) {
     const row = map.get(id);
     if (!row) continue;
-    if (row.enabled === false || row.wish_enabled === false) next[id] = action;
+    if (!isWishConditionActive(row, normalized.categories)) next[id] = action;
   }
   return next;
 }
 
 export function catalogConditionLookup(catalog, { includeInactive = false } = {}) {
-  return normalizeCatalog(catalog).conditions
-    .filter((row) => includeInactive || (row.enabled !== false && row.wish_enabled !== false))
+  const normalized = normalizeCatalog(catalog);
+  return normalized.conditions
+    .filter((row) => includeInactive || isWishConditionActive(row, normalized.categories))
     .map((row) => ({
       id: row.id,
       label: row.label,
@@ -671,12 +688,13 @@ export function mergeListingConditionValues(catalog, inputValues = {}, inputTrai
     ...listingValuesFromKnownTraits(previousTraits, catalog),
     ...normalizeListingValues(previousValues, catalog),
   };
-  const map = new Map(normalizeCatalog(catalog).conditions.map((row) => [row.id, row]));
+  const normalized = normalizeCatalog(catalog);
+  const map = new Map(normalized.conditions.map((row) => [row.id, row]));
   const out = { ...incoming };
   for (const [id, value] of Object.entries(previous)) {
     const row = map.get(id);
     if (!row) continue;
-    if (row.enabled === false || row.listing_enabled === false) out[id] = value;
+    if (!isListingConditionActive(row, normalized.categories)) out[id] = value;
   }
   return out;
 }
@@ -709,8 +727,9 @@ export function compatibilityForChoice(condition, wishAction, listingValue) {
 }
 
 export function catalogAsWishConditions(catalog) {
-  return normalizeCatalog(catalog).conditions
-    .filter((row) => row.enabled !== false && row.wish_enabled !== false)
+  const normalized = normalizeCatalog(catalog);
+  return normalized.conditions
+    .filter((row) => isWishConditionActive(row, normalized.categories))
     .map((row) => ({
       id: row.id,
       label: row.label,
@@ -726,7 +745,7 @@ export function catalogAsWishConditions(catalog) {
 export function catalogAsSelfTraitGroups(catalog, { includeInactive = false } = {}) {
   const cats = normalizeCatalog(catalog);
   return cats.categories
-    .filter((cat) => cat.enabled !== false)
+    .filter((cat) => includeInactive || cat.enabled !== false)
     .map((cat) => ({
       id: cat.id,
       label: cat.label,
@@ -741,11 +760,83 @@ export function catalogAsSelfTraitGroups(catalog, { includeInactive = false } = 
             input: polarity ? "polarity" : "presence",
             listing_negative: row.listing_negative || "",
             listing_legacy: row.listing_legacy || "",
-            enabled: row.enabled !== false && row.listing_enabled !== false,
+            enabled: isListingConditionActive(row, cats.categories),
           };
         }),
     }))
     .filter((group) => group.items.length);
+}
+
+export const SYSTEM_TEMPLATE_IDS = Object.freeze(["jibby_full", "suite_lite"]);
+
+export function isSystemCatalogTemplate(id) {
+  return SYSTEM_TEMPLATE_IDS.includes(String(id || ""));
+}
+
+export function catalogReferenceTokens(conditionId, catalog = defaultCatalog()) {
+  const normalized = normalizeCatalog(catalog);
+  const id = canonicalId(conditionId);
+  const row = normalized.conditions.find((item) => item.id === id);
+  const tokens = new Set([id, String(conditionId || "").trim()].filter(Boolean));
+  for (const [legacy, canonical] of Object.entries(LEGACY_ID_TO_CANONICAL)) {
+    if (canonical === id) tokens.add(legacy);
+  }
+  if (row) {
+    (row.listing_positive || []).forEach((token) => tokens.add(token));
+    if (row.listing_negative) tokens.add(row.listing_negative);
+    if (row.listing_legacy) tokens.add(row.listing_legacy);
+  }
+  return [...tokens];
+}
+
+function collectIdsFromBlob(blob) {
+  if (blob == null || blob === "") return [];
+  let parsed = blob;
+  if (typeof blob === "string") {
+    try { parsed = JSON.parse(blob); } catch { return [blob]; }
+  }
+  const ids = [];
+  const walk = (value) => {
+    if (value == null) return;
+    if (typeof value === "string") {
+      ids.push(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach(walk);
+      return;
+    }
+    if (typeof value === "object") {
+      for (const [key, val] of Object.entries(value)) {
+        ids.push(key);
+        walk(val);
+      }
+    }
+  };
+  walk(parsed);
+  return ids;
+}
+
+export function blobReferencesCondition(blob, tokens) {
+  const tokenSet = new Set(tokens || []);
+  return collectIdsFromBlob(blob).some((id) => tokenSet.has(id) || tokenSet.has(canonicalId(id)));
+}
+
+export function countCatalogReferences(rows = [], conditionId, catalog = defaultCatalog()) {
+  const tokens = catalogReferenceTokens(conditionId, catalog);
+  let n = 0;
+  for (const row of rows || []) {
+    const blobs = [
+      row.must_have,
+      row.nice_to_have,
+      row.avoid,
+      row.condition_choices,
+      row.self_traits,
+      row.listing_condition_values,
+    ];
+    if (blobs.some((blob) => blobReferencesCondition(blob, tokens))) n += 1;
+  }
+  return n;
 }
 
 function listingNegativeLabel(row) {

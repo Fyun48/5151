@@ -31,6 +31,14 @@ export function setSelfListingCatalog(catalog, flags) {
   if (flags) listingFlags = flags;
 }
 
+export function setSelfListingHydrate(catalog, flags) {
+  if (catalog && typeof catalog === "object" && !Array.isArray(catalog.categories) && (catalog.catalog || catalog.flags)) {
+    setSelfListingCatalog(catalog.catalog || listingCatalog, catalog.flags || flags);
+    return;
+  }
+  setSelfListingCatalog(catalog, flags);
+}
+
 function catalogTraitExtras({ includeInactive = false } = {}) {
   if (!listingCatalog || !isRentalCatalogV2Enabled(listingFlags)) return { ids: [], labels: {} };
   const ids = [];

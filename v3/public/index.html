@@ -8456,6 +8456,7 @@
     ];
     let wishMine = { active: null, draft: null, has_example: false, can_create: true };
     let wishEditingId = 0;
+    let wishPendingFullReconfirm = false;
     let wishMeta = null;
     function wishCatalogOn() { return wishMeta?.flags?.rental_catalog_v2?.enabled === true; }
     function wishLifeOn() { return wishMeta?.flags?.wish?.lifecycle_enabled === true; }
@@ -9038,9 +9039,10 @@
         ...(selected.avoid || []),
       ]);
       const cats = (catalog.categories || []).filter((row) => row.enabled !== false);
-      const conds = (catalog.conditions || []).filter((row) => row.enabled !== false && row.wish_enabled !== false);
+      const disabledCatIds = new Set((catalog.categories || []).filter((row) => row.enabled === false).map((row) => row.id));
+      const conds = (catalog.conditions || []).filter((row) => row.enabled !== false && row.wish_enabled !== false && !disabledCatIds.has(row.category_id));
       const historical = (catalog.conditions || []).filter((row) => (
-        (row.enabled === false || row.wish_enabled === false) && (want.has(row.id) || avoid.has(row.id))
+        (row.enabled === false || row.wish_enabled === false || disabledCatIds.has(row.category_id)) && (want.has(row.id) || avoid.has(row.id))
       ));
       host.innerHTML = cats.map((cat) => {
         const rows = conds.filter((row) => row.category_id === cat.id);
@@ -9161,6 +9163,7 @@
     }
     function showWishForm(show) {
       if ($("wishFormWrap")) $("wishFormWrap").hidden = !show;
+      if (!show && $("demandSubmit") && !wishPendingFullReconfirm) $("demandSubmit").textContent = "公開許願房";
       if (show) {
         fillDemandDistricts();
         if (!$("wishMust")?.children.length) renderWishConditionGroups();
@@ -9178,7 +9181,7 @@
         bar.className = "wish-life confirm";
         bar.hidden = false;
         bar.innerHTML = active.require_reconfirm
-          ? `<p><strong>你已找房一段時間，請確認需求是否仍相同。</strong></p><p class="hint">連續曝光已接近上限。確認預算、行政區、格局與關鍵條件後才能再延長。</p><div class="row"><button type="button" class="primary" id="wishConfirmStay">確認並繼續</button><button type="button" class="ghost" id="wishConfirmEdit">修改條件</button><button type="button" class="ghost" id="wishConfirmDone">已找到房</button></div>`
+          ? `<p><strong>你已找房一段時間，請確認需求是否仍相同。</strong></p><p class="hint">連續曝光已接近上限。請核對預算、行政區、格局與關鍵條件後才能再延長。</p><div class="row"><button type="button" class="primary" id="wishConfirmReview">核對條件後繼續</button><button type="button" class="ghost" id="wishConfirmEdit">修改條件</button><button type="button" class="ghost" id="wishConfirmDone">已找到房</button></div>`
           : `<p><strong>還在找房嗎？</strong></p><p class="hint">你的需求最近沒有確認。為避免屋主看到過期需求，之後會停止曝光。</p><div class="row"><button type="button" class="primary" id="wishConfirmStay">我還在找</button><button type="button" class="ghost" id="wishConfirmDone">已找到房</button><button type="button" class="ghost" id="wishConfirmPause">先暫停</button></div>`;
         return;
       }
@@ -9470,6 +9473,7 @@
       const msg = $("demandMsg");
       try {
         const payload = collectWishForm();
+        const pendingId = wishEditingId;
         let res;
         if (wishEditingId) {
           res = await fetch(`/api/wish-rooms/${wishEditingId}`, {
@@ -9497,8 +9501,17 @@
         }
         const data = await readApi(res);
         if (!res.ok) throw new Error(data.error || "刊登失敗");
-        setWishStatus("已公開許願房");
+        if (wishPendingFullReconfirm && pendingId) {
+          const lifeRes = await fetch(`/api/wish-rooms/${pendingId}/full_reconfirm`, { method: "POST" });
+          const lifeData = await readApi(lifeRes);
+          if (!lifeRes.ok) throw new Error(lifeData.error || "完整確認失敗");
+          wishPendingFullReconfirm = false;
+          setWishStatus("已核對條件並繼續曝光");
+        } else {
+          setWishStatus("已公開許願房");
+        }
         wishEditingId = 0;
+        if ($("demandSubmit")) $("demandSubmit").textContent = "公開許願房";
         showWishForm(false);
         await loadDemand();
         maybeAskPush("公開許願房後可允許系統推播。");
@@ -9584,9 +9597,22 @@
       const id = wishMine.active?.id;
       if (!id) return;
       if (ev.target.id === "wishConfirmStay") await wishLifeAction(id, "confirm", "確認失敗");
+      if (ev.target.id === "wishConfirmReview") {
+        wishPendingFullReconfirm = true;
+        wishEditingId = id;
+        applyWishForm(wishMine.active);
+        showWishForm(true);
+        if ($("demandSubmit")) $("demandSubmit").textContent = "核對後繼續曝光";
+        setWishStatus("請核對預算、行政區、格局與關鍵條件後再繼續曝光。");
+        return;
+      }
       if (ev.target.id === "wishConfirmDone") await wishLifeAction(id, "complete", "更新失敗");
       if (ev.target.id === "wishConfirmPause") await wishLifeAction(id, "pause", "暫停失敗");
-      if (ev.target.id === "wishConfirmEdit") $("wishEditBtn")?.click();
+      if (ev.target.id === "wishConfirmEdit") {
+        wishPendingFullReconfirm = Boolean(wishMine.active?.require_reconfirm);
+        $("wishEditBtn")?.click();
+        if (wishPendingFullReconfirm && $("demandSubmit")) $("demandSubmit").textContent = "核對後繼續曝光";
+      }
     });
     $("wishCatalogGroups")?.addEventListener("click", (ev) => {
       const bulk = ev.target.closest("[data-wish-bulk]");

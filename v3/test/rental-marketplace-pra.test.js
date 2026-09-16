@@ -13,6 +13,7 @@ import {
   expireOpenPosts,
   getDemandPost,
   listDemandPosts,
+  migrateOpenWishesOnActivation,
   publicWishRoomView,
   publishWishRoom,
   setRentalCatalogCache,
@@ -250,7 +251,10 @@ test("60-day confirm action completes and resets continuous window", () => {
   const gated = applyWishLifecycleAction(db, 1, post.id, "extend", now);
   assert.equal(gated.require_reconfirm, true);
   assert.equal(gated.lifecycle, "needs_confirmation");
-  const confirmed = applyWishLifecycleAction(db, 1, post.id, "confirm", now);
+  const blocked = applyWishLifecycleAction(db, 1, post.id, "confirm", now);
+  assert.equal(blocked.require_reconfirm, true);
+  assert.equal(blocked.lifecycle, "needs_confirmation");
+  const confirmed = applyWishLifecycleAction(db, 1, post.id, "full_reconfirm", now);
   assert.equal(confirmed.lifecycle, "active");
   assert.equal(confirmed.require_reconfirm, false);
   const row = db.prepare("SELECT continuous_active_from, last_confirmed_at, expires_at, lifecycle FROM demand_posts WHERE id = ?").get(post.id);
@@ -276,6 +280,33 @@ test("14-day confirm does not reset the 60-day continuous window", () => {
   const day60 = new Date("2026-11-16T00:00:00.000Z");
   const gated = applyWishLifecycleAction(db, 1, post.id, "extend", day60);
   assert.equal(gated.require_reconfirm, true);
+  setRentalMarketplaceFlags({});
+  db.close();
+});
+
+test("first lifecycle activation overwrites old open-wish timestamps", () => {
+  const db = open();
+  const started = new Date("2026-06-18T00:00:00.000Z");
+  const post = createDemandPost(db, 1, sample(), started);
+  db.prepare(
+    `UPDATE demand_posts SET last_confirmed_at = ?, last_active_at = ?, continuous_active_from = ?,
+     expires_at = ?, lifecycle = 'active' WHERE id = ?`,
+  ).run(started.toISOString(), started.toISOString(), started.toISOString(), "9999-12-31T00:00:00.000Z", post.id);
+  const now = new Date("2026-09-16T00:00:00.000Z");
+  setRentalMarketplaceFlags({ wish: { lifecycle_enabled: true } });
+  const n = migrateOpenWishesOnActivation(db, now);
+  assert.ok(n >= 1);
+  const row = db.prepare("SELECT last_confirmed_at, last_active_at, continuous_active_from, expires_at, lifecycle, status FROM demand_posts WHERE id = ?").get(post.id);
+  assert.equal(row.lifecycle, "active");
+  assert.equal(row.status, "open");
+  assert.equal(row.last_confirmed_at, now.toISOString());
+  assert.equal(row.last_active_at, now.toISOString());
+  assert.equal(row.continuous_active_from, now.toISOString());
+  assert.equal(row.expires_at, ttlExpiresAt(now, 14));
+  expireOpenPosts(db, now);
+  const afterTick = db.prepare("SELECT lifecycle, status FROM demand_posts WHERE id = ?").get(post.id);
+  assert.equal(afterTick.lifecycle, "active");
+  assert.equal(afterTick.status, "open");
   setRentalMarketplaceFlags({});
   db.close();
 });

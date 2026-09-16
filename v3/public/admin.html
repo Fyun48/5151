@@ -67,6 +67,7 @@
     .catalog-layout { display: grid; grid-template-columns: 220px 1fr; gap: 16px; }
     @media (max-width: 768px) { .catalog-layout { grid-template-columns: 1fr; } }
     .catalog-list { display: grid; gap: 6px; margin-top: 8px; }
+    .catalog-cat-row { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: stretch; }
     .catalog-item, .catalog-drawer { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--paper); }
     .catalog-item { min-height: 44px; text-align: left; cursor: pointer; }
     .catalog-item.on { background: var(--accent-mist); }
@@ -988,6 +989,19 @@
                 <button type="button" class="ghost" id="catalogAddCat">新增分類</button>
               </div>
               <div id="catalogCats" class="catalog-list"></div>
+              <div id="catalogCatDrawer" class="catalog-drawer" hidden>
+                <h3>編輯分類</h3>
+                <input type="hidden" id="catalogCatEditId" />
+                <label for="catalogCatEditLabel">分類名稱</label>
+                <input id="catalogCatEditLabel" maxlength="40" />
+                <label for="catalogCatEditSort">排序</label>
+                <input id="catalogCatEditSort" type="number" min="1" step="1" />
+                <label class="checks"><input type="checkbox" id="catalogCatEditEnabled" /> 啟用（停用後前台新輸入不能選，既有紀錄仍保留）</label>
+                <div class="row">
+                  <button type="button" class="primary" id="catalogCatDrawerSave">寫入草稿</button>
+                  <button type="button" class="ghost" id="catalogCatDrawerClose">關閉</button>
+                </div>
+              </div>
             </div>
             <div>
               <div class="row" style="justify-content:space-between">
@@ -1047,12 +1061,14 @@
       <div id="rental-templates" class="admin-panel" data-admin-page="rental/templates">
         <section class="card">
           <h2>條件範本</h2>
-          <p class="hint">套用後先進入草稿，顯示新增／修改／停用數量，確認後才會改前台目錄。</p>
+          <p class="hint">套用後先進入草稿，顯示新增／修改／停用數量，確認後才會改前台目錄。系統範本只能套用；自訂範本可以重新命名或刪除。</p>
           <label for="catalogTemplatePick">範本</label>
           <select id="catalogTemplatePick"></select>
           <div class="row" style="margin-top:10px">
             <button type="button" class="primary" id="catalogApplyTemplate">套用為草稿</button>
             <button type="button" class="ghost" id="catalogSaveTemplate">另存目前草稿為範本</button>
+            <button type="button" class="ghost" id="catalogRenameTemplate">重新命名自訂範本</button>
+            <button type="button" class="ghost" id="catalogDeleteTemplate">刪除自訂範本</button>
           </div>
           <p class="msg" id="catalogTplMsg"></p>
         </section>
@@ -2111,7 +2127,10 @@
       const catHost = $("catalogCats");
       if (catHost) {
         catHost.innerHTML = cats.map((row) => (
-          `<button type="button" class="catalog-item${row.id === catalogCatId ? " on" : ""}" data-cat="${esc(row.id)}">${esc(row.label)}${row.enabled === false ? "（停用）" : ""}</button>`
+          `<div class="catalog-cat-row">
+            <button type="button" class="catalog-item${row.id === catalogCatId ? " on" : ""}" data-cat="${esc(row.id)}">${esc(row.label)}${row.enabled === false ? "（停用）" : ""}</button>
+            <button type="button" class="ghost" data-cat-edit="${esc(row.id)}">編輯</button>
+          </div>`
         )).join("");
       }
       const conds = (catalog.conditions || []).filter((row) => row.category_id === catalogCatId);
@@ -2123,7 +2142,10 @@
       }
       const pick = $("catalogTemplatePick");
       if (pick) {
-        pick.innerHTML = (catalogState.templates || []).map((row) => `<option value="${esc(row.id)}">${esc(row.label)}</option>`).join("");
+        pick.innerHTML = (catalogState.templates || []).map((row) => (
+          `<option value="${esc(row.id)}">${esc(row.label)}${row.system ? "（系統）" : ""}</option>`
+        )).join("");
+        syncCatalogTemplateActions();
       }
       const diffEl = $("catalogDiff");
       if (diffEl) {
@@ -2138,11 +2160,30 @@
       }
       const listingHost = $("listingCatalogPreview");
       if (listingHost) {
-        const listingRows = (catalog.conditions || []).filter((row) => row.enabled !== false && row.listing_enabled !== false);
+        const listingRows = (catalog.conditions || []).filter((row) => {
+          const cat = (catalog.categories || []).find((item) => item.id === row.category_id);
+          return row.enabled !== false && row.listing_enabled !== false && cat?.enabled !== false;
+        });
         listingHost.innerHTML = listingRows.length
           ? listingRows.map((row) => `<div class="catalog-item">${esc(row.label)}</div>`).join("")
           : `<p class="hint">目前沒有啟用的刊登條件。</p>`;
       }
+    }
+    function syncCatalogTemplateActions() {
+      const id = $("catalogTemplatePick")?.value;
+      const row = (catalogState.templates || []).find((item) => item.id === id);
+      const system = Boolean(row?.system);
+      if ($("catalogRenameTemplate")) $("catalogRenameTemplate").disabled = !id || system;
+      if ($("catalogDeleteTemplate")) $("catalogDeleteTemplate").disabled = !id || system;
+    }
+    function openCatalogCategoryDrawer(row) {
+      if (!row) return;
+      $("catalogCatEditId").value = row.id || "";
+      $("catalogCatEditLabel").value = row.label || "";
+      $("catalogCatEditSort").value = row.sort_order || "";
+      $("catalogCatEditEnabled").checked = row.enabled !== false;
+      $("catalogCatDrawer").hidden = false;
+      $("catalogCatEditLabel")?.focus();
     }
     function openCatalogDrawer(row) {
       const catalog = catalogWorking();
@@ -3748,10 +3789,34 @@
         }
       };
       $("catalogCats")?.addEventListener("click", (ev) => {
+        const edit = ev.target.closest("[data-cat-edit]");
+        if (edit) {
+          const row = (catalogWorking().categories || []).find((item) => item.id === edit.dataset.catEdit);
+          openCatalogCategoryDrawer(row);
+          return;
+        }
         const id = ev.target.closest("[data-cat]")?.dataset.cat;
         if (!id) return;
         catalogCatId = id;
         renderCatalogAdmin();
+      });
+      $("catalogCatDrawerClose")?.addEventListener("click", () => { $("catalogCatDrawer").hidden = true; });
+      $("catalogCatDrawerSave")?.addEventListener("click", async () => {
+        const payload = {
+          action: "upsert_category",
+          id: $("catalogCatEditId").value,
+          label: $("catalogCatEditLabel").value,
+          sort_order: Number($("catalogCatEditSort").value) || undefined,
+          enabled: $("catalogCatEditEnabled").checked,
+        };
+        const res = await fetch("/api/admin/rental-catalog/mutate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+        const data = await readApi(res);
+        if (!res.ok) { setMsg("catalogMsg", data.error || "寫入失敗"); return; }
+        catalogState.draft = data.catalog;
+        catalogState.diff = data.diff;
+        $("catalogCatDrawer").hidden = true;
+        renderCatalogAdmin();
+        setMsg("catalogMsg", "分類已寫入草稿", true);
       });
       $("catalogConds")?.addEventListener("click", (ev) => {
         const id = ev.target.closest("[data-cond]")?.dataset.cond;
@@ -3835,6 +3900,32 @@
         if (!res.ok) { setMsg("catalogTplMsg", data.error || "儲存失敗"); return; }
         await loadRentalCatalog();
         setMsg("catalogTplMsg", "已另存範本", true);
+      });
+      $("catalogTemplatePick")?.addEventListener("change", syncCatalogTemplateActions);
+      $("catalogRenameTemplate")?.addEventListener("click", async () => {
+        const id = $("catalogTemplatePick")?.value;
+        const row = (catalogState.templates || []).find((item) => item.id === id);
+        if (!id || row?.system) return;
+        const label = prompt("新的範本名稱", row.label || "");
+        if (!label) return;
+        const res = await fetch(`/api/admin/rental-catalog/templates/${encodeURIComponent(id)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ label }) });
+        const data = await readApi(res);
+        if (!res.ok) { setMsg("catalogTplMsg", data.error || "重新命名失敗"); return; }
+        await loadRentalCatalog();
+        $("catalogTemplatePick").value = id;
+        syncCatalogTemplateActions();
+        setMsg("catalogTplMsg", "已重新命名範本", true);
+      });
+      $("catalogDeleteTemplate")?.addEventListener("click", async () => {
+        const id = $("catalogTemplatePick")?.value;
+        const row = (catalogState.templates || []).find((item) => item.id === id);
+        if (!id || row?.system) return;
+        if (!confirm(`刪除自訂範本「${row.label}」？這個動作不能復原。`)) return;
+        const res = await fetch(`/api/admin/rental-catalog/templates/${encodeURIComponent(id)}`, { method: "DELETE" });
+        const data = await readApi(res);
+        if (!res.ok) { setMsg("catalogTplMsg", data.error || "刪除失敗"); return; }
+        await loadRentalCatalog();
+        setMsg("catalogTplMsg", "已刪除自訂範本", true);
       });
       $("helpQaReset").onclick = async () => {
         if (!confirm("還原成系統預設的功能說明？你改過的題目會被蓋掉。")) return;

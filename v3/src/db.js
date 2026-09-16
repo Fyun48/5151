@@ -150,6 +150,7 @@ import {
   publicWishRoomView,
   demandMeta,
   applyWishLifecycleAction as applyWishLifecycleActionOn,
+  migrateOpenWishesOnActivation as migrateOpenWishesOnActivationOn,
   setRentalMarketplaceFlags,
   setRentalCatalogCache,
 } from "./demand.js";
@@ -167,13 +168,14 @@ import {
   publicAdminCatalog,
   catalogDiff,
   assertCatalogSafe,
+  countCatalogReferences,
+  isSystemCatalogTemplate,
 } from "./rentalCatalog.js";
 import {
   normalizeRentalMarketplaceFlags,
   publicRentalMarketplaceFlags,
 } from "./rentalMarketplaceFlags.js";
 import { runWishLifecycleTick } from "./wishLifecycleLoop.js";
-import { migrateOpenWishOnActivation } from "./wishLifecycle.js";
 import {
   DEFAULT_WISH_CONDITIONS,
   mergeWishConditions,
@@ -211,6 +213,7 @@ import {
   reportSelfListing as reportSelfListingOn,
   selfListingMeta,
   setSelfListingCatalog,
+  setSelfListingHydrate,
   selfSourceLabel,
   sqlNotSelfSource,
   sql591Source,
@@ -1449,6 +1452,8 @@ export function saveRentalMarketplaceFlags(partial = {}) {
     migrateOpenWishesOnActivation();
   }
   setRentalMarketplaceFlags(next);
+  const catalog = getRentalCatalog();
+  setSelfListingHydrate(catalog, next);
   return publicRentalMarketplaceFlags(next);
 }
 
@@ -1506,16 +1511,6 @@ export function getRentalCatalogTemplates() {
   return list.map((row, index) => normalizeTemplate(row, list.map((item) => item.id).filter((_, i) => i !== index)));
 }
 
-export function saveRentalCatalogTemplate(input = {}) {
-  const items = getRentalCatalogTemplates();
-  const next = normalizeTemplate(input, items.map((row) => row.id));
-  const idx = items.findIndex((row) => row.id === next.id);
-  if (idx >= 0) items[idx] = next;
-  else items.push(next);
-  writeSettingKey("rentalCatalogTemplates", { items });
-  return next;
-}
-
 export function applyRentalCatalogTemplate(templateId) {
   const template = getRentalCatalogTemplates().find((row) => row.id === templateId);
   if (!template) {
@@ -1547,35 +1542,77 @@ export function mutateRentalCatalog(action, payload = {}) {
 }
 
 export function catalogConditionReferences(conditionId) {
-  const id = String(conditionId || "");
+  const catalog = getRentalCatalog();
   let wish = 0;
   let listing = 0;
   try {
-    wish = Number(db.prepare(
-      `SELECT COUNT(*) AS n FROM demand_posts
-       WHERE must_have LIKE ? OR nice_to_have LIKE ? OR avoid LIKE ? OR IFNULL(condition_choices,'') LIKE ?`,
-    ).get(`%${id}%`, `%${id}%`, `%${id}%`, `%${id}%`)?.n) || 0;
+    const posts = db.prepare("SELECT must_have, nice_to_have, avoid, condition_choices FROM demand_posts").all();
+    wish = countCatalogReferences(posts, conditionId, catalog);
   } catch { /* isolated tests without column */ }
   try {
-    listing = Number(db.prepare(
-      `SELECT COUNT(*) AS n FROM listings WHERE IFNULL(self_traits,'') LIKE ?`,
-    ).get(`%${id}%`)?.n) || 0;
+    const listings = db.prepare("SELECT self_traits, listing_condition_values FROM listings").all();
+    listing = countCatalogReferences(listings, conditionId, catalog);
   } catch { /* no listings table */ }
   return { wish, listing, historical: wish + listing };
 }
 
 function migrateOpenWishesOnActivation() {
-  const now = new Date();
-  const rows = db.prepare("SELECT * FROM demand_posts WHERE status = 'open'").all();
-  for (const row of rows) {
-    const patch = migrateOpenWishOnActivation(row, now);
-    if (!patch) continue;
-    db.prepare(
-      `UPDATE demand_posts SET expires_at = ?, last_confirmed_at = COALESCE(last_confirmed_at, ?),
-       last_active_at = COALESCE(last_active_at, ?), continuous_active_from = COALESCE(continuous_active_from, ?),
-       lifecycle = 'active', updated_at = ? WHERE id = ?`,
-    ).run(patch.expires_at, patch.last_confirmed_at, patch.last_active_at, patch.continuous_active_from, patch.updated_at, row.id);
+  return migrateOpenWishesOnActivationOn(db);
+}
+
+export function saveRentalCatalogTemplate(input = {}) {
+  const items = getRentalCatalogTemplates();
+  const next = normalizeTemplate(input, items.map((row) => row.id).filter((id) => id !== input.id));
+  if (isSystemCatalogTemplate(next.id) || isSystemCatalogTemplate(input.id)) {
+    const err = new Error("系統範本只能套用，不能改名或覆寫");
+    err.status = 400;
+    throw err;
   }
+  const idx = items.findIndex((row) => row.id === next.id);
+  if (idx >= 0) items[idx] = next;
+  else items.push(next);
+  writeSettingKey("rentalCatalogTemplates", { items });
+  return { ...next, system: false };
+}
+
+export function renameRentalCatalogTemplate(id, label) {
+  if (isSystemCatalogTemplate(id)) {
+    const err = new Error("系統範本不能改名稱");
+    err.status = 400;
+    throw err;
+  }
+  const items = getRentalCatalogTemplates();
+  const row = items.find((item) => item.id === id);
+  if (!row) {
+    const err = new Error("找不到這個範本");
+    err.status = 404;
+    throw err;
+  }
+  const next = normalizeTemplate({ ...row, id: row.id, label }, items.map((item) => item.id).filter((item) => item !== id));
+  const idx = items.findIndex((item) => item.id === id);
+  items[idx] = { ...next, id: row.id };
+  writeSettingKey("rentalCatalogTemplates", { items });
+  return { ...items[idx], system: false };
+}
+
+export function deleteRentalCatalogTemplate(id) {
+  if (isSystemCatalogTemplate(id)) {
+    const err = new Error("系統範本不能刪除");
+    err.status = 400;
+    throw err;
+  }
+  const items = getRentalCatalogTemplates();
+  if (!items.some((item) => item.id === id)) {
+    const err = new Error("找不到這個範本");
+    err.status = 404;
+    throw err;
+  }
+  const next = items.filter((item) => item.id !== id);
+  writeSettingKey("rentalCatalogTemplates", { items: next });
+  return {
+    ok: true,
+    items: next.map((row) => ({ id: row.id, label: row.label, system: isSystemCatalogTemplate(row.id) })),
+  };
 }
 
 export function applyWishLifecycleFor(userId, postId, action) {
@@ -1858,6 +1895,7 @@ export function getSelfListing(postId, opts = {}) {
 }
 
 export function createSelfListing(userId, input) {
+  hydrateRentalMarketplace();
   return createSelfListingOn(db, userId, input, new Date(), {
     matchCandidates: (listing) => listMatchCandidates(listing.post_id, listing),
   });
@@ -1868,9 +1906,11 @@ export function listingToolsInfo(userId) {
   return listingToolsMeta({ plan: user?.plan, role: user?.role });
 }
 export function copyOwnListingFor(userId, sourceId, input = {}) {
+  hydrateRentalMarketplace();
   return copyOwnListingOn(db, userId, sourceId, input);
 }
 export function publishOwnedDraftFor(userId, postId, input = {}) {
+  hydrateRentalMarketplace();
   return publishOwnedDraftListingOn(db, userId, postId, input, new Date(), {
     matchCandidates: (listing) => listMatchCandidates(listing.post_id, listing),
   });

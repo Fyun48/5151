@@ -30,6 +30,7 @@ import {
   createPublicToken,
   daysBetween,
   mapLegacyLifecycle,
+  migrateOpenWishOnActivation,
   publicInactiveWishView,
   remainingTtlDays,
   transitionLifecycle,
@@ -521,6 +522,22 @@ export function expireOpenPosts(db, now = new Date()) {
      WHERE status = 'open' AND expires_at <= ? AND expires_at < ?`,
   ).run(stamp, stamp, WISH_FAR_EXPIRE);
   return Number(result.changes) || 0;
+}
+
+export function migrateOpenWishesOnActivation(db, now = new Date()) {
+  if (!hasWishColumn(db, "lifecycle")) return 0;
+  const rows = db.prepare("SELECT * FROM demand_posts WHERE status = 'open'").all();
+  let n = 0;
+  for (const row of rows) {
+    const patch = migrateOpenWishOnActivation(row, now);
+    if (!patch) continue;
+    db.prepare(
+      `UPDATE demand_posts SET expires_at = ?, last_confirmed_at = ?, last_active_at = ?,
+       continuous_active_from = ?, lifecycle = 'active', updated_at = ? WHERE id = ?`,
+    ).run(patch.expires_at, patch.last_confirmed_at, patch.last_active_at, patch.continuous_active_from, patch.updated_at, row.id);
+    n += 1;
+  }
+  return n;
 }
 
 function assertMatureAccount(db, userId, now, actionLabel) {

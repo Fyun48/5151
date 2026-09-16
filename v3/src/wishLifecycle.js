@@ -105,7 +105,7 @@ export function canSelfTransition(from, action) {
   if (action === "complete") return lifecycle !== "completed";
   if (action === "pause") return lifecycle === "active" || lifecycle === "needs_confirmation";
   if (action === "resume") return lifecycle === "paused" || lifecycle === "expired";
-  if (action === "extend" || action === "confirm") {
+  if (action === "extend" || action === "confirm" || action === "full_reconfirm") {
     return lifecycle === "active" || lifecycle === "needs_confirmation";
   }
   if (action === "publish") return lifecycle === "draft" || lifecycle === "paused";
@@ -127,10 +127,10 @@ export function transitionLifecycle(row, action, now = new Date(), { ttlDays = W
   if (action === "pause") {
     return { lifecycle: "paused", status: "closed", closed_reason: "paused", closed_at: stamp, updated_at: stamp };
   }
-  if (action === "extend" || action === "confirm" || action === "resume" || action === "publish") {
+  if (action === "extend" || action === "confirm" || action === "full_reconfirm" || action === "resume" || action === "publish") {
     const started = row.continuous_active_from || row.last_confirmed_at || row.published_at || row.created_at;
     const continuous = daysBetween(started, now);
-    if (action === "extend" && continuous >= continuousDays) {
+    if ((action === "extend" || action === "confirm") && continuous >= continuousDays) {
       return {
         lifecycle: "needs_confirmation",
         status: "open",
@@ -138,8 +138,7 @@ export function transitionLifecycle(row, action, now = new Date(), { ttlDays = W
         updated_at: stamp,
       };
     }
-    const fullReconfirm = action === "confirm" && continuous >= continuousDays;
-    const resetWindow = fullReconfirm || action === "resume" || action === "publish" || !row.continuous_active_from;
+    const resetWindow = action === "full_reconfirm" || action === "resume" || action === "publish" || !row.continuous_active_from;
     return {
       lifecycle: "active",
       status: "open",
@@ -190,16 +189,15 @@ export function shouldApplyLifecyclePlan(freshRow, planned, now = new Date()) {
 }
 
 export function migrateOpenWishOnActivation(row, now = new Date(), ttlDays = WISH_TTL_DAYS_DEFAULT) {
-  const lifecycle = mapLegacyLifecycle(row);
-  if (lifecycle !== "active") return null;
+  if (String(row?.status || "") !== "open") return null;
   const stamp = iso(now);
   return {
     lifecycle: "active",
     status: "open",
     expires_at: ttlExpiresAt(now, ttlDays),
-    last_confirmed_at: row.last_confirmed_at || stamp,
-    last_active_at: row.last_active_at || stamp,
-    continuous_active_from: row.continuous_active_from || stamp,
+    last_confirmed_at: stamp,
+    last_active_at: stamp,
+    continuous_active_from: stamp,
     updated_at: stamp,
   };
 }

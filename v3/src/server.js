@@ -91,6 +91,8 @@ import {
   publishRentalCatalogDraft,
   getRentalCatalogTemplates,
   saveRentalCatalogTemplate,
+  renameRentalCatalogTemplate,
+  deleteRentalCatalogTemplate,
   applyRentalCatalogTemplate,
   mutateRentalCatalog,
   getRentalMarketplaceFlags,
@@ -250,7 +252,7 @@ import { PROBE_ALIVE, PROBE_GONE, PROBE_INCONCLUSIVE, classifyListingProbeWrite 
 import { enqueueListingEnrich, processListingEnrichBatch, requestClickRefresh, wakeListingEnrichWorker, WATCH_PRIORITY } from "./listingEnrichQueue.js";
 import { deliveryConfigFromEnv, startDeliveryLoop } from "./opsDelivery.js";
 import { startWishLifecycleLoop } from "./wishLifecycleLoop.js";
-import { catalogDiff, publicAdminCatalog } from "./rentalCatalog.js";
+import { catalogDiff, isSystemCatalogTemplate, publicAdminCatalog } from "./rentalCatalog.js";
 import { isRentalCatalogV2Enabled, publicRentalMarketplaceFlags } from "./rentalMarketplaceFlags.js";
 import { opsDeliveryDb } from "./db.js";
 import { refreshHousingData } from "./housingFetch.js";
@@ -1759,7 +1761,11 @@ app.get("/api/admin/rental-catalog", requireAdminApi, (_req, res) => {
     published: publicAdminCatalog(published, { revealIds: true }),
     draft,
     diff: draft ? catalogDiff(published, draft) : null,
-    templates: getRentalCatalogTemplates().map((row) => ({ id: row.id, label: row.label })),
+    templates: getRentalCatalogTemplates().map((row) => ({
+      id: row.id,
+      label: row.label,
+      system: isSystemCatalogTemplate(row.id),
+    })),
     flags: publicRentalMarketplaceFlags(getRentalMarketplaceFlags()),
   });
 });
@@ -1783,6 +1789,22 @@ app.post("/api/admin/rental-catalog/mutate", requireAdminApi, (req, res) => {
 app.post("/api/admin/rental-catalog/templates", requireAdminApi, (req, res) => {
   try {
     res.json(saveRentalCatalogTemplate(req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.patch("/api/admin/rental-catalog/templates/:id", requireAdminApi, (req, res) => {
+  try {
+    res.json(renameRentalCatalogTemplate(req.params.id, req.body?.label));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.delete("/api/admin/rental-catalog/templates/:id", requireAdminApi, (req, res) => {
+  try {
+    res.json(deleteRentalCatalogTemplate(req.params.id));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -2116,7 +2138,7 @@ app.post("/api/wish-rooms/:id/reopen", (req, res) => {
   }
 });
 
-["extend", "pause", "resume", "complete", "confirm"].forEach((action) => {
+["extend", "pause", "resume", "complete", "confirm", "full_reconfirm"].forEach((action) => {
   app.post(`/api/wish-rooms/:id/${action}`, (req, res) => {
     try {
       const session = readSession(req);
