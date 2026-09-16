@@ -3478,6 +3478,7 @@
             </div>
           </div>
           <div class="row" style="margin-top:10px">
+            <button type="button" class="ghost" id="wishSaveDraft">儲存草稿</button>
             <button type="submit" class="primary" id="demandSubmit">公開許願房</button>
             <button type="button" class="ghost" id="wishCancelEdit">取消</button>
             <span class="save-msg" id="demandMsg" role="status" aria-live="polite"></span>
@@ -9062,9 +9063,9 @@
           <div class="wish-v2-head">
             <strong>${esc(cat.label)}</strong>
             <span class="wish-seg">
-              <button type="button" class="ghost" data-wish-bulk="want" data-wish-cat="${esc(cat.id)}">全部要有</button>
-              <button type="button" class="ghost" data-wish-bulk="avoid" data-wish-cat="${esc(cat.id)}">全部不要</button>
-              <button type="button" class="ghost" data-wish-bulk="clear" data-wish-cat="${esc(cat.id)}">清除</button>
+              <button type="button" class="ghost" data-wish-bulk="want">全部要有</button>
+              <button type="button" class="ghost" data-wish-bulk="avoid">全部不要</button>
+              <button type="button" class="ghost" data-wish-bulk="clear">清除</button>
             </span>
           </div>
           ${rows.map((row) => {
@@ -9160,6 +9161,7 @@
         && row.closed_reason !== "completed"
       ));
       $("wishCreateBtn").hidden = Boolean(active);
+      if ($("wishCreateBtn")) $("wishCreateBtn").textContent = !active && wishMine.draft ? "繼續編輯草稿" : "建立我的許願房";
       $("wishViewBtn").hidden = !active;
       $("wishEditBtn").hidden = !active;
       $("wishCloseBtn").hidden = !active || wishLifeOn();
@@ -9172,6 +9174,16 @@
       $("wishLoadExampleBtn").hidden = !wishMine.has_example;
       $("wishDeleteExampleBtn").hidden = !wishMine.has_example;
     }
+    function isWishDraftContext() {
+      if (isWishFullReconfirm(wishEditingId)) return false;
+      if (wishMine.active && Number(wishEditingId) === Number(wishMine.active.id)) return false;
+      return true;
+    }
+    function syncWishDraftAction() {
+      const btn = $("wishSaveDraft");
+      if (!btn) return;
+      btn.hidden = !isWishDraftContext();
+    }
     function showWishForm(show) {
       if ($("wishFormWrap")) $("wishFormWrap").hidden = !show;
       if (!show) clearWishFullReconfirm();
@@ -9179,6 +9191,7 @@
         fillDemandDistricts();
         if (!$("wishMust")?.children.length) renderWishConditionGroups();
       }
+      syncWishDraftAction();
       syncWishOwnerBar();
       paintWishLifecycleBar();
     }
@@ -9529,6 +9542,41 @@
         setWishStatus(error.message);
       }
     });
+    $("wishSaveDraft")?.addEventListener("click", async () => {
+      if (isGuest) {
+        remindGuest();
+        return;
+      }
+      if (!isWishDraftContext()) {
+        setWishStatus("已公開的許願房請用「公開許願房」更新");
+        return;
+      }
+      try {
+        const payload = { ...collectWishForm(), draft: true };
+        let res;
+        if (wishEditingId) {
+          res = await fetch(`/api/wish-rooms/${wishEditingId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+        } else {
+          res = await fetch("/api/wish-rooms", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+        }
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "草稿儲存失敗");
+        wishEditingId = Number(data.id || wishEditingId) || wishEditingId;
+        setWishStatus("已儲存草稿（尚未公開）");
+        await loadDemand();
+        syncWishDraftAction();
+      } catch (error) {
+        setWishStatus(error.message);
+      }
+    });
     $("demandList")?.addEventListener("click", async (ev) => {
       const btn = ev.target.closest("[data-wish-open]");
       const openId = btn?.dataset.wishOpen;
@@ -9630,9 +9678,9 @@
     $("wishCatalogGroups")?.addEventListener("click", (ev) => {
       const bulk = ev.target.closest("[data-wish-bulk]");
       if (bulk) {
-        const cat = bulk.dataset.wishCat;
         const action = bulk.dataset.wishBulk;
-        const section = bulk.closest("[data-wish-cat]") || document;
+        const section = bulk.closest(".wish-v2-cat");
+        if (!section) return;
         const ids = [...new Set([...section.querySelectorAll("[data-wish-v2]")].map((btn) => btn.dataset.wishV2))];
         for (const id of ids) {
           const btns = [...section.querySelectorAll(`[data-wish-v2="${id}"]`)];
@@ -10213,14 +10261,23 @@
       document.execCommand("insertText", false, mark);
       syncDescBodyFromEditor();
     });
+    let selfListingInFlight = false;
+    let selfListingCreateKey = "";
+    let selfListingCreateFingerprint = "";
+    function newSelfListingIdempotencyKey() {
+      if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
+      return `slc-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    }
     $("selfListingForm")?.addEventListener("submit", async (ev) => {
       ev.preventDefault();
+      if (selfListingInFlight) return;
       if (isGuest) {
         remindGuest();
         return;
       }
       const msg = $("selfMsg");
       const fail = (text) => { if (msg) msg.textContent = text; };
+      const submitBtn = $("selfSubmit");
       try {
         applyAddressToSelects();
         const title = String($("selfTitle")?.value || "").trim();
@@ -10272,6 +10329,17 @@
         };
         const publishFromImport = currentImport?.status === "confirmed" && currentImport?.id;
         const publishDraft = !publishFromImport && editingDraftId;
+        const isCreate = !publishFromImport && !publishDraft;
+        if (isCreate) {
+          const fingerprint = JSON.stringify(payload);
+          if (!selfListingCreateKey || selfListingCreateFingerprint !== fingerprint) {
+            selfListingCreateKey = newSelfListingIdempotencyKey();
+            selfListingCreateFingerprint = fingerprint;
+          }
+          payload.idempotency_key = selfListingCreateKey;
+        }
+        selfListingInFlight = true;
+        if (submitBtn) submitBtn.disabled = true;
         const res = await fetch(
           publishFromImport
             ? `/api/listing-imports/${currentImport.id}/publish`
@@ -10285,6 +10353,10 @@
         });
         const data = await readApi(res);
         if (!res.ok) throw new Error(data.error || "刊登失敗");
+        if (isCreate) {
+          selfListingCreateKey = "";
+          selfListingCreateFingerprint = "";
+        }
         if (msg) msg.textContent = "已刊登。資料寫得越清楚，來看的人越少再問一遍。";
         currentImport = null;
         editingDraftId = null;
@@ -10302,6 +10374,9 @@
         maybeAskPush("刊登物件後可允許系統推播。");
       } catch (error) {
         if (msg) msg.textContent = error.message;
+      } finally {
+        selfListingInFlight = false;
+        if (submitBtn) submitBtn.disabled = false;
       }
     });
     let editingDraftId = null;

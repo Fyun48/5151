@@ -18,6 +18,7 @@ test("navigation and empty/owner copy use 許願房", () => {
   assert.match(html, /建立我的許願房/);
   assert.match(html, /目前沒有公開的許願房/);
   assert.match(html, /id="wishCreateBtn"/);
+  assert.match(html, /id="wishSaveDraft"/);
   assert.match(html, /id="wishEditBtn"/);
   assert.match(html, /id="wishCloseBtn"/);
   assert.match(html, /id="wishSaveExampleBtn"/);
@@ -76,6 +77,7 @@ test("public share page and routes exist; guests can read", () => {
   assert.match(html, /id="wishCatalogV2"/);
   assert.match(html, /selected\.choices/);
   assert.match(html, /hasTarget \? target : "unspecified"/);
+  assert.match(html, /bulk\.closest\("\.wish-v2-cat"\)/);
   assert.match(html, /\/api\/public\/wish-room\//);
   assert.match(html, /wishPublicRef/);
   assert.match(html, /data-wish-public/);
