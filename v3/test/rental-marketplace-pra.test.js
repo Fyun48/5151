@@ -8,6 +8,7 @@ import {
   applyWishLifecycleAction,
   createDemandPost,
   ensureDemandSchema,
+  expireOpenPosts,
   getDemandPost,
   listDemandPosts,
   publicWishRoomView,
@@ -15,6 +16,7 @@ import {
   setRentalCatalogCache,
   setRentalMarketplaceFlags,
 } from "../src/demand.js";
+import { ttlExpiresAt } from "../src/wishLifecycle.js";
 import { listingFitScore } from "../src/listingScore.js";
 import { preferPrimaryListing } from "../src/match.js";
 import { defaultCatalog } from "../src/rentalCatalog.js";
@@ -78,7 +80,7 @@ test("lifecycle flag off blocks new actions; on uses real TTL and complete", () 
   const done = applyWishLifecycleAction(db, 1, post.id, "complete");
   assert.equal(done.lifecycle, "completed");
   assert.throws(() => applyWishLifecycleAction(db, 1, post.id, "resume"), /另開新的/);
-  const inactive = getDemandPost(db, post.id, { publicOnly: true });
+  const inactive = getDemandPost(db, post.public_token, { publicOnly: true });
   assert.equal(inactive.inactive, true);
   assert.equal(inactive.noindex, true);
   setRentalMarketplaceFlags({});
@@ -138,18 +140,115 @@ test("catalog v2 persists choices and does not upgrade leftover nice_to_have", (
   db.close();
 });
 
-test("old numeric public URL still resolves and reserved flags stay off", () => {
+test("new wish public API is token-only; legacy numeric still resolves", () => {
   const db = open();
   const post = createDemandPost(db, 1, sample());
-  const byId = getDemandPost(db, String(post.id), { publicOnly: true });
-  assert.equal(byId.id, post.id);
-  assert.equal("author" in byId, false);
+  assert.equal(Number(db.prepare("SELECT legacy_numeric_share FROM demand_posts WHERE id = ?").get(post.id).legacy_numeric_share), 0);
+  assert.throws(() => getDemandPost(db, String(post.id), { publicOnly: true }), /找不到/);
+  assert.throws(() => getDemandPost(db, String(post.id), { viewerId: 0 }), /找不到/);
+  const byToken = getDemandPost(db, post.public_token, { publicOnly: true });
+  assert.equal(byToken.id, post.id);
+  assert.equal("author" in byToken, false);
+  const owner = getDemandPost(db, post.id, { viewerId: 1 });
+  assert.equal(owner.id, post.id);
+  db.prepare("UPDATE demand_posts SET legacy_numeric_share = 1 WHERE id = ?").run(post.id);
+  const legacy = getDemandPost(db, String(post.id), { publicOnly: true });
+  assert.equal(legacy.id, post.id);
   const flags = publicRentalMarketplaceFlags({
     wish: { public_share_v2_enabled: true, owner_matching_enabled: true, offer_enabled: true },
   });
   assert.equal(flags.wish.public_share_v2_enabled, false);
   assert.equal(flags.wish.owner_matching_enabled, false);
   assert.equal(flags.wish.offer_enabled, false);
+  db.close();
+});
+
+test("existing rows are backfilled as legacy numeric share", () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec("PRAGMA foreign_keys = ON");
+  db.exec(`
+    CREATE TABLE users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT NOT NULL UNIQUE,
+      nickname TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE demand_posts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      districts TEXT NOT NULL DEFAULT '[]',
+      rent_max INTEGER NOT NULL DEFAULT 0,
+      housing_type TEXT NOT NULL DEFAULT 'any',
+      mrt_walk INTEGER NOT NULL DEFAULT 0,
+      body TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'open',
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      closed_at TEXT,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+  `);
+  db.prepare("INSERT INTO users(id, email, nickname, created_at) VALUES (1, 'a@example.com', '阿花', '2026-01-01T00:00:00.000Z')").run();
+  db.prepare(
+    "INSERT INTO demand_posts(user_id, body, status, created_at, expires_at) VALUES (1, '舊的公開許願房內容夠長', 'open', '2026-01-01T00:00:00.000Z', '9999-12-31T00:00:00.000Z')",
+  ).run();
+  ensureDemandSchema(db);
+  const row = db.prepare("SELECT legacy_numeric_share FROM demand_posts WHERE id = 1").get();
+  assert.equal(Number(row.legacy_numeric_share), 1);
+  const byId = getDemandPost(db, "1", { publicOnly: true });
+  assert.equal(byId.id, 1);
+  db.close();
+});
+
+test("publish TTL goes to confirmation then expires after grace", () => {
+  const db = open();
+  setRentalMarketplaceFlags({ wish: { lifecycle_enabled: true } });
+  const publishedAt = new Date("2026-09-01T00:00:00.000Z");
+  const post = createDemandPost(db, 1, sample(), publishedAt);
+  const stored = db.prepare("SELECT * FROM demand_posts WHERE id = ?").get(post.id);
+  assert.equal(stored.expires_at, ttlExpiresAt(publishedAt, 14));
+  assert.ok(!String(stored.expires_at).startsWith("9999"));
+
+  expireOpenPosts(db, new Date(stored.expires_at));
+  const confirming = db.prepare("SELECT status, lifecycle FROM demand_posts WHERE id = ?").get(post.id);
+  assert.equal(confirming.lifecycle, "needs_confirmation");
+  assert.equal(confirming.status, "open");
+
+  expireOpenPosts(db, new Date(Date.parse(stored.expires_at) + 3 * 86400000));
+  const duringGrace = db.prepare("SELECT status, lifecycle FROM demand_posts WHERE id = ?").get(post.id);
+  assert.equal(duringGrace.status, "open");
+  assert.equal(duringGrace.lifecycle, "needs_confirmation");
+
+  expireOpenPosts(db, new Date(Date.parse(stored.expires_at) + 7 * 86400000));
+  const expired = db.prepare("SELECT status, lifecycle, closed_reason FROM demand_posts WHERE id = ?").get(post.id);
+  assert.equal(expired.status, "expired");
+  assert.equal(expired.lifecycle, "expired");
+  assert.equal(expired.closed_reason, "expired");
+  setRentalMarketplaceFlags({});
+  db.close();
+});
+
+test("60-day confirm action completes and resets continuous window", () => {
+  const db = open();
+  setRentalMarketplaceFlags({ wish: { lifecycle_enabled: true } });
+  const started = new Date("2026-09-16T00:00:00.000Z");
+  const post = createDemandPost(db, 1, sample(), started);
+  db.prepare(
+    "UPDATE demand_posts SET continuous_active_from = ?, last_confirmed_at = ?, lifecycle = 'needs_confirmation' WHERE id = ?",
+  ).run(started.toISOString(), "2026-11-01T00:00:00.000Z", post.id);
+  const now = new Date("2026-11-16T00:00:00.000Z");
+  const gated = applyWishLifecycleAction(db, 1, post.id, "extend", now);
+  assert.equal(gated.require_reconfirm, true);
+  assert.equal(gated.lifecycle, "needs_confirmation");
+  const confirmed = applyWishLifecycleAction(db, 1, post.id, "confirm", now);
+  assert.equal(confirmed.lifecycle, "active");
+  assert.equal(confirmed.require_reconfirm, false);
+  const row = db.prepare("SELECT continuous_active_from, last_confirmed_at, expires_at, lifecycle FROM demand_posts WHERE id = ?").get(post.id);
+  assert.equal(row.lifecycle, "active");
+  assert.equal(row.continuous_active_from, now.toISOString());
+  assert.equal(row.last_confirmed_at, now.toISOString());
+  assert.equal(row.expires_at, ttlExpiresAt(now, 14));
+  setRentalMarketplaceFlags({});
   db.close();
 });
 

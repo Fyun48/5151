@@ -25,6 +25,7 @@ import {
   remainingTtlDays,
   transitionLifecycle,
   ttlExpiresAt,
+  WISH_CONFIRM_GRACE_DAYS,
   WISH_CONTINUOUS_ACTIVE_DAYS,
 } from "./wishLifecycle.js";
 
@@ -240,6 +241,10 @@ function addWishColumns(db) {
   for (const [name, def] of additions) {
     if (!cols.has(name)) db.exec(`ALTER TABLE demand_posts ADD COLUMN ${name} ${def}`);
   }
+  if (!cols.has("legacy_numeric_share")) {
+    db.exec("ALTER TABLE demand_posts ADD COLUMN legacy_numeric_share INTEGER NOT NULL DEFAULT 0");
+    db.exec("UPDATE demand_posts SET legacy_numeric_share = 1");
+  }
 }
 
 /** 舊額度為 2 則 open：保留較新一則為 ACTIVE，其餘改 closed（不刪資料）。 */
@@ -449,6 +454,25 @@ function userCreatedAt(db, userId) {
 
 export function expireOpenPosts(db, now = new Date()) {
   const stamp = iso(now);
+  if (isWishLifecycleEnabled(marketplaceFlags) && hasWishColumn(db, "lifecycle")) {
+    const confirm = db.prepare(
+      `UPDATE demand_posts
+       SET lifecycle = 'needs_confirmation', updated_at = ?
+       WHERE status = 'open'
+         AND (lifecycle IS NULL OR lifecycle = '' OR lifecycle = 'active')
+         AND expires_at <= ? AND expires_at < ?`,
+    ).run(stamp, stamp, WISH_FAR_EXPIRE);
+    const graceCutoff = new Date(nowMs(now) - WISH_CONFIRM_GRACE_DAYS * 86400000).toISOString();
+    const expired = db.prepare(
+      `UPDATE demand_posts
+       SET status = 'expired', lifecycle = 'expired', closed_at = COALESCE(closed_at, ?),
+           closed_reason = 'expired', updated_at = ?
+       WHERE status = 'open'
+         AND lifecycle = 'needs_confirmation'
+         AND expires_at <= ? AND expires_at < ?`,
+    ).run(stamp, stamp, graceCutoff, WISH_FAR_EXPIRE);
+    return (Number(confirm.changes) || 0) + (Number(expired.changes) || 0);
+  }
   const result = db.prepare(
     `UPDATE demand_posts SET status = 'expired', closed_at = COALESCE(closed_at, ?)
      WHERE status = 'open' AND expires_at <= ? AND expires_at < ?`,
@@ -791,6 +815,10 @@ export function getDemandPost(db, postId, { viewerId = 0, publicOnly = false } =
   const row = rowByRef(db, postId);
   if (!row) throw httpError("找不到這則許願房", 404);
   const mine = Number(row.user_id) === Number(viewerId);
+  const numeric = /^\d+$/.test(String(postId || "").trim());
+  if (numeric && (publicOnly || !mine) && hasWishColumn(db, "legacy_numeric_share") && !Number(row.legacy_numeric_share)) {
+    throw httpError("找不到這則許願房", 404);
+  }
   if (row.status === "hidden" && !mine) throw httpError("這則許願房已隱藏", 404);
   if (row.status === "draft" && !mine) throw httpError("找不到這則許願房", 404);
   if (publicOnly && row.status !== "open") {

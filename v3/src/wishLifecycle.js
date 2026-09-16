@@ -130,7 +130,7 @@ export function transitionLifecycle(row, action, now = new Date(), { ttlDays = W
   if (action === "extend" || action === "confirm" || action === "resume" || action === "publish") {
     const started = row.continuous_active_from || row.last_confirmed_at || row.published_at || row.created_at;
     const continuous = daysBetween(started, now);
-    if ((action === "extend" || action === "confirm") && continuous >= continuousDays) {
+    if (action === "extend" && continuous >= continuousDays) {
       return {
         lifecycle: "needs_confirmation",
         status: "open",
@@ -138,13 +138,14 @@ export function transitionLifecycle(row, action, now = new Date(), { ttlDays = W
         updated_at: stamp,
       };
     }
+    const resetWindow = action === "confirm" || action === "resume" || action === "publish" || !row.continuous_active_from;
     return {
       lifecycle: "active",
       status: "open",
       expires_at: ttlExpiresAt(now, ttlDays),
       last_confirmed_at: stamp,
       last_active_at: stamp,
-      continuous_active_from: action === "resume" || action === "publish" || !row.continuous_active_from ? stamp : row.continuous_active_from,
+      continuous_active_from: resetWindow ? stamp : row.continuous_active_from,
       closed_at: null,
       closed_reason: "",
       updated_at: stamp,
@@ -165,34 +166,29 @@ export function planLifecycleTick(row, now = new Date(), {
   if (lifecycle === "blocked" || lifecycle === "completed" || lifecycle === "draft" || lifecycle === "paused" || lifecycle === "expired") {
     return null;
   }
-  const expires = Date.parse(row.expires_at);
-  if (Number.isFinite(expires) && expires <= nowMs(now) && String(row.expires_at) < WISH_FAR_EXPIRE) {
-    return { lifecycle: "expired", status: "expired", closed_at: stamp, closed_reason: "expired", updated_at: stamp };
-  }
+  const ttlDue = isRealTtlDue(row.expires_at, now);
+  const ttlPastGrace = isRealTtlPastGrace(row.expires_at, now, graceDays);
   const last = row.last_confirmed_at || row.last_active_at || row.published_at || row.updated_at || row.created_at;
   const idle = daysBetween(last, now);
-  if (lifecycle === "active" && idle >= confirmAfterDays) {
+  if (lifecycle === "active" && (ttlDue || idle >= confirmAfterDays)) {
     return { lifecycle: "needs_confirmation", status: "open", updated_at: stamp };
   }
-  if (lifecycle === "needs_confirmation" && idle >= confirmAfterDays + graceDays) {
+  if (lifecycle === "needs_confirmation" && (ttlPastGrace || idle >= confirmAfterDays + graceDays)) {
+    if (ttlPastGrace) {
+      return { lifecycle: "expired", status: "expired", closed_at: stamp, closed_reason: "expired", updated_at: stamp };
+    }
     return { lifecycle: "paused", status: "closed", closed_at: stamp, closed_reason: "paused", updated_at: stamp };
   }
   return null;
 }
 
 /** Worker 寫入前重讀列：若使用者已續期／改狀態，不再覆寫。 */
-export function shouldApplyLifecyclePlan(freshRow, planned) {
+export function shouldApplyLifecyclePlan(freshRow, planned, now = new Date()) {
   if (!planned || !freshRow) return false;
   const current = mapLegacyLifecycle(freshRow);
   if (current === "blocked" || current === "completed") return false;
-  if (planned.lifecycle === "expired" && current !== "active" && current !== "needs_confirmation") return false;
-  if (planned.lifecycle === "expired") {
-    const expires = Date.parse(freshRow.expires_at);
-    if (!Number.isFinite(expires) || expires > Date.now()) return false;
-  }
-  if (planned.lifecycle === "needs_confirmation" && current !== "active") return false;
-  if (planned.lifecycle === "paused" && current !== "needs_confirmation") return false;
-  return true;
+  const still = planLifecycleTick(freshRow, now);
+  return Boolean(still && still.lifecycle === planned.lifecycle);
 }
 
 export function migrateOpenWishOnActivation(row, now = new Date(), ttlDays = WISH_TTL_DAYS_DEFAULT) {
@@ -218,6 +214,17 @@ export function publicInactiveWishView() {
     noindex: true,
     message: "這個租屋需求目前已停止。",
   };
+}
+
+export function isRealTtlDue(expiresAt, now = Date.now()) {
+  const expires = Date.parse(expiresAt);
+  return Number.isFinite(expires) && expires <= nowMs(now) && String(expiresAt) < WISH_FAR_EXPIRE;
+}
+
+export function isRealTtlPastGrace(expiresAt, now = Date.now(), graceDays = WISH_CONFIRM_GRACE_DAYS) {
+  const expires = Date.parse(expiresAt);
+  if (!Number.isFinite(expires) || String(expiresAt) >= WISH_FAR_EXPIRE) return false;
+  return expires + Math.max(0, Number(graceDays) || 0) * 86400000 <= nowMs(now);
 }
 
 function nowMs(now) {

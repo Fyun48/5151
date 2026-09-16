@@ -49,7 +49,7 @@ export function runWishLifecycleTick(db, now = new Date(), { limit = DEFAULT_LIM
     for (const row of rows) {
       const planned = planLifecycleTick(row, now);
       const fresh = db.prepare("SELECT * FROM demand_posts WHERE id = ?").get(row.id);
-      if (!shouldApplyLifecyclePlan(fresh, planned)) continue;
+      if (!shouldApplyLifecyclePlan(fresh, planned, now)) continue;
       update.run(
         planned.lifecycle,
         planned.status,
