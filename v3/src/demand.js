@@ -376,6 +376,25 @@ function assertNotCollapsed(row) {
   }
 }
 
+/** /publish 只接受 draft；already-open 可 idempotent 回傳，其餘狀態 fail-closed。 */
+function classifyWishPublishState(row) {
+  assertNotCollapsed(row);
+  const status = String(row?.status || "");
+  if (status === "draft") return "draft";
+  if (status === "open") return "already_open";
+  const life = mapLegacyLifecycle(row);
+  if (life === "completed") {
+    throw httpError("已找到房的許願房請另開新的一則", 400, "wish_completed");
+  }
+  if (life === "blocked" || status === "hidden") {
+    throw httpError("已封鎖的許願房不能自己恢復", 400, "wish_blocked");
+  }
+  if (life === "paused" || life === "expired") {
+    throw httpError("已暫停或過期的許願房請改用恢復", 400, "wish_use_resume");
+  }
+  throw httpError("只有草稿可以刊登", 400, "wish_not_draft");
+}
+
 function httpError(message, status = 400, code = "") {
   const err = new Error(message);
   err.status = status;
@@ -1240,10 +1259,13 @@ export function publishWishRoom(db, userId, postId, input = {}, now = new Date()
     const row = rowById(db, postId);
     if (!row) throw httpError("找不到這則許願房", 404);
     if (Number(row.user_id) !== uid) throw httpError("只能刊登自己的許願房", 403);
+    const publishState = classifyWishPublishState(row);
+    if (publishState === "already_open") {
+      return getDemandPost(db, row.id, { viewerId: uid });
+    }
     const fields = Object.keys(input || {}).length ? normalizeWishInput(db, uid, input, row) : normalizeWishInput(db, uid, {}, row);
     assertPublishable(fields);
-    assertNotCollapsed(row);
-    if (row.status !== "open" && countMutable(db, uid, row.id) >= DEMAND_MAX_OPEN) {
+    if (countMutable(db, uid, row.id) >= DEMAND_MAX_OPEN) {
       throwActiveLimit();
     }
     applyPublishInPlace(db, row, fields, now);

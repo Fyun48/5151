@@ -287,3 +287,94 @@ test("startup collapse retires leftover draft beside open without paused resume"
   setRentalMarketplaceFlags({});
   db.close();
 });
+
+function rowState(db, id) {
+  return db.prepare("SELECT status, lifecycle, closed_reason, closed_at FROM demand_posts WHERE id=?").get(id);
+}
+
+test("publish refuses completed Wish and leaves it completed/closed", () => {
+  const db = open();
+  setRentalMarketplaceFlags({ wish: { lifecycle_enabled: true } });
+  const draft = createDemandPost(db, 1, { ...sample(), draft: true });
+  const active = publishWishRoom(db, 1, draft.id);
+  const done = applyWishLifecycleAction(db, 1, active.id, "complete");
+  assert.equal(done.lifecycle, "completed");
+  assert.throws(
+    () => publishWishRoom(db, 1, done.id),
+    (e) => e.status === 400 && e.code === "wish_completed",
+  );
+  const after = rowState(db, done.id);
+  assert.equal(after.status, "closed");
+  assert.equal(after.lifecycle, "completed");
+  assert.equal(after.closed_reason, "completed");
+  setRentalMarketplaceFlags({});
+  db.close();
+});
+
+test("publish refuses blocked/hidden Wish and leaves it blocked", () => {
+  const db = open();
+  setRentalMarketplaceFlags({ wish: { lifecycle_enabled: true } });
+  const draft = createDemandPost(db, 1, { ...sample(), draft: true });
+  const active = publishWishRoom(db, 1, draft.id);
+  db.prepare("UPDATE demand_posts SET status='hidden', lifecycle='blocked', closed_reason='blocked' WHERE id=?").run(active.id);
+  assert.throws(
+    () => publishWishRoom(db, 1, active.id),
+    (e) => e.status === 400 && e.code === "wish_blocked",
+  );
+  const after = rowState(db, active.id);
+  assert.equal(after.status, "hidden");
+  assert.equal(after.lifecycle, "blocked");
+  setRentalMarketplaceFlags({});
+  db.close();
+});
+
+test("publish refuses paused Wish; resume remains the legal path", () => {
+  const db = open();
+  setRentalMarketplaceFlags({ wish: { lifecycle_enabled: true } });
+  const draft = createDemandPost(db, 1, { ...sample(), draft: true });
+  const active = publishWishRoom(db, 1, draft.id);
+  const paused = applyWishLifecycleAction(db, 1, active.id, "pause");
+  assert.equal(paused.lifecycle, "paused");
+  assert.throws(
+    () => publishWishRoom(db, 1, paused.id),
+    (e) => e.status === 400 && e.code === "wish_use_resume",
+  );
+  const afterPublish = rowState(db, paused.id);
+  assert.equal(afterPublish.status, "closed");
+  assert.equal(afterPublish.lifecycle, "paused");
+  const resumed = applyWishLifecycleAction(db, 1, paused.id, "resume");
+  assert.equal(resumed.id, paused.id);
+  assert.equal(resumed.status, "open");
+  assert.equal(resumed.lifecycle, "active");
+  setRentalMarketplaceFlags({});
+  db.close();
+});
+
+test("already-open publish is idempotent and does not rewrite fields", () => {
+  const db = open();
+  setRentalMarketplaceFlags({ wish: { lifecycle_enabled: true } });
+  const draft = createDemandPost(db, 1, { ...sample(), draft: true });
+  const published = publishWishRoom(db, 1, draft.id);
+  const again = publishWishRoom(db, 1, published.id, {
+    rent_max: 99000,
+    body: "【PR-A-UAT】不該用 publish 改欄位",
+  });
+  assert.equal(again.id, published.id);
+  assert.equal(again.status, "open");
+  assert.equal(again.rent_max, published.rent_max);
+  assert.equal(again.body, published.body);
+  setRentalMarketplaceFlags({});
+  db.close();
+});
+
+test("server /publish route only forwards to publishWishRoomFor", () => {
+  const server = readFileSync(path.join(dir, "../src/server.js"), "utf8");
+  const route = server.slice(
+    server.indexOf('app.post("/api/wish-rooms/:id/publish"'),
+    server.indexOf('app.post("/api/wish-rooms/:id/reopen"'),
+  );
+  assert.match(route, /publishWishRoomFor\(session\.userId, req\.params\.id/);
+  assert.doesNotMatch(route, /applyPublishInPlace/);
+  assert.doesNotMatch(route, /lifecycle\s*=\s*['"]active['"]/);
+  assert.match(readFileSync(path.join(dir, "../src/demand.js"), "utf8"), /classifyWishPublishState/);
+});

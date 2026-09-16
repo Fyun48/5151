@@ -107,7 +107,12 @@ test("server-side one-active and example APIs are present", () => {
   assert.match(demand, /wish_room_example/);
   assert.match(server, /app\.put\("\/api\/wish-rooms\/example"/);
   assert.match(server, /app\.post\("\/api\/wish-rooms\/:id\/reopen"/);
-  assert.match(server, /app\.post\("\/api\/wish-rooms\/:id\/publish"/);
+  const publishRoute = server.slice(
+    server.indexOf('app.post("/api/wish-rooms/:id/publish"'),
+    server.indexOf('app.post("/api/wish-rooms/:id/reopen"'),
+  );
+  assert.match(publishRoute, /publishWishRoomFor/);
+  assert.doesNotMatch(publishRoute, /applyPublishInPlace|status\s*=\s*['"]open['"]/);
   assert.match(server, /app\.get\("\/api\/admin\/wish-conditions"/);
   assert.match(server, /app\.put\("\/api\/admin\/wish-conditions"/);
 });
