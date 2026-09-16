@@ -16,6 +16,8 @@ test("owner matching UI stays inside 有房刊登 and has no sixth nav", () => {
   assert.match(html, /id="demandExposure"/);
   assert.match(html, /data-self-matches/);
   assert.match(html, /提供房源（即將推出）/);
+  assert.match(html, /配對暫時無法取得/);
+  assert.match(html, /matchUnavailable/);
   assert.match(html, /min-height: var\(--touch\)/);
   const nav = html.slice(html.indexOf('id="bottomNav"'), html.indexOf("</nav>", html.indexOf('id="bottomNav"')));
   assert.equal((nav.match(/data-nav="/g) || []).length, 5);

@@ -1595,6 +1595,10 @@
       border-radius: var(--radius);
       font-size: var(--text-sm);
     }
+    .self-mine-card .match-count.is-error {
+      background: var(--danger-mist, #f4ebe6);
+      color: var(--danger, #8a3d2a);
+    }
     .demand-exposure {
       margin: 0 0 12px;
       padding: 10px 12px;
@@ -9015,10 +9019,14 @@
     }
     function ownerCardHtml(item) {
       const summary = ownerMatchingOn && item.status === "open" ? item.match_summary : null;
+      const matchUnavailable = summary?.unavailable === true;
+      const matchLabel = matchUnavailable
+        ? (summary.label || "配對暫時無法取得")
+        : (summary?.label || (summary?.count ? `目前可能符合 ${summary.count} 個活躍需求` : "目前沒有符合的活躍需求"));
       const matchLine = summary
-        ? `<p class="match-count" aria-live="polite">${esc(summary.label || (summary.count ? `目前可能符合 ${summary.count} 個活躍需求` : "目前沒有符合的活躍需求"))}</p>`
+        ? `<p class="match-count${matchUnavailable ? " is-error" : ""}" aria-live="polite">${esc(matchLabel)}</p>`
         : "";
-      const matchBtn = summary
+      const matchBtn = summary && !matchUnavailable
         ? `<button type="button" class="primary" data-self-matches="${item.post_id}">查看符合需求</button>`
         : "";
       return `

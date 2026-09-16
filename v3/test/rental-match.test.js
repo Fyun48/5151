@@ -189,6 +189,29 @@ test("activity and freshness stay separate from match_score", () => {
   assert.equal(RANK_WEIGHTS.match, 70);
 });
 
+test("login view and watch signals change activity_score not match_score", () => {
+  const catalog = defaultCatalog();
+  const quiet = evaluateMatch(listing(), wish(), {
+    catalog,
+    now,
+    activity: { last_confirmed_at: "2026-08-01T00:00:00.000Z", wish_edited_at: "2026-08-01T00:00:00.000Z" },
+  });
+  const busy = evaluateMatch(listing(), wish(), {
+    catalog,
+    now,
+    activity: {
+      last_confirmed_at: "2026-08-01T00:00:00.000Z",
+      wish_edited_at: "2026-08-01T00:00:00.000Z",
+      last_login_at: "2026-09-16T07:00:00.000Z",
+      listing_viewed_at: "2026-09-16T06:00:00.000Z",
+      watched_at: "2026-09-16T05:00:00.000Z",
+    },
+  });
+  assert.equal(quiet.match_score, busy.match_score);
+  assert.ok(busy.activity_score > quiet.activity_score);
+  assert.ok(busy.rank_score > quiet.rank_score);
+});
+
 test("lifecycle contract: active and needs_confirmation match; others do not", () => {
   assert.equal(isWishMatchable(wish({ lifecycle: "active" })), true);
   assert.equal(isWishMatchable(wish({ lifecycle: "needs_confirmation", status: "open" })), true);

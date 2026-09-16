@@ -178,6 +178,7 @@ import {
 import {
   aggregateDemand as aggregateDemandOn,
   attachOwnerMatchSummaries as attachOwnerMatchSummariesOn,
+  ensureRentalMatchIndexes,
   homepageDemandExposure as homepageDemandExposureOn,
   matchRulesForAdmin,
   ownerListingMatches as ownerListingMatchesOn,
@@ -837,6 +838,7 @@ try {
   // ignore
 }
 ensureDemandSchema(db);
+ensureRentalMatchIndexes(db);
 ensureFeedbackSchema(db);
 ensureFeedbackOutboxSchema(db);
 ensureSelfListingSchema(db);

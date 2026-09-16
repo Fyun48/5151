@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { createDemandPost, ensureDemandSchema, setRentalCatalogCache, setRentalMarketplaceFlags } from "../src/demand.js";
+import { createDemandPost, ensureDemandSchema, setRentalCatalogCache, setRentalMarketplaceFlags, syncDemandMatchDistricts } from "../src/demand.js";
 import { defaultCatalog, deleteOrDisableCondition, upsertCondition } from "../src/rentalCatalog.js";
 import {
   aggregateDemand,
@@ -34,7 +34,18 @@ function open() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       email TEXT NOT NULL UNIQUE,
       nickname TEXT,
-      created_at TEXT NOT NULL
+      created_at TEXT NOT NULL,
+      last_login_at TEXT
+    );
+    CREATE TABLE user_listing_flags (
+      user_id INTEGER NOT NULL,
+      post_id INTEGER NOT NULL,
+      viewed INTEGER NOT NULL DEFAULT 0,
+      viewed_at TEXT,
+      watched INTEGER NOT NULL DEFAULT 0,
+      watched_at TEXT,
+      hidden INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (user_id, post_id)
     );
     CREATE TABLE listings (
       post_id INTEGER PRIMARY KEY,
@@ -161,6 +172,7 @@ test("owner listing summary and matches only count eligible active wishes", () =
   assert.equal("user_id" in detail.items[0], false);
   assert.equal("phone" in detail.items[0], false);
   assert.doesNotMatch(JSON.stringify(detail.items), /0912345678|tenant@example.com|阿花/);
+  assert.doesNotMatch(JSON.stringify(detail), /"rank_score"|"freshness_score"|"activity_score"|"wish_id"/);
   db.close();
 });
 
@@ -327,8 +339,153 @@ test("candidate query uses match indexes and stays bounded", () => {
   assert.ok(elapsed < 1500, `match query took ${elapsed}ms`);
   const plan = explainMatchCandidatePlan(db, { rent: 22000, districts: ["1-8"] });
   const text = JSON.stringify(plan);
-  assert.match(text, /idx_demand_match_open|demand_posts/);
-  const aggPlan = explainAggregatePlan(db);
-  assert.match(JSON.stringify(aggPlan), /idx_demand_match_open|demand_posts/);
+  assert.match(text, /idx_demand_match_districts_district|sqlite_autoindex_demand_match_districts/);
+  const aggPlan = explainAggregatePlan(db, { districts: ["1-8"] });
+  assert.match(JSON.stringify(aggPlan), /idx_demand_match_districts_district|sqlite_autoindex_demand_match_districts/);
+  db.close();
+});
+
+function bulkWish(db, userId, extra = {}) {
+  addTenant(db, userId, `bulk${userId}@example.com`);
+  const districts = extra.districts || ["1-8"];
+  const token = String(extra.public_token || `tok${userId}`).padEnd(32, "x").slice(0, 32);
+  const stamp = extra.last_confirmed_at || "2026-08-01T00:00:00.000Z";
+  const result = db.prepare(`
+    INSERT INTO demand_posts (
+      user_id, districts, rent_max, housing_type, body, status, created_at, expires_at,
+      layout, ping_min, lifecycle, public_token, last_confirmed_at, last_active_at,
+      updated_at, published_at, condition_choices, must_have
+    ) VALUES (?, ?, ?, 'whole', ?, 'open', ?, '9999-12-31T00:00:00.000Z', ?, 10, 'active', ?, ?, ?, ?, ?, ?, '[]')
+  `).run(
+    userId,
+    JSON.stringify(districts),
+    extra.rent_max || 28000,
+    extra.body || `大量需求 ${userId} 找房條件寫清楚`,
+    stamp,
+    extra.layout || "2",
+    token,
+    stamp,
+    stamp,
+    stamp,
+    stamp,
+    JSON.stringify(extra.choices || { need_pet: "want", need_cook: "want", elevator: "want" }),
+  );
+  syncDemandMatchDistricts(db, Number(result.lastInsertRowid));
+  return { id: Number(result.lastInsertRowid), public_token: token };
+}
+
+test("more than 800 coarse candidates still count all and keep highest rank first", () => {
+  const db = open();
+  const listing = createSelfListing(db, 1, listingInput());
+  let late = null;
+  for (let i = 0; i < 801; i += 1) {
+    const row = bulkWish(db, 400 + i, {
+      last_confirmed_at: i === 800 ? "2026-09-16T07:00:00.000Z" : "2026-07-01T00:00:00.000Z",
+      public_token: i === 800 ? "latehighrankwishxxxxxxxxxxxxxx" : undefined,
+    });
+    if (i === 800) late = row;
+  }
+  const started = Date.now();
+  const summary = ownerListingMatchSummary(db, listing.post_id, 1);
+  const page = ownerListingMatches(db, listing.post_id, 1, { limit: 5 });
+  const elapsed = Date.now() - started;
+  assert.equal(summary.count, 801);
+  assert.equal(page.total, 801);
+  assert.equal(page.items[0].wish_ref, late.public_token);
+  assert.doesNotMatch(JSON.stringify(page), /"rank_score"|"freshness_score"|"activity_score"/);
+  assert.ok(elapsed < 5000, `>800 match query took ${elapsed}ms`);
+  db.close();
+});
+
+test("aggregate scans past 2000 and does not false-suppress later districts", () => {
+  const db = open();
+  for (let i = 0; i < 2000; i += 1) {
+    bulkWish(db, 2000 + i, { districts: ["1-8"], layout: "2" });
+  }
+  for (let i = 0; i < 5; i += 1) {
+    bulkWish(db, 5000 + i, { districts: ["1-9"], layout: "3" });
+  }
+  const started = Date.now();
+  const all = aggregateDemand(db, {});
+  const beitou = aggregateDemand(db, { districts: ["1-9"], layout: "3" });
+  const elapsed = Date.now() - started;
+  assert.equal(all.total, 2005);
+  assert.ok(all.districts.some((row) => row.id === "1-9" && row.count === 5));
+  assert.equal(beitou.suppressed, false);
+  assert.equal(beitou.total, 5);
+  assert.ok(beitou.layouts.some((row) => row.id === "3" && row.count === 5));
+  assert.ok(elapsed < 8000, `>2000 aggregate took ${elapsed}ms`);
+  db.close();
+});
+
+test("owner matching uses login view and watch activity signals", () => {
+  const db = open();
+  const listing = createSelfListing(db, 1, listingInput());
+  const quiet = createDemandPost(db, 2, wishInput({ body: "安靜需求找士林兩房" }));
+  addTenant(db, 8, "busy@example.com");
+  const busy = createDemandPost(db, 8, wishInput({ body: "活躍需求找士林兩房" }));
+  db.prepare("UPDATE users SET last_login_at = ? WHERE id = 8").run("2026-09-16T07:30:00.000Z");
+  db.prepare("INSERT INTO user_listing_flags(user_id, post_id, viewed, viewed_at, watched, watched_at) VALUES (8, ?, 1, ?, 1, ?)")
+    .run(listing.post_id, "2026-09-16T07:10:00.000Z", "2026-09-16T07:20:00.000Z");
+  db.prepare("UPDATE demand_posts SET last_confirmed_at = ?, updated_at = ? WHERE id IN (?, ?)")
+    .run("2026-08-01T00:00:00.000Z", "2026-08-01T00:00:00.000Z", quiet.id, busy.id);
+  clearRentalMatchCache();
+  const page = ownerListingMatches(db, listing.post_id, 1, { limit: 20 });
+  assert.equal(page.total, 2);
+  assert.equal(page.items[0].wish_ref, busy.public_token);
+  assert.equal(page.items[0].match_score, page.items[1].match_score);
+  assert.doesNotMatch(JSON.stringify(page), /"rank_score"|"freshness_score"|"activity_score"|"wish_id"/);
+  db.close();
+});
+
+test("disabled matching condition is rejected from aggregate filter and distribution", () => {
+  const db = open();
+  let catalog = upsertCondition(defaultCatalog(), { label: "烘衣機", category_id: "appliance" });
+  const dryer = catalog.conditions.find((row) => row.label === "烘衣機");
+  hydrate(catalog);
+  for (let i = 0; i < 3; i += 1) {
+    addTenant(db, 70 + i, `dry${i}@example.com`);
+    createDemandPost(db, 70 + i, wishInput({
+      body: `烘衣機需求 ${i} 找士林`,
+      choices: { need_pet: "want", [dryer.id]: "want" },
+    }));
+  }
+  const before = aggregateDemand(db, { conditions: [dryer.id] });
+  assert.equal(before.total, 3);
+  assert.ok(before.conditions.some((row) => row.id === dryer.id));
+  catalog = deleteOrDisableCondition(catalog, dryer.id, { wish: 3 }).catalog;
+  hydrate(catalog);
+  assert.throws(() => aggregateDemand(db, { conditions: [dryer.id] }), /不可用於統計/);
+  const after = aggregateDemand(db, {});
+  assert.ok(!after.conditions.some((row) => row.id === dryer.id));
+  db.close();
+});
+
+test("matching failure is not disguised as zero demand", () => {
+  const db = open();
+  const rows = attachOwnerMatchSummaries(db, [{ post_id: 999999, status: "open", title: "幽靈刊登" }], 1);
+  assert.equal(rows[0].match_summary.unavailable, true);
+  assert.equal(rows[0].match_summary.count, null);
+  assert.match(rows[0].match_summary.label, /暫時無法取得/);
+  db.close();
+});
+
+test("multiple owner listings share one candidate scan", () => {
+  const db = open();
+  createSelfListing(db, 1, listingInput({ title: "士林 A 可看屋" }));
+  createSelfListing(db, 1, listingInput({
+    title: "士林 B 可看屋",
+    address: "中正路200號",
+    idempotency_key: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  }));
+  for (let i = 0; i < 30; i += 1) {
+    bulkWish(db, 800 + i);
+  }
+  const started = Date.now();
+  const rows = attachOwnerMatchSummaries(db, listMineSelfListings(db, 1), 1);
+  const elapsed = Date.now() - started;
+  assert.equal(rows.filter((row) => row.status === "open").length, 2);
+  assert.ok(rows.every((row) => row.status !== "open" || row.match_summary.count === 30));
+  assert.ok(elapsed < 3000, `multi listing summary took ${elapsed}ms`);
   db.close();
 });

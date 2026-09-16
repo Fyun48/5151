@@ -30,6 +30,12 @@ export const AGGREGATE_PRIVACY_THRESHOLD = 3;
 export const AGGREGATE_MAX_DISTRICTS = 8;
 export const AGGREGATE_MAX_CONDITIONS = 8;
 export const MATCH_CACHE_TTL_MS = 15_000;
+/** 分批掃描大小，不是正確性上限。 */
+export const MATCH_CANDIDATE_CHUNK = 400;
+export const AGGREGATE_SCAN_CHUNK = 500;
+export const OWNER_INTERNAL_SCORE_KEYS = Object.freeze([
+  "rank_score", "freshness_score", "activity_score", "wish_id", "last_active_at",
+]);
 
 /** 品質權重集中定義，禁止散落 magic numbers。 */
 export const MATCH_QUALITY_WEIGHTS = Object.freeze({
@@ -648,6 +654,13 @@ export function assertOwnerSafeMatchView(view) {
       throw err;
     }
   }
+  for (const key of OWNER_INTERNAL_SCORE_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(view, key)) {
+      const err = new Error("配對結果含有不該出現的內部分數");
+      err.status = 500;
+      throw err;
+    }
+  }
   if (/@example\.com|line\.me|09\d{8}/i.test(json) && /phone|line_url|email/.test(json)) {
     const err = new Error("配對結果含有不該出現的資料");
     err.status = 500;
@@ -682,8 +695,6 @@ export function ownerSafeWishCard(publicWish, match) {
     activity_bucket: match.activity_bucket,
     activity_label: match.activity_label,
     match_score: match.match_score,
-    freshness_score: match.freshness_score,
-    rank_score: match.rank_score,
     matched_count: match.matched_conditions.length,
     unmatched_unknown_count: match.unmet_unknowns.length,
     explanation: match.explanation,
