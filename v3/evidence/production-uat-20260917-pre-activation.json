@@ -1,0 +1,85 @@
+{
+  "schema": "production-uat-evidence-pack-v1",
+  "recovered_at": "2026-09-17T10:00:00.000Z",
+  "conclusion": "PRODUCTION_UAT_PASS_PRE_ACTIVATION_ONLY",
+  "coverage_verdict": "owner_matching_off_cannot_satisfy_post_activation_matching_gate",
+  "can_satisfy_post_activation_matching_gate": false,
+  "do_not_rerun_full_uat": true,
+  "identity": {
+    "source_sha": "877bd25ce7ad0cd22805bb97d528352574612a7b",
+    "tree_sha": "d38b6c70ca71853263bfe8742cf7cd9dd5c04532",
+    "image_digest": "sha256:aea2d1f7807ea828d56aa3f09894aa38fa5591d296d8382066c71dc10b261eb4",
+    "oci_revision": "877bd25ce7ad0cd22805bb97d528352574612a7b",
+    "deploy_run_id": "35197742201",
+    "public_health": {"ok": true, "version": "3.57"},
+    "site": "https://jibbyrenth.reversalplay.me"
+  },
+  "flag_snapshot": {
+    "phase": "pre_activation",
+    "captured_at": "2026-09-17T08:13:01.000Z",
+    "rental_catalog_v2.enabled": true,
+    "wish.lifecycle_enabled": true,
+    "wish.owner_matching_enabled": false,
+    "wish.offer_enabled": false,
+    "wish.public_share_v2_enabled": false,
+    "wish.owner_notifications_enabled": false,
+    "wish.notifications_enabled": false,
+    "wish.digest_enabled": false,
+    "wish.outbound_mail_enabled": false,
+    "wish.outbound_push_enabled": false
+  },
+  "recordings": [
+    {
+      "filename": "uat_production_guest_walkthrough.mp4",
+      "kind": "guest_walkthrough",
+      "bytes": 37774244,
+      "sha256": null,
+      "sha256_unavailable_reason": "file_not_retained_in_this_workspace; VideoReview refused 37MB; Owner reports GitHub rejected the upload for size",
+      "recorded_at": "2026-09-17T08:47:00.000Z",
+      "agent": "bc-2ba8ee95-49b4-43b8-a322-8da70177d8b8",
+      "agent_url": "https://cursor.com/agents/bc-2ba8ee95-49b4-43b8-a322-8da70177d8b8",
+      "original_path": "/opt/cursor/artifacts/uat_production_guest_walkthrough.mp4",
+      "github_upload": "rejected_for_size",
+      "storage": "cursor_agent_artifact_not_in_git",
+      "covers_authenticated_matching": false,
+      "covers_post_activation_isolation": false,
+      "covers_post_activation_suppression": false
+    }
+  ],
+  "screenshots": [
+    {"filename": "uat_1440_listings.png", "bytes": 169495, "agent": "bc-2ba8ee95-49b4-43b8-a322-8da70177d8b8"},
+    {"filename": "uat_1440_login.png", "bytes": 69379, "agent": "bc-2ba8ee95-49b4-43b8-a322-8da70177d8b8"},
+    {"filename": "uat_768_listings.png", "bytes": 169510, "agent": "bc-2ba8ee95-49b4-43b8-a322-8da70177d8b8"},
+    {"filename": "uat_375_listings.png", "bytes": 116237, "agent": "bc-2ba8ee95-49b4-43b8-a322-8da70177d8b8"},
+    {"filename": "uat_375_login.png", "bytes": 58222, "agent": "bc-2ba8ee95-49b4-43b8-a322-8da70177d8b8"},
+    {"filename": "uat_375_wish_missing.png", "bytes": 15172, "agent": "bc-2ba8ee95-49b4-43b8-a322-8da70177d8b8"},
+    {"filename": "uat-login-1440.png", "bytes": 68864, "agent": "bc-11aa8ecc-c328-410f-8a25-7091312fef78"},
+    {"filename": "uat-authed-home-1440.png", "bytes": 324441, "agent": "bc-11aa8ecc-c328-410f-8a25-7091312fef78"},
+    {"filename": "uat-authed-home-768.png", "bytes": 155041, "agent": "bc-11aa8ecc-c328-410f-8a25-7091312fef78"},
+    {"filename": "uat-authed-home-375.png", "bytes": 126628, "agent": "bc-11aa8ecc-c328-410f-8a25-7091312fef78"},
+    {"filename": "uat-wish-375.png", "bytes": 113479, "agent": "bc-11aa8ecc-c328-410f-8a25-7091312fef78"},
+    {"filename": "uat-public-wish-inactive.png", "bytes": 12115, "agent": "bc-11aa8ecc-c328-410f-8a25-7091312fef78"}
+  ],
+  "steps": [
+    {"at": "2026-09-17T08:12:40.000Z", "name": "health", "result": "200 version 3.57", "auth": "none"},
+    {"at": "2026-09-17T08:12:42.000Z", "name": "landing_login_me", "result": "guest ok", "auth": "none"},
+    {"at": "2026-09-17T08:13:01.000Z", "name": "aggregate_disabled", "result": "404 owner_matching_disabled", "auth": "none"},
+    {"at": "2026-09-17T08:22:00.000Z", "name": "guest_rwd_png", "result": "375/768/1440 captured", "auth": "none"},
+    {"at": "2026-09-17T08:47:00.000Z", "name": "guest_walkthrough_mp4", "result": "7 guest steps recorded", "auth": "none"},
+    {"at": "2026-09-17T08:30:00.000Z", "name": "authenticated_pra_uat", "result": "PRODUCTION_UAT_PASS while matching OFF", "auth": "pra_member", "agent": "bc-11aa8ecc-c328-410f-8a25-7091312fef78"},
+    {"at": "2026-09-17T08:35:00.000Z", "name": "completed_wish_public_page", "result": "inactive noindex no PII; not a Stage 1 ON matching-result probe", "auth": "pra_member"}
+  ],
+  "matching_safety": {
+    "post_activation_cross_account_isolation": "not_covered",
+    "post_activation_paused_completed_inactive_suppression": "not_covered",
+    "pre_activation_aggregate_disabled": "covered",
+    "pre_activation_unauth_match_401": "covered",
+    "pre_activation_completed_wish_public_page": "covered"
+  },
+  "required_next_gate": "post_activation_authenticated_probes",
+  "sources": [
+    "https://cursor.com/agents/bc-2ba8ee95-49b4-43b8-a322-8da70177d8b8",
+    "https://cursor.com/agents/bc-11aa8ecc-c328-410f-8a25-7091312fef78",
+    "https://github.com/Fyun48/5151/issues/327"
+  ]
+}

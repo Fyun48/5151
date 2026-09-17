@@ -225,6 +225,26 @@ export function isListingMatchable(listing, now = Date.now()) {
   return true;
 }
 
+/** Only lifecycle/status are normalized. Catalog, district, budget, and conditions stay real. */
+export function normalizeWishLifecycleForCounterfactual(wishRow = {}) {
+  return {
+    ...wishRow,
+    lifecycle: "active",
+    status: "open",
+    closed_reason: "",
+  };
+}
+
+export function evaluateCounterfactualMatch(listingRow, wishRow, options = {}) {
+  const listing = listingMatchSnapshot(listingRow, options);
+  const wish = wishMatchSnapshot(normalizeWishLifecycleForCounterfactual(wishRow), options);
+  return evaluateMatch(listing, wish, options);
+}
+
+export function isCounterfactuallyMatchable(listingRow, wishRow, options = {}) {
+  return evaluateCounterfactualMatch(listingRow, wishRow, options).eligible === true;
+}
+
 function districtOverlap(listingDistricts, wishDistricts) {
   const listing = (listingDistricts || []).filter(Boolean);
   const wish = (wishDistricts || []).filter(Boolean);

@@ -1,0 +1,317 @@
+name: Activate Stage 1 owner matching (manual)
+run-name: "activate-stage1:${{ inputs.source_sha }}"
+
+# 只啟用 Production 上已部署的 Stage 1 flag（wish.owner_matching_enabled）。
+# 不部署、不重建 image、不 restart。不可改作 PR A，也不可開 Stage 2–4 / outbound。
+# 必須從 refs/heads/master 做 workflow_dispatch。
+# 沒有 Cursor 永久繞過：actor 與 triggering_actor 必須是 PRODUCTION_DEPLOY_ALLOWED_ACTOR。
+# 另需 per-run Owner authorization。開啟後必須跑 authenticated matching probes；
+# pre-activation PRODUCTION_UAT_PASS 不能當 post-activation evidence。
+# 2026-09-17 UAT 錄影（guest mp4，GitHub 因過大拒收）已回收在
+# v3/evidence/production-uat-20260917-pre-activation.json；當時 owner_matching=OFF，
+# 不能替代開啟後的 authenticated matching probes。
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: "目前 Production source 的完整 40 碼 commit SHA"
+        required: true
+      image_digest:
+        description: "目前 running image digest，格式必須是 sha256: 加 64 碼小寫 hex"
+        required: true
+      backup_id:
+        description: "啟用前已驗證 backup 路徑，必須是 /DATA/AppData/591-tracker-v3-backups/predeploy-YYYYMMDD-HHMMSS"
+        required: true
+      backup_hash:
+        description: "啟用前已驗證 backup sha256，格式必須是 sha256: 加 64 碼小寫 hex"
+        required: true
+      confirmation:
+        description: "輸入 ACTIVATE-STAGE1-PRODUCTION 以確認只啟用 owner_matching"
+        required: true
+        default: ""
+      owner_authorization:
+        description: "Per-run Owner intent，必須剛好 AUTHORIZE-STAGE1:<source_sha>:<image_digest>:<backup_id>:<backup_hash>"
+        required: true
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  activate-stage1:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
+    steps:
+      - name: Authorize Stage 1 production activation (fail-closed)
+        env:
+          WF_REF: ${{ github.ref }}
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          ALLOWED_ACTOR: ${{ vars.PRODUCTION_DEPLOY_ALLOWED_ACTOR }}
+          CONFIRM: ${{ inputs.confirmation }}
+          OWNER_AUTHORIZATION: ${{ inputs.owner_authorization }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+          BACKUP_ID: ${{ inputs.backup_id }}
+          BACKUP_HASH: ${{ inputs.backup_hash }}
+        run: |
+          set -euo pipefail
+          if [ "$WF_REF" != "refs/heads/master" ]; then
+            echo "::error::Stage 1 activation must run from the master workflow definition (got $WF_REF)"; exit 1
+          fi
+          if [ -z "${ALLOWED_ACTOR:-}" ]; then
+            echo "::error::PRODUCTION_DEPLOY_ALLOWED_ACTOR is not configured; refusing (fail-closed)"; exit 1
+          fi
+          if [ "$ACTOR" = "cursor" ] || [ "$ACTOR" = "cursor[bot]" ]; then
+            if [ "$ACTOR" != "$ALLOWED_ACTOR" ]; then
+              echo "::error::cursor is not a durable Production activator; Owner authorization required"; exit 1
+            fi
+          fi
+          if [ "$TRIGGERING_ACTOR" = "cursor" ] || [ "$TRIGGERING_ACTOR" = "cursor[bot]" ]; then
+            if [ "$TRIGGERING_ACTOR" != "$ALLOWED_ACTOR" ]; then
+              echo "::error::cursor is not a durable Production activator; Owner authorization required"; exit 1
+            fi
+          fi
+          if [ "$ACTOR" != "$ALLOWED_ACTOR" ]; then
+            echo "::error::actor '$ACTOR' is not the authorized deployer"; exit 1
+          fi
+          if [ "$TRIGGERING_ACTOR" != "$ALLOWED_ACTOR" ]; then
+            echo "::error::triggering actor '$TRIGGERING_ACTOR' is not the authorized deployer"; exit 1
+          fi
+          if [ "${CONFIRM:-}" != "ACTIVATE-STAGE1-PRODUCTION" ]; then
+            echo "::error::confirmation must be exactly ACTIVATE-STAGE1-PRODUCTION"; exit 1
+          fi
+          if ! printf '%s' "${SOURCE_SHA:-}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::source_sha must be a full 40-character commit SHA"; exit 1
+          fi
+          if ! printf '%s' "${IMAGE_DIGEST:-}" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo "::error::image_digest must be exactly sha256: plus 64 lowercase hex characters"; exit 1
+          fi
+          if ! printf '%s' "${BACKUP_ID:-}" | grep -Eq '^/DATA/AppData/591-tracker-v3-backups/predeploy-[0-9]{8}-[0-9]{6}$'; then
+            echo "::error::backup_id must be /DATA/AppData/591-tracker-v3-backups/predeploy-YYYYMMDD-HHMMSS"; exit 1
+          fi
+          case "$BACKUP_ID" in
+            *..*) echo "::error::backup_id must not contain path traversal"; exit 1 ;;
+          esac
+          if ! printf '%s' "${BACKUP_HASH:-}" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo "::error::backup_hash must be exactly sha256: plus 64 lowercase hex characters"; exit 1
+          fi
+          EXPECTED_AUTH="AUTHORIZE-STAGE1:${SOURCE_SHA}:${IMAGE_DIGEST}:${BACKUP_ID}:${BACKUP_HASH}"
+          if [ "${OWNER_AUTHORIZATION:-}" != "$EXPECTED_AUTH" ]; then
+            echo "::error::owner_authorization must be exactly AUTHORIZE-STAGE1 bound to source SHA, digest, backup id and hash"; exit 1
+          fi
+      - name: Checkout workflow-definition SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Verify trusted workflow-definition SHA
+        env:
+          EXPECTED_WF_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          HEAD_SHA="$(git rev-parse HEAD)"
+          if [ "$HEAD_SHA" != "$EXPECTED_WF_SHA" ]; then
+            echo "::error::trusted checkout HEAD $HEAD_SHA != workflow execution SHA $EXPECTED_WF_SHA"; exit 1
+          fi
+      - name: Validate source SHA reachable from origin/master
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin master
+          if ! git merge-base --is-ancestor "$SOURCE_SHA" origin/master; then
+            echo "::error::commit $SOURCE_SHA is not reachable from origin/master; refusing"; exit 1
+          fi
+          echo "Activation source SHA $SOURCE_SHA is on origin/master ancestry."
+      - name: Build expected v3/src manifest from source SHA
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          EXPECTED_WF_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          HEAD_SHA="$(git rev-parse HEAD)"
+          if [ "$HEAD_SHA" != "$EXPECTED_WF_SHA" ]; then
+            echo "::error::trusted checkout HEAD $HEAD_SHA != workflow execution SHA $EXPECTED_WF_SHA"; exit 1
+          fi
+          python3 .github/scripts/pra-src-manifest.py --from-git "$SOURCE_SHA" --out pra-src-expected.json
+          AFTER_HEAD="$(git rev-parse HEAD)"
+          if [ "$AFTER_HEAD" != "$EXPECTED_WF_SHA" ]; then
+            echo "::error::manifest step moved HEAD $AFTER_HEAD off workflow SHA $EXPECTED_WF_SHA"; exit 1
+          fi
+      - name: Copy Stage 1 activation helpers to NAS /tmp
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.NAS_HOST }}
+          port: ${{ secrets.NAS_PORT }}
+          username: ${{ secrets.NAS_USER }}
+          key: ${{ secrets.NAS_SSH_KEY }}
+          source: ".github/scripts/activate-rental-marketplace-stage1-remote.sh,.github/scripts/activate-rental-marketplace-stage1-domain.mjs,.github/scripts/activate-rental-marketplace-stage1-path.py,.github/scripts/activate-rental-marketplace-stage1-evidence.py,.github/scripts/activate-rental-marketplace-stage1-postcheck.mjs,.github/scripts/pra-src-manifest.py,pra-src-expected.json"
+          target: /tmp/5151-stage1-activate-helpers
+          overwrite: true
+      - name: Activate Stage 1 owner_matching on running v3
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.NAS_HOST }}
+          port: ${{ secrets.NAS_PORT }}
+          username: ${{ secrets.NAS_USER }}
+          key: ${{ secrets.NAS_SSH_KEY }}
+          script_stop: true
+          command_timeout: 15m
+          script: |
+            set -euo pipefail
+            export SOURCE_SHA='${{ inputs.source_sha }}'
+            export IMAGE_DIGEST='${{ inputs.image_digest }}'
+            export BACKUP_ID='${{ inputs.backup_id }}'
+            export BACKUP_HASH='${{ inputs.backup_hash }}'
+            export OWNER_AUTHORIZATION='${{ inputs.owner_authorization }}'
+            export DOMAIN_SCRIPT=/tmp/5151-stage1-activate-helpers/.github/scripts/activate-rental-marketplace-stage1-domain.mjs
+            export PATH_SCRIPT=/tmp/5151-stage1-activate-helpers/.github/scripts/activate-rental-marketplace-stage1-path.py
+            export EVIDENCE_SCRIPT=/tmp/5151-stage1-activate-helpers/.github/scripts/activate-rental-marketplace-stage1-evidence.py
+            export POSTCHECK_SCRIPT=/tmp/5151-stage1-activate-helpers/.github/scripts/activate-rental-marketplace-stage1-postcheck.mjs
+            export SRC_MANIFEST_PY=/tmp/5151-stage1-activate-helpers/.github/scripts/pra-src-manifest.py
+            export EXPECTED_SRC_MANIFEST=/tmp/5151-stage1-activate-helpers/pra-src-expected.json
+            export EXPECTED_SRC_MOUNT=/mnt/Storage1/apps/5151/v3/src
+            chmod +x /tmp/5151-stage1-activate-helpers/.github/scripts/activate-rental-marketplace-stage1-remote.sh
+            /tmp/5151-stage1-activate-helpers/.github/scripts/activate-rental-marketplace-stage1-remote.sh
+      - name: Pull NAS activation evidence
+        env:
+          NAS_HOST: ${{ secrets.NAS_HOST }}
+          NAS_PORT: ${{ secrets.NAS_PORT }}
+          NAS_USER: ${{ secrets.NAS_USER }}
+          NAS_SSH_KEY: ${{ secrets.NAS_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          key="$(mktemp)"
+          printf '%s\n' "$NAS_SSH_KEY" > "$key"
+          chmod 600 "$key"
+          scp -o StrictHostKeyChecking=accept-new -P "$NAS_PORT" -i "$key" \
+            "$NAS_USER@$NAS_HOST:/tmp/stage1-activation-core.json" ./nas-activation-core.json
+          rm -f "$key"
+          python3 - <<'PY'
+          import json
+          nas = json.load(open("nas-activation-core.json"))
+          required = (
+              "source_sha", "image_digest", "backup_id", "backup_hash",
+              "src_mount", "src_tree_sha256", "receipt_path",
+              "before_raw_flags", "after_raw_flags", "before_counts", "after_counts",
+              "runtime_public_flags", "functional_smoke", "privacy_smoke", "perf_smoke",
+              "suppression", "post_activation", "http_5xx", "sqlite_busy",
+              "health", "landing", "login", "final_digest", "final_oci_revision",
+          )
+          if not all(nas.get(k) for k in required):
+              raise SystemExit("activation NAS evidence incomplete")
+          if nas.get("backup_verified") is not True or nas.get("src_manifest_verified") is not True:
+              raise SystemExit("activation NAS evidence is not verified")
+          if nas.get("ACTIVATION_OK") is not True or nas.get("rollback_used") is not False:
+              raise SystemExit("activation NAS evidence is not verified")
+          if nas.get("durable_receipt") is not True or nas.get("verify_only") not in (True, False):
+              raise SystemExit("activation receipt metadata is incomplete")
+          if "/stage1-activation-receipt.json" not in str(nas.get("receipt_path") or ""):
+              raise SystemExit("activation receipt_path is not durable")
+          if nas["backup_hash"][:7] != "sha256:" or len(nas["backup_hash"]) != 71:
+              raise SystemExit("activation backup_hash is not immutable")
+          if nas["final_digest"][:7] != "sha256:" or len(nas["final_digest"]) != 71:
+              raise SystemExit("activation final_digest is not immutable")
+          after = nas["after_raw_flags"]
+          if after["rental_catalog_v2"]["enabled"] is not True:
+              raise SystemExit("after PRA catalog flag is not ON")
+          if after["wish"]["lifecycle_enabled"] is not True:
+              raise SystemExit("after PRA lifecycle flag is not ON")
+          if after["wish"]["owner_matching_enabled"] is not True:
+              raise SystemExit("after Stage 1 owner_matching is not ON")
+          later = (
+              "offer_enabled", "public_share_v2_enabled", "owner_notifications_enabled",
+              "notifications_enabled", "digest_enabled", "outbound_mail_enabled", "outbound_push_enabled",
+          )
+          if any(after["wish"].get(key) is not False for key in later):
+              raise SystemExit("after Stage 2-4/outbound flag is not OFF")
+          post = nas.get("post_activation") or {}
+          if post.get("phase") != "post_activation" or post.get("probed_here") is not True:
+              raise SystemExit("NAS evidence is missing post-activation probes")
+          if "PRODUCTION_UAT_PASS" in json.dumps(nas):
+              raise SystemExit("pre-activation PRODUCTION_UAT_PASS cannot satisfy post-activation evidence")
+          PY
+          python3 .github/scripts/activate-rental-marketplace-stage1-evidence.py --check-receipt ./nas-activation-core.json
+      - name: Write Stage 1 activation evidence
+        env:
+          WF_FILE: .github/workflows/activate-rental-marketplace-stage1.yml
+          WF_REF: ${{ github.ref }}
+          WF_RUN_ID: ${{ github.run_id }}
+          WF_ATTEMPT: ${{ github.run_attempt }}
+          WF_HEAD_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+          WF_ACTOR: ${{ github.actor }}
+          WF_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          OWNER_AUTHORIZATION: ${{ inputs.owner_authorization }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          nas = json.load(open("nas-activation-core.json"))
+          doc = {
+              "schema": "stage1-activation-evidence-v1",
+              "workflow_file": os.environ["WF_FILE"],
+              "workflow_ref": os.environ["WF_REF"],
+              "workflow_run_id": os.environ["WF_RUN_ID"],
+              "workflow_attempt": int(os.environ.get("WF_ATTEMPT") or "0"),
+              "workflow_sha": os.environ["WF_HEAD_SHA"],
+              "head_sha": os.environ["WF_HEAD_SHA"],
+              "source_sha": os.environ["SOURCE_SHA"],
+              "image_digest": os.environ["IMAGE_DIGEST"],
+              "actor": os.environ["WF_ACTOR"],
+              "triggering_actor": os.environ["WF_TRIGGERING_ACTOR"],
+              "confirmation": os.environ["CONFIRMATION"],
+              "owner_authorization_bound": True,
+              "post_activation": nas["post_activation"],
+              "backup_id": nas["backup_id"],
+              "backup_hash": nas["backup_hash"],
+              "backup_verified": True,
+              "src_mount": nas["src_mount"],
+              "src_manifest_verified": True,
+              "src_tree_sha256": nas["src_tree_sha256"],
+              "receipt_path": nas["receipt_path"],
+              "durable_receipt": True,
+              "verify_only": nas["verify_only"] is True,
+              "rollback_used": False,
+              "activation_status": nas.get("activation_status") or "activated",
+              "before_raw_flags": nas["before_raw_flags"],
+              "after_raw_flags": nas["after_raw_flags"],
+              "before_counts": nas["before_counts"],
+              "after_counts": nas["after_counts"],
+              "runtime_public_flags": nas["runtime_public_flags"],
+              "functional_smoke": nas["functional_smoke"],
+              "privacy_smoke": nas["privacy_smoke"],
+              "perf_smoke": nas["perf_smoke"],
+              "suppression": nas.get("suppression") or {},
+              "health": nas["health"] is True,
+              "landing": nas["landing"] is True,
+              "login": nas["login"] is True,
+              "http_5xx": nas["http_5xx"],
+              "sqlite_busy": nas["sqlite_busy"],
+              "final_digest": nas["final_digest"],
+              "final_oci_revision": nas["final_oci_revision"],
+              "ACTIVATION_OK": True,
+          }
+          if doc["health"] is not True or doc["landing"] is not True or doc["login"] is not True:
+              raise SystemExit("activation evidence health/landing/login is not true")
+          blob = json.dumps(doc)
+          for token in ("SESSION_SECRET", "NAS_SSH_KEY", "AUTH_PASSWORD", "auth.env"):
+              if token in blob:
+                  raise SystemExit("activation evidence must not contain secrets")
+          open("stage1-activation-evidence.json", "w").write(json.dumps(doc, indent=2) + "\n")
+          PY
+          python3 .github/scripts/activate-rental-marketplace-stage1-evidence.py --check-receipt ./stage1-activation-evidence.json
+      - name: Upload Stage 1 activation evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage1-activation-evidence
+          path: stage1-activation-evidence.json
+          if-no-files-found: error

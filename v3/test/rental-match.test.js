@@ -7,9 +7,11 @@ import {
   compareMatchRank,
   defaultMatchRulesPublic,
   encodeMatchCursor,
+  evaluateCounterfactualMatch,
   evaluateMatch,
   expireMatchPageCursor,
   freshnessScoreFrom,
+  isCounterfactuallyMatchable,
   inspectMatchCursorPayload,
   inspectMatchCursorState,
   isListingMatchable,
@@ -216,6 +218,52 @@ test("login view and watch signals change activity_score not match_score", () =>
   assert.equal(quiet.match_score, busy.match_score);
   assert.ok(busy.activity_score > quiet.activity_score);
   assert.ok(busy.rank_score > quiet.rank_score);
+});
+
+test("counterfactual eligibility uses evaluateMatch after normalizing only lifecycle/status", () => {
+  const listingRow = {
+    post_id: 2100000002,
+    listed_by_user_id: 1,
+    self_status: "open",
+    source: "self",
+    price_num: 20000,
+    source_key: "1|8||台北市士林區中正路|3|18坪|2房1廳1衛",
+    address: "台北市士林區中正路100號",
+    area_name: "18坪",
+    layout: "2房1廳1衛",
+    kind_name: "整層住家",
+    listing_condition_values: JSON.stringify({
+      need_pet: "not_allowed",
+      need_cook: "allowed",
+    }),
+  };
+  const lifecycleOnly = {
+    public_token: "paused-lifecycle-only",
+    lifecycle: "paused",
+    status: "closed",
+    districts: ["1-8"],
+    rent_max: 30000,
+  };
+  const conditionConflict = {
+    ...lifecycleOnly,
+    public_token: "paused-pet-conflict",
+    condition_choices: { need_pet: "want" },
+  };
+  const catalog = defaultCatalog();
+  const unmodified = evaluateMatch(
+    listingMatchSnapshot(listingRow, { catalog }),
+    wishMatchSnapshot(lifecycleOnly, { catalog }),
+    { catalog, now },
+  );
+  assert.equal(unmodified.eligible, false);
+  assert.ok(unmodified.hard_conflicts.some((row) => row.code === "lifecycle"));
+  const counterfactual = evaluateCounterfactualMatch(listingRow, lifecycleOnly, { catalog, now });
+  assert.equal(counterfactual.eligible, true);
+  assert.equal(isCounterfactuallyMatchable(listingRow, lifecycleOnly, { catalog, now }), true);
+  const conflicting = evaluateCounterfactualMatch(listingRow, conditionConflict, { catalog, now });
+  assert.equal(conflicting.eligible, false);
+  assert.ok(conflicting.hard_conflicts.some((row) => row.code === "condition:need_pet"));
+  assert.equal(isCounterfactuallyMatchable(listingRow, conditionConflict, { catalog, now }), false);
 });
 
 test("lifecycle contract: active and needs_confirmation match; others do not", () => {

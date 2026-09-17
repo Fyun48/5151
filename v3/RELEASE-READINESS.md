@@ -54,7 +54,7 @@ PR A flags 啟用：Activate PR A run `35070846756`（2026-09-16），source `37
 
 ## 5–7. A. Release workflow audit
 
-盤點 `.github/workflows/`（9 檔）：
+盤點 `.github/workflows/`（10 檔）：
 
 | Workflow | Trigger | Production 效果 | 結論 |
 |---|---|---|---|
@@ -65,6 +65,7 @@ PR A flags 啟用：Activate PR A run `35070846756`（2026-09-16），source `37
 | `deploy-v2.yml` | `workflow_dispatch` | 授權後一律拒絕 | OK（已拆除） |
 | `docker.yml` | `workflow_dispatch` | **本 PR 前**：推 `:latest` 並 `compose pull/up` | **BLOCKER → 本 PR 已停用** |
 | `activate-rental-marketplace-pra.yml` | `workflow_dispatch` + `ACTIVATE-PRA-PRODUCTION` | 只開 catalog + lifecycle，保留 B/C/D OFF | OK |
+| `activate-rental-marketplace-stage1.yml` | `workflow_dispatch` + `ACTIVATE-STAGE1-PRODUCTION` | 只開 `owner_matching`；PRA 維持 ON；Stage 2–4 / outbound 維持 OFF | **repo 已建、尚未在 Production 執行** |
 | `production-support-check.yml` | `workflow_dispatch` + `VERIFY-V3-SUPPORT` | 唯讀檢查 | OK |
 | `production-rakuya-diagnostic.yml` | `workflow_dispatch` + `DIAGNOSE-RAKUYA` | 唯讀 | OK |
 
