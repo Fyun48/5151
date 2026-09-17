@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
-"""Stage 1 activation evidence contract. Fail-closed. No mutation."""
+"""Stage 1 activation evidence contract. Fail-closed. No mutation.
+
+Post-activation authenticated probes are the only accepted source for
+cross-account isolation and wish suppression. Pre-activation
+PRODUCTION_UAT_PASS cannot satisfy ACTIVATION_OK.
+"""
 from __future__ import annotations
 
 import json
 import sys
 
 PERF_BUDGET_MS = 5000
-UAT_PREREQ = "PRODUCTION_UAT_PASS"
+POST_ACTIVATION_SOURCE = "post_activation_authenticated_probes"
+REQUIRED_PROBE_KEYS = ("name", "timestamp", "target", "method", "auth", "status", "result")
+REQUIRED_SUPPRESSION = ("paused", "completed", "inactive")
 
 
 def fail(message: str) -> None:
@@ -44,22 +51,35 @@ def assert_probe_provenance(value, name) -> None:
         fail(f"{name} observed must be false after successful defined probes")
 
 
-def assert_bound_uat_block(block, label, source_sha, image_digest) -> None:
+def assert_probe_rows(probes, label) -> None:
+    if not isinstance(probes, list) or not probes:
+        fail(f"{label} probes are missing; refusing ACTIVATION_OK")
+    blob = json.dumps(probes, ensure_ascii=False)
+    if "PRODUCTION_UAT_PASS" in blob:
+        fail("post-activation evidence must not cite PRODUCTION_UAT_PASS")
+    for probe in probes:
+        if not isinstance(probe, dict):
+            fail(f"{label} probe is invalid")
+        for key in REQUIRED_PROBE_KEYS:
+            if probe.get(key) in (None, ""):
+                fail(f"{label} probe missing {key}")
+        if probe.get("result") in ("timeout", "http_5xx", "sqlite_busy"):
+            fail(f"{label} probe {probe.get('name')} failed closed ({probe.get('result')})")
+        if probe.get("http_5xx") is True or probe.get("sqlite_busy") is True or probe.get("timed_out") is True:
+            fail(f"{label} probe {probe.get('name')} recorded a fail-closed signal")
+
+
+def refuse_pre_activation_uat(block, label) -> None:
     if not isinstance(block, dict):
         fail(f"{label} block is missing")
-    if block.get("verified") is True or block.get("checked") is True:
-        fail(f"{label} must not claim executed verification from this activation run")
-    if block.get("authoritative_source") != UAT_PREREQ:
-        fail(f"{label} authoritative_source must be PRODUCTION_UAT_PASS")
-    if block.get("uat_attestation_bound") is not True:
-        fail(f"{label} requires identity-bound PRODUCTION_UAT_PASS; refusing ACTIVATION_OK")
-    if source_sha and block.get("bound_source_sha") != source_sha:
-        fail(f"{label} bound_source_sha does not match")
-    if image_digest and block.get("bound_image_digest") != image_digest:
-        fail(f"{label} bound_image_digest does not match")
+    source = block.get("authoritative_source")
+    if source == "PRODUCTION_UAT_PASS" or block.get("uat_attestation_bound") is True:
+        fail(f"pre-activation PRODUCTION_UAT_PASS cannot satisfy post-activation {label} evidence")
+    if source != POST_ACTIVATION_SOURCE:
+        fail(f"{label} authoritative_source must be {POST_ACTIVATION_SOURCE}")
 
 
-def assert_functional_smoke(func, source_sha="", image_digest="") -> None:
+def assert_functional_smoke(func) -> None:
     if not isinstance(func, dict) or not func:
         fail("functional_smoke is missing")
     if "cross_account" in func:
@@ -68,35 +88,72 @@ def assert_functional_smoke(func, source_sha="", image_digest="") -> None:
         fail("unauth match probes must be 401")
     if func.get("unauth_match_denied") is not True:
         fail("unauth_match_denied must be true")
-    uat = func.get("authenticated_cross_account")
-    if not isinstance(uat, dict):
-        fail("authenticated_cross_account prerequisite block is missing")
-    if uat.get("probed_here") is not False:
-        fail("authenticated cross-account must not be claimed as probed here")
-    if uat.get("unauth_401_is_not_cross_account") is not True:
+    cross = func.get("authenticated_cross_account")
+    refuse_pre_activation_uat(cross, "authenticated_cross_account")
+    if cross.get("probed_here") is not True:
+        fail("authenticated cross-account must be probed after Stage 1 ON")
+    if cross.get("verified") is not True:
+        fail("authenticated cross-account must be verified by post-activation probes")
+    if cross.get("unauth_401_is_not_cross_account") is not True:
         fail("unauthenticated 401 cannot satisfy cross-account evidence")
-    assert_bound_uat_block(uat, "authenticated_cross_account", source_sha, image_digest)
+    assert_probe_rows(cross.get("probes"), "authenticated_cross_account")
+    results = [row.get("result") for row in cross.get("probes")]
+    statuses = [row.get("status") for row in cross.get("probes")]
+    codes = [row.get("code") for row in cross.get("probes")]
+    if any(status == 401 for status in statuses) or "unauth_style_401" in results:
+        fail("unauthenticated 401 cannot satisfy cross-account evidence")
+    if "opaque_denial" not in results:
+        fail("authenticated cross-account missing opaque denial probe")
+    if "listing_not_found" not in codes:
+        fail("authenticated cross-account must record opaque listing_not_found")
 
 
-def assert_suppression(block, source_sha="", image_digest="") -> None:
+def assert_suppression(block) -> None:
     if not isinstance(block, dict) or not block:
         fail("suppression block is missing")
     if block.get("row_counts_are_not_verification") is not True:
         fail("row counts alone cannot satisfy suppression verification")
-    assert_bound_uat_block(block, "suppression", source_sha, image_digest)
+    refuse_pre_activation_uat(block, "suppression")
+    if not block.get("probes"):
+        fail("row counts alone cannot satisfy suppression verification")
+    if block.get("verified") is not True or block.get("probed_here") is not True:
+        fail("suppression must be verified by post-activation probes")
+    if type(block.get("suppressed_candidate_count")) is not int or block.get("suppressed_candidate_count") < 1:
+        fail("suppression candidates missing; refusing ACTIVATION_OK")
+    if block.get("leaked_count") != 0:
+        fail("suppressed wishes leaked into matching results")
+    checked = block.get("lifecycles_checked") or []
+    for name in REQUIRED_SUPPRESSION:
+        if name not in checked:
+            fail(f"suppression did not check {name} wishes")
+    assert_probe_rows(block.get("probes"), "suppression")
+    if not any(row.get("result") == "owner_ok" for row in block.get("probes")):
+        fail("suppression probe did not record owner_ok matching results")
+
+
+def assert_post_activation(block) -> None:
+    if not isinstance(block, dict) or not block:
+        fail("post_activation evidence is missing")
+    if block.get("phase") != "post_activation":
+        fail("post_activation.phase must be post_activation")
+    if block.get("probed_here") is not True:
+        fail("post_activation must be probed here")
+    if block.get("authoritative_source") != POST_ACTIVATION_SOURCE:
+        fail("post_activation authoritative_source must be post_activation_authenticated_probes")
+    if not block.get("started_at") or not block.get("finished_at"):
+        fail("post_activation timestamp provenance is missing")
+    assert_probe_rows(block.get("probes"), "post_activation")
 
 
 def assert_runtime_contract(payload) -> None:
-    source_sha = payload.get("source_sha") or ""
-    image_digest = payload.get("image_digest") or ""
+    if payload.get("uat_attestation") or payload.get("uat_attestation_bound") is True:
+        fail("pre-activation PRODUCTION_UAT_PASS cannot satisfy post-activation evidence")
     assert_perf_smoke(payload.get("perf_smoke"))
-    assert_functional_smoke(payload.get("functional_smoke"), source_sha, image_digest)
-    assert_suppression(payload.get("suppression"), source_sha, image_digest)
+    assert_functional_smoke(payload.get("functional_smoke"))
+    assert_suppression(payload.get("suppression"))
+    assert_post_activation(payload.get("post_activation") or payload)
     assert_probe_provenance(payload.get("http_5xx"), "http_5xx")
     assert_probe_provenance(payload.get("sqlite_busy"), "sqlite_busy")
-    expected_uat = f"{UAT_PREREQ}:{source_sha}:{image_digest}" if source_sha and image_digest else ""
-    if expected_uat and payload.get("uat_attestation") != expected_uat:
-        fail("uat_attestation is not bound to source SHA and digest")
 
 
 def assert_activation_receipt(doc) -> None:

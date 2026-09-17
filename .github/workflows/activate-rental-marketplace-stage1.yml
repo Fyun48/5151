@@ -5,7 +5,8 @@ run-name: "activate-stage1:${{ inputs.source_sha }}"
 # 不部署、不重建 image、不 restart。不可改作 PR A，也不可開 Stage 2–4 / outbound。
 # 必須從 refs/heads/master 做 workflow_dispatch。
 # 沒有 Cursor 永久繞過：actor 與 triggering_actor 必須是 PRODUCTION_DEPLOY_ALLOWED_ACTOR。
-# 另需 per-run Owner authorization + 已綁定 PRODUCTION_UAT_PASS 身分證明。
+# 另需 per-run Owner authorization。開啟後必須跑 authenticated matching probes；
+# pre-activation PRODUCTION_UAT_PASS 不能當 post-activation evidence。
 on:
   workflow_dispatch:
     inputs:
@@ -27,10 +28,6 @@ on:
         default: ""
       owner_authorization:
         description: "Per-run Owner intent，必須剛好 AUTHORIZE-STAGE1:<source_sha>:<image_digest>:<backup_id>:<backup_hash>"
-        required: true
-        default: ""
-      uat_attestation:
-        description: "已完成且綁定此身分的 Production UAT，必須剛好 PRODUCTION_UAT_PASS:<source_sha>:<image_digest>"
         required: true
         default: ""
 
@@ -55,7 +52,6 @@ jobs:
           ALLOWED_ACTOR: ${{ vars.PRODUCTION_DEPLOY_ALLOWED_ACTOR }}
           CONFIRM: ${{ inputs.confirmation }}
           OWNER_AUTHORIZATION: ${{ inputs.owner_authorization }}
-          UAT_ATTESTATION: ${{ inputs.uat_attestation }}
           SOURCE_SHA: ${{ inputs.source_sha }}
           IMAGE_DIGEST: ${{ inputs.image_digest }}
           BACKUP_ID: ${{ inputs.backup_id }}
@@ -106,10 +102,6 @@ jobs:
           if [ "${OWNER_AUTHORIZATION:-}" != "$EXPECTED_AUTH" ]; then
             echo "::error::owner_authorization must be exactly AUTHORIZE-STAGE1 bound to source SHA, digest, backup id and hash"; exit 1
           fi
-          EXPECTED_UAT="PRODUCTION_UAT_PASS:${SOURCE_SHA}:${IMAGE_DIGEST}"
-          if [ "${UAT_ATTESTATION:-}" != "$EXPECTED_UAT" ]; then
-            echo "::error::uat_attestation must be exactly PRODUCTION_UAT_PASS bound to source SHA and digest"; exit 1
-          fi
       - name: Checkout workflow-definition SHA
         uses: actions/checkout@v4
         with:
@@ -156,7 +148,7 @@ jobs:
           port: ${{ secrets.NAS_PORT }}
           username: ${{ secrets.NAS_USER }}
           key: ${{ secrets.NAS_SSH_KEY }}
-          source: ".github/scripts/activate-rental-marketplace-stage1-remote.sh,.github/scripts/activate-rental-marketplace-stage1-domain.mjs,.github/scripts/activate-rental-marketplace-stage1-path.py,.github/scripts/activate-rental-marketplace-stage1-evidence.py,.github/scripts/pra-src-manifest.py,pra-src-expected.json"
+          source: ".github/scripts/activate-rental-marketplace-stage1-remote.sh,.github/scripts/activate-rental-marketplace-stage1-domain.mjs,.github/scripts/activate-rental-marketplace-stage1-path.py,.github/scripts/activate-rental-marketplace-stage1-evidence.py,.github/scripts/activate-rental-marketplace-stage1-postcheck.mjs,.github/scripts/pra-src-manifest.py,pra-src-expected.json"
           target: /tmp/5151-stage1-activate-helpers
           overwrite: true
       - name: Activate Stage 1 owner_matching on running v3
@@ -175,10 +167,10 @@ jobs:
             export BACKUP_ID='${{ inputs.backup_id }}'
             export BACKUP_HASH='${{ inputs.backup_hash }}'
             export OWNER_AUTHORIZATION='${{ inputs.owner_authorization }}'
-            export UAT_ATTESTATION='${{ inputs.uat_attestation }}'
             export DOMAIN_SCRIPT=/tmp/5151-stage1-activate-helpers/.github/scripts/activate-rental-marketplace-stage1-domain.mjs
             export PATH_SCRIPT=/tmp/5151-stage1-activate-helpers/.github/scripts/activate-rental-marketplace-stage1-path.py
             export EVIDENCE_SCRIPT=/tmp/5151-stage1-activate-helpers/.github/scripts/activate-rental-marketplace-stage1-evidence.py
+            export POSTCHECK_SCRIPT=/tmp/5151-stage1-activate-helpers/.github/scripts/activate-rental-marketplace-stage1-postcheck.mjs
             export SRC_MANIFEST_PY=/tmp/5151-stage1-activate-helpers/.github/scripts/pra-src-manifest.py
             export EXPECTED_SRC_MANIFEST=/tmp/5151-stage1-activate-helpers/pra-src-expected.json
             export EXPECTED_SRC_MOUNT=/mnt/Storage1/apps/5151/v3/src
@@ -206,7 +198,7 @@ jobs:
               "src_mount", "src_tree_sha256", "receipt_path",
               "before_raw_flags", "after_raw_flags", "before_counts", "after_counts",
               "runtime_public_flags", "functional_smoke", "privacy_smoke", "perf_smoke",
-              "suppression", "http_5xx", "sqlite_busy",
+              "suppression", "post_activation", "http_5xx", "sqlite_busy",
               "health", "landing", "login", "final_digest", "final_oci_revision",
           )
           if not all(nas.get(k) for k in required):
@@ -236,6 +228,11 @@ jobs:
           )
           if any(after["wish"].get(key) is not False for key in later):
               raise SystemExit("after Stage 2-4/outbound flag is not OFF")
+          post = nas.get("post_activation") or {}
+          if post.get("phase") != "post_activation" or post.get("probed_here") is not True:
+              raise SystemExit("NAS evidence is missing post-activation probes")
+          if "PRODUCTION_UAT_PASS" in json.dumps(nas):
+              raise SystemExit("pre-activation PRODUCTION_UAT_PASS cannot satisfy post-activation evidence")
           PY
           python3 .github/scripts/activate-rental-marketplace-stage1-evidence.py --check-receipt ./nas-activation-core.json
       - name: Write Stage 1 activation evidence
@@ -251,7 +248,6 @@ jobs:
           WF_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
           CONFIRMATION: ${{ inputs.confirmation }}
           OWNER_AUTHORIZATION: ${{ inputs.owner_authorization }}
-          UAT_ATTESTATION: ${{ inputs.uat_attestation }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -271,7 +267,7 @@ jobs:
               "triggering_actor": os.environ["WF_TRIGGERING_ACTOR"],
               "confirmation": os.environ["CONFIRMATION"],
               "owner_authorization_bound": True,
-              "uat_attestation": os.environ["UAT_ATTESTATION"],
+              "post_activation": nas["post_activation"],
               "backup_id": nas["backup_id"],
               "backup_hash": nas["backup_hash"],
               "backup_verified": True,

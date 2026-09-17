@@ -75,7 +75,6 @@ const GOOD = {
   BACKUP_ID: "/DATA/AppData/591-tracker-v3-backups/predeploy-20260917-000000",
   BACKUP_HASH: "sha256:ffceb339b9e1b92f90171915fd8475faf422f6123a11f48b8d3a3c37f0fa2c1d",
   OWNER_AUTHORIZATION: "AUTHORIZE-STAGE1:877bd25ce7ad0cd22805bb97d528352574612a7b:sha256:aea2d1f7807ea828d56aa3f09894aa38fa5591d296d8382066c71dc10b261eb4:/DATA/AppData/591-tracker-v3-backups/predeploy-20260917-000000:sha256:ffceb339b9e1b92f90171915fd8475faf422f6123a11f48b8d3a3c37f0fa2c1d",
-  UAT_ATTESTATION: "PRODUCTION_UAT_PASS:877bd25ce7ad0cd22805bb97d528352574612a7b:sha256:aea2d1f7807ea828d56aa3f09894aa38fa5591d296d8382066c71dc10b261eb4",
 };
 
 const IDENTITY = {
@@ -138,9 +137,10 @@ test("Stage 1 activation remains workflow_dispatch only", () => {
 test("Stage 1 activation requires exact confirmation, source SHA, digest, backup path and hash", () => {
   const text = wf(WF_NAME);
   const auth = authorizeScript();
-  for (const name of ["source_sha", "image_digest", "backup_id", "backup_hash", "confirmation", "owner_authorization", "uat_attestation"]) {
+  for (const name of ["source_sha", "image_digest", "backup_id", "backup_hash", "confirmation", "owner_authorization"]) {
     assert.match(inputBlock(text, name), /required:\s*true/);
   }
+  assert.equal(inputBlock(text, "uat_attestation"), "");
   assert.match(auth, /confirmation must be exactly ACTIVATE-STAGE1-PRODUCTION/);
   assert.match(auth, /source_sha must be a full 40-character commit SHA/);
   assert.match(auth, /image_digest must be exactly sha256: plus 64 lowercase hex/);
@@ -161,7 +161,7 @@ test("Stage 1 activation keeps master, actor, triggering_actor and SHA ancestry 
   assert.doesNotMatch(auth, /CURSOR_DEPLOY=1/);
   assert.match(auth, /cursor is not a durable Production activator/);
   assert.match(auth, /owner_authorization must be exactly AUTHORIZE-STAGE1/);
-  assert.match(auth, /uat_attestation must be exactly PRODUCTION_UAT_PASS/);
+  assert.doesNotMatch(auth, /uat_attestation must be exactly PRODUCTION_UAT_PASS/);
   assert.match(text, /merge-base --is-ancestor "\$SOURCE_SHA" origin\/master/);
   assert.match(text, /environment: production/);
   assert.match(text, /group: production-deploy/);
@@ -185,7 +185,6 @@ test("Stage 1 activation authorize script fail-closes wrong ref/actor/confirmati
     /not a durable Production activator|not the authorized deployer/,
   );
   assert.throws(() => runAuthorize({ ...GOOD, OWNER_AUTHORIZATION: "AUTHORIZE-STAGE1-PRODUCTION" }), /owner_authorization/);
-  assert.throws(() => runAuthorize({ ...GOOD, UAT_ATTESTATION: "PRODUCTION_UAT_PASS" }), /uat_attestation/);
   assert.throws(() => runAuthorize({ ...GOOD, CONFIRM: "ACTIVATE-PRA-PRODUCTION" }), /ACTIVATE-STAGE1-PRODUCTION/);
   assert.throws(() => runAuthorize({ ...GOOD, CONFIRM: "DEPLOY-PRODUCTION" }), /ACTIVATE-STAGE1-PRODUCTION/);
   assert.throws(() => runAuthorize({ ...GOOD, WF_REF: "refs/heads/cursor/stage1-owner-matching-activation-eeec" }), /master workflow definition/);
@@ -265,6 +264,9 @@ test("Stage 1 remote guards digest, OCI, backup, concurrent lease and compensati
   assert.match(remote, /\/api\/demand\/aggregate/);
   assert.match(remote, /\/api\/self-listings\/1\/matches\/summary/);
   assert.match(remote, /\/api\/self-listings\/1\/matches/);
+  assert.match(remote, /run_post_activation_probes/);
+  assert.match(remote, /stage1-postcheck\.mjs/);
+  assert.match(remote, /write_rollback_evidence/);
   assert.match(remote, /owner_matching_disabled/);
   assert.match(remote, /rank_score/);
   assert.match(remote, /SQLITE_BUSY|database is locked/);
@@ -341,12 +343,56 @@ test("Stage 1 activation does not change build, predeploy, deploy or PRA workflo
   }
 });
 
+function postProbe(name, result, extra = {}) {
+  return {
+    name,
+    timestamp: "2026-09-17T09:00:00.000Z",
+    target: extra.target || "/api/self-listings/abc123def456/matches",
+    method: "GET",
+    auth: extra.auth || "other_account_session",
+    status: extra.status ?? 404,
+    code: extra.code || "listing_not_found",
+    result,
+    elapsed_ms: extra.elapsed_ms ?? 12,
+    http_5xx: false,
+    sqlite_busy: false,
+    timed_out: false,
+    ...extra.override,
+  };
+}
+
 function goodSmoke() {
+  const crossProbes = [
+    postProbe("owner_missing_listing_opaque", "opaque_denial", { auth: "owner_session", target: "/api/self-listings/000000000000/matches" }),
+    postProbe("other_account_listing_matches", "opaque_denial"),
+    postProbe("other_account_listing_summary", "opaque_denial", { target: "/api/self-listings/abc123def456/matches/summary" }),
+  ];
+  const suppressionProbes = [
+    postProbe("owner_own_listing_matches", "owner_ok", {
+      auth: "owner_session",
+      status: 200,
+      code: "",
+    }),
+  ];
   return {
     source_sha: GOOD.SOURCE_SHA,
     image_digest: GOOD.IMAGE_DIGEST,
-    uat_attestation: GOOD.UAT_ATTESTATION,
     owner_authorization_bound: true,
+    phase: "post_activation",
+    probed_here: true,
+    authoritative_source: "post_activation_authenticated_probes",
+    started_at: "2026-09-17T09:00:00.000Z",
+    finished_at: "2026-09-17T09:00:01.000Z",
+    probes: [...crossProbes, ...suppressionProbes],
+    post_activation: {
+      schema: "stage1-post-activation-probes-v1",
+      phase: "post_activation",
+      probed_here: true,
+      authoritative_source: "post_activation_authenticated_probes",
+      started_at: "2026-09-17T09:00:00.000Z",
+      finished_at: "2026-09-17T09:00:01.000Z",
+      probes: [...crossProbes, ...suppressionProbes],
+    },
     functional_smoke: {
       aggregate_status: 200,
       exposure_enabled: true,
@@ -354,33 +400,33 @@ function goodSmoke() {
       detail_unauth: 401,
       unauth_match_denied: true,
       authenticated_cross_account: {
-        probed_here: false,
-        verified: false,
+        probed_here: true,
+        verified: true,
         unauth_401_is_not_cross_account: true,
-        authoritative_source: "PRODUCTION_UAT_PASS",
-        bound_source_sha: GOOD.SOURCE_SHA,
-        bound_image_digest: GOOD.IMAGE_DIGEST,
-        uat_attestation_bound: true,
+        authoritative_source: "post_activation_authenticated_probes",
+        probes: crossProbes,
       },
     },
     suppression: {
-      verified: false,
-      checked: false,
+      probed_here: true,
+      verified: true,
+      checked: true,
       row_counts_are_not_verification: true,
-      authoritative_source: "PRODUCTION_UAT_PASS",
-      bound_source_sha: GOOD.SOURCE_SHA,
-      bound_image_digest: GOOD.IMAGE_DIGEST,
-      uat_attestation_bound: true,
+      authoritative_source: "post_activation_authenticated_probes",
+      suppressed_candidate_count: 3,
+      leaked_count: 0,
+      lifecycles_checked: ["paused", "completed", "inactive"],
+      probes: suppressionProbes,
     },
     http_5xx: {
       observed: false,
       provenance: "defined_probes",
-      probes: ["http://127.0.0.1:5153/api/demand/aggregate"],
+      probes: ["http://127.0.0.1:5153/api/demand/aggregate", "/api/self-listings/abc123def456/matches"],
     },
     sqlite_busy: {
       observed: false,
       provenance: "defined_probes",
-      probes: ["http://127.0.0.1:5153/api/demand/aggregate"],
+      probes: ["http://127.0.0.1:5153/api/demand/aggregate", "/api/self-listings/abc123def456/matches"],
     },
     perf_smoke: {
       aggregate_ms: 12,
@@ -433,12 +479,13 @@ test("Stage 1 5s perf budget is fail-closed and cannot sit inside ACTIVATION_OK"
   );
 });
 
-test("Stage 1 evidence does not claim cross-account from unauth 401 and requires Production UAT prerequisite", () => {
+test("Stage 1 evidence does not claim cross-account from unauth 401 or pre-activation UAT", () => {
   const remote = readFileSync(REMOTE, "utf8");
   const text = wf(WF_NAME);
   assert.doesNotMatch(remote, /"cross_account": 401/);
   assert.doesNotMatch(text, /"cross_account"/);
-  assert.match(remote, /PRODUCTION_UAT_PASS/);
+  assert.match(remote, /run_post_activation_probes/);
+  assert.match(remote, /pre-activation PRODUCTION_UAT_PASS cannot satisfy post-activation evidence/);
   assert.match(remote, /unauth_401_is_not_cross_account/);
   assert.match(remote, /unauth_match_denied/);
   assert.match(checkEvidence("--check-runtime", goodSmoke()), /EVIDENCE_RUNTIME_OK/);
@@ -463,7 +510,7 @@ test("Stage 1 evidence does not claim cross-account from unauth 401 and requires
         unauth_match_denied: true,
       },
     }),
-    /authenticated_cross_account prerequisite block is missing/,
+    /authenticated_cross_account block is missing/,
   );
   assert.throws(
     () => checkEvidence("--check-receipt", {
@@ -471,12 +518,15 @@ test("Stage 1 evidence does not claim cross-account from unauth 401 and requires
       functional_smoke: {
         ...goodSmoke().functional_smoke,
         authenticated_cross_account: {
-          ...goodSmoke().functional_smoke.authenticated_cross_account,
-          probed_here: true,
+          probed_here: false,
+          verified: false,
+          unauth_401_is_not_cross_account: true,
+          authoritative_source: "PRODUCTION_UAT_PASS",
+          uat_attestation_bound: true,
         },
       },
     }),
-    /must not be claimed as probed here/,
+    /pre-activation PRODUCTION_UAT_PASS cannot satisfy post-activation/,
   );
   assert.throws(
     () => checkEvidence("--check-receipt", {
@@ -486,6 +536,21 @@ test("Stage 1 evidence does not claim cross-account from unauth 401 and requires
         authenticated_cross_account: {
           ...goodSmoke().functional_smoke.authenticated_cross_account,
           unauth_401_is_not_cross_account: false,
+        },
+      },
+    }),
+    /unauthenticated 401 cannot satisfy cross-account evidence/,
+  );
+  assert.throws(
+    () => checkEvidence("--check-receipt", {
+      ...goodSmoke(),
+      functional_smoke: {
+        ...goodSmoke().functional_smoke,
+        authenticated_cross_account: {
+          ...goodSmoke().functional_smoke.authenticated_cross_account,
+          probes: [
+            postProbe("other_account_listing_matches", "unauth_style_401", { status: 401, code: "" }),
+          ],
         },
       },
     }),
@@ -505,32 +570,36 @@ test("cursor or cursor[bot] alone cannot activate Production without current Own
   }
 });
 
-test("row counts alone cannot satisfy suppression and bare 5xx/busy flags cannot be synthesized", () => {
+test("row counts or pre-activation UAT cannot satisfy suppression and bare 5xx/busy flags cannot be synthesized", () => {
   const remote = readFileSync(REMOTE, "utf8");
   assert.match(remote, /row_counts_are_not_verification/);
   assert.match(remote, /provenance": "defined_probes"/);
-  assert.doesNotMatch(remote, /"checked": True/);
+  assert.match(remote, /write_rollback_evidence/);
   assert.throws(
     () => checkEvidence("--check-receipt", {
       ...goodSmoke(),
       suppression: {
-        ...goodSmoke().suppression,
-        checked: true,
         verified: true,
+        checked: true,
+        row_counts_are_not_verification: true,
+        authoritative_source: "PRODUCTION_UAT_PASS",
+        uat_attestation_bound: true,
+        lifecycle_counts: [{ lifecycle: "paused", status: "open", n: 2 }],
       },
     }),
-    /must not claim executed verification|row counts/,
+    /pre-activation PRODUCTION_UAT_PASS cannot satisfy post-activation suppression/,
   );
   assert.throws(
     () => checkEvidence("--check-receipt", {
       ...goodSmoke(),
       suppression: {
-        verified: false,
-        checked: false,
-        authoritative_source: "PRODUCTION_UAT_PASS",
-        uat_attestation_bound: true,
-        bound_source_sha: GOOD.SOURCE_SHA,
-        bound_image_digest: GOOD.IMAGE_DIGEST,
+        probed_here: true,
+        verified: true,
+        checked: true,
+        authoritative_source: "post_activation_authenticated_probes",
+        suppressed_candidate_count: 3,
+        leaked_count: 0,
+        lifecycles_checked: ["paused", "completed", "inactive"],
       },
     }),
     /row counts alone cannot satisfy suppression verification/,
@@ -549,5 +618,43 @@ test("row counts alone cannot satisfy suppression and bare 5xx/busy flags cannot
       http_5xx: { observed: false, provenance: "hardcoded", probes: ["/api/health"] },
     }),
     /provenance must be defined_probes/,
+  );
+});
+
+test("Stage 1 post-activation probes are required and fail-closed with compensating rollback", () => {
+  const remote = readFileSync(REMOTE, "utf8");
+  const text = wf(WF_NAME);
+  assert.match(text, /activate-rental-marketplace-stage1-postcheck\.mjs/);
+  assert.match(remote, /POSTCHECK_SCRIPT/);
+  assert.match(remote, /compensate_and_fail "verify-only post-activation probes failed"/);
+  assert.match(remote, /run_post_activation_probes \|\| return 1/);
+  assert.match(checkEvidence("--check-receipt", goodSmoke()), /EVIDENCE_RECEIPT_OK/);
+  assert.throws(
+    () => checkEvidence("--check-receipt", {
+      ...goodSmoke(),
+      uat_attestation: "PRODUCTION_UAT_PASS:x:y",
+    }),
+    /pre-activation PRODUCTION_UAT_PASS cannot satisfy post-activation evidence/,
+  );
+  assert.throws(
+    () => checkEvidence("--check-receipt", {
+      ...goodSmoke(),
+      post_activation: { ...goodSmoke().post_activation, probes: [] },
+      probes: [],
+    }),
+    /probes are missing/,
+  );
+  assert.throws(
+    () => checkEvidence("--check-receipt", {
+      ...goodSmoke(),
+      functional_smoke: {
+        ...goodSmoke().functional_smoke,
+        authenticated_cross_account: {
+          ...goodSmoke().functional_smoke.authenticated_cross_account,
+          probes: [postProbe("other_account_listing_matches", "timeout", { status: 0, code: "", override: { timed_out: true } })],
+        },
+      },
+    }),
+    /timed out|timeout|fail-closed/,
   );
 });

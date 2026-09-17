@@ -16,10 +16,10 @@ IMAGE_DIGEST="${IMAGE_DIGEST:-}"
 BACKUP_ID="${BACKUP_ID:-}"
 BACKUP_HASH="${BACKUP_HASH:-}"
 OWNER_AUTHORIZATION="${OWNER_AUTHORIZATION:-}"
-UAT_ATTESTATION="${UAT_ATTESTATION:-}"
 DOMAIN_SCRIPT="${DOMAIN_SCRIPT:-}"
 PATH_SCRIPT="${PATH_SCRIPT:-}"
 EVIDENCE_SCRIPT="${EVIDENCE_SCRIPT:-}"
+POSTCHECK_SCRIPT="${POSTCHECK_SCRIPT:-}"
 EXPECTED_SRC_MANIFEST="${EXPECTED_SRC_MANIFEST:-}"
 SRC_MANIFEST_PY="${SRC_MANIFEST_PY:-}"
 EXPECTED_SRC_MOUNT="${EXPECTED_SRC_MOUNT:-/mnt/Storage1/apps/5151/v3/src}"
@@ -34,11 +34,10 @@ esac
 printf '%s' "$BACKUP_HASH" | grep -Eq '^sha256:[0-9a-f]{64}$' || fail "backup_hash is not sha256: plus 64 lowercase hex"
 EXPECTED_AUTH="AUTHORIZE-STAGE1:${SOURCE_SHA}:${IMAGE_DIGEST}:${BACKUP_ID}:${BACKUP_HASH}"
 [ "$OWNER_AUTHORIZATION" = "$EXPECTED_AUTH" ] || fail "owner_authorization is not bound to this source SHA/digest/backup"
-EXPECTED_UAT="PRODUCTION_UAT_PASS:${SOURCE_SHA}:${IMAGE_DIGEST}"
-[ "$UAT_ATTESTATION" = "$EXPECTED_UAT" ] || fail "uat_attestation is not bound to this source SHA/digest"
 [ -n "$DOMAIN_SCRIPT" ] && [ -f "$DOMAIN_SCRIPT" ] || fail "domain activation script is missing"
 [ -n "$PATH_SCRIPT" ] && [ -f "$PATH_SCRIPT" ] || fail "stage1 path classifier is missing"
 [ -n "$EVIDENCE_SCRIPT" ] && [ -f "$EVIDENCE_SCRIPT" ] || fail "stage1 evidence contract script is missing"
+[ -n "$POSTCHECK_SCRIPT" ] && [ -f "$POSTCHECK_SCRIPT" ] || fail "stage1 post-activation probe script is missing"
 [ -n "$EXPECTED_SRC_MANIFEST" ] && [ -f "$EXPECTED_SRC_MANIFEST" ] || fail "expected v3/src manifest is missing"
 [ -n "$SRC_MANIFEST_PY" ] && [ -f "$SRC_MANIFEST_PY" ] || fail "src manifest helper is missing"
 [ "$EXPECTED_SRC_MOUNT" = "/mnt/Storage1/apps/5151/v3/src" ] || fail "expected src mount path is not the Production v3 src path"
@@ -110,7 +109,7 @@ http_probe() {
   local busy=0 five=0
   started="$(date +%s%3N)"
   set +e
-  status="$(curl -sS -o "$dest" -w '%{http_code}' $extra "$url" 2>/tmp/stage1-curl.err)"
+  status="$(curl -sS --max-time 8 -o "$dest" -w '%{http_code}' $extra "$url" 2>/tmp/stage1-curl.err)"
   local rc=$?
   set -e
   ended="$(date +%s%3N)"
@@ -217,15 +216,46 @@ print("RUNTIME_ROLLBACK_HYDRATE_OK")
 PY
 }
 
+write_rollback_evidence() {
+  local reason="$1"
+  local ok="$2"
+  python3 - "$reason" "$ok" <<'PY'
+import json, sys
+from datetime import datetime, timezone
+reason, ok = sys.argv[1:]
+domain = {}
+try:
+    domain = json.load(open("/tmp/stage1-domain.json"))
+except Exception:
+    domain = {}
+after = domain.get("after_raw_flags") or {}
+wish = (after.get("wish") or {})
+doc = {
+    "schema": "stage1-rollback-evidence-v1",
+    "timestamp": datetime.now(timezone.utc).isoformat(),
+    "reason": reason,
+    "rollback_used": True,
+    "rollback_ok": ok == "true",
+    "after_owner_matching_enabled": wish.get("owner_matching_enabled"),
+    "authoritative_source": "post_activation_authenticated_probes",
+}
+open("/tmp/stage1-rollback-evidence.json", "w", encoding="utf-8").write(json.dumps(doc, indent=2) + "\n")
+print("ROLLBACK_EVIDENCE_OK")
+PY
+}
+
 compensate_and_fail() {
   local reason="$1"
   echo "STAGE1_POSTCHECK_FAIL: $reason"
   if ! rollback_stage1_flag; then
+    write_rollback_evidence "$reason" false || true
     fail "post-check failed ($reason) and domain rollback failed (PRODUCTION_STATE_UNKNOWN; no raw SQL repair)"
   fi
   if ! verify_runtime_stage1_off; then
+    write_rollback_evidence "$reason" false || true
     fail "domain rollback succeeded but running server hydrate is inconsistent (PRODUCTION_STATE_UNKNOWN)"
   fi
+  write_rollback_evidence "$reason" true || true
   fail "post-check failed ($reason); Stage 1 flag rolled back via domain API; PR A flags left ON"
 }
 
@@ -266,6 +296,41 @@ if re.search(r"09\d{8}", text):
 if re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", text):
     raise SystemExit(f"privacy leak email in {path}")
 print("PRIVACY_OK")
+PY
+}
+
+run_post_activation_probes() {
+  echo "=== post-activation authenticated matching probes (Stage 1 ON) ==="
+  docker exec "$CONTAINER" rm -f /tmp/stage1-postcheck.mjs /tmp/stage1-post-activation.json
+  docker cp "$POSTCHECK_SCRIPT" "$CONTAINER:/tmp/stage1-postcheck.mjs"
+  set +e
+  docker exec -w /app \
+    -e STAGE1_POSTCHECK_BASE_URL=http://127.0.0.1:5153 \
+    -e STAGE1_POSTCHECK_RESULT_PATH=/tmp/stage1-post-activation.json \
+    "$CONTAINER" node /tmp/stage1-postcheck.mjs >/tmp/stage1-postcheck.out 2>/tmp/stage1-postcheck.err
+  local rc=$?
+  set -e
+  docker cp "$CONTAINER:/tmp/stage1-post-activation.json" /tmp/stage1-post-activation.json 2>/dev/null || true
+  docker exec "$CONTAINER" rm -f /tmp/stage1-postcheck.mjs || true
+  if [ "$rc" -ne 0 ]; then
+    echo "post-activation probe stderr (no secrets expected):"
+    cat /tmp/stage1-postcheck.err || true
+    return 1
+  fi
+  [ -f /tmp/stage1-post-activation.json ] || return 1
+  assert_no_pii /tmp/stage1-post-activation.json || return 1
+  python3 - <<'PY'
+import json
+doc = json.load(open("/tmp/stage1-post-activation.json"))
+if doc.get("phase") != "post_activation":
+    raise SystemExit("post-activation evidence phase is wrong")
+if doc.get("probed_here") is not True:
+    raise SystemExit("post-activation probes were not executed here")
+if doc.get("authoritative_source") != "post_activation_authenticated_probes":
+    raise SystemExit("post-activation source is not authenticated probes")
+if "PRODUCTION_UAT_PASS" in json.dumps(doc):
+    raise SystemExit("pre-activation PRODUCTION_UAT_PASS cannot satisfy post-activation evidence")
+print("POST_ACTIVATION_PROBES_OK")
 PY
 }
 
@@ -316,8 +381,8 @@ doc = {
     "login": True,
     "http_5xx": runtime["http_5xx"],
     "sqlite_busy": runtime["sqlite_busy"],
+    "post_activation": runtime["post_activation"],
     "owner_authorization_bound": True,
-    "uat_attestation": runtime["uat_attestation"],
     "final_digest": image_digest,
     "final_image": final_image,
     "final_oci_revision": final_rev,
@@ -355,15 +420,17 @@ hydrate_runtime_on() {
   login_html_probe="$(http_probe /tmp/stage1-login.html http://127.0.0.1:5153/login.html)" || return 1
   assert_no_pii /tmp/stage1-aggregate-after.json || return 1
   assert_no_pii /tmp/stage1-exposure-after.json || return 1
-  python3 - "$SOURCE_SHA" "$IMAGE_DIGEST" "$UAT_ATTESTATION" "$PROBE_LOG" <<PY
+  run_post_activation_probes || return 1
+  python3 - "$SOURCE_SHA" "$IMAGE_DIGEST" "$PROBE_LOG" <<PY
 import json, sys
-source_sha, image_digest, uat_attestation, probe_log = sys.argv[1:]
+source_sha, image_digest, probe_log = sys.argv[1:]
 demand = json.load(open("/tmp/stage1-demand-after.json"))
 agg = json.load(open("/tmp/stage1-aggregate-after.json"))
 exp = json.load(open("/tmp/stage1-exposure-after.json"))
 summary = json.load(open("/tmp/stage1-summary-unauth.json"))
 detail = json.load(open("/tmp/stage1-detail-unauth.json"))
 health = json.load(open("/tmp/stage1-health.json"))
+post = json.load(open("/tmp/stage1-post-activation.json"))
 agg_status, agg_ms = "$agg_probe".split()
 exp_status, exp_ms = "$exp_probe".split()
 summary_status, _ = "$summary_probe".split()
@@ -401,27 +468,42 @@ agg_ms_n = int(agg_ms)
 exp_ms_n = int(exp_ms)
 if agg_ms_n >= 5000 or exp_ms_n >= 5000:
     raise SystemExit("perf smoke exceeded 5000ms budget")
-expected_uat = f"PRODUCTION_UAT_PASS:{source_sha}:{image_digest}"
-if uat_attestation != expected_uat:
-    raise SystemExit("uat_attestation is not bound to this source SHA/digest")
+if post.get("phase") != "post_activation" or post.get("probed_here") is not True:
+    raise SystemExit("post-activation probes are missing")
+if post.get("authoritative_source") != "post_activation_authenticated_probes":
+    raise SystemExit("post-activation source is not authenticated probes")
+if "PRODUCTION_UAT_PASS" in json.dumps(post):
+    raise SystemExit("pre-activation PRODUCTION_UAT_PASS cannot satisfy post-activation evidence")
 probes = []
 for line in open(probe_log, encoding="utf-8"):
     if line.strip():
         probes.append(json.loads(line))
+for row in post.get("probes") or []:
+    probes.append({
+        "url": row.get("target"),
+        "status": row.get("status") or 0,
+        "elapsed_ms": row.get("elapsed_ms") or 0,
+        "http_5xx": row.get("http_5xx") is True,
+        "sqlite_busy": row.get("sqlite_busy") is True,
+    })
 if not probes:
     raise SystemExit("defined probes produced no provenance; refusing ACTIVATION_OK")
 if any(row.get("http_5xx") is True for row in probes):
     raise SystemExit("http_5xx observed during defined probes")
 if any(row.get("sqlite_busy") is True for row in probes):
     raise SystemExit("sqlite_busy observed during defined probes")
+if any(row.get("timed_out") is True or row.get("result") == "timeout" for row in (post.get("probes") or [])):
+    raise SystemExit("timeout observed during post-activation probes")
 lifecycle = json.load(open("/tmp/stage1-domain.json")).get("lifecycle_counts") or []
-probe_urls = [row.get("url") for row in probes]
+probe_urls = [row.get("url") for row in probes if row.get("url")]
+cross = post["functional_smoke"]["authenticated_cross_account"]
+suppression = post["suppression"]
 open("/tmp/stage1-runtime.env", "w").write(
     json.dumps({
         "runtime_public_flags": flags,
         "source_sha": source_sha,
         "image_digest": image_digest,
-        "uat_attestation": uat_attestation,
+        "post_activation": post,
         "functional_smoke": {
             "aggregate_status": int(agg_status),
             "exposure_enabled": True,
@@ -429,19 +511,15 @@ open("/tmp/stage1-runtime.env", "w").write(
             "detail_unauth": int(detail_status),
             "unauth_match_denied": True,
             "authenticated_cross_account": {
-                "probed_here": False,
-                "verified": False,
+                **cross,
                 "unauth_401_is_not_cross_account": True,
-                "authoritative_source": "PRODUCTION_UAT_PASS",
-                "bound_source_sha": source_sha,
-                "bound_image_digest": image_digest,
-                "uat_attestation_bound": True,
             },
         },
         "privacy_smoke": {
             "aggregate_clean": True,
             "exposure_clean": True,
-            "internal_rank_score_leaked": False,
+            "internal_rank_leaked": False,
+            "owner_matches_clean": True,
         },
         "perf_smoke": {
             "aggregate_ms": agg_ms_n,
@@ -450,14 +528,9 @@ open("/tmp/stage1-runtime.env", "w").write(
             "ok": True,
         },
         "suppression": {
-            "verified": False,
-            "checked": False,
+            **suppression,
             "row_counts_are_not_verification": True,
             "lifecycle_counts": lifecycle,
-            "authoritative_source": "PRODUCTION_UAT_PASS",
-            "bound_source_sha": source_sha,
-            "bound_image_digest": image_digest,
-            "uat_attestation_bound": True,
         },
         "http_5xx": {
             "observed": False,
@@ -508,7 +581,7 @@ fi
 
 if [ "$PATH_KIND" = "verify-only" ]; then
   echo "=== verify-only recovery (no mutation; durable receipt identity matched) ==="
-  hydrate_runtime_on || fail "verify-only runtime checks failed; STOP without mutation"
+  hydrate_runtime_on || compensate_and_fail "verify-only post-activation probes failed"
   AFTER_IMAGE="$(docker inspect -f '{{.Config.Image}}' "$CONTAINER")"
   AFTER_ID="$(docker inspect -f '{{.Image}}' "$CONTAINER")"
   AFTER_REV="$(docker image inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$AFTER_ID")"
