@@ -171,6 +171,53 @@ export function ensureDemandSchema(db) {
         AND COALESCE(NULLIF(lifecycle, ''), 'active') IN ('active', 'needs_confirmation');
   `);
   ensureDemandMatchDistrictSchema(db);
+  ensureDemandMatchGenerationSchema(db);
+}
+
+export function ensureDemandMatchGenerationSchema(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS demand_match_generation (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      generation INTEGER NOT NULL DEFAULT 0
+    );
+    INSERT OR IGNORE INTO demand_match_generation(id, generation) VALUES (1, 0);
+  `);
+  try {
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS trg_demand_match_gen_insert
+      AFTER INSERT ON demand_posts
+      BEGIN
+        UPDATE demand_match_generation SET generation = generation + 1 WHERE id = 1;
+      END;
+      CREATE TRIGGER IF NOT EXISTS trg_demand_match_gen_delete
+      AFTER DELETE ON demand_posts
+      BEGIN
+        UPDATE demand_match_generation SET generation = generation + 1 WHERE id = 1;
+      END;
+      CREATE TRIGGER IF NOT EXISTS trg_demand_match_gen_update
+      AFTER UPDATE OF status, lifecycle, updated_at, rent_max, districts, layout,
+        housing_type, condition_choices, must_have, avoid, ping_min, public_token,
+        last_confirmed_at, closed_at, closed_reason
+      ON demand_posts
+      BEGIN
+        UPDATE demand_match_generation SET generation = generation + 1 WHERE id = 1;
+      END;
+    `);
+  } catch { /* demand_posts may be absent in isolated tests */ }
+}
+
+export function readDemandMatchGeneration(db) {
+  ensureDemandMatchGenerationSchema(db);
+  try {
+    return Number(db.prepare("SELECT generation FROM demand_match_generation WHERE id = 1").get()?.generation) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+export function explainDemandMatchGenerationPlan(db) {
+  ensureDemandMatchGenerationSchema(db);
+  return db.prepare("EXPLAIN QUERY PLAN SELECT generation FROM demand_match_generation WHERE id = 1").all();
 }
 
 export function ensureDemandMatchDistrictSchema(db) {

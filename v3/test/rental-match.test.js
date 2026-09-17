@@ -17,6 +17,7 @@ import {
   isWishMatchable,
   listingMatchSnapshot,
   MATCH_QUALITY_WEIGHTS,
+  MATCH_SNAPSHOT_ITEMS_MAX,
   MATCH_SNAPSHOT_MAX,
   RANK_WEIGHTS,
   wishMatchSnapshot,
@@ -340,6 +341,26 @@ test("oldest snapshot eviction expires leftover cursors", () => {
     assert.equal(err.code, "cursor_expired");
     return true;
   });
+  clearMatchPageCursors();
+});
+
+test("single snapshot over the item cap fails closed without storing", () => {
+  clearMatchPageCursors();
+  const before = inspectMatchCursorState();
+  const rows = Array.from({ length: MATCH_SNAPSHOT_ITEMS_MAX + 1 }, (_, i) => ({
+    rank_score: 1,
+    match_score: 1,
+    wish_ref: `big${i}`,
+  }));
+  assert.throws(() => applyMatchCursor(rows, null, 1, { listingId: "BIG" }), (err) => {
+    assert.equal(err.code, "match_snapshot_too_large");
+    assert.equal(err.status, 503);
+    return true;
+  });
+  const after = inspectMatchCursorState();
+  assert.equal(after.snapshots, before.snapshots);
+  assert.equal(after.total_items, before.total_items);
+  assert.ok(after.total_items <= MATCH_SNAPSHOT_ITEMS_MAX);
   clearMatchPageCursors();
 });
 

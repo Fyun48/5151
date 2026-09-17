@@ -8,6 +8,9 @@ import {
   publicWishRoomView,
   rebuildDemandMatchDistricts,
   ensureDemandMatchDistrictSchema,
+  ensureDemandMatchGenerationSchema,
+  explainDemandMatchGenerationPlan,
+  readDemandMatchGeneration,
 } from "./demand.js";
 import { isRentalCatalogV2Enabled, isWishOwnerMatchingEnabled } from "./rentalMarketplaceFlags.js";
 import { defaultCatalog, normalizeCatalog } from "./rentalCatalog.js";
@@ -64,6 +67,7 @@ export function currentMatchFlags() {
 
 export function ensureRentalMatchIndexes(db) {
   ensureDemandMatchDistrictSchema(db);
+  ensureDemandMatchGenerationSchema(db);
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_demand_match_open
       ON demand_posts(status, lifecycle, rent_max, id)
@@ -112,24 +116,12 @@ function parseJsonArray(raw) {
   }
 }
 
-const MATCHABLE_WISH_SQL = `
-  COALESCE(NULLIF(lifecycle, ''), 'active') IN ('active', 'needs_confirmation')
-  AND IFNULL(status, '') NOT IN ('hidden', 'draft')
-  AND (IFNULL(status, '') != 'closed' OR COALESCE(NULLIF(lifecycle, ''), 'active') = 'needs_confirmation')
-`;
-
 function wishGeneration(db) {
-  try {
-    const row = db.prepare(
-      `SELECT COUNT(*) AS n, MAX(id) AS max_id,
-              MAX(COALESCE(updated_at, published_at, created_at, '')) AS u
-       FROM demand_posts
-       WHERE ${MATCHABLE_WISH_SQL}`,
-    ).get();
-    return `${Number(row?.n) || 0}:${row?.max_id || 0}:${row?.u || ""}`;
-  } catch {
-    return "0:0:";
-  }
+  return String(readDemandMatchGeneration(db));
+}
+
+export function explainMatchGenerationPlan(db) {
+  return explainDemandMatchGenerationPlan(db);
 }
 
 function chunkStrings(values, size = ACTIVITY_PRELOAD_CHUNK) {
@@ -520,7 +512,16 @@ export function ownerListingMatches(db, postId, userId, { limit, cursor, now = n
     };
   }
   const snapshot = computeListingMatches(db, listing, { now });
-  const page = applyMatchCursor(snapshot.items, "", limit, { listingId: listing.id, now: at, epoch });
+  let page;
+  try {
+    page = applyMatchCursor(snapshot.items, "", limit, { listingId: listing.id, now: at, epoch });
+  } catch (error) {
+    if (error.code === "match_snapshot_too_large") {
+      error.total = snapshot.total;
+      throw error;
+    }
+    throw error;
+  }
   return {
     listing_id: listing.id,
     total: snapshot.total,

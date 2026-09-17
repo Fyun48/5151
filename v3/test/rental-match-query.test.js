@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { createDemandPost, ensureDemandSchema, setRentalCatalogCache, setRentalMarketplaceFlags, syncDemandMatchDistricts } from "../src/demand.js";
+import { createDemandPost, ensureDemandSchema, explainDemandMatchGenerationPlan, readDemandMatchGeneration, setRentalCatalogCache, setRentalMarketplaceFlags, syncDemandMatchDistricts } from "../src/demand.js";
 import { defaultCatalog, deleteOrDisableCondition, upsertCondition } from "../src/rentalCatalog.js";
 import {
   activityPreloadBindLimit,
@@ -12,6 +12,7 @@ import {
   computeListingMatches,
   explainAggregatePlan,
   explainMatchCandidatePlan,
+  explainMatchGenerationPlan,
   lastMatchLifecycleCheckCount,
   ownerListingMatches,
   ownerListingMatchSummary,
@@ -642,6 +643,29 @@ test("owner pagination keeps one snapshot and bounds lifecycle checks to page si
   }
   assert.equal(seen.length, 12);
   assert.equal(new Set(seen).size, 12);
+  db.close();
+});
+
+test("match generation is O(1) and bumps only on relevant mutations", () => {
+  const db = open();
+  const listing = createSelfListing(db, 1, listingInput());
+  const post = createDemandPost(db, 2, wishInput());
+  const first = readDemandMatchGeneration(db);
+  ownerListingMatches(db, listing.post_id, 1, { limit: 1 });
+  ownerListingMatchSummary(db, listing.post_id, 1);
+  const afterRead = readDemandMatchGeneration(db);
+  assert.equal(afterRead, first);
+  db.prepare("UPDATE demand_posts SET body=? WHERE id=?").run("只改說明不應推進 generation", post.id);
+  assert.equal(readDemandMatchGeneration(db), first);
+  db.prepare("UPDATE demand_posts SET status='closed', lifecycle='paused' WHERE id=?").run(post.id);
+  const afterPause = readDemandMatchGeneration(db);
+  assert.ok(afterPause > first);
+  const plan = explainMatchGenerationPlan(db);
+  const text = plan.map((row) => `${row.detail || ""} ${row.table || ""}`).join(" ");
+  assert.doesNotMatch(text, /demand_posts/);
+  assert.match(text, /demand_match_generation|INTEGER PRIMARY KEY/);
+  const explainRows = explainDemandMatchGenerationPlan(db);
+  assert.ok(explainRows.length >= 1);
   db.close();
 });
 

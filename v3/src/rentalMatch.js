@@ -514,8 +514,16 @@ function pruneMatchStores(now = Date.now()) {
   }
 }
 
+function snapshotTooLargeError() {
+  const err = new Error("配對結果暫時無法一次載入");
+  err.status = 503;
+  err.code = "match_snapshot_too_large";
+  return err;
+}
+
 function evictSnapshotsToFit(extraItems = 0, now = Date.now()) {
   pruneMatchStores(now);
+  if (extraItems > MATCH_SNAPSHOT_ITEMS_MAX) throw snapshotTooLargeError();
   while (
     matchSnapshots.size >= MATCH_SNAPSHOT_MAX
     || snapshotItemTotal() + extraItems > MATCH_SNAPSHOT_ITEMS_MAX
@@ -538,8 +546,10 @@ function evictCursorsToFit() {
 
 function createMatchSnapshot(items, { listingId = "", now = Date.now(), epoch = "" } = {}) {
   const at = asTime(now);
-  const list = Array.isArray(items) ? items.slice() : [];
-  evictSnapshotsToFit(list.length, at);
+  const source = Array.isArray(items) ? items : [];
+  if (source.length > MATCH_SNAPSHOT_ITEMS_MAX) throw snapshotTooLargeError();
+  evictSnapshotsToFit(source.length, at);
+  const list = source.slice();
   const id = randomBytes(16).toString("base64url");
   matchSnapshots.set(id, {
     listingId: String(listingId || ""),
@@ -667,6 +677,7 @@ export function applyMatchCursor(rows, cursor, limit, { listingId = "", now = Da
     return { items, total: stored.items.length, next_cursor };
   }
   const list = rows || [];
+  if (list.length > MATCH_SNAPSHOT_ITEMS_MAX) throw snapshotTooLargeError();
   const items = list.slice(0, size);
   if (list.length <= items.length) {
     return { items, total: list.length, next_cursor: "" };
