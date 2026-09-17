@@ -18,23 +18,71 @@ function clampRange(from, to) {
   return { from: start.toISOString().slice(0, 10), to: end.toISOString().slice(0, 10) };
 }
 
+function analyticsQueryError(cause, code = "analytics_query_failed") {
+  const err = rentalNotifyHttpError("營運分析查詢失敗", 500, code);
+  if (cause) err.cause = cause;
+  return err;
+}
+
 function sumMetric(db, metric, from, to) {
-  return Number(db.prepare(
-    "SELECT COALESCE(SUM(value), 0) AS n FROM rental_analytics_daily WHERE metric = ? AND day >= ? AND day <= ?",
-  ).get(metric, from, to)?.n) || 0;
+  try {
+    return Number(db.prepare(
+      "SELECT COALESCE(SUM(value), 0) AS n FROM rental_analytics_daily WHERE metric = ? AND day >= ? AND day <= ?",
+    ).get(metric, from, to)?.n) || 0;
+  } catch (error) {
+    throw analyticsQueryError(error, "analytics_metric_failed");
+  }
 }
 
 function timeseries(db, metric, from, to) {
-  return db.prepare(
-    "SELECT day, value FROM rental_analytics_daily WHERE metric = ? AND day >= ? AND day <= ? ORDER BY day ASC",
-  ).all(metric, from, to);
+  try {
+    return db.prepare(
+      "SELECT day, value FROM rental_analytics_daily WHERE metric = ? AND day >= ? AND day <= ? ORDER BY day ASC",
+    ).all(metric, from, to);
+  } catch (error) {
+    throw analyticsQueryError(error, "analytics_series_failed");
+  }
 }
 
 function countWhere(db, sql, params) {
   try {
     return Number(db.prepare(sql).get(...params)?.n) || 0;
-  } catch {
-    return 0;
+  } catch (error) {
+    throw analyticsQueryError(error, "analytics_count_failed");
+  }
+}
+
+function medianSecondsToAccept(db, from, to) {
+  const start = `${from}T00:00:00.000Z`;
+  const end = `${to}T23:59:59.999Z`;
+  let n = 0;
+  try {
+    n = Number(db.prepare(`
+      SELECT COUNT(*) AS n FROM wish_offers
+      WHERE accepted_at IS NOT NULL AND accepted_at >= ? AND accepted_at <= ?
+    `).get(start, end)?.n) || 0;
+  } catch (error) {
+    throw analyticsQueryError(error, "analytics_median_failed");
+  }
+  if (!n) return { median: null, n: 0 };
+  const sql = `
+    SELECT (julianday(accepted_at) - julianday(created_at)) * 86400 AS secs
+    FROM wish_offers
+    WHERE accepted_at IS NOT NULL AND accepted_at >= ? AND accepted_at <= ?
+    ORDER BY secs ASC, id ASC
+    LIMIT ? OFFSET ?
+  `;
+  try {
+    if (n % 2 === 1) {
+      const row = db.prepare(sql).get(start, end, 1, Math.floor((n - 1) / 2));
+      return { median: Math.round(Number(row?.secs) || 0), n };
+    }
+    const rows = db.prepare(sql).all(start, end, 2, n / 2 - 1);
+    const a = Number(rows[0]?.secs) || 0;
+    const b = Number(rows[1]?.secs) || 0;
+    return { median: Math.round((a + b) / 2), n };
+  } catch (error) {
+    throw analyticsQueryError(error, "analytics_median_failed");
   }
 }
 
@@ -79,22 +127,10 @@ export function rentalOpsSummary(db, { from, to } = {}) {
     seen_match_pairs: countWhere(db, "SELECT COUNT(*) AS n FROM rental_match_seen", []),
     definition: "活躍可配對許願房為目前存量；訂閱數為目前開啟 instant/digest 的刊登。",
   };
-  const acceptedTimes = (() => {
-    try {
-      return db.prepare(`
-        SELECT (julianday(accepted_at) - julianday(created_at)) * 86400 AS secs
-        FROM wish_offers
-        WHERE accepted_at >= ? AND accepted_at <= ?
-        ORDER BY secs ASC
-        LIMIT 200
-      `).all(`${range.from}T00:00:00.000Z`, `${range.to}T23:59:59.999Z`).map((row) => Number(row.secs) || 0);
-    } catch {
-      return [];
-    }
-  })();
-  const mid = acceptedTimes.length ? acceptedTimes[Math.floor((acceptedTimes.length - 1) / 2)] : 0;
-  offers.median_seconds_to_accept = acceptedTimes.length ? Math.round(mid) : null;
-  offers.median_definition = "期間 accepted 樣本（最多 200）的中位秒數；分母是期間 accepted 筆數。";
+  const median = medianSecondsToAccept(db, range.from, range.to);
+  offers.median_seconds_to_accept = median.median;
+  offers.median_sample_size = median.n;
+  offers.median_definition = "期間全部 accepted 的母體中位秒數（奇數取中間值，偶數取兩中間值平均），不是最快 200 筆。";
   const growth = {
     share_views: sumMetric(db, "share_view", range.from, range.to),
     share_views_bot: sumMetric(db, "share_view_bot", range.from, range.to),
@@ -109,8 +145,8 @@ export function rentalOpsSummary(db, { from, to } = {}) {
     survey_breakdown: surveyAggregate(db, { from: `${range.from}T00:00:00.000Z`, to: `${range.to}T23:59:59.999Z` }),
   };
   wish.resumed = sumMetric(db, "wish_resumed", range.from, range.to);
-  wish.clone_or_restart = wish.resumed;
-  wish.clone_definition = "期間 resume 次數；completed 不可直接改回 active，須另開新則。";
+  wish.clone_or_restart = sumMetric(db, "wish_cloned", range.from, range.to);
+  wish.clone_definition = "期間新建許願房且該使用者已有 completed 紀錄的次數；不是 resume。completed 不可直接改回 active。";
   return {
     range,
     wish,
@@ -155,8 +191,8 @@ export function rentalOpsDrilldown(db, { kind = "offers", cursor = 0, limit = 20
       WHERE created_at >= ? AND created_at <= ?
       ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?
     `).all(`${range.from}T00:00:00.000Z`, `${range.to}T23:59:59.999Z`, size + 1, offset);
-  } catch {
-    rows = [];
+  } catch (error) {
+    throw analyticsQueryError(error, "analytics_drill_failed");
   }
   return {
     kind: "offers",

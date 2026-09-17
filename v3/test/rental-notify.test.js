@@ -1,11 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { performance } from "node:perf_hooks";
 import { createDemandPost, ensureDemandSchema, setRentalMarketplaceFlags } from "../src/demand.js";
 import { remainingTtlDays } from "../src/wishLifecycle.js";
 import {
   applyUnsubscribeToken,
+  cleanupRentalNotify,
   createUnsubscribeToken,
   defaultRentalNotifyPrefs,
   deliverQueuedNotifications,
@@ -13,20 +15,32 @@ import {
   ensureRentalNotifySchema,
   explainRentalNotifyPlans,
   getRentalNotifyPrefs,
+  listingOwnedBy,
+  listDueMatchSubscriptions,
   reminderWindowForWish,
   saveRentalNotifyPrefs,
   saveMatchSubscription,
   scheduleLifecycleReminders,
-  scheduleOwnerRetention,
+  scheduleOfferExpiring,
   scheduleTenantRetention,
   setRentalNotifyDockWriter,
   setRentalNotifyHydrate,
+  setRentalNotifyMailSink,
+  setRentalNotifyPushSink,
   addDigestItem,
   closeDigestBuckets,
   isoWeekKey,
+  wishHasActiveOffer,
 } from "../src/rentalNotify.js";
 import { startRentalNotifyLoop, runRentalNotifyTick } from "../src/rentalNotifyWorker.js";
-import { recordShareEvent, resetShareGrowthLimits, sharePageExtras } from "../src/rentalShareGrowth.js";
+import { insertUserBlock } from "../src/userBlocks.js";
+import {
+  recordShareEvent,
+  resetShareGrowthLimits,
+  shareLimiterSize,
+  sharePageExtras,
+  shouldAttributeSignup,
+} from "../src/rentalShareGrowth.js";
 import { submitCompletionSurvey, getCompletionSurvey, surveyAggregate } from "../src/rentalSurvey.js";
 import { rentalOpsSummary, rentalOpsDrilldown } from "../src/rentalOpsAnalytics.js";
 import { listingFitScore } from "../src/listingScore.js";
@@ -63,11 +77,62 @@ function open() {
   `);
   ensureDemandSchema(db);
   ensureRentalNotifySchema(db);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS listings (
+      post_id INTEGER PRIMARY KEY,
+      title TEXT NOT NULL DEFAULT '房',
+      url TEXT NOT NULL DEFAULT '',
+      first_seen_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00.000Z',
+      last_seen_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00.000Z',
+      last_event TEXT NOT NULL DEFAULT 'new',
+      source TEXT NOT NULL DEFAULT 'self',
+      listed_by_user_id INTEGER,
+      self_status TEXT DEFAULT 'open'
+    );
+    CREATE TABLE IF NOT EXISTS wish_offers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      public_token TEXT,
+      wish_id INTEGER,
+      listing_id INTEGER,
+      owner_user_id INTEGER,
+      tenant_user_id INTEGER,
+      status TEXT,
+      created_at TEXT,
+      updated_at TEXT,
+      accepted_at TEXT,
+      expires_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS wish_offer_reports (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      public_token TEXT NOT NULL UNIQUE,
+      offer_id INTEGER NOT NULL,
+      reporter_user_id INTEGER NOT NULL,
+      reported_user_id INTEGER NOT NULL,
+      listing_id INTEGER NOT NULL,
+      reason TEXT NOT NULL,
+      detail TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'open',
+      created_at TEXT NOT NULL
+    );
+  `);
   db.prepare("INSERT INTO users(id, email, nickname, created_at) VALUES (1, 't@example.com', '租客', '2026-01-01T00:00:00.000Z')").run();
   db.prepare("INSERT INTO users(id, email, nickname, created_at) VALUES (2, 'o@example.com', '屋主', '2026-01-01T00:00:00.000Z')").run();
+  db.prepare("INSERT INTO listings(post_id, title, source, listed_by_user_id, self_status) VALUES (99, '士林套房', 'self', 2, 'open')").run();
   setRentalMarketplaceFlags(FLAGS_ON);
   setRentalNotifyHydrate(FLAGS_ON);
   return db;
+}
+
+function seedUser(db, id, email) {
+  db.prepare("INSERT OR IGNORE INTO users(id, email, nickname, created_at) VALUES (?, ?, 'u', '2026-01-01T00:00:00.000Z')")
+    .run(id, email);
+}
+
+function seedListing(db, postId, ownerId = 2) {
+  db.prepare(`
+    INSERT OR IGNORE INTO listings(post_id, title, source, listed_by_user_id, self_status)
+    VALUES (?, '房', 'self', ?, 'open')
+  `).run(postId, ownerId);
 }
 
 function seedWish(db, extra = {}) {
@@ -207,13 +272,16 @@ test("worker is bounded and non-reentrant", () => {
 
 test("match subscription instant vs digest vs off; no per-match mail flood", () => {
   const db = open();
+  seedUser(db, 3, "a@example.com");
+  seedUser(db, 4, "b@example.com");
+  const wishA = seedWish(db, { user_id: 3 });
+  const wishB = seedWish(db, { user_id: 4 });
   saveMatchSubscription(db, 2, 99, "instant", NOW);
-  saveRentalNotifyPrefs(db, 2, { new_match: true }, NOW);
   const matchFn = () => ({
     generation: 7,
     items: [
-      { wish_ref: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
-      { wish_ref: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
+      { wish_ref: wishA.public_token, user_id: 3 },
+      { wish_ref: wishB.public_token, user_id: 4 },
     ],
   });
   const first = runRentalNotifyTick(db, NOW, { flags: FLAGS_ON, matchFn });
@@ -225,7 +293,7 @@ test("match subscription instant vs digest vs off; no per-match mail flood", () 
   saveMatchSubscription(db, 2, 99, "off", NOW);
   const third = runRentalNotifyTick(db, NOW, {
     flags: FLAGS_ON,
-    matchFn: () => ({ generation: 8, items: [{ wish_ref: "cccccccccccccccccccccccccccccccc" }] }),
+    matchFn: () => ({ generation: 8, items: [{ wish_ref: wishA.public_token, user_id: 3 }] }),
   });
   assert.equal(third.matches.emitted, 0);
   db.close();
@@ -255,17 +323,19 @@ test("digest bucket overflow and retry does not duplicate", () => {
 test("share attribution dedup, bot mark, and burst limit", () => {
   const db = open();
   resetShareGrowthLimits();
-  const a = recordShareEvent(db, { shareToken: "abc", eventType: "view", ip: "1.1.1.1", userAgent: "Mozilla", now: NOW });
-  const b = recordShareEvent(db, { shareToken: "abc", eventType: "view", ip: "1.1.1.1", userAgent: "Mozilla", now: NOW });
+  const wish = seedWish(db);
+  const token = wish.public_token;
+  const a = recordShareEvent(db, { shareToken: token, eventType: "view", ip: "1.1.1.1", userAgent: "Mozilla", now: NOW });
+  const b = recordShareEvent(db, { shareToken: token, eventType: "view", ip: "1.1.1.1", userAgent: "Mozilla", now: NOW });
   assert.equal(a.recorded, true);
   assert.equal(b.reason, "deduped");
-  const bot = recordShareEvent(db, { shareToken: "abc", eventType: "view", ip: "2.2.2.2", userAgent: "Googlebot", now: NOW });
+  const bot = recordShareEvent(db, { shareToken: token, eventType: "view", ip: "2.2.2.2", userAgent: "Googlebot", now: NOW });
   assert.equal(bot.is_bot, true);
   resetShareGrowthLimits();
   let limited = false;
   for (let i = 0; i < 21; i += 1) {
     try {
-      recordShareEvent(db, { shareToken: "xyz", eventType: "view", ip: "9.9.9.9", userAgent: "Mozilla/burst", now: NOW });
+      recordShareEvent(db, { shareToken: token, eventType: "view", ip: "9.9.9.9", userAgent: "Mozilla/burst", now: NOW });
     } catch (error) {
       if (error.code === "RATE_LIMITED") limited = true;
     }
@@ -298,20 +368,6 @@ test("completion survey skip, idempotent submit, ownership and XSS", () => {
 test("retention skips pending offer and uses weekly cap", () => {
   const db = open();
   const wish = seedWish(db, { last_active_at: "2026-08-01T00:00:00.000Z" });
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS wish_offers (
-      id INTEGER PRIMARY KEY,
-      public_token TEXT,
-      wish_id INTEGER,
-      listing_id INTEGER,
-      owner_user_id INTEGER,
-      tenant_user_id INTEGER,
-      status TEXT,
-      created_at TEXT,
-      updated_at TEXT,
-      expires_at TEXT
-    );
-  `);
   const quiet = scheduleTenantRetention(db, NOW);
   assert.equal(quiet.emitted, 1);
   const again = scheduleTenantRetention(db, NOW);
@@ -401,3 +457,318 @@ test("flag off skips worker writes", () => {
   assert.equal(out.skipped, true);
   db.close();
 });
+
+test("P1-1 bounded workers progress past the first 80 rows", () => {
+  const db = open();
+  const expires = "2026-09-20T00:00:00.000Z";
+  const created = "2026-09-01T00:00:00.000Z";
+  const insertWish = db.prepare(`
+    INSERT INTO demand_posts(user_id, districts, rent_max, housing_type, mrt_walk, body, status, created_at, expires_at, public_token, lifecycle, last_active_at)
+    VALUES (?, '["1-8"]', 20000, 'whole', 0, '找房', 'open', ?, ?, ?, 'active', ?)
+  `);
+  for (let i = 0; i < 220; i += 1) {
+    const uid = 20 + i;
+    seedUser(db, uid, `p1w${i}@example.com`);
+    insertWish.run(uid, created, expires, `wishprog${String(i).padStart(4, "0")}tokenxx`, "2026-08-01T00:00:00.000Z");
+  }
+  let reminderEmitted = 0;
+  const reminderIds = new Set();
+  for (let tick = 0; tick < 4; tick += 1) {
+    const out = scheduleLifecycleReminders(db, NOW);
+    reminderEmitted += out.emitted;
+    for (const row of db.prepare("SELECT subject_ref FROM rental_notify_events WHERE event_type = 'wish_lifecycle_due_3d'").all()) {
+      reminderIds.add(row.subject_ref);
+    }
+  }
+  assert.equal(reminderEmitted, 220);
+  assert.equal(reminderIds.size, 220);
+
+  for (let i = 0; i < 220; i += 1) {
+    const lid = 400 + i;
+    seedListing(db, lid, 2);
+    db.prepare(`
+      INSERT INTO rental_match_subscriptions(public_token, owner_user_id, listing_id, mode, created_at, updated_at)
+      VALUES (?, 2, ?, 'instant', ?, ?)
+    `).run(`sub${i}tokenxxxxxxxxxxxx`, lid, NOW.toISOString(), NOW.toISOString());
+  }
+  const seenSubs = new Set();
+  for (let tick = 0; tick < 4; tick += 1) {
+    for (const row of listDueMatchSubscriptions(db, { now: NOW })) seenSubs.add(row.id);
+  }
+  assert.ok(seenSubs.size >= 220, `subscriptions progressed ${seenSubs.size}`);
+
+  let quiet = 0;
+  for (let tick = 0; tick < 4; tick += 1) quiet += scheduleTenantRetention(db, NOW).emitted;
+  assert.equal(quiet, 220);
+
+  const soon = "2026-09-18T06:00:00.000Z";
+  for (let i = 0; i < 220; i += 1) {
+    db.prepare(`
+      INSERT INTO wish_offers(public_token, wish_id, listing_id, owner_user_id, tenant_user_id, status, created_at, updated_at, expires_at)
+      VALUES (?, ?, 99, 2, 1, 'pending', ?, ?, ?)
+    `).run(`offexp${i}tok`, 10000 + i, NOW.toISOString(), NOW.toISOString(), soon);
+  }
+  let expiring = 0;
+  for (let tick = 0; tick < 4; tick += 1) expiring += scheduleOfferExpiring(db, NOW).emitted;
+  assert.equal(expiring, 220);
+  db.close();
+});
+
+test("P1-2 pair-level match episode ignores unrelated generation and honors block", () => {
+  const db = open();
+  seedUser(db, 5, "pair@example.com");
+  const wish = seedWish(db, { user_id: 5 });
+  seedUser(db, 6, "other@example.com");
+  const other = seedWish(db, { user_id: 6 });
+  saveMatchSubscription(db, 2, 99, "instant", NOW);
+  const pair = () => ({
+    generation: 1,
+    items: [{ wish_ref: wish.public_token, user_id: 5, wish_id: wish.id }],
+  });
+  assert.equal(runRentalNotifyTick(db, NOW, { flags: FLAGS_ON, matchFn: pair }).matches.emitted, 1);
+  const bumped = () => ({
+    generation: 99,
+    items: [
+      { wish_ref: wish.public_token, user_id: 5, wish_id: wish.id },
+      { wish_ref: other.public_token, user_id: 6, wish_id: other.id },
+    ],
+  });
+  assert.equal(runRentalNotifyTick(db, NOW, { flags: FLAGS_ON, matchFn: bumped }).matches.emitted, 1);
+  const samePair = db.prepare("SELECT COUNT(*) AS n FROM rental_notify_events WHERE event_type = 'owner_new_match_available' AND subject_ref = ?").get(wish.public_token);
+  assert.equal(samePair.n, 1);
+  runRentalNotifyTick(db, NOW, { flags: FLAGS_ON, matchFn: () => ({ generation: 100, items: [] }) });
+  assert.equal(runRentalNotifyTick(db, NOW, { flags: FLAGS_ON, matchFn: pair }).matches.emitted, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM rental_notify_events WHERE event_type = 'owner_new_match_available' AND subject_ref = ?").get(wish.public_token).n, 2);
+
+  seedListing(db, 77, 2);
+  seedUser(db, 7, "blocked@example.com");
+  const blockedWish = seedWish(db, { user_id: 7 });
+  insertUserBlock(db, { blockerUserId: 7, blockedUserId: 2, now: NOW });
+  saveMatchSubscription(db, 2, 77, "instant", NOW);
+  const blocked = runRentalNotifyTick(db, NOW, {
+    flags: FLAGS_ON,
+    matchFn: (listingId) => listingId === 77
+      ? { items: [{ wish_ref: blockedWish.public_token, user_id: 7, wish_id: blockedWish.id }] }
+      : { items: [] },
+  });
+  assert.equal(blocked.matches.emitted, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM rental_notify_events WHERE subject_ref = ?").get(blockedWish.public_token).n, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM rental_digest_items WHERE wish_ref = ?").get(blockedWish.public_token).n, 0);
+  db.close();
+});
+
+test("P1-3 subscription mode is authoritative with default prefs", () => {
+  const db = open();
+  seedUser(db, 8, "mode@example.com");
+  const wish = seedWish(db, { user_id: 8 });
+  const prefs = getRentalNotifyPrefs(db, 2);
+  assert.equal(prefs.new_match, false);
+  assert.equal(prefs.daily_digest, false);
+  const items = [{ wish_ref: wish.public_token, user_id: 8, wish_id: wish.id }];
+
+  saveMatchSubscription(db, 2, 99, "off", NOW);
+  assert.equal(runRentalNotifyTick(db, NOW, { flags: FLAGS_ON, matchFn: () => ({ items }) }).matches.emitted, 0);
+
+  saveMatchSubscription(db, 2, 99, "instant", NOW);
+  const instant = runRentalNotifyTick(db, NOW, { flags: FLAGS_ON, matchFn: () => ({ items }) });
+  assert.equal(instant.matches.emitted, 1);
+  const dock = db.prepare("SELECT status FROM rental_notify_deliveries d JOIN rental_notify_events e ON e.id = d.event_id WHERE e.event_type = 'owner_new_match_available' AND d.channel = 'dock'").get();
+  assert.ok(dock);
+  assert.ok(["queued", "delivered"].includes(dock.status));
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM rental_digest_items").get().n, 0);
+
+  seedListing(db, 88, 2);
+  seedUser(db, 9, "digest@example.com");
+  const digestWish = seedWish(db, { user_id: 9 });
+  saveMatchSubscription(db, 2, 88, "daily_digest", NOW);
+  const digestTick = runRentalNotifyTick(db, NOW, {
+    flags: FLAGS_ON,
+    matchFn: (listingId) => listingId === 88
+      ? { items: [{ wish_ref: digestWish.public_token, user_id: 9, wish_id: digestWish.id }] }
+      : { items: [] },
+  });
+  assert.equal(digestTick.matches.emitted, 1);
+  const immediate = db.prepare(`
+    SELECT d.status FROM rental_notify_deliveries d
+    JOIN rental_notify_events e ON e.id = d.event_id
+    WHERE e.subject_ref = ? AND e.event_type = 'owner_new_match_available'
+  `).all(digestWish.public_token);
+  assert.equal(immediate.length, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM rental_digest_items WHERE wish_ref = ?").get(digestWish.public_token).n, 1);
+  db.close();
+});
+
+test("P1-4 digest finalizes only after successful delivery and mail needs a sink", () => {
+  const db = open();
+  const ev = emitRentalNotifyEvent(db, {
+    eventType: "owner_new_match_available",
+    userId: 2,
+    eventKey: "owner_new_match_available:2:99:digestretry:1",
+    now: NOW,
+    queue: false,
+  });
+  addDigestItem(db, { userId: 2, eventId: ev.event_id, listingId: 99, wishRef: "digestretry", now: NOW });
+  const closeAt = new Date("2026-09-18T00:00:00.000Z");
+  const closed = closeDigestBuckets(db, closeAt);
+  assert.equal(closed.closed, 1);
+  const queued = db.prepare("SELECT * FROM rental_digest_buckets WHERE user_id = 2").get();
+  assert.equal(queued.status, "queued");
+  assert.ok(queued.event_id);
+
+  let boom = true;
+  setRentalNotifyDockWriter(() => { if (boom) throw new Error("dock_down"); });
+  const failed = deliverQueuedNotifications(db, closeAt);
+  assert.equal(failed.failed, 1);
+  assert.equal(db.prepare("SELECT status FROM rental_digest_buckets WHERE id = ?").get(queued.id).status, "queued");
+  boom = false;
+  const retryAt = new Date(closeAt.getTime() + 3 * 60_000);
+  const ok = deliverQueuedNotifications(db, retryAt);
+  assert.equal(ok.delivered, 1);
+  assert.equal(db.prepare("SELECT status FROM rental_digest_buckets WHERE id = ?").get(queued.id).status, "delivered");
+  const again = closeDigestBuckets(db, new Date("2026-09-18T00:00:00.000Z"));
+  assert.equal(again.closed, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM rental_notify_events WHERE event_type = 'owner_match_digest_ready'").get().n, 1);
+
+  const mailFlags = {
+    ...FLAGS_ON,
+    wish: { ...FLAGS_ON.wish, outbound_mail_enabled: true },
+  };
+  setRentalNotifyHydrate(mailFlags);
+  saveRentalNotifyPrefs(db, 1, { channel_mail: true, channel_dock: false }, NOW);
+  setRentalNotifyMailSink(null);
+  emitRentalNotifyEvent(db, {
+    eventType: "wish_completed",
+    userId: 1,
+    eventKey: "wish_completed:mail-sink",
+    now: NOW,
+  });
+  const noSink = deliverQueuedNotifications(db, NOW);
+  assert.equal(noSink.failed, 1);
+  assert.equal(db.prepare("SELECT status FROM rental_notify_deliveries WHERE event_id = (SELECT id FROM rental_notify_events WHERE event_key = 'wish_completed:mail-sink') AND channel = 'mail'").get().status, "retrying");
+  const sent = [];
+  setRentalNotifyMailSink((msg) => sent.push(msg));
+  const withSink = deliverQueuedNotifications(db, new Date(NOW.getTime() + 3 * 60_000));
+  assert.equal(withSink.delivered, 1);
+  assert.equal(sent.length, 1);
+  setRentalNotifyMailSink(null);
+  setRentalNotifyPushSink(null);
+  setRentalNotifyDockWriter(null);
+  db.close();
+});
+
+test("P1-5 public share cannot forge conversions; login is not signup; cookie must be a real wish", () => {
+  const db = open();
+  const wish = seedWish(db);
+  resetShareGrowthLimits();
+  assert.throws(
+    () => recordShareEvent(db, { shareToken: wish.public_token, eventType: "signup", source: "public", now: NOW }),
+    /無法記錄轉換/,
+  );
+  assert.throws(
+    () => recordShareEvent(db, { shareToken: "forged-share-token-xxxx", eventType: "signup", source: "server", userId: 2, now: NOW }),
+    /找不到分享/,
+  );
+  const signup = recordShareEvent(db, {
+    shareToken: wish.public_token,
+    eventType: "signup",
+    source: "server",
+    userId: 2,
+    now: NOW,
+  });
+  assert.equal(signup.recorded, true);
+  assert.equal(shouldAttributeSignup({ newlyCreated: false }), false);
+  assert.equal(shouldAttributeSignup({ newlyCreated: true }), true);
+  assert.equal(shouldAttributeSignup({ source: "verify_email" }), true);
+  assert.equal(shouldAttributeSignup({ source: "oauth_register" }), true);
+  const src = readServerSharePolicy();
+  assert.match(src, /oauthIsNewRegister/);
+  assert.doesNotMatch(src, /verifyLogin[\s\S]{0,240}attributeShare\(req, user\.id, "signup"\)/);
+  resetShareGrowthLimits();
+  for (let i = 0; i < 2100; i += 1) {
+    try {
+      recordShareEvent(db, {
+        shareToken: wish.public_token,
+        eventType: "view",
+        ip: `10.0.${Math.floor(i / 250)}.${i % 250}`,
+        userAgent: `Mozilla/${i}`,
+        now: NOW,
+      });
+    } catch (error) {
+      if (error.code !== "RATE_LIMITED") throw error;
+    }
+  }
+  assert.ok(shareLimiterSize() <= 2048, `limiter ${shareLimiterSize()}`);
+  db.close();
+});
+
+test("P1-6 cleanup never orphans queued or retrying deliveries", () => {
+  const db = open();
+  const old = "2025-01-01T00:00:00.000Z";
+  db.prepare(`
+    INSERT INTO rental_notify_events(event_key, event_type, user_id, subject_type, subject_ref, payload_json, created_at)
+    VALUES ('old-queued', 'wish_completed', 1, 'wish', 'w1', '{}', ?)
+  `).run(old);
+  db.prepare(`
+    INSERT INTO rental_notify_deliveries(event_id, user_id, channel, status, attempt, next_retry_at, last_error, created_at, updated_at)
+    VALUES (1, 1, 'dock', 'queued', 0, ?, '', ?, ?)
+  `).run(old, old, old);
+  db.prepare(`
+    INSERT INTO rental_notify_events(event_key, event_type, user_id, subject_type, subject_ref, payload_json, created_at)
+    VALUES ('old-done', 'wish_completed', 1, 'wish', 'w2', '{}', ?)
+  `).run(old);
+  db.prepare(`
+    INSERT INTO rental_notify_deliveries(event_id, user_id, channel, status, attempt, next_retry_at, last_error, created_at, updated_at)
+    VALUES (2, 1, 'dock', 'delivered', 1, NULL, '', ?, ?)
+  `).run(old, old);
+  const out = cleanupRentalNotify(db, NOW);
+  assert.equal(out.events, 1);
+  assert.ok(db.prepare("SELECT id FROM rental_notify_events WHERE event_key = 'old-queued'").get());
+  assert.ok(db.prepare("SELECT id FROM rental_notify_deliveries WHERE event_id = 1 AND status = 'queued'").get());
+  assert.equal(db.prepare("SELECT id FROM rental_notify_events WHERE event_key = 'old-done'").get(), undefined);
+  assert.equal(db.prepare("SELECT id FROM rental_notify_deliveries WHERE event_id = 2").get(), undefined);
+  db.close();
+});
+
+test("P1-7 ownership and active-offer checks fail closed", () => {
+  const db = open();
+  const wish = seedWish(db, { last_active_at: "2026-08-01T00:00:00.000Z" });
+  assert.equal(listingOwnedBy(db, 2, 99).found, true);
+  db.exec("DROP TABLE listings");
+  assert.throws(() => listingOwnedBy(db, 2, 99), /listings_unavailable/);
+  db.exec("DROP TABLE wish_offers");
+  assert.throws(() => wishHasActiveOffer(db, wish.id), /wish_offers_unavailable/);
+  const quiet = scheduleTenantRetention(db, NOW);
+  assert.equal(quiet.emitted, 0);
+  assert.ok(quiet.skipped_policy >= 1);
+  db.close();
+});
+
+test("P1-8 median uses the full accepted population and clone is not resume", () => {
+  const db = open();
+  const created = "2026-09-01T00:00:00.000Z";
+  for (let i = 1; i <= 201; i += 1) {
+    const accepted = new Date(Date.parse(created) + i * 1000).toISOString();
+    db.prepare(`
+      INSERT INTO wish_offers(public_token, wish_id, listing_id, owner_user_id, tenant_user_id, status, created_at, updated_at, accepted_at)
+      VALUES (?, 1, 99, 2, 1, 'accepted', ?, ?, ?)
+    `).run(`med${i}`, created, created, accepted);
+  }
+  const summary = rentalOpsSummary(db, { from: "2026-09-01", to: "2026-09-17" });
+  assert.equal(summary.offers.median_sample_size, 201);
+  assert.equal(summary.offers.median_seconds_to_accept, 101);
+  db.prepare("INSERT INTO rental_analytics_daily(day, metric, value) VALUES ('2026-09-10', 'wish_resumed', 4)").run();
+  db.prepare("INSERT INTO rental_analytics_daily(day, metric, value) VALUES ('2026-09-10', 'wish_cloned', 9)").run();
+  const labeled = rentalOpsSummary(db, { from: "2026-09-01", to: "2026-09-17" });
+  assert.equal(labeled.wish.resumed, 4);
+  assert.equal(labeled.wish.clone_or_restart, 9);
+  assert.notEqual(labeled.wish.clone_or_restart, labeled.wish.resumed);
+  const broken = open();
+  broken.exec("DROP TABLE wish_offers");
+  assert.throws(() => rentalOpsSummary(broken, { from: "2026-09-01", to: "2026-09-17" }), /營運分析查詢失敗/);
+  broken.close();
+  db.close();
+});
+
+function readServerSharePolicy() {
+  return readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+}

@@ -930,14 +930,20 @@ app.post("/api/public/wish-room/:id/share-events", (req, res) => {
     }
     const post = getDemand(req.params.id, { viewerId: 0, publicOnly: true });
     const token = post?.public_token || post?.public_ref || req.params.id;
+    const eventType = String(req.body?.event_type || "view");
+    if (!["view", "cta"].includes(eventType)) {
+      res.status(403).json({ error: "無法記錄轉換", code: "share_conversion_forbidden" });
+      return;
+    }
     const session = readSession(req);
     setShareCookie(res, token);
     res.json(recordShareEventFor({
       shareToken: token,
-      eventType: req.body?.event_type || "view",
+      eventType,
       userId: session?.userId || null,
       ip: clientIp(req),
       userAgent: req.get("user-agent") || "",
+      source: "public",
     }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
@@ -982,7 +988,6 @@ app.post("/api/login", (req, res) => {
     assertHuman(req.body);
     const user = verifyLogin(req.body?.email, req.body?.password, { keys });
     afterMemberSession(user);
-    attributeShare(req, user.id, "signup");
     setSession(req, res, user.email);
     res.json({ ok: true, email: user.email, role: user.role, plan: user.plan });
   } catch (error) {
@@ -1082,6 +1087,7 @@ function attributeShare(req, userId, eventType) {
       userId,
       ip: clientIp(req),
       userAgent: req.get("user-agent") || "",
+      source: "server",
     });
   } catch { /* attribution never blocks */ }
 }
@@ -1163,6 +1169,7 @@ app.get("/auth/:provider/callback", async (req, res) => {
     });
     let user = findUserByEmail(profile.email);
     const signup = planOauthSignup({ user, accept: state.accept === true });
+    const oauthIsNewRegister = signup.action === "register";
     if (signup.action === "closed") {
       const err = new Error("這個 Email 的帳號已關閉");
       err.status = 409;
@@ -1214,7 +1221,7 @@ app.get("/auth/:provider/callback", async (req, res) => {
       return;
     }
     afterMemberSession(user);
-    attributeShare(req, user.id, "signup");
+    if (oauthIsNewRegister) attributeShare(req, user.id, "signup");
     res.setHeader("Set-Cookie", [
       oauthStateCookie(req, "", { clear: true }),
       sessionCookie(req, user.email),

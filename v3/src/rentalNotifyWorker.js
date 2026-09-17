@@ -1,23 +1,19 @@
 /** PR D workers：lifecycle reminder、digest、delivery retry、cleanup。不綁 crawler。 */
 
 import {
-  addDigestItem,
   cleanupRentalNotify,
   closeDigestBuckets,
   deliverQueuedNotifications,
-  emitRentalNotifyEvent,
-  hasSeenMatch,
   listDueMatchSubscriptions,
-  listingOpenForNotify,
+  processMatchSubscriptionRow,
   RENTAL_NOTIFY_BATCH,
-  recordMatchSeen,
   scheduleLifecycleReminders,
   scheduleOfferExpiring,
   scheduleOwnerRetention,
   scheduleTenantRetention,
   setRentalNotifyHydrate,
 } from "./rentalNotify.js";
-import { isRentalDigestEnabled, isRentalNotificationsEnabled, isWishOwnerMatchingEnabled } from "./rentalMarketplaceFlags.js";
+import { isRentalNotificationsEnabled, isWishOwnerMatchingEnabled } from "./rentalMarketplaceFlags.js";
 
 export function startRentalNotifyLoop(runTick, {
   intervalMs = 5 * 60 * 1000,
@@ -74,45 +70,16 @@ function processMatchSubscriptions(db, now, { limit, matchFn, flags }) {
   if (!isWishOwnerMatchingEnabled(flags) || typeof matchFn !== "function") {
     return { scanned: 0, emitted: 0 };
   }
-  const rows = listDueMatchSubscriptions(db, { limit });
+  const rows = listDueMatchSubscriptions(db, { limit, now });
   let emitted = 0;
   for (const sub of rows) {
-    if (!listingOpenForNotify(db, sub.owner_user_id, sub.listing_id)) continue;
     let page;
     try {
-      page = matchFn(sub.listing_id, sub.owner_user_id) || { items: [], generation: 0 };
+      page = matchFn(sub.listing_id, sub.owner_user_id) || { items: [] };
     } catch {
       continue;
     }
-    const generation = Number(page.generation || page.epoch || 0);
-    for (const item of (page.items || []).slice(0, 20)) {
-      const wishRef = item.wish_ref || item.public_token || "";
-      if (!wishRef || hasSeenMatch(db, sub.owner_user_id, sub.listing_id, wishRef, generation)) continue;
-      const key = `owner_new_match_available:${sub.owner_user_id}:${sub.listing_id}:${wishRef}:${generation}`;
-      const result = emitRentalNotifyEvent(db, {
-        eventType: "owner_new_match_available",
-        userId: sub.owner_user_id,
-        eventKey: key,
-        subjectType: "wish",
-        subjectRef: wishRef,
-        listingId: sub.listing_id,
-        payload: { listing_ref: sub.listing_id },
-        now,
-      });
-      recordMatchSeen(db, sub.owner_user_id, sub.listing_id, wishRef, generation, now);
-      if (result.emitted) {
-        emitted += 1;
-        if (sub.mode === "daily_digest" && isRentalDigestEnabled(flags) && result.event_id) {
-          addDigestItem(db, {
-            userId: sub.owner_user_id,
-            eventId: result.event_id,
-            listingId: sub.listing_id,
-            wishRef,
-            now,
-          });
-        }
-      }
-    }
+    emitted += processMatchSubscriptionRow(db, sub, page, now, flags).emitted;
   }
   return { scanned: rows.length, emitted };
 }

@@ -6,10 +6,10 @@ import {
   isRentalNotificationsEnabled,
   isRentalOutboundMailEnabled,
   isRentalOutboundPushEnabled,
-  isWishOwnerMatchingEnabled,
 } from "./rentalMarketplaceFlags.js";
 import { remainingTtlDays, WISH_CONFIRM_GRACE_DAYS } from "./wishLifecycle.js";
 import { sanitizeDocumentText } from "./safeContent.js";
+import { ensureUserBlockSchema, tenantBlocksOwner } from "./userBlocks.js";
 
 export const RENTAL_NOTIFY_EVENT_TYPES = Object.freeze([
   "wish_lifecycle_due_3d",
@@ -42,6 +42,8 @@ const PII_KEYS = Object.freeze(["phone", "email", "line_url", "contact", "sessio
 
 let flagsCache = {};
 let dockWriter = null;
+let mailSink = null;
+let pushSink = null;
 
 export function setRentalNotifyHydrate(flags) {
   flagsCache = flags || {};
@@ -49,6 +51,14 @@ export function setRentalNotifyHydrate(flags) {
 
 export function setRentalNotifyDockWriter(fn) {
   dockWriter = typeof fn === "function" ? fn : null;
+}
+
+export function setRentalNotifyMailSink(fn) {
+  mailSink = typeof fn === "function" ? fn : null;
+}
+
+export function setRentalNotifyPushSink(fn) {
+  pushSink = typeof fn === "function" ? fn : null;
 }
 
 export function assertRentalNotificationsEnabled() {
@@ -85,17 +95,35 @@ export function isoWeekKey(now = new Date()) {
   return `${utc.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
 }
 
-function wishHasActiveOffer(db, wishId) {
+function hasTable(db, name) {
+  return Boolean(db.prepare("SELECT 1 AS n FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
+}
+
+function policyCheckError(message, cause) {
+  const err = new Error(message);
+  err.code = "policy_check_failed";
+  err.status = 500;
+  if (cause) err.cause = cause;
+  return err;
+}
+
+export function wishHasActiveOffer(db, wishId) {
+  if (!hasTable(db, "wish_offers")) {
+    throw policyCheckError("wish_offers_unavailable");
+  }
   try {
     return Boolean(db.prepare(
       "SELECT 1 AS n FROM wish_offers WHERE wish_id = ? AND status IN ('pending', 'accepted') LIMIT 1",
     ).get(Number(wishId) || 0));
-  } catch {
-    return false;
+  } catch (error) {
+    throw policyCheckError("wish_offer_lookup_failed", error);
   }
 }
 
-function listingOwnedBy(db, ownerUserId, listingId) {
+export function listingOwnedBy(db, ownerUserId, listingId) {
+  if (!hasTable(db, "listings")) {
+    throw policyCheckError("listings_unavailable");
+  }
   try {
     const row = db.prepare(
       "SELECT listed_by_user_id, COALESCE(self_status, 'open') AS self_status FROM listings WHERE post_id = ? AND COALESCE(source, '591') = 'self'",
@@ -105,8 +133,9 @@ function listingOwnedBy(db, ownerUserId, listingId) {
       found: Number(row.listed_by_user_id) === Number(ownerUserId),
       open: String(row.self_status || "open") === "open",
     };
-  } catch {
-    return { found: true, open: true };
+  } catch (error) {
+    if (error?.code === "policy_check_failed") throw error;
+    throw policyCheckError("listing_ownership_lookup_failed", error);
   }
 }
 
@@ -137,6 +166,7 @@ export function rentalNotifyHttpError(message, status = 400, code = "") {
 }
 
 export function ensureRentalNotifySchema(db) {
+  ensureUserBlockSchema(db);
   db.exec(`
     CREATE TABLE IF NOT EXISTS rental_notify_prefs (
       user_id INTEGER PRIMARY KEY,
@@ -204,6 +234,7 @@ export function ensureRentalNotifySchema(db) {
       overflow_count INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       delivered_at TEXT,
+      event_id INTEGER,
       UNIQUE(user_id, channel, bucket_date, kind)
     );
     CREATE INDEX IF NOT EXISTS idx_rental_digest_status
@@ -222,8 +253,15 @@ export function ensureRentalNotifySchema(db) {
       listing_id INTEGER NOT NULL,
       wish_ref TEXT NOT NULL,
       generation INTEGER NOT NULL DEFAULT 0,
+      eligible INTEGER NOT NULL DEFAULT 1,
+      episode INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL,
       PRIMARY KEY (owner_user_id, listing_id, wish_ref)
+    );
+    CREATE TABLE IF NOT EXISTS rental_notify_cursors (
+      job TEXT PRIMARY KEY,
+      last_id INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS rental_unsubscribe_tokens (
       token TEXT PRIMARY KEY,
@@ -280,7 +318,17 @@ export function ensureRentalNotifySchema(db) {
       ON rental_share_events(created_at, id);
     CREATE INDEX IF NOT EXISTS idx_rental_share_visitor
       ON rental_share_events(share_token, event_type, visitor_hash, created_at);
+    CREATE INDEX IF NOT EXISTS idx_rental_match_subs_mode_id
+      ON rental_match_subscriptions(mode, id);
   `);
+  for (const [table, def] of [
+    ["rental_match_seen", "eligible INTEGER NOT NULL DEFAULT 1"],
+    ["rental_match_seen", "episode INTEGER NOT NULL DEFAULT 1"],
+    ["rental_digest_buckets", "event_id INTEGER"],
+  ]) {
+    try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${def}`); } catch { /* already present */ }
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_rental_digest_event ON rental_digest_buckets(event_id)");
 }
 
 export function defaultRentalNotifyPrefs() {
@@ -373,6 +421,13 @@ export function applyUnsubscribeToken(db, token, now = new Date()) {
     : scope === "new_match" ? { new_match: false, daily_digest: false }
       : scope === "digest" ? { daily_digest: false }
         : { lifecycle_reminder: false, new_match: false, daily_digest: false, channel_mail: false, channel_push: false };
+  if (scope === "new_match" || scope === "all") {
+    db.prepare("UPDATE rental_match_subscriptions SET mode = 'off', updated_at = ? WHERE owner_user_id = ?")
+      .run(iso(now), row.user_id);
+  } else if (scope === "digest") {
+    db.prepare("UPDATE rental_match_subscriptions SET mode = 'off', updated_at = ? WHERE owner_user_id = ? AND mode = 'daily_digest'")
+      .run(iso(now), row.user_id);
+  }
   const prev = flagsCache;
   flagsCache = { ...prev, wish: { ...(prev.wish || {}), notifications_enabled: true } };
   try {
@@ -442,7 +497,8 @@ function preferenceAllows(prefs, eventType) {
     return prefs.lifecycle_reminder;
   }
   if (["owner_new_match_available", "owner_match_digest_ready", "owner_retention_matches"].includes(eventType)) {
-    return prefs.new_match || prefs.daily_digest;
+    // 訂閱 mode 是新配對的權威來源；帳號 prefs 只當 channel gate。
+    return true;
   }
   if (["tenant_offer_received", "tenant_offer_accepted_ack", "owner_offer_accepted", "offer_expiring_soon"].includes(eventType)) {
     return prefs.offer_transactional;
@@ -487,6 +543,7 @@ export function emitRentalNotifyEvent(db, {
   listingId = null,
   payload = {},
   now = new Date(),
+  queue = true,
 } = {}) {
   if (!isRentalNotificationsEnabled(flagsCache)) return { emitted: false, reason: "flag_off" };
   if (!RENTAL_NOTIFY_EVENT_TYPES.includes(eventType)) return { emitted: false, reason: "unknown_type" };
@@ -504,14 +561,15 @@ export function emitRentalNotifyEvent(db, {
   } catch (error) {
     if (String(error.message || "").includes("UNIQUE")) {
       bumpAnalytics(db, "notify_deduped", now);
-      return { emitted: false, reason: "deduped", event_key: key };
+      const existing = db.prepare("SELECT id FROM rental_notify_events WHERE event_key = ?").get(key);
+      return { emitted: false, reason: "deduped", event_key: key, event_id: existing?.id || 0 };
     }
     throw error;
   }
-  if (!inserted) return { emitted: false, reason: "deduped", event_key: key };
-  bumpAnalytics(db, "notify_generated", now);
   const event = db.prepare("SELECT * FROM rental_notify_events WHERE event_key = ?").get(key);
-  queueDeliveries(db, event, now);
+  if (!inserted) return { emitted: false, reason: "deduped", event_key: key, event_id: event?.id || 0 };
+  bumpAnalytics(db, "notify_generated", now);
+  if (queue !== false) queueDeliveries(db, event, now);
   return { emitted: true, event_id: event.id, event_key: key };
 }
 
@@ -596,10 +654,28 @@ function deliverOne(db, row, now) {
         notified: 0,
       });
     }
-  } else if (row.channel === "mail" && !isRentalOutboundMailEnabled(flagsCache)) {
-    throw new Error("mail_channel_off");
-  } else if (row.channel === "push" && !isRentalOutboundPushEnabled(flagsCache)) {
-    throw new Error("push_channel_off");
+  } else if (row.channel === "mail") {
+    if (!isRentalOutboundMailEnabled(flagsCache)) throw new Error("mail_channel_off");
+    if (!mailSink) throw new Error("mail_no_provider");
+    mailSink({
+      user_id: row.user_id,
+      event_id: row.event_id,
+      event_type: row.event_type,
+      title: copy.title,
+      detail: copy.detail,
+    });
+  } else if (row.channel === "push") {
+    if (!isRentalOutboundPushEnabled(flagsCache)) throw new Error("push_channel_off");
+    if (!pushSink) throw new Error("push_no_provider");
+    pushSink({
+      user_id: row.user_id,
+      event_id: row.event_id,
+      event_type: row.event_type,
+      title: copy.title,
+      detail: copy.detail,
+    });
+  } else {
+    throw new Error("unknown_channel");
   }
   db.prepare(`
     UPDATE rental_notify_deliveries
@@ -607,6 +683,16 @@ function deliverOne(db, row, now) {
     WHERE id = ?
   `).run(iso(now), row.id);
   bumpAnalytics(db, "notify_delivered", now);
+  finalizeDigestIfDelivered(db, row, now);
+}
+
+function finalizeDigestIfDelivered(db, row, now) {
+  if (row.event_type !== "owner_match_digest_ready") return;
+  db.prepare(`
+    UPDATE rental_digest_buckets
+    SET status = 'delivered', delivered_at = ?
+    WHERE event_id = ? AND status IN ('queued', 'open')
+  `).run(iso(now), row.event_id);
 }
 
 export function reminderWindowForWish(row, now = new Date()) {
@@ -619,18 +705,39 @@ export function reminderWindowForWish(row, now = new Date()) {
   return null;
 }
 
+function getNotifyCursor(db, job) {
+  return Number(db.prepare("SELECT last_id FROM rental_notify_cursors WHERE job = ?").get(job)?.last_id) || 0;
+}
+
+function setNotifyCursor(db, job, lastId, now) {
+  db.prepare(`
+    INSERT INTO rental_notify_cursors(job, last_id, updated_at) VALUES (?, ?, ?)
+    ON CONFLICT(job) DO UPDATE SET last_id = excluded.last_id, updated_at = excluded.updated_at
+  `).run(job, Number(lastId) || 0, iso(now));
+}
+
+function takeAfterCursor(db, job, now, limit, selectFn) {
+  const cap = Math.min(RENTAL_NOTIFY_BATCH, Math.max(1, Number(limit) || 80));
+  const lastId = getNotifyCursor(db, job);
+  let rows = selectFn(lastId, cap);
+  if (!rows.length && lastId > 0) rows = selectFn(0, cap);
+  if (rows.length) setNotifyCursor(db, job, rows[rows.length - 1].id, now);
+  return rows;
+}
+
 export function scheduleLifecycleReminders(db, now = new Date(), { limit = RENTAL_NOTIFY_BATCH } = {}) {
   if (!isRentalNotificationsEnabled(flagsCache)) return { scanned: 0, emitted: 0 };
   const until = iso(new Date(atMs(now) + 4 * 86400000));
-  const rows = db.prepare(`
+  const rows = takeAfterCursor(db, "lifecycle_reminders", now, limit, (afterId, cap) => db.prepare(`
     SELECT id, user_id, public_token, lifecycle, expires_at, last_confirmed_at, last_active_at
     FROM demand_posts
     WHERE status = 'open'
       AND COALESCE(lifecycle, 'active') IN ('active', 'needs_confirmation')
       AND expires_at <= ?
-    ORDER BY expires_at ASC, id ASC
+      AND id > ?
+    ORDER BY id ASC
     LIMIT ?
-  `).all(until, Math.min(RENTAL_NOTIFY_BATCH, Math.max(1, Number(limit) || 80)));
+  `).all(until, afterId, cap));
   let emitted = 0;
   for (const row of rows) {
     const type = reminderWindowForWish(row, now);
@@ -703,9 +810,18 @@ export function closeDigestBuckets(db, now = new Date(), { limit = RENTAL_NOTIFY
       payload: { item_count: row.item_count, overflow_count: row.overflow_count },
       now,
     });
-    db.prepare("UPDATE rental_digest_buckets SET status = ?, delivered_at = ? WHERE id = ?")
-      .run(result.emitted || result.reason === "deduped" ? "delivered" : "failed", iso(now), row.id);
-    if (result.emitted || result.reason === "deduped") {
+    const eventId = Number(result.event_id) || 0;
+    if (!eventId) continue;
+    const queued = db.prepare(
+      "SELECT 1 AS n FROM rental_notify_deliveries WHERE event_id = ? AND status IN ('queued', 'retrying') LIMIT 1",
+    ).get(eventId);
+    const already = db.prepare(
+      "SELECT 1 AS n FROM rental_notify_deliveries WHERE event_id = ? AND status = 'delivered' LIMIT 1",
+    ).get(eventId);
+    const nextStatus = queued ? "queued" : already ? "delivered" : "suppressed";
+    db.prepare("UPDATE rental_digest_buckets SET status = ?, event_id = ?, delivered_at = ? WHERE id = ?")
+      .run(nextStatus, eventId, nextStatus === "delivered" ? iso(now) : null, row.id);
+    if (nextStatus === "queued" || nextStatus === "delivered") {
       closed += 1;
       bumpAnalytics(db, "digest_count", now);
     }
@@ -713,48 +829,156 @@ export function closeDigestBuckets(db, now = new Date(), { limit = RENTAL_NOTIFY
   return { closed, scanned: rows.length };
 }
 
-export function recordMatchSeen(db, ownerUserId, listingId, wishRef, generation, now = new Date()) {
-  db.prepare(`
-    INSERT INTO rental_match_seen(owner_user_id, listing_id, wish_ref, generation, created_at)
-    VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(owner_user_id, listing_id, wish_ref) DO UPDATE SET generation = excluded.generation
-  `).run(Number(ownerUserId), Number(listingId), String(wishRef || ""), Number(generation) || 0, iso(now));
-}
-
-export function hasSeenMatch(db, ownerUserId, listingId, wishRef, generation) {
+export function openMatchEpisodeIfNeeded(db, ownerUserId, listingId, wishRef, now = new Date()) {
+  const owner = Number(ownerUserId) || 0;
+  const listing = Number(listingId) || 0;
+  const ref = String(wishRef || "");
+  if (!owner || !listing || !ref) return { notify: false, episode: 0 };
   const row = db.prepare(
-    "SELECT generation FROM rental_match_seen WHERE owner_user_id = ? AND listing_id = ? AND wish_ref = ?",
-  ).get(Number(ownerUserId), Number(listingId), String(wishRef || ""));
-  return Boolean(row && Number(row.generation) === Number(generation));
+    "SELECT eligible, episode FROM rental_match_seen WHERE owner_user_id = ? AND listing_id = ? AND wish_ref = ?",
+  ).get(owner, listing, ref);
+  if (!row) {
+    db.prepare(`
+      INSERT INTO rental_match_seen(owner_user_id, listing_id, wish_ref, generation, eligible, episode, created_at)
+      VALUES (?, ?, ?, 0, 1, 1, ?)
+    `).run(owner, listing, ref, iso(now));
+    return { notify: true, episode: 1 };
+  }
+  if (Number(row.eligible) === 1) return { notify: false, episode: Number(row.episode) || 1 };
+  const episode = (Number(row.episode) || 0) + 1;
+  db.prepare(`
+    UPDATE rental_match_seen SET eligible = 1, episode = ? WHERE owner_user_id = ? AND listing_id = ? AND wish_ref = ?
+  `).run(episode, owner, listing, ref);
+  return { notify: true, episode };
 }
 
-export function listDueMatchSubscriptions(db, { limit = RENTAL_NOTIFY_BATCH } = {}) {
-  return db.prepare(
-    "SELECT * FROM rental_match_subscriptions WHERE mode IN ('instant', 'daily_digest') ORDER BY id ASC LIMIT ?",
-  ).all(Math.min(RENTAL_NOTIFY_BATCH, Number(limit) || 80));
+export function markMissingMatchesIneligible(db, ownerUserId, listingId, eligibleWishRefs = []) {
+  const keep = new Set((eligibleWishRefs || []).map((ref) => String(ref || "")).filter(Boolean));
+  const rows = db.prepare(
+    "SELECT wish_ref FROM rental_match_seen WHERE owner_user_id = ? AND listing_id = ? AND eligible = 1",
+  ).all(Number(ownerUserId) || 0, Number(listingId) || 0);
+  const update = db.prepare(
+    "UPDATE rental_match_seen SET eligible = 0 WHERE owner_user_id = ? AND listing_id = ? AND wish_ref = ?",
+  );
+  for (const row of rows) {
+    if (!keep.has(String(row.wish_ref))) update.run(Number(ownerUserId), Number(listingId), row.wish_ref);
+  }
+}
+
+export function resolveWishTenantId(db, item = {}) {
+  const direct = Number(item.user_id || item.tenant_user_id || 0);
+  if (direct) return direct;
+  if (item.wish_id) {
+    try {
+      const row = db.prepare("SELECT user_id FROM demand_posts WHERE id = ?").get(Number(item.wish_id));
+      if (row) return Number(row.user_id) || 0;
+    } catch {
+      return 0;
+    }
+  }
+  const ref = item.wish_ref || item.public_token || "";
+  if (!ref) return 0;
+  try {
+    const row = db.prepare("SELECT user_id FROM demand_posts WHERE public_token = ?").get(String(ref));
+    return Number(row?.user_id) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+export function pairIsBlockedForNotify(db, tenantUserId, ownerUserId) {
+  const tenant = Number(tenantUserId) || 0;
+  const owner = Number(ownerUserId) || 0;
+  if (!tenant || !owner) return true;
+  try {
+    return tenantBlocksOwner(db, tenant, owner);
+  } catch {
+    return true;
+  }
+}
+
+export function processMatchSubscriptionRow(db, sub, page, now, flags) {
+  if (!listingOpenForNotify(db, sub.owner_user_id, sub.listing_id)) return { emitted: 0 };
+  if (sub.mode === "off") return { emitted: 0 };
+  const items = (page?.items || []).slice(0, 20);
+  const eligibleRefs = [];
+  let emitted = 0;
+  for (const item of items) {
+    const wishRef = item.wish_ref || item.public_token || "";
+    if (!wishRef) continue;
+    const tenantId = resolveWishTenantId(db, item);
+    if (pairIsBlockedForNotify(db, tenantId, sub.owner_user_id)) continue;
+    eligibleRefs.push(wishRef);
+    const episode = openMatchEpisodeIfNeeded(db, sub.owner_user_id, sub.listing_id, wishRef, now);
+    if (!episode.notify) continue;
+    const result = emitRentalNotifyEvent(db, {
+      eventType: "owner_new_match_available",
+      userId: sub.owner_user_id,
+      eventKey: `owner_new_match_available:${sub.owner_user_id}:${sub.listing_id}:${wishRef}:${episode.episode}`,
+      subjectType: "wish",
+      subjectRef: wishRef,
+      listingId: sub.listing_id,
+      payload: { listing_ref: sub.listing_id, episode: episode.episode },
+      now,
+      queue: sub.mode === "instant",
+    });
+    if (result.emitted) {
+      emitted += 1;
+      if (sub.mode === "daily_digest" && isRentalDigestEnabled(flags) && result.event_id) {
+        addDigestItem(db, {
+          userId: sub.owner_user_id,
+          eventId: result.event_id,
+          listingId: sub.listing_id,
+          wishRef,
+          now,
+        });
+      }
+    }
+  }
+  markMissingMatchesIneligible(db, sub.owner_user_id, sub.listing_id, eligibleRefs);
+  return { emitted };
+}
+
+export function recordMatchSeen(db, ownerUserId, listingId, wishRef, _generation, now = new Date()) {
+  openMatchEpisodeIfNeeded(db, ownerUserId, listingId, wishRef, now);
+}
+
+export function hasSeenMatch(db, ownerUserId, listingId, wishRef) {
+  const row = db.prepare(
+    "SELECT eligible FROM rental_match_seen WHERE owner_user_id = ? AND listing_id = ? AND wish_ref = ?",
+  ).get(Number(ownerUserId), Number(listingId), String(wishRef || ""));
+  return Boolean(row && Number(row.eligible) === 1);
+}
+
+export function listDueMatchSubscriptions(db, { limit = RENTAL_NOTIFY_BATCH, now = new Date() } = {}) {
+  return takeAfterCursor(db, "match_subscriptions", now, limit, (afterId, cap) => db.prepare(`
+    SELECT * FROM rental_match_subscriptions
+    WHERE mode IN ('instant', 'daily_digest') AND id > ?
+    ORDER BY id ASC LIMIT ?
+  `).all(afterId, cap));
 }
 
 export function listingOpenForNotify(db, ownerUserId, listingId) {
-  const owned = listingOwnedBy(db, ownerUserId, listingId);
-  return owned.found && owned.open;
+  try {
+    const owned = listingOwnedBy(db, ownerUserId, listingId);
+    return owned.found && owned.open;
+  } catch {
+    return false;
+  }
 }
 
 export function scheduleOfferExpiring(db, now = new Date(), { limit = RENTAL_NOTIFY_BATCH } = {}) {
   if (!isRentalNotificationsEnabled(flagsCache)) return { scanned: 0, emitted: 0 };
+  if (!hasTable(db, "wish_offers")) return { scanned: 0, emitted: 0, error: "wish_offers_unavailable" };
   const soon = iso(new Date(atMs(now) + 36 * 3600_000));
   const laterThan = iso(now);
-  let rows = [];
-  try {
-    rows = db.prepare(`
-      SELECT id, tenant_user_id, owner_user_id, public_token, listing_id, expires_at
-      FROM wish_offers
-      WHERE status = 'pending' AND expires_at > ? AND expires_at <= ?
-      ORDER BY expires_at ASC, id ASC
-      LIMIT ?
-    `).all(laterThan, soon, Math.min(RENTAL_NOTIFY_BATCH, Number(limit) || 80));
-  } catch {
-    return { scanned: 0, emitted: 0 };
-  }
+  const rows = takeAfterCursor(db, "offer_expiring", now, limit, (afterId, cap) => db.prepare(`
+    SELECT id, tenant_user_id, owner_user_id, public_token, listing_id, expires_at
+    FROM wish_offers
+    WHERE status = 'pending' AND expires_at > ? AND expires_at <= ? AND id > ?
+    ORDER BY id ASC
+    LIMIT ?
+  `).all(laterThan, soon, afterId, cap));
   let emitted = 0;
   for (const row of rows) {
     const deadline = String(row.expires_at || "").slice(0, 10);
@@ -776,18 +1000,27 @@ export function scheduleTenantRetention(db, now = new Date(), { limit = RENTAL_N
   if (!isRentalNotificationsEnabled(flagsCache)) return { scanned: 0, emitted: 0 };
   const quietBefore = iso(new Date(atMs(now) - 14 * 86400000));
   const week = isoWeekKey(now);
-  const rows = db.prepare(`
+  const rows = takeAfterCursor(db, "tenant_retention", now, limit, (afterId, cap) => db.prepare(`
     SELECT id, user_id, public_token, lifecycle, last_active_at
     FROM demand_posts
     WHERE status = 'open'
       AND COALESCE(lifecycle, 'active') = 'active'
       AND COALESCE(last_active_at, created_at) <= ?
-    ORDER BY last_active_at ASC, id ASC
+      AND id > ?
+    ORDER BY id ASC
     LIMIT ?
-  `).all(quietBefore, Math.min(RENTAL_NOTIFY_BATCH, Number(limit) || 80));
+  `).all(quietBefore, afterId, cap));
   let emitted = 0;
+  let skippedPolicy = 0;
   for (const row of rows) {
-    if (wishHasActiveOffer(db, row.id)) continue;
+    let hasOffer;
+    try {
+      hasOffer = wishHasActiveOffer(db, row.id);
+    } catch {
+      skippedPolicy += 1;
+      continue;
+    }
+    if (hasOffer) continue;
     const result = emitRentalNotifyEvent(db, {
       eventType: "tenant_retention_quiet",
       userId: row.user_id,
@@ -798,19 +1031,19 @@ export function scheduleTenantRetention(db, now = new Date(), { limit = RENTAL_N
     });
     if (result.emitted) emitted += 1;
   }
-  return { scanned: rows.length, emitted };
+  return { scanned: rows.length, emitted, skipped_policy: skippedPolicy };
 }
 
 export function scheduleOwnerRetention(db, now = new Date(), { limit = RENTAL_NOTIFY_BATCH } = {}) {
   if (!isRentalNotificationsEnabled(flagsCache)) return { scanned: 0, emitted: 0 };
   const week = isoWeekKey(now);
-  const rows = db.prepare(`
-    SELECT owner_user_id, listing_id
+  const rows = takeAfterCursor(db, "owner_retention", now, limit, (afterId, cap) => db.prepare(`
+    SELECT id, owner_user_id, listing_id
     FROM rental_match_subscriptions
-    WHERE mode IN ('instant', 'daily_digest')
+    WHERE mode IN ('instant', 'daily_digest') AND id > ?
     ORDER BY id ASC
     LIMIT ?
-  `).all(Math.min(RENTAL_NOTIFY_BATCH, Number(limit) || 80));
+  `).all(afterId, cap));
   const owners = new Map();
   for (const row of rows) {
     if (!listingOpenForNotify(db, row.owner_user_id, row.listing_id)) continue;
@@ -835,9 +1068,34 @@ export function scheduleOwnerRetention(db, now = new Date(), { limit = RENTAL_NO
 export function cleanupRentalNotify(db, now = new Date(), { limit = RENTAL_NOTIFY_BATCH } = {}) {
   const eventCut = iso(new Date(atMs(now) - RENTAL_EVENT_RETENTION_DAYS * 86400000));
   const attrCut = iso(new Date(atMs(now) - RENTAL_ATTRIBUTION_RETENTION_DAYS * 86400000));
-  const events = db.prepare("DELETE FROM rental_notify_events WHERE created_at < ? AND id IN (SELECT id FROM rental_notify_events WHERE created_at < ? LIMIT ?)").run(eventCut, eventCut, limit);
-  const share = db.prepare("DELETE FROM rental_share_events WHERE created_at < ? AND id IN (SELECT id FROM rental_share_events WHERE created_at < ? LIMIT ?)").run(attrCut, attrCut, limit);
-  return { events: Number(events.changes) || 0, share: Number(share.changes) || 0 };
+  const cap = Math.min(RENTAL_NOTIFY_BATCH, Math.max(1, Number(limit) || 80));
+  const eligible = db.prepare(`
+    SELECT e.id FROM rental_notify_events e
+    WHERE e.created_at < ?
+      AND NOT EXISTS (
+        SELECT 1 FROM rental_notify_deliveries d
+        WHERE d.event_id = e.id AND d.status IN ('queued', 'retrying')
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM rental_digest_items i
+        JOIN rental_digest_buckets b ON b.id = i.bucket_id
+        WHERE i.event_id = e.id AND b.status IN ('open', 'queued')
+      )
+    ORDER BY e.id ASC
+    LIMIT ?
+  `).all(eventCut, cap);
+  const ids = eligible.map((row) => row.id);
+  if (ids.length) {
+    const placeholders = ids.map(() => "?").join(",");
+    db.prepare(`DELETE FROM rental_digest_items WHERE event_id IN (${placeholders})`).run(...ids);
+    db.prepare(`
+      DELETE FROM rental_notify_deliveries
+      WHERE event_id IN (${placeholders}) AND status NOT IN ('queued', 'retrying')
+    `).run(...ids);
+    db.prepare(`DELETE FROM rental_notify_events WHERE id IN (${placeholders})`).run(...ids);
+  }
+  const share = db.prepare("DELETE FROM rental_share_events WHERE created_at < ? AND id IN (SELECT id FROM rental_share_events WHERE created_at < ? LIMIT ?)").run(attrCut, attrCut, cap);
+  return { events: ids.length, share: Number(share.changes) || 0 };
 }
 
 export function explainRentalNotifyPlans(db) {
@@ -850,7 +1108,7 @@ export function explainRentalNotifyPlans(db) {
     delivery_retry: explain("SELECT id FROM rental_notify_deliveries WHERE status IN ('queued','retrying') AND next_retry_at <= '2026-10-01' ORDER BY id ASC LIMIT 80"),
     digest_bucket: explain("SELECT id FROM rental_digest_buckets WHERE user_id = 1 AND channel = 'dock' AND bucket_date = '2026-09-17' AND kind = 'owner_new_match'"),
     match_sub: explain("SELECT id FROM rental_match_subscriptions WHERE owner_user_id = 1 AND mode IN ('instant','daily_digest')"),
-    match_seen: explain("SELECT generation FROM rental_match_seen WHERE owner_user_id = 1 AND listing_id = 1 AND wish_ref = 'abc'"),
+    match_seen: explain("SELECT eligible, episode FROM rental_match_seen WHERE owner_user_id = 1 AND listing_id = 1 AND wish_ref = 'abc'"),
     survey_due: explain("SELECT id FROM demand_posts WHERE lifecycle = 'completed' ORDER BY updated_at DESC LIMIT 80"),
     analytics_range: explain("SELECT day, value FROM rental_analytics_daily WHERE metric = 'notify_generated' AND day >= '2026-09-01' AND day <= '2026-09-17'"),
     share_lookup: explain("SELECT id FROM rental_share_events WHERE share_token = 'abc' AND event_type = 'view' ORDER BY created_at DESC LIMIT 20"),

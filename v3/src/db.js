@@ -1915,7 +1915,16 @@ export function getDemand(postId, opts = {}) {
 
 export function createDemand(userId, input) {
   getWishConditions();
-  return createDemandPostOn(db, userId, input);
+  const result = createDemandPostOn(db, userId, input);
+  try {
+    if (result && result.status !== "draft") {
+      const prior = db.prepare(
+        "SELECT 1 AS n FROM demand_posts WHERE user_id = ? AND COALESCE(lifecycle, '') = 'completed' AND id != ? LIMIT 1",
+      ).get(Number(userId) || 0, result.id);
+      if (prior) bumpAnalytics(db, "wish_cloned");
+    }
+  } catch { /* analytics must not fail publish */ }
+  return result;
 }
 
 export function closeDemand(userId, postId, opts = {}) {
