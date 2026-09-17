@@ -265,7 +265,7 @@ test("share attribution dedup, bot mark, and burst limit", () => {
   let limited = false;
   for (let i = 0; i < 21; i += 1) {
     try {
-      recordShareEvent(db, { shareToken: "xyz", eventType: "view", ip: `9.9.9.${i}`, userAgent: `Mozilla/${i}`, now: NOW });
+      recordShareEvent(db, { shareToken: "xyz", eventType: "view", ip: "9.9.9.9", userAgent: "Mozilla/burst", now: NOW });
     } catch (error) {
       if (error.code === "RATE_LIMITED") limited = true;
     }

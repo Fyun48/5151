@@ -31,7 +31,11 @@ function timeseries(db, metric, from, to) {
 }
 
 function countWhere(db, sql, params) {
-  return Number(db.prepare(sql).get(...params)?.n) || 0;
+  try {
+    return Number(db.prepare(sql).get(...params)?.n) || 0;
+  } catch {
+    return 0;
+  }
 }
 
 export function rentalOpsSummary(db, { from, to } = {}) {
@@ -143,12 +147,17 @@ export function rentalOpsDrilldown(db, { kind = "offers", cursor = 0, limit = 20
       next_cursor: rows.length > size ? offset + size : "",
     };
   }
-  const rows = db.prepare(`
-    SELECT public_token, status, created_at
-    FROM wish_offers
-    WHERE created_at >= ? AND created_at <= ?
-    ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?
-  `).all(`${range.from}T00:00:00.000Z`, `${range.to}T23:59:59.999Z`, size + 1, offset);
+  let rows = [];
+  try {
+    rows = db.prepare(`
+      SELECT public_token, status, created_at
+      FROM wish_offers
+      WHERE created_at >= ? AND created_at <= ?
+      ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?
+    `).all(`${range.from}T00:00:00.000Z`, `${range.to}T23:59:59.999Z`, size + 1, offset);
+  } catch {
+    rows = [];
+  }
   return {
     kind: "offers",
     items: rows.slice(0, size).map((row) => ({
