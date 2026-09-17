@@ -47,6 +47,10 @@ export function isWishOwnerMatchingEnabled(flags = {}) {
   return normalizeRentalMarketplaceFlags(flags).wish.owner_matching_enabled === true;
 }
 
+export function isWishOfferEnabled(flags = {}) {
+  return normalizeRentalMarketplaceFlags(flags).wish.offer_enabled === true;
+}
+
 export function publicRentalMarketplaceFlags(flags = {}) {
   const row = normalizeRentalMarketplaceFlags(flags);
   return {

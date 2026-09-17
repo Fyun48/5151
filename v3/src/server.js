@@ -146,6 +146,20 @@ import {
   homepageDemandExposure,
   rentalMatchAdminRules,
   rentalMatchOwnerMeta,
+  createWishOfferFor,
+  getWishOfferFor,
+  listOwnerWishOffersFor,
+  listTenantWishOffersFor,
+  acceptWishOfferFor,
+  declineWishOfferFor,
+  withdrawWishOfferFor,
+  blockWishOfferFor,
+  reportWishOfferFor,
+  readWishOfferContactFor,
+  listMyWishOfferBlocksFor,
+  unblockWishOfferFor,
+  listAdminWishOfferReportsFor,
+  runWishOfferExpiryWorkerTick,
   createSelfListing,
   listingToolsInfo,
   copyOwnListingFor,
@@ -258,6 +272,7 @@ import { PROBE_ALIVE, PROBE_GONE, PROBE_INCONCLUSIVE, classifyListingProbeWrite 
 import { enqueueListingEnrich, processListingEnrichBatch, requestClickRefresh, wakeListingEnrichWorker, WATCH_PRIORITY } from "./listingEnrichQueue.js";
 import { deliveryConfigFromEnv, startDeliveryLoop } from "./opsDelivery.js";
 import { startWishLifecycleLoop } from "./wishLifecycleLoop.js";
+import { startWishOfferExpiryLoop } from "./wishOfferWorker.js";
 import { catalogDiff, isSystemCatalogTemplate, publicAdminCatalog } from "./rentalCatalog.js";
 import { isRentalCatalogV2Enabled, publicRentalMarketplaceFlags } from "./rentalMarketplaceFlags.js";
 import { opsDeliveryDb } from "./db.js";
@@ -1881,6 +1896,10 @@ app.get("/api/admin/rental-match-rules", requireAdminApi, (_req, res) => {
   res.json(rentalMatchAdminRules());
 });
 
+app.get("/api/admin/wish-offer-reports", requireAdminApi, (_req, res) => {
+  res.json(listAdminWishOfferReportsFor());
+});
+
 app.get("/api/admin/feedback", requireAdminApi, (req, res) => {
   res.json({
     ...feedbackMeta(),
@@ -2309,6 +2328,192 @@ app.get("/api/self-listings/:id/matches", (req, res) => {
     }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
+  }
+});
+
+function sendOfferError(res, error) {
+  const body = { error: error.message, code: error.code || "" };
+  if (error.retry_after) body.retry_after = error.retry_after;
+  res.status(error.status || 400).json(body);
+}
+
+app.post("/api/self-listings/:id/matches/:wishRef/offers", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入" });
+      return;
+    }
+    res.json(createWishOfferFor(session.userId, req.params.id, req.params.wishRef, {
+      idempotencyKey: req.body?.idempotency_key || req.get("idempotency-key"),
+      actorKey: `owner:${session.userId}`,
+    }));
+  } catch (error) {
+    sendOfferError(res, error);
+  }
+});
+
+app.get("/api/wish-offers/inbox", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入" });
+      return;
+    }
+    res.json(listTenantWishOffersFor(session.userId, {
+      status: req.query?.status,
+      limit: req.query?.limit,
+      cursor: req.query?.cursor,
+    }));
+  } catch (error) {
+    sendOfferError(res, error);
+  }
+});
+
+app.get("/api/wish-offers/owner", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入" });
+      return;
+    }
+    res.json(listOwnerWishOffersFor(session.userId, {
+      status: req.query?.status,
+      limit: req.query?.limit,
+      cursor: req.query?.cursor,
+    }));
+  } catch (error) {
+    sendOfferError(res, error);
+  }
+});
+
+app.get("/api/wish-offers/blocks", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入" });
+      return;
+    }
+    res.json(listMyWishOfferBlocksFor(session.userId));
+  } catch (error) {
+    sendOfferError(res, error);
+  }
+});
+
+app.post("/api/wish-offers/blocks/:blockRef/remove", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入" });
+      return;
+    }
+    res.json(unblockWishOfferFor(session.userId, req.params.blockRef));
+  } catch (error) {
+    sendOfferError(res, error);
+  }
+});
+
+app.get("/api/wish-offers/:offerRef/contact", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入" });
+      return;
+    }
+    res.json(readWishOfferContactFor(session.userId, req.params.offerRef, {
+      actorKey: `contact:${session.userId}`,
+    }));
+  } catch (error) {
+    sendOfferError(res, error);
+  }
+});
+
+app.get("/api/wish-offers/:offerRef", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入" });
+      return;
+    }
+    res.json(getWishOfferFor(session.userId, req.params.offerRef));
+  } catch (error) {
+    sendOfferError(res, error);
+  }
+});
+
+app.post("/api/wish-offers/:offerRef/accept", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入" });
+      return;
+    }
+    res.json(acceptWishOfferFor(session.userId, req.params.offerRef, {
+      actorKey: `tenant:${session.userId}`,
+    }));
+  } catch (error) {
+    sendOfferError(res, error);
+  }
+});
+
+app.post("/api/wish-offers/:offerRef/decline", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入" });
+      return;
+    }
+    res.json(declineWishOfferFor(session.userId, req.params.offerRef, {
+      actorKey: `tenant:${session.userId}`,
+    }));
+  } catch (error) {
+    sendOfferError(res, error);
+  }
+});
+
+app.post("/api/wish-offers/:offerRef/withdraw", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入" });
+      return;
+    }
+    res.json(withdrawWishOfferFor(session.userId, req.params.offerRef, {
+      actorKey: `owner:${session.userId}`,
+    }));
+  } catch (error) {
+    sendOfferError(res, error);
+  }
+});
+
+app.post("/api/wish-offers/:offerRef/block", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入" });
+      return;
+    }
+    res.json(blockWishOfferFor(session.userId, req.params.offerRef, {
+      actorKey: `tenant:${session.userId}`,
+    }));
+  } catch (error) {
+    sendOfferError(res, error);
+  }
+});
+
+app.post("/api/wish-offers/:offerRef/report", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入" });
+      return;
+    }
+    res.json(reportWishOfferFor(session.userId, req.params.offerRef, {
+      reason: req.body?.reason,
+      detail: req.body?.detail,
+    }, { actorKey: `report:${session.userId}` }));
+  } catch (error) {
+    sendOfferError(res, error);
   }
 });
 
@@ -3621,6 +3826,7 @@ app.listen(PORT, HOST, () => {
     console.log(`Ops feedback 遞送已啟用：每 ${opsDelivery.intervalMs}ms 一次 → ${opsDelivery.url}`);
   }
   startWishLifecycleLoop(() => runWishLifecycleWorkerTick(), { intervalMs: 5 * 60 * 1000, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
+  startWishOfferExpiryLoop(() => runWishOfferExpiryWorkerTick(), { intervalMs: 5 * 60 * 1000, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
   console.log(`${APP_NAME}：http://${HOST}:${PORT}`);
   if (envAdminConfigured()) {
     console.log(`管理員帳號：${adminEmail()}（也可註冊新會員）`);

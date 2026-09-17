@@ -1646,8 +1646,43 @@
       font-variant-numeric: tabular-nums;
       font-weight: 700;
     }
-    .match-cta, .aggregate-panel button, [data-self-matches] {
+    .match-cta, .aggregate-panel button, [data-self-matches],
+    .offer-cta, .offer-actions button, .wish-offer-card button {
       min-height: var(--touch);
+    }
+    .wish-offer-inbox { margin: 0 0 16px; }
+    .wish-offer-inbox h3 { margin: 0 0 8px; font-size: var(--text-md); }
+    .wish-offer-card {
+      margin: 8px 0 0;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background: var(--paper);
+    }
+    .wish-offer-card .rent-price {
+      font-size: var(--text-price);
+      font-variant-numeric: tabular-nums;
+      font-weight: 700;
+    }
+    .offer-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .offer-actions .danger {
+      margin-left: auto;
+    }
+    .offer-contact {
+      margin-top: 10px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--bg);
+    }
+    .block-list { display: grid; gap: 8px; }
+    @media (max-width: 767px) {
+      .offer-actions .danger { margin-left: 0; width: 100%; }
     }
     @media (max-width: 767px) {
       .demand-chip-row, .match-explain { overflow: visible; }
@@ -3460,6 +3495,15 @@
         <button type="button" class="ghost" id="wishDeleteExampleBtn" hidden>刪除範例</button>
       </div>
       <div id="wishLifecycleBar" class="wish-life" hidden></div>
+      <section class="wish-offer-inbox" id="wishOfferInbox" hidden>
+        <h3 id="wishOfferInboxTitle">收到的房源提案</h3>
+        <p class="hint" id="wishOfferInboxHint">屋主提供房源後，你可先看條件再決定要不要互相確認聯絡。</p>
+        <p class="save-msg" id="wishOfferInboxMsg" role="status" aria-live="polite"></p>
+        <div id="wishOfferInboxList"></div>
+        <p class="list-more-wrap" id="wishOfferInboxMoreWrap" hidden>
+          <button type="button" class="ghost" id="wishOfferInboxMore">載入更多</button>
+        </p>
+      </section>
       <p class="save-msg" id="wishStatus" role="status" aria-live="polite"></p>
       <div class="list" id="demandList" style="padding-top:4px"><div class="empty">載入許願房…</div></div>
       <div id="wishFormWrap" hidden>
@@ -3666,6 +3710,12 @@
           <span class="save-msg" id="profileMsg"></span>
         </div>
       </form>
+    </div>
+    <div class="card panel" id="wishOfferBlockPanel" hidden>
+      <h2 style="margin:0 0 8px">已封鎖的屋主</h2>
+      <p class="hint">解除後對方才能再對你的許願房提出房源。不會顯示對方身分。</p>
+      <p class="save-msg" id="wishOfferBlockMsg" role="status" aria-live="polite"></p>
+      <div class="block-list" id="wishOfferBlockList"></div>
     </div>
     <div class="ad-slot me" id="adMe" hidden></div>
     <div class="card panel" id="supportAccountCard">
@@ -4241,6 +4291,20 @@
       <div class="row" style="margin-top:12px">
         <button type="button" class="ghost" id="ownerMatchMore" hidden>載入更多</button>
       </div>
+    </div>
+  </div>
+  <div id="wishOfferOverlay" class="hub-overlay" hidden>
+    <div class="hub-backdrop" data-close-wish-offer></div>
+    <div class="hub-panel" role="dialog" aria-modal="true" aria-labelledby="wishOfferTitle">
+      <div class="hub-head">
+        <div>
+          <h2 id="wishOfferTitle">房源提案</h2>
+          <p class="hint" id="wishOfferHint" style="margin:6px 0 0">確認有興趣後才會開啟聯絡方式。封鎖與檢舉隨時可用。</p>
+        </div>
+        <button type="button" class="ghost" id="wishOfferClose">關閉</button>
+      </div>
+      <p class="msg" id="wishOfferMsg" role="status" aria-live="polite"></p>
+      <div id="wishOfferDetail"></div>
     </div>
   </div>
   <div id="mediaLibOverlay" class="hub-overlay" hidden>
@@ -8409,6 +8473,7 @@
       }
       if (view === "listings") loadDemandExposure().catch(() => {});
       if (view === "post") { loadMineSelfListings().then(() => { if (ownerMatchingOn) loadAggregateDemand(); }).catch(() => {}); loadMediaLibrary().catch(() => {}); }
+      if (view === "me") loadWishOfferBlocks().catch(() => {});
       if (view === "qa") loadHelpQa();
       if (view === "notify") {
         // 桌機保留較寬的浮動 dock；手機不強制展開「待看更新」浮層（通知內容已在 #notifyInbox）。
@@ -8584,7 +8649,9 @@
     function wishCatalogOn() { return wishMeta?.flags?.rental_catalog_v2?.enabled === true; }
     function wishLifeOn() { return wishMeta?.flags?.wish?.lifecycle_enabled === true; }
     let ownerMatchingOn = false;
+    let wishOfferOn = false;
     let ownerMatchState = { listingId: "", cursor: "", loading: false };
+    let wishOfferInboxState = { cursor: "", loading: false };
     function demandDistrictKeys() {
       return [...document.querySelectorAll("#demandDistricts [data-demand-district]:checked")].map((el) => el.value);
     }
@@ -9056,6 +9123,7 @@
       const res = await fetch("/api/self-listings");
       const data = await res.json().catch(() => ({}));
       ownerMatchingOn = data.owner_matching?.enabled === true;
+      wishOfferOn = data.owner_matching?.offer_enabled === true;
       if ($("aggregateDemandPanel")) $("aggregateDemandPanel").hidden = !ownerMatchingOn;
       if (ownerMatchingOn) fillAggregateDistricts();
       paintSelfTraits(Array.isArray(data.traits) && data.traits.length ? data.traits : SELF_TRAIT_GROUPS);
@@ -9414,11 +9482,13 @@
           if (mineRes.ok) {
             wishMine = mine;
             wishMine.posts = mine.posts || [];
+            if (mine.offer_enabled === true) wishOfferOn = true;
           }
         } catch { /* ignore */ }
       }
       syncWishOwnerBar();
       paintWishLifecycleBar();
+      loadWishOfferInbox().catch(() => {});
     }
     $("collapsePanelBtn").onclick = () => {
       if (window.matchMedia("(max-width: 880px)").matches) closeFilterSheet();
@@ -10736,14 +10806,18 @@
       const chips = (item.explanation || []).map((row) => (
         `<span data-kind="${esc(row.kind || "matched")}">${esc(row.kind === "unknown" ? "? " : "✓ ")}${esc(row.label || "")}</span>`
       )).join("");
+      const canOffer = wishOfferOn && item.offer_available === true;
+      const canWithdraw = wishOfferOn && item.offer_status === "pending" && item.offer_ref;
+      const cta = item.offer_cta || "提供房源（即將推出）";
       return `
         <article class="wish-match-card">
           <p class="rent-price">${esc(budget)}</p>
           <p class="muted">${esc((item.district_labels || []).join("、") || item.city || "區域未填")} · ${esc(item.layout_label || item.housing_label || "格局不限")}</p>
           <p class="muted">${esc(item.activity_label || "最近活動較少")} · 符合 ${Number(item.matched_count) || 0} 項需求</p>
           <div class="match-explain" aria-label="配對說明">${chips}</div>
-          <div class="share-row">
-            <button type="button" class="ghost match-cta" disabled aria-disabled="true">${esc(item.offer_cta || "提供房源（即將推出）")}</button>
+          <div class="share-row offer-actions">
+            <button type="button" class="ghost match-cta offer-cta" ${canOffer ? `data-create-offer="${esc(item.wish_ref || "")}"` : "disabled aria-disabled=\"true\""}>${esc(cta)}</button>
+            ${canWithdraw ? `<button type="button" class="ghost" data-withdraw-offer="${esc(item.offer_ref)}">撤回提案</button>` : ""}
           </div>
         </article>`;
     }
@@ -10886,6 +10960,205 @@
         if (msg) msg.textContent = error.message;
       }
     }
+    function offerReasonLabel(reason) {
+      return ({
+        spam: "垃圾訊息",
+        misleading_listing: "房源不實",
+        harassment: "騷擾",
+        unsafe_contact: "不安全聯絡",
+        other: "其他",
+      })[reason] || reason;
+    }
+    function offerCardHtml(item) {
+      const listing = item.listing || {};
+      const rent = Number(listing.price_num) ? `${Number(listing.price_num).toLocaleString("zh-TW")} 元` : (listing.price || "租金未填");
+      const statusLabel = ({
+        pending: "等待回覆",
+        accepted: "已互相確認",
+        declined: "已表示不適合",
+        withdrawn: "屋主已撤回",
+        expired: "已過期",
+        blocked: "已結束",
+      })[item.status] || item.status;
+      return `
+        <article class="wish-offer-card">
+          <p class="rent-price">${esc(listing.title || "房源提案")} · ${esc(rent)}</p>
+          <p class="muted">${esc(listing.area_name || "")} ${esc(listing.layout || "")} · ${esc(statusLabel)} · ${esc(item.created_at || "")}</p>
+          <div class="offer-actions">
+            <button type="button" class="ghost offer-cta" data-open-offer="${esc(item.offer_ref)}">查看提案</button>
+          </div>
+        </article>`;
+    }
+    function closeWishOfferOverlay() {
+      const box = $("wishOfferOverlay");
+      if (box) box.hidden = true;
+    }
+    async function paintWishOfferDetail(item) {
+      const box = $("wishOfferDetail");
+      if (!box || !item) return;
+      const listing = item.listing || {};
+      const actions = item.actions || {};
+      const chips = (item.match_summary?.explanation || []).map((row) => (
+        `<span data-kind="${esc(row.kind || "matched")}">${esc(row.kind === "unknown" ? "? " : "✓ ")}${esc(row.label || "")}</span>`
+      )).join("");
+      let contactHtml = "";
+      if (actions.contact) {
+        try {
+          const res = await fetch(`/api/wish-offers/${encodeURIComponent(item.offer_ref)}/contact`);
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data.contact) {
+            contactHtml = `<div class="offer-contact">
+              <strong>已互相確認有興趣</strong>
+              <p class="muted">${esc(data.contact.next_step || "")}</p>
+              ${data.contact.display_name ? `<p>稱呼：${esc(data.contact.display_name)}</p>` : ""}
+              ${data.contact.phone ? `<p>電話：${esc(data.contact.phone)}</p>` : ""}
+              ${data.contact.line_url ? `<p>LINE：${esc(data.contact.line_url)}</p>` : ""}
+            </div>`;
+          } else {
+            contactHtml = `<div class="offer-contact"><p class="muted">${esc(data.error || "聯絡方式目前無法查看")}</p></div>`;
+          }
+        } catch {
+          contactHtml = `<div class="offer-contact"><p class="muted">聯絡方式目前無法查看</p></div>`;
+        }
+      }
+      box.innerHTML = `
+        <p class="rent-price">${esc(listing.title || "房源提案")}</p>
+        <p class="muted">${esc(listing.area_name || "")} ${esc(listing.layout || listing.kind_name || "")} · ${esc(listing.price || "")}</p>
+        <div class="match-explain" aria-label="配對說明">${chips || "<span class=\"muted\">沒有額外配對說明</span>"}</div>
+        ${contactHtml}
+        <div class="offer-actions">
+          ${listing.public_path ? `<a class="ghost offer-cta" href="${esc(listing.public_path)}" target="_blank" rel="noopener">查看房源</a>` : ""}
+          ${actions.accept ? `<button type="button" class="primary offer-cta" data-offer-act="accept">有興趣</button>` : ""}
+          ${actions.decline ? `<button type="button" class="ghost offer-cta" data-offer-act="decline">不適合</button>` : ""}
+          ${actions.withdraw ? `<button type="button" class="ghost offer-cta" data-offer-act="withdraw">撤回提案</button>` : ""}
+          ${actions.block ? `<button type="button" class="ghost danger" data-offer-act="block">封鎖此屋主</button>` : ""}
+          ${actions.report ? `<button type="button" class="ghost danger" data-offer-act="report">檢舉</button>` : ""}
+        </div>`;
+      box.dataset.offerRef = item.offer_ref || "";
+    }
+    async function openWishOffer(offerRef) {
+      const box = $("wishOfferOverlay");
+      const msg = $("wishOfferMsg");
+      if (!box) return;
+      box.hidden = false;
+      if (msg) msg.textContent = "載入提案…";
+      try {
+        const res = await fetch(`/api/wish-offers/${encodeURIComponent(offerRef)}`);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "讀取提案失敗");
+        if (msg) msg.textContent = "";
+        await paintWishOfferDetail(data);
+      } catch (error) {
+        if (msg) msg.textContent = error.message;
+      }
+    }
+    async function loadWishOfferInbox({ append = false } = {}) {
+      const wrap = $("wishOfferInbox");
+      const list = $("wishOfferInboxList");
+      const msg = $("wishOfferInboxMsg");
+      const more = $("wishOfferInboxMoreWrap");
+      if (!wrap || !list || isGuest || !wishOfferOn) {
+        if (wrap) wrap.hidden = true;
+        return;
+      }
+      wrap.hidden = false;
+      if (wishOfferInboxState.loading) return;
+      wishOfferInboxState.loading = true;
+      if (!append) {
+        wishOfferInboxState.cursor = "";
+        list.innerHTML = `<div class="empty">載入房源提案…</div>`;
+      }
+      try {
+        const q = new URLSearchParams({ limit: "20" });
+        if (append && wishOfferInboxState.cursor) q.set("cursor", wishOfferInboxState.cursor);
+        const res = await fetch(`/api/wish-offers/inbox?${q}`);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          if (data.code === "wish_offer_disabled") {
+            wrap.hidden = true;
+            return;
+          }
+          throw new Error(data.error || "讀取提案失敗");
+        }
+        const items = Array.isArray(data.items) ? data.items : [];
+        const html = items.map(offerCardHtml).join("");
+        if (append) list.insertAdjacentHTML("beforeend", html);
+        else list.innerHTML = html || `<div class="empty">目前沒有房源提案。</div>`;
+        wishOfferInboxState.cursor = data.next_cursor || "";
+        if (more) more.hidden = !wishOfferInboxState.cursor;
+        const pending = Number(data.pending_count) || 0;
+        if ($("wishOfferInboxTitle")) {
+          $("wishOfferInboxTitle").textContent = pending ? `收到的房源提案（${pending}）` : "收到的房源提案";
+        }
+        if (msg) msg.textContent = pending ? `有 ${pending} 筆待回覆` : "";
+      } catch (error) {
+        if (!append) list.innerHTML = `<div class="empty">${esc(error.message)}</div>`;
+        if (msg) msg.textContent = error.message;
+      } finally {
+        wishOfferInboxState.loading = false;
+      }
+    }
+    async function loadWishOfferBlocks() {
+      const panel = $("wishOfferBlockPanel");
+      const list = $("wishOfferBlockList");
+      if (!panel || !list || isGuest || !wishOfferOn) {
+        if (panel) panel.hidden = true;
+        return;
+      }
+      try {
+        const res = await fetch("/api/wish-offers/blocks");
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          panel.hidden = true;
+          return;
+        }
+        const items = Array.isArray(data.items) ? data.items : [];
+        panel.hidden = items.length === 0;
+        list.innerHTML = items.map((row) => (
+          `<div class="wish-offer-card">
+            <p>${esc(row.listing_title || "已封鎖的屋主")}</p>
+            <p class="muted">${esc(row.created_at || "")}</p>
+            <button type="button" class="ghost offer-cta" data-unblock="${esc(row.block_ref)}">解除封鎖</button>
+          </div>`
+        )).join("");
+      } catch {
+        panel.hidden = true;
+      }
+    }
+    async function createWishOffer(listingId, wishRef, btn) {
+      const msg = $("ownerMatchMsg");
+      if (btn) btn.disabled = true;
+      try {
+        const res = await fetch(`/api/self-listings/${encodeURIComponent(listingId)}/matches/${encodeURIComponent(wishRef)}/offers`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ idempotency_key: PraHelpers.newSelfListingIdempotencyKey() }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "目前無法提供");
+        if (msg) msg.textContent = "已提供，等待對方回覆";
+        if (listingId) await openOwnerMatches(listingId, { append: false });
+      } catch (error) {
+        if (msg) msg.textContent = error.message;
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+    async function actWishOffer(offerRef, action, extra = {}) {
+      const msg = $("wishOfferMsg") || $("ownerMatchMsg");
+      const path = action === "withdraw"
+        ? `/api/wish-offers/${encodeURIComponent(offerRef)}/withdraw`
+        : `/api/wish-offers/${encodeURIComponent(offerRef)}/${action}`;
+      const res = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(extra),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "操作失敗");
+      if (msg) msg.textContent = action === "accept" ? "已互相確認有興趣" : "已更新提案";
+      return data;
+    }
     $("selfMineList")?.addEventListener("click", onSelfMineClick);
     $("ownerOverlayList")?.addEventListener("click", onSelfMineClick);
     $("ownerMatchClose")?.addEventListener("click", closeOwnerMatchOverlay);
@@ -10894,6 +11167,65 @@
     });
     $("ownerMatchMore")?.addEventListener("click", () => {
       if (ownerMatchState.listingId) openOwnerMatches(ownerMatchState.listingId, { append: true });
+    });
+    $("ownerMatchList")?.addEventListener("click", async (ev) => {
+      const createBtn = ev.target?.closest?.("[data-create-offer]");
+      if (createBtn && ownerMatchState.listingId) {
+        await createWishOffer(ownerMatchState.listingId, createBtn.dataset.createOffer, createBtn);
+        return;
+      }
+      const withdrawBtn = ev.target?.closest?.("[data-withdraw-offer]");
+      if (withdrawBtn) {
+        try {
+          await actWishOffer(withdrawBtn.dataset.withdrawOffer, "withdraw");
+          if (ownerMatchState.listingId) await openOwnerMatches(ownerMatchState.listingId, { append: false });
+        } catch (error) {
+          if ($("ownerMatchMsg")) $("ownerMatchMsg").textContent = error.message;
+        }
+      }
+    });
+    $("wishOfferInboxList")?.addEventListener("click", (ev) => {
+      const btn = ev.target?.closest?.("[data-open-offer]");
+      if (btn) openWishOffer(btn.dataset.openOffer);
+    });
+    $("wishOfferInboxMore")?.addEventListener("click", () => loadWishOfferInbox({ append: true }));
+    $("wishOfferClose")?.addEventListener("click", closeWishOfferOverlay);
+    $("wishOfferOverlay")?.addEventListener("click", (ev) => {
+      if (ev.target?.dataset?.closeWishOffer != null) closeWishOfferOverlay();
+    });
+    $("wishOfferDetail")?.addEventListener("click", async (ev) => {
+      const btn = ev.target?.closest?.("[data-offer-act]");
+      const offerRef = $("wishOfferDetail")?.dataset?.offerRef;
+      if (!btn || !offerRef) return;
+      const action = btn.dataset.offerAct;
+      try {
+        if (action === "block" && !window.confirm("確定封鎖此屋主？之後對方不能再對你的許願房提出房源。")) return;
+        if (action === "report") {
+          const reason = window.prompt("檢舉原因（spam / misleading_listing / harassment / unsafe_contact / other）", "spam");
+          if (!reason) return;
+          const detail = window.prompt("補充說明（可留空）", "") || "";
+          await actWishOffer(offerRef, "report", { reason, detail });
+        } else {
+          await actWishOffer(offerRef, action);
+        }
+        await openWishOffer(offerRef);
+        loadWishOfferInbox().catch(() => {});
+        loadWishOfferBlocks().catch(() => {});
+      } catch (error) {
+        if ($("wishOfferMsg")) $("wishOfferMsg").textContent = error.message;
+      }
+    });
+    $("wishOfferBlockList")?.addEventListener("click", async (ev) => {
+      const btn = ev.target?.closest?.("[data-unblock]");
+      if (!btn) return;
+      try {
+        const res = await fetch(`/api/wish-offers/blocks/${encodeURIComponent(btn.dataset.unblock)}/remove`, { method: "POST" });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "解除失敗");
+        await loadWishOfferBlocks();
+      } catch (error) {
+        if ($("wishOfferBlockMsg")) $("wishOfferBlockMsg").textContent = error.message;
+      }
     });
     $("aggregateRefreshBtn")?.addEventListener("click", () => loadAggregateDemand());
     $("descTemplatePick")?.addEventListener("change", () => {
@@ -11483,6 +11815,7 @@
       }
       if (ev.key === "Escape" && $("ownerOverlay") && !$("ownerOverlay").hidden) closeOwnerOverlay();
       if (ev.key === "Escape" && $("ownerMatchOverlay") && !$("ownerMatchOverlay").hidden) closeOwnerMatchOverlay();
+      if (ev.key === "Escape" && $("wishOfferOverlay") && !$("wishOfferOverlay").hidden) closeWishOfferOverlay();
     });
     $("selectPageBtn").onclick = () => {
       document.querySelectorAll("[data-pick]").forEach((el) => {

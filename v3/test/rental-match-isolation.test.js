@@ -49,10 +49,12 @@ test("matching flag and wish volume do not change listing fit, sort, or primary"
     price_num: 24000,
     wish_count: 999,
     owner_matching_enabled: true,
+    offer_count: 12,
+    accepted_offers: 4,
     match_score: 100,
     rank_score: 9999,
   };
-  assert.equal(listingFitScore(a, settings), listingFitScore({ ...a, wish_count: 88, owner_matching_enabled: true }, settings));
+  assert.equal(listingFitScore(a, settings), listingFitScore({ ...a, wish_count: 88, owner_matching_enabled: true, offer_count: 7 }, settings));
   const sortedOff = sortListingsRows([
     { ...a, fit_score: 40 },
     { ...b, fit_score: 90 },

@@ -16,6 +16,9 @@ test("owner matching UI stays inside 有房刊登 and has no sixth nav", () => {
   assert.match(html, /id="demandExposure"/);
   assert.match(html, /data-self-matches/);
   assert.match(html, /提供房源（即將推出）/);
+  assert.match(html, /id="wishOfferInbox"/);
+  assert.match(html, /id="wishOfferOverlay"/);
+  assert.match(html, /提供我的房源|wishOfferInbox|data-create-offer/);
   assert.match(html, /配對暫時無法取得/);
   assert.match(html, /matchUnavailable/);
   assert.match(html, /min-height: var\(--touch\)/);
@@ -31,7 +34,10 @@ test("APIs are wired with ownership and flag gates", () => {
   assert.match(server, /\/api\/demand\/exposure/);
   assert.match(server, /\/api\/admin\/rental-match-rules/);
   assert.match(server, /ownerListingMatchSummary/);
-  assert.doesNotMatch(server, /wish_offer|double.?consent/i);
+  assert.match(server, /\/api\/self-listings\/:id\/matches\/:wishRef\/offers/);
+  assert.match(server, /\/api\/wish-offers\/inbox/);
+  assert.match(server, /\/api\/wish-offers\/:offerRef\/accept/);
+  assert.match(server, /createWishOfferFor/);
 });
 
 test("admin rules page is read-only default rules", () => {
