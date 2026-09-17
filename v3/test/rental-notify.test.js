@@ -537,6 +537,11 @@ test("P1-2 pair-level match episode ignores unrelated generation and honors bloc
   const samePair = db.prepare("SELECT COUNT(*) AS n FROM rental_notify_events WHERE event_type = 'owner_new_match_available' AND subject_ref = ?").get(wish.public_token);
   assert.equal(samePair.n, 1);
   runRentalNotifyTick(db, NOW, { flags: FLAGS_ON, matchFn: () => ({ generation: 100, items: [] }) });
+  assert.equal(db.prepare("SELECT eligible FROM rental_match_seen WHERE wish_ref = ?").get(wish.public_token).eligible, 1);
+  db.prepare("UPDATE demand_posts SET lifecycle = 'paused' WHERE id = ?").run(wish.id);
+  runRentalNotifyTick(db, NOW, { flags: FLAGS_ON, matchFn: () => ({ items: [] }) });
+  assert.equal(db.prepare("SELECT eligible FROM rental_match_seen WHERE wish_ref = ?").get(wish.public_token).eligible, 0);
+  db.prepare("UPDATE demand_posts SET lifecycle = 'active' WHERE id = ?").run(wish.id);
   assert.equal(runRentalNotifyTick(db, NOW, { flags: FLAGS_ON, matchFn: pair }).matches.emitted, 1);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM rental_notify_events WHERE event_type = 'owner_new_match_available' AND subject_ref = ?").get(wish.public_token).n, 2);
 
@@ -554,6 +559,54 @@ test("P1-2 pair-level match episode ignores unrelated generation and honors bloc
   assert.equal(blocked.matches.emitted, 0);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM rental_notify_events WHERE subject_ref = ?").get(blockedWish.public_token).n, 0);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM rental_digest_items WHERE wish_ref = ?").get(blockedWish.public_token).n, 0);
+  db.close();
+});
+
+test("P1 top-20 window must not close hard-eligible episodes", () => {
+  const db = open();
+  saveMatchSubscription(db, 2, 99, "instant", NOW);
+  const wishes = [];
+  for (let i = 0; i < 25; i += 1) {
+    const uid = 300 + i;
+    seedUser(db, uid, `rank${i}@example.com`);
+    wishes.push(seedWish(db, { user_id: uid }));
+  }
+  const asItems = (list) => list.map((wish) => ({
+    wish_ref: wish.public_token,
+    user_id: wish.user_id,
+    wish_id: wish.id,
+  }));
+  const ranked = [...wishes];
+  const tick = (list) => runRentalNotifyTick(db, NOW, {
+    flags: FLAGS_ON,
+    matchFn: () => ({ items: asItems(list).slice(0, 20) }),
+  });
+  assert.equal(tick(ranked).matches.emitted, 20);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM rental_notify_events WHERE event_type = 'owner_new_match_available'").get().n, 20);
+  for (const wish of ranked.slice(20)) {
+    assert.equal(db.prepare("SELECT eligible FROM rental_match_seen WHERE wish_ref = ?").get(wish.public_token), undefined);
+  }
+
+  const reordered = [ranked[20], ...ranked.slice(0, 19), ranked[21], ranked[22], ranked[23], ranked[24], ranked[19]];
+  assert.equal(tick(reordered).matches.emitted, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM rental_notify_events WHERE subject_ref = ?").get(ranked[20].public_token).n, 1);
+  assert.equal(db.prepare("SELECT episode, eligible FROM rental_match_seen WHERE wish_ref = ?").get(ranked[20].public_token).episode, 1);
+  const dropped = db.prepare("SELECT eligible, episode FROM rental_match_seen WHERE wish_ref = ?").get(ranked[19].public_token);
+  assert.equal(dropped.eligible, 1);
+  assert.equal(dropped.episode, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM rental_notify_events WHERE subject_ref = ?").get(ranked[19].public_token).n, 1);
+
+  assert.equal(tick(ranked).matches.emitted, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM rental_notify_events WHERE subject_ref = ?").get(ranked[19].public_token).n, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM rental_notify_events WHERE subject_ref = ?").get(ranked[20].public_token).n, 1);
+
+  db.prepare("UPDATE demand_posts SET lifecycle = 'paused' WHERE id = ?").run(ranked[20].id);
+  tick(reordered);
+  assert.equal(db.prepare("SELECT eligible FROM rental_match_seen WHERE wish_ref = ?").get(ranked[20].public_token).eligible, 0);
+  db.prepare("UPDATE demand_posts SET lifecycle = 'active' WHERE id = ?").run(ranked[20].id);
+  assert.equal(tick(reordered).matches.emitted, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM rental_notify_events WHERE subject_ref = ?").get(ranked[20].public_token).n, 2);
+  assert.equal(db.prepare("SELECT episode FROM rental_match_seen WHERE wish_ref = ?").get(ranked[20].public_token).episode, 2);
   db.close();
 });
 

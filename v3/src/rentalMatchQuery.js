@@ -541,6 +541,19 @@ export function ownerListingMatches(db, postId, userId, { limit, cursor, now = n
   };
 }
 
+export function pairStillHardEligible(db, postId, userId, wishRef, now = new Date()) {
+  try {
+    const { listing } = loadOwnedMatchListing(db, postId, userId, now);
+    const row = db.prepare("SELECT * FROM demand_posts WHERE public_token = ?").get(String(wishRef || ""));
+    if (!row) return false;
+    const catalog = currentMatchCatalog();
+    const wish = wishMatchSnapshot(row, { catalog });
+    return evaluateMatch(listing, wish, { catalog, now }).eligible === true;
+  } catch {
+    return false;
+  }
+}
+
 function unavailableSummary(listingId = null) {
   return {
     listing_id: listingId,

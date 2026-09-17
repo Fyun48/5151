@@ -43,6 +43,7 @@ export function runRentalNotifyTick(db, now = new Date(), {
   flags = {},
   limit = RENTAL_NOTIFY_BATCH,
   matchFn = null,
+  hardGateFn = null,
 } = {}) {
   setRentalNotifyHydrate(flags);
   if (!isRentalNotificationsEnabled(flags)) {
@@ -54,7 +55,7 @@ export function runRentalNotifyTick(db, now = new Date(), {
     const expiring = scheduleOfferExpiring(db, now, { limit });
     const tenantRetention = scheduleTenantRetention(db, now, { limit });
     const ownerRetention = scheduleOwnerRetention(db, now, { limit });
-    const matches = processMatchSubscriptions(db, now, { limit, matchFn, flags });
+    const matches = processMatchSubscriptions(db, now, { limit, matchFn, hardGateFn, flags });
     const digest = closeDigestBuckets(db, now, { limit });
     const delivered = deliverQueuedNotifications(db, now, { limit });
     const cleanup = cleanupRentalNotify(db, now, { limit });
@@ -66,7 +67,7 @@ export function runRentalNotifyTick(db, now = new Date(), {
   }
 }
 
-function processMatchSubscriptions(db, now, { limit, matchFn, flags }) {
+function processMatchSubscriptions(db, now, { limit, matchFn, hardGateFn, flags }) {
   if (!isWishOwnerMatchingEnabled(flags) || typeof matchFn !== "function") {
     return { scanned: 0, emitted: 0 };
   }
@@ -79,7 +80,7 @@ function processMatchSubscriptions(db, now, { limit, matchFn, flags }) {
     } catch {
       continue;
     }
-    emitted += processMatchSubscriptionRow(db, sub, page, now, flags).emitted;
+    emitted += processMatchSubscriptionRow(db, sub, page, now, flags, { hardGateFn }).emitted;
   }
   return { scanned: rows.length, emitted };
 }

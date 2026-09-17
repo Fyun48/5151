@@ -320,6 +320,8 @@ export function ensureRentalNotifySchema(db) {
       ON rental_share_events(share_token, event_type, visitor_hash, created_at);
     CREATE INDEX IF NOT EXISTS idx_rental_match_subs_mode_id
       ON rental_match_subscriptions(mode, id);
+    CREATE INDEX IF NOT EXISTS idx_rental_match_seen_eligible
+      ON rental_match_seen(owner_user_id, listing_id, eligible);
   `);
   for (const [table, def] of [
     ["rental_match_seen", "eligible INTEGER NOT NULL DEFAULT 1"],
@@ -865,6 +867,63 @@ export function markMissingMatchesIneligible(db, ownerUserId, listingId, eligibl
   }
 }
 
+export function closeMatchEpisode(db, ownerUserId, listingId, wishRef) {
+  db.prepare(`
+    UPDATE rental_match_seen SET eligible = 0
+    WHERE owner_user_id = ? AND listing_id = ? AND wish_ref = ? AND eligible = 1
+  `).run(Number(ownerUserId) || 0, Number(listingId) || 0, String(wishRef || ""));
+}
+
+const MATCHABLE_NOTIFY_LIFECYCLES = new Set(["active", "needs_confirmation"]);
+
+function wishStillHardEligibleForNotify(db, ownerUserId, listingId, wishRef, hardGateFn) {
+  let wish;
+  try {
+    wish = db.prepare(
+      "SELECT id, user_id, public_token, lifecycle, status FROM demand_posts WHERE public_token = ?",
+    ).get(String(wishRef || ""));
+  } catch {
+    return false;
+  }
+  if (!wish) return false;
+  if (pairIsBlockedForNotify(db, wish.user_id, ownerUserId)) return false;
+  const life = String(wish.lifecycle || "active");
+  if (!MATCHABLE_NOTIFY_LIFECYCLES.has(life)) return false;
+  if (String(wish.status || "") === "hidden") return false;
+  if (String(wish.status || "") === "draft") return false;
+  if (String(wish.status || "") === "closed" && life !== "needs_confirmation") return false;
+  if (typeof hardGateFn !== "function") return true;
+  try {
+    return hardGateFn(listingId, ownerUserId, wishRef) === true;
+  } catch {
+    return false;
+  }
+}
+
+export function recheckSeenMatchEligibility(db, ownerUserId, listingId, {
+  now = new Date(),
+  limit = RENTAL_NOTIFY_BATCH,
+  hardGateFn = null,
+  listingOpen = true,
+} = {}) {
+  const owner = Number(ownerUserId) || 0;
+  const listing = Number(listingId) || 0;
+  if (!owner || !listing) return { scanned: 0, closed: 0 };
+  const rows = takeAfterCursor(db, `match_recheck:${owner}:${listing}`, now, limit, (afterId, cap) => db.prepare(`
+    SELECT rowid AS id, wish_ref FROM rental_match_seen
+    WHERE owner_user_id = ? AND listing_id = ? AND eligible = 1 AND rowid > ?
+    ORDER BY rowid ASC LIMIT ?
+  `).all(owner, listing, afterId, cap));
+  let closed = 0;
+  for (const row of rows) {
+    const still = listingOpen && wishStillHardEligibleForNotify(db, owner, listing, row.wish_ref, hardGateFn);
+    if (still) continue;
+    closeMatchEpisode(db, owner, listing, row.wish_ref);
+    closed += 1;
+  }
+  return { scanned: rows.length, closed };
+}
+
 export function resolveWishTenantId(db, item = {}) {
   const direct = Number(item.user_id || item.tenant_user_id || 0);
   if (direct) return direct;
@@ -897,18 +956,36 @@ export function pairIsBlockedForNotify(db, tenantUserId, ownerUserId) {
   }
 }
 
-export function processMatchSubscriptionRow(db, sub, page, now, flags) {
-  if (!listingOpenForNotify(db, sub.owner_user_id, sub.listing_id)) return { emitted: 0 };
+export function processMatchSubscriptionRow(db, sub, page, now, flags, { hardGateFn = null } = {}) {
   if (sub.mode === "off") return { emitted: 0 };
+  const listingOpen = listingOpenForNotify(db, sub.owner_user_id, sub.listing_id);
+  if (page?.complete === true) {
+    const refs = Array.isArray(page.eligible_refs)
+      ? page.eligible_refs
+      : (page.items || []).map((item) => item.wish_ref || item.public_token || "").filter(Boolean);
+    markMissingMatchesIneligible(db, sub.owner_user_id, sub.listing_id, listingOpen ? refs : []);
+  } else {
+    recheckSeenMatchEligibility(db, sub.owner_user_id, sub.listing_id, {
+      now,
+      hardGateFn,
+      listingOpen,
+    });
+  }
+  if (!listingOpen) return { emitted: 0 };
   const items = (page?.items || []).slice(0, 20);
-  const eligibleRefs = [];
   let emitted = 0;
   for (const item of items) {
     const wishRef = item.wish_ref || item.public_token || "";
     if (!wishRef) continue;
     const tenantId = resolveWishTenantId(db, item);
-    if (pairIsBlockedForNotify(db, tenantId, sub.owner_user_id)) continue;
-    eligibleRefs.push(wishRef);
+    if (pairIsBlockedForNotify(db, tenantId, sub.owner_user_id)) {
+      closeMatchEpisode(db, sub.owner_user_id, sub.listing_id, wishRef);
+      continue;
+    }
+    if (!wishStillHardEligibleForNotify(db, sub.owner_user_id, sub.listing_id, wishRef, hardGateFn)) {
+      closeMatchEpisode(db, sub.owner_user_id, sub.listing_id, wishRef);
+      continue;
+    }
     const episode = openMatchEpisodeIfNeeded(db, sub.owner_user_id, sub.listing_id, wishRef, now);
     if (!episode.notify) continue;
     const result = emitRentalNotifyEvent(db, {
@@ -935,7 +1012,6 @@ export function processMatchSubscriptionRow(db, sub, page, now, flags) {
       }
     }
   }
-  markMissingMatchesIneligible(db, sub.owner_user_id, sub.listing_id, eligibleRefs);
   return { emitted };
 }
 

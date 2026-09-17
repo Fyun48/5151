@@ -183,6 +183,7 @@ import {
   matchRulesForAdmin,
   ownerListingMatches as ownerListingMatchesOn,
   ownerListingMatchSummary as ownerListingMatchSummaryOn,
+  pairStillHardEligible as pairStillHardEligibleOn,
   ownerMatchingMeta,
   setRentalMatchHydrate,
 } from "./rentalMatchQuery.js";
@@ -2231,6 +2232,7 @@ export function runRentalNotifyWorkerTick(now = new Date(), extra = {}) {
   return runRentalNotifyTick(db, now, {
     flags: getRentalMarketplaceFlags(),
     matchFn: (listingId, ownerId) => ownerListingMatchesOn(db, listingId, ownerId, { limit: 20 }),
+    hardGateFn: (listingId, ownerId, wishRef) => pairStillHardEligibleOn(db, listingId, ownerId, wishRef),
     ...extra,
   });
 }
