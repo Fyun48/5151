@@ -160,6 +160,18 @@ import {
   unblockWishOfferFor,
   listAdminWishOfferReportsFor,
   runWishOfferExpiryWorkerTick,
+  getRentalNotifyPrefsFor,
+  saveRentalNotifyPrefsFor,
+  getMatchSubscriptionFor,
+  saveMatchSubscriptionFor,
+  applyUnsubscribeTokenFor,
+  recordShareEventFor,
+  getCompletionSurveyFor,
+  submitCompletionSurveyFor,
+  rentalOpsSummaryFor,
+  rentalOpsDrilldownFor,
+  sharePageExtrasFor,
+  runRentalNotifyWorkerTick,
   createSelfListing,
   listingToolsInfo,
   copyOwnListingFor,
@@ -273,6 +285,7 @@ import { enqueueListingEnrich, processListingEnrichBatch, requestClickRefresh, w
 import { deliveryConfigFromEnv, startDeliveryLoop } from "./opsDelivery.js";
 import { startWishLifecycleLoop } from "./wishLifecycleLoop.js";
 import { startWishOfferExpiryLoop } from "./wishOfferWorker.js";
+import { startRentalNotifyLoop } from "./rentalNotifyWorker.js";
 import { catalogDiff, isSystemCatalogTemplate, publicAdminCatalog } from "./rentalCatalog.js";
 import { isRentalCatalogV2Enabled, publicRentalMarketplaceFlags } from "./rentalMarketplaceFlags.js";
 import { opsDeliveryDb } from "./db.js";
@@ -900,10 +913,48 @@ app.get("/api/wish-rooms/:id", (req, res) => {
 app.get("/api/public/wish-room/:id", (req, res) => {
   try {
     const post = getDemand(req.params.id, { viewerId: 0, publicOnly: true });
+    const extras = sharePageExtrasFor();
     res.setHeader("Cache-Control", "public, max-age=60");
-    res.json(publicWishRoomView(post) || post);
+    res.json({ ...(publicWishRoomView(post) || post), ...extras });
   } catch (error) {
     res.status(error.status === 404 ? 404 : 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/public/wish-room/:id/share-events", (req, res) => {
+  try {
+    const extras = sharePageExtrasFor();
+    if (!extras.share_v2) {
+      res.status(404).json({ error: "分享追蹤尚未開放", code: "share_disabled" });
+      return;
+    }
+    const post = getDemand(req.params.id, { viewerId: 0, publicOnly: true });
+    const token = post?.public_token || post?.public_ref || req.params.id;
+    const eventType = String(req.body?.event_type || "view");
+    if (!["view", "cta"].includes(eventType)) {
+      res.status(403).json({ error: "無法記錄轉換", code: "share_conversion_forbidden" });
+      return;
+    }
+    const session = readSession(req);
+    setShareCookie(res, token);
+    res.json(recordShareEventFor({
+      shareToken: token,
+      eventType,
+      userId: session?.userId || null,
+      ip: clientIp(req),
+      userAgent: req.get("user-agent") || "",
+      source: "public",
+    }));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
+  }
+});
+
+app.post("/api/public/unsubscribe/:token", (req, res) => {
+  try {
+    res.json(applyUnsubscribeTokenFor(req.params.token));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
   }
 });
 
@@ -1016,10 +1067,36 @@ function afterMemberSession(user) {
   resumeIdleIfNeeded(id);
 }
 
+function shareTokenFrom(req) {
+  return String(cookieNamed(req, "jr_share") || "").trim();
+}
+
+function setShareCookie(res, token) {
+  const raw = String(token || "").trim();
+  if (!raw || /^\d+$/.test(raw)) return;
+  res.append("Set-Cookie", `jr_share=${encodeURIComponent(raw)}; Path=/; Max-Age=${30 * 86400}; SameSite=Lax`);
+}
+
+function attributeShare(req, userId, eventType) {
+  const token = shareTokenFrom(req);
+  if (!token || !userId) return;
+  try {
+    recordShareEventFor({
+      shareToken: token,
+      eventType,
+      userId,
+      ip: clientIp(req),
+      userAgent: req.get("user-agent") || "",
+      source: "server",
+    });
+  } catch { /* attribution never blocks */ }
+}
+
 app.get("/verify-email", (req, res) => {
   try {
     const user = confirmVerifyToken(String(req.query?.token || ""));
     afterMemberSession(user);
+    attributeShare(req, user.id, "signup");
     setSession(req, res, user.email);
     const base = publicBaseUrl(req);
     try {
@@ -1092,6 +1169,7 @@ app.get("/auth/:provider/callback", async (req, res) => {
     });
     let user = findUserByEmail(profile.email);
     const signup = planOauthSignup({ user, accept: state.accept === true });
+    const oauthIsNewRegister = signup.action === "register";
     if (signup.action === "closed") {
       const err = new Error("這個 Email 的帳號已關閉");
       err.status = 409;
@@ -1143,6 +1221,7 @@ app.get("/auth/:provider/callback", async (req, res) => {
       return;
     }
     afterMemberSession(user);
+    if (oauthIsNewRegister) attributeShare(req, user.id, "signup");
     res.setHeader("Set-Cookie", [
       oauthStateCookie(req, "", { clear: true }),
       sessionCookie(req, user.email),
@@ -2344,12 +2423,89 @@ app.post("/api/self-listings/:id/matches/:wishRef/offers", (req, res) => {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(createWishOfferFor(session.userId, req.params.id, req.params.wishRef, {
+    const created = createWishOfferFor(session.userId, req.params.id, req.params.wishRef, {
       idempotencyKey: req.body?.idempotency_key || req.get("idempotency-key"),
       actorKey: `owner:${session.userId}`,
-    }));
+    });
+    attributeShare(req, session.userId, "offer");
+    res.json(created);
   } catch (error) {
     sendOfferError(res, error);
+  }
+});
+
+app.get("/api/rental-notify/prefs", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(getRentalNotifyPrefsFor(session.userId));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
+  }
+});
+app.put("/api/rental-notify/prefs", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(saveRentalNotifyPrefsFor(session.userId, req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
+  }
+});
+app.get("/api/self-listings/:id/match-subscription", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(getMatchSubscriptionFor(session.userId, req.params.id));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
+  }
+});
+app.put("/api/self-listings/:id/match-subscription", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(saveMatchSubscriptionFor(session.userId, req.params.id, req.body?.mode));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
+  }
+});
+app.get("/api/wish-rooms/:id/survey", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(getCompletionSurveyFor(session.userId, req.params.id));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
+  }
+});
+app.post("/api/wish-rooms/:id/survey", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(submitCompletionSurveyFor(session.userId, req.params.id, req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
+  }
+});
+app.get("/api/admin/rental-ops", requireAdminApi, (req, res) => {
+  try {
+    res.json(rentalOpsSummaryFor({ from: req.query?.from, to: req.query?.to }));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
+  }
+});
+app.get("/api/admin/rental-ops/drill", requireAdminApi, (req, res) => {
+  try {
+    res.json(rentalOpsDrilldownFor({
+      kind: req.query?.kind,
+      cursor: req.query?.cursor,
+      limit: req.query?.limit,
+      from: req.query?.from,
+      to: req.query?.to,
+    }));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
   }
 });
 
@@ -2540,7 +2696,9 @@ app.post("/api/self-listings", (req, res) => {
     // 安全：素材庫照片必須屬於本人（擋以猜測 URL 盜連他人 media）。
     const body = req.body || {};
     assertOwnsMemberMediaUrls(session.userId, [...(Array.isArray(body.photos) ? body.photos : []), body.cover].filter(Boolean));
-    res.json(createSelfListing(session.userId, body));
+    const created = createSelfListing(session.userId, body);
+    attributeShare(req, session.userId, "listing");
+    res.json(created);
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -3827,6 +3985,7 @@ app.listen(PORT, HOST, () => {
   }
   startWishLifecycleLoop(() => runWishLifecycleWorkerTick(), { intervalMs: 5 * 60 * 1000, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
   startWishOfferExpiryLoop(() => runWishOfferExpiryWorkerTick(), { intervalMs: 5 * 60 * 1000, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
+  startRentalNotifyLoop(() => runRentalNotifyWorkerTick(), { intervalMs: 5 * 60 * 1000, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
   console.log(`${APP_NAME}：http://${HOST}:${PORT}`);
   if (envAdminConfigured()) {
     console.log(`管理員帳號：${adminEmail()}（也可註冊新會員）`);

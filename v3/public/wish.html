@@ -90,14 +90,26 @@
           ${row.avoid_labels?.length ? `<h2>${esc(row.label_avoid || "不接受")}</h2><div class="chips">${chips(row.avoid_labels, "avoid")}</div>` : ""}
           <p class="muted">更新 ${esc(String(row.updated_at || row.published_at || "").replace("T", " ").slice(0, 16))}</p>
           <div class="cta">
-            <span class="muted">回找房列表繼續看物件</span>
-            <a class="btn" href="/">回吉比租房</a>
+            <span class="muted">${row.share_v2 ? "若你有符合的房子，可以登入後提供房源" : "回找房列表繼續看物件"}</span>
+            <a class="btn" href="${esc(row.share_v2 ? (row.owner_cta_href || "/login?next=%2F%23post") : "/")}" data-share-cta>${esc(row.share_v2 ? (row.owner_cta || "我有符合的房子") : "回吉比租房")}</a>
           </div>
         `;
         if (row.public_path && row.public_path !== location.pathname) {
           history.replaceState({}, "", row.public_path);
         }
         document.title = `${areas} · 許願房`;
+        fetch(`/api/public/wish-room/${encodeURIComponent(wishId)}/share-events`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ event_type: "view" }),
+        }).catch(() => {});
+        document.querySelector("[data-share-cta]")?.addEventListener("click", () => {
+          fetch(`/api/public/wish-room/${encodeURIComponent(wishId)}/share-events`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ event_type: "cta" }),
+          }).catch(() => {});
+        });
       } catch (error) {
         main.innerHTML = `<p class="err">${esc(error.message || "這則許願房目前未公開。")}</p>`;
       }

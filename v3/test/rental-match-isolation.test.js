@@ -10,7 +10,7 @@ import { sortListingsRows } from "../src/db.js";
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const read = (rel) => readFileSync(path.join(dir, rel), "utf8");
 
-const FORBIDDEN = /rentalMatch|rentalMatchQuery|demand_posts|owner_matching|wishLifecycle/;
+const FORBIDDEN = /rentalMatch|rentalMatchQuery|demand_posts|owner_matching|wishLifecycle|rentalNotify|rentalShareGrowth|rentalSurvey/;
 
 test("listingScore never imports matching domain", () => {
   const src = read("../src/listingScore.js");

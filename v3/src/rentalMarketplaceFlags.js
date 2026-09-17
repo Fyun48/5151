@@ -8,6 +8,10 @@ export const DEFAULT_RENTAL_MARKETPLACE_FLAGS = Object.freeze({
     offer_enabled: false,
     public_share_v2_enabled: false,
     owner_notifications_enabled: false,
+    notifications_enabled: false,
+    digest_enabled: false,
+    outbound_mail_enabled: false,
+    outbound_push_enabled: false,
   }),
 });
 
@@ -31,6 +35,10 @@ export function normalizeRentalMarketplaceFlags(input = {}) {
       offer_enabled: boolFlag(wish.offer_enabled),
       public_share_v2_enabled: boolFlag(wish.public_share_v2_enabled),
       owner_notifications_enabled: boolFlag(wish.owner_notifications_enabled),
+      notifications_enabled: boolFlag(wish.notifications_enabled),
+      digest_enabled: boolFlag(wish.digest_enabled),
+      outbound_mail_enabled: boolFlag(wish.outbound_mail_enabled),
+      outbound_push_enabled: boolFlag(wish.outbound_push_enabled),
     },
   };
 }
@@ -51,6 +59,25 @@ export function isWishOfferEnabled(flags = {}) {
   return normalizeRentalMarketplaceFlags(flags).wish.offer_enabled === true;
 }
 
+export function isRentalNotificationsEnabled(flags = {}) {
+  return normalizeRentalMarketplaceFlags(flags).wish.notifications_enabled === true;
+}
+
+export function isRentalDigestEnabled(flags = {}) {
+  const row = normalizeRentalMarketplaceFlags(flags).wish;
+  return row.notifications_enabled === true && row.digest_enabled === true;
+}
+
+export function isRentalOutboundMailEnabled(flags = {}) {
+  const row = normalizeRentalMarketplaceFlags(flags).wish;
+  return row.notifications_enabled === true && row.outbound_mail_enabled === true;
+}
+
+export function isRentalOutboundPushEnabled(flags = {}) {
+  const row = normalizeRentalMarketplaceFlags(flags).wish;
+  return row.notifications_enabled === true && row.outbound_push_enabled === true;
+}
+
 export function publicRentalMarketplaceFlags(flags = {}) {
   const row = normalizeRentalMarketplaceFlags(flags);
   return {
@@ -61,6 +88,10 @@ export function publicRentalMarketplaceFlags(flags = {}) {
       offer_enabled: false,
       public_share_v2_enabled: false,
       owner_notifications_enabled: false,
+      notifications_enabled: false,
+      digest_enabled: false,
+      outbound_mail_enabled: false,
+      outbound_push_enabled: false,
     },
   };
 }
