@@ -36,6 +36,9 @@ export const MATCH_CANDIDATE_CHUNK = 400;
 export const AGGREGATE_SCAN_CHUNK = 500;
 export const ACTIVITY_PRELOAD_CHUNK = 400;
 export const MATCH_PAGE_CURSOR_TTL_MS = 15_000;
+export const MATCH_SNAPSHOT_MAX = 32;
+export const MATCH_SNAPSHOT_ITEMS_MAX = 20_000;
+export const MATCH_CURSOR_MAX = 64;
 export const OWNER_INTERNAL_SCORE_KEYS = Object.freeze([
   "rank_score", "freshness_score", "activity_score", "wish_id", "last_active_at",
 ]);
@@ -472,20 +475,124 @@ export function compareMatchRank(a, b) {
   return (Number(a.wish_id) || 0) - (Number(b.wish_id) || 0);
 }
 
+const matchSnapshots = new Map();
 const pageCursors = new Map();
 
-function pruneMatchPageCursors(now = Date.now()) {
+function asTime(now) {
+  if (now instanceof Date) return now.getTime();
+  const n = Number(now);
+  return Number.isFinite(n) && n > 0 ? n : Date.now();
+}
+
+function snapshotItemTotal() {
+  let n = 0;
+  for (const snap of matchSnapshots.values()) n += snap.items.length;
+  return n;
+}
+
+function evictSnapshot(snapshotId) {
+  matchSnapshots.delete(snapshotId);
   for (const [token, row] of pageCursors) {
-    if (row.expires <= now) pageCursors.delete(token);
+    if (row.snapshotId === snapshotId) pageCursors.delete(token);
   }
+}
+
+function releaseSnapshotIfUnused(snapshotId) {
+  for (const row of pageCursors.values()) {
+    if (row.snapshotId === snapshotId) return;
+  }
+  matchSnapshots.delete(snapshotId);
+}
+
+function pruneMatchStores(now = Date.now()) {
+  const at = asTime(now);
+  for (const [id, snap] of matchSnapshots) {
+    if (snap.expires <= at) evictSnapshot(id);
+  }
+  for (const [token, row] of pageCursors) {
+    if (row.expires <= at || !matchSnapshots.has(row.snapshotId)) pageCursors.delete(token);
+  }
+}
+
+function evictSnapshotsToFit(extraItems = 0, now = Date.now()) {
+  pruneMatchStores(now);
+  while (
+    matchSnapshots.size >= MATCH_SNAPSHOT_MAX
+    || snapshotItemTotal() + extraItems > MATCH_SNAPSHOT_ITEMS_MAX
+  ) {
+    const oldest = matchSnapshots.keys().next().value;
+    if (!oldest) break;
+    evictSnapshot(oldest);
+  }
+}
+
+function evictCursorsToFit() {
+  while (pageCursors.size >= MATCH_CURSOR_MAX) {
+    const oldest = pageCursors.keys().next().value;
+    if (!oldest) break;
+    const row = pageCursors.get(oldest);
+    pageCursors.delete(oldest);
+    if (row) releaseSnapshotIfUnused(row.snapshotId);
+  }
+}
+
+function createMatchSnapshot(items, { listingId = "", now = Date.now(), epoch = "" } = {}) {
+  const at = asTime(now);
+  const list = Array.isArray(items) ? items.slice() : [];
+  evictSnapshotsToFit(list.length, at);
+  const id = randomBytes(16).toString("base64url");
+  matchSnapshots.set(id, {
+    listingId: String(listingId || ""),
+    items: list,
+    epoch: epoch == null ? "" : String(epoch),
+    expires: at + MATCH_PAGE_CURSOR_TTL_MS,
+  });
+  return id;
+}
+
+function createMatchCursor(snapshotId, afterIndex, now = Date.now()) {
+  const at = asTime(now);
+  evictCursorsToFit();
+  const token = randomBytes(24).toString("base64url");
+  pageCursors.set(token, {
+    snapshotId: String(snapshotId || ""),
+    afterIndex: Math.max(0, Number(afterIndex) || 0),
+    expires: at + MATCH_PAGE_CURSOR_TTL_MS,
+  });
+  return token;
+}
+
+function resolveCursorRow(token, now = Date.now()) {
+  const at = asTime(now);
+  pruneMatchStores(at);
+  const row = pageCursors.get(String(token || ""));
+  if (!row) return null;
+  const snap = matchSnapshots.get(row.snapshotId);
+  if (!snap || snap.expires <= at || row.expires <= at) {
+    pageCursors.delete(String(token || ""));
+    if (row.snapshotId) releaseSnapshotIfUnused(row.snapshotId);
+    return null;
+  }
+  return {
+    token: String(token),
+    snapshotId: row.snapshotId,
+    listingId: snap.listingId,
+    items: snap.items,
+    afterIndex: row.afterIndex,
+    epoch: snap.epoch,
+    expires: Math.min(row.expires, snap.expires),
+  };
 }
 
 export function clearMatchPageCursors() {
   pageCursors.clear();
+  matchSnapshots.clear();
 }
 
 export function expireMatchPageCursor(token) {
+  const row = pageCursors.get(String(token || ""));
   pageCursors.delete(String(token || ""));
+  if (row) releaseSnapshotIfUnused(row.snapshotId);
 }
 
 export function inspectMatchCursorPayload(token) {
@@ -498,32 +605,24 @@ export function inspectMatchCursorPayload(token) {
   }
 }
 
-export function createOpaqueMatchCursor(items, { listingId = "", afterIndex = 0, now = Date.now() } = {}) {
-  const at = now instanceof Date ? now.getTime() : (Number(now) || Date.now());
-  pruneMatchPageCursors(at);
-  const token = randomBytes(24).toString("base64url");
-  pageCursors.set(token, {
-    listingId: String(listingId || ""),
-    items: Array.isArray(items) ? items.slice() : [],
-    afterIndex: Math.max(0, Number(afterIndex) || 0),
-    expires: at + MATCH_PAGE_CURSOR_TTL_MS,
-  });
-  if (pageCursors.size > 400) {
-    const first = pageCursors.keys().next().value;
-    pageCursors.delete(first);
-  }
-  return token;
+export function inspectMatchCursorState() {
+  const arrays = new Set();
+  for (const snap of matchSnapshots.values()) arrays.add(snap.items);
+  return {
+    snapshots: matchSnapshots.size,
+    cursors: pageCursors.size,
+    item_arrays: arrays.size,
+    total_items: snapshotItemTotal(),
+  };
+}
+
+export function createOpaqueMatchCursor(items, { listingId = "", afterIndex = 0, now = Date.now(), epoch = "" } = {}) {
+  const snapshotId = createMatchSnapshot(items, { listingId, now, epoch });
+  return createMatchCursor(snapshotId, afterIndex, now);
 }
 
 export function readOpaqueMatchCursor(token, now = Date.now()) {
-  if (!token) return null;
-  const row = pageCursors.get(String(token));
-  if (!row) return null;
-  if (row.expires <= now) {
-    pageCursors.delete(String(token));
-    return null;
-  }
-  return row;
+  return resolveCursorRow(token, now);
 }
 
 function cursorError(message, code) {
@@ -533,36 +632,50 @@ function cursorError(message, code) {
   return err;
 }
 
-export function applyMatchCursor(rows, cursor, limit, { listingId = "", now = Date.now() } = {}) {
+function consumeMatchCursor(token, now = Date.now()) {
+  const stored = resolveCursorRow(token, now);
+  if (!stored) return null;
+  pageCursors.delete(String(token));
+  return stored;
+}
+
+export function applyMatchCursor(rows, cursor, limit, { listingId = "", now = Date.now(), epoch } = {}) {
   const size = clampLimit(limit);
-  const at = now instanceof Date ? now.getTime() : (Number(now) || Date.now());
+  const at = asTime(now);
   if (cursor) {
     const token = typeof cursor === "string" ? cursor.trim() : "";
     if (!token) throw cursorError("分頁游標不正確", "bad_cursor");
-    const stored = readOpaqueMatchCursor(token, at);
+    const stored = consumeMatchCursor(token, at);
     if (!stored) throw cursorError("分頁已過期，請重新查詢", "cursor_expired");
     if (listingId && stored.listingId && String(stored.listingId) !== String(listingId)) {
+      releaseSnapshotIfUnused(stored.snapshotId);
       throw cursorError("分頁游標不正確", "bad_cursor");
     }
+    if (epoch != null && stored.epoch !== "" && String(stored.epoch) !== String(epoch)) {
+      evictSnapshot(stored.snapshotId);
+      throw cursorError("分頁已過期，請重新查詢", "cursor_expired");
+    }
+    const snap = matchSnapshots.get(stored.snapshotId);
+    if (snap) snap.expires = at + MATCH_PAGE_CURSOR_TTL_MS;
     const start = stored.afterIndex;
     const items = stored.items.slice(start, start + size);
     const nextIndex = start + items.length;
-    return {
-      items,
-      total: stored.items.length,
-      next_cursor: nextIndex < stored.items.length
-        ? createOpaqueMatchCursor(stored.items, { listingId: stored.listingId, afterIndex: nextIndex, now: at })
-        : "",
-    };
+    const next_cursor = nextIndex < stored.items.length
+      ? createMatchCursor(stored.snapshotId, nextIndex, at)
+      : "";
+    if (!next_cursor) releaseSnapshotIfUnused(stored.snapshotId);
+    return { items, total: stored.items.length, next_cursor };
   }
   const list = rows || [];
   const items = list.slice(0, size);
+  if (list.length <= items.length) {
+    return { items, total: list.length, next_cursor: "" };
+  }
+  const snapshotId = createMatchSnapshot(list, { listingId, now: at, epoch: epoch == null ? "" : epoch });
   return {
     items,
     total: list.length,
-    next_cursor: list.length > items.length
-      ? createOpaqueMatchCursor(list, { listingId, afterIndex: items.length, now: at })
-      : "",
+    next_cursor: createMatchCursor(snapshotId, items.length, at),
   };
 }
 

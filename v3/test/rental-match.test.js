@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { defaultCatalog, deleteOrDisableCondition, upsertCondition } from "../src/rentalCatalog.js";
 import {
   applyMatchCursor,
+  clearMatchPageCursors,
   compareMatchRank,
   defaultMatchRulesPublic,
   encodeMatchCursor,
@@ -10,11 +11,13 @@ import {
   expireMatchPageCursor,
   freshnessScoreFrom,
   inspectMatchCursorPayload,
+  inspectMatchCursorState,
   isListingMatchable,
   isMatchingConditionActive,
   isWishMatchable,
   listingMatchSnapshot,
   MATCH_QUALITY_WEIGHTS,
+  MATCH_SNAPSHOT_MAX,
   RANK_WEIGHTS,
   wishMatchSnapshot,
 } from "../src/rentalMatch.js";
@@ -283,6 +286,61 @@ test("opaque cursor keeps snapshot order after live rank mutation", () => {
     assert.equal(err.code, "cursor_expired");
     return true;
   });
+});
+
+test("opaque cursor reuses one snapshot and consumed tokens cannot replay", () => {
+  clearMatchPageCursors();
+  const rows = Array.from({ length: 12 }, (_, i) => ({
+    rank_score: 1000 - i,
+    match_score: 80,
+    wish_ref: `w${String(i).padStart(2, "0")}`,
+  }));
+  const seen = [];
+  let cursor = "";
+  for (let page = 0; page < 6; page += 1) {
+    const result = applyMatchCursor(rows, cursor || null, 2, { listingId: "L3" });
+    seen.push(...result.items.map((row) => row.wish_ref));
+    const state = inspectMatchCursorState();
+    if (result.next_cursor) {
+      assert.equal(state.snapshots, 1);
+      assert.equal(state.item_arrays, 1);
+      assert.equal(state.cursors, 1);
+      assert.equal(state.total_items, 12);
+    }
+    if (cursor) {
+      assert.throws(() => applyMatchCursor(rows, cursor, 2, { listingId: "L3" }), (err) => {
+        assert.equal(err.code, "cursor_expired");
+        return true;
+      });
+    }
+    cursor = result.next_cursor;
+  }
+  assert.equal(seen.length, 12);
+  assert.equal(new Set(seen).size, 12);
+  assert.equal(inspectMatchCursorState().snapshots, 0);
+  assert.equal(inspectMatchCursorState().cursors, 0);
+});
+
+test("oldest snapshot eviction expires leftover cursors", () => {
+  clearMatchPageCursors();
+  const cursors = [];
+  for (let i = 0; i < MATCH_SNAPSHOT_MAX + 2; i += 1) {
+    const rows = Array.from({ length: 4 }, (_, n) => ({
+      rank_score: 10,
+      match_score: 10,
+      wish_ref: `e${i}-${n}`,
+    }));
+    const page = applyMatchCursor(rows, null, 1, { listingId: `E${i}` });
+    cursors.push(page.next_cursor);
+  }
+  const state = inspectMatchCursorState();
+  assert.ok(state.snapshots <= MATCH_SNAPSHOT_MAX);
+  assert.ok(state.total_items <= MATCH_SNAPSHOT_MAX * 4);
+  assert.throws(() => applyMatchCursor([], cursors[0], 1, { listingId: "E0" }), (err) => {
+    assert.equal(err.code, "cursor_expired");
+    return true;
+  });
+  clearMatchPageCursors();
 });
 
 test("default rules stay read-only and do not mention listing ranking", () => {

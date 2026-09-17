@@ -155,10 +155,19 @@ function loadWishLifecycleByTokens(db, tokens) {
   return map;
 }
 
-function assertPendingCursorWishesMatchable(db, stored, cursor) {
-  const pending = (stored.items || []).slice(Math.max(0, Number(stored.afterIndex) || 0));
-  if (!pending.length) return;
-  const tokens = pending.map((row) => row.wish_ref || row.public_token).filter(Boolean);
+let lastLifecycleCheckCount = 0;
+
+export function lastMatchLifecycleCheckCount() {
+  return lastLifecycleCheckCount;
+}
+
+function assertUpcomingCursorWishesMatchable(db, stored, cursor, limit) {
+  const size = clampLimit(limit);
+  const start = Math.max(0, Number(stored.afterIndex) || 0);
+  const upcoming = (stored.items || []).slice(start, start + size);
+  const tokens = upcoming.map((row) => row.wish_ref || row.public_token).filter(Boolean);
+  lastLifecycleCheckCount = tokens.length;
+  if (!tokens.length) return;
   const live = loadWishLifecycleByTokens(db, tokens);
   for (const token of tokens) {
     const row = live.get(token);
@@ -488,14 +497,19 @@ export function ownerListingMatches(db, postId, userId, { limit, cursor, now = n
   const { listing } = loadOwnedMatchListing(db, postId, userId, now);
   expireOpenPosts(db, now);
   const at = now instanceof Date ? now.getTime() : (Number(now) || Date.now());
+  const epoch = wishGeneration(db);
   if (cursor) {
     const stored = readOpaqueMatchCursor(cursor, at);
     if (!stored) throw httpError("分頁已過期，請重新查詢", 400, "cursor_expired");
     if (listing.id && stored.listingId && String(stored.listingId) !== String(listing.id)) {
       throw httpError("分頁游標不正確", 400, "bad_cursor");
     }
-    assertPendingCursorWishesMatchable(db, stored, cursor);
-    const page = applyMatchCursor(null, cursor, limit, { listingId: listing.id, now: at });
+    if (stored.epoch && String(stored.epoch) !== String(epoch)) {
+      expireMatchPageCursor(cursor);
+      throw httpError("分頁已過期，請重新查詢", 400, "cursor_expired");
+    }
+    assertUpcomingCursorWishesMatchable(db, stored, cursor, limit);
+    const page = applyMatchCursor(null, cursor, limit, { listingId: listing.id, now: at, epoch });
     return {
       listing_id: listing.id,
       total: page.total,
@@ -506,7 +520,7 @@ export function ownerListingMatches(db, postId, userId, { limit, cursor, now = n
     };
   }
   const snapshot = computeListingMatches(db, listing, { now });
-  const page = applyMatchCursor(snapshot.items, "", limit, { listingId: listing.id, now: at });
+  const page = applyMatchCursor(snapshot.items, "", limit, { listingId: listing.id, now: at, epoch });
   return {
     listing_id: listing.id,
     total: snapshot.total,

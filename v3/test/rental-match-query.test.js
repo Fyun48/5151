@@ -12,6 +12,7 @@ import {
   computeListingMatches,
   explainAggregatePlan,
   explainMatchCandidatePlan,
+  lastMatchLifecycleCheckCount,
   ownerListingMatches,
   ownerListingMatchSummary,
   preloadActivityByUser,
@@ -19,8 +20,9 @@ import {
 } from "../src/rentalMatchQuery.js";
 import {
   ACTIVITY_PRELOAD_CHUNK,
-  expireMatchPageCursor,
+  clearMatchPageCursors,
   inspectMatchCursorPayload,
+  inspectMatchCursorState,
 } from "../src/rentalMatch.js";
 import {
   createSelfListing,
@@ -533,15 +535,13 @@ test("cursor page stays on snapshot after pause and live rank changes", () => {
   }));
   db.prepare("UPDATE users SET last_login_at=? WHERE id=14").run("2026-09-16T07:59:00.000Z");
   clearRentalMatchCache();
-  const page2 = ownerListingMatches(db, listing.post_id, 1, { limit: 1, cursor: page1.next_cursor });
-  assert.equal(page2.items.length, 1);
-  assert.notEqual(page2.items[0].wish_ref, firstRef);
-  assert.notEqual(page2.items[0].wish_ref, newer.public_token);
-  assert.equal(new Set([page1.items[0].wish_ref, page2.items[0].wish_ref]).size, 2);
+  assert.throws(() => ownerListingMatches(db, listing.post_id, 1, { limit: 1, cursor: page1.next_cursor }), (err) => {
+    assert.equal(err.code, "cursor_expired");
+    return true;
+  });
   const live = ownerListingMatches(db, listing.post_id, 1, { limit: 5 });
   assert.ok(live.items.some((row) => row.wish_ref === newer.public_token));
   assert.ok(!live.items.some((row) => row.wish_ref === firstRef));
-  expireMatchPageCursor(page1.next_cursor);
   assert.throws(() => ownerListingMatches(db, listing.post_id, 1, { limit: 1, cursor: page1.next_cursor }), (err) => {
     assert.equal(err.code, "cursor_expired");
     return true;
@@ -609,6 +609,39 @@ test("cursor expires when a not-yet-returned wish is blocked or completed", () =
   assert.ok(!afterDone.items.some((row) => row.wish_ref === stillPending.wish_ref));
   assert.ok(!afterDone.items.some((row) => row.wish_ref === blockedRef));
   assert.equal(ownerListingMatchSummary(db, listing.post_id, 1).count, 1);
+  db.close();
+});
+
+test("owner pagination keeps one snapshot and bounds lifecycle checks to page size", () => {
+  const db = open();
+  const listing = createSelfListing(db, 1, listingInput());
+  for (let i = 0; i < 12; i += 1) {
+    addTenant(db, 200 + i, `pagebound${i}@example.com`);
+    createDemandPost(db, 200 + i, wishInput({ body: `分頁上限需求 ${i} 找士林兩房` }));
+  }
+  clearMatchPageCursors();
+  let cursor = "";
+  const seen = [];
+  for (let page = 0; page < 6; page += 1) {
+    const detail = ownerListingMatches(db, listing.post_id, 1, { limit: 2, cursor: cursor || undefined });
+    seen.push(...detail.items.map((row) => row.wish_ref));
+    assert.ok(lastMatchLifecycleCheckCount() <= 2 || page === 0);
+    const state = inspectMatchCursorState();
+    if (detail.next_cursor) {
+      assert.equal(state.snapshots, 1);
+      assert.equal(state.item_arrays, 1);
+      assert.equal(state.cursors, 1);
+    }
+    if (cursor) {
+      assert.throws(() => ownerListingMatches(db, listing.post_id, 1, { limit: 2, cursor }), (err) => {
+        assert.equal(err.code, "cursor_expired");
+        return true;
+      });
+    }
+    cursor = detail.next_cursor;
+  }
+  assert.equal(seen.length, 12);
+  assert.equal(new Set(seen).size, 12);
   db.close();
 });
 
