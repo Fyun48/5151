@@ -4,10 +4,12 @@ import {
   assertOfferBurst,
   assertWishOfferEnabled,
   createOfferReport,
+  expirePendingIfDue,
   insertUserBlock,
   liveMatchEligible,
   loadFreshOffer,
   loadVisibleOffer,
+  offerHasExpired,
   offerHttpError,
   projectOfferContact,
   recordOfferFail,
@@ -31,7 +33,20 @@ function requireOffer(db, offerRef, userId) {
   return offer;
 }
 
+function expirePendingOrConflict(db, offer, now) {
+  if (offer.status === "pending" && offerHasExpired(offer, now)) {
+    const ttl = expirePendingIfDue(db, offer, now);
+    return { denied: "offer_expired", offer: ttl.offer };
+  }
+  if (offer.status !== "pending") throw conflict(offer);
+  return { denied: "", offer };
+}
+
 function recheckAcceptable(db, offer, now) {
+  if (offerHasExpired(offer, now)) {
+    expirePendingIfDue(db, offer, now);
+    return { ok: false, code: "offer_expired" };
+  }
   if (tenantBlocksOwner(db, offer.tenant_user_id, offer.owner_user_id)) {
     terminalizeOffers(db, {
       ownerUserId: offer.owner_user_id,
@@ -66,7 +81,11 @@ export function acceptWishOffer(db, userId, offerRef, { now = new Date(), actorK
     if (Number(offer.tenant_user_id) !== Number(userId)) {
       throw offerHttpError("找不到這筆提案", 404, "offer_not_found");
     }
-    if (offer.status !== "pending") throw conflict(offer);
+    const ttl = expirePendingOrConflict(db, offer, now);
+    if (ttl.denied) {
+      denied = ttl.denied;
+      return ttl.offer;
+    }
     const check = recheckAcceptable(db, offer, now);
     if (!check.ok) {
       denied = check.code;
@@ -101,12 +120,17 @@ export function acceptWishOffer(db, userId, offerRef, { now = new Date(), actorK
 export function declineWishOffer(db, userId, offerRef, { now = new Date(), actorKey = "" } = {}) {
   assertWishOfferEnabled();
   if (actorKey) assertOfferBurst(actorKey, now);
-  return withImmediate(db, () => {
+  let denied = "";
+  const result = withImmediate(db, () => {
     const offer = requireOffer(db, offerRef, userId);
     if (Number(offer.tenant_user_id) !== Number(userId)) {
       throw offerHttpError("找不到這筆提案", 404, "offer_not_found");
     }
-    if (offer.status !== "pending") throw conflict(offer);
+    const ttl = expirePendingOrConflict(db, offer, now);
+    if (ttl.denied) {
+      denied = ttl.denied;
+      return ttl.offer;
+    }
     const changed = transitionOffer(db, offer.id, {
       fromStatus: "pending",
       toStatus: "declined",
@@ -123,17 +147,27 @@ export function declineWishOffer(db, userId, offerRef, { now = new Date(), actor
     });
     return loadFreshOffer(db, offer.id);
   });
+  if (denied) {
+    recordOfferFail(actorKey || `tenant:${userId}`, now);
+    throw offerHttpError("這筆提案已過期", 409, denied);
+  }
+  return result;
 }
 
 export function withdrawWishOffer(db, userId, offerRef, { now = new Date(), actorKey = "" } = {}) {
   assertWishOfferEnabled();
   if (actorKey) assertOfferBurst(actorKey, now);
-  return withImmediate(db, () => {
+  let denied = "";
+  const result = withImmediate(db, () => {
     const offer = requireOffer(db, offerRef, userId);
     if (Number(offer.owner_user_id) !== Number(userId)) {
       throw offerHttpError("找不到這筆提案", 404, "offer_not_found");
     }
-    if (offer.status !== "pending") throw conflict(offer);
+    const ttl = expirePendingOrConflict(db, offer, now);
+    if (ttl.denied) {
+      denied = ttl.denied;
+      return ttl.offer;
+    }
     const changed = transitionOffer(db, offer.id, {
       fromStatus: "pending",
       toStatus: "withdrawn",
@@ -150,6 +184,11 @@ export function withdrawWishOffer(db, userId, offerRef, { now = new Date(), acto
     });
     return loadFreshOffer(db, offer.id);
   });
+  if (denied) {
+    recordOfferFail(actorKey || `owner:${userId}`, now);
+    throw offerHttpError("這筆提案已過期", 409, denied);
+  }
+  return result;
 }
 
 export function blockOwnerFromOffer(db, userId, offerRef, { now = new Date(), actorKey = "" } = {}) {

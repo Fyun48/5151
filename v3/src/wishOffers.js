@@ -49,7 +49,6 @@ export const OFFER_PAGE_MAX = 50;
 export const OFFER_EXPIRE_BATCH = 80;
 export const OFFER_IDEMPOTENCY_KEY_RE = SELF_LISTING_IDEMPOTENCY_KEY_RE;
 export const OFFER_CURSOR_TTL_MS = 15_000;
-export const OFFER_SNAPSHOT_MAX = 32;
 export const OFFER_CURSOR_MAX = 64;
 
 export const OFFER_EVENTS = Object.freeze([
@@ -65,8 +64,6 @@ export const OFFER_EVENTS = Object.freeze([
 
 const burstHits = new Map();
 const failHits = new Map();
-const offerSnapshots = new Map();
-const offerCursors = new Map();
 
 let catalogCache = defaultCatalog();
 let flagsCache = {};
@@ -90,8 +87,7 @@ export function resetWishOfferRateLimits() {
 }
 
 export function clearWishOfferCursors() {
-  offerSnapshots.clear();
-  offerCursors.clear();
+  /* query cursors live in wishOfferQueries.js */
 }
 
 export function newOfferToken() {
@@ -159,14 +155,22 @@ export function ensureWishOfferSchema(db) {
       WHERE status = 'pending';
     CREATE INDEX IF NOT EXISTS idx_wish_offers_owner_created
       ON wish_offers(owner_user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_wish_offers_owner_keyset
+      ON wish_offers(owner_user_id, created_at DESC, id DESC);
     CREATE INDEX IF NOT EXISTS idx_wish_offers_listing_created
       ON wish_offers(listing_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_wish_offers_wish_status
       ON wish_offers(wish_id, status, created_at);
     CREATE INDEX IF NOT EXISTS idx_wish_offers_tenant_inbox
       ON wish_offers(tenant_user_id, status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_wish_offers_tenant_keyset
+      ON wish_offers(tenant_user_id, created_at DESC, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_wish_offers_tenant_status_keyset
+      ON wish_offers(tenant_user_id, status, created_at DESC, id DESC);
     CREATE INDEX IF NOT EXISTS idx_wish_offers_owner_status
       ON wish_offers(owner_user_id, status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_wish_offers_owner_status_keyset
+      ON wish_offers(owner_user_id, status, created_at DESC, id DESC);
     CREATE INDEX IF NOT EXISTS idx_wish_offers_expires
       ON wish_offers(status, expires_at);
     CREATE INDEX IF NOT EXISTS idx_wish_offers_token
@@ -433,17 +437,26 @@ export function createWishOffer(db, ownerUserId, listingRef, wishRef, {
   const key = normalizeOfferIdempotencyKey(idempotencyKey);
   expireOpenSelfListings(db, now);
   return withImmediate(db, () => {
+    const listingRow = getSelfRow(db, listingRef);
+    const wishRow = loadWishByPublicRef(db, wishRef);
     if (key) {
       const replay = db.prepare(
         "SELECT * FROM wish_offer_idempotency WHERE owner_user_id = ? AND idempotency_key = ?",
       ).get(Number(ownerUserId), key);
       if (replay) {
-        const offer = db.prepare("SELECT * FROM wish_offers WHERE id = ?").get(replay.offer_id);
-        if (offer) return offer;
+        const listingId = listingRow ? Number(listingRow.post_id) : NaN;
+        const wishId = wishRow ? Number(wishRow.id) : NaN;
+        const sameTarget = Number.isFinite(listingId)
+          && Number.isFinite(wishId)
+          && listingId === Number(replay.listing_id)
+          && wishId === Number(replay.wish_id);
+        if (sameTarget) {
+          const offer = db.prepare("SELECT * FROM wish_offers WHERE id = ?").get(replay.offer_id);
+          if (offer) return offer;
+        }
+        throw offerHttpError("此操作已用於另一筆提案", 409, "IDEMPOTENCY_CONFLICT");
       }
     }
-    const listingRow = getSelfRow(db, listingRef);
-    const wishRow = loadWishByPublicRef(db, wishRef);
     if (!listingRow || !wishRow) {
       recordOfferFail(actorKey || `owner:${ownerUserId}`, now);
       throw offerHttpError("目前無法提供", 409, "match_no_longer_eligible");
@@ -514,6 +527,36 @@ export function transitionOffer(db, offerId, {
 
 export function loadFreshOffer(db, offerId) {
   return db.prepare("SELECT * FROM wish_offers WHERE id = ?").get(Number(offerId));
+}
+
+export function offerHasExpired(offer, now = new Date()) {
+  if (!offer) return false;
+  const expiresMs = Date.parse(offer.expires_at);
+  return Number.isFinite(expiresMs) && expiresMs <= atMs(now);
+}
+
+export function expirePendingIfDue(db, offer, now = new Date()) {
+  if (!offer || offer.status !== "pending" || !offerHasExpired(offer, now)) {
+    return { expired: false, offer };
+  }
+  const changed = transitionOffer(db, offer.id, {
+    fromStatus: "pending",
+    toStatus: "expired",
+    version: offer.version,
+    stampField: "expired_at",
+    now,
+  });
+  const fresh = loadFreshOffer(db, offer.id) || offer;
+  if (changed) {
+    writeOfferEvent(db, {
+      offerId: offer.id,
+      actorUserId: null,
+      eventType: "offer_expired",
+      meta: { reason: "ttl" },
+      now,
+    });
+  }
+  return { expired: fresh.status === "expired", offer: fresh };
 }
 
 export function terminalizeOffers(db, {
@@ -989,6 +1032,10 @@ export function explainWishOfferPlans(db) {
     wish_pending: explain("SELECT id FROM wish_offers WHERE wish_id = 1 AND status = 'pending'"),
     tenant_inbox: explain("SELECT id FROM wish_offers WHERE tenant_user_id = 1 AND status = 'pending' ORDER BY created_at DESC"),
     owner_sent: explain("SELECT id FROM wish_offers WHERE owner_user_id = 1 AND status = 'pending' ORDER BY created_at DESC"),
+    owner_keyset: explain("SELECT id FROM wish_offers WHERE owner_user_id = 1 AND (created_at < '2026-09-01T00:00:00.000Z' OR (created_at = '2026-09-01T00:00:00.000Z' AND id < 10)) ORDER BY created_at DESC, id DESC LIMIT 21"),
+    tenant_keyset: explain("SELECT id FROM wish_offers WHERE tenant_user_id = 1 AND status = 'pending' AND (created_at < '2026-09-01T00:00:00.000Z' OR (created_at = '2026-09-01T00:00:00.000Z' AND id < 10)) ORDER BY created_at DESC, id DESC LIMIT 21"),
+    owner_total: explain("SELECT COUNT(*) AS n FROM wish_offers WHERE owner_user_id = 1"),
+    tenant_pending_count: explain("SELECT COUNT(*) AS n FROM wish_offers WHERE tenant_user_id = 1 AND status = 'pending'"),
     expiry: explain("SELECT id FROM wish_offers WHERE status = 'pending' AND expires_at <= '2026-12-01'"),
     block_lookup: explain("SELECT id FROM user_blocks WHERE blocker_user_id = 1 AND blocked_user_id = 2"),
     report_rate: explain("SELECT COUNT(*) AS n FROM wish_offer_reports WHERE reporter_user_id = 1 AND created_at >= '2026-01-01'"),

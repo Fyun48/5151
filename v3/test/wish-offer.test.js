@@ -29,7 +29,13 @@ import {
   reportWishOffer,
   withdrawWishOffer,
 } from "../src/wishOfferTransitions.js";
-import { listOwnerWishOffers, listTenantWishOffers, resetWishOfferQueryCursors } from "../src/wishOfferQueries.js";
+import {
+  lastWishOfferListStats,
+  listOwnerWishOffers,
+  listTenantWishOffers,
+  resetWishOfferQueryCursors,
+  wishOfferQueryMemory,
+} from "../src/wishOfferQueries.js";
 import { runWishOfferExpiryTick, startWishOfferExpiryLoop } from "../src/wishOfferWorker.js";
 import { evaluateMatch, listingMatchSnapshot, wishMatchSnapshot } from "../src/rentalMatch.js";
 import { listingFitScore } from "../src/listingScore.js";
@@ -376,10 +382,17 @@ test("inbox and owner lists are opaque and bounded", () => {
   createWishOffer(db, 1, listing.post_id, wish.public_token, { idempotencyKey: "offer-key-in01" });
   const inbox = listTenantWishOffers(db, 2, { limit: 20 });
   assert.equal(inbox.pending_count, 1);
+  assert.equal(inbox.total, 1);
   assert.equal(inbox.items[0].viewer_role, "tenant");
   assert.doesNotMatch(JSON.stringify(inbox), /"wish_id"|0987654321/);
+  const inboxStats = lastWishOfferListStats();
+  assert.equal(inboxStats.counted, true);
+  assert.equal(inboxStats.pending_counted, true);
+  assert.ok(inboxStats.fetched <= 21);
+  assert.ok(inboxStats.projected <= 20);
   const owner = listOwnerWishOffers(db, 1, { limit: 20 });
   assert.equal(owner.items[0].viewer_role, "owner");
+  assert.equal(wishOfferQueryMemory().snapshots, 0);
   db.close();
 });
 
@@ -538,5 +551,108 @@ test("evaluateMatch still works after offer history", () => {
   createWishOffer(db, 1, listing.post_id, wish.public_token, { idempotencyKey: "offer-key-em01" });
   const after = evaluateMatch(listingSnap, wishSnap, { catalog: defaultCatalog() });
   assert.equal(before.match_score, after.match_score);
+  db.close();
+});
+
+test("idempotency key replays same target and conflicts on different listing or wish", () => {
+  const db = open();
+  const { listing, wish } = seedPair(db);
+  const listingB = createSelfListing(db, 1, listingInput({ title: "士林第二間套房", address: "中正路200號" }));
+  const wishB = createDemandPost(db, 3, wishInput({ body: "另一則需求" }));
+  const first = createWishOffer(db, 1, listing.post_id, wish.public_token, { idempotencyKey: "offer-key-idm-x" });
+  const replay = createWishOffer(db, 1, listing.post_id, wish.public_token, { idempotencyKey: "offer-key-idm-x" });
+  assert.equal(first.id, replay.id);
+  assert.equal(first.public_token, replay.public_token);
+  assert.equal(codeOf(() => createWishOffer(db, 1, listingB.post_id, wish.public_token, { idempotencyKey: "offer-key-idm-x" })), "IDEMPOTENCY_CONFLICT");
+  assert.equal(codeOf(() => createWishOffer(db, 1, listing.post_id, wishB.public_token, { idempotencyKey: "offer-key-idm-x" })), "IDEMPOTENCY_CONFLICT");
+  assert.equal(codeOf(() => createWishOffer(db, 1, 99999999, wish.public_token, { idempotencyKey: "offer-key-idm-x" })), "IDEMPOTENCY_CONFLICT");
+  assert.equal(codeOf(() => createWishOffer(db, 1, listing.post_id, "missingwishtokenxx", { idempotencyKey: "offer-key-idm-x" })), "IDEMPOTENCY_CONFLICT");
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM wish_offers").get().n, 1);
+  db.close();
+});
+
+test("accept decline and withdraw fail-closed after TTL without worker", () => {
+  const db = open();
+  const { listing, wish } = seedPair(db);
+  const acceptOffer = createWishOffer(db, 1, listing.post_id, wish.public_token, { idempotencyKey: "offer-key-ttl-a" });
+  db.prepare("UPDATE wish_offers SET expires_at = ? WHERE id = ?").run("2020-01-01T00:00:00.000Z", acceptOffer.id);
+  const now = new Date("2026-09-17T00:00:00.000Z");
+  assert.equal(codeOf(() => acceptWishOffer(db, 2, acceptOffer.public_token, { now })), "offer_expired");
+  assert.equal(db.prepare("SELECT status FROM wish_offers WHERE id = ?").get(acceptOffer.id).status, "expired");
+  assert.equal(codeOf(() => acceptWishOffer(db, 2, acceptOffer.public_token, { now })), "offer_conflict");
+
+  const listingB = createSelfListing(db, 1, listingInput({ title: "士林第二間套房", address: "中正路200號" }));
+  const declineOffer = createWishOffer(db, 1, listingB.post_id, wish.public_token, { idempotencyKey: "offer-key-ttl-d" });
+  db.prepare("UPDATE wish_offers SET expires_at = ? WHERE id = ?").run("2020-01-01T00:00:00.000Z", declineOffer.id);
+  assert.equal(codeOf(() => declineWishOffer(db, 2, declineOffer.public_token, { now })), "offer_expired");
+  assert.equal(db.prepare("SELECT status FROM wish_offers WHERE id = ?").get(declineOffer.id).status, "expired");
+
+  const listingC = createSelfListing(db, 1, listingInput({ title: "士林第三間套房", address: "中正路300號" }));
+  const withdrawOffer = createWishOffer(db, 1, listingC.post_id, wish.public_token, { idempotencyKey: "offer-key-ttl-w" });
+  db.prepare("UPDATE wish_offers SET expires_at = ? WHERE id = ?").run("2020-01-01T00:00:00.000Z", withdrawOffer.id);
+  assert.equal(codeOf(() => withdrawWishOffer(db, 1, withdrawOffer.public_token, { now })), "offer_expired");
+  assert.equal(db.prepare("SELECT status FROM wish_offers WHERE id = ?").get(withdrawOffer.id).status, "expired");
+  db.close();
+});
+
+test("offer list keyset stays bounded at 10k rows", () => {
+  const db = open();
+  const { listing, wish } = seedPair(db);
+  const insert = db.prepare(`
+    INSERT INTO wish_offers(
+      public_token, wish_id, listing_id, owner_user_id, tenant_user_id, status,
+      idempotency_key, created_at, updated_at, expires_at, declined_at, version
+    ) VALUES (?, ?, ?, 1, 2, 'declined', NULL, ?, ?, ?, ?, 1)
+  `);
+  db.exec("BEGIN");
+  for (let i = 0; i < 10000; i += 1) {
+    const created = new Date(Date.parse("2026-01-01T00:00:00.000Z") + (i * 1000)).toISOString();
+    insert.run(
+      `bulk${String(i).padStart(6, "0")}tok`,
+      wish.id,
+      listing.post_id,
+      created,
+      created,
+      "2026-12-01T00:00:00.000Z",
+      created,
+    );
+  }
+  db.exec("COMMIT");
+  const pending = createWishOffer(db, 1, listing.post_id, wish.public_token, { idempotencyKey: "offer-key-10k01" });
+  const owner = listOwnerWishOffers(db, 1, { limit: 20 });
+  const ownerStats = lastWishOfferListStats();
+  assert.equal(owner.total, 10001);
+  assert.equal(owner.items.length, 20);
+  assert.equal(owner.items[0].offer_ref, pending.public_token);
+  assert.equal(ownerStats.counted, true);
+  assert.ok(ownerStats.fetched <= 21);
+  assert.ok(ownerStats.projected <= 20);
+  assert.equal(wishOfferQueryMemory().snapshots, 0);
+  assert.ok(owner.next_cursor);
+  assert.doesNotMatch(String(owner.next_cursor), /created_at|"id":/);
+
+  const owner2 = listOwnerWishOffers(db, 1, { limit: 20, cursor: owner.next_cursor });
+  const owner2Stats = lastWishOfferListStats();
+  assert.equal(owner2.items.length, 20);
+  assert.notEqual(owner2.items[0].offer_ref, owner.items[0].offer_ref);
+  assert.equal(owner.items.some((item) => item.offer_ref === owner2.items[0].offer_ref), false);
+  assert.ok(owner2Stats.fetched <= 21);
+  assert.ok(owner2Stats.projected <= 20);
+  assert.equal(owner2.total, 10001);
+
+  const inbox = listTenantWishOffers(db, 2, { limit: 20 });
+  const inboxStats = lastWishOfferListStats();
+  assert.equal(inbox.total, 10001);
+  assert.equal(inbox.pending_count, 1);
+  assert.equal(inbox.items.length, 20);
+  assert.equal(inboxStats.counted, true);
+  assert.equal(inboxStats.pending_counted, true);
+  assert.ok(inboxStats.fetched <= 21);
+  assert.ok(inboxStats.projected <= 20);
+
+  const plans = explainWishOfferPlans(db);
+  const text = JSON.stringify(plans);
+  assert.match(text, /idx_wish_offers_owner_keyset|idx_wish_offers_owner_created|idx_wish_offers_owner_status/);
+  assert.match(text, /idx_wish_offers_tenant_status_keyset|idx_wish_offers_tenant_inbox|idx_wish_offers_tenant_keyset/);
   db.close();
 });
