@@ -96,7 +96,7 @@ test("listListings benchmark: skip unused same-house decorate on 400 listings", 
 
   // 合成 400 筆沒有 match_post_id／same_house_role，兩條路徑 decorate 工作量相同。
   // 先暖機再交錯取樣，避免「先量 true、再量 false」把 JIT／GC 波動算成退化。
-  for (let i = 0; i < 4; i += 1) {
+  for (let i = 0; i < 10; i += 1) {
     timeList(true);
     timeList(false);
   }
@@ -105,7 +105,7 @@ test("listListings benchmark: skip unused same-house decorate on 400 listings", 
   const afterSamples = [];
   let lastBefore = { totalMatched: 0, listings: [] };
   let lastAfter = { totalMatched: 0, listings: [] };
-  for (let i = 0; i < 15; i += 1) {
+  for (let i = 0; i < 21; i += 1) {
     const beforeRun = timeList(true);
     const afterRun = timeList(false);
     beforeSamples.push(beforeRun.ms);
