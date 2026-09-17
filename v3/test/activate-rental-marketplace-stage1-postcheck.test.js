@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  evaluateCounterfactualMatch,
+  isCounterfactuallyMatchable,
+} from "../src/rentalMatch.js";
+import {
   opaqueId,
   selectPostActivationFixtures,
   runAuthenticatedMatchingProbes,
@@ -12,6 +16,43 @@ const pausedToken = "paused-token-aaa";
 const completedToken = "completed-token-bbb";
 const inactiveToken = "inactive-token-ccc";
 const activeToken = "active-token-ddd";
+const conflictingPausedToken = "paused-conflict-eee";
+
+const MATCH_ENGINE = {
+  isCounterfactuallyMatchable,
+  evaluateCounterfactualMatch,
+};
+
+function matchableListing(extra = {}) {
+  return {
+    post_id: 501,
+    listed_by_user_id: 11,
+    source: "self",
+    self_status: "open",
+    price_num: 20000,
+    source_key: "1|8||台北市士林區中正路|3|18坪|2房1廳1衛",
+    address: "台北市士林區中正路100號",
+    area_name: "18坪",
+    layout: "2房1廳1衛",
+    kind_name: "整層住家",
+    listing_condition_values: JSON.stringify({
+      need_pet: "not_allowed",
+      need_cook: "allowed",
+    }),
+    ...extra,
+  };
+}
+
+function lifecycleWish(token, lifecycle, status, extra = {}) {
+  return {
+    public_token: token,
+    lifecycle,
+    status,
+    districts: ["1-8"],
+    rent_max: 30000,
+    ...extra,
+  };
+}
 
 function fixtures(extra = {}) {
   return selectPostActivationFixtures({
@@ -19,23 +60,14 @@ function fixtures(extra = {}) {
       { id: 11, email: "owner-a@example.com" },
       { id: 22, email: "owner-b@example.com" },
     ],
-    listings: [
-      {
-        post_id: 501,
-        listed_by_user_id: 11,
-        source: "self",
-        self_status: "open",
-        price_num: 20000,
-        district: "1-8",
-      },
-    ],
+    listings: [matchableListing()],
     wishes: [
-      { public_token: pausedToken, lifecycle: "paused", status: "open", districts: ["1-8"], rent_max: 30000 },
-      { public_token: completedToken, lifecycle: "completed", status: "closed", districts: ["1-8"], rent_max: 30000 },
-      { public_token: inactiveToken, lifecycle: "expired", status: "expired", districts: ["1-8"], rent_max: 30000 },
-      { public_token: activeToken, lifecycle: "active", status: "open", districts: ["1-8"], rent_max: 30000 },
+      lifecycleWish(pausedToken, "paused", "open"),
+      lifecycleWish(completedToken, "completed", "closed"),
+      lifecycleWish(inactiveToken, "expired", "expired"),
+      lifecycleWish(activeToken, "active", "open"),
     ],
-    listingFormFields: () => ({ district: "1-8" }),
+    ...MATCH_ENGINE,
     ...extra,
   });
 }
@@ -75,6 +107,7 @@ test("post-activation fixtures require two accounts and paused/completed/inactiv
   assert.equal(selected.owner_email, "owner-a@example.com");
   assert.equal(selected.other_email, "owner-b@example.com");
   assert.deepEqual(new Set(selected.suppressed.map((row) => row.class)), new Set(["paused", "completed", "inactive"]));
+  assert.ok(selected.suppressed.every((row) => row.counterfactual_eligible === true));
   assert.throws(
     () => fixtures({ users: [{ id: 11, email: "only@example.com" }] }),
     /second living account/,
@@ -82,12 +115,60 @@ test("post-activation fixtures require two accounts and paused/completed/inactiv
   assert.throws(
     () => fixtures({
       wishes: [
-        { public_token: pausedToken, lifecycle: "paused", status: "open", districts: ["1-8"], rent_max: 30000 },
-        { public_token: completedToken, lifecycle: "completed", status: "closed", districts: ["1-8"], rent_max: 30000 },
+        lifecycleWish(pausedToken, "paused", "open"),
+        lifecycleWish(completedToken, "completed", "closed"),
       ],
     }),
     /missing suppressed wishes: inactive/,
   );
+  assert.throws(
+    () => selectPostActivationFixtures({
+      users: [
+        { id: 11, email: "owner-a@example.com" },
+        { id: 22, email: "owner-b@example.com" },
+      ],
+      listings: [matchableListing()],
+      wishes: [
+        lifecycleWish(pausedToken, "paused", "open"),
+        lifecycleWish(completedToken, "completed", "closed"),
+        lifecycleWish(inactiveToken, "expired", "expired"),
+      ],
+    }),
+    /require deployed Match Engine counterfactual helper/,
+  );
+});
+
+test("condition-conflicting suppressed wishes are rejected while lifecycle-only equivalents are accepted", () => {
+  const conflicting = lifecycleWish(conflictingPausedToken, "paused", "open", {
+    condition_choices: { need_pet: "want" },
+  });
+  const listing = matchableListing();
+  assert.equal(isCounterfactuallyMatchable(listing, conflicting), false);
+  assert.equal(isCounterfactuallyMatchable(listing, lifecycleWish(pausedToken, "paused", "open")), true);
+
+  assert.throws(
+    () => fixtures({
+      wishes: [
+        conflicting,
+        lifecycleWish(completedToken, "completed", "closed"),
+        lifecycleWish(inactiveToken, "expired", "expired"),
+      ],
+    }),
+    /missing suppressed wishes: paused/,
+  );
+
+  const selected = fixtures({
+    wishes: [
+      conflicting,
+      lifecycleWish(pausedToken, "paused", "open"),
+      lifecycleWish(completedToken, "completed", "closed"),
+      lifecycleWish(inactiveToken, "expired", "expired"),
+    ],
+  });
+  const paused = selected.suppressed.filter((row) => row.class === "paused");
+  assert.equal(paused.length, 1);
+  assert.equal(paused[0].token_hash, opaqueId(pausedToken));
+  assert.ok(!selected.suppressed.some((row) => row.token_hash === opaqueId(conflictingPausedToken)));
 });
 
 test("authenticated probes accept opaque 404 cross-account and reject leaked suppressed wishes", async () => {
@@ -106,6 +187,8 @@ test("authenticated probes accept opaque 404 cross-account and reject leaked sup
   assert.equal(ok.authoritative_source, POST_ACTIVATION_SOURCE);
   assert.equal(ok.functional_smoke.authenticated_cross_account.verified, true);
   assert.equal(ok.suppression.leaked_count, 0);
+  assert.equal(ok.suppression.district_rent_heuristics_are_not_sufficient, true);
+  assert.equal(ok.suppression.counterfactual_eligible_required, true);
   const published = publicPostActivationEvidence(ok);
   assert.doesNotMatch(JSON.stringify(published), /example\.com|owner-cookie|owner-a|owner-b/);
 

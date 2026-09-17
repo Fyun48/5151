@@ -56,27 +56,6 @@ export function suppressionClass(row = {}) {
   return "";
 }
 
-function parseDistricts(raw) {
-  if (Array.isArray(raw)) return raw.map(String);
-  try {
-    const parsed = JSON.parse(raw || "[]");
-    return Array.isArray(parsed) ? parsed.map(String) : [];
-  } catch {
-    return [];
-  }
-}
-
-export function wishOverlapsListing(wish, listingDistricts, rent) {
-  const wishDistricts = parseDistricts(wish.districts);
-  if (listingDistricts.length && wishDistricts.length) {
-    if (!wishDistricts.some((key) => listingDistricts.includes(key))) return false;
-  }
-  const max = Number(wish.rent_max) || 0;
-  const listingRent = Number(rent) || 0;
-  if (listingRent > 0 && max > 0 && listingRent > max) return false;
-  return true;
-}
-
 export function listingDistrictsFromRow(row, listingFormFields) {
   if (!row) return [];
   if (typeof listingFormFields === "function") {
@@ -85,6 +64,14 @@ export function listingDistrictsFromRow(row, listingFormFields) {
   }
   const district = String(row.district || "").trim();
   return district ? [district] : [];
+}
+
+function requireCounterfactualHelper({ isCounterfactuallyMatchable, evaluateCounterfactualMatch } = {}) {
+  if (typeof isCounterfactuallyMatchable === "function") return isCounterfactuallyMatchable;
+  if (typeof evaluateCounterfactualMatch === "function") {
+    return (listingRow, wishRow, options) => evaluateCounterfactualMatch(listingRow, wishRow, options)?.eligible === true;
+  }
+  throw new Error("post-activation fixtures require deployed Match Engine counterfactual helper");
 }
 
 export function isOpenSelfListing(row, now = new Date()) {
@@ -104,7 +91,14 @@ export function selectPostActivationFixtures({
   wishes = [],
   now = new Date(),
   listingFormFields,
+  catalog,
+  isCounterfactuallyMatchable,
+  evaluateCounterfactualMatch,
 } = {}) {
+  const counterfactualEligible = requireCounterfactualHelper({
+    isCounterfactuallyMatchable,
+    evaluateCounterfactualMatch,
+  });
   const livingUsers = (users || []).filter((row) => row?.id && row?.email && !String(row.deleted_at || "").trim());
   const openListings = (listings || []).filter((row) => isOpenSelfListing(row, now));
   const listing = openListings.find((row) => livingUsers.some((user) => Number(user.id) === Number(row.listed_by_user_id)));
@@ -116,20 +110,19 @@ export function selectPostActivationFixtures({
   if (!other) {
     throw new Error("post-activation fixtures missing: second living account required for cross-account probe");
   }
-  const districts = listingDistrictsFromRow(listing, listingFormFields);
-  const rent = Number(listing.price_num) || 0;
   const suppressed = [];
   const seen = new Set();
   for (const wish of wishes || []) {
     const klass = suppressionClass(wish);
     if (!klass) continue;
-    if (!wishOverlapsListing(wish, districts, rent)) continue;
+    if (!counterfactualEligible(listing, wish, { catalog, now })) continue;
     const token = String(wish.public_token || "");
     if (!token || seen.has(token)) continue;
     seen.add(token);
     suppressed.push({
       class: klass,
       token_hash: opaqueId(token),
+      counterfactual_eligible: true,
     });
   }
   const classes = new Set(suppressed.map((row) => row.class));
@@ -144,7 +137,7 @@ export function selectPostActivationFixtures({
     listing_id: Number(listing.post_id || listing.id) || 0,
     owner_email: owner.email,
     other_email: other.email,
-    listing_districts: districts,
+    listing_districts: listingDistrictsFromRow(listing, listingFormFields),
     suppressed,
   };
 }
@@ -464,6 +457,9 @@ export async function runAuthenticatedMatchingProbes({
       verified: true,
       checked: true,
       row_counts_are_not_verification: true,
+      district_rent_heuristics_are_not_sufficient: true,
+      counterfactual_eligible_required: true,
+      counterfactual_engine: "evaluateMatch",
       authoritative_source: POST_ACTIVATION_SOURCE,
       suppressed_candidate_count: fixtures.suppressed.length,
       leaked_count: 0,
@@ -496,9 +492,15 @@ function queryRows(db, sql) {
   }
 }
 
-export function loadProductionFixtures(db, listingFormFields, now = new Date()) {
+export function loadProductionFixtures(db, {
+  listingFormFields,
+  now = new Date(),
+  catalog,
+  isCounterfactuallyMatchable,
+  evaluateCounterfactualMatch,
+} = {}) {
   const listings = queryRows(db, `
-    SELECT post_id, listed_by_user_id, source, self_status, self_expires_at, price_num, address, source_key
+    SELECT *
     FROM listings
     WHERE COALESCE(source, '591') = 'self'
     ORDER BY post_id DESC
@@ -519,12 +521,21 @@ export function loadProductionFixtures(db, listingFormFields, now = new Date()) 
     `);
   }
   const wishes = queryRows(db, `
-    SELECT id, districts, rent_max, status, lifecycle, public_token, closed_reason
+    SELECT *
     FROM demand_posts
     ORDER BY id DESC
     LIMIT 400
   `);
-  return selectPostActivationFixtures({ listings, users, wishes, now, listingFormFields });
+  return selectPostActivationFixtures({
+    listings,
+    users,
+    wishes,
+    now,
+    listingFormFields,
+    catalog,
+    isCounterfactuallyMatchable,
+    evaluateCounterfactualMatch,
+  });
 }
 
 export async function runPostActivationGate({
@@ -532,6 +543,9 @@ export async function runPostActivationGate({
   getRentalMarketplaceFlags,
   sessionCookie,
   listingFormFields,
+  catalog,
+  isCounterfactuallyMatchable,
+  evaluateCounterfactualMatch,
   baseUrl = process.env.STAGE1_POSTCHECK_BASE_URL || "http://127.0.0.1:5153",
   fetchImpl = fetch,
   resultPath = process.env.STAGE1_POSTCHECK_RESULT_PATH || "/tmp/stage1-post-activation.json",
@@ -547,7 +561,12 @@ export async function runPostActivationGate({
   if (later.some((key) => flags?.wish?.[key] !== false)) {
     throw new Error("post-activation gate saw Stage 2-4/outbound enabled");
   }
-  const fixtures = loadProductionFixtures(db, listingFormFields);
+  const fixtures = loadProductionFixtures(db, {
+    listingFormFields,
+    catalog,
+    isCounterfactuallyMatchable,
+    evaluateCounterfactualMatch,
+  });
   const cookies = {
     owner: mintSessionCookieValue(sessionCookie, fixtures.owner_email),
     other: mintSessionCookieValue(sessionCookie, fixtures.other_email),
@@ -561,16 +580,21 @@ export async function runPostActivationGate({
 async function main() {
   const spec = process.env.STAGE1_DOMAIN_DB_MODULE || "/app/src/db.js";
   const href = spec.startsWith("file:") ? spec : pathToFileURL(path.resolve(spec)).href;
-  const [dbMod, authMod, listingMod] = await Promise.all([
+  const [dbMod, authMod, listingMod, matchMod] = await Promise.all([
     import(href),
     import(pathToFileURL(path.resolve(process.env.STAGE1_AUTH_MODULE || "/app/src/auth.js")).href),
     import(pathToFileURL(path.resolve(process.env.STAGE1_LISTING_MODULE || "/app/src/selfListings.js")).href),
+    import(pathToFileURL(path.resolve(process.env.STAGE1_MATCH_MODULE || "/app/src/rentalMatch.js")).href),
   ]);
+  const catalog = typeof dbMod.getRentalCatalog === "function" ? dbMod.getRentalCatalog() : undefined;
   await runPostActivationGate({
     db: dbMod.db,
     getRentalMarketplaceFlags: dbMod.getRentalMarketplaceFlags,
     sessionCookie: authMod.sessionCookie,
     listingFormFields: listingMod.listingFormFields,
+    catalog,
+    isCounterfactuallyMatchable: matchMod.isCounterfactuallyMatchable,
+    evaluateCounterfactualMatch: matchMod.evaluateCounterfactualMatch,
   });
   console.log("POST_ACTIVATION_PROBES_OK");
 }

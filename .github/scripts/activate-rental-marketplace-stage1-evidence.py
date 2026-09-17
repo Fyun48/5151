@@ -113,6 +113,10 @@ def assert_suppression(block) -> None:
         fail("suppression block is missing")
     if block.get("row_counts_are_not_verification") is not True:
         fail("row counts alone cannot satisfy suppression verification")
+    if block.get("district_rent_heuristics_are_not_sufficient") is not True:
+        fail("district/rent overlap cannot satisfy suppression fixtures")
+    if block.get("counterfactual_eligible_required") is not True:
+        fail("suppression fixtures must be counterfactually eligible via evaluateMatch")
     refuse_pre_activation_uat(block, "suppression")
     if not block.get("probes"):
         fail("row counts alone cannot satisfy suppression verification")

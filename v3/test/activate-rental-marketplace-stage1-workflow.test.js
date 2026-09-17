@@ -412,6 +412,9 @@ function goodSmoke() {
       verified: true,
       checked: true,
       row_counts_are_not_verification: true,
+      district_rent_heuristics_are_not_sufficient: true,
+      counterfactual_eligible_required: true,
+      counterfactual_engine: "evaluateMatch",
       authoritative_source: "post_activation_authenticated_probes",
       suppressed_candidate_count: 3,
       leaked_count: 0,
@@ -573,6 +576,8 @@ test("cursor or cursor[bot] alone cannot activate Production without current Own
 test("row counts or pre-activation UAT cannot satisfy suppression and bare 5xx/busy flags cannot be synthesized", () => {
   const remote = readFileSync(REMOTE, "utf8");
   assert.match(remote, /row_counts_are_not_verification/);
+  assert.match(readFileSync(path.join(root, ".github/scripts/activate-rental-marketplace-stage1-postcheck.mjs"), "utf8"), /isCounterfactuallyMatchable/);
+  assert.match(readFileSync(path.join(root, ".github/scripts/activate-rental-marketplace-stage1-postcheck.mjs"), "utf8"), /district_rent_heuristics_are_not_sufficient/);
   assert.match(remote, /provenance": "defined_probes"/);
   assert.match(remote, /write_rollback_evidence/);
   assert.throws(
@@ -582,6 +587,8 @@ test("row counts or pre-activation UAT cannot satisfy suppression and bare 5xx/b
         verified: true,
         checked: true,
         row_counts_are_not_verification: true,
+        district_rent_heuristics_are_not_sufficient: true,
+        counterfactual_eligible_required: true,
         authoritative_source: "PRODUCTION_UAT_PASS",
         uat_attestation_bound: true,
         lifecycle_counts: [{ lifecycle: "paused", status: "open", n: 2 }],
@@ -602,7 +609,27 @@ test("row counts or pre-activation UAT cannot satisfy suppression and bare 5xx/b
         lifecycles_checked: ["paused", "completed", "inactive"],
       },
     }),
-    /row counts alone cannot satisfy suppression verification/,
+    /row counts alone cannot satisfy suppression verification|district\/rent overlap cannot satisfy suppression fixtures/,
+  );
+  assert.throws(
+    () => checkEvidence("--check-receipt", {
+      ...goodSmoke(),
+      suppression: {
+        ...goodSmoke().suppression,
+        district_rent_heuristics_are_not_sufficient: false,
+      },
+    }),
+    /district\/rent overlap cannot satisfy suppression fixtures/,
+  );
+  assert.throws(
+    () => checkEvidence("--check-receipt", {
+      ...goodSmoke(),
+      suppression: {
+        ...goodSmoke().suppression,
+        counterfactual_eligible_required: false,
+      },
+    }),
+    /suppression fixtures must be counterfactually eligible via evaluateMatch/,
   );
   assert.throws(
     () => checkEvidence("--check-receipt", { ...goodSmoke(), http_5xx: false }),
