@@ -26,7 +26,10 @@ import {
   compareMatchRank,
   defaultMatchRulesPublic,
   evaluateMatch,
+  expireMatchPageCursor,
   isListingMatchable,
+  isWishMatchable,
+  readOpaqueMatchCursor,
   layoutBucket,
   listingMatchSnapshot,
   MATCH_CACHE_TTL_MS,
@@ -109,15 +112,60 @@ function parseJsonArray(raw) {
   }
 }
 
+const MATCHABLE_WISH_SQL = `
+  COALESCE(NULLIF(lifecycle, ''), 'active') IN ('active', 'needs_confirmation')
+  AND IFNULL(status, '') NOT IN ('hidden', 'draft')
+  AND (IFNULL(status, '') != 'closed' OR COALESCE(NULLIF(lifecycle, ''), 'active') = 'needs_confirmation')
+`;
+
 function wishGeneration(db) {
   try {
     const row = db.prepare(
-      `SELECT COUNT(*) AS n, MAX(COALESCE(updated_at, published_at, created_at)) AS u
-       FROM demand_posts WHERE status = 'open'`,
+      `SELECT COUNT(*) AS n, MAX(id) AS max_id,
+              MAX(COALESCE(updated_at, published_at, created_at, '')) AS u
+       FROM demand_posts
+       WHERE ${MATCHABLE_WISH_SQL}`,
     ).get();
-    return `${Number(row?.n) || 0}:${row?.u || ""}`;
+    return `${Number(row?.n) || 0}:${row?.max_id || 0}:${row?.u || ""}`;
   } catch {
-    return "0:";
+    return "0:0:";
+  }
+}
+
+function chunkStrings(values, size = ACTIVITY_PRELOAD_CHUNK) {
+  const limit = Math.max(1, Math.round(Number(size) || ACTIVITY_PRELOAD_CHUNK));
+  const list = [...new Set((values || []).map((value) => String(value || "").trim()).filter(Boolean))];
+  const chunks = [];
+  for (let i = 0; i < list.length; i += limit) chunks.push(list.slice(i, i + limit));
+  return chunks;
+}
+
+function loadWishLifecycleByTokens(db, tokens) {
+  const map = new Map();
+  for (const chunk of chunkStrings(tokens)) {
+    const marks = chunk.map(() => "?").join(",");
+    try {
+      for (const row of db.prepare(
+        `SELECT public_token, status, lifecycle FROM demand_posts WHERE public_token IN (${marks})`,
+      ).all(...chunk)) {
+        map.set(String(row.public_token), row);
+      }
+    } catch { /* isolated tests may lack public_token */ }
+  }
+  return map;
+}
+
+function assertPendingCursorWishesMatchable(db, stored, cursor) {
+  const pending = (stored.items || []).slice(Math.max(0, Number(stored.afterIndex) || 0));
+  if (!pending.length) return;
+  const tokens = pending.map((row) => row.wish_ref || row.public_token).filter(Boolean);
+  const live = loadWishLifecycleByTokens(db, tokens);
+  for (const token of tokens) {
+    const row = live.get(token);
+    if (!row || !isWishMatchable(row)) {
+      expireMatchPageCursor(cursor);
+      throw httpError("分頁已過期，請重新查詢", 400, "cursor_expired");
+    }
   }
 }
 
@@ -438,8 +486,15 @@ function ownerPublicMatchItem(row) {
 
 export function ownerListingMatches(db, postId, userId, { limit, cursor, now = new Date() } = {}) {
   const { listing } = loadOwnedMatchListing(db, postId, userId, now);
+  expireOpenPosts(db, now);
   const at = now instanceof Date ? now.getTime() : (Number(now) || Date.now());
   if (cursor) {
+    const stored = readOpaqueMatchCursor(cursor, at);
+    if (!stored) throw httpError("分頁已過期，請重新查詢", 400, "cursor_expired");
+    if (listing.id && stored.listingId && String(stored.listingId) !== String(listing.id)) {
+      throw httpError("分頁游標不正確", 400, "bad_cursor");
+    }
+    assertPendingCursorWishesMatchable(db, stored, cursor);
     const page = applyMatchCursor(null, cursor, limit, { listingId: listing.id, now: at });
     return {
       listing_id: listing.id,

@@ -551,6 +551,67 @@ test("cursor page stays on snapshot after pause and live rank changes", () => {
   db.close();
 });
 
+test("cursor expires when a not-yet-returned wish is paused", () => {
+  const db = open();
+  const listing = createSelfListing(db, 1, listingInput());
+  createDemandPost(db, 2, wishInput({ body: "第一頁需求找士林兩房" }));
+  addTenant(db, 15, "pending-pause@example.com");
+  createDemandPost(db, 15, wishInput({ body: "尚未顯示就要暫停的需求找士林兩房" }));
+  addTenant(db, 16, "pending-keep@example.com");
+  createDemandPost(db, 16, wishInput({ body: "第三頁需求找士林兩房" }));
+  const full = ownerListingMatches(db, listing.post_id, 1, { limit: 3 });
+  assert.equal(full.total, 3);
+  const page1 = ownerListingMatches(db, listing.post_id, 1, { limit: 1 });
+  const pendingRef = full.items[1].wish_ref;
+  assert.notEqual(page1.items[0].wish_ref, pendingRef);
+  db.prepare("UPDATE demand_posts SET status='closed', lifecycle='paused' WHERE public_token=?").run(pendingRef);
+  assert.throws(() => ownerListingMatches(db, listing.post_id, 1, { limit: 1, cursor: page1.next_cursor }), (err) => {
+    assert.equal(err.code, "cursor_expired");
+    return true;
+  });
+  const summary = ownerListingMatchSummary(db, listing.post_id, 1);
+  const fresh = ownerListingMatches(db, listing.post_id, 1, { limit: 5 });
+  assert.equal(summary.count, 2);
+  assert.equal(fresh.total, 2);
+  assert.ok(!fresh.items.some((row) => row.wish_ref === pendingRef));
+  assert.ok(!JSON.stringify(fresh.items).includes(pendingRef) || fresh.items.every((row) => row.wish_ref !== pendingRef));
+  db.close();
+});
+
+test("cursor expires when a not-yet-returned wish is blocked or completed", () => {
+  const db = open();
+  const listing = createSelfListing(db, 1, listingInput());
+  createDemandPost(db, 2, wishInput({ body: "封鎖案例第一頁找士林兩房" }));
+  addTenant(db, 17, "pending-block@example.com");
+  createDemandPost(db, 17, wishInput({ body: "尚未顯示就要封鎖的需求找士林兩房" }));
+  addTenant(db, 18, "pending-done@example.com");
+  createDemandPost(db, 18, wishInput({ body: "尚未顯示就要完成的需求找士林兩房" }));
+  const full = ownerListingMatches(db, listing.post_id, 1, { limit: 3 });
+  const page1 = ownerListingMatches(db, listing.post_id, 1, { limit: 1 });
+  const blockedRef = full.items[1].wish_ref;
+  db.prepare("UPDATE demand_posts SET status='hidden', lifecycle='blocked' WHERE public_token=?").run(blockedRef);
+  assert.throws(() => ownerListingMatches(db, listing.post_id, 1, { limit: 1, cursor: page1.next_cursor }), (err) => {
+    assert.equal(err.code, "cursor_expired");
+    return true;
+  });
+  const afterBlock = ownerListingMatches(db, listing.post_id, 1, { limit: 5 });
+  assert.equal(afterBlock.total, 2);
+  assert.ok(!afterBlock.items.some((row) => row.wish_ref === blockedRef));
+  const page1b = ownerListingMatches(db, listing.post_id, 1, { limit: 1 });
+  const stillPending = afterBlock.items.find((row) => row.wish_ref !== page1b.items[0].wish_ref);
+  db.prepare("UPDATE demand_posts SET status='closed', lifecycle='completed' WHERE public_token=?").run(stillPending.wish_ref);
+  assert.throws(() => ownerListingMatches(db, listing.post_id, 1, { limit: 1, cursor: page1b.next_cursor }), (err) => {
+    assert.equal(err.code, "cursor_expired");
+    return true;
+  });
+  const afterDone = ownerListingMatches(db, listing.post_id, 1, { limit: 5 });
+  assert.equal(afterDone.total, 1);
+  assert.ok(!afterDone.items.some((row) => row.wish_ref === stillPending.wish_ref));
+  assert.ok(!afterDone.items.some((row) => row.wish_ref === blockedRef));
+  assert.equal(ownerListingMatchSummary(db, listing.post_id, 1).count, 1);
+  db.close();
+});
+
 test("activity preload chunks user ids and stays consistent across chunk sizes", () => {
   const db = open();
   const listing = createSelfListing(db, 1, listingInput());
