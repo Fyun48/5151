@@ -185,6 +185,14 @@ test("PR A activation uses domain getters/savers and forbids raw SQL flag writes
   assert.doesNotMatch(domain, /offer_enabled:\s*true/);
   assert.doesNotMatch(domain, /public_share_v2_enabled:\s*true/);
   assert.doesNotMatch(domain, /owner_notifications_enabled:\s*true/);
+  assert.doesNotMatch(domain, /notifications_enabled:\s*true/);
+  assert.doesNotMatch(domain, /digest_enabled:\s*true/);
+  assert.doesNotMatch(domain, /outbound_mail_enabled:\s*true/);
+  assert.doesNotMatch(domain, /outbound_push_enabled:\s*true/);
+  assert.match(domain, /"notifications_enabled"/);
+  assert.match(domain, /"digest_enabled"/);
+  assert.match(domain, /"outbound_mail_enabled"/);
+  assert.match(domain, /"outbound_push_enabled"/);
   assert.doesNotMatch(domain, /UPDATE\s+settings/i);
   assert.doesNotMatch(domain, /INSERT\s+INTO\s+settings/i);
   assert.doesNotMatch(domain, /writeSettingKey\(/);

@@ -109,9 +109,9 @@ test("12. production workflows declare minimal permissions (no contents: write)"
     assert.match(text, /contents:\s*read/, `${name} should use contents: read`);
     assert.doesNotMatch(text, /contents:\s*write/, `${name} must not request contents: write`);
   }
-  // docker 需要 packages: write 才能推映像；其餘不得有
-  assert.match(wf("docker.yml"), /packages:\s*write/);
-  for (const name of ["deploy-v3.yml", "deploy-v2.yml", "deploy.yml"]) {
+  // docker.yml 已停用 :latest 推送／部署，不再需要 packages: write
+  assert.doesNotMatch(wf("docker.yml"), /packages:\s*write/, "docker.yml must not request packages: write after latest-path retirement");
+  for (const name of ["deploy-v3.yml", "deploy-v2.yml", "deploy.yml", "docker.yml"]) {
     if (!existsSync(wfPath(name))) continue;
     assert.doesNotMatch(wf(name), /packages:\s*write/, `${name} should not request packages: write`);
   }

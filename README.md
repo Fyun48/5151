@@ -71,11 +71,22 @@ Linux 容器沒有 Windows 氣泡通知。預設用站內待看視窗與系統�
 
 Cloudflare Zero Trust 請為目前版加 Public Hostname：`jibbyrenth` → `http://127.0.0.1:5153`。OPS 為 `jibbyrentops` → `http://127.0.0.1:5154`。同一條 tunnel，不要另開第二條。不要再用 `c5151`。
 
-### 方式一：CasaOS 匯入 Compose（建議，拉 GitHub 映像）
+### 正式 Production 部署（唯一路徑）
 
-1. 等 GitHub Actions 把映像推到 `ghcr.io/fyun48/5151:latest`
-2. CasaOS → 應用 → 安裝自訂應用 → 匯入 `casaos-compose.yml`
-3. 若 repo 是 private，先在 CasaOS 終端登入：
+合併／push 到 `master` **不會**自動建映像或部署。`:latest` 也**不是** Production identity。
+
+正式發行只走這三個 GitHub workflow，皆須從 `refs/heads/master` 手動 `workflow_dispatch`，並以 **40 碼 SHA + `sha256:` digest** 對帳：
+
+1. `Build production image (no deploy)` → `.github/workflows/build-production-image.yml`
+2. `Production predeploy check (no deploy)` → `.github/workflows/production-predeploy-check.yml`
+3. `Deploy v3 to CasaOS (manual)` → `.github/workflows/deploy-v3.yml`
+
+`.github/workflows/docker.yml` 已停用（舊 `:latest` 路徑一律拒絕）。不要用 Watchtower 自動換映像。盤點與 staged activation 見 `v3/RELEASE-READINESS.md`。
+
+### 方式一：CasaOS 匯入 Compose（本機／新機，非正式發行）
+
+1. CasaOS → 應用 → 安裝自訂應用 → 匯入 `casaos-compose.yml`
+2. 若 repo 是 private，先在 CasaOS 終端登入：
 
 ```bash
 echo YOUR_GITHUB_TOKEN | docker login ghcr.io -u YOUR_GITHUB_USER --password-stdin
@@ -87,9 +98,7 @@ Token 需要 `read:packages`。公開 repo 通常不必登入。
 
 瀏覽器開 `http://<CasaOS IP>:5153`（本機埠只綁 loopback，一般走下方公開網址）。
 
-推到 `master` 後，GitHub Actions 會建 `ghcr.io/fyun48/5151:latest`。CasaOS 上的 Watchtower 約每 2 分鐘檢查一次，有新映像就自動換上；SQLite 資料仍在各版的 AppData 目錄。
-
-### 方式二：在 CasaOS 上 clone 後拉映像
+### 方式二：在 CasaOS 上 clone 後拉映像（非正式發行）
 
 ```bash
 cd /mnt/Storage1/apps/5151
@@ -97,7 +106,7 @@ git pull
 docker compose --profile tunnel up -d
 ```
 
-第一次請用映像 `ghcr.io/fyun48/5151:latest`，不要再 `--build`。之後推 GitHub 即可。
+第一次不要再 `--build`。正式站請改走上方三個 workflow，不要把 compose 檔裡的 `:latest` 當成 Production identity。
 
 ### 從本機帶走已標記資料
 

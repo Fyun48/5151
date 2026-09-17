@@ -15,6 +15,7 @@ import {
   explainWishOfferPlans,
   listAdminOfferReports,
   listMyBlocks,
+  unblockByRef,
   OFFER_LISTING_DAILY_CAP,
   OFFER_OWNER_DAILY_CAP,
   OFFER_SAME_WISH_COOLDOWN_MS,
@@ -331,6 +332,8 @@ test("flag off fail-closes mutations", () => {
   const db = open(FLAGS_OFF);
   const { listing, wish } = seedPair(db);
   assert.equal(codeOf(() => createWishOffer(db, 1, listing.post_id, wish.public_token, { idempotencyKey: "offer-key-off1" })), "wish_offer_disabled");
+  assert.equal(codeOf(() => listMyBlocks(db, 1)), "wish_offer_disabled");
+  assert.equal(codeOf(() => unblockByRef(db, 1, "any-block-ref")), "wish_offer_disabled");
   db.close();
 });
 
