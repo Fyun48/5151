@@ -17,6 +17,7 @@ const UNTOUCHED = [
 const DOMAIN = path.join(root, ".github/scripts/activate-rental-marketplace-stage1-domain.mjs");
 const REMOTE = path.join(root, ".github/scripts/activate-rental-marketplace-stage1-remote.sh");
 const PATH_PY = path.join(root, ".github/scripts/activate-rental-marketplace-stage1-path.py");
+const EVIDENCE_PY = path.join(root, ".github/scripts/activate-rental-marketplace-stage1-evidence.py");
 const PRA_DOMAIN = path.join(root, ".github/scripts/activate-rental-marketplace-pra-domain.mjs");
 
 function wf(name) {
@@ -255,6 +256,7 @@ test("Stage 1 remote guards digest, OCI, backup, concurrent lease and compensati
   assert.match(remote, /rank_score/);
   assert.match(remote, /SQLITE_BUSY|database is locked/);
   assert.match(text, /name: stage1-activation-evidence/);
+  assert.match(text, /activate-rental-marketplace-stage1-evidence\.py/);
   assert.match(text, /group: production-deploy/);
   for (const blob of [remote, text]) {
     assert.doesNotMatch(blob, /docker\s+pull\b/);
@@ -324,4 +326,112 @@ test("Stage 1 activation does not change build, predeploy, deploy or PRA workflo
     assert.doesNotMatch(text, /ACTIVATE-STAGE1-PRODUCTION/);
     assert.doesNotMatch(text, /activate-rental-marketplace-stage1/);
   }
+});
+
+function goodSmoke() {
+  return {
+    functional_smoke: {
+      aggregate_status: 200,
+      exposure_enabled: true,
+      summary_unauth: 401,
+      detail_unauth: 401,
+      unauth_match_denied: true,
+      authenticated_cross_account: {
+        probed_here: false,
+        prerequisite: "PRODUCTION_UAT_PASS",
+      },
+    },
+    perf_smoke: {
+      aggregate_ms: 12,
+      exposure_ms: 9,
+      budget_ms: 5000,
+      ok: true,
+    },
+    ACTIVATION_OK: true,
+  };
+}
+
+function checkEvidence(flag, doc) {
+  const dir = mkdtempSync(path.join(tmpdir(), "stage1-evidence-"));
+  const file = path.join(dir, "doc.json");
+  writeFileSync(file, JSON.stringify(doc));
+  try {
+    return execFileSync("python3", [EVIDENCE_PY, flag, file], { encoding: "utf8" });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("Stage 1 5s perf budget is fail-closed and cannot sit inside ACTIVATION_OK", () => {
+  const remote = readFileSync(REMOTE, "utf8");
+  const text = wf(WF_NAME);
+  assert.match(remote, /perf smoke exceeded 5000ms budget/);
+  assert.match(remote, /EVIDENCE_SCRIPT/);
+  assert.match(text, /activate-rental-marketplace-stage1-evidence\.py --check-receipt/);
+  assert.match(checkEvidence("--check-receipt", goodSmoke()), /EVIDENCE_RECEIPT_OK/);
+  assert.throws(
+    () => checkEvidence("--check-receipt", {
+      ...goodSmoke(),
+      perf_smoke: { aggregate_ms: 5001, exposure_ms: 9, budget_ms: 5000, ok: false },
+    }),
+    /exceeded 5000ms budget|ok is not true/,
+  );
+  assert.throws(
+    () => checkEvidence("--check-receipt", {
+      ...goodSmoke(),
+      perf_smoke: { aggregate_ms: 5001, exposure_ms: 9, budget_ms: 5000, ok: true },
+    }),
+    /exceeded 5000ms budget|contradicts measured times/,
+  );
+  assert.throws(
+    () => checkEvidence("--check-runtime", {
+      ...goodSmoke(),
+      perf_smoke: { aggregate_ms: 12, exposure_ms: 9000, budget_ms: 5000, ok: false },
+    }),
+    /exceeded 5000ms budget|ok is not true/,
+  );
+});
+
+test("Stage 1 evidence does not claim cross-account from unauth 401 and requires Production UAT prerequisite", () => {
+  const remote = readFileSync(REMOTE, "utf8");
+  const text = wf(WF_NAME);
+  assert.doesNotMatch(remote, /"cross_account": 401/);
+  assert.doesNotMatch(text, /"cross_account"/);
+  assert.match(remote, /PRODUCTION_UAT_PASS/);
+  assert.match(remote, /probed_here": False/);
+  assert.match(remote, /unauth_match_denied/);
+  assert.match(checkEvidence("--check-runtime", goodSmoke()), /EVIDENCE_RUNTIME_OK/);
+  assert.throws(
+    () => checkEvidence("--check-receipt", {
+      ...goodSmoke(),
+      functional_smoke: {
+        ...goodSmoke().functional_smoke,
+        cross_account: 401,
+      },
+    }),
+    /cross_account must not be claimed from unauth probes/,
+  );
+  assert.throws(
+    () => checkEvidence("--check-receipt", {
+      ...goodSmoke(),
+      functional_smoke: {
+        aggregate_status: 200,
+        exposure_enabled: true,
+        summary_unauth: 401,
+        detail_unauth: 401,
+        unauth_match_denied: true,
+      },
+    }),
+    /authenticated_cross_account prerequisite block is missing/,
+  );
+  assert.throws(
+    () => checkEvidence("--check-receipt", {
+      ...goodSmoke(),
+      functional_smoke: {
+        ...goodSmoke().functional_smoke,
+        authenticated_cross_account: { probed_here: true, prerequisite: "PRODUCTION_UAT_PASS" },
+      },
+    }),
+    /must not be claimed as probed here/,
+  );
 });

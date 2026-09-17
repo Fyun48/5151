@@ -17,6 +17,7 @@ BACKUP_ID="${BACKUP_ID:-}"
 BACKUP_HASH="${BACKUP_HASH:-}"
 DOMAIN_SCRIPT="${DOMAIN_SCRIPT:-}"
 PATH_SCRIPT="${PATH_SCRIPT:-}"
+EVIDENCE_SCRIPT="${EVIDENCE_SCRIPT:-}"
 EXPECTED_SRC_MANIFEST="${EXPECTED_SRC_MANIFEST:-}"
 SRC_MANIFEST_PY="${SRC_MANIFEST_PY:-}"
 EXPECTED_SRC_MOUNT="${EXPECTED_SRC_MOUNT:-/mnt/Storage1/apps/5151/v3/src}"
@@ -31,6 +32,7 @@ esac
 printf '%s' "$BACKUP_HASH" | grep -Eq '^sha256:[0-9a-f]{64}$' || fail "backup_hash is not sha256: plus 64 lowercase hex"
 [ -n "$DOMAIN_SCRIPT" ] && [ -f "$DOMAIN_SCRIPT" ] || fail "domain activation script is missing"
 [ -n "$PATH_SCRIPT" ] && [ -f "$PATH_SCRIPT" ] || fail "stage1 path classifier is missing"
+[ -n "$EVIDENCE_SCRIPT" ] && [ -f "$EVIDENCE_SCRIPT" ] || fail "stage1 evidence contract script is missing"
 [ -n "$EXPECTED_SRC_MANIFEST" ] && [ -f "$EXPECTED_SRC_MANIFEST" ] || fail "expected v3/src manifest is missing"
 [ -n "$SRC_MANIFEST_PY" ] && [ -f "$SRC_MANIFEST_PY" ] || fail "src manifest helper is missing"
 [ "$EXPECTED_SRC_MOUNT" = "/mnt/Storage1/apps/5151/v3/src" ] || fail "expected src mount path is not the Production v3 src path"
@@ -293,9 +295,15 @@ blob = json.dumps(doc)
 for token in ("SESSION_SECRET", "NAS_SSH_KEY", "AUTH_PASSWORD", "auth.env"):
     if token in blob:
         raise SystemExit("activation receipt must not contain secrets")
-os.makedirs(os.path.dirname(receipt_path), exist_ok=True)
-open(receipt_path, "w").write(json.dumps(doc, indent=2) + "\n")
 open("/tmp/stage1-activation-core.json", "w").write(json.dumps(doc, indent=2) + "\n")
+print("CORE_EVIDENCE_DRAFT_OK")
+PY
+  python3 "$EVIDENCE_SCRIPT" --check-receipt /tmp/stage1-activation-core.json || return 1
+  python3 - "$RECEIPT_PATH" <<'PY'
+import os, shutil, sys
+receipt_path = sys.argv[1]
+os.makedirs(os.path.dirname(receipt_path), exist_ok=True)
+shutil.copyfile("/tmp/stage1-activation-core.json", receipt_path)
 print("DURABLE_RECEIPT_OK")
 print("CORE_EVIDENCE_OK")
 PY
@@ -353,7 +361,11 @@ if summary_status != "401":
 if detail_status != "401":
     raise SystemExit("unauth detail is not fail-closed 401")
 if "請先登入" not in str(summary.get("error") or "") or "請先登入" not in str(detail.get("error") or ""):
-    raise SystemExit("unauth/cross-account match APIs did not fail-closed")
+    raise SystemExit("unauth match APIs did not fail-closed")
+agg_ms_n = int(agg_ms)
+exp_ms_n = int(exp_ms)
+if agg_ms_n >= 5000 or exp_ms_n >= 5000:
+    raise SystemExit("perf smoke exceeded 5000ms budget")
 lifecycle = json.load(open("/tmp/stage1-domain.json")).get("lifecycle_counts") or []
 suppressed = sum(
     int(row.get("n") or 0)
@@ -369,7 +381,12 @@ open("/tmp/stage1-runtime.env", "w").write(
             "exposure_enabled": True,
             "summary_unauth": int(summary_status),
             "detail_unauth": int(detail_status),
-            "cross_account": 401,
+            "unauth_match_denied": True,
+            "authenticated_cross_account": {
+                "probed_here": False,
+                "prerequisite": "PRODUCTION_UAT_PASS",
+                "note": "authenticated cross-account isolation is a Production UAT prerequisite; this activation only records unauthenticated 401 fail-closed",
+            },
         },
         "privacy_smoke": {
             "aggregate_clean": True,
@@ -377,10 +394,10 @@ open("/tmp/stage1-runtime.env", "w").write(
             "internal_rank_score_leaked": False,
         },
         "perf_smoke": {
-            "aggregate_ms": int(agg_ms),
-            "exposure_ms": int(exp_ms),
+            "aggregate_ms": agg_ms_n,
+            "exposure_ms": exp_ms_n,
             "budget_ms": 5000,
-            "ok": int(agg_ms) < 5000 and int(exp_ms) < 5000,
+            "ok": True,
         },
         "suppression": {
             "inactive_paused_completed_rows": suppressed,
@@ -396,6 +413,7 @@ open("/tmp/stage1-runtime.env", "w").write(
 )
 print("RUNTIME_HYDRATE_OK")
 PY
+  python3 "$EVIDENCE_SCRIPT" --check-runtime /tmp/stage1-runtime.env || return 1
 }
 
 echo "=== inspect current raw flags (no mutation) ==="

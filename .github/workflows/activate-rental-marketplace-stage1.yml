@@ -133,7 +133,7 @@ jobs:
           port: ${{ secrets.NAS_PORT }}
           username: ${{ secrets.NAS_USER }}
           key: ${{ secrets.NAS_SSH_KEY }}
-          source: ".github/scripts/activate-rental-marketplace-stage1-remote.sh,.github/scripts/activate-rental-marketplace-stage1-domain.mjs,.github/scripts/activate-rental-marketplace-stage1-path.py,.github/scripts/pra-src-manifest.py,pra-src-expected.json"
+          source: ".github/scripts/activate-rental-marketplace-stage1-remote.sh,.github/scripts/activate-rental-marketplace-stage1-domain.mjs,.github/scripts/activate-rental-marketplace-stage1-path.py,.github/scripts/activate-rental-marketplace-stage1-evidence.py,.github/scripts/pra-src-manifest.py,pra-src-expected.json"
           target: /tmp/5151-stage1-activate-helpers
           overwrite: true
       - name: Activate Stage 1 owner_matching on running v3
@@ -153,6 +153,7 @@ jobs:
             export BACKUP_HASH='${{ inputs.backup_hash }}'
             export DOMAIN_SCRIPT=/tmp/5151-stage1-activate-helpers/.github/scripts/activate-rental-marketplace-stage1-domain.mjs
             export PATH_SCRIPT=/tmp/5151-stage1-activate-helpers/.github/scripts/activate-rental-marketplace-stage1-path.py
+            export EVIDENCE_SCRIPT=/tmp/5151-stage1-activate-helpers/.github/scripts/activate-rental-marketplace-stage1-evidence.py
             export SRC_MANIFEST_PY=/tmp/5151-stage1-activate-helpers/.github/scripts/pra-src-manifest.py
             export EXPECTED_SRC_MANIFEST=/tmp/5151-stage1-activate-helpers/pra-src-expected.json
             export EXPECTED_SRC_MOUNT=/mnt/Storage1/apps/5151/v3/src
@@ -210,6 +211,7 @@ jobs:
           if any(after["wish"].get(key) is not False for key in later):
               raise SystemExit("after Stage 2-4/outbound flag is not OFF")
           PY
+          python3 .github/scripts/activate-rental-marketplace-stage1-evidence.py --check-receipt ./nas-activation-core.json
       - name: Write Stage 1 activation evidence
         env:
           WF_FILE: .github/workflows/activate-rental-marketplace-stage1.yml
@@ -277,6 +279,7 @@ jobs:
                   raise SystemExit("activation evidence must not contain secrets")
           open("stage1-activation-evidence.json", "w").write(json.dumps(doc, indent=2) + "\n")
           PY
+          python3 .github/scripts/activate-rental-marketplace-stage1-evidence.py --check-receipt ./stage1-activation-evidence.json
       - name: Upload Stage 1 activation evidence
         uses: actions/upload-artifact@v4
         with:
