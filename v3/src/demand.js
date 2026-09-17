@@ -160,7 +160,100 @@ export function ensureDemandSchema(db) {
       ON demand_posts(status, updated_at, id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_demand_public_token
       ON demand_posts(public_token) WHERE public_token IS NOT NULL AND public_token != '';
+    CREATE INDEX IF NOT EXISTS idx_demand_match_open
+      ON demand_posts(status, lifecycle, rent_max, id)
+      WHERE status = 'open';
+    CREATE INDEX IF NOT EXISTS idx_demand_match_lifecycle
+      ON demand_posts(lifecycle, status, id);
+    CREATE INDEX IF NOT EXISTS idx_demand_match_eligible
+      ON demand_posts(rent_max, id)
+      WHERE status = 'open'
+        AND COALESCE(NULLIF(lifecycle, ''), 'active') IN ('active', 'needs_confirmation');
   `);
+  ensureDemandMatchDistrictSchema(db);
+  ensureDemandMatchGenerationSchema(db);
+}
+
+export function ensureDemandMatchGenerationSchema(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS demand_match_generation (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      generation INTEGER NOT NULL DEFAULT 0
+    );
+    INSERT OR IGNORE INTO demand_match_generation(id, generation) VALUES (1, 0);
+  `);
+  try {
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS trg_demand_match_gen_insert
+      AFTER INSERT ON demand_posts
+      BEGIN
+        UPDATE demand_match_generation SET generation = generation + 1 WHERE id = 1;
+      END;
+      CREATE TRIGGER IF NOT EXISTS trg_demand_match_gen_delete
+      AFTER DELETE ON demand_posts
+      BEGIN
+        UPDATE demand_match_generation SET generation = generation + 1 WHERE id = 1;
+      END;
+      CREATE TRIGGER IF NOT EXISTS trg_demand_match_gen_update
+      AFTER UPDATE OF status, lifecycle, updated_at, rent_max, districts, layout,
+        housing_type, condition_choices, must_have, avoid, ping_min, public_token,
+        last_confirmed_at, closed_at, closed_reason
+      ON demand_posts
+      BEGIN
+        UPDATE demand_match_generation SET generation = generation + 1 WHERE id = 1;
+      END;
+    `);
+  } catch { /* demand_posts may be absent in isolated tests */ }
+}
+
+export function readDemandMatchGeneration(db) {
+  ensureDemandMatchGenerationSchema(db);
+  try {
+    return Number(db.prepare("SELECT generation FROM demand_match_generation WHERE id = 1").get()?.generation) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+export function explainDemandMatchGenerationPlan(db) {
+  ensureDemandMatchGenerationSchema(db);
+  return db.prepare("EXPLAIN QUERY PLAN SELECT generation FROM demand_match_generation WHERE id = 1").all();
+}
+
+export function ensureDemandMatchDistrictSchema(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS demand_match_districts (
+      wish_id INTEGER NOT NULL,
+      district TEXT NOT NULL,
+      PRIMARY KEY (wish_id, district)
+    );
+    CREATE INDEX IF NOT EXISTS idx_demand_match_districts_district
+      ON demand_match_districts(district, wish_id);
+  `);
+}
+
+export function syncDemandMatchDistricts(db, wishId) {
+  ensureDemandMatchDistrictSchema(db);
+  const id = Number(wishId) || 0;
+  if (!id) return;
+  db.prepare("DELETE FROM demand_match_districts WHERE wish_id = ?").run(id);
+  const row = db.prepare("SELECT id, districts, status FROM demand_posts WHERE id = ?").get(id);
+  if (!row || String(row.status) !== "open") return;
+  let raw = [];
+  try {
+    raw = JSON.parse(row.districts || "[]");
+  } catch {
+    raw = [];
+  }
+  const ins = db.prepare("INSERT OR IGNORE INTO demand_match_districts(wish_id, district) VALUES (?, ?)");
+  for (const key of normalizeWatchDistricts(raw)) ins.run(id, key);
+}
+
+export function rebuildDemandMatchDistricts(db) {
+  ensureDemandMatchDistrictSchema(db);
+  db.exec("DELETE FROM demand_match_districts");
+  const rows = db.prepare("SELECT id FROM demand_posts WHERE status = 'open'").all();
+  for (const row of rows) syncDemandMatchDistricts(db, row.id);
 }
 
 function tableColumns(db, table) {
@@ -639,13 +732,25 @@ export function expireOpenPosts(db, now = new Date()) {
          AND lifecycle = 'needs_confirmation'
          AND expires_at <= ? AND expires_at < ?`,
     ).run(stamp, stamp, graceCutoff, WISH_FAR_EXPIRE);
+    pruneDemandMatchDistricts(db);
     return (Number(confirm.changes) || 0) + (Number(paused.changes) || 0);
   }
   const result = db.prepare(
     `UPDATE demand_posts SET status = 'expired', closed_at = COALESCE(closed_at, ?)
      WHERE status = 'open' AND expires_at <= ? AND expires_at < ?`,
   ).run(stamp, stamp, WISH_FAR_EXPIRE);
+  pruneDemandMatchDistricts(db);
   return Number(result.changes) || 0;
+}
+
+export function pruneDemandMatchDistricts(db) {
+  try {
+    ensureDemandMatchDistrictSchema(db);
+    db.prepare(`
+      DELETE FROM demand_match_districts
+      WHERE wish_id NOT IN (SELECT id FROM demand_posts WHERE status = 'open')
+    `).run();
+  } catch { /* isolated tests may lack the table */ }
 }
 
 export function migrateOpenWishesOnActivation(db, now = new Date()) {
@@ -1112,6 +1217,7 @@ function insertRow(db, uid, fields, status, now) {
   } else if (status === "draft") {
     writeLifecycle(db, id, { lifecycle: "draft" });
   }
+  syncDemandMatchDistricts(db, id);
   return id;
 }
 
@@ -1157,6 +1263,7 @@ function writeRow(db, id, fields, extra = {}) {
     fields.condition_choices ? JSON.stringify(fields.condition_choices) : null,
     id,
   );
+  syncDemandMatchDistricts(db, id);
 }
 
 function applyPublishInPlace(db, row, fields, now) {
@@ -1282,6 +1389,7 @@ export function closeDemandPost(db, userId, postId, { admin = false } = {}, now 
     "UPDATE demand_posts SET status = 'closed', closed_at = ?, updated_at = ? WHERE id = ?",
   ).run(stamp, stamp, row.id);
   writeLifecycle(db, row.id, { lifecycle: "paused", closed_reason: "paused" });
+  syncDemandMatchDistricts(db, row.id);
   return getDemandPost(db, row.id, { viewerId: userId });
 }
 

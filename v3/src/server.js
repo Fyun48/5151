@@ -140,6 +140,12 @@ import {
   feedbackMeta,
   listMineSelfListings,
   getSelfListing,
+  ownerListingMatchSummary,
+  ownerListingMatches,
+  aggregateDemand,
+  homepageDemandExposure,
+  rentalMatchAdminRules,
+  rentalMatchOwnerMeta,
   createSelfListing,
   listingToolsInfo,
   copyOwnListingFor,
@@ -765,6 +771,39 @@ app.get("/api/wish-rooms", (req, res) => {
     res.json(wishListPayload(req));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/demand/aggregate", (req, res) => {
+  try {
+    const query = req.query || {};
+    const districts = String(query.districts || query.district || "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    const conditions = String(query.conditions || query.condition || "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    res.json(aggregateDemand({
+      districts,
+      city: query.city,
+      rent_min: query.rent_min,
+      rent_max: query.rent_max,
+      layout: query.layout,
+      housing_type: query.housing_type,
+      conditions,
+    }));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
+  }
+});
+
+app.get("/api/demand/exposure", (req, res) => {
+  try {
+    res.json(homepageDemandExposure());
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
   }
 });
 
@@ -1838,6 +1877,10 @@ app.put("/api/admin/rental-marketplace-flags", requireAdminApi, (req, res) => {
   }
 });
 
+app.get("/api/admin/rental-match-rules", requireAdminApi, (_req, res) => {
+  res.json(rentalMatchAdminRules());
+});
+
 app.get("/api/admin/feedback", requireAdminApi, (req, res) => {
   res.json({
     ...feedbackMeta(),
@@ -2232,10 +2275,40 @@ app.get("/api/self-listings", (req, res) => {
           : {},
       ),
       tools: listingToolsInfo(session.userId),
+      owner_matching: rentalMatchOwnerMeta(),
       listings: listMineSelfListings(session.userId),
     });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/self-listings/:id/matches/summary", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入" });
+      return;
+    }
+    res.json(ownerListingMatchSummary(req.params.id, session.userId));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
+  }
+});
+
+app.get("/api/self-listings/:id/matches", (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: "請先登入" });
+      return;
+    }
+    res.json(ownerListingMatches(req.params.id, session.userId, {
+      limit: req.query?.limit,
+      cursor: req.query?.cursor,
+    }));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
   }
 });
 

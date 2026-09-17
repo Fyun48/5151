@@ -444,7 +444,7 @@ test("catalog and wish modules stay out of listing ranking", () => {
   const sortSrc = readFileSync(path.join(dir, "../src/db.js"), "utf8");
   const matchSrc = readFileSync(path.join(dir, "../src/match.js"), "utf8");
   for (const src of [scoreSrc, matchSrc]) {
-    assert.doesNotMatch(src, /rentalCatalog|wishLifecycle|demand\.js/);
+    assert.doesNotMatch(src, /rentalCatalog|wishLifecycle|demand\.js|rentalMatch/);
   }
   const start = sortSrc.indexOf("export function sortListingsRows");
   const end = sortSrc.indexOf("const LIST_CANDIDATE_COLUMNS");

@@ -1020,7 +1020,7 @@
             <select id="catalogEditCategory"></select>
             <label class="checks"><input type="checkbox" id="catalogEditListing" /> 有房刊登使用</label>
             <label class="checks"><input type="checkbox" id="catalogEditWish" /> 許願房使用</label>
-            <label class="checks"><input type="checkbox" id="catalogEditMatch" /> 參與配對（供後續 PR B）</label>
+            <label class="checks"><input type="checkbox" id="catalogEditMatch" /> 參與配對</label>
             <label class="checks"><input type="checkbox" id="catalogEditWant" /> 許願房可以選「要有」</label>
             <label class="checks"><input type="checkbox" id="catalogEditAvoid" /> 許願房可以選「不要」</label>
             <label class="checks"><input type="checkbox" id="catalogEditEnabled" /> 啟用</label>
@@ -1054,8 +1054,9 @@
       <div id="rental-rules" class="admin-panel" data-admin-page="rental/rules">
         <section class="card">
           <h2>配對規則</h2>
-          <p class="hint">正式 Match Engine 尚未開放。這個頁面只是預留位置，不會影響找房排序或同房源判定。</p>
-          <p><button type="button" class="ghost" disabled>即將推出</button></p>
+          <p class="hint">第一版是唯讀預設規則，不會影響找房排序或同房源判定。正式規則編輯器尚未開放。</p>
+          <div id="rentalMatchRules" class="catalog-list"><p class="muted">載入預設規則…</p></div>
+          <p><button type="button" class="ghost" disabled>規則編輯器即將推出</button></p>
         </section>
       </div>
       <div id="rental-templates" class="admin-panel" data-admin-page="rental/templates">
@@ -2210,6 +2211,28 @@
       if (!res.ok) throw new Error(data.error || "載入條件目錄失敗");
       catalogState = data;
       renderCatalogAdmin();
+    }
+    async function loadRentalMatchRules() {
+      const box = $("rentalMatchRules");
+      if (!box) return;
+      try {
+        const res = await fetch("/api/admin/rental-match-rules", { cache: "no-store" });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "載入配對規則失敗");
+        const gates = (data.hard_gates || []).map((row) => `<li>${esc(row)}</li>`).join("");
+        const weights = Object.entries(data.quality?.condition_by_id || {}).map(([id, n]) => `<li>${esc(id)}：${n}</li>`).join("");
+        box.innerHTML = `
+          <p class="hint">${esc(data.note || "")}</p>
+          <p><strong>Hard Gate</strong></p>
+          <ul>${gates}</ul>
+          <p><strong>品質權重</strong>　格局 ${data.quality?.layout ?? "—"}、坪數 ${data.quality?.area ?? "—"}</p>
+          <ul>${weights}</ul>
+          <p><strong>排序權重</strong>　符合 ${data.rank?.match ?? "—"}／新鮮 ${data.rank?.freshness ?? "—"}／活躍 ${data.rank?.activity ?? "—"}</p>
+          <p>隱私門檻：群組少於 ${data.privacy_threshold ?? 3} 筆不顯示精細分布。</p>
+        `;
+      } catch (error) {
+        box.innerHTML = `<p class="muted">${esc(error.message)}</p>`;
+      }
     }
 
     function fillBrand(data) {
@@ -3665,7 +3688,7 @@
       if (me.role !== "admin") { location.replace("/"); return; }
       meEmail = me.email || "";
       $("who").textContent = meEmail;
-      await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadAnnouncements(), loadCommsAdmin(), loadMaps(), loadHelpQa(), loadWishConditions(), loadRentalCatalog(), loadLegalCopy(), loadContentCms(), loadListingImports(), loadSpirit(), loadHousing(), loadCrawlSources(), loadSystemCrawl(), loadBrand(), loadFeedback(), typeof loadSupportAdmin === "function" ? loadSupportAdmin() : Promise.resolve()]);
+      await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadAnnouncements(), loadCommsAdmin(), loadMaps(), loadHelpQa(), loadWishConditions(), loadRentalCatalog(), loadRentalMatchRules(), loadLegalCopy(), loadContentCms(), loadListingImports(), loadSpirit(), loadHousing(), loadCrawlSources(), loadSystemCrawl(), loadBrand(), loadFeedback(), typeof loadSupportAdmin === "function" ? loadSupportAdmin() : Promise.resolve()]);
       adminFormsReady = true;
       IA.finishPageLoad(IA.currentPageId());
       $("brandForm").onsubmit = async (ev) => {
