@@ -124,6 +124,32 @@ test("PRA activation reserved list includes notify and outbound flags", () => {
   }
 });
 
+test("Stage 1 activation workflow exists as a separate manual-only path", () => {
+  const text = wf("activate-rental-marketplace-stage1.yml");
+  const block = onBlock(text);
+  assert.match(block, /workflow_dispatch:/);
+  assert.doesNotMatch(block, /(^|\n)\s*push:/);
+  assert.match(text, /ACTIVATE-STAGE1-PRODUCTION/);
+  assert.match(text, /group:\s*production-deploy/);
+  const domain = readFileSync(
+    path.join(root, ".github/scripts/activate-rental-marketplace-stage1-domain.mjs"),
+    "utf8",
+  );
+  assert.match(domain, /owner_matching_enabled:\s*true/);
+  assert.doesNotMatch(domain, /rental_catalog_v2:\s*\{\s*enabled:\s*false\s*\}/);
+  for (const key of [
+    "offer_enabled",
+    "public_share_v2_enabled",
+    "owner_notifications_enabled",
+    "notifications_enabled",
+    "digest_enabled",
+    "outbound_mail_enabled",
+    "outbound_push_enabled",
+  ]) {
+    assert.doesNotMatch(domain, new RegExp(`${key}:\\s*true`));
+  }
+});
+
 test("readiness evidence file is present", () => {
   assert.equal(existsSync(path.join(root, "v3/RELEASE-READINESS.md")), true);
 });
