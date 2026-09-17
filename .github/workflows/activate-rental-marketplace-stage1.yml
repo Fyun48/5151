@@ -7,6 +7,9 @@ run-name: "activate-stage1:${{ inputs.source_sha }}"
 # 沒有 Cursor 永久繞過：actor 與 triggering_actor 必須是 PRODUCTION_DEPLOY_ALLOWED_ACTOR。
 # 另需 per-run Owner authorization。開啟後必須跑 authenticated matching probes；
 # pre-activation PRODUCTION_UAT_PASS 不能當 post-activation evidence。
+# 2026-09-17 UAT 錄影（guest mp4，GitHub 因過大拒收）已回收在
+# v3/evidence/production-uat-20260917-pre-activation.json；當時 owner_matching=OFF，
+# 不能替代開啟後的 authenticated matching probes。
 on:
   workflow_dispatch:
     inputs:

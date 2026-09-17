@@ -152,4 +152,8 @@ test("Stage 1 activation workflow exists as a separate manual-only path", () => 
 
 test("readiness evidence file is present", () => {
   assert.equal(existsSync(path.join(root, "v3/RELEASE-READINESS.md")), true);
+  assert.equal(
+    existsSync(path.join(root, "v3/evidence/production-uat-20260917-pre-activation.json")),
+    true,
+  );
 });
