@@ -7,7 +7,9 @@ import {
   defaultMatchRulesPublic,
   encodeMatchCursor,
   evaluateMatch,
+  expireMatchPageCursor,
   freshnessScoreFrom,
+  inspectMatchCursorPayload,
   isListingMatchable,
   isMatchingConditionActive,
   isWishMatchable,
@@ -246,14 +248,41 @@ test("rank sort and cursor pagination are stable", () => {
     { rank_score: 1000, match_score: 40, wish_ref: "cc", wish_id: 3 },
   ].sort(compareMatchRank);
   assert.deepEqual(rows.map((row) => row.wish_ref), ["aa", "bb", "cc"]);
-  const first = applyMatchCursor(rows, null, 1);
+  const first = applyMatchCursor(rows, null, 1, { listingId: "L1" });
   assert.equal(first.items.length, 1);
   assert.equal(first.items[0].wish_ref, "aa");
   assert.ok(first.next_cursor);
-  const second = applyMatchCursor(rows, { rank_score: first.items[0].rank_score, wish_ref: first.items[0].wish_ref }, 1);
+  assert.equal(inspectMatchCursorPayload(first.next_cursor).reversible_json, false);
+  const second = applyMatchCursor(rows, first.next_cursor, 1, { listingId: "L1" });
   assert.equal(second.items[0].wish_ref, "bb");
   assert.equal(encodeMatchCursor(rows[0]).length > 4, true);
   assert.ok(freshnessScoreFrom(wish(), now) > 0);
+});
+
+test("opaque cursor keeps snapshot order after live rank mutation", () => {
+  const rows = [
+    { rank_score: 8000, match_score: 90, wish_ref: "aa" },
+    { rank_score: 7000, match_score: 80, wish_ref: "bb" },
+    { rank_score: 7000, match_score: 50, wish_ref: "cc" },
+  ];
+  const first = applyMatchCursor(rows, null, 1, { listingId: "L2" });
+  rows.splice(0, 1);
+  rows.unshift({ rank_score: 7000, match_score: 99, wish_ref: "zz" });
+  rows.sort(compareMatchRank);
+  const second = applyMatchCursor(rows, first.next_cursor, 1, { listingId: "L2" });
+  assert.equal(second.items[0].wish_ref, "bb");
+  assert.equal(second.items[0].match_score, 80);
+  expireMatchPageCursor(first.next_cursor);
+  assert.throws(() => applyMatchCursor(rows, first.next_cursor, 1, { listingId: "L2" }), (err) => {
+    assert.equal(err.code, "cursor_expired");
+    return true;
+  });
+  const legacy = Buffer.from(JSON.stringify({ r: 8000, t: "aa", i: 1 }), "utf8").toString("base64url");
+  assert.equal(inspectMatchCursorPayload(legacy).reversible_json, true);
+  assert.throws(() => applyMatchCursor(rows, legacy, 1, { listingId: "L2" }), (err) => {
+    assert.equal(err.code, "cursor_expired");
+    return true;
+  });
 });
 
 test("default rules stay read-only and do not mention listing ranking", () => {

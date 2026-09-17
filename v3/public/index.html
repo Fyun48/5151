@@ -10771,7 +10771,13 @@
         if (append && ownerMatchState.cursor) q.set("cursor", ownerMatchState.cursor);
         const res = await fetch(`/api/self-listings/${encodeURIComponent(listingId)}/matches?${q}`);
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || "讀取配對失敗");
+        if (!res.ok) {
+          if (append && data.code === "cursor_expired") {
+            ownerMatchState.loading = false;
+            return openOwnerMatches(listingId, { append: false });
+          }
+          throw new Error(data.error || "讀取配對失敗");
+        }
         const items = Array.isArray(data.items) ? data.items : [];
         const html = items.map(wishMatchCardHtml).join("");
         if (append) list.insertAdjacentHTML("beforeend", html);

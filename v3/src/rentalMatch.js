@@ -3,6 +3,7 @@
  * 結果可解釋；同樣 input 必須得到同樣 output。
  */
 
+import { randomBytes } from "node:crypto";
 import { lookupDistrict, normalizeWatchDistricts } from "./regions.js";
 import {
   compatibilityForChoice,
@@ -33,6 +34,8 @@ export const MATCH_CACHE_TTL_MS = 15_000;
 /** 分批掃描大小，不是正確性上限。 */
 export const MATCH_CANDIDATE_CHUNK = 400;
 export const AGGREGATE_SCAN_CHUNK = 500;
+export const ACTIVITY_PRELOAD_CHUNK = 400;
+export const MATCH_PAGE_CURSOR_TTL_MS = 15_000;
 export const OWNER_INTERNAL_SCORE_KEYS = Object.freeze([
   "rank_score", "freshness_score", "activity_score", "wish_id", "last_active_at",
 ]);
@@ -469,55 +472,107 @@ export function compareMatchRank(a, b) {
   return (Number(a.wish_id) || 0) - (Number(b.wish_id) || 0);
 }
 
-export function encodeMatchCursor(row) {
-  return Buffer.from(JSON.stringify({
-    r: Number(row.rank_score) || 0,
-    t: String(row.wish_ref || row.public_token || ""),
-    i: Number(row.wish_id) || 0,
-  }), "utf8").toString("base64url");
+const pageCursors = new Map();
+
+function pruneMatchPageCursors(now = Date.now()) {
+  for (const [token, row] of pageCursors) {
+    if (row.expires <= now) pageCursors.delete(token);
+  }
+}
+
+export function clearMatchPageCursors() {
+  pageCursors.clear();
+}
+
+export function expireMatchPageCursor(token) {
+  pageCursors.delete(String(token || ""));
+}
+
+export function inspectMatchCursorPayload(token) {
+  try {
+    const text = Buffer.from(String(token || ""), "base64url").toString("utf8");
+    JSON.parse(text);
+    return { reversible_json: true, text };
+  } catch {
+    return { reversible_json: false };
+  }
+}
+
+export function createOpaqueMatchCursor(items, { listingId = "", afterIndex = 0, now = Date.now() } = {}) {
+  const at = now instanceof Date ? now.getTime() : (Number(now) || Date.now());
+  pruneMatchPageCursors(at);
+  const token = randomBytes(24).toString("base64url");
+  pageCursors.set(token, {
+    listingId: String(listingId || ""),
+    items: Array.isArray(items) ? items.slice() : [],
+    afterIndex: Math.max(0, Number(afterIndex) || 0),
+    expires: at + MATCH_PAGE_CURSOR_TTL_MS,
+  });
+  if (pageCursors.size > 400) {
+    const first = pageCursors.keys().next().value;
+    pageCursors.delete(first);
+  }
+  return token;
+}
+
+export function readOpaqueMatchCursor(token, now = Date.now()) {
+  if (!token) return null;
+  const row = pageCursors.get(String(token));
+  if (!row) return null;
+  if (row.expires <= now) {
+    pageCursors.delete(String(token));
+    return null;
+  }
+  return row;
+}
+
+function cursorError(message, code) {
+  const err = new Error(message);
+  err.status = 400;
+  err.code = code;
+  return err;
+}
+
+export function applyMatchCursor(rows, cursor, limit, { listingId = "", now = Date.now() } = {}) {
+  const size = clampLimit(limit);
+  const at = now instanceof Date ? now.getTime() : (Number(now) || Date.now());
+  if (cursor) {
+    const token = typeof cursor === "string" ? cursor.trim() : "";
+    if (!token) throw cursorError("分頁游標不正確", "bad_cursor");
+    const stored = readOpaqueMatchCursor(token, at);
+    if (!stored) throw cursorError("分頁已過期，請重新查詢", "cursor_expired");
+    if (listingId && stored.listingId && String(stored.listingId) !== String(listingId)) {
+      throw cursorError("分頁游標不正確", "bad_cursor");
+    }
+    const start = stored.afterIndex;
+    const items = stored.items.slice(start, start + size);
+    const nextIndex = start + items.length;
+    return {
+      items,
+      total: stored.items.length,
+      next_cursor: nextIndex < stored.items.length
+        ? createOpaqueMatchCursor(stored.items, { listingId: stored.listingId, afterIndex: nextIndex, now: at })
+        : "",
+    };
+  }
+  const list = rows || [];
+  const items = list.slice(0, size);
+  return {
+    items,
+    total: list.length,
+    next_cursor: list.length > items.length
+      ? createOpaqueMatchCursor(list, { listingId, afterIndex: items.length, now: at })
+      : "",
+  };
+}
+
+/** 舊可逆 cursor 僅供測試證明已拒絕；不再編碼分數或 numeric id。 */
+export function encodeMatchCursor() {
+  return createOpaqueMatchCursor([], { afterIndex: 0 });
 }
 
 export function decodeMatchCursor(raw) {
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(Buffer.from(String(raw), "base64url").toString("utf8"));
-    if (!parsed || typeof parsed !== "object") return null;
-    return {
-      rank_score: Number(parsed.r) || 0,
-      wish_ref: String(parsed.t || ""),
-      wish_id: Number(parsed.i) || 0,
-    };
-  } catch {
-    return null;
-  }
-}
-
-export function applyMatchCursor(rows, cursor, limit) {
-  const size = clampLimit(limit);
-  let start = 0;
-  if (cursor) {
-    const cursorRow = {
-      rank_score: cursor.rank_score,
-      wish_ref: cursor.wish_ref,
-      public_token: cursor.wish_ref,
-      wish_id: cursor.wish_id,
-    };
-    const exact = rows.findIndex((row) => (
-      String(row.wish_ref || row.public_token || "") === String(cursor.wish_ref || "")
-      && Number(row.rank_score) === Number(cursor.rank_score)
-    ));
-    if (exact >= 0) start = exact + 1;
-    else {
-      const after = rows.findIndex((row) => compareMatchRank(row, cursorRow) > 0);
-      start = after < 0 ? rows.length : after;
-    }
-  }
-  const items = rows.slice(start, start + size);
-  const hasMore = rows.length > start + items.length;
-  return {
-    items,
-    next_cursor: hasMore && items.length ? encodeMatchCursor(items[items.length - 1]) : "",
-  };
+  return raw ? readOpaqueMatchCursor(raw) : null;
 }
 
 export function clampLimit(value, fallback = MATCH_PAGE_DEFAULT) {

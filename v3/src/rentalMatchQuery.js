@@ -16,6 +16,7 @@ import {
   getSelfRow,
 } from "./selfListings.js";
 import {
+  ACTIVITY_PRELOAD_CHUNK,
   AGGREGATE_PRIVACY_THRESHOLD,
   AGGREGATE_SCAN_CHUNK,
   applyMatchCursor,
@@ -23,7 +24,6 @@ import {
   BUDGET_BANDS,
   clampLimit,
   compareMatchRank,
-  decodeMatchCursor,
   defaultMatchRulesPublic,
   evaluateMatch,
   isListingMatchable,
@@ -241,14 +241,26 @@ function queryAllCandidateWishes(db, listing) {
   return rows;
 }
 
-function preloadActivityByUser(db, rows, now) {
-  const ids = [...new Set(rows.map((row) => Number(row.user_id)).filter(Boolean))];
+export function chunkIds(ids, size = ACTIVITY_PRELOAD_CHUNK) {
+  const limit = Math.max(1, Math.round(Number(size) || ACTIVITY_PRELOAD_CHUNK));
+  const list = [...new Set((ids || []).map((id) => Number(id)).filter(Boolean))];
+  const chunks = [];
+  for (let i = 0; i < list.length; i += limit) chunks.push(list.slice(i, i + limit));
+  return chunks;
+}
+
+export function activityPreloadBindLimit() {
+  return ACTIVITY_PRELOAD_CHUNK;
+}
+
+export function preloadActivityByUser(db, rows, now, { chunkSize = ACTIVITY_PRELOAD_CHUNK } = {}) {
+  const ids = [...new Set((rows || []).map((row) => Number(row.user_id)).filter(Boolean))];
   const logins = new Map();
   const flags = new Map();
-  if (ids.length) {
-    const marks = ids.map(() => "?").join(",");
+  for (const chunk of chunkIds(ids, chunkSize)) {
+    const marks = chunk.map(() => "?").join(",");
     try {
-      for (const user of db.prepare(`SELECT id, last_login_at FROM users WHERE id IN (${marks})`).all(...ids)) {
+      for (const user of db.prepare(`SELECT id, last_login_at FROM users WHERE id IN (${marks})`).all(...chunk)) {
         if (user.last_login_at) logins.set(Number(user.id), user.last_login_at);
       }
     } catch { /* last_login_at may be absent */ }
@@ -257,13 +269,13 @@ function preloadActivityByUser(db, rows, now) {
         SELECT user_id, MAX(viewed_at) AS viewed_at, MAX(watched_at) AS watched_at
         FROM user_listing_flags WHERE user_id IN (${marks})
         GROUP BY user_id
-      `).all(...ids)) {
+      `).all(...chunk)) {
         flags.set(Number(flag.user_id), flag);
       }
     } catch { /* flags table may be absent */ }
   }
   const map = new Map();
-  for (const row of rows) {
+  for (const row of rows || []) {
     const uid = Number(row.user_id);
     const flag = flags.get(uid) || {};
     map.set(uid, {
@@ -426,15 +438,25 @@ function ownerPublicMatchItem(row) {
 
 export function ownerListingMatches(db, postId, userId, { limit, cursor, now = new Date() } = {}) {
   const { listing } = loadOwnedMatchListing(db, postId, userId, now);
+  const at = now instanceof Date ? now.getTime() : (Number(now) || Date.now());
+  if (cursor) {
+    const page = applyMatchCursor(null, cursor, limit, { listingId: listing.id, now: at });
+    return {
+      listing_id: listing.id,
+      total: page.total,
+      limit: clampLimit(limit),
+      cursor: String(cursor),
+      next_cursor: page.next_cursor,
+      items: page.items.map(ownerPublicMatchItem),
+    };
+  }
   const snapshot = computeListingMatches(db, listing, { now });
-  const decoded = decodeMatchCursor(cursor);
-  if (cursor && !decoded) throw httpError("分頁游標不正確", 400, "bad_cursor");
-  const page = applyMatchCursor(snapshot.items, decoded, limit);
+  const page = applyMatchCursor(snapshot.items, "", limit, { listingId: listing.id, now: at });
   return {
     listing_id: listing.id,
     total: snapshot.total,
     limit: clampLimit(limit),
-    cursor: cursor || "",
+    cursor: "",
     next_cursor: page.next_cursor,
     items: page.items.map(ownerPublicMatchItem),
   };

@@ -4,16 +4,24 @@ import { DatabaseSync } from "node:sqlite";
 import { createDemandPost, ensureDemandSchema, setRentalCatalogCache, setRentalMarketplaceFlags, syncDemandMatchDistricts } from "../src/demand.js";
 import { defaultCatalog, deleteOrDisableCondition, upsertCondition } from "../src/rentalCatalog.js";
 import {
+  activityPreloadBindLimit,
   aggregateDemand,
   attachOwnerMatchSummaries,
+  chunkIds,
   clearRentalMatchCache,
   computeListingMatches,
   explainAggregatePlan,
   explainMatchCandidatePlan,
   ownerListingMatches,
   ownerListingMatchSummary,
+  preloadActivityByUser,
   setRentalMatchHydrate,
 } from "../src/rentalMatchQuery.js";
+import {
+  ACTIVITY_PRELOAD_CHUNK,
+  expireMatchPageCursor,
+  inspectMatchCursorPayload,
+} from "../src/rentalMatch.js";
 import {
   createSelfListing,
   ensureSelfListingSchema,
@@ -467,6 +475,116 @@ test("matching failure is not disguised as zero demand", () => {
   assert.equal(rows[0].match_summary.unavailable, true);
   assert.equal(rows[0].match_summary.count, null);
   assert.match(rows[0].match_summary.label, /暫時無法取得/);
+  db.close();
+});
+
+test("owner next_cursor is opaque and cannot leak internal scores", () => {
+  const db = open();
+  const listing = createSelfListing(db, 1, listingInput());
+  const tokens = [];
+  for (let i = 0; i < 3; i += 1) {
+    addTenant(db, 50 + i, `opaque${i}@example.com`);
+    tokens.push(createDemandPost(db, 50 + i, wishInput({ body: `不透明游標 ${i} 找士林兩房` })).public_token);
+  }
+  const seen = [];
+  let cursor = "";
+  for (let page = 0; page < 3; page += 1) {
+    const detail = ownerListingMatches(db, listing.post_id, 1, { limit: 1, cursor: cursor || undefined });
+    assert.equal(detail.items.length, 1);
+    assert.doesNotMatch(JSON.stringify(detail), /"rank_score"|"freshness_score"|"activity_score"|"wish_id"/);
+    assert.equal("wish_id" in detail.items[0], false);
+    assert.equal("rank_score" in detail.items[0], false);
+    if (detail.next_cursor) {
+      assert.equal(inspectMatchCursorPayload(detail.next_cursor).reversible_json, false);
+      assert.doesNotMatch(detail.next_cursor, /rank_score|wish_id|"r":|"i":/);
+      const raw = Buffer.from(detail.next_cursor, "base64url").toString("utf8");
+      assert.doesNotMatch(raw, /rank_score|wish_id|"r":|"i":/);
+    }
+    seen.push(detail.items[0].wish_ref);
+    cursor = detail.next_cursor;
+  }
+  assert.equal(new Set(seen).size, 3);
+  assert.ok(tokens.every((token) => seen.includes(token)));
+  const legacy = Buffer.from(JSON.stringify({ r: 9999, t: seen[0], i: 123 }), "utf8").toString("base64url");
+  assert.equal(inspectMatchCursorPayload(legacy).reversible_json, true);
+  assert.throws(() => ownerListingMatches(db, listing.post_id, 1, { limit: 1, cursor: legacy }), (err) => {
+    assert.equal(err.code, "cursor_expired");
+    return true;
+  });
+  db.close();
+});
+
+test("cursor page stays on snapshot after pause and live rank changes", () => {
+  const db = open();
+  const listing = createSelfListing(db, 1, listingInput());
+  const first = createDemandPost(db, 2, wishInput({ body: "快照第一頁需求找士林兩房" }));
+  addTenant(db, 12, "snap-second@example.com");
+  const second = createDemandPost(db, 12, wishInput({ body: "快照第二頁需求找士林兩房" }));
+  addTenant(db, 13, "snap-third@example.com");
+  createDemandPost(db, 13, wishInput({ body: "快照第三頁需求找士林兩房" }));
+  const page1 = ownerListingMatches(db, listing.post_id, 1, { limit: 1 });
+  assert.equal(page1.items.length, 1);
+  const firstRef = page1.items[0].wish_ref;
+  db.prepare("UPDATE demand_posts SET status='closed', lifecycle='paused' WHERE public_token=?").run(firstRef);
+  addTenant(db, 14, "snap-newtop@example.com");
+  const newer = createDemandPost(db, 14, wishInput({
+    body: "新插入的最高排序需求找士林兩房",
+    layout: "1",
+  }));
+  db.prepare("UPDATE users SET last_login_at=? WHERE id=14").run("2026-09-16T07:59:00.000Z");
+  clearRentalMatchCache();
+  const page2 = ownerListingMatches(db, listing.post_id, 1, { limit: 1, cursor: page1.next_cursor });
+  assert.equal(page2.items.length, 1);
+  assert.notEqual(page2.items[0].wish_ref, firstRef);
+  assert.notEqual(page2.items[0].wish_ref, newer.public_token);
+  assert.equal(new Set([page1.items[0].wish_ref, page2.items[0].wish_ref]).size, 2);
+  const live = ownerListingMatches(db, listing.post_id, 1, { limit: 5 });
+  assert.ok(live.items.some((row) => row.wish_ref === newer.public_token));
+  assert.ok(!live.items.some((row) => row.wish_ref === firstRef));
+  expireMatchPageCursor(page1.next_cursor);
+  assert.throws(() => ownerListingMatches(db, listing.post_id, 1, { limit: 1, cursor: page1.next_cursor }), (err) => {
+    assert.equal(err.code, "cursor_expired");
+    return true;
+  });
+  assert.ok(second.public_token);
+  assert.ok(first.public_token);
+  db.close();
+});
+
+test("activity preload chunks user ids and stays consistent across chunk sizes", () => {
+  const db = open();
+  const listing = createSelfListing(db, 1, listingInput());
+  const rows = [];
+  for (let i = 0; i < 7; i += 1) {
+    addTenant(db, 90 + i, `chunk${i}@example.com`);
+    createDemandPost(db, 90 + i, wishInput({ body: `分批活動 ${i} 找士林兩房` }));
+    db.prepare("UPDATE users SET last_login_at=? WHERE id=?").run(`2026-09-16T07:0${i}:00.000Z`, 90 + i);
+    if (i % 2 === 0) {
+      db.prepare("INSERT INTO user_listing_flags(user_id, post_id, viewed, viewed_at, watched, watched_at) VALUES (?, ?, 1, ?, 1, ?)")
+        .run(90 + i, listing.post_id, `2026-09-16T07:1${i}:00.000Z`, `2026-09-16T07:2${i}:00.000Z`);
+    }
+    rows.push({
+      user_id: 90 + i,
+      last_confirmed_at: "2026-08-01T00:00:00.000Z",
+      updated_at: "2026-08-01T00:00:00.000Z",
+    });
+  }
+  const now = new Date("2026-09-16T08:00:00.000Z");
+  const byTwo = preloadActivityByUser(db, rows, now, { chunkSize: 2 });
+  const byThree = preloadActivityByUser(db, rows, now, { chunkSize: 3 });
+  const byDefault = preloadActivityByUser(db, rows, now);
+  assert.deepEqual(Object.fromEntries(byTwo), Object.fromEntries(byThree));
+  assert.deepEqual(Object.fromEntries(byTwo), Object.fromEntries(byDefault));
+  assert.equal(byTwo.get(90).last_login_at, "2026-09-16T07:00:00.000Z");
+  assert.equal(byTwo.get(90).listing_viewed_at, "2026-09-16T07:10:00.000Z");
+  assert.equal(byTwo.get(91).listing_viewed_at, "");
+  assert.equal(activityPreloadBindLimit(), ACTIVITY_PRELOAD_CHUNK);
+  assert.ok(ACTIVITY_PRELOAD_CHUNK <= 500);
+  const ids = Array.from({ length: ACTIVITY_PRELOAD_CHUNK * 2 + 5 }, (_, i) => i + 1);
+  const chunks = chunkIds(ids, ACTIVITY_PRELOAD_CHUNK);
+  assert.ok(chunks.length >= 3);
+  assert.ok(chunks.every((chunk) => chunk.length <= ACTIVITY_PRELOAD_CHUNK));
+  assert.equal(chunks[0].length, ACTIVITY_PRELOAD_CHUNK);
   db.close();
 });
 
