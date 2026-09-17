@@ -1,32 +1,35 @@
 name: Docker image (manual)
 
-# 明確手動觸發：建置並推送映像，並在 CasaOS 上拉取重啟正式容器。
-# 合併/push 到 master（含 package.json 變更）不會自動建置或動到正式站。
+# :latest 部署路徑已拆除。檔名保留以免舊連結 404。
+# 正式發行只走這三個 workflow（皆須從 refs/heads/master 手動 workflow_dispatch）：
+#   1. Build production image (no deploy) → .github/workflows/build-production-image.yml
+#   2. Production predeploy check (no deploy) → .github/workflows/production-predeploy-check.yml
+#   3. Deploy v3 to CasaOS (manual) → .github/workflows/deploy-v3.yml
+# 授權檢查與正式部署護欄仍在；實際建置、推送 :latest、SSH、compose pull/up 一律拒絕。
+# 合併 / push 到 master 不會觸發本檔，也不會自動部署。
 on:
   workflow_dispatch:
     inputs:
       sha:
-        description: "要建置/部署的完整 40 碼 commit SHA（必須可從 origin/master 追溯）"
+        description: "此路徑已停用。請改走 Build production image / predeploy / Deploy v3。此欄僅為護欄格式。"
         required: true
       confirmation:
-        description: "輸入 DEPLOY-PRODUCTION 以確認正式部署"
+        description: "輸入 DEPLOY-PRODUCTION（仍會被拒絕；請改走 Deploy v3）"
         required: true
         default: ""
 
-# 最小權限：讀原始碼 + 推送 GHCR 映像。
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: production-deploy
   cancel-in-progress: false
 
 jobs:
-  build-and-push:
+  refuse-retired-latest-path:
     runs-on: ubuntu-latest
-    # 拉取重啟正式容器會用到 NAS 密鑰；限定在 'production' environment。
     environment: production
+    timeout-minutes: 10
     steps:
       - name: Authorize production deployment (fail-closed)
         env:
@@ -44,7 +47,6 @@ jobs:
           if [ -z "${ALLOWED_ACTOR:-}" ]; then
             echo "::error::PRODUCTION_DEPLOY_ALLOWED_ACTOR is not configured; refusing (fail-closed)"; exit 1
           fi
-          # re-run 時 github.actor 仍是初始觸發者，github.triggering_actor 才是本次 re-run 的人；兩者都必須是授權部署者。
           if [ "$ACTOR" != "$ALLOWED_ACTOR" ]; then
             echo "::error::actor '$ACTOR' is not the authorized deployer"; exit 1
           fi
@@ -72,47 +74,6 @@ jobs:
             echo "::error::commit $DEPLOY_SHA is not reachable from origin/master; refusing"; exit 1
           fi
           git checkout --force "$DEPLOY_SHA"
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Image name
-        id: image
-        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ${{ steps.image.outputs.name }}:latest
-            ${{ steps.image.outputs.name }}:${{ inputs.sha }}
-      - name: Make GHCR package public
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: latest-tag deploy path retired
         run: |
-          gh api --method PUT \
-            -H "Accept: application/vnd.github+json" \
-            "/user/packages/container/5151/visibility" \
-            -f visibility=public
-      - name: Pull runtime image on CasaOS
-        uses: appleboy/ssh-action@v1.2.0
-        continue-on-error: true
-        with:
-          host: ${{ secrets.NAS_HOST }}
-          port: ${{ secrets.NAS_PORT }}
-          username: ${{ secrets.NAS_USER }}
-          key: ${{ secrets.NAS_SSH_KEY }}
-          script_stop: true
-          script: |
-            set -euo pipefail
-            cd /mnt/Storage1/apps/5151
-            docker compose stop 591-tracker 591-tracker-v2 || true
-            docker stop 591-tracker 591-tracker-v2 || true
-            docker rm -f 591-tracker 591-tracker-v2 || true
-            docker compose pull 591-tracker-v3 || docker compose pull
-            docker compose up -d --no-build --no-deps 591-tracker-v3
+          echo "::error::docker.yml 已停用 :latest 部署路徑。請改走 Build production image → Production predeploy check → Deploy v3 to CasaOS (manual)，並以 sha256 digest 為 Production identity"; exit 1

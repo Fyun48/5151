@@ -12,6 +12,10 @@ const RESERVED = [
   "offer_enabled",
   "public_share_v2_enabled",
   "owner_notifications_enabled",
+  "notifications_enabled",
+  "digest_enabled",
+  "outbound_mail_enabled",
+  "outbound_push_enabled",
 ];
 
 function countDemandPosts() {

@@ -971,6 +971,7 @@ export function publicBlockView(row, listingRow = null) {
 }
 
 export function listMyBlocks(db, userId) {
+  assertWishOfferEnabled();
   return listBlocksForUser(db, userId).map((row) => {
     const listing = row.listing_id ? getSelfRow(db, row.listing_id) : null;
     return publicBlockView(row, listing);
@@ -978,6 +979,7 @@ export function listMyBlocks(db, userId) {
 }
 
 export function unblockByRef(db, userId, blockRef) {
+  assertWishOfferEnabled();
   const result = removeUserBlock(db, userId, blockRef);
   if (!result) throw offerHttpError("找不到這筆封鎖", 404, "block_not_found");
   if (result.forbidden) throw offerHttpError("這筆封鎖不能自行解除", 403, "block_locked");

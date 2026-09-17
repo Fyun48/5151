@@ -38,10 +38,11 @@ test("CasaOS compose does not start v1 or v2", () => {
 test("deploy workflows do not start v1 or v2 as the live app", () => {
   const docker = readFileSync(path.join(root, ".github/workflows/docker.yml"), "utf8");
   const deployV2 = readFileSync(path.join(root, ".github/workflows/deploy-v2.yml"), "utf8");
-  assert.match(docker, /docker compose stop 591-tracker 591-tracker-v2/);
-  assert.equal(/docker compose up[^\n]*591-tracker(?!-v)/.test(docker), false);
-  assert.match(docker, /591-tracker-v3/);
-  assert.doesNotMatch(docker, /up -d[^\n]*591-tracker-v2/);
+  assert.match(docker, /latest-tag deploy path retired|:latest 部署路徑已拆除/);
+  assert.doesNotMatch(docker, /outputs\.name \}\}:latest/);
+  assert.doesNotMatch(docker, /build-push-action/);
+  assert.doesNotMatch(docker, /docker compose (pull|up)/);
+  assert.doesNotMatch(docker, /appleboy\/(scp|ssh)-action/);
   assert.match(deployV2, /v2 已拆除/);
   assert.doesNotMatch(deployV2, /force-recreate 591-tracker-v2/);
   const deployV3Path = path.join(root, ".github/workflows/deploy-v3.yml");

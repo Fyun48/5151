@@ -170,6 +170,7 @@ test("new wish public API is token-only; legacy numeric still resolves", () => {
       public_share_v2_enabled: true,
       owner_matching_enabled: true,
       offer_enabled: true,
+      owner_notifications_enabled: true,
       notifications_enabled: true,
       digest_enabled: true,
       outbound_mail_enabled: true,
@@ -179,6 +180,7 @@ test("new wish public API is token-only; legacy numeric still resolves", () => {
   assert.equal(flags.wish.public_share_v2_enabled, false);
   assert.equal(flags.wish.owner_matching_enabled, false);
   assert.equal(flags.wish.offer_enabled, false);
+  assert.equal(flags.wish.owner_notifications_enabled, false);
   assert.equal(flags.wish.notifications_enabled, false);
   assert.equal(flags.wish.digest_enabled, false);
   assert.equal(flags.wish.outbound_mail_enabled, false);
