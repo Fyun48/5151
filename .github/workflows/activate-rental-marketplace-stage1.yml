@@ -4,7 +4,8 @@ run-name: "activate-stage1:${{ inputs.source_sha }}"
 # 只啟用 Production 上已部署的 Stage 1 flag（wish.owner_matching_enabled）。
 # 不部署、不重建 image、不 restart。不可改作 PR A，也不可開 Stage 2–4 / outbound。
 # 必須從 refs/heads/master 做 workflow_dispatch。
-# Owner 已書面授權：Cursor Agent（actor `cursor` / `cursor[bot]`）可從 master 觸發本檔。
+# 沒有 Cursor 永久繞過：actor 與 triggering_actor 必須是 PRODUCTION_DEPLOY_ALLOWED_ACTOR。
+# 另需 per-run Owner authorization + 已綁定 PRODUCTION_UAT_PASS 身分證明。
 on:
   workflow_dispatch:
     inputs:
@@ -22,6 +23,14 @@ on:
         required: true
       confirmation:
         description: "輸入 ACTIVATE-STAGE1-PRODUCTION 以確認只啟用 owner_matching"
+        required: true
+        default: ""
+      owner_authorization:
+        description: "Per-run Owner intent，必須剛好 AUTHORIZE-STAGE1:<source_sha>:<image_digest>:<backup_id>:<backup_hash>"
+        required: true
+        default: ""
+      uat_attestation:
+        description: "已完成且綁定此身分的 Production UAT，必須剛好 PRODUCTION_UAT_PASS:<source_sha>:<image_digest>"
         required: true
         default: ""
 
@@ -45,6 +54,8 @@ jobs:
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
           ALLOWED_ACTOR: ${{ vars.PRODUCTION_DEPLOY_ALLOWED_ACTOR }}
           CONFIRM: ${{ inputs.confirmation }}
+          OWNER_AUTHORIZATION: ${{ inputs.owner_authorization }}
+          UAT_ATTESTATION: ${{ inputs.uat_attestation }}
           SOURCE_SHA: ${{ inputs.source_sha }}
           IMAGE_DIGEST: ${{ inputs.image_digest }}
           BACKUP_ID: ${{ inputs.backup_id }}
@@ -57,16 +68,20 @@ jobs:
           if [ -z "${ALLOWED_ACTOR:-}" ]; then
             echo "::error::PRODUCTION_DEPLOY_ALLOWED_ACTOR is not configured; refusing (fail-closed)"; exit 1
           fi
-          CURSOR_DEPLOY=0
           if [ "$ACTOR" = "cursor" ] || [ "$ACTOR" = "cursor[bot]" ]; then
-            if [ "$TRIGGERING_ACTOR" = "cursor" ] || [ "$TRIGGERING_ACTOR" = "cursor[bot]" ]; then
-              CURSOR_DEPLOY=1
+            if [ "$ACTOR" != "$ALLOWED_ACTOR" ]; then
+              echo "::error::cursor is not a durable Production activator; Owner authorization required"; exit 1
             fi
           fi
-          if [ "$CURSOR_DEPLOY" != 1 ] && [ "$ACTOR" != "$ALLOWED_ACTOR" ]; then
+          if [ "$TRIGGERING_ACTOR" = "cursor" ] || [ "$TRIGGERING_ACTOR" = "cursor[bot]" ]; then
+            if [ "$TRIGGERING_ACTOR" != "$ALLOWED_ACTOR" ]; then
+              echo "::error::cursor is not a durable Production activator; Owner authorization required"; exit 1
+            fi
+          fi
+          if [ "$ACTOR" != "$ALLOWED_ACTOR" ]; then
             echo "::error::actor '$ACTOR' is not the authorized deployer"; exit 1
           fi
-          if [ "$CURSOR_DEPLOY" != 1 ] && [ "$TRIGGERING_ACTOR" != "$ALLOWED_ACTOR" ]; then
+          if [ "$TRIGGERING_ACTOR" != "$ALLOWED_ACTOR" ]; then
             echo "::error::triggering actor '$TRIGGERING_ACTOR' is not the authorized deployer"; exit 1
           fi
           if [ "${CONFIRM:-}" != "ACTIVATE-STAGE1-PRODUCTION" ]; then
@@ -86,6 +101,14 @@ jobs:
           esac
           if ! printf '%s' "${BACKUP_HASH:-}" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
             echo "::error::backup_hash must be exactly sha256: plus 64 lowercase hex characters"; exit 1
+          fi
+          EXPECTED_AUTH="AUTHORIZE-STAGE1:${SOURCE_SHA}:${IMAGE_DIGEST}:${BACKUP_ID}:${BACKUP_HASH}"
+          if [ "${OWNER_AUTHORIZATION:-}" != "$EXPECTED_AUTH" ]; then
+            echo "::error::owner_authorization must be exactly AUTHORIZE-STAGE1 bound to source SHA, digest, backup id and hash"; exit 1
+          fi
+          EXPECTED_UAT="PRODUCTION_UAT_PASS:${SOURCE_SHA}:${IMAGE_DIGEST}"
+          if [ "${UAT_ATTESTATION:-}" != "$EXPECTED_UAT" ]; then
+            echo "::error::uat_attestation must be exactly PRODUCTION_UAT_PASS bound to source SHA and digest"; exit 1
           fi
       - name: Checkout workflow-definition SHA
         uses: actions/checkout@v4
@@ -151,6 +174,8 @@ jobs:
             export IMAGE_DIGEST='${{ inputs.image_digest }}'
             export BACKUP_ID='${{ inputs.backup_id }}'
             export BACKUP_HASH='${{ inputs.backup_hash }}'
+            export OWNER_AUTHORIZATION='${{ inputs.owner_authorization }}'
+            export UAT_ATTESTATION='${{ inputs.uat_attestation }}'
             export DOMAIN_SCRIPT=/tmp/5151-stage1-activate-helpers/.github/scripts/activate-rental-marketplace-stage1-domain.mjs
             export PATH_SCRIPT=/tmp/5151-stage1-activate-helpers/.github/scripts/activate-rental-marketplace-stage1-path.py
             export EVIDENCE_SCRIPT=/tmp/5151-stage1-activate-helpers/.github/scripts/activate-rental-marketplace-stage1-evidence.py
@@ -181,6 +206,7 @@ jobs:
               "src_mount", "src_tree_sha256", "receipt_path",
               "before_raw_flags", "after_raw_flags", "before_counts", "after_counts",
               "runtime_public_flags", "functional_smoke", "privacy_smoke", "perf_smoke",
+              "suppression", "http_5xx", "sqlite_busy",
               "health", "landing", "login", "final_digest", "final_oci_revision",
           )
           if not all(nas.get(k) for k in required):
@@ -224,6 +250,8 @@ jobs:
           WF_ACTOR: ${{ github.actor }}
           WF_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
           CONFIRMATION: ${{ inputs.confirmation }}
+          OWNER_AUTHORIZATION: ${{ inputs.owner_authorization }}
+          UAT_ATTESTATION: ${{ inputs.uat_attestation }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -242,6 +270,8 @@ jobs:
               "actor": os.environ["WF_ACTOR"],
               "triggering_actor": os.environ["WF_TRIGGERING_ACTOR"],
               "confirmation": os.environ["CONFIRMATION"],
+              "owner_authorization_bound": True,
+              "uat_attestation": os.environ["UAT_ATTESTATION"],
               "backup_id": nas["backup_id"],
               "backup_hash": nas["backup_hash"],
               "backup_verified": True,
@@ -265,8 +295,8 @@ jobs:
               "health": nas["health"] is True,
               "landing": nas["landing"] is True,
               "login": nas["login"] is True,
-              "http_5xx": False,
-              "sqlite_busy": False,
+              "http_5xx": nas["http_5xx"],
+              "sqlite_busy": nas["sqlite_busy"],
               "final_digest": nas["final_digest"],
               "final_oci_revision": nas["final_oci_revision"],
               "ACTIVATION_OK": True,

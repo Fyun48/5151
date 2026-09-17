@@ -15,6 +15,8 @@ SOURCE_SHA="${SOURCE_SHA:-}"
 IMAGE_DIGEST="${IMAGE_DIGEST:-}"
 BACKUP_ID="${BACKUP_ID:-}"
 BACKUP_HASH="${BACKUP_HASH:-}"
+OWNER_AUTHORIZATION="${OWNER_AUTHORIZATION:-}"
+UAT_ATTESTATION="${UAT_ATTESTATION:-}"
 DOMAIN_SCRIPT="${DOMAIN_SCRIPT:-}"
 PATH_SCRIPT="${PATH_SCRIPT:-}"
 EVIDENCE_SCRIPT="${EVIDENCE_SCRIPT:-}"
@@ -30,6 +32,10 @@ case "$BACKUP_ID" in
   *..*|*$'\n'*|*$'\r'*) fail "backup_id contains forbidden path characters" ;;
 esac
 printf '%s' "$BACKUP_HASH" | grep -Eq '^sha256:[0-9a-f]{64}$' || fail "backup_hash is not sha256: plus 64 lowercase hex"
+EXPECTED_AUTH="AUTHORIZE-STAGE1:${SOURCE_SHA}:${IMAGE_DIGEST}:${BACKUP_ID}:${BACKUP_HASH}"
+[ "$OWNER_AUTHORIZATION" = "$EXPECTED_AUTH" ] || fail "owner_authorization is not bound to this source SHA/digest/backup"
+EXPECTED_UAT="PRODUCTION_UAT_PASS:${SOURCE_SHA}:${IMAGE_DIGEST}"
+[ "$UAT_ATTESTATION" = "$EXPECTED_UAT" ] || fail "uat_attestation is not bound to this source SHA/digest"
 [ -n "$DOMAIN_SCRIPT" ] && [ -f "$DOMAIN_SCRIPT" ] || fail "domain activation script is missing"
 [ -n "$PATH_SCRIPT" ] && [ -f "$PATH_SCRIPT" ] || fail "stage1 path classifier is missing"
 [ -n "$EVIDENCE_SCRIPT" ] && [ -f "$EVIDENCE_SCRIPT" ] || fail "stage1 evidence contract script is missing"
@@ -79,11 +85,29 @@ ACTUAL_HASH="$(sha256sum "$BACKUP_ID/v3.db" | awk '{print $1}')"
 EXPECTED_HASH="${BACKUP_HASH#sha256:}"
 [ "$ACTUAL_HASH" = "$EXPECTED_HASH" ] || fail "backup db sha256 does not match input backup_hash"
 
+PROBE_LOG=/tmp/stage1-probe-log.jsonl
+: > "$PROBE_LOG"
+
+record_probe() {
+  python3 - "$1" "$2" "$3" "$4" "$5" "$PROBE_LOG" <<'PY'
+import json, sys
+url, status, elapsed, five, busy, dest = sys.argv[1:]
+open(dest, "a", encoding="utf-8").write(json.dumps({
+    "url": url,
+    "status": int(status) if str(status).isdigit() else 0,
+    "elapsed_ms": int(elapsed),
+    "http_5xx": five == "1",
+    "sqlite_busy": busy == "1",
+}) + "\n")
+PY
+}
+
 http_probe() {
   local dest="$1"
   local url="$2"
   local extra="${3:-}"
   local started ended elapsed status
+  local busy=0 five=0
   started="$(date +%s%3N)"
   set +e
   status="$(curl -sS -o "$dest" -w '%{http_code}' $extra "$url" 2>/tmp/stage1-curl.err)"
@@ -94,13 +118,21 @@ http_probe() {
   if [ "$rc" -ne 0 ]; then
     echo "curl_error url=$url rc=$rc" >&2
     cat /tmp/stage1-curl.err >&2 || true
+    record_probe "$url" "${status:-0}" "$elapsed" 0 0
     return 1
   fi
   if grep -Eqi 'SQLITE_BUSY|database is locked' "$dest" /tmp/stage1-curl.err 2>/dev/null; then
+    busy=1
+  fi
+  if [ "${status:0:1}" = "5" ]; then
+    five=1
+  fi
+  record_probe "$url" "$status" "$elapsed" "$five" "$busy"
+  if [ "$busy" = 1 ]; then
     echo "sqlite_busy url=$url" >&2
     return 1
   fi
-  if [ "${status:0:1}" = "5" ]; then
+  if [ "$five" = 1 ]; then
     echo "http_5xx url=$url status=$status" >&2
     return 1
   fi
@@ -282,8 +314,10 @@ doc = {
     "health": True,
     "landing": True,
     "login": True,
-    "http_5xx": False,
-    "sqlite_busy": False,
+    "http_5xx": runtime["http_5xx"],
+    "sqlite_busy": runtime["sqlite_busy"],
+    "owner_authorization_bound": True,
+    "uat_attestation": runtime["uat_attestation"],
     "final_digest": image_digest,
     "final_image": final_image,
     "final_oci_revision": final_rev,
@@ -317,12 +351,13 @@ hydrate_runtime_on() {
   summary_probe="$(http_probe /tmp/stage1-summary-unauth.json http://127.0.0.1:5153/api/self-listings/1/matches/summary)" || return 1
   detail_probe="$(http_probe /tmp/stage1-detail-unauth.json http://127.0.0.1:5153/api/self-listings/1/matches)" || return 1
   health_probe="$(http_probe /tmp/stage1-health.json http://127.0.0.1:5153/api/health)" || return 1
-  curl -fsS -o /dev/null http://127.0.0.1:5153/ || return 1
-  curl -fsS -o /dev/null http://127.0.0.1:5153/login.html || return 1
+  land_probe="$(http_probe /tmp/stage1-landing.html http://127.0.0.1:5153/)" || return 1
+  login_html_probe="$(http_probe /tmp/stage1-login.html http://127.0.0.1:5153/login.html)" || return 1
   assert_no_pii /tmp/stage1-aggregate-after.json || return 1
   assert_no_pii /tmp/stage1-exposure-after.json || return 1
-  python3 - <<PY
-import json
+  python3 - "$SOURCE_SHA" "$IMAGE_DIGEST" "$UAT_ATTESTATION" "$PROBE_LOG" <<PY
+import json, sys
+source_sha, image_digest, uat_attestation, probe_log = sys.argv[1:]
 demand = json.load(open("/tmp/stage1-demand-after.json"))
 agg = json.load(open("/tmp/stage1-aggregate-after.json"))
 exp = json.load(open("/tmp/stage1-exposure-after.json"))
@@ -366,16 +401,27 @@ agg_ms_n = int(agg_ms)
 exp_ms_n = int(exp_ms)
 if agg_ms_n >= 5000 or exp_ms_n >= 5000:
     raise SystemExit("perf smoke exceeded 5000ms budget")
+expected_uat = f"PRODUCTION_UAT_PASS:{source_sha}:{image_digest}"
+if uat_attestation != expected_uat:
+    raise SystemExit("uat_attestation is not bound to this source SHA/digest")
+probes = []
+for line in open(probe_log, encoding="utf-8"):
+    if line.strip():
+        probes.append(json.loads(line))
+if not probes:
+    raise SystemExit("defined probes produced no provenance; refusing ACTIVATION_OK")
+if any(row.get("http_5xx") is True for row in probes):
+    raise SystemExit("http_5xx observed during defined probes")
+if any(row.get("sqlite_busy") is True for row in probes):
+    raise SystemExit("sqlite_busy observed during defined probes")
 lifecycle = json.load(open("/tmp/stage1-domain.json")).get("lifecycle_counts") or []
-suppressed = sum(
-    int(row.get("n") or 0)
-    for row in lifecycle
-    if row.get("lifecycle") in ("inactive", "paused", "completed", "blocked")
-    or row.get("status") in ("hidden", "closed", "draft")
-)
+probe_urls = [row.get("url") for row in probes]
 open("/tmp/stage1-runtime.env", "w").write(
     json.dumps({
         "runtime_public_flags": flags,
+        "source_sha": source_sha,
+        "image_digest": image_digest,
+        "uat_attestation": uat_attestation,
         "functional_smoke": {
             "aggregate_status": int(agg_status),
             "exposure_enabled": True,
@@ -384,8 +430,12 @@ open("/tmp/stage1-runtime.env", "w").write(
             "unauth_match_denied": True,
             "authenticated_cross_account": {
                 "probed_here": False,
-                "prerequisite": "PRODUCTION_UAT_PASS",
-                "note": "authenticated cross-account isolation is a Production UAT prerequisite; this activation only records unauthenticated 401 fail-closed",
+                "verified": False,
+                "unauth_401_is_not_cross_account": True,
+                "authoritative_source": "PRODUCTION_UAT_PASS",
+                "bound_source_sha": source_sha,
+                "bound_image_digest": image_digest,
+                "uat_attestation_bound": True,
             },
         },
         "privacy_smoke": {
@@ -400,9 +450,24 @@ open("/tmp/stage1-runtime.env", "w").write(
             "ok": True,
         },
         "suppression": {
-            "inactive_paused_completed_rows": suppressed,
-            "rule": "only open + active|needs_confirmation wishes are matchable",
-            "checked": True,
+            "verified": False,
+            "checked": False,
+            "row_counts_are_not_verification": True,
+            "lifecycle_counts": lifecycle,
+            "authoritative_source": "PRODUCTION_UAT_PASS",
+            "bound_source_sha": source_sha,
+            "bound_image_digest": image_digest,
+            "uat_attestation_bound": True,
+        },
+        "http_5xx": {
+            "observed": False,
+            "provenance": "defined_probes",
+            "probes": probe_urls,
+        },
+        "sqlite_busy": {
+            "observed": False,
+            "provenance": "defined_probes",
+            "probes": probe_urls,
         },
         "lifecycle_counts": lifecycle,
         "health": True,

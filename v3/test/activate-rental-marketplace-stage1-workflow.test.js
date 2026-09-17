@@ -74,6 +74,8 @@ const GOOD = {
   IMAGE_DIGEST: "sha256:aea2d1f7807ea828d56aa3f09894aa38fa5591d296d8382066c71dc10b261eb4",
   BACKUP_ID: "/DATA/AppData/591-tracker-v3-backups/predeploy-20260917-000000",
   BACKUP_HASH: "sha256:ffceb339b9e1b92f90171915fd8475faf422f6123a11f48b8d3a3c37f0fa2c1d",
+  OWNER_AUTHORIZATION: "AUTHORIZE-STAGE1:877bd25ce7ad0cd22805bb97d528352574612a7b:sha256:aea2d1f7807ea828d56aa3f09894aa38fa5591d296d8382066c71dc10b261eb4:/DATA/AppData/591-tracker-v3-backups/predeploy-20260917-000000:sha256:ffceb339b9e1b92f90171915fd8475faf422f6123a11f48b8d3a3c37f0fa2c1d",
+  UAT_ATTESTATION: "PRODUCTION_UAT_PASS:877bd25ce7ad0cd22805bb97d528352574612a7b:sha256:aea2d1f7807ea828d56aa3f09894aa38fa5591d296d8382066c71dc10b261eb4",
 };
 
 const IDENTITY = {
@@ -136,7 +138,7 @@ test("Stage 1 activation remains workflow_dispatch only", () => {
 test("Stage 1 activation requires exact confirmation, source SHA, digest, backup path and hash", () => {
   const text = wf(WF_NAME);
   const auth = authorizeScript();
-  for (const name of ["source_sha", "image_digest", "backup_id", "backup_hash", "confirmation"]) {
+  for (const name of ["source_sha", "image_digest", "backup_id", "backup_hash", "confirmation", "owner_authorization", "uat_attestation"]) {
     assert.match(inputBlock(text, name), /required:\s*true/);
   }
   assert.match(auth, /confirmation must be exactly ACTIVATE-STAGE1-PRODUCTION/);
@@ -156,7 +158,10 @@ test("Stage 1 activation keeps master, actor, triggering_actor and SHA ancestry 
   assert.match(auth, /"\$TRIGGERING_ACTOR"\s*!=\s*"\$ALLOWED_ACTOR"/);
   assert.match(text, /github\.triggering_actor/);
   assert.match(auth, /"\$WF_REF"\s*!=\s*"refs\/heads\/master"/);
-  assert.match(auth, /cursor\[bot\]/);
+  assert.doesNotMatch(auth, /CURSOR_DEPLOY=1/);
+  assert.match(auth, /cursor is not a durable Production activator/);
+  assert.match(auth, /owner_authorization must be exactly AUTHORIZE-STAGE1/);
+  assert.match(auth, /uat_attestation must be exactly PRODUCTION_UAT_PASS/);
   assert.match(text, /merge-base --is-ancestor "\$SOURCE_SHA" origin\/master/);
   assert.match(text, /environment: production/);
   assert.match(text, /group: production-deploy/);
@@ -167,12 +172,20 @@ test("Stage 1 activation keeps master, actor, triggering_actor and SHA ancestry 
 
 test("Stage 1 activation authorize script fail-closes wrong ref/actor/confirmation/SHA/digest/backup", () => {
   runAuthorize(GOOD);
-  runAuthorize({
-    ...GOOD,
-    ACTOR: "cursor",
-    TRIGGERING_ACTOR: "cursor[bot]",
-    ALLOWED_ACTOR: "Fyun48",
-  });
+  assert.throws(
+    () => runAuthorize({ ...GOOD, ACTOR: "cursor", TRIGGERING_ACTOR: "cursor[bot]" }),
+    /not a durable Production activator|not the authorized deployer/,
+  );
+  assert.throws(
+    () => runAuthorize({ ...GOOD, ACTOR: "cursor[bot]", TRIGGERING_ACTOR: "cursor[bot]" }),
+    /not a durable Production activator|not the authorized deployer/,
+  );
+  assert.throws(
+    () => runAuthorize({ ...GOOD, ACTOR: "cursor", TRIGGERING_ACTOR: "Fyun48" }),
+    /not a durable Production activator|not the authorized deployer/,
+  );
+  assert.throws(() => runAuthorize({ ...GOOD, OWNER_AUTHORIZATION: "AUTHORIZE-STAGE1-PRODUCTION" }), /owner_authorization/);
+  assert.throws(() => runAuthorize({ ...GOOD, UAT_ATTESTATION: "PRODUCTION_UAT_PASS" }), /uat_attestation/);
   assert.throws(() => runAuthorize({ ...GOOD, CONFIRM: "ACTIVATE-PRA-PRODUCTION" }), /ACTIVATE-STAGE1-PRODUCTION/);
   assert.throws(() => runAuthorize({ ...GOOD, CONFIRM: "DEPLOY-PRODUCTION" }), /ACTIVATE-STAGE1-PRODUCTION/);
   assert.throws(() => runAuthorize({ ...GOOD, WF_REF: "refs/heads/cursor/stage1-owner-matching-activation-eeec" }), /master workflow definition/);
@@ -330,6 +343,10 @@ test("Stage 1 activation does not change build, predeploy, deploy or PRA workflo
 
 function goodSmoke() {
   return {
+    source_sha: GOOD.SOURCE_SHA,
+    image_digest: GOOD.IMAGE_DIGEST,
+    uat_attestation: GOOD.UAT_ATTESTATION,
+    owner_authorization_bound: true,
     functional_smoke: {
       aggregate_status: 200,
       exposure_enabled: true,
@@ -338,8 +355,32 @@ function goodSmoke() {
       unauth_match_denied: true,
       authenticated_cross_account: {
         probed_here: false,
-        prerequisite: "PRODUCTION_UAT_PASS",
+        verified: false,
+        unauth_401_is_not_cross_account: true,
+        authoritative_source: "PRODUCTION_UAT_PASS",
+        bound_source_sha: GOOD.SOURCE_SHA,
+        bound_image_digest: GOOD.IMAGE_DIGEST,
+        uat_attestation_bound: true,
       },
+    },
+    suppression: {
+      verified: false,
+      checked: false,
+      row_counts_are_not_verification: true,
+      authoritative_source: "PRODUCTION_UAT_PASS",
+      bound_source_sha: GOOD.SOURCE_SHA,
+      bound_image_digest: GOOD.IMAGE_DIGEST,
+      uat_attestation_bound: true,
+    },
+    http_5xx: {
+      observed: false,
+      provenance: "defined_probes",
+      probes: ["http://127.0.0.1:5153/api/demand/aggregate"],
+    },
+    sqlite_busy: {
+      observed: false,
+      provenance: "defined_probes",
+      probes: ["http://127.0.0.1:5153/api/demand/aggregate"],
     },
     perf_smoke: {
       aggregate_ms: 12,
@@ -398,7 +439,7 @@ test("Stage 1 evidence does not claim cross-account from unauth 401 and requires
   assert.doesNotMatch(remote, /"cross_account": 401/);
   assert.doesNotMatch(text, /"cross_account"/);
   assert.match(remote, /PRODUCTION_UAT_PASS/);
-  assert.match(remote, /probed_here": False/);
+  assert.match(remote, /unauth_401_is_not_cross_account/);
   assert.match(remote, /unauth_match_denied/);
   assert.match(checkEvidence("--check-runtime", goodSmoke()), /EVIDENCE_RUNTIME_OK/);
   assert.throws(
@@ -429,9 +470,84 @@ test("Stage 1 evidence does not claim cross-account from unauth 401 and requires
       ...goodSmoke(),
       functional_smoke: {
         ...goodSmoke().functional_smoke,
-        authenticated_cross_account: { probed_here: true, prerequisite: "PRODUCTION_UAT_PASS" },
+        authenticated_cross_account: {
+          ...goodSmoke().functional_smoke.authenticated_cross_account,
+          probed_here: true,
+        },
       },
     }),
     /must not be claimed as probed here/,
+  );
+  assert.throws(
+    () => checkEvidence("--check-receipt", {
+      ...goodSmoke(),
+      functional_smoke: {
+        ...goodSmoke().functional_smoke,
+        authenticated_cross_account: {
+          ...goodSmoke().functional_smoke.authenticated_cross_account,
+          unauth_401_is_not_cross_account: false,
+        },
+      },
+    }),
+    /unauthenticated 401 cannot satisfy cross-account evidence/,
+  );
+});
+
+test("cursor or cursor[bot] alone cannot activate Production without current Owner authorization", () => {
+  const auth = authorizeScript();
+  assert.doesNotMatch(auth, /CURSOR_DEPLOY=1/);
+  assert.doesNotMatch(wf(WF_NAME), /Owner 已書面授權：Cursor Agent/);
+  for (const actor of ["cursor", "cursor[bot]"]) {
+    assert.throws(
+      () => runAuthorize({ ...GOOD, ACTOR: actor, TRIGGERING_ACTOR: actor }),
+      /not a durable Production activator|not the authorized deployer/,
+    );
+  }
+});
+
+test("row counts alone cannot satisfy suppression and bare 5xx/busy flags cannot be synthesized", () => {
+  const remote = readFileSync(REMOTE, "utf8");
+  assert.match(remote, /row_counts_are_not_verification/);
+  assert.match(remote, /provenance": "defined_probes"/);
+  assert.doesNotMatch(remote, /"checked": True/);
+  assert.throws(
+    () => checkEvidence("--check-receipt", {
+      ...goodSmoke(),
+      suppression: {
+        ...goodSmoke().suppression,
+        checked: true,
+        verified: true,
+      },
+    }),
+    /must not claim executed verification|row counts/,
+  );
+  assert.throws(
+    () => checkEvidence("--check-receipt", {
+      ...goodSmoke(),
+      suppression: {
+        verified: false,
+        checked: false,
+        authoritative_source: "PRODUCTION_UAT_PASS",
+        uat_attestation_bound: true,
+        bound_source_sha: GOOD.SOURCE_SHA,
+        bound_image_digest: GOOD.IMAGE_DIGEST,
+      },
+    }),
+    /row counts alone cannot satisfy suppression verification/,
+  );
+  assert.throws(
+    () => checkEvidence("--check-receipt", { ...goodSmoke(), http_5xx: false }),
+    /must not be a bare boolean/,
+  );
+  assert.throws(
+    () => checkEvidence("--check-receipt", { ...goodSmoke(), sqlite_busy: false }),
+    /must not be a bare boolean/,
+  );
+  assert.throws(
+    () => checkEvidence("--check-receipt", {
+      ...goodSmoke(),
+      http_5xx: { observed: false, provenance: "hardcoded", probes: ["/api/health"] },
+    }),
+    /provenance must be defined_probes/,
   );
 });
