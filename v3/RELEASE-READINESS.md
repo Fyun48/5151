@@ -35,6 +35,9 @@ A/B/C/D 已進 master
 | Gate 開始時 tree SHA | `b985ce64a7a842e2786ec54612a22e803d823476` |
 | 來源 | Merge pull request #326（PR D notifications） |
 | 本 remedation branch | `cursor/rental-marketplace-release-readiness-337d` |
+| 本 PR | https://github.com/Fyun48/5151/pull/328 |
+| 本 PR HEAD | `598d6b29a4a4c345b74ee0cc2d6709fa363f165d` |
+| 本 PR tree | `a83d3ff6d930e088c6ca2eebc7ed8b64250598e4` |
 | 本 PR 合併後 | 必須重新鎖定 **新的** master exact SHA + tree SHA |
 
 目前正式站最後一次成功 Deploy v3（**不含** B/C/D code）：
@@ -106,6 +109,8 @@ PR A flags 啟用：Activate PR A run `35070846756`（2026-09-16），source `37
 | Performance | `list-perf-bench.test.js`, match/notify EXPLAIN bounds |
 
 **master `ea1872b` Actions** run `35191081347`：1748 pass / 1 fail。失敗是既有 `list-perf-bench` 抖動：`paired p50 delta 7.54 should not exceed +5ms`。**不得放寬 threshold。** 本 PR 的 same-SHA Actions 若再遇到同一抖動，重跑即可，不可改門檻。
+
+本 PR HEAD 本機 `npm test`：1753 pass / 1 fail。失敗是既有 `list-district-relations` EXPLAIN 抖動（同一 `idx_listings_district_prefix` 被報成 `SCAN` 而非 `SEARCH`）。重跑 lock-in／offer／PRA／list-perf-bench 皆綠。**不改 EXPLAIN 斷言。**
 
 ---
 
