@@ -17,6 +17,7 @@ import {
   listMyBlocks,
   OFFER_LISTING_DAILY_CAP,
   OFFER_OWNER_DAILY_CAP,
+  OFFER_SAME_WISH_COOLDOWN_MS,
   publicOfferView,
   resetWishOfferRateLimits,
   setWishOfferHydrate,
@@ -595,6 +596,46 @@ test("accept decline and withdraw fail-closed after TTL without worker", () => {
   db.close();
 });
 
+test("accepted stays active and cannot resend after cooldown until terminalized", () => {
+  const db = open();
+  const { listing, wish } = seedPair(db);
+  const createdAt = new Date("2026-09-01T00:00:00.000Z");
+  const later = new Date(createdAt.getTime() + OFFER_SAME_WISH_COOLDOWN_MS + 24 * 60 * 60 * 1000);
+  const offer = createWishOffer(db, 1, listing.post_id, wish.public_token, {
+    idempotencyKey: "offer-key-actv1",
+    now: createdAt,
+  });
+  acceptWishOffer(db, 2, offer.public_token, { now: createdAt });
+  assert.equal(codeOf(() => createWishOffer(db, 1, listing.post_id, wish.public_token, {
+    idempotencyKey: "offer-key-actv2",
+    now: createdAt,
+  })), "offer_already_active");
+  assert.equal(codeOf(() => createWishOffer(db, 1, listing.post_id, wish.public_token, {
+    idempotencyKey: "offer-key-actv3",
+    now: later,
+  })), "offer_already_active");
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM wish_offers").get().n, 1);
+  assert.equal(db.prepare("SELECT status FROM wish_offers WHERE id = ?").get(offer.id).status, "accepted");
+  const card = attachOfferCtas(db, [{ wish_ref: wish.public_token }], {
+    listingId: listing.post_id,
+    ownerUserId: 1,
+    now: later,
+  })[0];
+  assert.equal(card.offer_available, false);
+  assert.equal(card.offer_status, "accepted");
+
+  applyWishLifecycleAction(db, 2, wish.public_token, "pause");
+  assert.equal(db.prepare("SELECT status FROM wish_offers WHERE id = ?").get(offer.id).status, "expired");
+  applyWishLifecycleAction(db, 2, wish.public_token, "resume");
+  const resent = createWishOffer(db, 1, listing.post_id, wish.public_token, {
+    idempotencyKey: "offer-key-actv4",
+    now: later,
+  });
+  assert.equal(resent.status, "pending");
+  assert.notEqual(resent.id, offer.id);
+  db.close();
+});
+
 test("offer list keyset stays bounded at 10k rows", () => {
   const db = open();
   const { listing, wish } = seedPair(db);
@@ -625,6 +666,7 @@ test("offer list keyset stays bounded at 10k rows", () => {
   assert.equal(owner.items.length, 20);
   assert.equal(owner.items[0].offer_ref, pending.public_token);
   assert.equal(ownerStats.counted, true);
+  assert.equal(ownerStats.count_queries, 1);
   assert.ok(ownerStats.fetched <= 21);
   assert.ok(ownerStats.projected <= 20);
   assert.equal(wishOfferQueryMemory().snapshots, 0);
@@ -639,6 +681,11 @@ test("offer list keyset stays bounded at 10k rows", () => {
   assert.ok(owner2Stats.fetched <= 21);
   assert.ok(owner2Stats.projected <= 20);
   assert.equal(owner2.total, 10001);
+  assert.equal(owner2Stats.counted, false);
+  assert.equal(owner2Stats.pending_counted, false);
+  assert.equal(owner2Stats.count_queries, 0);
+  assert.equal(codeOf(() => listOwnerWishOffers(db, 1, { limit: 20, cursor: owner.next_cursor })), "cursor_expired");
+  assert.equal(codeOf(() => listTenantWishOffers(db, 2, { limit: 20, cursor: owner2.next_cursor })), "cursor_expired");
 
   const inbox = listTenantWishOffers(db, 2, { limit: 20 });
   const inboxStats = lastWishOfferListStats();
@@ -647,8 +694,18 @@ test("offer list keyset stays bounded at 10k rows", () => {
   assert.equal(inbox.items.length, 20);
   assert.equal(inboxStats.counted, true);
   assert.equal(inboxStats.pending_counted, true);
+  assert.equal(inboxStats.count_queries, 2);
   assert.ok(inboxStats.fetched <= 21);
   assert.ok(inboxStats.projected <= 20);
+  const inbox2 = listTenantWishOffers(db, 2, { limit: 20, cursor: inbox.next_cursor });
+  const inbox2Stats = lastWishOfferListStats();
+  assert.equal(inbox2.total, 10001);
+  assert.equal(inbox2.pending_count, 1);
+  assert.equal(inbox2Stats.counted, false);
+  assert.equal(inbox2Stats.pending_counted, false);
+  assert.equal(inbox2Stats.count_queries, 0);
+  assert.ok(inbox2Stats.fetched <= 21);
+  assert.ok(inbox2Stats.projected <= 20);
 
   const plans = explainWishOfferPlans(db);
   const text = JSON.stringify(plans);

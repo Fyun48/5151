@@ -153,6 +153,9 @@ export function ensureWishOfferSchema(db) {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_wish_offers_pending_unique
       ON wish_offers(owner_user_id, listing_id, wish_id)
       WHERE status = 'pending';
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_wish_offers_active_unique
+      ON wish_offers(owner_user_id, listing_id, wish_id)
+      WHERE status IN ('pending', 'accepted');
     CREATE INDEX IF NOT EXISTS idx_wish_offers_owner_created
       ON wish_offers(owner_user_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_wish_offers_owner_keyset
@@ -338,7 +341,7 @@ function lastTerminalOffer(db, ownerUserId, listingId, wishId) {
   return db.prepare(
     `SELECT * FROM wish_offers
      WHERE owner_user_id = ? AND listing_id = ? AND wish_id = ?
-       AND status != 'pending'
+       AND status IN ('declined', 'withdrawn', 'expired', 'blocked')
      ORDER BY created_at DESC, id DESC LIMIT 1`,
   ).get(Number(ownerUserId), Number(listingId), Number(wishId));
 }
@@ -347,6 +350,14 @@ function pendingOffer(db, ownerUserId, listingId, wishId) {
   return db.prepare(
     `SELECT * FROM wish_offers
      WHERE owner_user_id = ? AND listing_id = ? AND wish_id = ? AND status = 'pending'
+     LIMIT 1`,
+  ).get(Number(ownerUserId), Number(listingId), Number(wishId));
+}
+
+function acceptedOffer(db, ownerUserId, listingId, wishId) {
+  return db.prepare(
+    `SELECT * FROM wish_offers
+     WHERE owner_user_id = ? AND listing_id = ? AND wish_id = ? AND status = 'accepted'
      LIMIT 1`,
   ).get(Number(ownerUserId), Number(listingId), Number(wishId));
 }
@@ -379,6 +390,9 @@ export function assertCreateOfferGates(db, {
   }
   const existingPending = pendingOffer(db, ownerUserId, listingRow.post_id, wishRow.id);
   if (existingPending) return { live, existingPending };
+  if (acceptedOffer(db, ownerUserId, listingRow.post_id, wishRow.id)) {
+    throw offerHttpError("目前無法提供", 409, "offer_already_active");
+  }
   const last = lastTerminalOffer(db, ownerUserId, listingRow.post_id, wishRow.id);
   if (last) {
     const created = Date.parse(last.created_at);
@@ -421,7 +435,11 @@ export function insertPendingOffer(db, {
     return db.prepare("SELECT * FROM wish_offers WHERE id = ?").get(Number(ins.lastInsertRowid));
   } catch (error) {
     if (String(error.message || "").includes("UNIQUE") || String(error.code || "") === "SQLITE_CONSTRAINT_UNIQUE") {
-      return pendingOffer(db, ownerUserId, listingRow.post_id, wishRow.id);
+      const existing = pendingOffer(db, ownerUserId, listingRow.post_id, wishRow.id);
+      if (existing) return existing;
+      if (acceptedOffer(db, ownerUserId, listingRow.post_id, wishRow.id)) {
+        throw offerHttpError("目前無法提供", 409, "offer_already_active");
+      }
     }
     throw error;
   }
@@ -895,13 +913,14 @@ export function attachOfferCtas(db, items, { listingId, ownerUserId, now = new D
       wishes.set(row.public_token, row);
     }
   }
-  const pending = new Map();
+  const active = new Map();
   if (tokens.length) {
     for (const row of db.prepare(
       `SELECT public_token, wish_id, status FROM wish_offers
-       WHERE owner_user_id = ? AND listing_id = ? AND status = 'pending'`,
+       WHERE owner_user_id = ? AND listing_id = ? AND status IN ('pending', 'accepted')`,
     ).all(Number(ownerUserId), Number(listingId))) {
-      pending.set(Number(row.wish_id), row);
+      const prev = active.get(Number(row.wish_id));
+      if (!prev || row.status === "accepted") active.set(Number(row.wish_id), row);
     }
   }
   return list.map((item) => {
@@ -912,8 +931,17 @@ export function attachOfferCtas(db, items, { listingId, ownerUserId, now = new D
     if (tenantBlocksOwner(db, wish.user_id, ownerUserId) || ownerBanned(db, ownerUserId, now)) {
       return { ...item, offer_available: false, offer_cta: "目前無法提供", offer_status: "unavailable" };
     }
-    const open = pending.get(Number(wish.id));
-    if (open) {
+    const open = active.get(Number(wish.id));
+    if (open?.status === "accepted") {
+      return {
+        ...item,
+        offer_available: false,
+        offer_cta: "目前無法提供",
+        offer_status: "accepted",
+        offer_ref: open.public_token,
+      };
+    }
+    if (open?.status === "pending") {
       return {
         ...item,
         offer_available: false,

@@ -19,6 +19,7 @@ let lastListStats = {
   projected: 0,
   counted: false,
   pending_counted: false,
+  count_queries: 0,
   total: 0,
   pending_count: 0,
 };
@@ -31,6 +32,7 @@ export function resetWishOfferQueryCursors() {
     projected: 0,
     counted: false,
     pending_counted: false,
+    count_queries: 0,
     total: 0,
     pending_count: 0,
   };
@@ -57,7 +59,15 @@ function evict(map, max) {
   }
 }
 
-function createKeysetCursor({ role, userId, status, afterCreatedAt, afterId }) {
+function createKeysetCursor({
+  role,
+  userId,
+  status,
+  afterCreatedAt,
+  afterId,
+  total,
+  pendingCount,
+}) {
   evict(cursors, OFFER_CURSOR_MAX);
   const token = randomBytes(24).toString("base64url");
   cursors.set(token, {
@@ -66,6 +76,8 @@ function createKeysetCursor({ role, userId, status, afterCreatedAt, afterId }) {
     status: String(status || ""),
     afterCreatedAt: String(afterCreatedAt || ""),
     afterId: Number(afterId) || 0,
+    total: Number(total) || 0,
+    pendingCount: pendingCount == null ? null : Number(pendingCount) || 0,
     expires: Date.now() + OFFER_CURSOR_TTL_MS,
   });
   return token;
@@ -137,10 +149,24 @@ function listWishOffers(db, {
   const size = clampLimit(limit);
   const identity = { role, userId, status: status || "" };
   const boundary = cursor ? consumeKeysetCursor(cursor, identity) : null;
-  const total = countOfferRows(db, { column, userId, status });
-  const pendingCount = includePendingCount
-    ? pendingInboxCount(db, userId)
-    : 0;
+  let counted = false;
+  let pendingCounted = false;
+  let countQueries = 0;
+  let total;
+  let pendingCount = 0;
+  if (boundary) {
+    total = Number(boundary.total) || 0;
+    pendingCount = includePendingCount ? Number(boundary.pendingCount) || 0 : 0;
+  } else {
+    total = countOfferRows(db, { column, userId, status });
+    counted = true;
+    countQueries += 1;
+    if (includePendingCount) {
+      pendingCount = pendingInboxCount(db, userId);
+      pendingCounted = true;
+      countQueries += 1;
+    }
+  }
   const rows = listOfferPageRows(db, {
     column,
     userId,
@@ -154,8 +180,9 @@ function listWishOffers(db, {
   lastListStats = {
     fetched: rows.length,
     projected: views.length,
-    counted: true,
-    pending_counted: includePendingCount,
+    counted,
+    pending_counted: pendingCounted,
+    count_queries: countQueries,
     total,
     pending_count: pendingCount,
   };
@@ -167,6 +194,8 @@ function listWishOffers(db, {
       status,
       afterCreatedAt: lastRow.created_at,
       afterId: lastRow.id,
+      total,
+      pendingCount: includePendingCount ? pendingCount : null,
     })
     : "";
   const result = {
