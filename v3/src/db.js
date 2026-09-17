@@ -2164,7 +2164,7 @@ export function getRentalNotifyPrefsFor(userId) {
 
 export function saveRentalNotifyPrefsFor(userId, patch, now = new Date()) {
   hydrateRentalMarketplace();
-  return saveRentalNotifyPrefsOn(db, userId, patch, now);
+  return { ...saveRentalNotifyPrefsOn(db, userId, patch, now), ...publicRentalNotifyCaps(getRentalMarketplaceFlags()) };
 }
 
 export function getMatchSubscriptionFor(userId, listingId) {
