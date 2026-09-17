@@ -86,6 +86,16 @@ export { WISH_FORBIDDEN_CONDITION_IDS };
 
 let marketplaceFlags = normalizeRentalMarketplaceFlags({});
 let catalogCacheV2 = null;
+let wishOfferLifecycleHook = null;
+
+export function setWishOfferLifecycleHook(fn) {
+  wishOfferLifecycleHook = typeof fn === "function" ? fn : null;
+}
+
+function notifyWishOfferLifecycle(db, payload) {
+  if (!wishOfferLifecycleHook) return;
+  wishOfferLifecycleHook(db, payload);
+}
 
 export function setRentalMarketplaceFlags(flags) {
   marketplaceFlags = normalizeRentalMarketplaceFlags(flags);
@@ -733,6 +743,7 @@ export function expireOpenPosts(db, now = new Date()) {
          AND expires_at <= ? AND expires_at < ?`,
     ).run(stamp, stamp, graceCutoff, WISH_FAR_EXPIRE);
     pruneDemandMatchDistricts(db);
+    notifyWishOfferLifecycle(db, { sweep: true, now });
     return (Number(confirm.changes) || 0) + (Number(paused.changes) || 0);
   }
   const result = db.prepare(
@@ -740,6 +751,7 @@ export function expireOpenPosts(db, now = new Date()) {
      WHERE status = 'open' AND expires_at <= ? AND expires_at < ?`,
   ).run(stamp, stamp, WISH_FAR_EXPIRE);
   pruneDemandMatchDistricts(db);
+  notifyWishOfferLifecycle(db, { sweep: true, now });
   return Number(result.changes) || 0;
 }
 
@@ -1390,6 +1402,7 @@ export function closeDemandPost(db, userId, postId, { admin = false } = {}, now 
   ).run(stamp, stamp, row.id);
   writeLifecycle(db, row.id, { lifecycle: "paused", closed_reason: "paused" });
   syncDemandMatchDistricts(db, row.id);
+  notifyWishOfferLifecycle(db, { wishId: row.id, lifecycle: "paused", now });
   return getDemandPost(db, row.id, { viewerId: userId });
 }
 
@@ -1549,6 +1562,7 @@ export function reportDemand(db, userId, { targetType, targetId, reason } = {}, 
     } else {
       db.prepare("UPDATE demand_posts SET status = 'hidden', closed_at = COALESCE(closed_at, ?) WHERE id = ?").run(iso(now), id);
       writeLifecycle(db, id, { lifecycle: "blocked", closed_reason: "blocked" });
+      notifyWishOfferLifecycle(db, { wishId: id, lifecycle: "blocked", now });
     }
   }
   return { ok: true, hidden: count >= DEMAND_REPORT_HIDE_AFTER };
@@ -1576,6 +1590,9 @@ export function applyWishLifecycleAction(db, userId, postId, action, now = new D
       ).run(patch.status, patch.expires_at || null, patch.closed_at ?? null, patch.updated_at, patch.published_at || null, row.id);
     }
     writeLifecycle(db, row.id, patch);
+    if (patch.lifecycle) {
+      notifyWishOfferLifecycle(db, { wishId: row.id, lifecycle: patch.lifecycle, now });
+    }
     return getDemandPost(db, row.id, { viewerId: uid });
   });
 }

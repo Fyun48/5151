@@ -188,6 +188,31 @@ import {
 } from "./rentalMatchQuery.js";
 import { runWishLifecycleTick } from "./wishLifecycleLoop.js";
 import {
+  createWishOffer as createWishOfferOn,
+  ensureWishOfferSchema,
+  explainWishOfferPlans as explainWishOfferPlansOn,
+  listAdminOfferReports as listAdminOfferReportsOn,
+  listMyBlocks as listMyBlocksOn,
+  publicOfferView,
+  setWishOfferHydrate,
+  unblockByRef as unblockByRefOn,
+} from "./wishOffers.js";
+import {
+  acceptWishOffer as acceptWishOfferOn,
+  blockOwnerFromOffer as blockOwnerFromOfferOn,
+  declineWishOffer as declineWishOfferOn,
+  getWishOffer as getWishOfferOn,
+  readOfferContact as readOfferContactOn,
+  reportWishOffer as reportWishOfferOn,
+  withdrawWishOffer as withdrawWishOfferOn,
+} from "./wishOfferTransitions.js";
+import {
+  listOwnerWishOffers as listOwnerWishOffersOn,
+  listTenantWishOffers as listTenantWishOffersOn,
+  pendingInboxCount,
+} from "./wishOfferQueries.js";
+import { runWishOfferExpiryTick } from "./wishOfferWorker.js";
+import {
   DEFAULT_WISH_CONDITIONS,
   mergeWishConditions,
   normalizeWishConditionItems,
@@ -842,6 +867,7 @@ ensureFeedbackSchema(db);
 ensureFeedbackOutboxSchema(db);
 ensureSelfListingSchema(db);
 ensureRentalMatchIndexes(db);
+ensureWishOfferSchema(db);
 ensureMemberMediaSchema(db);
 ensureContentDocumentSchema(db);
 ensureMemberConsentSchema(db);
@@ -1445,6 +1471,7 @@ function hydrateRentalMarketplace() {
   setRentalCatalogCache(catalog);
   setSelfListingCatalog(catalog, flags);
   setRentalMatchHydrate(catalog, flags);
+  setWishOfferHydrate(catalog, flags);
 }
 
 export function getRentalMarketplaceFlags() {
@@ -1647,6 +1674,10 @@ export function applyWishLifecycleFor(userId, postId, action) {
 
 export function runWishLifecycleWorkerTick(now = new Date()) {
   return runWishLifecycleTick(db, now, { flags: getRentalMarketplaceFlags() });
+}
+
+export function runWishOfferExpiryWorkerTick(now = new Date()) {
+  return runWishOfferExpiryTick(db, now, { flags: getRentalMarketplaceFlags() });
 }
 
 export function saveWishConditions(partial = {}) {
@@ -1874,7 +1905,17 @@ export function deleteWishExampleFor(userId) {
 }
 
 export function wishRoomOwnerSummaryFor(userId) {
-  return wishRoomOwnerSummaryOn(db, userId);
+  hydrateRentalMarketplace();
+  const summary = wishRoomOwnerSummaryOn(db, userId);
+  let pending_offer_count = 0;
+  try {
+    pending_offer_count = pendingInboxCount(db, userId);
+  } catch { /* offer schema optional in isolated tests */ }
+  return {
+    ...summary,
+    pending_offer_count,
+    offer_enabled: getRentalMarketplaceFlags().wish.offer_enabled === true,
+  };
 }
 
 export { demandMeta, publicWishRoomView, selfListingMeta, isSelfListingId };
@@ -1945,6 +1986,89 @@ export function rentalMatchAdminRules() {
 export function rentalMatchOwnerMeta() {
   hydrateRentalMarketplace();
   return ownerMatchingMeta();
+}
+
+function offerJson(db, offer, userId) {
+  return publicOfferView(db, offer, userId);
+}
+
+export function createWishOfferFor(userId, listingRef, wishRef, opts = {}) {
+  hydrateRentalMarketplace();
+  const offer = createWishOfferOn(db, userId, listingRef, wishRef, opts);
+  return offerJson(db, offer, userId);
+}
+
+export function getWishOfferFor(userId, offerRef) {
+  hydrateRentalMarketplace();
+  const offer = getWishOfferOn(db, userId, offerRef);
+  return offerJson(db, offer, userId);
+}
+
+export function listOwnerWishOffersFor(userId, opts = {}) {
+  hydrateRentalMarketplace();
+  return listOwnerWishOffersOn(db, userId, opts);
+}
+
+export function listTenantWishOffersFor(userId, opts = {}) {
+  hydrateRentalMarketplace();
+  return listTenantWishOffersOn(db, userId, opts);
+}
+
+export function acceptWishOfferFor(userId, offerRef, opts = {}) {
+  hydrateRentalMarketplace();
+  const offer = acceptWishOfferOn(db, userId, offerRef, opts);
+  return offerJson(db, offer, userId);
+}
+
+export function declineWishOfferFor(userId, offerRef, opts = {}) {
+  hydrateRentalMarketplace();
+  const offer = declineWishOfferOn(db, userId, offerRef, opts);
+  return offerJson(db, offer, userId);
+}
+
+export function withdrawWishOfferFor(userId, offerRef, opts = {}) {
+  hydrateRentalMarketplace();
+  const offer = withdrawWishOfferOn(db, userId, offerRef, opts);
+  return offerJson(db, offer, userId);
+}
+
+export function blockWishOfferFor(userId, offerRef, opts = {}) {
+  hydrateRentalMarketplace();
+  const result = blockOwnerFromOfferOn(db, userId, offerRef, opts);
+  return {
+    ok: true,
+    block_ref: result.block_ref,
+    offer: offerJson(db, result.offer, userId),
+  };
+}
+
+export function reportWishOfferFor(userId, offerRef, input = {}, opts = {}) {
+  hydrateRentalMarketplace();
+  return reportWishOfferOn(db, userId, offerRef, input, opts);
+}
+
+export function readWishOfferContactFor(userId, offerRef, opts = {}) {
+  hydrateRentalMarketplace();
+  return readOfferContactOn(db, userId, offerRef, opts);
+}
+
+export function listMyWishOfferBlocksFor(userId) {
+  hydrateRentalMarketplace();
+  return { items: listMyBlocksOn(db, userId) };
+}
+
+export function unblockWishOfferFor(userId, blockRef) {
+  hydrateRentalMarketplace();
+  return unblockByRefOn(db, userId, blockRef);
+}
+
+export function listAdminWishOfferReportsFor(opts = {}) {
+  hydrateRentalMarketplace();
+  return { items: listAdminOfferReportsOn(db, opts) };
+}
+
+export function explainWishOfferPlansFor() {
+  return explainWishOfferPlansOn(db);
 }
 
 export function getSelfListing(postId, opts = {}) {

@@ -18,7 +18,8 @@
 - 有房刊登卡片內：match count +「查看符合需求」（44px）
 - Overlay 沿用 `.hub-panel`，寬度 `min(760px, 100%)`
 - 需求卡：預算 tabular、行政區、活動桶、explanation chips（flex-wrap）
-- 提供房源 CTA 必須 disabled，文案「即將推出」
+- `wish.offer_enabled` 關閉時，提供房源 CTA 必須 disabled，文案「即將推出」
+- flag 開啟後 CTA 改為「提供我的房源」；已送出顯示「已提供，等待對方回覆」，可撤回
 - 375px：晶片換行、無橫向溢出
 - 找房頁 demand exposure 是列表上方的小型 aside，不是滿版 Hero
 

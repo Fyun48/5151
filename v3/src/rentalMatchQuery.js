@@ -12,7 +12,7 @@ import {
   explainDemandMatchGenerationPlan,
   readDemandMatchGeneration,
 } from "./demand.js";
-import { isRentalCatalogV2Enabled, isWishOwnerMatchingEnabled } from "./rentalMarketplaceFlags.js";
+import { isRentalCatalogV2Enabled, isWishOfferEnabled, isWishOwnerMatchingEnabled } from "./rentalMarketplaceFlags.js";
 import { defaultCatalog, normalizeCatalog } from "./rentalCatalog.js";
 import {
   expireOpenSelfListings,
@@ -45,6 +45,7 @@ import {
   suppressSmallGroups,
   wishMatchSnapshot,
 } from "./rentalMatch.js";
+import { attachOfferCtas } from "./wishOffers.js";
 
 let catalogCache = defaultCatalog();
 let flagsCache = {};
@@ -508,7 +509,11 @@ export function ownerListingMatches(db, postId, userId, { limit, cursor, now = n
       limit: clampLimit(limit),
       cursor: String(cursor),
       next_cursor: page.next_cursor,
-      items: page.items.map(ownerPublicMatchItem),
+      items: attachOfferCtas(db, page.items.map(ownerPublicMatchItem), {
+        listingId: listing.id,
+        ownerUserId: userId,
+        now,
+      }),
     };
   }
   const snapshot = computeListingMatches(db, listing, { now });
@@ -528,7 +533,11 @@ export function ownerListingMatches(db, postId, userId, { limit, cursor, now = n
     limit: clampLimit(limit),
     cursor: "",
     next_cursor: page.next_cursor,
-    items: page.items.map(ownerPublicMatchItem),
+    items: attachOfferCtas(db, page.items.map(ownerPublicMatchItem), {
+      listingId: listing.id,
+      ownerUserId: userId,
+      now,
+    }),
   };
 }
 
@@ -803,6 +812,7 @@ export function matchRulesForAdmin() {
 export function ownerMatchingMeta() {
   return {
     enabled: isWishOwnerMatchingEnabled(flagsCache),
+    offer_enabled: isWishOfferEnabled(flagsCache),
     catalog_v2: isRentalCatalogV2Enabled(flagsCache),
     privacy_threshold: AGGREGATE_PRIVACY_THRESHOLD,
   };

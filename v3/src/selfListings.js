@@ -30,6 +30,11 @@ import {
 
 let listingCatalog = null;
 let listingFlags = {};
+let listingOfferHook = null;
+
+export function setListingOfferHook(fn) {
+  listingOfferHook = typeof fn === "function" ? fn : null;
+}
 
 export function setSelfListingCatalog(catalog, flags) {
   listingCatalog = catalog || null;
@@ -1190,6 +1195,7 @@ export function closeSelfListing(db, userId, postId, { admin = false } = {}, now
   db.prepare(
     "UPDATE listings SET self_status = 'closed', last_event = 'offline', last_seen_at = ? WHERE post_id = ?",
   ).run(iso(now), row.post_id);
+  try { listingOfferHook?.(db, { listingId: row.post_id, now }); } catch { /* offer sweep must not block close */ }
   return getSelfListing(db, row.post_id, { viewerId: userId });
 }
 
@@ -1199,6 +1205,7 @@ export function hideSelfListing(db, postId, now = new Date()) {
   db.prepare(
     "UPDATE listings SET self_status = 'hidden', hidden = 1, hidden_at = ? WHERE post_id = ?",
   ).run(iso(now), row.post_id);
+  try { listingOfferHook?.(db, { listingId: row.post_id, now }); } catch { /* offer sweep must not block hide */ }
   const until = banSelfPublisher(db, row.listed_by_user_id, now);
   return { ok: true, post_id: Number(row.post_id), hidden: true, ban_until: until };
 }
