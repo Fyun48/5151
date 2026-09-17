@@ -166,11 +166,23 @@ test("new wish public API is token-only; legacy numeric still resolves", () => {
   const legacy = getDemandPost(db, String(post.id), { publicOnly: true });
   assert.equal(legacy.id, post.id);
   const flags = publicRentalMarketplaceFlags({
-    wish: { public_share_v2_enabled: true, owner_matching_enabled: true, offer_enabled: true },
+    wish: {
+      public_share_v2_enabled: true,
+      owner_matching_enabled: true,
+      offer_enabled: true,
+      notifications_enabled: true,
+      digest_enabled: true,
+      outbound_mail_enabled: true,
+      outbound_push_enabled: true,
+    },
   });
   assert.equal(flags.wish.public_share_v2_enabled, false);
   assert.equal(flags.wish.owner_matching_enabled, false);
   assert.equal(flags.wish.offer_enabled, false);
+  assert.equal(flags.wish.notifications_enabled, false);
+  assert.equal(flags.wish.digest_enabled, false);
+  assert.equal(flags.wish.outbound_mail_enabled, false);
+  assert.equal(flags.wish.outbound_push_enabled, false);
   db.close();
 });
 

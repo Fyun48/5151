@@ -172,6 +172,14 @@
       aliases: ["範本", "template", "吉比標準版"],
     },
     {
+      id: "rental/ops",
+      group: "rental",
+      groupLabel: "租屋與配對",
+      label: "營運分析",
+      blurb: "許願房漏斗、提案轉換、通知與分享的區間彙總。",
+      aliases: ["分析", "analytics", "漏斗", "通知統計"],
+    },
+    {
       id: "comms/notices",
       group: "comms",
       groupLabel: "通知與溝通",
@@ -302,7 +310,7 @@
     { id: "overview", label: "總覽", pages: ["overview"] },
     { id: "inventory", label: "房源與資料", pages: ["inventory/sources", "inventory/crawl", "inventory/same-house", "inventory/imports", "inventory/health"] },
     { id: "members", label: "會員與權限", pages: ["members/users", "members/plans", "members/guest", "members/login"] },
-    { id: "rental", label: "租屋與配對", pages: ["rental/catalog", "rental/listing", "rental/wish", "rental/rules", "rental/templates"] },
+    { id: "rental", label: "租屋與配對", pages: ["rental/catalog", "rental/listing", "rental/wish", "rental/rules", "rental/templates", "rental/ops"] },
     { id: "content", label: "站台內容", pages: ["content/brand", "content/spirit", "content/legal", "content/cms", "content/qa", "content/housing"] },
     { id: "comms", label: "通知與溝通", pages: ["comms/notices", "comms/news", "comms/smtp", "comms/templates"] },
     { id: "revenue", label: "收益與曝光", pages: ["revenue/sponsors", "revenue/support", "revenue/campaigns", "revenue/ads"] },

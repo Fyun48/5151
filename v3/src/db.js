@@ -213,6 +213,25 @@ import {
 } from "./wishOfferQueries.js";
 import { runWishOfferExpiryTick } from "./wishOfferWorker.js";
 import {
+  applyUnsubscribeToken as applyUnsubscribeTokenOn,
+  bumpAnalytics,
+  createUnsubscribeToken as createUnsubscribeTokenOn,
+  emitRentalNotifyEvent as emitRentalNotifyEventOn,
+  ensureRentalNotifySchema,
+  explainRentalNotifyPlans as explainRentalNotifyPlansOn,
+  getMatchSubscription as getMatchSubscriptionOn,
+  getRentalNotifyPrefs as getRentalNotifyPrefsOn,
+  publicRentalNotifyCaps,
+  saveMatchSubscription as saveMatchSubscriptionOn,
+  saveRentalNotifyPrefs as saveRentalNotifyPrefsOn,
+  setRentalNotifyDockWriter,
+  setRentalNotifyHydrate,
+} from "./rentalNotify.js";
+import { runRentalNotifyTick } from "./rentalNotifyWorker.js";
+import { recordShareEvent as recordShareEventOn, sharePageExtras } from "./rentalShareGrowth.js";
+import { getCompletionSurvey as getCompletionSurveyOn, publicSurvey, submitCompletionSurvey as submitCompletionSurveyOn } from "./rentalSurvey.js";
+import { rentalOpsDrilldown as rentalOpsDrilldownOn, rentalOpsSummary as rentalOpsSummaryOn } from "./rentalOpsAnalytics.js";
+import {
   DEFAULT_WISH_CONDITIONS,
   mergeWishConditions,
   normalizeWishConditionItems,
@@ -868,6 +887,8 @@ ensureFeedbackOutboxSchema(db);
 ensureSelfListingSchema(db);
 ensureRentalMatchIndexes(db);
 ensureWishOfferSchema(db);
+ensureRentalNotifySchema(db);
+setRentalNotifyDockWriter(addUserEvent);
 ensureMemberMediaSchema(db);
 ensureContentDocumentSchema(db);
 ensureMemberConsentSchema(db);
@@ -1472,6 +1493,7 @@ function hydrateRentalMarketplace() {
   setSelfListingCatalog(catalog, flags);
   setRentalMatchHydrate(catalog, flags);
   setWishOfferHydrate(catalog, flags);
+  setRentalNotifyHydrate(flags);
 }
 
 export function getRentalMarketplaceFlags() {
@@ -1669,7 +1691,39 @@ export function deleteRentalCatalogTemplate(id) {
 
 export function applyWishLifecycleFor(userId, postId, action) {
   hydrateRentalMarketplace();
-  return applyWishLifecycleActionOn(db, userId, postId, action);
+  const result = applyWishLifecycleActionOn(db, userId, postId, action);
+  try {
+    if (String(action) === "complete" && result) {
+      emitRentalNotifyEventOn(db, {
+        eventType: "wish_completed",
+        userId,
+        eventKey: `wish_completed:${result.id || postId}`,
+        subjectType: "wish",
+        subjectRef: result.public_token || "",
+      });
+      emitRentalNotifyEventOn(db, {
+        eventType: "completion_survey_due",
+        userId,
+        eventKey: `completion_survey_due:${result.id || postId}`,
+        subjectType: "wish",
+        subjectRef: result.public_token || "",
+      });
+    }
+    if (String(action) === "pause" && result) {
+      emitRentalNotifyEventOn(db, {
+        eventType: "wish_paused_inactive",
+        userId,
+        eventKey: `wish_paused_inactive:${result.id || postId}`,
+        subjectType: "wish",
+        subjectRef: result.public_token || "",
+      });
+    }
+    if (String(action) === "confirm" || String(action) === "extend" || String(action) === "full_reconfirm") {
+      bumpAnalytics(db, "wish_confirmed");
+    }
+    if (String(action) === "resume") bumpAnalytics(db, "wish_resumed");
+  } catch { /* notify must not fail lifecycle */ }
+  return result;
 }
 
 export function runWishLifecycleWorkerTick(now = new Date()) {
@@ -1995,6 +2049,17 @@ function offerJson(db, offer, userId) {
 export function createWishOfferFor(userId, listingRef, wishRef, opts = {}) {
   hydrateRentalMarketplace();
   const offer = createWishOfferOn(db, userId, listingRef, wishRef, opts);
+  try {
+    emitRentalNotifyEventOn(db, {
+      eventType: "tenant_offer_received",
+      userId: offer.tenant_user_id,
+      eventKey: `tenant_offer_received:${offer.id}`,
+      subjectType: "offer",
+      subjectRef: offer.public_token,
+      listingId: offer.listing_id,
+      now: opts.now || new Date(),
+    });
+  } catch { /* notify must not fail create */ }
   return offerJson(db, offer, userId);
 }
 
@@ -2017,6 +2082,27 @@ export function listTenantWishOffersFor(userId, opts = {}) {
 export function acceptWishOfferFor(userId, offerRef, opts = {}) {
   hydrateRentalMarketplace();
   const offer = acceptWishOfferOn(db, userId, offerRef, opts);
+  try {
+    const now = opts.now || new Date();
+    emitRentalNotifyEventOn(db, {
+      eventType: "owner_offer_accepted",
+      userId: offer.owner_user_id,
+      eventKey: `owner_offer_accepted:${offer.id}`,
+      subjectType: "offer",
+      subjectRef: offer.public_token,
+      listingId: offer.listing_id,
+      now,
+    });
+    emitRentalNotifyEventOn(db, {
+      eventType: "tenant_offer_accepted_ack",
+      userId: offer.tenant_user_id,
+      eventKey: `tenant_offer_accepted_ack:${offer.id}`,
+      subjectType: "offer",
+      subjectRef: offer.public_token,
+      listingId: offer.listing_id,
+      now,
+    });
+  } catch { /* notify must not fail accept */ }
   return offerJson(db, offer, userId);
 }
 
@@ -2069,6 +2155,75 @@ export function listAdminWishOfferReportsFor(opts = {}) {
 
 export function explainWishOfferPlansFor() {
   return explainWishOfferPlansOn(db);
+}
+
+export function getRentalNotifyPrefsFor(userId) {
+  hydrateRentalMarketplace();
+  return { ...getRentalNotifyPrefsOn(db, userId), ...publicRentalNotifyCaps(getRentalMarketplaceFlags()) };
+}
+
+export function saveRentalNotifyPrefsFor(userId, patch, now = new Date()) {
+  hydrateRentalMarketplace();
+  return saveRentalNotifyPrefsOn(db, userId, patch, now);
+}
+
+export function getMatchSubscriptionFor(userId, listingId) {
+  hydrateRentalMarketplace();
+  return getMatchSubscriptionOn(db, userId, listingId);
+}
+
+export function saveMatchSubscriptionFor(userId, listingId, mode, now = new Date()) {
+  hydrateRentalMarketplace();
+  return saveMatchSubscriptionOn(db, userId, listingId, mode, now);
+}
+
+export function applyUnsubscribeTokenFor(token, now = new Date()) {
+  hydrateRentalMarketplace();
+  return applyUnsubscribeTokenOn(db, token, now);
+}
+
+export function createUnsubscribeTokenFor(userId, scope, now = new Date()) {
+  return createUnsubscribeTokenOn(db, userId, scope, now);
+}
+
+export function recordShareEventFor(input) {
+  return recordShareEventOn(db, input);
+}
+
+export function getCompletionSurveyFor(userId, wishRef) {
+  const wish = getDemand(wishRef, { viewerId: userId });
+  return publicSurvey(getCompletionSurveyOn(db, userId, wish.id));
+}
+
+export function submitCompletionSurveyFor(userId, wishRef, input, now = new Date()) {
+  hydrateRentalMarketplace();
+  const wishRow = getDemand(wishRef, { viewerId: userId });
+  return submitCompletionSurveyOn(db, userId, wishRow, input, now);
+}
+
+export function rentalOpsSummaryFor(opts = {}) {
+  return rentalOpsSummaryOn(db, opts);
+}
+
+export function rentalOpsDrilldownFor(opts = {}) {
+  return rentalOpsDrilldownOn(db, opts);
+}
+
+export function explainRentalNotifyPlansFor() {
+  return explainRentalNotifyPlansOn(db);
+}
+
+export function sharePageExtrasFor() {
+  return sharePageExtras(getRentalMarketplaceFlags());
+}
+
+export function runRentalNotifyWorkerTick(now = new Date(), extra = {}) {
+  hydrateRentalMarketplace();
+  return runRentalNotifyTick(db, now, {
+    flags: getRentalMarketplaceFlags(),
+    matchFn: (listingId, ownerId) => ownerListingMatchesOn(db, listingId, ownerId, { limit: 20 }),
+    ...extra,
+  });
 }
 
 export function getSelfListing(postId, opts = {}) {

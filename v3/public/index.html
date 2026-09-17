@@ -1673,6 +1673,44 @@
     .offer-actions .danger {
       margin-left: auto;
     }
+    .rental-notify-prefs, .match-sub-bar, .survey-fields {
+      display: grid;
+      gap: var(--space-2);
+      margin: 0 0 12px;
+    }
+    .rental-notify-prefs label, .match-sub-bar label, .survey-fields label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: var(--touch);
+    }
+    .rental-notify-prefs select, .match-sub-bar select, .survey-fields select,
+    .survey-fields textarea {
+      min-height: var(--touch);
+      width: 100%;
+    }
+    .rental-ops-grid, .notify-stat-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: var(--space-2);
+    }
+    @media (min-width: 768px) {
+      .rental-ops-grid, .notify-stat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+    @media (min-width: 1440px) {
+      .rental-ops-grid, .notify-stat-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    }
+    .notify-stat {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 10px 12px;
+      background: var(--accent-mist);
+    }
+    .notify-stat strong {
+      display: block;
+      font-variant-numeric: tabular-nums;
+      font-size: var(--text-md);
+    }
     .offer-contact {
       margin-top: 10px;
       padding: 10px 12px;
@@ -3968,6 +4006,7 @@
       </div>
       <div class="hub-tabs" role="tablist">
         <button type="button" class="ghost" data-hub-tab="events" aria-selected="true">通知種類</button>
+        <button type="button" class="ghost" data-hub-tab="rental" aria-selected="false">租屋通知</button>
         <button type="button" class="ghost" data-hub-tab="webhook" aria-selected="false">Discord Webhook</button>
         <button type="button" class="ghost" data-hub-tab="mail" aria-selected="false">自己的郵件 SMTP</button>
       </div>
@@ -4027,6 +4066,20 @@
           <button type="button" class="ghost" id="memberMailTest">寄測試信到我的信箱</button>
         </div>
         <p class="msg" id="memberMailMsg"></p>
+      </section>
+      <section class="hub-pane" data-hub-pane="rental" hidden>
+        <p class="hint">只控制許願房生命週期、提案與符合需求。物件抓取通知仍在「通知種類」。信箱／推播預設關閉，正式啟用後才會寄出。</p>
+        <div class="rental-notify-prefs" id="rentalNotifyPrefs">
+          <label><input type="checkbox" id="rentalPrefLife" checked /> 許願房到期提醒</label>
+          <label><input type="checkbox" id="rentalPrefMatch" /> 新的符合需求（選用）</label>
+          <label><input type="checkbox" id="rentalPrefOffer" checked /> 提案與互相確認（交易通知）</label>
+          <label><input type="checkbox" id="rentalPrefDigest" /> 每日摘要（選用）</label>
+          <label><input type="checkbox" id="rentalPrefDock" checked /> 站內通知</label>
+          <label><input type="checkbox" id="rentalPrefMail" disabled /> 郵件（尚未正式開放）</label>
+          <label><input type="checkbox" id="rentalPrefPush" disabled /> 推播（尚未正式開放）</label>
+        </div>
+        <p class="hint" id="rentalNotifyHint">訂閱符合需求不會提高配對排名。</p>
+        <p class="msg" id="rentalNotifyMsg" role="status" aria-live="polite"></p>
       </section>
       <section class="hub-pane" data-hub-pane="events">
         <p class="hint">全新物件只通知符合目前設定檔的篩選（例如只看整層、排除 1F 及地下室、行政區、租金）。價格、費用、下架、重新上架與同屋源重刊都只有特別關注才會發。頻道勾選也存在同一個設定檔。</p>
@@ -4287,10 +4340,67 @@
         <button type="button" class="ghost" id="ownerMatchClose">關閉</button>
       </div>
       <p class="msg" id="ownerMatchMsg" role="status" aria-live="polite"></p>
+      <div class="match-sub-bar" id="matchSubBar" hidden>
+        <label for="matchSubMode">新符合需求通知</label>
+        <select id="matchSubMode" aria-describedby="matchSubHint">
+          <option value="off">不通知</option>
+          <option value="instant">有新符合就站內提醒</option>
+          <option value="daily_digest">每日摘要</option>
+        </select>
+        <p class="hint" id="matchSubHint">這不會改變配對排名，只決定要不要提醒你。</p>
+        <p class="msg" id="matchSubMsg" role="status" aria-live="polite"></p>
+      </div>
       <div class="owner-list" id="ownerMatchList"></div>
       <div class="row" style="margin-top:12px">
         <button type="button" class="ghost" id="ownerMatchMore" hidden>載入更多</button>
       </div>
+    </div>
+  </div>
+  <div id="wishSurveyOverlay" class="hub-overlay" hidden>
+    <div class="hub-backdrop" data-close-survey></div>
+    <div class="hub-panel" role="dialog" aria-modal="true" aria-labelledby="wishSurveyTitle">
+      <div class="hub-head">
+        <div>
+          <h2 id="wishSurveyTitle">找房回饋</h2>
+          <p class="hint" style="margin:6px 0 0">大約 30 秒，可跳過。不必填姓名或電話。</p>
+        </div>
+        <button type="button" class="ghost" id="wishSurveyClose">關閉</button>
+      </div>
+      <form id="wishSurveyForm">
+        <input type="hidden" id="wishSurveyRef" />
+        <div class="survey-fields">
+          <label for="wishSurveyFound">是否透過本站找到房</label>
+          <select id="wishSurveyFound">
+            <option value="yes">有</option>
+            <option value="no">沒有</option>
+            <option value="prefer_not_to_say">不想說</option>
+          </select>
+          <label for="wishSurveyVia">透過哪個功能（可選）</label>
+          <select id="wishSurveyVia">
+            <option value="">不指定</option>
+            <option value="search">一般找房</option>
+            <option value="wish_match">許願房配對</option>
+            <option value="owner_offer">屋主提案</option>
+            <option value="other">其他</option>
+          </select>
+          <label for="wishSurveyHelp">整體是否有幫助（可選）</label>
+          <select id="wishSurveyHelp">
+            <option value="">不評</option>
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+          </select>
+          <label for="wishSurveyDetail">補充（可選，最多 400 字）</label>
+          <textarea id="wishSurveyDetail" maxlength="400"></textarea>
+        </div>
+        <div class="row">
+          <button type="submit" class="primary" id="wishSurveySubmit">送出</button>
+          <button type="button" class="ghost" id="wishSurveySkip">跳過</button>
+        </div>
+        <p class="msg" id="wishSurveyMsg" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </div>
   <div id="wishOfferOverlay" class="hub-overlay" hidden>
@@ -6733,12 +6843,71 @@
           box.querySelectorAll("input, textarea, select").forEach((el) => { el.disabled = false; });
           if ($("notifyHubSave")) $("notifyHubSave").disabled = !settingsLoaded;
           syncNotifyChannelLocks();
+          loadRentalNotifyPrefs();
         }
         box.scrollIntoView({ behavior: "smooth", block: "start" });
       }
     }
     function closeNotifyHub() {
       // 通知設定已固定在「通知」頁，不必關閉。
+    }
+    function fillRentalNotifyPrefs(data) {
+      if (!data) return;
+      if ($("rentalPrefLife")) $("rentalPrefLife").checked = data.lifecycle_reminder !== false;
+      if ($("rentalPrefMatch")) $("rentalPrefMatch").checked = data.new_match === true;
+      if ($("rentalPrefOffer")) $("rentalPrefOffer").checked = data.offer_transactional !== false;
+      if ($("rentalPrefDigest")) $("rentalPrefDigest").checked = data.daily_digest === true;
+      if ($("rentalPrefDock")) $("rentalPrefDock").checked = data.channel_dock !== false;
+      if ($("rentalPrefMail")) {
+        $("rentalPrefMail").checked = data.channel_mail === true && data.outbound_mail_enabled === true;
+        $("rentalPrefMail").disabled = data.outbound_mail_enabled !== true;
+      }
+      if ($("rentalPrefPush")) {
+        $("rentalPrefPush").checked = data.channel_push === true && data.outbound_push_enabled === true;
+        $("rentalPrefPush").disabled = data.outbound_push_enabled !== true;
+      }
+      if ($("rentalNotifyHint")) {
+        $("rentalNotifyHint").textContent = data.enabled
+          ? "訂閱符合需求不會提高配對排名。郵件與推播仍關閉，直到管理員正式開放。"
+          : "租屋通知尚未正式開放。設定會先存成關閉狀態。";
+      }
+    }
+    async function loadRentalNotifyPrefs() {
+      if (isGuest || !$("rentalPrefLife")) return;
+      try {
+        const res = await fetch("/api/rental-notify/prefs", { cache: "no-store" });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "讀取租屋通知失敗");
+        fillRentalNotifyPrefs(data);
+      } catch (error) {
+        if ($("rentalNotifyMsg")) $("rentalNotifyMsg").textContent = error.message;
+      }
+    }
+    async function saveRentalNotifyPrefs() {
+      if (isGuest || !$("rentalPrefLife")) return;
+      const res = await fetch("/api/rental-notify/prefs", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lifecycle_reminder: $("rentalPrefLife")?.checked === true,
+          new_match: $("rentalPrefMatch")?.checked === true,
+          offer_transactional: $("rentalPrefOffer")?.checked === true,
+          daily_digest: $("rentalPrefDigest")?.checked === true,
+          channel_dock: $("rentalPrefDock")?.checked === true,
+          channel_mail: $("rentalPrefMail")?.checked === true,
+          channel_push: $("rentalPrefPush")?.checked === true,
+        }),
+      });
+      const data = await readApi(res);
+      if (!res.ok) {
+        if (data.code === "rental_notify_disabled") {
+          if ($("rentalNotifyMsg")) $("rentalNotifyMsg").textContent = "租屋通知尚未開放，物件通知仍已儲存。";
+          return;
+        }
+        throw new Error(data.error || "租屋通知沒存到");
+      }
+      fillRentalNotifyPrefs(data);
+      if ($("rentalNotifyMsg")) $("rentalNotifyMsg").textContent = "租屋通知已儲存";
     }
     async function loadMemberMail() {
       if (isGuest) return;
@@ -6768,6 +6937,7 @@
         const mailData = await readApi(mailRes);
         if (!mailRes.ok) throw new Error(mailData.error || "郵件設定沒存到");
         fillMemberMail(mailData);
+        await saveRentalNotifyPrefs();
         if ($("notifyHubSaveMsg")) $("notifyHubSaveMsg").textContent = "已儲存";
         flash("通知設定已儲存");
       } catch (error) {
@@ -9414,6 +9584,14 @@
       const active = wishMine.active;
       if (!wishLifeOn() || !active) { bar.hidden = true; bar.innerHTML = ""; return; }
       const days = active.remaining_days;
+      if (days === 3 || days === 1) {
+        bar.className = "wish-life";
+        bar.hidden = false;
+        bar.innerHTML = days === 3
+          ? `<p><strong>條件若仍正確，確認一下就能繼續曝光。</strong></p><p class="hint">${esc(wishAreaText(active))} · 大約還有三天。</p><div class="row"><button type="button" class="primary" id="wishConfirmStay">我還在找</button><button type="button" class="ghost" id="wishConfirmDone">已找到房</button></div>`
+          : `<p><strong>今天確認條件，以免暫停曝光。</strong></p><p class="hint">${esc(wishAreaText(active))} · 大約還有一天。</p><div class="row"><button type="button" class="primary" id="wishConfirmStay">我還在找</button><button type="button" class="ghost" id="wishConfirmDone">已找到房</button></div>`;
+        return;
+      }
       if (active.lifecycle === "needs_confirmation") {
         bar.className = "wish-life confirm";
         bar.hidden = false;
@@ -9869,8 +10047,11 @@
     });
     $("wishCompleteBtn")?.addEventListener("click", async () => {
       if (!wishMine.active) return;
-      await wishLifeAction(wishMine.active.id, "complete", "更新失敗");
+      const id = wishMine.active.id;
+      const token = wishMine.active.public_token || wishMine.active.public_ref || id;
+      await wishLifeAction(id, "complete", "更新失敗");
       setWishStatus("恭喜找到房子。你的許願房已停止曝光。之後再次找房時可以沿用這次條件。");
+      openWishSurvey(token);
     });
     $("wishLifecycleBar")?.addEventListener("click", async (ev) => {
       const id = wishMine.active?.id;
@@ -9884,7 +10065,11 @@
         setWishStatus("請核對預算、行政區、格局與關鍵條件後再繼續曝光。");
         return;
       }
-      if (ev.target.id === "wishConfirmDone") await wishLifeAction(id, "complete", "更新失敗");
+      if (ev.target.id === "wishConfirmDone") {
+        const token = wishMine.active?.public_token || wishMine.active?.public_ref || id;
+        await wishLifeAction(id, "complete", "更新失敗");
+        openWishSurvey(token);
+      }
       if (ev.target.id === "wishConfirmPause") await wishLifeAction(id, "pause", "暫停失敗");
       if (ev.target.id === "wishConfirmEdit") {
         wishEditingId = id;
@@ -10821,6 +11006,68 @@
           </div>
         </article>`;
     }
+    async function loadMatchSubscription(listingId) {
+      const bar = $("matchSubBar");
+      const sel = $("matchSubMode");
+      if (!bar || !sel || !listingId) return;
+      try {
+        const res = await fetch(`/api/self-listings/${encodeURIComponent(listingId)}/match-subscription`);
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "讀取訂閱失敗");
+        sel.value = data.mode || "off";
+        bar.hidden = false;
+        if ($("matchSubMsg")) $("matchSubMsg").textContent = "";
+      } catch (error) {
+        bar.hidden = true;
+        if ($("matchSubMsg")) $("matchSubMsg").textContent = error.message;
+      }
+    }
+    async function saveMatchSubscription(listingId, mode) {
+      const res = await fetch(`/api/self-listings/${encodeURIComponent(listingId)}/match-subscription`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode }),
+      });
+      const data = await readApi(res);
+      if (!res.ok) throw new Error(data.error || "訂閱沒存到");
+      if ($("matchSubMode")) $("matchSubMode").value = data.mode || "off";
+      if ($("matchSubMsg")) $("matchSubMsg").textContent = "已更新。這不會改變配對排名。";
+    }
+    function closeWishSurvey() {
+      if ($("wishSurveyOverlay")) $("wishSurveyOverlay").hidden = true;
+    }
+    async function openWishSurvey(wishRef) {
+      const box = $("wishSurveyOverlay");
+      if (!box || !wishRef) return;
+      $("wishSurveyRef").value = wishRef;
+      $("wishSurveyMsg").textContent = "";
+      try {
+        const res = await fetch(`/api/wish-rooms/${encodeURIComponent(wishRef)}/survey`);
+        const data = await readApi(res);
+        if (data.submitted) {
+          $("wishSurveyMsg").textContent = "這則已填過，可關閉。";
+        }
+      } catch { /* still allow skip */ }
+      box.hidden = false;
+    }
+    async function submitWishSurvey(found) {
+      const ref = $("wishSurveyRef")?.value;
+      if (!ref) return;
+      const res = await fetch(`/api/wish-rooms/${encodeURIComponent(ref)}/survey`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          found_via_site: found,
+          via_feature: $("wishSurveyVia")?.value || "",
+          helpful: $("wishSurveyHelp")?.value ? Number($("wishSurveyHelp").value) : null,
+          detail: $("wishSurveyDetail")?.value || "",
+        }),
+      });
+      const data = await readApi(res);
+      if (!res.ok) throw new Error(data.error || "送出失敗");
+      if ($("wishSurveyMsg")) $("wishSurveyMsg").textContent = data.already ? "已記錄過" : "謝謝回饋";
+      if (found === "skipped" || data.submitted) setTimeout(closeWishSurvey, 600);
+    }
     function closeOwnerMatchOverlay() {
       const box = $("ownerMatchOverlay");
       if (box) box.hidden = true;
@@ -10837,6 +11084,7 @@
         ownerMatchState = { listingId: String(listingId), cursor: "", loading: false };
         list.innerHTML = `<div class="empty">載入符合需求…</div>`;
         if (msg) msg.textContent = "";
+        loadMatchSubscription(listingId);
       }
       if (ownerMatchState.loading) return;
       ownerMatchState.loading = true;
@@ -11167,6 +11415,29 @@
     });
     $("ownerMatchMore")?.addEventListener("click", () => {
       if (ownerMatchState.listingId) openOwnerMatches(ownerMatchState.listingId, { append: true });
+    });
+    $("matchSubMode")?.addEventListener("change", async () => {
+      if (!ownerMatchState.listingId) return;
+      try {
+        await saveMatchSubscription(ownerMatchState.listingId, $("matchSubMode").value);
+      } catch (error) {
+        if ($("matchSubMsg")) $("matchSubMsg").textContent = error.message;
+      }
+    });
+    $("wishSurveyClose")?.addEventListener("click", closeWishSurvey);
+    $("wishSurveyOverlay")?.addEventListener("click", (ev) => {
+      if (ev.target?.dataset?.closeSurvey != null) closeWishSurvey();
+    });
+    $("wishSurveySkip")?.addEventListener("click", async () => {
+      try { await submitWishSurvey("skipped"); } catch (error) {
+        if ($("wishSurveyMsg")) $("wishSurveyMsg").textContent = error.message;
+      }
+    });
+    $("wishSurveyForm")?.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      try { await submitWishSurvey($("wishSurveyFound")?.value || "prefer_not_to_say"); } catch (error) {
+        if ($("wishSurveyMsg")) $("wishSurveyMsg").textContent = error.message;
+      }
     });
     $("ownerMatchList")?.addEventListener("click", async (ev) => {
       const createBtn = ev.target?.closest?.("[data-create-offer]");
@@ -11814,6 +12085,7 @@
         return;
       }
       if (ev.key === "Escape" && $("ownerOverlay") && !$("ownerOverlay").hidden) closeOwnerOverlay();
+      if (ev.key === "Escape" && $("wishSurveyOverlay") && !$("wishSurveyOverlay").hidden) closeWishSurvey();
       if (ev.key === "Escape" && $("ownerMatchOverlay") && !$("ownerMatchOverlay").hidden) closeOwnerMatchOverlay();
       if (ev.key === "Escape" && $("wishOfferOverlay") && !$("wishOfferOverlay").hidden) closeWishOfferOverlay();
     });

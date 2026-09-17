@@ -361,11 +361,18 @@
     .admin-fav-btn { min-height: var(--touch); }
     .admin-shell.is-ready .admin-panel { display: none; }
     .admin-shell.is-ready .admin-panel.is-on { display: grid; gap: 16px; }
-    .admin-status-grid, .admin-metric-grid {
+    .admin-status-grid, .admin-metric-grid, .rental-ops-grid, .notify-stat-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
       gap: 8px;
     }
+    .notify-stat {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 12px;
+      background: var(--paper);
+    }
+    .notify-stat strong { display: block; font-variant-numeric: tabular-nums; font-size: 20px; }
     .admin-metric, .source-card {
       border: 1px solid var(--line);
       border-radius: var(--radius);
@@ -1057,6 +1064,19 @@
           <p class="hint">第一版是唯讀預設規則，不會影響找房排序或同房源判定。正式規則編輯器尚未開放。</p>
           <div id="rentalMatchRules" class="catalog-list"><p class="muted">載入預設規則…</p></div>
           <p><button type="button" class="ghost" disabled>規則編輯器即將推出</button></p>
+        </section>
+      </div>
+      <div id="rental-ops" class="admin-panel" data-admin-page="rental/ops">
+        <section class="card">
+          <h2>營運分析</h2>
+          <p class="hint">區間最多 93 天。數字是彙總，不含租客聯絡資料。接受率分母是期間新建提案。</p>
+          <div class="row">
+            <label>起 <input type="date" id="rentalOpsFrom" /></label>
+            <label>迄 <input type="date" id="rentalOpsTo" /></label>
+            <button type="button" class="primary" id="rentalOpsLoad">更新</button>
+          </div>
+          <p class="msg" id="rentalOpsMsg"></p>
+          <div id="rentalOpsSummary" class="catalog-list"><p class="muted">載入區間彙總…</p></div>
         </section>
       </div>
       <div id="rental-templates" class="admin-panel" data-admin-page="rental/templates">
@@ -2211,6 +2231,83 @@
       if (!res.ok) throw new Error(data.error || "載入條件目錄失敗");
       catalogState = data;
       renderCatalogAdmin();
+    }
+    function rentalOpsMetric(label, value, hint) {
+      return `<div class="notify-stat"><strong>${esc(value ?? "0")}</strong><span>${esc(label)}</span>${hint ? `<p class="hint">${esc(hint)}</p>` : ""}</div>`;
+    }
+    async function loadRentalOps() {
+      const box = $("rentalOpsSummary");
+      const msg = $("rentalOpsMsg");
+      if (!box) return;
+      const from = $("rentalOpsFrom")?.value || "";
+      const to = $("rentalOpsTo")?.value || "";
+      const q = new URLSearchParams();
+      if (from) q.set("from", from);
+      if (to) q.set("to", to);
+      try {
+        const res = await fetch(`/api/admin/rental-ops?${q}`, { cache: "no-store" });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "載入營運分析失敗");
+        const wish = data.wish || {};
+        const matching = data.matching || {};
+        const offers = data.offers || {};
+        const notify = data.notifications || {};
+        const growth = data.growth || {};
+        box.innerHTML = `
+          <p class="hint">區間 ${esc(data.range?.from || "")} ～ ${esc(data.range?.to || "")}</p>
+          <p><strong>許願房存量</strong></p>
+          <div class="rental-ops-grid">
+            ${rentalOpsMetric("草稿", wish.draft, "目前狀態")}
+            ${rentalOpsMetric("曝光中", wish.active, "目前狀態")}
+            ${rentalOpsMetric("待確認", wish.needs_confirmation)}
+            ${rentalOpsMetric("暫停", wish.paused)}
+            ${rentalOpsMetric("已找到", wish.completed)}
+            ${rentalOpsMetric("到期", wish.expired)}
+            ${rentalOpsMetric("恢復次數", wish.resumed || 0, wish.clone_definition || "")}
+          </div>
+          <p><strong>配對</strong></p>
+          <div class="rental-ops-grid">
+            ${rentalOpsMetric("可配對許願房", matching.active_matchable_wishes)}
+            ${rentalOpsMetric("已訂閱刊登", matching.listings_with_subscription)}
+            ${rentalOpsMetric("已見配對對", matching.seen_match_pairs)}
+          </div>
+          <p><strong>提案</strong></p>
+          <div class="rental-ops-grid">
+            ${rentalOpsMetric("期間新建", offers.created, "接受率分母")}
+            ${rentalOpsMetric("待回覆", offers.pending)}
+            ${rentalOpsMetric("已接受", offers.accepted)}
+            ${rentalOpsMetric("接受率", offers.acceptance_rate, offers.acceptance_rate_definition)}
+            ${rentalOpsMetric("中位回覆秒數", offers.median_seconds_to_accept ?? "—", offers.median_definition)}
+            ${rentalOpsMetric("檢舉", offers.reported)}
+          </div>
+          <p><strong>通知</strong></p>
+          <div class="notify-stat-grid">
+            ${rentalOpsMetric("產生", notify.generated)}
+            ${rentalOpsMetric("偏好略過", notify.suppressed)}
+            ${rentalOpsMetric("去重", notify.deduped)}
+            ${rentalOpsMetric("排隊", notify.queued)}
+            ${rentalOpsMetric("已送達", notify.delivered)}
+            ${rentalOpsMetric("失敗", notify.failed)}
+            ${rentalOpsMetric("重試中", notify.retrying)}
+            ${rentalOpsMetric("摘要", notify.digest)}
+          </div>
+          <p><strong>成長／回饋</strong></p>
+          <div class="rental-ops-grid">
+            ${rentalOpsMetric("分享瀏覽", growth.share_views)}
+            ${rentalOpsMetric("機器人瀏覽", growth.share_views_bot)}
+            ${rentalOpsMetric("CTA", growth.share_cta)}
+            ${rentalOpsMetric("歸因註冊", growth.attributed_signup)}
+            ${rentalOpsMetric("歸因刊登", growth.attributed_listing)}
+            ${rentalOpsMetric("歸因提案", growth.attributed_offer)}
+            ${rentalOpsMetric("問卷送出", growth.survey_submitted)}
+            ${rentalOpsMetric("問卷跳過", growth.survey_skipped)}
+          </div>
+        `;
+        if (msg) msg.textContent = "";
+      } catch (error) {
+        box.innerHTML = `<p class="muted">${esc(error.message)}</p>`;
+        if (msg) msg.textContent = error.message;
+      }
     }
     async function loadRentalMatchRules() {
       const box = $("rentalMatchRules");
@@ -3688,7 +3785,7 @@
       if (me.role !== "admin") { location.replace("/"); return; }
       meEmail = me.email || "";
       $("who").textContent = meEmail;
-      await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadAnnouncements(), loadCommsAdmin(), loadMaps(), loadHelpQa(), loadWishConditions(), loadRentalCatalog(), loadRentalMatchRules(), loadLegalCopy(), loadContentCms(), loadListingImports(), loadSpirit(), loadHousing(), loadCrawlSources(), loadSystemCrawl(), loadBrand(), loadFeedback(), typeof loadSupportAdmin === "function" ? loadSupportAdmin() : Promise.resolve()]);
+      await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadAnnouncements(), loadCommsAdmin(), loadMaps(), loadHelpQa(), loadWishConditions(), loadRentalCatalog(), loadRentalMatchRules(), loadRentalOps(), loadLegalCopy(), loadContentCms(), loadListingImports(), loadSpirit(), loadHousing(), loadCrawlSources(), loadSystemCrawl(), loadBrand(), loadFeedback(), typeof loadSupportAdmin === "function" ? loadSupportAdmin() : Promise.resolve()]);
       adminFormsReady = true;
       IA.finishPageLoad(IA.currentPageId());
       $("brandForm").onsubmit = async (ev) => {
@@ -3886,6 +3983,7 @@
         renderCatalogAdmin();
         if (data.diff) setMsg("catalogMsg", `草稿：新增 ${data.diff.added}、修改 ${data.diff.changed}、停用 ${data.diff.disabled}`, true);
       });
+      $("rentalOpsLoad")?.addEventListener("click", () => loadRentalOps());
       $("catalogPublishDraft")?.addEventListener("click", async () => {
         if (!confirm("確認發布目錄草稿？前台會改成這份條件。")) return;
         const res = await fetch("/api/admin/rental-catalog/draft/publish", { method: "POST" });
