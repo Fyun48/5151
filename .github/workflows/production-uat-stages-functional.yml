@@ -18,7 +18,7 @@ on:
         description: "目前 running image digest，格式必須是 sha256: 加 64 碼小寫 hex"
         required: true
       backup_id:
-        description: "已驗證 backup 路徑，必須是 /DATA/AppData/591-tracker-v3-backups/predeploy-YYYYMMDD-HHMMSS"
+        description: "已驗證 backup 路徑，必須是 (/DATA/AppData|/mnt/Storage1/docker_data)/591-tracker-v3-backups/predeploy-YYYYMMDD-HHMMSS"
         required: true
       backup_hash:
         description: "已驗證 backup sha256，格式必須是 sha256: 加 64 碼小寫 hex"
@@ -77,8 +77,8 @@ jobs:
           if ! printf '%s' "${IMAGE_DIGEST:-}" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
             echo "::error::image_digest must be exactly sha256: plus 64 lowercase hex characters"; exit 1
           fi
-          if ! printf '%s' "${BACKUP_ID:-}" | grep -Eq '^/DATA/AppData/591-tracker-v3-backups/predeploy-[0-9]{8}-[0-9]{6}$'; then
-            echo "::error::backup_id must be /DATA/AppData/591-tracker-v3-backups/predeploy-YYYYMMDD-HHMMSS"; exit 1
+          if ! printf '%s' "${BACKUP_ID:-}" | grep -Eq '^(/DATA/AppData|/mnt/Storage1/docker_data)/591-tracker-v3-backups/predeploy-[0-9]{8}-[0-9]{6}$'; then
+            echo "::error::backup_id must be (/DATA/AppData|/mnt/Storage1/docker_data)/591-tracker-v3-backups/predeploy-YYYYMMDD-HHMMSS"; exit 1
           fi
           case "$BACKUP_ID" in
             *..*) echo "::error::backup_id must not contain path traversal"; exit 1 ;;

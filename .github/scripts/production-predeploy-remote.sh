@@ -105,7 +105,28 @@ echo "host_node_sqlite=${HOST_NODE_SQLITE:-no}"
 
 PARENT="$(dirname "$DATA_HOST")"
 BASE="$(basename "$DATA_HOST")"
-BACKUP_ROOT="${PARENT}/${BASE}-backups"
+
+# Backup root (Issue #355): defaults to a sibling of the live data dir, but the workflow points
+# it at another volume (/mnt/Storage1/docker_data/591-tracker-v3-backups) so backups stop
+# competing with the live DB for space. Must be an absolute path, created here, and reported
+# with its real filesystem so a same-volume misconfiguration is visible in the log.
+BACKUP_ROOT="${PREDEPLOY_BACKUP_ROOT:-${PARENT}/${BASE}-backups}"
+case "$BACKUP_ROOT" in
+  /*) ;;
+  *) fail "PREDEPLOY_BACKUP_ROOT must be an absolute path (got '$BACKUP_ROOT')" ;;
+esac
+case "$BACKUP_ROOT" in
+  *..*) fail "PREDEPLOY_BACKUP_ROOT must not contain path traversal (got '$BACKUP_ROOT')" ;;
+esac
+mkdir -p "$BACKUP_ROOT" || fail "cannot create backup root $BACKUP_ROOT (check NAS ownership/permissions)"
+echo "backup_root=$BACKUP_ROOT"
+echo "backup_root_resolved=$(readlink -f "$BACKUP_ROOT" 2>/dev/null || printf '%s' "$BACKUP_ROOT")"
+BACKUP_FS="$(df -Pk "$BACKUP_ROOT" 2>/dev/null | awk 'NR==2 {print $1}' || true)"
+DATA_FS="$(df -Pk "$DATA_HOST" 2>/dev/null | awk 'NR==2 {print $1}' || true)"
+if [ -n "$BACKUP_FS" ] && [ -n "$DATA_FS" ] && [ "$BACKUP_FS" = "$DATA_FS" ]; then
+  echo "warning=backup_root_shares_data_volume fs=$BACKUP_FS (a full data volume can block the backup)"
+fi
+df -h "$BACKUP_ROOT" 2>/dev/null || true
 
 # Retention (Issue #355): keep only the newest PREDEPLOY_BACKUP_KEEP existing backups
 # (default 2) so repeated predeploy runs cannot fill the data volume. This runs BEFORE the
@@ -116,7 +137,7 @@ case "$BACKUP_KEEP" in
   ''|*[!0-9]*) fail "PREDEPLOY_BACKUP_KEEP must be a non-negative integer (got '$BACKUP_KEEP')" ;;
 esac
 echo "=== backup retention (keep=$BACKUP_KEEP) ==="
-df -h "$PARENT" 2>/dev/null || true
+df -h "$BACKUP_ROOT" 2>/dev/null || true
 if [ -d "$BACKUP_ROOT" ]; then
   EXISTING_BACKUPS="$({ ls -1d "$BACKUP_ROOT"/predeploy-* 2>/dev/null || true; } | wc -l | tr -d ' ')"
   echo "existing_backups=$EXISTING_BACKUPS"
@@ -132,11 +153,12 @@ if [ -d "$BACKUP_ROOT" ]; then
     done
   fi
 fi
-AVAIL_KB="$(df -Pk "$PARENT" 2>/dev/null | awk 'NR==2 {print $4}' || true)"
+AVAIL_KB="$(df -Pk "$BACKUP_ROOT" 2>/dev/null | awk 'NR==2 {print $4}' || true)"
 if [ -n "$AVAIL_KB" ] && [ "$AVAIL_KB" -lt 524288 ]; then
   echo "warning=low_free_space_after_prune avail_kb=$AVAIL_KB (backup needs roughly the v3.db size)"
 fi
-df -h "$PARENT" 2>/dev/null || true
+df -h "$BACKUP_ROOT" 2>/dev/null || true
+df -h "$DATA_HOST" 2>/dev/null || true
 
 BACKUP_DIR="${BACKUP_ROOT}/predeploy-${STAMP}"
 mkdir -p "$BACKUP_DIR"

@@ -28,7 +28,7 @@ FIXTURE_CORE_PATH="/tmp/stage1-fixture-core-${RUN_ID}-${RUN_ATTEMPT}.json"
 
 printf '%s' "$SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$' || fail "source_sha is not a 40-character lowercase hex SHA"
 printf '%s' "$IMAGE_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$' || fail "image_digest is not sha256: plus 64 lowercase hex"
-printf '%s' "$BACKUP_ID" | grep -Eq '^/DATA/AppData/591-tracker-v3-backups/predeploy-[0-9]{8}-[0-9]{6}$' || fail "backup_id is not a trusted predeploy backup path"
+printf '%s' "$BACKUP_ID" | grep -Eq '^(/DATA/AppData|/mnt/Storage1/docker_data)/591-tracker-v3-backups/predeploy-[0-9]{8}-[0-9]{6}$' || fail "backup_id is not a trusted predeploy backup path"
 case "$BACKUP_ID" in
   *..*|*$'\n'*|*$'\r'*) fail "backup_id contains forbidden path characters" ;;
 esac

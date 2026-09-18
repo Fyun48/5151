@@ -127,6 +127,19 @@ test("predeploy backup prunes older backups before writing the new one (Issue #3
   assert.ok(mediaAt > mkdirAt, "media pass must run after the backup dir is created");
 });
 
+test("predeploy backup root is configurable, validated and pointed at the Storage1 pool (Issue #355)", () => {
+  const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "../..");
+  const script = readFileSync(path.join(root, ".github/scripts/production-predeploy-remote.sh"), "utf8");
+  assert.match(script, /BACKUP_ROOT="\$\{PREDEPLOY_BACKUP_ROOT:-/);
+  assert.match(script, /PREDEPLOY_BACKUP_ROOT must be an absolute path/);
+  assert.match(script, /PREDEPLOY_BACKUP_ROOT must not contain path traversal/);
+  assert.match(script, /echo "backup_root_resolved=\$\(readlink -f/);
+  assert.match(script, /warning=backup_root_shares_data_volume/);
+  assert.match(script, /mkdir -p "\$BACKUP_ROOT" \|\| fail/);
+  const wf = readFileSync(path.join(root, ".github/workflows/production-predeploy-check.yml"), "utf8");
+  assert.match(wf, /export PREDEPLOY_BACKUP_ROOT=\/mnt\/Storage1\/docker_data\/591-tracker-v3-backups/);
+});
+
 test("predeploy backup verification capability-detects host node:sqlite and has Python read-only fallback", () => {
   const script = readFileSync(
     path.join(path.dirname(fileURLToPath(import.meta.url)), "../../.github/scripts/production-predeploy-remote.sh"),

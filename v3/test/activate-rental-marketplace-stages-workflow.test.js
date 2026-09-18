@@ -197,6 +197,14 @@ test("Staged activation authorize script accepts each stage and rejects mismatch
   assert.throws(() => runAuthorize({ ...good(2), BACKUP_ID: "/tmp/evil" }), /backup_id must be/);
   assert.throws(() => runAuthorize({ ...good(2), BACKUP_ID: "/DATA/AppData/591-tracker-v3-backups/predeploy-20260918-063424/.." }), /backup_id must be/);
   assert.throws(() => runAuthorize({ ...good(2), BACKUP_HASH: "nope" }), /backup_hash must be exactly/);
+  // Issue #355: backups can also live under the Storage1 pool.
+  const storage1 = "/mnt/Storage1/docker_data/591-tracker-v3-backups/predeploy-20260918-170000";
+  assert.doesNotThrow(() => runAuthorize({
+    ...good(2),
+    BACKUP_ID: storage1,
+    OWNER_AUTHORIZATION: good(2).OWNER_AUTHORIZATION.replace(BACKUP, storage1),
+  }));
+  assert.throws(() => runAuthorize({ ...good(2), BACKUP_ID: "/mnt/Storage1/docker_data/../etc" }), /backup_id must be/);
 });
 
 test("Staged activation keeps master, actor, triggering_actor and SHA ancestry guards", () => {
