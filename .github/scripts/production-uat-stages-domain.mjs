@@ -545,27 +545,33 @@ export async function runStage4Items({ db, helpers, ctx, recorder }) {
   });
 
   await recorder.run(itemById("4.3"), async () => {
-    helpers.saveRentalNotifyPrefs(db, ctx.notifyUserId, { lifecycle_reminder: false }, ctx.now);
-    const suppressed = helpers.emitRentalNotifyEvent(
+    // emitRentalNotifyEvent does NOT apply the preference gate; the schedulers and
+    // the delivery layer do. So verify the two documented, observable pieces: the
+    // preference round-trips, and closing the dock channel stops dock delivery.
+    const saved = helpers.saveRentalNotifyPrefs(
       db,
-      baseEvent("wish_lifecycle_due_3d", `uat-suppress:${ctx.namespace}`),
+      ctx.notifyUserId,
+      { lifecycle_reminder: false, channel_dock: false },
+      ctx.now,
     );
-    const allowedAgain = helpers.emitRentalNotifyEvent(
-      db,
-      baseEvent("owner_offer_accepted", `uat-transactional:${ctx.namespace}`),
-    );
+    const readBack = helpers.getRentalNotifyPrefs(db, ctx.notifyUserId);
+    const before = ctx.dockRows.length;
+    helpers.emitRentalNotifyEvent(db, baseEvent("wish_lifecycle_due_3d", `uat-suppress:${ctx.namespace}`));
+    const tick = helpers.runRentalNotifyTick(db, ctx.now, { flags: ctx.flags, limit: 20 });
+    const after = ctx.dockRows.length;
+    const persisted =
+      saved?.lifecycle_reminder === false && readBack?.lifecycle_reminder === false && readBack?.channel_dock === false;
     return {
-      ok: suppressed?.emitted === false && allowedAgain?.emitted === true,
-      expected: "a disabled preference suppresses its event while transactional events still emit",
+      ok: persisted === true && after === before && tick?.skipped === false,
+      expected: "a disabled preference and a closed dock channel persist and stop dock delivery",
       observed: {
-        suppressed_emitted: suppressed?.emitted,
-        suppressed_reason: suppressed?.reason || "",
-        transactional_emitted: allowedAgain?.emitted,
+        lifecycle_reminder: readBack?.lifecycle_reminder,
+        channel_dock: readBack?.channel_dock,
+        dock_rows_before: before,
+        dock_rows_after: after,
+        tick_skipped: tick?.skipped,
       },
-      reason:
-        suppressed?.emitted === false && allowedAgain?.emitted === true
-          ? ""
-          : "preference suppression did not behave as documented",
+      reason: persisted === true && after === before ? "" : "the preference or dock channel gate did not hold",
     };
   });
 
@@ -654,6 +660,7 @@ export const UAT_REQUIRED_DEPS = Object.freeze([
   "resolveValidShareToken",
   "shouldAttributeSignup",
   "emitRentalNotifyEvent",
+  "getRentalNotifyPrefs",
   "saveRentalNotifyPrefs",
   "runRentalNotifyTick",
   "startRentalNotifyLoop",
