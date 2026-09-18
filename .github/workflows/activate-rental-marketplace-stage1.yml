@@ -180,6 +180,7 @@ jobs:
             chmod +x /tmp/5151-stage1-activate-helpers/.github/scripts/activate-rental-marketplace-stage1-remote.sh
             /tmp/5151-stage1-activate-helpers/.github/scripts/activate-rental-marketplace-stage1-remote.sh
       - name: Pull NAS activation evidence
+        if: ${{ always() }}
         env:
           NAS_HOST: ${{ secrets.NAS_HOST }}
           NAS_PORT: ${{ secrets.NAS_PORT }}
@@ -191,54 +192,14 @@ jobs:
           printf '%s\n' "$NAS_SSH_KEY" > "$key"
           chmod 600 "$key"
           scp -o StrictHostKeyChecking=accept-new -P "$NAS_PORT" -i "$key" \
-            "$NAS_USER@$NAS_HOST:/tmp/stage1-activation-core.json" ./nas-activation-core.json
+            "$NAS_USER@$NAS_HOST:/tmp/stage1-activation-core.json" ./nas-activation-core.json \
+            || echo "NAS core evidence missing"
+          scp -o StrictHostKeyChecking=accept-new -P "$NAS_PORT" -i "$key" \
+            "$NAS_USER@$NAS_HOST:/tmp/stage1-rollback-evidence.json" ./nas-rollback-evidence.json \
+            || echo "NAS rollback evidence missing"
           rm -f "$key"
-          python3 - <<'PY'
-          import json
-          nas = json.load(open("nas-activation-core.json"))
-          required = (
-              "source_sha", "image_digest", "backup_id", "backup_hash",
-              "src_mount", "src_tree_sha256", "receipt_path",
-              "before_raw_flags", "after_raw_flags", "before_counts", "after_counts",
-              "runtime_public_flags", "functional_smoke", "privacy_smoke", "perf_smoke",
-              "suppression", "post_activation", "http_5xx", "sqlite_busy",
-              "health", "landing", "login", "final_digest", "final_oci_revision",
-          )
-          if not all(nas.get(k) for k in required):
-              raise SystemExit("activation NAS evidence incomplete")
-          if nas.get("backup_verified") is not True or nas.get("src_manifest_verified") is not True:
-              raise SystemExit("activation NAS evidence is not verified")
-          if nas.get("ACTIVATION_OK") is not True or nas.get("rollback_used") is not False:
-              raise SystemExit("activation NAS evidence is not verified")
-          if nas.get("durable_receipt") is not True or nas.get("verify_only") not in (True, False):
-              raise SystemExit("activation receipt metadata is incomplete")
-          if "/stage1-activation-receipt.json" not in str(nas.get("receipt_path") or ""):
-              raise SystemExit("activation receipt_path is not durable")
-          if nas["backup_hash"][:7] != "sha256:" or len(nas["backup_hash"]) != 71:
-              raise SystemExit("activation backup_hash is not immutable")
-          if nas["final_digest"][:7] != "sha256:" or len(nas["final_digest"]) != 71:
-              raise SystemExit("activation final_digest is not immutable")
-          after = nas["after_raw_flags"]
-          if after["rental_catalog_v2"]["enabled"] is not True:
-              raise SystemExit("after PRA catalog flag is not ON")
-          if after["wish"]["lifecycle_enabled"] is not True:
-              raise SystemExit("after PRA lifecycle flag is not ON")
-          if after["wish"]["owner_matching_enabled"] is not True:
-              raise SystemExit("after Stage 1 owner_matching is not ON")
-          later = (
-              "offer_enabled", "public_share_v2_enabled", "owner_notifications_enabled",
-              "notifications_enabled", "digest_enabled", "outbound_mail_enabled", "outbound_push_enabled",
-          )
-          if any(after["wish"].get(key) is not False for key in later):
-              raise SystemExit("after Stage 2-4/outbound flag is not OFF")
-          post = nas.get("post_activation") or {}
-          if post.get("phase") != "post_activation" or post.get("probed_here") is not True:
-              raise SystemExit("NAS evidence is missing post-activation probes")
-          if "PRODUCTION_UAT_PASS" in json.dumps(nas):
-              raise SystemExit("pre-activation PRODUCTION_UAT_PASS cannot satisfy post-activation evidence")
-          PY
-          python3 .github/scripts/activate-rental-marketplace-stage1-evidence.py --check-receipt ./nas-activation-core.json
       - name: Write Stage 1 activation evidence
+        if: ${{ always() }}
         env:
           WF_FILE: .github/workflows/activate-rental-marketplace-stage1.yml
           WF_REF: ${{ github.ref }}
@@ -247,71 +208,46 @@ jobs:
           WF_HEAD_SHA: ${{ github.sha }}
           SOURCE_SHA: ${{ inputs.source_sha }}
           IMAGE_DIGEST: ${{ inputs.image_digest }}
+          BACKUP_ID: ${{ inputs.backup_id }}
+          BACKUP_HASH: ${{ inputs.backup_hash }}
           WF_ACTOR: ${{ github.actor }}
           WF_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
           CONFIRMATION: ${{ inputs.confirmation }}
           OWNER_AUTHORIZATION: ${{ inputs.owner_authorization }}
+          STAGE1_CORE_PATH: nas-activation-core.json
+          STAGE1_ROLLBACK_PATH: nas-rollback-evidence.json
+          STAGE1_EVIDENCE_OUT: stage1-activation-evidence.json
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          import json, os
-          nas = json.load(open("nas-activation-core.json"))
-          doc = {
-              "schema": "stage1-activation-evidence-v1",
-              "workflow_file": os.environ["WF_FILE"],
-              "workflow_ref": os.environ["WF_REF"],
-              "workflow_run_id": os.environ["WF_RUN_ID"],
-              "workflow_attempt": int(os.environ.get("WF_ATTEMPT") or "0"),
-              "workflow_sha": os.environ["WF_HEAD_SHA"],
-              "head_sha": os.environ["WF_HEAD_SHA"],
-              "source_sha": os.environ["SOURCE_SHA"],
-              "image_digest": os.environ["IMAGE_DIGEST"],
-              "actor": os.environ["WF_ACTOR"],
-              "triggering_actor": os.environ["WF_TRIGGERING_ACTOR"],
-              "confirmation": os.environ["CONFIRMATION"],
-              "owner_authorization_bound": True,
-              "post_activation": nas["post_activation"],
-              "backup_id": nas["backup_id"],
-              "backup_hash": nas["backup_hash"],
-              "backup_verified": True,
-              "src_mount": nas["src_mount"],
-              "src_manifest_verified": True,
-              "src_tree_sha256": nas["src_tree_sha256"],
-              "receipt_path": nas["receipt_path"],
-              "durable_receipt": True,
-              "verify_only": nas["verify_only"] is True,
-              "rollback_used": False,
-              "activation_status": nas.get("activation_status") or "activated",
-              "before_raw_flags": nas["before_raw_flags"],
-              "after_raw_flags": nas["after_raw_flags"],
-              "before_counts": nas["before_counts"],
-              "after_counts": nas["after_counts"],
-              "runtime_public_flags": nas["runtime_public_flags"],
-              "functional_smoke": nas["functional_smoke"],
-              "privacy_smoke": nas["privacy_smoke"],
-              "perf_smoke": nas["perf_smoke"],
-              "suppression": nas.get("suppression") or {},
-              "health": nas["health"] is True,
-              "landing": nas["landing"] is True,
-              "login": nas["login"] is True,
-              "http_5xx": nas["http_5xx"],
-              "sqlite_busy": nas["sqlite_busy"],
-              "final_digest": nas["final_digest"],
-              "final_oci_revision": nas["final_oci_revision"],
-              "ACTIVATION_OK": True,
-          }
-          if doc["health"] is not True or doc["landing"] is not True or doc["login"] is not True:
-              raise SystemExit("activation evidence health/landing/login is not true")
-          blob = json.dumps(doc)
-          for token in ("SESSION_SECRET", "NAS_SSH_KEY", "AUTH_PASSWORD", "auth.env"):
-              if token in blob:
-                  raise SystemExit("activation evidence must not contain secrets")
-          open("stage1-activation-evidence.json", "w").write(json.dumps(doc, indent=2) + "\n")
-          PY
-          python3 .github/scripts/activate-rental-marketplace-stage1-evidence.py --check-receipt ./stage1-activation-evidence.json
+          python3 .github/scripts/write-stage1-activation-artifact.py
       - name: Upload Stage 1 activation evidence
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: stage1-activation-evidence
           path: stage1-activation-evidence.json
           if-no-files-found: error
+      - name: Conclude Stage 1 activation (fail-closed)
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+        run: |
+          set -euo pipefail
+          if [ ! -f stage1-activation-evidence.json ]; then
+            echo "::error::Stage 1 evidence artifact is missing; refusing PASS"
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json
+          doc = json.load(open("stage1-activation-evidence.json"))
+          if doc.get("evidence_available") is not True:
+              raise SystemExit("Stage 1 evidence unavailable; refusing PASS")
+          if doc.get("ACTIVATION_OK") is not True:
+              raise SystemExit(
+                  "Stage 1 activation is not PASS (activation_result=%s rollback_result=%s)"
+                  % (doc.get("activation_result"), doc.get("rollback_result"))
+              )
+          if doc.get("rollback_used") is True:
+              raise SystemExit("Stage 1 rollback evidence cannot be treated as ACTIVATION_OK")
+          PY
+          python3 .github/scripts/activate-rental-marketplace-stage1-evidence.py --check-receipt ./stage1-activation-evidence.json

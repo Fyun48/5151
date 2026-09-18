@@ -335,6 +335,56 @@ test("PR A domain still reserves owner_matching and is not reused as Stage 1", (
   assert.doesNotMatch(wf(WF_NAME), /ACTIVATE-PRA-PRODUCTION/);
 });
 
+test("Stage 1 failure/rollback evidence is still uploaded via always() steps", () => {
+  const text = wf(WF_NAME);
+  const pull = namedStep(text, "Pull NAS activation evidence");
+  const write = namedStep(text, "Write Stage 1 activation evidence");
+  const upload = namedStep(text, "Upload Stage 1 activation evidence");
+  const conclude = namedStep(text, "Conclude Stage 1 activation (fail-closed)");
+  assert.match(pull, /if: \$\{\{ always\(\) \}\}/);
+  assert.match(write, /if: \$\{\{ always\(\) \}\}/);
+  assert.match(upload, /if: \$\{\{ always\(\) \}\}/);
+  assert.match(write, /write-stage1-activation-artifact\.py/);
+  assert.match(conclude, /activate-rental-marketplace-stage1-evidence\.py --check-receipt/);
+  assert.match(conclude, /refusing PASS|is not PASS/);
+  assert.doesNotMatch(namedStep(text, "Authorize Stage 1 production activation (fail-closed)"), /if: \$\{\{ always\(\) \}\}/);
+});
+
+test("Stage 1 success evidence still becomes ACTIVATION_OK after durable write", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "stage1-ok-"));
+  const core = path.join(dir, "core.json");
+  const out = path.join(dir, "out.json");
+  writeFileSync(core, JSON.stringify({
+    ...goodSmoke(),
+    rollback_used: false,
+    backup_id: GOOD.BACKUP_ID,
+    backup_hash: GOOD.BACKUP_HASH,
+    health: true,
+    landing: true,
+    login: true,
+    final_digest: GOOD.IMAGE_DIGEST,
+    final_oci_revision: GOOD.SOURCE_SHA,
+    receipt_path: "/DATA/AppData/591-tracker-v3/stage1-activation-receipt.json",
+  }));
+  execFileSync("python3", [path.join(root, ".github/scripts/write-stage1-activation-artifact.py")], {
+    env: {
+      ...process.env,
+      STAGE1_CORE_PATH: core,
+      STAGE1_ROLLBACK_PATH: path.join(dir, "missing-rollback.json"),
+      STAGE1_EVIDENCE_OUT: out,
+      SOURCE_SHA: GOOD.SOURCE_SHA,
+      IMAGE_DIGEST: GOOD.IMAGE_DIGEST,
+      BACKUP_ID: GOOD.BACKUP_ID,
+      BACKUP_HASH: GOOD.BACKUP_HASH,
+    },
+  });
+  const doc = JSON.parse(readFileSync(out, "utf8"));
+  assert.equal(doc.ACTIVATION_OK, true);
+  assert.equal(doc.activation_result, "activated");
+  assert.match(checkEvidence("--check-receipt", doc), /EVIDENCE_RECEIPT_OK/);
+  rmSync(dir, { recursive: true, force: true });
+});
+
 test("Stage 1 activation does not change build, predeploy, deploy or PRA workflows", () => {
   for (const name of UNTOUCHED) {
     const text = wf(name);

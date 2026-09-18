@@ -303,6 +303,12 @@ UAT 全綠後仍分階段。每一階段只開下表，觀察至少一個業務�
 
 ---
 
+## Stage 1 fixture readiness（後續 gate，非本文件當時的 deploy 授權）
+
+方案 B 已另開實作，見 `v3/STAGE1-FIXTURE-READINESS.md`。該變更只存在後續 PR：registry + 集中隔離 + 成熟度例外 + fixture workflow + Stage 1 failure evidence `always()` 上傳。**不在本文件授權 Production fixture 或 Stage 1 重跑。**
+
+---
+
 ## 24. Blockers
 
 1. **`docker.yml` 第四條 `:latest` 部署路徑**（master `ea1872b`）— 本 PR 已改 refuse-closed。
