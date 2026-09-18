@@ -144,9 +144,19 @@ test("Stage 1 activation requires exact confirmation, source SHA, digest, backup
   assert.match(auth, /confirmation must be exactly ACTIVATE-STAGE1-PRODUCTION/);
   assert.match(auth, /source_sha must be a full 40-character commit SHA/);
   assert.match(auth, /image_digest must be exactly sha256: plus 64 lowercase hex/);
-  assert.match(auth, /backup_id must be \/DATA\/AppData\/591-tracker-v3-backups\/predeploy-YYYYMMDD-HHMMSS/);
+  assert.match(auth, /backup_id must be \(\/DATA\/AppData\|\/mnt\/Storage1\/docker_data\)\/591-tracker-v3-backups\/predeploy-YYYYMMDD-HHMMSS/);
   assert.match(auth, /backup_hash must be exactly sha256: plus 64 lowercase hex/);
   assert.match(auth, /backup_id must not contain path traversal/);
+});
+
+test("Stage 1 activation accepts a predeploy backup under the Storage1 root (Issue #355)", () => {
+  const storage1 = "/mnt/Storage1/docker_data/591-tracker-v3-backups/predeploy-20260918-170000";
+  assert.doesNotThrow(() => runAuthorize({
+    ...GOOD,
+    BACKUP_ID: storage1,
+    OWNER_AUTHORIZATION: GOOD.OWNER_AUTHORIZATION.replace(GOOD.BACKUP_ID, storage1),
+  }));
+  assert.throws(() => runAuthorize({ ...GOOD, BACKUP_ID: "/mnt/Storage1/docker_data/tmp/evil" }), /backup_id must be/);
 });
 
 test("Stage 1 activation keeps master, actor, triggering_actor and SHA ancestry guards", () => {
