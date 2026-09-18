@@ -140,3 +140,26 @@ Cleanup：close listing → pause/complete open wish → soft-delete fixture use
 - 仍做 current-run 檢查：health、landing/login、public flags、aggregate/exposure、unauth 401、5xx/SQLITE_BUSY、image/revision、Stage2–4/outbound OFF
 - verify-only 走 `fail`（**不呼叫** `compensate_and_fail` / `run_domain rollback`）；只有 activation 路徑才用 compensating rollback
 - 回歸：`P1-10 verify-only recovery never rolls back merely because fixtures were cleaned`、`P1-10 verify-only still fails closed on identity, runtime or UAT substitution`、`P1-10 a cleaned fixture run leaves zero active rows so the fixture-dependent selector cannot run`
+
+## Review P1-11：cleanup 語意驗證失敗也必須補償
+
+`run_fixture_domain cleanup-activated` 的 transport/process 失敗本來就有補償；但若它 exit 0、而複製回來的 JSON 損毀或語意檢查失敗（`mode != cleanup-activated`、`flags_mutated != false`、`owner_matching_enabled != true`、`result.ok != true`），原本的 `python3` 在 `set -e` 下會直接中止，**不經 `compensate_and_fail`**，導致 `owner_matching` 可能留在 ON 而 workflow 失敗、又沒有 durable receipt。
+
+修正：語意驗證以 `set +e` 執行、捕捉 `CLEANUP_SEMANTIC_RC`，非 0 即 `compensate_and_fail "post-activation fixture cleanup evidence validation failed"`。
+
+- 回歸：`P1-11 cleanup semantic-validation failure is compensated (Stage 1 never left ON)`
+
+## Review P2-12：重複 verify-only 必須保留真正的 original run
+
+verify-only 原本用 `prev.get("workflow_run_id")` 當 `original_run_id`。第一次 verify-only 改寫 receipt 後，`prev.workflow_run_id` 就變成那次驗證 run，第二次 verify-only 會把 `original_run_id` 往前推進，遺失真正把 Stage 1 打開的那個 run 身分。
+
+修正：`original_run_id = prev.get("original_run_id") or prev.get("workflow_run_id") or run_id`（attempt 同理）。
+
+- 回歸：`P2-12 repeated verify-only replays keep the original activation run`
+
+## Review P2-13：整個 A/B/T 帳號建立階段一個交易
+
+`createFixtureUserRow` 只在呼叫者的交易內建立單一帳號 + registry row；`prepareStage1Fixtures` 用 `withFixtureImmediateTx` 把 A/B/T **整個階段包成一個 `BEGIN IMMEDIATE`**。若 B 或 T 失敗，A 也會一起回滾，不會留下部分 registry 而讓同 run 重試卡在 `verifyStage1Fixtures`。
+
+- 不修改一般會員 signup_count 規則、不動一般會員
+- 回歸：`P2-13 the whole A/B/T account phase is one transaction (no partial accounts)`、`P2-13 a leftover run stays fail-closed for a different run until cleaned`

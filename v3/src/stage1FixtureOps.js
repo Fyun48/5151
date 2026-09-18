@@ -212,13 +212,30 @@ function findRole(rows, role) {
   return (rows || []).find((row) => row.role === role) || null;
 }
 
-/** P2: fixture user creation + registry binding must be one atomic write.
- * A crash between registerUser and registerFixtureRow must never leave an
- * untracked, verified fixture account behind. Wrapping both in a single
- * BEGIN IMMEDIATE means either both rows commit or neither does; a retry of
- * the same run therefore starts clean and is never blocked by an orphan.
+/** P2-13: run a whole fixture phase inside one BEGIN IMMEDIATE so a partial
+ * fixture-account preparation can never be left behind. Preferred over
+ * per-row transactions: either the complete phase commits or nothing does.
  */
-function createAtomicFixtureUser(db, registerUser, {
+function withFixtureImmediateTx(db, fn) {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const out = fn();
+    db.exec("COMMIT");
+    return out;
+  } catch (error) {
+    try {
+      db.exec("ROLLBACK");
+    } catch { /* transaction may already be rolled back */ }
+    throw error;
+  }
+}
+
+/** Create one fixture user + its registry row inside the caller's transaction.
+ * A crash between registerUser and registerFixtureRow must never leave an
+ * untracked verified fixture account behind; the caller owns the surrounding
+ * BEGIN IMMEDIATE (see withFixtureImmediateTx).
+ */
+function createFixtureUserRow(db, registerUser, {
   role,
   runId,
   now = new Date(),
@@ -226,33 +243,24 @@ function createAtomicFixtureUser(db, registerUser, {
 } = {}) {
   const email = fixtureEmailForRole(runId, role);
   const password = randomFixturePassword();
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const user = registerUser(db, {
-      email,
-      password,
-      acceptDisclaimer: true,
-      acceptPrivacy: true,
-      emailVerified: true,
-    });
-    if (typeof hooks.onAfterUserCreate === "function") {
-      hooks.onAfterUserCreate({ userId: Number(user.id), role, runId });
-    }
-    registerFixtureRow(db, {
-      runId,
-      kind: STAGE1_FIXTURE_KIND.USER,
-      role,
-      rowId: user.id,
-      now,
-    });
-    db.exec("COMMIT");
-    return { role, id: Number(user.id), email_hash: opaqueId(email) };
-  } catch (error) {
-    try {
-      db.exec("ROLLBACK");
-    } catch { /* transaction may already be rolled back */ }
-    throw error;
+  const user = registerUser(db, {
+    email,
+    password,
+    acceptDisclaimer: true,
+    acceptPrivacy: true,
+    emailVerified: true,
+  });
+  if (typeof hooks.onAfterUserCreate === "function") {
+    hooks.onAfterUserCreate({ userId: Number(user.id), role, runId });
   }
+  registerFixtureRow(db, {
+    runId,
+    kind: STAGE1_FIXTURE_KIND.USER,
+    role,
+    rowId: user.id,
+    now,
+  });
+  return { role, id: Number(user.id), email_hash: opaqueId(email) };
 }
 
 export function prepareStage1Fixtures(db, deps = {}, {
@@ -274,19 +282,24 @@ export function prepareStage1Fixtures(db, deps = {}, {
     return verifyStage1Fixtures(db, deps, { now, runId, flags });
   }
 
-  const accounts = [];
-  for (const role of [
+  const accountRoles = [
     STAGE1_FIXTURE_ROLE.OWNER_A,
     STAGE1_FIXTURE_ROLE.OTHER_B,
     STAGE1_FIXTURE_ROLE.TENANT_T,
-  ]) {
-    accounts.push(createAtomicFixtureUser(db, registerUser, {
-      role,
-      runId,
-      now,
-      hooks: deps.userIsolation || {},
-    }));
-  }
+  ];
+  const userHooks = deps.userIsolation || {};
+  const accounts = withFixtureImmediateTx(db, () => {
+    const created = [];
+    for (const role of accountRoles) {
+      created.push(createFixtureUserRow(db, registerUser, {
+        role,
+        runId,
+        now,
+        hooks: userHooks,
+      }));
+    }
+    return created;
+  });
 
   const owner = accounts.find((row) => row.role === STAGE1_FIXTURE_ROLE.OWNER_A);
   const other = accounts.find((row) => row.role === STAGE1_FIXTURE_ROLE.OTHER_B);

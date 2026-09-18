@@ -949,3 +949,24 @@ test("P1-10 verify-only still fails closed on identity, runtime or UAT substitut
   // Original authenticated evidence cannot be replaced by pre-activation UAT.
   assert.match(remote, /pre-activation PRODUCTION_UAT_PASS cannot satisfy post-activation evidence/);
 });
+
+test("P1-11 cleanup semantic-validation failure is compensated (Stage 1 never left ON)", () => {
+  const remote = readFileSync(REMOTE, "utf8");
+  // transport/process failure is compensated...
+  assert.match(remote, /if ! run_fixture_domain cleanup-activated; then\s+compensate_and_fail "post-activation fixture cleanup failed"/);
+  // ...and so is a success exit whose cleanup JSON is malformed or semantically invalid.
+  assert.match(remote, /CLEANUP_SEMANTIC_RC=\$\?/);
+  assert.match(remote, /if \[ "\$CLEANUP_SEMANTIC_RC" -ne 0 \]; then\s+compensate_and_fail "post-activation fixture cleanup evidence validation failed"/);
+  // It runs with errexit temporarily disabled so a malformed JSON cannot bypass compensation.
+  const guard = remote.indexOf("CLEANUP_SEMANTIC_RC=$?");
+  assert.ok(guard > 0, "cleanup semantic guard missing");
+  assert.match(remote.slice(Math.max(0, guard - 2000), guard), /set \+e/);
+  // A valid cleanup result still flows on to the durable receipt.
+  assert.match(remote, /write_core_and_receipt false \|\| compensate_and_fail "durable receipt write failed after mutation"/);
+});
+
+test("P2-12 repeated verify-only replays keep the original activation run", () => {
+  const remote = readFileSync(REMOTE, "utf8");
+  assert.match(remote, /original_run_id = prev\.get\("original_run_id"\) or prev\.get\("workflow_run_id"\) or run_id/);
+  assert.match(remote, /original_attempt = prev\.get\("original_attempt"\) or prev\.get\("workflow_attempt"\) or attempt/);
+});

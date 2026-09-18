@@ -397,8 +397,8 @@ if verify_only == "true" and os.path.isfile(receipt_path):
     after = prev.get("after_raw_flags") or after
     before_counts = prev.get("before_counts") or before_counts
     after_counts = prev.get("after_counts") or after_counts
-    original_run_id = prev.get("workflow_run_id") or run_id
-    original_attempt = prev.get("workflow_attempt") or attempt
+    original_run_id = prev.get("original_run_id") or prev.get("workflow_run_id") or run_id
+    original_attempt = prev.get("original_attempt") or prev.get("workflow_attempt") or attempt
     original_fixture_run_id = prev.get("fixture_run_id") or original_fixture_run_id
     original_fixture_readiness_at = prev.get("fixture_readiness_at") or original_fixture_readiness_at
     original_fixture_cleanup = prev.get("fixture_cleanup") is True
@@ -759,6 +759,7 @@ echo "=== post-activation fixture cleanup (exact run_id, no flag mutation) ==="
 if ! run_fixture_domain cleanup-activated; then
   compensate_and_fail "post-activation fixture cleanup failed"
 fi
+set +e
 python3 - <<'PY'
 import json
 doc = json.load(open("/tmp/stage1-fixture-result.json"))
@@ -773,6 +774,11 @@ if result.get("ok") is not True:
     raise SystemExit("fixture cleanup result is not ok")
 print("FIXTURE_CLEANUP_ACTIVATED_OK")
 PY
+CLEANUP_SEMANTIC_RC=$?
+set -e
+if [ "$CLEANUP_SEMANTIC_RC" -ne 0 ]; then
+  compensate_and_fail "post-activation fixture cleanup evidence validation failed"
+fi
 
 write_core_and_receipt false || compensate_and_fail "durable receipt write failed after mutation"
 

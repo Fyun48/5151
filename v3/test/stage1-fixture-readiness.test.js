@@ -453,6 +453,53 @@ test("P1-10 a cleaned fixture run leaves zero active rows so the fixture-depende
 });
 
 
+test("P2-13 the whole A/B/T account phase is one transaction (no partial accounts)", () => {
+  const db = open();
+  const runId = "stage1-fix:test:p213";
+  assert.throws(
+    () => prepareStage1Fixtures(db, {
+      ...deps(),
+      userIsolation: {
+        onAfterUserCreate({ role }) {
+          if (role === STAGE1_FIXTURE_ROLE.OTHER_B) throw new Error("inject-after-b");
+        },
+      },
+    }, { now: new Date(), runId, flags: FLAGS }),
+    /inject-after-b/,
+  );
+  // A had already been created before B threw, but the whole phase must roll back.
+  const emailA = fixtureEmailForRole(runId, STAGE1_FIXTURE_ROLE.OWNER_A);
+  const anyUser = db.prepare("SELECT id FROM users WHERE email = ?").get(emailA);
+  assert.equal(anyUser, undefined);
+  const registry = db.prepare("SELECT id FROM stage1_fixture_registry WHERE run_id = ?").all(runId);
+  assert.equal(registry.length, 0);
+  // Retry of the same run completes deterministically from a clean slate.
+  const retried = prepareStage1Fixtures(db, deps(), { now: new Date(), runId, flags: FLAGS });
+  assert.equal(retried.ok, true);
+  assert.equal(retried.run_id, runId);
+  db.close();
+});
+
+test("P2-13 a leftover run stays fail-closed for a different run until cleaned", () => {
+  const db = open();
+  const now = new Date("2026-01-01T00:00:00.000Z");
+  db.prepare("INSERT INTO users(email, password_hash, created_at) VALUES (?, ?, ?)").run("normal-p213@example.com", "x", now.toISOString());
+  prepareStage1Fixtures(db, deps(), { now: new Date(), runId: "stage1-fix:test:p213-a", flags: FLAGS });
+  assert.throws(
+    () => prepareStage1Fixtures(db, deps(), { now: new Date(), runId: "stage1-fix:test:p213-b", flags: FLAGS }),
+    /uncleaned fixture run exists/,
+  );
+  cleanupStage1Fixtures(db, deps(), { now: new Date(), runId: "stage1-fix:test:p213-a", flags: FLAGS });
+  reapStaleStage1Fixtures(db, deps(), { now: new Date(), flags: FLAGS });
+  const fresh = prepareStage1Fixtures(db, deps(), { now: new Date(), runId: "stage1-fix:test:p213-b", flags: FLAGS });
+  assert.equal(fresh.ok, true);
+  // cleanup/reap never touch normal users.
+  const keeper = db.prepare("SELECT deleted_at FROM users WHERE email = ?").get("normal-p213@example.com");
+  assert.equal(String(keeper.deleted_at || ""), "");
+  db.close();
+});
+
+
 test("durable Stage 1 failure evidence is written without becoming PASS", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "stage1-ev-"));
   const rollback = path.join(dir, "rollback.json");
