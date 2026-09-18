@@ -36,6 +36,16 @@ REQUIRED_POSTCHECK_CHECKS = (
     "outbound_off",
     "privacy_redaction",
 )
+# `redaction` mixes boolean checks with the `leak_report` *report* (the list of
+# leaks found). A report is NOT a boolean: requiring it to be `true` would fail
+# the activation precisely when zero leaks were found, so reports get their own
+# handling below and must be an explicit empty list.
+REDACTION_CHECKS = (
+    "probe_bodies_without_pii",
+    "closed_gate_responses_are_opaque",
+    "authenticated_probe_requires_session",
+)
+REDACTION_REPORTS = ("leak_report",)
 
 
 def load(path: str) -> dict:
@@ -129,8 +139,21 @@ def collect_problems(args, inspect_doc, result_doc, status_doc, postcheck_doc) -
     redaction = postcheck_doc.get("redaction") or {}
     if not redaction:
         problems.append("privacy redaction evidence missing")
+    for name in REDACTION_CHECKS:
+        if redaction.get(name) is not True:
+            problems.append(f"privacy redaction {name} not verified")
+    for name in REDACTION_REPORTS:
+        report = redaction.get(name)
+        if not isinstance(report, list):
+            problems.append(f"privacy redaction {name} report missing")
+        elif report:
+            problems.append(f"privacy redaction {name} reported leaks")
     for name, value in redaction.items():
-        if value is not True:
+        if name in REDACTION_CHECKS or name in REDACTION_REPORTS:
+            continue
+        if not isinstance(value, bool):
+            problems.append(f"privacy redaction {name} is not a boolean check")
+        elif value is not True:
             problems.append(f"privacy redaction {name} not verified")
 
     return problems
