@@ -7,6 +7,8 @@ import {
   OUTBOUND_FLAGS,
   STAGE_FLAGS,
   assertStagedFlags,
+  earlierStageFlags,
+  flagsForStage,
   laterStageFlags,
   runStagedDomain,
   targetFlagState,
@@ -194,15 +196,25 @@ test("unsupported target stages fail closed", () => {
   h.cleanup();
 });
 
-test("staged flag contract: stage map, later flags and target state", () => {
+test("staged flag contract: stage map, earlier/later flags and target state", () => {
   assert.deepEqual(STAGE_FLAGS[2], ["offer_enabled"]);
   assert.deepEqual(STAGE_FLAGS[3], ["public_share_v2_enabled"]);
   assert.deepEqual(STAGE_FLAGS[4], ["owner_notifications_enabled", "notifications_enabled"]);
+  assert.deepEqual(flagsForStage(1), ["owner_matching_enabled"]);
+  assert.deepEqual(earlierStageFlags(2), ["owner_matching_enabled"]);
+  assert.deepEqual(earlierStageFlags(3), ["owner_matching_enabled", "offer_enabled"]);
+  assert.deepEqual(earlierStageFlags(4), [
+    "owner_matching_enabled",
+    "offer_enabled",
+    "public_share_v2_enabled",
+  ]);
   assert.deepEqual(laterStageFlags(2), [
     "public_share_v2_enabled",
     "owner_notifications_enabled",
     "notifications_enabled",
   ]);
+  assert.deepEqual(laterStageFlags(3), ["owner_notifications_enabled", "notifications_enabled"]);
+  assert.deepEqual(laterStageFlags(4), []);
   assert.throws(
     () => assertStagedFlags(baseFlags(), "label", 2, { expectTargetOn: false }),
     /earlier-stage flag owner_matching_enabled must be true/,

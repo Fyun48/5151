@@ -17,7 +17,11 @@ STAGE_FLAGS = {
     3: ("public_share_v2_enabled",),
     4: ("owner_notifications_enabled", "notifications_enabled"),
 }
-EARLIER_FLAGS = {2: ("owner_matching_enabled",), 3: ("owner_matching_enabled", "offer_enabled")}
+EARLIER_FLAGS = {
+    2: ("owner_matching_enabled",),
+    3: ("owner_matching_enabled", "offer_enabled"),
+    4: ("owner_matching_enabled", "offer_enabled", "public_share_v2_enabled"),
+}
 LATER_FLAGS = {
     2: ("public_share_v2_enabled", "owner_notifications_enabled", "notifications_enabled"),
     3: ("owner_notifications_enabled", "notifications_enabled"),

@@ -375,7 +375,8 @@ stage = int(sys.argv[2])
 before = doc["before_raw_flags"]
 after = doc["after_raw_flags"]
 mine = {2: ("offer_enabled",), 3: ("public_share_v2_enabled",), 4: ("owner_notifications_enabled", "notifications_enabled")}[stage]
-earlier = {2: ("owner_matching_enabled",), 3: ("owner_matching_enabled", "offer_enabled")}[stage]
+earlier = {2: ("owner_matching_enabled",), 3: ("owner_matching_enabled", "offer_enabled"),
+           4: ("owner_matching_enabled", "offer_enabled", "public_share_v2_enabled")}[stage]
 later = {2: ("public_share_v2_enabled", "owner_notifications_enabled", "notifications_enabled"),
          3: ("owner_notifications_enabled", "notifications_enabled"), 4: ()}[stage]
 if doc.get("mode") != "activate":

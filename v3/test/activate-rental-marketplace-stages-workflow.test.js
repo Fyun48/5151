@@ -594,3 +594,37 @@ test("Staged postcheck redaction is fail-closed and phone detection stays bounda
   assert.equal(secret.probe_bodies_without_pii, false);
 });
 
+
+test("Staged scripts enumerate every target stage in every stage map (guards the missing-stage-key class)", () => {
+  // Regression guard: the path classifier, evidence contract and remote contract
+  // each carry hand-written per-stage maps. A map that omits Stage 4 raises
+  // KeyError inside Production at activate time, so every map must list 2, 3 and 4.
+  const cases = [
+    ["activate-rental-marketplace-stages-path.py", readText(PATH_PY)],
+    ["activate-rental-marketplace-stages-evidence.py", readText(EVIDENCE_PY)],
+  ];
+  for (const [name, text] of cases) {
+    for (const mapName of ["STAGE_FLAGS", "EARLIER_FLAGS", "LATER_FLAGS"]) {
+      const start = text.indexOf(`${mapName} = {`);
+      assert.ok(start >= 0, `${name} is missing ${mapName}`);
+      const end = text.indexOf("}", start);
+      const block = text.slice(start, end);
+      for (const stage of ["2:", "3:", "4:"]) {
+        assert.ok(block.includes(stage), `${name} ${mapName} does not enumerate stage ${stage}`);
+      }
+    }
+  }
+  const remote = readText(REMOTE);
+  assert.match(remote, /4: \("owner_matching_enabled", "offer_enabled", "public_share_v2_enabled"\)/);
+  assert.match(remote, /mine = \{2: \("offer_enabled",\), 3: \("public_share_v2_enabled",\), 4: \("owner_notifications_enabled", "notifications_enabled"\)\}\[stage\]/);
+  const postcheck = readText(POSTCHECK);
+  for (const mapName of ["STAGE_FLAGS", "EARLIER_FLAGS", "LATER_FLAGS"]) {
+    const start = postcheck.indexOf(`${mapName} = Object.freeze({`);
+    assert.ok(start >= 0, `postcheck is missing ${mapName}`);
+    const block = postcheck.slice(start, postcheck.indexOf("});", start));
+    for (const stage of ["2:", "3:", "4:"]) {
+      assert.ok(block.includes(stage), `postcheck ${mapName} does not enumerate stage ${stage}`);
+    }
+  }
+});
+
