@@ -70,3 +70,40 @@ test("P1-16 listingCommutePatch enforces the centralized MAP fixture policy (not
   const body = db.slice(start, start + 400);
   assert.match(body, /listingVisibleOnSurface\(row, \{ surface: LISTING_SURFACE\.MAP, viewerId: uid \}\)/);
 });
+
+test("P1-18 product-visible totals exclude fixture listings", () => {
+  const out = runIsolated(`
+    import { db, listingCount, productListingCount, upsertListing } from ${dbPath};
+    function seed(id) {
+      upsertListing({
+        post_id: id, source_key: "1|1", search_key: "https://example.test",
+        title: "count " + id, url: "https://rent.591.com.tw/" + id,
+        price: "22000", price_num: 22000, extra_fees: [],
+        address: "\\u53f0\\u5317\\u5e02\\u58eb\\u6797\\u5340\\u4e2d\\u6b63\\u8def" + id + "\\u865f",
+        area_name: "20", layout: "2", floor_name: "5/12",
+        kind_name: "k", role_name: "", cover: "", tags: "[]",
+        refresh_time: "", first_seen_at: "2026-09-01T00:00:00.000Z",
+        last_seen_at: "2026-09-01T00:00:00.000Z", last_event: "new", source: "591",
+      });
+    }
+    seed(960001);
+    const before = { raw: listingCount(), product: productListingCount() };
+    seed(960002);
+    db.prepare("UPDATE listings SET fixture_namespace = ? WHERE post_id = ?").run("stage1-fix", 960002);
+    const during = { raw: listingCount(), product: productListingCount() };
+    db.prepare("UPDATE listings SET fixture_namespace = NULL WHERE post_id = ?").run(960002);
+    const after = { raw: listingCount(), product: productListingCount() };
+    console.log(JSON.stringify({ before, during, after }));
+  `);
+  assert.equal(out.before.raw, 1);
+  assert.equal(out.before.product, 1);
+  // the fixture listing exists physically but must not be product-visible
+  assert.equal(out.during.raw, 2);
+  assert.equal(out.during.product, 1);
+  // once the fixture is gone both totals agree again
+  assert.equal(out.after.raw, 2);
+  assert.equal(out.after.product, 2);
+  // member-facing stats must use the product-visible count, not the raw count
+  const db = readFileSync(path.join(root, "v3/src/db.js"), "utf8");
+  assert.match(db, /dbTotal: productListingCount\(\)/);
+});

@@ -735,10 +735,43 @@ test("P2-15 an unexpectedly eligible hard-conflict control fails the gate", () =
   prepareStage1Fixtures(db, deps(), { now: new Date(), runId: "stage1-fix:test:p215c", flags: FLAGS });
   assert.throws(
     () => loadRegistryBoundFixtures(db, {
-      evaluateCounterfactualMatch,
-      isCounterfactuallyMatchable: () => true,
+      evaluateCounterfactualMatch: () => ({ eligible: true, hard_conflicts: [] }),
+      isCounterfactuallyMatchable,
     }),
     /hard-conflict control was eligible/,
+  );
+  db.close();
+});
+
+test("P2-20 the hard-conflict control must expose the intended condition:need_pet code", () => {
+  const db = open();
+  prepareStage1Fixtures(db, deps(), { now: new Date(), runId: "stage1-fix:test:p220", flags: FLAGS });
+  const run = (evaluateCounterfactualMatch) => loadRegistryBoundFixtures(db, {
+    evaluateCounterfactualMatch,
+    isCounterfactuallyMatchable,
+  });
+  // valid fixture: exactly the intended condition conflict
+  const valid = run(evaluateCounterfactualMatch);
+  assert.equal(valid.hard_conflict_rejected, true);
+  // district corruption => an unrelated conflict, the need_pet control was never exercised
+  assert.throws(
+    () => run(() => ({ eligible: false, hard_conflicts: [{ code: "district" }] })),
+    /did not exercise condition:need_pet/,
+  );
+  // budget corruption => unrelated conflict
+  assert.throws(
+    () => run(() => ({ eligible: false, hard_conflicts: [{ code: "budget" }] })),
+    /did not exercise condition:need_pet/,
+  );
+  // need_pet unexpectedly compatible => no conflict at all
+  assert.throws(
+    () => run(() => ({ eligible: false, hard_conflicts: [] })),
+    /did not exercise condition:need_pet/,
+  );
+  // intended condition plus an extra unrelated conflict => fail closed
+  assert.throws(
+    () => run(() => ({ eligible: false, hard_conflicts: [{ code: "condition:need_pet" }, { code: "lifecycle" }] })),
+    /unrelated conflicts \(lifecycle\)/,
   );
   db.close();
 });
@@ -802,5 +835,31 @@ test("P2-17 retry reconciles a wish whose lifecycle transition did not complete"
   const retried = prepareStage1Fixtures(db, deps(), { now: new Date(), runId, flags: FLAGS });
   assert.equal(retried.ok, true);
   assert.equal(db.prepare("SELECT lifecycle FROM demand_posts WHERE id = ?").get(reg.row_id).lifecycle, "completed");
+  db.close();
+});
+
+test("P2-21 an onAfterInsert crash rolls the fixture listing back and retry recovers", () => {
+  const db = open();
+  const runId = "stage1-fix:test:p221";
+  assert.throws(
+    () => prepareStage1Fixtures(db, {
+      ...deps(),
+      listingIsolation: { onAfterInsert() { throw new Error("inject-after-insert-atomic"); } },
+    }, { now: new Date(), runId, flags: FLAGS }),
+    /inject-after-insert-atomic/,
+  );
+  // the deterministic idempotency key routes creation through withImmediate(),
+  // so the half-written fixture listing must not survive the injected crash
+  const leftover = db.prepare(
+    "SELECT post_id FROM listings WHERE fixture_namespace = ?",
+  ).all(STAGE1_FIXTURE_NAMESPACE);
+  assert.equal(leftover.length, 0);
+  const retried = prepareStage1Fixtures(db, deps(), { now: new Date(), runId, flags: FLAGS });
+  assert.equal(retried.ok, true);
+  assert.equal(retried.run_id, runId);
+  const active = db.prepare(
+    "SELECT post_id FROM listings WHERE fixture_namespace = ? AND COALESCE(self_status, 'open') = 'open'",
+  ).all(STAGE1_FIXTURE_NAMESPACE);
+  assert.equal(active.length, 1);
   db.close();
 });

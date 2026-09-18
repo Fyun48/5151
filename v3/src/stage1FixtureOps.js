@@ -91,6 +91,10 @@ export function listingFixtureInput(runId, extra = {}) {
     body: `${STAGE1_FIXTURE_NAMESPACE} ${runId} owner self listing for authenticated matching.`,
     accept_pledge: true,
     listing_values: { need_pet: "not_allowed", need_cook: "allowed" },
+    // P2-21: a deterministic per-run key routes createSelfListing through its
+    // existing withImmediate() path, so an onAfterInsert failure rolls back the
+    // listing + later partial writes instead of leaving a half-written fixture.
+    idempotency_key: `stage1-fix-listing-${opaqueId(runId)}`,
     ...extra,
   };
 }

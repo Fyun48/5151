@@ -212,3 +212,38 @@ P2-13 只讓 A/B/T 帳號階段原子；listing / wish / lifecycle 仍是各自�
 - 不刪除既有 fixture 帳號（避免 signup_count 被消耗）；不動一般會員；部分失敗期間 fixture 仍維持隔離
 - 不同 run 在 incomplete run 完成或清理前仍 fail-closed
 - 回歸：`P2-17 retry of the same run completes after an aborted listing registration`、`P2-17 retry of the same run completes after an aborted wish registration`、`P2-17 retry reconciles a wish whose lifecycle transition did not complete`
+
+## Review P1-18：member-visible 總數不得洩漏 fixture
+
+`stats().dbTotal` 原本用 `listingCount()`（`SELECT COUNT(*) FROM listings`），所以 fixture listing 存在時，一般會員可透過 `/api/listings` 的 `dbTotal` 觀察到它。
+
+修正：新增 `productListingCount()`，用共用的 `sqlExcludeFixtureRows(db, "listings")` 排除 fixture；`stats().dbTotal` 改用它。**raw `listingCount()` 保持不變**（watcher 等維運用）。
+
+- 回歸：`P1-18 product-visible totals exclude fixture listings`
+
+## Review P2-19：landing/login 需驗證頁面內容
+
+除 200 + 非空外，需驗證頁面專屬 marker：
+
+- landing：`<title>吉比租房物件追蹤</title>`
+- login：`<title>登入 · 吉比租房物件追蹤</title>` + `<form id="loginForm">` + `type="password"`
+
+- 回歸：`P2-19 landing/login evidence requires the intended page markers`
+
+## Review P2-20：hard-conflict 必須證明是 `condition:need_pet`
+
+不再只看 boolean；改用 `evaluateCounterfactualMatch()` 的結果檢查 `hard_conflicts`：
+
+1. 必須包含 `condition:need_pet`
+2. 不得含任何其他衝突（district / budget / fixture_namespace / listing_status / lifecycle…）
+3. `eligible` 必須為 false
+
+- 回歸：`P2-20 the hard-conflict control must expose the intended condition:need_pet code`（valid / district / budget / 相容 / 多餘衝突）
+
+## Review P2-21：listing INSERT 後的中斷必須可回滾重試
+
+`createSelfListing()` 在**沒有** idempotency key 時不走 `withImmediate`，故 `onAfterInsert` 失敗會留下半寫入的 fixture listing。
+
+修正：`listingFixtureInput()` 帶入 deterministic per-run `idempotency_key`（`stage1-fix-listing-<hash>`），使 `createSelfListing()` 走既有 `withImmediate(db, run)` 原子路徑；`onAfterInsert` 失敗會回滾 listing 及後續部分寫入，pre-registered registry reservation 再由 resume 邏輯釋放/重建。
+
+- 回歸：`P2-21 an onAfterInsert crash rolls the fixture listing back and retry recovers`

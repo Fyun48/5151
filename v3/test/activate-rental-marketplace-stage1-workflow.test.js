@@ -979,8 +979,10 @@ test("P1-14 landing/login must be verified with HTTP 200 (no hardcoded PASS)", (
   // runtime evidence derives landing/login from the probe statuses, not hardcoded true
   assert.match(remote, /land_status, _land_ms = "\$land_probe"\.split\(\)/);
   assert.match(remote, /login_status, _login_ms = "\$login_html_probe"\.split\(\)/);
-  assert.match(remote, /land_ok = land_status == "200" and os\.path\.getsize\("\/tmp\/stage1-landing\.html"\) > 0/);
-  assert.match(remote, /login_ok = login_status == "200" and os\.path\.getsize\("\/tmp\/stage1-login\.html"\) > 0/);
+  assert.match(remote, /land_ok = \(/);
+  assert.match(remote, /and os\.path\.getsize\("\/tmp\/stage1-landing\.html"\) > 0/);
+  assert.match(remote, /login_ok = \(/);
+  assert.match(remote, /and os\.path\.getsize\("\/tmp\/stage1-login\.html"\) > 0/);
   assert.match(remote, /if not land_ok:/);
   assert.match(remote, /if not login_ok:/);
   assert.match(remote, /"landing": land_ok,/);
@@ -996,5 +998,19 @@ test("P1-14 landing/login must be verified with HTTP 200 (no hardcoded PASS)", (
   // both 200 with non-empty bodies => runtime evidence may pass
   assert.match(checkEvidence("--check-runtime", goodSmoke()), /EVIDENCE_RUNTIME_OK/);
   // verify-only reuses the same checks but never rolls back
+  assert.match(remote, /hydrate_runtime_on verify-only \|\| fail "verify-only/);
+});
+
+test("P2-19 landing/login evidence requires the intended page markers", () => {
+  const remote = readFileSync(REMOTE, "utf8");
+  // landing must be the product page, not merely any 200 body
+  assert.match(remote, /"<title>吉比租房物件追蹤<\/title>" in land_html/);
+  // login must be the actual login form page
+  assert.match(remote, /"<title>登入 · 吉比租房物件追蹤<\/title>" in login_html/);
+  assert.match(remote, /'<form id="loginForm">' in login_html/);
+  assert.match(remote, /'type="password"' in login_html/);
+  assert.match(remote, /landing page did not serve the expected product page/);
+  assert.match(remote, /login page did not serve the expected login form/);
+  // verify-only still fails without rollback
   assert.match(remote, /hydrate_runtime_on verify-only \|\| fail "verify-only/);
 });

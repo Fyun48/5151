@@ -541,12 +541,24 @@ if health.get("ok") is not True:
     raise SystemExit("health is not ok")
 land_status, _land_ms = "$land_probe".split()
 login_status, _login_ms = "$login_html_probe".split()
-land_ok = land_status == "200" and os.path.getsize("/tmp/stage1-landing.html") > 0
-login_ok = login_status == "200" and os.path.getsize("/tmp/stage1-login.html") > 0
+land_html = open("/tmp/stage1-landing.html", encoding="utf-8", errors="replace").read()
+login_html = open("/tmp/stage1-login.html", encoding="utf-8", errors="replace").read()
+land_ok = (
+    land_status == "200"
+    and os.path.getsize("/tmp/stage1-landing.html") > 0
+    and "<title>吉比租房物件追蹤</title>" in land_html
+)
+login_ok = (
+    login_status == "200"
+    and os.path.getsize("/tmp/stage1-login.html") > 0
+    and "<title>登入 · 吉比租房物件追蹤</title>" in login_html
+    and '<form id="loginForm">' in login_html
+    and 'type="password"' in login_html
+)
 if not land_ok:
-    raise SystemExit("landing page did not return 200 with a non-empty body")
+    raise SystemExit("landing page did not serve the expected product page")
 if not login_ok:
-    raise SystemExit("login page did not return 200 with a non-empty body")
+    raise SystemExit("login page did not serve the expected login form")
 if (flags.get("rental_catalog_v2") or {}).get("enabled") is not True:
     raise SystemExit("runtime rental_catalog_v2.enabled is not true")
 if wish.get("lifecycle_enabled") is not True:

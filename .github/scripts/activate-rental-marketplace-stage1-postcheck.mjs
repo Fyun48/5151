@@ -577,12 +577,24 @@ export function loadRegistryBoundFixtures(db, {
   if (!hardListing) {
     throw new Error("post-activation fixtures rejected: bound fixture listing is missing for the hard-conflict control");
   }
-  const counterfactualEligible = requireCounterfactualHelper({
-    isCounterfactuallyMatchable,
-    evaluateCounterfactualMatch,
-  });
-  if (counterfactualEligible(hardListing, hardWish, { catalog, now })) {
+  if (typeof evaluateCounterfactualMatch !== "function") {
+    throw new Error("post-activation fixtures rejected: the Match Engine counterfactual helper must be callable to inspect hard-conflict codes");
+  }
+  const hardResult = evaluateCounterfactualMatch(hardListing, hardWish, { catalog, now });
+  if (!hardResult || typeof hardResult !== "object") {
+    throw new Error("post-activation fixtures rejected: counterfactual helper returned no result");
+  }
+  if (hardResult.eligible === true) {
     throw new Error("post-activation fixtures rejected: hard-conflict control was eligible");
+  }
+  const EXPECTED_HARD_CONFLICT = "condition:need_pet";
+  const hardCodes = (hardResult.hard_conflicts || []).map((row) => String(row?.code || ""));
+  if (!hardCodes.includes(EXPECTED_HARD_CONFLICT)) {
+    throw new Error(`post-activation fixtures rejected: hard-conflict control did not exercise ${EXPECTED_HARD_CONFLICT}`);
+  }
+  const unrelatedHardConflicts = hardCodes.filter((code) => code !== EXPECTED_HARD_CONFLICT);
+  if (unrelatedHardConflicts.length) {
+    throw new Error(`post-activation fixtures rejected: hard-conflict control had unrelated conflicts (${unrelatedHardConflicts.join(",")})`);
   }
   if (selected.suppressed.some((row) => row.token_hash === opaqueId(hardWish.public_token))) {
     throw new Error("post-activation fixtures rejected: hard-conflict control was selected");

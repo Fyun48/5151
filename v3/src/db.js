@@ -6148,7 +6148,7 @@ export function stats(searchKeys, userId, settingsOverride, diagnostics) {
       );
       return !failedRouteJobs.has(jobKey);
     }).length,
-    dbTotal: listingCount(),
+    dbTotal: productListingCount(),
   };
   markStage("count_ms");
   const computedAt = Date.now();
@@ -6162,6 +6162,15 @@ export function stats(searchKeys, userId, settingsOverride, diagnostics) {
 
 export function listingCount() {
   return Number(db.prepare("SELECT COUNT(*) AS n FROM listings").get().n || 0);
+}
+
+/** P1-18: product-visible listing total. Uses the shared centralized fixture
+ * exclusion so member-facing stats never reveal an active Stage 1 fixture.
+ * The raw internal listingCount() stays physical for operational callers.
+ */
+export function productListingCount() {
+  const isolation = sqlExcludeFixtureRows(db, "listings");
+  return Number(db.prepare(`SELECT COUNT(*) AS n FROM listings WHERE ${isolation.sql}`).get().n || 0);
 }
 
 export function listingCountForSearch(searchKey) {
