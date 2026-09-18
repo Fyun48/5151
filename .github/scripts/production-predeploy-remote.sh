@@ -106,6 +106,38 @@ echo "host_node_sqlite=${HOST_NODE_SQLITE:-no}"
 PARENT="$(dirname "$DATA_HOST")"
 BASE="$(basename "$DATA_HOST")"
 BACKUP_ROOT="${PARENT}/${BASE}-backups"
+
+# Retention (Issue #355): keep only the newest PREDEPLOY_BACKUP_KEEP existing backups
+# (default 2) so repeated predeploy runs cannot fill the data volume. This runs BEFORE the
+# new backup is written, so a full disk can be recovered by the run itself instead of
+# failing with "no space left on device".
+BACKUP_KEEP="${PREDEPLOY_BACKUP_KEEP:-2}"
+case "$BACKUP_KEEP" in
+  ''|*[!0-9]*) fail "PREDEPLOY_BACKUP_KEEP must be a non-negative integer (got '$BACKUP_KEEP')" ;;
+esac
+echo "=== backup retention (keep=$BACKUP_KEEP) ==="
+df -h "$PARENT" 2>/dev/null || true
+if [ -d "$BACKUP_ROOT" ]; then
+  EXISTING_BACKUPS="$({ ls -1d "$BACKUP_ROOT"/predeploy-* 2>/dev/null || true; } | wc -l | tr -d ' ')"
+  echo "existing_backups=$EXISTING_BACKUPS"
+  if [ -n "$EXISTING_BACKUPS" ] && [ "$EXISTING_BACKUPS" -gt "$BACKUP_KEEP" ]; then
+    { ls -1dt "$BACKUP_ROOT"/predeploy-* 2>/dev/null || true; } | tail -n +"$((BACKUP_KEEP + 1))" | while IFS= read -r old_backup; do
+      [ -n "$old_backup" ] || continue
+      case "$old_backup" in
+        "$BACKUP_ROOT"/predeploy-*) ;;
+        *) continue ;;
+      esac
+      echo "prune_backup=$old_backup"
+      rm -rf "$old_backup"
+    done
+  fi
+fi
+AVAIL_KB="$(df -Pk "$PARENT" 2>/dev/null | awk 'NR==2 {print $4}' || true)"
+if [ -n "$AVAIL_KB" ] && [ "$AVAIL_KB" -lt 524288 ]; then
+  echo "warning=low_free_space_after_prune avail_kb=$AVAIL_KB (backup needs roughly the v3.db size)"
+fi
+df -h "$PARENT" 2>/dev/null || true
+
 BACKUP_DIR="${BACKUP_ROOT}/predeploy-${STAMP}"
 mkdir -p "$BACKUP_DIR"
 echo "backup_dir=$BACKUP_DIR"

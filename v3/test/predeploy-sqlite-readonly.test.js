@@ -109,6 +109,24 @@ test("predeploy remote script reads RepoDigests and arch from image id, not cont
   assert.match(script, /docker image inspect -f '\{\{\.Architecture\}\}\/\{\{\.Os\}\}' "\$IMAGE_ID"/);
 });
 
+test("predeploy backup prunes older backups before writing the new one (Issue #355 disk-fill guard)", () => {
+  const script = readFileSync(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "../../.github/scripts/production-predeploy-remote.sh"),
+    "utf8",
+  );
+  assert.match(script, /PREDEPLOY_BACKUP_KEEP/);
+  assert.match(script, /echo "existing_backups=\$EXISTING_BACKUPS"/);
+  assert.match(script, /echo "prune_backup=\$old_backup"/);
+  assert.match(script, /case "\$old_backup" in\r?\n\s+"\$BACKUP_ROOT"\/predeploy-\*\)/);
+  assert.match(script, /warning=low_free_space_after_prune/);
+  const retentionAt = script.indexOf("PREDEPLOY_BACKUP_KEEP");
+  const mkdirAt = script.indexOf('mkdir -p "$BACKUP_DIR"');
+  const mediaAt = script.indexOf('echo "=== media pass 1 ==="');
+  assert.ok(retentionAt > 0, "retention block must exist");
+  assert.ok(mkdirAt > retentionAt, "retention must run before the backup dir is created");
+  assert.ok(mediaAt > mkdirAt, "media pass must run after the backup dir is created");
+});
+
 test("predeploy backup verification capability-detects host node:sqlite and has Python read-only fallback", () => {
   const script = readFileSync(
     path.join(path.dirname(fileURLToPath(import.meta.url)), "../../.github/scripts/production-predeploy-remote.sh"),
