@@ -1,0 +1,260 @@
+name: Prepare Stage 1 fixtures (manual)
+run-name: "stage1-fixtures:${{ inputs.mode }}:${{ inputs.source_sha }}"
+
+# Fixture prepare / verify / cleanup / reap-stale only.
+# 不部署、不改 image、不改 feature flags、不建立除非 Owner 明確 dispatch。
+# 必須從 refs/heads/master 做 workflow_dispatch。
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "prepare | verify | cleanup | reap-stale"
+        required: true
+        default: "verify"
+      source_sha:
+        description: "目前 Production source 的完整 40 碼 commit SHA"
+        required: true
+      image_digest:
+        description: "目前 running image digest，格式必須是 sha256: 加 64 碼小寫 hex"
+        required: true
+      backup_id:
+        description: "已驗證 backup 路徑，必須是 /DATA/AppData/591-tracker-v3-backups/predeploy-YYYYMMDD-HHMMSS"
+        required: true
+      backup_hash:
+        description: "已驗證 backup sha256，格式必須是 sha256: 加 64 碼小寫 hex"
+        required: true
+      confirmation:
+        description: "輸入 STAGE1-FIXTURES-PRODUCTION 以確認只操作 fixtures、不改 flags"
+        required: true
+        default: ""
+      owner_authorization:
+        description: "必須剛好 AUTHORIZE-STAGE1-FIXTURES:<mode>:<source_sha>:<image_digest>:<backup_id>:<backup_hash>"
+        required: true
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  stage1-fixtures:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
+    steps:
+      - name: Authorize Stage 1 fixture operation (fail-closed)
+        env:
+          WF_REF: ${{ github.ref }}
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          ALLOWED_ACTOR: ${{ vars.PRODUCTION_DEPLOY_ALLOWED_ACTOR }}
+          CONFIRM: ${{ inputs.confirmation }}
+          OWNER_AUTHORIZATION: ${{ inputs.owner_authorization }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+          BACKUP_ID: ${{ inputs.backup_id }}
+          BACKUP_HASH: ${{ inputs.backup_hash }}
+          FIXTURE_MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          if [ "$WF_REF" != "refs/heads/master" ]; then
+            echo "::error::Stage 1 fixtures must run from the master workflow definition (got $WF_REF)"; exit 1
+          fi
+          if [ -z "${ALLOWED_ACTOR:-}" ]; then
+            echo "::error::PRODUCTION_DEPLOY_ALLOWED_ACTOR is not configured; refusing (fail-closed)"; exit 1
+          fi
+          if [ "$ACTOR" = "cursor" ] || [ "$ACTOR" = "cursor[bot]" ]; then
+            if [ "$ACTOR" != "$ALLOWED_ACTOR" ]; then
+              echo "::error::cursor is not a durable Production fixture operator; Owner authorization required"; exit 1
+            fi
+          fi
+          if [ "$TRIGGERING_ACTOR" = "cursor" ] || [ "$TRIGGERING_ACTOR" = "cursor[bot]" ]; then
+            if [ "$TRIGGERING_ACTOR" != "$ALLOWED_ACTOR" ]; then
+              echo "::error::cursor is not a durable Production fixture operator; Owner authorization required"; exit 1
+            fi
+          fi
+          if [ "$ACTOR" != "$ALLOWED_ACTOR" ]; then
+            echo "::error::actor '$ACTOR' is not the authorized deployer"; exit 1
+          fi
+          if [ "$TRIGGERING_ACTOR" != "$ALLOWED_ACTOR" ]; then
+            echo "::error::triggering actor '$TRIGGERING_ACTOR' is not the authorized deployer"; exit 1
+          fi
+          if [ "${CONFIRM:-}" != "STAGE1-FIXTURES-PRODUCTION" ]; then
+            echo "::error::confirmation must be exactly STAGE1-FIXTURES-PRODUCTION"; exit 1
+          fi
+          case "$FIXTURE_MODE" in
+            prepare|verify|cleanup|reap-stale) ;;
+            *) echo "::error::mode must be prepare, verify, cleanup, or reap-stale"; exit 1 ;;
+          esac
+          if ! printf '%s' "${SOURCE_SHA:-}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::source_sha must be a full 40-character commit SHA"; exit 1
+          fi
+          if ! printf '%s' "${IMAGE_DIGEST:-}" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo "::error::image_digest must be exactly sha256: plus 64 lowercase hex characters"; exit 1
+          fi
+          if ! printf '%s' "${BACKUP_ID:-}" | grep -Eq '^/DATA/AppData/591-tracker-v3-backups/predeploy-[0-9]{8}-[0-9]{6}$'; then
+            echo "::error::backup_id must be /DATA/AppData/591-tracker-v3-backups/predeploy-YYYYMMDD-HHMMSS"; exit 1
+          fi
+          case "$BACKUP_ID" in
+            *..*) echo "::error::backup_id must not contain path traversal"; exit 1 ;;
+          esac
+          if ! printf '%s' "${BACKUP_HASH:-}" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo "::error::backup_hash must be exactly sha256: plus 64 lowercase hex characters"; exit 1
+          fi
+          EXPECTED_AUTH="AUTHORIZE-STAGE1-FIXTURES:${FIXTURE_MODE}:${SOURCE_SHA}:${IMAGE_DIGEST}:${BACKUP_ID}:${BACKUP_HASH}"
+          if [ "${OWNER_AUTHORIZATION:-}" != "$EXPECTED_AUTH" ]; then
+            echo "::error::owner_authorization must be exactly AUTHORIZE-STAGE1-FIXTURES bound to mode, source SHA, digest, backup id and hash"; exit 1
+          fi
+      - name: Checkout workflow-definition SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Verify trusted workflow-definition SHA
+        env:
+          EXPECTED_WF_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          HEAD_SHA="$(git rev-parse HEAD)"
+          if [ "$HEAD_SHA" != "$EXPECTED_WF_SHA" ]; then
+            echo "::error::trusted checkout HEAD $HEAD_SHA != workflow execution SHA $EXPECTED_WF_SHA"; exit 1
+          fi
+      - name: Validate source SHA reachable from origin/master
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin master
+          if ! git merge-base --is-ancestor "$SOURCE_SHA" origin/master; then
+            echo "::error::commit $SOURCE_SHA is not reachable from origin/master; refusing"; exit 1
+          fi
+      - name: Build expected v3/src manifest from source SHA
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          EXPECTED_WF_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/pra-src-manifest.py --from-git "$SOURCE_SHA" --out pra-src-expected.json
+          AFTER_HEAD="$(git rev-parse HEAD)"
+          if [ "$AFTER_HEAD" != "$EXPECTED_WF_SHA" ]; then
+            echo "::error::manifest step moved HEAD $AFTER_HEAD off workflow SHA $EXPECTED_WF_SHA"; exit 1
+          fi
+      - name: Copy Stage 1 fixture helpers to NAS /tmp
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.NAS_HOST }}
+          port: ${{ secrets.NAS_PORT }}
+          username: ${{ secrets.NAS_USER }}
+          key: ${{ secrets.NAS_SSH_KEY }}
+          source: ".github/scripts/stage1-fixture-remote.sh,.github/scripts/stage1-fixture-domain.mjs,.github/scripts/stage1-fixture-evidence.py,.github/scripts/pra-src-manifest.py,pra-src-expected.json"
+          target: /tmp/5151-stage1-fixture-helpers
+          overwrite: true
+      - name: Run Stage 1 fixture operation on running v3
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.NAS_HOST }}
+          port: ${{ secrets.NAS_PORT }}
+          username: ${{ secrets.NAS_USER }}
+          key: ${{ secrets.NAS_SSH_KEY }}
+          script_stop: true
+          command_timeout: 15m
+          script: |
+            set -euo pipefail
+            export SOURCE_SHA='${{ inputs.source_sha }}'
+            export IMAGE_DIGEST='${{ inputs.image_digest }}'
+            export BACKUP_ID='${{ inputs.backup_id }}'
+            export BACKUP_HASH='${{ inputs.backup_hash }}'
+            export OWNER_AUTHORIZATION='${{ inputs.owner_authorization }}'
+            export FIXTURE_MODE='${{ inputs.mode }}'
+            export GITHUB_RUN_ID='${{ github.run_id }}'
+            export DOMAIN_SCRIPT=/tmp/5151-stage1-fixture-helpers/.github/scripts/stage1-fixture-domain.mjs
+            export EVIDENCE_SCRIPT=/tmp/5151-stage1-fixture-helpers/.github/scripts/stage1-fixture-evidence.py
+            export SRC_MANIFEST_PY=/tmp/5151-stage1-fixture-helpers/.github/scripts/pra-src-manifest.py
+            export EXPECTED_SRC_MANIFEST=/tmp/5151-stage1-fixture-helpers/pra-src-expected.json
+            export EXPECTED_SRC_MOUNT=/mnt/Storage1/apps/5151/v3/src
+            chmod +x /tmp/5151-stage1-fixture-helpers/.github/scripts/stage1-fixture-remote.sh
+            /tmp/5151-stage1-fixture-helpers/.github/scripts/stage1-fixture-remote.sh
+      - name: Pull NAS fixture evidence
+        if: ${{ always() }}
+        env:
+          NAS_HOST: ${{ secrets.NAS_HOST }}
+          NAS_PORT: ${{ secrets.NAS_PORT }}
+          NAS_USER: ${{ secrets.NAS_USER }}
+          NAS_SSH_KEY: ${{ secrets.NAS_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          key="$(mktemp)"
+          printf '%s\n' "$NAS_SSH_KEY" > "$key"
+          chmod 600 "$key"
+          scp -o StrictHostKeyChecking=accept-new -P "$NAS_PORT" -i "$key" \
+            "$NAS_USER@$NAS_HOST:/tmp/stage1-fixture-core.json" ./nas-fixture-core.json \
+            || echo "NAS fixture evidence missing"
+          rm -f "$key"
+      - name: Write Stage 1 fixture evidence
+        if: ${{ always() }}
+        env:
+          WF_FILE: .github/workflows/prepare-rental-marketplace-stage1-fixtures.yml
+          WF_REF: ${{ github.ref }}
+          WF_RUN_ID: ${{ github.run_id }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+          BACKUP_ID: ${{ inputs.backup_id }}
+          BACKUP_HASH: ${{ inputs.backup_hash }}
+          FIXTURE_MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from datetime import datetime, timezone
+          nas = {}
+          try:
+              nas = json.load(open("nas-fixture-core.json"))
+          except Exception:
+              nas = {}
+          doc = {
+              "schema": "stage1-fixture-evidence-v1",
+              "written_at": datetime.now(timezone.utc).isoformat(),
+              "workflow_file": os.environ["WF_FILE"],
+              "workflow_ref": os.environ["WF_REF"],
+              "workflow_run_id": os.environ["WF_RUN_ID"],
+              "mode": os.environ["FIXTURE_MODE"],
+              "source_sha": os.environ["SOURCE_SHA"],
+              "image_digest": os.environ["IMAGE_DIGEST"],
+              "backup_id": os.environ["BACKUP_ID"],
+              "backup_hash": os.environ["BACKUP_HASH"],
+              "flags_mutated": nas.get("flags_mutated") is True,
+              "owner_matching_enabled": False,
+              "before_raw_flags": nas.get("before_raw_flags"),
+              "after_raw_flags": nas.get("after_raw_flags"),
+              "result": nas.get("result"),
+              "evidence_available": bool(nas),
+          }
+          open("stage1-fixture-evidence.json", "w").write(json.dumps(doc, indent=2) + "\n")
+          PY
+      - name: Upload Stage 1 fixture evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage1-fixture-evidence
+          path: stage1-fixture-evidence.json
+          if-no-files-found: error
+      - name: Conclude Stage 1 fixture operation (fail-closed)
+        run: |
+          set -euo pipefail
+          if [ ! -f stage1-fixture-evidence.json ]; then
+            echo "::error::fixture evidence artifact is missing"; exit 1
+          fi
+          python3 .github/scripts/stage1-fixture-evidence.py ./stage1-fixture-evidence.json
+          python3 - <<'PY'
+          import json
+          doc = json.load(open("stage1-fixture-evidence.json"))
+          if doc.get("evidence_available") is not True:
+              raise SystemExit("fixture evidence unavailable; refusing PASS")
+          if doc.get("flags_mutated") is True:
+              raise SystemExit("fixture workflow mutated flags")
+          if doc.get("owner_matching_enabled") is not False:
+              raise SystemExit("owner_matching_enabled must remain false")
+          PY

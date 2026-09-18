@@ -492,41 +492,55 @@ function queryRows(db, sql) {
   }
 }
 
-export function loadProductionFixtures(db, {
+export function loadRegistryBoundFixtures(db, {
   listingFormFields,
   now = new Date(),
   catalog,
   isCounterfactuallyMatchable,
   evaluateCounterfactualMatch,
 } = {}) {
-  const listings = queryRows(db, `
-    SELECT *
-    FROM listings
-    WHERE COALESCE(source, '591') = 'self'
-    ORDER BY post_id DESC
-    LIMIT 80
-  `);
-  let users = queryRows(db, `
-    SELECT id, email, COALESCE(deleted_at, '') AS deleted_at
-    FROM users
-    ORDER BY id ASC
-    LIMIT 80
-  `);
-  if (!users.length) {
-    users = queryRows(db, `
-      SELECT id, email, '' AS deleted_at
-      FROM users
+  const stamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+  let registry = [];
+  try {
+    registry = db.prepare(`
+      SELECT *
+      FROM stage1_fixture_registry
+      WHERE namespace = 'stage1-fix'
+        AND cleaned_at IS NULL
+        AND status = 'active'
+        AND expires_at > ?
       ORDER BY id ASC
-      LIMIT 80
-    `);
+    `).all(stamp);
+  } catch {
+    registry = [];
   }
-  const wishes = queryRows(db, `
-    SELECT *
-    FROM demand_posts
-    ORDER BY id DESC
-    LIMIT 400
-  `);
-  return selectPostActivationFixtures({
+  if (!registry.length) {
+    throw new Error("post-activation fixtures missing: stage1_fixture_registry has no active fixtures");
+  }
+  const userIds = registry.filter((row) => row.kind === "user").map((row) => Number(row.row_id) || 0).filter(Boolean);
+  const listingIds = registry.filter((row) => row.kind === "listing").map((row) => Number(row.row_id) || 0).filter(Boolean);
+  const wishIds = registry.filter((row) => row.kind === "wish").map((row) => Number(row.row_id) || 0).filter(Boolean);
+  if (!userIds.length || !listingIds.length || !wishIds.length) {
+    throw new Error("post-activation fixtures missing: registry identities are incomplete");
+  }
+  const listings = db.prepare(
+    `SELECT * FROM listings WHERE post_id IN (${listingIds.map(() => "?").join(",")})`,
+  ).all(...listingIds);
+  let users = [];
+  try {
+    users = db.prepare(
+      `SELECT id, email, COALESCE(deleted_at, '') AS deleted_at
+       FROM users WHERE id IN (${userIds.map(() => "?").join(",")})`,
+    ).all(...userIds);
+  } catch {
+    users = db.prepare(
+      `SELECT id, email, '' AS deleted_at FROM users WHERE id IN (${userIds.map(() => "?").join(",")})`,
+    ).all(...userIds);
+  }
+  const wishes = db.prepare(
+    `SELECT * FROM demand_posts WHERE id IN (${wishIds.map(() => "?").join(",")})`,
+  ).all(...wishIds);
+  const selected = selectPostActivationFixtures({
     listings,
     users,
     wishes,
@@ -536,6 +550,29 @@ export function loadProductionFixtures(db, {
     isCounterfactuallyMatchable,
     evaluateCounterfactualMatch,
   });
+  const hard = registry.find((row) => row.role === "wish_hard_conflict");
+  if (hard) {
+    const hardWish = wishes.find((row) => Number(row.id) === Number(hard.row_id));
+    const counterfactualEligible = requireCounterfactualHelper({
+      isCounterfactuallyMatchable,
+      evaluateCounterfactualMatch,
+    });
+    const listing = listings.find((row) => Number(row.post_id || row.id) === Number(selected.listing_id));
+    if (hardWish && listing && counterfactualEligible(listing, hardWish, { catalog, now })) {
+      throw new Error("post-activation fixtures rejected: hard-conflict control was eligible");
+    }
+    if (hardWish && selected.suppressed.some((row) => row.token_hash === opaqueId(hardWish.public_token))) {
+      throw new Error("post-activation fixtures rejected: hard-conflict control was selected");
+    }
+    selected.hard_conflict_rejected = true;
+  }
+  selected.selector = "stage1_fixture_registry";
+  selected.limit_80_used = false;
+  return selected;
+}
+
+export function loadProductionFixtures(db, options = {}) {
+  return loadRegistryBoundFixtures(db, options);
 }
 
 export async function runPostActivationGate({
