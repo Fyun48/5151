@@ -108,15 +108,33 @@ python3 - "$SOURCE_SHA" "$IMAGE_DIGEST" "$BACKUP_ID" "$BACKUP_HASH" "$FIXTURE_MO
 import json, sys
 from datetime import datetime, timezone
 source_sha, image_digest, backup_id, backup_hash, mode, run_id, attempt, out_path = sys.argv[1:]
+CLEANUP_MODES = ("cleanup", "reap-stale", "cleanup-activated")
+STAGE_FLAGS = ("offer_enabled", "public_share_v2_enabled", "owner_notifications_enabled", "notifications_enabled")
+OUTBOUND = ("digest_enabled", "outbound_mail_enabled", "outbound_push_enabled")
 domain = json.load(open("/tmp/stage1-fixture-result.json"))
 if domain.get("flags_mutated") is True:
     raise SystemExit("fixture domain mutated flags")
-if domain.get("owner_matching_enabled") is not False:
-    raise SystemExit("owner_matching_enabled is not false")
+posture = str(domain.get("posture") or "")
+activated = mode in CLEANUP_MODES and posture == "post_activation"
+if posture == "post_activation" and mode not in CLEANUP_MODES:
+    raise SystemExit("prepare/verify must not run in the post-activation posture")
+if activated and domain.get("readiness_posture") != "cleanup":
+    raise SystemExit("post-activation cleanup must use the cleanup readiness posture")
+owner_matching = True if activated else False
+if domain.get("owner_matching_enabled") is not owner_matching:
+    raise SystemExit("owner_matching_enabled is not %s" % owner_matching)
+wish = ((domain.get("after_raw_flags") or {}).get("wish") or {})
+for key in STAGE_FLAGS:
+    if wish.get(key) is not activated:
+        raise SystemExit("wish.%s must be %s" % (key, activated))
+for key in OUTBOUND:
+    if wish.get(key) is not False:
+        raise SystemExit("wish.%s must be false" % key)
 doc = {
     "schema": "stage1-fixture-core-v1",
     "timestamp": datetime.now(timezone.utc).isoformat(),
     "mode": mode,
+    "posture": posture,
     "workflow_run_id": run_id,
     "workflow_attempt": attempt,
     "source_sha": source_sha,
@@ -124,7 +142,7 @@ doc = {
     "backup_id": backup_id,
     "backup_hash": backup_hash,
     "flags_mutated": False,
-    "owner_matching_enabled": False,
+    "owner_matching_enabled": owner_matching,
     "before_raw_flags": domain.get("before_raw_flags"),
     "after_raw_flags": domain.get("after_raw_flags"),
     "result": domain.get("result"),

@@ -227,6 +227,9 @@ jobs:
               nas = {}
           if nas and os.environ.get("WF_ATTEMPT") and str(nas.get("workflow_attempt") or "") and str(nas.get("workflow_attempt")) != os.environ["WF_ATTEMPT"]:
               nas = {}
+          mode = os.environ["FIXTURE_MODE"]
+          posture = str(nas.get("posture") or "")
+          activated = mode in ("cleanup", "reap-stale", "cleanup-activated") and posture == "post_activation"
           doc = {
               "schema": "stage1-fixture-evidence-v1",
               "written_at": datetime.now(timezone.utc).isoformat(),
@@ -234,13 +237,14 @@ jobs:
               "workflow_ref": os.environ["WF_REF"],
               "workflow_run_id": os.environ["WF_RUN_ID"],
               "workflow_attempt": int(os.environ.get("WF_ATTEMPT") or "0"),
-              "mode": os.environ["FIXTURE_MODE"],
+              "mode": mode,
+              "posture": posture,
               "source_sha": os.environ["SOURCE_SHA"],
               "image_digest": os.environ["IMAGE_DIGEST"],
               "backup_id": os.environ["BACKUP_ID"],
               "backup_hash": os.environ["BACKUP_HASH"],
               "flags_mutated": nas.get("flags_mutated") is True,
-              "owner_matching_enabled": False,
+              "owner_matching_enabled": activated,
               "before_raw_flags": nas.get("before_raw_flags"),
               "after_raw_flags": nas.get("after_raw_flags"),
               "result": nas.get("result"),
@@ -269,6 +273,16 @@ jobs:
               raise SystemExit("fixture evidence unavailable; refusing PASS")
           if doc.get("flags_mutated") is True:
               raise SystemExit("fixture workflow mutated flags")
-          if doc.get("owner_matching_enabled") is not False:
-              raise SystemExit("owner_matching_enabled must remain false")
+          activated = doc.get("posture") == "post_activation"
+          if activated and doc.get("mode") not in ("cleanup", "reap-stale", "cleanup-activated"):
+              raise SystemExit("prepare/verify must not pass in the post-activation posture")
+          if doc.get("owner_matching_enabled") is not activated:
+              raise SystemExit("owner_matching_enabled does not match the declared posture")
+          wish = ((doc.get("after_raw_flags") or {}).get("wish") or {})
+          for key in ("offer_enabled", "public_share_v2_enabled", "owner_notifications_enabled", "notifications_enabled"):
+              if wish.get(key) is not activated:
+                  raise SystemExit("wish.%s must be %s" % (key, activated))
+          for key in ("digest_enabled", "outbound_mail_enabled", "outbound_push_enabled"):
+              if wish.get(key) is not False:
+                  raise SystemExit("wish.%s must be false" % key)
           PY

@@ -11,22 +11,31 @@ EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 # Boundary-anchored so a compact fixture run id (stage1-fix:20260918061756:...)
 # is not mistaken for a 09xxxxxxxx mobile number.
 PHONE_RE = re.compile(r"(?<![0-9])09\d{8}(?![0-9])")
-LATER = (
+# Only these modes may run once the later stages are legitimately ON.
+CLEANUP_MODES = ("cleanup", "reap-stale", "cleanup-activated")
+STAGE_FLAGS = (
     "offer_enabled",
     "public_share_v2_enabled",
     "owner_notifications_enabled",
     "notifications_enabled",
-    "digest_enabled",
-    "outbound_mail_enabled",
-    "outbound_push_enabled",
 )
+OUTBOUND = ("digest_enabled", "outbound_mail_enabled", "outbound_push_enabled")
 
 
 def fail(message: str) -> None:
     raise SystemExit(message)
 
 
-def assert_flags(flags, label: str) -> None:
+def activated_posture(doc: dict) -> bool:
+    """True only for an explicitly declared post-activation cleanup/reap run."""
+    if doc.get("posture") != "post_activation":
+        return False
+    if doc.get("mode") not in CLEANUP_MODES:
+        fail("prepare/verify must not run in the post-activation posture")
+    return True
+
+
+def assert_flags(flags, label: str, activated: bool = False) -> None:
     if not isinstance(flags, dict):
         fail(f"{label} flags missing")
     if (flags.get("rental_catalog_v2") or {}).get("enabled") is not True:
@@ -34,9 +43,13 @@ def assert_flags(flags, label: str) -> None:
     wish = flags.get("wish") or {}
     if wish.get("lifecycle_enabled") is not True:
         fail(f"{label} wish.lifecycle_enabled must be true")
-    if wish.get("owner_matching_enabled") is not False:
-        fail(f"{label} wish.owner_matching_enabled must be false")
-    for key in LATER:
+    owner_expected = True if activated else False
+    if wish.get("owner_matching_enabled") is not owner_expected:
+        fail(f"{label} wish.owner_matching_enabled must be {owner_expected}")
+    for key in STAGE_FLAGS:
+        if wish.get(key) is not activated:
+            fail(f"{label} wish.{key} must be {activated}")
+    for key in OUTBOUND:
         if wish.get(key) is not False:
             fail(f"{label} wish.{key} must be false")
 
@@ -60,9 +73,11 @@ def main(argv: list[str]) -> int:
         fail("fixture evidence is invalid")
     if doc.get("flags_mutated") is True:
         fail("fixture workflow must not mutate flags")
-    assert_flags(doc.get("before_raw_flags") or doc.get("after_raw_flags") or {}, "fixture")
-    if doc.get("owner_matching_enabled") is not False:
-        fail("owner_matching_enabled must remain false")
+    activated = activated_posture(doc)
+    assert_flags(doc.get("before_raw_flags") or doc.get("after_raw_flags") or {}, "fixture", activated)
+    owner_expected = True if activated else False
+    if doc.get("owner_matching_enabled") is not owner_expected:
+        fail(f"owner_matching_enabled must be {owner_expected}")
     assert_clean(doc)
     print("FIXTURE_EVIDENCE_OK")
     return 0
