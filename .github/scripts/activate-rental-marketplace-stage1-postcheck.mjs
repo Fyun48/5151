@@ -652,6 +652,14 @@ export async function runPostActivationGate({
 async function main() {
   const spec = process.env.STAGE1_DOMAIN_DB_MODULE || "/app/src/db.js";
   const href = spec.startsWith("file:") ? spec : pathToFileURL(path.resolve(spec)).href;
+  // The running server loads its session signing secret from DATA_DIR
+  // (auth.env / session.secret) inside v3/src/env.js at module load. `docker exec`
+  // starts a fresh process that does not carry that value, so without this the
+  // postcheck would sign cookies with the "missing" fallback and every authenticated
+  // probe would come back 401 (owner_denied) even though the fixture accounts exist.
+  // DATA_DIR is part of the container config env, so the same data directory resolves.
+  const envSpec = process.env.STAGE1_ENV_MODULE || "/app/src/env.js";
+  await import(pathToFileURL(path.resolve(envSpec)).href);
   const [dbMod, authMod, listingMod, matchMod] = await Promise.all([
     import(href),
     import(pathToFileURL(path.resolve(process.env.STAGE1_AUTH_MODULE || "/app/src/auth.js")).href),
