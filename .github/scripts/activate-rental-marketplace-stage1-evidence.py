@@ -152,6 +152,12 @@ def assert_post_activation(block) -> None:
 def assert_runtime_contract(payload) -> None:
     if payload.get("uat_attestation") or payload.get("uat_attestation_bound") is True:
         fail("pre-activation PRODUCTION_UAT_PASS cannot satisfy post-activation evidence")
+    if payload.get("health") is not True:
+        fail("runtime health is not verified")
+    if payload.get("landing") is not True:
+        fail("runtime landing page is not verified (HTTP 200 with a non-empty body required)")
+    if payload.get("login") is not True:
+        fail("runtime login page is not verified (HTTP 200 with a non-empty body required)")
     assert_perf_smoke(payload.get("perf_smoke"))
     assert_functional_smoke(payload.get("functional_smoke"))
     assert_suppression(payload.get("suppression"))

@@ -20,6 +20,7 @@ import {
   activityScoreFromSignals,
   mapLegacyLifecycle,
 } from "./wishLifecycle.js";
+import { fixtureNamespacesCompatible } from "./stage1FixtureIsolation.js";
 
 export const MATCHABLE_WISH_LIFECYCLES = Object.freeze(["active", "needs_confirmation"]);
 export const BLOCKED_WISH_LIFECYCLES = Object.freeze(["draft", "paused", "completed", "expired", "blocked"]);
@@ -163,6 +164,7 @@ export function listingMatchSnapshot(row = {}, { catalog = defaultCatalog() } = 
     layout_text: String(row.layout || fields.layout || ""),
     listing_values,
     source: String(row.source || "self"),
+    fixture_namespace: String(row.fixture_namespace || "").trim(),
     updated_at: row.last_seen_at || row.first_seen_at || "",
   };
 }
@@ -202,6 +204,7 @@ export function wishMatchSnapshot(row = {}, { catalog = defaultCatalog() } = {})
     created_at: row.created_at || "",
     published_at: row.published_at || "",
     activity_score: Number(row.activity_score) || 0,
+    fixture_namespace: String(row.fixture_namespace || "").trim(),
     body: String(row.body || ""),
   };
 }
@@ -327,6 +330,9 @@ export function evaluateMatch(listing, wish, {
   }
   if (!isWishMatchable(wish, now)) {
     pushConflict(hard_conflicts, "lifecycle", "需求目前不可配對");
+  }
+  if (!fixtureNamespacesCompatible(listing, wish)) {
+    pushConflict(hard_conflicts, "fixture_namespace", "測試資料與正式需求不可交叉配對");
   }
 
   const loc = districtOverlap(listing.districts, wish.districts);

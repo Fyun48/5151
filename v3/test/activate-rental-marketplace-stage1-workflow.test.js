@@ -335,6 +335,222 @@ test("PR A domain still reserves owner_matching and is not reused as Stage 1", (
   assert.doesNotMatch(wf(WF_NAME), /ACTIVATE-PRA-PRODUCTION/);
 });
 
+test("Stage 1 failure/rollback evidence is still uploaded via always() steps", () => {
+  const text = wf(WF_NAME);
+  const pull = namedStep(text, "Pull NAS activation evidence");
+  const write = namedStep(text, "Write Stage 1 activation evidence");
+  const upload = namedStep(text, "Upload Stage 1 activation evidence");
+  const conclude = namedStep(text, "Conclude Stage 1 activation (fail-closed)");
+  const authorize = namedStep(text, "Authorize Stage 1 production activation (fail-closed)");
+  assert.match(authorize, /id: authorize/);
+  assert.match(authorize, /authorized=true/);
+  assert.match(pull, /always\(\)/);
+  assert.match(pull, /steps.authorize.outputs.authorized == 'true'/);
+  assert.match(pull, /steps.activate.outcome/);
+  assert.match(write, /if: \$\{\{ always\(\) \}\}/);
+  assert.match(upload, /if: \$\{\{ always\(\) \}\}/);
+  assert.match(write, /write-stage1-activation-artifact\.py/);
+  assert.match(conclude, /activate-rental-marketplace-stage1-evidence\.py --check-receipt/);
+  assert.match(conclude, /write-stage1-activation-artifact\.py --check-success/);
+  assert.match(conclude, /refusing PASS|is not PASS/);
+  assert.doesNotMatch(authorize, /if: \$\{\{ always\(\) \}\}/);
+});
+
+test("P1-5 unauthorized Stage 1 actor cannot take the NAS evidence pull path", () => {
+  const text = wf(WF_NAME);
+  const pull = namedStep(text, "Pull NAS activation evidence");
+  assert.match(pull, /NAS_SSH_KEY/);
+  assert.match(pull, /steps.authorize.outputs.authorized == 'true'/);
+  assert.match(namedStep(text, "Write Stage 1 activation evidence"), /if: \$\{\{ always\(\) \}\}/);
+  assert.doesNotMatch(namedStep(text, "Write Stage 1 activation evidence"), /NAS_SSH_KEY/);
+  assert.doesNotMatch(namedStep(text, "Copy Stage 1 activation helpers to NAS /tmp"), /if: \$\{\{ always\(\) \}\}/);
+  assert.doesNotMatch(namedStep(text, "Activate Stage 1 owner_matching on running v3"), /if: \$\{\{ always\(\) \}\}/);
+  assert.throws(() => runAuthorize({ ...GOOD, ACTOR: "cursor", TRIGGERING_ACTOR: "cursor[bot]" }), /not a durable Production activator|not the authorized deployer/);
+  assert.throws(() => runAuthorize({ ...GOOD, CONFIRM: "NO" }), /ACTIVATE-STAGE1-PRODUCTION/);
+  assert.throws(
+    () => runAuthorize({ ...GOOD, OWNER_AUTHORIZATION: "AUTHORIZE-STAGE1:wrong" }),
+    /AUTHORIZE-STAGE1/,
+  );
+});
+
+function completeSuccessCore() {
+  const after = {
+    rental_catalog_v2: { enabled: true },
+    wish: {
+      lifecycle_enabled: true,
+      owner_matching_enabled: true,
+      offer_enabled: false,
+      public_share_v2_enabled: false,
+      owner_notifications_enabled: false,
+      notifications_enabled: false,
+      digest_enabled: false,
+      outbound_mail_enabled: false,
+      outbound_push_enabled: false,
+    },
+  };
+  return {
+    ...goodSmoke(),
+    source_sha: GOOD.SOURCE_SHA,
+    image_digest: GOOD.IMAGE_DIGEST,
+    rollback_used: false,
+    backup_id: GOOD.BACKUP_ID,
+    backup_hash: GOOD.BACKUP_HASH,
+    backup_verified: true,
+    src_mount: "/mnt/Storage1/apps/5151/v3/src",
+    src_manifest_verified: true,
+    src_tree_sha256: "a".repeat(64),
+    durable_receipt: true,
+    verify_only: false,
+    receipt_path: "/DATA/AppData/591-tracker-v3/stage1-activation-receipt.json",
+    before_raw_flags: { ...after, wish: { ...after.wish, owner_matching_enabled: false } },
+    after_raw_flags: after,
+    before_counts: { total_posts: 1, total_open: 1 },
+    after_counts: { total_posts: 1, total_open: 1 },
+    runtime_public_flags: after,
+    privacy_smoke: { ok: true },
+    health: true,
+    landing: true,
+    login: true,
+    final_digest: GOOD.IMAGE_DIGEST,
+    final_oci_revision: GOOD.SOURCE_SHA,
+    fixture_run_id: "stage1-fix:20260918:000000:test-run",
+    fixture_cleanup: true,
+  };
+}
+
+test("Stage 1 success evidence still becomes ACTIVATION_OK after durable write", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "stage1-ok-"));
+  const core = path.join(dir, "core.json");
+  const out = path.join(dir, "out.json");
+  writeFileSync(core, JSON.stringify(completeSuccessCore()));
+  execFileSync("python3", [path.join(root, ".github/scripts/write-stage1-activation-artifact.py")], {
+    env: {
+      ...process.env,
+      STAGE1_CORE_PATH: core,
+      STAGE1_ROLLBACK_PATH: path.join(dir, "missing-rollback.json"),
+      STAGE1_EVIDENCE_OUT: out,
+      SOURCE_SHA: GOOD.SOURCE_SHA,
+      IMAGE_DIGEST: GOOD.IMAGE_DIGEST,
+      BACKUP_ID: GOOD.BACKUP_ID,
+      BACKUP_HASH: GOOD.BACKUP_HASH,
+    },
+  });
+  const doc = JSON.parse(readFileSync(out, "utf8"));
+  assert.equal(doc.ACTIVATION_OK, true);
+  assert.equal(doc.activation_result, "activated");
+  assert.match(checkEvidence("--check-receipt", doc), /EVIDENCE_RECEIPT_OK/);
+  assert.match(
+    execFileSync("python3", [path.join(root, ".github/scripts/write-stage1-activation-artifact.py"), "--check-success", out], { encoding: "utf8" }),
+    /STAGE1_SUCCESS_CONTRACT_OK/,
+  );
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("P1-6 success contract still fail-closes missing fields, wrong flags, digest or receipt", () => {
+  const writer = path.join(root, ".github/scripts/write-stage1-activation-artifact.py");
+  const run = (coreDoc) => {
+    const dir = mkdtempSync(path.join(tmpdir(), "stage1-p16-"));
+    const core = path.join(dir, "core.json");
+    const out = path.join(dir, "out.json");
+    writeFileSync(core, JSON.stringify(coreDoc));
+    execFileSync("python3", [writer], {
+      env: {
+        ...process.env,
+        STAGE1_CORE_PATH: core,
+        STAGE1_ROLLBACK_PATH: path.join(dir, "missing-rollback.json"),
+        STAGE1_EVIDENCE_OUT: out,
+        SOURCE_SHA: GOOD.SOURCE_SHA,
+        IMAGE_DIGEST: GOOD.IMAGE_DIGEST,
+        BACKUP_ID: GOOD.BACKUP_ID,
+        BACKUP_HASH: GOOD.BACKUP_HASH,
+      },
+    });
+    const doc = JSON.parse(readFileSync(out, "utf8"));
+    rmSync(dir, { recursive: true, force: true });
+    return doc;
+  };
+  const missingReceipt = completeSuccessCore();
+  delete missingReceipt.receipt_path;
+  assert.equal(run(missingReceipt).ACTIVATION_OK, false);
+  const missingDurable = completeSuccessCore();
+  delete missingDurable.durable_receipt;
+  assert.equal(run(missingDurable).ACTIVATION_OK, false);
+  const matchingOff = completeSuccessCore();
+  matchingOff.after_raw_flags.wish.owner_matching_enabled = false;
+  assert.equal(run(matchingOff).ACTIVATION_OK, false);
+  const stage2On = completeSuccessCore();
+  stage2On.after_raw_flags.wish.offer_enabled = true;
+  assert.equal(run(stage2On).ACTIVATION_OK, false);
+  const wrongDigest = completeSuccessCore();
+  wrongDigest.final_digest = "sha256:" + "b".repeat(64);
+  assert.equal(run(wrongDigest).ACTIVATION_OK, false);
+  const missingBackupVerified = completeSuccessCore();
+  delete missingBackupVerified.backup_verified;
+  assert.equal(run(missingBackupVerified).ACTIVATION_OK, false);
+});
+test("P1-7/P1-8 success contract requires fixture_run_id and fixture_cleanup", () => {
+  const writer = path.join(root, ".github/scripts/write-stage1-activation-artifact.py");
+  const run = (coreDoc) => {
+    const dir = mkdtempSync(path.join(tmpdir(), "stage1-p178-"));
+    const core = path.join(dir, "core.json");
+    const out = path.join(dir, "out.json");
+    writeFileSync(core, JSON.stringify(coreDoc));
+    execFileSync("python3", [writer], {
+      env: {
+        ...process.env,
+        STAGE1_CORE_PATH: core,
+        STAGE1_ROLLBACK_PATH: path.join(dir, "missing-rollback.json"),
+        STAGE1_EVIDENCE_OUT: out,
+        SOURCE_SHA: GOOD.SOURCE_SHA,
+        IMAGE_DIGEST: GOOD.IMAGE_DIGEST,
+        BACKUP_ID: GOOD.BACKUP_ID,
+        BACKUP_HASH: GOOD.BACKUP_HASH,
+      },
+    });
+    const doc = JSON.parse(readFileSync(out, "utf8"));
+    rmSync(dir, { recursive: true, force: true });
+    return doc;
+  };
+  const missingFixtureRun = completeSuccessCore();
+  delete missingFixtureRun.fixture_run_id;
+  assert.equal(run(missingFixtureRun).ACTIVATION_OK, false);
+  const cleanupFalse = completeSuccessCore();
+  cleanupFalse.fixture_cleanup = false;
+  assert.equal(run(cleanupFalse).ACTIVATION_OK, false);
+});
+
+test("P1-9 stale prior-run transient evidence cannot satisfy evidence_available", () => {
+  const writer = path.join(root, ".github/scripts/write-stage1-activation-artifact.py");
+  const dir = mkdtempSync(path.join(tmpdir(), "stage1-p19-"));
+  const core = path.join(dir, "core.json");
+  const out = path.join(dir, "out.json");
+  const stale = completeSuccessCore();
+  stale.workflow_run_id = "1111111111";
+  stale.workflow_attempt = "1";
+  writeFileSync(core, JSON.stringify(stale));
+  execFileSync("python3", [writer], {
+    env: {
+      ...process.env,
+      STAGE1_CORE_PATH: core,
+      STAGE1_ROLLBACK_PATH: path.join(dir, "missing-rollback.json"),
+      STAGE1_EVIDENCE_OUT: out,
+      WF_RUN_ID: "2222222222",
+      WF_ATTEMPT: "1",
+      SOURCE_SHA: GOOD.SOURCE_SHA,
+      IMAGE_DIGEST: GOOD.IMAGE_DIGEST,
+      BACKUP_ID: GOOD.BACKUP_ID,
+      BACKUP_HASH: GOOD.BACKUP_HASH,
+    },
+  });
+  const doc = JSON.parse(readFileSync(out, "utf8"));
+  assert.equal(doc.ACTIVATION_OK, false);
+  assert.equal(doc.evidence_available, false);
+  assert.equal(doc.activation_result, "evidence_unavailable");
+  rmSync(dir, { recursive: true, force: true });
+});
+
+
+
 test("Stage 1 activation does not change build, predeploy, deploy or PRA workflows", () => {
   for (const name of UNTOUCHED) {
     const text = wf(name);
@@ -437,6 +653,9 @@ function goodSmoke() {
       budget_ms: 5000,
       ok: true,
     },
+    health: true,
+    landing: true,
+    login: true,
     ACTIVATION_OK: true,
   };
 }
@@ -653,7 +872,11 @@ test("Stage 1 post-activation probes are required and fail-closed with compensat
   const text = wf(WF_NAME);
   assert.match(text, /activate-rental-marketplace-stage1-postcheck\.mjs/);
   assert.match(remote, /POSTCHECK_SCRIPT/);
-  assert.match(remote, /compensate_and_fail "verify-only post-activation probes failed"/);
+  // P1-10: verify-only recovery must not roll back merely because fixtures were cleaned.
+  assert.doesNotMatch(remote, /compensate_and_fail "verify-only post-activation probes failed"/);
+  assert.match(remote, /hydrate_runtime_on verify-only \|\| fail "verify-only/);
+  // The activate path still fails closed with the compensating rollback.
+  assert.match(remote, /hydrate_runtime_on \|\| compensate_and_fail "runtime hydrate\/public flag post-check failed"/);
   assert.match(remote, /run_post_activation_probes \|\| return 1/);
   assert.match(checkEvidence("--check-receipt", goodSmoke()), /EVIDENCE_RECEIPT_OK/);
   assert.throws(
@@ -684,4 +907,110 @@ test("Stage 1 post-activation probes are required and fail-closed with compensat
     }),
     /timed out|timeout|fail-closed/,
   );
+});
+test("P1-10 verify-only recovery never rolls back merely because fixtures were cleaned", () => {
+  const remote = readFileSync(REMOTE, "utf8");
+  const start = remote.indexOf('if [ "$PATH_KIND" = "verify-only" ]');
+  assert.ok(start >= 0, "verify-only recovery block missing");
+  const end = remote.indexOf("exit 0", start);
+  assert.ok(end > start, "verify-only recovery block has no exit");
+  const block = remote.slice(start, end);
+  // Runs the current-run verification without the fixture-dependent probes.
+  assert.match(block, /hydrate_runtime_on verify-only/);
+  // Must NOT roll back or mutate Production on a clean, already-activated Stage 1.
+  assert.doesNotMatch(block, /compensate_and_fail/);
+  assert.doesNotMatch(block, /run_domain rollback/);
+  assert.doesNotMatch(block, /saveRentalMarketplaceFlags/);
+  // Must not depend on re-creating fixtures.
+  assert.doesNotMatch(block, /run_fixture_domain/);
+  // The fixture-dependent post-activation probes run only for the activate path.
+  assert.match(remote, /if \[ "\$mode" = "activate" \]; then\s+run_post_activation_probes \|\| return 1/);
+  // hydrate_runtime_on requires the prior durable, cleaned activation receipt.
+  assert.match(remote, /verify-only prior receipt is not ACTIVATION_OK/);
+  assert.match(remote, /verify-only prior receipt is missing fixture_run_id/);
+  assert.match(remote, /verify-only prior receipt did not verify fixture cleanup/);
+  assert.match(remote, /verify-only requires runtime wish\.owner_matching_enabled true/);
+  // It retains the original authenticated post-activation evidence, marked as a verification run.
+  assert.match(remote, /prior\.get\("post_activation"\)/);
+  assert.match(remote, /current_run_is_verification/);
+  assert.match(remote, /fixtures_cleaned_by_prior_run/);
+});
+
+test("P1-10 verify-only still fails closed on identity, runtime or UAT substitution", () => {
+  const remote = readFileSync(REMOTE, "utf8");
+  // Fresh current-run runtime checks still apply in verify-only.
+  assert.match(remote, /verify-only requires runtime wish\.owner_matching_enabled true/);
+  assert.match(remote, /if agg_ms_n >= 5000 or exp_ms_n >= 5000:/);
+  assert.match(remote, /unauth summary is not fail-closed 401/);
+  assert.match(remote, /unauth detail is not fail-closed 401/);
+  assert.match(remote, /http_5xx observed during defined probes/);
+  assert.match(remote, /sqlite_busy observed during defined probes/);
+  // Wrong digest/revision/source/tree is rejected by the path classifier before verify-only.
+  const pathPy = readFileSync(PATH_PY, "utf8");
+  assert.match(pathPy, /receipt \{key\} does not match/);
+  assert.match(pathPy, /receipt is not ACTIVATION_OK/);
+  // Original authenticated evidence cannot be replaced by pre-activation UAT.
+  assert.match(remote, /pre-activation PRODUCTION_UAT_PASS cannot satisfy post-activation evidence/);
+});
+
+test("P1-11 cleanup semantic-validation failure is compensated (Stage 1 never left ON)", () => {
+  const remote = readFileSync(REMOTE, "utf8");
+  // transport/process failure is compensated...
+  assert.match(remote, /if ! run_fixture_domain cleanup-activated; then\s+compensate_and_fail "post-activation fixture cleanup failed"/);
+  // ...and so is a success exit whose cleanup JSON is malformed or semantically invalid.
+  assert.match(remote, /CLEANUP_SEMANTIC_RC=\$\?/);
+  assert.match(remote, /if \[ "\$CLEANUP_SEMANTIC_RC" -ne 0 \]; then\s+compensate_and_fail "post-activation fixture cleanup evidence validation failed"/);
+  // It runs with errexit temporarily disabled so a malformed JSON cannot bypass compensation.
+  const guard = remote.indexOf("CLEANUP_SEMANTIC_RC=$?");
+  assert.ok(guard > 0, "cleanup semantic guard missing");
+  assert.match(remote.slice(Math.max(0, guard - 2000), guard), /set \+e/);
+  // A valid cleanup result still flows on to the durable receipt.
+  assert.match(remote, /write_core_and_receipt false \|\| compensate_and_fail "durable receipt write failed after mutation"/);
+});
+
+test("P2-12 repeated verify-only replays keep the original activation run", () => {
+  const remote = readFileSync(REMOTE, "utf8");
+  assert.match(remote, /original_run_id = prev\.get\("original_run_id"\) or prev\.get\("workflow_run_id"\) or run_id/);
+  assert.match(remote, /original_attempt = prev\.get\("original_attempt"\) or prev\.get\("workflow_attempt"\) or attempt/);
+});
+
+test("P1-14 landing/login must be verified with HTTP 200 (no hardcoded PASS)", () => {
+  const remote = readFileSync(REMOTE, "utf8");
+  // runtime evidence derives landing/login from the probe statuses, not hardcoded true
+  assert.match(remote, /land_status, _land_ms = "\$land_probe"\.split\(\)/);
+  assert.match(remote, /login_status, _login_ms = "\$login_html_probe"\.split\(\)/);
+  assert.match(remote, /land_ok = \(/);
+  assert.match(remote, /and os\.path\.getsize\("\/tmp\/stage1-landing\.html"\) > 0/);
+  assert.match(remote, /login_ok = \(/);
+  assert.match(remote, /and os\.path\.getsize\("\/tmp\/stage1-login\.html"\) > 0/);
+  assert.match(remote, /if not land_ok:/);
+  assert.match(remote, /if not login_ok:/);
+  assert.match(remote, /"landing": land_ok,/);
+  assert.match(remote, /"login": login_ok,/);
+  assert.doesNotMatch(remote, /"landing": True,/);
+  assert.doesNotMatch(remote, /"login": True,/);
+  // the evidence contract rejects unproven health/landing/login
+  assert.throws(() => checkEvidence("--check-runtime", { ...goodSmoke(), health: false }), /health is not verified/);
+  assert.throws(() => checkEvidence("--check-runtime", { ...goodSmoke(), landing: false }), /landing page is not verified/);
+  assert.throws(() => checkEvidence("--check-runtime", { ...goodSmoke(), login: false }), /login page is not verified/);
+  assert.throws(() => checkEvidence("--check-receipt", { ...goodSmoke(), landing: false }), /landing page is not verified/);
+  assert.throws(() => checkEvidence("--check-receipt", { ...goodSmoke(), login: false }), /login page is not verified/);
+  // both 200 with non-empty bodies => runtime evidence may pass
+  assert.match(checkEvidence("--check-runtime", goodSmoke()), /EVIDENCE_RUNTIME_OK/);
+  // verify-only reuses the same checks but never rolls back
+  assert.match(remote, /hydrate_runtime_on verify-only \|\| fail "verify-only/);
+});
+
+test("P2-19 landing/login evidence requires the intended page markers", () => {
+  const remote = readFileSync(REMOTE, "utf8");
+  // landing must be the product page, not merely any 200 body
+  assert.match(remote, /"<title>吉比租房物件追蹤<\/title>" in land_html/);
+  // login must be the actual login form page
+  assert.match(remote, /"<title>登入 · 吉比租房物件追蹤<\/title>" in login_html/);
+  assert.match(remote, /'<form id="loginForm">' in login_html/);
+  assert.match(remote, /'type="password"' in login_html/);
+  assert.match(remote, /landing page did not serve the expected product page/);
+  assert.match(remote, /login page did not serve the expected login form/);
+  // verify-only still fails without rollback
+  assert.match(remote, /hydrate_runtime_on verify-only \|\| fail "verify-only/);
 });

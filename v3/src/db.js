@@ -276,6 +276,8 @@ import {
   sqlOpenSelfListing,
   isSelfListingId,
 } from "./selfListings.js";
+import { LISTING_SURFACE, applyBrowseIsolation, listingVisibleOnSurface, sqlExcludeFixtureRows } from "./stage1FixtureIsolation.js";
+import { ensureStage1FixtureSchema } from "./stage1FixtureRegistry.js";
 import {
   ensureMemberMediaSchema,
   saveMemberMedia as saveMemberMediaOn,
@@ -886,6 +888,7 @@ ensureDemandSchema(db);
 ensureFeedbackSchema(db);
 ensureFeedbackOutboxSchema(db);
 ensureSelfListingSchema(db);
+ensureStage1FixtureSchema(db);
 ensureRentalMatchIndexes(db);
 ensureWishOfferSchema(db);
 ensureRentalNotifySchema(db);
@@ -3136,6 +3139,9 @@ export function getListing(postId, userId, options = {}) {
   const row = db.prepare("SELECT * FROM listings WHERE post_id = ?").get(postId);
   if (!row) return row;
   const uid = resolveUserId(userId);
+  if (!listingVisibleOnSurface(row, { surface: LISTING_SURFACE.MEMBER_DETAIL, viewerId: uid })) {
+    return undefined;
+  }
   return decorateListing(withPersonal(row, uid), getSettings(uid), uid, options);
 }
 
@@ -3165,10 +3171,12 @@ export function listMatchCandidates(excludePostId, incoming = null) {
     }
   }
   const hints = incoming ? matchFocusHints(incoming) : { street: "", community: "", cover: "" };
+  const isolation = sqlExcludeFixtureRows(db, "listings");
   const rows = hints.street || hints.community || hints.cover
     ? db.prepare(
       `SELECT * FROM listings
        WHERE post_id != ?
+         AND ${isolation.sql}
          AND (
            (? != '' AND replace(replace(IFNULL(address, ''), ' ', ''), '-', '') LIKE '%' || ? || '%')
            OR (? != '' AND IFNULL(community_name, '') = ?)
@@ -3176,13 +3184,14 @@ export function listMatchCandidates(excludePostId, incoming = null) {
          )
        ORDER BY ${sqlWatchedFirst()}, IFNULL(offline, 0) DESC, last_seen_at DESC
        LIMIT 400`,
-    ).all(pid, hints.street, hints.street, hints.community, hints.community, hints.cover, hints.cover)
+    ).all(pid, ...isolation.params, hints.street, hints.street, hints.community, hints.community, hints.cover, hints.cover)
     : db.prepare(
       `SELECT * FROM listings
        WHERE post_id != ?
+         AND ${isolation.sql}
        ORDER BY ${sqlWatchedFirst()}, IFNULL(offline, 0) DESC, hidden DESC, viewed DESC, last_seen_at DESC
        LIMIT 800`,
-    ).all(pid);
+    ).all(pid, ...isolation.params);
   return rows.map((row) => overlayPersonal(row, anyone.get(Number(row.post_id))));
 }
 
@@ -3601,6 +3610,9 @@ function listingVisibilityClauses(clauses, params) {
     params.push(...disabled);
   }
   clauses.push(hpDisplayReadySql("listings"));
+  const isolation = sqlExcludeFixtureRows(db, "listings");
+  clauses.push(isolation.sql);
+  params.push(...isolation.params);
 }
 
 export function upsertListing(listing) {
@@ -5113,6 +5125,7 @@ export function listingCommutePatch(postId, userId, settingsOverride) {
   const uid = userId == null ? defaultUserId() : Number(userId) || 0;
   const row = db.prepare("SELECT * FROM listings WHERE post_id = ?").get(Number(postId));
   if (!row) return null;
+  if (!listingVisibleOnSurface(row, { surface: LISTING_SURFACE.MAP, viewerId: uid })) return null;
   const settings = settingsOverride || getSettings(uid);
   const lite = decorateListing(withPersonal(row, uid), settings, uid, { sameHouse: false });
   return {
@@ -5384,6 +5397,8 @@ export function listListings({
     listingVisibilityClauses(clauses, params);
     appendDistrictCandidates(districtNames, clauses, params, { preserveRelationsFor: voteUid });
     appendPriceCeilingCandidates(settings, clauses, params);
+  } else {
+    applyBrowseIsolation(clauses, params, db, "listings");
   }
   if (filter === "suspected") {
     clauses.push("match_level IN ('high', 'medium')");
@@ -6133,7 +6148,7 @@ export function stats(searchKeys, userId, settingsOverride, diagnostics) {
       );
       return !failedRouteJobs.has(jobKey);
     }).length,
-    dbTotal: listingCount(),
+    dbTotal: productListingCount(),
   };
   markStage("count_ms");
   const computedAt = Date.now();
@@ -6147,6 +6162,15 @@ export function stats(searchKeys, userId, settingsOverride, diagnostics) {
 
 export function listingCount() {
   return Number(db.prepare("SELECT COUNT(*) AS n FROM listings").get().n || 0);
+}
+
+/** P1-18: product-visible listing total. Uses the shared centralized fixture
+ * exclusion so member-facing stats never reveal an active Stage 1 fixture.
+ * The raw internal listingCount() stays physical for operational callers.
+ */
+export function productListingCount() {
+  const isolation = sqlExcludeFixtureRows(db, "listings");
+  return Number(db.prepare(`SELECT COUNT(*) AS n FROM listings WHERE ${isolation.sql}`).get().n || 0);
 }
 
 export function listingCountForSearch(searchKey) {

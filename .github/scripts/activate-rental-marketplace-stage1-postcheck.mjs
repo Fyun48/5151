@@ -492,41 +492,66 @@ function queryRows(db, sql) {
   }
 }
 
-export function loadProductionFixtures(db, {
+export function loadRegistryBoundFixtures(db, {
   listingFormFields,
   now = new Date(),
   catalog,
   isCounterfactuallyMatchable,
   evaluateCounterfactualMatch,
+  runId,
 } = {}) {
-  const listings = queryRows(db, `
-    SELECT *
-    FROM listings
-    WHERE COALESCE(source, '591') = 'self'
-    ORDER BY post_id DESC
-    LIMIT 80
-  `);
-  let users = queryRows(db, `
-    SELECT id, email, COALESCE(deleted_at, '') AS deleted_at
-    FROM users
-    ORDER BY id ASC
-    LIMIT 80
-  `);
-  if (!users.length) {
-    users = queryRows(db, `
-      SELECT id, email, '' AS deleted_at
-      FROM users
+  const stamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+  let registry = [];
+  try {
+    registry = db.prepare(`
+      SELECT *
+      FROM stage1_fixture_registry
+      WHERE namespace = 'stage1-fix'
+        AND cleaned_at IS NULL
+        AND status = 'active'
+        AND expires_at > ?
       ORDER BY id ASC
-      LIMIT 80
-    `);
+    `).all(stamp);
+  } catch {
+    registry = [];
   }
-  const wishes = queryRows(db, `
-    SELECT *
-    FROM demand_posts
-    ORDER BY id DESC
-    LIMIT 400
-  `);
-  return selectPostActivationFixtures({
+  if (!registry.length) {
+    throw new Error("post-activation fixtures missing: stage1_fixture_registry has no active fixtures");
+  }
+  const runIds = [...new Set(registry.map((row) => String(row.run_id || "")).filter(Boolean))];
+  const boundRun = String(runId || process.env.STAGE1_FIXTURE_RUN_ID || "").trim();
+  if (boundRun) {
+    registry = registry.filter((row) => String(row.run_id) === boundRun);
+  } else if (runIds.length !== 1) {
+    throw new Error("post-activation fixtures must bind a single uncleaned run_id; cleanup leftover runs first");
+  }
+  if (!registry.length) {
+    throw new Error("post-activation fixtures missing: bound run_id has no active fixtures");
+  }
+  const userIds = registry.filter((row) => row.kind === "user").map((row) => Number(row.row_id) || 0).filter(Boolean);
+  const listingIds = registry.filter((row) => row.kind === "listing").map((row) => Number(row.row_id) || 0).filter(Boolean);
+  const wishIds = registry.filter((row) => row.kind === "wish").map((row) => Number(row.row_id) || 0).filter(Boolean);
+  if (!userIds.length || !listingIds.length || !wishIds.length) {
+    throw new Error("post-activation fixtures missing: registry identities are incomplete");
+  }
+  const listings = db.prepare(
+    `SELECT * FROM listings WHERE post_id IN (${listingIds.map(() => "?").join(",")})`,
+  ).all(...listingIds);
+  let users = [];
+  try {
+    users = db.prepare(
+      `SELECT id, email, COALESCE(deleted_at, '') AS deleted_at
+       FROM users WHERE id IN (${userIds.map(() => "?").join(",")})`,
+    ).all(...userIds);
+  } catch {
+    users = db.prepare(
+      `SELECT id, email, '' AS deleted_at FROM users WHERE id IN (${userIds.map(() => "?").join(",")})`,
+    ).all(...userIds);
+  }
+  const wishes = db.prepare(
+    `SELECT * FROM demand_posts WHERE id IN (${wishIds.map(() => "?").join(",")})`,
+  ).all(...wishIds);
+  const selected = selectPostActivationFixtures({
     listings,
     users,
     wishes,
@@ -536,6 +561,52 @@ export function loadProductionFixtures(db, {
     isCounterfactuallyMatchable,
     evaluateCounterfactualMatch,
   });
+  const hardRows = registry.filter((row) => row.role === "wish_hard_conflict");
+  if (hardRows.length !== 1) {
+    throw new Error("post-activation fixtures rejected: exactly one hard-conflict registry row is required");
+  }
+  const hard = hardRows[0];
+  const hardWish = wishes.find((row) => Number(row.id) === Number(hard.row_id));
+  if (!hardWish) {
+    throw new Error("post-activation fixtures rejected: hard-conflict wish row is missing");
+  }
+  if (String(hardWish.fixture_namespace || "") !== String(hard.namespace || "")) {
+    throw new Error("post-activation fixtures rejected: hard-conflict wish is not in the bound fixture namespace");
+  }
+  const hardListing = listings.find((row) => Number(row.post_id || row.id) === Number(selected.listing_id));
+  if (!hardListing) {
+    throw new Error("post-activation fixtures rejected: bound fixture listing is missing for the hard-conflict control");
+  }
+  if (typeof evaluateCounterfactualMatch !== "function") {
+    throw new Error("post-activation fixtures rejected: the Match Engine counterfactual helper must be callable to inspect hard-conflict codes");
+  }
+  const hardResult = evaluateCounterfactualMatch(hardListing, hardWish, { catalog, now });
+  if (!hardResult || typeof hardResult !== "object") {
+    throw new Error("post-activation fixtures rejected: counterfactual helper returned no result");
+  }
+  if (hardResult.eligible === true) {
+    throw new Error("post-activation fixtures rejected: hard-conflict control was eligible");
+  }
+  const EXPECTED_HARD_CONFLICT = "condition:need_pet";
+  const hardCodes = (hardResult.hard_conflicts || []).map((row) => String(row?.code || ""));
+  if (!hardCodes.includes(EXPECTED_HARD_CONFLICT)) {
+    throw new Error(`post-activation fixtures rejected: hard-conflict control did not exercise ${EXPECTED_HARD_CONFLICT}`);
+  }
+  const unrelatedHardConflicts = hardCodes.filter((code) => code !== EXPECTED_HARD_CONFLICT);
+  if (unrelatedHardConflicts.length) {
+    throw new Error(`post-activation fixtures rejected: hard-conflict control had unrelated conflicts (${unrelatedHardConflicts.join(",")})`);
+  }
+  if (selected.suppressed.some((row) => row.token_hash === opaqueId(hardWish.public_token))) {
+    throw new Error("post-activation fixtures rejected: hard-conflict control was selected");
+  }
+  selected.hard_conflict_rejected = true;
+  selected.selector = "stage1_fixture_registry";
+  selected.limit_80_used = false;
+  return selected;
+}
+
+export function loadProductionFixtures(db, options = {}) {
+  return loadRegistryBoundFixtures(db, options);
 }
 
 export async function runPostActivationGate({

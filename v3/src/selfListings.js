@@ -27,6 +27,13 @@ import {
   normalizeSelfListingIdempotencyKey,
   selfListingCreateFingerprint,
 } from "./selfListingIdempotency.js";
+import { LISTING_SURFACE, listingVisibleOnSurface } from "./stage1FixtureIsolation.js";
+import {
+  ensureStage1FixtureSchema,
+  fixtureNamespaceFromIsolation,
+  isFixtureMaturityAuthorized,
+  registerFixtureRow,
+} from "./stage1FixtureRegistry.js";
 
 let listingCatalog = null;
 let listingFlags = {};
@@ -226,6 +233,7 @@ export function ensureSelfListingSchema(db) {
     "ALTER TABLE listings ADD COLUMN self_pledge_at TEXT",
     "ALTER TABLE listings ADD COLUMN self_deposit TEXT",
     "ALTER TABLE listings ADD COLUMN listing_condition_values TEXT",
+    "ALTER TABLE listings ADD COLUMN fixture_namespace TEXT",
   ]) {
     try {
       db.exec(sql);
@@ -249,6 +257,7 @@ export function ensureSelfListingSchema(db) {
   `);
   ensureSelfListingIdempotencySchema(db);
   ensureProfileSchema(db);
+  ensureStage1FixtureSchema(db);
 }
 
 export function sqlNotSelfSource() {
@@ -280,15 +289,15 @@ function httpError(message, status = 400, code = "") {
 }
 
 function withImmediate(db, fn) {
-  try { db.exec("PRAGMA busy_timeout=5000"); } catch { /* ignore */ }
+  try { db.exec("PRAGMA busy_timeout=8000"); } catch { /* ignore */ }
   let last;
-  for (let attempt = 0; attempt < 12; attempt++) {
+  for (let attempt = 0; attempt < 20; attempt++) {
     try {
       db.exec("BEGIN IMMEDIATE");
     } catch (error) {
       last = error;
       if (!/locked|busy/i.test(String(error.message || ""))) throw error;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20 * (attempt + 1));
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25 * (attempt + 1));
       continue;
     }
     try {
@@ -374,14 +383,15 @@ export function banSelfPublisher(db, userId, now = new Date()) {
   return until;
 }
 
-function assertCanPublish(db, userId, now = new Date()) {
+function assertCanPublish(db, userId, now = new Date(), { maturity } = {}) {
   const banned = Date.parse(selfBanUntil(db, userId));
   if (Number.isFinite(banned) && banned > nowMs(now)) {
     const when = new Date(banned).toISOString().slice(0, 10);
     throw httpError(`因不實刊登暫停上傳，直到 ${when}`, 403);
   }
   const created = Date.parse(userCreatedAt(db, userId));
-  if (Number.isFinite(created) && nowMs(now) - created < SELF_NEW_ACCOUNT_WAIT_MS) {
+  const skipWait = isFixtureMaturityAuthorized(db, userId, now, maturity);
+  if (!skipWait && Number.isFinite(created) && nowMs(now) - created < SELF_NEW_ACCOUNT_WAIT_MS) {
     throw httpError("新帳號註冊滿 24 小時後才能自行刊登，避免洗版", 403);
   }
   expireOpenSelfListings(db, now);
@@ -640,8 +650,12 @@ export function getSelfListing(db, postId, { viewerId = 0 } = {}) {
   expireOpenSelfListings(db);
   const row = getSelfRow(db, postId);
   if (!row) throw httpError("找不到這則站內刊登", 404);
-  const status = String(row.self_status || "open");
   const mine = Number(row.listed_by_user_id) === Number(viewerId);
+  const surface = mine ? LISTING_SURFACE.OWNER_SELF : LISTING_SURFACE.PUBLIC_DETAIL;
+  if (!listingVisibleOnSurface(row, { surface, viewerId })) {
+    throw httpError("找不到這則站內刊登", 404);
+  }
+  const status = String(row.self_status || "open");
   if (status !== "open" && !mine) throw httpError("這則刊登已關閉或隱藏", 404);
   return decorateSelfListing(row, { viewerId });
 }
@@ -659,7 +673,7 @@ function insertCreateIdempotency(db, uid, key, payloadHash, postId, now) {
   ).run(uid, key, payloadHash, postId, iso(now));
 }
 
-export function createSelfListing(db, userId, input = {}, now = new Date(), { matchCandidates } = {}) {
+export function createSelfListing(db, userId, input = {}, now = new Date(), { matchCandidates, maturity, isolation } = {}) {
   const uid = Number(userId) || 0;
   if (!uid) throw httpError("請先登入才能刊登", 401);
   const key = normalizeSelfListingIdempotencyKey(input.idempotency_key ?? input.idempotencyKey);
@@ -674,7 +688,7 @@ export function createSelfListing(db, userId, input = {}, now = new Date(), { ma
         return getSelfListing(db, existing.post_id, { viewerId: uid });
       }
     }
-    const created = insertOpenSelfListing(db, uid, input, now, { matchCandidates });
+    const created = insertOpenSelfListing(db, uid, input, now, { matchCandidates, maturity, isolation });
     if (key) {
       try {
         insertCreateIdempotency(db, uid, key, payloadHash, created.post_id, now);
@@ -700,8 +714,10 @@ export function createSelfListing(db, userId, input = {}, now = new Date(), { ma
   }
 }
 
-function insertOpenSelfListing(db, uid, input = {}, now = new Date(), { matchCandidates } = {}) {
-  assertCanPublish(db, uid, now);
+function insertOpenSelfListing(db, uid, input = {}, now = new Date(), { matchCandidates, maturity, isolation } = {}) {
+  assertCanPublish(db, uid, now, { maturity: maturity || isolation });
+  void input.fixture_namespace;
+  const fixtureNs = fixtureNamespaceFromIsolation(db, uid, now, isolation);
 
   const districts = normalizeWatchDistricts(
     input.district ? [input.district] : input.districts,
@@ -759,7 +775,8 @@ function insertOpenSelfListing(db, uid, input = {}, now = new Date(), { matchCan
 
   const created = iso(now);
   const expires = new Date(nowMs(now) + SELF_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString();
-  const postId = nextSelfPostId(db);
+  const postId = Number(isolation?.rowId) || nextSelfPostId(db);
+  if (typeof isolation?.onBeforeInsert === "function") isolation.onBeforeInsert({ postId, fixtureNs });
   const sourceKey = selfSourceKey({
     regionId: district.region,
     sectionId: district.id,
@@ -776,8 +793,9 @@ function insertOpenSelfListing(db, uid, input = {}, now = new Date(), { matchCan
       post_id, source_key, search_key, title, url, price, price_num,
       extra_fee, extra_fee_text, price_contain_text, extra_fees, extra_fees_fetched,
       address, area_name, layout, floor_name, kind_name, role_name, cover, tags,
-      refresh_time, first_seen_at, last_seen_at, last_event, viewed, watched
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, '', '', '[]', 1, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, 'new', 0, 0)
+      refresh_time, first_seen_at, last_seen_at, last_event, viewed, watched,
+      fixture_namespace
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, '', '', '[]', 1, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, 'new', 0, 0, ?)
   `).run(
     postId,
     sourceKey,
@@ -796,6 +814,7 @@ function insertOpenSelfListing(db, uid, input = {}, now = new Date(), { matchCan
     JSON.stringify(["吉比本站", ...selfTraitLabels(traitIds, extra.labels), depositLabel(deposit)].filter(Boolean)),
     created,
     created,
+    fixtureNs || null,
   );
 
   db.prepare(`
@@ -833,6 +852,17 @@ function insertOpenSelfListing(db, uid, input = {}, now = new Date(), { matchCan
     lineUrl,
     postId,
   );
+  if (fixtureNs && isolation?.runId && isolation.kind && isolation.role && isolation.registered !== true) {
+    registerFixtureRow(db, {
+      namespace: fixtureNs,
+      runId: isolation.runId,
+      kind: isolation.kind,
+      role: isolation.role,
+      rowId: postId,
+      now,
+    });
+  }
+  if (typeof isolation?.onAfterInsert === "function") isolation.onAfterInsert({ postId, fixtureNs });
   setPublisherFace(db, postId, uid);
 
   const listing = db.prepare("SELECT * FROM listings WHERE post_id = ?").get(postId);
@@ -1233,6 +1263,7 @@ export function reportSelfListing(db, userId, postId, reason = "", now = new Dat
 }
 
 export function keepSelfListingForViewer(row, uid, settings, listingInScope) {
+  if (!listingVisibleOnSurface(row, { surface: LISTING_SURFACE.BROWSE, viewerId: uid })) return false;
   if (!isSelfListingRow(row)) return true;
   if (row.mine === true) return true;
   if (Number(row.listed_by_user_id) === Number(uid)) return true;

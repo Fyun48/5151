@@ -23,6 +23,7 @@ import {
   postConfirmationLevel,
   recordMatchEvaluation,
 } from "./listingGroups.js";
+import { sqlExcludeFixtureRows } from "./stage1FixtureIsolation.js";
 
 export const RECONCILE_BATCH = 50;
 export const RECONCILE_CANDIDATE_LIMIT = 80;
@@ -108,6 +109,9 @@ export function blockMatchCandidates(db, incoming, { limit = RECONCILE_CANDIDATE
     params.push(lat, lng);
   }
   clauses.push(`(${blocks.join(" OR ")})`);
+  const isolation = sqlExcludeFixtureRows(db, "listings");
+  clauses.push(isolation.sql);
+  params.push(...isolation.params);
   if (district) {
     clauses.push("(IFNULL(address, '') LIKE '%' || ? || '%')");
     params.push(district);
