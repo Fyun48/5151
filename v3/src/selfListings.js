@@ -27,6 +27,8 @@ import {
   normalizeSelfListingIdempotencyKey,
   selfListingCreateFingerprint,
 } from "./selfListingIdempotency.js";
+import { LISTING_SURFACE, listingVisibleOnSurface } from "./stage1FixtureIsolation.js";
+import { ensureStage1FixtureSchema, isFixtureMaturityAuthorized } from "./stage1FixtureRegistry.js";
 
 let listingCatalog = null;
 let listingFlags = {};
@@ -226,6 +228,7 @@ export function ensureSelfListingSchema(db) {
     "ALTER TABLE listings ADD COLUMN self_pledge_at TEXT",
     "ALTER TABLE listings ADD COLUMN self_deposit TEXT",
     "ALTER TABLE listings ADD COLUMN listing_condition_values TEXT",
+    "ALTER TABLE listings ADD COLUMN fixture_namespace TEXT",
   ]) {
     try {
       db.exec(sql);
@@ -249,6 +252,7 @@ export function ensureSelfListingSchema(db) {
   `);
   ensureSelfListingIdempotencySchema(db);
   ensureProfileSchema(db);
+  ensureStage1FixtureSchema(db);
 }
 
 export function sqlNotSelfSource() {
@@ -374,14 +378,15 @@ export function banSelfPublisher(db, userId, now = new Date()) {
   return until;
 }
 
-function assertCanPublish(db, userId, now = new Date()) {
+function assertCanPublish(db, userId, now = new Date(), { maturity } = {}) {
   const banned = Date.parse(selfBanUntil(db, userId));
   if (Number.isFinite(banned) && banned > nowMs(now)) {
     const when = new Date(banned).toISOString().slice(0, 10);
     throw httpError(`因不實刊登暫停上傳，直到 ${when}`, 403);
   }
   const created = Date.parse(userCreatedAt(db, userId));
-  if (Number.isFinite(created) && nowMs(now) - created < SELF_NEW_ACCOUNT_WAIT_MS) {
+  const skipWait = isFixtureMaturityAuthorized(db, userId, now, maturity);
+  if (!skipWait && Number.isFinite(created) && nowMs(now) - created < SELF_NEW_ACCOUNT_WAIT_MS) {
     throw httpError("新帳號註冊滿 24 小時後才能自行刊登，避免洗版", 403);
   }
   expireOpenSelfListings(db, now);
@@ -640,8 +645,12 @@ export function getSelfListing(db, postId, { viewerId = 0 } = {}) {
   expireOpenSelfListings(db);
   const row = getSelfRow(db, postId);
   if (!row) throw httpError("找不到這則站內刊登", 404);
-  const status = String(row.self_status || "open");
   const mine = Number(row.listed_by_user_id) === Number(viewerId);
+  const surface = mine ? LISTING_SURFACE.OWNER_SELF : LISTING_SURFACE.PUBLIC_DETAIL;
+  if (!listingVisibleOnSurface(row, { surface, viewerId })) {
+    throw httpError("找不到這則站內刊登", 404);
+  }
+  const status = String(row.self_status || "open");
   if (status !== "open" && !mine) throw httpError("這則刊登已關閉或隱藏", 404);
   return decorateSelfListing(row, { viewerId });
 }
@@ -659,7 +668,7 @@ function insertCreateIdempotency(db, uid, key, payloadHash, postId, now) {
   ).run(uid, key, payloadHash, postId, iso(now));
 }
 
-export function createSelfListing(db, userId, input = {}, now = new Date(), { matchCandidates } = {}) {
+export function createSelfListing(db, userId, input = {}, now = new Date(), { matchCandidates, maturity } = {}) {
   const uid = Number(userId) || 0;
   if (!uid) throw httpError("請先登入才能刊登", 401);
   const key = normalizeSelfListingIdempotencyKey(input.idempotency_key ?? input.idempotencyKey);
@@ -674,7 +683,7 @@ export function createSelfListing(db, userId, input = {}, now = new Date(), { ma
         return getSelfListing(db, existing.post_id, { viewerId: uid });
       }
     }
-    const created = insertOpenSelfListing(db, uid, input, now, { matchCandidates });
+    const created = insertOpenSelfListing(db, uid, input, now, { matchCandidates, maturity });
     if (key) {
       try {
         insertCreateIdempotency(db, uid, key, payloadHash, created.post_id, now);
@@ -700,8 +709,8 @@ export function createSelfListing(db, userId, input = {}, now = new Date(), { ma
   }
 }
 
-function insertOpenSelfListing(db, uid, input = {}, now = new Date(), { matchCandidates } = {}) {
-  assertCanPublish(db, uid, now);
+function insertOpenSelfListing(db, uid, input = {}, now = new Date(), { matchCandidates, maturity } = {}) {
+  assertCanPublish(db, uid, now, { maturity });
 
   const districts = normalizeWatchDistricts(
     input.district ? [input.district] : input.districts,
@@ -1233,6 +1242,7 @@ export function reportSelfListing(db, userId, postId, reason = "", now = new Dat
 }
 
 export function keepSelfListingForViewer(row, uid, settings, listingInScope) {
+  if (!listingVisibleOnSurface(row, { surface: LISTING_SURFACE.BROWSE, viewerId: uid })) return false;
   if (!isSelfListingRow(row)) return true;
   if (row.mine === true) return true;
   if (Number(row.listed_by_user_id) === Number(uid)) return true;

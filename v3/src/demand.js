@@ -38,6 +38,8 @@ import {
   WISH_CONFIRM_GRACE_DAYS,
   WISH_CONTINUOUS_ACTIVE_DAYS,
 } from "./wishLifecycle.js";
+import { WISH_SURFACE, sqlExcludeFixtureRows, wishVisibleOnSurface } from "./stage1FixtureIsolation.js";
+import { ensureStage1FixtureSchema, isFixtureMaturityAuthorized } from "./stage1FixtureRegistry.js";
 
 export const DEMAND_MAX_OPEN = 1;
 export const DEMAND_TTL_DAYS = 14;
@@ -182,6 +184,7 @@ export function ensureDemandSchema(db) {
   `);
   ensureDemandMatchDistrictSchema(db);
   ensureDemandMatchGenerationSchema(db);
+  ensureStage1FixtureSchema(db);
 }
 
 export function ensureDemandMatchGenerationSchema(db) {
@@ -357,6 +360,7 @@ function addWishColumns(db) {
     ["condition_choices", "TEXT"],
     ["closed_reason", "TEXT"],
     ["lifecycle_migrated_at", "TEXT"],
+    ["fixture_namespace", "TEXT"],
   ];
   for (const [name, def] of additions) {
     if (!cols.has(name)) db.exec(`ALTER TABLE demand_posts ADD COLUMN ${name} ${def}`);
@@ -1112,6 +1116,7 @@ function matchesFilters(row, filters = {}) {
 
 export function listDemandPosts(db, { viewerId = 0, mine = false, ...filters } = {}) {
   expireOpenPosts(db);
+  const isolation = sqlExcludeFixtureRows(db, "demand_posts");
   const rows = mine && viewerId
     ? db.prepare(
       `SELECT * FROM demand_posts
@@ -1121,8 +1126,9 @@ export function listDemandPosts(db, { viewerId = 0, mine = false, ...filters } =
     : db.prepare(
       `SELECT * FROM demand_posts
        WHERE status = 'open'
+         AND ${isolation.sql}
        ORDER BY COALESCE(updated_at, published_at, created_at) DESC, id DESC LIMIT 80`,
-    ).all();
+    ).all(...isolation.params);
   const filtered = mine ? rows : rows.filter((row) => matchesFilters(row, filters));
   filtered.sort((a, b) => {
     const ta = recencyStamp(a);
@@ -1143,6 +1149,10 @@ export function getDemandPost(db, postId, { viewerId = 0, publicOnly = false, al
   const row = rowByRef(db, postId);
   if (!row) throw httpError("找不到這則許願房", 404);
   const mine = Number(row.user_id) === Number(viewerId);
+  const surface = mine && !publicOnly ? WISH_SURFACE.MINE : WISH_SURFACE.PUBLIC_DETAIL;
+  if (!wishVisibleOnSurface(row, { surface, viewerId })) {
+    throw httpError("找不到這則許願房", 404);
+  }
   const numeric = /^\d+$/.test(String(postId || "").trim());
   if (numeric && !allowNumeric && (publicOnly || !mine) && hasWishColumn(db, "legacy_numeric_share") && !Number(row.legacy_numeric_share)) {
     throw httpError("找不到這則許願房", 404);
@@ -1301,11 +1311,12 @@ function applyPublishInPlace(db, row, fields, now) {
   });
 }
 
-export function createDemandPost(db, userId, input = {}, now = new Date()) {
+export function createDemandPost(db, userId, input = {}, now = new Date(), options = {}) {
   const uid = Number(userId) || 0;
   if (!uid) throw httpError("請先登入", 401);
   const asDraft = input.draft === true || input.status === "draft";
-  if (!asDraft) assertMatureAccount(db, uid, now, "刊登許願房");
+  const skipWait = isFixtureMaturityAuthorized(db, uid, now, options.maturity);
+  if (!asDraft && !skipWait) assertMatureAccount(db, uid, now, "刊登許願房");
   expireOpenPosts(db, now);
   const fields = normalizeWishInput(db, uid, input);
   if (!asDraft) assertPublishable(fields);

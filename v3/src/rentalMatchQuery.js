@@ -46,6 +46,8 @@ import {
   wishMatchSnapshot,
 } from "./rentalMatch.js";
 import { attachOfferCtas } from "./wishOffers.js";
+import { sqlExcludeFixtureRows, sqlWishMatchesListingNamespace } from "./stage1FixtureIsolation.js";
+import { ensureStage1FixtureSchema } from "./stage1FixtureRegistry.js";
 
 let catalogCache = defaultCatalog();
 let flagsCache = {};
@@ -69,6 +71,7 @@ export function currentMatchFlags() {
 export function ensureRentalMatchIndexes(db) {
   ensureDemandMatchDistrictSchema(db);
   ensureDemandMatchGenerationSchema(db);
+  ensureStage1FixtureSchema(db);
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_demand_match_open
       ON demand_posts(status, lifecycle, rent_max, id)
@@ -228,10 +231,11 @@ const CANDIDATE_COLUMNS = `
   p.id, p.user_id, p.districts, p.city, p.rent_min, p.rent_max, p.layout, p.housing_type,
   p.ping_min, p.must_have, p.nice_to_have, p.avoid, p.condition_choices,
   p.status, p.lifecycle, p.public_token, p.updated_at, p.published_at, p.created_at,
-  p.last_confirmed_at, p.last_active_at, p.move_in_date, p.lease_duration, p.includes_management, p.mrt_walk
+  p.last_confirmed_at, p.last_active_at, p.move_in_date, p.lease_duration, p.includes_management, p.mrt_walk,
+  p.fixture_namespace
 `;
 
-function candidateSql(listing, { afterId = 0, limit = MATCH_CANDIDATE_CHUNK } = {}) {
+function candidateSql(listing, { afterId = 0, limit = MATCH_CANDIDATE_CHUNK, db = null } = {}) {
   const districts = listing.districts || [];
   const rent = Number(listing.rent) || 0;
   const params = [];
@@ -265,6 +269,9 @@ function candidateSql(listing, { afterId = 0, limit = MATCH_CANDIDATE_CHUNK } = 
     sql += " AND (p.rent_max = 0 OR p.rent_max >= ?)";
     params.push(rent);
   }
+  const isolation = sqlWishMatchesListingNamespace(db, listing.fixture_namespace, "p");
+  sql += ` AND ${isolation.sql}`;
+  params.push(...isolation.params);
   sql += " ORDER BY p.id ASC LIMIT ?";
   params.push(limit);
   return { sql, params };
@@ -272,7 +279,7 @@ function candidateSql(listing, { afterId = 0, limit = MATCH_CANDIDATE_CHUNK } = 
 
 export function explainMatchCandidatePlan(db, listing) {
   ensureRentalMatchIndexes(db);
-  const { sql, params } = candidateSql(listing, { afterId: 0, limit: MATCH_CANDIDATE_CHUNK });
+  const { sql, params } = candidateSql(listing, { afterId: 0, limit: MATCH_CANDIDATE_CHUNK, db });
   return db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params);
 }
 
@@ -281,7 +288,7 @@ function queryAllCandidateWishes(db, listing) {
   const rows = [];
   let afterId = 0;
   while (true) {
-    const { sql, params } = candidateSql(listing, { afterId, limit: MATCH_CANDIDATE_CHUNK });
+    const { sql, params } = candidateSql(listing, { afterId, limit: MATCH_CANDIDATE_CHUNK, db });
     const chunk = db.prepare(sql).all(...params);
     if (!chunk.length) break;
     rows.push(...chunk);
@@ -454,15 +461,28 @@ export function computeListingMatches(db, listing, { now = new Date(), rows = nu
 function computeListingMatchesBatch(db, listings, now = new Date()) {
   expireOpenPosts(db, now);
   if (!listings.length) return [];
-  const districts = [...new Set(listings.flatMap((row) => row.districts || []))];
-  const rents = listings.map((row) => Number(row.rent) || 0).filter((n) => n > 0);
-  const probe = {
-    districts,
-    rent: rents.length ? Math.min(...rents) : 0,
-  };
-  const rows = queryAllCandidateWishes(db, probe);
-  const activityByUser = preloadActivityByUser(db, rows, now);
-  return listings.map((listing) => computeListingMatches(db, listing, { now, rows, activityByUser }));
+  const groups = new Map();
+  for (const listing of listings) {
+    const key = String(listing.fixture_namespace || "");
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(listing);
+  }
+  const byId = new Map();
+  for (const group of groups.values()) {
+    const districts = [...new Set(group.flatMap((row) => row.districts || []))];
+    const rents = group.map((row) => Number(row.rent) || 0).filter((n) => n > 0);
+    const probe = {
+      districts,
+      rent: rents.length ? Math.min(...rents) : 0,
+      fixture_namespace: group[0].fixture_namespace || "",
+    };
+    const rows = queryAllCandidateWishes(db, probe);
+    const activityByUser = preloadActivityByUser(db, rows, now);
+    for (const listing of group) {
+      byId.set(listing.id, computeListingMatches(db, listing, { now, rows, activityByUser }));
+    }
+  }
+  return listings.map((listing) => byId.get(listing.id));
 }
 
 export function ownerListingMatchSummary(db, postId, userId, now = new Date()) {
@@ -684,6 +704,9 @@ function aggregateSql(filters, { afterId = 0, limit = AGGREGATE_SCAN_CHUNK } = {
     sql += " AND (p.rent_min = 0 OR p.rent_min <= ?)";
     params.push(filters.rent_max);
   }
+  const isolation = sqlExcludeFixtureRows(null, "demand_posts", "p");
+  sql += ` AND ${isolation.sql}`;
+  params.push(...isolation.params);
   sql += " ORDER BY p.id ASC LIMIT ?";
   params.push(limit);
   return { sql, params };
