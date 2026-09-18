@@ -1,7 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { cleanupUatFixtures, createUatFixtures } from "../../.github/scripts/production-uat-stages-wiring.mjs";
+
+const WIRING_SRC = readFileSync(
+  path.join(path.dirname(fileURLToPath(import.meta.url)), "../../.github/scripts/production-uat-stages-wiring.mjs"),
+  "utf8",
+);
 
 const ROLE = Object.freeze({
   OWNER_A: "owner_a",
@@ -168,3 +176,22 @@ test("UAT cleanup reports leftovers instead of passing silently", async () => {
   assert.match(result.reason, /registry rows were not cleaned/);
   assert.equal(result.registry_leftover_runs, 2);
 });
+
+test("UAT wiring hydrates the demand and listing modules a fresh process would not have", () => {
+  // Regression for the Production 503 wish_lifecycle_off: demand.js reads an
+  // in-process flag snapshot, so a fresh `docker exec` process must hydrate it
+  // exactly as stage1-fixture-domain.mjs does.
+  assert.match(WIRING_SRC, /demandMod\.setRentalMarketplaceFlags\(flags\)/);
+  assert.match(WIRING_SRC, /demandMod\.setRentalCatalogCache\(catalog\)/);
+  assert.match(WIRING_SRC, /listingMod\.setSelfListingCatalog\(catalog, flags\)/);
+  assert.match(WIRING_SRC, /await import\(pathToFileURL\(path\.resolve\(envSpec\)\)\.href\)/);
+});
+
+test("UAT wiring records ASCII status and code for a fatal domain refusal", () => {
+  // The SSH transport can mangle non-ASCII text in the log, so the fatal record
+  // must carry the machine-readable status/code.
+  assert.match(WIRING_SRC, /fatal = `status=\$\{Number\(error\?\.status \|\| 0\)\} code=\$\{String\(error\?\.code \|\| ""\)\}/);
+  assert.match(WIRING_SRC, /console\.error\("UAT_FATAL " \+ fatal\)/);
+  assert.match(WIRING_SRC, /if \(!doc\) \{/);
+});
+
