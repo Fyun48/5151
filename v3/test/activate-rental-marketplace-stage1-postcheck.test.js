@@ -1,5 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   evaluateCounterfactualMatch,
   isCounterfactuallyMatchable,
@@ -11,6 +14,8 @@ import {
   publicPostActivationEvidence,
   POST_ACTIVATION_SOURCE,
 } from "../../.github/scripts/activate-rental-marketplace-stage1-postcheck.mjs";
+
+const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 const pausedToken = "paused-token-aaa";
 const completedToken = "completed-token-bbb";
@@ -256,3 +261,17 @@ test("post-activation probes fail-closed on 5xx, sqlite busy, and timeout", asyn
   );
   assert.equal(opaqueId("x").length, 12);
 });
+
+test("Stage 1 postcheck loads the app env module so session cookies sign with the server secret", () => {
+  // `docker exec` does not carry the secret that v3/src/env.js derives from
+  // DATA_DIR, so the postcheck must import the env module before using auth.js;
+  // otherwise every authenticated probe returns 401 owner_denied in Production.
+  const source = readFileSync(path.join(root, ".github/scripts/activate-rental-marketplace-stage1-postcheck.mjs"), "utf8");
+  assert.match(source, /STAGE1_ENV_MODULE \|\| "\/app\/src\/env\.js"/);
+  const envIdx = source.indexOf('process.env.STAGE1_ENV_MODULE || "/app/src/env.js"');
+  const authIdx = source.indexOf("STAGE1_AUTH_MODULE");
+  assert.ok(envIdx > 0 && authIdx > 0, "postcheck env/auth module wiring missing");
+  assert.ok(envIdx < authIdx, "env module must be loaded before auth module");
+  assert.match(source, /await import\(pathToFileURL\(path\.resolve\(envSpec\)\)\.href\)/);
+});
+
