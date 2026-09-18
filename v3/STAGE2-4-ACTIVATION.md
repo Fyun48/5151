@@ -102,3 +102,42 @@ Remote 端（NAS）另會驗證：running `Config.Image` digest pin、`RepoDiges
 - `v3/test/activate-rental-marketplace-stages-workflow.test.js`：workflow 授權／SHA pin／remote 閘門、
   path classifier、evidence 契約與 postcheck 純函式（含 P1-22 電話邊界）。
   python 相關案例在沒有 `python3` 的主機上會 skip，於 CI 執行。
+
+## 實跑後修正（3 個真實缺陷）
+
+本框架第一次真正跑在 Ubuntu CI 與 Production 上時，暴露三個「單元測試用假 fixture 看不到」的缺陷；
+三者都已修正並加上回歸守護：
+
+1. `activate-rental-marketplace-stages-path.py` / `-evidence.py` 的 `EARLIER_FLAGS` 少了 key `4`，
+   而 `-remote.sh` 內嵌的 `earlier` 對照表同樣缺 `4`。這會讓 **Stage 4 在 Production 直接
+   `KeyError` 中止**（在任何寫入之前）。守護：`Staged scripts enumerate every target stage in every
+   stage map`（純文字結構測試，任何主機都能跑，不需要 python）。
+2. `-evidence.py` 的 `wish_of()` 只認得 `inspect` 快照的 `raw_flags` 形狀，因此 domain `activate`
+   結果（`after_raw_flags` / `before_raw_flags`）一律解析成空的 wish，導致成功啟用被回報成一堆
+   「flag was not ON/OFF」。守護：domain 測試對每個階段明列 `earlierStageFlags()` /
+   `laterStageFlags()` 契約。
+3. `-evidence.py` 把 `redaction` 的**每一個**條目都當成必須為 `true` 的布林檢查，但
+   `-postcheck.mjs` 的 `leak_report` 是**洩漏清單（陣列）**；零洩漏（正確結果）時
+   `leak_report = []` 是 falsy，於是啟用被誤判失敗。現在 `REDACTION_CHECKS` 與
+   `REDACTION_REPORTS` 分開處理：報告必須是**明確的空陣列**，非空即為硬失敗；未知的 key 必須是
+   boolean 且為 true（fail-closed）。守護：`Staged evidence contract separates redaction checks
+   from the leak report`，且 fixture 改為**直接呼叫真實的 `buildRedactionChecks()`**，形狀無法再漂移。
+
+## 復原：啟用已成功但契約判定失敗時
+
+若 remote 已印出 `STAGES_ACTIVATION_OK` 且 NAS 已有 durable receipt，代表 flag **確實已開啟**；
+此時**不要** rollback（rollback 只在目標階段尚未開啟時使用）。正確做法是同 identity 重跑：
+
+1. 修正契約缺陷並合併到 `master`。
+2. 用**完全相同**的 `target_stage` / `source_sha` / `image_digest` / `backup_id` / `backup_hash` 重新
+   `workflow_dispatch`。
+3. path classifier 會因為 NAS 上已有相符 receipt 而歸類為 `verify-only`（`activate-already-on`
+   no-op），只做驗證與證據，不重複寫入。
+
+## 部署說明
+
+本框架全部位於 `.github/` 與 `v3/test/`、`v3/*.md`；NAS 端的 helper 由本 workflow 自己以
+`appleboy/scp-action` 從 master checkout 複製到 `/tmp/5151-stages-activate-helpers`。
+因此**不需要**為了本框架而部署 v3；只有 `v3/src`、`v3/public` 有變更時才需要走
+build → predeploy-check → deploy-v3，並以新的 digest / backup 重新取得 Owner 授權。
+

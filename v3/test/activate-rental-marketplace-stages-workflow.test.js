@@ -5,6 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildRedactionChecks } from "../../.github/scripts/activate-rental-marketplace-stages-postcheck.mjs";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const WF_NAME = "activate-rental-marketplace-stages.yml";
@@ -335,6 +336,24 @@ pythonTest("Staged path classifier verify-only needs a matching durable receipt"
 });
 
 
+/**
+ * Build the redaction block from the real postcheck module so this fixture can
+ * never drift from the producer's shape. `leak_report` is an array (the leaks
+ * found), not a boolean, and treating it as a boolean previously failed the
+ * evidence contract precisely when zero leaks were found.
+ */
+function cleanRedaction() {
+  return buildRedactionChecks({
+    gates: {
+      aggregate: { status: 404, code: "owner_matching_disabled", body: { error: "x", code: "owner_matching_disabled" } },
+      offers: { status: 404, code: "wish_offer_disabled", body: { error: "y", code: "wish_offer_disabled" } },
+      shares: { status: 404, code: "share_disabled", body: { error: "z", code: "share_disabled" } },
+      notifications: { status: 200, code: "", body: { enabled: false } },
+      notifications_anonymous: { status: 401, code: "", body: {} },
+    },
+  });
+}
+
 function postcheckDoc(stage, overrides = {}) {
   return {
     schema: "rental-marketplace-stages-post-activation/v1",
@@ -352,11 +371,7 @@ function postcheckDoc(stage, overrides = {}) {
       outbound_off: true,
       privacy_redaction: true,
     },
-    redaction: {
-      probe_bodies_without_pii: true,
-      closed_gate_responses_are_opaque: true,
-      authenticated_probe_requires_session: true,
-    },
+    redaction: cleanRedaction(),
     ...overrides,
   };
 }
@@ -626,5 +641,64 @@ test("Staged scripts enumerate every target stage in every stage map (guards the
       assert.ok(block.includes(stage), `postcheck ${mapName} does not enumerate stage ${stage}`);
     }
   }
+});
+
+pythonTest("Staged evidence contract separates redaction checks from the leak report", () => {
+  // Regression guard for a real Production failure: `buildRedactionChecks()`
+  // returns `leak_report` as an array (the leaks found), so treating every
+  // redaction entry as a boolean check failed the contract precisely when zero
+  // leaks were found — which is the correct, desired outcome.
+  const fixture = postcheckDoc(2);
+  assert.ok(Array.isArray(fixture.redaction.leak_report), "fixture must mirror the producer shape");
+  assert.deepEqual(fixture.redaction.leak_report, []);
+  const base = {
+    stage: 2,
+    klass: "activate",
+    inspect: { mode: "inspect", raw_flags: flags({ stage: 1 }) },
+    result: { mode: "activate", before_raw_flags: flags({ stage: 1 }), after_raw_flags: flags({ stage: 2 }) },
+    status: { phase: "after-verify", mutated: true },
+  };
+
+  const clean = runEvidence({ ...base, postcheck: fixture });
+  assert.equal(clean.ok, true, clean.stdout);
+  assert.deepEqual(clean.evidence.problems, []);
+  assert.equal(clean.hasReceipt, true);
+
+  const leaked = runEvidence({
+    ...base,
+    postcheck: postcheckDoc(2, {
+      redaction: { ...fixture.redaction, leak_report: [{ probe: "offers", kind: "phone" }] },
+    }),
+  });
+  assert.equal(leaked.ok, false);
+  assert.ok(leaked.evidence.problems.some((p) => /privacy redaction leak_report reported leaks/.test(p)));
+  assert.equal(leaked.hasReceipt, false);
+
+  const absent = runEvidence({
+    ...base,
+    postcheck: postcheckDoc(2, {
+      redaction: {
+        probe_bodies_without_pii: true,
+        closed_gate_responses_are_opaque: true,
+        authenticated_probe_requires_session: true,
+      },
+    }),
+  });
+  assert.equal(absent.ok, false);
+  assert.ok(absent.evidence.problems.some((p) => /privacy redaction leak_report report missing/.test(p)));
+
+  const unverified = runEvidence({
+    ...base,
+    postcheck: postcheckDoc(2, { redaction: { ...fixture.redaction, probe_bodies_without_pii: false } }),
+  });
+  assert.equal(unverified.ok, false);
+  assert.ok(unverified.evidence.problems.some((p) => /privacy redaction probe_bodies_without_pii not verified/.test(p)));
+
+  const unknown = runEvidence({
+    ...base,
+    postcheck: postcheckDoc(2, { redaction: { ...fixture.redaction, mystery_signal: "ok" } }),
+  });
+  assert.equal(unknown.ok, false);
+  assert.ok(unknown.evidence.problems.some((p) => /privacy redaction mystery_signal is not a boolean check/.test(p)));
 });
 
