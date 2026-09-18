@@ -192,7 +192,14 @@ export function classifyGates({ gates, stage }) {
     targetServing = reachable(gates.offers) && !offerRefused && gates.offers.status !== 404;
   } else if (target === 3) {
     targetSignal = "share_v2_gate_open";
-    targetServing = reachable(gates.shares) && !shareRefused && gates.shares.status !== 404;
+    // The probe posts to a sentinel room id that can never exist, so an OPEN
+    // share gate still answers 404 ("room not found") without any code field.
+    // The discriminating signal is therefore the absence of the share_disabled
+    // code, not the status: requiring `status !== 404` (copied from the Stage 2
+    // offers probe, which answers 200) made Stage 3 impossible to ever satisfy
+    // and caused a correct activation to be rolled back. A closed gate is still
+    // detected, because it is exactly the case that returns share_disabled.
+    targetServing = reachable(gates.shares) && !shareRefused;
   } else {
     targetSignal = "rental_notify_enabled";
     targetServing = notificationsEnabled;
