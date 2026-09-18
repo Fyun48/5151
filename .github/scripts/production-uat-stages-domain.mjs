@@ -233,6 +233,42 @@ export function pendingOffersFor(db, wishId, ownerUserId) {
   );
 }
 
+/** Read-only: the dock delivery row for one notification event. */
+export function dockDeliveryFor(db, eventId, channel = "dock") {
+  if (!Number(eventId)) return null;
+  try {
+    return db
+      .prepare("SELECT id, channel, status FROM rental_notify_deliveries WHERE event_id = ? AND channel = ? ORDER BY id DESC LIMIT 1")
+      .get(Number(eventId), String(channel)) || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Read-only: how many notification events exist for one subject reference. */
+export function notifyEventCount(db, subjectRef) {
+  try {
+    return countRows(db, "SELECT COUNT(*) AS n FROM rental_notify_events WHERE subject_ref = ?", String(subjectRef || ""));
+  } catch {
+    return -1;
+  }
+}
+
+/** Read-only: dock delivery rows pointing at one subject reference. */
+export function dockDeliveryCountForSubject(db, subjectRef) {
+  try {
+    return countRows(
+      db,
+      `SELECT COUNT(*) AS n FROM rental_notify_deliveries d
+       JOIN rental_notify_events e ON e.id = d.event_id
+       WHERE d.channel = 'dock' AND e.subject_ref = ?`,
+      String(subjectRef || ""),
+    );
+  } catch {
+    return -1;
+  }
+}
+
 export async function runStage2Items({ db, helpers, ctx, recorder }) {
   await recorder.run(itemById("2.1"), async () => {
     const gates = helpers.assertCreateOfferGates(db, {
@@ -513,16 +549,33 @@ export async function runStage4Items({ db, helpers, ctx, recorder }) {
 
   await recorder.run(itemById("4.1"), async () => {
     helpers.saveRentalNotifyPrefs(db, ctx.notifyUserId, { lifecycle_reminder: true, channel_dock: true }, ctx.now);
+    // Drain anything queued earlier so the subsequent dock write is attributable.
+    helpers.deliverQueuedNotifications(db, ctx.now, { limit: 50 });
     ctx.dockRows.length = 0;
     const emitted = helpers.emitRentalNotifyEvent(
       db,
       baseEvent("owner_new_match_available", `uat-match:${ctx.namespace}`),
     );
+    const queued = dockDeliveryFor(db, emitted?.event_id || 0);
+    const pass = helpers.deliverQueuedNotifications(db, ctx.now, { limit: 50 });
+    const settled = dockDeliveryFor(db, emitted?.event_id || 0);
+    const ok =
+      emitted?.emitted === true &&
+      queued?.status === "queued" &&
+      settled?.status === "delivered" &&
+      ctx.dockRows.length >= 1;
     return {
-      ok: emitted?.emitted === true,
-      expected: "a new-match event is emitted and reaches the dock",
-      observed: { emitted: emitted?.emitted, reason: emitted?.reason || "", dock_rows: ctx.dockRows.length },
-      reason: emitted?.emitted === true ? "" : `new-match event not emitted (${emitted?.reason || "no reason"})`,
+      ok,
+      expected: "the unique new-match event is queued for dock delivery and produces a real dock write",
+      observed: {
+        emitted: emitted?.emitted,
+        event_id: emitted?.event_id || 0,
+        dock_status_after_queue: queued?.status || "",
+        dock_status_after_delivery: settled?.status || "",
+        delivery_pass: { scanned: pass?.scanned ?? 0, delivered: pass?.delivered ?? 0 },
+        dock_writes: ctx.dockRows.length,
+      },
+      reason: ok ? "" : "the new-match event did not reach a dock write through the delivery path",
     };
   });
 
@@ -551,37 +604,43 @@ export async function runStage4Items({ db, helpers, ctx, recorder }) {
   });
 
   await recorder.run(itemById("4.3"), async () => {
-    // emitRentalNotifyEvent does NOT apply the preference gate; the schedulers and
-    // the delivery layer do. So verify the two documented, observable pieces: the
-    // preference round-trips, and closing the dock channel stops dock delivery.
+    // queueDeliveries() applies preferenceAllows() at queue time and writes a dock
+    // delivery with status "suppressed". deliverQueuedNotifications() only scans
+    // queued/retrying rows, so a suppressed dock row provably cannot be delivered.
+    // channel_dock stays true here, so the suppression can only come from the
+    // preference, not from the channel gate.
     const saved = helpers.saveRentalNotifyPrefs(
       db,
       ctx.notifyUserId,
-      { lifecycle_reminder: false, channel_dock: false },
+      { lifecycle_reminder: false, channel_dock: true },
       ctx.now,
     );
     const readBack = helpers.getRentalNotifyPrefs(db, ctx.notifyUserId);
-    const before = ctx.dockRows.length;
-    helpers.emitRentalNotifyEvent(db, baseEvent("wish_lifecycle_due_3d", `uat-suppress:${ctx.namespace}`));
-    const tick = helpers.runRentalNotifyTick(db, ctx.now, { flags: ctx.flags, limit: 20 });
-    const after = ctx.dockRows.length;
-    const persisted =
-      saved?.lifecycle_reminder === false && readBack?.lifecycle_reminder === false && readBack?.channel_dock === false;
-    // Delivery is deliberately NOT asserted: a tick also delivers events that the
-    // scheduler queued earlier, so the preference/channel gate is applied when the
-    // scheduler queues an event, not retroactively at delivery time.
+    helpers.deliverQueuedNotifications(db, ctx.now, { limit: 50 });
+    const emitted = helpers.emitRentalNotifyEvent(
+      db,
+      baseEvent("wish_lifecycle_due_3d", `uat-suppress:${ctx.namespace}`),
+    );
+    const queued = dockDeliveryFor(db, emitted?.event_id || 0);
+    const pass = helpers.deliverQueuedNotifications(db, ctx.now, { limit: 50 });
+    const settled = dockDeliveryFor(db, emitted?.event_id || 0);
+    const ok =
+      saved?.lifecycle_reminder === false &&
+      readBack?.lifecycle_reminder === false &&
+      emitted?.emitted === true &&
+      queued?.status === "suppressed" &&
+      settled?.status === "suppressed";
     return {
-      ok: persisted === true && tick?.skipped === false,
-      expected: "a disabled preference and a closed dock channel persist and are read back by the schedulers",
+      ok,
+      expected: "a preference-suppressed lifecycle event gets dock delivery status suppressed and is never delivered",
       observed: {
         lifecycle_reminder: readBack?.lifecycle_reminder,
         channel_dock: readBack?.channel_dock,
-        dock_rows_before: before,
-        dock_rows_after: after,
-        tick_skipped: tick?.skipped,
-        note: "the tick also delivers previously queued events; the gate is applied at queue time",
+        dock_status_after_queue: queued?.status || "",
+        dock_status_after_delivery: settled?.status || "",
+        delivery_pass: { scanned: pass?.scanned ?? 0, delivered: pass?.delivered ?? 0 },
       },
-      reason: persisted === true ? "" : "the notification preference did not round-trip",
+      reason: ok ? "" : "the suppressed dock delivery was not proven authoritatively",
     };
   });
 
@@ -620,20 +679,62 @@ export async function runStage4Items({ db, helpers, ctx, recorder }) {
   });
 
   await recorder.run(itemById("4.5"), async () => {
-    const activeOfferOnClosed = helpers.wishHasActiveOffer(db, ctx.wishes.closed.id);
-    const closedEmit = helpers.emitRentalNotifyEvent(
+    // Drive the canonical path: processMatchSubscriptionRow applies
+    // pairIsBlockedForNotify() and wishStillHardEligibleForNotify() BEFORE it calls
+    // emitRentalNotifyEvent(). Item 2.6 blocked the tenant/owner pair, and the
+    // closed wish is not a matchable lifecycle, while hardGateFn always allows, so
+    // only the blocked/closed gate can suppress these two items.
+    // Precondition guard: if the listing were not open the function would return
+    // emitted 0 trivially, so that is asserted explicitly rather than assumed.
+    const listingOpen = String(ctx.listing?.self_status || "") === "open";
+    const sub = {
+      owner_user_id: ctx.notifyUserId,
+      listing_id: Number(ctx.listing?.post_id || 0),
+      mode: "instant",
+    };
+    const allow = () => true;
+    const eligibleRef = ctx.shareToken;
+    const closedRef = String(ctx.wishes.closed?.public_token || "");
+    const eventsBefore = notifyEventCount(db, eligibleRef);
+    const blocked = helpers.processMatchSubscriptionRow(
       db,
-      baseEvent("owner_new_match_available", `uat-closed:${ctx.namespace}`),
+      sub,
+      { items: [{ wish_ref: eligibleRef }], complete: false },
+      ctx.now,
+      ctx.flags,
+      { hardGateFn: allow },
     );
+    const closed = helpers.processMatchSubscriptionRow(
+      db,
+      sub,
+      { items: [{ wish_ref: closedRef }], complete: false },
+      ctx.now,
+      ctx.flags,
+      { hardGateFn: allow },
+    );
+    const eventsAfter = notifyEventCount(db, eligibleRef);
+    const closedEvents = notifyEventCount(db, closedRef);
+    const closedDock = dockDeliveryCountForSubject(db, closedRef);
+    const ok =
+      listingOpen === true &&
+      blocked?.emitted === 0 &&
+      closed?.emitted === 0 &&
+      eventsAfter === eventsBefore &&
+      closedEvents === 0 &&
+      closedDock === 0;
     return {
-      ok: activeOfferOnClosed === false,
-      expected: "an ineligible subject reports no active offer and does not produce a dock row",
+      ok,
+      expected: "the canonical eligibility path emits 0 and writes no event or dock delivery for a blocked or closed pair",
       observed: {
-        active_offer_on_closed_wish: activeOfferOnClosed === true,
-        closed_emit: closedEmit?.emitted === true,
-        closed_reason: closedEmit?.reason || "",
+        listing_open: listingOpen,
+        blocked_pair_emitted: blocked?.emitted,
+        closed_pair_emitted: closed?.emitted,
+        eligible_events_before: eventsBefore,
+        eligible_events_after: eventsAfter,
+        closed_events: closedEvents,
+        closed_dock_deliveries: closedDock,
       },
-      reason: activeOfferOnClosed === false ? "" : "an ineligible subject still reported an active offer",
+      reason: ok ? "" : "the blocked/closed suppression path did not hold",
     };
   });
 
@@ -672,9 +773,10 @@ export const UAT_REQUIRED_DEPS = Object.freeze([
   "emitRentalNotifyEvent",
   "getRentalNotifyPrefs",
   "saveRentalNotifyPrefs",
+  "deliverQueuedNotifications",
+  "processMatchSubscriptionRow",
   "runRentalNotifyTick",
   "startRentalNotifyLoop",
-  "wishHasActiveOffer",
   "httpProbe",
 ]);
 
