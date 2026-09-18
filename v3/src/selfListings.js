@@ -289,15 +289,15 @@ function httpError(message, status = 400, code = "") {
 }
 
 function withImmediate(db, fn) {
-  try { db.exec("PRAGMA busy_timeout=5000"); } catch { /* ignore */ }
+  try { db.exec("PRAGMA busy_timeout=8000"); } catch { /* ignore */ }
   let last;
-  for (let attempt = 0; attempt < 12; attempt++) {
+  for (let attempt = 0; attempt < 20; attempt++) {
     try {
       db.exec("BEGIN IMMEDIATE");
     } catch (error) {
       last = error;
       if (!/locked|busy/i.test(String(error.message || ""))) throw error;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20 * (attempt + 1));
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25 * (attempt + 1));
       continue;
     }
     try {
@@ -834,8 +834,7 @@ function insertOpenSelfListing(db, uid, input = {}, now = new Date(), { matchCan
       mobile = ?,
       phone = ?,
       line_url = ?,
-      contact_fetched = 1,
-      fixture_namespace = COALESCE(?, fixture_namespace)
+      contact_fetched = 1
     WHERE post_id = ?
   `).run(
     `self:${uid}:${postId}`,
@@ -851,7 +850,6 @@ function insertOpenSelfListing(db, uid, input = {}, now = new Date(), { matchCan
     phone,
     phone,
     lineUrl,
-    fixtureNs || null,
     postId,
   );
   if (fixtureNs && isolation?.runId && isolation.kind && isolation.role && isolation.registered !== true) {
