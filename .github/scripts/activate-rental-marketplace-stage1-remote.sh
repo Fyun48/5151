@@ -330,7 +330,7 @@ forbidden = (
 for token in forbidden:
     if token in text:
         raise SystemExit(f"privacy leak token {token} in {path}")
-if re.search(r"09\d{8}", text):
+if re.search(r"(?<![0-9])09\d{8}(?![0-9])", text):
     raise SystemExit(f"privacy leak phone in {path}")
 if re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", text):
     raise SystemExit(f"privacy leak email in {path}")

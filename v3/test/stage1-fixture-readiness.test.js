@@ -50,6 +50,7 @@ import {
   ensureStage1FixtureSchema,
   fixtureEmailForRole,
   isFixtureMaturityAuthorized,
+  makeStage1FixtureRunId,
   registerFixtureRow,
   STAGE1_FIXTURE_KIND,
   STAGE1_FIXTURE_ROLE,
@@ -530,7 +531,7 @@ test("durable Stage 1 failure evidence is written without becoming PASS", () => 
   assert.equal(doc.ACTIVATION_OK, false);
   assert.equal(doc.activation_result, "rolled_back");
   assert.equal(doc.rollback_result, "ok");
-  assert.doesNotMatch(JSON.stringify(doc), /@|09\d{8}|SESSION_SECRET/);
+  assert.doesNotMatch(JSON.stringify(doc), /@|(?<!\d)09\d{8}(?!\d)|SESSION_SECRET/);
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -863,3 +864,29 @@ test("P2-21 an onAfterInsert crash rolls the fixture listing back and retry reco
   assert.equal(active.length, 1);
   db.close();
 });
+
+test("P1-22 a production-shaped compact run id is not mistaken for a leaked phone", () => {
+  const db = open();
+  // exact production format: <namespace>:<compact UTC stamp>:<workflow run id>
+  const runId = makeStage1FixtureRunId(new Date("2026-09-18T06:17:56Z"), "35314199788");
+  assert.equal(runId, "stage1-fix:20260918061756:35314199788");
+  // the raw digits really do contain a phone-shaped substring (09 + 8 digits)...
+  assert.match(runId, /09\d{8}/);
+  // ...so the naive detector fired on every Production fixture run (stage1FixtureOps
+  // threw "fixture evidence leaked phone"). The evidence must be accepted instead.
+  const prepared = prepareStage1Fixtures(db, deps(), { now: new Date(), runId, flags: FLAGS });
+  assert.equal(prepared.ok, true);
+  assert.equal(prepared.run_id, runId);
+  db.close();
+});
+
+test("P1-22 the boundary-anchored phone detector still catches real phone numbers", () => {
+  const phoneRe = /(?<!\d)09\d{8}(?!\d)/;
+  // real, unformatted 09xxxxxxxx mobile numbers are still detected...
+  assert.equal(phoneRe.test('"phone":"0912345678"'), true);
+  assert.equal(phoneRe.test("0912-345-678"), false); // formatted: never matched before either
+  // ...while compact timestamps / long digit runs are not
+  assert.equal(phoneRe.test("20260918061756"), false);
+  assert.equal(phoneRe.test("/DATA/predeploy-20260918-055613"), false);
+});
+
