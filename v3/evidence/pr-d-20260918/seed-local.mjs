@@ -71,7 +71,12 @@ function makeUser(email, nickname, password) {
 }
 
 const ownerId = makeUser("owner@evidence.test", "屋主阿明", EVIDENCE_PASSWORD);
-const tenantId = makeUser("tenant@evidence.test", "租客小美", EVIDENCE_PASSWORD);
+const tenantIds = [
+  makeUser("tenant@evidence.test", "租客小美", EVIDENCE_PASSWORD),
+  makeUser("tenant2@evidence.test", "租客小華", EVIDENCE_PASSWORD),
+  makeUser("tenant3@evidence.test", "租客小安", EVIDENCE_PASSWORD),
+];
+const tenantId = tenantIds[0];
 
 const listing = createSelfListing(db, ownerId, {
   district: "1-8",
@@ -102,6 +107,17 @@ const done = createDemandPost(db, tenantId, {
 }, NOW);
 db.prepare("UPDATE demand_posts SET lifecycle = 'completed', status = 'closed' WHERE id = ?").run(done.id);
 
+// A second completed wish keeps its survey unanswered, so the completion-survey UI can
+// still be opened for the responsive evidence while the first one feeds the aggregate.
+const doneSurveyed = createDemandPost(db, tenantId, {
+  districts: ["1-8"],
+  rent_max: 21000,
+  housing_type: "room",
+  layout: "1",
+  body: "上一次的找房紀錄。",
+}, NOW);
+db.prepare("UPDATE demand_posts SET lifecycle = 'completed', status = 'closed' WHERE id = ?").run(doneSurveyed.id);
+
 const wish = createDemandPost(db, tenantId, {
   districts: ["1-8"],
   rent_max: 28000,
@@ -112,6 +128,19 @@ const wish = createDemandPost(db, tenantId, {
   condition_choices: { need_pet: "want", need_cook: "want" },
   choices: { need_pet: "want", need_cook: "want" },
 }, NOW);
+
+// Every seeded tenant owns one open wish, so the lifecycle and completion-survey flows
+// can be driven at each width without re-seeding the database.
+const otherTenantWishes = tenantIds.slice(1).map((uid) => ({ userId: uid, wish: createDemandPost(db, uid, {
+  districts: ["1-8"],
+  rent_max: 26000,
+  housing_type: "whole",
+  layout: "2",
+  ping_min: 15,
+  body: "第二次找房，需求與前一次相近。",
+  condition_choices: { need_pet: "want" },
+  choices: { need_pet: "want" },
+}, NOW) }));
 
 const offerToken = "evidenceoffer000000000000000000".slice(0, 32);
 db.prepare(`
@@ -145,7 +174,7 @@ for (let i = 0; i < 6; i += 1) {
 }
 addDigestItem(db, { userId: ownerId, eventId: 1, listingId: listing.post_id, wishRef: wish.public_token, now: NOW });
 try {
-  submitCompletionSurvey(db, tenantId, db.prepare("SELECT * FROM demand_posts WHERE id = ?").get(done.id), {
+  submitCompletionSurvey(db, tenantId, db.prepare("SELECT * FROM demand_posts WHERE id = ?").get(doneSurveyed.id), {
     found_via_site: "yes",
     via_feature: "wish_match",
     detail: "配對通知幫上忙",
@@ -180,10 +209,23 @@ console.log(JSON.stringify({
   },
 }, null, 2));
 writeFileSync(
+  path.join(DATA_DIR, "tokens.json"),
+  `${JSON.stringify({
+    listing_id: listing.post_id,
+    wish_token: wish.public_token,
+    completed_wish_token: done.public_token,
+    surveyed_wish_token: doneSurveyed.public_token,
+    offer_token: offerToken,
+    note: "local evidence only; gitignored",
+  }, null, 2)}\n`,
+);
+writeFileSync(
   path.join(DATA_DIR, "credentials.json"),
   `${JSON.stringify({
     owner: "owner@evidence.test",
     tenant: "tenant@evidence.test",
+    tenant2: "tenant2@evidence.test",
+    tenant3: "tenant3@evidence.test",
     password: EVIDENCE_PASSWORD,
     note: "local evidence only; gitignored",
   }, null, 2)}\n`,

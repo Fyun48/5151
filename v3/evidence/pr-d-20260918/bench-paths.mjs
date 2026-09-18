@@ -55,8 +55,10 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const NOW = new Date("2026-09-17T12:00:00.000Z");
 const DAY_MS = 86400000;
 
-// In-app channels on, outbound explicitly off: this measures the posture Production
-// runs today (Stage 1-4 ON; digest / mail / push stay a separate gate).
+// In-app channels on and outbound (mail / push) explicitly off. The digest switch is ON
+// here on purpose so the digest bucket sweep is actually exercised by the benchmark; it is
+// NOT the posture Production runs today (Production keeps digest / mail / push OFF until
+// the outbound gate gets its own approval). See README.md.
 const FLAGS = {
   rental_catalog_v2: { enabled: true },
   wish: {
@@ -433,7 +435,7 @@ function main() {
       platform: `${process.platform} ${process.arch}`,
       sqlite: "node:sqlite DatabaseSync(:memory:)",
       data: "seeded only; no Production data, no network, no writes outside this process",
-      posture_measured: "Stage 1-4 in-app ON, digest/mail/push OFF (as Production runs today)",
+      posture_measured: "seeded benchmark posture: Stage 1-4 in-app ON, digest ON (to exercise the digest sweep), mail/push OFF. Production today keeps digest/mail/push OFF.",
     },
     dataset: { seed: SEED, actual_counts: counts, seed_ms: round(seedMs), total_ms: round(performance.now() - started) },
     bounds: {
@@ -469,6 +471,11 @@ function main() {
   for (const [key, value] of Object.entries(explain)) {
     lines.push(`| ${key} | ${value.indexes.join(", ") || "-"} | ${value.search_nodes} | ${value.scan_nodes} |`);
   }
+  const explainEntries = Object.values(explain);
+  const searchOnly = explainEntries.filter((v) => v.search_nodes > 0 && v.scan_nodes === 0).length;
+  const withScan = explainEntries.filter((v) => v.scan_nodes > 0).length;
+  lines.push("");
+  lines.push(`${explainEntries.length} paths total: ${searchOnly} are index SEARCH paths with no SCAN node, ${withScan} contains a SCAN node (see the table for which one).`);
   lines.push("");
   lines.push(`## Row counts after seeding`);
   lines.push("");

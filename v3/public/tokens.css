@@ -163,3 +163,79 @@
   color: var(--muted);
   line-height: 1.5;
 }
+
+/* ── Issue #325 PART N: touch targets ──────────────────────────────────────────
+   每一個可見的互動控制項都必須提供 >=44px 的觸控目標（Issue 的 `touch >= 44px`）。
+   --btn-height / --chip-height 原本是 40px / 32px，低於門檻，這裡拉齊到 --touch；
+   輸入框、select、textarea 與「當作控制項使用的獨立連結」直接吃 --touch。
+   內文中的行內連結刻意不放大：那不是控制項。 */
+:root {
+  --btn-height: 44px;
+  --chip-height: 44px;
+}
+
+button,
+[role="button"],
+[role="tab"],
+input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]),
+select,
+textarea {
+  min-height: var(--touch);
+}
+
+/* 原生 checkbox／radio 的方框維持 24px（WCAG 2.5.8 AA），實際 44px 觸控目標由
+   包住它們的 label 提供（下方的 label:has(...) 規則）。 */
+input[type="checkbox"],
+input[type="radio"] {
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+}
+
+label:has(> input[type="checkbox"]),
+label:has(> input[type="radio"]) {
+  min-height: var(--touch);
+}
+
+a.ghost,
+a.primary,
+a.btn,
+a.chip,
+.chip,
+.hub-tab,
+.admin-nav a,
+.admin-nav button,
+.site-footer a,
+footer a,
+.self-mine-card a,
+.owner-list a,
+.bulk-bar a,
+.toolbar a,
+.row a.ghost,
+.row a.primary,
+.hint a,
+.muted a,
+a.muted,
+.brand-lockup a,
+.brand a,
+.card a,
+.site-notice a,
+.topbar a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--touch);
+}
+
+/* 手機求助 dock 的按鈕與「獨立（非行內段落）」連結：明確拉高到 --touch。
+   段落內的行內連結（p a）維持文字流，不放大。 */
+body .mobile-help-dock button,
+body a:not(p a) {
+  min-height: var(--touch);
+}
+
+body a:not(p a) {
+  display: inline-flex;
+  align-items: center;
+}
+

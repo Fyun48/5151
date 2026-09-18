@@ -785,7 +785,7 @@
     body.role-guest .mobile-help-dock { display: none !important; }
     .mobile-help-dock button {
       padding: 5px 10px; font-size: 12px; font-weight: 700; border-radius: 999px;
-      display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-height: 32px;
+      display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-height: var(--touch);
       box-shadow: 0 2px 8px rgba(31, 27, 22, 0.14); background: var(--paper);
     }
     .mobile-help-dock button span { font-size: 13px; line-height: 1; }
@@ -1341,7 +1341,7 @@
       font-size: 11px;
       font-weight: 700;
       cursor: pointer;
-      min-height: 32px;
+      min-height: var(--touch);
       white-space: nowrap;
       line-height: 1.2;
     }
@@ -1921,7 +1921,7 @@
       margin-left: auto;
     }
     .filter-head-actions > button {
-      min-height: 32px;
+      min-height: var(--touch);
       min-width: 76px;
       padding: 4px 12px;
       font-size: 13px;
@@ -2557,7 +2557,7 @@
     .site-notice[hidden] { display: none !important; }
     .site-notice p { margin: 0; flex: 1; min-width: 0; font-size: 13px; line-height: 1.55; }
     .site-notice b { color: var(--accent-deep); margin-right: 4px; }
-    .site-notice .ghost { min-height: 32px; padding: 4px 8px; }
+    .site-notice .ghost { min-height: var(--touch); padding: 4px 8px; }
     .announce-banner {
       display: flex;
       align-items: flex-start;
@@ -2958,7 +2958,7 @@
       }
       .filter-head-actions > button.mobile-only,
       #openFilterSheetBtn {
-        min-height: 32px;
+        min-height: var(--touch);
         padding: 4px 12px;
         font-weight: 700;
         background: var(--accent);
@@ -3368,21 +3368,21 @@
       <div id="districtPicker" data-tour="districts"></div>
       <div class="price-row">
         <div>
-          <label>租金下限（可空白＝不限）</label>
+          <label for="priceMin">租金下限（可空白＝不限）</label>
           <input type="number" id="priceMin" class="guest-cheap" min="0" step="1" inputmode="numeric" placeholder="不限" />
         </div>
         <div>
-          <label>租金上限（可空白＝不限）</label>
+          <label for="priceMax">租金上限（可空白＝不限）</label>
           <input type="number" id="priceMax" class="guest-cheap" min="0" step="1" inputmode="numeric" placeholder="不限" />
         </div>
       </div>
       <label class="check-inline"><input type="checkbox" id="priceMaxIncludesExtras" /> <span>租金上限是包含其它額外需繳的費用</span></label>
-      <label>坪數上限（幾坪以內，可空白）</label>
+      <label for="areaMax">坪數上限（幾坪以內，可空白）</label>
       <input type="number" id="areaMax" class="guest-cheap" min="0" max="500" step="0.5" placeholder="不限，例如 30" />
       <p class="hint">頂樓加蓋、整層住家、一樓與地下室改在物件列表上方過濾顯示，不會讓爬蟲少抓。</p>
       <textarea id="searchUrls" hidden aria-hidden="true"></textarea>
       <div class="admin-only">
-        <label>檢查間隔（分鐘）</label>
+        <label for="intervalMinutes">檢查間隔（分鐘）</label>
         <input type="number" id="intervalMinutes" min="1" max="120" />
         <p class="hint" id="intervalMemberHint">全站共用抓取庫，約每 15 分鐘檢查一次有沒有新物件。</p>
       </div>
@@ -3391,7 +3391,7 @@
         <ul class="support-benefits" id="sponsorSettingsBenefits"></ul>
         <div class="sponsor-links" id="sponsorSettingsLinks"></div>
       </div>
-      <label>建物總樓層至少（可空白＝不限）</label>
+      <label for="minBuildingFloors">建物總樓層至少（可空白＝不限）</label>
       <input type="number" id="minBuildingFloors" class="guest-cheap" min="0" max="99" step="1" inputmode="numeric" placeholder="不限" />
       <label data-tour="commute">上班地址（選填）</label>
       <input type="text" id="workAddress" class="guest-cheap" placeholder="例如：臺北市南港區經貿一路170號" />
@@ -3401,7 +3401,7 @@
         <label><input type="radio" name="commuteMode" value="car" /> 汽車</label>
       </div>
       <p class="hint">機車與汽車目前都用汽車路網估算。機車會避開高速公路，但不是專用機車道路。</p>
-      <label>物件與公司距離上限（公里，0 表示不篩）</label>
+      <label for="commuteKm">物件與公司距離上限（公里，0 表示不篩）</label>
       <input type="number" id="commuteKm" class="guest-cheap" min="0" max="80" step="0.1" />
       <p class="hint guest-only-hint">訪客可用直線距離先篩，最多同時 4 個行政區。找不到地址時會提示，不會默默略過。登入後才會用機車／汽車路線。</p>
       <p class="hint" data-tour="mrt">步行路線未滿 1.5 公里的最近捷運站會顯示在列表。這個開關只在後台統一設定。</p>
@@ -3663,7 +3663,7 @@
             <span class="media-x" id="profileAvatarClear" hidden>×</span>
           </button>
           <div style="flex:1;min-width:0">
-            <label>暱稱（2～20 字，選填）</label>
+            <label for="profileNickname">暱稱（2～20 字，選填）</label>
             <input id="profileNickname" maxlength="20" placeholder="例如 小林" />
             <div class="avatar-pick" id="avatarPick" hidden>
               <button type="button" class="ghost" id="avatarCameraBtn">拍照</button>
@@ -3675,31 +3675,31 @@
         </div>
         <div class="profile-grid">
           <div class="span-2">
-            <label>註冊 Email（開通後不能改）</label>
+            <label for="profileAccountEmail">註冊 Email（開通後不能改）</label>
             <input id="profileAccountEmail" readonly disabled autocomplete="username" />
           </div>
           <div class="span-2">
-            <label>聯絡 Email（選填）</label>
+            <label for="profileContactEmail">聯絡 Email（選填）</label>
             <input id="profileContactEmail" maxlength="120" placeholder="與註冊信箱不同再填" />
           </div>
           <div class="span-2">
-            <label>現在居住地（選填）</label>
+            <label for="profileHome">現在居住地（選填）</label>
             <input id="profileHome" maxlength="120" placeholder="例如 台北市士林區…" />
           </div>
           <div class="span-2">
-            <label>公司地址（選填）</label>
+            <label for="profileCompany">公司地址（選填）</label>
             <input id="profileCompany" maxlength="120" placeholder="通勤篩選請仍到找房設定" />
           </div>
           <div>
-            <label>聯絡電話（選填）</label>
+            <label for="profilePhone">聯絡電話（選填）</label>
             <input id="profilePhone" maxlength="40" inputmode="tel" placeholder="09xxxxxxxx" />
           </div>
           <div>
-            <label>LINE ID（選填）</label>
+            <label for="profileLineId">LINE ID（選填）</label>
             <input id="profileLineId" maxlength="40" placeholder="不含網址" />
           </div>
           <div class="span-2">
-            <label>LINE QR Code 圖（選填，點圖上傳或刪除）</label>
+            <label for="profileLineQr">LINE QR Code 圖（選填，點圖上傳或刪除）</label>
             <input type="file" id="profileLineQr" accept="image/jpeg,image/png,image/webp" hidden />
             <button type="button" class="media-hit" id="profileLineQrHit" aria-label="上傳或刪除 LINE QR">
               <img id="profileLineQrImg" alt="" hidden style="margin-top:8px;max-height:88px;border-radius:8px;border:1px solid var(--line)" />
@@ -3713,7 +3713,7 @@
             <p class="hint" style="margin:6px 0 0">以下為<strong>選填</strong>的分析用資料，預設不公開、可留空或清空。填了有助於整體了解租屋／房屋買賣／人口結構／中古商品等居住相關趨勢；不會出現在你的刊登，也不強迫填寫。</p>
           </div>
           <div>
-            <label>出生年月日（選填）</label>
+            <label for="profileBirthDate">出生年月日（選填）</label>
             <input type="date" id="profileBirthDate" min="1900-01-01" />
           </div>
           <div>
@@ -3865,31 +3865,31 @@
             </select>
           </div>
           <div>
-            <label>每月租金</label>
+            <label for="selfRent">每月租金</label>
             <input type="number" id="selfRent" min="1000" max="200000" step="500" />
           </div>
           <div>
-            <label>可用坪數</label>
+            <label for="selfPing">可用坪數</label>
             <input type="number" id="selfPing" min="1" max="500" step="0.5" placeholder="扣除公設" />
           </div>
           <div>
-            <label>出租樓層</label>
+            <label for="selfFloor">出租樓層</label>
             <input type="number" id="selfFloor" min="1" max="80" />
           </div>
           <div>
-            <label>總樓層</label>
+            <label for="selfTotalFloors">總樓層</label>
             <input type="number" id="selfTotalFloors" min="1" max="80" />
           </div>
           <div>
-            <label>房</label>
+            <label for="selfRooms">房</label>
             <input type="number" id="selfRooms" min="0" max="12" value="2" />
           </div>
           <div>
-            <label>廳</label>
+            <label for="selfLiving">廳</label>
             <input type="number" id="selfLiving" min="0" max="8" value="1" />
           </div>
           <div>
-            <label>衛</label>
+            <label for="selfBath">衛</label>
             <input type="number" id="selfBath" min="0" max="8" value="1" />
           </div>
           <div>
@@ -3909,7 +3909,7 @@
             <input id="selfLine" type="hidden" />
           </div>
           <div class="span-all">
-            <label>物件照片</label>
+            <label for="selfPhotos">物件照片</label>
             <input type="file" id="selfPhotos" accept="image/jpeg,image/png,image/webp,image/avif" multiple />
             <p class="hint" id="selfPhotoCount">已選 0／100 張放上此物件。</p>
             <button type="button" class="ghost" id="mediaLibOpen">開啟照片素材庫</button>
@@ -4018,7 +4018,7 @@
           <li>複製 Webhook 網址（會像 <code>https://discord.com/api/webhooks/…</code>）。</li>
           <li>貼到下面並儲存。變更通知預設只會推「特別關注」的物件。</li>
         </ol>
-        <label>Discord Webhook（選填）</label>
+        <label for="discordWebhook">Discord Webhook（選填）</label>
         <input type="url" id="discordWebhook" placeholder="https://discord.com/api/webhooks/..." />
         <p class="hint">Webhook 同房源多筆只送主物件。全新物件依搜尋設定檔；其餘種類都只有特別關注才會推。要改通道請切到「通知種類」。</p>
       </section>
@@ -4031,34 +4031,34 @@
         <p class="gmail-hint" id="gmailHint" hidden>Gmail 不能用平常登入的密碼。請到 Google 帳戶 → 安全性 → 兩步驟驗證 → 應用程式密碼，產生 16 碼後填在這裡。</p>
         <div class="hub-grid">
           <div>
-            <label>SMTP 主機</label>
+            <label for="memberSmtpHost">SMTP 主機</label>
             <input id="memberSmtpHost" placeholder="smtp.gmail.com" autocomplete="off" />
           </div>
           <div>
-            <label>連接埠</label>
+            <label for="memberSmtpPort">連接埠</label>
             <input id="memberSmtpPort" type="number" min="1" max="65535" placeholder="587" />
           </div>
           <div>
-            <label>帳號</label>
+            <label for="memberSmtpUser">帳號</label>
             <input id="memberSmtpUser" autocomplete="username" />
           </div>
           <div>
-            <label>密碼</label>
+            <label for="memberSmtpPass">密碼</label>
             <input id="memberSmtpPass" type="password" autocomplete="new-password" placeholder="已設定則可留白" />
           </div>
           <div>
-            <label>寄件 Email</label>
+            <label for="memberSmtpFrom">寄件 Email</label>
             <input id="memberSmtpFrom" placeholder="you@gmail.com" />
           </div>
           <div>
-            <label>寄件名稱</label>
+            <label for="memberSmtpFromName">寄件名稱</label>
             <input id="memberSmtpFromName" placeholder="吉比租房物件追蹤" />
           </div>
         </div>
         <label class="checks"><input type="checkbox" id="memberSmtpSecure" /> 使用 TLS／SMTPS（465 會自動勾）</label>
         <label>罐頭訊息</label>
         <select id="mailPreset" aria-label="罐頭訊息"></select>
-        <label>物件通知主旨</label>
+        <label for="memberMailSubject">物件通知主旨</label>
         <input id="memberMailSubject" />
         <label>物件通知本文</label>
         <textarea id="memberMailText"></textarea>
