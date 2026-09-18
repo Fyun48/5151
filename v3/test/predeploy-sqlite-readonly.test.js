@@ -140,6 +140,22 @@ test("predeploy backup root is configurable, validated and pointed at the Storag
   assert.match(wf, /export PREDEPLOY_BACKUP_ROOT=\/mnt\/Storage1\/docker_data\/591-tracker-v3-backups/);
 });
 
+test("predeploy host-side writes stay on the Storage1 pool (Issue #355)", () => {
+  const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "../..");
+  const script = readFileSync(path.join(root, ".github/scripts/production-predeploy-remote.sh"), "utf8");
+  assert.match(script, /WORK_ROOT="\$\{PREDEPLOY_WORK_ROOT:-/);
+  assert.match(script, /PREDEPLOY_WORK_ROOT must be an absolute path/);
+  assert.match(script, /EVIDENCE="\$\{WORK_ROOT\}\/predeploy-evidence-/);
+  assert.match(script, /WORKDIR="\$\{WORK_ROOT\}\/predeploy-work-/);
+  assert.match(script, /cp "\$EVIDENCE" "\$\{WORK_ROOT\}\/phase15-predeploy-evidence\.json"/);
+  assert.doesNotMatch(script, /cp "\$EVIDENCE" \/tmp\//);
+  const wf = readFileSync(path.join(root, ".github/workflows/production-predeploy-check.yml"), "utf8");
+  assert.match(wf, /export PREDEPLOY_WORK_ROOT=\/mnt\/Storage1\/docker_data/);
+  assert.match(wf, /target: \/mnt\/Storage1\/docker_data\/5151-predeploy-helpers/);
+  assert.match(wf, /\$NAS_USER@\$NAS_HOST:\/mnt\/Storage1\/docker_data\/phase15-predeploy-evidence\.json/);
+  assert.doesNotMatch(wf, /\/tmp\/5151-predeploy-helpers/);
+});
+
 test("predeploy backup verification capability-detects host node:sqlite and has Python read-only fallback", () => {
   const script = readFileSync(
     path.join(path.dirname(fileURLToPath(import.meta.url)), "../../.github/scripts/production-predeploy-remote.sh"),
