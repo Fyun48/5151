@@ -341,3 +341,61 @@ UAT 全綠後仍分階段。每一階段只開下表，觀察至少一個業務�
 可再核一次 identity 後改判 `PRODUCTION_RELEASE_READY`（仍 **不得** 自行 deploy / 開 B/C/D / 開 outbound）。
 
 本 Issue 到此 **STOP**，等 ChatGPT 獨立核對與 Owner 下一步批准。
+
+---
+
+# 附錄：Staged activation 完成與 identity 再核（2026-09-18 更新）
+
+本附錄更新第 1–3、24、26 節的狀態：兩個 blocker 都已解除、Stage 1–4 已在 Production 完成，並附 current master 的再核結果。**這不是任何新的 deploy / activation 授權。**
+
+## 再核 identity
+
+| 項目 | 值 |
+|---|---|
+| current `master` SHA | `66c979d914a85673bf2a839eb208d517f8a08208` |
+| current tree SHA | `ad96e4bbe715fd2ae1c70a3ca883f7189926c70e` |
+| deployed Production source | 同上（deploy-v3 run `35352243854`） |
+| deployed image digest | `sha256:177507c1f2f2553f05653a74fe0417d45e863f78410c7963387051b460068a97`（build run `35350261293`） |
+| 本次 predeploy 已驗證備份 | `/DATA/AppData/591-tracker-v3-backups/predeploy-20260918-132852`，`sha256:2b862a2f32316cf7d6660b73081952c9e7d0ee3bd210d9cc524d34c119f783da`（predeploy run `35350411705`） |
+| 前一版 Production source / digest | `a27d8330d761cfd80f1156d90cf291b6ce2d8fe5` / `sha256:1ec91d429f18cd143f8216a504a02e0311daf60f4e92cf6e44b98430b0fbc2d1` |
+
+## Blocker 狀態（原第 24 節）
+
+1. `docker.yml` 的第四條 `:latest` 路徑 → 已 refuse-closed（`on: workflow_dispatch`、job `refuse-retired-latest-path`）。
+2. master Tests 紅燈 → `66c979d` 的 push Tests run `35349889506` **success**；PR #350 的 PR Tests run `35349664703` success。
+
+Manual-only proof 再核（current master 全部 workflow 檔）：**只有 `test.yml` 具備 `push` / `pull_request` 觸發**，其餘（`build-production-image` / `production-predeploy-check` / `deploy-v3` / `deploy-v2` / `docker` / `activate-rental-marketplace-pra` / `activate-rental-marketplace-stage1` / `activate-rental-marketplace-stages` / `prepare-rental-marketplace-stage1-fixtures` / `production-uat-stages-functional` / `production-support-check` / `production-rakuya-diagnostic`）皆 `workflow_dispatch` only。
+
+## Staged activation 實績（source `e4ced0018f1994640ca7da02014cabfbfb6d8445`）
+
+| 階段 | Run | 結果 |
+|---|---|---|
+| Stage 1 owner matching | 35319442609 `activate-stage1:e4ced001…` | success（07:26:39Z；前兩次 35316508785 / 35317128142 fail-closed） |
+| Stage 2 wish offer / double consent | `activate-stage2:e4ced001…` | success（07:41:58Z） |
+| Stage 3 public share v2 / growth | `activate-stage3:e4ced001…` | success（07:52:11Z；07:43:50Z 一次 fail-closed） |
+| Stage 4 in-app owner notifications | `activate-stage4:e4ced001…` | success（07:54:13Z） |
+| Stage 1–4 consolidated UAT | `uat-stage1-4:e4ced001…` | success（08:54:31Z、09:15:14Z；先前數次 fail-closed） |
+| deploy `a27d833` | 35332260795 | success（09:57:59Z） |
+| fixture `reap-stale`（舊缺陷） | 35332391126 | **failure** — Issue #349 |
+| PR #350 → `66c979d` deploy | 35352243854 | success |
+| fixture `reap-stale`（修復後） | 35352428855 | success：`orphan_recovered_count=12`（6 listing + 6 wish） |
+| fixture `reap-stale`（冪等複驗） | 35352559125 | success：`empty=true`、`orphan_recovered_count=0` |
+
+## 目前 Production flag snapshot（fixture gate evidence，run 35352428855）
+
+`rental_catalog_v2.enabled=true`、`wish.lifecycle_enabled=true`、`wish.owner_matching_enabled=true`、`wish.offer_enabled=true`、`wish.public_share_v2_enabled=true`、`wish.owner_notifications_enabled=true`、`wish.notifications_enabled=true`、`wish.digest_enabled=false`、`wish.outbound_mail_enabled=false`、`wish.outbound_push_enabled=false`。
+
+Final outbound gate（digest / mail / push）**仍未**啟用，需另一次 Owner 書面批准，不隨 Stage 4 自動開啟。
+
+## 第 26 節結論更新
+
+對 `66c979d914a85673bf2a839eb208d517f8a08208`：
+
+`PRODUCTION_RELEASE_READY`（in-app 範圍：Stage 1–4 已啟動且有 Production 實證；兩個 blocker 已解除；same-SHA Tests 綠）
+
+附帶條件：
+
+- outbound（digest / mail / push）仍 OFF，屬另一次批准，不計入本次 READY 範圍
+- 後續 gate 修復 #346 / #349 已合併、部署並在 Production 驗證，實作規格見 `v3/STAGE1-FIXTURE-READINESS.md`
+- 本附錄不授權任何新的 deploy、flag 變更或 activation；原第 26 節對 `ea1872b` 的 `PRODUCTION_RELEASE_BLOCKED` 判決保留作為歷史紀錄
+
