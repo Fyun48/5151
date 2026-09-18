@@ -1,13 +1,13 @@
 {
   "schema": "pr-d-paths-bench-v1",
-  "generated_at": "2026-09-18T15:02:07.888Z",
+  "generated_at": "2026-09-18T15:51:18.988Z",
   "issue": "#325 PART P / PART R items 12 + 26-27",
   "environment": {
     "node": "v24.13.0",
     "platform": "win32 x64",
     "sqlite": "node:sqlite DatabaseSync(:memory:)",
     "data": "seeded only; no Production data, no network, no writes outside this process",
-    "posture_measured": "Stage 1-4 in-app ON, digest/mail/push OFF (as Production runs today)"
+    "posture_measured": "seeded benchmark posture: Stage 1-4 in-app ON, digest ON (to exercise the digest sweep), mail/push OFF. Production today keeps digest/mail/push OFF."
   },
   "dataset": {
     "seed": {
@@ -38,8 +38,8 @@
       "rental_analytics_daily": 403,
       "rental_completion_surveys": 600
     },
-    "seed_ms": 5865.97,
-    "total_ms": 6426.999
+    "seed_ms": 5909.241,
+    "total_ms": 6494.199
   },
   "bounds": {
     "notify_batch": 80,
@@ -61,9 +61,9 @@
       "mutates": true,
       "note": "bounded 80/tick, cursor-paged",
       "iterations": 3,
-      "median_ms": 13.895,
-      "min_ms": 13.573,
-      "max_ms": 14.091,
+      "median_ms": 13.768,
+      "min_ms": 13.588,
+      "max_ms": 14.662,
       "result": {
         "scanned": 80,
         "emitted": 43
@@ -75,9 +75,9 @@
       "mutates": false,
       "note": "UNIQUE event_key dedup path",
       "iterations": 5,
-      "median_ms": 0.072,
-      "min_ms": 0.06,
-      "max_ms": 0.096,
+      "median_ms": 0.068,
+      "min_ms": 0.064,
+      "max_ms": 0.102,
       "result": {
         "emitted": false,
         "reason": "deduped",
@@ -91,9 +91,9 @@
       "mutates": true,
       "note": "bounded 80/batch",
       "iterations": 3,
-      "median_ms": 6.501,
-      "min_ms": 6.337,
-      "max_ms": 7.565,
+      "median_ms": 7.042,
+      "min_ms": 6.368,
+      "max_ms": 7.206,
       "result": {
         "scanned": 80,
         "delivered": 80,
@@ -106,9 +106,9 @@
       "mutates": false,
       "note": "item cap 8/bucket",
       "iterations": 5,
-      "median_ms": 0.092,
-      "min_ms": 0.073,
-      "max_ms": 0.125,
+      "median_ms": 0.098,
+      "min_ms": 0.077,
+      "max_ms": 0.127,
       "result": {
         "id": 10,
         "public_token": "<redacted-token>",
@@ -128,9 +128,9 @@
       "mutates": false,
       "note": "bounded 80/tick",
       "iterations": 5,
-      "median_ms": 0.121,
-      "min_ms": 0.11,
-      "max_ms": 0.137,
+      "median_ms": 0.115,
+      "min_ms": 0.109,
+      "max_ms": 0.131,
       "result": {
         "rows": 80
       },
@@ -155,9 +155,9 @@
       "mutates": true,
       "note": "bounded 80/batch",
       "iterations": 3,
-      "median_ms": 0.905,
-      "min_ms": 0.808,
-      "max_ms": 0.985,
+      "median_ms": 1.15,
+      "min_ms": 1.116,
+      "max_ms": 1.175,
       "result": {
         "scanned": 4,
         "closed": 0
@@ -169,9 +169,9 @@
       "mutates": false,
       "note": "bounded 80",
       "iterations": 5,
-      "median_ms": 0.408,
-      "min_ms": 0.402,
-      "max_ms": 0.436,
+      "median_ms": 0.426,
+      "min_ms": 0.399,
+      "max_ms": 0.579,
       "result": {
         "rows": 80
       },
@@ -182,9 +182,9 @@
       "mutates": false,
       "note": "GROUP BY found_via_site",
       "iterations": 5,
-      "median_ms": 0.064,
-      "min_ms": 0.062,
-      "max_ms": 0.068,
+      "median_ms": 0.088,
+      "min_ms": 0.066,
+      "max_ms": 0.1,
       "result": {
         "rows": 1
       },
@@ -195,9 +195,9 @@
       "mutates": false,
       "note": "range clamp 93 days",
       "iterations": 5,
-      "median_ms": 1.514,
-      "min_ms": 1.47,
-      "max_ms": 1.703,
+      "median_ms": 1.614,
+      "min_ms": 1.55,
+      "max_ms": 1.757,
       "result": {
         "keys": 7
       },
@@ -208,9 +208,9 @@
       "mutates": false,
       "note": "page cap 50",
       "iterations": 5,
-      "median_ms": 0.402,
-      "min_ms": 0.393,
-      "max_ms": 0.471,
+      "median_ms": 0.376,
+      "min_ms": 0.376,
+      "max_ms": 0.395,
       "result": {
         "kind": "offers",
         "next_cursor": 20
@@ -235,9 +235,9 @@
       "mutates": true,
       "note": "server-source conversion; public cta/server is refused by design",
       "iterations": 3,
-      "median_ms": 0.035,
-      "min_ms": 0.017,
-      "max_ms": 0.252,
+      "median_ms": 0.038,
+      "min_ms": 0.018,
+      "max_ms": 0.255,
       "result": {
         "recorded": false,
         "reason": "deduped",
@@ -250,9 +250,9 @@
       "mutates": true,
       "note": "bounded 80/tick",
       "iterations": 3,
-      "median_ms": 21.14,
-      "min_ms": 21.115,
-      "max_ms": 21.199,
+      "median_ms": 21.29,
+      "min_ms": 20.512,
+      "max_ms": 21.591,
       "result": {
         "scanned": 80,
         "emitted": 80
@@ -264,9 +264,9 @@
       "mutates": true,
       "note": "bounded 80/tick",
       "iterations": 3,
-      "median_ms": 15.196,
-      "min_ms": 14.723,
-      "max_ms": 15.706,
+      "median_ms": 15.753,
+      "min_ms": 15.37,
+      "max_ms": 15.835,
       "result": {
         "scanned": 80,
         "emitted": 40,
@@ -279,9 +279,9 @@
       "mutates": true,
       "note": "bounded 80/tick",
       "iterations": 3,
-      "median_ms": 11.856,
-      "min_ms": 11.759,
-      "max_ms": 13.2,
+      "median_ms": 11.683,
+      "min_ms": 11.629,
+      "max_ms": 12.281,
       "result": {
         "scanned": 80,
         "emitted": 40
@@ -293,9 +293,9 @@
       "mutates": true,
       "note": "bounded 80/tick",
       "iterations": 3,
-      "median_ms": 30.898,
-      "min_ms": 30.57,
-      "max_ms": 31.311,
+      "median_ms": 31.818,
+      "min_ms": 31.766,
+      "max_ms": 32.288,
       "result": {
         "closed": 80,
         "scanned": 80
@@ -307,9 +307,9 @@
       "mutates": true,
       "note": "retention 180d events",
       "iterations": 3,
-      "median_ms": 0.854,
-      "min_ms": 0.722,
-      "max_ms": 1.047,
+      "median_ms": 0.863,
+      "min_ms": 0.735,
+      "max_ms": 1.056,
       "result": {
         "events": 0,
         "share": 0
@@ -321,9 +321,9 @@
       "mutates": true,
       "note": "the real worker entry point",
       "iterations": 3,
-      "median_ms": 87.619,
-      "min_ms": 47.918,
-      "max_ms": 92.932,
+      "median_ms": 87.427,
+      "min_ms": 68.311,
+      "max_ms": 92.774,
       "result": {
         "skipped": false
       },

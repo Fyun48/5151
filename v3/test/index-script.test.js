@@ -470,7 +470,7 @@ test("member settings copy hides advanced hints and locks schedule defaults", ()
   assert.doesNotMatch(html, /進階：591 網址（自動產生，通常不用改）/);
   assert.doesNotMatch(html, /meIsAdmin \? Number\(\$\("pagesPerWatch"\)\.value\) : 40/);
   assert.match(html, /body:not\(\.role-admin\) \.admin-only/);
-  assert.match(html, /<div class="admin-only">\s*<label>檢查間隔（分鐘）/);
+  assert.match(html, /<div class="admin-only">\s*<label for="intervalMinutes">檢查間隔（分鐘）/);
   assert.doesNotMatch(html, /<label>確認已下架天數/);
   assert.doesNotMatch(html, /站內是右下角「待看更新」/);
   assert.doesNotMatch(html, /路徑用 591 物件頁「點地址」/);

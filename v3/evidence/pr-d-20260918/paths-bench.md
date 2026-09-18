@@ -1,28 +1,28 @@
-# PR D seeded path benchmark — 2026-09-18T15:02:07.888Z
+# PR D seeded path benchmark — 2026-09-18T15:51:18.988Z
 
-node v24.13.0 / win32 x64; in-memory SQLite; seed 5865.97 ms; total 6426.999 ms
+node v24.13.0 / win32 x64; in-memory SQLite; seed 5909.241 ms; total 6494.199 ms
 
 | path | median ms | min | max | iters | bounds/notes | result |
 |---|---|---|---|---|---|---|
-| due lifecycle reminders (scheduleLifecycleReminders) | 13.895 | 13.573 | 14.091 | 3 | bounded 80/tick, cursor-paged | {"scanned":80,"emitted":43} |
-| notification dedup lookup (emitRentalNotifyEvent, second call) | 0.072 | 0.06 | 0.096 | 5 | UNIQUE event_key dedup path | {"emitted":false,"reason":"deduped","event_key":"<redacted-token>","event_id":30129} |
-| pending delivery retry (deliverQueuedNotifications) | 6.501 | 6.337 | 7.565 | 3 | bounded 80/batch | {"scanned":80,"delivered":80,"failed":0} |
-| digest bucket lookup (addDigestItem) | 0.092 | 0.073 | 0.125 | 5 | item cap 8/bucket | {"id":10,"public_token":"<redacted-token>","user_id":11,"channel":"dock","bucket_date":"2026-09-17","kind":"owner_new_match","status":"open","item_count":3,"overflow_count":0,"created_at":"2026-09-17T12:00:00.000Z"} |
-| owner subscription lookup (listDueMatchSubscriptions) | 0.121 | 0.11 | 0.137 | 5 | bounded 80/tick | {"rows":80} |
+| due lifecycle reminders (scheduleLifecycleReminders) | 13.768 | 13.588 | 14.662 | 3 | bounded 80/tick, cursor-paged | {"scanned":80,"emitted":43} |
+| notification dedup lookup (emitRentalNotifyEvent, second call) | 0.068 | 0.064 | 0.102 | 5 | UNIQUE event_key dedup path | {"emitted":false,"reason":"deduped","event_key":"<redacted-token>","event_id":30129} |
+| pending delivery retry (deliverQueuedNotifications) | 7.042 | 6.368 | 7.206 | 3 | bounded 80/batch | {"scanned":80,"delivered":80,"failed":0} |
+| digest bucket lookup (addDigestItem) | 0.098 | 0.077 | 0.127 | 5 | item cap 8/bucket | {"id":10,"public_token":"<redacted-token>","user_id":11,"channel":"dock","bucket_date":"2026-09-17","kind":"owner_new_match","status":"open","item_count":3,"overflow_count":0,"created_at":"2026-09-17T12:00:00.000Z"} |
+| owner subscription lookup (listDueMatchSubscriptions) | 0.115 | 0.109 | 0.131 | 5 | bounded 80/tick | {"rows":80} |
 | new-match notification dedup (openMatchEpisodeIfNeeded) | 0.005 | 0.005 | 0.007 | 5 | rental_match_seen lookup | {"notify":false,"episode":1} |
-| new-match eligibility recheck (recheckSeenMatchEligibility) | 0.905 | 0.808 | 0.985 | 3 | bounded 80/batch | {"scanned":4,"closed":0} |
-| completion survey due lookup (raw path used by the notify tick) | 0.408 | 0.402 | 0.436 | 5 | bounded 80 | {"rows":80} |
-| survey aggregate over a bounded range (surveyAggregate) | 0.064 | 0.062 | 0.068 | 5 | GROUP BY found_via_site | {"rows":1} |
-| analytics timeseries range (rentalOpsSummary) | 1.514 | 1.47 | 1.703 | 5 | range clamp 93 days | {"keys":7} |
-| admin drill-down pagination (rentalOpsDrilldown offers) | 0.402 | 0.393 | 0.471 | 5 | page cap 50 | {"kind":"offers","next_cursor":20} |
+| new-match eligibility recheck (recheckSeenMatchEligibility) | 1.15 | 1.116 | 1.175 | 3 | bounded 80/batch | {"scanned":4,"closed":0} |
+| completion survey due lookup (raw path used by the notify tick) | 0.426 | 0.399 | 0.579 | 5 | bounded 80 | {"rows":80} |
+| survey aggregate over a bounded range (surveyAggregate) | 0.088 | 0.066 | 0.1 | 5 | GROUP BY found_via_site | {"rows":1} |
+| analytics timeseries range (rentalOpsSummary) | 1.614 | 1.55 | 1.757 | 5 | range clamp 93 days | {"keys":7} |
+| admin drill-down pagination (rentalOpsDrilldown offers) | 0.376 | 0.376 | 0.395 | 5 | page cap 50 | {"kind":"offers","next_cursor":20} |
 | attribution conversion lookup (resolveValidShareToken) | 0.004 | 0.004 | 0.005 | 5 | token lookup | {"value":"<redacted-token>"} |
-| attribution conversion write (recordShareEvent signup, server source) | 0.035 | 0.017 | 0.252 | 3 | server-source conversion; public cta/server is refused by design | {"recorded":false,"reason":"deduped","is_bot":false} |
-| offer expiring sweep (scheduleOfferExpiring) | 21.14 | 21.115 | 21.199 | 3 | bounded 80/tick | {"scanned":80,"emitted":80} |
-| tenant retention sweep (scheduleTenantRetention) | 15.196 | 14.723 | 15.706 | 3 | bounded 80/tick | {"scanned":80,"emitted":40,"skipped_policy":0} |
-| owner retention sweep (scheduleOwnerRetention) | 11.856 | 11.759 | 13.2 | 3 | bounded 80/tick | {"scanned":80,"emitted":40} |
-| digest bucket close (closeDigestBuckets) | 30.898 | 30.57 | 31.311 | 3 | bounded 80/tick | {"closed":80,"scanned":80} |
-| event/delivery cleanup (cleanupRentalNotify) | 0.854 | 0.722 | 1.047 | 3 | retention 180d events | {"events":0,"share":0} |
-| notify worker tick end to end (runRentalNotifyTick) | 87.619 | 47.918 | 92.932 | 3 | the real worker entry point | {"skipped":false} |
+| attribution conversion write (recordShareEvent signup, server source) | 0.038 | 0.018 | 0.255 | 3 | server-source conversion; public cta/server is refused by design | {"recorded":false,"reason":"deduped","is_bot":false} |
+| offer expiring sweep (scheduleOfferExpiring) | 21.29 | 20.512 | 21.591 | 3 | bounded 80/tick | {"scanned":80,"emitted":80} |
+| tenant retention sweep (scheduleTenantRetention) | 15.753 | 15.37 | 15.835 | 3 | bounded 80/tick | {"scanned":80,"emitted":40,"skipped_policy":0} |
+| owner retention sweep (scheduleOwnerRetention) | 11.683 | 11.629 | 12.281 | 3 | bounded 80/tick | {"scanned":80,"emitted":40} |
+| digest bucket close (closeDigestBuckets) | 31.818 | 31.766 | 32.288 | 3 | bounded 80/tick | {"closed":80,"scanned":80} |
+| event/delivery cleanup (cleanupRentalNotify) | 0.863 | 0.735 | 1.056 | 3 | retention 180d events | {"events":0,"share":0} |
+| notify worker tick end to end (runRentalNotifyTick) | 87.427 | 68.311 | 92.774 | 3 | the real worker entry point | {"skipped":false} |
 
 ## EXPLAIN QUERY PLAN (index usage)
 
@@ -52,6 +52,8 @@ node v24.13.0 / win32 x64; in-memory SQLite; seed 5865.97 ms; total 6426.999 ms
 | offer.expiry | cover:idx_wish_offers_expires | 1 | 0 |
 | offer.block_lookup | cover:sqlite_autoindex_user_blocks_2 | 1 | 0 |
 | offer.report_rate | cover:idx_wish_offer_reports_reporter_created | 1 | 0 |
+
+24 paths total: 23 are index SEARCH paths with no SCAN node, 1 contains a SCAN node (see the table for which one).
 
 ## Row counts after seeding
 

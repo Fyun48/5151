@@ -18,10 +18,20 @@ const SHOTS = path.join(HERE, "shots");
 mkdirSync(SHOTS, { recursive: true });
 
 const BASE = process.env.EVIDENCE_BASE_URL || "http://127.0.0.1:5199";
-const WISH_TOKEN = process.env.EVIDENCE_WISH_TOKEN || "f47f20b1ec0ab43d030a33cacd6bf4c5";
-const LISTING_ID = process.env.EVIDENCE_LISTING_ID || "2100000001";
 const WIDTHS = [375, 768, 1440];
 const VIEWPORT_HEIGHT = 1400;
+
+// Seeded ids/tokens come from the gitignored tokens.json written by seed-local.mjs.
+let tokens = { listing_id: "2100000001", wish_token: "", completed_wish_token: "" };
+const tokensPath = path.join(HERE, "data", "tokens.json");
+if (existsSync(tokensPath)) {
+  try {
+    tokens = { ...tokens, ...JSON.parse(readFileSync(tokensPath, "utf8")) };
+  } catch { /* keep the defaults above */ }
+}
+const WISH_TOKEN = process.env.EVIDENCE_WISH_TOKEN || tokens.wish_token;
+const SURVEY_TOKEN = process.env.EVIDENCE_SURVEY_TOKEN || tokens.completed_wish_token || tokens.wish_token;
+const LISTING_ID = process.env.EVIDENCE_LISTING_ID || String(tokens.listing_id);
 
 const CHROME_CANDIDATES = [
   "C:/Program Files/Google/Chrome/Application/chrome.exe",
@@ -105,12 +115,22 @@ const DIAGNOSTICS = `(() => {
     }
   }
   const small = [];
-  for (const el of document.querySelectorAll("a,button,input,select,textarea,[role=button],[role=tab]")) {
+  // A checkbox/radio is a 24px box whose 44px target is the wrapping label, so the label
+  // is measured as the control (documented in README.md) and the box is not counted twice.
+  const controlSelector = "a,button,select,textarea,[role=button],[role=tab],input:not([type=checkbox]):not([type=radio]),label:has(> input[type=checkbox]),label:has(> input[type=radio])";
+  for (const el of document.querySelectorAll(controlSelector)) {
     const rect = el.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) continue;
     if (rect.height < 44 || rect.width < 24) {
-      small.push({ tag: el.tagName.toLowerCase(), text: String(el.textContent || el.value || "").trim().slice(0, 24), w: Math.round(rect.width), h: Math.round(rect.height) });
-      if (small.length >= 10) break;
+      small.push({
+        tag: el.tagName.toLowerCase(),
+        id: el.id || "",
+        cls: String(el.className || "").slice(0, 60),
+        text: String(el.textContent || el.value || "").trim().slice(0, 24),
+        w: Math.round(rect.width),
+        h: Math.round(rect.height),
+      });
+      if (small.length >= 14) break;
     }
   }
   const unnamed = [];
@@ -152,12 +172,26 @@ const redactToken = (text) => String(text)
 const { issueCaptcha } = await import("../../src/captcha.js");
 const sessionCache = new Map();
 
+// Local evidence credentials: generated per run by seed-local.mjs into a gitignored file.
+const credsPath = path.join(HERE, "data", "credentials.json");
+let creds = { owner: "owner@evidence.test", tenant: "tenant@evidence.test", password: process.env.EVIDENCE_PASSWORD || "" };
+if (existsSync(credsPath)) {
+  try {
+    creds = { ...creds, ...JSON.parse(readFileSync(credsPath, "utf8")) };
+  } catch { /* keep the defaults above */ }
+}
+
+function credsFor(role) {
+  return { email: creds[role] || creds.owner, password: creds.password };
+}
+
 /**
  * Logs in through the real /api/login endpoint. The captcha is minted in-process
  * with the same SESSION_SECRET the local evidence server runs with, so the
  * anti-bot path stays intact instead of being bypassed.
  */
-async function sessionFor(email, password) {
+async function sessionFor(role) {
+  const { email, password } = credsFor(role);
   if (sessionCache.has(email)) return sessionCache.get(email);
   const captcha = issueCaptcha({ code: "AEV1" });
   const res = await fetch(`${BASE}/api/login`, {
@@ -179,7 +213,8 @@ async function sessionFor(email, password) {
   return result;
 }
 
-async function capture(cdp, { name, url, width, login }) {
+async function capture(cdp, { name, url, width, login, loginByWidth, steps = [] }) {
+  const role = (loginByWidth && loginByWidth[width]) || login;
   await cdp.send("Emulation.setDeviceMetricsOverride", {
     width,
     height: VIEWPORT_HEIGHT,
@@ -187,8 +222,8 @@ async function capture(cdp, { name, url, width, login }) {
     mobile: width < 700,
   });
   let loginResult = null;
-  if (login) {
-    const session = await sessionFor(login.email, login.password);
+  if (role) {
+    const session = await sessionFor(role);
     loginResult = { status: session.status, ok: session.ok, role: session.role, cookie: session.cookie ? session.cookie.name : null };
     if (session.cookie) {
       await cdp.send("Network.setCookie", {
@@ -200,28 +235,106 @@ async function capture(cdp, { name, url, width, login }) {
     }
   }
   await cdp.send("Page.navigate", { url });
-  await sleep(2500);
+  await sleep(2600);
+
+  const stepResults = [];
+  for (const step of steps) {
+    let clicked = null;
+    if (step.select) {
+      clicked = await cdp.send("Runtime.evaluate", {
+        expression: `(() => {
+          const el = document.querySelector(${JSON.stringify(step.select)});
+          if (!el) return { found: false };
+          el.click();
+          return { found: true, id: el.id || "", cls: String(el.className || "").slice(0, 40) };
+        })()`,
+        returnByValue: true,
+      });
+    } else if (step.js) {
+      clicked = await cdp.send("Runtime.evaluate", { expression: step.js, returnByValue: true });
+    }
+    await sleep(step.wait || 900);
+    let expectation = null;
+    if (step.expect) {
+      const probe = await cdp.send("Runtime.evaluate", {
+        expression: `(() => {
+          const el = document.querySelector(${JSON.stringify(step.expect)});
+          if (!el) return { found: false, visible: false };
+          const rect = el.getBoundingClientRect();
+          return { found: true, visible: rect.width > 0 && rect.height > 0, w: Math.round(rect.width), h: Math.round(rect.height) };
+        })()`,
+        returnByValue: true,
+      });
+      expectation = probe.result.value;
+    }
+    stepResults.push({
+      step: step.label || step.select || "js",
+      result: clicked && clicked.result ? clicked.result.value : null,
+      expect: expectation,
+    });
+  }
+
   const shot = await cdp.send("Page.captureScreenshot", { format: "png" });
   writeFileSync(path.join(SHOTS, `${name}-${width}.png`), Buffer.from(shot.data, "base64"));
-  const focus = await cdp.send("Runtime.evaluate", {
-    expression: `(() => {
-      const first = document.querySelector("a,button,input,select");
-      if (first) first.focus();
-      const el = document.activeElement;
-      const style = el ? getComputedStyle(el) : null;
-      return {
-        active: el ? el.tagName.toLowerCase() + (el.id ? "#" + el.id : "") : null,
-        outline: style ? style.outlineStyle + " " + style.outlineWidth + " " + style.outlineColor : null,
-      };
-    })()`,
-    returnByValue: true,
-  });
   const diag = await cdp.send("Runtime.evaluate", { expression: DIAGNOSTICS, returnByValue: true });
   const diagnostics = diag.result.value || {};
   if (diagnostics.url) diagnostics.url = redactToken(diagnostics.url);
   if (diagnostics.title) diagnostics.title = redactToken(diagnostics.title);
-  return { name, width, login: loginResult, focus: focus.result.value, diagnostics };
+  return { name, width, login: loginResult, steps: stepResults, diagnostics };
 }
+
+const TARGETS = [
+  {
+    name: "public-share-cta",
+    url: `${BASE}/w/${WISH_TOKEN}`,
+    label: "public share page v2 CTA as an anonymous visitor",
+  },
+  {
+    name: "tenant-notify-prefs",
+    url: `${BASE}/`,
+    login: "tenant",
+    steps: [
+      { label: "open the notify view", select: '[data-nav="notify"]', wait: 1400, expect: "#notifyHub" },
+      { label: "select the 租屋通知 pane", select: '[data-hub-tab="rental"]', wait: 1000, expect: "#rentalNotifyPrefs" },
+    ],
+  },
+  { name: "tenant-wish-room", url: `${BASE}/w/${WISH_TOKEN}`, login: "tenant" },
+  {
+    name: "tenant-wish-lifecycle",
+    url: `${BASE}/#wish`,
+    login: "tenant",
+    steps: [
+      { label: "open the tenant wish view (lifecycle controls)", select: '[data-nav="demand"]', wait: 1600, expect: "#wishLifecycleBar" },
+    ],
+  },
+  {
+    name: "tenant-survey",
+    url: `${BASE}/#wish`,
+    login: "tenant",
+    // Each width completes a different seeded tenant's wish, so the flow stays deterministic.
+    loginByWidth: { 375: "tenant", 768: "tenant2", 1440: "tenant3" },
+    steps: [
+      { label: "completion-survey entry 已找到房", select: "#wishCompleteBtn", wait: 3000, expect: "#wishSurveyOverlay" },
+    ],
+  },
+  {
+    name: "owner-match-subscription",
+    url: `${BASE}/`,
+    login: "owner",
+    steps: [
+      { label: "open the owner listings view", select: '[data-nav="post"]', wait: 2000, expect: "[data-self-matches]" },
+      { label: "open the match overlay (new-match subscription controls)", select: "[data-self-matches]", wait: 3200, expect: "#matchSubBar" },
+    ],
+  },
+  {
+    name: "admin-rental-ops",
+    url: `${BASE}/admin.html#rental/ops`,
+    login: "owner",
+    steps: [
+      { label: "load the rental operations analytics panel", select: "#rentalOpsLoad", wait: 2400, expect: "#rentalOpsSummary" },
+    ],
+  },
+];
 
 async function main() {
   const browser = findBrowser();
@@ -250,22 +363,14 @@ async function main() {
   await cdp.send("Runtime.enable");
   await cdp.send("Network.enable");
 
-  const credsPath = path.join(HERE, "data", "credentials.json");
-  let creds = { owner: "owner@evidence.test", tenant: "tenant@evidence.test", password: process.env.EVIDENCE_PASSWORD || "" };
-  if (existsSync(credsPath)) {
-    try {
-      creds = { ...creds, ...JSON.parse(readFileSync(credsPath, "utf8")) };
-    } catch { /* fall back to the defaults above */ }
-  }
-  const owner = { email: process.env.EVIDENCE_OWNER_EMAIL || creds.owner, password: creds.password };
-  const tenant = { email: process.env.EVIDENCE_TENANT_EMAIL || creds.tenant, password: creds.password };
-
   const results = [];
-  for (const width of WIDTHS) {
-    results.push(await capture(cdp, { name: "public-home", url: `${BASE}/`, width }));
-    results.push(await capture(cdp, { name: "tenant-wish-room", url: `${BASE}/w/${WISH_TOKEN}`, width, login: tenant }));
-    results.push(await capture(cdp, { name: "owner-listing-match", url: `${BASE}/go/${LISTING_ID}`, width, login: owner }));
-    results.push(await capture(cdp, { name: "admin-console", url: `${BASE}/admin.html`, width, login: owner }));
+  const only = process.env.EVIDENCE_ONLY ? process.env.EVIDENCE_ONLY.split(",") : null;
+  const widths = process.env.EVIDENCE_WIDTHS ? process.env.EVIDENCE_WIDTHS.split(",").map(Number) : WIDTHS;
+  for (const width of widths) {
+    for (const target of TARGETS) {
+      if (only && !only.includes(target.name)) continue;
+      results.push(await capture(cdp, { ...target, width }));
+    }
   }
 
   const report = {
@@ -286,11 +391,10 @@ async function main() {
     page: r.name,
     width: r.width,
     url: r.diagnostics ? r.diagnostics.url : null,
-    title: r.diagnostics ? r.diagnostics.title : null,
     overflow_px: r.diagnostics ? r.diagnostics.overflowPx : null,
     small_targets: r.diagnostics ? r.diagnostics.small_touch_targets.length : null,
     unnamed_controls: r.diagnostics ? r.diagnostics.unnamed_controls.length : null,
-    focus: r.focus,
+    steps: (r.steps || []).map((s) => ({ step: s.step, ok: s.result ? s.result.found : null, expect: s.expect })),
   })), null, 2));
 
   child.kill();
