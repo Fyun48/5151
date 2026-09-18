@@ -38,15 +38,54 @@ export function randomFixturePassword() {
   return `Fx!${randomBytes(32).toString("base64url")}`;
 }
 
-const LATER_OFF = [
+/** Stage flags that may legitimately be ON once the Stage 1-4 rollout finished. */
+export const ACTIVATED_STAGE_FLAGS = Object.freeze([
   "offer_enabled",
   "public_share_v2_enabled",
   "owner_notifications_enabled",
   "notifications_enabled",
+]);
+
+/** Outbound channels must be false in every posture. */
+export const FIXTURE_OUTBOUND_FLAGS = Object.freeze([
   "digest_enabled",
   "outbound_mail_enabled",
   "outbound_push_enabled",
-];
+]);
+
+/** Flag postures the fixture contract understands. */
+export const FIXTURE_POSTURE = Object.freeze({
+  PRE_ACTIVATION: "pre_activation",
+  POST_ACTIVATION: "post_activation",
+});
+
+/**
+ * Only these modes may run after the later stages are ON. prepare/verify keep the
+ * strict pre-activation requirement, so an abandoned run can still be recovered
+ * without ever making preparation valid in an activated posture.
+ */
+export const FIXTURE_CLEANUP_MODES = Object.freeze(["cleanup", "reap-stale", "cleanup-activated"]);
+
+/** Readiness posture required by a fixture mode. */
+export function postureForMode(mode) {
+  return FIXTURE_CLEANUP_MODES.includes(mode) ? "cleanup" : "strict";
+}
+
+/**
+ * Detects the live posture from the stage flags. A partially activated set is
+ * refused rather than guessed, so the caller can never pick the posture that
+ * happens to be convenient.
+ */
+export function detectFixturePosture(flags, label = "fixture") {
+  const wish = asObject(flags?.wish);
+  const on = ACTIVATED_STAGE_FLAGS.filter((key) => wish[key] === true);
+  const off = ACTIVATED_STAGE_FLAGS.filter((key) => wish[key] === false);
+  if (on.length === ACTIVATED_STAGE_FLAGS.length) return FIXTURE_POSTURE.POST_ACTIVATION;
+  if (off.length === ACTIVATED_STAGE_FLAGS.length) return FIXTURE_POSTURE.PRE_ACTIVATION;
+  throw new Error(
+    `${label} wish stage flags are inconsistent (${on.join("+") || "none"} ON); refusing`,
+  );
+}
 
 function opaqueId(value) {
   return createHash("sha256").update(String(value || "")).digest("hex").slice(0, 12);
@@ -56,7 +95,21 @@ function asObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
-export function assertReadinessFlags(flags, label = "fixture", expectedOwnerMatching = false) {
+/**
+ * Readiness contract.
+ *
+ * `posture: "strict"` (default, used by prepare and verify) keeps the original
+ * pre-activation requirement: every later stage flag must be false.
+ *
+ * `posture: "cleanup"` additionally accepts the post-activation posture, because
+ * cleanup and reap only ever touch exact registry-bound fixture rows. In that
+ * posture Stage 1 must be ON and the four stage flags must all be ON, while the
+ * three outbound channels must still be false. Mixed stage flags are refused.
+ */
+export function assertReadinessFlags(flags, label = "fixture", expectedOwnerMatching = false, { posture = "strict" } = {}) {
+  if (posture !== "strict" && posture !== "cleanup") {
+    throw new Error(`${label} unsupported fixture posture '${posture}'`);
+  }
   const wish = asObject(flags?.wish);
   if (flags?.rental_catalog_v2?.enabled !== true) {
     throw new Error(`${label} rental_catalog_v2.enabled must be true`);
@@ -64,14 +117,27 @@ export function assertReadinessFlags(flags, label = "fixture", expectedOwnerMatc
   if (wish.lifecycle_enabled !== true) {
     throw new Error(`${label} wish.lifecycle_enabled must be true`);
   }
-  if (wish.owner_matching_enabled !== expectedOwnerMatching) {
-    throw new Error(`${label} wish.owner_matching_enabled must be ${expectedOwnerMatching}`);
+  const detected = posture === "cleanup"
+    ? detectFixturePosture(flags, label)
+    : FIXTURE_POSTURE.PRE_ACTIVATION;
+  const activated = detected === FIXTURE_POSTURE.POST_ACTIVATION;
+  // A post-activation posture implies Stage 1 is ON, so that expectation wins.
+  const ownerExpectation = activated ? true : expectedOwnerMatching;
+  if (wish.owner_matching_enabled !== ownerExpectation) {
+    throw new Error(`${label} wish.owner_matching_enabled must be ${ownerExpectation}`);
   }
-  for (const key of LATER_OFF) {
+  const stageExpectation = activated;
+  for (const key of ACTIVATED_STAGE_FLAGS) {
+    if (wish[key] !== stageExpectation) {
+      throw new Error(`${label} wish.${key} must be ${stageExpectation}`);
+    }
+  }
+  for (const key of FIXTURE_OUTBOUND_FLAGS) {
     if (wish[key] !== false) {
       throw new Error(`${label} wish.${key} must be false`);
     }
   }
+  return detected;
 }
 
 export function listingFixtureInput(runId, extra = {}) {
@@ -568,7 +634,7 @@ export function cleanupStage1Fixtures(db, deps = {}, {
   ownerMatching = false,
 } = {}) {
   ensureStage1FixtureSchema(db);
-  if (flags) assertReadinessFlags(flags, "cleanup", ownerMatching);
+  if (flags) assertReadinessFlags(flags, "cleanup", ownerMatching, { posture: "cleanup" });
   const closeSelfListing = requireDomain(deps, "closeSelfListing");
   const applyWishLifecycleAction = requireDomain(deps, "applyWishLifecycleAction");
   const deleteUser = requireDomain(deps, "deleteUser");
@@ -644,7 +710,7 @@ export function verifyCleanup(db, deps = {}, {
   emptyOk = false,
   ownerMatching = false,
 } = {}) {
-  if (flags) assertReadinessFlags(flags, "cleanup-verify", ownerMatching);
+  if (flags) assertReadinessFlags(flags, "cleanup-verify", ownerMatching, { posture: "cleanup" });
   const leftover = listActiveRegistryRows(db, { namespace, runId, now });
   if (leftover.length) failCleanup("active registry rows remain after cleanup");
 
@@ -719,7 +785,8 @@ export function runStage1FixtureDomain({
   }
   const before = snapshotFlags(getRentalMarketplaceFlags);
   const expectOwnerMatching = mode === "cleanup-activated";
-  assertReadinessFlags(before, "fixture-before", expectOwnerMatching);
+  const posture = postureForMode(mode);
+  const beforePosture = assertReadinessFlags(before, "fixture-before", expectOwnerMatching, { posture });
   let result;
   if (mode === "prepare") {
     result = prepareStage1Fixtures(db, deps, {
@@ -740,14 +807,19 @@ export function runStage1FixtureDomain({
   if (!sameFlags(before, after)) {
     throw new Error("fixture domain mutated feature flags");
   }
-  assertReadinessFlags(after, "fixture-after", expectOwnerMatching);
+  assertReadinessFlags(after, "fixture-after", expectOwnerMatching, { posture });
+  // The actionable value is the posture that was actually verified, not the
+  // mode default: plain cleanup/reap run with Stage 1 ON in the activated posture.
+  const enactedOwnerMatching = beforePosture === FIXTURE_POSTURE.POST_ACTIVATION ? true : expectOwnerMatching;
   const doc = {
     schema: "stage1-fixture-domain-v1",
     mode,
+    posture: beforePosture,
+    readiness_posture: posture,
     flags_mutated: false,
     before_raw_flags: before,
     after_raw_flags: after,
-    owner_matching_enabled: expectOwnerMatching,
+    owner_matching_enabled: enactedOwnerMatching,
     result: result?.evidence || result,
     ok: true,
   };
