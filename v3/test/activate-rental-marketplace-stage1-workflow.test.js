@@ -413,6 +413,8 @@ function completeSuccessCore() {
     login: true,
     final_digest: GOOD.IMAGE_DIGEST,
     final_oci_revision: GOOD.SOURCE_SHA,
+    fixture_run_id: "stage1-fix:20260918:000000:test-run",
+    fixture_cleanup: true,
   };
 }
 
@@ -486,6 +488,68 @@ test("P1-6 success contract still fail-closes missing fields, wrong flags, diges
   delete missingBackupVerified.backup_verified;
   assert.equal(run(missingBackupVerified).ACTIVATION_OK, false);
 });
+test("P1-7/P1-8 success contract requires fixture_run_id and fixture_cleanup", () => {
+  const writer = path.join(root, ".github/scripts/write-stage1-activation-artifact.py");
+  const run = (coreDoc) => {
+    const dir = mkdtempSync(path.join(tmpdir(), "stage1-p178-"));
+    const core = path.join(dir, "core.json");
+    const out = path.join(dir, "out.json");
+    writeFileSync(core, JSON.stringify(coreDoc));
+    execFileSync("python3", [writer], {
+      env: {
+        ...process.env,
+        STAGE1_CORE_PATH: core,
+        STAGE1_ROLLBACK_PATH: path.join(dir, "missing-rollback.json"),
+        STAGE1_EVIDENCE_OUT: out,
+        SOURCE_SHA: GOOD.SOURCE_SHA,
+        IMAGE_DIGEST: GOOD.IMAGE_DIGEST,
+        BACKUP_ID: GOOD.BACKUP_ID,
+        BACKUP_HASH: GOOD.BACKUP_HASH,
+      },
+    });
+    const doc = JSON.parse(readFileSync(out, "utf8"));
+    rmSync(dir, { recursive: true, force: true });
+    return doc;
+  };
+  const missingFixtureRun = completeSuccessCore();
+  delete missingFixtureRun.fixture_run_id;
+  assert.equal(run(missingFixtureRun).ACTIVATION_OK, false);
+  const cleanupFalse = completeSuccessCore();
+  cleanupFalse.fixture_cleanup = false;
+  assert.equal(run(cleanupFalse).ACTIVATION_OK, false);
+});
+
+test("P1-9 stale prior-run transient evidence cannot satisfy evidence_available", () => {
+  const writer = path.join(root, ".github/scripts/write-stage1-activation-artifact.py");
+  const dir = mkdtempSync(path.join(tmpdir(), "stage1-p19-"));
+  const core = path.join(dir, "core.json");
+  const out = path.join(dir, "out.json");
+  const stale = completeSuccessCore();
+  stale.workflow_run_id = "1111111111";
+  stale.workflow_attempt = "1";
+  writeFileSync(core, JSON.stringify(stale));
+  execFileSync("python3", [writer], {
+    env: {
+      ...process.env,
+      STAGE1_CORE_PATH: core,
+      STAGE1_ROLLBACK_PATH: path.join(dir, "missing-rollback.json"),
+      STAGE1_EVIDENCE_OUT: out,
+      WF_RUN_ID: "2222222222",
+      WF_ATTEMPT: "1",
+      SOURCE_SHA: GOOD.SOURCE_SHA,
+      IMAGE_DIGEST: GOOD.IMAGE_DIGEST,
+      BACKUP_ID: GOOD.BACKUP_ID,
+      BACKUP_HASH: GOOD.BACKUP_HASH,
+    },
+  });
+  const doc = JSON.parse(readFileSync(out, "utf8"));
+  assert.equal(doc.ACTIVATION_OK, false);
+  assert.equal(doc.evidence_available, false);
+  assert.equal(doc.activation_result, "evidence_unavailable");
+  rmSync(dir, { recursive: true, force: true });
+});
+
+
 
 test("Stage 1 activation does not change build, predeploy, deploy or PRA workflows", () => {
   for (const name of UNTOUCHED) {

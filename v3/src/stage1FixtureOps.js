@@ -55,7 +55,7 @@ function asObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
-export function assertReadinessFlags(flags, label = "fixture") {
+export function assertReadinessFlags(flags, label = "fixture", expectedOwnerMatching = false) {
   const wish = asObject(flags?.wish);
   if (flags?.rental_catalog_v2?.enabled !== true) {
     throw new Error(`${label} rental_catalog_v2.enabled must be true`);
@@ -63,8 +63,8 @@ export function assertReadinessFlags(flags, label = "fixture") {
   if (wish.lifecycle_enabled !== true) {
     throw new Error(`${label} wish.lifecycle_enabled must be true`);
   }
-  if (wish.owner_matching_enabled !== false) {
-    throw new Error(`${label} wish.owner_matching_enabled must be false`);
+  if (wish.owner_matching_enabled !== expectedOwnerMatching) {
+    throw new Error(`${label} wish.owner_matching_enabled must be ${expectedOwnerMatching}`);
   }
   for (const key of LATER_OFF) {
     if (wish[key] !== false) {
@@ -212,6 +212,49 @@ function findRole(rows, role) {
   return (rows || []).find((row) => row.role === role) || null;
 }
 
+/** P2: fixture user creation + registry binding must be one atomic write.
+ * A crash between registerUser and registerFixtureRow must never leave an
+ * untracked, verified fixture account behind. Wrapping both in a single
+ * BEGIN IMMEDIATE means either both rows commit or neither does; a retry of
+ * the same run therefore starts clean and is never blocked by an orphan.
+ */
+function createAtomicFixtureUser(db, registerUser, {
+  role,
+  runId,
+  now = new Date(),
+  hooks = {},
+} = {}) {
+  const email = fixtureEmailForRole(runId, role);
+  const password = randomFixturePassword();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const user = registerUser(db, {
+      email,
+      password,
+      acceptDisclaimer: true,
+      acceptPrivacy: true,
+      emailVerified: true,
+    });
+    if (typeof hooks.onAfterUserCreate === "function") {
+      hooks.onAfterUserCreate({ userId: Number(user.id), role, runId });
+    }
+    registerFixtureRow(db, {
+      runId,
+      kind: STAGE1_FIXTURE_KIND.USER,
+      role,
+      rowId: user.id,
+      now,
+    });
+    db.exec("COMMIT");
+    return { role, id: Number(user.id), email_hash: opaqueId(email) };
+  } catch (error) {
+    try {
+      db.exec("ROLLBACK");
+    } catch { /* transaction may already be rolled back */ }
+    throw error;
+  }
+}
+
 export function prepareStage1Fixtures(db, deps = {}, {
   now = new Date(),
   runId = makeStage1FixtureRunId(now, deps.workflowRunId),
@@ -237,23 +280,12 @@ export function prepareStage1Fixtures(db, deps = {}, {
     STAGE1_FIXTURE_ROLE.OTHER_B,
     STAGE1_FIXTURE_ROLE.TENANT_T,
   ]) {
-    const email = fixtureEmailForRole(runId, role);
-    const password = randomFixturePassword();
-    const user = registerUser(db, {
-      email,
-      password,
-      acceptDisclaimer: true,
-      acceptPrivacy: true,
-      emailVerified: true,
-    });
-    registerFixtureRow(db, {
-      runId,
-      kind: STAGE1_FIXTURE_KIND.USER,
+    accounts.push(createAtomicFixtureUser(db, registerUser, {
       role,
-      rowId: user.id,
+      runId,
       now,
-    });
-    accounts.push({ role, id: Number(user.id), email_hash: opaqueId(email) });
+      hooks: deps.userIsolation || {},
+    }));
   }
 
   const owner = accounts.find((row) => row.role === STAGE1_FIXTURE_ROLE.OWNER_A);
@@ -497,9 +529,10 @@ export function cleanupStage1Fixtures(db, deps = {}, {
   namespace = STAGE1_FIXTURE_NAMESPACE,
   flags,
   includeStale = false,
+  ownerMatching = false,
 } = {}) {
   ensureStage1FixtureSchema(db);
-  if (flags) assertReadinessFlags(flags, "cleanup");
+  if (flags) assertReadinessFlags(flags, "cleanup", ownerMatching);
   const closeSelfListing = requireDomain(deps, "closeSelfListing");
   const applyWishLifecycleAction = requireDomain(deps, "applyWishLifecycleAction");
   const deleteUser = requireDomain(deps, "deleteUser");
@@ -514,7 +547,7 @@ export function cleanupStage1Fixtures(db, deps = {}, {
     return true;
   });
   if (!rows.length) {
-    return verifyCleanup(db, deps, { now, runId, namespace, flags, emptyOk: true });
+    return verifyCleanup(db, deps, { now, runId, namespace, flags, emptyOk: true, ownerMatching });
   }
 
   const identities = rows.map((row) => registryRowIdentity(row));
@@ -562,6 +595,7 @@ export function cleanupStage1Fixtures(db, deps = {}, {
     namespace,
     flags,
     cleanedIdentities: identities,
+    ownerMatching,
   });
 }
 
@@ -572,8 +606,9 @@ export function verifyCleanup(db, deps = {}, {
   flags,
   cleanedIdentities = [],
   emptyOk = false,
+  ownerMatching = false,
 } = {}) {
-  if (flags) assertReadinessFlags(flags, "cleanup-verify");
+  if (flags) assertReadinessFlags(flags, "cleanup-verify", ownerMatching);
   const leftover = listActiveRegistryRows(db, { namespace, runId, now });
   if (leftover.length) failCleanup("active registry rows remain after cleanup");
 
@@ -611,7 +646,7 @@ export function verifyCleanup(db, deps = {}, {
       role: row.role,
       row_hash: opaqueId(row.row_id),
     })),
-    owner_matching_enabled: false,
+    owner_matching_enabled: ownerMatching,
     flags_mutated: false,
     wildcard_email_like: false,
   });
@@ -621,7 +656,7 @@ export function reapStaleStage1Fixtures(db, deps = {}, options = {}) {
   return cleanupStage1Fixtures(db, deps, { ...options, includeStale: true, runId: undefined });
 }
 
-export const FIXTURE_MODES = Object.freeze(["prepare", "verify", "cleanup", "reap-stale"]);
+export const FIXTURE_MODES = Object.freeze(["prepare", "verify", "cleanup", "reap-stale", "cleanup-activated"]);
 
 function snapshotFlags(getRentalMarketplaceFlags) {
   return JSON.parse(JSON.stringify(getRentalMarketplaceFlags()));
@@ -647,7 +682,8 @@ export function runStage1FixtureDomain({
     throw new Error(`unsupported STAGE1_FIXTURE_MODE ${mode}`);
   }
   const before = snapshotFlags(getRentalMarketplaceFlags);
-  assertReadinessFlags(before, "fixture-before");
+  const expectOwnerMatching = mode === "cleanup-activated";
+  assertReadinessFlags(before, "fixture-before", expectOwnerMatching);
   let result;
   if (mode === "prepare") {
     result = prepareStage1Fixtures(db, deps, {
@@ -657,6 +693,8 @@ export function runStage1FixtureDomain({
     });
   } else if (mode === "cleanup") {
     result = cleanupStage1Fixtures(db, deps, { now, runId, flags: before });
+  } else if (mode === "cleanup-activated") {
+    result = cleanupStage1Fixtures(db, deps, { now, runId, flags: before, ownerMatching: true });
   } else if (mode === "reap-stale") {
     result = reapStaleStage1Fixtures(db, deps, { now, flags: before });
   } else {
@@ -666,14 +704,14 @@ export function runStage1FixtureDomain({
   if (!sameFlags(before, after)) {
     throw new Error("fixture domain mutated feature flags");
   }
-  assertReadinessFlags(after, "fixture-after");
+  assertReadinessFlags(after, "fixture-after", expectOwnerMatching);
   const doc = {
     schema: "stage1-fixture-domain-v1",
     mode,
     flags_mutated: false,
     before_raw_flags: before,
     after_raw_flags: after,
-    owner_matching_enabled: false,
+    owner_matching_enabled: expectOwnerMatching,
     result: result?.evidence || result,
     ok: true,
   };

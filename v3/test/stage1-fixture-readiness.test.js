@@ -361,6 +361,80 @@ test("cleanup failure keeps non-fixture rows and reports FIXTURE_CLEANUP_FAILED"
   db.close();
 });
 
+test("P1-8 cleanup-activated succeeds with owner_matching=true and does not mutate flags", () => {
+  const db = open();
+  prepareStage1Fixtures(db, deps(), {
+    now: new Date(),
+    runId: "stage1-fix:test:p18",
+    flags: FLAGS,
+  });
+  const activated = structuredClone({ ...FLAGS, wish: { ...FLAGS.wish, owner_matching_enabled: true } });
+  const flags = { current: activated };
+  const doc = runStage1FixtureDomain({
+    db,
+    getRentalMarketplaceFlags: () => flags.current,
+    mode: "cleanup-activated",
+    runId: "stage1-fix:test:p18",
+    deps: deps(),
+  });
+  assert.equal(doc.flags_mutated, false);
+  assert.equal(doc.owner_matching_enabled, true);
+  assert.equal(doc.result.ok, true);
+  assert.deepEqual(flags.current, activated);
+  const openListings = db.prepare(
+    "SELECT post_id FROM listings WHERE fixture_namespace = ? AND COALESCE(self_status, 'open') = 'open'",
+  ).all(STAGE1_FIXTURE_NAMESPACE);
+  assert.equal(openListings.length, 0);
+  const openWishes = db.prepare(
+    "SELECT id FROM demand_posts WHERE fixture_namespace = ? AND status = 'open'",
+  ).all(STAGE1_FIXTURE_NAMESPACE);
+  assert.equal(openWishes.length, 0);
+  const active = db.prepare(
+    "SELECT id FROM stage1_fixture_registry WHERE cleaned_at IS NULL AND status = 'active'",
+  ).all();
+  assert.equal(active.length, 0);
+  db.close();
+});
+test("P2 fixture user creation and registry binding are atomic (no orphan, retry unblocked)", () => {
+  const db = open();
+  const runId = "stage1-fix:test:p2-atomic";
+  assert.throws(
+    () => prepareStage1Fixtures(db, {
+      ...deps(),
+      userIsolation: {
+        onAfterUserCreate() { throw new Error("inject-after-user-create"); },
+      },
+    }, { now: new Date(), runId, flags: FLAGS }),
+    /inject-after-user-create/,
+  );
+  const email = fixtureEmailForRole(runId, STAGE1_FIXTURE_ROLE.OWNER_A);
+  const orphan = db.prepare("SELECT id FROM users WHERE email = ?").get(email);
+  assert.equal(orphan, undefined);
+  const registry = db.prepare("SELECT id FROM stage1_fixture_registry WHERE run_id = ?").all(runId);
+  assert.equal(registry.length, 0);
+  const members = readFileSync(path.join(root, "v3/src/members.js"), "utf8");
+  assert.match(members, /signups >= 2/);
+  const retried = prepareStage1Fixtures(db, deps(), { now: new Date(), runId, flags: FLAGS });
+  assert.equal(retried.ok, true);
+  assert.equal(retried.run_id, runId);
+  db.close();
+});
+
+test("P2 cleanup and reap never delete a normal user", () => {
+  const db = open();
+  const now = new Date("2026-01-01T00:00:00.000Z");
+  db.prepare("INSERT INTO users(email, password_hash, created_at) VALUES (?, ?, ?)").run("normal-p2@example.com", "x", now.toISOString());
+  const prepared = prepareStage1Fixtures(db, deps(), { now: new Date(), runId: "stage1-fix:test:p2-normal", flags: FLAGS });
+  cleanupStage1Fixtures(db, deps(), { now: new Date(), runId: prepared.run_id, flags: FLAGS });
+  reapStaleStage1Fixtures(db, deps(), { now: new Date(), flags: FLAGS });
+  const keeper = db.prepare("SELECT deleted_at FROM users WHERE email = ?").get("normal-p2@example.com");
+  assert.equal(String(keeper.deleted_at || ""), "");
+  db.close();
+});
+
+
+
+
 test("durable Stage 1 failure evidence is written without becoming PASS", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "stage1-ev-"));
   const rollback = path.join(dir, "rollback.json");

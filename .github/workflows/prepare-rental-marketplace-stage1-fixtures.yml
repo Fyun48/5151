@@ -176,6 +176,7 @@ jobs:
             export OWNER_AUTHORIZATION='${{ inputs.owner_authorization }}'
             export FIXTURE_MODE='${{ inputs.mode }}'
             export GITHUB_RUN_ID='${{ github.run_id }}'
+            export GITHUB_RUN_ATTEMPT='${{ github.run_attempt }}'
             export DOMAIN_SCRIPT=/tmp/5151-stage1-fixture-helpers/.github/scripts/stage1-fixture-domain.mjs
             export EVIDENCE_SCRIPT=/tmp/5151-stage1-fixture-helpers/.github/scripts/stage1-fixture-evidence.py
             export SRC_MANIFEST_PY=/tmp/5151-stage1-fixture-helpers/.github/scripts/pra-src-manifest.py
@@ -196,7 +197,7 @@ jobs:
           printf '%s\n' "$NAS_SSH_KEY" > "$key"
           chmod 600 "$key"
           scp -o StrictHostKeyChecking=accept-new -P "$NAS_PORT" -i "$key" \
-            "$NAS_USER@$NAS_HOST:/tmp/stage1-fixture-core.json" ./nas-fixture-core.json \
+            "$NAS_USER@$NAS_HOST:/tmp/stage1-fixture-core-${{ github.run_id }}-${{ github.run_attempt }}.json" ./nas-fixture-core.json \
             || echo "NAS fixture evidence missing"
           rm -f "$key"
       - name: Write Stage 1 fixture evidence
@@ -205,6 +206,7 @@ jobs:
           WF_FILE: .github/workflows/prepare-rental-marketplace-stage1-fixtures.yml
           WF_REF: ${{ github.ref }}
           WF_RUN_ID: ${{ github.run_id }}
+          WF_ATTEMPT: ${{ github.run_attempt }}
           SOURCE_SHA: ${{ inputs.source_sha }}
           IMAGE_DIGEST: ${{ inputs.image_digest }}
           BACKUP_ID: ${{ inputs.backup_id }}
@@ -220,12 +222,18 @@ jobs:
               nas = json.load(open("nas-fixture-core.json"))
           except Exception:
               nas = {}
+          # P1-9: a prior-run fixture core must never satisfy this run's evidence.
+          if nas and str(nas.get("workflow_run_id") or "") != os.environ["WF_RUN_ID"]:
+              nas = {}
+          if nas and os.environ.get("WF_ATTEMPT") and str(nas.get("workflow_attempt") or "") and str(nas.get("workflow_attempt")) != os.environ["WF_ATTEMPT"]:
+              nas = {}
           doc = {
               "schema": "stage1-fixture-evidence-v1",
               "written_at": datetime.now(timezone.utc).isoformat(),
               "workflow_file": os.environ["WF_FILE"],
               "workflow_ref": os.environ["WF_REF"],
               "workflow_run_id": os.environ["WF_RUN_ID"],
+              "workflow_attempt": int(os.environ.get("WF_ATTEMPT") or "0"),
               "mode": os.environ["FIXTURE_MODE"],
               "source_sha": os.environ["SOURCE_SHA"],
               "image_digest": os.environ["IMAGE_DIGEST"],

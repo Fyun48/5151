@@ -156,7 +156,7 @@ jobs:
           port: ${{ secrets.NAS_PORT }}
           username: ${{ secrets.NAS_USER }}
           key: ${{ secrets.NAS_SSH_KEY }}
-          source: ".github/scripts/activate-rental-marketplace-stage1-remote.sh,.github/scripts/activate-rental-marketplace-stage1-domain.mjs,.github/scripts/activate-rental-marketplace-stage1-path.py,.github/scripts/activate-rental-marketplace-stage1-evidence.py,.github/scripts/activate-rental-marketplace-stage1-postcheck.mjs,.github/scripts/pra-src-manifest.py,pra-src-expected.json"
+          source: ".github/scripts/activate-rental-marketplace-stage1-remote.sh,.github/scripts/activate-rental-marketplace-stage1-domain.mjs,.github/scripts/activate-rental-marketplace-stage1-path.py,.github/scripts/activate-rental-marketplace-stage1-evidence.py,.github/scripts/activate-rental-marketplace-stage1-postcheck.mjs,.github/scripts/stage1-fixture-domain.mjs,.github/scripts/pra-src-manifest.py,pra-src-expected.json"
           target: /tmp/5151-stage1-activate-helpers
           overwrite: true
       - name: Activate Stage 1 owner_matching on running v3
@@ -180,9 +180,12 @@ jobs:
             export PATH_SCRIPT=/tmp/5151-stage1-activate-helpers/.github/scripts/activate-rental-marketplace-stage1-path.py
             export EVIDENCE_SCRIPT=/tmp/5151-stage1-activate-helpers/.github/scripts/activate-rental-marketplace-stage1-evidence.py
             export POSTCHECK_SCRIPT=/tmp/5151-stage1-activate-helpers/.github/scripts/activate-rental-marketplace-stage1-postcheck.mjs
+            export FIXTURE_DOMAIN_SCRIPT=/tmp/5151-stage1-activate-helpers/.github/scripts/stage1-fixture-domain.mjs
             export SRC_MANIFEST_PY=/tmp/5151-stage1-activate-helpers/.github/scripts/pra-src-manifest.py
             export EXPECTED_SRC_MANIFEST=/tmp/5151-stage1-activate-helpers/pra-src-expected.json
             export EXPECTED_SRC_MOUNT=/mnt/Storage1/apps/5151/v3/src
+            export GITHUB_RUN_ID='${{ github.run_id }}'
+            export GITHUB_RUN_ATTEMPT='${{ github.run_attempt }}'
             chmod +x /tmp/5151-stage1-activate-helpers/.github/scripts/activate-rental-marketplace-stage1-remote.sh
             /tmp/5151-stage1-activate-helpers/.github/scripts/activate-rental-marketplace-stage1-remote.sh
       - name: Pull NAS activation evidence
@@ -198,10 +201,10 @@ jobs:
           printf '%s\n' "$NAS_SSH_KEY" > "$key"
           chmod 600 "$key"
           scp -o StrictHostKeyChecking=accept-new -P "$NAS_PORT" -i "$key" \
-            "$NAS_USER@$NAS_HOST:/tmp/stage1-activation-core.json" ./nas-activation-core.json \
+            "$NAS_USER@$NAS_HOST:/tmp/stage1-activation-core-${{ github.run_id }}-${{ github.run_attempt }}.json" ./nas-activation-core.json \
             || echo "NAS core evidence missing"
           scp -o StrictHostKeyChecking=accept-new -P "$NAS_PORT" -i "$key" \
-            "$NAS_USER@$NAS_HOST:/tmp/stage1-rollback-evidence.json" ./nas-rollback-evidence.json \
+            "$NAS_USER@$NAS_HOST:/tmp/stage1-rollback-evidence-${{ github.run_id }}-${{ github.run_attempt }}.json" ./nas-rollback-evidence.json \
             || echo "NAS rollback evidence missing"
           rm -f "$key"
       - name: Write Stage 1 activation evidence

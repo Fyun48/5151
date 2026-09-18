@@ -21,6 +21,10 @@ EVIDENCE_SCRIPT="${EVIDENCE_SCRIPT:-}"
 EXPECTED_SRC_MANIFEST="${EXPECTED_SRC_MANIFEST:-}"
 SRC_MANIFEST_PY="${SRC_MANIFEST_PY:-}"
 EXPECTED_SRC_MOUNT="${EXPECTED_SRC_MOUNT:-/mnt/Storage1/apps/5151/v3/src}"
+RUN_ID="${RUN_ID:-${GITHUB_RUN_ID:-local}}"
+RUN_ATTEMPT="${RUN_ATTEMPT:-${GITHUB_RUN_ATTEMPT:-1}}"
+# Per-run unique transient fixture evidence (P1-9). Never reuse a prior run's fixed path.
+FIXTURE_CORE_PATH="/tmp/stage1-fixture-core-${RUN_ID}-${RUN_ATTEMPT}.json"
 
 printf '%s' "$SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$' || fail "source_sha is not a 40-character lowercase hex SHA"
 printf '%s' "$IMAGE_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$' || fail "image_digest is not sha256: plus 64 lowercase hex"
@@ -100,10 +104,10 @@ fi
 docker cp "$CONTAINER:/tmp/stage1-fixture-result.json" /tmp/stage1-fixture-result.json
 docker exec "$CONTAINER" rm -f /tmp/stage1-fixture-domain.mjs /tmp/stage1-fixture-result.json || true
 
-python3 - "$SOURCE_SHA" "$IMAGE_DIGEST" "$BACKUP_ID" "$BACKUP_HASH" "$FIXTURE_MODE" <<'PY'
+python3 - "$SOURCE_SHA" "$IMAGE_DIGEST" "$BACKUP_ID" "$BACKUP_HASH" "$FIXTURE_MODE" "$RUN_ID" "$RUN_ATTEMPT" "$FIXTURE_CORE_PATH" <<'PY'
 import json, sys
 from datetime import datetime, timezone
-source_sha, image_digest, backup_id, backup_hash, mode = sys.argv[1:]
+source_sha, image_digest, backup_id, backup_hash, mode, run_id, attempt, out_path = sys.argv[1:]
 domain = json.load(open("/tmp/stage1-fixture-result.json"))
 if domain.get("flags_mutated") is True:
     raise SystemExit("fixture domain mutated flags")
@@ -113,6 +117,8 @@ doc = {
     "schema": "stage1-fixture-core-v1",
     "timestamp": datetime.now(timezone.utc).isoformat(),
     "mode": mode,
+    "workflow_run_id": run_id,
+    "workflow_attempt": attempt,
     "source_sha": source_sha,
     "image_digest": image_digest,
     "backup_id": backup_id,
@@ -123,8 +129,8 @@ doc = {
     "after_raw_flags": domain.get("after_raw_flags"),
     "result": domain.get("result"),
 }
-open("/tmp/stage1-fixture-core.json", "w", encoding="utf-8").write(json.dumps(doc, indent=2) + "\n")
+open(out_path, "w", encoding="utf-8").write(json.dumps(doc, indent=2) + "\n")
 print("FIXTURE_CORE_OK")
 PY
-python3 "$EVIDENCE_SCRIPT" /tmp/stage1-fixture-core.json
+python3 "$EVIDENCE_SCRIPT" "$FIXTURE_CORE_PATH"
 echo "STAGE1_FIXTURE_DOMAIN_OK"

@@ -90,3 +90,40 @@ Cleanup：close listing → pause/complete open wish → soft-delete fixture use
 2. 未來部署含本 SHA 的 image（另一次 Owner deploy gate）
 3. fixture prepare + verify 獨立 PASS，且 flags 仍為 PR A ON、Stage 1–4 / outbound OFF
 4. 才可再申請既有 Stage 1 activation workflow
+
+## Review P1-7：mutation 前強制 fixture readiness
+
+`activate-rental-marketplace-stage1-remote.sh` 在 `run_domain activate` 之前先跑 fail-closed pre-activation fixture gate：
+
+- 重複使用 `stage1FixtureOps.verifyStage1Fixtures`（read-only，同一 Match Engine helper）
+- 確認 owner_matching 仍 false、exactly one uncleaned run、A/B/T + open listing + active/paused/completed/inactive + hard-conflict control 齊備、namespace 正確、product isolation 成立
+- 產出唯一 `fixture_run_id` 與 `fixture_readiness_at`
+- 任一失敗直接 `fail-before-save`，絕不呼叫 `saveRentalMarketplaceFlags` / `run_domain activate`
+
+## Review P1-8：activation 成功後的 fixture cleanup 閉環
+
+新增 fixture domain mode `cleanup-activated`（`owner_matching=true`、不改 flags）。remote.sh 在 post-activation probes 全 PASS 後、寫最終 `ACTIVATION_OK` receipt 前：
+
+1. exact `fixture_run_id` cleanup（只 fixture exact identities）
+2. verify 無 open/active fixture listing/wish、產品面不可見
+3. cleanup 成功才寫最終 receipt（含 `fixture_cleanup=true`）
+4. cleanup 失敗 → `FIXTURE_CLEANUP_FAILED` → 既有 compensating rollback 把 `owner_matching=false`
+5. cleanup 本身不關 Stage 1 flag；只有 cleanup failure 的 compensation 才 rollback
+
+## Review P1-9：per-run unique durable evidence
+
+- activation core / rollback / fixture core 改 per-run path：含 `GITHUB_RUN_ID` + `GITHUB_RUN_ATTEMPT`
+- core / rollback / fixture core 內含 `workflow_run_id` / `workflow_attempt`
+- workflow 只 pull current-run exact path；`write-stage1-activation-artifact.py` 驗證 evidence run identity 與本次一致
+- stale prior-run file 不得滿足本次 `evidence_available`
+- durable backup receipt 標示 `original_run_id`/`original_attempt` 與 `verification_run_id`/`verification_attempt`
+
+## Release-gate P2：帳號建立與 registry 綁定必須原子
+
+`prepareStage1Fixtures` 的帳號建立改走 `createAtomicFixtureUser`：`registerUser` 與 `registerFixtureRow` 包在**同一個 `BEGIN IMMEDIATE`**，任一失敗即 `ROLLBACK`。
+
+- crash 在 `registerUser` 與 `registerFixtureRow` 之間不會留下沒有 registry 的 verified fixture account
+- 同一 run 重試 deterministic、不被 orphan 阻擋
+- cleanup / reap 只依 registry exact identity，**永遠不會動到一般會員**
+- 回歸：`P2 fixture user creation and registry binding are atomic (no orphan, retry unblocked)`、`P2 cleanup and reap never delete a normal user`
+- **不**修改一般會員 registration / signup_count 規則

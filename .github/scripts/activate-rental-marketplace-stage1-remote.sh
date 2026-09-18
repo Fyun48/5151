@@ -24,6 +24,14 @@ EXPECTED_SRC_MANIFEST="${EXPECTED_SRC_MANIFEST:-}"
 SRC_MANIFEST_PY="${SRC_MANIFEST_PY:-}"
 EXPECTED_SRC_MOUNT="${EXPECTED_SRC_MOUNT:-/mnt/Storage1/apps/5151/v3/src}"
 RECEIPT_NAME="stage1-activation-receipt.json"
+FIXTURE_DOMAIN_SCRIPT="${FIXTURE_DOMAIN_SCRIPT:-}"
+RUN_ID="${RUN_ID:-${GITHUB_RUN_ID:-local}}"
+RUN_ATTEMPT="${RUN_ATTEMPT:-${GITHUB_RUN_ATTEMPT:-1}}"
+# Per-run unique transient evidence (P1-9). Never reuse a prior run's fixed path.
+CORE_EVIDENCE_PATH="/tmp/stage1-activation-core-${RUN_ID}-${RUN_ATTEMPT}.json"
+ROLLBACK_EVIDENCE_PATH="/tmp/stage1-rollback-evidence-${RUN_ID}-${RUN_ATTEMPT}.json"
+FIXTURE_RUN_ID=""
+FIXTURE_READINESS_AT=""
 
 printf '%s' "$SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$' || fail "source_sha is not a 40-character lowercase hex SHA"
 printf '%s' "$IMAGE_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$' || fail "image_digest is not sha256: plus 64 lowercase hex"
@@ -165,6 +173,35 @@ run_domain() {
   return 0
 }
 
+run_fixture_domain() {
+  local mode="$1"
+  [ -n "$FIXTURE_DOMAIN_SCRIPT" ] && [ -f "$FIXTURE_DOMAIN_SCRIPT" ] || fail "fixture domain script is missing"
+  docker exec "$CONTAINER" rm -f /tmp/stage1-fixture-domain.mjs /tmp/stage1-fixture-result.json
+  docker cp "$FIXTURE_DOMAIN_SCRIPT" "$CONTAINER:/tmp/stage1-fixture-domain.mjs"
+  set +e
+  docker exec -w /app \
+    -e STAGE1_FIXTURE_MODE="$mode" \
+    -e STAGE1_FIXTURE_RUN_ID="${FIXTURE_RUN_ID:-}" \
+    -e STAGE1_FIXTURE_RESULT_PATH=/tmp/stage1-fixture-result.json \
+    -e STAGE1_FIXTURE_SRC_ROOT=/app/src \
+    -e GITHUB_RUN_ID="${RUN_ID}" \
+    "$CONTAINER" node /tmp/stage1-fixture-domain.mjs >/tmp/stage1-fixture-domain.out 2>/tmp/stage1-fixture-domain.err
+  local rc=$?
+  set -e
+  if [ "$rc" -ne 0 ]; then
+    echo "fixture domain $mode stderr (no secrets expected):"
+    cat /tmp/stage1-fixture-domain.err || true
+    docker exec "$CONTAINER" rm -f /tmp/stage1-fixture-domain.mjs /tmp/stage1-fixture-result.json || true
+    return 1
+  fi
+  if ! docker cp "$CONTAINER:/tmp/stage1-fixture-result.json" /tmp/stage1-fixture-result.json; then
+    docker exec "$CONTAINER" rm -f /tmp/stage1-fixture-domain.mjs /tmp/stage1-fixture-result.json || true
+    return 1
+  fi
+  docker exec "$CONTAINER" rm -f /tmp/stage1-fixture-domain.mjs /tmp/stage1-fixture-result.json || true
+  return 0
+}
+
 rollback_stage1_flag() {
   echo "=== compensating rollback via domain API (only owner_matching_enabled=false) ==="
   run_domain rollback || return 1
@@ -219,10 +256,10 @@ PY
 write_rollback_evidence() {
   local reason="$1"
   local ok="$2"
-  python3 - "$reason" "$ok" <<'PY'
+  python3 - "$reason" "$ok" "$RUN_ID" "$RUN_ATTEMPT" "$ROLLBACK_EVIDENCE_PATH" <<'PY'
 import json, sys
 from datetime import datetime, timezone
-reason, ok = sys.argv[1:]
+reason, ok, run_id, attempt, out_path = sys.argv[1:]
 domain = {}
 try:
     domain = json.load(open("/tmp/stage1-domain.json"))
@@ -233,13 +270,15 @@ wish = (after.get("wish") or {})
 doc = {
     "schema": "stage1-rollback-evidence-v1",
     "timestamp": datetime.now(timezone.utc).isoformat(),
+    "workflow_run_id": run_id,
+    "workflow_attempt": attempt,
     "reason": reason,
     "rollback_used": True,
     "rollback_ok": ok == "true",
     "after_owner_matching_enabled": wish.get("owner_matching_enabled"),
     "authoritative_source": "post_activation_authenticated_probes",
 }
-open("/tmp/stage1-rollback-evidence.json", "w", encoding="utf-8").write(json.dumps(doc, indent=2) + "\n")
+open(out_path, "w", encoding="utf-8").write(json.dumps(doc, indent=2) + "\n")
 print("ROLLBACK_EVIDENCE_OK")
 PY
 }
@@ -336,9 +375,9 @@ PY
 
 write_core_and_receipt() {
   local verify_only="$1"
-  python3 - "$SOURCE_SHA" "$IMAGE_DIGEST" "$BACKUP_ID" "$BACKUP_HASH" "$PIN" "$SOURCE_SHA" "$SRC_MOUNT" "$TREE_SHA" "$RECEIPT_PATH" "$verify_only" <<'PY'
+  python3 - "$SOURCE_SHA" "$IMAGE_DIGEST" "$BACKUP_ID" "$BACKUP_HASH" "$PIN" "$SOURCE_SHA" "$SRC_MOUNT" "$TREE_SHA" "$RECEIPT_PATH" "$verify_only" "$RUN_ID" "$RUN_ATTEMPT" "$CORE_EVIDENCE_PATH" "$FIXTURE_RUN_ID" "$FIXTURE_READINESS_AT" <<'PY'
 import json, os, sys
-source_sha, image_digest, backup_id, backup_hash, final_image, final_rev, src_mount, tree_sha, receipt_path, verify_only = sys.argv[1:]
+source_sha, image_digest, backup_id, backup_hash, final_image, final_rev, src_mount, tree_sha, receipt_path, verify_only, run_id, attempt, core_path, fixture_run_id, fixture_readiness_at = sys.argv[1:]
 domain = json.load(open("/tmp/stage1-domain.json"))
 runtime = json.load(open("/tmp/stage1-runtime.env"))
 if domain.get("mode") not in ("activate", "inspect", "activate-already-on"):
@@ -347,12 +386,32 @@ before = domain.get("before_raw_flags") or domain.get("raw_flags")
 after = domain.get("after_raw_flags") or domain.get("raw_flags")
 before_counts = domain.get("before_counts") or domain.get("counts")
 after_counts = domain.get("after_counts") or domain.get("counts")
+original_run_id = run_id
+original_attempt = attempt
+original_fixture_run_id = fixture_run_id or ""
+original_fixture_readiness_at = fixture_readiness_at or ""
+original_fixture_cleanup = False
 if verify_only == "true" and os.path.isfile(receipt_path):
     prev = json.load(open(receipt_path))
     before = prev.get("before_raw_flags") or before
     after = prev.get("after_raw_flags") or after
     before_counts = prev.get("before_counts") or before_counts
     after_counts = prev.get("after_counts") or after_counts
+    original_run_id = prev.get("workflow_run_id") or run_id
+    original_attempt = prev.get("workflow_attempt") or attempt
+    original_fixture_run_id = prev.get("fixture_run_id") or original_fixture_run_id
+    original_fixture_readiness_at = prev.get("fixture_readiness_at") or original_fixture_readiness_at
+    original_fixture_cleanup = prev.get("fixture_cleanup") is True
+fixture_cleanup = False
+fixture_cleanup_doc = {}
+try:
+    fixture_cleanup_doc = json.load(open("/tmp/stage1-fixture-result.json"))
+except Exception:
+    fixture_cleanup_doc = {}
+if fixture_cleanup_doc.get("mode") == "cleanup-activated":
+    fixture_cleanup = (fixture_cleanup_doc.get("result") or {}).get("ok") is True
+elif verify_only == "true":
+    fixture_cleanup = original_fixture_cleanup
 doc = {
     "schema": "stage1-activation-receipt-v1",
     "source_sha": source_sha,
@@ -366,6 +425,15 @@ doc = {
     "receipt_path": receipt_path,
     "durable_receipt": True,
     "verify_only": verify_only == "true",
+    "workflow_run_id": run_id,
+    "workflow_attempt": attempt,
+    "original_run_id": original_run_id,
+    "original_attempt": original_attempt,
+    "verification_run_id": run_id if verify_only == "true" else None,
+    "verification_attempt": attempt if verify_only == "true" else None,
+    "fixture_run_id": fixture_run_id or original_fixture_run_id or "",
+    "fixture_readiness_at": fixture_readiness_at or original_fixture_readiness_at or "",
+    "fixture_cleanup": fixture_cleanup,
     "before_raw_flags": before,
     "after_raw_flags": after,
     "before_counts": before_counts,
@@ -394,15 +462,15 @@ blob = json.dumps(doc)
 for token in ("SESSION_SECRET", "NAS_SSH_KEY", "AUTH_PASSWORD", "auth.env"):
     if token in blob:
         raise SystemExit("activation receipt must not contain secrets")
-open("/tmp/stage1-activation-core.json", "w").write(json.dumps(doc, indent=2) + "\n")
+open(core_path, "w").write(json.dumps(doc, indent=2) + "\n")
 print("CORE_EVIDENCE_DRAFT_OK")
 PY
-  python3 "$EVIDENCE_SCRIPT" --check-receipt /tmp/stage1-activation-core.json || return 1
-  python3 - "$RECEIPT_PATH" <<'PY'
+  python3 "$EVIDENCE_SCRIPT" --check-receipt "$CORE_EVIDENCE_PATH" || return 1
+  python3 - "$RECEIPT_PATH" "$CORE_EVIDENCE_PATH" <<'PY'
 import os, shutil, sys
-receipt_path = sys.argv[1]
+receipt_path, core_path = sys.argv[1:]
 os.makedirs(os.path.dirname(receipt_path), exist_ok=True)
-shutil.copyfile("/tmp/stage1-activation-core.json", receipt_path)
+shutil.copyfile(core_path, receipt_path)
 print("DURABLE_RECEIPT_OK")
 print("CORE_EVIDENCE_OK")
 PY
@@ -594,6 +662,25 @@ fi
 
 [ "$PATH_KIND" = "activate" ] || fail "unsupported activation path $PATH_KIND"
 
+echo "=== pre-activation fixture readiness gate (fail-before-save) ==="
+if ! run_fixture_domain verify; then
+  fail "pre-activation fixture readiness gate failed; owner_matching left off (fail-before-save)"
+fi
+FIXTURE_RUN_ID="$(python3 - <<'PY'
+import json
+doc = json.load(open("/tmp/stage1-fixture-result.json"))
+result = doc.get("result") or {}
+rid = result.get("run_id") or doc.get("run_id") or ""
+if not rid:
+    raise SystemExit("pre-activation fixture gate did not produce a run_id")
+print(rid)
+PY
+)"
+[ -n "$FIXTURE_RUN_ID" ] || fail "pre-activation fixture gate produced an empty run_id"
+assert_no_pii /tmp/stage1-fixture-result.json || fail "pre-activation fixture evidence leaked PII"
+FIXTURE_READINESS_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo "PRE_ACTIVATION_FIXTURE_READY run_id=$FIXTURE_RUN_ID at=$FIXTURE_READINESS_AT"
+
 echo "=== domain activation (single node process, only owner_matching_enabled, no raw SQL) ==="
 if ! run_domain activate; then
   compensate_if_mutated "domain get/saveRentalMarketplaceFlags process failed"
@@ -643,6 +730,25 @@ AFTER_REV="$(docker image inspect -f '{{ index .Config.Labels "org.opencontainer
 [ "$AFTER_REV" = "$SOURCE_SHA" ] || compensate_and_fail "OCI revision changed after activation"
 AFTER_MOUNT="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/src"}}{{.Source}}{{end}}{{end}}' "$CONTAINER")"
 [ "$AFTER_MOUNT" = "$EXPECTED_SRC_MOUNT" ] || compensate_and_fail "container /app/src mount changed after activation"
+
+echo "=== post-activation fixture cleanup (exact run_id, no flag mutation) ==="
+if ! run_fixture_domain cleanup-activated; then
+  compensate_and_fail "post-activation fixture cleanup failed"
+fi
+python3 - <<'PY'
+import json
+doc = json.load(open("/tmp/stage1-fixture-result.json"))
+if doc.get("mode") != "cleanup-activated":
+    raise SystemExit("fixture cleanup result mode is not cleanup-activated")
+if doc.get("flags_mutated") is not False:
+    raise SystemExit("fixture cleanup mutated flags")
+if doc.get("owner_matching_enabled") is not True:
+    raise SystemExit("fixture cleanup ran with owner_matching unexpectedly off")
+result = doc.get("result") or {}
+if result.get("ok") is not True:
+    raise SystemExit("fixture cleanup result is not ok")
+print("FIXTURE_CLEANUP_ACTIVATED_OK")
+PY
 
 write_core_and_receipt false || compensate_and_fail "durable receipt write failed after mutation"
 

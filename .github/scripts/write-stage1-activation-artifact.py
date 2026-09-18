@@ -98,6 +98,10 @@ def success_contract_error(core: dict | None, env: dict | None = None) -> str:
         return "activation receipt metadata is incomplete"
     if "/stage1-activation-receipt.json" not in str(core.get("receipt_path") or ""):
         return "activation receipt_path is not durable"
+    if not str(core.get("fixture_run_id") or ""):
+        return "activation fixture_run_id is missing"
+    if core.get("fixture_cleanup") is not True:
+        return "activation fixture_cleanup is not verified"
     if not DIGEST_RE.fullmatch(str(core.get("backup_hash") or "")):
         return "activation backup_hash is not immutable"
     if not DIGEST_RE.fullmatch(str(core.get("final_digest") or "")):
@@ -140,8 +144,28 @@ def success_contract_error(core: dict | None, env: dict | None = None) -> str:
     return ""
 
 
+def evidence_matches_current_run(doc, env=None) -> bool:
+    """P1-9: a prior-run transient evidence file must never satisfy this run."""
+    env = env or os.environ
+    if not isinstance(doc, dict):
+        return False
+    run_id = str(env.get("WF_RUN_ID") or "")
+    if not run_id:
+        return True
+    if str(doc.get("workflow_run_id") or "") != run_id:
+        return False
+    attempt = str(env.get("WF_ATTEMPT") or "")
+    if attempt and str(doc.get("workflow_attempt") or "") and str(doc.get("workflow_attempt")) != attempt:
+        return False
+    return True
+
+
 def build_doc(core, rollback) -> dict:
     now = datetime.now(timezone.utc).isoformat()
+    if core and not evidence_matches_current_run(core):
+        core = None
+    if rollback and not evidence_matches_current_run(rollback):
+        rollback = None
     contract_error = success_contract_error(core) if core else "activation NAS evidence incomplete"
     activation_ok = contract_error == ""
     if rollback and rollback.get("rollback_used") is True:
@@ -199,6 +223,10 @@ def build_doc(core, rollback) -> dict:
             "backup_id", "backup_hash", "backup_verified",
             "src_mount", "src_manifest_verified", "src_tree_sha256",
             "durable_receipt", "verify_only", "before_counts", "after_counts",
+            "workflow_run_id", "workflow_attempt",
+            "fixture_run_id", "fixture_readiness_at", "fixture_cleanup",
+            "original_run_id", "original_attempt",
+            "verification_run_id", "verification_attempt",
         ):
             if key in core:
                 doc[key] = sanitize(core.get(key))
