@@ -561,22 +561,33 @@ export function loadRegistryBoundFixtures(db, {
     isCounterfactuallyMatchable,
     evaluateCounterfactualMatch,
   });
-  const hard = registry.find((row) => row.role === "wish_hard_conflict");
-  if (hard) {
-    const hardWish = wishes.find((row) => Number(row.id) === Number(hard.row_id));
-    const counterfactualEligible = requireCounterfactualHelper({
-      isCounterfactuallyMatchable,
-      evaluateCounterfactualMatch,
-    });
-    const listing = listings.find((row) => Number(row.post_id || row.id) === Number(selected.listing_id));
-    if (hardWish && listing && counterfactualEligible(listing, hardWish, { catalog, now })) {
-      throw new Error("post-activation fixtures rejected: hard-conflict control was eligible");
-    }
-    if (hardWish && selected.suppressed.some((row) => row.token_hash === opaqueId(hardWish.public_token))) {
-      throw new Error("post-activation fixtures rejected: hard-conflict control was selected");
-    }
-    selected.hard_conflict_rejected = true;
+  const hardRows = registry.filter((row) => row.role === "wish_hard_conflict");
+  if (hardRows.length !== 1) {
+    throw new Error("post-activation fixtures rejected: exactly one hard-conflict registry row is required");
   }
+  const hard = hardRows[0];
+  const hardWish = wishes.find((row) => Number(row.id) === Number(hard.row_id));
+  if (!hardWish) {
+    throw new Error("post-activation fixtures rejected: hard-conflict wish row is missing");
+  }
+  if (String(hardWish.fixture_namespace || "") !== String(hard.namespace || "")) {
+    throw new Error("post-activation fixtures rejected: hard-conflict wish is not in the bound fixture namespace");
+  }
+  const hardListing = listings.find((row) => Number(row.post_id || row.id) === Number(selected.listing_id));
+  if (!hardListing) {
+    throw new Error("post-activation fixtures rejected: bound fixture listing is missing for the hard-conflict control");
+  }
+  const counterfactualEligible = requireCounterfactualHelper({
+    isCounterfactuallyMatchable,
+    evaluateCounterfactualMatch,
+  });
+  if (counterfactualEligible(hardListing, hardWish, { catalog, now })) {
+    throw new Error("post-activation fixtures rejected: hard-conflict control was eligible");
+  }
+  if (selected.suppressed.some((row) => row.token_hash === opaqueId(hardWish.public_token))) {
+    throw new Error("post-activation fixtures rejected: hard-conflict control was selected");
+  }
+  selected.hard_conflict_rejected = true;
   selected.selector = "stage1_fixture_registry";
   selected.limit_80_used = false;
   return selected;

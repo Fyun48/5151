@@ -653,6 +653,9 @@ function goodSmoke() {
       budget_ms: 5000,
       ok: true,
     },
+    health: true,
+    landing: true,
+    login: true,
     ACTIVATION_OK: true,
   };
 }
@@ -969,4 +972,29 @@ test("P2-12 repeated verify-only replays keep the original activation run", () =
   const remote = readFileSync(REMOTE, "utf8");
   assert.match(remote, /original_run_id = prev\.get\("original_run_id"\) or prev\.get\("workflow_run_id"\) or run_id/);
   assert.match(remote, /original_attempt = prev\.get\("original_attempt"\) or prev\.get\("workflow_attempt"\) or attempt/);
+});
+
+test("P1-14 landing/login must be verified with HTTP 200 (no hardcoded PASS)", () => {
+  const remote = readFileSync(REMOTE, "utf8");
+  // runtime evidence derives landing/login from the probe statuses, not hardcoded true
+  assert.match(remote, /land_status, _land_ms = "\$land_probe"\.split\(\)/);
+  assert.match(remote, /login_status, _login_ms = "\$login_html_probe"\.split\(\)/);
+  assert.match(remote, /land_ok = land_status == "200" and os\.path\.getsize\("\/tmp\/stage1-landing\.html"\) > 0/);
+  assert.match(remote, /login_ok = login_status == "200" and os\.path\.getsize\("\/tmp\/stage1-login\.html"\) > 0/);
+  assert.match(remote, /if not land_ok:/);
+  assert.match(remote, /if not login_ok:/);
+  assert.match(remote, /"landing": land_ok,/);
+  assert.match(remote, /"login": login_ok,/);
+  assert.doesNotMatch(remote, /"landing": True,/);
+  assert.doesNotMatch(remote, /"login": True,/);
+  // the evidence contract rejects unproven health/landing/login
+  assert.throws(() => checkEvidence("--check-runtime", { ...goodSmoke(), health: false }), /health is not verified/);
+  assert.throws(() => checkEvidence("--check-runtime", { ...goodSmoke(), landing: false }), /landing page is not verified/);
+  assert.throws(() => checkEvidence("--check-runtime", { ...goodSmoke(), login: false }), /login page is not verified/);
+  assert.throws(() => checkEvidence("--check-receipt", { ...goodSmoke(), landing: false }), /landing page is not verified/);
+  assert.throws(() => checkEvidence("--check-receipt", { ...goodSmoke(), login: false }), /login page is not verified/);
+  // both 200 with non-empty bodies => runtime evidence may pass
+  assert.match(checkEvidence("--check-runtime", goodSmoke()), /EVIDENCE_RUNTIME_OK/);
+  // verify-only reuses the same checks but never rolls back
+  assert.match(remote, /hydrate_runtime_on verify-only \|\| fail "verify-only/);
 });

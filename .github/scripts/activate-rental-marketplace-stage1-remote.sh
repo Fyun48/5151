@@ -444,9 +444,9 @@ doc = {
     "privacy_smoke": runtime["privacy_smoke"],
     "perf_smoke": runtime["perf_smoke"],
     "suppression": runtime["suppression"],
-    "health": True,
-    "landing": True,
-    "login": True,
+    "health": runtime.get("health") is True,
+    "landing": runtime.get("landing") is True,
+    "login": runtime.get("login") is True,
     "http_5xx": runtime["http_5xx"],
     "sqlite_busy": runtime["sqlite_busy"],
     "post_activation": runtime["post_activation"],
@@ -492,9 +492,9 @@ hydrate_runtime_on() {
   if [ "$mode" = "activate" ]; then
     run_post_activation_probes || return 1
   fi
-  python3 - "$SOURCE_SHA" "$IMAGE_DIGEST" "$PROBE_LOG" "$mode" "$RECEIPT_PATH" "$RUN_ID" "$RUN_ATTEMPT" <<PY
-import json, sys
-source_sha, image_digest, probe_log, mode, receipt_path, run_id, attempt = sys.argv[1:]
+  python3 - "$SOURCE_SHA" "$IMAGE_DIGEST" "$PROBE_LOG" "$mode" "$RECEIPT_PATH" "$RUN_ID" "$RUN_ATTEMPT" "$land_probe" "$login_html_probe" <<PY
+import json, os, sys
+source_sha, image_digest, probe_log, mode, receipt_path, run_id, attempt, land_probe, login_probe = sys.argv[1:]
 demand = json.load(open("/tmp/stage1-demand-after.json"))
 agg = json.load(open("/tmp/stage1-aggregate-after.json"))
 exp = json.load(open("/tmp/stage1-exposure-after.json"))
@@ -539,6 +539,14 @@ later = (
 )
 if health.get("ok") is not True:
     raise SystemExit("health is not ok")
+land_status, _land_ms = "$land_probe".split()
+login_status, _login_ms = "$login_html_probe".split()
+land_ok = land_status == "200" and os.path.getsize("/tmp/stage1-landing.html") > 0
+login_ok = login_status == "200" and os.path.getsize("/tmp/stage1-login.html") > 0
+if not land_ok:
+    raise SystemExit("landing page did not return 200 with a non-empty body")
+if not login_ok:
+    raise SystemExit("login page did not return 200 with a non-empty body")
 if (flags.get("rental_catalog_v2") or {}).get("enabled") is not True:
     raise SystemExit("runtime rental_catalog_v2.enabled is not true")
 if wish.get("lifecycle_enabled") is not True:
@@ -636,8 +644,8 @@ open("/tmp/stage1-runtime.env", "w").write(
         },
         "lifecycle_counts": lifecycle,
         "health": True,
-        "landing": True,
-        "login": True,
+        "landing": land_ok,
+        "login": login_ok,
     })
     + "\n"
 )

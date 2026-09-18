@@ -163,3 +163,30 @@ verify-only 原本用 `prev.get("workflow_run_id")` 當 `original_run_id`。第�
 
 - 不修改一般會員 signup_count 規則、不動一般會員
 - 回歸：`P2-13 the whole A/B/T account phase is one transaction (no partial accounts)`、`P2-13 a leftover run stays fail-closed for a different run until cleaned`
+
+## Review P1-14：landing/login 必須真的驗 HTTP status
+
+`hydrate_runtime_on()` 原本只確認 curl transport/5xx，卻在 runtime 證據無條件寫 `"landing": true, "login": true`；因此 landing/login 回 404 也會被記成 PASS。
+
+修正：
+
+- 解析 `land_probe` / `login_html_probe` 的 status，要求 **HTTP 200 且 response body 非空** 才 `land_ok` / `login_ok`
+- runtime 證據與 core receipt 改由已驗證結果衍生（`"landing": land_ok`、`"login": login_ok`、receipt 用 `runtime.get("landing") is True`），不再硬編碼 true
+- `activate-rental-marketplace-stage1-evidence.py` 的 `assert_runtime_contract` 新增 health/landing/login 必須為 true
+- verify-only 共用同一組檢查，但失敗時**不回滾**（走 `fail`）
+- 回歸：`P1-14 landing/login must be verified with HTTP 200 (no hardcoded PASS)`
+
+## Review P2-15：hard-conflict 負控制必須 fail-closed
+
+`activate-rental-marketplace-stage1-postcheck.mjs` 原本只在 `hard` registry row 存在時才檢查；若 role 缺失、wish row 消失或 listing 找不到，整個負控制會被跳過，卻仍可能寫入 `hard_conflict_rejected=true`。
+
+修正為 fail-closed，要求全部成立才claim：
+
+1. bound run 內**剛好一筆** `wish_hard_conflict` registry row
+2. 對應 wish row 存在且 namespace 與 registry 相符
+3. bound fixture listing 存在（且等於 selected listing）
+4. 用正式 Match Engine counterfactual helper 實際執行並回傳 ineligible
+5. hard-conflict wish 不在 selected/suppressed 可匹配集合
+
+任一缺失/異常 → throw（initial activation 走既有 compensating rollback）
+- 回歸：`P2-15 missing hard-conflict registry row fails the post-activation gate`、`P2-15 a hard-conflict registry row without its wish row fails the gate`、`P2-15 an unexpectedly eligible hard-conflict control fails the gate`

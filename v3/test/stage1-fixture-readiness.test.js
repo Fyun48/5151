@@ -706,3 +706,39 @@ test("P1-4 prepare fail-closes when another uncleaned run exists", () => {
   );
   db.close();
 });
+
+test("P2-15 missing hard-conflict registry row fails the post-activation gate", () => {
+  const db = open();
+  prepareStage1Fixtures(db, deps(), { now: new Date(), runId: "stage1-fix:test:p215", flags: FLAGS });
+  db.prepare("DELETE FROM stage1_fixture_registry WHERE role = 'wish_hard_conflict'").run();
+  assert.throws(
+    () => loadRegistryBoundFixtures(db, { evaluateCounterfactualMatch, isCounterfactuallyMatchable }),
+    /exactly one hard-conflict registry row/,
+  );
+  db.close();
+});
+
+test("P2-15 a hard-conflict registry row without its wish row fails the gate", () => {
+  const db = open();
+  prepareStage1Fixtures(db, deps(), { now: new Date(), runId: "stage1-fix:test:p215b", flags: FLAGS });
+  const hard = db.prepare("SELECT row_id FROM stage1_fixture_registry WHERE role = 'wish_hard_conflict'").get();
+  db.prepare("DELETE FROM demand_posts WHERE id = ?").run(hard.row_id);
+  assert.throws(
+    () => loadRegistryBoundFixtures(db, { evaluateCounterfactualMatch, isCounterfactuallyMatchable }),
+    /hard-conflict wish row is missing/,
+  );
+  db.close();
+});
+
+test("P2-15 an unexpectedly eligible hard-conflict control fails the gate", () => {
+  const db = open();
+  prepareStage1Fixtures(db, deps(), { now: new Date(), runId: "stage1-fix:test:p215c", flags: FLAGS });
+  assert.throws(
+    () => loadRegistryBoundFixtures(db, {
+      evaluateCounterfactualMatch,
+      isCounterfactuallyMatchable: () => true,
+    }),
+    /hard-conflict control was eligible/,
+  );
+  db.close();
+});
