@@ -7,6 +7,8 @@ run-name: "${{ inputs.release_mode == 'ops_phase15' && format('phase15-intent:{0
 # 備份位置（Issue #355）：備份根目錄由 remote script 的 PREDEPLOY_BACKUP_ROOT 決定，預設是 live
 # 資料卷旁的同層目錄；本 workflow 明確指向另一顆儲存池 /mnt/Storage1/docker_data/591-tracker-v3-backups，
 # 避免備份與 live v3.db 競爭同一個 /DATA 卷（先前就是這樣把資料卷塞滿的）。
+# Host 端工作目錄（helpers / work dir / evidence）同樣放在 /mnt/Storage1/docker_data
+# （PREDEPLOY_WORK_ROOT），因此系統卷或 /DATA 滿載時 predeploy 仍能完成。
 # 備份保留：remote script 會在寫入新備份「之前」先修剪較舊的 predeploy-* 備份，只保留最新
 # PREDEPLOY_BACKUP_KEEP 份（預設 2）。這讓資料卷滿載時，同一次 run 能先釋放空間再建立備份，
 # 而不是以 no space left on device 失敗；也避免備份無上限累積。
@@ -174,7 +176,7 @@ jobs:
             echo "::error::commit $CHECK_SHA is not reachable from origin/master; refusing"; exit 1
           fi
           echo "Evaluated source SHA $CHECK_SHA is on origin/master ancestry (not deployed by this job)."
-      - name: Copy inspect/backup helpers to NAS /tmp
+      - name: Copy inspect/backup helpers to NAS (Storage1 pool)
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.NAS_HOST }}
@@ -182,7 +184,7 @@ jobs:
           username: ${{ secrets.NAS_USER }}
           key: ${{ secrets.NAS_SSH_KEY }}
           source: ".github/scripts/production-predeploy-remote.sh,.github/scripts/verify-sqlite-integrity-json.py,.github/scripts/sqlite-readonly-inspect.mjs,.github/scripts/sqlite-online-backup.mjs,.github/scripts/sqlite-online-backup.py"
-          target: /tmp/5151-predeploy-helpers
+          target: /mnt/Storage1/docker_data/5151-predeploy-helpers
           overwrite: true
       - name: Inspect Production v3, backup, read-only Wish Room
         uses: appleboy/ssh-action@v1.2.0
@@ -197,16 +199,17 @@ jobs:
           script: |
             set -euo pipefail
             # 不 docker compose up、不 pull、不重啟成新版、不印 secrets。
-            # Issue #355: keep predeploy backups on the Storage1 pool, not on the live data volume.
+            # Issue #355: keep every host-side write on the Storage1 pool, not on the live data volume.
             export PREDEPLOY_BACKUP_ROOT=/mnt/Storage1/docker_data/591-tracker-v3-backups
-            export INSPECT_SCRIPT=/tmp/5151-predeploy-helpers/.github/scripts/sqlite-readonly-inspect.mjs
-            export BACKUP_SCRIPT=/tmp/5151-predeploy-helpers/.github/scripts/sqlite-online-backup.mjs
-            export BACKUP_PY_SCRIPT=/tmp/5151-predeploy-helpers/.github/scripts/sqlite-online-backup.py
-            chmod +x /tmp/5151-predeploy-helpers/.github/scripts/production-predeploy-remote.sh
-            /tmp/5151-predeploy-helpers/.github/scripts/production-predeploy-remote.sh
-            rm -f /tmp/5151-predeploy-helpers/.github/scripts/sqlite-readonly-inspect.mjs \
-                  /tmp/5151-predeploy-helpers/.github/scripts/sqlite-online-backup.mjs \
-                  /tmp/5151-predeploy-helpers/.github/scripts/sqlite-online-backup.py
+            export PREDEPLOY_WORK_ROOT=/mnt/Storage1/docker_data
+            export INSPECT_SCRIPT=/mnt/Storage1/docker_data/5151-predeploy-helpers/.github/scripts/sqlite-readonly-inspect.mjs
+            export BACKUP_SCRIPT=/mnt/Storage1/docker_data/5151-predeploy-helpers/.github/scripts/sqlite-online-backup.mjs
+            export BACKUP_PY_SCRIPT=/mnt/Storage1/docker_data/5151-predeploy-helpers/.github/scripts/sqlite-online-backup.py
+            chmod +x /mnt/Storage1/docker_data/5151-predeploy-helpers/.github/scripts/production-predeploy-remote.sh
+            /mnt/Storage1/docker_data/5151-predeploy-helpers/.github/scripts/production-predeploy-remote.sh
+            rm -f /mnt/Storage1/docker_data/5151-predeploy-helpers/.github/scripts/sqlite-readonly-inspect.mjs \
+                  /mnt/Storage1/docker_data/5151-predeploy-helpers/.github/scripts/sqlite-online-backup.mjs \
+                  /mnt/Storage1/docker_data/5151-predeploy-helpers/.github/scripts/sqlite-online-backup.py
       - name: Pull NAS predeploy evidence
         env:
           NAS_HOST: ${{ secrets.NAS_HOST }}
@@ -219,7 +222,7 @@ jobs:
           printf '%s\n' "$NAS_SSH_KEY" > "$key"
           chmod 600 "$key"
           scp -o StrictHostKeyChecking=accept-new -P "$NAS_PORT" -i "$key" \
-            "$NAS_USER@$NAS_HOST:/tmp/phase15-predeploy-evidence.json" ./nas-predeploy-evidence.json
+            "$NAS_USER@$NAS_HOST:/mnt/Storage1/docker_data/phase15-predeploy-evidence.json" ./nas-predeploy-evidence.json
           rm -f "$key"
           python3 - <<'PY'
           import json, re

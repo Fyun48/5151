@@ -374,13 +374,14 @@ for (const name of WORKFLOWS) {
 test("predeploy inspect SSH step pins command_timeout 20m without changing job timeout or other workflows", () => {
   const text = wf("production-predeploy-check.yml");
   const inspect = namedStep(text, "Inspect Production v3, backup, read-only Wish Room");
-  const scp = namedStep(text, "Copy inspect/backup helpers to NAS /tmp");
+  const scp = namedStep(text, "Copy inspect/backup helpers to NAS (Storage1 pool)");
   assert.match(inspect, /uses:\s*appleboy\/ssh-action@v1\.2\.0/);
   assert.match(inspect, /command_timeout:\s*20m/);
   assert.match(inspect, /script_stop:\s*true/);
   assert.match(text, /timeout-minutes:\s*30/);
   assert.doesNotMatch(inspect, /timeout-minutes:/);
   assert.doesNotMatch(scp, /command_timeout:/);
+  assert.match(scp, /target:\s*\/mnt\/Storage1\/docker_data\/5151-predeploy-helpers/);
   assert.doesNotMatch(wf("deploy-v3.yml"), /command_timeout:\s*20m/);
   assert.doesNotMatch(wf("build-production-image.yml"), /command_timeout:\s*20m/);
 });

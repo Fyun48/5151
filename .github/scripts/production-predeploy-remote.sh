@@ -4,15 +4,28 @@ set -euo pipefail
 
 CONTAINER="${CONTAINER:-591-tracker-v3}"
 STAMP="$(date -u +%Y%m%d-%H%M%S)"
-EVIDENCE="/tmp/predeploy-evidence-${STAMP}.json"
-WORKDIR="/tmp/predeploy-work-${STAMP}"
-mkdir -p "$WORKDIR"
 
 fail() {
   echo "::error::$1"
   echo "PREDEPLOY_FAIL: $1"
   exit 1
 }
+
+# Host-side working root (Issue #355): keep every host write (helpers, work dir, evidence) on the
+# Storage1 pool so a full system/data volume cannot block the predeploy run. Defaults to /tmp.
+WORK_ROOT="${PREDEPLOY_WORK_ROOT:-/tmp}"
+case "$WORK_ROOT" in
+  /*) ;;
+  *) fail "PREDEPLOY_WORK_ROOT must be an absolute path (got '$WORK_ROOT')" ;;
+esac
+case "$WORK_ROOT" in
+  *..*) fail "PREDEPLOY_WORK_ROOT must not contain path traversal (got '$WORK_ROOT')" ;;
+esac
+mkdir -p "$WORK_ROOT" || fail "cannot create work root $WORK_ROOT (check NAS ownership/permissions)"
+echo "work_root=$WORK_ROOT"
+EVIDENCE="${WORK_ROOT}/predeploy-evidence-${STAMP}.json"
+WORKDIR="${WORK_ROOT}/predeploy-work-${STAMP}"
+mkdir -p "$WORKDIR"
 
 echo "=== discover container ==="
 if ! docker inspect "$CONTAINER" >/dev/null 2>&1; then
@@ -344,7 +357,7 @@ PY
 echo "BEGIN_PREDEPLOY_EVIDENCE"
 cat "$EVIDENCE"
 echo "END_PREDEPLOY_EVIDENCE"
-cp "$EVIDENCE" /tmp/phase15-predeploy-evidence.json
+cp "$EVIDENCE" "${WORK_ROOT}/phase15-predeploy-evidence.json"
 echo "PHASE15_BACKUP_ID=$BACKUP_DIR"
 echo "PHASE15_BACKUP_HASH=sha256:$BACKUP_SHA"
 echo "PREDEPLOY_CHECK_OK"
