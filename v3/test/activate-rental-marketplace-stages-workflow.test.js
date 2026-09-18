@@ -551,7 +551,15 @@ test("Staged postcheck classifies live gates and keeps later gates closed", asyn
   const gatesFor = (stage, { shareRefused = stage < 3, notifyEnabled = stage >= 4 } = {}) => ({
     aggregate: { status: 200, code: "", body: { enabled: true } },
     offers: { status: stage >= 2 ? 401 : 404, code: stage >= 2 ? "" : "wish_offer_disabled", body: {} },
-    shares: { status: shareRefused ? 404 : 400, code: shareRefused ? "share_disabled" : "", body: {} },
+    // The share probe posts to a sentinel room id that can never exist, so the
+    // live route answers 404 both when the gate is closed (with the
+    // share_disabled code) and when it is open (room not found, no code). Only
+    // the code discriminates; mirror that here or the fixture hides a real bug.
+    shares: {
+      status: 404,
+      code: shareRefused ? "share_disabled" : "",
+      body: shareRefused ? { error: "分享追蹤尚未開放", code: "share_disabled" } : { error: "找不到心願" },
+    },
     notifications: { status: 200, code: "", body: { enabled: notifyEnabled } },
     notifications_anonymous: { status: 401, code: "", body: {} },
   });
@@ -571,6 +579,33 @@ test("Staged postcheck classifies live gates and keeps later gates closed", asyn
   assert.equal(s4closed.target_serving, false);
   const s2leak = mod.classifyGates({ gates: gatesFor(2, { shareRefused: false, notifyEnabled: true }), stage: 2 });
   assert.equal(s2leak.later_gates_closed, false);
+
+  // Regression: the live share route answers 404 for the never-existing sentinel
+  // id even when the gate is OPEN. Requiring `status !== 404` made
+  // target_serving unsatisfiable for Stage 3 and rolled a correct Stage 3 back.
+  const s3open = mod.classifyGates({
+    gates: { ...gatesFor(3), shares: { status: 404, code: "", body: { error: "找不到心願" } } },
+    stage: 3,
+  });
+  assert.equal(s3open.share_gate_open, true);
+  assert.equal(s3open.target_serving, true);
+  const s3closed = mod.classifyGates({
+    gates: {
+      ...gatesFor(3),
+      shares: { status: 404, code: "share_disabled", body: { error: "分享追蹤尚未開放", code: "share_disabled" } },
+    },
+    stage: 3,
+  });
+  assert.equal(s3closed.share_gate_open, false);
+  assert.equal(s3closed.target_serving, false);
+  // Stage 2 keeps its own rule: /api/wish-offers/owner answers 401 with a session
+  // when open, so a 404 still means the offer gate did not come up.
+  const s2notServing = mod.classifyGates({
+    gates: { ...gatesFor(2), offers: { status: 404, code: "", body: { error: "not found" } } },
+    stage: 2,
+  });
+  assert.equal(s2notServing.offer_gate_open, true);
+  assert.equal(s2notServing.target_serving, false);
 });
 
 test("Staged postcheck redaction is fail-closed and phone detection stays boundary-anchored (P1-22)", async () => {
