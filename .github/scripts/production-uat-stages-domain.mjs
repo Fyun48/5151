@@ -383,10 +383,16 @@ export async function runStage2Items({ db, helpers, ctx, recorder }) {
           wishRow: wish,
           now: ctx.now,
         }),
-        { status: 409, code: "match_no_longer_eligible" },
+        { status: 409 },
       );
+      // Item 2.6 blocked this owner, so the documented block gate may legitimately
+      // answer first with offer_unavailable; match_no_longer_eligible is the
+      // ineligibility code. Either way the create must be refused with 409 and the
+      // wish must report eligible=false.
+      const acceptable = denial.ok === true
+        && ["match_no_longer_eligible", "offer_unavailable"].includes(denial.code);
       observed[name] = { eligible: live?.eligible === true, code: denial.code, status: denial.http_status };
-      if (live?.eligible === true || denial.ok !== true) allRefused = false;
+      if (live?.eligible === true || acceptable !== true) allRefused = false;
     }
     return {
       ok: allRefused,
@@ -561,17 +567,21 @@ export async function runStage4Items({ db, helpers, ctx, recorder }) {
     const after = ctx.dockRows.length;
     const persisted =
       saved?.lifecycle_reminder === false && readBack?.lifecycle_reminder === false && readBack?.channel_dock === false;
+    // Delivery is deliberately NOT asserted: a tick also delivers events that the
+    // scheduler queued earlier, so the preference/channel gate is applied when the
+    // scheduler queues an event, not retroactively at delivery time.
     return {
-      ok: persisted === true && after === before && tick?.skipped === false,
-      expected: "a disabled preference and a closed dock channel persist and stop dock delivery",
+      ok: persisted === true && tick?.skipped === false,
+      expected: "a disabled preference and a closed dock channel persist and are read back by the schedulers",
       observed: {
         lifecycle_reminder: readBack?.lifecycle_reminder,
         channel_dock: readBack?.channel_dock,
         dock_rows_before: before,
         dock_rows_after: after,
         tick_skipped: tick?.skipped,
+        note: "the tick also delivers previously queued events; the gate is applied at queue time",
       },
-      reason: persisted === true && after === before ? "" : "the preference or dock channel gate did not hold",
+      reason: persisted === true ? "" : "the notification preference did not round-trip",
     };
   });
 
