@@ -702,3 +702,43 @@ pythonTest("Staged evidence contract separates redaction checks from the leak re
   assert.ok(unknown.evidence.problems.some((p) => /privacy redaction mystery_signal is not a boolean check/.test(p)));
 });
 
+test("Staged remote never rolls back a verify-only replay and bounds read-only probe retries", () => {
+  const remote = readText(REMOTE);
+  const helperStart = remote.indexOf("compensate_or_fail() {");
+  assert.ok(helperStart > 0, "compensate_or_fail helper is missing");
+  const helper = remote.slice(helperStart, helperStart + 900);
+  assert.match(helper, /if \[ "\$CLASS" = "activate" \]/);
+  assert.match(helper, /compensate_and_fail "\$reason"/);
+  assert.match(helper, /STAGES_VERIFY_ONLY_FAIL/);
+  assert.match(helper, /no rollback/);
+
+  // Regression: run 35320127057 was a verify-only replay whose read-only exposure
+  // probe timed out, and the shared post-mutation block compensated
+  // unconditionally, turning a correctly enabled Stage 2 back OFF.
+  const sharedStart = remote.indexOf("hydrate runtime caches");
+  const sharedEnd = remote.indexOf("write core evidence bundle");
+  assert.ok(sharedStart > 0 && sharedEnd > sharedStart, "shared post-mutation block was not found");
+  const shared = remote.slice(sharedStart, sharedEnd);
+  assert.ok(
+    !shared.includes("compensate_and_fail"),
+    "shared post-mutation block must never compensate unconditionally",
+  );
+  assert.ok(shared.includes("compensate_or_fail"));
+
+  const probeStart = remote.indexOf("http_probe() {");
+  assert.ok(probeStart > 0, "http_probe is missing");
+  const probe = remote.slice(probeStart, probeStart + 1400);
+  assert.match(probe, /for attempt in 1 2 3/);
+  assert.match(probe, /--max-time 20/);
+  assert.match(probe, /curl_error_after_retries/);
+  assert.ok(!/--max-time 8/.test(probe), "the unbounded 8s probe budget must not come back");
+});
+
+test("Staged activation shell helper parses under bash -n", () => {
+  // A shell syntax error would otherwise only surface on the NAS at activation
+  // time, so parse the helper on every host that has bash (local and CI). The
+  // embedded python heredocs are covered by the python cases that run in CI.
+  assert.ok(readText(REMOTE).includes("compensate_or_fail() {"), "sanity: the shell helper was read");
+  execFileSync("bash", ["-c", `bash -n ${JSON.stringify(REMOTE)}`], { encoding: "utf8" });
+});
+
