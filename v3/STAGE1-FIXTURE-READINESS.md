@@ -127,3 +127,16 @@ Cleanup：close listing → pause/complete open wish → soft-delete fixture use
 - cleanup / reap 只依 registry exact identity，**永遠不會動到一般會員**
 - 回歸：`P2 fixture user creation and registry binding are atomic (no orphan, retry unblocked)`、`P2 cleanup and reap never delete a normal user`
 - **不**修改一般會員 registration / signup_count 規則
+
+## Review P1-10：verify-only 不得因 fixture 已被 cleanup 而回滾
+
+第一次成功 activation 的流程是 `post-activation probes → cleanup-activated → ACTIVATION_OK receipt`，會把 fixture registry 標記 cleaned。若之後 Stage 1 已 ON、durable receipt 相符而進入 `PATH_KIND=verify-only`，舊流程仍呼叫 fixture-dependent 的 post-activation probes，會在 fixture 已被清掉時失敗並 `compensate_and_fail`，把健康的 `owner_matching=true` 誤回滾為 false。
+
+修正：`hydrate_runtime_on` 新增 `mode` 參數（`activate` / `verify-only`）：
+
+- `verify-only` **不**呼叫 `run_post_activation_probes`（fixture-dependent）
+- 驗證 durable receipt 身分 + 先前 `fixture_run_id` + 先前 `fixture_cleanup=true` + runtime `owner_matching=true`
+- 保留原本 activation 的 authenticated post-activation 證據（標記 `current_run_is_verification`、`fixtures_cleaned_by_prior_run`、`original_run_id`、`verification_run_id`）
+- 仍做 current-run 檢查：health、landing/login、public flags、aggregate/exposure、unauth 401、5xx/SQLITE_BUSY、image/revision、Stage2–4/outbound OFF
+- verify-only 走 `fail`（**不呼叫** `compensate_and_fail` / `run_domain rollback`）；只有 activation 路徑才用 compensating rollback
+- 回歸：`P1-10 verify-only recovery never rolls back merely because fixtures were cleaned`、`P1-10 verify-only still fails closed on identity, runtime or UAT substitution`、`P1-10 a cleaned fixture run leaves zero active rows so the fixture-dependent selector cannot run`

@@ -435,6 +435,24 @@ test("P2 cleanup and reap never delete a normal user", () => {
 
 
 
+test("P1-10 a cleaned fixture run leaves zero active rows so the fixture-dependent selector cannot run", () => {
+  const db = open();
+  const prepared = prepareStage1Fixtures(db, deps(), { now: new Date(), runId: "stage1-fix:test:p110", flags: FLAGS });
+  cleanupStage1Fixtures(db, deps(), { now: new Date(), runId: prepared.run_id, flags: FLAGS });
+  const active = db.prepare(
+    "SELECT id FROM stage1_fixture_registry WHERE cleaned_at IS NULL AND status = 'active'",
+  ).all();
+  assert.equal(active.length, 0);
+  // The registry-bound post-activation selector used by run_post_activation_probes
+  // is therefore unusable after a successful cleanup: verify-only must not need it.
+  assert.throws(
+    () => loadRegistryBoundFixtures(db, { evaluateCounterfactualMatch, isCounterfactuallyMatchable }),
+    /no active fixtures|must bind a single uncleaned run_id/,
+  );
+  db.close();
+});
+
+
 test("durable Stage 1 failure evidence is written without becoming PASS", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "stage1-ev-"));
   const rollback = path.join(dir, "rollback.json");

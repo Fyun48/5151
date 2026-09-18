@@ -901,3 +901,47 @@ test("Stage 1 post-activation probes are required and fail-closed with compensat
     /timed out|timeout|fail-closed/,
   );
 });
+test("P1-10 verify-only recovery never rolls back merely because fixtures were cleaned", () => {
+  const remote = readFileSync(REMOTE, "utf8");
+  const start = remote.indexOf('if [ "$PATH_KIND" = "verify-only" ]');
+  assert.ok(start >= 0, "verify-only recovery block missing");
+  const end = remote.indexOf("exit 0", start);
+  assert.ok(end > start, "verify-only recovery block has no exit");
+  const block = remote.slice(start, end);
+  // Runs the current-run verification without the fixture-dependent probes.
+  assert.match(block, /hydrate_runtime_on verify-only/);
+  // Must NOT roll back or mutate Production on a clean, already-activated Stage 1.
+  assert.doesNotMatch(block, /compensate_and_fail/);
+  assert.doesNotMatch(block, /run_domain rollback/);
+  assert.doesNotMatch(block, /saveRentalMarketplaceFlags/);
+  // Must not depend on re-creating fixtures.
+  assert.doesNotMatch(block, /run_fixture_domain/);
+  // The fixture-dependent post-activation probes run only for the activate path.
+  assert.match(remote, /if \[ "\$mode" = "activate" \]; then\s+run_post_activation_probes \|\| return 1/);
+  // hydrate_runtime_on requires the prior durable, cleaned activation receipt.
+  assert.match(remote, /verify-only prior receipt is not ACTIVATION_OK/);
+  assert.match(remote, /verify-only prior receipt is missing fixture_run_id/);
+  assert.match(remote, /verify-only prior receipt did not verify fixture cleanup/);
+  assert.match(remote, /verify-only requires runtime wish\.owner_matching_enabled true/);
+  // It retains the original authenticated post-activation evidence, marked as a verification run.
+  assert.match(remote, /prior\.get\("post_activation"\)/);
+  assert.match(remote, /current_run_is_verification/);
+  assert.match(remote, /fixtures_cleaned_by_prior_run/);
+});
+
+test("P1-10 verify-only still fails closed on identity, runtime or UAT substitution", () => {
+  const remote = readFileSync(REMOTE, "utf8");
+  // Fresh current-run runtime checks still apply in verify-only.
+  assert.match(remote, /verify-only requires runtime wish\.owner_matching_enabled true/);
+  assert.match(remote, /if agg_ms_n >= 5000 or exp_ms_n >= 5000:/);
+  assert.match(remote, /unauth summary is not fail-closed 401/);
+  assert.match(remote, /unauth detail is not fail-closed 401/);
+  assert.match(remote, /http_5xx observed during defined probes/);
+  assert.match(remote, /sqlite_busy observed during defined probes/);
+  // Wrong digest/revision/source/tree is rejected by the path classifier before verify-only.
+  const pathPy = readFileSync(PATH_PY, "utf8");
+  assert.match(pathPy, /receipt \{key\} does not match/);
+  assert.match(pathPy, /receipt is not ACTIVATION_OK/);
+  // Original authenticated evidence cannot be replaced by pre-activation UAT.
+  assert.match(remote, /pre-activation PRODUCTION_UAT_PASS cannot satisfy post-activation evidence/);
+});

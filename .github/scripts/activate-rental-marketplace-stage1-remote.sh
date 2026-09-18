@@ -477,6 +477,7 @@ PY
 }
 
 hydrate_runtime_on() {
+  local mode="${1:-activate}"
   local demand_probe agg_probe exp_probe summary_probe detail_probe health_probe
   demand_probe="$(http_probe /tmp/stage1-demand-after.json http://127.0.0.1:5153/api/demand)" || return 1
   agg_probe="$(http_probe /tmp/stage1-aggregate-after.json http://127.0.0.1:5153/api/demand/aggregate)" || return 1
@@ -488,23 +489,45 @@ hydrate_runtime_on() {
   login_html_probe="$(http_probe /tmp/stage1-login.html http://127.0.0.1:5153/login.html)" || return 1
   assert_no_pii /tmp/stage1-aggregate-after.json || return 1
   assert_no_pii /tmp/stage1-exposure-after.json || return 1
-  run_post_activation_probes || return 1
-  python3 - "$SOURCE_SHA" "$IMAGE_DIGEST" "$PROBE_LOG" <<PY
+  if [ "$mode" = "activate" ]; then
+    run_post_activation_probes || return 1
+  fi
+  python3 - "$SOURCE_SHA" "$IMAGE_DIGEST" "$PROBE_LOG" "$mode" "$RECEIPT_PATH" "$RUN_ID" "$RUN_ATTEMPT" <<PY
 import json, sys
-source_sha, image_digest, probe_log = sys.argv[1:]
+source_sha, image_digest, probe_log, mode, receipt_path, run_id, attempt = sys.argv[1:]
 demand = json.load(open("/tmp/stage1-demand-after.json"))
 agg = json.load(open("/tmp/stage1-aggregate-after.json"))
 exp = json.load(open("/tmp/stage1-exposure-after.json"))
 summary = json.load(open("/tmp/stage1-summary-unauth.json"))
 detail = json.load(open("/tmp/stage1-detail-unauth.json"))
 health = json.load(open("/tmp/stage1-health.json"))
-post = json.load(open("/tmp/stage1-post-activation.json"))
+if mode == "verify-only":
+    prior = json.load(open(receipt_path))
+    if prior.get("ACTIVATION_OK") is not True:
+        raise SystemExit("verify-only prior receipt is not ACTIVATION_OK")
+    if not str(prior.get("fixture_run_id") or ""):
+        raise SystemExit("verify-only prior receipt is missing fixture_run_id")
+    if prior.get("fixture_cleanup") is not True:
+        raise SystemExit("verify-only prior receipt did not verify fixture cleanup")
+    post = dict(prior.get("post_activation") or {})
+    post.update({
+        "current_run_is_verification": True,
+        "fixtures_cleaned_by_prior_run": True,
+        "original_run_id": prior.get("original_run_id") or prior.get("workflow_run_id") or "",
+        "original_attempt": prior.get("original_attempt") or prior.get("workflow_attempt") or "",
+        "verification_run_id": run_id,
+        "verification_attempt": attempt,
+    })
+else:
+    post = json.load(open("/tmp/stage1-post-activation.json"))
 agg_status, agg_ms = "$agg_probe".split()
 exp_status, exp_ms = "$exp_probe".split()
 summary_status, _ = "$summary_probe".split()
 detail_status, _ = "$detail_probe".split()
 flags = demand.get("flags") or {}
 wish = flags.get("wish") or {}
+if mode == "verify-only" and wish.get("owner_matching_enabled") is not True:
+    raise SystemExit("verify-only requires runtime wish.owner_matching_enabled true")
 later = (
     "offer_enabled",
     "public_share_v2_enabled",
@@ -546,14 +569,15 @@ probes = []
 for line in open(probe_log, encoding="utf-8"):
     if line.strip():
         probes.append(json.loads(line))
-for row in post.get("probes") or []:
-    probes.append({
-        "url": row.get("target"),
-        "status": row.get("status") or 0,
-        "elapsed_ms": row.get("elapsed_ms") or 0,
-        "http_5xx": row.get("http_5xx") is True,
-        "sqlite_busy": row.get("sqlite_busy") is True,
-    })
+if mode != "verify-only":
+    for row in post.get("probes") or []:
+        probes.append({
+            "url": row.get("target"),
+            "status": row.get("status") or 0,
+            "elapsed_ms": row.get("elapsed_ms") or 0,
+            "http_5xx": row.get("http_5xx") is True,
+            "sqlite_busy": row.get("sqlite_busy") is True,
+        })
 if not probes:
     raise SystemExit("defined probes produced no provenance; refusing ACTIVATION_OK")
 if any(row.get("http_5xx") is True for row in probes):
@@ -648,8 +672,8 @@ PY
 fi
 
 if [ "$PATH_KIND" = "verify-only" ]; then
-  echo "=== verify-only recovery (no mutation; durable receipt identity matched) ==="
-  hydrate_runtime_on || compensate_and_fail "verify-only post-activation probes failed"
+  echo "=== verify-only recovery (no mutation; fixtures already cleaned by the original run) ==="
+  hydrate_runtime_on verify-only || fail "verify-only runtime/identity verification failed (no mutation performed; Stage 1 flag left untouched)"
   AFTER_IMAGE="$(docker inspect -f '{{.Config.Image}}' "$CONTAINER")"
   AFTER_ID="$(docker inspect -f '{{.Image}}' "$CONTAINER")"
   AFTER_REV="$(docker image inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$AFTER_ID")"
