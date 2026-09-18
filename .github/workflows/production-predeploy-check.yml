@@ -4,6 +4,10 @@ run-name: "${{ inputs.release_mode == 'ops_phase15' && format('phase15-intent:{0
 # 使用既有 Production NAS secrets：檢查現行 v3、做已驗證備份、Wish Room 唯讀預檢。
 # 不是部署：不 SCP 應用程式、不 pull image、不改 image、不 compose up 新版、不跑應用 schema migration。
 #
+# 備份保留（Issue #355）：remote script 會在寫入新備份「之前」先修剪較舊的 predeploy-* 備份，
+# 只保留最新 PREDEPLOY_BACKUP_KEEP 份（預設 2）。這讓資料卷滿載時，同一次 run 能先釋放空間
+# 再建立備份，而不是以 no space left on device 失敗；也避免備份無上限累積。
+#
 # release_mode=manual_owner：人工治理路徑，不依賴 Ops Phase 15 / release_intent_id。
 # release_mode=ops_phase15：維持既有 Phase 15 綁定（run-name phase15-intent:<id>）。
 #
