@@ -284,14 +284,27 @@ jobs:
             IMAGE_DIGEST='${{ inputs.image_digest }}'
             DEPLOY_SHA='${{ inputs.sha }}'
             IMAGE_PIN="ghcr.io/fyun48/5151@${IMAGE_DIGEST}"
-            mkdir -p /DATA/AppData/591-tracker-v3
+            # Resolve the live /data mount from the running container instead of assuming the legacy
+            # path: after a data-volume relocation the hardcoded path would silently recreate a stray
+            # directory and copy a legacy auth.env to the wrong place (Issue #355 follow-up).
+            DATA_HOST="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' 591-tracker-v3 2>/dev/null || true)"
+            if [ -z "$DATA_HOST" ]; then
+              DATA_HOST=/DATA/AppData/591-tracker-v3
+              echo "data_host_fallback=$DATA_HOST (container mount not resolvable)"
+            else
+              echo "data_host=$DATA_HOST"
+            fi
+            mkdir -p "$DATA_HOST"
             copied=0
-            if [ -f /DATA/AppData/591-tracker-v2/auth.env ] && [ ! -f /DATA/AppData/591-tracker-v3/auth.env ]; then
-              cp /DATA/AppData/591-tracker-v2/auth.env /DATA/AppData/591-tracker-v3/auth.env
-              copied=1
-            elif [ -f /DATA/AppData/591-tracker/auth.env ] && [ ! -f /DATA/AppData/591-tracker-v3/auth.env ]; then
-              cp /DATA/AppData/591-tracker/auth.env /DATA/AppData/591-tracker-v3/auth.env
-              copied=1
+            if [ ! -f "$DATA_HOST/auth.env" ]; then
+              for legacy in /DATA/AppData/591-tracker-v2/auth.env /DATA/AppData/591-tracker/auth.env; do
+                if [ -f "$legacy" ]; then
+                  cp "$legacy" "$DATA_HOST/auth.env"
+                  echo "copied_auth_env_from=$legacy"
+                  copied=1
+                  break
+                fi
+              done
             fi
             cd /mnt/Storage1/apps/5151
             test -f docker-compose.override.yml

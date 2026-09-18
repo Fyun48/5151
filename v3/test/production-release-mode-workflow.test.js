@@ -162,6 +162,20 @@ test("deploy-v3 manual_owner still requires immutable digest + DEPLOY-PRODUCTION
   assert.doesNotMatch(auth, /RELEASE_MODE.*= "manual_owner"[\s\S]*DEPLOY-PRODUCTION/);
 });
 
+test("deploy-v3 resolves the live /data mount instead of hardcoding the legacy path (Issue #355 follow-up)", () => {
+  const text = wf("deploy-v3.yml");
+  assert.match(
+    text,
+    /docker inspect -f '\{\{range \.Mounts\}\}\{\{if eq \.Destination "\/data"\}\}\{\{\.Source\}\}\{\{end\}\}\{\{end\}\}'/,
+  );
+  assert.match(text, /data_host_fallback=\$DATA_HOST \(container mount not resolvable\)/);
+  assert.match(text, /mkdir -p "\$DATA_HOST"/);
+  assert.match(text, /copied_auth_env_from=\$legacy/);
+  // the legacy path may only remain as an explicit fallback / legacy source, never as a hardcoded target
+  assert.doesNotMatch(text, /cp \/DATA\/AppData\/591-tracker-v2\/auth\.env \/DATA\/AppData\/591-tracker-v3\/auth\.env/);
+  assert.doesNotMatch(text, /^ {12}mkdir -p \/DATA\/AppData\/591-tracker-v3$/m);
+});
+
 test("predeploy still requires PREDEPLOY-PRODUCTION in both modes", () => {
   const text = wf("production-predeploy-check.yml");
   const auth = authorizeScript(text);
