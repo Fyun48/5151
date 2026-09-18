@@ -1,0 +1,1134 @@
+{
+  "schema": "pr-d-responsive-evidence-v1",
+  "generated_at": "2026-09-18T15:02:43.530Z",
+  "issue": "#325 PART N / PART R items 31-33",
+  "target": {
+    "base_url": "http://127.0.0.1:5199",
+    "source": "local evidence server running the deployed master code (same app as Production)",
+    "widths": [
+      375,
+      768,
+      1440
+    ],
+    "viewport_height": 1400,
+    "browser": "chrome.exe"
+  },
+  "results": [
+    {
+      "name": "public-home",
+      "width": 375,
+      "login": null,
+      "focus": {
+        "active": "body",
+        "outline": "none 3px rgb(28, 25, 23)"
+      },
+      "diagnostics": {
+        "url": "/",
+        "title": "吉比租房物件追蹤",
+        "viewport": 375,
+        "overflowPx": 0,
+        "widest_element": null,
+        "wide_elements": [],
+        "small_touch_targets": [
+          {
+            "tag": "input",
+            "text": "屋主阿明",
+            "w": 177,
+            "h": 21
+          },
+          {
+            "tag": "button",
+            "text": "拍照",
+            "w": 58,
+            "h": 34
+          },
+          {
+            "tag": "button",
+            "text": "相簿",
+            "w": 58,
+            "h": 34
+          },
+          {
+            "tag": "input",
+            "text": "owner@evidence.test",
+            "w": 305,
+            "h": 21
+          },
+          {
+            "tag": "input",
+            "text": "",
+            "w": 305,
+            "h": 21
+          },
+          {
+            "tag": "input",
+            "text": "",
+            "w": 305,
+            "h": 21
+          },
+          {
+            "tag": "input",
+            "text": "",
+            "w": 305,
+            "h": 21
+          },
+          {
+            "tag": "input",
+            "text": "",
+            "w": 305,
+            "h": 21
+          },
+          {
+            "tag": "input",
+            "text": "",
+            "w": 305,
+            "h": 21
+          },
+          {
+            "tag": "button",
+            "text": "點此上傳\n              ×",
+            "w": 48,
+            "h": 18
+          }
+        ],
+        "unnamed_controls": [],
+        "tables": [
+          {
+            "w": 0,
+            "overflows": false
+          }
+        ],
+        "charts": [
+          {
+            "tag": "svg",
+            "w": 0
+          },
+          {
+            "tag": "svg",
+            "w": 22
+          }
+        ],
+        "body_height": 2012
+      }
+    },
+    {
+      "name": "tenant-wish-room",
+      "width": 375,
+      "login": {
+        "status": 200,
+        "ok": true,
+        "role": "member",
+        "cookie": "591_session"
+      },
+      "focus": {
+        "active": "a",
+        "outline": "none 3px rgb(28, 25, 23)"
+      },
+      "diagnostics": {
+        "url": "/w/<token>",
+        "title": "許願房 · 吉比租房物件追蹤",
+        "viewport": 375,
+        "overflowPx": 0,
+        "widest_element": null,
+        "wide_elements": [],
+        "small_touch_targets": [
+          {
+            "tag": "a",
+            "text": "吉比租房物件追蹤",
+            "w": 131,
+            "h": 24
+          },
+          {
+            "tag": "a",
+            "text": "看全部許願房",
+            "w": 78,
+            "h": 19
+          }
+        ],
+        "unnamed_controls": [],
+        "tables": [],
+        "charts": [],
+        "body_height": 1400
+      }
+    },
+    {
+      "name": "owner-listing-match",
+      "width": 375,
+      "login": {
+        "status": 200,
+        "ok": true,
+        "role": "admin",
+        "cookie": "591_session"
+      },
+      "focus": {
+        "active": "body",
+        "outline": "none 3px rgb(28, 25, 23)"
+      },
+      "diagnostics": {
+        "url": "/?self=<post_id>",
+        "title": "吉比租房物件追蹤",
+        "viewport": 375,
+        "overflowPx": 0,
+        "widest_element": null,
+        "wide_elements": [],
+        "small_touch_targets": [
+          {
+            "tag": "input",
+            "text": "屋主阿明",
+            "w": 177,
+            "h": 21
+          },
+          {
+            "tag": "button",
+            "text": "拍照",
+            "w": 58,
+            "h": 34
+          },
+          {
+            "tag": "button",
+            "text": "相簿",
+            "w": 58,
+            "h": 34
+          },
+          {
+            "tag": "input",
+            "text": "owner@evidence.test",
+            "w": 305,
+            "h": 21
+          },
+          {
+            "tag": "input",
+            "text": "",
+            "w": 305,
+            "h": 21
+          },
+          {
+            "tag": "input",
+            "text": "",
+            "w": 305,
+            "h": 21
+          },
+          {
+            "tag": "input",
+            "text": "",
+            "w": 305,
+            "h": 21
+          },
+          {
+            "tag": "input",
+            "text": "",
+            "w": 305,
+            "h": 21
+          },
+          {
+            "tag": "input",
+            "text": "",
+            "w": 305,
+            "h": 21
+          },
+          {
+            "tag": "button",
+            "text": "點此上傳\n              ×",
+            "w": 48,
+            "h": 18
+          }
+        ],
+        "unnamed_controls": [],
+        "tables": [
+          {
+            "w": 0,
+            "overflows": false
+          }
+        ],
+        "charts": [
+          {
+            "tag": "svg",
+            "w": 0
+          },
+          {
+            "tag": "svg",
+            "w": 22
+          }
+        ],
+        "body_height": 2012
+      }
+    },
+    {
+      "name": "admin-console",
+      "width": 375,
+      "login": {
+        "status": 200,
+        "ok": true,
+        "role": "admin",
+        "cookie": "591_session"
+      },
+      "focus": {
+        "active": "button#adminMenuBtn",
+        "outline": "none 3px rgb(28, 25, 23)"
+      },
+      "diagnostics": {
+        "url": "/admin.html",
+        "title": "後台管理 · 吉比租房物件追蹤",
+        "viewport": 375,
+        "overflowPx": 0,
+        "widest_element": null,
+        "wide_elements": [],
+        "small_touch_targets": [
+          {
+            "tag": "input",
+            "text": "",
+            "w": 335,
+            "h": 43
+          },
+          {
+            "tag": "a",
+            "text": "回追蹤首頁",
+            "w": 98,
+            "h": 32
+          },
+          {
+            "tag": "a",
+            "text": "登出",
+            "w": 56,
+            "h": 32
+          },
+          {
+            "tag": "a",
+            "text": "總覽",
+            "w": 279,
+            "h": 36
+          },
+          {
+            "tag": "button",
+            "text": "房源與資料▾",
+            "w": 279,
+            "h": 30
+          },
+          {
+            "tag": "button",
+            "text": "會員與權限▾",
+            "w": 279,
+            "h": 30
+          },
+          {
+            "tag": "button",
+            "text": "租屋與配對▾",
+            "w": 279,
+            "h": 30
+          },
+          {
+            "tag": "button",
+            "text": "站台內容▾",
+            "w": 279,
+            "h": 30
+          },
+          {
+            "tag": "button",
+            "text": "通知與溝通▾",
+            "w": 279,
+            "h": 30
+          },
+          {
+            "tag": "button",
+            "text": "收益與曝光▾",
+            "w": 279,
+            "h": 30
+          }
+        ],
+        "unnamed_controls": [],
+        "tables": [
+          {
+            "w": 0,
+            "overflows": false
+          },
+          {
+            "w": 0,
+            "overflows": false
+          },
+          {
+            "w": 0,
+            "overflows": false
+          },
+          {
+            "w": 0,
+            "overflows": false
+          },
+          {
+            "w": 0,
+            "overflows": false
+          },
+          {
+            "w": 0,
+            "overflows": false
+          },
+          {
+            "w": 0,
+            "overflows": false
+          },
+          {
+            "w": 0,
+            "overflows": false
+          },
+          {
+            "w": 0,
+            "overflows": false
+          },
+          {
+            "w": 0,
+            "overflows": false
+          },
+          {
+            "w": 0,
+            "overflows": false
+          }
+        ],
+        "charts": [],
+        "body_height": 2736
+      }
+    },
+    {
+      "name": "public-home",
+      "width": 768,
+      "login": null,
+      "focus": {
+        "active": "body",
+        "outline": "none 3px rgb(28, 25, 23)"
+      },
+      "diagnostics": {
+        "url": "/",
+        "title": "吉比租房物件追蹤",
+        "viewport": 768,
+        "overflowPx": 0,
+        "widest_element": null,
+        "wide_elements": [],
+        "small_touch_targets": [
+          {
+            "tag": "input",
+            "text": "屋主阿明",
+            "w": 177,
+            "h": 21
+          },
+          {
+            "tag": "button",
+            "text": "拍照",
+            "w": 58,
+            "h": 34
+          },
+          {
+            "tag": "button",
+            "text": "相簿",
+            "w": 58,
+            "h": 34
+          },
+          {
+            "tag": "input",
+            "text": "owner@evidence.test",
+            "w": 698,
+            "h": 21
+          },
+          {
+            "tag": "input",
+            "text": "",
+            "w": 698,
+            "h": 21
+          },
+          {
+            "tag": "input",
+            "text": "",
+            "w": 698,
+            "h": 21
+          },
+          {
+            "tag": "input",
+            "text": "",
+            "w": 698,
+            "h": 21
+          },
+          {
+            "tag": "input",
+            "text": "",
+            "w": 343,
+            "h": 21
+          },
+          {
+            "tag": "input",
+            "text": "",
+            "w": 343,
+            "h": 21
+          },
+          {
+            "tag": "button",
+            "text": "點此上傳\n              ×",
+            "w": 48,
+            "h": 18
+          }
+        ],
+        "unnamed_controls": [],
+        "tables": [
+          {
+            "w": 0,
+            "overflows": false
+          }
+        ],
+        "charts": [
+          {
+            "tag": "svg",
+            "w": 0
+          },
+          {
+            "tag": "svg",
+            "w": 22
+          }
+        ],
+        "body_height": 1524
+      }
+    },
+    {
+      "name": "tenant-wish-room",
+      "width": 768,
+      "login": {
+        "status": 200,
+        "ok": true,
+        "role": "member",
+        "cookie": "591_session"
+      },
+      "focus": {
+        "active": "a",
+        "outline": "none 3px rgb(28, 25, 23)"
+      },
+      "diagnostics": {
+        "url": "/w/<token>",
+        "title": "許願房 · 吉比租房物件追蹤",
+        "viewport": 768,
+        "overflowPx": 0,
+        "widest_element": null,
+        "wide_elements": [],
+        "small_touch_targets": [
+          {
+            "tag": "a",
+            "text": "吉比租房物件追蹤",
+            "w": 131,
+            "h": 24
+          },
+          {
+            "tag": "a",
+            "text": "看全部許願房",
+            "w": 78,
+            "h": 19
+          }
+        ],
+        "unnamed_controls": [],
+        "tables": [],
+        "charts": [],
+        "body_height": 1400
+      }
+    },
+    {
+      "name": "owner-listing-match",
+      "width": 768,
+      "login": {
+        "status": 200,
+        "ok": true,
+        "role": "admin",
+        "cookie": "591_session"
+      },
+      "focus": {
+        "active": "body",
+        "outline": "none 3px rgb(28, 25, 23)"
+      },
+      "diagnostics": {
+        "url": "/?self=<post_id>",
+        "title": "吉比租房物件追蹤",
+        "viewport": 768,
+        "overflowPx": 0,
+        "widest_element": null,
+        "wide_elements": [],
+        "small_touch_targets": [
+          {
+            "tag": "input",
+            "text": "屋主阿明",
+            "w": 177,
+            "h": 21
+          },
+          {
+            "tag": "button",
+            "text": "拍照",
+            "w": 58,
+            "h": 34
+          },
+          {
+            "tag": "button",
+            "text": "相簿",
+            "w": 58,
+            "h": 34
+          },
+          {
+            "tag": "input",
+            "text": "owner@evidence.test",
+            "w": 698,
+            "h": 21
+          },
+          {
+            "tag": "input",
+            "text": "",
+            "w": 698,
+            "h": 21
+          },
+          {
+            "tag": "input",
+            "text": "",
+            "w": 698,
+            "h": 21
+          },
+          {
+            "tag": "input",
+            "text": "",
+            "w": 698,
+            "h": 21
+          },
+          {
+            "tag": "input",
+            "text": "",
+            "w": 343,
+            "h": 21
+          },
+          {
+            "tag": "input",
+            "text": "",
+            "w": 343,
+            "h": 21
+          },
+          {
+            "tag": "button",
+            "text": "點此上傳\n              ×",
+            "w": 48,
+            "h": 18
+          }
+        ],
+        "unnamed_controls": [],
+        "tables": [
+          {
+            "w": 0,
+            "overflows": false
+          }
+        ],
+        "charts": [
+          {
+            "tag": "svg",
+            "w": 0
+          },
+          {
+            "tag": "svg",
+            "w": 22
+          }
+        ],
+        "body_height": 1524
+      }
+    },
+    {
+      "name": "admin-console",
+      "width": 768,
+      "login": {
+        "status": 200,
+        "ok": true,
+        "role": "admin",
+        "cookie": "591_session"
+      },
+      "focus": {
+        "active": "button#adminMenuBtn",
+        "outline": "none 3px rgb(28, 25, 23)"
+      },
+      "diagnostics": {
+        "url": "/admin.html",
+        "title": "後台管理 · 吉比租房物件追蹤",
+        "viewport": 768,
+        "overflowPx": 0,
+        "widest_element": null,
+        "wide_elements": [],
+        "small_touch_targets": [
+          {
+            "tag": "input",
+            "text": "",
+            "w": 728,
+            "h": 43
+          },
+          {
+            "tag": "a",
+            "text": "回追蹤首頁",
+            "w": 98,
+            "h": 32
+          },
+          {
+            "tag": "a",
+            "text": "登出",
+            "w": 56,
+            "h": 32
+          },
+          {
+            "tag": "a",
+            "text": "總覽",
+            "w": 279,
+            "h": 36
+          },
+          {
+            "tag": "button",
+            "text": "房源與資料▾",
+            "w": 279,
+            "h": 30
+          },
+          {
+            "tag": "button",
+            "text": "會員與權限▾",
+            "w": 279,
+            "h": 30
+          },
+          {
+            "tag": "button",
+            "text": "租屋與配對▾",
+            "w": 279,
+            "h": 30
+          },
+          {
+            "tag": "button",
+            "text": "站台內容▾",
+            "w": 279,
+            "h": 30
+          },
+          {
+            "tag": "button",
+            "text": "通知與溝通▾",
+            "w": 279,
+            "h": 30
+          },
+          {
+            "tag": "button",
+            "text": "收益與曝光▾",
+            "w": 279,
+            "h": 30
+          }
+        ],
+        "unnamed_controls": [],
+        "tables": [
+          {
+            "w": 0,
+            "overflows": false
+          },
+          {
+            "w": 0,
+            "overflows": false
+          },
+          {
+            "w": 0,
+            "overflows": false
+          },
+          {
+            "w": 0,
+            "overflows": false
+          },
+          {
+            "w": 0,
+            "overflows": false
+          },
+          {
+            "w": 0,
+            "overflows": false
+          },
+          {
+            "w": 0,
+            "overflows": false
+          },
+          {
+            "w": 0,
+            "overflows": false
+          },
+          {
+            "w": 0,
+            "overflows": false
+          },
+          {
+            "w": 0,
+            "overflows": false
+          },
+          {
+            "w": 0,
+            "overflows": false
+          }
+        ],
+        "charts": [],
+        "body_height": 2200
+      }
+    },
+    {
+      "name": "public-home",
+      "width": 1440,
+      "login": null,
+      "focus": {
+        "active": "body",
+        "outline": "none 3px rgb(28, 25, 23)"
+      },
+      "diagnostics": {
+        "url": "/",
+        "title": "吉比租房物件追蹤",
+        "viewport": 1440,
+        "overflowPx": 0,
+        "widest_element": null,
+        "wide_elements": [],
+        "small_touch_targets": [
+          {
+            "tag": "a",
+            "text": "支持本站",
+            "w": 84,
+            "h": 32
+          },
+          {
+            "tag": "button",
+            "text": "變更密碼",
+            "w": 86,
+            "h": 34
+          },
+          {
+            "tag": "a",
+            "text": "登出",
+            "w": 56,
+            "h": 32
+          },
+          {
+            "tag": "a",
+            "text": "後台管理",
+            "w": 84,
+            "h": 32
+          },
+          {
+            "tag": "a",
+            "text": "清除資料",
+            "w": 84,
+            "h": 32
+          },
+          {
+            "tag": "button",
+            "text": "重新整理",
+            "w": 86,
+            "h": 34
+          },
+          {
+            "tag": "button",
+            "text": "立即檢查",
+            "w": 84,
+            "h": 32
+          },
+          {
+            "tag": "input",
+            "text": "屋主阿明",
+            "w": 177,
+            "h": 21
+          },
+          {
+            "tag": "button",
+            "text": "拍照",
+            "w": 58,
+            "h": 34
+          },
+          {
+            "tag": "button",
+            "text": "相簿",
+            "w": 58,
+            "h": 34
+          }
+        ],
+        "unnamed_controls": [],
+        "tables": [
+          {
+            "w": 0,
+            "overflows": false
+          }
+        ],
+        "charts": [
+          {
+            "tag": "svg",
+            "w": 0
+          },
+          {
+            "tag": "svg",
+            "w": 22
+          }
+        ],
+        "body_height": 1400
+      }
+    },
+    {
+      "name": "tenant-wish-room",
+      "width": 1440,
+      "login": {
+        "status": 200,
+        "ok": true,
+        "role": "member",
+        "cookie": "591_session"
+      },
+      "focus": {
+        "active": "a",
+        "outline": "none 3px rgb(28, 25, 23)"
+      },
+      "diagnostics": {
+        "url": "/w/<token>",
+        "title": "許願房 · 吉比租房物件追蹤",
+        "viewport": 1440,
+        "overflowPx": 0,
+        "widest_element": null,
+        "wide_elements": [],
+        "small_touch_targets": [
+          {
+            "tag": "a",
+            "text": "吉比租房物件追蹤",
+            "w": 131,
+            "h": 24
+          },
+          {
+            "tag": "a",
+            "text": "看全部許願房",
+            "w": 78,
+            "h": 19
+          }
+        ],
+        "unnamed_controls": [],
+        "tables": [],
+        "charts": [],
+        "body_height": 1400
+      }
+    },
+    {
+      "name": "owner-listing-match",
+      "width": 1440,
+      "login": {
+        "status": 200,
+        "ok": true,
+        "role": "admin",
+        "cookie": "591_session"
+      },
+      "focus": {
+        "active": "body",
+        "outline": "none 3px rgb(28, 25, 23)"
+      },
+      "diagnostics": {
+        "url": "/?self=<post_id>",
+        "title": "吉比租房物件追蹤",
+        "viewport": 1440,
+        "overflowPx": 0,
+        "widest_element": null,
+        "wide_elements": [],
+        "small_touch_targets": [
+          {
+            "tag": "a",
+            "text": "支持本站",
+            "w": 84,
+            "h": 32
+          },
+          {
+            "tag": "button",
+            "text": "變更密碼",
+            "w": 86,
+            "h": 34
+          },
+          {
+            "tag": "a",
+            "text": "登出",
+            "w": 56,
+            "h": 32
+          },
+          {
+            "tag": "a",
+            "text": "後台管理",
+            "w": 84,
+            "h": 32
+          },
+          {
+            "tag": "a",
+            "text": "清除資料",
+            "w": 84,
+            "h": 32
+          },
+          {
+            "tag": "button",
+            "text": "重新整理",
+            "w": 86,
+            "h": 34
+          },
+          {
+            "tag": "button",
+            "text": "立即檢查",
+            "w": 84,
+            "h": 32
+          },
+          {
+            "tag": "input",
+            "text": "屋主阿明",
+            "w": 177,
+            "h": 21
+          },
+          {
+            "tag": "button",
+            "text": "拍照",
+            "w": 58,
+            "h": 34
+          },
+          {
+            "tag": "button",
+            "text": "相簿",
+            "w": 58,
+            "h": 34
+          }
+        ],
+        "unnamed_controls": [],
+        "tables": [
+          {
+            "w": 0,
+            "overflows": false
+          }
+        ],
+        "charts": [
+          {
+            "tag": "svg",
+            "w": 0
+          },
+          {
+            "tag": "svg",
+            "w": 22
+          }
+        ],
+        "body_height": 1400
+      }
+    },
+    {
+      "name": "admin-console",
+      "width": 1440,
+      "login": {
+        "status": 200,
+        "ok": true,
+        "role": "admin",
+        "cookie": "591_session"
+      },
+      "focus": {
+        "active": "body#adminApp",
+        "outline": "none 3px rgb(28, 25, 23)"
+      },
+      "diagnostics": {
+        "url": "/admin.html",
+        "title": "後台管理 · 吉比租房物件追蹤",
+        "viewport": 1440,
+        "overflowPx": 0,
+        "widest_element": null,
+        "wide_elements": [],
+        "small_touch_targets": [
+          {
+            "tag": "input",
+            "text": "",
+            "w": 440,
+            "h": 43
+          },
+          {
+            "tag": "a",
+            "text": "回追蹤首頁",
+            "w": 98,
+            "h": 32
+          },
+          {
+            "tag": "a",
+            "text": "登出",
+            "w": 56,
+            "h": 32
+          },
+          {
+            "tag": "a",
+            "text": "總覽",
+            "w": 227,
+            "h": 36
+          },
+          {
+            "tag": "button",
+            "text": "房源與資料▾",
+            "w": 227,
+            "h": 30
+          },
+          {
+            "tag": "button",
+            "text": "會員與權限▾",
+            "w": 227,
+            "h": 30
+          },
+          {
+            "tag": "button",
+            "text": "租屋與配對▾",
+            "w": 227,
+            "h": 30
+          },
+          {
+            "tag": "button",
+            "text": "站台內容▾",
+            "w": 227,
+            "h": 30
+          },
+          {
+            "tag": "button",
+            "text": "通知與溝通▾",
+            "w": 227,
+            "h": 30
+          },
+          {
+            "tag": "button",
+            "text": "收益與曝光▾",
+            "w": 227,
+            "h": 30
+          }
+        ],
+        "unnamed_controls": [],
+        "tables": [
+          {
+            "w": 0,
+            "overflows": false
+          },
+          {
+            "w": 0,
+            "overflows": false
+          },
+          {
+            "w": 0,
+            "overflows": false
+          },
+          {
+            "w": 0,
+            "overflows": false
+          },
+          {
+            "w": 0,
+            "overflows": false
+          },
+          {
+            "w": 0,
+            "overflows": false
+          },
+          {
+            "w": 0,
+            "overflows": false
+          },
+          {
+            "w": 0,
+            "overflows": false
+          },
+          {
+            "w": 0,
+            "overflows": false
+          },
+          {
+            "w": 0,
+            "overflows": false
+          },
+          {
+            "w": 0,
+            "overflows": false
+          }
+        ],
+        "charts": [],
+        "body_height": 1998
+      }
+    }
+  ]
+}

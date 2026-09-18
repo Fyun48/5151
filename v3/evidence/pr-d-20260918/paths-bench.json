@@ -1,0 +1,600 @@
+{
+  "schema": "pr-d-paths-bench-v1",
+  "generated_at": "2026-09-18T15:02:07.888Z",
+  "issue": "#325 PART P / PART R items 12 + 26-27",
+  "environment": {
+    "node": "v24.13.0",
+    "platform": "win32 x64",
+    "sqlite": "node:sqlite DatabaseSync(:memory:)",
+    "data": "seeded only; no Production data, no network, no writes outside this process",
+    "posture_measured": "Stage 1-4 in-app ON, digest/mail/push OFF (as Production runs today)"
+  },
+  "dataset": {
+    "seed": {
+      "users": 12000,
+      "listings": 6000,
+      "wishes": 12000,
+      "offers": 8000,
+      "notify_events": 30000,
+      "notify_deliveries": 30000,
+      "digest_items": 4000,
+      "match_subscriptions": 2000,
+      "match_seen": 20000,
+      "share_events": 15000,
+      "analytics_days": 200
+    },
+    "actual_counts": {
+      "users": 12000,
+      "listings": 6000,
+      "demand_posts": 12000,
+      "wish_offers": 8000,
+      "rental_notify_events": 30000,
+      "rental_notify_deliveries": 30000,
+      "rental_digest_buckets": 3400,
+      "rental_digest_items": 4400,
+      "rental_match_subscriptions": 2000,
+      "rental_match_seen": 12000,
+      "rental_share_events": 15000,
+      "rental_analytics_daily": 403,
+      "rental_completion_surveys": 600
+    },
+    "seed_ms": 5865.97,
+    "total_ms": 6426.999
+  },
+  "bounds": {
+    "notify_batch": 80,
+    "digest_items_per_bucket": 8,
+    "analytics_drill_max": 50,
+    "analytics_range_days": 93
+  },
+  "thresholds": [
+    {
+      "name": "notify EXPLAIN probe + seeded dedup/retry queries",
+      "limit_ms": 200,
+      "source": "v3/test/rental-notify.test.js:449 (assert.ok(elapsed < 200))"
+    }
+  ],
+  "errors": [],
+  "paths": [
+    {
+      "label": "due lifecycle reminders (scheduleLifecycleReminders)",
+      "mutates": true,
+      "note": "bounded 80/tick, cursor-paged",
+      "iterations": 3,
+      "median_ms": 13.895,
+      "min_ms": 13.573,
+      "max_ms": 14.091,
+      "result": {
+        "scanned": 80,
+        "emitted": 43
+      },
+      "error": ""
+    },
+    {
+      "label": "notification dedup lookup (emitRentalNotifyEvent, second call)",
+      "mutates": false,
+      "note": "UNIQUE event_key dedup path",
+      "iterations": 5,
+      "median_ms": 0.072,
+      "min_ms": 0.06,
+      "max_ms": 0.096,
+      "result": {
+        "emitted": false,
+        "reason": "deduped",
+        "event_key": "<redacted-token>",
+        "event_id": 30129
+      },
+      "error": ""
+    },
+    {
+      "label": "pending delivery retry (deliverQueuedNotifications)",
+      "mutates": true,
+      "note": "bounded 80/batch",
+      "iterations": 3,
+      "median_ms": 6.501,
+      "min_ms": 6.337,
+      "max_ms": 7.565,
+      "result": {
+        "scanned": 80,
+        "delivered": 80,
+        "failed": 0
+      },
+      "error": ""
+    },
+    {
+      "label": "digest bucket lookup (addDigestItem)",
+      "mutates": false,
+      "note": "item cap 8/bucket",
+      "iterations": 5,
+      "median_ms": 0.092,
+      "min_ms": 0.073,
+      "max_ms": 0.125,
+      "result": {
+        "id": 10,
+        "public_token": "<redacted-token>",
+        "user_id": 11,
+        "channel": "dock",
+        "bucket_date": "2026-09-17",
+        "kind": "owner_new_match",
+        "status": "open",
+        "item_count": 3,
+        "overflow_count": 0,
+        "created_at": "2026-09-17T12:00:00.000Z"
+      },
+      "error": ""
+    },
+    {
+      "label": "owner subscription lookup (listDueMatchSubscriptions)",
+      "mutates": false,
+      "note": "bounded 80/tick",
+      "iterations": 5,
+      "median_ms": 0.121,
+      "min_ms": 0.11,
+      "max_ms": 0.137,
+      "result": {
+        "rows": 80
+      },
+      "error": ""
+    },
+    {
+      "label": "new-match notification dedup (openMatchEpisodeIfNeeded)",
+      "mutates": false,
+      "note": "rental_match_seen lookup",
+      "iterations": 5,
+      "median_ms": 0.005,
+      "min_ms": 0.005,
+      "max_ms": 0.007,
+      "result": {
+        "notify": false,
+        "episode": 1
+      },
+      "error": ""
+    },
+    {
+      "label": "new-match eligibility recheck (recheckSeenMatchEligibility)",
+      "mutates": true,
+      "note": "bounded 80/batch",
+      "iterations": 3,
+      "median_ms": 0.905,
+      "min_ms": 0.808,
+      "max_ms": 0.985,
+      "result": {
+        "scanned": 4,
+        "closed": 0
+      },
+      "error": ""
+    },
+    {
+      "label": "completion survey due lookup (raw path used by the notify tick)",
+      "mutates": false,
+      "note": "bounded 80",
+      "iterations": 5,
+      "median_ms": 0.408,
+      "min_ms": 0.402,
+      "max_ms": 0.436,
+      "result": {
+        "rows": 80
+      },
+      "error": ""
+    },
+    {
+      "label": "survey aggregate over a bounded range (surveyAggregate)",
+      "mutates": false,
+      "note": "GROUP BY found_via_site",
+      "iterations": 5,
+      "median_ms": 0.064,
+      "min_ms": 0.062,
+      "max_ms": 0.068,
+      "result": {
+        "rows": 1
+      },
+      "error": ""
+    },
+    {
+      "label": "analytics timeseries range (rentalOpsSummary)",
+      "mutates": false,
+      "note": "range clamp 93 days",
+      "iterations": 5,
+      "median_ms": 1.514,
+      "min_ms": 1.47,
+      "max_ms": 1.703,
+      "result": {
+        "keys": 7
+      },
+      "error": ""
+    },
+    {
+      "label": "admin drill-down pagination (rentalOpsDrilldown offers)",
+      "mutates": false,
+      "note": "page cap 50",
+      "iterations": 5,
+      "median_ms": 0.402,
+      "min_ms": 0.393,
+      "max_ms": 0.471,
+      "result": {
+        "kind": "offers",
+        "next_cursor": 20
+      },
+      "error": ""
+    },
+    {
+      "label": "attribution conversion lookup (resolveValidShareToken)",
+      "mutates": false,
+      "note": "token lookup",
+      "iterations": 5,
+      "median_ms": 0.004,
+      "min_ms": 0.004,
+      "max_ms": 0.005,
+      "result": {
+        "value": "<redacted-token>"
+      },
+      "error": ""
+    },
+    {
+      "label": "attribution conversion write (recordShareEvent signup, server source)",
+      "mutates": true,
+      "note": "server-source conversion; public cta/server is refused by design",
+      "iterations": 3,
+      "median_ms": 0.035,
+      "min_ms": 0.017,
+      "max_ms": 0.252,
+      "result": {
+        "recorded": false,
+        "reason": "deduped",
+        "is_bot": false
+      },
+      "error": ""
+    },
+    {
+      "label": "offer expiring sweep (scheduleOfferExpiring)",
+      "mutates": true,
+      "note": "bounded 80/tick",
+      "iterations": 3,
+      "median_ms": 21.14,
+      "min_ms": 21.115,
+      "max_ms": 21.199,
+      "result": {
+        "scanned": 80,
+        "emitted": 80
+      },
+      "error": ""
+    },
+    {
+      "label": "tenant retention sweep (scheduleTenantRetention)",
+      "mutates": true,
+      "note": "bounded 80/tick",
+      "iterations": 3,
+      "median_ms": 15.196,
+      "min_ms": 14.723,
+      "max_ms": 15.706,
+      "result": {
+        "scanned": 80,
+        "emitted": 40,
+        "skipped_policy": 0
+      },
+      "error": ""
+    },
+    {
+      "label": "owner retention sweep (scheduleOwnerRetention)",
+      "mutates": true,
+      "note": "bounded 80/tick",
+      "iterations": 3,
+      "median_ms": 11.856,
+      "min_ms": 11.759,
+      "max_ms": 13.2,
+      "result": {
+        "scanned": 80,
+        "emitted": 40
+      },
+      "error": ""
+    },
+    {
+      "label": "digest bucket close (closeDigestBuckets)",
+      "mutates": true,
+      "note": "bounded 80/tick",
+      "iterations": 3,
+      "median_ms": 30.898,
+      "min_ms": 30.57,
+      "max_ms": 31.311,
+      "result": {
+        "closed": 80,
+        "scanned": 80
+      },
+      "error": ""
+    },
+    {
+      "label": "event/delivery cleanup (cleanupRentalNotify)",
+      "mutates": true,
+      "note": "retention 180d events",
+      "iterations": 3,
+      "median_ms": 0.854,
+      "min_ms": 0.722,
+      "max_ms": 1.047,
+      "result": {
+        "events": 0,
+        "share": 0
+      },
+      "error": ""
+    },
+    {
+      "label": "notify worker tick end to end (runRentalNotifyTick)",
+      "mutates": true,
+      "note": "the real worker entry point",
+      "iterations": 3,
+      "median_ms": 87.619,
+      "min_ms": 47.918,
+      "max_ms": 92.932,
+      "result": {
+        "skipped": false
+      },
+      "error": ""
+    }
+  ],
+  "explain": {
+    "notify.lifecycle_due": {
+      "indexes": [
+        "idx_demand_posts_status"
+      ],
+      "search_nodes": 1,
+      "scan_nodes": 0,
+      "scans_present": false,
+      "details": [
+        "SEARCH demand_posts USING INDEX idx_demand_posts_status (status=? AND expires_at<?)"
+      ]
+    },
+    "notify.notify_dedup": {
+      "indexes": [
+        "cover:sqlite_autoindex_rental_notify_events_1"
+      ],
+      "search_nodes": 1,
+      "scan_nodes": 0,
+      "scans_present": false,
+      "details": [
+        "SEARCH rental_notify_events USING COVERING INDEX sqlite_autoindex_rental_notify_events_1 (event_key=?)"
+      ]
+    },
+    "notify.delivery_retry": {
+      "indexes": [
+        "cover:idx_rental_notify_deliveries_retry"
+      ],
+      "search_nodes": 1,
+      "scan_nodes": 0,
+      "scans_present": false,
+      "details": [
+        "SEARCH rental_notify_deliveries USING COVERING INDEX idx_rental_notify_deliveries_retry (status=? AND next_retry_at<?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    "notify.digest_bucket": {
+      "indexes": [
+        "cover:sqlite_autoindex_rental_digest_buckets_2"
+      ],
+      "search_nodes": 1,
+      "scan_nodes": 0,
+      "scans_present": false,
+      "details": [
+        "SEARCH rental_digest_buckets USING COVERING INDEX sqlite_autoindex_rental_digest_buckets_2 (user_id=? AND channel=? AND bucket_date=? AND kind=?)"
+      ]
+    },
+    "notify.match_sub": {
+      "indexes": [
+        "cover:idx_rental_match_subs_owner"
+      ],
+      "search_nodes": 1,
+      "scan_nodes": 0,
+      "scans_present": false,
+      "details": [
+        "SEARCH rental_match_subscriptions USING COVERING INDEX idx_rental_match_subs_owner (owner_user_id=? AND mode=?)"
+      ]
+    },
+    "notify.match_seen": {
+      "indexes": [
+        "sqlite_autoindex_rental_match_seen_1"
+      ],
+      "search_nodes": 1,
+      "scan_nodes": 0,
+      "scans_present": false,
+      "details": [
+        "SEARCH rental_match_seen USING INDEX sqlite_autoindex_rental_match_seen_1 (owner_user_id=? AND listing_id=? AND wish_ref=?)"
+      ]
+    },
+    "notify.survey_due": {
+      "indexes": [
+        "idx_demand_lifecycle_expires"
+      ],
+      "search_nodes": 1,
+      "scan_nodes": 0,
+      "scans_present": false,
+      "details": [
+        "SEARCH demand_posts USING INDEX idx_demand_lifecycle_expires (lifecycle=?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    "notify.analytics_range": {
+      "indexes": [
+        "idx_rental_analytics_metric"
+      ],
+      "search_nodes": 1,
+      "scan_nodes": 0,
+      "scans_present": false,
+      "details": [
+        "SEARCH rental_analytics_daily USING INDEX idx_rental_analytics_metric (metric=? AND day>? AND day<?)"
+      ]
+    },
+    "notify.share_lookup": {
+      "indexes": [
+        "cover:idx_rental_share_lookup"
+      ],
+      "search_nodes": 1,
+      "scan_nodes": 0,
+      "scans_present": false,
+      "details": [
+        "SEARCH rental_share_events USING COVERING INDEX idx_rental_share_lookup (share_token=? AND event_type=?)"
+      ]
+    },
+    "notify.offer_expiring": {
+      "indexes": [
+        "cover:idx_wish_offers_expires"
+      ],
+      "search_nodes": 1,
+      "scan_nodes": 0,
+      "scans_present": false,
+      "details": [
+        "SEARCH wish_offers USING COVERING INDEX idx_wish_offers_expires (status=? AND expires_at>? AND expires_at<?)"
+      ]
+    },
+    "notify.tenant_retention": {
+      "indexes": [
+        "cover:idx_demand_lifecycle_active"
+      ],
+      "search_nodes": 1,
+      "scan_nodes": 0,
+      "scans_present": false,
+      "details": [
+        "SEARCH demand_posts USING COVERING INDEX idx_demand_lifecycle_active (status=? AND lifecycle=? AND last_active_at<?)"
+      ]
+    },
+    "notify.admin_drill": {
+      "indexes": [],
+      "search_nodes": 0,
+      "scan_nodes": 1,
+      "scans_present": true,
+      "details": [
+        "SCAN wish_offers",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    "offer.owner_daily": {
+      "indexes": [
+        "cover:idx_wish_offers_owner_keyset"
+      ],
+      "search_nodes": 1,
+      "scan_nodes": 0,
+      "scans_present": false,
+      "details": [
+        "SEARCH wish_offers USING COVERING INDEX idx_wish_offers_owner_keyset (owner_user_id=? AND created_at>?)"
+      ]
+    },
+    "offer.listing_daily": {
+      "indexes": [
+        "cover:idx_wish_offers_listing_created"
+      ],
+      "search_nodes": 1,
+      "scan_nodes": 0,
+      "scans_present": false,
+      "details": [
+        "SEARCH wish_offers USING COVERING INDEX idx_wish_offers_listing_created (listing_id=? AND created_at>?)"
+      ]
+    },
+    "offer.wish_pending": {
+      "indexes": [
+        "cover:idx_wish_offers_wish_status"
+      ],
+      "search_nodes": 1,
+      "scan_nodes": 0,
+      "scans_present": false,
+      "details": [
+        "SEARCH wish_offers USING COVERING INDEX idx_wish_offers_wish_status (wish_id=? AND status=?)"
+      ]
+    },
+    "offer.tenant_inbox": {
+      "indexes": [
+        "cover:idx_wish_offers_tenant_inbox"
+      ],
+      "search_nodes": 1,
+      "scan_nodes": 0,
+      "scans_present": false,
+      "details": [
+        "SEARCH wish_offers USING COVERING INDEX idx_wish_offers_tenant_inbox (tenant_user_id=? AND status=?)"
+      ]
+    },
+    "offer.owner_sent": {
+      "indexes": [
+        "cover:idx_wish_offers_owner_status"
+      ],
+      "search_nodes": 1,
+      "scan_nodes": 0,
+      "scans_present": false,
+      "details": [
+        "SEARCH wish_offers USING COVERING INDEX idx_wish_offers_owner_status (owner_user_id=? AND status=?)"
+      ]
+    },
+    "offer.owner_keyset": {
+      "indexes": [
+        "cover:idx_wish_offers_owner_created"
+      ],
+      "search_nodes": 1,
+      "scan_nodes": 0,
+      "scans_present": false,
+      "details": [
+        "SEARCH wish_offers USING COVERING INDEX idx_wish_offers_owner_created (owner_user_id=? AND created_at<?)"
+      ]
+    },
+    "offer.tenant_keyset": {
+      "indexes": [
+        "cover:idx_wish_offers_tenant_inbox"
+      ],
+      "search_nodes": 1,
+      "scan_nodes": 0,
+      "scans_present": false,
+      "details": [
+        "SEARCH wish_offers USING COVERING INDEX idx_wish_offers_tenant_inbox (tenant_user_id=? AND status=? AND created_at<?)"
+      ]
+    },
+    "offer.owner_total": {
+      "indexes": [
+        "cover:idx_wish_offers_owner_keyset"
+      ],
+      "search_nodes": 1,
+      "scan_nodes": 0,
+      "scans_present": false,
+      "details": [
+        "SEARCH wish_offers USING COVERING INDEX idx_wish_offers_owner_keyset (owner_user_id=?)"
+      ]
+    },
+    "offer.tenant_pending_count": {
+      "indexes": [
+        "cover:idx_wish_offers_tenant_status_keyset"
+      ],
+      "search_nodes": 1,
+      "scan_nodes": 0,
+      "scans_present": false,
+      "details": [
+        "SEARCH wish_offers USING COVERING INDEX idx_wish_offers_tenant_status_keyset (tenant_user_id=? AND status=?)"
+      ]
+    },
+    "offer.expiry": {
+      "indexes": [
+        "cover:idx_wish_offers_expires"
+      ],
+      "search_nodes": 1,
+      "scan_nodes": 0,
+      "scans_present": false,
+      "details": [
+        "SEARCH wish_offers USING COVERING INDEX idx_wish_offers_expires (status=? AND expires_at<?)"
+      ]
+    },
+    "offer.block_lookup": {
+      "indexes": [
+        "cover:sqlite_autoindex_user_blocks_2"
+      ],
+      "search_nodes": 1,
+      "scan_nodes": 0,
+      "scans_present": false,
+      "details": [
+        "SEARCH user_blocks USING COVERING INDEX sqlite_autoindex_user_blocks_2 (blocker_user_id=? AND blocked_user_id=?)"
+      ]
+    },
+    "offer.report_rate": {
+      "indexes": [
+        "cover:idx_wish_offer_reports_reporter_created"
+      ],
+      "search_nodes": 1,
+      "scan_nodes": 0,
+      "scans_present": false,
+      "details": [
+        "SEARCH wish_offer_reports USING COVERING INDEX idx_wish_offer_reports_reporter_created (reporter_user_id=? AND created_at>?)"
+      ]
+    }
+  }
+}
