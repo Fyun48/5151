@@ -143,13 +143,22 @@ jobs:
             bash "$HELPERS_DIR/.github/scripts/production-uat-stages-remote.sh"
       - name: Pull the UAT evidence from the NAS
         if: ${{ always() }}
+        env:
+          NAS_HOST: ${{ secrets.NAS_HOST }}
+          NAS_PORT: ${{ secrets.NAS_PORT }}
+          NAS_USER: ${{ secrets.NAS_USER }}
+          NAS_SSH_KEY: ${{ secrets.NAS_SSH_KEY }}
         run: |
           set -euo pipefail
           mkdir -p uat-out
-          scp -P "${{ secrets.NAS_PORT }}" -o StrictHostKeyChecking=no \
-            "${{ secrets.NAS_USER }}@${{ secrets.NAS_HOST }}:/tmp/uat-stages-evidence-${{ github.run_id }}.json" \
+          key="$(mktemp)"
+          printf '%s\n' "$NAS_SSH_KEY" > "$key"
+          chmod 600 "$key"
+          scp -o StrictHostKeyChecking=accept-new -P "$NAS_PORT" -i "$key" \
+            "$NAS_USER@$NAS_HOST:/tmp/uat-stages-evidence-${{ github.run_id }}.json" \
             uat-out/stages-functional-uat-evidence.json \
             || echo "UAT evidence was not produced (fail-closed below)"
+          rm -f "$key"
       - name: Upload the UAT evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v4

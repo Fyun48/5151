@@ -208,6 +208,16 @@ async function main() {
 
   const db = dbMod.db;
   const flags = dbMod.getRentalMarketplaceFlags();
+  // A fresh `docker exec` process does not inherit the running server's in-process
+  // flag/catalog snapshots, so hydrate the modules that read them. Without this,
+  // demand.js applyWishLifecycleAction refuses with 503 wish_lifecycle_off and
+  // selfListings.js cannot create the fixture listing under the right flags.
+  demandMod.setRentalMarketplaceFlags(flags);
+  if (typeof dbMod.getRentalCatalog === "function") {
+    const catalog = dbMod.getRentalCatalog();
+    demandMod.setRentalCatalogCache(catalog);
+    listingMod.setSelfListingCatalog(catalog, flags);
+  }
   const runId = String(process.env.UAT_RUN_ID || "").trim() || `local-${Date.now()}`;
   const namespace = makeUatNamespace(runId);
   const resultPath = process.env.UAT_RESULT_PATH || "/tmp/uat-evidence.json";
@@ -264,7 +274,13 @@ async function main() {
       workflow: process.env.UAT_WORKFLOW || "production-uat-stages-functional.yml",
     });
   } catch (error) {
-    fatal = String(error?.stack || error?.message || error);
+    // Record the ASCII status/code as well as the message: the SSH transport can
+    // mangle non-ASCII text in the log, but `code` stays readable and identifies
+    // the exact domain rule that refused the call.
+    const frame = String(error?.stack || "")
+      .split("\n")
+      .find((line) => line.includes("production-uat-stages-wiring")) || "";
+    fatal = `status=${Number(error?.status || 0)} code=${String(error?.code || "")} at=${frame.trim()} message=${messageOf(error)}`;
     console.error("UAT_FATAL " + fatal);
   } finally {
     try {
