@@ -190,3 +190,25 @@ verify-only 原本用 `prev.get("workflow_run_id")` 當 `original_run_id`。第�
 
 任一缺失/異常 → throw（initial activation 走既有 compensating rollback）
 - 回歸：`P2-15 missing hard-conflict registry row fails the post-activation gate`、`P2-15 a hard-conflict registry row without its wish row fails the gate`、`P2-15 an unexpectedly eligible hard-conflict control fails the gate`
+
+## Review P1-16：commute snapshot 必須走集中式 fixture 隔離
+
+`listingCommutePatch()` 原本直接 `SELECT * FROM listings WHERE post_id = ?` 後回傳位置/通勤投影，沒有經過集中式 fixture 可見性政策，於是會員只要猜到／列舉 fixture `post_id`，就能透過 `/api/commute/snapshot?ids=...` 取得 fixture 物件存在與位置。
+
+修正：`listingCommutePatch()` 在查得 row 後立即套用 `listingVisibleOnSurface(row, { surface: LISTING_SURFACE.MAP, viewerId: uid })`；fixture 列在 MAP 產品面一律回 `null`（等同不存在），不新增 ad-hoc namespace 字串比對。watcher 與正常通勤行為不受影響。
+
+- 回歸：`P1-16 commute snapshot never reveals a fixture listing to ordinary members`、`P1-16 listingCommutePatch enforces the centralized MAP fixture policy (not ad-hoc SQL)`
+
+## Review P2-17：整個 prepare 必須可 replay（same-run resume）
+
+P2-13 只讓 A/B/T 帳號階段原子；listing / wish / lifecycle 仍是各自獨立步驟。若中途失敗：A/B/T 已提交、部分 registry / fixture 列殘留、同 run 重試會直接進 `verifyStage1Fixtures` 而因 bundle 不完整失敗、不同 run 又被 run exclusivity 擋住。
+
+由於 `createSelfListing` / `createDemandPost` / `applyWishLifecycleAction` 各自會開自己的 `BEGIN IMMEDIATE`（無法外層包一個大交易），改採 **deterministic same-run resume**：
+
+- 以 `listActiveRegistryRows` 為 source of truth，逐角色判斷
+- 帳號：只建立缺少的 A/B/T（單一交易）
+- listing / wish：若 registry row 存在但 domain row 不存在（中斷的 pre-registration），以 `markRegistryRowCleaned` 釋放該筆 reservation，再建立
+- wish lifecycle：用 `mapLegacyLifecycle` + `canSelfTransition` 對照每個角色的目標狀態（hard/completed → `completed`、paused → `paused`、active → `active`、inactive → `draft`），未達標就套用既有 domain transition；無法安全 reconcile 則 fail-closed
+- 不刪除既有 fixture 帳號（避免 signup_count 被消耗）；不動一般會員；部分失敗期間 fixture 仍維持隔離
+- 不同 run 在 incomplete run 完成或清理前仍 fail-closed
+- 回歸：`P2-17 retry of the same run completes after an aborted listing registration`、`P2-17 retry of the same run completes after an aborted wish registration`、`P2-17 retry reconciles a wish whose lifecycle transition did not complete`

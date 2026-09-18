@@ -742,3 +742,65 @@ test("P2-15 an unexpectedly eligible hard-conflict control fails the gate", () =
   );
   db.close();
 });
+
+test("P1-16 the MAP surface hides fixture listings from every viewer", () => {
+  const db = open();
+  const prepared = prepareStage1Fixtures(db, deps(), { now: new Date(), runId: "stage1-fix:test:p116", flags: FLAGS });
+  const listing = prepared.bundle.listing;
+  assert.equal(listingVisibleOnSurface(listing, { surface: LISTING_SURFACE.MAP }), false);
+  assert.equal(listingVisibleOnSurface(listing, { surface: LISTING_SURFACE.MAP, viewerId: prepared.bundle.owner.id }), false);
+  assert.equal(listingVisibleOnSurface({ post_id: 1, source: "591" }, { surface: LISTING_SURFACE.MAP, viewerId: 7 }), true);
+  db.close();
+});
+
+test("P2-17 retry of the same run completes after an aborted listing registration", () => {
+  const db = open();
+  const runId = "stage1-fix:test:p217a";
+  assert.throws(
+    () => prepareStage1Fixtures(db, {
+      ...deps(),
+      listingIsolation: { onAfterRegister() { throw new Error("inject-listing-reg"); } },
+    }, { now: new Date(), runId, flags: FLAGS }),
+    /inject-listing-reg/,
+  );
+  const retried = prepareStage1Fixtures(db, deps(), { now: new Date(), runId, flags: FLAGS });
+  assert.equal(retried.ok, true);
+  assert.equal(retried.run_id, runId);
+  const openListings = db.prepare(
+    "SELECT post_id FROM listings WHERE fixture_namespace = ? AND COALESCE(self_status, 'open') = 'open'",
+  ).all(STAGE1_FIXTURE_NAMESPACE);
+  assert.equal(openListings.length, 1);
+  db.close();
+});
+
+test("P2-17 retry of the same run completes after an aborted wish registration", () => {
+  const db = open();
+  const runId = "stage1-fix:test:p217b";
+  assert.throws(
+    () => prepareStage1Fixtures(db, {
+      ...deps(),
+      wishIsolation: { onAfterRegister() { throw new Error("inject-wish-reg"); } },
+    }, { now: new Date(), runId, flags: FLAGS }),
+    /inject-wish-reg/,
+  );
+  const retried = prepareStage1Fixtures(db, deps(), { now: new Date(), runId, flags: FLAGS });
+  assert.equal(retried.ok, true);
+  assert.equal(retried.run_id, runId);
+  db.close();
+});
+
+test("P2-17 retry reconciles a wish whose lifecycle transition did not complete", () => {
+  const db = open();
+  const runId = "stage1-fix:test:p217c";
+  prepareStage1Fixtures(db, deps(), { now: new Date(), runId, flags: FLAGS });
+  const reg = db.prepare(
+    "SELECT row_id FROM stage1_fixture_registry WHERE run_id = ? AND role = 'wish_completed'",
+  ).get(runId);
+  // simulate a crash between the wish create and its complete transition
+  db.prepare("UPDATE demand_posts SET lifecycle = 'active' WHERE id = ?").run(reg.row_id);
+  assert.equal(db.prepare("SELECT lifecycle FROM demand_posts WHERE id = ?").get(reg.row_id).lifecycle, "active");
+  const retried = prepareStage1Fixtures(db, deps(), { now: new Date(), runId, flags: FLAGS });
+  assert.equal(retried.ok, true);
+  assert.equal(db.prepare("SELECT lifecycle FROM demand_posts WHERE id = ?").get(reg.row_id).lifecycle, "completed");
+  db.close();
+});

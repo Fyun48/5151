@@ -13,6 +13,7 @@ import {
   listingVisibleOnSurface,
   wishVisibleOnSurface,
 } from "./stage1FixtureIsolation.js";
+import { canSelfTransition, mapLegacyLifecycle } from "./wishLifecycle.js";
 import {
   STAGE1_FIXTURE_KIND,
   STAGE1_FIXTURE_NAMESPACE,
@@ -263,6 +264,21 @@ function createFixtureUserRow(db, registerUser, {
   return { role, id: Number(user.id), email_hash: opaqueId(email) };
 }
 
+/** P2-17: the deterministic wish set for one fixture run (creation + target lifecycle). */
+const WISH_PREPARE_RECIPE = Object.freeze([
+  {
+    role: STAGE1_FIXTURE_ROLE.WISH_HARD_CONFLICT,
+    owner: "tenant",
+    lifecycle: "completed",
+    action: "complete",
+    extra: { condition_choices: { need_pet: "want" }, choices: { need_pet: "want" } },
+  },
+  { role: STAGE1_FIXTURE_ROLE.WISH_COMPLETED, owner: "tenant", lifecycle: "completed", action: "complete" },
+  { role: STAGE1_FIXTURE_ROLE.WISH_PAUSED, owner: "tenant", lifecycle: "paused", action: "pause" },
+  { role: STAGE1_FIXTURE_ROLE.WISH_ACTIVE, owner: "tenant", lifecycle: "active", action: "" },
+  { role: STAGE1_FIXTURE_ROLE.WISH_INACTIVE, owner: "other", lifecycle: "draft", action: "", extra: { draft: true } },
+]);
+
 export function prepareStage1Fixtures(db, deps = {}, {
   now = new Date(),
   runId = makeStage1FixtureRunId(now, deps.workflowRunId),
@@ -277,76 +293,77 @@ export function prepareStage1Fixtures(db, deps = {}, {
   runId = String(runId || "").trim() || makeStage1FixtureRunId(now, deps.workflowRunId);
   assertPrepareRunExclusive(db, runId);
 
-  const existing = listActiveRegistryRows(db, { runId, now });
-  if (existing.length) {
-    return verifyStage1Fixtures(db, deps, { now, runId, flags });
-  }
-
+  const userHooks = deps.userIsolation || {};
+  const listingHooks = deps.listingIsolation || {};
+  const wishHooks = deps.wishIsolation || {};
   const accountRoles = [
     STAGE1_FIXTURE_ROLE.OWNER_A,
     STAGE1_FIXTURE_ROLE.OTHER_B,
     STAGE1_FIXTURE_ROLE.TENANT_T,
   ];
-  const userHooks = deps.userIsolation || {};
-  const accounts = withFixtureImmediateTx(db, () => {
-    const created = [];
-    for (const role of accountRoles) {
-      created.push(createFixtureUserRow(db, registerUser, {
-        role,
-        runId,
-        now,
-        hooks: userHooks,
-      }));
-    }
-    return created;
-  });
+  const roleRow = (kind, role) => listActiveRegistryRows(db, { runId, now })
+    .find((row) => row.kind === kind && row.role === role) || null;
 
-  const owner = accounts.find((row) => row.role === STAGE1_FIXTURE_ROLE.OWNER_A);
-  const other = accounts.find((row) => row.role === STAGE1_FIXTURE_ROLE.OTHER_B);
-  const tenant = accounts.find((row) => row.role === STAGE1_FIXTURE_ROLE.TENANT_T);
+  // P2-17: deterministic same-run resume. A registry row whose domain row was
+  // never created (an aborted pre-registration) is released, and every missing
+  // role is created, so retrying the same run converges without manual surgery.
+  const releaseAbortedRegistration = (kind, role, loader) => {
+    const reg = roleRow(kind, role);
+    if (!reg) return null;
+    const row = loader(db, reg.row_id);
+    if (row) return { reg, row };
+    markRegistryRowCleaned(db, reg.id, now);
+    return null;
+  };
 
-  createIsolatedListing(db, { createSelfListing }, owner.id, runId, now, deps.listingIsolation || {});
+  const missingAccounts = accountRoles.filter((role) => !roleRow(STAGE1_FIXTURE_KIND.USER, role));
+  if (missingAccounts.length) {
+    withFixtureImmediateTx(db, () => {
+      for (const role of missingAccounts) {
+        createFixtureUserRow(db, registerUser, { role, runId, now, hooks: userHooks });
+      }
+    });
+  }
+  const accountId = (role) => {
+    const reg = roleRow(STAGE1_FIXTURE_KIND.USER, role);
+    if (!reg) throw new Error(`fixture prepare could not resolve the ${role} account`);
+    return Number(reg.row_id);
+  };
+  const ownerId = accountId(STAGE1_FIXTURE_ROLE.OWNER_A);
+  const otherId = accountId(STAGE1_FIXTURE_ROLE.OTHER_B);
+  const tenantId = accountId(STAGE1_FIXTURE_ROLE.TENANT_T);
 
-  function publishWish(role, input) {
-    return createIsolatedWish(db, { createDemandPost }, tenant.id, runId, role, input, now, deps.wishIsolation || {});
+  if (!releaseAbortedRegistration(STAGE1_FIXTURE_KIND.LISTING, STAGE1_FIXTURE_ROLE.LISTING_A, loadListing)) {
+    createIsolatedListing(db, { createSelfListing }, ownerId, runId, now, listingHooks);
   }
 
-  const hard = publishWish(
-    STAGE1_FIXTURE_ROLE.WISH_HARD_CONFLICT,
-    wishFixtureInput(runId, STAGE1_FIXTURE_ROLE.WISH_HARD_CONFLICT, {
-      condition_choices: { need_pet: "want" },
-      choices: { need_pet: "want" },
-    }),
-  );
-  applyWishLifecycleAction(db, tenant.id, hard.id, "complete", now);
+  const ensureWish = (recipe) => {
+    const wishOwnerId = recipe.owner === "other" ? otherId : tenantId;
+    let row = releaseAbortedRegistration(STAGE1_FIXTURE_KIND.WISH, recipe.role, loadWish)?.row || null;
+    if (!row) {
+      createIsolatedWish(
+        db,
+        { createDemandPost },
+        wishOwnerId,
+        runId,
+        recipe.role,
+        wishFixtureInput(runId, recipe.role, recipe.extra || {}),
+        now,
+        wishHooks,
+      );
+      const reg = roleRow(STAGE1_FIXTURE_KIND.WISH, recipe.role);
+      row = reg ? loadWish(db, reg.row_id) : null;
+      if (!row) throw new Error(`fixture prepare could not load the ${recipe.role} wish`);
+    }
+    const current = mapLegacyLifecycle(row);
+    if (current === recipe.lifecycle) return;
+    if (!recipe.action || !canSelfTransition(current, recipe.action)) {
+      throw new Error(`fixture prepare cannot reconcile wish ${recipe.role} (${current} -> ${recipe.lifecycle})`);
+    }
+    applyWishLifecycleAction(db, wishOwnerId, row.id, recipe.action, now);
+  };
 
-  const completed = publishWish(
-    STAGE1_FIXTURE_ROLE.WISH_COMPLETED,
-    wishFixtureInput(runId, STAGE1_FIXTURE_ROLE.WISH_COMPLETED),
-  );
-  applyWishLifecycleAction(db, tenant.id, completed.id, "complete", now);
-
-  const paused = publishWish(
-    STAGE1_FIXTURE_ROLE.WISH_PAUSED,
-    wishFixtureInput(runId, STAGE1_FIXTURE_ROLE.WISH_PAUSED),
-  );
-  applyWishLifecycleAction(db, tenant.id, paused.id, "pause", now);
-
-  publishWish(
-    STAGE1_FIXTURE_ROLE.WISH_ACTIVE,
-    wishFixtureInput(runId, STAGE1_FIXTURE_ROLE.WISH_ACTIVE),
-  );
-
-  createIsolatedWish(
-    db,
-    { createDemandPost },
-    other.id,
-    runId,
-    STAGE1_FIXTURE_ROLE.WISH_INACTIVE,
-    { ...wishFixtureInput(runId, STAGE1_FIXTURE_ROLE.WISH_INACTIVE), draft: true },
-    now,
-    deps.wishIsolation || {},
-  );
+  for (const recipe of WISH_PREPARE_RECIPE) ensureWish(recipe);
 
   return verifyStage1Fixtures(db, deps, { now, runId, flags });
 }
