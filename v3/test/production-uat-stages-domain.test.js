@@ -52,14 +52,47 @@ function makeDeps(overrides = {}) {
     eventKeys: new Set(),
     shareViews: 0,
     seenIdempotency: "",
+    events: [],
+    deliveries: [],
+    eventId: 0,
+    dockWriter: null,
   };
-  const db = { prepare: () => ({ get: () => ({ n: state.livePending }) }) };
+  // A minimal SQL-aware fake: the UAT reads delivery/event rows with read-only
+  // queries, so the fake answers them the way the real schema would.
+  const db = {
+    prepare: (sql) => ({
+      get: (...params) => {
+        const text = String(sql);
+        if (/COUNT\(\*\) AS n/.test(text) && /FROM rental_notify_deliveries/.test(text)) {
+          const subject = String(params[0] || "");
+          const ids = state.events.filter((row) => row.subject_ref === subject).map((row) => row.id);
+          return { n: state.deliveries.filter((row) => row.channel === "dock" && ids.includes(row.event_id)).length };
+        }
+        if (/COUNT\(\*\) AS n/.test(text) && /FROM rental_notify_events/.test(text)) {
+          const subject = String(params[0] || "");
+          return { n: state.events.filter((row) => row.subject_ref === subject).length };
+        }
+        if (/COUNT\(\*\) AS n/.test(text) && /FROM wish_offers/.test(text)) return { n: state.livePending };
+        if (/FROM rental_notify_deliveries/.test(text)) {
+          const eventId = Number(params[0] || 0);
+          const channel = String(params[1] || "dock");
+          const row = state.deliveries.find((entry) => entry.event_id === eventId && entry.channel === channel);
+          return row ? { id: row.id, channel: row.channel, status: row.status } : undefined;
+        }
+        return { n: state.livePending };
+      },
+    }),
+    exec: () => true,
+  };
   const deps = {
     getRentalMarketplaceFlags: () => state.flags,
     getRentalCatalog: () => ({}),
     setWishOfferHydrate: () => true,
     setRentalNotifyHydrate: () => true,
-    setRentalNotifyDockWriter: () => true,
+    setRentalNotifyDockWriter: (fn) => {
+      state.dockWriter = fn;
+      return true;
+    },
     assertCreateOfferGates: (_db, { wishRow }) => {
       if (wishRow?.eligible !== true) throw httpError("not eligible", 409, "match_no_longer_eligible");
       return true;
@@ -102,13 +135,39 @@ function makeDeps(overrides = {}) {
     resolveValidShareToken: (_db, token) => (token === TOKEN ? TOKEN : ""),
     shouldAttributeSignup: ({ newlyCreated = false, source = "" } = {}) =>
       newlyCreated === true || source === "verify_email" || source === "oauth_register",
-    emitRentalNotifyEvent: (_db, { eventType, eventKey }) => {
-      if (eventType === "wish_lifecycle_due_3d" && state.prefs.lifecycle_reminder !== true) {
-        return { emitted: false, reason: "preference_suppressed" };
-      }
+    // Mirrors the real domain: an event is emitted (deduped by key) and
+    // queueDeliveries() then writes a dock delivery that is "queued" when the
+    // preference allows it and "suppressed" when it does not.
+    emitRentalNotifyEvent: (_db, { eventType, eventKey, subjectRef = "" }) => {
       if (state.eventKeys.has(eventKey)) return { emitted: false, reason: "deduped" };
       state.eventKeys.add(eventKey);
-      return { emitted: true };
+      state.eventId += 1;
+      const userAllowed = eventType === "wish_lifecycle_due_3d" ? state.prefs.lifecycle_reminder === true : true;
+      const status = userAllowed && state.prefs.channel_dock === true ? "queued" : "suppressed";
+      state.events.push({ id: state.eventId, subject_ref: subjectRef });
+      state.deliveries.push({ id: state.deliveries.length + 1, event_id: state.eventId, channel: "dock", status });
+      return { emitted: true, event_id: state.eventId, event_key: eventKey };
+    },
+    deliverQueuedNotifications: () => {
+      let delivered = 0;
+      for (const row of state.deliveries) {
+        if (row.status !== "queued") continue;
+        row.status = "delivered";
+        delivered += 1;
+        if (typeof state.dockWriter === "function") state.dockWriter(row);
+      }
+      return { scanned: delivered, delivered, failed: 0 };
+    },
+    processMatchSubscriptionRow: (_db, sub, page) => {
+      if (sub?.mode === "off") return { emitted: 0 };
+      let emitted = 0;
+      for (const item of page?.items || []) {
+        const ref = String(item?.wish_ref || "");
+        if (!ref || state.blocked === true) continue;
+        if (ref !== TOKEN) continue;
+        emitted += 1;
+      }
+      return { emitted };
     },
     saveRentalNotifyPrefs: (_db, _userId, patch) => {
       state.prefs = { ...state.prefs, ...patch };
@@ -153,7 +212,7 @@ function makeCtx() {
     ownerId: 11,
     tenantId: 12,
     otherId: 13,
-    listing: { post_id: 900001 },
+    listing: { post_id: 900001, self_status: "open" },
     wishes: {
       eligible: { id: 800001, public_token: TOKEN, eligible: true },
       paused: { id: 800002, public_token: "uat-paused", eligible: false },
@@ -242,7 +301,7 @@ test("UAT dependency contract rejects a partial wiring and the read-only count w
   assert.throws(() => assertUatDeps({}), /requires domain dependency getRentalMarketplaceFlags/);
   const { deps, db } = makeDeps();
   assert.equal(assertUatDeps(deps), deps);
-  assert.equal(UAT_REQUIRED_DEPS.length, 23);
+  assert.equal(UAT_REQUIRED_DEPS.length, 24);
   assert.equal(pendingOffersFor(db, 800001, 11), 0);
 });
 

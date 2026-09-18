@@ -250,6 +250,8 @@ async function main() {
     emitRentalNotifyEvent: notifyMod.emitRentalNotifyEvent,
     getRentalNotifyPrefs: notifyMod.getRentalNotifyPrefs,
     saveRentalNotifyPrefs: notifyMod.saveRentalNotifyPrefs,
+    deliverQueuedNotifications: notifyMod.deliverQueuedNotifications,
+    processMatchSubscriptionRow: notifyMod.processMatchSubscriptionRow,
     runRentalNotifyTick: workerMod.runRentalNotifyTick,
     startRentalNotifyLoop: workerMod.startRentalNotifyLoop,
     wishHasActiveOffer: notifyMod.wishHasActiveOffer,
