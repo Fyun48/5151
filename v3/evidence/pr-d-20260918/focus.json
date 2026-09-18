@@ -1,0 +1,158 @@
+{
+  "schema": "pr-d-focus-probe-v1",
+  "generated_at": "2026-09-18T15:09:20.541Z",
+  "rows": [
+    {
+      "page": "public-home",
+      "width": 375,
+      "sequence": [
+        {
+          "active": "a#loginBtn.ghost",
+          "text": "登入",
+          "focus_visible": true,
+          "outline": "solid 2px rgb(15, 111, 106)",
+          "box_shadow": "none",
+          "background": "rgb(250, 248, 244)"
+        },
+        {
+          "active": "a#registerBtn.primary",
+          "text": "註冊",
+          "focus_visible": true,
+          "outline": "solid 2px rgb(15, 111, 106)",
+          "box_shadow": "none",
+          "background": "rgb(15, 111, 106)"
+        },
+        {
+          "active": "button#guestTourSkip.ghost",
+          "text": "略過",
+          "focus_visible": true,
+          "outline": "solid 2px rgb(15, 111, 106)",
+          "box_shadow": "none",
+          "background": "rgb(250, 248, 244)"
+        },
+        {
+          "active": "button#guestTourNext.primary",
+          "text": "下一步",
+          "focus_visible": true,
+          "outline": "solid 2px rgb(15, 111, 106)",
+          "box_shadow": "none",
+          "background": "rgb(15, 111, 106)"
+        }
+      ]
+    },
+    {
+      "page": "public-home",
+      "width": 1440,
+      "sequence": [
+        {
+          "active": "a#supportHeaderLink.ghost",
+          "text": "支持本站",
+          "focus_visible": true,
+          "outline": "solid 2px rgb(15, 111, 106)",
+          "box_shadow": "none",
+          "background": "rgb(250, 248, 244)"
+        },
+        {
+          "active": "a#loginBtn.ghost",
+          "text": "登入",
+          "focus_visible": true,
+          "outline": "solid 2px rgb(15, 111, 106)",
+          "box_shadow": "none",
+          "background": "rgb(250, 248, 244)"
+        },
+        {
+          "active": "a#registerBtn.primary",
+          "text": "註冊",
+          "focus_visible": true,
+          "outline": "solid 2px rgb(15, 111, 106)",
+          "box_shadow": "none",
+          "background": "rgb(15, 111, 106)"
+        },
+        {
+          "active": "button#reloadBtn.ghost",
+          "text": "重新整理",
+          "focus_visible": true,
+          "outline": "solid 2px rgb(15, 111, 106)",
+          "box_shadow": "none",
+          "background": "rgb(250, 248, 244)"
+        }
+      ]
+    },
+    {
+      "page": "admin-console",
+      "width": 375,
+      "sequence": [
+        {
+          "active": "a",
+          "text": "網站功能畫面示範(含連結)",
+          "focus_visible": true,
+          "outline": "solid 2px rgb(15, 111, 106)",
+          "box_shadow": "none",
+          "background": "rgba(0, 0, 0, 0)"
+        },
+        {
+          "active": "button#tabLogin.on",
+          "text": "登入",
+          "focus_visible": true,
+          "outline": "solid 2px rgb(15, 111, 106)",
+          "box_shadow": "none",
+          "background": "rgb(15, 111, 106)"
+        },
+        {
+          "active": "button#tabRegister",
+          "text": "註冊",
+          "focus_visible": true,
+          "outline": "solid 2px rgb(15, 111, 106)",
+          "box_shadow": "none",
+          "background": "rgb(250, 248, 244)"
+        },
+        {
+          "active": "input#email",
+          "text": "",
+          "focus_visible": true,
+          "outline": "solid 2px rgb(15, 111, 106)",
+          "box_shadow": "none",
+          "background": "rgb(250, 248, 244)"
+        }
+      ]
+    },
+    {
+      "page": "admin-console",
+      "width": 1440,
+      "sequence": [
+        {
+          "active": "a",
+          "text": "網站功能畫面示範(含連結)",
+          "focus_visible": true,
+          "outline": "solid 2px rgb(15, 111, 106)",
+          "box_shadow": "none",
+          "background": "rgba(0, 0, 0, 0)"
+        },
+        {
+          "active": "button#tabLogin.on",
+          "text": "登入",
+          "focus_visible": true,
+          "outline": "solid 2px rgb(15, 111, 106)",
+          "box_shadow": "none",
+          "background": "rgb(15, 111, 106)"
+        },
+        {
+          "active": "button#tabRegister",
+          "text": "註冊",
+          "focus_visible": true,
+          "outline": "solid 2px rgb(15, 111, 106)",
+          "box_shadow": "none",
+          "background": "rgb(250, 248, 244)"
+        },
+        {
+          "active": "input#email",
+          "text": "",
+          "focus_visible": true,
+          "outline": "solid 2px rgb(15, 111, 106)",
+          "box_shadow": "none",
+          "background": "rgb(250, 248, 244)"
+        }
+      ]
+    }
+  ]
+}
