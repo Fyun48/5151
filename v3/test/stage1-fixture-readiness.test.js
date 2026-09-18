@@ -44,10 +44,11 @@ import {
   wishVisibleOnSurface,
 } from "../src/stage1FixtureIsolation.js";
 import {
-  STAGE1_FIXTURE_EMAILS,
   STAGE1_FIXTURE_NAMESPACE,
+  authorizeFixtureIsolation,
   authorizeFixtureMaturity,
   ensureStage1FixtureSchema,
+  fixtureEmailForRole,
   isFixtureMaturityAuthorized,
   registerFixtureRow,
   STAGE1_FIXTURE_KIND,
@@ -58,6 +59,7 @@ import {
   cleanupStage1Fixtures,
   listingFixtureInput,
   prepareStage1Fixtures,
+  randomFixturePassword,
   reapStaleStage1Fixtures,
   runStage1FixtureDomain,
   verifyStage1Fixtures,
@@ -196,7 +198,7 @@ test("only an active registry-bound fixture user can use the maturity exception"
   const db = open();
   const now = new Date();
   const user = registerUser(db, {
-    email: STAGE1_FIXTURE_EMAILS.owner_a,
+    email: "maturity-owner@example.com",
     password: "demopass123",
     acceptDisclaimer: true,
     emailVerified: true,
@@ -391,4 +393,177 @@ test("durable Stage 1 failure evidence is written without becoming PASS", () => 
   assert.equal(doc.rollback_result, "ok");
   assert.doesNotMatch(JSON.stringify(doc), /@|09\d{8}|SESSION_SECRET/);
   rmSync(dir, { recursive: true, force: true });
+});
+
+test("P1-1 fixture passwords are random and never stored in repo or evidence", () => {
+  const first = randomFixturePassword();
+  const second = randomFixturePassword();
+  assert.notEqual(first, second);
+  assert.ok(first.length >= 24);
+  const repo = [
+    "v3/src/stage1FixtureOps.js",
+    "v3/src/stage1FixtureRegistry.js",
+    ".github/scripts/stage1-fixture-domain.mjs",
+    ".github/scripts/stage1-fixture-remote.sh",
+    "v3/STAGE1-FIXTURE-READINESS.md",
+  ].map((file) => readFileSync(path.join(root, file), "utf8")).join("\n");
+  assert.doesNotMatch(repo, /STAGE1_FIXTURE_PASSWORD|Stage1Fixture#Readiness-72h/);
+  assert.match(readFileSync(path.join(root, "v3/src/stage1FixtureOps.js"), "utf8"), /randomBytes\(32\)/);
+  assert.doesNotMatch(readFileSync(path.join(root, "v3/src/stage1FixtureOps.js"), "utf8"), /stampFixtureNamespace/);
+  const db = open();
+  const prepared = prepareStage1Fixtures(db, deps(), { now: new Date(), runId: "stage1-fix:test:pwd", flags: FLAGS });
+  assert.doesNotMatch(JSON.stringify(prepared.evidence), /Fx!|password/);
+  const registryBlob = JSON.stringify(db.prepare("SELECT * FROM stage1_fixture_registry").all());
+  assert.doesNotMatch(registryBlob, /Fx!|password|@jibby\.test/);
+  db.close();
+});
+
+test("P1-2 fixture emails are per-run unique so signup_count cannot block the next run", () => {
+  const a = fixtureEmailForRole("stage1-fix:run-a", STAGE1_FIXTURE_ROLE.OWNER_A);
+  const b = fixtureEmailForRole("stage1-fix:run-b", STAGE1_FIXTURE_ROLE.OWNER_A);
+  assert.notEqual(a, b);
+  assert.match(a, /@jibby\.test$/);
+  const db = open();
+  const first = prepareStage1Fixtures(db, deps(), { now: new Date(), runId: "stage1-fix:test:email-a", flags: FLAGS });
+  cleanupStage1Fixtures(db, deps(), { now: new Date(), runId: first.run_id, flags: FLAGS });
+  const second = prepareStage1Fixtures(db, deps(), { now: new Date(), runId: "stage1-fix:test:email-b", flags: FLAGS });
+  assert.notEqual(first.evidence.accounts[0].email_hash, second.evidence.accounts[0].email_hash);
+  db.close();
+});
+
+test("P1-3 fixture namespace lands in the same create write and user input cannot set it", () => {
+  const db = open();
+  const now = new Date();
+  const owner = registerUser(db, {
+    email: "iso-owner@example.com",
+    password: "demopass123",
+    acceptDisclaimer: true,
+    emailVerified: true,
+  });
+  registerFixtureRow(db, {
+    runId: "stage1-fix:test:iso-write",
+    kind: STAGE1_FIXTURE_KIND.USER,
+    role: STAGE1_FIXTURE_ROLE.OWNER_A,
+    rowId: owner.id,
+    now,
+  });
+  const ignored = createSelfListing(db, owner.id, {
+    ...listingFixtureInput("iso-input"),
+    fixture_namespace: STAGE1_FIXTURE_NAMESPACE,
+  }, now, { maturity: authorizeFixtureMaturity(db, owner.id, now) });
+  assert.equal(String(db.prepare("SELECT fixture_namespace FROM listings WHERE post_id = ?").get(ignored.post_id).fixture_namespace || ""), "");
+  db.prepare("UPDATE listings SET self_status = 'closed' WHERE post_id = ?").run(ignored.post_id);
+  const isolation = authorizeFixtureIsolation(db, owner.id, {
+    now,
+    runId: "stage1-fix:test:iso-write",
+    kind: STAGE1_FIXTURE_KIND.LISTING,
+    role: STAGE1_FIXTURE_ROLE.LISTING_A,
+    rowId: 900000002,
+  });
+  const created = createSelfListing(db, owner.id, listingFixtureInput("iso-write"), now, { isolation });
+  assert.equal(
+    db.prepare("SELECT fixture_namespace FROM listings WHERE post_id = ?").get(created.post_id).fixture_namespace,
+    STAGE1_FIXTURE_NAMESPACE,
+  );
+  db.close();
+});
+
+test("P1-2 ordinary member signup_count re-register rule is unchanged", () => {
+  const db = open();
+  const email = "reuse@example.com";
+  const payload = {
+    email,
+    password: "demopass123",
+    acceptDisclaimer: true,
+    emailVerified: true,
+  };
+  const first = registerUser(db, payload);
+  deleteUser(db, first.id, { by: "admin", reasonCode: "test", reason: "first delete" });
+  const second = registerUser(db, payload);
+  assert.equal(Number(second.id), Number(first.id));
+  deleteUser(db, second.id, { by: "admin", reasonCode: "test", reason: "second delete" });
+  assert.throws(() => registerUser(db, payload), /已刪除兩次/);
+  const members = readFileSync(path.join(root, "v3/src/members.js"), "utf8");
+  assert.match(members, /這個 Email 已刪除兩次，不能再註冊/);
+  assert.match(members, /signups >= 2/);
+  db.close();
+});
+
+test("P1-3 fault injection after registry before create leaves no public listing", () => {
+  const db = open();
+  assert.throws(
+    () => prepareStage1Fixtures(db, {
+      ...deps(),
+      listingIsolation: {
+        onAfterRegister() { throw new Error("inject-after-register"); },
+      },
+    }, { now: new Date(), runId: "stage1-fix:test:crash-reg", flags: FLAGS }),
+    /inject-after-register/,
+  );
+  const openListings = db.prepare(
+    "SELECT post_id FROM listings WHERE COALESCE(source, '591') = 'self' AND COALESCE(self_status, 'open') = 'open'",
+  ).all();
+  assert.equal(openListings.length, 0);
+  db.close();
+});
+
+test("P1-3 fault injection before insert leaves no listing row", () => {
+  const db = open();
+  assert.throws(
+    () => prepareStage1Fixtures(db, {
+      ...deps(),
+      listingIsolation: {
+        onBeforeInsert() { throw new Error("inject-before-insert"); },
+      },
+    }, { now: new Date(), runId: "stage1-fix:test:crash-pre", flags: FLAGS }),
+    /inject-before-insert/,
+  );
+  const listings = db.prepare(
+    "SELECT post_id FROM listings WHERE COALESCE(source, '591') = 'self'",
+  ).all();
+  assert.equal(listings.length, 0);
+  db.close();
+});
+
+test("P1-3 fault injection after create does not leak an untagged listing", () => {
+  const db = open();
+  assert.throws(
+    () => prepareStage1Fixtures(db, {
+      ...deps(),
+      listingIsolation: {
+        onAfterInsert() { throw new Error("inject-after-insert"); },
+      },
+    }, { now: new Date(), runId: "stage1-fix:test:crash-ins", flags: FLAGS }),
+    /inject-after-insert/,
+  );
+  const leaked = db.prepare(
+    "SELECT post_id, fixture_namespace FROM listings WHERE COALESCE(source, '591') = 'self'",
+  ).all();
+  assert.ok(leaked.every((row) => String(row.fixture_namespace || "") === STAGE1_FIXTURE_NAMESPACE));
+  assert.equal(listDemandPosts(db, { viewerId: 0 }).length, 0);
+  db.close();
+});
+
+test("P1-4 prepare fail-closes when another uncleaned run exists", () => {
+  const db = open();
+  prepareStage1Fixtures(db, deps(), { now: new Date(), runId: "stage1-fix:test:run-one", flags: FLAGS });
+  assert.throws(
+    () => prepareStage1Fixtures(db, deps(), { now: new Date(), runId: "stage1-fix:test:run-two", flags: FLAGS }),
+    /uncleaned fixture run exists/,
+  );
+  registerFixtureRow(db, {
+    runId: "stage1-fix:test:stale-other",
+    kind: STAGE1_FIXTURE_KIND.USER,
+    role: STAGE1_FIXTURE_ROLE.OWNER_A,
+    rowId: 900000099,
+    now: new Date(),
+  });
+  assert.throws(
+    () => loadRegistryBoundFixtures(db, {
+      evaluateCounterfactualMatch,
+      isCounterfactuallyMatchable,
+    }),
+    /single uncleaned run_id/,
+  );
+  db.close();
 });

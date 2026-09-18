@@ -57,9 +57,32 @@ Cleanup：close listing → pause/complete open wish → soft-delete fixture use
 - 禁止改任何 feature flag
 - 本 PR **不 dispatch**
 
-## P1-C Stage 1 evidence
+## Review P1-1／P1-2：帳號不可重用已知 credential
 
-`activate-rental-marketplace-stage1.yml` 的 pull / write / upload 使用 `if: always()`。失敗或 rollback 仍上傳 artifact；artifact 不含 email / phone / session / password / secret / internal scores。沒有完整 `ACTIVATION_OK` 時 Conclude 仍 fail-closed。
+- repo 不得有 fixture plaintext password；prepare 用 `crypto.randomBytes` 高熵密碼，只在 process memory 交給 `registerUser`
+- evidence / log / registry 只留 `email_hash`，不含 password / `Fx!` prefix
+- post-activation probe 用 server-side `sessionCookie`，不需要保存密碼
+- fixture email 由 `run_id + role` 的 SHA-256 短 hash 派生 `stage1.fixture.<role>.<hash>@jibby.test`
+- 不得改一般會員 `signup_count` / 重註冊規則；下一 run 用新 email，不受前 run residue 影響
+
+## Review P1-3：建立當下即隔離
+
+- `fixture_namespace` 必須在 `createSelfListing` / `createDemandPost` 的同一 INSERT 寫入
+- 只能由 server-only `authorizeFixtureIsolation()` Symbol token 啟用；HTTP / user input 的 `fixture_namespace` 被忽略
+- prepare 先以預定 `row_id` 寫 pending registry，再在同一 create 路徑 INSERT（帶 namespace）；`registered: true` 避免事後 stamp
+- 中斷時未 tagged 列不得公開；fault-injection 覆蓋 register / before-insert / after-insert
+
+## Review P1-4：run isolation（方案 B）
+
+固定 namespace `stage1-fix`。prepare 前 `assertPrepareRunExclusive`：若已有其他 uncleaned active/stale run 必須先 cleanup / reap。verify / cleanup / postcheck / evidence 綁唯一 `run_id`。不得靠固定 email 當 isolation。
+
+## P1-C / Review P1-5／P1-6 Stage 1 evidence
+
+- Authorization step `id: authorize`，全部 auth checks 通過後才寫 `authorized=true`
+- NAS evidence pull：`always() && steps.authorize.outputs.authorized == 'true' && (remote outcome success|failure)`
+- 未授權 run 只寫本地、無 secrets 的 fail artifact，不得碰 NAS
+- success artifact 必須重建 PR #330 等價 contract：identity、`backup_verified`、`src_manifest_verified`、durable receipt、`verify_only`、receipt_path、digest 格式、after flags（PR A ON、owner_matching ON、Stage2–4/outbound OFF）、post_activation、禁止用 pre-activation UAT 替代
+- rollback / failure artifact 可以不完整，但 Conclude 不得 PASS
 
 ## Stage 1 重跑條件（尚未授權）
 

@@ -341,31 +341,86 @@ test("Stage 1 failure/rollback evidence is still uploaded via always() steps", (
   const write = namedStep(text, "Write Stage 1 activation evidence");
   const upload = namedStep(text, "Upload Stage 1 activation evidence");
   const conclude = namedStep(text, "Conclude Stage 1 activation (fail-closed)");
-  assert.match(pull, /if: \$\{\{ always\(\) \}\}/);
+  const authorize = namedStep(text, "Authorize Stage 1 production activation (fail-closed)");
+  assert.match(authorize, /id: authorize/);
+  assert.match(authorize, /authorized=true/);
+  assert.match(pull, /always\(\)/);
+  assert.match(pull, /steps.authorize.outputs.authorized == 'true'/);
+  assert.match(pull, /steps.activate.outcome/);
   assert.match(write, /if: \$\{\{ always\(\) \}\}/);
   assert.match(upload, /if: \$\{\{ always\(\) \}\}/);
   assert.match(write, /write-stage1-activation-artifact\.py/);
   assert.match(conclude, /activate-rental-marketplace-stage1-evidence\.py --check-receipt/);
+  assert.match(conclude, /write-stage1-activation-artifact\.py --check-success/);
   assert.match(conclude, /refusing PASS|is not PASS/);
-  assert.doesNotMatch(namedStep(text, "Authorize Stage 1 production activation (fail-closed)"), /if: \$\{\{ always\(\) \}\}/);
+  assert.doesNotMatch(authorize, /if: \$\{\{ always\(\) \}\}/);
 });
 
-test("Stage 1 success evidence still becomes ACTIVATION_OK after durable write", () => {
-  const dir = mkdtempSync(path.join(tmpdir(), "stage1-ok-"));
-  const core = path.join(dir, "core.json");
-  const out = path.join(dir, "out.json");
-  writeFileSync(core, JSON.stringify({
+test("P1-5 unauthorized Stage 1 actor cannot take the NAS evidence pull path", () => {
+  const text = wf(WF_NAME);
+  const pull = namedStep(text, "Pull NAS activation evidence");
+  assert.match(pull, /NAS_SSH_KEY/);
+  assert.match(pull, /steps.authorize.outputs.authorized == 'true'/);
+  assert.match(namedStep(text, "Write Stage 1 activation evidence"), /if: \$\{\{ always\(\) \}\}/);
+  assert.doesNotMatch(namedStep(text, "Write Stage 1 activation evidence"), /NAS_SSH_KEY/);
+  assert.doesNotMatch(namedStep(text, "Copy Stage 1 activation helpers to NAS /tmp"), /if: \$\{\{ always\(\) \}\}/);
+  assert.doesNotMatch(namedStep(text, "Activate Stage 1 owner_matching on running v3"), /if: \$\{\{ always\(\) \}\}/);
+  assert.throws(() => runAuthorize({ ...GOOD, ACTOR: "cursor", TRIGGERING_ACTOR: "cursor[bot]" }), /not a durable Production activator|not the authorized deployer/);
+  assert.throws(() => runAuthorize({ ...GOOD, CONFIRM: "NO" }), /ACTIVATE-STAGE1-PRODUCTION/);
+  assert.throws(
+    () => runAuthorize({ ...GOOD, OWNER_AUTHORIZATION: "AUTHORIZE-STAGE1:wrong" }),
+    /AUTHORIZE-STAGE1/,
+  );
+});
+
+function completeSuccessCore() {
+  const after = {
+    rental_catalog_v2: { enabled: true },
+    wish: {
+      lifecycle_enabled: true,
+      owner_matching_enabled: true,
+      offer_enabled: false,
+      public_share_v2_enabled: false,
+      owner_notifications_enabled: false,
+      notifications_enabled: false,
+      digest_enabled: false,
+      outbound_mail_enabled: false,
+      outbound_push_enabled: false,
+    },
+  };
+  return {
     ...goodSmoke(),
+    source_sha: GOOD.SOURCE_SHA,
+    image_digest: GOOD.IMAGE_DIGEST,
     rollback_used: false,
     backup_id: GOOD.BACKUP_ID,
     backup_hash: GOOD.BACKUP_HASH,
+    backup_verified: true,
+    src_mount: "/mnt/Storage1/apps/5151/v3/src",
+    src_manifest_verified: true,
+    src_tree_sha256: "a".repeat(64),
+    durable_receipt: true,
+    verify_only: false,
+    receipt_path: "/DATA/AppData/591-tracker-v3/stage1-activation-receipt.json",
+    before_raw_flags: { ...after, wish: { ...after.wish, owner_matching_enabled: false } },
+    after_raw_flags: after,
+    before_counts: { total_posts: 1, total_open: 1 },
+    after_counts: { total_posts: 1, total_open: 1 },
+    runtime_public_flags: after,
+    privacy_smoke: { ok: true },
     health: true,
     landing: true,
     login: true,
     final_digest: GOOD.IMAGE_DIGEST,
     final_oci_revision: GOOD.SOURCE_SHA,
-    receipt_path: "/DATA/AppData/591-tracker-v3/stage1-activation-receipt.json",
-  }));
+  };
+}
+
+test("Stage 1 success evidence still becomes ACTIVATION_OK after durable write", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "stage1-ok-"));
+  const core = path.join(dir, "core.json");
+  const out = path.join(dir, "out.json");
+  writeFileSync(core, JSON.stringify(completeSuccessCore()));
   execFileSync("python3", [path.join(root, ".github/scripts/write-stage1-activation-artifact.py")], {
     env: {
       ...process.env,
@@ -382,7 +437,54 @@ test("Stage 1 success evidence still becomes ACTIVATION_OK after durable write",
   assert.equal(doc.ACTIVATION_OK, true);
   assert.equal(doc.activation_result, "activated");
   assert.match(checkEvidence("--check-receipt", doc), /EVIDENCE_RECEIPT_OK/);
+  assert.match(
+    execFileSync("python3", [path.join(root, ".github/scripts/write-stage1-activation-artifact.py"), "--check-success", out], { encoding: "utf8" }),
+    /STAGE1_SUCCESS_CONTRACT_OK/,
+  );
   rmSync(dir, { recursive: true, force: true });
+});
+
+test("P1-6 success contract still fail-closes missing fields, wrong flags, digest or receipt", () => {
+  const writer = path.join(root, ".github/scripts/write-stage1-activation-artifact.py");
+  const run = (coreDoc) => {
+    const dir = mkdtempSync(path.join(tmpdir(), "stage1-p16-"));
+    const core = path.join(dir, "core.json");
+    const out = path.join(dir, "out.json");
+    writeFileSync(core, JSON.stringify(coreDoc));
+    execFileSync("python3", [writer], {
+      env: {
+        ...process.env,
+        STAGE1_CORE_PATH: core,
+        STAGE1_ROLLBACK_PATH: path.join(dir, "missing-rollback.json"),
+        STAGE1_EVIDENCE_OUT: out,
+        SOURCE_SHA: GOOD.SOURCE_SHA,
+        IMAGE_DIGEST: GOOD.IMAGE_DIGEST,
+        BACKUP_ID: GOOD.BACKUP_ID,
+        BACKUP_HASH: GOOD.BACKUP_HASH,
+      },
+    });
+    const doc = JSON.parse(readFileSync(out, "utf8"));
+    rmSync(dir, { recursive: true, force: true });
+    return doc;
+  };
+  const missingReceipt = completeSuccessCore();
+  delete missingReceipt.receipt_path;
+  assert.equal(run(missingReceipt).ACTIVATION_OK, false);
+  const missingDurable = completeSuccessCore();
+  delete missingDurable.durable_receipt;
+  assert.equal(run(missingDurable).ACTIVATION_OK, false);
+  const matchingOff = completeSuccessCore();
+  matchingOff.after_raw_flags.wish.owner_matching_enabled = false;
+  assert.equal(run(matchingOff).ACTIVATION_OK, false);
+  const stage2On = completeSuccessCore();
+  stage2On.after_raw_flags.wish.offer_enabled = true;
+  assert.equal(run(stage2On).ACTIVATION_OK, false);
+  const wrongDigest = completeSuccessCore();
+  wrongDigest.final_digest = "sha256:" + "b".repeat(64);
+  assert.equal(run(wrongDigest).ACTIVATION_OK, false);
+  const missingBackupVerified = completeSuccessCore();
+  delete missingBackupVerified.backup_verified;
+  assert.equal(run(missingBackupVerified).ACTIVATION_OK, false);
 });
 
 test("Stage 1 activation does not change build, predeploy, deploy or PRA workflows", () => {

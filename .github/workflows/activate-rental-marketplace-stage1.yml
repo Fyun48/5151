@@ -48,6 +48,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Authorize Stage 1 production activation (fail-closed)
+        id: authorize
         env:
           WF_REF: ${{ github.ref }}
           ACTOR: ${{ github.actor }}
@@ -105,7 +106,11 @@ jobs:
           if [ "${OWNER_AUTHORIZATION:-}" != "$EXPECTED_AUTH" ]; then
             echo "::error::owner_authorization must be exactly AUTHORIZE-STAGE1 bound to source SHA, digest, backup id and hash"; exit 1
           fi
+          if [ -n "${GITHUB_OUTPUT:-}" ]; then
+            echo "authorized=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Checkout workflow-definition SHA
+        if: ${{ always() }}
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
@@ -155,6 +160,7 @@ jobs:
           target: /tmp/5151-stage1-activate-helpers
           overwrite: true
       - name: Activate Stage 1 owner_matching on running v3
+        id: activate
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.NAS_HOST }}
@@ -180,7 +186,7 @@ jobs:
             chmod +x /tmp/5151-stage1-activate-helpers/.github/scripts/activate-rental-marketplace-stage1-remote.sh
             /tmp/5151-stage1-activate-helpers/.github/scripts/activate-rental-marketplace-stage1-remote.sh
       - name: Pull NAS activation evidence
-        if: ${{ always() }}
+        if: ${{ always() && steps.authorize.outputs.authorized == 'true' && (steps.activate.outcome == 'success' || steps.activate.outcome == 'failure') }}
         env:
           NAS_HOST: ${{ secrets.NAS_HOST }}
           NAS_PORT: ${{ secrets.NAS_PORT }}
@@ -250,4 +256,5 @@ jobs:
           if doc.get("rollback_used") is True:
               raise SystemExit("Stage 1 rollback evidence cannot be treated as ACTIVATION_OK")
           PY
+          python3 .github/scripts/write-stage1-activation-artifact.py --check-success ./stage1-activation-evidence.json
           python3 .github/scripts/activate-rental-marketplace-stage1-evidence.py --check-receipt ./stage1-activation-evidence.json

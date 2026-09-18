@@ -46,6 +46,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Authorize Stage 1 fixture operation (fail-closed)
+        id: authorize
         env:
           WF_REF: ${{ github.ref }}
           ACTOR: ${{ github.actor }}
@@ -108,7 +109,11 @@ jobs:
           if [ "${OWNER_AUTHORIZATION:-}" != "$EXPECTED_AUTH" ]; then
             echo "::error::owner_authorization must be exactly AUTHORIZE-STAGE1-FIXTURES bound to mode, source SHA, digest, backup id and hash"; exit 1
           fi
+          if [ -n "${GITHUB_OUTPUT:-}" ]; then
+            echo "authorized=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Checkout workflow-definition SHA
+        if: ${{ always() }}
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
@@ -153,6 +158,7 @@ jobs:
           target: /tmp/5151-stage1-fixture-helpers
           overwrite: true
       - name: Run Stage 1 fixture operation on running v3
+        id: operate
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.NAS_HOST }}
@@ -178,7 +184,7 @@ jobs:
             chmod +x /tmp/5151-stage1-fixture-helpers/.github/scripts/stage1-fixture-remote.sh
             /tmp/5151-stage1-fixture-helpers/.github/scripts/stage1-fixture-remote.sh
       - name: Pull NAS fixture evidence
-        if: ${{ always() }}
+        if: ${{ always() && steps.authorize.outputs.authorized == 'true' && (steps.operate.outcome == 'success' || steps.operate.outcome == 'failure') }}
         env:
           NAS_HOST: ${{ secrets.NAS_HOST }}
           NAS_PORT: ${{ secrets.NAS_PORT }}

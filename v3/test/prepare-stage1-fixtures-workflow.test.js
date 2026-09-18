@@ -94,5 +94,27 @@ test("Stage 1 fixture helpers never mutate flags or deploy", () => {
     assert.doesNotMatch(blob, /docker\s+pull\b/);
     assert.doesNotMatch(blob, /compose\s+up/);
   }
-  assert.match(text, /if: \$\{\{ always\(\) \}\}/);
+  const pull = namedStep(text, "Pull NAS fixture evidence");
+  const authorize = namedStep(text, "Authorize Stage 1 fixture operation (fail-closed)");
+  assert.match(authorize, /id: authorize/);
+  assert.match(authorize, /authorized=true/);
+  assert.match(pull, /always\(\)/);
+  assert.match(pull, /steps.authorize.outputs.authorized == 'true'/);
+  assert.match(pull, /steps.operate.outcome/);
+  assert.match(namedStep(text, "Write Stage 1 fixture evidence"), /if: \$\{\{ always\(\) \}\}/);
+});
+
+test("P1-5 unauthorized fixture actor cannot take the NAS evidence pull path", () => {
+  const text = wf();
+  assert.match(namedStep(text, "Pull NAS fixture evidence"), /NAS_SSH_KEY/);
+  assert.match(namedStep(text, "Pull NAS fixture evidence"), /steps.authorize.outputs.authorized == 'true'/);
+  assert.doesNotMatch(namedStep(text, "Write Stage 1 fixture evidence"), /NAS_SSH_KEY/);
+  assert.doesNotMatch(namedStep(text, "Copy Stage 1 fixture helpers to NAS /tmp"), /if: \$\{\{ always\(\) \}\}/);
+  assert.doesNotMatch(namedStep(text, "Run Stage 1 fixture operation on running v3"), /if: \$\{\{ always\(\) \}\}/);
+  assert.throws(() => runAuthorize({ ...GOOD, ACTOR: "cursor", TRIGGERING_ACTOR: "cursor[bot]" }), /not a durable Production fixture operator|not the authorized deployer/);
+  assert.throws(() => runAuthorize({ ...GOOD, CONFIRM: "NO" }), /STAGE1-FIXTURES-PRODUCTION/);
+  assert.throws(
+    () => runAuthorize({ ...GOOD, OWNER_AUTHORIZATION: GOOD.OWNER_AUTHORIZATION.replace(":verify:", ":prepare:") }),
+    /AUTHORIZE-STAGE1-FIXTURES/,
+  );
 });

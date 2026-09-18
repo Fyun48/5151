@@ -498,6 +498,7 @@ export function loadRegistryBoundFixtures(db, {
   catalog,
   isCounterfactuallyMatchable,
   evaluateCounterfactualMatch,
+  runId,
 } = {}) {
   const stamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
   let registry = [];
@@ -516,6 +517,16 @@ export function loadRegistryBoundFixtures(db, {
   }
   if (!registry.length) {
     throw new Error("post-activation fixtures missing: stage1_fixture_registry has no active fixtures");
+  }
+  const runIds = [...new Set(registry.map((row) => String(row.run_id || "")).filter(Boolean))];
+  const boundRun = String(runId || process.env.STAGE1_FIXTURE_RUN_ID || "").trim();
+  if (boundRun) {
+    registry = registry.filter((row) => String(row.run_id) === boundRun);
+  } else if (runIds.length !== 1) {
+    throw new Error("post-activation fixtures must bind a single uncleaned run_id; cleanup leftover runs first");
+  }
+  if (!registry.length) {
+    throw new Error("post-activation fixtures missing: bound run_id has no active fixtures");
   }
   const userIds = registry.filter((row) => row.kind === "user").map((row) => Number(row.row_id) || 0).filter(Boolean);
   const listingIds = registry.filter((row) => row.kind === "listing").map((row) => Number(row.row_id) || 0).filter(Boolean);

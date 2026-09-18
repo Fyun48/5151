@@ -39,7 +39,12 @@ import {
   WISH_CONTINUOUS_ACTIVE_DAYS,
 } from "./wishLifecycle.js";
 import { WISH_SURFACE, sqlExcludeFixtureRows, wishVisibleOnSurface } from "./stage1FixtureIsolation.js";
-import { ensureStage1FixtureSchema, isFixtureMaturityAuthorized } from "./stage1FixtureRegistry.js";
+import {
+  ensureStage1FixtureSchema,
+  fixtureNamespaceFromIsolation,
+  isFixtureMaturityAuthorized,
+  registerFixtureRow,
+} from "./stage1FixtureRegistry.js";
 
 export const DEMAND_MAX_OPEN = 1;
 export const DEMAND_TTL_DAYS = 14;
@@ -1179,18 +1184,32 @@ export function getDemandPost(db, postId, { viewerId = 0, publicOnly = false, al
   return decorated;
 }
 
-function insertRow(db, uid, fields, status, now) {
+export function nextDemandPostId(db) {
+  const row = db.prepare("SELECT MAX(id) AS n FROM demand_posts").get();
+  return (Number(row?.n) || 0) + 1;
+}
+
+function insertRow(db, uid, fields, status, now, isolation) {
   const created = iso(now);
   const published = status === "open" ? created : null;
   const expires = status === "open" ? WISH_FAR_EXPIRE : created;
-  const result = db.prepare(
-    `INSERT INTO demand_posts(
+  const fixtureNs = fixtureNamespaceFromIsolation(db, uid, now, isolation);
+  const forcedId = Number(isolation?.rowId) || 0;
+  if (typeof isolation?.onBeforeInsert === "function") isolation.onBeforeInsert({ fixtureNs, rowId: forcedId });
+  const idSql = forcedId
+    ? `INSERT INTO demand_posts(
+      id, user_id, districts, rent_max, housing_type, mrt_walk, body, status, created_at, expires_at,
+      city, location_note, rent_min, includes_management, ping_min, layout, move_in_date, lease_duration,
+      transit_note, destination_note, commute_minutes, must_have, nice_to_have, avoid,
+      contact_name, phone, line_url, updated_at, published_at, condition_choices, fixture_namespace
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    : `INSERT INTO demand_posts(
       user_id, districts, rent_max, housing_type, mrt_walk, body, status, created_at, expires_at,
       city, location_note, rent_min, includes_management, ping_min, layout, move_in_date, lease_duration,
       transit_note, destination_note, commute_minutes, must_have, nice_to_have, avoid,
-      contact_name, phone, line_url, updated_at, published_at, condition_choices
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
+      contact_name, phone, line_url, updated_at, published_at, condition_choices, fixture_namespace
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+  const params = [
     uid,
     JSON.stringify(fields.districts),
     fields.rent_max,
@@ -1220,8 +1239,11 @@ function insertRow(db, uid, fields, status, now) {
     created,
     published,
     JSON.stringify(fields.condition_choices || {}),
-  );
-  const id = Number(result.lastInsertRowid);
+    fixtureNs || null,
+  ];
+  if (forcedId) params.unshift(forcedId);
+  const result = db.prepare(idSql).run(...params);
+  const id = forcedId || Number(result.lastInsertRowid);
   ensurePublicToken(db, id);
   if (status === "open") {
     writeLifecycle(db, id, {
@@ -1240,6 +1262,17 @@ function insertRow(db, uid, fields, status, now) {
     writeLifecycle(db, id, { lifecycle: "draft" });
   }
   syncDemandMatchDistricts(db, id);
+  if (fixtureNs && isolation?.runId && isolation.kind && isolation.role && isolation.registered !== true) {
+    registerFixtureRow(db, {
+      namespace: fixtureNs,
+      runId: isolation.runId,
+      kind: isolation.kind,
+      role: isolation.role,
+      rowId: id,
+      now,
+    });
+  }
+  if (typeof isolation?.onAfterInsert === "function") isolation.onAfterInsert({ id, fixtureNs });
   return id;
 }
 
@@ -1315,7 +1348,8 @@ export function createDemandPost(db, userId, input = {}, now = new Date(), optio
   const uid = Number(userId) || 0;
   if (!uid) throw httpError("請先登入", 401);
   const asDraft = input.draft === true || input.status === "draft";
-  const skipWait = isFixtureMaturityAuthorized(db, uid, now, options.maturity);
+  void input.fixture_namespace;
+  const skipWait = isFixtureMaturityAuthorized(db, uid, now, options.maturity || options.isolation);
   if (!asDraft && !skipWait) assertMatureAccount(db, uid, now, "刊登許願房");
   expireOpenPosts(db, now);
   const fields = normalizeWishInput(db, uid, input);
@@ -1331,7 +1365,7 @@ export function createDemandPost(db, userId, input = {}, now = new Date(), optio
         return getDemandPost(db, draftId, { viewerId: uid });
       }
       try {
-        const id = insertRow(db, uid, fields, "draft", now);
+        const id = insertRow(db, uid, fields, "draft", now, options.isolation);
         return getDemandPost(db, id, { viewerId: uid });
       } catch (error) {
         if (isUniqueUserConstraint(error) || /UNIQUE/i.test(String(error.message || ""))) {
@@ -1351,7 +1385,7 @@ export function createDemandPost(db, userId, input = {}, now = new Date(), optio
       return getDemandPost(db, draftId, { viewerId: uid });
     }
     try {
-      const id = insertRow(db, uid, fields, "open", now);
+      const id = insertRow(db, uid, fields, "open", now, options.isolation);
       return getDemandPost(db, id, { viewerId: uid });
     } catch (error) {
       if (isUniqueUserConstraint(error) || /UNIQUE/i.test(String(error.message || ""))) {

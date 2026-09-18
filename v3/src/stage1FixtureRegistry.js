@@ -2,6 +2,7 @@
  * Cleanup is exact row identity + namespace only — never email LIKE.
  */
 
+import { createHash } from "node:crypto";
 import {
   STAGE1_FIXTURE_NAMESPACE,
   STAGE1_FIXTURE_TTL_MS,
@@ -12,6 +13,7 @@ import {
 export { STAGE1_FIXTURE_NAMESPACE, STAGE1_FIXTURE_TTL_MS };
 
 export const FIXTURE_MATURITY = Symbol("stage1-fixture-maturity");
+export const FIXTURE_ISOLATION = Symbol("stage1-fixture-isolation");
 
 export const STAGE1_FIXTURE_KIND = Object.freeze({
   USER: "user",
@@ -31,11 +33,14 @@ export const STAGE1_FIXTURE_ROLE = Object.freeze({
   WISH_HARD_CONFLICT: "wish_hard_conflict",
 });
 
-export const STAGE1_FIXTURE_EMAILS = Object.freeze({
-  owner_a: "stage1.fixture.owner.a@jibby.test",
-  other_b: "stage1.fixture.other.b@jibby.test",
-  tenant_t: "stage1.fixture.tenant.t@jibby.test",
-});
+export function fixtureEmailForRole(runId, role) {
+  const run = String(runId || "").trim();
+  const key = String(role || "").trim();
+  if (!run || !key) throw new Error("fixture email requires run_id and role");
+  const hash = createHash("sha256").update(`stage1-fix:${run}:${key}`).digest("hex").slice(0, 12);
+  const local = String(key).replace(/_/g, ".");
+  return `stage1.fixture.${local}.${hash}@jibby.test`;
+}
 
 export const STAGE1_FIXTURE_STATUS = Object.freeze({
   ACTIVE: "active",
@@ -162,6 +167,34 @@ export function listActiveRegistryRows(db, {
   return db.prepare(sql).all(...params);
 }
 
+export function listUncleanedRegistryRows(db, {
+  namespace = STAGE1_FIXTURE_NAMESPACE,
+} = {}) {
+  ensureStage1FixtureSchema(db);
+  return db.prepare(`
+    SELECT * FROM stage1_fixture_registry
+    WHERE namespace = ?
+      AND cleaned_at IS NULL
+    ORDER BY id ASC
+  `).all(namespace);
+}
+
+export function uncleanedFixtureRunIds(db, {
+  namespace = STAGE1_FIXTURE_NAMESPACE,
+} = {}) {
+  return [...new Set(listUncleanedRegistryRows(db, { namespace }).map((row) => String(row.run_id || "")))].filter(Boolean);
+}
+
+export function assertPrepareRunExclusive(db, runId, namespace = STAGE1_FIXTURE_NAMESPACE) {
+  const want = String(runId || "").trim();
+  if (!want) throw new Error("prepare requires a fixture run_id");
+  const other = uncleanedFixtureRunIds(db, { namespace }).filter((id) => id !== want);
+  if (other.length) {
+    throw new Error(`uncleaned fixture run exists (${other.join(",")}); cleanup or reap-stale first`);
+  }
+  return true;
+}
+
 export function listStaleRegistryRows(db, {
   namespace = STAGE1_FIXTURE_NAMESPACE,
   now = new Date(),
@@ -207,6 +240,48 @@ export function authorizeFixtureMaturity(db, userId, now = new Date()) {
     [FIXTURE_MATURITY]: true,
     userId: Number(userId),
   });
+}
+
+export function authorizeFixtureIsolation(db, userId, {
+  now = new Date(),
+  namespace = STAGE1_FIXTURE_NAMESPACE,
+  runId,
+  kind,
+  role,
+  rowId,
+} = {}) {
+  if (!isActiveRegistryFixtureUser(db, userId, now)) {
+    throw new Error("fixture isolation requires an active unexpired registry user");
+  }
+  const ns = String(namespace || "").trim();
+  if (ns !== STAGE1_FIXTURE_NAMESPACE) {
+    throw new Error("fixture isolation namespace is not authorized");
+  }
+  if (!runId || !kind || !role) throw new Error("fixture isolation requires run_id, kind and role");
+  return Object.freeze({
+    [FIXTURE_MATURITY]: true,
+    [FIXTURE_ISOLATION]: true,
+    userId: Number(userId),
+    namespace: ns,
+    runId: String(runId),
+    kind: String(kind),
+    role: String(role),
+    rowId: Number(rowId) || 0,
+  });
+}
+
+export function fixtureNamespaceFromIsolation(db, userId, now, isolation) {
+  if (
+    !isolation
+    || typeof isolation !== "object"
+    || isolation[FIXTURE_ISOLATION] !== true
+    || Number(isolation.userId) !== Number(userId)
+    || !isActiveRegistryFixtureUser(db, userId, now)
+  ) {
+    return "";
+  }
+  const ns = String(isolation.namespace || "").trim();
+  return ns === STAGE1_FIXTURE_NAMESPACE ? ns : "";
 }
 
 export function isFixtureMaturityAuthorized(db, userId, now, maturity) {

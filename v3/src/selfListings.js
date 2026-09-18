@@ -28,7 +28,12 @@ import {
   selfListingCreateFingerprint,
 } from "./selfListingIdempotency.js";
 import { LISTING_SURFACE, listingVisibleOnSurface } from "./stage1FixtureIsolation.js";
-import { ensureStage1FixtureSchema, isFixtureMaturityAuthorized } from "./stage1FixtureRegistry.js";
+import {
+  ensureStage1FixtureSchema,
+  fixtureNamespaceFromIsolation,
+  isFixtureMaturityAuthorized,
+  registerFixtureRow,
+} from "./stage1FixtureRegistry.js";
 
 let listingCatalog = null;
 let listingFlags = {};
@@ -668,7 +673,7 @@ function insertCreateIdempotency(db, uid, key, payloadHash, postId, now) {
   ).run(uid, key, payloadHash, postId, iso(now));
 }
 
-export function createSelfListing(db, userId, input = {}, now = new Date(), { matchCandidates, maturity } = {}) {
+export function createSelfListing(db, userId, input = {}, now = new Date(), { matchCandidates, maturity, isolation } = {}) {
   const uid = Number(userId) || 0;
   if (!uid) throw httpError("請先登入才能刊登", 401);
   const key = normalizeSelfListingIdempotencyKey(input.idempotency_key ?? input.idempotencyKey);
@@ -683,7 +688,7 @@ export function createSelfListing(db, userId, input = {}, now = new Date(), { ma
         return getSelfListing(db, existing.post_id, { viewerId: uid });
       }
     }
-    const created = insertOpenSelfListing(db, uid, input, now, { matchCandidates, maturity });
+    const created = insertOpenSelfListing(db, uid, input, now, { matchCandidates, maturity, isolation });
     if (key) {
       try {
         insertCreateIdempotency(db, uid, key, payloadHash, created.post_id, now);
@@ -709,8 +714,10 @@ export function createSelfListing(db, userId, input = {}, now = new Date(), { ma
   }
 }
 
-function insertOpenSelfListing(db, uid, input = {}, now = new Date(), { matchCandidates, maturity } = {}) {
-  assertCanPublish(db, uid, now, { maturity });
+function insertOpenSelfListing(db, uid, input = {}, now = new Date(), { matchCandidates, maturity, isolation } = {}) {
+  assertCanPublish(db, uid, now, { maturity: maturity || isolation });
+  void input.fixture_namespace;
+  const fixtureNs = fixtureNamespaceFromIsolation(db, uid, now, isolation);
 
   const districts = normalizeWatchDistricts(
     input.district ? [input.district] : input.districts,
@@ -768,7 +775,8 @@ function insertOpenSelfListing(db, uid, input = {}, now = new Date(), { matchCan
 
   const created = iso(now);
   const expires = new Date(nowMs(now) + SELF_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString();
-  const postId = nextSelfPostId(db);
+  const postId = Number(isolation?.rowId) || nextSelfPostId(db);
+  if (typeof isolation?.onBeforeInsert === "function") isolation.onBeforeInsert({ postId, fixtureNs });
   const sourceKey = selfSourceKey({
     regionId: district.region,
     sectionId: district.id,
@@ -785,8 +793,9 @@ function insertOpenSelfListing(db, uid, input = {}, now = new Date(), { matchCan
       post_id, source_key, search_key, title, url, price, price_num,
       extra_fee, extra_fee_text, price_contain_text, extra_fees, extra_fees_fetched,
       address, area_name, layout, floor_name, kind_name, role_name, cover, tags,
-      refresh_time, first_seen_at, last_seen_at, last_event, viewed, watched
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, '', '', '[]', 1, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, 'new', 0, 0)
+      refresh_time, first_seen_at, last_seen_at, last_event, viewed, watched,
+      fixture_namespace
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, '', '', '[]', 1, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, 'new', 0, 0, ?)
   `).run(
     postId,
     sourceKey,
@@ -805,6 +814,7 @@ function insertOpenSelfListing(db, uid, input = {}, now = new Date(), { matchCan
     JSON.stringify(["吉比本站", ...selfTraitLabels(traitIds, extra.labels), depositLabel(deposit)].filter(Boolean)),
     created,
     created,
+    fixtureNs || null,
   );
 
   db.prepare(`
@@ -824,7 +834,8 @@ function insertOpenSelfListing(db, uid, input = {}, now = new Date(), { matchCan
       mobile = ?,
       phone = ?,
       line_url = ?,
-      contact_fetched = 1
+      contact_fetched = 1,
+      fixture_namespace = COALESCE(?, fixture_namespace)
     WHERE post_id = ?
   `).run(
     `self:${uid}:${postId}`,
@@ -840,8 +851,20 @@ function insertOpenSelfListing(db, uid, input = {}, now = new Date(), { matchCan
     phone,
     phone,
     lineUrl,
+    fixtureNs || null,
     postId,
   );
+  if (fixtureNs && isolation?.runId && isolation.kind && isolation.role && isolation.registered !== true) {
+    registerFixtureRow(db, {
+      namespace: fixtureNs,
+      runId: isolation.runId,
+      kind: isolation.kind,
+      role: isolation.role,
+      rowId: postId,
+      now,
+    });
+  }
+  if (typeof isolation?.onAfterInsert === "function") isolation.onAfterInsert({ postId, fixtureNs });
   setPublisherFace(db, postId, uid);
 
   const listing = db.prepare("SELECT * FROM listings WHERE post_id = ?").get(postId);

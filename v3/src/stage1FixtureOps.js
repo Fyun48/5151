@@ -3,8 +3,10 @@
  * Never mutates feature flags. Never uses email LIKE cleanup.
  */
 
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { writeFileSync } from "node:fs";
+import { nextSelfPostId } from "./selfListings.js";
+import { nextDemandPostId } from "./demand.js";
 import {
   LISTING_SURFACE,
   WISH_SURFACE,
@@ -12,24 +14,28 @@ import {
   wishVisibleOnSurface,
 } from "./stage1FixtureIsolation.js";
 import {
-  STAGE1_FIXTURE_EMAILS,
   STAGE1_FIXTURE_KIND,
   STAGE1_FIXTURE_NAMESPACE,
   STAGE1_FIXTURE_ROLE,
   STAGE1_FIXTURE_TTL_MS,
-  authorizeFixtureMaturity,
+  assertPrepareRunExclusive,
+  authorizeFixtureIsolation,
   ensureStage1FixtureSchema,
+  fixtureEmailForRole,
   listActiveRegistryRows,
   listStaleRegistryRows,
   makeStage1FixtureRunId,
   markRegistryRowCleaned,
   registerFixtureRow,
   registryRowIdentity,
-  stampFixtureNamespace,
+  uncleanedFixtureRunIds,
 } from "./stage1FixtureRegistry.js";
 
 export const FIXTURE_CLEANUP_FAILED = "FIXTURE_CLEANUP_FAILED";
-export const STAGE1_FIXTURE_PASSWORD = "Stage1Fixture#Readiness-72h";
+
+export function randomFixturePassword() {
+  return `Fx!${randomBytes(32).toString("base64url")}`;
+}
 
 const LATER_OFF = [
   "offer_enabled",
@@ -148,10 +154,58 @@ function publicEvidence(doc) {
     throw new Error("fixture evidence leaked email");
   }
   if (/09\d{8}/.test(text)) throw new Error("fixture evidence leaked phone");
-  for (const token of ["SESSION_SECRET", "NAS_SSH_KEY", "AUTH_PASSWORD", "auth.env", "rank_score"]) {
+  for (const token of ["SESSION_SECRET", "NAS_SSH_KEY", "AUTH_PASSWORD", "auth.env", "rank_score", "Fx!"]) {
     if (text.includes(token)) throw new Error(`fixture evidence leaked ${token}`);
   }
   return copy;
+}
+
+function createIsolatedListing(db, deps, ownerId, runId, now, isolationExtra = {}) {
+  const postId = nextSelfPostId(db);
+  registerFixtureRow(db, {
+    runId,
+    kind: STAGE1_FIXTURE_KIND.LISTING,
+    role: STAGE1_FIXTURE_ROLE.LISTING_A,
+    rowId: postId,
+    now,
+  });
+  if (typeof isolationExtra.onAfterRegister === "function") isolationExtra.onAfterRegister({ postId });
+  const isolation = {
+    ...authorizeFixtureIsolation(db, ownerId, {
+      now,
+      runId,
+      kind: STAGE1_FIXTURE_KIND.LISTING,
+      role: STAGE1_FIXTURE_ROLE.LISTING_A,
+      rowId: postId,
+    }),
+    registered: true,
+    ...isolationExtra,
+  };
+  return deps.createSelfListing(db, ownerId, listingFixtureInput(runId), now, { isolation });
+}
+
+function createIsolatedWish(db, deps, userId, runId, role, input, now, isolationExtra = {}) {
+  const wishId = nextDemandPostId(db);
+  registerFixtureRow(db, {
+    runId,
+    kind: STAGE1_FIXTURE_KIND.WISH,
+    role,
+    rowId: wishId,
+    now,
+  });
+  if (typeof isolationExtra.onAfterRegister === "function") isolationExtra.onAfterRegister({ wishId });
+  const isolation = {
+    ...authorizeFixtureIsolation(db, userId, {
+      now,
+      runId,
+      kind: STAGE1_FIXTURE_KIND.WISH,
+      role,
+      rowId: wishId,
+    }),
+    registered: true,
+    ...isolationExtra,
+  };
+  return deps.createDemandPost(db, userId, input, now, { isolation });
 }
 
 function findRole(rows, role) {
@@ -170,6 +224,7 @@ export function prepareStage1Fixtures(db, deps = {}, {
   const createDemandPost = requireDomain(deps, "createDemandPost");
   const applyWishLifecycleAction = requireDomain(deps, "applyWishLifecycleAction");
   runId = String(runId || "").trim() || makeStage1FixtureRunId(now, deps.workflowRunId);
+  assertPrepareRunExclusive(db, runId);
 
   const existing = listActiveRegistryRows(db, { runId, now });
   if (existing.length) {
@@ -177,14 +232,16 @@ export function prepareStage1Fixtures(db, deps = {}, {
   }
 
   const accounts = [];
-  for (const [role, email] of [
-    [STAGE1_FIXTURE_ROLE.OWNER_A, STAGE1_FIXTURE_EMAILS.owner_a],
-    [STAGE1_FIXTURE_ROLE.OTHER_B, STAGE1_FIXTURE_EMAILS.other_b],
-    [STAGE1_FIXTURE_ROLE.TENANT_T, STAGE1_FIXTURE_EMAILS.tenant_t],
+  for (const role of [
+    STAGE1_FIXTURE_ROLE.OWNER_A,
+    STAGE1_FIXTURE_ROLE.OTHER_B,
+    STAGE1_FIXTURE_ROLE.TENANT_T,
   ]) {
+    const email = fixtureEmailForRole(runId, role);
+    const password = randomFixturePassword();
     const user = registerUser(db, {
       email,
-      password: STAGE1_FIXTURE_PASSWORD,
+      password,
       acceptDisclaimer: true,
       acceptPrivacy: true,
       emailVerified: true,
@@ -202,30 +259,11 @@ export function prepareStage1Fixtures(db, deps = {}, {
   const owner = accounts.find((row) => row.role === STAGE1_FIXTURE_ROLE.OWNER_A);
   const other = accounts.find((row) => row.role === STAGE1_FIXTURE_ROLE.OTHER_B);
   const tenant = accounts.find((row) => row.role === STAGE1_FIXTURE_ROLE.TENANT_T);
-  const maturityA = authorizeFixtureMaturity(db, owner.id, now);
-  const maturityT = authorizeFixtureMaturity(db, tenant.id, now);
 
-  const listing = createSelfListing(db, owner.id, listingFixtureInput(runId), now, { maturity: maturityA });
-  stampFixtureNamespace(db, "listings", "post_id", listing.post_id);
-  registerFixtureRow(db, {
-    runId,
-    kind: STAGE1_FIXTURE_KIND.LISTING,
-    role: STAGE1_FIXTURE_ROLE.LISTING_A,
-    rowId: listing.post_id,
-    now,
-  });
+  createIsolatedListing(db, { createSelfListing }, owner.id, runId, now, deps.listingIsolation || {});
 
   function publishWish(role, input) {
-    const wish = createDemandPost(db, tenant.id, input, now, { maturity: maturityT });
-    stampFixtureNamespace(db, "demand_posts", "id", wish.id);
-    registerFixtureRow(db, {
-      runId,
-      kind: STAGE1_FIXTURE_KIND.WISH,
-      role,
-      rowId: wish.id,
-      now,
-    });
-    return wish;
+    return createIsolatedWish(db, { createDemandPost }, tenant.id, runId, role, input, now, deps.wishIsolation || {});
   }
 
   const hard = publishWish(
@@ -254,20 +292,16 @@ export function prepareStage1Fixtures(db, deps = {}, {
     wishFixtureInput(runId, STAGE1_FIXTURE_ROLE.WISH_ACTIVE),
   );
 
-  const inactive = createDemandPost(
+  createIsolatedWish(
     db,
+    { createDemandPost },
     other.id,
+    runId,
+    STAGE1_FIXTURE_ROLE.WISH_INACTIVE,
     { ...wishFixtureInput(runId, STAGE1_FIXTURE_ROLE.WISH_INACTIVE), draft: true },
     now,
+    deps.wishIsolation || {},
   );
-  stampFixtureNamespace(db, "demand_posts", "id", inactive.id);
-  registerFixtureRow(db, {
-    runId,
-    kind: STAGE1_FIXTURE_KIND.WISH,
-    role: STAGE1_FIXTURE_ROLE.WISH_INACTIVE,
-    rowId: inactive.id,
-    now,
-  });
 
   return verifyStage1Fixtures(db, deps, { now, runId, flags });
 }
@@ -316,6 +350,11 @@ export function verifyStage1Fixtures(db, deps = {}, {
 } = {}) {
   ensureStage1FixtureSchema(db);
   if (flags) assertReadinessFlags(flags, "verify");
+  if (!runId) {
+    const runs = uncleanedFixtureRunIds(db);
+    if (runs.length !== 1) throw new Error("fixture verify must bind a unique run_id");
+    runId = runs[0];
+  }
   const bundle = loadRegistryFixtureBundle(db, { now, runId });
   if (!bundle?.listing || !bundle.owner || !bundle.other || !bundle.tenant) {
     throw new Error("fixture verify missing registry-bound owner/listing/second account");
