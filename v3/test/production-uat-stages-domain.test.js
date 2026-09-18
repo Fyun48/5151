@@ -114,6 +114,7 @@ function makeDeps(overrides = {}) {
       state.prefs = { ...state.prefs, ...patch };
       return state.prefs;
     },
+    getRentalNotifyPrefs: () => state.prefs,
     runRentalNotifyTick: (_db, _now, { limit }) => ({
       skipped: false,
       reminders: { scanned: 0, emitted: 0 },
@@ -241,7 +242,7 @@ test("UAT dependency contract rejects a partial wiring and the read-only count w
   assert.throws(() => assertUatDeps({}), /requires domain dependency getRentalMarketplaceFlags/);
   const { deps, db } = makeDeps();
   assert.equal(assertUatDeps(deps), deps);
-  assert.equal(UAT_REQUIRED_DEPS.length, 22);
+  assert.equal(UAT_REQUIRED_DEPS.length, 23);
   assert.equal(pendingOffersFor(db, 800001, 11), 0);
 });
 

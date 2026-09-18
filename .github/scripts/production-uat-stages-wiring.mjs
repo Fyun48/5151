@@ -47,9 +47,11 @@ function makeHttpProbe(baseUrl) {
   };
 }
 
+/** Raw row loader. The listings table keys on post_id, not id. */
 function loadRow(db, table, id) {
+  const column = table === "listings" ? "post_id" : "id";
   try {
-    return db.prepare(`SELECT * FROM ${table} WHERE id = ?`).get(Number(id)) || null;
+    return db.prepare(`SELECT * FROM ${table} WHERE ${column} = ?`).get(Number(id)) || null;
   } catch {
     return null;
   }
@@ -91,9 +93,13 @@ export async function createUatFixtures({ db, deps, registryMod, fixtureOpsMod, 
 
   const listingId = deps.nextSelfPostId(db);
   registryMod.registerFixtureRow(db, { runId, kind: KIND.LISTING, role: ROLE.LISTING_A, rowId: listingId, now });
-  const listing = deps.createSelfListing(db, accounts.owner, fixtureOpsMod.listingFixtureInput(runId), now, {
+  deps.createSelfListing(db, accounts.owner, fixtureOpsMod.listingFixtureInput(runId), now, {
     isolation: { ...registryMod.authorizeFixtureIsolation(db, accounts.owner, { now, runId, kind: KIND.LISTING, role: ROLE.LISTING_A, rowId: listingId }), registered: true },
   });
+  // The domain create API returns a projection, not the raw row. assertCreateOfferGates
+  // and liveMatchEligible need the raw listings row (listed_by_user_id, self_status).
+  const listing = loadRow(db, "listings", listingId);
+  if (!listing) fail("the UAT fixture listing was not created");
 
   const wishes = {};
   // Domain rule: a user may hold only ONE open/public wish at a time
@@ -242,6 +248,7 @@ async function main() {
     resolveValidShareToken: shareMod.resolveValidShareToken,
     shouldAttributeSignup: shareMod.shouldAttributeSignup,
     emitRentalNotifyEvent: notifyMod.emitRentalNotifyEvent,
+    getRentalNotifyPrefs: notifyMod.getRentalNotifyPrefs,
     saveRentalNotifyPrefs: notifyMod.saveRentalNotifyPrefs,
     runRentalNotifyTick: workerMod.runRentalNotifyTick,
     startRentalNotifyLoop: workerMod.startRentalNotifyLoop,
