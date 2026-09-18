@@ -58,8 +58,10 @@
   --space-4: 16px;
   --touch: 44px;
   --page-gutter: 16px;
-  --btn-height: 40px;
-  --chip-height: 32px;
+  /* Issue #325 PART N: every visible interactive control must expose a >=44px touch
+     target, so the component heights follow --touch instead of the old 40px / 32px. */
+  --btn-height: var(--touch);
+  --chip-height: var(--touch);
   --background: var(--bg);
   --foreground: var(--ink);
   --card: var(--paper);
@@ -165,15 +167,10 @@
 }
 
 /* ── Issue #325 PART N: touch targets ──────────────────────────────────────────
+   --btn-height / --chip-height follow --touch (44px) in the token block above.
    每一個可見的互動控制項都必須提供 >=44px 的觸控目標（Issue 的 `touch >= 44px`）。
-   --btn-height / --chip-height 原本是 40px / 32px，低於門檻，這裡拉齊到 --touch；
    輸入框、select、textarea 與「當作控制項使用的獨立連結」直接吃 --touch。
    內文中的行內連結刻意不放大：那不是控制項。 */
-:root {
-  --btn-height: 44px;
-  --chip-height: 44px;
-}
-
 button,
 [role="button"],
 [role="tab"],
