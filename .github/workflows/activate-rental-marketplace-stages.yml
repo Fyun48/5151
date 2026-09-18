@@ -1,0 +1,304 @@
+name: Activate Marketplace stages 2-4 (manual)
+run-name: "activate-stage${{ inputs.target_stage }}:${{ inputs.source_sha }}"
+
+# 只啟用 Production 上已部署的 Stage 2/3/4 flag（offer_enabled /
+# public_share_v2_enabled / owner_notifications_enabled + notifications_enabled）。
+# 不部署、不重建 image、不 restart，也不開啟任何 outbound channel（digest / mail / push）。
+# 必須從 refs/heads/master 做 workflow_dispatch。
+# 單調順序：只有前一階段已 ON、後一階段仍 OFF 時才允許啟用本階段。
+# 沒有 Cursor 永久繞過：actor 與 triggering_actor 必須是 PRODUCTION_DEPLOY_ALLOWED_ACTOR。
+# 另需 per-run Owner authorization，且必須同時綁定目標階段。
+on:
+  workflow_dispatch:
+    inputs:
+      target_stage:
+        description: "要啟用的階段：2、3 或 4"
+        required: true
+      source_sha:
+        description: "目前 Production source 的完整 40 碼 commit SHA"
+        required: true
+      image_digest:
+        description: "目前 running image digest，格式必須是 sha256: 加 64 碼小寫 hex"
+        required: true
+      backup_id:
+        description: "啟用前已驗證 backup 路徑，必須是 /DATA/AppData/591-tracker-v3-backups/predeploy-YYYYMMDD-HHMMSS"
+        required: true
+      backup_hash:
+        description: "啟用前已驗證 backup sha256，格式必須是 sha256: 加 64 碼小寫 hex"
+        required: true
+      confirmation:
+        description: "輸入 ACTIVATE-STAGE2-PRODUCTION / ACTIVATE-STAGE3-PRODUCTION / ACTIVATE-STAGE4-PRODUCTION"
+        required: true
+        default: ""
+      owner_authorization:
+        description: "Per-run Owner intent，必須剛好 AUTHORIZE-STAGE<n>:<source_sha>:<image_digest>:<backup_id>:<backup_hash>"
+        required: true
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  activate-stage:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
+    steps:
+      - name: Authorize staged production activation (fail-closed)
+        id: authorize
+        env:
+          WF_REF: ${{ github.ref }}
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          ALLOWED_ACTOR: ${{ vars.PRODUCTION_DEPLOY_ALLOWED_ACTOR }}
+          TARGET_STAGE: ${{ inputs.target_stage }}
+          CONFIRM: ${{ inputs.confirmation }}
+          OWNER_AUTHORIZATION: ${{ inputs.owner_authorization }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+          BACKUP_ID: ${{ inputs.backup_id }}
+          BACKUP_HASH: ${{ inputs.backup_hash }}
+        run: |
+          set -euo pipefail
+          if [ "$WF_REF" != "refs/heads/master" ]; then
+            echo "::error::staged activation must run from the master workflow definition (got $WF_REF)"; exit 1
+          fi
+          if [ -z "${ALLOWED_ACTOR:-}" ]; then
+            echo "::error::PRODUCTION_DEPLOY_ALLOWED_ACTOR is not configured; refusing (fail-closed)"; exit 1
+          fi
+          case "${TARGET_STAGE:-}" in
+            2|3|4) : ;;
+            *) echo "::error::target_stage must be 2, 3 or 4 (got '${TARGET_STAGE:-}')"; exit 1 ;;
+          esac
+          if [ "$ACTOR" = "cursor" ] || [ "$ACTOR" = "cursor[bot]" ]; then
+            if [ "$ACTOR" != "$ALLOWED_ACTOR" ]; then
+              echo "::error::cursor is not a durable Production activator; Owner authorization required"; exit 1
+            fi
+          fi
+          if [ "$TRIGGERING_ACTOR" = "cursor" ] || [ "$TRIGGERING_ACTOR" = "cursor[bot]" ]; then
+            if [ "$TRIGGERING_ACTOR" != "$ALLOWED_ACTOR" ]; then
+              echo "::error::cursor is not a durable Production activator; Owner authorization required"; exit 1
+            fi
+          fi
+          if [ "$ACTOR" != "$ALLOWED_ACTOR" ]; then
+            echo "::error::actor '$ACTOR' is not the authorized deployer"; exit 1
+          fi
+          if [ "$TRIGGERING_ACTOR" != "$ALLOWED_ACTOR" ]; then
+            echo "::error::triggering actor '$TRIGGERING_ACTOR' is not the authorized deployer"; exit 1
+          fi
+          if [ "${CONFIRM:-}" != "ACTIVATE-STAGE${TARGET_STAGE}-PRODUCTION" ]; then
+            echo "::error::confirmation must be exactly ACTIVATE-STAGE${TARGET_STAGE}-PRODUCTION"; exit 1
+          fi
+          if ! printf '%s' "${SOURCE_SHA:-}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::source_sha must be a full 40-character commit SHA"; exit 1
+          fi
+          if ! printf '%s' "${IMAGE_DIGEST:-}" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo "::error::image_digest must be exactly sha256: plus 64 lowercase hex characters"; exit 1
+          fi
+          if ! printf '%s' "${BACKUP_ID:-}" | grep -Eq '^/DATA/AppData/591-tracker-v3-backups/predeploy-[0-9]{8}-[0-9]{6}$'; then
+            echo "::error::backup_id must be /DATA/AppData/591-tracker-v3-backups/predeploy-YYYYMMDD-HHMMSS"; exit 1
+          fi
+          case "$BACKUP_ID" in
+            *..*) echo "::error::backup_id must not contain path traversal"; exit 1 ;;
+          esac
+          if ! printf '%s' "${BACKUP_HASH:-}" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo "::error::backup_hash must be exactly sha256: plus 64 lowercase hex characters"; exit 1
+          fi
+          EXPECTED_AUTH="AUTHORIZE-STAGE${TARGET_STAGE}:${SOURCE_SHA}:${IMAGE_DIGEST}:${BACKUP_ID}:${BACKUP_HASH}"
+          if [ "${OWNER_AUTHORIZATION:-}" != "$EXPECTED_AUTH" ]; then
+            echo "::error::owner_authorization must be exactly AUTHORIZE-STAGE${TARGET_STAGE} bound to source SHA, digest, backup id and hash"; exit 1
+          fi
+          if [ -n "${GITHUB_OUTPUT:-}" ]; then
+            echo "authorized=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Checkout workflow-definition SHA
+        if: ${{ always() }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Verify trusted workflow-definition SHA
+        env:
+          EXPECTED_WF_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          HEAD_SHA="$(git rev-parse HEAD)"
+          if [ "$HEAD_SHA" != "$EXPECTED_WF_SHA" ]; then
+            echo "::error::trusted checkout HEAD $HEAD_SHA != workflow execution SHA $EXPECTED_WF_SHA"; exit 1
+          fi
+      - name: Validate source SHA reachable from origin/master
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin master
+          if ! git merge-base --is-ancestor "$SOURCE_SHA" origin/master; then
+            echo "::error::commit $SOURCE_SHA is not reachable from origin/master; refusing"; exit 1
+          fi
+          echo "Activation source SHA $SOURCE_SHA is on origin/master ancestry."
+      - name: Build expected v3/src manifest from source SHA
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          EXPECTED_WF_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          HEAD_SHA="$(git rev-parse HEAD)"
+          if [ "$HEAD_SHA" != "$EXPECTED_WF_SHA" ]; then
+            echo "::error::trusted checkout HEAD $HEAD_SHA != workflow execution SHA $EXPECTED_WF_SHA"; exit 1
+          fi
+          python3 .github/scripts/pra-src-manifest.py --from-git "$SOURCE_SHA" --out pra-src-expected.json
+          AFTER_HEAD="$(git rev-parse HEAD)"
+          if [ "$AFTER_HEAD" != "$EXPECTED_WF_SHA" ]; then
+            echo "::error::manifest step moved HEAD $AFTER_HEAD off workflow SHA $EXPECTED_WF_SHA"; exit 1
+          fi
+      - name: Copy staged activation helpers to NAS /tmp
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.NAS_HOST }}
+          port: ${{ secrets.NAS_PORT }}
+          username: ${{ secrets.NAS_USER }}
+          key: ${{ secrets.NAS_SSH_KEY }}
+          source: ".github/scripts/activate-rental-marketplace-stages-remote.sh,.github/scripts/activate-rental-marketplace-stages-domain.mjs,.github/scripts/activate-rental-marketplace-stages-path.py,.github/scripts/activate-rental-marketplace-stages-evidence.py,.github/scripts/activate-rental-marketplace-stages-postcheck.mjs,.github/scripts/pra-src-manifest.py,pra-src-expected.json"
+          target: /tmp/5151-stages-activate-helpers
+          overwrite: true
+      - name: Activate the target Marketplace stage on running v3
+        id: activate
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.NAS_HOST }}
+          port: ${{ secrets.NAS_PORT }}
+          username: ${{ secrets.NAS_USER }}
+          key: ${{ secrets.NAS_SSH_KEY }}
+          script_stop: true
+          command_timeout: 15m
+          script: |
+            set -euo pipefail
+            export TARGET_STAGE='${{ inputs.target_stage }}'
+            export SOURCE_SHA='${{ inputs.source_sha }}'
+            export IMAGE_DIGEST='${{ inputs.image_digest }}'
+            export BACKUP_ID='${{ inputs.backup_id }}'
+            export BACKUP_HASH='${{ inputs.backup_hash }}'
+            export OWNER_AUTHORIZATION='${{ inputs.owner_authorization }}'
+            export DOMAIN_SCRIPT=/tmp/5151-stages-activate-helpers/.github/scripts/activate-rental-marketplace-stages-domain.mjs
+            export PATH_SCRIPT=/tmp/5151-stages-activate-helpers/.github/scripts/activate-rental-marketplace-stages-path.py
+            export EVIDENCE_SCRIPT=/tmp/5151-stages-activate-helpers/.github/scripts/activate-rental-marketplace-stages-evidence.py
+            export POSTCHECK_SCRIPT=/tmp/5151-stages-activate-helpers/.github/scripts/activate-rental-marketplace-stages-postcheck.mjs
+            export SRC_MANIFEST_PY=/tmp/5151-stages-activate-helpers/.github/scripts/pra-src-manifest.py
+            export EXPECTED_SRC_MANIFEST=/tmp/5151-stages-activate-helpers/pra-src-expected.json
+            export EXPECTED_SRC_MOUNT=/mnt/Storage1/apps/5151/v3/src
+            export GITHUB_RUN_ID='${{ github.run_id }}'
+            export GITHUB_RUN_ATTEMPT='${{ github.run_attempt }}'
+            chmod +x /tmp/5151-stages-activate-helpers/.github/scripts/activate-rental-marketplace-stages-remote.sh
+            /tmp/5151-stages-activate-helpers/.github/scripts/activate-rental-marketplace-stages-remote.sh
+
+      - name: Pull NAS staged activation evidence
+        if: ${{ always() && steps.authorize.outputs.authorized == 'true' && (steps.activate.outcome == 'success' || steps.activate.outcome == 'failure') }}
+        env:
+          NAS_HOST: ${{ secrets.NAS_HOST }}
+          NAS_PORT: ${{ secrets.NAS_PORT }}
+          NAS_USER: ${{ secrets.NAS_USER }}
+          NAS_SSH_KEY: ${{ secrets.NAS_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          key="$(mktemp)"
+          printf '%s\n' "$NAS_SSH_KEY" > "$key"
+          chmod 600 "$key"
+          scp -o StrictHostKeyChecking=accept-new -P "$NAS_PORT" -i "$key" \
+            "$NAS_USER@$NAS_HOST:/tmp/stages-activation-core-${{ github.run_id }}-${{ github.run_attempt }}.json" ./nas-stages-core.json \
+            || echo "NAS staged core evidence missing"
+          scp -o StrictHostKeyChecking=accept-new -P "$NAS_PORT" -i "$key" \
+            "$NAS_USER@$NAS_HOST:/tmp/stages-rollback-evidence-${{ github.run_id }}-${{ github.run_attempt }}.json" ./nas-stages-rollback-evidence.json \
+            || echo "NAS staged rollback evidence missing"
+          rm -f "$key"
+      - name: Split staged core evidence bundle
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          if not os.path.isfile("nas-stages-core.json"):
+              print("staged core evidence bundle absent; downstream conclusion will fail closed")
+              raise SystemExit(0)
+          doc = json.load(open("nas-stages-core.json", encoding="utf-8"))
+          for key, dest in (
+              ("inspect", "stages-inspect.json"),
+              ("result", "stages-result.json"),
+              ("status", "stages-status.json"),
+              ("postcheck", "stages-postcheck.json"),
+          ):
+              with open(dest, "w", encoding="utf-8") as handle:
+                  json.dump(doc.get(key) or {}, handle, indent=2, sort_keys=True)
+                  handle.write("\n")
+          with open("stages-class.txt", "w", encoding="utf-8") as handle:
+              handle.write(str(doc.get("class") or ""))
+          with open("stages-source-sha.txt", "w", encoding="utf-8") as handle:
+              handle.write(str((doc.get("identity") or {}).get("source_sha") or ""))
+          with open("stages-tree-sha.txt", "w", encoding="utf-8") as handle:
+              handle.write(str((doc.get("identity") or {}).get("src_tree_sha256") or ""))
+          print("STAGED_CORE_BUNDLE_SPLIT_OK")
+          PY
+      - name: Write staged activation evidence
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          if [ ! -f nas-stages-core.json ]; then
+            echo "::error::staged activation core evidence is missing; refusing to synthesize evidence"
+            exit 1
+          fi
+          python3 .github/scripts/activate-rental-marketplace-stages-evidence.py \
+            --stage "${{ inputs.target_stage }}" \
+            --class "$(cat stages-class.txt)" \
+            --inspect stages-inspect.json \
+            --result stages-result.json \
+            --status stages-status.json \
+            --postcheck stages-postcheck.json \
+            --evidence stages-activation-evidence.json \
+            --receipt stages-activation-receipt-copy.json \
+            --run-id "${{ github.run_id }}" \
+            --workflow activate-rental-marketplace-stages.yml \
+            --source-sha "${{ inputs.source_sha }}" \
+            --tree-sha "$(cat stages-tree-sha.txt)" \
+            --image-digest "${{ inputs.image_digest }}" \
+            --backup-id "${{ inputs.backup_id }}" \
+            --backup-hash "${{ inputs.backup_hash }}"
+      - name: Upload staged activation evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: stages-activation-evidence
+          path: |
+            stages-activation-evidence.json
+            stages-activation-receipt-copy.json
+            nas-stages-core.json
+            nas-stages-rollback-evidence.json
+          if-no-files-found: error
+      - name: Conclude staged activation (fail-closed)
+        run: |
+          set -euo pipefail
+          if [ ! -f stages-activation-evidence.json ]; then
+            echo "::error::staged activation evidence artifact is missing; refusing PASS"
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json
+          doc = json.load(open("stages-activation-evidence.json", encoding="utf-8"))
+          if doc.get("problems"):
+              raise SystemExit("staged activation problems: %s" % doc["problems"])
+          if doc.get("class") not in ("activate", "verify-only"):
+              raise SystemExit("staged activation class is not activate/verify-only")
+          boundary = doc.get("stage_boundary") or {}
+          if not all(boundary.get("earlier_flags_on", {}).values()):
+              raise SystemExit("earlier stage flags are not all ON")
+          if any(boundary.get("later_flags_off", {}).values()):
+              raise SystemExit("a later stage flag is ON")
+          if any(boundary.get("outbound_off", {}).values()):
+              raise SystemExit("an outbound channel flag is ON")
+          if not (doc.get("postcheck") or {}).get("ok"):
+              raise SystemExit("staged post-activation probes did not pass")
+          print("STAGED_ACTIVATION_OK stage=%s class=%s" % (doc.get("identity", {}).get("target_stage"), doc.get("class")))
+          PY
+
