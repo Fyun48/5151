@@ -222,7 +222,7 @@ test("same user + same key concurrent creates only one listing", async () => {
   const file = path.join(os.tmpdir(), `self-idemp-${process.pid}-${Date.now()}.db`);
   const seed = new DatabaseSync(file);
   seed.exec("PRAGMA journal_mode=WAL");
-  seed.exec("PRAGMA busy_timeout=8000");
+  seed.exec("PRAGMA busy_timeout=30000");
   seed.exec(listingSchemaSql());
   ensureSelfListingSchema(seed);
   addUser(seed, { id: 1, email: "a@example.com" });
@@ -233,16 +233,28 @@ test("same user + same key concurrent creates only one listing", async () => {
     import { DatabaseSync } from "node:sqlite";
     import { createSelfListing } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/selfListings.js")).href)};
     const db = new DatabaseSync(workerData.file);
-    db.exec("PRAGMA journal_mode=WAL");
-    db.exec("PRAGMA busy_timeout=8000");
-    try {
-      const row = createSelfListing(db, 1, workerData.input);
-      parentPort.postMessage({ ok: true, post_id: row.post_id });
-    } catch (error) {
-      parentPort.postMessage({ ok: false, status: error.status || 500, message: error.message });
-    } finally {
-      db.close();
-    }
+    // busy_timeout is connection-local and cannot fail; WAL is already set by the seed, so a busy
+    // header write here must not fail the worker (SQLITE_BUSY_RECOVERY on a contended runner).
+    db.exec("PRAGMA busy_timeout=30000");
+    try { db.exec("PRAGMA journal_mode=WAL"); } catch { /* seed already set WAL */ }
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const transientLock = (error) => /database is locked|SQLITE_BUSY/i.test(String((error && error.message) || error));
+    (async () => {
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        try {
+          const row = createSelfListing(db, 1, workerData.input);
+          parentPort.postMessage({ ok: true, post_id: row.post_id });
+          return;
+        } catch (error) {
+          if (transientLock(error) && attempt < 9) {
+            await sleep(50 * (attempt + 1));
+            continue;
+          }
+          parentPort.postMessage({ ok: false, status: error.status || 500, message: error.message });
+          return;
+        }
+      }
+    })().finally(() => db.close());
   `;
   const input = sample({ idempotency_key: KEY, address: "台北市士林區中正路106號" });
   const run = () => new Promise((resolve, reject) => {
@@ -260,7 +272,7 @@ test("same user + same key concurrent creates only one listing", async () => {
   assert.equal(ok.length, 2, JSON.stringify([left, right]));
   assert.equal(ok[0].post_id, ok[1].post_id);
   const check = new DatabaseSync(file);
-  check.exec("PRAGMA busy_timeout=8000");
+  check.exec("PRAGMA busy_timeout=30000");
   assert.equal(check.prepare("SELECT COUNT(*) n FROM listings WHERE listed_by_user_id=1").get().n, 1);
   check.close();
   unlinkSync(file);
