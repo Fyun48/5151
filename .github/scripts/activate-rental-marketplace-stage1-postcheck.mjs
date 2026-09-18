@@ -156,7 +156,8 @@ export function assertNoEvidenceSecrets(doc) {
       throw new Error(`post-activation evidence leaked ${token}`);
     }
   }
-  if (/09\d{8}/.test(text)) throw new Error("post-activation evidence leaked phone");
+  // Boundary-anchored: compact fixture run ids / timestamps must not look like 09xxxxxxxx.
+  if (/(?<!\d)09\d{8}(?!\d)/.test(text)) throw new Error("post-activation evidence leaked phone");
   if (/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(text)) {
     throw new Error("post-activation evidence leaked email");
   }

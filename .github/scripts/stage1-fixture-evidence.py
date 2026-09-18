@@ -8,7 +8,9 @@ import sys
 
 FORBIDDEN = ("SESSION_SECRET", "NAS_SSH_KEY", "AUTH_PASSWORD", "auth.env", "rank_score")
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-PHONE_RE = re.compile(r"09\d{8}")
+# Boundary-anchored so a compact fixture run id (stage1-fix:20260918061756:...)
+# is not mistaken for a 09xxxxxxxx mobile number.
+PHONE_RE = re.compile(r"(?<![0-9])09\d{8}(?![0-9])")
 LATER = (
     "offer_enabled",
     "public_share_v2_enabled",

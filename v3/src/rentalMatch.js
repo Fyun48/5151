@@ -866,7 +866,7 @@ export function assertOwnerSafeMatchView(view) {
       throw err;
     }
   }
-  if (/@example\.com|line\.me|09\d{8}/i.test(json) && /phone|line_url|email/.test(json)) {
+  if (/@example\.com|line\.me|(?<!\d)09\d{8}(?!\d)/i.test(json) && /phone|line_url|email/.test(json)) {
     const err = new Error("配對結果含有不該出現的資料");
     err.status = 500;
     throw err;

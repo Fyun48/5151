@@ -24,7 +24,9 @@ FORBIDDEN = (
     "activity_score",
 )
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-PHONE_RE = re.compile(r"09\d{8}")
+# Boundary-anchored so compact fixture run ids / timestamps are neither redacted
+# nor reported as a leaked 09xxxxxxxx phone number.
+PHONE_RE = re.compile(r"(?<![0-9])09\d{8}(?![0-9])")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 LATER = (
     "offer_enabled",
