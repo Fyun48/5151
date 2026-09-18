@@ -116,23 +116,42 @@ PY
 }
 
 # http_probe <body-file> <url> [extra curl args] -> prints "<status> <elapsed_ms>"
+#
+# This is a READ-ONLY observation of the running gate state, not a latency SLO:
+# /api/demand/aggregate and /api/demand/exposure are aggregate reads that can
+# occasionally take longer than a few seconds. A transient transport failure must
+# never be enough to trigger a state-changing compensating rollback, so transport
+# errors are retried a bounded number of times. Deterministic failures (HTTP 5xx,
+# SQLITE_BUSY) still fail on the first attempt and are never masked by a retry.
 http_probe() {
   local dest="$1"
   local url="$2"
   local extra="${3:-}"
-  local started ended elapsed status
+  local started ended elapsed status rc attempt
   local busy=0 five=0
-  started="$(date +%s%3N)"
-  set +e
-  status="$(curl -sS --max-time 8 -o "$dest" -w '%{http_code}' $extra "$url" 2>/tmp/stages-curl.err)"
-  local rc=$?
-  set -e
-  ended="$(date +%s%3N)"
-  elapsed=$((ended - started))
-  if [ "$rc" -ne 0 ]; then
-    echo "curl_error url=$url rc=$rc" >&2
+  rc=1
+  for attempt in 1 2 3; do
+    busy=0
+    five=0
+    started="$(date +%s%3N)"
+    set +e
+    status="$(curl -sS --max-time 20 -o "$dest" -w '%{http_code}' $extra "$url" 2>/tmp/stages-curl.err)"
+    rc=$?
+    set -e
+    ended="$(date +%s%3N)"
+    elapsed=$((ended - started))
+    if [ "$rc" -eq 0 ]; then
+      break
+    fi
+    echo "curl_error url=$url rc=$rc attempt=$attempt" >&2
     cat /tmp/stages-curl.err >&2 || true
     record_probe "$url" "${status:-0}" "$elapsed" 0 0
+    if [ "$attempt" -lt 3 ]; then
+      sleep 3
+    fi
+  done
+  if [ "$rc" -ne 0 ]; then
+    echo "curl_error_after_retries url=$url rc=$rc" >&2
     return 1
   fi
   if grep -Eqi 'SQLITE_BUSY|database is locked' "$dest" /tmp/stages-curl.err 2>/dev/null; then busy=1; fi
@@ -331,6 +350,21 @@ compensate_and_fail() {
   fail "post-check failed ($reason); Stage ${TARGET_STAGE} rolled back via domain API; earlier stages left ON"
 }
 
+# A verify-only replay performed NO mutation, so there is nothing to compensate:
+# rolling the target stage back would destroy a state that was already activated
+# and receipt-verified. Fail closed (fail the run, report a clear reason) while
+# touching no flag. Only a run that actually mutated may compensate.
+# Regression: run 35320127057 was a verify-only replay whose read-only exposure
+# probe timed out, and the unconditional rollback turned a correct Stage 2 OFF.
+compensate_or_fail() {
+  local reason="$1"
+  if [ "$CLASS" = "activate" ]; then
+    compensate_and_fail "$reason"
+  fi
+  echo "STAGES_VERIFY_ONLY_FAIL: $reason"
+  fail "post-check failed ($reason) during a verify-only replay; no flag was touched (Stage ${TARGET_STAGE} left as-is, no rollback)"
+}
+
 compensate_if_mutated() {
   local reason="$1"
   local phase="unknown"
@@ -411,18 +445,18 @@ else
 fi
 
 echo "=== hydrate runtime caches (GET /api/health + /api/demand/exposure, no restart) ==="
-http_probe /tmp/stages-health.json http://127.0.0.1:5153/api/health >/dev/null || compensate_and_fail "health probe failed after activation"
-http_probe /tmp/stages-exposure.json http://127.0.0.1:5153/api/demand/exposure >/dev/null || compensate_and_fail "exposure probe failed after activation"
+http_probe /tmp/stages-health.json http://127.0.0.1:5153/api/health >/dev/null || compensate_or_fail "health probe failed after activation"
+http_probe /tmp/stages-exposure.json http://127.0.0.1:5153/api/demand/exposure >/dev/null || compensate_or_fail "exposure probe failed after activation"
 
-run_staged_postcheck || compensate_and_fail "post-activation staged probes failed"
+run_staged_postcheck || compensate_or_fail "post-activation staged probes failed"
 
 AFTER_IMAGE="$(docker inspect -f '{{.Config.Image}}' "$CONTAINER")"
 AFTER_ID="$(docker inspect -f '{{.Image}}' "$CONTAINER")"
 AFTER_REV="$(docker image inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$AFTER_ID")"
-[ "$AFTER_IMAGE" = "$PIN" ] || compensate_and_fail "running image digest changed during activation"
-[ "$AFTER_REV" = "$SOURCE_SHA" ] || compensate_and_fail "OCI revision changed during activation"
+[ "$AFTER_IMAGE" = "$PIN" ] || compensate_or_fail "running image digest changed during activation"
+[ "$AFTER_REV" = "$SOURCE_SHA" ] || compensate_or_fail "OCI revision changed during activation"
 AFTER_MOUNT="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/src"}}{{.Source}}{{end}}{{end}}' "$CONTAINER")"
-[ "$AFTER_MOUNT" = "$EXPECTED_SRC_MOUNT" ] || compensate_and_fail "container /app/src mount changed during activation"
+[ "$AFTER_MOUNT" = "$EXPECTED_SRC_MOUNT" ] || compensate_or_fail "container /app/src mount changed during activation"
 
 
 echo "=== write core evidence bundle ($CORE_EVIDENCE_PATH) ==="
