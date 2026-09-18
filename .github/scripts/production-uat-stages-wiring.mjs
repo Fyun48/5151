@@ -96,11 +96,15 @@ export async function createUatFixtures({ db, deps, registryMod, fixtureOpsMod, 
   });
 
   const wishes = {};
+  // Domain rule: a user may hold only ONE open/public wish at a time
+  // (demand.js throwActiveLimit -> 409 wish_active_limit). The non-active wishes
+  // are therefore created first and closed immediately, and the open/eligible
+  // wish is created last.
   const wishSpec = [
-    ["eligible", ROLE.WISH_ACTIVE, "tenant", ""],
     ["paused", ROLE.WISH_PAUSED, "tenant", "pause"],
     ["completed", ROLE.WISH_COMPLETED, "tenant", "complete"],
     ["closed", ROLE.WISH_HARD_CONFLICT, "tenant", "complete"],
+    ["eligible", ROLE.WISH_ACTIVE, "tenant", ""],
   ];
   for (const [key, role, ownerKey, action] of wishSpec) {
     const wishId = deps.nextDemandPostId(db);
@@ -151,8 +155,27 @@ export async function cleanupUatFixtures({ db, deps, registryMod, runId, now }) 
   const leftoverUsers = registryMod.listUncleanedRegistryRows
     ? registryMod.listUncleanedRegistryRows(db, { runId }).length
     : 0;
-  if (leftoverUsers > 0) return { ok: false, reason: `${leftoverUsers} registry rows were not cleaned`, cleaned: rows.length };
-  return { ok: true, reason: "", cleaned: rows.length, namespace: makeUatNamespace(runId) };
+  // Read-only transparency: this run's own leftovers plus any other uncleaned
+  // fixture run (for example the Stage 1 Phase A rows that can no longer be
+  // reaped because the readiness gate rejects the post-activation posture).
+  const registryLeftover = typeof registryMod.uncleanedFixtureRunIds === "function"
+    ? registryMod.uncleanedFixtureRunIds(db)
+    : [];
+  if (leftoverUsers > 0) {
+    return {
+      ok: false,
+      reason: `${leftoverUsers} registry rows were not cleaned`,
+      cleaned: rows.length,
+      registry_leftover_runs: registryLeftover.length,
+    };
+  }
+  return {
+    ok: true,
+    reason: "",
+    cleaned: rows.length,
+    namespace: makeUatNamespace(runId),
+    registry_leftover_runs: registryLeftover.length,
+  };
 }
 
 const selfUrl = pathToFileURL(path.resolve(process.argv[1] || "")).href;
@@ -226,7 +249,8 @@ async function main() {
   };
   deps.httpProbe = makeHttpProbe(process.env.UAT_BASE_URL || "http://127.0.0.1:5153");
 
-  let doc;
+  let doc = null;
+  let fatal = "";
   let cleanup = { ok: false, reason: "not_done" };
   try {
     const ctx = await createUatFixtures({ db, deps, registryMod, fixtureOpsMod, runId, now, namespace });
@@ -239,6 +263,9 @@ async function main() {
       runId,
       workflow: process.env.UAT_WORKFLOW || "production-uat-stages-functional.yml",
     });
+  } catch (error) {
+    fatal = String(error?.stack || error?.message || error);
+    console.error("UAT_FATAL " + fatal);
   } finally {
     try {
       cleanup = await cleanupUatFixtures({ db, deps, registryMod, runId, now });
@@ -247,6 +274,28 @@ async function main() {
     }
   }
 
+  // Evidence must always exist: a fatal fixture/item error is recorded in the
+  // document so the workflow's conclusion step fails closed with the real reason
+  // instead of reporting a missing artifact.
+  if (!doc) {
+    doc = {
+      schema: UAT_SCHEMA,
+      generated_at: new Date().toISOString(),
+      run_id: runId,
+      workflow: process.env.UAT_WORKFLOW || "production-uat-stages-functional.yml",
+      namespace,
+      flags_mutated: false,
+      before_raw_flags: flags,
+      after_raw_flags: flags,
+      summary: { total: 0, passed: 0, failed: 0, failed_ids: [] },
+      items: [],
+      probe_log: [],
+      dock_rows: 0,
+      problems: [],
+      conclusion: "",
+    };
+  }
+  if (fatal) doc.problems.push(`fatal: ${fatal.split("\n")[0]}`);
   if (cleanup.ok !== true) doc.problems.push(`fixture cleanup failed: ${cleanup.reason}`);
   doc.cleanup = cleanup;
   doc.schema = UAT_SCHEMA;
