@@ -869,7 +869,11 @@ test("Stage 1 post-activation probes are required and fail-closed with compensat
   const text = wf(WF_NAME);
   assert.match(text, /activate-rental-marketplace-stage1-postcheck\.mjs/);
   assert.match(remote, /POSTCHECK_SCRIPT/);
-  assert.match(remote, /compensate_and_fail "verify-only post-activation probes failed"/);
+  // P1-10: verify-only recovery must not roll back merely because fixtures were cleaned.
+  assert.doesNotMatch(remote, /compensate_and_fail "verify-only post-activation probes failed"/);
+  assert.match(remote, /hydrate_runtime_on verify-only \|\| fail "verify-only/);
+  // The activate path still fails closed with the compensating rollback.
+  assert.match(remote, /hydrate_runtime_on \|\| compensate_and_fail "runtime hydrate\/public flag post-check failed"/);
   assert.match(remote, /run_post_activation_probes \|\| return 1/);
   assert.match(checkEvidence("--check-receipt", goodSmoke()), /EVIDENCE_RECEIPT_OK/);
   assert.throws(
