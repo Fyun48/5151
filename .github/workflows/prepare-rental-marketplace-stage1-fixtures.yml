@@ -229,6 +229,11 @@ jobs:
               nas = {}
           mode = os.environ["FIXTURE_MODE"]
           posture = str(nas.get("posture") or "")
+          # Issue #349: a failed run records posture and the failure reason in the
+          # same per-run core file, so the evidence document is diagnosable instead
+          # of empty. It still counts as "no evidence": ok is explicitly false.
+          failure_reason = str(nas.get("failure_reason") or "")
+          core_ok = nas.get("ok") is not False
           activated = mode in ("cleanup", "reap-stale", "cleanup-activated") and posture == "post_activation"
           doc = {
               "schema": "stage1-fixture-evidence-v1",
@@ -248,7 +253,8 @@ jobs:
               "before_raw_flags": nas.get("before_raw_flags"),
               "after_raw_flags": nas.get("after_raw_flags"),
               "result": nas.get("result"),
-              "evidence_available": bool(nas),
+              "evidence_available": bool(nas) and core_ok,
+              "failure_reason": failure_reason,
           }
           open("stage1-fixture-evidence.json", "w").write(json.dumps(doc, indent=2) + "\n")
           PY
@@ -265,6 +271,18 @@ jobs:
           if [ ! -f stage1-fixture-evidence.json ]; then
             echo "::error::fixture evidence artifact is missing"; exit 1
           fi
+          # Issue #349: surface the recorded failure reason before the fail-closed
+          # contract checks, so a failed run is diagnosable from the log alone.
+          python3 - <<'PY'
+          import json
+          doc = json.load(open("stage1-fixture-evidence.json"))
+          reason = str(doc.get("failure_reason") or "")
+          if reason:
+              print("fixture failure reason: " + reason)
+          core_exit = doc.get("domain_exit_code")
+          if core_exit:
+              print("fixture domain exit code: %s" % core_exit)
+          PY
           python3 .github/scripts/stage1-fixture-evidence.py ./stage1-fixture-evidence.json
           python3 - <<'PY'
           import json

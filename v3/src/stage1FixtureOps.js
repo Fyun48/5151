@@ -625,6 +625,92 @@ function failCleanup(message) {
   throw error;
 }
 
+/**
+ * Issue #349: rows bound to the fixture namespace that no active or uncleaned
+ * registry row points at any more.
+ *
+ * Cleanup and reap-stale both enter through registry rows, so a row whose registry
+ * entry was booked as cleaned while the underlying row stayed open used to be
+ * detectable (verifyCleanup) but unrecoverable. Only rows that actually carry the
+ * fixture namespace can be selected: a normal member row has no fixture namespace,
+ * and no wildcard delete of users/listings/wishes exists here.
+ */
+export function listOrphanFixtureRows(db, {
+  namespace = STAGE1_FIXTURE_NAMESPACE,
+  now = new Date(),
+  registeredKeys,
+} = {}) {
+  ensureStage1FixtureSchema(db);
+  const bound = registeredKeys instanceof Set
+    ? registeredKeys
+    : new Set([
+      ...listActiveRegistryRows(db, { namespace, now }),
+      ...listStaleRegistryRows(db, { namespace, now }),
+    ].map((row) => `${row.kind}:${Number(row.row_id)}`));
+  const orphans = [];
+  try {
+    const listings = db.prepare(`
+      SELECT post_id FROM listings
+      WHERE fixture_namespace = ?
+        AND COALESCE(self_status, 'open') = 'open'
+    `).all(namespace);
+    for (const row of listings) {
+      if (!bound.has(`${STAGE1_FIXTURE_KIND.LISTING}:${Number(row.post_id)}`)) {
+        orphans.push({ kind: STAGE1_FIXTURE_KIND.LISTING, row_id: Number(row.post_id) });
+      }
+    }
+  } catch { /* listings table absent in isolated tests */ }
+  try {
+    const wishes = db.prepare(`
+      SELECT id FROM demand_posts
+      WHERE fixture_namespace = ?
+        AND status = 'open'
+    `).all(namespace);
+    for (const row of wishes) {
+      if (!bound.has(`${STAGE1_FIXTURE_KIND.WISH}:${Number(row.id)}`)) {
+        orphans.push({ kind: STAGE1_FIXTURE_KIND.WISH, row_id: Number(row.id) });
+      }
+    }
+  } catch { /* demand_posts table absent */ }
+  return orphans;
+}
+
+/** Closes one namespace-bound fixture listing and proves it is no longer open. */
+function closeFixtureListingRow(db, closeSelfListing, namespace, rowId, now) {
+  const listing = loadListing(db, rowId);
+  if (!listing) return 0;
+  if (String(listing.fixture_namespace || "") !== namespace) {
+    failCleanup("refusing to close a listing outside fixture namespace");
+  }
+  if (String(listing.self_status || "") !== "open") return 0;
+  closeSelfListing(db, Number(listing.listed_by_user_id) || 0, listing.post_id, { admin: true }, now);
+  const after = loadListing(db, rowId);
+  if (after && String(after.self_status || "") === "open") {
+    failCleanup("fixture listing could not be closed");
+  }
+  return 1;
+}
+
+/** Closes one namespace-bound fixture wish and proves it is no longer open. */
+function closeFixtureWishRow(db, applyWishLifecycleAction, namespace, rowId, now) {
+  const wish = loadWish(db, rowId);
+  if (!wish) return 0;
+  if (String(wish.fixture_namespace || "") !== namespace) {
+    failCleanup("refusing to close a wish outside fixture namespace");
+  }
+  if (String(wish.status || "") !== "open") return 0;
+  try {
+    applyWishLifecycleAction(db, wish.user_id, wish.id, "pause", now);
+  } catch {
+    applyWishLifecycleAction(db, wish.user_id, wish.id, "complete", now);
+  }
+  const after = loadWish(db, rowId);
+  if (after && String(after.status || "") === "open") {
+    failCleanup("fixture wish could not be closed");
+  }
+  return 1;
+}
+
 export function cleanupStage1Fixtures(db, deps = {}, {
   now = new Date(),
   runId,
@@ -648,34 +734,34 @@ export function cleanupStage1Fixtures(db, deps = {}, {
     seen.add(key);
     return true;
   });
-  if (!rows.length) {
+  // #349 orphan recovery: rows bound to the namespace that no active (or stale,
+  // still uncleaned) registry row points at. Only the explicitly safe cleanup /
+  // reap / cleanup-activated modes reach this function, so prepare and verify can
+  // never reclaim a row implicitly.
+  const registeredKeys = new Set(rows.map((row) => `${row.kind}:${Number(row.row_id)}`));
+  const orphans = listOrphanFixtureRows(db, { namespace, now, registeredKeys });
+  if (!rows.length && !orphans.length) {
     return verifyCleanup(db, deps, { now, runId, namespace, flags, emptyOk: true, ownerMatching });
   }
 
   const identities = rows.map((row) => registryRowIdentity(row));
+  const orphanIdentities = orphans.map((row) => ({ kind: row.kind, row_id: Number(row.row_id) }));
   try {
     for (const row of rows.filter((item) => item.kind === STAGE1_FIXTURE_KIND.LISTING)) {
-      const listing = loadListing(db, row.row_id);
-      if (!listing) continue;
-      if (String(listing.fixture_namespace || "") !== namespace) {
-        failCleanup("refusing to close a listing outside fixture namespace");
-      }
-      if (String(listing.self_status || "") === "open") {
-        closeSelfListing(db, Number(listing.listed_by_user_id) || 0, listing.post_id, { admin: true }, now);
-      }
+      closeFixtureListingRow(db, closeSelfListing, namespace, row.row_id, now);
     }
     for (const row of rows.filter((item) => item.kind === STAGE1_FIXTURE_KIND.WISH)) {
-      const wish = loadWish(db, row.row_id);
-      if (!wish) continue;
-      if (String(wish.fixture_namespace || "") !== namespace) {
-        failCleanup("refusing to close a wish outside fixture namespace");
+      closeFixtureWishRow(db, applyWishLifecycleAction, namespace, row.row_id, now);
+    }
+    // #349: reclaim rows whose registry entry was already booked cleaned, still
+    // before any account is removed, so a fixture owner that is about to be
+    // deleted can always still close its own row through the domain API.
+    for (const row of orphanIdentities) {
+      if (row.kind === STAGE1_FIXTURE_KIND.LISTING) {
+        closeFixtureListingRow(db, closeSelfListing, namespace, row.row_id, now);
       }
-      if (String(wish.status || "") === "open") {
-        try {
-          applyWishLifecycleAction(db, wish.user_id, wish.id, "pause", now);
-        } catch {
-          applyWishLifecycleAction(db, wish.user_id, wish.id, "complete", now);
-        }
+      if (row.kind === STAGE1_FIXTURE_KIND.WISH) {
+        closeFixtureWishRow(db, applyWishLifecycleAction, namespace, row.row_id, now);
       }
     }
     for (const row of rows.filter((item) => item.kind === STAGE1_FIXTURE_KIND.USER)) {
@@ -697,6 +783,7 @@ export function cleanupStage1Fixtures(db, deps = {}, {
     namespace,
     flags,
     cleanedIdentities: identities,
+    orphanIdentities,
     ownerMatching,
   });
 }
@@ -707,6 +794,7 @@ export function verifyCleanup(db, deps = {}, {
   namespace = STAGE1_FIXTURE_NAMESPACE,
   flags,
   cleanedIdentities = [],
+  orphanIdentities = [],
   emptyOk = false,
   ownerMatching = false,
 } = {}) {
@@ -748,9 +836,15 @@ export function verifyCleanup(db, deps = {}, {
       role: row.role,
       row_hash: opaqueId(row.row_id),
     })),
+    orphan_recovered_count: orphanIdentities.length,
+    orphan_recovered: orphanIdentities.map((row) => ({
+      kind: row.kind,
+      row_hash: opaqueId(row.row_id),
+    })),
     owner_matching_enabled: ownerMatching,
     flags_mutated: false,
     wildcard_email_like: false,
+    wildcard_namespace_delete: false,
   });
 }
 

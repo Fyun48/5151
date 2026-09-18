@@ -58,6 +58,7 @@ import {
 import {
   FIXTURE_CLEANUP_FAILED,
   cleanupStage1Fixtures,
+  listOrphanFixtureRows,
   listingFixtureInput,
   prepareStage1Fixtures,
   randomFixturePassword,
@@ -888,5 +889,163 @@ test("P1-22 the boundary-anchored phone detector still catches real phone number
   // ...while compact timestamps / long digit runs are not
   assert.equal(phoneRe.test("20260918061756"), false);
   assert.equal(phoneRe.test("/DATA/predeploy-20260918-055613"), false);
+});
+
+test("#349 cleanup reclaims a namespace-bound row whose registry entry was booked cleaned first", () => {
+  const db = open();
+  const now = new Date();
+  const prepared = prepareStage1Fixtures(db, deps(), { now, runId: "stage1-fix:test:p349", flags: FLAGS });
+  const listingId = prepared.bundle.listing.post_id;
+  const wishId = prepared.bundle.wishByRole[STAGE1_FIXTURE_ROLE.WISH_ACTIVE].row.id;
+  // Reproduce the CI-side defect that surfaced in Production: the listing/wish
+  // registry rows are booked as cleaned while the underlying rows stay open.
+  db.prepare(
+    "UPDATE stage1_fixture_registry SET cleaned_at = ?, status = 'cleaned' WHERE kind IN ('listing', 'wish')",
+  ).run(now.toISOString());
+  const orphans = listOrphanFixtureRows(db, { now });
+  assert.deepEqual(orphans.map((row) => row.kind).sort(), ["listing", "wish"]);
+  const result = cleanupStage1Fixtures(db, deps(), { now, flags: FLAGS });
+  assert.equal(result.ok, true);
+  assert.equal(result.orphan_recovered_count, 2);
+  assert.notEqual(String(db.prepare("SELECT self_status FROM listings WHERE post_id = ?").get(listingId).self_status), "open");
+  assert.notEqual(String(db.prepare("SELECT status FROM demand_posts WHERE id = ?").get(wishId).status), "open");
+  const stillOpen = db.prepare(
+    "SELECT post_id FROM listings WHERE fixture_namespace = ? AND COALESCE(self_status, 'open') = 'open'",
+  ).all(STAGE1_FIXTURE_NAMESPACE);
+  assert.equal(stillOpen.length, 0);
+  db.close();
+});
+
+test("#349 orphan recovery never closes a normal member row", () => {
+  const db = open();
+  const now = new Date();
+  const born = new Date(now.getTime() - 48 * 60 * 60 * 1000);
+  db.prepare("INSERT INTO users(email, password_hash, created_at) VALUES (?, ?, ?)").run("normal-p349@example.com", "x", born.toISOString());
+  const normalListing = createSelfListing(db, 1, listingFixtureInput("p349-normal", { title: "正式士林整層可看屋" }), now);
+  prepareStage1Fixtures(db, deps(), { now, runId: "stage1-fix:test:p349-normal", flags: FLAGS });
+  db.prepare(
+    "UPDATE stage1_fixture_registry SET cleaned_at = ?, status = 'cleaned' WHERE kind IN ('listing', 'wish')",
+  ).run(now.toISOString());
+  cleanupStage1Fixtures(db, deps(), { now, flags: FLAGS });
+  reapStaleStage1Fixtures(db, deps(), { now, flags: FLAGS });
+  // the normal listing carries no fixture namespace, so it is never a candidate
+  assert.equal(String(db.prepare("SELECT self_status FROM listings WHERE post_id = ?").get(normalListing.post_id).self_status || "open"), "open");
+  const keeper = db.prepare("SELECT deleted_at FROM users WHERE email = ?").get("normal-p349@example.com");
+  assert.equal(String(keeper.deleted_at || ""), "");
+  db.close();
+});
+
+test("#349 prepare and verify never reclaim an orphan row implicitly", () => {
+  const db = open();
+  const now = new Date();
+  const born = new Date(now.getTime() - 48 * 60 * 60 * 1000);
+  db.prepare("INSERT INTO users(email, password_hash, created_at) VALUES (?, ?, ?)").run("orphan-owner@example.com", "x", born.toISOString());
+  const leakedListing = createSelfListing(db, 1, listingFixtureInput("p349-leak", { title: "洩漏的站內刊登" }), now);
+  db.prepare("UPDATE listings SET fixture_namespace = ? WHERE post_id = ?").run(STAGE1_FIXTURE_NAMESPACE, leakedListing.post_id);
+  const leakedWish = createDemandPost(db, 1, {
+    districts: ["1-8"],
+    rent_max: 30000,
+    body: "洩漏的站內許願房",
+  }, now);
+  db.prepare("UPDATE demand_posts SET fixture_namespace = ? WHERE id = ?").run(STAGE1_FIXTURE_NAMESPACE, leakedWish.id);
+  const flags = { current: structuredClone(FLAGS) };
+  const prepared = runStage1FixtureDomain({
+    db,
+    getRentalMarketplaceFlags: () => flags.current,
+    mode: "prepare",
+    runId: "stage1-fix:test:p349-prepare",
+    deps: deps(),
+  });
+  assert.equal(prepared.ok, true);
+  const verified = runStage1FixtureDomain({
+    db,
+    getRentalMarketplaceFlags: () => flags.current,
+    mode: "verify",
+    runId: "stage1-fix:test:p349-prepare",
+    deps: deps(),
+  });
+  assert.equal(verified.ok, true);
+  // #349: only cleanup / reap / cleanup-activated may reclaim a row
+  assert.equal(String(db.prepare("SELECT self_status FROM listings WHERE post_id = ?").get(leakedListing.post_id).self_status || "open"), "open");
+  assert.equal(String(db.prepare("SELECT status FROM demand_posts WHERE id = ?").get(leakedWish.id).status || "open"), "open");
+  assert.equal(flags.current.wish.owner_matching_enabled, false);
+  db.close();
+});
+
+test("#349 an outbound channel that is ON refuses every cleanup mode", () => {
+  const db = open();
+  prepareStage1Fixtures(db, deps(), { now: new Date(), runId: "stage1-fix:test:p349-outbound", flags: FLAGS });
+  // pre-activation posture: only cleanup / reap-stale are reachable
+  const preOutboundOn = structuredClone({ ...FLAGS, wish: { ...FLAGS.wish, digest_enabled: true } });
+  assert.throws(
+    () => cleanupStage1Fixtures(db, deps(), { now: new Date(), flags: preOutboundOn }),
+    /wish\.digest_enabled must be false/,
+  );
+  const pre = { current: preOutboundOn };
+  for (const mode of ["cleanup", "reap-stale"]) {
+    assert.throws(
+      () => runStage1FixtureDomain({ db, getRentalMarketplaceFlags: () => pre.current, mode, deps: deps() }),
+      /wish\.digest_enabled must be false/,
+      `${mode} must refuse while an outbound channel is ON`,
+    );
+  }
+  // activated posture: every cleanup mode, including cleanup-activated, still refuses
+  const postOutboundOn = structuredClone({
+    ...FLAGS,
+    wish: {
+      ...FLAGS.wish,
+      owner_matching_enabled: true,
+      offer_enabled: true,
+      public_share_v2_enabled: true,
+      owner_notifications_enabled: true,
+      notifications_enabled: true,
+      outbound_push_enabled: true,
+    },
+  });
+  assert.throws(
+    () => cleanupStage1Fixtures(db, deps(), { now: new Date(), flags: postOutboundOn }),
+    /wish\.outbound_push_enabled must be false/,
+  );
+  const post = { current: postOutboundOn };
+  for (const mode of ["cleanup", "reap-stale", "cleanup-activated"]) {
+    assert.throws(
+      () => runStage1FixtureDomain({ db, getRentalMarketplaceFlags: () => post.current, mode, deps: deps() }),
+      /wish\.outbound_push_enabled must be false/,
+      `${mode} must refuse in the activated posture while an outbound channel is ON`,
+    );
+  }
+  // the refusal happened before any row or flag was touched
+  assert.deepEqual(pre.current, preOutboundOn);
+  assert.deepEqual(post.current, postOutboundOn);
+  const active = db.prepare("SELECT id FROM stage1_fixture_registry WHERE cleaned_at IS NULL").all();
+  assert.ok(active.length > 0);
+  assert.equal(String(db.prepare("SELECT self_status FROM listings WHERE fixture_namespace = ?").get(STAGE1_FIXTURE_NAMESPACE).self_status), "open");
+  db.close();
+});
+
+test("#349 orphan recovery adds no wildcard delete and no flag mutation path", () => {
+  const src = readFileSync(path.join(root, "v3/src/stage1FixtureOps.js"), "utf8");
+  assert.match(src, /export function listOrphanFixtureRows/);
+  assert.match(src, /WHERE fixture_namespace = \?/);
+  assert.match(src, /orphan_recovered_count/);
+  assert.doesNotMatch(src, /DELETE FROM (users|listings|demand_posts)/);
+  assert.doesNotMatch(src, /saveRentalMarketplaceFlags/);
+  assert.doesNotMatch(src, /fixture_namespace IS NOT NULL/);
+});
+
+test("#349 a failed fixture domain run still publishes posture and the failure reason", () => {
+  const remote = readFileSync(path.join(root, ".github/scripts/stage1-fixture-remote.sh"), "utf8");
+  assert.match(remote, /DOMAIN_RC=\$\?/);
+  assert.match(remote, /FIXTURE_CORE_FAILURE_RECORDED/);
+  assert.match(remote, /"failure_reason": reason or/);
+  assert.match(remote, /"evidence_available": False/);
+  // P1-9 identity stays intact, so only this run's failure core is accepted
+  assert.match(remote, /"workflow_run_id": run_id/);
+  assert.match(remote, /"workflow_attempt": attempt/);
+  assert.match(remote, /<redacted-email>/);
+  const wf = readFileSync(path.join(root, ".github/workflows/prepare-rental-marketplace-stage1-fixtures.yml"), "utf8");
+  assert.match(wf, /"evidence_available": bool\(nas\) and core_ok/);
+  assert.match(wf, /"failure_reason": failure_reason/);
+  assert.match(wf, /fixture failure reason/);
 });
 

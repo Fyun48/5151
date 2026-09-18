@@ -142,15 +142,81 @@ export async function createUatFixtures({ db, deps, registryMod, fixtureOpsMod, 
   };
 }
 
+/**
+ * Closes one fixture listing/wish through the domain API and proves it closed.
+ *
+ * Issue #349: marking a registry row cleaned while its listing/wish is still open
+ * orphans the row - cleanup and reap-stale both enter through active registry rows,
+ * so an orphaned row could never be removed again. Closing first (and verifying the
+ * close) keeps the CI-side cleanup recoverable in the same order the runtime
+ * fixture domain uses.
+ */
+function closeUatRegistryRow(db, deps, registryMod, row, now) {
+  const KIND = registryMod.STAGE1_FIXTURE_KIND;
+  const NAMESPACE = registryMod.STAGE1_FIXTURE_NAMESPACE;
+  if (row.kind === KIND.LISTING) {
+    const listing = loadRow(db, "listings", row.row_id);
+    if (!listing) return 0;
+    if (String(listing.fixture_namespace || "") !== NAMESPACE) {
+      fail(`UAT cleanup refuses to close listing ${row.row_id} outside the fixture namespace`);
+    }
+    if (String(listing.self_status || "open") !== "open") return 0;
+    deps.closeSelfListing(db, Number(listing.listed_by_user_id) || 0, listing.post_id, { admin: true }, now);
+    const after = loadRow(db, "listings", row.row_id);
+    if (after && String(after.self_status || "") === "open") {
+      fail(`UAT cleanup could not close fixture listing ${row.row_id}`);
+    }
+    return 1;
+  }
+  if (row.kind === KIND.WISH) {
+    const wish = loadRow(db, "demand_posts", row.row_id);
+    if (!wish) return 0;
+    if (String(wish.fixture_namespace || "") !== NAMESPACE) {
+      fail(`UAT cleanup refuses to close wish ${row.row_id} outside the fixture namespace`);
+    }
+    if (String(wish.status || "open") !== "open") return 0;
+    try {
+      deps.applyWishLifecycleAction(db, wish.user_id, wish.id, "pause", now);
+    } catch {
+      deps.applyWishLifecycleAction(db, wish.user_id, wish.id, "complete", now);
+    }
+    const after = loadRow(db, "demand_posts", row.row_id);
+    if (after && String(after.status || "") === "open") {
+      fail(`UAT cleanup could not close fixture wish ${row.row_id}`);
+    }
+    return 1;
+  }
+  return 0;
+}
+
 /** Cleans every UAT fixture through the domain APIs and verifies nothing remains. */
 export async function cleanupUatFixtures({ db, deps, registryMod, runId, now }) {
-  const rows = registryMod.listActiveRegistryRows(db, { runId, now });
-  const accounts = rows.filter((row) => row.kind === registryMod.STAGE1_FIXTURE_KIND.USER);
+  const KIND = registryMod.STAGE1_FIXTURE_KIND;
+  const active = registryMod.listActiveRegistryRows(db, { runId, now });
+  const stale = typeof registryMod.listStaleRegistryRows === "function"
+    ? registryMod.listStaleRegistryRows(db, { now })
+      .filter((row) => String(row.run_id || "") === String(runId || ""))
+    : [];
+  const seen = new Set();
+  const rows = [...active, ...stale].filter((row) => {
+    const key = `${row.kind}:${row.row_id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  const closed = { listings: 0, wishes: 0 };
+  // #349: close first, then book the registry row cleaned, then remove the accounts.
+  // A cleanup that cannot close a row fails closed and leaves the registry rows
+  // uncleaned, so the same run stays recoverable.
   for (const row of rows) {
-    if (row.kind === registryMod.STAGE1_FIXTURE_KIND.USER) continue;
+    if (row.kind === KIND.LISTING) closed.listings += closeUatRegistryRow(db, deps, registryMod, row, now);
+    if (row.kind === KIND.WISH) closed.wishes += closeUatRegistryRow(db, deps, registryMod, row, now);
+  }
+  for (const row of rows) {
+    if (row.kind === KIND.USER) continue;
     registryMod.markRegistryRowCleaned(db, row.id, now);
   }
-  for (const row of accounts) {
+  for (const row of rows.filter((item) => item.kind === KIND.USER)) {
     deps.deleteUser(db, row.row_id, {
       by: "admin",
       reasonCode: "issue333_uat_cleanup",
@@ -172,6 +238,8 @@ export async function cleanupUatFixtures({ db, deps, registryMod, runId, now }) 
       ok: false,
       reason: `${leftoverUsers} registry rows were not cleaned`,
       cleaned: rows.length,
+      closed_listings: closed.listings,
+      closed_wishes: closed.wishes,
       registry_leftover_runs: registryLeftover.length,
     };
   }
@@ -179,6 +247,8 @@ export async function cleanupUatFixtures({ db, deps, registryMod, runId, now }) 
     ok: true,
     reason: "",
     cleaned: rows.length,
+    closed_listings: closed.listings,
+    closed_wishes: closed.wishes,
     namespace: makeUatNamespace(runId),
     registry_leftover_runs: registryLeftover.length,
   };

@@ -199,6 +199,43 @@ verify-only 原本用 `prev.get("workflow_run_id")` 當 `original_run_id`。第�
 
 - 回歸：`P1-16 commute snapshot never reveals a fixture listing to ordinary members`、`P1-16 listingCommutePatch enforces the centralized MAP fixture policy (not ad-hoc SQL)`
 
+## Issue #349：cleanup 先關閉再標 cleaned，並補 orphan recovery
+
+CI 端 UAT cleanup 先把 listing／wish 的 registry 列標成 cleaned 才刪帳號，底層列仍是 open；runtime 的 cleanup／reap-stale 都只從 active registry 列進入，所以那些列只會被 `verifyCleanup()` 偵測到、卻永遠刪不掉（Production 上即 `FIXTURE_CLEANUP_FAILED: open fixture listings remain`）。此為孤立殘留，產品面由 `stage1FixtureIsolation.js` 擋住，不是產品可見的洩漏。
+
+A. CI 端（`.github/scripts/production-uat-stages-wiring.mjs`，不部署）
+
+`cleanupUatFixtures()` 改為 close → 標 cleaned → 刪帳號：
+
+1. 先對本 run 的 listing 走 `closeSelfListing(..., { admin: true })`、wish 走 `applyWishLifecycleAction`（pause，失敗才 complete）
+2. 重新讀回確認真的不再 open，否則 throw：fail closed、registry 列保持 uncleaned，同一 run 可重試
+3. 才 `markRegistryRowCleaned`，最後才刪帳號
+4. 只處理 fixture namespace 相符的列，不符即拒絕（一般會員列不可碰）
+5. 結果多回報 `closed_listings` / `closed_wishes`
+
+B. runtime（`v3/src/stage1FixtureOps.js`，需部署）
+
+新增 `listOrphanFixtureRows()`：找出掛在 fixture namespace、但已無 active／uncleaned registry 列的 open 列。`cleanup` / `reap-stale` / `cleanup-activated` 在處理 registry 列之後、刪帳號之前，額外關閉這些孤兒列，並把 `orphan_recovered_count` / `orphan_recovered` 寫進 cleanup evidence。
+
+- prepare 與 verify 完全不會走到這段，不會取得 orphan recovery 權限
+- 仍然 registry exact identity + namespace 比對；沒有 wildcard delete users/listings/wishes
+- 一般會員列沒有 fixture namespace，永遠不會被選中
+- orphan 列若無法關閉即 `FIXTURE_CLEANUP_FAILED`（fail closed）
+- outbound（digest / mail / push）為 ON 時，所有 cleanup 模式仍然拒絕
+- 仍然不改任何 feature flag
+
+C. 失敗也要有可診斷的 durable evidence（`.github/scripts/stage1-fixture-remote.sh` + `prepare-rental-marketplace-stage1-fixtures.yml`）
+
+domain 失敗時仍寫入 per-run core：
+
+- node 輸出存成 log 並印出 tail；失敗訊息附上 exit code
+- core 寫入 `posture`（partial result 有就用）、去識別化的 `failure_reason`、`ok=false`、`evidence_available=false`、`domain_exit_code`
+- 保留 `workflow_run_id` / `workflow_attempt`，P1-9 的當 run 身分檢查語意不變
+- workflow Write step 帶出 `failure_reason`；Conclude step 先印出失敗原因才做 fail-closed 契約檢查；`evidence_available` 仍只在成功 core 時為 true
+- 失敗 run 仍然不得 PASS
+
+- 回歸：`#349 UAT cleanup closes every fixture row before it books the registry row cleaned`、`#349 UAT cleanup fails closed when a fixture row cannot be closed and stays retryable`、`#349 UAT cleanup fails closed when a listing silently stays open`、`#349 cleanup reclaims a namespace-bound row whose registry entry was booked cleaned first`、`#349 orphan recovery never closes a normal member row`、`#349 prepare and verify never reclaim an orphan row implicitly`、`#349 an outbound channel that is ON refuses every cleanup mode`、`#349 orphan recovery adds no wildcard delete and no flag mutation path`、`#349 a failed fixture domain run still publishes posture and the failure reason`
+
 ## Review P2-17：整個 prepare 必須可 replay（same-run resume）
 
 P2-13 只讓 A/B/T 帳號階段原子；listing / wish / lifecycle 仍是各自獨立步驟。若中途失敗：A/B/T 已提交、部分 registry / fixture 列殘留、同 run 重試會直接進 `verifyStage1Fixtures` 而因 bundle 不完整失敗、不同 run 又被 run exclusivity 擋住。

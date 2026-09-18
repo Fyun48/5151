@@ -90,16 +90,66 @@ fi
 echo "=== fixture domain $FIXTURE_MODE (no flag mutation) ==="
 docker exec "$CONTAINER" rm -f /tmp/stage1-fixture-domain.mjs /tmp/stage1-fixture-result.json
 docker cp "$DOMAIN_SCRIPT" "$CONTAINER:/tmp/stage1-fixture-domain.mjs"
-if ! docker exec -w /app \
+DOMAIN_LOG="/tmp/stage1-fixture-domain-${RUN_ID}-${RUN_ATTEMPT}.log"
+set +e
+docker exec -w /app \
   -e STAGE1_FIXTURE_MODE="$FIXTURE_MODE" \
   -e STAGE1_FIXTURE_RUN_ID="${STAGE1_FIXTURE_RUN_ID:-}" \
   -e STAGE1_FIXTURE_RESULT_PATH=/tmp/stage1-fixture-result.json \
   -e STAGE1_FIXTURE_SRC_ROOT=/app/src \
   -e GITHUB_RUN_ID="${GITHUB_RUN_ID:-local}" \
-  "$CONTAINER" node /tmp/stage1-fixture-domain.mjs; then
+  "$CONTAINER" node /tmp/stage1-fixture-domain.mjs >"$DOMAIN_LOG" 2>&1
+DOMAIN_RC=$?
+set -e
+tail -n 40 "$DOMAIN_LOG" || true
+if [ "$DOMAIN_RC" -ne 0 ]; then
   docker cp "$CONTAINER:/tmp/stage1-fixture-result.json" /tmp/stage1-fixture-result.json 2>/dev/null || true
   docker exec "$CONTAINER" rm -f /tmp/stage1-fixture-domain.mjs /tmp/stage1-fixture-result.json || true
-  fail "fixture domain $FIXTURE_MODE failed"
+  # Issue #349: a failed run must still publish durable evidence. The workflow
+  # Write step derives posture / failure_reason from this file, so a failure is
+  # diagnosable instead of an empty evidence document (posture="",
+  # evidence_available=false, result=null).
+  python3 - "$SOURCE_SHA" "$IMAGE_DIGEST" "$BACKUP_ID" "$BACKUP_HASH" "$FIXTURE_MODE" "$RUN_ID" "$RUN_ATTEMPT" "$DOMAIN_RC" "$DOMAIN_LOG" "$FIXTURE_CORE_PATH" <<'PY'
+import json, re, sys
+from datetime import datetime, timezone
+source_sha, image_digest, backup_id, backup_hash, mode, run_id, attempt, rc, log_path, out_path = sys.argv[1:]
+try:
+    partial = json.load(open("/tmp/stage1-fixture-result.json"))
+except Exception:
+    partial = {}
+if not isinstance(partial, dict):
+    partial = {}
+with open(log_path, "r", encoding="utf-8", errors="replace") as handle:
+    tail = [line.strip() for line in handle.readlines()[-8:]]
+reason = " ".join(line for line in tail if line)[-400:]
+reason = re.sub(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", "<redacted-email>", reason)
+reason = re.sub(r"(?<![0-9])09\d{8}(?![0-9])", "<redacted-phone>", reason)
+doc = {
+    "schema": "stage1-fixture-core-v1",
+    "timestamp": datetime.now(timezone.utc).isoformat(),
+    "mode": mode,
+    "posture": str(partial.get("posture") or ""),
+    "workflow_run_id": run_id,
+    "workflow_attempt": attempt,
+    "source_sha": source_sha,
+    "image_digest": image_digest,
+    "backup_id": backup_id,
+    "backup_hash": backup_hash,
+    "flags_mutated": partial.get("flags_mutated") is True,
+    "owner_matching_enabled": partial.get("owner_matching_enabled") is True,
+    "before_raw_flags": partial.get("before_raw_flags"),
+    "after_raw_flags": partial.get("after_raw_flags"),
+    "result": None,
+    "ok": False,
+    "evidence_available": False,
+    "failure_reason": reason or ("fixture domain %s failed with exit code %s" % (mode, rc)),
+    "domain_exit_code": int(rc),
+}
+open(out_path, "w", encoding="utf-8").write(json.dumps(doc, indent=2) + "\n")
+print("FIXTURE_CORE_FAILURE_RECORDED")
+PY
+  DOMAIN_REASON_LOG="$(tail -n 3 "$DOMAIN_LOG" 2>/dev/null | tr -d '\r' | LC_ALL=C tr -cd ' -~' || true)"
+  fail "fixture domain $FIXTURE_MODE failed (exit $DOMAIN_RC): $DOMAIN_REASON_LOG"
 fi
 docker cp "$CONTAINER:/tmp/stage1-fixture-result.json" /tmp/stage1-fixture-result.json
 docker exec "$CONTAINER" rm -f /tmp/stage1-fixture-domain.mjs /tmp/stage1-fixture-result.json || true
