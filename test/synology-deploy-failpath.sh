@@ -73,10 +73,16 @@ case "$1" in
 esac
 EOF
   chmod +x "$B/docker" "$B/curl" "$B/stat"
+  # deploy script 會 prepend Synology PATH（含 /usr/local/bin）；把 mock symlink 進去，
+  # 讓 mock 優先於 runner 上真正的 docker/curl/stat（否則真實 docker 會搶先被找到）。
+  mkdir -p /usr/local/bin 2>/dev/null || true
+  ln -sf "$B/docker" /usr/local/bin/docker
+  ln -sf "$B/curl" /usr/local/bin/curl
+  ln -sf "$B/stat" /usr/local/bin/stat
 }
 
 T1="$(mktemp -d)"; T2="$(mktemp -d)"; T3="$(mktemp -d)"; T4="$(mktemp -d)"
-trap 'rm -rf "$T1" "$T2" "$T3" "$T4"' EXIT
+trap 'rm -rf "$T1" "$T2" "$T3" "$T4"; rm -f /usr/local/bin/docker /usr/local/bin/curl /usr/local/bin/stat /usr/local/bin/cp' EXIT
 
 # ---- Scenario 1: explicit fail after start -> rollback restores OLD (BLOCKER 1) ----
 setup_nas_prev "$T1"; mock_bin "$T1/bin"
@@ -104,6 +110,7 @@ fi
 exec /usr/bin/cp "$@"
 EOF
 chmod +x "$T2/bin/cp"
+ln -sf "$T2/bin/cp" /usr/local/bin/cp
 set +e
 PATH="$T2/bin:$PATH" CP_FLAG="$T2/cp.flag" DEPLOY_SHA="NEWSHA" OPS_RUNTIME_IMAGE="$NEW_IMAGE" \
   OPS_SYNOLOGY_APP_ROOT="$T2/app" OPS_SYNOLOGY_DATA_ROOT="$T2/data" \
@@ -187,7 +194,7 @@ grep -q "ROLLBACK_OK" "$T4/out.log" || fail "scenario4: rollback not invoked"
 echo "scenario4 PASS (rollback removes newly created sidecars)"
 
 # ---- Scenario 5: DB restore copy failure -> ROLLBACK_FAILED, no previous recreate (BLOCKER 3) ----
-T5="$(mktemp -d)"; trap 'rm -rf "$T1" "$T2" "$T3" "$T4" "$T5" "$T6"' EXIT
+T5="$(mktemp -d)"; trap 'rm -rf "$T1" "$T2" "$T3" "$T4" "$T5" "$T6"; rm -f /usr/local/bin/docker /usr/local/bin/curl /usr/local/bin/stat /usr/local/bin/cp' EXIT
 setup_nas_prev "$T5"; mock_bin "$T5/bin"
 # mock cp: fail only when the SOURCE (first non-flag arg) is under .backup/ (rollback restore), not the snapshot.
 cat > "$T5/bin/cp" <<'EOF'
@@ -202,6 +209,7 @@ done
 exec /usr/bin/cp "$@"
 EOF
 chmod +x "$T5/bin/cp"
+ln -sf "$T5/bin/cp" /usr/local/bin/cp
 set +e
 PATH="$T5/bin:$PATH" DEPLOY_SHA="NEWSHA" OPS_RUNTIME_IMAGE="$NEW_IMAGE" \
   OPS_SYNOLOGY_APP_ROOT="$T5/app" OPS_SYNOLOGY_DATA_ROOT="$T5/data" \
