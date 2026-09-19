@@ -102,7 +102,16 @@
 - `cursor/ops-predeploy-smoke-sql-fix-39d3` @ f7e76a43ee
 - `cursor/ops-v3-digest-deploy-39d3` @ 43cb0d4f8b
 
-## Not done (must not be treated as complete)
+## Completion-gate status (updated after blockers were implemented)
 
-- Scenario A-H end-to-end tests, UI 375/768/1440 verification, performance benchmarks, dedicated security suite and OPS_SCHEMA_VERSION migration tests are NOT implemented in this branch.
+- Scenario A–H E2E: `ops/test/scenario-e2e.test.js` (A chain / B reject / C request-changes) plus
+  the existing package suites for D/E/F/G/H; see `ops/evidence/final-integration-20260919/SUITES.md`.
+- UI 375/768/1440 + accessibility: `ops/evidence/final-integration-20260919/` (capture script,
+  `ops-responsive.json`, `shots/`); OPS Console surface capture still pending (see risks below).
+- Performance benchmarks: `ops/evidence/final-integration-20260919/bench.mjs` (100/1k/10k,
+  p50/p95/max + query count + EXPLAIN over the required product paths).
+- Dedicated security suite: credential-at-rest encryption (`secret-at-rest.test.js`), SSRF-safe
+  outbound URL (`outbound-url.test.js`), hostile-input/prompt-injection (`security-hostile-input.test.js`).
+- `OPS_SCHEMA_VERSION` migration contract: `ops/test/ops-schema-version.test.js` (PRAGMA user_version ledger).
 - The 35 open OPS PRs are not closed or superseded yet; that decision is left to the final review.
+

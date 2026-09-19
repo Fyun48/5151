@@ -6,22 +6,21 @@ targeted runs are cited where they add signal.
 
 ## Scenario A–H (E2E lifecycle) — mapping
 
-The OPS lifecycle is covered end-to-end by the stack's own tests. The eight arcs below are the
-integration's canonical flows; each is mapped to the green suite that exercises it.
+The eight original completion-gate scenarios (semantics unchanged) and their executable coverage:
 
-| Scenario | Lifecycle arc | Suite (green) |
+| Scenario | Required semantics | Suite / test (green) |
 |---|---|---|
-| A | Ingest feedback → cluster → issue candidate | `ops/test/ingest.test.js`, `clustering.test.js`, `analysis*.test.js` |
-| B | Evaluate → propose → Owner Gate #1 approve | `ops/test/evaluation.test.js`, `proposal.test.js`, `proposal-api.test.js` |
-| C | Approve development → coding → QA | `ops/test/coding.test.js`, `qa.test.js`, `qa-api.test.js` |
-| D | QA PASS → staging → Gate #2 release candidate | `ops/test/staging.test.js`, `staging-api.test.js`, `release*.test.js` |
-| E | Approve release → production release run (fail-closed) | `ops/test/production-release*.test.js` |
-| F | Code rollback (exact previous stable, never silent DB restore) | `ops/test/pack27-code-rollback.test.js`, `pack28-db-restore.test.js` |
-| G | Migration safety assessment (rollback/compat proof) | `ops/test/migration-safety.test.js`, `migration-safety-api.test.js` |
-| H | Exit/retry + unknown-run reconciliation (idempotent) | `ops/test/pack37-exit-retry.test.js`, `exit-drill.test.js` |
+| A | chained feedback→ingest→classify→cluster→impact→evaluate→proposal→Owner Gate#1→coding→PR→QA→staging→release request, stopping **before** real Production dispatch | `ops/test/scenario-e2e.test.js` (chain) + `qa.test.js`/`staging.test.js`/`release*.test.js` |
+| B | Owner **reject** → archive, no coding/release, history retained | `ops/test/scenario-e2e.test.js` + `proposal.test.js` |
+| C | Owner **requests changes** → reevaluation/revised proposal, old history preserved | `ops/test/reevaluation.test.js` + `scenario-e2e.test.js` |
+| D | **cancellation race** — worker starts, Owner cancels, late result rejected | `ops/test/pack20-qa-cancel` … `pack26-runner-cancel` + `pack29-cancel-result` |
+| E | **site exit** — Site A local op valid, OPS valid, Site B unaffected, no new delivery after exit | `ops/test/exit-drill.test.js` + `pack36-site-delivery.test.js` |
+| F | **OPS outage** — public site search/login/listing still operate; feedback persists locally/outbox | `ops/test/feedback.test.js` (v3 outbox) + `ops/test/webhook.test.js` |
+| G | **public-site outage** — OPS does not crash/fake success; retry/backoff; other sites unaffected | `ops/test/pack37-exit-retry.test.js` + `ingest.test.js` |
+| H | **Production unknown state** — accepted dispatch + missing completion → `PRODUCTION_STATE_UNKNOWN`, next release blocked | `ops/test/pack34-unknown-confirm.test.js` + `scenario-e2e.test.js` |
 
-Each arc also has its package-level regression tests (`pack8-live-contract` … `pack36-site-delivery`)
-and the state-machine / canonical-state layer (`state-machine.test.js`, `canonical-state.test.js`).
+Scenarios B/C/H are additionally pinned in `ops/test/scenario-e2e.test.js` with their negative assertions
+(reject → no coding/release; request-changes → old proposal version preserved; unknown state → next release blocked).
 
 ## Concurrency / idempotency suite
 
