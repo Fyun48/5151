@@ -79,3 +79,16 @@ test("Synology compose mounts the versioned current pointer, not the live ops di
   assert.match(compose, /current\/ops:\/app\/ops:ro/);
   assert.doesNotMatch(compose, /\$\{OPS_SYNOLOGY_APP_ROOT[^}]*\}\/ops:\/app\/ops:ro/);
 });
+
+test("Synology rollback stops the failed/new container before restoring the DB snapshot", () => {
+  // 只取 rollback() 函式本體（腳本內另有 backup 段的 stop，需避免誤判）。
+  const rbStart = script.indexOf("rollback() {");
+  assert.ok(rbStart !== -1, "rollback() must exist");
+  const rbEnd = script.indexOf("\n}\n", rbStart);
+  const body = script.slice(rbStart, rbEnd === -1 ? script.length : rbEnd);
+  const stopIdx = body.indexOf('docker compose -f "$COMPOSE_FILE" stop 5151-ops');
+  const restoreIdx = body.indexOf('cp -p "$BACKUP_DIR/$f" "${DATA_ROOT}/$f"');
+  assert.ok(stopIdx !== -1, "rollback() must stop the container fail-safe");
+  assert.ok(restoreIdx !== -1, "rollback() must restore the DB/WAL/SHM snapshot");
+  assert.ok(stopIdx < restoreIdx, "rollback() must stop the container BEFORE restoring the DB snapshot");
+});

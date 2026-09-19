@@ -45,6 +45,8 @@ log "backup at $BACKUP_DIR (previous=$PREVIOUS)"
 # ---------- rollback (on any failure) ----------
 rollback() {
   log "rollback to previous source + DB snapshot"
+  # 先停容器（fail-safe）：新容器可能仍開著 SQLite/WAL，不能在 live 寫入時覆寫 DB 檔。
+  docker compose -f "$COMPOSE_FILE" stop 5151-ops >/dev/null 2>&1 || true
   if [ -n "$PREVIOUS" ] && [ -d "$PREVIOUS" ]; then
     ln -sfn "$PREVIOUS" "$APP_ROOT/current"
   fi
@@ -53,6 +55,13 @@ rollback() {
   done
   if [ -f "$BACKUP_DIR/auth.env" ]; then cp -p "$BACKUP_DIR/auth.env" "$AUTH_ENV"; chmod 600 "$AUTH_ENV"; fi
   ( cd "$APP_ROOT" && docker compose -f "$COMPOSE_FILE" up -d --no-build --no-deps --force-recreate 5151-ops ) || true
+  # 若有前一版，健康檢查還原後的前一版。
+  if [ -n "$PREVIOUS" ] && [ -d "$PREVIOUS" ]; then
+    for _ in $(seq 1 30); do
+      if curl -fsS http://127.0.0.1:5154/ops/api/health | grep -q '"ok":true'; then break; fi
+      sleep 1
+    done
+  fi
   log "rollback complete"
 }
 trap 'ERR=$?; if [ "$ERR" != "0" ]; then rollback; fi' ERR
