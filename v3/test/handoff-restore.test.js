@@ -1,3 +1,5 @@
+import "../../ops/test/secretAtRestKey.js";
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
