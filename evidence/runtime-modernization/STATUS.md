@@ -129,6 +129,15 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
   全部有 SQL-first fast path。
 - 尚未：`fit_desc` 的 `commuteKm>0`（含 route 距離的 fit_score）、commute/fit 的 cursor、EXPLAIN evidence。
 
+### Phase 8 收尾 — cursor 接前端
+
+- server `/api/listings` 現在解析 `?cursor=`（JSON）並回 `nextCursor`；前端 `loadList` 用
+  `listCursor` 做 keyset 分頁（`append` 時帶 `cursor`，回 `nextCursor` 就沿用，否則回退 `offset`）。
+- 測試 `list-sql-first-wiring.test.js`（3 項）：server 接線 source assertion、`matchVoteUserId` 差異、
+  前端 cursor 接線 source assertion。
+- 尚未：commute/fit 的 cursor（需 route distance/fit_score 的 sort key 編碼）、client-state 前端接入、
+  SSE delta events 前端接入（仍 broadcast 整包）。
+
 
 ### Phase 13/14/15/19 — Shadow PostgreSQL Primary/Standby（已上線並驗證）
 

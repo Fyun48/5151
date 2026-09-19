@@ -3689,6 +3689,10 @@ app.get("/api/listings", async (req, res) => {
     .filter(Boolean);
   const started = Date.now();
   confirmExpiredOfflineFromSettings();
+  let cursor = null;
+  if (req.query.cursor) {
+    try { cursor = JSON.parse(String(req.query.cursor)); } catch { cursor = null; }
+  }
   const args = {
     filter: req.query.filter || "all",
     kind: req.query.kind || "",
@@ -3697,6 +3701,7 @@ app.get("/api/listings", async (req, res) => {
     sort: req.query.sort || "newest",
     limit: Number(req.query.limit) || 80,
     offset: Number(req.query.offset) || 0,
+    cursor,
     districts,
     userId: uid,
     matchVoteUserId: uid,
@@ -3721,6 +3726,7 @@ app.get("/api/listings", async (req, res) => {
     listings: listed.listings,
     hasMore: listed.hasMore === true,
     nextOffset: listed.nextOffset || 0,
+    nextCursor: listed.nextCursor || null,
     queryVersion: listed.queryVersion || 2,
     timing: {
       query_ms: queryMs, stats_ms: statsMs, total_ms: Date.now() - started,

@@ -21,6 +21,17 @@ test("api/listings wires the SQL-first paths with a listListings fallback", () =
   assert.match(handler, /listListingsCommuteSqlFirst\(args\) \|\|/);
   assert.match(handler, /listListingsFitSqlFirst\(args\) \|\|/);
   assert.match(handler, /listListings\(args\)/);
+  // cursor/keyset pagination round-trip: parse ?cursor= and echo nextCursor.
+  assert.match(handler, /JSON\.parse\(String\(req\.query\.cursor\)\)/);
+  assert.match(handler, /nextCursor: listed\.nextCursor \|\| null/);
+});
+
+test("frontend loadList pages by cursor and falls back to offset", () => {
+  const html = readFileSync(path.join(dir, "../public/index.html"), "utf8");
+  assert.match(html, /let listCursor = null/);
+  assert.match(html, /cursorParam = append && listCursor/);
+  assert.match(html, /&cursor=\$\{encodeURIComponent\(JSON\.stringify\(listCursor\)\)\}/);
+  assert.match(html, /listCursor = data\.nextCursor \|\| null/);
 });
 
 test("SQL-first paths honor matchVoteUserId like listListings does", () => {
