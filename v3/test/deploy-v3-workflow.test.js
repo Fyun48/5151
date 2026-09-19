@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -97,4 +98,34 @@ test("NAS ssh script avoids bash case/;; because drone-ssh joins lines with semi
   assert.doesNotMatch(ssh, /\besac\b/);
   assert.doesNotMatch(ssh, /;;/);
   assert.match(ssh, /grep -Eq ':latest\$'/);
+});
+
+function deploySshScript() {
+  const start = yml.indexOf("- name: Pull digest-pinned image and recreate v3 only");
+  assert.ok(start > 0, "deploy ssh step not found");
+  const bodyAt = yml.indexOf("script: |", start);
+  assert.ok(bodyAt > 0, "deploy ssh script block not found");
+  const lines = [];
+  for (const line of yml.slice(bodyAt).split("\n").slice(1)) {
+    if (!line.trim()) continue;
+    if (!/^\s{12,}\S/.test(line)) break;
+    lines.push(line.slice(12));
+  }
+  assert.ok(lines.length > 20, `deploy ssh script looks empty (${lines.length} lines)`);
+  return lines;
+}
+
+test("deploy ssh script has no comment lines (drone-ssh ;-join would comment out the next command)", () => {
+  const lines = deploySshScript();
+  const comments = lines.filter((line) => line.trim().startsWith("#"));
+  assert.deepEqual(comments, [], "inline ssh scripts must not contain # comments");
+  assert.ok(lines[0].trim() === "set -euo pipefail");
+  assert.ok(lines.some((line) => line.includes("echo \"deploy_start")), "first diagnostic echo must stay");
+});
+
+test("deploy ssh script stays valid bash when every line is joined with semicolons", () => {
+  const joined = deploySshScript().join("; ") + "\n";
+  const probe = spawnSync("bash", ["-n"], { input: joined, encoding: "utf8" });
+  if (probe.error && probe.error.code === "ENOENT") return;
+  assert.equal(probe.status, 0, probe.stderr || "deploy ssh script is not join-safe bash");
 });

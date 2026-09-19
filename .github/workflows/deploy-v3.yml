@@ -48,6 +48,11 @@ on:
         description: "僅 ops_phase15 必填：Ops Phase 15 durable release_intent_id。manual_owner 必須空白；非空會 fail-closed（避免舊 Phase 15 caller 被降成 Manual Owner）"
         required: false
         default: ""
+      debug:
+        description: "true 會讓 drone-ssh 印出完整遠端輸出（僅診斷用；預設 false）"
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -272,6 +277,9 @@ jobs:
           target: /mnt/Storage1/apps/5151
           overwrite: true
       - name: Pull digest-pinned image and recreate v3 only
+        # Keep this inline ssh script comment-free and keep every shell block on a single
+        # line: drone-ssh joins inline script lines with ';', so a '#' line can comment out
+        # the next command and multi-line blocks can be mangled.
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.NAS_HOST }}
@@ -279,65 +287,36 @@ jobs:
           username: ${{ secrets.NAS_USER }}
           key: ${{ secrets.NAS_SSH_KEY }}
           script_stop: true
+          debug: ${{ inputs.debug }}
           script: |
             set -euo pipefail
             IMAGE_DIGEST='${{ inputs.image_digest }}'
             DEPLOY_SHA='${{ inputs.sha }}'
             IMAGE_PIN="ghcr.io/fyun48/5151@${IMAGE_DIGEST}"
-            # Resolve the live /data mount from the running container instead of assuming the legacy
-            # path: after a data-volume relocation the hardcoded path would silently recreate a stray
-            # directory and copy a legacy auth.env to the wrong place (Issue #355 follow-up).
+            echo "deploy_start source=$DEPLOY_SHA image=$IMAGE_PIN"
             DATA_HOST="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' 591-tracker-v3 2>/dev/null || true)"
-            if [ -z "$DATA_HOST" ]; then
-              DATA_HOST=/DATA/AppData/591-tracker-v3
-              echo "data_host_fallback=$DATA_HOST (container mount not resolvable)"
-            else
-              echo "data_host=$DATA_HOST"
-            fi
+            if [ -z "$DATA_HOST" ]; then DATA_HOST=/DATA/AppData/591-tracker-v3; echo "data_host_fallback=$DATA_HOST (container mount not resolvable)"; fi
+            echo "data_host=$DATA_HOST"
             mkdir -p "$DATA_HOST"
             copied=0
-            if [ ! -f "$DATA_HOST/auth.env" ]; then
-              for legacy in /DATA/AppData/591-tracker-v2/auth.env /DATA/AppData/591-tracker/auth.env; do
-                if [ -f "$legacy" ]; then
-                  cp "$legacy" "$DATA_HOST/auth.env"
-                  echo "copied_auth_env_from=$legacy"
-                  copied=1
-                  break
-                fi
-              done
-            fi
+            for legacy in /DATA/AppData/591-tracker-v2/auth.env /DATA/AppData/591-tracker/auth.env; do if [ ! -f "$DATA_HOST/auth.env" ] && [ -f "$legacy" ]; then cp "$legacy" "$DATA_HOST/auth.env"; echo "copied_auth_env_from=$legacy"; copied=1; break; fi; done
             cd /mnt/Storage1/apps/5151
             test -f docker-compose.override.yml
-            if grep -q ':latest' docker-compose.override.yml; then
-              echo "override contains :latest"; exit 1
-            fi
+            if grep -q ':latest' docker-compose.override.yml; then echo "override contains :latest"; exit 1; fi
             V3_CFG="$(docker compose -f docker-compose.yml -f docker-compose.override.yml config --format json)"
             V3_IMAGE="$(printf '%s' "$V3_CFG" | python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["591-tracker-v3"]["image"])')"
             echo "rendered_v3_image=$V3_IMAGE"
-            if [ "$V3_IMAGE" != "$IMAGE_PIN" ]; then
-              echo "rendered v3 image is not the requested digest pin"; exit 1
-            fi
-            # drone-ssh script_stop joins lines with ';' (in-pattern arms are unsafe).
-            if printf '%s' "$V3_IMAGE" | grep -Eq ':latest$'; then
-              echo "v3 must not resolve to :latest"; exit 1
-            fi
+            if [ "$V3_IMAGE" != "$IMAGE_PIN" ]; then echo "rendered v3 image is not the requested digest pin"; exit 1; fi
+            if printf '%s' "$V3_IMAGE" | grep -Eq ':latest$'; then echo "v3 must not resolve to :latest"; exit 1; fi
             docker pull "$IMAGE_PIN"
             docker compose stop 591-tracker 591-tracker-v2 || true
             docker stop 591-tracker 591-tracker-v2 || true
             docker rm -f 591-tracker 591-tracker-v2 || true
             docker compose -f docker-compose.yml -f docker-compose.override.yml up -d --no-build --no-deps --force-recreate 591-tracker-v3
-            if [ "$copied" = 1 ]; then
-              docker compose -f docker-compose.yml -f docker-compose.override.yml restart 591-tracker-v3
-            fi
+            if [ "$copied" = 1 ]; then docker compose -f docker-compose.yml -f docker-compose.override.yml restart 591-tracker-v3; fi
             ok=0
-            for _ in $(seq 1 40); do
-              if curl -fsS http://127.0.0.1:5153/api/health | grep -q '"ok":true'; then
-                ok=1
-                break
-              fi
-              sleep 1
-            done
-            [ "$ok" = 1 ] || { docker logs 591-tracker-v3 || true; echo "health did not become ready"; exit 1; }
+            for _ in $(seq 1 40); do if curl -fsS http://127.0.0.1:5153/api/health | grep -q '"ok":true'; then ok=1; break; fi; sleep 1; done
+            if [ "$ok" != 1 ]; then docker logs 591-tracker-v3 || true; echo "health did not become ready"; exit 1; fi
             curl -fsS -o /tmp/v3-health.json http://127.0.0.1:5153/api/health
             python3 -c 'import json; d=json.load(open("/tmp/v3-health.json")); assert d.get("ok") is True'
             curl -fsS -o /dev/null http://127.0.0.1:5153/
@@ -349,12 +328,10 @@ jobs:
             [ "$RUNNING" = "running" ]
             CFG_IMAGE="$(docker inspect -f '{{.Config.Image}}' 591-tracker-v3)"
             echo "container_image=$CFG_IMAGE"
-            if [ "$CFG_IMAGE" != "$IMAGE_PIN" ]; then
-              echo "running container image is not digest-pinned candidate"; exit 1
-            fi
+            if [ "$CFG_IMAGE" != "$IMAGE_PIN" ]; then echo "running container image is not digest-pinned candidate"; exit 1; fi
             docker exec 591-tracker-v3 node -e "import('sharp').then(()=>console.log('SHARP_OK')).catch(()=>{console.error('SHARP_MISSING'); process.exit(1)})"
             echo "DEPLOY_V3_OK source=$DEPLOY_SHA image=$IMAGE_PIN"
-            python3 -c "import json; open('/tmp/phase15-deploy-health.json','w').write(json.dumps({'container_running':True,'health':True,'landing':True,'login':True,'image_digest':'$IMAGE_DIGEST','oci_revision':'$DEPLOY_SHA','container_image':'$IMAGE_PIN'})+'\n')"
+            python3 -c "import json; open('/tmp/phase15-deploy-health.json','w').write(json.dumps({'container_running':True,'health':True,'landing':True,'login':True,'image_digest':'$IMAGE_DIGEST','oci_revision':'$DEPLOY_SHA','container_image':'$IMAGE_PIN'}) + '\n')"
       - name: Pull NAS deploy health evidence
         env:
           NAS_HOST: ${{ secrets.NAS_HOST }}
