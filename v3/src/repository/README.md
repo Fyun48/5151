@@ -25,6 +25,11 @@ SQLite adapter（node:sqlite，今日） | PostgreSQL adapter（pg，目標）
   `createSqliteRouteCacheRepository` / `createPostgresRouteCacheRepository`。
 - 介面：`get(routeKey)` / `set(routeKey, route)`（upsert）/ `delete(routeKey)`。示範**寬欄位** key-value
   （rush 分鐘、公尺、location class、route version），對應 `route_cache` 表。
+- `users.js`：`createUsersRepository({ driver, sqliteDb, pgPool })` 工廠 +
+  `createSqliteUsersRepository` / `createPostgresUsersRepository`。
+- 介面：`findByEmail` / `findById` / `create`（INSERT … RETURNING）/ `setPasswordHash` / `list`。
+  示範 **auth/CRUD 形態**（email 查詢、create、密碼雜湊更新），與 key-value 完全不同；密碼
+  hash/verify 留在 domain（`password.js`/`members.js`），repository 只存 hash。
 
 ## 遷移路徑（其餘 domain）
 
