@@ -707,11 +707,11 @@ export function reminderWindowForWish(row, now = new Date()) {
   return null;
 }
 
-function getNotifyCursor(db, job) {
+export function getNotifyCursor(db, job) {
   return Number(db.prepare("SELECT last_id FROM rental_notify_cursors WHERE job = ?").get(job)?.last_id) || 0;
 }
 
-function setNotifyCursor(db, job, lastId, now) {
+export function setNotifyCursor(db, job, lastId, now) {
   db.prepare(`
     INSERT INTO rental_notify_cursors(job, last_id, updated_at) VALUES (?, ?, ?)
     ON CONFLICT(job) DO UPDATE SET last_id = excluded.last_id, updated_at = excluded.updated_at

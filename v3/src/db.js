@@ -187,7 +187,7 @@ import {
   ownerMatchingMeta,
   setRentalMatchHydrate,
 } from "./rentalMatchQuery.js";
-import { runWishLifecycleTick } from "./wishLifecycleLoop.js";
+import { runWishLifecycleTick, WISH_LIFECYCLE_CURSOR_JOB } from "./wishLifecycleLoop.js";
 import {
   createWishOffer as createWishOfferOn,
   ensureWishOfferSchema,
@@ -221,10 +221,12 @@ import {
   ensureRentalNotifySchema,
   explainRentalNotifyPlans as explainRentalNotifyPlansOn,
   getMatchSubscription as getMatchSubscriptionOn,
+  getNotifyCursor,
   getRentalNotifyPrefs as getRentalNotifyPrefsOn,
   publicRentalNotifyCaps,
   saveMatchSubscription as saveMatchSubscriptionOn,
   saveRentalNotifyPrefs as saveRentalNotifyPrefsOn,
+  setNotifyCursor,
   setRentalNotifyDockWriter,
   setRentalNotifyHydrate,
 } from "./rentalNotify.js";
@@ -1731,7 +1733,14 @@ export function applyWishLifecycleFor(userId, postId, action) {
 }
 
 export function runWishLifecycleWorkerTick(now = new Date()) {
-  return runWishLifecycleTick(db, now, { flags: getRentalMarketplaceFlags() });
+  return runWishLifecycleTick(db, now, {
+    flags: getRentalMarketplaceFlags(),
+    // 與 notify worker 共用 rental_notify_cursors：每 tick 從上次掃到的 id 之後繼續，掃到尾端回到 0。
+    cursor: {
+      get: () => getNotifyCursor(db, WISH_LIFECYCLE_CURSOR_JOB),
+      set: (lastId) => setNotifyCursor(db, WISH_LIFECYCLE_CURSOR_JOB, lastId, now),
+    },
+  });
 }
 
 export function runWishOfferExpiryWorkerTick(now = new Date()) {

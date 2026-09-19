@@ -1,5 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
+import os from "os";
+import path from "path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   activityBucket,
   activityScoreFromSignals,
@@ -15,7 +21,84 @@ import {
   ttlExpiresAt,
   visibilityStatusFor,
 } from "../src/wishLifecycle.js";
+import { ensureDemandSchema } from "../src/demand.js";
 import { runWishLifecycleTick, startWishLifecycleLoop } from "../src/wishLifecycleLoop.js";
+
+const dir = path.dirname(fileURLToPath(import.meta.url));
+const TICK_NOW = new Date("2026-09-17T00:00:00.000Z");
+const LIFECYCLE_ON = { wish: { lifecycle_enabled: true } };
+
+function runIsolated(body) {
+  const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-wish-lifecycle-"));
+  const moduleUrl = (relative) => pathToFileURL(path.join(dir, relative)).href;
+  const script = `
+    import assert from "node:assert/strict";
+    import path from "path";
+    import { DatabaseSync } from "node:sqlite";
+    import * as app from ${JSON.stringify(moduleUrl("../src/db.js"))};
+    import { getNotifyCursor } from ${JSON.stringify(moduleUrl("../src/rentalNotify.js"))};
+    import { WISH_LIFECYCLE_CURSOR_JOB } from ${JSON.stringify(moduleUrl("../src/wishLifecycleLoop.js"))};
+    ${body}
+  `;
+  try {
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+      encoding: "utf8",
+      timeout: 60_000,
+      env: { ...process.env, DATA_DIR: dataDir },
+    });
+    assert.equal(result.status, 0, result.error?.message || result.stderr || result.stdout);
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+}
+
+/** active、TTL 未到、但長期未確認 → 下一次 tick 會轉 needs_confirmation（再用來偵測是否被重複掃描）。 */
+function seedDueWish(db, id, now = TICK_NOW) {
+  const idle = new Date(now.getTime() - 40 * 86400000).toISOString();
+  db.prepare(
+    `INSERT INTO demand_posts
+       (id, user_id, status, lifecycle, expires_at, last_confirmed_at, last_active_at, created_at)
+     VALUES (?, ?, 'open', 'active', ?, ?, ?, ?)`,
+  ).run(id, id, new Date(now.getTime() + 30 * 86400000).toISOString(), idle, idle, idle);
+}
+
+/** active 且剛確認過 → 掃到也不會變更，用來單純驗證掃描範圍。 */
+function seedIdleWish(db, id, now = TICK_NOW) {
+  const stamp = now.toISOString();
+  db.prepare(
+    `INSERT INTO demand_posts
+       (id, user_id, status, lifecycle, expires_at, last_confirmed_at, last_active_at, created_at)
+     VALUES (?, ?, 'open', 'active', ?, ?, ?, ?)`,
+  ).run(id, id, new Date(now.getTime() + 30 * 86400000).toISOString(), stamp, stamp, stamp);
+}
+
+/** 每位會員只能有一則 open 許願，所以測試資料一列一個 user_id。 */
+function memoryDb() {
+  const db = new DatabaseSync(":memory:");
+  db.exec(`
+    CREATE TABLE users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT NOT NULL UNIQUE,
+      nickname TEXT,
+      created_at TEXT NOT NULL
+    );
+  `);
+  const insert = db.prepare("INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)");
+  for (const id of [1, 2, 3]) insert.run(id, `wish-seed-${id}@example.test`, TICK_NOW.toISOString());
+  ensureDemandSchema(db);
+  return db;
+}
+
+function recordingCursor(start = 0) {
+  const state = { stored: start, writes: [] };
+  return {
+    state,
+    cursor: {
+      get: () => state.stored,
+      set: (id) => { state.stored = id; state.writes.push(id); },
+    },
+  };
+}
 
 test("legacy status maps without destroying data", () => {
   assert.equal(mapLegacyLifecycle({ status: "open" }), "active");
@@ -299,4 +382,91 @@ test("loop is non-reentrant", () => {
   loop.tick();
   assert.equal(max, 1);
   loop.stop();
+});
+
+test("worker cursor advances so ids past the first batch still get scanned", () => {
+  const db = memoryDb();
+  for (const id of [1, 2, 3]) seedDueWish(db, id);
+  const { state, cursor } = recordingCursor();
+  const ticks = [0, 1, 2].map(() => runWishLifecycleTick(db, TICK_NOW, { limit: 1, flags: LIFECYCLE_ON, cursor }));
+  assert.deepEqual(ticks.map((t) => t.after_id), [0, 1, 2]);
+  assert.deepEqual(ticks.map((t) => t.next_id), [1, 2, 3]);
+  assert.deepEqual(ticks.map((t) => t.changed), [1, 1, 1]);
+  assert.deepEqual(state.writes, [1, 2, 3]);
+  const states = db.prepare("SELECT lifecycle FROM demand_posts ORDER BY id").all().map((r) => r.lifecycle);
+  assert.deepEqual(states, ["needs_confirmation", "needs_confirmation", "needs_confirmation"]);
+});
+
+test("worker without a cursor keeps the old rescan-first-batch behaviour", () => {
+  const db = memoryDb();
+  for (const id of [1, 2, 3]) seedDueWish(db, id);
+  const first = runWishLifecycleTick(db, TICK_NOW, { limit: 1, flags: LIFECYCLE_ON });
+  const second = runWishLifecycleTick(db, TICK_NOW, { limit: 1, flags: LIFECYCLE_ON });
+  assert.equal(first.after_id, 0);
+  assert.equal(second.after_id, 0);
+  assert.equal(second.wrapped, false);
+  assert.equal(db.prepare("SELECT lifecycle FROM demand_posts WHERE id = 1").get().lifecycle, "paused");
+});
+
+test("worker cursor wraps to the first batch once the tail is exhausted", () => {
+  const db = memoryDb();
+  for (const id of [1, 2, 3]) seedIdleWish(db, id);
+  const { state, cursor } = recordingCursor(3);
+  const tick = runWishLifecycleTick(db, TICK_NOW, { limit: 2, flags: LIFECYCLE_ON, cursor });
+  assert.equal(tick.wrapped, true);
+  assert.equal(tick.after_id, 3);
+  assert.equal(tick.scanned, 2);
+  assert.equal(tick.changed, 0);
+  assert.equal(tick.next_id, 2);
+  assert.deepEqual(state.writes, [2]);
+});
+
+test("worker cursor is left untouched when nothing is scanned", () => {
+  const db = memoryDb();
+  const { state, cursor } = recordingCursor(9);
+  const tick = runWishLifecycleTick(db, TICK_NOW, { limit: 5, flags: LIFECYCLE_ON, cursor });
+  assert.equal(tick.scanned, 0);
+  assert.equal(tick.wrapped, true);
+  assert.equal(tick.next_id, 9);
+  assert.deepEqual(state.writes, []);
+});
+
+test("flag-off worker ignores the cursor entirely", () => {
+  const { state, cursor } = recordingCursor(4);
+  const result = runWishLifecycleTick({ prepare() { throw new Error("should not query"); } }, TICK_NOW, {
+    flags: { wish: { lifecycle_enabled: false } },
+    cursor,
+  });
+  assert.equal(result.skipped, true);
+  assert.equal(result.after_id, null);
+  assert.equal(result.next_id, null);
+  assert.deepEqual(state.writes, []);
+});
+
+test("production worker persists its cursor under the wish_lifecycle job key", () => {
+  runIsolated(`
+    app.saveRentalMarketplaceFlags({ wish: { lifecycle_enabled: true } });
+    const raw = new DatabaseSync(path.join(process.env.DATA_DIR, "v3.db"));
+    const stamp = "2026-09-17T00:00:00.000Z";
+    const idle = "2026-08-01T00:00:00.000Z";
+    const now = new Date(stamp);
+    const expires = new Date(now.getTime() + 30 * 86400000).toISOString();
+    for (const id of [2, 3, 4]) {
+      raw.prepare("INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)").run(id, \`wish-lifecycle-\${id}@example.test\`, stamp);
+    }
+    for (const id of [1, 2, 3]) {
+      raw.prepare(\`INSERT INTO demand_posts
+          (id, user_id, status, lifecycle, expires_at, last_confirmed_at, last_active_at, created_at)
+        VALUES (?, ?, 'open', 'active', ?, ?, ?, ?)\`).run(id, id + 1, expires, idle, idle, stamp);
+    }
+    const first = app.runWishLifecycleWorkerTick(now);
+    assert.equal(first.skipped, false);
+    assert.equal(first.after_id, 0);
+    assert.equal(first.next_id, 3);
+    assert.equal(getNotifyCursor(raw, WISH_LIFECYCLE_CURSOR_JOB), 3);
+    const second = app.runWishLifecycleWorkerTick(now);
+    assert.equal(second.after_id, 3);
+    assert.equal(second.wrapped, true);
+    assert.equal(second.next_id, 3);
+  `);
 });

@@ -170,7 +170,7 @@ PRA 啟用腳本只寫 catalog + lifecycle；本 PR 把 notify / digest / outbou
 
 | Worker | Flag | Batch | Non-reentrant | Retry / idempotency | Poison | Restart | Channel OFF |
 |---|---|---|---|---|---|---|---|
-| Wish lifecycle | `lifecycle_enabled` | 80 | in-process + IMMEDIATE | 重讀 + plan gate | 不適用則 skip | **無 cursor**（見風險） | 無 outbound |
+| Wish lifecycle | `lifecycle_enabled` | 80 + cursor | in-process + IMMEDIATE | 重讀 + plan gate | 不適用則 skip | cursor wrap（`rental_notify_cursors` job `wish_lifecycle`） | 無 outbound |
 | Offer expiry | `offer_enabled` | 80 | 同上 | version optimistic | 狀態變了 skip | `expires_at` 佇列自然排空 | 無 outbound |
 | Lifecycle reminders | `notifications_enabled` | 80 + cursor | notify tick | `event_key` UNIQUE | window null skip | cursor wrap | prefs + channelAllowed |
 | Match notify | matching + notifications | 80 subs；match page 20 | notify tick | episode + `rental_match_seen` | `matchFn` throw continue；hard-gate 關 episode | cursor wrap | instant 受 digest/outbound 抑制 |
@@ -320,7 +320,7 @@ UAT 全綠後仍分階段。每一階段只開下表，觀察至少一個業務�
 
 ## 25. Non-blocking risks
 
-- Wish lifecycle worker 無 cursor：若 `open|expired` 超過 80 且前 80 筆長期不變更，高 id 可能延後掃描。PR A 啟用時 posts 為 0；規模變大前應補 cursor。
+- Wish lifecycle worker cursor（2026-09-19 補）：原本若 `open|expired` 超過 80 且前 80 筆長期不變更，高 id 會延後掃描；現在每 tick 從 `rental_notify_cursors` job `wish_lifecycle` 續掃，掃到尾端回到 0，每則許願都會在數輪內被掃到。未帶 cursor 的呼叫端（舊測試／工具）行為不變。
 - Survey API 不吃 notify flag（只要求 Wish completed）。無 outbound。
 - `owner_notifications_enabled` 與 `notifications_enabled` 雙旗標，Stage 4 必須兩個一起開。
 - `casaos-compose.yml` / `docker-compose.yml` 檔案預設仍寫 `:latest`；正式站靠 deploy-v3 digest override。
