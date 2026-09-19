@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -27,7 +27,7 @@ test("startup tick no longer starts geo backfill in parallel", () => {
 test("listListings attaches same-house only on the returned page", () => {
   const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-unhang-"));
   const script = `
-    import { listListings, upsertListing, setListingMatch } from ${JSON.stringify(path.join(dir, "../src/db.js"))};
+    import { listListings, upsertListing, setListingMatch } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/db.js")).href)};
     const stamp = "2026-09-05T00:00:00.000Z";
     const newest = "2026-09-06T12:00:00.000Z";
     for (let i = 1; i <= 80; i += 1) {
@@ -113,8 +113,8 @@ test("commute list plus stats stay under 1.5s on a 2000-row route cache", () => 
       setCachedRoute,
       stats,
       upsertListing,
-    } from ${JSON.stringify(path.join(dir, "../src/db.js"))};
-    import { applyDemoCommute, DEMO_COMMUTE_MODE, DEMO_WORK_LAT, DEMO_WORK_LNG } from ${JSON.stringify(path.join(dir, "../src/demo.js"))};
+    } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/db.js")).href)};
+    import { applyDemoCommute, DEMO_COMMUTE_MODE, DEMO_WORK_LAT, DEMO_WORK_LNG } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/demo.js")).href)};
     const stamp = "2026-09-05T00:00:00.000Z";
     const settings = applyDemoCommute({});
     for (let i = 1; i <= 2000; i += 1) {

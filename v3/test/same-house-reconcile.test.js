@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { communityId, matchVeto, scoreMatch } from "../src/match.js";
 import {
   blockMatchCandidates,
@@ -105,7 +105,7 @@ function runIsolated(body) {
   const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-reconcile-"));
   const script = `
     import assert from "node:assert/strict";
-    import * as app from ${JSON.stringify(path.join(dir, "../src/db.js"))};
+    import * as app from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/db.js")).href)};
     function seed(post_id, overrides = {}) {
       app.upsertListing({
         post_id, source: overrides.source || "591", source_id: String(post_id),

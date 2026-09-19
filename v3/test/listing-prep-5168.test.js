@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   classifyFacilities,
   classifyRentalFloor,
@@ -289,9 +289,9 @@ test("unready 5168 stays off the list until prep is ready; persist writes floor 
   const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-hp-prep-"));
   const script = `
     import assert from "node:assert/strict";
-    import { upsertListing, listListings, persistHpListingFields, listingsNeedingAddressEnrich, getListing, db, defaultUserId, getSettings, saveCrawlSources } from ${JSON.stringify(path.join(dir, "../src/db.js"))};
-    import { upsertListingPrep, listingPrepAdminStats } from ${JSON.stringify(path.join(dir, "../src/listingEnrichQueue.js"))};
-    import { evaluateHpPrep } from ${JSON.stringify(path.join(dir, "../src/listingPrep.js"))};
+    import { upsertListing, listListings, persistHpListingFields, listingsNeedingAddressEnrich, getListing, db, defaultUserId, getSettings, saveCrawlSources } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/db.js")).href)};
+    import { upsertListingPrep, listingPrepAdminStats } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/listingEnrichQueue.js")).href)};
+    import { evaluateHpPrep } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/listingPrep.js")).href)};
     saveCrawlSources({ items: [{ id: "houseprice", enabled: true }, { id: "591", enabled: true }] });
     const uid = defaultUserId();
     const settings = {
@@ -441,7 +441,7 @@ test("R3 unready 5168 cannot become group primary or hide a ready 591", () => {
   const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-hp-group-"));
   const script = `
     import assert from "node:assert/strict";
-    import { upsertListing, listListings, mergeSameHouseForUser, db, defaultUserId, getSettings, saveCrawlSources } from ${JSON.stringify(path.join(dir, "../src/db.js"))};
+    import { upsertListing, listListings, mergeSameHouseForUser, db, defaultUserId, getSettings, saveCrawlSources } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/db.js")).href)};
     saveCrawlSources({ items: [{ id: "houseprice", enabled: true }, { id: "591", enabled: true }] });
     const uid = defaultUserId();
     const settings = {
@@ -612,9 +612,9 @@ test("R5 persist writes title/rent/address and source_key through SQLite", () =>
   const script = `
     import assert from "node:assert/strict";
     import { readFileSync } from "node:fs";
-    import { upsertListing, persistHpListingFields, getListing, invalidateListingLocation, db, saveCrawlSources } from ${JSON.stringify(path.join(dir, "../src/db.js"))};
-    import { ensureListingPrepSchema, enqueueListingEnrich, claimEnrichJobs, processOneEnrichJob } from ${JSON.stringify(path.join(dir, "../src/listingEnrichQueue.js"))};
-    import { inspectHpDetailResponse } from ${JSON.stringify(path.join(dir, "../src/houseprice.js"))};
+    import { upsertListing, persistHpListingFields, getListing, invalidateListingLocation, db, saveCrawlSources } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/db.js")).href)};
+    import { ensureListingPrepSchema, enqueueListingEnrich, claimEnrichJobs, processOneEnrichJob } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/listingEnrichQueue.js")).href)};
+    import { inspectHpDetailResponse } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/houseprice.js")).href)};
     saveCrawlSources({ items: [{ id: "houseprice", enabled: true }] });
     ensureListingPrepSchema(db);
     const stamp = "2026-09-14T00:00:00.000Z";
@@ -848,9 +848,9 @@ test("S1 disabled 5168 does not hide a cheaper-ready 591 or linger as match_peer
   const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-hp-s1-"));
   const script = `
     import assert from "node:assert/strict";
-    import { upsertListing, listListings, mergeSameHouseForUser, db, defaultUserId, getSettings, saveCrawlSources } from ${JSON.stringify(path.join(dir, "../src/db.js"))};
-    import { ensureListingPrepSchema, upsertListingPrep } from ${JSON.stringify(path.join(dir, "../src/listingEnrichQueue.js"))};
-    import { evaluateHpPrep } from ${JSON.stringify(path.join(dir, "../src/listingPrep.js"))};
+    import { upsertListing, listListings, mergeSameHouseForUser, db, defaultUserId, getSettings, saveCrawlSources } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/db.js")).href)};
+    import { ensureListingPrepSchema, upsertListingPrep } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/listingEnrichQueue.js")).href)};
+    import { evaluateHpPrep } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/listingPrep.js")).href)};
     saveCrawlSources({ items: [{ id: "houseprice", enabled: true }, { id: "591", enabled: true }] });
     ensureListingPrepSchema(db);
     const uid = defaultUserId();
@@ -912,9 +912,9 @@ test("S1 expensive disabled 5168 leaves peers and match_peer", () => {
   const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-hp-s1b-"));
   const script = `
     import assert from "node:assert/strict";
-    import { upsertListing, listListings, mergeSameHouseForUser, db, defaultUserId, getSettings, saveCrawlSources } from ${JSON.stringify(path.join(dir, "../src/db.js"))};
-    import { ensureListingPrepSchema, upsertListingPrep } from ${JSON.stringify(path.join(dir, "../src/listingEnrichQueue.js"))};
-    import { evaluateHpPrep } from ${JSON.stringify(path.join(dir, "../src/listingPrep.js"))};
+    import { upsertListing, listListings, mergeSameHouseForUser, db, defaultUserId, getSettings, saveCrawlSources } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/db.js")).href)};
+    import { ensureListingPrepSchema, upsertListingPrep } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/listingEnrichQueue.js")).href)};
+    import { evaluateHpPrep } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/listingPrep.js")).href)};
     saveCrawlSources({ items: [{ id: "houseprice", enabled: true }, { id: "591", enabled: true }] });
     ensureListingPrepSchema(db);
     const uid = defaultUserId();
@@ -1004,9 +1004,9 @@ test("S3 single rental floor without building height writes through SQLite", () 
   const script = `
     import assert from "node:assert/strict";
     import { readFileSync } from "node:fs";
-    import { upsertListing, persistHpListingFields, getListing, invalidateListingLocation, db, saveCrawlSources } from ${JSON.stringify(path.join(dir, "../src/db.js"))};
-    import { ensureListingPrepSchema, enqueueListingEnrich, claimEnrichJobs, processOneEnrichJob } from ${JSON.stringify(path.join(dir, "../src/listingEnrichQueue.js"))};
-    import { inspectHpDetailResponse } from ${JSON.stringify(path.join(dir, "../src/houseprice.js"))};
+    import { upsertListing, persistHpListingFields, getListing, invalidateListingLocation, db, saveCrawlSources } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/db.js")).href)};
+    import { ensureListingPrepSchema, enqueueListingEnrich, claimEnrichJobs, processOneEnrichJob } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/listingEnrichQueue.js")).href)};
+    import { inspectHpDetailResponse } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/houseprice.js")).href)};
     saveCrawlSources({ items: [{ id: "houseprice", enabled: true }] });
     ensureListingPrepSchema(db);
     const stamp = "2026-09-14T00:00:00.000Z";
@@ -1058,10 +1058,10 @@ test("S4 source geo correction without local version writes; address change with
   const script = `
     import assert from "node:assert/strict";
     import { readFileSync } from "node:fs";
-    import { upsertListing, persistHpListingFields, getListing, invalidateListingLocation, db, saveCrawlSources } from ${JSON.stringify(path.join(dir, "../src/db.js"))};
-    import { ensureListingPrepSchema, enqueueListingEnrich, claimEnrichJobs, processOneEnrichJob } from ${JSON.stringify(path.join(dir, "../src/listingEnrichQueue.js"))};
-    import { inspectHpDetailResponse } from ${JSON.stringify(path.join(dir, "../src/houseprice.js"))};
-    import { classifyAddress } from ${JSON.stringify(path.join(dir, "../src/listingPrep.js"))};
+    import { upsertListing, persistHpListingFields, getListing, invalidateListingLocation, db, saveCrawlSources } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/db.js")).href)};
+    import { ensureListingPrepSchema, enqueueListingEnrich, claimEnrichJobs, processOneEnrichJob } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/listingEnrichQueue.js")).href)};
+    import { inspectHpDetailResponse } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/houseprice.js")).href)};
+    import { classifyAddress } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/listingPrep.js")).href)};
     saveCrawlSources({ items: [{ id: "houseprice", enabled: true }] });
     ensureListingPrepSchema(db);
     const stamp = "2026-09-14T00:00:00.000Z";
@@ -1290,11 +1290,11 @@ test("S6 real DB late alive/gone interleave cannot rewrite offline", async () =>
     import {
       upsertListing, getListing, markListingOffline, markListingAlive,
       persistHpListingFields, invalidateListingLocation, db,
-    } from ${JSON.stringify(path.join(dir, "../src/db.js"))};
+    } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/db.js")).href)};
     import {
       ensureListingPrepSchema, enqueueListingEnrich, claimEnrichJobs, processOneEnrichJob,
-    } from ${JSON.stringify(path.join(dir, "../src/listingEnrichQueue.js"))};
-    import { inspectHpDetailResponse } from ${JSON.stringify(path.join(dir, "../src/houseprice.js"))};
+    } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/listingEnrichQueue.js")).href)};
+    import { inspectHpDetailResponse } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/houseprice.js")).href)};
     const live = JSON.parse(readFileSync(${JSON.stringify(path.join(dir, "fixtures/houseprice-detail-16470110.json"))}, "utf8"));
     ensureListingPrepSchema(db);
     const stamp = "2026-09-14T00:00:00.000Z";

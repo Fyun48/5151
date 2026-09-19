@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -13,7 +13,7 @@ const dir = path.dirname(fileURLToPath(import.meta.url));
 test("stale contact 591 listings are re-queued for detail (bounded), fresh ones are not", () => {
   const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-contact-refresh-"));
   const script = `
-    import { db, upsertListing, setListingDetail, listingsNeedingFeeDetail } from ${JSON.stringify(path.join(dir, "../src/db.js"))};
+    import { db, upsertListing, setListingDetail, listingsNeedingFeeDetail } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/db.js")).href)};
     const stamp = "2026-09-06T00:00:00.000Z";
     function seedFetched(post_id) {
       upsertListing({ post_id, source: "591", source_key: "1|8|||", search_key: "https://example.test",
@@ -51,7 +51,7 @@ test("stale contact 591 listings are re-queued for detail (bounded), fresh ones 
 test("kit backfill with empty 591 contact does not wipe stored phone", () => {
   const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-kit-contact-keep-"));
   const script = `
-    import { db, upsertListing, setListingDetail } from ${JSON.stringify(path.join(dir, "../src/db.js"))};
+    import { db, upsertListing, setListingDetail } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/db.js")).href)};
     const stamp = "2026-09-06T00:00:00.000Z";
     upsertListing({ post_id: 21952442, source: "591", source_key: "1|8|||", search_key: "https://example.test",
       title: "芝山兩房", url: "https://rent.591.com.tw/21952442", price: "32000元", price_num: 32000, extra_fees: [],

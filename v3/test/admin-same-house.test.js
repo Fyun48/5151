@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -12,7 +12,7 @@ function runIsolated(body) {
   const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-admin-house-"));
   const script = `
     import assert from "node:assert/strict";
-    import * as app from ${JSON.stringify(path.join(dir, "../src/db.js"))};
+    import * as app from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/db.js")).href)};
     function seed(post_id, overrides = {}) {
       app.upsertListing({
         post_id, source: overrides.source || "591", source_id: String(post_id),

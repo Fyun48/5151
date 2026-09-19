@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -12,7 +12,7 @@ const dir = path.dirname(fileURLToPath(import.meta.url));
 test("houseprice listings with a geo pin feed the MRT/geo backfill", () => {
   const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-hp-geo-"));
   const script = `
-    import { upsertListing, listingsNeedingMrt, listingHasTrustedGeo } from ${JSON.stringify(path.join(dir, "../src/db.js"))};
+    import { upsertListing, listingsNeedingMrt, listingHasTrustedGeo } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/db.js")).href)};
     const stamp = "2026-09-06T00:00:00.000Z";
     const common = {
       source: "houseprice",

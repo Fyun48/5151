@@ -4,13 +4,13 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
-const dbPath = JSON.stringify(path.join(dir, "../src/db.js"));
-const watcherPath = JSON.stringify(path.join(dir, "../src/watcher.js"));
-const routePath = JSON.stringify(path.join(dir, "../src/route.js"));
-const demoPath = JSON.stringify(path.join(dir, "../src/demo.js"));
+const dbPath = JSON.stringify(pathToFileURL(path.join(dir, "../src/db.js")).href);
+const watcherPath = JSON.stringify(pathToFileURL(path.join(dir, "../src/watcher.js")).href);
+const routePath = JSON.stringify(pathToFileURL(path.join(dir, "../src/route.js")).href);
+const demoPath = JSON.stringify(pathToFileURL(path.join(dir, "../src/demo.js")).href);
 
 function runIsolated(script) {
   const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-commute-live-"));

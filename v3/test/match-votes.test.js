@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   MATCH_SPLIT_DAILY_LIMIT,
   pairConfidence,
@@ -36,7 +36,7 @@ test("personal split hides affiliate only for that user until consensus", () => 
       rejectSuspectedMatch,
       setListingMatch,
       upsertListing,
-    } from ${JSON.stringify(path.join(dir, "../src/db.js"))};
+    } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/db.js")).href)};
     const stamp = "2026-09-05T00:00:00.000Z";
     const cheap = {
       post_id: 910001,

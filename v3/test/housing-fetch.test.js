@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { fetchRisPopulation, refreshHousingData, rocYearNow } from "../src/housingFetch.js";
 import { normalizeHousingData } from "../src/housingData.js";
 

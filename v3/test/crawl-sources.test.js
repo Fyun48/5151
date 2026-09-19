@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "os";
 import path from "path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { crawlSourceEnabled, defaultCrawlSources, normalizeCrawlSources } from "../src/crawlSources.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
@@ -43,7 +43,7 @@ test("saveCrawlSources keeps omitted source switches, including Owner rakuya set
   const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-crawl-src-"));
   const script = `
     import assert from "node:assert/strict";
-    import * as app from ${JSON.stringify(path.join(dir, "../src/db.js"))};
+    import * as app from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/db.js")).href)};
     const enabled = (id) => app.getCrawlSources().items.find((row) => row.id === id)?.enabled;
     assert.equal(enabled("rakuya"), false);
     app.saveCrawlSources({ "591": true });

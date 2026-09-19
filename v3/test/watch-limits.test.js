@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "os";
 import path from "path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import {
   MEMBER_MAX_WATCHED,
@@ -50,8 +50,8 @@ test("stats counts personal watches even when listings are pending offline", () 
   const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-watch-stats-"));
   const script = `
     import assert from "node:assert/strict";
-    import { db, defaultUserId, setFlags, stats, upsertListing } from ${JSON.stringify(path.join(dir, "../src/db.js"))};
-    import { countWatched } from ${JSON.stringify(path.join(dir, "../src/watchLimits.js"))};
+    import { db, defaultUserId, setFlags, stats, upsertListing } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/db.js")).href)};
+    import { countWatched } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/watchLimits.js")).href)};
     const stamp = "2026-09-01T00:00:00.000Z";
     function seed(post_id) {
       upsertListing({

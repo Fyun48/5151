@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { normalizeBroadcasts, publicBroadcasts, publicBroadcastsRuntime } from "../src/broadcasts.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
