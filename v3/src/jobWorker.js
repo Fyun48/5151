@@ -22,7 +22,7 @@ export function runWorkerBatch({
       completeJob(db, { jobId: job.id, workerId, now: Date.now() });
       results.push({ id: Number(job.id), state: "done", out });
     } catch (error) {
-      failJob(db, { jobId: job.id, workerId, error: error?.message || String(error), now: Date.now() });
+      failJob(db, { jobId: job.id, workerId, error: error?.message || String(error), retryAfterMs: error?.retryAfterMs ?? null, now: Date.now() });
       results.push({ id: Number(job.id), state: "failed", error: error?.message || String(error) });
     }
   }
@@ -47,7 +47,7 @@ export async function runWorkerBatchAsync({
       completeJob(db, { jobId: job.id, workerId, now: Date.now() });
       results.push({ id: Number(job.id), state: "done", out });
     } catch (error) {
-      failJob(db, { jobId: job.id, workerId, error: error?.message || String(error), now: Date.now() });
+      failJob(db, { jobId: job.id, workerId, error: error?.message || String(error), retryAfterMs: error?.retryAfterMs ?? null, now: Date.now() });
       results.push({ id: Number(job.id), state: "failed", error: error?.message || String(error) });
     }
   }

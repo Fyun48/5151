@@ -38,12 +38,15 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
 - **Jobs repository**（`createJobQueue` 工廠 + SQLite/PostgreSQL 兩個 adapter）：PostgreSQL claim 真正
   wired `FOR UPDATE SKIP LOCKED` + `$n` 佔位符 + `ON CONFLICT (idempotency_key)`。測試 3 項。
 - **Worker convergence**（Phase 4 收尾）：`jobWorker.js` 新增 `runWorkerBatchAsync`（async handler 版，
-  給 enrich/notify/CRM 這類 fetch 型 worker）；`workerConvergence.js` 以 CRM 為範例提供
-  `enqueueCrmDeliveryJob`（idempotent producer，`job_type: "crm"`）+ `runCrmDeliveryConvergedBatch`
-  （經 durable queue claim → deliver → complete/fail）。測試 `worker-convergence.test.js`（3 項：deliver+
-  complete、idempotency、retry→dead-letter）。
-- 尚未：把 enrich/notification/OPS/wish 各 worker 逐一遷移（CRM 已示範 producer/consumer 橋接，
-  enrich 的 source-specific backoff + priority slots 需額外 mapping）。
+  給 enrich/notify/CRM 這類 fetch 型 worker）；`jobQueue.js` 的 `failJob` 支援 `retryAfterMs`（source-specific
+  回退覆蓋，預設維持 generic exponential backoff）；`workerConvergence.js` 提供 CRM（`enqueueCrmDeliveryJob` +
+  `runCrmDeliveryConvergedBatch`）與 enrich（`enqueueEnrichJob` + `runEnrichConvergedBatch` + `enrichRetryError`，
+  `via` → priority mapping + `source_limited`/`parse_failed` cooldown）兩種 producer/consumer 橋接。
+  測試 `worker-convergence.test.js`（6 項：deliver+complete、idempotency、retry→dead-letter、
+  enrich priority、enrich idempotency、12h cooldown）。
+- 尚未：enrich 的 supersession（request_seq/run_seq 舊 run 失效偵測）+ `processOneEnrichJob` 完全收斂
+  （現以 producer/consumer 橋接示範 priority/backoff/idempotency，production loop 仍用 `listing_enrich_jobs`）；
+  notification/OPS/wish 遷移。
 
 ### Phase 5/6 — DB driver 抽象 + Migration framework（完成核心）
 - `v3/src/dbDriver.js`：`DB_DRIVER=sqlite|postgres` 選擇（`resolveDbDriver()`），`createDb()` 工廠、

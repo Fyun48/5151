@@ -222,6 +222,7 @@ export function failJob(db, {
   workerId,
   error = null,
   maxAttempts = null,
+  retryAfterMs = null,
   now = Date.now(),
 } = {}) {
   const row = db.prepare("SELECT * FROM job_queue WHERE id = ? AND lease_owner = ?").get(jobId, workerId);
@@ -236,7 +237,11 @@ export function failJob(db, {
     `).run(attempts, error ? String(error).slice(0, 2000) : null, now, jobId);
     return { id: Number(jobId), state: JOB_STATE.DEAD, attempts };
   }
-  const backoff = Math.min(BACKOFF_BASE_MS * 2 ** (attempts - 1), BACKOFF_MAX_MS);
+  // A worker can override the generic exponential backoff (e.g. enrich uses
+  // source-specific cooldowns: source_limited=12h, parse_failed=24h).
+  const backoff = retryAfterMs != null && Number.isFinite(Number(retryAfterMs)) && Number(retryAfterMs) >= 0
+    ? Number(retryAfterMs)
+    : Math.min(BACKOFF_BASE_MS * 2 ** (attempts - 1), BACKOFF_MAX_MS);
   db.prepare(`
     UPDATE job_queue SET state = '${JOB_STATE.PENDING}', attempts = ?, lease_owner = NULL,
       leased_at = NULL, lease_until = NULL, available_at = ?, last_error = ?, updated_at = ?
