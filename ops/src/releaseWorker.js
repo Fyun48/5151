@@ -1,6 +1,7 @@
-import { createReleaseCandidate, validateReleaseChain } from "./releaseCandidate.js";
+import { createReleaseCandidate, validateReleaseChain, retryReleaseNotification } from "./releaseCandidate.js";
 import { releaseConfigFromEnv } from "./release/releasePolicy.js";
 import { makeCodingRepo } from "./coding/gitRepo.js";
+import { issueWriteDecision } from "./insightConsent.js";
 
 // Phase 13 背景 worker：為「fresh QA PASS + fresh Staging PASS」的 coding task 決定性組裝 Release Candidate + 排通知。
 // 不用 LLM（不可變 provenance 由本地決定性組裝）。安全預設：repo 不可用 → 不建。不部署、不 merge、不呼叫 coding provider。
@@ -20,7 +21,11 @@ export function createReleaseCandidatesForEligible(db, { repo, env = process.env
   ).all(Math.max(1, limit));
   const created = [];
   for (const r of rows) {
-    try { validateReleaseChain(db, r.id, { repo, env }); created.push(createReleaseCandidate(db, { codingTaskId: r.id, repo, env, now })); }
+    try {
+      const { task } = validateReleaseChain(db, r.id, { repo, env });
+      if (!issueWriteDecision(db, task.issue_id, { expectedGeneration: task.subscription_generation }).ok) continue;
+      created.push(createReleaseCandidate(db, { codingTaskId: r.id, repo, env, now }));
+    }
     catch { /* 不合格（QA/Staging 非 fresh PASS 等）→ 跳過 */ }
   }
   return created;
@@ -29,7 +34,13 @@ export function createReleaseCandidatesForEligible(db, { repo, env = process.env
 export async function runReleaseOnce(db, { repo, config = releaseWorkerConfigFromEnv(), now = () => new Date() } = {}) {
   const at = typeof now === "function" ? now() : now;
   const created = createReleaseCandidatesForEligible(db, { repo, env: process.env, now: at });
-  return { created: created.length };
+  const pending = db.prepare("SELECT id FROM release_notification WHERE status='pending' ORDER BY id ASC LIMIT 20").all();
+  let notified = 0;
+  for (const n of pending) {
+    const r = await retryReleaseNotification(db, n.id, { actor: "system", now: at });
+    if (r.status === "sent") notified += 1;
+  }
+  return { created: created.length, notified };
 }
 
 export function startReleaseLoop(db, { repo = makeCodingRepo(), config = releaseWorkerConfigFromEnv(), log = () => {} } = {}) {

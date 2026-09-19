@@ -130,8 +130,8 @@ export function makeNullEmbeddingProvider() {
   };
 }
 
-export function makeEmbeddingProvider(env = process.env) {
-  const kind = String(env.EMBEDDING_PROVIDER || "").toLowerCase();
+export function makeEmbeddingProvider(env = process.env, opts = {}) {
+  const kind = String(opts.kind || env.EMBEDDING_PROVIDER || "").toLowerCase();
   if (kind === "stub") return makeStubEmbeddingProvider();
   if (kind === "local") return makeLocalEmbeddingProvider(env);
   return makeNullEmbeddingProvider();

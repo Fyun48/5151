@@ -1,0 +1,67 @@
+/* jibby-kit layer 1 — 基礎 token
+   Quiet Luxury 預設（與 v3/public/tokens.css :root 對齊）。
+   主題檔只覆寫 --accent、--bg、--paper。
+   本檔必須自包含，禁止 @import 遠端或回抓 OPS。 */
+:root {
+  --bg: #f3efe8;
+  --paper: #faf8f4;
+  --ink: #1c1917;
+  --muted: #6f6a64;
+  --line: #e4dfd6;
+  --accent: #0f6f6a;
+  --accent-deep: #0b5551;
+  --accent-soft: #e7f1ef;
+  --accent-mist: #f3f6f5;
+  --rose: #b08989;
+  --rose-soft: #f7f1f0;
+  --rose-deep: #8a5e5e;
+  --accent-2: #0b5551;
+  --watch: #9a6b6b;
+  --new: #0b5551;
+  --same: #6b6394;
+  --same-soft: #eceaf4;
+  --tag-on-bg: var(--accent-soft);
+  --tag-on-fg: var(--accent-deep);
+  --tag-off-bg: var(--line);
+  --tag-off-fg: var(--muted);
+  --tag-strong-bg: var(--ink);
+  --tag-strong-fg: var(--paper);
+  --hermes: #E65326;
+  --hermes-deep: #C2410C;
+  --hermes-light: #F47A2A;
+  --shezi-red: #DC2626;
+  --notify-new: #7dd3fc;
+  --notify-new-fg: #075985;
+  --notify-relist: #86efac;
+  --notify-relist-fg: #166534;
+  --notify-fee: #f9a8d4;
+  --notify-fee-fg: #9d174d;
+  --offline-sure: #dc2626;
+  --radius: 8px;
+  --radius-lg: 10px;
+  --shadow: none;
+  --font-sans: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+  --font-serif: "Noto Serif TC", "Source Han Serif TC", serif;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-price: 20px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --touch: 44px;
+  --page-gutter: 16px;
+  --btn-height: 40px;
+  --chip-height: 32px;
+  --background: var(--bg);
+  --foreground: var(--ink);
+  --card: var(--paper);
+  --card-foreground: var(--ink);
+  --primary: var(--accent);
+  --primary-foreground: #faf8f4;
+  --muted-foreground: var(--muted);
+  --border: var(--line);
+  --ring: var(--accent);
+}

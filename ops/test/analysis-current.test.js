@@ -10,10 +10,12 @@ import {
 } from "../src/feedbackAnalysis.js";
 import { runAnalysisOnce } from "../src/analysisWorker.js";
 import { makeStubProvider } from "../src/ai/provider.js";
+import { updateProductCapabilities } from "../src/products.js";
 
 const RUN = { random: () => 0.5, now: () => new Date() };
 
 function seed(db, content = "登入轉圈圈", i = Math.floor(Math.random() * 1e9)) {
+  updateProductCapabilities(db, "v3", { cross_site_insight: true });
   db.prepare(
     `INSERT INTO ingested_feedback(delivery_id, idempotency_key, source, kind, content, received_at)
      VALUES (?, ?, 'v3', 'bug', ?, ?)`,

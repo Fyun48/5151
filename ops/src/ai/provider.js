@@ -119,9 +119,12 @@ export function makeNullProvider() {
 }
 
 // 依環境變數選 provider。未設定 → Null（worker 會略過，不消耗 attempts）。
-export function makeProvider(env = process.env) {
-  const kind = String(env.AI_PROVIDER || "").toLowerCase();
+export function makeProvider(env = process.env, opts = {}) {
+  const kind = String(opts.kind || env.AI_PROVIDER || "").toLowerCase();
   if (kind === "stub") return makeStubProvider();
   if (kind === "local") return makeLocalProvider(env);
+  if (kind === "openai" || kind === "anthropic" || kind === "gemini") {
+    return makeNullProvider();
+  }
   return makeNullProvider();
 }

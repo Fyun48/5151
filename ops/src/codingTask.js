@@ -6,6 +6,7 @@ import { findEntity, transitionRow } from "./stateMachine.js";
 import { classifyChangedPaths } from "./coding/pathPolicy.js";
 import { CODING_PROVIDER_POLICY_VERSION } from "./coding/provider.js";
 import { CODING_PATH_POLICY_VERSION } from "./coding/pathPolicy.js";
+import { inferIssueProductId, issueWriteDecision } from "./insightConsent.js";
 
 // ── Phase 10：授權後的 Coding Task 引擎 ──
 // 唯一授權來源＝ACTIVE development_authorization；消費「確切」核准的 Proposal 快照；
@@ -117,6 +118,26 @@ export function validateAuthorizationForCoding(db, { issueId, authorizationId = 
   return { auth, proposal, entity };
 }
 
+function scopedProductId(value) {
+  const id = String(value || "").trim().toLowerCase();
+  return /^[a-z][a-z0-9_-]{0,31}$/.test(id) ? id : "";
+}
+
+export function inferredIssueProductId(db, issueId) {
+  return inferIssueProductId(db, issueId);
+}
+
+function withIssueMeta(db, row) {
+  const pub = publicCodingTask(row);
+  if (!pub) return null;
+  const issue = db.prepare("SELECT title FROM issue_candidate WHERE id=?").get(pub.issue_id);
+  return {
+    ...pub,
+    issue_title: issue?.title || null,
+    product_id: inferredIssueProductId(db, pub.issue_id),
+  };
+}
+
 export function publicCodingTask(row) {
   if (!row) return null;
   const arr = (v) => { try { return v ? JSON.parse(v) : null; } catch { return null; } };
@@ -145,6 +166,13 @@ export function createCodingTask(db, { issueId, authorizationId = null, provider
   const providerPolicyFp = codingProviderPolicyFingerprint(provider, env);
   const ts = iso(now);
   return withImmediateTx(db, () => {
+    const gate = issueWriteDecision(db, issueId);
+    if (!gate.ok) {
+      const err = httpError(gate.reason === "stale_generation" ? "訂閱世代已換，晚到製作不入隊。" : "訂閱已退出，晚到製作不入隊。", 409);
+      err.code = gate.reason || "subscription_revoked";
+      throw err;
+    }
+    const generation = gate.unbound ? null : gate.generation;
     const { auth, proposal } = validateAuthorizationForCoding(db, { issueId, authorizationId, now });
     const fingerprint = computeTaskFingerprint({
       authorizationId: Number(auth.id), authorizationHash: String(auth.authorization_hash),
@@ -159,12 +187,12 @@ export function createCodingTask(db, { issueId, authorizationId = null, provider
     const res = db.prepare(
       `INSERT INTO development_coding_task(
         issue_id, development_authorization_id, proposal_id, proposal_version, proposal_hash, task_fingerprint,
-        provider, model, repository, base_branch, base_sha, approved_scope_snapshot, status, attempt_count, max_attempts, next_attempt_at, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'pending', 0, ?, ?, ?)`,
+        provider, model, repository, base_branch, base_sha, approved_scope_snapshot, status, attempt_count, max_attempts, next_attempt_at, created_at, subscription_generation)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'pending', 0, ?, ?, ?, ?)`,
     ).run(
       Number(auth.issue_id), Number(auth.id), Number(auth.proposal_id), Number(auth.proposal_version), String(auth.proposal_hash), fingerprint,
       provider?.name || "none", provider?.model || null, cfg.repository, baseBranch, baseSha, JSON.stringify(snapshot),
-      cfg.maxAttempts, ts, ts,
+      cfg.maxAttempts, ts, ts, generation,
     );
     const id = Number(res.lastInsertRowid);
     const branch = `ai-dev/${id}-issue-${Number(auth.issue_id)}`;
@@ -175,10 +203,20 @@ export function createCodingTask(db, { issueId, authorizationId = null, provider
 }
 
 // 交易式 claim：pending / failed_retry(到期) / stale-claimed|running → claimed。避免重複 worker 同時執行同一 task。
+function abandonCodingTask(db, task, reason) {
+  db.prepare("UPDATE development_coding_task SET status='failed', error_code=? WHERE id=? AND status IN ('pending','failed_retry','claimed','running')")
+    .run(String(reason || "subscription_revoked").slice(0, 64), Number(task.id));
+}
+
 export function claimCodingTaskBatch(db, { now = new Date(), staleMs = CODING_CLAIM_STALE_MS, limit = 1 } = {}) {
   const ts = iso(now);
   const staleBefore = iso(new Date((now instanceof Date ? now.getTime() : Date.parse(iso(now))) - staleMs));
   return withImmediateTx(db, () => {
+    const inflight = db.prepare("SELECT * FROM development_coding_task WHERE status IN ('pending','failed_retry','claimed','running')").all();
+    for (const row of inflight) {
+      const decision = issueWriteDecision(db, row.issue_id, { expectedGeneration: row.subscription_generation });
+      if (!decision.ok) abandonCodingTask(db, row, decision.reason);
+    }
     const rows = db.prepare(
       `SELECT * FROM development_coding_task
        WHERE ( (status IN ('pending','failed_retry') AND next_attempt_at <= ?)
@@ -187,6 +225,11 @@ export function claimCodingTaskBatch(db, { now = new Date(), staleMs = CODING_CL
     ).all(ts, staleBefore, Math.max(1, limit));
     const claimed = [];
     for (const r of rows) {
+      const decision = issueWriteDecision(db, r.issue_id, { expectedGeneration: r.subscription_generation });
+      if (!decision.ok) {
+        abandonCodingTask(db, r, decision.reason);
+        continue;
+      }
       const upd = db.prepare("UPDATE development_coding_task SET status='claimed', claimed_at=? WHERE id=? AND status=?").run(ts, r.id, r.status);
       if (upd.changes === 1) claimed.push(db.prepare("SELECT * FROM development_coding_task WHERE id=?").get(r.id));
     }
@@ -200,6 +243,8 @@ export function recheckBeforeStart(db, task) {
   const fresh = db.prepare("SELECT * FROM development_coding_task WHERE id=?").get(Number(task.id));
   if (!fresh || fresh.status === "cancelled") return { ok: false, reason: "task_cancelled" };
   try {
+    const gate = issueWriteDecision(db, fresh.issue_id, { expectedGeneration: fresh.subscription_generation });
+    if (!gate.ok) return { ok: false, reason: gate.reason || "subscription_revoked" };
     const { auth } = validateAuthorizationForCoding(db, { issueId: fresh.issue_id, authorizationId: fresh.development_authorization_id });
     if (Number(auth.id) !== Number(fresh.development_authorization_id)) return { ok: false, reason: "authorization_superseded" };
     if (String(auth.proposal_hash) !== String(fresh.proposal_hash)) return { ok: false, reason: "proposal_hash_changed" };
@@ -211,11 +256,18 @@ export function recheckBeforeStart(db, task) {
 }
 
 function markFailure(db, task, { code, now, cfg }) {
+  const latest = db.prepare("SELECT status FROM development_coding_task WHERE id=?").get(Number(task.id));
+  if (latest?.status === "cancelled") return { skipped: true, reason: "cancelled", status: "cancelled" };
   const attempt = Number(task.attempt_count) || 0;
   const willRetry = attempt < (Number(task.max_attempts) || cfg.maxAttempts);
   const status = willRetry ? "failed_retry" : "failed";
   const next = willRetry ? iso(new Date((now instanceof Date ? now.getTime() : Date.now()) + backoffMs(attempt))) : iso(now);
-  db.prepare("UPDATE development_coding_task SET status=?, error_code=?, next_attempt_at=? WHERE id=?").run(status, code, next, Number(task.id));
+  const upd = db.prepare("UPDATE development_coding_task SET status=?, error_code=?, next_attempt_at=? WHERE id=? AND status IN ('pending','failed_retry','claimed','running')")
+    .run(status, code, next, Number(task.id));
+  if (upd.changes !== 1) {
+    const fresh = db.prepare("SELECT status FROM development_coding_task WHERE id=?").get(Number(task.id));
+    if (fresh?.status === "cancelled") return { skipped: true, reason: "cancelled", status: "cancelled" };
+  }
   appendAuditRow(db, { actor: "system", action: "issue.coding.failed", entityType: "development_coding_task", entityId: String(task.id), data: { issue_id: Number(task.issue_id), coding_task_id: Number(task.id), authorization_id: Number(task.development_authorization_id), error_code: code, status }, now });
   return { failed: true, error_code: code, status };
 }
@@ -231,6 +283,12 @@ export async function executeCodingTask(db, taskRow, { provider, repo, pr, selfT
   // 授權失效 → 不啟動 coding（記錄 authorization_invalidated，標記需取消）。
   const rc = recheckBeforeStart(db, task);
   if (!rc.ok) {
+    if (rc.reason === "stale_generation" || rc.reason === "subscription_revoked") {
+      return withImmediateTx(db, () => {
+        abandonCodingTask(db, task, rc.reason);
+        return { failed: true, error_code: rc.reason, status: "failed" };
+      });
+    }
     return withImmediateTx(db, () => {
       db.prepare("UPDATE development_coding_task SET status='cancelled', error_code=? WHERE id=? AND status!='changes_ready'").run(`authorization_invalidated:${rc.reason}`, Number(task.id));
       appendAuditRow(db, { actor: "system", action: "issue.coding.authorization_invalidated", entityType: "development_coding_task", entityId: String(task.id), data: { issue_id: Number(task.issue_id), coding_task_id: Number(task.id), authorization_id: Number(task.development_authorization_id), reason: rc.reason }, now });
@@ -248,7 +306,7 @@ export async function executeCodingTask(db, taskRow, { provider, repo, pr, selfT
 
   // 標記 running + 遞增 attempt + issue 生命週期進入 DEVELOPING（若目前為 APPROVED_FOR_DEVELOPMENT）。
   withImmediateTx(db, () => {
-    db.prepare("UPDATE development_coding_task SET status='running', started_at=COALESCE(started_at,?), attempt_count=attempt_count+1 WHERE id=?").run(iso(now), Number(task.id));
+    db.prepare("UPDATE development_coding_task SET status='running', started_at=COALESCE(started_at,?), attempt_count=attempt_count+1 WHERE id=? AND status IN ('pending','failed_retry','claimed','running')").run(iso(now), Number(task.id));
     const entity = findEntity(db, issueEntityId(task.issue_id));
     if (entity && entity.state === "APPROVED_FOR_DEVELOPMENT") {
       transitionRow(db, { id: issueEntityId(task.issue_id), to: CODING_STARTED_STATE, actor: "system", data: { coding_task_id: Number(task.id) }, now });
@@ -317,12 +375,24 @@ function resultHash({ headSha, diff, changedFiles }) {
 
 function finalizeSuccess(db, task, { headSha, diff, changedFiles, protectedFlags, warnings, selftest, providerTaskId, model, pr, now }) {
   return withImmediateTx(db, () => {
+    const latest = db.prepare("SELECT status FROM development_coding_task WHERE id=?").get(Number(task.id));
+    if (latest?.status === "cancelled") return { skipped: true, reason: "cancelled" };
+    const gate = issueWriteDecision(db, task.issue_id, { expectedGeneration: task.subscription_generation });
+    if (!gate.ok) {
+      abandonCodingTask(db, task, gate.reason);
+      return { failed: true, error_code: gate.reason, status: "failed" };
+    }
     const rhash = resultHash({ headSha, diff, changedFiles });
-    db.prepare(
+    const upd = db.prepare(
       `UPDATE development_coding_task SET status='changes_ready', head_sha=?, provider_task_id=?, model=COALESCE(?,model),
         changed_files=?, diff_insertions=?, diff_deletions=?, protected_flags=?, selftest_results=?, warnings=?, result_hash=?,
-        pr_number=?, pr_url=?, completed_at=?, error_code=NULL WHERE id=?`,
+        pr_number=?, pr_url=?, completed_at=?, error_code=NULL WHERE id=? AND status IN ('pending','failed_retry','claimed','running')`,
     ).run(headSha, providerTaskId || null, model || null, JSON.stringify(diff.files), diff.insertions, diff.deletions, JSON.stringify(protectedFlags), JSON.stringify(selftest), JSON.stringify(warnings), rhash, pr?.number ?? null, pr?.url ?? null, iso(now), Number(task.id));
+    if (upd.changes !== 1) {
+      const fresh = db.prepare("SELECT status FROM development_coding_task WHERE id=?").get(Number(task.id));
+      if (fresh?.status === "cancelled") return { skipped: true, reason: "cancelled" };
+      if (fresh?.status === "changes_ready") return { idempotent: true, task: publicCodingTask(db.prepare("SELECT * FROM development_coding_task WHERE id=?").get(Number(task.id))) };
+    }
     appendAudit(db, { action: "issue.coding.pr_created", task, data: { branch: task.coding_branch, base_sha: task.base_sha, head_sha: headSha, pr_number: pr?.number ?? null, changed_files: changedFiles.length }, now });
     appendAudit(db, { action: "issue.coding.completed", task, data: { base_sha: task.base_sha, head_sha: headSha, pr_number: pr?.number ?? null, insertions: diff.insertions, deletions: diff.deletions, warnings: warnings.length, protected: protectedFlags.has_protected }, now });
     return { changes_ready: true, task: publicCodingTask(db.prepare("SELECT * FROM development_coding_task WHERE id=?").get(Number(task.id))) };
@@ -366,30 +436,85 @@ function buildPrBody(task, snapshot, { headSha, diff, changedFiles, protectedFla
   return lines.join("\n");
 }
 
-// ── Owner 取消（保留分支/PR/歷史/授權 provenance） ──
+const CODING_CANCELABLE = new Set(["pending", "failed_retry", "claimed", "running", "changes_ready"]);
+function codingCancelableWhere() {
+  return "status IN ('pending','failed_retry','claimed','running','changes_ready')";
+}
+
+// ── Owner 取消（保留分支/PR/歷史/授權 provenance；已在跑的不宣稱撤回） ──
 export function cancelCodingTask(db, taskId, { actor = "owner", reason = null, now = new Date() } = {}) {
   return withImmediateTx(db, () => {
     const task = db.prepare("SELECT * FROM development_coding_task WHERE id=?").get(Number(taskId));
     if (!task) throw httpError("coding task not found", 404);
-    if (task.status === "cancelled") return { idempotent: true, task: publicCodingTask(task) };
-    if (task.status === "changes_ready") {
-      // 已產出變更後取消：標記需 superseded review，不刪除 PR/歷史。
-      db.prepare("UPDATE development_coding_task SET error_code=? WHERE id=?").run(`owner_cancelled_after_changes:${reason ? String(reason).slice(0, 200) : ""}`, Number(task.id));
+    if (task.status === "cancelled") {
+      return { idempotent: true, in_flight_not_withdrawn: false, task: publicCodingTask(task) };
     }
-    db.prepare("UPDATE development_coding_task SET status='cancelled' WHERE id=?").run(Number(task.id));
-    appendAuditRow(db, { actor, action: "issue.coding.cancelled", entityType: "development_coding_task", entityId: String(task.id), data: { issue_id: Number(task.issue_id), coding_task_id: Number(task.id), authorization_id: Number(task.development_authorization_id), prev_status: task.status }, now });
-    return { cancelled: true, task: publicCodingTask(db.prepare("SELECT * FROM development_coding_task WHERE id=?").get(Number(task.id))) };
+    if (!CODING_CANCELABLE.has(task.status)) {
+      throw httpError(`製作目前不能取消（status=${task.status}）`, 409);
+    }
+    const inFlight = task.status === "claimed" || task.status === "running";
+    const code = task.status === "changes_ready"
+      ? `owner_cancelled_after_changes:${reason ? String(reason).slice(0, 200) : ""}`
+      : (reason ? `owner_cancelled:${String(reason).slice(0, 120)}` : "owner_cancelled");
+    const upd = db.prepare(`UPDATE development_coding_task SET status='cancelled', error_code=? WHERE id=? AND ${codingCancelableWhere()}`)
+      .run(code, Number(task.id));
+    if (upd.changes !== 1) {
+      const fresh = db.prepare("SELECT * FROM development_coding_task WHERE id=?").get(Number(task.id));
+      if (fresh?.status === "cancelled") return { idempotent: true, in_flight_not_withdrawn: inFlight, task: publicCodingTask(fresh) };
+      throw httpError("製作目前不能取消", 409);
+    }
+    appendAuditRow(db, {
+      actor,
+      action: "issue.coding.cancelled",
+      entityType: "development_coding_task",
+      entityId: String(task.id),
+      data: {
+        issue_id: Number(task.issue_id),
+        coding_task_id: Number(task.id),
+        authorization_id: Number(task.development_authorization_id),
+        prev_status: task.status,
+        in_flight_not_withdrawn: inFlight,
+      },
+      now,
+    });
+    return {
+      cancelled: true,
+      in_flight_not_withdrawn: inFlight,
+      task: publicCodingTask(db.prepare("SELECT * FROM development_coding_task WHERE id=?").get(Number(task.id))),
+    };
   });
 }
 
 // ── Owner 檢視 ──
 export function listCodingTasks(db, { issueId, limit = 50 } = {}) {
   const cap = Math.max(1, Math.min(Number(limit) || 50, 200));
-  return db.prepare("SELECT * FROM development_coding_task WHERE issue_id=? ORDER BY id DESC LIMIT ?").all(Number(issueId), cap).map(publicCodingTask);
+  return db.prepare("SELECT * FROM development_coding_task WHERE issue_id=? ORDER BY id DESC LIMIT ?").all(Number(issueId), cap).map((row) => withIssueMeta(db, row));
+}
+export function listRecentCodingTasks(db, { limit = 40, productId = null } = {}) {
+  const cap = Math.max(1, Math.min(Number(limit) || 40, 200));
+  const raw = productId == null ? "" : String(productId).trim();
+  const scoped = scopedProductId(productId);
+  if (raw && !scoped) return [];
+  const rows = scoped
+    ? db.prepare(`
+        SELECT t.* FROM development_coding_task t
+         JOIN issue_candidate i ON i.id = t.issue_id
+         WHERE (
+           i.product_id = ?
+           OR EXISTS (
+             SELECT 1 FROM issue_feedback_link l
+             JOIN ingested_feedback f ON f.id = l.feedback_id
+             WHERE l.issue_id = t.issue_id AND l.active = 1 AND f.product_id = ?
+           )
+         )
+         ORDER BY t.id DESC LIMIT ?
+      `).all(scoped, scoped, cap)
+    : db.prepare("SELECT * FROM development_coding_task ORDER BY id DESC LIMIT ?").all(cap);
+  return rows.map((row) => withIssueMeta(db, row));
 }
 export function getCodingTask(db, taskId) {
   const row = db.prepare("SELECT * FROM development_coding_task WHERE id=?").get(Number(taskId));
-  return row ? publicCodingTask(row) : null;
+  return row ? withIssueMeta(db, row) : null;
 }
 export function getIssueCodingView(db, issueId) {
   const auth = db.prepare("SELECT * FROM development_authorization WHERE issue_id=? AND status='active' ORDER BY id DESC LIMIT 1").get(Number(issueId)) || null;

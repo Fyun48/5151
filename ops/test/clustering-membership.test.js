@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { openOpsDb } from "../src/opsDb.js";
 import { runEmbeddingOnce } from "../src/clusteringWorker.js";
+import { updateProductCapabilities } from "../src/products.js";
 import {
   clusteringConfig, getCurrentIssueMembers, getReviewRequiredMembers, feedbackIssue,
   issueRepresentative, moveFeedback, storeEmbedding,
@@ -30,6 +31,7 @@ const RUN = { now: () => new Date() };
 let seq = 1;
 // #vec 放在 summary，才能透過 re-analysis 改變 embedding。
 function seedAnalyzed(db, vec, { category = "BUG" } = {}) {
+  updateProductCapabilities(db, "v3", { cross_site_insight: true });
   const i = seq++;
   const ts = new Date().toISOString();
   db.prepare("INSERT INTO ingested_feedback(delivery_id, idempotency_key, source, kind, content, received_at) VALUES (?, ?, 'v3', 'bug', ?, ?)").run(`d${i}`, `k${i}`, `feedback ${i}`, ts);

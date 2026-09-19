@@ -78,8 +78,8 @@ export function makeLocalCommandCodingProvider(env = process.env) {
   return unavailableProvider("local", { status: "opt_in_runtime_only", required: ["Local command execution is opt-in at runtime and intentionally not exercised by tests/CI."] });
 }
 
-export function makeCodingProvider(env = process.env) {
-  const kind = String(env.CODING_PROVIDER || "").toLowerCase();
+export function makeCodingProvider(env = process.env, opts = {}) {
+  const kind = String(opts.kind || env.CODING_PROVIDER || "").toLowerCase();
   if (kind === "stub") return makeStubCodingProvider();
   if (kind === "cursor") return makeCursorCodingProvider();
   if (kind === "local") return makeLocalCommandCodingProvider(env);

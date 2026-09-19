@@ -32,6 +32,12 @@ test("v3 docker service binds 5153/5155 and mounts historical dbs read-only", ()
 });
 
 test("CasaOS compose lists v3 as the only app on port 5153", () => {
+test("OPS console is a separate loopback service on 5154", () => {
+  const ops = serviceBlock(compose, "5151-ops");
+  assert.match(ops, /127\.0\.0\.1:5154:5154/);
+  assert.match(ops, /5151-ops:\/data/);
+  const casaOps = serviceBlock(casaos, "5151-ops");
+  assert.match(casaOps, /127\.0\.0\.1:5154:5154/);
   const casaos = readFileSync(path.join(root, "casaos-compose.yml"), "utf8");
   assert.match(casaos, /^  main: 591-tracker-v3\s*$/m);
   assert.match(casaos, /591-tracker-v3:/);

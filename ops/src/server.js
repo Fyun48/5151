@@ -7,8 +7,36 @@ import { openOpsDb, defaultDataDir, defaultDbPath } from "./opsDb.js";
 import { makeAuth } from "./auth.js";
 import { appendAudit, listAudit, verifyAuditChain, createCheckpoint, listCheckpoints } from "./audit.js";
 import { listTransitions } from "./stateMachine.js";
-import { verifyIngestRequest, bodyHashHex } from "./ingestSignature.js";
 import { ingestFeedback } from "./ingest.js";
+import {
+  createProduct,
+  ensureDefaultProduct,
+  ensureLegacyIngestSecret,
+  getFeedbackForProduct,
+  getProduct,
+  listProducts,
+  pauseProduct,
+  publicProduct,
+  reconnectProduct,
+  resolveIngestAuth,
+  resumeProduct,
+  rotateCredential,
+  updateProductCapabilities,
+} from "./products.js";
+import {
+  ingestCrmSnapshot,
+  crmDashboard,
+  upsertOwnerNote,
+  setCrmModule,
+} from "./crmReplica.js";
+import {
+  beginUnsubscribeExit,
+  exportHandoff,
+  latestHandoff,
+  listExits,
+  listPendingWork,
+  purgeReplica,
+} from "./exitDrill.js";
 import {
   acceptAttachment,
   getAttachmentRow,
@@ -19,48 +47,66 @@ import {
 } from "./attachments.js";
 import { LocalPersistentStorage, defaultAttachmentDir } from "./storage/localStorage.js";
 import { makeScanner } from "./malwareScan.js";
-import { listAnalyses, publicAnalysis, reprocessAnalysis, analysisStats, currentAnalysisId, getCurrentFeedbackAnalysis } from "./feedbackAnalysis.js";
+import { listAnalyses, publicAnalysis, reprocessAnalysis, analysisStats, currentAnalysisId, getCurrentFeedbackAnalysis, cancelAnalysis } from "./feedbackAnalysis.js";
 import { makeProvider } from "./ai/provider.js";
+import { drawersAdminView, resolveDrawerKind, saveDrawer } from "./providerDrawer.js";
 import { analysisConfigFromEnv, startAnalysisLoop } from "./analysisWorker.js";
-import { listIssues, getIssueWithMembers, mergeIssues, splitIssue, moveFeedback } from "./clustering.js";
+import { getIssueWithMembers, mergeIssues, splitIssue, moveFeedback } from "./clustering.js";
+import { createFollowUpIssue } from "./followUp.js";
+import { rejectSpoofedOwnerDirect, resolveVerifiedInstruction } from "./instructionSource.js";
+import { resolveProductionTarget, upsertProductEnvironment } from "./productEnvironment.js";
 import { makeEmbeddingProvider } from "./ai/embeddingProvider.js";
 import { clusteringConfigFromEnv, startClusteringLoop } from "./clusteringWorker.js";
 import { getCurrentIssueImpact, listAssessments, isImpactStale, calculateAndStoreImpact, currentImpactId } from "./impact.js";
 import { impactWorkerConfigFromEnv, startImpactLoop } from "./impactWorker.js";
-import { getCurrentIssueEvaluation, getEvaluationRunDetail, listEvaluationRuns, currentEvaluationRunId, isEvaluationStale, requestEvaluationRecalc } from "./evaluation.js";
+import { getCurrentIssueEvaluation, getEvaluationRunDetail, listEvaluationRuns, currentEvaluationRunId, isEvaluationStale, requestEvaluationRecalc, cancelEvaluation } from "./evaluation.js";
 import { makeEvaluationProvider } from "./ai/evaluationProvider.js";
 import { evaluationWorkerConfigFromEnv, startEvaluationLoop } from "./evaluationWorker.js";
 import { evaluationRolesConfig } from "./evaluationRoles.js";
-import { getCurrentIssueProposal, listProposals, listOwnerDecisions, currentOwnerDecision, getActiveAuthorization, submitOwnerDecision, requestProposalGeneration } from "./proposal.js";
+import { getCurrentIssueProposal, listProposals, listOwnerDecisions, currentOwnerDecision, getActiveAuthorization, submitOwnerDecision, requestProposalGeneration, cancelProposal } from "./proposal.js";
 import { makeProposalProvider } from "./ai/proposalProvider.js";
 import { proposalWorkerConfigFromEnv, startProposalLoop } from "./proposalWorker.js";
 import { getReevaluationView, ownerManualReevaluate, ownerUnblock } from "./reevaluation.js";
 import { reevaluationWorkerConfigFromEnv, startReevaluationLoop } from "./reevaluationWorker.js";
-import { getIssueCodingView, getCodingTask, cancelCodingTask } from "./codingTask.js";
+import { getIssueCodingView, getCodingTask, cancelCodingTask, listRecentCodingTasks } from "./codingTask.js";
+import { confirmCancelResult } from "./cancelResult.js";
 import { codingWorkerConfigFromEnv, startCodingLoop } from "./codingWorker.js";
 import { makeCodingProvider } from "./coding/provider.js";
 import { makeCodingRepo } from "./coding/gitRepo.js";
 import { makePrGateway } from "./coding/prGateway.js";
-import { getIssueQaView, getQaRunDetail, requestQaRerun } from "./qaRun.js";
+import { getIssueQaView, getQaRunDetail, requestQaRerun, cancelQaRun } from "./qaRun.js";
 import { qaWorkerConfigFromEnv, startQaLoop } from "./qaWorker.js";
 import { makeQaReviewProvider } from "./qa/reviewProvider.js";
 import { getCodingStagingView, getStagingDeployment, requestStagingRedeploy, cancelStagingDeployment, cleanupStagingDeployment } from "./stagingDeploy.js";
 import { stagingWorkerConfigFromEnv, startStagingLoop } from "./stagingWorker.js";
 import { makeStagingProvider } from "./staging/provider.js";
-import { getReleaseCandidateView, getReleaseManifest, submitOwnerReleaseDecision, retryReleaseNotification, listReleaseNotifications } from "./releaseCandidate.js";
+import { getReleaseCandidateView, getReleaseManifest, submitOwnerReleaseDecision, retryReleaseNotification, listReleaseNotifications, cancelReleaseNotification } from "./releaseCandidate.js";
 import { releaseWorkerConfigFromEnv, startReleaseLoop } from "./releaseWorker.js";
 import { getMigrationSafetyView, createMigrationSafetyAssessment, assessApprovedReleaseIfNeeded } from "./release/migrationSafety.js";
 import {
+  cancelProductionReleaseRun,
+  cancelProductionReleaseRunner,
+  confirmUnknownProductionResult,
   createProductionReleaseRun,
   executeProductionRelease,
   getProductionRelease,
   getProductionReleaseView,
   getProductionStable,
+  importOwnerDirectObservation,
   reconcileProductionRelease,
   requestCodeRollback,
+  requestProductionDbRestore,
   retryProductionRelease,
 } from "./release/productionRelease.js";
 import { makeProductionReleaseProvider } from "./release/productionReleaseProvider.js";
+import { kitFilePath, resolveKitStatic } from "./designKitStatic.js";
+import { cancelSiteCommand, confirmSiteCommandApplyObservation, deliverSiteCommand, enqueueAndMaybeDeliver, listSiteCommands } from "./siteCommand.js";
+import { confirmSiteDeliveryObservation } from "./siteDelivery.js";
+import { retryBlockedExit } from "./exitRetry.js";
+import { getDashboard, listFeedbackInbox, listIssuesWithLifecycle, OPS_PHASE, publicFeedback } from "./dashboard.js";
+import { notifyConfig, sendOpsNotification } from "./notify/webhook.js";
+import { productAllowsFollowup } from "./usageConsent.js";
+import { productNotifyDecision } from "./insightConsent.js";
 
 // 刻意不使用 express：ops 服務維持「零外部相依」，與本 repo 的 CI（不跑 npm install）相容，
 // 也縮小攻擊面。所有路由用 node:http 手刻的極小 router。
@@ -175,11 +221,13 @@ function runGuard(mw, req, reply) {
   return passed;
 }
 
-export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret = process.env.OPS_INGEST_SECRET || "", storage = null, scanner = null, codingRepo = null, productionReleaseProvider = null }) {
+export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret = process.env.OPS_INGEST_SECRET || "", storage = null, scanner = null, codingRepo = null, productionReleaseProvider = null, siteCommandFetch = fetch, siteCommandApplyUrl = process.env.V3_OPS_COMMAND_APPLY_URL || "" }) {
   const releaseRepo = codingRepo || makeCodingRepo();
   const releaseProvider = productionReleaseProvider || makeProductionReleaseProvider();
   if (!db) throw new Error("createHandler requires db");
   if (!auth) throw new Error("createHandler requires auth");
+  ensureDefaultProduct(db);
+  ensureLegacyIngestSecret(db, ingestSecret);
   const store = storage || new LocalPersistentStorage(defaultAttachmentDir(process.env.OPS_DATA_DIR || process.cwd()));
   const scan = scanner || makeScanner();
 
@@ -197,7 +245,19 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         const full = path.join(publicDir, entry.file);
         try {
           const buf = readFileSync(full);
-          res.writeHead(200, { "Content-Type": entry.type });
+          res.writeHead(200, { "Content-Type": entry.type, "Cache-Control": "no-store" });
+          res.end(buf);
+        } catch {
+          sendJson(res, 404, { error: "not found" });
+        }
+        return;
+      }
+
+      const kit = method === "GET" ? resolveKitStatic(pathname) : null;
+      if (kit) {
+        try {
+          const buf = readFileSync(kitFilePath(publicDir, kit.rel));
+          res.writeHead(200, { "Content-Type": kit.type, "Cache-Control": "no-store" });
           res.end(buf);
         } catch {
           sendJson(res, 404, { error: "not found" });
@@ -207,28 +267,22 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
 
       // ── 公開 API ──
       if (pathname === "/ops/api/health" && method === "GET") {
-        sendJson(res, 200, { ok: true, service: "ops", phase: "13", configured: auth.configured });
+        sendJson(res, 200, { ok: true, service: "ops", phase: OPS_PHASE, configured: auth.configured, webhook: notifyConfig().configured });
         return;
       }
 
       // ── Ingest（HMAC 認證，非 Owner session） ──
       if (pathname === "/ops/api/ingest/feedback" && method === "POST") {
-        if (!ingestSecret) {
-          sendJson(res, 503, { error: "ingest not configured" });
-          return;
-        }
         const raw = await readRawBody(req);
-        const check = verifyIngestRequest({
+        const check = resolveIngestAuth(db, {
           method: "POST",
           path: "/ops/api/ingest/feedback",
           headers: req.headers,
           rawBody: raw,
-          secret: ingestSecret,
+          envSecret: ingestSecret,
         });
         if (!check.ok) {
-          // 不外洩簽章細節；只回通用錯誤（reason 僅供內部推斷）。
-          const status = check.reason === "expired_timestamp" ? 401 : 401;
-          sendJson(res, status, { error: "unauthorized" });
+          sendJson(res, check.status || 401, { error: check.error || "unauthorized" });
           return;
         }
         let payload;
@@ -244,13 +298,71 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
           return;
         }
         try {
-          const result = ingestFeedback(db, { deliveryId: check.deliveryId, payload, payloadHash: check.bodyHash });
+          // 歸屬由憑證決定；body.product_id 不得改寫到另一站。
+          const result = ingestFeedback(db, {
+            deliveryId: check.deliveryId,
+            payload,
+            payloadHash: check.bodyHash,
+            productId: check.productId,
+          });
           if (result.conflict) {
-            // delivery_id / idempotency_key 被重用於不同內容 → 409，不覆寫原紀錄。
             sendJson(res, 409, { error: "conflict", reason: result.reason });
             return;
           }
-          sendJson(res, 200, { ok: true, id: result.id, duplicate: result.duplicate });
+          sendJson(res, 200, { ok: true, id: result.id, duplicate: result.duplicate, product_id: check.productId });
+          if (!result.duplicate && !result.conflict && notifyConfig().onIngest) {
+            const product = getProduct(db, check.productId);
+            const expectedGen = Number(product?.subscription_generation || 1);
+            if (productAllowsFollowup(product) && productNotifyDecision(db, check.productId, { expectedGeneration: expectedGen }).ok) {
+              sendOpsNotification({
+                event: "ops.feedback.ingested",
+                title: "新的使用者回饋",
+                text: "正式站有一筆新回饋進入 OPS 收件匣。",
+                fields: [
+                  { name: "id", value: result.id },
+                  { name: "product_id", value: check.productId },
+                  { name: "kind", value: payload.kind || "other" },
+                ],
+              }).catch(() => {});
+            }
+          }
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
+
+      if (pathname === "/ops/api/ingest/crm" && method === "POST") {
+        const raw = await readRawBody(req);
+        const check = resolveIngestAuth(db, {
+          method: "POST",
+          path: "/ops/api/ingest/crm",
+          headers: req.headers,
+          rawBody: raw,
+          envSecret: ingestSecret,
+        });
+        if (!check.ok) {
+          sendJson(res, check.status || 401, { error: check.error || "unauthorized" });
+          return;
+        }
+        let payload;
+        try {
+          payload = JSON.parse(raw || "{}");
+        } catch {
+          sendJson(res, 400, { error: "invalid JSON" });
+          return;
+        }
+        if (String(payload.delivery_id || "") !== check.deliveryId) {
+          sendJson(res, 400, { error: "delivery_id mismatch" });
+          return;
+        }
+        try {
+          const result = ingestCrmSnapshot(db, {
+            deliveryId: check.deliveryId,
+            payload,
+            productId: check.productId,
+          });
+          sendJson(res, 200, { ok: true, id: result.id, duplicate: result.duplicate, product_id: check.productId });
         } catch (err) {
           sendJson(res, err.status || 400, { error: err.message });
         }
@@ -423,11 +535,12 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
       if (analysisListMatch && method === "GET") {
         if (!runGuard(auth.requireOwner, req, reply)) return;
         const fid = Number(analysisListMatch[1]);
-        const fb = db.prepare("SELECT id, source, kind, content, app_version, submitted_at, received_at, trust_level FROM ingested_feedback WHERE id = ?").get(fid);
+        const scoped = url.searchParams.get("productId");
+        const fb = getFeedbackForProduct(db, fid, scoped || null);
         if (!fb) { sendJson(res, 404, { error: "not found" }); return; }
         const currentId = currentAnalysisId(db, fid);
         sendJson(res, 200, {
-          feedback: fb,
+          feedback: publicFeedback(fb),
           current_analysis_id: currentId,
           current: getCurrentFeedbackAnalysis(db, fid),
           analyses: listAnalyses(db, { feedbackId: fid }).map((row) => ({ ...publicAnalysis(row), is_current: Number(row.id) === currentId })),
@@ -459,11 +572,344 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         sendJson(res, 200, analysisStats(db));
         return;
       }
+      const analysisCancel = pathname.match(/^\/ops\/api\/analyses\/(\d+)\/cancel$/);
+      if (analysisCancel && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {};
+        try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          sendJson(res, 200, { ok: true, ...cancelAnalysis(db, Number(analysisCancel[1]), { actor: `owner:${req.owner.email}`, reason: b.reason }) });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
 
       // ── Phase 5：Issue Candidate 檢視（Owner） ──
       if (pathname === "/ops/api/issues" && method === "GET") {
         if (!runGuard(auth.requireOwner, req, reply)) return;
-        sendJson(res, 200, { items: listIssues(db, { limit: url.searchParams.get("limit") }) });
+        sendJson(res, 200, { items: listIssuesWithLifecycle(db, { limit: url.searchParams.get("limit") }) });
+        return;
+      }
+      if (pathname === "/ops/api/feedback" && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        sendJson(res, 200, listFeedbackInbox(db, {
+          limit: url.searchParams.get("limit"),
+          offset: url.searchParams.get("offset"),
+          includeContact: url.searchParams.get("includeContact") === "1",
+          productId: url.searchParams.get("productId") || null,
+        }));
+        return;
+      }
+      if (pathname === "/ops/api/crm" && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        sendJson(res, 200, crmDashboard(db, { productId: url.searchParams.get("productId") || null }));
+        return;
+      }
+      if (pathname === "/ops/api/crm/notes" && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          const body = await readBody(req);
+          sendJson(res, 200, {
+            ok: true,
+            note: upsertOwnerNote(db, {
+              productId: body?.product_id || url.searchParams.get("productId"),
+              subjectKind: body?.subject_kind || "contact",
+              subjectKey: body?.subject_key,
+              body: body?.body,
+              actor: `owner:${req.owner.email}`,
+            }),
+          });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
+      if (pathname === "/ops/api/site-commands" && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        sendJson(res, 200, { items: listSiteCommands(db, { productId: url.searchParams.get("productId") || "" }) });
+        return;
+      }
+      if (pathname === "/ops/api/site-commands" && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          const body = await readBody(req);
+          const result = await enqueueAndMaybeDeliver(db, body || {}, {
+            actor: `owner:${req.owner.email}`,
+            fetchImpl: siteCommandFetch,
+            applyUrl: siteCommandApplyUrl,
+          });
+          sendJson(res, result.duplicate ? 200 : 201, { ok: true, ...result });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
+      const commandDeliver = pathname.match(/^\/ops\/api\/site-commands\/([a-z0-9-]+)\/deliver$/);
+      if (commandDeliver && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          sendJson(res, 200, {
+            ok: true,
+            job: await deliverSiteCommand(db, commandDeliver[1], {
+              fetchImpl: siteCommandFetch,
+              applyUrl: siteCommandApplyUrl,
+            }),
+          });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
+      const commandCancel = pathname.match(/^\/ops\/api\/site-commands\/(\d+)\/cancel$/);
+      if (commandCancel && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {};
+        try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          sendJson(res, 200, { ok: true, ...cancelSiteCommand(db, Number(commandCancel[1]), { actor: `owner:${req.owner.email}`, reason: b.reason }) });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
+      const commandConfirmApply = pathname.match(/^\/ops\/api\/site-commands\/(\d+)\/confirm-apply$/);
+      if (commandConfirmApply && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {};
+        try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          sendJson(res, 200, { ok: true, ...confirmSiteCommandApplyObservation(db, Number(commandConfirmApply[1]), {
+            ...b,
+            actor: `owner:${req.owner.email}`,
+            reason: b.reason,
+            observedApply: b.observed_apply || b.observedApply,
+          }) });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
+      if (pathname === "/ops/api/crm/module" && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          const body = await readBody(req);
+          sendJson(res, 200, {
+            ok: true,
+            module: setCrmModule(db, body?.product_id, {
+              enabled: body?.enabled,
+              siteAdminUrl: body?.site_admin_url,
+              actor: `owner:${req.owner.email}`,
+            }),
+          });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
+      if (pathname === "/ops/api/providers" && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        sendJson(res, 200, drawersAdminView(db));
+        return;
+      }
+      const drawerSave = pathname.match(/^\/ops\/api\/providers\/([a-z0-9_-]+)$/);
+      if (drawerSave && method === "PUT") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          const body = await readBody(req);
+          sendJson(res, 200, { ok: true, item: saveDrawer(db, drawerSave[1], body), overview: drawersAdminView(db) });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
+      if (pathname === "/ops/api/products" && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        sendJson(res, 200, { items: listProducts(db) });
+        return;
+      }
+      if (pathname === "/ops/api/products" && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          const body = await readBody(req);
+          const created = createProduct(db, {
+            id: body?.id,
+            displayName: body?.display_name || body?.displayName,
+            actor: `owner:${req.owner.email}`,
+          });
+          sendJson(res, 201, { ok: true, ...created });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
+      const productCaps = pathname.match(/^\/ops\/api\/products\/([a-z0-9_-]+)\/capabilities$/);
+      if (productCaps && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          const body = await readBody(req);
+          const product = updateProductCapabilities(db, productCaps[1], body || {}, { actor: `owner:${req.owner.email}` });
+          sendJson(res, 200, { ok: true, product, command_secret: product.command_secret || "" });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
+      const productAction = pathname.match(/^\/ops\/api\/products\/([a-z0-9_-]+)\/(pause|resume|unsubscribe|reconnect|rotate-credential|handoff|purge-replica)$/);
+      if (productAction && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        const [, productId, action] = productAction;
+        const actor = `owner:${req.owner.email}`;
+        try {
+          if (action === "pause") sendJson(res, 200, { ok: true, product: pauseProduct(db, productId, { actor }) });
+          else if (action === "resume") sendJson(res, 200, { ok: true, product: resumeProduct(db, productId, { actor }) });
+          else if (action === "unsubscribe") sendJson(res, 200, { ok: true, ...beginUnsubscribeExit(db, productId, { actor }) });
+          else if (action === "reconnect") sendJson(res, 200, { ok: true, ...reconnectProduct(db, productId, { actor }) });
+          else if (action === "handoff") sendJson(res, 200, { ok: true, ...exportHandoff(db, productId, { actor }) });
+          else if (action === "purge-replica") {
+            const body = await readBody(req);
+            sendJson(res, 200, { ok: true, ...purgeReplica(db, productId, { actor, confirm: body?.confirm }) });
+          } else sendJson(res, 200, { ok: true, ...rotateCredential(db, productId, { actor }) });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
+      const productEnvPut = pathname.match(/^\/ops\/api\/products\/([a-z0-9_-]+)\/environments\/([a-z0-9_-]+)$/);
+      if (productEnvPut && method === "PUT") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          const body = await readBody(req);
+          rejectSpoofedOwnerDirect(body || {});
+          const instruction = resolveVerifiedInstruction({ session: req.owner, body: body || {} });
+          sendJson(res, 200, {
+            ok: true,
+            environment: upsertProductEnvironment(db, {
+              productId: productEnvPut[1],
+              environmentKey: productEnvPut[2],
+              repoUrl: body?.repo_url,
+              workflowFile: body?.workflow_file,
+              containerName: body?.container_name,
+              dataPath: body?.data_path,
+              deployIdentity: body?.deploy_identity,
+              displayLabel: body?.display_label,
+              actor: instruction.actor,
+            }),
+          });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
+      const productLive = pathname.match(/^\/ops\/api\/products\/([a-z0-9_-]+)\/environments\/([a-z0-9_-]+)\/live-identity$/);
+      if (productLive && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          const body = await readBody(req);
+          rejectSpoofedOwnerDirect(body || {});
+          const instruction = resolveVerifiedInstruction({
+            session: req.owner,
+            workflowActor: body?.workflow_actor,
+            body: body || {},
+          });
+          resolveProductionTarget(db, { productId: productLive[1], environmentKey: productLive[2], displayName: body?.display_name });
+          sendJson(res, 200, {
+            ok: true,
+            current_stable: importOwnerDirectObservation(db, {
+              productId: productLive[1],
+              environmentKey: productLive[2],
+              sourceSha: body?.source_sha,
+              artifactDigest: body?.artifact_digest,
+              staticTreeHash: body?.static_tree_hash,
+              schemaCompat: body?.schema_compat,
+              workflowRunId: body?.workflow_run_id,
+              instruction,
+            }),
+          });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
+      const productRetryExit = pathname.match(/^\/ops\/api\/products\/([a-z0-9_-]+)\/retry-exit$/);
+      if (productRetryExit && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {};
+        try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          sendJson(res, 200, { ok: true, ...retryBlockedExit(db, productRetryExit[1], {
+            ...b,
+            actor: `owner:${req.owner.email}`,
+            reason: b.reason,
+            listPendingWork,
+          }) });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
+      const productConfirmDelivery = pathname.match(/^\/ops\/api\/products\/([a-z0-9_-]+)\/confirm-site-delivery$/);
+      if (productConfirmDelivery && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {};
+        try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          sendJson(res, 200, { ok: true, ...confirmSiteDeliveryObservation(db, productConfirmDelivery[1], {
+            ...b,
+            actor: `owner:${req.owner.email}`,
+            reason: b.reason,
+            observedDelivery: b.observed_delivery || b.observedDelivery,
+          }) });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
+      const productPending = pathname.match(/^\/ops\/api\/products\/([a-z0-9_-]+)\/pending$/);
+      if (productPending && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        const row = getProduct(db, productPending[1]);
+        if (!row) { sendJson(res, 404, { error: "not found" }); return; }
+        const pending = listPendingWork(db, row.id);
+        sendJson(res, 200, {
+          product: publicProduct(row),
+          pending,
+          exits: listExits(db, row.id),
+          site_delivery_unconfirmed: pending.site_delivery_unconfirmed === true,
+          exit_retry_blocked: pending.exit_retry_blocked === true,
+        });
+        return;
+      }
+      const productHandoffGet = pathname.match(/^\/ops\/api\/products\/([a-z0-9_-]+)\/handoff$/);
+      if (productHandoffGet && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        const pack = latestHandoff(db, productHandoffGet[1]);
+        if (!pack) { sendJson(res, 404, { error: "not found" }); return; }
+        sendJson(res, 200, pack);
+        return;
+      }
+      const productGet = pathname.match(/^\/ops\/api\/products\/([a-z0-9_-]+)$/);
+      if (productGet && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        const row = getProduct(db, productGet[1]);
+        if (!row) { sendJson(res, 404, { error: "not found" }); return; }
+        sendJson(res, 200, { ...publicProduct(row), pending: listPendingWork(db, row.id), latest_exit: listExits(db, row.id)[0] || null });
+        return;
+      }
+      if (pathname === "/ops/api/dashboard" && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        sendJson(res, 200, getDashboard(db, process.env, { productId: url.searchParams.get("productId") || null }));
+        return;
+      }
+      if (pathname === "/ops/api/notify/test" && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        const sent = await sendOpsNotification({
+          event: "ops.notify.test",
+          title: "OPS webhook 測試",
+          text: "這是 Owner 從 Console 送出的測試通知。",
+          fields: [{ name: "actor", value: req.owner.email }],
+        });
+        sendJson(res, sent.ok ? 200 : 503, { ok: sent.ok, ...sent });
         return;
       }
       const issueGet = pathname.match(/^\/ops\/api\/issues\/(\d+)$/);
@@ -472,6 +918,25 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         const data = getIssueWithMembers(db, issueGet[1]);
         if (!data) { sendJson(res, 404, { error: "not found" }); return; }
         sendJson(res, 200, data);
+        return;
+      }
+      const issueFollowUp = pathname.match(/^\/ops\/api\/issues\/(\d+)\/follow-up$/);
+      if (issueFollowUp && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {};
+        try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          rejectSpoofedOwnerDirect(b);
+          const created = createFollowUpIssue(db, {
+            parentIssueId: Number(issueFollowUp[1]),
+            title: b.title,
+            reason: b.reason,
+            actor: `owner:${req.owner.email}`,
+          });
+          sendJson(res, 201, { ok: true, ...created });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
         return;
       }
 
@@ -561,6 +1026,18 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         sendJson(res, 200, detail);
         return;
       }
+      const evalCancel = pathname.match(/^\/ops\/api\/evaluation-runs\/(\d+)\/cancel$/);
+      if (evalCancel && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {};
+        try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          sendJson(res, 200, { ok: true, ...cancelEvaluation(db, Number(evalCancel[1]), { actor: `owner:${req.owner.email}`, reason: b.reason }) });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
+        return;
+      }
       const evalRecalc = pathname.match(/^\/ops\/api\/issues\/(\d+)\/evaluation\/recalculate$/);
       if (evalRecalc && method === "POST") {
         if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
@@ -604,6 +1081,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         let b = {};
         try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
         try {
+          rejectSpoofedOwnerDirect(b);
           const r = submitOwnerDecision(db, Number(proposalDecide[1]), {
             action: b.action,
             proposalId: Number(b.proposal_id),
@@ -614,6 +1092,18 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
           });
           sendJson(res, 200, { ok: true, ...r });
         } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+      const proposalCancel = pathname.match(/^\/ops\/api\/proposals\/(\d+)\/cancel$/);
+      if (proposalCancel && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {};
+        try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          sendJson(res, 200, { ok: true, ...cancelProposal(db, Number(proposalCancel[1]), { actor: `owner:${req.owner.email}`, reason: b.reason }) });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
         return;
       }
 
@@ -632,7 +1122,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         let b = {};
         try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
         try {
-          const r = ownerManualReevaluate(db, Number(reevalReopen[1]), { actor: `owner:${req.owner.email}`, reason: b.reason });
+          const r = ownerManualReevaluate(db, Number(reevalReopen[1]), { ...b, actor: `owner:${req.owner.email}`, reason: b.reason });
           sendJson(res, 200, { ok: true, ...r });
         } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
         return;
@@ -643,7 +1133,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         let b = {};
         try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
         try {
-          const r = ownerUnblock(db, Number(reevalUnblock[1]), { actor: `owner:${req.owner.email}`, reason: b.reason });
+          const r = ownerUnblock(db, Number(reevalUnblock[1]), { ...b, actor: `owner:${req.owner.email}`, reason: b.reason });
           sendJson(res, 200, { ok: true, ...r });
         } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
         return;
@@ -656,6 +1146,12 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         const iid = Number(codingGet[1]);
         if (!db.prepare("SELECT id FROM issue_candidate WHERE id=?").get(iid)) { sendJson(res, 404, { error: "not found" }); return; }
         sendJson(res, 200, getIssueCodingView(db, iid));
+        return;
+      }
+      if (pathname === "/ops/api/coding-tasks" && method === "GET") {
+        if (!runGuard(auth.requireOwner, req, reply)) return;
+        const limit = Number(url.searchParams.get("limit") || 40);
+        sendJson(res, 200, { items: listRecentCodingTasks(db, { limit, productId: url.searchParams.get("productId") }) });
         return;
       }
       const codingTaskGet = pathname.match(/^\/ops\/api\/coding-tasks\/(\d+)$/);
@@ -674,6 +1170,14 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         try {
           const r = cancelCodingTask(db, Number(codingCancel[1]), { actor: `owner:${req.owner.email}`, reason: b.reason });
           sendJson(res, 200, { ok: true, ...r });
+        } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+      const codingConfirmResult = pathname.match(/^\/ops\/api\/coding-tasks\/(\d+)\/confirm-cancel-result$/);
+      if (codingConfirmResult && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          sendJson(res, 200, { ok: true, ...confirmCancelResult(db, "coding", Number(codingConfirmResult[1]), { actor: `owner:${req.owner.email}` }) });
         } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
         return;
       }
@@ -700,6 +1204,25 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         try {
           const r = requestQaRerun(db, Number(qaRerun[1]), { actor: `owner:${req.owner.email}` });
           sendJson(res, 200, { ok: true, ...r });
+        } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+      const qaCancel = pathname.match(/^\/ops\/api\/qa-runs\/(\d+)\/cancel$/);
+      if (qaCancel && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {};
+        try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          const r = cancelQaRun(db, Number(qaCancel[1]), { actor: `owner:${req.owner.email}`, reason: b.reason });
+          sendJson(res, 200, { ok: true, ...r });
+        } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+      const qaConfirmResult = pathname.match(/^\/ops\/api\/qa-runs\/(\d+)\/confirm-cancel-result$/);
+      if (qaConfirmResult && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          sendJson(res, 200, { ok: true, ...confirmCancelResult(db, "qa", Number(qaConfirmResult[1]), { actor: `owner:${req.owner.email}` }) });
         } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
         return;
       }
@@ -735,6 +1258,14 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
         return;
       }
+      const stgConfirmResult = pathname.match(/^\/ops\/api\/staging-deployments\/(\d+)\/confirm-cancel-result$/);
+      if (stgConfirmResult && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        try {
+          sendJson(res, 200, { ok: true, ...confirmCancelResult(db, "staging", Number(stgConfirmResult[1]), { actor: `owner:${req.owner.email}` }) });
+        } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
       const stgCleanup = pathname.match(/^\/ops\/api\/staging-deployments\/(\d+)\/cleanup$/);
       if (stgCleanup && method === "POST") {
         if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
@@ -768,6 +1299,7 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
         let b = {}; try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
         try {
+          rejectSpoofedOwnerDirect(b);
           const r = submitOwnerReleaseDecision(db, { codingTaskId: Number(rcDecision[1]), action: b.action, manifestId: b.manifest_id, manifestVersion: b.manifest_version, manifestHash: b.manifest_hash, artifactDigest: b.artifact_digest, headSha: b.head_sha, actor: `owner:${req.owner.email}`, reason: b.reason, repo: releaseRepo });
           if (r.authorization) {
             try { r.migration_safety = assessApprovedReleaseIfNeeded(db, { codingTaskId: Number(rcDecision[1]), authorization: r.authorization, repo: releaseRepo, actor: `owner:${req.owner.email}` }); }
@@ -838,6 +1370,8 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
         let b = {}; try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
         try {
+          rejectSpoofedOwnerDirect(b);
+          const instruction = resolveVerifiedInstruction({ session: req.owner, body: b });
           const created = createProductionReleaseRun(db, {
             codingTaskId: Number(prodRelExec[1]),
             releaseAuthorizationId: b.release_authorization_id,
@@ -857,8 +1391,8 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
             workflowRef: b.workflow_ref,
             expectedMasterHead: b.expected_master_head,
             githubActor: "Fyun48",
-          }, { repo: releaseRepo, actor: `owner:${req.owner.email}` });
-          const executed = await executeProductionRelease(db, created.run.id, { provider: releaseProvider, repo: releaseRepo, actor: `owner:${req.owner.email}` });
+          }, { repo: releaseRepo, actor: instruction.actor, session: req.owner, instruction });
+          const executed = await executeProductionRelease(db, created.run.id, { provider: releaseProvider, repo: releaseRepo, actor: instruction.actor });
           sendJson(res, 200, { ok: true, idempotent: created.idempotent === true, ...executed });
         } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
         return;
@@ -879,19 +1413,73 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
         } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
         return;
       }
+      const prodRelConfirmState = pathname.match(/^\/ops\/api\/production-releases\/(\d+)\/confirm-state$/);
+      if (prodRelConfirmState && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {}; try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          sendJson(res, 200, { ok: true, ...confirmUnknownProductionResult(db, Number(prodRelConfirmState[1]), {
+            ...b,
+            actor: `owner:${req.owner.email}`,
+            reason: b.reason,
+            observedResult: b.observed_result || b.observedResult,
+          }) });
+        } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+      const prodRelCancelRunner = pathname.match(/^\/ops\/api\/production-releases\/(\d+)\/cancel-runner$/);
+      if (prodRelCancelRunner && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {}; try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          sendJson(res, 200, { ok: true, ...await cancelProductionReleaseRunner(db, Number(prodRelCancelRunner[1]), {
+            actor: `owner:${req.owner.email}`,
+            reason: b.reason,
+            provider: releaseProvider,
+          }) });
+        } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+      const prodRelCancel = pathname.match(/^\/ops\/api\/production-releases\/(\d+)\/cancel$/);
+      if (prodRelCancel && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {}; try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          sendJson(res, 200, { ok: true, ...cancelProductionReleaseRun(db, Number(prodRelCancel[1]), { actor: `owner:${req.owner.email}`, reason: b.reason }) });
+        } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+      const prodRelRestoreDb = pathname.match(/^\/ops\/api\/production-releases\/(\d+)\/restore-db$/);
+      if (prodRelRestoreDb && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {}; try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          sendJson(res, 200, { ok: true, ...requestProductionDbRestore(db, Number(prodRelRestoreDb[1]), {
+            actor: `owner:${req.owner.email}`,
+            confirmDbRestore: b.confirm_db_restore,
+            provider: releaseProvider,
+          }) });
+        } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
       const prodRelRollback = pathname.match(/^\/ops\/api\/production-releases\/(\d+)\/rollback$/);
       if (prodRelRollback && method === "POST") {
         if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
         let b = {}; try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
         try {
+          rejectSpoofedOwnerDirect(b);
+          const instruction = resolveVerifiedInstruction({ session: req.owner, body: b });
           sendJson(res, 200, { ok: true, ...await requestCodeRollback(db, {
             releaseRunId: Number(prodRelRollback[1]),
             previousStableSha: b.previous_stable_sha,
             previousStableDigest: b.previous_stable_digest,
             previousStableWorkflowRunId: b.previous_stable_workflow_run_id,
+            confirmDbRestore: b.confirm_db_restore,
             provider: releaseProvider,
             repo: releaseRepo,
-            actor: `owner:${req.owner.email}`,
+            actor: instruction.actor,
+            session: req.owner,
+            instruction,
           }) });
         } catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
         return;
@@ -900,8 +1488,20 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
       const rcNotifRetry = pathname.match(/^\/ops\/api\/release-notifications\/(\d+)\/retry$/);
       if (rcNotifRetry && method === "POST") {
         if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
-        try { sendJson(res, 200, { ok: true, ...retryReleaseNotification(db, Number(rcNotifRetry[1]), { actor: `owner:${req.owner.email}` }) }); }
+        try { sendJson(res, 200, { ok: true, ...await retryReleaseNotification(db, Number(rcNotifRetry[1]), { actor: `owner:${req.owner.email}` }) }); }
         catch (err) { sendJson(res, err.status || 400, { error: err.message }); }
+        return;
+      }
+      const rcNotifCancel = pathname.match(/^\/ops\/api\/release-notifications\/(\d+)\/cancel$/);
+      if (rcNotifCancel && method === "POST") {
+        if (!runGuard(auth.requireOwnerMutation, req, reply)) return;
+        let b = {};
+        try { b = JSON.parse(await readRawBody(req) || "{}"); } catch { b = {}; }
+        try {
+          sendJson(res, 200, { ok: true, ...cancelReleaseNotification(db, Number(rcNotifCancel[1]), { actor: `owner:${req.owner.email}`, reason: b.reason }) });
+        } catch (err) {
+          sendJson(res, err.status || 400, { error: err.message });
+        }
         return;
       }
 
@@ -919,14 +1519,30 @@ export function createHandler({ db, auth, publicDir = PUBLIC_DIR, ingestSecret =
 }
 
 // 相容舊測試/呼叫：createApp 回傳一個 { listen } 介面（用 node:http 包裝 handler）。
-export function createApp({ db, auth, publicDir = PUBLIC_DIR, ingestSecret = process.env.OPS_INGEST_SECRET || "", storage = null, scanner = null, codingRepo = null, productionReleaseProvider = null }) {
-  const handler = createHandler({ db, auth, publicDir, ingestSecret, storage, scanner, codingRepo, productionReleaseProvider });
+export function createApp({ db, auth, publicDir = PUBLIC_DIR, ingestSecret = process.env.OPS_INGEST_SECRET || "", storage = null, scanner = null, codingRepo = null, productionReleaseProvider = null, siteCommandFetch = fetch, siteCommandApplyUrl = process.env.V3_OPS_COMMAND_APPLY_URL || "" }) {
+  const handler = createHandler({ db, auth, publicDir, ingestSecret, storage, scanner, codingRepo, productionReleaseProvider, siteCommandFetch, siteCommandApplyUrl });
   return {
     handler,
     listen(...args) {
       return http.createServer(handler).listen(...args);
     },
   };
+}
+
+function loadEnvFile(file) {
+  if (!existsSync(file)) return;
+  for (const line of readFileSync(file, "utf8").split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) continue;
+    const i = t.indexOf("=");
+    if (i <= 0) continue;
+    const key = t.slice(0, i).trim();
+    let value = t.slice(i + 1);
+    if ((value.startsWith("\"") && value.endsWith("\"")) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    if (process.env[key] == null || process.env[key] === "") process.env[key] = value;
+  }
 }
 
 function resolveSessionSecret(dataDir) {
@@ -946,6 +1562,7 @@ function resolveSessionSecret(dataDir) {
 
 export function startServer() {
   const dataDir = defaultDataDir();
+  loadEnvFile(path.join(dataDir, "auth.env"));
   const db = openOpsDb(defaultDbPath());
   const auth = makeAuth({
     ownerEmail: process.env.OPS_OWNER_EMAIL || process.env.AUTH_EMAIL,
@@ -957,14 +1574,16 @@ export function startServer() {
   const host = process.env.OPS_HOST || "127.0.0.1";
   const port = Number(process.env.OPS_PORT || 5154);
   // Phase 4：AI 分析背景 worker。provider 未設定（AI_PROVIDER 未設）→ 不啟動、feedback 仍正常入庫。
-  const aiProvider = makeProvider();
-  const aiConfig = analysisConfigFromEnv();
+  const analysisKind = resolveDrawerKind(db, "analysis", "AI_PROVIDER");
+  const aiProvider = makeProvider(process.env, { kind: analysisKind });
+  const aiConfig = analysisConfigFromEnv(process.env, { kind: analysisKind });
   if (aiProvider.available && aiConfig.enabled) {
     startAnalysisLoop(db, { provider: aiProvider, config: aiConfig, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
   }
   // Phase 5：embedding + 分群 worker。EMBEDDING_PROVIDER 未設定 → 不啟動、feedback 照常入庫。
-  const embProvider = makeEmbeddingProvider();
-  const clusterCfg = clusteringConfigFromEnv();
+  const clusteringKind = resolveDrawerKind(db, "clustering", "EMBEDDING_PROVIDER");
+  const embProvider = makeEmbeddingProvider(process.env, { kind: clusteringKind });
+  const clusterCfg = clusteringConfigFromEnv(process.env, { kind: clusteringKind });
   if (embProvider.available && clusterCfg.enabled) {
     startClusteringLoop(db, { provider: embProvider, config: clusterCfg, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
   }
@@ -974,14 +1593,16 @@ export function startServer() {
     startImpactLoop(db, { config: impactCfg, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
   }
   // Phase 7：角色制評估 worker。EVALUATION_PROVIDER 未設定 → 不啟動；feedback/clustering/impact 照常。
-  const evalProvider = makeEvaluationProvider();
-  const evalCfg = evaluationWorkerConfigFromEnv();
+  const evaluationKind = resolveDrawerKind(db, "evaluation", "EVALUATION_PROVIDER");
+  const evalProvider = makeEvaluationProvider(process.env, { kind: evaluationKind });
+  const evalCfg = evaluationWorkerConfigFromEnv(process.env, { kind: evaluationKind });
   if (evalProvider.available && evalCfg.enabled) {
     startEvaluationLoop(db, { provider: evalProvider, config: evalCfg, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
   }
   // Phase 8：提案生成 worker。PROPOSAL_PROVIDER 未設定 → 不啟動；前面各階段照常。生成提案不寫程式、不部署。
-  const proposalProvider = makeProposalProvider();
-  const proposalCfg = proposalWorkerConfigFromEnv();
+  const proposalKind = resolveDrawerKind(db, "proposal", "PROPOSAL_PROVIDER");
+  const proposalProvider = makeProposalProvider(process.env, { kind: proposalKind });
+  const proposalCfg = proposalWorkerConfigFromEnv(process.env, { kind: proposalKind });
   if (proposalProvider.available && proposalCfg.enabled) {
     startProposalLoop(db, { provider: proposalProvider, config: proposalCfg, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
   }
@@ -992,7 +1613,8 @@ export function startServer() {
   }
   // Phase 10：Coding worker。唯一會呼叫 coding provider 的階段，且僅在 ACTIVE 授權存在時。
   // 成本控制 + 安全預設：CODING_PROVIDER 未設 → provider 不可用；OPS_CODING_REPO_PATH 未設 → repo 不可用 → 不建/不跑。
-  const codingProvider = makeCodingProvider();
+  const codingKind = resolveDrawerKind(db, "coding", "CODING_PROVIDER");
+  const codingProvider = makeCodingProvider(process.env, { kind: codingKind });
   const codingRepo = makeCodingRepo();
   const codingPr = makePrGateway();
   const codingCfg = codingWorkerConfigFromEnv();
@@ -1002,7 +1624,8 @@ export function startServer() {
   // Phase 11：獨立 QA worker（決定性檢核為主；optional AI reviewer 預設關）。
   // 安全預設：repo 不可用（OPS_CODING_REPO_PATH 未設）→ 不建/不跑；QA 絕不 merge/部署。
   const qaRepo = makeCodingRepo();
-  const qaReviewer = makeQaReviewProvider();
+  const reviewKind = resolveDrawerKind(db, "review", "QA_REVIEW_PROVIDER");
+  const qaReviewer = makeQaReviewProvider(process.env, { kind: reviewKind });
   const qaCfg = qaWorkerConfigFromEnv();
   if (qaCfg.enabled && qaRepo.available) {
     startQaLoop(db, { repo: qaRepo, reviewProvider: qaReviewer, config: qaCfg, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
@@ -1023,7 +1646,7 @@ export function startServer() {
   }
   http.createServer(handler).listen(port, host, () => {
     // eslint-disable-next-line no-console
-    console.log(`Ops console (Phase 13)：http://${host}:${port}  owner=${auth.configured ? auth.ownerEmail : "(未設定)"}  ingest=${process.env.OPS_INGEST_SECRET ? "on" : "off"}  ai=${aiProvider.available ? aiProvider.name : "off"}  embed=${embProvider.available ? embProvider.name : "off"}  impact=${impactCfg.enabled ? "on" : "off"}  eval=${evalProvider.available ? evalProvider.name : "off"}  proposal=${proposalProvider.available ? proposalProvider.name : "off"}  reeval=${reevalCfg.enabled ? "on" : "off"}  coding=${codingProvider.available && codingRepo.available ? codingProvider.name : "off"}  qa=${qaCfg.enabled && qaRepo.available ? "on" : "off"}  staging=${stagingCfg.enabled && stagingProvider.available && stagingRepo.available ? stagingProvider.name : "off"}  release=${releaseCfg.enabled && releaseRepo.available ? "on" : "off"}`);
+    console.log(`Ops console (Phase ${OPS_PHASE})：http://${host}:${port}  owner=${auth.configured ? auth.ownerEmail : "(未設定)"}  ingest=${process.env.OPS_INGEST_SECRET ? "on" : "off"}  webhook=${notifyConfig().configured ? notifyConfig().channel : "off"}  ai=${aiProvider.available ? aiProvider.name : "off"}  embed=${embProvider.available ? embProvider.name : "off"}  impact=${impactCfg.enabled ? "on" : "off"}  eval=${evalProvider.available ? evalProvider.name : "off"}  proposal=${proposalProvider.available ? proposalProvider.name : "off"}  reeval=${reevalCfg.enabled ? "on" : "off"}  coding=${codingProvider.available && codingRepo.available ? codingProvider.name : "off"}  qa=${qaCfg.enabled && qaRepo.available ? "on" : "off"}  staging=${stagingCfg.enabled && stagingProvider.available && stagingRepo.available ? stagingProvider.name : "off"}  release=${releaseCfg.enabled && releaseRepo.available ? "on" : "off"}`);
   });
   return { db, auth };
 }

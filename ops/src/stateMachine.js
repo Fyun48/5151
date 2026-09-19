@@ -54,7 +54,6 @@ const ISSUE_LIFECYCLE = {
   guarded: {
     DEFERRED: { EVALUATING: "reevaluation" },
     REJECTED: { EVALUATING: "reevaluation" },
-    ROLLED_BACK: { EVALUATING: "reevaluation" },
     BLOCKED: { EVALUATING: "owner_unblock" },
   },
 };

@@ -1,6 +1,7 @@
 import { createStagingDeployment, claimStagingBatch, executeStagingDeployment, stagingRunConfigFromEnv, validateCodingTaskForStaging } from "./stagingDeploy.js";
 import { makeCodingRepo } from "./coding/gitRepo.js";
 import { makeStagingProvider } from "./staging/provider.js";
+import { issueWriteDecision } from "./insightConsent.js";
 
 // Phase 12 背景 worker：為「有 fresh QA PASS」的 coding task 建立/執行隔離 Staging 部署。
 // 安全預設：provider 未設（STAGING_PROVIDER 未設）或 repo 不可用（OPS_CODING_REPO_PATH 未設）→ 不建/不跑。
@@ -20,7 +21,11 @@ export function createStagingForReadyTasks(db, { repo, env = process.env, now = 
   ).all(Math.max(1, limit));
   const created = [];
   for (const r of rows) {
-    try { validateCodingTaskForStaging(db, r.id, { env }); created.push(createStagingDeployment(db, { codingTaskId: r.id, repo, env, now })); }
+    try {
+      const { task } = validateCodingTaskForStaging(db, r.id, { env });
+      if (!issueWriteDecision(db, task.issue_id, { expectedGeneration: task.subscription_generation }).ok) continue;
+      created.push(createStagingDeployment(db, { codingTaskId: r.id, repo, env, now }));
+    }
     catch { /* 不合格（QA 非 fresh PASS 等）→ 跳過 */ }
   }
   return created;

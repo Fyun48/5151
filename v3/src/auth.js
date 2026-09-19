@@ -142,6 +142,13 @@ export function verifyLogin(email, password, { keys, now } = {}) {
   throw err;
 }
 
+export function isPublicKitPath(p) {
+  if (typeof p !== "string" || !p.startsWith("/kit/")) return false;
+  const rest = p.slice("/kit/".length);
+  if (!rest || rest.includes("..") || rest.includes("\\") || rest.includes("//")) return false;
+  return /^(tokens\.css|components\.css|VERSION|README\.md|MANIFEST\.json|themes\/[a-z0-9-]+\.css)$/.test(rest);
+}
+
 export function publicPath(req) {
   const p = req.path || "";
   return (
@@ -174,6 +181,7 @@ export function publicPath(req) {
     p === "/api/housing-data" ||
     p === "/api/help-qa" ||
     p === "/api/feedback/meta" ||
+    p === "/api/ops/commands/apply" ||
     p === "/api/ads" ||
     p === "/api/brand" ||
     p === "/api/broadcasts" ||
@@ -187,6 +195,7 @@ export function publicPath(req) {
     p === "/manifest.webmanifest" ||
     p === "/sw.js" ||
     p === "/tokens.css" ||
+    isPublicKitPath(p) ||
     p === "/mascot.js" ||
     p === "/pra-helpers.js" ||
     p === "/guest-search-state.js" ||

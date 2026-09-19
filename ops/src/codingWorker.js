@@ -1,4 +1,5 @@
 import { createCodingTask, claimCodingTaskBatch, executeCodingTask, codingConfigFromEnv } from "./codingTask.js";
+import { issueWriteDecision } from "./insightConsent.js";
 import { makeCodingProvider } from "./coding/provider.js";
 import { makeCodingRepo } from "./coding/gitRepo.js";
 import { makePrGateway } from "./coding/prGateway.js";
@@ -23,6 +24,7 @@ export function createTasksForActiveAuthorizations(db, { provider, repo, env = p
   ).all(Math.max(1, limit));
   const created = [];
   for (const a of rows) {
+    if (!issueWriteDecision(db, a.issue_id).ok) continue;
     try { created.push(createCodingTask(db, { issueId: a.issue_id, authorizationId: a.id, provider, repo, env, now })); }
     catch { /* 個別授權建立失敗不影響其它；保留安全 */ }
   }

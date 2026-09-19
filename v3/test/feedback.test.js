@@ -64,6 +64,8 @@ test("createFeedback stores structured feedback and rejects too-short body", () 
   const db = open();
   assert.match(feedbackMeta().legal, /只給站方看/);
   assert.match(FEEDBACK_LEGAL, /修 bug/);
+  assert.match(FEEDBACK_LEGAL, /跨站洞察要另授權/);
+  assert.match(FEEDBACK_LEGAL, /對外 LLM/);
   assert.throws(() => createFeedback(db, 1, { kind: "bug", body: "短" }), /至少/);
   const created = createFeedback(db, 1, {
     kind: "bug",
@@ -149,6 +151,8 @@ test("index.html exposes feedback entry, modal and context capture", () => {
   assert.match(html, /"\/api\/feedback"/);
   // honeypot field present and visually hidden
   assert.match(html, /id="feedbackHp"/);
+  assert.match(html, /id="feedbackLegal"/);
+  assert.match(html, /\/api\/feedback\/meta/);
 });
 
 test("admin.html exposes feedback inbox", () => {
@@ -157,4 +161,7 @@ test("admin.html exposes feedback inbox", () => {
   assert.match(html, /async function loadFeedback/);
   assert.match(html, /\/api\/admin\/feedback/);
   assert.match(html, /data-fb-save/);
+  assert.match(html, /id="opsOutboxCompact"[^>]*hidden/);
+  assert.match(html, /button\[hidden\], a\.ghost\[hidden\], a\.primary\[hidden\]/);
+  assert.match(html, /display:\s*none\s*!important/);
 });
