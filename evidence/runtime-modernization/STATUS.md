@@ -161,6 +161,17 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
   production **manual-only** + 精確 confirmation）、`.agent/`（policy.yml / limits.yml / context.md）、
   `ARCHITECTURE.md` / `SECURITY.md` / `OPERATIONS.md` / `RELEASE.md` / `AGENTS.md`。
 
+### Backup / Restore（HA 收尾，SQLite 可測 + PG drill 就緒）
+
+- `v3/src/backupRestore.js`：`backupSqlite`（`VACUUM INTO` 一致性快照）＋
+  `verifySqliteBackup`（表覆蓋 + 全庫 digest）、`restoreSqlite`（資料還原 + 驗證）、
+  `manifestOf`（表清單 + digest）；PostgreSQL 側 `pgDumpArgv` / `pgRestoreArgv` /
+  `pgBasebackupArgv` / `pgVerifyArgv` 為純 argv 建構（無注入、可單測）。
+- 測試 `backup-restore.test.js`（4 項：快照驗證、還原驗證、digest 變動、PG argv）。
+- `docs/runbooks/postgres-backup-restore.md`：邏輯/實體備份、驗證、隔離還原演練、RPO/RTO。
+- `deploy/shadow-ha/backup/{backup,restore,basebackup}.sh`：跑在 Primary host，唯讀備份＋
+  manifest；restore 一律還原到隔離 database（不碰 `5151_shadow`）。**實際 drill 待 Owner 授權後執行。**
+
 ## EXTERNAL_SETUP_REQUIRED（仍需 Owner 提供）
 
 - **HAProxy shadow container 上線**（config 已備好，未起容器）；Web-A/Web-B / crawler / worker shadow 容器上線。
