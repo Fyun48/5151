@@ -51,7 +51,7 @@ test("all-platform conservative probe dispatcher exists and offline sweep uses i
 
 test("db has alive_checked_at column and markListingAlive helper", () => {
   const db = read("src/db.js");
-  assert.match(db, /ADD COLUMN alive_checked_at TEXT/);
+  assert.match(db, /\["alive_checked_at", "TEXT"\]/);
   assert.match(db, /export function markListingAlive/);
 });
 
