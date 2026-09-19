@@ -40,7 +40,10 @@ done < "$AUTH_ENV"
 [ "$KEY_PRESENT" = "1" ] || fail "auth.env missing a valid 64-hex OPS_SECRET_AT_REST_KEY"
 
 # ---------- resolve PREVIOUS + fail-closed on unknown unmanaged container ----------
-PREVIOUS="$(readlink -f "$CURRENT" 2>/dev/null || true)"
+PREVIOUS=""
+if [ -L "$CURRENT" ]; then
+  PREVIOUS="$(readlink -f "$CURRENT" 2>/dev/null || true)"
+fi
 if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q '^5151-ops$'; then
   if [ -z "$PREVIOUS" ] || [ ! -d "$PREVIOUS" ] || [ ! -f "$PREVIOUS/.deployed-sha" ] || [ ! -f "$PREVIOUS/.runtime-image" ]; then
     fail "existing 5151-ops container has no managed current release metadata; refusing to take over unknown deployment"
