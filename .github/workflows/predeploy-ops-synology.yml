@@ -1,0 +1,122 @@
+name: Synology OPS predeploy check (no deploy)
+run-name: "ops-synology-predeploy:${{ inputs.sha }}"
+
+# READ-ONLY predeploy gate. No container recreate/stop/delete, no DB write, no current switch.
+# Manual-only; runs from master; never triggers a deploy or build.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "要檢查的完整 40 碼 commit SHA（必須可從 origin/master 追溯）"
+        required: true
+      image_digest:
+        description: "immutable runtime image digest：sha256:<64 lowercase hex>"
+        required: true
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: ops-synology-predeploy
+  cancel-in-progress: false
+
+jobs:
+  predeploy-check:
+    runs-on: ubuntu-latest
+    environment: ops-synology-production
+    timeout-minutes: 20
+    steps:
+      - name: Validate inputs + master gating (read-only)
+        env:
+          WF_REF: ${{ github.ref }}
+          DEPLOY_SHA: ${{ inputs.sha }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+        run: |
+          set -euo pipefail
+          [ "$WF_REF" = "refs/heads/master" ] || { echo "::error::predeploy must run from master"; exit 1; }
+          printf '%s' "${DEPLOY_SHA:-}" | grep -Eq '^[0-9a-f]{40}$' || { echo "::error::sha must be 40 hex"; exit 1; }
+          printf '%s' "${IMAGE_DIGEST:-}" | grep -Eq '^sha256:[0-9a-f]{64}$' || { echo "::error::image_digest must be sha256:<64 hex>"; exit 1; }
+      - name: Checkout + verify SHA reachable from master (read-only)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Verify SHA reachable from origin/master
+        env:
+          DEPLOY_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin master
+          git merge-base --is-ancestor "$DEPLOY_SHA" origin/master || { echo "::error::$DEPLOY_SHA not reachable from master"; exit 1; }
+      - name: Validate image digest + OCI metadata (read-only)
+        env:
+          DEPLOY_SHA: ${{ inputs.sha }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+          GH_TOKEN: ${{ github.token }}
+          GH_ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          IMAGE_REPO="ghcr.io/${GITHUB_REPOSITORY,,}"
+          TAG="$IMAGE_REPO:$DEPLOY_SHA"
+          PIN="$IMAGE_REPO@$IMAGE_DIGEST"
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin >/dev/null 2>&1
+          docker buildx imagetools inspect "$TAG" >/dev/null 2>&1 || { echo "::error::tag missing: $TAG"; exit 1; }
+          ACTUAL="$(docker buildx imagetools inspect "$TAG" | awk '/^Digest:/{print $2; found=1} END{if(!found) exit 1}')"
+          [ "$ACTUAL" = "$IMAGE_DIGEST" ] || { echo "::error::tag digest $ACTUAL != $IMAGE_DIGEST"; exit 1; }
+          docker pull --platform linux/amd64 "$PIN"
+          REV="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$PIN")"
+          SRC="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.source" }}' "$PIN")"
+          [ "$REV" = "$DEPLOY_SHA" ] || { echo "::error::OCI revision '$REV' != $DEPLOY_SHA"; exit 1; }
+          EXPECT_SRC="https://github.com/${GITHUB_REPOSITORY}"
+          [ "${SRC,,}" = "${EXPECT_SRC,,}" ] || { echo "::error::OCI source '$SRC' != this repo"; exit 1; }
+          echo "oci_revision=$REV" >> "$GITHUB_ENV"
+          echo "oci_source=$SRC" >> "$GITHUB_ENV"
+      - name: Resolve deploy paths (env -> shell default)
+        env:
+          APP_ROOT_IN: ${{ vars.OPS_SYNOLOGY_APP_ROOT }}
+          DATA_ROOT_IN: ${{ vars.OPS_SYNOLOGY_DATA_ROOT }}
+        run: |
+          echo "OPS_SYNOLOGY_APP_ROOT=${APP_ROOT_IN:-/volume1/docker/5151-ops/app}" >> "$GITHUB_ENV"
+          echo "OPS_SYNOLOGY_DATA_ROOT=${DATA_ROOT_IN:-/volume1/docker/5151-ops/data}" >> "$GITHUB_ENV"
+      - name: Synology read-only checks (no mutation)
+        env:
+          OPS_SYNOLOGY_HOST: ${{ secrets.OPS_SYNOLOGY_HOST }}
+          OPS_SYNOLOGY_PORT: ${{ secrets.OPS_SYNOLOGY_PORT }}
+          OPS_SYNOLOGY_USER: ${{ secrets.OPS_SYNOLOGY_USER }}
+          OPS_SYNOLOGY_SSH_KEY: ${{ secrets.OPS_SYNOLOGY_SSH_KEY }}
+          OPS_SYNOLOGY_APP_ROOT: ${{ env.OPS_SYNOLOGY_APP_ROOT }}
+          OPS_SYNOLOGY_DATA_ROOT: ${{ env.OPS_SYNOLOGY_DATA_ROOT }}
+        run: |
+          set -euo pipefail
+          install -d "$HOME/.ssh"
+          printf '%s\n' "$OPS_SYNOLOGY_SSH_KEY" > "$HOME/.ssh/id_ops"
+          chmod 600 "$HOME/.ssh/id_ops"
+          ssh -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes \
+              -i "$HOME/.ssh/id_ops" -p "$OPS_SYNOLOGY_PORT" "$OPS_SYNOLOGY_USER@$OPS_SYNOLOGY_HOST" \
+              "APP_ROOT='$OPS_SYNOLOGY_APP_ROOT' DATA_ROOT='$OPS_SYNOLOGY_DATA_ROOT' bash -s" \
+              < .github/scripts/predeploy-ops-synology-remote.sh | tee predeploy.out
+      - name: Write non-secret step summary
+        if: always()
+        env:
+          DEPLOY_SHA: ${{ inputs.sha }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+        run: |
+          {
+            echo "## Synology OPS predeploy check (read-only)"
+            echo "- sha: \`$DEPLOY_SHA\`"
+            echo "- image_digest: \`$IMAGE_DIGEST\`"
+            echo "- oci_revision: \`${oci_revision:-n/a}\`"
+            echo "- oci_source: \`${oci_source:-n/a}\`"
+            echo '```'
+            [ -f predeploy.out ] && cat predeploy.out || echo "(no Synology output)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload non-secret predeploy evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ops-synology-predeploy-evidence
+          path: predeploy.out
+          if-no-files-found: warn
