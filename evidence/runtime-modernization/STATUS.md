@@ -47,8 +47,11 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
 - **`db.js` 已把 `listings`（57 欄）與 `route_cache`（6 欄）的 `ALTER TABLE try/catch` 全部收斂成
   `addColumnsIfMissing`**（資料 backfill 保留原位）。schema 等價經 73 個 db 相關測試驗證。
 - 測試 `migrate-driver.test.js`（8 項）+ db 測試全綠。
-- 尚未：把 `ensureXxxSchema`（personal/demand/feedback/crm/... 各模組）也納入 runner；SQLite→PostgreSQL
-  資料搬遷 tool（dry-run / verify-only / resume）；把 domain 查詢抽成 repository interface。
+- **SQLite→PostgreSQL 資料搬遷 tool**（`v3/src/sqliteToPostgres.js`）：`snapshotTables` / `tableHash` /
+  `copyTable`（idempotent，重跑不重複）/ `verifyMigration`（row count + hash）/ `planMigration`（dry-run）/
+  `runMigration`（dry-run + resume checkpoint）。測試 5 項。
+- 尚未：把 `ensureXxxSchema`（personal/demand/feedback/crm/... 各模組）也納入 runner；把 domain 查詢
+  抽成 repository interface；安裝 `pg` 接線真實 PostgreSQL target。
 
 
 
