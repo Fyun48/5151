@@ -25,7 +25,22 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
 ### Cross-platform test harness（Windows + Linux）
 - `pathToFileURL(...).href` 修正 38 個測試檔；`.gitattributes` 加 `*.yml eol=lf`。
 
+### Phase 7 — SQL-first search（部分完成，效能核心）
+- 新增 `v3/src/listingSearchProjection.js`：`listing_search_projection` 表 + derived columns
+  （district/source/kind/rent/total_monthly_cost/area/floor/total_floors/elevator/parking/rooftop/
+  low_floor/lat/lng/location_class/primary_listing_id/offline_state/commute_km/updated_at）
+  + 索引（updated_at / total_monthly_cost / district / commute_km）。derived 值用**既有同一批函式**算，保證語意一致。
+- `db.js`：`upsertListing` 同步 projection；新增 `listListingsSqlFirst()`，把 district re-check +
+  ORDER BY + LIMIT/OFFSET 推進 SQL（只回 page IDs 再 hydrate）。支援 `newest`/`price_asc`/`price_desc`
+  且「無複雜過濾」的 envelope，超出範圍回 `null`（呼叫端退回 Node 路徑）。
+- 差異測試 `list-sql-first.test.js`：同一 fixture 下 `listListingsSqlFirst` 與 `listListings`
+  回傳**相同 id 集合/順序**（含 offset 分頁）。
+- **實測 50k**：`newest` p50 331→100ms（3.3x）、`price_asc` p50 427→98ms（4.4x）。
+- 尚未：commute/fit 排序的 SQL 化（依賴 route_cache，跨使用者）、cursor/keyset pagination、EXPLAIN evidence。
+
+
 ### Phase 13/14/15/19 — Shadow PostgreSQL Primary/Standby（已上線並驗證）
+
 - `deploy/shadow-ha/postgres-primary/`：PostgreSQL-A（Primary, CasaOS `192.168.0.140:15432`）+ setup-replication.sh + fix-pg-hba.sh。
 - `deploy/shadow-ha/postgres-standby/`：PostgreSQL-B（Hot Standby, Synology `192.168.0.220:15432`）+ setup-standby.sh。
 - `deploy/shadow-ha/haproxy/`：`postgres-rw` / `postgres-ro` / `web` 三組路由（config，尚未上線 HAProxy 容器）。

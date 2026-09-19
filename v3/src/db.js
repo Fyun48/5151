@@ -27,6 +27,7 @@ import { sameSearch } from "./client591.js";
 import { CITIES, districtNameFromListing, districtsFromSearchUrls, lookupDistrict, normalizeWatchDistricts } from "./regions.js";
 import { appendDistrictCandidates, ensureDistrictCandidateIndex } from "./listDistrictSql.js";
 import { appendPriceCeilingCandidates } from "./listPriceSql.js";
+import { ensureListingSearchProjection, syncListingProjection, deleteListingProjection } from "./listingSearchProjection.js";
 import { geoDistanceM, listingRefreshAt, matchFocusHints, preferPrimaryListing } from "./match.js";
 import {
   ensureUserSameHouseSchema,
@@ -523,6 +524,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_listings_last_seen ON listings(last_seen_at);
   CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
 `);
+ensureListingSearchProjection(db);
 
 try {
   db.exec("ALTER TABLE listings ADD COLUMN search_key TEXT NOT NULL DEFAULT ''");
@@ -3986,6 +3988,11 @@ export function upsertListing(listing) {
     }
   }
   enqueueSimilaritySafe(listing);
+  try {
+    syncListingProjection(db, listing);
+  } catch {
+    // projection is best-effort; the Node path remains the source of truth
+  }
 }
 
 function enqueueSimilaritySafe(listing) {
@@ -5742,6 +5749,119 @@ export function listListings({
     nextOffset: start + pageSize,
     queryVersion: 2,
     queryDetails,
+  };
+}
+
+// SQL-first search path (Phase 7). Pushes the district re-check, ORDER BY and
+// LIMIT/OFFSET into SQL against the indexed listing_search_projection, so only
+// the page IDs (not every candidate) are loaded. Returns null when the inputs
+// fall outside the exact-equivalence envelope; callers must fall back to
+// listListings(). Supports only the common "all" surface with the simplest
+// sort keys (newest / price) and no complex per-user filters.
+export function listListingsSqlFirst({
+  filter = "all",
+  kind = "",
+  sources = "",
+  q = "",
+  sort = "newest",
+  limit = 500,
+  offset = 0,
+  searchKeys,
+  districts = [],
+  userId,
+  settings: settingsOverride,
+  sameHouse = true,
+} = {}) {
+  if (filter !== "all") return null;
+  if (kind || sources || q) return null;
+  if (!["newest", "price_asc", "price_desc"].includes(sort)) return null;
+
+  const uid = resolveUserId(userId);
+  const settings = settingsOverride || getSettings(uid);
+  if (
+    Number(settings.priceMin) > 0 || Number(settings.priceMax) > 0 ||
+    Number(settings.minBuildingFloors) > 0 || Number(settings.areaMax) > 0 ||
+    settings.wholeFloorOnly === true || settings.excludeLowFloors === true ||
+    settings.excludeRooftop === true || settings.hasParking === true ||
+    (settings.excludeKeywords || []).length || (settings.excludeAgents || []).length ||
+    (settings.excludeAgentIds || []).length || (settings.excludeBoxes || []).length ||
+    Number(settings.commuteKm) > 0
+  ) {
+    return null;
+  }
+
+  const requestedDistricts = (Array.isArray(districts) ? districts : String(districts || "").split(","))
+    .map((name) => String(name || "").trim()).filter(Boolean);
+  const districtNames = requestedDistricts.length ? requestedDistricts : memberRegionDistrictNames(settings);
+  if (!districtNames.length) return null;
+
+  const clauses = [];
+  const params = [];
+  searchWhere(searchKeys, clauses, params);
+  listingVisibilityClauses(clauses, params);
+  appendDistrictCandidates(districtNames, clauses, params);
+  appendPriceCeilingCandidates(settings, clauses, params);
+  // filter === "all": confirmed-offline / dup / hidden / watched are excluded.
+  clauses.push("NOT (IFNULL(offline, 0) = 1 AND IFNULL(offline_confirmed, 0) = 1)");
+  clauses.push("(IFNULL(match_verdict, '') != 'yes')");
+  clauses.push(`NOT EXISTS (
+    SELECT 1 FROM user_listing_flags f
+    WHERE f.post_id = listings.post_id AND f.user_id = ? AND f.hidden = 1
+  )`);
+  params.push(uid);
+  clauses.push(`IFNULL((
+    SELECT watched FROM user_listing_flags f
+    WHERE f.post_id = listings.post_id AND f.user_id = ?
+  ), 0) = 0`);
+  params.push(uid);
+
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  const cost = settings.priceMaxIncludesExtras === true ? "p.total_monthly_cost" : "p.rent";
+  const orderBy =
+    sort === "newest" ? "p.updated_at DESC, p.post_id ASC"
+      : sort === "price_desc"
+        ? `CASE WHEN ${cost} > 0 THEN 0 ELSE 1 END ASC, ${cost} DESC, p.updated_at DESC, p.post_id ASC`
+        : `CASE WHEN ${cost} > 0 THEN ${cost} ELSE 9223372036854775807 END ASC, p.updated_at DESC, p.post_id ASC`;
+
+  const pageSize = Math.max(1, Math.min(Number(limit) || 500, 500));
+  const start = Math.max(0, Number(offset) || 0);
+  const districtMarks = districtNames.map(() => "?").join(",");
+  const districtWhere = `p.district IN (${districtMarks})`;
+
+  const countRow = db.prepare(`SELECT COUNT(*) AS n FROM listing_search_projection p
+    WHERE p.post_id IN (SELECT post_id FROM listings ${where})
+    AND ${districtWhere}`).get(...params, ...districtNames);
+  const totalMatched = Number(countRow?.n) || 0;
+
+  const pageRows = db.prepare(`SELECT p.post_id FROM listing_search_projection p
+    WHERE p.post_id IN (SELECT post_id FROM listings ${where})
+    AND ${districtWhere}
+    ORDER BY ${orderBy}
+    LIMIT ? OFFSET ?`).all(...params, ...districtNames, pageSize, start);
+
+  const ids = pageRows.map((row) => Number(row.post_id));
+  const fullRows = ids.length
+    ? db.prepare(`SELECT * FROM listings WHERE post_id IN (${ids.map(() => "?").join(",")})`).all(...ids)
+    : [];
+  const fullById = new Map(fullRows.map((row) => [Number(row.post_id), row]));
+  const flagMap = loadFlagMap(db, uid);
+  const ordered = ids
+    .map((id) => Object.assign(fullById.get(id) || {}, { post_id: id }))
+    .filter((row) => fullById.has(Number(row.post_id)));
+  const overlaid = overlayRowsPersonal(ordered, flagMap, { inPlace: true });
+  const listings = overlaid.map((row) => {
+    const lite = decorateListingLite(row, settings, uid);
+    const needPeers = sameHouse !== false && Boolean(row.match_post_id || row.same_house_role);
+    return finalizeListingDecorate(lite, settings, uid, { sameHouse: needPeers });
+  });
+
+  return {
+    listings,
+    totalMatched,
+    hasMore: start + pageSize < totalMatched,
+    nextOffset: start + pageSize,
+    queryVersion: 3,
+    queryDetails: { sql_first: true },
   };
 }
 
