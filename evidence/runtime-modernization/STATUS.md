@@ -113,7 +113,17 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
 - 尚未：實際 `docker compose up`；Gitea migration rehearsal（GitHub authoritative）；DeepSeek 實際串接 loop-engine；
   `.gitea/workflows/*` + `.agent/*` template（Phase 29）。
 
+### Phase 5 — Repository layer（示範完成，其餘 domain 漸進）
+- `v3/src/repository/settings.js`：`createSettingsRepository({ driver, sqliteDb, pgPool })` 工廠 +
+  SQLite/PostgreSQL 兩個 adapter；介面 `get/set/delete/all`（async）。示範 Domain → Repository → adapter。
+- SQLite 用 `?` + `ON CONFLICT(key)`；PostgreSQL 用 `$n` + `ON CONFLICT (key) ... EXCLUDED`。
+- 測試 `settings-repository.test.js`（3 項：SQLite CRUD、factory 選擇、PG SQL 結構）。
+- 尚未：把 `db.js` 其餘 domain（listings/users/flags/search/geo/route/jobs/...）逐一抽成 repository
+  interface（需把同步 hot path 逐步改 async）。
+
+
 ### Phase 18 — Media/File storage abstraction（完成，S3 標 EXTERNAL_SETUP_REQUIRED）
+
 - `v3/src/storage.js`：`STORAGE_DRIVER=local|s3` 選擇（`resolveStorageDriver()`）+ `createStorage()` 工廠；
   local driver（put/get/delete/exists/getMetadata/list，向後相容）；S3 driver（S3-compatible，未給 credentials 時
   每個 method 丟 `OBJECT_STORAGE_EXTERNAL_SETUP_REQUIRED`）；`deterministicStorageKey`（content hash 為 key，冪等）。
@@ -130,14 +140,15 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
 
 - **HAProxy shadow container 上線**（config 已備好，未起容器）；Web-A/Web-B / crawler / worker shadow 容器上線。
 - **Object storage（S3/R2）credentials**：storage abstraction 的 S3 driver。
-- **Gitea instance hostname / token**：Gitea migration rehearsal + loop-engine。
+- **Gitea token / 上線**：hostname 已知（`https://jgitea01.reversalplay.me` → `127.0.0.1:5251`），
+  但 migration rehearsal + loop-engine 串接仍需 Gitea token 與實際 `docker compose up`。
 - **OpenAI Reviewer API key**：optional Final Review flow。
 
 ## 尚未開始（依優先序）
 
 1. Phase 16–17 Web active/active + Cloudflare HA：config 已備好，尚未上線容器。
 2. Phase 22–27 Gitea + loop-engine：核心完成，尚未上線 + Gitea migration rehearsal。
-3. 把 domain 查詢（listings/users/settings/search/...）抽成 repository interface
+3. 把 `db.js` 其餘 domain 逐一抽成 repository interface（已示範 settings，其餘 listings/users/search/... 漸進）
 4. 安裝 `pg` 並接線 PostgreSQL adapter（同步 hot path 需先改 async）
 
 ## 注意（Windows 本機）

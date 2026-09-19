@@ -20,7 +20,7 @@ GITEA_WEBHOOK_SECRET='<loop-engine webhook secret>' \
 docker compose up -d
 ```
 
-- Gitea UI：`http://<SYNOLOGY_HOST>:3000`
+- Gitea UI：Cloudflare Tunnel `https://jgitea01.reversalplay.me` → `http://127.0.0.1:5251`（loopback）。
 - 首次設定時資料庫選 PostgreSQL，連 `gitea-db:5432`。
 - GitHub → Gitea migration rehearsal：驗證 branches/tags/commits/releases/issues/labels/LFS，
   source-of-truth cutover 留給 Owner 決定（不自動切換）。

@@ -17,7 +17,7 @@ services:
       GITEA__server__ROOT_URL: ${GITEA_ROOT_URL:-http://localhost:3000/}
       GITEA__actions__ENABLED: "true"
     ports:
-      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:5251:3000"
       - "127.0.0.1:2222:22"
     volumes:
       - gitea-data:/data
