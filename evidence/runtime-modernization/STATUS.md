@@ -208,13 +208,16 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
 - 尚未：`panel`/`moreCondition`/`pagination`/`scroll` 仍走舊的分散 key（`PANEL_KEY`/`FILTER_COMPACT_KEY`/
   `VIEW_KEY`），尚未遷入 versioned schema（漸進）。
 
-### Phase 5 — Repository layer（示範完成，其餘 domain 漸進）
+### Phase 5 — Repository layer（settings + flags 示範，其餘 domain 漸進）
 
 - `v3/src/repository/settings.js`：`createSettingsRepository({ driver, sqliteDb, pgPool })` 工廠 +
   SQLite/PostgreSQL 兩個 adapter；介面 `get/set/delete/all`（async）。示範 Domain → Repository → adapter。
-- SQLite 用 `?` + `ON CONFLICT(key)`；PostgreSQL 用 `$n` + `ON CONFLICT (key) ... EXCLUDED`。
-- 測試 `settings-repository.test.js`（3 項：SQLite CRUD、factory 選擇、PG SQL 結構）。
-- 尚未：把 `db.js` 其餘 domain（listings/users/flags/search/geo/route/jobs/...）逐一抽成 repository
+- `v3/src/repository/flags.js`：`createFlagsRepository({ driver, sqliteDb, pgPool })` 工廠 +
+  SQLite/PostgreSQL 兩個 adapter；介面 `get(userId, postId)/set(upsert)/map/delete`。示範**複合主鍵**
+  （user_id + post_id）與 `map` 集合查詢，超出 settings 的單鍵 key-value 形態。
+- SQLite 用 `?` + `ON CONFLICT`；PostgreSQL 用 `$n` + `ON CONFLICT ... EXCLUDED`。
+- 測試 `settings-repository.test.js`（3 項）+ `flags-repository.test.js`（3 項）。
+- 尚未：把 `db.js` 其餘 domain（listings/users/search/geo/route/jobs/...）逐一抽成 repository
   interface（需把同步 hot path 逐步改 async）。
 
 

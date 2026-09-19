@@ -17,6 +17,10 @@ SQLite adapter（node:sqlite，今日） | PostgreSQL adapter（pg，目標）
   `createSqliteSettingsRepository` / `createPostgresSettingsRepository`。
 - 介面：`get` / `set`（upsert）/ `delete` / `all`。
 - SQLite 用 `?` + `ON CONFLICT(key)`；PostgreSQL 用 `$n` + `ON CONFLICT (key) ... EXCLUDED`。
+- `flags.js`：`createFlagsRepository({ driver, sqliteDb, pgPool })` 工廠 +
+  `createSqliteFlagsRepository` / `createPostgresFlagsRepository`。
+- 介面：`get(userId, postId)` / `set(userId, postId, flags)`（upsert）/ `map(userId)` / `delete(userId, postId)`。
+  示範**複合主鍵**（user_id + post_id）與 `map` 集合查詢，超出 key-value 的單鍵形態。
 
 ## 遷移路徑（其餘 domain）
 
