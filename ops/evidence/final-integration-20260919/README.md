@@ -29,11 +29,13 @@ Product paths added (the required set): `ingestFeedback` (feedback ingestion), `
 (pending queue), `listIssuesWithLifecycle` (cluster list), `listCrmViews` (CRM list), `getDashboard`
 (dashboard), `listAudit` (audit timeline), `listProducts` (multi-site overview).
 
-Findings (observations, not changed here): `listCrmViews` is unbounded and N+1 (5 queries per
-contact → ~50,001 queries / ~497 ms at 10k); `getDashboard` lifecycle scan is O(N²) via a
-per-entity EXISTS → ~8.5 s at 10k; `listIssuesWithLifecycle` issues one query per issue (N+1,
-~401 queries/call). They are measured with fewer iterations and recorded here; the benchmark
-still reports p50/p95/max + query count + EXPLAIN for each.
+Findings — fixed in this PR, before → after (10k scale):
+- CRM list (`listCrmViews`): **50,001 queries / ~497 ms** → **6 queries / ~0.67 ms** (batched cases/notes/todos/owner/module/fb/progress; added LIMIT pagination).
+- dashboard (`getDashboard`): **~8.5 s** (O(N²) correlated-EXISTS lifecycle scan) → **~8 ms** (de-correlated single `IN` subquery).
+- cluster list (`listIssuesWithLifecycle`): **401 queries / ~1.8 ms** → **6 queries / ~0.26 ms** (batched entity/impact/eval/member/product lookups).
+
+The benchmark reports p50/p95/max + query count + EXPLAIN for each path at 100/1k/10k.
+
 
 ## 2. Responsive + focus evidence (`capture-ops-admin.mjs` → `ops-responsive.json`, `shots/`)
 

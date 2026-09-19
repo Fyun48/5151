@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import "./secretAtRestKey.js";
 import { openOpsDb } from "../src/opsDb.js";
 import { ensureDefaultProduct, issueCredential, listActiveCredentials, resolveIngestAuth, rotateCredential } from "../src/products.js";
-import { ensureCommandCredential, getActiveCommandSecret } from "../src/siteCommand.js";
+import { ensureCommandCredential, getActiveCommandSecret, ensureSiteCommandSchema } from "../src/siteCommand.js";
 import { decryptSecret, secretAtRestKey, isEncryptedSecretBlob } from "../src/secretAtRest.js";
+import { migrateCredentialSecretsAtRest } from "../src/credentialMigration.js";
 import { signIngestRequest } from "../src/ingestSignature.js";
 
 test("issued ingest credential is encrypted at rest (DB never holds plaintext)", () => {
@@ -76,5 +77,40 @@ test("command credential is encrypted at rest and decrypted only at the signing 
   assert.notEqual(row.secret, secret);
   assert.equal(isEncryptedSecretBlob(row.secret), true);
   assert.equal(getActiveCommandSecret(db, "v3"), secret);
+  db.close();
+});
+
+test("legacy plaintext credentials migrate to encrypted at rest (idempotent, no plaintext logged)", () => {
+  const db = openOpsDb(":memory:");
+  ensureDefaultProduct(db);
+  ensureSiteCommandSchema(db);
+  const ts = new Date().toISOString();
+  db.prepare("INSERT INTO product_ingest_credential(product_id, generation, secret, label, status, created_at) VALUES ('v3', 1, 'legacy-ingest-secret', 'old', 'active', ?)").run(ts);
+  db.prepare("INSERT INTO product_command_credential(product_id, generation, secret, cred_state, created_at) VALUES ('v3', 1, 'legacy-command-secret', 'active', ?)").run(ts);
+  const res = migrateCredentialSecretsAtRest(db);
+  assert.equal(res.migrated_ingest, 1);
+  assert.equal(res.migrated_command, 1);
+  const irow = db.prepare("SELECT secret FROM product_ingest_credential WHERE label='old'").get();
+  const crow = db.prepare("SELECT secret FROM product_command_credential WHERE cred_state='active'").get();
+  assert.notEqual(irow.secret, "legacy-ingest-secret");
+  assert.notEqual(crow.secret, "legacy-command-secret");
+  assert.equal(isEncryptedSecretBlob(irow.secret), true);
+  assert.equal(isEncryptedSecretBlob(crow.secret), true);
+  assert.equal(decryptSecret(irow.secret, secretAtRestKey()), "legacy-ingest-secret");
+  assert.equal(decryptSecret(crow.secret, secretAtRestKey()), "legacy-command-secret");
+  // 冪等：第二次遷移 0 筆。
+  const again = migrateCredentialSecretsAtRest(db);
+  assert.equal(again.migrated_ingest, 0);
+  assert.equal(again.migrated_command, 0);
+  db.close();
+});
+
+test("credential migration fails closed without a key and leaves plaintext untouched", () => {
+  const db = openOpsDb(":memory:");
+  ensureDefaultProduct(db);
+  db.prepare("INSERT INTO product_ingest_credential(product_id, generation, secret, label, status, created_at) VALUES ('v3', 1, 'legacy', 'old', 'active', ?)").run(new Date().toISOString());
+  assert.throws(() => migrateCredentialSecretsAtRest(db, { key: null }), /OPS_SECRET_AT_REST_KEY/);
+  const row = db.prepare("SELECT secret FROM product_ingest_credential WHERE label='old'").get();
+  assert.equal(row.secret, "legacy");
   db.close();
 });

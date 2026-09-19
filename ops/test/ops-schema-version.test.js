@@ -35,3 +35,30 @@ test("unsupported newer DB fails closed and does not rewrite the version", () =>
   assert.equal(readOpsSchemaVersion(db), 99);
   db.close();
 });
+
+test("mid-migration failure rolls back and never falsely advances the version", () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec("PRAGMA user_version = 0");
+  let threw = false;
+  try {
+    migrateOpsSchema(db, {
+      apply: (d) => {
+        d.exec("CREATE TABLE IF NOT EXISTS _migration_marker (id INTEGER)");
+        throw new Error("injected migration failure");
+      },
+      purge: () => {},
+    });
+  } catch {
+    threw = true;
+  }
+  assert.equal(threw, true);
+  assert.equal(readOpsSchemaVersion(db), 0); // 版本未假推進
+  const marker = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='_migration_marker'").get();
+  assert.equal(marker, undefined); // 半套 DDL 已回滾
+  // 重試（重開後冪等）可達最新版本。
+  const ok = migrateOpsSchema(db);
+  assert.equal(ok, OPS_SCHEMA_VERSION);
+  const applied = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='state_entity'").get();
+  assert.ok(applied);
+  db.close();
+});

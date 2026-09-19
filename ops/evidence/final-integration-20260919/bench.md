@@ -1,24 +1,24 @@
 # OPS final-integration seeded benchmark — PR #369
 
-node v24.13.0 / win32 x64; in-memory SQLite; generated 2026-09-19T04:21:10.972Z
+node v24.13.0 / win32 x64; in-memory SQLite; generated 2026-09-19T05:02:26.561Z
 
 ## scale 100 rows
 
 | path | p50 ms | p95 ms | max ms | avg ms | iters | queries/call | SEARCH | SCAN |
 |---|---|---|---|---|---|---|---|---|
-| SELECT * FROM issue_proposal_current WHERE issue_id = ? | 0.121 | 0.459 | 0.459 | 0.146 | 20 | 8 | 1 | 0 |
-| SELECT * FROM state_entity WHERE id = ? | 0.007 | 0.023 | 0.023 | 0.008 | 20 | 1 | 1 | 0 |
-| SELECT * FROM state_entity WHERE entity_type = ? LIMIT 1 | 0.007 | 0.041 | 0.041 | 0.01 | 20 | 1 | 1 | 0 |
-| SELECT * FROM state_transition WHERE idempotency_key = ? | 0.006 | 0.015 | 0.015 | 0.007 | 20 | 1 | 1 | 0 |
-| SELECT * FROM audit_log ORDER BY id DESC LIMIT 200 | 0.161 | 1.573 | 1.573 | 0.233 | 20 | 2 | 0 | 1 |
-| seedProductionStable (idempotent upsert) | 0.045 | 0.228 | 0.228 | 0.058 | 12 | 2 | - | - |
-| describeRollbackIdentityRecord (pure) | 0.004 | 0.098 | 0.098 | 0.008 | 20 | 0 | - | - |
-| ingestFeedback (write) | 0.089 | 0.4 | 0.4 | 0.114 | 12 | 6 | - | - |
-| SELECT * FROM feedback_analysis WHERE status IN ('pending','failed_retry','processing') | 0.491 | 1.154 | 1.154 | 0.71 | 3 | 39 | 1 | 0 |
-| SELECT * FROM issue_candidate ORDER BY id DESC LIMIT 80 | 2.017 | 4.504 | 4.504 | 2.198 | 20 | 401 | 0 | 1 |
-| SELECT * FROM ingested_crm_contact ORDER BY id DESC | 4.465 | 4.465 | 4.465 | 4.123 | 2 | 501 | 0 | 1 |
-| SELECT COUNT(*) FROM ingested_feedback | 1.014 | 1.365 | 1.365 | 1.122 | 3 | 7 | 0 | 1 |
-| SELECT * FROM ops_product ORDER BY id | 0.051 | 0.211 | 0.211 | 0.058 | 20 | 3 | 0 | 1 |
+| SELECT * FROM issue_proposal_current WHERE issue_id = ? | 0.102 | 0.462 | 0.462 | 0.125 | 20 | 8 | 1 | 0 |
+| SELECT * FROM state_entity WHERE id = ? | 0.007 | 0.028 | 0.028 | 0.009 | 20 | 1 | 1 | 0 |
+| SELECT * FROM state_entity WHERE entity_type = ? LIMIT 1 | 0.006 | 0.015 | 0.015 | 0.007 | 20 | 1 | 1 | 0 |
+| SELECT * FROM state_transition WHERE idempotency_key = ? | 0.006 | 0.022 | 0.022 | 0.008 | 20 | 1 | 1 | 0 |
+| SELECT * FROM audit_log ORDER BY id DESC LIMIT 200 | 0.159 | 1.722 | 1.722 | 0.255 | 20 | 2 | 0 | 1 |
+| seedProductionStable (idempotent upsert) | 0.042 | 0.232 | 0.232 | 0.057 | 12 | 2 | - | - |
+| describeRollbackIdentityRecord (pure) | 0.004 | 0.099 | 0.099 | 0.008 | 20 | 0 | - | - |
+| ingestFeedback (write) | 0.085 | 0.39 | 0.39 | 0.109 | 12 | 6 | - | - |
+| SELECT * FROM feedback_analysis WHERE status IN ('pending','failed_retry','processing') | 0.52 | 1.174 | 1.174 | 0.73 | 3 | 39 | 1 | 0 |
+| SELECT * FROM issue_candidate ORDER BY id DESC LIMIT 80 | 0.267 | 0.831 | 0.831 | 0.304 | 20 | 6 | 0 | 1 |
+| SELECT * FROM ingested_crm_contact ORDER BY id DESC | 1.049 | 1.049 | 1.049 | 0.871 | 2 | 6 | 0 | 1 |
+| SELECT COUNT(*) FROM ingested_feedback | 0.245 | 0.717 | 0.717 | 0.399 | 3 | 7 | 0 | 1 |
+| SELECT * FROM ops_product ORDER BY id | 0.042 | 0.197 | 0.197 | 0.052 | 20 | 3 | 0 | 1 |
 
 row counts: issue_candidate=100, issue_proposal=100, issue_proposal_current=100, state_entity=100, state_transition=100, audit_log=200, production_stable_current=1
 
@@ -26,19 +26,19 @@ row counts: issue_candidate=100, issue_proposal=100, issue_proposal_current=100,
 
 | path | p50 ms | p95 ms | max ms | avg ms | iters | queries/call | SEARCH | SCAN |
 |---|---|---|---|---|---|---|---|---|
-| SELECT * FROM issue_proposal_current WHERE issue_id = ? | 0.092 | 0.156 | 0.156 | 0.094 | 20 | 8 | 1 | 0 |
-| SELECT * FROM state_entity WHERE id = ? | 0.007 | 0.022 | 0.022 | 0.008 | 20 | 1 | 1 | 0 |
-| SELECT * FROM state_entity WHERE entity_type = ? LIMIT 1 | 0.006 | 0.012 | 0.012 | 0.007 | 20 | 1 | 1 | 0 |
-| SELECT * FROM state_transition WHERE idempotency_key = ? | 0.005 | 0.029 | 0.029 | 0.008 | 20 | 1 | 1 | 0 |
-| SELECT * FROM audit_log ORDER BY id DESC LIMIT 200 | 0.15 | 0.781 | 0.781 | 0.185 | 20 | 2 | 0 | 1 |
-| seedProductionStable (idempotent upsert) | 0.029 | 0.093 | 0.093 | 0.034 | 12 | 2 | - | - |
-| describeRollbackIdentityRecord (pure) | 0 | 0.005 | 0.005 | 0.001 | 20 | 0 | - | - |
-| ingestFeedback (write) | 0.063 | 0.112 | 0.112 | 0.067 | 12 | 6 | - | - |
-| SELECT * FROM feedback_analysis WHERE status IN ('pending','failed_retry','processing') | 1.158 | 1.427 | 1.427 | 1.239 | 3 | 39 | 1 | 0 |
-| SELECT * FROM issue_candidate ORDER BY id DESC LIMIT 80 | 1.796 | 4.265 | 4.265 | 1.935 | 20 | 401 | 0 | 1 |
-| SELECT * FROM ingested_crm_contact ORDER BY id DESC | 47.92 | 47.92 | 47.92 | 43.237 | 2 | 5001 | 0 | 1 |
-| SELECT COUNT(*) FROM ingested_feedback | 85.833 | 87.155 | 87.155 | 85.904 | 3 | 7 | 0 | 1 |
-| SELECT * FROM ops_product ORDER BY id | 0.041 | 0.086 | 0.086 | 0.045 | 20 | 3 | 0 | 1 |
+| SELECT * FROM issue_proposal_current WHERE issue_id = ? | 0.088 | 0.173 | 0.173 | 0.093 | 20 | 8 | 1 | 0 |
+| SELECT * FROM state_entity WHERE id = ? | 0.006 | 0.025 | 0.025 | 0.007 | 20 | 1 | 1 | 0 |
+| SELECT * FROM state_entity WHERE entity_type = ? LIMIT 1 | 0.006 | 0.011 | 0.011 | 0.006 | 20 | 1 | 1 | 0 |
+| SELECT * FROM state_transition WHERE idempotency_key = ? | 0.005 | 0.03 | 0.03 | 0.007 | 20 | 1 | 1 | 0 |
+| SELECT * FROM audit_log ORDER BY id DESC LIMIT 200 | 0.147 | 0.552 | 0.552 | 0.168 | 20 | 2 | 0 | 1 |
+| seedProductionStable (idempotent upsert) | 0.025 | 0.067 | 0.067 | 0.03 | 12 | 2 | - | - |
+| describeRollbackIdentityRecord (pure) | 0 | 0.004 | 0.004 | 0.001 | 20 | 0 | - | - |
+| ingestFeedback (write) | 0.059 | 0.098 | 0.098 | 0.062 | 12 | 6 | - | - |
+| SELECT * FROM feedback_analysis WHERE status IN ('pending','failed_retry','processing') | 1.335 | 1.421 | 1.421 | 1.298 | 3 | 39 | 1 | 0 |
+| SELECT * FROM issue_candidate ORDER BY id DESC LIMIT 80 | 0.247 | 0.305 | 0.305 | 0.252 | 20 | 6 | 0 | 1 |
+| SELECT * FROM ingested_crm_contact ORDER BY id DESC | 1.331 | 1.331 | 1.331 | 1.038 | 2 | 6 | 0 | 1 |
+| SELECT COUNT(*) FROM ingested_feedback | 0.763 | 0.861 | 0.861 | 0.777 | 3 | 7 | 0 | 1 |
+| SELECT * FROM ops_product ORDER BY id | 0.037 | 0.066 | 0.066 | 0.04 | 20 | 3 | 0 | 1 |
 
 row counts: issue_candidate=1000, issue_proposal=1000, issue_proposal_current=1000, state_entity=1000, state_transition=1000, audit_log=2000, production_stable_current=1
 
@@ -46,19 +46,19 @@ row counts: issue_candidate=1000, issue_proposal=1000, issue_proposal_current=10
 
 | path | p50 ms | p95 ms | max ms | avg ms | iters | queries/call | SEARCH | SCAN |
 |---|---|---|---|---|---|---|---|---|
-| SELECT * FROM issue_proposal_current WHERE issue_id = ? | 0.075 | 0.153 | 0.153 | 0.081 | 20 | 8 | 1 | 0 |
-| SELECT * FROM state_entity WHERE id = ? | 0.007 | 0.025 | 0.025 | 0.008 | 20 | 1 | 1 | 0 |
-| SELECT * FROM state_entity WHERE entity_type = ? LIMIT 1 | 0.006 | 0.015 | 0.015 | 0.007 | 20 | 1 | 1 | 0 |
-| SELECT * FROM state_transition WHERE idempotency_key = ? | 0.005 | 0.015 | 0.015 | 0.006 | 20 | 1 | 1 | 0 |
-| SELECT * FROM audit_log ORDER BY id DESC LIMIT 200 | 0.147 | 0.461 | 0.461 | 0.167 | 20 | 2 | 0 | 1 |
-| seedProductionStable (idempotent upsert) | 0.025 | 0.087 | 0.087 | 0.031 | 12 | 2 | - | - |
-| describeRollbackIdentityRecord (pure) | 0.001 | 0.005 | 0.005 | 0.001 | 20 | 0 | - | - |
-| ingestFeedback (write) | 0.055 | 0.103 | 0.103 | 0.061 | 12 | 6 | - | - |
-| SELECT * FROM feedback_analysis WHERE status IN ('pending','failed_retry','processing') | 9.156 | 9.513 | 9.513 | 9.08 | 3 | 39 | 1 | 0 |
-| SELECT * FROM issue_candidate ORDER BY id DESC LIMIT 80 | 1.821 | 2.958 | 2.958 | 1.895 | 20 | 401 | 0 | 1 |
-| SELECT * FROM ingested_crm_contact ORDER BY id DESC | 496.926 | 496.926 | 496.926 | 455.484 | 2 | 50001 | 0 | 1 |
-| SELECT COUNT(*) FROM ingested_feedback | 8508.394 | 8533.491 | 8533.491 | 8492.316 | 3 | 7 | 0 | 1 |
-| SELECT * FROM ops_product ORDER BY id | 0.043 | 0.106 | 0.106 | 0.047 | 20 | 3 | 0 | 1 |
+| SELECT * FROM issue_proposal_current WHERE issue_id = ? | 0.078 | 0.157 | 0.157 | 0.086 | 20 | 8 | 1 | 0 |
+| SELECT * FROM state_entity WHERE id = ? | 0.007 | 0.021 | 0.021 | 0.008 | 20 | 1 | 1 | 0 |
+| SELECT * FROM state_entity WHERE entity_type = ? LIMIT 1 | 0.006 | 0.013 | 0.013 | 0.007 | 20 | 1 | 1 | 0 |
+| SELECT * FROM state_transition WHERE idempotency_key = ? | 0.005 | 0.009 | 0.009 | 0.006 | 20 | 1 | 1 | 0 |
+| SELECT * FROM audit_log ORDER BY id DESC LIMIT 200 | 0.179 | 0.582 | 0.582 | 0.217 | 20 | 2 | 0 | 1 |
+| seedProductionStable (idempotent upsert) | 0.025 | 0.092 | 0.092 | 0.032 | 12 | 2 | - | - |
+| describeRollbackIdentityRecord (pure) | 0 | 0.004 | 0.004 | 0.001 | 20 | 0 | - | - |
+| ingestFeedback (write) | 0.054 | 0.109 | 0.109 | 0.06 | 12 | 6 | - | - |
+| SELECT * FROM feedback_analysis WHERE status IN ('pending','failed_retry','processing') | 9.196 | 9.232 | 9.232 | 9.026 | 3 | 39 | 1 | 0 |
+| SELECT * FROM issue_candidate ORDER BY id DESC LIMIT 80 | 0.26 | 0.501 | 0.501 | 0.284 | 20 | 6 | 0 | 1 |
+| SELECT * FROM ingested_crm_contact ORDER BY id DESC | 0.667 | 0.667 | 0.667 | 0.635 | 2 | 6 | 0 | 1 |
+| SELECT COUNT(*) FROM ingested_feedback | 7.989 | 8.591 | 8.591 | 8.104 | 3 | 7 | 0 | 1 |
+| SELECT * FROM ops_product ORDER BY id | 0.038 | 0.074 | 0.074 | 0.04 | 20 | 3 | 0 | 1 |
 
 row counts: issue_candidate=10000, issue_proposal=10000, issue_proposal_current=10000, state_entity=10000, state_transition=10000, audit_log=20000, production_stable_current=1
 

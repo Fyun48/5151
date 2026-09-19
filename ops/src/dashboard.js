@@ -102,19 +102,15 @@ export function getDashboard(db, env = process.env, { productId = null } = {}) {
       SELECT se.state, COUNT(*) AS n
         FROM state_entity se
        WHERE se.entity_type IN ('issue','lifecycle')
-         AND (
-           EXISTS (
-             SELECT 1 FROM issue_feedback_link l
+         AND se.id IN (
+           SELECT 'issue:' || CAST(l.issue_id AS TEXT)
+             FROM issue_feedback_link l
              JOIN ingested_feedback f ON f.id = l.feedback_id
-             WHERE l.active = 1
-               AND se.id = 'issue:' || CAST(l.issue_id AS TEXT)
-               AND f.product_id = ?
-           )
-           OR EXISTS (
-             SELECT 1 FROM issue_candidate i
-              WHERE se.id = 'issue:' || CAST(i.id AS TEXT)
-                AND i.product_id = ?
-           )
+            WHERE l.active = 1 AND f.product_id = ?
+            UNION
+           SELECT 'issue:' || CAST(i.id AS TEXT)
+             FROM issue_candidate i
+            WHERE i.product_id = ?
          )
        GROUP BY se.state
     `).all(scoped, scoped)) {
@@ -149,33 +145,35 @@ export function getDashboard(db, env = process.env, { productId = null } = {}) {
 export function listIssuesWithLifecycle(db, { limit = 80 } = {}) {
   const cap = Math.max(1, Math.min(Number(limit) || 80, 200));
   const rows = db.prepare("SELECT * FROM issue_candidate ORDER BY id DESC LIMIT ?").all(cap);
+  if (!rows.length) return [];
+  const ids = rows.map((r) => Number(r.id));
+  const ph = ids.map(() => "?").join(",");
+
+  const entities = new Map(db.prepare(`SELECT id, state, version FROM state_entity WHERE id IN (${ph})`).all(...ids.map((id) => `issue:${id}`)).map((e) => [e.id, e]));
+  const impacts = new Map(db.prepare(`SELECT c.issue_id, a.impact_score, a.impact_level FROM issue_impact_current c JOIN issue_impact_assessment a ON a.id = c.assessment_id WHERE c.issue_id IN (${ph})`).all(...ids).map((r) => [Number(r.issue_id), r]));
+  const evals = new Map(db.prepare(`SELECT issue_id, final_recommendation FROM issue_evaluation_current WHERE issue_id IN (${ph})`).all(...ids).map((r) => [Number(r.issue_id), r]));
+  const members = new Map(db.prepare(`SELECT issue_id, COUNT(*) AS n FROM issue_feedback_link WHERE active=1 AND issue_id IN (${ph}) GROUP BY issue_id`).all(...ids).map((r) => [Number(r.issue_id), Number(r.n)]));
+  const prod = new Map();
+  for (const r of db.prepare(`SELECT l.issue_id, f.product_id FROM issue_feedback_link l JOIN ingested_feedback f ON f.id = l.feedback_id WHERE l.active=1 AND l.issue_id IN (${ph}) ORDER BY l.id DESC`).all(...ids)) {
+    const k = Number(r.issue_id);
+    if (!prod.has(k)) prod.set(k, r.product_id);
+  }
+
   return rows.map((r) => {
-    const entity = db.prepare("SELECT state, version FROM state_entity WHERE id=?").get(`issue:${r.id}`);
-    const impact = db.prepare(
-      `SELECT a.impact_score, a.impact_level FROM issue_impact_current c
-       JOIN issue_impact_assessment a ON a.id = c.assessment_id
-       WHERE c.issue_id=?`,
-    ).get(Number(r.id));
-    const evalRow = db.prepare(
-      "SELECT final_recommendation FROM issue_evaluation_current WHERE issue_id=?",
-    ).get(Number(r.id));
-    const members = Number(db.prepare("SELECT COUNT(*) n FROM issue_feedback_link WHERE issue_id=? AND active=1").get(r.id).n) || 0;
-    const prod = db.prepare(`
-      SELECT f.product_id FROM issue_feedback_link l
-      JOIN ingested_feedback f ON f.id = l.feedback_id
-      WHERE l.issue_id=? AND l.active=1
-      ORDER BY l.id DESC LIMIT 1
-    `).get(Number(r.id));
+    const id = Number(r.id);
+    const entity = entities.get(`issue:${id}`);
+    const impact = impacts.get(id);
+    const evalRow = evals.get(id);
     return {
-      id: Number(r.id),
+      id,
       title: r.title,
-      product_id: prod?.product_id || r.product_id || null,
+      product_id: prod.get(id) || r.product_id || null,
       parent_issue_id: r.parent_issue_id ? Number(r.parent_issue_id) : null,
       issue_kind: r.issue_kind || "normal",
       summary: r.summary,
       category: r.category,
       status: r.status,
-      member_count: members,
+      member_count: members.get(id) || 0,
       lifecycle_state: entity?.state || "COLLECTING",
       impact_score: impact?.impact_score ?? null,
       impact_level: impact?.impact_level ?? null,

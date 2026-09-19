@@ -1697,16 +1697,27 @@ export function readOpsSchemaVersion(db) {
 }
 
 // 冪等 schema 套用＋版本推進。若版本比支援的新（來自較新程式）→ fail-closed。
-// 失敗時（applyOpsSchema 拋錯）不會推進 user_version，重開會重新套用（冪等）。
-export function migrateOpsSchema(db) {
+// 版本推進包在 BEGIN IMMEDIATE 交易內：apply/purge 成功才 COMMIT，失敗 ROLLBACK，版本不假推進。
+export function migrateOpsSchema(db, { apply = applyOpsSchema, purge = reapplyPurgeLedger } = {}) {
   const current = readOpsSchemaVersion(db);
   if (current > OPS_SCHEMA_VERSION) {
     throw new Error(`OPS DB schema version ${current} is newer than supported ${OPS_SCHEMA_VERSION}; refusing to open (fail-closed)`);
   }
-  applyOpsSchema(db);
-  reapplyPurgeLedger(db);
   if (current < OPS_SCHEMA_VERSION) {
-    db.exec(`PRAGMA user_version = ${OPS_SCHEMA_VERSION}`);
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      apply(db);
+      purge(db);
+      db.exec(`PRAGMA user_version = ${OPS_SCHEMA_VERSION}`);
+      db.exec("COMMIT");
+    } catch (err) {
+      try { db.exec("ROLLBACK"); } catch { /* nothing to roll back */ }
+      throw err;
+    }
+  } else {
+    // 已是最新版本：冪等重新套用（不推進版本），保留「每次開庫重套 schema」的相容行為。
+    apply(db);
+    purge(db);
   }
   return readOpsSchemaVersion(db);
 }

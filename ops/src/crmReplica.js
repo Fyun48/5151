@@ -332,31 +332,81 @@ export function upsertOwnerNote(db, { productId, subjectKind, subjectKey, body, 
   return { product_id: product.id, subject_kind: kind, subject_key: key, body: text, source: "ops_owner", updated_at: ts };
 }
 
-export function listCrmViews(db, { productId = null, now = new Date() } = {}) {
+export function listCrmViews(db, { productId = null, now = new Date(), limit = 200, offset = 0 } = {}) {
   const pid = productId ? String(productId) : null;
+  const cap = Math.max(1, Math.min(Number(limit) || 200, 1000));
+  const off = Math.max(0, Number(offset) || 0);
   const contacts = pid
-    ? db.prepare("SELECT * FROM ingested_crm_contact WHERE product_id=? ORDER BY id DESC").all(pid)
-    : db.prepare("SELECT * FROM ingested_crm_contact ORDER BY id DESC").all();
+    ? db.prepare("SELECT * FROM ingested_crm_contact WHERE product_id=? ORDER BY id DESC LIMIT ? OFFSET ?").all(pid, cap, off)
+    : db.prepare("SELECT * FROM ingested_crm_contact ORDER BY id DESC LIMIT ? OFFSET ?").all(cap, off);
   const nowMs = now instanceof Date ? now.getTime() : Date.parse(now);
+  if (!contacts.length) return [];
+
+  // 批次載入：消除逐筆 N+1（cases/notes/todos/owner/module/fb/progress 一次查完）。
+  const extIds = [...new Set(contacts.map((c) => String(c.external_contact_id)))];
+  const ph = extIds.map(() => "?").join(",");
+  const k = (p, e) => `${p}\u0000${e}`;
+  const groupBy = (rows, fn) => { const m = new Map(); for (const r of rows) { const key = fn(r); if (!m.has(key)) m.set(key, []); m.get(key).push(r); } return m; };
+  const listFor = (m, p, e) => m.get(k(p, e)) || [];
+
+  const casesBy = groupBy(db.prepare(`SELECT * FROM ingested_crm_case WHERE external_contact_id IN (${ph}) ORDER BY id DESC`).all(...extIds), (r) => k(r.product_id, r.external_contact_id));
+  const notesBy = groupBy(db.prepare(`SELECT * FROM ingested_crm_note WHERE external_contact_id IN (${ph}) ORDER BY id DESC`).all(...extIds), (r) => k(r.product_id, r.external_contact_id));
+  const todosBy = groupBy(db.prepare(`SELECT * FROM ingested_crm_todo WHERE external_contact_id IN (${ph}) ORDER BY id DESC`).all(...extIds), (r) => k(r.product_id, r.external_contact_id));
+  const ownerBy = groupBy(db.prepare(`SELECT * FROM owner_crm_note WHERE subject_kind='contact' AND subject_key IN (${ph})`).all(...extIds), (r) => k(r.product_id, r.subject_key));
+
+  const moduleCache = new Map();
+  const moduleFor = (p) => { if (!moduleCache.has(p)) moduleCache.set(p, crmModuleFor(db, p)); return moduleCache.get(p); };
+
+  const fbIds = [...new Set(contacts.map((c) => { const cs = listFor(casesBy, c.product_id, c.external_contact_id); const id = cs[0]?.external_feedback_id; return id == null ? null : String(id); }).filter(Boolean))];
+  const fbBy = new Map();
+  if (fbIds.length) {
+    const fbPh = fbIds.map(() => "?").join(",");
+    for (const r of db.prepare(`SELECT * FROM ingested_crm_feedback_handling WHERE CAST(external_feedback_id AS TEXT) IN (${fbPh})`).all(...fbIds)) {
+      const key = k(r.product_id, String(r.external_feedback_id));
+      if (!fbBy.has(key)) fbBy.set(key, r);
+    }
+  }
+
+  const progressBy = new Map();
+  if (fbIds.length) {
+    const fbPh = fbIds.map(() => "?").join(",");
+    const ing = db.prepare(`SELECT id, product_id, external_feedback_id FROM ingested_feedback WHERE CAST(external_feedback_id AS TEXT) IN (${fbPh})`).all(...fbIds);
+    const ingIds = ing.map((r) => Number(r.id));
+    const linkByFeedback = new Map();
+    const issueIds = new Set();
+    if (ingIds.length) {
+      const ingPh = ingIds.map(() => "?").join(",");
+      for (const r of db.prepare(`SELECT feedback_id, issue_id FROM issue_feedback_link WHERE feedback_id IN (${ingPh}) ORDER BY id DESC`).all(...ingIds)) {
+        if (!linkByFeedback.has(Number(r.feedback_id))) linkByFeedback.set(Number(r.feedback_id), r.issue_id);
+        issueIds.add(String(r.issue_id));
+      }
+    }
+    const stateById = new Map();
+    if (issueIds.size) {
+      const issuePh = [...issueIds].map(() => "?").join(",");
+      for (const r of db.prepare(`SELECT id, state FROM state_entity WHERE id IN (${issuePh})`).all(...[...issueIds])) stateById.set(r.id, r.state);
+    }
+    for (const row of ing) {
+      const key = k(row.product_id, String(row.external_feedback_id));
+      const lid = linkByFeedback.get(Number(row.id));
+      const state = lid ? stateById.get(lid) || null : null;
+      progressBy.set(key, lid
+        ? { label: "OPS 開發進度", state, issue_id: lid, text: state ? `議題 ${state}` : "議題狀態未知" }
+        : { label: "OPS 開發進度", state: null, issue_id: null, text: "與站方客服進度分開；尚未連到議題" });
+    }
+  }
+
   return contacts.map((contact) => {
-    const cases = db.prepare("SELECT * FROM ingested_crm_case WHERE product_id=? AND external_contact_id=? ORDER BY id DESC")
-      .all(contact.product_id, contact.external_contact_id);
-    const notes = db.prepare("SELECT * FROM ingested_crm_note WHERE product_id=? AND external_contact_id=? ORDER BY id DESC")
-      .all(contact.product_id, contact.external_contact_id);
-    const todos = db.prepare("SELECT * FROM ingested_crm_todo WHERE product_id=? AND external_contact_id=? ORDER BY id DESC")
-      .all(contact.product_id, contact.external_contact_id);
-    const module = crmModuleFor(db, contact.product_id);
+    const cases = listFor(casesBy, contact.product_id, contact.external_contact_id);
+    const notes = listFor(notesBy, contact.product_id, contact.external_contact_id);
+    const todos = listFor(todosBy, contact.product_id, contact.external_contact_id);
+    const module = moduleFor(contact.product_id);
     const syncedMs = Date.parse(contact.last_synced_at || "") || 0;
     const lag = Math.max(0, nowMs - syncedMs);
-    const owner = db.prepare(
-      "SELECT * FROM owner_crm_note WHERE product_id=? AND subject_kind='contact' AND subject_key=?",
-    ).get(contact.product_id, contact.external_contact_id);
+    const owner = (ownerBy.get(k(contact.product_id, contact.external_contact_id)) || [null])[0];
     const primary = cases[0] || null;
-    const fbId = primary?.external_feedback_id || null;
-    const fb = fbId
-      ? db.prepare("SELECT * FROM ingested_crm_feedback_handling WHERE product_id=? AND external_feedback_id=?")
-        .get(contact.product_id, String(fbId))
-      : null;
+    const fbId = primary?.external_feedback_id == null ? null : String(primary.external_feedback_id);
+    const fb = fbId ? fbBy.get(k(contact.product_id, fbId)) || null : null;
     const siteHandling = primary || fb
       ? {
         label: "站方處理進度",
@@ -390,7 +440,7 @@ export function listCrmViews(db, { productId = null, now = new Date() } = {}) {
           todos,
         },
         site_handling: siteHandling,
-        ops_progress: opsProgressForFeedback(db, contact.product_id, fbId) || {
+        ops_progress: progressBy.get(k(contact.product_id, fbId)) || {
           label: "OPS 開發進度",
           state: null,
           issue_id: null,
