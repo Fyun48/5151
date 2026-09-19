@@ -25,7 +25,20 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
 ### Cross-platform test harness（Windows + Linux）
 - `pathToFileURL(...).href` 修正 38 個測試檔；`.gitattributes` 加 `*.yml eol=lf`。
 
+### Phase 3 — Web/Crawler/Worker split（完成）
+- 新增 `v3/src/appRole.js`：`APP_ROLE=web|crawler|worker|all`（`all` 為本地/向後相容預設），
+  `resolveAppRole()` + `roleRunsWeb/Crawler/Worker()` predicates。
+- `server.js`：抽出 `startWorkerLoops()`（housing/feedback 遞送/wish lifecycle/wish offer expiry/
+  rental notify/CRM delivery）與 `startStartupWork()`（第一次爬取 + geo backfill）；`app.listen`
+  依 `APP_ROLE` 決定：web 只開 HTTP，crawler 只跑 `schedule()`（爬蟲排程），worker 只跑背景迴圈；
+  非 web 角色有獨立「不提供 HTTP」分支。
+- 測試：`app-role.test.js`（role 解析 + predicates + server.js gating 結構）；既有結構測試
+  （admin-members / list-unhang / commute-route-live）全數保留且通過。
+- 尚未：Docker/compose 的 `APP_ROLE` 環境參數化與三 container 部署（crawler/worker shadow 上線）。
+
+
 ### Phase 7 — SQL-first search（部分完成，效能核心）
+
 - 新增 `v3/src/listingSearchProjection.js`：`listing_search_projection` 表 + derived columns
   （district/source/kind/rent/total_monthly_cost/area/floor/total_floors/elevator/parking/rooftop/
   low_floor/lat/lng/location_class/primary_listing_id/offline_state/commute_km/updated_at）
