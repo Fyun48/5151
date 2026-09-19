@@ -1,0 +1,128 @@
+name: Migrate v3 data volume to Storage1 (manual)
+run-name: "migrate-v3-data:${{ inputs.mode }} by ${{ github.actor }}"
+
+# One-off, Owner-run migration that moves the live v3 data directory off the /DATA system
+# volume onto the Storage1 pool. It never rebuilds or re-pushes an image and never deletes
+# the source directory, so a failed run can always fall back to the previous compose.
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "plan 需 MIGRATE-V3-DATA；apply 需 MIGRATE-V3-DATA-APPLY"
+        required: true
+        default: ""
+      mode:
+        description: "plan（只驗證與檢查容量）或 apply（停止容器、複製、切換掛載）"
+        type: choice
+        required: true
+        default: plan
+        options:
+          - plan
+          - apply
+      source_dir:
+        description: "目前 live 資料目錄"
+        required: true
+        default: /DATA/AppData/591-tracker-v3
+      target_dir:
+        description: "Storage1 目標目錄（必須在 /mnt/Storage1 底下）"
+        required: true
+        default: /mnt/Storage1/docker_data/591-tracker-v3
+      force:
+        description: "僅 apply：允許覆蓋內容與來源不同且非空的目標目錄"
+        type: boolean
+        required: false
+        default: false
+      debug:
+        description: "true 會讓 drone-ssh 印出完整遠端輸出（僅診斷用）"
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-data-migration
+  cancel-in-progress: false
+
+jobs:
+  migrate-v3-data:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 60
+    steps:
+      - name: Authorize data migration (fail-closed)
+        env:
+          WF_REF: ${{ github.ref }}
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          ALLOWED_ACTOR: ${{ vars.PRODUCTION_DEPLOY_ALLOWED_ACTOR }}
+          CONFIRM: ${{ inputs.confirmation }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          if [ "$WF_REF" != "refs/heads/master" ]; then
+            echo "::error::data migration must run from the master workflow definition"; exit 1
+          fi
+          if [ -n "${ALLOWED_ACTOR:-}" ] && [ "$ACTOR" != "$ALLOWED_ACTOR" ]; then
+            echo "::error::actor '$ACTOR' is not the authorized owner"; exit 1
+          fi
+          if [ -n "${ALLOWED_ACTOR:-}" ] && [ "$TRIGGERING_ACTOR" != "$ALLOWED_ACTOR" ]; then
+            echo "::error::triggering actor '$TRIGGERING_ACTOR' is not the authorized owner"; exit 1
+          fi
+          if [ "$MODE" = "apply" ]; then
+            if [ "$CONFIRM" != "MIGRATE-V3-DATA-APPLY" ]; then
+              echo "::error::apply requires confirmation exactly MIGRATE-V3-DATA-APPLY"; exit 1
+            fi
+          elif [ "$CONFIRM" != "MIGRATE-V3-DATA" ]; then
+            echo "::error::plan requires confirmation exactly MIGRATE-V3-DATA"; exit 1
+          fi
+
+      - name: Checkout workflow-definition SHA
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Stage migration helper and compose on the Storage1 pool
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.NAS_HOST }}
+          port: ${{ secrets.NAS_PORT }}
+          username: ${{ secrets.NAS_USER }}
+          key: ${{ secrets.NAS_SSH_KEY }}
+          source: ".github/scripts/migrate-v3-data-volume-remote.sh,docker-compose.yml"
+          target: /mnt/Storage1/docker_data/5151-migrate-helpers
+          overwrite: true
+
+      - name: Run the data volume migration
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.NAS_HOST }}
+          port: ${{ secrets.NAS_PORT }}
+          username: ${{ secrets.NAS_USER }}
+          key: ${{ secrets.NAS_SSH_KEY }}
+          script_stop: true
+          debug: ${{ inputs.debug }}
+          script: |
+            set -euo pipefail
+            export SOURCE_DIR='${{ inputs.source_dir }}'
+            export TARGET_DIR='${{ inputs.target_dir }}'
+            export MODE='${{ inputs.mode }}'
+            if [ '${{ inputs.force }}' = 'true' ]; then export FORCE=1; else export FORCE=0; fi
+            export STAGED_COMPOSE=/mnt/Storage1/docker_data/5151-migrate-helpers/docker-compose.yml
+            echo "migrate_start mode=$MODE source=$SOURCE_DIR target=$TARGET_DIR force=$FORCE"
+            bash /mnt/Storage1/docker_data/5151-migrate-helpers/.github/scripts/migrate-v3-data-volume-remote.sh
+
+      - name: Remove staged migration helper from the NAS
+        if: always()
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.NAS_HOST }}
+          port: ${{ secrets.NAS_PORT }}
+          username: ${{ secrets.NAS_USER }}
+          key: ${{ secrets.NAS_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            rm -f /mnt/Storage1/docker_data/5151-migrate-helpers/.github/scripts/migrate-v3-data-volume-remote.sh
+            rm -f /mnt/Storage1/docker_data/5151-migrate-helpers/docker-compose.yml

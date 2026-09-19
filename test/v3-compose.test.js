@@ -19,7 +19,7 @@ test("v3 docker service binds 5153/5155 and mounts historical dbs read-only", ()
   const v3 = serviceBlock(compose, "591-tracker-v3");
   assert.match(v3, /127\.0\.0\.1:5153:5153/);
   assert.match(v3, /127\.0\.0\.1:5155:5153/);
-  assert.match(v3, /591-tracker-v3:\/data/);
+  assert.match(v3, /\$\{V3_DATA_ROOT:-\/mnt\/Storage1\/docker_data\/591-tracker-v3\}:\/data/);
   assert.match(v3, /591-tracker-v2:\/v2-data:ro/);
   assert.match(v3, /591-tracker:\/v1-data:ro/);
   assert.match(v3, /V2_DB_PATH: \/v2-data\/v2\.db/);

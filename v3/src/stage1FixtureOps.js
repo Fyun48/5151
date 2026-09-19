@@ -226,7 +226,12 @@ function publicEvidence(doc) {
   }
   // Boundary-anchored so a compact fixture run id / timestamp such as
   // "stage1-fix:20260918061756:35314199788" is not mistaken for a 09xxxxxxxx phone.
-  if (/(?<!\d)09\d{8}(?!\d)/.test(text)) throw new Error("fixture evidence leaked phone");
+  const phoneHit = /(?<!\d)09\d{8}(?!\d)/.exec(text);
+  if (phoneHit) {
+    // Include redacted context so an intermittent hit can be triaged from CI logs alone.
+    const near = text.slice(Math.max(0, phoneHit.index - 70), phoneHit.index + 12).replace(/\d/g, "*");
+    throw new Error(`fixture evidence leaked phone near ...${near}`);
+  }
   for (const token of ["SESSION_SECRET", "NAS_SSH_KEY", "AUTH_PASSWORD", "auth.env", "rank_score", "Fx!"]) {
     if (text.includes(token)) throw new Error(`fixture evidence leaked ${token}`);
   }
