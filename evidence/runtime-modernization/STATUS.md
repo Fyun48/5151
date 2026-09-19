@@ -42,11 +42,15 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
   stub，需 `npm install pg` 後接線）。
 - `v3/src/migrate.js`：ordered/versioned migration framework，取代 `ALTER TABLE try/catch`。
   `schema_migrations` 表、transactional forward migration、`down`（rollback）、safety classification、
-  `verifyMigrations()`、idempotent re-run（重跑不重複套用）、duplicate version 偵測。
-- 測試 `migrate-driver.test.js`（8 項）：套用順序、idempotent、失敗 rollback、verify、duplicate、
-  DB_DRIVER 解析、sqlite createDb、postgres stub。
-- 尚未：把 `db.js` 的 `ALTER TABLE try/catch` 實際搬到 migration runner；SQLite→PostgreSQL 資料搬遷
-  tool（dry-run / verify-only / resume）；把 domain 查詢抽成 repository interface。
+  `verifyMigrations()`、idempotent re-run、duplicate version 偵測；`addColumnIfMissing`/`addColumnsIfMissing`
+  為取代 try/catch 的 idempotent helper。
+- **`db.js` 已把 `listings`（57 欄）與 `route_cache`（6 欄）的 `ALTER TABLE try/catch` 全部收斂成
+  `addColumnsIfMissing`**（資料 backfill 保留原位）。schema 等價經 73 個 db 相關測試驗證。
+- 測試 `migrate-driver.test.js`（8 項）+ db 測試全綠。
+- 尚未：把 `ensureXxxSchema`（personal/demand/feedback/crm/... 各模組）也納入 runner；SQLite→PostgreSQL
+  資料搬遷 tool（dry-run / verify-only / resume）；把 domain 查詢抽成 repository interface。
+
+
 
 ### Phase 3 — Web/Crawler/Worker split（完成）
 

@@ -98,3 +98,23 @@ export function verifyMigrations(db, migrations) {
   const extra = [...appliedVersions].filter((v) => !expected.has(v));
   return { ok: missing.length === 0, missing, extra, applied: applied.map((row) => Number(row.version)) };
 }
+
+// Idempotent ALTER TABLE ADD COLUMN — the clean replacement for the old
+// `try { ALTER TABLE ... } catch { /* already migrated */ }` pattern.
+export function addColumnIfMissing(db, table, column, definition) {
+  const exists = db.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column);
+  if (exists) return false;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  return true;
+}
+
+// Batch form: [["column", "definition"], ...] — applies each idempotently.
+export function addColumnsIfMissing(db, table, columns) {
+  const existing = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name));
+  for (const [column, definition] of columns) {
+    if (existing.has(column)) continue;
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    existing.add(column);
+  }
+}
+

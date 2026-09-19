@@ -28,6 +28,7 @@ import { CITIES, districtNameFromListing, districtsFromSearchUrls, lookupDistric
 import { appendDistrictCandidates, ensureDistrictCandidateIndex } from "./listDistrictSql.js";
 import { appendPriceCeilingCandidates } from "./listPriceSql.js";
 import { ensureListingSearchProjection, syncListingProjection, deleteListingProjection } from "./listingSearchProjection.js";
+import { addColumnIfMissing, addColumnsIfMissing } from "./migrate.js";
 import { geoDistanceM, listingRefreshAt, matchFocusHints, preferPrimaryListing } from "./match.js";
 import {
   ensureUserSameHouseSchema,
@@ -526,41 +527,15 @@ db.exec(`
 `);
 ensureListingSearchProjection(db);
 
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN search_key TEXT NOT NULL DEFAULT ''");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN hidden_at TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN lat REAL");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN lng REAL");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN geo_source TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN watch_note TEXT NOT NULL DEFAULT ''");
-} catch {
-  // already migrated
-}
+addColumnsIfMissing(db, "listings", [
+  ["search_key", "TEXT NOT NULL DEFAULT ''"],
+  ["hidden", "INTEGER NOT NULL DEFAULT 0"],
+  ["hidden_at", "TEXT"],
+  ["lat", "REAL"],
+  ["lng", "REAL"],
+  ["geo_source", "TEXT"],
+  ["watch_note", "TEXT NOT NULL DEFAULT ''"],
+]);
 db.exec(`
   CREATE TABLE IF NOT EXISTS geo_cache (
     address TEXT PRIMARY KEY,
@@ -589,49 +564,25 @@ db.exec(`
     updated_at TEXT NOT NULL
   );
 `);
-try {
-  db.exec("ALTER TABLE route_cache ADD COLUMN rush_am_min REAL");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE route_cache ADD COLUMN rush_pm_min REAL");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE route_cache ADD COLUMN rush_updated_at TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE route_cache ADD COLUMN min_m INTEGER");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE route_cache ADD COLUMN location_class TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE route_cache ADD COLUMN route_version INTEGER");
-} catch {
-  // already migrated
-}
-for (const sql of [
-  "ALTER TABLE listings ADD COLUMN location_class TEXT",
-  "ALTER TABLE listings ADD COLUMN address_norm TEXT",
-  "ALTER TABLE listings ADD COLUMN address_raw TEXT",
-  "ALTER TABLE listings ADD COLUMN coord_version INTEGER",
-  "ALTER TABLE listings ADD COLUMN geo_provider TEXT",
-  "ALTER TABLE listings ADD COLUMN geo_approx INTEGER",
-  "ALTER TABLE listings ADD COLUMN geo_error TEXT",
-  "ALTER TABLE listings ADD COLUMN geo_job_state TEXT",
-  "ALTER TABLE listings ADD COLUMN content_seq INTEGER NOT NULL DEFAULT 0",
-]) {
-  try { db.exec(sql); } catch { /* already migrated */ }
-}
+addColumnsIfMissing(db, "route_cache", [
+  ["rush_am_min", "REAL"],
+  ["rush_pm_min", "REAL"],
+  ["rush_updated_at", "TEXT"],
+  ["min_m", "INTEGER"],
+  ["location_class", "TEXT"],
+  ["route_version", "INTEGER"],
+]);
+addColumnsIfMissing(db, "listings", [
+  ["location_class", "TEXT"],
+  ["address_norm", "TEXT"],
+  ["address_raw", "TEXT"],
+  ["coord_version", "INTEGER"],
+  ["geo_provider", "TEXT"],
+  ["geo_approx", "INTEGER"],
+  ["geo_error", "TEXT"],
+  ["geo_job_state", "TEXT"],
+  ["content_seq", "INTEGER NOT NULL DEFAULT 0"],
+]);
 db.exec(`
   CREATE TABLE IF NOT EXISTS route_jobs (
     job_key TEXT PRIMARY KEY,
@@ -649,171 +600,43 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_route_jobs_post ON route_jobs(post_id, job_state, next_retry_at);
 `);
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN match_post_id INTEGER");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN match_level TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN match_detail TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN match_rejected INTEGER NOT NULL DEFAULT 0");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN extra_fee INTEGER NOT NULL DEFAULT 0");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN extra_fee_text TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN price_contain_text TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN extra_fees TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN extra_fees_fetched INTEGER NOT NULL DEFAULT 0");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN contact_name TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN contact_role TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN agency TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN mobile TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN phone TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN contact_fetched_at TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN line_url TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN avatar TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN contact_uid INTEGER");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN contact_fetched INTEGER NOT NULL DEFAULT 0");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN community_id INTEGER NOT NULL DEFAULT 0");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN community_name TEXT NOT NULL DEFAULT ''");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN offline INTEGER NOT NULL DEFAULT 0");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN offline_at TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN last_checked_at TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN offline_confirmed INTEGER NOT NULL DEFAULT 0");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN alive_checked_at TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN has_natural_gas INTEGER NOT NULL DEFAULT 0");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN furnish_items TEXT NOT NULL DEFAULT '[]'");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN has_balcony INTEGER NOT NULL DEFAULT 0");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN kit_fetched INTEGER NOT NULL DEFAULT 0");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN kit_refetch_v1 INTEGER NOT NULL DEFAULT 0");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN kit_error TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN kit_next_retry_at TEXT");
-} catch {
-  // already migrated
-}
+addColumnsIfMissing(db, "listings", [
+  ["match_post_id", "INTEGER"],
+  ["match_level", "TEXT"],
+  ["match_detail", "TEXT"],
+  ["match_rejected", "INTEGER NOT NULL DEFAULT 0"],
+  ["extra_fee", "INTEGER NOT NULL DEFAULT 0"],
+  ["extra_fee_text", "TEXT"],
+  ["price_contain_text", "TEXT"],
+  ["extra_fees", "TEXT"],
+  ["extra_fees_fetched", "INTEGER NOT NULL DEFAULT 0"],
+  ["contact_name", "TEXT"],
+  ["contact_role", "TEXT"],
+  ["agency", "TEXT"],
+  ["mobile", "TEXT"],
+  ["phone", "TEXT"],
+]);
+addColumnsIfMissing(db, "listings", [
+  ["contact_fetched_at", "TEXT"],
+  ["line_url", "TEXT"],
+  ["avatar", "TEXT"],
+  ["contact_uid", "INTEGER"],
+  ["contact_fetched", "INTEGER NOT NULL DEFAULT 0"],
+  ["community_id", "INTEGER NOT NULL DEFAULT 0"],
+  ["community_name", "TEXT NOT NULL DEFAULT ''"],
+  ["offline", "INTEGER NOT NULL DEFAULT 0"],
+  ["offline_at", "TEXT"],
+  ["last_checked_at", "TEXT"],
+  ["offline_confirmed", "INTEGER NOT NULL DEFAULT 0"],
+  ["alive_checked_at", "TEXT"],
+  ["has_natural_gas", "INTEGER NOT NULL DEFAULT 0"],
+  ["furnish_items", "TEXT NOT NULL DEFAULT '[]'"],
+  ["has_balcony", "INTEGER NOT NULL DEFAULT 0"],
+  ["kit_fetched", "INTEGER NOT NULL DEFAULT 0"],
+  ["kit_refetch_v1", "INTEGER NOT NULL DEFAULT 0"],
+  ["kit_error", "TEXT"],
+  ["kit_next_retry_at", "TEXT"],
+]);
 try {
   db.exec(`UPDATE listings SET kit_fetched = 0, kit_refetch_v1 = 1
     WHERE source = 'hbhousing'
@@ -822,26 +645,12 @@ try {
 } catch {
   // ignore
 }
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN match_verdict TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN source TEXT NOT NULL DEFAULT '591'");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN source_id TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN model_score REAL");
-} catch {
-  // already migrated
-}
+addColumnsIfMissing(db, "listings", [
+  ["match_verdict", "TEXT"],
+  ["source", "TEXT NOT NULL DEFAULT '591'"],
+  ["source_id", "TEXT"],
+  ["model_score", "REAL"],
+]);
 try {
   db.exec("UPDATE listings SET source = '591' WHERE IFNULL(source, '') = ''");
   db.exec("UPDATE listings SET source_id = CAST(post_id AS TEXT) WHERE IFNULL(source_id, '') = ''");
@@ -863,26 +672,12 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_listings_search ON listings(search_key)"
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_hidden ON listings(hidden)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_match ON listings(match_level)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_offline ON listings(offline)");
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN cost_changed_at TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN cost_change_detail TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN cost_change_type TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN community_linked INTEGER NOT NULL DEFAULT 0");
-} catch {
-  // already migrated
-}
+addColumnsIfMissing(db, "listings", [
+  ["cost_changed_at", "TEXT"],
+  ["cost_change_detail", "TEXT"],
+  ["cost_change_type", "TEXT"],
+  ["community_linked", "INTEGER NOT NULL DEFAULT 0"],
+]);
 try {
   db.exec(`UPDATE listings SET community_linked = 1
     WHERE IFNULL(community_linked, 0) = 0
