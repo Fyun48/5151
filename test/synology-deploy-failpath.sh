@@ -189,12 +189,14 @@ echo "scenario4 PASS (rollback removes newly created sidecars)"
 # ---- Scenario 5: DB restore copy failure -> ROLLBACK_FAILED, no previous recreate (BLOCKER 3) ----
 T5="$(mktemp -d)"; trap 'rm -rf "$T1" "$T2" "$T3" "$T4" "$T5" "$T6"' EXIT
 setup_nas_prev "$T5"; mock_bin "$T5/bin"
-# mock cp: fail only when the SOURCE is under .backup/ (the rollback restore), not the snapshot.
+# mock cp: fail only when the SOURCE (first non-flag arg) is under .backup/ (rollback restore), not the snapshot.
 cat > "$T5/bin/cp" <<'EOF'
 #!/usr/bin/env bash
 for a in "$@"; do
+  case "$a" in -*) continue;; esac
   case "$a" in
     */.backup/*) echo "cp: injected restore failure" >&2; exit 1;;
+    *) break;;
   esac
 done
 exec /usr/bin/cp "$@"
