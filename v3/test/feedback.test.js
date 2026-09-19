@@ -136,7 +136,9 @@ test("server wires feedback endpoints", () => {
   assert.match(server, /app\.patch\("\/api\/admin\/feedback\/:id"/);
   assert.match(server, /submitFeedback/);
   const db = readSrc("src/db.js");
-  assert.match(db, /ensureFeedbackSchema\(db\)/);
+  assert.match(db, /runMigrations\(db, SCHEMA_MIGRATIONS\)/);
+  const migrations = readSrc("src/schemaMigrations.js");
+  assert.match(migrations, /ensureFeedbackSchema/);
   assert.match(db, /export function submitFeedback/);
 });
 

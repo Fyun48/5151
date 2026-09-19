@@ -51,8 +51,10 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
 - **SQLite→PostgreSQL 資料搬遷 tool**（`v3/src/sqliteToPostgres.js`）：`snapshotTables` / `tableHash` /
   `copyTable`（idempotent，重跑不重複）/ `verifyMigration`（row count + hash）/ `planMigration`（dry-run）/
   `runMigration`（dry-run + resume checkpoint）。測試 5 項。
-- 尚未：把 `ensureXxxSchema`（personal/demand/feedback/crm/... 各模組）也納入 runner；把 domain 查詢
-  抽成 repository interface；安裝 `pg` 接線真實 PostgreSQL target。
+- **`ensureXxxSchema` 已納入 runner**（`v3/src/schemaMigrations.js`）：把 personal/demand/feedback/crm/...
+  等 26 個 domain module 的 `ensureXxxSchema` 包成 5 個 ordered migration（`runMigrations(db, SCHEMA_MIGRATIONS)`），
+  data backfill/binding 保留原位。160 項測試驗證 schema 等價。
+- 尚未：把 domain 查詢抽成 repository interface；安裝 `pg` 接線真實 PostgreSQL target。
 
 
 
@@ -135,9 +137,8 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
 
 1. Phase 16–17 Web active/active + Cloudflare HA：config 已備好，尚未上線容器。
 2. Phase 22–27 Gitea + loop-engine：核心完成，尚未上線 + Gitea migration rehearsal。
-3. 把 `ensureXxxSchema`（personal/demand/feedback/crm/... 各模組）也納入 migration runner
-4. 把 domain 查詢（listings/users/settings/search/...）抽成 repository interface
-5. 安裝 `pg` 並接線 PostgreSQL adapter（同步 hot path 需先改 async）
+3. 把 domain 查詢（listings/users/settings/search/...）抽成 repository interface
+4. 安裝 `pg` 並接線 PostgreSQL adapter（同步 hot path 需先改 async）
 
 ## 注意（Windows 本機）
 

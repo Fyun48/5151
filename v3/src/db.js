@@ -28,7 +28,8 @@ import { CITIES, districtNameFromListing, districtsFromSearchUrls, lookupDistric
 import { appendDistrictCandidates, ensureDistrictCandidateIndex } from "./listDistrictSql.js";
 import { appendPriceCeilingCandidates } from "./listPriceSql.js";
 import { ensureListingSearchProjection, syncListingProjection, deleteListingProjection } from "./listingSearchProjection.js";
-import { addColumnIfMissing, addColumnsIfMissing } from "./migrate.js";
+import { addColumnIfMissing, addColumnsIfMissing, runMigrations } from "./migrate.js";
+import { SCHEMA_MIGRATIONS } from "./schemaMigrations.js";
 import { geoDistanceM, listingRefreshAt, matchFocusHints, preferPrimaryListing } from "./match.js";
 import {
   ensureUserSameHouseSchema,
@@ -697,12 +698,7 @@ try {
 } catch {
   // older fixtures
 }
-ensurePersonalSchema(db);
-ensureUserSameHouseSchema(db);
-ensureListingGroupSchema(db);
-ensureSearchProfileSchema(db);
-ensureGeoCacheSchema(db);
-ensureListingPrepSchema(db);
+runMigrations(db, SCHEMA_MIGRATIONS);
 try { markLegacyNotifiedUnknown(); } catch { /* user_events columns arrive with personal schema */ }
 try {
   const already = db.prepare("SELECT value FROM settings WHERE key = 'profileOnboardedBackfill'").get();
@@ -720,49 +716,12 @@ try {
 } catch {
   // ignore
 }
-ensureDemandSchema(db);
-ensureFeedbackSchema(db);
-ensureFeedbackOutboxSchema(db);
-ensureCrmSchema(db);
-ensureCrmOutboxSchema(db);
-ensureBudgetSchema(db);
 bindBudgetDb(db);
-ensureListingSimilaritySchema(db);
-ensureSelfListingSchema(db);
-ensureStage1FixtureSchema(db);
-ensureRentalMatchIndexes(db);
-ensureWishOfferSchema(db);
-ensureRentalNotifySchema(db);
 setRentalNotifyDockWriter(addUserEvent);
-ensureMemberMediaSchema(db);
-ensureContentDocumentSchema(db);
-ensureMemberConsentSchema(db);
-ensureListingImportSchema(db);
-ensureListingToolsSchema(db);
 try {
   seedDefaultDocuments(db, { legalCopy: settingKey("legalCopy") ?? defaultLegalCopy() });
 } catch {
   // 種子失敗不擋開站；註冊會 fail-closed
-}
-ensurePushSchema(db);
-ensureCommsSchema(db);
-ensureSupportSchema(db);
-db.exec(`
-  CREATE TABLE IF NOT EXISTS admin_audit (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    at TEXT NOT NULL,
-    actor_id INTEGER NOT NULL DEFAULT 0,
-    actor_email TEXT NOT NULL DEFAULT '',
-    action TEXT NOT NULL DEFAULT '',
-    target TEXT NOT NULL DEFAULT '',
-    before_json TEXT,
-    after_json TEXT
-  );
-`);
-try {
-  db.exec("CREATE INDEX IF NOT EXISTS idx_admin_audit_at ON admin_audit(at DESC)");
-} catch {
-  // older fixtures
 }
 try {
   migrateLegacyAdminAudit(db);
