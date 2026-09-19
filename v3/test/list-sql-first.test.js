@@ -105,3 +105,36 @@ test("sql-first falls back (null) outside its envelope", () => {
     );
   `);
 });
+
+test("cursor/keyset pagination pages through newest without gaps or overlap", () => {
+  runIsolated(`
+    for (let i = 1; i <= 55; i++) {
+      const stamp = new Date(Date.UTC(2026, 0, 1) + i * 60000).toISOString();
+      seed(i, { first_seen_at: stamp, last_seen_at: stamp, refresh_time: stamp });
+    }
+    const base = { userId: uid, searchKeys: [], settings, sort: "newest", limit: 10 };
+
+    // Reference: full ordered ids via offset pagination.
+    const full = app.listListingsSqlFirst({ ...base, limit: 500 }).listings.map(r => r.post_id);
+
+    // Page through using nextCursor.
+    const collected = [];
+    let cursor = null;
+    let pages = 0;
+    while (true) {
+      const result = cursor == null
+        ? app.listListingsSqlFirst(base)
+        : app.listListingsSqlFirst({ ...base, cursor });
+      assert.ok(result, "cursor page should be supported");
+      collected.push(...result.listings.map(r => r.post_id));
+      pages += 1;
+      if (!result.hasMore) break;
+      assert.ok(result.nextCursor, "hasMore implies a nextCursor");
+      cursor = result.nextCursor;
+      assert.ok(pages < 20, "should not loop forever");
+    }
+
+    assert.deepEqual(collected, full);
+    assert.equal(collected.length, new Set(collected).size, "no duplicate ids across pages");
+  `);
+});

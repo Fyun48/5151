@@ -5520,6 +5520,7 @@ export function listListingsSqlFirst({
   sort = "newest",
   limit = 500,
   offset = 0,
+  cursor = null,
   searchKeys,
   districts = [],
   userId,
@@ -5582,16 +5583,30 @@ export function listListingsSqlFirst({
   const districtMarks = districtNames.map(() => "?").join(",");
   const districtWhere = `p.district IN (${districtMarks})`;
 
+  // Cursor/keyset pagination (newest only for now). Instead of OFFSET (which
+  // rescans all previous rows), the cursor is the (updated_at, post_id) of the
+  // last row of the previous page and the predicate fetches strictly after it.
+  const useCursor = cursor != null && sort === "newest";
+  const cursorWhere = useCursor
+    ? `AND (p.updated_at < ? OR (p.updated_at = ? AND p.post_id > ?))`
+    : "";
+  const cursorParams = useCursor ? [Number(cursor.updatedAt), Number(cursor.updatedAt), Number(cursor.postId)] : [];
+
   const countRow = db.prepare(`SELECT COUNT(*) AS n FROM listing_search_projection p
     WHERE p.post_id IN (SELECT post_id FROM listings ${where})
     AND ${districtWhere}`).get(...params, ...districtNames);
   const totalMatched = Number(countRow?.n) || 0;
 
-  const pageRows = db.prepare(`SELECT p.post_id FROM listing_search_projection p
+  const pageSql = `SELECT p.post_id, p.updated_at FROM listing_search_projection p
     WHERE p.post_id IN (SELECT post_id FROM listings ${where})
     AND ${districtWhere}
+    ${cursorWhere}
     ORDER BY ${orderBy}
-    LIMIT ? OFFSET ?`).all(...params, ...districtNames, pageSize, start);
+    LIMIT ?${useCursor ? "" : " OFFSET ?"}`;
+  const pageParams = useCursor
+    ? [...params, ...districtNames, ...cursorParams, pageSize]
+    : [...params, ...districtNames, pageSize, start];
+  const pageRows = db.prepare(pageSql).all(...pageParams);
 
   const ids = pageRows.map((row) => Number(row.post_id));
   const fullRows = ids.length
@@ -5609,13 +5624,18 @@ export function listListingsSqlFirst({
     return finalizeListingDecorate(lite, settings, uid, { sameHouse: needPeers });
   });
 
+  const nextCursor = sort === "newest" && ids.length
+    ? { updatedAt: pageRows[pageRows.length - 1].updated_at, postId: ids[ids.length - 1] }
+    : null;
+
   return {
     listings,
     totalMatched,
-    hasMore: start + pageSize < totalMatched,
+    hasMore: useCursor ? ids.length === pageSize : start + pageSize < totalMatched,
     nextOffset: start + pageSize,
+    nextCursor,
     queryVersion: 3,
-    queryDetails: { sql_first: true },
+    queryDetails: { sql_first: true, cursor: useCursor },
   };
 }
 
