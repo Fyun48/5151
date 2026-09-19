@@ -217,7 +217,9 @@ test("deploy workflow uses native scp/ssh with correct port flags, not mutable t
   assert.match(workflow, /\bscp\s/);
   assert.match(workflow, /\bssh\s/);
   assert.match(workflow, /StrictHostKeyChecking=accept-new/);
-  // scp 的 port flag 是 -P（大寫），ssh 是 -p（小寫）。
+  // Synology sshd 不支援 SFTP → scp 必須用 legacy SCP protocol（-O）。
+  assert.match(workflow, /SCP_OPTS=\(-O /);
+  // scp 的 port flag 是 -P（大寫），ssh 是 -p（小寫）；ssh 不動。
   assert.match(workflow, /SCP_OPTS=\([^)]*-P "\$OPS_SYNOLOGY_PORT"/);
   assert.match(workflow, /SSH_OPTS=\([^)]*-p "\$OPS_SYNOLOGY_PORT"/);
 });
