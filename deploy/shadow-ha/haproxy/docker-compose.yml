@@ -1,0 +1,16 @@
+name: 5151-shadow-haproxy
+
+services:
+  5151-haproxy:
+    container_name: 5151-haproxy
+    image: haproxy:2.9-alpine
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:25433:25433"
+      - "0.0.0.0:25434:25434"
+      - "0.0.0.0:15153:15153"
+    environment:
+      CASAOS_HOST: ${CASAOS_HOST:?set CASAOS_HOST (CasaOS LAN IP)}
+      SYNOLOGY_HOST: ${SYNOLOGY_HOST:?set SYNOLOGY_HOST (Synology LAN IP)}
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
