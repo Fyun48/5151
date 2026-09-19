@@ -4,6 +4,16 @@
 # Rollback restores previous source + runtime image + compose + DB snapshot.
 set -euo pipefail
 
+# --- Synology Docker PATH normalization（non-interactive SSH 的 PATH 常缺 /usr/local/bin 與 ContainerManager binary）---
+PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/packages/ContainerManager/target/usr/bin:$PATH"
+export PATH
+
+# Docker resolution fail-closed（與 predeploy 同一套邏輯；不 silent fallback 到不存在的位置）。
+if ! command -v docker >/dev/null 2>&1; then
+  echo "::error::[ops-synology] docker not found on PATH" >&2
+  exit 1
+fi
+
 DEPLOY_SHA="${DEPLOY_SHA:?missing DEPLOY_SHA}"
 OPS_RUNTIME_IMAGE="${OPS_RUNTIME_IMAGE:?missing OPS_RUNTIME_IMAGE}"
 APP_ROOT="${OPS_SYNOLOGY_APP_ROOT:-/volume1/docker/5151-ops/app}"

@@ -3,6 +3,10 @@
 # Blocking prerequisites are hard failures (exit non-zero + PREDEPLOY_RESULT=FAIL).
 set -euo pipefail
 
+# --- Synology Docker PATH normalization（non-interactive SSH 的 PATH 常缺 /usr/local/bin 與 ContainerManager binary）---
+PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/packages/ContainerManager/target/usr/bin:$PATH"
+export PATH
+
 APP_ROOT="${APP_ROOT:-/volume1/docker/5151-ops/app}"
 DATA_ROOT="${DATA_ROOT:-/volume1/docker/5151-ops/data}"
 AUTH_ENV="${DATA_ROOT}/auth.env"
@@ -13,8 +17,9 @@ BLOCKED=0
 block() { printf 'FAIL %s\n' "$*"; BLOCKED=1; }
 
 say "== docker / docker compose =="
-docker --version || { printf 'FAIL docker not available\n'; BLOCKED=1; }
-docker compose version || { printf 'FAIL docker compose not available\n'; BLOCKED=1; }
+command -v docker >/dev/null 2>&1 || block "docker not found on PATH"
+docker --version || block "docker --version failed"
+docker compose version || block "docker compose not available"
 
 say "== NAS architecture =="
 say "arch=$(uname -m)"
