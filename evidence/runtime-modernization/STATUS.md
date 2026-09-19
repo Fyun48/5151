@@ -175,7 +175,12 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
 - `v3/src/dataRevision.js`：`data_revision` change-log（`bumpRevision` / `currentRevision` / `changesSince`），
   Web reconnect 靠 DB revision 補回正確狀態。測試 2 項。
 - 測試 `event-bus-delta.test.js`（5 項）。
-- 尚未：把 server.js 的 SSE 廣播實際改接 delta event（現仍 broadcast 整包）；Web reconnect 靠 DB revision 補回狀態。
+- **server.js SSE 已接 delta event**（Phase 10 收尾）：geo/route backfill 現會額外 broadcast
+  `commute_updated`（`{ postIds, fingerprint }`，只針對 located listings）+ `stats_invalidated`；
+  前端 SSE 對應處理 `commute_updated → refreshCommuteSnapshot()`、`stats_invalidated → loadList`。
+  原 `listing_updated`（click refresh 補抓）早已接上。測試 `delta-events-wiring.test.js`（2 項）。
+- 尚未：Web reconnect 靠 DB `dataRevision` 補回狀態（`changesSince` 的 API endpoint 未做）；
+  跨 Web-A/Web-B 的 `eventBus`（postgres LISTEN/NOTIFY）需多節點部署後才生效。
 
 
 ### Phase 12 — Client state（schema + versioning 完成，前端接入後續）

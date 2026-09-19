@@ -3359,9 +3359,16 @@ function queueGeoBackfill(settings = getSettings()) {
     async function runRoutes() {
       const routes = await backfillListingRoutes(settings, { limit: 20, priorityIds: visibleFocusIds() });
       if (routes.attempted || (routes.listings && routes.listings.length)) {
+        const commutePostIds = Array.isArray(routes.postIds) ? routes.postIds : [];
+        const fingerprint = routes.fingerprint || "";
         delete routes.listings;
         delete routes.fingerprint;
         broadcast({ type: "geo", routeBackfill: routes });
+        // Phase 10: targeted commute delta — only the located listings changed;
+        // clients refresh their commute chips, not the whole list.
+        if (commutePostIds.length) {
+          broadcast({ type: "commute_updated", postIds: commutePostIds, fingerprint });
+        }
       }
       const notified = await flushPendingNotifications(settings);
       if (notified.length) broadcastNotify(notified);
@@ -3420,6 +3427,7 @@ function queueGeoBackfill(settings = getSettings()) {
     }
     try {
       broadcast({ type: "geo", stats: stats(), done: true });
+      broadcast({ type: "stats_invalidated" });
     } catch (error) {
       console.warn("補定位後統計失敗：", error.message);
     }

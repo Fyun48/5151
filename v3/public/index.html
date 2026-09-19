@@ -13282,6 +13282,12 @@
           if (data.type === "listing_updated") {
             loadList({ silent: true, keep: true, refreshCards: true });
           }
+          if (data.type === "commute_updated") {
+            refreshCommuteSnapshot();
+          }
+          if (data.type === "stats_invalidated") {
+            loadList({ silent: true, keep: true });
+          }
           if (data.type === "geo") {
             queueGeoRefresh(data);
           }
