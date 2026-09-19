@@ -182,9 +182,9 @@ set -e
 [ "$C4" != "0" ] || fail "scenario4: expected non-zero exit"
 grep -q "ROLLBACK_OK" "$T4/out.log" || fail "scenario4: rollback not invoked"
 if [ -e "$T4/data/ops.db-wal" ] || [ -e "$T4/data/ops.db-shm" ]; then
-  echo "=== scenario4 debug: sidecar still present ==="
-  echo "--- out.log ---"; cat "$T4/out.log"
-  echo "--- data dir ---"; ls -la "$T4/data"
+  echo "=== scenario4 debug: sidecar still present ===" >&2
+  echo "--- out.log ---" >&2; cat "$T4/out.log" >&2
+  echo "--- data dir ---" >&2; ls -la "$T4/data" >&2
   fail "scenario4: sidecar should be removed"
 fi
 [ -f "$T4/data/ops.db" ] || fail "scenario4: ops.db should be restored"
