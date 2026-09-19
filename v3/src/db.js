@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { passesGeoFilters, passesAttributeFilters, passesDisplayFilters, listingHasElevator, matchesHousingKind, matchesListingSources, normalizeListQuery, housingTypeLabel, formatFloorDisplay, sanitizeFloorName } from "./floors.js";
 import { listingKitFrom, mergeKitColumns, parseStoredFurnish } from "./listingKit.js";
 import { addressPrecision, isTrustedGeoSource, listingCommunityId, preferListingAddress, sourceCommunityLinked, sqlTrustedGeoSource } from "./location.js";
-import { commuteNetworkHint, makeRouteKey } from "./route.js";
+import { commuteNetworkHint, makeRouteKey, roundCoord } from "./route.js";
 import {
   COMMUTE_STATES,
   commuteSettingsFingerprint,
@@ -5650,6 +5650,153 @@ export function listListingsSqlFirst({
     nextCursor,
     queryVersion: 3,
     queryDetails: { sql_first: true, cursor: useCursor },
+  };
+}
+
+// Commute-sort SQL-first path (Phase 7 收尾). The commute distance is per-user
+// (route_cache is keyed by work point + mode + direction), so unlike the other
+// sorts it can NOT use the projection's commute_km column (that column is null
+// at upsert time). Instead it INNER JOINs route_cache on the v2 to_work key and
+// mirrors listListings()'s strict geo filter (usable road + trusted coords +
+// within commute budget) so the returned set and order are identical.
+export function listListingsCommuteSqlFirst({
+  filter = "all",
+  kind = "",
+  sources = "",
+  q = "",
+  sort = "commute_asc",
+  limit = 500,
+  offset = 0,
+  searchKeys,
+  districts = [],
+  userId,
+  settings: settingsOverride,
+  sameHouse = true,
+} = {}) {
+  if (filter !== "all") return null;
+  if (kind || sources || q) return null;
+  if (sort !== "commute_asc" && sort !== "commute_desc") return null;
+
+  const uid = resolveUserId(userId);
+  const settings = settingsOverride || getSettings(uid);
+  const commuteKm = Number(settings.commuteKm);
+  if (!(commuteKm > 0) || !hasWorkPoint(settings)) return null;
+  if (
+    Number(settings.priceMin) > 0 || Number(settings.priceMax) > 0 ||
+    Number(settings.minBuildingFloors) > 0 || Number(settings.areaMax) > 0 ||
+    settings.wholeFloorOnly === true || settings.excludeLowFloors === true ||
+    settings.excludeRooftop === true || settings.hasParking === true ||
+    (settings.excludeKeywords || []).length || (settings.excludeAgents || []).length ||
+    (settings.excludeAgentIds || []).length || (settings.excludeBoxes || []).length
+  ) {
+    return null;
+  }
+
+  const requestedDistricts = (Array.isArray(districts) ? districts : String(districts || "").split(","))
+    .map((name) => String(name || "").trim()).filter(Boolean);
+  const districtNames = requestedDistricts.length ? requestedDistricts : memberRegionDistrictNames(settings);
+  if (!districtNames.length) return null;
+
+  const clauses = [];
+  const params = [];
+  searchWhere(searchKeys, clauses, params);
+  listingVisibilityClauses(clauses, params);
+  appendDistrictCandidates(districtNames, clauses, params);
+  appendPriceCeilingCandidates(settings, clauses, params);
+  clauses.push("NOT (IFNULL(offline, 0) = 1 AND IFNULL(offline_confirmed, 0) = 1)");
+  clauses.push("(IFNULL(match_verdict, '') != 'yes')");
+  clauses.push(`NOT EXISTS (
+    SELECT 1 FROM user_listing_flags f
+    WHERE f.post_id = listings.post_id AND f.user_id = ? AND f.hidden = 1
+  )`);
+  params.push(uid);
+  clauses.push(`IFNULL((
+    SELECT watched FROM user_listing_flags f
+    WHERE f.post_id = listings.post_id AND f.user_id = ?
+  ), 0) = 0`);
+  params.push(uid);
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+
+  // resolveLocationClass() falls back to geocode quality / address inference when
+  // location_class is empty AND geo_source = 'geocode'. That inference is not
+  // representable in SQL; fall back to the Node path when it would be needed.
+  const guardRow = db.prepare(`SELECT 1 FROM listings ${where}
+    AND geo_source = 'geocode'
+    AND (location_class IS NULL OR location_class NOT IN ('source','address','community','street','admin','unknown'))
+    LIMIT 1`).get(...params);
+  if (guardRow) return null;
+
+  const mode = normalizeCommuteMode(settings.commuteMode);
+  const workLat = roundCoord(settings.workLat);
+  const workLng = roundCoord(settings.workLng);
+  const routeKeyExpr = `'v2:to_work:' || '${mode}' || ':' ||
+    (ROUND(p.lat * 100000) / 100000.0) || ',' || (ROUND(p.lng * 100000) / 100000.0) || '>' ||
+    '${workLat},${workLng}'`;
+
+  const clsExpr = `CASE
+    WHEN p.location_class IN ('source','address','community','street','admin','unknown') THEN p.location_class
+    WHEN l.geo_source = 'community' THEN 'community'
+    WHEN l.geo_source IN ('591','hbhousing','sinyi','housefun','houseprice','ddroom','rakuya') THEN 'source'
+    ELSE 'unknown'
+  END`;
+  const roadClass = `'source','address','community','street'`;
+  // listingNotifyMeters = MAX(round(route_min_m if >0 else min(distances)*1000), round(route_km*1000)).
+  const budgetExpr = `MAX(
+    CASE WHEN IFNULL(rc.min_m, 0) > 0 THEN ROUND(rc.min_m) ELSE ROUND(rc.min_km * 1000) END,
+    ROUND(rc.min_km * 1000)
+  ) <= ${commuteKm} * 1000`;
+  const commuteExpr = `ROUND(rc.min_km * 10) / 10.0`;
+  const dir = sort === "commute_asc" ? "ASC" : "DESC";
+
+  const districtMarks = districtNames.map(() => "?").join(",");
+  const districtWhere = `p.district IN (${districtMarks})`;
+  const commuteFilter = `
+      AND ${clsExpr} IN (${roadClass})
+      AND ${sqlTrustedGeoSource("l.geo_source")}
+      AND p.lat IS NOT NULL AND p.lat != 0 AND p.lng IS NOT NULL AND p.lng != 0
+      AND ${budgetExpr}`;
+
+  const pageSize = Math.max(1, Math.min(Number(limit) || 500, 500));
+  const start = Math.max(0, Number(offset) || 0);
+
+  const from = `FROM listing_search_projection p
+    JOIN listings l ON l.post_id = p.post_id
+    JOIN route_cache rc ON rc.route_key = ${routeKeyExpr}
+    WHERE p.post_id IN (SELECT post_id FROM listings ${where})
+      AND ${districtWhere}${commuteFilter}`;
+
+  const countRow = db.prepare(`SELECT COUNT(*) AS n ${from}`).get(...params, ...districtNames);
+  const totalMatched = Number(countRow?.n) || 0;
+
+  const pageSql = `SELECT p.post_id, p.updated_at ${from}
+    ORDER BY ${commuteExpr} ${dir}, p.updated_at DESC, p.post_id ASC
+    LIMIT ? OFFSET ?`;
+  const pageRows = db.prepare(pageSql).all(...params, ...districtNames, pageSize, start);
+
+  const ids = pageRows.map((row) => Number(row.post_id));
+  const fullRows = ids.length
+    ? db.prepare(`SELECT * FROM listings WHERE post_id IN (${ids.map(() => "?").join(",")})`).all(...ids)
+    : [];
+  const fullById = new Map(fullRows.map((row) => [Number(row.post_id), row]));
+  const flagMap = loadFlagMap(db, uid);
+  const ordered = ids
+    .map((id) => Object.assign(fullById.get(id) || {}, { post_id: id }))
+    .filter((row) => fullById.has(Number(row.post_id)));
+  const overlaid = overlayRowsPersonal(ordered, flagMap, { inPlace: true });
+  const listings = overlaid.map((row) => {
+    const lite = decorateListingLite(row, settings, uid);
+    const needPeers = sameHouse !== false && Boolean(row.match_post_id || row.same_house_role);
+    return finalizeListingDecorate(lite, settings, uid, { sameHouse: needPeers });
+  });
+
+  return {
+    listings,
+    totalMatched,
+    hasMore: start + pageSize < totalMatched,
+    nextOffset: start + pageSize,
+    nextCursor: null,
+    queryVersion: 3,
+    queryDetails: { sql_first: true, commute: true },
   };
 }
 

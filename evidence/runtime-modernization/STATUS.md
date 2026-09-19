@@ -90,6 +90,22 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
   無 gap/overlap（與 offset 全量一致）。
 - 尚未：commute/fit 排序的 SQL 化（依賴 route_cache，跨使用者）、commute 的 cursor、EXPLAIN evidence。
 
+### Phase 7 收尾 — commute sort SQL 化
+
+- `listListingsCommuteSqlFirst()`：通勤距離是**每個使用者的**（`route_cache` 以 work point + mode +
+  direction 為 key），所以不能沿用 projection 的 `commute_km`（該欄在 upsert 時是 null）。改用
+  **INNER JOIN route_cache on v2 to_work key**（`ROUND(lat*1e5)/1e5` 字串拼 key，與 `makeRouteKey`
+  一致，實測字串格式化與 JS `String()` 完全相同），並複製 `listListings` 的 strict geo filter
+  （usable road + trusted coords + `listingNotifyMeters` 預算），回傳集合/順序與 JS 一致。
+- `geocode` 且 `location_class` 空的 case 會用到 JS 的 quality/address inference，SQL 無法複製，
+  以 guard query 偵測後回 `null`（退回 Node 路徑）。
+- 差異測試 `commute-sql-first.test.js`（2 項）：同 fixture 下 `listListingsCommuteSqlFirst` 與
+  `listListings` 回傳相同 id 順序（含超出預算/無路線被過濾）；envelope 外回 null。
+- **實測 10k**：`commute_asc` p50 143→61ms（2.4x）、p95 263→64ms（4.1x）；
+  `commute_desc` p50 140→61ms（2.3x）。
+- 尚未：`fit_desc` 的 SQL 化（`listingFitScore` 公式含樓層/電梯/價格/route，較複雜）、
+  commute 的 cursor、EXPLAIN evidence。
+
 
 ### Phase 13/14/15/19 — Shadow PostgreSQL Primary/Standby（已上線並驗證）
 
