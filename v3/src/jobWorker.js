@@ -29,6 +29,31 @@ export function runWorkerBatch({
   return results;
 }
 
+export async function runWorkerBatchAsync({
+  db,
+  workerId,
+  jobTypes = null,
+  limit = 10,
+  handler = null,
+  now = Date.now(),
+} = {}) {
+  // Crash recovery: reclaim jobs whose lease expired (e.g. a dead worker).
+  reclaimExpiredLeases(db, { now });
+  const jobs = claimJobs(db, { workerId, jobTypes, limit, now });
+  const results = [];
+  for (const job of jobs) {
+    try {
+      const out = handler ? await handler(job) : undefined;
+      completeJob(db, { jobId: job.id, workerId, now: Date.now() });
+      results.push({ id: Number(job.id), state: "done", out });
+    } catch (error) {
+      failJob(db, { jobId: job.id, workerId, error: error?.message || String(error), now: Date.now() });
+      results.push({ id: Number(job.id), state: "failed", error: error?.message || String(error) });
+    }
+  }
+  return results;
+}
+
 export function startWorkerLoop({
   db,
   workerId,

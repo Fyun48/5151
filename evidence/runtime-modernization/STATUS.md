@@ -37,7 +37,13 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
   complete/fail）+ `startWorkerLoop`；證明兩 worker 不重複執行、失敗不丟 job。測試 4 項。
 - **Jobs repository**（`createJobQueue` 工廠 + SQLite/PostgreSQL 兩個 adapter）：PostgreSQL claim 真正
   wired `FOR UPDATE SKIP LOCKED` + `$n` 佔位符 + `ON CONFLICT (idempotency_key)`。測試 3 項。
-- 尚未：把現有 geo/enrich/notification/CRM/OPS/wish 各 worker 逐一改接 `runWorkerBatch`（漸進遷移）。
+- **Worker convergence**（Phase 4 收尾）：`jobWorker.js` 新增 `runWorkerBatchAsync`（async handler 版，
+  給 enrich/notify/CRM 這類 fetch 型 worker）；`workerConvergence.js` 以 CRM 為範例提供
+  `enqueueCrmDeliveryJob`（idempotent producer，`job_type: "crm"`）+ `runCrmDeliveryConvergedBatch`
+  （經 durable queue claim → deliver → complete/fail）。測試 `worker-convergence.test.js`（3 項：deliver+
+  complete、idempotency、retry→dead-letter）。
+- 尚未：把 enrich/notification/OPS/wish 各 worker 逐一遷移（CRM 已示範 producer/consumer 橋接，
+  enrich 的 source-specific backoff + priority slots 需額外 mapping）。
 
 ### Phase 5/6 — DB driver 抽象 + Migration framework（完成核心）
 - `v3/src/dbDriver.js`：`DB_DRIVER=sqlite|postgres` 選擇（`resolveDbDriver()`），`createDb()` 工廠、
