@@ -123,6 +123,8 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
   membership/order 變才 re-query）、`searchMembershipChanged`、`eventRequiresRelist`。
 - `v3/src/eventBus.js`：共用 event bus；`local`（in-memory pub/sub，SQLite/dev）+ `postgres`
   （`pg_notify`/`LISTEN`，跨 Web-A/Web-B）。NOTIFY 只作 wake-up/cache invalidation，DB 仍是 source of truth。
+- `v3/src/dataRevision.js`：`data_revision` change-log（`bumpRevision` / `currentRevision` / `changesSince`），
+  Web reconnect 靠 DB revision 補回正確狀態。測試 2 項。
 - 測試 `event-bus-delta.test.js`（5 項）。
 - 尚未：把 server.js 的 SSE 廣播實際改接 delta event（現仍 broadcast 整包）；Web reconnect 靠 DB revision 補回狀態。
 
