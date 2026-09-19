@@ -469,7 +469,9 @@
     /* OPS 後台：hidden 必須真的隱藏（本頁 button/a 有 display:inline-flex，會蓋掉 native hidden）。 */
     button[hidden], a.ghost[hidden], a.primary[hidden] { display: none !important; }
     .ops-crm-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
-    .ops-crm-query { min-width: 560px; flex: 1 1 320px; }
+    .ops-crm-query { min-width: 0; flex: 1 1 240px; }
+    @media (min-width: 700px) { .ops-crm-query { min-width: 560px; } }
+    .ops-check { display: flex; align-items: center; gap: 8px; min-height: 44px; }
     .ops-panel-note { font-size: 13px; color: var(--muted); line-height: 1.6; margin: 0 0 10px; }
     .ops-badge { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; font-size: 12px; }
     .ops-badge[data-state="blocked"], .ops-badge[data-state="cancelled"] { border-color: #d9b3b3; color: #8a3b3b; }
@@ -1772,8 +1774,8 @@
             <label>候選上限
               <input id="phashMaxCandidates" name="max_candidates" type="number" min="1" max="200" step="1" value="20" />
             </label>
-            <label class="row"><input id="phashEnabled" name="phash_enabled" type="checkbox" /> 啟用 pHash 候選</label>
-            <label class="row"><input id="phashLlmEnabled" name="llm_enabled" type="checkbox" /> 啟用 LLM 覆核（選用）</label>
+            <label class="row ops-check"><input id="phashEnabled" name="phash_enabled" type="checkbox" /> 啟用 pHash 候選</label>
+            <label class="row ops-check"><input id="phashLlmEnabled" name="llm_enabled" type="checkbox" /> 啟用 LLM 覆核（選用）</label>
             <div class="row">
               <button type="submit" class="primary ops-min-44" id="phashSaveBtn">儲存設定</button>
               <button type="button" class="ghost ops-min-44" id="similarityReload">重新整理</button>
