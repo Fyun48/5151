@@ -1,0 +1,25 @@
+name: Production deploy (manual-only)
+# Manual-only production release. Requires an exact confirmation string so a
+# push/merge can never deploy production. Runs on a dedicated production runner
+# (separate capability boundary — never the generic CI runner).
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'Commit SHA to release'
+        required: true
+      confirmation:
+        description: 'Type DEPLOY-PRODUCTION to confirm'
+        required: true
+jobs:
+  deploy:
+    runs-on: production
+    if: ${{ github.event.inputs.confirmation == 'DEPLOY-PRODUCTION' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.sha }}
+      - name: Deploy to production
+        run: ./scripts/production-deploy.sh ${{ github.event.inputs.sha }}
+      - name: Post-deploy verify
+        run: ./scripts/postdeploy-verify.sh

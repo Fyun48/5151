@@ -1,0 +1,48 @@
+name: 5151-shadow-pg-standby
+
+# Shadow PostgreSQL-B (Hot Standby) for Synology. Isolated from production.
+# Two-phase start:
+#   1) `docker compose run --rm standby-basebackup` runs setup-standby.sh to pull
+#      a base backup from the primary and write recovery config into the volume.
+#   2) `docker compose up -d` starts postgres in standby mode (standby.signal).
+services:
+  5151-postgres-B:
+    container_name: 5151-postgres-B
+    image: postgres:16-alpine
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:15432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${PG_SUPER_PASSWORD:?set PG_SUPER_PASSWORD}
+      POSTGRES_DB: 5151_shadow
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - 5151-shadow-pg-b:/var/lib/postgresql/data
+    networks:
+      - shadow-pg
+
+  # One-shot base-backup helper. Never runs as a daemon.
+  standby-basebackup:
+    image: postgres:16-alpine
+    profiles: ["setup"]
+    environment:
+      CASAOS_HOST: ${CASAOS_HOST:?set CASAOS_HOST (primary LAN IP)}
+      PG_REPLICATION_PASSWORD: ${PG_REPLICATION_PASSWORD:?set PG_REPLICATION_PASSWORD}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        . /setup-standby.sh
+    volumes:
+      - 5151-shadow-pg-b:/var/lib/postgresql/data
+      - ./setup-standby.sh:/setup-standby.sh:ro
+    networks:
+      - shadow-pg
+
+volumes:
+  5151-shadow-pg-b:
+
+networks:
+  shadow-pg:

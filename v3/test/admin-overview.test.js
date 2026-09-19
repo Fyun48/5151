@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import os from "os";
 import path from "path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -13,9 +13,9 @@ function runIsolated(body) {
   const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-admin-ov-"));
   const script = `
     import assert from "node:assert/strict";
-    import * as app from ${JSON.stringify(path.join(dir, "../src/db.js"))};
-    import { getAdminOverview, getAdminDataHealth, searchAdminListings, remainingSameHouseBackfill } from ${JSON.stringify(path.join(dir, "../src/adminOverview.js"))};
-    import { appendAdminAudit, listAdminAudit, redactAuditValue } from ${JSON.stringify(path.join(dir, "../src/adminAudit.js"))};
+    import * as app from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/db.js")).href)};
+    import { getAdminOverview, getAdminDataHealth, searchAdminListings, remainingSameHouseBackfill } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/adminOverview.js")).href)};
+    import { appendAdminAudit, listAdminAudit, redactAuditValue } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/adminAudit.js")).href)};
     function seed(post_id, overrides = {}) {
       app.upsertListing({
         post_id, source: overrides.source || "591", source_id: String(post_id),
@@ -113,8 +113,8 @@ test("pendingReconcile counts remaining post_id > cursor, not listings minus cur
 
 test("legacy adminAudit JSON migrates with BEGIN IMMEDIATE on node:sqlite", () => {
   runIsolated(`
-    import { lastAuditAction } from ${JSON.stringify(path.join(dir, "../src/adminAudit.js"))};
-    import { ADMIN_AUDIT_LEGACY_KEY, migrateLegacyAdminAudit } from ${JSON.stringify(path.join(dir, "../src/adminAuditSchema.js"))};
+    import { lastAuditAction } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/adminAudit.js")).href)};
+    import { ADMIN_AUDIT_LEGACY_KEY, migrateLegacyAdminAudit } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/adminAuditSchema.js")).href)};
     assert.equal(typeof app.db.transaction, "undefined");
     const legacy = [
       { at: "2026-09-01T00:00:00.000Z", actorId: 1, actorEmail: "a@example.test", action: "smtp_test", target: "mail" },
@@ -149,9 +149,9 @@ test("startup migrates leftover adminAudit JSON without DatabaseSync.transaction
   boot.close();
   const script = `
     import assert from "node:assert/strict";
-    import { lastAuditAction, listAdminAudit } from ${JSON.stringify(path.join(dir, "../src/adminAudit.js"))};
-    import { ADMIN_AUDIT_LEGACY_KEY } from ${JSON.stringify(path.join(dir, "../src/adminAuditSchema.js"))};
-    import { db } from ${JSON.stringify(path.join(dir, "../src/db.js"))};
+    import { lastAuditAction, listAdminAudit } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/adminAudit.js")).href)};
+    import { ADMIN_AUDIT_LEGACY_KEY } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/adminAuditSchema.js")).href)};
+    import { db } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/db.js")).href)};
     assert.equal(typeof db.transaction, "undefined");
     assert.equal(lastAuditAction("smtp_test")?.action, "smtp_test");
     assert.equal(listAdminAudit({ limit: 5 }).length, 1);

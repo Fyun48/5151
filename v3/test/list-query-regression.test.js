@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -14,7 +14,7 @@ function runIsolated(body) {
     import assert from "node:assert/strict";
     import path from "node:path";
     import { DatabaseSync } from "node:sqlite";
-    import * as app from ${JSON.stringify(path.join(dir, "../src/db.js"))};
+    import * as app from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/db.js")).href)};
     const uid = app.defaultUserId();
     const settings = {
       ...app.getSettings(uid), searchUrls: [], watchDistricts: ["1-8"],

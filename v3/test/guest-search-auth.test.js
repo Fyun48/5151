@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { publicPath } from "../src/auth.js";
 import {
   assertPublicListingsReadable,
@@ -101,8 +101,8 @@ function runIsolated(body) {
   const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-guest-auth-"));
   const script = `
     import assert from "node:assert/strict";
-    import * as app from ${JSON.stringify(path.join(dir, "../src/db.js"))};
-    import { getCachedPublicListings, resetPublicListingsCache } from ${JSON.stringify(path.join(dir, "../src/publicListings.js"))};
+    import * as app from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/db.js")).href)};
+    import { getCachedPublicListings, resetPublicListingsCache } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/publicListings.js")).href)};
     const uid = app.defaultUserId();
     const beforeSettings = JSON.stringify(app.getSettings(uid));
     function seed(post_id, overrides = {}) {

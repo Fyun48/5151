@@ -1,0 +1,10 @@
+# Agent 限制（.agent/limits.yml）
+# 防止無限 loop / 成本失控。超過任一上限即停止，回報 NOT_READY。
+
+limits:
+  max_runtime_minutes: 60
+  max_tokens: 200000
+  max_cost_usd: 25
+  max_changed_files: 20
+  max_diff_lines: 2000
+  max_self_fix_iterations: 3

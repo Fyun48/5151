@@ -1,4 +1,5 @@
 import "./env.js";
+import { resolveAppRole, roleRunsWeb, roleRunsCrawler, roleRunsWorker } from "./appRole.js";
 import express from "express";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -20,6 +21,9 @@ import {
   getSettings,
   hideMany,
   listListings,
+  listListingsCommuteSqlFirst,
+  listListingsFitSqlFirst,
+  listListingsSqlFirst,
   loadProfile,
   recentEvents,
   registerUser,
@@ -259,6 +263,7 @@ import {
   saveCommsConfig,
   db,
 } from "./db.js";
+import { currentRevision, changesSince } from "./dataRevision.js";
 import {
   announcementInboxForUser,
   bannerAnnouncements,
@@ -3355,9 +3360,16 @@ function queueGeoBackfill(settings = getSettings()) {
     async function runRoutes() {
       const routes = await backfillListingRoutes(settings, { limit: 20, priorityIds: visibleFocusIds() });
       if (routes.attempted || (routes.listings && routes.listings.length)) {
+        const commutePostIds = Array.isArray(routes.postIds) ? routes.postIds : [];
+        const fingerprint = routes.fingerprint || "";
         delete routes.listings;
         delete routes.fingerprint;
         broadcast({ type: "geo", routeBackfill: routes });
+        // Phase 10: targeted commute delta — only the located listings changed;
+        // clients refresh their commute chips, not the whole list.
+        if (commutePostIds.length) {
+          broadcast({ type: "commute_updated", postIds: commutePostIds, fingerprint });
+        }
       }
       const notified = await flushPendingNotifications(settings);
       if (notified.length) broadcastNotify(notified);
@@ -3416,6 +3428,7 @@ function queueGeoBackfill(settings = getSettings()) {
     }
     try {
       broadcast({ type: "geo", stats: stats(), done: true });
+      broadcast({ type: "stats_invalidated" });
     } catch (error) {
       console.warn("補定位後統計失敗：", error.message);
     }
@@ -3685,7 +3698,11 @@ app.get("/api/listings", async (req, res) => {
     .filter(Boolean);
   const started = Date.now();
   confirmExpiredOfflineFromSettings();
-  const listed = listListings({
+  let cursor = null;
+  if (req.query.cursor) {
+    try { cursor = JSON.parse(String(req.query.cursor)); } catch { cursor = null; }
+  }
+  const args = {
     filter: req.query.filter || "all",
     kind: req.query.kind || "",
     sources: authorizedListingSources(req.query.sources || "", readSession(req)).join(","),
@@ -3693,11 +3710,20 @@ app.get("/api/listings", async (req, res) => {
     sort: req.query.sort || "newest",
     limit: Number(req.query.limit) || 80,
     offset: Number(req.query.offset) || 0,
+    cursor,
     districts,
     userId: uid,
     matchVoteUserId: uid,
     sameHouse: req.query.sameHouse !== "0",
-  });
+  };
+  // SQL-first fast path (Phase 7/8): push the district re-check + ORDER BY +
+  // LIMIT/OFFSET into SQL. Each fast path returns null outside its
+  // exact-equivalence envelope, so fall back to the Node path when it does.
+  const listed =
+    listListingsSqlFirst(args) ||
+    listListingsCommuteSqlFirst(args) ||
+    listListingsFitSqlFirst(args) ||
+    listListings(args);
   const queryMs = Date.now() - started;
   const statsStarted = Date.now();
   const statsDetails = {};
@@ -3709,6 +3735,7 @@ app.get("/api/listings", async (req, res) => {
     listings: listed.listings,
     hasMore: listed.hasMore === true,
     nextOffset: listed.nextOffset || 0,
+    nextCursor: listed.nextCursor || null,
     queryVersion: listed.queryVersion || 2,
     timing: {
       query_ms: queryMs, stats_ms: statsMs, total_ms: Date.now() - started,
@@ -4154,6 +4181,18 @@ app.post("/api/watch", async (req, res) => {
   }
 });
 
+// Reconnect catch-up (Phase 11): a client that dropped its SSE stream asks
+// "what changed since revision N?" and re-reads only the delta, not the whole set.
+app.get("/api/events/revision", (req, res) => {
+  const session = requireMember(req, res);
+  if (!session) return;
+  const since = Math.max(0, Number(req.query.since) || 0);
+  res.json({
+    revision: currentRevision(db),
+    changes: changesSince(db, since, { limit: 500 }),
+  });
+});
+
 app.get("/api/events/stream", (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
@@ -4180,8 +4219,32 @@ function runHousingRefresh() {
     .catch((error) => console.warn("居住數據自動更新失敗：", error.message));
 }
 
-app.listen(PORT, HOST, () => {
-  schedule();
+const APP_ROLE = resolveAppRole();
+
+if (roleRunsWeb(APP_ROLE)) {
+  app.listen(PORT, HOST, () => {
+    if (roleRunsCrawler(APP_ROLE)) schedule();
+    if (roleRunsWorker(APP_ROLE)) startWorkerLoops();
+    if (roleRunsCrawler(APP_ROLE) || roleRunsWorker(APP_ROLE)) startStartupWork();
+    console.log(`${APP_NAME}：http://${HOST}:${PORT}（role=${APP_ROLE}）`);
+    if (envAdminConfigured()) {
+      console.log(`管理員帳號：${adminEmail()}（也可註冊新會員）`);
+    } else {
+      console.log("可從登入頁註冊新會員。若要保留舊的單一管理員，請在 auth.env 設定 AUTH_EMAIL / AUTH_PASSWORD。");
+    }
+    if (!mailConfigured(getStoredSmtp())) {
+      console.log("系統信（註冊、忘記密碼、變更密碼、贊助）尚未能寄信：請在後台填 SMTP，或在 auth.env 寫入 SMTP_HOST、SMTP_USER、SMTP_PASS、SMTP_FROM。");
+    }
+  });
+} else {
+  // crawler / worker 獨立行程：啟動各自的背景迴圈，不提供 HTTP。
+  if (roleRunsCrawler(APP_ROLE)) schedule();
+  if (roleRunsWorker(APP_ROLE)) startWorkerLoops();
+  if (roleRunsCrawler(APP_ROLE) || roleRunsWorker(APP_ROLE)) startStartupWork();
+  console.log(`${APP_NAME}：以 ${APP_ROLE} 角色啟動（不提供 HTTP）`);
+}
+
+function startWorkerLoops() {
   // 居住數據：開站 30 秒後補一次、之後每天自動抓開放資料（失敗不影響服務）
   setTimeout(runHousingRefresh, 30_000);
   setInterval(runHousingRefresh, 24 * 60 * 60 * 1000);
@@ -4195,15 +4258,10 @@ app.listen(PORT, HOST, () => {
   startWishOfferExpiryLoop(() => runWishOfferExpiryWorkerTick(), { intervalMs: 5 * 60 * 1000, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
   startRentalNotifyLoop(() => runRentalNotifyWorkerTick(), { intervalMs: 5 * 60 * 1000, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
   startCrmDeliveryLoop(opsDeliveryDb(), process.env, { log: (tag, info) => console.log(tag, JSON.stringify(info)) });
-  console.log(`${APP_NAME}：http://${HOST}:${PORT}`);
-  if (envAdminConfigured()) {
-    console.log(`管理員帳號：${adminEmail()}（也可註冊新會員）`);
-  } else {
-    console.log("可從登入頁註冊新會員。若要保留舊的單一管理員，請在 auth.env 設定 AUTH_EMAIL / AUTH_PASSWORD。");
-  }
-  if (!mailConfigured(getStoredSmtp())) {
-    console.log("系統信（註冊、忘記密碼、變更密碼、贊助）尚未能寄信：請在後台填 SMTP，或在 auth.env 寫入 SMTP_HOST、SMTP_USER、SMTP_PASS、SMTP_FROM。");
-  }
+}
+
+// 啟動後 20 秒做第一次爬取 + geo backfill（crawler 與 worker 共用）。
+function startStartupWork() {
   setTimeout(() => {
     ensureWorkCoords()
       .then((settings) => {
@@ -4222,4 +4280,4 @@ app.listen(PORT, HOST, () => {
         console.warn("第一次檢查失敗：", error.message);
       });
   }, 20000);
-});
+}

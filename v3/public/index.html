@@ -4583,6 +4583,37 @@
     const APP_VIEW_KEY = "591-v3-app-view";
     const PUSH_ASKED_KEY = "591-v3-push-asked";
     const CHANNEL_DEFAULT_ON = { dock: true, push: true, webhook: false, mail: false };
+    // Versioned client state (Phase 12): consolidates the scattered localStorage
+    // keys so F5 keeps filter / district / sort. Mirrors src/clientState.js.
+    const CLIENT_STATE_KEY = "5151-client-state-v1";
+    function readClientState() {
+      let raw = null;
+      try { raw = JSON.parse(localStorage.getItem(CLIENT_STATE_KEY) || "null"); } catch { raw = null; }
+      if (!raw || typeof raw !== "object") raw = {};
+      return {
+        version: 1,
+        filter: typeof raw.filter === "string" ? raw.filter : "all",
+        district: Array.isArray(raw.district) ? raw.district : [],
+        sort: typeof raw.sort === "string" ? raw.sort : "newest",
+        panel: { collapsed: false, filterCompact: false, ...(raw.panel || {}) },
+        moreCondition: { expanded: false, ...(raw.moreCondition || {}) },
+        currentProfile: typeof raw.currentProfile === "string" ? raw.currentProfile : "",
+        pagination: { cursor: null, offset: 0, ...(raw.pagination || {}) },
+        scroll: { top: 0, ...(raw.scroll || {}) },
+      };
+    }
+    function writeClientState(patch) {
+      try { localStorage.setItem(CLIENT_STATE_KEY, JSON.stringify({ ...readClientState(), ...patch, version: 1 })); } catch { /* ignore quota */ }
+    }
+    function persistSearchState() {
+      writeClientState({ filter, sort, district: [...viewDistricts] });
+    }
+    function restoreSearchState() {
+      const state = readClientState();
+      if (state.filter) filter = state.filter;
+      if (state.sort) sort = state.sort;
+      if (Array.isArray(state.district) && state.district.length) viewDistricts = new Set(state.district);
+    }
     if (localStorage.getItem(PANEL_KEY) === "1") {
       document.body.classList.add("panel-collapsed");
       if (localStorage.getItem(FILTER_COMPACT_KEY) === "1") {
@@ -4602,7 +4633,10 @@
     let filter = "all";
     let kinds = ["whole"];
     let listOffset = 0;
+    let listCursor = null;
     let listHasMore = false;
+    let lastRevision = 0;
+    let revisionSynced = false;
     const LIST_PAGE_SIZE = 80;
     const GUEST_LIST_PAGE_SIZE = 40;
     let guestFilterTimer = 0;
@@ -5164,6 +5198,7 @@
       const saved = JSON.parse(sessionStorage.getItem(VIEW_KEY) || "[]");
       if (Array.isArray(saved)) viewDistricts = new Set(saved);
     } catch {}
+    restoreSearchState();
 
     function migrateHousingKinds(list) {
       const raw = Array.isArray(list) ? list : [];
@@ -6666,6 +6701,7 @@
             if (viewDistricts.size === names.length) viewDistricts = new Set();
           }
           sessionStorage.setItem(VIEW_KEY, JSON.stringify([...viewDistricts]));
+          persistSearchState();
           persistGuestSearch();
           renderDistrictChips(settings);
           loadList();
@@ -8061,15 +8097,18 @@
         ? LIST_PAGE_SIZE
         : Math.min(500, Math.max(LIST_PAGE_SIZE, options.keep && loadedCount ? loadedCount : 0));
       const fetchOffset = append ? listOffset : 0;
+      const cursorParam = append && listCursor
+        ? `&cursor=${encodeURIComponent(JSON.stringify(listCursor))}`
+        : `&offset=${fetchOffset}`;
       const listAnchorId = options.keep
         ? (document.activeElement?.closest?.("[data-card]")?.dataset?.card || "")
         : "";
-      if (!append) listOffset = 0;
+      if (!append) { listOffset = 0; listCursor = null; }
       const districts = [...viewDistricts].map(encodeURIComponent).join(",");
       const paintStart = performance.now();
       try {
         const res = await fetch(
-          `/api/listings?filter=${encodeURIComponent(filter)}&kind=${encodeURIComponent(kinds.join(","))}&sources=${encodeURIComponent(canFilterSources() ? sources.join(",") : "")}&sort=${encodeURIComponent(sort)}&q=${encodeURIComponent(q)}&limit=${fetchLimit}&offset=${fetchOffset}&districts=${districts}`,
+          `/api/listings?filter=${encodeURIComponent(filter)}&kind=${encodeURIComponent(kinds.join(","))}&sources=${encodeURIComponent(canFilterSources() ? sources.join(",") : "")}&sort=${encodeURIComponent(sort)}&q=${encodeURIComponent(q)}&limit=${fetchLimit}${cursorParam}&districts=${districts}`,
         );
         const data = await res.json();
         if (gen !== listLoadGen) return;
@@ -8084,6 +8123,7 @@
         lastStats.paint_ms = Math.round(performance.now() - paintStart);
         listHasMore = data.hasMore === true;
         listOffset = Number(data.nextOffset) || ((append ? listOffset : 0) + (data.listings || []).length);
+        listCursor = data.nextCursor || null;
         const next = applyListView(append && listCache.length
           ? mergeAppendedListings(listCache, data.listings || [])
           : data.listings);
@@ -12261,6 +12301,7 @@
         document.querySelectorAll("[data-filter]").forEach((b) => b.classList.remove("on"));
         btn.classList.add("on");
         filter = btn.dataset.filter;
+        persistSearchState();
         const preview = previewListForFilter(filter);
         loadList({
           keep: !preview,
@@ -12312,6 +12353,7 @@
         } else {
           sort = btn.dataset.sort;
         }
+        persistSearchState();
         syncSortChips();
         loadList();
       };
@@ -13255,7 +13297,20 @@
       if (!window.__watchStream && !isGuest) {
         const es = new EventSource("/api/events/stream");
         window.__watchStream = es;
-        es.onopen = () => { refreshCommuteSnapshot(); };
+        es.onopen = () => {
+          refreshCommuteSnapshot();
+          // Phase 11 reconnect catch-up: re-read only what changed since the last
+          // seen revision (skip the re-query on the very first sync).
+          fetch(`/api/events/revision?since=${lastRevision}`)
+            .then((r) => r.json())
+            .then((data) => {
+              const changed = (data.changes || []).length > 0;
+              lastRevision = Number(data.revision) || lastRevision;
+              if (revisionSynced && changed) loadList({ silent: true, keep: true });
+              revisionSynced = true;
+            })
+            .catch(() => {});
+        };
         es.onmessage = (msg) => {
           const data = JSON.parse(msg.data);
           if (data.type === "watch") {
@@ -13276,6 +13331,12 @@
           }
           if (data.type === "listing_updated") {
             loadList({ silent: true, keep: true, refreshCards: true });
+          }
+          if (data.type === "commute_updated") {
+            refreshCommuteSnapshot();
+          }
+          if (data.type === "stats_invalidated") {
+            loadList({ silent: true, keep: true });
           }
           if (data.type === "geo") {
             queueGeoRefresh(data);

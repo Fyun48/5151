@@ -1,0 +1,17 @@
+name: Staging deploy
+# Manual staging deploy to an isolated environment. Never touches production.
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'Commit SHA to stage'
+        required: true
+jobs:
+  staging:
+    runs-on: staging
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.sha }}
+      - name: Deploy to staging
+        run: ./scripts/staging-deploy.sh ${{ github.event.inputs.sha }}

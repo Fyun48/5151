@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { CRAWL_PAGES_591, CRAWL_PAGES_EXTERNAL, SYSTEM_CRAWL_INTERVAL_MINUTES } from "../src/crawlPolicy.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
@@ -50,7 +50,7 @@ test("shared crawl uses fixed page depth and a 15-minute default interval", () =
 test("system crawl stores offline confirm days for the watcher and getSettings overlay", () => {
   const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-offline-days-"));
   const script = `
-    import { getSettings, getSystemCrawl, saveSettings, saveSystemCrawl } from ${JSON.stringify(path.join(dir, "../src/db.js"))};
+    import { getSettings, getSystemCrawl, saveSettings, saveSystemCrawl } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/db.js")).href)};
     const first = getSystemCrawl();
     if (first.offlineConfirmDays !== 7) throw new Error("default " + first.offlineConfirmDays);
     const saved = saveSystemCrawl({ offlineConfirmDays: 3 });

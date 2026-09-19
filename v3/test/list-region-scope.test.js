@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -13,8 +13,8 @@ const dir = path.dirname(fileURLToPath(import.meta.url));
 test("default listing scope is limited to the member's own configured districts", () => {
   const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-region-scope-"));
   const script = `
-    import { listListings, upsertListing, memberRegionDistrictNames, getSettings } from ${JSON.stringify(path.join(dir, "../src/db.js"))};
-    import { allDistricts } from ${JSON.stringify(path.join(dir, "../src/regions.js"))};
+    import { listListings, upsertListing, memberRegionDistrictNames, getSettings } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/db.js")).href)};
+    import { allDistricts } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/regions.js")).href)};
     const keyByName = (n) => { for (const d of allDistricts()) if (d.name === n) return d.region + "-" + d.id; return ""; };
     const shilin = keyByName("士林區");
     const xitun = keyByName("西屯區");

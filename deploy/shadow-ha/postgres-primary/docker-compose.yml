@@ -1,0 +1,42 @@
+name: 5151-shadow-pg-primary
+
+# Shadow PostgreSQL-A (Primary) for CasaOS. Isolated from production:
+# separate container name / port / volume / database.
+services:
+  5151-postgres-A:
+    container_name: 5151-postgres-A
+    image: postgres:16-alpine
+    restart: unless-stopped
+    # Expose to the LAN so the Synology standby can stream-replicate. The port
+    # must be reachable from SYNOLOGY_HOST only; tighten with host firewall.
+    ports:
+      - "0.0.0.0:15432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${PG_SUPER_PASSWORD:?set PG_SUPER_PASSWORD}
+      POSTGRES_DB: 5151_shadow
+      PGDATA: /var/lib/postgresql/data/pgdata
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+      - -c
+      - hot_standby=on
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_command=/bin/true
+    volumes:
+      - 5151-shadow-pg-a:/var/lib/postgresql/data
+    networks:
+      - shadow-pg
+
+volumes:
+  5151-shadow-pg-a:
+
+networks:
+  shadow-pg:

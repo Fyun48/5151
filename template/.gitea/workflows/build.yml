@@ -1,0 +1,17 @@
+name: Build image (no deploy)
+# Builds and pushes an immutable SHA-tagged image. Never deploys.
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'Commit SHA to build'
+        required: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.sha }}
+      - name: Build image
+        run: docker build -t ghcr.io/${{ github.repository }}:${{ github.event.inputs.sha }} .

@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { passesGeoFilters, passesAttributeFilters, passesDisplayFilters, listingHasElevator, matchesHousingKind, matchesListingSources, normalizeListQuery, housingTypeLabel, formatFloorDisplay, sanitizeFloorName } from "./floors.js";
 import { listingKitFrom, mergeKitColumns, parseStoredFurnish } from "./listingKit.js";
 import { addressPrecision, isTrustedGeoSource, listingCommunityId, preferListingAddress, sourceCommunityLinked, sqlTrustedGeoSource } from "./location.js";
-import { commuteNetworkHint, makeRouteKey } from "./route.js";
+import { commuteNetworkHint, makeRouteKey, roundCoord } from "./route.js";
 import {
   COMMUTE_STATES,
   commuteSettingsFingerprint,
@@ -27,6 +27,9 @@ import { sameSearch } from "./client591.js";
 import { CITIES, districtNameFromListing, districtsFromSearchUrls, lookupDistrict, normalizeWatchDistricts } from "./regions.js";
 import { appendDistrictCandidates, ensureDistrictCandidateIndex } from "./listDistrictSql.js";
 import { appendPriceCeilingCandidates } from "./listPriceSql.js";
+import { ensureListingSearchProjection, syncListingProjection, deleteListingProjection } from "./listingSearchProjection.js";
+import { addColumnIfMissing, addColumnsIfMissing, runMigrations } from "./migrate.js";
+import { SCHEMA_MIGRATIONS } from "./schemaMigrations.js";
 import { geoDistanceM, listingRefreshAt, matchFocusHints, preferPrimaryListing } from "./match.js";
 import {
   ensureUserSameHouseSchema,
@@ -112,6 +115,7 @@ import {
 } from "./comms.js";
 import { ensureSupportSchema } from "./supportSchema.js";
 import { DATA_EPOCH, shouldResetForEpoch } from "./dataEpoch.js";
+import { bumpRevision } from "./dataRevision.js";
 import { countsTowardAllTotal, isConfirmedOffline, isPendingOffline, normalizeOfflineConfirmDays } from "./offline.js";
 import { coveringJobsFromMembers, coversFromMemberSettings, coversFromWatchDistricts, listingInMemberScope } from "./covering.js";
 import { listCrawlCovers } from "./crawlCovers.js";
@@ -523,42 +527,17 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_listings_last_seen ON listings(last_seen_at);
   CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
 `);
+ensureListingSearchProjection(db);
 
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN search_key TEXT NOT NULL DEFAULT ''");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN hidden_at TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN lat REAL");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN lng REAL");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN geo_source TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN watch_note TEXT NOT NULL DEFAULT ''");
-} catch {
-  // already migrated
-}
+addColumnsIfMissing(db, "listings", [
+  ["search_key", "TEXT NOT NULL DEFAULT ''"],
+  ["hidden", "INTEGER NOT NULL DEFAULT 0"],
+  ["hidden_at", "TEXT"],
+  ["lat", "REAL"],
+  ["lng", "REAL"],
+  ["geo_source", "TEXT"],
+  ["watch_note", "TEXT NOT NULL DEFAULT ''"],
+]);
 db.exec(`
   CREATE TABLE IF NOT EXISTS geo_cache (
     address TEXT PRIMARY KEY,
@@ -587,49 +566,25 @@ db.exec(`
     updated_at TEXT NOT NULL
   );
 `);
-try {
-  db.exec("ALTER TABLE route_cache ADD COLUMN rush_am_min REAL");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE route_cache ADD COLUMN rush_pm_min REAL");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE route_cache ADD COLUMN rush_updated_at TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE route_cache ADD COLUMN min_m INTEGER");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE route_cache ADD COLUMN location_class TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE route_cache ADD COLUMN route_version INTEGER");
-} catch {
-  // already migrated
-}
-for (const sql of [
-  "ALTER TABLE listings ADD COLUMN location_class TEXT",
-  "ALTER TABLE listings ADD COLUMN address_norm TEXT",
-  "ALTER TABLE listings ADD COLUMN address_raw TEXT",
-  "ALTER TABLE listings ADD COLUMN coord_version INTEGER",
-  "ALTER TABLE listings ADD COLUMN geo_provider TEXT",
-  "ALTER TABLE listings ADD COLUMN geo_approx INTEGER",
-  "ALTER TABLE listings ADD COLUMN geo_error TEXT",
-  "ALTER TABLE listings ADD COLUMN geo_job_state TEXT",
-  "ALTER TABLE listings ADD COLUMN content_seq INTEGER NOT NULL DEFAULT 0",
-]) {
-  try { db.exec(sql); } catch { /* already migrated */ }
-}
+addColumnsIfMissing(db, "route_cache", [
+  ["rush_am_min", "REAL"],
+  ["rush_pm_min", "REAL"],
+  ["rush_updated_at", "TEXT"],
+  ["min_m", "INTEGER"],
+  ["location_class", "TEXT"],
+  ["route_version", "INTEGER"],
+]);
+addColumnsIfMissing(db, "listings", [
+  ["location_class", "TEXT"],
+  ["address_norm", "TEXT"],
+  ["address_raw", "TEXT"],
+  ["coord_version", "INTEGER"],
+  ["geo_provider", "TEXT"],
+  ["geo_approx", "INTEGER"],
+  ["geo_error", "TEXT"],
+  ["geo_job_state", "TEXT"],
+  ["content_seq", "INTEGER NOT NULL DEFAULT 0"],
+]);
 db.exec(`
   CREATE TABLE IF NOT EXISTS route_jobs (
     job_key TEXT PRIMARY KEY,
@@ -647,171 +602,43 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_route_jobs_post ON route_jobs(post_id, job_state, next_retry_at);
 `);
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN match_post_id INTEGER");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN match_level TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN match_detail TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN match_rejected INTEGER NOT NULL DEFAULT 0");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN extra_fee INTEGER NOT NULL DEFAULT 0");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN extra_fee_text TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN price_contain_text TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN extra_fees TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN extra_fees_fetched INTEGER NOT NULL DEFAULT 0");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN contact_name TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN contact_role TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN agency TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN mobile TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN phone TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN contact_fetched_at TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN line_url TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN avatar TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN contact_uid INTEGER");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN contact_fetched INTEGER NOT NULL DEFAULT 0");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN community_id INTEGER NOT NULL DEFAULT 0");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN community_name TEXT NOT NULL DEFAULT ''");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN offline INTEGER NOT NULL DEFAULT 0");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN offline_at TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN last_checked_at TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN offline_confirmed INTEGER NOT NULL DEFAULT 0");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN alive_checked_at TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN has_natural_gas INTEGER NOT NULL DEFAULT 0");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN furnish_items TEXT NOT NULL DEFAULT '[]'");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN has_balcony INTEGER NOT NULL DEFAULT 0");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN kit_fetched INTEGER NOT NULL DEFAULT 0");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN kit_refetch_v1 INTEGER NOT NULL DEFAULT 0");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN kit_error TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN kit_next_retry_at TEXT");
-} catch {
-  // already migrated
-}
+addColumnsIfMissing(db, "listings", [
+  ["match_post_id", "INTEGER"],
+  ["match_level", "TEXT"],
+  ["match_detail", "TEXT"],
+  ["match_rejected", "INTEGER NOT NULL DEFAULT 0"],
+  ["extra_fee", "INTEGER NOT NULL DEFAULT 0"],
+  ["extra_fee_text", "TEXT"],
+  ["price_contain_text", "TEXT"],
+  ["extra_fees", "TEXT"],
+  ["extra_fees_fetched", "INTEGER NOT NULL DEFAULT 0"],
+  ["contact_name", "TEXT"],
+  ["contact_role", "TEXT"],
+  ["agency", "TEXT"],
+  ["mobile", "TEXT"],
+  ["phone", "TEXT"],
+]);
+addColumnsIfMissing(db, "listings", [
+  ["contact_fetched_at", "TEXT"],
+  ["line_url", "TEXT"],
+  ["avatar", "TEXT"],
+  ["contact_uid", "INTEGER"],
+  ["contact_fetched", "INTEGER NOT NULL DEFAULT 0"],
+  ["community_id", "INTEGER NOT NULL DEFAULT 0"],
+  ["community_name", "TEXT NOT NULL DEFAULT ''"],
+  ["offline", "INTEGER NOT NULL DEFAULT 0"],
+  ["offline_at", "TEXT"],
+  ["last_checked_at", "TEXT"],
+  ["offline_confirmed", "INTEGER NOT NULL DEFAULT 0"],
+  ["alive_checked_at", "TEXT"],
+  ["has_natural_gas", "INTEGER NOT NULL DEFAULT 0"],
+  ["furnish_items", "TEXT NOT NULL DEFAULT '[]'"],
+  ["has_balcony", "INTEGER NOT NULL DEFAULT 0"],
+  ["kit_fetched", "INTEGER NOT NULL DEFAULT 0"],
+  ["kit_refetch_v1", "INTEGER NOT NULL DEFAULT 0"],
+  ["kit_error", "TEXT"],
+  ["kit_next_retry_at", "TEXT"],
+]);
 try {
   db.exec(`UPDATE listings SET kit_fetched = 0, kit_refetch_v1 = 1
     WHERE source = 'hbhousing'
@@ -820,26 +647,12 @@ try {
 } catch {
   // ignore
 }
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN match_verdict TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN source TEXT NOT NULL DEFAULT '591'");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN source_id TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN model_score REAL");
-} catch {
-  // already migrated
-}
+addColumnsIfMissing(db, "listings", [
+  ["match_verdict", "TEXT"],
+  ["source", "TEXT NOT NULL DEFAULT '591'"],
+  ["source_id", "TEXT"],
+  ["model_score", "REAL"],
+]);
 try {
   db.exec("UPDATE listings SET source = '591' WHERE IFNULL(source, '') = ''");
   db.exec("UPDATE listings SET source_id = CAST(post_id AS TEXT) WHERE IFNULL(source_id, '') = ''");
@@ -861,26 +674,12 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_listings_search ON listings(search_key)"
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_hidden ON listings(hidden)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_match ON listings(match_level)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_listings_offline ON listings(offline)");
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN cost_changed_at TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN cost_change_detail TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN cost_change_type TEXT");
-} catch {
-  // already migrated
-}
-try {
-  db.exec("ALTER TABLE listings ADD COLUMN community_linked INTEGER NOT NULL DEFAULT 0");
-} catch {
-  // already migrated
-}
+addColumnsIfMissing(db, "listings", [
+  ["cost_changed_at", "TEXT"],
+  ["cost_change_detail", "TEXT"],
+  ["cost_change_type", "TEXT"],
+  ["community_linked", "INTEGER NOT NULL DEFAULT 0"],
+]);
 try {
   db.exec(`UPDATE listings SET community_linked = 1
     WHERE IFNULL(community_linked, 0) = 0
@@ -900,12 +699,7 @@ try {
 } catch {
   // older fixtures
 }
-ensurePersonalSchema(db);
-ensureUserSameHouseSchema(db);
-ensureListingGroupSchema(db);
-ensureSearchProfileSchema(db);
-ensureGeoCacheSchema(db);
-ensureListingPrepSchema(db);
+runMigrations(db, SCHEMA_MIGRATIONS);
 try { markLegacyNotifiedUnknown(); } catch { /* user_events columns arrive with personal schema */ }
 try {
   const already = db.prepare("SELECT value FROM settings WHERE key = 'profileOnboardedBackfill'").get();
@@ -923,49 +717,12 @@ try {
 } catch {
   // ignore
 }
-ensureDemandSchema(db);
-ensureFeedbackSchema(db);
-ensureFeedbackOutboxSchema(db);
-ensureCrmSchema(db);
-ensureCrmOutboxSchema(db);
-ensureBudgetSchema(db);
 bindBudgetDb(db);
-ensureListingSimilaritySchema(db);
-ensureSelfListingSchema(db);
-ensureStage1FixtureSchema(db);
-ensureRentalMatchIndexes(db);
-ensureWishOfferSchema(db);
-ensureRentalNotifySchema(db);
 setRentalNotifyDockWriter(addUserEvent);
-ensureMemberMediaSchema(db);
-ensureContentDocumentSchema(db);
-ensureMemberConsentSchema(db);
-ensureListingImportSchema(db);
-ensureListingToolsSchema(db);
 try {
   seedDefaultDocuments(db, { legalCopy: settingKey("legalCopy") ?? defaultLegalCopy() });
 } catch {
   // 種子失敗不擋開站；註冊會 fail-closed
-}
-ensurePushSchema(db);
-ensureCommsSchema(db);
-ensureSupportSchema(db);
-db.exec(`
-  CREATE TABLE IF NOT EXISTS admin_audit (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    at TEXT NOT NULL,
-    actor_id INTEGER NOT NULL DEFAULT 0,
-    actor_email TEXT NOT NULL DEFAULT '',
-    action TEXT NOT NULL DEFAULT '',
-    target TEXT NOT NULL DEFAULT '',
-    before_json TEXT,
-    after_json TEXT
-  );
-`);
-try {
-  db.exec("CREATE INDEX IF NOT EXISTS idx_admin_audit_at ON admin_audit(at DESC)");
-} catch {
-  // older fixtures
 }
 try {
   migrateLegacyAdminAudit(db);
@@ -3986,6 +3743,22 @@ export function upsertListing(listing) {
     }
   }
   enqueueSimilaritySafe(listing);
+  try {
+    syncListingProjection(db, listing);
+  } catch {
+    // projection is best-effort; the Node path remains the source of truth
+  }
+  try {
+    // Durable change-log so a reconnecting Web node / SSE client can ask
+    // "what changed since revision N?" (Phase 11).
+    bumpRevision(db, {
+      entityType: "listing",
+      entityId: Number(listing.post_id) || 0,
+      eventType: existing ? "listing_updated" : "listing_added",
+    });
+  } catch {
+    // revision change-log is best-effort
+  }
 }
 
 function enqueueSimilaritySafe(listing) {
@@ -5742,6 +5515,447 @@ export function listListings({
     nextOffset: start + pageSize,
     queryVersion: 2,
     queryDetails,
+  };
+}
+
+// Display filters mirrored from passesDisplayFilters() (whole-floor / low-floor /
+// rooftop / parking). These are precomputed in the projection with the SAME
+// helpers, so the SQL-first envelope can honor them instead of rejecting the
+// default user settings (excludeLowFloors/excludeRooftop default to true).
+function sqlDisplayFilter(settings) {
+  const clauses = [];
+  if (settings.excludeLowFloors !== false) clauses.push("p.low_floor = 0");
+  if (settings.excludeRooftop !== false) clauses.push("p.rooftop = 0");
+  if (settings.hasParking === true) clauses.push("p.parking = 1");
+  return clauses.length ? `AND ${clauses.join(" AND ")}` : "";
+}
+
+// SQL-first search path (Phase 7). Pushes the district re-check, ORDER BY and
+// LIMIT/OFFSET into SQL against the indexed listing_search_projection, so only
+// the page IDs (not every candidate) are loaded. Returns null when the inputs
+// fall outside the exact-equivalence envelope; callers must fall back to
+// listListings(). Supports the common "all" surface (newest / price sorts) and
+// the display filters mirrored above.
+export function listListingsSqlFirst({
+  filter = "all",
+  kind = "",
+  sources = "",
+  q = "",
+  sort = "newest",
+  limit = 500,
+  offset = 0,
+  cursor = null,
+  searchKeys,
+  districts = [],
+  userId,
+  settings: settingsOverride,
+  sameHouse = true,
+  matchVoteUserId,
+} = {}) {
+  if (filter !== "all") return null;
+  if (kind || sources || q) return null;
+  if (!["newest", "price_asc", "price_desc"].includes(sort)) return null;
+
+  const uid = resolveUserId(userId);
+  const voteUid = matchVoteUserId == null ? uid : Number(matchVoteUserId) || 0;
+  const settings = settingsOverride || getSettings(uid);
+  if (
+    Number(settings.priceMin) > 0 || Number(settings.priceMax) > 0 ||
+    Number(settings.minBuildingFloors) > 0 || Number(settings.areaMax) > 0 ||
+    settings.wholeFloorOnly === true ||
+    (settings.excludeKeywords || []).length || (settings.excludeAgents || []).length ||
+    (settings.excludeAgentIds || []).length || (settings.excludeBoxes || []).length ||
+    Number(settings.commuteKm) > 0
+  ) {
+    return null;
+  }
+
+  const requestedDistricts = (Array.isArray(districts) ? districts : String(districts || "").split(","))
+    .map((name) => String(name || "").trim()).filter(Boolean);
+  const districtNames = requestedDistricts.length ? requestedDistricts : memberRegionDistrictNames(settings);
+  if (!districtNames.length) return null;
+
+  const clauses = [];
+  const params = [];
+  searchWhere(searchKeys, clauses, params);
+  listingVisibilityClauses(clauses, params);
+  appendDistrictCandidates(districtNames, clauses, params);
+  appendPriceCeilingCandidates(settings, clauses, params);
+  // filter === "all": confirmed-offline / dup / hidden / watched are excluded.
+  clauses.push("NOT (IFNULL(offline, 0) = 1 AND IFNULL(offline_confirmed, 0) = 1)");
+  clauses.push("(IFNULL(match_verdict, '') != 'yes')");
+  clauses.push(`NOT EXISTS (
+    SELECT 1 FROM user_listing_flags f
+    WHERE f.post_id = listings.post_id AND f.user_id = ? AND f.hidden = 1
+  )`);
+  params.push(uid);
+  clauses.push(`IFNULL((
+    SELECT watched FROM user_listing_flags f
+    WHERE f.post_id = listings.post_id AND f.user_id = ?
+  ), 0) = 0`);
+  params.push(uid);
+
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  const cost = settings.priceMaxIncludesExtras === true ? "p.total_monthly_cost" : "p.rent";
+  const orderBy =
+    sort === "newest" ? "p.updated_at DESC, p.post_id ASC"
+      : sort === "price_desc"
+        ? `CASE WHEN ${cost} > 0 THEN 0 ELSE 1 END ASC, ${cost} DESC, p.updated_at DESC, p.post_id ASC`
+        : `CASE WHEN ${cost} > 0 THEN ${cost} ELSE 9223372036854775807 END ASC, p.updated_at DESC, p.post_id ASC`;
+
+  const pageSize = Math.max(1, Math.min(Number(limit) || 500, 500));
+  const start = Math.max(0, Number(offset) || 0);
+  const districtMarks = districtNames.map(() => "?").join(",");
+  const districtWhere = `p.district IN (${districtMarks})`;
+  const displayFilter = sqlDisplayFilter(settings);
+
+  // Cursor/keyset pagination. The cursor encodes the full sort key of the last
+  // row; DESC columns are negated so one row-value `>` comparison matches the
+  // ORDER BY across the ASC/DESC mix.
+  const rowCost = (row) => (settings.priceMaxIncludesExtras === true ? Number(row.total_monthly_cost) : Number(row.rent));
+  const sortCostExpr = `CASE WHEN ${cost} > 0 THEN ${cost} ELSE 9223372036854775807 END`;
+  const costGroupExpr = `CASE WHEN ${cost} > 0 THEN 0 ELSE 1 END`;
+  const useCursor = cursor != null;
+  let tupleExpr = "";
+  let cursorParams = [];
+  let cursorOf = null;
+  if (sort === "newest") {
+    tupleExpr = "(-p.updated_at, p.post_id)";
+    cursorParams = useCursor ? [-Number(cursor.updatedAt), Number(cursor.postId)] : [];
+    cursorOf = (row) => ({ updatedAt: row.updated_at, postId: row.post_id });
+  } else if (sort === "price_asc") {
+    tupleExpr = `(${sortCostExpr}, -p.updated_at, p.post_id)`;
+    cursorParams = useCursor ? [Number(cursor.sortCost), -Number(cursor.updatedAt), Number(cursor.postId)] : [];
+    cursorOf = (row) => ({ sortCost: rowCost(row) > 0 ? rowCost(row) : 9223372036854775807, updatedAt: row.updated_at, postId: row.post_id });
+  } else { // price_desc
+    tupleExpr = `(${costGroupExpr}, -${cost}, -p.updated_at, p.post_id)`;
+    cursorParams = useCursor ? [Number(cursor.costGroup), -Number(cursor.cost), -Number(cursor.updatedAt), Number(cursor.postId)] : [];
+    cursorOf = (row) => ({ costGroup: rowCost(row) > 0 ? 0 : 1, cost: rowCost(row), updatedAt: row.updated_at, postId: row.post_id });
+  }
+  const cursorWhere = useCursor ? `AND ${tupleExpr} > (${cursorParams.map(() => "?").join(", ")})` : "";
+
+  const countRow = db.prepare(`SELECT COUNT(*) AS n FROM listing_search_projection p
+    WHERE p.post_id IN (SELECT post_id FROM listings ${where})
+    AND ${districtWhere}
+    ${displayFilter}`).get(...params, ...districtNames);
+  const totalMatched = Number(countRow?.n) || 0;
+
+  const pageSql = `SELECT p.post_id, p.updated_at, p.rent, p.total_monthly_cost FROM listing_search_projection p
+    WHERE p.post_id IN (SELECT post_id FROM listings ${where})
+    AND ${districtWhere}
+    ${displayFilter}
+    ${cursorWhere}
+    ORDER BY ${orderBy}
+    LIMIT ?${useCursor ? "" : " OFFSET ?"}`;
+  const pageParams = useCursor
+    ? [...params, ...districtNames, ...cursorParams, pageSize]
+    : [...params, ...districtNames, pageSize, start];
+  const pageRows = db.prepare(pageSql).all(...pageParams);
+
+  const ids = pageRows.map((row) => Number(row.post_id));
+  const fullRows = ids.length
+    ? db.prepare(`SELECT * FROM listings WHERE post_id IN (${ids.map(() => "?").join(",")})`).all(...ids)
+    : [];
+  const fullById = new Map(fullRows.map((row) => [Number(row.post_id), row]));
+  const flagMap = loadFlagMap(db, uid);
+  const ordered = ids
+    .map((id) => Object.assign(fullById.get(id) || {}, { post_id: id }))
+    .filter((row) => fullById.has(Number(row.post_id)));
+  const overlaid = overlayRowsPersonal(ordered, flagMap, { inPlace: true });
+  const listings = overlaid.map((row) => {
+    const lite = decorateListingLite(row, settings, uid);
+    const needPeers = sameHouse !== false && Boolean(row.match_post_id || row.same_house_role);
+    return finalizeListingDecorate(lite, settings, uid, { sameHouse: needPeers, matchVoteUserId: voteUid });
+  });
+
+  const nextCursor = ids.length ? cursorOf(pageRows[pageRows.length - 1]) : null;
+
+  return {
+    listings,
+    totalMatched,
+    hasMore: useCursor ? ids.length === pageSize : start + pageSize < totalMatched,
+    nextOffset: start + pageSize,
+    nextCursor,
+    queryVersion: 3,
+    queryDetails: { sql_first: true, cursor: useCursor },
+  };
+}
+
+// Commute-sort SQL-first path (Phase 7 收尾). The commute distance is per-user
+// (route_cache is keyed by work point + mode + direction), so unlike the other
+// sorts it can NOT use the projection's commute_km column (that column is null
+// at upsert time). Instead it INNER JOINs route_cache on the v2 to_work key and
+// mirrors listListings()'s strict geo filter (usable road + trusted coords +
+// within commute budget) so the returned set and order are identical.
+export function listListingsCommuteSqlFirst({
+  filter = "all",
+  kind = "",
+  sources = "",
+  q = "",
+  sort = "commute_asc",
+  limit = 500,
+  offset = 0,
+  searchKeys,
+  districts = [],
+  userId,
+  settings: settingsOverride,
+  sameHouse = true,
+  matchVoteUserId,
+} = {}) {
+  if (filter !== "all") return null;
+  if (kind || sources || q) return null;
+  if (sort !== "commute_asc" && sort !== "commute_desc") return null;
+
+  const uid = resolveUserId(userId);
+  const voteUid = matchVoteUserId == null ? uid : Number(matchVoteUserId) || 0;
+  const settings = settingsOverride || getSettings(uid);
+  const commuteKm = Number(settings.commuteKm);
+  if (!(commuteKm > 0) || !hasWorkPoint(settings)) return null;
+  if (
+    Number(settings.priceMin) > 0 || Number(settings.priceMax) > 0 ||
+    Number(settings.minBuildingFloors) > 0 || Number(settings.areaMax) > 0 ||
+    settings.wholeFloorOnly === true ||
+    (settings.excludeKeywords || []).length || (settings.excludeAgents || []).length ||
+    (settings.excludeAgentIds || []).length || (settings.excludeBoxes || []).length
+  ) {
+    return null;
+  }
+
+  const requestedDistricts = (Array.isArray(districts) ? districts : String(districts || "").split(","))
+    .map((name) => String(name || "").trim()).filter(Boolean);
+  const districtNames = requestedDistricts.length ? requestedDistricts : memberRegionDistrictNames(settings);
+  if (!districtNames.length) return null;
+
+  const clauses = [];
+  const params = [];
+  searchWhere(searchKeys, clauses, params);
+  listingVisibilityClauses(clauses, params);
+  appendDistrictCandidates(districtNames, clauses, params);
+  appendPriceCeilingCandidates(settings, clauses, params);
+  clauses.push("NOT (IFNULL(offline, 0) = 1 AND IFNULL(offline_confirmed, 0) = 1)");
+  clauses.push("(IFNULL(match_verdict, '') != 'yes')");
+  clauses.push(`NOT EXISTS (
+    SELECT 1 FROM user_listing_flags f
+    WHERE f.post_id = listings.post_id AND f.user_id = ? AND f.hidden = 1
+  )`);
+  params.push(uid);
+  clauses.push(`IFNULL((
+    SELECT watched FROM user_listing_flags f
+    WHERE f.post_id = listings.post_id AND f.user_id = ?
+  ), 0) = 0`);
+  params.push(uid);
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+
+  // resolveLocationClass() falls back to geocode quality / address inference when
+  // location_class is empty AND geo_source = 'geocode'. That inference is not
+  // representable in SQL; fall back to the Node path when it would be needed.
+  const guardRow = db.prepare(`SELECT 1 FROM listings ${where}
+    AND geo_source = 'geocode'
+    AND (location_class IS NULL OR location_class NOT IN ('source','address','community','street','admin','unknown'))
+    LIMIT 1`).get(...params);
+  if (guardRow) return null;
+
+  const mode = normalizeCommuteMode(settings.commuteMode);
+  const workLat = roundCoord(settings.workLat);
+  const workLng = roundCoord(settings.workLng);
+  const routeKeyExpr = `'v2:to_work:' || '${mode}' || ':' ||
+    (ROUND(p.lat * 100000) / 100000.0) || ',' || (ROUND(p.lng * 100000) / 100000.0) || '>' ||
+    '${workLat},${workLng}'`;
+
+  const clsExpr = `CASE
+    WHEN p.location_class IN ('source','address','community','street','admin','unknown') THEN p.location_class
+    WHEN l.geo_source = 'community' THEN 'community'
+    WHEN l.geo_source IN ('591','hbhousing','sinyi','housefun','houseprice','ddroom','rakuya') THEN 'source'
+    ELSE 'unknown'
+  END`;
+  const roadClass = `'source','address','community','street'`;
+  // listingNotifyMeters = MAX(round(route_min_m if >0 else min(distances)*1000), round(route_km*1000)).
+  const budgetExpr = `MAX(
+    CASE WHEN IFNULL(rc.min_m, 0) > 0 THEN ROUND(rc.min_m) ELSE ROUND(rc.min_km * 1000) END,
+    ROUND(rc.min_km * 1000)
+  ) <= ${commuteKm} * 1000`;
+  const commuteExpr = `ROUND(rc.min_km * 10) / 10.0`;
+  const dir = sort === "commute_asc" ? "ASC" : "DESC";
+
+  const districtMarks = districtNames.map(() => "?").join(",");
+  const districtWhere = `p.district IN (${districtMarks})`;
+  const displayFilter = sqlDisplayFilter(settings);
+  const commuteFilter = `
+      AND ${clsExpr} IN (${roadClass})
+      AND ${sqlTrustedGeoSource("l.geo_source")}
+      AND p.lat IS NOT NULL AND p.lat != 0 AND p.lng IS NOT NULL AND p.lng != 0
+      AND ${budgetExpr}`;
+
+  const pageSize = Math.max(1, Math.min(Number(limit) || 500, 500));
+  const start = Math.max(0, Number(offset) || 0);
+
+  const from = `FROM listing_search_projection p
+    JOIN listings l ON l.post_id = p.post_id
+    JOIN route_cache rc ON rc.route_key = ${routeKeyExpr}
+    WHERE p.post_id IN (SELECT post_id FROM listings ${where})
+      AND ${districtWhere}${displayFilter}${commuteFilter}`;
+
+  const countRow = db.prepare(`SELECT COUNT(*) AS n ${from}`).get(...params, ...districtNames);
+  const totalMatched = Number(countRow?.n) || 0;
+
+  const pageSql = `SELECT p.post_id, p.updated_at ${from}
+    ORDER BY ${commuteExpr} ${dir}, p.updated_at DESC, p.post_id ASC
+    LIMIT ? OFFSET ?`;
+  const pageRows = db.prepare(pageSql).all(...params, ...districtNames, pageSize, start);
+
+  const ids = pageRows.map((row) => Number(row.post_id));
+  const fullRows = ids.length
+    ? db.prepare(`SELECT * FROM listings WHERE post_id IN (${ids.map(() => "?").join(",")})`).all(...ids)
+    : [];
+  const fullById = new Map(fullRows.map((row) => [Number(row.post_id), row]));
+  const flagMap = loadFlagMap(db, uid);
+  const ordered = ids
+    .map((id) => Object.assign(fullById.get(id) || {}, { post_id: id }))
+    .filter((row) => fullById.has(Number(row.post_id)));
+  const overlaid = overlayRowsPersonal(ordered, flagMap, { inPlace: true });
+  const listings = overlaid.map((row) => {
+    const lite = decorateListingLite(row, settings, uid);
+    const needPeers = sameHouse !== false && Boolean(row.match_post_id || row.same_house_role);
+    return finalizeListingDecorate(lite, settings, uid, { sameHouse: needPeers, matchVoteUserId: voteUid });
+  });
+
+  return {
+    listings,
+    totalMatched,
+    hasMore: start + pageSize < totalMatched,
+    nextOffset: start + pageSize,
+    nextCursor: null,
+    queryVersion: 3,
+    queryDetails: { sql_first: true, commute: true },
+  };
+}
+
+// Fit-desc SQL-first path (Phase 7 收尾). The fit_score formula's commute term
+// needs per-user route distance, so this covers only commuteKm=0 (no route) and
+// priceMin/Max=0 + minBuildingFloors=0 (no price/floor adjustment) — the
+// baseline's worst-case fit_desc shape. The remaining terms (whole-floor,
+// elevator, extra fees) map onto projection columns plus a listings join for
+// kind_name (isWholeFloorHome). excludeLowFloors is handled by the display
+// filter: low-floor listings are filtered out, so the score penalty is moot.
+export function listListingsFitSqlFirst({
+  filter = "all",
+  kind = "",
+  sources = "",
+  q = "",
+  sort = "fit_desc",
+  limit = 500,
+  offset = 0,
+  searchKeys,
+  districts = [],
+  userId,
+  settings: settingsOverride,
+  sameHouse = true,
+  matchVoteUserId,
+} = {}) {
+  if (filter !== "all") return null;
+  if (kind || sources || q) return null;
+  if (sort !== "fit_desc") return null;
+
+  const uid = resolveUserId(userId);
+  const voteUid = matchVoteUserId == null ? uid : Number(matchVoteUserId) || 0;
+  const settings = settingsOverride || getSettings(uid);
+  if (
+    Number(settings.commuteKm) > 0 ||
+    Number(settings.priceMin) > 0 || Number(settings.priceMax) > 0 ||
+    Number(settings.minBuildingFloors) > 0 || Number(settings.areaMax) > 0 ||
+    settings.wholeFloorOnly === true ||
+    (settings.excludeKeywords || []).length || (settings.excludeAgents || []).length ||
+    (settings.excludeAgentIds || []).length || (settings.excludeBoxes || []).length
+  ) {
+    return null;
+  }
+
+  const requestedDistricts = (Array.isArray(districts) ? districts : String(districts || "").split(","))
+    .map((name) => String(name || "").trim()).filter(Boolean);
+  const districtNames = requestedDistricts.length ? requestedDistricts : memberRegionDistrictNames(settings);
+  if (!districtNames.length) return null;
+
+  const clauses = [];
+  const params = [];
+  searchWhere(searchKeys, clauses, params);
+  listingVisibilityClauses(clauses, params);
+  appendDistrictCandidates(districtNames, clauses, params);
+  appendPriceCeilingCandidates(settings, clauses, params);
+  clauses.push("NOT (IFNULL(offline, 0) = 1 AND IFNULL(offline_confirmed, 0) = 1)");
+  clauses.push("(IFNULL(match_verdict, '') != 'yes')");
+  clauses.push(`NOT EXISTS (
+    SELECT 1 FROM user_listing_flags f
+    WHERE f.post_id = listings.post_id AND f.user_id = ? AND f.hidden = 1
+  )`);
+  params.push(uid);
+  clauses.push(`IFNULL((
+    SELECT watched FROM user_listing_flags f
+    WHERE f.post_id = listings.post_id AND f.user_id = ?
+  ), 0) = 0`);
+  params.push(uid);
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+
+  const districtMarks = districtNames.map(() => "?").join(",");
+  const districtWhere = `p.district IN (${districtMarks})`;
+  const displayFilter = sqlDisplayFilter(settings);
+
+  // extraMonthlyAmount > 0 equals total_monthly_cost > rent only when rent > 0;
+  // listings with no rent would be mis-scored, so fall back to the Node path.
+  const rentGuard = db.prepare(`SELECT 1 FROM listing_search_projection p
+    WHERE p.post_id IN (SELECT post_id FROM listings ${where})
+    AND ${districtWhere}
+    AND p.rent <= 0
+    LIMIT 1`).get(...params, ...districtNames);
+  if (rentGuard) return null;
+
+  const wholeFloorExpr = `CASE WHEN (
+    l.kind_name LIKE '%整層%' OR l.kind_name LIKE '%整戶出租%' OR l.kind_name LIKE '%整間出租%'
+  ) AND NOT (
+    l.kind_name LIKE '%獨立套房%' OR l.kind_name LIKE '%分租套房%' OR l.kind_name LIKE '%雅房%'
+    OR l.kind_name LIKE '%共宅%' OR l.kind_name LIKE '%共居%'
+  ) THEN 1 ELSE 0 END`;
+  const extraFlagExpr = `CASE WHEN p.total_monthly_cost > p.rent THEN 1 ELSE 0 END`;
+  const fitExpr = `(58 + 4 * p.elevator + 4 * ${wholeFloorExpr} - 4 * ${extraFlagExpr})`;
+
+  const pageSize = Math.max(1, Math.min(Number(limit) || 500, 500));
+  const start = Math.max(0, Number(offset) || 0);
+
+  const from = `FROM listing_search_projection p
+    JOIN listings l ON l.post_id = p.post_id
+    WHERE p.post_id IN (SELECT post_id FROM listings ${where})
+      AND ${districtWhere}${displayFilter}`;
+  const countRow = db.prepare(`SELECT COUNT(*) AS n ${from}`).get(...params, ...districtNames);
+  const totalMatched = Number(countRow?.n) || 0;
+
+  const pageSql = `SELECT p.post_id, p.updated_at ${from}
+    ORDER BY ${fitExpr} DESC, p.updated_at DESC, p.post_id ASC
+    LIMIT ? OFFSET ?`;
+  const pageRows = db.prepare(pageSql).all(...params, ...districtNames, pageSize, start);
+
+  const ids = pageRows.map((row) => Number(row.post_id));
+  const fullRows = ids.length
+    ? db.prepare(`SELECT * FROM listings WHERE post_id IN (${ids.map(() => "?").join(",")})`).all(...ids)
+    : [];
+  const fullById = new Map(fullRows.map((row) => [Number(row.post_id), row]));
+  const flagMap = loadFlagMap(db, uid);
+  const ordered = ids
+    .map((id) => Object.assign(fullById.get(id) || {}, { post_id: id }))
+    .filter((row) => fullById.has(Number(row.post_id)));
+  const overlaid = overlayRowsPersonal(ordered, flagMap, { inPlace: true });
+  const listings = overlaid.map((row) => {
+    const lite = decorateListingLite(row, settings, uid);
+    const needPeers = sameHouse !== false && Boolean(row.match_post_id || row.same_house_role);
+    return finalizeListingDecorate(lite, settings, uid, { sameHouse: needPeers, matchVoteUserId: voteUid });
+  });
+
+  return {
+    listings,
+    totalMatched,
+    hasMore: start + pageSize < totalMatched,
+    nextOffset: start + pageSize,
+    nextCursor: null,
+    queryVersion: 3,
+    queryDetails: { sql_first: true, fit: true },
   };
 }
 
