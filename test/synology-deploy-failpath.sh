@@ -146,7 +146,7 @@ PATH="$T3/bin:$PATH" DEPLOY_SHA="NEWSHA" OPS_RUNTIME_IMAGE="$NEW_IMAGE" \
 C3=$?
 set -e
 [ "$C3" != "0" ] || fail "scenario3: expected non-zero exit"
-grep -q "first deploy failed" "$T3/out.log" || fail "scenario3: first-deploy rollback not invoked"
+grep -q "ROLLBACK_OK first deploy" "$T3/out.log" || fail "scenario3: first-deploy rollback not invoked"
 [ ! -e "$T3/data/ops.db" ] || fail "scenario3: ops.db should remain absent after failed first deploy"
 [ ! -L "$T3/app/current" ] || fail "scenario3: current should be removed"
 echo "scenario3 PASS (failed first deploy leaves DB absent)"
