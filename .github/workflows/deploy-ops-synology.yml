@@ -6,13 +6,17 @@ run-name: "manual-owner-ops-synology:${{ inputs.sha }}"
 # 合併／push 到 master 不會自動跑；必須明確 workflow_dispatch，且從 master 定義啟動。
 # 確認字串是 DEPLOY-OPS（不是 DEPLOY-PRODUCTION）。
 # 正式 Production release live mutation 預設關閉（PRODUCTION_RELEASE_ALLOW_LIVE=0）。
-# Owner 已書面授權：Cursor Agent（actor cursor / cursor[bot]）在使用者要求時可從 master 觸發本檔。見 AGENTS.md。
+# 使用獨立 Synology credentials（OPS_SYNOLOGY_*）+ 獨立 environment（ops-synology-production），
+# 不與 v3/CasaOS 的 NAS_* 共用。runtime image 必須 pin 到 immutable digest。
 
 on:
   workflow_dispatch:
     inputs:
       sha:
         description: "要部署的完整 40 碼 commit SHA（必須可從 origin/master 追溯）"
+        required: true
+      image_digest:
+        description: "immutable runtime image digest：sha256:<64 lowercase hex>"
         required: true
       confirmation:
         description: "輸入 DEPLOY-OPS 以確認只部署 OPS Console 到 Synology"
@@ -29,8 +33,8 @@ concurrency:
 jobs:
   sync-synology-ops:
     runs-on: ubuntu-latest
-    environment: production
-    timeout-minutes: 15
+    environment: ops-synology-production
+    timeout-minutes: 20
     steps:
       - name: Authorize OPS Synology deployment (fail-closed)
         env:
@@ -40,6 +44,7 @@ jobs:
           ALLOWED_ACTOR: ${{ vars.PRODUCTION_DEPLOY_ALLOWED_ACTOR }}
           CONFIRM: ${{ inputs.confirmation }}
           DEPLOY_SHA: ${{ inputs.sha }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
         run: |
           set -euo pipefail
           if [ "$WF_REF" != "refs/heads/master" ]; then
@@ -66,6 +71,9 @@ jobs:
           if ! printf '%s' "${DEPLOY_SHA:-}" | grep -Eq '^[0-9a-f]{40}$'; then
             echo "::error::sha must be a full 40-character commit SHA"; exit 1
           fi
+          if ! printf '%s' "${IMAGE_DIGEST:-}" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo "::error::image_digest must be sha256:<64 lowercase hex>"; exit 1
+          fi
       - name: Checkout workflow-definition SHA
         uses: actions/checkout@v4
         with:
@@ -85,28 +93,63 @@ jobs:
           test -f ops/src/server.js
           test -f ops/public/console.html
           test -f docker-compose.ops.synology.yml
+      - name: Validate immutable image digest + OCI metadata (read-only)
+        env:
+          DEPLOY_SHA: ${{ inputs.sha }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+          GH_TOKEN: ${{ github.token }}
+          GH_ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          IMAGE_REPO="ghcr.io/${GITHUB_REPOSITORY,,}"
+          TAG="$IMAGE_REPO:$DEPLOY_SHA"
+          PIN="$IMAGE_REPO@$IMAGE_DIGEST"
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin >/dev/null 2>&1
+          docker buildx imagetools inspect "$TAG" >/dev/null 2>&1 || { echo "::error::candidate tag does not exist: $TAG"; exit 1; }
+          ACTUAL="$(docker buildx imagetools inspect "$TAG" | awk '/^Digest:/{print $2; found=1} END{if(!found) exit 1}')"
+          printf '%s' "$ACTUAL" | grep -Eq '^sha256:[0-9a-f]{64}$' || { echo "::error::could not resolve immutable manifest digest for $TAG"; exit 1; }
+          echo "tag_manifest_digest=$ACTUAL"
+          [ "$ACTUAL" = "$IMAGE_DIGEST" ] || { echo "::error::tag digest $ACTUAL != requested $IMAGE_DIGEST"; exit 1; }
+          docker pull --platform linux/amd64 "$PIN"
+          REV="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$PIN")"
+          SRC="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.source" }}' "$PIN")"
+          echo "oci_revision=$REV"
+          echo "oci_source=$SRC"
+          [ "$REV" = "$DEPLOY_SHA" ] || { echo "::error::OCI revision '$REV' != DEPLOY_SHA $DEPLOY_SHA"; exit 1; }
+          EXPECT_SRC="https://github.com/${GITHUB_REPOSITORY}"
+          [ "${SRC,,}" = "${EXPECT_SRC,,}" ] || { echo "::error::OCI source '$SRC' is not this repository"; exit 1; }
+          echo "OPS_RUNTIME_IMAGE=$PIN" >> "$GITHUB_ENV"
+      - name: Resolve deploy paths (env -> shell default, no expression literals)
+        env:
+          APP_ROOT_IN: ${{ vars.OPS_SYNOLOGY_APP_ROOT }}
+          DATA_ROOT_IN: ${{ vars.OPS_SYNOLOGY_DATA_ROOT }}
+        run: |
+          set -euo pipefail
+          echo "OPS_SYNOLOGY_APP_ROOT=${APP_ROOT_IN:-/volume1/docker/5151-ops/app}" >> "$GITHUB_ENV"
+          echo "OPS_SYNOLOGY_DATA_ROOT=${DATA_ROOT_IN:-/volume1/docker/5151-ops/data}" >> "$GITHUB_ENV"
       - name: Copy OPS source + Synology compose only
         uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ secrets.NAS_HOST }}
-          port: ${{ secrets.NAS_PORT }}
-          username: ${{ secrets.NAS_USER }}
-          key: ${{ secrets.NAS_SSH_KEY }}
+          host: ${{ secrets.OPS_SYNOLOGY_HOST }}
+          port: ${{ secrets.OPS_SYNOLOGY_PORT }}
+          username: ${{ secrets.OPS_SYNOLOGY_USER }}
+          key: ${{ secrets.OPS_SYNOLOGY_SSH_KEY }}
           source: "ops,docker-compose.ops.synology.yml,.github/scripts/deploy-ops-synology-remote.sh"
-          target: ${{ vars.OPS_SYNOLOGY_APP_ROOT || '/volume1/docker/5151-ops/app' }}/incoming
+          target: ${{ env.OPS_SYNOLOGY_APP_ROOT }}/incoming
           overwrite: true
       - name: Deploy 5151-ops on Synology (preflight + backup + rollback)
         uses: appleboy/ssh-action@v1.2.0
         with:
-          host: ${{ secrets.NAS_HOST }}
-          port: ${{ secrets.NAS_PORT }}
-          username: ${{ secrets.NAS_USER }}
-          key: ${{ secrets.NAS_SSH_KEY }}
+          host: ${{ secrets.OPS_SYNOLOGY_HOST }}
+          port: ${{ secrets.OPS_SYNOLOGY_PORT }}
+          username: ${{ secrets.OPS_SYNOLOGY_USER }}
+          key: ${{ secrets.OPS_SYNOLOGY_SSH_KEY }}
           script_stop: true
-          envs: DEPLOY_SHA,OPS_SYNOLOGY_APP_ROOT,OPS_SYNOLOGY_DATA_ROOT
+          envs: DEPLOY_SHA,OPS_SYNOLOGY_APP_ROOT,OPS_SYNOLOGY_DATA_ROOT,OPS_RUNTIME_IMAGE
           script: |
             set -euo pipefail
             export DEPLOY_SHA='${{ inputs.sha }}'
-            export OPS_SYNOLOGY_APP_ROOT='${{ vars.OPS_SYNOLOGY_APP_ROOT || "/volume1/docker/5151-ops/app" }}'
-            export OPS_SYNOLOGY_DATA_ROOT='${{ vars.OPS_SYNOLOGY_DATA_ROOT || "/volume1/docker/5151-ops/data" }}'
+            export OPS_SYNOLOGY_APP_ROOT='${{ env.OPS_SYNOLOGY_APP_ROOT }}'
+            export OPS_SYNOLOGY_DATA_ROOT='${{ env.OPS_SYNOLOGY_DATA_ROOT }}'
+            export OPS_RUNTIME_IMAGE='${{ env.OPS_RUNTIME_IMAGE }}'
             bash "$OPS_SYNOLOGY_APP_ROOT/incoming/.github/scripts/deploy-ops-synology-remote.sh"

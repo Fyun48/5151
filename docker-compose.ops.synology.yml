@@ -6,7 +6,7 @@
 services:
   5151-ops:
     container_name: 5151-ops
-    image: ${OPS_RUNTIME_IMAGE:-ghcr.io/fyun48/5151:latest}
+    image: ${OPS_RUNTIME_IMAGE:?OPS_RUNTIME_IMAGE is required}
     restart: unless-stopped
     ports:
       - "127.0.0.1:5154:5154"
