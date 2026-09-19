@@ -5506,12 +5506,24 @@ export function listListings({
   };
 }
 
+// Display filters mirrored from passesDisplayFilters() (whole-floor / low-floor /
+// rooftop / parking). These are precomputed in the projection with the SAME
+// helpers, so the SQL-first envelope can honor them instead of rejecting the
+// default user settings (excludeLowFloors/excludeRooftop default to true).
+function sqlDisplayFilter(settings) {
+  const clauses = [];
+  if (settings.excludeLowFloors !== false) clauses.push("p.low_floor = 0");
+  if (settings.excludeRooftop !== false) clauses.push("p.rooftop = 0");
+  if (settings.hasParking === true) clauses.push("p.parking = 1");
+  return clauses.length ? `AND ${clauses.join(" AND ")}` : "";
+}
+
 // SQL-first search path (Phase 7). Pushes the district re-check, ORDER BY and
 // LIMIT/OFFSET into SQL against the indexed listing_search_projection, so only
 // the page IDs (not every candidate) are loaded. Returns null when the inputs
 // fall outside the exact-equivalence envelope; callers must fall back to
-// listListings(). Supports only the common "all" surface with the simplest
-// sort keys (newest / price) and no complex per-user filters.
+// listListings(). Supports the common "all" surface (newest / price sorts) and
+// the display filters mirrored above.
 export function listListingsSqlFirst({
   filter = "all",
   kind = "",
@@ -5538,8 +5550,7 @@ export function listListingsSqlFirst({
   if (
     Number(settings.priceMin) > 0 || Number(settings.priceMax) > 0 ||
     Number(settings.minBuildingFloors) > 0 || Number(settings.areaMax) > 0 ||
-    settings.wholeFloorOnly === true || settings.excludeLowFloors === true ||
-    settings.excludeRooftop === true || settings.hasParking === true ||
+    settings.wholeFloorOnly === true ||
     (settings.excludeKeywords || []).length || (settings.excludeAgents || []).length ||
     (settings.excludeAgentIds || []).length || (settings.excludeBoxes || []).length ||
     Number(settings.commuteKm) > 0
@@ -5584,6 +5595,7 @@ export function listListingsSqlFirst({
   const start = Math.max(0, Number(offset) || 0);
   const districtMarks = districtNames.map(() => "?").join(",");
   const districtWhere = `p.district IN (${districtMarks})`;
+  const displayFilter = sqlDisplayFilter(settings);
 
   // Cursor/keyset pagination. The cursor encodes the full sort key of the last
   // row; DESC columns are negated so one row-value `>` comparison matches the
@@ -5612,12 +5624,14 @@ export function listListingsSqlFirst({
 
   const countRow = db.prepare(`SELECT COUNT(*) AS n FROM listing_search_projection p
     WHERE p.post_id IN (SELECT post_id FROM listings ${where})
-    AND ${districtWhere}`).get(...params, ...districtNames);
+    AND ${districtWhere}
+    ${displayFilter}`).get(...params, ...districtNames);
   const totalMatched = Number(countRow?.n) || 0;
 
   const pageSql = `SELECT p.post_id, p.updated_at, p.rent, p.total_monthly_cost FROM listing_search_projection p
     WHERE p.post_id IN (SELECT post_id FROM listings ${where})
     AND ${districtWhere}
+    ${displayFilter}
     ${cursorWhere}
     ORDER BY ${orderBy}
     LIMIT ?${useCursor ? "" : " OFFSET ?"}`;
@@ -5688,8 +5702,7 @@ export function listListingsCommuteSqlFirst({
   if (
     Number(settings.priceMin) > 0 || Number(settings.priceMax) > 0 ||
     Number(settings.minBuildingFloors) > 0 || Number(settings.areaMax) > 0 ||
-    settings.wholeFloorOnly === true || settings.excludeLowFloors === true ||
-    settings.excludeRooftop === true || settings.hasParking === true ||
+    settings.wholeFloorOnly === true ||
     (settings.excludeKeywords || []).length || (settings.excludeAgents || []).length ||
     (settings.excludeAgentIds || []).length || (settings.excludeBoxes || []).length
   ) {
@@ -5754,6 +5767,7 @@ export function listListingsCommuteSqlFirst({
 
   const districtMarks = districtNames.map(() => "?").join(",");
   const districtWhere = `p.district IN (${districtMarks})`;
+  const displayFilter = sqlDisplayFilter(settings);
   const commuteFilter = `
       AND ${clsExpr} IN (${roadClass})
       AND ${sqlTrustedGeoSource("l.geo_source")}
@@ -5767,7 +5781,7 @@ export function listListingsCommuteSqlFirst({
     JOIN listings l ON l.post_id = p.post_id
     JOIN route_cache rc ON rc.route_key = ${routeKeyExpr}
     WHERE p.post_id IN (SELECT post_id FROM listings ${where})
-      AND ${districtWhere}${commuteFilter}`;
+      AND ${districtWhere}${displayFilter}${commuteFilter}`;
 
   const countRow = db.prepare(`SELECT COUNT(*) AS n ${from}`).get(...params, ...districtNames);
   const totalMatched = Number(countRow?.n) || 0;

@@ -106,6 +106,11 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
 - **已接進 `/api/listings`**（server.js）：`listListingsSqlFirst(args) || listListingsCommuteSqlFirst(args)
   || listListings(args)` 回退鏈；兩個 fast path 都支援 `matchVoteUserId`（與 server 的 `matchVoteUserId=uid`
   裝飾一致）。超出 envelope 回 `null` → 退回 Node 路徑。`queryVersion` 2→3 標示走 fast path。
+- **顯示篩選 envelope 擴充**（重要）：預設設定 `excludeLowFloors=true` + `excludeRooftop=true`
+  （`settingsState.js` 的 `!== false` 正規化）原本讓 SQL-first 對**預設使用者 dormant**（envelope 直接 reject）。
+  現在改用 projection 既有的 `low_floor`/`rooftop`/`parking`（用同批 `isAtOrBelowFirstFloor`/
+  `isRooftopAddition`/`listingHasParking` 算）在 SQL 內套 `AND p.low_floor=0 / p.rooftop=0 / p.parking=1`，
+  不再 reject。`wholeFloorOnly` 仍需 `kind_name`（projection 只有 `housingTypeLabel`），暫留 fallback。
 - 尚未：`fit_desc` 的 SQL 化（`listingFitScore` 公式含樓層/電梯/價格/route，較複雜）、
   commute 的 cursor、EXPLAIN evidence。
 
