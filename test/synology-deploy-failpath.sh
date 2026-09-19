@@ -79,6 +79,8 @@ EOF
   ln -sf "$B/docker" /usr/local/bin/docker
   ln -sf "$B/curl" /usr/local/bin/curl
   ln -sf "$B/stat" /usr/local/bin/stat
+  # 重置 cp symlink（scenario 2/5 才會再 symlink 自己的 cp mock；其餘 scenario 用真實 cp）。
+  rm -f /usr/local/bin/cp
 }
 
 T1="$(mktemp -d)"; T2="$(mktemp -d)"; T3="$(mktemp -d)"; T4="$(mktemp -d)"
@@ -188,13 +190,8 @@ C4=$?
 set -e
 [ "$C4" != "0" ] || fail "scenario4: expected non-zero exit"
 grep -q "ROLLBACK_OK" "$T4/out.log" || fail "scenario4: rollback not invoked"
-if [ -e "$T4/data/ops.db-wal" ] || [ -e "$T4/data/ops.db-shm" ]; then
-  echo "=== scenario4 debug ===" >&2
-  cat "$T4/out.log" >&2
-  echo "--- ls data ---" >&2; ls -la "$T4/data" >&2
-  echo "--- ls releases ---" >&2; ls -laR "$T4/app/releases" >&2
-  fail "scenario4: sidecar should be removed"
-fi
+[ ! -e "$T4/data/ops.db-wal" ] || fail "scenario4: wal sidecar should be removed"
+[ ! -e "$T4/data/ops.db-shm" ] || fail "scenario4: shm sidecar should be removed"
 [ -f "$T4/data/ops.db" ] || fail "scenario4: ops.db should be restored"
 echo "scenario4 PASS (rollback removes newly created sidecars)"
 
