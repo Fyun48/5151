@@ -129,6 +129,13 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
 - 尚未：把 server.js 的 SSE 廣播實際改接 delta event（現仍 broadcast 整包）；Web reconnect 靠 DB revision 補回狀態。
 
 
+### Phase 12 — Client state（schema + versioning 完成，前端接入後續）
+- `v3/src/clientState.js`：versioned client state schema（filter/district/sort/panel/moreCondition/
+  currentProfile/pagination cursor/scroll）+ `normalizeClientState`（coerce + v0→v1 migration）+
+  `serialize/deserialize`。F5 不重設搜尋條件；server 仍 authoritative。
+- 測試 `client-state.test.js`（5 項）。
+- 尚未：前端 `v3/public/index.html` 實際改接此 schema（現為分散 localStorage key）。
+
 ### Phase 5 — Repository layer（示範完成，其餘 domain 漸進）
 
 - `v3/src/repository/settings.js`：`createSettingsRepository({ driver, sqliteDb, pgPool })` 工廠 +
