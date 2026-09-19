@@ -119,6 +119,11 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
 - 測試 `storage.test.js`（6 項）。
 - 尚未：把 member-media / self-photos 實際改接 storage driver（現仍直接寫 DATA_DIR）；S3 credentials。
 
+### Phase 29 — Engineering Template（完成）
+- `template/`：可複製的工程模板。`.gitea/workflows/`（ci/build/staging/predeploy/production，
+  production **manual-only** + 精確 confirmation）、`.agent/`（policy.yml / limits.yml / context.md）、
+  `ARCHITECTURE.md` / `SECURITY.md` / `OPERATIONS.md` / `RELEASE.md` / `AGENTS.md`。
+
 ## EXTERNAL_SETUP_REQUIRED（仍需 Owner 提供）
 
 - **HAProxy shadow container 上線**（config 已備好，未起容器）；Web-A/Web-B / crawler / worker shadow 容器上線。
@@ -128,12 +133,11 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
 
 ## 尚未開始（依優先序）
 
-1. Phase 16–17 Web active/active + Cloudflare HA：config 已備好（`deploy/shadow-ha/web/`），尚未上線容器。
+1. Phase 16–17 Web active/active + Cloudflare HA：config 已備好，尚未上線容器。
 2. Phase 22–27 Gitea + loop-engine：核心完成，尚未上線 + Gitea migration rehearsal。
 3. 把 `ensureXxxSchema`（personal/demand/feedback/crm/... 各模組）也納入 migration runner
 4. 把 domain 查詢（listings/users/settings/search/...）抽成 repository interface
 5. 安裝 `pg` 並接線 PostgreSQL adapter（同步 hot path 需先改 async）
-6. Phase 29 Engineering Template（`.gitea/workflows/*` + `.agent/*`）
 
 ## 注意（Windows 本機）
 

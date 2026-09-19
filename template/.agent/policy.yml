@@ -1,0 +1,29 @@
+# Agent 政策（.agent/policy.yml）
+# DeepSeek / coding agent 自主開發時遵循的行為契約。
+
+development_flow:
+  order: [plan, code, test, fix, test, staging]
+  # 中途不呼叫 ChatGPT Code Review；agent 自行 code -> test -> fix 循環直到完成。
+  self_fix: true
+
+code_review:
+  # Final Code Review 為 optional。Release Candidate 時 Owner 三選一：
+  #   FINAL_REVIEW / SKIP_REVIEW_AND_RELEASE / RETURN_TO_DEVELOPMENT
+  mode: optional
+  skip_marks_audit: "SKIPPED_BY_OWNER"
+
+production:
+  deploy: manual-only           # 永遠需要 Owner 授權；merge/push 不會自動部署。
+  approval_required: true
+  runner: production            # 專屬 capability boundary，不是 generic CI runner。
+
+secrets:
+  never_commit: [db_password, replication_password, gitea_token, api_keys,
+                 cloudflare_token, ssh_private_key, object_storage_secret]
+  repo_contains: [".env.example", "secret names", "validation logic"]
+
+behavior:
+  # 不順便改產品語意（篩選語意 / ranking / sponsor / matching / notification / privacy）。
+  no_behavior_drift: true
+  # 重大架構變更先以 parallel / shadow 建立並驗證，不直接動 production。
+  shadow_first: true
