@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -169,4 +170,57 @@ test("predeploy workflow is manual-only, read-only, and non-mutating", () => {
   assert.match(predeployScript, /first_deploy/);
   // 絕不輸出 secret value。
   assert.doesNotMatch(predeployScript, /echo.*OPS_SECRET_AT_REST_KEY=/);
+});
+
+test("predeploy hard-fails on invalid deploy prerequisites (not just WARN)", () => {
+  // 這些是 deploy 的 fail-closed 條件，predeploy 必須 exit 非零。
+  assert.match(predeployScript, /BLOCKED=0/);
+  assert.match(predeployScript, /block\(\) \{ printf 'FAIL/);
+  assert.match(predeployScript, /auth.env absent/);
+  assert.match(predeployScript, /auth.env perms must be 0400\/0600/);
+  assert.match(predeployScript, /owner email key missing/);
+  assert.match(predeployScript, /owner password key missing/);
+  assert.match(predeployScript, /OPS_SECRET_AT_REST_KEY missing or not 64-hex/);
+  assert.match(predeployScript, /port 5154 occupied by unrelated\/unmanaged service/);
+  assert.match(predeployScript, /existing 5151-ops container has no managed current release metadata/);
+  assert.match(predeployScript, /managed current metadata incomplete/);
+  assert.match(predeployScript, /PREDEPLOY_RESULT=PASS/);
+  assert.match(predeployScript, /PREDEPLOY_RESULT=FAIL/);
+  assert.match(predeployScript, /exit 1/);
+});
+
+test("deploy + predeploy workflows declare packages: read for GHCR pull", () => {
+  assert.match(workflow, /contents: read\s*\n\s*packages: read/);
+  assert.match(predeployWorkflow, /contents: read\s*\n\s*packages: read/);
+});
+
+test("deploy workflow uses native scp/ssh, not mutable third-party action tags", () => {
+  assert.doesNotMatch(workflow, /appleboy\/(scp|ssh)-action@/);
+  assert.match(workflow, /\bscp\s/);
+  assert.match(workflow, /\bssh\s/);
+  assert.match(workflow, /StrictHostKeyChecking=accept-new/);
+});
+
+test("deploy script arms an EXIT trap before destructive ops and commits after health/identity", () => {
+  assert.match(script, /DEPLOY_COMMITTED=0/);
+  assert.match(script, /DEPLOY_COMMITTED=1/);
+  assert.match(script, /trap 'code=\$\?; if \[ "\$code" != "0" \] && \[ "\$DEPLOY_COMMITTED" != "1" \]; then rollback; fi; exit "\$code"' EXIT/);
+  assert.doesNotMatch(script, /trap .* ERR/);
+  const trapIdx = script.indexOf("trap 'code=$?;");
+  const stopIdx = script.indexOf('docker compose -f "$PREVIOUS/docker-compose.ops.synology.yml" stop 5151-ops');
+  assert.ok(trapIdx !== -1 && stopIdx !== -1 && trapIdx < stopIdx, "EXIT trap must be armed before stopping the container");
+});
+
+test("deploy backup is fail-closed and records predeploy SQLite files", () => {
+  assert.match(script, /failed to snapshot/);
+  assert.match(script, /PRE_SQLITE_FILES/);
+  assert.match(script, /cp -p "\$AUTH_ENV" "\$BACKUP_DIR\/auth\.env" \|\| fail/);
+  assert.match(script, /failed to write backup metadata/);
+  // 不得再有 `|| true` 的 DB/auth.env snapshot（會 silent 失敗）。
+  assert.doesNotMatch(script, /cp -p "\$AUTH_ENV" "\$BACKUP_DIR\/auth\.env" 2>\/dev\/null \|\| true/);
+});
+
+test("executable deploy failure-path tests (rollback on fail, fail-closed backup)", { skip: process.platform === "win32", timeout: 120000 }, () => {
+  const out = execFileSync("bash", [path.join(ROOT, "test", "synology-deploy-failpath.sh")], { encoding: "utf8" });
+  assert.match(out, /ALL FAILURE-PATH TESTS PASS/);
 });

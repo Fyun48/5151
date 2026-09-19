@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # READ-ONLY Synology OPS predeploy check. No container recreate/stop/delete, no DB write, no current switch.
+# Blocking prerequisites are hard failures (exit non-zero + PREDEPLOY_RESULT=FAIL).
 set -euo pipefail
 
 APP_ROOT="${APP_ROOT:-/volume1/docker/5151-ops/app}"
@@ -8,10 +9,12 @@ AUTH_ENV="${DATA_ROOT}/auth.env"
 
 say() { printf '%s\n' "$*"; }
 warn() { printf 'WARN %s\n' "$*"; }
+BLOCKED=0
+block() { printf 'FAIL %s\n' "$*"; BLOCKED=1; }
 
 say "== docker / docker compose =="
-docker --version || { echo "::error::docker not available"; exit 1; }
-docker compose version || { echo "::error::docker compose not available"; exit 1; }
+docker --version || { printf 'FAIL docker not available\n'; BLOCKED=1; }
+docker compose version || { printf 'FAIL docker compose not available\n'; BLOCKED=1; }
 
 say "== NAS architecture =="
 say "arch=$(uname -m)"
@@ -26,24 +29,37 @@ say "== disk free =="
 df -h "$APP_ROOT" "$DATA_ROOT" 2>/dev/null || df -h /
 
 say "== port 5154 / container status (read-only) =="
-( ss -ltn 2>/dev/null | grep ':5154 ' ) || say "port 5154 not currently listening"
-( docker ps -a --filter "name=5151-ops" --format 'container={{.Names}} status={{.Status}} image={{.Image}}' ) || say "no 5151-ops container"
+PORT_OWNER="$(ss -ltnp 2>/dev/null | grep ':5154 ' || true)"
+CONTAINER="$(docker ps -a --filter "name=5151-ops" --format '{{.Names}}' 2>/dev/null || true)"
+if [ -n "$PORT_OWNER" ]; then
+  if echo "$CONTAINER" | grep -q '^5151-ops$'; then
+    say "port 5154 in use by managed 5151-ops container"
+  else
+    block "port 5154 occupied by unrelated/unmanaged service"
+  fi
+else
+  say "port 5154 not currently listening"
+fi
+if echo "$CONTAINER" | grep -q '^5151-ops$'; then
+  say "container=5151-ops present"
+else
+  say "no 5151-ops container"
+fi
 
 say "== auth.env =="
 if [ -f "$AUTH_ENV" ]; then
   PERMS="$(stat -c '%a' "$AUTH_ENV" 2>/dev/null || stat -f '%Lp' "$AUTH_ENV")"
   say "auth_env_perms=$PERMS"
-  case "$PERMS" in 400|600) ;; *) warn "auth.env perms should be 0400/0600 (got $PERMS)";; esac
-  grep -Eq '^[[:space:]]*(OPS_OWNER_EMAIL|AUTH_EMAIL)[[:space:]]*=' "$AUTH_ENV" && say "owner_email_key=present" || warn "owner email key missing"
-  grep -Eq '^[[:space:]]*(OPS_OWNER_PASSWORD|AUTH_PASSWORD)[[:space:]]*=' "$AUTH_ENV" && say "owner_password_key=present" || warn "owner password key missing"
-  # only validate presence + 64-hex format; NEVER print the value
+  case "$PERMS" in 400|600) ;; *) block "auth.env perms must be 0400/0600 (got $PERMS)";; esac
+  grep -Eq '^[[:space:]]*(OPS_OWNER_EMAIL|AUTH_EMAIL)[[:space:]]*=' "$AUTH_ENV" && say "owner_email_key=present" || block "owner email key missing"
+  grep -Eq '^[[:space:]]*(OPS_OWNER_PASSWORD|AUTH_PASSWORD)[[:space:]]*=' "$AUTH_ENV" && say "owner_password_key=present" || block "owner password key missing"
   if grep -E '^[[:space:]]*OPS_SECRET_AT_REST_KEY=' "$AUTH_ENV" | sed 's/^[^=]*=//' | tr -d '"'"'"' ' | grep -Eq '^[0-9a-fA-F]{64}$'; then
     say "secret_at_rest_key=present_64hex"
   else
-    warn "OPS_SECRET_AT_REST_KEY missing or not 64-hex"
+    block "OPS_SECRET_AT_REST_KEY missing or not 64-hex"
   fi
 else
-  say "auth_env=absent (first deploy must provision it)"
+  block "auth.env absent (first deploy must provision it before deploy)"
 fi
 
 say "== ops.db (read-only) =="
@@ -57,13 +73,30 @@ say "== current / previous release metadata =="
 if [ -L "$APP_ROOT/current" ]; then
   CUR="$(readlink -f "$APP_ROOT/current" 2>/dev/null || true)"
   say "current=$CUR"
-  [ -f "$CUR/.deployed-sha" ] && say "current_deployed_sha=$(cat "$CUR/.deployed-sha")" || warn "current missing .deployed-sha"
-  [ -f "$CUR/.runtime-image" ] && say "current_runtime_image=$(cat "$CUR/.runtime-image")" || warn "current missing .runtime-image"
+  if [ -f "$CUR/.deployed-sha" ] && [ -f "$CUR/.runtime-image" ]; then
+    say "current_deployed_sha=$(cat "$CUR/.deployed-sha")"
+    say "current_runtime_image=$(cat "$CUR/.runtime-image")"
+  else
+    block "managed current metadata incomplete (missing .deployed-sha or .runtime-image)"
+  fi
 else
   say "current=absent (first deploy)"
+fi
+
+# 既有 5151-ops container 但無 managed current metadata → block
+if echo "$CONTAINER" | grep -q '^5151-ops$'; then
+  if [ ! -L "$APP_ROOT/current" ]; then
+    block "existing 5151-ops container has no managed current release metadata"
+  fi
 fi
 
 say "== first deploy =="
 if [ -L "$APP_ROOT/current" ]; then say "first_deploy=false"; else say "first_deploy=true"; fi
 
-say "PREDEPLOY_CHECK_DONE"
+if [ "$BLOCKED" = "0" ]; then
+  say "PREDEPLOY_RESULT=PASS"
+else
+  say "PREDEPLOY_RESULT=FAIL"
+  exit 1
+fi
+

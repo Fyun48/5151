@@ -47,7 +47,53 @@ if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q '^5151-ops$'; then
   fi
 fi
 
-# ---------- consistent backup (stop active container, snapshot DB, keep stopped) ----------
+# ---------- rollback state (armed before any destructive op) ----------
+DEPLOY_COMMITTED=0
+ROLLBACK_DONE=0
+PRE_SQLITE_FILES=""
+
+rollback() {
+  [ "$ROLLBACK_DONE" = "1" ] && return 0
+  ROLLBACK_DONE=1
+  log "rollback: stop failed container, restore previous source+image+compose+DB"
+  docker stop 5151-ops >/dev/null 2>&1 || true
+  # 只還原 snapshot 中存在的檔；移除 predeploy 不存在的新 sidecar（避免 mixed/stale SQLite state）。
+  for f in ops.db ops.db-wal ops.db-shm; do
+    case " $PRE_SQLITE_FILES " in
+      *" $f "*)
+        if [ -f "$BACKUP_DIR/$f" ]; then cp -p "$BACKUP_DIR/$f" "${DATA_ROOT}/$f" || true; fi
+        ;;
+      *)
+        rm -f "${DATA_ROOT}/$f"
+        ;;
+    esac
+  done
+  if [ -f "$BACKUP_DIR/auth.env" ]; then cp -p "$BACKUP_DIR/auth.env" "$AUTH_ENV"; chmod 600 "$AUTH_ENV"; fi
+  if [ -n "$PREVIOUS" ] && [ -d "$PREVIOUS" ] && [ -f "$PREVIOUS/.runtime-image" ] && [ -f "$PREVIOUS/docker-compose.ops.synology.yml" ]; then
+    ln -sfn "$PREVIOUS" "$CURRENT"
+    PREV_IMAGE="$(cat "$PREVIOUS/.runtime-image")"
+    OPS_RUNTIME_IMAGE="$PREV_IMAGE" docker compose -f "$PREVIOUS/docker-compose.ops.synology.yml" up -d --no-build --no-deps --force-recreate 5151-ops || true
+    for _ in $(seq 1 30); do
+      if curl -fsS http://127.0.0.1:5154/ops/api/health | grep -q '"ok":true'; then break; fi
+      sleep 1
+    done
+    log "rollback complete (restored previous source+image+compose: $PREVIOUS @ $PREV_IMAGE)"
+  else
+    rm -f "$CURRENT"
+    rm -rf "$RELEASES/$DEPLOY_SHA"
+    log "first deploy failed: OPS left stopped, failed release removed"
+  fi
+}
+
+# EXIT trap：在第一次 destructive op 之前武裝；非零 exit 且未 commit 時 rollback 一次。
+trap 'code=$?; if [ "$code" != "0" ] && [ "$DEPLOY_COMMITTED" != "1" ]; then rollback; fi; exit "$code"' EXIT
+
+# ---------- record predeploy SQLite files ----------
+for f in ops.db ops.db-wal ops.db-shm; do
+  if [ -f "${DATA_ROOT}/$f" ]; then PRE_SQLITE_FILES="$PRE_SQLITE_FILES $f"; fi
+done
+
+# ---------- consistent backup (fail-closed; rollback trap already armed) ----------
 mkdir -p "$BACKUP_DIR"; chmod 700 "$BACKUP_DIR"
 if [ -n "$PREVIOUS" ] && [ -f "$PREVIOUS/docker-compose.ops.synology.yml" ]; then
   docker compose -f "$PREVIOUS/docker-compose.ops.synology.yml" stop 5151-ops >/dev/null 2>&1 || true
@@ -55,51 +101,14 @@ else
   docker stop 5151-ops >/dev/null 2>&1 || true
 fi
 for f in ops.db ops.db-wal ops.db-shm; do
-  [ -f "${DATA_ROOT}/$f" ] && cp -p "${DATA_ROOT}/$f" "$BACKUP_DIR/$f" || true
+  if [ -f "${DATA_ROOT}/$f" ]; then
+    cp -p "${DATA_ROOT}/$f" "$BACKUP_DIR/$f" || fail "failed to snapshot $f"
+  fi
 done
-cp -p "$AUTH_ENV" "$BACKUP_DIR/auth.env" 2>/dev/null || true
-chmod 600 "$BACKUP_DIR/auth.env" 2>/dev/null || true
-printf 'deploy_sha=%s\nprevious=%s\nruntime_image=%s\nbackup_at=%s\n' "$DEPLOY_SHA" "$PREVIOUS" "$OPS_RUNTIME_IMAGE" "$(date -u +%FT%TZ)" > "$BACKUP_DIR/meta.txt"
-log "backup at $BACKUP_DIR (previous=$PREVIOUS)"
-
-# ---------- rollback (on any failure) ----------
-rollback() {
-  log "rollback: stop failed container, restore previous source+image+compose+DB"
-  # 1) stop failed/new container fail-safe (never restore DB while it is live)
-  if [ -f "$CURRENT/docker-compose.ops.synology.yml" ]; then
-    docker compose -f "$CURRENT/docker-compose.ops.synology.yml" stop 5151-ops >/dev/null 2>&1 || true
-  fi
-  docker stop 5151-ops >/dev/null 2>&1 || true
-  if [ -n "$PREVIOUS" ] && [ -d "$PREVIOUS" ] && [ -f "$PREVIOUS/.runtime-image" ] && [ -f "$PREVIOUS/docker-compose.ops.synology.yml" ]; then
-    # 2) current → PREVIOUS (source + compose identity restored together)
-    ln -sfn "$PREVIOUS" "$CURRENT"
-    # 3) read previous runtime image
-    PREV_IMAGE="$(cat "$PREVIOUS/.runtime-image")"
-    # 4) restore DB/config snapshot
-    for f in ops.db ops.db-wal ops.db-shm; do
-      [ -f "$BACKUP_DIR/$f" ] && cp -p "$BACKUP_DIR/$f" "${DATA_ROOT}/$f" || true
-    done
-    if [ -f "$BACKUP_DIR/auth.env" ]; then cp -p "$BACKUP_DIR/auth.env" "$AUTH_ENV"; chmod 600 "$AUTH_ENV"; fi
-    # 5) recreate previous source + previous runtime image (compose from PREVIOUS release)
-    OPS_RUNTIME_IMAGE="$PREV_IMAGE" docker compose -f "$PREVIOUS/docker-compose.ops.synology.yml" up -d --no-build --no-deps --force-recreate 5151-ops || true
-    # 6) health-check restored previous release
-    for _ in $(seq 1 30); do
-      if curl -fsS http://127.0.0.1:5154/ops/api/health | grep -q '"ok":true'; then break; fi
-      sleep 1
-    done
-    log "rollback complete (restored previous source+image+compose: $PREVIOUS @ $PREV_IMAGE)"
-  else
-    # first-deploy failure: restore DB/config snapshot, remove/disable failed current, do NOT restart
-    for f in ops.db ops.db-wal ops.db-shm; do
-      [ -f "$BACKUP_DIR/$f" ] && cp -p "$BACKUP_DIR/$f" "${DATA_ROOT}/$f" || true
-    done
-    if [ -f "$BACKUP_DIR/auth.env" ]; then cp -p "$BACKUP_DIR/auth.env" "$AUTH_ENV"; chmod 600 "$AUTH_ENV"; fi
-    rm -f "$CURRENT"
-    rm -rf "$RELEASES/$DEPLOY_SHA"
-    log "first deploy failed: OPS left stopped, failed release removed"
-  fi
-}
-trap 'ERR=$?; if [ "$ERR" != "0" ]; then rollback; exit $ERR; fi' ERR
+cp -p "$AUTH_ENV" "$BACKUP_DIR/auth.env" || fail "failed to snapshot auth.env"
+chmod 600 "$BACKUP_DIR/auth.env" || fail "failed to chmod auth.env snapshot"
+printf 'deploy_sha=%s\nprevious=%s\nruntime_image=%s\nsqlite_files=%s\nbackup_at=%s\n' "$DEPLOY_SHA" "$PREVIOUS" "$OPS_RUNTIME_IMAGE" "$(echo $PRE_SQLITE_FILES)" "$(date -u +%FT%TZ)" > "$BACKUP_DIR/meta.txt" || fail "failed to write backup metadata"
+log "backup at $BACKUP_DIR (previous=$PREVIOUS, sqlite=[$(echo $PRE_SQLITE_FILES)])"
 
 # ---------- promote staged release (source + compose + runtime-image + sha) ----------
 [ -d "$INCOMING/ops" ] || fail "incoming ops source missing at $INCOMING/ops"
@@ -128,6 +137,9 @@ MARKER="$(cat "$CURRENT/.deployed-sha" 2>/dev/null || true)"
 [ "$MARKER" = "$DEPLOY_SHA" ] || fail "deployed SHA marker mismatch (got $MARKER)"
 RUNNING="$(docker inspect -f '{{.State.Status}}' 5151-ops)"
 [ "$RUNNING" = "running" ] || fail "container not running (state=$RUNNING)"
+
+# new release verified: commit (EXIT trap no longer rolls back on clean exit)
+DEPLOY_COMMITTED=1
 
 # bounded retention: keep current + last 5 releases
 ( cd "$RELEASES" && ls -1t | tail -n +7 | xargs -r rm -rf )
