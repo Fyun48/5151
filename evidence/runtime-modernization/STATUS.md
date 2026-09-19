@@ -111,6 +111,14 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
 - 尚未：實際 `docker compose up`；Gitea migration rehearsal（GitHub authoritative）；DeepSeek 實際串接 loop-engine；
   `.gitea/workflows/*` + `.agent/*` template（Phase 29）。
 
+### Phase 18 — Media/File storage abstraction（完成，S3 標 EXTERNAL_SETUP_REQUIRED）
+- `v3/src/storage.js`：`STORAGE_DRIVER=local|s3` 選擇（`resolveStorageDriver()`）+ `createStorage()` 工廠；
+  local driver（put/get/delete/exists/getMetadata/list，向後相容）；S3 driver（S3-compatible，未給 credentials 時
+  每個 method 丟 `OBJECT_STORAGE_EXTERNAL_SETUP_REQUIRED`）；`deterministicStorageKey`（content hash 為 key，冪等）。
+- `v3/src/mediaMigration.js`：`migrateMedia`（local→S3，dry-run / verify / resume 冪等）+ `verifyMedia`（sha256 比對）。
+- 測試 `storage.test.js`（6 項）。
+- 尚未：把 member-media / self-photos 實際改接 storage driver（現仍直接寫 DATA_DIR）；S3 credentials。
+
 ## EXTERNAL_SETUP_REQUIRED（仍需 Owner 提供）
 
 - **HAProxy shadow container 上線**（config 已備好，未起容器）；Web-A/Web-B / crawler / worker shadow 容器上線。
@@ -121,11 +129,11 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
 ## 尚未開始（依優先序）
 
 1. Phase 16–17 Web active/active + Cloudflare HA：config 已備好（`deploy/shadow-ha/web/`），尚未上線容器。
-2. Phase 18 storage abstraction（local/s3）
-3. Phase 22–27 Gitea + loop-engine + optional Final Review
-4. 把 `ensureXxxSchema`（personal/demand/feedback/crm/... 各模組）也納入 migration runner
-5. 把 domain 查詢（listings/users/settings/search/...）抽成 repository interface
-6. 安裝 `pg` 並接線 PostgreSQL adapter（同步 hot path 需先改 async）
+2. Phase 22–27 Gitea + loop-engine：核心完成，尚未上線 + Gitea migration rehearsal。
+3. 把 `ensureXxxSchema`（personal/demand/feedback/crm/... 各模組）也納入 migration runner
+4. 把 domain 查詢（listings/users/settings/search/...）抽成 repository interface
+5. 安裝 `pg` 並接線 PostgreSQL adapter（同步 hot path 需先改 async）
+6. Phase 29 Engineering Template（`.gitea/workflows/*` + `.agent/*`）
 
 ## 注意（Windows 本機）
 
