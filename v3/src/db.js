@@ -5583,21 +5583,37 @@ export function listListingsSqlFirst({
   const districtMarks = districtNames.map(() => "?").join(",");
   const districtWhere = `p.district IN (${districtMarks})`;
 
-  // Cursor/keyset pagination (newest only for now). Instead of OFFSET (which
-  // rescans all previous rows), the cursor is the (updated_at, post_id) of the
-  // last row of the previous page and the predicate fetches strictly after it.
-  const useCursor = cursor != null && sort === "newest";
-  const cursorWhere = useCursor
-    ? `AND (p.updated_at < ? OR (p.updated_at = ? AND p.post_id > ?))`
-    : "";
-  const cursorParams = useCursor ? [Number(cursor.updatedAt), Number(cursor.updatedAt), Number(cursor.postId)] : [];
+  // Cursor/keyset pagination. The cursor encodes the full sort key of the last
+  // row; DESC columns are negated so one row-value `>` comparison matches the
+  // ORDER BY across the ASC/DESC mix.
+  const rowCost = (row) => (settings.priceMaxIncludesExtras === true ? Number(row.total_monthly_cost) : Number(row.rent));
+  const sortCostExpr = `CASE WHEN ${cost} > 0 THEN ${cost} ELSE 9223372036854775807 END`;
+  const costGroupExpr = `CASE WHEN ${cost} > 0 THEN 0 ELSE 1 END`;
+  const useCursor = cursor != null;
+  let tupleExpr = "";
+  let cursorParams = [];
+  let cursorOf = null;
+  if (sort === "newest") {
+    tupleExpr = "(-p.updated_at, p.post_id)";
+    cursorParams = useCursor ? [-Number(cursor.updatedAt), Number(cursor.postId)] : [];
+    cursorOf = (row) => ({ updatedAt: row.updated_at, postId: row.post_id });
+  } else if (sort === "price_asc") {
+    tupleExpr = `(${sortCostExpr}, -p.updated_at, p.post_id)`;
+    cursorParams = useCursor ? [Number(cursor.sortCost), -Number(cursor.updatedAt), Number(cursor.postId)] : [];
+    cursorOf = (row) => ({ sortCost: rowCost(row) > 0 ? rowCost(row) : 9223372036854775807, updatedAt: row.updated_at, postId: row.post_id });
+  } else { // price_desc
+    tupleExpr = `(${costGroupExpr}, -${cost}, -p.updated_at, p.post_id)`;
+    cursorParams = useCursor ? [Number(cursor.costGroup), -Number(cursor.cost), -Number(cursor.updatedAt), Number(cursor.postId)] : [];
+    cursorOf = (row) => ({ costGroup: rowCost(row) > 0 ? 0 : 1, cost: rowCost(row), updatedAt: row.updated_at, postId: row.post_id });
+  }
+  const cursorWhere = useCursor ? `AND ${tupleExpr} > (${cursorParams.map(() => "?").join(", ")})` : "";
 
   const countRow = db.prepare(`SELECT COUNT(*) AS n FROM listing_search_projection p
     WHERE p.post_id IN (SELECT post_id FROM listings ${where})
     AND ${districtWhere}`).get(...params, ...districtNames);
   const totalMatched = Number(countRow?.n) || 0;
 
-  const pageSql = `SELECT p.post_id, p.updated_at FROM listing_search_projection p
+  const pageSql = `SELECT p.post_id, p.updated_at, p.rent, p.total_monthly_cost FROM listing_search_projection p
     WHERE p.post_id IN (SELECT post_id FROM listings ${where})
     AND ${districtWhere}
     ${cursorWhere}
@@ -5624,9 +5640,7 @@ export function listListingsSqlFirst({
     return finalizeListingDecorate(lite, settings, uid, { sameHouse: needPeers });
   });
 
-  const nextCursor = sort === "newest" && ids.length
-    ? { updatedAt: pageRows[pageRows.length - 1].updated_at, postId: ids[ids.length - 1] }
-    : null;
+  const nextCursor = ids.length ? cursorOf(pageRows[pageRows.length - 1]) : null;
 
   return {
     listings,

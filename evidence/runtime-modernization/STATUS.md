@@ -85,9 +85,10 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
 - 差異測試 `list-sql-first.test.js`：同一 fixture 下 `listListingsSqlFirst` 與 `listListings`
   回傳**相同 id 集合/順序**（含 offset 分頁）。
 - **實測 50k**：`newest` p50 331→100ms（3.3x）、`price_asc` p50 427→98ms（4.4x）。
-- **cursor/keyset pagination**（Phase 8）：`listListingsSqlFirst` 支援 `newest` 的 cursor（`{updatedAt, postId}`），
-  以 keyset predicate 取代 OFFSET，回 `nextCursor`；測試驗證跨頁無 gap/overlap（與 offset 全量一致）。
-- 尚未：commute/fit 排序的 SQL 化（依賴 route_cache，跨使用者）、price/commute 的 cursor、EXPLAIN evidence。
+- **cursor/keyset pagination**（Phase 8）：`listListingsSqlFirst` 支援 `newest`/`price_asc`/`price_desc`
+  的 cursor（negated-tuple row-value 比較處理 ASC/DESC 混合），回 `nextCursor`；測試驗證三種排序跨頁
+  無 gap/overlap（與 offset 全量一致）。
+- 尚未：commute/fit 排序的 SQL 化（依賴 route_cache，跨使用者）、commute 的 cursor、EXPLAIN evidence。
 
 
 ### Phase 13/14/15/19 — Shadow PostgreSQL Primary/Standby（已上線並驗證）
