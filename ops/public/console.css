@@ -163,6 +163,10 @@ button {
   padding: 8px 14px;
   font-size: 13px;
   font-weight: 700;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 button:focus-visible, .chip-btn:focus-visible, .tab:focus-visible {
