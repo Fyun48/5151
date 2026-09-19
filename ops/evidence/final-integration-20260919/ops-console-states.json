@@ -1,6 +1,6 @@
 {
   "schema": "ops-console-states-v1",
-  "generated_at": "2026-09-19T05:12:21.726Z",
+  "generated_at": "2026-09-19T05:49:39.842Z",
   "pr": "#369",
   "target": {
     "base_url": "http://127.0.0.1:5154",
@@ -15,189 +15,189 @@
       "state": "loading",
       "width": 375,
       "ok": true,
-      "marker": "載入中",
+      "marker": "loading",
       "rendered": true
     },
     {
       "state": "empty",
       "width": 375,
-      "ok": false,
-      "marker": "尚無產品卡",
-      "rendered": false
+      "ok": true,
+      "marker": "empty",
+      "rendered": true
     },
     {
       "state": "normal",
       "width": 375,
-      "ok": false,
-      "marker": "已連接",
-      "rendered": false
+      "ok": true,
+      "marker": "ST_connected",
+      "rendered": true
     },
     {
       "state": "error",
       "width": 375,
-      "ok": false,
-      "marker": "無法讀取產品",
-      "rendered": false
+      "ok": true,
+      "marker": "ST_error",
+      "rendered": true
     },
     {
       "state": "retry",
       "width": 375,
-      "ok": false,
-      "marker": "失敗可重試",
-      "rendered": false
+      "ok": true,
+      "marker": "ST_failed_retry",
+      "rendered": true
     },
     {
       "state": "blocked",
       "width": 375,
       "ok": true,
-      "marker": "已封鎖",
+      "marker": "ST_blocked",
       "rendered": true
     },
     {
       "state": "cancelled",
       "width": 375,
       "ok": true,
-      "marker": "已取消",
+      "marker": "ST_cancelled",
       "rendered": true
     },
     {
       "state": "unknown",
       "width": 375,
       "ok": true,
-      "marker": "狀態不明",
+      "marker": "ST_unknown",
       "rendered": true
     },
     {
       "state": "completed",
       "width": 375,
       "ok": true,
-      "marker": "已完成",
+      "marker": "ST_completed",
       "rendered": true
     },
     {
       "state": "loading",
       "width": 768,
       "ok": true,
-      "marker": "載入中",
+      "marker": "loading",
       "rendered": true
     },
     {
       "state": "empty",
       "width": 768,
-      "ok": false,
-      "marker": "尚無產品卡",
-      "rendered": false
+      "ok": true,
+      "marker": "empty",
+      "rendered": true
     },
     {
       "state": "normal",
       "width": 768,
-      "ok": false,
-      "marker": "已連接",
-      "rendered": false
+      "ok": true,
+      "marker": "ST_connected",
+      "rendered": true
     },
     {
       "state": "error",
       "width": 768,
-      "ok": false,
-      "marker": "無法讀取產品",
-      "rendered": false
+      "ok": true,
+      "marker": "ST_error",
+      "rendered": true
     },
     {
       "state": "retry",
       "width": 768,
-      "ok": false,
-      "marker": "失敗可重試",
-      "rendered": false
+      "ok": true,
+      "marker": "ST_failed_retry",
+      "rendered": true
     },
     {
       "state": "blocked",
       "width": 768,
       "ok": true,
-      "marker": "已封鎖",
+      "marker": "ST_blocked",
       "rendered": true
     },
     {
       "state": "cancelled",
       "width": 768,
       "ok": true,
-      "marker": "已取消",
+      "marker": "ST_cancelled",
       "rendered": true
     },
     {
       "state": "unknown",
       "width": 768,
       "ok": true,
-      "marker": "狀態不明",
+      "marker": "ST_unknown",
       "rendered": true
     },
     {
       "state": "completed",
       "width": 768,
       "ok": true,
-      "marker": "已完成",
+      "marker": "ST_completed",
       "rendered": true
     },
     {
       "state": "loading",
       "width": 1440,
       "ok": true,
-      "marker": "載入中",
+      "marker": "loading",
       "rendered": true
     },
     {
       "state": "empty",
       "width": 1440,
-      "ok": false,
-      "marker": "尚無產品卡",
-      "rendered": false
+      "ok": true,
+      "marker": "empty",
+      "rendered": true
     },
     {
       "state": "normal",
       "width": 1440,
-      "ok": false,
-      "marker": "已連接",
-      "rendered": false
+      "ok": true,
+      "marker": "ST_connected",
+      "rendered": true
     },
     {
       "state": "error",
       "width": 1440,
-      "ok": false,
-      "marker": "無法讀取產品",
-      "rendered": false
+      "ok": true,
+      "marker": "ST_error",
+      "rendered": true
     },
     {
       "state": "retry",
       "width": 1440,
-      "ok": false,
-      "marker": "失敗可重試",
-      "rendered": false
+      "ok": true,
+      "marker": "ST_failed_retry",
+      "rendered": true
     },
     {
       "state": "blocked",
       "width": 1440,
       "ok": true,
-      "marker": "已封鎖",
+      "marker": "ST_blocked",
       "rendered": true
     },
     {
       "state": "cancelled",
       "width": 1440,
       "ok": true,
-      "marker": "已取消",
+      "marker": "ST_cancelled",
       "rendered": true
     },
     {
       "state": "unknown",
       "width": 1440,
       "ok": true,
-      "marker": "狀態不明",
+      "marker": "ST_unknown",
       "rendered": true
     },
     {
       "state": "completed",
       "width": 1440,
       "ok": true,
-      "marker": "已完成",
+      "marker": "ST_completed",
       "rendered": true
     }
   ]

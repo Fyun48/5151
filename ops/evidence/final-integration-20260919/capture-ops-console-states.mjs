@@ -41,12 +41,12 @@ async function connect(wsUrl) { const ws = new WebSocket(wsUrl); await new Promi
 const CAPS = { feedback_copy: true, crm_sync: false, remote_cs: false, cross_site_insight: false, stats: false, followup_service: false, retain_after_exit: false };
 const FIXTURE_OVERRIDE = `(() => {
   const CAPS = ${JSON.stringify(CAPS)};
-  const product = (status) => ({ items: [{ id: "v3", display_name: "吉比租房", status, subscription: { generation: 1, status, capabilities: CAPS }, environments: [], consent_events: [] }] });
+  const product = (status) => ({ items: [{ id: "v3", display_name: "ST_" + status, status, subscription: { generation: 1, status, capabilities: CAPS }, environments: [], consent_events: [] }] });
   const STATES = {
     loading: () => new Promise(() => {}),
     empty: () => ({ ok: true, status: 200, json: async () => ({ items: [] }) }),
     normal: () => ({ ok: true, status: 200, json: async () => product("connected") }),
-    error: () => ({ ok: false, status: 500, json: async () => ({ error: "無法讀取產品" }) }),
+    error: () => ({ ok: false, status: 500, json: async () => ({ error: "ST_error" }) }),
     retry: () => ({ ok: true, status: 200, json: async () => product("failed_retry") }),
     blocked: () => ({ ok: true, status: 200, json: async () => product("blocked") }),
     cancelled: () => ({ ok: true, status: 200, json: async () => product("cancelled") }),
@@ -55,25 +55,28 @@ const FIXTURE_OVERRIDE = `(() => {
   };
   const orig = window.fetch.bind(window);
   window.fetch = async (url, opts) => {
+    window.__OVERRIDE_ACTIVE = (window.__OVERRIDE_ACTIVE || 0) + 1;
     const s = String(url || "");
     if (s.includes("/ops/api/products")) {
       const state = (location.hash.match(/state=(\\w+)/) || [])[1] || "normal";
-      return STATES[state] ? STATES[state]() : STATES.normal();
+      const ret = STATES[state] ? STATES[state]() : STATES.normal();
+      window.__DBG = { state, type: ret && typeof ret.then === "function" ? "promise" : typeof ret };
+      return ret;
     }
     return orig(url, opts);
   };
 })()`;
 
 const STATES = [
-  { name: "loading", marker: "載入中" },
-  { name: "empty", marker: "尚無產品卡" },
-  { name: "normal", marker: "已連接" },
-  { name: "error", marker: "無法讀取產品" },
-  { name: "retry", marker: "失敗可重試" },
-  { name: "blocked", marker: "已封鎖" },
-  { name: "cancelled", marker: "已取消" },
-  { name: "unknown", marker: "狀態不明" },
-  { name: "completed", marker: "已完成" },
+  { name: "loading", kind: "loading", marker: null },
+  { name: "empty", kind: "empty", marker: null },
+  { name: "normal", kind: "text", marker: "ST_connected" },
+  { name: "error", kind: "text", marker: "ST_error" },
+  { name: "retry", kind: "text", marker: "ST_failed_retry" },
+  { name: "blocked", kind: "text", marker: "ST_blocked" },
+  { name: "cancelled", kind: "text", marker: "ST_cancelled" },
+  { name: "unknown", kind: "text", marker: "ST_unknown" },
+  { name: "completed", kind: "text", marker: "ST_completed" },
 ];
 
 async function main() {
@@ -92,18 +95,28 @@ async function main() {
     await cdp.send("Emulation.setDeviceMetricsOverride", { width, height: 1200, deviceScaleFactor: 1, mobile: width < 700 });
     if (session.cookie) await cdp.send("Network.setCookie", { ...session.cookie, url: `${BASE}/`, httpOnly: true });
     for (const state of STATES) {
-      await cdp.send("Page.navigate", { url: `${BASE}/#state=${state.name}` });
+      // 加 cache-buster query 強制 full reload（否則只差 hash 會被當 same-document navigation）。
+      await cdp.send("Page.navigate", { url: `${BASE}/?s=${state.name}&c=${Date.now()}#state=${state.name}` });
       await sleep(2200);
       // 切換到「產品」分頁（預設是總覽，產品卡在 hidden pane 內）。
       await cdp.send("Runtime.evaluate", { expression: `(() => { const b = document.querySelector('[data-tab="products"]'); if (b) b.click(); return true; })()`, returnByValue: true });
       await sleep(700);
-      const text = await cdp.send("Runtime.evaluate", { expression: `(() => { const b = document.getElementById("productCards"); const m = document.getElementById("productMsg"); return (b ? b.innerText : "") + "\\n" + (m ? m.innerText : ""); })()`, returnByValue: true });
-      const body = String(text.result && text.result.value ? text.result.value : "");
-      const ok = body.includes(state.marker);
+      const probe = await cdp.send("Runtime.evaluate", { expression: `(() => {
+        const b = document.getElementById("productCards");
+        const m = document.getElementById("productMsg");
+        const hasCard = !!b && !!b.querySelector(".product-card");
+        const loaded = !!b && !!b.dataset.loaded;
+        return { text: document.body.innerText, hasCard, loaded, msg: m ? m.innerText : "", msgClass: m ? m.className : "", hash: location.hash, overrideActive: window.__OVERRIDE_ACTIVE || 0, dbg: window.__DBG || null };
+      })()`, returnByValue: true });
+      const d = probe.result.value || {};
+      let ok = false;
+      if (state.kind === "loading") ok = d.loaded === false;              // 仍在載入（fetch 未完成）
+      else if (state.kind === "empty") ok = d.hasCard === false && d.loaded === true; // 已載入但無產品卡
+      else ok = String(d.text || "").includes(state.marker);
       const shot = await cdp.send("Page.captureScreenshot", { format: "png" });
       writeFileSync(path.join(SHOTS, `ops-console-${state.name}-${width}.png`), Buffer.from(shot.data, "base64"));
-      results.push({ state: state.name, width, ok, marker: state.marker, rendered: ok });
-      console.log(JSON.stringify({ state: state.name, width, ok, marker: state.marker }));
+      results.push({ state: state.name, width, ok, marker: state.marker || state.kind, rendered: ok });
+      console.log(JSON.stringify({ state: state.name, width, ok, marker: state.marker || state.kind, hasCard: d.hasCard, loaded: d.loaded, msg: d.msg, hash: d.hash, overrideActive: d.overrideActive, dbg: d.dbg }));
     }
   }
   const report = { schema: "ops-console-states-v1", generated_at: new Date().toISOString(), pr: "#369", target: { base_url: BASE, widths: WIDTHS }, results };
