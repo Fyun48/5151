@@ -254,3 +254,86 @@ export function reclaimExpiredLeases(db, { now = Date.now() } = {}) {
   return result.changes;
 }
 
+// --- Repository-style factory (Phase 5): one interface, two adapters ---
+
+function sqliteQueue(db) {
+  return {
+    name: "sqlite",
+    enqueue: (opts) => enqueueJob(db, opts),
+    claim: (opts) => claimJobs(db, opts),
+    complete: (opts) => completeJob(db, opts),
+    fail: (opts) => failJob(db, opts),
+    reclaimExpired: (opts) => reclaimExpiredLeases(db, opts),
+  };
+}
+
+function postgresQueue(pool) {
+  return {
+    name: "postgres",
+    async enqueue({ jobType, payload = {}, priority = JOB_PRIORITY.ENRICHMENT, idempotencyKey = null, maxAttempts = DEFAULT_MAX_ATTEMPTS, availableAt = Date.now(), now = Date.now() } = {}) {
+      const result = await pool.query(`
+        INSERT INTO job_queue (job_type, payload, priority, state, attempts, max_attempts,
+          available_at, idempotency_key, created_at, updated_at)
+        VALUES ($1, $2::jsonb, $3, 'pending', 0, $4, $5, $6, $7, $7)
+        ON CONFLICT (idempotency_key) DO NOTHING
+        RETURNING *
+      `, [jobType, JSON.stringify(payload ?? {}), priority, maxAttempts, availableAt, idempotencyKey, now]);
+      if (result.rows.length === 0 && idempotencyKey != null) {
+        const existing = await pool.query("SELECT * FROM job_queue WHERE idempotency_key = $1", [idempotencyKey]);
+        return existing.rows[0] || null;
+      }
+      return result.rows[0] || null;
+    },
+    async claim({ workerId, jobTypes = null, limit = 10, leaseDurationMs = DEFAULT_LEASE_MS, now = Date.now() } = {}) {
+      const until = now + leaseDurationMs;
+      const { rows } = await pool.query(POSTGRES_CLAIM_JOBS_SQL, [now, jobTypes, limit, workerId, until]);
+      return rows;
+    },
+    async complete({ jobId, workerId, now = Date.now() } = {}) {
+      const result = await pool.query(
+        `UPDATE job_queue SET state = 'done', lease_owner = NULL, updated_at = $3
+         WHERE id = $1 AND state = 'leased' AND lease_owner = $2`,
+        [jobId, workerId, now],
+      );
+      return result.rowCount === 1;
+    },
+    async fail({ jobId, workerId, error = null, maxAttempts = null, now = Date.now() } = {}) {
+      const row = (await pool.query("SELECT * FROM job_queue WHERE id = $1 AND lease_owner = $2", [jobId, workerId])).rows[0];
+      if (!row) return null;
+      const attempts = (Number(row.attempts) || 0) + 1;
+      const cap = Number(maxAttempts ?? row.max_attempts ?? DEFAULT_MAX_ATTEMPTS);
+      if (attempts >= cap) {
+        await pool.query(
+          `UPDATE job_queue SET state = 'dead', attempts = $2, lease_owner = NULL, lease_until = NULL, last_error = $3, updated_at = $4 WHERE id = $1`,
+          [jobId, attempts, error ? String(error).slice(0, 2000) : null, now],
+        );
+        return { id: Number(jobId), state: JOB_STATE.DEAD, attempts };
+      }
+      const backoff = Math.min(BACKOFF_BASE_MS * 2 ** (attempts - 1), BACKOFF_MAX_MS);
+      await pool.query(
+        `UPDATE job_queue SET state = 'pending', attempts = $2, lease_owner = NULL, leased_at = NULL,
+           lease_until = NULL, available_at = $3, last_error = $4, updated_at = $5 WHERE id = $1`,
+        [jobId, attempts, now + backoff, error ? String(error).slice(0, 2000) : null, now],
+      );
+      return { id: Number(jobId), state: JOB_STATE.PENDING, attempts, availableAt: now + backoff };
+    },
+    async reclaimExpired({ now = Date.now() } = {}) {
+      const result = await pool.query(
+        `UPDATE job_queue SET state = 'pending', lease_owner = NULL, leased_at = NULL, lease_until = NULL, updated_at = $1
+         WHERE state = 'leased' AND lease_until < $1`,
+        [now],
+      );
+      return result.rowCount;
+    },
+  };
+}
+
+export function createJobQueue({ driver = "sqlite", sqliteDb = null, pgPool = null } = {}) {
+  if (driver === "postgres") {
+    if (!pgPool) throw new Error("createJobQueue(postgres) requires pgPool");
+    return postgresQueue(pgPool);
+  }
+  if (!sqliteDb) throw new Error("createJobQueue(sqlite) requires sqliteDb");
+  return sqliteQueue(sqliteDb);
+}
+

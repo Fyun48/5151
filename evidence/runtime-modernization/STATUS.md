@@ -35,6 +35,8 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
 - Recurring scheduler 互斥：PostgreSQL `pg_try_advisory_lock`；SQLite `scheduler_locks` lease 表。
 - **Worker 收斂 reference**（`v3/src/jobWorker.js`）：`runWorkerBatch`（reclaim expired → claim → process →
   complete/fail）+ `startWorkerLoop`；證明兩 worker 不重複執行、失敗不丟 job。測試 4 項。
+- **Jobs repository**（`createJobQueue` 工廠 + SQLite/PostgreSQL 兩個 adapter）：PostgreSQL claim 真正
+  wired `FOR UPDATE SKIP LOCKED` + `$n` 佔位符 + `ON CONFLICT (idempotency_key)`。測試 3 項。
 - 尚未：把現有 geo/enrich/notification/CRM/OPS/wish 各 worker 逐一改接 `runWorkerBatch`（漸進遷移）。
 
 ### Phase 5/6 — DB driver 抽象 + Migration framework（完成核心）
