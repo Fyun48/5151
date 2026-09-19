@@ -87,7 +87,7 @@ PATH="$T1/bin:$PATH" DEPLOY_SHA="NEWSHA" OPS_RUNTIME_IMAGE="$NEW_IMAGE" \
 C1=$?
 set -e
 [ "$C1" != "0" ] || fail "scenario1: expected non-zero exit"
-grep -q "rollback complete" "$T1/out.log" || fail "scenario1: rollback not invoked"
+grep -q "ROLLBACK_OK" "$T1/out.log" || fail "scenario1: rollback not invoked"
 [ "$(readlink -f "$T1/app/current")" = "$T1/app/releases/OLD" ] || fail "scenario1: current not rolled back to OLD"
 [ -f "$T1/data/ops.db" ] || fail "scenario1: ops.db not restored"
 echo "scenario1 PASS (explicit fail after start -> rollback)"
@@ -180,11 +180,71 @@ PATH="$T4/bin:$PATH" SIDECAR_FLAG="$T4/sidecar.flag" SIDECAR_ROOT="$T4/data" \
 C4=$?
 set -e
 [ "$C4" != "0" ] || fail "scenario4: expected non-zero exit"
-grep -q "rollback complete" "$T4/out.log" || fail "scenario4: rollback not invoked"
+grep -q "ROLLBACK_OK" "$T4/out.log" || fail "scenario4: rollback not invoked"
 [ ! -e "$T4/data/ops.db-wal" ] || fail "scenario4: wal sidecar should be removed"
 [ ! -e "$T4/data/ops.db-shm" ] || fail "scenario4: shm sidecar should be removed"
 [ -f "$T4/data/ops.db" ] || fail "scenario4: ops.db should be restored"
 echo "scenario4 PASS (rollback removes newly created sidecars)"
+
+# ---- Scenario 5: DB restore copy failure -> ROLLBACK_FAILED, no previous recreate (BLOCKER 3) ----
+T5="$(mktemp -d)"; trap 'rm -rf "$T1" "$T2" "$T3" "$T4" "$T5" "$T6"' EXIT
+setup_nas_prev "$T5"; mock_bin "$T5/bin"
+# mock cp: fail only when the SOURCE is under .backup/ (the rollback restore), not the snapshot.
+cat > "$T5/bin/cp" <<'EOF'
+#!/usr/bin/env bash
+for a in "$@"; do
+  case "$a" in
+    */.backup/*) echo "cp: injected restore failure" >&2; exit 1;;
+  esac
+done
+exec /usr/bin/cp "$@"
+EOF
+chmod +x "$T5/bin/cp"
+set +e
+PATH="$T5/bin:$PATH" DEPLOY_SHA="NEWSHA" OPS_RUNTIME_IMAGE="$NEW_IMAGE" \
+  OPS_SYNOLOGY_APP_ROOT="$T5/app" OPS_SYNOLOGY_DATA_ROOT="$T5/data" \
+  bash "$DEPLOY_SCRIPT" > "$T5/out.log" 2>&1
+C5=$?
+set -e
+[ "$C5" != "0" ] || fail "scenario5: expected non-zero exit"
+grep -q "ROLLBACK_FAILED" "$T5/out.log" || fail "scenario5: rollback must report ROLLBACK_FAILED"
+if grep -q "ROLLBACK_OK" "$T5/out.log"; then fail "scenario5: must not report ROLLBACK_OK"; fi
+echo "scenario5 PASS (DB restore copy failure -> ROLLBACK_FAILED, no previous recreate)"
+
+# ---- Scenario 6: previous health never returns -> ROLLBACK_FAILED (BLOCKER 3) ----
+T6="$(mktemp -d)"
+setup_nas_prev "$T6"; mock_bin "$T6/bin"
+# curl: ok until a flag is created (by docker inspect), then fail (rollback health fails).
+cat > "$T6/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+if [ -f "$CURL_FAIL_FLAG" ]; then
+  exit 1
+fi
+echo '{"ok":true}'
+EOF
+chmod +x "$T6/bin/curl"
+cat > "$T6/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+  ps) echo "5151-ops";;
+  inspect) touch "$CURL_FAIL_FLAG"; echo "exited";;
+  compose) exit 0;;
+  stop) exit 0;;
+  logs) exit 0;;
+  *) exit 0;;
+esac
+EOF
+chmod +x "$T6/bin/docker"
+set +e
+PATH="$T6/bin:$PATH" CURL_FAIL_FLAG="$T6/fail.flag" DEPLOY_SHA="NEWSHA" OPS_RUNTIME_IMAGE="$NEW_IMAGE" \
+  OPS_SYNOLOGY_APP_ROOT="$T6/app" OPS_SYNOLOGY_DATA_ROOT="$T6/data" \
+  bash "$DEPLOY_SCRIPT" > "$T6/out.log" 2>&1
+C6=$?
+set -e
+[ "$C6" != "0" ] || fail "scenario6: expected non-zero exit"
+grep -q "ROLLBACK_FAILED" "$T6/out.log" || fail "scenario6: rollback must report ROLLBACK_FAILED"
+if grep -q "ROLLBACK_OK" "$T6/out.log"; then fail "scenario6: must not report ROLLBACK_OK"; fi
+echo "scenario6 PASS (previous health failure -> ROLLBACK_FAILED)"
 
 echo "ALL FAILURE-PATH TESTS PASS"
 

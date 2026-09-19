@@ -29,13 +29,21 @@ say "== disk free =="
 df -h "$APP_ROOT" "$DATA_ROOT" 2>/dev/null || df -h /
 
 say "== port 5154 / container status (read-only) =="
-PORT_OWNER="$(ss -ltnp 2>/dev/null | grep ':5154 ' || true)"
+PORT_LISTENING=0
+( ss -ltn 2>/dev/null | grep -q ':5154 ' ) && PORT_LISTENING=1
 CONTAINER="$(docker ps -a --filter "name=5151-ops" --format '{{.Names}}' 2>/dev/null || true)"
-if [ -n "$PORT_OWNER" ]; then
-  if echo "$CONTAINER" | grep -q '^5151-ops$'; then
-    say "port 5154 in use by managed 5151-ops container"
+
+if [ "$PORT_LISTENING" = "1" ]; then
+  RUNNING="$(docker inspect -f '{{.State.Status}}' 5151-ops 2>/dev/null || echo unknown)"
+  if echo "$CONTAINER" | grep -q '^5151-ops$' && [ "$RUNNING" = "running" ]; then
+    BINDING="$(docker port 5151-ops 5154 2>/dev/null | tr -d '[:space:]' || true)"
+    if [ "$BINDING" = "127.0.0.1:5154" ]; then
+      say "port 5154 owned by running 5151-ops (loopback 127.0.0.1:5154)"
+    else
+      block "port 5154 listening but 5151-ops binding is not exactly 127.0.0.1:5154 (got '$BINDING')"
+    fi
   else
-    block "port 5154 occupied by unrelated/unmanaged service"
+    block "port 5154 listening but 5151-ops container is not running (ownership unproven)"
   fi
 else
   say "port 5154 not currently listening"

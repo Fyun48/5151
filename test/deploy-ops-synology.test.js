@@ -129,6 +129,21 @@ test("rollback restores previous source + image + compose (no old source + new i
   assert.ok(stopIdx !== -1 && restoreIdx !== -1 && stopIdx < restoreIdx, "rollback must stop before restoring DB");
 });
 
+test("rollback is fail-closed and reports ROLLBACK_OK/ROLLBACK_FAILED (never silent)", () => {
+  const body = fnBody(script, "rollback");
+  // 不得再有 `|| true` 的 DB/auth restore 或 `up ... || true`（會 silent 失敗）。
+  assert.doesNotMatch(body, /cp -p "\$BACKUP_DIR\/\$f" "\$\{DATA_ROOT\}\/\$f" \|\| true/);
+  assert.doesNotMatch(body, /docker compose .* up -d .* \|\| true/);
+  assert.match(body, /db_ok=0/);
+  assert.match(body, /rollback_ok=1/);
+  // 驗證 PREV_IMAGE 為 immutable repo digest。
+  assert.match(body, /\^ghcr\.io\/fyun48\/5151@sha256:\[0-9a-f\]\{64\}\$/);
+  // 區分 ROLLBACK_OK / ROLLBACK_FAILED，不再有 bare "rollback complete"。
+  assert.match(body, /ROLLBACK_OK/);
+  assert.match(body, /ROLLBACK_FAILED/);
+  assert.doesNotMatch(body, /log "rollback complete/);
+});
+
 test("first-deploy failure stops and removes failed release without restarting it", () => {
   const body = fnBody(script, "rollback");
   const elseIdx = body.indexOf("else");
@@ -181,7 +196,10 @@ test("predeploy hard-fails on invalid deploy prerequisites (not just WARN)", () 
   assert.match(predeployScript, /owner email key missing/);
   assert.match(predeployScript, /owner password key missing/);
   assert.match(predeployScript, /OPS_SECRET_AT_REST_KEY missing or not 64-hex/);
-  assert.match(predeployScript, /port 5154 occupied by unrelated\/unmanaged service/);
+  assert.match(predeployScript, /port 5154 listening but 5151-ops container is not running/);
+  assert.match(predeployScript, /port 5154 listening but 5151-ops binding is not exactly 127\.0\.0\.1:5154/);
+  assert.match(predeployScript, /docker port 5151-ops 5154/);
+  assert.match(predeployScript, /docker inspect -f '\{\{\.State\.Status\}\}' 5151-ops/);
   assert.match(predeployScript, /existing 5151-ops container has no managed current release metadata/);
   assert.match(predeployScript, /managed current metadata incomplete/);
   assert.match(predeployScript, /PREDEPLOY_RESULT=PASS/);
@@ -194,11 +212,21 @@ test("deploy + predeploy workflows declare packages: read for GHCR pull", () => 
   assert.match(predeployWorkflow, /contents: read\s*\n\s*packages: read/);
 });
 
-test("deploy workflow uses native scp/ssh, not mutable third-party action tags", () => {
+test("deploy workflow uses native scp/ssh with correct port flags, not mutable third-party actions", () => {
   assert.doesNotMatch(workflow, /appleboy\/(scp|ssh)-action@/);
   assert.match(workflow, /\bscp\s/);
   assert.match(workflow, /\bssh\s/);
   assert.match(workflow, /StrictHostKeyChecking=accept-new/);
+  // scp 的 port flag 是 -P（大寫），ssh 是 -p（小寫）。
+  assert.match(workflow, /SCP_OPTS=\([^)]*-P "\$OPS_SYNOLOGY_PORT"/);
+  assert.match(workflow, /SSH_OPTS=\([^)]*-p "\$OPS_SYNOLOGY_PORT"/);
+});
+
+test("deploy stages into a clean per-SHA incoming dir (no stale-file merge)", () => {
+  assert.match(workflow, /incoming\/\$DEPLOY_SHA/);
+  assert.match(workflow, /rm -rf '\$INCOMING' && mkdir -p '\$INCOMING'/);
+  assert.match(workflow, /incoming path escapes APP_ROOT/);
+  assert.match(script, /INCOMING="\$APP_ROOT\/incoming\/\$DEPLOY_SHA"/);
 });
 
 test("deploy script arms an EXIT trap before destructive ops and commits after health/identity", () => {

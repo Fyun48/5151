@@ -12,7 +12,7 @@ export OPS_SYNOLOGY_APP_ROOT="$APP_ROOT"
 export OPS_SYNOLOGY_DATA_ROOT="$DATA_ROOT"
 
 RELEASES="$APP_ROOT/releases"
-INCOMING="$APP_ROOT/incoming"
+INCOMING="$APP_ROOT/incoming/$DEPLOY_SHA"
 CURRENT="$APP_ROOT/current"
 BACKUP_DIR="${DATA_ROOT}/.backup/$(date -u +%Y%m%d%H%M%S)"
 
@@ -58,33 +58,55 @@ PRE_SQLITE_FILES=""
 rollback() {
   [ "$ROLLBACK_DONE" = "1" ] && return 0
   ROLLBACK_DONE=1
+  rollback_ok=0
+  db_ok=1
   log "rollback: stop failed container, restore previous source+image+compose+DB"
   docker stop 5151-ops >/dev/null 2>&1 || true
-  # 只還原 snapshot 中存在的檔；移除 predeploy 不存在的新 sidecar（避免 mixed/stale SQLite state）。
+
+  # DB/config restore：fail-closed（只對 predeploy 存在過的檔還原；新 sidecar 移除）。
   for f in ops.db ops.db-wal ops.db-shm; do
     case " $PRE_SQLITE_FILES " in
       *" $f "*)
-        if [ -f "$BACKUP_DIR/$f" ]; then cp -p "$BACKUP_DIR/$f" "${DATA_ROOT}/$f" || true; fi
+        if [ -f "$BACKUP_DIR/$f" ]; then
+          cp -p "$BACKUP_DIR/$f" "${DATA_ROOT}/$f" || db_ok=0
+        fi
         ;;
-      *)
-        rm -f "${DATA_ROOT}/$f"
-        ;;
+      *) rm -f "${DATA_ROOT}/$f" || true ;;
     esac
   done
-  if [ -f "$BACKUP_DIR/auth.env" ]; then cp -p "$BACKUP_DIR/auth.env" "$AUTH_ENV"; chmod 600 "$AUTH_ENV"; fi
+  if [ -f "$BACKUP_DIR/auth.env" ]; then
+    cp -p "$BACKUP_DIR/auth.env" "$AUTH_ENV" || db_ok=0
+    chmod 600 "$AUTH_ENV" || db_ok=0
+  fi
+
   if [ -n "$PREVIOUS" ] && [ -d "$PREVIOUS" ] && [ -f "$PREVIOUS/.runtime-image" ] && [ -f "$PREVIOUS/docker-compose.ops.synology.yml" ]; then
-    ln -sfn "$PREVIOUS" "$CURRENT"
+    ln -sfn "$PREVIOUS" "$CURRENT" || true
     PREV_IMAGE="$(cat "$PREVIOUS/.runtime-image")"
-    OPS_RUNTIME_IMAGE="$PREV_IMAGE" docker compose -f "$PREVIOUS/docker-compose.ops.synology.yml" up -d --no-build --no-deps --force-recreate 5151-ops || true
-    for _ in $(seq 1 30); do
-      if curl -fsS http://127.0.0.1:5154/ops/api/health | grep -q '"ok":true'; then break; fi
-      sleep 1
-    done
-    log "rollback complete (restored previous source+image+compose: $PREVIOUS @ $PREV_IMAGE)"
+    # validate PREV_IMAGE is an immutable expected repo digest before use
+    if printf '%s' "$PREV_IMAGE" | grep -Eq '^ghcr.io/fyun48/5151@sha256:[0-9a-f]{64}$'; then
+      if [ "$db_ok" = "1" ]; then
+        if OPS_RUNTIME_IMAGE="$PREV_IMAGE" docker compose -f "$PREVIOUS/docker-compose.ops.synology.yml" up -d --no-build --no-deps --force-recreate 5151-ops; then
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:5154/ops/api/health | grep -q '"ok":true'; then rollback_ok=1; break; fi
+            sleep 1
+          done
+        fi
+      fi
+    fi
+    if [ "$rollback_ok" = "1" ]; then
+      log "ROLLBACK_OK source=$PREVIOUS image=$PREV_IMAGE"
+    else
+      log "ROLLBACK_FAILED db_ok=$db_ok"
+    fi
   else
-    rm -f "$CURRENT"
-    rm -rf "$RELEASES/$DEPLOY_SHA"
-    log "first deploy failed: OPS left stopped, failed release removed"
+    rm -f "$CURRENT" || true
+    rm -rf "$RELEASES/$DEPLOY_SHA" || true
+    if [ "$db_ok" = "1" ]; then
+      rollback_ok=1
+      log "ROLLBACK_OK first deploy: OPS left stopped, failed release removed"
+    else
+      log "ROLLBACK_FAILED first deploy: DB/config restore failed"
+    fi
   fi
 }
 
