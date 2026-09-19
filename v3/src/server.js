@@ -21,6 +21,8 @@ import {
   getSettings,
   hideMany,
   listListings,
+  listListingsCommuteSqlFirst,
+  listListingsSqlFirst,
   loadProfile,
   recentEvents,
   registerUser,
@@ -3686,7 +3688,7 @@ app.get("/api/listings", async (req, res) => {
     .filter(Boolean);
   const started = Date.now();
   confirmExpiredOfflineFromSettings();
-  const listed = listListings({
+  const args = {
     filter: req.query.filter || "all",
     kind: req.query.kind || "",
     sources: authorizedListingSources(req.query.sources || "", readSession(req)).join(","),
@@ -3698,7 +3700,14 @@ app.get("/api/listings", async (req, res) => {
     userId: uid,
     matchVoteUserId: uid,
     sameHouse: req.query.sameHouse !== "0",
-  });
+  };
+  // SQL-first fast path (Phase 7/8): push the district re-check + ORDER BY +
+  // LIMIT/OFFSET into SQL. Both fast paths return null outside their
+  // exact-equivalence envelope, so fall back to the Node path when they do.
+  const listed =
+    listListingsSqlFirst(args) ||
+    listListingsCommuteSqlFirst(args) ||
+    listListings(args);
   const queryMs = Date.now() - started;
   const statsStarted = Date.now();
   const statsDetails = {};

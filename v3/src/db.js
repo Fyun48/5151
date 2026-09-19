@@ -5526,12 +5526,14 @@ export function listListingsSqlFirst({
   userId,
   settings: settingsOverride,
   sameHouse = true,
+  matchVoteUserId,
 } = {}) {
   if (filter !== "all") return null;
   if (kind || sources || q) return null;
   if (!["newest", "price_asc", "price_desc"].includes(sort)) return null;
 
   const uid = resolveUserId(userId);
+  const voteUid = matchVoteUserId == null ? uid : Number(matchVoteUserId) || 0;
   const settings = settingsOverride || getSettings(uid);
   if (
     Number(settings.priceMin) > 0 || Number(settings.priceMax) > 0 ||
@@ -5637,7 +5639,7 @@ export function listListingsSqlFirst({
   const listings = overlaid.map((row) => {
     const lite = decorateListingLite(row, settings, uid);
     const needPeers = sameHouse !== false && Boolean(row.match_post_id || row.same_house_role);
-    return finalizeListingDecorate(lite, settings, uid, { sameHouse: needPeers });
+    return finalizeListingDecorate(lite, settings, uid, { sameHouse: needPeers, matchVoteUserId: voteUid });
   });
 
   const nextCursor = ids.length ? cursorOf(pageRows[pageRows.length - 1]) : null;
@@ -5672,12 +5674,14 @@ export function listListingsCommuteSqlFirst({
   userId,
   settings: settingsOverride,
   sameHouse = true,
+  matchVoteUserId,
 } = {}) {
   if (filter !== "all") return null;
   if (kind || sources || q) return null;
   if (sort !== "commute_asc" && sort !== "commute_desc") return null;
 
   const uid = resolveUserId(userId);
+  const voteUid = matchVoteUserId == null ? uid : Number(matchVoteUserId) || 0;
   const settings = settingsOverride || getSettings(uid);
   const commuteKm = Number(settings.commuteKm);
   if (!(commuteKm > 0) || !hasWorkPoint(settings)) return null;
@@ -5786,7 +5790,7 @@ export function listListingsCommuteSqlFirst({
   const listings = overlaid.map((row) => {
     const lite = decorateListingLite(row, settings, uid);
     const needPeers = sameHouse !== false && Boolean(row.match_post_id || row.same_house_role);
-    return finalizeListingDecorate(lite, settings, uid, { sameHouse: needPeers });
+    return finalizeListingDecorate(lite, settings, uid, { sameHouse: needPeers, matchVoteUserId: voteUid });
   });
 
   return {

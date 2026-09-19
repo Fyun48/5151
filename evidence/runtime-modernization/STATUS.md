@@ -103,6 +103,9 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
   `listListings` 回傳相同 id 順序（含超出預算/無路線被過濾）；envelope 外回 null。
 - **實測 10k**：`commute_asc` p50 143→61ms（2.4x）、p95 263→64ms（4.1x）；
   `commute_desc` p50 140→61ms（2.3x）。
+- **已接進 `/api/listings`**（server.js）：`listListingsSqlFirst(args) || listListingsCommuteSqlFirst(args)
+  || listListings(args)` 回退鏈；兩個 fast path 都支援 `matchVoteUserId`（與 server 的 `matchVoteUserId=uid`
+  裝飾一致）。超出 envelope 回 `null` → 退回 Node 路徑。`queryVersion` 2→3 標示走 fast path。
 - 尚未：`fit_desc` 的 SQL 化（`listingFitScore` 公式含樓層/電梯/價格/route，較複雜）、
   commute 的 cursor、EXPLAIN evidence。
 
