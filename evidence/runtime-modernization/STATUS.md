@@ -25,7 +25,22 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
 ### Cross-platform test harness（Windows + Linux）
 - `pathToFileURL(...).href` 修正 38 個測試檔；`.gitattributes` 加 `*.yml eol=lf`。
 
+### Phase 4 — Durable job queue（完成，SQLite 可測 + PostgreSQL SQL 就緒）
+- 新增 `v3/src/jobQueue.js`：共用 durable queue 核心（lease / retry / exponential backoff /
+  dead-letter / idempotency / expired-lease reclaim / 排程互斥）。
+- Schema（PostgreSQL DDL + SQLite DDL）：`id, job_type, payload, priority, state, attempts,
+  max_attempts, available_at, leased_at, lease_until, lease_owner, idempotency_key, created_at,
+  updated_at, last_error`。priority 100/90/80/60/20/5 已定義（`JOB_PRIORITY`）。
+- Claim：PostgreSQL 用 `SELECT ... FOR UPDATE SKIP LOCKED`（`POSTGRES_CLAIM_JOBS_SQL`）；
+  SQLite 用 `BEGIN IMMEDIATE` 交易模擬（多程序 WAL 安全）。
+- Recurring scheduler 互斥：PostgreSQL `pg_try_advisory_lock`；SQLite `scheduler_locks` lease 表。
+- 測試 `job-queue.test.js`（7 項）：enqueue/claim/complete、priority、idempotency、retry/backoff/
+  dead-letter、expired lease reclaim、scheduler lock、PG SQL 結構（FOR UPDATE SKIP LOCKED）。
+- 尚未：把現有 geo/enrich/notification/CRM/OPS/wish 各 queue 實際收斂到這個共用 queue（漸進遷移）。
+
+
 ### Phase 3 — Web/Crawler/Worker split（完成）
+
 - 新增 `v3/src/appRole.js`：`APP_ROLE=web|crawler|worker|all`（`all` 為本地/向後相容預設），
   `resolveAppRole()` + `roleRunsWeb/Crawler/Worker()` predicates。
 - `server.js`：抽出 `startWorkerLoops()`（housing/feedback 遞送/wish lifecycle/wish offer expiry/
