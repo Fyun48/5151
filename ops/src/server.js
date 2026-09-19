@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { openOpsDb, defaultDataDir, defaultDbPath } from "./opsDb.js";
-import { hasLegacyPlaintextCredentials, migrateLegacyCredentialsOnStartup } from "./credentialMigration.js";
+import { migrateLegacyCredentialsOnStartup } from "./credentialMigration.js";
 import { makeAuth } from "./auth.js";
 import { appendAudit, listAudit, verifyAuditChain, createCheckpoint, listCheckpoints } from "./audit.js";
 import { listTransitions } from "./stateMachine.js";
