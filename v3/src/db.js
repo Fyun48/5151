@@ -115,6 +115,7 @@ import {
 } from "./comms.js";
 import { ensureSupportSchema } from "./supportSchema.js";
 import { DATA_EPOCH, shouldResetForEpoch } from "./dataEpoch.js";
+import { bumpRevision } from "./dataRevision.js";
 import { countsTowardAllTotal, isConfirmedOffline, isPendingOffline, normalizeOfflineConfirmDays } from "./offline.js";
 import { coveringJobsFromMembers, coversFromMemberSettings, coversFromWatchDistricts, listingInMemberScope } from "./covering.js";
 import { listCrawlCovers } from "./crawlCovers.js";
@@ -3746,6 +3747,17 @@ export function upsertListing(listing) {
     syncListingProjection(db, listing);
   } catch {
     // projection is best-effort; the Node path remains the source of truth
+  }
+  try {
+    // Durable change-log so a reconnecting Web node / SSE client can ask
+    // "what changed since revision N?" (Phase 11).
+    bumpRevision(db, {
+      entityType: "listing",
+      entityId: Number(listing.post_id) || 0,
+      eventType: existing ? "listing_updated" : "listing_added",
+    });
+  } catch {
+    // revision change-log is best-effort
   }
 }
 

@@ -263,6 +263,7 @@ import {
   saveCommsConfig,
   db,
 } from "./db.js";
+import { currentRevision, changesSince } from "./dataRevision.js";
 import {
   announcementInboxForUser,
   bannerAnnouncements,
@@ -4178,6 +4179,18 @@ app.post("/api/watch", async (req, res) => {
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
+});
+
+// Reconnect catch-up (Phase 11): a client that dropped its SSE stream asks
+// "what changed since revision N?" and re-reads only the delta, not the whole set.
+app.get("/api/events/revision", (req, res) => {
+  const session = requireMember(req, res);
+  if (!session) return;
+  const since = Math.max(0, Number(req.query.since) || 0);
+  res.json({
+    revision: currentRevision(db),
+    changes: changesSince(db, since, { limit: 500 }),
+  });
 });
 
 app.get("/api/events/stream", (req, res) => {
