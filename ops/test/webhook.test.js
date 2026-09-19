@@ -45,12 +45,14 @@ test("deliverWebhook posts JSON and reports http errors", async () => {
     calls.push({ url, opts });
     return { ok: true, status: 204 };
   };
-  const r = await deliverWebhook("https://example.com/hook", { hello: 1 }, { fetchImpl });
+  const validateUrl = async (u) => ({ ok: true, url: u }); // SSRF 案例另見 outbound-url.test.js
+  const r = await deliverWebhook("https://example.com/hook", { hello: 1 }, { fetchImpl, validateUrl });
   assert.equal(r.ok, true);
   assert.equal(calls[0].url, "https://example.com/hook");
   assert.equal(calls[0].opts.method, "POST");
+  assert.equal(calls[0].opts.redirect, "error");
 
-  const bad = await deliverWebhook("https://example.com/hook", {}, { fetchImpl: async () => ({ ok: false, status: 500 }) });
+  const bad = await deliverWebhook("https://example.com/hook", {}, { fetchImpl: async () => ({ ok: false, status: 500 }), validateUrl });
   assert.equal(bad.ok, false);
   assert.equal(bad.reason, "http_500");
 });

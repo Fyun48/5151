@@ -5,6 +5,7 @@ import { httpError } from "./errors.js";
 import { getProduct, publicProduct } from "./products.js";
 import { withImmediateTx } from "./tx.js";
 import { rejectSpoofedOwnerDirect } from "./instructionSource.js";
+import { encryptSecret, decryptSecret, requireSecretAtRestKey, secretAtRestKey } from "./secretAtRest.js";
 
 export const APPLY_PATH = "/api/ops/commands/apply";
 export const COMMAND_KINDS = Object.freeze(["feedback.patch_handling", "crm.add_note"]);
@@ -93,13 +94,16 @@ export function getActiveCommandSecret(db, productId) {
      WHERE product_id=? AND cred_state='active'
      ORDER BY id DESC LIMIT 1
   `).get(productId);
-  return row?.secret || "";
+  if (!row) return "";
+  // 只在簽章邊界解密；legacy plaintext／壞 key 都回空（fail-closed），不靜默沿用明文。
+  return decryptSecret(String(row.secret || ""), secretAtRestKey()) || "";
 }
 
 export function issueCommandCredential(db, { productId, now = new Date(), secret = "" } = {}) {
   ensureSiteCommandSchema(db);
   const ts = iso(now);
   const material = secret || randomBytes(24).toString("hex");
+  const ciphertext = encryptSecret(material, requireSecretAtRestKey());
   const current = db.prepare(`
     SELECT generation FROM product_command_credential WHERE product_id=? ORDER BY id DESC LIMIT 1
   `).get(productId);
@@ -111,7 +115,7 @@ export function issueCommandCredential(db, { productId, now = new Date(), secret
   db.prepare(`
     INSERT INTO product_command_credential(product_id, generation, secret, cred_state, created_at)
     VALUES (?, ?, ?, 'active', ?)
-  `).run(productId, generation, material, ts);
+  `).run(productId, generation, ciphertext, ts);
   return { secret: material, generation };
 }
 

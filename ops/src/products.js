@@ -5,6 +5,7 @@ import { httpError } from "./errors.js";
 import { verifyIngestRequest } from "./ingestSignature.js";
 import { ensureDefaultEnvironmentBindings, listProductEnvironments } from "./productEnvironment.js";
 import { ensureCommandCredential, revokeCommandCredentials } from "./siteCommand.js";
+import { encryptSecret, decryptSecret, requireSecretAtRestKey, secretAtRestKey } from "./secretAtRest.js";
 
 export const DEFAULT_PRODUCT_ID = "v3";
 export const DEFAULT_PRODUCT_NAME = "吉比租房";
@@ -92,9 +93,10 @@ export function ensureLegacyIngestSecret(db, secret, { productId = DEFAULT_PRODU
   const trimmed = String(secret || "");
   if (!trimmed) return null;
   ensureDefaultProduct(db, { now });
+  const key = secretAtRestKey();
   const existing = db.prepare(
-    "SELECT * FROM product_ingest_credential WHERE product_id=? AND status='active' AND secret=?",
-  ).get(productId, trimmed);
+    "SELECT * FROM product_ingest_credential WHERE product_id=? AND status='active'",
+  ).all(productId).find((row) => decryptSecret(row.secret, key) === trimmed);
   if (existing) return existing;
   return issueCredential(db, { productId, secret: trimmed, label: "legacy-env", now });
 }
@@ -286,12 +288,13 @@ export function issueCredential(db, { productId, secret = null, label = "ingest"
   if (!id) throw httpError("invalid product_id", 400);
   const product = getProduct(db, id) || { subscription_generation: 1 };
   const material = secret || randomBytes(24).toString("hex");
+  const ciphertext = encryptSecret(material, requireSecretAtRestKey());
   const ts = iso(now);
   const gen = generation == null ? Number(product.subscription_generation || 1) : Number(generation);
   const res = db.prepare(`
     INSERT INTO product_ingest_credential(product_id, generation, secret, label, status, created_at)
     VALUES (?, ?, ?, ?, 'active', ?)
-  `).run(id, gen, material, String(label || "ingest").slice(0, 64), ts);
+  `).run(id, gen, ciphertext, String(label || "ingest").slice(0, 64), ts);
   return { id: Number(res.lastInsertRowid), product_id: id, secret: material, generation: gen, label };
 }
 
@@ -408,18 +411,21 @@ export function resolveIngestAuth(db, {
   envSecret = "",
   now = Date.now(),
 } = {}) {
-  const candidates = listActiveCredentials(db);
+  const key = secretAtRestKey();
+  const candidates = listActiveCredentials(db)
+    .map((cred) => ({ ...cred, plaintext: decryptSecret(cred.secret, key) }))
+    .filter((cred) => cred.plaintext != null);
   const env = String(envSecret || "");
   const v3Creds = Number(db.prepare(
     "SELECT COUNT(*) AS n FROM product_ingest_credential WHERE product_id=?",
   ).get(DEFAULT_PRODUCT_ID)?.n || 0);
   // env 只在完全沒有憑證列時當後備；撤銷／輪替後不得再靠環境變數開門。
-  if (env && v3Creds === 0 && !candidates.some((c) => c.secret === env && c.product_id === DEFAULT_PRODUCT_ID)) {
+  if (env && v3Creds === 0 && !candidates.some((c) => c.plaintext === env && c.product_id === DEFAULT_PRODUCT_ID)) {
     candidates.push({
       id: 0,
       product_id: DEFAULT_PRODUCT_ID,
       generation: 0,
-      secret: env,
+      plaintext: env,
       label: "env",
       status: "active",
     });
@@ -432,7 +438,7 @@ export function resolveIngestAuth(db, {
 
   let matched = null;
   for (const cred of candidates) {
-    const check = verifyIngestRequest({ method, path, headers, rawBody, secret: cred.secret, now });
+    const check = verifyIngestRequest({ method, path, headers, rawBody, secret: cred.plaintext, now });
     if (check.ok) {
       matched = { ...check, productId: cred.product_id, generation: cred.generation, credentialId: cred.id };
       break;
