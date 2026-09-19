@@ -143,7 +143,7 @@ jobs:
           chmod 600 "$HOME/.ssh/id_ops"
           # scp 的 port flag 是 -P（大寫），ssh 是 -p（小寫）；分開兩組 options。
           SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i "$HOME/.ssh/id_ops" -p "$OPS_SYNOLOGY_PORT")
-          SCP_OPTS=(-o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i "$HOME/.ssh/id_ops" -P "$OPS_SYNOLOGY_PORT")
+          SCP_OPTS=(-O -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i "$HOME/.ssh/id_ops" -P "$OPS_SYNOLOGY_PORT")
           INCOMING="$OPS_SYNOLOGY_APP_ROOT/incoming/$DEPLOY_SHA"
           # 只允許 bounded staging 目錄（防 path 逃逸）。
           case "$INCOMING" in
