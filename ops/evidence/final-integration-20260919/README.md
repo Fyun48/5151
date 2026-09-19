@@ -25,6 +25,16 @@ range read, which is bounded by LIMIT and runs ~0.15 ms at 20k rows). Full table
 
 Run: `node ops/evidence/final-integration-20260919/bench.mjs`
 
+Product paths added (the required set): `ingestFeedback` (feedback ingestion), `listPendingWork`
+(pending queue), `listIssuesWithLifecycle` (cluster list), `listCrmViews` (CRM list), `getDashboard`
+(dashboard), `listAudit` (audit timeline), `listProducts` (multi-site overview).
+
+Findings (observations, not changed here): `listCrmViews` is unbounded and N+1 (5 queries per
+contact → ~50,001 queries / ~497 ms at 10k); `getDashboard` lifecycle scan is O(N²) via a
+per-entity EXISTS → ~8.5 s at 10k; `listIssuesWithLifecycle` issues one query per issue (N+1,
+~401 queries/call). They are measured with fewer iterations and recorded here; the benchmark
+still reports p50/p95/max + query count + EXPLAIN for each.
+
 ## 2. Responsive + focus evidence (`capture-ops-admin.mjs` → `ops-responsive.json`, `shots/`)
 
 Drives a LOCAL v3 server (same integrated code as deployed) with headless Chrome over CDP.

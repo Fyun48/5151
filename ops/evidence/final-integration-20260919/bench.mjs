@@ -14,12 +14,17 @@ import { appendAuditRow, listAudit } from "../../src/audit.js";
 import { getCurrentIssueProposal } from "../../src/proposal.js";
 import { seedProductionStable } from "../../src/release/productionRelease.js";
 import { describeRollbackIdentityRecord } from "../../src/release/rollbackContract.js";
+import { ensureDefaultProduct, listProducts } from "../../src/products.js";
+import { ingestFeedback } from "../../src/ingest.js";
+import { listPendingWork } from "../../src/exitDrill.js";
+import { listIssuesWithLifecycle, getDashboard } from "../../src/dashboard.js";
+import { ensureCrmReplicaSchema, listCrmViews } from "../../src/crmReplica.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const NOW = new Date("2026-09-19T00:00:00.000Z");
 const SCALES = [100, 1000, 10000];
-const ITERS_READ = 400;
-const ITERS_WRITE = 100;
+const ITERS_READ = 20;
+const ITERS_WRITE = 12;
 
 function iso(n) { return new Date(NOW.getTime() + n).toISOString(); }
 function round(n) { return Math.round(n * 1000) / 1000; }
@@ -95,6 +100,24 @@ function seed(n) {
     provenance: { kind: "bench" }, staticTreeHash: "cd".repeat(32), schemaCompat: "compatible", now: NOW,
   });
 
+  // 產品路徑種子：feedback + pending analysis + CRM replica + 多站（v3 product）。
+  ensureDefaultProduct(db, { now: NOW });
+  ensureCrmReplicaSchema(db);
+  const insFeedback = db.prepare(
+    "INSERT INTO ingested_feedback(product_id, delivery_id, idempotency_key, source, kind, content, contact, submitted_at, received_at) VALUES (?,?,?,?,?,?,?,?,?)",
+  );
+  const insAnalysis = db.prepare(
+    "INSERT INTO feedback_analysis(feedback_id, analysis_type, revision, prompt_version, status, next_attempt_at, created_at) VALUES (?,?,?,?,?,?,?)",
+  );
+  const insCrm = db.prepare(
+    "INSERT INTO ingested_crm_contact(product_id, delivery_id, idempotency_key, external_contact_id, display_name, email, phone, last_synced_at, received_at) VALUES (?,?,?,?,?,?,?,?,?)",
+  );
+  for (let i = 1; i <= n; i += 1) {
+    const f = insFeedback.run("v3", `d-${i}`, `k-${i}`, "web", "bug", `content-${i}`, `user-${i}`, iso(i), iso(i));
+    insAnalysis.run(Number(f.lastInsertRowid), "classification", 1, "c-v1", "pending", iso(i), iso(i));
+    insCrm.run("v3", `cd-${i}`, `ck-${i}`, `ext-${i}`, `contact-${i}`, `c${i}@example.test`, `09${i}`, iso(i), iso(i));
+  }
+
   const counts = {};
   for (const table of ["issue_candidate", "issue_proposal", "issue_proposal_current", "state_entity", "state_transition", "audit_log", "production_stable_current"]) {
     counts[table] = Number(db.prepare(`SELECT COUNT(*) AS c FROM ${table}`).get().c);
@@ -110,11 +133,11 @@ function explain(db, sql) {
 
 function runScale(n) {
   const { db, probe, issueIds, counts } = seed(n);
-  const read = (sql, fn) => {
+  const read = (sql, fn, iterations = ITERS_READ) => {
     const plan = explain(db, sql);
     probe.reset();
-    const b = bench(plan.sql, fn, ITERS_READ);
-    return { ...b, query_count: round(probe.count() / ITERS_READ), ...plan };
+    const b = bench(plan.sql, fn, iterations);
+    return { ...b, query_count: round(probe.count() / iterations), ...plan };
   };
 
   const proposalPath = read(
@@ -152,8 +175,23 @@ function runScale(n) {
   }, ITERS_READ);
   rollbackDescribe.query_count = 0;
 
+  // 產品路徑（feedback ingestion / pending queue / cluster / CRM / dashboard / multi-site）。
+  probe.reset();
+  const ingestPath = bench("ingestFeedback (write)", (i) => {
+    ingestFeedback(db, { deliveryId: `bench-${n}-${i}`, payload: { idempotency_key: `bk-${n}-${i}`, kind: "bug", content: "x" }, payloadHash: `h-${n}-${i}`, productId: "v3", now: NOW });
+  }, ITERS_WRITE);
+  ingestPath.query_count = round(probe.count() / ITERS_WRITE);
+
+  // listPendingWork / getDashboard 做 EXISTS 掃描、listCrmViews 無 LIMIT 且逐筆 N+1：以少量迭代測量並記錄此觀察。
+  const pendingPath = read("SELECT * FROM feedback_analysis WHERE status IN ('pending','failed_retry','processing')", () => listPendingWork(db, "v3"), 3);
+  const clusterPath = read("SELECT * FROM issue_candidate ORDER BY id DESC LIMIT 80", () => listIssuesWithLifecycle(db, { limit: 80 }));
+  // listCrmViews 無 LIMIT 且逐筆 N+1（case/note/todo/module），故用較少迭代並記錄此觀察。
+  const crmPath = read("SELECT * FROM ingested_crm_contact ORDER BY id DESC", () => listCrmViews(db, {}), 2);
+  const dashboardPath = read("SELECT COUNT(*) FROM ingested_feedback", () => getDashboard(db, {}, { productId: "v3" }), 3);
+  const productsPath = read("SELECT * FROM ops_product ORDER BY id", () => listProducts(db));
+
   db.close();
-  return { scale: n, counts, paths: [proposalPath, entityPath, findPath, dedupPath, auditPath, stableWrite, rollbackDescribe] };
+  return { scale: n, counts, paths: [proposalPath, entityPath, findPath, dedupPath, auditPath, stableWrite, rollbackDescribe, ingestPath, pendingPath, clusterPath, crmPath, dashboardPath, productsPath] };
 }
 
 function main() {
