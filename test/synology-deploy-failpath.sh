@@ -26,7 +26,7 @@ EOF
 # sandbox with a managed previous release (OLD) + ops.db (no wal/shm)
 setup_nas_prev() {
   local T="$1"
-  mkdir -p "$T/app/releases/OLD/ops" "$T/data" "$T/app/incoming/ops"
+  mkdir -p "$T/app/releases/OLD/ops" "$T/data" "$T/app/incoming/NEWSHA/ops"
   printf 'legacy-db' > "$T/data/ops.db"
   write_auth_env "$T"
   cat > "$T/app/releases/OLD/docker-compose.ops.synology.yml" <<'EOF'
@@ -37,8 +37,8 @@ EOF
   printf 'OLD' > "$T/app/releases/OLD/.deployed-sha"
   printf '%s' "$OLD_IMAGE" > "$T/app/releases/OLD/.runtime-image"
   ln -s "$T/app/releases/OLD" "$T/app/current"
-  printf 'x' > "$T/app/incoming/ops/server.js"
-  cat > "$T/app/incoming/docker-compose.ops.synology.yml" <<'EOF'
+  printf 'x' > "$T/app/incoming/NEWSHA/ops/server.js"
+  cat > "$T/app/incoming/NEWSHA/docker-compose.ops.synology.yml" <<'EOF'
 services:
   5151-ops:
     image: ${OPS_RUNTIME_IMAGE:?required}
@@ -118,9 +118,9 @@ grep -q "failed to snapshot ops.db" "$T2/out.log" || fail "scenario2: snapshot f
 echo "scenario2 PASS (snapshot copy failure aborts before promotion)"
 
 # ---- Scenario 3: first deploy, DB absent -> failed deploy leaves DB absent (BLOCKER 2.2) ----
-mkdir -p "$T3/app/incoming/ops" "$T3/data"
-printf 'x' > "$T3/app/incoming/ops/server.js"
-cat > "$T3/app/incoming/docker-compose.ops.synology.yml" <<'EOF'
+mkdir -p "$T3/app/incoming/NEWSHA/ops" "$T3/data"
+printf 'x' > "$T3/app/incoming/NEWSHA/ops/server.js"
+cat > "$T3/app/incoming/NEWSHA/docker-compose.ops.synology.yml" <<'EOF'
 services:
   5151-ops:
     image: ${OPS_RUNTIME_IMAGE:?required}
@@ -181,12 +181,8 @@ C4=$?
 set -e
 [ "$C4" != "0" ] || fail "scenario4: expected non-zero exit"
 grep -q "ROLLBACK_OK" "$T4/out.log" || fail "scenario4: rollback not invoked"
-if [ -e "$T4/data/ops.db-wal" ] || [ -e "$T4/data/ops.db-shm" ]; then
-  echo "=== scenario4 debug: sidecar still present ===" >&2
-  echo "--- out.log ---" >&2; cat "$T4/out.log" >&2
-  echo "--- data dir ---" >&2; ls -la "$T4/data" >&2
-  fail "scenario4: sidecar should be removed"
-fi
+[ ! -e "$T4/data/ops.db-wal" ] || fail "scenario4: wal sidecar should be removed"
+[ ! -e "$T4/data/ops.db-shm" ] || fail "scenario4: shm sidecar should be removed"
 [ -f "$T4/data/ops.db" ] || fail "scenario4: ops.db should be restored"
 echo "scenario4 PASS (rollback removes newly created sidecars)"
 
