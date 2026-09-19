@@ -21,6 +21,10 @@ SQLite adapter（node:sqlite，今日） | PostgreSQL adapter（pg，目標）
   `createSqliteFlagsRepository` / `createPostgresFlagsRepository`。
 - 介面：`get(userId, postId)` / `set(userId, postId, flags)`（upsert）/ `map(userId)` / `delete(userId, postId)`。
   示範**複合主鍵**（user_id + post_id）與 `map` 集合查詢，超出 key-value 的單鍵形態。
+- `routeCache.js`：`createRouteCacheRepository({ driver, sqliteDb, pgPool })` 工廠 +
+  `createSqliteRouteCacheRepository` / `createPostgresRouteCacheRepository`。
+- 介面：`get(routeKey)` / `set(routeKey, route)`（upsert）/ `delete(routeKey)`。示範**寬欄位** key-value
+  （rush 分鐘、公尺、location class、route version），對應 `route_cache` 表。
 
 ## 遷移路徑（其餘 domain）
 

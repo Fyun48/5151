@@ -215,9 +215,13 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
 - `v3/src/repository/flags.js`：`createFlagsRepository({ driver, sqliteDb, pgPool })` 工廠 +
   SQLite/PostgreSQL 兩個 adapter；介面 `get(userId, postId)/set(upsert)/map/delete`。示範**複合主鍵**
   （user_id + post_id）與 `map` 集合查詢，超出 settings 的單鍵 key-value 形態。
+- `v3/src/repository/routeCache.js`：`createRouteCacheRepository({ driver, sqliteDb, pgPool })` 工廠 +
+  SQLite/PostgreSQL 兩個 adapter；介面 `get/set(upsert)/delete`。示範**寬欄位** key-value
+  （rush 分鐘/公尺/location class/route version），對應 `route_cache` 表。
 - SQLite 用 `?` + `ON CONFLICT`；PostgreSQL 用 `$n` + `ON CONFLICT ... EXCLUDED`。
-- 測試 `settings-repository.test.js`（3 項）+ `flags-repository.test.js`（3 項）。
-- 尚未：把 `db.js` 其餘 domain（listings/users/search/geo/route/jobs/...）逐一抽成 repository
+- 測試 `settings-repository.test.js`（3 項）+ `flags-repository.test.js`（3 項）+
+  `route-cache-repository.test.js`（3 項）。
+- 尚未：把 `db.js` 其餘 domain（listings/users/search/geo/jobs/...）逐一抽成 repository
   interface（需把同步 hot path 逐步改 async）。
 
 
