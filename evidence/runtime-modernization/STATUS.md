@@ -96,6 +96,11 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
   - 資料傳播：primary 寫入 1 筆 → standby 讀到 1 筆。
 - 全部用 env（`CASAOS_HOST`/`SYNOLOGY_HOST`/`PG_*_PASSWORD`），獨立 name/port/volume，不碰 Production。
 
+### Phase 16/17 — Web active/active + Cloudflare HA config（config 就緒，未上線）
+- `deploy/shadow-ha/web/`：`web-a`/`web-b`（`APP_ROLE=web` + `cloudflared-A/B` 兩 connector 同一 tunnel）
+  compose template；`SESSION_SECRET` 跨節點一致、`CASAOS_HOST`/`SYNOLOGY_HOST` env（不硬編碼 IP）。
+- 尚未：實際 `docker compose up`（需 Owner 授權 + 測試 hostname）；`SESSION_SECRET` 注入 code 是否已讀 env 待查證。
+
 ## EXTERNAL_SETUP_REQUIRED（仍需 Owner 提供）
 
 - **HAProxy shadow container 上線**（config 已備好，未起容器）；Web-A/Web-B / crawler / worker shadow 容器上線。
@@ -105,13 +110,12 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
 
 ## 尚未開始（依優先序）
 
-1. Phase 7 SQL-first search（listing_search_projection、indexed ORDER BY、cursor pagination）
-2. Phase 3 Web/Crawler/Worker split（APP_ROLE）
-3. Phase 4 durable PostgreSQL job queue（FOR UPDATE SKIP LOCKED）
-4. Phase 5/6 repository layer + PostgreSQL adapter + migration framework
-5. Phase 16–17 Web active/active + Cloudflare HA（shadow config 未寫）
-6. Phase 18 storage abstraction（local/s3）
-7. Phase 22–27 Gitea + loop-engine + optional Final Review
+1. Phase 16–17 Web active/active + Cloudflare HA：config 已備好（`deploy/shadow-ha/web/`），尚未上線容器。
+2. Phase 18 storage abstraction（local/s3）
+3. Phase 22–27 Gitea + loop-engine + optional Final Review
+4. 把 `ensureXxxSchema`（personal/demand/feedback/crm/... 各模組）也納入 migration runner
+5. 把 domain 查詢（listings/users/settings/search/...）抽成 repository interface
+6. 安裝 `pg` 並接線 PostgreSQL adapter（同步 hot path 需先改 async）
 
 ## 注意（Windows 本機）
 
