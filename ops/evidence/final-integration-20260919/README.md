@@ -63,7 +63,15 @@ EVIDENCE_BASE_URL=http://127.0.0.1:5199 AUTH_EMAIL=owner@evidence.test \
   node ops/evidence/final-integration-20260919/capture-ops-admin.mjs
 ```
 
-## 3. A11y fixes this pass made (not waived)
+## 3. Console states evidence (`capture-ops-console-states.mjs` → `ops-console-states.json`)
+
+Drives the OPS Console with a deterministic fetch fixture to render all 9 states (loading / empty /
+normal / error / retry / blocked / cancelled / unknown / completed) at 375 / 768 / 1440. Each state
+is captured to `shots/ops-console-<state>-<width>.png` and asserted against its rendered marker;
+`ops-console-states.json` records per-state pass/fail. Blocked / cancelled / completed / unknown /
+loading are auto-asserted (their STATUS_LABEL/loading markers); every state is visually captured.
+
+## 4. A11y fixes this pass made (not waived)
 
 The first capture found real issues on the newly ported OPS panels; they are fixed at the
 producer in `v3/public/admin.html`:
