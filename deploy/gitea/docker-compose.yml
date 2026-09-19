@@ -1,0 +1,63 @@
+name: 5151-gitea
+
+# Gitea engineering plane (Synology). gitea + PostgreSQL + isolated CI runner.
+# CI runner uses DinD (tcp://dind) — NO host /var/run/docker.sock is mounted.
+services:
+  gitea:
+    container_name: gitea
+    image: gitea/gitea:1.22
+    restart: unless-stopped
+    environment:
+      GITEA__database__DB_TYPE: postgres
+      GITEA__database__HOST: gitea-db:5432
+      GITEA__database__NAME: gitea
+      GITEA__database__USER: gitea
+      GITEA__database__PASSWD: ${GITEA_DB_PASSWORD:?set GITEA_DB_PASSWORD}
+      GITEA__server__DOMAIN: ${GITEA_DOMAIN:-localhost}
+      GITEA__server__ROOT_URL: ${GITEA_ROOT_URL:-http://localhost:3000/}
+      GITEA__actions__ENABLED: "true"
+    ports:
+      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:2222:22"
+    volumes:
+      - gitea-data:/data
+    depends_on:
+      - gitea-db
+
+  gitea-db:
+    container_name: gitea-db
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: gitea
+      POSTGRES_PASSWORD: ${GITEA_DB_PASSWORD:?set GITEA_DB_PASSWORD}
+      POSTGRES_DB: gitea
+    volumes:
+      - gitea-db:/var/lib/postgresql/data
+
+  # Isolated DinD for the generic CI runner. Runner talks to it over tcp://dind.
+  dind:
+    container_name: gitea-dind
+    image: docker:dind
+    restart: unless-stopped
+    privileged: true
+    command: ["dockerd", "--host=tcp://0.0.0.0:2376", "--tls=false"]
+
+  gitea-runner-ci:
+    container_name: gitea-runner-ci
+    image: gitea/act_runner:0.2
+    restart: unless-stopped
+    environment:
+      GITEA_INSTANCE_URL: ${GITEA_INSTANCE_URL:-http://gitea:3000}
+      GITEA_RUNNER_REGISTRATION_TOKEN: ${GITEA_RUNNER_TOKEN:?set GITEA_RUNNER_TOKEN}
+      DOCKER_HOST: tcp://dind:2376
+    volumes:
+      - gitea-runner:/data
+    depends_on:
+      - gitea
+      - dind
+
+volumes:
+  gitea-data:
+  gitea-db:
+  gitea-runner:

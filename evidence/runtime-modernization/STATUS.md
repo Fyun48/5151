@@ -101,6 +101,16 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
   compose template；`SESSION_SECRET` 跨節點一致、`CASAOS_HOST`/`SYNOLOGY_HOST` env（不硬編碼 IP）。
 - 尚未：實際 `docker compose up`（需 Owner 授權 + 測試 hostname）；`SESSION_SECRET` 注入 code 是否已讀 env 待查證。
 
+### Phase 22–27 — Gitea + loop-engine（核心完成，未上線）
+- `loop-engine/src/loopEngine.js`：task 狀態機（plan→code→test→fix→staging→implementation_complete→
+  release_candidate），owner decision（FINAL_REVIEW / SKIP_REVIEW_AND_RELEASE / RETURN_TO_DEVELOPMENT），
+  audit trail，budget/limits（max self-fix iterations / changed files / diff lines / tokens / cost / runtime）。
+- `loop-engine/src/giteaWebhook.js`：Gitea webhook HMAC-SHA256 簽章驗證（constant-time）。
+- 測試 `loop-engine/test/loop-engine.test.js`（6 項）。
+- `deploy/gitea/`：gitea + PostgreSQL + gitea-runner-ci（隔離 DinD，**不掛 host docker.sock**）compose template。
+- 尚未：實際 `docker compose up`；Gitea migration rehearsal（GitHub authoritative）；DeepSeek 實際串接 loop-engine；
+  `.gitea/workflows/*` + `.agent/*` template（Phase 29）。
+
 ## EXTERNAL_SETUP_REQUIRED（仍需 Owner 提供）
 
 - **HAProxy shadow container 上線**（config 已備好，未起容器）；Web-A/Web-B / crawler / worker shadow 容器上線。
