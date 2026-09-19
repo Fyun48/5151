@@ -252,3 +252,23 @@ test("executable deploy failure-path tests (rollback on fail, fail-closed backup
   const out = execFileSync("bash", [path.join(ROOT, "test", "synology-deploy-failpath.sh")], { encoding: "utf8" });
   assert.match(out, /ALL FAILURE-PATH TESTS PASS/);
 });
+
+test("remote scripts export Synology-compatible PATH and fail-closed docker resolution", () => {
+  const expectedPath = 'PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/packages/ContainerManager/target/usr/bin:$PATH"';
+  // 兩份 script 都 export 同一組 PATH（避免 predeploy PASS 但 deploy command not found）。
+  assert.ok(script.includes(expectedPath), "deploy script must export Synology-compatible PATH");
+  assert.ok(predeployScript.includes(expectedPath), "predeploy script must export Synology-compatible PATH");
+  assert.match(script, /export PATH/);
+  assert.match(predeployScript, /export PATH/);
+  // 兩份都用 command -v docker 做 fail-closed 解析（同一套邏輯，不 hardcode 單一路徑）。
+  assert.match(script, /command -v docker/);
+  assert.match(predeployScript, /command -v docker/);
+  // 優先 PATH resolution，且納入已人工確認的相容路徑。
+  assert.match(script, /\/usr\/local\/bin/);
+  assert.match(script, /\/var\/packages\/ContainerManager\/target\/usr\/bin/);
+  assert.match(predeployScript, /\/usr\/local\/bin/);
+  assert.match(predeployScript, /\/var\/packages\/ContainerManager\/target\/usr\/bin/);
+  // 不直接 hardcode 單一 docker binary 絕對路徑執行。
+  assert.doesNotMatch(script, /\/usr\/local\/bin\/docker( |$)/);
+  assert.doesNotMatch(predeployScript, /\/usr\/local\/bin\/docker( |$)/);
+});
