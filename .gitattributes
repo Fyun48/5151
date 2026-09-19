@@ -1,0 +1,2 @@
+# Bash scripts must use LF line endings (CRLF breaks `set -o pipefail` on Linux).
+*.sh text eol=lf
