@@ -188,8 +188,13 @@ C4=$?
 set -e
 [ "$C4" != "0" ] || fail "scenario4: expected non-zero exit"
 grep -q "ROLLBACK_OK" "$T4/out.log" || fail "scenario4: rollback not invoked"
-[ ! -e "$T4/data/ops.db-wal" ] || fail "scenario4: wal sidecar should be removed"
-[ ! -e "$T4/data/ops.db-shm" ] || fail "scenario4: shm sidecar should be removed"
+if [ -e "$T4/data/ops.db-wal" ] || [ -e "$T4/data/ops.db-shm" ]; then
+  echo "=== scenario4 debug ===" >&2
+  cat "$T4/out.log" >&2
+  echo "--- ls data ---" >&2; ls -la "$T4/data" >&2
+  echo "--- ls releases ---" >&2; ls -laR "$T4/app/releases" >&2
+  fail "scenario4: sidecar should be removed"
+fi
 [ -f "$T4/data/ops.db" ] || fail "scenario4: ops.db should be restored"
 echo "scenario4 PASS (rollback removes newly created sidecars)"
 
