@@ -2,6 +2,7 @@
 
 整合分支：`deepseek/ha-runtime-modernization`
 BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
+FINAL_HEAD：`9bc92604df435be73bdff43b8271c25edddc9792`（code/test 收尾；整合回報 commit 在其上）
 
 ## 主機存取（已確認）
 
@@ -14,6 +15,13 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
 - 注意：`5151-ops` 兩台都有（CasaOS 與 Synology 各一），正式 v3 在 CasaOS。
 
 ## 已完成
+
+### Phase 39 — Final Gate 整合回報（完成）
+- `evidence/runtime-modernization/FINAL-REPORT.md`：BASE_SHA / FINAL_HEAD / branch /
+  commits-by-phase（41 commits）/ 效能 before-after / 測試（1462/1463 pass，唯一 fail 為 Windows
+  CRLF 跨平台問題）/ 各 phase 狀態 / EXTERNAL_SETUP_REQUIRED / NOT_COMPLETED，交回 Owner Final Gate。
+- 收尾：修掉 Phase 6 留下的陳舊斷言（`offline-report.test.js` 仍斷言 `ADD COLUMN alive_checked_at
+  TEXT`，更新為 `addColumnsIfMissing` 的 `["alive_checked_at","TEXT"]`）。
 
 ### Phase 0 — 保護 Production / 建立分支
 - fetch master、記錄 BASE_SHA、建立 integration branch。
