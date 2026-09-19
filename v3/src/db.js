@@ -5818,6 +5818,135 @@ export function listListingsCommuteSqlFirst({
   };
 }
 
+// Fit-desc SQL-first path (Phase 7 收尾). The fit_score formula's commute term
+// needs per-user route distance, so this covers only commuteKm=0 (no route) and
+// priceMin/Max=0 + minBuildingFloors=0 (no price/floor adjustment) — the
+// baseline's worst-case fit_desc shape. The remaining terms (whole-floor,
+// elevator, extra fees) map onto projection columns plus a listings join for
+// kind_name (isWholeFloorHome). excludeLowFloors is handled by the display
+// filter: low-floor listings are filtered out, so the score penalty is moot.
+export function listListingsFitSqlFirst({
+  filter = "all",
+  kind = "",
+  sources = "",
+  q = "",
+  sort = "fit_desc",
+  limit = 500,
+  offset = 0,
+  searchKeys,
+  districts = [],
+  userId,
+  settings: settingsOverride,
+  sameHouse = true,
+  matchVoteUserId,
+} = {}) {
+  if (filter !== "all") return null;
+  if (kind || sources || q) return null;
+  if (sort !== "fit_desc") return null;
+
+  const uid = resolveUserId(userId);
+  const voteUid = matchVoteUserId == null ? uid : Number(matchVoteUserId) || 0;
+  const settings = settingsOverride || getSettings(uid);
+  if (
+    Number(settings.commuteKm) > 0 ||
+    Number(settings.priceMin) > 0 || Number(settings.priceMax) > 0 ||
+    Number(settings.minBuildingFloors) > 0 || Number(settings.areaMax) > 0 ||
+    settings.wholeFloorOnly === true ||
+    (settings.excludeKeywords || []).length || (settings.excludeAgents || []).length ||
+    (settings.excludeAgentIds || []).length || (settings.excludeBoxes || []).length
+  ) {
+    return null;
+  }
+
+  const requestedDistricts = (Array.isArray(districts) ? districts : String(districts || "").split(","))
+    .map((name) => String(name || "").trim()).filter(Boolean);
+  const districtNames = requestedDistricts.length ? requestedDistricts : memberRegionDistrictNames(settings);
+  if (!districtNames.length) return null;
+
+  const clauses = [];
+  const params = [];
+  searchWhere(searchKeys, clauses, params);
+  listingVisibilityClauses(clauses, params);
+  appendDistrictCandidates(districtNames, clauses, params);
+  appendPriceCeilingCandidates(settings, clauses, params);
+  clauses.push("NOT (IFNULL(offline, 0) = 1 AND IFNULL(offline_confirmed, 0) = 1)");
+  clauses.push("(IFNULL(match_verdict, '') != 'yes')");
+  clauses.push(`NOT EXISTS (
+    SELECT 1 FROM user_listing_flags f
+    WHERE f.post_id = listings.post_id AND f.user_id = ? AND f.hidden = 1
+  )`);
+  params.push(uid);
+  clauses.push(`IFNULL((
+    SELECT watched FROM user_listing_flags f
+    WHERE f.post_id = listings.post_id AND f.user_id = ?
+  ), 0) = 0`);
+  params.push(uid);
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+
+  const districtMarks = districtNames.map(() => "?").join(",");
+  const districtWhere = `p.district IN (${districtMarks})`;
+  const displayFilter = sqlDisplayFilter(settings);
+
+  // extraMonthlyAmount > 0 equals total_monthly_cost > rent only when rent > 0;
+  // listings with no rent would be mis-scored, so fall back to the Node path.
+  const rentGuard = db.prepare(`SELECT 1 FROM listing_search_projection p
+    WHERE p.post_id IN (SELECT post_id FROM listings ${where})
+    AND ${districtWhere}
+    AND p.rent <= 0
+    LIMIT 1`).get(...params, ...districtNames);
+  if (rentGuard) return null;
+
+  const wholeFloorExpr = `CASE WHEN (
+    l.kind_name LIKE '%整層%' OR l.kind_name LIKE '%整戶出租%' OR l.kind_name LIKE '%整間出租%'
+  ) AND NOT (
+    l.kind_name LIKE '%獨立套房%' OR l.kind_name LIKE '%分租套房%' OR l.kind_name LIKE '%雅房%'
+    OR l.kind_name LIKE '%共宅%' OR l.kind_name LIKE '%共居%'
+  ) THEN 1 ELSE 0 END`;
+  const extraFlagExpr = `CASE WHEN p.total_monthly_cost > p.rent THEN 1 ELSE 0 END`;
+  const fitExpr = `(58 + 4 * p.elevator + 4 * ${wholeFloorExpr} - 4 * ${extraFlagExpr})`;
+
+  const pageSize = Math.max(1, Math.min(Number(limit) || 500, 500));
+  const start = Math.max(0, Number(offset) || 0);
+
+  const from = `FROM listing_search_projection p
+    JOIN listings l ON l.post_id = p.post_id
+    WHERE p.post_id IN (SELECT post_id FROM listings ${where})
+      AND ${districtWhere}${displayFilter}`;
+  const countRow = db.prepare(`SELECT COUNT(*) AS n ${from}`).get(...params, ...districtNames);
+  const totalMatched = Number(countRow?.n) || 0;
+
+  const pageSql = `SELECT p.post_id, p.updated_at ${from}
+    ORDER BY ${fitExpr} DESC, p.updated_at DESC, p.post_id ASC
+    LIMIT ? OFFSET ?`;
+  const pageRows = db.prepare(pageSql).all(...params, ...districtNames, pageSize, start);
+
+  const ids = pageRows.map((row) => Number(row.post_id));
+  const fullRows = ids.length
+    ? db.prepare(`SELECT * FROM listings WHERE post_id IN (${ids.map(() => "?").join(",")})`).all(...ids)
+    : [];
+  const fullById = new Map(fullRows.map((row) => [Number(row.post_id), row]));
+  const flagMap = loadFlagMap(db, uid);
+  const ordered = ids
+    .map((id) => Object.assign(fullById.get(id) || {}, { post_id: id }))
+    .filter((row) => fullById.has(Number(row.post_id)));
+  const overlaid = overlayRowsPersonal(ordered, flagMap, { inPlace: true });
+  const listings = overlaid.map((row) => {
+    const lite = decorateListingLite(row, settings, uid);
+    const needPeers = sameHouse !== false && Boolean(row.match_post_id || row.same_house_role);
+    return finalizeListingDecorate(lite, settings, uid, { sameHouse: needPeers, matchVoteUserId: voteUid });
+  });
+
+  return {
+    listings,
+    totalMatched,
+    hasMore: start + pageSize < totalMatched,
+    nextOffset: start + pageSize,
+    nextCursor: null,
+    queryVersion: 3,
+    queryDetails: { sql_first: true, fit: true },
+  };
+}
+
 export const GUEST_MAX_DISTRICTS = 4;
 
 function guestFitSettings(settings = {}) {

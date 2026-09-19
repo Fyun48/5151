@@ -19,6 +19,7 @@ test("api/listings wires the SQL-first paths with a listListings fallback", () =
   assert.match(handler, /matchVoteUserId: uid/);
   assert.match(handler, /listListingsSqlFirst\(args\) \|\|/);
   assert.match(handler, /listListingsCommuteSqlFirst\(args\) \|\|/);
+  assert.match(handler, /listListingsFitSqlFirst\(args\) \|\|/);
   assert.match(handler, /listListings\(args\)/);
 });
 

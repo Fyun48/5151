@@ -22,6 +22,7 @@ import {
   hideMany,
   listListings,
   listListingsCommuteSqlFirst,
+  listListingsFitSqlFirst,
   listListingsSqlFirst,
   loadProfile,
   recentEvents,
@@ -3702,11 +3703,12 @@ app.get("/api/listings", async (req, res) => {
     sameHouse: req.query.sameHouse !== "0",
   };
   // SQL-first fast path (Phase 7/8): push the district re-check + ORDER BY +
-  // LIMIT/OFFSET into SQL. Both fast paths return null outside their
-  // exact-equivalence envelope, so fall back to the Node path when they do.
+  // LIMIT/OFFSET into SQL. Each fast path returns null outside its
+  // exact-equivalence envelope, so fall back to the Node path when it does.
   const listed =
     listListingsSqlFirst(args) ||
     listListingsCommuteSqlFirst(args) ||
+    listListingsFitSqlFirst(args) ||
     listListings(args);
   const queryMs = Date.now() - started;
   const statsStarted = Date.now();

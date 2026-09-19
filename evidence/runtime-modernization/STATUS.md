@@ -114,6 +114,21 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
 - 尚未：`fit_desc` 的 SQL 化（`listingFitScore` 公式含樓層/電梯/價格/route，較複雜）、
   commute 的 cursor、EXPLAIN evidence。
 
+### Phase 7 收尾 — fit_desc SQL 化
+
+- `listListingsFitSqlFirst()`：`listingFitScore` 的通勤項吃 per-user route 距離，所以只涵蓋
+  `commuteKm=0` + `priceMin/Max=0` + `minBuildingFloors=0` 的 narrow envelope（就是 50k baseline
+  最壞路徑的形狀）。剩餘項（整層 `isWholeFloorHome`、電梯、額外費用）對應 projection 欄位
+  （`elevator`/`rent`/`total_monthly_cost`）＋一個 `listings` JOIN 拿 `kind_name`（LIKE 複製
+  `isWholeFloorHome` 的正/負 regex）。`extra>0` ⟺ `total_monthly_cost > rent`（`rent<=0` 用 guard
+  回退）。`excludeLowFloors` 走 display filter：低樓層先被濾掉，score penalty 恆 moot。
+- 差異測試 `fit-sql-first.test.js`（2 項）：電梯/整層/額外費組合的 fit_score 排序與 JS 一致、
+  envelope 外回 null。
+- **實測 50k**：`fit_desc` p50 945→202ms（4.7x）、p95 993→204ms（4.9x）。此為 baseline 最後一個
+  慢路徑，至此 `newest`/`price_asc`/`price_desc`/`commute_asc`/`commute_desc`/`fit_desc` 六種排序
+  全部有 SQL-first fast path。
+- 尚未：`fit_desc` 的 `commuteKm>0`（含 route 距離的 fit_score）、commute/fit 的 cursor、EXPLAIN evidence。
+
 
 ### Phase 13/14/15/19 — Shadow PostgreSQL Primary/Standby（已上線並驗證）
 
