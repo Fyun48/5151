@@ -207,7 +207,15 @@ test("phash and LLM off leave the old match.js path unchanged", async () => {
   assert.equal(out.skipped, "disabled");
   assert.equal(listSimilaritySuggestions(db).length, 0);
   const after = scoreMatch(incoming, previous);
-  assert.deepEqual(after, before);
+  // evaluated_at 是每次呼叫的執行時間（毫秒），不是產品語意；比對決策與證據其餘欄位。
+  const stableDecision = (result) => {
+    const copy = JSON.parse(JSON.stringify(result ?? null));
+    if (copy && typeof copy === "object" && copy.evidence && typeof copy.evidence === "object") {
+      delete copy.evidence.evaluated_at;
+    }
+    return copy;
+  };
+  assert.deepEqual(stableDecision(after), stableDecision(before));
   assert.equal(after.level, "high");
   db.close();
 });

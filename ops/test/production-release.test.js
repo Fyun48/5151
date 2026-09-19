@@ -263,9 +263,9 @@ test("Production workflows remain workflow_dispatch only; merge/push does not de
   const ci = readFileSync(ciPath, "utf8");
   assert.doesNotMatch(ci, /workflow_dispatch:[\s\S]*deploy-v3/);
   assert.doesNotMatch(ci, /DEPLOY-PRODUCTION/);
-  // 現行契約：Tests only（無 auto-merge、無部署、無寫入權限）。
+  // 現行契約：Tests only（以可執行行為檢查，不匹配註解文字）。
   assert.match(ci, /npm test/);
-  assert.doesNotMatch(ci, /gh pr merge|auto-merge|--squash/i);
+  assert.doesNotMatch(ci, /gh pr merge|--squash|merge_pull_request|peter-evans\/enable-auto-merge|pull_request_target/i);
   assert.doesNotMatch(ci, /contents:\s*write|pull-requests:\s*write/);
   assert.doesNotMatch(ci, /appleboy\/(scp|ssh)-action/);
 });

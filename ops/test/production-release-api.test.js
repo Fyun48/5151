@@ -98,6 +98,9 @@ async function seedCleared(db, repoRef) {
     sourceSha: repo.resolveRef("master"),
     artifactDigest: "sha256:" + "11".repeat(32),
     workflowRunId: "33999999999",
+    // rollback contract 需要完整 identity：static tree hash 必須是 64 hex，schema 必須 compatible。
+    staticTreeHash: "ab".repeat(32),
+    schemaCompat: "compatible",
     provenance: { kind: "seeded_previous_stable" },
     now: NOW,
   });
