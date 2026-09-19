@@ -17,7 +17,7 @@ services:
       V1_DB_PATH: /v1-data/591.db
       V2_DB_PATH: /v2-data/v2.db
     volumes:
-      - ${DATA_ROOT:-/DATA}/AppData/591-tracker-v3:/data
+      - ${V3_DATA_ROOT:-/mnt/Storage1/docker_data/591-tracker-v3}:/data
       - ${DATA_ROOT:-/DATA}/AppData/591-tracker:/v1-data:ro
       - ${DATA_ROOT:-/DATA}/AppData/591-tracker-v2:/v2-data:ro
       - ./v3/src:/app/src:ro
