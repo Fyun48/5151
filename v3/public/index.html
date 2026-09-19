@@ -4604,6 +4604,8 @@
     let listOffset = 0;
     let listCursor = null;
     let listHasMore = false;
+    let lastRevision = 0;
+    let revisionSynced = false;
     const LIST_PAGE_SIZE = 80;
     const GUEST_LIST_PAGE_SIZE = 40;
     let guestFilterTimer = 0;
@@ -13260,7 +13262,20 @@
       if (!window.__watchStream && !isGuest) {
         const es = new EventSource("/api/events/stream");
         window.__watchStream = es;
-        es.onopen = () => { refreshCommuteSnapshot(); };
+        es.onopen = () => {
+          refreshCommuteSnapshot();
+          // Phase 11 reconnect catch-up: re-read only what changed since the last
+          // seen revision (skip the re-query on the very first sync).
+          fetch(`/api/events/revision?since=${lastRevision}`)
+            .then((r) => r.json())
+            .then((data) => {
+              const changed = (data.changes || []).length > 0;
+              lastRevision = Number(data.revision) || lastRevision;
+              if (revisionSynced && changed) loadList({ silent: true, keep: true });
+              revisionSynced = true;
+            })
+            .catch(() => {});
+        };
         es.onmessage = (msg) => {
           const data = JSON.parse(msg.data);
           if (data.type === "watch") {

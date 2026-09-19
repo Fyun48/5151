@@ -69,3 +69,10 @@ test("api/events/revision returns the durable change-log", () => {
   assert.match(server, /revision: currentRevision\(db\)/);
   assert.match(server, /changes: changesSince\(db, since, \{ limit: 500 \}\)/);
 });
+
+test("frontend reconnects by re-reading the revision delta", () => {
+  const html = readFileSync(path.join(dir, "../public/index.html"), "utf8");
+  assert.match(html, /let lastRevision = 0/);
+  assert.match(html, /\/api\/events\/revision\?since=\$\{lastRevision\}/);
+  assert.match(html, /revisionSynced && changed/);
+});

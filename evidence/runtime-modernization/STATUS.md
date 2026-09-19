@@ -182,8 +182,9 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
 - **Web reconnect 靠 `dataRevision`**（Phase 11 收尾）：`upsertListing` 現在 `bumpRevision`
   （新增→`listing_added`、更新→`listing_updated`，best-effort）；新增 `/api/events/revision?since=N`
   回 `{ revision, changes }`，斷線重連的 client 只補 delta。測試 `data-revision-wiring.test.js`（2 項）。
-- 尚未：跨 Web-A/Web-B 的 `eventBus`（postgres LISTEN/NOTIFY）需多節點部署後才生效；
-  前端重連時實際去問 `/api/events/revision` 的 client 邏輯未接。
+- **前端重連補 delta**（Phase 11 閉環）：`es.onopen` 去問 `/api/events/revision?since=lastRevision`，
+  有變更就 `loadList({ silent, keep })`，並更新 `lastRevision`（首次連線只設 baseline 不重查）。
+- 尚未：跨 Web-A/Web-B 的 `eventBus`（postgres LISTEN/NOTIFY）需多節點部署後才生效。
 
 
 ### Phase 12 — Client state（schema + versioning 完成，前端接入後續）
