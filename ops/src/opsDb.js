@@ -1689,6 +1689,28 @@ function migrateProductionStableProductScope(db) {
 // - journal_mode = WAL：檔案型 DB 併發讀寫較佳（:memory: 會忽略）。
 // - busy_timeout = 5000：兩個連線競爭寫鎖時等待而非立即 SQLITE_BUSY，配合 BEGIN IMMEDIATE 避免 fork。
 // - synchronous = FULL：稽核/狀態機是 metadata，重durability 勝過吞吐；每次 commit 落盤。
+export const OPS_SCHEMA_VERSION = 1;
+
+export function readOpsSchemaVersion(db) {
+  const row = db.prepare("PRAGMA user_version").get();
+  return Number(row && row.user_version ? row.user_version : 0);
+}
+
+// 冪等 schema 套用＋版本推進。若版本比支援的新（來自較新程式）→ fail-closed。
+// 失敗時（applyOpsSchema 拋錯）不會推進 user_version，重開會重新套用（冪等）。
+export function migrateOpsSchema(db) {
+  const current = readOpsSchemaVersion(db);
+  if (current > OPS_SCHEMA_VERSION) {
+    throw new Error(`OPS DB schema version ${current} is newer than supported ${OPS_SCHEMA_VERSION}; refusing to open (fail-closed)`);
+  }
+  applyOpsSchema(db);
+  reapplyPurgeLedger(db);
+  if (current < OPS_SCHEMA_VERSION) {
+    db.exec(`PRAGMA user_version = ${OPS_SCHEMA_VERSION}`);
+  }
+  return readOpsSchemaVersion(db);
+}
+
 export function openOpsDb(dbPath) {
   const target = dbPath || defaultDbPath();
   if (target !== ":memory:") {
@@ -1699,8 +1721,7 @@ export function openOpsDb(dbPath) {
   db.exec("PRAGMA foreign_keys = ON");
   db.exec("PRAGMA busy_timeout = 5000");
   db.exec("PRAGMA synchronous = FULL");
-  applyOpsSchema(db);
-  reapplyPurgeLedger(db);
+  migrateOpsSchema(db);
   return db;
 }
 
