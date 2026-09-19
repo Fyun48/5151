@@ -31,13 +31,22 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
 - Schema（PostgreSQL DDL + SQLite DDL）：`id, job_type, payload, priority, state, attempts,
   max_attempts, available_at, leased_at, lease_until, lease_owner, idempotency_key, created_at,
   updated_at, last_error`。priority 100/90/80/60/20/5 已定義（`JOB_PRIORITY`）。
-- Claim：PostgreSQL 用 `SELECT ... FOR UPDATE SKIP LOCKED`（`POSTGRES_CLAIM_JOBS_SQL`）；
-  SQLite 用 `BEGIN IMMEDIATE` 交易模擬（多程序 WAL 安全）。
+- Claim：PostgreSQL 用 `SELECT ... FOR UPDATE SKIP LOCKED`；SQLite 用 `BEGIN IMMEDIATE` 交易模擬。
 - Recurring scheduler 互斥：PostgreSQL `pg_try_advisory_lock`；SQLite `scheduler_locks` lease 表。
-- 測試 `job-queue.test.js`（7 項）：enqueue/claim/complete、priority、idempotency、retry/backoff/
-  dead-letter、expired lease reclaim、scheduler lock、PG SQL 結構（FOR UPDATE SKIP LOCKED）。
-- 尚未：把現有 geo/enrich/notification/CRM/OPS/wish 各 queue 實際收斂到這個共用 queue（漸進遷移）。
+- 測試 `job-queue.test.js`（7 項）。
+- 尚未：把現有 geo/enrich/notification/CRM/OPS/wish 各 queue 實際收斂到共用 queue。
 
+### Phase 5/6 — DB driver 抽象 + Migration framework（完成核心）
+- `v3/src/dbDriver.js`：`DB_DRIVER=sqlite|postgres` 選擇（`resolveDbDriver()`），`createDb()` 工廠、
+  `dialectOf()`/`nowExpr()` dialect helpers；SQLite 走 node:sqlite（同步），PostgreSQL 走 `pg`（非同步，
+  stub，需 `npm install pg` 後接線）。
+- `v3/src/migrate.js`：ordered/versioned migration framework，取代 `ALTER TABLE try/catch`。
+  `schema_migrations` 表、transactional forward migration、`down`（rollback）、safety classification、
+  `verifyMigrations()`、idempotent re-run（重跑不重複套用）、duplicate version 偵測。
+- 測試 `migrate-driver.test.js`（8 項）：套用順序、idempotent、失敗 rollback、verify、duplicate、
+  DB_DRIVER 解析、sqlite createDb、postgres stub。
+- 尚未：把 `db.js` 的 `ALTER TABLE try/catch` 實際搬到 migration runner；SQLite→PostgreSQL 資料搬遷
+  tool（dry-run / verify-only / resume）；把 domain 查詢抽成 repository interface。
 
 ### Phase 3 — Web/Crawler/Worker split（完成）
 
