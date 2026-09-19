@@ -14,10 +14,11 @@ BEGIN
   ELSE
     ALTER ROLE replicator WITH REPLICATION LOGIN PASSWORD '${REPL_PASSWORD}';
   END IF;
+  IF NOT EXISTS (SELECT FROM pg_replication_slots WHERE slot_name = 'standby_b') THEN
+    PERFORM pg_create_physical_replication_slot('standby_b');
+  END IF;
 END
 \$\$;
-SELECT slot_name FROM pg_create_physical_replication_slot('standby_b')
-WHERE NOT EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = 'standby_b');
 SQL
 
 echo "primary replication user + slot ready (slot: standby_b)"

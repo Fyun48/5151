@@ -30,7 +30,8 @@ CASAOS_HOST=192.168.0.140 \
 PG_SUPER_PASSWORD='<super>' \
 PG_REPLICATION_PASSWORD='<repl>' \
 docker compose up -d
-./setup-replication.sh   # 建 replication user + slot
+bash setup-replication.sh   # 建 replication user + slot（idempotent）
+bash fix-pg-hba.sh          # 加 pg_hba replication 條目（預設映像無此條目）+ reload
 ```
 
 ### 2. Synology — 啟動 Standby

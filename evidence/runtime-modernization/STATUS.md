@@ -25,16 +25,20 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
 ### Cross-platform test harness（Windows + Linux）
 - `pathToFileURL(...).href` 修正 38 個測試檔；`.gitattributes` 加 `*.yml eol=lf`。
 
-### Phase 13/14/15/19 — Shadow PostgreSQL + HAProxy config（本次新增）
-- `deploy/shadow-ha/postgres-primary/`：PostgreSQL-A（Primary）+ replication user/slot script。
-- `deploy/shadow-ha/postgres-standby/`：PostgreSQL-B（Hot Standby，pg_basebackup + standby.signal）。
-- `deploy/shadow-ha/haproxy/`：`postgres-rw` / `postgres-ro` / `web` 三組路由。
-- `docs/runbooks/postgres-manual-failover.md`：manual failover runbook（含 fence / split-brain prevention）。
+### Phase 13/14/15/19 — Shadow PostgreSQL Primary/Standby（已上線並驗證）
+- `deploy/shadow-ha/postgres-primary/`：PostgreSQL-A（Primary, CasaOS `192.168.0.140:15432`）+ setup-replication.sh + fix-pg-hba.sh。
+- `deploy/shadow-ha/postgres-standby/`：PostgreSQL-B（Hot Standby, Synology `192.168.0.220:15432`）+ setup-standby.sh。
+- `deploy/shadow-ha/haproxy/`：`postgres-rw` / `postgres-ro` / `web` 三組路由（config，尚未上線 HAProxy 容器）。
+- `docs/runbooks/postgres-manual-failover.md`：manual failover runbook（fence / split-brain prevention）。
+- **已實際在兩台 NAS 起 shadow container 並驗證**：
+  - `pg_stat_replication` = `192.168.0.220 | streaming | async`。
+  - Standby `pg_is_in_recovery()` = `t`，寫入被拒（`cannot execute INSERT in a read-only transaction`）→ split-brain prevention OK。
+  - 資料傳播：primary 寫入 1 筆 → standby 讀到 1 筆。
 - 全部用 env（`CASAOS_HOST`/`SYNOLOGY_HOST`/`PG_*_PASSWORD`），獨立 name/port/volume，不碰 Production。
 
 ## EXTERNAL_SETUP_REQUIRED（仍需 Owner 提供）
 
-- **實際在兩台 NAS `docker compose up`**：shadow container 上線需 Owner 授權（會佔少量 CPU/RAM）。
+- **HAProxy shadow container 上線**（config 已備好，未起容器）；Web-A/Web-B / crawler / worker shadow 容器上線。
 - **Object storage（S3/R2）credentials**：storage abstraction 的 S3 driver。
 - **Gitea instance hostname / token**：Gitea migration rehearsal + loop-engine。
 - **OpenAI Reviewer API key**：optional Final Review flow。
