@@ -40,8 +40,8 @@ OPS_PRODUCT_ID=v3
 6. **議題與投票**：同類回饋會聚成議題；影響力夠高後做五角色評估（PROPOSE / WAIT / IGNORE / ESCALATE），再產生提案
 7. 評估結果是 **PROPOSE** 時，對提案按「核准開發」（Gate #1）
 8. Coding / QA / Staging 通過後，用 API 或後續畫面做 Gate #2 核准發布
-9. **正式機仍要走 CasaOS Deploy v3**，OPS Phase 15 預設不會自己部署
-10. **更新 OPS 本身**走 `.github/workflows/deploy-ops.yml`（確認字 `DEPLOY-OPS`，只重建 `5151-ops`），不是 v3 的第四條路徑
+9. **正式機仍要走 Synology Container Manager 部署 v3**，OPS Phase 15 預設不會自己部署
+10. **更新 OPS 本身**走 `.github/workflows/deploy-ops-synology.yml`（確認字 `DEPLOY-OPS`，Synology 專用 OPS-only compose `docker-compose.ops.synology.yml`，只重建 `5151-ops`，版本化 release + rollback），不是 v3 的第四條路徑
 
 ## Webhook 通知
 

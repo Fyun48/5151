@@ -5,11 +5,21 @@ import { withImmediateTx } from "./tx.js";
 
 const LEGACY_PLAINTEXT_PREDICATE = `secret IS NOT NULL AND secret NOT LIKE 'v1:%'`;
 
+function tableExists(db, name) {
+  try {
+    return !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(name);
+  } catch {
+    return false;
+  }
+}
+
 function rowsOf(db, table) {
+  if (!tableExists(db, table)) return [];
   return db.prepare(`SELECT id, secret FROM ${table} WHERE ${LEGACY_PLAINTEXT_PREDICATE}`).all();
 }
 
 function countPlaintext(db, table) {
+  if (!tableExists(db, table)) return 0;
   return Number(db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${LEGACY_PLAINTEXT_PREDICATE}`).get()?.n || 0);
 }
 
@@ -43,6 +53,12 @@ export function migrateCredentialSecretsAtRest(db, { key = secretAtRestKey() } =
 
 export function hasLegacyPlaintextCredentials(db) {
   return countPlaintext(db, "product_ingest_credential") + countPlaintext(db, "product_command_credential") > 0;
+}
+
+// 啟動／部署路徑用：有舊明文才遷移；失敗（含無 key）由 migrateCredentialSecretsAtRest 拋錯 fail-closed。
+export function migrateLegacyCredentialsOnStartup(db) {
+  if (!hasLegacyPlaintextCredentials(db)) return { migrated_ingest: 0, migrated_command: 0 };
+  return migrateCredentialSecretsAtRest(db);
 }
 
 export { isEncryptedSecretBlob };

@@ -93,7 +93,7 @@ jobs:
           username: ${{ secrets.NAS_USER }}
           key: ${{ secrets.NAS_SSH_KEY }}
           source: "ops,docker-compose.ops.synology.yml,.github/scripts/deploy-ops-synology-remote.sh"
-          target: ${{ vars.OPS_SYNOLOGY_APP_ROOT || '/volume1/docker/5151-ops/app' }}
+          target: ${{ vars.OPS_SYNOLOGY_APP_ROOT || '/volume1/docker/5151-ops/app' }}/incoming
           overwrite: true
       - name: Deploy 5151-ops on Synology (preflight + backup + rollback)
         uses: appleboy/ssh-action@v1.2.0
@@ -109,4 +109,4 @@ jobs:
             export DEPLOY_SHA='${{ inputs.sha }}'
             export OPS_SYNOLOGY_APP_ROOT='${{ vars.OPS_SYNOLOGY_APP_ROOT || "/volume1/docker/5151-ops/app" }}'
             export OPS_SYNOLOGY_DATA_ROOT='${{ vars.OPS_SYNOLOGY_DATA_ROOT || "/volume1/docker/5151-ops/data" }}'
-            bash "$OPS_SYNOLOGY_APP_ROOT/.github/scripts/deploy-ops-synology-remote.sh"
+            bash "$OPS_SYNOLOGY_APP_ROOT/incoming/.github/scripts/deploy-ops-synology-remote.sh"

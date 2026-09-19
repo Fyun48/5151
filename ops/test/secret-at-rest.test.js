@@ -5,7 +5,7 @@ import { openOpsDb } from "../src/opsDb.js";
 import { ensureDefaultProduct, issueCredential, listActiveCredentials, resolveIngestAuth, rotateCredential } from "../src/products.js";
 import { ensureCommandCredential, getActiveCommandSecret, ensureSiteCommandSchema } from "../src/siteCommand.js";
 import { decryptSecret, secretAtRestKey, isEncryptedSecretBlob } from "../src/secretAtRest.js";
-import { migrateCredentialSecretsAtRest } from "../src/credentialMigration.js";
+import { migrateCredentialSecretsAtRest, migrateLegacyCredentialsOnStartup } from "../src/credentialMigration.js";
 import { signIngestRequest } from "../src/ingestSignature.js";
 
 test("issued ingest credential is encrypted at rest (DB never holds plaintext)", () => {
@@ -112,5 +112,31 @@ test("credential migration fails closed without a key and leaves plaintext untou
   assert.throws(() => migrateCredentialSecretsAtRest(db, { key: null }), /OPS_SECRET_AT_REST_KEY/);
   const row = db.prepare("SELECT secret FROM product_ingest_credential WHERE label='old'").get();
   assert.equal(row.secret, "legacy");
+  db.close();
+});
+
+test("startup wiring: legacy plaintext migrates, HMAC still authenticates, second startup idempotent", () => {
+  const db = openOpsDb(":memory:");
+  ensureDefaultProduct(db);
+  // 模擬舊 DB 的明文 ingest 憑證。
+  db.prepare("INSERT INTO product_ingest_credential(product_id, generation, secret, label, status, created_at) VALUES ('v3', 1, 'legacy-startup-secret', 'old', 'active', ?)").run(new Date().toISOString());
+
+  const first = migrateLegacyCredentialsOnStartup(db);
+  assert.equal(first.migrated_ingest, 1);
+  const row = db.prepare("SELECT secret FROM product_ingest_credential WHERE label='old'").get();
+  assert.equal(isEncryptedSecretBlob(row.secret), true);
+
+  // 舊 HMAC 憑證遷移後仍可驗證。
+  const method = "POST";
+  const path = "/ops/api/ingest/feedback";
+  const rawBody = JSON.stringify({ ok: true });
+  const signed = signIngestRequest({ method, path, deliveryId: "d1", rawBody, secret: "legacy-startup-secret" });
+  const headers = Object.fromEntries(Object.entries(signed.headers).map(([k, v]) => [k.toLowerCase(), v]));
+  const auth = resolveIngestAuth(db, { method, path, rawBody, headers, now: Date.now() });
+  assert.equal(auth.ok, true);
+
+  // 第二次啟動冪等。
+  const second = migrateLegacyCredentialsOnStartup(db);
+  assert.equal(second.migrated_ingest, 0);
   db.close();
 });

@@ -54,8 +54,28 @@ test("Synology remote script preflights secrets without printing, backs up, and 
   assert.match(script, /ops\.db/);
   assert.match(script, /rollback/);
   assert.match(script, /\/ops\/api\/health/);
-  assert.match(script, /\.deployed-sha/);
   // 不碰 v3 / cloudflared / tunnel
   assert.doesNotMatch(script, /591-tracker-v3/);
   assert.doesNotMatch(script, /cloudflared/);
+});
+
+test("Synology deploy is staged/versioned and rollback restores previous source pointer", () => {
+  // 版本化 release 目錄 + incoming staging + atomic current symlink。
+  assert.match(script, /releases\/\$DEPLOY_SHA/);
+  assert.match(script, /INCOMING/);
+  assert.match(script, /current/);
+  assert.match(script, /ln -sfn/);
+  assert.match(script, /PREVIOUS/);
+  assert.match(script, /readlink/);
+  // rollback 切回 PREVIOUS source（不是只還 DB/config）。
+  assert.match(script, /ln -sfn "\$PREVIOUS"/);
+  // 一致性 DB 快照：先 stop 再 copy。
+  assert.match(script, /docker compose -f "\$COMPOSE_FILE" stop/);
+  // 有界保留舊 release。
+  assert.match(script, /tail -n \+7/);
+});
+
+test("Synology compose mounts the versioned current pointer, not the live ops dir", () => {
+  assert.match(compose, /current\/ops:\/app\/ops:ro/);
+  assert.doesNotMatch(compose, /\$\{OPS_SYNOLOGY_APP_ROOT[^}]*\}\/ops:\/app\/ops:ro/);
 });

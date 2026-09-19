@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { openOpsDb, defaultDataDir, defaultDbPath } from "./opsDb.js";
+import { hasLegacyPlaintextCredentials, migrateLegacyCredentialsOnStartup } from "./credentialMigration.js";
 import { makeAuth } from "./auth.js";
 import { appendAudit, listAudit, verifyAuditChain, createCheckpoint, listCheckpoints } from "./audit.js";
 import { listTransitions } from "./stateMachine.js";
@@ -1564,6 +1565,8 @@ export function startServer() {
   const dataDir = defaultDataDir();
   loadEnvFile(path.join(dataDir, "auth.env"));
   const db = openOpsDb(defaultDbPath());
+  // 舊明文憑證遷移：必須在 worker／網路變更之前完成；無 key 或失敗 → fail-closed 拒啟動。
+  migrateLegacyCredentialsOnStartup(db);
   const auth = makeAuth({
     ownerEmail: process.env.OPS_OWNER_EMAIL || process.env.AUTH_EMAIL,
     ownerPassword: process.env.OPS_OWNER_PASSWORD || process.env.AUTH_PASSWORD,

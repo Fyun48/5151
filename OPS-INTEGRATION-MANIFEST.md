@@ -107,7 +107,8 @@
 - Scenario A–H E2E: `ops/test/scenario-e2e.test.js` (A chain / B reject / C request-changes) plus
   the existing package suites for D/E/F/G/H; see `ops/evidence/final-integration-20260919/SUITES.md`.
 - UI 375/768/1440 + accessibility: `ops/evidence/final-integration-20260919/` (capture script,
-  `ops-responsive.json`, `shots/`); OPS Console surface capture still pending (see risks below).
+  `ops-responsive.json`, `shots/`); OPS Console 9-state rendering captured and 27/27 green
+  (`ops-console-states.json` + `ops/test/ops-console-states.test.js` CI guard).
 - Performance benchmarks: `ops/evidence/final-integration-20260919/bench.mjs` (100/1k/10k,
   p50/p95/max + query count + EXPLAIN over the required product paths).
 - Dedicated security suite: credential-at-rest encryption (`secret-at-rest.test.js`), SSRF-safe
