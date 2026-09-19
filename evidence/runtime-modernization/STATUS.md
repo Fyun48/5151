@@ -117,7 +117,18 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
 - 尚未：實際 `docker compose up`；Gitea migration rehearsal（GitHub authoritative）；DeepSeek 實際串接 loop-engine；
   `.gitea/workflows/*` + `.agent/*` template（Phase 29）。
 
+### Phase 10/11 — SSE delta events + 共用 event bus（完成核心）
+- `v3/src/deltaEvents.js`：`listing_added/updated/removed/commute_updated/stats_invalidated/
+  search_membership_changed` 六類 delta event；`classifyDeltaEvent`（enrichment 只 patch card，
+  membership/order 變才 re-query）、`searchMembershipChanged`、`eventRequiresRelist`。
+- `v3/src/eventBus.js`：共用 event bus；`local`（in-memory pub/sub，SQLite/dev）+ `postgres`
+  （`pg_notify`/`LISTEN`，跨 Web-A/Web-B）。NOTIFY 只作 wake-up/cache invalidation，DB 仍是 source of truth。
+- 測試 `event-bus-delta.test.js`（5 項）。
+- 尚未：把 server.js 的 SSE 廣播實際改接 delta event（現仍 broadcast 整包）；Web reconnect 靠 DB revision 補回狀態。
+
+
 ### Phase 5 — Repository layer（示範完成，其餘 domain 漸進）
+
 - `v3/src/repository/settings.js`：`createSettingsRepository({ driver, sqliteDb, pgPool })` 工廠 +
   SQLite/PostgreSQL 兩個 adapter；介面 `get/set/delete/all`（async）。示範 Domain → Repository → adapter。
 - SQLite 用 `?` + `ON CONFLICT(key)`；PostgreSQL 用 `$n` + `ON CONFLICT (key) ... EXCLUDED`。
