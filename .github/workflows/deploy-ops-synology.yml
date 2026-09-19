@@ -1,6 +1,4 @@
 name: Deploy OPS to Synology NAS (manual)
-run-name: "manual-owner-ops-synology:${{ inputs.sha }}"
-
 # 只同步 ops/ + Synology OPS-only compose，並只重建 5151-ops。
 # 這不是 v3 部署路徑：不 SCP v3/、不重建 591-tracker-v3、不碰 cloudflared/tunnel。
 # 合併／push 到 master 不會自動跑；必須明確 workflow_dispatch，且從 master 定義啟動。
