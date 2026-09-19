@@ -33,8 +33,9 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
   updated_at, last_error`。priority 100/90/80/60/20/5 已定義（`JOB_PRIORITY`）。
 - Claim：PostgreSQL 用 `SELECT ... FOR UPDATE SKIP LOCKED`；SQLite 用 `BEGIN IMMEDIATE` 交易模擬。
 - Recurring scheduler 互斥：PostgreSQL `pg_try_advisory_lock`；SQLite `scheduler_locks` lease 表。
-- 測試 `job-queue.test.js`（7 項）。
-- 尚未：把現有 geo/enrich/notification/CRM/OPS/wish 各 queue 實際收斂到共用 queue。
+- **Worker 收斂 reference**（`v3/src/jobWorker.js`）：`runWorkerBatch`（reclaim expired → claim → process →
+  complete/fail）+ `startWorkerLoop`；證明兩 worker 不重複執行、失敗不丟 job。測試 4 項。
+- 尚未：把現有 geo/enrich/notification/CRM/OPS/wish 各 worker 逐一改接 `runWorkerBatch`（漸進遷移）。
 
 ### Phase 5/6 — DB driver 抽象 + Migration framework（完成核心）
 - `v3/src/dbDriver.js`：`DB_DRIVER=sqlite|postgres` 選擇（`resolveDbDriver()`），`createDb()` 工廠、
