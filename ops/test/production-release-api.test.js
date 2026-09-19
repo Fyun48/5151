@@ -215,7 +215,8 @@ test("rollback API requires exact previous stable and never calls DB restore", a
       method: "POST", headers: { cookie, "Content-Type": "application/json", "X-CSRF-Token": csrf, Origin: base },
       body: JSON.stringify(payload),
     });
-    assert.equal(exec.status, 200);
+    const execBody = await exec.clone().text();
+    assert.equal(exec.status, 200, `execute must succeed with rollback, got ${exec.status}: ${execBody}`);
     const out = await exec.json();
     assert.equal(out.rolled_back, true);
     assert.equal(p.restoreCallCount, 0);

@@ -78,6 +78,14 @@ test("deploy-ops authorize precedes NAS secrets; production env; read-only conte
 
 test("deploy-safety PROD list does not treat deploy-ops as a v3 production path", () => {
   const safety = readFileSync(path.join(root, "test/deploy-safety.test.js"), "utf8");
-  assert.match(safety, /const PROD = \["deploy-v3\.yml", "docker\.yml", "deploy-v2\.yml"\]/);
-  assert.doesNotMatch(safety, /deploy-ops\.yml/);
+  // 語意式檢查：不清空 master 演進後的清單內容，只要求 OPS 部署與 v3 production 安全清單分離。
+  const list = safety.match(/const PROD = \[([^\]]*)\]/);
+  assert.ok(list, "deploy-safety must declare a PROD workflow list");
+  const entries = list[1];
+  assert.match(entries, /deploy-v3\.yml/, "v3 production deploy must stay in the PROD list");
+  assert.doesNotMatch(entries, /deploy-ops\.yml/, "deploy-ops must not be part of the v3 production deploy list");
+  // deploy-ops 只能用來同步 ops/，不得成為 v3 的第四條部署路徑。
+  const ops = readFileSync(path.join(root, ".github/workflows/deploy-ops.yml"), "utf8");
+  assert.doesNotMatch(ops, /force-recreate 591-tracker-v3/);
+  assert.doesNotMatch(ops, /group:\s*production-deploy/);
 });

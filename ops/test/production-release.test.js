@@ -263,7 +263,11 @@ test("Production workflows remain workflow_dispatch only; merge/push does not de
   const ci = readFileSync(ciPath, "utf8");
   assert.doesNotMatch(ci, /workflow_dispatch:[\s\S]*deploy-v3/);
   assert.doesNotMatch(ci, /DEPLOY-PRODUCTION/);
-  assert.match(ci, /ai-dev\//);
+  // 現行契約：Tests only（無 auto-merge、無部署、無寫入權限）。
+  assert.match(ci, /npm test/);
+  assert.doesNotMatch(ci, /gh pr merge|auto-merge|--squash/i);
+  assert.doesNotMatch(ci, /contents:\s*write|pull-requests:\s*write/);
+  assert.doesNotMatch(ci, /appleboy\/(scp|ssh)-action/);
 });
 
 test("A→H isolated stub release succeeds only after health/smoke and updates current stable", async () => {
