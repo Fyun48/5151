@@ -187,12 +187,17 @@ BASE_SHA：`c60a4f084bc5a01df0858eb669527f074bf22d8a`
 - 尚未：跨 Web-A/Web-B 的 `eventBus`（postgres LISTEN/NOTIFY）需多節點部署後才生效。
 
 
-### Phase 12 — Client state（schema + versioning 完成，前端接入後續）
+### Phase 12 — Client state（schema + versioning 完成，前端接入完成）
 - `v3/src/clientState.js`：versioned client state schema（filter/district/sort/panel/moreCondition/
   currentProfile/pagination cursor/scroll）+ `normalizeClientState`（coerce + v0→v1 migration）+
   `serialize/deserialize`。F5 不重設搜尋條件；server 仍 authoritative。
 - 測試 `client-state.test.js`（5 項）。
-- 尚未：前端 `v3/public/index.html` 實際改接此 schema（現為分散 localStorage key）。
+- **前端 `v3/public/index.html` 已接 schema**（Phase 12 收尾）：新增 `CLIENT_STATE_KEY`（`5151-client-state-v1`）+
+  `readClientState`/`writeClientState`/`persistSearchState`/`restoreSearchState`（鏡射 `clientState.js`）；
+  `filter`/`sort`/`district` 在 change handler 寫入、boot 時 `restoreSearchState()` 還原（F5 不再重設）。
+  測試 `client-state-wiring.test.js`（1 項 source assertion）。
+- 尚未：`panel`/`moreCondition`/`pagination`/`scroll` 仍走舊的分散 key（`PANEL_KEY`/`FILTER_COMPACT_KEY`/
+  `VIEW_KEY`），尚未遷入 versioned schema（漸進）。
 
 ### Phase 5 — Repository layer（示範完成，其餘 domain 漸進）
 

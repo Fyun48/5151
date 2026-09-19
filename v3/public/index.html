@@ -4583,6 +4583,37 @@
     const APP_VIEW_KEY = "591-v3-app-view";
     const PUSH_ASKED_KEY = "591-v3-push-asked";
     const CHANNEL_DEFAULT_ON = { dock: true, push: true, webhook: false, mail: false };
+    // Versioned client state (Phase 12): consolidates the scattered localStorage
+    // keys so F5 keeps filter / district / sort. Mirrors src/clientState.js.
+    const CLIENT_STATE_KEY = "5151-client-state-v1";
+    function readClientState() {
+      let raw = null;
+      try { raw = JSON.parse(localStorage.getItem(CLIENT_STATE_KEY) || "null"); } catch { raw = null; }
+      if (!raw || typeof raw !== "object") raw = {};
+      return {
+        version: 1,
+        filter: typeof raw.filter === "string" ? raw.filter : "all",
+        district: Array.isArray(raw.district) ? raw.district : [],
+        sort: typeof raw.sort === "string" ? raw.sort : "newest",
+        panel: { collapsed: false, filterCompact: false, ...(raw.panel || {}) },
+        moreCondition: { expanded: false, ...(raw.moreCondition || {}) },
+        currentProfile: typeof raw.currentProfile === "string" ? raw.currentProfile : "",
+        pagination: { cursor: null, offset: 0, ...(raw.pagination || {}) },
+        scroll: { top: 0, ...(raw.scroll || {}) },
+      };
+    }
+    function writeClientState(patch) {
+      try { localStorage.setItem(CLIENT_STATE_KEY, JSON.stringify({ ...readClientState(), ...patch, version: 1 })); } catch { /* ignore quota */ }
+    }
+    function persistSearchState() {
+      writeClientState({ filter, sort, district: [...viewDistricts] });
+    }
+    function restoreSearchState() {
+      const state = readClientState();
+      if (state.filter) filter = state.filter;
+      if (state.sort) sort = state.sort;
+      if (Array.isArray(state.district) && state.district.length) viewDistricts = new Set(state.district);
+    }
     if (localStorage.getItem(PANEL_KEY) === "1") {
       document.body.classList.add("panel-collapsed");
       if (localStorage.getItem(FILTER_COMPACT_KEY) === "1") {
@@ -5167,6 +5198,7 @@
       const saved = JSON.parse(sessionStorage.getItem(VIEW_KEY) || "[]");
       if (Array.isArray(saved)) viewDistricts = new Set(saved);
     } catch {}
+    restoreSearchState();
 
     function migrateHousingKinds(list) {
       const raw = Array.isArray(list) ? list : [];
@@ -6669,6 +6701,7 @@
             if (viewDistricts.size === names.length) viewDistricts = new Set();
           }
           sessionStorage.setItem(VIEW_KEY, JSON.stringify([...viewDistricts]));
+          persistSearchState();
           persistGuestSearch();
           renderDistrictChips(settings);
           loadList();
@@ -12268,6 +12301,7 @@
         document.querySelectorAll("[data-filter]").forEach((b) => b.classList.remove("on"));
         btn.classList.add("on");
         filter = btn.dataset.filter;
+        persistSearchState();
         const preview = previewListForFilter(filter);
         loadList({
           keep: !preview,
@@ -12319,6 +12353,7 @@
         } else {
           sort = btn.dataset.sort;
         }
+        persistSearchState();
         syncSortChips();
         loadList();
       };
