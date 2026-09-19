@@ -6,6 +6,7 @@ import { qaConfigFromEnv, buildQaPolicy, qaPolicyFingerprint, effectiveQaPolicyF
 import { runAllChecks, diffHash } from "./qa/qaChecks.js";
 import { aggregateQa } from "./qa/aggregate.js";
 import { makeCommandRunner } from "./qa/commandRunner.js";
+import { issueWriteDecision } from "./insightConsent.js";
 
 export const QA_MAX_ATTEMPTS = 3;
 export const QA_CLAIM_STALE_MS = 15 * 60 * 1000;
@@ -60,6 +61,13 @@ export function createQaRun(db, { codingTaskId, repo, env = process.env, now = n
   const policyFp = qaPolicyFingerprint(policy);
   const ts = iso(now);
   const { task, auth } = validateCodingTaskForQa(db, codingTaskId);
+  const gate = issueWriteDecision(db, task.issue_id, { expectedGeneration: task.subscription_generation });
+  if (!gate.ok) {
+    const err = httpError(gate.reason === "stale_generation" ? "訂閱世代已換，晚到 QA 不入隊。" : "訂閱已退出，晚到 QA 不入隊。", 409);
+    err.code = gate.reason || "subscription_revoked";
+    throw err;
+  }
+  const generation = gate.unbound ? null : (task.subscription_generation ?? gate.generation);
   const diff = repo.numstatRange(task.base_sha, task.head_sha);
   const dHash = diffHash(diff);
   const inputFp = qaInputFingerprint({
@@ -73,22 +81,32 @@ export function createQaRun(db, { codingTaskId, repo, env = process.env, now = n
     const res = db.prepare(
       `INSERT INTO development_qa_run(issue_id, coding_task_id, development_authorization_id, proposal_id, proposal_version, proposal_hash,
         base_sha, head_sha, coding_result_hash, diff_hash, qa_version, qa_policy_fingerprint, qa_policy_snapshot, input_fingerprint,
-        status, attempt_count, max_attempts, next_attempt_at, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'pending', 0, ?, ?, ?)`,
+        status, attempt_count, max_attempts, next_attempt_at, created_at, subscription_generation)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'pending', 0, ?, ?, ?, ?)`,
     ).run(
       Number(task.issue_id), Number(task.id), Number(auth.id), Number(task.proposal_id), Number(task.proposal_version), String(task.proposal_hash),
       task.base_sha, task.head_sha, task.result_hash, dHash, cfg.qaVersion, policyFp, JSON.stringify(policy), inputFp,
-      cfg.maxAttempts, ts, ts,
+      cfg.maxAttempts, ts, ts, generation,
     );
     const id = Number(res.lastInsertRowid);
     return { run: publicQaRun(db, db.prepare("SELECT * FROM development_qa_run WHERE id=?").get(id)) };
   });
 }
 
+function abandonQaRun(db, run, reason) {
+  db.prepare("UPDATE development_qa_run SET status='failed', error_code=? WHERE id=? AND status IN ('pending','failed_retry','claimed','running')")
+    .run(String(reason || "subscription_revoked").slice(0, 64), Number(run.id));
+}
+
 export function claimQaBatch(db, { now = new Date(), staleMs = QA_CLAIM_STALE_MS, limit = 1 } = {}) {
   const ts = iso(now);
   const staleBefore = iso(new Date((now instanceof Date ? now.getTime() : Date.now()) - staleMs));
   return withImmediateTx(db, () => {
+    const inflight = db.prepare("SELECT * FROM development_qa_run WHERE status IN ('pending','failed_retry','claimed','running')").all();
+    for (const row of inflight) {
+      const decision = issueWriteDecision(db, row.issue_id, { expectedGeneration: row.subscription_generation });
+      if (!decision.ok) abandonQaRun(db, row, decision.reason);
+    }
     const rows = db.prepare(
       `SELECT * FROM development_qa_run
        WHERE ( (status IN ('pending','failed_retry') AND next_attempt_at <= ?)
@@ -97,6 +115,11 @@ export function claimQaBatch(db, { now = new Date(), staleMs = QA_CLAIM_STALE_MS
     ).all(ts, staleBefore, Math.max(1, limit));
     const claimed = [];
     for (const r of rows) {
+      const decision = issueWriteDecision(db, r.issue_id, { expectedGeneration: r.subscription_generation });
+      if (!decision.ok) {
+        abandonQaRun(db, r, decision.reason);
+        continue;
+      }
       const upd = db.prepare("UPDATE development_qa_run SET status='claimed', claimed_at=? WHERE id=? AND status=?").run(ts, r.id, r.status);
       if (upd.changes === 1) claimed.push(db.prepare("SELECT * FROM development_qa_run WHERE id=?").get(r.id));
     }
@@ -105,11 +128,16 @@ export function claimQaBatch(db, { now = new Date(), staleMs = QA_CLAIM_STALE_MS
 }
 
 function markRunFailure(db, run, { code, now, cfg }) {
+  const fresh = db.prepare("SELECT status FROM development_qa_run WHERE id=?").get(Number(run.id));
+  if (!fresh || fresh.status === "cancelled") return { skipped: true, reason: "cancelled", in_flight_not_withdrawn: true };
+  if (fresh.status === "completed") return { skipped: true, reason: "already_completed" };
   const attempt = Number(run.attempt_count) || 0;
   const willRetry = attempt < (Number(run.max_attempts) || cfg.maxAttempts);
   const status = willRetry ? "failed_retry" : "failed";
   const next = willRetry ? iso(new Date((now instanceof Date ? now.getTime() : Date.now()) + backoffMs(attempt))) : iso(now);
-  db.prepare("UPDATE development_qa_run SET status=?, error_code=?, next_attempt_at=? WHERE id=?").run(status, code, next, Number(run.id));
+  const upd = db.prepare("UPDATE development_qa_run SET status=?, error_code=?, next_attempt_at=? WHERE id=? AND status IN ('pending','failed_retry','claimed','running')")
+    .run(status, code, next, Number(run.id));
+  if (upd.changes !== 1) return { skipped: true, reason: "cancelled", in_flight_not_withdrawn: true };
   appendAuditRow(db, { actor: "system", action: "issue.qa.failed", entityType: "development_qa_run", entityId: String(run.id), data: { issue_id: Number(run.issue_id), coding_task_id: Number(run.coding_task_id), qa_run_id: Number(run.id), error_code: code, status }, now });
   return { failed: true, error_code: code, status };
 }
@@ -121,6 +149,14 @@ export async function executeQaRun(db, runRow, { repo, reviewProvider = null, en
   if (!run) return { skipped: true, reason: "run_missing" };
   if (run.status === "completed") return { idempotent: true, run: publicQaRun(db, run) };
   if (run.status === "cancelled") return { skipped: true, reason: "cancelled" };
+
+  const gate = issueWriteDecision(db, run.issue_id, { expectedGeneration: run.subscription_generation });
+  if (!gate.ok) {
+    return withImmediateTx(db, () => {
+      abandonQaRun(db, run, gate.reason);
+      return { failed: true, error_code: gate.reason, status: "failed" };
+    });
+  }
 
   // 重新驗證 coding task 仍合格（TOCTOU）。
   let task, auth;
@@ -137,10 +173,17 @@ export async function executeQaRun(db, runRow, { repo, reviewProvider = null, en
     return withImmediateTx(db, () => markRunFailure(db, run, { code: "head_sha_changed", now, cfg }));
   }
 
-  withImmediateTx(db, () => {
-    db.prepare("UPDATE development_qa_run SET status='running', started_at=COALESCE(started_at,?), attempt_count=attempt_count+1 WHERE id=?").run(iso(now), Number(run.id));
+  const started = withImmediateTx(db, () => {
+    const fresh = db.prepare("SELECT status FROM development_qa_run WHERE id=?").get(Number(run.id));
+    if (!fresh || fresh.status === "cancelled") return { skipped: true, reason: "cancelled" };
+    if (!["pending", "failed_retry", "claimed"].includes(fresh.status)) return { skipped: true, reason: "status_changed" };
+    const upd = db.prepare("UPDATE development_qa_run SET status='running', started_at=COALESCE(started_at,?), attempt_count=attempt_count+1 WHERE id=? AND status IN ('pending','failed_retry','claimed')")
+      .run(iso(now), Number(run.id));
+    if (upd.changes !== 1) return { skipped: true, reason: "cancelled" };
     appendAuditRow(db, { actor: "system", action: "issue.qa.started", entityType: "development_qa_run", entityId: String(run.id), data: { issue_id: Number(run.issue_id), coding_task_id: Number(run.coding_task_id), qa_run_id: Number(run.id), base_sha: run.base_sha, head_sha: run.head_sha, qa_policy_fingerprint: run.qa_policy_fingerprint }, now });
+    return { ok: true };
   });
+  if (started.skipped) return started;
 
   let worktree = null;
   try {
@@ -190,14 +233,26 @@ function safeSnapshot(task) {
 
 function finalizeQa(db, run, { checks, agg, reviewer, now }) {
   return withImmediateTx(db, () => {
+    const fresh = db.prepare("SELECT status FROM development_qa_run WHERE id=?").get(Number(run.id));
+    if (!fresh || fresh.status === "cancelled") {
+      return { skipped: true, reason: "cancelled", in_flight_not_withdrawn: true };
+    }
+    const again = issueWriteDecision(db, run.issue_id, { expectedGeneration: run.subscription_generation });
+    if (!again.ok) {
+      abandonQaRun(db, run, again.reason);
+      return { failed: true, error_code: again.reason, status: "failed" };
+    }
     // 冪等/重跑：清掉此 run 既有 checks 再寫入。
     db.prepare("DELETE FROM development_qa_check WHERE qa_run_id=?").run(Number(run.id));
     const ins = db.prepare(`INSERT INTO development_qa_check(qa_run_id, issue_id, coding_task_id, check_type, status, severity, finding, evidence, command, tool, tool_version, started_at, completed_at, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     for (const c of checks) {
       ins.run(Number(run.id), Number(run.issue_id), Number(run.coding_task_id), c.check_type, c.status, c.severity, String(c.finding || "").slice(0, 1000), JSON.stringify(c.evidence || {}), c.command || null, c.tool || null, c.tool_version || null, c.started_at || iso(now), c.completed_at || iso(now), iso(now));
     }
-    db.prepare("UPDATE development_qa_run SET status='completed', final_result=?, blocking_checks=?, warning_count=?, reviewer=?, completed_at=?, error_code=NULL WHERE id=?")
+    const upd = db.prepare("UPDATE development_qa_run SET status='completed', final_result=?, blocking_checks=?, warning_count=?, reviewer=?, completed_at=?, error_code=NULL WHERE id=? AND status IN ('running','claimed')")
       .run(agg.final_result, JSON.stringify(agg.blocking_checks), agg.warning_count, reviewer, iso(now), Number(run.id));
+    if (upd.changes !== 1) {
+      return { skipped: true, reason: "cancelled", in_flight_not_withdrawn: true };
+    }
     // 更新 canonical current（只指向 completed run）。
     db.prepare(`INSERT INTO development_qa_current(coding_task_id, qa_run_id, head_sha, input_fingerprint, final_result, updated_at)
                 VALUES (?,?,?,?,?,?) ON CONFLICT(coding_task_id) DO UPDATE SET qa_run_id=excluded.qa_run_id, head_sha=excluded.head_sha, input_fingerprint=excluded.input_fingerprint, final_result=excluded.final_result, updated_at=excluded.updated_at`)
@@ -205,6 +260,54 @@ function finalizeQa(db, run, { checks, agg, reviewer, now }) {
     appendAuditRow(db, { actor: "system", action: "issue.qa.completed", entityType: "development_qa_run", entityId: String(run.id), data: { issue_id: Number(run.issue_id), coding_task_id: Number(run.coding_task_id), qa_run_id: Number(run.id), base_sha: run.base_sha, head_sha: run.head_sha, qa_policy_fingerprint: run.qa_policy_fingerprint, final_result: agg.final_result, blocking_checks: agg.blocking_checks, warning_count: agg.warning_count, reviewer }, now });
     appendAuditRow(db, { actor: "system", action: "issue.qa.current_changed", entityType: "development_qa_current", entityId: String(run.coding_task_id), data: { issue_id: Number(run.issue_id), coding_task_id: Number(run.coding_task_id), qa_run_id: Number(run.id), final_result: agg.final_result }, now });
     return { completed: true, final_result: agg.final_result, run: publicQaRun(db, db.prepare("SELECT * FROM development_qa_run WHERE id=?").get(Number(run.id))) };
+  });
+}
+
+const QA_CANCELABLE = new Set(["pending", "failed_retry", "claimed", "running"]);
+
+// Owner 取消（保留歷史／checks／授權 provenance；不改寫已完成結果）。
+export function cancelQaRun(db, qaRunId, { actor = "owner", reason = null, now = new Date() } = {}) {
+  return withImmediateTx(db, () => {
+    const run = db.prepare("SELECT * FROM development_qa_run WHERE id=?").get(Number(qaRunId));
+    if (!run) throw httpError("QA run not found", 404);
+    if (run.status === "cancelled") {
+      return { idempotent: true, in_flight_not_withdrawn: false, run: publicQaRun(db, run) };
+    }
+    if (run.status === "completed") {
+      throw httpError("已完成的 QA 結果不改寫。要重跑請用重跑，不要取消完成事實。", 409);
+    }
+    if (!QA_CANCELABLE.has(run.status)) {
+      throw httpError(`QA 目前不能取消（status=${run.status}）`, 409);
+    }
+    const inFlight = run.status === "claimed" || run.status === "running";
+    const code = reason ? `owner_cancelled:${String(reason).slice(0, 120)}` : "owner_cancelled";
+    const upd = db.prepare("UPDATE development_qa_run SET status='cancelled', error_code=? WHERE id=? AND status IN ('pending','failed_retry','claimed','running')")
+      .run(code, Number(run.id));
+    if (upd.changes !== 1) {
+      const fresh = db.prepare("SELECT * FROM development_qa_run WHERE id=?").get(Number(run.id));
+      if (fresh?.status === "cancelled") return { idempotent: true, in_flight_not_withdrawn: inFlight, run: publicQaRun(db, fresh) };
+      if (fresh?.status === "completed") throw httpError("已完成的 QA 結果不改寫。要重跑請用重跑，不要取消完成事實。", 409);
+      throw httpError("QA 目前不能取消", 409);
+    }
+    appendAuditRow(db, {
+      actor,
+      action: "issue.qa.cancelled",
+      entityType: "development_qa_run",
+      entityId: String(run.id),
+      data: {
+        issue_id: Number(run.issue_id),
+        coding_task_id: Number(run.coding_task_id),
+        qa_run_id: Number(run.id),
+        prev_status: run.status,
+        in_flight_not_withdrawn: inFlight,
+      },
+      now,
+    });
+    return {
+      cancelled: true,
+      in_flight_not_withdrawn: inFlight,
+      run: publicQaRun(db, db.prepare("SELECT * FROM development_qa_run WHERE id=?").get(Number(run.id))),
+    };
   });
 }
 

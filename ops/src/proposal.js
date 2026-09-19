@@ -10,6 +10,8 @@ import { buildProposalPrompt, PROPOSAL_PROMPT_VERSION } from "./proposalPrompt.j
 import { parseAndValidateProposal, canonicalProposalContent, PROPOSAL_SCHEMA_VERSION } from "./proposalSchema.js";
 import { buildProposalPolicy, proposalPolicyFingerprint, effectiveProposalPolicyFingerprint, PROPOSAL_GENERATION_VERSION } from "./proposalPolicy.js";
 import { createEntityRow, transitionRow, findEntity, getEntity } from "./stateMachine.js";
+import { issueWriteDecision } from "./insightConsent.js";
+import { rejectSpoofedOwnerDirect } from "./instructionSource.js";
 
 export const PROPOSAL_MAX_RETRIES = 5;
 export const PROPOSAL_SCHEMA_MAX_RETRIES = 2;
@@ -115,22 +117,87 @@ export function computeProposalInput(db, issueId, { now = new Date(), env = proc
 
 // 建立一個 pending 生成 job（新的 proposal_version）。無自帶交易版本供交易內組合。
 export function enqueueProposalRow(db, { issueId, revisionInstruction = null, now = new Date() }) {
+  const gate = issueWriteDecision(db, issueId);
+  if (!gate.ok) {
+    const err = httpError(gate.reason === "stale_generation" ? "訂閱世代已換，晚到提案不入隊。" : "訂閱已退出，晚到提案不入隊。", 409);
+    err.code = gate.reason || "subscription_revoked";
+    throw err;
+  }
   const prev = db.prepare("SELECT MAX(proposal_version) AS m FROM issue_proposal WHERE issue_id=?").get(Number(issueId));
   const version = (Number(prev?.m) || 0) + 1;
   const ts = iso(now);
+  const generation = gate.unbound ? null : gate.generation;
   const res = db.prepare(
-    `INSERT INTO issue_proposal(issue_id, proposal_version, generation_version, revision_instruction, status, retry_count, max_retries, next_attempt_at, created_at)
-     VALUES (?, ?, ?, ?, 'pending', 0, ?, ?, ?)`,
-  ).run(Number(issueId), version, PROPOSAL_GENERATION_VERSION, revisionInstruction ? String(revisionInstruction).slice(0, REASON_MAX) : null, PROPOSAL_MAX_RETRIES, ts, ts);
-  return { id: Number(res.lastInsertRowid), version };
+    `INSERT INTO issue_proposal(issue_id, proposal_version, generation_version, revision_instruction, status, retry_count, max_retries, next_attempt_at, created_at, subscription_generation)
+     VALUES (?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?)`,
+  ).run(Number(issueId), version, PROPOSAL_GENERATION_VERSION, revisionInstruction ? String(revisionInstruction).slice(0, REASON_MAX) : null, PROPOSAL_MAX_RETRIES, ts, ts, generation);
+  return { id: Number(res.lastInsertRowid), version, subscription_generation: generation };
 }
 export function enqueueProposalGeneration(db, opts) {
   return withImmediateTx(db, () => enqueueProposalRow(db, opts));
 }
 
+const PROPOSAL_WRITABLE = new Set(["pending", "failed_retry", "processing"]);
+const PROPOSAL_CANCELABLE = PROPOSAL_WRITABLE;
+
+function abandonProposalRow(db, row, reason) {
+  db.prepare("UPDATE issue_proposal SET status='failed', error_code=? WHERE id=? AND status IN ('pending','failed_retry','processing')")
+    .run(String(reason || "subscription_revoked").slice(0, 64), row.id);
+}
+
+// Owner 取消尚未完成的提案生成（保留歷史／CURRENT 不動；不宣稱撤回已在跑的外部呼叫）。
+export function cancelProposal(db, proposalId, { actor = "owner", reason = null, now = new Date() } = {}) {
+  return withImmediateTx(db, () => {
+    const row = db.prepare("SELECT * FROM issue_proposal WHERE id=?").get(Number(proposalId));
+    if (!row) throw httpError("proposal not found", 404);
+    if (row.status === "cancelled") {
+      return { idempotent: true, in_flight_not_withdrawn: false, proposal: publicProposal(row) };
+    }
+    if (row.status === "completed") {
+      throw httpError("已完成的提案不改寫。要改內容請開新版本，不要取消完成事實。", 409);
+    }
+    if (!PROPOSAL_CANCELABLE.has(row.status)) {
+      throw httpError(`提案目前不能取消（status=${row.status}）`, 409);
+    }
+    const inFlight = row.status === "processing";
+    const code = reason ? `owner_cancelled:${String(reason).slice(0, 120)}` : "owner_cancelled";
+    const upd = db.prepare("UPDATE issue_proposal SET status='cancelled', error_code=? WHERE id=? AND status IN ('pending','failed_retry','processing')")
+      .run(code, Number(row.id));
+    if (upd.changes !== 1) {
+      const fresh = db.prepare("SELECT * FROM issue_proposal WHERE id=?").get(Number(row.id));
+      if (fresh?.status === "cancelled") return { idempotent: true, in_flight_not_withdrawn: inFlight, proposal: publicProposal(fresh) };
+      if (fresh?.status === "completed") throw httpError("已完成的提案不改寫。要改內容請開新版本，不要取消完成事實。", 409);
+      throw httpError("提案目前不能取消", 409);
+    }
+    appendAuditRow(db, {
+      actor,
+      action: "issue.proposal.cancelled",
+      entityType: "issue_proposal",
+      entityId: String(row.id),
+      data: {
+        issue_id: Number(row.issue_id),
+        proposal_id: Number(row.id),
+        prev_status: row.status,
+        in_flight_not_withdrawn: inFlight,
+      },
+      now,
+    });
+    return {
+      cancelled: true,
+      in_flight_not_withdrawn: inFlight,
+      proposal: publicProposal(db.prepare("SELECT * FROM issue_proposal WHERE id=?").get(Number(row.id))),
+    };
+  });
+}
+
 export function claimProposalBatch(db, { limit = 5, now = new Date(), staleMs = PROPOSAL_CLAIM_STALE_MS } = {}) {
   const nowIso = iso(now);
   const staleBefore = iso(new Date((now instanceof Date ? now.getTime() : now) - staleMs));
+  const inflight = db.prepare("SELECT * FROM issue_proposal WHERE status IN ('pending','failed_retry','processing')").all();
+  for (const row of inflight) {
+    const decision = issueWriteDecision(db, row.issue_id, { expectedGeneration: row.subscription_generation });
+    if (!decision.ok) abandonProposalRow(db, row, decision.reason);
+  }
   const candidates = db.prepare(
     `SELECT * FROM issue_proposal
      WHERE (status IN ('pending','failed_retry') AND next_attempt_at <= ?)
@@ -139,6 +206,11 @@ export function claimProposalBatch(db, { limit = 5, now = new Date(), staleMs = 
   ).all(nowIso, staleBefore, Math.max(1, Math.min(Number(limit) || 5, 50)));
   const claimed = [];
   for (const row of candidates) {
+    const decision = issueWriteDecision(db, row.issue_id, { expectedGeneration: row.subscription_generation });
+    if (!decision.ok) {
+      abandonProposalRow(db, row, decision.reason);
+      continue;
+    }
     let res;
     if (row.status === "processing") {
       res = db.prepare("UPDATE issue_proposal SET claimed_at=? WHERE id=? AND status='processing' AND (claimed_at IS NULL OR claimed_at <= ?)").run(nowIso, row.id, staleBefore);
@@ -151,23 +223,46 @@ export function claimProposalBatch(db, { limit = 5, now = new Date(), staleMs = 
 }
 
 function deferRow(db, row, { errorCode, now = new Date(), random = Math.random }) {
+  const latest = db.prepare("SELECT status FROM issue_proposal WHERE id=?").get(row.id);
+  if (!latest || !PROPOSAL_WRITABLE.has(latest.status)) {
+    return { status: latest?.status || "cancelled", skipped: true, errorCode };
+  }
   const nowMs = now instanceof Date ? now.getTime() : now;
   const next = iso(new Date(nowMs + proposalBackoffMs(1, { random })));
-  db.prepare("UPDATE issue_proposal SET status='failed_retry', next_attempt_at=?, error_code=? WHERE id=?").run(next, String(errorCode).slice(0, 64), row.id);
+  const upd = db.prepare("UPDATE issue_proposal SET status='failed_retry', next_attempt_at=?, error_code=? WHERE id=? AND status IN ('pending','failed_retry','processing')")
+    .run(next, String(errorCode).slice(0, 64), row.id);
+  if (upd.changes !== 1) {
+    const fresh = db.prepare("SELECT status FROM issue_proposal WHERE id=?").get(row.id);
+    return { status: fresh?.status || "cancelled", skipped: true, errorCode };
+  }
   return { status: "deferred", errorCode };
 }
 
 export function failProposal(db, row, { errorCode, transient = true, now = new Date(), random = Math.random }) {
-  const retries = Number(row.retry_count) + 1;
+  const latest = db.prepare("SELECT status, retry_count FROM issue_proposal WHERE id=?").get(row.id);
+  if (!latest || !PROPOSAL_WRITABLE.has(latest.status)) {
+    return { status: latest?.status || "cancelled", skipped: true, retry_count: Number(latest?.retry_count ?? row.retry_count) };
+  }
+  const retries = Number(latest.retry_count) + 1;
   const cap = transient ? Number(row.max_retries || PROPOSAL_MAX_RETRIES) : PROPOSAL_SCHEMA_MAX_RETRIES;
   const code = String(errorCode || "error").slice(0, 64);
   if (retries >= cap) {
-    db.prepare("UPDATE issue_proposal SET status='failed', retry_count=?, error_code=? WHERE id=?").run(retries, code, row.id);
+    const upd = db.prepare("UPDATE issue_proposal SET status='failed', retry_count=?, error_code=? WHERE id=? AND status IN ('pending','failed_retry','processing')")
+      .run(retries, code, row.id);
+    if (upd.changes !== 1) {
+      const fresh = db.prepare("SELECT status, retry_count FROM issue_proposal WHERE id=?").get(row.id);
+      return { status: fresh?.status || "cancelled", skipped: true, retry_count: Number(fresh?.retry_count ?? retries) };
+    }
     return { status: "failed", retry_count: retries };
   }
   const nowMs = now instanceof Date ? now.getTime() : now;
   const next = iso(new Date(nowMs + proposalBackoffMs(retries, { random })));
-  db.prepare("UPDATE issue_proposal SET status='failed_retry', retry_count=?, next_attempt_at=?, error_code=? WHERE id=?").run(retries, next, code, row.id);
+  const upd = db.prepare("UPDATE issue_proposal SET status='failed_retry', retry_count=?, next_attempt_at=?, error_code=? WHERE id=? AND status IN ('pending','failed_retry','processing')")
+    .run(retries, next, code, row.id);
+  if (upd.changes !== 1) {
+    const fresh = db.prepare("SELECT status, retry_count FROM issue_proposal WHERE id=?").get(row.id);
+    return { status: fresh?.status || "cancelled", skipped: true, retry_count: Number(fresh?.retry_count ?? retries) };
+  }
   return { status: "failed_retry", retry_count: retries, next_attempt_at: next };
 }
 
@@ -205,6 +300,11 @@ function ensureWaitingApproval(db, issueId, { actor = "system", now = new Date()
 // 執行一個已 claim 的提案生成：provider 呼叫在交易外；完成 + promote current + lifecycle 轉移在單一交易。
 export async function executeProposalGeneration(db, row, { provider, now = () => new Date(), timeoutMs = 30000, env = process.env, random = Math.random } = {}) {
   const nowDate = now();
+  const gate = issueWriteDecision(db, row.issue_id, { expectedGeneration: row.subscription_generation });
+  if (!gate.ok) {
+    withImmediateTx(db, () => abandonProposalRow(db, row, gate.reason));
+    return "failed";
+  }
   const input = computeProposalInput(db, row.issue_id, { now: nowDate, env, provider });
   if (!input.ok) {
     if (input.defer) {
@@ -243,12 +343,19 @@ export async function executeProposalGeneration(db, row, { provider, now = () =>
   const proposalHash = computeProposalHash(content, { issueId: row.issue_id, proposalVersion: row.proposal_version });
   const ts = iso(nowDate);
   return withImmediateTx(db, () => {
-    db.prepare(
+    const fresh = db.prepare("SELECT status FROM issue_proposal WHERE id=?").get(Number(row.id));
+    if (!fresh || fresh.status === "cancelled") return "cancelled";
+    const again = issueWriteDecision(db, row.issue_id, { expectedGeneration: row.subscription_generation });
+    if (!again.ok) {
+      abandonProposalRow(db, row, again.reason);
+      return "failed";
+    }
+    const upd = db.prepare(
       `UPDATE issue_proposal SET status='completed', input_fingerprint=?, policy_fingerprint=?, proposal_hash=?,
         source_evaluation_run_id=?, source_impact_assessment_id=?, final_recommendation=?,
         title=?, problem_statement=?, proposed_change=?, intended_outcome=?, scope=?, non_goals=?, acceptance_criteria=?,
         known_risks=?, security_considerations=?, compliance_considerations=?, operational_considerations=?, rollback_considerations=?,
-        evidence_summary=?, provider=?, model=?, error_code=NULL, generated_at=? WHERE id=?`,
+        evidence_summary=?, provider=?, model=?, error_code=NULL, generated_at=? WHERE id=? AND status IN ('pending','failed_retry','processing')`,
     ).run(
       input.fingerprint, input.policyFingerprint, proposalHash,
       input.sourceEvaluationRunId, input.sourceImpactAssessmentId, input.finalRecommendation,
@@ -258,6 +365,7 @@ export async function executeProposalGeneration(db, row, { provider, now = () =>
       content.operational_considerations, content.rollback_considerations, content.evidence_summary,
       provider.name, provider.model || null, ts, row.id,
     );
+    if (upd.changes !== 1) return "cancelled";
     const prev = db.prepare("SELECT proposal_id FROM issue_proposal_current WHERE issue_id=?").get(Number(row.issue_id));
     db.prepare(
       `INSERT INTO issue_proposal_current(issue_id, proposal_id, proposal_version, proposal_hash, input_fingerprint, updated_at)
@@ -375,6 +483,7 @@ export function publicDecision(row) {
     id: Number(row.id), issue_id: Number(row.issue_id), proposal_id: Number(row.proposal_id),
     proposal_version: Number(row.proposal_version), proposal_hash: row.proposal_hash,
     action: row.action, actor: row.actor, reason: row.reason, created_at: row.created_at,
+    subscription_generation: row.subscription_generation == null ? null : Number(row.subscription_generation),
   };
 }
 
@@ -411,8 +520,33 @@ export function getCurrentIssueProposal(db, issueId, opts = {}) {
   return { ...publicProposal(row), stale: reasons.length > 0, fresh: reasons.length === 0, stale_reasons: reasons, current_decision: currentOwnerDecision(db, issueId) };
 }
 
+export function describeGate1Offer(db, issueId) {
+  const id = Number(issueId);
+  if (!Number.isInteger(id) || id < 1) return { offered: false };
+  const issue = db.prepare("SELECT * FROM issue_candidate WHERE id=?").get(id);
+  if (!issue || issue.status !== "open") return { offered: false };
+  const entity = findEntity(db, issueEntityId(id));
+  if (!entity || entity.state !== "WAITING_OWNER_APPROVAL") return { offered: false };
+  const cur = db.prepare("SELECT * FROM issue_proposal_current WHERE issue_id=?").get(id);
+  if (!cur) return { offered: false };
+  const proposal = db.prepare("SELECT * FROM issue_proposal WHERE id=?").get(Number(cur.proposal_id));
+  if (!proposal || proposal.status !== "completed") return { offered: false };
+  const auth = db.prepare("SELECT id FROM development_authorization WHERE issue_id=? AND status='active'").get(id);
+  if (auth) return { offered: false };
+  return {
+    offered: true,
+    issue_id: id,
+    proposal_id: Number(cur.proposal_id),
+    proposal_version: Number(cur.proposal_version),
+    proposal_hash: String(cur.proposal_hash),
+    decision_label: "pending_review",
+  };
+}
+
 // ── Owner Approval Gate #1（TOCTOU-safe，單一交易） ──
-export function submitOwnerDecision(db, issueId, { action, proposalId, proposalVersion, proposalHash, actor = "owner", reason = null, now = new Date(), env = process.env, provider } = {}) {
+export function submitOwnerDecision(db, issueId, opts = {}) {
+  rejectSpoofedOwnerDirect(opts);
+  const { action, proposalId, proposalVersion, proposalHash, actor = "owner", reason = null, now = new Date(), env = process.env, provider } = opts;
   const act = String(action || "").toUpperCase();
   if (!OWNER_ACTIONS.includes(act)) throw httpError(`invalid action: ${action}`, 400);
   const ts = iso(now);
@@ -478,10 +612,12 @@ export function submitOwnerDecision(db, issueId, { action, proposalId, proposalV
 }
 
 function recordDecision(db, { issueId, cur, action, actor, reason, ts }) {
+  const gate = issueWriteDecision(db, issueId);
+  const generation = gate.unbound ? null : Number(gate.generation ?? gate.current_generation ?? 1);
   db.prepare(
-    `INSERT INTO proposal_owner_decision(issue_id, proposal_id, proposal_version, proposal_hash, action, actor, reason, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(Number(issueId), Number(cur.proposal_id), Number(cur.proposal_version), String(cur.proposal_hash), action, actor, reason ? String(reason).slice(0, REASON_MAX) : null, ts);
+    `INSERT INTO proposal_owner_decision(issue_id, proposal_id, proposal_version, proposal_hash, action, actor, reason, created_at, subscription_generation)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(Number(issueId), Number(cur.proposal_id), Number(cur.proposal_version), String(cur.proposal_hash), action, actor, reason ? String(reason).slice(0, REASON_MAX) : null, ts, generation);
 }
 
 // Owner 手動請求生成／重生成提案（僅排入 job；不建授權、不寫程式）。

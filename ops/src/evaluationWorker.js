@@ -4,6 +4,7 @@ import {
   enqueueEvaluationRun, claimEvaluationBatch, executeEvaluationRun,
   evaluationStaleReasons, computeEvaluationInput,
 } from "./evaluation.js";
+import { issueWriteDecision } from "./insightConsent.js";
 
 // Phase 7 背景 worker：非同步、bounded concurrency、retry/backoff、stale 復原、provider timeout 保護。
 // - feedback ingestion / clustering / impact 不等待評估。
@@ -15,8 +16,8 @@ const DEFAULT_BATCH = 20;
 const DEFAULT_CLAIM = 5;
 const DEFAULT_CONCURRENCY = 2;
 
-export function evaluationWorkerConfigFromEnv(env = process.env) {
-  const provider = String(env.EVALUATION_PROVIDER || "").toLowerCase();
+export function evaluationWorkerConfigFromEnv(env = process.env, opts = {}) {
+  const provider = String(opts.kind || env.EVALUATION_PROVIDER || "").toLowerCase();
   return {
     enabled: provider === "local" || provider === "stub",
     intervalMs: Number(env.EVAL_INTERVAL_MS || 20000),
@@ -72,6 +73,7 @@ export async function runEvaluationOnce(db, { provider, config = {}, aggConfig =
     if (impactBlocked) continue; // 依賴 Phase 6 新鮮度：impact 未 fresh 就不評估
     const input = computeEvaluationInput(db, it.id, { now: now(), roles: roleList });
     if (!input.ok) continue;
+    if (!issueWriteDecision(db, it.id).ok) continue;
     enqueueEvaluationRun(db, { issueId: it.id, roles: roleList, deliberationEnabled, fingerprint: input.fingerprint, sourceImpactAssessmentId: input.sourceImpactAssessmentId, now: now() });
     summary.enqueued += 1;
   }

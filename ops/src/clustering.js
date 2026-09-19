@@ -2,6 +2,7 @@ import { withImmediateTx } from "./tx.js";
 import { appendAuditRow } from "./audit.js";
 import { httpError } from "./errors.js";
 import { cosineSimilarity, areComparable } from "./ai/embeddingProvider.js";
+import { workerWriteDecision } from "./insightConsent.js";
 
 export const CLUSTERING_VERSION = "cluster-v1";
 
@@ -67,6 +68,8 @@ export function bestMatch(db, embRow, { excludeFeedbackId = null } = {}) {
   ).all();
   let best = { issueId: null, score: 0 };
   for (const m of members) {
+    const matchGen = db.prepare("SELECT subscription_generation FROM feedback_analysis WHERE id=?").get(m.analysis_id)?.subscription_generation;
+    if (!workerWriteDecision(db, m.feedback_id, { expectedGeneration: matchGen }).ok) continue;
     if (excludeFeedbackId != null && Number(m.feedback_id) === Number(excludeFeedbackId)) continue;
     if (!areComparable(meta, embMeta(m))) continue; // 不比較不相容向量空間
     const s = cosineSimilarity(vec, parseVector(m));
@@ -133,6 +136,8 @@ export function issueRepresentative(db, issueId, meta, { excludeFeedbackId = nul
 
 // 自動分群（保守）：需同時滿足 nearest>=auto 且 coherence(對群 centroid)>=coherence 才連既有 issue；否則另建新 issue。
 export function autoClusterFeedback(db, { feedbackId, currentAnalysis, actor = "system", now = new Date(), config = clusteringConfig() }) {
+  const gate = workerWriteDecision(db, feedbackId, { expectedGeneration: currentAnalysis?.subscription_generation });
+  if (!gate.ok) return { action: "subscription_blocked", reason: gate.reason };
   return withImmediateTx(db, () => {
     const already = db.prepare("SELECT id FROM issue_feedback_link WHERE feedback_id=? AND active=1").get(Number(feedbackId));
     if (already) return { action: "already_linked" };
@@ -319,7 +324,24 @@ export function getIssueWithMembers(db, issueId) {
   if (!issue) return null;
   const members = db.prepare("SELECT feedback_id, analysis_id, similarity_score, coherence_score, embedding_id, embedding_model, clustering_version, added_by, membership_status, review_flag, review_reason, reason, created_at FROM issue_feedback_link WHERE issue_id=? AND active=1 ORDER BY id ASC").all(Number(issueId));
   const history = db.prepare("SELECT op, from_issue, to_issue, feedback_ids, actor, reason, created_at FROM cluster_operation WHERE issue_id=? OR from_issue=? OR to_issue=? ORDER BY id ASC").all(Number(issueId), Number(issueId), Number(issueId));
-  return { issue, members, history };
+  const entity = db.prepare("SELECT state FROM state_entity WHERE id=?").get(`issue:${Number(issueId)}`);
+  const followUps = db.prepare(
+    "SELECT id, title, issue_kind, product_id, created_at FROM issue_candidate WHERE parent_issue_id=? ORDER BY id DESC",
+  ).all(Number(issueId)).map((r) => ({
+    id: Number(r.id), title: r.title || "", issue_kind: r.issue_kind || "followup", product_id: r.product_id || null, created_at: r.created_at,
+  }));
+  return {
+    issue: {
+      ...issue,
+      parent_issue_id: issue.parent_issue_id ? Number(issue.parent_issue_id) : null,
+      issue_kind: issue.issue_kind || "normal",
+      product_id: issue.product_id || null,
+    },
+    lifecycle_state: entity?.state || "COLLECTING",
+    follow_ups: followUps,
+    members,
+    history,
+  };
 }
 
 export function feedbackIssue(db, feedbackId) {

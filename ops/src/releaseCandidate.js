@@ -6,20 +6,23 @@ import { validateCodingTaskForQa, getCurrentCodingQA } from "./qaRun.js";
 import { getCurrentCodingStaging } from "./stagingDeploy.js";
 import { releaseConfigFromEnv, buildReleasePolicy, releasePolicyFingerprint, effectiveReleasePolicyFingerprint } from "./release/releasePolicy.js";
 import { buildManifestContent, computeManifestHash, releaseInputFingerprint } from "./release/manifest.js";
+import { notifyConfig, buildWebhookPayload, deliverWebhook } from "./notify/webhook.js";
+import { rejectSpoofedOwnerDirect } from "./instructionSource.js";
+import { issueWriteDecision } from "./insightConsent.js";
 
 export const RELEASE_OWNER_ACTIONS = ["APPROVE_RELEASE", "REQUEST_CHANGES", "CANCEL_RELEASE"];
 function iso(now) { return (now instanceof Date ? now : new Date(now || Date.now())).toISOString(); }
 function parse(v) { try { return v ? JSON.parse(v) : null; } catch { return null; } }
 
 // 只有「確切、fresh 的 QA PASS + Staging PASS + 對應同一 QA run」的鏈可組 RC。source base drift 另行標記（不擋建立，但擋核准）。
-export function validateReleaseChain(db, codingTaskId, { repo = null, env = process.env } = {}) {
+export function validateReleaseChain(db, codingTaskId, { repo = null, env = process.env, now = new Date() } = {}) {
   const cfg = releaseConfigFromEnv(env);
   const { task, auth } = validateCodingTaskForQa(db, codingTaskId); // 涵蓋：coding task 合格、未取消、授權 active、proposal 相符
   const qa = getCurrentCodingQA(db, codingTaskId, { env });
   if (!qa) throw httpError("no current QA", 409);
   if (!qa.fresh) throw httpError(`QA stale (${(qa.stale_reasons || []).join(",")})`, 409);
   if (qa.final_result !== "PASS") throw httpError(`QA result ${qa.final_result} != PASS`, 409);
-  const staging = getCurrentCodingStaging(db, codingTaskId, { env });
+  const staging = getCurrentCodingStaging(db, codingTaskId, { env, now });
   if (!staging) throw httpError("no current staging", 409);
   if (!staging.fresh) throw httpError(`staging stale (${(staging.stale_reasons || []).join(",")})`, 409);
   if (staging.validation_result !== "PASS") throw httpError(`staging result ${staging.validation_result} != PASS`, 409);
@@ -37,7 +40,14 @@ export function createReleaseCandidate(db, { codingTaskId, repo, env = process.e
   const policy = buildReleasePolicy(cfg);
   const policyFp = releasePolicyFingerprint(policy);
   const ts = iso(now);
-  const { task, auth, qa, staging, currentMaster, drift, artifactDigest } = validateReleaseChain(db, codingTaskId, { repo, env });
+  const { task, auth, qa, staging, currentMaster, drift, artifactDigest } = validateReleaseChain(db, codingTaskId, { repo, env, now });
+  const gate = issueWriteDecision(db, task.issue_id, { expectedGeneration: task.subscription_generation });
+  if (!gate.ok) {
+    const err = httpError(gate.reason === "stale_generation" ? "訂閱世代已換，晚到發行候選不組裝。" : "訂閱已退出，晚到發行候選不組裝。", 409);
+    err.code = gate.reason || "subscription_revoked";
+    throw err;
+  }
+  const generation = gate.unbound ? null : (task.subscription_generation ?? gate.generation);
   const inputFp = releaseInputFingerprint({
     codingTaskId: Number(task.id), authorizationId: Number(auth.id), proposalId: Number(task.proposal_id), proposalVersion: Number(task.proposal_version), proposalHash: String(task.proposal_hash),
     baseSha: task.base_sha, headSha: task.head_sha, currentMaster, codingResultHash: task.result_hash, diffHash: qa.diff_hash,
@@ -63,23 +73,23 @@ export function createReleaseCandidate(db, { codingTaskId, repo, env = process.e
         qa_run_id, staging_deployment_id, manifest_version, release_manifest_version, release_policy_version, base_sha, head_sha, current_master_sha,
         source_tree_hash, coding_result_hash, diff_hash, artifact_id, artifact_digest, qa_input_fingerprint, qa_policy_fingerprint,
         staging_input_fingerprint, staging_policy_fingerprint, staging_config_fingerprint, release_policy_fingerprint, release_input_fingerprint,
-        manifest_hash, manifest_content, source_base_drift, status, generated_at, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'completed', ?, ?)`,
+        manifest_hash, manifest_content, source_base_drift, status, generated_at, created_at, subscription_generation)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'completed', ?, ?, ?)`,
     ).run(
       Number(task.issue_id), Number(task.id), Number(auth.id), Number(task.proposal_id), Number(task.proposal_version), String(task.proposal_hash),
       Number(qa.id), Number(staging.id), version, cfg.manifestVersion, cfg.policyVersion, task.base_sha, task.head_sha, currentMaster,
       staging.source_tree_hash || null, task.result_hash, qa.diff_hash, staging.artifact_id || null, artifactDigest, qa.input_fingerprint, qa.qa_policy_fingerprint,
       staging.input_fingerprint, staging.staging_policy_fingerprint, staging.config_fingerprint, policyFp, inputFp,
-      manifestHash, JSON.stringify(content), drift ? 1 : 0, ts, ts,
+      manifestHash, JSON.stringify(content), drift ? 1 : 0, ts, ts, generation,
     );
     const id = Number(res.lastInsertRowid);
     db.prepare(`INSERT INTO development_release_current(coding_task_id, release_manifest_id, manifest_version, manifest_hash, updated_at)
                 VALUES (?,?,?,?,?) ON CONFLICT(coding_task_id) DO UPDATE SET release_manifest_id=excluded.release_manifest_id, manifest_version=excluded.manifest_version, manifest_hash=excluded.manifest_hash, updated_at=excluded.updated_at`)
       .run(Number(task.id), id, version, manifestHash, ts);
     // 通知 outbox（idempotent；未設 adapter → pending，不假造送達）。
-    db.prepare(`INSERT OR IGNORE INTO release_notification(issue_id, coding_task_id, release_manifest_id, manifest_version, channel, status, payload, created_at, updated_at)
-                VALUES (?,?,?,?, 'internal', 'pending', ?, ?, ?)`)
-      .run(Number(task.issue_id), Number(task.id), id, version, JSON.stringify({ title: snapshot.title || "", manifest_version: version, head_sha: task.head_sha, artifact_digest: artifactDigest, qa_result: qa.final_result, staging_result: staging.validation_result, review_ref: `/ops/api/coding-tasks/${task.id}/release` }), ts, ts);
+    db.prepare(`INSERT OR IGNORE INTO release_notification(issue_id, coding_task_id, release_manifest_id, manifest_version, channel, status, payload, created_at, updated_at, subscription_generation)
+                VALUES (?,?,?,?, 'internal', 'pending', ?, ?, ?, ?)`)
+      .run(Number(task.issue_id), Number(task.id), id, version, JSON.stringify({ title: snapshot.title || "", manifest_version: version, head_sha: task.head_sha, artifact_digest: artifactDigest, qa_result: qa.final_result, staging_result: staging.validation_result, review_ref: `/ops/api/coding-tasks/${task.id}/release` }), ts, ts, generation);
     appendAuditRow(db, { actor: "system", action: "issue.release_candidate.created", entityType: "development_release_candidate", entityId: String(id), data: { issue_id: Number(task.issue_id), coding_task_id: Number(task.id), manifest_id: id, manifest_version: version, manifest_hash: manifestHash, head_sha: task.head_sha, artifact_digest: artifactDigest, qa_run_id: Number(qa.id), staging_deployment_id: Number(staging.id), source_base_drift: drift }, now });
     appendAuditRow(db, { actor: "system", action: "issue.release_candidate.current_changed", entityType: "development_release_current", entityId: String(task.id), data: { issue_id: Number(task.issue_id), coding_task_id: Number(task.id), manifest_id: id, manifest_version: version } });
     appendAuditRow(db, { actor: "system", action: "issue.release.notification_queued", entityType: "development_release_candidate", entityId: String(id), data: { issue_id: Number(task.issue_id), coding_task_id: Number(task.id), manifest_id: id, manifest_version: version } });
@@ -99,6 +109,7 @@ export function publicRC(db, row, { withManifest = false } = {}) {
     artifact_id: row.artifact_id, artifact_digest: row.artifact_digest, release_policy_fingerprint: row.release_policy_fingerprint,
     release_input_fingerprint: row.release_input_fingerprint, manifest_hash: row.manifest_hash,
     source_base_drift: !!row.source_base_drift, status: row.status, generated_at: row.generated_at, created_at: row.created_at,
+    subscription_generation: row.subscription_generation == null ? null : Number(row.subscription_generation),
   };
   if (withManifest) out.manifest = parse(row.manifest_content);
   return out;
@@ -116,7 +127,7 @@ export function publicDecision(row) { return row ? { id: Number(row.id), release
 export function publicAuthorization(row) { return row ? { id: Number(row.id), release_manifest_id: Number(row.release_manifest_id), release_manifest_version: Number(row.release_manifest_version), manifest_hash: row.manifest_hash, head_sha: row.head_sha, artifact_digest: row.artifact_digest, approved_by: row.approved_by, approved_at: row.approved_at, status: row.status, authorization_hash: row.authorization_hash } : null; }
 
 // canonical 當前 RC + 新鮮度（Phase 14/15 不需以時間猜測）。
-export function getCurrentReleaseCandidate(db, codingTaskId, { repo = null, env = process.env } = {}) {
+export function getCurrentReleaseCandidate(db, codingTaskId, { repo = null, env = process.env, now = new Date() } = {}) {
   const cur = db.prepare("SELECT * FROM development_release_current WHERE coding_task_id=?").get(Number(codingTaskId));
   if (!cur) return null;
   const rc = db.prepare("SELECT * FROM development_release_candidate WHERE id=?").get(Number(cur.release_manifest_id));
@@ -136,7 +147,7 @@ export function getCurrentReleaseCandidate(db, codingTaskId, { repo = null, env 
   if (!qa || !qa.fresh || qa.final_result !== "PASS") reasons.push("qa_not_fresh_pass");
   else if (Number(qa.id) !== Number(rc.qa_run_id)) reasons.push("qa_run_changed");
   else if (String(qa.diff_hash) !== String(rc.diff_hash)) reasons.push("diff_hash_changed");
-  const staging = getCurrentCodingStaging(db, codingTaskId, { env });
+  const staging = getCurrentCodingStaging(db, codingTaskId, { env, now });
   if (!staging || !staging.fresh || staging.validation_result !== "PASS") reasons.push("staging_not_fresh_pass");
   else {
     if (Number(staging.id) !== Number(rc.staging_deployment_id)) reasons.push("staging_changed");
@@ -151,13 +162,15 @@ export function getCurrentReleaseCandidate(db, codingTaskId, { repo = null, env 
   } else if (cfg.sourceBaseDriftPolicy === "fail_closed") {
     reasons.push("source_base_unverified");
   }
+  const gate = issueWriteDecision(db, rc.issue_id, { expectedGeneration: rc.subscription_generation });
+  if (!gate.ok) reasons.push(gate.reason || "subscription_revoked");
   return { ...publicRC(db, rc, { withManifest: true }), fresh: reasons.length === 0, stale: reasons.length > 0, stale_reasons: reasons, current_decision: currentReleaseDecision(db, codingTaskId) };
 }
 
-export function getReleaseCandidateView(db, codingTaskId, { repo = null, env = process.env } = {}) {
+export function getReleaseCandidateView(db, codingTaskId, { repo = null, env = process.env, now = new Date() } = {}) {
   const task = db.prepare("SELECT * FROM development_coding_task WHERE id=?").get(Number(codingTaskId));
   if (!task) throw httpError("coding task not found", 404);
-  const current = getCurrentReleaseCandidate(db, codingTaskId, { repo, env });
+  const current = getCurrentReleaseCandidate(db, codingTaskId, { repo, env, now });
   const history = db.prepare("SELECT * FROM development_release_candidate WHERE coding_task_id=? ORDER BY id DESC LIMIT 50").all(Number(codingTaskId)).map((r) => publicRC(db, r));
   const decisions = db.prepare("SELECT * FROM release_owner_decision WHERE coding_task_id=? ORDER BY id DESC LIMIT 100").all(Number(codingTaskId)).map(publicDecision);
   return { coding_task_id: Number(codingTaskId), issue_id: Number(task.issue_id), current, history, decisions };
@@ -167,8 +180,35 @@ export function getReleaseManifest(db, manifestId) {
   return row ? publicRC(db, row, { withManifest: true }) : null;
 }
 
+export function describeGate2Offer(db, codingTaskId) {
+  const taskId = Number(codingTaskId);
+  if (!Number.isInteger(taskId) || taskId < 1) return { offered: false };
+  const cur = db.prepare("SELECT * FROM development_release_current WHERE coding_task_id=?").get(taskId);
+  if (!cur) return { offered: false };
+  const rc = db.prepare("SELECT * FROM development_release_candidate WHERE id=?").get(Number(cur.release_manifest_id));
+  if (!rc || rc.status !== "completed") return { offered: false };
+  const task = db.prepare("SELECT * FROM development_coding_task WHERE id=?").get(taskId);
+  if (!task || task.status === "cancelled") return { offered: false };
+  const decision = currentReleaseDecision(db, taskId);
+  if (decision.latest_decision || decision.active_authorization) return { offered: false };
+  return {
+    offered: true,
+    release_candidate_id: Number(rc.id),
+    coding_task_id: taskId,
+    issue_id: Number(rc.issue_id),
+    manifest_id: Number(rc.id),
+    manifest_version: Number(rc.manifest_version),
+    manifest_hash: rc.manifest_hash,
+    artifact_digest: rc.artifact_digest,
+    head_sha: rc.head_sha,
+    decision_label: decision.label,
+  };
+}
+
 // ── Owner Gate #2 ──
-export function submitOwnerReleaseDecision(db, { codingTaskId, action, manifestId, manifestVersion, manifestHash, artifactDigest, headSha, actor = "owner", reason = null, repo = null, env = process.env, now = new Date() }) {
+export function submitOwnerReleaseDecision(db, opts) {
+  rejectSpoofedOwnerDirect(opts);
+  const { codingTaskId, action, manifestId, manifestVersion, manifestHash, artifactDigest, headSha, actor = "owner", reason = null, repo = null, env = process.env, now = new Date() } = opts || {};
   const act = String(action || "").toUpperCase();
   if (!RELEASE_OWNER_ACTIONS.includes(act)) throw httpError(`invalid action: ${action}`, 400);
   const ts = iso(now);
@@ -189,7 +229,7 @@ export function submitOwnerReleaseDecision(db, { codingTaskId, action, manifestI
       const existing = db.prepare("SELECT * FROM production_release_authorization WHERE release_manifest_id=? AND manifest_hash=? AND status='active'").get(Number(rc.id), String(rc.manifest_hash));
       if (existing) return { idempotent: true, authorization: publicAuthorization(existing) };
       // 交易內再驗新鮮度（QA/Staging fresh PASS、無 drift、master 有效）。
-      const fresh = getCurrentReleaseCandidate(db, codingTaskId, { repo, env });
+      const fresh = getCurrentReleaseCandidate(db, codingTaskId, { repo, env, now });
       if (!fresh || !fresh.fresh) throw httpError(`cannot approve stale release candidate: ${(fresh?.stale_reasons || ["unknown"]).join(",")}`, 409);
       const authHash = createHash("sha256").update(JSON.stringify({ manifest_id: Number(rc.id), manifest_version: Number(rc.manifest_version), manifest_hash: rc.manifest_hash, head_sha: rc.head_sha, artifact_digest: rc.artifact_digest, coding_task_id: Number(codingTaskId) })).digest("hex");
       recordDecision(db, { rc, action: act, actor, reason, ts });
@@ -207,6 +247,8 @@ export function submitOwnerReleaseDecision(db, { codingTaskId, action, manifestI
 
     recordDecision(db, { rc, action: act, actor, reason, ts });
     if (act === "REQUEST_CHANGES") {
+      const note = reason ? String(reason).trim() : "";
+      if (!note) throw httpError("REQUEST_CHANGES requires a written reason", 400);
       appendAuditRow(db, { actor, action: "issue.release.changes_requested", entityType: "development_release_candidate", entityId: String(rc.id), data: { issue_id: Number(rc.issue_id), coding_task_id: Number(codingTaskId), manifest_id: Number(rc.id), manifest_version: Number(rc.manifest_version) }, now });
       return { changes_requested: true };
     }
@@ -224,17 +266,146 @@ function recordDecision(db, { rc, action, actor, reason, ts }) {
 }
 
 // ── 通知 outbox retry（idempotent；不改 Gate#2 狀態、不重建 RC；無 adapter → 不假造送達） ──
-export function retryReleaseNotification(db, notificationId, { actor = "owner", now = new Date() } = {}) {
+export async function retryReleaseNotification(db, notificationId, {
+  actor = "owner",
+  now = new Date(),
+  env = process.env,
+  sender = null,
+} = {}) {
+  const n = db.prepare("SELECT * FROM release_notification WHERE id=?").get(Number(notificationId));
+  if (!n) throw httpError("notification not found", 404);
+  if (n.status === "sent") return { idempotent: true, status: "sent" };
+  if (n.status === "failed") return { idempotent: true, status: "failed" };
+  if (n.status === "cancelled") return { skipped: true, status: "cancelled", reason: "cancelled" };
+
+  const notifyGate = issueWriteDecision(db, n.issue_id, { expectedGeneration: n.subscription_generation });
+  if (!notifyGate.ok) {
+    return withImmediateTx(db, () => {
+      const latest = db.prepare("SELECT * FROM release_notification WHERE id=?").get(Number(n.id));
+      if (latest?.status === "cancelled") return { skipped: true, status: "cancelled", reason: "cancelled" };
+      if (latest?.status === "sent") return { idempotent: true, status: "sent" };
+      if (latest?.status === "failed") return { idempotent: true, status: "failed" };
+      const upd = db.prepare("UPDATE release_notification SET status='failed', updated_at=? WHERE id=? AND status='pending'").run(iso(now), Number(n.id));
+      if (upd.changes !== 1) {
+        const fresh = db.prepare("SELECT * FROM release_notification WHERE id=?").get(Number(n.id));
+        if (fresh?.status === "cancelled") return { skipped: true, status: "cancelled", reason: "cancelled" };
+        if (fresh?.status === "sent") return { idempotent: true, status: "sent" };
+        if (fresh?.status === "failed") return { idempotent: true, status: "failed" };
+      }
+      appendAuditRow(db, { actor, action: "issue.release.notification_failed", entityType: "release_notification", entityId: String(n.id), data: { issue_id: Number(n.issue_id), coding_task_id: Number(n.coding_task_id), manifest_id: Number(n.release_manifest_id), reason: notifyGate.reason }, now });
+      return { failed: true, status: "failed", reason: notifyGate.reason };
+    });
+  }
+
+  const cfg = notifyConfig(env);
+  const deliver = sender || (cfg.configured
+    ? (payload) => deliverWebhook(cfg.url, payload, { timeoutMs: cfg.timeoutMs })
+    : null);
+
+  if (!deliver) {
+    return withImmediateTx(db, () => {
+      const latest = db.prepare("SELECT * FROM release_notification WHERE id=?").get(Number(n.id));
+      if (latest?.status === "cancelled") return { skipped: true, status: "cancelled", reason: "cancelled" };
+      db.prepare("UPDATE release_notification SET attempt_count=attempt_count+1, updated_at=? WHERE id=? AND status='pending'").run(iso(now), Number(n.id));
+      appendAuditRow(db, { actor, action: "issue.release.notification_failed", entityType: "release_notification", entityId: String(n.id), data: { issue_id: Number(n.issue_id), coding_task_id: Number(n.coding_task_id), manifest_id: Number(n.release_manifest_id), reason: "no_adapter_configured" }, now });
+      return { retried: true, status: latest?.status || "pending", reason: "no_adapter_configured" };
+    });
+  }
+
+  const parsed = parse(n.payload) || {};
+  const payload = buildWebhookPayload({
+    event: "ops.release.candidate",
+    title: parsed.title || `Release candidate #${n.manifest_version}`,
+    text: `議題 #${n.issue_id} 已可審核發布（coding task ${n.coding_task_id}）。`,
+    fields: [
+      { name: "issue", value: n.issue_id },
+      { name: "coding_task", value: n.coding_task_id },
+      { name: "manifest", value: n.manifest_version },
+    ],
+    channel: cfg.channel,
+  });
+  const result = await deliver(payload);
+  return withImmediateTx(db, () => {
+    const latest = db.prepare("SELECT * FROM release_notification WHERE id=?").get(Number(n.id));
+    if (!latest) throw httpError("notification not found", 404);
+    if (latest.status === "sent") return { idempotent: true, status: "sent" };
+    if (latest.status === "cancelled") {
+      return { skipped: true, status: "cancelled", in_flight_not_withdrawn: true, reason: "cancelled" };
+    }
+    db.prepare("UPDATE release_notification SET attempt_count=attempt_count+1, updated_at=? WHERE id=? AND status='pending'").run(iso(now), Number(n.id));
+    if (result.ok) {
+      const sent = db.prepare("UPDATE release_notification SET status='sent', updated_at=? WHERE id=? AND status='pending'").run(iso(now), Number(n.id));
+      if (sent.changes !== 1) {
+        const fresh = db.prepare("SELECT * FROM release_notification WHERE id=?").get(Number(n.id));
+        if (fresh?.status === "cancelled") return { skipped: true, status: "cancelled", in_flight_not_withdrawn: true, reason: "cancelled" };
+        if (fresh?.status === "sent") return { idempotent: true, status: "sent" };
+      }
+      appendAuditRow(db, { actor, action: "issue.release.notification_sent", entityType: "release_notification", entityId: String(n.id), data: { issue_id: Number(n.issue_id), coding_task_id: Number(n.coding_task_id), manifest_id: Number(n.release_manifest_id), channel: cfg.channel }, now });
+      return { retried: true, status: "sent" };
+    }
+    appendAuditRow(db, { actor, action: "issue.release.notification_failed", entityType: "release_notification", entityId: String(n.id), data: { issue_id: Number(n.issue_id), coding_task_id: Number(n.coding_task_id), manifest_id: Number(n.release_manifest_id), reason: result.reason || "send_failed" }, now });
+    return { retried: true, status: "pending", reason: result.reason || "send_failed" };
+  });
+}
+export function publicNotification(n) {
+  if (!n) return null;
+  return {
+    id: Number(n.id),
+    manifest_id: Number(n.release_manifest_id),
+    manifest_version: Number(n.manifest_version),
+    channel: n.channel,
+    status: n.status,
+    attempt_count: Number(n.attempt_count),
+    payload: parse(n.payload),
+  };
+}
+
+export function listReleaseNotifications(db, codingTaskId) {
+  return db.prepare("SELECT * FROM release_notification WHERE coding_task_id=? ORDER BY id DESC").all(Number(codingTaskId)).map(publicNotification);
+}
+
+// Owner 取消尚未外送的發布通知（不宣稱撤回已送出的 webhook）。
+export function cancelReleaseNotification(db, notificationId, { actor = "owner", reason = null, now = new Date() } = {}) {
   return withImmediateTx(db, () => {
     const n = db.prepare("SELECT * FROM release_notification WHERE id=?").get(Number(notificationId));
     if (!n) throw httpError("notification not found", 404);
-    if (n.status === "sent") return { idempotent: true, status: "sent" };
-    db.prepare("UPDATE release_notification SET attempt_count=attempt_count+1, updated_at=? WHERE id=?").run(iso(now), Number(n.id));
-    // 無真實 adapter → 維持 pending（誠實，不假造 delivered）。
-    appendAuditRow(db, { actor, action: "issue.release.notification_failed", entityType: "release_notification", entityId: String(n.id), data: { issue_id: Number(n.issue_id), coding_task_id: Number(n.coding_task_id), manifest_id: Number(n.release_manifest_id), reason: "no_adapter_configured" }, now });
-    return { retried: true, status: "pending", reason: "no_adapter_configured" };
+    if (n.status === "cancelled") {
+      return { idempotent: true, in_flight_not_withdrawn: false, notification: publicNotification(n) };
+    }
+    if (n.status === "sent") {
+      throw httpError("已送出的發布通知不宣稱撤回。Webhook 若已外送，紀錄仍保留。", 409);
+    }
+    if (n.status !== "pending") {
+      throw httpError(`發布通知目前不能取消（status=${n.status}）`, 409);
+    }
+    const ts = iso(now);
+    const upd = db.prepare("UPDATE release_notification SET status='cancelled', updated_at=? WHERE id=? AND status='pending'")
+      .run(ts, Number(n.id));
+    if (upd.changes !== 1) {
+      const fresh = db.prepare("SELECT * FROM release_notification WHERE id=?").get(Number(n.id));
+      if (fresh?.status === "cancelled") return { idempotent: true, in_flight_not_withdrawn: false, notification: publicNotification(fresh) };
+      if (fresh?.status === "sent") throw httpError("已送出的發布通知不宣稱撤回。Webhook 若已外送，紀錄仍保留。", 409);
+      throw httpError("發布通知目前不能取消", 409);
+    }
+    appendAuditRow(db, {
+      actor,
+      action: "issue.release.notification_cancelled",
+      entityType: "release_notification",
+      entityId: String(n.id),
+      data: {
+        issue_id: Number(n.issue_id),
+        coding_task_id: Number(n.coding_task_id),
+        manifest_id: Number(n.release_manifest_id),
+        prev_status: n.status,
+        reason: reason ? String(reason).slice(0, 120) : null,
+        in_flight_not_withdrawn: false,
+      },
+      now,
+    });
+    return {
+      cancelled: true,
+      in_flight_not_withdrawn: false,
+      notification: publicNotification(db.prepare("SELECT * FROM release_notification WHERE id=?").get(Number(n.id))),
+    };
   });
-}
-export function listReleaseNotifications(db, codingTaskId) {
-  return db.prepare("SELECT * FROM release_notification WHERE coding_task_id=? ORDER BY id DESC").all(Number(codingTaskId)).map((n) => ({ id: Number(n.id), manifest_id: Number(n.release_manifest_id), manifest_version: Number(n.manifest_version), channel: n.channel, status: n.status, attempt_count: Number(n.attempt_count), payload: parse(n.payload) }));
 }

@@ -76,6 +76,13 @@ import {
   publicBroadcastsSettings,
   getAdminMapsSettings,
   saveAdminMapsSettings,
+  getAdminProviderSettings,
+  saveAdminProviderSettings,
+  saveAdminSiteBudget,
+  testAdminProvider,
+  getAdminSimilaritySettings,
+  saveAdminPhashSettings,
+  reviewAdminSimilarity,
   settingsForGeoBackfill,
   listingCommutePatch,
   getMemberMailSettings,
@@ -137,6 +144,25 @@ import {
   listFeedbackItems,
   updateFeedbackItem,
   getFeedbackStats,
+  getOpsDeliveryControl,
+  setOpsDeliveryStop,
+  applyOpsSiteCommand,
+  getRemoteCsControl,
+  setRemoteCsStop,
+  compactOpsOutbox,
+  getCrmOverview,
+  getCrmContact,
+  createCrmContact,
+  updateCrmContact,
+  createCrmCase,
+  updateCrmCase,
+  addCrmNote,
+  addCrmTodo,
+  setCrmTodoDone,
+  setCrmModuleEnabled,
+  getCrmDeliveryControl,
+  setCrmDeliveryStop,
+  createCrmFromFeedback,
   feedbackMeta,
   listMineSelfListings,
   getSelfListing,
@@ -288,6 +314,7 @@ import { startWishOfferExpiryLoop } from "./wishOfferWorker.js";
 import { startRentalNotifyLoop } from "./rentalNotifyWorker.js";
 import { catalogDiff, isSystemCatalogTemplate, publicAdminCatalog } from "./rentalCatalog.js";
 import { isRentalCatalogV2Enabled, publicRentalMarketplaceFlags } from "./rentalMarketplaceFlags.js";
+import { startCrmDeliveryLoop } from "./crmDelivery.js";
 import { opsDeliveryDb } from "./db.js";
 import { refreshHousingData } from "./housingFetch.js";
 import {
@@ -375,7 +402,14 @@ function yieldEventLoop() {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({
+  limit: "1mb",
+  verify(req, _res, buf) {
+    if ((req.originalUrl || req.url || "").startsWith("/api/ops/commands/apply")) {
+      req.rawBody = buf.toString("utf8");
+    }
+  },
+}));
 
 app.use((req, res, next) => {
   if (req.path === "/" || req.path.endsWith(".html")) {
@@ -1257,6 +1291,11 @@ app.get("/logout", (req, res) => {
   res.redirect(303, "/login.html?logout=1");
 });
 
+app.post("/api/ops/commands/apply", (req, res) => {
+  const result = applyOpsSiteCommand(req.headers, req.rawBody || JSON.stringify(req.body || {}));
+  res.status(result.httpStatus).json(result.body);
+});
+
 app.use(requireAuth);
 
 function requireAdminApi(req, res, next) {
@@ -1984,12 +2023,125 @@ app.get("/api/admin/feedback", requireAdminApi, (req, res) => {
     ...feedbackMeta(),
     stats: getFeedbackStats(),
     items: listFeedbackItems({ status: req.query?.status, kind: req.query?.kind }),
+    ops_delivery: getOpsDeliveryControl(),
   });
 });
 
 app.patch("/api/admin/feedback/:id", requireAdminApi, (req, res) => {
   try {
     res.json(updateFeedbackItem(req.params.id, req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/admin/ops-delivery", requireAdminApi, (_req, res) => {
+  res.json(getOpsDeliveryControl());
+});
+
+app.put("/api/admin/ops-delivery", requireAdminApi, (req, res) => {
+  const stop = req.body?.stop === true || req.body?.stop === 1 || req.body?.stop === "1";
+  res.json(setOpsDeliveryStop(stop));
+});
+
+app.get("/api/admin/remote-cs", requireAdminApi, (_req, res) => {
+  res.json(getRemoteCsControl());
+});
+
+app.put("/api/admin/remote-cs", requireAdminApi, (req, res) => {
+  const stop = req.body?.stop === true || req.body?.stop === 1 || req.body?.stop === "1";
+  res.json(setRemoteCsStop(stop));
+});
+
+app.post("/api/admin/ops-delivery/compact-outbox", requireAdminApi, (req, res) => {
+  const olderThanMs = Number(req.body?.older_than_ms);
+  res.json({ ok: true, ...compactOpsOutbox({ olderThanMs: Number.isFinite(olderThanMs) && olderThanMs >= 0 ? olderThanMs : undefined }) });
+});
+
+app.get("/api/admin/crm", requireAdminApi, (req, res) => {
+  res.json({
+    ...getCrmOverview({ q: req.query?.q }),
+    sync: getCrmDeliveryControl(),
+  });
+});
+
+app.put("/api/admin/crm/module", requireAdminApi, (req, res) => {
+  const enabled = !(req.body?.enabled === false || req.body?.enabled === 0 || req.body?.enabled === "0");
+  res.json({ module: setCrmModuleEnabled(enabled), sync: getCrmDeliveryControl() });
+});
+
+app.put("/api/admin/crm/sync", requireAdminApi, (req, res) => {
+  const stop = req.body?.stop === true || req.body?.stop === 1 || req.body?.stop === "1";
+  res.json(setCrmDeliveryStop(stop));
+});
+
+app.get("/api/admin/crm/contacts/:id", requireAdminApi, (req, res) => {
+  try {
+    res.json(getCrmContact(req.params.id));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/admin/crm/contacts", requireAdminApi, (req, res) => {
+  try {
+    res.status(201).json(createCrmContact(req.body || {}, { actorUserId: actorUserId(req) }));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.patch("/api/admin/crm/contacts/:id", requireAdminApi, (req, res) => {
+  try {
+    res.json(updateCrmContact(req.params.id, req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/admin/crm/contacts/:id/cases", requireAdminApi, (req, res) => {
+  try {
+    res.status(201).json(createCrmCase(req.params.id, req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.patch("/api/admin/crm/cases/:id", requireAdminApi, (req, res) => {
+  try {
+    res.json(updateCrmCase(req.params.id, req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/admin/crm/contacts/:id/notes", requireAdminApi, (req, res) => {
+  try {
+    res.status(201).json(addCrmNote(req.params.id, req.body || {}, { actorUserId: actorUserId(req) }));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/admin/crm/contacts/:id/todos", requireAdminApi, (req, res) => {
+  try {
+    res.status(201).json(addCrmTodo(req.params.id, req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/admin/crm/todos/:id/done", requireAdminApi, (req, res) => {
+  try {
+    res.json(setCrmTodoDone(req.params.id, req.body?.done !== false));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/admin/crm/from-feedback/:id", requireAdminApi, (req, res) => {
+  try {
+    res.status(201).json(createCrmFromFeedback(req.params.id));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -2099,6 +2251,62 @@ app.post("/api/admin/documents/:id/new-version", requireAdminApi, (req, res) => 
   try {
     const session = readSession(req);
     res.status(201).json(newContentVersion(req.params.id, { actorId: session?.userId || 0 }));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/admin/providers", requireAdminApi, (_req, res) => {
+  res.json(getAdminProviderSettings());
+});
+
+app.put("/api/admin/providers/site-budget", requireAdminApi, (req, res) => {
+  try {
+    res.json({ ok: true, ...saveAdminSiteBudget(req.body || {}), overview: getAdminProviderSettings() });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.put("/api/admin/providers", requireAdminApi, (req, res) => {
+  try {
+    res.json({ ok: true, item: saveAdminProviderSettings(req.body || {}), overview: getAdminProviderSettings() });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/admin/providers/test", requireAdminApi, async (req, res) => {
+  try {
+    res.json(await testAdminProvider(req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/admin/providers/usage", requireAdminApi, (_req, res) => {
+  res.json(getAdminProviderSettings());
+});
+
+app.get("/api/admin/similarity", requireAdminApi, (_req, res) => {
+  res.json(getAdminSimilaritySettings());
+});
+
+app.put("/api/admin/phash", requireAdminApi, (req, res) => {
+  try {
+    res.json({ ok: true, ...saveAdminPhashSettings(req.body || {}), overview: getAdminSimilaritySettings() });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/admin/similarity/:id/review", requireAdminApi, (req, res) => {
+  try {
+    res.json({
+      ok: true,
+      item: reviewAdminSimilarity(req.params.id, req.body || {}, actorUserId(req)),
+      overview: getAdminSimilaritySettings(),
+    });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -3986,6 +4194,7 @@ app.listen(PORT, HOST, () => {
   startWishLifecycleLoop(() => runWishLifecycleWorkerTick(), { intervalMs: 5 * 60 * 1000, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
   startWishOfferExpiryLoop(() => runWishOfferExpiryWorkerTick(), { intervalMs: 5 * 60 * 1000, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
   startRentalNotifyLoop(() => runRentalNotifyWorkerTick(), { intervalMs: 5 * 60 * 1000, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
+  startCrmDeliveryLoop(opsDeliveryDb(), process.env, { log: (tag, info) => console.log(tag, JSON.stringify(info)) });
   console.log(`${APP_NAME}：http://${HOST}:${PORT}`);
   if (envAdminConfigured()) {
     console.log(`管理員帳號：${adminEmail()}（也可註冊新會員）`);

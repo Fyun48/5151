@@ -1,6 +1,12 @@
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { ensureCrmReplicaSchema } from "./crmReplica.js";
+import { ensureProviderDrawerSchema } from "./providerDrawer.js";
+import { ensureDefaultEnvironmentBindings, ensureProductEnvironmentSchema } from "./productEnvironment.js";
+import { ensureInstructionRecordSchema } from "./instructionSource.js";
+import { reapplyPurgeLedger } from "./purgeLedger.js";
+import { ensureCancelResultSchema } from "./cancelResult.js";
 
 // Ops 專用資料庫（與產品 v3 的 v3.db 完全分離）。
 // 只放維運自動化系統的狀態機與稽核；Phase 1 尚無 feedback / AI / coding 相關資料。
@@ -57,13 +63,71 @@ export function applyOpsSchema(db) {
       created_at TEXT NOT NULL
     );
 
+    -- 多站身分：穩定 product_id，不以顯示名／目錄當安全識別。
+    CREATE TABLE IF NOT EXISTS ops_product (
+      id TEXT PRIMARY KEY,
+      display_name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS product_subscription (
+      product_id TEXT PRIMARY KEY,
+      generation INTEGER NOT NULL DEFAULT 1,
+      status TEXT NOT NULL DEFAULT 'connected',
+      capabilities TEXT,
+      started_at TEXT,
+      ended_at TEXT,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (product_id) REFERENCES ops_product(id) ON DELETE RESTRICT
+    );
+    CREATE TABLE IF NOT EXISTS product_ingest_credential (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id TEXT NOT NULL,
+      generation INTEGER NOT NULL DEFAULT 1,
+      secret TEXT NOT NULL,
+      label TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL,
+      revoked_at TEXT,
+      FOREIGN KEY (product_id) REFERENCES ops_product(id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS idx_product_cred_active ON product_ingest_credential(product_id, status);
+
+    -- 第 3 包：退出紀錄與交接包（exit_status 不是議題 lifecycle）。
+    CREATE TABLE IF NOT EXISTS product_exit_record (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id TEXT NOT NULL,
+      generation INTEGER NOT NULL DEFAULT 1,
+      action TEXT NOT NULL,
+      exit_status TEXT NOT NULL,
+      pending_json TEXT,
+      notes TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT,
+      FOREIGN KEY (product_id) REFERENCES ops_product(id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS idx_exit_record_product ON product_exit_record(product_id, id);
+    CREATE TABLE IF NOT EXISTS product_handoff_export (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id TEXT NOT NULL,
+      exit_record_id INTEGER,
+      manifest_json TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      sha256 TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (product_id) REFERENCES ops_product(id) ON DELETE RESTRICT
+    );
+
     -- Phase 2：從 Product 非同步遞送進來的 feedback。
-    -- delivery_id / idempotency_key 皆唯一 → 重複遞送只會有一筆邏輯紀錄（冪等）。
+    -- 去重範圍是 (product_id, delivery_id) / (product_id, idempotency_key)，避免 A、B 各送 feedback:1 撞號。
     -- trust_level 一律 untrusted；Phase 2 只儲存與傳輸，不執行任何內容。
     CREATE TABLE IF NOT EXISTS ingested_feedback (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      delivery_id TEXT NOT NULL UNIQUE,
-      idempotency_key TEXT NOT NULL UNIQUE,
+      product_id TEXT NOT NULL DEFAULT 'v3',
+      delivery_id TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
       source TEXT NOT NULL DEFAULT 'unknown',
       external_feedback_id TEXT,
       user_ref TEXT,
@@ -75,7 +139,9 @@ export function applyOpsSchema(db) {
       submitted_at TEXT,
       trust_level TEXT NOT NULL DEFAULT 'untrusted',
       payload_hash TEXT,
-      received_at TEXT NOT NULL
+      received_at TEXT NOT NULL,
+      UNIQUE(product_id, delivery_id),
+      UNIQUE(product_id, idempotency_key)
     );
 
     -- Phase 3：附件 metadata。內容存於 Storage Provider；此處只存不透明 object_key。
@@ -128,6 +194,7 @@ export function applyOpsSchema(db) {
       estimated_cost REAL,
       created_at TEXT NOT NULL,
       completed_at TEXT,
+      subscription_generation INTEGER,
       FOREIGN KEY (feedback_id) REFERENCES ingested_feedback(id) ON DELETE RESTRICT
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_analysis_identity ON feedback_analysis(feedback_id, analysis_type, revision);
@@ -200,6 +267,9 @@ export function applyOpsSchema(db) {
       clustering_version TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'open',
       merged_into INTEGER,
+      parent_issue_id INTEGER,
+      issue_kind TEXT NOT NULL DEFAULT 'normal',
+      product_id TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -315,7 +385,7 @@ export function applyOpsSchema(db) {
       policy_fingerprint TEXT,                       -- 決策政策/評估設定指紋（result-affecting config；不含 secrets）
       policy_snapshot TEXT,                          -- 去識別化政策快照（可解釋歷史 run 是用哪些規則產生）
       source_impact_assessment_id INTEGER,
-      status TEXT NOT NULL DEFAULT 'pending',       -- pending|processing|completed|failed|failed_retry
+      status TEXT NOT NULL DEFAULT 'pending',       -- pending|processing|completed|failed|failed_retry|cancelled
       final_recommendation TEXT,                    -- PROPOSE|WAIT|IGNORE|ESCALATE（僅 completed）
       aggregate_confidence REAL,
       agreement REAL,
@@ -331,6 +401,7 @@ export function applyOpsSchema(db) {
       started_at TEXT,
       completed_at TEXT,
       created_at TEXT NOT NULL,
+      subscription_generation INTEGER,
       FOREIGN KEY (issue_id) REFERENCES issue_candidate(id) ON DELETE RESTRICT,
       FOREIGN KEY (source_impact_assessment_id) REFERENCES issue_impact_assessment(id) ON DELETE RESTRICT
     );
@@ -416,7 +487,7 @@ export function applyOpsSchema(db) {
       rollback_considerations TEXT,
       evidence_summary TEXT,
       revision_instruction TEXT,
-      status TEXT NOT NULL DEFAULT 'pending',   -- pending|processing|completed|failed|failed_retry
+      status TEXT NOT NULL DEFAULT 'pending',   -- pending|processing|completed|failed|failed_retry|cancelled
       provider TEXT,
       model TEXT,
       retry_count INTEGER NOT NULL DEFAULT 0,
@@ -426,6 +497,7 @@ export function applyOpsSchema(db) {
       claimed_at TEXT,
       generated_at TEXT,
       created_at TEXT NOT NULL,
+      subscription_generation INTEGER,
       FOREIGN KEY (issue_id) REFERENCES issue_candidate(id) ON DELETE RESTRICT,
       FOREIGN KEY (source_evaluation_run_id) REFERENCES issue_evaluation_run(id) ON DELETE RESTRICT
     );
@@ -485,6 +557,7 @@ export function applyOpsSchema(db) {
       actor TEXT NOT NULL,
       reason TEXT,
       created_at TEXT NOT NULL,
+      subscription_generation INTEGER,
       FOREIGN KEY (proposal_id) REFERENCES issue_proposal(id) ON DELETE RESTRICT
     );
     CREATE INDEX IF NOT EXISTS idx_owner_decision_issue ON proposal_owner_decision(issue_id, id);
@@ -534,6 +607,7 @@ export function applyOpsSchema(db) {
       actor TEXT NOT NULL,
       reason TEXT,
       created_at TEXT NOT NULL,
+      subscription_generation INTEGER,
       FOREIGN KEY (issue_id) REFERENCES issue_candidate(id) ON DELETE RESTRICT
     );
     CREATE INDEX IF NOT EXISTS idx_reauth_issue ON issue_reevaluation_authorization(issue_id, id);
@@ -585,6 +659,7 @@ export function applyOpsSchema(db) {
       started_at TEXT,
       completed_at TEXT,
       created_at TEXT NOT NULL,
+      subscription_generation INTEGER,
       FOREIGN KEY (issue_id) REFERENCES issue_candidate(id) ON DELETE RESTRICT,
       FOREIGN KEY (development_authorization_id) REFERENCES development_authorization(id) ON DELETE RESTRICT,
       FOREIGN KEY (proposal_id) REFERENCES issue_proposal(id) ON DELETE RESTRICT
@@ -636,6 +711,7 @@ export function applyOpsSchema(db) {
       started_at TEXT,
       completed_at TEXT,
       created_at TEXT NOT NULL,
+      subscription_generation INTEGER,
       FOREIGN KEY (issue_id) REFERENCES issue_candidate(id) ON DELETE RESTRICT,
       FOREIGN KEY (coding_task_id) REFERENCES development_coding_task(id) ON DELETE RESTRICT,
       FOREIGN KEY (development_authorization_id) REFERENCES development_authorization(id) ON DELETE RESTRICT,
@@ -733,6 +809,7 @@ export function applyOpsSchema(db) {
       completed_at TEXT,
       expires_at TEXT,
       cleanup_status TEXT,
+      subscription_generation INTEGER,
       created_at TEXT NOT NULL,
       FOREIGN KEY (issue_id) REFERENCES issue_candidate(id) ON DELETE RESTRICT,
       FOREIGN KEY (coding_task_id) REFERENCES development_coding_task(id) ON DELETE RESTRICT,
@@ -817,6 +894,7 @@ export function applyOpsSchema(db) {
       source_base_drift INTEGER NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'completed',   -- completed|cancelled（manifest 產物狀態；本體不可變）
       generated_at TEXT NOT NULL,
+      subscription_generation INTEGER,
       created_at TEXT NOT NULL,
       FOREIGN KEY (issue_id) REFERENCES issue_candidate(id) ON DELETE RESTRICT,
       FOREIGN KEY (coding_task_id) REFERENCES development_coding_task(id) ON DELETE RESTRICT,
@@ -914,11 +992,12 @@ export function applyOpsSchema(db) {
       release_manifest_id INTEGER NOT NULL,
       manifest_version INTEGER NOT NULL,
       channel TEXT NOT NULL DEFAULT 'internal',
-      status TEXT NOT NULL DEFAULT 'pending',   -- pending|sent|failed
+      status TEXT NOT NULL DEFAULT 'pending',   -- pending|sent|failed|cancelled
       payload TEXT,
       attempt_count INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
+      subscription_generation INTEGER,
       FOREIGN KEY (release_manifest_id) REFERENCES development_release_candidate(id) ON DELETE CASCADE
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_relnotif_manifest ON release_notification(release_manifest_id, channel);
@@ -1010,6 +1089,7 @@ export function applyOpsSchema(db) {
       authorized_github_actor TEXT NOT NULL,
       created_by TEXT NOT NULL,
       created_at TEXT NOT NULL,
+      subscription_generation INTEGER,
       FOREIGN KEY (release_authorization_id) REFERENCES production_release_authorization(id) ON DELETE RESTRICT,
       FOREIGN KEY (release_manifest_id) REFERENCES development_release_candidate(id) ON DELETE RESTRICT,
       FOREIGN KEY (migration_safety_assessment_id) REFERENCES production_migration_safety_assessment(id) ON DELETE RESTRICT
@@ -1092,14 +1172,18 @@ export function applyOpsSchema(db) {
     );
 
     CREATE TABLE IF NOT EXISTS production_stable_current (
-      id INTEGER PRIMARY KEY CHECK (id = 1),
+      product_id TEXT NOT NULL,
+      environment_key TEXT NOT NULL DEFAULT 'production',
       release_run_id INTEGER,
       source_sha TEXT,
       artifact_digest TEXT,
       workflow_run_id TEXT,
       provenance_json TEXT,
       provenance_fingerprint TEXT,
-      updated_at TEXT NOT NULL
+      static_tree_hash TEXT,
+      schema_compat TEXT,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (product_id, environment_key)
     );
 
     CREATE TABLE IF NOT EXISTS production_release_global_lease (
@@ -1131,7 +1215,185 @@ export function applyOpsSchema(db) {
   `);
   upgradeMigrationSafetyImmutability(db);
   upgradeProductionReleaseImmutability(db);
+  upgradeProductIsolation(db);
+  upgradeExitDrill(db);
+  upgradeCrmReplica(db);
+  upgradeIssueFollowUp(db);
+  upgradeProviderDrawer(db);
+  upgradeLiveTargets(db);
+  upgradeSiteCommand(db);
+  upgradeCancelResult(db);
   return db;
+}
+
+export function upgradeCancelResult(db) {
+  ensureCancelResultSchema(db);
+}
+
+export function upgradeSiteCommand(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS product_command_credential (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id TEXT NOT NULL,
+      generation INTEGER NOT NULL DEFAULT 1,
+      secret TEXT NOT NULL,
+      cred_state TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL,
+      revoked_at TEXT,
+      FOREIGN KEY (product_id) REFERENCES ops_product(id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS idx_command_cred_product ON product_command_credential(product_id, cred_state);
+    CREATE TABLE IF NOT EXISTS site_command_job (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id TEXT NOT NULL,
+      command_id TEXT NOT NULL UNIQUE,
+      idempotency_key TEXT NOT NULL,
+      command_kind TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      job_state TEXT NOT NULL,
+      apply_state TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      next_attempt_at TEXT,
+      last_error TEXT,
+      site_result_json TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      applied_at TEXT,
+      subscription_generation INTEGER,
+      UNIQUE(product_id, idempotency_key),
+      FOREIGN KEY (product_id) REFERENCES ops_product(id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS idx_site_command_product ON site_command_job(product_id, id);
+  `);
+  const cols = tableColumns(db, "site_command_job");
+  if (cols.length && !cols.includes("subscription_generation")) {
+    db.exec("ALTER TABLE site_command_job ADD COLUMN subscription_generation INTEGER");
+  }
+}
+
+export function upgradeLiveTargets(db) {
+  ensureProductEnvironmentSchema(db);
+  ensureInstructionRecordSchema(db);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS production_release_target_lease (
+      product_id TEXT NOT NULL,
+      environment_key TEXT NOT NULL,
+      release_run_id INTEGER,
+      workflow_kind TEXT,
+      lease_owner TEXT,
+      claimed_at TEXT,
+      updated_at TEXT,
+      PRIMARY KEY (product_id, environment_key)
+    );
+  `);
+  const addIfMissing = (table, columns) => {
+    let cols = [];
+    try { cols = tableColumns(db, table); } catch { return; }
+    if (!cols.length) return;
+    for (const [name, decl] of columns) {
+      if (!cols.includes(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${decl}`);
+    }
+  };
+  addIfMissing("production_release_run", [
+    ["product_id", "TEXT"],
+    ["environment_key", "TEXT"],
+    ["instruction_source", "TEXT"],
+    ["instruction_actor", "TEXT"],
+    ["previous_stable_static_tree_hash", "TEXT"],
+    ["previous_stable_schema_compat", "TEXT"],
+  ]);
+  migrateProductionStableEnvironmentScope(db);
+  migrateGlobalLeaseToTargetLease(db);
+  try {
+    const products = db.prepare("SELECT id FROM ops_product").all();
+    for (const row of products) ensureDefaultEnvironmentBindings(db, row.id);
+  } catch { /* schema may still be mid-upgrade */ }
+  ensureDefaultEnvironmentBindings(db, "v3");
+}
+
+export function upgradeProviderDrawer(db) {
+  ensureProviderDrawerSchema(db);
+}
+
+export function upgradeIssueFollowUp(db) {
+  const addIfMissing = (table, columns) => {
+    let cols = [];
+    try { cols = tableColumns(db, table); } catch { return; }
+    if (!cols.length) return;
+    for (const [name, decl] of columns) {
+      if (!cols.includes(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${decl}`);
+    }
+  };
+  addIfMissing("issue_candidate", [
+    ["parent_issue_id", "INTEGER"],
+    ["issue_kind", "TEXT NOT NULL DEFAULT 'normal'"],
+    ["product_id", "TEXT"],
+  ]);
+  addIfMissing("feedback_analysis", [
+    ["subscription_generation", "INTEGER"],
+  ]);
+  addIfMissing("issue_evaluation_run", [
+    ["subscription_generation", "INTEGER"],
+  ]);
+  addIfMissing("issue_proposal", [
+    ["subscription_generation", "INTEGER"],
+  ]);
+  addIfMissing("development_coding_task", [
+    ["subscription_generation", "INTEGER"],
+  ]);
+  addIfMissing("development_qa_run", [
+    ["subscription_generation", "INTEGER"],
+  ]);
+  addIfMissing("development_staging_deployment", [
+    ["subscription_generation", "INTEGER"],
+  ]);
+  addIfMissing("development_release_candidate", [
+    ["subscription_generation", "INTEGER"],
+  ]);
+  addIfMissing("release_notification", [
+    ["subscription_generation", "INTEGER"],
+  ]);
+  addIfMissing("production_release_run", [
+    ["subscription_generation", "INTEGER"],
+  ]);
+  addIfMissing("proposal_owner_decision", [
+    ["subscription_generation", "INTEGER"],
+  ]);
+  addIfMissing("issue_reevaluation_authorization", [
+    ["subscription_generation", "INTEGER"],
+  ]);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_issue_parent ON issue_candidate(parent_issue_id, id)");
+}
+
+export function upgradeCrmReplica(db) {
+  ensureCrmReplicaSchema(db);
+}
+
+export function upgradeExitDrill(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS product_exit_record (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id TEXT NOT NULL,
+      generation INTEGER NOT NULL DEFAULT 1,
+      action TEXT NOT NULL,
+      exit_status TEXT NOT NULL,
+      pending_json TEXT,
+      notes TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_exit_record_product ON product_exit_record(product_id, id);
+    CREATE TABLE IF NOT EXISTS product_handoff_export (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id TEXT NOT NULL,
+      exit_record_id INTEGER,
+      manifest_json TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      sha256 TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+  `);
 }
 
 // CREATE TRIGGER IF NOT EXISTS 不會升級已存在的舊 trigger；每次開庫重裝全欄位不可變。
@@ -1231,12 +1493,235 @@ function ensureProductionReleaseBindingColumns(db) {
   ]);
 }
 
+// 舊庫：ingest 去重是全域 UNIQUE；穩定版是 id=1。既有列明確歸入 v3，不猜「目前選取站」。
+export function upgradeProductIsolation(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ops_product (
+      id TEXT PRIMARY KEY,
+      display_name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS product_subscription (
+      product_id TEXT PRIMARY KEY,
+      generation INTEGER NOT NULL DEFAULT 1,
+      status TEXT NOT NULL DEFAULT 'connected',
+      capabilities TEXT,
+      started_at TEXT,
+      ended_at TEXT,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS product_ingest_credential (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id TEXT NOT NULL,
+      generation INTEGER NOT NULL DEFAULT 1,
+      secret TEXT NOT NULL,
+      label TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL,
+      revoked_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_product_cred_active ON product_ingest_credential(product_id, status);
+  `);
+
+  const ts = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO ops_product(id, display_name, status, created_at, updated_at)
+    VALUES ('v3', '吉比租房', 'active', ?, ?)
+    ON CONFLICT(id) DO NOTHING
+  `).run(ts, ts);
+  db.prepare(`
+    INSERT INTO product_subscription(product_id, generation, status, capabilities, started_at, updated_at)
+    VALUES ('v3', 1, 'connected', '{"feedback_copy":true,"crm_sync":false,"stats":false,"cross_site_insight":false,"followup_service":false,"retain_after_exit":false}', ?, ?)
+    ON CONFLICT(product_id) DO NOTHING
+  `).run(ts, ts);
+
+  migrateIngestedFeedbackProductScope(db);
+  migrateProductionStableProductScope(db);
+
+  const envSecret = process.env.OPS_INGEST_SECRET || "";
+  if (envSecret) {
+    const exists = db.prepare(
+      "SELECT id FROM product_ingest_credential WHERE product_id='v3' AND status='active' AND secret=?",
+    ).get(envSecret);
+    if (!exists) {
+      db.prepare(`
+        INSERT INTO product_ingest_credential(product_id, generation, secret, label, status, created_at)
+        VALUES ('v3', 1, ?, 'legacy-env', 'active', ?)
+      `).run(envSecret, ts);
+    }
+  }
+}
+
+function migrateIngestedFeedbackProductScope(db) {
+  let cols = [];
+  try { cols = tableColumns(db, "ingested_feedback"); } catch { return; }
+  if (!cols.length) return;
+  if (cols.includes("product_id")) {
+    db.exec("CREATE INDEX IF NOT EXISTS idx_ingested_product ON ingested_feedback(product_id, id)");
+    return;
+  }
+  db.exec("PRAGMA foreign_keys = OFF");
+  db.exec(`
+    CREATE TABLE ingested_feedback_v2 (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id TEXT NOT NULL DEFAULT 'v3',
+      delivery_id TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'unknown',
+      external_feedback_id TEXT,
+      user_ref TEXT,
+      kind TEXT,
+      content TEXT,
+      contact TEXT,
+      context TEXT,
+      app_version TEXT,
+      submitted_at TEXT,
+      trust_level TEXT NOT NULL DEFAULT 'untrusted',
+      payload_hash TEXT,
+      received_at TEXT NOT NULL,
+      UNIQUE(product_id, delivery_id),
+      UNIQUE(product_id, idempotency_key)
+    );
+    INSERT INTO ingested_feedback_v2 (
+      id, product_id, delivery_id, idempotency_key, source, external_feedback_id, user_ref, kind,
+      content, contact, context, app_version, submitted_at, trust_level, payload_hash, received_at
+    )
+    SELECT id, 'v3', delivery_id, idempotency_key, source, external_feedback_id, user_ref, kind,
+           content, contact, context, app_version, submitted_at, trust_level, payload_hash, received_at
+      FROM ingested_feedback;
+    DROP TABLE ingested_feedback;
+    ALTER TABLE ingested_feedback_v2 RENAME TO ingested_feedback;
+    CREATE INDEX IF NOT EXISTS idx_ingested_product ON ingested_feedback(product_id, id);
+  `);
+  db.exec("PRAGMA foreign_keys = ON");
+}
+
+function migrateGlobalLeaseToTargetLease(db) {
+  let oldCols = [];
+  try { oldCols = tableColumns(db, "production_release_global_lease"); } catch { return; }
+  if (!oldCols.length) return;
+  const held = db.prepare("SELECT * FROM production_release_global_lease WHERE id=1").get();
+  if (!held?.release_run_id) return;
+  const ts = held.updated_at || new Date().toISOString();
+  db.prepare(`
+    INSERT INTO production_release_target_lease(
+      product_id, environment_key, release_run_id, workflow_kind, lease_owner, claimed_at, updated_at)
+    VALUES ('v3', 'production', ?, ?, ?, ?, ?)
+    ON CONFLICT(product_id, environment_key) DO UPDATE SET
+      release_run_id=excluded.release_run_id,
+      workflow_kind=excluded.workflow_kind,
+      lease_owner=excluded.lease_owner,
+      claimed_at=excluded.claimed_at,
+      updated_at=excluded.updated_at
+    WHERE production_release_target_lease.release_run_id IS NULL
+  `).run(held.release_run_id, held.workflow_kind || null, held.lease_owner || null, held.claimed_at || null, ts);
+}
+
+function migrateProductionStableEnvironmentScope(db) {
+  let cols = [];
+  try { cols = tableColumns(db, "production_stable_current"); } catch { return; }
+  if (!cols.length) return;
+  if (cols.includes("environment_key") && cols.includes("static_tree_hash") && !cols.includes("id")) return;
+  db.exec(`
+    CREATE TABLE production_stable_current_v3 (
+      product_id TEXT NOT NULL,
+      environment_key TEXT NOT NULL DEFAULT 'production',
+      release_run_id INTEGER,
+      source_sha TEXT,
+      artifact_digest TEXT,
+      workflow_run_id TEXT,
+      provenance_json TEXT,
+      provenance_fingerprint TEXT,
+      static_tree_hash TEXT,
+      schema_compat TEXT,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (product_id, environment_key)
+    );
+    INSERT INTO production_stable_current_v3 (
+      product_id, environment_key, release_run_id, source_sha, artifact_digest, workflow_run_id,
+      provenance_json, provenance_fingerprint, static_tree_hash, schema_compat, updated_at
+    )
+    SELECT COALESCE(product_id, 'v3'), 'production', release_run_id, source_sha, artifact_digest, workflow_run_id,
+           provenance_json, provenance_fingerprint, NULL, NULL, updated_at
+      FROM production_stable_current;
+    DROP TABLE production_stable_current;
+    ALTER TABLE production_stable_current_v3 RENAME TO production_stable_current;
+  `);
+}
+
+function migrateProductionStableProductScope(db) {
+  let cols = [];
+  try { cols = tableColumns(db, "production_stable_current"); } catch { return; }
+  if (!cols.length) return;
+  if (cols.includes("product_id") && !cols.includes("id")) return;
+  if (cols.includes("product_id") && cols.includes("id")) {
+    // 極少見的半遷移：已有 product_id 但仍用 id。維持現況，讀寫層改查 product_id。
+    return;
+  }
+  db.exec(`
+    CREATE TABLE production_stable_current_v2 (
+      product_id TEXT PRIMARY KEY,
+      release_run_id INTEGER,
+      source_sha TEXT,
+      artifact_digest TEXT,
+      workflow_run_id TEXT,
+      provenance_json TEXT,
+      provenance_fingerprint TEXT,
+      updated_at TEXT NOT NULL
+    );
+    INSERT INTO production_stable_current_v2 (
+      product_id, release_run_id, source_sha, artifact_digest, workflow_run_id,
+      provenance_json, provenance_fingerprint, updated_at
+    )
+    SELECT 'v3', release_run_id, source_sha, artifact_digest, workflow_run_id,
+           provenance_json, provenance_fingerprint, updated_at
+      FROM production_stable_current;
+    DROP TABLE production_stable_current;
+    ALTER TABLE production_stable_current_v2 RENAME TO production_stable_current;
+  `);
+}
+
 // 開一個 ops 資料庫。dbPath = ":memory:" 供測試使用。
 // Baseline 設定（明確且集中）：
 // - foreign_keys = ON：外鍵約束（未來 domain 表需要）。
 // - journal_mode = WAL：檔案型 DB 併發讀寫較佳（:memory: 會忽略）。
 // - busy_timeout = 5000：兩個連線競爭寫鎖時等待而非立即 SQLITE_BUSY，配合 BEGIN IMMEDIATE 避免 fork。
 // - synchronous = FULL：稽核/狀態機是 metadata，重durability 勝過吞吐；每次 commit 落盤。
+export const OPS_SCHEMA_VERSION = 1;
+
+export function readOpsSchemaVersion(db) {
+  const row = db.prepare("PRAGMA user_version").get();
+  return Number(row && row.user_version ? row.user_version : 0);
+}
+
+// 冪等 schema 套用＋版本推進。若版本比支援的新（來自較新程式）→ fail-closed。
+// 版本推進包在 BEGIN IMMEDIATE 交易內：apply/purge 成功才 COMMIT，失敗 ROLLBACK，版本不假推進。
+export function migrateOpsSchema(db, { apply = applyOpsSchema, purge = reapplyPurgeLedger } = {}) {
+  const current = readOpsSchemaVersion(db);
+  if (current > OPS_SCHEMA_VERSION) {
+    throw new Error(`OPS DB schema version ${current} is newer than supported ${OPS_SCHEMA_VERSION}; refusing to open (fail-closed)`);
+  }
+  if (current < OPS_SCHEMA_VERSION) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      apply(db);
+      purge(db);
+      db.exec(`PRAGMA user_version = ${OPS_SCHEMA_VERSION}`);
+      db.exec("COMMIT");
+    } catch (err) {
+      try { db.exec("ROLLBACK"); } catch { /* nothing to roll back */ }
+      throw err;
+    }
+  } else {
+    // 已是最新版本：冪等重新套用（不推進版本），保留「每次開庫重套 schema」的相容行為。
+    apply(db);
+    purge(db);
+  }
+  return readOpsSchemaVersion(db);
+}
+
 export function openOpsDb(dbPath) {
   const target = dbPath || defaultDbPath();
   if (target !== ":memory:") {
@@ -1247,7 +1732,7 @@ export function openOpsDb(dbPath) {
   db.exec("PRAGMA foreign_keys = ON");
   db.exec("PRAGMA busy_timeout = 5000");
   db.exec("PRAGMA synchronous = FULL");
-  applyOpsSchema(db);
+  migrateOpsSchema(db);
   return db;
 }
 

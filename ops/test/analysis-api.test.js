@@ -6,6 +6,7 @@ import { createApp } from "../src/server.js";
 import { enqueueAnalysisRow } from "../src/feedbackAnalysis.js";
 import { runAnalysisOnce } from "../src/analysisWorker.js";
 import { makeStubProvider } from "../src/ai/provider.js";
+import { updateProductCapabilities } from "../src/products.js";
 
 const CFG = { ownerEmail: "owner@example.com", ownerPassword: "pw", sessionSecret: "s" };
 
@@ -15,6 +16,7 @@ async function withServer(run) {
   const server = createApp({ db, auth }).listen(0);
   await new Promise((r) => server.once("listening", r));
   const base = `http://127.0.0.1:${server.address().port}`;
+  updateProductCapabilities(db, "v3", { cross_site_insight: true });
   db.prepare(`INSERT INTO ingested_feedback(delivery_id, idempotency_key, source, kind, content, received_at) VALUES('d1','k1','v3','bug','登入轉圈圈',?)`).run(new Date().toISOString());
   const fid = Number(db.prepare("SELECT id FROM ingested_feedback LIMIT 1").get().id);
   try {

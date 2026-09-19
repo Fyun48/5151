@@ -291,6 +291,22 @@
       blurb: "誰在何時改了來源、同房源、公告或金鑰。",
       aliases: ["操作紀錄", "audit", "稽核", "誰改的"],
     },
+    {
+      id: "crm",
+      group: "feedback",
+      groupLabel: "意見與治理",
+      label: "客戶關係（CRM）",
+      blurb: "把使用者回饋轉成客戶、案件與待辦；關閉只停新處理，資料保留。",
+      aliases: ["CRM", "客戶", "客戶關係", "案件", "待辦", "回饋轉客戶"],
+    },
+    {
+      id: "similarity",
+      group: "inventory",
+      groupLabel: "房源與資料",
+      label: "相似房源與 pHash",
+      blurb: "pHash 只產生候選，人工判定優先；未確認不會自動合併或下架。",
+      aliases: ["相似房源", "pHash", "感知雜湊", "重複房源", "人工判定"],
+    },
   ];
 
   const LEGACY = {
@@ -308,14 +324,14 @@
 
   const GROUPS = [
     { id: "overview", label: "總覽", pages: ["overview"] },
-    { id: "inventory", label: "房源與資料", pages: ["inventory/sources", "inventory/crawl", "inventory/same-house", "inventory/imports", "inventory/health"] },
+    { id: "inventory", label: "房源與資料", pages: ["inventory/sources", "inventory/crawl", "inventory/same-house", "inventory/imports", "inventory/health", "similarity"] },
     { id: "members", label: "會員與權限", pages: ["members/users", "members/plans", "members/guest", "members/login"] },
     { id: "rental", label: "租屋與配對", pages: ["rental/catalog", "rental/listing", "rental/wish", "rental/rules", "rental/templates", "rental/ops"] },
     { id: "content", label: "站台內容", pages: ["content/brand", "content/spirit", "content/legal", "content/cms", "content/qa", "content/housing"] },
     { id: "comms", label: "通知與溝通", pages: ["comms/notices", "comms/news", "comms/smtp", "comms/templates"] },
     { id: "revenue", label: "收益與曝光", pages: ["revenue/sponsors", "revenue/support", "revenue/campaigns", "revenue/ads"] },
     { id: "system", label: "系統與整合", pages: ["system/maps", "system/oauth", "system/services", "system/status"] },
-    { id: "feedback", label: "意見與治理", pages: ["feedback/inbox", "feedback/audit"] },
+    { id: "feedback", label: "意見與治理", pages: ["feedback/inbox", "feedback/audit", "crm"] },
   ];
 
   function pageById(id) {

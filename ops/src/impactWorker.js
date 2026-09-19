@@ -1,4 +1,5 @@
 import { calculateAndStoreImpact, isImpactStale, impactConfig } from "./impact.js";
+import { issueWriteDecision } from "./insightConsent.js";
 
 // Phase 6 背景 worker：純本地決定性計算，不需外部 AI provider。
 // - feedback ingestion / clustering 不等待。
@@ -22,6 +23,7 @@ export function runImpactOnce(db, { now = () => new Date(), batchSize = DEFAULT_
   for (const it of issues) {
     summary.scanned += 1;
     if (!isImpactStale(db, it.id, { now: now() })) { summary.skipped += 1; continue; }
+    if (!issueWriteDecision(db, it.id).ok) { summary.skipped += 1; continue; }
     try {
       calculateAndStoreImpact(db, it.id, { now: now(), config });
       summary.recalculated += 1;

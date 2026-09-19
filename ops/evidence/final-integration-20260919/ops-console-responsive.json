@@ -1,0 +1,47 @@
+{
+  "schema": "ops-console-responsive-v1",
+  "generated_at": "2026-09-19T04:28:36.378Z",
+  "pr": "#369",
+  "target": {
+    "base_url": "http://127.0.0.1:5154",
+    "source": "local ops server",
+    "widths": [
+      375,
+      768,
+      1440
+    ],
+    "browser": "chrome.exe"
+  },
+  "results": [
+    {
+      "name": "ops-console",
+      "width": 375,
+      "logged_in": true,
+      "url": "http://127.0.0.1:5154/",
+      "overflow_px": 0,
+      "small_touch_targets": [],
+      "unnamed_controls": [],
+      "login_visible": false
+    },
+    {
+      "name": "ops-console",
+      "width": 768,
+      "logged_in": true,
+      "url": "http://127.0.0.1:5154/",
+      "overflow_px": 0,
+      "small_touch_targets": [],
+      "unnamed_controls": [],
+      "login_visible": false
+    },
+    {
+      "name": "ops-console",
+      "width": 1440,
+      "logged_in": true,
+      "url": "http://127.0.0.1:5154/",
+      "overflow_px": 0,
+      "small_touch_targets": [],
+      "unnamed_controls": [],
+      "login_visible": false
+    }
+  ]
+}

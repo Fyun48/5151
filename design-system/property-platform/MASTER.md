@@ -2,7 +2,9 @@
 
 產品：**吉比租房物件追蹤**（v3）。這是找房租屋的**情報台**，用途接近 591，但視覺不得做成傳統分類廣告站或行銷官網。
 
-這份檔案是 user-facing UI 的 source of truth。頁面覆寫見 `pages/`。實作檔是 `v3/public/tokens.css`。
+這份檔案是 user-facing UI 的 source of truth。頁面覆寫見 `pages/`。  
+可打包來源是 `design-system/tokens.css` 與 `design-system/kit/`（第 9 包）。  
+**正式機實作檔仍是 `v3/public/tokens.css`**（CasaOS 反悔路徑，必須自包含）。
 
 ## Design rationale
 

@@ -90,14 +90,14 @@ function collectFreshnessReasons(db, {
   return [...new Set(reasons)];
 }
 
-function boundContext(db, codingTaskId, expected, { repo = null, env = process.env } = {}) {
+function boundContext(db, codingTaskId, expected, { repo = null, env = process.env, now = new Date() } = {}) {
   const task = db.prepare("SELECT * FROM development_coding_task WHERE id=?").get(Number(codingTaskId));
   if (!task) throw httpError("coding task not found", 404);
   const auth = loadBoundAuthorization(db, codingTaskId, expected.releaseAuthorizationId);
   const rc = db.prepare("SELECT * FROM development_release_candidate WHERE id=?").get(Number(auth.release_manifest_id));
-  const currentRc = getCurrentReleaseCandidate(db, codingTaskId, { repo, env });
+  const currentRc = getCurrentReleaseCandidate(db, codingTaskId, { repo, env, now });
   const qa = getCurrentCodingQA(db, codingTaskId, { env });
-  const staging = getCurrentCodingStaging(db, codingTaskId, { env });
+  const staging = getCurrentCodingStaging(db, codingTaskId, { env, now });
   const reasons = collectFreshnessReasons(db, { codingTaskId, auth, rc, currentRc, qa, staging, env, expected });
   return { task, auth, rc, currentRc, qa, staging, reasons };
 }
@@ -172,7 +172,7 @@ export function createMigrationSafetyAssessment(db, {
   const cfg = migrationSafetyConfigFromEnv(env);
   const policy = buildMigrationSafetyPolicy(cfg);
   const policyFp = migrationSafetyPolicyFingerprint(policy);
-  const { task, auth, rc, qa, staging, reasons } = boundContext(db, codingTaskId, expected, { repo, env });
+  const { task, auth, rc, qa, staging, reasons } = boundContext(db, codingTaskId, expected, { repo, env, now });
   const qaDetail = qa.checks ? qa : getQaRunDetail(db, Number(auth.qa_run_id));
   const approvedMigration = approvedMigrationFromManifest(rc);
   const liveMigration = qaMigrationCheck(qaDetail);
@@ -304,13 +304,13 @@ export function publicAssessment(row) {
   };
 }
 
-function assessmentFreshness(db, row, { repo = null, env = process.env } = {}) {
+function assessmentFreshness(db, row, { repo = null, env = process.env, now = new Date() } = {}) {
   if (!row) return { fresh: false, stale: true, stale_reasons: ["assessment_missing"] };
   const auth = db.prepare("SELECT * FROM production_release_authorization WHERE id=?").get(Number(row.release_authorization_id));
   const rc = db.prepare("SELECT * FROM development_release_candidate WHERE id=?").get(Number(row.release_manifest_id));
-  const currentRc = getCurrentReleaseCandidate(db, Number(row.coding_task_id), { repo, env });
+  const currentRc = getCurrentReleaseCandidate(db, Number(row.coding_task_id), { repo, env, now });
   const qa = getCurrentCodingQA(db, Number(row.coding_task_id), { env });
-  const staging = getCurrentCodingStaging(db, Number(row.coding_task_id), { env });
+  const staging = getCurrentCodingStaging(db, Number(row.coding_task_id), { env, now });
   const reasons = collectFreshnessReasons(db, {
     codingTaskId: Number(row.coding_task_id), auth, rc, currentRc, qa, staging, env,
     expected: {
@@ -370,7 +370,7 @@ function assessmentFreshness(db, row, { repo = null, env = process.env } = {}) {
   return { fresh: unique.length === 0, stale: unique.length > 0, stale_reasons: unique };
 }
 
-export function getCurrentMigrationSafety(db, codingTaskId, { repo = null, env = process.env } = {}) {
+export function getCurrentMigrationSafety(db, codingTaskId, { repo = null, env = process.env, now = new Date() } = {}) {
   const task = db.prepare("SELECT * FROM development_coding_task WHERE id=?").get(Number(codingTaskId));
   if (!task) throw httpError("coding task not found", 404);
   const cur = db.prepare("SELECT * FROM production_migration_safety_current WHERE coding_task_id=?").get(Number(codingTaskId));
@@ -387,7 +387,7 @@ export function getCurrentMigrationSafety(db, codingTaskId, { repo = null, env =
     };
   }
   const row = db.prepare("SELECT * FROM production_migration_safety_assessment WHERE id=?").get(Number(cur.assessment_id));
-  const freshness = assessmentFreshness(db, row, { repo, env });
+  const freshness = assessmentFreshness(db, row, { repo, env, now });
   if (activeAuth && Number(cur.release_authorization_id) !== Number(activeAuth.id)) {
     freshness.stale_reasons = [...new Set([...(freshness.stale_reasons || []), "authorization_superseded"])];
     freshness.fresh = false;
@@ -404,8 +404,8 @@ export function getCurrentMigrationSafety(db, codingTaskId, { repo = null, env =
   };
 }
 
-export function getMigrationSafetyView(db, codingTaskId, { repo = null, env = process.env } = {}) {
-  const current = getCurrentMigrationSafety(db, codingTaskId, { repo, env });
+export function getMigrationSafetyView(db, codingTaskId, { repo = null, env = process.env, now = new Date() } = {}) {
+  const current = getCurrentMigrationSafety(db, codingTaskId, { repo, env, now });
   const history = db.prepare("SELECT * FROM production_migration_safety_assessment WHERE coding_task_id=? ORDER BY id DESC LIMIT 50").all(Number(codingTaskId)).map(publicAssessment);
   return { ...current, history };
 }
@@ -448,9 +448,10 @@ export function getPhase15ReleaseEligibility(db, identities = {}, runtime = {}) 
   if (problems) return { allowed: false, ...problems, clearance: null, fresh: false };
   const repo = runtime.repo ?? null;
   const env = runtime.env ?? process.env;
+  const now = runtime.now ?? new Date();
   let current;
   try {
-    current = getCurrentMigrationSafety(db, identities.codingTaskId, { repo, env });
+    current = getCurrentMigrationSafety(db, identities.codingTaskId, { repo, env, now });
   } catch (err) {
     if (err.status === 404) return { allowed: false, reason: "phase15_coding_task_not_found", clearance: null, fresh: false };
     throw err;

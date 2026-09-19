@@ -418,12 +418,19 @@ test("27+28+32+33. successful coding opens Draft PR base=master with provenance 
   } finally { s.cleanup(); }
 });
 
-test("29. coding PR cannot auto-merge under existing CI policy (draft + ai-dev/ excluded)", () => {
+test("29. Tests workflow cannot auto-merge or deploy (current safety contract)", () => {
   const wfPath = path.join(ROOT, ".github", "workflows", "test.yml");
-  if (!existsSync(wfPath)) return;
+  assert.ok(existsSync(wfPath), "Tests workflow must exist");
   const wf = readFileSync(wfPath, "utf8");
-  assert.doesNotMatch(wf, /gh pr merge|ENABLE_AUTO_MERGE/i);
-  assert.match(wf, /auto-merge|Tests only/i);
+  assert.match(wf, /npm test/);
+  // 現行契約：Tests only。檢查「可執行行為」而不是註解文字（註解本身會提到 auto-merge）。
+  assert.doesNotMatch(wf, /gh pr merge|--squash|merge_pull_request|peter-evans\/enable-auto-merge|pull_request_target/i);
+  assert.doesNotMatch(wf, /gh workflow run|DEPLOY-PRODUCTION|appleboy\/(scp|ssh)-action/i);
+  assert.doesNotMatch(wf, /contents:\s*write|pull-requests:\s*write/);
+  // coding provider 只能開 draft PR，且沒有 merge 能力（見 test 30）。
+  const provider = readFileSync(path.join(ROOT, "ops", "src", "codingTask.js"), "utf8");
+  assert.match(provider, /draft/i);
+  assert.doesNotMatch(provider, /mergePr|gh pr merge/);
 });
 
 test("30. coding PR gateway cannot merge its own PR (no merge capability)", () => {

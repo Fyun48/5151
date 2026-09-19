@@ -466,6 +466,19 @@
       .admin-app.is-nav-open .admin-nav-backdrop { display: block; }
       .admin-main { padding: 12px 16px 88px; }
     }
+    /* OPS 後台：hidden 必須真的隱藏（本頁 button/a 有 display:inline-flex，會蓋掉 native hidden）。 */
+    button[hidden], a.ghost[hidden], a.primary[hidden] { display: none !important; }
+    .ops-crm-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
+    .ops-crm-query { min-width: 0; flex: 1 1 240px; }
+    @media (min-width: 700px) { .ops-crm-query { min-width: 560px; } }
+    .ops-check { display: flex; align-items: center; gap: 8px; min-height: 44px; }
+    .ops-panel-note { font-size: 13px; color: var(--muted); line-height: 1.6; margin: 0 0 10px; }
+    .ops-badge { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; font-size: 12px; }
+    .ops-badge[data-state="blocked"], .ops-badge[data-state="cancelled"] { border-color: #d9b3b3; color: #8a3b3b; }
+    .ops-badge[data-state="completed"] { border-color: #b7d5bd; color: #2f6b45; }
+    .ops-similarity-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--line); }
+    .ops-similarity-row:last-child { border-bottom: 0; }
+    .ops-min-44 { min-width: 44px; min-height: 44px; }
   </style>
 </head>
 <body class="admin-app" id="adminApp">
@@ -1678,7 +1691,9 @@
           </select>
         </label>
         <button type="button" class="ghost" id="feedbackReload">重新整理</button>
+        <button type="button" class="ghost" id="opsOutboxCompact" hidden>OPS 待送出維護</button>
       </div>
+      <div id="opsOutboxCompactBox" class="hint" hidden></div>
       <div id="feedbackList" style="margin-top:12px"></div>
       <p class="msg" id="feedbackMsg"></p>
     </section>
@@ -1704,6 +1719,396 @@
           <div id="systemStatusBox"></div>
         </section>
       </div>
+      <div id="crm" class="admin-panel" data-admin-page="crm" data-admin-panel="crm">
+        <section class="card">
+          <div class="admin-page-head">
+            <div>
+              <h2>客戶關係（CRM）</h2>
+              <p class="hint">把使用者回饋轉成客戶、案件與待辦。關閉模組只停新處理，資料保留。</p>
+            </div>
+            <a class="ghost ops-min-44" href="#crm" data-admin-nav="crm">CRM</a>
+          </div>
+          <p class="ops-panel-note" id="crmModuleState" role="status">模組狀態載入中…</p>
+          <div id="crmClosedNotice" class="ops-panel-note" role="status" hidden>CRM 已關閉，只能看既有資料。要恢復處理請到「客戶關係模組」重新開啟。</div>
+          <div id="crmErrorSummary" class="msg" role="alert" hidden></div>
+          <form id="crmContactForm" class="grid-2" novalidate>
+            <label>稱呼
+              <input id="crmDisplayName" name="display_name" type="text" data-crm-focus autocomplete="off" />
+            </label>
+            <label>電話
+              <input id="crmPhone" name="phone" type="tel" inputmode="tel" autocomplete="off" />
+            </label>
+            <label>Email
+              <input id="crmEmail" name="email" type="email" autocomplete="off" />
+            </label>
+            <label>來源
+              <input id="crmSource" name="source" type="text" autocomplete="off" placeholder="例如：使用者回饋" />
+            </label>
+            <div class="row">
+              <button type="submit" class="primary ops-min-44" id="crmCreateBtn">建立客戶</button>
+              <button type="button" class="ghost ops-min-44" id="crmCancelBtn">清除</button>
+            </div>
+          </form>
+          <div class="ops-crm-toolbar" style="margin-top:12px">
+            <label>查詢客戶
+              <input id="crmQuery" type="search" class="ops-crm-query" autocomplete="off" placeholder="姓名、電話或 Email" />
+            </label>
+            <button type="button" class="primary ops-min-44" id="crmSearchBtn">查詢</button>
+            <button type="button" class="ghost ops-min-44" id="crmFromFeedbackBtn" data-fb-crm>從回饋建立客戶</button>
+          </div>
+          <p class="ops-panel-note" id="crmSearchState" role="status" hidden></p>
+          <div id="crmContacts"></div>
+          <div id="crmRetryBox" class="row" hidden>
+            <button type="button" class="ghost ops-min-44" id="crmRetryBtn">重新載入 CRM</button>
+          </div>
+        </section>
+      </div>
+      <div id="similarity" class="admin-panel" data-admin-page="similarity">
+        <section class="card">
+          <h2>相似房源與 pHash</h2>
+          <p class="hint">感知雜湊（pHash）只產生候選，人工判定優先。未經人工確認不會自動合併或下架；關閉時回到舊的比對路徑。</p>
+          <form id="phashForm" class="grid-2" novalidate>
+            <label>pHash 門檻（漢明距離）
+              <input id="phashThreshold" name="threshold" type="number" min="0" max="64" step="1" value="10" />
+            </label>
+            <label>候選上限
+              <input id="phashMaxCandidates" name="max_candidates" type="number" min="1" max="200" step="1" value="20" />
+            </label>
+            <label class="row ops-check"><input id="phashEnabled" name="phash_enabled" type="checkbox" /> 啟用 pHash 候選</label>
+            <label class="row ops-check"><input id="phashLlmEnabled" name="llm_enabled" type="checkbox" /> 啟用 LLM 覆核（選用）</label>
+            <div class="row">
+              <button type="submit" class="primary ops-min-44" id="phashSaveBtn">儲存設定</button>
+              <button type="button" class="ghost ops-min-44" id="similarityReload">重新整理</button>
+            </div>
+          </form>
+          <p class="msg" id="phashMsg" role="status"></p>
+          <div id="similarityRows">載入中…</div>
+        </section>
+      </div>
+  <script>
+    /* OPS 後台（一）：回饋待送出 outbox ＋ 相似房源／pHash。獨立 IIFE，避免與 admin.html 內部助手衝突。 */
+    (() => {
+      const q = (id) => document.getElementById(id);
+      const txt = (value) => String(value == null ? "" : value);
+      const esc = (value) => txt(value).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+      const asJson = async (res) => { try { return await res.json(); } catch { return {}; } };
+      const rowsOf = (payload) => (Array.isArray(payload) ? payload : (payload && (payload.items || payload.rows)) || []);
+      const STATE_LABEL = { loading: "載入中", empty: "尚無資料", ready: "可處理", error: "載入失敗", blocked: "已封鎖", cancelled: "已取消", unknown: "狀態未知", completed: "已完成" };
+      const STATES = Object.keys(STATE_LABEL);
+      const stateOf = (value) => (STATES.includes(value) ? value : "unknown");
+
+      function setState(node, state, message) {
+        if (!node) return;
+        node.dataset.state = stateOf(state);
+        node.textContent = txt(message);
+        node.hidden = !message;
+      }
+
+      function badgeHtml(state) {
+        const key = stateOf(state);
+        return `<span class="ops-badge ops-min-44" data-state="${esc(key)}">${esc(STATE_LABEL[key])}</span>`;
+      }
+
+      function isPendingOutbox(row) {
+        if (!row || typeof row !== "object") return false;
+        const raw = ["outbox_state", "outbox_status", "delivery_state", "delivery_status", "crm_outbox_state"]
+          .map((key) => row[key]).find((value) => txt(value));
+        if (!txt(raw)) return false;
+        return ["pending", "queued", "failed", "retry", "blocked"].includes(txt(raw).toLowerCase());
+      }
+
+      async function loadOpsOutboxCompact() {
+        const button = q("opsOutboxCompact");
+        const box = q("opsOutboxCompactBox");
+        if (!button) return;
+        let res;
+        try {
+          res = await fetch("/api/admin/feedback", { cache: "no-store" });
+        } catch {
+          button.hidden = true;
+          setState(box, "error", "無法連線讀取回饋待送出清單，請稍後重試。");
+          return;
+        }
+        if (!res.ok) {
+          button.hidden = true;
+          setState(box, "error", `讀取回饋待送出清單失敗（HTTP ${res.status}）。`);
+          return;
+        }
+        const payload = await asJson(res);
+        const pending = rowsOf(payload).filter(isPendingOutbox);
+        if (!pending.length) {
+          button.hidden = true;
+          setState(box, "empty", "");
+          return;
+        }
+        button.hidden = false;
+        button.textContent = `OPS 待送出維護（${pending.length}）`;
+        const summary = `有 ${pending.length} 筆回饋待送出／重試。這裡只維護狀態，不會自動對外送出。`;
+        setState(box, "blocked", summary);
+        box.innerHTML = pending.slice(0, 10).map((row) => `
+          <div class="ops-similarity-row">
+            <span>#${esc(row.id)} ${esc(row.title || row.kind || "回饋")}</span>
+            <span>${badgeHtml(row.outbox_state || row.outbox_status || row.delivery_state)}</span>
+          </div>`).join("");
+      }
+      function similarityRowHtml(row) {
+        const id = txt(row.id);
+        const state = row.review_state || row.state || (txt(row.decision) ? "completed" : "ready");
+        return `<div class="ops-similarity-row" data-similarity-row="${esc(id)}">
+          <div>
+            <div>候選 #${esc(id)} · 距離 ${esc(row.hamming_distance ?? row.distance ?? "-")}</div>
+            <div class="ops-panel-note">人工判定優先。審核結果只寫入紀錄，未確認不會合併或下架。</div>
+          </div>
+          <div class="row">
+            ${badgeHtml(state)}
+            <button type="button" class="ghost ops-min-44" data-similarity-review="same" data-similarity-id="${esc(id)}">同一房源</button>
+            <button type="button" class="ghost ops-min-44" data-similarity-review="different" data-similarity-id="${esc(id)}">不同房源</button>
+          </div>
+        </div>`;
+      }
+
+      async function loadSimilarity() {
+        const box = q("similarityRows");
+        setState(q("phashMsg"), "loading", "載入中…");
+        let res;
+        try {
+          res = await fetch("/api/admin/similarity", { cache: "no-store" });
+        } catch {
+          if (box) box.innerHTML = `<p class="ops-panel-note">無法連線相似房源服務，請稍後重試。</p>`;
+          setState(q("phashMsg"), "error", "無法連線相似房源服務。");
+          return;
+        }
+        if (!res.ok) {
+          if (box) box.innerHTML = `<p class="ops-panel-note">讀取失敗（HTTP ${res.status}）。</p>`;
+          setState(q("phashMsg"), "error", `讀取失敗（HTTP ${res.status}）。`);
+          return;
+        }
+        const data = await asJson(res);
+        const settings = data.settings || {};
+        if (q("phashEnabled")) q("phashEnabled").checked = !!settings.phash_enabled;
+        if (q("phashLlmEnabled")) q("phashLlmEnabled").checked = !!settings.llm_enabled;
+        if (q("phashThreshold") && settings.threshold != null) q("phashThreshold").value = txt(settings.threshold);
+        if (q("phashMaxCandidates") && settings.max_candidates != null) q("phashMaxCandidates").value = txt(settings.max_candidates);
+        const rows = rowsOf(data.suggestions || []);
+        if (!box) return;
+        box.innerHTML = rows.length
+          ? rows.map(similarityRowHtml).join("")
+          : `<p class="ops-panel-note">目前沒有待判定候選。人工判定優先；pHash／LLM 關閉時沿用舊比對路徑。</p>`;
+        setState(q("phashMsg"), rows.length ? "ready" : "empty", rows.length ? `共 ${rows.length} 筆候選待人工判定。` : "目前沒有待判定候選。");
+      }
+
+      async function savePhashSettings(ev) {
+        ev.preventDefault();
+        const payload = {
+          phash_enabled: !!q("phashEnabled")?.checked,
+          llm_enabled: !!q("phashLlmEnabled")?.checked,
+          threshold: Number(q("phashThreshold")?.value ?? 0),
+          max_candidates: Number(q("phashMaxCandidates")?.value ?? 0),
+        };
+        setState(q("phashMsg"), "loading", "儲存中…");
+        const res = await fetch("/api/admin/phash", {
+          method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+        }).catch(() => null);
+        if (!res) { setState(q("phashMsg"), "error", "儲存失敗：無法連線。"); return; }
+        setState(q("phashMsg"), res.ok ? "completed" : "error", res.ok ? "設定已儲存。" : `儲存失敗（HTTP ${res.status}）。`);
+        if (res.ok) await loadSimilarity();
+      }
+
+      async function reviewSimilarity(id, decision) {
+        if (!txt(id)) { setState(q("phashMsg"), "error", "缺少候選編號，無法判定。"); return; }
+        setState(q("phashMsg"), "loading", "送出人工判定中…");
+        const res = await fetch(`/api/admin/similarity/${encodeURIComponent(id)}/review`, {
+          method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ decision }),
+        }).catch(() => null);
+        if (!res) { setState(q("phashMsg"), "error", "判定失敗：無法連線。"); return; }
+        setState(q("phashMsg"), res.ok ? "completed" : "error", res.ok ? "已記錄人工判定。" : `判定失敗（HTTP ${res.status}）。`);
+        if (res.ok) await loadSimilarity();
+      }
+
+      document.addEventListener("DOMContentLoaded", () => {
+        q("phashForm")?.addEventListener("submit", savePhashSettings);
+        q("similarityReload")?.addEventListener("click", loadSimilarity);
+        q("similarityRows")?.addEventListener("click", (ev) => {
+          const btn = ev.target.closest("[data-similarity-review]");
+          if (btn) reviewSimilarity(btn.dataset.similarityId, btn.dataset.similarityReview);
+        });
+        q("opsOutboxCompact")?.addEventListener("click", () => {
+          const box = q("opsOutboxCompactBox");
+          if (box) box.hidden = !box.hidden;
+        });
+        loadOpsOutboxCompact();
+        if (location.hash === "#similarity") loadSimilarity();
+      });
+      window.addEventListener("hashchange", () => {
+        if (location.hash === "#similarity") loadSimilarity();
+      });
+    })();
+  </script>
+  <script>
+    /* OPS 後台（二）：CRM。沿用現行 AdminIA（panel／nav／a11y），只補能力。關閉模組＝唯讀，不刪資料。 */
+    (() => {
+      const q = (id) => document.getElementById(id);
+      const txt = (value) => String(value == null ? "" : value);
+      const esc = (value) => txt(value).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+      const asJson = async (res) => { try { return await res.json(); } catch { return {}; } };
+      const contactsOf = (payload) => (Array.isArray(payload) ? payload : (payload && (payload.contacts || payload.items)) || []);
+      let crmEnabled = null;
+
+      function crmHandlingLabel(state) {
+        const map = {
+          loading: "載入中", empty: "尚無客戶", ready: "可處理", error: "讀取失敗",
+          blocked: "模組關閉，僅可檢視", cancelled: "已取消", unknown: "狀態未知", completed: "已建立",
+        };
+        return map[txt(state)] || map.unknown;
+      }
+
+      function setCrmState(state, message) {
+        const node = q("crmSearchState");
+        if (!node) return;
+        node.dataset.state = txt(state) || "unknown";
+        node.textContent = `${crmHandlingLabel(state)}${message ? `｜${message}` : ""}`;
+        node.hidden = false;
+      }
+
+      function showCrmError(message) {
+        const box = q("crmErrorSummary");
+        if (!box) return;
+        box.textContent = txt(message);
+        box.hidden = !message;
+      }
+
+      function renderCrmContacts(rows, note) {
+        const box = q("crmContacts");
+        if (!box) return;
+        if (!rows.length) {
+          box.innerHTML = `<p class="ops-panel-note">${esc(note || "沒有符合的客戶。")}</p>`;
+          return;
+        }
+        box.innerHTML = rows.map((row) => `
+          <div class="ops-similarity-row" data-crm-contact="${esc(row.id)}">
+            <div>
+              <div>${esc(row.display_name || "未命名客戶")}</div>
+              <div class="ops-panel-note">${esc(row.phone || "無電話")} · ${esc(row.email || "無 Email")} · 案件 ${esc(row.case_count ?? 0)}</div>
+            </div>
+            <div class="row">
+              <span class="ops-badge ops-min-44" data-state="${esc(crmEnabled === false ? "blocked" : "ready")}">${esc(crmHandlingLabel(crmEnabled === false ? "blocked" : "ready"))}</span>
+              <button type="button" class="ghost ops-min-44" data-crm-view="${esc(row.id)}">檢視</button>
+            </div>
+          </div>`).join("");
+      }
+
+      function applyCrmModuleState(enabled) {
+        crmEnabled = enabled;
+        const notice = q("crmClosedNotice");
+        const create = q("crmCreateBtn");
+        const fromFeedback = q("crmFromFeedbackBtn");
+        if (notice) notice.hidden = enabled !== false;
+        if (create) create.disabled = enabled === false;
+        if (fromFeedback) fromFeedback.disabled = enabled === false;
+        const label = q("crmModuleState");
+        if (label) {
+          label.textContent = enabled === false
+            ? "CRM 已關閉，只能看既有資料。既有客戶、案件與待辦不會被刪除。"
+            : "CRM 已開啟，可新增客戶、案件與待辦。";
+        }
+      }
+
+      async function loadCrm(query) {
+        setCrmState("loading", "讀取中");
+        const url = txt(query) ? `/api/admin/crm?q=${encodeURIComponent(query)}` : "/api/admin/crm";
+        let res;
+        try {
+          res = await fetch(url, { cache: "no-store" });
+        } catch {
+          setCrmState("error", "無法連線 CRM");
+          showCrmError("無法連線 CRM 服務，請稍後重試。");
+          if (q("crmRetryBox")) q("crmRetryBox").hidden = false;
+          return;
+        }
+        if (!res.ok) {
+          setCrmState("error", `HTTP ${res.status}`);
+          showCrmError(`讀取 CRM 失敗（HTTP ${res.status}）。`);
+          if (q("crmRetryBox")) q("crmRetryBox").hidden = false;
+          return;
+        }
+        showCrmError("");
+        if (q("crmRetryBox")) q("crmRetryBox").hidden = true;
+        const data = await asJson(res);
+        const enabled = data.enabled !== false && (data.module ? data.module.enabled !== false : true);
+        applyCrmModuleState(enabled);
+        const rows = contactsOf(data.contacts ? data.contacts : data);
+        setCrmState(enabled === false ? "blocked" : (rows.length ? "ready" : "empty"), rows.length ? `共 ${rows.length} 位客戶` : "沒有符合的客戶。");
+        renderCrmContacts(rows, txt(query) ? `沒有符合「${query}」的客戶。` : "目前沒有客戶資料。");
+      }
+      async function submitCrmContact(ev) {
+        ev.preventDefault();
+        showCrmError("");
+        if (crmEnabled === false) {
+          showCrmError("CRM 已關閉，只能看既有資料；請先重新開啟模組再新增客戶。");
+          q("crmClosedNotice")?.focus?.();
+          return;
+        }
+        const payload = {
+          display_name: txt(q("crmDisplayName")?.value).trim(),
+          phone: txt(q("crmPhone")?.value).trim(),
+          email: txt(q("crmEmail")?.value).trim(),
+          source: txt(q("crmSource")?.value).trim(),
+        };
+        if (!payload.display_name) {
+          showCrmError("請填寫客戶稱呼。");
+          q("crmDisplayName")?.focus?.();
+          return;
+        }
+        const res = await fetch("/api/admin/crm/contacts", {
+          method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+        }).catch(() => null);
+        if (!res) { showCrmError("建立客戶失敗：無法連線。"); return; }
+        if (!res.ok) {
+          const body = await asJson(res);
+          showCrmError(txt(body.error) || `建立客戶失敗（HTTP ${res.status}）。`);
+          return;
+        }
+        setCrmState("completed", `已建立 ${payload.display_name}`);
+        ev.target.reset?.();
+        await loadCrm();
+      }
+
+      async function createFromFeedback() {
+        const raw = window.prompt("要轉成客戶的回饋編號（#id）", "");
+        const id = txt(raw).replace(/[^0-9]/g, "");
+        if (!id) { showCrmError("請輸入有效的回饋編號。"); return; }
+        showCrmError("");
+        const res = await fetch(`/api/admin/crm/from-feedback/${encodeURIComponent(id)}`, {
+          method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}),
+        }).catch(() => null);
+        if (!res) { showCrmError("從回饋建立客戶失敗：無法連線。"); return; }
+        if (!res.ok) {
+          const body = await asJson(res);
+          showCrmError(txt(body.error) || `從回饋建立客戶失敗（HTTP ${res.status}）。`);
+          return;
+        }
+        setCrmState("completed", `已由回饋 #${id} 建立客戶`);
+        await loadCrm();
+      }
+
+      document.addEventListener("DOMContentLoaded", () => {
+        q("crmContactForm")?.addEventListener("submit", submitCrmContact);
+        q("crmCancelBtn")?.addEventListener("click", () => { q("crmContactForm")?.reset?.(); showCrmError(""); });
+        q("crmSearchBtn")?.addEventListener("click", () => loadCrm(txt(q("crmQuery")?.value).trim()));
+        q("crmQuery")?.addEventListener("keydown", (ev) => {
+          if (ev.key === "Enter") { ev.preventDefault(); loadCrm(txt(q("crmQuery")?.value).trim()); }
+        });
+        q("crmRetryBtn")?.addEventListener("click", () => loadCrm(""));
+        q("crmFromFeedbackBtn")?.addEventListener("click", createFromFeedback);
+        if (location.hash === "#crm") loadCrm("");
+      });
+      window.addEventListener("hashchange", () => {
+        if (location.hash === "#crm") loadCrm(txt(q("crmQuery")?.value).trim());
+      });
+    })();
+  </script>
+
+
     </div>
     </div>
   </div>

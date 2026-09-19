@@ -255,6 +255,43 @@ import {
   listOutbox as listOutboxOn,
   outboxStats as outboxStatsOn,
 } from "./feedbackOutbox.js";
+import { deliveryControl, setLocalDeliveryStopped, compactLocalOutbox } from "./opsDelivery.js";
+import { handleApplyRequest, remoteCsAcceptControl, setRemoteCsStopped } from "./siteCommandApply.js";
+import {
+  ensureCrmSchema,
+  crmOverview as crmOverviewOn,
+  getContact as getContactOn,
+  createContact as createContactOn,
+  updateContact as updateContactOn,
+  createCase as createCaseOn,
+  updateCase as updateCaseOn,
+  addNote as addNoteOn,
+  addTodo as addTodoOn,
+  setTodoDone as setTodoDoneOn,
+  setCrmEnabled as setCrmEnabledOn,
+  crmModule as crmModuleOn,
+  enqueueCrmFromFeedback,
+  createCaseFromFeedback as createCaseFromFeedbackOn,
+} from "./crm.js";
+import { ensureCrmOutboxSchema } from "./crmOutbox.js";
+import { crmDeliveryControl, setLocalCrmSyncStopped } from "./crmDelivery.js";
+import {
+  bindBudgetDb,
+  ensureBudgetSchema,
+  listProviderAdmin,
+  saveProviderConfig,
+  saveSiteBudget,
+  getProviderConfig,
+} from "./budgetGuard.js";
+import { executeWithProvider } from "./providers/executeWithProvider.js";
+import {
+  ensureListingSimilaritySchema,
+  enqueueListingSimilarity,
+  getSimilarityAdmin,
+  reviewSimilarity,
+  savePhashSettings,
+  shouldEnqueueSimilarity,
+} from "./listingSimilarity.js";
 import {
   closeSelfListing as closeSelfListingOn,
   createSelfListing as createSelfListingOn,
@@ -889,6 +926,11 @@ try {
 ensureDemandSchema(db);
 ensureFeedbackSchema(db);
 ensureFeedbackOutboxSchema(db);
+ensureCrmSchema(db);
+ensureCrmOutboxSchema(db);
+ensureBudgetSchema(db);
+bindBudgetDb(db);
+ensureListingSimilaritySchema(db);
 ensureSelfListingSchema(db);
 ensureStage1FixtureSchema(db);
 ensureRentalMatchIndexes(db);
@@ -1174,9 +1216,68 @@ export function getAdminMapsSettings() {
     googleBlockReason: block.reason,
     googleBlockUntil: block.until,
     provider: googleDirectionsAllowed() ? "google" : "osrm",
-    warning: mapsAdminWarning({ googleEnabled, rushEnabled: enabled, hasKey, block }),
+    warning: mapsDistanceWarning(mapsAdminWarning({ googleEnabled, rushEnabled: enabled, hasKey, block })),
     usage,
   };
+}
+
+function mapsDistanceWarning(base) {
+  const cfg = getProviderConfig(db, "distance_matrix");
+  if (googleDirectionsEnabled() && Number(cfg?.daily_limit_minor || 0) <= 0) {
+    return `${base} 外掛日預算為 0，BudgetGuard 不准花付費額度，Google Directions 不會送出。請到「外掛與預算」填日預算（建議 NT$50）。`;
+  }
+  return base;
+}
+
+export function getAdminProviderSettings() {
+  return listProviderAdmin(db);
+}
+
+export function saveAdminProviderSettings(partial = {}) {
+  return saveProviderConfig(db, partial);
+}
+
+export function saveAdminSiteBudget(partial = {}) {
+  return saveSiteBudget(db, partial);
+}
+
+export function getAdminSimilaritySettings() {
+  return getSimilarityAdmin(db);
+}
+
+export function saveAdminPhashSettings(partial = {}) {
+  return savePhashSettings(db, partial);
+}
+
+export function reviewAdminSimilarity(id, partial = {}, userId = 0) {
+  return reviewSimilarity(db, id, partial, userId);
+}
+
+export async function testAdminProvider(partial = {}) {
+  const category = String(partial.category || "").trim();
+  const cfg = getProviderConfig(db, category);
+  if (!cfg) {
+    const err = new Error("unknown category");
+    err.status = 400;
+    throw err;
+  }
+  const result = await executeWithProvider({
+    db,
+    category,
+    actionWithProvider: async (row) => {
+      if (row.provider_code === "stub_paid") {
+        return { value: { ping: "stub_paid" }, usage: { costMinor: Number(row.ceiling_minor) || 0 } };
+      }
+      if (row.provider_code === "google_routes") {
+        if (!hasGoogleMapsKey()) throw new Error("no google key");
+        return { value: { ping: "google_configured" }, usage: { costMinor: 0 } };
+      }
+      if (!row.credential_ref) throw new Error("no credential");
+      return { value: { ping: "configured" }, usage: { costMinor: 0 } };
+    },
+    fallbackAction: async () => ({ fallback: true, ping: "free_path" }),
+  });
+  return { ok: Boolean(result) && result.fallback !== true, result, ceiling_twd: Number(cfg.ceiling_minor || 0) / 1_000_000 };
 }
 
 export function saveAdminMapsSettings(partial = {}) {
@@ -2019,11 +2120,95 @@ export function listFeedbackItems(opts = {}) {
 }
 
 export function updateFeedbackItem(id, patch) {
-  return updateFeedbackOn(db, id, patch);
+  const row = updateFeedbackOn(db, id, patch);
+  try { enqueueCrmFromFeedback(db, id); } catch { /* CRM 連結是可選 */ }
+  return row;
+}
+
+export function getCrmOverview(query = {}) {
+  return crmOverviewOn(db, query);
+}
+
+export function getCrmContact(id) {
+  return getContactOn(db, id);
+}
+
+export function createCrmContact(input, opts) {
+  return createContactOn(db, input, opts);
+}
+
+export function updateCrmContact(id, input) {
+  return updateContactOn(db, id, input);
+}
+
+export function createCrmCase(contactId, input) {
+  return createCaseOn(db, contactId, input);
+}
+
+export function updateCrmCase(caseId, input) {
+  return updateCaseOn(db, caseId, input);
+}
+
+export function addCrmNote(contactId, input, opts) {
+  return addNoteOn(db, contactId, input, opts);
+}
+
+export function addCrmTodo(contactId, input) {
+  return addTodoOn(db, contactId, input);
+}
+
+export function setCrmTodoDone(todoId, done) {
+  return setTodoDoneOn(db, todoId, done);
+}
+
+export function getCrmModule() {
+  return crmModuleOn(db);
+}
+
+export function setCrmModuleEnabled(enabled) {
+  return setCrmEnabledOn(db, enabled);
+}
+
+export function getCrmDeliveryControl() {
+  return crmDeliveryControl(db);
+}
+
+export function setCrmDeliveryStop(stopped) {
+  return setLocalCrmSyncStopped(db, Boolean(stopped));
+}
+
+export function createCrmFromFeedback(feedbackId) {
+  return createCaseFromFeedbackOn(db, feedbackId);
 }
 
 export function getFeedbackStats() {
   return feedbackStatsOn(db);
+}
+
+export function getOpsDeliveryControl() {
+  return deliveryControl(db);
+}
+
+export function setOpsDeliveryStop(stopped) {
+  setLocalDeliveryStopped(db, Boolean(stopped));
+  return deliveryControl(db);
+}
+
+export function applyOpsSiteCommand(headers, rawBody) {
+  return handleApplyRequest(db, { headers, rawBody });
+}
+
+export function getRemoteCsControl() {
+  return remoteCsAcceptControl(db);
+}
+
+export function setRemoteCsStop(stopped) {
+  setRemoteCsStopped(db, Boolean(stopped));
+  return remoteCsAcceptControl(db);
+}
+
+export function compactOpsOutbox(opts = {}) {
+  return compactLocalOutbox(db, opts);
 }
 
 export { feedbackMeta };
@@ -3799,6 +3984,18 @@ export function upsertListing(listing) {
     } catch {
       // ignore
     }
+  }
+  enqueueSimilaritySafe(listing);
+}
+
+function enqueueSimilaritySafe(listing) {
+  try {
+    if (!listing?.post_id || !shouldEnqueueSimilarity(db)) return;
+    queueMicrotask(() => {
+      Promise.resolve(enqueueListingSimilarity(db, listing)).catch(() => {});
+    });
+  } catch {
+    // 指紋失敗不擋入庫
   }
 }
 

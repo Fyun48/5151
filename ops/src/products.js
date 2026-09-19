@@ -1,0 +1,454 @@
+import { randomBytes } from "node:crypto";
+import { withImmediateTx } from "./tx.js";
+import { appendAuditRow } from "./audit.js";
+import { httpError } from "./errors.js";
+import { verifyIngestRequest } from "./ingestSignature.js";
+import { ensureDefaultEnvironmentBindings, listProductEnvironments } from "./productEnvironment.js";
+import { ensureCommandCredential, revokeCommandCredentials } from "./siteCommand.js";
+import { encryptSecret, decryptSecret, requireSecretAtRestKey, secretAtRestKey } from "./secretAtRest.js";
+
+export const DEFAULT_PRODUCT_ID = "v3";
+export const DEFAULT_PRODUCT_NAME = "吉比租房";
+
+export const DEFAULT_CAPABILITIES = Object.freeze({
+  feedback_copy: true,
+  crm_sync: false,
+  remote_cs: false,
+  stats: false,
+  cross_site_insight: false,
+  followup_service: false,
+  retain_after_exit: false,
+});
+
+export const CONSENT_KEYS = Object.freeze(Object.keys(DEFAULT_CAPABILITIES));
+
+export function ensureConsentEventSchema(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS product_consent_event (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id TEXT NOT NULL,
+      capability_key TEXT NOT NULL,
+      granted INTEGER NOT NULL,
+      actor TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_consent_product ON product_consent_event(product_id, id);
+  `);
+}
+
+export function listConsentEvents(db, productId, { limit = 8 } = {}) {
+  ensureConsentEventSchema(db);
+  const id = String(productId || "");
+  if (!id) return [];
+  return db.prepare(`
+    SELECT id, product_id, capability_key, granted, actor, created_at
+      FROM product_consent_event WHERE product_id=? ORDER BY id DESC LIMIT ?
+  `).all(id, Number(limit) || 8).map((row) => ({
+    id: Number(row.id),
+    product_id: row.product_id,
+    capability_key: row.capability_key,
+    granted: Number(row.granted) === 1,
+    actor: row.actor,
+    created_at: row.created_at,
+  }));
+}
+
+export const PRODUCT_STATUSES = Object.freeze(["active", "paused", "exiting", "exited"]);
+export const SUBSCRIPTION_STATUSES = Object.freeze([
+  "connecting", "connected", "paused", "exiting", "exited", "reconnecting",
+]);
+
+const PRODUCT_ID_RE = /^[a-z][a-z0-9_-]{0,31}$/;
+
+function iso(now = new Date()) {
+  return (now instanceof Date ? now : new Date(now)).toISOString();
+}
+
+function parseCaps(raw) {
+  try { return raw ? JSON.parse(raw) : {}; } catch { return {}; }
+}
+
+export function normalizeProductId(value, { fallback = "" } = {}) {
+  const id = String(value || "").trim().toLowerCase();
+  if (PRODUCT_ID_RE.test(id)) return id;
+  return fallback;
+}
+
+export function ensureDefaultProduct(db, { now = new Date() } = {}) {
+  const ts = iso(now);
+  db.prepare(`
+    INSERT INTO ops_product(id, display_name, status, created_at, updated_at)
+    VALUES (?, ?, 'active', ?, ?)
+    ON CONFLICT(id) DO NOTHING
+  `).run(DEFAULT_PRODUCT_ID, DEFAULT_PRODUCT_NAME, ts, ts);
+  db.prepare(`
+    INSERT INTO product_subscription(product_id, generation, status, capabilities, started_at, updated_at)
+    VALUES (?, 1, 'connected', ?, ?, ?)
+    ON CONFLICT(product_id) DO NOTHING
+  `).run(DEFAULT_PRODUCT_ID, JSON.stringify({ ...DEFAULT_CAPABILITIES }), ts, ts);
+  ensureDefaultEnvironmentBindings(db, DEFAULT_PRODUCT_ID, { now });
+}
+
+export function ensureLegacyIngestSecret(db, secret, { productId = DEFAULT_PRODUCT_ID, now = new Date() } = {}) {
+  const trimmed = String(secret || "");
+  if (!trimmed) return null;
+  ensureDefaultProduct(db, { now });
+  const key = secretAtRestKey();
+  const existing = db.prepare(
+    "SELECT * FROM product_ingest_credential WHERE product_id=? AND status='active'",
+  ).all(productId).find((row) => decryptSecret(row.secret, key) === trimmed);
+  if (existing) return existing;
+  return issueCredential(db, { productId, secret: trimmed, label: "legacy-env", now });
+}
+
+export function listProducts(db) {
+  const rows = db.prepare(`
+    SELECT p.*, s.generation AS subscription_generation, s.status AS subscription_status,
+           s.capabilities, s.started_at AS subscription_started_at, s.ended_at AS subscription_ended_at
+      FROM ops_product p
+      LEFT JOIN product_subscription s ON s.product_id = p.id
+     ORDER BY p.id ASC
+  `).all();
+  return rows.map((row) => {
+    const product = publicProduct(row);
+    return {
+      ...product,
+      consent_events: listConsentEvents(db, product.id),
+      environments: listProductEnvironments(db, product.id),
+    };
+  });
+}
+
+export function getProduct(db, productId) {
+  const id = normalizeProductId(productId);
+  if (!id) return null;
+  const row = db.prepare(`
+    SELECT p.*, s.generation AS subscription_generation, s.status AS subscription_status,
+           s.capabilities, s.started_at AS subscription_started_at, s.ended_at AS subscription_ended_at
+      FROM ops_product p
+      LEFT JOIN product_subscription s ON s.product_id = p.id
+     WHERE p.id=?
+  `).get(id);
+  return row || null;
+}
+
+export function publicProduct(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    display_name: row.display_name,
+    status: row.status,
+    subscription: {
+      generation: Number(row.subscription_generation || 1),
+      status: row.subscription_status || "connected",
+      capabilities: parseCaps(row.capabilities),
+      started_at: row.subscription_started_at || row.created_at || null,
+      ended_at: row.subscription_ended_at || null,
+    },
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+export function createProduct(db, { id, displayName, actor = "owner", now = new Date() } = {}) {
+  const productId = normalizeProductId(id);
+  if (!productId) throw httpError("invalid product_id", 400);
+  if (getProduct(db, productId)) throw httpError("product exists", 409);
+  const ts = iso(now);
+  const name = String(displayName || productId).trim().slice(0, 80) || productId;
+  return withImmediateTx(db, () => {
+    db.prepare(`
+      INSERT INTO ops_product(id, display_name, status, created_at, updated_at)
+      VALUES (?, ?, 'active', ?, ?)
+    `).run(productId, name, ts, ts);
+    db.prepare(`
+      INSERT INTO product_subscription(product_id, generation, status, capabilities, started_at, updated_at)
+      VALUES (?, 1, 'connected', ?, ?, ?)
+    `).run(productId, JSON.stringify({ ...DEFAULT_CAPABILITIES }), ts, ts);
+    const cred = issueCredential(db, { productId, label: "initial", now });
+    ensureDefaultEnvironmentBindings(db, productId, { now });
+    appendAuditRow(db, {
+      actor,
+      action: "product.created",
+      entityType: "ops_product",
+      entityId: productId,
+      data: { display_name: name },
+      now,
+    });
+    return {
+      product: {
+        ...publicProduct(getProduct(db, productId)),
+        environments: listProductEnvironments(db, productId),
+      },
+      ingest_secret: cred.secret,
+    };
+  });
+}
+
+function setStatuses(db, productId, { productStatus, subscriptionStatus, actor, now, action }) {
+  const product = getProduct(db, productId);
+  if (!product) throw httpError("not found", 404);
+  const ts = iso(now);
+  return withImmediateTx(db, () => {
+    if (productStatus) {
+      db.prepare("UPDATE ops_product SET status=?, updated_at=? WHERE id=?").run(productStatus, ts, product.id);
+    }
+    if (subscriptionStatus) {
+      const ended = ["exited", "exiting"].includes(subscriptionStatus) ? ts : null;
+      db.prepare("UPDATE product_subscription SET status=?, ended_at=?, updated_at=? WHERE product_id=?")
+        .run(subscriptionStatus, ended, ts, product.id);
+    }
+    appendAuditRow(db, {
+      actor,
+      action,
+      entityType: "ops_product",
+      entityId: product.id,
+      data: { product_status: productStatus || product.status, subscription_status: subscriptionStatus || product.subscription_status },
+      now,
+    });
+    return publicProduct(getProduct(db, product.id));
+  });
+}
+
+export function pauseProduct(db, productId, { actor = "owner", now = new Date() } = {}) {
+  return setStatuses(db, productId, {
+    productStatus: "paused",
+    subscriptionStatus: "paused",
+    actor,
+    now,
+    action: "product.paused",
+  });
+}
+
+export function resumeProduct(db, productId, { actor = "owner", now = new Date() } = {}) {
+  const product = getProduct(db, productId);
+  if (!product) throw httpError("not found", 404);
+  if (product.status === "exited" || product.subscription_status === "exited") {
+    throw httpError("reconnect required", 409);
+  }
+  return setStatuses(db, productId, {
+    productStatus: "active",
+    subscriptionStatus: "connected",
+    actor,
+    now,
+    action: "product.resumed",
+  });
+}
+
+export function unsubscribeProduct(db, productId, { actor = "owner", now = new Date() } = {}) {
+  const product = getProduct(db, productId);
+  if (!product) throw httpError("not found", 404);
+  const ts = iso(now);
+  return withImmediateTx(db, () => {
+    revokeCredentials(db, product.id, { now, actor });
+    revokeCommandCredentials(db, product.id, { now });
+    db.prepare("UPDATE ops_product SET status=?, updated_at=? WHERE id=?").run("exited", ts, product.id);
+    db.prepare("UPDATE product_subscription SET status=?, ended_at=?, updated_at=? WHERE product_id=?")
+      .run("exited", ts, ts, product.id);
+    appendAuditRow(db, {
+      actor,
+      action: "product.unsubscribed",
+      entityType: "ops_product",
+      entityId: product.id,
+      data: { generation: product.subscription_generation },
+      now,
+    });
+    return publicProduct(getProduct(db, product.id));
+  });
+}
+
+export function reconnectProduct(db, productId, { actor = "owner", now = new Date() } = {}) {
+  const product = getProduct(db, productId);
+  if (!product) throw httpError("not found", 404);
+  const ts = iso(now);
+  return withImmediateTx(db, () => {
+    revokeCredentials(db, product.id, { now, actor });
+    const nextGen = Number(product.subscription_generation || 1) + 1;
+    db.prepare("UPDATE ops_product SET status=?, updated_at=? WHERE id=?").run("active", ts, product.id);
+    db.prepare(`
+      UPDATE product_subscription
+         SET generation=?, status='connected', ended_at=NULL, started_at=?, updated_at=?
+       WHERE product_id=?
+    `).run(nextGen, ts, ts, product.id);
+    const cred = issueCredential(db, { productId: product.id, label: `gen-${nextGen}`, now, generation: nextGen });
+    appendAuditRow(db, {
+      actor,
+      action: "product.reconnected",
+      entityType: "ops_product",
+      entityId: product.id,
+      data: { generation: nextGen },
+      now,
+    });
+    return { product: publicProduct(getProduct(db, product.id)), ingest_secret: cred.secret };
+  });
+}
+
+export function issueCredential(db, { productId, secret = null, label = "ingest", now = new Date(), generation = null } = {}) {
+  const id = normalizeProductId(productId);
+  if (!id) throw httpError("invalid product_id", 400);
+  const product = getProduct(db, id) || { subscription_generation: 1 };
+  const material = secret || randomBytes(24).toString("hex");
+  const ciphertext = encryptSecret(material, requireSecretAtRestKey());
+  const ts = iso(now);
+  const gen = generation == null ? Number(product.subscription_generation || 1) : Number(generation);
+  const res = db.prepare(`
+    INSERT INTO product_ingest_credential(product_id, generation, secret, label, status, created_at)
+    VALUES (?, ?, ?, ?, 'active', ?)
+  `).run(id, gen, ciphertext, String(label || "ingest").slice(0, 64), ts);
+  return { id: Number(res.lastInsertRowid), product_id: id, secret: material, generation: gen, label };
+}
+
+export function rotateCredential(db, productId, { actor = "owner", now = new Date() } = {}) {
+  const product = getProduct(db, productId);
+  if (!product) throw httpError("not found", 404);
+  if (!productAcceptsIngest(product)) throw httpError("subscription_inactive", 403);
+  return withImmediateTx(db, () => {
+    revokeCredentials(db, product.id, { now, actor });
+    const cred = issueCredential(db, { productId: product.id, label: "rotated", now });
+    appendAuditRow(db, {
+      actor,
+      action: "product.credential.rotated",
+      entityType: "ops_product",
+      entityId: product.id,
+      data: { credential_id: cred.id },
+      now,
+    });
+    return { product: publicProduct(getProduct(db, product.id)), ingest_secret: cred.secret };
+  });
+}
+
+export function revokeCredentials(db, productId, { now = new Date() } = {}) {
+  const ts = iso(now);
+  db.prepare("UPDATE product_ingest_credential SET status='revoked', revoked_at=? WHERE product_id=? AND status='active'")
+    .run(ts, productId);
+}
+
+export function listActiveCredentials(db) {
+  return db.prepare(`
+    SELECT id, product_id, generation, secret, label, status, created_at
+      FROM product_ingest_credential
+     WHERE status='active'
+     ORDER BY id ASC
+  `).all();
+}
+
+export function updateProductCapabilities(db, productId, patch = {}, { actor = "owner", now = new Date() } = {}) {
+  const product = getProduct(db, productId);
+  if (!product) throw httpError("not found", 404);
+  const current = parseCaps(product.capabilities);
+  const next = { ...DEFAULT_CAPABILITIES, ...current };
+  for (const key of CONSENT_KEYS) {
+    if (patch[key] === true || patch[key] === false) next[key] = patch[key];
+  }
+  if (next.crm_sync && !next.feedback_copy) {
+    throw httpError("CRM 同步不能代替回饋複製授權；兩者要分開勾。", 400);
+  }
+  if (next.cross_site_insight && !next.feedback_copy) {
+    throw httpError("跨站分析不能代替回饋複製授權；兩者要分開勾。", 400);
+  }
+  if (next.stats && !next.feedback_copy) {
+    throw httpError("統計指標不能代替回饋複製授權；兩者要分開勾。", 400);
+  }
+  if (next.followup_service && !next.feedback_copy) {
+    throw httpError("後續服務使用不能代替回饋複製授權；兩者要分開勾。", 400);
+  }
+  if (!next.cross_site_insight) next.retain_after_exit = false;
+  if (next.retain_after_exit && !next.cross_site_insight) {
+    throw httpError("退出後保留用途不能單獨開；要先有跨站分析授權。", 400);
+  }
+  const ts = iso(now);
+  ensureConsentEventSchema(db);
+  db.prepare("UPDATE product_subscription SET capabilities=?, updated_at=? WHERE product_id=?")
+    .run(JSON.stringify(next), ts, product.id);
+  for (const key of CONSENT_KEYS) {
+    if (Boolean(current[key]) === Boolean(next[key])) continue;
+    db.prepare(`
+      INSERT INTO product_consent_event(product_id, capability_key, granted, actor, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(product.id, key, next[key] ? 1 : 0, String(actor || "owner").slice(0, 80), ts);
+  }
+  appendAuditRow(db, {
+    actor,
+    action: "product.capabilities.updated",
+    entityType: "ops_product",
+    entityId: product.id,
+    data: next,
+    now,
+  });
+  const updated = publicProduct(getProduct(db, product.id));
+  const out = { ...updated, consent_events: listConsentEvents(db, product.id) };
+  if (next.remote_cs && !current.remote_cs) {
+    const cred = ensureCommandCredential(db, product.id, { now });
+    if (cred.created) out.command_secret = cred.secret;
+  }
+  if (!next.remote_cs && current.remote_cs) {
+    revokeCommandCredentials(db, product.id, { now });
+  }
+  return out;
+}
+
+export function productAcceptsIngest(product) {
+  if (!product) return false;
+  const pStatus = product.status;
+  const sStatus = product.subscription_status || product.subscription?.status;
+  return pStatus === "active" && (sStatus === "connected" || sStatus === "connecting");
+}
+
+export function getFeedbackForProduct(db, feedbackId, productId) {
+  const id = Number(feedbackId) || 0;
+  if (!id) return null;
+  const row = db.prepare("SELECT * FROM ingested_feedback WHERE id=?").get(id);
+  if (!row) return null;
+  if (productId && row.product_id !== productId) return null;
+  return row;
+}
+
+export function resolveIngestAuth(db, {
+  method,
+  path,
+  headers,
+  rawBody,
+  envSecret = "",
+  now = Date.now(),
+} = {}) {
+  const key = secretAtRestKey();
+  const candidates = listActiveCredentials(db)
+    .map((cred) => ({ ...cred, plaintext: decryptSecret(cred.secret, key) }))
+    .filter((cred) => cred.plaintext != null);
+  const env = String(envSecret || "");
+  const v3Creds = Number(db.prepare(
+    "SELECT COUNT(*) AS n FROM product_ingest_credential WHERE product_id=?",
+  ).get(DEFAULT_PRODUCT_ID)?.n || 0);
+  // env 只在完全沒有憑證列時當後備；撤銷／輪替後不得再靠環境變數開門。
+  if (env && v3Creds === 0 && !candidates.some((c) => c.plaintext === env && c.product_id === DEFAULT_PRODUCT_ID)) {
+    candidates.push({
+      id: 0,
+      product_id: DEFAULT_PRODUCT_ID,
+      generation: 0,
+      plaintext: env,
+      label: "env",
+      status: "active",
+    });
+  }
+  if (!candidates.length) {
+    const anyCreds = Number(db.prepare("SELECT COUNT(*) AS n FROM product_ingest_credential").get()?.n || 0);
+    if (anyCreds) return { ok: false, status: 401, error: "unauthorized", reason: "no_active_credential" };
+    return { ok: false, status: 503, error: "ingest not configured", reason: "no_secret_configured" };
+  }
+
+  let matched = null;
+  for (const cred of candidates) {
+    const check = verifyIngestRequest({ method, path, headers, rawBody, secret: cred.plaintext, now });
+    if (check.ok) {
+      matched = { ...check, productId: cred.product_id, generation: cred.generation, credentialId: cred.id };
+      break;
+    }
+  }
+  if (!matched) return { ok: false, status: 401, error: "unauthorized", reason: "bad_signature" };
+
+  const product = getProduct(db, matched.productId);
+  if (!productAcceptsIngest(product || { status: "active", subscription_status: "connected" })) {
+    return { ok: false, status: 403, error: "subscription_inactive", reason: "subscription_inactive", productId: matched.productId };
+  }
+  return { ok: true, ...matched };
+}

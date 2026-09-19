@@ -1,0 +1,112 @@
+name: Deploy OPS to Synology NAS (manual)
+run-name: "manual-owner-ops-synology:${{ inputs.sha }}"
+
+# 只同步 ops/ + Synology OPS-only compose，並只重建 5151-ops。
+# 這不是 v3 部署路徑：不 SCP v3/、不重建 591-tracker-v3、不碰 cloudflared/tunnel。
+# 合併／push 到 master 不會自動跑；必須明確 workflow_dispatch，且從 master 定義啟動。
+# 確認字串是 DEPLOY-OPS（不是 DEPLOY-PRODUCTION）。
+# 正式 Production release live mutation 預設關閉（PRODUCTION_RELEASE_ALLOW_LIVE=0）。
+# Owner 已書面授權：Cursor Agent（actor cursor / cursor[bot]）在使用者要求時可從 master 觸發本檔。見 AGENTS.md。
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "要部署的完整 40 碼 commit SHA（必須可從 origin/master 追溯）"
+        required: true
+      confirmation:
+        description: "輸入 DEPLOY-OPS 以確認只部署 OPS Console 到 Synology"
+        required: true
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ops-synology-deploy
+  cancel-in-progress: false
+
+jobs:
+  sync-synology-ops:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 15
+    steps:
+      - name: Authorize OPS Synology deployment (fail-closed)
+        env:
+          WF_REF: ${{ github.ref }}
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          ALLOWED_ACTOR: ${{ vars.PRODUCTION_DEPLOY_ALLOWED_ACTOR }}
+          CONFIRM: ${{ inputs.confirmation }}
+          DEPLOY_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$WF_REF" != "refs/heads/master" ]; then
+            echo "::error::OPS Synology deploy must run from the master workflow definition (got $WF_REF)"; exit 1
+          fi
+          if [ -z "${ALLOWED_ACTOR:-}" ]; then
+            echo "::error::PRODUCTION_DEPLOY_ALLOWED_ACTOR is not configured; refusing (fail-closed)"; exit 1
+          fi
+          CURSOR_DEPLOY=0
+          if [ "$ACTOR" = "cursor" ] || [ "$ACTOR" = "cursor[bot]" ]; then
+            if [ "$TRIGGERING_ACTOR" = "cursor" ] || [ "$TRIGGERING_ACTOR" = "cursor[bot]" ]; then
+              CURSOR_DEPLOY=1
+            fi
+          fi
+          if [ "$CURSOR_DEPLOY" != 1 ] && [ "$ACTOR" != "$ALLOWED_ACTOR" ]; then
+            echo "::error::actor '$ACTOR' is not the authorized deployer"; exit 1
+          fi
+          if [ "$CURSOR_DEPLOY" != 1 ] && [ "$TRIGGERING_ACTOR" != "$ALLOWED_ACTOR" ]; then
+            echo "::error::triggering actor '$TRIGGERING_ACTOR' is not the authorized deployer (re-run by another user is refused)"; exit 1
+          fi
+          if [ "${CONFIRM:-}" != "DEPLOY-OPS" ]; then
+            echo "::error::confirmation must be exactly DEPLOY-OPS"; exit 1
+          fi
+          if ! printf '%s' "${DEPLOY_SHA:-}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::sha must be a full 40-character commit SHA"; exit 1
+          fi
+      - name: Checkout workflow-definition SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Validate SHA reachable from origin/master, then check it out
+        env:
+          DEPLOY_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin master
+          if ! git merge-base --is-ancestor "$DEPLOY_SHA" origin/master; then
+            echo "::error::commit $DEPLOY_SHA is not reachable from origin/master; refusing"; exit 1
+          fi
+          git checkout --force "$DEPLOY_SHA"
+          test -d ops/src
+          test -f ops/src/server.js
+          test -f ops/public/console.html
+          test -f docker-compose.ops.synology.yml
+      - name: Copy OPS source + Synology compose only
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.NAS_HOST }}
+          port: ${{ secrets.NAS_PORT }}
+          username: ${{ secrets.NAS_USER }}
+          key: ${{ secrets.NAS_SSH_KEY }}
+          source: "ops,docker-compose.ops.synology.yml,.github/scripts/deploy-ops-synology-remote.sh"
+          target: ${{ vars.OPS_SYNOLOGY_APP_ROOT || '/volume1/docker/5151-ops/app' }}/incoming
+          overwrite: true
+      - name: Deploy 5151-ops on Synology (preflight + backup + rollback)
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.NAS_HOST }}
+          port: ${{ secrets.NAS_PORT }}
+          username: ${{ secrets.NAS_USER }}
+          key: ${{ secrets.NAS_SSH_KEY }}
+          script_stop: true
+          envs: DEPLOY_SHA,OPS_SYNOLOGY_APP_ROOT,OPS_SYNOLOGY_DATA_ROOT
+          script: |
+            set -euo pipefail
+            export DEPLOY_SHA='${{ inputs.sha }}'
+            export OPS_SYNOLOGY_APP_ROOT='${{ vars.OPS_SYNOLOGY_APP_ROOT || "/volume1/docker/5151-ops/app" }}'
+            export OPS_SYNOLOGY_DATA_ROOT='${{ vars.OPS_SYNOLOGY_DATA_ROOT || "/volume1/docker/5151-ops/data" }}'
+            bash "$OPS_SYNOLOGY_APP_ROOT/incoming/.github/scripts/deploy-ops-synology-remote.sh"

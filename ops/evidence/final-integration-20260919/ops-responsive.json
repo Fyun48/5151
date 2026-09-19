@@ -1,0 +1,130 @@
+{
+  "schema": "ops-final-integration-responsive-v1",
+  "generated_at": "2026-09-19T03:48:38.703Z",
+  "pr": "#369",
+  "target": {
+    "base_url": "http://127.0.0.1:5199",
+    "source": "local v3 server running the integrated code (same as deployed)",
+    "widths": [
+      375,
+      768,
+      1440
+    ],
+    "browser": "chrome.exe"
+  },
+  "surfaces": [
+    "admin-crm",
+    "admin-similarity",
+    "admin-feedback-inbox"
+  ],
+  "results": [
+    {
+      "name": "admin-crm",
+      "width": 375,
+      "logged_in": true,
+      "url": "http://127.0.0.1:5199/admin.html#crm",
+      "hash": "#crm",
+      "overflow_px": 0,
+      "small_touch_targets": [],
+      "unnamed_controls": [],
+      "focus_stops": 13,
+      "focus_failures": []
+    },
+    {
+      "name": "admin-similarity",
+      "width": 375,
+      "logged_in": true,
+      "url": "http://127.0.0.1:5199/admin.html#similarity",
+      "hash": "#similarity",
+      "overflow_px": 0,
+      "small_touch_targets": [],
+      "unnamed_controls": [],
+      "focus_stops": 26,
+      "focus_failures": []
+    },
+    {
+      "name": "admin-feedback-inbox",
+      "width": 375,
+      "logged_in": true,
+      "url": "http://127.0.0.1:5199/admin.html#feedback/inbox",
+      "hash": "#feedback/inbox",
+      "overflow_px": 0,
+      "small_touch_targets": [],
+      "unnamed_controls": [],
+      "focus_stops": 25,
+      "focus_failures": []
+    },
+    {
+      "name": "admin-crm",
+      "width": 768,
+      "logged_in": true,
+      "url": "http://127.0.0.1:5199/admin.html#crm",
+      "hash": "#crm",
+      "overflow_px": 0,
+      "small_touch_targets": [],
+      "unnamed_controls": [],
+      "focus_stops": 13,
+      "focus_failures": []
+    },
+    {
+      "name": "admin-similarity",
+      "width": 768,
+      "logged_in": true,
+      "url": "http://127.0.0.1:5199/admin.html#similarity",
+      "hash": "#similarity",
+      "overflow_px": 0,
+      "small_touch_targets": [],
+      "unnamed_controls": [],
+      "focus_stops": 26,
+      "focus_failures": []
+    },
+    {
+      "name": "admin-feedback-inbox",
+      "width": 768,
+      "logged_in": true,
+      "url": "http://127.0.0.1:5199/admin.html#feedback/inbox",
+      "hash": "#feedback/inbox",
+      "overflow_px": 0,
+      "small_touch_targets": [],
+      "unnamed_controls": [],
+      "focus_stops": 25,
+      "focus_failures": []
+    },
+    {
+      "name": "admin-crm",
+      "width": 1440,
+      "logged_in": true,
+      "url": "http://127.0.0.1:5199/admin.html#crm",
+      "hash": "#crm",
+      "overflow_px": 0,
+      "small_touch_targets": [],
+      "unnamed_controls": [],
+      "focus_stops": 12,
+      "focus_failures": []
+    },
+    {
+      "name": "admin-similarity",
+      "width": 1440,
+      "logged_in": true,
+      "url": "http://127.0.0.1:5199/admin.html#similarity",
+      "hash": "#similarity",
+      "overflow_px": 0,
+      "small_touch_targets": [],
+      "unnamed_controls": [],
+      "focus_stops": 25,
+      "focus_failures": []
+    },
+    {
+      "name": "admin-feedback-inbox",
+      "width": 1440,
+      "logged_in": true,
+      "url": "http://127.0.0.1:5199/admin.html#feedback/inbox",
+      "hash": "#feedback/inbox",
+      "overflow_px": 0,
+      "small_touch_targets": [],
+      "unnamed_controls": [],
+      "focus_stops": 24,
+      "focus_failures": []
+    }
+  ]
+}

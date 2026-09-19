@@ -98,6 +98,9 @@ async function seedCleared(db, repoRef) {
     sourceSha: repo.resolveRef("master"),
     artifactDigest: "sha256:" + "11".repeat(32),
     workflowRunId: "33999999999",
+    // rollback contract 需要完整 identity：static tree hash 必須是 64 hex，schema 必須 compatible。
+    staticTreeHash: "ab".repeat(32),
+    schemaCompat: "compatible",
     provenance: { kind: "seeded_previous_stable" },
     now: NOW,
   });
@@ -215,7 +218,8 @@ test("rollback API requires exact previous stable and never calls DB restore", a
       method: "POST", headers: { cookie, "Content-Type": "application/json", "X-CSRF-Token": csrf, Origin: base },
       body: JSON.stringify(payload),
     });
-    assert.equal(exec.status, 200);
+    const execBody = await exec.clone().text();
+    assert.equal(exec.status, 200, `execute must succeed with rollback, got ${exec.status}: ${execBody}`);
     const out = await exec.json();
     assert.equal(out.rolled_back, true);
     assert.equal(p.restoreCallCount, 0);
