@@ -28,6 +28,7 @@ import { CITIES, districtNameFromListing, districtsFromSearchUrls, lookupDistric
 import { appendDistrictCandidates, ensureDistrictCandidateIndex } from "./listDistrictSql.js";
 import { appendPriceCeilingCandidates } from "./listPriceSql.js";
 import { ensureListingSearchProjection, syncListingProjection, deleteListingProjection } from "./listingSearchProjection.js";
+import { buildListingSearchSql, sqlDisplayFilter } from "./listingSearchSql.js";
 import { addColumnIfMissing, addColumnsIfMissing, runMigrations } from "./migrate.js";
 import { SCHEMA_MIGRATIONS } from "./schemaMigrations.js";
 import { geoDistanceM, listingRefreshAt, matchFocusHints, preferPrimaryListing } from "./match.js";
@@ -5518,17 +5519,34 @@ export function listListings({
   };
 }
 
-// Display filters mirrored from passesDisplayFilters() (whole-floor / low-floor /
-// rooftop / parking). These are precomputed in the projection with the SAME
-// helpers, so the SQL-first envelope can honor them instead of rejecting the
-// default user settings (excludeLowFloors/excludeRooftop default to true).
-function sqlDisplayFilter(settings) {
-  const clauses = [];
-  if (settings.excludeLowFloors !== false) clauses.push("p.low_floor = 0");
-  if (settings.excludeRooftop !== false) clauses.push("p.rooftop = 0");
-  if (settings.hasParking === true) clauses.push("p.parking = 1");
-  return clauses.length ? `AND ${clauses.join(" AND ")}` : "";
+// Dependency bundle for the shared SQL-first builder (listingSearchSql.js). The
+// builder stays free of this module's singleton, and the PostgreSQL listings
+// repository gets the identical helpers through it — so both drivers build the
+// same statement.
+export function listingSearchBuildContext() {
+  return {
+    resolveUserId,
+    getSettings,
+    searchWhere,
+    listingVisibilityClauses,
+    appendDistrictCandidates,
+    appendPriceCeilingCandidates,
+    memberRegionDistrictNames,
+    // Handy for adapters that need to derive PostgreSQL DDL from the SQLite
+    // schema (repository/listings.js ensureProjection).
+    sqliteDb: db,
+  };
 }
+
+// Raw SQLite driver handle. Domain code must keep using the exported functions;
+// this exists so the repository adapters (createListingsRepository) and the
+// parity tests can run the same SQL against node:sqlite.
+export function sqliteHandle() {
+  return db;
+}
+
+// Display filters moved to listingSearchSql.js so the PostgreSQL listings
+// repository applies the identical predicate (imported at the top of this file).
 
 // SQL-first search path (Phase 7). Pushes the district re-check, ORDER BY and
 // LIMIT/OFFSET into SQL against the indexed listing_search_projection, so only
@@ -5536,121 +5554,24 @@ function sqlDisplayFilter(settings) {
 // fall outside the exact-equivalence envelope; callers must fall back to
 // listListings(). Supports the common "all" surface (newest / price sorts) and
 // the display filters mirrored above.
-export function listListingsSqlFirst({
-  filter = "all",
-  kind = "",
-  sources = "",
-  q = "",
-  sort = "newest",
-  limit = 500,
-  offset = 0,
-  cursor = null,
-  searchKeys,
-  districts = [],
-  userId,
-  settings: settingsOverride,
-  sameHouse = true,
-  matchVoteUserId,
-} = {}) {
-  if (filter !== "all") return null;
-  if (kind || sources || q) return null;
-  if (!["newest", "price_asc", "price_desc"].includes(sort)) return null;
+//
+// The statement text comes from the shared builder (listingSearchSql.js), which
+// the PostgreSQL listings repository calls too — parity between the SQLite and
+// PostgreSQL paths is therefore a property of the code, not of two copies.
+export function listListingsSqlFirst(args = {}) {
+  const built = buildListingSearchSql(args, listingSearchBuildContext());
+  if (!built.ok) return null;
+  const { uid, voteUid, settings } = built;
+  const { sameHouse = true } = args;
 
-  const uid = resolveUserId(userId);
-  const voteUid = matchVoteUserId == null ? uid : Number(matchVoteUserId) || 0;
-  const settings = settingsOverride || getSettings(uid);
-  if (
-    Number(settings.priceMin) > 0 || Number(settings.priceMax) > 0 ||
-    Number(settings.minBuildingFloors) > 0 || Number(settings.areaMax) > 0 ||
-    settings.wholeFloorOnly === true ||
-    (settings.excludeKeywords || []).length || (settings.excludeAgents || []).length ||
-    (settings.excludeAgentIds || []).length || (settings.excludeBoxes || []).length ||
-    Number(settings.commuteKm) > 0
-  ) {
-    return null;
-  }
-
-  const requestedDistricts = (Array.isArray(districts) ? districts : String(districts || "").split(","))
-    .map((name) => String(name || "").trim()).filter(Boolean);
-  const districtNames = requestedDistricts.length ? requestedDistricts : memberRegionDistrictNames(settings);
-  if (!districtNames.length) return null;
-
-  const clauses = [];
-  const params = [];
-  searchWhere(searchKeys, clauses, params);
-  listingVisibilityClauses(clauses, params);
-  appendDistrictCandidates(districtNames, clauses, params);
-  appendPriceCeilingCandidates(settings, clauses, params);
-  // filter === "all": confirmed-offline / dup / hidden / watched are excluded.
-  clauses.push("NOT (IFNULL(offline, 0) = 1 AND IFNULL(offline_confirmed, 0) = 1)");
-  clauses.push("(IFNULL(match_verdict, '') != 'yes')");
-  clauses.push(`NOT EXISTS (
-    SELECT 1 FROM user_listing_flags f
-    WHERE f.post_id = listings.post_id AND f.user_id = ? AND f.hidden = 1
-  )`);
-  params.push(uid);
-  clauses.push(`IFNULL((
-    SELECT watched FROM user_listing_flags f
-    WHERE f.post_id = listings.post_id AND f.user_id = ?
-  ), 0) = 0`);
-  params.push(uid);
-
-  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-  const cost = settings.priceMaxIncludesExtras === true ? "p.total_monthly_cost" : "p.rent";
-  const orderBy =
-    sort === "newest" ? "p.updated_at DESC, p.post_id ASC"
-      : sort === "price_desc"
-        ? `CASE WHEN ${cost} > 0 THEN 0 ELSE 1 END ASC, ${cost} DESC, p.updated_at DESC, p.post_id ASC`
-        : `CASE WHEN ${cost} > 0 THEN ${cost} ELSE 9223372036854775807 END ASC, p.updated_at DESC, p.post_id ASC`;
-
-  const pageSize = Math.max(1, Math.min(Number(limit) || 500, 500));
-  const start = Math.max(0, Number(offset) || 0);
-  const districtMarks = districtNames.map(() => "?").join(",");
-  const districtWhere = `p.district IN (${districtMarks})`;
-  const displayFilter = sqlDisplayFilter(settings);
-
-  // Cursor/keyset pagination. The cursor encodes the full sort key of the last
-  // row; DESC columns are negated so one row-value `>` comparison matches the
-  // ORDER BY across the ASC/DESC mix.
-  const rowCost = (row) => (settings.priceMaxIncludesExtras === true ? Number(row.total_monthly_cost) : Number(row.rent));
-  const sortCostExpr = `CASE WHEN ${cost} > 0 THEN ${cost} ELSE 9223372036854775807 END`;
-  const costGroupExpr = `CASE WHEN ${cost} > 0 THEN 0 ELSE 1 END`;
-  const useCursor = cursor != null;
-  let tupleExpr = "";
-  let cursorParams = [];
-  let cursorOf = null;
-  if (sort === "newest") {
-    tupleExpr = "(-p.updated_at, p.post_id)";
-    cursorParams = useCursor ? [-Number(cursor.updatedAt), Number(cursor.postId)] : [];
-    cursorOf = (row) => ({ updatedAt: row.updated_at, postId: row.post_id });
-  } else if (sort === "price_asc") {
-    tupleExpr = `(${sortCostExpr}, -p.updated_at, p.post_id)`;
-    cursorParams = useCursor ? [Number(cursor.sortCost), -Number(cursor.updatedAt), Number(cursor.postId)] : [];
-    cursorOf = (row) => ({ sortCost: rowCost(row) > 0 ? rowCost(row) : 9223372036854775807, updatedAt: row.updated_at, postId: row.post_id });
-  } else { // price_desc
-    tupleExpr = `(${costGroupExpr}, -${cost}, -p.updated_at, p.post_id)`;
-    cursorParams = useCursor ? [Number(cursor.costGroup), -Number(cursor.cost), -Number(cursor.updatedAt), Number(cursor.postId)] : [];
-    cursorOf = (row) => ({ costGroup: rowCost(row) > 0 ? 0 : 1, cost: rowCost(row), updatedAt: row.updated_at, postId: row.post_id });
-  }
-  const cursorWhere = useCursor ? `AND ${tupleExpr} > (${cursorParams.map(() => "?").join(", ")})` : "";
-
-  const countRow = db.prepare(`SELECT COUNT(*) AS n FROM listing_search_projection p
-    WHERE p.post_id IN (SELECT post_id FROM listings ${where})
-    AND ${districtWhere}
-    ${displayFilter}`).get(...params, ...districtNames);
+  // SQL construction (WHERE clauses, ORDER BY, keyset cursor, display filter)
+  // lives in the shared builder so the PostgreSQL listings repository runs the
+  // exact same statement text.
+  const countRow = db.prepare(built.countQuery.sql).get(...built.countQuery.params);
   const totalMatched = Number(countRow?.n) || 0;
 
-  const pageSql = `SELECT p.post_id, p.updated_at, p.rent, p.total_monthly_cost FROM listing_search_projection p
-    WHERE p.post_id IN (SELECT post_id FROM listings ${where})
-    AND ${districtWhere}
-    ${displayFilter}
-    ${cursorWhere}
-    ORDER BY ${orderBy}
-    LIMIT ?${useCursor ? "" : " OFFSET ?"}`;
-  const pageParams = useCursor
-    ? [...params, ...districtNames, ...cursorParams, pageSize]
-    : [...params, ...districtNames, pageSize, start];
-  const pageRows = db.prepare(pageSql).all(...pageParams);
+  const plan = built.pageQuery({ limit: args.limit, offset: args.offset, cursor: args.cursor ?? null });
+  const pageRows = db.prepare(plan.sql).all(...plan.params);
 
   const ids = pageRows.map((row) => Number(row.post_id));
   const fullRows = ids.length
@@ -5668,16 +5589,16 @@ export function listListingsSqlFirst({
     return finalizeListingDecorate(lite, settings, uid, { sameHouse: needPeers, matchVoteUserId: voteUid });
   });
 
-  const nextCursor = ids.length ? cursorOf(pageRows[pageRows.length - 1]) : null;
+  const nextCursor = ids.length ? built.cursorOf(pageRows[pageRows.length - 1]) : null;
 
   return {
     listings,
     totalMatched,
-    hasMore: useCursor ? ids.length === pageSize : start + pageSize < totalMatched,
-    nextOffset: start + pageSize,
+    hasMore: plan.useCursor ? ids.length === plan.pageSize : plan.start + plan.pageSize < totalMatched,
+    nextOffset: plan.start + plan.pageSize,
     nextCursor,
     queryVersion: 3,
-    queryDetails: { sql_first: true, cursor: useCursor },
+    queryDetails: { sql_first: true, cursor: plan.useCursor },
   };
 }
 
