@@ -1,5 +1,6 @@
 import "./env.js";
 import { resolveAppRole, roleRunsWeb, roleRunsCrawler, roleRunsWorker } from "./appRole.js";
+import { searchListingsAsync } from "./listingSearchAsync.js";
 import express from "express";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -21,9 +22,6 @@ import {
   getSettings,
   hideMany,
   listListings,
-  listListingsCommuteSqlFirst,
-  listListingsFitSqlFirst,
-  listListingsSqlFirst,
   loadProfile,
   recentEvents,
   registerUser,
@@ -3719,11 +3717,11 @@ app.get("/api/listings", async (req, res) => {
   // SQL-first fast path (Phase 7/8): push the district re-check + ORDER BY +
   // LIMIT/OFFSET into SQL. Each fast path returns null outside its
   // exact-equivalence envelope, so fall back to the Node path when it does.
-  const listed =
-    listListingsSqlFirst(args) ||
-    listListingsCommuteSqlFirst(args) ||
-    listListingsFitSqlFirst(args) ||
-    listListings(args);
+  // The chain is awaited (searchListingsAsync) so the same handler can serve the
+  // PostgreSQL driver; with DB_DRIVER=sqlite the returned object is unchanged.
+  const listed = await searchListingsAsync(args, {
+    allowUndecorated: process.env.PG_LISTINGS_UNDECORATED === "1",
+  });
   const queryMs = Date.now() - started;
   const statsStarted = Date.now();
   const statsDetails = {};
