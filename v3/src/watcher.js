@@ -13,17 +13,11 @@ import {
   listingCount,
   listingCountForSearch,
   listMatchCandidates,
-  listingsNeeding591Geo,
   listingHasTrustedGeo,
-  listingsNeedingFeeDetail,
-  listingsNeedingSourceKit,
   markSourceKitRetry,
-  listingsNeedingRoute,
   listingCommutePatch,
   upsertRouteJob,
   getRouteJob,
-  listingsNeedingAddressGeo,
-  listingsNeedingAddressEnrich,
   markCoveringCompleted,
   markEventNotified,
   markListingOffline,
@@ -38,13 +32,9 @@ import {
   db,
   saveSettings,
   setCachedRoute,
-  setCachedMrt,
-  listingsNeedingMrt,
   commuteRushEnabled,
   collectCommuteSettings,
-  setCommunityCache,
   copyUserFlags,
-  setListingDetail,
   setListingMatch,
   reconcileListingById,
   touchListingChecked,
@@ -93,14 +83,32 @@ import { normalizeOfflineConfirmDays, shouldRecheckOffline } from "./offline.js"
 import { detailConcurrency, mapPool } from "./pool.js";
 // Driver-aware reads: with DB_DRIVER=postgres the crawler has to read back what it just wrote
 // (see crawlerReads.js). The synchronous read stays for helpers that are still sync.
-import { listingForWatchAsync, matchCandidatesAsync, needingAliveCheckAsync, needingOfflineRecheckAsync, watchSiblings } from "./crawlerReads.js";
+import {
+  listingForWatchAsync,
+  matchCandidatesAsync,
+  needing591GeoAsync,
+  needingAddressEnrichAsync,
+  needingAddressGeoAsync,
+  needingAliveCheckAsync,
+  needingFeeDetailAsync,
+  needingMrtAsync,
+  needingOfflineRecheckAsync,
+  needingRouteAsync,
+  needingSourceKitAsync,
+  watchSiblings,
+} from "./crawlerReads.js";
 // ... and the write half: the loops must store their results in the same store (crawlerWrites.js).
 import {
   invalidateListingLocationAsync,
   markListingAliveAsync,
   markListingOfflineAsync,
+  persistHpListingFieldsAsync,
   restoreListingOnlineAsync,
+  setCachedMrtAsync,
+  setCommunityCacheAsync,
+  setListingDetailAsync,
   touchListingCheckedAsync,
+  upsertListingPrepAsync,
 } from "./crawlerWrites.js";
 
 function nowIso() {
@@ -119,6 +127,8 @@ export function listingEnrichHelpers() {
     loadListing: (id) => listingForWatch(id),
     loadListingAsync: (id) => listingForWatchAsync(id),
     persistHpListingFields,
+    persistHpListingFieldsAsync: (id, next, options = {}) => persistHpListingFieldsAsync(id, next, options),
+    upsertListingPrepAsync: (postId, listing, evalResult) => upsertListingPrepAsync(postId, listing, evalResult),
     invalidateLocation: invalidateListingLocation,
     invalidateLocationAsync: (listing, next) => invalidateListingLocationAsync(Number(next?.post_id || listing?.post_id) || 0),
     markGone: (id) => markListingOffline(id),
@@ -244,12 +254,14 @@ function classify(incoming, existing, siblings = null, candidates = null) {
 function detailOptions() {
   return {
     getCommunity: getCommunityCache,
-    saveCommunity: setCommunityCache,
+    // Fire-and-forget inside client591, so swallow a rejected write here (the async path already
+    // falls back to SQLite on a PostgreSQL failure).
+    saveCommunity: (community) => { setCommunityCacheAsync(community).catch(() => {}); },
   };
 }
 
-function applyFetchedDetail(listing, detail) {
-  const saved = setListingDetail(listing.post_id, {
+async function applyFetchedDetail(listing, detail) {
+  const saved = await setListingDetailAsync(listing.post_id, {
     extraFees: mergeFeeRows(listing.extra_fees, detail.fees),
     contact: detail.contact,
     fetched: 1,
@@ -275,7 +287,7 @@ function listingHasTrustedPin(listing) {
 
 async function applyCommunityPin(listing, community) {
   if (!listing || !community || community.lat == null || community.lng == null) return listing;
-  return setListingDetail(listing.post_id, {
+  return await setListingDetailAsync(listing.post_id, {
     extraFees: listing.extra_fees,
     fetched: listing.extra_fees_fetched,
     lat: community.lat,
@@ -303,7 +315,7 @@ export async function ingestListingGeo(postId) {
     let community = getCommunityCache(commId);
     if (!community || (community.lat == null && !community.address)) {
       community = await fetchCommunityLocation(commId);
-      setCommunityCache(community || { id: commId, name: listing.community_name, address: "", lat: null, lng: null });
+      await setCommunityCacheAsync(community || { id: commId, name: listing.community_name, address: "", lat: null, lng: null });
     }
     if (community?.lat != null && community?.lng != null) {
       listing = await applyCommunityPin(listing, community);
@@ -313,7 +325,7 @@ export async function ingestListingGeo(postId) {
   if (listingHasTrustedPin(listing)) return { located: true };
   try {
     const detail = await fetchListingDetail(postId, detailOptions());
-    listing = applyFetchedDetail(listing, detail) || listing;
+    listing = (await applyFetchedDetail(listing, detail)) || listing;
     return { located: listingHasTrustedPin(listing) };
   } catch (error) {
     if (isListingGoneError(error)) {
@@ -853,13 +865,13 @@ export async function runWatch(options = {}) {
   await resolvePendingNotifyLocations(settings, { withRoute: options.skipHeavyGeo !== true });
   const offlineSweep = await sweepOfflineListings(seen, { limit: options.skipHeavyGeo ? 12 : 20 });
 
-  const pendingFees = listingsNeedingFeeDetail(needsListingGeo(settings) ? 30 : 20);
+  const pendingFees = await needingFeeDetailAsync({ limit: needsListingGeo(settings) ? 30 : 20 });
   for (const row of pendingFees) {
     try {
       const listing = await listingForWatchAsync(row.post_id);
       if (!listing) continue;
       const detail = await fetchListingDetail(row.post_id, detailOptions());
-      applyFetchedDetail(listing, detail);
+      await applyFetchedDetail(listing, detail);
     } catch (error) {
       if (isListingGoneError(error)) {
         const listing = await listingForWatchAsync(row.post_id);
@@ -871,7 +883,7 @@ export async function runWatch(options = {}) {
   }
 
   const skipBlockedKit = new Set();
-  const pendingSourceKit = listingsNeedingSourceKit(8);
+  const pendingSourceKit = await needingSourceKitAsync({ limit: 8 });
   for (const row of pendingSourceKit) {
     try {
       const listing = await listingForWatchAsync(row.post_id);
@@ -881,7 +893,7 @@ export async function runWatch(options = {}) {
       const extraFees = Array.isArray(kit.extra_fees)
         ? mergeFeeRows(listing.extra_fees, kit.extra_fees)
         : listing.extra_fees;
-      setListingDetail(listing.post_id, {
+      await setListingDetailAsync(listing.post_id, {
         extraFees,
         fetched: Array.isArray(kit.extra_fees) && kit.extra_fees.length
           ? 1
@@ -933,7 +945,7 @@ export async function runWatch(options = {}) {
 
 export async function backfillListingCoords(settings = getSettings(), { limit = LIST_PAGE_SIZE } = {}) {
   if (!needsListingGeo(settings) || limit <= 0) return { attempted: 0, located: 0 };
-  const rows = listingsNeeding591Geo(limit);
+  const rows = await needing591GeoAsync({ limit });
   return ingestListingGeoBatch(rows.map((row) => row.post_id));
 }
 
@@ -997,7 +1009,7 @@ function finishRouteAttempt(row, direction, kind, reason) {
 export async function backfillListingRoutes(settings = getSettings(), { limit = 20, priorityIds = [] } = {}) {
   const fallback = commuteWorkJobs([settings, ...collectCommuteSettings()])[0];
   if (limit <= 0) return { attempted: 0, located: 0, listings: [], postIds: [] };
-  const rows = listingsNeedingRoute(limit, { priorityIds }).filter((row) => {
+  const rows = (await needingRouteAsync({ limit, priorityIds })).filter((row) => {
     const key = routeJobKey(row, "to_work", "distance");
     return !routeInflight.has(key);
   });
@@ -1097,7 +1109,7 @@ export async function backfillListingRoutes(settings = getSettings(), { limit = 
 
 export async function backfillAddressGeo(settings = getSettings(), { limit = 12 } = {}) {
   if (!needsListingGeo(settings) || limit <= 0) return { attempted: 0, located: 0 };
-  const rows = listingsNeedingAddressGeo(limit);
+  const rows = await needingAddressGeoAsync({ limit });
   let attempted = 0;
   let located = 0;
   for (const row of rows) {
@@ -1124,7 +1136,7 @@ export async function backfillAddressGeo(settings = getSettings(), { limit = 12 
 
 export async function backfillIncompleteAddresses({ limit = 8 } = {}) {
   const hp = await processListingEnrichBatch(db, listingEnrichHelpers(), { limit: Math.min(8, limit) });
-  const rows = listingsNeedingAddressEnrich(Math.max(0, limit - (hp.processed || 0)));
+  const rows = await needingAddressEnrichAsync({ limit: Math.max(0, limit - (hp.processed || 0)) });
   if (!rows.length && !hp.attempted) return { attempted: 0, located: 0, processed: 0, updated: 0 };
   let attempted = hp.attempted || 0;
   let located = hp.located || 0;
@@ -1137,7 +1149,7 @@ export async function backfillIncompleteAddresses({ limit = 8 } = {}) {
       if (row.source === "591") {
         const detail = await fetchListingDetail(row.source_id || row.post_id, detailOptions());
         if (!detail?.address) continue;
-        const saved591 = applyFetchedDetail(current, detail);
+        const saved591 = await applyFetchedDetail(current, detail);
         if (saved591?.address && saved591.address !== current.address) {
           located += 1;
           updated += 1;
@@ -1185,7 +1197,7 @@ export async function backfillIncompleteAddresses({ limit = 8 } = {}) {
 }
 
 export async function backfillListingMrt({ limit = 20 } = {}) {
-  const rows = listingsNeedingMrt(limit);
+  const rows = await needingMrtAsync({ limit });
   if (!rows.length) return { attempted: 0, located: 0 };
   let attempted = 0;
   let located = 0;
@@ -1194,7 +1206,7 @@ export async function backfillListingMrt({ limit = 20 } = {}) {
     const access = await fetchMrtAccess(row.lat, row.lng);
     if (access?.pending) continue;
     if (access?.resolved) {
-      setCachedMrt(row.lat, row.lng, access);
+      await setCachedMrtAsync(row.lat, row.lng, access);
       located += 1;
     }
   }

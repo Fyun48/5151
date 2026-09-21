@@ -3510,6 +3510,67 @@ export function crawlerReadsBuildContext() {
     aliveCheckScanQuery,
     pickAliveCheckRows,
     offlineRecheckScanQuery,
+    // The other seven "what needs work" scans (repository/crawlerScans.js): statement text plus the
+    // JS pick that follows it, so a PostgreSQL scan cannot drift from the SQLite one.
+    feeDetailScanQuery,
+    feeDetailStaleScanQuery,
+    feeDetailStaleBefore,
+    feeDetailStaleQueryLimit,
+    pickFeeDetailRows,
+    sourceKitSources,
+    sourceKitPerSourceLimit,
+    sourceKitScanQuery,
+    sourceKitLegacyScanQuery,
+    pickSourceKitRows,
+    geo591ScanQuery,
+    communityCacheIdsQuery,
+    pick591GeoRows,
+    addressGeoScanQuery,
+    pickAddressGeoRows,
+    addressEnrichScanQuery,
+    pickAddressEnrichRows,
+    mrtScanQuery,
+    mrtCacheKeysQuery,
+    mrtKeyFor: makeMrtKey,
+    pickMrtRows,
+    // The route backfill also has to read route_jobs / route_cache, so the bundle carries those
+    // statements and the pure decision + key builders.
+    routeScanPlan,
+    routePriorityScanQuery,
+    routeWatchedScanQuery,
+    routePageScanQuery,
+    routeJobsQuery,
+    routeCacheQuery,
+    routeRowJobKeys,
+    routeRowCacheKeys,
+    routeRowNeed,
+    makeRouteKey,
+    parseRouteCacheRow,
+  };
+}
+
+// Dependency bundle for the listing FIELD writes the loops make (crawlerWrites ->
+// repository/listingFields.js). Same rule as the crawler reads: the statement text and the value
+// decisions stay here, next to the SQLite functions that already use them, and the repository runs
+// them through the injected exec without importing this module.
+export function listingFieldsBuildContext() {
+  return {
+    listingDetailPlan,
+    hpFieldsPlan,
+    mrtCacheUpsert,
+    communityCacheUpsert,
+    listingLocationUpdate,
+    notifyReopenQuery,
+    runStatements,
+    listingFields: {
+      detail: LISTING_DETAIL_SQL,
+      kit: LISTING_DETAIL_KIT_SQL,
+      costChange: LISTING_COST_CHANGE_SQL,
+      location: LISTING_LOCATION_SQL,
+      notifyReopen: NOTIFY_REOPEN_SQL,
+      mrtCache: MRT_CACHE_UPSERT_SQL,
+      communityCache: COMMUNITY_CACHE_UPSERT_SQL,
+    },
   };
 }
 
@@ -4181,6 +4242,37 @@ function preferFilledContact(next, prev) {
   return incoming || String(prev ?? "").trim();
 }
 
+// Statement text for setListingDetail(). Both drivers run these exact strings; the plan below
+// decides the values, so "which fetched field wins over the stored one" has one home.
+// `CAST(? AS ...) IS NOT NULL`: PostgreSQL cannot infer a parameter's type from `IS NOT NULL`
+// alone (SQLite does not care, and the cast is a no-op there).
+export const LISTING_DETAIL_SQL = `UPDATE listings SET
+      extra_fees = ?, extra_fees_fetched = ?,
+      contact_name = ?, contact_role = ?, agency = ?, mobile = ?, phone = ?,
+      line_url = ?, avatar = ?, contact_uid = ?, contact_fetched = ?,
+      contact_fetched_at = CASE WHEN ? = 1 THEN ? ELSE contact_fetched_at END,
+      lat = CASE WHEN CAST(? AS DOUBLE PRECISION) IS NOT NULL THEN ? ELSE lat END,
+      lng = CASE WHEN CAST(? AS DOUBLE PRECISION) IS NOT NULL THEN ? ELSE lng END,
+      geo_source = CASE WHEN CAST(? AS TEXT) IS NOT NULL THEN ? ELSE geo_source END,
+      address = CASE WHEN ? = 1 THEN listings.address ELSE ? END,
+      community_id = CASE WHEN ? > 0 THEN ? ELSE community_id END,
+      community_name = CASE WHEN ? != '' THEN ? ELSE community_name END,
+      community_linked = CASE WHEN ? > 0 THEN 1 ELSE community_linked END
+     WHERE post_id = ?`;
+
+export const LISTING_DETAIL_KIT_SQL = `UPDATE listings
+         SET has_natural_gas = ?,
+             has_balcony = ?,
+             furnish_items = ?,
+             kit_fetched = CASE WHEN ? = 1 THEN 1 ELSE kit_fetched END,
+             kit_error = CASE WHEN ? = 1 THEN NULL ELSE kit_error END,
+             kit_next_retry_at = CASE WHEN ? = 1 THEN NULL ELSE kit_next_retry_at END
+       WHERE post_id = ?`;
+
+export const LISTING_COST_CHANGE_SQL = `UPDATE listings
+       SET cost_changed_at = ?, cost_change_type = 'fee_update', cost_change_detail = ?, last_event = 'update'
+       WHERE post_id = ?`;
+
 function contactPayloadHasValue(contact) {
   if (!contact || typeof contact !== "object") return false;
   return [
@@ -4195,138 +4287,28 @@ function contactPayloadHasValue(contact) {
   ].some((value) => String(value ?? "").trim() !== "");
 }
 
-export function setListingDetail(postId, { extraFees, contact, fetched = 1, lat, lng, address, community_id, community_name, community_linked, geo_source, has_natural_gas, has_balcony, furnish_items, kit_fetched } = {}) {
+export function setListingDetail(postId, input = {}) {
   const listing = getListing(postId);
   if (!listing) return null;
-  const fees =
-    extraFees === undefined
-      ? JSON.stringify(listing.extra_fees || [])
-      : JSON.stringify(extraFees || []);
-  const next = {
-    contact_name: preferFilledContact(contact?.contact_name, listing.contact_name),
-    contact_role: preferFilledContact(contact?.contact_role, listing.contact_role),
-    agency: preferFilledContact(contact?.agency, listing.agency),
-    mobile: preferFilledContact(contact?.mobile, listing.mobile),
-    phone: preferFilledContact(contact?.phone, listing.phone),
-    line_url: preferFilledContact(contact?.line_url, listing.line_url),
-    avatar: preferFilledContact(contact?.avatar, listing.avatar),
-    contact_uid: contact?.contact_uid || listing.contact_uid || null,
-  };
-  const latNum = Number(lat);
-  const lngNum = Number(lng);
-  const hasCoords = Number.isFinite(latNum) && Number.isFinite(lngNum) && latNum !== 0 && lngNum !== 0;
-  const upgradingToCommunity = hasCoords && geo_source === "community";
-  const keepCommunity = listing.geo_source === "community" && !upgradingToCommunity;
-  const applyCoords = hasCoords && !keepCommunity;
-  const source = applyCoords ? (geo_source === "community" ? "community" : "591") : null;
-  const nextAddress = preferListingAddress(address, listing.address, listing.geo_source);
-  const keepAddress = !String(address || "").trim();
-  const nextCommunityId = Number(community_id) || listing.community_id || 0;
-  const nextCommunityName = String(community_name || listing.community_name || "").trim();
-  const nextCommunityLinked = sourceCommunityLinked({
-    communityId: nextCommunityId,
-    hasAnchor: Number(community_linked) === 1 || Number(listing.community_linked) === 1,
-  }) ? 1 : Number(listing.community_linked) || 0;
-  // 有實際帶入非空聯絡資料（非只補社區座標／空字串）才更新 contact_fetched_at。
-  const contactRefreshed = Boolean(fetched) && contactPayloadHasValue(contact);
-  const contactStamp = new Date().toISOString();
-  db.prepare(
-    `UPDATE listings SET
-      extra_fees = ?, extra_fees_fetched = ?,
-      contact_name = ?, contact_role = ?, agency = ?, mobile = ?, phone = ?,
-      line_url = ?, avatar = ?, contact_uid = ?, contact_fetched = ?,
-      contact_fetched_at = CASE WHEN ? = 1 THEN ? ELSE contact_fetched_at END,
-      lat = CASE WHEN ? IS NOT NULL THEN ? ELSE lat END,
-      lng = CASE WHEN ? IS NOT NULL THEN ? ELSE lng END,
-      geo_source = CASE WHEN ? IS NOT NULL THEN ? ELSE geo_source END,
-      address = CASE WHEN ? THEN listings.address ELSE ? END,
-      community_id = CASE WHEN ? > 0 THEN ? ELSE community_id END,
-      community_name = CASE WHEN ? != '' THEN ? ELSE community_name END,
-      community_linked = CASE WHEN ? > 0 THEN 1 ELSE community_linked END
-     WHERE post_id = ?`,
-  ).run(
-    fees,
-    Number(Boolean(fetched)),
-    next.contact_name,
-    next.contact_role,
-    next.agency,
-    next.mobile,
-    next.phone,
-    next.line_url,
-    next.avatar,
-    next.contact_uid,
-    Number(Boolean(fetched)),
-    contactRefreshed ? 1 : 0,
-    contactRefreshed ? contactStamp : null,
-    applyCoords ? latNum : null,
-    applyCoords ? latNum : null,
-    applyCoords ? lngNum : null,
-    applyCoords ? lngNum : null,
-    source,
-    source,
-    keepAddress ? 1 : 0,
-    nextAddress,
-    nextCommunityId,
-    nextCommunityId,
-    nextCommunityName,
-    nextCommunityName,
-    nextCommunityLinked,
-    postId,
-  );
-  try {
-    const kit = mergeKitColumns(listing, listingKitFrom({
-      ...listing,
-      has_natural_gas: has_natural_gas ?? listing.has_natural_gas,
-      has_balcony: has_balcony ?? listing.has_balcony,
-      furnish_items: furnish_items ?? listing.furnish_items,
-      kit_complete: Number(kit_fetched) === 1,
-    }));
-    db.prepare(`
-      UPDATE listings
-         SET has_natural_gas = ?,
-             has_balcony = ?,
-             furnish_items = ?,
-             kit_fetched = CASE WHEN ? = 1 THEN 1 ELSE kit_fetched END,
-             kit_error = CASE WHEN ? = 1 THEN NULL ELSE kit_error END,
-             kit_next_retry_at = CASE WHEN ? = 1 THEN NULL ELSE kit_next_retry_at END
-       WHERE post_id = ?
-    `).run(
-      kit.has_natural_gas,
-      kit.has_balcony,
-      JSON.stringify(kit.furnish_items),
-      Number(kit_fetched) === 1 ? 1 : 0,
-      Number(kit_fetched) === 1 ? 1 : 0,
-      Number(kit_fetched) === 1 ? 1 : 0,
-      postId,
-    );
-  } catch {
-    // older isolated fixtures without kit columns
+  // The statements (and their order) come from listingDetailPlan(), so the PostgreSQL twin runs the
+  // same text with the same values; only the extra SQLite side effects below are engine-specific.
+  const plan = listingDetailPlan(listing, input);
+  for (const step of plan.updates) {
+    if (step.tolerant) {
+      try {
+        db.prepare(step.sql).run(...step.params);
+      } catch {
+        // older isolated fixtures without kit columns
+      }
+    } else {
+      db.prepare(step.sql).run(...step.params);
+    }
   }
-  if (
-    extraFees !== undefined
-    && Number(listing.extra_fees_fetched) === 1
-    && feeSignature(listing) !== feeSignature({ ...listing, extra_fees: extraFees })
-  ) {
-    const stamp = new Date().toISOString();
-    const detail = feeChangeDetail(listing, { ...listing, extra_fees: extraFees });
-    db.prepare(
-      `UPDATE listings
-       SET cost_changed_at = ?, cost_change_type = 'fee_update', cost_change_detail = ?, last_event = 'update'
-       WHERE post_id = ?`,
-    ).run(stamp, detail, postId);
+  if (plan.feeChange) {
     const saved = getListing(postId);
-    if (saved) enqueueListingEvent(saved, { type: "fee_update", detail, created_at: stamp });
+    if (saved) enqueueListingEvent(saved, { type: "fee_update", detail: plan.feeChange.detail, created_at: plan.feeChange.stamp });
   }
-  if (applyCoords) {
-    applyListingLocation(postId, {
-      lat: latNum,
-      lng: lngNum,
-      geo_source: source,
-      location_class: source === "community" ? "community" : "source",
-      coord_version: Date.now(),
-      geo_job_state: "done",
-    });
-  }
+  if (plan.location) applyListingLocation(postId, plan.location);
   const saved = getListing(postId);
   try {
     if (significantListingUpdate(listing, saved)) {
@@ -4344,11 +4326,13 @@ export function setListingDetail(postId, { extraFees, contact, fetched = 1, lat,
 const CONTACT_REFRESH_MS = 7 * 24 * 60 * 60 * 1000;
 const CONTACT_REFRESH_CAP = 6;
 
-export function listingsNeedingFeeDetail(limit = 12) {
+// Statement builders for the 591 detail backfill. Same shape as the alive-check scans above: the
+// text lives here, is published through crawlerReadsBuildContext(), and the PostgreSQL path
+// (repository/crawlerScans.js) runs the SAME statement plus the same JS pick.
+export function feeDetailScanQuery({ limit = 12 } = {}) {
   const cap = Math.max(1, Number(limit) || 12);
-  const needy = db
-    .prepare(
-      `SELECT post_id FROM listings
+  return {
+    sql: `SELECT post_id FROM listings
        WHERE IFNULL(hidden, 0) = 0 AND IFNULL(offline, 0) = 0
          AND ${sql591Source()} AND (
          IFNULL(contact_fetched, 0) = 0
@@ -4358,73 +4342,133 @@ export function listingsNeedingFeeDetail(limit = 12) {
        )
        ORDER BY CASE WHEN lat IS NULL OR lng IS NULL THEN 0 ELSE 1 END, last_seen_at DESC
        LIMIT ?`,
-    )
-    .all(cap);
-  if (needy.length >= cap) return needy;
-  // 只用剩餘預算補「聯絡資料過期」的線上 591 物件（最舊的先），且不超過小上限。
-  const room = Math.min(cap - needy.length, CONTACT_REFRESH_CAP);
-  if (room <= 0) return needy;
-  const staleBefore = new Date(Date.now() - CONTACT_REFRESH_MS).toISOString();
-  const seen = new Set(needy.map((r) => Number(r.post_id)));
-  const stale = db
-    .prepare(
-      `SELECT post_id FROM listings
+    params: [cap],
+  };
+}
+
+export function feeDetailStaleBefore(now = Date.now()) {
+  return new Date((Number(now) || Date.now()) - CONTACT_REFRESH_MS).toISOString();
+}
+
+export function feeDetailStaleScanQuery({ staleBefore = feeDetailStaleBefore(), limit = 1 } = {}) {
+  return {
+    sql: `SELECT post_id FROM listings
        WHERE IFNULL(hidden, 0) = 0 AND IFNULL(offline, 0) = 0
          AND ${sql591Source()}
          AND IFNULL(contact_fetched, 0) = 1
          AND IFNULL(contact_fetched_at, '') < ?
        ORDER BY IFNULL(contact_fetched_at, '') ASC
        LIMIT ?`,
-    )
-    .all(staleBefore, room + needy.length);
-  const out = [...needy];
-  for (const r of stale) {
-    if (out.length >= needy.length + room) break;
+    params: [String(staleBefore || ""), Math.max(1, Number(limit) || 1)],
+  };
+}
+
+// The stale stage only runs with leftover budget from the needy stage, and its LIMIT is derived from
+// how many rows that stage returned - so a caller asks for the limit instead of guessing it.
+export function feeDetailStaleQueryLimit(needyCount, { limit = 12 } = {}) {
+  const cap = Math.max(1, Number(limit) || 12);
+  const count = Math.max(0, Number(needyCount) || 0);
+  if (count >= cap) return 0;
+  const room = Math.min(cap - count, CONTACT_REFRESH_CAP);
+  return room > 0 ? count + room : 0;
+}
+
+// 只用剩餘預算補「聯絡資料過期」的線上 591 物件（最舊的先），且不超過小上限。
+export function pickFeeDetailRows(needy, stale = [], { limit = 12 } = {}) {
+  const cap = Math.max(1, Number(limit) || 12);
+  const page = needy || [];
+  if (page.length >= cap) return page;
+  const room = Math.min(cap - page.length, CONTACT_REFRESH_CAP);
+  if (room <= 0) return page;
+  const seen = new Set(page.map((r) => Number(r.post_id)));
+  const out = [...page];
+  for (const r of stale || []) {
+    if (out.length >= page.length + room) break;
     if (!seen.has(Number(r.post_id))) out.push(r);
   }
   return out;
 }
 
-export function listingsNeedingSourceKit(limit = 8) {
+export function listingsNeedingFeeDetail(limit = 12) {
+  const needyQuery = feeDetailScanQuery({ limit });
+  // Plain objects on both drivers (see listingsNeedingAliveCheck).
+  const needy = db.prepare(needyQuery.sql).all(...needyQuery.params).map((row) => ({ ...row }));
+  const staleLimit = feeDetailStaleQueryLimit(needy.length, { limit });
+  if (!staleLimit) return pickFeeDetailRows(needy, [], { limit });
+  const staleQuery = feeDetailStaleScanQuery({ limit: staleLimit });
+  const stale = db.prepare(staleQuery.sql).all(...staleQuery.params).map((row) => ({ ...row }));
+  return pickFeeDetailRows(needy, stale, { limit });
+}
+
+// 外站（非 591）來源的補齊掃描：每個來源各一頁，再整體去重與截斷。
+export const SOURCE_KIT_SOURCES = ["hbhousing", "sinyi", "housefun", "rakuya"];
+
+export function sourceKitSources() {
+  return [...SOURCE_KIT_SOURCES];
+}
+
+export function sourceKitPerSourceLimit(limit = 8) {
   const cap = Math.max(1, Number(limit) || 8);
-  const sources = ["hbhousing", "sinyi", "housefun", "rakuya"];
-  const now = new Date().toISOString();
-  const perSource = Math.max(1, Math.ceil(cap / sources.length));
-  const out = [];
-  const seen = new Set();
-  for (const source of sources) {
-    let rows = [];
-    try {
-      rows = db
-        .prepare(
-          `SELECT post_id, source, source_id, url FROM listings
+  return Math.max(1, Math.ceil(cap / SOURCE_KIT_SOURCES.length));
+}
+
+export function sourceKitScanQuery({ source, now = new Date().toISOString(), limit = 2 } = {}) {
+  return {
+    sql: `SELECT post_id, source, source_id, url FROM listings
            WHERE IFNULL(hidden, 0) = 0 AND IFNULL(offline, 0) = 0
              AND source = ?
              AND IFNULL(kit_fetched, 0) = 0
              AND (kit_next_retry_at IS NULL OR kit_next_retry_at <= ?)
            ORDER BY ${sqlWatchedFirst()}, last_seen_at DESC
            LIMIT ?`,
-        )
-        .all(source, now, perSource);
-    } catch {
-      rows = db
-        .prepare(
-          `SELECT post_id, source, source_id, url FROM listings
+    params: [String(source || ""), String(now || ""), Math.max(1, Number(limit) || 1)],
+  };
+}
+
+// Stores that predate kit_next_retry_at: the same scan without the retry gate (the SQLite function
+// falls back to it when the wide statement does not prepare).
+export function sourceKitLegacyScanQuery({ source, limit = 2 } = {}) {
+  return {
+    sql: `SELECT post_id, source, source_id, url FROM listings
            WHERE IFNULL(hidden, 0) = 0 AND IFNULL(offline, 0) = 0
              AND source = ?
              AND IFNULL(kit_fetched, 0) = 0
            ORDER BY last_seen_at DESC
            LIMIT ?`,
-        )
-        .all(source, perSource);
-    }
-    for (const row of rows) {
-      if (seen.has(row.post_id) || out.length >= cap) continue;
-      seen.add(row.post_id);
-      out.push(row);
-    }
+    params: [String(source || ""), Math.max(1, Number(limit) || 1)],
+  };
+}
+
+export function pickSourceKitRows(rows, { limit = 8 } = {}) {
+  const cap = Math.max(1, Number(limit) || 8);
+  const out = [];
+  const seen = new Set();
+  for (const row of rows || []) {
+    if (seen.has(row.post_id) || out.length >= cap) continue;
+    seen.add(row.post_id);
+    out.push(row);
   }
   return out;
+}
+
+export function listingsNeedingSourceKit(limit = 8) {
+  const cap = Math.max(1, Number(limit) || 8);
+  const perSource = sourceKitPerSourceLimit(cap);
+  const now = new Date().toISOString();
+  const collected = [];
+  for (const source of SOURCE_KIT_SOURCES) {
+    let rows = [];
+    try {
+      const query = sourceKitScanQuery({ source, now, limit: perSource });
+      rows = db.prepare(query.sql).all(...query.params);
+    } catch {
+      const query = sourceKitLegacyScanQuery({ source, limit: perSource });
+      rows = db.prepare(query.sql).all(...query.params);
+    }
+    // Plain objects on both drivers (see listingsNeedingAliveCheck).
+    collected.push(...rows.map((row) => ({ ...row })));
+  }
+  return pickSourceKitRows(collected, { limit: cap });
 }
 
 export function markSourceKitRetry(postId, { error = "", delayMs = 15 * 60 * 1000 } = {}) {
@@ -4441,29 +4485,43 @@ export function markSourceKitRetry(postId, { error = "", delayMs = 15 * 60 * 100
   }
 }
 
-export function listingsNeeding591Geo(limit = 20) {
-  const cap = Math.max(1, Number(limit) || 20);
-  const rows = db
-    .prepare(
-      `SELECT post_id, community_id, source_key, lat, lng, geo_source FROM listings
+// 591 座標／社區補齊的掃描。`community_cache` 是否已有該社區（決定要不要再打社區 API）是唯一的
+// 額外讀取，所以 pick 把它當成注入的 predicate：SQLite 傳 hasCommunityCache()，PostgreSQL 傳由
+// communityCacheIdsQuery() 一次撈回來的集合。
+export function geo591ScanQuery() {
+  return {
+    sql: `SELECT post_id, community_id, source_key, lat, lng, geo_source FROM listings
        WHERE IFNULL(hidden, 0) = 0
          AND IFNULL(offline, 0) = 0
          AND ${sql591Source()}
        ORDER BY ${sqlWatchedFirst()}, last_seen_at DESC`,
-    )
-    .all();
+    params: [],
+  };
+}
+
+export function communityCacheIdsQuery() {
+  return { sql: "SELECT community_id FROM community_cache", params: [] };
+}
+
+export function pick591GeoRows(rows, { limit = 20, hasCommunity = () => false } = {}) {
+  const cap = Math.max(1, Number(limit) || 20);
   const out = [];
-  for (const row of rows) {
+  for (const row of rows || []) {
     const trusted = isTrustedGeoSource(row.geo_source);
     const missing = row.lat == null || row.lng == null || !trusted;
     const commId = listingCommunityId(row);
-    const needsCommunity = commId > 0 && row.geo_source !== "community" && !hasCommunityCache(commId);
+    const needsCommunity = commId > 0 && row.geo_source !== "community" && !hasCommunity(commId);
     if (missing || needsCommunity) {
       out.push({ post_id: row.post_id });
       if (out.length >= cap) break;
     }
   }
   return out;
+}
+
+export function listingsNeeding591Geo(limit = 20) {
+  const { sql, params } = geo591ScanQuery();
+  return pick591GeoRows(db.prepare(sql).all(...params), { limit, hasCommunity: hasCommunityCache });
 }
 
 /** 該物件是否已有可信座標（供外站爬蟲跳過已定位者，把補明細的預算留給還沒座標的物件）。 */
@@ -4935,21 +4993,23 @@ export function crawlIntervalMinutes() {
   return Math.max(1, Number(getSystemCrawl().intervalMinutes) || SYSTEM_CRAWL_INTERVAL_MINUTES);
 }
 
-export function listingsNeedingAddressGeo(limit = 20) {
-  const cap = Math.max(1, Number(limit) || 20);
-  const rows = db
-    .prepare(
-      `SELECT post_id, address, lat, lng, geo_source
+export function addressGeoScanQuery() {
+  return {
+    sql: `SELECT post_id, address, lat, lng, geo_source
        FROM listings
        WHERE IFNULL(hidden, 0) = 0
          AND IFNULL(offline, 0) = 0
          AND IFNULL(address, '') != ''
        ORDER BY ${sqlWatchedFirst()}, last_seen_at DESC
        LIMIT 800`,
-    )
-    .all();
+    params: [],
+  };
+}
+
+export function pickAddressGeoRows(rows, { limit = 20 } = {}) {
+  const cap = Math.max(1, Number(limit) || 20);
   const out = [];
-  for (const row of rows) {
+  for (const row of rows || []) {
     if (row.lat != null && row.lng != null && isTrustedGeoSource(row.geo_source)) continue;
     if (inferGeoQuality({ address: row.address }) === "unknown") continue;
     out.push(row);
@@ -4958,47 +5018,198 @@ export function listingsNeedingAddressGeo(limit = 20) {
   return out;
 }
 
-export function listingsNeedingAddressEnrich(limit = 12) {
-  const cap = Math.max(1, Number(limit) || 12);
-  const rows = db
-    .prepare(
-      `SELECT post_id, source, source_id, address, url
+export function listingsNeedingAddressGeo(limit = 20) {
+  const { sql, params } = addressGeoScanQuery();
+  // Plain objects on both drivers (see listingsNeedingAliveCheck).
+  return pickAddressGeoRows(db.prepare(sql).all(...params).map((row) => ({ ...row })), { limit });
+}
+
+export function addressEnrichScanQuery() {
+  return {
+    sql: `SELECT post_id, source, source_id, address, url
        FROM listings
        WHERE IFNULL(offline, 0) = 0
          AND source IN ('591', 'ddroom', 'rakuya')
        ORDER BY ${sqlWatchedFirst()}, IFNULL(last_checked_at, first_seen_at) ASC, post_id ASC
        LIMIT 400`,
-    )
-    .all();
-  return rows.filter((row) => addressPrecision(row.address) < 25).slice(0, cap);
+    params: [],
+  };
 }
 
-export function persistHpListingFields(postId, next, { locationChanged = false, previous = null } = {}) {
-  const row = db.prepare("SELECT * FROM listings WHERE post_id = ?").get(postId);
-  if (!row) return null;
+export function pickAddressEnrichRows(rows, { limit = 12 } = {}) {
+  const cap = Math.max(1, Number(limit) || 12);
+  return (rows || []).filter((row) => addressPrecision(row.address) < 25).slice(0, cap);
+}
+
+export function listingsNeedingAddressEnrich(limit = 12) {
+  const { sql, params } = addressEnrichScanQuery();
+  // Plain objects on both drivers (see listingsNeedingAliveCheck).
+  return pickAddressEnrichRows(db.prepare(sql).all(...params).map((row) => ({ ...row })), { limit });
+}
+
+// The pure half of setListingDetail(): given the stored row and the fetched detail, decide the
+// statements. `tolerant` mirrors the original try/catch: a store without the newer columns still
+// gets the rest written (the last statement of a chain is the one that must succeed).
+export function listingDetailPlan(listing, input = {}) {
+  const {
+    extraFees, contact, fetched = 1, lat, lng, address, community_id, community_name,
+    community_linked, geo_source, has_natural_gas, has_balcony, furnish_items, kit_fetched,
+  } = input;
+  const postId = Number(listing.post_id) || 0;
+  const fees = extraFees === undefined
+    ? JSON.stringify(listing.extra_fees || [])
+    : JSON.stringify(extraFees || []);
+  const next = {
+    contact_name: preferFilledContact(contact?.contact_name, listing.contact_name),
+    contact_role: preferFilledContact(contact?.contact_role, listing.contact_role),
+    agency: preferFilledContact(contact?.agency, listing.agency),
+    mobile: preferFilledContact(contact?.mobile, listing.mobile),
+    phone: preferFilledContact(contact?.phone, listing.phone),
+    line_url: preferFilledContact(contact?.line_url, listing.line_url),
+    avatar: preferFilledContact(contact?.avatar, listing.avatar),
+    contact_uid: contact?.contact_uid || listing.contact_uid || null,
+  };
+  const latNum = Number(lat);
+  const lngNum = Number(lng);
+  const hasCoords = Number.isFinite(latNum) && Number.isFinite(lngNum) && latNum !== 0 && lngNum !== 0;
+  const upgradingToCommunity = hasCoords && geo_source === "community";
+  const keepCommunity = listing.geo_source === "community" && !upgradingToCommunity;
+  const applyCoords = hasCoords && !keepCommunity;
+  const source = applyCoords ? (geo_source === "community" ? "community" : "591") : null;
+  const nextAddress = preferListingAddress(address, listing.address, listing.geo_source);
+  const keepAddress = !String(address || "").trim();
+  const nextCommunityId = Number(community_id) || listing.community_id || 0;
+  const nextCommunityName = String(community_name || listing.community_name || "").trim();
+  const nextCommunityLinked = sourceCommunityLinked({
+    communityId: nextCommunityId,
+    hasAnchor: Number(community_linked) === 1 || Number(listing.community_linked) === 1,
+  }) ? 1 : Number(listing.community_linked) || 0;
+  // 有實際帶入非空聯絡資料（非只補社區座標／空字串）才更新 contact_fetched_at。
+  const contactRefreshed = Boolean(fetched) && contactPayloadHasValue(contact);
+  const contactStamp = new Date().toISOString();
+  const updates = [{
+    sql: LISTING_DETAIL_SQL,
+    tolerant: false,
+    params: [
+      fees,
+      Number(Boolean(fetched)),
+      next.contact_name,
+      next.contact_role,
+      next.agency,
+      next.mobile,
+      next.phone,
+      next.line_url,
+      next.avatar,
+      next.contact_uid,
+      Number(Boolean(fetched)),
+      contactRefreshed ? 1 : 0,
+      contactRefreshed ? contactStamp : null,
+      applyCoords ? latNum : null,
+      applyCoords ? latNum : null,
+      applyCoords ? lngNum : null,
+      applyCoords ? lngNum : null,
+      source,
+      source,
+      keepAddress ? 1 : 0,
+      nextAddress,
+      nextCommunityId,
+      nextCommunityId,
+      nextCommunityName,
+      nextCommunityName,
+      nextCommunityLinked,
+      postId,
+    ],
+  }];
+  // Older isolated fixtures have no kit columns - that statement is the tolerant one.
+  const kit = mergeKitColumns(listing, listingKitFrom({
+    ...listing,
+    has_natural_gas: has_natural_gas ?? listing.has_natural_gas,
+    has_balcony: has_balcony ?? listing.has_balcony,
+    furnish_items: furnish_items ?? listing.furnish_items,
+    kit_complete: Number(kit_fetched) === 1,
+  }));
+  const kitFlag = Number(kit_fetched) === 1 ? 1 : 0;
+  updates.push({
+    sql: LISTING_DETAIL_KIT_SQL,
+    tolerant: true,
+    params: [
+      kit.has_natural_gas,
+      kit.has_balcony,
+      JSON.stringify(kit.furnish_items),
+      kitFlag,
+      kitFlag,
+      kitFlag,
+      postId,
+    ],
+  });
+  const feeChange = extraFees !== undefined
+    && Number(listing.extra_fees_fetched) === 1
+    && feeSignature(listing) !== feeSignature({ ...listing, extra_fees: extraFees })
+    ? {
+      stamp: new Date().toISOString(),
+      detail: feeChangeDetail(listing, { ...listing, extra_fees: extraFees }),
+    }
+    : null;
+  if (feeChange) {
+    updates.push({
+      sql: LISTING_COST_CHANGE_SQL,
+      tolerant: false,
+      params: [feeChange.stamp, feeChange.detail, postId],
+    });
+  }
+  return {
+    postId,
+    updates,
+    feeChange,
+    applyCoords,
+    contactRefreshed,
+    contactStamp,
+    address: nextAddress,
+    location: applyCoords
+      ? {
+        lat: latNum,
+        lng: lngNum,
+        geo_source: source,
+        location_class: source === "community" ? "community" : "source",
+        coord_version: Date.now(),
+        geo_job_state: "done",
+      }
+      : null,
+  };
+}
+
+// The pure half of persistHpListingFields(): same statement chain as before (wide -> without
+// content_seq -> without the newer columns), with `tolerant` marking the attempts the original
+// wrapped in try/catch. Only the last attempt may throw.
+export function hpFieldsPlan(listing, next = {}, { locationChanged = false } = {}) {
+  const postId = Number(listing.post_id) || 0;
   const text = (value, fallback = "") => {
     const raw = value == null || value === "" ? fallback : value;
     return raw == null ? "" : String(raw);
   };
-  const address = text(next.address, row.address);
-  const floorName = sanitizeFloorName(next.floor_name) || text(row.floor_name);
+  const address = text(next.address, listing.address);
+  const floorName = sanitizeFloorName(next.floor_name) || text(listing.floor_name);
   const tags = typeof next.tags === "string" ? next.tags : JSON.stringify(next.tags || []);
   const clearCoords = next.clear_coords === true;
   const approx = classifyAddress({
-    ...row,
+    ...listing,
     ...next,
     address,
-    lat: clearCoords ? null : (next.lat ?? row.lat),
-    lng: clearCoords ? null : (next.lng ?? row.lng),
+    lat: clearCoords ? null : (next.lat ?? listing.lat),
+    lng: clearCoords ? null : (next.lng ?? listing.lng),
   }).mark === "approx" ? 1 : 0;
-  const title = text(next.title, row.title);
-  const url = text(next.url, row.url);
-  const price = text(next.price, row.price);
-  const areaName = text(next.area_name, row.area_name);
-  const layout = text(next.layout, row.layout);
-  const kindName = text(next.kind_name, row.kind_name);
-  const communityName = text(next.community_name, row.community_name);
-  const geoSource = text(next.geo_source, row.geo_source);
+  const title = text(next.title, listing.title);
+  const url = text(next.url, listing.url);
+  const price = text(next.price, listing.price);
+  const areaName = text(next.area_name, listing.area_name);
+  const layout = text(next.layout, listing.layout);
+  const kindName = text(next.kind_name, listing.kind_name);
+  const communityName = text(next.community_name, listing.community_name);
+  const geoSource = text(next.geo_source, listing.geo_source);
+  // `CASE WHEN ? = 1` (not `WHEN ?`): node:sqlite cannot bind a JavaScript boolean, and on
+  // PostgreSQL the comparison gives the boolean the CASE needs - the same statement serves both.
+  const clear = clearCoords ? 1 : 0;
+  const bumpCoords = (locationChanged || clearCoords) ? 1 : 0;
   const values = [
     title, title,
     url, url,
@@ -5013,11 +5224,11 @@ export function persistHpListingFields(postId, next, { locationChanged = false, 
     Number(next.community_id) || 0, Number(next.community_id) || 0,
     Number(next.community_linked) || 0,
     tags, tags,
-    clearCoords ? 1 : 0, next.lat ?? null, next.lat ?? null,
-    clearCoords ? 1 : 0, next.lng ?? null, next.lng ?? null,
-    clearCoords ? 1 : 0, geoSource, geoSource,
+    clear, next.lat ?? null, next.lat ?? null,
+    clear, next.lng ?? null, next.lng ?? null,
+    clear, geoSource, geoSource,
     approx,
-    (locationChanged || clearCoords) ? 1 : 0,
+    bumpCoords,
     postId,
   ];
   const sqlCore = `
@@ -5035,53 +5246,90 @@ export function persistHpListingFields(postId, next, { locationChanged = false, 
       community_id = CASE WHEN ? > 0 THEN ? ELSE community_id END,
       community_linked = CASE WHEN ? > 0 THEN 1 ELSE community_linked END,
       tags = CASE WHEN IFNULL(?, '') != '' THEN ? ELSE tags END,
-      lat = CASE WHEN ? = 1 THEN NULL WHEN ? IS NOT NULL THEN ? ELSE lat END,
-      lng = CASE WHEN ? = 1 THEN NULL WHEN ? IS NOT NULL THEN ? ELSE lng END,
+      lat = CASE WHEN ? = 1 THEN NULL WHEN CAST(? AS DOUBLE PRECISION) IS NOT NULL THEN ? ELSE lat END,
+      lng = CASE WHEN ? = 1 THEN NULL WHEN CAST(? AS DOUBLE PRECISION) IS NOT NULL THEN ? ELSE lng END,
       geo_source = CASE WHEN ? = 1 THEN '' WHEN IFNULL(?, '') != '' THEN ? ELSE geo_source END`;
-  try {
-    db.prepare(`${sqlCore},
+  // The kit columns and a re-keyed source fingerprint follow the main update (both best-effort).
+  const kit = next.facility_replace === true
+    ? {
+      has_natural_gas: Number(next.has_natural_gas) === 1 ? 1 : 0,
+      has_balcony: Number(next.has_balcony) === 1 ? 1 : 0,
+      furnish_items: Array.isArray(next.furnish_items)
+        ? next.furnish_items
+        : (() => { try { return JSON.parse(next.furnish_items || "[]"); } catch { return []; } })(),
+    }
+    : mergeKitColumns(listing, listingKitFrom({ ...listing, ...next, tags }));
+  const sourceKeyChanged = Boolean(next.source_key && next.source_key !== listing.source_key);
+  return {
+    postId,
+    attempts: [
+      {
+        sql: `${sqlCore},
       geo_approx = ?,
-      coord_version = CASE WHEN ? THEN IFNULL(coord_version, 0) + 1 ELSE coord_version END,
+      coord_version = CASE WHEN ? = 1 THEN IFNULL(coord_version, 0) + 1 ELSE coord_version END,
       content_seq = IFNULL(content_seq, 0) + 1
-     WHERE post_id = ?`).run(...values);
-  } catch {
-    try {
-      db.prepare(`${sqlCore},
+     WHERE post_id = ?`,
+        params: values,
+        tolerant: true,
+      },
+      {
+        sql: `${sqlCore},
         geo_approx = ?,
-        coord_version = CASE WHEN ? THEN IFNULL(coord_version, 0) + 1 ELSE coord_version END
-       WHERE post_id = ?`).run(...values);
-    } catch {
-      db.prepare(`${sqlCore} WHERE post_id = ?`).run(...values.slice(0, -3), postId);
+        coord_version = CASE WHEN ? = 1 THEN IFNULL(coord_version, 0) + 1 ELSE coord_version END
+       WHERE post_id = ?`,
+        params: values,
+        tolerant: true,
+      },
+      {
+        sql: `${sqlCore} WHERE post_id = ?`,
+        params: [...values.slice(0, -3), postId],
+        tolerant: false,
+      },
+    ],
+    // The original then re-bumps the counters, so a store that needed the narrow statement still
+    // gets a fresh coord_version/content_seq. A store without the newer columns just skips them.
+    followUps: [
+      ...(bumpCoords
+        ? [{ sql: "UPDATE listings SET coord_version = IFNULL(coord_version, 0) + 1 WHERE post_id = ?", params: [postId], tolerant: true }]
+        : []),
+      { sql: "UPDATE listings SET content_seq = IFNULL(content_seq, 0) + 1 WHERE post_id = ?", params: [postId], tolerant: true },
+      {
+        sql: "UPDATE listings SET has_natural_gas = ?, has_balcony = ?, furnish_items = ? WHERE post_id = ?",
+        params: [kit.has_natural_gas, kit.has_balcony, JSON.stringify(kit.furnish_items || []), postId],
+        tolerant: true,
+      },
+      ...(sourceKeyChanged
+        ? [{ sql: "UPDATE listings SET source_key = ? WHERE post_id = ?", params: [String(next.source_key), postId], tolerant: true }]
+        : []),
+    ],
+    clearCoords,
+    bumpCoords,
+    invalidateSearchKey: sourceKeyChanged,
+  };
+}
+
+// Shared runner for the plan shapes above: `chain` = "try each statement until one succeeds"
+// (the wide -> narrow fallback), otherwise every statement runs and a tolerant one may fail.
+export function runStatements(sqliteDb, statements, { chain = false } = {}) {
+  let done = !chain;
+  for (const step of statements || []) {
+    if (chain && done) return;
+    try {
+      sqliteDb.prepare(step.sql).run(...step.params);
+      done = true;
+    } catch (error) {
+      if (!step.tolerant) throw error;
     }
   }
-  if (locationChanged || clearCoords) {
-    try {
-      db.prepare("UPDATE listings SET coord_version = IFNULL(coord_version, 0) + 1 WHERE post_id = ?").run(postId);
-    } catch { /* older fixtures */ }
-  }
-  try {
-    db.prepare("UPDATE listings SET content_seq = IFNULL(content_seq, 0) + 1 WHERE post_id = ?").run(postId);
-  } catch { /* older fixtures */ }
-  try {
-    const kit = next.facility_replace === true
-      ? {
-        has_natural_gas: Number(next.has_natural_gas) === 1 ? 1 : 0,
-        has_balcony: Number(next.has_balcony) === 1 ? 1 : 0,
-        furnish_items: Array.isArray(next.furnish_items)
-          ? next.furnish_items
-          : (() => { try { return JSON.parse(next.furnish_items || "[]"); } catch { return []; } })(),
-      }
-      : mergeKitColumns(row, listingKitFrom({ ...row, ...next, tags }));
-    db.prepare(`
-      UPDATE listings SET has_natural_gas = ?, has_balcony = ?, furnish_items = ? WHERE post_id = ?
-    `).run(kit.has_natural_gas, kit.has_balcony, JSON.stringify(kit.furnish_items || []), postId);
-  } catch { /* older fixtures */ }
-  if (next.source_key && next.source_key !== row.source_key) {
-    try {
-      db.prepare("UPDATE listings SET source_key = ? WHERE post_id = ?").run(String(next.source_key), postId);
-    } catch { /* older fixtures */ }
-  }
-  invalidateSearchKeyMemo();
+}
+
+export function persistHpListingFields(postId, next, { locationChanged = false, previous = null } = {}) {
+  const row = db.prepare("SELECT * FROM listings WHERE post_id = ?").get(postId);
+  if (!row || !row.post_id) return null;
+  const plan = hpFieldsPlan(row, next, { locationChanged, previous });
+  runStatements(db, plan.attempts, { chain: true });
+  runStatements(db, plan.followUps, { chain: false });
+  if (plan.invalidateSearchKey) invalidateSearchKeyMemo();
   return db.prepare("SELECT * FROM listings WHERE post_id = ?").get(postId);
 }
 
@@ -5217,12 +5465,7 @@ export function getCachedMrt(lat, lng) {
   return null;
 }
 
-export function setCachedMrt(lat, lng, access) {
-  if (!access || access.pending || access.resolved === false) return;
-  const key = makeMrtKey(lat, lng);
-  if (key.includes("NaN")) return;
-  db.prepare(
-    `INSERT INTO mrt_cache(geo_key, station, walk_km, walk_min, ride_km, ride_min, updated_at)
+export const MRT_CACHE_UPSERT_SQL = `INSERT INTO mrt_cache(geo_key, station, walk_km, walk_min, ride_km, ride_min, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(geo_key) DO UPDATE SET
        station = excluded.station,
@@ -5230,42 +5473,74 @@ export function setCachedMrt(lat, lng, access) {
        walk_min = excluded.walk_min,
        ride_km = excluded.ride_km,
        ride_min = excluded.ride_min,
-       updated_at = excluded.updated_at`,
-  ).run(
-    key,
-    String(access.station || ""),
-    Number(access.walk_km) || null,
-    Number(access.walk_min) || null,
-    Number(access.ride_km) || null,
-    Number(access.ride_min) || null,
-    new Date().toISOString(),
-  );
+       updated_at = excluded.updated_at`;
+
+// The MRT cache row setCachedMrt() writes, as a statement the caller can run on either driver
+// (`null` = nothing to store, which is also what the synchronous function returns early on).
+export function mrtCacheUpsert(lat, lng, access, { now = new Date().toISOString() } = {}) {
+  if (!access || access.pending || access.resolved === false) return null;
+  const key = makeMrtKey(lat, lng);
+  if (key.includes("NaN")) return null;
+  return {
+    sql: MRT_CACHE_UPSERT_SQL,
+    params: [
+      key,
+      String(access.station || ""),
+      Number(access.walk_km) || null,
+      Number(access.walk_min) || null,
+      Number(access.ride_km) || null,
+      Number(access.ride_min) || null,
+      now,
+    ],
+  };
 }
 
-export function listingsNeedingMrt(limit = 20) {
-  const cap = Math.max(1, Math.min(Number(limit) || 20, 80));
-  const rows = db
-    .prepare(
-      `SELECT lat, lng FROM listings
+export function setCachedMrt(lat, lng, access) {
+  const upsert = mrtCacheUpsert(lat, lng, access);
+  if (!upsert) return;
+  db.prepare(upsert.sql).run(...upsert.params);
+}
+
+// MRT 補齊的掃描。是否已有快取（`mrt_cache`）是唯一的額外讀取，所以 pick 收一個 predicate：
+// SQLite 傳 getCachedMrt()，PostgreSQL 傳由 mrtCacheKeysQuery() 一次撈回來的 geo_key 集合。
+export function mrtScanQuery() {
+  return {
+    sql: `SELECT lat, lng FROM listings
        WHERE lat IS NOT NULL AND lng IS NOT NULL
          AND ${sqlTrustedGeoSource()}
          AND IFNULL(hidden, 0) = 0
          AND IFNULL(offline, 0) = 0
        ORDER BY last_seen_at DESC
        LIMIT 2000`,
-    )
-    .all();
+    params: [],
+  };
+}
+
+export function mrtCacheKeysQuery() {
+  return { sql: "SELECT geo_key FROM mrt_cache", params: [] };
+}
+
+export function pickMrtRows(rows, { limit = 20, hasMrt = () => false } = {}) {
+  const cap = Math.max(1, Math.min(Number(limit) || 20, 80));
   const seen = new Set();
   const out = [];
-  for (const row of rows) {
+  for (const row of rows || []) {
     const key = makeMrtKey(row.lat, row.lng);
     if (seen.has(key) || key.includes("NaN")) continue;
     seen.add(key);
-    if (getCachedMrt(row.lat, row.lng)) continue;
+    if (hasMrt(row.lat, row.lng)) continue;
     out.push({ lat: row.lat, lng: row.lng });
     if (out.length >= cap) break;
   }
   return out;
+}
+
+export function listingsNeedingMrt(limit = 20) {
+  const { sql, params } = mrtScanQuery();
+  return pickMrtRows(db.prepare(sql).all(...params), {
+    limit,
+    hasMrt: (lat, lng) => Boolean(getCachedMrt(lat, lng)),
+  });
 }
 
 function mrtFields(row, settings, provider) {
@@ -5399,23 +5674,120 @@ export function upsertRouteJob(partial = {}) {
   return getRouteJob(jobKey);
 }
 
-function routeJobBlocks(row, job, kind, now) {
-  const rec = getRouteJob(makeRouteJobKey(row.post_id, "to_work", kind, job.commuteMode, job.workLat, job.workLng));
-  if (!rec) return false;
-  if (rec.job_state === COMMUTE_STATES.COMPUTING) return true;
-  if (rec.job_state === COMMUTE_STATES.FAILED) return kind === "distance";
-  if (rec.job_state === COMMUTE_STATES.RETRY && rec.next_retry_at && Date.parse(rec.next_retry_at) > now) return true;
-  return false;
+// ---- 通勤路線補齊的掃描（語句與決策都放這裡，透過 crawlerReadsBuildContext() 發佈） ----
+// PostgreSQL 路徑（repository/crawlerScans.js）會自己去撈 route_jobs／route_cache，再用同一個
+// routeRowNeed() 決策，所以兩個 driver 的「哪些物件還需要跑路線」定義只有一份。
+
+export function routeScanPlan({ limit = 40, priorityIds = [], cursor = 0, now = Date.now() } = {}) {
+  return {
+    cap: Math.max(1, Math.min(Number(limit) || 40, 80)),
+    jobs: commuteWorkJobs(collectCommuteSettings()),
+    wantRush: commuteRushEnabled() && googleDirectionsAllowed(),
+    now: Number(now) || Date.now(),
+    priorityIds: [...new Set((priorityIds || []).map(Number).filter((id) => id > 0))],
+    cursor: Number(cursor) || 0,
+    pageSize: 250,
+    maxPages: 20,
+  };
 }
 
-function listingNeedsRoute(row, job, wantRush, now) {
-  if (routeJobBlocks(row, job, "distance", now)) return null;
-  const toWork = getCachedRoute(row.lat, row.lng, job.workLat, job.workLng, job.commuteMode, "to_work");
-  const fromWork = getCachedRoute(job.workLat, job.workLng, row.lat, row.lng, job.commuteMode, "from_work");
+export function routePriorityScanQuery({ postIds = [] } = {}) {
+  const ids = (postIds || []).map(Number).filter((id) => id > 0);
+  if (!ids.length) return { sql: "", params: [] };
+  return {
+    sql: `SELECT post_id, lat, lng FROM listings
+       WHERE post_id IN (${ids.map(() => "?").join(",")})
+         AND lat IS NOT NULL AND lng IS NOT NULL
+         AND ${sqlTrustedGeoSource()}
+         AND IFNULL(hidden, 0) = 0
+         AND IFNULL(offline, 0) = 0`,
+    params: ids,
+  };
+}
+
+export function routeWatchedScanQuery({ limit = 40 } = {}) {
+  return {
+    sql: `SELECT l.post_id, l.lat, l.lng FROM listings l
+     WHERE l.lat IS NOT NULL AND l.lng IS NOT NULL
+       AND ${sqlTrustedGeoSource("l.geo_source")}
+       AND IFNULL(l.hidden, 0) = 0
+       AND IFNULL(l.offline, 0) = 0
+       AND EXISTS (SELECT 1 FROM user_listing_flags f WHERE f.post_id = l.post_id AND f.watched = 1)
+     ORDER BY l.last_seen_at DESC
+     LIMIT ?`,
+    params: [Math.max(1, Number(limit) || 40)],
+  };
+}
+
+export function routePageScanQuery({ cursor = 0, limit = 250 } = {}) {
+  return {
+    sql: `SELECT post_id, lat, lng FROM listings
+       WHERE lat IS NOT NULL AND lng IS NOT NULL
+         AND ${sqlTrustedGeoSource()}
+         AND IFNULL(hidden, 0) = 0
+         AND IFNULL(offline, 0) = 0
+         AND post_id > ?
+       ORDER BY post_id ASC
+       LIMIT ?`,
+    params: [Number(cursor) || 0, Math.max(1, Number(limit) || 250)],
+  };
+}
+
+export function routeJobsQuery({ jobKeys = [] } = {}) {
+  const keys = [...new Set((jobKeys || []).filter(Boolean))];
+  if (!keys.length) return { sql: "", params: [] };
+  return {
+    sql: `SELECT * FROM route_jobs WHERE job_key IN (${keys.map(() => "?").join(",")})`,
+    params: keys,
+  };
+}
+
+export function routeCacheQuery({ keys = [] } = {}) {
+  const list = [...new Set((keys || []).filter(Boolean))];
+  if (!list.length) return { sql: "", params: [] };
+  return {
+    sql: `SELECT route_key, distances, min_km, min_m, rush_am_min, rush_pm_min, rush_updated_at
+          FROM route_cache WHERE route_key IN (${list.map(() => "?").join(",")})`,
+    params: list,
+  };
+}
+
+// The route_jobs keys a candidate row consults for one commute job (distance + rush gate).
+export function routeRowJobKeys(row, job) {
+  const postId = Number(row?.post_id) || 0;
+  return [
+    makeRouteJobKey(postId, "to_work", "distance", job.commuteMode, job.workLat, job.workLng),
+    makeRouteJobKey(postId, "to_work", "rush", job.commuteMode, job.workLat, job.workLng),
+  ];
+}
+
+// The route_cache keys a candidate row needs for one commute job (to-work and from-work).
+export function routeRowCacheKeys(row, job) {
+  return [
+    makeRouteKey(row.lat, row.lng, job.workLat, job.workLng, job.commuteMode, "to_work"),
+    makeRouteKey(job.workLat, job.workLng, row.lat, row.lng, job.commuteMode, "from_work"),
+  ];
+}
+
+// routeJobBlocks() + listingNeedsRoute() with both reads injected: jobFor()/cacheFor() answer from
+// the caller's fetched rows. The SQLite path passes getRouteJob/getCachedRoute, so the decision is
+// literally the same code for both drivers.
+export function routeRowNeed(row, job, { wantRush = false, now = Date.now(), jobFor = () => null, cacheFor = () => null } = {}) {
+  const blocked = (kind) => {
+    const rec = jobFor(makeRouteJobKey(row.post_id, "to_work", kind, job.commuteMode, job.workLat, job.workLng));
+    if (!rec) return false;
+    if (rec.job_state === COMMUTE_STATES.COMPUTING) return true;
+    if (rec.job_state === COMMUTE_STATES.FAILED) return kind === "distance";
+    if (rec.job_state === COMMUTE_STATES.RETRY && rec.next_retry_at && Date.parse(rec.next_retry_at) > now) return true;
+    return false;
+  };
+  if (blocked("distance")) return null;
+  const toWork = cacheFor(row.lat, row.lng, job.workLat, job.workLng, job.commuteMode, "to_work");
+  const fromWork = cacheFor(job.workLat, job.workLng, row.lat, row.lng, job.commuteMode, "from_work");
   const needBasic = !toWork;
   const needReturn = !fromWork;
   const needRush = wantRush && (!toWork || !Number.isFinite(toWork.rush_am_min) || !Number.isFinite(toWork.rush_pm_min));
-  if (needRush && routeJobBlocks(row, job, "rush", now) && !needBasic && !needReturn) return null;
+  if (needRush && blocked("rush") && !needBasic && !needReturn) return null;
   if (!needBasic && !needReturn && !needRush) return null;
   return {
     ...row,
@@ -5428,84 +5800,67 @@ function listingNeedsRoute(row, job, wantRush, now) {
   };
 }
 
+// The SQLite twin of repository/crawlerScans.selectRouteCandidates(): same builders, same
+// routeRowNeed() decision, same priority -> watched -> keyset-page order. Only the I/O differs
+// (synchronous handle here, injected exec there).
 export function listingsNeedingRoute(limit = 40, options = {}) {
-  const cap = Math.max(1, Math.min(Number(limit) || 40, 80));
-  const jobs = commuteWorkJobs(collectCommuteSettings());
-  if (!jobs.length) {
+  const plan = routeScanPlan({
+    limit,
+    priorityIds: options.priorityIds,
+    cursor: options.cursor ?? listingsNeedingRoute.lastCursor,
+    now: options.now,
+  });
+  if (!plan.jobs.length) {
     listingsNeedingRoute.lastCursor = 0;
     return [];
   }
-  const wantRush = commuteRushEnabled() && googleDirectionsAllowed();
-  const now = Number(options.now) || Date.now();
-  const priorityIds = [...new Set((options.priorityIds || []).map(Number).filter((id) => id > 0))];
-  const cursor = Number(options.cursor ?? listingsNeedingRoute.lastCursor) || 0;
   const out = [];
   const seen = new Set();
+  const jobFor = (jobKey) => getRouteJob(jobKey);
+  const cacheFor = (fromLat, fromLng, toLat, toLng, mode, direction) => (
+    getCachedRoute(fromLat, fromLng, toLat, toLng, mode, direction)
+  );
 
   const pushRow = (row) => {
-    for (const job of jobs) {
+    for (const job of plan.jobs) {
       const key = `${row.post_id}|${job.workLat}|${job.workLng}|${job.commuteMode}`;
       if (seen.has(key)) continue;
-      const need = listingNeedsRoute(row, job, wantRush, now);
+      const need = routeRowNeed(row, job, { wantRush: plan.wantRush, now: plan.now, jobFor, cacheFor });
       if (!need) continue;
       seen.add(key);
       out.push(need);
-      if (out.length >= cap) return true;
+      if (out.length >= plan.cap) return true;
     }
     return false;
   };
 
-  if (priorityIds.length) {
-    const placeholders = priorityIds.map(() => "?").join(",");
-    const priorityRows = db.prepare(
-      `SELECT post_id, lat, lng FROM listings
-       WHERE post_id IN (${placeholders})
-         AND lat IS NOT NULL AND lng IS NOT NULL
-         AND ${sqlTrustedGeoSource()}
-         AND IFNULL(hidden, 0) = 0
-         AND IFNULL(offline, 0) = 0`,
-    ).all(...priorityIds);
-    const order = new Map(priorityIds.map((id, index) => [id, index]));
-    priorityRows.sort((a, b) => (order.get(a.post_id) ?? 1e9) - (order.get(b.post_id) ?? 1e9));
+  if (plan.priorityIds.length) {
+    const query = routePriorityScanQuery({ postIds: plan.priorityIds });
+    const priorityRows = db.prepare(query.sql).all(...query.params);
+    const order = new Map(plan.priorityIds.map((id, index) => [id, index]));
+    priorityRows.sort((a, b) => (order.get(Number(a.post_id)) ?? 1e9) - (order.get(Number(b.post_id)) ?? 1e9));
     for (const row of priorityRows) {
       if (pushRow(row)) {
-        listingsNeedingRoute.lastCursor = cursor;
+        listingsNeedingRoute.lastCursor = plan.cursor;
         return out;
       }
     }
   }
 
-  const watched = db.prepare(
-    `SELECT l.post_id, l.lat, l.lng FROM listings l
-     WHERE l.lat IS NOT NULL AND l.lng IS NOT NULL
-       AND ${sqlTrustedGeoSource("l.geo_source")}
-       AND IFNULL(l.hidden, 0) = 0
-       AND IFNULL(l.offline, 0) = 0
-       AND EXISTS (SELECT 1 FROM user_listing_flags f WHERE f.post_id = l.post_id AND f.watched = 1)
-     ORDER BY l.last_seen_at DESC
-     LIMIT ?`,
-  ).all(Math.max(cap, 40));
+  const watchedQuery = routeWatchedScanQuery({ limit: Math.max(plan.cap, 40) });
+  const watched = db.prepare(watchedQuery.sql).all(...watchedQuery.params);
   for (const row of watched) {
     if (pushRow(row)) {
-      listingsNeedingRoute.lastCursor = cursor;
+      listingsNeedingRoute.lastCursor = plan.cursor;
       return out;
     }
   }
 
-  let scanCursor = cursor;
-  const pageSize = 250;
+  let scanCursor = plan.cursor;
   let scanned = 0;
-  while (out.length < cap && scanned < 20) {
-    const rows = db.prepare(
-      `SELECT post_id, lat, lng FROM listings
-       WHERE lat IS NOT NULL AND lng IS NOT NULL
-         AND ${sqlTrustedGeoSource()}
-         AND IFNULL(hidden, 0) = 0
-         AND IFNULL(offline, 0) = 0
-         AND post_id > ?
-       ORDER BY post_id ASC
-       LIMIT ?`,
-    ).all(scanCursor, pageSize);
+  while (out.length < plan.cap && scanned < plan.maxPages) {
+    const pageQuery = routePageScanQuery({ cursor: scanCursor, limit: plan.pageSize });
+    const rows = db.prepare(pageQuery.sql).all(...pageQuery.params);
     if (!rows.length) {
       scanCursor = 0;
       break;
@@ -5518,7 +5873,7 @@ export function listingsNeedingRoute(limit = 40, options = {}) {
         return out;
       }
     }
-    if (rows.length < pageSize) {
+    if (rows.length < plan.pageSize) {
       scanCursor = 0;
       break;
     }
@@ -5526,6 +5881,7 @@ export function listingsNeedingRoute(limit = 40, options = {}) {
   listingsNeedingRoute.lastCursor = scanCursor;
   return out;
 }
+listingsNeedingRoute.lastCursor = 0;
 listingsNeedingRoute.lastCursor = 0;
 
 export function listingCommutePatch(postId, userId, settingsOverride) {
@@ -6753,15 +7109,7 @@ export function eventChannelsHandled(event = {}, needed = {}) {
   return eventFullyHandled(jobs);
 }
 
-export function applyListingLocation(postId, next = {}, prev = null) {
-  const current = prev || db.prepare("SELECT lat, lng, geo_source, location_class, coord_version, address FROM listings WHERE post_id = ?").get(Number(postId));
-  if (!current) return false;
-  if (!shouldAcceptGeoUpdate(current, next)) return false;
-  const cls = resolveLocationClass({ ...current, ...next });
-  const version = Number(next.coord_version || current.coord_version || 0) || Date.now();
-  try {
-    db.prepare(`
-      UPDATE listings SET
+export const LISTING_LOCATION_SQL = `UPDATE listings SET
         lat = COALESCE(?, lat),
         lng = COALESCE(?, lng),
         geo_source = COALESCE(?, geo_source),
@@ -6772,8 +7120,30 @@ export function applyListingLocation(postId, next = {}, prev = null) {
         geo_approx = ?,
         geo_error = ?,
         geo_job_state = COALESCE(?, geo_job_state)
+      WHERE post_id = ?`;
+
+export const NOTIFY_REOPEN_SQL = `UPDATE user_events
+      SET notified = 0,
+          notify_decide = CASE WHEN notify_decide IN ('skip_distance', 'wait_precision') THEN 'wait_route' ELSE notify_decide END
       WHERE post_id = ?
-    `).run(
+        AND type = 'new'
+        AND IFNULL(notified, 0) = 1
+        AND notify_decide IN ('skip_distance', 'wait_precision')
+        AND IFNULL(line_job_state, '') NOT IN ('accepted', 'legacy_handled_unknown')
+        AND IFNULL(dock_job_state, '') NOT IN ('accepted', 'legacy_handled_unknown')
+        AND IFNULL(notify_coord_version, 0) < ?`;
+
+// The pure decision of applyListingLocation(): the statement to run, or null when the update is
+// rejected (a less trustworthy position never overwrites a better one). The id comes from the
+// argument: the SQLite caller's `current` row (a narrow SELECT) has no post_id in it.
+export function listingLocationUpdate(current, next = {}, postId = 0) {
+  if (!current) return null;
+  if (!shouldAcceptGeoUpdate(current, next)) return null;
+  const cls = resolveLocationClass({ ...current, ...next });
+  const version = Number(next.coord_version || current.coord_version || 0) || Date.now();
+  return {
+    sql: LISTING_LOCATION_SQL,
+    params: [
       next.lat ?? null,
       next.lng ?? null,
       next.geo_source || null,
@@ -6784,29 +7154,40 @@ export function applyListingLocation(postId, next = {}, prev = null) {
       cls === "street" || cls === "admin" ? 1 : 0,
       next.geo_error || "",
       next.geo_job_state || null,
-      Number(postId),
-    );
+      Number(postId || current.post_id) || 0,
+    ],
+    locationClass: cls,
+    coordVersion: version,
+  };
+}
+
+// 座標變好之後，先前因距離／精度被跳過的通知要重新排隊（兩邊 driver 共用同一條語句）。
+export function notifyReopenQuery(postId, coordVersion) {
+  return {
+    sql: NOTIFY_REOPEN_SQL,
+    params: [Number(postId) || 0, Number(coordVersion) || 0],
+    tolerant: true,
+  };
+}
+
+export function applyListingLocation(postId, next = {}, prev = null) {
+  const current = prev || db.prepare("SELECT lat, lng, geo_source, location_class, coord_version, address FROM listings WHERE post_id = ?").get(Number(postId));
+  if (!current) return false;
+  const update = listingLocationUpdate(current, next, postId);
+  if (!update) return false;
+  try {
+    db.prepare(update.sql).run(...update.params);
   } catch {
     return false;
   }
-  reopenNotifyAfterGeo(postId, { ...current, ...next, coord_version: version });
+  reopenNotifyAfterGeo(postId, { ...current, ...next, coord_version: update.coordVersion });
   return true;
 }
 
 export function reopenNotifyAfterGeo(postId, listing = {}) {
+  const query = notifyReopenQuery(postId, listing.coord_version);
   try {
-    db.prepare(`
-      UPDATE user_events
-      SET notified = 0,
-          notify_decide = CASE WHEN notify_decide IN ('skip_distance', 'wait_precision') THEN 'wait_route' ELSE notify_decide END
-      WHERE post_id = ?
-        AND type = 'new'
-        AND IFNULL(notified, 0) = 1
-        AND notify_decide IN ('skip_distance', 'wait_precision')
-        AND IFNULL(line_job_state, '') NOT IN ('accepted', 'legacy_handled_unknown')
-        AND IFNULL(dock_job_state, '') NOT IN ('accepted', 'legacy_handled_unknown')
-        AND IFNULL(notify_coord_version, 0) < ?
-    `).run(Number(postId), Number(listing.coord_version) || 0);
+    db.prepare(query.sql).run(...query.params);
   } catch {
     // older fixtures
   }
@@ -6877,28 +7258,38 @@ export function hasCommunityCache(communityId) {
   return Boolean(db.prepare("SELECT 1 AS ok FROM community_cache WHERE community_id = ?").get(id));
 }
 
-export function setCommunityCache(community) {
-  const id = Number(community?.id || community?.community_id);
-  if (!id) return;
-  const lat = Number(community.lat);
-  const lng = Number(community.lng);
-  db.prepare(
-    `INSERT INTO community_cache(community_id, name, address, lat, lng, updated_at)
+export const COMMUNITY_CACHE_UPSERT_SQL = `INSERT INTO community_cache(community_id, name, address, lat, lng, updated_at)
      VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT(community_id) DO UPDATE SET
        name = excluded.name,
        address = excluded.address,
        lat = excluded.lat,
        lng = excluded.lng,
-       updated_at = excluded.updated_at`,
-  ).run(
-    id,
-    String(community.name || "").trim(),
-    String(community.address || "").trim(),
-    Number.isFinite(lat) ? lat : null,
-    Number.isFinite(lng) ? lng : null,
-    new Date().toISOString(),
-  );
+       updated_at = excluded.updated_at`;
+
+// The community_cache row setCommunityCache() writes (`null` when there is no usable id).
+export function communityCacheUpsert(community, { now = new Date().toISOString() } = {}) {
+  const id = Number(community?.id || community?.community_id);
+  if (!id) return null;
+  const lat = Number(community.lat);
+  const lng = Number(community.lng);
+  return {
+    sql: COMMUNITY_CACHE_UPSERT_SQL,
+    params: [
+      id,
+      String(community.name || "").trim(),
+      String(community.address || "").trim(),
+      Number.isFinite(lat) ? lat : null,
+      Number.isFinite(lng) ? lng : null,
+      now,
+    ],
+  };
+}
+
+export function setCommunityCache(community) {
+  const upsert = communityCacheUpsert(community);
+  if (!upsert) return;
+  db.prepare(upsert.sql).run(...upsert.params);
 }
 
 let statsHoldUntil = 0;
