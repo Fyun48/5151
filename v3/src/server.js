@@ -2,6 +2,7 @@ import "./env.js";
 import { resolveAppRole, roleRunsWeb, roleRunsCrawler, roleRunsWorker } from "./appRole.js";
 import { searchListingsAsync } from "./listingSearchAsync.js";
 import { listingStatsAsync } from "./listingStatsAsync.js";
+import { getListingAsync } from "./listingDetailAsync.js";
 import express from "express";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -14,7 +15,6 @@ import {
   listUserIds,
   deleteProfile,
   getCachedGeo,
-  getListing,
   markListingOffline,
   confirmExpiredOfflineFromSettings,
   restoreListingOnline,
@@ -642,14 +642,15 @@ function kickListingEnrich() {
 }
 
 /** 點通知／Discord 連結：已登入才標記已瀏覽，再導向原站。站內刊登：會員開站內詳情、訪客開公開分享頁。訪客只轉址、不寫入。 */
-app.get("/go/:id", (req, res) => {
+app.get("/go/:id", async (req, res) => {
   const id = Number(req.params.id);
   let listing = null;
   const session = readSession(req);
   if (Number.isFinite(id) && id > 0) {
     try {
-      listing = getListing(id);
-      if (session?.userId && getListing(id, session.userId)) {
+      // Awaited so the redirect follows the store the list came from (listingDetailAsync.js).
+      listing = await getListingAsync(id);
+      if (session?.userId && await getListingAsync(id, session.userId)) {
         setFlags(id, { viewed: true }, session.userId);
       }
       if (listing && String(listing.source || "") === "houseprice") {
@@ -3790,11 +3791,11 @@ app.post("/api/reset-all", (req, res) => {
   res.json({ ok: true, settings, stats: { total: 0 } });
 });
 
-app.get("/api/listings/:id/history", (req, res) => {
+app.get("/api/listings/:id/history", async (req, res) => {
   const session = requireMember(req, res);
   if (!session) return;
   const uid = session.userId;
-  const listing = getListing(Number(req.params.id), uid);
+  const listing = await getListingAsync(Number(req.params.id), uid);
   if (!listing) {
     res.status(404).json({ error: "找不到這筆物件" });
     return;
@@ -3860,7 +3861,7 @@ app.post("/api/listings/:id/recheck", async (req, res) => {
       return;
     }
     const postId = Number(req.params.id);
-    const listing = getListing(postId);
+    const listing = await getListingAsync(postId);
     if (!listing) {
       res.json({ supported: false, gone: false });
       return;
@@ -3931,7 +3932,7 @@ app.post("/api/listings/:id/report-gone", async (req, res) => {
       return;
     }
     const postId = Number(req.params.id);
-    const listing = getListing(postId);
+    const listing = await getListingAsync(postId);
     if (!listing) {
       res.json({ supported: false });
       return;

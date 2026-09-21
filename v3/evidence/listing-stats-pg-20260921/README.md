@@ -89,13 +89,36 @@ NUMERIC/DECIMAL（OID 1700）不動（schema 鏡射把 SQLite REAL 映成 DOUBLE
 | `decoration-data.test.js`（回歸；SQLite 與真實 PG 逐值比對） | 3 pass / 0 fail |
 | `pg-driver.test.js`（本機；新增數值語意單測） | pass |
 
+## 第三輪（同日）：詳情頁讀取（`getListing`）
+
+列表與初始載入都同源了，但**詳情頁**還沒有：`db.js` 的 `getListing(postId, userId, options)` 是同步
+SQLite 讀取（`SELECT * … WHERE post_id = ?` → fixture 可見性 → 該會員的旗標 → 共用裝飾器）。PG 模式下
+列表會出現只存在於 PG 的物件，點進去卻 404（`/go` 通知連結、`/api/listings/:id/history`、recheck、
+report-gone 全都一樣）。
+
+`v3/src/listingDetailAsync.js`：PG 模式用 listings repository 的 `hydrate([id])`（同一句 `SELECT *`）
+讀列，再跑**同一個** `listingVisibleOnSurface`（`MEMBER_DETAIL`）與同一組裝飾器
+（`preloadDecorationProviderAsync` ＋ `decorateRowsWithProvider`）；`DB_DRIVER=sqlite` 直接轉呼叫
+`getListing()`。四個 server 呼叫點（`/go/:id`、history、recheck、report-gone）改成 await。
+
+驗證：`v3/test/listing-detail-parity.test.js` —— 本機（sqlite driver 逐欄等於 `getListing()`）＋
+shadow PG **4/4**：五種列形（peer＋match、有旗標、houseprice 走 `listing_prep` gate、
+fixture 列不可見 → `undefined`、不存在的 id → `undefined`），外加 `sameHouse:false` 的爬蟲讀法。
+回歸 `listing-stats-parity` 5/5。
+
 ## 這還不是全部（切換前仍缺）
 
 - ~~`/api/state`（初始載入）~~ → **已同源（2026-09-21）**：它現在也走 `listingStatsAsync()` ＋
   `searchListingsAsync()`，live 測試把那 500 筆頁面逐欄 deepEqual（也因此抓到 BIGINT 型別缺陷）。
-- **詳情頁／列表以外的讀取仍是 SQLite**：`getListing()`（`v3/src/db.js`；`/api/listings/:id/history`、
-  詳情、`/go` 等）直接 `SELECT * FROM listings`，PG 模式下會看不到只存在於 PG 的資料 ——
-  這是 ② 之中**最會直接壞掉**的一塊。
+- ~~列表路徑以外的讀取（詳情頁）~~ → **已接上（2026-09-21）**：`getListingAsync()` 走 listings repository
+  的 `hydrate()` ＋ 同一組可見性／裝飾器，`/go`、history、recheck、report-gone 都改成 await；
+  live parity 4/4（`v3/test/listing-detail-parity.test.js`）。
+- **爬蟲／enrich／通知管線的讀取仍是 SQLite，而且是同步的**：`watcher.js` 的 `listingForWatch()`
+  （＝ `getListing`）與整條 enqueue/notify 鏈用的 `loadAnyoneFlagMap`／`findBySourceKey`／
+  `listMatchCandidates`／`getRouteJob`… 都綁 `node:sqlite`。寫入已可走 PG，但爬蟲「寫完再讀」若仍讀
+  SQLite，PG 模式下會看不到自己剛寫的列（重複建立、變更偵測失效）→ **爬蟲的讀取必須與寫入同批上線**，
+  這是剩下的最大一塊。
+- 其餘寫入仍 SQLite-only：`enqueueSimilaritySafe`（pHash）、`listing_prep`、通知／CRM 佇列。
 - 列表路徑以外的旗標／路線讀取、`enqueueSimilaritySafe`（pHash 佇列）、`listing_prep`、通知／CRM 佇列仍 SQLite-only。
 - commute／fit 排序仍在 PG 的 SQL-first envelope 外（安全但回退 SQLite）；PG 的 EXPLAIN evidence 只涵蓋三種價格／新舊排序。
 - PG schema bootstrap（app 只 ensure SQLite schema）與 `pgSchema.importTable` 的 COPY／分批版本、寫入凍結視窗。
