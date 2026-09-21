@@ -12,9 +12,13 @@
 //
 // Fail-open: a PostgreSQL failure falls back to the SQLite read (a crawler cycle must not die
 // because one row could not be fetched).
-import { findBySourceKey as findBySourceKeySync, listMatchCandidates, listingSearchBuildContext, crawlerReadsBuildContext } from "./db.js";
+import { findBySourceKey as findBySourceKeySync, listMatchCandidates, listingSearchBuildContext, crawlerReadsBuildContext, listingsNeedingAliveCheck, listingsNeedingOfflineRecheck } from "./db.js";
 import { getListingAsync } from "./listingDetailAsync.js";
 import { findBySourceKey as findBySourceKeyRepo, listMatchCandidates as listMatchCandidatesRepo } from "./repository/listingReads.js";
+import {
+  selectAliveCheckCandidates,
+  selectOfflineRecheckCandidates,
+} from "./repository/crawlerScans.js";
 import { resolveDbDriver } from "./dbDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
@@ -42,6 +46,34 @@ export async function watchSiblings(sourceKey, excludePostId, options = {}) {
   } catch (error) {
     if (options.strict) throw error;
     return findBySourceKeySync(sourceKey, excludePostId);
+  }
+}
+
+// db.js listingsNeedingAliveCheck(): the listings the offline sweep should probe next.
+export async function needingAliveCheckAsync({ excludeIds = [], limit = 20 } = {}, options = {}) {
+  const driver = options.driver || resolveDbDriver();
+  if (driver !== "postgres") return listingsNeedingAliveCheck({ excludeIds, limit });
+  try {
+    const exec = await postgresExec(options);
+    const deps = options.deps || crawlerReadsBuildContext();
+    return await selectAliveCheckCandidates(exec, { deps, excludeIds, limit });
+  } catch (error) {
+    if (options.strict) throw error;
+    return listingsNeedingAliveCheck({ excludeIds, limit });
+  }
+}
+
+// db.js listingsNeedingOfflineRecheck(): the pending-offline listings due for another look.
+export async function needingOfflineRecheckAsync({ limit = 8 } = {}, options = {}) {
+  const driver = options.driver || resolveDbDriver();
+  if (driver !== "postgres") return listingsNeedingOfflineRecheck({ limit });
+  try {
+    const exec = await postgresExec(options);
+    const deps = options.deps || crawlerReadsBuildContext();
+    return await selectOfflineRecheckCandidates(exec, { deps, limit });
+  } catch (error) {
+    if (options.strict) throw error;
+    return listingsNeedingOfflineRecheck({ limit });
   }
 }
 

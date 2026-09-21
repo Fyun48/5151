@@ -116,12 +116,21 @@
      live parity：`v3/test/listing-state-writes.test.js` **4/4**（PG 寫入後以爬蟲入口回讀，
      offline／alive／restore／checked 逐欄等於 SQLite；invalidateLocation 清掉 route_jobs）。
    - **仍待接（切換前必須完成，已評估可機械化）**：
-     ① **`listingsNeeding*` 掃描（9 個）**：`listingsNeeding{591Geo,AddressGeo,AddressEnrich,FeeDetail,
+     ① **`listingsNeeding*` 掃描（9 個，進行中）**：`listingsNeeding{591Geo,AddressGeo,AddressEnrich,FeeDetail,
         SourceKit,Route,AliveCheck,OfflineRecheck,Mrt}` ＋ `getRouteJob`／`community_cache`／`route_jobs`
         的讀取。它們是背景迴圈的「待辦清單」，PG 模式下會掃到空的 SQLite → 迴圈空跑（不會壞，但站上
-        的補齊／探測／下架偵測全部停止）。做法與爬蟲讀取相同：每個語句抽成 builder（`db.js` 發佈、
-        repository 執行、`crawlerReads.js` 分派），9 個 `backfillX()` 的讀取改成 await。已抽查 SQL：
-        只有 IFNULL／LIKE／EXISTS／子查詢，**沒有 SQLite-only 函式**，現有翻譯層足以應付。
+        的補齊／探測／下架偵測全部停止）。
+        - **已完成（2026-09-21）**：`AliveCheck`／`OfflineRecheck` —— 語句抽成 `aliveCheckScanQuery()`／
+          `offlineRecheckScanQuery()`（＋純過濾 `pickAliveCheckRows()`），由 `crawlerReadsBuildContext()`
+          發佈、`repository/crawlerScans.js` 執行、`crawlerReads.needingAliveCheckAsync()`／
+          `needingOfflineRecheckAsync()` 分派；`watcher.sweepOfflineListings()` 改成 await。
+          live parity：`crawler-reads-parity.test.js` **6/6**（含兩條掃描的列與順序）。
+          **離線／存活這條 loop 至此讀寫同源**（掃描 → 探測 → 狀態寫入）。
+          同時發現並統一一個跨 driver 細節：`node:sqlite` 回傳 null-prototype 物件、node-postgres 回傳
+          一般物件 → 掃描結果一律複製成一般物件（同 BIGINT 的處理）。
+        - **其餘 7 個**：`591Geo`（需要 `community_cache` 讀取）、`AddressGeo`、`AddressEnrich`、`FeeDetail`
+          （兩段查詢）、`SourceKit`（每來源 + 舊 schema fallback）、`Route`（route_jobs join）、`Mrt`。
+          做法同上；已抽查 SQL 只有 IFNULL／LIKE／EXISTS／子查詢，沒有 SQLite-only 函式。
      ② **迴圈套用的欄位寫入**：`setListingDetail`（591 詳情／座標／費用）、`persistHpListingFields`
         （5168 補齊）、`upsertListingPrep`、`setCachedMrt`、`setCommunityCache`——這些仍是 SQLite 形狀，
         少了它們 ① 掃出來的工作做完也進不了 PG。
