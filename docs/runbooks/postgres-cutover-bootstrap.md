@@ -14,8 +14,11 @@
         ② `setListingDetail`／`persistHpListingFields`／`setCachedMrt`／`setCommunityCache`／
         `upsertListingPrep`；live parity `crawler-reads-parity.test.js` 8/8、
         `listing-fields-parity.test.js` 6/6，證據 `v3/evidence/pg-loop-parity-20260921/`）
-      - **通知／CRM 佇列的讀寫（③）** ⛔ **尚未完成** —— PG 模式下 `user_events`／`crmOutbox` 仍寫 SQLite，
-        而 Web 讀 PG → 會員收不到通知。**這一項沒做完不要切換。**
+      - **通知／CRM 佇列的讀寫（③）** ⛔ **仍阻塞切換** —— 佇列的**讀＋寫**已完成（2026-09-21：
+        `notifyQueueAsync.js` ＋ `repository/notifyQueue.js`，live parity `notify-queue-parity.test.js` 5/5），
+        但**填佇列**的 `enqueueListingEvent()` 決策鏈仍讀 SQLite（需要 users／settings／search profile／
+        listing group 的 PG 讀取）→ PG 模式下排得空佇列卻填不進新事件，**會員收不到通知**。
+        **這一項沒做完不要切換。**
       - **`enqueueSimilaritySafe`（④，pHash 佇列）** ⛔ 尚未完成 —— PG 模式下爬進來的物件不會進
         相似度佇列（功能缺口，不會寫壞資料）。
 - [ ] shadow 叢集健康：`sh deploy/shadow-ha/drill.sh preflight`（primary/standby 角色、複寫延遲）。
