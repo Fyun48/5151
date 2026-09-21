@@ -28,16 +28,26 @@ db.js 以 `listingSearchBuildContext()` 注入它原本的私有 helper。
 | `v3/src/dbDriverPostgres.js` | 真正的 pg adapter：pool、query/queryOne/exec/withTransaction/healthCheck、紅acted config |
 | `v3/src/repository/listings.js` | `createListingsRepository({driver})`，SQLite 與 PostgreSQL 兩個 adapter（同一介面） |
 | `v3/src/listingSearchAsync.js` | app 的 async 入口，driver dispatch + 安全 fallback |
+| `v3/src/listingStatsAsync.js` | 列表頁統計的 async 入口（同一套 dispatch；PG 由 repository 供料、跑共用純管線） |
+| `v3/src/repository/listingStats.js` | stats 的 PostgreSQL 讀取層（candidates／statusCounts／watchedTotal／dbTotal／failedRouteJobs＋flag map） |
 | `v3/src/pgSchema.js` | SQLite schema → PostgreSQL DDL + 冪等 import（parity 測試與未來遷移用） |
 
 ## 安全性設計（避免「一半的 PostgreSQL 上線」）
 
-listings 的**裝飾**（flags overlay、same-house peer、per-user commute 標籤、settings 相關顯示）
-目前仍由 SQLite 形狀的 helper 執行，尚未移植。因此：
+listings 的**裝飾**已移植（Slice 1／2a／2b：`v3/src/repository/decorationData.js` 與 `db.js` 的
+`preloadDecorationProviderAsync`／`decorateRowsWithProvider`）。`DB_DRIVER=postgres` 時
+`searchListingsAsync` 回傳的是**完整裝飾**的卡片（`queryDetails.decoration = "full"`）——
+SQLite 與 PostgreSQL 跑同一批裝飾函式。只剩兩種 fail-safe 回退，不會有「半裝飾」的回應上線：
 
-- `DB_DRIVER=postgres` 時 `searchListingsAsync` **預設仍走 SQLite 鏈**；
-- 只有在明確設定 `PG_LISTINGS_UNDECORATED=1` 時才會回傳 PostgreSQL 的**未裝飾**資料列
-  （`queryDetails.decoration = "pending"`），不會有「半裝飾」的回應悄悄上線。
+- SQL-first envelope 外的查詢（commute／fit 排序等）→ 回 SQLite 鏈；
+- 預載或裝飾丟錯（缺表、連線中斷）→ 回 SQLite 鏈。
+
+`PG_LISTINGS_UNDECORATED=1` 仍保留，但只為遷移診斷（回傳未裝飾列，`decoration = "skipped"`）。
+
+同一條原則用在**列表頁統計**：`stats()` 的「純管線」由兩個 driver 共用
+（`db.js` 的 `buildListingStatsRows`／`summarizeListingStats`），PG 端
+（`listingStatsAsync.js` ＋ `repository/listingStats.js`）從同一套 PostgreSQL 讀同一批輸入，
+所以卡片與計數器不會各說各話。證據：`v3/evidence/listing-stats-pg-20260921/`。
 
 ## 怎麼驗證
 
@@ -45,6 +55,7 @@ listings 的**裝飾**（flags overlay、same-house peer、per-user commute 標�
 # 1) 不需資料庫的單元測試
 node --test v3/test/sql-dialect.test.js v3/test/pg-driver.test.js
 node --test v3/test/listings-search-repository.test.js        # SQLite adapter 與既有 fast path 逐項相同
+node --test v3/test/listing-stats-parity.test.js              # 列表頁統計：同一條管線（live PG 子測試需 PG_TEST_URL）
 
 # 2) 真實 PostgreSQL（shadow HA；測試自建/自刪自己的 schema，不碰既有表）
 PG_TEST_URL='postgres://postgres:<pw>@192.168.0.220:15432/5151_shadow' \
@@ -78,8 +89,8 @@ idempotency key 去重、以及 **standby 上可見同一 schema（串流複寫�
 
 ## 還沒做（下一段）
 
-1. **裝飾管線移植**：`decorateListingLite` / `finalizeListingDecorate` / `overlayRowsPersonal` /
-   `loadFlagMap` / same-house peers / per-user commute 需要 async 化，才能讓 PostgreSQL 路徑回傳完整回應。
-2. **其餘 domain 查詢**（settings/flags 已有 repository 示範，其餘仍在 sqlite 形狀）。
-3. `listing_prep`（以及任何 visibility clause 依賴的表）在 PostgreSQL 端要一起建立與維護。
-4. EXPLAIN (ANALYZE, BUFFERS) 的 PostgreSQL 版 regression evidence（目前 baseline 仍是 SQLite）。
+1. **commute／fit 排序的 SQL 化與 cursor**：目前仍在 PG 的 SQL-first envelope 外（安全，但切到 PG 後這兩種排序吃 SQLite）。
+2. **EXPLAIN evidence**：已有 newest／price_asc／price_desc（`v3/evidence/pg-explain-20260921/`，0 個 Seq Scan）；commute／fit 尚未。
+3. **`/api/state`（初始載入）** 仍是 `listListings()` ＋ SQLite `stats()`，PG 模式下與 `/api/listings` 不同源。
+4. **其餘 domain 讀寫**：列表路徑以外的旗標／路線讀取、`enqueueSimilaritySafe`（pHash 佇列）、`listing_prep`、通知／CRM 佇列仍 SQLite-only。
+5. **PG schema bootstrap 與遷移工具效率**：app 只會 ensure SQLite schema；`pgSchema.importTable` 仍是逐列 INSERT（108k 筆 listings 需要 COPY／分批版），cutover 還需要寫入凍結視窗。

@@ -5506,14 +5506,14 @@ export function listingCommutePatch(postId, userId, settingsOverride) {
   };
 }
 
-function applyListingFilter(rows, settings = getSettings()) {
+function applyListingFilter(rows, settings = getSettings(), provider = null) {
   // 列表用非嚴格通勤：還沒算完路線的先顯示（排在離公司排序末端），避免新北等區整批空白
   const commuteOn = Number(settings.commuteKm) > 0 && hasWorkPoint(settings);
   if (commuteOn) warmRouteCache();
   // Price/keyword/agent/area checks do not depend on routes. Avoid fetching
   // cached routes and cloning wide rows that these checks already exclude.
   const candidates = rows.filter((row) => passesAttributeFilters(row, settings));
-  const prepared = commuteOn ? candidates.map((row) => applyCachedCoords(row, settings)) : candidates;
+  const prepared = commuteOn ? candidates.map((row) => applyCachedCoords(row, settings, provider)) : candidates;
   return prepared.filter((row) => passesGeoFilters(row, settings, { strict: commuteOn }));
 }
 
@@ -5522,11 +5522,11 @@ function listingDistrictName(row) {
 }
 
 /** 設定檔結果：租金／關鍵字／通勤／樓層／行政區，與列表「全部」同一套範圍。 */
-function applyProfileScope(rows, settings) {
+function applyProfileScope(rows, settings, provider = null) {
   const districtNames = memberRegionDistrictNames(settings);
   const districtSet = new Set(districtNames);
   const scoped = districtSet.size ? rows.filter(row => districtSet.has(listingDistrictName(row))) : rows;
-  return applyListingFilter(scoped, settings).filter((row) => {
+  return applyListingFilter(scoped, settings, provider).filter((row) => {
     if (!passesDisplayFilters(row, settings)) return false;
     return true;
   });
@@ -5909,6 +5909,96 @@ export function listingSearchBuildContext() {
     // Handy for adapters that need to derive PostgreSQL DDL from the SQLite
     // schema (repository/listings.js ensureProjection).
     sqliteDb: db,
+  };
+}
+
+// Dependency bundle for the PostgreSQL stats path (listingStatsAsync.js +
+// repository/listingStats.js). The clause builders are the very same functions the
+// search path uses, and the two pipeline steps below are the pure halves of stats():
+// the PostgreSQL adapter only has to load the inputs and run these, so a filter or a
+// counter can never be defined twice.
+export function listingStatsBuildContext() {
+  return {
+    resolveUserId,
+    getSettings,
+    searchWhere,
+    listingVisibilityClauses,
+    appendDistrictCandidates,
+    appendPriceCeilingCandidates,
+    memberRegionDistrictNames,
+    candidateColumns: LIST_CANDIDATE_COLUMNS,
+    buildListingStatsRows,
+    summarizeListingStats,
+    sqliteDb: db,
+  };
+}
+
+/**
+ * Stage 1 of stats(): personal-flag overlay, self-listing visibility and the profile
+ * scope (district / price / keywords / commute / display filters). Driver-agnostic:
+ * pure over the candidate rows, so the PostgreSQL path reuses it verbatim.
+ */
+export function buildListingStatsRows({ rows = [], flagMap = null, userId = 0, settings = null, provider = null } = {}) {
+  const uid = Number(userId) || 0;
+  const conf = settings || getSettings(uid);
+  const overlaid = overlayRowsPersonal(rows, flagMap, { inPlace: true })
+    .filter((row) => keepSelfListingForViewer(row, uid, conf, listingInMemberScope));
+  return applyProfileScope(overlaid, conf, provider);
+}
+
+/**
+ * Stage 2 of stats(): the counters themselves. `provider` is the decoration provider
+ * (route cache reads for `missingRoute`); without one the SQLite route cache is used.
+ */
+export function summarizeListingStats({
+  profileRows = [],
+  settings = null,
+  statusCounts = {},
+  watchedTotal = 0,
+  failedRouteJobs = new Set(),
+  dbTotal = 0,
+  provider = null,
+} = {}) {
+  const conf = settings || getSettings();
+  const rows = Array.isArray(profileRows) ? profileRows : [];
+  const failed = failedRouteJobs instanceof Set ? failedRouteJobs : new Set(failedRouteJobs || []);
+  const browse = rows.filter(countsTowardAllTotal);
+  return {
+    total: browse.length,
+    unseen: browse.filter((row) => !row.viewed).length,
+    watched: rows.filter((row) => row.watched && !isConfirmedOffline(row)).length,
+    watchedTotal: Number(watchedTotal) || 0,
+    same_source: browse.filter((row) => ["same_source", "update", "price_drop", "title_update"].includes(row.last_event)).length,
+    hidden: rows.filter((row) => row.hidden).length,
+    offline: Number(statusCounts?.pending) || 0,
+    offlineConfirmed: Number(statusCounts?.confirmed) || 0,
+    suspected: rows.filter((row) => row.match_level && !row.offline && row.match_verdict !== "yes" && !row.hidden).length,
+    suspectedPending: rows.filter((row) => row.match_level && !row.match_verdict && !row.offline && !row.hidden).length,
+    elevator: browse.filter((row) => listingHasElevator(row)).length,
+    stored: browse.length,
+    filteredOut: 0,
+    missingGeo: rows.filter((row) => !row.hidden && !isPendingOffline(row) && !isConfirmedOffline(row) && !row.watched && row.match_verdict !== "yes" && (!isTrustedGeoSource(row.geo_source) || row.lat == null || row.lng == null)).length,
+    missingRoute: rows.filter((row) => {
+      if (row.hidden || isPendingOffline(row) || isConfirmedOffline(row) || row.watched || row.match_verdict === "yes") return false;
+      const geo = applyCachedCoords(row, conf, provider);
+      if (!(
+        Number(conf.commuteKm) > 0 &&
+        isTrustedGeoSource(geo.geo_source) &&
+        Number.isFinite(Number(geo.lat)) &&
+        Number.isFinite(Number(geo.lng)) &&
+        !(Array.isArray(geo.route_kms) && geo.route_kms.length)
+      )) return false;
+      const jobKey = makeRouteJobKey(
+        row.post_id,
+        "to_work",
+        "distance",
+        conf.commuteMode,
+        conf.workLat,
+        conf.workLng,
+      );
+      return !failed.has(jobKey);
+    }).length,
+    dbTotal: Number(dbTotal) || 0,
   };
 }
 
@@ -6821,50 +6911,19 @@ export function stats(searchKeys, userId, settingsOverride, diagnostics) {
     .all(...params);
   markStage("sql_ms");
   if (diagnostics) diagnostics.candidates = raw.length;
-  const flagMap = loadFlagMap(db, uid);
-  const overlaid = overlayRowsPersonal(raw, flagMap, { inPlace: true })
-    .filter((row) => keepSelfListingForViewer(row, uid, settings, listingInMemberScope));
-  const profileRows = applyProfileScope(overlaid, settings);
+  const profileRows = buildListingStatsRows({ rows: raw, flagMap: loadFlagMap(db, uid), uid, settings });
   markStage("profile_ms");
-  const browse = profileRows.filter(countsTowardAllTotal);
-  const failedRouteJobs = new Set(db.prepare("SELECT job_key FROM route_jobs WHERE job_state = 'failed'").all().map(row => row.job_key));
-  const out = {
-    total: browse.length,
-    unseen: browse.filter((row) => !row.viewed).length,
-    watched: profileRows.filter((row) => row.watched && !isConfirmedOffline(row)).length,
+  // These five inputs are the only driver-specific part of the counters. The PostgreSQL stats
+  // path (listingStatsAsync.js) reads the same five from PostgreSQL and then runs this identical
+  // pure pipeline, so the list and its counters cannot disagree about which store they describe.
+  const out = summarizeListingStats({
+    profileRows,
+    settings,
+    statusCounts,
     watchedTotal: countWatched(db, uid),
-    same_source: browse.filter((row) => ["same_source", "update", "price_drop", "title_update"].includes(row.last_event)).length,
-    hidden: profileRows.filter((row) => row.hidden).length,
-    offline: Number(statusCounts.pending) || 0,
-    offlineConfirmed: Number(statusCounts.confirmed) || 0,
-    suspected: profileRows.filter((row) => row.match_level && !row.offline && row.match_verdict !== "yes" && !row.hidden).length,
-    suspectedPending: profileRows.filter((row) => row.match_level && !row.match_verdict && !row.offline && !row.hidden).length,
-    elevator: browse.filter((row) => listingHasElevator(row)).length,
-    stored: browse.length,
-    filteredOut: 0,
-    missingGeo: profileRows.filter((row) => !row.hidden && !isPendingOffline(row) && !isConfirmedOffline(row) && !row.watched && row.match_verdict !== "yes" && (!isTrustedGeoSource(row.geo_source) || row.lat == null || row.lng == null)).length,
-    missingRoute: profileRows.filter((row) => {
-      if (row.hidden || isPendingOffline(row) || isConfirmedOffline(row) || row.watched || row.match_verdict === "yes") return false;
-      const geo = applyCachedCoords(row, settings);
-      if (!(
-        Number(settings.commuteKm) > 0 &&
-        isTrustedGeoSource(geo.geo_source) &&
-        Number.isFinite(Number(geo.lat)) &&
-        Number.isFinite(Number(geo.lng)) &&
-        !(Array.isArray(geo.route_kms) && geo.route_kms.length)
-      )) return false;
-      const jobKey = makeRouteJobKey(
-        row.post_id,
-        "to_work",
-        "distance",
-        settings.commuteMode,
-        settings.workLat,
-        settings.workLng,
-      );
-      return !failedRouteJobs.has(jobKey);
-    }).length,
+    failedRouteJobs: new Set(db.prepare("SELECT job_key FROM route_jobs WHERE job_state = 'failed'").all().map(row => row.job_key)),
     dbTotal: productListingCount(),
-  };
+  });
   markStage("count_ms");
   const computedAt = Date.now();
   // Each entry is scoped to the member/profile AND both SQLite writer versions.
