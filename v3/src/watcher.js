@@ -93,6 +93,9 @@ import { significantListingUpdate } from "./sameHouseReconcile.js";
 import { rentAmount } from "./listingCost.js";
 import { normalizeOfflineConfirmDays, shouldRecheckOffline } from "./offline.js";
 import { detailConcurrency, mapPool } from "./pool.js";
+// Driver-aware reads: with DB_DRIVER=postgres the crawler has to read back what it just wrote
+// (see crawlerReads.js). The synchronous read stays for helpers that are still sync.
+import { listingForWatchAsync, watchSiblings } from "./crawlerReads.js";
 
 function nowIso() {
   return new Date().toISOString();
@@ -104,7 +107,11 @@ function listingForWatch(postId, userId) {
 
 export function listingEnrichHelpers() {
   return {
+    // Synchronous today: the enrich queue (listingEnrichQueue.js) still calls loadListing() in the
+    // middle of its batch, so this is the last crawler-side read bound to SQLite. loadListingAsync
+    // is the seam for the next slice (POSTGRES_SWITCH_PLAN §2.6 "爬蟲／enrich 管線").
     loadListing: (id) => listingForWatch(id),
+    loadListingAsync: (id) => listingForWatchAsync(id),
     persistHpListingFields,
     invalidateLocation: invalidateListingLocation,
     markGone: (id) => markListingOffline(id),
@@ -146,9 +153,9 @@ function listingEventPayload(listing, type, detail, stamp = nowIso()) {
   };
 }
 
-function queueOfflineEvent(postId, { wasOnline = true } = {}) {
+async function queueOfflineEvent(postId, { wasOnline = true } = {}) {
   if (!wasOnline) return;
-  const listing = listingForWatch(postId);
+  const listing = await listingForWatchAsync(postId);
   if (!listing) return;
   const stamp = nowIso();
   enqueueListingEvent(listing, {
@@ -160,7 +167,7 @@ function queueOfflineEvent(postId, { wasOnline = true } = {}) {
 
 async function markOfflineAndNotify(postId, { wasOnline = true } = {}) {
   markListingOffline(postId);
-  queueOfflineEvent(postId, { wasOnline });
+  await queueOfflineEvent(postId, { wasOnline });
 }
 
 function yieldEventLoop() {
@@ -194,11 +201,13 @@ function costPatchFromClassify({ type, detail, cost_change_type }, incoming, exi
   return {};
 }
 
-function classify(incoming, existing) {
+// `siblings` is the same-source fingerprint read (crawlerReads.watchSiblings): the caller awaits
+// it once and hands it in, so this stays a pure decision function for both drivers.
+function classify(incoming, existing, siblings = null) {
   if (!existing) {
-    const siblings = findBySourceKey(incoming.source_key, incoming.post_id);
-    if (siblings.length) {
-      const prev = siblings[0];
+    const sameSource = siblings ?? findBySourceKey(incoming.source_key, incoming.post_id);
+    if (sameSource.length) {
+      const prev = sameSource[0];
       const detail = prev.price && prev.price !== incoming.price
         ? `指紋相同，先前 #${prev.post_id}，${prev.price} → ${incoming.price}`
         : `指紋相同，先前 #${prev.post_id}`;
@@ -269,7 +278,7 @@ async function applyCommunityPin(listing, community) {
 
 /** 先走社區超連結（同一棟只打一次社區 API），不夠再抓物件詳情／HTML。 */
 export async function ingestListingGeo(postId) {
-  let listing = listingForWatch(postId);
+  let listing = await listingForWatchAsync(postId);
   if (!listing) return { located: false };
   if (String(listing.source || "591") !== "591") {
     return { located: listingHasTrustedPin(listing) };
@@ -329,12 +338,12 @@ async function resolveListingRoute(listing, settings) {
     const rush = await fetchRushRoadRoutes(lat, lng, workLat, workLng, { mode });
     const distances = rush?.distances?.length ? rush.distances : listing.route_kms;
     if (distances?.length) setCachedRoute(lat, lng, workLat, workLng, distances, rush, mode);
-    return listingForWatch(listing.post_id);
+    return listingForWatchAsync(listing.post_id);
   }
   const distances = await fetchRoadRoutes(lat, lng, workLat, workLng, { mode });
   if (!distances?.length) return listing;
   setCachedRoute(lat, lng, workLat, workLng, distances, null, mode);
-  return listingForWatch(listing.post_id);
+  return listingForWatchAsync(listing.post_id);
 }
 
 export async function flushPendingNotifications(settings = getSettings(), { silent = false } = {}) {
@@ -348,7 +357,7 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
   for (const event of pending) {
     const userId = Number(event.user_id) || 0;
     const userSettings = userId ? getSettings(userId) : settings;
-    const listing = listingForWatch(event.post_id, userId || undefined);
+    const listing = await listingForWatchAsync(event.post_id, userId || undefined);
     const mailTo = String(getUserById(userId)?.email || "").trim();
     const mailBundle = userId ? getMemberMailBundle(userId) : { configured: false, smtp: null, templates: getMailTemplates() };
     const mailReady = Boolean(mailBundle.configured);
@@ -517,7 +526,7 @@ async function resolvePendingNotifyLocations(settings, { withRoute = true } = {}
     if (seen.has(event.post_id)) continue;
     seen.add(event.post_id);
     const userId = Number(event.user_id) || 0;
-    const listing = listingForWatch(event.post_id, userId || undefined);
+    const listing = await listingForWatchAsync(event.post_id, userId || undefined);
     if (!listing) continue;
     const userSettings = userId ? getSettings(userId) : settings;
     if (!shouldNotify(userSettings, listing, event)) continue;
@@ -530,7 +539,7 @@ async function resolvePendingNotifyLocations(settings, { withRoute = true } = {}
   await ingestListingGeoBatch(ids);
   if (!withRoute) return;
   for (const postId of ids) {
-    const listing = listingForWatch(postId);
+    const listing = await listingForWatchAsync(postId);
     if (listing) await resolveListingRoute(listing, settings);
   }
 }
@@ -544,7 +553,7 @@ async function sweepOfflineListings(seenIds, { limit = 20 } = {}) {
   let rechecked = 0;
   let restored = 0;
   for (const row of rows) {
-    const listing = listingForWatch(row.post_id);
+    const listing = await listingForWatchAsync(row.post_id);
     if (!listing) continue;
     checked += 1;
     try {
@@ -567,7 +576,7 @@ async function sweepOfflineListings(seenIds, { limit = 20 } = {}) {
   for (const row of pendingRecheck) {
     if (rechecked >= 8) break;
     if (!shouldRecheckOffline(row, { days: confirmDays, now })) continue;
-    const listing = listingForWatch(row.post_id);
+    const listing = await listingForWatchAsync(row.post_id);
     if (!listing) continue;
     rechecked += 1;
     try {
@@ -761,8 +770,12 @@ export async function runWatch(options = {}) {
       if (seen.has(listing.post_id)) continue;
       seen.add(listing.post_id);
 
-      const existing = listingForWatch(listing.post_id);
-      const { type, detail, prev, level, cost_change_type } = classify(listing, existing);
+      // Awaited so change detection reads the same store persistListing() writes to
+      // (crawlerReads.js). `siblings` is the same-source fingerprint read for the
+      // "this listing moved to a new post_id" branch of classify().
+      const existing = await listingForWatchAsync(listing.post_id);
+      const siblings = await watchSiblings(listing.source_key, listing.post_id);
+      const { type, detail, prev, level, cost_change_type } = classify(listing, existing, siblings);
       const stamp = nowIso();
       await persistListing({
         ...listing,
@@ -775,7 +788,7 @@ export async function runWatch(options = {}) {
       upserts += 1;
       if (!existing) freshIds.push(listing.post_id);
       if (String(listing.source || "") === "houseprice") {
-        enqueueListingEnrich(db, listingForWatch(listing.post_id) || listing, { via: "scheduler" });
+        enqueueListingEnrich(db, (await listingForWatchAsync(listing.post_id)) || listing, { via: "scheduler" });
       }
       if (upserts % 20 === 0) await yieldEventLoop();
 
@@ -802,7 +815,7 @@ export async function runWatch(options = {}) {
       if (type === "seen" || isBaseline || isSearchBaseline) continue;
 
       // 非特別關注的內容微差（地址補齊來回等）不要進通知佇列
-      const saved = listingForWatch(listing.post_id) || listing;
+      const saved = (await listingForWatchAsync(listing.post_id)) || listing;
       // 5168 全新房源等資料準備完成再通知，避免舊庫回填大量「全新」
       if (type === "new" && String(saved.source || listing.source || "") === "houseprice") continue;
       const evt = { type, detail };
@@ -826,13 +839,13 @@ export async function runWatch(options = {}) {
   const pendingFees = listingsNeedingFeeDetail(needsListingGeo(settings) ? 30 : 20);
   for (const row of pendingFees) {
     try {
-      const listing = listingForWatch(row.post_id);
+      const listing = await listingForWatchAsync(row.post_id);
       if (!listing) continue;
       const detail = await fetchListingDetail(row.post_id, detailOptions());
       applyFetchedDetail(listing, detail);
     } catch (error) {
       if (isListingGoneError(error)) {
-        const listing = listingForWatch(row.post_id);
+        const listing = await listingForWatchAsync(row.post_id);
         await markOfflineAndNotify(row.post_id, { wasOnline: !listing?.offline });
       }
       // 詳情失敗下次再試，不中斷本輪追蹤
@@ -844,7 +857,7 @@ export async function runWatch(options = {}) {
   const pendingSourceKit = listingsNeedingSourceKit(8);
   for (const row of pendingSourceKit) {
     try {
-      const listing = listingForWatch(row.post_id);
+      const listing = await listingForWatchAsync(row.post_id);
       if (!listing) continue;
       if (skipBlockedKit.has(listing.source)) continue;
       const kit = await fetchSourceKit(listing);
@@ -1102,7 +1115,7 @@ export async function backfillIncompleteAddresses({ limit = 8 } = {}) {
   for (const row of rows) {
     attempted += 1;
     try {
-      const current = listingForWatch(row.post_id);
+      const current = await listingForWatchAsync(row.post_id);
       if (!current) continue;
       if (row.source === "591") {
         const detail = await fetchListingDetail(row.source_id || row.post_id, detailOptions());

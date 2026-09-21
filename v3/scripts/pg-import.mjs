@@ -20,7 +20,7 @@
 //   DRY_RUN        "1" prints the plan without writing
 import { DatabaseSync } from "node:sqlite";
 import { createPostgresDriver } from "../src/dbDriverPostgres.js";
-import { ensurePgSchema, importTable, userTables } from "../src/pgSchema.js";
+import { importStore, userTables } from "../src/pgSchema.js";
 
 const env = process.env;
 const snapshot = String(env.SNAP_DB || "").trim();
@@ -59,22 +59,27 @@ if (dryRun) {
 }
 
 const pgDriver = await createPostgresDriver({});
-let copied = 0;
 const started = Date.now();
 try {
-  const mirrored = await ensurePgSchema(pgDriver, sqliteDb, {
-    schema, tables, indexes: env.INDEXES === "1",
+  // Schema mirror -> streamed batched copy -> identity-sequence re-sync, all in one call: the
+  // re-sync is not optional (an imported id would otherwise collide with the first generated one).
+  const result = await importStore(pgDriver, sqliteDb, {
+    schema,
+    tables: skipRows.size ? tables.filter((table) => !skipRows.has(table)) : tables,
+    indexes: env.INDEXES === "1",
+    batchSize,
+    multiRow,
+    chunkRows,
   });
-  console.log(`schema mirrored: ${mirrored.statements} statements`);
-  for (const table of tables) {
-    const tableStarted = Date.now();
-    const rows = skipRows.has(table)
-      ? 0
-      : await importTable(pgDriver, sqliteDb, table, { schema, batchSize, multiRow, chunkRows });
-    copied += rows;
-    console.log(`  ${table}: ${rows} rows in ${Date.now() - tableStarted} ms`);
+  console.log(`schema mirrored: ${result.statements} statements`);
+  for (const table of result.tables) {
+    console.log(`  ${table}: ${result.rowsByTable[table] || 0} rows`);
   }
-  console.log(`imported ${copied} rows in ${Date.now() - started} ms (schema included)`);
+  for (const table of skipRows) {
+    if (tables.includes(table)) console.log(`  ${table}: 0 rows (schema only)`);
+  }
+  console.log(`identity sequences re-synced: ${result.sequences.length}${result.sequences.length ? ` (${result.sequences.slice(0, 8).join(", ")}${result.sequences.length > 8 ? ", …" : ""})` : ""}`);
+  console.log(`imported ${result.copied} rows in ${Date.now() - started} ms (schema included)`);
 } finally {
   await pgDriver.close();
   sqliteDb.close();

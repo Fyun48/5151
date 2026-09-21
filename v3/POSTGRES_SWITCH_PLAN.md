@@ -100,10 +100,19 @@
      `/api/listings` 改成 `await listingStatsAsync(...)`。實測：shadow 真實 PG 逐欄 parity **4/4**、
      回歸 `pg-live-integration` **10/10**、`write-path-parity` **2/2**；證據與踩到的坑見
      `v3/evidence/listing-stats-pg-20260921/`。
-   - **仍走 SQLite**：③ `enqueueSimilaritySafe`（pHash 佇列）、④ `listing_prep` 與通知／CRM 佇列；
-     以及**爬蟲／enrich／通知管線的讀取**（`watcher.js` 的 `listingForWatch()`＝`getListing`、
-     `loadAnyoneFlagMap`、`findBySourceKey`、`listMatchCandidates`、`getRouteJob`…，全是同步 SQLite）
-     —— 爬蟲「寫完再讀」必須與寫入同批上線，否則 PG 模式下看不到自己剛寫的列。這是剩下的最大一塊。
+   - **爬蟲／enrich／通知管線的讀取（進行中）**：`crawlerReads.js` 已把「爬蟲自己那一列」與
+     「同源指紋查詢」改成 driver-aware（`listingForWatchAsync`／`watchSiblings`），
+     `watcher.js` 的 12 個非同步呼叫點（crawl loop、geo、route、offline sweep、通知佇列、
+     backfill）都改成 await；live 測試證明「PG 寫入後回讀」可行
+     （`v3/test/crawler-reads-parity.test.js`，4/4）。
+     **仍待接**：① `listingEnrichQueue.js` 的 `helpers.loadListing()`（enrich 批次中段的同步讀，
+     seam 已放在 `listingEnrichHelpers().loadListingAsync`）、② `classify()` 內的
+     `listMatchCandidates()`（配對候選，需把 match.js 的區塊邏輯一起移植）、
+     ③ 各 `listingsNeeding*` 掃描（PG 模式下會掃到空的 SQLite → 迴圈空跑，不會壞但不會做事）、
+     ④ 通知／CRM 佇列的寫入。**在 ①–④ 完成前不要切換**：爬蟲的讀寫必須同批上線。
+   - **遷移工具**：identity sequence 的 re-sync 已納入 `importStore()`
+     （PostgreSQL 不會為帶明確 id 的 INSERT 推進 identity sequence，漏了會在第一次自動編號時
+     撞主鍵；案例見 `v3/evidence/pg-import-20260921/`）。
    - 詳情頁（`getListing`）**已接上**（2026-09-21）：`getListingAsync()` ＋ `/go`／history／recheck／
      report-gone 四個呼叫點，live parity 4/4（`v3/test/listing-detail-parity.test.js`）。
      `/api/state`（初始載入）也**已同源**（見上表）。
