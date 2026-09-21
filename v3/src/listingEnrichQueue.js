@@ -496,13 +496,18 @@ function syncJobListingSeq(job, listing) {
   }
 }
 
-// The enrich worker reads the row it is about to patch. With DB_DRIVER=postgres that read has to
-// come from PostgreSQL (watcher's listingEnrichHelpers().loadListingAsync -> crawlerReads.js), so
-// it is awaited here. A helper bundle that only provides the synchronous loader keeps working
-// unchanged (SQLite-only callers, tests).
+// The enrich worker reads and writes the row it is patching. With DB_DRIVER=postgres those have to
+// come from/go to PostgreSQL (watcher's listingEnrichHelpers() exposes the ...Async variants backed
+// by crawlerReads.js / crawlerWrites.js), so they are awaited here. A helper bundle that only has
+// the synchronous functions keeps working unchanged (SQLite-only callers, tests).
+function runHelper(helpers, name, ...args) {
+  const asyncName = `${name}Async`;
+  if (typeof helpers?.[asyncName] === "function") return helpers[asyncName](...args);
+  return helpers?.[name]?.(...args);
+}
+
 async function loadListingForRun(helpers, postId) {
-  if (typeof helpers?.loadListingAsync === "function") return helpers.loadListingAsync(postId);
-  return helpers?.loadListing?.(postId);
+  return runHelper(helpers, "loadListing", postId);
 }
 
 async function refreshFreshListing(conn, helpers, job) {
@@ -567,7 +572,7 @@ export async function processOneEnrichJob(conn, helpers, job, {
   const timingBase = { queued_ms: queuedMs, start_ms: startMs, fetch_ms: fetchMs, parse_ms: parseMs, attempt_wait_ms: attemptWaitMs };
   if (inspected.outcome === PROBE_GONE) {
     if (!(await refreshFreshListing(conn, helpers, job))) return staleWrite();
-    helpers.markGone(listing.post_id);
+    await runHelper(helpers, "markGone", listing.post_id);
     syncJobListingSeq(job, await loadListingForRun(helpers, job.post_id));
     if (!(await refreshFreshListing(conn, helpers, job))) return staleWrite();
     finishJob(conn, job, { status: "succeeded", timings: { ...timingBase, outcome: "succeeded" } });
@@ -610,7 +615,7 @@ export async function processOneEnrichJob(conn, helpers, job, {
     return { outcome: PROBE_INCONCLUSIVE };
   }
   if (!(await refreshFreshListing(conn, helpers, job))) return staleWrite();
-  helpers.markAlive(listing.post_id);
+  await runHelper(helpers, "markAlive", listing.post_id);
   syncJobListingSeq(job, await loadListingForRun(helpers, job.post_id));
   const locateStarted = Date.now();
   const enriched = enrichHpListingFromDetail(listing, inspected.detail, { allowFieldFill: true, replaceBetterGeo: true });
@@ -658,7 +663,7 @@ export async function processOneEnrichJob(conn, helpers, job, {
     finishJob(conn, job, { status: "queued", error: "stale_write", errorClass: "" });
     return { stale: true };
   }
-  if (merged.locationChanged) helpers.invalidateLocation(listing, merged.listing);
+  if (merged.locationChanged) await runHelper(helpers, "invalidateLocation", listing, merged.listing);
   const stored = (await loadListingForRun(helpers, job.post_id)) || merged.listing;
   if (!(await refreshFreshListing(conn, helpers, job))) return staleWrite();
   const existingPrep = getListingPrep(conn, listing.post_id);

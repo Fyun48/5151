@@ -96,6 +96,14 @@ import { detailConcurrency, mapPool } from "./pool.js";
 // Driver-aware reads: with DB_DRIVER=postgres the crawler has to read back what it just wrote
 // (see crawlerReads.js). The synchronous read stays for helpers that are still sync.
 import { listingForWatchAsync, matchCandidatesAsync, watchSiblings } from "./crawlerReads.js";
+// ... and the write half: the loops must store their results in the same store (crawlerWrites.js).
+import {
+  invalidateListingLocationAsync,
+  markListingAliveAsync,
+  markListingOfflineAsync,
+  restoreListingOnlineAsync,
+  touchListingCheckedAsync,
+} from "./crawlerWrites.js";
 
 function nowIso() {
   return new Date().toISOString();
@@ -107,15 +115,18 @@ function listingForWatch(postId, userId) {
 
 export function listingEnrichHelpers() {
   return {
-    // Synchronous today: the enrich queue (listingEnrichQueue.js) still calls loadListing() in the
-    // middle of its batch, so this is the last crawler-side read bound to SQLite. loadListingAsync
-    // is the seam for the next slice (POSTGRES_SWITCH_PLAN §2.6 "爬蟲／enrich 管線").
+    // The enrich queue awaits loadListingAsync/markGoneAsync/markAliveAsync/invalidateLocationAsync
+    // when the bundle provides them (see loadListingForRun in listingEnrichQueue.js); the
+    // synchronous variants stay for SQLite-only callers.
     loadListing: (id) => listingForWatch(id),
     loadListingAsync: (id) => listingForWatchAsync(id),
     persistHpListingFields,
     invalidateLocation: invalidateListingLocation,
+    invalidateLocationAsync: (listing, next) => invalidateListingLocationAsync(Number(next?.post_id || listing?.post_id) || 0),
     markGone: (id) => markListingOffline(id),
+    markGoneAsync: (id) => markListingOfflineAsync(id),
     markAlive: (id) => markListingAlive(id),
+    markAliveAsync: (id) => markListingAliveAsync(id),
     isSourceEnabled: isCrawlSourceEnabled,
     onFirstReady: (listing) => {
       const age = Date.now() - (Date.parse(listing.first_seen_at || "") || 0);
@@ -166,7 +177,7 @@ async function queueOfflineEvent(postId, { wasOnline = true } = {}) {
 }
 
 async function markOfflineAndNotify(postId, { wasOnline = true } = {}) {
-  markListingOffline(postId);
+  await markListingOfflineAsync(postId);
   await queueOfflineEvent(postId, { wasOnline });
 }
 
@@ -567,7 +578,7 @@ async function sweepOfflineListings(seenIds, { limit = 20 } = {}) {
         await markOfflineAndNotify(row.post_id, { wasOnline: !listing.offline });
         gone += 1;
       } else if (decision.write === "alive") {
-        markListingAlive(row.post_id);
+        await markListingAliveAsync(row.post_id, { wasOffline: Boolean(listing.offline) });
       }
     } catch {
       // 探測失敗（保守）：不動狀態，下輪再試
@@ -584,10 +595,10 @@ async function sweepOfflineListings(seenIds, { limit = 20 } = {}) {
     rechecked += 1;
     try {
       const { supported, outcome, alive } = await probeListingAliveBySource(listing);
-      if (supported && classifyListingProbeWrite({ outcome, alive }).write === "alive") { restoreListingOnline(row.post_id); restored += 1; }
-      else touchListingChecked(row.post_id);
+      if (supported && classifyListingProbeWrite({ outcome, alive }).write === "alive") { await restoreListingOnlineAsync(row.post_id); restored += 1; }
+      else await touchListingCheckedAsync(row.post_id);
     } catch {
-      touchListingChecked(row.post_id);
+      await touchListingCheckedAsync(row.post_id);
     }
     await new Promise((resolve) => setTimeout(resolve, 400));
   }

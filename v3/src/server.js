@@ -3,6 +3,7 @@ import { resolveAppRole, roleRunsWeb, roleRunsCrawler, roleRunsWorker } from "./
 import { searchListingsAsync } from "./listingSearchAsync.js";
 import { listingStatsAsync } from "./listingStatsAsync.js";
 import { getListingAsync } from "./listingDetailAsync.js";
+import { markListingAliveAsync, markListingOfflineAsync } from "./crawlerWrites.js";
 import express from "express";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -15,11 +16,7 @@ import {
   listUserIds,
   deleteProfile,
   getCachedGeo,
-  markListingOffline,
   confirmExpiredOfflineFromSettings,
-  restoreListingOnline,
-  markListingAlive,
-  touchListingChecked,
   getSettings,
   hideMany,
   listListings,
@@ -3905,12 +3902,12 @@ app.post("/api/listings/:id/recheck", async (req, res) => {
     }
     const decision = classifyListingProbeWrite({ outcome, alive });
     if (decision.write === "gone") {
-      markListingOffline(postId);
+      await markListingOfflineAsync(postId);
       res.json({ supported: true, gone: true, outcome: PROBE_GONE });
       return;
     }
     if (decision.write === "alive") {
-      markListingAlive(postId);
+      await markListingAliveAsync(postId, { wasOffline: Boolean(listing.offline) });
       res.json({ supported: true, gone: false, outcome: PROBE_ALIVE });
       return;
     }
@@ -3963,12 +3960,12 @@ app.post("/api/listings/:id/report-gone", async (req, res) => {
     }
     const decision = classifyListingProbeWrite({ outcome, alive });
     if (decision.write === "gone") {
-      markListingOffline(postId);
+      await markListingOfflineAsync(postId);
       res.json({ supported: true, gone: true, reported: true, outcome: PROBE_GONE, message: "已記錄此物件下架，7 日內同屋源若在任一平台重現會自動接手。" });
       return;
     }
     if (decision.write === "alive") {
-      markListingAlive(postId);
+      await markListingAliveAsync(postId, { wasOffline: Boolean(listing.offline) });
       res.json({ supported: true, gone: false, alive: true, outcome: PROBE_ALIVE, locked: true, until: new Date(Date.now() + REPORT_GONE_LOCK_MS).toISOString(), message: REPORT_GONE_LOCK_MSG });
       return;
     }

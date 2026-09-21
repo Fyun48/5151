@@ -108,19 +108,27 @@
      都改成 await。live parity：`v3/test/crawler-reads-parity.test.js` **5/5**
      （PG 寫入後回讀、指紋、配對候選的 block 與 fallback 兩條路徑）
      ＋ enrich worker 的 async loader 測試（`listing-prep-5168.test.js`，48 項）。
+   - **背景迴圈的寫入已接上（2026-09-21）**：`crawlerWrites.js` ＋ `repository/listingState.js`
+     把 `markListingOffline`／`restoreListingOnline`／`markListingAlive`／`touchListingChecked`／
+     `invalidateListingLocation`（route_jobs）改成 driver-aware；`watcher.js` 的離線探測迴圈、
+     enrich worker（`markGone`／`markAlive`／`invalidateLocation` 的 `...Async` 變體）與
+     **會員的兩個動作**（`/api/listings/:id/recheck`、`/report-gone`）都改成 await。
+     live parity：`v3/test/listing-state-writes.test.js` **4/4**（PG 寫入後以爬蟲入口回讀，
+     offline／alive／restore／checked 逐欄等於 SQLite；invalidateLocation 清掉 route_jobs）。
    - **仍待接（切換前必須完成，已評估可機械化）**：
      ① **`listingsNeeding*` 掃描（9 個）**：`listingsNeeding{591Geo,AddressGeo,AddressEnrich,FeeDetail,
         SourceKit,Route,AliveCheck,OfflineRecheck,Mrt}` ＋ `getRouteJob`／`community_cache`／`route_jobs`
         的讀取。它們是背景迴圈的「待辦清單」，PG 模式下會掃到空的 SQLite → 迴圈空跑（不會壞，但站上
         的補齊／探測／下架偵測全部停止）。做法與爬蟲讀取相同：每個語句抽成 builder（`db.js` 發佈、
         repository 執行、`crawlerReads.js` 分派），9 個 `backfillX()` 的讀取改成 await。已抽查 SQL：
-        只有 IFNULL／LIKE／EXISTS／子查詢，**沒有 SQLite-only 函式**（`typeof()` 只出現在價格候選 SQL，
-        那條本來就在 SQL-first envelope 外），現有翻譯層足以應付。
-     ② **通知／CRM 佇列的讀寫**（`pendingNotifyEvents`／`updateEventNotify`／`channelJobDone`／
+        只有 IFNULL／LIKE／EXISTS／子查詢，**沒有 SQLite-only 函式**，現有翻譯層足以應付。
+     ② **迴圈套用的欄位寫入**：`setListingDetail`（591 詳情／座標／費用）、`persistHpListingFields`
+        （5168 補齊）、`upsertListingPrep`、`setCachedMrt`、`setCommunityCache`——這些仍是 SQLite 形狀，
+        少了它們 ① 掃出來的工作做完也進不了 PG。
+     ③ **通知／CRM 佇列的讀寫**（`pendingNotifyEvents`／`updateEventNotify`／`channelJobDone`／
         `user_events` 寫入、`crmOutbox`）：PG 模式下通知會寫進 SQLite、Web 讀 PG → 會員收不到通知。
-        同一個 pattern。
-     ③ **`enqueueSimilaritySafe`（pHash 佇列）與 `listing_prep` 的寫入分流**（§2.3 尾）。
-     建議 ①＋② 同批（都是「背景管線同源」），③ 可獨立一支；三項都完成才切換。
+     ④ **`enqueueSimilaritySafe`（pHash 佇列）**（§2.3 尾）。
+     建議 ①＋② 同批（掃描與它對應的寫入）、③ 一批、④ 獨立；全部完成才切換。
    - **遷移工具**：identity sequence 的 re-sync 已納入 `importStore()`
      （PostgreSQL 不會為帶明確 id 的 INSERT 推進 identity sequence，漏了會在第一次自動編號時
      撞主鍵；案例見 `v3/evidence/pg-import-20260921/`）。

@@ -38,7 +38,9 @@ test("click-time recheck endpoint and client trigger are wired", () => {
   assert.match(server, /app\.post\("\/api\/listings\/:id\/recheck"/);
   assert.match(server, /requestClickRefresh/);
   assert.match(server, /probeListingAliveBySource/);
-  assert.match(server, /markListingOffline\(postId\)/);
+  // The write goes through crawlerWrites.js now, so DB_DRIVER=postgres stores the result where
+  // the site reads it (see v3/test/listing-state-writes.test.js).
+  assert.match(server, /markListingOfflineAsync\(postId\)/);
   const index = readFileSync(path.join(dir, "../public/index.html"), "utf8");
   assert.match(index, /\/recheck\?fresh=1`/);
   assert.match(index, /if \(data && \(data\.gone \|\| data\.queued\)\) loadList\(\{ keep: true/);
