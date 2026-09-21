@@ -24,8 +24,6 @@ import {
   getRouteJob,
   listingsNeedingAddressGeo,
   listingsNeedingAddressEnrich,
-  listingsNeedingAliveCheck,
-  listingsNeedingOfflineRecheck,
   markCoveringCompleted,
   markEventNotified,
   markListingOffline,
@@ -95,7 +93,7 @@ import { normalizeOfflineConfirmDays, shouldRecheckOffline } from "./offline.js"
 import { detailConcurrency, mapPool } from "./pool.js";
 // Driver-aware reads: with DB_DRIVER=postgres the crawler has to read back what it just wrote
 // (see crawlerReads.js). The synchronous read stays for helpers that are still sync.
-import { listingForWatchAsync, matchCandidatesAsync, watchSiblings } from "./crawlerReads.js";
+import { listingForWatchAsync, matchCandidatesAsync, needingAliveCheckAsync, needingOfflineRecheckAsync, watchSiblings } from "./crawlerReads.js";
 // ... and the write half: the loops must store their results in the same store (crawlerWrites.js).
 import {
   invalidateListingLocationAsync,
@@ -561,7 +559,7 @@ async function resolvePendingNotifyLocations(settings, { withRoute = true } = {}
 async function sweepOfflineListings(seenIds, { limit = 20 } = {}) {
   const confirmDays = normalizeOfflineConfirmDays(getSystemCrawl().offlineConfirmDays);
   const confirmed = confirmExpiredOfflineListings(confirmDays);
-  const rows = listingsNeedingAliveCheck({ excludeIds: [...seenIds], limit });
+  const rows = await needingAliveCheckAsync({ excludeIds: [...seenIds], limit });
   let checked = 0;
   let gone = 0;
   let rechecked = 0;
@@ -585,7 +583,7 @@ async function sweepOfflineListings(seenIds, { limit = 20 } = {}) {
     }
     await new Promise((resolve) => setTimeout(resolve, 400));
   }
-  const pendingRecheck = listingsNeedingOfflineRecheck({ limit: 8 });
+  const pendingRecheck = await needingOfflineRecheckAsync({ limit: 8 });
   const now = new Date();
   for (const row of pendingRecheck) {
     if (rechecked >= 8) break;

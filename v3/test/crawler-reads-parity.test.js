@@ -46,6 +46,8 @@ const TABLES = [
 ];
 
 const SEEDED = [920001, 920002, 920003];
+// The scan subtests need a pending-offline row (see loadFixture).
+const PENDING_OFFLINE = 920004;
 // Written through PostgreSQL only, so a SQLite read cannot see it.
 const PG_ONLY = 930001;
 
@@ -87,8 +89,11 @@ async function loadFixture() {
   seed(920001, { source_key: "1|8|same" });
   seed(920002, { source_key: "1|8|same" });
   seed(920003, { source_key: "1|8|other" });
+  // One pending-offline row, so the recheck scan has work on both drivers.
+  seed(920004, { source_key: "1|8|offline" });
   const db = app.sqliteHandle();
   db.prepare("UPDATE listings SET geo_source = 'geocode' WHERE post_id > 0").run();
+  db.prepare("UPDATE listings SET offline = 1, offline_at = ? WHERE post_id = 920004").run("2026-09-06T00:00:00.000Z");
   app.setFlags(920002, { viewed: true }, uid);
   // The change log is created on first use, so a fixture has to create it explicitly - otherwise
   // the mirrored PostgreSQL schema would be missing it (runbook: mirror a fully-initialised store).
@@ -146,7 +151,9 @@ test("the crawler reads go through the driver-aware entry point", async () => {
 
   // Wiring: the crawl loop awaits both reads and hands the fingerprint to classify().
   const watcher = readFileSync(path.join(dir, "../src/watcher.js"), "utf8");
-  assert.match(watcher, /import \{ listingForWatchAsync, matchCandidatesAsync, watchSiblings \} from "\.\/crawlerReads\.js";/);
+  assert.match(watcher, /import \{ listingForWatchAsync, matchCandidatesAsync, needingAliveCheckAsync, needingOfflineRecheckAsync, watchSiblings \} from "\.\/crawlerReads\.js";/);
+  assert.match(watcher, /await needingAliveCheckAsync\(\{ excludeIds: \[\.\.\.seenIds\], limit \}\);/);
+  assert.match(watcher, /await needingOfflineRecheckAsync\(\{ limit: 8 \}\);/);
   assert.match(watcher, /const existing = await listingForWatchAsync\(listing\.post_id\);/);
   assert.match(watcher, /siblings = await watchSiblings\(listing\.source_key, listing\.post_id\);/);
   assert.match(watcher, /candidates = await matchCandidatesAsync\(listing\.post_id, listing\);/);
@@ -176,6 +183,23 @@ test("live PostgreSQL: the crawler reads match SQLite, and a PostgreSQL write is
         await watchSiblings("1|8|same", 920001, pgOptions(pgDriver)),
         app.findBySourceKey("1|8|same", 920001),
       );
+    });
+  });
+
+  // The scans the offline sweep runs: same rows, same order, both drivers.
+  await t.test("the offline sweep scans match", async () => {
+    await withMirroredSchema(app, async (pgDriver) => {
+      const { needingAliveCheckAsync, needingOfflineRecheckAsync } = await import("../src/crawlerReads.js");
+      const alivePg = await needingAliveCheckAsync({ excludeIds: [920001], limit: 20 }, pgOptions(pgDriver));
+      const aliveSqlite = app.listingsNeedingAliveCheck({ excludeIds: [920001], limit: 20 });
+      assert.deepEqual(alivePg.map((row) => row.post_id), aliveSqlite.map((row) => row.post_id));
+      assert.ok(!aliveSqlite.some((row) => Number(row.post_id) === 920001), "excluded ids stay excluded");
+
+      const recheckPg = await needingOfflineRecheckAsync({ limit: 8 }, pgOptions(pgDriver));
+      const recheckSqlite = app.listingsNeedingOfflineRecheck({ limit: 8 });
+      assert.deepEqual(recheckPg, recheckSqlite);
+      assert.equal(recheckSqlite.length, 1);
+      assert.equal(Number(recheckSqlite[0].post_id), PENDING_OFFLINE);
     });
   });
 

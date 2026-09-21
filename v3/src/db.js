@@ -3507,6 +3507,9 @@ export function crawlerReadsBuildContext() {
     matchCandidateQuery,
     blockMatchCandidatesQuery,
     filterBlockMatchRows,
+    aliveCheckScanQuery,
+    pickAliveCheckRows,
+    offlineRecheckScanQuery,
   };
 }
 
@@ -4623,22 +4626,29 @@ export function touchListingChecked(postId) {
   db.prepare("UPDATE listings SET last_checked_at = ? WHERE post_id = ?").run(new Date().toISOString(), postId);
 }
 
-export function listingsNeedingAliveCheck({ excludeIds = [], limit = 20 } = {}) {
-  const cap = Math.max(1, Number(limit) || 20);
-  const skip = new Set((excludeIds || []).map(Number).filter((id) => id > 0));
-  const rows = db
-    .prepare(
-      `SELECT post_id FROM listings
+// Statement builders for the background loops' "what needs work" scans. They live here, next to
+// the SQLite functions that use them, and are published through crawlerReadsBuildContext() so the
+// PostgreSQL path (repository/crawlerScans.js) runs the SAME text - a scan that drifts between
+// drivers would make the crawler work on one store and the site read another.
+export function aliveCheckScanQuery() {
+  return {
+    sql: `SELECT post_id FROM listings
        WHERE IFNULL(hidden, 0) = 0 AND IFNULL(offline, 0) = 0
          AND ${sqlNotSelfSource()}
        ORDER BY ${sqlWatchedFirst()},
                 CASE WHEN last_checked_at IS NULL THEN 0 ELSE 1 END,
                 IFNULL(last_checked_at, last_seen_at) ASC
        LIMIT 800`,
-    )
-    .all();
+    params: [],
+  };
+}
+
+// The rows the SQLite function keeps after the scan (skip already-seen ids, then cap).
+export function pickAliveCheckRows(rows, { excludeIds = [], limit = 20 } = {}) {
+  const cap = Math.max(1, Number(limit) || 20);
+  const skip = new Set((excludeIds || []).map(Number).filter((id) => id > 0));
   const out = [];
-  for (const row of rows) {
+  for (const row of rows || []) {
     if (skip.has(Number(row.post_id))) continue;
     out.push(row);
     if (out.length >= cap) break;
@@ -4646,11 +4656,19 @@ export function listingsNeedingAliveCheck({ excludeIds = [], limit = 20 } = {}) 
   return out;
 }
 
-export function listingsNeedingOfflineRecheck({ limit = 8 } = {}) {
+export function listingsNeedingAliveCheck({ excludeIds = [], limit = 20 } = {}) {
+  const { sql, params } = aliveCheckScanQuery();
+  // node:sqlite hands back null-prototype objects while node-postgres returns plain ones; copying
+  // keeps both drivers' rows the same shape for callers and parity tests (the same reasoning as
+  // the BIGINT parsing in dbDriverPostgres.js).
+  return pickAliveCheckRows(db.prepare(sql).all(...params), { excludeIds, limit })
+    .map((row) => ({ ...row }));
+}
+
+export function offlineRecheckScanQuery({ limit = 8 } = {}) {
   const cap = Math.max(1, Number(limit) || 8);
-  return db
-    .prepare(
-      `SELECT post_id, offline, offline_at, offline_confirmed, last_checked_at
+  return {
+    sql: `SELECT post_id, offline, offline_at, offline_confirmed, last_checked_at
        FROM listings
        WHERE IFNULL(hidden, 0) = 0
          AND IFNULL(offline, 0) = 1
@@ -4659,8 +4677,14 @@ export function listingsNeedingOfflineRecheck({ limit = 8 } = {}) {
        ORDER BY CASE WHEN last_checked_at IS NULL THEN 0 ELSE 1 END,
                 IFNULL(last_checked_at, offline_at) ASC
        LIMIT ?`,
-    )
-    .all(Math.max(cap, 40));
+    params: [Math.max(cap, 40)],
+  };
+}
+
+export function listingsNeedingOfflineRecheck({ limit = 8 } = {}) {
+  const { sql, params } = offlineRecheckScanQuery({ limit });
+  // Plain objects on both drivers (see listingsNeedingAliveCheck).
+  return db.prepare(sql).all(...params).map((row) => ({ ...row }));
 }
 
 export function resetListings() {
