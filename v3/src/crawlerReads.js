@@ -12,9 +12,9 @@
 //
 // Fail-open: a PostgreSQL failure falls back to the SQLite read (a crawler cycle must not die
 // because one row could not be fetched).
-import { findBySourceKey as findBySourceKeySync, listingSearchBuildContext } from "./db.js";
+import { findBySourceKey as findBySourceKeySync, listMatchCandidates, listingSearchBuildContext, crawlerReadsBuildContext } from "./db.js";
 import { getListingAsync } from "./listingDetailAsync.js";
-import { findBySourceKey as findBySourceKeyRepo } from "./repository/listingReads.js";
+import { findBySourceKey as findBySourceKeyRepo, listMatchCandidates as listMatchCandidatesRepo } from "./repository/listingReads.js";
 import { resolveDbDriver } from "./dbDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
@@ -48,5 +48,20 @@ export async function watchSiblings(sourceKey, excludePostId, options = {}) {
 // Exposed for tests/diagnostics: the dependency bundle the PostgreSQL reads need.
 export function crawlerReadsContext() {
   return listingSearchBuildContext();
+}
+
+// db.js listMatchCandidates(): the same-house candidates for the classify step. Same driver
+// dispatch (and fail-open) as the other two reads.
+export async function matchCandidatesAsync(excludePostId, incoming = null, options = {}) {
+  const driver = options.driver || resolveDbDriver();
+  if (driver !== "postgres") return listMatchCandidates(excludePostId, incoming);
+  try {
+    const exec = await postgresExec(options);
+    const deps = options.deps || crawlerReadsBuildContext();
+    return await listMatchCandidatesRepo(exec, { deps, excludePostId, incoming });
+  } catch (error) {
+    if (options.strict) throw error;
+    return listMatchCandidates(excludePostId, incoming);
+  }
 }
 

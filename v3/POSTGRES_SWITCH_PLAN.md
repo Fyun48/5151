@@ -100,16 +100,27 @@
      `/api/listings` 改成 `await listingStatsAsync(...)`。實測：shadow 真實 PG 逐欄 parity **4/4**、
      回歸 `pg-live-integration` **10/10**、`write-path-parity` **2/2**；證據與踩到的坑見
      `v3/evidence/listing-stats-pg-20260921/`。
-   - **爬蟲／enrich／通知管線的讀取（進行中）**：`crawlerReads.js` 已把「爬蟲自己那一列」與
-     「同源指紋查詢」改成 driver-aware（`listingForWatchAsync`／`watchSiblings`），
-     `watcher.js` 的 12 個非同步呼叫點（crawl loop、geo、route、offline sweep、通知佇列、
-     backfill）都改成 await；live 測試證明「PG 寫入後回讀」可行
-     （`v3/test/crawler-reads-parity.test.js`，4/4）。
-     **仍待接**：① `listingEnrichQueue.js` 的 `helpers.loadListing()`（enrich 批次中段的同步讀，
-     seam 已放在 `listingEnrichHelpers().loadListingAsync`）、② `classify()` 內的
-     `listMatchCandidates()`（配對候選，需把 match.js 的區塊邏輯一起移植）、
-     ③ 各 `listingsNeeding*` 掃描（PG 模式下會掃到空的 SQLite → 迴圈空跑，不會壞但不會做事）、
-     ④ 通知／CRM 佇列的寫入。**在 ①–④ 完成前不要切換**：爬蟲的讀寫必須同批上線。
+   - **爬蟲讀取已接上（2026-09-21）**：`crawlerReads.js` 提供三個 driver-aware 讀取
+     —— `listingForWatchAsync`（那一列）、`watchSiblings`（同源指紋）、`matchCandidatesAsync`
+     （配對候選，blocking 查詢與純過濾器由 `sameHouseReconcile.js` 匯出、與 SQLite 同一份）；
+     `watcher.js` 的 13 個非同步呼叫點（crawl loop、geo、route、offline sweep、通知佇列、backfill）
+     與 `listingEnrichQueue.js` 的 enrich worker（`loadListingForRun` 優先走 `loadListingAsync`）
+     都改成 await。live parity：`v3/test/crawler-reads-parity.test.js` **5/5**
+     （PG 寫入後回讀、指紋、配對候選的 block 與 fallback 兩條路徑）
+     ＋ enrich worker 的 async loader 測試（`listing-prep-5168.test.js`，48 項）。
+   - **仍待接（切換前必須完成，已評估可機械化）**：
+     ① **`listingsNeeding*` 掃描（9 個）**：`listingsNeeding{591Geo,AddressGeo,AddressEnrich,FeeDetail,
+        SourceKit,Route,AliveCheck,OfflineRecheck,Mrt}` ＋ `getRouteJob`／`community_cache`／`route_jobs`
+        的讀取。它們是背景迴圈的「待辦清單」，PG 模式下會掃到空的 SQLite → 迴圈空跑（不會壞，但站上
+        的補齊／探測／下架偵測全部停止）。做法與爬蟲讀取相同：每個語句抽成 builder（`db.js` 發佈、
+        repository 執行、`crawlerReads.js` 分派），9 個 `backfillX()` 的讀取改成 await。已抽查 SQL：
+        只有 IFNULL／LIKE／EXISTS／子查詢，**沒有 SQLite-only 函式**（`typeof()` 只出現在價格候選 SQL，
+        那條本來就在 SQL-first envelope 外），現有翻譯層足以應付。
+     ② **通知／CRM 佇列的讀寫**（`pendingNotifyEvents`／`updateEventNotify`／`channelJobDone`／
+        `user_events` 寫入、`crmOutbox`）：PG 模式下通知會寫進 SQLite、Web 讀 PG → 會員收不到通知。
+        同一個 pattern。
+     ③ **`enqueueSimilaritySafe`（pHash 佇列）與 `listing_prep` 的寫入分流**（§2.3 尾）。
+     建議 ①＋② 同批（都是「背景管線同源」），③ 可獨立一支；三項都完成才切換。
    - **遷移工具**：identity sequence 的 re-sync 已納入 `importStore()`
      （PostgreSQL 不會為帶明確 id 的 INSERT 推進 identity sequence，漏了會在第一次自動編號時
      撞主鍵；案例見 `v3/evidence/pg-import-20260921/`）。

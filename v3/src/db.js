@@ -69,6 +69,8 @@ import {
   matchPatchFromEvaluation,
   nextBackfillBatch,
   RECONCILE_BATCH,
+  blockMatchCandidatesQuery,
+  filterBlockMatchRows,
   significantListingUpdate,
   summarizeReconciliationBatch,
 } from "./sameHouseReconcile.js";
@@ -3447,20 +3449,16 @@ function sqlWatchedFirst() {
   ) THEN 0 ELSE 1 END`;
 }
 
-export function listMatchCandidates(excludePostId, incoming = null) {
-  const anyone = loadAnyoneFlagMap(db);
-  const pid = Number(excludePostId) || 0;
-  if (incoming) {
-    const blocked = blockMatchCandidates(db, { ...incoming, post_id: incoming.post_id || pid });
-    if (blocked.length) {
-      return blocked.map((row) => overlayPersonal(row, anyone.get(Number(row.post_id))));
-    }
-  }
+// Statement text for listMatchCandidates(), split out so the PostgreSQL crawler read
+// (repository/listingReads.js) runs the identical query. `overlayPersonal()` stays with the
+// caller, as does the block-candidates pre-step.
+export function matchCandidateQuery(sqliteDb, excludePostId, incoming = null) {
   const hints = incoming ? matchFocusHints(incoming) : { street: "", community: "", cover: "" };
-  const isolation = sqlExcludeFixtureRows(db, "listings");
-  const rows = hints.street || hints.community || hints.cover
-    ? db.prepare(
-      `SELECT * FROM listings
+  const isolation = sqlExcludeFixtureRows(sqliteDb, "listings");
+  const pid = Number(excludePostId) || 0;
+  if (hints.street || hints.community || hints.cover) {
+    return {
+      sql: `SELECT * FROM listings
        WHERE post_id != ?
          AND ${isolation.sql}
          AND (
@@ -3470,15 +3468,46 @@ export function listMatchCandidates(excludePostId, incoming = null) {
          )
        ORDER BY ${sqlWatchedFirst()}, IFNULL(offline, 0) DESC, last_seen_at DESC
        LIMIT 400`,
-    ).all(pid, ...isolation.params, hints.street, hints.street, hints.community, hints.community, hints.cover, hints.cover)
-    : db.prepare(
-      `SELECT * FROM listings
+      params: [pid, ...isolation.params, hints.street, hints.street, hints.community, hints.community, hints.cover, hints.cover],
+    };
+  }
+  return {
+    sql: `SELECT * FROM listings
        WHERE post_id != ?
          AND ${isolation.sql}
        ORDER BY ${sqlWatchedFirst()}, IFNULL(offline, 0) DESC, hidden DESC, viewed DESC, last_seen_at DESC
        LIMIT 800`,
-    ).all(pid, ...isolation.params);
+    params: [pid, ...isolation.params],
+  };
+}
+
+export function listMatchCandidates(excludePostId, incoming = null) {
+  const anyone = loadAnyoneFlagMap(db);
+  const pid = Number(excludePostId) || 0;
+  if (incoming) {
+    const blocked = blockMatchCandidates(db, { ...incoming, post_id: incoming.post_id || pid });
+    if (blocked.length) {
+      return blocked.map((row) => overlayPersonal(row, anyone.get(Number(row.post_id))));
+    }
+  }
+  const { sql, params } = matchCandidateQuery(db, pid, incoming);
+  const rows = db.prepare(sql).all(...params);
   return rows.map((row) => overlayPersonal(row, anyone.get(Number(row.post_id))));
+}
+
+// Dependency bundle for the crawler's match-candidate read (crawlerReads.matchCandidatesAsync ->
+// repository/listingReads.js). The statement builders stay here, where the SQLite path already
+// uses them, so both drivers run one statement text; the repository itself imports nothing from
+// this module (no cycle, and tests that mirror a fixture never open the singleton). It is a
+// superset of listingSearchBuildContext(), so one bundle serves every crawler read
+// (getListingAsync + watchSiblings + matchCandidatesAsync).
+export function crawlerReadsBuildContext() {
+  return {
+    ...listingSearchBuildContext(),
+    matchCandidateQuery,
+    blockMatchCandidatesQuery,
+    filterBlockMatchRows,
+  };
 }
 
 export function setListingMatch(postId, match) {

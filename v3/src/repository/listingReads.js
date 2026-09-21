@@ -25,3 +25,24 @@ export async function findBySourceKey(exec, { sourceKey, excludePostId = 0 } = {
   return overlayRowsPersonal(rows, anyone);
 }
 
+// db.js listMatchCandidates(): the same-house match candidates `classify()` scores. The blocking
+// query and the post-filter come from the dependency bundle db.js publishes as
+// crawlerReadsBuildContext() (same statement text as the SQLite path; the filter is pure JS).
+export async function listMatchCandidates(exec, { deps, excludePostId = 0, incoming = null } = {}) {
+  const context = deps || {};
+  const pid = Number(excludePostId) || 0;
+  const anyone = await loadAnyoneFlagMap(exec);
+  if (incoming && typeof context.blockMatchCandidatesQuery === "function") {
+    const { sql, params } = context.blockMatchCandidatesQuery(context.sqliteDb, {
+      ...incoming,
+      post_id: incoming.post_id || pid,
+    });
+    if (sql) {
+      const blocked = context.filterBlockMatchRows(incoming, await exec(sql, params));
+      if (blocked.length) return overlayRowsPersonal(blocked, anyone);
+    }
+  }
+  const { sql, params } = context.matchCandidateQuery(context.sqliteDb, pid, incoming);
+  return overlayRowsPersonal(await exec(sql, params), anyone);
+}
+
