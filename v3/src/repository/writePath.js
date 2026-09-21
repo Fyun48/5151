@@ -13,6 +13,12 @@
 import { toPostgresSql } from "../sqlDialect.js";
 import { listingCommunityId, preferListingAddress, sourceCommunityLinked, sqlTrustedGeoSource } from "../location.js";
 import { sanitizeFloorName } from "../floors.js";
+import { listingKitFrom, mergeKitColumns } from "../listingKit.js";
+import {
+  bindProjectionValues,
+  computeListingProjection,
+  listingProjectionUpsertSql,
+} from "../listingSearchProjection.js";
 
 export const WRITE_PATH_SQL = {
   // personalFlags.js setUserListingFlags()
@@ -320,6 +326,45 @@ export function createWritePath({ driver = "sqlite", sqliteDb = null, pgDriver =
         }
       }
       await exec(listingsUpsertSql(), listingsUpsertParams(listing, existing));
+    },
+    // Mirrors the follow-up UPDATEs in db.js upsertListing(): source/source_id backfill, content_seq
+    // bump, geo_source backfill and the kit columns.
+    async backfillListing(listing, existing = null) {
+      const postId = Number(listing?.post_id) || 0;
+      if (!postId) throw new Error("backfillListing requires listing.post_id");
+      const origin = String(listing.source || "591").trim() || "591";
+      const originId = String(listing.source_id || postId || "").trim() || String(postId);
+      await exec(
+        "UPDATE listings SET source = ?, source_id = COALESCE(NULLIF(source_id, ''), ?) WHERE post_id = ?",
+        [origin, originId, postId],
+      );
+      const kit = mergeKitColumns(existing || {}, listingKitFrom({ ...listing, tags: listing.tags }));
+      await exec(
+        "UPDATE listings SET has_natural_gas = ?, has_balcony = ?, furnish_items = ? WHERE post_id = ?",
+        [kit.has_natural_gas, kit.has_balcony, JSON.stringify(kit.furnish_items), postId],
+      );
+      await exec("UPDATE listings SET content_seq = IFNULL(content_seq, 0) + 1 WHERE post_id = ?", [postId]);
+      const geoSource = String(listing.geo_source || "").trim();
+      if (geoSource) {
+        await exec(
+          "UPDATE listings SET geo_source = COALESCE(NULLIF(geo_source, ''), ?) WHERE post_id = ?",
+          [geoSource, postId],
+        );
+      }
+    },
+    // Mirrors listingSearchProjection.syncListingProjection(): the derived projection row the
+    // SQL-first search reads (an upsert, so a brand-new listing becomes searchable too).
+    async syncProjection(row, { now = Date.now() } = {}) {
+      const values = computeListingProjection(row, now);
+      await exec(listingProjectionUpsertSql(), bindProjectionValues(values));
+    },
+    // Mirrors dataRevision.bumpRevision(): the durable change-log row.
+    async bumpRevision({ entityType, entityId = null, eventType, now = Date.now() } = {}) {
+      if (!entityType || !eventType) throw new Error("bumpRevision requires entityType and eventType");
+      await exec(
+        "INSERT INTO data_revision (entity_type, entity_id, event_type, created_at) VALUES (?, ?, ?, ?)",
+        [String(entityType), entityId == null ? null : Number(entityId), String(eventType), Number(now) || Date.now()],
+      );
     },
   };
 }
