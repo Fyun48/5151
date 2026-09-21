@@ -137,11 +137,10 @@ function parseJson(raw, fallback) {
   }
 }
 
-export function upsertListingPrep(conn, postId, listing, evalResult) {
-  const stamp = nowIso();
-  const existing = conn.prepare("SELECT ready_at, first_ready_notified FROM listing_prep WHERE post_id = ?").get(postId);
-  const becomingReady = evalResult.displayReady && !existing?.ready_at;
-  conn.prepare(`
+// The listing_prep row is owned by this module (schema + statement together), so its text lives
+// here and is shared by the SQLite writer and the driver-aware writer the enrich worker uses when
+// the deployment is on PostgreSQL.
+export const LISTING_PREP_UPSERT_SQL = `
     INSERT INTO listing_prep(
       post_id, source, display_ready, prep_status, detail_status, address_status,
       floor_status, facility_status, facility_basis, geo_precision, location_label,
@@ -164,26 +163,62 @@ export function upsertListingPrep(conn, postId, listing, evalResult) {
       checked_at = excluded.checked_at,
       ready_at = COALESCE(listing_prep.ready_at, excluded.ready_at),
       first_ready_notified = listing_prep.first_ready_notified
-  `).run(
-    postId,
-    HP_PREP_SOURCE,
-    evalResult.displayReady ? 1 : 0,
-    evalResult.status,
-    evalResult.detailRecognized ? "fetched" : (evalResult.status === PREP_PARSE_FAILED ? "parse_failed" : "pending"),
-    evalResult.address.usable ? (evalResult.address.sourceLimited ? "approx" : "usable") : "pending",
-    evalResult.floor.status,
-    evalResult.facility.status,
-    evalResult.facility.basis || "",
-    evalResult.geoPrecision,
-    evalResult.locationLabel,
-    JSON.stringify(evalResult.missing),
-    evalResult.withholdReason || "",
-    evalResult.sourceLimitedReason || "",
-    stamp,
-    evalResult.displayReady ? stamp : null,
-    0,
-  );
-  return { becomingReady, firstReadyAt: becomingReady ? stamp : existing?.ready_at || "" };
+  `;
+
+// The values one prep write contains. `ready_at` keeps its first value, which is what the
+// becomingReady / firstReadyAt answer is derived from.
+export function listingPrepPlan(existing, postId, evalResult, { stamp = nowIso() } = {}) {
+  const becomingReady = Boolean(evalResult.displayReady) && !existing?.ready_at;
+  return {
+    sql: LISTING_PREP_UPSERT_SQL,
+    params: [
+      postId,
+      HP_PREP_SOURCE,
+      evalResult.displayReady ? 1 : 0,
+      evalResult.status,
+      evalResult.detailRecognized ? "fetched" : (evalResult.status === PREP_PARSE_FAILED ? "parse_failed" : "pending"),
+      evalResult.address.usable ? (evalResult.address.sourceLimited ? "approx" : "usable") : "pending",
+      evalResult.floor.status,
+      evalResult.facility.status,
+      evalResult.facility.basis || "",
+      evalResult.geoPrecision,
+      evalResult.locationLabel,
+      JSON.stringify(evalResult.missing),
+      evalResult.withholdReason || "",
+      evalResult.sourceLimitedReason || "",
+      stamp,
+      evalResult.displayReady ? stamp : null,
+      0,
+    ],
+    becomingReady,
+    firstReadyAt: becomingReady ? stamp : existing?.ready_at || "",
+  };
+}
+
+export function upsertListingPrep(conn, postId, listing, evalResult) {
+  const existing = conn.prepare("SELECT ready_at, first_ready_notified FROM listing_prep WHERE post_id = ?").get(postId);
+  const plan = listingPrepPlan(existing, postId, evalResult);
+  conn.prepare(plan.sql).run(...plan.params);
+  return { becomingReady: plan.becomingReady, firstReadyAt: plan.firstReadyAt };
+}
+
+// The PostgreSQL twin of upsertListingPrep(): same statement, same decision, the caller's exec
+// (crawlerWrites.upsertListingPrepAsync supplies the pool).
+export async function upsertListingPrepAsync(exec, { postId, listing, evalResult } = {}) {
+  const rows = await exec("SELECT ready_at, first_ready_notified FROM listing_prep WHERE post_id = ?", [postId]);
+  const existing = (rows || [])[0] || null;
+  const plan = listingPrepPlan(existing, postId, evalResult);
+  await exec(plan.sql, plan.params);
+  return { becomingReady: plan.becomingReady, firstReadyAt: plan.firstReadyAt };
+}
+
+// The prep row is written through the bundle when it has a driver-aware writer (PostgreSQL), and
+// through the handled connection otherwise - same statement either way (listingPrepPlan).
+function prepWrite(helpers, conn, postId, listing, evalResult) {
+  if (typeof helpers?.upsertListingPrepAsync === "function") {
+    return helpers.upsertListingPrepAsync(postId, listing, evalResult);
+  }
+  return upsertListingPrep(conn, postId, listing, evalResult);
 }
 
 export function getListingPrep(conn, postId) {
@@ -525,11 +560,16 @@ export async function applyHpListingPatch(conn, helpers, current, next, { locati
   if (job && !listingWriteIsFresh(job, latest)) {
     return { applied: false, stale: true };
   }
-  helpers.persistHpListingFields(current.post_id, next, { locationChanged, previous: current });
+  // The patch write goes through the driver-aware helper when the bundle has one, so a PostgreSQL
+  // deployment stores the 5168 fields in the store the site reads.
+  await runHelper(helpers, "persistHpListingFields", current.post_id, next, {
+    locationChanged,
+    previous: current,
+    listing: latest,
+  });
   syncJobListingSeq(job, (await loadListingForRun(helpers, current.post_id)) || next);
   return { applied: true, stale: false };
 }
-
 export async function processOneEnrichJob(conn, helpers, job, {
   fetchDetail = fetchHpDetailInspected,
 } = {}) {
@@ -586,7 +626,7 @@ export async function processOneEnrichJob(conn, helpers, job, {
     const existingPrep = getListingPrep(conn, listing.post_id);
     if (!existingPrep || Number(existingPrep.display_ready) !== 1) {
       const evalPending = evaluateHpPrep(listing, { fetched: false });
-      upsertListingPrep(conn, listing.post_id, listing, evalPending);
+      await prepWrite(helpers, conn, listing.post_id, listing, evalPending);
       finishJob(conn, job, {
         status: "failed",
         error: inspected.reason || "inconclusive",
@@ -677,7 +717,7 @@ export async function processOneEnrichJob(conn, helpers, job, {
     facilityPartial: inspected.facilityPartial === true,
     buildingOnly: inspected.buildingOnly === true,
   });
-  const readyInfo = upsertListingPrep(conn, listing.post_id, stored, evalResult);
+  const readyInfo = await prepWrite(helpers, conn, listing.post_id, stored, evalResult);
   if (readyInfo.becomingReady) helpers.onFirstReady?.(stored, readyInfo);
   const firstQueuedAt = Date.parse(job.created_at || "") || t0;
   const firstReadyMs = readyInfo.becomingReady ? Math.max(0, Date.now() - firstQueuedAt) : null;

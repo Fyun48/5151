@@ -12,12 +12,33 @@
 //
 // Fail-open: a PostgreSQL failure falls back to the SQLite read (a crawler cycle must not die
 // because one row could not be fetched).
-import { findBySourceKey as findBySourceKeySync, listMatchCandidates, listingSearchBuildContext, crawlerReadsBuildContext, listingsNeedingAliveCheck, listingsNeedingOfflineRecheck } from "./db.js";
+import {
+  findBySourceKey as findBySourceKeySync,
+  listMatchCandidates,
+  listingSearchBuildContext,
+  crawlerReadsBuildContext,
+  listingsNeeding591Geo,
+  listingsNeedingAddressEnrich,
+  listingsNeedingAddressGeo,
+  listingsNeedingAliveCheck,
+  listingsNeedingFeeDetail,
+  listingsNeedingMrt,
+  listingsNeedingOfflineRecheck,
+  listingsNeedingRoute,
+  listingsNeedingSourceKit,
+} from "./db.js";
 import { getListingAsync } from "./listingDetailAsync.js";
 import { findBySourceKey as findBySourceKeyRepo, listMatchCandidates as listMatchCandidatesRepo } from "./repository/listingReads.js";
 import {
+  select591GeoCandidates,
+  selectAddressEnrichCandidates,
+  selectAddressGeoCandidates,
   selectAliveCheckCandidates,
+  selectFeeDetailCandidates,
+  selectMrtCandidates,
   selectOfflineRecheckCandidates,
+  selectRouteCandidates,
+  selectSourceKitCandidates,
 } from "./repository/crawlerScans.js";
 import { resolveDbDriver } from "./dbDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
@@ -28,6 +49,22 @@ async function postgresExec(options = {}) {
   if (options.exec) return options.exec;
   const pgDriver = options.pgDriver || (await sharedPgDriver());
   return (sql, params = []) => pgDriver.query(toPostgresSql(sql), params).then((res) => res.rows);
+}
+
+// One dispatch shape for every scan in this module: sqlite -> the synchronous db.js function,
+// postgres -> repository/crawlerScans.js, and a PostgreSQL failure falls back to the SQLite scan
+// (a loop must not stop finding work because one read failed).
+async function scan(options, runPostgres, runSqlite) {
+  const driver = options.driver || resolveDbDriver();
+  if (driver !== "postgres") return runSqlite();
+  try {
+    const exec = await postgresExec(options);
+    const deps = options.deps || crawlerReadsBuildContext();
+    return await runPostgres(exec, deps);
+  } catch (error) {
+    if (options.strict) throw error;
+    return runSqlite();
+  }
 }
 
 // db.js listingForWatch(): the crawler's per-listing read (getListing with sameHouse:false).
@@ -50,32 +87,107 @@ export async function watchSiblings(sourceKey, excludePostId, options = {}) {
 }
 
 // db.js listingsNeedingAliveCheck(): the listings the offline sweep should probe next.
-export async function needingAliveCheckAsync({ excludeIds = [], limit = 20 } = {}, options = {}) {
-  const driver = options.driver || resolveDbDriver();
-  if (driver !== "postgres") return listingsNeedingAliveCheck({ excludeIds, limit });
-  try {
-    const exec = await postgresExec(options);
-    const deps = options.deps || crawlerReadsBuildContext();
-    return await selectAliveCheckCandidates(exec, { deps, excludeIds, limit });
-  } catch (error) {
-    if (options.strict) throw error;
-    return listingsNeedingAliveCheck({ excludeIds, limit });
-  }
+export function needingAliveCheckAsync({ excludeIds = [], limit = 20 } = {}, options = {}) {
+  return scan(
+    options,
+    (exec, deps) => selectAliveCheckCandidates(exec, { deps, excludeIds, limit }),
+    () => listingsNeedingAliveCheck({ excludeIds, limit }),
+  );
 }
 
 // db.js listingsNeedingOfflineRecheck(): the pending-offline listings due for another look.
-export async function needingOfflineRecheckAsync({ limit = 8 } = {}, options = {}) {
+export function needingOfflineRecheckAsync({ limit = 8 } = {}, options = {}) {
+  return scan(
+    options,
+    (exec, deps) => selectOfflineRecheckCandidates(exec, { deps, limit }),
+    () => listingsNeedingOfflineRecheck({ limit }),
+  );
+}
+
+// db.js listingsNeedingFeeDetail(): the 591 detail backfill's work list (fee/contact/coords/kit).
+export function needingFeeDetailAsync({ limit = 12 } = {}, options = {}) {
+  return scan(
+    options,
+    (exec, deps) => selectFeeDetailCandidates(exec, { deps, limit }),
+    () => listingsNeedingFeeDetail(limit),
+  );
+}
+
+// db.js listingsNeedingSourceKit(): the external sources whose kit columns are still missing.
+export function needingSourceKitAsync({ limit = 8 } = {}, options = {}) {
+  return scan(
+    options,
+    (exec, deps) => selectSourceKitCandidates(exec, { deps, limit }),
+    () => listingsNeedingSourceKit(limit),
+  );
+}
+
+// db.js listingsNeeding591Geo(): the 591 listings still without a trusted pin.
+export function needing591GeoAsync({ limit = 20 } = {}, options = {}) {
+  return scan(
+    options,
+    (exec, deps) => select591GeoCandidates(exec, { deps, limit }),
+    () => listingsNeeding591Geo(limit),
+  );
+}
+
+// db.js listingsNeedingAddressGeo(): the address-only geocode backlog.
+export function needingAddressGeoAsync({ limit = 20 } = {}, options = {}) {
+  return scan(
+    options,
+    (exec, deps) => selectAddressGeoCandidates(exec, { deps, limit }),
+    () => listingsNeedingAddressGeo(limit),
+  );
+}
+
+// db.js listingsNeedingAddressEnrich(): the coarse addresses worth re-fetching from the source.
+export function needingAddressEnrichAsync({ limit = 12 } = {}, options = {}) {
+  return scan(
+    options,
+    (exec, deps) => selectAddressEnrichCandidates(exec, { deps, limit }),
+    () => listingsNeedingAddressEnrich(limit),
+  );
+}
+
+// db.js listingsNeedingMrt(): the trusted coordinates whose MRT cache entry is missing.
+export function needingMrtAsync({ limit = 20 } = {}, options = {}) {
+  return scan(
+    options,
+    (exec, deps) => selectMrtCandidates(exec, { deps, limit }),
+    () => listingsNeedingMrt(limit),
+  );
+}
+
+// db.js listingsNeedingRoute(): the commute backlog. It is the one resumable scan, so the
+// PostgreSQL side keeps its own keyset cursor here - the synchronous twin keeps
+// listingsNeedingRoute.lastCursor. Only one driver is live at a time, so the two never mix.
+export async function needingRouteAsync({ limit = 40, priorityIds = [], cursor } = {}, options = {}) {
+  const scanNow = options.now;
+  const sqliteOptions = { priorityIds };
+  if (cursor !== undefined) sqliteOptions.cursor = cursor;
+  if (scanNow !== undefined) sqliteOptions.now = scanNow;
+  const runSqlite = () => listingsNeedingRoute(limit, sqliteOptions);
   const driver = options.driver || resolveDbDriver();
-  if (driver !== "postgres") return listingsNeedingOfflineRecheck({ limit });
+  if (driver !== "postgres") return runSqlite();
+  const nextCursor = Number(cursor ?? needingRouteAsync.lastCursor) || 0;
   try {
     const exec = await postgresExec(options);
     const deps = options.deps || crawlerReadsBuildContext();
-    return await selectOfflineRecheckCandidates(exec, { deps, limit });
+    const result = await selectRouteCandidates(exec, {
+      deps,
+      limit,
+      priorityIds,
+      cursor: nextCursor,
+      now: scanNow,
+    });
+    needingRouteAsync.lastCursor = result.cursor;
+    return result.rows;
   } catch (error) {
     if (options.strict) throw error;
-    return listingsNeedingOfflineRecheck({ limit });
+    return runSqlite();
   }
 }
+needingRouteAsync.lastCursor = 0;
 
 // Exposed for tests/diagnostics: the dependency bundle the PostgreSQL reads need.
 export function crawlerReadsContext() {

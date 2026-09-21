@@ -39,7 +39,10 @@ const PEER_COLUMNS = `post_id, source_id, title, url, price, price_num, extra_fe
        hidden, match_post_id, match_level, match_verdict, match_detail,
        cost_changed_at, cost_change_detail, cost_change_type, last_seen_at, refresh_time`;
 
-const PEER_COLUMNS_QUALIFIED = PEER_COLUMNS.split(",\n").map((part) => `l.${part.trim()}`).join(", ");
+// Every column has to carry the `l.` prefix: the join also reads listing_group_members, and an
+// unqualified name that exists in both tables makes PostgreSQL reject the statement
+// ("column reference \"source\" is ambiguous") - SQLite tolerated it.
+const PEER_COLUMNS_QUALIFIED = PEER_COLUMNS.split(",").map((part) => `l.${part.trim()}`).join(", ");
 
 function normalizeUserId(userId) {
   return Number(userId) || 0;

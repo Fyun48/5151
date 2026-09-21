@@ -11,8 +11,15 @@ import {
   markListingAlive as markListingAliveSync,
   markListingOffline as markListingOfflineSync,
   restoreListingOnline as restoreListingOnlineSync,
+  setCachedMrt as setCachedMrtSync,
+  setCommunityCache as setCommunityCacheSync,
+  setListingDetail as setListingDetailSync,
   touchListingChecked as touchListingCheckedSync,
+  persistHpListingFields as persistHpListingFieldsSync,
+  listingFieldsBuildContext,
 } from "./db.js";
+import { getListingAsync } from "./listingDetailAsync.js";
+import { upsertListingPrepAsync as upsertListingPrepRepo } from "./listingEnrichQueue.js";
 import {
   clearRouteJobs as clearRouteJobsRepo,
   markListingAlive as markListingAliveRepo,
@@ -20,6 +27,12 @@ import {
   restoreListingOnline as restoreListingOnlineRepo,
   touchListingChecked as touchListingCheckedRepo,
 } from "./repository/listingState.js";
+import {
+  persistHpListingFields as persistHpListingFieldsRepo,
+  setCachedMrt as setCachedMrtRepo,
+  setCommunityCache as setCommunityCacheRepo,
+  setListingDetail as setListingDetailRepo,
+} from "./repository/listingFields.js";
 import { resolveDbDriver } from "./dbDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
@@ -74,5 +87,80 @@ export function invalidateListingLocationAsync(postId, options = {}) {
       return { postId: id, cleared: true };
     },
   );
+}
+
+// db.js setListingDetail(): the 591 detail (fees, contact, coords, community, kit columns) the
+// detail backfill loop applies. The PostgreSQL side reads the row it is about to patch from the
+// same store (getListingAsync), so the "which field wins" decision sees what the site sees.
+export async function setListingDetailAsync(postId, input = {}, options = {}) {
+  const driver = options.driver || resolveDbDriver();
+  if (driver !== "postgres") return setListingDetailSync(postId, input);
+  try {
+    const exec = await postgresExec(options);
+    const deps = options.deps || listingFieldsBuildContext();
+    const listing = options.listing || await loadListingForWrite(postId, options);
+    if (!listing) return null;
+    return await setListingDetailRepo(exec, { deps, listing, input });
+  } catch (error) {
+    if (options.strict) throw error;
+    return setListingDetailSync(postId, input);
+  }
+}
+
+// db.js persistHpListingFields(): the 5168 enrich worker's field patch.
+export async function persistHpListingFieldsAsync(postId, next, options = {}) {
+  const { locationChanged = false, previous = null, ...driverOptions } = options || {};
+  const driver = driverOptions.driver || resolveDbDriver();
+  if (driver !== "postgres") return persistHpListingFieldsSync(postId, next, { locationChanged, previous });
+  try {
+    const exec = await postgresExec(driverOptions);
+    const deps = driverOptions.deps || listingFieldsBuildContext();
+    const listing = driverOptions.listing || await loadListingForWrite(postId, driverOptions);
+    if (!listing) return null;
+    const result = await persistHpListingFieldsRepo(exec, { deps, listing, next, locationChanged });
+    return { ...result, postId: Number(postId) || 0 };
+  } catch (error) {
+    if (driverOptions.strict) throw error;
+    return persistHpListingFieldsSync(postId, next, { locationChanged, previous });
+  }
+}
+
+// db.js setCachedMrt(): the MRT access cache (decoration reads it per row).
+export function setCachedMrtAsync(lat, lng, access, options = {}) {
+  return write(
+    options,
+    (exec) => setCachedMrtRepo(exec, { deps: options.deps || listingFieldsBuildContext(), lat, lng, access }),
+    () => setCachedMrtSync(lat, lng, access),
+  );
+}
+
+// db.js setCommunityCache(): the community pin cache (the 591 geo scan reads it back).
+export function setCommunityCacheAsync(community, options = {}) {
+  return write(
+    options,
+    (exec) => setCommunityCacheRepo(exec, { deps: options.deps || listingFieldsBuildContext(), community }),
+    () => setCommunityCacheSync(community),
+  );
+}
+
+// listingEnrichQueue.upsertListingPrep(): the 5168 prep row the site's display_ready gate reads.
+export function upsertListingPrepAsync(postId, listing, evalResult, options = {}) {
+  return write(
+    options,
+    (exec) => upsertListingPrepRepo(exec, { postId, listing, evalResult }),
+    () => null,
+  );
+}
+
+// The row the field planners patch, read through the driver-aware detail loader (same decorated
+// shape getListing() gives the SQLite functions). `sameHouse: false` is the crawler seam's read
+// (watcher's listingForWatch), and the planners only look at the row's own columns anyway.
+async function loadListingForWrite(postId, options = {}) {
+  return getListingAsync(postId, undefined, {
+    driver: "postgres",
+    pgDriver: options.pgDriver,
+    sameHouse: false,
+    strict: options.strict === true,
+  });
 }
 

@@ -128,16 +128,43 @@
           **離線／存活這條 loop 至此讀寫同源**（掃描 → 探測 → 狀態寫入）。
           同時發現並統一一個跨 driver 細節：`node:sqlite` 回傳 null-prototype 物件、node-postgres 回傳
           一般物件 → 掃描結果一律複製成一般物件（同 BIGINT 的處理）。
-        - **其餘 7 個**：`591Geo`（需要 `community_cache` 讀取）、`AddressGeo`、`AddressEnrich`、`FeeDetail`
-          （兩段查詢）、`SourceKit`（每來源 + 舊 schema fallback）、`Route`（route_jobs join）、`Mrt`。
-          做法同上；已抽查 SQL 只有 IFNULL／LIKE／EXISTS／子查詢，沒有 SQLite-only 函式。
-     ② **迴圈套用的欄位寫入**：`setListingDetail`（591 詳情／座標／費用）、`persistHpListingFields`
-        （5168 補齊）、`upsertListingPrep`、`setCachedMrt`、`setCommunityCache`——這些仍是 SQLite 形狀，
-        少了它們 ① 掃出來的工作做完也進不了 PG。
+        - **已完成（2026-09-21，第二批）**：其餘 7 條 —— `FeeDetail`（兩段查詢，`feeDetailScanQuery()`／
+          `feeDetailStaleScanQuery()`／`feeDetailStaleQueryLimit()`／`pickFeeDetailRows()`）、`SourceKit`
+          （每來源一頁＋舊 schema fallback，`sourceKitScanQuery()`／`sourceKitLegacyScanQuery()`／
+          `pickSourceKitRows()`）、`591Geo`（`geo591ScanQuery()` ＋ `communityCacheIdsQuery()`，把
+          「社區已快取嗎」變成一次 `community_cache` 讀取）、`AddressGeo`、`AddressEnrich`、`Mrt`
+          （`mrtCacheKeysQuery()` 同理）、`Route`（`routeScanPlan()` 提供 jobs/wantRush/cap/cursor，
+          `routePriorityScanQuery()`／`routeWatchedScanQuery()`／`routePageScanQuery()`／`routeJobsQuery()`／
+          `routeCacheQuery()` 是四段查詢，`routeRowNeed()` 是純決策；`repository/crawlerScans.selectRouteCandidates()`
+          每頁只撈一次 `route_jobs`＋`route_cache` 就決定，回傳 `{ rows, cursor }`）。
+          `watcher.js` 的 7 個 backfill 呼叫點全部改成 `await needingXxxAsync(...)`，同步 `listingsNeeding*`
+          在 watcher 已無殘留（測試用 regex 釘住）。live parity：`crawler-reads-parity.test.js` **8/8**
+          （含 7 條掃描逐列／逐序比對與 PG 分支覆蓋）。
+        - **（已完成的 7 條，2026-09-21）** 原本列為「其餘 7 個」：`591Geo`（需要 `community_cache` 讀取）、
+          `AddressGeo`、`AddressEnrich`、`FeeDetail`（兩段查詢）、`SourceKit`（每來源 + 舊 schema fallback）、
+          `Route`（route_jobs join）、`Mrt`。做法同上；SQL 只有 IFNULL／LIKE／EXISTS／子查詢，沒有 SQLite-only
+          函式。
+     ② **已完成（2026-09-21，同批）**：迴圈套用的欄位寫入 —— `v3/src/repository/listingFields.js`
+        ＋ `crawlerWrites.js` 的 async 分派（`setListingDetailAsync`／`persistHpListingFieldsAsync`／
+        `setCachedMrtAsync`／`setCommunityCacheAsync`／`upsertListingPrepAsync`）。
+        語句與值決策抽成 db.js 的純 planner（`listingDetailPlan()`／`hpFieldsPlan()`／`mrtCacheUpsert()`／
+        `communityCacheUpsert()`／`listingLocationUpdate()`），由 `listingFieldsBuildContext()` 發佈；
+        `watcher.js` 的 `applyFetchedDetail`／`applyCommunityPin`／SourceKit 迴圈／MRT 迴圈與
+        `listingEnrichQueue.js` 的 `applyHpListingPatch`（`runHelper`）／`prepWrite`（`listing_prep` 同一條
+        語句，`listingPrepPlan()`）都改走 async 分派。live parity：`v3/test/listing-fields-parity.test.js`
+        **6/6**（`listings` 逐欄、`mrt_cache`、`community_cache`、`listing_prep` 都比對到 SQLite 的答案）。
+        修掉三個跨 driver 的細節：`CASE WHEN ?` 在 PG 需要 boolean（node:sqlite 不能綁 boolean）→
+        統一寫成 `CASE WHEN ? = 1`；`CAST(? AS DOUBLE PRECISION) IS NOT NULL`（PG 無法從 `IS NOT NULL`
+        推參數型別）；`listingLocationUpdate()` 的 post_id 改由參數帶入（SQLite 端讀的 `current`
+        是窄 SELECT，沒有 post_id）。
+        一併修掉 `repository/decorationData.js` 的 `PEER_COLUMNS_QUALIFIED`：`split(",\n")` 只替每行
+        第一個欄位加 `l.`，PG 在 `listing_group_members JOIN listings` 的查詢上會回
+        `column reference "source" is ambiguous`（SQLite 容忍）—— 這是切換前就會踩到的既有 bug。
      ③ **通知／CRM 佇列的讀寫**（`pendingNotifyEvents`／`updateEventNotify`／`channelJobDone`／
         `user_events` 寫入、`crmOutbox`）：PG 模式下通知會寫進 SQLite、Web 讀 PG → 會員收不到通知。
      ④ **`enqueueSimilaritySafe`（pHash 佇列）**（§2.3 尾）。
      建議 ①＋② 同批（掃描與它對應的寫入）、③ 一批、④ 獨立；全部完成才切換。
+     **①＋② 已於 2026-09-21 完成並以 shadow PG 實測（14/14）。**
    - **遷移工具**：identity sequence 的 re-sync 已納入 `importStore()`
      （PostgreSQL 不會為帶明確 id 的 INSERT 推進 identity sequence，漏了會在第一次自動編號時
      撞主鍵；案例見 `v3/evidence/pg-import-20260921/`）。

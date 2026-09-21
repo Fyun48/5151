@@ -14,6 +14,8 @@ import { fileURLToPath } from "node:url";
 import { createPostgresDriver } from "../src/dbDriverPostgres.js";
 import { importStore } from "../src/pgSchema.js";
 import { ensureDataRevisionTable } from "../src/dataRevision.js";
+import { DEMO_COMMUTE_MODE, DEMO_WORK_LAT, DEMO_WORK_LNG } from "../src/demo.js";
+import { makeMrtKey } from "../src/mrt.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-crawler-reads-"));
@@ -43,6 +45,8 @@ const TABLES = [
   "route_cache",
   "mrt_cache",
   "route_jobs",
+  // The 591-geo scan asks whether a community is already cached.
+  "community_cache",
 ];
 
 const SEEDED = [920001, 920002, 920003];
@@ -50,6 +54,22 @@ const SEEDED = [920001, 920002, 920003];
 const PENDING_OFFLINE = 920004;
 // Written through PostgreSQL only, so a SQLite read cannot see it.
 const PG_ONLY = 930001;
+// One row per branch of the seven remaining backfill scans (see loadFixture).
+const FEE_NO_COORDS = 920010;
+const FEE_STALE_CONTACT = 920011;
+const KIT_SINYI = 920020;
+const KIT_HBH_RETRY = 920021;
+const KIT_OFFLINE = 920022;
+const KIT_RAKUYA = 920023;
+const GEO_NO_COORDS = 920030;
+const GEO_COMMUNITY_MISSING = 920031;
+const GEO_COMMUNITY_CACHED = 920032;
+const GEO_UNTRUSTED = 920040;
+const GEO_UNKNOWN_QUALITY = 920041;
+const ENRICH_DDROOM = 920050;
+const ENRICH_PRECISE = 920051;
+const MRT_SECOND_KEY = 920060;
+const CACHED_COMMUNITY = 999;
 
 let fixture = null;
 
@@ -91,9 +111,79 @@ async function loadFixture() {
   seed(920003, { source_key: "1|8|other" });
   // One pending-offline row, so the recheck scan has work on both drivers.
   seed(920004, { source_key: "1|8|offline" });
+  // --- the seven remaining scans: one row per branch -------------------------------------------
+  seed(FEE_NO_COORDS, { source_key: "1|8|fee" });
+  seed(FEE_STALE_CONTACT, { source_key: "1|8|stale" });
+  // Source kit is per source, and the retry gate is what makes the wide statement interesting.
+  seed(KIT_SINYI, { source: "sinyi", source_key: "sinyi|1" });
+  seed(KIT_HBH_RETRY, { source: "hbhousing", source_key: "hbhousing|1" });
+  seed(KIT_OFFLINE, { source: "housefun", source_key: "housefun|1" });
+  seed(KIT_RAKUYA, { source: "rakuya", source_key: "rakuya|1" });
+  // 591 geo: the community id can come from the column or from the source_key fingerprint.
+  seed(GEO_NO_COORDS, { source_key: "1|8|c777" });
+  seed(GEO_COMMUNITY_MISSING, { source_key: "1|8|c888" });
+  seed(GEO_COMMUNITY_CACHED, { source_key: `1|8|c${CACHED_COMMUNITY}` });
+  seed(GEO_UNTRUSTED, { source_key: "1|8|nog" });
+  seed(GEO_UNKNOWN_QUALITY, { source_key: "1|8|district" });
+  seed(ENRICH_DDROOM, { source: "ddroom", source_key: "ddroom|1" });
+  seed(ENRICH_PRECISE, { source: "rakuya", source_key: "rakuya|2" });
+  seed(MRT_SECOND_KEY, { source_key: "1|8|mrt2" });
   const db = app.sqliteHandle();
-  db.prepare("UPDATE listings SET geo_source = 'geocode' WHERE post_id > 0").run();
-  db.prepare("UPDATE listings SET offline = 1, offline_at = ? WHERE post_id = 920004").run("2026-09-06T00:00:00.000Z");
+  // Distinct timestamps: a scan ORDER BY must not have ties that SQLite and PostgreSQL could break
+  // differently (the row order is part of the contract - the loops take the first N).
+  const stampAt = (step) => new Date(Date.parse(stamp) - step * 60_000).toISOString();
+  db.prepare("SELECT post_id FROM listings ORDER BY post_id").all()
+    .forEach((row, index) => {
+      db.prepare("UPDATE listings SET first_seen_at = ?, last_seen_at = ? WHERE post_id = ?")
+        .run(stampAt(index), stampAt(index), row.post_id);
+    });
+  db.prepare("UPDATE listings SET last_checked_at = NULL, geo_source = 'geocode'").run();
+  db.prepare("UPDATE listings SET contact_fetched = 0, extra_fees_fetched = 0, kit_fetched = 0, contact_fetched_at = '', kit_next_retry_at = NULL").run();
+  db.prepare("UPDATE listings SET offline = 1, offline_at = ? WHERE post_id = ?").run(stamp, PENDING_OFFLINE);
+  // FeeDetail: a row without coordinates lands in the first stage...
+  db.prepare("UPDATE listings SET lat = NULL, lng = NULL, geo_source = '' WHERE post_id = ?").run(FEE_NO_COORDS);
+  // ...and a row whose contact data is older than the refresh window lands in the second stage.
+  db.prepare("UPDATE listings SET contact_fetched = 1, extra_fees_fetched = 1, kit_fetched = 1, contact_fetched_at = ? WHERE post_id = ?")
+    .run("2020-01-01T00:00:00.000Z", FEE_STALE_CONTACT);
+  // SourceKit: the retry gate hides one row, offline hides another, a fetched kit hides a third.
+  db.prepare("UPDATE listings SET kit_next_retry_at = ? WHERE post_id = ?").run("2999-01-01T00:00:00.000Z", KIT_HBH_RETRY);
+  db.prepare("UPDATE listings SET kit_next_retry_at = ? WHERE post_id = ?").run("2000-01-01T00:00:00.000Z", KIT_RAKUYA);
+  // offline_confirmed keeps this row out of the pending-offline recheck scan: it is only here to
+  // prove the kit scan skips offline listings.
+  db.prepare("UPDATE listings SET offline = 1, offline_confirmed = 1, offline_at = ? WHERE post_id = ?").run(stamp, KIT_OFFLINE);
+  db.prepare("UPDATE listings SET kit_fetched = 1 WHERE post_id = ?").run(ENRICH_PRECISE);
+  // 591 geo: no coordinates, a trusted pin with an uncached community, and one with a cached one.
+  db.prepare("UPDATE listings SET lat = NULL, lng = NULL, geo_source = '', community_id = 777 WHERE post_id = ?").run(GEO_NO_COORDS);
+  db.prepare("UPDATE listings SET geo_source = '591', community_id = 888 WHERE post_id = ?").run(GEO_COMMUNITY_MISSING);
+  db.prepare("UPDATE listings SET geo_source = '591', community_id = ? WHERE post_id = ?").run(CACHED_COMMUNITY, GEO_COMMUNITY_CACHED);
+  db.prepare(
+    "INSERT INTO community_cache(community_id, name, address, lat, lng, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+  ).run(CACHED_COMMUNITY, "已快取社區", "", 25.11, 121.52, stamp);
+  // AddressGeo: an untrusted pin (still worth geocoding) and an address too coarse to try.
+  db.prepare("UPDATE listings SET geo_source = '' WHERE post_id = ?").run(GEO_UNTRUSTED);
+  db.prepare("UPDATE listings SET address = ? WHERE post_id = ?").run("近捷運好房", GEO_UNKNOWN_QUALITY);
+  // AddressEnrich: a coarse ddroom address is work, a house-numbered address is not.
+  db.prepare("UPDATE listings SET address = ? WHERE post_id = ?").run("台北市士林區", ENRICH_DDROOM);
+  db.prepare("UPDATE listings SET address = ? WHERE post_id = ?").run("台北市士林區測試路 7 號", ENRICH_PRECISE);
+  // MRT: a second coordinate key, with the first one already cached.
+  db.prepare("UPDATE listings SET lat = 25.22, lng = 121.62 WHERE post_id = ?").run(MRT_SECOND_KEY);
+  db.prepare(
+    "INSERT INTO mrt_cache(geo_key, station, walk_km, walk_min, ride_km, ride_min, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  ).run(makeMrtKey(25.11, 121.52), "士林", 0.4, 6, 2.1, 9, stamp);
+  // Route: one listing blocked by a failed route job, one that is already fully cached.
+  app.upsertRouteJob({
+    post_id: 920001,
+    direction: "to_work",
+    kind: "distance",
+    commuteMode: DEMO_COMMUTE_MODE,
+    workLat: DEMO_WORK_LAT,
+    workLng: DEMO_WORK_LNG,
+    job_state: "failed",
+    fail_reason: "no_route",
+    attempts: 2,
+  });
+  app.setCachedRoute(25.11, 121.52, DEMO_WORK_LAT, DEMO_WORK_LNG, [5.4], null, DEMO_COMMUTE_MODE, "to_work");
+  app.setCachedRoute(DEMO_WORK_LAT, DEMO_WORK_LNG, 25.11, 121.52, [6.1], null, DEMO_COMMUTE_MODE, "from_work");
   app.setFlags(920002, { viewed: true }, uid);
   // The change log is created on first use, so a fixture has to create it explicitly - otherwise
   // the mirrored PostgreSQL schema would be missing it (runbook: mirror a fully-initialised store).
@@ -108,6 +198,32 @@ function existingTables(sqliteDb, tables) {
   );
   return tables.filter((name) => have.has(name));
 }
+
+// The fixture rows are only worth mirroring if they really land in the branch each one was built
+// for, so both the SQLite test and the live PostgreSQL subtest run these expectations.
+function assertScanFixture(app, routeRows = null) {
+  const ids = (rows) => rows.map((row) => Number(row.post_id));
+  const fee = ids(app.listingsNeedingFeeDetail(12));
+  assert.ok(fee.includes(FEE_NO_COORDS) && fee.includes(FEE_STALE_CONTACT), "both fee stages fire");
+  const kit = ids(app.listingsNeedingSourceKit(8));
+  assert.ok(kit.includes(KIT_SINYI) && kit.includes(KIT_RAKUYA), "one page per source");
+  assert.ok(!kit.includes(KIT_HBH_RETRY), "a future retry hides the row");
+  assert.ok(!kit.includes(KIT_OFFLINE), "an offline row is not kit work");
+  const geo = ids(app.listingsNeeding591Geo(20));
+  assert.ok(geo.includes(GEO_NO_COORDS) && geo.includes(GEO_COMMUNITY_MISSING));
+  assert.ok(!geo.includes(GEO_COMMUNITY_CACHED), "a cached community satisfies the pin");
+  const address = ids(app.listingsNeedingAddressGeo(20));
+  assert.ok(address.includes(GEO_UNTRUSTED) && !address.includes(GEO_UNKNOWN_QUALITY));
+  const enrich = ids(app.listingsNeedingAddressEnrich(12));
+  assert.ok(enrich.includes(ENRICH_DDROOM) && !enrich.includes(ENRICH_PRECISE));
+  assert.deepEqual(app.listingsNeedingMrt(20), [{ lat: 25.22, lng: 121.62 }], "the cached key is skipped");
+  const route = routeRows || app.listingsNeedingRoute(20, { cursor: 0, now: ROUTE_NOW });
+  // Only the uncached coordinate needs a route: the failed job and the cached pair stay out.
+  assert.deepEqual(ids(route), [MRT_SECOND_KEY]);
+}
+
+// One fixed clock for the route scan, so "the retry is in the future" cannot depend on wall time.
+const ROUTE_NOW = Date.parse("2026-09-06T00:00:00.000Z");
 
 async function withMirroredSchema(app, fn) {
   const sqliteDb = app.sqliteHandle();
@@ -151,17 +267,70 @@ test("the crawler reads go through the driver-aware entry point", async () => {
 
   // Wiring: the crawl loop awaits both reads and hands the fingerprint to classify().
   const watcher = readFileSync(path.join(dir, "../src/watcher.js"), "utf8");
-  assert.match(watcher, /import \{ listingForWatchAsync, matchCandidatesAsync, needingAliveCheckAsync, needingOfflineRecheckAsync, watchSiblings \} from "\.\/crawlerReads\.js";/);
-  assert.match(watcher, /await needingAliveCheckAsync\(\{ excludeIds: \[\.\.\.seenIds\], limit \}\);/);
-  assert.match(watcher, /await needingOfflineRecheckAsync\(\{ limit: 8 \}\);/);
-  assert.match(watcher, /const existing = await listingForWatchAsync\(listing\.post_id\);/);
-  assert.match(watcher, /siblings = await watchSiblings\(listing\.source_key, listing\.post_id\);/);
-  assert.match(watcher, /candidates = await matchCandidatesAsync\(listing\.post_id, listing\);/);
-  assert.match(watcher, /classify\(listing, existing, siblings, candidates\)/);
-  assert.match(watcher, /function classify\(incoming, existing, siblings = null, candidates = null\)/);
+  assert.match(watcher, /from "\.\/crawlerReads\.js";/);
+  for (const facade of [
+    "listingForWatchAsync",
+    "matchCandidatesAsync",
+    "needing591GeoAsync",
+    "needingAddressEnrichAsync",
+    "needingAddressGeoAsync",
+    "needingAliveCheckAsync",
+    "needingFeeDetailAsync",
+    "needingMrtAsync",
+    "needingOfflineRecheckAsync",
+    "needingRouteAsync",
+    "needingSourceKitAsync",
+    "watchSiblings",
+  ]) {
+    assert.match(watcher, new RegExp(`\\n  ${facade},`), `${facade} is imported from crawlerReads.js`);
+  }
+  // The SQLite driver path is unchanged: the async twin delegates to the same db.js scan.
+  const reads = await import("../src/crawlerReads.js");
+  for (const [facade, sync] of [
+    [reads.needingFeeDetailAsync, app.listingsNeedingFeeDetail],
+    [reads.needingSourceKitAsync, app.listingsNeedingSourceKit],
+    [reads.needing591GeoAsync, app.listingsNeeding591Geo],
+    [reads.needingAddressGeoAsync, app.listingsNeedingAddressGeo],
+    [reads.needingAddressEnrichAsync, app.listingsNeedingAddressEnrich],
+    [reads.needingMrtAsync, app.listingsNeedingMrt],
+  ]) {
+    assert.deepEqual(await facade({ limit: 12 }, { driver: "sqlite" }), sync(12));
+  }
+  assert.deepEqual(
+    await reads.needingRouteAsync({ limit: 20, cursor: 0 }, { driver: "sqlite" }),
+    app.listingsNeedingRoute(20, { cursor: 0 }),
+  );
+  // Every backfill scan awaits its driver-aware twin...
+  for (const call of [
+    /const existing = await listingForWatchAsync\(listing\.post_id\);/,
+    /siblings = await watchSiblings\(listing\.source_key, listing\.post_id\);/,
+    /candidates = await matchCandidatesAsync\(listing\.post_id, listing\);/,
+    /classify\(listing, existing, siblings, candidates\)/,
+    /function classify\(incoming, existing, siblings = null, candidates = null\)/,
+    /const rows = await needingAliveCheckAsync\(\{ excludeIds: \[\.\.\.seenIds\], limit \}\);/,
+    /const pendingRecheck = await needingOfflineRecheckAsync\(\{ limit: 8 \}\);/,
+    /const pendingFees = await needingFeeDetailAsync\(\{ limit: needsListingGeo\(settings\) \? 30 : 20 \}\);/,
+    /const pendingSourceKit = await needingSourceKitAsync\(\{ limit: 8 \}\);/,
+    /const rows = await needing591GeoAsync\(\{ limit \}\);/,
+    /const rows = \(await needingRouteAsync\(\{ limit, priorityIds \}\)\)\.filter\(/,
+    /const rows = await needingAddressGeoAsync\(\{ limit \}\);/,
+    /const rows = await needingAddressEnrichAsync\(\{ limit: Math\.max\(0, limit - \(hp\.processed \|\| 0\)\) \}\);/,
+    /const rows = await needingMrtAsync\(\{ limit \}\);/,
+  ]) {
+    assert.match(watcher, call);
+  }
+  // ...and none of them still calls the synchronous SQLite scan.
+  assert.equal((watcher.match(/listingsNeeding[A-Za-z0-9]+\(/g) || []).length, 0);
   // The only synchronous listing read left is the enrich queue seam.
   const syncReads = watcher.match(/listingForWatch\(/g) || [];
   assert.equal(syncReads.length, 2, "getListing stays only for the enrich helper (definition + use)");
+});
+
+// The SQLite half of the scan parity: with no PostgreSQL in the picture, the scans still have to
+// find exactly the work the fixture was built to describe (this is the CI-visible half).
+test("the backfill scans find the fixture's work on the sqlite driver", async () => {
+  const { app } = await loadFixture();
+  assertScanFixture(app);
 });
 
 test("live PostgreSQL: the crawler reads match SQLite, and a PostgreSQL write is readable back", { skip }, async (t) => {
@@ -200,6 +369,35 @@ test("live PostgreSQL: the crawler reads match SQLite, and a PostgreSQL write is
       assert.deepEqual(recheckPg, recheckSqlite);
       assert.equal(recheckSqlite.length, 1);
       assert.equal(Number(recheckSqlite[0].post_id), PENDING_OFFLINE);
+    });
+  });
+
+  // The seven backfill scans: the loops must find the same work, in the same order, on both
+  // drivers. Each one is driven through the async entry point the watcher now awaits.
+  await t.test("the backfill scans match", async () => {
+    await withMirroredSchema(app, async (pgDriver) => {
+      const reads = await import("../src/crawlerReads.js");
+      const ids = (rows) => rows.map((row) => Number(row.post_id));
+      for (const [facade, limit, sync] of [
+        [reads.needingFeeDetailAsync, 12, app.listingsNeedingFeeDetail],
+        [reads.needingSourceKitAsync, 8, app.listingsNeedingSourceKit],
+        [reads.needing591GeoAsync, 20, app.listingsNeeding591Geo],
+        [reads.needingAddressGeoAsync, 20, app.listingsNeedingAddressGeo],
+        [reads.needingAddressEnrichAsync, 12, app.listingsNeedingAddressEnrich],
+        [reads.needingMrtAsync, 20, app.listingsNeedingMrt],
+      ]) {
+        const pgRows = await facade({ limit }, pgOptions(pgDriver));
+        const sqliteRows = sync(limit);
+        assert.ok(sqliteRows.length > 0, `${facade.name}: the fixture has work to find`);
+        assert.deepEqual(pgRows, sqliteRows, facade.name);
+      }
+      // The route scan is the resumable one, so both sides get the same cursor and clock.
+      const now = Date.parse("2026-09-06T00:00:00.000Z");
+      const routePg = await reads.needingRouteAsync({ limit: 20, cursor: 0 }, { ...pgOptions(pgDriver), now });
+      const routeSqlite = app.listingsNeedingRoute(20, { cursor: 0, now });
+      assert.deepEqual(routePg, routeSqlite);
+      // ...and the fixture rows really do hit the branches this test claims to cover.
+      assertScanFixture(app, routeSqlite);
     });
   });
 
