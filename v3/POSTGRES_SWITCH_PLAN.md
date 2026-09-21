@@ -51,6 +51,14 @@
    必須先處理的一項（順序上比通勤／fit 排序重要）。
    - 做法：先把寫入路徑逐一抽成 repository（upsertListing / flags / route_cache / route_jobs / listing_prep…），
      再讓 `DB_DRIVER=postgres` 時寫入也走 PG；每一項都要有「同一份 payload 在兩個 driver 寫入後讀回相同」的測試。
+   - **進度（2026-09-21，第一批完成）**：`v3/src/repository/writePath.js` 把三個 hot-path 寫入改成
+     driver-agnostic —— `user_listing_flags`（含 `watched_at`／`hidden_at` 的 CASE 邏輯）、
+     `route_cache`（含 rush 變體與 `ON CONFLICT` 更新）、`route_jobs`。SQL 逐字沿用 SQLite 版，
+     PG 端只經 `sqlDialect` 轉換。驗證：`v3/test/write-path-parity.test.js` 在 SQLite 與
+     **真實 shadow PG** 上跑同一段 payload，讀回（用 `decorationData.js` 的同一組 loaders）必須完全相同
+     —— **2/2 通過**；開發中還抓到 `Number(null) === 0` 會把 `min_km` 寫成 0 的真 bug（會讓通勤排序算錯）。
+   - **尚未做**：`upsertListing`（爬蟲入庫最大一筆，含 projection 同步與 revision bump）、`listing_prep`、
+     其餘 domain 的寫入，以及「`DB_DRIVER=postgres` 時寫入真的走 PG」的接線。
 4. ~~**PG 端 EXPLAIN regression evidence**~~ → **已有第一版（2026-09-21）**：`v3/evidence/pg-explain-20260921/`
    （真實資料 108,539 筆）。結論：newest／price_asc／price_desc 走 PG SQL-first；建 hot-path 索引後
    count/page 各 7–8 ms、**0 個 Seq Scan**（索引前是 20,324 筆的 seq scan、12–19 ms）。
