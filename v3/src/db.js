@@ -2755,25 +2755,17 @@ function decorateSameHousePeer(raw) {
   };
 }
 
-function loadSameHousePeers(row, userId) {
+function loadSameHousePeers(row, userId, provider) {
   const selfId = Number(row?.post_id) || 0;
   if (!selfId) return [];
+  const source = provider || sqliteDecorationProvider(userId);
   const seed = new Set([selfId, Number(row.match_post_id) || 0].filter(Boolean));
-  for (const id of loadPersonalSameHouseIds(db, userId, selfId)) seed.add(id);
+  for (const id of source.personalIndex().peers(selfId)) seed.add(id);
   const found = new Map();
   for (let hop = 0; hop < 2 && seed.size; hop += 1) {
     const ids = [...seed];
     seed.clear();
-    const placeholders = ids.map(() => "?").join(",");
-    const rows = db.prepare(
-      `SELECT post_id, source_id, title, url, price, price_num, extra_fee, extra_fees, extra_fee_text,
-              price_contain_text, floor_name, area_name, layout, source, offline, offline_confirmed,
-              hidden, match_post_id, match_level, match_verdict, match_detail,
-              cost_changed_at, cost_change_detail, cost_change_type, last_seen_at, refresh_time
-       FROM listings
-       WHERE post_id IN (${placeholders}) OR match_post_id IN (${placeholders})
-       LIMIT 8`,
-    ).all(...ids, ...ids);
+    const rows = source.peerRows(ids);
     for (const item of rows) {
       const id = Number(item.post_id);
       if (!id || found.has(id)) continue;
@@ -2782,49 +2774,275 @@ function loadSameHousePeers(row, userId) {
       if (peer && !found.has(peer)) seed.add(peer);
     }
   }
-  try {
-    const gid = groupIdForPost(db, selfId);
-    if (gid) {
-      const extras = db.prepare(
-        `SELECT l.post_id, l.source_id, l.title, l.url, l.price, l.price_num, l.extra_fee, l.extra_fees, l.extra_fee_text,
-                l.price_contain_text, l.floor_name, l.area_name, l.layout, l.source, l.offline, l.offline_confirmed,
-                l.hidden, l.match_post_id, l.match_level, l.match_verdict, l.match_detail,
-                l.cost_changed_at, l.cost_change_detail, l.cost_change_type, l.last_seen_at, l.refresh_time
-         FROM listing_group_members m
-         JOIN listings l ON l.post_id = m.post_id
-         WHERE m.group_id = ?`,
-      ).all(gid);
-      for (const item of extras) {
-        const id = Number(item.post_id);
-        if (!id || found.has(id)) continue;
-        found.set(id, item);
-      }
+  const gid = source.groupId(selfId);
+  if (gid) {
+    for (const item of source.groupMemberRows(gid)) {
+      const id = Number(item.post_id);
+      if (!id || found.has(id)) continue;
+      found.set(id, item);
     }
-  } catch {
-    // group tables optional in older isolated fixtures
   }
   return [...found.values()]
     .filter((item) => Number(item.post_id) !== selfId)
-    .filter((item) => !housepriceNotDisplayReady(item))
+    .filter((item) => !housepriceNotDisplayReady(item, source))
     .map(decorateSameHousePeer);
 }
 
-function housepriceNotDisplayReady(row) {
+function housepriceNotDisplayReady(row, provider) {
   const source = String(row?.source || "591") || "591";
   if (!isCrawlSourceEnabled(source)) return true;
   if (!isHousepriceListing(row)) return false;
   try {
-    const prep = db.prepare("SELECT display_ready FROM listing_prep WHERE post_id = ?").get(row.post_id);
+    const prep = listingPrepRow(row.post_id, provider);
     return !listingIsDisplayable({ ...row, source_enabled: true }, prep || { display_ready: 0 });
   } catch {
     return true;
   }
 }
 
-function hpPrepFields(row) {
+/**
+ * Decoration data providers (PostgreSQL hot path, slice 2b).
+ *
+ * Every decoration helper below reads side data (listing_prep, same-house peers, personal
+ * groups, split votes, route/mrt cache, route jobs). Historically each helper queried SQLite
+ * directly, which is why PostgreSQL rows could never be decorated. The helpers now take a
+ * *synchronous getter* provider instead:
+ *
+ *   - sqliteDecorationProvider(userId) - reads the local SQLite database (today's behaviour,
+ *     same statements, per-request memo)
+ *   - preloadedDecorationProvider(...) - reads maps that were loaded asynchronously up front
+ *     (see repository/decorationData.js)
+ *
+ * Async preload + sync getters keeps every existing synchronous call site untouched while
+ * letting the PostgreSQL path build the exact same cards.
+ */
+function prepRowFor(provider, postId) {
+  const id = Number(postId) || 0;
+  if (!id) return null;
+  try {
+    return provider.prep(id) || null;
+  } catch {
+    return null;
+  }
+}
+
+// Without a provider this is exactly the statement the decorators used before the refactor,
+// so every legacy call site keeps its behaviour.
+function listingPrepRow(postId, provider) {
+  const id = Number(postId) || 0;
+  if (!id) return null;
+  if (provider) return prepRowFor(provider, id);
+  try {
+    return db.prepare("SELECT * FROM listing_prep WHERE post_id = ?").get(id) || null;
+  } catch {
+    return null;
+  }
+}
+
+function sqliteDecorationProvider(userId) {
+  const uid = Number(userId) || 0;
+  const memo = { prep: new Map(), index: null, splits: null };
+  return {
+    driver: "sqlite",
+    prep(postId) {
+      const id = Number(postId) || 0;
+      if (!id) return null;
+      if (!memo.prep.has(id)) {
+        memo.prep.set(id, db.prepare("SELECT * FROM listing_prep WHERE post_id = ?").get(id) || null);
+      }
+      return memo.prep.get(id);
+    },
+    personalIndex() {
+      if (!memo.index) memo.index = loadPersonalSameHouseIndex(db, uid);
+      return memo.index;
+    },
+    // userSameHouse.personalGroupAgrees() - kept as its own getter because the SQLite index
+    // does not carry the aggregate (the preloaded index does).
+    personalGroupAgrees(postId) {
+      return personalGroupAgrees(db, uid, Number(postId) || 0);
+    },
+    splitPairs() {
+      if (!memo.splits) memo.splits = loadUserSplitPairSet(uid);
+      return memo.splits;
+    },
+    groupId(postId) {
+      return groupIdForPost(db, Number(postId) || 0);
+    },
+    routeCache(fromLat, fromLng, toLat, toLng, mode, direction) {
+      return getCachedRoute(fromLat, fromLng, toLat, toLng, mode, direction);
+    },
+    mrtCache(lat, lng) {
+      return getCachedMrt(lat, lng);
+    },
+    routeJob(jobKey) {
+      return getRouteJob(jobKey);
+    },
+    // The three SQL-heavy getters share the statements with the pre-provider code.
+    peerRows: sqlitePeerRows,
+    groupMemberRows: sqliteGroupMemberRows,
+    extras: sqliteListingExtras,
+  };
+}
+// Same statements the decorators used before (column lists unchanged on purpose).
+function sqlitePeerRows(ids) {
+  const list = [...new Set((ids || []).map((n) => Number(n) || 0).filter(Boolean))];
+  if (!list.length) return [];
+  const placeholders = list.map(() => "?").join(",");
+  try {
+    return db.prepare(
+      `SELECT post_id, source_id, title, url, price, price_num, extra_fee, extra_fees, extra_fee_text,
+              price_contain_text, floor_name, area_name, layout, source, offline, offline_confirmed,
+              hidden, match_post_id, match_level, match_verdict, match_detail,
+              cost_changed_at, cost_change_detail, cost_change_type, last_seen_at, refresh_time
+       FROM listings
+       WHERE post_id IN (${placeholders}) OR match_post_id IN (${placeholders})
+       LIMIT 8`,
+    ).all(...list, ...list);
+  } catch {
+    return [];
+  }
+}
+
+function sqliteGroupMemberRows(groupId) {
+  const gid = String(groupId || "");
+  if (!gid) return [];
+  try {
+    return db.prepare(
+      `SELECT l.post_id, l.source_id, l.title, l.url, l.price, l.price_num, l.extra_fee, l.extra_fees, l.extra_fee_text,
+              l.price_contain_text, l.floor_name, l.area_name, l.layout, l.source, l.offline, l.offline_confirmed,
+              l.hidden, l.match_post_id, l.match_level, l.match_verdict, l.match_detail,
+              l.cost_changed_at, l.cost_change_detail, l.cost_change_type, l.last_seen_at, l.refresh_time
+       FROM listing_group_members m
+       JOIN listings l ON l.post_id = m.post_id
+       WHERE m.group_id = ?`,
+    ).all(gid);
+  } catch {
+    return [];
+  }
+}
+
+function sqliteListingExtras(ids) {
+  const map = new Map();
+  const list = [...new Set((ids || []).map((n) => Number(n) || 0).filter(Boolean))];
+  if (!list.length) return map;
+  const placeholders = list.map(() => "?").join(",");
+  try {
+    const rows = db.prepare(
+      `SELECT post_id, source, source_id, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text,
+              refresh_time, last_seen_at, hidden, offline, match_verdict, match_level
+       FROM listings WHERE post_id IN (${placeholders})`,
+    ).all(...list);
+    for (const row of rows) map.set(Number(row.post_id), row);
+  } catch {
+    // older isolated fixtures may not have every column
+  }
+  return map;
+}
+
+/**
+ * Provider built from data that was loaded asynchronously up front
+ * (repository/decorationData.js). Every getter is synchronous, so the decoration helpers
+ * below stay exactly as they are - only the data source changes.
+ */
+export function preloadedDecorationProvider({
+  userId = 0,
+  prep = new Map(),
+  personalIndex = null,
+  splitPairs = new Set(),
+  groupIds = new Map(),
+  groupMembers = new Map(),
+  peers = new Map(),
+  extras = new Map(),
+  routeCache = new Map(),
+  mrtCache = new Map(),
+  routeJobs = new Map(),
+  personalFlags = null,
+} = {}) {
+  const emptyIndex = { groupKey: () => "", peers: () => [], agrees: () => true, size: 0 };
+  const index = personalIndex || emptyIndex;
+  return {
+    driver: "postgres",
+    userId: Number(userId) || 0,
+    prep: (postId) => prep.get(Number(postId) || 0) || null,
+    personalIndex: () => index,
+    personalGroupAgrees: (postId) => {
+      const key = index.groupKey(postId);
+      return key ? index.agrees(key) : true;
+    },
+    splitPairs: () => splitPairs,
+    groupId: (postId) => groupIds.get(Number(postId) || 0) || "",
+    groupMemberRows: (groupId) => groupMembers.get(String(groupId || "")) || [],
+    // The preloader stored every peer row under both its post_id and its match_post_id.
+    peerRows: (ids) => {
+      const seen = new Set();
+      const out = [];
+      for (const id of ids || []) {
+        for (const row of peers.get(Number(id) || 0) || []) {
+          const key = Number(row.post_id) || 0;
+          if (!key || seen.has(key)) continue;
+          seen.add(key);
+          out.push(row);
+        }
+      }
+      return out;
+    },
+    extras: (ids) => {
+      const out = new Map();
+      for (const id of ids || []) {
+        const row = extras.get(Number(id) || 0);
+        if (row) out.set(Number(id), row);
+      }
+      return out;
+    },
+    routeCache: (fromLat, fromLng, toLat, toLng, mode = "scooter", direction = "to_work") =>
+      parseRouteCacheRow(routeCache.get(makeRouteKey(fromLat, fromLng, toLat, toLng, mode, direction)) || null),
+    mrtCache: (lat, lng) => {
+      const key = makeMrtKey(lat, lng);
+      if (String(key).includes("NaN")) return null;
+      const row = mrtCache.get(String(key));
+      if (!row) return null;
+      return {
+        station: String(row.station || ""),
+        walk_km: Number(row.walk_km) || null,
+        walk_min: Number(row.walk_min) || null,
+        ride_km: Number(row.ride_km) || null,
+        ride_min: Number(row.ride_min) || null,
+        resolved: true,
+      };
+    },
+    routeJob: (jobKey) => routeJobs.get(String(jobKey || "")) || null,
+    personalFlags: () => personalFlags,
+  };
+}
+
+/**
+ * The decoration block every list path runs, exposed so the PostgreSQL path can apply the
+ * identical steps to rows fetched through repository/listings.js.
+ */
+export function decorateRowsWithProvider(
+  rows,
+  { settings = null, userId = 0, provider = null, sameHouse = true, matchVoteUserId } = {},
+) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) return list;
+  const conf = settings || getSettings();
+  const uid = Number(userId) || 0;
+  const voteUid = matchVoteUserId == null ? uid : Number(matchVoteUserId) || 0;
+  const data = provider || sqliteDecorationProvider(voteUid);
+  const flagMap = typeof data.personalFlags === "function" ? data.personalFlags() : null;
+  const overlaid = flagMap ? overlayRowsPersonal(list, flagMap, { inPlace: true }) : list;
+  return overlaid.map((row) => finalizeListingDecorate(
+    decorateListingLite(row, conf, uid, data),
+    conf,
+    uid,
+    { sameHouse, matchVoteUserId: voteUid, provider: data },
+  ));
+}
+
+function hpPrepFields(row, provider) {
   if (!isHousepriceListing(row)) return {};
   try {
-    const prep = db.prepare("SELECT * FROM listing_prep WHERE post_id = ?").get(row.post_id);
+    const prep = listingPrepRow(row.post_id, provider);
     if (!prep) return { prep_status: "pending", display_ready: false, location_label: "", geo_precision: "unknown", facility_status: "not_fetched" };
     return {
       prep_status: prep.prep_status,
@@ -2838,11 +3056,12 @@ function hpPrepFields(row) {
   }
 }
 
-function decorateListingLite(row, settings, userId) {
+function decorateListingLite(row, settings, userId, provider) {
   if (!row) return row;
   settings = settings || getSettings();
+  const data = provider || sqliteDecorationProvider(userId);
   if (!Array.isArray(row.route_kms) && !Number.isFinite(Number(row.route_km))) {
-    row = applyCachedCoords(row, settings);
+    row = applyCachedCoords(row, settings, data);
   }
   const locationClass = effectiveNotifyLocationClass(row, settings);
   const showRoadKm = canUseForRoadDistance(locationClass);
@@ -2859,7 +3078,7 @@ function decorateListingLite(row, settings, userId) {
     && Number.isFinite(Number(row.lng))
     && showRoadKm;
   const job = commuteOn && commuteKm == null
-    ? getRouteJob(makeRouteJobKey(row.post_id, "to_work", "distance", settings.commuteMode, settings.workLat, settings.workLng))
+    ? data.routeJob(makeRouteJobKey(row.post_id, "to_work", "distance", settings.commuteMode, settings.workLat, settings.workLng))
     : null;
   const commuteState = resolveCommuteState({ commuteOn, hasCoords, commuteKm, job });
   const routeMinM = showRoadKm ? kmListToMinMeters(row.route_kms, row.route_min_m ?? row.min_m) : null;
@@ -2894,7 +3113,7 @@ function decorateListingLite(row, settings, userId) {
       }).furnish_items;
     })(),
     community_linked: Number(row.community_linked) === 1 || Number(row.community_id) > 0,
-    ...hpPrepFields(row),
+    ...hpPrepFields(row, data),
     source,
     source_label: selfSourceLabel(source),
     source_enabled: isCrawlSourceEnabled(source),
@@ -2918,10 +3137,11 @@ function loadUserSplitPairSet(userId) {
   }
 }
 
-function attachSameHouseRoles(rows, voteUserId) {
+function attachSameHouseRoles(rows, voteUserId, provider) {
   const list = Array.isArray(rows) ? rows : [];
   if (!list.length) return list;
-  const personal = loadPersonalSameHouseIndex(db, voteUserId);
+  const source = provider || sqliteDecorationProvider(voteUserId);
+  const personal = source.personalIndex();
   const byId = new Map(list.map((row) => [Number(row.post_id), row]));
   const missing = new Set();
   for (const row of list) {
@@ -2936,23 +3156,16 @@ function attachSameHouseRoles(rows, voteUserId) {
   }
   const extras = new Map();
   if (missing.size) {
-    const ids = [...missing];
-    const placeholders = ids.map(() => "?").join(",");
-    const found = db.prepare(
-      `SELECT post_id, source, source_id, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text,
-              refresh_time, last_seen_at, hidden, offline, match_verdict, match_level
-       FROM listings WHERE post_id IN (${placeholders})`,
-    ).all(...ids);
-    for (const item of found) extras.set(Number(item.post_id), item);
+    for (const [id, item] of source.extras([...missing])) extras.set(id, item);
   }
   const resolve = (id) => byId.get(id) || extras.get(id) || null;
-  const splits = loadUserSplitPairSet(voteUserId);
+  const splits = source.splitPairs();
   for (const row of list) {
     const mid = Number(row.match_post_id) || 0;
     if (!mid || String(row.match_verdict || "") === "no") continue;
     const peer = resolve(mid);
     if (!peer || String(peer.match_verdict || "") === "no") continue;
-    if (housepriceNotDisplayReady(peer) || housepriceNotDisplayReady(row)) continue;
+    if (housepriceNotDisplayReady(peer, source) || housepriceNotDisplayReady(row, source)) continue;
     if (splits.has(votePairKey(row.post_id, mid))) {
       row.same_house_split = true;
       continue;
@@ -2992,7 +3205,7 @@ function attachSameHouseRoles(rows, voteUserId) {
         add(row);
         for (const pid of personal.peers(row.post_id)) add(resolve(pid));
       }
-      const visible = pool.filter((item) => !housepriceNotDisplayReady(item));
+      const visible = pool.filter((item) => !housepriceNotDisplayReady(item, source));
       if (visible.length < 2) continue;
       const primary = visible.reduce((best, item) => preferPrimaryListing(best, item), visible[0]);
       const primaryId = Number(primary.post_id);
@@ -3009,15 +3222,16 @@ function attachSameHouseRoles(rows, voteUserId) {
   return list;
 }
 
-function attachListingPeers(row, settings, voteUserId) {
+function attachListingPeers(row, settings, voteUserId, provider) {
   if (!row) return row;
-  const splits = loadUserSplitPairSet(voteUserId);
+  const data = provider || sqliteDecorationProvider(voteUserId);
+  const splits = data.splitPairs();
   const selfId = Number(row.post_id) || 0;
-  const sameHousePeers = loadSameHousePeers(row, voteUserId).filter((peer) => (
+  const sameHousePeers = loadSameHousePeers(row, voteUserId, data).filter((peer) => (
     peer.match_verdict !== "no" && !splits.has(votePairKey(selfId, peer.post_id))
   )).map((peer) => ({
     ...peer,
-    display_ready: !housepriceNotDisplayReady(peer),
+    display_ready: !housepriceNotDisplayReady(peer, data),
   })).filter((peer) => peer.display_ready);
   const matchPostId = Number(row.match_post_id) || 0;
   const splitFromMatch = matchPostId > 0 && splits.has(votePairKey(selfId, matchPostId));
@@ -3035,15 +3249,15 @@ function attachListingPeers(row, settings, voteUserId) {
   const same_house = (row.match_verdict === "no" || Number(row.match_rejected) === 1 || splitFromMatch)
     ? null
     : sameHouseBundle(decoratedSelf, sameHousePeers);
-  if (same_house && voteUserId && personalGroupKeyFor(db, voteUserId, selfId)) {
+  if (same_house && voteUserId && data.personalIndex().groupKey(selfId)) {
     same_house.personal_only = true;
-    same_house.system_agrees = personalGroupAgrees(db, voteUserId, selfId);
+    same_house.system_agrees = data.personalGroupAgrees(selfId);
     if (!same_house.system_agrees) same_house.status = "personal";
   }
   return { ...row, match_peer: matchPeer || null, same_house };
 }
 
-function finalizeListingDecorate(row, settings, userId, { sameHouse = true, matchVoteUserId } = {}) {
+function finalizeListingDecorate(row, settings, userId, { sameHouse = true, matchVoteUserId, provider } = {}) {
   if (!row) return row;
   settings = settings || getSettings();
   const uid = Number(userId) || 0;
@@ -3051,8 +3265,9 @@ function finalizeListingDecorate(row, settings, userId, { sameHouse = true, matc
   const listedBy = Number(row.listed_by_user_id) || 0;
   const extraFees = Array.isArray(row.extra_fees) ? row.extra_fees : parseJson(row.extra_fees, []);
   const source = String(row.source || "591") || "591";
+  const data = provider || sqliteDecorationProvider(voteUid);
   const withPeers = sameHouse
-    ? attachListingPeers({ ...row, extra_fees: extraFees, source, source_label: row.source_label || selfSourceLabel(source) }, settings, voteUid)
+    ? attachListingPeers({ ...row, extra_fees: extraFees, source, source_label: row.source_label || selfSourceLabel(source) }, settings, voteUid, data)
     : { ...row, extra_fees: extraFees, source, source_label: row.source_label || selfSourceLabel(source), match_peer: null, same_house: null };
   const {
     listed_by_user_id: _listedBy,
@@ -3068,14 +3283,14 @@ function finalizeListingDecorate(row, settings, userId, { sameHouse = true, matc
     self_body: String(row.self_body || ""),
     photos: listingPhotoUrls(row),
     mine: uid > 0 && listedBy === uid,
-    ...mrtFields(row, settings),
+    ...mrtFields(row, settings, data),
   };
 }
 
 function decorateListing(row, settings, userId, options = {}) {
   if (!row) return row;
   settings = settings || getSettings();
-  return finalizeListingDecorate(decorateListingLite(row, settings, userId), settings, userId, options);
+  return finalizeListingDecorate(decorateListingLite(row, settings, userId, options.provider), settings, userId, options);
 }
 
 function resolveUserId(userId) {
@@ -4698,7 +4913,7 @@ export function setFlags(postId, flags, userId) {
   return getListing(postId, uid);
 }
 
-export function applyCachedCoords(row, settings) {
+export function applyCachedCoords(row, settings, provider) {
   if (!row) return row;
   if (!isTrustedGeoSource(row.geo_source)) return row;
   const conf = settings || getSettings();
@@ -4710,8 +4925,13 @@ export function applyCachedCoords(row, settings) {
     Number.isFinite(Number(row.lat)) &&
     Number.isFinite(Number(row.lng))
   ) {
-    const toWork = getCachedRoute(row.lat, row.lng, workLat, workLng, conf.commuteMode, "to_work");
-    const fromWork = getCachedRoute(workLat, workLng, row.lat, row.lng, conf.commuteMode, "from_work");
+    // With a decoration provider the rows come from its preloaded cache; without one this
+    // is the original synchronous SQLite lookup.
+    const readRoute = provider && typeof provider.routeCache === "function"
+      ? (a, b, c, d, mode, direction) => provider.routeCache(a, b, c, d, mode, direction)
+      : (a, b, c, d, mode, direction) => getCachedRoute(a, b, c, d, mode, direction);
+    const toWork = readRoute(row.lat, row.lng, workLat, workLng, conf.commuteMode, "to_work");
+    const fromWork = readRoute(workLat, workLng, row.lat, row.lng, conf.commuteMode, "from_work");
     if (toWork || fromWork) {
       return {
         ...row,
@@ -4843,7 +5063,7 @@ export function listingsNeedingMrt(limit = 20) {
   return out;
 }
 
-function mrtFields(row, settings) {
+function mrtFields(row, settings, provider) {
   const showMrt = getSystemCrawl().showMrt !== false;
   if (!showMrt) {
     return { mrt_station: null, mrt_walk_km: null, mrt_walk_min: null, mrt_ride_km: null, mrt_ride_min: null };
@@ -4851,7 +5071,9 @@ function mrtFields(row, settings) {
   if (!isTrustedGeoSource(row.geo_source) || !Number.isFinite(Number(row.lat)) || !Number.isFinite(Number(row.lng))) {
     return { mrt_station: null, mrt_walk_km: null, mrt_walk_min: null, mrt_ride_km: null, mrt_ride_min: null };
   }
-  const cached = getCachedMrt(row.lat, row.lng);
+  const cached = provider && typeof provider.mrtCache === "function"
+    ? provider.mrtCache(row.lat, row.lng)
+    : getCachedMrt(row.lat, row.lng);
   if (!cached) {
     return { mrt_station: "", mrt_walk_km: null, mrt_walk_min: null, mrt_ride_km: null, mrt_ride_min: null };
   }
