@@ -146,11 +146,12 @@ test("the crawler reads go through the driver-aware entry point", async () => {
 
   // Wiring: the crawl loop awaits both reads and hands the fingerprint to classify().
   const watcher = readFileSync(path.join(dir, "../src/watcher.js"), "utf8");
-  assert.match(watcher, /import \{ listingForWatchAsync, watchSiblings \} from "\.\/crawlerReads\.js";/);
+  assert.match(watcher, /import \{ listingForWatchAsync, matchCandidatesAsync, watchSiblings \} from "\.\/crawlerReads\.js";/);
   assert.match(watcher, /const existing = await listingForWatchAsync\(listing\.post_id\);/);
-  assert.match(watcher, /const siblings = await watchSiblings\(listing\.source_key, listing\.post_id\);/);
-  assert.match(watcher, /classify\(listing, existing, siblings\)/);
-  assert.match(watcher, /function classify\(incoming, existing, siblings = null\)/);
+  assert.match(watcher, /siblings = await watchSiblings\(listing\.source_key, listing\.post_id\);/);
+  assert.match(watcher, /candidates = await matchCandidatesAsync\(listing\.post_id, listing\);/);
+  assert.match(watcher, /classify\(listing, existing, siblings, candidates\)/);
+  assert.match(watcher, /function classify\(incoming, existing, siblings = null, candidates = null\)/);
   // The only synchronous listing read left is the enrich queue seam.
   const syncReads = watcher.match(/listingForWatch\(/g) || [];
   assert.equal(syncReads.length, 2, "getListing stays only for the enrich helper (definition + use)");
@@ -159,7 +160,7 @@ test("the crawler reads go through the driver-aware entry point", async () => {
 test("live PostgreSQL: the crawler reads match SQLite, and a PostgreSQL write is readable back", { skip }, async (t) => {
   const { app, uid } = await loadFixture();
   const { listingForWatchAsync, watchSiblings } = await import("../src/crawlerReads.js");
-  const deps = app.listingSearchBuildContext();
+  const deps = app.crawlerReadsBuildContext();
   const pgOptions = (pgDriver) => ({ driver: "postgres", pgDriver, deps, strict: true });
 
   await t.test("existing row and fingerprint lookup", async () => {
@@ -175,6 +176,34 @@ test("live PostgreSQL: the crawler reads match SQLite, and a PostgreSQL write is
         await watchSiblings("1|8|same", 920001, pgOptions(pgDriver)),
         app.findBySourceKey("1|8|same", 920001),
       );
+    });
+  });
+
+  await t.test("match candidates match on both paths", async () => {
+    await withMirroredSchema(app, async (pgDriver) => {
+      const { matchCandidatesAsync } = await import("../src/crawlerReads.js");
+      // Block path: same street + trusted coords + same floor/area/layout as 920001/920002, so the
+      // blocking query fires and the pure post-filter decides.
+      const blockedIncoming = {
+        post_id: 920003,
+        address: "台北市士林區測試路 5 號",
+        community_name: "",
+        floor_name: "5/12",
+        area_name: "20坪",
+        layout: "2房1廳1衛",
+        lat: 25.11,
+        lng: 121.52,
+      };
+      assert.deepEqual(
+        await matchCandidatesAsync(blockedIncoming.post_id, blockedIncoming, pgOptions(pgDriver)),
+        app.listMatchCandidates(blockedIncoming.post_id, blockedIncoming),
+      );
+      // Fallback path (no street/community/geo hints): the watched-first ordered page.
+      const bareIncoming = { post_id: 920003, address: "", community_name: "", lat: 0, lng: 0 };
+      const pgRows = await matchCandidatesAsync(bareIncoming.post_id, bareIncoming, pgOptions(pgDriver));
+      const sqliteRows = app.listMatchCandidates(bareIncoming.post_id, bareIncoming);
+      assert.deepEqual(pgRows.map((row) => row.post_id), sqliteRows.map((row) => row.post_id));
+      assert.ok(sqliteRows.length >= 2, "the fallback path returns the other listings");
     });
   });
 

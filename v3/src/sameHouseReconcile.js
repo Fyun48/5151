@@ -80,18 +80,18 @@ function likeDistrict(listing) {
   return String(districtNameFromListing(listing) || "").replace(/區$/, "");
 }
 
-export function blockMatchCandidates(db, incoming, { limit = RECONCILE_CANDIDATE_LIMIT } = {}) {
+// The blocking query and the row filter are separate, exported pieces so the PostgreSQL path
+// (repository/listingReads.js) runs the SAME statement text and the SAME post-filter - the
+// crawl's same-house matching must not differ between drivers.
+export function blockMatchCandidatesQuery(sqliteDb, incoming, { limit = RECONCILE_CANDIDATE_LIMIT } = {}) {
   const pid = Number(incoming?.post_id) || 0;
   const street = streetKey(incoming?.address);
   const community = String(incoming?.community_name || "").trim();
   const district = likeDistrict(incoming);
-  const floor = floorMain(incoming?.floor_name);
-  const area = areaNum(incoming?.area_name);
-  const rooms = layoutRooms(incoming?.layout);
   const lat = Number(incoming?.lat);
   const lng = Number(incoming?.lng);
   const hasGeo = Number.isFinite(lat) && Number.isFinite(lng) && lat !== 0 && lng !== 0;
-  if (!street && !community && !hasGeo) return [];
+  if (!street && !community && !hasGeo) return { sql: null, params: [] };
 
   const clauses = ["post_id != ?"];
   const params = [pid];
@@ -109,7 +109,7 @@ export function blockMatchCandidates(db, incoming, { limit = RECONCILE_CANDIDATE
     params.push(lat, lng);
   }
   clauses.push(`(${blocks.join(" OR ")})`);
-  const isolation = sqlExcludeFixtureRows(db, "listings");
+  const isolation = sqlExcludeFixtureRows(sqliteDb, "listings");
   clauses.push(isolation.sql);
   params.push(...isolation.params);
   if (district) {
@@ -118,19 +118,23 @@ export function blockMatchCandidates(db, incoming, { limit = RECONCILE_CANDIDATE
   }
 
   const cap = Math.max(1, Math.min(Number(limit) || RECONCILE_CANDIDATE_LIMIT, 200));
-  let rows = [];
-  try {
-    rows = db.prepare(
-      `SELECT * FROM listings
+  return {
+    sql: `SELECT * FROM listings
        WHERE ${clauses.join(" AND ")}
        ORDER BY IFNULL(offline, 0) DESC, last_seen_at DESC
        LIMIT ${cap}`,
-    ).all(...params);
-  } catch {
-    return [];
-  }
+    params,
+  };
+}
 
-  return rows.filter((row) => {
+export function filterBlockMatchRows(incoming, rows) {
+  const floor = floorMain(incoming?.floor_name);
+  const area = areaNum(incoming?.area_name);
+  const rooms = layoutRooms(incoming?.layout);
+  const lat = Number(incoming?.lat);
+  const lng = Number(incoming?.lng);
+  const hasGeo = Number.isFinite(lat) && Number.isFinite(lng) && lat !== 0 && lng !== 0;
+  return (rows || []).filter((row) => {
     if (floor && floorMain(row.floor_name) && floorMain(row.floor_name) !== floor) return false;
     const otherArea = areaNum(row.area_name);
     if (area != null && otherArea != null && Math.abs(area - otherArea) > 3) return false;
@@ -142,6 +146,18 @@ export function blockMatchCandidates(db, incoming, { limit = RECONCILE_CANDIDATE
     }
     return true;
   });
+}
+
+export function blockMatchCandidates(db, incoming, { limit = RECONCILE_CANDIDATE_LIMIT } = {}) {
+  const { sql, params } = blockMatchCandidatesQuery(db, incoming, { limit });
+  if (!sql) return [];
+  let rows = [];
+  try {
+    rows = db.prepare(sql).all(...params);
+  } catch {
+    return [];
+  }
+  return filterBlockMatchRows(incoming, rows);
 }
 
 export function evaluateBlockedMatches(incoming, candidates, { now = new Date() } = {}) {

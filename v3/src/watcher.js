@@ -95,7 +95,7 @@ import { normalizeOfflineConfirmDays, shouldRecheckOffline } from "./offline.js"
 import { detailConcurrency, mapPool } from "./pool.js";
 // Driver-aware reads: with DB_DRIVER=postgres the crawler has to read back what it just wrote
 // (see crawlerReads.js). The synchronous read stays for helpers that are still sync.
-import { listingForWatchAsync, watchSiblings } from "./crawlerReads.js";
+import { listingForWatchAsync, matchCandidatesAsync, watchSiblings } from "./crawlerReads.js";
 
 function nowIso() {
   return new Date().toISOString();
@@ -201,9 +201,11 @@ function costPatchFromClassify({ type, detail, cost_change_type }, incoming, exi
   return {};
 }
 
-// `siblings` is the same-source fingerprint read (crawlerReads.watchSiblings): the caller awaits
-// it once and hands it in, so this stays a pure decision function for both drivers.
-function classify(incoming, existing, siblings = null) {
+// `siblings` / `candidates` are the two reads classify() may need (crawlerReads.watchSiblings and
+// crawlerReads.matchCandidatesAsync): the caller awaits them once and hands them in, so this stays
+// a pure decision function for both drivers. Passing null falls back to the synchronous SQLite
+// reads, which is what a SQLite-only caller still does.
+function classify(incoming, existing, siblings = null, candidates = null) {
   if (!existing) {
     const sameSource = siblings ?? findBySourceKey(incoming.source_key, incoming.post_id);
     if (sameSource.length) {
@@ -213,7 +215,8 @@ function classify(incoming, existing, siblings = null) {
         : `指紋相同，先前 #${prev.post_id}`;
       return { type: "same_source", detail, prev, level: "high" };
     }
-    const hit = bestMatch(incoming, listMatchCandidates(incoming.post_id, incoming));
+    const pool = candidates ?? listMatchCandidates(incoming.post_id, incoming);
+    const hit = bestMatch(incoming, pool);
     if (hit?.listing) {
       const prev = hit.listing;
       const priceBit = prev.price && prev.price !== incoming.price ? `，${prev.price} → ${incoming.price}` : "";
@@ -771,11 +774,16 @@ export async function runWatch(options = {}) {
       seen.add(listing.post_id);
 
       // Awaited so change detection reads the same store persistListing() writes to
-      // (crawlerReads.js). `siblings` is the same-source fingerprint read for the
-      // "this listing moved to a new post_id" branch of classify().
+      // (crawlerReads.js). `siblings` and `candidates` are only needed when the row is new, and
+      // they are what classify() would otherwise read synchronously from SQLite.
       const existing = await listingForWatchAsync(listing.post_id);
-      const siblings = await watchSiblings(listing.source_key, listing.post_id);
-      const { type, detail, prev, level, cost_change_type } = classify(listing, existing, siblings);
+      let siblings = null;
+      let candidates = null;
+      if (!existing) {
+        siblings = await watchSiblings(listing.source_key, listing.post_id);
+        if (!siblings.length) candidates = await matchCandidatesAsync(listing.post_id, listing);
+      }
+      const { type, detail, prev, level, cost_change_type } = classify(listing, existing, siblings, candidates);
       const stamp = nowIso();
       await persistListing({
         ...listing,
