@@ -56,12 +56,28 @@ export function userTables(db) {
     .map((row) => row.name);
 }
 
+// SQLite keeps column defaults in PRAGMA table_info().dflt_value. Without carrying them over, a
+// PostgreSQL table that a SQLite INSERT omits a column from would fail its NOT NULL constraint
+// (the crawler's listings upsert relies on those defaults), so translatable defaults are copied.
+// Expressions we cannot translate confidently are skipped and left to the caller.
+function pgDefaultClause(sqliteDefault) {
+  if (sqliteDefault == null) return "";
+  const raw = String(sqliteDefault).trim();
+  if (!raw || /^null$/i.test(raw)) return "";
+  if (/^-?\d+(\.\d+)?$/.test(raw)) return ` DEFAULT ${raw}`;
+  if (/^'(?:[^']|'')*'$/.test(raw)) return ` DEFAULT ${raw}`;
+  if (/^(current_timestamp|current_date|current_time)$/i.test(raw)) return ` DEFAULT ${raw.toUpperCase()}`;
+  return "";
+}
+
 export function createTableStatement(db, table, { schema = "", ifNotExists = true } = {}) {
   const columns = tableInfo(db, table);
   const pk = columns.filter((c) => Number(c.pk) > 0).sort((a, b) => Number(a.pk) - Number(b.pk));
   const lines = columns.map((c) => {
     const parts = [`  ${quoteIdent(c.name)} ${pgTypeFor(c.type)}`];
     if (Number(c.notnull) === 1) parts.push("NOT NULL");
+    const defaultClause = pgDefaultClause(c.dflt_value);
+    if (defaultClause) parts.push(defaultClause.trim());
     return parts.join(" ");
   });
   if (pk.length) lines.push(`  PRIMARY KEY (${pk.map((c) => quoteIdent(c.name)).join(", ")})`);
