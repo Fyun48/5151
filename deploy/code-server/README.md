@@ -5,7 +5,7 @@
 - 容器：`5151-code-server`（CasaOS 那台以外，跑在 **Synology**；與 Gitea 同一台）
 - 對外：`https://cocodeco.reversalplay.me`（走既有 `jgitea-tunnel`，dashboard 上顯示為 connector **`gitea`**）
 - 只綁 `127.0.0.1:8484`（不對 LAN 開放），因此對外一律經 Cloudflare
-- 密碼：NAS `~/code-server/.env` 的 `CODE_SERVER_PASSWORD`（600，不進 repo）
+- 密碼：NAS `~/code-server/.env` 的 `PASSWORD`（compose 以 `env_file: .env` 讀入；600，不進 repo；`CODE_SERVER_PASSWORD` 保留為向後相容）
 - 資料：`~/code-server/data`（設定＋已安裝擴充套件）、`~/code-server/workspace`（工作區，已預先 clone `5151`）
 
 ## 一次性設定：加 Cloudflare Public Hostname
@@ -213,6 +213,6 @@ Access 會在最前面多一層「只有你的 email 能進來」的閘門（免
 - **沒有掛 docker socket** ✓（只是編輯器，不給它動 host 的能力）
 - 對外唯一入口是 Cloudflare tunnel + code-server 密碼；建議再開 **Cloudflare Access**（Zero Trust → Access →
   Applications → 加 `code.reversalplay.me`，用 email OTP 或 Google 登入）多一層 ✓
-- 生命週期：`cd ~/code-server && CODE_SERVER_PASSWORD=<pw> docker compose up -d`（更新：`docker compose pull && up -d`）
+- 生命週期：`cd ~/code-server && docker compose up -d`（密碼由 `.env` 的 `PASSWORD` 提供；更新：`docker compose pull && up -d`）
 - 日誌：`docker logs --tail 50 5151-code-server`
 - 資料備份：`~/code-server/data`（設定/擴充）＋ `~/code-server/workspace`（程式碼；程式碼也可從 Gitea 重拉）

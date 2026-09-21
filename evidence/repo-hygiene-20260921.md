@@ -127,3 +127,45 @@ cursor/synology-legacy-scp
 1. **輪替 PostgreSQL 密碼**：`PG_SUPER_PASSWORD` / `PG_REPLICATION_PASSWORD` 曾在 Gitea 歷史以明文存在（shadow 叢集；Synology `5151-postgres-B` = primary、CasaOS `5151-postgres-A` = hot standby）。輪替要同步更新兩台的 `.env`、primary 的 `ALTER ROLE` 與 standby 的 `primary_conninfo`，最後驗證複寫；步驟見 `docs/runbooks/postgres-manual-failover.md`，健康檢查用 `deploy/shadow-ha/drill.sh preflight`。
 2. 重新檢視 Gitea 是否降級為「選用鏡像／選用 CI」：若確定不用，可停 `gitea-runner-ci` 與 `.gitea/workflows/*`（對 GitHub 無影響），但保留 `deploy/gitea/` 的 dispatch／runner 文件。
 3. `evidence/runtime-modernization/STATUS.md` 的「EXTERNAL_SETUP_REQUIRED / 尚未開始」段落已過時（shadow HA、Gitea 都已上線），現況以 `HANDOFF.md` 的「還沒做的」為準。
+
+
+## 5. 執行紀錄（2026-09-21 同日完成）
+
+### 5.1 PostgreSQL 密碼輪替（shadow 叢集）
+
+- 產生兩組 40 字元隨機密碼，在 **primary（Synology `5151-postgres-B`）** 執行
+  `ALTER ROLE postgres` 與 `ALTER ROLE replicator`。
+- `.env` 更新：Synology `postgres-standby/.env`、CasaOS `postgres-primary/.env`
+  （各自留下 `.bak-20260921`）。
+- standby（CasaOS `5151-postgres-A`）的 `$PGDATA/postgresql.auto.conf` → `primary_conninfo`
+  換成新密碼後 `pg_reload_conf()`；primary 上那條指向 CasaOS 的**殘留** conninfo 一併更新
+  （該節點目前不是 recovery，屬無害殘留，換掉以免下次角色對調時踩到）。
+- 驗證（全部通過）：
+  - standby：`pg_is_in_recovery()=t`、`pg_last_wal_receive_lsn() = pg_last_wal_replay_lsn()`（無落後）
+  - primary：`pg_stat_replication` = `172.21.0.1 | streaming | async`
+  - 用**新** super 密碼從 standby 走 TCP 打 primary：`super_tcp_ok`
+  - 用**舊** 24 字元密碼走同一路徑：`FATAL: password authentication failed for user "postgres"` → 輪替生效
+  - `drill.sh preflight` 兩邊 `preflight OK`，且 `haproxy 192.168.0.140:25433 pg_is_in_recovery() = f`
+  - 報告：CasaOS `~/drill-reports/drill-20260921T032734Z.txt`、
+    Synology `/var/services/homes/tori/drill-reports/drill-20260921T032733Z.txt`
+- 注意：容器 env 內的舊值要等下次重建才更新（`POSTGRES_PASSWORD` 只在 initdb 時用得到）；
+  DB 內已是新密碼，`.env` 也已同步。
+
+### 5.2 Gitea CI / runner 停止
+
+- `gitea-runner-ci`：`docker update --restart=no` + `stop` → `status=exited`、`restart=no`；
+  背景的 `~/backfill-runs.sh` 也確認不在執行。
+- Gitea 本體、`gitea-db`、`jgitea-tunnel`、`5151-code-server` **保留**（當參考環境與瀏覽器 IDE）。
+- `.gitea/workflows/*` 留在 repo 當參考；**GitHub 是唯一發版路徑**。
+
+### 5.3 GitGuardian 誤報處理
+
+- 兩個 finding 都是 `PASSWORD: ${…}` 這種 **env 佔位**（`deploy/code-server`、
+  `deploy/shadow-ha/postgres-primary`），不是真機密。
+- 已改成值只留在 NAS：code-server 的 `PASSWORD` 與兩份 shadow compose 的 `standby-basebackup`
+  密碼都改走 `env_file: .env`（600，不進版控）。
+- 四個目錄（兩台主機 × primary/standby 目錄）都已同步新版 compose，並以
+  `docker compose config -q` 驗證通過；NAS 上缺 `.env` 的目錄已由同源複本補齊。
+- 主服務的 `POSTGRES_PASSWORD` 仍走 `${PG_SUPER_PASSWORD}`（initdb 需要，且未被標記）；
+  若 GitGuardian 之後改標它，處理方式是在 GitGuardian dashboard 標成 false positive。
+- 附帶修掉 `drill.sh` 報告時間戳重複 `Z` 的顯示問題（`…T032733ZZ` → `…T032733Z`）。
