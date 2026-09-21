@@ -21,6 +21,15 @@
    `overlayRowsPersonal` / `loadFlagMap` / same-house peers / per-user commute 仍走 SQLite 形狀。
    現在 `DB_DRIVER=postgres` 時 `searchListingsAsync` **預設仍回 SQLite 鏈**，只有明確設
    `PG_LISTINGS_UNDECORATED=1` 才會回 PG 的未裝飾資料（刻意避免「半裝飾」上線）。
+   - **進度（2026-09-21，Slice 1 完成）**：`v3/src/repository/decorationData.js` 把六個 SQLite 綁定的
+     資料載入（personal flags／anyone flags／個人同屋源索引／group id／同屋源 peers／`listing_prep`）
+     改成 driver-agnostic：同一份 SQL 文字在兩個 driver 上跑，並在載入層把 PG 的 BIGINT 字串正規化
+     （否則 `display_ready` 之類會以 `"1"` 漏進回應）。`v3/test/decoration-data.test.js` 在
+     SQLite fixture 與**真實 shadow PostgreSQL** 上比對同一組值（兩邊皆 3/3）。
+     過程中抓到 2 個真差異：同一個 id 清單出現兩次時的 `$n` 編號、以及 PG 的 int8→string。
+   - **下一步（Slice 2）**：讓 `db.js` 的 `decorateListingLite` / `attachListingPeers` /
+     `housepriceNotDisplayReady` 接受「預先載入的裝飾資料」（context），SQLite 與 PG 共用同一條
+     純裝飾路徑；再把 `searchListingsAsync` 的 `decoration: "pending"` 拿掉。
 2. **其餘 domain**：settings / flags / routeCache / users 已有 repository 示範；
    `demand`、`feedback`、`crm`、`geo`、`jobs`、`listing_prep`… 仍在 SQLite 形狀。
 3. **寫入分流**：目前只有 listings 搜尋有 PG 路徑；爬蟲入庫、會員標記、通知、許願房等寫入仍打 SQLite。
