@@ -7,8 +7,17 @@
 
 ## 0. 前置條件（先確認，否則不要開始）
 
-- [ ] `POSTGRES_SWITCH_PLAN.md` §2 的阻塞項都已關閉：裝飾管線（完成）、寫入分流（§2.3）、
-      **爬蟲／enrich／通知管線的讀取**（`watcher.js` 的同步 SQLite 讀；必須與寫入同批上線）。
+- [ ] `POSTGRES_SWITCH_PLAN.md` §2 的阻塞項都已關閉：
+      - 裝飾管線 ✅（完成）
+      - 寫入分流 ✅（§2.3）
+      - **爬蟲／enrich 的讀取與欄位寫入** ✅（2026-09-21：① 七條 `listingsNeeding*` 掃描、
+        ② `setListingDetail`／`persistHpListingFields`／`setCachedMrt`／`setCommunityCache`／
+        `upsertListingPrep`；live parity `crawler-reads-parity.test.js` 8/8、
+        `listing-fields-parity.test.js` 6/6，證據 `v3/evidence/pg-loop-parity-20260921/`）
+      - **通知／CRM 佇列的讀寫（③）** ⛔ **尚未完成** —— PG 模式下 `user_events`／`crmOutbox` 仍寫 SQLite，
+        而 Web 讀 PG → 會員收不到通知。**這一項沒做完不要切換。**
+      - **`enqueueSimilaritySafe`（④，pHash 佇列）** ⛔ 尚未完成 —— PG 模式下爬進來的物件不會進
+        相似度佇列（功能缺口，不會寫壞資料）。
 - [ ] shadow 叢集健康：`sh deploy/shadow-ha/drill.sh preflight`（primary/standby 角色、複寫延遲）。
 - [ ] 目標 PG 由 **完整初始化過的 store** 鏡射：app 只會 ensure SQLite 的 schema，PG 端的
       `data_revision` 之類的表是「第一次用到才建立」，空的暫存 DB 會漏掉它們。
