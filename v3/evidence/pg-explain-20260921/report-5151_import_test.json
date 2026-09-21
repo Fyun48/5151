@@ -1,0 +1,86 @@
+{
+  "district": "士林區",
+  "sorts": [
+    {
+      "sort": "newest",
+      "envelope": "sql-first",
+      "matched": 182,
+      "pageIds": 50,
+      "searchPageMs": 201,
+      "statements": 2,
+      "plans": [
+        {
+          "plan": "Aggregate  (cost=16039.73..16039.74 rows=1 width=8) (actual time=12.558..12.562 rows=1 loops=1)\n  Buffers: shared hit=4718\n  ->  Nested Loop Semi Join  (cost=1.78..16039.73 rows=1 width=0) (actual time=0.096..12.518 rows=182 loops=1)\n        Buffers: shared hit=4718\n        ->  Seq Scan on listing_search_projection p  (cost=0.00..745.05 rows=581 width=8) (actual time=0.016..4.941 rows=581 loops=1)\n              Filter: (district = '士林區'::text)\n              Rows Removed by Filter: 19743\n              Buffers: shared hit=491",
+          "planning": "Planning Time: 2.432 ms",
+          "execution": "Execution Time: 12.741 ms",
+          "seqScanListings": false
+        },
+        {
+          "plan": "Limit  (cost=16039.74..16039.74 rows=1 width=32) (actual time=12.490..12.509 rows=50 loops=1)\n  Buffers: shared hit=4718\n  ->  Sort  (cost=16039.74..16039.74 rows=1 width=32) (actual time=12.488..12.499 rows=50 loops=1)\n        Sort Key: p.updated_at DESC, p.post_id\n        Sort Method: top-N heapsort  Memory: 31kB\n        Buffers: shared hit=4718\n        ->  Nested Loop Semi Join  (cost=1.78..16039.73 rows=1 width=32) (actual time=0.087..12.370 rows=182 loops=1)\n              Buffers: shared hit=4718",
+          "planning": "Planning Time: 2.334 ms",
+          "execution": "Execution Time: 12.693 ms",
+          "seqScanListings": false
+        }
+      ]
+    },
+    {
+      "sort": "price_asc",
+      "envelope": "sql-first",
+      "matched": 182,
+      "pageIds": 50,
+      "searchPageMs": 46,
+      "statements": 2,
+      "plans": [
+        {
+          "plan": "Aggregate  (cost=16039.73..16039.74 rows=1 width=8) (actual time=11.565..11.568 rows=1 loops=1)\n  Buffers: shared hit=4718\n  ->  Nested Loop Semi Join  (cost=1.78..16039.73 rows=1 width=0) (actual time=0.106..11.528 rows=182 loops=1)\n        Buffers: shared hit=4718\n        ->  Seq Scan on listing_search_projection p  (cost=0.00..745.05 rows=581 width=8) (actual time=0.020..4.293 rows=581 loops=1)\n              Filter: (district = '士林區'::text)\n              Rows Removed by Filter: 19743\n              Buffers: shared hit=491",
+          "planning": "Planning Time: 2.933 ms",
+          "execution": "Execution Time: 11.781 ms",
+          "seqScanListings": false
+        },
+        {
+          "plan": "Limit  (cost=16039.74..16039.75 rows=1 width=40) (actual time=18.576..18.596 rows=50 loops=1)\n  Buffers: shared hit=4718\n  ->  Sort  (cost=16039.74..16039.75 rows=1 width=40) (actual time=18.574..18.584 rows=50 loops=1)\n        Sort Key: (CASE WHEN (p.rent > 0) THEN p.rent ELSE '9223372036854775807'::bigint END), p.updated_at DESC, p.post_id\n        Sort Method: top-N heapsort  Memory: 31kB\n        Buffers: shared hit=4718\n        ->  Nested Loop Semi Join  (cost=1.78..16039.73 rows=1 width=40) (actual time=0.081..18.450 rows=182 loops=1)\n              Buffers: shared hit=4718",
+          "planning": "Planning Time: 2.016 ms",
+          "execution": "Execution Time: 18.786 ms",
+          "seqScanListings": false
+        }
+      ]
+    },
+    {
+      "sort": "price_desc",
+      "envelope": "sql-first",
+      "matched": 182,
+      "pageIds": 50,
+      "searchPageMs": 53,
+      "statements": 2,
+      "plans": [
+        {
+          "plan": "Aggregate  (cost=16039.73..16039.74 rows=1 width=8) (actual time=11.331..11.334 rows=1 loops=1)\n  Buffers: shared hit=4718\n  ->  Nested Loop Semi Join  (cost=1.78..16039.73 rows=1 width=0) (actual time=0.087..11.295 rows=182 loops=1)\n        Buffers: shared hit=4718\n        ->  Seq Scan on listing_search_projection p  (cost=0.00..745.05 rows=581 width=8) (actual time=0.018..4.156 rows=581 loops=1)\n              Filter: (district = '士林區'::text)\n              Rows Removed by Filter: 19743\n              Buffers: shared hit=491",
+          "planning": "Planning Time: 2.169 ms",
+          "execution": "Execution Time: 11.518 ms",
+          "seqScanListings": false
+        },
+        {
+          "plan": "Limit  (cost=16039.74..16039.75 rows=1 width=36) (actual time=12.121..12.139 rows=50 loops=1)\n  Buffers: shared hit=4718\n  ->  Sort  (cost=16039.74..16039.75 rows=1 width=36) (actual time=12.118..12.127 rows=50 loops=1)\n        Sort Key: (CASE WHEN (p.rent > 0) THEN 0 ELSE 1 END), p.rent DESC, p.updated_at DESC, p.post_id\n        Sort Method: top-N heapsort  Memory: 30kB\n        Buffers: shared hit=4718\n        ->  Nested Loop Semi Join  (cost=1.78..16039.73 rows=1 width=36) (actual time=0.085..11.967 rows=182 loops=1)\n              Buffers: shared hit=4718",
+          "planning": "Planning Time: 2.478 ms",
+          "execution": "Execution Time: 12.345 ms",
+          "seqScanListings": false
+        }
+      ]
+    },
+    {
+      "sort": "commute_asc",
+      "envelope": "outside",
+      "reason": "sort"
+    },
+    {
+      "sort": "commute_desc",
+      "envelope": "outside",
+      "reason": "sort"
+    },
+    {
+      "sort": "fit_desc",
+      "envelope": "outside",
+      "reason": "sort"
+    }
+  ]
+}

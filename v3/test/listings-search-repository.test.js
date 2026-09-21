@@ -141,14 +141,24 @@ test("listingSearchSql rejects incomplete dependency bundles", async () => {
   }), true);
 });
 
-test("the async hot path keeps the SQLite chain unless postgres is opted into", async () => {
+test("the async hot path decorates PostgreSQL pages and falls back to the SQLite chain", async () => {
   const { searchListingsAsync } = await import("../src/listingSearchAsync.js");
   const source = readFileSync(path.join(dir, "../src/listingSearchAsync.js"), "utf8");
+  // The pre-existing chain still backs the sqlite driver and every fallback.
   assert.match(source, /listListingsSqlFirst\(args\) \|\|/);
   assert.match(source, /listListingsCommuteSqlFirst\(args\) \|\|/);
   assert.match(source, /listListingsFitSqlFirst\(args\) \|\|/);
   assert.match(source, /listListings\(args\)/);
-  assert.match(source, /if \(!options\.allowUndecorated\) return searchListingsSqlite\(args\)/);
+  // Slice 2b/2: the PostgreSQL path preloads the decoration inputs and runs the shared
+  // decorators, so its response is fully decorated rather than raw.
+  assert.match(source, /await preloadDecorationProviderAsync\(\{ exec, rows, settings, userId, matchVoteUserId, sameHouse \}\)/);
+  assert.match(source, /decorateRowsWithProvider\(rows, \{/);
+  assert.match(source, /decoration: "full"/);
+  // allowUndecorated is diagnostics-only now, and the SQLite chain is the fallback for the
+  // SQL-first envelope as well as for any preload/decoration failure.
+  assert.match(source, /if \(options\.allowUndecorated\) \{/);
+  assert.match(source, /if \(!page\) return searchListingsSqlite\(args\);/);
+  assert.match(source, /catch \(error\) \{[\s\S]*?return searchListingsSqlite\(args\);/);
   assert.equal(typeof searchListingsAsync, "function");
   const server = readFileSync(path.join(dir, "../src/server.js"), "utf8");
   assert.match(server, /await searchListingsAsync\(args, \{/);
