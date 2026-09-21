@@ -135,24 +135,118 @@ export function rowsForTable(db, table) {
   return { columns, rows };
 }
 
-// Idempotent import (ON CONFLICT DO NOTHING) so a retry/resume never duplicates
-// rows — the same guarantee sqliteToPostgres.copyTable gives the SQLite target.
-export async function importTable(pgDriver, sqliteDb, table, { schema = "", batchSize = 500 } = {}) {
-  const { columns, rows } = rowsForTable(sqliteDb, table);
+// PostgreSQL accepts at most 65535 bind parameters per statement; leave headroom for the
+// statement's own literals.
+export const PG_MAX_BIND_PARAMS = 65000;
+
+// Rows that fit into one multi-row INSERT for a table of `columnCount` columns.
+export function rowsPerStatement(columnCount, batchSize = 500) {
+  const width = Math.max(1, Number(columnCount) || 1);
+  const cap = Math.max(1, Math.floor(PG_MAX_BIND_PARAMS / width));
+  return Math.max(1, Math.min(Math.max(1, Number(batchSize) || 1), cap));
+}
+
+export function multiRowInsertSql(table, columns, rowCount, { schema = "" } = {}) {
+  const width = columns.length;
+  const tuples = [];
+  for (let row = 0; row < rowCount; row += 1) {
+    const start = row * width;
+    tuples.push(`(${columns.map((_, col) => `$${start + col + 1}`).join(", ")})`);
+  }
+  return `INSERT INTO ${quoteQualified(schema, table)} (${columns.map(quoteIdent).join(", ")})\n`
+    + `VALUES ${tuples.join(", ")}\nON CONFLICT DO NOTHING`;
+}
+
+// Copies a slice of rows with the requested statement shape. Returns the row count sent.
+async function insertRows(pgDriver, table, columns, rows, { schema = "", batchSize = 500, multiRow = true } = {}) {
   if (!rows.length) return 0;
-  const placeholders = columns.map((_, i) => `$${i + 1}`).join(", ");
-  const sql = translateInsertOrIgnore(
-    `INSERT OR IGNORE INTO ${quoteQualified(schema, table)} (${columns.map(quoteIdent).join(", ")}) VALUES (${placeholders})`,
-  );
+  if (!multiRow) {
+    const placeholders = columns.map((_, i) => `$${i + 1}`).join(", ");
+    const sql = translateInsertOrIgnore(
+      `INSERT OR IGNORE INTO ${quoteQualified(schema, table)} (${columns.map(quoteIdent).join(", ")}) VALUES (${placeholders})`,
+    );
+    let copied = 0;
+    for (let start = 0; start < rows.length; start += batchSize) {
+      const slice = rows.slice(start, start + batchSize);
+      await pgDriver.withTransaction(async (client) => {
+        for (const row of slice) {
+          await client.query(sql, columns.map((c) => row[c]));
+          copied += 1;
+        }
+      });
+    }
+    return copied;
+  }
+
+  const perStatement = rowsPerStatement(columns.length, batchSize);
   let copied = 0;
-  for (let start = 0; start < rows.length; start += batchSize) {
-    const slice = rows.slice(start, start + batchSize);
-    await pgDriver.withTransaction(async (client) => {
-      for (const row of slice) {
-        await client.query(sql, columns.map((c) => row[c]));
-        copied += 1;
+  for (let start = 0; start < rows.length; start += perStatement) {
+    const slice = rows.slice(start, start + perStatement);
+    const params = [];
+    for (const row of slice) {
+      for (const column of columns) params.push(row[column]);
+    }
+    await pgDriver.query(multiRowInsertSql(table, columns, slice.length, { schema }), params);
+    copied += slice.length;
+  }
+  return copied;
+}
+
+// Reads a table in rowid order, `chunkRows` rows at a time. The live v3 `listings` table is ~108k
+// wide rows (text bodies included), and holding all of them in memory is both slow and a risk on
+// a NAS - so the import streams instead. A table without a usable rowid (WITHOUT ROWID) falls
+// back to LIMIT/OFFSET pagination.
+export function readTableChunks(sqliteDb, table, { chunkRows = 2000 } = {}) {
+  const columns = tableInfo(sqliteDb, table).map((c) => c.name);
+  const size = Math.max(1, Number(chunkRows) || 2000);
+  const quoted = quoteIdent(table);
+  const selected = columns.map(quoteIdent).join(", ");
+  let keyset = true;
+  let cursor = null;
+  let offset = 0;
+  const next = () => {
+    if (keyset) {
+      try {
+        const rows = cursor == null
+          ? sqliteDb.prepare(`SELECT rowid AS __rowid, ${selected} FROM ${quoted} ORDER BY rowid LIMIT ${size}`).all()
+          : sqliteDb.prepare(`SELECT rowid AS __rowid, ${selected} FROM ${quoted} WHERE rowid > ? ORDER BY rowid LIMIT ${size}`).all(cursor);
+        if (rows.length) cursor = rows[rows.length - 1].__rowid;
+        return rows;
+      } catch {
+        keyset = false;
       }
-    });
+    }
+    const rows = sqliteDb.prepare(`SELECT ${selected} FROM ${quoted} LIMIT ${size} OFFSET ${offset}`).all();
+    offset += rows.length;
+    return rows;
+  };
+  return { columns, next };
+}
+
+// Idempotent import (ON CONFLICT DO NOTHING) so a retry/resume never duplicates rows - the same
+// guarantee sqliteToPostgres.copyTable gives the SQLite target.
+//
+// `multiRow` (default) sends one statement per `rowsPerStatement()` rows instead of one per row:
+// the cutover import has to move ~108k listings plus the rest of the store inside a freeze
+// window, and a per-row round trip is what made the original tool take so long. Each multi-row
+// statement is atomic on its own, so no explicit transaction is needed; the per-row path keeps
+// its batch transaction for callers that ask for `multiRow: false`.
+//
+// Measured on the shadow cluster with the production snapshot: `listings` (108,539 rows)
+// 60.3 s multi-row vs per-row (see v3/evidence/pg-import-20260921/README.md).
+export async function importTable(pgDriver, sqliteDb, table, {
+  schema = "",
+  batchSize = 500,
+  multiRow = true,
+  chunkRows = 2000,
+} = {}) {
+  const reader = readTableChunks(sqliteDb, table, { chunkRows });
+  if (!reader.columns.length) return 0;
+  let copied = 0;
+  for (;;) {
+    const rows = reader.next();
+    if (!rows.length) break;
+    copied += await insertRows(pgDriver, table, reader.columns, rows, { schema, batchSize, multiRow });
   }
   return copied;
 }

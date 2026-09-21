@@ -102,4 +102,7 @@ idempotency key 去重、以及 **standby 上可見同一 schema（串流複寫�
    `findBySourceKey`、`listMatchCandidates`、`getRouteJob`…）。爬蟲「寫完再讀」必須與寫入同批上線，
    否則 PG 模式下看不到自己剛寫的列 —— 這是剩下的最大一塊。
 4. **其餘 domain 讀寫**：列表路徑以外的旗標／路線讀取、`enqueueSimilaritySafe`（pHash 佇列）、`listing_prep`、通知／CRM 佇列仍 SQLite-only。
-5. **PG schema bootstrap 與遷移工具效率**：app 只會 ensure SQLite schema；`pgSchema.importTable` 仍是逐列 INSERT（108k 筆 listings 需要 COPY／分批版），cutover 還需要寫入凍結視窗。
+5. **PG schema bootstrap 與遷移工具**：**已解決（2026-09-21）** —— `v3/scripts/pg-import.mjs`＋
+   `deploy/shadow-ha/pg-import-run.sh`（批次＋串流匯入，`listings` 108,539 列 60.3 s 實測），
+   切換步驟見 `docs/runbooks/postgres-cutover-bootstrap.md`、證據 `v3/evidence/pg-import-20260921/`。
+   `COPY` 仍可當後續優化，但目前不是阻塞項。
