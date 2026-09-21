@@ -14,7 +14,8 @@
 | `v3/src/repository/listings.js`、`listingSearchAsync.js`、`listingSearchSql.js` | driver-agnostic listings repository；`/api/listings` 改走 async 入口（SQLite 行為不變） | `listings-search-repository.test.js`、`list-sql-first-wiring.test.js` |
 | shadow HA PG 叢集 | primary = Synology `5151-postgres-B`、hot standby = CasaOS `5151-postgres-A`、串流複寫、HAProxy `pg-rw`/`pg-ro` | 2026-09-21 failover 來回演練（`A4-HA-DRILL-20260921.md`） |
 | **真實 PG 整合測試** | **tests 10 / pass 10 / fail 0**（5.7s）：driver 健檢含 `pg_is_in_recovery()`、SQLite schema 鏡射且 row count 一致、重跑匯入不重複、三種排序（newest/price_asc/price_desc × offset × cursor）與 SQLite **id 集合/順序/total/hasMore/nextCursor 完全一致**、envelope 外 fallback、`FOR UPDATE SKIP LOCKED` 兩 worker 併發 claim 不重複、lease 過期回收、idempotency key 去重、standby 可見同一 schema | 2026-09-21 於 shadow 叢集實跑 |
-| **列表頁統計 `stats()`** | **同一條純管線、兩個 store 各自供料**：`listingStatsAsync.js`（dispatch）＋`repository/listingStats.js`（PG 讀取）＋ `db.js` 的 `buildListingStatsRows`／`summarizeListingStats`（純計算，SQLite 也走同一支）；PG 模式下列表與統計**同源** | `v3/test/listing-stats-parity.test.js`（本機 1/1；shadow PG **4/4**，逐欄 deepEqual）；`v3/evidence/listing-stats-pg-20260921/` |
+| **列表頁統計 `stats()`** | **同一條純管線、兩個 store 各自供料**：`listingStatsAsync.js`（dispatch）＋`repository/listingStats.js`（PG 讀取）＋ `db.js` 的 `buildListingStatsRows`／`summarizeListingStats`（純計算，SQLite 也走同一支）；PG 模式下列表與統計**同源** | `v3/test/listing-stats-parity.test.js`（本機 1/1；shadow PG **5/5**，逐欄 deepEqual）；`v3/evidence/listing-stats-pg-20260921/` |
+| **`/api/state` 同源 ＋ 兩 driver 的數值語意** | 初始載入也走 `listingStatsAsync()`＋`searchListingsAsync()`（那 500 筆頁面逐欄 deepEqual）；`dbDriverPostgres` 把 BIGINT 以**數字**回傳，與 SQLite 的 INTEGER 語意一致（先前 PG 卡片是 `post_id: "900001"`） | 同上 live 子測試（shadow PG 5/5）＋ `pg-driver.test.js`；證據同上 |
 
 ## 2. 還缺什麼（切換的前置條件）
 
@@ -99,9 +100,9 @@
      `/api/listings` 改成 `await listingStatsAsync(...)`。實測：shadow 真實 PG 逐欄 parity **4/4**、
      回歸 `pg-live-integration` **10/10**、`write-path-parity` **2/2**；證據與踩到的坑見
      `v3/evidence/listing-stats-pg-20260921/`。
-   - **仍走 SQLite**：② 列表路徑以外的旗標／路線讀取、③ `enqueueSimilaritySafe`（pHash 佇列）、
-     ④ `listing_prep` 與通知／CRM 佇列。另外 `/api/state`（初始載入）這條仍是
-     `listListings()`＋SQLite `stats()`，PG 模式下它與 `/api/listings` 會不同源。
+   - **仍走 SQLite**：② 列表路徑以外的讀取（最要緊的是 `getListing()`：詳情頁／`/go`／history）、
+     ③ `enqueueSimilaritySafe`（pHash 佇列）、④ `listing_prep` 與通知／CRM 佇列。
+     `/api/state`（初始載入）**已同源**（2026-09-21，見上表）。
 7. **PG schema bootstrap**：app 只會 ensure SQLite schema；PG 模式要求 PG 端先有 schema，且必須從
    **完整初始化過的 store**（正式站 DB）鏡射 —— 空的暫存 DB 會少掉延遲建立的表（例如 `data_revision`）。
 5. **遷移工具效率**：`pgSchema.importTable` 是逐列 INSERT，108k listings 會跑很久；
@@ -127,8 +128,8 @@ sh ~/shadow-ha-tools/5151-pg-import-run.sh        # 在 CasaOS 跑；產出 5151
 ## 4. Production 切換步驟（草案；需要 Owner 指定窗口）
 
 1. 先完成 §2.1–§2.4（裝飾管線、其餘 domain、寫入分流、EXPLAIN evidence）。
-   - 統計已同源（§2.6 ① 完成）：PG 模式下 `/api/listings` 的計數器由 `listingStatsAsync.js`
-     讀同一套 PostgreSQL；`/api/state` 仍是 SQLite 鏈，切換前要一起處理（或明確接受不同源）。
+   - 統計與 `/api/state` 都已同源（§2.6 ① 完成）：PG 模式下 `/api/listings` 與 `/api/state` 的
+     列表＋計數器都讀同一套 PostgreSQL。切換前仍要處理詳情頁（`getListing()`）等列表以外的讀取。
    - 同時**建立 PG 索引**：`sh deploy/shadow-ha/pg-indexes.sh <database>`（匯入只建表與 primary key；
      沒索引時每次查詢都是 20,324 筆的 seq scan）。
    - 同時**確認 PG schema 的 DEFAULT 與 SQLite 一致**：`pgSchema` 已會帶入可翻譯的 default，

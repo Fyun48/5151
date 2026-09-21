@@ -69,6 +69,24 @@ export function numberFromPg(value) {
   return Number.isFinite(n) ? n : value;
 }
 
+// BIGINT is OID 20 in PostgreSQL (every SQLite `INTEGER` column is mirrored as BIGINT).
+export const PG_BIGINT_OID = 20;
+
+// `pg` hands int8 back as a string, `node:sqlite` hands INTEGER back as a number. Every consumer
+// in this app was written against the SQLite semantics, so a row read from PostgreSQL used to
+// carry `post_id: "900001"`, `offline: "0"`, `community_id: "0"`, `price_num: "25000"` ... and
+// the decorated card (or any `===` comparison, object key or arithmetic over it) differed between
+// drivers. /api/state page parity surfaced it: v3/test/listing-stats-parity.test.js.
+// Parsing int8 back to a number gives both drivers one semantics. Safe here: ids are ~1e9 and
+// epoch milliseconds ~1.7e12, far below Number.MAX_SAFE_INTEGER (9.007e15). NUMERIC/DECIMAL
+// columns (OID 1700) stay strings - the schema mirror maps SQLite REAL to DOUBLE PRECISION, so it
+// has none, and a future one would need its own decision.
+export function applySqliteNumberSemantics(pg) {
+  if (!pg?.types?.setTypeParser) return false;
+  pg.types.setTypeParser(PG_BIGINT_OID, (value) => (value == null ? null : Number(value)));
+  return true;
+}
+
 export async function loadPgModule() {
   try {
     return await import("pg");
@@ -84,6 +102,9 @@ export async function createPostgresDriver({
   importPg = loadPgModule,
 } = {}) {
   const pg = await importPg();
+  // One numeric semantics for both drivers (BIGINT as a number, like node:sqlite); see
+  // applySqliteNumberSemantics() for why the SQLite semantics is the one that has to win.
+  applySqliteNumberSemantics(pg);
   const resolved = resolvePostgresConfig(env);
   const options = { ...resolved.options, ...poolOptions };
   const target = String(connectionString || resolved.connectionString || "").trim();

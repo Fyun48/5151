@@ -3631,12 +3631,17 @@ app.get("/api/state", async (req, res) => {
   let listings = [];
   let events = [];
   try {
-    listingStats = stats(undefined, uid);
+    // The initial payload has to come from the same place the list does. GET /api/listings uses
+    // searchListingsAsync() + listingStatsAsync(); this endpoint uses them too, so "first paint"
+    // and "refresh" cannot disagree. With DB_DRIVER=sqlite both are the pre-existing SQLite
+    // chain (awaited), so today's production response is unchanged.
+    listingStats = await listingStatsAsync({ userId: uid });
     confirmExpiredOfflineFromSettings();
-    const listed = listListings({
+    const listed = await searchListingsAsync({
       filter: "all",
       sort: "newest",
       limit: 500,
+      offset: 0,
       userId: uid,
       matchVoteUserId: uid,
     });
