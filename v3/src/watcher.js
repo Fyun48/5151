@@ -50,7 +50,6 @@ import {
   setListingMatch,
   reconcileListingById,
   touchListingChecked,
-  upsertListing,
   updateListingsGeoByAddress,
   getCachedGeo,
   setCachedGeo,
@@ -59,6 +58,7 @@ import {
   invalidateListingLocation,
   getRakuyaPageCursors,
   saveRakuyaPageCursors,
+  persistListing,
   sendUserWebPush,
   pushPayloadFromEvents,
 } from "./db.js";
@@ -764,7 +764,7 @@ export async function runWatch(options = {}) {
       const existing = listingForWatch(listing.post_id);
       const { type, detail, prev, level, cost_change_type } = classify(listing, existing);
       const stamp = nowIso();
-      upsertListing({
+      await persistListing({
         ...listing,
         search_key: batch.searchUrl,
         first_seen_at: existing?.first_seen_at || stamp,
@@ -1119,7 +1119,7 @@ export async function backfillIncompleteAddresses({ limit = 8 } = {}) {
         if (!object) continue;
         const next = enrichDdListingFromObject(current, object);
         if (next.address !== current.address || next.floor_name !== current.floor_name || next.lat !== current.lat) {
-          upsertListing({ ...next, last_seen_at: current.last_seen_at || nowIso() });
+          await persistListing({ ...next, last_seen_at: current.last_seen_at || nowIso() });
           updated += 1;
           if (next.lat != null && next.lng != null) located += 1;
         }
@@ -1142,7 +1142,7 @@ export async function backfillIncompleteAddresses({ limit = 8 } = {}) {
           lng: detail.lng ?? current.lng,
         };
         if (next.address !== current.address || next.floor_name !== current.floor_name || next.lat !== current.lat) {
-          upsertListing({ ...next, last_seen_at: current.last_seen_at || nowIso() });
+          await persistListing({ ...next, last_seen_at: current.last_seen_at || nowIso() });
           updated += 1;
           if (next.lat != null && next.lng != null) located += 1;
         }

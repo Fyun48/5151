@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const srcUrl = (name) => pathToFileURL(path.join(dir, "../src", name)).href;
 
-const { db, getSettings, listingSearchBuildContext, upsertListing } = await import(srcUrl("db.js"));
+const { db, getSettings, listingSearchBuildContext, persistListing, upsertListing } = await import(srcUrl("db.js"));
 const { createListingsRepository } = await import(srcUrl("repository/listings.js"));
 const { ensureListingSearchProjection } = await import(srcUrl("listingSearchProjection.js"));
 const { ensureListingPrepSchema } = await import(srcUrl("listingEnrichQueue.js"));
@@ -150,6 +150,23 @@ const revisionOf = (postId) => {
 assert.deepEqual(revisionOf(adapterPayload.post_id), revisionOf(payload.post_id), "change-log rows must match");
 assert.equal(revisionOf(payload.post_id).event_type, "listing_added");
 
+// 5. The wiring facade: in sqlite mode persistListing() must behave exactly like the production
+// upsertListing() - that is what keeps the default deployment untouched.
+const facadePayload = { ...payload, post_id: 592003, source_id: "9913", url: "https://rent.591.com.tw/9913" };
+assert.deepEqual(await persistListing(facadePayload, { driver: "sqlite" }), { driver: "sqlite", changeEvent: null });
+const viaFacade = pick(db.prepare("SELECT * FROM listings WHERE post_id = ?").get(facadePayload.post_id));
+assert.deepEqual(viaFacade, viaProduction, "facade (sqlite): row must match production");
+assert.deepEqual(
+  projectionOf(facadePayload.post_id),
+  projectionOf(payload.post_id),
+  "facade (sqlite): projection must match production",
+);
+assert.deepEqual(
+  { ...revisionOf(facadePayload.post_id) },
+  { ...revisionOf(payload.post_id) },
+  "facade (sqlite): change-log must match production",
+);
+
 // 5. PostgreSQL: create the same tables there (DDL derived from the SQLite schema, no rows), write
 // through the adapter and then prove the loop closes - the freshly written listing must show up in
 // the PostgreSQL list query the app would run.
@@ -167,14 +184,10 @@ if (process.env.PG_TEST_URL) {
     ensureListingPrepSchema(db);
     await ensurePgSchema(pgDriver, db, { schema, indexes: false });
     const pgWriter = createWritePath({ driver: "postgres", pgDriver });
-    await pgWriter.upsertListingRow(adapterPayload);
-    await pgWriter.backfillListing(adapterPayload, null);
-    await pgWriter.syncProjection(adapterPayload);
-    await pgWriter.bumpRevision({
-      entityType: "listing",
-      entityId: adapterPayload.post_id,
-      eventType: "listing_added",
-    });
+    const facadeResult = await persistListing(adapterPayload, { driver: "postgres", pgDriver });
+    assert.equal(facadeResult.driver, "postgres");
+    assert.equal(facadeResult.changeEvent, "listing_added");
+    assert.ok(pgWriter, "adapter remains available for the row-level checks");
 
     const row = (await pgDriver.query("SELECT * FROM listings WHERE post_id = $1", [adapterPayload.post_id])).rows[0];
     assert.ok(row, "expected the row in PostgreSQL");

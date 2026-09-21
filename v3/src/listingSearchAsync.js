@@ -32,15 +32,8 @@ import { resolveDbDriver } from "./dbDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { createListingsRepository } from "./repository/listings.js";
 
-// One pool for the process: the list path must not open a new pool per request.
-let sharedPgDriver = null;
-async function resolveSharedPgDriver() {
-  if (!sharedPgDriver) {
-    const { createPostgresDriver } = await import("./dbDriverPostgres.js");
-    sharedPgDriver = await createPostgresDriver({});
-  }
-  return sharedPgDriver;
-}
+// One pool for the process, shared with the write path (see pgSharedDriver.js).
+import { sharedPgDriver } from "./pgSharedDriver.js";
 
 // The pre-existing chain, unchanged and shared by both drivers as the fallback.
 export function searchListingsSqlite(args = {}) {
@@ -74,7 +67,7 @@ export async function searchListingsAsync(args = {}, options = {}) {
   if (driver !== "postgres") return searchListingsSqlite(args);
 
   try {
-    const pgDriver = options.pgDriver || (await resolveSharedPgDriver());
+    const pgDriver = options.pgDriver || (await sharedPgDriver());
     const repository = options.repository || createListingsRepository({
       driver: "postgres",
       pgDriver,

@@ -57,8 +57,14 @@
      PG 端只經 `sqlDialect` 轉換。驗證：`v3/test/write-path-parity.test.js` 在 SQLite 與
      **真實 shadow PG** 上跑同一段 payload，讀回（用 `decorationData.js` 的同一組 loaders）必須完全相同
      —— **2/2 通過**；開發中還抓到 `Number(null) === 0` 會把 `min_km` 寫成 0 的真 bug（會讓通勤排序算錯）。
-   - **尚未做**：`enqueueSimilaritySafe`（pHash／相似度佇列，仍 SQLite 形態）、`listing_prep`
-     與其餘 domain 的寫入，以及「`DB_DRIVER=postgres` 時寫入真的走 PG」的接線。
+   - **第四批（2026-09-21）：接線完成** —— `db.js` 匯出 `persistListing()`，依 `DB_DRIVER` 分派：
+     `sqlite` 走原本的 `upsertListing()`（同步、行為不變），`postgres` 走 writePath 的完整序列
+     （列 upsert → backfill → projection → change-log，事件型別比照 production 的
+     `listing_added`／`listing_updated`）。`watcher.js` 的**三個寫入呼叫點**都改走它，且共用 PG pool
+     抽到 `pgSharedDriver.js`（讀取與寫入共用同一個 pool）。驗證：SQLite 模式下 facade 與 production
+     產生的列／投影／change-log 完全相同（**預設部署不受影響**）；PG 模式下走 facade 也能被列表查詢找到。
+   - **尚未做（PG 模式）**：`enqueueSimilaritySafe`（pHash／相似度佇列）與 `listing_prep`、其餘 domain
+     的寫入 —— 這些在 `DB_DRIVER=postgres` 時目前不會執行，屬已知落差。
    - **第三批（2026-09-21）**：`upsertListing` 的後續步驟也移植了 —— `backfillListing()`（source／
      source_id、kit 欄位、content_seq、geo_source）、`syncProjection()`（`listing_search_projection`，
      用 `computeListingProjection` 同一組純函式）、`bumpRevision()`（`data_revision` change-log）。
