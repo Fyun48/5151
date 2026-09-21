@@ -1,0 +1,173 @@
+// Batched PostgreSQL import (cutover tooling).
+//
+// pgSchema.importTable used to send one INSERT per row, which is what made the cutover import of
+// ~108k listings take so long. It now sends one multi-row INSERT per `rowsPerStatement()` rows
+// (bounded by PostgreSQL's 65535 bind-parameter limit). These tests pin the statement shape and
+// the chunking without a server, and - when PG_TEST_URL is set - assert that both paths write the
+// same rows on the real shadow cluster.
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
+import {
+  PG_MAX_BIND_PARAMS,
+  ensurePgSchema,
+  importTable,
+  multiRowInsertSql,
+  readTableChunks,
+  rowsPerStatement,
+} from "../src/pgSchema.js";
+import { createPostgresDriver } from "../src/dbDriverPostgres.js";
+
+const PG_TEST_URL = (process.env.PG_TEST_URL || "").trim();
+const skip = PG_TEST_URL ? false : "PG_TEST_URL is not set (live PostgreSQL import parity)";
+
+// A SQLite stand-in for importTable's reads: PRAGMA table_info, then rowid-keyset chunks (the
+// importer streams, so the fake has to page like the real handle does).
+function fakeSqliteDb(columns, rows, { chunk = 1000 } = {}) {
+  return {
+    prepare(sql) {
+      return {
+        all: (...args) => {
+          if (sql.startsWith("PRAGMA")) return columns.map((name) => ({ name, type: "INTEGER" }));
+          const start = args[0] == null ? 0 : Number(args[0]);
+          return rows.slice(start, start + chunk).map((row, i) => ({ __rowid: start + i + 1, ...row }));
+        },
+      };
+    },
+  };
+}
+
+function fakePgDriver(statements) {
+  return {
+    async query(sql, params = []) {
+      statements.push({ kind: "query", sql, params });
+    },
+    async withTransaction(fn) {
+      return fn({
+        async query(sql, params = []) {
+          statements.push({ kind: "tx", sql, params });
+        },
+      });
+    },
+  };
+}
+
+test("rowsPerStatement respects the bind-parameter limit and the batch size", () => {
+  assert.equal(rowsPerStatement(10, 500), 500);
+  // 200 columns: floor(65000 / 200) = 325 rows per statement, below the requested 500.
+  assert.equal(rowsPerStatement(200, 500), 325);
+  assert.equal(rowsPerStatement(4, 2), 2);
+  assert.equal(rowsPerStatement(0, 10), 10);
+  assert.ok(rowsPerStatement(300, 500) * 300 <= PG_MAX_BIND_PARAMS);
+});
+
+test("multiRowInsertSql numbers the placeholders across rows", () => {
+  const sql = multiRowInsertSql("listings", ["id", "title"], 2, { schema: "imp" });
+  assert.match(sql, /^INSERT INTO imp\.listings \(id, title\)\nVALUES \(\$1, \$2\), \(\$3, \$4\)\nON CONFLICT DO NOTHING$/);
+});
+
+test("readTableChunks streams rowid-ordered chunks without holding the table", () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec("CREATE TABLE listings (post_id INTEGER PRIMARY KEY, title TEXT)");
+  for (let i = 1; i <= 5; i += 1) db.prepare("INSERT INTO listings VALUES (?, ?)").run(i * 10, `t${i}`);
+  const reader = readTableChunks(db, "listings", { chunkRows: 2 });
+  assert.deepEqual(reader.columns, ["post_id", "title"]);
+  const chunks = [];
+  for (;;) {
+    const rows = reader.next();
+    if (!rows.length) break;
+    chunks.push(rows.map((row) => row.post_id));
+  }
+  // The live listings table is ~108k wide rows: reading it in bounded chunks is what keeps the
+  // cutover import from holding the whole store in memory.
+  assert.deepEqual(chunks, [[10, 20], [30, 40], [50]]);
+  db.close();
+});
+
+test("the multi-row path sends one statement per chunk and flattens the params", async () => {
+  const columns = ["id", "title"];
+  const rows = Array.from({ length: 5 }, (_, i) => ({ id: i + 1, title: `t${i + 1}` }));
+  const statements = [];
+  const copied = await importTable(fakePgDriver(statements), fakeSqliteDb(columns, rows), "listings", {
+    schema: "imp",
+    batchSize: 2,
+  });
+  assert.equal(copied, 5);
+  assert.deepEqual(statements.map((entry) => entry.kind), ["query", "query", "query"]);
+  assert.deepEqual(statements[0].params, [1, "t1", 2, "t2"]);
+  assert.deepEqual(statements[2].params, [5, "t5"]);
+  // ON CONFLICT DO NOTHING keeps a resume/retry idempotent.
+  for (const entry of statements) assert.match(entry.sql, /ON CONFLICT DO NOTHING$/);
+});
+
+test("multiRow:false keeps the legacy per-row path (batch transaction)", async () => {
+  const columns = ["id", "title"];
+  const rows = Array.from({ length: 3 }, (_, i) => ({ id: i + 1, title: `t${i + 1}` }));
+  const statements = [];
+  const copied = await importTable(fakePgDriver(statements), fakeSqliteDb(columns, rows), "listings", {
+    schema: "imp",
+    batchSize: 2,
+    multiRow: false,
+  });
+  assert.equal(copied, 3);
+  assert.deepEqual(statements.map((entry) => entry.kind), ["tx", "tx", "tx"]);
+  assert.deepEqual(statements[0].params, [1, "t1"]);
+  assert.match(statements[0].sql, /INSERT INTO imp\.listings \(id, title\) VALUES \(\$1, \$2\)/);
+});
+
+function fixtureDb(rows) {
+  const db = new DatabaseSync(":memory:");
+  db.exec("CREATE TABLE listings (post_id INTEGER PRIMARY KEY, title TEXT, price_num INTEGER)");
+  const statement = db.prepare("INSERT INTO listings (post_id, title, price_num) VALUES (?, ?, ?)");
+  for (const row of rows) statement.run(row.post_id, row.title, row.price_num);
+  return db;
+}
+
+test("live PostgreSQL: both import paths write the same rows", { skip }, async (t) => {
+  const rows = Array.from({ length: 120 }, (_, i) => ({
+    post_id: 950000 + i,
+    title: `進口測試 ${i}`,
+    price_num: 10000 + i,
+  }));
+  const sqliteDb = fixtureDb(rows);
+  const schemaFor = (suffix) => `pgimport_${suffix}_${Date.now().toString(36)}_${Math.floor(Math.random() * 10000)}`;
+  const fast = schemaFor("fast");
+  const slow = schemaFor("slow");
+  const driver = await createPostgresDriver({
+    connectionString: PG_TEST_URL,
+    poolOptions: { max: 2, application_name: "5151-import-test" },
+  });
+  const dump = async (schema) => (await driver.query(
+    `SELECT post_id, title, price_num FROM "${schema}".listings ORDER BY post_id`,
+  )).rows;
+  try {
+    await t.test("multi-row import (and a rerun stays idempotent)", async () => {
+      await ensurePgSchema(driver, sqliteDb, { schema: fast, tables: ["listings"], indexes: false });
+      const copied = await importTable(driver, sqliteDb, "listings", { schema: fast, batchSize: 50 });
+      assert.equal(copied, rows.length);
+      // Rerun proves the ON CONFLICT path: no duplicates, no error.
+      assert.equal(await importTable(driver, sqliteDb, "listings", { schema: fast, batchSize: 50 }), rows.length);
+      const imported = await dump(fast);
+      assert.equal(imported.length, rows.length);
+      assert.equal(imported[0].post_id, 950000);
+    });
+
+    await t.test("per-row import writes the same content", async () => {
+      await ensurePgSchema(driver, sqliteDb, { schema: slow, tables: ["listings"], indexes: false });
+      const copied = await importTable(driver, sqliteDb, "listings", {
+        schema: slow,
+        batchSize: 50,
+        multiRow: false,
+      });
+      assert.equal(copied, rows.length);
+      assert.deepEqual(await dump(slow), await dump(fast));
+    });
+  } finally {
+    await driver.exec(`DROP SCHEMA IF EXISTS "${fast}" CASCADE`);
+    await driver.exec(`DROP SCHEMA IF EXISTS "${slow}" CASCADE`);
+    await driver.close();
+    sqliteDb.close();
+  }
+});
+
+

@@ -1,0 +1,97 @@
+# v3 切到 PostgreSQL：bootstrap 與切換 runbook
+
+> 適用：`v3/POSTGRES_SWITCH_PLAN.md` §4 的「Production 切換步驟」。**這份是切換當天照著做的清單**，
+> 每個指令都在 shadow 上跑過（證據見 `v3/evidence/pg-import-20260921/`、
+> `v3/evidence/listing-stats-pg-20260921/`、`v3/evidence/pg-explain-20260921/`）。
+> 尚未切換：`DB_DRIVER` 預設仍是 `sqlite`，公開站目前完全不受影響。
+
+## 0. 前置條件（先確認，否則不要開始）
+
+- [ ] `POSTGRES_SWITCH_PLAN.md` §2 的阻塞項都已關閉：裝飾管線（完成）、寫入分流（§2.3）、
+      **爬蟲／enrich／通知管線的讀取**（`watcher.js` 的同步 SQLite 讀；必須與寫入同批上線）。
+- [ ] shadow 叢集健康：`sh deploy/shadow-ha/drill.sh preflight`（primary/standby 角色、複寫延遲）。
+- [ ] 目標 PG 由 **完整初始化過的 store** 鏡射：app 只會 ensure SQLite 的 schema，PG 端的
+      `data_revision` 之類的表是「第一次用到才建立」，空的暫存 DB 會漏掉它們。
+- [ ] Owner 決定 **寫入凍結** 的方式與時間窗（見步驟 1）。
+- [ ] 切換用的 image digest 已備妥（`Build production image (no deploy)` 的產出）。
+
+## 1. 凍結寫入
+
+切換期間必須停止所有寫入 PG/SQLite 的行程，否則匯入完的資料會在切換瞬間落後。
+
+- shadow 上爬蟲是獨立容器（`5151-crawler`），可以直接停。
+- 正式站在同一台 CasaOS 的 `591-tracker-v3` 內含 web 與爬蟲 → **要短暫停站，或先把爬蟲停掉**
+  （實際做法由 Owner 決定；停站期間公開站會 502）。
+- 匯入工具是 `ON CONFLICT DO NOTHING` 且可重跑，所以「凍結 → 匯入 → 發現漏東西 → 再匯入」
+  是安全的。
+
+## 2. 快照 ＋ 匯入（工具都在 repo 內）
+
+```bash
+# 快照（VACUUM INTO，含 WAL 的資料）＋ 匯入，逐表印 rows/ms
+IMPORT_DB=5151_import_test sh deploy/shadow-ha/pg-import-run.sh
+
+# 想先看計畫、不寫任何東西
+DRY_RUN=1 sh deploy/shadow-ha/pg-import-run.sh
+
+# 只匯某幾張表 / 先跳過大表的資料（只建 schema）
+TABLES=listings,user_listing_flags sh deploy/shadow-ha/pg-import-run.sh
+SKIP_ROWS=route_cache,mrt_cache sh deploy/shadow-ha/pg-import-run.sh
+```
+
+- 工具：`v3/scripts/pg-import.mjs`（`v3/src/pgSchema.js` 的批次＋串流匯入）；實測 `listings`
+  108,539 列 **60.3 s**（multi-row；逐列模式見 evidence）。
+- 匯入只建**表與 primary key**（`indexes: false`），索引在下一步建。
+- 中斷可以直接重跑（不重複、不報錯）。
+
+## 3. 建索引（**不可跳過**）
+
+```bash
+sh deploy/shadow-ha/pg-indexes.sh 5151_import_test
+```
+
+沒有索引時 hot path 是 20,324 筆的 seq scan；建完後 newest／price_asc／price_desc 都是
+`Index Scan using idx_proj_district`，count/page 各 6.9–8.0 ms、**0 個 Seq Scan**
+（`v3/evidence/pg-explain-20260921/`）。
+
+## 4. 驗證
+
+```bash
+# 匯入前後的列數／內容
+docker exec <pg> psql -U postgres -d 5151_import_test -c "SELECT count(*) FROM listings"
+
+# 兩邊同時比對（SQLite 快照 vs PG）
+node v3/scripts/pg-import.mjs        # DRY_RUN=1 會印出每張表的列數，可直接對照
+
+# driver／搜尋／統計的 parity（測試自建自刪 schema，不碰正式表）
+PG_TEST_URL=... PG_TEST_STANDBY_URL=... node --test \
+  v3/test/pg-live-integration.test.js v3/test/listing-stats-parity.test.js \
+  v3/test/listing-detail-parity.test.js v3/test/write-path-parity.test.js
+```
+
+## 5. 先切 web-A 驗證，再切正式站
+
+1. `5151-web-A`（CasaOS）換環境：`DB_DRIVER=postgres`、`PG_URL=postgres://…@<haproxy>:25433/<db>`
+   （`pg-rw` frontend → 當下的 primary）。
+2. 用 shadow hostname 走一輪：`/api/state`（初始載入）、`/api/listings`（排序／分頁／cursor）、
+   詳情頁、`/go`、`/api/listings/:id/history`。
+3. 通過後才切正式站：`Deploy v3 to CasaOS (manual)`（image digest ＋ 上述兩個環境變數）。
+4. 觀察：`/api/health`、`/api/listings` 的 `Server-Timing`（`list`／`stats` 兩段）、
+   `pg_stat_activity`（連線來源）、`pg_stat_replication`（standby 是否跟上）。
+
+## 6. 回復（rollback）
+
+```bash
+# 1) DB_DRIVER 改回 sqlite（compose env），用 deploy-v3.yml 回前一版 image digest
+# 2) SQLite 檔在切換期間保持原樣 → 資料不會消失
+```
+
+- **回復不會自動回寫**：切換期間寫進 PG 的新資料必須人工評估（先 `pg_dump` 該時間窗，再決定怎麼補）。
+- 因此凍結視窗越短越好，這也是本輪把匯入從「逐列」改成「批次＋串流」的原因。
+
+## 7. 之後（HA）
+
+兩個 web 節點（`5151-web-A`、`5151-web-B`）都改讀同一套 PG 之後，才能把 Cloudflare Tunnel 的
+ingress 指到 `5151-haproxy` 的 `web` frontend（`POSTGRES_SWITCH_PLAN.md` §5）。SQLite 不能跨主機共用，
+在那之前切 HAProxy 只會服務到空的 shadow 資料庫。
+
