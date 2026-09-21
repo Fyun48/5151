@@ -46,13 +46,22 @@
      純裝飾路徑；再把 `searchListingsAsync` 的 `decoration: "pending"` 拿掉。
 2. **其餘 domain**：settings / flags / routeCache / users 已有 repository 示範；
    `demand`、`feedback`、`crm`、`geo`、`jobs`、`listing_prep`… 仍在 SQLite 形狀。
-3. **寫入分流**：目前只有 listings 搜尋有 PG 路徑；爬蟲入庫、會員標記、通知、許願房等寫入仍打 SQLite。
+3. **寫入分流（切換的真正阻塞項）**：目前只有 listings 搜尋有 PG 路徑；爬蟲入庫、會員標記（`user_listing_flags`）、
+   通知、許願房等寫入仍全部打 SQLite。**一旦讀取改走 PG，寫入還在 SQLite，兩邊就會分叉**，所以這是 cutover 前
+   必須先處理的一項（順序上比通勤／fit 排序重要）。
+   - 做法：先把寫入路徑逐一抽成 repository（upsertListing / flags / route_cache / route_jobs / listing_prep…），
+     再讓 `DB_DRIVER=postgres` 時寫入也走 PG；每一項都要有「同一份 payload 在兩個 driver 寫入後讀回相同」的測試。
 4. ~~**PG 端 EXPLAIN regression evidence**~~ → **已有第一版（2026-09-21）**：`v3/evidence/pg-explain-20260921/`
    （真實資料 108,539 筆）。結論：newest／price_asc／price_desc 走 PG SQL-first；建 hot-path 索引後
    count/page 各 7–8 ms、**0 個 Seq Scan**（索引前是 20,324 筆的 seq scan、12–19 ms）。
-   **commute／fit 排序仍在 envelope 外**（回退 SQLite，Slice 3 待補）。
+   **commute／fit 排序仍在 envelope 外**（回退 SQLite；切換後仍可用，屬**優化**而非阻塞項）。
    尚未做：commute／fit 的 EXPLAIN、六種排序的 cursor evidence、正式機絕對延遲（cutover 後用
    `/api/listings` 的 `Server-Timing` 實測）。
+5. **（優化，非阻塞）commute／fit 排序走 PG**：可移植，但要小心兩件事 —— (a) `route_cache` 的 key 是
+   SQLite 端用 `ROUND(lat*1e5)/1e5 || ',' || …` 拼出來的（v2 格式），要驗證 PostgreSQL 的 float→text
+   輸出與 `makeRouteKey()` 的 JS 格式化一致；(b) 那個 `geo_source='geocode'` 的 guard 需要多一個查詢，
+   所以 `repository.searchPage()` 要能回報「需要退回 Node 路徑」。實作後用既有的 live parity 測試
+   （id 集合／順序必須一致）把關。
 5. **遷移工具效率**：`pgSchema.importTable` 是逐列 INSERT，108k listings 會跑很久；
    正式切換要用 `COPY` 或分批 commit 的版本，並決定 cutover 的**寫入凍結視窗**。
 
