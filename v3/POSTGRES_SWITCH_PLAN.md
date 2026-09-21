@@ -57,8 +57,17 @@
      PG 端只經 `sqlDialect` 轉換。驗證：`v3/test/write-path-parity.test.js` 在 SQLite 與
      **真實 shadow PG** 上跑同一段 payload，讀回（用 `decorationData.js` 的同一組 loaders）必須完全相同
      —— **2/2 通過**；開發中還抓到 `Number(null) === 0` 會把 `min_km` 寫成 0 的真 bug（會讓通勤排序算錯）。
-   - **尚未做**：`upsertListing`（爬蟲入庫最大一筆，含 projection 同步與 revision bump）、`listing_prep`、
-     其餘 domain 的寫入，以及「`DB_DRIVER=postgres` 時寫入真的走 PG」的接線。
+   - **尚未做**：`upsertListing` 的 DB 端後續步驟（source/source_id 補寫、kit 欄位、projection 同步、
+     revision bump）、`listing_prep`、其餘 domain 的寫入，以及「`DB_DRIVER=postgres` 時寫入真的走 PG」的接線。
+   - **第二批（2026-09-21）**：`writePath.upsertListingRow()` —— 爬蟲主寫入的 `listings` 列 upsert
+     （含寫入前的既有列預讀，供 `preferListingAddress`／`sanitizeFloorName` 回退用）。
+     驗證方式是把 production 實際送出的 SQL／參數**攔截下來當基準**：adapter 的 SQL 必須與它
+     （去空白後）完全相同、參數逐項相同，且兩條路徑寫出的列**35 個欄位完全相同** —— SQLite 與
+     **真實 shadow PG** 都通過。
+   - **因此抓到的真 blocker**：`pgSchema` 從 SQLite 推導 DDL 時原本**不帶 DEFAULT**，缺欄位的 INSERT
+     在 PG 會撞 `NOT NULL`（爬蟲大量依賴欄位預設值）。已修：現在會帶數字／字串／`CURRENT_*` 的
+     default（無法翻譯的運算式仍會略過，需人工檢查）。**cutover 前必須確認 PG schema 與 SQLite 的
+     default 一致**，否則寫入會在 runtime 失敗。
 4. ~~**PG 端 EXPLAIN regression evidence**~~ → **已有第一版（2026-09-21）**：`v3/evidence/pg-explain-20260921/`
    （真實資料 108,539 筆）。結論：newest／price_asc／price_desc 走 PG SQL-first；建 hot-path 索引後
    count/page 各 7–8 ms、**0 個 Seq Scan**（索引前是 20,324 筆的 seq scan、12–19 ms）。
@@ -95,6 +104,8 @@ sh ~/shadow-ha-tools/5151-pg-import-run.sh        # 在 CasaOS 跑；產出 5151
 1. 先完成 §2.1–§2.4（裝飾管線、其餘 domain、寫入分流、EXPLAIN evidence）。
    - 同時**建立 PG 索引**：`sh deploy/shadow-ha/pg-indexes.sh <database>`（匯入只建表與 primary key；
      沒索引時每次查詢都是 20,324 筆的 seq scan）。
+   - 同時**確認 PG schema 的 DEFAULT 與 SQLite 一致**：`pgSchema` 已會帶入可翻譯的 default，
+     但函式／運算式型 default 仍會略過 —— 缺 default 會讓爬蟲的 INSERT 在 runtime 撞 `NOT NULL`。
 2. 低流量時段 **freeze 寫入**（暫停爬蟲排程），跑最後一次增量匯入。
 3. 先給 **web-A** 換上新設定（`DB_DRIVER=postgres`、PG 連 `pg-rw`），用 shadow hostname 驗證；
    通過後再切 **591-tracker-v3**（正式站）。
