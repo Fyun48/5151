@@ -21,12 +21,19 @@
    `overlayRowsPersonal` / `loadFlagMap` / same-house peers / per-user commute 仍走 SQLite 形狀。
    現在 `DB_DRIVER=postgres` 時 `searchListingsAsync` **預設仍回 SQLite 鏈**，只有明確設
    `PG_LISTINGS_UNDECORATED=1` 才會回 PG 的未裝飾資料（刻意避免「半裝飾」上線）。
-   - **進度（2026-09-21，Slice 1 完成）**：`v3/src/repository/decorationData.js` 把六個 SQLite 綁定的
-     資料載入（personal flags／anyone flags／個人同屋源索引／group id／同屋源 peers／`listing_prep`）
-     改成 driver-agnostic：同一份 SQL 文字在兩個 driver 上跑，並在載入層把 PG 的 BIGINT 字串正規化
-     （否則 `display_ready` 之類會以 `"1"` 漏進回應）。`v3/test/decoration-data.test.js` 在
-     SQLite fixture 與**真實 shadow PostgreSQL** 上比對同一組值（兩邊皆 3/3）。
-     過程中抓到 2 個真差異：同一個 id 清單出現兩次時的 `$n` 編號、以及 PG 的 int8→string。
+   - **進度（2026-09-21，Slice 1＋2a 完成）**：`v3/src/repository/decorationData.js` 已覆蓋**整條列表裝飾
+     會用到的資料面**（10 張表、13 個載入器）：`user_listing_flags`（個人／任何人）、
+     `user_same_house_members`（索引＋`system_agrees`）、`listing_group_members`、`listing_prep`、
+     `listings`（同屋源 peers ＋ 卡片 extras）、`user_match_votes`（split 票）、`route_cache`、
+     `mrt_cache`、`route_jobs`。同一份 SQL 文字跑兩個 driver，並在載入層把 PG 的 BIGINT 字串正規化
+     （否則 `display_ready` 之類會以 `"1"` 漏進回應）；`createDecorationDataLoader()` 提供 promise 記憶化
+     （並發共用一次查詢、失敗不快取）。`v3/test/decoration-data.test.js` 在 SQLite fixture 與
+     **真實 shadow PostgreSQL** 上比對同一組值（兩邊皆 3/3）。過程中抓到 2 個真差異：
+     同一個 id 清單出現兩次時的 `$n` 編號、以及 PG 的 int8→string。
+   - **下一步（Slice 2b）**：provider 抽象 —— 讓 `db.js` 的 `decorateListingLite`／`attachListingPeers`／
+     `attachSameHouseRoles`／`housepriceNotDisplayReady`／`getCachedRoute`／`getCachedMrt`／`getRouteJob`／
+     `loadUserSplitPairSet` 改走一個**同步 getter provider**（SQLite 預設＝今天的實作；PG＝Slice 1 的
+     maps 預載後同步取用），兩個 driver 共用同一條純裝飾路徑，再拿掉 `decoration: "pending"`。
    - **下一步（Slice 2）**：讓 `db.js` 的 `decorateListingLite` / `attachListingPeers` /
      `housepriceNotDisplayReady` 接受「預先載入的裝飾資料」（context），SQLite 與 PG 共用同一條
      純裝飾路徑；再把 `searchListingsAsync` 的 `decoration: "pending"` 拿掉。
