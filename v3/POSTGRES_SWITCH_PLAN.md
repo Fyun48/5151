@@ -47,7 +47,12 @@
 2. **其餘 domain**：settings / flags / routeCache / users 已有 repository 示範；
    `demand`、`feedback`、`crm`、`geo`、`jobs`、`listing_prep`… 仍在 SQLite 形狀。
 3. **寫入分流**：目前只有 listings 搜尋有 PG 路徑；爬蟲入庫、會員標記、通知、許願房等寫入仍打 SQLite。
-4. **PG 端 EXPLAIN regression evidence**（目前 baseline 只有 SQLite）。
+4. ~~**PG 端 EXPLAIN regression evidence**~~ → **已有第一版（2026-09-21）**：`v3/evidence/pg-explain-20260921/`
+   （真實資料 108,539 筆）。結論：newest／price_asc／price_desc 走 PG SQL-first；建 hot-path 索引後
+   count/page 各 7–8 ms、**0 個 Seq Scan**（索引前是 20,324 筆的 seq scan、12–19 ms）。
+   **commute／fit 排序仍在 envelope 外**（回退 SQLite，Slice 3 待補）。
+   尚未做：commute／fit 的 EXPLAIN、六種排序的 cursor evidence、正式機絕對延遲（cutover 後用
+   `/api/listings` 的 `Server-Timing` 實測）。
 5. **遷移工具效率**：`pgSchema.importTable` 是逐列 INSERT，108k listings 會跑很久；
    正式切換要用 `COPY` 或分批 commit 的版本，並決定 cutover 的**寫入凍結視窗**。
 
@@ -71,6 +76,8 @@ sh ~/shadow-ha-tools/5151-pg-import-run.sh        # 在 CasaOS 跑；產出 5151
 ## 4. Production 切換步驟（草案；需要 Owner 指定窗口）
 
 1. 先完成 §2.1–§2.4（裝飾管線、其餘 domain、寫入分流、EXPLAIN evidence）。
+   - 同時**建立 PG 索引**：`sh deploy/shadow-ha/pg-indexes.sh <database>`（匯入只建表與 primary key；
+     沒索引時每次查詢都是 20,324 筆的 seq scan）。
 2. 低流量時段 **freeze 寫入**（暫停爬蟲排程），跑最後一次增量匯入。
 3. 先給 **web-A** 換上新設定（`DB_DRIVER=postgres`、PG 連 `pg-rw`），用 shadow hostname 驗證；
    通過後再切 **591-tracker-v3**（正式站）。

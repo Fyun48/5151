@@ -90,7 +90,7 @@ for (const sort of SORTS) {
     const res = await pgDriver.query(`EXPLAIN (ANALYZE, BUFFERS) ${statement.sql}`, statement.params);
     const lines = res.rows.map((row) => row["QUERY PLAN"]);
     plans.push({
-      plan: lines.filter((line) => !/^(Planning|Execution) Time/.test(line)).slice(0, 8).join("\n"),
+      plan: lines.filter((line) => !/^(Planning|Execution) Time/.test(line)).slice(0, 16).join("\n"),
       planning: lines.find((line) => line.startsWith("Planning Time")) || "",
       execution: lines.find((line) => line.startsWith("Execution Time")) || "",
       seqScanListings: lines.some((line) => /Seq Scan on listings/.test(line)),

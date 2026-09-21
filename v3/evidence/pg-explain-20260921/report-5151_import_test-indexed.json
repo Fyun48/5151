@@ -1,0 +1,86 @@
+{
+  "district": "士林區",
+  "sorts": [
+    {
+      "sort": "newest",
+      "envelope": "sql-first",
+      "matched": 182,
+      "pageIds": 50,
+      "searchPageMs": 122,
+      "statements": 2,
+      "plans": [
+        {
+          "plan": "Aggregate  (cost=15783.54..15783.55 rows=1 width=8) (actual time=7.838..7.842 rows=1 loops=1)\n  Buffers: shared hit=4518\n  ->  Nested Loop Semi Join  (cost=10.57..15783.54 rows=1 width=0) (actual time=0.197..7.805 rows=182 loops=1)\n        Buffers: shared hit=4518\n        ->  Bitmap Heap Scan on listing_search_projection p  (cost=8.79..532.07 rows=581 width=8) (actual time=0.131..0.712 rows=581 loops=1)\n              Recheck Cond: (district = '士林區'::text)\n              Heap Blocks: exact=288\n              Buffers: shared hit=291\n              ->  Bitmap Index Scan on idx_proj_district  (cost=0.00..8.64 rows=581 width=0) (actual time=0.080..0.080 rows=581 loops=1)\n                    Index Cond: (district = '士林區'::text)\n                    Buffers: shared hit=3\n        ->  Nested Loop Anti Join  (cost=1.78..26.24 rows=1 width=16) (actual time=0.012..0.012 rows=0 loops=581)\n              Buffers: shared hit=4227\n              ->  Nested Loop  (cost=1.50..25.69 rows=1 width=16) (actual time=0.011..0.011 rows=0 loops=581)\n                    Join Filter: (p.post_id = listings.post_id)\n                    Buffers: shared hit=3861",
+          "planning": "Planning Time: 2.417 ms",
+          "execution": "Execution Time: 8.032 ms",
+          "seqScanListings": false
+        },
+        {
+          "plan": "Limit  (cost=15783.55..15783.55 rows=1 width=32) (actual time=7.315..7.332 rows=50 loops=1)\n  Buffers: shared hit=4518\n  ->  Sort  (cost=15783.55..15783.55 rows=1 width=32) (actual time=7.313..7.323 rows=50 loops=1)\n        Sort Key: p.updated_at DESC, p.post_id\n        Sort Method: top-N heapsort  Memory: 31kB\n        Buffers: shared hit=4518\n        ->  Nested Loop Semi Join  (cost=10.57..15783.54 rows=1 width=32) (actual time=0.213..7.208 rows=182 loops=1)\n              Buffers: shared hit=4518\n              ->  Bitmap Heap Scan on listing_search_projection p  (cost=8.79..532.07 rows=581 width=32) (actual time=0.139..0.686 rows=581 loops=1)\n                    Recheck Cond: (district = '士林區'::text)\n                    Heap Blocks: exact=288\n                    Buffers: shared hit=291\n                    ->  Bitmap Index Scan on idx_proj_district  (cost=0.00..8.64 rows=581 width=0) (actual time=0.079..0.079 rows=581 loops=1)\n                          Index Cond: (district = '士林區'::text)\n                          Buffers: shared hit=3\n              ->  Nested Loop Anti Join  (cost=1.78..26.24 rows=1 width=16) (actual time=0.011..0.011 rows=0 loops=581)",
+          "planning": "Planning Time: 2.415 ms",
+          "execution": "Execution Time: 7.525 ms",
+          "seqScanListings": false
+        }
+      ]
+    },
+    {
+      "sort": "price_asc",
+      "envelope": "sql-first",
+      "matched": 182,
+      "pageIds": 50,
+      "searchPageMs": 41,
+      "statements": 2,
+      "plans": [
+        {
+          "plan": "Aggregate  (cost=15783.54..15783.55 rows=1 width=8) (actual time=6.735..6.739 rows=1 loops=1)\n  Buffers: shared hit=4518\n  ->  Nested Loop Semi Join  (cost=10.57..15783.54 rows=1 width=0) (actual time=0.177..6.706 rows=182 loops=1)\n        Buffers: shared hit=4518\n        ->  Bitmap Heap Scan on listing_search_projection p  (cost=8.79..532.07 rows=581 width=8) (actual time=0.114..0.638 rows=581 loops=1)\n              Recheck Cond: (district = '士林區'::text)\n              Heap Blocks: exact=288\n              Buffers: shared hit=291\n              ->  Bitmap Index Scan on idx_proj_district  (cost=0.00..8.64 rows=581 width=0) (actual time=0.069..0.070 rows=581 loops=1)\n                    Index Cond: (district = '士林區'::text)\n                    Buffers: shared hit=3\n        ->  Nested Loop Anti Join  (cost=1.78..26.24 rows=1 width=16) (actual time=0.010..0.010 rows=0 loops=581)\n              Buffers: shared hit=4227\n              ->  Nested Loop  (cost=1.50..25.69 rows=1 width=16) (actual time=0.009..0.009 rows=0 loops=581)\n                    Join Filter: (p.post_id = listings.post_id)\n                    Buffers: shared hit=3861",
+          "planning": "Planning Time: 2.166 ms",
+          "execution": "Execution Time: 6.919 ms",
+          "seqScanListings": false
+        },
+        {
+          "plan": "Limit  (cost=15783.55..15783.56 rows=1 width=40) (actual time=7.020..7.032 rows=50 loops=1)\n  Buffers: shared hit=4518\n  ->  Sort  (cost=15783.55..15783.56 rows=1 width=40) (actual time=7.017..7.024 rows=50 loops=1)\n        Sort Key: (CASE WHEN (p.rent > 0) THEN p.rent ELSE '9223372036854775807'::bigint END), p.updated_at DESC, p.post_id\n        Sort Method: top-N heapsort  Memory: 31kB\n        Buffers: shared hit=4518\n        ->  Nested Loop Semi Join  (cost=10.57..15783.54 rows=1 width=40) (actual time=0.180..6.922 rows=182 loops=1)\n              Buffers: shared hit=4518\n              ->  Bitmap Heap Scan on listing_search_projection p  (cost=8.79..532.07 rows=581 width=32) (actual time=0.113..0.644 rows=581 loops=1)\n                    Recheck Cond: (district = '士林區'::text)\n                    Heap Blocks: exact=288\n                    Buffers: shared hit=291\n                    ->  Bitmap Index Scan on idx_proj_district  (cost=0.00..8.64 rows=581 width=0) (actual time=0.067..0.067 rows=581 loops=1)\n                          Index Cond: (district = '士林區'::text)\n                          Buffers: shared hit=3\n              ->  Nested Loop Anti Join  (cost=1.78..26.24 rows=1 width=16) (actual time=0.010..0.010 rows=0 loops=581)",
+          "planning": "Planning Time: 1.989 ms",
+          "execution": "Execution Time: 7.269 ms",
+          "seqScanListings": false
+        }
+      ]
+    },
+    {
+      "sort": "price_desc",
+      "envelope": "sql-first",
+      "matched": 182,
+      "pageIds": 50,
+      "searchPageMs": 32,
+      "statements": 2,
+      "plans": [
+        {
+          "plan": "Aggregate  (cost=15783.54..15783.55 rows=1 width=8) (actual time=7.075..7.078 rows=1 loops=1)\n  Buffers: shared hit=4518\n  ->  Nested Loop Semi Join  (cost=10.57..15783.54 rows=1 width=0) (actual time=0.192..7.049 rows=182 loops=1)\n        Buffers: shared hit=4518\n        ->  Bitmap Heap Scan on listing_search_projection p  (cost=8.79..532.07 rows=581 width=8) (actual time=0.130..0.689 rows=581 loops=1)\n              Recheck Cond: (district = '士林區'::text)\n              Heap Blocks: exact=288\n              Buffers: shared hit=291\n              ->  Bitmap Index Scan on idx_proj_district  (cost=0.00..8.64 rows=581 width=0) (actual time=0.084..0.084 rows=581 loops=1)\n                    Index Cond: (district = '士林區'::text)\n                    Buffers: shared hit=3\n        ->  Nested Loop Anti Join  (cost=1.78..26.24 rows=1 width=16) (actual time=0.011..0.011 rows=0 loops=581)\n              Buffers: shared hit=4227\n              ->  Nested Loop  (cost=1.50..25.69 rows=1 width=16) (actual time=0.010..0.010 rows=0 loops=581)\n                    Join Filter: (p.post_id = listings.post_id)\n                    Buffers: shared hit=3861",
+          "planning": "Planning Time: 2.097 ms",
+          "execution": "Execution Time: 7.317 ms",
+          "seqScanListings": false
+        },
+        {
+          "plan": "Limit  (cost=15783.55..15783.56 rows=1 width=36) (actual time=7.120..7.132 rows=50 loops=1)\n  Buffers: shared hit=4518\n  ->  Sort  (cost=15783.55..15783.56 rows=1 width=36) (actual time=7.117..7.124 rows=50 loops=1)\n        Sort Key: (CASE WHEN (p.rent > 0) THEN 0 ELSE 1 END), p.rent DESC, p.updated_at DESC, p.post_id\n        Sort Method: top-N heapsort  Memory: 30kB\n        Buffers: shared hit=4518\n        ->  Nested Loop Semi Join  (cost=10.57..15783.54 rows=1 width=36) (actual time=0.177..7.003 rows=182 loops=1)\n              Buffers: shared hit=4518\n              ->  Bitmap Heap Scan on listing_search_projection p  (cost=8.79..532.07 rows=581 width=32) (actual time=0.115..0.660 rows=581 loops=1)\n                    Recheck Cond: (district = '士林區'::text)\n                    Heap Blocks: exact=288\n                    Buffers: shared hit=291\n                    ->  Bitmap Index Scan on idx_proj_district  (cost=0.00..8.64 rows=581 width=0) (actual time=0.070..0.070 rows=581 loops=1)\n                          Index Cond: (district = '士林區'::text)\n                          Buffers: shared hit=3\n              ->  Nested Loop Anti Join  (cost=1.78..26.24 rows=1 width=16) (actual time=0.010..0.010 rows=0 loops=581)",
+          "planning": "Planning Time: 2.096 ms",
+          "execution": "Execution Time: 7.311 ms",
+          "seqScanListings": false
+        }
+      ]
+    },
+    {
+      "sort": "commute_asc",
+      "envelope": "outside",
+      "reason": "sort"
+    },
+    {
+      "sort": "commute_desc",
+      "envelope": "outside",
+      "reason": "sort"
+    },
+    {
+      "sort": "fit_desc",
+      "envelope": "outside",
+      "reason": "sort"
+    }
+  ]
+}
