@@ -418,20 +418,29 @@ shadow stack 實際已在兩台 NAS 上跑（`5151-web-A/B`、`5151-haproxy`、`
 - 測試環境已於當日清理（throwaway Gitea 1.27.3 容器 + `JimmyGOD/probe-on-shapes` probe repo + 本機暫存檔全刪）。
 
 
-## EXTERNAL_SETUP_REQUIRED（仍需 Owner 提供）
+## EXTERNAL_SETUP_REQUIRED（2026-09-21 更新：原清單多半已完成）
 
-- **HAProxy shadow container 上線**（config 已備好，未起容器）；Web-A/Web-B / crawler / worker shadow 容器上線。
-- **Object storage（S3/R2）credentials**：storage abstraction 的 S3 driver。
-- **Gitea token / 上線**：hostname 已知（`https://jgitea01.reversalplay.me` → `127.0.0.1:5251`），
-  但 migration rehearsal + loop-engine 串接仍需 Gitea token 與實際 `docker compose up`。
-- **OpenAI Reviewer API key**：optional Final Review flow。
+- ~~HAProxy shadow container 上線~~ → **已在跑**（CasaOS `5151-haproxy`：`pg_primary`／`pg_standby_first`／web 三組路由，
+  設定來源是 `/opt/5151-shadow/haproxy/haproxy.cfg`）。
+- ~~Web-A/Web-B / crawler / worker shadow 容器上線~~ → **已在跑**（CasaOS A 組、Synology B 組）。
+- **Object storage（S3/R2）credentials**：仍缺；Owner 2026-09-21 決定**暫緩**（照片目前寫 NAS 磁碟即可）。
+- ~~Gitea token / 上線~~ → 1.27.3 已上線、migration rehearsal 完成；**但 2026-09-21 Owner 決定版本管理回到
+  GitHub、Gitea 暫停**（CI runner `gitea-runner-ci` 已 `stop` + `restart=no`；容器保留當參考）。
+- **OpenAI Reviewer API key**：optional，仍未提供。
 
-## 尚未開始（依優先序）
+## 尚未開始（2026-09-21 更正）
 
-1. Phase 16–17 Web active/active + Cloudflare HA：config 已備好，尚未上線容器。
-2. Phase 22–27 Gitea + loop-engine：核心完成，尚未上線 + Gitea migration rehearsal。
-3. 把 `db.js` 其餘 domain 逐一抽成 repository interface（已示範 settings，其餘 listings/users/search/... 漸進）
-4. 安裝 `pg` 並接線 PostgreSQL adapter（同步 hot path 需先改 async）
+1. ~~Phase 16–17 Web active/active + Cloudflare HA~~ → **容器已上線**，但**公開流量仍在單一 `591-tracker-v3`（5153）**。
+   要切到 HAProxy 之前必須先完成 PostgreSQL 切換：web-A／web-B 目前**各掛自己的 SQLite 目錄**
+   （`/opt/5151-shadow/web-a/data`、`~/5151-shadow/web-b/data`），直接切會服務到空資料庫。
+   步驟與前置條件見 `v3/POSTGRES_SWITCH_PLAN.md`。
+2. ~~Phase 22–27 Gitea + loop-engine~~ → 核心完成、Gitea 曾上線；**現已暫停**（見上）。
+3. 把 `db.js` 其餘 domain 逐一抽成 repository interface（settings/flags/routeCache/users 已示範；
+   `listings` 見 `v3/src/repository/listings.js`）。
+4. ~~安裝 `pg` 並接線 PostgreSQL adapter~~ → **已完成並在 shadow 實測**（PR #376：真 driver、方言轉換、
+   listings async repository；PG live 整合測試 10/10，含 schema 鏡射、三種排序的 offset/cursor parity、
+   `FOR UPDATE SKIP LOCKED` 併發 claim、standby 可見同一 schema）。**尚未做**：裝飾管線移植與 Production
+   cutover（見 `v3/POSTGRES_SWITCH_PLAN.md`）。
 
 ## 注意（Windows 本機）
 

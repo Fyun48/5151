@@ -4,15 +4,24 @@
 （Synology kernel 4.4 不支援 nested overlayfs，DinD 不可用）——因此 job 容器內的路徑不能
 bind-mount 進其他容器、也不能用 `127.0.0.1:<host_port>` 連其他容器（見
 `evidence/runtime-modernization/GITEA-MIGRATION.md`）。
-**Gitea 現在是主場（authoritative）**：GitHub 上的 18 個 repo 都已遷入（9 public + 9 private，見 §1），
-`github` remote 只留作唯讀參考（**不要把 master 推回去**，歷史含明文憑證，見 `HANDOFF.md`）。
+> ⚠️ **2026-09-21 Owner 決定：版本管理回到 GitHub（`github.com/Fyun48/5151`），Gitea 暫停。**
+> Gitea 只保留為可用環境（容器與資料都在，CI runner `gitea-runner-ci` 已 `stop` + `restart=no`），
+> 不再是權威來源、也不再是發版路徑；發版一律走 GitHub Actions 的三條 manual-only workflow。
+> 以下的內容是 2026-09-20 遷移當時的紀錄，仍可當操作參考。
+> 歷史提醒：Gitea 的 commit 歷史含明文憑證，**不要把任何 Gitea 歷史推回公開的 GitHub**。
+
+當時的狀態（2026-09-20）：Gitea 曾是主場，GitHub 上的 18 個 repo 都已遷入（9 public + 9 private，見 §1），
+`github` remote 只留作唯讀參考。
 
 ## Security（Phase 23）
 
 - 一般 CI runner：`DOCKER_HOST=tcp://dind:2376`（DinD container），無 host Docker root。
+  （實際部署在 Synology 上是 **host docker socket 拓撲**：kernel 4.4 不支援 nested overlayfs；
+  詳見 `evidence/runtime-modernization/GITEA-MIGRATION.md`。）
 - Production deployment runner：獨立 capability boundary（manual-only / Owner 授權），
   **不在這個 compose 內**。
-- Loop Engine：獨立 container，用 Gitea webhook（驗證 signature）+ API。
+- Loop Engine：**不在這個 compose 內**。`loop-engine/` 的狀態機與 Gitea webhook 驗簽已實作並有測試，
+  但**沒有部署**；這塊功能目前由已在跑的 `5151-ops` Console 承接。
 
 ## 套用
 

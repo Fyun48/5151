@@ -4614,20 +4614,55 @@
       if (state.sort) sort = state.sort;
       if (Array.isArray(state.district) && state.district.length) viewDistricts = new Set(state.district);
     }
-    if (localStorage.getItem(PANEL_KEY) === "1") {
+    // Phase 12 follow-up: panel / filter-compact / more-condition moved into the
+    // versioned state as well. The two legacy keys are read exactly once, folded into
+    // 5151-client-state-v1 and then deleted, so no code writes them any more.
+    function adoptLegacyLayoutState() {
+      let legacyPanel = null;
+      let legacyCompact = null;
+      try {
+        legacyPanel = localStorage.getItem(PANEL_KEY);
+        legacyCompact = localStorage.getItem(FILTER_COMPACT_KEY);
+      } catch {
+        return null;
+      }
+      if (legacyPanel === null && legacyCompact === null) return null;
+      const panel = {};
+      if (legacyPanel !== null) panel.collapsed = legacyPanel === "1";
+      if (legacyCompact !== null) {
+        panel.filterCompact = legacyCompact === "1";
+      }
+      const patch = { panel };
+      if (legacyCompact !== null) patch.moreCondition = { expanded: legacyCompact === "0" };
+      try {
+        localStorage.removeItem(PANEL_KEY);
+        localStorage.removeItem(FILTER_COMPACT_KEY);
+      } catch { /* ignore */ }
+      return patch;
+    }
+    const bootLayout = (() => {
+      const legacy = adoptLegacyLayoutState();
+      if (legacy) {
+        writeClientState(legacy);
+        return readClientState();
+      }
+      return readClientState();
+    })();
+    if (bootLayout.panel.collapsed) {
       document.body.classList.add("panel-collapsed");
-      if (localStorage.getItem(FILTER_COMPACT_KEY) === "1") {
+      if (bootLayout.panel.filterCompact) {
         $("listHeadSticky")?.classList.add("filter-compact");
       }
     }
     if (window.matchMedia("(max-width: 880px)").matches) {
       document.body.classList.add("panel-collapsed");
-      if (localStorage.getItem(FILTER_COMPACT_KEY) !== "0") {
+      if (bootLayout.panel.filterCompact !== false) {
         $("listHeadSticky")?.classList.add("filter-compact");
       }
     }
     if (new URLSearchParams(location.search).has("expandFilters")) {
       $("listHeadSticky")?.classList.remove("filter-compact");
+      writeClientState({ moreCondition: { expanded: true } });
     }
     $("status").textContent = "正在載入…";
     let filter = "all";
@@ -8459,6 +8494,21 @@
     document.addEventListener("scroll", syncScrollTopBtn, { passive: true, capture: true });
     window.addEventListener("resize", syncScrollTopBtn);
     syncScrollTopBtn();
+    // Phase 12 follow-up: capture the keyset cursor / offset of the last list load and
+    // the scroll offset into the versioned client state. Captured once when the page is
+    // hidden (cheap) and deliberately not auto-restored: resuming a keyset cursor
+    // without the pages it continued from is not meaningful, and jumping the viewport
+    // on reload is worse than starting at the top.
+    function persistListPositionState() {
+      writeClientState({
+        pagination: { cursor: listCursor, offset: listOffset },
+        scroll: { top: Math.max(0, Math.round(getScrollTop())) },
+      });
+    }
+    window.addEventListener("pagehide", persistListPositionState);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") persistListPositionState();
+    });
 
     $("profileSelect").onchange = async () => {
       const id = $("profileSelect").value;
@@ -8534,9 +8584,9 @@
     }
     function setPanelCollapsed(on) {
       document.body.classList.toggle("panel-collapsed", Boolean(on));
-      localStorage.setItem(PANEL_KEY, on ? "1" : "0");
+      writeClientState({ panel: { ...readClientState().panel, collapsed: Boolean(on) } });
       if (!on) setFilterCompact(false);
-      else if (localStorage.getItem(FILTER_COMPACT_KEY) === "1") {
+      else if (readClientState().panel.filterCompact) {
         $("listHeadSticky")?.classList.add("filter-compact");
       }
       syncPanelFab();
@@ -8544,13 +8594,17 @@
     function setFilterCompact(on) {
       const sticky = $("listHeadSticky");
       if (!sticky) return;
+      const panel = readClientState().panel;
       if (!document.body.classList.contains("panel-collapsed")) {
         sticky.classList.remove("filter-compact");
-        localStorage.setItem(FILTER_COMPACT_KEY, "0");
+        writeClientState({ panel: { ...panel, filterCompact: false } });
         return;
       }
       sticky.classList.toggle("filter-compact", Boolean(on));
-      localStorage.setItem(FILTER_COMPACT_KEY, on ? "1" : "0");
+      writeClientState({
+        panel: { ...panel, filterCompact: Boolean(on) },
+        moreCondition: { expanded: !on },
+      });
     }
     const NOTICE_DISMISS_KEY = "591-notice-dismiss-v1";
     const NOTICE_HOPS_KEY = "591-notice-hops-v1";
