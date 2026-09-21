@@ -3,9 +3,15 @@
 > 目的：讓**任何新的 agent session**（例如 NAS `code-server` 裡的 Cline、或 Gitea 上的 `Agent (DeepSeek)`
 > workflow）不用讀完整對話就能接手。**先讀這份，再讀 `AGENTS.md` 與 `evidence/runtime-modernization/GITEA-MIGRATION.md`。**
 
+> ⚠️ **2026-09-21 Owner 決定（最新，優先於本文件以下的敘述）**：**版本管理回到 GitHub**
+> （`github.com/Fyun48/5151`）。Gitea **暫停**：只保留為可用環境，不再當權威來源、也不當發版路徑；
+> 發版一律走 GitHub Actions 的三條 manual-only workflow。Gitea 時代的內容已在同日以
+> **單一 snapshot commit** 併入 GitHub `master`（不含會洩漏憑證的 Gitea 歷史），收尾紀錄見
+> `evidence/repo-hygiene-20260921.md`。以下內容為當時（2026-09-20）的實查紀錄，仍可當環境與指令參考。
+
 ## 一句話現況
 
-5151 已從 GitHub 遷到**自架 Gitea**（`https://jgitea01.reversalplay.me`，**1.27.3**）：
+（歷史紀錄 2026-09-20）5151 當時從 GitHub 遷到**自架 Gitea**（`https://jgitea01.reversalplay.me`，**1.27.3**）：
 **GitHub 上 18 個 repo（9 public + 9 private）已全部搬進 `JimmyGOD/*` 並驗收通過**；3 條移植 workflow
 （build / predeploy / deploy）可在 Gitea 觸發；**build 現在又綠又快**（run 67/#64：整個 job **1 分 28 秒**、
 smoke 13 秒、digest `sha256:47f808bb…`，先前要 32–38 分鐘），可多架構建置並推到 `ghcr.io/fyun48/5151`；
