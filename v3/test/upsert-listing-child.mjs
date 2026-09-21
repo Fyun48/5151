@@ -13,7 +13,10 @@ import { fileURLToPath } from "node:url";
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const srcUrl = (name) => pathToFileURL(path.join(dir, "../src", name)).href;
 
-const { db, upsertListing } = await import(srcUrl("db.js"));
+const { db, getSettings, listingSearchBuildContext, upsertListing } = await import(srcUrl("db.js"));
+const { createListingsRepository } = await import(srcUrl("repository/listings.js"));
+const { ensureListingSearchProjection } = await import(srcUrl("listingSearchProjection.js"));
+const { ensureListingPrepSchema } = await import(srcUrl("listingEnrichQueue.js"));
 const {
   createWritePath,
   listingsUpsertParams,
@@ -113,8 +116,43 @@ await createWritePath({ driver: "sqlite", sqliteDb: db }).upsertListingRow(adapt
 const viaAdapter = pick(db.prepare("SELECT * FROM listings WHERE post_id = ?").get(adapterPayload.post_id));
 assert.deepEqual(viaAdapter, viaProduction, "SQLite: adapter row must match the production row");
 
-// 4. PostgreSQL: create the same tables there (DDL derived from the SQLite schema, no rows) and
-// check that the same adapter payload writes a row that reads back identically.
+// 4. The follow-up steps: the row backfill, the search projection the SQL-first query reads, and
+// the change-log entry. The production call above already ran its own copy of these for `payload`.
+ensureListingSearchProjection(db);
+const adapterWriter = createWritePath({ driver: "sqlite", sqliteDb: db });
+await adapterWriter.backfillListing(adapterPayload, null);
+await adapterWriter.syncProjection(adapterPayload);
+await adapterWriter.bumpRevision({
+  entityType: "listing",
+  entityId: adapterPayload.post_id,
+  eventType: "listing_added",
+});
+
+const PROJECTION_FIELDS = [
+  "district", "source", "kind", "rent", "total_monthly_cost", "area", "floor", "total_floors",
+  "elevator", "parking", "rooftop", "low_floor", "lat", "lng", "location_class",
+  "primary_listing_id", "offline_state", "commute_km", "updated_at",
+];
+const projectionOf = (postId) => {
+  const row = db.prepare("SELECT * FROM listing_search_projection WHERE post_id = ?").get(postId);
+  assert.ok(row, `expected a projection row for ${postId}`);
+  return Object.fromEntries(PROJECTION_FIELDS.map((field) => [field, normaliseValue(row[field])]));
+};
+assert.deepEqual(projectionOf(adapterPayload.post_id), projectionOf(payload.post_id), "projection rows must match");
+
+const revisionOf = (postId) => {
+  const row = db
+    .prepare("SELECT entity_type, event_type FROM data_revision WHERE entity_id = ? ORDER BY id DESC")
+    .get(postId);
+  assert.ok(row, `expected a change-log row for ${postId}`);
+  return row;
+};
+assert.deepEqual(revisionOf(adapterPayload.post_id), revisionOf(payload.post_id), "change-log rows must match");
+assert.equal(revisionOf(payload.post_id).event_type, "listing_added");
+
+// 5. PostgreSQL: create the same tables there (DDL derived from the SQLite schema, no rows), write
+// through the adapter and then prove the loop closes - the freshly written listing must show up in
+// the PostgreSQL list query the app would run.
 if (process.env.PG_TEST_URL) {
   const schema = `upsert_listing_${process.pid}`;
   const pgDriver = await createPostgresDriver({
@@ -124,17 +162,65 @@ if (process.env.PG_TEST_URL) {
   try {
     await pgDriver.exec(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
     await pgDriver.exec(`CREATE SCHEMA ${schema}`);
-    await ensurePgSchema(pgDriver, db, { schema, tables: ["listings"], indexes: false });
-    await createWritePath({ driver: "postgres", pgDriver }).upsertListingRow(adapterPayload);
+    // Mirror the whole SQLite schema (the search SQL also reads listing_prep and the visibility
+    // clauses' tables), exactly like a real cutover would.
+    ensureListingPrepSchema(db);
+    await ensurePgSchema(pgDriver, db, { schema, indexes: false });
+    const pgWriter = createWritePath({ driver: "postgres", pgDriver });
+    await pgWriter.upsertListingRow(adapterPayload);
+    await pgWriter.backfillListing(adapterPayload, null);
+    await pgWriter.syncProjection(adapterPayload);
+    await pgWriter.bumpRevision({
+      entityType: "listing",
+      entityId: adapterPayload.post_id,
+      eventType: "listing_added",
+    });
+
     const row = (await pgDriver.query("SELECT * FROM listings WHERE post_id = $1", [adapterPayload.post_id])).rows[0];
     assert.ok(row, "expected the row in PostgreSQL");
     assert.deepEqual(pick(row), viaProduction, "PostgreSQL: adapter row must match the SQLite production row");
-    console.log(JSON.stringify({ ok: true, pg: true, sqlMatched: true, fields: FIELDS.length }));
+
+    const projection = (
+      await pgDriver.query("SELECT * FROM listing_search_projection WHERE post_id = $1", [adapterPayload.post_id])
+    ).rows[0];
+    assert.ok(projection, "expected the projection row in PostgreSQL");
+    assert.deepEqual(
+      Object.fromEntries(PROJECTION_FIELDS.map((field) => [field, normaliseValue(projection[field])])),
+      projectionOf(payload.post_id),
+      "PostgreSQL: projection row must match the SQLite one",
+    );
+    const revision = (
+      await pgDriver.query("SELECT entity_type, event_type FROM data_revision WHERE entity_id = $1", [
+        adapterPayload.post_id,
+      ])
+    ).rows[0];
+    assert.deepEqual({ ...revision }, { ...revisionOf(payload.post_id) }, "PostgreSQL: change-log row must match the SQLite one");
+
+    // The closure: the PostgreSQL list query (the same repository the app uses) finds the row.
+    const deps = listingSearchBuildContext();
+    const repository = createListingsRepository({ driver: "postgres", pgDriver, deps });
+    const base = getSettings(0);
+    const page = await repository.searchPage({
+      filter: "all", kind: "", sources: "", q: "", sort: "newest", limit: 50, offset: 0, cursor: null,
+      districts: ["士林區"], userId: 0, matchVoteUserId: 0, sameHouse: true,
+      settings: {
+        ...base,
+        priceMin: 0, priceMax: 0, areaMax: 0, minBuildingFloors: 0, wholeFloorOnly: false,
+        excludeLowFloors: false, excludeRooftop: false, commuteKm: 0,
+        excludeKeywords: [], excludeAgents: [], excludeAgentIds: [], excludeBoxes: [],
+      },
+    });
+    assert.ok(page, "expected the PostgreSQL list query to stay inside the SQL-first envelope");
+    assert.ok(
+      page.ids.includes(adapterPayload.post_id),
+      `the freshly written listing must be listable on PostgreSQL (ids=${page.ids.join(",")})`,
+    );
+    console.log(JSON.stringify({ ok: true, pg: true, fields: FIELDS.length, listable: true }));
     await pgDriver.exec(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
   } finally {
     await pgDriver.close();
   }
 } else {
-  console.log(JSON.stringify({ ok: true, pg: false, sqlMatched: true, fields: FIELDS.length }));
+  console.log(JSON.stringify({ ok: true, pg: false, fields: FIELDS.length, listable: false }));
 }
 db.close();

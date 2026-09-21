@@ -142,6 +142,16 @@ function bind(p) {
     p.location_class, p.primary_listing_id, p.offline_state, p.commute_km, p.updated_at];
 }
 
+// Exposed for the PostgreSQL write port (repository/writePath.js): the statement text and the
+// value order must stay identical to what syncListingProjection() runs.
+export function listingProjectionUpsertSql() {
+  return UPDATE_SQL;
+}
+
+export function bindProjectionValues(projection) {
+  return bind(projection);
+}
+
 export function syncListingProjection(db, row, now = Date.now()) {
   db.prepare(UPDATE_SQL).run(...bind(computeListingProjection(row, now)));
 }
