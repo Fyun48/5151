@@ -160,8 +160,21 @@
         一併修掉 `repository/decorationData.js` 的 `PEER_COLUMNS_QUALIFIED`：`split(",\n")` 只替每行
         第一個欄位加 `l.`，PG 在 `listing_group_members JOIN listings` 的查詢上會回
         `column reference "source" is ambiguous`（SQLite 容忍）—— 這是切換前就會踩到的既有 bug。
-     ③ **通知／CRM 佇列的讀寫**（`pendingNotifyEvents`／`updateEventNotify`／`channelJobDone`／
+     ③ **通知／CRM 佇列**（`pendingNotifyEvents`／`updateEventNotify`／`channelJobDone`／
         `user_events` 寫入、`crmOutbox`）：PG 模式下通知會寫進 SQLite、Web 讀 PG → 會員收不到通知。
+        - **已完成（2026-09-21，佇列的讀＋寫）**：`notifyBuildContext()`（`pendingNotifyEventsQuery()`／
+          `pendingNotifyEventsLegacyQuery()`／`eventNotifyRowQuery()`／`updateEventNotifyStatement()`／
+          `markEventNotifiedQuery()`，加上上一批已共用的 `notifyReopenQuery()`）→
+          `repository/notifyQueue.js` → `v3/src/notifyQueueAsync.js`
+          （`pendingNotifyEventsAsync`／`updateEventNotifyAsync`／`markEventNotifiedAsync`）；
+          `watcher.flushPendingNotifications()`／`resolvePendingNotifyLocations()` 的 13 處改成 await。
+          live parity：`v3/test/notify-queue-parity.test.js` **5/5**（待處理頁整列含排序契約、
+          `updateEventNotify` 12 欄、`markEventNotified` 讓事件離開佇列）。
+          同時把 `pendingNotifyEvents()` 的回傳正規化成一般物件（同掃描那批的 null-prototype 處理）。
+        - **仍未完成（切換阻塞項）**：`enqueueListingEvent()` 的**決策鏈**（決定「什麼進佇列」）仍讀 SQLite
+          —— 依賴 `users`／`settings`／search profile／listing group 的 PG 讀取，這幾項尚未移植。
+          因此 PG 模式目前**排得空佇列卻填不進新事件**，會員仍收不到通知；詳見
+          `docs/handoffs/20260921-postgres-cutover-session.md` §4 ③ 的兩段切法。
      ④ **`enqueueSimilaritySafe`（pHash 佇列）**（§2.3 尾）。
      建議 ①＋② 同批（掃描與它對應的寫入）、③ 一批、④ 獨立；全部完成才切換。
      **①＋② 已於 2026-09-21 完成並以 shadow PG 實測（14/14）。**

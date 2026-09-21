@@ -19,14 +19,11 @@ import {
   upsertRouteJob,
   getRouteJob,
   markCoveringCompleted,
-  markEventNotified,
   markListingOffline,
   confirmExpiredOfflineListings,
   restoreListingOnline,
   markListingAlive,
-  pendingNotifyEvents,
   eventPayloadFromListing,
-  updateEventNotify,
   eventChannelsHandled,
   channelJobDone,
   db,
@@ -110,6 +107,10 @@ import {
   touchListingCheckedAsync,
   upsertListingPrepAsync,
 } from "./crawlerWrites.js";
+
+// Driver-aware notification queue: the flush loop reads the pending page and writes every channel
+// outcome through these (notifyQueueAsync.js).
+import { markEventNotifiedAsync, pendingNotifyEventsAsync, updateEventNotifyAsync } from "./notifyQueueAsync.js";
 
 function nowIso() {
   return new Date().toISOString();
@@ -372,7 +373,7 @@ async function resolveListingRoute(listing, settings) {
 
 export async function flushPendingNotifications(settings = getSettings(), { silent = false } = {}) {
   bindNotifyJobSnapshots();
-  const pending = pendingNotifyEvents(400);
+  const pending = await pendingNotifyEventsAsync({ limit: 400 });
   const dockByUser = new Map();
   const hookByUser = new Map();
   const mailByUser = new Map();
@@ -386,11 +387,11 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
     const mailBundle = userId ? getMemberMailBundle(userId) : { configured: false, smtp: null, templates: getMailTemplates() };
     const mailReady = Boolean(mailBundle.configured);
     if (!listing) {
-      updateEventNotify(event.id, { notify_decide: "cancelled", notify_reason: "missing", notified: 1 });
+      await updateEventNotifyAsync(event.id, { notify_decide: "cancelled", notify_reason: "missing", notified: 1 });
       continue;
     }
     if (userSettings.notificationsPaused === true) {
-      updateEventNotify(event.id, { notify_reason: "paused" });
+      await updateEventNotifyAsync(event.id, { notify_reason: "paused" });
       continue;
     }
     const forDock = shouldDockNotify(userSettings, listing, event);
@@ -398,7 +399,7 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
     const forMail = shouldMailNotify(userSettings, listing, event, { to: mailTo, configured: mailReady });
     const forPush = shouldPushNotify(userSettings, listing, event);
     const decision = decideNotifyDecision(listing, userSettings);
-    updateEventNotify(event.id, {
+    await updateEventNotifyAsync(event.id, {
       notify_decide: decision.decide,
       notify_reason: decision.reason,
       notify_coord_version: Number(listing.coord_version) || 0,
@@ -406,7 +407,7 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
     });
     if (decision.verdict === "pending") {
       if (isStalePendingNotify(event)) {
-        updateEventNotify(event.id, {
+        await updateEventNotifyAsync(event.id, {
           notify_decide: "wait_data",
           notify_reason: "backoff",
           notify_next_at: Date.now() + NOTIFY_BACKOFF_MS,
@@ -416,11 +417,11 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
       continue;
     }
     if (decision.verdict !== "send") {
-      updateEventNotify(event.id, { notified: 1, notify_decide: decision.decide || "skip_distance", notify_reason: decision.reason });
+      await updateEventNotifyAsync(event.id, { notified: 1, notify_decide: decision.decide || "skip_distance", notify_reason: decision.reason });
       continue;
     }
     if (!forDock && !forHook && !forMail && !forPush) {
-      updateEventNotify(event.id, {
+      await updateEventNotifyAsync(event.id, {
         dock_job_state: "skipped",
         line_job_state: "skipped",
         email_job_state: "skipped",
@@ -498,23 +499,23 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
     const mailState = result.mail?.job_state || "retry";
     const mailShown = new Set(result.mail?.shown_ids || mail.slice(0, 8).map((event) => event.event_id || event.id));
     for (const payload of dock) {
-      updateEventNotify(payload.event_id, { dock_job_state: silent ? "accepted" : "accepted" });
+      await updateEventNotifyAsync(payload.event_id, { dock_job_state: silent ? "accepted" : "accepted" });
     }
     for (const payload of hook) {
-      updateEventNotify(payload.event_id, {
+      await updateEventNotifyAsync(payload.event_id, {
         line_job_state: hookState || "retry",
         notify_last_error: result.webhook?.fail_reason || "",
       });
     }
     for (const payload of mail) {
       const id = payload.event_id || payload.id;
-      updateEventNotify(id, {
+      await updateEventNotifyAsync(id, {
         email_job_state: mailShown.has(id) ? mailState : "retry",
         notify_last_error: mailShown.has(id) ? (result.mail?.fail_reason || "") : "batch_overflow",
       });
     }
     for (const payload of push) {
-      updateEventNotify(payload.event_id, { push_job_state: pushState });
+      await updateEventNotifyAsync(payload.event_id, { push_job_state: pushState });
     }
     const touched = new Set([
       ...dock.map((event) => event.event_id),
@@ -534,7 +535,7 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
           : latest.email_job_state,
         push_job_state: push.some((event) => event.event_id === id) ? pushState : latest.push_job_state,
       };
-      if (needed && eventChannelsHandled(merged, needed)) markEventNotified(id);
+      if (needed && eventChannelsHandled(merged, needed)) await markEventNotifiedAsync(id);
     }
     ready.push(...dock.map((event) => ({ ...event, type_label: eventLabel(event.type), user_id: userId })));
   }
@@ -543,7 +544,7 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
 
 async function resolvePendingNotifyLocations(settings, { withRoute = true } = {}) {
   if (!needsListingGeo(settings)) return;
-  const pending = pendingNotifyEvents(40);
+  const pending = await pendingNotifyEventsAsync({ limit: 40 });
   const ids = [];
   const seen = new Set();
   for (const event of pending) {

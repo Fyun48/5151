@@ -7005,11 +7005,14 @@ export function recentEvents(limit = 40, userId) {
   return db.prepare("SELECT * FROM user_events WHERE user_id = ? ORDER BY id DESC LIMIT ?").all(uid, Math.max(1, Number(limit) || 40));
 }
 
-export function pendingNotifyEvents(limit = 80, now = Date.now()) {
+// Statement builders for the notification queue (watcher's flush loop). Same rule as the crawler
+// scans: the text lives here, notifyBuildContext() publishes it, and repository/notifyQueue.js runs
+// it through the injected exec - a PostgreSQL deployment has to drain the queue the site reads
+// (the events themselves still get enqueued by enqueueListingEvent(), see POSTGRES_SWITCH_PLAN ③).
+export function pendingNotifyEventsQuery({ limit = 80, now = Date.now() } = {}) {
   const cap = Math.max(1, Number(limit) || 80);
-  const stamp = Number(now) || Date.now();
-  try {
-    return db.prepare(`
+  return {
+    sql: `
       SELECT e.*
       FROM user_events e
       LEFT JOIN listings l ON l.post_id = e.post_id
@@ -7027,26 +7030,25 @@ export function pendingNotifyEvents(limit = 80, now = Date.now()) {
         END,
         COALESCE(e.notify_next_at, 0) ASC,
         e.id ASC
-      LIMIT ?
-    `).all(stamp, cap);
-  } catch {
-    return db.prepare("SELECT * FROM user_events WHERE IFNULL(notified, 0) = 0 ORDER BY id ASC LIMIT ?").all(cap);
-  }
+      LIMIT ?`,
+    params: [Number(now) || Date.now(), cap],
+  };
 }
 
-const CHANNEL_DONE = new Set(["accepted", "skipped", "legacy_handled_unknown"]);
-
-export function channelJobDone(state) {
-  return CHANNEL_DONE.has(String(state || ""));
+// Stores that predate the notify columns: the plain pending page (the SQLite function falls back to
+// it when the ordering statement does not prepare).
+export function pendingNotifyEventsLegacyQuery({ limit = 80 } = {}) {
+  return {
+    sql: "SELECT * FROM user_events WHERE IFNULL(notified, 0) = 0 ORDER BY id ASC LIMIT ?",
+    params: [Math.max(1, Number(limit) || 80)],
+  };
 }
 
-export function updateEventNotify(id, patch = {}) {
-  const row = db.prepare("SELECT * FROM user_events WHERE id = ?").get(Number(id));
-  if (!row) return null;
-  const next = { ...row, ...patch };
-  try {
-    db.prepare(`
-      UPDATE user_events SET
+export function eventNotifyRowQuery(id) {
+  return { sql: "SELECT * FROM user_events WHERE id = ?", params: [Number(id) || 0] };
+}
+
+export const EVENT_NOTIFY_UPDATE_SQL = `UPDATE user_events SET
         notify_decide = ?,
         notify_reason = ?,
         notify_retry_count = ?,
@@ -7059,8 +7061,16 @@ export function updateEventNotify(id, patch = {}) {
         email_job_state = ?,
         push_job_state = ?,
         notified = ?
-      WHERE id = ?
-    `).run(
+      WHERE id = ?`;
+
+// The merged row -> statement updateEventNotify() runs (the `tolerant`/`fallbackToNotified` flags
+// mirror its try/catch: a store without the notify columns still records `notified`).
+export function updateEventNotifyStatement(row, patch = {}, id = null) {
+  if (!row) return null;
+  const next = { ...row, ...patch };
+  return {
+    sql: EVENT_NOTIFY_UPDATE_SQL,
+    params: [
       String(next.notify_decide || ""),
       String(next.notify_reason || ""),
       Number(next.notify_retry_count) || 0,
@@ -7073,12 +7083,61 @@ export function updateEventNotify(id, patch = {}) {
       String(next.email_job_state || ""),
       String(next.push_job_state || ""),
       Number(next.notified) || 0,
-      Number(id),
-    );
+      Number(id ?? row.id) || 0,
+    ],
+    row: next,
+    tolerant: true,
+    fallbackToNotified: Number(next.notified) === 1,
+  };
+}
+
+export function markEventNotifiedQuery(id) {
+  return { sql: "UPDATE user_events SET notified = 1 WHERE id = ?", params: [Number(id) || 0] };
+}
+
+// Dependency bundle for the notification queue (watcher's flush loop ->
+// repository/notifyQueue.js + notifyQueueAsync.js).
+export function notifyBuildContext() {
+  return {
+    pendingNotifyEventsQuery,
+    pendingNotifyEventsLegacyQuery,
+    eventNotifyRowQuery,
+    updateEventNotifyStatement,
+    markEventNotifiedQuery,
+    notifyReopenQuery,
+  };
+}
+
+export function pendingNotifyEvents(limit = 80, now = Date.now()) {
+  const cap = Math.max(1, Number(limit) || 80);
+  const wide = pendingNotifyEventsQuery({ limit: cap, now });
+  // Plain objects on both drivers (see listingsNeedingAliveCheck): node:sqlite hands back
+  // null-prototype rows while node-postgres returns plain ones, and the async twin has to answer
+  // the same shape as this one.
+  try {
+    return db.prepare(wide.sql).all(...wide.params).map((row) => ({ ...row }));
   } catch {
-    if (Number(next.notified) === 1) markEventNotified(id);
+    const legacy = pendingNotifyEventsLegacyQuery({ limit: cap });
+    return db.prepare(legacy.sql).all(...legacy.params).map((row) => ({ ...row }));
   }
-  return { ...next, id: Number(id) };
+}
+
+const CHANNEL_DONE = new Set(["accepted", "skipped", "legacy_handled_unknown"]);
+
+export function channelJobDone(state) {
+  return CHANNEL_DONE.has(String(state || ""));
+}
+
+export function updateEventNotify(id, patch = {}) {
+  const row = db.prepare("SELECT * FROM user_events WHERE id = ?").get(Number(id));
+  if (!row) return null;
+  const statement = updateEventNotifyStatement(row, patch, id);
+  try {
+    db.prepare(statement.sql).run(...statement.params);
+  } catch {
+    if (statement.fallbackToNotified) markEventNotified(id);
+  }
+  return { ...statement.row, id: Number(id) };
 }
 
 export function markLegacyNotifiedUnknown() {
