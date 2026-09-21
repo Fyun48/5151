@@ -6,11 +6,19 @@ services:
     image: haproxy:2.9-alpine
     restart: unless-stopped
     ports:
+      # 25433 / 25434 = postgres-rw / postgres-ro。
+      # web 對外只能綁主機 25153：同一台的 Web-A/Web-B 已經用掉主機 15153，
+      # 寫成 15153:15153 會讓 `docker compose up` 直接失敗（address already in use）。
       - "0.0.0.0:25433:25433"
       - "0.0.0.0:25434:25434"
-      - "0.0.0.0:15153:15153"
+      - "0.0.0.0:25153:15153"
     environment:
       CASAOS_HOST: ${CASAOS_HOST:?set CASAOS_HOST (CasaOS LAN IP)}
       SYNOLOGY_HOST: ${SYNOLOGY_HOST:?set SYNOLOGY_HOST (Synology LAN IP)}
     volumes:
-      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      # haproxy.cfg 是 template（內含 ${CASAOS_HOST} / ${SYNOLOGY_HOST}）。
+      # docker compose 只會替換 compose YAML 內的 ${...}，不會替換掛載檔案內容，
+      # 所以交給 render-and-run.sh 在啟動時展開，展開失敗就讓容器直接失敗。
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg.tmpl:ro
+      - ./render-and-run.sh:/usr/local/bin/render-and-run.sh:ro
+    entrypoint: ["/bin/sh", "/usr/local/bin/render-and-run.sh"]

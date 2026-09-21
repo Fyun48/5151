@@ -1,0 +1,24 @@
+# act_runner config — 對齊 NAS 正式站 `~/gitea/runner-config.yaml`（volume 掛進
+# /data/config.yaml，compose 用 CONFIG_FILE=/data/config.yaml 指向它）。
+#
+# runner.timeout 是 **job 層** timeout（不是 per-step）：
+#   2026-09-20 run 26（build-production-image，multi-arch amd64+arm64/qemu）在起跑後
+#   20m02s 被砍，log 症狀是 act_runner 讀 job 容器檔案時
+#   `Get ".../containers/<id>/archive?path=.../pathcmd.txt": context deadline exceeded`
+#   —— 這是 job timeout 的表象，不是 docker daemon 掛掉。故 20m → 60m → 90m，
+#   並把 build workflow 的 `timeout-minutes` 由 45 → 60 → 90 對齊（與 CI 併行時會更慢）。
+# runner.capacity 是**同時可跑的 job 數**：1 → 2（2026-09-20）。
+#   capacity=1 時 build 得排在 CI 後面等（實測 ~20 分鐘才輪到）；NAS 4 vCPU / 33 GB，shadow pg/HAProxy
+#   等容器多為閒置，兩個 job 併行可行。代價是併行時各自變慢 → 兩邊 timeout 一起放寬。
+#   注意：**不能用 `paths-ignore: *.md` 省佇列** —— 測試會讀 markdown（見 .gitea/workflows/ci.yml 的註解）。
+log:
+  level: info
+runner:
+  capacity: 2
+  timeout: 90m
+# runner 內每個 job 容器使用的 docker network（需能連到 gitea:3000）。
+container:
+  network: "5151-gitea_default"
+# 不啟用 actions cache（NAS 上沒有對應的 cache 服務；關掉避免 job 啟動時探測失敗）。
+cache:
+  enabled: false

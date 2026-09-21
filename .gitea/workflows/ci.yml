@@ -1,0 +1,70 @@
+name: CI
+
+# Gitea Actions CI (replaces the GitHub Actions test.yml).
+# Runs the v3 test suite on push to master and on pull requests.
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
+permissions:
+  contents: read
+
+# 2026-09-20：master 的 run 一律不取消。
+#  - 實測（Gitea 1.22.6→1.27.3 期間）：push 新 commit 會把同一 group 中「還在排隊」的舊 run
+#    標成 cancelled（run 24/27），那些 commit 就永遠沒有 CI 結論 → master「每個 commit 都有綠燈」出現缺口。
+#  - **只設 `cancel-in-progress: false` 還不夠**：2026-09-20 又抓到一次 —— run 69（sha `98d38cd`，
+#    event=push）在 run 70（`21c3b03`）建立的同一秒被標成 cancelled，**job 從未啟動**，
+#    而當時的定義確實已經是 `cancel-in-progress: false`。→ 證明 Gitea 仍會取消同 group 的「排隊中」run。
+#  - 修法：把 **sha 放進 group**，讓每個 commit 各自一組 → 不同 run 永遠不會互相取消；
+#    代價是排隊變長，靠 runner capacity=2（見 `deploy/gitea/runner-config.yaml`）消化。
+#  - 不用 paths-ignore 省佇列：**測試會讀 markdown**（`test/v3-compose.test.js` 讀 `README.md`、
+#    `test/cursor-rules.test.js` 讀 `design-system/property-platform/MASTER.md`、
+#    `v3/test/release-readiness-gate.test.js` 要求 `v3/RELEASE-READINESS.md` 存在）→ 忽略 `*.md` 會漏測。
+concurrency:
+  group: ci-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    # Synology runner 比 GitHub-hosted runner 慢很多（整套 2358 tests 約 10.5 分鐘）。
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install dependencies
+        run: npm ci
+
+      # 隔離子程序測試的上限可用 V3_ISOLATED_TEST_TIMEOUT_MS 覆寫（預設 180000ms）。
+      - name: Run Test Suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm test
+
+      # P1 通知：把結果推到 Discord。沒設 `DISCORD_WEBHOOK_URL`（repo variable/secret）時
+      # notify.sh 只印 skipped（含解析到的 STATUS，方便驗證運算式），**不會讓 CI 紅燈**。
+      # 設定方式：Gitea → repo Settings → Actions → Variables → 新增 DISCORD_WEBHOOK_URL。
+      - name: Notify Discord
+        if: ${{ always() }}
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL || vars.DISCORD_WEBHOOK_URL }}
+          STATUS: ${{ job.status }}
+          TITLE: ${{ github.workflow }} (${{ github.ref_name }})
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          FIELDS: sha=${{ github.sha }},run=${{ github.run_id }}
+        run: bash deploy/gitea/notify.sh

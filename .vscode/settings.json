@@ -1,0 +1,14 @@
+{
+  // 這個 repo 要求 LF（見 .editorconfig 與 .gitattributes）。
+  // 在 NAS 的瀏覽器版 VS Code（code-server）或本機 VS Code 存檔都會維持 LF。
+  "files.eol": "\n",
+  "files.insertFinalNewline": true,
+  "files.trimTrailingWhitespace": true,
+  "editor.tabSize": 2,
+  "git.autofetch": true,
+  "git.confirmSync": false,
+  // 這個 repo 沒有 formatter/linter 設定，避免存檔被意外重排。
+  "editor.formatOnSave": false,
+  // code-server 以 --disable-workspace-trust 啟動；這裡再保險一次，讓擴充套件（Cline）直接可用。
+  "security.workspace.trust.enabled": false
+}

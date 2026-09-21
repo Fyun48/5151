@@ -1,11 +1,14 @@
 name: 5151-gitea
 
-# Gitea engineering plane (Synology). gitea + PostgreSQL + isolated CI runner.
-# CI runner uses DinD (tcp://dind) — NO host /var/run/docker.sock is mounted.
+# Gitea engineering plane (Synology). gitea + PostgreSQL + CI runner.
+# 2026-09-20：Gitea 1.22 → 1.27.3（1.22 內建的 act parser 會把含 workflow_dispatch.inputs
+# 的 workflow 判成 invalid 而整個忽略，見 evidence/runtime-modernization/GITEA-MIGRATION.md §2.6）。
+# 本檔已對齊 NAS 上的實際部署（`~/gitea/docker-compose.yml`）：runner 用 host docker socket
+# + `runner-config.yaml`（早先的 DinD 版本並未在正式站啟用）。
 services:
   gitea:
     container_name: gitea
-    image: gitea/gitea:1.22
+    image: gitea/gitea:1.27.3
     restart: unless-stopped
     environment:
       GITEA__database__DB_TYPE: postgres
@@ -35,27 +38,21 @@ services:
     volumes:
       - gitea-db:/var/lib/postgresql/data
 
-  # Isolated DinD for the generic CI runner. Runner talks to it over tcp://dind.
-  dind:
-    container_name: gitea-dind
-    image: docker:dind
-    restart: unless-stopped
-    privileged: true
-    command: ["dockerd", "--host=tcp://0.0.0.0:2376", "--tls=false"]
-
+  # CI runner（對齊正式站）：host docker socket + runner-config.yaml。
   gitea-runner-ci:
     container_name: gitea-runner-ci
-    image: gitea/act_runner:0.2
+    image: gitea/act_runner:latest
     restart: unless-stopped
     environment:
-      GITEA_INSTANCE_URL: ${GITEA_INSTANCE_URL:-http://gitea:3000}
+      GITEA_INSTANCE_URL: http://gitea:3000
       GITEA_RUNNER_REGISTRATION_TOKEN: ${GITEA_RUNNER_TOKEN:?set GITEA_RUNNER_TOKEN}
-      DOCKER_HOST: tcp://dind:2376
+      CONFIG_FILE: /data/config.yaml
     volumes:
       - gitea-runner:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./runner-config.yaml:/data/config.yaml:ro
     depends_on:
       - gitea
-      - dind
 
 volumes:
   gitea-data:

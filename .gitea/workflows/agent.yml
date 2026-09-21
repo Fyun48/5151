@@ -1,0 +1,174 @@
+name: Agent (DeepSeek)
+
+# P2：在 Gitea 上「用一句提示詞叫 agent 做事」。
+#   * 觸發 A：Actions → Agent → **Run workflow**，在 `task` 欄位打你的提示詞（手機也可）。
+#   * 觸發 B：開一個 issue 把任務寫在標題/內容，然後加上標籤 **`agent`**。
+#   * 行為：runner 內用 DeepSeek（OpenAI 相容 API）讀檔／改檔／跑測試，迭代到完成 →
+#     推 `agent/run-<run_id>` 分支 → 開 PR → 在 issue 留言（若是 issue 觸發）→ Discord 通知。
+#   * 護欄（實作在 `deploy/gitea/agent/agent.mjs`）：**永不動 master**、禁改 `.github/**`、
+#     `.gitea/**`、`deploy/gitea/**`、任何 `.env*`/secret 路徑；指令白名單；步數／時間／token 上限。
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "要 agent 做什麼（一句話；越具體越好）"
+        required: true
+        default: ""
+      model:
+        description: "deepseek-chat / deepseek-reasoner / deepseek-flash / deepseek-v4-pro"
+        required: false
+        default: "deepseek-chat"
+      max_steps:
+        description: "最多幾輪（預設 15）"
+        required: false
+        default: "15"
+      dry_run:
+        description: "1 = 只模擬（不改檔、不開 PR）"
+        required: false
+        default: "0"
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+# agent 會改檔並推分支：同群組序列化，避免兩個同時跑打架。
+concurrency:
+  group: agent-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  agent:
+    name: Run DeepSeek agent
+    runs-on: ubuntu-latest
+    # Synology runner 慢：留足額度（agent 自身另有 AGENT_MAX_SECONDS 上限）。
+    timeout-minutes: 60
+    # issue 觸發只認標籤 `agent`，避免其他標籤也觸發。
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.label.name == 'agent' }}
+    env:
+      TASK: ${{ github.event_name == 'workflow_dispatch' && inputs.task || format('{0}\n\n{1}', github.event.issue.title, github.event.issue.body) }}
+      MODEL: ${{ inputs.model || 'deepseek-chat' }}
+      MAX_STEPS: ${{ inputs.max_steps || '15' }}
+      DRY_RUN: ${{ inputs.dry_run || '0' }}
+      ISSUE_NUMBER: ${{ github.event.issue.number || '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # agent 本體：讀檔／改檔／跑測試，全部記錄在 agent-log.md。非零 exit = 模型放棄或超過上限。
+      - name: Run DeepSeek agent
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY || vars.DEEPSEEK_API_KEY }}
+          AGENT_TASK: ${{ env.TASK }}
+          AGENT_MODEL: ${{ env.MODEL }}
+          AGENT_MAX_STEPS: ${{ env.MAX_STEPS }}
+          AGENT_DRY_RUN: ${{ env.DRY_RUN }}
+          AGENT_MAX_SECONDS: "2400"
+          AGENT_LOG: agent-log.md
+          AGENT_SUMMARY: agent-summary.md
+        run: node deploy/gitea/agent/agent.mjs
+
+      - name: Show agent log
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          echo "----- agent-summary.md -----"
+          cat agent-summary.md 2>/dev/null || echo "(no summary)"
+          echo "----- agent-log.md (tail 200) -----"
+          tail -n 200 agent-log.md 2>/dev/null || echo "(no log)"
+
+      # 只推分支（就算 agent 失敗也推，方便人接手看它做到哪）——**永不推 master**。
+      - name: Commit and push branch (never master)
+        id: push
+        if: ${{ always() && env.DRY_RUN != '1' }}
+        env:
+          TASK_TITLE: ${{ github.event.issue.title || inputs.task }}
+        run: |
+          set -euo pipefail
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "agent 沒有改動任何檔案 → 不推分支、不開 PR"
+            exit 0
+          fi
+          BRANCH="agent/run-${GITHUB_RUN_ID}"
+          git config user.name "5151 agent"
+          git config user.email "agent@5151.local"
+          git checkout -b "$BRANCH"
+          git add -A
+          git commit -m "agent: $(printf '%s' "${TASK_TITLE:-task}" | head -c 60)"
+          git push origin "HEAD:refs/heads/${BRANCH}"
+          echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "pushed ${BRANCH}"
+
+      # 開 PR（Gitea API）。沒有可用 token 時只警告（分支已推上，可人工開），不讓整條 pipeline 紅燈。
+      - name: Open pull request
+        id: pr
+        if: ${{ always() && steps.push.outputs.changed == 'true' }}
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN || github.token }}
+          TASK_TITLE: ${{ github.event.issue.title || inputs.task }}
+          BRANCH: ${{ steps.push.outputs.branch }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TOKEN:-}" ]; then
+            echo "::warning::沒有可用 token（secrets.GITHUB_TOKEN / github.token 皆空）→ 略過開 PR；分支 ${BRANCH} 已推上"
+            echo "pr_opened=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          BODY_FILE="$(mktemp)"
+          {
+            echo "由 Gitea Actions 的 DeepSeek agent 自動產生（run ${GITHUB_RUN_ID}）。"
+            echo
+            echo "任務：${TASK_TITLE:-（未提供）}"
+            echo
+            echo '```'
+            cat agent-summary.md 2>/dev/null || echo "(no summary)"
+            echo '```'
+            echo
+            echo "逐輪記錄在該 run 的 log（step：Show agent log）。**請人工審查後再合併。**"
+          } > "$BODY_FILE"
+          node -e 'const fs=require("fs");const t=(process.env.TASK_TITLE||"task").slice(0,80);fs.writeFileSync("/tmp/pr.json",JSON.stringify({title:`[agent] ${t}`,head:process.env.BRANCH,base:"master",body:fs.readFileSync(process.argv[1],"utf8")}))' "$BODY_FILE"
+          CODE="$(curl -sS -o /tmp/pr-out.json -w '%{http_code}' -H "Content-Type: application/json" -H "Authorization: token ${TOKEN}" \
+            -X POST --data-binary @/tmp/pr.json "http://gitea:3000/api/v1/repos/${GITHUB_REPOSITORY}/pulls")"
+          echo "PR HTTP ${CODE}"
+          head -c 400 /tmp/pr-out.json || true
+          if [ "${CODE}" = "201" ]; then echo "pr_opened=true" >> "$GITHUB_OUTPUT"; else echo "pr_opened=false" >> "$GITHUB_OUTPUT"; fi
+
+      # issue 觸發時回留言：手機上直接看到結果（不用點進 run）。
+      - name: Comment result on issue
+        if: ${{ always() && env.ISSUE_NUMBER != '' && env.DRY_RUN != '1' }}
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN || github.token }}
+          BRANCH: ${{ steps.push.outputs.branch }}
+          PR_OPENED: ${{ steps.pr.outputs.pr_opened }}
+        run: |
+          set -euo pipefail
+          [ -n "${TOKEN:-}" ] || { echo "::warning::沒有 token → 略過 issue 留言"; exit 0; }
+          {
+            echo "**agent run ${GITHUB_RUN_ID} 已結束**"
+            echo
+            cat agent-summary.md 2>/dev/null || echo "(no summary)"
+            echo
+            echo "分支：\`${BRANCH:-（無變更）}\`；已開 PR：${PR_OPENED:-false}"
+          } > /tmp/comment.md
+          node -e 'const fs=require("fs");fs.writeFileSync("/tmp/comment.json",JSON.stringify({body:fs.readFileSync("/tmp/comment.md","utf8")}))'
+          curl -sS -o /dev/null -w "comment HTTP %{http_code}\n" -H "Content-Type: application/json" -H "Authorization: token ${TOKEN}" \
+            -X POST --data-binary @/tmp/comment.json \
+            "http://gitea:3000/api/v1/repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments"
+
+      # P1 通知（Discord）：一個人摘要 + 分支/PR 狀態。
+      - name: Notify Discord
+        if: ${{ always() }}
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL || vars.DISCORD_WEBHOOK_URL }}
+          STATUS: ${{ job.status }}
+          MESSAGE: ${{ github.event.issue.title || inputs.task }}
+          TITLE: ${{ github.workflow }} (${{ env.MODEL }})
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          FIELDS: branch=${{ steps.push.outputs.branch }},pr=${{ steps.pr.outputs.pr_opened }},dry_run=${{ env.DRY_RUN }}
+        run: bash deploy/gitea/notify.sh

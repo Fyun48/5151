@@ -1,0 +1,61 @@
+name: 5151-code-server
+
+# 瀏覽器版 VS Code（code-server）—— 「隨時關掉分頁、下次打開同一個工作區與 session 還在」的雲端 IDE。
+# 只綁 127.0.0.1:8484；對外走既有 cloudflared tunnel（jgitea-tunnel 是 --network host、token 遠端管理）：
+#   在 Zero Trust → Networks → Tunnels → jgitea-tunnel → Public Hostnames 加一筆
+#   code.reversalplay.me → http://localhost:8484（DNS 會自動建立）。
+# 刻意**不掛 docker socket**：這只是編輯器，不給它動 host 的能力。
+services:
+  5151-code-server:
+    container_name: 5151-code-server
+    image: ${CODE_SERVER_IMAGE:-codercom/code-server:latest}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8484:8080"
+    environment:
+      # 密碼走 env，不進 repo：在 NAS 上以 CODE_SERVER_PASSWORD='…' docker compose up -d 帶入，
+      # 或寫進同目錄 .env（.gitattributes 已規範 *.env? → 這裡用 .env，別 commit）。
+      PASSWORD: ${CODE_SERVER_PASSWORD:?set CODE_SERVER_PASSWORD}
+    command:
+      - --bind-addr
+      - 0.0.0.0:8080
+      - --auth
+      - password
+      - --disable-telemetry
+      - --disable-update-check
+      # 免去「Restricted Mode / 工作區信任」擋掉擴充套件（Cline）的問題。
+      - --disable-workspace-trust
+      # 預設開在專案區（`/workspace` 底下每個 repo 都會出現在左側；預設值可由 compose 最後這個參數改）。
+      - /workspace
+    volumes:
+      # 設定 / 已安裝擴充套件 / 開啟的工作區都持久化 → 這就是「關掉再打開還在」的關鍵。
+      - ./data:/home/coder
+      - ./workspace:/workspace
+      # 唯讀的私有憑證（INFRA-CREDENTIALS.md 等）：**不進 repo**，只有這個容器看得到，
+      # 而且以 :ro 掛載（容器內改不動）。IDE 內查法：`cat /private/INFRA-CREDENTIALS.md`。
+      - ./private:/private:ro
+      # NAS 端的存取範圍（2026-09-20 新增；本來 IDE 只看得到上面三條 → 上傳/開啟檔案時
+      # 「選不到 NAS 的路徑」，只能靠拖曳進 /workspace）：
+      #   1. **不要**掛整個 `/volume1`：VS Code 會對它做 file watcher／索引，11TB 的共享
+      #      會把 NAS CPU 與 inotify 額度吃光（`.vscode` 的 watcherExclude 只擋搜尋、不擋 watcher）。
+      #   2. ⚠️ **Synology 的 ACL 會蓋掉 777**：`/volume1/homes/tori`、`~/code-server` 都是
+      #      `drwxrwxrwx+`，但 ACL 只列了 `user:tori` 與 `group:administrators`、沒有 others
+      #      → 容器內的 `coder`（uid 1000）連 `ls` 都被拒。**bind mount 會繞過上層目錄的 ACL**，
+      #      但**不會**繞過被掛那一個目錄自己的 ACL —— 所以能掛的只有「沒有 Synology ACL、
+      #      且 owner 是 1000」的目錄（例如 `~/code-server/workspace` 與下面這個 `~/inbox`）。
+      #   3. 需要更多 NAS 路徑（例如分享資料夾、或想直接編輯家目錄裡的 ops 腳本）就要另外處理：
+      #      用 root 建目錄＋`chown 1000:1000`（像 `~/inbox`），或在 DSM 加 ACL 給容器用的 uid。
+      #  /nas-inbox  ← /volume1/homes/tori/inbox（2026-09-20 由 root 建立、owner 1000:1000）：
+      #                IDE 內可直接上傳／新增檔案到 NAS 的落地區。NAS 端就是 `~/inbox`。
+      #  /nas-docker ← /volume1/docker：各容器的 compose／.env（5151-ops、ecpapi、mbriapi…），
+      #                實測可讀、**不可寫**（ACL）→ 標成 `:ro` 讓權限與事實一致。
+      - /volume1/homes/tori/inbox:/nas-inbox
+      - /volume1/docker:/nas-docker:ro
+    networks:
+      - gitea
+
+networks:
+  gitea:
+    # 既有 Gitea 網路：讓容器內可以直接 git clone http://gitea:3000/JimmyGOD/5151.git
+    external: true
+    name: 5151-gitea_default

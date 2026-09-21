@@ -1,0 +1,18 @@
+# 這個 repo 的檔案一律 LF + UTF-8。
+# 為什麼要寫進 repo：CRLF 曾在 Gitea runner 上把 shell script 弄壞（`set -o pipefail` 變成
+# `pipefail\r`），也在多個 compose/workflow 上造成 no-arg 的怪問題 → 讓編輯器存檔就維持 LF。
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+indent_style = space
+indent_size = 2
+trim_trailing_whitespace = true
+
+[*.md]
+trim_trailing_whitespace = false
+
+[Makefile]
+indent_style = tab

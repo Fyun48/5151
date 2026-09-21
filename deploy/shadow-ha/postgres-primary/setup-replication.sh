@@ -3,10 +3,15 @@
 # shadow primary. Idempotent: safe to run again (duplicate role/slot are ignored).
 set -euo pipefail
 
-CONTAINER="${CONTAINER:-5151-postgres-A}"
+# docker 可能不在非登入 shell 的 PATH（Synology 是 /usr/local/bin/docker）。
+# failover 後 primary 換人，這支腳本要在「當下的 primary」主機跑，兩台都要能執行。
+DOCKER="${DOCKER:-docker}"
+command -v "${DOCKER}" >/dev/null 2>&1 || DOCKER=/usr/local/bin/docker
+
+CONTAINER="${CONTAINER:-5151-postgres-B}"   # 預設 primary = Synology（5151-postgres-B）
 REPL_PASSWORD="${PG_REPLICATION_PASSWORD:?set PG_REPLICATION_PASSWORD}"
 
-docker exec -i "$CONTAINER" psql -U postgres -v ON_ERROR_STOP=1 <<SQL
+"${DOCKER}" exec -i "$CONTAINER" psql -U postgres -v ON_ERROR_STOP=1 <<SQL
 DO \$\$
 BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'replicator') THEN

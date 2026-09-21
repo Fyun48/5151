@@ -2,7 +2,18 @@
 
 ## 專案來源（唯一權威來源）
 
-本專案的原始碼、開發、PR、CI 與部署都在 GitHub：**`github.com/Fyun48/5151`**。
+本專案的原始碼、開發、PR、CI 與部署都以 GitHub 為唯一權威來源：**`github.com/Fyun48/5151`**。
+
+**2026-09-21 Owner 決定**：版本管理回到 GitHub；自架 Gitea（`jgitea01.reversalplay.me`）**暫停** ——
+只保留為可用環境，不再是權威來源、也不再當發版路徑。發版一律走 GitHub Actions 的三條 manual-only
+workflow（build → predeploy → deploy）。Gitea 時代的內容已在同日以**單一 snapshot commit** 併入 `master`
+（刻意不帶 Gitea 的 commit 歷史，因為那段歷史含明文憑證），收尾紀錄見
+`evidence/repo-hygiene-20260921.md`。
+
+> **新的 agent session 先讀這份**：`evidence/runtime-modernization/HANDOFF.md`
+> （現況、常用命令、待辦、踩過的坑）。它是在 NAS 的瀏覽器 IDE（code-server）裡寫的，內容仍適用；
+> 但「權威來源」一律以本節的 2026-09-21 決定為準。
+
 請一律以這個 GitHub repo 為唯一權威來源；不要另開新專案或第二條 tunnel（同一 repo、同一張 Docker 映像、同一條 Cloudflare Tunnel）。
 
 ## 開發範圍：只做 v3
