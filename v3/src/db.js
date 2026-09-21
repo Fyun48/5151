@@ -42,6 +42,7 @@ import {
   personalGroupKeyFor,
   splitPersonalSameHouse,
 } from "./userSameHouse.js";
+import { createDecorationDataLoader } from "./repository/decorationData.js";
 import { canAddWatch, countWatched } from "./watchLimits.js";
 import {
   alreadyNotifiedGroup,
@@ -3037,6 +3038,121 @@ export function decorateRowsWithProvider(
     uid,
     { sameHouse, matchVoteUserId: voteUid, provider: data },
   ));
+}
+
+/**
+ * Loads every decoration input for a page of rows through repository/decorationData.js and
+ * returns a synchronous provider for decorateRowsWithProvider(). The peer walk mirrors
+ * loadSameHousePeers() (two hops, same seeds) so the preloaded maps cover every id the
+ * decorators ask for; route / MRT / job lookups only ever run for the rows being decorated.
+ */
+export async function preloadDecorationProviderAsync({
+  exec,
+  rows,
+  settings = null,
+  userId = 0,
+  matchVoteUserId = null,
+  sameHouse = true,
+  driver = "postgres",
+} = {}) {
+  if (typeof exec !== "function") throw new Error("preloadDecorationProviderAsync requires exec");
+  const list = Array.isArray(rows) ? rows : [];
+  const conf = settings || getSettings();
+  const uid = Number(userId) || 0;
+  const voteUid = matchVoteUserId == null ? uid : Number(matchVoteUserId) || 0;
+  if (!list.length) return preloadedDecorationProvider({ userId: voteUid });
+
+  const loader = createDecorationDataLoader({ exec, driver });
+  const pageIds = [...new Set(list.map((row) => Number(row.post_id) || 0).filter(Boolean))];
+  const onPage = new Set(pageIds);
+  const personalFlags = await loader.personalFlagMap(voteUid);
+  const personalIndex = await loader.personalIndex(voteUid);
+  const splitPairs = await loader.splitPairSet(voteUid);
+
+  const peers = new Map();
+  const prepIds = new Set(pageIds);
+  if (sameHouse) {
+    const seeds = new Set(pageIds);
+    for (const row of list) {
+      const mid = Number(row.match_post_id) || 0;
+      if (mid) seeds.add(mid);
+      for (const pid of personalIndex.peers(row.post_id)) seeds.add(pid);
+    }
+    let frontier = [...seeds];
+    for (let hop = 0; hop < 2 && frontier.length; hop += 1) {
+      const fetched = await loader.peerRowsFor(frontier);
+      const next = [];
+      for (const row of fetched) {
+        const id = Number(row.post_id) || 0;
+        const mid = Number(row.match_post_id) || 0;
+        if (id) {
+          prepIds.add(id);
+          if (!peers.has(id)) peers.set(id, []);
+          peers.get(id).push(row);
+        }
+        if (mid) {
+          if (!peers.has(mid)) peers.set(mid, []);
+          peers.get(mid).push(row);
+          if (!onPage.has(mid) && !prepIds.has(mid)) next.push(mid);
+        }
+      }
+      frontier = next;
+    }
+  }
+
+  const groupIds = new Map();
+  for (const [id, gid] of await loader.groupIdsFor([...prepIds])) groupIds.set(id, gid);
+  const groupMembers = new Map();
+  for (const gid of new Set([...groupIds.values()].filter(Boolean))) {
+    groupMembers.set(gid, await loader.groupMemberRows(gid));
+  }
+  const prep = new Map();
+  for (const [id, row] of await loader.prepMap([...prepIds])) if (row) prep.set(id, row);
+  const extras = new Map();
+  for (const [id, row] of await loader.extrasMap([...prepIds])) {
+    if (row && !onPage.has(id)) extras.set(id, row);
+  }
+
+  const routeKeys = [];
+  const mrtKeys = [];
+  const jobKeys = [];
+  const commuteOn = Number(conf.commuteKm) > 0 && hasWorkPoint(conf);
+  for (const row of list) {
+    const lat = Number(row.lat);
+    const lng = Number(row.lng);
+    const trusted = isTrustedGeoSource(row.geo_source) && Number.isFinite(lat) && Number.isFinite(lng);
+    if (!trusted) continue;
+    if (commuteOn) {
+      routeKeys.push(makeRouteKey(lat, lng, conf.workLat, conf.workLng, conf.commuteMode, "to_work"));
+      routeKeys.push(makeRouteKey(conf.workLat, conf.workLng, lat, lng, conf.commuteMode, "from_work"));
+      const postId = Number(row.post_id) || 0;
+      if (postId) {
+        jobKeys.push(makeRouteJobKey(postId, "to_work", "distance", conf.commuteMode, conf.workLat, conf.workLng));
+      }
+    }
+    mrtKeys.push(makeMrtKey(lat, lng));
+  }
+  const routeCache = new Map();
+  for (const [key, row] of await loader.routeCacheMap(routeKeys)) if (row) routeCache.set(key, row);
+  const mrtCache = new Map();
+  for (const [key, row] of await loader.mrtCacheMap(mrtKeys)) if (row) mrtCache.set(key, row);
+  const routeJobs = new Map();
+  for (const [key, row] of await loader.routeJobsMap(jobKeys)) if (row) routeJobs.set(key, row);
+
+  return preloadedDecorationProvider({
+    userId: voteUid,
+    prep,
+    personalIndex,
+    splitPairs,
+    groupIds,
+    groupMembers,
+    peers,
+    extras,
+    routeCache,
+    mrtCache,
+    routeJobs,
+    personalFlags,
+  });
 }
 
 function hpPrepFields(row, provider) {

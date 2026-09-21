@@ -30,10 +30,17 @@
      （並發共用一次查詢、失敗不快取）。`v3/test/decoration-data.test.js` 在 SQLite fixture 與
      **真實 shadow PostgreSQL** 上比對同一組值（兩邊皆 3/3）。過程中抓到 2 個真差異：
      同一個 id 清單出現兩次時的 `$n` 編號、以及 PG 的 int8→string。
-   - **下一步（Slice 2b）**：provider 抽象 —— 讓 `db.js` 的 `decorateListingLite`／`attachListingPeers`／
-     `attachSameHouseRoles`／`housepriceNotDisplayReady`／`getCachedRoute`／`getCachedMrt`／`getRouteJob`／
-     `loadUserSplitPairSet` 改走一個**同步 getter provider**（SQLite 預設＝今天的實作；PG＝Slice 1 的
-     maps 預載後同步取用），兩個 driver 共用同一條純裝飾路徑，再拿掉 `decoration: "pending"`。
+   - **完成（Slice 2b，2026-09-21）**：`db.js` 的裝飾函式全部改走**同步 getter provider**
+     （`sqliteDecorationProvider`＝今天的語句；`preloadedDecorationProvider`＝讀預載 maps），並新增
+     `preloadDecorationProviderAsync()`（用 `repository/decorationData.js` 預載、含 2-hop peers 與
+     route/mrt/job key 計算）與 `decorateRowsWithProvider()`。`searchListingsAsync` 的 PG 路徑現在
+     **回傳完整裝飾過的卡片**（`decoration: "full"`）：`pending` 與預設 fallback 已移除，只剩兩種
+     fail-safe 回退（SQL-first envelope 外、或預載／裝飾丟錯 → 回 SQLite 鏈）。
+     驗證：`decoration-data.test.js`（SQLite fixture ＋ 真實 PG parity）與新的
+     `decoration-provider-parity.test.js`（**同一 fixture 下 provider 路徑與 SQLite pipeline 的卡片
+     逐欄相等**，含個人同屋源 `same_house_status: "personal"` 與 peers）。
+   - **下一步（Slice 3）**：PG 端 EXPLAIN evidence（現有 108,539 筆真實資料可量）＋ commute／fit 的 cursor；
+     再來是 Slice 4 的其餘 domain 與寫入分流，最後才是 cutover 與 HA。
    - **下一步（Slice 2）**：讓 `db.js` 的 `decorateListingLite` / `attachListingPeers` /
      `housepriceNotDisplayReady` 接受「預先載入的裝飾資料」（context），SQLite 與 PG 共用同一條
      純裝飾路徑；再把 `searchListingsAsync` 的 `decoration: "pending"` 拿掉。
