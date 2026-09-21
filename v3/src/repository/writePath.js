@@ -326,6 +326,9 @@ export function createWritePath({ driver = "sqlite", sqliteDb = null, pgDriver =
         }
       }
       await exec(listingsUpsertSql(), listingsUpsertParams(listing, existing));
+      // The pre-read row is handed back so the caller can mirror db.js upsertListing()'s
+      // "listing_added" vs "listing_updated" change-log entry and the kit-column merge.
+      return existing;
     },
     // Mirrors the follow-up UPDATEs in db.js upsertListing(): source/source_id backfill, content_seq
     // bump, geo_source backfill and the kit columns.

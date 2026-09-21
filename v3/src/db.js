@@ -43,6 +43,9 @@ import {
   splitPersonalSameHouse,
 } from "./userSameHouse.js";
 import { createDecorationDataLoader } from "./repository/decorationData.js";
+import { createWritePath } from "./repository/writePath.js";
+import { resolveDbDriver } from "./dbDriver.js";
+import { sharedPgDriver } from "./pgSharedDriver.js";
 import { canAddWatch, countWatched } from "./watchLimits.js";
 import {
   alreadyNotifiedGroup,
@@ -4091,6 +4094,39 @@ export function upsertListing(listing) {
   } catch {
     // revision change-log is best-effort
   }
+}
+
+/**
+ * Driver-aware ingest entry point (write port wiring).
+ *
+ * The crawler called upsertListing() directly, which only ever wrote SQLite. With
+ * DB_DRIVER=postgres the same ingest has to land in PostgreSQL, so this facade dispatches:
+ *
+ *   - sqlite   - upsertListing(listing), unchanged and synchronous (production default)
+ *   - postgres - repository/writePath: the row upsert, the source/kit/content_seq/geo backfills,
+ *                the search projection and the change-log entry, mirroring the order and the
+ *                event types of upsertListing()
+ *
+ * NOT ported here: enqueueSimilaritySafe() (the pHash/similarity queue) stays SQLite-shaped, so a
+ * PostgreSQL ingest does not enqueue image fingerprints yet - recorded in POSTGRES_SWITCH_PLAN.
+ */
+export async function persistListing(listing, { driver = resolveDbDriver(), pgDriver = null } = {}) {
+  if (driver !== "postgres") {
+    upsertListing(listing);
+    return { driver: "sqlite", changeEvent: null };
+  }
+  const pool = pgDriver || (await sharedPgDriver());
+  const writer = createWritePath({ driver: "postgres", pgDriver: pool });
+  const existing = await writer.upsertListingRow(listing);
+  await writer.backfillListing(listing, existing);
+  await writer.syncProjection(listing);
+  const changeEvent = existing ? "listing_updated" : "listing_added";
+  await writer.bumpRevision({
+    entityType: "listing",
+    entityId: Number(listing?.post_id) || 0,
+    eventType: changeEvent,
+  });
+  return { driver: "postgres", changeEvent };
 }
 
 function enqueueSimilaritySafe(listing) {
