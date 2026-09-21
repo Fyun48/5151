@@ -90,6 +90,13 @@
    輸出與 `makeRouteKey()` 的 JS 格式化一致；(b) 那個 `geo_source='geocode'` 的 guard 需要多一個查詢，
    所以 `repository.searchPage()` 要能回報「需要退回 Node 路徑」。實作後用既有的 live parity 測試
    （id 集合／順序必須一致）把關。
+6. **（PG 模式的已知落差，2026-09-21 演練實證）** 見 `v3/evidence/pg-rw-drill-20260921/`：
+   `DB_DRIVER=postgres` 時「寫入 → 列表 → 裝飾 → 會員標記」都已走 PG（含 PG 寫入後列表查得到），
+   但下列仍走 SQLite：**① `stats()` 列表頁統計**（最明顯：列表有資料、統計卻是 0，切換前必須接上）、
+   ② 列表路徑以外的旗標／路線讀取、③ `enqueueSimilaritySafe`（pHash 佇列）、④ `listing_prep` 與
+   通知／CRM 佇列。**PG 模式要能上線，至少要先解決 ①。**
+7. **PG schema bootstrap**：app 只會 ensure SQLite schema；PG 模式要求 PG 端先有 schema，且必須從
+   **完整初始化過的 store**（正式站 DB）鏡射 —— 空的暫存 DB 會少掉延遲建立的表（例如 `data_revision`）。
 5. **遷移工具效率**：`pgSchema.importTable` 是逐列 INSERT，108k listings 會跑很久；
    正式切換要用 `COPY` 或分批 commit 的版本，並決定 cutover 的**寫入凍結視窗**。
 
