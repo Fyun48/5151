@@ -29,6 +29,7 @@ db.js 以 `listingSearchBuildContext()` 注入它原本的私有 helper。
 | `v3/src/repository/listings.js` | `createListingsRepository({driver})`，SQLite 與 PostgreSQL 兩個 adapter（同一介面） |
 | `v3/src/listingSearchAsync.js` | app 的 async 入口，driver dispatch + 安全 fallback |
 | `v3/src/listingStatsAsync.js` | 列表頁統計的 async 入口（同一套 dispatch；PG 由 repository 供料、跑共用純管線） |
+| `v3/src/listingDetailAsync.js` | 詳情頁讀取的 async 入口（`hydrate()` ＋ 同一組可見性／裝飾器；`/go`、history、recheck、report-gone 用） |
 | `v3/src/repository/listingStats.js` | stats 的 PostgreSQL 讀取層（candidates／statusCounts／watchedTotal／dbTotal／failedRouteJobs＋flag map） |
 | `v3/src/pgSchema.js` | SQLite schema → PostgreSQL DDL + 冪等 import（parity 測試與未來遷移用） |
 
@@ -96,7 +97,9 @@ idempotency key 去重、以及 **standby 上可見同一 schema（串流複寫�
 
 1. **commute／fit 排序的 SQL 化與 cursor**：目前仍在 PG 的 SQL-first envelope 外（安全，但切到 PG 後這兩種排序吃 SQLite）。
 2. **EXPLAIN evidence**：已有 newest／price_asc／price_desc（`v3/evidence/pg-explain-20260921/`，0 個 Seq Scan）；commute／fit 尚未。
-3. **列表以外的讀取**：`/api/state` 已同源；`getListing()`（詳情頁／`/go`／history）仍是 SQLite-only，
-   PG 模式下會看不到只存在於 PG 的資料 —— 切換前必須處理。
+3. **列表以外的讀取**：`/api/state` 與詳情頁（`getListingAsync`）已同源；剩下的**爬蟲／enrich／通知
+   管線讀取仍是同步 SQLite**（`watcher.js` 的 `listingForWatch()`、`loadAnyoneFlagMap`、
+   `findBySourceKey`、`listMatchCandidates`、`getRouteJob`…）。爬蟲「寫完再讀」必須與寫入同批上線，
+   否則 PG 模式下看不到自己剛寫的列 —— 這是剩下的最大一塊。
 4. **其餘 domain 讀寫**：列表路徑以外的旗標／路線讀取、`enqueueSimilaritySafe`（pHash 佇列）、`listing_prep`、通知／CRM 佇列仍 SQLite-only。
 5. **PG schema bootstrap 與遷移工具效率**：app 只會 ensure SQLite schema；`pgSchema.importTable` 仍是逐列 INSERT（108k 筆 listings 需要 COPY／分批版），cutover 還需要寫入凍結視窗。

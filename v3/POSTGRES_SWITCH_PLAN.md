@@ -100,9 +100,13 @@
      `/api/listings` 改成 `await listingStatsAsync(...)`。實測：shadow 真實 PG 逐欄 parity **4/4**、
      回歸 `pg-live-integration` **10/10**、`write-path-parity` **2/2**；證據與踩到的坑見
      `v3/evidence/listing-stats-pg-20260921/`。
-   - **仍走 SQLite**：② 列表路徑以外的讀取（最要緊的是 `getListing()`：詳情頁／`/go`／history）、
-     ③ `enqueueSimilaritySafe`（pHash 佇列）、④ `listing_prep` 與通知／CRM 佇列。
-     `/api/state`（初始載入）**已同源**（2026-09-21，見上表）。
+   - **仍走 SQLite**：③ `enqueueSimilaritySafe`（pHash 佇列）、④ `listing_prep` 與通知／CRM 佇列；
+     以及**爬蟲／enrich／通知管線的讀取**（`watcher.js` 的 `listingForWatch()`＝`getListing`、
+     `loadAnyoneFlagMap`、`findBySourceKey`、`listMatchCandidates`、`getRouteJob`…，全是同步 SQLite）
+     —— 爬蟲「寫完再讀」必須與寫入同批上線，否則 PG 模式下看不到自己剛寫的列。這是剩下的最大一塊。
+   - 詳情頁（`getListing`）**已接上**（2026-09-21）：`getListingAsync()` ＋ `/go`／history／recheck／
+     report-gone 四個呼叫點，live parity 4/4（`v3/test/listing-detail-parity.test.js`）。
+     `/api/state`（初始載入）也**已同源**（見上表）。
 7. **PG schema bootstrap**：app 只會 ensure SQLite schema；PG 模式要求 PG 端先有 schema，且必須從
    **完整初始化過的 store**（正式站 DB）鏡射 —— 空的暫存 DB 會少掉延遲建立的表（例如 `data_revision`）。
 5. **遷移工具效率**：`pgSchema.importTable` 是逐列 INSERT，108k listings 會跑很久；
