@@ -1,0 +1,96 @@
+name: Code review (advisory)
+
+# 任何 **OpenAI 相容** 的模型都可以當 reviewer，不必是 OpenAI：
+#   GitHub → Settings → Secrets and variables → Actions
+#     secret   REVIEW_API_KEY    （provider 金鑰；沒設就整支跳過，不會紅燈）
+#     variable REVIEW_BASE_URL   （例：https://api.deepseek.com、https://openrouter.ai/api/v1）
+#     variable REVIEW_MODEL      （例：deepseek-chat、gpt-4o-mini）
+# 只用留言，**不是 merge gate、不改程式、不合併、不部署**。細節見 docs/runbooks/code-review-bot.md。
+on:
+  pull_request:
+    branches:
+      - master
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "要審查的 PR 編號"
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: code-review-${{ github.event.pull_request.number || inputs.pr }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: Review diff with the configured model
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Resolve PR number
+        id: pr
+        env:
+          EVENT_PR: ${{ github.event.pull_request.number }}
+          INPUT_PR: ${{ inputs.pr }}
+        run: |
+          set -euo pipefail
+          PR="${EVENT_PR:-$INPUT_PR}"
+          [ -n "$PR" ] || { echo "::error::no PR number to review"; exit 1; }
+          echo "number=$PR" >> "$GITHUB_OUTPUT"
+
+      # Fork PRs never receive repo secrets, and a checkout without a key must stay green.
+      - name: Check the reviewer key
+        id: key
+        env:
+          REVIEW_API_KEY: ${{ secrets.REVIEW_API_KEY }}
+        run: |
+          if [ -z "${REVIEW_API_KEY}" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "REVIEW_API_KEY is not configured - skipping the advisory review."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: steps.key.outputs.configured == 'true'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Collect the PR diff
+        if: steps.key.outputs.configured == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ steps.pr.outputs.number }}
+        run: gh pr diff "$PR" > .review-diff.patch
+
+      - name: Ask the configured model
+        if: steps.key.outputs.configured == 'true'
+        # advisory：provider 掛掉不該讓任何東西變紅，也不該擋合併
+        continue-on-error: true
+        env:
+          REVIEW_API_KEY: ${{ secrets.REVIEW_API_KEY }}
+          REVIEW_BASE_URL: ${{ vars.REVIEW_BASE_URL }}
+          REVIEW_MODEL: ${{ vars.REVIEW_MODEL }}
+          REVIEW_PR_NUMBER: ${{ steps.pr.outputs.number }}
+          REVIEW_PR_TITLE: ${{ github.event.pull_request.title }}
+          REVIEW_PR_BODY: ${{ github.event.pull_request.body }}
+        run: node .github/scripts/code-review.mjs
+
+      - name: Post the review as a comment
+        if: steps.key.outputs.configured == 'true' && hashFiles('.review-output.md') != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ steps.pr.outputs.number }}
+        run: gh pr comment "$PR" --body-file .review-output.md
+
