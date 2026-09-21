@@ -15,10 +15,11 @@
 
 ## 0. 一句話現況
 
-- master = `64828a8`（PR #406；#406 只改文件）。**已部署的程式版本也是 `64828a8`** ——
-  2026-09-21 晚間把 ③ 的佇列讀寫（#405／`4752b51`）推上正式站：digest
-  `sha256:0f758bd6eab542429f68f16bd920107fe92abae781945e5b2a705b7ebef8af3e`、
-  deploy run `35606393475`（證據見 `v3/evidence/pg-notify-queue-20260921/README.md` 的「追加」段）。
+- **已部署的程式版本 = `64828a8`**（image digest
+  `sha256:0f758bd6eab542429f68f16bd920107fe92abae781945e5b2a705b7ebef8af3e`、deploy run `35606393475`）＝
+  ③ 的佇列讀寫（`4752b51`／PR #405）那一包；`64828a8` 之後的 commit 全部只是文件（#406 交接文件、
+  #407 部署紀錄）→ **master 上最新的程式碼就是 `64828a8`**。
+  （2026-09-21 晚間部署；證據見 `v3/evidence/pg-notify-queue-20260921/README.md` 的「追加」段。）
   **`DB_DRIVER` 仍 `unset`（＝sqlite），所以會員行為不變**；這次部署的目的是先在 sqlite 模式
   讓 `watcher.js` 的 await 化跑過真實流量，並讓正式站 revision 對齊 master。
 - 移植進度：**①七條 `listingsNeeding*` 掃描 ✅、②迴圈欄位寫入 ✅、③通知佇列的讀＋寫 ✅**
