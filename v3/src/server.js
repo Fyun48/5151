@@ -1,6 +1,7 @@
 import "./env.js";
 import { resolveAppRole, roleRunsWeb, roleRunsCrawler, roleRunsWorker } from "./appRole.js";
 import { searchListingsAsync } from "./listingSearchAsync.js";
+import { listingStatsAsync } from "./listingStatsAsync.js";
 import express from "express";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -3725,7 +3726,9 @@ app.get("/api/listings", async (req, res) => {
   const queryMs = Date.now() - started;
   const statsStarted = Date.now();
   const statsDetails = {};
-  const listingStats = stats(undefined, uid, undefined, statsDetails);
+  // Awaited so the PostgreSQL driver answers the counters from the store the list itself reads
+  // (listingStatsAsync.js); with DB_DRIVER=sqlite the returned object is unchanged.
+  const listingStats = await listingStatsAsync({ userId: uid, diagnostics: statsDetails });
   const statsMs = Date.now() - statsStarted;
   res.setHeader("Server-Timing", `list;dur=${queryMs}, stats;dur=${statsMs}`);
   res.json({

@@ -15,21 +15,25 @@ export function watchLimitMessage(limit) {
   return `一般會員最多特別關注 ${MEMBER_MAX_WATCHED} 筆，贊助會員可到 ${SPONSOR_MAX_WATCHED} 筆。請先取消一筆再加。`;
 }
 
-export function countWatched(conn, userId) {
-  const uid = Number(userId) || 0;
-  if (!uid) return 0;
-  try {
-    return Number(
-      conn.prepare(
-        `SELECT COUNT(*) AS n
+// Statement text kept as a constant: the PostgreSQL stats path
+// (repository/listingStats.js) runs the same predicate through its executor, so the quota
+// count and the list-page `watchedTotal` cannot drift apart. A watch only occupies quota
+// while its listing is not confirmed-offline; orphan flags never count.
+export const WATCHED_COUNT_SQL = `SELECT COUNT(*) AS n
          FROM user_listing_flags f
          WHERE f.user_id = ? AND f.watched = 1
            AND EXISTS (
              SELECT 1 FROM listings l
              WHERE l.post_id = f.post_id
                AND IFNULL(l.offline_confirmed, 0) = 0
-           )`,
-      ).get(uid)?.n,
+           )`;
+
+export function countWatched(conn, userId) {
+  const uid = Number(userId) || 0;
+  if (!uid) return 0;
+  try {
+    return Number(
+      conn.prepare(WATCHED_COUNT_SQL).get(uid)?.n,
     ) || 0;
   } catch {
     try {

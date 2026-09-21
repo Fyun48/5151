@@ -39,6 +39,12 @@ SQLite adapter（node:sqlite，今日） | PostgreSQL adapter（pg，目標）
   PostgreSQL 端以連線的 `search_path` 決定 schema（`schema` 參數只用於 `ensureProjection()` 的 DDL），
   因為 builder 的 SQL 也會引用 repository 不知道的表（例如 `listing_prep`）。
   domain 入口是 `v3/src/listingSearchAsync.js`（async，driver dispatch + 安全 fallback）。
+- `listingStats.js`：`createListingStatsRepository({ driver, pgDriver, exec, deps })`。
+  介面：`loadInputs({ searchKeys, userId, settings })`（candidates／statusCounts／watchedTotal／
+  dbTotal／failedRouteJobs ＋ flag map）。它不是「重寫一份統計」，而是把 `db.js` 的 clause builder
+  與純管線（`listingStatsBuildContext()`）拿來用，所以 PG 與 SQLite 的計數器定義只有一份。
+  domain 入口是 `v3/src/listingStatsAsync.js`（`/api/listings` 用）。
+  注意：注入的 `exec` 一律回 row array，單列讀取由 repository 的 `runOne()` 自己 unwrap。
 
 ## domain 入口（async）
 
@@ -46,9 +52,12 @@ SQLite adapter（node:sqlite，今日） | PostgreSQL adapter（pg，目標）
 
 - `DB_DRIVER=sqlite`（預設）：與改動前**完全相同的鏈**
   （`listListingsSqlFirst ∥ listListingsCommuteSqlFirst ∥ listListingsFitSqlFirst ∥ listListings`）。
-- `DB_DRIVER=postgres`：預設**仍走 SQLite 鏈**，只有 `PG_LISTINGS_UNDECORATED=1` 才回傳
-  PostgreSQL 的未裝飾列（裝飾管線移植完成前，避免半裝飾回應上線）。
-- 設計與實測證據：`docs/architecture/postgres-listings-hotpath.md`。
+- `DB_DRIVER=postgres`：`searchListingsAsync` 回傳**完整裝飾**的卡片（裝飾已移植），
+  只在 SQL-first envelope 外或裝飾失敗時回 SQLite 鏈；`PG_LISTINGS_UNDECORATED=1` 僅供遷移診斷。
+- 同一個 handler 的列表頁統計走 `await listingStatsAsync(...)`：PG 模式由 `repository/listingStats.js`
+  從同一套 PostgreSQL 讀輸入，再跑 `db.js` 的純管線，因此列表與計數器同源。
+- 設計與實測證據：`docs/architecture/postgres-listings-hotpath.md`、
+  `v3/evidence/listing-stats-pg-20260921/`。
 
 ## 遷移路徑（其餘 domain）
 
