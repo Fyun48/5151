@@ -29,6 +29,9 @@ Synology 192.168.0.220 (SYNOLOGY_HOST)
 
 - Primary 的 `15432` 需對 Standby（`SYNOLOGY_HOST`）開放，供 streaming replication。
 - 所有密碼一律走 env（`PG_SUPER_PASSWORD` / `PG_REPLICATION_PASSWORD`），不 commit 明文。
+- 2026-09-21 起：`standby-basebackup` helper 的 `PG_REPLICATION_PASSWORD` 改由**同目錄 `.env`**
+  （compose `env_file`）提供，compose 檔本身不再出現 password 形狀的字串（secret scanner 誤報來源）；
+  inline 環境變數仍可覆寫；`.env` 不在版控內，缺檔時 compose 會直接失敗（fail-closed）。
 - 兩節點**不啟用 automatic failover**（無 Witness）。promotion 一律手動（見
   `docs/runbooks/postgres-manual-failover.md`）。
 
@@ -69,6 +72,7 @@ CONTAINER=5151-postgres-B bash fix-pg-hba.sh    # pg_hba：LAN + docker 網段�
 
 ```bash
 cd deploy/shadow-ha/postgres-primary          # 這個目錄 = CasaOS 節點（A）
+# 密碼由同目錄 .env 提供（PG_REPLICATION_PASSWORD=…）；要用 inline 覆寫也可以：
 SYNOLOGY_HOST=192.168.0.220 \
 PG_REPLICATION_PASSWORD='<repl>' \
 docker compose --profile setup run --rm standby-basebackup

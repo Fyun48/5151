@@ -12,10 +12,12 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:8484:8080"
-    environment:
-      # 密碼走 env，不進 repo：在 NAS 上以 CODE_SERVER_PASSWORD='…' docker compose up -d 帶入，
-      # 或寫進同目錄 .env（.gitattributes 已規範 *.env? → 這裡用 .env，別 commit）。
-      PASSWORD: ${CODE_SERVER_PASSWORD:?set CODE_SERVER_PASSWORD}
+    env_file:
+      # 密碼只放在 NAS 的 .env（本檔不含任何 password 形狀的字面值，避免 secret scanner 誤報）：
+      #   PASSWORD=<值>              ← code-server 讀這個
+      #   CODE_SERVER_PASSWORD=<值>  ← 只為向後相容留著
+      # `.env` 不在版控內；缺檔時 compose 會直接失敗（fail-closed）。
+      - .env
     command:
       - --bind-addr
       - 0.0.0.0:8080

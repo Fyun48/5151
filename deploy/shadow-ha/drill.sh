@@ -43,7 +43,7 @@ log() { echo "$@" | tee -a "${REPORT}"; }
 
 report_start() {
   mkdir -p "${REPORT_DIR}"
-  log "A4 drill — ${1} — host=$(hostname) — ${TS}Z"
+  log "A4 drill — ${1} — host=$(hostname) — ${TS}"
   log "container=${PG_CONTAINER} peer=${PG_CONTAINER_PEER} db=${PG_DATABASE} docker=${DOCKER}"
   log "------------------------------------------------------------"
 }

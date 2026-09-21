@@ -40,8 +40,11 @@ services:
       PRIMARY_HOST: ${PRIMARY_HOST:-${CASAOS_HOST:-192.168.0.140}}
       PRIMARY_PORT: ${PRIMARY_PORT:-15432}
       SLOT_NAME: ${SLOT_NAME:-standby_b}
-      PG_REPLICATION_PASSWORD: ${PG_REPLICATION_PASSWORD:?set PG_REPLICATION_PASSWORD}
       PGDATA: /var/lib/postgresql/data/pgdata
+    # 複寫密碼改由同目錄 `.env` 提供（本檔不再出現 password 形狀的字串）；
+    # `.env` 不在版控內，缺檔時 compose 會直接失敗（fail-closed）。
+    env_file:
+      - .env
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
