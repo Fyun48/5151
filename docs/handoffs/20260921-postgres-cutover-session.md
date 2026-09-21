@@ -15,10 +15,12 @@
 
 ## 0. 一句話現況
 
-- master = `daf7bad`（`939ecb0` 是**已部署的程式版本**，後兩個 commit 是文件）。
-- 移植進度：**①七條 `listingsNeeding*` 掃描 ✅、②迴圈欄位寫入 ✅**（都通過 shadow PG live parity）。
-- **③ 通知／CRM 佇列讀寫 ⛔、④ `enqueueSimilaritySafe` ⛔** → **還不能切換**。
-- 正式站（CasaOS `591-tracker-v3`）已跑 `939ecb0` 的映像，但 `DB_DRIVER=unset`（＝sqlite），行為不變。
+- master = `4752b51`（PR #405）。**已部署的程式版本是 `939ecb0`**（①＋②；之後的 #402／#403 是文件、
+  #405 是 ③ 佇列讀寫，尚未部署 —— `DB_DRIVER` 仍 `unset`，所以沒部署也不影響使用者）。
+- 移植進度：**①七條 `listingsNeeding*` 掃描 ✅、②迴圈欄位寫入 ✅、③通知佇列的讀＋寫 ✅**
+  （三者都有 shadow PG live parity）。
+- **③ 的另一半（`enqueueListingEvent()` 決策鏈）⛔、④ `enqueueSimilaritySafe` ⛔** → **還不能切換**。
+- 正式站（CasaOS `591-tracker-v3`）跑 `939ecb0` 的映像，`DB_DRIVER=unset`（＝sqlite），行為不變。
 
 ## 1. 當天對話歷程（依序）
 
@@ -50,7 +52,13 @@
    本機 `HEALTH=200`／`LANDING=200`／`STATE_ANON=401`、**`DB_DRIVER=unset`（仍 sqlite）**、
    只有 `591-tracker-v3` 被重建、公開站 `/` 200 與 `/api/health` 200。
 9. **文件**：#402（切換清單狀態）、#403（上版證據）均已合併；切換 runbook 的步驟 0 已把 ③④ 標成 ⛔。
-10. **收尾**：Owner 要求把這個 session 的內容上 GitHub 以便隔天換機續做 → 就是本文件。
+10. **收尾**：Owner 要求把這個 session 的內容上 GitHub 以便隔天換機續做 → `docs/handoffs/20260921-postgres-cutover-session.md`（PR #404）。
+11. **續做 ③ 的第 1 段**（Owner 說「請繼續」之後）：通知佇列的讀＋寫 driver-aware 化
+    （`notifyBuildContext()`＋`repository/notifyQueue.js`＋`notifyQueueAsync.js`，watcher 13 處改 await），
+    live parity `notify-queue-parity.test.js` **5/5**，PR #405（`4752b51`）合併。
+    過程中發現：`pendingNotifyEvents()` 要回一般物件（null-prototype 會讓 async twins 的形狀不同）；
+    fixture 混用 event id 與 post_id 被測試直接抓出來。
+12. **尚未完成**：③ 的第 2 段（`enqueueListingEvent()` 決策鏈）與 ④（見 §4）。
 
 ## 2. 已完成項目的關鍵檔案
 
@@ -112,11 +120,13 @@ node --test v3/test/crawler-reads-parity.test.js v3/test/listing-fields-parity.t
 
 **建議切法（兩段）**
 
-1. **佇列的讀＋寫**（可獨立驗證）：`repository/notifyQueue.js` ＋ façade（比照 `crawlerReads.js` 的 dispatch）：
-   - `pendingNotifyEventsQuery({ limit, now })`、`eventNotifyRowQuery(id)`、`updateEventNotifyQuery(row, patch)`、`markEventNotifiedQuery(id)`、`addUserEventQuery(event)` 全部放 db.js builder，透過新的 `notifyBuildContext()` 發佈。
-   - façade：`pendingNotifyEventsAsync()`／`updateEventNotifyAsync()`／`markEventNotifiedAsync()`／`addUserEventAsync()`；SQLite 分支照舊、PG 分支走 repository，失敗 fallback。
-   - `watcher.flushPendingNotifications()` 內的 `updateEventNotify(...)`／`markEventNotified(...)` 與 `pendingNotifyEvents(400)`／`(40)` 改 `await`。
-   - live 測試：新增 `v3/test/notify-queue-parity.test.js`（比照 `listing-fields-parity.test.js`：同一 fixture 鏡射到私有 schema，PG 寫入後逐欄比對 SQLite 的答案；`pendingNotifyEvents` 比整列陣列含順序）。
+> **狀態（2026-09-21 晚間補記）**：**第 1 段已完成並合併** —— PR #405（`4752b51`）：
+> `notifyBuildContext()` ＋ `repository/notifyQueue.js` ＋ `v3/src/notifyQueueAsync.js`，
+> `watcher.js` 13 處改 await，live parity `v3/test/notify-queue-parity.test.js` **5/5**
+> （證據 `v3/evidence/pg-notify-queue-20260921/README.md`）。
+> **隔天請直接從下面的第 2 段（`enqueueListingEvent` 決策鏈）開始**，不要重做第 1 段。
+
+1. ~~**佇列的讀＋寫**~~ ✅ 完成（見上）。
 2. **`enqueueListingEvent()` 的決策鏈**（真正的瓶頸，需要先補三個尚未移植的讀取）：
    - `users`（`repository/users.js` 已有 `list()` ✅）、`user_listing_flags`（`repository/flags.js` ✅）、
      `settings`（`repository/settings.js` 已存在，但 `getSettings(uid)` 是 db.js 的大型組裝函式，**尚未接**）、
