@@ -8,6 +8,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 
+// 隔離子程序在 CI（Gitea runner：CPU 較慢且 node --test 會並行多個檔案）上可能遠超過 30s；
+// 這是環境時序而非程式錯誤，因此只保留防卡死的寬鬆上限，可用 V3_ISOLATED_TEST_TIMEOUT_MS 覆寫。
+const ISOLATED_TIMEOUT_MS = Math.max(30_000, Number(process.env.V3_ISOLATED_TEST_TIMEOUT_MS) || 180_000);
+
 function runIsolated(body) {
   const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-admin-house-"));
   const script = `
@@ -33,7 +37,7 @@ function runIsolated(body) {
   try {
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
       encoding: "utf8",
-      timeout: 30_000,
+      timeout: ISOLATED_TIMEOUT_MS,
       env: { ...process.env, DATA_DIR: dataDir },
     });
     assert.equal(result.status, 0, result.error?.message || result.stderr || result.stdout);

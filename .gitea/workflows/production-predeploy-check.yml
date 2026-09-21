@@ -1,0 +1,357 @@
+# ============================================================================
+# Gitea Actions port of .github/workflows/production-predeploy-check.yml（2026-09-20 遷移；Owner 指定 Gitea 為正式主場）
+#
+# 與 GitHub 版的差異（Gitea 相容性/環境必要調整；以下各點都用 ci-probe repo 的 probe workflow 實測過）：
+#   1. `jobs.<job_id>.environment` 移除 → Gitea 不支援 environments（docs: Compared to
+#      GitHub Actions / Unsupported workflows syntax）。原 GitHub 的 environment 保護規則在
+#      Gitea 沒有對應物；授權仍靠下方的 fail-closed 檢查（actor + 精確 confirmation 字串）。
+#   2. vars.PRODUCTION_DEPLOY_ALLOWED_ACTOR → secrets.PRODUCTION_DEPLOY_ALLOWED_ACTOR
+#      （實測 Gitea 支援 vars，但用 secret 較穩、不依賴 repo 變數設定）。
+#   3. docker login：secrets.GITHUB_TOKEN → secrets.GHCR_USER / secrets.GHCR_TOKEN。
+#      實測 Gitea 的 secrets.GITHUB_TOKEN 有值，但那是 Gitea 的 job token（GITEA_TOKEN），
+#      Gitea 尚未實作 package 授權 → 不能推 OCI，推 ghcr.io 必須用 GitHub PAT。
+#   4. permissions.packages 移除（GitHub-only scope）。
+#   5. registry path / provenance URL：Gitea 的 github.repository 是 JimmyGOD/5151，與 image
+#      實際所在的 ghcr.io/fyun48/5151 不同 → 改用 secrets.GHCR_REPO / secrets.SOURCE_REPO_URL
+#      （值見 evidence/runtime-modernization/GITEA-MIGRATION.md）。
+#   6. ${{ github.triggering_actor }} → ${{ github.triggering_actor || github.actor }}：
+#      實測 Gitea 的 github.triggering_actor 是空的，不補 fallback 會讓 fail-closed 檢查
+#      一律拒絕。Gitea 沒有 GitHub 的「他人重跑」情境，故 fallback 到 actor 等價。
+#
+#   7. `actions/upload-artifact@v4` → 改為把 evidence 直接印進 run log + step summary：
+#      GitHub 的 v4 action 內建「非 GitHub host 就拒絕」，跑在 Gitea 會直接失敗
+#      （`@actions/artifact v2.0.0+ ... not supported on GHES`），實測會讓整個 job 失敗、
+#      後面的 docker login/build/push 全被跳過。改寫後 evidence 仍留在 run log
+#      （`docker logs gitea-runner-ci` 或 Gitea 的 actions_log）與 step summary。
+#
+# 觸發方式與 GitHub 版相同：manual-only（workflow_dispatch + 40 碼 sha + 精確確認字串）。
+# ============================================================================
+
+name: Production predeploy check (no deploy)
+run-name: "${{ inputs.release_mode == 'ops_phase15' && format('phase15-intent:{0}', inputs.release_intent_id) || format('manual-owner:{0}', inputs.sha) }}"
+
+# 使用既有 Production NAS secrets：檢查現行 v3、做已驗證備份、Wish Room 唯讀預檢。
+# 不是部署：不 SCP 應用程式、不 pull image、不改 image、不 compose up 新版、不跑應用 schema migration。
+#
+# 備份位置（Issue #355）：備份根目錄由 remote script 的 PREDEPLOY_BACKUP_ROOT 決定，預設是 live
+# 資料卷旁的同層目錄；本 workflow 明確指向另一顆儲存池 /mnt/Storage1/docker_data/591-tracker-v3-backups，
+# 避免備份與 live v3.db 競爭同一個 /DATA 卷（先前就是這樣把資料卷塞滿的）。
+# Host 端工作目錄（helpers / work dir / evidence）同樣放在 /mnt/Storage1/docker_data
+# （PREDEPLOY_WORK_ROOT），因此系統卷或 /DATA 滿載時 predeploy 仍能完成。
+# 備份保留：remote script 會在寫入新備份「之前」先修剪較舊的 predeploy-* 備份，只保留最新
+# PREDEPLOY_BACKUP_KEEP 份（預設 2）。這讓資料卷滿載時，同一次 run 能先釋放空間再建立備份，
+# 而不是以 no space left on device 失敗；也避免備份無上限累積。
+#
+# release_mode=manual_owner：人工治理路徑，不依賴 Ops Phase 15 / release_intent_id。
+# release_mode=ops_phase15：維持既有 Phase 15 綁定（run-name phase15-intent:<id>）。
+#
+# 已核對的最後一次成功 v3 Production source（deploy-v3.yml run 34113624372, 2026-09-07T10:51:37Z）：
+#   584d583e56151abcf01c972b7bb45a82c73e4596
+#   = GitHub PR #191 merge commit（gh pr view 191 / git cat-file）
+# 無效 SHA 584d583e56151abcf01c972b7bb45e4596 不是 Git object，禁止當作 rollback。
+# Owner 已書面授權：Cursor Agent（actor `cursor` / `cursor[bot]`）在使用者要求合併部署時
+# 可從 master 觸發本檔；見 AGENTS.md 與 .cursor/rules/owner-merge-deploy.mdc。
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "即將評估的完整 40 碼 source SHA（必須可從 origin/master 追溯；本 workflow 不會部署它）"
+        required: true
+      confirmation:
+        description: "輸入 PREDEPLOY-PRODUCTION 以確認只做檢查與備份"
+        required: true
+        default: ""
+      release_mode:
+        description: "Release path: manual_owner（人工治理，預設）或 ops_phase15（Ops Phase 15 綁定）"
+        type: choice
+        required: true
+        default: manual_owner
+        options:
+          - manual_owner
+          - ops_phase15
+      release_intent_id:
+        description: "僅 ops_phase15 必填：Ops Phase 15 durable release_intent_id。manual_owner 必須空白；非空會 fail-closed（避免舊 Phase 15 caller 被降成 Manual Owner）"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  inspect-and-backup:
+    runs-on: ubuntu-latest
+    env:
+      # 遷移新增：Gitea 的 github.repository 是 JimmyGOD/5151，跟 ghcr.io/fyun48/5151 不同，
+      # 所以 registry path 與 provenance URL 改用 secret 提供（值見 evidence）。
+      GHCR_REPO: ${{ secrets.GHCR_REPO }}
+      SOURCE_REPO_URL: ${{ secrets.SOURCE_REPO_URL }}
+    # Gitea Actions 不支援 jobs.<job_id>.environment（docs: Compared to GitHub Actions / Unsupported workflows syntax）
+    # 原 GitHub 版：environment: production（有 environment 保護規則；Gitea 沒有對應物）
+    timeout-minutes: 30
+    steps:
+      - name: Authorize production predeploy check (fail-closed)
+        env:
+          WF_REF: ${{ github.ref }}
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor || github.actor }}
+          ALLOWED_ACTOR: ${{ secrets.PRODUCTION_DEPLOY_ALLOWED_ACTOR }}
+          CONFIRM: ${{ inputs.confirmation }}
+          CHECK_SHA: ${{ inputs.sha }}
+          RELEASE_MODE: ${{ inputs.release_mode }}
+          RELEASE_INTENT_ID: ${{ inputs.release_intent_id }}
+        run: |
+          set -euo pipefail
+          if [ "$WF_REF" != "refs/heads/master" ]; then
+            echo "::error::Predeploy check must run from the master workflow definition (got $WF_REF)"; exit 1
+          fi
+          if [ -z "${ALLOWED_ACTOR:-}" ]; then
+            echo "::error::PRODUCTION_DEPLOY_ALLOWED_ACTOR is not configured; refusing (fail-closed)"; exit 1
+          fi
+          CURSOR_DEPLOY=0
+          if [ "$ACTOR" = "cursor" ] || [ "$ACTOR" = "cursor[bot]" ]; then
+            if [ "$TRIGGERING_ACTOR" = "cursor" ] || [ "$TRIGGERING_ACTOR" = "cursor[bot]" ]; then
+              CURSOR_DEPLOY=1
+            fi
+          fi
+          if [ "$CURSOR_DEPLOY" != 1 ] && [ "$ACTOR" != "$ALLOWED_ACTOR" ]; then
+            echo "::error::actor '$ACTOR' is not the authorized deployer"; exit 1
+          fi
+          if [ "$CURSOR_DEPLOY" != 1 ] && [ "$TRIGGERING_ACTOR" != "$ALLOWED_ACTOR" ]; then
+            echo "::error::triggering actor '$TRIGGERING_ACTOR' is not the authorized deployer"; exit 1
+          fi
+          if [ "${CONFIRM:-}" != "PREDEPLOY-PRODUCTION" ]; then
+            echo "::error::confirmation must be exactly PREDEPLOY-PRODUCTION"; exit 1
+          fi
+          if ! printf '%s' "${CHECK_SHA:-}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::sha must be a full 40-character commit SHA"; exit 1
+          fi
+          if [ "${RELEASE_MODE:-}" != "manual_owner" ] && [ "${RELEASE_MODE:-}" != "ops_phase15" ]; then
+            echo "::error::release_mode must be manual_owner or ops_phase15 (got '${RELEASE_MODE:-}')"; exit 1
+          fi
+          if [ "${RELEASE_MODE:-}" = "ops_phase15" ] && [ -z "${RELEASE_INTENT_ID:-}" ]; then
+            echo "::error::ops_phase15 requires a non-empty release_intent_id"; exit 1
+          fi
+          if [ "${RELEASE_MODE:-}" = "manual_owner" ] && [ -n "${RELEASE_INTENT_ID:-}" ]; then
+            echo "::error::manual_owner forbids a non-empty release_intent_id; stale Phase 15 callers must set release_mode=ops_phase15"; exit 1
+          fi
+      - name: Checkout workflow-definition SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Verify trusted workflow-definition SHA
+        env:
+          EXPECTED_WF_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Helpers and evidence writers must come from this exact workflow-definition
+          # commit (github.sha), not a moving master tip that advanced after dispatch.
+          HEAD_SHA="$(git rev-parse HEAD)"
+          if [ "$HEAD_SHA" != "$EXPECTED_WF_SHA" ]; then
+            echo "::error::trusted checkout HEAD $HEAD_SHA != workflow execution SHA $EXPECTED_WF_SHA"; exit 1
+          fi
+      - name: Write Phase 15 run identity
+        if: ${{ always() && inputs.release_mode == 'ops_phase15' }}
+        env:
+          EVIDENCE_KIND: identity
+          WF_FILE: .github/workflows/production-predeploy-check.yml
+          WF_REF: ${{ github.ref }}
+          WF_RUN_ID: ${{ github.run_id }}
+          WF_ATTEMPT: ${{ github.run_attempt }}
+          WF_HEAD_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ inputs.sha }}
+          WF_ACTOR: ${{ github.actor }}
+          WF_TRIGGERING_ACTOR: ${{ github.triggering_actor || github.actor }}
+          RELEASE_INTENT_ID: ${{ inputs.release_intent_id }}
+          WF_ENVIRONMENT: production
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: python3 .github/scripts/write-phase15-workflow-evidence.py phase15-run-identity.json
+      - name: Publish Phase 15 run identity (Gitea run log + step summary)
+        if: ${{ always() && inputs.release_mode == 'ops_phase15' }}
+        run: |
+          set -euo pipefail
+          test -s phase15-run-identity.json
+          echo "----- phase15-run-identity.json (evidence; act/Gitea has no v4 artifact service, kept in run log) -----"
+          cat phase15-run-identity.json
+      - name: Write Manual Owner run identity
+        if: ${{ always() && inputs.release_mode == 'manual_owner' }}
+        env:
+          EVIDENCE_KIND: identity
+          RELEASE_MODE: manual_owner
+          WF_FILE: .github/workflows/production-predeploy-check.yml
+          WF_REF: ${{ github.ref }}
+          WF_RUN_ID: ${{ github.run_id }}
+          WF_ATTEMPT: ${{ github.run_attempt }}
+          WF_HEAD_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ inputs.sha }}
+          WF_ACTOR: ${{ github.actor }}
+          WF_TRIGGERING_ACTOR: ${{ github.triggering_actor || github.actor }}
+          RELEASE_INTENT_ID: ${{ inputs.release_intent_id }}
+          WF_ENVIRONMENT: production
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: python3 .github/scripts/write-manual-owner-workflow-evidence.py manual-owner-run-identity.json
+      - name: Publish Manual Owner run identity (Gitea run log + step summary)
+        if: ${{ always() && inputs.release_mode == 'manual_owner' }}
+        run: |
+          set -euo pipefail
+          test -s manual-owner-run-identity.json
+          echo "----- manual-owner-run-identity.json (evidence; act/Gitea has no v4 artifact service, kept in run log) -----"
+          cat manual-owner-run-identity.json
+      - name: Validate SHA reachable from origin/master (no checkout of that SHA onto NAS)
+        env:
+          CHECK_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin master
+          if ! git merge-base --is-ancestor "$CHECK_SHA" origin/master; then
+            echo "::error::commit $CHECK_SHA is not reachable from origin/master; refusing"; exit 1
+          fi
+          echo "Evaluated source SHA $CHECK_SHA is on origin/master ancestry (not deployed by this job)."
+      - name: Copy inspect/backup helpers to NAS (Storage1 pool)
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.NAS_HOST }}
+          port: ${{ secrets.NAS_PORT }}
+          username: ${{ secrets.NAS_USER }}
+          key: ${{ secrets.NAS_SSH_KEY }}
+          source: ".github/scripts/production-predeploy-remote.sh,.github/scripts/verify-sqlite-integrity-json.py,.github/scripts/sqlite-readonly-inspect.mjs,.github/scripts/sqlite-online-backup.mjs,.github/scripts/sqlite-online-backup.py"
+          target: /mnt/Storage1/docker_data/5151-predeploy-helpers
+          overwrite: true
+      - name: Inspect Production v3, backup, read-only Wish Room
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.NAS_HOST }}
+          port: ${{ secrets.NAS_PORT }}
+          username: ${{ secrets.NAS_USER }}
+          key: ${{ secrets.NAS_SSH_KEY }}
+          script_stop: true
+          # Live v3.db online backup can exceed appleboy's default 10m; job timeout-minutes stays 30.
+          command_timeout: 20m
+          script: |
+            set -euo pipefail
+            # 不 docker compose up、不 pull、不重啟成新版、不印 secrets。
+            # Issue #355: keep every host-side write on the Storage1 pool, not on the live data volume.
+            export PREDEPLOY_BACKUP_ROOT=/mnt/Storage1/docker_data/591-tracker-v3-backups
+            export PREDEPLOY_WORK_ROOT=/mnt/Storage1/docker_data
+            export INSPECT_SCRIPT=/mnt/Storage1/docker_data/5151-predeploy-helpers/.github/scripts/sqlite-readonly-inspect.mjs
+            export BACKUP_SCRIPT=/mnt/Storage1/docker_data/5151-predeploy-helpers/.github/scripts/sqlite-online-backup.mjs
+            export BACKUP_PY_SCRIPT=/mnt/Storage1/docker_data/5151-predeploy-helpers/.github/scripts/sqlite-online-backup.py
+            chmod +x /mnt/Storage1/docker_data/5151-predeploy-helpers/.github/scripts/production-predeploy-remote.sh
+            /mnt/Storage1/docker_data/5151-predeploy-helpers/.github/scripts/production-predeploy-remote.sh
+            rm -f /mnt/Storage1/docker_data/5151-predeploy-helpers/.github/scripts/sqlite-readonly-inspect.mjs \
+                  /mnt/Storage1/docker_data/5151-predeploy-helpers/.github/scripts/sqlite-online-backup.mjs \
+                  /mnt/Storage1/docker_data/5151-predeploy-helpers/.github/scripts/sqlite-online-backup.py
+      - name: Pull NAS predeploy evidence
+        env:
+          NAS_HOST: ${{ secrets.NAS_HOST }}
+          NAS_PORT: ${{ secrets.NAS_PORT }}
+          NAS_USER: ${{ secrets.NAS_USER }}
+          NAS_SSH_KEY: ${{ secrets.NAS_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          key="$(mktemp)"
+          printf '%s\n' "$NAS_SSH_KEY" > "$key"
+          chmod 600 "$key"
+          scp -o StrictHostKeyChecking=accept-new -P "$NAS_PORT" -i "$key" \
+            "$NAS_USER@$NAS_HOST:/mnt/Storage1/docker_data/phase15-predeploy-evidence.json" ./nas-predeploy-evidence.json
+          rm -f "$key"
+          python3 - <<'PY'
+          import json, re
+          nas = json.load(open("nas-predeploy-evidence.json"))
+          backup_id = nas.get("backup_dir") or ""
+          backup_hash = nas.get("backup_sha256") or ""
+          if not backup_id or not backup_hash:
+              raise SystemExit("predeploy NAS evidence missing backup identity")
+          if not backup_hash.startswith("sha256:"):
+              backup_hash = "sha256:" + backup_hash
+          if nas.get("integrity_check") != "ok" or nas.get("ok") is not True:
+              raise SystemExit("predeploy NAS integrity_check is not ok")
+          digest = None
+          digest_re = re.compile(r"sha256:[a-f0-9]{64}")
+          for raw in (nas.get("repo_digests"), nas.get("image_ref")):
+              if not raw:
+                  continue
+              match = digest_re.search(str(raw))
+              if match:
+                  digest = match.group(0)
+                  break
+          lines = [
+              f"BACKUP_ID={backup_id}",
+              f"BACKUP_HASH={backup_hash}",
+              "BACKUP_VERIFIED=true",
+          ]
+          if digest:
+              lines.append(f"CURRENT_DIGEST={digest}")
+              if nas.get("image_ref"):
+                  lines.append(f"CURRENT_IMAGE_REF={nas.get('image_ref')}")
+              if nas.get("image_id"):
+                  lines.append(f"CURRENT_IMAGE_ID={nas.get('image_id')}")
+              if nas.get("container"):
+                  lines.append(f"CURRENT_CONTAINER={nas.get('container')}")
+          open("phase15-backup.env","w").write("\n".join(lines) + "\n")
+          PY
+      - name: Write Phase 15 workflow evidence
+        if: ${{ always() && inputs.release_mode == 'ops_phase15' }}
+        env:
+          WF_FILE: .github/workflows/production-predeploy-check.yml
+          WF_REF: ${{ github.ref }}
+          WF_RUN_ID: ${{ github.run_id }}
+          WF_ATTEMPT: ${{ github.run_attempt }}
+          WF_HEAD_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ inputs.sha }}
+          WF_ACTOR: ${{ github.actor }}
+          WF_TRIGGERING_ACTOR: ${{ github.triggering_actor || github.actor }}
+          RELEASE_INTENT_ID: ${{ inputs.release_intent_id }}
+          WF_ENVIRONMENT: production
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          if [ -f ./phase15-backup.env ]; then
+            set -a
+            # shellcheck disable=SC1091
+            . ./phase15-backup.env
+            set +a
+          fi
+          python3 .github/scripts/write-phase15-workflow-evidence.py phase15-workflow-evidence.json
+      - name: Publish Phase 15 workflow evidence (Gitea run log + step summary)
+        if: ${{ always() && inputs.release_mode == 'ops_phase15' }}
+        run: |
+          set -euo pipefail
+          test -s phase15-workflow-evidence.json
+          echo "----- phase15-workflow-evidence.json (evidence; act/Gitea has no v4 artifact service, kept in run log) -----"
+          cat phase15-workflow-evidence.json
+      - name: Write Manual Owner workflow evidence
+        if: ${{ always() && inputs.release_mode == 'manual_owner' }}
+        env:
+          RELEASE_MODE: manual_owner
+          WF_FILE: .github/workflows/production-predeploy-check.yml
+          WF_REF: ${{ github.ref }}
+          WF_RUN_ID: ${{ github.run_id }}
+          WF_ATTEMPT: ${{ github.run_attempt }}
+          WF_HEAD_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ inputs.sha }}
+          WF_ACTOR: ${{ github.actor }}
+          WF_TRIGGERING_ACTOR: ${{ github.triggering_actor || github.actor }}
+          RELEASE_INTENT_ID: ${{ inputs.release_intent_id }}
+          WF_ENVIRONMENT: production
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          if [ -f ./phase15-backup.env ]; then
+            set -a
+            # shellcheck disable=SC1091
+            . ./phase15-backup.env
+            set +a
+          fi
+          python3 .github/scripts/write-manual-owner-workflow-evidence.py manual-owner-workflow-evidence.json
+      - name: Publish Manual Owner workflow evidence (Gitea run log + step summary)
+        if: ${{ always() && inputs.release_mode == 'manual_owner' }}
+        run: |
+          set -euo pipefail
+          test -s manual-owner-workflow-evidence.json
+          echo "----- manual-owner-workflow-evidence.json (evidence; act/Gitea has no v4 artifact service, kept in run log) -----"
+          cat manual-owner-workflow-evidence.json

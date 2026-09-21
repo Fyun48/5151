@@ -1,0 +1,495 @@
+# ============================================================================
+# Gitea Actions port of .github/workflows/build-production-image.yml（2026-09-20 遷移；Owner 指定 Gitea 為正式主場）
+#
+# 與 GitHub 版的差異（Gitea 相容性/環境必要調整；以下各點都用 ci-probe repo 的 probe workflow 實測過）：
+#   1. `jobs.<job_id>.environment` 移除 → Gitea 不支援 environments（docs: Compared to
+#      GitHub Actions / Unsupported workflows syntax）。原 GitHub 的 environment 保護規則在
+#      Gitea 沒有對應物；授權仍靠下方的 fail-closed 檢查（actor + 精確 confirmation 字串）。
+#   2. vars.PRODUCTION_DEPLOY_ALLOWED_ACTOR → secrets.PRODUCTION_DEPLOY_ALLOWED_ACTOR
+#      （實測 Gitea 支援 vars，但用 secret 較穩、不依賴 repo 變數設定）。
+#   3. docker login：secrets.GITHUB_TOKEN → secrets.GHCR_USER / secrets.GHCR_TOKEN。
+#      實測 Gitea 的 secrets.GITHUB_TOKEN 有值，但那是 Gitea 的 job token（GITEA_TOKEN），
+#      Gitea 尚未實作 package 授權 → 不能推 OCI，推 ghcr.io 必須用 GitHub PAT。
+#   4. permissions.packages 移除（GitHub-only scope）。
+#   5. registry path / provenance URL：Gitea 的 github.repository 是 JimmyGOD/5151，與 image
+#      實際所在的 ghcr.io/fyun48/5151 不同 → 改用 secrets.GHCR_REPO / secrets.SOURCE_REPO_URL
+#      （值見 evidence/runtime-modernization/GITEA-MIGRATION.md）。
+#   6. ${{ github.triggering_actor }} → ${{ github.triggering_actor || github.actor }}：
+#      實測 Gitea 的 github.triggering_actor 是空的，不補 fallback 會讓 fail-closed 檢查
+#      一律拒絕。Gitea 沒有 GitHub 的「他人重跑」情境，故 fallback 到 actor 等價。
+#
+#   7. `actions/upload-artifact@v4` → 改為把 evidence 直接印進 run log + step summary：
+#      GitHub 的 v4 action 內建「非 GitHub host 就拒絕」，跑在 Gitea 會直接失敗
+#      （`@actions/artifact v2.0.0+ ... not supported on GHES`），實測會讓整個 job 失敗、
+#      後面的 docker login/build/push 全被跳過。改寫後 evidence 仍留在 run log
+#      （`docker logs gitea-runner-ci` 或 Gitea 的 actions_log）與 step summary。
+#   8. `timeout-minutes` 45 → 60：NAS runner 用 qemu 建 multi-arch 比 GitHub-hosted 慢，
+#      且 runner 端 `runner.timeout` 同步由 20m 調到 60m（見 `deploy/gitea/runner-config.yaml`）。
+#      實測 run 26 在 20m02s 撞到 runner job timeout（症狀：act_runner 讀 job 容器時
+#      `context deadline exceeded`），故兩邊一起放寬。
+#   9. `timeout-minutes` 60 → 90：runner capacity 由 1 調到 2（見 `deploy/gitea/runner-config.yaml`）後，
+#      multi-arch build 可能與 CI 併行、比單獨跑更慢，故再把上限留寬，避免被誤判成失敗。
+#  10. smoke 步驟**完全不發佈 host port**（原本是 `-p 127.0.0.1::5153`）：本 runner 是
+#      「job 跑在容器裡 + 用 host docker socket」，job 容器掛在 `5151-gitea_default` 橋接網路上，
+#      它裡面的 `127.0.0.1:<host_port>` 指的是**它自己**、不是 host；而 `-p 127.0.0.1::` 只綁 host
+#      loopback，從 bridge 連 gateway IP 也看不到。
+#      2026-09-20 實測（run 57/#54）：curl 150 次全是 `Failed to connect to 127.0.0.1 port 32771`，
+#      但**同一時間 app 早就起來了**（NAS 上實測 4–5 秒就 ready）→ 150 秒窗只是在延後失敗。
+#      → 改成把 smoke 容器放進**job 容器同一個網路**、用**容器名**當 host（`http://$NAME:5153`）。
+#      實測（`deploy/gitea/smoke-topology-diag.sh`）：拿掉 `-p` 後 5 秒 ready、`/api/health` `/`
+#      `/login.html` 全 200、`docker exec` 也照常。順帶解掉固定埠撞 `5151-web-B` 的問題（run 30 的
+#      `Bind for 0.0.0.0:15153 failed: port is already allocated`）——現在一個 host 埠都不佔。
+#  11. smoke 步驟**不能 bind-mount job 容器內的路徑**（`$PWD/v3/src`、`$SMOKE_DIR`）：daemon 只在 host 上
+#      解析路徑 → `Bind mount failed: '/workspace/<owner>/5151/v3/src' does not exist`（run #35 紅燈）。
+#      → image+source 的等價性改用 **sha256 比對**（checkout vs image 內檔案）、DB 改用 **`docker cp`** 取回。
+#  12. smoke 的健康檢查：等待窗 150 → 60 秒，並加上「容器中途死掉就立刻紅燈並印 log」。
+#      HTTP health 實測 4–6 秒就 OK，NAS 上 98 張表也是**開機 6 秒**就有。
+#      ⚠️ 真正的坑是 **SQLite WAL**：DB 以 WAL 模式運作，`/data/v3.db` 只有 4 KB、
+#      資料在 2.5 MB 的 `v3.db-wal` 裡 → 只 `docker cp v3.db` 會拿到「integrity ok 但 **0 張表**」的
+#      假象，正是 run 62/#59、63/#60、65/#62 連續三次紅燈的原因（把等待窗 150→300 秒都治不了）。
+#      → DB 檢查一律改用 `docker exec` 在**容器內**讀同一個檔；等待窗回到 90 秒。
+#
+# 觸發方式與 GitHub 版相同：manual-only（workflow_dispatch + 40 碼 sha + 精確確認字串）。
+# ============================================================================
+
+name: Build production image (no deploy)
+run-name: "${{ inputs.release_mode == 'ops_phase15' && format('phase15-intent:{0}', inputs.release_intent_id) || format('manual-owner:{0}', inputs.sha) }}"
+
+# 只建置並推送不可變 SHA tag。不 SSH、不重啟 CasaOS、不改 :latest。
+# 合併/push 不會自動執行；必須從 refs/heads/master 做 workflow_dispatch。
+#
+# release_mode=manual_owner：人工治理路徑，不依賴 Ops Phase 15 / release_intent_id。
+# release_mode=ops_phase15：維持既有 Phase 15 綁定（run-name phase15-intent:<id>）。
+#
+# Production 身分以 IMAGE DIGEST 為準；full SHA tag 只是人讀參考。
+# 已核對的最後一次成功 v3 Production source（deploy-v3.yml run 34113624372）：
+#   584d583e56151abcf01c972b7bb45a82c73e4596 （GitHub PR #191 merge commit）
+# 錯誤寫法 584d583e56151abcf01c972b7bb45e4596 不是有效 object，禁止使用。
+# Owner 已書面授權：Cursor Agent（actor `cursor` / `cursor[bot]`）在使用者要求合併部署時
+# 可從 master 觸發本檔；見 AGENTS.md 與 .cursor/rules/owner-merge-deploy.mdc。
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "要建置的完整 40 碼 commit SHA（必須可從 origin/master 追溯）"
+        required: true
+      release_mode:
+        description: "Release path: manual_owner（人工治理，預設）或 ops_phase15（Ops Phase 15 綁定）"
+        type: choice
+        required: true
+        default: manual_owner
+        options:
+          - manual_owner
+          - ops_phase15
+      release_intent_id:
+        description: "僅 ops_phase15 必填：Ops Phase 15 durable release_intent_id。manual_owner 必須空白；非空會 fail-closed（避免舊 Phase 15 caller 被降成 Manual Owner）"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  # packages: write（Gitea 不支援 GitHub-only scope；且 GITEA_TOKEN 不能推 OCI，需 PAT）
+
+concurrency:
+  group: build-production-image
+  cancel-in-progress: false
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    env:
+      # 遷移新增：Gitea 的 github.repository 是 JimmyGOD/5151，跟 ghcr.io/fyun48/5151 不同，
+      # 所以 registry path 與 provenance URL 改用 secret 提供（值見 evidence）。
+      GHCR_REPO: ${{ secrets.GHCR_REPO }}
+      SOURCE_REPO_URL: ${{ secrets.SOURCE_REPO_URL }}
+    timeout-minutes: 90
+    steps:
+      - name: Authorize build (fail-closed)
+        env:
+          WF_REF: ${{ github.ref }}
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor || github.actor }}
+          ALLOWED_ACTOR: ${{ secrets.PRODUCTION_DEPLOY_ALLOWED_ACTOR }}
+          BUILD_SHA: ${{ inputs.sha }}
+          RELEASE_MODE: ${{ inputs.release_mode }}
+          RELEASE_INTENT_ID: ${{ inputs.release_intent_id }}
+        run: |
+          set -euo pipefail
+          if [ "$WF_REF" != "refs/heads/master" ]; then
+            echo "::error::Build workflow definition must run from master (got $WF_REF)"; exit 1
+          fi
+          if [ -z "${ALLOWED_ACTOR:-}" ]; then
+            echo "::error::PRODUCTION_DEPLOY_ALLOWED_ACTOR is not configured; refusing (fail-closed)"; exit 1
+          fi
+          CURSOR_DEPLOY=0
+          if [ "$ACTOR" = "cursor" ] || [ "$ACTOR" = "cursor[bot]" ]; then
+            if [ "$TRIGGERING_ACTOR" = "cursor" ] || [ "$TRIGGERING_ACTOR" = "cursor[bot]" ]; then
+              CURSOR_DEPLOY=1
+            fi
+          fi
+          if [ "$CURSOR_DEPLOY" != 1 ] && [ "$ACTOR" != "$ALLOWED_ACTOR" ]; then
+            echo "::error::actor '$ACTOR' is not the authorized deployer"; exit 1
+          fi
+          if [ "$CURSOR_DEPLOY" != 1 ] && [ "$TRIGGERING_ACTOR" != "$ALLOWED_ACTOR" ]; then
+            echo "::error::triggering actor '$TRIGGERING_ACTOR' is not the authorized deployer"; exit 1
+          fi
+          if ! printf '%s' "${BUILD_SHA:-}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::sha must be a full 40-character commit SHA"; exit 1
+          fi
+          if [ "${RELEASE_MODE:-}" != "manual_owner" ] && [ "${RELEASE_MODE:-}" != "ops_phase15" ]; then
+            echo "::error::release_mode must be manual_owner or ops_phase15 (got '${RELEASE_MODE:-}')"; exit 1
+          fi
+          if [ "${RELEASE_MODE:-}" = "ops_phase15" ] && [ -z "${RELEASE_INTENT_ID:-}" ]; then
+            echo "::error::ops_phase15 requires a non-empty release_intent_id"; exit 1
+          fi
+          if [ "${RELEASE_MODE:-}" = "manual_owner" ] && [ -n "${RELEASE_INTENT_ID:-}" ]; then
+            echo "::error::manual_owner forbids a non-empty release_intent_id; stale Phase 15 callers must set release_mode=ops_phase15"; exit 1
+          fi
+      - name: Checkout workflow-definition SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Stage trusted workflow-definition evidence writers
+        env:
+          TRUSTED_SCRIPT_DIR: ${{ runner.temp }}/trusted-workflow-scripts
+          EXPECTED_WF_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Writers must come from this exact workflow-definition commit (github.sha),
+          # not a moving master tip and not a later candidate checkout (e.g. #217).
+          HEAD_SHA="$(git rev-parse HEAD)"
+          if [ "$HEAD_SHA" != "$EXPECTED_WF_SHA" ]; then
+            echo "::error::trusted checkout HEAD $HEAD_SHA != workflow execution SHA $EXPECTED_WF_SHA"; exit 1
+          fi
+          mkdir -p "$TRUSTED_SCRIPT_DIR"
+          cp -f \
+            .github/scripts/write-manual-owner-workflow-evidence.py \
+            .github/scripts/write-phase15-workflow-evidence.py \
+            "$TRUSTED_SCRIPT_DIR/"
+          test -s "$TRUSTED_SCRIPT_DIR/write-manual-owner-workflow-evidence.py"
+          test -s "$TRUSTED_SCRIPT_DIR/write-phase15-workflow-evidence.py"
+          echo "TRUSTED_SCRIPT_DIR=$TRUSTED_SCRIPT_DIR" >> "$GITHUB_ENV"
+      - name: Write Phase 15 run identity
+        if: ${{ always() && inputs.release_mode == 'ops_phase15' }}
+        env:
+          TRUSTED_SCRIPT_DIR: ${{ runner.temp }}/trusted-workflow-scripts
+          EVIDENCE_KIND: identity
+          WF_FILE: .github/workflows/build-production-image.yml
+          WF_REF: ${{ github.ref }}
+          WF_RUN_ID: ${{ github.run_id }}
+          WF_ATTEMPT: ${{ github.run_attempt }}
+          WF_HEAD_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ inputs.sha }}
+          WF_ACTOR: ${{ github.actor }}
+          WF_TRIGGERING_ACTOR: ${{ github.triggering_actor || github.actor }}
+          RELEASE_INTENT_ID: ${{ inputs.release_intent_id }}
+        run: python3 "${TRUSTED_SCRIPT_DIR:?}/write-phase15-workflow-evidence.py" phase15-run-identity.json
+      - name: Publish Phase 15 run identity (Gitea run log + step summary)
+        if: ${{ always() && inputs.release_mode == 'ops_phase15' }}
+        run: |
+          set -euo pipefail
+          test -s phase15-run-identity.json
+          echo "----- phase15-run-identity.json (evidence; act/Gitea has no v4 artifact service, kept in run log) -----"
+          cat phase15-run-identity.json
+      - name: Write Manual Owner run identity
+        if: ${{ always() && inputs.release_mode == 'manual_owner' }}
+        env:
+          TRUSTED_SCRIPT_DIR: ${{ runner.temp }}/trusted-workflow-scripts
+          EVIDENCE_KIND: identity
+          RELEASE_MODE: manual_owner
+          WF_FILE: .github/workflows/build-production-image.yml
+          WF_REF: ${{ github.ref }}
+          WF_RUN_ID: ${{ github.run_id }}
+          WF_ATTEMPT: ${{ github.run_attempt }}
+          WF_HEAD_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ inputs.sha }}
+          WF_ACTOR: ${{ github.actor }}
+          WF_TRIGGERING_ACTOR: ${{ github.triggering_actor || github.actor }}
+          RELEASE_INTENT_ID: ${{ inputs.release_intent_id }}
+        run: python3 "${TRUSTED_SCRIPT_DIR:?}/write-manual-owner-workflow-evidence.py" manual-owner-run-identity.json
+      - name: Publish Manual Owner run identity (Gitea run log + step summary)
+        if: ${{ always() && inputs.release_mode == 'manual_owner' }}
+        run: |
+          set -euo pipefail
+          test -s manual-owner-run-identity.json
+          echo "----- manual-owner-run-identity.json (evidence; act/Gitea has no v4 artifact service, kept in run log) -----"
+          cat manual-owner-run-identity.json
+      - name: Validate SHA reachable from origin/master, then check it out
+        env:
+          BUILD_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin master
+          if ! git merge-base --is-ancestor "$BUILD_SHA" origin/master; then
+            echo "::error::commit $BUILD_SHA is not reachable from origin/master; refusing"; exit 1
+          fi
+          git checkout --force "$BUILD_SHA"
+          echo "SOURCE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - uses: docker/setup-qemu-action@v3
+      # Gitea 版加速（P1.5）：builder 具名 + 不清理 → **跨 run 保留** buildkit 的圖層快取，
+      # 讓 `FROM node:22-bookworm-slim` 的解壓（實測單次 170–1000 秒）只付一次。
+      # 預設 `cleanup: true` 會在 job 結束時把 builder 刪掉（＝每次重來），這是慢的主因之一。
+      - uses: docker/setup-buildx-action@v3
+        with:
+          # buildx 要求名稱以**字母**開頭（`5151-builder` 會 invalid name ✗，run #46 實測）。
+          name: nas-5151-builder
+          cleanup: false
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ secrets.GHCR_USER }}
+          password: ${{ secrets.GHCR_TOKEN }}
+      - name: Image name
+        id: image
+        run: echo "name=${GHCR_REPO}" >> "$GITHUB_OUTPUT"
+      - name: Reuse existing immutable SHA tag if trustworthy
+        id: existing
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          BUILD_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          REF="${IMAGE}:${BUILD_SHA}"
+          echo "image_ref=$REF" >> "$GITHUB_OUTPUT"
+          if ! docker buildx imagetools inspect "$REF" >/dev/null 2>&1; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "No existing SHA tag; will build."
+            exit 0
+          fi
+          DIGEST="$(docker buildx imagetools inspect "$REF" | awk '/^Digest:/{print $2; found=1} END{if(!found) exit 1}')"
+          if ! printf '%s' "$DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo "::error::Could not resolve immutable manifest digest for $REF"; exit 1
+          fi
+          docker pull --platform linux/amd64 "$REF"
+          REV="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$REF")"
+          echo "Existing tag digest=$DIGEST revision_label=${REV:-missing}"
+          if [ "$REV" != "$BUILD_SHA" ]; then
+            echo "::error::Refusing to overwrite existing ${REF} (revision label '${REV:-missing}' != ${BUILD_SHA})"
+            exit 1
+          fi
+          echo "exists=true" >> "$GITHUB_OUTPUT"
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "Reusing trustworthy existing image $REF @ $DIGEST"
+      - uses: docker/build-push-action@v6
+        if: steps.existing.outputs.exists != 'true'
+        id: build
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ steps.image.outputs.name }}:${{ inputs.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ inputs.sha }}
+            org.opencontainers.image.source=${SOURCE_REPO_URL}
+          # Gitea 版加速（P1.5）：registry cache（GitHub 版沒有）。讓 `npm ci` 與各 COPY 層
+          # 在輸入未變時直接命中；另存一個 `:buildcache` tag，**不影響 image 本身的 tags/digest**。
+          cache-from: type=registry,ref=${{ secrets.GHCR_REPO }}:buildcache
+          cache-to: type=registry,ref=${{ secrets.GHCR_REPO }}:buildcache,mode=max
+      - name: Record digest
+        id: digest
+        env:
+          BUILT: ${{ steps.build.outputs.digest }}
+          REUSED: ${{ steps.existing.outputs.digest }}
+          EXISTS: ${{ steps.existing.outputs.exists }}
+        run: |
+          set -euo pipefail
+          if [ "$EXISTS" = "true" ]; then
+            echo "digest=$REUSED" >> "$GITHUB_OUTPUT"
+          else
+            echo "digest=$BUILT" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Verify sharp + revision label inside built amd64 image
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}:${{ inputs.sha }}
+          BUILD_SHA: ${{ inputs.sha }}
+          MANIFEST_DIGEST: ${{ steps.digest.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker pull --platform linux/amd64 "$IMAGE"
+          REV="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$IMAGE")"
+          SRC="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.source" }}' "$IMAGE")"
+          echo "revision_label=$REV"
+          echo "source_label=$SRC"
+          if [ "$REV" != "$BUILD_SHA" ]; then
+            echo "::error::image revision label '$REV' != BUILD_SHA $BUILD_SHA"; exit 1
+          fi
+          docker run --rm --platform linux/amd64 "$IMAGE" node -e "import('sharp').then(()=>console.log('SHARP_OK')).catch(()=>{console.error('SHARP_MISSING'); process.exit(1)})"
+          docker run --rm --platform linux/amd64 "$IMAGE" node -e "console.log('NODE', process.version)"
+          echo "architecture_tested=linux/amd64"
+          echo "IMAGE_DIGEST=$MANIFEST_DIGEST"
+          echo "SOURCE_SHA=$BUILD_SHA"
+          echo "IMAGE_TAG=$IMAGE"
+          {
+            echo "## Candidate image"
+            echo "- source SHA: \`$BUILD_SHA\`"
+            echo "- SHA tag: \`$IMAGE\`"
+            echo "- multi-arch manifest digest: \`$MANIFEST_DIGEST\`"
+            echo "- architecture tested: linux/amd64"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Isolated v3 image+source smoke
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}:${{ inputs.sha }}
+          BUILD_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          SMOKE_DIR="$(mktemp -d)"
+          NAME="predeploy-v3-smoke-${GITHUB_RUN_ID}"
+          cleanup() {
+            docker rm -f "$NAME" >/dev/null 2>&1 || true
+            rm -rf "$SMOKE_DIR"
+          }
+          trap cleanup EXIT
+          docker pull --platform linux/amd64 "$IMAGE"
+          # 本 runner 是「job 跑在容器裡 + 用 host docker socket」，與 GitHub-hosted（指令直接跑在 host）
+          # 拓撲不同。三個踩過的坑在檔頭註解 10–12 有完整記錄，這裡只留結論：
+          #   1. **不發佈 host port**：job 容器在同一橋接網路上，`127.0.0.1:<host_port>` 指的是它自己
+          #      → 改成把 smoke 容器放進**同一個網路**、用**容器名**連（也不再撞 5151-web-B 的 15153）。
+          #   2. **不 bind-mount job 容器內的路徑**（daemon 在 host 上解析）→ 用 sha256 等價性 + `docker cp`。
+          #   3. 等待窗**不需要長**：實測 NAS 上 4–5 秒就 ready；容器中途死掉要立刻紅燈。
+          JOB_NET="$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$(hostname)" 2>/dev/null | awk '{print $1}' || true)"
+          if [ -z "$JOB_NET" ]; then
+            JOB_NET="${SMOKE_NETWORK:-5151-gitea_default}"
+            echo "smoke: network autodetect failed; falling back to ${JOB_NET}"
+          fi
+          echo "smoke: job network = ${JOB_NET}"
+          docker network inspect "$JOB_NET" >/dev/null
+          docker run -d --name "$NAME" --network "$JOB_NET" --platform linux/amd64 \
+            -e HOST=0.0.0.0 \
+            -e PORT=5153 \
+            -e DATA_DIR=/data \
+            -e OPS_FEEDBACK_DELIVERY=0 \
+            -e PUBLIC_BASE_URL="http://${NAME}:5153" \
+            -e AUTH_EMAIL=predeploy-smoke@example.com \
+            -e AUTH_PASSWORD=predeploy-smoke-not-production \
+            "$IMAGE" \
+            node src/server.js
+          BASE_URL="http://${NAME}:5153"
+          ok=0
+          for _ in $(seq 1 60); do
+            if [ "$(docker inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null || echo false)" != "true" ]; then
+              echo "::error::smoke container exited before becoming ready (network=${JOB_NET})"
+              docker logs "$NAME" || true
+              exit 1
+            fi
+            if curl -fsS "$BASE_URL/api/health" | grep -q '"ok":true'; then
+              ok=1
+              break
+            fi
+            sleep 1
+          done
+          [ "$ok" = 1 ] || {
+            echo "::error::health did not become ready in 60s (network=${JOB_NET}, url=${BASE_URL})"
+            docker inspect -f 'status={{.State.Status}} networks={{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$NAME" || true
+            docker logs "$NAME" || true
+            exit 1
+          }
+          curl -fsS -o /tmp/health.json -w "health %{http_code}\n" "$BASE_URL/api/health"
+          # ⚠️ DB 驗證一律在**容器內**讀（`docker exec`），不要只 `docker cp v3.db`：
+          # SQLite 開在 **WAL 模式**，資料可能還在 `v3.db-wal`、沒 checkpoint 回 `v3.db`
+          # → 單獨複製 `v3.db` 會得到「`integrity_check` ok 但 **0 張表**」的假象。
+          # 2026-09-20 連續三次就是這樣紅的（run 62/#59、63/#60、65/#62）；同一時間用
+          # `docker exec` 讀同一個檔可看到 98 張表、而且是**開機 6 秒**就有（不是等 refresh）。
+          DB_CHECK='import { DatabaseSync } from "node:sqlite";
+          const db = new DatabaseSync("/data/v3.db", { readOnly: true });
+          const t = db.prepare("SELECT name FROM sqlite_master WHERE type = ?").all("table").map((r) => r.name);
+          db.close();
+          process.exit(t.includes("demand_posts") && t.includes("member_media") ? 0 : 1);'
+          DB_REPORT='import { DatabaseSync } from "node:sqlite";
+          const db = new DatabaseSync("/data/v3.db", { readOnly: true });
+          const ic = db.prepare("PRAGMA integrity_check").get();
+          const t = db.prepare("SELECT name FROM sqlite_master WHERE type = ? ORDER BY 1").all("table").map((r) => r.name);
+          db.close();
+          console.log(JSON.stringify({ integrity_check: ic.integrity_check, table_count: t.length, has_demand_posts: t.includes("demand_posts"), has_member_media: t.includes("member_media") }));
+          if (ic.integrity_check !== "ok") process.exit(1);
+          if (!t.includes("demand_posts") || !t.includes("member_media")) process.exit(1);'
+          db_ok=0
+          for _ in $(seq 1 90); do
+            if [ "$(docker inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null || echo false)" != "true" ]; then
+              echo "::error::smoke container died before the DB was ready"
+              docker logs "$NAME" || true
+              exit 1
+            fi
+            if docker exec "$NAME" node --input-type=module -e "$DB_CHECK" >/dev/null 2>&1; then db_ok=1; break; fi
+            sleep 1
+          done
+          [ "$db_ok" = 1 ] || {
+            echo "::error::DB not ready in 90s (network=${JOB_NET}, url=${BASE_URL})"
+            docker logs "$NAME" | tail -40 || true
+            exit 1
+          }
+          curl -fsS -o /tmp/landing.html -w "landing %{http_code}\n" "$BASE_URL/"
+          curl -fsS -o /tmp/login.html -w "login %{http_code}\n" "$BASE_URL/login.html"
+          docker exec "$NAME" node -e "import('sharp').then(()=>console.log('SHARP_OK')).catch(()=>{console.error('SHARP_MISSING'); process.exit(1)})"
+          # image+source 等價性（取代原本的 src/public bind-mount）：比對 image 內檔案與 checkout 的 sha256。
+          for rel in v3/src/server.js v3/public/login.html; do
+            LOCAL_SHA="$(sha256sum "$PWD/$rel" | awk '{print $1}')"
+            IMAGE_SHA="$(docker run --rm --platform linux/amd64 "$IMAGE" sha256sum "/app/${rel#v3/}" | awk '{print $1}')"
+            echo "equivalence $rel: checkout=$LOCAL_SHA image=$IMAGE_SHA"
+            [ "$LOCAL_SHA" = "$IMAGE_SHA" ] || { echo "::error::image /app/${rel#v3/} differs from the checked-out $rel"; exit 1; }
+          done
+          # DB 完整性與統計在容器內做（理由同上：`docker cp` 單獨複製 v3.db 會少掉 WAL）。
+          docker exec "$NAME" node --input-type=module -e "$DB_REPORT"
+          echo "ISOLATED_V3_SMOKE_OK source=$BUILD_SHA image=$IMAGE"
+      - name: Write Phase 15 workflow evidence
+        if: ${{ always() && inputs.release_mode == 'ops_phase15' }}
+        env:
+          TRUSTED_SCRIPT_DIR: ${{ runner.temp }}/trusted-workflow-scripts
+          WF_FILE: .github/workflows/build-production-image.yml
+          WF_REF: ${{ github.ref }}
+          WF_RUN_ID: ${{ github.run_id }}
+          WF_ATTEMPT: ${{ github.run_attempt }}
+          WF_HEAD_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ inputs.sha }}
+          WF_ACTOR: ${{ github.actor }}
+          WF_TRIGGERING_ACTOR: ${{ github.triggering_actor || github.actor }}
+          RELEASE_INTENT_ID: ${{ inputs.release_intent_id }}
+          IMAGE_DIGEST: ${{ steps.digest.outputs.digest }}
+          OCI_REVISION: ${{ inputs.sha }}
+          OCI_SOURCE: https://github.com/${{ github.repository }}
+        run: python3 "${TRUSTED_SCRIPT_DIR:?}/write-phase15-workflow-evidence.py" phase15-workflow-evidence.json
+      - name: Publish Phase 15 workflow evidence (Gitea run log + step summary)
+        if: ${{ always() && inputs.release_mode == 'ops_phase15' }}
+        run: |
+          set -euo pipefail
+          test -s phase15-workflow-evidence.json
+          echo "----- phase15-workflow-evidence.json (evidence; act/Gitea has no v4 artifact service, kept in run log) -----"
+          cat phase15-workflow-evidence.json
+      - name: Write Manual Owner workflow evidence
+        if: ${{ always() && inputs.release_mode == 'manual_owner' }}
+        env:
+          TRUSTED_SCRIPT_DIR: ${{ runner.temp }}/trusted-workflow-scripts
+          RELEASE_MODE: manual_owner
+          WF_FILE: .github/workflows/build-production-image.yml
+          WF_REF: ${{ github.ref }}
+          WF_RUN_ID: ${{ github.run_id }}
+          WF_ATTEMPT: ${{ github.run_attempt }}
+          WF_HEAD_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ inputs.sha }}
+          WF_ACTOR: ${{ github.actor }}
+          WF_TRIGGERING_ACTOR: ${{ github.triggering_actor || github.actor }}
+          RELEASE_INTENT_ID: ${{ inputs.release_intent_id }}
+          IMAGE_DIGEST: ${{ steps.digest.outputs.digest }}
+          OCI_REVISION: ${{ inputs.sha }}
+          OCI_SOURCE: https://github.com/${{ github.repository }}
+        run: python3 "${TRUSTED_SCRIPT_DIR:?}/write-manual-owner-workflow-evidence.py" manual-owner-workflow-evidence.json
+      - name: Publish Manual Owner workflow evidence (Gitea run log + step summary)
+        if: ${{ always() && inputs.release_mode == 'manual_owner' }}
+        run: |
+          set -euo pipefail
+          test -s manual-owner-workflow-evidence.json
+          echo "----- manual-owner-workflow-evidence.json (evidence; act/Gitea has no v4 artifact service, kept in run log) -----"
+          cat manual-owner-workflow-evidence.json
+
+      # P1 通知：build/推送結果（含 digest）推到 Discord。
+      # 沒設 `DISCORD_WEBHOOK_URL`（repo variable/secret）時只印 skipped，不會讓 job 紅燈。
+      - name: Notify Discord
+        if: ${{ always() }}
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL || vars.DISCORD_WEBHOOK_URL }}
+          STATUS: ${{ job.status }}
+          TITLE: ${{ github.workflow }} (${{ github.ref_name }})
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          FIELDS: sha=${{ inputs.sha }},digest=${{ steps.digest.outputs.digest }},mode=${{ inputs.release_mode }}
+        run: bash deploy/gitea/notify.sh

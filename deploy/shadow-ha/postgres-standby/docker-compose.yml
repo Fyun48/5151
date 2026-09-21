@@ -1,10 +1,13 @@
 name: 5151-shadow-pg-standby
 
-# Shadow PostgreSQL-B (Hot Standby) for Synology. Isolated from production.
+# Shadow PostgreSQL 節點 B（Synology）：container 5151-postgres-B、volume 5151-shadow-pg-b。
+# 目錄名沿用 bootstrap 時的「角色」命名，但角色會變：**2026-09-20 起本節點是預設 primary**
+# （Synology 端的資料庫主節點），CasaOS 的 5151-postgres-A 是 hot standby。
+# 角色記在各自的資料目錄，由 promote / 重拉 base backup 決定，不是由這份 compose 決定。
 # Two-phase start:
-#   1) `docker compose run --rm standby-basebackup` runs setup-standby.sh to pull
-#      a base backup from the primary and write recovery config into the volume.
-#   2) `docker compose up -d` starts postgres in standby mode (standby.signal).
+#   1) `docker compose --profile setup run --rm standby-basebackup` 會把本節點重建成當下
+#      primary 的 standby（清空 volume → pg_basebackup → standby.signal + primary_conninfo）。
+#   2) `docker compose up -d` 以（該資料目錄記住的）角色啟動。
 services:
   5151-postgres-B:
     container_name: 5151-postgres-B
@@ -23,11 +26,20 @@ services:
       - shadow-pg
 
   # One-shot base-backup helper. Never runs as a daemon.
+  # PRIMARY_HOST 預設沿用 CASAOS_HOST（本節點若被重建，primary 是 CasaOS）；
+  # 預設 primary（Synology）情境下本節點不需重建，除非做 failover 演練。
   standby-basebackup:
     image: postgres:16-alpine
     profiles: ["setup"]
+    # 用 postgres 身分跑，資料目錄檔案才會是 postgres 擁有（root 會留 root-owned 檔）。
+    user: postgres
     environment:
-      CASAOS_HOST: ${CASAOS_HOST:?set CASAOS_HOST (primary LAN IP)}
+      # 預設 = 文件上「本節點若被重建時的 primary」（CasaOS）。同樣必須給預設值：
+      # compose 會插值整個檔案，`${CASAOS_HOST:?...}` 會讓不帶變數的 `docker compose up -d` 直接失敗
+      # （2026-09-20 在 peer 節點實測踩到）。
+      PRIMARY_HOST: ${PRIMARY_HOST:-${CASAOS_HOST:-192.168.0.140}}
+      PRIMARY_PORT: ${PRIMARY_PORT:-15432}
+      SLOT_NAME: ${SLOT_NAME:-standby_b}
       PG_REPLICATION_PASSWORD: ${PG_REPLICATION_PASSWORD:?set PG_REPLICATION_PASSWORD}
       PGDATA: /var/lib/postgresql/data/pgdata
     entrypoint: ["/bin/sh", "-c"]

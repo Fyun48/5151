@@ -3,3 +3,6 @@
 # YAML (CI workflows, compose) must use LF so regex/onBlock tests and Linux tooling agree.
 *.yml text eol=lf
 *.yaml text eol=lf
+# Config files mounted into containers (e.g. haproxy.cfg) must be LF: HAProxy on Linux
+# parses the file line by line and a stray CR ends up inside values such as bind ports.
+*.cfg text eol=lf

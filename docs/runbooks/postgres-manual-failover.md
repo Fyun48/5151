@@ -11,9 +11,19 @@
 
 ## 名詞
 
-- `P` = 舊 primary（CasaOS，`CASAOS_HOST:15432`）
-- `S` = standby（Synology，`SYNOLOGY_HOST:15432`）
+- 本 cluster 自 2026-09-20 起**預設 primary = Synology**（`5151-postgres-B`，`SYNOLOGY_HOST:15432`），
+  預設 standby = CasaOS（`5151-postgres-A`，`CASAOS_HOST:15432`）。流程本身對稱。
+- `P` = 當下的 primary（預設 Synology）
+- `S` = 當下的 standby（預設 CasaOS）
 - 連線一律用 `docker exec`（shadow container），不碰正式 DB。
+
+> ⚠️ 下面 §1–§8 的**範例指令是照「CasaOS → Synology」方向寫的**（2026-09-20 drill 逐步實測過，
+> 那次 CasaOS 是 primary）。要按預設方向（Synology → CasaOS）操作時，把範例中的
+> `5151-postgres-A` ↔ `5151-postgres-B`、`CASAOS_HOST` ↔ `SYNOLOGY_HOST` 對調即可；
+> 兩個方向 drill 都跑過（見 `evidence/runtime-modernization/A4-HA-DRILL-20260920.md`）。
+
+> 演練可改用 `deploy/shadow-ha/drill.sh`（`preflight` / `failover`；`failover` 需 `CONFIRM_FAILOVER=yes`，
+> 且它只做本機步驟、跨主機一律人工）。**下列步驟仍是唯一權威來源**，腳本只是把已實測過的步驟自動化。
 
 ## 流程
 
@@ -54,8 +64,10 @@ docker exec 5151-postgres-B psql -U postgres \
 ### 5. promote — 手動升格 standby
 
 ```bash
-docker exec 5151-postgres-B pg_ctl promote -D /var/lib/postgresql/data/pgdata
-# 或直接跑：
+# 一定要 -u postgres：docker exec 預設是 root，pg_ctl 會直接拒絕
+# （2026-09-20 drill 實測：`pg_ctl: cannot be run as root`）。
+docker exec -u postgres 5151-postgres-B pg_ctl promote -D /var/lib/postgresql/data/pgdata
+# 或直接跑（psql 走容器內 local socket trust，不受 root 影響）：
 docker exec 5151-postgres-B psql -U postgres -c "SELECT pg_promote();"
 ```
 
@@ -67,8 +79,15 @@ docker exec 5151-postgres-B psql -U postgres -c "SELECT pg_is_in_recovery();"  #
 
 ### 6. re-point — 更新 router
 
-更新 HAProxy `haproxy.cfg` 的 `pg_primary` backend，把 `pg-b`（Synology）改成 primary、
-`pg-a`（CasaOS）改成 backup；`pg_standby_first` 反向調整。重新載入：
+實測結論（2026-09-20 drill）分兩種情況，**不能只記一種**：
+
+- **舊 primary 還停機**（fence 後尚未回來）：**不需要**動設定。HAProxy 會在 `fall 3 × inter 3s`
+  後自動把 pg-rw 轉到標成 `backup` 的那台（drill 實測：經 `25433` 查 `pg_is_in_recovery()` = `f`）。
+- **舊 primary 已回來變成 standby**：**必須**把 `pg_primary` 的順序對調並 reload，否則 pg-rw 會照舊順序
+  打到「已降級成唯讀」的節點（2026-09-20 實測踩到：`pg_is_in_recovery()` 回 `t`、寫入會失敗）。
+
+本 cluster 預設 primary = Synology，`haproxy.cfg` 已按此排列（`pg-b` 在前）；若把 primary 交回 CasaOS，
+要把 `pg-a` 排回前面。重新載入：
 
 ```bash
 docker exec 5151-haproxy haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg && \
@@ -85,15 +104,36 @@ docker exec 5151-postgres-B psql -U postgres -d 5151_shadow -c "CREATE TABLE fai
 
 ### 8. rejoin — 舊 primary 回來後重建為 standby
 
-舊 P 重新可達後，**不要直接啟動**（否則兩 primary 併存）。用 `pg_rewind` 或重拉 base backup：
+舊 P 重新可達後，**不要直接啟動**（否則兩個 primary 併存）。以下步驟為 2026-09-20 drill 實測可行版本：
 
 ```bash
-# 偏好：直接重拉 base backup（資料已分歧時最安全）
-cd deploy/shadow-ha/postgres-standby   # 在舊 P（CasaOS）上，把它當新 standby
-docker stop 5151-postgres-A || true
-docker compose run --rm standby-basebackup   # 從新 primary（Synology）重拉
-docker compose up -d
+# 1) 在「新 primary」上為被重建的節點建 slot（名字要與下面 SLOT_NAME 一致）
+docker exec -u postgres 5151-postgres-B psql -U postgres \
+  -c "SELECT pg_create_physical_replication_slot('standby_a');"   # 舊 primary = A
+
+# 2) fence 舊節點（避免邊跑邊被覆蓋）
+docker stop 5151-postgres-A
+
+# 3) 用「被重建節點自己的 volume」重拉 base backup
+#    （standby compose 掛的是 5151-shadow-pg-b；重建 A 必須換成 A 的 volume）
+docker run --rm -u postgres \
+  -v 5151-shadow-pg-primary_5151-shadow-pg-a:/var/lib/postgresql/data \
+  -e PRIMARY_HOST=192.168.0.220 -e SLOT_NAME=standby_a \
+  -e PG_REPLICATION_PASSWORD='<repl>' -e PGDATA=/var/lib/postgresql/data/pgdata \
+  -v "$PWD/setup-standby.sh:/setup-standby.sh:ro" \
+  --entrypoint /bin/sh postgres:16-alpine -c '. /setup-standby.sh'
+
+# 4) 啟動（standby.signal + primary_conninfo 已寫好）
+docker start 5151-postgres-A
 ```
+
+- 第 3 步若出現 `no pg_hba.conf entry for replication connection from host "172.21.0.1"`，
+  表示 pg_hba 少了 docker 私有網段（peer 主機上的容器經 docker-proxy，來源會變 bridge gateway）。
+  用 `deploy/shadow-ha/postgres-primary/fix-pg-hba.sh` 補（`CONTAINER=<new primary>`），兩段都仍要密碼。
+- 反向（B 接回 A）只是把 `PRIMARY_HOST` / `SLOT_NAME` / volume 對調；drill 兩個方向都實測過，
+  **RPO = 0、RTO ≈ 5–17s**（詳見 `evidence/runtime-modernization/A4-HA-DRILL-20260920.md`）。
+- 腳本已加 `DOCKER`（Synology 的 docker 在 `/usr/local/bin`）與 `PG_CONTAINER` 覆寫，
+  failover 後不論在哪一台主機都能執行。
 
 ## Split-brain prevention 重點
 

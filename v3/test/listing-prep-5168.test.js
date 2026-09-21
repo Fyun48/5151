@@ -50,6 +50,10 @@ import { listingIsDisplayable } from "../src/listingPrep.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 
+// 隔離子程序在 CI（Gitea runner：CPU 較慢且 node --test 會並行多個檔案）上可能遠超過 30s；
+// 這是環境時序而非程式錯誤，因此只保留防卡死的寬鬆上限，可用 V3_ISOLATED_TEST_TIMEOUT_MS 覆寫。
+const ISOLATED_TIMEOUT_MS = Math.max(30_000, Number(process.env.V3_ISOLATED_TEST_TIMEOUT_MS) || 180_000);
+
 function hpListing(overrides = {}) {
   return {
     post_id: 2400000888,
@@ -329,7 +333,7 @@ test("unready 5168 stays off the list until prep is ready; persist writes floor 
   try {
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
       encoding: "utf8",
-      timeout: 30_000,
+      timeout: ISOLATED_TIMEOUT_MS,
       env: { ...process.env, DATA_DIR: dataDir },
     });
     assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -490,7 +494,7 @@ test("R3 unready 5168 cannot become group primary or hide a ready 591", () => {
   try {
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
       encoding: "utf8",
-      timeout: 30_000,
+      timeout: ISOLATED_TIMEOUT_MS,
       env: { ...process.env, DATA_DIR: dataDir },
     });
     assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -657,7 +661,7 @@ test("R5 persist writes title/rent/address and source_key through SQLite", () =>
   try {
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
       encoding: "utf8",
-      timeout: 30_000,
+      timeout: ISOLATED_TIMEOUT_MS,
       env: { ...process.env, DATA_DIR: dataDir },
     });
     assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -899,7 +903,7 @@ test("S1 disabled 5168 does not hide a cheaper-ready 591 or linger as match_peer
   try {
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
       encoding: "utf8",
-      timeout: 30_000,
+      timeout: ISOLATED_TIMEOUT_MS,
       env: { ...process.env, DATA_DIR: dataDir },
     });
     assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -958,7 +962,7 @@ test("S1 expensive disabled 5168 leaves peers and match_peer", () => {
   try {
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
       encoding: "utf8",
-      timeout: 30_000,
+      timeout: ISOLATED_TIMEOUT_MS,
       env: { ...process.env, DATA_DIR: dataDir },
     });
     assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -1043,7 +1047,7 @@ test("S3 single rental floor without building height writes through SQLite", () 
   try {
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
       encoding: "utf8",
-      timeout: 30_000,
+      timeout: ISOLATED_TIMEOUT_MS,
       env: { ...process.env, DATA_DIR: dataDir },
     });
     assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -1123,7 +1127,7 @@ test("S4 source geo correction without local version writes; address change with
   try {
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
       encoding: "utf8",
-      timeout: 30_000,
+      timeout: ISOLATED_TIMEOUT_MS,
       env: { ...process.env, DATA_DIR: dataDir },
     });
     assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -1344,7 +1348,7 @@ test("S6 real DB late alive/gone interleave cannot rewrite offline", async () =>
   try {
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
       encoding: "utf8",
-      timeout: 30_000,
+      timeout: ISOLATED_TIMEOUT_MS,
       env: { ...process.env, DATA_DIR: dataDir },
     });
     assert.equal(result.status, 0, result.stderr || result.stdout);

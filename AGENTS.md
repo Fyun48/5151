@@ -3,6 +3,10 @@
 ## 專案來源（唯一權威來源）
 
 本專案的原始碼、開發、PR、CI 與部署都在 GitHub：**`github.com/Fyun48/5151`**。
+> **新的 agent session 先讀這份**：`evidence/runtime-modernization/HANDOFF.md`
+> （現況、常用命令、待辦、踩過的坑）。無論是在 NAS 的瀏覽器 IDE（code-server）或在 Gitea 上
+> 觸發的 `Agent (DeepSeek)` workflow，都適用同一份接手說明。
+
 請一律以這個 GitHub repo 為唯一權威來源；不要另開新專案或第二條 tunnel（同一 repo、同一張 Docker 映像、同一條 Cloudflare Tunnel）。
 
 ## 開發範圍：只做 v3

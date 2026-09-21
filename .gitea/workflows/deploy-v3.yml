@@ -1,0 +1,469 @@
+# ============================================================================
+# Gitea Actions port of .github/workflows/deploy-v3.yml（2026-09-20 遷移；Owner 指定 Gitea 為正式主場）
+#
+# 與 GitHub 版的差異（Gitea 相容性/環境必要調整；以下各點都用 ci-probe repo 的 probe workflow 實測過）：
+#   1. `jobs.<job_id>.environment` 移除 → Gitea 不支援 environments（docs: Compared to
+#      GitHub Actions / Unsupported workflows syntax）。原 GitHub 的 environment 保護規則在
+#      Gitea 沒有對應物；授權仍靠下方的 fail-closed 檢查（actor + 精確 confirmation 字串）。
+#   2. vars.PRODUCTION_DEPLOY_ALLOWED_ACTOR → secrets.PRODUCTION_DEPLOY_ALLOWED_ACTOR
+#      （實測 Gitea 支援 vars，但用 secret 較穩、不依賴 repo 變數設定）。
+#   3. docker login：secrets.GITHUB_TOKEN → secrets.GHCR_USER / secrets.GHCR_TOKEN。
+#      實測 Gitea 的 secrets.GITHUB_TOKEN 有值，但那是 Gitea 的 job token（GITEA_TOKEN），
+#      Gitea 尚未實作 package 授權 → 不能推 OCI，推 ghcr.io 必須用 GitHub PAT。
+#   4. permissions.packages 移除（GitHub-only scope）。
+#   5. registry path / provenance URL：Gitea 的 github.repository 是 JimmyGOD/5151，與 image
+#      實際所在的 ghcr.io/fyun48/5151 不同 → 改用 secrets.GHCR_REPO / secrets.SOURCE_REPO_URL
+#      （值見 evidence/runtime-modernization/GITEA-MIGRATION.md）。
+#   6. ${{ github.triggering_actor }} → ${{ github.triggering_actor || github.actor }}：
+#      實測 Gitea 的 github.triggering_actor 是空的，不補 fallback 會讓 fail-closed 檢查
+#      一律拒絕。Gitea 沒有 GitHub 的「他人重跑」情境，故 fallback 到 actor 等價。
+#
+#   7. `actions/upload-artifact@v4` → 改為把 evidence 直接印進 run log + step summary：
+#      GitHub 的 v4 action 內建「非 GitHub host 就拒絕」，跑在 Gitea 會直接失敗
+#      （`@actions/artifact v2.0.0+ ... not supported on GHES`），實測會讓整個 job 失敗、
+#      後面的 docker login/build/push 全被跳過。改寫後 evidence 仍留在 run log
+#      （`docker logs gitea-runner-ci` 或 Gitea 的 actions_log）與 step summary。
+#
+# 觸發方式與 GitHub 版相同：manual-only（workflow_dispatch + 40 碼 sha + 精確確認字串）。
+# ============================================================================
+
+name: Deploy v3 to CasaOS (manual)
+run-name: "${{ inputs.release_mode == 'ops_phase15' && format('phase15-intent:{0}', inputs.release_intent_id) || format('manual-owner:{0}', inputs.sha) }}"
+
+# Production 部署一律「明確手動觸發」。合併/push 到 master 不會自動部署 v3。
+# 部署會把指定 commit SHA 的 v3/src、v3/public 與 compose 檔 SCP 到正式 NAS，
+# 並以「已驗證的不可變 image digest」重建 591-tracker-v3。
+#
+# 本次 #192–#197 發行候選（請用這組，不要改成較新的 workflow-only master SHA）：
+#   source: 620c3a2419c6591626eb35df0eba5ce2a13ae2fa
+#   tag:    ghcr.io/fyun48/5151:620c3a2419c6591626eb35df0eba5ce2a13ae2fa
+#   digest: sha256:17cd853459aab52ca9c32f2d31bb280792ae834073e4b866bb8ea63119896227
+#
+# 部署前必須已由 Owner 審過「Production predeploy check (no deploy)」為 PASS。
+# 本 workflow 不會自動觸發 predeploy check，也不會從其他 workflow 自動部署。
+#
+# Rollback identity（不在此 workflow 自動還原 DB）：
+#   已知先前 Production source：584d583e56151abcf01c972b7bb45a82c73e4596（#191 / deploy-v3 run 34113624372）
+#   先前 image digest、DB backup path：以 predeploy check 實際輸出為準，禁止捏造。
+#
+# release_mode=manual_owner：人工治理路徑，不依賴 Ops Phase 15 / release_intent_id。
+# release_mode=ops_phase15：維持既有 Phase 15 綁定（run-name phase15-intent:<id>）。
+#
+# 【必要前提】master branch protection / ruleset 為必要（防止直接改本 workflow 繞過授權）。
+# Owner 已書面授權：Cursor Agent（actor `cursor` / `cursor[bot]`）在使用者要求合併部署時
+# 可從 master 觸發本檔；見 AGENTS.md 與 .cursor/rules/owner-merge-deploy.mdc。不套用 Ops Phase 15 停手規則。
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "要部署的完整 40 碼 commit SHA（必須可從 origin/master 追溯；#192–#197 請用 620c3a2419c6591626eb35df0eba5ce2a13ae2fa）"
+        required: true
+      image_digest:
+        description: "不可變 image digest，格式必須是 sha256: 加 64 碼小寫 hex（禁止 latest / 可變 tag）"
+        required: true
+      confirmation:
+        description: "輸入 DEPLOY-PRODUCTION 以確認正式部署"
+        required: true
+        default: ""
+      release_mode:
+        description: "Release path: manual_owner（人工治理，預設）或 ops_phase15（Ops Phase 15 綁定）"
+        type: choice
+        required: true
+        default: manual_owner
+        options:
+          - manual_owner
+          - ops_phase15
+      release_intent_id:
+        description: "僅 ops_phase15 必填：Ops Phase 15 durable release_intent_id。manual_owner 必須空白；非空會 fail-closed（避免舊 Phase 15 caller 被降成 Manual Owner）"
+        required: false
+        default: ""
+      debug:
+        description: "true 會讓 drone-ssh 印出完整遠端輸出（僅診斷用；預設 false）"
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+  # packages: read（同上）
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  sync-nas-v3:
+    runs-on: ubuntu-latest
+    env:
+      # 遷移新增：Gitea 的 github.repository 是 JimmyGOD/5151，跟 ghcr.io/fyun48/5151 不同，
+      # 所以 registry path 與 provenance URL 改用 secret 提供（值見 evidence）。
+      GHCR_REPO: ${{ secrets.GHCR_REPO }}
+      SOURCE_REPO_URL: ${{ secrets.SOURCE_REPO_URL }}
+    # Gitea Actions 不支援 jobs.<job_id>.environment（docs: Compared to GitHub Actions / Unsupported workflows syntax）
+    # 原 GitHub 版：environment: production（有 environment 保護規則；Gitea 沒有對應物）
+    timeout-minutes: 20
+    steps:
+      - name: Authorize production deployment (fail-closed)
+        env:
+          WF_REF: ${{ github.ref }}
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor || github.actor }}
+          ALLOWED_ACTOR: ${{ secrets.PRODUCTION_DEPLOY_ALLOWED_ACTOR }}
+          CONFIRM: ${{ inputs.confirmation }}
+          DEPLOY_SHA: ${{ inputs.sha }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+          RELEASE_MODE: ${{ inputs.release_mode }}
+          RELEASE_INTENT_ID: ${{ inputs.release_intent_id }}
+        run: |
+          set -euo pipefail
+          if [ "$WF_REF" != "refs/heads/master" ]; then
+            echo "::error::Production deploy must run from the master workflow definition (got $WF_REF)"; exit 1
+          fi
+          if [ -z "${ALLOWED_ACTOR:-}" ]; then
+            echo "::error::PRODUCTION_DEPLOY_ALLOWED_ACTOR is not configured; refusing (fail-closed)"; exit 1
+          fi
+          CURSOR_DEPLOY=0
+          if [ "$ACTOR" = "cursor" ] || [ "$ACTOR" = "cursor[bot]" ]; then
+            if [ "$TRIGGERING_ACTOR" = "cursor" ] || [ "$TRIGGERING_ACTOR" = "cursor[bot]" ]; then
+              CURSOR_DEPLOY=1
+            fi
+          fi
+          if [ "$CURSOR_DEPLOY" != 1 ] && [ "$ACTOR" != "$ALLOWED_ACTOR" ]; then
+            echo "::error::actor '$ACTOR' is not the authorized deployer"; exit 1
+          fi
+          if [ "$CURSOR_DEPLOY" != 1 ] && [ "$TRIGGERING_ACTOR" != "$ALLOWED_ACTOR" ]; then
+            echo "::error::triggering actor '$TRIGGERING_ACTOR' is not the authorized deployer (re-run by another user is refused)"; exit 1
+          fi
+          if [ "${CONFIRM:-}" != "DEPLOY-PRODUCTION" ]; then
+            echo "::error::confirmation must be exactly DEPLOY-PRODUCTION"; exit 1
+          fi
+          if ! printf '%s' "${DEPLOY_SHA:-}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::sha must be a full 40-character commit SHA"; exit 1
+          fi
+          if ! printf '%s' "${IMAGE_DIGEST:-}" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo "::error::image_digest must be exactly sha256: plus 64 lowercase hex characters"; exit 1
+          fi
+          if [ "${RELEASE_MODE:-}" != "manual_owner" ] && [ "${RELEASE_MODE:-}" != "ops_phase15" ]; then
+            echo "::error::release_mode must be manual_owner or ops_phase15 (got '${RELEASE_MODE:-}')"; exit 1
+          fi
+          if [ "${RELEASE_MODE:-}" = "ops_phase15" ] && [ -z "${RELEASE_INTENT_ID:-}" ]; then
+            echo "::error::ops_phase15 requires a non-empty release_intent_id"; exit 1
+          fi
+          if [ "${RELEASE_MODE:-}" = "manual_owner" ] && [ -n "${RELEASE_INTENT_ID:-}" ]; then
+            echo "::error::manual_owner forbids a non-empty release_intent_id; stale Phase 15 callers must set release_mode=ops_phase15"; exit 1
+          fi
+      - name: Checkout workflow-definition SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Stage trusted workflow-definition evidence writers
+        env:
+          TRUSTED_SCRIPT_DIR: ${{ runner.temp }}/trusted-workflow-scripts
+          EXPECTED_WF_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Writers must come from this exact workflow-definition commit (github.sha),
+          # not a moving master tip and not a later candidate checkout (e.g. #217).
+          HEAD_SHA="$(git rev-parse HEAD)"
+          if [ "$HEAD_SHA" != "$EXPECTED_WF_SHA" ]; then
+            echo "::error::trusted checkout HEAD $HEAD_SHA != workflow execution SHA $EXPECTED_WF_SHA"; exit 1
+          fi
+          mkdir -p "$TRUSTED_SCRIPT_DIR"
+          cp -f \
+            .github/scripts/write-manual-owner-workflow-evidence.py \
+            .github/scripts/write-phase15-workflow-evidence.py \
+            "$TRUSTED_SCRIPT_DIR/"
+          test -s "$TRUSTED_SCRIPT_DIR/write-manual-owner-workflow-evidence.py"
+          test -s "$TRUSTED_SCRIPT_DIR/write-phase15-workflow-evidence.py"
+          echo "TRUSTED_SCRIPT_DIR=$TRUSTED_SCRIPT_DIR" >> "$GITHUB_ENV"
+      - name: Write Phase 15 run identity
+        if: ${{ always() && inputs.release_mode == 'ops_phase15' }}
+        env:
+          TRUSTED_SCRIPT_DIR: ${{ runner.temp }}/trusted-workflow-scripts
+          EVIDENCE_KIND: identity
+          WF_FILE: .github/workflows/deploy-v3.yml
+          WF_REF: ${{ github.ref }}
+          WF_RUN_ID: ${{ github.run_id }}
+          WF_ATTEMPT: ${{ github.run_attempt }}
+          WF_HEAD_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ inputs.sha }}
+          WF_ACTOR: ${{ github.actor }}
+          WF_TRIGGERING_ACTOR: ${{ github.triggering_actor || github.actor }}
+          RELEASE_INTENT_ID: ${{ inputs.release_intent_id }}
+          WF_ENVIRONMENT: production
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: python3 "${TRUSTED_SCRIPT_DIR:?}/write-phase15-workflow-evidence.py" phase15-run-identity.json
+      - name: Publish Phase 15 run identity (Gitea run log + step summary)
+        if: ${{ always() && inputs.release_mode == 'ops_phase15' }}
+        run: |
+          set -euo pipefail
+          test -s phase15-run-identity.json
+          echo "----- phase15-run-identity.json (evidence; act/Gitea has no v4 artifact service, kept in run log) -----"
+          cat phase15-run-identity.json
+      - name: Write Manual Owner run identity
+        if: ${{ always() && inputs.release_mode == 'manual_owner' }}
+        env:
+          TRUSTED_SCRIPT_DIR: ${{ runner.temp }}/trusted-workflow-scripts
+          EVIDENCE_KIND: identity
+          RELEASE_MODE: manual_owner
+          WF_FILE: .github/workflows/deploy-v3.yml
+          WF_REF: ${{ github.ref }}
+          WF_RUN_ID: ${{ github.run_id }}
+          WF_ATTEMPT: ${{ github.run_attempt }}
+          WF_HEAD_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ inputs.sha }}
+          WF_ACTOR: ${{ github.actor }}
+          WF_TRIGGERING_ACTOR: ${{ github.triggering_actor || github.actor }}
+          RELEASE_INTENT_ID: ${{ inputs.release_intent_id }}
+          WF_ENVIRONMENT: production
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: python3 "${TRUSTED_SCRIPT_DIR:?}/write-manual-owner-workflow-evidence.py" manual-owner-run-identity.json
+      - name: Publish Manual Owner run identity (Gitea run log + step summary)
+        if: ${{ always() && inputs.release_mode == 'manual_owner' }}
+        run: |
+          set -euo pipefail
+          test -s manual-owner-run-identity.json
+          echo "----- manual-owner-run-identity.json (evidence; act/Gitea has no v4 artifact service, kept in run log) -----"
+          cat manual-owner-run-identity.json
+      - name: Validate SHA reachable from origin/master, then check it out
+        env:
+          DEPLOY_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin master
+          if ! git merge-base --is-ancestor "$DEPLOY_SHA" origin/master; then
+            echo "::error::commit $DEPLOY_SHA is not reachable from origin/master; refusing"; exit 1
+          fi
+          git checkout --force "$DEPLOY_SHA"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ secrets.GHCR_USER }}
+          password: ${{ secrets.GHCR_TOKEN }}
+      - name: Verify candidate registry artifact (no rebuild, no push)
+        env:
+          DEPLOY_SHA: ${{ inputs.sha }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+        run: |
+          set -euo pipefail
+          IMAGE_REPO="${GHCR_REPO}"
+          TAG="${IMAGE_REPO}:${DEPLOY_SHA}"
+          PIN="${IMAGE_REPO}@${IMAGE_DIGEST}"
+          echo "candidate_tag=$TAG"
+          echo "requested_digest=$IMAGE_DIGEST"
+          if ! docker buildx imagetools inspect "$TAG" >/dev/null; then
+            echo "::error::candidate tag does not exist: $TAG"; exit 1
+          fi
+          ACTUAL="$(docker buildx imagetools inspect "$TAG" | awk '/^Digest:/{print $2; found=1} END{if(!found) exit 1}')"
+          if ! printf '%s' "$ACTUAL" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo "::error::Could not resolve immutable manifest digest for $TAG"; exit 1
+          fi
+          echo "tag_manifest_digest=$ACTUAL"
+          if [ "$ACTUAL" != "$IMAGE_DIGEST" ]; then
+            echo "::error::tag digest $ACTUAL != requested $IMAGE_DIGEST"; exit 1
+          fi
+          docker pull --platform linux/amd64 "$PIN"
+          REV="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$PIN")"
+          SRC="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.source" }}' "$PIN")"
+          echo "oci_revision=$REV"
+          echo "oci_source=$SRC"
+          if [ "$REV" != "$DEPLOY_SHA" ]; then
+            echo "::error::OCI revision '$REV' != DEPLOY_SHA $DEPLOY_SHA"; exit 1
+          fi
+          EXPECT_SRC="${SOURCE_REPO_URL}"
+          if [ "${SRC,,}" != "${EXPECT_SRC,,}" ]; then
+            echo "::error::OCI source '$SRC' is not this repository"; exit 1
+          fi
+          docker run --rm --platform linux/amd64 "$PIN" node -e "import('sharp').then(()=>console.log('SHARP_OK')).catch(()=>{console.error('SHARP_MISSING'); process.exit(1)})"
+          echo "ARTIFACT_OK tag=$TAG digest=$IMAGE_DIGEST revision=$REV"
+      - name: Write v3-only digest compose override
+        env:
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+        run: |
+          set -euo pipefail
+          IMAGE_REPO="${GHCR_REPO}"
+          umask 022
+          {
+            echo "# Generated by deploy-v3.yml. Pins ONLY 591-tracker-v3."
+            echo "# v1/v2 are retired; leftover containers are stopped during deploy."
+            echo "services:"
+            echo "  591-tracker-v3:"
+            echo "    image: ${IMAGE_REPO}@${IMAGE_DIGEST}"
+          } > docker-compose.override.yml.tmp
+          mv docker-compose.override.yml.tmp docker-compose.override.yml
+          grep -q "591-tracker-v3" docker-compose.override.yml
+          grep -q "@${IMAGE_DIGEST}" docker-compose.override.yml
+          if grep -q ':latest' docker-compose.override.yml; then
+            echo "::error::override must not contain :latest"; exit 1
+          fi
+          if grep -q '591-tracker-v2' docker-compose.override.yml || grep -qE '591-tracker:' docker-compose.override.yml; then
+            echo "::error::override must pin only 591-tracker-v3"; exit 1
+          fi
+      - name: Copy v3 app, compose files, and digest override
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.NAS_HOST }}
+          port: ${{ secrets.NAS_PORT }}
+          username: ${{ secrets.NAS_USER }}
+          key: ${{ secrets.NAS_SSH_KEY }}
+          source: "v3/src,v3/public,docker-compose.yml,casaos-compose.yml,docker-compose.override.yml"
+          target: /mnt/Storage1/apps/5151
+          overwrite: true
+      - name: Pull digest-pinned image and recreate v3 only
+        # Keep this inline ssh script comment-free and keep every shell block on a single
+        # line: drone-ssh joins inline script lines with ';', so a '#' line can comment out
+        # the next command and multi-line blocks can be mangled.
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.NAS_HOST }}
+          port: ${{ secrets.NAS_PORT }}
+          username: ${{ secrets.NAS_USER }}
+          key: ${{ secrets.NAS_SSH_KEY }}
+          script_stop: true
+          debug: ${{ inputs.debug }}
+          script: |
+            set -euo pipefail
+            IMAGE_DIGEST='${{ inputs.image_digest }}'
+            DEPLOY_SHA='${{ inputs.sha }}'
+            IMAGE_PIN="ghcr.io/fyun48/5151@${IMAGE_DIGEST}"
+            echo "deploy_start source=$DEPLOY_SHA image=$IMAGE_PIN"
+            DATA_HOST="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' 591-tracker-v3 2>/dev/null || true)"
+            if [ -z "$DATA_HOST" ]; then DATA_HOST=/DATA/AppData/591-tracker-v3; echo "data_host_fallback=$DATA_HOST (container mount not resolvable)"; fi
+            echo "data_host=$DATA_HOST"
+            mkdir -p "$DATA_HOST"
+            copied=0
+            for legacy in /DATA/AppData/591-tracker-v2/auth.env /DATA/AppData/591-tracker/auth.env; do if [ ! -f "$DATA_HOST/auth.env" ] && [ -f "$legacy" ]; then cp "$legacy" "$DATA_HOST/auth.env"; echo "copied_auth_env_from=$legacy"; copied=1; break; fi; done
+            cd /mnt/Storage1/apps/5151
+            test -f docker-compose.override.yml
+            if grep -q ':latest' docker-compose.override.yml; then echo "override contains :latest"; exit 1; fi
+            V3_CFG="$(docker compose -f docker-compose.yml -f docker-compose.override.yml config --format json)"
+            V3_IMAGE="$(printf '%s' "$V3_CFG" | python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["591-tracker-v3"]["image"])')"
+            echo "rendered_v3_image=$V3_IMAGE"
+            if [ "$V3_IMAGE" != "$IMAGE_PIN" ]; then echo "rendered v3 image is not the requested digest pin"; exit 1; fi
+            if printf '%s' "$V3_IMAGE" | grep -Eq ':latest$'; then echo "v3 must not resolve to :latest"; exit 1; fi
+            docker pull "$IMAGE_PIN"
+            docker compose stop 591-tracker 591-tracker-v2 || true
+            docker stop 591-tracker 591-tracker-v2 || true
+            docker rm -f 591-tracker 591-tracker-v2 || true
+            docker compose -f docker-compose.yml -f docker-compose.override.yml up -d --no-build --no-deps --force-recreate 591-tracker-v3
+            if [ "$copied" = 1 ]; then docker compose -f docker-compose.yml -f docker-compose.override.yml restart 591-tracker-v3; fi
+            ok=0
+            for _ in $(seq 1 40); do if curl -fsS http://127.0.0.1:5153/api/health | grep -q '"ok":true'; then ok=1; break; fi; sleep 1; done
+            if [ "$ok" != 1 ]; then docker logs 591-tracker-v3 || true; echo "health did not become ready"; exit 1; fi
+            curl -fsS -o /tmp/v3-health.json http://127.0.0.1:5153/api/health
+            python3 -c 'import json; d=json.load(open("/tmp/v3-health.json")); assert d.get("ok") is True'
+            curl -fsS -o /dev/null http://127.0.0.1:5153/
+            curl -fsS -o /dev/null http://127.0.0.1:5153/login.html
+            curl -fsS -o /tmp/v3-alias-health.json http://127.0.0.1:5155/api/health
+            python3 -c 'import json; d=json.load(open("/tmp/v3-alias-health.json")); assert d.get("ok") is True'
+            curl -fsS -o /dev/null http://127.0.0.1:5155/
+            RUNNING="$(docker inspect -f '{{.State.Status}}' 591-tracker-v3)"
+            [ "$RUNNING" = "running" ]
+            CFG_IMAGE="$(docker inspect -f '{{.Config.Image}}' 591-tracker-v3)"
+            echo "container_image=$CFG_IMAGE"
+            if [ "$CFG_IMAGE" != "$IMAGE_PIN" ]; then echo "running container image is not digest-pinned candidate"; exit 1; fi
+            docker exec 591-tracker-v3 node -e "import('sharp').then(()=>console.log('SHARP_OK')).catch(()=>{console.error('SHARP_MISSING'); process.exit(1)})"
+            echo "DEPLOY_V3_OK source=$DEPLOY_SHA image=$IMAGE_PIN"
+            python3 -c "import json; open('/tmp/phase15-deploy-health.json','w').write(json.dumps({'container_running':True,'health':True,'landing':True,'login':True,'image_digest':'$IMAGE_DIGEST','oci_revision':'$DEPLOY_SHA','container_image':'$IMAGE_PIN'}) + '\n')"
+      - name: Pull NAS deploy health evidence
+        env:
+          NAS_HOST: ${{ secrets.NAS_HOST }}
+          NAS_PORT: ${{ secrets.NAS_PORT }}
+          NAS_USER: ${{ secrets.NAS_USER }}
+          NAS_SSH_KEY: ${{ secrets.NAS_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          key="$(mktemp)"
+          printf '%s\n' "$NAS_SSH_KEY" > "$key"
+          chmod 600 "$key"
+          scp -o StrictHostKeyChecking=accept-new -P "$NAS_PORT" -i "$key" \
+            "$NAS_USER@$NAS_HOST:/tmp/phase15-deploy-health.json" ./nas-deploy-health.json
+          rm -f "$key"
+          python3 - <<'PY'
+          import json
+          nas = json.load(open("nas-deploy-health.json"))
+          required = ("container_running", "health", "landing", "login", "image_digest", "oci_revision")
+          if not all(nas.get(k) for k in required):
+              raise SystemExit("deploy NAS health evidence incomplete")
+          digest = nas["image_digest"]
+          revision = nas["oci_revision"]
+          if not str(digest).startswith("sha256:") or len(str(digest)) != 71:
+              raise SystemExit("deploy NAS health evidence digest is not immutable")
+          lines = [
+              f"IMAGE_DIGEST={digest}",
+              f"OCI_REVISION={revision}",
+              "HEALTH_OBSERVED=true",
+              f"HEALTH_API={'true' if nas.get('health') else 'false'}",
+              f"HEALTH_LANDING={'true' if nas.get('landing') else 'false'}",
+              f"HEALTH_LOGIN={'true' if nas.get('login') else 'false'}",
+              f"HEALTH_CONTAINER={'true' if nas.get('container_running') else 'false'}",
+          ]
+          open("phase15-health.env", "w").write("\n".join(lines) + "\n")
+          PY
+      - name: Write Phase 15 workflow evidence
+        if: ${{ always() && inputs.release_mode == 'ops_phase15' }}
+        env:
+          TRUSTED_SCRIPT_DIR: ${{ runner.temp }}/trusted-workflow-scripts
+          WF_FILE: .github/workflows/deploy-v3.yml
+          WF_REF: ${{ github.ref }}
+          WF_RUN_ID: ${{ github.run_id }}
+          WF_ATTEMPT: ${{ github.run_attempt }}
+          WF_HEAD_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ inputs.sha }}
+          WF_ACTOR: ${{ github.actor }}
+          WF_TRIGGERING_ACTOR: ${{ github.triggering_actor || github.actor }}
+          RELEASE_INTENT_ID: ${{ inputs.release_intent_id }}
+          WF_ENVIRONMENT: production
+          OCI_SOURCE: https://github.com/${{ github.repository }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          if [ -f ./phase15-health.env ]; then
+            set -a
+            # shellcheck disable=SC1091
+            . ./phase15-health.env
+            set +a
+          fi
+          python3 "${TRUSTED_SCRIPT_DIR:?}/write-phase15-workflow-evidence.py" phase15-workflow-evidence.json
+      - name: Publish Phase 15 workflow evidence (Gitea run log + step summary)
+        if: ${{ always() && inputs.release_mode == 'ops_phase15' }}
+        run: |
+          set -euo pipefail
+          test -s phase15-workflow-evidence.json
+          echo "----- phase15-workflow-evidence.json (evidence; act/Gitea has no v4 artifact service, kept in run log) -----"
+          cat phase15-workflow-evidence.json
+      - name: Write Manual Owner workflow evidence
+        if: ${{ always() && inputs.release_mode == 'manual_owner' }}
+        env:
+          TRUSTED_SCRIPT_DIR: ${{ runner.temp }}/trusted-workflow-scripts
+          RELEASE_MODE: manual_owner
+          WF_FILE: .github/workflows/deploy-v3.yml
+          WF_REF: ${{ github.ref }}
+          WF_RUN_ID: ${{ github.run_id }}
+          WF_ATTEMPT: ${{ github.run_attempt }}
+          WF_HEAD_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ inputs.sha }}
+          WF_ACTOR: ${{ github.actor }}
+          WF_TRIGGERING_ACTOR: ${{ github.triggering_actor || github.actor }}
+          RELEASE_INTENT_ID: ${{ inputs.release_intent_id }}
+          WF_ENVIRONMENT: production
+          OCI_SOURCE: https://github.com/${{ github.repository }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          if [ -f ./phase15-health.env ]; then
+            set -a
+            # shellcheck disable=SC1091
+            . ./phase15-health.env
+            set +a
+          fi
+          python3 "${TRUSTED_SCRIPT_DIR:?}/write-manual-owner-workflow-evidence.py" manual-owner-workflow-evidence.json
+      - name: Publish Manual Owner workflow evidence (Gitea run log + step summary)
+        if: ${{ always() && inputs.release_mode == 'manual_owner' }}
+        run: |
+          set -euo pipefail
+          test -s manual-owner-workflow-evidence.json
+          echo "----- manual-owner-workflow-evidence.json (evidence; act/Gitea has no v4 artifact service, kept in run log) -----"
+          cat manual-owner-workflow-evidence.json

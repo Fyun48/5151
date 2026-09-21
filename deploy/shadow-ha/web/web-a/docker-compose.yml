@@ -9,7 +9,9 @@ services:
     image: ghcr.io/fyun48/5151:latest
     restart: unless-stopped
     ports:
-      - "127.0.0.1:15153:5153"
+      # 0.0.0.0 綁定：跨主機的 HAProxy/health check 才連得到（綁 127.0.0.1 只有本機可見，
+      # 另一台主機的 HAProxy 會連不到 → 節點 DOWN）。
+      - "0.0.0.0:15153:5153"
     environment:
       HOST: "0.0.0.0"
       PORT: "5153"
