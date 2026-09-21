@@ -18,6 +18,8 @@
         `notifyQueueAsync.js` ＋ `repository/notifyQueue.js`，live parity `notify-queue-parity.test.js` 5/5），
         但**填佇列**的 `enqueueListingEvent()` 決策鏈仍讀 SQLite（需要 users／settings／search profile／
         listing group 的 PG 讀取）→ PG 模式下排得空佇列卻填不進新事件，**會員收不到通知**。
+        （佇列的讀＋寫已於 2026-09-21 晚間部署到正式站，但 `DB_DRIVER` 仍 `unset`＝sqlite，行為不變；
+        證據 `v3/evidence/pg-notify-queue-20260921/README.md` 的「追加」段。）
         **這一項沒做完不要切換。**
       - **`enqueueSimilaritySafe`（④，pHash 佇列）** ⛔ 尚未完成 —— PG 模式下爬進來的物件不會進
         相似度佇列（功能缺口，不會寫壞資料）。

@@ -15,12 +15,16 @@
 
 ## 0. 一句話現況
 
-- master = `4752b51`（PR #405）。**已部署的程式版本是 `939ecb0`**（①＋②；之後的 #402／#403 是文件、
-  #405 是 ③ 佇列讀寫，尚未部署 —— `DB_DRIVER` 仍 `unset`，所以沒部署也不影響使用者）。
+- master = `64828a8`（PR #406；#406 只改文件）。**已部署的程式版本也是 `64828a8`** ——
+  2026-09-21 晚間把 ③ 的佇列讀寫（#405／`4752b51`）推上正式站：digest
+  `sha256:0f758bd6eab542429f68f16bd920107fe92abae781945e5b2a705b7ebef8af3e`、
+  deploy run `35606393475`（證據見 `v3/evidence/pg-notify-queue-20260921/README.md` 的「追加」段）。
+  **`DB_DRIVER` 仍 `unset`（＝sqlite），所以會員行為不變**；這次部署的目的是先在 sqlite 模式
+  讓 `watcher.js` 的 await 化跑過真實流量，並讓正式站 revision 對齊 master。
 - 移植進度：**①七條 `listingsNeeding*` 掃描 ✅、②迴圈欄位寫入 ✅、③通知佇列的讀＋寫 ✅**
   （三者都有 shadow PG live parity）。
 - **③ 的另一半（`enqueueListingEvent()` 決策鏈）⛔、④ `enqueueSimilaritySafe` ⛔** → **還不能切換**。
-- 正式站（CasaOS `591-tracker-v3`）跑 `939ecb0` 的映像，`DB_DRIVER=unset`（＝sqlite），行為不變。
+- 正式站（CasaOS `591-tracker-v3`）跑 `64828a8` 的映像，`DB_DRIVER=unset`（＝sqlite），行為不變。
 
 ## 1. 當天對話歷程（依序）
 
@@ -59,6 +63,16 @@
     過程中發現：`pendingNotifyEvents()` 要回一般物件（null-prototype 會讓 async twins 的形狀不同）；
     fixture 混用 event id 與 post_id 被測試直接抓出來。
 12. **尚未完成**：③ 的第 2 段（`enqueueListingEvent()` 決策鏈）與 ④（見 §4）。
+13. **同日稍晚的追加部署（Owner 決定）**：先把 #405 推上正式站，理由是「先在 sqlite 模式讓 await 化
+    跑過真實流量，並讓正式站 revision 對齊 master」。三條 manual workflow 全 success：
+    build `35605862498` → predeploy `35606208183` → deploy `35606393475`，
+    source `64828a8`（程式等同 `4752b51`，`64828a8` 只多了 #406 的文件）。
+    predeploy 前的正式站是 `sha256:937719ef…`（`939ecb0`）、備份
+    `predeploy-20260921-133223`（`sha256:6cf1f045…`）＝ 回復點；部署後 `container_image` 確認為
+    digest-pinned 候選（`0f758bd6…`）、只有 `591-tracker-v3` 被重建、NAS 端 `SHARP_OK`、
+    健康（container/health/landing/login）四項 true。`DB_DRIVER` 全程 `unset`（compose 沒有這個變數）。
+14. **收尾**：關掉過期的 PR #404（它新增的交接文件已隨 #405 的 squash 落地，master 上的版本還比它新
+    20 行；硬 merge 會是 both-added 衝突）。
 
 ## 2. 已完成項目的關鍵檔案
 
@@ -158,8 +172,8 @@ SQLite 檔不動故資料不丟，但切換期間寫進 PG 的資料要人工評
 ## 5. 隔天開工的第一件事
 
 ```bash
-git log --oneline -5                                     # 確認 master 至少有 daf7bad
+git log --oneline -5                                     # 確認 master 至少有 64828a8
 cat docs/handoffs/20260921-postgres-cutover-session.md    # 就是本文件
-# 照 §3 起手式跑一次 24/24 確認環境沒變，再從 §4 ③ 第 1 段開始。
+# 照 §3 起手式跑一次 24/24 確認環境沒變，再從 §4 ③ 第 2 段開始（第 1 段已完成，不要重做）。
 ```
 
