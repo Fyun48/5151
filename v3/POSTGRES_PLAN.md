@@ -1,5 +1,11 @@
 # PostgreSQL 升級規劃（尚未開工）
 
+> **2026-09-20 更新**：第 1 階段（抽象資料存取）已開工，見
+> `docs/architecture/postgres-listings-hotpath.md`：`pg` 已接線、listings 搜尋在真實
+> PostgreSQL（shadow HA）通過 parity 驗證、durable queue 的兩 worker claim/lease 回收實測通過。
+> 正式站仍是 `DB_DRIVER=sqlite`，公開站行為未變；下面「這次不開雙節點 cluster」的結論仍然成立
+> （本輪只做 driver/repository/搜尋路徑，沒有切換 production source of truth）。
+
 目前 v3 資料在單機 SQLite：`data-v3/v3.db`，程式用 `better-sqlite3` 與 SQLite 語法（`IFNULL`、`ON CONFLICT`、`datetime('now')`）。CasaOS 上一份檔、一條程序就夠跑。
 
 ## 這次不開雙節點 cluster

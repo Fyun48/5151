@@ -110,9 +110,14 @@ test("createDb(sqlite) returns a working synchronous driver", async () => {
   db.close();
 });
 
-test("createDb(postgres) reports pg not installed until wired", async () => {
-  await assert.rejects(
-    () => createDb({ driver: "postgres", connectionString: "postgres://x" }),
-    /pg package is not installed/,
-  );
+test("createDb(postgres) returns the asynchronous pg driver", async () => {
+  const driver = await createDb({ driver: "postgres", connectionString: "postgres://user:pass@127.0.0.1:5432/5151_test" });
+  assert.equal(driver.dialect, "postgres");
+  assert.equal(typeof driver.query, "function");
+  assert.equal(typeof driver.withTransaction, "function");
+  assert.equal(typeof driver.healthCheck, "function");
+  // Never connects eagerly: pointing it at a dead host must not throw at build time.
+  assert.equal(driver.config.host, "127.0.0.1");
+  assert.ok(!JSON.stringify(driver.config).includes("pass"));
+  await driver.close();
 });

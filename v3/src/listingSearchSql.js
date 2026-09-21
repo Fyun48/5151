@@ -1,0 +1,205 @@
+// Shared SQL-first search statement builder (PostgreSQL hot path).
+//
+// The SQLite fast paths in db.js and the PostgreSQL listings repository both
+// call this module, so the two drivers execute the SAME statement text: parity
+// is a property of the code, not of a hand-maintained second copy. Driver
+// differences (`?` vs `$n`, IFNULL vs COALESCE) are handled at execution time by
+// sqlDialect.js.
+//
+// Caller-injected dependencies keep this module free of the db.js singleton:
+//   resolveUserId / getSettings / searchWhere / listingVisibilityClauses /
+//   appendDistrictCandidates / appendPriceCeilingCandidates /
+//   memberRegionDistrictNames
+// db.js exports them bundled as `listingSearchBuildContext()`.
+
+export const LISTING_SEARCH_SQL_SORTS = ["newest", "price_asc", "price_desc"];
+
+// Display filters mirrored from passesDisplayFilters() (whole-floor / low-floor
+// / rooftop / parking). These are precomputed in the projection with the SAME
+// helpers, so the SQL-first envelope can honor them instead of rejecting the
+// default user settings (excludeLowFloors/excludeRooftop default to true).
+export function sqlDisplayFilter(settings = {}) {
+  const clauses = [];
+  if (settings.excludeLowFloors !== false) clauses.push("p.low_floor = 0");
+  if (settings.excludeRooftop !== false) clauses.push("p.rooftop = 0");
+  if (settings.hasParking === true) clauses.push("p.parking = 1");
+  return clauses.length ? `AND ${clauses.join(" AND ")}` : "";
+}
+
+const REQUIRED_DEPS = [
+  "resolveUserId",
+  "getSettings",
+  "searchWhere",
+  "listingVisibilityClauses",
+  "appendDistrictCandidates",
+  "appendPriceCeilingCandidates",
+  "memberRegionDistrictNames",
+];
+
+export function assertListingSearchDeps(deps = {}) {
+  for (const name of REQUIRED_DEPS) {
+    if (typeof deps[name] !== "function") {
+      throw new Error(`buildListingSearchSql requires deps.${name}`);
+    }
+  }
+  return true;
+}
+
+function outOfEnvelope(reason) {
+  return { ok: false, reason };
+}
+
+// Returns `{ ok: false }` when the inputs fall outside the exact-equivalence
+// envelope (the caller then uses the Node path, exactly as before).
+export function buildListingSearchSql(args = {}, deps = {}) {
+  assertListingSearchDeps(deps);
+  const {
+    filter = "all",
+    kind = "",
+    sources = "",
+    q = "",
+    sort = "newest",
+    searchKeys,
+    districts = [],
+    userId,
+    settings: settingsOverride,
+    matchVoteUserId,
+  } = args;
+
+  if (filter !== "all") return outOfEnvelope("filter");
+  if (kind || sources || q) return outOfEnvelope("kind_or_sources_or_q");
+  if (!LISTING_SEARCH_SQL_SORTS.includes(sort)) return outOfEnvelope("sort");
+
+  const uid = deps.resolveUserId(userId);
+  const voteUid = matchVoteUserId == null ? uid : Number(matchVoteUserId) || 0;
+  const settings = settingsOverride || deps.getSettings(uid);
+  if (
+    Number(settings.priceMin) > 0 || Number(settings.priceMax) > 0 ||
+    Number(settings.minBuildingFloors) > 0 || Number(settings.areaMax) > 0 ||
+    settings.wholeFloorOnly === true ||
+    (settings.excludeKeywords || []).length || (settings.excludeAgents || []).length ||
+    (settings.excludeAgentIds || []).length || (settings.excludeBoxes || []).length ||
+    Number(settings.commuteKm) > 0
+  ) {
+    return outOfEnvelope("settings");
+  }
+
+  const requestedDistricts = (Array.isArray(districts) ? districts : String(districts || "").split(","))
+    .map((name) => String(name || "").trim()).filter(Boolean);
+  const districtNames = requestedDistricts.length ? requestedDistricts : deps.memberRegionDistrictNames(settings);
+  if (!districtNames.length) return outOfEnvelope("districts");
+
+  const clauses = [];
+  const params = [];
+  deps.searchWhere(searchKeys, clauses, params);
+  deps.listingVisibilityClauses(clauses, params);
+  deps.appendDistrictCandidates(districtNames, clauses, params);
+  deps.appendPriceCeilingCandidates(settings, clauses, params);
+  // filter === "all": confirmed-offline / dup / hidden / watched are excluded.
+  clauses.push("NOT (IFNULL(offline, 0) = 1 AND IFNULL(offline_confirmed, 0) = 1)");
+  clauses.push("(IFNULL(match_verdict, '') != 'yes')");
+  clauses.push(`NOT EXISTS (
+    SELECT 1 FROM user_listing_flags f
+    WHERE f.post_id = listings.post_id AND f.user_id = ? AND f.hidden = 1
+  )`);
+  params.push(uid);
+  clauses.push(`IFNULL((
+    SELECT watched FROM user_listing_flags f
+    WHERE f.post_id = listings.post_id AND f.user_id = ?
+  ), 0) = 0`);
+  params.push(uid);
+
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  const cost = settings.priceMaxIncludesExtras === true ? "p.total_monthly_cost" : "p.rent";
+  const orderBy =
+    sort === "newest" ? "p.updated_at DESC, p.post_id ASC"
+      : sort === "price_desc"
+        ? `CASE WHEN ${cost} > 0 THEN 0 ELSE 1 END ASC, ${cost} DESC, p.updated_at DESC, p.post_id ASC`
+        : `CASE WHEN ${cost} > 0 THEN ${cost} ELSE 9223372036854775807 END ASC, p.updated_at DESC, p.post_id ASC`;
+
+  const districtWhere = `p.district IN (${districtNames.map(() => "?").join(",")})`;
+  const displayFilter = sqlDisplayFilter(settings);
+
+  // Cursor/keyset pagination. The cursor encodes the full sort key of the last
+  // row; DESC columns are negated so one row-value `>` comparison matches the
+  // ORDER BY across the ASC/DESC mix.
+  const MAX_BIGINT = 9223372036854775807;
+  const rowCost = (row) => (settings.priceMaxIncludesExtras === true ? Number(row.total_monthly_cost) : Number(row.rent));
+  const sortCostExpr = `CASE WHEN ${cost} > 0 THEN ${cost} ELSE ${MAX_BIGINT} END`;
+  const costGroupExpr = `CASE WHEN ${cost} > 0 THEN 0 ELSE 1 END`;
+  let tupleExpr = "";
+  let cursorOf = null;
+  if (sort === "newest") {
+    tupleExpr = "(-p.updated_at, p.post_id)";
+    cursorOf = (row) => ({ updatedAt: Number(row.updated_at), postId: Number(row.post_id) });
+  } else if (sort === "price_asc") {
+    tupleExpr = `(${sortCostExpr}, -p.updated_at, p.post_id)`;
+    cursorOf = (row) => ({
+      sortCost: rowCost(row) > 0 ? rowCost(row) : MAX_BIGINT,
+      updatedAt: Number(row.updated_at),
+      postId: Number(row.post_id),
+    });
+  } else { // price_desc
+    tupleExpr = `(${costGroupExpr}, -${cost}, -p.updated_at, p.post_id)`;
+    cursorOf = (row) => ({
+      costGroup: rowCost(row) > 0 ? 0 : 1,
+      cost: rowCost(row),
+      updatedAt: Number(row.updated_at),
+      postId: Number(row.post_id),
+    });
+  }
+
+  const cursorParamsFor = (cursor) => {
+    if (cursor == null) return null;
+    if (sort === "newest") return [-Number(cursor.updatedAt), Number(cursor.postId)];
+    if (sort === "price_asc") return [Number(cursor.sortCost), -Number(cursor.updatedAt), Number(cursor.postId)];
+    return [Number(cursor.costGroup), -Number(cursor.cost), -Number(cursor.updatedAt), Number(cursor.postId)];
+  };
+
+  const countQuery = {
+    sql: `SELECT COUNT(*) AS n FROM listing_search_projection p
+    WHERE p.post_id IN (SELECT post_id FROM listings ${where})
+    AND ${districtWhere}
+    ${displayFilter}`,
+    params: [...params, ...districtNames],
+  };
+
+  // Page plan: cursor mode ignores offset (keyset), offset mode ignores the
+  // cursor — exactly the behaviour of the existing SQLite fast path.
+  const pageQuery = ({ limit = 500, offset = 0, cursor = null } = {}) => {
+    const cursorParams = cursorParamsFor(cursor);
+    const useCursor = cursorParams != null;
+    const pageSize = Math.max(1, Math.min(Number(limit) || 500, 500));
+    const start = Math.max(0, Number(offset) || 0);
+    const cursorWhere = useCursor ? `AND ${tupleExpr} > (${cursorParams.map(() => "?").join(", ")})` : "";
+    const pageParams = useCursor
+      ? [...params, ...districtNames, ...cursorParams, pageSize]
+      : [...params, ...districtNames, pageSize, start];
+    const sql = `SELECT p.post_id, p.updated_at, p.rent, p.total_monthly_cost FROM listing_search_projection p
+    WHERE p.post_id IN (SELECT post_id FROM listings ${where})
+    AND ${districtWhere}
+    ${displayFilter}
+    ${cursorWhere}
+    ORDER BY ${orderBy}
+    LIMIT ?${useCursor ? "" : " OFFSET ?"}`;
+    return { sql, params: pageParams, pageSize, start, useCursor };
+  };
+
+  return {
+    ok: true,
+    sort,
+    uid,
+    voteUid,
+    settings,
+    districtNames,
+    params,
+    where,
+    cost,
+    orderBy,
+    districtWhere,
+    displayFilter,
+    cursorOf,
+    countQuery,
+    pageQuery,
+  };
+}
