@@ -496,23 +496,32 @@ function syncJobListingSeq(job, listing) {
   }
 }
 
-function refreshFreshListing(conn, helpers, job) {
+// The enrich worker reads the row it is about to patch. With DB_DRIVER=postgres that read has to
+// come from PostgreSQL (watcher's listingEnrichHelpers().loadListingAsync -> crawlerReads.js), so
+// it is awaited here. A helper bundle that only provides the synchronous loader keeps working
+// unchanged (SQLite-only callers, tests).
+async function loadListingForRun(helpers, postId) {
+  if (typeof helpers?.loadListingAsync === "function") return helpers.loadListingAsync(postId);
+  return helpers?.loadListing?.(postId);
+}
+
+async function refreshFreshListing(conn, helpers, job) {
   if (job && !jobStillOwnsRun(conn, job)) return null;
-  const listing = helpers.loadListing?.(job.post_id);
+  const listing = await loadListingForRun(helpers, job.post_id);
   if (!listingWriteIsFresh(job, listing)) return null;
   return listing;
 }
 
-export function applyHpListingPatch(conn, helpers, current, next, { locationChanged = false, job = null } = {}) {
+export async function applyHpListingPatch(conn, helpers, current, next, { locationChanged = false, job = null } = {}) {
   if (job && !jobStillOwnsRun(conn, job)) {
     return { applied: false, stale: true };
   }
-  const latest = helpers.loadListing?.(current.post_id) || current;
+  const latest = (await loadListingForRun(helpers, current.post_id)) || current;
   if (job && !listingWriteIsFresh(job, latest)) {
     return { applied: false, stale: true };
   }
   helpers.persistHpListingFields(current.post_id, next, { locationChanged, previous: current });
-  syncJobListingSeq(job, helpers.loadListing?.(current.post_id) || next);
+  syncJobListingSeq(job, (await loadListingForRun(helpers, current.post_id)) || next);
   return { applied: true, stale: false };
 }
 
@@ -520,7 +529,7 @@ export async function processOneEnrichJob(conn, helpers, job, {
   fetchDetail = fetchHpDetailInspected,
 } = {}) {
   const t0 = Date.now();
-  const listing = helpers.loadListing(job.post_id);
+  const listing = await loadListingForRun(helpers, job.post_id);
   if (!listing) {
     finishJob(conn, job, { status: "failed", error: "listing_missing", errorClass: "parse_failed" });
     return { skipped: true };
@@ -548,7 +557,7 @@ export async function processOneEnrichJob(conn, helpers, job, {
     finishJob(conn, job, { status: "queued", error: "stale_write", errorClass: "" });
     return { stale: true };
   };
-  if (!refreshFreshListing(conn, helpers, job)) {
+  if (!(await refreshFreshListing(conn, helpers, job))) {
     if (!jobStillOwnsRun(conn, job)) {
       finishJob(conn, job, { status: "queued", error: "superseded", errorClass: "" });
       return { superseded: true, stale: true };
@@ -557,18 +566,18 @@ export async function processOneEnrichJob(conn, helpers, job, {
   }
   const timingBase = { queued_ms: queuedMs, start_ms: startMs, fetch_ms: fetchMs, parse_ms: parseMs, attempt_wait_ms: attemptWaitMs };
   if (inspected.outcome === PROBE_GONE) {
-    if (!refreshFreshListing(conn, helpers, job)) return staleWrite();
+    if (!(await refreshFreshListing(conn, helpers, job))) return staleWrite();
     helpers.markGone(listing.post_id);
-    syncJobListingSeq(job, helpers.loadListing(job.post_id));
-    if (!refreshFreshListing(conn, helpers, job)) return staleWrite();
+    syncJobListingSeq(job, await loadListingForRun(helpers, job.post_id));
+    if (!(await refreshFreshListing(conn, helpers, job))) return staleWrite();
     finishJob(conn, job, { status: "succeeded", timings: { ...timingBase, outcome: "succeeded" } });
-    const goneRow = helpers.loadListing(job.post_id) || { ...listing, offline: 1 };
-    if (!refreshFreshListing(conn, helpers, job)) return staleWrite();
+    const goneRow = (await loadListingForRun(helpers, job.post_id)) || { ...listing, offline: 1 };
+    if (!(await refreshFreshListing(conn, helpers, job))) return staleWrite();
     helpers.onListingUpdated?.(goneRow, { outcome: PROBE_GONE, displayReady: false });
     return { outcome: PROBE_GONE };
   }
   if (inspected.outcome === PROBE_INCONCLUSIVE) {
-    if (!refreshFreshListing(conn, helpers, job)) return staleWrite();
+    if (!(await refreshFreshListing(conn, helpers, job))) return staleWrite();
     const existingPrep = getListingPrep(conn, listing.post_id);
     if (!existingPrep || Number(existingPrep.display_ready) !== 1) {
       const evalPending = evaluateHpPrep(listing, { fetched: false });
@@ -600,9 +609,9 @@ export async function processOneEnrichJob(conn, helpers, job, {
     recordEnrichMetric(conn, job, { ...timingBase, outcome: "failed" });
     return { outcome: PROBE_INCONCLUSIVE };
   }
-  if (!refreshFreshListing(conn, helpers, job)) return staleWrite();
+  if (!(await refreshFreshListing(conn, helpers, job))) return staleWrite();
   helpers.markAlive(listing.post_id);
-  syncJobListingSeq(job, helpers.loadListing(job.post_id));
+  syncJobListingSeq(job, await loadListingForRun(helpers, job.post_id));
   const locateStarted = Date.now();
   const enriched = enrichHpListingFromDetail(listing, inspected.detail, { allowFieldFill: true, replaceBetterGeo: true });
   if (inspected.facilityAbsent === true) {
@@ -636,7 +645,7 @@ export async function processOneEnrichJob(conn, helpers, job, {
     }
   }
   const merged = mergeHpListingFields(listing, enriched, { allowCorrection: true });
-  const patched = applyHpListingPatch(conn, helpers, listing, merged.listing, {
+  const patched = await applyHpListingPatch(conn, helpers, listing, merged.listing, {
     locationChanged: merged.locationChanged,
     job,
   });
@@ -650,8 +659,8 @@ export async function processOneEnrichJob(conn, helpers, job, {
     return { stale: true };
   }
   if (merged.locationChanged) helpers.invalidateLocation(listing, merged.listing);
-  const stored = helpers.loadListing(job.post_id) || merged.listing;
-  if (!refreshFreshListing(conn, helpers, job)) return staleWrite();
+  const stored = (await loadListingForRun(helpers, job.post_id)) || merged.listing;
+  if (!(await refreshFreshListing(conn, helpers, job))) return staleWrite();
   const existingPrep = getListingPrep(conn, listing.post_id);
   const evalResult = evaluateHpPrep(stored, {
     fetched: true,
@@ -690,7 +699,7 @@ export async function processOneEnrichJob(conn, helpers, job, {
     missing: evalResult.missing,
     timings,
   });
-  if (!refreshFreshListing(conn, helpers, job)) return staleWrite();
+  if (!(await refreshFreshListing(conn, helpers, job))) return staleWrite();
   helpers.onListingUpdated?.(stored, {
     outcome: PROBE_ALIVE,
     displayReady: evalResult.displayReady,
