@@ -166,6 +166,83 @@ export async function loadListingPrepMap(exec, postIds, driver = "sqlite") {
   return map;
 }
 
+// personalSchema.js user_match_votes: db.js loadUserSplitPairSet() (the "不是同一間" votes).
+export async function loadUserSplitPairSet(exec, userId) {
+  const set = new Set();
+  const uid = normalizeUserId(userId);
+  if (!uid) return set;
+  const rows = await exec(
+    `SELECT post_id, peer_id FROM user_match_votes WHERE user_id = ? AND vote = 'split'`,
+    [uid],
+  );
+  for (const row of rows || []) set.add(`${Number(row.post_id)}:${Number(row.peer_id)}`);
+  return set;
+}
+
+// db.js attachSameHouseRoles(): same-house partners of the page that are NOT on the page.
+const EXTRAS_COLUMNS = `post_id, source, source_id, url, price, price_num, extra_fee, extra_fees, extra_fee_text,
+       price_contain_text, refresh_time, last_seen_at, hidden, offline, match_verdict, match_level`;
+
+export async function loadListingExtras(exec, postIds, driver = "sqlite") {
+  const map = new Map();
+  const ids = [...new Set((postIds || []).map(normalizeId).filter(Boolean))];
+  if (!ids.length) return map;
+  const rows = await exec(
+    `SELECT ${EXTRAS_COLUMNS} FROM listings WHERE post_id IN (${inList(ids, driver)})`,
+    ids,
+  );
+  for (const row of rows || []) {
+    map.set(Number(row.post_id), normalizeRow(row, NUMERIC_KEYS.peer));
+  }
+  return map;
+}
+
+// db.js getCachedRoute(): route_cache rows keyed by route.js makeRouteKey(). The row is
+// returned raw - the parsing/rounding stays in db.js so both drivers share one parser.
+const ROUTE_CACHE_COLUMNS = "route_key, distances, min_km, min_m, rush_am_min, rush_pm_min, rush_updated_at";
+
+export async function loadRouteCacheEntries(exec, keys, driver = "sqlite") {
+  const map = new Map();
+  const list = [...new Set((keys || []).map((key) => String(key || "")).filter(Boolean))];
+  if (!list.length) return map;
+  const rows = await exec(
+    `SELECT ${ROUTE_CACHE_COLUMNS} FROM route_cache WHERE route_key IN (${inList(list, driver)})`,
+    list,
+  );
+  for (const row of rows || []) {
+    map.set(String(row.route_key), normalizeRow(row, ["min_km", "min_m", "rush_am_min", "rush_pm_min"]));
+  }
+  return map;
+}
+
+// db.js getCachedMrt(): mrt_cache rows keyed by geo_key.
+export async function loadMrtCacheEntries(exec, keys, driver = "sqlite") {
+  const map = new Map();
+  const list = [...new Set((keys || []).map((key) => String(key || "")).filter(Boolean))];
+  if (!list.length) return map;
+  const rows = await exec(
+    `SELECT geo_key, station, walk_km, walk_min, ride_km, ride_min FROM mrt_cache WHERE geo_key IN (${inList(list, driver)})`,
+    list,
+  );
+  for (const row of rows || []) {
+    map.set(String(row.geo_key), normalizeRow(row, ["walk_km", "walk_min", "ride_km", "ride_min"]));
+  }
+  return map;
+}
+
+// db.js getRouteJob(): route_jobs rows keyed by job_key.
+export async function loadRouteJobs(exec, keys, driver = "sqlite") {
+  const map = new Map();
+  const list = [...new Set((keys || []).map((key) => String(key || "")).filter(Boolean))];
+  if (!list.length) return map;
+  const rows = await exec(
+    `SELECT * FROM route_jobs WHERE job_key IN (${inList(list, driver)})`,
+    list,
+  );
+  for (const row of rows || []) map.set(String(row.job_key), normalizeRow(row, ["post_id", "attempts"]));
+  return map;
+}
+
 // Per-request memoisation: one read per user / per id set, regardless of how many cards get
 // decorated or how many of those calls happen concurrently. The cache holds the *promise*
 // (not the resolved value) so two concurrent calls share one query, and a rejection is
@@ -194,6 +271,11 @@ export function createDecorationDataLoader({ exec, driver = "sqlite" }) {
     peers: new Map(),
     groupMembers: new Map(),
     prep: new Map(),
+    splits: new Map(),
+    extras: new Map(),
+    routeCache: new Map(),
+    mrtCache: new Map(),
+    routeJobs: new Map(),
   };
   const keyOf = (ids) => [...new Set((ids || []).map(normalizeId).filter(Boolean))].sort((a, b) => a - b).join(",");
 
@@ -242,6 +324,34 @@ export function createDecorationDataLoader({ exec, driver = "sqlite" }) {
       if (!ids.length) return new Map();
       const map = await memo(cache.prep, keyOf(ids), () => loadListingPrepMap(exec, ids, driver));
       return new Map(ids.map((id) => [id, map.get(id) || null]));
+    },
+    async splitPairSet(userId) {
+      const uid = normalizeUserId(userId);
+      return memo(cache.splits, uid, () => loadUserSplitPairSet(exec, uid));
+    },
+    async extrasMap(postIds) {
+      const ids = [...new Set((postIds || []).map(normalizeId).filter(Boolean))];
+      if (!ids.length) return new Map();
+      const map = await memo(cache.extras, keyOf(ids), () => loadListingExtras(exec, ids, driver));
+      return new Map(ids.map((id) => [id, map.get(id) || null]));
+    },
+    async routeCacheMap(keys) {
+      const list = [...new Set((keys || []).map((key) => String(key || "")).filter(Boolean))].sort();
+      if (!list.length) return new Map();
+      const map = await memo(cache.routeCache, list.join("|"), () => loadRouteCacheEntries(exec, list, driver));
+      return new Map(list.map((key) => [key, map.get(key) || null]));
+    },
+    async mrtCacheMap(keys) {
+      const list = [...new Set((keys || []).map((key) => String(key || "")).filter(Boolean))].sort();
+      if (!list.length) return new Map();
+      const map = await memo(cache.mrtCache, list.join("|"), () => loadMrtCacheEntries(exec, list, driver));
+      return new Map(list.map((key) => [key, map.get(key) || null]));
+    },
+    async routeJobsMap(keys) {
+      const list = [...new Set((keys || []).map((key) => String(key || "")).filter(Boolean))].sort();
+      if (!list.length) return new Map();
+      const map = await memo(cache.routeJobs, list.join("|"), () => loadRouteJobs(exec, list, driver));
+      return new Map(list.map((key) => [key, map.get(key) || null]));
     },
   };
 }

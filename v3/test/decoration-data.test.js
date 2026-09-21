@@ -11,10 +11,15 @@ import {
   loadAnyoneFlagMap,
   loadGroupIds,
   loadGroupMemberRows,
+  loadListingExtras,
   loadListingPrepMap,
+  loadMrtCacheEntries,
   loadPeerRows,
   loadPersonalFlagMap,
   loadPersonalSameHouseIndex,
+  loadRouteCacheEntries,
+  loadRouteJobs,
+  loadUserSplitPairSet,
 } from "../src/repository/decorationData.js";
 import { toPostgresSql } from "../src/sqlDialect.js";
 import { createPostgresDriver } from "../src/dbDriverPostgres.js";
@@ -26,6 +31,10 @@ const TABLES = [
   "listing_group_members",
   "listing_prep",
   "listings",
+  "user_match_votes",
+  "mrt_cache",
+  "route_cache",
+  "route_jobs",
 ];
 
 const LISTING_COLUMNS = [
@@ -60,6 +69,10 @@ function createFixtureDb() {
     CREATE TABLE listing_group_members (group_id TEXT NOT NULL, post_id INTEGER NOT NULL);
     CREATE TABLE listing_prep (post_id INTEGER PRIMARY KEY, display_ready INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE listings (${LISTING_COLUMNS.map(columnDdl).join(", ")});
+    CREATE TABLE user_match_votes (user_id INTEGER NOT NULL, post_id INTEGER NOT NULL, peer_id INTEGER NOT NULL, vote TEXT NOT NULL);
+    CREATE TABLE mrt_cache (geo_key TEXT PRIMARY KEY, station TEXT, walk_km REAL, walk_min REAL, ride_km REAL, ride_min REAL);
+    CREATE TABLE route_cache (route_key TEXT PRIMARY KEY, distances TEXT, min_km REAL, min_m REAL, rush_am_min INTEGER, rush_pm_min INTEGER, rush_updated_at TEXT);
+    CREATE TABLE route_jobs (job_key TEXT PRIMARY KEY, post_id INTEGER, direction TEXT, kind TEXT, job_state TEXT, attempts INTEGER);
   `);
   const flag = db.prepare(
     "INSERT INTO user_listing_flags(user_id, post_id, viewed, watched, hidden, watch_note) VALUES (?,?,?,?,?,?)",
@@ -78,6 +91,19 @@ function createFixtureDb() {
   group.run("G-9", 101);
   group.run("G-9", 103);
   db.prepare("INSERT INTO listing_prep(post_id, display_ready) VALUES (?,?)").run(101, 1);
+  const vote = db.prepare("INSERT INTO user_match_votes(user_id, post_id, peer_id, vote) VALUES (?,?,?,?)");
+  vote.run(7, 101, 103, "split");
+  vote.run(7, 102, 101, "same");
+  vote.run(8, 101, 103, "split");
+  db.prepare(
+    "INSERT INTO mrt_cache(geo_key, station, walk_km, walk_min, ride_km, ride_min) VALUES (?,?,?,?,?,?)",
+  ).run("geo|101", "中山", 0.4, 6, 2.1, 9);
+  db.prepare(
+    "INSERT INTO route_cache(route_key, distances, min_km, min_m, rush_am_min, rush_pm_min, rush_updated_at) VALUES (?,?,?,?,?,?,?)",
+  ).run("rk|101", "[1.2,1.5]", 1.2, 1200, 12, 15, "2026-09-21T00:00:00Z");
+  db.prepare(
+    "INSERT INTO route_jobs(job_key, post_id, direction, kind, job_state, attempts) VALUES (?,?,?,?,?,?)",
+  ).run("job|101", 101, "to_work", "distance", "pending", 2);
   const listing = db.prepare(
     `INSERT INTO listings(${LISTING_COLUMNS.join(",")}) VALUES (${LISTING_COLUMNS.map(() => "?").join(",")})`,
   );
@@ -122,6 +148,11 @@ async function collect(exec, driver) {
   const peers = await loadPeerRows(exec, [101, 102], driver);
   const members = await loadGroupMemberRows(exec, "G-9");
   const prep = await loadListingPrepMap(exec, [101, 104], driver);
+  const splits = await loadUserSplitPairSet(exec, 7);
+  const extras = await loadListingExtras(exec, [101, 104], driver);
+  const routeCache = await loadRouteCacheEntries(exec, ["rk|101", "rk|missing"], driver);
+  const mrtCache = await loadMrtCacheEntries(exec, ["geo|101"], driver);
+  const routeJobs = await loadRouteJobs(exec, ["job|101"], driver);
   return {
     flags: [...flagMap.entries()].map(([id, r]) => [id, Number(r.viewed), Number(r.watched), String(r.watch_note)]).sort(),
     anyone: [...anyone.entries()].map(([id, r]) => [id, Number(r.viewed), Number(r.watched), Number(r.hidden)]).sort(),
@@ -136,6 +167,13 @@ async function collect(exec, driver) {
     peers: peers.map((r) => Number(r.post_id)).sort((a, b) => a - b),
     members: members.map((r) => Number(r.post_id)).sort((a, b) => a - b),
     prep: [...prep.entries()].map(([id, r]) => [Number(id), r ? Number(r.display_ready) : null]).sort((a, b) => a[0] - b[0]),
+    splits: [...splits].sort(),
+    extras: [...extras.entries()]
+      .map(([id, r]) => [Number(id), String(r?.source || ""), Number(r?.offline)])
+      .sort((a, b) => a[0] - b[0]),
+    routeCache: [...routeCache.entries()].map(([key, r]) => [key, Number(r?.min_km), Number(r?.rush_am_min)]).sort(),
+    mrtCache: [...mrtCache.entries()].map(([key, r]) => [key, String(r?.station || ""), Number(r?.walk_min)]).sort(),
+    routeJobs: [...routeJobs.entries()].map(([key, r]) => [key, String(r?.job_state || ""), Number(r?.attempts)]).sort(),
   };
 }
 
@@ -148,6 +186,11 @@ const EXPECTED = {
   peers: [101, 102, 103],
   members: [101, 103],
   prep: [[101, 1]],
+  splits: ["101:103"],
+  extras: [[101, "591", 0], [104, "591", 0]],
+  routeCache: [["rk|101", 1.2, 12]],
+  mrtCache: [["geo|101", "中山", 6]],
+  routeJobs: [["job|101", "pending", 2]],
 };
 
 test("decoration data loaders read the SQLite fixture", async () => {
