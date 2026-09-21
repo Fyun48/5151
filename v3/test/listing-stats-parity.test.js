@@ -34,9 +34,11 @@ const PG_TEST_URL = (process.env.PG_TEST_URL || "").trim();
 const skip = PG_TEST_URL ? false : "PG_TEST_URL is not set (live PostgreSQL listing-stats parity)";
 
 // Every table the stats path reads, plus the ones the decoration preload it runs touches
-// (personal flags, same-house index, votes, groups, prep, route/MRT caches, route jobs).
+// (personal flags, same-house index, votes, groups, prep, route/MRT caches, route jobs) and the
+// projection the SQL-first page query runs against.
 const TABLES = [
   "listings",
+  "listing_search_projection",
   "user_listing_flags",
   "user_same_house_members",
   "user_match_votes",
@@ -162,18 +164,18 @@ async function loadFixture() {
 }
 
 async function loadFacade() {
-  const [{ listingStatsAsync }, { createListingStatsRepository }] = await Promise.all([
+  const [{ listingStatsAsync }, { searchListingsAsync }, { createListingStatsRepository }] = await Promise.all([
     import("../src/listingStatsAsync.js"),
+    import("../src/listingSearchAsync.js"),
     import("../src/repository/listingStats.js"),
   ]);
-  return { listingStatsAsync, createListingStatsRepository };
+  return { listingStatsAsync, searchListingsAsync, createListingStatsRepository };
 }
 
-// Same fixture, mirrored table for table into a private schema, then the counters compared.
-async function assertStatsParity(app, uid, settings) {
-  const { listingStatsAsync } = await loadFacade();
+// The fixture store mirrored table for table into a private schema, handed to the PostgreSQL
+// path under test. Both parity helpers below share it; the schema is always dropped again.
+async function withMirroredSchema(app, fn) {
   const sqliteDb = app.sqliteHandle();
-  const expected = app.stats(undefined, uid, settings);
   const schema = `pgstats_${Date.now().toString(36)}_${Math.floor(Math.random() * 100000)}`;
   const pgDriver = await createPostgresDriver({
     connectionString: PG_TEST_URL,
@@ -183,6 +185,18 @@ async function assertStatsParity(app, uid, settings) {
     const tables = existingTables(sqliteDb, TABLES);
     await ensurePgSchema(pgDriver, sqliteDb, { schema, tables, indexes: false });
     for (const table of tables) await importTable(pgDriver, sqliteDb, table, { schema });
+    return await fn(pgDriver, schema);
+  } finally {
+    await pgDriver.exec(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+    await pgDriver.close();
+  }
+}
+
+// Same fixture, mirrored table for table into a private schema, then the counters compared.
+async function assertStatsParity(app, uid, settings) {
+  const { listingStatsAsync } = await loadFacade();
+  const expected = app.stats(undefined, uid, settings);
+  return withMirroredSchema(app, async (pgDriver) => {
     const diagnostics = {};
     const actual = await listingStatsAsync(
       { userId: uid, settings, diagnostics },
@@ -191,10 +205,23 @@ async function assertStatsParity(app, uid, settings) {
     assert.equal(diagnostics.driver, "postgres");
     assert.deepEqual(actual, expected);
     return actual;
-  } finally {
-    await pgDriver.exec(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
-    await pgDriver.close();
-  }
+  });
+}
+
+// The /api/state initial payload: the same page and the same counters, one driver each.
+async function assertStatePageParity(app, uid, settings) {
+  const { searchListingsAsync } = await loadFacade();
+  const args = { filter: "all", sort: "newest", limit: 500, offset: 0, userId: uid, matchVoteUserId: uid };
+  const expected = app.listListings({ ...args, settings });
+  return withMirroredSchema(app, async (pgDriver) => {
+    const actual = await searchListingsAsync(
+      { ...args, settings },
+      { driver: "postgres", pgDriver, deps: app.listingSearchBuildContext(), strict: true },
+    );
+    assert.equal(actual.totalMatched, expected.totalMatched);
+    assert.deepEqual(actual.listings, expected.listings);
+    return actual;
+  });
 }
 
 test("listingStatsAsync keeps the SQLite counters on the sqlite driver", async () => {
@@ -227,9 +254,17 @@ test("listingStatsAsync keeps the SQLite counters on the sqlite driver", async (
   assert.match(facade, /summarizeListingStats\(\{/);
   assert.match(facade, /return stats\(searchKeys, userId, settings, diagnostics\);/);
   assert.throws(
-    () => createListingStatsRepository({ deps: {}, exec: async () => [] }),
+    () => createListingStatsRepository({ deps: {}, exec: async () => {} }),
     /requires deps\.resolveUserId/,
   );
+  // The initial payload (/api/state) goes through the same two entry points, so "first paint"
+  // and the first /api/listings refresh cannot describe different stores.
+  const stateStart = server.indexOf('app.get("/api/state"');
+  const state = server.slice(stateStart, stateStart + 2400);
+  assert.match(state, /await listingStatsAsync\(\{ userId: uid \}\)/);
+  assert.match(state, /const listed = await searchListingsAsync\(\{/);
+  assert.doesNotMatch(state, /listListings\(/);
+  assert.doesNotMatch(state, /stats\(undefined/);
 });
 
 test("live PostgreSQL: the counters equal the SQLite counters", { skip }, async (t) => {
@@ -253,6 +288,12 @@ test("live PostgreSQL: the counters equal the SQLite counters", { skip }, async 
     });
     const actual = await assertStatsParity(app, uid, settings);
     assert.ok(actual.total >= 1, `PG total with commute ${actual.total}`);
+  });
+
+  // The initial payload (/api/state): the same page the SQLite path would serve, one driver each.
+  await t.test("the initial payload page matches the SQLite page", async () => {
+    const actual = await assertStatePageParity(app, uid, settingsFor(app, uid));
+    assert.ok(actual.listings.length >= 3, `PG page size ${actual.listings.length}`);
   });
 });
 

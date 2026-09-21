@@ -1,9 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  applySqliteNumberSemantics,
   createPostgresDriver,
   describeConnection,
   numberFromPg,
+  PG_BIGINT_OID,
   resolvePostgresConfig,
 } from "../src/dbDriverPostgres.js";
 
@@ -90,6 +92,21 @@ test("numberFromPg normalises the BIGINT-as-string the driver returns", () => {
   assert.equal(numberFromPg("42"), 42);
   assert.equal(numberFromPg(42), 42);
   assert.equal(numberFromPg(null), null);
+});
+
+test("the driver applies one numeric semantics to both engines (BIGINT as a number)", () => {
+  const parsers = new Map();
+  const fakePg = { types: { setTypeParser: (oid, parse) => parsers.set(oid, parse) } };
+  assert.equal(applySqliteNumberSemantics(fakePg), true);
+  // BIGINT (OID 20) is what every mirrored SQLite INTEGER column comes back as: node-postgres
+  // would hand it over as a string, which made PostgreSQL cards differ from SQLite ones.
+  const parse = parsers.get(PG_BIGINT_OID);
+  assert.equal(typeof parse, "function");
+  assert.equal(parse("900001"), 900001);
+  assert.equal(parse("0"), 0);
+  assert.equal(parse(null), null);
+  // A module without the parser API is reported rather than throwing.
+  assert.equal(applySqliteNumberSemantics({}), false);
 });
 
 test("createPostgresDriver wires query/exec/healthCheck/close", async () => {

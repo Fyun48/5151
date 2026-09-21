@@ -59,9 +59,43 @@ missingGeo / missingRoute / dbTotal`。fixture（10 筆）刻意讓每個計數�
    （那些欄位不在 upsert 的欄位清單裡，`offline` 甚至被 ON CONFLICT 重設為 0）→ 測試改成 upsert 後用
    SQLite handle 補 UPDATE，否則對照組會兩邊都 0。
 
+## 第二輪（同日）：`/api/state` 同源 ＋ 兩個 driver 的數值語意
+
+`GET /api/state`（前端第一次載入的 payload）原本仍走 `stats()` ＋ `listListings()` 的 SQLite 鏈，
+PG 模式下「首次載入」與「重新整理（`/api/listings`）」會是兩個 store。現在它也走同兩個 async 入口
+（`listingStatsAsync` ＋ `searchListingsAsync`，參數與 `/api/listings` 一致）；`DB_DRIVER=sqlite`
+時仍是原本那條鏈，只是改成 await。
+
+新增的 live 子測試把 **`/api/state` 那 500 筆頁面**逐欄 deepEqual（SQLite `listListings()` vs
+PG `searchListingsAsync()`），第一次跑就抓到一個**真的會上線的缺陷**：
+
+> node-postgres 把 BIGINT（int8, OID 20）以**字串**回傳，`node:sqlite` 是數字。
+> 於是 PG 模式下的卡片長成 `post_id: "900001"`、`price_num: "25000"`、`offline: "0"`、
+> `community_id: "0"`、`content_seq: "1"` …（**`/api/listings` 也一樣**，因為共用同一條 hydrate
+> 路徑），SQLite 則是數字 —— 任何 `===`、物件鍵或前端運算都會不同。
+
+修法：`dbDriverPostgres.js` 的 `applySqliteNumberSemantics()` 在建立 driver 時把 int8 的 parser
+換成 `Number`（`createPostgresDriver()` 內套用），讓兩個 driver 對 INTEGER 有同一個語意。
+安全性：本 schema 的 id ~1e9、epoch 毫秒 ~1.7e12，遠低於 `Number.MAX_SAFE_INTEGER`（9.007e15）；
+NUMERIC/DECIMAL（OID 1700）不動（schema 鏡射把 SQLite REAL 映成 DOUBLE PRECISION，目前沒有這種欄位）。
+
+驗證（shadow PG，image `ghcr.io/fyun48/5151:bcb6eb7f…`）：
+
+| 測試 | 結果 |
+|---|---|
+| `listing-stats-parity.test.js`（含新的 state 頁面 parity） | **5 pass / 0 fail** |
+| `pg-live-integration.test.js`（回歸） | 10 pass / 0 fail |
+| `write-path-parity.test.js`（回歸） | 2 pass / 0 fail |
+| `decoration-data.test.js`（回歸；SQLite 與真實 PG 逐值比對） | 3 pass / 0 fail |
+| `pg-driver.test.js`（本機；新增數值語意單測） | pass |
+
 ## 這還不是全部（切換前仍缺）
 
-- `/api/state`（初始載入）仍用 `listListings()` ＋ SQLite `stats()`；PG 模式下它與 `/api/listings` 會不同源。
+- ~~`/api/state`（初始載入）~~ → **已同源（2026-09-21）**：它現在也走 `listingStatsAsync()` ＋
+  `searchListingsAsync()`，live 測試把那 500 筆頁面逐欄 deepEqual（也因此抓到 BIGINT 型別缺陷）。
+- **詳情頁／列表以外的讀取仍是 SQLite**：`getListing()`（`v3/src/db.js`；`/api/listings/:id/history`、
+  詳情、`/go` 等）直接 `SELECT * FROM listings`，PG 模式下會看不到只存在於 PG 的資料 ——
+  這是 ② 之中**最會直接壞掉**的一塊。
 - 列表路徑以外的旗標／路線讀取、`enqueueSimilaritySafe`（pHash 佇列）、`listing_prep`、通知／CRM 佇列仍 SQLite-only。
 - commute／fit 排序仍在 PG 的 SQL-first envelope 外（安全但回退 SQLite）；PG 的 EXPLAIN evidence 只涵蓋三種價格／新舊排序。
 - PG schema bootstrap（app 只 ensure SQLite schema）與 `pgSchema.importTable` 的 COPY／分批版本、寫入凍結視窗。

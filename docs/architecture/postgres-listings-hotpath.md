@@ -32,6 +32,11 @@ db.js 以 `listingSearchBuildContext()` 注入它原本的私有 helper。
 | `v3/src/repository/listingStats.js` | stats 的 PostgreSQL 讀取層（candidates／statusCounts／watchedTotal／dbTotal／failedRouteJobs＋flag map） |
 | `v3/src/pgSchema.js` | SQLite schema → PostgreSQL DDL + 冪等 import（parity 測試與未來遷移用） |
 
+`dbDriverPostgres.js` 另外負責**數值語意**：node-postgres 把 BIGINT（int8）以字串回傳，`node:sqlite`
+是數字，所以 driver 建立時會把 int8 的 parser 換成 `Number`（`applySqliteNumberSemantics()`）。
+沒有這一步，PG 的卡片會帶著 `post_id: "900001"`、`offline: "0"` 這種字串欄位（實測抓到，
+見 `v3/evidence/listing-stats-pg-20260921/`）。
+
 ## 安全性設計（避免「一半的 PostgreSQL 上線」）
 
 listings 的**裝飾**已移植（Slice 1／2a／2b：`v3/src/repository/decorationData.js` 與 `db.js` 的
@@ -91,6 +96,7 @@ idempotency key 去重、以及 **standby 上可見同一 schema（串流複寫�
 
 1. **commute／fit 排序的 SQL 化與 cursor**：目前仍在 PG 的 SQL-first envelope 外（安全，但切到 PG 後這兩種排序吃 SQLite）。
 2. **EXPLAIN evidence**：已有 newest／price_asc／price_desc（`v3/evidence/pg-explain-20260921/`，0 個 Seq Scan）；commute／fit 尚未。
-3. **`/api/state`（初始載入）** 仍是 `listListings()` ＋ SQLite `stats()`，PG 模式下與 `/api/listings` 不同源。
+3. **列表以外的讀取**：`/api/state` 已同源；`getListing()`（詳情頁／`/go`／history）仍是 SQLite-only，
+   PG 模式下會看不到只存在於 PG 的資料 —— 切換前必須處理。
 4. **其餘 domain 讀寫**：列表路徑以外的旗標／路線讀取、`enqueueSimilaritySafe`（pHash 佇列）、`listing_prep`、通知／CRM 佇列仍 SQLite-only。
 5. **PG schema bootstrap 與遷移工具效率**：app 只會 ensure SQLite schema；`pgSchema.importTable` 仍是逐列 INSERT（108k 筆 listings 需要 COPY／分批版），cutover 還需要寫入凍結視窗。
