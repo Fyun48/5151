@@ -247,6 +247,38 @@ test("enrich job writes floor without address change and ignores a stale late re
   assert.notEqual(store.get(listing.post_id).floor_name, "1/99");
 });
 
+test("the enrich worker reads through the async loader when the bundle provides one", async () => {
+  const conn = memoryQueue();
+  const listing = hpListing({ floor_name: "", furnish_items: "[]", has_natural_gas: 0, tags: "[]" });
+  enqueueListingEnrich(conn, listing, { via: "scheduler" });
+  const [job] = claimEnrichJobs(conn, { limit: 1 });
+  const store = new Map([[listing.post_id, listing]]);
+  let asyncCalls = 0;
+  const helpers = {
+    ...storeHelpers(store),
+    // The PostgreSQL-mode bundle: watcher's listingEnrichHelpers() exposes loadListingAsync and
+    // crawlerReads.js decides which store answers. The worker must use the async loader - the
+    // synchronous one is here only to fail loudly if it is ever picked.
+    loadListing: () => { throw new Error("sync loader must not be used when loadListingAsync exists"); },
+    loadListingAsync: async (id) => {
+      asyncCalls += 1;
+      return store.get(Number(id)) || null;
+    },
+  };
+  const detail = parseHpDetailJson(JSON.parse(readFileSync(path.join(dir, "fixtures/houseprice-detail-16470110.json"), "utf8")));
+  const result = await processOneEnrichJob(conn, helpers, job, {
+    fetchDetail: async () => ({
+      outcome: PROBE_ALIVE,
+      detail,
+      facilityBlock: true,
+      parse_ms: 4,
+    }),
+  });
+  assert.equal(result.outcome, PROBE_ALIVE);
+  assert.ok(asyncCalls >= 1, "the worker read the row through loadListingAsync");
+  assert.equal(store.get(listing.post_id).floor_name, "4/4");
+});
+
 test("source-limited listings get a later retry and do not consume every claim slot", () => {
   const conn = memoryQueue();
   for (let i = 0; i < 6; i += 1) {
