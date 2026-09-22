@@ -94,6 +94,8 @@ jobs:
           client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
           fallback-host: ${{ secrets.NAS_HOST }}
           fallback-port: ${{ secrets.NAS_PORT }}
+          ssh-user: ${{ secrets.NAS_USER }}
+          ssh-key: ${{ secrets.NAS_SSH_KEY }}
       - name: Stage migration helper and compose on the Storage1 pool
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -115,6 +117,8 @@ jobs:
           client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
           fallback-host: ${{ secrets.NAS_HOST }}
           fallback-port: ${{ secrets.NAS_PORT }}
+          ssh-user: ${{ secrets.NAS_USER }}
+          ssh-key: ${{ secrets.NAS_SSH_KEY }}
       - name: Run the data volume migration
         uses: appleboy/ssh-action@v1.2.0
         with:
@@ -144,6 +148,8 @@ jobs:
           client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
           fallback-host: ${{ secrets.NAS_HOST }}
           fallback-port: ${{ secrets.NAS_PORT }}
+          ssh-user: ${{ secrets.NAS_USER }}
+          ssh-key: ${{ secrets.NAS_SSH_KEY }}
       - name: Remove staged migration helper from the NAS
         if: always()
         uses: appleboy/ssh-action@v1.2.0

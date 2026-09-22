@@ -97,6 +97,8 @@ jobs:
           client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
           fallback-host: ${{ secrets.NAS_HOST }}
           fallback-port: ${{ secrets.NAS_PORT }}
+          ssh-user: ${{ secrets.NAS_USER }}
+          ssh-key: ${{ secrets.NAS_SSH_KEY }}
       - name: Copy ops source only
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -117,6 +119,8 @@ jobs:
           client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
           fallback-host: ${{ secrets.NAS_HOST }}
           fallback-port: ${{ secrets.NAS_PORT }}
+          ssh-user: ${{ secrets.NAS_USER }}
+          ssh-key: ${{ secrets.NAS_SSH_KEY }}
       - name: Recreate 5151-ops only
         uses: appleboy/ssh-action@v1.2.0
         with:

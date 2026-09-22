@@ -83,6 +83,8 @@ jobs:
           client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
           fallback-host: ${{ secrets.NAS_HOST }}
           fallback-port: ${{ secrets.NAS_PORT }}
+          ssh-user: ${{ secrets.NAS_USER }}
+          ssh-key: ${{ secrets.NAS_SSH_KEY }}
       - name: Collect one diagnostic from the running v3 container
         id: collect
         env:

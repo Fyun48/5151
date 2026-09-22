@@ -157,6 +157,8 @@ jobs:
           client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
           fallback-host: ${{ secrets.NAS_HOST }}
           fallback-port: ${{ secrets.NAS_PORT }}
+          ssh-user: ${{ secrets.NAS_USER }}
+          ssh-key: ${{ secrets.NAS_SSH_KEY }}
       - name: Copy Stage 1 fixture helpers to NAS /tmp
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -177,6 +179,8 @@ jobs:
           client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
           fallback-host: ${{ secrets.NAS_HOST }}
           fallback-port: ${{ secrets.NAS_PORT }}
+          ssh-user: ${{ secrets.NAS_USER }}
+          ssh-key: ${{ secrets.NAS_SSH_KEY }}
       - name: Run Stage 1 fixture operation on running v3
         id: operate
         uses: appleboy/ssh-action@v1.2.0
@@ -214,6 +218,8 @@ jobs:
           client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
           fallback-host: ${{ secrets.NAS_HOST }}
           fallback-port: ${{ secrets.NAS_PORT }}
+          ssh-user: ${{ secrets.NAS_USER }}
+          ssh-key: ${{ secrets.NAS_SSH_KEY }}
       - name: Pull NAS fixture evidence
         if: ${{ always() && steps.authorize.outputs.authorized == 'true' && (steps.operate.outcome == 'success' || steps.operate.outcome == 'failure') }}
         env:

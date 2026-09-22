@@ -120,6 +120,8 @@ jobs:
           client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
           fallback-host: ${{ secrets.NAS_HOST }}
           fallback-port: ${{ secrets.NAS_PORT }}
+          ssh-user: ${{ secrets.NAS_USER }}
+          ssh-key: ${{ secrets.NAS_SSH_KEY }}
       - name: Copy UAT helpers to the NAS
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -140,6 +142,8 @@ jobs:
           client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
           fallback-host: ${{ secrets.NAS_HOST }}
           fallback-port: ${{ secrets.NAS_PORT }}
+          ssh-user: ${{ secrets.NAS_USER }}
+          ssh-key: ${{ secrets.NAS_SSH_KEY }}
       - name: Run the consolidated Production UAT
         id: run
         uses: appleboy/ssh-action@v1.2.0
@@ -171,6 +175,8 @@ jobs:
           client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
           fallback-host: ${{ secrets.NAS_HOST }}
           fallback-port: ${{ secrets.NAS_PORT }}
+          ssh-user: ${{ secrets.NAS_USER }}
+          ssh-key: ${{ secrets.NAS_SSH_KEY }}
       - name: Pull the UAT evidence from the NAS
         if: ${{ always() }}
         env:
