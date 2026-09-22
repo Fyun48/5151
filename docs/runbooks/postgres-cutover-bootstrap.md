@@ -23,8 +23,16 @@
         生產者（`crm.js`，同步）與消費者（`crmDelivery.js`）共用同一個 handle（`opsDeliveryDb()` 就是 `db`），
         所以是「同一個 store 進出」而非「寫 A 讀 B」——不影響單容器切換。
         **但多節點 HA（兩個 web 共用 PG）之前必須移植**，見步驟 7。
-      - **`enqueueSimilaritySafe`（④，pHash 佇列）** ⛔ 尚未完成 —— PG 模式下爬進來的物件不會進
-        相似度佇列（功能缺口，不會寫壞資料）。
+      - **`enqueueSimilaritySafe`（④，pHash／相似度建議／爬蟲洞察）** ⚠️ **已知功能缺口，判定為不阻塞單容器切換**
+        —— PG 模式下 `persistListing()` 刻意跳過它，所以爬進來的物件不會產生指紋／建議／洞察
+        （**功能缺口，不會寫壞資料**）。這個功能是 **opt-in、預設關閉**（`phash_enabled` 預設 `false`；
+        洞察還要另外啟用 LLM provider），**2026-09-22 Owner 確認正式站沒有在用** → 不阻塞切換。
+        **要啟用這個功能或走到 HA 之前必須移植**：`v3/src/listingSimilarity.js`（409 行、18 條同步語句）的
+        「佇列寫入 ＋ 審核 UI（`listSimilaritySuggestions`／`reviewSimilarity`／`getSimilarityAdmin`／
+        `listRecentInsights`）＋ 兩個設定」是同一條鏈，只換一半會變成寫 A 讀 B；UI 那幾個是同步函式、
+        被 admin 路由直接呼叫，移植時要一起 async 化。詳見步驟 7。
+      - **結論（2026-09-22）**：單容器切換**已無功能阻塞項**（①✅ ②✅ ③✅；④ 是未啟用的 opt-in 功能缺口，
+        CRM outbox／job queue 類是同一個 store 進出的孤島）。接下來只剩 Owner 決定凍結視窗（步驟 1）。
 - [ ] shadow 叢集健康：`sh deploy/shadow-ha/drill.sh preflight`（primary/standby 角色、複寫延遲）。
 - [ ] 目標 PG 由 **完整初始化過的 store** 鏡射：app 只會 ensure SQLite 的 schema，PG 端的
       `data_revision` 之類的表是「第一次用到才建立」，空的暫存 DB 會漏掉它們。
@@ -123,4 +131,7 @@ ingress 指到 `5151-haproxy` 的 `web` frontend（`POSTGRES_SWITCH_PLAN.md` §5
   （enqueue／claim／markSent／markFailure／stats）要一起走 driver-aware，`res.changes` 改判 `rowCount`。
 - **背景工作佇列**：`jobQueue.js`／`jobWorker.js`／`geoQueue.js`／`listingEnrichQueue.js`
   （同一個道理：佇列與 worker 都在同一台時自洽，多節點就會互看不到）。
+- **相似度／洞察（④）**：`listingSimilarity.js` 的佇列寫入與**審核 UI** 一起移植
+  （`listSimilaritySuggestions`／`reviewSimilarity`／`getSimilarityAdmin`／`listRecentInsights` 這幾個同步
+  函式 ＋ admin 路由要 async 化），否則會變成「寫 PG、UI 讀 SQLite」；目前正式站未啟用這個功能。
 
