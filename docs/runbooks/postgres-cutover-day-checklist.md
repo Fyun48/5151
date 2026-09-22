@@ -14,6 +14,8 @@
 | 目前正式站 image | `sha256:0f758bd6eab542429f68f16bd920107fe92abae781945e5b2a705b7ebef8af3e`（＝`64828a8`）← **回復點** |
 | predeploy 備份（**今天的回復點**） | 2026-09-22 重跑 `PREDEPLOY_CHECK_OK` → `/mnt/Storage1/docker_data/591-tracker-v3-backups/predeploy-20260922-051725`（`v3.db` `sha256:2e1b149da66abcdc9e502b2a30234909146f73a1dd1c7dd6b48d2b464de4b630`）；2026-09-21 那次為 `predeploy-20260921-133223`（`sha256:6cf1f045…`） |
 | live parity（切換前基準） | 11 個 live 檔 **61/61、0 skip**（2026-09-22，shadow） |
+| 匯入環境（CasaOS 實查 2026-09-22） | `5151-web-A` 存在 ✅（image `…:bcb6eb7f…`，腳本用它跑 `VACUUM INTO`）；`/root/pgtest/incoming` 存在但**是 09-21 的舊副本 → 先更新**；正式 `v3.db` **476 MB**（mtime 即時）；備份目錄共 **1.6 G**；`/mnt/Storage1` 還有 **819 G** 可用 |
+| 切換用的環境檔（CasaOS） | `/mnt/Storage1/apps/5151/.env` 已存在（目前只有 `TUNNEL_TOKEN`）；部署版 `casaos-compose.yml` 的 v3 `environment:` **沒有** `DB_DRIVER`／`PG_URL` → 需要一次性小 PR（見步驟 5）；正式容器目前 `DB_DRIVER` 未設（＝sqlite）✅ |
 
 ## 步驟 0.5（建議、可先做）：先把新 image 上正式站，但**先不切 driver**
 
@@ -64,6 +66,13 @@ IMPORT_DB=5151_import_test sh deploy/shadow-ha/pg-import-run.sh \
   <env_file> <src_dir> /mnt/Storage1/docker_data/591-tracker-v3 192.168.0.220
 ```
 
+`src_dir` 目前是 `/root/pgtest/incoming`（2026-09-22 實查存在，但是 **09-21 的副本**）→ **匯入前先更新**，
+讓匯入工具與 master 一致：
+
+```bash
+git -C /root/pgtest/incoming pull --ff-only        # 或重新複製一份 repo
+```
+
 預期：`=== 1) VACUUM INTO snapshot of the live DB ===` → `snapshot ok, listings=<N>` →
 逐表 `rows/ms` → **identity sequence re-sync 清單**（這步不能省：帶明確 id 的 INSERT 不會推進 identity）。
 
@@ -111,7 +120,7 @@ node --test v3/test/crawler-reads-parity.test.js v3/test/listing-fields-parity.t
    DB_DRIVER: ${DB_DRIVER:-sqlite}
    PG_URL: ${PG_URL:-}
    ```
-2. NAS 的 compose 同目錄放 `.env`（**不進版控**）：
+2. **既有的** NAS 環境檔 `/mnt/Storage1/apps/5151/.env`（**不進版控**，目前只有 `TUNNEL_TOKEN`）**追加**兩行：
    ```
    DB_DRIVER=postgres
    PG_URL=postgres://postgres:<PG_SUPER_PASSWORD>@192.168.0.140:25433/5151_shadow
@@ -148,5 +157,11 @@ psql "$PG_URL" -c "select client_addr, state, pg_wal_lsn_diff(sent_lsn, replay_l
   都在同一個 store（單容器自洽，不是「寫 A 讀 B」）；**HA（兩個 web 共用 PG）之前必須移植**。
 - **④ pHash／相似度建議／爬蟲洞察**：opt-in 且正式站未啟用；**啟用該功能或 HA 之前必須移植**。
 - 兩者的掛點與移植範圍都寫在 `docs/runbooks/postgres-cutover-bootstrap.md` 步驟 7。
+
+## 順手的資安觀察（2026-09-22 在 CasaOS 上看到）
+
+- 該機的 **`fail2ban` 是 `inactive`**（也沒裝 `fail2ban-client`），而 SSH 埠（`54722`）**持續被外部暴力嘗試**
+  （日誌可見 `invalid user php_dev`／`jingjing`／`itakura` 等來自多個來源 IP）。建議：收斂 SSH 暴露面
+  （只允許特定來源／改埠／走 VPN）、啟用 fail2ban 或等效防護、並**輪替 root 密碼**（它已出現在對話記錄裡）。
 
 
