@@ -266,11 +266,21 @@ jobs:
           if grep -q '591-tracker-v2' docker-compose.override.yml || grep -qE '591-tracker:' docker-compose.override.yml; then
             echo "::error::override must pin only 591-tracker-v3"; exit 1
           fi
+      - name: NAS SSH endpoint (Cloudflare Access bridge, falls back to public SSH)
+        id: cf-bridge
+        uses: ./.github/actions/cf-ssh-bridge
+        with:
+          hostname: ssh-casa.reversalplay.me
+          port: "2222"
+          client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          fallback-host: ${{ secrets.NAS_HOST }}
+          fallback-port: ${{ secrets.NAS_PORT }}
       - name: Copy v3 app, compose files, and digest override
         uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ secrets.NAS_HOST }}
-          port: ${{ secrets.NAS_PORT }}
+          host: ${{ steps.cf-bridge.outputs.host }}
+          port: ${{ steps.cf-bridge.outputs.port }}
           username: ${{ secrets.NAS_USER }}
           key: ${{ secrets.NAS_SSH_KEY }}
           source: "v3/src,v3/public,docker-compose.yml,casaos-compose.yml,docker-compose.override.yml"
@@ -282,8 +292,8 @@ jobs:
         # the next command and multi-line blocks can be mangled.
         uses: appleboy/ssh-action@v1.2.0
         with:
-          host: ${{ secrets.NAS_HOST }}
-          port: ${{ secrets.NAS_PORT }}
+          host: ${{ steps.cf-bridge.outputs.host }}
+          port: ${{ steps.cf-bridge.outputs.port }}
           username: ${{ secrets.NAS_USER }}
           key: ${{ secrets.NAS_SSH_KEY }}
           script_stop: true
@@ -334,8 +344,8 @@ jobs:
             python3 -c "import json; open('/tmp/phase15-deploy-health.json','w').write(json.dumps({'container_running':True,'health':True,'landing':True,'login':True,'image_digest':'$IMAGE_DIGEST','oci_revision':'$DEPLOY_SHA','container_image':'$IMAGE_PIN'}) + '\n')"
       - name: Pull NAS deploy health evidence
         env:
-          NAS_HOST: ${{ secrets.NAS_HOST }}
-          NAS_PORT: ${{ secrets.NAS_PORT }}
+          NAS_HOST: ${{ steps.cf-bridge.outputs.host }}
+          NAS_PORT: ${{ steps.cf-bridge.outputs.port }}
           NAS_USER: ${{ secrets.NAS_USER }}
           NAS_SSH_KEY: ${{ secrets.NAS_SSH_KEY }}
         run: |
