@@ -479,31 +479,69 @@ Promise、Agent 繼續跑**。寫入端（`writeText`）本來就有 `execComman
 
 兩個檔都只有那 334 個字元被換掉，其餘 byte-for-byte 相同（有驗證腳本可證明，見下）。
 
-### 自我修復（container 重建後不會消失）
+### 自我修復：container 啟動時先補、再啟動 code-server（2026-09-22 改）
 
-patch 在容器內，所以容器被重建（`docker compose up -d --force-recreate`、換 image）就會不見。
-因此把「補丁腳本 + 觸發點」放在**持久化掛載**上：
+patch 改在容器內（`/usr/lib/...`），容器被重建（`docker compose up -d`、換 image）就會不見，
+所以一定要有啟動時自動補的機制。code-server 官方 image 的 `/usr/bin/entrypoint.sh`
+**本來就有「啟動前 hook」**，正好用：
+
+```sh
+# image 內的 /usr/bin/entrypoint.sh（節錄，未修改）
+if [ -d "${ENTRYPOINTD}" ]; then
+  find "${ENTRYPOINTD}" -type f -executable -print -exec {} \;
+fi
+exec dumb-init /usr/bin/code-server "$@"
+```
+
+因此觸發點放在**啟動序最前面**（先前放在 `~/.bashrc`，要等使用者開 Terminal 才跑，
+會有「先開瀏覽器 → 還沒開 Terminal → 還沒補」的 race window；那條已移除）：
 
 | 項目 | 位置（容器內） | 對應 NAS 主機 |
 |---|---|---|
-| 補丁腳本 | `~/.local/share/code-server/tools/clipboard-failopen.sh` | `~/code-server/data/.local/share/code-server/tools/clipboard-failopen.sh` |
-| 觸發點 | `~/.bashrc`（在開頭，每個 shell 都會跑一次）| 同左（`~/code-server/data/.bashrc`）|
+| 觸發點（prestart hook） | `~/.local/share/code-server/entrypoint.d/50-clipboard-failopen.sh` | `~/code-server/data/.local/share/code-server/entrypoint.d/…` |
+| 補丁腳本 | `~/.local/share/code-server/tools/clipboard-failopen.sh` | `~/code-server/data/.local/share/code-server/tools/…` |
+| `ENTRYPOINTD` | `docker-compose.yml` → `environment:` 內 `ENTRYPOINTD=/home/coder/.local/share/code-server/entrypoint.d` | `~/code-server/docker-compose.yml` |
 
-腳本是 idempotent：已經補過就只做「讀 stamp + `stat` 兩個 bundle」的 fast path（約 1–11 ms），
-不會拖慢 shell。原始檔在補之前會備份到 `~/.backups/clipboard-failopen-auto/`。
+實際順序（log 可證，相差約 1 秒，且**完全不需要開 Terminal**）：
 
-驗證自我修復（模擬容器重建）：
+```text
+entrypoint.d hook（patch 完成）
+→ exec dumb-init /usr/bin/code-server
+→ code-server listening
+```
+
+`~/.bashrc` 已**不再**執行 patch（只留一行註解當備援：compose 的 `ENTRYPOINTD` 萬一被拿掉時可回舊行為）。
+
+腳本的 fail-safe 契約：
+
+```text
+pattern 已 patch              -> PASS（fast path：讀 stamp + stat 兩個 bundle，幾毫秒）
+pattern 可安全 patch          -> 套用（並把原檔備份到 ~/.backups/clipboard-failopen-auto/）
+pattern 不符（未來新版 VS Code）-> 記 WARNING、原檔不動、不寫 stamp（下次啟動再試）
+補丁腳本不存在                 -> 記 WARNING
+任何情況 hook 都 exit 0        -> code-server 一定照常啟動
+```
+
+驗證自我修復（模擬 container 重建，**全程不開 Terminal**）：
 
 ```bash
-# 1) 把某個檔案還原成 image 原版（模擬重建後的狀態）
+# 1) 還原成 image 原版（＝剛重建完的狀態）
 BK=$(ls -dt ~/.backups/clipboard-failopen-* | head -1)
 sudo cp "$BK/workbench.js.orig" /usr/lib/code-server/lib/vscode/out/vs/code/browser/workbench/workbench.js
-# 2) 開一個互動式 shell（＝平常打開 Terminal 的動作）
-bash -ic true
-# 3) 應該已被自動補回（log 會出現 PATCHED …）
-grep -c clipboard-fail-open /usr/lib/code-server/lib/vscode/out/vs/code/browser/workbench/workbench.js   # → 1
-tail -3 ~/.local/share/code-server/tools/clipboard-failopen.log
+rm -f ~/.local/share/code-server/tools/.clipboard-failopen.stamp
+# 2) 跑真正的啟動路徑（image entrypoint + ENTRYPOINTD）→ 先 patch、再起 code-server
+env -i HOME=/home/coder PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  TERM=xterm ENTRYPOINTD=/home/coder/.local/share/code-server/entrypoint.d \
+  /usr/bin/entrypoint.sh --bind-addr 127.0.0.1:9999 --auth none \
+  --user-data-dir /tmp/sim-data --extensions-dir /tmp/sim-ext /tmp/sim-ws
+# 3) 直接抓「瀏覽器會拿到的那一份」→ 已經是 fail-open
+curl -s http://127.0.0.1:9999/stable-<commit>/static/out/vs/code/browser/workbench/workbench.js | grep -c clipboard-fail-open   # → 1
+# 4) log 可看到 prestart hook 與 patcher 的輸出
+tail -5 ~/.local/share/code-server/tools/clipboard-failopen.log
 ```
+
+> ⚠️ 手動模擬時要清掉 `VSCODE_IPC_HOOK_CLI`（或用上面的 `env -i`），否則 code-server 會
+> 認成「CLI client」，把參數丟給正在跑的視窗後 exit 0（log：`Trying to open in existing instance`）。
 
 ### 驗證（已經做過的）
 
@@ -518,6 +556,9 @@ curl -s -b <登入後的 cookie> http://127.0.0.1:8080/stable-<commit>/static/ou
 # 4) 行為：用「真的 bundle 裡的那段程式碼」＋一個會丟 NotAllowedError 的 clipboard 跑：
 #    before → 400ms 後仍在 pending、跳出 Retry toast；after → 立刻回 ""、只記 warning、無 toast
 node clipboard-behaviour-test.cjs <orig-bundle> <patched-bundle>   # → OVERALL: PASS
+# 5) 啟動流程（container start 就先補）＋ fail-safe：
+#    原版 → 跑 entrypoint（ENTRYPOINTD）→ served bundle 已是 fail-open（沒有開 Terminal）
+#    pattern 不符 → rc=1、原檔不動、hook 仍 exit 0（code-server 照常啟動）
 ```
 
 ### 使用者端要做的一次動作
@@ -526,20 +567,31 @@ node clipboard-behaviour-test.cjs <orig-bundle> <patched-bundle>   # → OVERALL
 所以**舊分頁會快取舊的（會卡 Retry 的）bundle**。改完後請做一次 **硬重新整理
 `Ctrl+Shift+R`**（之後瀏覽器快取的就是修好的版本）。
 
-- 升級 code-server 版本時，URL 會因為版本/commit 而改變 → 新 bundle 會在**下一個 Terminal
-  開啟時**被自動補上；同樣再硬重整一次即可。
+- 升級 code-server 版本時（或 `docker compose up -d` 重建容器），URL 會因為版本/commit 而改變 →
+  新的 bundle 會在**容器啟動時（entrypoint.d hook）**被自動補上，不需要等 Terminal；同樣再硬重整一次即可。
 - 想順手讓 clipboard 真的可用（不只 fail-open）：Chrome → 網址列左邊的圖示 → 網站設定 →
   「剪貼簿」→ 允許 `cocodeco.reversalplay.me`。這是加分項，**不是** Agent 能不能跑的條件。
 
 ### Rollback
 
 ```bash
+# A) 取消「啟動時自我修復」（任一即可）
+#   A1. compose 的 ENTRYPOINTD 拿掉（回到 image 預設 /entrypoint.d）：
+#       NAS：cp ~/code-server/docker-compose.yml.bak-clipboard-prestart-<TS> ~/code-server/docker-compose.yml
+#            再 docker compose up -d
+#   A2. 或直接停用 hook（不用動 compose）：
+mv ~/.local/share/code-server/entrypoint.d/50-clipboard-failopen.sh \
+   ~/.local/share/code-server/entrypoint.d/50-clipboard-failopen.sh.disabled
+#   （備援：~/.bashrc 內留了一行註解版 hook，可視需要取消註解）
+
+# B) 還原 bundle 成 image 原版（＝回到「會跳 Retry」的行為）
 BK=$(ls -dt ~/.backups/clipboard-failopen-* | head -1)   # 或 ~/.backups/clipboard-failopen-auto/
 sudo cp "$BK/workbench.js.orig"                   /usr/lib/code-server/lib/vscode/out/vs/code/browser/workbench/workbench.js
 sudo cp "$BK/workbench.web.main.internal.js.orig" /usr/lib/code-server/lib/vscode/out/vs/workbench/workbench.web.main.internal.js
 rm -f ~/.local/share/code-server/tools/.clipboard-failopen.stamp
-# 移除 ~/.bashrc 裡 "clipboard-failopen" 那一段（備份：~/.bashrc.bak-clipboard-failopen-*）
-# 最後硬重整瀏覽器分頁
+
+# C) 最後硬重整瀏覽器分頁（Ctrl+Shift+R）
+# D) repo 端若要撤：git revert <本節相關 commit>
 ```
 
 ### Cline 內部要不要用 OS clipboard？（檢查結果：沒有）

@@ -27,6 +27,15 @@ services:
       - "100"
     environment:
       CLINE_DATA_DIR: /home/coder/.cline/data
+      # 2026-09-22：code-server 官方 image entrypoint（/usr/bin/entrypoint.sh）會在啟動 code-server
+      #   **之前** 執行 $ENTRYPOINTD 底下所有可執行檔
+      #     find "$ENTRYPOINTD" -type f -executable -print -exec {} \;
+      #   （code-server #5177 的官方 hook），之後才 `exec dumb-init /usr/bin/code-server "$@"`。
+      #   用它放 clipboard fail-open 的 prestart patch：container 一起來就已經補好，
+      #   不必等使用者開 Terminal → 消除「先開瀏覽器、還沒開 Terminal」的 race window。
+      #   ⚠️ 這個目錄必須落在 `./data:/home/coder` 持久化掛載內，否則重建容器就消失。
+      #   內容：entrypoint.d/50-clipboard-failopen.sh（idempotent、pattern 不符就只記 warning 不動檔）
+      ENTRYPOINTD: /home/coder/.local/share/code-server/entrypoint.d
     ports:
       - "127.0.0.1:8484:8080"
     env_file:
