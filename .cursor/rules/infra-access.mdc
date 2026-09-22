@@ -14,8 +14,11 @@ alwaysApply: true
 2. **SSH 依身份走法固定**：
    - 代理人（在區網內）：`ssh syn-nas`（Synology `tori@192.168.0.220:58722`）、
      `ssh casa-nas`（CasaOS `root@192.168.0.140:54722`），金鑰 `~/.ssh/nas_cline`，免密碼。
-   - 使用者（外網 Windows）：Cloudflare Access + service token（`ssh-tori.reversalplay.me` /
-     `ssh-casa.reversalplay.me`），設定見 runbook §2.2；**不要再要求每日 OTP**。
+   - 使用者與 CI（外網）：Cloudflare Access ＋ **service token**（`ssh-casa.reversalplay.me` /
+     `ssh-tori.reversalplay.me`，設定見 runbook §2.2.2）。
+   - ⚠️ **服務權杖的兩個識別碼不能混用**：政策 `include` 用 token 的 **`id`**；
+     `CF-Access-Client-Id`／`--service-token-id` 用 token 的 **`client_id`**（`…access`）。
+     混用會得到 302 登入頁，看起來像「token 無效」但其實只是送錯值（2026-09-22 踩過）。
 3. **connector 容器必須用 host network，ingress 只能寫區網 IP**。寫 `localhost` 會連到容器自己 →
    使用者會看到「Remote side unexpectedly closed network connection」（2026-09-22 已踩）。
 4. **公網 SSH 埠**：CasaOS `54722` **已於 2026-09-22 關閉** ✅（自動化已走 Cloudflare 並實測通過）。
