@@ -14,10 +14,13 @@
         ② `setListingDetail`／`persistHpListingFields`／`setCachedMrt`／`setCommunityCache`／
         `upsertListingPrep`；live parity `crawler-reads-parity.test.js` 8/8、
         `listing-fields-parity.test.js` 6/6，證據 `v3/evidence/pg-loop-parity-20260921/`）
-      - **通知／CRM 佇列的讀寫（③）** ⛔ **仍阻塞切換** —— 佇列的**讀＋寫**已完成（2026-09-21：
-        `notifyQueueAsync.js` ＋ `repository/notifyQueue.js`，live parity `notify-queue-parity.test.js` 5/5），
-        但**填佇列**的 `enqueueListingEvent()` 決策鏈仍讀 SQLite（需要 users／settings／search profile／
-        listing group 的 PG 讀取）→ PG 模式下排得空佇列卻填不進新事件，**會員收不到通知**。
+      - **通知／CRM 佇列的讀寫（③）** ⛔ **仍阻塞切換** —— 兩段的**程式面都已完成**（2026-09-21）：
+        佇列的**讀＋寫**（`notifyQueueAsync.js` ＋ `repository/notifyQueue.js`，live parity
+        `notify-queue-parity.test.js` 5/5）與**填佇列**的 `enqueueListingEvent()` 決策鏈
+        （`notifyEnqueueAsync.js` ＋ `repository/notifyEnqueue.js`，離線 parity
+        `notify-enqueue-parity.test.js` 3/3，證據 `v3/evidence/pg-notify-enqueue-20260921/`）。
+        ⛔ 的理由縮到一件：**後者的 shadow live parity 還沒跑**（當天的工作區沒有 `PG_TEST_URL`，
+        live 子測試 SKIP）—— 補跑過、把 live 數字填進證據之後才能把這一項轉 ✅。
         （佇列的讀＋寫已於 2026-09-21 晚間部署到正式站，但 `DB_DRIVER` 仍 `unset`＝sqlite，行為不變；
         證據 `v3/evidence/pg-notify-queue-20260921/README.md` 的「追加」段。）
         **這一項沒做完不要切換。**

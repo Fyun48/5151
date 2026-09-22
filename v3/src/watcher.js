@@ -1,5 +1,4 @@
 import {
-  enqueueListingEvent,
   bindNotifyJobSnapshots,
   coveringPlan,
   findBySourceKey,
@@ -111,6 +110,7 @@ import {
 // Driver-aware notification queue: the flush loop reads the pending page and writes every channel
 // outcome through these (notifyQueueAsync.js).
 import { markEventNotifiedAsync, pendingNotifyEventsAsync, updateEventNotifyAsync } from "./notifyQueueAsync.js";
+import { enqueueListingEventAsync } from "./notifyEnqueueAsync.js";
 
 function nowIso() {
   return new Date().toISOString();
@@ -137,10 +137,10 @@ export function listingEnrichHelpers() {
     markAlive: (id) => markListingAlive(id),
     markAliveAsync: (id) => markListingAliveAsync(id),
     isSourceEnabled: isCrawlSourceEnabled,
-    onFirstReady: (listing) => {
+    onFirstReady: async (listing) => {
       const age = Date.now() - (Date.parse(listing.first_seen_at || "") || 0);
       if (age > 2 * 60 * 60 * 1000) return;
-      enqueueListingEvent({ ...listing, display_ready: true }, {
+      await enqueueListingEventAsync({ ...listing, display_ready: true }, {
         type: "new",
         detail: "5168 資料已補齊，開始展示",
         created_at: nowIso(),
@@ -178,7 +178,7 @@ async function queueOfflineEvent(postId, { wasOnline = true } = {}) {
   const listing = await listingForWatchAsync(postId);
   if (!listing) return;
   const stamp = nowIso();
-  enqueueListingEvent(listing, {
+  await enqueueListingEventAsync(listing, {
     type: "offline",
     detail: "591 詳情已不存在或已關閉",
     created_at: stamp,
@@ -849,7 +849,7 @@ export async function runWatch(options = {}) {
       // 5168 全新房源等資料準備完成再通知，避免舊庫回填大量「全新」
       if (type === "new" && String(saved.source || listing.source || "") === "houseprice") continue;
       const evt = { type, detail };
-      enqueueListingEvent(saved, evt);
+      await enqueueListingEventAsync(saved, evt);
     }
   }
 

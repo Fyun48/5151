@@ -24,7 +24,8 @@
   讓 `watcher.js` 的 await 化跑過真實流量，並讓正式站 revision 對齊 master。
 - 移植進度：**①七條 `listingsNeeding*` 掃描 ✅、②迴圈欄位寫入 ✅、③通知佇列的讀＋寫 ✅**
   （三者都有 shadow PG live parity）。
-- **③ 的另一半（`enqueueListingEvent()` 決策鏈）⛔、④ `enqueueSimilaritySafe` ⛔** → **還不能切換**。
+- **③ 的另一半（`enqueueListingEvent()` 決策鏈）：程式面 ✅（`notify-enqueue-parity.test.js` 離線 3/3，
+  2026-09-21 深夜），但 shadow live parity 待補；④ `enqueueSimilaritySafe` ⛔** → **還不能切換**。
 - 正式站（CasaOS `591-tracker-v3`）跑 `64828a8` 的映像，`DB_DRIVER=unset`（＝sqlite），行為不變。
 
 ## 1. 當天對話歷程（依序）
@@ -135,20 +136,28 @@ node --test v3/test/crawler-reads-parity.test.js v3/test/listing-fields-parity.t
 
 **建議切法（兩段）**
 
-> **狀態（2026-09-21 晚間補記）**：**第 1 段已完成並合併** —— PR #405（`4752b51`）：
-> `notifyBuildContext()` ＋ `repository/notifyQueue.js` ＋ `v3/src/notifyQueueAsync.js`，
-> `watcher.js` 13 處改 await，live parity `v3/test/notify-queue-parity.test.js` **5/5**
-> （證據 `v3/evidence/pg-notify-queue-20260921/README.md`）。
-> **隔天請直接從下面的第 2 段（`enqueueListingEvent` 決策鏈）開始**，不要重做第 1 段。
+> **狀態（2026-09-21 深夜補記）**：**兩段的程式面都已完成**。
+> - 第 1 段：PR #405（`4752b51`）—— `notifyBuildContext()` ＋ `repository/notifyQueue.js` ＋
+>   `v3/src/notifyQueueAsync.js`，`watcher.js` 13 處改 await，live parity **5/5**
+>   （證據 `v3/evidence/pg-notify-queue-20260921/README.md`）。
+> - 第 2 段：`enqueueListingEvent()` 決策鏈 —— `notifyEnqueueBuildContext()`（純函式 ＋ 16 條 builder）＋
+>   `v3/src/repository/notifyEnqueue.js` ＋ `v3/src/notifyEnqueueAsync.js`；`watcher.js` 3 個事件點、
+>   enrich worker 的 `onFirstReady`、`crawlerWrites.setListingDetailAsync()` 的 `fee_update` 全部改走它；
+>   `settingsFromRows()`／`systemCrawlFromRows()` 與三個 search-profile 語句抽成兩個 driver 共用。
+>   離線 parity `v3/test/notify-enqueue-parity.test.js` **3/3**（PostgreSQL 路徑整條跑在 SQLite fixture 上），
+>   證據 `v3/evidence/pg-notify-enqueue-20260921/`。
+> **⛔ 只剩一件事**：第 2 段的 **shadow live parity 沒跑**（當天的工作區沒有 `PG_TEST_URL`，live 子測試 SKIP）。
+> 隔天第一件事＝設好 `PG_TEST_URL` 跑那條 live 子測試、把數字填進證據，再把
+> `docs/runbooks/postgres-cutover-bootstrap.md` 步驟 0 的 ③ 轉 ✅；接下來才是 ④。
 
 1. ~~**佇列的讀＋寫**~~ ✅ 完成（見上）。
-2. **`enqueueListingEvent()` 的決策鏈**（真正的瓶頸，需要先補三個尚未移植的讀取）：
-   - `users`（`repository/users.js` 已有 `list()` ✅）、`user_listing_flags`（`repository/flags.js` ✅）、
-     `settings`（`repository/settings.js` 已存在，但 `getSettings(uid)` 是 db.js 的大型組裝函式，**尚未接**）、
-     search profile（`getActiveSearchProfile`）與 listing group（`groupIdForPost`／`watchedInGroup`／`alreadyNotifiedGroup`）**尚未移植**。
-   - 也就是說 ③ 要完整關閉，會拉到「settings／search profile／listing group 的 PG 讀取」這幾個 §2 的獨立項目。
-     建議做法：`enqueueListingEventAsync()` 接受注入的 lookups（`users`／`settings`／`flags`／`groupIds`／`alreadyNotified`），
-     SQLite 傳原本的同步版本、PG 傳 repository 版本，決策主體保持純函式（本輪 ①② 已用這個模式三次）。
+2. ~~**`enqueueListingEvent()` 的決策鏈**~~ ✅ 程式面完成（見上），**live parity 待補**：
+   - 原本估要先補的三個讀取，最後是這樣收的：`settings`／search profile／listing group 都用
+     `notifyEnqueueQueries()` 與 SQLite **同一份語句文字**發布，`settingsFromRows()` 讓兩個 driver
+     共用同一套組裝（含 `withSystemCrawl` 與 role/plan 分支）；`users`／`flags` 沒有繞去
+     `repository/users.js`／`flags.js`，因為那兩支是刻意挑過的欄位子集，而 `loadFlags()` 讀 `SELECT *`。
+   - 決策本體的形狀：`notifyEnqueueDecision()` 吃「已解析好的輸入」（含三個去重讀取的結果）——
+     去重讀取一律是唯讀 SELECT，先解析不會改變結果，所以兩個 driver 可以共用同一支判斷。
 
 ### ④ `enqueueSimilaritySafe`（pHash 佇列）
 

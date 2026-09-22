@@ -36,6 +36,7 @@ import {
 import { resolveDbDriver } from "./dbDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
+import { enqueueListingEventAsync } from "./notifyEnqueueAsync.js";
 
 async function postgresExec(options = {}) {
   if (options.exec) return options.exec;
@@ -100,7 +101,20 @@ export async function setListingDetailAsync(postId, input = {}, options = {}) {
     const deps = options.deps || listingFieldsBuildContext();
     const listing = options.listing || await loadListingForWrite(postId, options);
     if (!listing) return null;
-    return await setListingDetailRepo(exec, { deps, listing, input });
+    const result = await setListingDetailRepo(exec, { deps, listing, input });
+    // The fee change db.js enqueues inline on SQLite; PostgreSQL goes through the driver-aware
+    // entry point so the event lands in the queue the site reads (POSTGRES_SWITCH_PLAN ③).
+    if (result && result.feeChange) {
+      const saved = await loadListingForWrite(postId, options);
+      if (saved) {
+        await enqueueListingEventAsync(saved, {
+          type: "fee_update",
+          detail: result.feeChange.detail,
+          created_at: result.feeChange.created_at,
+        }, options);
+      }
+    }
+    return result;
   } catch (error) {
     if (options.strict) throw error;
     return setListingDetailSync(postId, input);

@@ -75,6 +75,9 @@ import {
   summarizeReconciliationBatch,
 } from "./sameHouseReconcile.js";
 import {
+  ACTIVE_PROFILE_ORDER_SQL,
+  ACTIVE_PROFILE_SQL,
+  DEACTIVATE_PROFILES_SQL,
   activateSearchProfile,
   ensureSearchProfileSchema,
   getActiveSearchProfile,
@@ -2553,15 +2556,21 @@ function omitSiteMail(stored) {
   return next;
 }
 
-function withSystemCrawl(settings) {
+// The system-crawl block can come from a driver that already fetched the `settings` rows
+// (PostgreSQL: notifyEnqueueBuildContext()), so reading them stays in getSystemCrawl().
+function withSystemCrawlFrom(settings, system = null) {
   if (!settings) return settings;
-  const system = getSystemCrawl();
+  const values = system || getSystemCrawl();
   return {
     ...settings,
-    systemCrawlIntervalMinutes: system.intervalMinutes,
-    showListRefreshBar: system.showListRefreshBar === true,
-    offlineConfirmDays: system.offlineConfirmDays,
+    systemCrawlIntervalMinutes: values.intervalMinutes,
+    showListRefreshBar: values.showListRefreshBar === true,
+    offlineConfirmDays: values.offlineConfirmDays,
   };
+}
+
+function withSystemCrawl(settings) {
+  return withSystemCrawlFrom(settings, null);
 }
 
 const settingsMemo = new Map();
@@ -2583,24 +2592,31 @@ function forgetSettings(uid) {
   settingsMemo.delete(Number(uid) || 0);
 }
 
+// Pure: the assembly getSettings() runs, from rows a driver has already fetched. `system` is the
+// systemCrawlFromRows() block of the same `settings` rows, so no driver reads them twice.
+export function settingsFromRows({ globalRows = [], userRows = [], user = null, system = null } = {}) {
+  const global = hydrateSettings(omitSiteMail(parseSettingRows(globalRows)), DEFAULTS, { admin: true, plan: "free" });
+  if (!Number(user?.id)) return withSystemCrawlFrom(global, system);
+  const admin = user.role === "admin";
+  const plan = user.plan || "free";
+  if (!userRows.length) {
+    if (admin) return withSystemCrawlFrom(global, system);
+    return withSystemCrawlFrom(hydrateSettings({
+      dataEpoch: global.dataEpoch,
+      hasBaseline: global.hasBaseline,
+    }, DEFAULTS, { admin: false, plan }), system);
+  }
+  return withSystemCrawlFrom(hydrateSettings(omitSiteMail({ ...global, ...parseSettingRows(userRows) }), DEFAULTS, { admin, plan }), system);
+}
+
 export function getSettings(userId) {
   const uid = Number(userId) || 0;
   if (settingsMemo.has(uid)) return settingsMemo.get(uid);
-  const rows = db.prepare("SELECT key, value FROM settings").all();
-  const global = hydrateSettings(omitSiteMail(parseSettingRows(rows)), DEFAULTS, { admin: true, plan: "free" });
-  if (!uid) return rememberSettings(0, withSystemCrawl(global));
+  const globalRows = db.prepare("SELECT key, value FROM settings").all();
+  const system = systemCrawlFromRows(globalRows);
+  if (!uid) return rememberSettings(0, settingsFromRows({ globalRows, system }));
   const userRows = db.prepare("SELECT key, value FROM user_settings WHERE user_id = ?").all(uid);
-  const user = getUserById(uid);
-  const admin = user?.role === "admin";
-  const plan = user?.plan || "free";
-  if (!userRows.length) {
-    if (user?.role === "admin") return rememberSettings(uid, withSystemCrawl(global));
-    return rememberSettings(uid, withSystemCrawl(hydrateSettings({
-      dataEpoch: global.dataEpoch,
-      hasBaseline: global.hasBaseline,
-    }, DEFAULTS, { admin: false, plan })));
-  }
-  return rememberSettings(uid, withSystemCrawl(hydrateSettings(omitSiteMail({ ...global, ...parseSettingRows(userRows) }), DEFAULTS, { admin, plan })));
+  return rememberSettings(uid, settingsFromRows({ globalRows, userRows, user: getUserById(uid), system }));
 }
 
 export function saveSettings(partial, userId, { forceAdmin = false } = {}) {
@@ -4893,9 +4909,17 @@ export function notifyJobSnapshotFor(userId) {
   }
 }
 
-export function enqueueListingEvent(listing, event) {
-  const stamp = event?.created_at || new Date().toISOString();
-  const payload = {
+// ---- The notification enqueue decision (POSTGRES_SWITCH_PLAN ③, second half) ---------------------
+//
+// enqueueListingEvent() decides *what* enters the queue: for every member it builds the row in that
+// member's scope (global settings + their search profile), decorates it, and then applies the
+// delivery, group-dedupe and same-detail rules. That reasoning lives in the pure functions below, so
+// the PostgreSQL twin (repository/notifyEnqueue.js) cannot drift from it; the two drivers differ only
+// in where the inputs come from.
+
+// Pure: the columns every member's user_events row shares.
+export function notifyEventPayload(listing, event, stamp = event?.created_at || new Date().toISOString()) {
+  return {
     post_id: listing.post_id,
     source_key: listing.source_key || event?.source_key || "",
     type: event.type,
@@ -4904,6 +4928,52 @@ export function enqueueListingEvent(listing, event) {
     created_at: stamp,
     notified: 0,
   };
+}
+
+// Pure: the per-member row addUserEvent() gets.
+export function notifyEventRow(payload, { userId, groupId = "", snap = null } = {}) {
+  return {
+    ...payload,
+    user_id: Number(userId) || 0,
+    group_id: String(groupId || ""),
+    notify_profile_id: (snap && snap.notify_profile_id) || "",
+    notify_profile_version: Number(snap && snap.notify_profile_version) || 0,
+  };
+}
+
+// Pure: the decision chain of enqueueListingEvent() for one member, in its original order. The
+// dedupe inputs are the values of the reads the chain would run - resolving them up front cannot
+// change the outcome, because the chain only ever reads them to decide "skip".
+export function notifyEnqueueDecision({
+  event = {},
+  payload = {},
+  row = {},
+  scoped = {},
+  groupId = "",
+  userEmail = "",
+  mailConfigured = false,
+  watchedInGroup = false,
+  alreadyNotified = false,
+  newExists = null,
+  lastDetail = null,
+} = {}) {
+  const watched = Number(row.watched) === 1 || Boolean(groupId && watchedInGroup);
+  if (!watched && event.type === "new" && !listingInMemberScope(row, scoped)) {
+    return { enqueue: false, reason: "out_of_scope" };
+  }
+  if (!shouldDeliverNotify(scoped, row, event, { to: userEmail, configured: mailConfigured })) {
+    return { enqueue: false, reason: "channel" };
+  }
+  if (groupId && alreadyNotified) return { enqueue: false, reason: "group_dedupe" };
+  if (payload.type === "new" && newExists) return { enqueue: false, reason: "new_dedupe" };
+  if (lastDetail != null && isSameNotifyDetail(lastDetail, payload.detail)) {
+    return { enqueue: false, reason: "detail_dedupe" };
+  }
+  return { enqueue: true, reason: "" };
+}
+
+export function enqueueListingEvent(listing, event) {
+  const payload = notifyEventPayload(listing, event);
   const ids = [];
   for (const userId of listUserIds()) {
     const settings = getSettings(userId);
@@ -4914,36 +4984,37 @@ export function enqueueListingEvent(listing, event) {
     const row = decorateListing(overlayPersonal(listing, loadFlags(db, userId, listing.post_id)), scoped, userId, { sameHouse: false });
     let groupId = "";
     try { groupId = groupIdForPost(db, payload.post_id); } catch { groupId = ""; }
-    const watched = Number(row.watched) === 1 || Boolean(groupId && watchedInGroup(db, userId, groupId));
-    if (!watched && event.type === "new" && !listingInMemberScope(row, scoped)) continue;
-    if (!shouldDeliverNotify(scoped, row, event, {
-      to: getUserById(userId)?.email,
-      configured: getMemberMailBundle(userId).configured,
-    })) continue;
-    if (groupId && alreadyNotifiedGroup(db, userId, groupId, payload.type, payload.detail)) continue;
-    if (payload.type === "new") {
-      const alreadyNew = db.prepare(
-        "SELECT id FROM user_events WHERE user_id = ? AND post_id = ? AND type = 'new' LIMIT 1",
-      ).get(userId, payload.post_id);
-      if (alreadyNew) continue;
-    }
     const last = db.prepare(
       "SELECT detail FROM user_events WHERE user_id = ? AND post_id = ? AND type = ? ORDER BY id DESC LIMIT 1",
     ).get(userId, payload.post_id, payload.type);
-    if (last && isSameNotifyDetail(last.detail, payload.detail)) continue;
-    ids.push(addUserEvent({
-      ...payload,
-      user_id: userId,
-      group_id: groupId,
-      notify_profile_id: snap.notify_profile_id || "",
-      notify_profile_version: snap.notify_profile_version || 0,
-    }));
+    const decision = notifyEnqueueDecision({
+      event,
+      payload,
+      row,
+      scoped,
+      groupId,
+      userEmail: getUserById(userId)?.email || "",
+      mailConfigured: getMemberMailBundle(userId).configured,
+      watchedInGroup: groupId ? watchedInGroup(db, userId, groupId) : false,
+      alreadyNotified: groupId
+        ? alreadyNotifiedGroup(db, userId, groupId, payload.type, payload.detail)
+        : false,
+      newExists: payload.type === "new"
+        ? db.prepare(
+          "SELECT id FROM user_events WHERE user_id = ? AND post_id = ? AND type = 'new' LIMIT 1",
+        ).get(userId, payload.post_id)
+        : null,
+      lastDetail: last ? last.detail : null,
+    });
+    if (!decision.enqueue) continue;
+    ids.push(addUserEvent(notifyEventRow(payload, { userId, groupId, snap })));
   }
   return ids;
 }
 
-export function getSystemCrawl() {
-  const stored = parseSettingRows(db.prepare("SELECT key, value FROM settings").all());
+// Pure: the system-crawl block, from the `settings` rows a driver already fetched.
+export function systemCrawlFromRows(rows) {
+  const stored = parseSettingRows(rows);
   const intervalRaw = Number(stored.systemCrawlIntervalMinutes);
   const offlineRaw = stored.systemOfflineConfirmDays ?? stored.offlineConfirmDays;
   return {
@@ -4956,6 +5027,10 @@ export function getSystemCrawl() {
     showListRefreshBar: stored.systemShowListRefreshBar === true,
     cities: CITIES,
   };
+}
+
+export function getSystemCrawl() {
+  return systemCrawlFromRows(db.prepare("SELECT key, value FROM settings").all());
 }
 
 export function saveSystemCrawl(partial = {}) {
@@ -7097,6 +7172,101 @@ export function markEventNotifiedQuery(id) {
 
 // Dependency bundle for the notification queue (watcher's flush loop ->
 // repository/notifyQueue.js + notifyQueueAsync.js).
+// ---- Reads + writers of the notification enqueue (POSTGRES_SWITCH_PLAN ③, second half) -----------
+//
+// Same split as notifyBuildContext(): the statement text and the pure helpers stay here, where the
+// SQLite path already runs them, and repository/notifyEnqueue.js runs the identical text through
+// whatever driver it was given. The text mirrors the helpers the SQLite path calls (members.js
+// listUserIds/getUserById, personalFlags.loadFlags, listingGroups.groupIdForPost/watchedInGroup/
+// alreadyNotifiedGroup, searchProfiles) so a value cannot differ between the two drivers.
+
+// The member mail `configured` flag shouldDeliverNotify() gets: getMemberMailBundle(userId) reads
+// user_settings.memberSmtp, so the same JSON from any driver answers the same.
+export function memberMailConfiguredFromRows(userRows) {
+  const stored = parseSettingRows(userRows);
+  return smtpReady(normalizeSmtp(stored.memberSmtp || {}));
+}
+
+// alreadyNotifiedGroup(): "new" is once-ever, the rest dedupe on the normalised detail.
+export function notifyGroupAlreadySent({ onceEver = false, exists = null, details = [], detail = "" } = {}) {
+  if (onceEver) return Boolean(exists);
+  return (details || []).some((row) => isSameNotifyDetail(row && row.detail, detail));
+}
+
+export function notifyEnqueueQueries() {
+  return {
+    listUserIds: () => ({
+      sql: "SELECT id FROM users WHERE deleted_at IS NULL OR deleted_at = '' ORDER BY id",
+      params: [],
+    }),
+    userById: (userId) => ({ sql: "SELECT * FROM users WHERE id = ?", params: [Number(userId) || 0] }),
+    globalSettings: () => ({ sql: "SELECT key, value FROM settings", params: [] }),
+    userSettings: (userId) => ({
+      sql: "SELECT key, value FROM user_settings WHERE user_id = ?",
+      params: [Number(userId) || 0],
+    }),
+    // getActiveSearchProfile() repairs multiple active rows before reading; both statements are the
+    // ones searchProfiles.js runs, so the PostgreSQL path keeps the same "which profile wins".
+    activeProfileOrder: (userId) => ({ sql: ACTIVE_PROFILE_ORDER_SQL, params: [Number(userId) || 0] }),
+    activeProfile: (userId) => ({ sql: ACTIVE_PROFILE_SQL, params: [Number(userId) || 0] }),
+    deactivateProfiles: (userId, keepId, stamp) => ({
+      sql: DEACTIVATE_PROFILES_SQL,
+      params: [stamp, Number(userId) || 0, String(keepId || "")],
+    }),
+    userFlags: (userId, postId) => ({
+      sql: "SELECT * FROM user_listing_flags WHERE user_id = ? AND post_id = ?",
+      params: [Number(userId) || 0, Number(postId) || 0],
+    }),
+    watchedInGroup: (userId, groupId) => ({
+      sql: "SELECT 1 FROM user_listing_flags WHERE user_id = ? AND watch_group_id = ? AND watched = 1 LIMIT 1",
+      params: [Number(userId) || 0, String(groupId || "")],
+    }),
+    groupIdForPost: (postId) => ({
+      sql: "SELECT group_id FROM listing_group_members WHERE post_id = ?",
+      params: [Number(postId) || 0],
+    }),
+    groupNotifiedExists: (userId, groupId, type) => ({
+      sql: "SELECT id FROM user_events WHERE user_id = ? AND group_id = ? AND type = ? LIMIT 1",
+      params: [Number(userId) || 0, String(groupId || ""), String(type || "")],
+    }),
+    groupNotifiedDetails: (userId, groupId, type) => ({
+      sql: "SELECT detail FROM user_events WHERE user_id = ? AND group_id = ? AND type = ? ORDER BY id DESC",
+      params: [Number(userId) || 0, String(groupId || ""), String(type || "")],
+    }),
+    newEventExists: (userId, postId) => ({
+      sql: "SELECT id FROM user_events WHERE user_id = ? AND post_id = ? AND type = 'new' LIMIT 1",
+      params: [Number(userId) || 0, Number(postId) || 0],
+    }),
+    lastEventDetail: (userId, postId, type) => ({
+      sql: `SELECT detail FROM user_events WHERE user_id = ? AND post_id = ? AND type = ?
+             ORDER BY id DESC LIMIT 1`,
+      params: [Number(userId) || 0, Number(postId) || 0, String(type || "")],
+    }),
+    // addUserEvent(): an id is only needed by callers that report it back, so the PostgreSQL side
+    // asks for RETURNING (SQLite answers with lastInsertRowid instead).
+    insertUserEvent: (row, { returning = false } = {}) => ({
+      sql: `INSERT INTO user_events (user_id, post_id, type, title, detail, source_key, created_at, notified)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)${returning ? " RETURNING id" : ""}`,
+      params: [
+        Number(row.user_id) || 0,
+        Number(row.post_id) || 0,
+        row.type,
+        row.title,
+        row.detail,
+        row.source_key || "",
+        row.created_at,
+        Number(row.notified) || 0,
+      ],
+    }),
+    // addUserEvent()'s follow-up: the profile/group columns newer schemas carry (older fixtures
+    // simply do not apply it - the SQLite path swallows the same failure).
+    eventProfileStatement: (row, id) => ({
+      sql: "UPDATE user_events SET group_id = ?, notify_profile_id = ?, notify_profile_version = ? WHERE id = ?",
+      params: [String(row.group_id || ""), String(row.notify_profile_id || ""), Number(row.notify_profile_version) || 0, Number(id) || 0],
+    }),
+  };
+}
+
 export function notifyBuildContext() {
   return {
     pendingNotifyEventsQuery,
@@ -7105,6 +7275,26 @@ export function notifyBuildContext() {
     updateEventNotifyStatement,
     markEventNotifiedQuery,
     notifyReopenQuery,
+  };
+}
+
+// Dependency bundle for the notification enqueue (watcher's event sites + the detail backfill's
+// fee change -> repository/notifyEnqueue.js + notifyEnqueueAsync.js): the statements above plus the
+// pure helpers the decision needs and the decoration plumbing the PostgreSQL path reuses.
+export function notifyEnqueueBuildContext() {
+  return {
+    ...notifyEnqueueQueries(),
+    notifyEventPayload,
+    notifyEventRow,
+    notifyEnqueueDecision,
+    notifyGroupAlreadySent,
+    settingsFromRows,
+    systemCrawlFromRows,
+    memberMailConfiguredFromRows,
+    notifySnapshotFromProfile,
+    overlayPersonal,
+    preloadDecorationProviderAsync,
+    decorateRowsWithProvider,
   };
 }
 

@@ -171,13 +171,28 @@
           live parity：`v3/test/notify-queue-parity.test.js` **5/5**（待處理頁整列含排序契約、
           `updateEventNotify` 12 欄、`markEventNotified` 讓事件離開佇列）。
           同時把 `pendingNotifyEvents()` 的回傳正規化成一般物件（同掃描那批的 null-prototype 處理）。
-        - **仍未完成（切換阻塞項）**：`enqueueListingEvent()` 的**決策鏈**（決定「什麼進佇列」）仍讀 SQLite
-          —— 依賴 `users`／`settings`／search profile／listing group 的 PG 讀取，這幾項尚未移植。
-          因此 PG 模式目前**排得空佇列卻填不進新事件**，會員仍收不到通知；詳見
-          `docs/handoffs/20260921-postgres-cutover-session.md` §4 ③ 的兩段切法。
+        - **已完成（2026-09-21，決策鏈／「填佇列」）**：`enqueueListingEvent()` 的決策鏈抽成純函式
+          （`notifyEventPayload()`／`notifyEventRow()`／`notifyEnqueueDecision()`）＋ `notifyEnqueueQueries()`
+          的 16 條 builder，由 `notifyEnqueueBuildContext()` 發佈 → `repository/notifyEnqueue.js`
+          （PG 端讀 members／settings／search profile／flags／listing group／`user_events`，並用列表頁同一套
+          `preloadDecorationProviderAsync()` ＋ `decorateRowsWithProvider()` 裝飾列）→
+          `v3/src/notifyEnqueueAsync.js`（fail-open 回 SQLite，`strict` 可關）。呼叫點：`watcher.js` 3 個事件點、
+          enrich worker 的 `onFirstReady`（改 await）、`crawlerWrites.setListingDetailAsync()` 的 `fee_update`
+          （明細回填；`repository/listingFields.js` 早已把 `feeChange` 回傳給呼叫端等這一包接）。
+          `settingsFromRows()`／`systemCrawlFromRows()` 與三個 search-profile 語句抽成兩邊共用（SQLite 行為不變）。
+          離線證據：`v3/test/notify-enqueue-parity.test.js` 把 PostgreSQL 路徑整條跑在 SQLite fixture 上
+          （自製 exec 同時吃裝飾 loader 的 `$n` 與 builder 的 `?`，並回答 `RETURNING`）→ **3/3**；
+          證據 `v3/evidence/pg-notify-enqueue-20260921/`。
+        - **仍阻塞切換（2026-09-21 現況）**：這一包的 shadow **live parity 待補** —— 當時的工作區沒有
+          `PG_TEST_URL`，live 子測試因此 SKIP。跑過 shadow（或 CI 有 PG 的環境）之前，
+          `docs/runbooks/postgres-cutover-bootstrap.md` 步驟 0 的 ③ **維持 ⛔**。
+          另有一個刻意差異：`notifyJobSnapshotFor()` 是 SQLite 行程內快照（爬行開始時
+          `watcher.bindNotifyJobSnapshots()` 從 SQLite 填），PG 路徑直接讀 active profile 那一列 ——
+          差異只在同一輪爬行中會員改了搜尋條件時可見，屆時 PG 的答案比凍結快照新。
      ④ **`enqueueSimilaritySafe`（pHash 佇列）**（§2.3 尾）。
      建議 ①＋② 同批（掃描與它對應的寫入）、③ 一批、④ 獨立；全部完成才切換。
-     **①＋② 已於 2026-09-21 完成並以 shadow PG 實測（14/14）。**
+     **①＋② 已於 2026-09-21 完成並以 shadow PG 實測（14/14）；③ 的程式面同日完成，離線證據 3/3，**
+     **shadow live parity 待補；④ 未動。**
    - **遷移工具**：identity sequence 的 re-sync 已納入 `importStore()`
      （PostgreSQL 不會為帶明確 id 的 INSERT 推進 identity sequence，漏了會在第一次自動編號時
      撞主鍵；案例見 `v3/evidence/pg-import-20260921/`）。
