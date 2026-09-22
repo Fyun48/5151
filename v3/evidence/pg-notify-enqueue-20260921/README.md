@@ -37,11 +37,19 @@ node --test v3/test/notify-enqueue-parity.test.js
 ## 實測結果
 
 ```
+# 有 PG_TEST_URL（shadow PG，primary 192.168.0.220:15432 / standby 192.168.0.140:15432）
 ✔ the decision chain answers with the reasons the SQLite path acts on
 ✔ the PostgreSQL enqueue answers the SQLite rows through its own executor
 ✔ every event site goes through the driver-aware entry point
-✔ live PostgreSQL: the enqueue writes the queue the site reads # SKIP PG_TEST_URL is not set
+✔ live PostgreSQL: the enqueue writes the queue the site reads
+ℹ tests 5 / pass 5 / fail 0 / skipped 0
+
+# 沒有 PG_TEST_URL（CI 與離線開發）
 ℹ tests 4 / pass 3 / fail 0 / skipped 1
+
+# 同一場把全部 live 檔一起跑（切換前的現況快照）
+11 個檔、61 tests / pass 61 / fail 0 / skipped 0（exit=0）
+含 pg-live-integration 的「測試 schema 在 standby 可見（串流複寫）」= ok
 ```
 
 fixture 是四個會員 × 三筆物件，故意讓每個分支都有主：
@@ -72,9 +80,23 @@ fixture 是四個會員 × 三筆物件，故意讓每個分支都有主：
    SQLite 填），PG 路徑刻意**不**用它、直接讀 active profile 那一列。差異只在「同一輪爬行中會員改了
    搜尋條件」時才看得到，屆時 PG 的答案比凍結快照更新。已寫在 `repository/notifyEnqueue.js` 註解。
 
+## 這一輪只有 live 才照出來的兩個測試修正
+
+第一次跑 live 時 `ids` 全是空的（PG 端「看起來」什麼都沒寫），追下去發現**兩個都是測試自己的問題**，
+production 程式是對的：
+
+1. **離線測試把列留在 fixture 裡**：離線層跑完 exec 形狀的那一輪後沒有清理，live 層 `importStore`
+   鏡射時把那 3 列一起帶進 PG → 那些列剛好觸發 `new_dedupe`／`detail_dedupe`，live 於是全部跳過。
+   修法：離線測試結束時 `clearEvents(db, seedMaxId)`，live 子測試鏡射前也先清一次（不依賴測試順序）。
+2. **比對對排序敏感**：`eventRows()` 是照 `POSTS` 逐筆讀，而 PG 那條查詢是 `ORDER BY user_id, id`
+   —— 兩邊列完全相同、只是順序不同。修法：比對前兩邊都用 `(post_id, user_id)` 排序，
+   並在註解寫明「比內容、不比兩個 store 剛好回傳的順序」。
+
+診斷方式：把測試複製成 debug 副本、在 `exec` 外面包一層印出「SQL 前 70 字＋params＋回傳列數」，
+一眼就看到 INSERT 其實回了 1 列、是決策端的讀取把它們 skip 掉的。
+
 ## 仍未完成（切換阻塞）
 
-- **live parity 待補**：這個工作區沒有 `PG_TEST_URL`（憑證不進 repo），所以 live 子測試目前 SKIP。
-  補跑方式見上；**跑過之前 `docs/runbooks/postgres-cutover-bootstrap.md` 步驟 0 的 ③ 仍維持 ⛔**。
 - **④ `enqueueSimilaritySafe`（pHash 佇列）** 仍是 SQLite-only：PG 模式下新爬進來的物件不會進
   `listing_image_phash`／`listing_similarity_suggestion`／`listing_crawl_insight`（功能缺口，不會寫壞資料）。
+  這是 ③ 收掉之後**唯一**還在擋切換的項目。

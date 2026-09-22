@@ -312,6 +312,8 @@ test("the PostgreSQL enqueue answers the SQLite rows through its own executor", 
   assert.equal(inScopeRows[0].notify_profile_id, PROFILE_IN_SCOPE);
   assert.equal(Number(inScopeRows[0].notify_profile_version), 3);
   for (const row of pgRows) assert.equal(row.created_at, STAMP);
+  // Leave the fixture as it was found: the live section mirrors it into PostgreSQL.
+  clearEvents(db, seedMaxId);
 });
 
 test("every event site goes through the driver-aware entry point", async () => {
@@ -390,6 +392,8 @@ test("live PostgreSQL: the enqueue writes the queue the site reads", { skip }, a
 
   await t.test("the same members are queued with the same columns", async () => {
     const { enqueueListingEventAsync } = await import("../src/notifyEnqueueAsync.js");
+    // The mirror carries whatever the SQLite fixture holds, so start from the seeded state.
+    clearEvents(db, seedMaxId);
     await withMirroredSchema(app, async (pgDriver) => {
       const exec = (sql, params = []) => pgDriver.query(toPostgresSql(sql), params).then((res) => res.rows);
       const written = [];
@@ -413,7 +417,13 @@ test("live PostgreSQL: the enqueue writes the queue the site reads", { skip }, a
       clearEvents(db, seedMaxId);
       for (const [postId, event] of CASES) app.enqueueListingEvent(listingRow(db, postId), event);
 
-      assert.deepEqual(pgRows.rows.map(normalizeEventRow), eventRows(db, { afterId: seedMaxId }).map(normalizeEventRow));
+      // eventRows() walks POSTS while the query above answers in id order - compare row content, not
+      // the order the two stores happen to return it in.
+      const byPostThenUser = (a, b) => a.post_id - b.post_id || a.user_id - b.user_id;
+      assert.deepEqual(
+        pgRows.rows.map(normalizeEventRow).sort(byPostThenUser),
+        eventRows(db, { afterId: seedMaxId }).map(normalizeEventRow).sort(byPostThenUser),
+      );
       assert.equal(written.filter(Boolean).length, pgRows.rows.length);
       // ...and those rows are the ones the flush loop drains (notifyQueueAsync.js, ③ first half).
       const pending = await pgDriver.query(
