@@ -183,16 +183,22 @@
           離線證據：`v3/test/notify-enqueue-parity.test.js` 把 PostgreSQL 路徑整條跑在 SQLite fixture 上
           （自製 exec 同時吃裝飾 loader 的 `$n` 與 builder 的 `?`，並回答 `RETURNING`）→ **3/3**；
           證據 `v3/evidence/pg-notify-enqueue-20260921/`。
-        - **仍阻塞切換（2026-09-21 現況）**：這一包的 shadow **live parity 待補** —— 當時的工作區沒有
-          `PG_TEST_URL`，live 子測試因此 SKIP。跑過 shadow（或 CI 有 PG 的環境）之前，
-          `docs/runbooks/postgres-cutover-bootstrap.md` 步驟 0 的 ③ **維持 ⛔**。
-          另有一個刻意差異：`notifyJobSnapshotFor()` 是 SQLite 行程內快照（爬行開始時
-          `watcher.bindNotifyJobSnapshots()` 從 SQLite 填），PG 路徑直接讀 active profile 那一列 ——
-          差異只在同一輪爬行中會員改了搜尋條件時可見，屆時 PG 的答案比凍結快照新。
+        - **已完成（2026-09-22，含 shadow live）**：這一包的 shadow live parity 已補齊 ——
+          `notify-enqueue-parity.test.js` **5/5、0 skip**，同一場把 11 個 live 檔一起跑 **61/61**
+          （含 standby 可見性）。過程中修掉兩個**測試**問題（離線層把列留在 fixture 汙染 live 鏡射、
+          比對對排序敏感），production 程式本身沒有改動；詳見
+          `v3/evidence/pg-notify-enqueue-20260921/README.md` 的「只有 live 才照出來的兩個測試修正」。
+        - **③ 仍未完成的部分：CRM outbox**（`v3/src/crmOutbox.js`，104 行、8 條同步語句；
+          呼叫點 `crm.js` 的聯絡人快照與 `crmDelivery.js` 的 claim／sent／failure／stats）。
+          PG 模式下它會寫進 SQLite、而 CRM 介面讀 PG → 切換前必須移植（語句單純，但
+          `res.changes` 是 SQLite 專屬，PG 要用 rowCount）。
+        - 一個刻意差異（已記錄在 `repository/notifyEnqueue.js` 註解）：`notifyJobSnapshotFor()` 是 SQLite
+          行程內快照（爬行開始時 `watcher.bindNotifyJobSnapshots()` 從 SQLite 填），PG 路徑直接讀 active
+          profile 那一列 —— 差異只在同一輪爬行中會員改了搜尋條件時可見，屆時 PG 的答案比凍結快照新。
      ④ **`enqueueSimilaritySafe`（pHash 佇列）**（§2.3 尾）。
      建議 ①＋② 同批（掃描與它對應的寫入）、③ 一批、④ 獨立；全部完成才切換。
-     **①＋② 已於 2026-09-21 完成並以 shadow PG 實測（14/14）；③ 的程式面同日完成，離線證據 3/3，**
-     **shadow live parity 待補；④ 未動。**
+     **①＋② 已於 2026-09-21 完成並以 shadow PG 實測（14/14）；③ 的通知部分同日完成、09-22 補上
+     shadow live（5/5，全 live 套件 61/61）；③ 的 CRM outbox 與 ④ 未動。**
    - **遷移工具**：identity sequence 的 re-sync 已納入 `importStore()`
      （PostgreSQL 不會為帶明確 id 的 INSERT 推進 identity sequence，漏了會在第一次自動編號時
      撞主鍵；案例見 `v3/evidence/pg-import-20260921/`）。

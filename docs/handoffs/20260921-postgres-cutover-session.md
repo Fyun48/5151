@@ -24,8 +24,8 @@
   讓 `watcher.js` 的 await 化跑過真實流量，並讓正式站 revision 對齊 master。
 - 移植進度：**①七條 `listingsNeeding*` 掃描 ✅、②迴圈欄位寫入 ✅、③通知佇列的讀＋寫 ✅**
   （三者都有 shadow PG live parity）。
-- **③ 的另一半（`enqueueListingEvent()` 決策鏈）：程式面 ✅（`notify-enqueue-parity.test.js` 離線 3/3，
-  2026-09-21 深夜），但 shadow live parity 待補；④ `enqueueSimilaritySafe` ⛔** → **還不能切換**。
+- **③ 的通知部分 ✅（含 shadow live：`notify-enqueue-parity.test.js` 5/5、0 skip；全 live 套件 61/61）。
+  還缺 ③ 的 CRM outbox（`v3/src/crmOutbox.js`）與 ④ `enqueueSimilaritySafe`** → **還不能切換**。
 - 正式站（CasaOS `591-tracker-v3`）跑 `64828a8` 的映像，`DB_DRIVER=unset`（＝sqlite），行為不變。
 
 ## 1. 當天對話歷程（依序）
@@ -136,19 +136,19 @@ node --test v3/test/crawler-reads-parity.test.js v3/test/listing-fields-parity.t
 
 **建議切法（兩段）**
 
-> **狀態（2026-09-21 深夜補記）**：**兩段的程式面都已完成**。
+> **狀態（2026-09-22 補記）**：**通知的兩段都已完成，並補上 shadow live 實證**。
 > - 第 1 段：PR #405（`4752b51`）—— `notifyBuildContext()` ＋ `repository/notifyQueue.js` ＋
 >   `v3/src/notifyQueueAsync.js`，`watcher.js` 13 處改 await，live parity **5/5**
 >   （證據 `v3/evidence/pg-notify-queue-20260921/README.md`）。
-> - 第 2 段：`enqueueListingEvent()` 決策鏈 —— `notifyEnqueueBuildContext()`（純函式 ＋ 16 條 builder）＋
->   `v3/src/repository/notifyEnqueue.js` ＋ `v3/src/notifyEnqueueAsync.js`；`watcher.js` 3 個事件點、
->   enrich worker 的 `onFirstReady`、`crawlerWrites.setListingDetailAsync()` 的 `fee_update` 全部改走它；
->   `settingsFromRows()`／`systemCrawlFromRows()` 與三個 search-profile 語句抽成兩個 driver 共用。
->   離線 parity `v3/test/notify-enqueue-parity.test.js` **3/3**（PostgreSQL 路徑整條跑在 SQLite fixture 上），
+> - 第 2 段：`enqueueListingEvent()` 決策鏈 —— PR #409（`80559f4`）—— `notifyEnqueueBuildContext()`
+>   （純函式 ＋ 16 條 builder）＋ `v3/src/repository/notifyEnqueue.js` ＋ `v3/src/notifyEnqueueAsync.js`；
+>   `watcher.js` 3 個事件點、enrich worker 的 `onFirstReady`、`crawlerWrites.setListingDetailAsync()` 的
+>   `fee_update` 全部改走它。離線 parity 3/3，**09-22 補上 shadow live 5/5（0 skip）**；同一場把全部
+>   live 檔一起跑 **61/61**（含 standby 可見性）。過程中修掉兩個**測試**問題（離線層的殘留列汙染 live
+>   鏡射、比對對排序敏感），production 程式沒有改動。
 >   證據 `v3/evidence/pg-notify-enqueue-20260921/`。
-> **⛔ 只剩一件事**：第 2 段的 **shadow live parity 沒跑**（當天的工作區沒有 `PG_TEST_URL`，live 子測試 SKIP）。
-> 隔天第一件事＝設好 `PG_TEST_URL` 跑那條 live 子測試、把數字填進證據，再把
-> `docs/runbooks/postgres-cutover-bootstrap.md` 步驟 0 的 ③ 轉 ✅；接下來才是 ④。
+> **⛔ ③ 還缺 CRM outbox**（`v3/src/crmOutbox.js`：104 行、8 條同步語句，`crm.js` 與 `crmDelivery.js`
+> 在用）—— 這是 ③ 剩下的部分。**隔天第一件事＝移植 CRM outbox（或先做 ④）。**
 
 1. ~~**佇列的讀＋寫**~~ ✅ 完成（見上）。
 2. ~~**`enqueueListingEvent()` 的決策鏈**~~ ✅ 程式面完成（見上），**live parity 待補**：
@@ -182,8 +182,8 @@ SQLite 檔不動故資料不丟，但切換期間寫進 PG 的資料要人工評
 ## 5. 隔天開工的第一件事
 
 ```bash
-git log --oneline -5                                     # 確認 master 至少有 64828a8
+git log --oneline -5                                     # 確認 master 至少有 80559f4
 cat docs/handoffs/20260921-postgres-cutover-session.md    # 就是本文件
-# 照 §3 起手式跑一次 24/24 確認環境沒變，再從 §4 ③ 第 2 段開始（第 1 段已完成，不要重做）。
+# 照 §3 起手式跑一次 24/24 確認環境沒變，再從 §4 ③ 剩下的 CRM outbox 開始（通知兩段已完成，不要重做）。
 ```
 
