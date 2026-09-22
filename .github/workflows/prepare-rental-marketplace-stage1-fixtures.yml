@@ -147,22 +147,42 @@ jobs:
           if [ "$AFTER_HEAD" != "$EXPECTED_WF_SHA" ]; then
             echo "::error::manifest step moved HEAD $AFTER_HEAD off workflow SHA $EXPECTED_WF_SHA"; exit 1
           fi
+      - name: NAS SSH endpoint (Cloudflare Access bridge, falls back to public SSH)
+        id: cf-bridge
+        uses: ./.github/actions/cf-ssh-bridge
+        with:
+          hostname: ssh-casa.reversalplay.me
+          port: "2222"
+          client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          fallback-host: ${{ secrets.NAS_HOST }}
+          fallback-port: ${{ secrets.NAS_PORT }}
       - name: Copy Stage 1 fixture helpers to NAS /tmp
         uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ secrets.NAS_HOST }}
-          port: ${{ secrets.NAS_PORT }}
+          host: ${{ steps.cf-bridge.outputs.docker_host }}
+          port: ${{ steps.cf-bridge.outputs.port }}
           username: ${{ secrets.NAS_USER }}
           key: ${{ secrets.NAS_SSH_KEY }}
           source: ".github/scripts/stage1-fixture-remote.sh,.github/scripts/stage1-fixture-domain.mjs,.github/scripts/stage1-fixture-evidence.py,.github/scripts/pra-src-manifest.py,pra-src-expected.json"
           target: /tmp/5151-stage1-fixture-helpers
           overwrite: true
+      - name: NAS SSH endpoint (Cloudflare Access bridge, falls back to public SSH)
+        id: cf-bridge
+        uses: ./.github/actions/cf-ssh-bridge
+        with:
+          hostname: ssh-casa.reversalplay.me
+          port: "2222"
+          client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          fallback-host: ${{ secrets.NAS_HOST }}
+          fallback-port: ${{ secrets.NAS_PORT }}
       - name: Run Stage 1 fixture operation on running v3
         id: operate
         uses: appleboy/ssh-action@v1.2.0
         with:
-          host: ${{ secrets.NAS_HOST }}
-          port: ${{ secrets.NAS_PORT }}
+          host: ${{ steps.cf-bridge.outputs.host }}
+          port: ${{ steps.cf-bridge.outputs.port }}
           username: ${{ secrets.NAS_USER }}
           key: ${{ secrets.NAS_SSH_KEY }}
           script_stop: true
@@ -184,11 +204,21 @@ jobs:
             export EXPECTED_SRC_MOUNT=/mnt/Storage1/apps/5151/v3/src
             chmod +x /tmp/5151-stage1-fixture-helpers/.github/scripts/stage1-fixture-remote.sh
             /tmp/5151-stage1-fixture-helpers/.github/scripts/stage1-fixture-remote.sh
+      - name: NAS SSH endpoint (Cloudflare Access bridge, falls back to public SSH)
+        id: cf-bridge
+        uses: ./.github/actions/cf-ssh-bridge
+        with:
+          hostname: ssh-casa.reversalplay.me
+          port: "2222"
+          client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          fallback-host: ${{ secrets.NAS_HOST }}
+          fallback-port: ${{ secrets.NAS_PORT }}
       - name: Pull NAS fixture evidence
         if: ${{ always() && steps.authorize.outputs.authorized == 'true' && (steps.operate.outcome == 'success' || steps.operate.outcome == 'failure') }}
         env:
-          NAS_HOST: ${{ secrets.NAS_HOST }}
-          NAS_PORT: ${{ secrets.NAS_PORT }}
+          NAS_HOST: ${{ steps.cf-bridge.outputs.host }}
+          NAS_PORT: ${{ steps.cf-bridge.outputs.port }}
           NAS_USER: ${{ secrets.NAS_USER }}
           NAS_SSH_KEY: ${{ secrets.NAS_SSH_KEY }}
         run: |

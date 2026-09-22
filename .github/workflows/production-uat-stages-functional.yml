@@ -110,22 +110,42 @@ jobs:
           set -euo pipefail
           git fetch origin master
           git merge-base --is-ancestor "$SOURCE_SHA" origin/master || { echo "::error::commit $SOURCE_SHA is not reachable from origin/master"; exit 1; }
+      - name: NAS SSH endpoint (Cloudflare Access bridge, falls back to public SSH)
+        id: cf-bridge
+        uses: ./.github/actions/cf-ssh-bridge
+        with:
+          hostname: ssh-casa.reversalplay.me
+          port: "2222"
+          client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          fallback-host: ${{ secrets.NAS_HOST }}
+          fallback-port: ${{ secrets.NAS_PORT }}
       - name: Copy UAT helpers to the NAS
         uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ secrets.NAS_HOST }}
-          port: ${{ secrets.NAS_PORT }}
+          host: ${{ steps.cf-bridge.outputs.docker_host }}
+          port: ${{ steps.cf-bridge.outputs.port }}
           username: ${{ secrets.NAS_USER }}
           key: ${{ secrets.NAS_SSH_KEY }}
           source: ".github/scripts/production-uat-stages-domain.mjs,.github/scripts/production-uat-stages-wiring.mjs,.github/scripts/production-uat-stages-remote.sh"
           target: /tmp/5151-uat-helpers
           overwrite: true
+      - name: NAS SSH endpoint (Cloudflare Access bridge, falls back to public SSH)
+        id: cf-bridge
+        uses: ./.github/actions/cf-ssh-bridge
+        with:
+          hostname: ssh-casa.reversalplay.me
+          port: "2222"
+          client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          fallback-host: ${{ secrets.NAS_HOST }}
+          fallback-port: ${{ secrets.NAS_PORT }}
       - name: Run the consolidated Production UAT
         id: run
         uses: appleboy/ssh-action@v1.2.0
         with:
-          host: ${{ secrets.NAS_HOST }}
-          port: ${{ secrets.NAS_PORT }}
+          host: ${{ steps.cf-bridge.outputs.host }}
+          port: ${{ steps.cf-bridge.outputs.port }}
           username: ${{ secrets.NAS_USER }}
           key: ${{ secrets.NAS_SSH_KEY }}
           script_stop: true
@@ -141,11 +161,21 @@ jobs:
             export HELPERS_DIR=/tmp/5151-uat-helpers
             export EVIDENCE_OUT=/tmp/uat-stages-evidence-${{ github.run_id }}.json
             bash "$HELPERS_DIR/.github/scripts/production-uat-stages-remote.sh"
+      - name: NAS SSH endpoint (Cloudflare Access bridge, falls back to public SSH)
+        id: cf-bridge
+        uses: ./.github/actions/cf-ssh-bridge
+        with:
+          hostname: ssh-casa.reversalplay.me
+          port: "2222"
+          client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          fallback-host: ${{ secrets.NAS_HOST }}
+          fallback-port: ${{ secrets.NAS_PORT }}
       - name: Pull the UAT evidence from the NAS
         if: ${{ always() }}
         env:
-          NAS_HOST: ${{ secrets.NAS_HOST }}
-          NAS_PORT: ${{ secrets.NAS_PORT }}
+          NAS_HOST: ${{ steps.cf-bridge.outputs.host }}
+          NAS_PORT: ${{ steps.cf-bridge.outputs.port }}
           NAS_USER: ${{ secrets.NAS_USER }}
           NAS_SSH_KEY: ${{ secrets.NAS_SSH_KEY }}
         run: |

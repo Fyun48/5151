@@ -84,22 +84,42 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: NAS SSH endpoint (Cloudflare Access bridge, falls back to public SSH)
+        id: cf-bridge
+        uses: ./.github/actions/cf-ssh-bridge
+        with:
+          hostname: ssh-casa.reversalplay.me
+          port: "2222"
+          client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          fallback-host: ${{ secrets.NAS_HOST }}
+          fallback-port: ${{ secrets.NAS_PORT }}
       - name: Stage migration helper and compose on the Storage1 pool
         uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ secrets.NAS_HOST }}
-          port: ${{ secrets.NAS_PORT }}
+          host: ${{ steps.cf-bridge.outputs.docker_host }}
+          port: ${{ steps.cf-bridge.outputs.port }}
           username: ${{ secrets.NAS_USER }}
           key: ${{ secrets.NAS_SSH_KEY }}
           source: ".github/scripts/migrate-v3-data-volume-remote.sh,docker-compose.yml"
           target: /mnt/Storage1/docker_data/5151-migrate-helpers
           overwrite: true
 
+      - name: NAS SSH endpoint (Cloudflare Access bridge, falls back to public SSH)
+        id: cf-bridge
+        uses: ./.github/actions/cf-ssh-bridge
+        with:
+          hostname: ssh-casa.reversalplay.me
+          port: "2222"
+          client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          fallback-host: ${{ secrets.NAS_HOST }}
+          fallback-port: ${{ secrets.NAS_PORT }}
       - name: Run the data volume migration
         uses: appleboy/ssh-action@v1.2.0
         with:
-          host: ${{ secrets.NAS_HOST }}
-          port: ${{ secrets.NAS_PORT }}
+          host: ${{ steps.cf-bridge.outputs.host }}
+          port: ${{ steps.cf-bridge.outputs.port }}
           username: ${{ secrets.NAS_USER }}
           key: ${{ secrets.NAS_SSH_KEY }}
           script_stop: true
@@ -114,12 +134,22 @@ jobs:
             echo "migrate_start mode=$MODE source=$SOURCE_DIR target=$TARGET_DIR force=$FORCE"
             bash /mnt/Storage1/docker_data/5151-migrate-helpers/.github/scripts/migrate-v3-data-volume-remote.sh
 
+      - name: NAS SSH endpoint (Cloudflare Access bridge, falls back to public SSH)
+        id: cf-bridge
+        uses: ./.github/actions/cf-ssh-bridge
+        with:
+          hostname: ssh-casa.reversalplay.me
+          port: "2222"
+          client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          fallback-host: ${{ secrets.NAS_HOST }}
+          fallback-port: ${{ secrets.NAS_PORT }}
       - name: Remove staged migration helper from the NAS
         if: always()
         uses: appleboy/ssh-action@v1.2.0
         with:
-          host: ${{ secrets.NAS_HOST }}
-          port: ${{ secrets.NAS_PORT }}
+          host: ${{ steps.cf-bridge.outputs.host }}
+          port: ${{ steps.cf-bridge.outputs.port }}
           username: ${{ secrets.NAS_USER }}
           key: ${{ secrets.NAS_SSH_KEY }}
           script: |
