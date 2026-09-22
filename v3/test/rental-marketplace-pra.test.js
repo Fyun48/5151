@@ -28,6 +28,14 @@ import { publicRentalMarketplaceFlags } from "../src/rentalMarketplaceFlags.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 
+// 這些 fixture 把「時間」當參數餵給 demand.js，但讀取路徑（getDemandPost -> expireOpenPosts(db)）會用
+// 真實時鐘做一次生命週期掃描，所以「發佈日」不能寫死：TTL 14 天 + grace 7 天，一旦發佈日距今天超過
+// 21 天，內容在建立回讀時就會被掃成 paused，測試結果於是隨「今天」改變。
+// 發佈日一律取相對現在的日期；其餘時間點由該測試的 started 推導，測試才與日曆無關。
+const DAY_MS = 86400000;
+const daysAgo = (days) => new Date(Date.now() - days * DAY_MS);
+const daysAfter = (from, days) => new Date(from.getTime() + days * DAY_MS);
+
 function open() {
   const db = new DatabaseSync(":memory:");
   db.exec("PRAGMA foreign_keys = ON");
@@ -228,7 +236,7 @@ test("existing rows are backfilled as legacy numeric share", () => {
 test("publish TTL goes to confirmation then expires after grace", () => {
   const db = open();
   setRentalMarketplaceFlags({ wish: { lifecycle_enabled: true } });
-  const publishedAt = new Date("2026-09-01T00:00:00.000Z");
+  const publishedAt = daysAgo(1);
   const post = createDemandPost(db, 1, sample(), publishedAt);
   const stored = db.prepare("SELECT * FROM demand_posts WHERE id = ?").get(post.id);
   assert.equal(stored.expires_at, ttlExpiresAt(publishedAt, 14));
@@ -256,12 +264,12 @@ test("publish TTL goes to confirmation then expires after grace", () => {
 test("60-day confirm action completes and resets continuous window", () => {
   const db = open();
   setRentalMarketplaceFlags({ wish: { lifecycle_enabled: true } });
-  const started = new Date("2026-09-16T00:00:00.000Z");
+  const started = daysAgo(1);
   const post = createDemandPost(db, 1, sample(), started);
   db.prepare(
     "UPDATE demand_posts SET continuous_active_from = ?, last_confirmed_at = ?, lifecycle = 'needs_confirmation' WHERE id = ?",
-  ).run(started.toISOString(), "2026-11-01T00:00:00.000Z", post.id);
-  const now = new Date("2026-11-16T00:00:00.000Z");
+  ).run(started.toISOString(), daysAfter(started, 45).toISOString(), post.id);
+  const now = daysAfter(started, 61);
   const gated = applyWishLifecycleAction(db, 1, post.id, "extend", now);
   assert.equal(gated.require_reconfirm, true);
   assert.equal(gated.lifecycle, "needs_confirmation");
@@ -283,15 +291,15 @@ test("60-day confirm action completes and resets continuous window", () => {
 test("14-day confirm does not reset the 60-day continuous window", () => {
   const db = open();
   setRentalMarketplaceFlags({ wish: { lifecycle_enabled: true } });
-  const started = new Date("2026-09-16T00:00:00.000Z");
+  const started = daysAgo(1);
   const post = createDemandPost(db, 1, sample(), started);
-  const day14 = new Date("2026-09-30T00:00:00.000Z");
+  const day14 = daysAfter(started, 14);
   const stay = applyWishLifecycleAction(db, 1, post.id, "confirm", day14);
   assert.equal(stay.lifecycle, "active");
   const row = db.prepare("SELECT continuous_active_from, last_confirmed_at FROM demand_posts WHERE id = ?").get(post.id);
   assert.equal(row.continuous_active_from, started.toISOString());
   assert.equal(row.last_confirmed_at, day14.toISOString());
-  const day60 = new Date("2026-11-16T00:00:00.000Z");
+  const day60 = daysAfter(started, 60);
   const gated = applyWishLifecycleAction(db, 1, post.id, "extend", day60);
   assert.equal(gated.require_reconfirm, true);
   setRentalMarketplaceFlags({});
@@ -339,15 +347,15 @@ test("first lifecycle activation overwrites old open-wish timestamps", () => {
 test("full_reconfirm before 60 days is rejected and leaves the continuous window", () => {
   const db = open();
   setRentalMarketplaceFlags({ wish: { lifecycle_enabled: true } });
-  const started = new Date("2026-09-16T00:00:00.000Z");
+  const started = daysAgo(1);
   const post = createDemandPost(db, 1, sample(), started);
-  const day14 = new Date("2026-09-30T00:00:00.000Z");
+  const day14 = daysAfter(started, 14);
   assert.throws(() => applyWishLifecycleAction(db, 1, post.id, "full_reconfirm", day14), (err) => err.status === 400 || err.status === 409);
   const day14Row = db.prepare("SELECT continuous_active_from, lifecycle FROM demand_posts WHERE id = ?").get(post.id);
   assert.equal(day14Row.continuous_active_from, started.toISOString());
   assert.equal(day14Row.lifecycle, "active");
   db.prepare("UPDATE demand_posts SET lifecycle = 'needs_confirmation' WHERE id = ?").run(post.id);
-  const day30 = new Date("2026-10-16T00:00:00.000Z");
+  const day30 = daysAfter(started, 30);
   assert.throws(() => applyWishLifecycleAction(db, 1, post.id, "full_reconfirm", day30), (err) => err.status === 409);
   const day30Row = db.prepare("SELECT continuous_active_from, lifecycle FROM demand_posts WHERE id = ?").get(post.id);
   assert.equal(day30Row.continuous_active_from, started.toISOString());
