@@ -24,8 +24,9 @@
   讓 `watcher.js` 的 await 化跑過真實流量，並讓正式站 revision 對齊 master。
 - 移植進度：**①七條 `listingsNeeding*` 掃描 ✅、②迴圈欄位寫入 ✅、③通知佇列的讀＋寫 ✅**
   （三者都有 shadow PG live parity）。
-- **③ 的通知部分 ✅（含 shadow live：`notify-enqueue-parity.test.js` 5/5、0 skip；全 live 套件 61/61）。
-  還缺 ③ 的 CRM outbox（`v3/src/crmOutbox.js`）與 ④ `enqueueSimilaritySafe`** → **還不能切換**。
+- **③ ✅（通知，含 shadow live 5/5；全 live 套件 61/61）。③ 的 CRM outbox 判定為「單容器可接受的
+  SQLite 孤島」（生產者/消費者同一個 store；HA 前必須移植，見 runbook 步驟 7）。剩下唯一的切換阻塞項
+  是 ④ `enqueueSimilaritySafe`**。
 - 正式站（CasaOS `591-tracker-v3`）跑 `64828a8` 的映像，`DB_DRIVER=unset`（＝sqlite），行為不變。
 
 ## 1. 當天對話歷程（依序）
@@ -147,8 +148,13 @@ node --test v3/test/crawler-reads-parity.test.js v3/test/listing-fields-parity.t
 >   live 檔一起跑 **61/61**（含 standby 可見性）。過程中修掉兩個**測試**問題（離線層的殘留列汙染 live
 >   鏡射、比對對排序敏感），production 程式沒有改動。
 >   證據 `v3/evidence/pg-notify-enqueue-20260921/`。
-> **⛔ ③ 還缺 CRM outbox**（`v3/src/crmOutbox.js`：104 行、8 條同步語句，`crm.js` 與 `crmDelivery.js`
-> 在用）—— 這是 ③ 剩下的部分。**隔天第一件事＝移植 CRM outbox（或先做 ④）。**
+> **CRM outbox 的判定（2026-09-22）**：`crm_outbox` 只被 `crmOutbox.js` 碰；生產者 `crm.js`（8 個同步
+> 呼叫點）與消費者 `crmDelivery.js` 共用同一個 handle（`db.js` 的 `opsDeliveryDb()` 就是 `return db;`）
+> → 單容器切換可接受（同一個 store 進出，不是「寫 A 讀 B」）。只換一半會更糟（迴圈永遠撈不到），要就
+> 整條連 `crm.js`（同步 CRUD）與 3 條 admin 路由一起 async 化＝獨立一包。
+> **正式掛點：`docs/runbooks/postgres-cutover-bootstrap.md` 步驟 7「HA 前必須移植的孤島」**
+> （同類：`jobQueue`／`jobWorker`／`geoQueue`／`listingEnrichQueue`）。
+> **因此 ③ 對單容器切換已關閉；隔天第一件事＝④。**
 
 1. ~~**佇列的讀＋寫**~~ ✅ 完成（見上）。
 2. ~~**`enqueueListingEvent()` 的決策鏈**~~ ✅ 程式面完成（見上），**live parity 待補**：
@@ -182,8 +188,8 @@ SQLite 檔不動故資料不丟，但切換期間寫進 PG 的資料要人工評
 ## 5. 隔天開工的第一件事
 
 ```bash
-git log --oneline -5                                     # 確認 master 至少有 80559f4
+git log --oneline -5                                     # 確認 master 至少有 68bd851
 cat docs/handoffs/20260921-postgres-cutover-session.md    # 就是本文件
-# 照 §3 起手式跑一次 24/24 確認環境沒變，再從 §4 ③ 剩下的 CRM outbox 開始（通知兩段已完成，不要重做）。
+# 照 §3 起手式跑一次 24/24 確認環境沒變，再從 §4 ④（enqueueSimilaritySafe）開始（③ 已完成，不要重做）。
 ```
 
