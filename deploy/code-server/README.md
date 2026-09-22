@@ -40,9 +40,12 @@ docker run --rm --network host \
 
 1. 開 <https://code.reversalplay.me> → 輸入 `~/code-server/.env` 裡的密碼
 2. **File → Open Folder → `/workspace/5151`**（已預先 clone，remote URL 已含 Gitea token，可直接 `git pull`/`push`）
+   ⚠️ 這是 code-server **自己的 clone**，不是 agent 在用的那份；要跟 agent 同一份工作區請開
+   `/workspace/cline-server/repos/5151`（見下面「Cline 對話紀錄」一節）。
 3. 內建終端機（Ctrl+`）可直接跑 `npm test`、`git status`；容器與 `gitea:3000` 同網路，`git` 對內網穩定 ✓
 4. 想用 AI：**Extensions → 搜 `Cline`**（code-server 走 Open VSX；若搜不到就用 `.vsix` 安裝）→
-   設定 Provider 選 **OpenAI Compatible**：
+   **它的對話歷史與 Cline Server 共用同一份**（2026-09-22 起，見下一節），所以 Desktop 開的 session
+   在這裡的 RECENT 就看得到。Provider 設定：
    - Base URL：`https://api.deepseek.com`
    - API Key：DeepSeek key（見 Gitea repo variable `DEEPSEEK_API_KEY`）
    - Model：`deepseek-chat`（也可 `deepseek-reasoner` / `deepseek-flash` / `deepseek-v4-pro`）
@@ -80,6 +83,71 @@ docker run --rm --network host \
 > 想改「預設打開什麼」：編輯 `docker-compose.yml` 最後那個參數（現在是 `/workspace`；
 > 要固定單一專案就改成 `/workspace/5151`）→ `docker compose up -d`。
 > 想在新分頁直接開某個資料夾，可試 URL 參數：`https://cocodeco.reversalplay.me/?folder=/workspace/5151` ✓
+
+## Cline 對話紀錄：與 Cline Server 共用同一份（2026-09-22 起）
+
+**背景**：NAS 上其實有**兩套 Cline**，天生各有各的 data dir，所以以前「在 Cline Desktop 連 `cline-server`
+開的 session」不會出現在 code-server 的 Cline 面板（反之亦然）——
+Cline 的歷史存在該 core 的 data dir（`sessions/<id>/*.messages.json` + `db/sessions.db`），
+**不會跨 data dir 同步，也沒有雲端同步**。
+
+| 誰 | 容器 | data dir（NAS 路徑） |
+|---|---|---|
+| 瀏覽器版 IDE 的 Cline 擴充 | `5151-code-server` | `~/code-server/data/.cline/data`（舊）|
+| Cline Server ← Cline Desktop 遠端連的那台 | `cline-dev` | `~/code-server/workspace/cline-server/home/.cline/data` |
+
+**2026-09-22 起改成兩邊共用同一份**（compose 動三件事）：
+
+1. `user: "1001:1001"` ← 與 `cline-dev` 的 `cline` 同 uid。Cline 建檔是 `0666 & ~umask`，
+   **不同 uid 光靠群組/ACL 是不夠的：後建的那個檔一定有一邊寫不進去** → 同 uid 才穩。
+   （容器啟動時 `fixuid` 會把 `coder` 對映到 1001，所以 `id` 顯示 `uid=1001(coder)` ✓）
+2. `group_add: ["100"]` ← 保留 `users` 群組，才能繼續寫 `~/inbox`（`/nas-inbox` 是 2775 root:users）。
+3. `CLINE_DATA_DIR=/home/coder/.cline/data` ＋ 把 `cline-server/home/.cline/data` 掛到 `/home/coder/.cline/data`
+   ← **兩個容器指到同一份** sessions／settings／db。
+
+**結果**：code-server 的 Cline 面板「RECENT／歷史」＝ Cline Desktop 接 `cline-server` 的同一份清單；
+在 code-server 開的 session，Desktop 那側也看得到。**工作可以在任一邊接續，不用怕漏掉紀錄。**
+
+### 驗證指令
+
+```bash
+# NAS 上：兩邊看到的 session 數要一樣
+docker exec 5151-code-server sh -c 'ls ~/.cline/data/sessions | wc -l'
+ls ~/code-server/workspace/cline-server/home/.cline/data/sessions | wc -l
+
+# code-server 的 Terminal（CLI 已持久化安裝在 ~/.npm-global；找不到就重開 Terminal）：
+cline history --limit 5             # 列出共用的歷史
+cline -i -c /workspace/cline-server/repos/5151   # TUI 接續同一份 session
+# ⚠️ CLI 的預設 provider 是 `cline`（走 Cline Credits，餘額 0 會直接 Insufficient balance）；
+#    要用你自己的 DeepSeek key 請明示：
+cline -P deepseek -m deepseek-flash -c /workspace/cline-server/repos/5151 "你的提示詞"
+```
+
+### ⚠️ 注意事項（本次實測踩到的）
+
+- **兩邊 Cline 版本要一致**（目前 extension/core `4.1.19`、CLI `3.0.6x`）。升一邊就要升另一邊，
+  否則共用 data dir 時 schema migration 會互打；升完要 `docker compose up -d` 重建容器。
+- 共用 `globalState.json`／`providers.json`（＝API key、auto-approve、語言設定兩邊一致）；
+  **`~/.cline/remote` 沒有共用**（Desktop remote helper 專用，只掛 `data`）。
+- 只有「同時在兩邊跑 zen／背景任務」才會有兩個 hub daemon 寫同一顆 `hub-events-hub-production.db`；
+  一般對話不受影響（hub 只在背景任務出現）。
+- 舊的、只屬於 code-server 的 6 條 session 已封存（檔案還在，只是不再出現在 UI 清單）：
+  `~/code-server/data/.cline/data-code-server-archive-20260922-2006`。
+- 容器身分是 **uid 1001**（以前是 1000）：之後要再掛 NAS 目錄，記得 `chown 1001:1001`（或在 DSM 加 ACL），
+  否則容器會 `Permission denied`。
+- 回滾：`cp ~/code-server/docker-compose.yml.bak-20260922-clineshare ~/code-server/docker-compose.yml`
+  → `docker exec -u 0 5151-code-server chown -R 1000:1000 /home/coder /workspace/5151`
+  → `cd ~/code-server && docker compose up -d`。
+
+### 兩個 `5151` 是**不同的 clone**（很容易搞混）
+
+| IDE 裡的路徑 | NAS 路徑 | 說明 |
+|---|---|---|
+| `/workspace/5151` | `~/code-server/workspace/5151` | code-server 自己的 clone（2026-09-22 時落後 `master` **57 個 commit**）|
+| `/workspace/cline-server/repos/5151` | `~/code-server/workspace/cline-server/repos/5151` | **agent／Cline Server 實際工作的 clone**（＝ `cline-dev` 容器內的 `/workspace/repos/5151`）|
+
+要跟 agent 用同一份工作區，就在 IDE 開 `/workspace/cline-server/repos/5151`（uid 1001 → 可寫 ✓）。
+
 
 ## 上傳 / 存取檔案（2026-09-20 補：為什麼檔案對話框只看得到容器路徑）
 
