@@ -129,7 +129,7 @@ jobs:
         id: cf-bridge
         uses: ./.github/actions/cf-ssh-bridge
         with:
-          hostname: ssh-casa.reversalplay.me
+          hostname: ssh-casa-ci.reversalplay.me
           port: "2222"
           client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
@@ -149,7 +149,7 @@ jobs:
         id: cf-bridge
         uses: ./.github/actions/cf-ssh-bridge
         with:
-          hostname: ssh-casa.reversalplay.me
+          hostname: ssh-casa-ci.reversalplay.me
           port: "2222"
           client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
@@ -180,7 +180,7 @@ jobs:
         id: cf-bridge
         uses: ./.github/actions/cf-ssh-bridge
         with:
-          hostname: ssh-casa.reversalplay.me
+          hostname: ssh-casa-ci.reversalplay.me
           port: "2222"
           client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
