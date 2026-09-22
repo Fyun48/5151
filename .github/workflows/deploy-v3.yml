@@ -279,7 +279,7 @@ jobs:
       - name: Copy v3 app, compose files, and digest override
         uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ steps.cf-bridge.outputs.host }}
+          host: ${{ steps.cf-bridge.outputs.docker_host }}
           port: ${{ steps.cf-bridge.outputs.port }}
           username: ${{ secrets.NAS_USER }}
           key: ${{ secrets.NAS_SSH_KEY }}

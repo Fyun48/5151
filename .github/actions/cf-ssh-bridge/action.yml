@@ -41,6 +41,12 @@ outputs:
   mode:
     description: '`cloudflare` when the bridge is up, `public-fallback` otherwise'
     value: ${{ steps.bridge.outputs.mode }}
+  docker_host:
+    description: >-
+      Host to use from Docker-based actions (e.g. appleboy/scp-action runs inside
+      a container, where 127.0.0.1 is the container itself). Equals the Docker
+      bridge gateway while the tunnel is up, otherwise the public fallback host.
+    value: ${{ steps.bridge.outputs.docker_host }}
 
 runs:
   using: composite
@@ -67,6 +73,7 @@ runs:
           echo "::warning::cf-ssh-bridge falling back to public SSH ${CF_FALLBACK_HOST}:${CF_FALLBACK_PORT} (${1})"
           echo "mode=public-fallback" >> "$GITHUB_OUTPUT"
           echo "host=${CF_FALLBACK_HOST}" >> "$GITHUB_OUTPUT"
+          echo "docker_host=${CF_FALLBACK_HOST}" >> "$GITHUB_OUTPUT"
           echo "port=${CF_FALLBACK_PORT}" >> "$GITHUB_OUTPUT"
           exit 0
         }
@@ -80,23 +87,36 @@ runs:
         fi
         cloudflared --version || fallback "cloudflared not runnable"
 
+        DOCKER_GW="$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || true)"
+        if [ -z "$DOCKER_GW" ]; then DOCKER_GW="172.17.0.1"; fi
+
+        # Bind on all interfaces: container-based actions reach the runner through the
+        # Docker bridge gateway, not through loopback.
         nohup cloudflared access tcp \
           --hostname "$CF_HOST" \
           --service-token-id "$CF_ID" \
           --service-token-secret "$CF_SECRET" \
-          --url "127.0.0.1:$CF_PORT" \
+          --url "0.0.0.0:$CF_PORT" \
           > /tmp/cf-ssh-bridge.log 2>&1 &
 
+        ready=0
         for _ in $(seq 1 30); do
-          if (exec 3<>/dev/tcp/127.0.0.1/"$CF_PORT") 2>/dev/null; then
-            echo "cf-ssh-bridge: ${CF_HOST} -> 127.0.0.1:${CF_PORT} ready"
-            echo "mode=cloudflare" >> "$GITHUB_OUTPUT"
-            echo "host=127.0.0.1" >> "$GITHUB_OUTPUT"
-            echo "port=${CF_PORT}" >> "$GITHUB_OUTPUT"
-            exit 0
+          if (exec 3<>/dev/tcp/127.0.0.1/"$CF_PORT") 2>/dev/null && \
+             (exec 3<>/dev/tcp/"$DOCKER_GW"/"$CF_PORT") 2>/dev/null; then
+            ready=1
+            break
           fi
           sleep 1
         done
+
+        if [ "$ready" = 1 ]; then
+          echo "cf-ssh-bridge: ${CF_HOST} -> 127.0.0.1:${CF_PORT} / docker ${DOCKER_GW}:${CF_PORT} ready"
+          echo "mode=cloudflare" >> "$GITHUB_OUTPUT"
+          echo "host=127.0.0.1" >> "$GITHUB_OUTPUT"
+          echo "docker_host=${DOCKER_GW}" >> "$GITHUB_OUTPUT"
+          echo "port=${CF_PORT}" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
 
         cat /tmp/cf-ssh-bridge.log || true
         fallback "bridge never listened on 127.0.0.1:${CF_PORT}"
