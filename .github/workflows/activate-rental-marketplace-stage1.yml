@@ -171,16 +171,6 @@ jobs:
           source: ".github/scripts/activate-rental-marketplace-stage1-remote.sh,.github/scripts/activate-rental-marketplace-stage1-domain.mjs,.github/scripts/activate-rental-marketplace-stage1-path.py,.github/scripts/activate-rental-marketplace-stage1-evidence.py,.github/scripts/activate-rental-marketplace-stage1-postcheck.mjs,.github/scripts/stage1-fixture-domain.mjs,.github/scripts/pra-src-manifest.py,pra-src-expected.json"
           target: /tmp/5151-stage1-activate-helpers
           overwrite: true
-      - name: NAS SSH endpoint (Cloudflare Access bridge, falls back to public SSH)
-        id: cf-bridge
-        uses: ./.github/actions/cf-ssh-bridge
-        with:
-          hostname: ssh-casa-ci.reversalplay.me
-          port: "2222"
-          client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-          fallback-host: ${{ secrets.NAS_HOST }}
-          fallback-port: ${{ secrets.NAS_PORT }}
           ssh-user: ${{ secrets.NAS_USER }}
           ssh-key: ${{ secrets.NAS_SSH_KEY }}
       - name: Activate Stage 1 owner_matching on running v3
@@ -212,16 +202,6 @@ jobs:
             export GITHUB_RUN_ATTEMPT='${{ github.run_attempt }}'
             chmod +x /tmp/5151-stage1-activate-helpers/.github/scripts/activate-rental-marketplace-stage1-remote.sh
             /tmp/5151-stage1-activate-helpers/.github/scripts/activate-rental-marketplace-stage1-remote.sh
-      - name: NAS SSH endpoint (Cloudflare Access bridge, falls back to public SSH)
-        id: cf-bridge
-        uses: ./.github/actions/cf-ssh-bridge
-        with:
-          hostname: ssh-casa-ci.reversalplay.me
-          port: "2222"
-          client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-          fallback-host: ${{ secrets.NAS_HOST }}
-          fallback-port: ${{ secrets.NAS_PORT }}
           ssh-user: ${{ secrets.NAS_USER }}
           ssh-key: ${{ secrets.NAS_SSH_KEY }}
       - name: Pull NAS activation evidence

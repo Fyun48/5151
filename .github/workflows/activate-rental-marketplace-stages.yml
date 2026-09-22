@@ -177,16 +177,6 @@ jobs:
           source: ".github/scripts/activate-rental-marketplace-stages-remote.sh,.github/scripts/activate-rental-marketplace-stages-domain.mjs,.github/scripts/activate-rental-marketplace-stages-path.py,.github/scripts/activate-rental-marketplace-stages-evidence.py,.github/scripts/activate-rental-marketplace-stages-postcheck.mjs,.github/scripts/pra-src-manifest.py,pra-src-expected.json"
           target: /tmp/5151-stages-activate-helpers
           overwrite: true
-      - name: NAS SSH endpoint (Cloudflare Access bridge, falls back to public SSH)
-        id: cf-bridge
-        uses: ./.github/actions/cf-ssh-bridge
-        with:
-          hostname: ssh-casa-ci.reversalplay.me
-          port: "2222"
-          client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-          fallback-host: ${{ secrets.NAS_HOST }}
-          fallback-port: ${{ secrets.NAS_PORT }}
           ssh-user: ${{ secrets.NAS_USER }}
           ssh-key: ${{ secrets.NAS_SSH_KEY }}
       - name: Activate the target Marketplace stage on running v3
@@ -219,16 +209,6 @@ jobs:
             chmod +x /tmp/5151-stages-activate-helpers/.github/scripts/activate-rental-marketplace-stages-remote.sh
             /tmp/5151-stages-activate-helpers/.github/scripts/activate-rental-marketplace-stages-remote.sh
 
-      - name: NAS SSH endpoint (Cloudflare Access bridge, falls back to public SSH)
-        id: cf-bridge
-        uses: ./.github/actions/cf-ssh-bridge
-        with:
-          hostname: ssh-casa-ci.reversalplay.me
-          port: "2222"
-          client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-          fallback-host: ${{ secrets.NAS_HOST }}
-          fallback-port: ${{ secrets.NAS_PORT }}
           ssh-user: ${{ secrets.NAS_USER }}
           ssh-key: ${{ secrets.NAS_SSH_KEY }}
       - name: Pull NAS staged activation evidence
