@@ -182,6 +182,48 @@ docker exec 5151-code-server sh -c 'test -x /home/cline/.local/bin/chrome-no-san
 `.cline/figma-images`、`Documents`（**不掛 `.ssh`**）；但那樣「終端 cwd」與舊 session 的路徑還是不存在，
 得接受點到舊 session 會跳錯。
 
+### ⚠️ 同一個道理：`/workspace/repos/<repo>`（agent 的路徑）也要成立
+
+**症狀**（2026-09-22 實測，使用者端連跳兩次）：
+
+```
+The terminal process failed to launch: Starting directory (cwd) "/workspace/repos/5151" does not exist.
+```
+
+**根因**：兩個容器對「同一棵 repos」用了**不同的路徑**，而 session 記的是**建立它的那個容器**的路徑：
+
+| | code-server（IDE） | `cline-dev`（agent／Cline Server） |
+|---|---|---|
+| repos 根目錄 | `/workspace` | `/workspace/repos` |
+| 5151 這個 repo | `/workspace/5151` | `/workspace/repos/5151` |
+
+（`WORKFLOW.md` 定的專案位置就是 `/workspace/repos/<repo>` —— Desktop 建 session 時填的那個。）
+同一個原因也會讓**在 IDE 裡跑的 agent 自己的終端機**開不起來（pty 的 cwd 正是這個路徑）。
+
+**修法（一行；IDE 內建終端機執行，不用重建容器）**：
+
+```bash
+ln -s . /workspace/repos        # 建立 /workspace/repos → 指回自己（= repos 根目錄）
+cd /workspace/repos/5151 && pwd && git log --oneline -1   # 應與 /workspace/5151 完全相同
+```
+
+- 連結落在 NAS `~/code-server/workspace/cline-server/repos/repos` → 兩邊容器看到的是**同一個目錄**
+  （`cline-dev` 那側是 `/workspace/repos/repos`，指回自己＝無害）；因為在共用目錄裡，**重建後仍在**。
+- 搜尋不受影響（`search.followSymlinks: false` 已設）；要在 Explorer 藏掉那個 `repos` 項目：
+  設定 → 搜尋 `files.exclude` → 加 `"/repos": true`。
+
+**選項 B（真實掛載；需 `docker compose up -d`，可完全不用符號連結）**：把 `/workspace` 改成
+cline-server 根目錄、再多掛一次 repos，兩邊路徑就完全對稱：
+
+```yaml
+- /volume1/homes/tori/code-server/workspace/cline-server:/workspace
+- /volume1/homes/tori/code-server/workspace/cline-server/repos:/workspace/repos
+```
+
+代價：IDE 開的根目錄變成 cline-server 根目錄 → `5151-projects.code-workspace` 的 18 條路徑要改成
+`/workspace/repos/<repo>`，`command` 最後的 `/workspace` 要改成 `/workspace/repos`，
+且 `/workspace/home`（agent 家目錄）會多一份路徑 → 要加進 `files.watcherExclude`。
+
 ### 驗證指令
 
 ```bash
@@ -283,7 +325,7 @@ Cline 輸入框左下角的 `+`（Add Files & Images）用的是 **VS Code 的�
 
 | 容器內路徑 | NAS 實際位置 | 權限 | 用途 |
 |---|---|---|---|
-| `/workspace` | `~/code-server/workspace/cline-server/repos` | **rw** | 專案區（18 個 repo，＝ Cline Server／agent 的同一份 working tree）|
+| `/workspace` | `~/code-server/workspace/cline-server/repos` | **rw** | 專案區（18 個 repo，＝ Cline Server／agent 的同一份 working tree）；內含 `repos/` 符號連結指回自己，讓 agent 的 `/workspace/repos/<repo>` 也成立（見上一節）|
 | `/nas-inbox` | `~/inbox` | **rw** | **上傳到 NAS 的落地區**（IDE 寫、NAS 端看／搬）|
 | `/nas-docker` | `/volume1/docker` | **ro** | 各容器 compose／.env（5151-ops、ecpapi、mbriapi…）|
 | `/private` | `~/code-server/private` | **ro** | `INFRA-CREDENTIALS.md` 等憑證 |
