@@ -147,16 +147,6 @@ jobs:
           source: ".github/scripts/activate-rental-marketplace-pra-remote.sh,.github/scripts/activate-rental-marketplace-pra-domain.mjs,.github/scripts/pra-src-manifest.py,pra-src-expected.json"
           target: /tmp/5151-pra-activate-helpers
           overwrite: true
-      - name: NAS SSH endpoint (Cloudflare Access bridge, falls back to public SSH)
-        id: cf-bridge
-        uses: ./.github/actions/cf-ssh-bridge
-        with:
-          hostname: ssh-casa-ci.reversalplay.me
-          port: "2222"
-          client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-          fallback-host: ${{ secrets.NAS_HOST }}
-          fallback-port: ${{ secrets.NAS_PORT }}
           ssh-user: ${{ secrets.NAS_USER }}
           ssh-key: ${{ secrets.NAS_SSH_KEY }}
       - name: Activate PR A flags on running v3
@@ -180,16 +170,6 @@ jobs:
             export EXPECTED_SRC_MOUNT=/mnt/Storage1/apps/5151/v3/src
             chmod +x /tmp/5151-pra-activate-helpers/.github/scripts/activate-rental-marketplace-pra-remote.sh
             /tmp/5151-pra-activate-helpers/.github/scripts/activate-rental-marketplace-pra-remote.sh
-      - name: NAS SSH endpoint (Cloudflare Access bridge, falls back to public SSH)
-        id: cf-bridge
-        uses: ./.github/actions/cf-ssh-bridge
-        with:
-          hostname: ssh-casa-ci.reversalplay.me
-          port: "2222"
-          client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-          fallback-host: ${{ secrets.NAS_HOST }}
-          fallback-port: ${{ secrets.NAS_PORT }}
           ssh-user: ${{ secrets.NAS_USER }}
           ssh-key: ${{ secrets.NAS_SSH_KEY }}
       - name: Pull NAS activation evidence

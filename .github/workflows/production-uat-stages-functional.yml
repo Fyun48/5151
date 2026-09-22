@@ -132,16 +132,6 @@ jobs:
           source: ".github/scripts/production-uat-stages-domain.mjs,.github/scripts/production-uat-stages-wiring.mjs,.github/scripts/production-uat-stages-remote.sh"
           target: /tmp/5151-uat-helpers
           overwrite: true
-      - name: NAS SSH endpoint (Cloudflare Access bridge, falls back to public SSH)
-        id: cf-bridge
-        uses: ./.github/actions/cf-ssh-bridge
-        with:
-          hostname: ssh-casa-ci.reversalplay.me
-          port: "2222"
-          client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-          fallback-host: ${{ secrets.NAS_HOST }}
-          fallback-port: ${{ secrets.NAS_PORT }}
           ssh-user: ${{ secrets.NAS_USER }}
           ssh-key: ${{ secrets.NAS_SSH_KEY }}
       - name: Run the consolidated Production UAT
@@ -165,16 +155,6 @@ jobs:
             export HELPERS_DIR=/tmp/5151-uat-helpers
             export EVIDENCE_OUT=/tmp/uat-stages-evidence-${{ github.run_id }}.json
             bash "$HELPERS_DIR/.github/scripts/production-uat-stages-remote.sh"
-      - name: NAS SSH endpoint (Cloudflare Access bridge, falls back to public SSH)
-        id: cf-bridge
-        uses: ./.github/actions/cf-ssh-bridge
-        with:
-          hostname: ssh-casa-ci.reversalplay.me
-          port: "2222"
-          client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-          fallback-host: ${{ secrets.NAS_HOST }}
-          fallback-port: ${{ secrets.NAS_PORT }}
           ssh-user: ${{ secrets.NAS_USER }}
           ssh-key: ${{ secrets.NAS_SSH_KEY }}
       - name: Pull the UAT evidence from the NAS

@@ -109,16 +109,6 @@ jobs:
           source: "ops"
           target: /mnt/Storage1/apps/5151
           overwrite: true
-      - name: NAS SSH endpoint (Cloudflare Access bridge, falls back to public SSH)
-        id: cf-bridge
-        uses: ./.github/actions/cf-ssh-bridge
-        with:
-          hostname: ssh-casa-ci.reversalplay.me
-          port: "2222"
-          client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-          fallback-host: ${{ secrets.NAS_HOST }}
-          fallback-port: ${{ secrets.NAS_PORT }}
           ssh-user: ${{ secrets.NAS_USER }}
           ssh-key: ${{ secrets.NAS_SSH_KEY }}
       - name: Recreate 5151-ops only
