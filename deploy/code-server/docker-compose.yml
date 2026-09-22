@@ -47,7 +47,13 @@ services:
     volumes:
       # 設定 / 已安裝擴充套件 / 開啟的工作區都持久化 → 這就是「關掉再打開還在」的關鍵。
       - ./data:/home/coder
-      - ./workspace:/workspace
+      # 2026-09-22：`/workspace` **直接指向 Cline Server 的 repos 根目錄**
+      #   IDE 內 `/workspace/<repo>` ↔ NAS `~/code-server/workspace/cline-server/repos/<repo>`
+      #   ↔ agent 容器（cline-dev）內 `/workspace/repos/<repo>`
+      #   → 跟「Cline Desktop 用 SSH 連 cline-server 工作」看到的是**同一份 working tree**，
+      #     不再是兩份各自落後的 clone（原本 code-server 自己那份 18 個 repo 已於 2026-09-22 刪除，
+      #     `_uploads` 的兩個檔案已移到 NAS `~/inbox/code-server-old-_uploads/`）。
+      - /volume1/homes/tori/code-server/workspace/cline-server/repos:/workspace
       # Cline Server（cline-dev 容器）的 Cline 資料 = **兩邊唯一的 session 來源**。
       # 只掛 `data`（settings/sessions/db/hooks），不掛整個 `~/.cline`（`remote/` 是 Desktop helper 專用）。
       # 副作用：`~/code-server/data/.cline/data` 會被這條覆蓋（原本 code-server 自己的 6 條舊 session
@@ -65,7 +71,7 @@ services:
       #      → 容器身分（2026-09-22 起是 uid 1001；在那之前是 1000）連 `ls` 都被拒。
       #      **bind mount 會繞過上層目錄的 ACL**，但**不會**繞過被掛那一個目錄自己的 ACL ——
       #      所以能掛的只有「沒有 Synology ACL、且 owner 是容器身分（1001）」的目錄
-      #      （例如 `~/code-server/workspace`、cline-server 的資料，與 `~/inbox`）。
+      #      （例如 `~/code-server/workspace/cline-server/repos`、下面這個 `~/inbox`）。
       #   3. 需要更多 NAS 路徑（例如分享資料夾、或想直接編輯家目錄裡的 ops 腳本）就要另外處理：
       #      用 root 建目錄＋`chown 1001:1001`，或在 DSM 加 ACL 給容器用的 uid。
       #  /nas-inbox  ← /volume1/homes/tori/inbox（2026-09-20 由 root 建立、owner 1000:users 2775）：

@@ -6,7 +6,8 @@
 - 對外：`https://cocodeco.reversalplay.me`（走既有 `jgitea-tunnel`，dashboard 上顯示為 connector **`gitea`**）
 - 只綁 `127.0.0.1:8484`（不對 LAN 開放），因此對外一律經 Cloudflare
 - 密碼：NAS `~/code-server/.env` 的 `PASSWORD`（compose 以 `env_file: .env` 讀入；600，不進 repo；`CODE_SERVER_PASSWORD` 保留為向後相容）
-- 資料：`~/code-server/data`（設定＋已安裝擴充套件）、`~/code-server/workspace`（工作區，已預先 clone `5151`）
+- 資料：`~/code-server/data`（設定＋已安裝擴充套件）、`~/code-server/workspace/cline-server/repos`（工作區＝
+  Cline Server 的 repos，與 agent／Desktop 共用同一份；2026-09-22 起直接掛成 IDE 的 `/workspace`）
 
 ## 一次性設定：加 Cloudflare Public Hostname
 
@@ -39,9 +40,11 @@ docker run --rm --network host \
 ## 進去之後怎麼用
 
 1. 開 <https://code.reversalplay.me> → 輸入 `~/code-server/.env` 裡的密碼
-2. **File → Open Folder → `/workspace/5151`**（已預先 clone，remote URL 已含 Gitea token，可直接 `git pull`/`push`）
-   ⚠️ 這是 code-server **自己的 clone**，不是 agent 在用的那份；要跟 agent 同一份工作區請開
-   `/workspace/cline-server/repos/5151`（見下面「Cline 對話紀錄」一節）。
+2. **File → Open Folder → `/workspace/5151`**
+   `/workspace` 現在**直接就是 Cline Server 的 repos 根目錄**（2026-09-22 起）→
+   IDE 內的 `/workspace/<repo>` 與「Cline Desktop 用 SSH 連 cline-server 工作」看到的是
+   **同一份 working tree**（agent 容器內是 `/workspace/repos/<repo>`），remote 已設好，可直接
+   `git pull` / `push` ✓
 3. 內建終端機（Ctrl+`）可直接跑 `npm test`、`git status`；容器與 `gitea:3000` 同網路，`git` 對內網穩定 ✓
 4. 想用 AI：**Extensions → 搜 `Cline`**（code-server 走 Open VSX；若搜不到就用 `.vsix` 安裝）→
    **它的對話歷史與 Cline Server 共用同一份**（2026-09-22 起，見下一節），所以 Desktop 開的 session
@@ -52,37 +55,72 @@ docker run --rm --network host \
 5. **關掉分頁不會中斷**：容器與 VS Code server 持續在 NAS 上跑；下次打開分頁會回到同一個工作區與狀態。
    終端機裡的長指令建議用 `tmux`（若要關分頁後繼續跑）。
 
-## 加入其他專案（多專案工作區）
+## 專案區：直接就是 Cline Server 的 repos（2026-09-22 起）
 
-`/workspace` 這個掛載目錄就是「專案區」：放進去的每個 repo 都會出現在 IDE 左側。
+`/workspace` = NAS `~/code-server/workspace/cline-server/repos` = agent 容器（`cline-dev`）內的
+`/workspace/repos`。**只有這一份 working tree**，不再有第二份 clone。
 
-**目前已預先 clone（2026-09-20，**18 個＝GitHub 上的全部**）**：
+| IDE 內 | NAS | agent 容器內 |
+|---|---|---|
+| `/workspace/5151` | `~/code-server/workspace/cline-server/repos/5151` | `/workspace/repos/5151` |
+| `/workspace`（預設開啟） | `…/cline-server/repos` | `/workspace/repos` |
+
+目前有 **18 個 repo**（＝2026-09-20 從 GitHub 搬進 Gitea 後 clone 的全部）：
 `5151`、`your-remit-01`、`your-remit-erp01`、`your-remit-erp02`、`your-remit-erpdev`、
 `yourremit-accounting-system`、`yourfavorestore`、`ForumSeeksDLer`、`bnplloan`、`MBRIAPI`、`ECPAPI`、
 `my-erp-mobile`、`cnndemo`、`hsihung_php`、`hsihung_php2`、`tori`、`HeyWorld`、`Fyun48`
 （`HeyWorld`／`Fyun48`／`hsihung_php2`／`tori` 是**空 repo**：clone 會成功但沒有任何 commit）。
 
-> 後 9 個（private）是 2026-09-20 第二輪從 GitHub 補搬進 Gitea 之後才 clone 進來的 ——
-> 詳見 `evidence/runtime-modernization/GITEA-MIGRATION.md` §1.2。每個 clone 的 remote 都已內含
-> Gitea token，可直接 `git pull`／`push`。
+> ⚠️ 原本 code-server 自己那 18 份 clone（`~/code-server/workspace/<repo>`）已於 2026-09-22 **刪除**
+> （刪前逐一驗證 `git status` 乾淨、無未推送 commit）；當時放在裡面的 `_uploads`（2 個 .md）
+> 已搬到 NAS `~/inbox/code-server-old-_uploads/`。
 
-三種切換／新增方式：
+三種用法：
 
-1. **一次看全部（預設）**：File → Open Folder → `/workspace`
-   → VS Code 會辨識底下每個 git repo，**Source Control 會同時列出多個** ✓
-2. **用工作區檔**：File → Open Workspace from File… → `/workspace/5151-projects.code-workspace`
-   （已替你建好，內含上面 **18 個** ✓）；要自己的組合就 File → Save Workspace As… ✓
-3. **再加新專案**：IDE 內建終端機
-   ```bash
-   cd /workspace
-   git clone http://JimmyGOD:<token>@gitea:3000/JimmyGOD/<repo>.git   # 自己的 Gitea（容器內可直達）
-   git clone https://github.com/<user>/<repo>.git                     # 外部 repo（私有需 access token）
-   ```
-   然後 File → **Add Folder to Workspace…** 加進來即可 ✓
+1. **一次看全部（預設，`compose` 最後一個參數就是 `/workspace`）** → Source Control 會列出多個 repo ✓
+2. **只看 5151**：File → Open Folder → `/workspace/5151`；
+   或在網址後面加參數：`https://cocodeco.reversalplay.me/?folder=/workspace/5151` ✓
+3. **用工作區檔**：File → Open Workspace from File… → `/workspace/5151-projects.code-workspace`
+   （已建好，內含 18 個資料夾）；要自己的組合就 File → Save Workspace As… ✓
 
-> 想改「預設打開什麼」：編輯 `docker-compose.yml` 最後那個參數（現在是 `/workspace`；
-> 要固定單一專案就改成 `/workspace/5151`）→ `docker compose up -d`。
-> 想在新分頁直接開某個資料夾，可試 URL 參數：`https://cocodeco.reversalplay.me/?folder=/workspace/5151` ✓
+**再加新專案**：建議在 cline-server 那一側做（這樣 Desktop 與瀏覽器兩邊才同時看得到）：
+
+```bash
+# IDE 內建終端機（＝在 code-server 容器裡）
+cd /workspace
+git clone http://JimmyGOD:<token>@gitea:3000/JimmyGOD/<repo>.git   # 自己的 Gitea（容器內可直達）
+git clone https://github.com/<user>/<repo>.git                     # 外部 repo（私有需 access token）
+```
+
+然後 File → **Add Folder to Workspace…** 加進來 ✓（或用 agent／Desktop 在 `/workspace/repos` 底下 clone）
+
+## 常見問題：`Unable to watch for file changes`
+
+**現象**：打開 IDE 常常跳出 `⚠ Unable to watch for file changes.`。
+
+**根因（已實測）**：Synology 主機的 inotify 額度是預設值 —— `fs.inotify.max_user_watches = 8192`、
+`max_user_instances = 128`（VS Code 建議 ≥ 524288 / 512）。專案裡有 `node_modules`（動輒上萬檔）時，
+遞迴 watcher 一下就爆掉。另外 code-server 與 `cline-dev` 現在**同 uid 1001 → 共用同一份 inotify 額度**。
+
+**永久解（需要 DSM 的 root；`tori` 沒有 sudo）**：
+
+```bash
+# 以 DSM 管理員帳號 ssh 進去後
+sudo -i
+sysctl -w fs.inotify.max_user_watches=524288
+sysctl -w fs.inotify.max_user_instances=1024
+cat /proc/sys/fs/inotify/max_user_watches   # 應顯示 524288
+```
+
+（`fs.inotify.*` 不是 namespaced 的 sysctl → 容器內改不動、`docker --sysctl` 也不允許，只能在主機做。）
+
+**重開機後保留**：DSM → **控制台 → 任務排程器 → 新增 → 觸發的任務 → 開機** → 使用者選 **root**
+→ 自訂指令碼填上面兩行 `sysctl -w …` → 儲存。
+
+**已做的減壓（治標）**：容器內的 VS Code 使用者設定與 repo 的 `.vscode/settings.json` 都加了
+`files.watcherExclude`（`node_modules`、`.git/objects`、`*.db`、`data-v3`…），以及
+`search.followSymlinks: false`；`cline-dev` 的 VS Code server（Desktop 遠端那個）也加了同一組，
+避免兩個容器一起把額度吃光。
 
 ## Cline 對話紀錄：與 Cline Server 共用同一份（2026-09-22 起）
 
@@ -93,8 +131,8 @@ Cline 的歷史存在該 core 的 data dir（`sessions/<id>/*.messages.json` + `
 
 | 誰 | 容器 | data dir（NAS 路徑） |
 |---|---|---|
-| 瀏覽器版 IDE 的 Cline 擴充 | `5151-code-server` | `~/code-server/data/.cline/data`（舊）|
-| Cline Server ← Cline Desktop 遠端連的那台 | `cline-dev` | `~/code-server/workspace/cline-server/home/.cline/data` |
+| 瀏覽器版 IDE 的 Cline 擴充 | `5151-code-server` | ~~`~/code-server/data/.cline/data`~~（舊；2026-09-22 起改用下面那條）|
+| Cline Server ← Cline Desktop 遠端連的那台 | `cline-dev` | `~/code-server/workspace/cline-server/home/.cline/data` ← **兩邊共用這一份** |
 
 **2026-09-22 起改成兩邊共用同一份**（compose 動三件事）：
 
@@ -117,10 +155,10 @@ ls ~/code-server/workspace/cline-server/home/.cline/data/sessions | wc -l
 
 # code-server 的 Terminal（CLI 已持久化安裝在 ~/.npm-global；找不到就重開 Terminal）：
 cline history --limit 5             # 列出共用的歷史
-cline -i -c /workspace/cline-server/repos/5151   # TUI 接續同一份 session
+cline -i -c /workspace/5151         # TUI 接續同一份 session（＝ agent 的 /workspace/repos/5151）
 # ⚠️ CLI 的預設 provider 是 `cline`（走 Cline Credits，餘額 0 會直接 Insufficient balance）；
 #    要用你自己的 DeepSeek key 請明示：
-cline -P deepseek -m deepseek-flash -c /workspace/cline-server/repos/5151 "你的提示詞"
+cline -P deepseek -m deepseek-flash -c /workspace/5151 "你的提示詞"
 ```
 
 ### ⚠️ 注意事項（本次實測踩到的）
@@ -135,18 +173,18 @@ cline -P deepseek -m deepseek-flash -c /workspace/cline-server/repos/5151 "你�
   `~/code-server/data/.cline/data-code-server-archive-20260922-2006`。
 - 容器身分是 **uid 1001**（以前是 1000）：之後要再掛 NAS 目錄，記得 `chown 1001:1001`（或在 DSM 加 ACL），
   否則容器會 `Permission denied`。
-- 回滾：`cp ~/code-server/docker-compose.yml.bak-20260922-clineshare ~/code-server/docker-compose.yml`
-  → `docker exec -u 0 5151-code-server chown -R 1000:1000 /home/coder /workspace/5151`
-  → `cd ~/code-server && docker compose up -d`。
+- 回滾（回到「code-server 用自己那份 clone」的舊架構）：
+  `cp ~/code-server/docker-compose.yml.bak-20260922-workspace ~/code-server/docker-compose.yml`
+  → `docker exec -u 0 5151-code-server chown -R 1000:1000 /home/coder`
+  → `cd ~/code-server && docker compose up -d`
+  （**不要**對 `…/cline-server/repos` 做 chown 回 1000：那份是 cline-server／agent 在用的，owner 必須維持 1001。
+  若要「只退回共用 data dir、保留新工作區」，用 `…bak-20260922-clineshare`。）
 
-### 兩個 `5151` 是**不同的 clone**（很容易搞混）
+### 工作區：現在只有**一份** working tree
 
-| IDE 裡的路徑 | NAS 路徑 | 說明 |
-|---|---|---|
-| `/workspace/5151` | `~/code-server/workspace/5151` | code-server 自己的 clone（2026-09-22 時落後 `master` **57 個 commit**）|
-| `/workspace/cline-server/repos/5151` | `~/code-server/workspace/cline-server/repos/5151` | **agent／Cline Server 實際工作的 clone**（＝ `cline-dev` 容器內的 `/workspace/repos/5151`）|
-
-要跟 agent 用同一份工作區，就在 IDE 開 `/workspace/cline-server/repos/5151`（uid 1001 → 可寫 ✓）。
+`/workspace`（IDE）＝ `~/code-server/workspace/cline-server/repos`（NAS）＝ `/workspace/repos`（agent 容器）。
+原本 code-server 自己那份獨立 clone（曾落後 `master` 57 個 commit）已於 2026-09-22 刪除，
+所以「在瀏覽器改的檔案」與「agent／Desktop 改的檔案」現在是同一棵樹，不會再各改各的。
 
 
 ## 上傳 / 存取檔案（2026-09-20 補：為什麼檔案對話框只看得到容器路徑）
@@ -158,9 +196,9 @@ cline -P deepseek -m deepseek-flash -c /workspace/cline-server/repos/5151 "你�
    （開的是**你電腦**的檔案選擇視窗），或直接把檔案／整個資料夾**拖進 Explorer**。
    檔案會落在你開的那個資料夾底下（例如 `/workspace/5151/…`）。
    ⚠️ **不要**用 `File → Open File…`／`Save As…` 來上傳，那兩個永遠只看得到容器內的路徑。
-2. **檔案已經在 NAS 上**：丟進 NAS 的 `~/code-server/workspace/`（Synology File Station、
-   SMB 網路磁碟、或 `scp` 都行）→ IDE 內立刻看到（同一個資料夾）。反向也一樣：IDE 裡寫的檔案
-   就躺在 NAS 的那個路徑上。
+2. **檔案已經在 NAS 上**：丟進 NAS 的 `~/code-server/workspace/cline-server/repos/`（Synology File Station、
+   SMB 網路磁碟、或 `scp` 都行）→ IDE 內立刻看到（＝ `/workspace/…`，同一個資料夾）。反向也一樣：
+   IDE 裡寫的檔案就躺在 NAS 的那個路徑上。
 3. **IDE 內建終端機**：`curl -O`、`wget`、`git clone` 都可以（容器網路是通的）。
 
 ### 把「你電腦的檔案」附給 Cline（`+` 只會看到容器）
@@ -187,10 +225,13 @@ Cline 輸入框左下角的 `+`（Add Files & Images）用的是 **VS Code 的�
 
 **結論**：非圖片檔案要**先讓檔案進到容器看得到的地方**，再讓 Cline 用路徑讀它：
 
-1. **上傳（最直覺）**：Explorer 對 `/workspace/_uploads/` 或 `/nas-inbox/` 按右鍵 → **Upload…**
+1. **上傳（最直覺）**：Explorer 對 `/nas-inbox/` 按右鍵 → **Upload…**
    （VS Code 內建指令 `explorer.upload`，code-server 4.138.0 的 web workbench 已確認有）→
    開的是**你電腦**的檔案視窗。也可以直接把檔案**拖進 Explorer**（同功能的 drop 版）；上游有已知
    bug [code-server#7886](https://github.com/coder/code-server/issues/7886)，拖失敗就改用 **Upload…**。
+   （舊的 `/workspace/_uploads/` 已於 2026-09-22 移除：工作區改成 agent 的 repos 根目錄後，
+   上傳落到 repo 裡會污染版本控制；舊檔已搬去 NAS `~/inbox/code-server-old-_uploads/`。
+   現在要「先落地再引用」就用 `/nas-inbox/` ✓）
 2. **從 NAS 丟（不用上傳，推薦）**：檔案丟進 NAS 的 `~/inbox`（Synology File Station／SMB 網路磁碟／
    `scp` 皆可）→ IDE 內就是 `/nas-inbox/<檔名>`。
 3. **在對話裡引用**：按 `+` 選剛上傳／剛丟進去的檔，或直接把路徑打在對話裡、用 `@`（工作區檔案）。
@@ -200,28 +241,27 @@ Cline 輸入框左下角的 `+`（Add Files & Images）用的是 **VS Code 的�
 > 反向（Cline 產生的檔案要拿回你電腦）：Explorer 對檔案右鍵 → **Download…**。
 > 圖片是 base64 進 context，太大的圖會吃 token —— 大圖建議先存成檔案、用路徑引用。
 
-### 容器內看得到哪些掛載（2026-09-20 現況）
-
-
+### 容器內看得到哪些掛載（2026-09-22 現況）
 
 | 容器內路徑 | NAS 實際位置 | 權限 | 用途 |
 |---|---|---|---|
-| `/workspace` | `~/code-server/workspace` | **rw** | 專案區（18 個 repo）＝上傳的預設落點 |
+| `/workspace` | `~/code-server/workspace/cline-server/repos` | **rw** | 專案區（18 個 repo，＝ Cline Server／agent 的同一份 working tree）|
 | `/nas-inbox` | `~/inbox` | **rw** | **上傳到 NAS 的落地區**（IDE 寫、NAS 端看／搬）|
 | `/nas-docker` | `/volume1/docker` | **ro** | 各容器 compose／.env（5151-ops、ecpapi、mbriapi…）|
 | `/private` | `~/code-server/private` | **ro** | `INFRA-CREDENTIALS.md` 等憑證 |
 | `/home/coder` | `~/code-server/data` | **rw** | code-server 自己的設定／已安裝擴充 |
+| `/home/coder/.cline/data` | `…/cline-server/home/.cline/data` | **rw** | Cline 的 session／settings／db（與 cline-dev 共用）|
 
 ### ⚠️ 為什麼「家目錄 / 整個 /volume1」不能直接掛
 
 - Synology 的 **ACL 會蓋掉 Unix 777**：`/volume1/homes/tori`、`~/code-server` 顯示為 `drwxrwxrwx+`，
-  但 ACL 只列 `user:tori` 與 `group:administrators`、**沒有 others** → 容器裡的 `coder`（uid 1000）
-  連 `ls` 都被拒（實測 `Permission denied`）。
+  但 ACL 只列 `user:tori` 與 `group:administrators`、**沒有 others** → 容器身分（2026-09-22 起為
+  uid **1001**，之前是 1000）連 `ls` 都被拒（實測 `Permission denied`）。
 - **bind mount 會繞過上層目錄的 ACL，但不會繞過被掛那一個目錄自己的 ACL** —— 所以
-  `~/code-server/workspace`（無 ACL、owner 1000）能掛，`~/` 或 `~/code-server` 不行。
+  `~/code-server/workspace/cline-server/repos`（無 ACL、owner 1001）能掛，`~/` 或 `~/code-server` 不行。
 - 也**不要**掛整個 `/volume1`：VS Code 會對它建 file watcher／索引，11TB 的共享會把 NAS 的 CPU
-  與 inotify 額度吃光（`files.watcherExclude` 只擋搜尋、不擋 watcher）。
-- 要再開放其他路徑有兩條：**① 用 root 建目錄 ＋ `chown 1000:users` ＋ `chmod 2775`**
+  與 inotify 額度吃光（`files.watcherExclude` 能少看很多目錄，但主機的 inotify 上限才是關鍵，見上方 FAQ）。
+- 要再開放其他路徑有兩條：**① 用 root 建目錄 ＋ `chown 1001:users` ＋ `chmod 2775`**
   （`~/inbox` 就是這樣做的：容器可寫、`tori` 也能刪／搬，因為容器身分的補充群組就有 `users`）；
   **② 在 DSM 加 ACL** 給容器用的 uid。掛其他共享（`MOVIE`、`NAKIVO_Repository`…）建議加 `:ro`。
 
@@ -283,4 +323,5 @@ Access 會在最前面多一層「只有你的 email 能進來」的閘門（免
   Applications → 加 `code.reversalplay.me`，用 email OTP 或 Google 登入）多一層 ✓
 - 生命週期：`cd ~/code-server && docker compose up -d`（密碼由 `.env` 的 `PASSWORD` 提供；更新：`docker compose pull && up -d`）
 - 日誌：`docker logs --tail 50 5151-code-server`
-- 資料備份：`~/code-server/data`（設定/擴充）＋ `~/code-server/workspace`（程式碼；程式碼也可從 Gitea 重拉）
+- 資料備份：`~/code-server/data`（設定/擴充）＋ `~/code-server/workspace/cline-server/`（程式碼＝agent 的 repos；
+  程式碼本身也可從 GitHub/Gitea 重拉，但 **Cline 的對話紀錄（`home/.cline/data`）只有這裡有，要備**）
