@@ -14,18 +14,15 @@
         ② `setListingDetail`／`persistHpListingFields`／`setCachedMrt`／`setCommunityCache`／
         `upsertListingPrep`；live parity `crawler-reads-parity.test.js` 8/8、
         `listing-fields-parity.test.js` 6/6，證據 `v3/evidence/pg-loop-parity-20260921/`）
-      - **通知／CRM 佇列的讀寫（③）** ⛔ **仍阻塞切換** —— **通知的部分已完成並有 live 實證**（2026-09-22）：
-        佇列的**讀＋寫**（`notifyQueueAsync.js` ＋ `repository/notifyQueue.js`，live
-        `notify-queue-parity.test.js` 5/5）與**填佇列**的 `enqueueListingEvent()` 決策鏈
-        （`notifyEnqueueAsync.js` ＋ `repository/notifyEnqueue.js`，live
-        `notify-enqueue-parity.test.js` **5/5、0 skip**，證據 `v3/evidence/pg-notify-enqueue-20260921/`）。
-        同一場把 11 個 live 檔一起跑：**61/61**（含 standby 可見性），切換前的現況快照已取得。
-        **仍未移植的是同一項裡的 CRM outbox**（`v3/src/crmOutbox.js`，8 條同步語句；呼叫點是 `crm.js` 的
-        聯絡人快照與 `crmDelivery.js` 的 claim／sent／failure／stats）→ PG 模式下 CRM outbox 會寫進 SQLite、
-        而 CRM 介面讀 PG。
-        **這一項（CRM outbox）沒做完不要切換。**
-        （佇列的讀＋寫已於 2026-09-21 晚間部署到正式站，但 `DB_DRIVER` 仍 `unset`＝sqlite，行為不變；
-        證據 `v3/evidence/pg-notify-queue-20260921/README.md` 的「追加」段。）
+      - **通知／CRM 佇列的讀寫（③）** ✅ **通知的部分已完成**（2026-09-22，含 shadow live）：
+        佇列的**讀＋寫**（`notifyQueueAsync.js` ＋ `repository/notifyQueue.js`，live `notify-queue-parity.test.js` 5/5）
+        與**填佇列**的 `enqueueListingEvent()` 決策鏈（`notifyEnqueueAsync.js` ＋ `repository/notifyEnqueue.js`，
+        live `notify-enqueue-parity.test.js` **5/5、0 skip**，證據 `v3/evidence/pg-notify-enqueue-20260921/`）。
+        同一場把 11 個 live 檔一起跑：**61/61**（含 standby 可見性）。
+        **CRM outbox 是已記錄的 SQLite 孤島（單容器階段可接受）**：`crm_outbox` 只被 `crmOutbox.js` 碰，
+        生產者（`crm.js`，同步）與消費者（`crmDelivery.js`）共用同一個 handle（`opsDeliveryDb()` 就是 `db`），
+        所以是「同一個 store 進出」而非「寫 A 讀 B」——不影響單容器切換。
+        **但多節點 HA（兩個 web 共用 PG）之前必須移植**，見步驟 7。
       - **`enqueueSimilaritySafe`（④，pHash 佇列）** ⛔ 尚未完成 —— PG 模式下爬進來的物件不會進
         相似度佇列（功能缺口，不會寫壞資料）。
 - [ ] shadow 叢集健康：`sh deploy/shadow-ha/drill.sh preflight`（primary/standby 角色、複寫延遲）。
@@ -118,4 +115,12 @@ PG_TEST_URL=... PG_TEST_STANDBY_URL=... node --test \
 兩個 web 節點（`5151-web-A`、`5151-web-B`）都改讀同一套 PG 之後，才能把 Cloudflare Tunnel 的
 ingress 指到 `5151-haproxy` 的 `web` frontend（`POSTGRES_SWITCH_PLAN.md` §5）。SQLite 不能跨主機共用，
 在那之前切 HAProxy 只會服務到空的 shadow 資料庫。
+
+**HA 前必須先移植的 SQLite 孤島**（單容器切換可以接受、多節點不行——A 節點寫、B 節點的迴圈看不到）：
+
+- **CRM 領域**：`crm.js`（同步 CRUD）＋ `crmDelivery.js` ＋ `crmOutbox.js`（`crm_outbox` 只被它碰；
+  生產者與消費者共用 `opsDeliveryDb()`＝`db`）。移植時 `crmOutbox` 的 5 個操作
+  （enqueue／claim／markSent／markFailure／stats）要一起走 driver-aware，`res.changes` 改判 `rowCount`。
+- **背景工作佇列**：`jobQueue.js`／`jobWorker.js`／`geoQueue.js`／`listingEnrichQueue.js`
+  （同一個道理：佇列與 worker 都在同一台時自洽，多節點就會互看不到）。
 

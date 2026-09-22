@@ -188,17 +188,21 @@
           （含 standby 可見性）。過程中修掉兩個**測試**問題（離線層把列留在 fixture 汙染 live 鏡射、
           比對對排序敏感），production 程式本身沒有改動；詳見
           `v3/evidence/pg-notify-enqueue-20260921/README.md` 的「只有 live 才照出來的兩個測試修正」。
-        - **③ 仍未完成的部分：CRM outbox**（`v3/src/crmOutbox.js`，104 行、8 條同步語句；
-          呼叫點 `crm.js` 的聯絡人快照與 `crmDelivery.js` 的 claim／sent／failure／stats）。
-          PG 模式下它會寫進 SQLite、而 CRM 介面讀 PG → 切換前必須移植（語句單純，但
-          `res.changes` 是 SQLite 專屬，PG 要用 rowCount）。
+        - **③ 的 CRM outbox：判定為「單容器可接受的 SQLite 孤島」，HA 前必須移植**（2026-09-22）。
+          證據：`crm_outbox` 只被 `v3/src/crmOutbox.js` 碰；生產者 `crm.js`（8 個同步呼叫點）與消費者
+          `crmDelivery.js` 共用同一個 handle（`db.js` 的 `opsDeliveryDb()` 就是 `return db;`），
+          所以是「同一個 store 進出」，而不是通知佇列那種「寫 A 讀 B」→ 不影響單容器切換。
+          只換一半（例如只把迴圈改讀 PG）反而會讓它永遠撈不到 → 要就整條連 `crm.js`（同步 CRUD）
+          與 3 條 admin 路由一起 async 化，那是獨立的一包。
+          正式掛點：`docs/runbooks/postgres-cutover-bootstrap.md` 步驟 7（HA 前要移植的孤島清單，
+          同類還有 `jobQueue.js`／`jobWorker.js`／`geoQueue.js`／`listingEnrichQueue.js`）。
         - 一個刻意差異（已記錄在 `repository/notifyEnqueue.js` 註解）：`notifyJobSnapshotFor()` 是 SQLite
           行程內快照（爬行開始時 `watcher.bindNotifyJobSnapshots()` 從 SQLite 填），PG 路徑直接讀 active
           profile 那一列 —— 差異只在同一輪爬行中會員改了搜尋條件時可見，屆時 PG 的答案比凍結快照新。
      ④ **`enqueueSimilaritySafe`（pHash 佇列）**（§2.3 尾）。
      建議 ①＋② 同批（掃描與它對應的寫入）、③ 一批、④ 獨立；全部完成才切換。
-     **①＋② 已於 2026-09-21 完成並以 shadow PG 實測（14/14）；③ 的通知部分同日完成、09-22 補上
-     shadow live（5/5，全 live 套件 61/61）；③ 的 CRM outbox 與 ④ 未動。**
+     **①＋② 已於 2026-09-21 完成並以 shadow PG 實測（14/14）；③（通知）09-22 完成並補上 shadow live
+     （5/5；全 live 套件 61/61），CRM outbox 判定為單容器可接受、HA 前移植；④ 未動（最後一個阻塞項）。**
    - **遷移工具**：identity sequence 的 re-sync 已納入 `importStore()`
      （PostgreSQL 不會為帶明確 id 的 INSERT 推進 identity sequence，漏了會在第一次自動編號時
      撞主鍵；案例見 `v3/evidence/pg-import-20260921/`）。
