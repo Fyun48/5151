@@ -10,5 +10,34 @@
   // 這個 repo 沒有 formatter/linter 設定，避免存檔被意外重排。
   "editor.formatOnSave": false,
   // code-server 以 --disable-workspace-trust 啟動；這裡再保險一次，讓擴充套件（Cline）直接可用。
-  "security.workspace.trust.enabled": false
+  "security.workspace.trust.enabled": false,
+  // 2026-09-22：NAS（Synology，kernel 4.4）的 inotify 額度很小
+  //   （fs.inotify.max_user_watches=8192、max_user_instances=128）→ 專案有 node_modules 時
+  //   VS Code 會跳「Unable to watch for file changes」。這裡先把大量/無關檔案排除在 watcher 外；
+  //   真正的根因是主機 sysctl，需在 DSM 以 root 調高（見 deploy/code-server/README.md）。
+  "files.watcherExclude": {
+    "**/.git/objects/**": true,
+    "**/.git/subtree-cache/**": true,
+    "**/node_modules/**": true,
+    "**/.next/**": true,
+    "**/dist/**": true,
+    "**/build/**": true,
+    "**/coverage/**": true,
+    "**/.cache/**": true,
+    "**/*.db": true,
+    "**/*.db-wal": true,
+    "**/*.db-shm": true,
+    "**/data-v3/**": true,
+    "**/*.log": true
+  },
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/.git": true,
+    "**/.next": true,
+    "**/dist": true,
+    "**/build": true,
+    "**/*.db": true,
+    "**/data-v3": true
+  },
+  "search.followSymlinks": false
 }

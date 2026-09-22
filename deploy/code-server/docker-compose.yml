@@ -10,6 +10,32 @@ services:
     container_name: 5151-code-server
     image: ${CODE_SERVER_IMAGE:-codercom/code-server:latest}
     restart: unless-stopped
+    # 2026-09-22：讓瀏覽器版 IDE 的 Cline 與 Cline Server 容器（`cline-dev`，uid 1001）**共用同一份 Cline 資料**，
+    # 這樣「Cline Desktop 連 cline-server 開的 session」在 code-server 的 Cline 面板也看得到（反之亦然）。
+    #   ├─ user 1001:1001 ← 與 cline-dev 的 `cline` 同 uid。**必須同 uid**：Cline core 以 0666 & ~umask 建檔，
+    #   │                    不同 uid 只能靠群組/ACL 通，new file 會有一邊永遠寫不進去（實測過會壞）。
+    #   ├─ group_add 100   ← 保留 `users` 群組 → 仍可寫 `~/inbox`（/nas-inbox 是 2775 root:users）。
+    #   ├─ CLINE_DATA_DIR  ← 官方環境變數（Base data directory for sessions/settings/teams/hooks）；
+    #   │                    預設就是 `~/.cline/data`，寫出來讓容器內終端機的 `cline` CLI 也指到同一份。
+    #   ├─ 下面 volumes 多掛 cline-server 的 `.cline/data`（session／settings／db）與**家目錄** `/home/cline`。
+    #   │  為什麼連家目錄也要掛進同一個路徑：共用資料裡有 cline-server 視角的絕對路徑
+    #   │  （session 的 cwd／workspace_root、`cline_mcp_settings.json` 的 chrome／figma 路徑），
+    #   │  不掛就會跳「Starting directory (cwd) "/home/cline" does not exist.」→ 詳見 README 同名段。
+    # 注意：兩邊 Cline 版本要一致（目前 core/extension 皆 4.1.19）；升一邊就要升另一邊，避免 schema migration 互打。
+    user: "1001:1001"
+    group_add:
+      - "100"
+    environment:
+      CLINE_DATA_DIR: /home/coder/.cline/data
+      # 2026-09-22：code-server 官方 image entrypoint（/usr/bin/entrypoint.sh）會在啟動 code-server
+      #   **之前** 執行 $ENTRYPOINTD 底下所有可執行檔
+      #     find "$ENTRYPOINTD" -type f -executable -print -exec {} \;
+      #   （code-server #5177 的官方 hook），之後才 `exec dumb-init /usr/bin/code-server "$@"`。
+      #   用它放 clipboard fail-open 的 prestart patch：container 一起來就已經補好，
+      #   不必等使用者開 Terminal → 消除「先開瀏覽器、還沒開 Terminal」的 race window。
+      #   ⚠️ 這個目錄必須落在 `./data:/home/coder` 持久化掛載內，否則重建容器就消失。
+      #   內容：entrypoint.d/50-clipboard-failopen.sh（idempotent、pattern 不符就只記 warning 不動檔）
+      ENTRYPOINTD: /home/coder/.local/share/code-server/entrypoint.d
     ports:
       - "127.0.0.1:8484:8080"
     env_file:
@@ -32,7 +58,37 @@ services:
     volumes:
       # 設定 / 已安裝擴充套件 / 開啟的工作區都持久化 → 這就是「關掉再打開還在」的關鍵。
       - ./data:/home/coder
-      - ./workspace:/workspace
+      # 2026-09-22：`/workspace` **直接指向 Cline Server 的 repos 根目錄**
+      #   IDE 內 `/workspace/<repo>` ↔ NAS `~/code-server/workspace/cline-server/repos/<repo>`
+      #   ↔ agent 容器（cline-dev）內 `/workspace/repos/<repo>`
+      #   → 跟「Cline Desktop 用 SSH 連 cline-server 工作」看到的是**同一份 working tree**，
+      #     不再是兩份各自落後的 clone（原本 code-server 自己那份 18 個 repo 已於 2026-09-22 刪除，
+      #     `_uploads` 的兩個檔案已移到 NAS `~/inbox/code-server-old-_uploads/`）。
+      - /volume1/homes/tori/code-server/workspace/cline-server/repos:/workspace
+      # Cline Server（cline-dev 容器）的 Cline 資料 = **兩邊唯一的 session 來源**。
+      # 只掛 `data`（settings/sessions/db/hooks），不掛整個 `~/.cline`（`remote/` 是 Desktop helper 專用）。
+      # 副作用：`~/code-server/data/.cline/data` 會被這條覆蓋（原本 code-server 自己的 6 條舊 session
+      # 已備份成 `~/code-server/data/.cline/data-code-server-archive-<timestamp>`，檔案還在，只是不在 UI 清單）。
+      - /volume1/homes/tori/code-server/workspace/cline-server/home/.cline/data:/home/coder/.cline/data
+      # 2026-09-22（共用 session 之後補的）：Cline Server 的**家目錄**用同一個路徑掛進來。
+      #   為什麼需要：共用的 Cline 資料裡到處是「cline-server 視角」的絕對路徑，而 code-server 這邊
+      #   `/home/cline` 不存在。症狀（實測）：
+      #     The terminal process failed to launch: Starting directory (cwd) "/home/cline" does not exist.
+      #   來源（Cline 擴充 log，logs/…/exthost1/output_logging_…/1-Cline.log）：
+      #     [TerminalManager] Looking for terminal in cwd: /home/cline
+      #     → 終端 cwd 取自 session 的 `workspace_root`；共用資料裡的 workspace 就是 cline-server 的家目錄。
+      #   同一類、不掛就一起壞的字串：
+      #     • settings/cline_mcp_settings.json → chrome-devtools MCP 的 `--executablePath
+      #       /home/cline/.local/bin/chrome-no-sandbox`、`LD_LIBRARY_PATH /home/cline/.local/chrome-deps/…`、
+      #       figma 圖片輸出 `/home/cline/.cline/figma-images`
+      #     • db/sessions.db 與 sessions/*/*.json 的 `cwd` / `workspace_root` / `messages_path`
+      #   掛上之後：IDE 內 `/home/cline` ＝ NAS `~/code-server/workspace/cline-server/home`
+      #   ＝ cline-dev 內 `/home/cline`，兩邊真的是同一個家目錄、同一份檔案（跟 `/workspace` 同一個道理）。
+      #   權衡：等於把 agent 的家目錄（含 `.ssh`、`.cline/remote`、`.bashrc`）開給 IDE 容器讀寫。
+      #   同 uid(1001)、同 owner，IDE 有 Cloudflare Access + 密碼，且它本來就讀得到 `/private` 與共用
+      #   Cline 資料（secrets.json 的 API key）。要縮小範圍可只掛工具鏈子目錄：
+      #   `.local`、`.agents`、`.cline/figma-images`、`Documents`（排除 `.ssh`）。
+      - /volume1/homes/tori/code-server/workspace/cline-server/home:/home/cline
       # 唯讀的私有憑證（INFRA-CREDENTIALS.md 等）：**不進 repo**，只有這個容器看得到，
       # 而且以 :ro 掛載（容器內改不動）。IDE 內查法：`cat /private/INFRA-CREDENTIALS.md`。
       - ./private:/private:ro
@@ -42,13 +98,15 @@ services:
       #      會把 NAS CPU 與 inotify 額度吃光（`.vscode` 的 watcherExclude 只擋搜尋、不擋 watcher）。
       #   2. ⚠️ **Synology 的 ACL 會蓋掉 777**：`/volume1/homes/tori`、`~/code-server` 都是
       #      `drwxrwxrwx+`，但 ACL 只列了 `user:tori` 與 `group:administrators`、沒有 others
-      #      → 容器內的 `coder`（uid 1000）連 `ls` 都被拒。**bind mount 會繞過上層目錄的 ACL**，
-      #      但**不會**繞過被掛那一個目錄自己的 ACL —— 所以能掛的只有「沒有 Synology ACL、
-      #      且 owner 是 1000」的目錄（例如 `~/code-server/workspace` 與下面這個 `~/inbox`）。
+      #      → 容器身分（2026-09-22 起是 uid 1001；在那之前是 1000）連 `ls` 都被拒。
+      #      **bind mount 會繞過上層目錄的 ACL**，但**不會**繞過被掛那一個目錄自己的 ACL ——
+      #      所以能掛的只有「沒有 Synology ACL、且 owner 是容器身分（1001）」的目錄
+      #      （例如 `~/code-server/workspace/cline-server/repos`、下面這個 `~/inbox`）。
       #   3. 需要更多 NAS 路徑（例如分享資料夾、或想直接編輯家目錄裡的 ops 腳本）就要另外處理：
-      #      用 root 建目錄＋`chown 1000:1000`（像 `~/inbox`），或在 DSM 加 ACL 給容器用的 uid。
-      #  /nas-inbox  ← /volume1/homes/tori/inbox（2026-09-20 由 root 建立、owner 1000:1000）：
+      #      用 root 建目錄＋`chown 1001:1001`，或在 DSM 加 ACL 給容器用的 uid。
+      #  /nas-inbox  ← /volume1/homes/tori/inbox（2026-09-20 由 root 建立、owner 1000:users 2775）：
       #                IDE 內可直接上傳／新增檔案到 NAS 的落地區。NAS 端就是 `~/inbox`。
+      #                （容器 uid 變成 1001 之後靠 `group_add: 100`（users）維持可寫 ✓）
       #  /nas-docker ← /volume1/docker：各容器的 compose／.env（5151-ops、ecpapi、mbriapi…），
       #                實測可讀、**不可寫**（ACL）→ 標成 `:ro` 讓權限與事實一致。
       - /volume1/homes/tori/inbox:/nas-inbox

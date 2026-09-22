@@ -140,7 +140,42 @@ Host = CF hostname、Port `22`、Auto-login username 同上。
 ## 8. 代理人可代操作範圍
 
 可以：CF API（zones / tunnels / Access apps & policies / service tokens）、`ssh syn-nas` / `ssh casa-nas`
-（讀寫 NAS 上的 compose／容器／日誌）、GitHub Actions `workflow_dispatch`、開 PR／合併（依 owner 規則）。
+（讀寫 NAS 上的 compose／容器／日誌、**操作 Synology 的 docker**：`tori` 在 `docker` 群組，`/usr/local/bin/docker`
+要打全路徑；也能用 `docker exec -u 0` 取得容器 root 來 chown／改容器內檔案）、GitHub Actions `workflow_dispatch`、
+開 PR／合併（依 owner 規則）。
 
-不可代做（需使用者本人）：路由器設定（含關閉埠轉發）、密碼與 token 輪替、在公司/家用電腦上安裝金鑰
-（可提供指令，由使用者執行）、CF 帳號層級的計費或成員設定。
+不可代做（需使用者本人）：路由器設定（含關閉埠轉發）、**Synology 主機層設定**（`tori` 沒有 sudo →
+sysctl／DSM 設定都動不了，例：inotify 上限，見 §9）、密碼與 token 輪替、
+在公司/家用電腦上安裝金鑰（可提供指令，由使用者執行）、CF 帳號層級的計費或成員設定。
+
+## 9. Synology 主機層設定（代理人做不到、需 Owner 執行）
+
+- **`tori` 的權限**：`uid=1026`、群組 `users`(100) / `administrators`(101) / `docker`(65537)。
+  → 可以操作 docker（`docker compose` v2.20.1；`docker` 不在 PATH，要用 `/usr/local/bin/docker`）；
+  **沒有 sudo**（需要密碼）→ 主機 sysctl 與 DSM 設定只能在 GUI／root 下做。
+
+- **inotify 額度（2026-09-22 量測）**：主機只有 `fs.inotify.max_user_watches=8192`、
+  `fs.inotify.max_user_instances=128`（VS Code 建議 524288 / 512）。這是
+  「`Unable to watch for file changes`」的根因（專案有 `node_modules` 時必爆）。
+  這兩個 sysctl **不是 namespaced** → 容器內寫不進去、`docker run --sysctl …` 也被拒
+  （實測 `sysctl 'fs.inotify…' is not allowed`），只能在主機做：
+
+  ```bash
+  # DSM 管理員帳號 ssh 進去後
+  sudo -i
+  sysctl -w fs.inotify.max_user_watches=524288
+  sysctl -w fs.inotify.max_user_instances=1024
+  ```
+
+  永久生效：DSM → 控制台 → 任務排程器 → 新增 → 觸發的任務 → **開機**（使用者 `root`）→ 填上面兩行。
+  ⚠️ `5151-code-server` 與 `cline-dev` 自 2026-09-22 起**同 uid 1001 → 共用同一份 inotify 額度**，更需調高。
+  已先做容器側減壓：兩邊 VS Code 設定都加了 `files.watcherExclude` / `search.followSymlinks: false`。
+
+- **`5151-code-server` ↔ `cline-dev` 自 2026-09-22 起共用同一組路徑**（兩容器皆 **uid 1001**，
+  所以能被同一顆 NAS 目錄接受；詳見 `deploy/code-server/README.md`）：
+  - code-server `/workspace` ＝ `cline-dev` `/workspace/repos` ＝ NAS `~/code-server/workspace/cline-server/repos`
+  - code-server `/home/cline` ＝ `cline-dev` `/home/cline` ＝ NAS `…/cline-server/home`
+  - code-server `/home/coder/.cline/data` ＝ `…/cline-server/home/.cline/data`（Cline session／settings／db 共用一份）
+  → **要再加掛 NAS 目錄時，owner/uid 必須是 1001**（或 DSM 加 ACL），否則新檔會有一邊寫不進去。
+  `/home/cline` 這一條是必要的，不是方便：共用資料裡的 session `cwd`／`workspace_root` 與
+  `cline_mcp_settings.json` 的 chrome／figma 路徑都是 `/home/cline/…`。
