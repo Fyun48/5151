@@ -24,9 +24,9 @@
   讓 `watcher.js` 的 await 化跑過真實流量，並讓正式站 revision 對齊 master。
 - 移植進度：**①七條 `listingsNeeding*` 掃描 ✅、②迴圈欄位寫入 ✅、③通知佇列的讀＋寫 ✅**
   （三者都有 shadow PG live parity）。
-- **③ ✅（通知，含 shadow live 5/5；全 live 套件 61/61）。③ 的 CRM outbox 判定為「單容器可接受的
-  SQLite 孤島」（生產者/消費者同一個 store；HA 前必須移植，見 runbook 步驟 7）。剩下唯一的切換阻塞項
-  是 ④ `enqueueSimilaritySafe`**。
+- **③ ✅（通知，含 shadow live 5/5；全 live 套件 61/61）。③ 的 CRM outbox 與 ④ `enqueueSimilaritySafe`
+  都判定為「單容器可接受的 SQLite 孤島」（同一個 store 進出；④ 還是 opt-in 且正式站未啟用）
+  → 單容器切換已無功能阻塞項**；兩者都要在 HA（或啟用該功能）前移植，掛點在 runbook 步驟 7。
 - 正式站（CasaOS `591-tracker-v3`）跑 `64828a8` 的映像，`DB_DRIVER=unset`（＝sqlite），行為不變。
 
 ## 1. 當天對話歷程（依序）
@@ -165,17 +165,21 @@ node --test v3/test/crawler-reads-parity.test.js v3/test/listing-fields-parity.t
    - 決策本體的形狀：`notifyEnqueueDecision()` 吃「已解析好的輸入」（含三個去重讀取的結果）——
      去重讀取一律是唯讀 SELECT，先解析不會改變結果，所以兩個 driver 可以共用同一支判斷。
 
-### ④ `enqueueSimilaritySafe`（pHash 佇列）
+### ④ `enqueueSimilaritySafe`（pHash／相似度建議／爬蟲洞察）
 
-**症狀**：`persistListing()` 的 PG 分支目前刻意**不呼叫**它（`db.js` 有註解），所以 PG 模式下新爬進來的物件
-不會進 `listing_image_phash`／`listing_similarity_suggestion`／`listing_crawl_insight`。功能缺口，不會寫壞資料。
+**判定（2026-09-22，Owner 確認）**：**已知功能缺口，不阻塞單容器切換**。`persistListing()` 的 PG 分支刻意
+不呼叫它（`db.js` 有註解）→ PG 模式下新物件不會進 `listing_image_phash`／`listing_similarity_suggestion`／
+`listing_crawl_insight`（**不會寫壞資料**）；而這個功能是 **opt-in、預設關閉**（`phash_enabled` 預設 `false`，
+洞察另外要啟用 LLM provider），正式站沒有在用。**要啟用該功能或走到 HA 之前必須移植。**
 
-**難點**：`v3/src/listingSimilarity.js` 的 `enqueueListingSimilarity(db, listing, opts)` 整條鏈都是同步 SQLite 形狀
-（13 處 `db.prepare`，加上 `shouldEnqueueSimilarity`／`isPhashEnabled`／`loadEnabledProvider` 讀 `settings` 與
-`system_provider_configs`，`suggestFromNewHash` 要讀同版本 peer 的 phash，`compareSameHouseWithLlm` 讀 provider 設定）。
-建議：把「指紋列＋候選列」的 upsert 抽成 db.js builder（`listingSimilarityBuildContext()`），
-模組改成 async＋注入 store（跟 ③ 第 2 段同一套模式），先移植 `recordListingPhash`＋`upsertSuggestion`，
-LLM insight（`recordCrawlInsight`）維持 SQLite 並在計畫書標明。
+**移植範圍與難點（給下一包用）**：`v3/src/listingSimilarity.js` **409 行、18 條同步語句**，而且「佇列寫入」與
+「審核 UI」是同一條鏈：`recordListingPhash`／`suggestFromNewHash`／`recordCrawlInsight` 寫入，
+`listSimilaritySuggestions`／`reviewSimilarity`／`getSimilarityAdmin`／`listRecentInsights` 讀取
+（都是**同步**函式、被 admin 路由直接呼叫），另有 `phash_enabled`／`llm_insight_apply_enabled` 兩個 settings
+與 `system_provider_configs`／`listings` 的讀取。只換一半＝寫 PG、UI 讀 SQLite → 建議做法是
+「模組改成 async ＋ 注入 store」（③ 第 2 段同一套模式），並把 admin 路由一起 async 化；
+`compareSameHouseWithLlm`／`extractCrawlInsight` 只是 fetch，driver 無關。
+掛點：`docs/runbooks/postgres-cutover-bootstrap.md` 步驟 7。
 
 ### 切換清單（切換當天照做）
 
@@ -188,8 +192,10 @@ SQLite 檔不動故資料不丟，但切換期間寫進 PG 的資料要人工評
 ## 5. 隔天開工的第一件事
 
 ```bash
-git log --oneline -5                                     # 確認 master 至少有 68bd851
+git log --oneline -5                                     # 確認 master 至少有 ff442be
 cat docs/handoffs/20260921-postgres-cutover-session.md    # 就是本文件
-# 照 §3 起手式跑一次 24/24 確認環境沒變，再從 §4 ④（enqueueSimilaritySafe）開始（③ 已完成，不要重做）。
+# 照 §3 起手式跑一次全部 live（11 檔 61/61）確認環境沒變。
+# 然後：步驟 0 已無功能阻塞項 → 可以跟 Owner 排切換（凍結視窗、步驟 1-4）；
+# 若要先補 ④（相似度／洞察）或 CRM outbox／job queue，見 §4 與 runbook 步驟 7。
 ```
 

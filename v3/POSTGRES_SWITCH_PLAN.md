@@ -199,10 +199,17 @@
         - 一個刻意差異（已記錄在 `repository/notifyEnqueue.js` 註解）：`notifyJobSnapshotFor()` 是 SQLite
           行程內快照（爬行開始時 `watcher.bindNotifyJobSnapshots()` 從 SQLite 填），PG 路徑直接讀 active
           profile 那一列 —— 差異只在同一輪爬行中會員改了搜尋條件時可見，屆時 PG 的答案比凍結快照新。
-     ④ **`enqueueSimilaritySafe`（pHash 佇列）**（§2.3 尾）。
+     ④ **`enqueueSimilaritySafe`（pHash／相似度建議／爬蟲洞察）**：**判定為已知功能缺口，不阻塞單容器切換**
+        （2026-09-22）。PG 模式下 `persistListing()` 刻意跳過它 → 不會寫壞資料，只是新物件不產生指紋／建議／
+        洞察；而這個功能是 **opt-in、預設關閉**（`phash_enabled` 預設 `false`，洞察另外要啟用 LLM provider），
+        **Owner 確認正式站沒有在用**。要啟用該功能或走到 HA 之前必須移植：`listingSimilarity.js`（409 行、
+        18 條同步語句）的「佇列寫入 ＋ 審核 UI（`listSimilaritySuggestions`／`reviewSimilarity`／
+        `getSimilarityAdmin`／`listRecentInsights`）＋ 兩個 settings」是同一條鏈（只換一半＝寫 A 讀 B），
+        UI 那幾個同步函式與 admin 路由要一起 async 化。
      建議 ①＋② 同批（掃描與它對應的寫入）、③ 一批、④ 獨立；全部完成才切換。
      **①＋② 已於 2026-09-21 完成並以 shadow PG 實測（14/14）；③（通知）09-22 完成並補上 shadow live
-     （5/5；全 live 套件 61/61），CRM outbox 判定為單容器可接受、HA 前移植；④ 未動（最後一個阻塞項）。**
+     （5/5；全 live 套件 61/61）。③ 的 CRM outbox 與 ④ 都判定為「單容器可接受的孤島」（④ 還是 opt-in
+     且正式站未啟用）→ 單容器切換已無功能阻塞項；兩者都要在 HA 或啟用該功能前移植。**
    - **遷移工具**：identity sequence 的 re-sync 已納入 `importStore()`
      （PostgreSQL 不會為帶明確 id 的 INSERT 推進 identity sequence，漏了會在第一次自動編號時
      撞主鍵；案例見 `v3/evidence/pg-import-20260921/`）。
