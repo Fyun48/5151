@@ -73,12 +73,22 @@ jobs:
       - name: Verify diagnostic collection safeguards
         run: python3 .github/scripts/test-rakuya-diagnostic.py
 
+      - name: NAS SSH endpoint (Cloudflare Access bridge, falls back to public SSH)
+        id: cf-bridge
+        uses: ./.github/actions/cf-ssh-bridge
+        with:
+          hostname: ssh-casa.reversalplay.me
+          port: "2222"
+          client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          fallback-host: ${{ secrets.NAS_HOST }}
+          fallback-port: ${{ secrets.NAS_PORT }}
       - name: Collect one diagnostic from the running v3 container
         id: collect
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}
-          NAS_HOST: ${{ secrets.NAS_HOST }}
-          NAS_PORT: ${{ secrets.NAS_PORT }}
+          NAS_HOST: ${{ steps.cf-bridge.outputs.host }}
+          NAS_PORT: ${{ steps.cf-bridge.outputs.port }}
           NAS_USER: ${{ secrets.NAS_USER }}
           NAS_SSH_KEY: ${{ secrets.NAS_SSH_KEY }}
         run: |

@@ -72,13 +72,23 @@ jobs:
           python3 .github/scripts/test-production-support.py
           tree_hash="$(node .github/scripts/production-support-check.mjs source-hash v3)"
           printf 'SOURCE_TREE_SHA256=%s\n' "$tree_hash" >> "$GITHUB_ENV"
+      - name: NAS SSH endpoint (Cloudflare Access bridge, falls back to public SSH)
+        id: cf-bridge
+        uses: ./.github/actions/cf-ssh-bridge
+        with:
+          hostname: ssh-casa.reversalplay.me
+          port: "2222"
+          client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          fallback-host: ${{ secrets.NAS_HOST }}
+          fallback-port: ${{ secrets.NAS_PORT }}
       - name: Collect isolated timings and one Rakuya response
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}
           ACCOUNT_HASH: ${{ inputs.account_email_sha256 }}
           INCLUDE_RAKUYA: ${{ inputs.include_rakuya }}
-          NAS_HOST: ${{ secrets.NAS_HOST }}
-          NAS_PORT: ${{ secrets.NAS_PORT }}
+          NAS_HOST: ${{ steps.cf-bridge.outputs.host }}
+          NAS_PORT: ${{ steps.cf-bridge.outputs.port }}
           NAS_USER: ${{ secrets.NAS_USER }}
           NAS_SSH_KEY: ${{ secrets.NAS_SSH_KEY }}
         run: |
