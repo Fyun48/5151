@@ -115,9 +115,10 @@ node --test v3/test/crawler-reads-parity.test.js v3/test/listing-fields-parity.t
 > `casaos-compose.yml`、`docker-compose.override.yml` → `/mnt/Storage1/apps/5151/`），所以**直接改 NAS 上的
 > compose 會在下次部署被蓋掉**。正解是把變數寫進 compose（repo 內、一次性的小 PR）＋把值放 NAS 的 `.env`：
 
-1. **（已完成）** repo 的 `casaos-compose.yml` 已在 `591-tracker-v3` service 加上兩個佔位（**不含密碼**）：
-   `DB_DRIVER: ${DB_DRIVER:-sqlite}` 與 `PG_URL: ${PG_URL:-}`；下一次部署就會帶到 NAS。
-   **沒設 `.env` 時 `DB_DRIVER` 就是 `sqlite` → 行為與現在完全相同**（可以先部署、不必等切換日）。
+1. **（已完成）** `docker-compose.yml`（**deploy 實際用的那份**；`casaos-compose.yml` 只是 manifest）
+   已在 `591-tracker-v3` service 加上兩個佔位（**不含密碼**）：`DB_DRIVER: ${DB_DRIVER:-sqlite}` 與
+   `PG_URL: ${PG_URL:-}`（PR #417；#416 只改到 manifest，切換當天已在 NAS 上手動補上同一份）。
+   **沒設 `.env` 時 `DB_DRIVER` 就是 `sqlite` → 行為與現在完全相同**。
 2. **既有的** NAS 環境檔 `/mnt/Storage1/apps/5151/.env`（**不進版控**，目前只有 `TUNNEL_TOKEN`）**追加**兩行：
    ```
    DB_DRIVER=postgres
@@ -156,10 +157,43 @@ psql "$PG_URL" -c "select client_addr, state, pg_wal_lsn_diff(sent_lsn, replay_l
 - **④ pHash／相似度建議／爬蟲洞察**：opt-in 且正式站未啟用；**啟用該功能或 HA 之前必須移植**。
 - 兩者的掛點與移植範圍都寫在 `docs/runbooks/postgres-cutover-bootstrap.md` 步驟 7。
 
-## 順手的資安觀察（2026-09-22 在 CasaOS 上看到）
+## 選用：把兩台 NAS 的對外暴露收斂（Cloudflare Tunnel／Access ＋ DDoS）
 
-- 該機的 **`fail2ban` 是 `inactive`**（也沒裝 `fail2ban-client`），而 SSH 埠（`54722`）**持續被外部暴力嘗試**
-  （日誌可見 `invalid user php_dev`／`jingjing`／`itakura` 等來自多個來源 IP）。建議：收斂 SSH 暴露面
-  （只允許特定來源／改埠／走 VPN）、啟用 fail2ban 或等效防護、並**輪替 root 密碼**（它已出現在對話記錄裡）。
+> 2026-09-22 實查：公開站**已經**走 Cloudflare Tunnel（`591-tracker-tunnel` 容器）→ HTTP 路徑沒有對外開埠、
+> CF 邊緣的 DDoS 防護已生效、origin IP 不暴露 ✅。**但 SSH 是直接對外開的**（Synology `58722`、CasaOS
+> `54722`），日誌可見持續暴力嘗試；CasaOS 的 `fail2ban` 是 **inactive**。
+
+CF Proxy（橘雲）只代理 **HTTP/HTTPS**，SSH 這種純 TCP 要用下列之一：
+
+| 方案 | 成本 | 效果 |
+|---|---|---|
+| **Cloudflare Tunnel ＋ Zero Trust Access（推薦）** | 免費 | `cloudflared` 由 NAS 反向連出，入口變成 `ssh-<host>.reversalplay.me`，**先過 Access 驗身分**才轉到 22 → 路由器上的 58722／54722 可以直接關掉 |
+| CF Spectrum | 付費 | 純 TCP 代理（無 Access 身分層） |
+| Tailscale／WireGuard VPN | 免費 | 完全不下放任何公網埠（最乾淨，但要多裝 client） |
+
+**建議做（兩台一起）**
+
+1. Zero Trust → Access → Applications 建一個 **SSH** 應用，policy 只允許你的 email（OTP）或 service token。
+2. 每台 NAS 跑一個 cloudflared tunnel（Synology 用 ContainerManager、CasaOS 用 docker），
+   公開主機名 → service `ssh://localhost:22`（Synology 對外的 `58722` 只是 router 轉發）。
+   client 端用：
+   ```
+   # ~/.ssh/config
+   Host syn-nas
+     HostName ssh-tori.reversalplay.me
+     User tori
+     ProxyCommand cloudflared access ssh --hostname %h
+   ```
+3. **確認用 tunnel 登得進去之後**，才把路由器的 `58722`／`54722` 轉發**關掉**（順序不能顛倒，
+   否則會把自己鎖在外面；回復＝把轉發加回來）。
+4. 應用層再加一層：CF `Rate limiting rules`（`/api/login`、`/api/register` 每 IP 每分鐘 N 次）＋ WAF managed
+   rules；`SSL/TLS` 設 `Full (strict)`。
+5. 就算有 tunnel 仍建議：啟用 `fail2ban`（CasaOS 目前 inactive）、`PasswordAuthentication no`（改金鑰）、
+   **輪替已在對話中出現過的密碼**。
+
+**我能代做 vs 需要你**：我可以檢查兩台 sshd 設定（`PermitRootLogin`／`PasswordAuthentication`）、驗證 CF 是否
+proxied（回應標頭）、寫好 client 設定與照抄步驟；**建 tunnel＋Access policy 與關閉 router 轉發需要你的
+Cloudflare 帳號／路由器**。
+
 
 

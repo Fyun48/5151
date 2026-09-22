@@ -15,13 +15,14 @@
 
 ## 0. 一句話現況
 
-- **已部署的程式版本 = `64828a8`**（image digest
-  `sha256:0f758bd6eab542429f68f16bd920107fe92abae781945e5b2a705b7ebef8af3e`、deploy run `35606393475`）＝
-  ③ 的佇列讀寫（`4752b51`／PR #405）那一包；`64828a8` 之後的 commit 全部只是文件（#406 交接文件、
-  #407 部署紀錄）→ **master 上最新的程式碼就是 `64828a8`**。
-  （2026-09-21 晚間部署；證據見 `v3/evidence/pg-notify-queue-20260921/README.md` 的「追加」段。）
-  **`DB_DRIVER` 仍 `unset`（＝sqlite），所以會員行為不變**；這次部署的目的是先在 sqlite 模式
-  讓 `watcher.js` 的 await 化跑過真實流量，並讓正式站 revision 對齊 master。
+- **正式站已切到 PostgreSQL（2026-09-22）**：部署 `a5f6ba0`（digest
+  `sha256:9a50251fb06cb1318f427a70356304bced4a075b8cbd42213ad604325a6d083c`、deploy run `35692135894`）
+  ＋容器 env `DB_DRIVER=postgres`、`PG_URL=…@192.168.0.140:25433/5151_shadow`。
+  流程與數據：凍結（05:49:57Z）→ 匯入 **2,017,228 列／285s** → 7 條 hot-path 索引 → 切站 → 驗證
+  （`listings=115,618`；`v3.db` 停在凍結時刻未被寫入）；步驟見
+  `docs/runbooks/postgres-cutover-day-checklist.md`。
+  **回復**＝NAS `/mnt/Storage1/apps/5151/.env` 把 `DB_DRIVER` 改回 `sqlite` ＋重建容器
+  （回復點：image `sha256:0f758bd6…`／備份 `predeploy-20260922-054731`）。
 - 移植進度：**①七條 `listingsNeeding*` 掃描 ✅、②迴圈欄位寫入 ✅、③通知佇列的讀＋寫 ✅**
   （三者都有 shadow PG live parity）。
 - **③ ✅（通知，含 shadow live 5/5；全 live 套件 61/61）。③ 的 CRM outbox 與 ④ `enqueueSimilaritySafe`
