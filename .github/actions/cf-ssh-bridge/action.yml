@@ -26,6 +26,14 @@ inputs:
     description: Public SSH port used only when the bridge cannot be established
     required: false
     default: "22"
+  ssh-user:
+    description: Optional SSH user for the end-to-end smoke test
+    required: false
+    default: ""
+  ssh-key:
+    description: Optional SSH private key for the end-to-end smoke test
+    required: false
+    default: ""
   cloudflared-url:
     description: Download URL for the cloudflared linux-amd64 binary
     required: false
@@ -62,6 +70,8 @@ runs:
         CF_URL: ${{ inputs.cloudflared-url }}
         CF_FALLBACK_HOST: ${{ inputs.fallback-host }}
         CF_FALLBACK_PORT: ${{ inputs.fallback-port }}
+        CF_SSH_USER: ${{ inputs.ssh-user }}
+        CF_SSH_KEY: ${{ inputs.ssh-key }}
       run: |
         set -uo pipefail
 
@@ -93,6 +103,7 @@ runs:
         # Bind on all interfaces: container-based actions reach the runner through the
         # Docker bridge gateway, not through loopback.
         nohup cloudflared access tcp \
+          --protocol http2 \
           --hostname "$CF_HOST" \
           --service-token-id "$CF_ID" \
           --service-token-secret "$CF_SECRET" \
@@ -110,6 +121,28 @@ runs:
         done
 
         if [ "$ready" = 1 ]; then
+          # A listening socket is not proof that the data path works: probe end to end
+          # with a bounded SSH command so a stalled tunnel falls back instead of hanging.
+          if [ -n "${CF_SSH_USER:-}" ] && [ -n "${CF_SSH_KEY:-}" ]; then
+            keyfile="$(mktemp)"
+            printf '%s\n' "$CF_SSH_KEY" > "$keyfile"
+            chmod 600 "$keyfile"
+            if timeout 90 ssh -p "$CF_PORT" -i "$keyfile" \
+                 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ConnectTimeout=20 \
+                 "${CF_SSH_USER}@127.0.0.1" 'echo bridge-ssh-ok' > /tmp/cf-ssh-smoke.log 2>&1 \
+               && grep -q bridge-ssh-ok /tmp/cf-ssh-smoke.log; then
+              echo "cf-ssh-bridge: SSH smoke test OK (${CF_SSH_USER}@127.0.0.1:${CF_PORT})"
+            else
+              echo "cf-ssh-bridge: smoke test output follows"; tail -5 /tmp/cf-ssh-smoke.log || true
+              rm -f "$keyfile"
+              fallback "bridge SSH smoke test failed or timed out"
+            fi
+            rm -f "$keyfile"
+          else
+            echo "cf-ssh-bridge: smoke test skipped (ssh-user/ssh-key not provided)"
+          fi
+
           echo "cf-ssh-bridge: ${CF_HOST} -> 127.0.0.1:${CF_PORT} / docker ${DOCKER_GW}:${CF_PORT} ready"
           echo "mode=cloudflare" >> "$GITHUB_OUTPUT"
           echo "host=127.0.0.1" >> "$GITHUB_OUTPUT"
