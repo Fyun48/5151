@@ -157,7 +157,7 @@ jobs:
         id: cf-bridge
         uses: ./.github/actions/cf-ssh-bridge
         with:
-          hostname: ssh-tori-ci.reversalplay.me
+          hostname: ssh-tori.reversalplay.me
           port: "2223"
           client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
