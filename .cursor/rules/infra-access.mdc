@@ -18,8 +18,10 @@ alwaysApply: true
      `ssh-casa.reversalplay.me`），設定見 runbook §2.2；**不要再要求每日 OTP**。
 3. **connector 容器必須用 host network，ingress 只能寫區網 IP**。寫 `localhost` 會連到容器自己 →
    使用者會看到「Remote side unexpectedly closed network connection」（2026-09-22 已踩）。
-4. **公網 SSH 埠（`54722` / `58722`）不得先關**：`secrets.NAS_*` 與 `secrets.OPS_SYNOLOGY_*`
-   仍被 12 條 workflow 使用。先改走 CF（runbook §6）並實跑三條部署 workflow 驗證，才可請使用者關閉轉發。
+4. **公網 SSH 埠**：CasaOS `54722` **已於 2026-09-22 關閉** ✅（自動化已走 Cloudflare 並實測通過）。
+   Synology `58722` **仍開啟** ⚠️，因為本帳號方案只允許 1 個 `type: ssh` Access 應用（名額已給
+   `ssh-casa-ci`），其兩條 ops workflow 仍走公網。**不要再為 Synology 建立第二個 `type: ssh` 應用**
+   （會回 `domain not included in destinations`），也不要為了關 58722 而動到 `ssh-casa-ci` 名額。
 5. **機密不得進版控**：NAS 密碼、SSH 私鑰、CF API token、CF service token secret、PG 密碼一律不寫入
    repo／commit message／PR 描述。存放位置見 runbook §5。
 6. **一次性口令退場順序**：先把金鑰裝到使用者**每一台**電腦並實測免密碼登入，才可關閉密碼登入；

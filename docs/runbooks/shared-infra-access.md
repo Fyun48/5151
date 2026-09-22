@@ -32,13 +32,17 @@ ssh casa-nas     # root@192.168.0.140:54722
 | Synology | `ssh-tori.reversalplay.me` | `8757c57f-cd70-4f5c-81c9-d3b6ba3f49f7` | `cf-ssh-tori` | `ssh://192.168.0.220:58722` |
 | CasaOS | `ssh-casa.reversalplay.me` | `771768cb-a153-41a9-8477-36a97ea09132` | `cf-ssh-casa` | `ssh://192.168.0.140:54722` |
 
-Access 應用：`ssh-tori`、`ssh-casa`（皆 self-hosted），policy 名 `email+token` =
-**email `acefengyun@gmail.com`**（會寄 OTP，24h）**OR service token**。
+Access 應用：
+- `ssh-casa-ci`（**`type: ssh` 基礎設施應用**）＝ `ssh-casa-ci.reversalplay.me` → **唯一支援 service token 的端點**（CI 與免 OTP 的 PuTTY 都用它）。
+- `ssh-casa` / `ssh-tori`（`self_hosted`）＝ 原始 hostname，**只支援 email OTP**（`self_hosted` 應用不接受 service token，2026-09-22 實測：cloudflared 仍要求瀏覽器登入）。
+- 政策：每個應用都有 `email`（allow，`acefengyun@gmail.com`）＋ `service-auth`（`non_identity`，綁 service token）。
+- ⚠️ 方案限制：**只能有 1 個 `type: ssh` 應用**，所以 Synology 目前沒有 token 端點。
 
-Service token（帳號層級，兩台共用同一把）：
-- 名稱 `nas-ssh-putty`，**Client ID** `9881d66a-3598-402b-ae38-3330d71ce61f`，效期至 2027-09-22。
-- **Client Secret 不寫進 repo**：存在使用者的密碼管理器（需要時由 Zero Trust → Access → Service Auth 重設）。
-- 兩個應用的 policy 都已 include 這把 token → 任一台都能用同一組 ID/Secret 免 OTP 登入。
+Service token（帳號層級）：
+- 名稱 `nas-ssh-putty-2`，**Client ID** `0bc1b387-b1f5-4b44-b8eb-91f868eb870d`，效期至 2027-09-22。
+- **Client Secret 不寫進 repo**：存使用者的密碼管理器（要換就到 Zero Trust → Access → Service Auth 重建）。
+- 舊 token `9881d66a-…`（nas-ssh-putty）已從政策移除，可在 Zero Trust 手動刪除。
+
 
 **方法 A（建議）本機轉發**：開一個 cmd 保持開著
 ```cmd
@@ -88,20 +92,16 @@ Host = CF hostname、Port `22`、Auto-login username 同上。
 | PG 密碼 | `~/.config/5151-pg.env`（代理人）、CasaOS `/root/pgtest/pg.env`（**臨時檔，建議刪除**） |
 | GitHub Actions | `secrets.NAS_HOST/PORT/USER`、`secrets.OPS_SYNOLOGY_*`、SSH 私鑰 |
 
-## 6. 待辦：把自動化改走 Cloudflare，然後關掉公網 SSH 埠
+## 6. 公網 SSH 埠現況（2026-09-22 更新）
 
-⚠️ **在下列自動化改走 CF 之前，不要關路由器的 `54722` / `58722` 轉發**（會直接壞掉）：
-
-| 公網埠 | 依賴 | 影響 |
+| 公網埠 | 狀態 | 說明 |
 |---|---|---|
-| CasaOS `54722` | `secrets.NAS_HOST` / `NAS_PORT` | 11 條 workflow：`deploy-v3`、`production-predeploy-check`、`build-production-image` 的 NAS 步驟、`deploy-ops`、`activate-rental-marketplace-*`、`migrate-v3-data-volume`、`prepare-rental-marketplace-stage1-fixtures`、`production-rakuya-diagnostic`、`production-support-check`、`production-uat-stages-functional` |
-| Synology `58722` | `secrets.OPS_SYNOLOGY_HOST` / `OPS_SYNOLOGY_PORT` | `deploy-ops-synology.yml` |
+| CasaOS `54722` | **已關閉** ✅ | 12 條 CasaOS 目標 workflow 已改走 Cloudflare；關埠後實跑 `production-predeploy-check` **SUCCESS**（log 顯示 `SSH smoke test OK` ＋ `ssh-casa-ci.reversalplay.me`，無回退）。回復方式＝把路由器轉發加回來。 |
+| Synology `58722` | **仍開啟** ⚠️ | `deploy-ops-synology.yml`／`predeploy-ops-synology.yml` 仍需要它：本帳號方案**只允許 1 個 `type: ssh`（Infrastructure）Access 應用**，該名額已用於 `ssh-casa-ci`，`ssh-tori*` 建立 `type: ssh` 應用一律回 `access.api.error.invalid_request: domain not included in destinations`。等之後升級方案或改用其他機制再關。 |
 
-改造方式（已規劃、尚未執行）：workflow 內先跑
-`cloudflared access tcp --hostname ssh-casa.reversalplay.me --service-token-id/secret --url 127.0.0.1:2222`
-（背景），再把 `host: 127.0.0.1`、`port: 2222`；GitHub 端新增 `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET`。
-Synology 那條同理（`ssh-tori` / `2223`）。
-驗證方式：實跑一次 `build → predeploy → deploy` 三條 workflow；全綠後才關埠（回復 ＝ 把轉發加回來）。
+關埠後仍正常：使用者 PuTTY（走 CF tunnel，NAS 對外主動連線，與路由器轉發無關）、代理人區網金鑰、PG `25433`、公開站與 OPS Console。
+唯一失效的是 CI 的「公網回退」保險：若 CF 路徑異常，workflow 會直接失敗（不再靜默走公網），需重跑或暫時把轉發加回。
+
 
 ## 7. 安全基線
 
