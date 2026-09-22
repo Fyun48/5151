@@ -1,0 +1,28 @@
+---
+description: 所有專案共用同一套 NAS / Cloudflare Tunnel 存取；新連線一律重用既有通道，不得另開 tunnel 或第二條路徑
+alwaysApply: true
+---
+
+# 共享基礎設施存取（跨專案）
+
+完整內容：`docs/runbooks/shared-infra-access.md`（改動基礎設施前必讀）。
+
+## 硬規則
+
+1. **不要另開 tunnel、不要另開第二條通道**：同一 repo、同一張 Docker 映像、同一條 Cloudflare Tunnel。
+   公開站 `jibbyrenth.reversalplay.me` → `127.0.0.1:5153`；OPS Console `jibbyrentops.reversalplay.me` → `127.0.0.1:5154`。
+2. **SSH 依身份走法固定**：
+   - 代理人（在區網內）：`ssh syn-nas`（Synology `tori@192.168.0.220:58722`）、
+     `ssh casa-nas`（CasaOS `root@192.168.0.140:54722`），金鑰 `~/.ssh/nas_cline`，免密碼。
+   - 使用者（外網 Windows）：Cloudflare Access + service token（`ssh-tori.reversalplay.me` /
+     `ssh-casa.reversalplay.me`），設定見 runbook §2.2；**不要再要求每日 OTP**。
+3. **connector 容器必須用 host network，ingress 只能寫區網 IP**。寫 `localhost` 會連到容器自己 →
+   使用者會看到「Remote side unexpectedly closed network connection」（2026-09-22 已踩）。
+4. **公網 SSH 埠（`54722` / `58722`）不得先關**：`secrets.NAS_*` 與 `secrets.OPS_SYNOLOGY_*`
+   仍被 12 條 workflow 使用。先改走 CF（runbook §6）並實跑三條部署 workflow 驗證，才可請使用者關閉轉發。
+5. **機密不得進版控**：NAS 密碼、SSH 私鑰、CF API token、CF service token secret、PG 密碼一律不寫入
+   repo／commit message／PR 描述。存放位置見 runbook §5。
+6. **一次性口令退場順序**：先把金鑰裝到使用者**每一台**電腦並實測免密碼登入，才可關閉密碼登入；
+   順序顛倒會把人鎖在門外（見 runbook §7）。
+7. 需要 NAS 上的寫入／重啟／設定變更時，優先用代理人的區網金鑰直接做，並把結果寫回
+   `docs/` 或 `evidence/`；不要用聊天訊息當唯一紀錄。

@@ -27,6 +27,12 @@ workflow（build → predeploy → deploy）。Gitea 時代的內容已在同日
 - 規劃見 `v3/ARCHITECTURE.md` 與 `v3/DESIGN.md`。
 - **v1／v2 已拆除**（不再啟動容器）。歷史庫仍可只讀掛給 v3 匯入。不要再用 `https://c5151.reversalplay.me/`。
 
+## 共享基礎設施存取（跨專案）
+
+NAS、Cloudflare Tunnel／Access、SSH 走法、PG 連線、機密位置與代理人可操作範圍一律看
+`docs/runbooks/shared-infra-access.md`，並遵守 `.cursor/rules/infra-access.mdc`。
+禁止另開 tunnel／第二條通道；公網 SSH 埠（54722／58722）在自動化改走 CF 前不得關閉。
+
 ## 本機開發
 
 Cloud Agent 環境由 `.cursor/environment.json` 自動 `npm ci` 並啟動 v3 開發伺服器（`npm run dev:v3`，埠 5153，預設管理員 `demo@example.com` / `demopass123`，可用 `AUTH_EMAIL` / `AUTH_PASSWORD` secrets 覆寫）。
