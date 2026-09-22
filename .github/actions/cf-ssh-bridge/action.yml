@@ -1,0 +1,103 @@
+name: cf-ssh-bridge
+description: >-
+  Prefer a Cloudflare Access TCP bridge for NAS SSH/scp, and fall back to the
+  public SSH endpoint when the bridge is unavailable. Emits `host` / `port`
+  outputs so callers stay working during the migration away from port forwards.
+
+inputs:
+  hostname:
+    description: Cloudflare Access hostname (e.g. ssh-casa.reversalplay.me)
+    required: true
+  port:
+    description: Local TCP port to expose the bridge on
+    required: false
+    default: "2222"
+  client-id:
+    description: Access Service Token client id
+    required: true
+  client-secret:
+    description: Access Service Token client secret
+    required: true
+  fallback-host:
+    description: Public SSH host used only when the bridge cannot be established
+    required: false
+    default: ""
+  fallback-port:
+    description: Public SSH port used only when the bridge cannot be established
+    required: false
+    default: "22"
+  cloudflared-url:
+    description: Download URL for the cloudflared linux-amd64 binary
+    required: false
+    default: https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+
+outputs:
+  host:
+    description: Host that callers should SSH to
+    value: ${{ steps.bridge.outputs.host }}
+  port:
+    description: Port that callers should SSH to
+    value: ${{ steps.bridge.outputs.port }}
+  mode:
+    description: '`cloudflare` when the bridge is up, `public-fallback` otherwise'
+    value: ${{ steps.bridge.outputs.mode }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve NAS SSH endpoint
+      id: bridge
+      shell: bash
+      env:
+        CF_HOST: ${{ inputs.hostname }}
+        CF_PORT: ${{ inputs.port }}
+        CF_ID: ${{ inputs.client-id }}
+        CF_SECRET: ${{ inputs.client-secret }}
+        CF_URL: ${{ inputs.cloudflared-url }}
+        CF_FALLBACK_HOST: ${{ inputs.fallback-host }}
+        CF_FALLBACK_PORT: ${{ inputs.fallback-port }}
+      run: |
+        set -uo pipefail
+
+        fallback() {
+          if [ -z "${CF_FALLBACK_HOST}" ]; then
+            echo "::error::cf-ssh-bridge unusable: ${1} and no fallback host configured"
+            exit 1
+          fi
+          echo "::warning::cf-ssh-bridge falling back to public SSH ${CF_FALLBACK_HOST}:${CF_FALLBACK_PORT} (${1})"
+          echo "mode=public-fallback" >> "$GITHUB_OUTPUT"
+          echo "host=${CF_FALLBACK_HOST}" >> "$GITHUB_OUTPUT"
+          echo "port=${CF_FALLBACK_PORT}" >> "$GITHUB_OUTPUT"
+          exit 0
+        }
+
+        if ! command -v cloudflared >/dev/null 2>&1; then
+          if ! curl -fsSL -o /tmp/cloudflared "$CF_URL"; then
+            fallback "cloudflared download failed"
+          fi
+          chmod +x /tmp/cloudflared
+          sudo mv /tmp/cloudflared /usr/local/bin/cloudflared || fallback "cloudflared install failed"
+        fi
+        cloudflared --version || fallback "cloudflared not runnable"
+
+        nohup cloudflared access tcp \
+          --hostname "$CF_HOST" \
+          --service-token-id "$CF_ID" \
+          --service-token-secret "$CF_SECRET" \
+          --url "127.0.0.1:$CF_PORT" \
+          > /tmp/cf-ssh-bridge.log 2>&1 &
+
+        for _ in $(seq 1 30); do
+          if (exec 3<>/dev/tcp/127.0.0.1/"$CF_PORT") 2>/dev/null; then
+            echo "cf-ssh-bridge: ${CF_HOST} -> 127.0.0.1:${CF_PORT} ready"
+            echo "mode=cloudflare" >> "$GITHUB_OUTPUT"
+            echo "host=127.0.0.1" >> "$GITHUB_OUTPUT"
+            echo "port=${CF_PORT}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          sleep 1
+        done
+
+        cat /tmp/cf-ssh-bridge.log || true
+        fallback "bridge never listened on 127.0.0.1:${CF_PORT}"
+
