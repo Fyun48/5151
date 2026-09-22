@@ -17,8 +17,10 @@ services:
     #   ├─ group_add 100   ← 保留 `users` 群組 → 仍可寫 `~/inbox`（/nas-inbox 是 2775 root:users）。
     #   ├─ CLINE_DATA_DIR  ← 官方環境變數（Base data directory for sessions/settings/teams/hooks）；
     #   │                    預設就是 `~/.cline/data`，寫出來讓容器內終端機的 `cline` CLI 也指到同一份。
-    #   └─ 下面 volumes 多掛 cline-server 的 `.cline/data`（**只掛 data，不掛 ~/.cline**，
-    #      `~/.cline/remote` 是 Desktop remote helper 的狀態，不能共用）。
+    #   ├─ 下面 volumes 多掛 cline-server 的 `.cline/data`（session／settings／db）與**家目錄** `/home/cline`。
+    #   │  為什麼連家目錄也要掛進同一個路徑：共用資料裡有 cline-server 視角的絕對路徑
+    #   │  （session 的 cwd／workspace_root、`cline_mcp_settings.json` 的 chrome／figma 路徑），
+    #   │  不掛就會跳「Starting directory (cwd) "/home/cline" does not exist.」→ 詳見 README 同名段。
     # 注意：兩邊 Cline 版本要一致（目前 core/extension 皆 4.1.19）；升一邊就要升另一邊，避免 schema migration 互打。
     user: "1001:1001"
     group_add:
@@ -59,6 +61,25 @@ services:
       # 副作用：`~/code-server/data/.cline/data` 會被這條覆蓋（原本 code-server 自己的 6 條舊 session
       # 已備份成 `~/code-server/data/.cline/data-code-server-archive-<timestamp>`，檔案還在，只是不在 UI 清單）。
       - /volume1/homes/tori/code-server/workspace/cline-server/home/.cline/data:/home/coder/.cline/data
+      # 2026-09-22（共用 session 之後補的）：Cline Server 的**家目錄**用同一個路徑掛進來。
+      #   為什麼需要：共用的 Cline 資料裡到處是「cline-server 視角」的絕對路徑，而 code-server 這邊
+      #   `/home/cline` 不存在。症狀（實測）：
+      #     The terminal process failed to launch: Starting directory (cwd) "/home/cline" does not exist.
+      #   來源（Cline 擴充 log，logs/…/exthost1/output_logging_…/1-Cline.log）：
+      #     [TerminalManager] Looking for terminal in cwd: /home/cline
+      #     → 終端 cwd 取自 session 的 `workspace_root`；共用資料裡的 workspace 就是 cline-server 的家目錄。
+      #   同一類、不掛就一起壞的字串：
+      #     • settings/cline_mcp_settings.json → chrome-devtools MCP 的 `--executablePath
+      #       /home/cline/.local/bin/chrome-no-sandbox`、`LD_LIBRARY_PATH /home/cline/.local/chrome-deps/…`、
+      #       figma 圖片輸出 `/home/cline/.cline/figma-images`
+      #     • db/sessions.db 與 sessions/*/*.json 的 `cwd` / `workspace_root` / `messages_path`
+      #   掛上之後：IDE 內 `/home/cline` ＝ NAS `~/code-server/workspace/cline-server/home`
+      #   ＝ cline-dev 內 `/home/cline`，兩邊真的是同一個家目錄、同一份檔案（跟 `/workspace` 同一個道理）。
+      #   權衡：等於把 agent 的家目錄（含 `.ssh`、`.cline/remote`、`.bashrc`）開給 IDE 容器讀寫。
+      #   同 uid(1001)、同 owner，IDE 有 Cloudflare Access + 密碼，且它本來就讀得到 `/private` 與共用
+      #   Cline 資料（secrets.json 的 API key）。要縮小範圍可只掛工具鏈子目錄：
+      #   `.local`、`.agents`、`.cline/figma-images`、`Documents`（排除 `.ssh`）。
+      - /volume1/homes/tori/code-server/workspace/cline-server/home:/home/cline
       # 唯讀的私有憑證（INFRA-CREDENTIALS.md 等）：**不進 repo**，只有這個容器看得到，
       # 而且以 :ro 掛載（容器內改不動）。IDE 內查法：`cat /private/INFRA-CREDENTIALS.md`。
       - ./private:/private:ro

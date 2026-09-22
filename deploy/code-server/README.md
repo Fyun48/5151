@@ -146,6 +146,42 @@ Cline 的歷史存在該 core 的 data dir（`sessions/<id>/*.messages.json` + `
 **結果**：code-server 的 Cline 面板「RECENT／歷史」＝ Cline Desktop 接 `cline-server` 的同一份清單；
 在 code-server 開的 session，Desktop 那側也看得到。**工作可以在任一邊接續，不用怕漏掉紀錄。**
 
+### ⚠️ 共用之後必踩：終端機跳 `Starting directory (cwd) "/home/cline" does not exist.`
+
+共用的是「**cline-server 視角**」的資料，所以裡面會出現一堆 cline-server 的絕對路徑（`/home/cline/…`）。
+code-server 容器裡本來沒有那個目錄，症狀與根因（2026-09-22 實測，Cline 擴充 log 在
+`~/code-server/data/.local/share/code-server/logs/<ts>/exthost1/output_logging_*/1-Cline.log`）：
+
+| 症狀 | 根因 |
+|---|---|
+| Cline 一執行指令就跳 `The terminal process failed to launch: Starting directory (cwd) "/home/cline" does not exist.` | `[TerminalManager] Looking for terminal in cwd: /home/cline` ← 終端 cwd 取自**該 session 的 `workspace_root`**，而共用資料裡的 workspace 就是 cline-server 的家目錄 |
+| `chrome-devtools`／`figma` 等 MCP 起不來（`npx` 起來了但瀏覽器／輸出目錄找不到） | `settings/cline_mcp_settings.json` 寫死 `--executablePath /home/cline/.local/bin/chrome-no-sandbox`、`LD_LIBRARY_PATH /home/cline/.local/chrome-deps/…`、figma 輸出 `/home/cline/.cline/figma-images` |
+
+**修法（compose 的第 4 件事）**：把 cline-server 的**家目錄**以同一路徑掛進來 ——
+
+```yaml
+- /volume1/homes/tori/code-server/workspace/cline-server/home:/home/cline
+```
+
+→ IDE 內 `/home/cline` ＝ NAS `…/cline-server/home` ＝ `cline-dev` 內 `/home/cline`
+（同一份、同 uid 1001 可寫），於是那些絕對路徑全部指回真身：
+session 的 `cwd`／`workspace_root`／`messages_path`、終端 cwd、MCP 的 chrome／fontconfig／figma。
+**邏輯與 `/workspace` 相同**：不是複製、是同一個目錄。
+
+```bash
+# 驗證（NAS 上）：用同一個 uid、以那個 cwd 起 login shell ＝ VS Code ptyHost 建終端的動作
+docker exec -u 1001 -w /home/cline 5151-code-server bash -lc 'pwd && ls | head'
+# 兩條掛載必須是同一個 inode（proof：同一份，不是兩份）
+docker exec 5151-code-server sh -c 'stat -c "%d:%i %n" /home/cline/.cline/data/sessions /home/coder/.cline/data/sessions'
+docker exec 5151-code-server sh -c 'test -x /home/cline/.local/bin/chrome-no-sandbox && echo CHROME_OK'
+```
+
+**權衡**：這等於把 agent 的家目錄（含 `.ssh`、`.cline/remote`、`.bash_history`）開給 IDE 容器讀寫。
+同 uid、同 owner、IDE 有 Cloudflare Access ＋ 密碼，且它原本就讀得到 `/private` 與共用 Cline 資料
+（`secrets.json` 內的 API key）。要縮小範圍就改成只掛工具鏈子目錄：`.local`、`.agents`、
+`.cline/figma-images`、`Documents`（**不掛 `.ssh`**）；但那樣「終端 cwd」與舊 session 的路徑還是不存在，
+得接受點到舊 session 會跳錯。
+
 ### 驗證指令
 
 ```bash
@@ -166,7 +202,9 @@ cline -P deepseek -m deepseek-flash -c /workspace/5151 "你的提示詞"
 - **兩邊 Cline 版本要一致**（目前 extension/core `4.1.19`、CLI `3.0.6x`）。升一邊就要升另一邊，
   否則共用 data dir 時 schema migration 會互打；升完要 `docker compose up -d` 重建容器。
 - 共用 `globalState.json`／`providers.json`（＝API key、auto-approve、語言設定兩邊一致）；
-  **`~/.cline/remote` 沒有共用**（Desktop remote helper 專用，只掛 `data`）。
+  **code-server 的 core 不會用到 Desktop remote helper 的狀態**：它的 data dir 是
+  `CLINE_DATA_DIR=/home/coder/.cline/data`、`$HOME=/home/coder`，所以 `…/cline-server/home/.cline/remote`
+  雖然透過 `/home/cline` 看得到，卻不是它在讀的那份（Desktop helper 專用）。
 - 只有「同時在兩邊跑 zen／背景任務」才會有兩個 hub daemon 寫同一顆 `hub-events-hub-production.db`；
   一般對話不受影響（hub 只在背景任務出現）。
 - 舊的、只屬於 code-server 的 6 條 session 已封存（檔案還在，只是不再出現在 UI 清單）：
@@ -251,6 +289,7 @@ Cline 輸入框左下角的 `+`（Add Files & Images）用的是 **VS Code 的�
 | `/private` | `~/code-server/private` | **ro** | `INFRA-CREDENTIALS.md` 等憑證 |
 | `/home/coder` | `~/code-server/data` | **rw** | code-server 自己的設定／已安裝擴充 |
 | `/home/coder/.cline/data` | `…/cline-server/home/.cline/data` | **rw** | Cline 的 session／settings／db（與 cline-dev 共用）|
+| `/home/cline` | `…/cline-server/home` | **rw** | cline-server 的**家目錄**；讓共用資料裡的 `/home/cline/…` 絕對路徑指回真身（終端 cwd、MCP 工具鏈、舊 session 路徑），見上一節 |
 
 ### ⚠️ 為什麼「家目錄 / 整個 /volume1」不能直接掛
 
@@ -261,6 +300,9 @@ Cline 輸入框左下角的 `+`（Add Files & Images）用的是 **VS Code 的�
   `~/code-server/workspace/cline-server/repos`（無 ACL、owner 1001）能掛，`~/` 或 `~/code-server` 不行。
 - 也**不要**掛整個 `/volume1`：VS Code 會對它建 file watcher／索引，11TB 的共享會把 NAS 的 CPU
   與 inotify 額度吃光（`files.watcherExclude` 能少看很多目錄，但主機的 inotify 上限才是關鍵，見上方 FAQ）。
+- **例外／補充**：`/home/cline`（＝ `…/cline-server/home`）是**可以**掛的 —— 它沒有 Synology ACL、
+  owner 就是容器身分 1001，符合上面那條規則（不是特例，是同一個理由）。**不要**掛的是 `~/` 本身
+  （`/volume1/homes/tori`，有 ACL、且會把整個家目錄 11TB 拉進來）。
 - 要再開放其他路徑有兩條：**① 用 root 建目錄 ＋ `chown 1001:users` ＋ `chmod 2775`**
   （`~/inbox` 就是這樣做的：容器可寫、`tori` 也能刪／搬，因為容器身分的補充群組就有 `users`）；
   **② 在 DSM 加 ACL** 給容器用的 uid。掛其他共享（`MOVIE`、`NAKIVO_Repository`…）建議加 `:ro`。

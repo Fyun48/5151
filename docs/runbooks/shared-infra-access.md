@@ -170,3 +170,12 @@ sysctl／DSM 設定都動不了，例：inotify 上限，見 §9）、密碼與 
   永久生效：DSM → 控制台 → 任務排程器 → 新增 → 觸發的任務 → **開機**（使用者 `root`）→ 填上面兩行。
   ⚠️ `5151-code-server` 與 `cline-dev` 自 2026-09-22 起**同 uid 1001 → 共用同一份 inotify 額度**，更需調高。
   已先做容器側減壓：兩邊 VS Code 設定都加了 `files.watcherExclude` / `search.followSymlinks: false`。
+
+- **`5151-code-server` ↔ `cline-dev` 自 2026-09-22 起共用同一組路徑**（兩容器皆 **uid 1001**，
+  所以能被同一顆 NAS 目錄接受；詳見 `deploy/code-server/README.md`）：
+  - code-server `/workspace` ＝ `cline-dev` `/workspace/repos` ＝ NAS `~/code-server/workspace/cline-server/repos`
+  - code-server `/home/cline` ＝ `cline-dev` `/home/cline` ＝ NAS `…/cline-server/home`
+  - code-server `/home/coder/.cline/data` ＝ `…/cline-server/home/.cline/data`（Cline session／settings／db 共用一份）
+  → **要再加掛 NAS 目錄時，owner/uid 必須是 1001**（或 DSM 加 ACL），否則新檔會有一邊寫不進去。
+  `/home/cline` 這一條是必要的，不是方便：共用資料裡的 session `cwd`／`workspace_root` 與
+  `cline_mcp_settings.json` 的 chrome／figma 路徑都是 `/home/cline/…`。
