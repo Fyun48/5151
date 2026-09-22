@@ -127,6 +127,10 @@ jobs:
             test -d ops/src
             test -f ops/src/server.js
             # 只用主 compose，避免誤觸 v3 digest override 的重建範圍。
+            # 若 /5151-ops 這個名字已被「非本 compose 專案」的容器佔用，compose 會回
+            # "Conflict. The container name /5151-ops is already in use"；ops 是無狀態容器，
+            # 先移除同名容器再重建最穩。
+            docker rm -f 5151-ops >/dev/null 2>&1 || true
             docker compose -f docker-compose.yml up -d --no-build --no-deps --force-recreate 5151-ops
             ok=0
             for _ in $(seq 1 40); do
