@@ -80,10 +80,22 @@ jobs:
         run: |
           echo "OPS_SYNOLOGY_APP_ROOT=${APP_ROOT_IN:-/volume1/docker/5151-ops/app}" >> "$GITHUB_ENV"
           echo "OPS_SYNOLOGY_DATA_ROOT=${DATA_ROOT_IN:-/volume1/docker/5151-ops/data}" >> "$GITHUB_ENV"
+      - name: NAS SSH endpoint (Cloudflare Access bridge, falls back to public SSH)
+        id: cf-bridge
+        uses: ./.github/actions/cf-ssh-bridge
+        with:
+          hostname: ssh-tori-ci.reversalplay.me
+          port: "2223"
+          client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          fallback-host: ${{ secrets.OPS_SYNOLOGY_HOST }}
+          fallback-port: ${{ secrets.OPS_SYNOLOGY_PORT }}
+          ssh-user: ${{ secrets.OPS_SYNOLOGY_USER }}
+          ssh-key: ${{ secrets.OPS_SYNOLOGY_SSH_KEY }}
       - name: Synology read-only checks (no mutation)
         env:
-          OPS_SYNOLOGY_HOST: ${{ secrets.OPS_SYNOLOGY_HOST }}
-          OPS_SYNOLOGY_PORT: ${{ secrets.OPS_SYNOLOGY_PORT }}
+          OPS_SYNOLOGY_HOST: ${{ steps.cf-bridge.outputs.host }}
+          OPS_SYNOLOGY_PORT: ${{ steps.cf-bridge.outputs.port }}
           OPS_SYNOLOGY_USER: ${{ secrets.OPS_SYNOLOGY_USER }}
           OPS_SYNOLOGY_SSH_KEY: ${{ secrets.OPS_SYNOLOGY_SSH_KEY }}
           OPS_SYNOLOGY_APP_ROOT: ${{ env.OPS_SYNOLOGY_APP_ROOT }}
