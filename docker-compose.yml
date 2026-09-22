@@ -16,6 +16,11 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL_V3:-https://jibbyrenth.reversalplay.me}
       V1_DB_PATH: /v1-data/591.db
       V2_DB_PATH: /v2-data/v2.db
+      # PostgreSQL 切換開關（佔位）。預設 sqlite：不設 PG_URL 時行為與現在完全相同。
+      # 切換當天在 NAS 的 /mnt/Storage1/apps/5151/.env 追加 DB_DRIVER=postgres 與 PG_URL=… 後重建。
+      # 見 docs/runbooks/postgres-cutover-day-checklist.md 步驟 5。
+      DB_DRIVER: ${DB_DRIVER:-sqlite}
+      PG_URL: ${PG_URL:-}
     volumes:
       - ${V3_DATA_ROOT:-/mnt/Storage1/docker_data/591-tracker-v3}:/data
       - ${DATA_ROOT:-/DATA}/AppData/591-tracker:/v1-data:ro
