@@ -12,7 +12,7 @@
 | primary／standby | `192.168.0.220:15432`（`pg_is_in_recovery=false`，PG 16.14）／`192.168.0.140:15432`（`true`、`caught_up=true`） |
 | 切換用 image | sha `828acf76a9a8568d292b347cc7eb802183454851` → digest `sha256:dd2bb8f02db127307404e3ada21d6574f835f45b0805493f08cad8ef078fe187`（`revision_label=828acf7…`、`SHARP_OK`、amd64 smoke ✅） |
 | 目前正式站 image | `sha256:0f758bd6eab542429f68f16bd920107fe92abae781945e5b2a705b7ebef8af3e`（＝`64828a8`）← **回復點** |
-| predeploy 備份 | 每次 predeploy 產生 `…/591-tracker-v3-backups/predeploy-<UTC>/`（含 `v3.db` 與 `sha256`）；2026-09-21 那次為 `predeploy-20260921-133223`（`sha256:6cf1f045…`） |
+| predeploy 備份（**今天的回復點**） | 2026-09-22 重跑 `PREDEPLOY_CHECK_OK` → `/mnt/Storage1/docker_data/591-tracker-v3-backups/predeploy-20260922-051725`（`v3.db` `sha256:2e1b149da66abcdc9e502b2a30234909146f73a1dd1c7dd6b48d2b464de4b630`）；2026-09-21 那次為 `predeploy-20260921-133223`（`sha256:6cf1f045…`） |
 | live parity（切換前基準） | 11 個 live 檔 **61/61、0 skip**（2026-09-22，shadow） |
 
 ## 步驟 0.5（建議、可先做）：先把新 image 上正式站，但**先不切 driver**
