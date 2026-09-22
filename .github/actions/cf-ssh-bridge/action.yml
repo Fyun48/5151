@@ -134,6 +134,8 @@ runs:
               echo "cf-ssh-bridge: SSH smoke test OK (${CF_SSH_USER}@127.0.0.1:${CF_PORT})"
             else
               echo "cf-ssh-bridge: smoke test output follows"; tail -5 /tmp/cf-ssh-smoke.log || true
+              echo "--- cloudflared log (tail) ---"; tail -20 /tmp/cf-ssh-bridge.log || true
+              echo -n "Access probe http_code: "; curl -s -o /dev/null -w '%{http_code}\n' -H "CF-Access-Client-Id: $CF_ID" -H "CF-Access-Client-Secret: $CF_SECRET" "https://$CF_HOST" || true
               rm -f "$keyfile"
               fallback "bridge SSH smoke test failed or timed out"
             fi
