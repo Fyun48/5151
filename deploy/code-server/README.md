@@ -409,3 +409,142 @@ Access 會在最前面多一層「只有你的 email 能進來」的閘門（免
 - 日誌：`docker logs --tail 50 5151-code-server`
 - 資料備份：`~/code-server/data`（設定/擴充）＋ `~/code-server/workspace/cline-server/`（程式碼＝agent 的 repos；
   程式碼本身也可從 GitHub/Gitea 重拉，但 **Cline 的對話紀錄（`home/.cline/data`）只有這裡有，要備**）
+
+---
+
+## ⚠️ Clipboard 讀取失敗會卡住 Agent（`Retry` 那個錯誤）— 2026-09-22 已修
+
+### 症狀（你回報的那張截圖）
+
+在 code-server 用 VS Code Web 時右下角跳出：
+
+```text
+ⓧ Unable to read from the browser's clipboard. Please make sure you have granted
+   access for this website to read from the clipboard.        [Retry]  [Learn More]
+```
+
+而且 **Cline Agent 會停在原地**，要人工去按 `Retry` 或把那個 toast 關掉才會繼續。
+
+### 根因（不是猜測；位置在 VS Code 前端 bundle 裡）
+
+code-server 4.138.0（VS Code core 1.138.0）內建的 `BrowserClipboardService.readText()`：
+
+```js
+async readText(e) {
+  try { let t = await navigator.clipboard.readText(); return t; }
+  catch {                                             // ← Chromium 拒絕讀剪貼簿時
+    return new Promise(i => {                         // ← 回傳一個「不會自己 resolve」的 Promise
+      let n = new A, r = this.notificationService.prompt(Ct.Error,
+        d(20492,null),                                // "Unable to read from the browser's clipboard…"
+        [{ label: d(20494,null), run: async()=>{ n.dispose(); i(await this.readText(e)); } },  // Retry
+         { label: d(20493,null), run: ()=> this.openerService.open("…linkid=2151362") }],       // Learn More
+        { sticky: !0 });
+      n.add(K.once(r.onDidClose)(()=>i("")));          // ← 只有「人」動作才會 resolve
+    });
+  }
+}
+```
+
+也就是：**clipboard 讀取失敗時，VS Code 不是 fail-open，而是把 Promise 掛在那裡等真人按
+`Retry`**。任何 `await` 這個 read 的呼叫端都會一起卡住 —— 終端機/編輯器貼上、擴充功能，
+以及 **Cline 擴充的 `env.clipboardReadText` RPC**（`vscode.env.clipboard.readText()`）。
+Chromium 為什麼拒絕不是重點（權限沒給、document 沒有 focus、沒有 user activation、
+之前按過「封鎖」…在 Cloudflare Access + 重載/切分頁的情境下很常見），重點是
+**失敗時不該把 Agent 的 control flow 綁在這種互動上**。
+
+> 順帶排除的兩個懷疑點：對外回應 `permissions-policy: clipboard-read=(self), clipboard-write=(self)`
+> 是 Cloudflare Access 加的，`(self)` 是預設允許值（不是 deny）；webview iframe 的
+> `allow="clipboard-read; clipboard-write;"` 也是正常允許。兩者都不是根因。
+
+### 修法：只把那個 catch 改成 fail-open（最小 patch）
+
+```diff
+- catch { return new Promise(i=>{ …prompt(Retry / Learn More)… }) }
++ /*clipboard-fail-open*/catch(__clipErr){
++   this.logService.error("clipboard read failed (fail-open, no Retry gate):",__clipErr);
++   return "";
++ }
+```
+
+改完之後：clipboard 讀不到 → 只記一筆 warning → 立刻回 `""` → **不跳 toast、不會有 pending
+Promise、Agent 繼續跑**。寫入端（`writeText`）本來就有 `execCommand` fallback + `console.error`，
+本來就是 fail-open，沒有動它。
+
+### 改了哪兩個檔案（容器內路徑）
+
+| 檔案 | 說明 |
+|---|---|
+| `/usr/lib/code-server/lib/vscode/out/vs/code/browser/workbench/workbench.js` | **瀏覽器實際載入的那一份**（`workbench.html` 的 `<script src>`）|
+| `/usr/lib/code-server/lib/vscode/out/vs/workbench/workbench.web.main.internal.js` | 同一段程式碼的另一份 build artifact（一起補，避免換路徑時漏掉）|
+
+兩個檔都只有那 334 個字元被換掉，其餘 byte-for-byte 相同（有驗證腳本可證明，見下）。
+
+### 自我修復（container 重建後不會消失）
+
+patch 在容器內，所以容器被重建（`docker compose up -d --force-recreate`、換 image）就會不見。
+因此把「補丁腳本 + 觸發點」放在**持久化掛載**上：
+
+| 項目 | 位置（容器內） | 對應 NAS 主機 |
+|---|---|---|
+| 補丁腳本 | `~/.local/share/code-server/tools/clipboard-failopen.sh` | `~/code-server/data/.local/share/code-server/tools/clipboard-failopen.sh` |
+| 觸發點 | `~/.bashrc`（在開頭，每個 shell 都會跑一次）| 同左（`~/code-server/data/.bashrc`）|
+
+腳本是 idempotent：已經補過就只做「讀 stamp + `stat` 兩個 bundle」的 fast path（約 1–11 ms），
+不會拖慢 shell。原始檔在補之前會備份到 `~/.backups/clipboard-failopen-auto/`。
+
+驗證自我修復（模擬容器重建）：
+
+```bash
+# 1) 把某個檔案還原成 image 原版（模擬重建後的狀態）
+BK=$(ls -dt ~/.backups/clipboard-failopen-* | head -1)
+sudo cp "$BK/workbench.js.orig" /usr/lib/code-server/lib/vscode/out/vs/code/browser/workbench/workbench.js
+# 2) 開一個互動式 shell（＝平常打開 Terminal 的動作）
+bash -ic true
+# 3) 應該已被自動補回（log 會出現 PATCHED …）
+grep -c clipboard-fail-open /usr/lib/code-server/lib/vscode/out/vs/code/browser/workbench/workbench.js   # → 1
+tail -3 ~/.local/share/code-server/tools/clipboard-failopen.log
+```
+
+### 驗證（已經做過的）
+
+```bash
+# 1) 語法：patch 後仍然是合法 JS（19MB bundle）
+/home/coder/.local/node/bin/node --check /usr/lib/code-server/lib/vscode/out/vs/code/browser/workbench/workbench.js
+# 2) 最小性：除了那 334 字元，前後都與 image 原版逐 byte 相同
+node verify-clipboard-patch.cjs "$(ls -dt ~/.backups/clipboard-failopen-* | head -1)/workbench.js.orig" \
+     /usr/lib/code-server/lib/vscode/out/vs/code/browser/workbench/workbench.js
+# 3) 伺服器實際吐給瀏覽器的內容 == 磁碟上補過的檔案（md5 相同）
+curl -s -b <登入後的 cookie> http://127.0.0.1:8080/stable-<commit>/static/out/vs/code/browser/workbench/workbench.js | md5sum
+# 4) 行為：用「真的 bundle 裡的那段程式碼」＋一個會丟 NotAllowedError 的 clipboard 跑：
+#    before → 400ms 後仍在 pending、跳出 Retry toast；after → 立刻回 ""、只記 warning、無 toast
+node clipboard-behaviour-test.cjs <orig-bundle> <patched-bundle>   # → OVERALL: PASS
+```
+
+### 使用者端要做的一次動作
+
+那個 `<script src="…/workbench.js">` 的回應是 `Cache-Control: public, max-age=31536000`，
+所以**舊分頁會快取舊的（會卡 Retry 的）bundle**。改完後請做一次 **硬重新整理
+`Ctrl+Shift+R`**（之後瀏覽器快取的就是修好的版本）。
+
+- 升級 code-server 版本時，URL 會因為版本/commit 而改變 → 新 bundle 會在**下一個 Terminal
+  開啟時**被自動補上；同樣再硬重整一次即可。
+- 想順手讓 clipboard 真的可用（不只 fail-open）：Chrome → 網址列左邊的圖示 → 網站設定 →
+  「剪貼簿」→ 允許 `cocodeco.reversalplay.me`。這是加分項，**不是** Agent 能不能跑的條件。
+
+### Rollback
+
+```bash
+BK=$(ls -dt ~/.backups/clipboard-failopen-* | head -1)   # 或 ~/.backups/clipboard-failopen-auto/
+sudo cp "$BK/workbench.js.orig"                   /usr/lib/code-server/lib/vscode/out/vs/code/browser/workbench/workbench.js
+sudo cp "$BK/workbench.web.main.internal.js.orig" /usr/lib/code-server/lib/vscode/out/vs/workbench/workbench.web.main.internal.js
+rm -f ~/.local/share/code-server/tools/.clipboard-failopen.stamp
+# 移除 ~/.bashrc 裡 "clipboard-failopen" 那一段（備份：~/.bashrc.bak-clipboard-failopen-*）
+# 最後硬重整瀏覽器分頁
+```
+
+### Cline 內部要不要用 OS clipboard？（檢查結果：沒有）
+
+Cline 擴充 4.1.19 與 Cline CLI 3.0.64 的 bundle 內**沒有任何** `xclip`／`xsel`／`wl-copy`／
+`pbcopy` 依賴；clipboard 只透過 VS Code API / webview 使用，且 webview 內每一處都是
+`.catch(err => console.error(...))`（fail-open）。所以 Agent 的資料流本來就沒有依賴系統剪貼簿，
+唯一的阻塞點就是上面那個 VS Code `readText()`。
