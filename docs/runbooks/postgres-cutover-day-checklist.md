@@ -15,7 +15,7 @@
 | predeploy 備份（**今天的回復點**） | 2026-09-22 重跑 `PREDEPLOY_CHECK_OK` → `/mnt/Storage1/docker_data/591-tracker-v3-backups/predeploy-20260922-051725`（`v3.db` `sha256:2e1b149da66abcdc9e502b2a30234909146f73a1dd1c7dd6b48d2b464de4b630`）；2026-09-21 那次為 `predeploy-20260921-133223`（`sha256:6cf1f045…`） |
 | live parity（切換前基準） | 11 個 live 檔 **61/61、0 skip**（2026-09-22，shadow） |
 | 匯入環境（CasaOS 實查 2026-09-22） | `5151-web-A` 存在 ✅（image `…:bcb6eb7f…`，腳本用它跑 `VACUUM INTO`）；`/root/pgtest/incoming` 存在但**是 09-21 的舊副本 → 先更新**；正式 `v3.db` **476 MB**（mtime 即時）；備份目錄共 **1.6 G**；`/mnt/Storage1` 還有 **819 G** 可用 |
-| 切換用的環境檔（CasaOS） | `/mnt/Storage1/apps/5151/.env` 已存在（目前只有 `TUNNEL_TOKEN`）；部署版 `casaos-compose.yml` 的 v3 `environment:` **沒有** `DB_DRIVER`／`PG_URL` → 需要一次性小 PR（見步驟 5）；正式容器目前 `DB_DRIVER` 未設（＝sqlite）✅ |
+| 切換用的環境檔（CasaOS） | `/mnt/Storage1/apps/5151/.env` 已存在（目前只有 `TUNNEL_TOKEN`）；部署版 `casaos-compose.yml` 的 v3 `environment:` **沒有** `DB_DRIVER`／`PG_URL` → **已由這批補上佔位**（見步驟 5）；正式容器目前 `DB_DRIVER` 未設（＝sqlite）✅ |
 
 ## 步驟 0.5（建議、可先做）：先把新 image 上正式站，但**先不切 driver**
 
@@ -115,11 +115,9 @@ node --test v3/test/crawler-reads-parity.test.js v3/test/listing-fields-parity.t
 > `casaos-compose.yml`、`docker-compose.override.yml` → `/mnt/Storage1/apps/5151/`），所以**直接改 NAS 上的
 > compose 會在下次部署被蓋掉**。正解是把變數寫進 compose（repo 內、一次性的小 PR）＋把值放 NAS 的 `.env`：
 
-1. repo 的 `casaos-compose.yml` 的 `591-tracker-v3` service 加兩行（**不含密碼**）：
-   ```yaml
-   DB_DRIVER: ${DB_DRIVER:-sqlite}
-   PG_URL: ${PG_URL:-}
-   ```
+1. **（已完成）** repo 的 `casaos-compose.yml` 已在 `591-tracker-v3` service 加上兩個佔位（**不含密碼**）：
+   `DB_DRIVER: ${DB_DRIVER:-sqlite}` 與 `PG_URL: ${PG_URL:-}`；下一次部署就會帶到 NAS。
+   **沒設 `.env` 時 `DB_DRIVER` 就是 `sqlite` → 行為與現在完全相同**（可以先部署、不必等切換日）。
 2. **既有的** NAS 環境檔 `/mnt/Storage1/apps/5151/.env`（**不進版控**，目前只有 `TUNNEL_TOKEN`）**追加**兩行：
    ```
    DB_DRIVER=postgres
