@@ -103,7 +103,6 @@ runs:
         # Bind on all interfaces: container-based actions reach the runner through the
         # Docker bridge gateway, not through loopback.
         nohup cloudflared access tcp \
-          --protocol http2 \
           --hostname "$CF_HOST" \
           --service-token-id "$CF_ID" \
           --service-token-secret "$CF_SECRET" \
