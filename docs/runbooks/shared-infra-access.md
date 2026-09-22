@@ -43,6 +43,21 @@ Service token（帳號層級）：
 - **Client Secret 不寫進 repo**：存使用者的密碼管理器（要換就到 Zero Trust → Access → Service Auth 重建）。
 - 舊 token `9881d66a-…`（nas-ssh-putty）已從政策移除，可在 Zero Trust 手動刪除。
 
+### 2.2.1 service token 實測結論（2026-09-22，重要，不要重踩）
+CF 的 SSH 有兩套模式，本帳號的實測結果：
+
+| 路徑 | service token 是否被採用 | 備註 |
+|---|---|---|
+| `self_hosted` 應用（client-side cloudflared／`cloudflared access tcp`，也就是 PuTTY 的用法） | **❌ 不採用**（cloudflared 仍要求瀏覽器登入；即使 API 掛了 `non_identity` 政策也一樣） | 只能 email OTP，或靠 24h session |
+| 新版後台表單（`type: ssh` ＋ target／Access for Infrastructure） | 「包含」選取器**沒有服務權杖選項** ⚠️；官方文件明載此模式要求使用者安裝 **Cloudflare One Client（WARP）** | 不適用 PuTTY ＋ cloudflared |
+| **API 直建 `type: ssh` ＋公開 hostname**（如 `ssh-casa-ci`，於帳號尚無任何 target 時建立） | **✅ 採用**（實測多次取得 `SSH-2.0-OpenSSH…`） | 目前唯一可用組合；**同型第二個 app 一律被拒**（`access.api.error.invalid_request: domain not included in destinations`，即使刪光 target 亦同） |
+
+- ⛔ **不要**再嘗試為 `ssh-tori*` 建立 `type: ssh` 應用，也**不要**在後台表單找服務權杖（沒有這個選項）。
+- ✅ Synology 的正式做法＝**email OTP**（`ssh-tori.reversalplay.me`，24h 一次）；`58722` 因此保留給兩條 ops workflow。
+- 若日後要讓 Synology 也免 OTP，選項是：(a) 裝 Cloudflare One Client（WARP）走新模型，或 (b) 改用 Tailscale／WireGuard 直連（免費、不經 CF）。
+- 這**不是**付費問題：Zero Trust Free（$0，50 使用者內）已含 Access／service token／client-side cloudflared；$7/user/月 只在超過 50 使用者時才有意義。
+
+
 
 **方法 A（建議）本機轉發**：開一個 cmd 保持開著
 ```cmd
@@ -97,7 +112,7 @@ Host = CF hostname、Port `22`、Auto-login username 同上。
 | 公網埠 | 狀態 | 說明 |
 |---|---|---|
 | CasaOS `54722` | **已關閉** ✅ | 12 條 CasaOS 目標 workflow 已改走 Cloudflare；關埠後實跑 `production-predeploy-check` **SUCCESS**（log 顯示 `SSH smoke test OK` ＋ `ssh-casa-ci.reversalplay.me`，無回退）。回復方式＝把路由器轉發加回來。 |
-| Synology `58722` | **仍開啟** ⚠️ | `deploy-ops-synology.yml`／`predeploy-ops-synology.yml` 仍需要它：本帳號方案**只允許 1 個 `type: ssh`（Infrastructure）Access 應用**，該名額已用於 `ssh-casa-ci`，`ssh-tori*` 建立 `type: ssh` 應用一律回 `access.api.error.invalid_request: domain not included in destinations`。等之後升級方案或改用其他機制再關。 |
+| Synology `58722` | **仍開啟** ⚠️ | `deploy-ops-synology.yml`／`predeploy-ops-synology.yml` 仍需要它：CF 目前沒有可接受 service token 且能用 `cloudflared access` 的 Synology 端點（詳見 §2.2.1 實測表）。Synology 的人工登入＝email OTP（24h）。要關這顆埠需先完成：(a) 改用 WARP 新模型，或 (b) 改走 Tailscale／WireGuard。 |
 
 關埠後仍正常：使用者 PuTTY（走 CF tunnel，NAS 對外主動連線，與路由器轉發無關）、代理人區網金鑰、PG `25433`、公開站與 OPS Console。
 唯一失效的是 CI 的「公網回退」保險：若 CF 路徑異常，workflow 會直接失敗（不再靜默走公網），需重跑或暫時把轉發加回。
