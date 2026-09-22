@@ -19,16 +19,21 @@ export function ensureSearchProfileSchema(db) {
   `);
 }
 
+// The two reads and the repair write, as text: repository/notifyEnqueue.js runs the same statements
+// through PostgreSQL, so "which active profile wins" cannot differ between the drivers.
+export const ACTIVE_PROFILE_SQL = "SELECT * FROM user_search_profiles WHERE user_id = ? AND active = 1";
+export const ACTIVE_PROFILE_ORDER_SQL = `SELECT id, last_used_at, updated_at FROM user_search_profiles
+     WHERE user_id = ? AND active = 1
+     ORDER BY last_used_at DESC, updated_at DESC, id DESC`;
+export const DEACTIVATE_PROFILES_SQL = "UPDATE user_search_profiles SET active = 0, updated_at = ? WHERE user_id = ? AND id != ?";
+
 export function repairMultipleActiveProfiles(db, userId, now = new Date()) {
   const uid = Number(userId);
-  const rows = db.prepare(
-    "SELECT id, last_used_at, updated_at FROM user_search_profiles WHERE user_id = ? AND active = 1 ORDER BY last_used_at DESC, updated_at DESC, id DESC",
-  ).all(uid);
+  const rows = db.prepare(ACTIVE_PROFILE_ORDER_SQL).all(uid);
   if (rows.length <= 1) return rows[0]?.id || "";
   const keep = rows[0].id;
   const stamp = (now instanceof Date ? now : new Date(now)).toISOString();
-  db.prepare("UPDATE user_search_profiles SET active = 0, updated_at = ? WHERE user_id = ? AND id != ?")
-    .run(stamp, uid, keep);
+  db.prepare(DEACTIVATE_PROFILES_SQL).run(stamp, uid, keep);
   return keep;
 }
 
@@ -76,7 +81,7 @@ export function activateSearchProfile(db, userId, profileId, { data, name, now =
 export function getActiveSearchProfile(db, userId) {
   const uid = Number(userId);
   repairMultipleActiveProfiles(db, uid);
-  return db.prepare("SELECT * FROM user_search_profiles WHERE user_id = ? AND active = 1").get(uid) || null;
+  return db.prepare(ACTIVE_PROFILE_SQL).get(uid) || null;
 }
 
 export function notifySnapshotFromProfile(row) {

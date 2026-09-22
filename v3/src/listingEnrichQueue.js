@@ -718,7 +718,7 @@ export async function processOneEnrichJob(conn, helpers, job, {
     buildingOnly: inspected.buildingOnly === true,
   });
   const readyInfo = await prepWrite(helpers, conn, listing.post_id, stored, evalResult);
-  if (readyInfo.becomingReady) helpers.onFirstReady?.(stored, readyInfo);
+  if (readyInfo.becomingReady) await helpers.onFirstReady?.(stored, readyInfo);
   const firstQueuedAt = Date.parse(job.created_at || "") || t0;
   const firstReadyMs = readyInfo.becomingReady ? Math.max(0, Date.now() - firstQueuedAt) : null;
   const timings = {
