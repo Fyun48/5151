@@ -2293,24 +2293,29 @@ app.get("/api/admin/providers/usage", requireAdminApi, (_req, res) => {
   res.json(getAdminProviderSettings());
 });
 
-app.get("/api/admin/similarity", requireAdminApi, (_req, res) => {
-  res.json(getAdminSimilaritySettings());
+app.get("/api/admin/similarity", requireAdminApi, async (_req, res) => {
+  try {
+    res.json(await getAdminSimilaritySettings());
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message });
+  }
 });
 
-app.put("/api/admin/phash", requireAdminApi, (req, res) => {
+app.put("/api/admin/phash", requireAdminApi, async (req, res) => {
   try {
-    res.json({ ok: true, ...saveAdminPhashSettings(req.body || {}), overview: getAdminSimilaritySettings() });
+    const saved = await saveAdminPhashSettings(req.body || {});
+    res.json({ ok: true, ...saved, overview: await getAdminSimilaritySettings() });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.post("/api/admin/similarity/:id/review", requireAdminApi, (req, res) => {
+app.post("/api/admin/similarity/:id/review", requireAdminApi, async (req, res) => {
   try {
     res.json({
       ok: true,
-      item: reviewAdminSimilarity(req.params.id, req.body || {}, actorUserId(req)),
-      overview: getAdminSimilaritySettings(),
+      item: await reviewAdminSimilarity(req.params.id, req.body || {}, actorUserId(req)),
+      overview: await getAdminSimilaritySettings(),
     });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
