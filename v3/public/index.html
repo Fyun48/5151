@@ -13362,6 +13362,14 @@
 
     renderDistrictPicker({ watchDistricts: [] });
 
+    // 公告、「支持本站」入口、帳號區支持方式、廣告與廣播都跟「設定載入」無關，不該排在使用者設定的後面。
+    // 訪客路徑的 loadState() 最後會 await 公開房源查詢（冷啟動時實測可達 28 秒），若把這些呼叫留在下面的
+    // .then() 裡，入口會跟著晚 20～30 秒才出現（實測正式站入口 32.6s 才可見，而 /api/comms 本身只花 0.35s）。
+    ensureServiceWorker();
+    loadComms().catch(() => {});
+    loadPublicAds().catch(() => {});
+    loadBroadcasts().catch(() => {});
+
     loadState().catch((error) => {
       $("status").textContent = error.message || "載入失敗，請再按重新整理";
       setSettingsReady(false, "設定沒載到。請按右上「重新整理」。現在看到的空白表單不是你的存檔，請不要按儲存。");
@@ -13369,16 +13377,13 @@
       initMap();
       renderBoxes();
       renderDock();
-      ensureServiceWorker();
       fillDemandDistricts();
       fillSelfDistricts();
       paintSelfTraits();
       loadMineSelfListings().catch(() => {});
       loadDemandExposure().catch(() => {});
-      loadPublicAds().catch(() => {});
-      loadBroadcasts().catch(() => {});
-      loadComms().catch(() => {});
       openSelfFromQuery().catch(() => {});
+      // 品牌／贊助提示要看登入狀態（isGuest、mePlan），所以要等 loadState() 完成才決定。
       window.JibbyMascot?.load?.().then((brand) => {
         if (!brand) return;
         if (isGuest) window.JibbyMascot.maybeWelcome();
