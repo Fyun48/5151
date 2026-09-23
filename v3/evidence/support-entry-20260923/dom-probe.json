@@ -1,0 +1,449 @@
+{
+ "member": {
+  "desktop": {
+   "appView": "listings",
+   "supportDomain": "0",
+   "horizontalOverflow": false,
+   "scrollW": 1280,
+   "clientW": 1280,
+   "headerEntry": {
+    "hidden": false,
+    "display": "flex",
+    "visible": true,
+    "href": "#me",
+    "text": "支持本站"
+   },
+   "footerEntry": {
+    "hidden": false,
+    "display": "inline-flex",
+    "visible": true,
+    "href": "#me",
+    "text": "支持本站"
+   },
+   "sponsorBar": {
+    "hidden": true,
+    "display": "none",
+    "visible": false,
+    "href": "",
+    "text": ""
+   },
+   "supportCard": {
+    "hidden": false,
+    "display": "block",
+    "visible": false,
+    "href": "",
+    "text": "支持本站\n      支持是自願的。沒贊助也能繼續找房與看許願房。\n      "
+   },
+   "accountLinks": {
+    "html": "<a class=\"sponsor-chip\" href=\"https://buymeacoffee.com/jibbyexample\" target=\"_blank\" rel=\"noopener\">Buy Me a Coffee<span class=\"blurb\">海外信用卡</span></a>",
+    "count": 1
+   },
+   "chipTexts": [
+    "Buy Me a Coffee海外信用卡 -> https://buymeacoffee.com/jibbyexample"
+   ],
+   "afterClick": {
+    "appView": "me",
+    "supportDomain": "0",
+    "horizontalOverflow": false,
+    "scrollW": 1280,
+    "clientW": 1280,
+    "headerEntry": {
+     "hidden": false,
+     "display": "flex",
+     "visible": true,
+     "href": "#me",
+     "text": "支持本站"
+    },
+    "footerEntry": {
+     "hidden": false,
+     "display": "inline-flex",
+     "visible": true,
+     "href": "#me",
+     "text": "支持本站"
+    },
+    "sponsorBar": {
+     "hidden": true,
+     "display": "none",
+     "visible": false,
+     "href": "",
+     "text": ""
+    },
+    "supportCard": {
+     "hidden": false,
+     "display": "block",
+     "visible": true,
+     "href": "",
+     "text": "支持本站\n      支持是自願的。沒贊助也能繼續找房與看許願房。\n      "
+    },
+    "accountLinks": {
+     "html": "<a class=\"sponsor-chip\" href=\"https://buymeacoffee.com/jibbyexample\" target=\"_blank\" rel=\"noopener\">Buy Me a Coffee<span class=\"blurb\">海外信用卡</span></a>",
+     "count": 1
+    },
+    "chipTexts": [
+     "Buy Me a Coffee海外信用卡 -> https://buymeacoffee.com/jibbyexample"
+    ]
+   }
+  },
+  "tablet": {
+   "appView": "listings",
+   "supportDomain": "0",
+   "horizontalOverflow": false,
+   "scrollW": 768,
+   "clientW": 768,
+   "headerEntry": {
+    "hidden": false,
+    "display": "none",
+    "visible": false,
+    "href": "#me",
+    "text": "支持本站"
+   },
+   "footerEntry": {
+    "hidden": false,
+    "display": "inline-flex",
+    "visible": true,
+    "href": "#me",
+    "text": "支持本站"
+   },
+   "sponsorBar": {
+    "hidden": true,
+    "display": "none",
+    "visible": false,
+    "href": "",
+    "text": ""
+   },
+   "supportCard": {
+    "hidden": false,
+    "display": "block",
+    "visible": false,
+    "href": "",
+    "text": "支持本站\n      支持是自願的。沒贊助也能繼續找房與看許願房。\n      "
+   },
+   "accountLinks": {
+    "html": "<a class=\"sponsor-chip\" href=\"https://buymeacoffee.com/jibbyexample\" target=\"_blank\" rel=\"noopener\">Buy Me a Coffee<span class=\"blurb\">海外信用卡</span></a>",
+    "count": 1
+   },
+   "chipTexts": [
+    "Buy Me a Coffee海外信用卡 -> https://buymeacoffee.com/jibbyexample"
+   ],
+   "afterClick": {
+    "appView": "listings",
+    "supportDomain": "0",
+    "horizontalOverflow": false,
+    "scrollW": 768,
+    "clientW": 768,
+    "headerEntry": {
+     "hidden": false,
+     "display": "none",
+     "visible": false,
+     "href": "#me",
+     "text": "支持本站"
+    },
+    "footerEntry": {
+     "hidden": false,
+     "display": "inline-flex",
+     "visible": true,
+     "href": "#me",
+     "text": "支持本站"
+    },
+    "sponsorBar": {
+     "hidden": true,
+     "display": "none",
+     "visible": false,
+     "href": "",
+     "text": ""
+    },
+    "supportCard": {
+     "hidden": false,
+     "display": "block",
+     "visible": false,
+     "href": "",
+     "text": "支持本站\n      支持是自願的。沒贊助也能繼續找房與看許願房。\n      "
+    },
+    "accountLinks": {
+     "html": "<a class=\"sponsor-chip\" href=\"https://buymeacoffee.com/jibbyexample\" target=\"_blank\" rel=\"noopener\">Buy Me a Coffee<span class=\"blurb\">海外信用卡</span></a>",
+     "count": 1
+    },
+    "chipTexts": [
+     "Buy Me a Coffee海外信用卡 -> https://buymeacoffee.com/jibbyexample"
+    ]
+   }
+  },
+  "mobile": {
+   "appView": "listings",
+   "supportDomain": "0",
+   "horizontalOverflow": false,
+   "scrollW": 375,
+   "clientW": 375,
+   "headerEntry": {
+    "hidden": false,
+    "display": "none",
+    "visible": false,
+    "href": "#me",
+    "text": "支持本站"
+   },
+   "footerEntry": {
+    "hidden": false,
+    "display": "inline-flex",
+    "visible": true,
+    "href": "#me",
+    "text": "支持本站"
+   },
+   "sponsorBar": {
+    "hidden": true,
+    "display": "none",
+    "visible": false,
+    "href": "",
+    "text": ""
+   },
+   "supportCard": {
+    "hidden": false,
+    "display": "block",
+    "visible": false,
+    "href": "",
+    "text": "支持本站\n      支持是自願的。沒贊助也能繼續找房與看許願房。\n      "
+   },
+   "accountLinks": {
+    "html": "<a class=\"sponsor-chip\" href=\"https://buymeacoffee.com/jibbyexample\" target=\"_blank\" rel=\"noopener\">Buy Me a Coffee<span class=\"blurb\">海外信用卡</span></a>",
+    "count": 1
+   },
+   "chipTexts": [
+    "Buy Me a Coffee海外信用卡 -> https://buymeacoffee.com/jibbyexample"
+   ],
+   "afterClick": {
+    "appView": "me",
+    "supportDomain": "0",
+    "horizontalOverflow": false,
+    "scrollW": 375,
+    "clientW": 375,
+    "headerEntry": {
+     "hidden": false,
+     "display": "none",
+     "visible": false,
+     "href": "#me",
+     "text": "支持本站"
+    },
+    "footerEntry": {
+     "hidden": false,
+     "display": "inline-flex",
+     "visible": true,
+     "href": "#me",
+     "text": "支持本站"
+    },
+    "sponsorBar": {
+     "hidden": true,
+     "display": "none",
+     "visible": false,
+     "href": "",
+     "text": ""
+    },
+    "supportCard": {
+     "hidden": false,
+     "display": "block",
+     "visible": true,
+     "href": "",
+     "text": "支持本站\n      支持是自願的。沒贊助也能繼續找房與看許願房。\n      "
+    },
+    "accountLinks": {
+     "html": "<a class=\"sponsor-chip\" href=\"https://buymeacoffee.com/jibbyexample\" target=\"_blank\" rel=\"noopener\">Buy Me a Coffee<span class=\"blurb\">海外信用卡</span></a>",
+     "count": 1
+    },
+    "chipTexts": [
+     "Buy Me a Coffee海外信用卡 -> https://buymeacoffee.com/jibbyexample"
+    ]
+   }
+  }
+ },
+ "guest": {
+  "desktop": {
+   "appView": "listings",
+   "supportDomain": "0",
+   "horizontalOverflow": false,
+   "scrollW": 1280,
+   "clientW": 1280,
+   "headerEntry": {
+    "hidden": false,
+    "display": "flex",
+    "visible": true,
+    "href": "#me",
+    "text": "支持本站"
+   },
+   "footerEntry": {
+    "hidden": false,
+    "display": "inline-flex",
+    "visible": true,
+    "href": "#me",
+    "text": "支持本站"
+   },
+   "sponsorBar": {
+    "hidden": true,
+    "display": "none",
+    "visible": false,
+    "href": "",
+    "text": ""
+   },
+   "supportCard": {
+    "hidden": false,
+    "display": "block",
+    "visible": false,
+    "href": "",
+    "text": "支持本站\n      支持是自願的。沒贊助也能繼續找房與看許願房。\n      "
+   },
+   "accountLinks": {
+    "html": "<a class=\"sponsor-chip\" href=\"https://buymeacoffee.com/jibbyexample\" target=\"_blank\" rel=\"noopener\">Buy Me a Coffee<span class=\"blurb\">海外信用卡</span></a>",
+    "count": 1
+   },
+   "chipTexts": [
+    "Buy Me a Coffee海外信用卡 -> https://buymeacoffee.com/jibbyexample"
+   ],
+   "afterClick": {
+    "appView": "me",
+    "supportDomain": "0",
+    "horizontalOverflow": false,
+    "scrollW": 1280,
+    "clientW": 1280,
+    "headerEntry": {
+     "hidden": false,
+     "display": "flex",
+     "visible": true,
+     "href": "#me",
+     "text": "支持本站"
+    },
+    "footerEntry": {
+     "hidden": false,
+     "display": "inline-flex",
+     "visible": true,
+     "href": "#me",
+     "text": "支持本站"
+    },
+    "sponsorBar": {
+     "hidden": true,
+     "display": "none",
+     "visible": false,
+     "href": "",
+     "text": ""
+    },
+    "supportCard": {
+     "hidden": false,
+     "display": "block",
+     "visible": true,
+     "href": "",
+     "text": "支持本站\n      支持是自願的。沒贊助也能繼續找房與看許願房。\n      "
+    },
+    "accountLinks": {
+     "html": "<a class=\"sponsor-chip\" href=\"https://buymeacoffee.com/jibbyexample\" target=\"_blank\" rel=\"noopener\">Buy Me a Coffee<span class=\"blurb\">海外信用卡</span></a>",
+     "count": 1
+    },
+    "chipTexts": [
+     "Buy Me a Coffee海外信用卡 -> https://buymeacoffee.com/jibbyexample"
+    ]
+   }
+  },
+  "mobile": {
+   "appView": "listings",
+   "supportDomain": "0",
+   "horizontalOverflow": false,
+   "scrollW": 375,
+   "clientW": 375,
+   "headerEntry": {
+    "hidden": false,
+    "display": "none",
+    "visible": false,
+    "href": "#me",
+    "text": "支持本站"
+   },
+   "footerEntry": {
+    "hidden": false,
+    "display": "inline-flex",
+    "visible": true,
+    "href": "#me",
+    "text": "支持本站"
+   },
+   "sponsorBar": {
+    "hidden": true,
+    "display": "none",
+    "visible": false,
+    "href": "",
+    "text": ""
+   },
+   "supportCard": {
+    "hidden": false,
+    "display": "block",
+    "visible": false,
+    "href": "",
+    "text": "支持本站\n      支持是自願的。沒贊助也能繼續找房與看許願房。\n      "
+   },
+   "accountLinks": {
+    "html": "<a class=\"sponsor-chip\" href=\"https://buymeacoffee.com/jibbyexample\" target=\"_blank\" rel=\"noopener\">Buy Me a Coffee<span class=\"blurb\">海外信用卡</span></a>",
+    "count": 1
+   },
+   "chipTexts": [
+    "Buy Me a Coffee海外信用卡 -> https://buymeacoffee.com/jibbyexample"
+   ],
+   "afterClick": {
+    "appView": "me",
+    "supportDomain": "0",
+    "horizontalOverflow": false,
+    "scrollW": 375,
+    "clientW": 375,
+    "headerEntry": {
+     "hidden": false,
+     "display": "none",
+     "visible": false,
+     "href": "#me",
+     "text": "支持本站"
+    },
+    "footerEntry": {
+     "hidden": false,
+     "display": "inline-flex",
+     "visible": true,
+     "href": "#me",
+     "text": "支持本站"
+    },
+    "sponsorBar": {
+     "hidden": true,
+     "display": "none",
+     "visible": false,
+     "href": "",
+     "text": ""
+    },
+    "supportCard": {
+     "hidden": false,
+     "display": "block",
+     "visible": true,
+     "href": "",
+     "text": "支持本站\n      支持是自願的。沒贊助也能繼續找房與看許願房。\n      "
+    },
+    "accountLinks": {
+     "html": "<a class=\"sponsor-chip\" href=\"https://buymeacoffee.com/jibbyexample\" target=\"_blank\" rel=\"noopener\">Buy Me a Coffee<span class=\"blurb\">海外信用卡</span></a>",
+     "count": 1
+    },
+    "chipTexts": [
+     "Buy Me a Coffee海外信用卡 -> https://buymeacoffee.com/jibbyexample"
+    ]
+   }
+  }
+ },
+ "problems": [
+  "member/desktop CONSOLE Failed to load resource: net::ERR_FAILED",
+  "member/desktop CONSOLE Failed to load resource: net::ERR_FAILED",
+  "member/desktop CONSOLE Failed to load resource: net::ERR_FAILED",
+  "member/desktop CONSOLE Failed to load resource: net::ERR_FAILED",
+  "member/desktop PAGEERROR getScrollTop is not defined",
+  "member/desktop PAGEERROR getScrollTop is not defined",
+  "member/tablet CONSOLE Failed to load resource: net::ERR_FAILED",
+  "member/tablet PAGEERROR getScrollTop is not defined",
+  "member/tablet PAGEERROR getScrollTop is not defined",
+  "member/mobile CONSOLE Failed to load resource: net::ERR_FAILED",
+  "member/mobile PAGEERROR getScrollTop is not defined",
+  "member/mobile PAGEERROR getScrollTop is not defined",
+  "guest/desktop CONSOLE Failed to load resource: net::ERR_FAILED",
+  "guest/desktop CONSOLE Failed to load resource: net::ERR_FAILED",
+  "guest/desktop CONSOLE Failed to load resource: net::ERR_FAILED",
+  "guest/desktop CONSOLE Failed to load resource: net::ERR_FAILED",
+  "guest/desktop PAGEERROR getScrollTop is not defined",
+  "guest/desktop PAGEERROR getScrollTop is not defined",
+  "guest/mobile CONSOLE Failed to load resource: net::ERR_FAILED",
+  "guest/mobile PAGEERROR getScrollTop is not defined",
+  "guest/mobile PAGEERROR getScrollTop is not defined"
+ ]
+}

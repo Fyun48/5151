@@ -39,7 +39,11 @@ test("pagination and scroll are captured into the versioned client state on page
   const html = readFileSync(path.join(dir, "../public/index.html"), "utf8");
   assert.match(html, /function persistListPositionState\(\)/);
   assert.match(html, /pagination: \{ cursor: listCursor, offset: listOffset \}/);
-  assert.match(html, /scroll: \{ top: Math\.max\(0, Math\.round\(getScrollTop\(\)\)\) \}/);
+  assert.match(html, /scroll: \{ top: Math\.max\(0, Math\.round\(pageScrollY\(\)\)\) \}/);
+  // 這裡曾經寫成不存在的 getScrollTop()，pagehide 時會丟 ReferenceError 讓狀態存不起來；
+  // 用既有的 pageScrollY()，並擋住它再被改回去。
+  assert.match(html, /function pageScrollY\(\)/);
+  assert.doesNotMatch(html, /getScrollTop/);
   assert.match(html, /window\.addEventListener\("pagehide", persistListPositionState\)/);
   assert.match(html, /visibilitychange[\s\S]{0,160}persistListPositionState\(\)/);
 });

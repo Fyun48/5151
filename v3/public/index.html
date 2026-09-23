@@ -1922,6 +1922,9 @@
     }
     .filter-head-actions > button {
       min-height: var(--touch);
+      /* 按鈕尺寸固定：文字太長時換到第二排，不撐高、不撐寬、也不溢出膠囊。
+         line-height 1.2 × 13px × 2 排 = 31.2px，仍在 44px 減 padding／border 的內容框內。 */
+      max-height: var(--touch);
       min-width: 76px;
       padding: 4px 12px;
       font-size: 13px;
@@ -1933,8 +1936,10 @@
       align-items: center;
       justify-content: center;
       overflow: hidden;
-      white-space: nowrap;
-      text-overflow: ellipsis;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      text-overflow: clip;
     }
     /* 桌面收合搜尋設定後，不要露出手機用的「搜尋設定」鈕（specificity 蓋過 .mobile-only） */
     .filter-head-actions > button.mobile-only {
@@ -2955,6 +2960,8 @@
       }
       .filter-head-actions > button {
         flex: 1 1 0;
+        /* 兩顆鈕平分寬度；文字可換到第二排，寬度不足時縮到 min-width，不會溢出膠囊。 */
+        min-width: 0;
       }
       .filter-head-actions > button.mobile-only,
       #openFilterSheetBtn {
@@ -5309,8 +5316,12 @@
       const bits = activeFilterSummary();
       const full = bits.length ? `更多條件 · ${bits.join(" · ")}` : "更多條件";
       const compact = bits.length ? bits.join(" · ") : "更多條件";
+      // 按鈕高度固定（--touch），文字允許換到第二排；超出兩排會被裁掉，
+      // 所以用 scrollWidth／scrollHeight 判斷，再退回較短的標籤。
+      const clipped = () => btn.scrollWidth > btn.clientWidth + 1 || btn.scrollHeight > btn.clientHeight + 1;
       btn.textContent = full;
-      if (bits.length && btn.scrollWidth > btn.clientWidth + 1) btn.textContent = compact;
+      if (bits.length && clipped()) btn.textContent = compact;
+      if (bits.length && clipped()) btn.textContent = "更多條件";
     }
     function fillFloorFilters(s = settings) {
       if ($("excludeRooftop")) $("excludeRooftop").checked = s.excludeRooftop !== false;
@@ -5499,7 +5510,7 @@
     }
 
     let publicAdsCache = {};
-    let commsCache = { announcements: [], banner: null, sponsored: { cards: [], interval: 5, listing_enabled: false, session_cap: 3, notify: [] }, support: { show_entry: false, show_card: false, benefits: [], copy: "" } };
+    let commsCache = { announcements: [], banner: null, sponsored: { cards: [], interval: 5, listing_enabled: false, session_cap: 3, notify: [] }, support: { show_entry: false, show_card: false, benefits: [], copy: "", sponsor_links: [] } };
     let commsBannerId = "";
 
     function sponsoredCardMarkup(card) {
@@ -5586,10 +5597,36 @@
       const copy = $("supportAccountCopy");
       const benefits = $("supportAccountBenefits");
       const links = $("supportAccountLinks");
+      const ways = Array.isArray(support.sponsor_links) ? support.sponsor_links : [];
       if (copy) copy.textContent = support.copy || "支持是自願的。沒贊助也能繼續找房與看許願房。";
       if (benefits) benefits.innerHTML = (support.benefits || []).map((row) => `<li>${esc(row.label)}</li>`).join("");
-      if (card) card.hidden = support.enabled === false;
-      if (links && !links.dataset.bound) links.dataset.bound = "1";
+      // 支持方式：後台「贊助連結」的公開收款連結（例如 Buy Me a Coffee）。這裡是「使用者主動打開」的區塊，
+      // 所以訪客也看得到；首頁那條主動出現的贊助橫條仍只給未贊助的登入會員。
+      if (links) links.innerHTML = ways.map(sponsorChipHtml).join("");
+      // 有可點的支持方式就顯示；沒有連結時只有 Support domain 真的開放才顯示，避免出現沒有出口的空區塊。
+      if (card) card.hidden = !(ways.length > 0 || support.enabled === true);
+      paintSupportEntry();
+    }
+
+    /** 桌機 header／頁尾／帳號區的「支持本站」入口。 */
+    function paintSupportEntry() {
+      const support = commsCache.support || {};
+      const entry = $("supportHeaderLink");
+      const footer = $("supportFooterLink");
+      const meWrap = $("supportMeLinkWrap");
+      const meLink = $("supportMeLink");
+      // Support domain（/support.html）是否真的開放。沒開放時入口留在站內帳號區，
+      // 不要把人帶去只寫「目前尚未開放線上支持入口」的頁面。
+      const domainOpen = document.body.dataset.supportDomain === "1";
+      const showEntry = domainOpen || support.show_entry === true;
+      if (entry) {
+        if (domainOpen) entry.href = "/support.html";
+        else if (entry.getAttribute("href") === "/support.html") entry.href = "#me";
+        entry.hidden = !showEntry;
+      }
+      if (footer) footer.href = domainOpen ? "/support.html" : "#me";
+      if (meWrap) meWrap.hidden = !showEntry;
+      if (meLink && domainOpen) meLink.href = "/support.html";
     }
 
     function commsInboxItems() {
@@ -8502,7 +8539,7 @@
     function persistListPositionState() {
       writeClientState({
         pagination: { cursor: listCursor, offset: listOffset },
-        scroll: { top: Math.max(0, Math.round(getScrollTop())) },
+        scroll: { top: Math.max(0, Math.round(pageScrollY())) },
       });
     }
     window.addEventListener("pagehide", persistListPositionState);
@@ -8660,12 +8697,19 @@
         await fetch(`/api/announcements/${encodeURIComponent(commsBannerId)}/dismiss`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).catch(() => {});
       }
     });
-    $("supportFooterLink")?.addEventListener("click", (ev) => {
-      if ($("supportFooterLink").getAttribute("href") === "/support.html") return;
-      ev.preventDefault();
-      setAppView("me");
-      $("supportAccountCard")?.scrollIntoView({ block: "nearest" });
-    });
+    // 「支持本站」入口（桌機 header、頁尾）：Support domain 沒開放時不要連到 /support.html
+    // （那裡只會說尚未開放），改成打開帳號區的支持區塊，直接看到可用的支持方式。
+    for (const supportEntryId of ["supportFooterLink", "supportHeaderLink"]) {
+      $(supportEntryId)?.addEventListener("click", (ev) => {
+        const link = $(supportEntryId);
+        if (!link || link.hidden || link.getAttribute("href") === "/support.html") return;
+        ev.preventDefault();
+        setAppView("me");
+        $("supportAccountCard")?.scrollIntoView({ block: "nearest" });
+      });
+    }
+    // support-cta.js 取得 /api/support/public 後才知道 Support domain 是否開放；知道後重畫入口。
+    window.addEventListener("support-domain", () => paintSupportEntry());
     document.addEventListener("click", (ev) => {
       const ad = ev.target.closest("[data-sponsored-id]");
       if (ad?.dataset.sponsoredId) {

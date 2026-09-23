@@ -119,6 +119,8 @@
       border-radius: var(--radius);
       color: var(--muted);
     }
+    .ways { display: flex; flex-wrap: wrap; gap: 8px; }
+    .ways a small { opacity: 0.88; font-size: 12px; }
     @media (max-width: 700px) {
       .tiers, .goal-nums { grid-template-columns: 1fr; }
     }
@@ -168,6 +170,12 @@
       <h2 id="tierTitle">支持方式</h2>
       <div class="tiers" id="tierList"></div>
       <p class="fallback" id="checkoutFallback" hidden>目前支持付款服務暫時無法使用，稍後再試即可。</p>
+    </section>
+
+    <section id="directWays" hidden>
+      <h2 id="directWaysTitle">其他支持方式</h2>
+      <p class="muted" id="directWaysHint">選一個你方便的服務，到該服務的頁面完成支持。</p>
+      <div class="ways" id="directWaysList"></div>
     </section>
 
     <section id="sponsorSection" hidden>

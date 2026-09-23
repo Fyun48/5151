@@ -297,6 +297,16 @@ test("support presentation reuses real benefits and is not an ad or modal", () =
   const sponsor = supportPresentation({ support_entry_enabled: true, support_card_enabled: true }, {}, { plan: "sponsor" });
   assert.equal(sponsor.show_entry, false);
   assert.equal(sponsor.sponsored, true);
+  const withWays = supportPresentation({ support_entry_enabled: true }, { sponsored: false }, {
+    plan: "free",
+    role: "member",
+    sponsorLinks: [{ id: "bmc", label: "Buy Me a Coffee", url: "https://buymeacoffee.com/jibbyexample", blurb: "海外信用卡" }],
+  });
+  assert.equal(withWays.show_entry, true);
+  assert.equal(withWays.sponsor_links.length, 1);
+  assert.equal(withWays.sponsor_links[0].id, "bmc");
+  assert.equal(withWays.sponsor_links[0].url, "https://buymeacoffee.com/jibbyexample");
+  assert.deepEqual(supportPresentation({ support_entry_enabled: true }, {}, {}).sponsor_links, []);
   assert.ok(FORBIDDEN_TARGETING_FIELDS.includes("race"));
   assert.ok(!commsMeta().forbidden_targeting.includes("listing_feed"));
 });

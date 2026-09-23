@@ -1,0 +1,125 @@
+{
+ "w375": {
+  "buttons": [
+   {
+    "label": "openFilterSheetBtn",
+    "text": "搜尋設定",
+    "h": 44,
+    "w": 281,
+    "lines": 1,
+    "scrollH": 42,
+    "clientH": 42,
+    "maxH": "44px",
+    "minW": "0px",
+    "ws": "normal"
+   },
+   {
+    "label": "filterRestoreBtn",
+    "text": "更多條件 · 整層住家",
+    "h": 0,
+    "w": 0,
+    "lines": 0,
+    "scrollH": 0,
+    "clientH": 0,
+    "maxH": "44px",
+    "minW": "0px",
+    "ws": "normal"
+   }
+  ],
+  "injected": {
+   "label": "filterRestoreBtn",
+   "text": "更多條件 · 大安區 · 信義區 · 文山區 · 中正區 · 松山區 · 有電梯 · 可開伙",
+   "h": 44,
+   "w": 136.5,
+   "lines": 5,
+   "scrollH": 64,
+   "clientH": 42,
+   "maxH": "44px",
+   "minW": "0px",
+   "ws": "normal"
+  },
+  "pageOverflow": false
+ },
+ "w320": {
+  "buttons": [
+   {
+    "label": "openFilterSheetBtn",
+    "text": "搜尋設定",
+    "h": 44,
+    "w": 226,
+    "lines": 1,
+    "scrollH": 42,
+    "clientH": 42,
+    "maxH": "44px",
+    "minW": "0px",
+    "ws": "normal"
+   },
+   {
+    "label": "filterRestoreBtn",
+    "text": "更多條件 · 整層住家",
+    "h": 0,
+    "w": 0,
+    "lines": 0,
+    "scrollH": 0,
+    "clientH": 0,
+    "maxH": "44px",
+    "minW": "0px",
+    "ws": "normal"
+   }
+  ],
+  "injected": {
+   "label": "filterRestoreBtn",
+   "text": "更多條件 · 大安區 · 信義區 · 文山區 · 中正區 · 松山區 · 有電梯 · 可開伙",
+   "h": 44,
+   "w": 109,
+   "lines": 7,
+   "scrollH": 80,
+   "clientH": 42,
+   "maxH": "44px",
+   "minW": "0px",
+   "ws": "normal"
+  },
+  "pageOverflow": false
+ },
+ "w768": {
+  "buttons": [
+   {
+    "label": "openFilterSheetBtn",
+    "text": "搜尋設定",
+    "h": 44,
+    "w": 674,
+    "lines": 1,
+    "scrollH": 42,
+    "clientH": 42,
+    "maxH": "44px",
+    "minW": "0px",
+    "ws": "normal"
+   },
+   {
+    "label": "filterRestoreBtn",
+    "text": "更多條件 · 整層住家",
+    "h": 0,
+    "w": 0,
+    "lines": 0,
+    "scrollH": 0,
+    "clientH": 0,
+    "maxH": "44px",
+    "minW": "0px",
+    "ws": "normal"
+   }
+  ],
+  "injected": {
+   "label": "filterRestoreBtn",
+   "text": "更多條件 · 大安區 · 信義區 · 文山區 · 中正區 · 松山區 · 有電梯 · 可開伙",
+   "h": 44,
+   "w": 333,
+   "lines": 2,
+   "scrollH": 42,
+   "clientH": 42,
+   "maxH": "44px",
+   "minW": "0px",
+   "ws": "normal"
+  },
+  "pageOverflow": false
+ }
+}

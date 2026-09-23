@@ -60,6 +60,19 @@ test("site entries and CTA stay out of the way of search chrome", () => {
   assertScriptsParse(html);
 });
 
+test("support page still lists the configured sponsor ways while the domain stays closed", () => {
+  assert.match(support, /id="directWays"/);
+  assert.match(support, /id="directWaysList"/);
+  assert.match(supportPage, /function renderDirectWays\(/);
+  assert.match(supportPage, /sponsor_links/);
+  assert.match(supportPage, /heroCta\.href = "#directWays"/);
+  // 前端仍不得寫死第三方收款網址，一律用 API 回來的連結。
+  assert.doesNotMatch(support, /buymeacoffee\.com/);
+  assert.doesNotMatch(supportPage, /buymeacoffee\.com/);
+  assertScriptsParse(support);
+  assertScriptsParse(html);
+});
+
 test("admin support page covers dashboard, preview, and legacy comms form", () => {
   assert.match(admin, /id="supportAdminRoot"/);
   assert.match(admin, /id="supportConfigForm"/);
