@@ -1,4 +1,5 @@
 import { signIngestRequest } from "./opsSignature.js";
+import { resolveDbDriver } from "./dbDriver.js";
 import {
   claimCrmOutboxBatch,
   markCrmOutboxSent,
@@ -82,6 +83,7 @@ export async function deliverCrmOutboxOnce(db, {
   timeoutMs = DEFAULT_TIMEOUT_MS,
   batchSize = 20,
 } = {}) {
+  if (resolveDbDriver() === "postgres") return { claimed: 0, sent: 0, failed: 0, dead: 0, skipped: "pg_loop_pending" };
   if (!url || !secret) return { claimed: 0, sent: 0, failed: 0, dead: 0, skipped: "not_configured" };
   if (isLocalCrmSyncStopped(db)) return { claimed: 0, sent: 0, failed: 0, dead: 0, skipped: "local_stopped" };
   const claimed = claimCrmOutboxBatch(db, { limit: batchSize, now: now() });
