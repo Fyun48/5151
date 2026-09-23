@@ -181,9 +181,8 @@ node --test v3/test/crawler-reads-parity.test.js v3/test/listing-fields-parity.t
 >   既有 `listing-similarity.test.js` **11/11**；正式站行為不變（`phash_enabled` 預設 false）。
 > - **第 2 段（佇列寫入）**：`recordListingPhash`／`suggestFromNewHash`／`recordCrawlInsight`／
 >   `enqueueListingSimilarity` 的 driver-aware 版本，程式在分支 **`feat/pg-similarity-queue`**
->   （**draft PR #447**，HEAD `2825c60`）：離線 parity **7 pass／0 fail／1 skip**（0 skip 要 live）、
->   `listing-similarity.test.js` 11/11、**CI 三項全綠**；**shadow live 待補**（本容器沒有 `PG_TEST_URL` 憑證，
->   192.168.0.220:15432 可達 ✓）。資料本體（`listing_image_phash`／`listing_similarity_suggestion`／
+>   （**PR #447**）：離線 parity **7/7**、**shadow live 8/8（0 skip）**、`listing-similarity.test.js` 11/11、**CI 三項全綠**；
+>   live 憑證於 2026-09-23 由 `ssh syn-nas` 取用影子站 `.env`（未落地、未進版控）。資料本體（`listing_image_phash`／`listing_similarity_suggestion`／
 >   `listing_crawl_insight`）改寫進「與 UI 同一個 store」（PG 模式＝PostgreSQL）——這正是
 >   「後台讀得到、佇列填不進去」的修法；`db.js` 的 `persistListing()` PG 分支改呼叫
 >   `enqueueSimilaritySafeAsync()`（best-effort、不擋入庫）。
@@ -196,7 +195,7 @@ node --test v3/test/crawler-reads-parity.test.js v3/test/listing-fields-parity.t
 >   已經**轉正（不再失敗）**：`suggestFromNewHashAsync` 直接餵 `recorded={post_id,phash,algo_version}`（不必真的算圖）、
 >   `recordCrawlInsightAsync` 用 `options.llmInsight` **函式**注入 provider（注意只吃函式）、
 >   `enqueueListingSimilarityAsync` 關閉時回 `disabled`；fixture 用 `beforeEach` 還原（否則後面第一段的測試會被清掉而紅）。
->   沒綠之前不要 merge；綠了再跑 live（`PG_TEST_URL=postgres://postgres:<PG_SUPER_PASSWORD>@192.168.0.220:15432/5151_shadow`，目標 0 skip）。
+>   離線 7/7 ＋ shadow live 8/8 都已在 2026-09-23 通過（live 需要 `PG_TEST_URL`，密碼在 syn-nas 的 `~/5151-shadow-ha/shadow-ha/postgres-primary/.env`）。
 >   這條測試會建立 3 張表並動 `settings`（用影子站／離線 shim 就好，別打正式站）。
 
 
