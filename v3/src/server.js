@@ -318,6 +318,7 @@ import { catalogDiff, isSystemCatalogTemplate, publicAdminCatalog } from "./rent
 import { isRentalCatalogV2Enabled, publicRentalMarketplaceFlags } from "./rentalMarketplaceFlags.js";
 import { startCrmDeliveryLoop } from "./crmDelivery.js";
 import { opsDeliveryDb } from "./db.js";
+import { crmOutboxOps } from "./crmOutboxAsync.js";
 import { refreshHousingData } from "./housingFetch.js";
 import {
   TICK_BUDGET_MS,
@@ -4278,7 +4279,7 @@ function startWorkerLoops() {
   startWishLifecycleLoop(() => runWishLifecycleWorkerTick(), { intervalMs: 5 * 60 * 1000, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
   startWishOfferExpiryLoop(() => runWishOfferExpiryWorkerTick(), { intervalMs: 5 * 60 * 1000, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
   startRentalNotifyLoop(() => runRentalNotifyWorkerTick(), { intervalMs: 5 * 60 * 1000, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
-  startCrmDeliveryLoop(opsDeliveryDb(), process.env, { log: (tag, info) => console.log(tag, JSON.stringify(info)) });
+  startCrmDeliveryLoop(opsDeliveryDb(), process.env, { log: (tag, info) => console.log(tag, JSON.stringify(info)), ops: crmOutboxOps() });
 }
 
 // 啟動後 20 秒做第一次爬取 + geo backfill（crawler 與 worker 共用）。

@@ -24,6 +24,8 @@ const app = await import("../src/db.js");
 const crm = await import("../src/crm.js");
 const crmAsync = await import("../src/crmAsync.js");
 const crmOutbox = await import("../src/crmOutbox.js");
+const crmOutboxAsync = await import("../src/crmOutboxAsync.js");
+const crmDelivery = await import("../src/crmDelivery.js");
 
 const db = app.sqliteHandle();
 crm.ensureCrmSchema(db);
@@ -64,12 +66,16 @@ function pgShimOn(handle) {
     // 交易控制語句在 PG 是原生命令，替身直接轉給 SQLite 的 exec。
     if (/^(BEGIN|COMMIT|ROLLBACK)\b/i.test(text.trim())) { handle.exec(text.trim()); return []; }
     const statement = handle.prepare(text);
-    try {
-      return statement.all(...params);
-    } catch {
-      statement.run(...params);
-      return [];
+    const isRead = /^\s*(select|with)/i.test(text) || /returning/i.test(text);
+    if (isRead) {
+      const rows = statement.all(...params);
+      rows.rowCount = Array.isArray(rows) ? rows.length : 0;
+      return rows;
     }
+    const info = statement.run(...params);
+    const out = [];
+    out.rowCount = Number(info && info.changes) || 0;
+    return out;
   };
 }
 const pgOptions = { driver: "postgres", exec: pgShimOn(db), strict: true };
@@ -214,6 +220,103 @@ test("第二段：同步開啟時，寫入會把快照寫進 crm_outbox（PG 也
     delete process.env.OPS_CRM_DELIVERY;
     delete process.env.OPS_INGEST_URL;
     delete process.env.OPS_INGEST_SECRET;
+  }
+});
+
+// ---- 2.2c：crm_outbox 佇列六支的 parity ----
+async function seedOutbox() {
+  crmOutbox.enqueueCrmOutbox(db, { contactId: FIRST_ID, data: { a: 1 }, now: WHEN });
+  crmOutbox.enqueueCrmOutbox(db, { contactId: FIRST_ID + 1, data: { a: 2 }, now: WHEN });
+}
+function resetOutbox() {
+  db.prepare("UPDATE crm_outbox SET status='pending', claimed_at=NULL, attempts=0, sent_at=NULL, last_error=NULL, next_attempt_at=?").run(STAMP);
+}
+
+test("第二段：crm_outbox 的 claim／sent／failure／stats 在兩個 driver 一致", async () => {
+  seed();
+  seedOutbox();
+
+  // sqlite 路徑
+  const syncClaimed = crmOutbox.claimCrmOutboxBatch(db, { limit: 10, now: WHEN });
+  crmOutbox.markCrmOutboxSent(db, syncClaimed[0].id, { now: WHEN });
+  const syncFail = crmOutbox.markCrmOutboxFailure(db, syncClaimed[1], "timeout", { now: WHEN });
+  const syncRows = db.prepare("SELECT status, attempts, sent_at, last_error, next_attempt_at FROM crm_outbox ORDER BY id").all();
+  const syncStats = crmOutbox.crmOutboxStats(db);
+
+  // 還原後走 PostgreSQL 路徑
+  resetOutbox();
+  const pgClaimed = await crmOutboxAsync.claimCrmOutboxBatchAsync({ limit: 10, now: WHEN }, pgOptions);
+  assert.equal(pgClaimed.length, syncClaimed.length, "兩邊搶到的筆數要相同");
+  assert.equal(pgClaimed.length, 2, "兩筆都該搶到（rowCount 沒對上就會是 0）");
+  await crmOutboxAsync.markCrmOutboxSentAsync(pgClaimed[0].id, { now: WHEN }, pgOptions);
+  const pgFail = await crmOutboxAsync.markCrmOutboxFailureAsync(pgClaimed[1], "timeout", { now: WHEN }, pgOptions);
+  const pgRows = db.prepare("SELECT status, attempts, sent_at, last_error, next_attempt_at FROM crm_outbox ORDER BY id").all();
+  const pgStats = await crmOutboxAsync.crmOutboxStatsAsync(pgOptions);
+
+  assert.deepEqual(pgRows, syncRows, "逐列欄位要完全相同（含退避時間）");
+  assert.deepEqual(pgFail, syncFail, "失敗回傳要相同");
+  assert.deepEqual(pgStats, syncStats, "統計要相同");
+  assert.equal(Number(pgRows[1].attempts), 1);
+});
+
+test("第二段：deliverCrmOutboxOnce 走 ops 時，成功與失敗的標記與 sqlite 相同", async () => {
+  const okFetch = async () => ({ status: 200 });
+  const badFetch = async () => ({ status: 500 });
+  const base = { url: "http://127.0.0.1:9/ops/api/ingest/crm", secret: "s", now: () => WHEN, timeoutMs: 100 };
+
+  seed();
+  seedOutbox();
+  const syncOk = await crmDelivery.deliverCrmOutboxOnce(db, { ...base, fetchImpl: okFetch });
+  const syncRows = db.prepare("SELECT status, last_error FROM crm_outbox ORDER BY id").all();
+
+  resetOutbox();
+  const ops = crmOutboxAsync.crmOutboxOps(pgOptions);
+  const pgOk = await crmDelivery.deliverCrmOutboxOnce(db, { ...base, fetchImpl: okFetch, ops });
+  const pgRows = db.prepare("SELECT status, last_error FROM crm_outbox ORDER BY id").all();
+  assert.deepEqual(pgOk, syncOk, "送出成功的摘要要相同");
+  assert.deepEqual(pgRows, syncRows, "送出後的狀態要相同");
+
+  resetOutbox();
+  await crmDelivery.deliverCrmOutboxOnce(db, { ...base, fetchImpl: badFetch, ops });
+  const failedRows = db.prepare("SELECT status, last_error FROM crm_outbox ORDER BY id").all();
+  assert.equal(failedRows[0].status, "failed");
+  assert.equal(failedRows[0].last_error, "HTTP 500");
+});
+
+test("第二段：投遞控制（停止旗標與統計）在 PostgreSQL 也讀得到", async () => {
+  seed();
+  const stopped = await crmOutboxAsync.setCrmDeliveryStopAsync(false, process.env, pgOptions);
+  assert.equal(stopped.local_stopped, false);
+  const isStopped = await crmOutboxAsync.crmOutboxStatsAsync(pgOptions);
+  assert.equal(typeof isStopped.total, "number");
+  const control = await crmOutboxAsync.crmDeliveryControlAsync(process.env, pgOptions);
+  assert.equal(control.local_stopped, false);
+  assert.equal(typeof control.outbox.total, "number");
+  assert.equal(control.note, "回饋複製授權不自動包含 CRM 同步。");
+});
+
+test("live：影子站的 crm_outbox 可以搶到工作（rowCount 正確）", async (t) => {
+  const url = process.env.PG_TEST_URL;
+  if (!url) {
+    t.skip("PG_TEST_URL is not set (live crm_outbox)");
+    return;
+  }
+  const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");
+  const pgDriver = await createPostgresDriver({ connectionString: url });
+  const options = { driver: "postgres", pgDriver, strict: true };
+  try {
+    const before = await crmOutboxAsync.crmOutboxStatsAsync(options);
+    const enqueued = await crmOutboxAsync.enqueueCrmOutboxAsync({ contactId: 960001, data: { live: true }, now: WHEN }, options);
+    assert.equal(typeof enqueued.deliveryId, "string");
+    const claimed = await crmOutboxAsync.claimCrmOutboxBatchAsync({ limit: 5, now: WHEN }, options);
+    assert.equal(claimed.length >= 1, true, "要真的搶到至少一筆（rowCount 沒對上會是 0）");
+    const target = claimed.find((row) => Number(row.contact_id) === 960001);
+    assert.ok(target, "剛剛排進去的要搶到");
+    await crmOutboxAsync.markCrmOutboxSentAsync(target.id, { now: WHEN }, options);
+    const stats = await crmOutboxAsync.crmOutboxStatsAsync(options);
+    assert.equal(stats.total >= before.total, true);
+  } finally {
+    await pgDriver.close();
   }
 });
 

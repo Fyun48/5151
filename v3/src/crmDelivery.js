@@ -1,5 +1,4 @@
 import { signIngestRequest } from "./opsSignature.js";
-import { resolveDbDriver } from "./dbDriver.js";
 import {
   claimCrmOutboxBatch,
   markCrmOutboxSent,
@@ -53,7 +52,18 @@ async function withTimeout(fetchImpl, url, options, timeoutMs) {
   }
 }
 
-async function deliverOne(db, row, { url, secret, timeoutMs, fetchImpl, now }) {
+function defaultOps(db) {
+  return {
+    driver: "sqlite",
+    stopped: async () => isLocalCrmSyncStopped(db),
+    claim: async (args) => claimCrmOutboxBatch(db, args),
+    sent: async (id, args) => markCrmOutboxSent(db, id, args),
+    failure: async (row, errText, args) => markCrmOutboxFailure(db, row, errText, args),
+    stats: async () => crmOutboxStats(db),
+  };
+}
+
+async function deliverOne(db, row, { url, secret, timeoutMs, fetchImpl, now, ops }) {
   const raw = row.payload;
   let deliveryId = row.delivery_id;
   try {
@@ -63,14 +73,14 @@ async function deliverOne(db, row, { url, secret, timeoutMs, fetchImpl, now }) {
     const { headers } = signIngestRequest({ method: "POST", path: INGEST_PATH, deliveryId, rawBody: raw, secret });
     const res = await withTimeout(fetchImpl, url, { method: "POST", headers, body: raw }, timeoutMs);
     if (res.status >= 200 && res.status < 300) {
-      markCrmOutboxSent(db, row.id, { now: now() });
+      await ops.sent(row.id, { now: now() });
       return { id: row.id, result: "sent" };
     }
-    const info = markCrmOutboxFailure(db, row, `HTTP ${res.status}`, { now: now() });
+    const info = await ops.failure(row, `HTTP ${res.status}`, { now: now() });
     return { id: row.id, result: info.status };
   } catch (err) {
     const cls = err?.name === "AbortError" ? "timeout" : (err?.name || "error");
-    const info = markCrmOutboxFailure(db, row, cls, { now: now() });
+    const info = await ops.failure(row, cls, { now: now() });
     return { id: row.id, result: info.status };
   }
 }
@@ -82,14 +92,15 @@ export async function deliverCrmOutboxOnce(db, {
   fetchImpl = globalThis.fetch,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   batchSize = 20,
+  ops = null,
 } = {}) {
-  if (resolveDbDriver() === "postgres") return { claimed: 0, sent: 0, failed: 0, dead: 0, skipped: "pg_loop_pending" };
+  const outboxOps = ops || defaultOps(db);
   if (!url || !secret) return { claimed: 0, sent: 0, failed: 0, dead: 0, skipped: "not_configured" };
-  if (isLocalCrmSyncStopped(db)) return { claimed: 0, sent: 0, failed: 0, dead: 0, skipped: "local_stopped" };
-  const claimed = claimCrmOutboxBatch(db, { limit: batchSize, now: now() });
+  if (await outboxOps.stopped()) return { claimed: 0, sent: 0, failed: 0, dead: 0, skipped: "local_stopped" };
+  const claimed = await outboxOps.claim({ limit: batchSize, now: now() });
   const summary = { claimed: claimed.length, sent: 0, failed: 0, dead: 0 };
   for (const row of claimed) {
-    const r = await deliverOne(db, row, { url, secret, timeoutMs, fetchImpl, now });
+    const r = await deliverOne(db, row, { url, secret, timeoutMs, fetchImpl, now, ops: outboxOps });
     if (r.result === "sent") summary.sent += 1;
     else if (r.result === "dead") summary.dead += 1;
     else summary.failed += 1;
@@ -97,17 +108,19 @@ export async function deliverCrmOutboxOnce(db, {
   return summary;
 }
 
-export function startCrmDeliveryLoop(db, env = process.env, { fetchImpl = globalThis.fetch, log = () => {} } = {}) {
+export function startCrmDeliveryLoop(db, env = process.env, { fetchImpl = globalThis.fetch, log = () => {}, ops = null } = {}) {
+  const outboxOps = ops || defaultOps(db);
   if (env.OPS_CRM_DELIVERY !== "1" || !env.OPS_INGEST_URL || !env.OPS_INGEST_SECRET) return () => {};
   let running = false;
   const tick = async () => {
-    if (running || isLocalCrmSyncStopped(db)) return;
+    if (running || (await outboxOps.stopped())) return;
     running = true;
     try {
       const summary = await deliverCrmOutboxOnce(db, {
         url: env.OPS_INGEST_URL,
         secret: env.OPS_INGEST_SECRET,
         fetchImpl,
+        ops: outboxOps,
       });
       if (summary.claimed) log("ops-crm-delivery", summary);
     } catch (err) {
