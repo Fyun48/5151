@@ -364,6 +364,7 @@ jobs:
             RENDERED="$(docker compose config --format json | python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["5151-web-A"]["image"])')"
             echo "rendered_a_group_image=$RENDERED"
             if [ "$RENDERED" != "$IMAGE_PIN" ]; then echo "rendered A-group image is not the requested digest pin"; exit 1; fi
+            if printf '%s' "$RENDERED" | grep -Eq ':latest$'; then echo "A-group must not resolve to :latest"; exit 1; fi
             docker compose up -d --no-build --force-recreate
             ok=0
             for _ in $(seq 1 40); do if curl -fsS http://127.0.0.1:15153/api/health | grep -q '"ok":true'; then ok=1; break; fi; sleep 1; done
@@ -375,6 +376,55 @@ jobs:
             if [ "$CFG_IMAGE" != "$IMAGE_PIN" ]; then echo "running A-group container image is not the requested digest pin"; exit 1; fi
             echo "DEPLOY_A_GROUP_OK image=$IMAGE_PIN"
             python3 -c "import json; open('/tmp/a-group-deploy-health.json','w').write(json.dumps({'web_a_running':True,'web_a_health':True,'haproxy_health':True,'image_digest':'$IMAGE_DIGEST'}) + '\n')"
+      - name: Synology NAS SSH endpoint for the B-group web node (Cloudflare Access bridge only; no public fallback)
+        id: cf-tori-bridge
+        uses: ./.github/actions/cf-ssh-bridge
+        with:
+          hostname: ssh-tori.reversalplay.me
+          port: "2223"
+          client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          ssh-user: ${{ secrets.V3_SYNOLOGY_USER }}
+          ssh-key: ${{ secrets.V3_SYNOLOGY_SSH_KEY }}
+      - name: Recreate B-group web node with the same digest (Synology)
+        # A 組與 B 組是同一組 web 後端（HAProxy 輪詢兩台），所以發版一定要兩台同一個 digest；
+        # 不然 failover 到 B 會跑舊版程式。B 節點在 Synology（ssh-tori），與 OPS 用同一種
+        # Cloudflare Access bridge，但用 v3 專屬的 V3_SYNOLOGY_* 憑證。
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ steps.cf-tori-bridge.outputs.host }}
+          port: ${{ steps.cf-tori-bridge.outputs.port }}
+          username: ${{ secrets.V3_SYNOLOGY_USER }}
+          key: ${{ secrets.V3_SYNOLOGY_SSH_KEY }}
+          script_stop: true
+          debug: ${{ inputs.debug }}
+          script: |
+            set -euo pipefail
+            IMAGE_DIGEST='${{ inputs.image_digest }}'
+            IMAGE_PIN="ghcr.io/fyun48/5151@${IMAGE_DIGEST}"
+            B_DIR="$HOME/5151-shadow/web-b"
+            DOCKER=/usr/local/bin/docker
+            if [ ! -f "$B_DIR/docker-compose.yml" ]; then echo "B_GROUP_SKIPPED reason=no_compose dir=$B_DIR"; exit 0; fi
+            printf 'V3_IMAGE=%s\n' "$IMAGE_PIN" > "$B_DIR/.env"
+            chmod 600 "$B_DIR/.env"
+            "$DOCKER" pull "$IMAGE_PIN"
+            cd "$B_DIR"
+            RENDERED="$("$DOCKER" compose config --images | head -1)"
+            echo "rendered_b_group_image=$RENDERED"
+            if [ "$RENDERED" != "$IMAGE_PIN" ]; then echo "rendered B-group image is not the requested digest pin"; exit 1; fi
+            if printf '%s' "$RENDERED" | grep -Eq ':latest$'; then echo "B-group must not resolve to :latest"; exit 1; fi
+            "$DOCKER" compose up -d --no-build --force-recreate 5151-web-B
+            ok=0
+            for _ in $(seq 1 60); do if curl -fsS http://127.0.0.1:15153/api/health | grep -q '"ok":true'; then ok=1; break; fi; sleep 1; done
+            if [ "$ok" != 1 ]; then "$DOCKER" logs 5151-web-B || true; echo "B-group health did not become ready"; exit 1; fi
+            curl -fsS -o /dev/null http://127.0.0.1:15153/
+            RUNNING="$("$DOCKER" inspect -f '{{.State.Status}}' 5151-web-B)"
+            [ "$RUNNING" = "running" ]
+            CFG_IMAGE="$("$DOCKER" inspect -f '{{.Config.Image}}' 5151-web-B)"
+            echo "b_group_image=$CFG_IMAGE"
+            if [ "$CFG_IMAGE" != "$IMAGE_PIN" ]; then echo "running B-group container image is not the requested digest pin"; exit 1; fi
+            echo "DEPLOY_B_GROUP_OK image=$IMAGE_PIN"
+            python3 -c "import json; open('/tmp/b-group-deploy-health.json','w').write(json.dumps({'web_b_running':True,'web_b_health':True,'image_digest':'$IMAGE_DIGEST'}) + '\n')"
       - name: Pull NAS deploy health evidence
         env:
           NAS_HOST: ${{ steps.cf-bridge.outputs.host }}

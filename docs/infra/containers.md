@@ -35,6 +35,9 @@
 > 並把 `SESSION_SECRET` 對齊正式站、複製一份正式站的 `/data/auth.env`（SMTP／OAuth／管理員帳號）
 > 到 A 組的 `/data/auth.env`，讓兩個節點行為一致。
 > 最後在 Cloudflare 後台把公開站的 ingress 由 `http://127.0.0.1:5155` 改成 `http://127.0.0.1:25153`。
+> 因此正式站容器發佈的 **`5155` 現在只剩「本機別名」用途**——`deploy-v3.yml` 仍用它做本機健康探測
+> （`/tmp/v3-alias-health.json`），公開流量已不走它。要收回這個埠得**同時**改 workflow 的那兩處檢查
+> 與主機的 compose override，且會重啟正式站容器，所以**併入下一次發版處理**（不要單獨做）。
 > compose 備份：同一目錄的 `docker-compose.yml.bak-20260923T*`、`…bak-seq-…`；
 > tunnel 設定的備份在 `/home/cline/infra-compose/cloudflare/`。
 > `5151-crawler` 刻意留在 SQLite（它是 A 組 SQLite 的保鮮來源＝回復路徑），**不要一起切**。
@@ -44,12 +47,24 @@
 > （compose 寫 `image: ${V3_IMAGE:-<目前 digest>}`），而 `deploy-v3.yml` 在重建正式站之後**會用同一顆
 > digest 重建 web-A**（新步驟 `Recreate A-group web node with the same digest`，成功訊息 `DEPLOY_A_GROUP_OK`）。
 > 所以公開站（在 web-A）會跟著發版更新。
-> ⚠️ **web-B 在 syn-nas，發版流程的 SSH 通道只到 casa-nas**（Cloudflare Access bridge，沒有 syn-nas 的
-> secret）→ web-B 的更新目前是**手動**：把同一顆 digest 寫進它的 `.env` 後重建（見 P1 章節的指令）。
+> ⚠️ ~~**web-B 在 syn-nas，發版流程的 SSH 通道只到 casa-nas**… web-B 的更新目前是**手動**~~
+> → **2026-09-23 已自動化（P3）**：`deploy-v3.yml` 新增 `Recreate B-group web node with the same digest
+> (Synology)`，走 Cloudflare Access bridge `ssh-tori.reversalplay.me:2223` ＋ v3 專屬憑證
+> **`V3_SYNOLOGY_USER` / `V3_SYNOLOGY_SSH_KEY`**（repo secrets；與 OPS 的 `OPS_SYNOLOGY_*` 分開），
+> 在 syn-nas 上寫 `~/5151-shadow/web-b/.env` 的 `V3_IMAGE`、`/usr/local/bin/docker compose up -d
+> --no-build --force-recreate 5151-web-B`，並驗 rendered image／容器 Image／`/api/health`
+> （成功訊息 `DEPLOY_B_GROUP_OK`；compose 不存在時 `B_GROUP_SKIPPED reason=no_compose`）。
+> 所以**正式站、A 組、B 組一次發版三邊同 digest**。`5151-worker` 是 profile 化的，不會被拉起。
 >
 > **兩個節點的對齊清單（2026-09-23 兩台都做完）**：① image 同一顆 digest（由各自 `.env` 的 `V3_IMAGE` 注入）
 > ② `DB_DRIVER=postgres` ＋ 同一個 `PG_URL`（HAProxy `pg-rw`）③ `SESSION_SECRET` 與正式站同一組
 > （已登入會員跨節點不會被登出）④ `/data/auth.env` 複製自正式站（SMTP／OAuth／管理員帳號）。
+>
+> ⚠️ **`auth.env` 現在有三份**（正式站容器 `/data/auth.env`、`/opt/5151-shadow/web-a/data/auth.env`、
+> syn-nas 的 `~/5151-shadow/web-b/data/auth.env`）。**輪替任何一把憑證（SMTP 密碼、OAuth、
+> 管理員帳號）時三份都要換**，否則被接管的那台會用舊憑證（通知寄不出去、OAuth 失效），
+> 而且症狀通常**只在 failover 之後**才出現。換完重啟對應容器即可（web-B 在 syn-nas，
+> 用發版章節那條 Cloudflare Access bridge 或手動登入該機）。
 > 少了任一項，該節點就會「服務得到但行為不一樣」——所以**新增節點時要照這四項逐項確認**。
 >
 > **HAProxy（`/opt/5151-shadow/haproxy/haproxy.cfg`，正本在 repo `deploy/shadow-ha/haproxy/`）**：

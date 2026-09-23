@@ -129,3 +129,70 @@ test("deploy ssh script stays valid bash when every line is joined with semicolo
   if (probe.error && probe.error.code === "ENOENT") return;
   assert.equal(probe.status, 0, probe.stderr || "deploy ssh script is not join-safe bash");
 });
+
+// ---- HA web group steps（A 組在 CasaOS、B 組在 Synology） ----------------------
+// A/B 是同一組後端（HAProxy 輪詢兩台），發版一定要兩台同一個 digest，否則 failover 到
+// 舊版節點會跑舊程式。以下把兩步的契約釘住（先前這兩步沒有測試）。
+const GROUP_STEPS = {
+  A: "Recreate A-group web node with the same digest",
+  B: "Recreate B-group web node with the same digest (Synology)",
+};
+
+function groupStepScript(name) {
+  const start = yml.indexOf(`- name: ${name}`);
+  assert.ok(start > 0, `step not found: ${name}`);
+  const bodyAt = yml.indexOf("script: |", start);
+  assert.ok(bodyAt > 0, `script block not found: ${name}`);
+  const lines = [];
+  for (const line of yml.slice(bodyAt).split("\n").slice(1)) {
+    if (!line.trim()) continue;
+    if (!/^\s{12,}\S/.test(line)) break;
+    lines.push(line.slice(12));
+  }
+  assert.ok(lines.length > 10, `group ssh script looks empty (${name}: ${lines.length})`);
+  return lines;
+}
+
+test("both web groups are recreated from the release digest and fail closed on drift", () => {
+  for (const [label, name] of Object.entries(GROUP_STEPS)) {
+    const script = groupStepScript(name).join("\n");
+    assert.match(script, /IMAGE_DIGEST='\$\{\{ inputs\.image_digest \}\}'/, `${label} must consume the release digest`);
+    assert.match(script, /IMAGE_PIN="ghcr\.io\/fyun48\/5151@\$\{IMAGE_DIGEST\}"/, `${label} must pin by digest`);
+    assert.match(script, /is not the requested digest pin/, `${label} must fail closed when the rendered image differs`);
+    assert.match(script, /grep -Eq ':latest\$'/, `${label} must reject :latest`);
+    assert.match(script, /running .*container image is not the requested digest pin/, `${label} must verify the running container image`);
+    assert.match(script, /api\/health/, `${label} must health-check after recreate`);
+    assert.match(script, /SKIPPED reason=no_compose/, `${label} must skip cleanly when the node is not deployed`);
+  }
+});
+
+test("B-group step uses the tori bridge with its own credentials and never starts the worker profile", () => {
+  const start = yml.indexOf("- name: Synology NAS SSH endpoint for the B-group web node");
+  assert.ok(start > 0, "tori bridge step not found");
+  const bridge = yml.slice(start, yml.indexOf("- name: Recreate B-group web node", start));
+  assert.match(bridge, /hostname: ssh-tori\.reversalplay\.me/);
+  assert.match(bridge, /client-id: \$\{\{ secrets\.CF_ACCESS_CLIENT_ID \}\}/);
+  assert.match(bridge, /client-secret: \$\{\{ secrets\.CF_ACCESS_CLIENT_SECRET \}\}/);
+  assert.match(bridge, /ssh-user: \$\{\{ secrets\.V3_SYNOLOGY_USER \}\}/);
+  assert.match(bridge, /ssh-key: \$\{\{ secrets\.V3_SYNOLOGY_SSH_KEY \}\}/);
+  assert.doesNotMatch(bridge, /NAS_SSH_KEY/, "B bridge must not reuse the CasaOS key");
+
+  const script = groupStepScript(GROUP_STEPS.B).join("\n");
+  assert.match(script, /compose up -d --no-build --force-recreate 5151-web-B/);
+  assert.doesNotMatch(script, /5151-worker/, "B step must not start the profile-gated worker");
+  assert.match(script, /DOCKER=\/usr\/local\/bin\/docker/, "non-interactive ssh on Synology has no docker on PATH");
+});
+
+test("A/B group ssh scripts contain no comment lines and stay valid bash when joined", () => {
+  for (const [label, name] of Object.entries(GROUP_STEPS)) {
+    const lines = groupStepScript(name);
+    assert.deepEqual(
+      lines.filter((line) => line.trim().startsWith("#")),
+      [],
+      `${label} group ssh script must not contain # comments`,
+    );
+    const probe = spawnSync("bash", ["-n"], { input: lines.join("; ") + "\n", encoding: "utf8" });
+    if (probe.error && probe.error.code === "ENOENT") continue;
+    assert.equal(probe.status, 0, `${label} group ssh script is not join-safe bash: ${probe.stderr || ""}`);
+  }
+});

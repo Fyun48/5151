@@ -122,6 +122,23 @@ runbook `docs/runbooks/postgres-cutover-bootstrap.md` 步驟 7 的孤島清完 �
    **讀取維持 fail-open**；`PG_SQLITE_FALLBACK=open` 或呼叫端 `fallback: "open"` 是緊急逃生門。
    證據 `v3/test/sqlite-fallback-policy.test.js` 7/7。**注意：這包尚未發版**——
    發版後（若 PG 真的不可用）寫入會直接失敗，不會再無聲寫 SQLite。
+6. **web-B 發版自動化（2026-09-23，PR #474）**：`deploy-v3.yml` 新增
+   `Recreate B-group web node with the same digest (Synology)`——正式站／A 組／B 組一次發版三邊同 digest。
+   - 通道：Cloudflare Access bridge `ssh-tori.reversalplay.me`（runner 本機埠 2223，與 OPS 同一組
+     `CF_ACCESS_CLIENT_ID/SECRET`）＋ **新的一組 repo secrets** `V3_SYNOLOGY_USER`（= `tori`）、
+     `V3_SYNOLOGY_SSH_KEY`（新產 ed25519 `~/.ssh/5151-v3-syn-nas`，公鑰已加到 syn-nas
+     `tori:~/.ssh/authorized_keys`）。**不要**動 OPS 的 `OPS_SYNOLOGY_*`（環境範圍不同）。
+   - 動作：寫 `~/5151-shadow/web-b/.env` 的 `V3_IMAGE` → `/usr/local/bin/docker pull` →
+     `docker compose config --images` 驗 rendered → `up -d --no-build --force-recreate 5151-web-B` →
+     健康檢查 → 驗容器 Image → `DEPLOY_B_GROUP_OK`（失敗一律 fail-closed）。
+   - 實跑驗證：把該步驟的 inline script 抽出來、在本機對 syn-nas 跑一次（同 digest、冪等）→
+     `DEPLOY_B_GROUP_OK`，之後 web-B／HAProxy／公開站都 200。契約測試
+     `v3/test/deploy-v3-workflow.test.js` 12/12（A/B 兩步的 digest／`:latest` 拒絕／bridge 憑證／
+     只重建 `5151-web-B`）。
+   - 環境事實（別再踩）：**syn-nas SSH 在 `58722`、casa-nas 在 `54722`**（都不是 22）；
+     syn-nas **沒開 scp/SFTP subsystem**（`scp` 會 `subsystem request failed`）→ 要傳檔用 base64 over ssh；
+     本機 dev container 的 `cloudflared` 執行時 segfault，所以 CF 那一跳只能靠 OPS 部署的成功紀錄佐證
+     （2026-09-23T02:37 那筆成功走的就是同一個 bridge）。
 
 ## 4. 常用指令
 
