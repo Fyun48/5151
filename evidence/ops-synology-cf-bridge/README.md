@@ -80,6 +80,7 @@ PREDEPLOY_RESULT=PASS
 - `58722` 的關閉前提（自動化可全程走 Cloudflare Access）**已由實測滿足** → 可由 Owner 關閉公網 SSH 埠。
   - 注意：workflow 內仍保留 `fallback-host/port` 設定；埠關掉後 fallback 自然失效，只會在有問題時
     讓 `cf-ssh-bridge` 明確失敗（比默默走公網更安全）。要更嚴格可把 fallback secrets 一併移除。
+  **（2026-09-22 已做：正式發版路徑 5 條 workflow 的 fallback 已在 PR #438 移除，bridge 掛掉時 fail-closed。）**
 - 尚未執行：`deploy-ops-synology.yml`（會**真的**在 Synology 上建立/切換 `5151-ops` 版本、
   symlink `current` 與容器重建）。目前 Synology 上是 `e01bfc5b…`；要更新成 `6e4617b2…` 需 Owner 明確指示：
 
