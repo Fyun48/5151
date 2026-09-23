@@ -125,3 +125,17 @@ action 本身仍保留 fallback 能力（輸入預設空值），要恢復只需
 `.gitea/workflows/*` 以 `secrets.NAS_HOST`／`NAS_PORT`（公網）當 SSH 目標，不是走 `cf-ssh-bridge`。
 Gitea 目前已暫停（`AGENTS.md`：不再是權威來源、也不再當發版路徑），因此**刻意不動**；
 若日後要復活 Gitea CI，必須改成 CF bridge 或區網位址，否則會因公網埠關閉而失敗。
+
+## 2026-09-23：正式把 Synology `5151-ops` 更新到新 master
+
+- build run `35810932498`（成功）→ tag digest `sha256:b8c28339bec46fcab1b6ece5503ed453889cb28bc2ccf402d882db425687386c`
+- read-only predeploy run `35811056859`（30s，PASS）
+- deploy run `35811102675`（4m8s，成功）：
+  `DEPLOY_OPS_SYNOLOGY_OK source=190072eb3a6d28c868a36515e3be88dadba7794c image=…@sha256:b8c28339… previous=…/releases/e01bfc5b…`
+- 部署後實查：容器 image digest ＝ 上述 digest、`.deployed-sha` ＝ 上述 source、`/ops/api/health` ＝ 200、
+  公開 `jibbyrentops.reversalplay.me` ＝ 200；前一版 release `e01bfc5b…` 仍保留（rollback 錨點）。
+- **過程中修掉一個真 bug**（PR #439）：`deploy-ops-synology.yml` 的 staging 步驟讀
+  `steps.cf-bridge.outputs.host/port`，但 `cf-ssh-bridge` 步驟被排在它後面 → 該輸出此時是空的，
+  以 `Bad port ''`（exit 255）失敗。CF bridge 重構後這條路徑其實一直是壞的（上次成功部署是
+  2026-09-19，之後沒人跑過）。已把 bridge 步驟移到使用者之前，並在 `test/deploy-safety.test.js`
+  新增 `steps-output-order`（所有 workflow 的 `steps.<id>.outputs` 都必須在定義 `id: <id>` 之後）。
