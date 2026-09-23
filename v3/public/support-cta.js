@@ -100,10 +100,6 @@
   }
 
   async function boot() {
-    const entry = document.getElementById("supportHeaderLink");
-    const footer = document.getElementById("supportFooterLink");
-    const meLink = document.getElementById("supportMeLink");
-    const meWrap = document.getElementById("supportMeLinkWrap");
     let pub = null;
     try {
       const res = await fetch("/api/support/public", { cache: "no-store" });
@@ -111,17 +107,13 @@
     } catch {
       return;
     }
-    if (pub && pub.enabled && pub.entry?.show) {
-      if (entry) {
-        entry.hidden = false;
-        entry.href = "/support.html";
-      }
-      if (meLink) meLink.hidden = false;
-      if (meWrap) meWrap.hidden = false;
-      if (footer) {
-        footer.href = "/support.html";
-        footer.onclick = null;
-      }
+    const domainOpen = Boolean(pub?.enabled && pub.entry?.show);
+    // 「支持本站」入口（桌機 header／頁尾／帳號區）由 index.html 的 paintSupportEntry() 統一處理，
+    // 因為它同時知道通訊設定裡的入口開關；這裡只把 Support domain 是否開放交出去，
+    // 避免兩支程式互相覆蓋 href／hidden（先前就是這樣把入口指到只寫「尚未開放」的頁面）。
+    document.body.dataset.supportDomain = domainOpen ? "1" : "0";
+    window.dispatchEvent(new Event("support-domain"));
+    if (domainOpen) {
       fetch("/api/support/event", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

@@ -1,7 +1,7 @@
 /** Support / Sponsorship 服務。不得被 listingScore / match / sortListingsRows 引用。 */
 
 import { containsUnsafeMarkup, sanitizeDocumentText } from "./safeContent.js";
-import { sanitizeHttpUrl } from "./sponsorLinks.js";
+import { publicSponsorLinks, sanitizeHttpUrl } from "./sponsorLinks.js";
 import {
   BILLING_CYCLES,
   COST_CATEGORIES,
@@ -74,6 +74,16 @@ function parseJson(text, fallback) {
     return value && typeof value === "object" ? value : fallback;
   } catch {
     return fallback;
+  }
+}
+
+/** 後台「贊助連結」的公開收款方式。Support domain 關閉時仍要列得出來，否則支持頁只剩一句「尚未開放」。 */
+function publicSponsorWays(db) {
+  try {
+    const row = db.prepare("SELECT value FROM settings WHERE key = 'sponsorLinks'").get();
+    return publicSponsorLinks(parseJson(row?.value, {}));
+  } catch {
+    return [];
   }
 }
 
@@ -975,6 +985,8 @@ function publicPagePayload(db, page, flags, now = new Date()) {
     fallback_message: "目前支持付款服務暫時無法使用，稍後再試即可。",
     sponsors: flags.sponsor_enabled && page.show_sponsors ? publicActiveSponsors(db, now) : [],
     thanks: config.wall_enabled && page.show_supporters ? publicSupportThanks(db) : [],
+    // 後台「贊助連結」是公開資訊，與 Support domain 的旗標無關；方案卡之外也讓它並存，不寫死第三方 URL。
+    sponsor_links: publicSponsorWays(db),
     entry: {
       show: flags.enabled,
       label: page.copy.cta_label || "支持本站",
@@ -991,6 +1003,9 @@ export function publicSupportConfig(db, now = new Date()) {
       flags,
       entry: { show: false, label: "支持本站", href: "/support.html" },
       cta: { enabled: false },
+      // Support domain 關閉 ≠ 沒有支持方式。後台填了「贊助連結」就把公開收款頁列出來，
+      // 不要讓 /support.html 變成只有一句「尚未開放」的死路。
+      sponsor_links: publicSponsorWays(db),
     };
   }
   return publicPagePayload(db, readPublished(db), flags, now);

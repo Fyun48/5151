@@ -12,6 +12,7 @@ const sw = read("public/sw.js");
 const server = read("src/server.js");
 const auth = read("src/auth.js");
 const db = read("src/db.js");
+const comms = read("src/comms.js");
 
 function assertScriptsParse(source) {
   const blocks = [...source.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)];
@@ -74,4 +75,20 @@ test("service worker cache bumped to v7 with prefix cleanup intact", () => {
   assert.match(sw, /startsWith\(CACHE_PREFIX\)/);
   assert.match(sw, /self\.skipWaiting\(\)/);
   assert.match(sw, /self\.clients\.claim\(\)/);
+});
+
+test("支持本站 entry and sponsor ways come from comms instead of a dead-ended support page", () => {
+  // 後台「贊助連結」是公開資訊：訪客也要拿得到，否則「支持本站」點進去只有說明沒有出口。
+  assert.match(comms, /sponsor_links: Array\.isArray\(sponsorLinks\)/);
+  assert.match(comms, /supportPresentation\(cfg, sponsorOffer, \{ \.\.\.\(user \|\| \{\}\), sponsorLinks \}\)/);
+  assert.match(server, /const publicSponsorOffer = publicSponsorSettings\(\{\}\);/);
+  assert.match(server, /sponsorLinks: publicSponsorOffer\.links/);
+  // 前台把連結畫進帳號區，並由通訊設定的入口開關決定桌機 header 的「支持本站」。
+  assert.match(html, /support\.sponsor_links/);
+  assert.match(html, /links\.innerHTML = ways\.map\(sponsorChipHtml\)\.join\(""\)/);
+  assert.match(html, /function paintSupportEntry\(\)/);
+  assert.match(html, /support\.show_entry === true/);
+  // Support domain 沒開時不要把人帶去只寫「尚未開放」的頁面。
+  assert.match(html, /domainOpen \? "\/support\.html" : "#me"/);
+  assert.match(html, /dataset\.supportDomain/);
 });

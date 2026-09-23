@@ -16,11 +16,52 @@
     return "NT$ " + Math.round(v).toLocaleString("zh-Hant-TW");
   }
 
+  // 後台「贊助連結」的公開收款頁（與 Support domain 的旗標無關）。沒有這些連結時，
+  // 支持頁在 domain 關閉的狀態下只會剩一句「尚未開放」，使用者找不到任何出口。
+  function renderDirectWays(list, { domainOpen }) {
+    const wrap = $("directWays");
+    const box = $("directWaysList");
+    if (!wrap || !box) return;
+    const ways = Array.isArray(list) ? list : [];
+    box.innerHTML = "";
+    wrap.hidden = ways.length === 0;
+    if (!ways.length) return;
+    text($("directWaysTitle"), domainOpen ? "其他支持方式" : "支持方式");
+    text($("directWaysHint"), domainOpen
+      ? "也可以用這些服務直接支持，金額與流程由該服務處理。"
+      : "選一個你方便的服務，到該服務的頁面完成支持。");
+    for (const way of ways) {
+      const a = document.createElement("a");
+      a.className = "primary";
+      a.href = way.url;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.textContent = way.label || "支持";
+      if (way.blurb) {
+        const small = document.createElement("small");
+        small.textContent = way.blurb;
+        a.append(" ", small);
+      }
+      box.appendChild(a);
+    }
+  }
+
   function render(data) {
+    const ways = Array.isArray(data?.sponsor_links) ? data.sponsor_links : [];
+    const domainOpen = Boolean(data && data.enabled !== false);
+    renderDirectWays(ways, { domainOpen });
     if (!data || data.enabled === false) {
       text($("heroTitle"), "支持本站");
-      text($("heroDesc"), "本站維持免費使用。目前尚未開放線上支持入口。");
+      text($("heroDesc"), ways.length
+        ? "本站維持免費使用。支持完全自願，不支持也不會減少任何功能。"
+        : "本站維持免費使用。目前尚未開放線上支持入口。");
       $("supportWays").hidden = true;
+      // hero CTA 不要指向已經被藏起來的方案卡；有贊助連結就帶到下面的支持方式。
+      const heroCta = $("heroCta");
+      if (heroCta) {
+        heroCta.hidden = ways.length === 0;
+        if (ways.length) heroCta.href = "#directWays";
+      }
       return;
     }
     const copy = data.copy || {};

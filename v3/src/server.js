@@ -1615,9 +1615,12 @@ app.post("/api/sponsored/:id/event", (req, res) => {
 
 app.get("/api/comms", (req, res) => {
   const session = readSession(req);
+  // 支持方式（後台「贊助連結」）是公開資訊：未登入訪客也要拿得到，才不會在「支持本站」看到死路。
+  const publicSponsorOffer = publicSponsorSettings({});
   res.json(publicCommsBundle(db, {
     config: getCommsConfig(),
     sponsorOffer: session ? publicSponsorSettings(session) : {},
+    sponsorLinks: publicSponsorOffer.links,
     user: session ? { id: session.userId, plan: session.plan, role: session.role } : {},
   }));
 });

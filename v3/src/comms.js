@@ -744,7 +744,7 @@ export async function deliverSponsoredWebhook(db, {
   }
 }
 
-export function supportPresentation(config, sponsorOffer = {}, { plan, role } = {}) {
+export function supportPresentation(config, sponsorOffer = {}, { plan, role, sponsorLinks } = {}) {
   const cfg = normalizeCommsConfig(config);
   const sponsored = plan === "sponsor" || sponsorOffer.sponsored === true;
   const admin = role === "admin";
@@ -757,6 +757,9 @@ export function supportPresentation(config, sponsorOffer = {}, { plan, role } = 
     card_interval: cfg.support_card_interval,
     copy: cfg.support_copy,
     benefits: CURRENT_SPONSOR_BENEFITS.map((row) => ({ ...row })),
+    // 支持方式（後台「贊助連結」）：公開收款頁網址，前台一律用這裡回來的值，不寫死第三方 URL。
+    // 這是被動的資訊揭露，不是會員專屬的推銷；首頁的贊助橫條仍只給未贊助一般會員看。
+    sponsor_links: Array.isArray(sponsorLinks) ? sponsorLinks.map((row) => ({ ...row })) : [],
     sponsored,
     blocking: false,
     modal: false,
@@ -766,6 +769,7 @@ export function supportPresentation(config, sponsorOffer = {}, { plan, role } = 
 export function publicCommsBundle(db, {
   config,
   sponsorOffer,
+  sponsorLinks,
   user,
   now = new Date(),
 } = {}) {
@@ -789,7 +793,7 @@ export function publicCommsBundle(db, {
           .map((row) => publicCampaignView(row))
         : [],
     },
-    support: supportPresentation(cfg, sponsorOffer, user || {}),
+    support: supportPresentation(cfg, sponsorOffer, { ...(user || {}), sponsorLinks }),
   };
 }
 

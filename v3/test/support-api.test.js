@@ -52,6 +52,21 @@ test("feature flags default false and public payload stays dark", () => {
   db.close();
 });
 
+test("sponsor ways stay listed while the support domain is closed", () => {
+  const db = open();
+  assert.deepEqual(publicSupportConfig(db).sponsor_links, []);
+  db.exec("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+  db.prepare("INSERT INTO settings(key, value) VALUES ('sponsorLinks', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(
+    JSON.stringify({ providers: { bmc: { url: "https://buymeacoffee.com/jibbyexample", enabled: true } } }),
+  );
+  const pub = publicSupportConfig(db);
+  assert.equal(pub.enabled, false);
+  assert.deepEqual(pub.sponsor_links.map((row) => row.id), ["bmc"]);
+  assert.equal(pub.sponsor_links[0].url, "https://buymeacoffee.com/jibbyexample");
+  assert.equal(pub.entry.show, false);
+  db.close();
+});
+
 test("seeded tiers exist and providers start disabled without a live URL", () => {
   const db = open();
   const tiers = listSupportTiers(db);
