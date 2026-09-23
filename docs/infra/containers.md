@@ -37,6 +37,13 @@
 > tunnel 設定的備份在 `/home/cline/infra-compose/cloudflare/`。
 > `5151-crawler` 刻意留在 SQLite（它是 A 組 SQLite 的保鮮來源＝回復路徑），**不要一起切**。
 > A 組的 `APP_ROLE=web`（只跑 HTTP），爬蟲與 worker 仍在正式站容器（`APP_ROLE` 未設＝all）。
+>
+> **發版路徑（P0，2026-09-23）**：A 組的 image 由 `/opt/5151-shadow/web-a/.env` 的 `V3_IMAGE` 注入
+> （compose 寫 `image: ${V3_IMAGE:-<目前 digest>}`），而 `deploy-v3.yml` 在重建正式站之後**會用同一顆
+> digest 重建 web-A**（新步驟 `Recreate A-group web node with the same digest`，成功訊息 `DEPLOY_A_GROUP_OK`）。
+> 所以公開站（在 web-A）會跟著發版更新。
+> ⚠️ **web-B 在 syn-nas，發版流程的 SSH 通道只到 casa-nas**（Cloudflare Access bridge，沒有 syn-nas 的
+> secret）→ web-B 的更新目前是**手動**：把同一顆 digest 寫進它的 `.env` 後重建（見 P1 章節的指令）。
 
 ## 三個必須記住的事實
 

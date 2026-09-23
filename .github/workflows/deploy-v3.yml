@@ -342,6 +342,39 @@ jobs:
             docker exec 591-tracker-v3 node -e "import('sharp').then(()=>console.log('SHARP_OK')).catch(()=>{console.error('SHARP_MISSING'); process.exit(1)})"
             echo "DEPLOY_V3_OK source=$DEPLOY_SHA image=$IMAGE_PIN"
             python3 -c "import json; open('/tmp/phase15-deploy-health.json','w').write(json.dumps({'container_running':True,'health':True,'landing':True,'login':True,'image_digest':'$IMAGE_DIGEST','oci_revision':'$DEPLOY_SHA','container_image':'$IMAGE_PIN'}) + '\n')"
+      - name: Recreate A-group web node with the same digest
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ steps.cf-bridge.outputs.host }}
+          port: ${{ steps.cf-bridge.outputs.port }}
+          username: ${{ secrets.NAS_USER }}
+          key: ${{ secrets.NAS_SSH_KEY }}
+          script_stop: true
+          debug: ${{ inputs.debug }}
+          script: |
+            set -euo pipefail
+            IMAGE_DIGEST='${{ inputs.image_digest }}'
+            IMAGE_PIN="ghcr.io/fyun48/5151@${IMAGE_DIGEST}"
+            A_DIR=/opt/5151-shadow/web-a
+            if [ ! -f "$A_DIR/docker-compose.yml" ]; then echo "A_GROUP_SKIPPED reason=no_compose"; exit 0; fi
+            printf 'V3_IMAGE=%s\n' "$IMAGE_PIN" > "$A_DIR/.env"
+            chmod 600 "$A_DIR/.env"
+            docker pull "$IMAGE_PIN"
+            cd "$A_DIR"
+            RENDERED="$(docker compose config --format json | python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["5151-web-A"]["image"])')"
+            echo "rendered_a_group_image=$RENDERED"
+            if [ "$RENDERED" != "$IMAGE_PIN" ]; then echo "rendered A-group image is not the requested digest pin"; exit 1; fi
+            docker compose up -d --no-build --force-recreate
+            ok=0
+            for _ in $(seq 1 40); do if curl -fsS http://127.0.0.1:15153/api/health | grep -q '"ok":true'; then ok=1; break; fi; sleep 1; done
+            if [ "$ok" != 1 ]; then docker logs 5151-web-A || true; echo "A-group health did not become ready"; exit 1; fi
+            curl -fsS -o /dev/null http://127.0.0.1:15153/
+            curl -fsS -o /dev/null http://127.0.0.1:25153/api/health
+            CFG_IMAGE="$(docker inspect -f '{{.Config.Image}}' 5151-web-A)"
+            echo "a_group_image=$CFG_IMAGE"
+            if [ "$CFG_IMAGE" != "$IMAGE_PIN" ]; then echo "running A-group container image is not the requested digest pin"; exit 1; fi
+            echo "DEPLOY_A_GROUP_OK image=$IMAGE_PIN"
+            python3 -c "import json; open('/tmp/a-group-deploy-health.json','w').write(json.dumps({'web_a_running':True,'web_a_health':True,'haproxy_health':True,'image_digest':'$IMAGE_DIGEST'}) + '\n')"
       - name: Pull NAS deploy health evidence
         env:
           NAS_HOST: ${{ steps.cf-bridge.outputs.host }}
