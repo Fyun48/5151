@@ -126,8 +126,9 @@ test("live shadow PostgreSQL：同一組 CRM 讀取斷言", async (t) => {
     return;
   }
   const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");
-  const driver = createPostgresDriver(url);
-  const options = { driver: "postgres", pgDriver: driver, strict: true };
+  // 與 ④ 的 live 段相同：factory 是 async、收 { connectionString }（exec 由它提供）。
+  const pgDriver = await createPostgresDriver({ connectionString: url });
+  const options = { driver: "postgres", pgDriver, strict: true };
   try {
     // 影子站是空的也沒關係：只要求兩邊「形狀與語意」一致，逐列比對在 SQLite fixture 那幾條。
     const module = await crmAsync.crmModuleAsync(options);
@@ -137,7 +138,7 @@ test("live shadow PostgreSQL：同一組 CRM 讀取斷言", async (t) => {
     assert.equal(Array.isArray(overview.contacts), true);
     assert.deepEqual(Object.keys(overview).sort(), ["contacts", "module"]);
   } finally {
-    await driver.close?.();
+    await pgDriver.close();
   }
 });
 
