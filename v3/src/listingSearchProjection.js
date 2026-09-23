@@ -174,32 +174,42 @@ export function rebuildListingSearchProjection(db, listingRows, now = Date.now()
   }
 }
 
-// Idempotent safety net: fills projection rows that are missing. A row is missing only when it
-// was created before the projection existed (Phase 7) and never re-upserted since — the SQL-first
-// search paths read this table, so a missing row would simply disappear from the list. Runs in
-// bounded batches so a cold database cannot make boot slow; returns how many rows were added.
-export function backfillListingSearchProjection(db, { maxBatches = 40, batchSize = 500 } = {}) {
+// Idempotent safety net for search: the SQL-first paths read this table, so a row that is missing
+// here silently disappears from the list. A row can be missing only when it was created before the
+// projection existed (Phase 7) and never re-upserted since.
+//
+// Two hard-won constraints (2026-09-23 prod incident: ~14.5k of 65k rows were missing, so the
+// guest SQL-first path returned 50,846 instead of 65,341):
+//   • never open an explicit transaction here — a request may already hold one and `BEGIN` would
+//     throw, losing the whole batch;
+//   • never fail silently — callers must be able to see progress.
+// One row per statement (autocommit) keeps every step interruptible and always safe to re-run.
+export function projectionCounts(db) {
   ensureListingSearchProjection(db);
-  const missingSql = `SELECT l.* FROM listings l
+  const listings = Number(db.prepare("SELECT COUNT(*) AS n FROM listings").get()?.n) || 0;
+  const projected = Number(db.prepare(`SELECT COUNT(*) AS n FROM ${PROJECTION_TABLE}`).get()?.n) || 0;
+  return { listings, projected, missing: Math.max(0, listings - projected) };
+}
+
+// Inserts at most `batchSize` missing rows. Returns how many were written so a caller can loop
+// (with yields) without ever blocking the event loop for long.
+export function backfillListingSearchProjectionStep(db, { batchSize = 200 } = {}) {
+  ensureListingSearchProjection(db);
+  const rows = db.prepare(`SELECT l.* FROM listings l
     LEFT JOIN ${PROJECTION_TABLE} p ON p.post_id = l.post_id
     WHERE p.post_id IS NULL
-    LIMIT ?`;
+    LIMIT ?`).all(batchSize);
+  if (!rows.length) return { added: 0, scanned: 0 };
   const insert = db.prepare(UPDATE_SQL);
   let added = 0;
-  for (let i = 0; i < maxBatches; i += 1) {
-    const rows = db.prepare(missingSql).all(batchSize);
-    if (!rows.length) break;
-    db.exec("BEGIN");
+  for (const row of rows) {
     try {
-      for (const row of rows) insert.run(...bind(computeListingProjection(row)));
-      db.exec("COMMIT");
-    } catch (err) {
-      db.exec("ROLLBACK");
-      throw err;
+      insert.run(...bind(computeListingProjection(row)));
+      added += 1;
+    } catch {
+      /* 單列失敗（例如缺欄位）不影響其他列，下一輪還會再看到它 */
     }
-    added += rows.length;
-    if (rows.length < batchSize) break;
   }
-  return added;
+  return { added, scanned: rows.length };
 }
 

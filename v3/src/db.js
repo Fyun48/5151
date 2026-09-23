@@ -27,7 +27,7 @@ import { sameSearch } from "./client591.js";
 import { CITIES, districtNameFromListing, districtsFromSearchUrls, lookupDistrict, normalizeWatchDistricts } from "./regions.js";
 import { appendDistrictCandidates, ensureDistrictCandidateIndex } from "./listDistrictSql.js";
 import { appendPriceCeilingCandidates } from "./listPriceSql.js";
-import { backfillListingSearchProjection, ensureListingSearchProjection, syncListingProjection, deleteListingProjection } from "./listingSearchProjection.js";
+import { backfillListingSearchProjectionStep, ensureListingSearchProjection, projectionCounts, syncListingProjection, deleteListingProjection } from "./listingSearchProjection.js";
 import { buildListingSearchSql, buildPublicListingSearchSql, sqlDisplayFilter } from "./listingSearchSql.js";
 import { addColumnIfMissing, addColumnsIfMissing, runMigrations } from "./migrate.js";
 import { SCHEMA_MIGRATIONS } from "./schemaMigrations.js";
@@ -544,13 +544,48 @@ db.exec(`
 `);
 ensureListingSearchProjection(db);
 // 訪客搜尋也讀 listing_search_projection；Phase 7 之前建立、之後沒再被 upsert 的列若不在表裡，
-// 會從清單消失。啟動後（延後一點，別跟第一批請求搶）用冪等、分批的補建把缺的列補齊。
-setTimeout(() => {
+// 會從清單消失（2026-09-23 正式站實測：65k 列中約 14.5k 缺席）。啟動後用冪等、分批、可中斷的
+// 方式補齊；補到 projection 與 listings 筆數一致，訪客搜尋才會真的切到 SQL-first。
+let publicProjectionReady = false;
+export function publicListingsProjectionReady() {
+  return publicProjectionReady;
+}
+// 重新比對 projection 與 listings 筆數。不一致就當成「不能走 SQL-first」——寧可慢但完整。
+export function refreshPublicListingsProjectionReady() {
   try {
-    backfillListingSearchProjection(db);
+    publicProjectionReady = projectionCounts(db).missing === 0;
   } catch {
-    /* fail-open：補建失敗只代表可能少顯示舊列，不能讓啟動或請求掛掉 */
+    publicProjectionReady = false;
   }
+  return publicProjectionReady;
+}
+setTimeout(() => {
+  let idleSteps = 0;
+  const step = () => {
+    let progress = { added: 0 };
+    try {
+      progress = backfillListingSearchProjectionStep(db);
+    } catch {
+      /* fail-open：補建失敗只代表可能少顯示舊列，不能讓啟動或請求掛掉 */
+    }
+    const ready = refreshPublicListingsProjectionReady();
+    if (ready) {
+      console.log("[search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first");
+      return;
+    }
+    if (progress.added > 0) {
+      idleSteps = 0;
+      console.log(`[search] projection 補建 ${progress.added} 列，仍與 listings 不一致，繼續補`);
+    } else {
+      idleSteps += 1;
+      if (idleSteps >= 20) {
+        console.warn("[search] projection 補建停滯：訪客搜尋維持在 Node 路徑（慢但完整）");
+        return;
+      }
+    }
+    setTimeout(step, 500);
+  };
+  step();
 }, 1500);
 
 addColumnsIfMissing(db, "listings", [
@@ -7004,6 +7039,8 @@ export function listPublicListingsSqlFirst(args = {}) {
 // the same dispatch shape the member surface uses (see searchListingsSqlite() in
 // listingSearchAsync.js).
 export function listPublicListingsFast(args = {}) {
+  // projection 與 listings 筆數不一致時（有列缺席）SQL-first 會少顯示物件，寧可回退完整的 Node 路徑。
+  if (!publicProjectionReady) return listPublicListings(args);
   return listPublicListingsSqlFirst(args) || listPublicListings(args);
 }
 

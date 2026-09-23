@@ -20,7 +20,7 @@ function runIsolated(body) {
   const script = `
     import assert from "node:assert/strict";
     import * as app from ${dbUrl};
-    import { backfillListingSearchProjection } from ${projectionUrl};
+    import { backfillListingSearchProjectionStep, projectionCounts } from ${projectionUrl};
     const uid = app.defaultUserId();
     const memberSettingsBefore = JSON.stringify(app.getSettings(uid));
     const stamp = (i) => new Date(Date.UTC(2026, 0, 1) + i * 60000).toISOString();
@@ -143,7 +143,8 @@ test("guest SQL-first 只在一模一樣的等價範圍內接手，其餘回退 
     assert.ok(fallback.listings.length >= 1);
     assert.equal(fallback.guest, true);
     assert.equal(fallback.queryDetails?.sql_first, undefined);
-    // 範圍內的查詢則確實走 SQL-first
+    // 範圍內的查詢則確實走 SQL-first（前提是 projection 與 listings 已對齊）
+    assert.equal(app.refreshPublicListingsProjectionReady(), true);
     assert.equal(app.listPublicListingsFast(guestArgs({})).queryDetails.sql_first, true);
   `);
 });
@@ -195,17 +196,27 @@ test("訪客路由走 SQL-first 分派，且 SQL-first 只抓一頁（不再全�
   assert.doesNotMatch(fast, /LIST_CANDIDATE_COLUMNS/);
 });
 
-test("projection 缺列時，啟動補建會把列補回來（訪客不會少看到物件）", () => {
+test("projection 缺列時，啟動補建會把列補回來，且守門會先回退 Node 路徑", () => {
   runIsolated(`
     ${seedTrickyPool()}
     const scope = guestArgs({ districts: ["士林區"] });
-    const before = app.listPublicListingsSqlFirst(scope).totalMatched;
+    const full = app.listPublicListings(scope).totalMatched;
     // 模擬 Phase 7 之前建立、之後沒再被 upsert 的列：直接從 projection 刪掉
     app.sqliteHandle().prepare("DELETE FROM listing_search_projection WHERE post_id IN (901, 902)").run();
-    assert.equal(app.listPublicListingsSqlFirst(scope).totalMatched, before - 2);
-    assert.equal(backfillListingSearchProjection(app.sqliteHandle()), 2);
-    assert.equal(app.listPublicListingsSqlFirst(scope).totalMatched, before);
-    // 冪等：再跑一次不會再加
-    assert.equal(backfillListingSearchProjection(app.sqliteHandle()), 0);
+    assert.equal(projectionCounts(app.sqliteHandle()).missing, 2);
+    // 守門：筆數不一致時，即使查詢在 envelope 內也要回退 Node 路徑（慢但完整）
+    assert.equal(app.refreshPublicListingsProjectionReady(), false);
+    const guarded = app.listPublicListingsFast(scope);
+    assert.equal(guarded.totalMatched, full);
+    assert.equal(guarded.queryDetails?.sql_first, undefined);
+    // 補建：一次一步、可中斷、冪等
+    assert.equal(backfillListingSearchProjectionStep(app.sqliteHandle()).added, 2);
+    assert.equal(projectionCounts(app.sqliteHandle()).missing, 0);
+    assert.equal(backfillListingSearchProjectionStep(app.sqliteHandle()).added, 0);
+    // 對齊之後守門打開，SQL-first 接手且結果與 Node 路徑一致
+    assert.equal(app.refreshPublicListingsProjectionReady(), true);
+    const fast = app.listPublicListingsFast(scope);
+    assert.equal(fast.queryDetails.sql_first, true);
+    assert.equal(fast.totalMatched, full);
   `);
 });
