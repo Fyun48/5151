@@ -1,8 +1,15 @@
 # 5151 Shadow — Web Active/Active + Cloudflare Tunnel HA（Phase 16/17）
 
-Config templates（**尚未上線**）。Web-A/Web-B 用 `APP_ROLE=web` 只跑 HTTP；
-cloudflared-A/B 為**同一條 Cloudflare Tunnel 的兩個 connector**；HAProxy 各自
-round-robin Web-A/Web-B。全部用 env，不硬編碼 LAN IP。
+**2026-09-23 起已上線**：Web-A（CasaOS）與 Web-B（Synology）都跑 `APP_ROLE=web`、
+`DB_DRIVER=postgres`（同一個 shadow PostgreSQL，經 HAProxy `pg-rw 25433`），
+HAProxy round-robin 兩台；公開站經 Cloudflare Tunnel 進 CasaOS 的 `25153`。
+實際容器、埠與 tunnel ingress 見 `docs/infra/containers.md`。
+
+**發版（兩台必須同 digest）**：`deploy-v3.yml` 的
+`Recreate A-group web node with the same digest`（SSH 進 CasaOS）與
+`Recreate B-group web node with the same digest (Synology)`（Cloudflare Access bridge
+`ssh-tori` + `V3_SYNOLOGY_*` 憑證）兩步會把 A/B 都換成同一個 digest 並各自健康檢查；
+只改各節點 `.env` 的 `V3_IMAGE`，不動 compose。**只發一台＝failover 會跑到舊版**。
 
 ## 拓撲
 
@@ -10,19 +17,24 @@ round-robin Web-A/Web-B。全部用 env，不硬編碼 LAN IP。
 CasaOS  (CASAOS_HOST=192.168.0.140)
 ├─ 5151-web-A        APP_ROLE=web   (0.0.0.0:15153 -> 5153)
 ├─ 5151-haproxy      (haproxy.cfg，web 段；對外 0.0.0.0:25153)
-└─ 5151-cloudflared-A  tunnel 同一 token（network_mode: host）
+└─ 5151-cloudflared-A  tunnel（目前唯一的 connector；host net）
 
 Synology (SYNOLOGY_HOST=192.168.0.220)
-├─ 5151-web-B        APP_ROLE=web   (0.0.0.0:15153 -> 5153)
-└─ 5151-cloudflared-B  tunnel 同一 token（network_mode: host）
+└─ 5151-web-B        APP_ROLE=web   (0.0.0.0:15153 -> 5153)
 ```
+
+> 原始設計是「同一條 tunnel 兩個 connector（A/B 各一）」，**目前只跑 CasaOS 的
+> `5151-cloudflared-A`**；Synology 上沒有 B connector（`5151-cloudflared-B` 未部署）。
+> tunnel 的 ingress → `127.0.0.1:25153`（= CasaOS 的 HAProxy）→ 輪詢 A/B 兩台 web。
+> 詳見 `docs/infra/containers.md`。
 
 - web 節點綁 **0.0.0.0**：另一台的 HAProxy health check 要連得到（綁 127.0.0.1 只有本機可見
   → 跨主機節點一律 DOWN）。
 
-- 正常時兩台 Web 分擔；一台掛掉，另一個 connector + HAProxy + Web 繼續服務。
-- **不切正式 traffic**：本 shadow 用獨立測試 hostname（例如 `shadow-jibbyrenth.reversalplay.me`），
-  正式 `jibbyrenth.reversalplay.me` 指向不動。
+- 正常時兩台 Web 分擔；一台掛掉，HAProxy 會轉到另一台（`option redispatch` + `retry-on`）繼續服務。
+  2026-09-23 web 層演練：停掉 web-A 期間 15 次請求有 14 次 200。
+- **這組節點現在服務的是正式公開站**：2026-09-23 HA 切換後 `jibbyrenth.reversalplay.me` 走 tunnel →
+  CasaOS `25153`（HAProxy）→ 輪詢 A/B。早期「shadow 用獨立 hostname、不碰正式 traffic」的說明已不適用。
 
 ## 必備 env（兩台 Web 一致）
 
@@ -30,43 +42,74 @@ Synology (SYNOLOGY_HOST=192.168.0.220)
   （已查證：`v3/src/auth.js` / `captcha.js` / `oauth.js` 都讀 `process.env.SESSION_SECRET`；
   `v3/src/env.js` 在沒有 env 時會**每台各自**在 `DATA_DIR/session.secret` 產生一組隨機值 →
   兩台不一致，登入會隨機失效。所以一定要用 env 明確指定同一組。）
-- `DB_DRIVER`：目前 `sqlite`（單檔，active/active 需把 `DATA_DIR` 放在共享磁碟/NFS）；
-  待 Phase 5/6 PostgreSQL adapter 接線後改 `postgres` 指向 shadow Primary/Standby（DB_RW/DB_RO）。
-- `TUNNEL_TOKEN`：Cloudflare Tunnel 的 token（同一 tunnel，兩 connector 共用）。
+- `DB_DRIVER=postgres` ＋ `PG_URL`：指向 HAProxy 的 **`pg-rw`（`25433`）**，寫入才會落到當下的 primary
+  （`pg-ro 25434` 給唯讀用途）。`SESSION_SECRET` 兩台必須同一組。
+- `V3_IMAGE`：**digest pin**（`ghcr.io/fyun48/5151@sha256:…`），放在各節點目錄的 `.env`，
+  由發版流程寫入；不要用 `:latest`（發版步驟會直接拒絕，比對 rendered image 與執行中容器的 Image）。
+- tunnel connector：目前只有 CasaOS 的 `5151-cloudflared-A`（**單點**，見上面的拓撲註記）。
+  要在 Synology 補第二個 connector 時才需要 `TUNNEL_TOKEN`。
 
-## 套用
+## 套用（首次建置；**已上線，不要照抄重跑**）
+
+> 這裡的 compose 是**去識別化模板**；實際在跑的是主機上的正本
+> （CasaOS `/opt/5151-shadow/web-a/`、Synology `~/5151-shadow/web-b/`）。
+> 重跑下面的指令會用模板覆蓋主機設定（含 secret），只在首次建置或重建節點時用。
 
 ```bash
 # CasaOS
 cd deploy/shadow-ha/web/web-a
-SESSION_SECRET='<同一組>' TUNNEL_TOKEN='<token>' CASAOS_HOST=192.168.0.140 docker compose up -d
-# Synology
+SESSION_SECRET='<同一組>' PG_URL='postgres://…@<haproxy>:25433/<db>' CASAOS_HOST=192.168.0.140 docker compose up -d
+# Synology（docker 在 /usr/local/bin，非登入 shell 不在 PATH）
 cd deploy/shadow-ha/web/web-b
-SESSION_SECRET='<同一組>' TUNNEL_TOKEN='<token>' SYNOLOGY_HOST=192.168.0.220 docker compose up -d
+SESSION_SECRET='<同一組>' PG_URL='postgres://…@<haproxy>:25433/<db>' SYNOLOGY_HOST=192.168.0.220 /usr/local/bin/docker compose up -d
 ```
+
+## 發版（release，2026-09-23 起自動化）
+
+發版**不是**在這裡 `docker compose up`，而是跑 `deploy-v3.yml`（`workflow_dispatch`，需
+`DEPLOY-PRODUCTION` 確認字串 + 不可變 digest）。它依序：
+
+1. 正式站 `591-tracker-v3`（CasaOS）→ 以 digest pin 重建。
+2. **A 組** `5151-web-A`（CasaOS）→ 寫 `.env` 的 `V3_IMAGE`、`docker compose up -d --force-recreate`，
+   驗 rendered image／容器的 Image／`/api/health`。
+3. **B 組** `5151-web-B`（Synology）→ 同一件事，走 Cloudflare Access bridge
+   `ssh-tori.reversalplay.me`（runner 本機埠 2223）＋ v3 專屬憑證 `V3_SYNOLOGY_USER` /
+   `V3_SYNOLOGY_SSH_KEY`（與 OPS 的 `OPS_SYNOLOGY_*` 分開）。
+
+- compose 目錄不存在時兩步都**跳過**（`*_GROUP_SKIPPED reason=no_compose`）；但
+  「rendered image ≠ 指定 digest」「執行中容器 Image ≠ 指定 digest」「健康檢查逾時」都是**直接失敗**
+  （fail-closed，不留半套）。
+- 手動補做（CI 通道不通時）：在該主機的 compose 目錄
+  `printf 'V3_IMAGE=ghcr.io/fyun48/5151@sha256:…\n' > .env && docker compose up -d --no-build --force-recreate 5151-web-B`
+  （Synology 用 `/usr/local/bin/docker`；發版步驟只重建 `5151-web-B`，profile 化的 `5151-worker` 不會被拉起）。
+- 契約測試：`v3/test/deploy-v3-workflow.test.js`（A/B 兩步的 digest、`:latest` 拒絕、bridge 憑證、
+  只重建 `5151-web-B`、ssh script 不含 `#` 且逐行以 `;` 串接仍是合法 bash）。
 
 ## 驗證
 
 - 輪流打兩台 Web（login / search / settings / flags / wish / owner flow / SSE / logout）
   都正確（session 一致）。
-- 停一台 Web → 另一台繼續；停一台 cloudflared → 另一 connector 繼續。
+- 停一台 Web → 另一台繼續（HAProxy redispatch；2026-09-23 實測 15 次 14 次 200）。
+- 經 HAProxy 探測：`curl -fsS http://127.0.0.1:25153/api/health`（在 CasaOS 上）。
 
 ## 尚未做到
 
-- Web active/active 的 SQLite 共享磁碟（NFS）設定；或等 PostgreSQL adapter 接線後改 `postgres`。
-- `crawler` / `worker` shadow compose 尚未收進本目錄（實際已在跑，見下方「實際佈署狀態」），
-  目前是手工 compose；要重現請照該節的 env/mount 建檔。
+- **tunnel 仍是單點**：只有 CasaOS 的 `5151-cloudflared-A`；Synology 沒有第二個 connector。
+  CasaOS 整台掛掉時，HAProxy 與 Web 的冗餘派不上用場（入口就斷了）。
+- `crawler` 的 shadow compose 尚未收進本目錄（跑在 CasaOS、共用 web-a 的 data）；
+  Synology 的 `5151-worker` 用 web-b compose 的 `profiles: ["worker"]` 關著（正式站的 worker 已在做同一批工作）。
 
-## 實際佈署狀態（2026-09-20，皆 `Up`）
+## 實際佈署狀態
 
-| 主機 | container | role / 重點 |
+容器、埠、tunnel ingress 的**權威清單**在 `docs/infra/containers.md`。要點：
+
+| 主機 | container | 重點 |
 |---|---|---|
-| CasaOS | `5151-web-A` | `APP_ROLE=web`，`0.0.0.0:15153->5153`，`DATA_DIR=/data` ← `/opt/5151-shadow/web-a/data` |
-| CasaOS | `5151-haproxy` | `0.0.0.0:25153->15153`、`25433`、`25434` |
-| CasaOS | `5151-cloudflared-A` | `cloudflared tunnel --no-autoupdate run --token <TUNNEL_TOKEN>`（host net） |
-| CasaOS | `5151-crawler` | `APP_ROLE=crawler`，共用 web-a 的 data（`/opt/5151-shadow/web-a/data`） |
-| Synology | `5151-web-B` | `APP_ROLE=web`，`0.0.0.0:15153->5153`，data ← `~/5151-shadow/web-b/data` |
-| Synology | `5151-cloudflared-B` | 同一 tunnel 的第二個 connector（host net） |
-| Synology | `5151-worker` | `APP_ROLE=worker`，共用 web-b 的 data（SQLite 必須同檔） |
+| CasaOS | `5151-web-A` | `APP_ROLE=web`、`DB_DRIVER=postgres`、`0.0.0.0:15153->5153`、data ← `/opt/5151-shadow/web-a/data` |
+| CasaOS | `5151-haproxy` | `0.0.0.0:25153->15153`、`25433`（pg-rw）、`25434`（pg-ro） |
+| CasaOS | `5151-cloudflared-A` | 公開站的 tunnel connector（目前唯一一個） |
+| CasaOS | `5151-crawler` | `APP_ROLE=crawler`，共用 web-a 的 data |
+| Synology | `5151-web-B` | `APP_ROLE=web`、`DB_DRIVER=postgres`、`0.0.0.0:15153->5153`、data ← `~/5151-shadow/web-b/data` |
+| Synology | `5151-worker` | `APP_ROLE=worker`，**profile 關閉、未執行**（2026-09-23） |
 
-兩台 Web 的 `SESSION_SECRET` / `DB_DRIVER=sqlite` 一致；非 web 角色不提供 HTTP。
+兩台 web 的 `SESSION_SECRET` 與 `V3_IMAGE`（digest）一致；非 web 角色不提供 HTTP。

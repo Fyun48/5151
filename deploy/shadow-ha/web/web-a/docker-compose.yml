@@ -1,16 +1,19 @@
 name: 5151-shadow-web-a
 
-# Web-A (CasaOS) + cloudflared-A connector. Web runs APP_ROLE=web (HTTP only).
-# Session secret must match Web-B. cloudflared shares the production Tunnel token
-# (two connectors to one tunnel; ingress points at the local HAProxy web frontend).
+# Web-A（CasaOS，192.168.0.140）— HAProxy web backend 的第一台。
+#
+# ⚠️ 這裡是**去識別化的模板**，實際在跑的正本是主機上的
+#    `/opt/5151-shadow/web-a/docker-compose.yml`。
+#    發版不改這個檔，只改同目錄的 `.env`（`V3_IMAGE=<digest pin>`）；
+#    deploy-v3.yml 的 "Recreate A-group web node…" 步驟會自動做這件事。
 services:
   5151-web-A:
     container_name: 5151-web-A
-    image: ghcr.io/fyun48/5151:latest
+    # 2026-09-23 HA 切換：與正式站同一個 digest（A/B 是同一組後端，版本必須一致）。
+    image: ${V3_IMAGE:?digest-pinned release image（deploy-v3.yml 寫入 .env）}
     restart: unless-stopped
     ports:
-      # 0.0.0.0 綁定：跨主機的 HAProxy/health check 才連得到（綁 127.0.0.1 只有本機可見，
-      # 另一台主機的 HAProxy 會連不到 → 節點 DOWN）。
+      # 0.0.0.0 綁定：Synology 上的 HAProxy/health check 要連得到（綁 127.0.0.1 只有本機可見 → 節點 DOWN）。
       - "0.0.0.0:15153:5153"
     environment:
       HOST: "0.0.0.0"
@@ -18,17 +21,10 @@ services:
       APP_ROLE: "web"
       DATA_DIR: /data
       SESSION_SECRET: ${SESSION_SECRET:?shared across web nodes}
-      DB_DRIVER: ${DB_DRIVER:-sqlite}
+      DB_DRIVER: ${DB_DRIVER:-postgres}
+      PG_URL: ${PG_URL:?postgres://…@<haproxy>:25433/<db>}
       TZ: Asia/Taipei
     volumes:
-      - ${V3_DATA_ROOT}:/data
+      - ${WEB_A_DATA_DIR:-/opt/5151-shadow/web-a/data}:/data
     command: ["node", "src/server.js"]
 
-  5151-cloudflared-A:
-    container_name: 5151-cloudflared-A
-    image: cloudflare/cloudflared:latest
-    restart: unless-stopped
-    network_mode: host
-    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
-    depends_on:
-      - 5151-web-A

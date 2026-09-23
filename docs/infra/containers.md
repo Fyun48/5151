@@ -44,8 +44,14 @@
 > （compose 寫 `image: ${V3_IMAGE:-<目前 digest>}`），而 `deploy-v3.yml` 在重建正式站之後**會用同一顆
 > digest 重建 web-A**（新步驟 `Recreate A-group web node with the same digest`，成功訊息 `DEPLOY_A_GROUP_OK`）。
 > 所以公開站（在 web-A）會跟著發版更新。
-> ⚠️ **web-B 在 syn-nas，發版流程的 SSH 通道只到 casa-nas**（Cloudflare Access bridge，沒有 syn-nas 的
-> secret）→ web-B 的更新目前是**手動**：把同一顆 digest 寫進它的 `.env` 後重建（見 P1 章節的指令）。
+> ⚠️ ~~**web-B 在 syn-nas，發版流程的 SSH 通道只到 casa-nas**… web-B 的更新目前是**手動**~~
+> → **2026-09-23 已自動化（P3）**：`deploy-v3.yml` 新增 `Recreate B-group web node with the same digest
+> (Synology)`，走 Cloudflare Access bridge `ssh-tori.reversalplay.me:2223` ＋ v3 專屬憑證
+> **`V3_SYNOLOGY_USER` / `V3_SYNOLOGY_SSH_KEY`**（repo secrets；與 OPS 的 `OPS_SYNOLOGY_*` 分開），
+> 在 syn-nas 上寫 `~/5151-shadow/web-b/.env` 的 `V3_IMAGE`、`/usr/local/bin/docker compose up -d
+> --no-build --force-recreate 5151-web-B`，並驗 rendered image／容器 Image／`/api/health`
+> （成功訊息 `DEPLOY_B_GROUP_OK`；compose 不存在時 `B_GROUP_SKIPPED reason=no_compose`）。
+> 所以**正式站、A 組、B 組一次發版三邊同 digest**。`5151-worker` 是 profile 化的，不會被拉起。
 >
 > **兩個節點的對齊清單（2026-09-23 兩台都做完）**：① image 同一顆 digest（由各自 `.env` 的 `V3_IMAGE` 注入）
 > ② `DB_DRIVER=postgres` ＋ 同一個 `PG_URL`（HAProxy `pg-rw`）③ `SESSION_SECRET` 與正式站同一組
