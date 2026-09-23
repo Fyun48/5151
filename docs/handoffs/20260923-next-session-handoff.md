@@ -93,6 +93,20 @@ PG 模式下那句話可能與 PG 的實際設定不一致，但**不影響預�
 runbook `docs/runbooks/postgres-cutover-bootstrap.md` 步驟 7 的孤島清完 ＝ 可切 HA；
 切之前跑一次全 live 套件（目標 0 skip）＋ predeploy 檢查。
 
+**2026-09-23 已完成的部分**：
+1. 公開流量切到 A 組（tunnel ingress `5155` → `25153`），web-A 對齊 PG（見 §2 的 2.4 之後那幾列）。
+2. B 節點（syn-nas `5151-web-B`）對齊四件事（image／PG／session secret／auth.env），
+   HAProxy `web_nodes` 兩台都在；`option redispatch` ＋ `retry-on conn-failure empty-response response-timeout`。
+3. **web 層演練（實跑兩次）**：停掉 web-A → HAProxy 標 `web-a DOWN (Connection refused)`、
+   公開站由 web-B 接手（15 次請求中 14 次 200，**只有節點被殺的那一瞬間 1 次 503**）；
+   啟動 web-A 後兩台都回 200。那個 1 次 503 是「回應已開始傳輸後節點死亡」，
+   代理無法重試（redispatch／retry-on 都救不到）。
+4. **DB 層演練尚未做**：前置檢查已過（primary = syn-nas `5151-postgres-B`、standby = casa-nas
+   `5151-postgres-A` 且 `caught_up`、`pg_rw(25433) → primary`、`pg_ro(25434) → standby`）。
+   ⚠️ 做之前要注意：**PG 模式的 async 寫入在失敗時會 fail-open 回本機 SQLite**
+   （`withFallback` 未設 `strict`），promote 的數秒寫入失敗可能讓少量狀態落在 SQLite 而沒進 PG。
+   建議先決定要「接受這個風險」（挑離峰做）還是「先讓 DB 不可用時拒絕寫入」再演練。
+
 ## 4. 常用指令
 
 ```bash
