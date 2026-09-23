@@ -128,6 +128,16 @@ jobs:
           set -euo pipefail
           echo "OPS_SYNOLOGY_APP_ROOT=${APP_ROOT_IN:-/volume1/docker/5151-ops/app}" >> "$GITHUB_ENV"
           echo "OPS_SYNOLOGY_DATA_ROOT=${DATA_ROOT_IN:-/volume1/docker/5151-ops/data}" >> "$GITHUB_ENV"
+      - name: NAS SSH endpoint (Cloudflare Access bridge only; no public fallback)
+        id: cf-bridge
+        uses: ./.github/actions/cf-ssh-bridge
+        with:
+          hostname: ssh-tori.reversalplay.me
+          port: "2223"
+          client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          ssh-user: ${{ secrets.OPS_SYNOLOGY_USER }}
+          ssh-key: ${{ secrets.OPS_SYNOLOGY_SSH_KEY }}
       - name: Stage OPS source + compose into clean per-SHA dir via native scp
         env:
           OPS_SYNOLOGY_HOST: ${{ steps.cf-bridge.outputs.host }}
@@ -153,16 +163,6 @@ jobs:
           # 清空並重建這個 per-SHA staging 目錄（不 merge 舊 incoming tree）。
           ssh "${SSH_OPTS[@]}" "$OPS_SYNOLOGY_USER@$OPS_SYNOLOGY_HOST" "rm -rf '$INCOMING' && mkdir -p '$INCOMING'"
           scp "${SCP_OPTS[@]}" -r ops docker-compose.ops.synology.yml "$OPS_SYNOLOGY_USER@$OPS_SYNOLOGY_HOST:$INCOMING/"
-      - name: NAS SSH endpoint (Cloudflare Access bridge only; no public fallback)
-        id: cf-bridge
-        uses: ./.github/actions/cf-ssh-bridge
-        with:
-          hostname: ssh-tori.reversalplay.me
-          port: "2223"
-          client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-          ssh-user: ${{ secrets.OPS_SYNOLOGY_USER }}
-          ssh-key: ${{ secrets.OPS_SYNOLOGY_SSH_KEY }}
       - name: Deploy 5151-ops on Synology via native ssh (preflight + backup + rollback)
         env:
           OPS_SYNOLOGY_HOST: ${{ steps.cf-bridge.outputs.host }}
