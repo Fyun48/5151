@@ -161,3 +161,31 @@ deploy-v3          run 35815081496  → success
 | 手機 375 帳號區連結 | `/support.html` |
 
 四種情境皆無 console error；`node --test`（6 個相關檔）**76/76 通過**。
+
+**部署（第二輪，2026-09-23）**
+
+```text
+PR                 #444（squash 併入 master）
+master / sha       9511992f41da20667943f3e5760ac6f899a0b655
+build              run 35816880132 → success
+image digest       sha256:6591e36cd262a51a8691cd9f008e31a6087df9f3bbe77ec25e4ce2e6281b5e3d
+predeploy-check    run 35816976777 → success
+deploy-v3          run 35817091141 → success
+```
+
+**上線後實測（訪客身分）**：四種入口**全部**導到 `/support.html`，該頁 hero＝「支持本站」＋免費聲明，
+「支持方式」列出站長的連結（`吉比需要你的支持~來份飼料~! → https://buymeacoffee.com/acefengyund`）：
+
+| 情境 | 點擊後 URL | 支持方式可見 |
+| --- | --- | --- |
+| 桌機 1280 header | `/support.html` | ✓ |
+| 桌機 1280 頁尾（已在「設定」） | `/support.html` | ✓ |
+| 手機 375 頁尾 | `/support.html` | ✓ |
+| 手機 375 帳號區連結 | `/support.html` | ✓ |
+
+截圖：`shots/prod2-1280-support-page.png`、`shots/prod2-375-support-page.png`、`shots/prod2-375-account-chip.png`
+（手機「設定」帳號區那張）；DOM 實測：`prod-verify-2.json`。
+
+> 註：帳號區 chip 在正式站首次載入約 **30.4 秒**才出現（`prod-verify-2.json` 亦有兩次 30s 等待逾時）。
+> 那是正式站首次載入本身較慢（大頁面＋爬蟲庫＋Cloudflare），不是壞掉；頁尾入口因為是**靜態連結**
+> （不需要等 JS）所以不受影響。

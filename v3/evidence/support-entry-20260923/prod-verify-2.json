@@ -1,0 +1,78 @@
+[
+ {
+  "label": "prod-1280-header",
+  "target": "#supportHeaderLink",
+  "before": {
+   "url": "/",
+   "href": "/support.html"
+  },
+  "after": {
+   "url": "/support.html",
+   "heroTitle": "支持本站",
+   "heroDesc": "本站維持免費使用。支持完全自願，不支持也不會減少任何功能。",
+   "directWaysVisible": true,
+   "ways": [
+    "吉比需要你的支持~來份飼料~! 海外信用卡 -> https://buymeacoffee.com/acefengyund"
+   ]
+  },
+  "errors": [
+   "TIMEOUT chip"
+  ]
+ },
+ {
+  "label": "prod-1280-footer-on-me",
+  "target": "#supportFooterLink",
+  "before": {
+   "url": "/",
+   "href": "/support.html"
+  },
+  "after": {
+   "url": "/support.html",
+   "heroTitle": "支持本站",
+   "heroDesc": "本站維持免費使用。支持完全自願，不支持也不會減少任何功能。",
+   "directWaysVisible": true,
+   "ways": [
+    "吉比需要你的支持~來份飼料~! 海外信用卡 -> https://buymeacoffee.com/acefengyund"
+   ]
+  },
+  "errors": []
+ },
+ {
+  "label": "prod-375-footer",
+  "target": "#supportFooterLink",
+  "before": {
+   "url": "/",
+   "href": "/support.html"
+  },
+  "after": {
+   "url": "/support.html",
+   "heroTitle": "支持本站",
+   "heroDesc": "本站維持免費使用。支持完全自願，不支持也不會減少任何功能。",
+   "directWaysVisible": true,
+   "ways": [
+    "吉比需要你的支持~來份飼料~! 海外信用卡 -> https://buymeacoffee.com/acefengyund"
+   ]
+  },
+  "errors": []
+ },
+ {
+  "label": "prod-375-meLink",
+  "target": "#supportMeLink",
+  "before": {
+   "url": "/",
+   "href": "/support.html"
+  },
+  "after": {
+   "url": "/support.html",
+   "heroTitle": "支持本站",
+   "heroDesc": "本站維持免費使用。支持完全自願，不支持也不會減少任何功能。",
+   "directWaysVisible": true,
+   "ways": [
+    "吉比需要你的支持~來份飼料~! 海外信用卡 -> https://buymeacoffee.com/acefengyund"
+   ]
+  },
+  "errors": [
+   "TIMEOUT chip"
+  ]
+ }
+]
