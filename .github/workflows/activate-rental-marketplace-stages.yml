@@ -155,7 +155,7 @@ jobs:
           if [ "$AFTER_HEAD" != "$EXPECTED_WF_SHA" ]; then
             echo "::error::manifest step moved HEAD $AFTER_HEAD off workflow SHA $EXPECTED_WF_SHA"; exit 1
           fi
-      - name: NAS SSH endpoint (Cloudflare Access bridge, falls back to public SSH)
+      - name: NAS SSH endpoint (Cloudflare Access bridge only; no public fallback)
         id: cf-bridge
         uses: ./.github/actions/cf-ssh-bridge
         with:
@@ -163,8 +163,6 @@ jobs:
           port: "2222"
           client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-          fallback-host: ${{ secrets.NAS_HOST }}
-          fallback-port: ${{ secrets.NAS_PORT }}
           ssh-user: ${{ secrets.NAS_USER }}
           ssh-key: ${{ secrets.NAS_SSH_KEY }}
       - name: Copy staged activation helpers to NAS /tmp
