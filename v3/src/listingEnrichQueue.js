@@ -17,6 +17,8 @@ import {
 } from "./listingPrep.js";
 import { enrichHpListingFromDetail, fetchHpDetailInspected, HP_SOURCE } from "./houseprice.js";
 import { PROBE_ALIVE, PROBE_GONE, PROBE_INCONCLUSIVE } from "./probeOutcomes.js";
+// 2.3b 第二段：寫入路徑的 SQL 文字集中在 repository builder（SQLite 與 PostgreSQL 共用同一份文字）。
+import * as enrichRepo from "./repository/listingEnrich.js";
 
 const CLICK_PRIORITY = 100;
 const WATCH_PRIORITY = 60;
@@ -116,7 +118,14 @@ function metricNumber(value) {
 
 export function jobStillOwnsRun(conn, job) {
   if (!job?.id) return false;
-  const latest = conn.prepare("SELECT request_seq, run_seq FROM listing_enrich_jobs WHERE id = ?").get(job.id);
+  const q = enrichRepo.enrichJobRunSeqQuery(job.id);
+  const latest = conn.prepare(q.sql).get(...q.params);
+  return jobRunOwns(latest, job);
+}
+
+// 擁有權判斷本身（sync 與 async 共用）：run_seq 被推進或 request_seq 被別人推進都算失去擁有權。
+export function jobRunOwns(latest, job) {
+  if (!job?.id) return false;
   if (!latest) return false;
   if (Number(latest.run_seq) !== Number(job.run_seq)) return false;
   if (Number(latest.request_seq) > Number(job.request_seq ?? job.run_seq)) return false;
@@ -135,6 +144,47 @@ function parseJson(raw, fallback) {
   } catch {
     return fallback;
   }
+}
+
+// --- 2.3b 第二段：寫入路徑的 driver-aware 分派 -----------------------------
+// helpers.enrichQueue 由呼叫端提供（listingEnrichQueueAsync.js 的 listingEnrichQueueFacade()）。
+// 沒有它時走本檔原本的同步函式，所以 SQLite-only 呼叫端與既有測試一行都不用改。
+function enrichQueueOf(helpers) {
+  return helpers?.enrichQueue || null;
+}
+
+function queueFinish(queue, conn, job, patch) {
+  return queue ? queue.finish(conn, job, patch) : finishJob(conn, job, patch);
+}
+
+function queueMetric(queue, conn, job, timings) {
+  return queue ? queue.metric(conn, job, timings) : recordEnrichMetric(conn, job, timings);
+}
+
+function queueOwnsRun(queue, conn, job) {
+  return queue ? queue.ownsRun(conn, job) : jobStillOwnsRun(conn, job);
+}
+
+function queueGetPrep(queue, conn, postId) {
+  return queue ? queue.getPrep(conn, postId) : getListingPrep(conn, postId);
+}
+
+function queuePrepChecked(queue, conn, args) {
+  return queue ? queue.prepChecked(conn, args) : prepCheckedUpdate(conn, args);
+}
+
+function queueSeed(queue, conn, opts) {
+  return queue ? queue.seed(conn, opts) : seedHousepriceEnrichJobs(conn, opts);
+}
+
+function queueClaim(queue, conn, opts) {
+  return queue ? queue.claim(conn, opts) : claimEnrichJobs(conn, opts);
+}
+
+// 全檔唯一直接寫 listing_prep 的手寫 UPDATE（processOneEnrichJob 的 PROBE_INCONCLUSIVE 分支）。
+function prepCheckedUpdate(conn, { postId, reason, now = Date.now() } = {}) {
+  const q = enrichRepo.prepCheckedUpdateQuery({ stamp: new Date(now).toISOString(), reason, postId });
+  conn.prepare(q.sql).run(...q.params);
 }
 
 // The listing_prep row is owned by this module (schema + statement together), so its text lives
@@ -225,135 +275,116 @@ export function getListingPrep(conn, postId) {
   return conn.prepare("SELECT * FROM listing_prep WHERE post_id = ?").get(postId) || null;
 }
 
-export function enqueueListingEnrich(conn, listing, {
-  via = "scheduler",
-  priority,
-  missing = [],
-} = {}) {
-  if (!listing?.post_id || !isHousepriceListing(listing)) return null;
-  const postId = Number(listing.post_id);
-  const stamp = nowIso();
-  const prio = Number.isFinite(Number(priority))
-    ? Number(priority)
-    : via === "click" || via === "notify" || via === "go"
-      ? CLICK_PRIORITY
-      : via === "watch"
-        ? WATCH_PRIORITY
-        : NORMAL_PRIORITY;
-  const existing = conn.prepare("SELECT * FROM listing_enrich_jobs WHERE post_id = ?").get(postId);
+// via → 預設優先權（sync 與 async 共用）。
+export function enqueuePriority(via, priority) {
+  if (Number.isFinite(Number(priority))) return Number(priority);
+  return via === "click" || via === "notify" || via === "go"
+    ? CLICK_PRIORITY
+    : via === "watch"
+      ? WATCH_PRIORITY
+      : NORMAL_PRIORITY;
+}
+
+// enqueueListingEnrich() 的判斷部分（sync 與 async 共用）：既有列 → 提高優先權／重排，
+// 沒有列 → 插一筆。回傳 repository 的 { sql, params }，呼叫端只負責執行。
+export function enqueueEnrichPlan(existing, { postId, prio, via, missing = [], now = Date.now() } = {}) {
+  const stamp = new Date(now).toISOString();
   if (existing) {
     const nextPriority = Math.max(Number(existing.priority) || 0, prio);
     const bumpSeq = via === "click" || via === "notify" || via === "go";
     const running = existing.status === "running";
-    const retryBlocked = Boolean(existing.next_retry_at && Date.parse(existing.next_retry_at) > Date.now());
-    const keepBackoff = sourceBackoffActive(existing) || retryBlocked;
+    const retryBlocked = Boolean(existing.next_retry_at && Date.parse(existing.next_retry_at) > now);
+    const keepBackoff = sourceBackoffActive(existing, now) || retryBlocked;
     const requeue = !running && !keepBackoff && (
       bumpSeq
       || (CLAIMABLE_STATUSES.includes(existing.status) && !retryBlocked)
     );
     const setQueuedAt = requeue && existing.status !== "queued";
-    conn.prepare(`
-      UPDATE listing_enrich_jobs
-         SET priority = ?,
-             requested_via = CASE WHEN ? >= ? THEN ? ELSE requested_via END,
-             request_seq = request_seq + ?,
-             missing_fields = ?,
-             status = CASE
-               WHEN ? THEN 'queued'
-               ELSE status
-             END,
-             next_retry_at = CASE
-               WHEN ? THEN next_retry_at
-               WHEN ? THEN NULL
-               ELSE next_retry_at
-             END,
-             last_queued_at = CASE WHEN ? THEN ? ELSE last_queued_at END
-       WHERE post_id = ?
-    `).run(
+    return enrichRepo.enrichJobBumpQuery({
       nextPriority,
-      prio,
-      Number(existing.priority) || 0,
       via,
-      running ? 0 : (bumpSeq ? 1 : 0),
-      JSON.stringify(missing.length ? missing : parseJson(existing.missing_fields, [])),
-      requeue ? 1 : 0,
-      (keepBackoff || running) ? 1 : 0,
-      requeue ? 1 : 0,
-      setQueuedAt ? 1 : 0,
+      prio,
+      prevPriority: Number(existing.priority) || 0,
+      requestSeqStep: running ? 0 : (bumpSeq ? 1 : 0),
+      missingJson: JSON.stringify(missing.length ? missing : parseJson(existing.missing_fields, [])),
+      requeue,
+      keepBackoff: keepBackoff || running,
+      setQueuedAt,
       stamp,
       postId,
-    );
-    return conn.prepare("SELECT * FROM listing_enrich_jobs WHERE post_id = ?").get(postId);
+    });
   }
-  conn.prepare(`
-    INSERT INTO listing_enrich_jobs(
-      post_id, source, job_kind, status, missing_fields, priority, requested_via, created_at, last_queued_at
-    ) VALUES (?, ?, 'enrich', 'queued', ?, ?, ?, ?, ?)
-  `).run(postId, HP_SOURCE, JSON.stringify(missing), prio, via, stamp, stamp);
-  return conn.prepare("SELECT * FROM listing_enrich_jobs WHERE post_id = ?").get(postId);
+  const insert = enrichRepo.enrichJobInsertQuery();
+  return { sql: insert.sql, params: [postId, HP_SOURCE, JSON.stringify(missing), prio, via, stamp, stamp] };
+}
+
+// 入列資格：只有房價（houseprice）的物件會進補抓佇列（sync 與 async 共用）。
+export function enrichEnqueueEligible(listing) {
+  return Boolean(listing?.post_id && isHousepriceListing(listing));
+}
+
+export function enqueueListingEnrich(conn, listing, {
+  via = "scheduler",
+  priority,
+  missing = [],
+  now = Date.now(),
+} = {}) {
+  if (!enrichEnqueueEligible(listing)) return null;
+  const postId = Number(listing.post_id);
+  const prio = enqueuePriority(via, priority);
+  const jobQuery = enrichRepo.enrichJobByPostIdQuery(postId);
+  const existing = conn.prepare(jobQuery.sql).get(...jobQuery.params);
+  const plan = enqueueEnrichPlan(existing, { postId, prio, via, missing, now });
+  conn.prepare(plan.sql).run(...plan.params);
+  return conn.prepare(jobQuery.sql).get(...jobQuery.params);
 }
 
 export function reclaimStaleEnrichJobs(conn, now = Date.now()) {
   const cut = new Date(now).toISOString();
-  const info = conn.prepare(`
-    UPDATE listing_enrich_jobs
-       SET status = 'queued',
-           lease_until = NULL,
-           last_queued_at = ?
-     WHERE status = 'running' AND lease_until IS NOT NULL AND lease_until < ?
-  `).run(cut, cut);
+  const q = enrichRepo.reclaimStaleEnrichJobsQuery(cut);
+  const info = conn.prepare(q.sql).run(...q.params);
   return Number(info.changes) || 0;
 }
 
-function claimOne(conn, { minPriority = 0, maxPriority = 1000, order = "priority" } = {}) {
-  const stamp = nowIso();
-  const lease = new Date(Date.now() + LEASE_MS).toISOString();
-  const orderSql = order === "oldest"
-    ? "created_at ASC, post_id ASC"
-    : order === "fair"
-      ? "IFNULL(last_attempt_at, created_at) ASC, post_id ASC"
-      : "priority DESC, IFNULL(next_retry_at, created_at) ASC, post_id ASC";
-  const row = conn.prepare(`
-    SELECT * FROM listing_enrich_jobs
-     WHERE status IN ('queued', 'failed', 'source_limited', 'parse_failed')
-       AND priority >= ? AND priority <= ?
-       AND (next_retry_at IS NULL OR next_retry_at <= ?)
-     ORDER BY ${orderSql}
-     LIMIT 1
-  `).get(minPriority, maxPriority, stamp);
+function claimOne(conn, { minPriority = 0, maxPriority = 1000, order = "priority" } = {}, now = Date.now()) {
+  const stamp = new Date(now).toISOString();
+  const lease = new Date(now + LEASE_MS).toISOString();
+  const candidates = enrichRepo.claimCandidatesQuery({ minPriority, maxPriority, stamp, order });
+  const row = conn.prepare(candidates.sql).get(...candidates.params);
   if (!row) return null;
-  const info = conn.prepare(`
-    UPDATE listing_enrich_jobs
-       SET status = 'running',
-           started_at = ?,
-           last_attempt_at = ?,
-           attempt_count = attempt_count + 1,
-           run_seq = IFNULL(run_seq, 0) + 1,
-           lease_until = ?
-     WHERE id = ? AND status IN ('queued', 'failed', 'source_limited', 'parse_failed')
-  `).run(stamp, stamp, lease, row.id);
+  const leaseQuery = enrichRepo.leaseEnrichJobQuery({ stamp, leaseUntil: lease, id: row.id });
+  const info = conn.prepare(leaseQuery.sql).run(...leaseQuery.params);
   if (!info.changes) return null;
-  return conn.prepare("SELECT * FROM listing_enrich_jobs WHERE id = ?").get(row.id);
+  const byId = enrichRepo.enrichJobByIdQuery(row.id);
+  return conn.prepare(byId.sql).get(...byId.params);
 }
 
-export function claimEnrichJobs(conn, { limit = 6 } = {}) {
-  reclaimStaleEnrichJobs(conn);
+// 名額分配（sync 與 async 兩條路徑共用；名額與排序必須一樣，parity 才對得起來）。
+// slots < 0 代表「剩下的名額」，由呼叫端用 cap - 已搶到筆數 代入。
+export function claimTakePlan(cap) {
+  return [
+    { opts: { minPriority: CLICK_PRIORITY, order: "priority" }, slots: Math.max(1, Math.ceil(cap / 2)) },
+    { opts: { maxPriority: CLICK_PRIORITY - 1, order: "oldest" }, slots: Math.max(1, Math.floor(cap / 4)) },
+    { opts: { maxPriority: WATCH_PRIORITY, order: "fair" }, slots: -1 },
+  ];
+}
+
+export function claimEnrichJobs(conn, { limit = 6 } = {}, now = Date.now()) {
+  reclaimStaleEnrichJobs(conn, now);
   const cap = Math.max(1, Math.min(Number(limit) || 6, 12));
-  const clickSlots = Math.max(1, Math.ceil(cap / 2));
-  const agedSlots = Math.max(1, Math.floor(cap / 4));
   const claimed = [];
   const seen = new Set();
   const take = (opts, n) => {
     for (let i = 0; i < n; i += 1) {
-      const row = claimOne(conn, opts);
+      const row = claimOne(conn, opts, now);
       if (!row || seen.has(row.id)) break;
       seen.add(row.id);
       claimed.push(row);
     }
   };
-  take({ minPriority: CLICK_PRIORITY, order: "priority" }, clickSlots);
-  take({ maxPriority: CLICK_PRIORITY - 1, order: "oldest" }, agedSlots);
-  take({ maxPriority: WATCH_PRIORITY, order: "fair" }, cap - claimed.length);
+  for (const step of claimTakePlan(cap)) {
+    take(step.opts, step.slots < 0 ? cap - claimed.length : step.slots);
+  }
   return claimed;
 }
 
@@ -364,18 +395,19 @@ function backoffMs(errorClass, attempt) {
   return TRANSIENT_BACKOFF_MS[idx];
 }
 
-function finishJob(conn, job, {
+// finishJob() 的判斷部分（sync 與 async 共用）。leaked 狀態一律以「最新列的 run_seq／request_seq」
+// 決定：run_seq 被別人推進 → stale；request_seq 被推進 → superseded（退回 queued）。
+export function finishEnrichPlan(job, {
   status,
   error = "",
   errorClass = "",
   missing = [],
   timings = {},
   retryAfterMs = 0,
-}) {
-  const stamp = nowIso();
+} = {}, latest, now = Date.now()) {
+  const stamp = new Date(now).toISOString();
   const waitMs = Math.max(backoffMs(errorClass || "transient", Number(job.attempt_count) || 1), Number(retryAfterMs) || 0);
-  const retry = status === "succeeded" ? null : new Date(Date.now() + waitMs).toISOString();
-  const latest = conn.prepare("SELECT request_seq, run_seq FROM listing_enrich_jobs WHERE id = ?").get(job.id);
+  const retry = status === "succeeded" ? null : new Date(now + waitMs).toISOString();
   if (latest && Number(latest.run_seq) !== Number(job.run_seq)) {
     return { stale: true };
   }
@@ -384,52 +416,55 @@ function finishJob(conn, job, {
   const retryAt = finalStatus === "succeeded" || finalStatus === "queued"
     ? null
     : retry;
-  conn.prepare(`
-    UPDATE listing_enrich_jobs
-       SET status = ?,
-           last_error = ?,
-           last_error_class = ?,
-           missing_fields = ?,
-           last_success_at = CASE WHEN ? = 'succeeded' THEN ? ELSE last_success_at END,
-           next_retry_at = ?,
-           lease_until = NULL,
-           timings = ?
-     WHERE id = ? AND run_seq = ?
-  `).run(
+  const query = enrichRepo.finishEnrichJobQuery({
     finalStatus,
-    superseded ? "superseded" : error,
-    superseded ? "" : errorClass,
-    JSON.stringify(missing),
-    finalStatus,
+    error: superseded ? "superseded" : error,
+    errorClass: superseded ? "" : errorClass,
+    missingJson: JSON.stringify(missing),
     stamp,
     retryAt,
-    JSON.stringify(timings),
-    job.id,
-    job.run_seq,
-  );
+    timingsJson: JSON.stringify(timings),
+    jobId: job.id,
+    runSeq: job.run_seq,
+  });
+  return { stale: false, superseded: Boolean(superseded), status: finalStatus, retryAt, sql: query.sql, params: query.params };
 }
 
-export function recordEnrichMetric(conn, job, timings = {}) {
-  conn.prepare(`
-    INSERT INTO listing_enrich_metrics(
-      post_id, job_id, queued_ms, start_ms, fetch_ms, parse_ms, locate_ms, route_ms, ready_ms,
-      first_ready_ms, attempt_wait_ms, outcome, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    job.post_id,
-    job.id,
-    metricNumber(timings.queued_ms),
-    metricNumber(timings.start_ms),
-    metricNumber(timings.fetch_ms),
-    metricNumber(timings.parse_ms),
-    metricNumber(timings.locate_ms),
-    metricNumber(timings.route_ms),
-    metricNumber(timings.ready_ms),
-    metricNumber(timings.first_ready_ms),
-    metricNumber(timings.attempt_wait_ms ?? timings.queued_ms),
-    timings.outcome || "",
-    nowIso(),
-  );
+function finishJob(conn, job, patch = {}, now = Date.now()) {
+  const latestQuery = enrichRepo.enrichJobRunSeqQuery(job.id);
+  const latest = conn.prepare(latestQuery.sql).get(...latestQuery.params);
+  const plan = finishEnrichPlan(job, patch, latest, now);
+  if (plan.stale) return { stale: true };
+  conn.prepare(plan.sql).run(...plan.params);
+  return { stale: false, superseded: plan.superseded, status: plan.status };
+}
+
+// recordEnrichMetric() 的值組裝（sync 與 async 共用）。
+export function enrichMetricPlan(job, timings = {}, now = Date.now()) {
+  const query = enrichRepo.enrichMetricInsertQuery();
+  return {
+    sql: query.sql,
+    params: [
+      job.post_id,
+      job.id,
+      metricNumber(timings.queued_ms),
+      metricNumber(timings.start_ms),
+      metricNumber(timings.fetch_ms),
+      metricNumber(timings.parse_ms),
+      metricNumber(timings.locate_ms),
+      metricNumber(timings.route_ms),
+      metricNumber(timings.ready_ms),
+      metricNumber(timings.first_ready_ms),
+      metricNumber(timings.attempt_wait_ms ?? timings.queued_ms),
+      timings.outcome || "",
+      new Date(now).toISOString(),
+    ],
+  };
+}
+
+export function recordEnrichMetric(conn, job, timings = {}, now = Date.now()) {
+  const plan = enrichMetricPlan(job, timings, now);
+  conn.prepare(plan.sql).run(...plan.params);
 }
 
 function percentile(list, p) {
@@ -546,14 +581,14 @@ async function loadListingForRun(helpers, postId) {
 }
 
 async function refreshFreshListing(conn, helpers, job) {
-  if (job && !jobStillOwnsRun(conn, job)) return null;
+  if (job && !(await queueOwnsRun(enrichQueueOf(helpers), conn, job))) return null;
   const listing = await loadListingForRun(helpers, job.post_id);
   if (!listingWriteIsFresh(job, listing)) return null;
   return listing;
 }
 
 export async function applyHpListingPatch(conn, helpers, current, next, { locationChanged = false, job = null } = {}) {
-  if (job && !jobStillOwnsRun(conn, job)) {
+  if (job && !(await queueOwnsRun(enrichQueueOf(helpers), conn, job))) {
     return { applied: false, stale: true };
   }
   const latest = (await loadListingForRun(helpers, current.post_id)) || current;
@@ -574,14 +609,21 @@ export async function processOneEnrichJob(conn, helpers, job, {
   fetchDetail = fetchHpDetailInspected,
 } = {}) {
   const t0 = Date.now();
+  // 2.3b 第二段：寫入走 driver-aware 分派。helpers 有 enrichQueue 時（PostgreSQL 佈署）
+  // 走 listingEnrichQueueAsync.js 的非同步版本；沒有時就是本檔原本的同步函式，
+  // SQLite 模式的行為完全不變。下面三個區域變數刻意同名，讓呼叫端不必判斷 driver。
+  const enrichQueue = enrichQueueOf(helpers);
+  const finishJob = (c, j, patch) => queueFinish(enrichQueue, c, j, patch);
+  const getListingPrep = (c, postId) => queueGetPrep(enrichQueue, c, postId);
+  const recordEnrichMetric = (c, j, timings) => queueMetric(enrichQueue, c, j, timings);
   const listing = await loadListingForRun(helpers, job.post_id);
   if (!listing) {
-    finishJob(conn, job, { status: "failed", error: "listing_missing", errorClass: "parse_failed" });
+    await finishJob(conn, job, { status: "failed", error: "listing_missing", errorClass: "parse_failed" });
     return { skipped: true };
   }
   job.listing_seq = Number(listing.content_seq || 0);
   if (helpers.isSourceEnabled && !helpers.isSourceEnabled("houseprice")) {
-    finishJob(conn, job, { status: "failed", error: "source_disabled", errorClass: "source_limited" });
+    await finishJob(conn, job, { status: "failed", error: "source_disabled", errorClass: "source_limited" });
     return { skipped: true };
   }
   const attemptWaitMs = Math.max(0, t0 - (Date.parse(job.last_queued_at || job.started_at || job.created_at || "") || t0));
@@ -593,18 +635,18 @@ export async function processOneEnrichJob(conn, helpers, job, {
     inspected = await fetchDetail(listing.source_id || listing.url);
   } catch (error) {
     const message = String(error?.message || error || "fetch_failed");
-    finishJob(conn, job, { status: "failed", error: message.slice(0, 240), errorClass: "transient" });
+    await finishJob(conn, job, { status: "failed", error: message.slice(0, 240), errorClass: "transient" });
     return { outcome: PROBE_INCONCLUSIVE, errorClass: "transient" };
   }
   const fetchMs = metricNumber(inspected.fetch_ms) ?? Math.max(0, Date.now() - fetchStarted);
   const parseMs = metricNumber(inspected.parse_ms);
-  const staleWrite = () => {
-    finishJob(conn, job, { status: "queued", error: "stale_write", errorClass: "" });
+  const staleWrite = async () => {
+    await finishJob(conn, job, { status: "queued", error: "stale_write", errorClass: "" });
     return { stale: true };
   };
   if (!(await refreshFreshListing(conn, helpers, job))) {
     if (!jobStillOwnsRun(conn, job)) {
-      finishJob(conn, job, { status: "queued", error: "superseded", errorClass: "" });
+      await finishJob(conn, job, { status: "queued", error: "superseded", errorClass: "" });
       return { superseded: true, stale: true };
     }
     return staleWrite();
@@ -615,7 +657,7 @@ export async function processOneEnrichJob(conn, helpers, job, {
     await runHelper(helpers, "markGone", listing.post_id);
     syncJobListingSeq(job, await loadListingForRun(helpers, job.post_id));
     if (!(await refreshFreshListing(conn, helpers, job))) return staleWrite();
-    finishJob(conn, job, { status: "succeeded", timings: { ...timingBase, outcome: "succeeded" } });
+    await finishJob(conn, job, { status: "succeeded", timings: { ...timingBase, outcome: "succeeded" } });
     const goneRow = (await loadListingForRun(helpers, job.post_id)) || { ...listing, offline: 1 };
     if (!(await refreshFreshListing(conn, helpers, job))) return staleWrite();
     helpers.onListingUpdated?.(goneRow, { outcome: PROBE_GONE, displayReady: false });
@@ -623,11 +665,11 @@ export async function processOneEnrichJob(conn, helpers, job, {
   }
   if (inspected.outcome === PROBE_INCONCLUSIVE) {
     if (!(await refreshFreshListing(conn, helpers, job))) return staleWrite();
-    const existingPrep = getListingPrep(conn, listing.post_id);
+    const existingPrep = await getListingPrep(conn, listing.post_id);
     if (!existingPrep || Number(existingPrep.display_ready) !== 1) {
       const evalPending = evaluateHpPrep(listing, { fetched: false });
       await prepWrite(helpers, conn, listing.post_id, listing, evalPending);
-      finishJob(conn, job, {
+      await finishJob(conn, job, {
         status: "failed",
         error: inspected.reason || "inconclusive",
         errorClass: inspected.errorClass || "transient",
@@ -636,13 +678,8 @@ export async function processOneEnrichJob(conn, helpers, job, {
         retryAfterMs: inspected.retryAfterMs,
       });
     } else {
-      conn.prepare(`
-        UPDATE listing_prep
-           SET checked_at = ?,
-               withhold_reason = ?
-         WHERE post_id = ?
-      `).run(nowIso(), inspected.reason || "inconclusive", listing.post_id);
-      finishJob(conn, job, {
+      await queuePrepChecked(enrichQueue, conn, { postId: listing.post_id, reason: inspected.reason || "inconclusive" });
+      await finishJob(conn, job, {
         status: "failed",
         error: inspected.reason || "inconclusive",
         errorClass: inspected.errorClass || "transient",
@@ -651,7 +688,7 @@ export async function processOneEnrichJob(conn, helpers, job, {
         retryAfterMs: inspected.retryAfterMs,
       });
     }
-    recordEnrichMetric(conn, job, { ...timingBase, outcome: "failed" });
+    await recordEnrichMetric(conn, job, { ...timingBase, outcome: "failed" });
     return { outcome: PROBE_INCONCLUSIVE };
   }
   if (!(await refreshFreshListing(conn, helpers, job))) return staleWrite();
@@ -696,17 +733,17 @@ export async function processOneEnrichJob(conn, helpers, job, {
   });
   const locateMs = Date.now() - locateStarted;
   if (patched.stale) {
-    finishJob(conn, job, { status: "queued", error: "stale_write", errorClass: "" });
+    await finishJob(conn, job, { status: "queued", error: "stale_write", errorClass: "" });
     return { stale: true };
   }
   if (!jobStillOwnsRun(conn, job)) {
-    finishJob(conn, job, { status: "queued", error: "stale_write", errorClass: "" });
+    await finishJob(conn, job, { status: "queued", error: "stale_write", errorClass: "" });
     return { stale: true };
   }
   if (merged.locationChanged) await runHelper(helpers, "invalidateLocation", listing, merged.listing);
   const stored = (await loadListingForRun(helpers, job.post_id)) || merged.listing;
   if (!(await refreshFreshListing(conn, helpers, job))) return staleWrite();
-  const existingPrep = getListingPrep(conn, listing.post_id);
+  const existingPrep = await getListingPrep(conn, listing.post_id);
   const evalResult = evaluateHpPrep(stored, {
     fetched: true,
     parseFailed: false,
@@ -729,7 +766,7 @@ export async function processOneEnrichJob(conn, helpers, job, {
     first_ready_ms: firstReadyMs,
     outcome: evalResult.displayReady ? "succeeded" : "failed",
   };
-  recordEnrichMetric(conn, job, timings);
+  await recordEnrichMetric(conn, job, timings);
   const jobStatus = evalResult.displayReady && evalResult.status === PREP_READY
     ? "succeeded"
     : evalResult.status === PREP_PARSE_FAILED
@@ -737,7 +774,7 @@ export async function processOneEnrichJob(conn, helpers, job, {
       : evalResult.status === PREP_SOURCE_LIMITED
         ? "source_limited"
         : "failed";
-  finishJob(conn, job, {
+  await finishJob(conn, job, {
     status: jobStatus === "failed" && evalResult.missing.length ? "failed" : jobStatus,
     error: evalResult.withholdReason || "",
     errorClass: jobStatus === "succeeded" ? "" : (jobStatus === "parse_failed" ? "parse_failed" : (jobStatus === "source_limited" ? "source_limited" : "transient")),
@@ -754,14 +791,15 @@ export async function processOneEnrichJob(conn, helpers, job, {
 }
 
 export async function processListingEnrichBatch(conn, helpers, { limit = 6 } = {}) {
-  seedHousepriceEnrichJobs(conn, { limit: 40, isEnabled: helpers.isSourceEnabled || (() => true) });
-  const jobs = claimEnrichJobs(conn, { limit });
+  const queue = enrichQueueOf(helpers);
+  await queueSeed(queue, conn, { limit: 40, isEnabled: helpers.isSourceEnabled || (() => true) });
+  const jobs = await queueClaim(queue, conn, { limit });
   const results = [];
   for (const job of jobs) {
     try {
       results.push(await processOneEnrichJob(conn, helpers, job));
     } catch (error) {
-      finishJob(conn, job, { status: "failed", error: String(error.message || error).slice(0, 240), errorClass: "transient" });
+      await queueFinish(queue, conn, job, { status: "failed", error: String(error.message || error).slice(0, 240), errorClass: "transient" });
       results.push({ error: String(error.message || error) });
     }
   }
@@ -774,6 +812,11 @@ export async function processListingEnrichBatch(conn, helpers, { limit = 6 } = {
   return { attempted: jobs.length, processed: jobs.length, updated, located, results };
 }
 
+// 供 listingEnrichQueueAsync.js 的 SQLite 分支直接沿用（行為必須與 sync 完全一致）。
+export { finishJob as finishEnrichJobSync, prepCheckedUpdate as prepCheckedUpdateSync };
+// 租約長度也給 async 分支用（同一個值，不要各寫一份）。
+export const CLAIM_LEASE_MS = LEASE_MS;
+
 export function statusCheckIsFresh(listing, now = Date.now()) {
   const lastStatus = Date.parse(listing?.last_checked_at || "") || 0;
   return Boolean(lastStatus && now - lastStatus < STATUS_COOLDOWN_MS);
@@ -784,31 +827,49 @@ export function enrichCooldownActive(job) {
   return last && Date.now() - last < ENRICH_COOLDOWN_MS && job?.status === "running";
 }
 
-export function requestClickRefresh(conn, listing, via = "click") {
-  if (!listing?.post_id || !isHousepriceListing(listing)) return { queued: false };
-  const prep = getListingPrep(conn, listing.post_id);
+// requestClickRefresh() 的判斷部分（sync 與 async 共用）：回傳要不要入列，以及入列的 plan。
+export function requestClickPlan(prep, existing, listing, via = "click", now = Date.now()) {
   const missing = parseJson(prep?.missing_fields, []) || evaluateHpPrep(listing, { fetched: Boolean(prep) }).missing;
-  const existing = conn.prepare("SELECT * FROM listing_enrich_jobs WHERE post_id = ?").get(listing.post_id);
-  const sourcePaused = sourceBackoffActive(existing);
-  const statusCooldown = (Date.parse(listing.last_checked_at || "") || 0) > Date.now() - STATUS_COOLDOWN_MS;
+  const sourcePaused = sourceBackoffActive(existing, now);
+  const statusCooldown = (Date.parse(listing.last_checked_at || "") || 0) > now - STATUS_COOLDOWN_MS;
   const recentlySucceeded = existing?.status === "succeeded"
-    && (Date.parse(existing.last_success_at || "") || 0) > Date.now() - STATUS_COOLDOWN_MS
+    && (Date.parse(existing.last_success_at || "") || 0) > now - STATUS_COOLDOWN_MS
     && !missing.length;
-  const job = recentlySucceeded && !sourcePaused
-    ? existing
-    : enqueueListingEnrich(conn, listing, { via, priority: CLICK_PRIORITY, missing });
-  const runnableNow = !recentlySucceeded && !sourcePaused && job && (job.status === "queued" || job.status === "failed")
+  const enqueue = recentlySucceeded && !sourcePaused
+    ? null
+    : enqueueEnrichPlan(existing, { postId: Number(listing.post_id) || 0, prio: CLICK_PRIORITY, via, missing, now });
+  return { missing, sourcePaused, statusCooldown, recentlySucceeded, enqueue };
+}
+
+// 回傳值的組裝（sync 與 async 共用）。
+export function clickRefreshResult(decision, job) {
+  const runnableNow = !decision.recentlySucceeded && !decision.sourcePaused && job
+    && (job.status === "queued" || job.status === "failed")
     && (!job.next_retry_at || Date.parse(job.next_retry_at) <= Date.now());
   return {
     queued: Boolean(runnableNow),
     merged: true,
     jobId: job?.id || 0,
     requestSeq: job?.request_seq || 0,
-    statusCooldown,
-    sourcePaused,
-    missingFields: missing,
+    statusCooldown: decision.statusCooldown,
+    sourcePaused: decision.sourcePaused,
+    missingFields: decision.missing,
     wakeWorker: Boolean(runnableNow),
   };
+}
+
+export function requestClickRefresh(conn, listing, via = "click", now = Date.now()) {
+  if (!enrichEnqueueEligible(listing)) return { queued: false };
+  const jobQuery = enrichRepo.enrichJobByPostIdQuery(listing.post_id);
+  const prep = getListingPrep(conn, listing.post_id);
+  const existing = conn.prepare(jobQuery.sql).get(...jobQuery.params);
+  const decision = requestClickPlan(prep, existing, listing, via, now);
+  let job = existing;
+  if (decision.enqueue) {
+    conn.prepare(decision.enqueue.sql).run(...decision.enqueue.params);
+    job = conn.prepare(jobQuery.sql).get(...jobQuery.params);
+  }
+  return clickRefreshResult(decision, job);
 }
 
 let enrichWorker = null;

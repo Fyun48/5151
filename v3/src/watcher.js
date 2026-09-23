@@ -52,7 +52,10 @@ import { noteConsecutiveTimeout } from "./crawlWatchdog.js";
 import { fetchCommunityLocation, fetchListingDetail, fetchListings, isListingGoneError, LIST_PAGE_SIZE, mergeFeeRows, probeListingAlive } from "./client591.js";
 import { probeListingAliveBySource } from "./probe.js";
 import { classifyListingProbeWrite } from "./probeOutcomes.js";
-import { enqueueListingEnrich, processListingEnrichBatch } from "./listingEnrichQueue.js";
+import { processListingEnrichBatch } from "./listingEnrichQueue.js";
+// 2.3b 第二段：入列與 worker 的 queue 管理走 driver-aware 版本
+// （SQLite 模式的行為與同步函式完全相同；PG 模式才寫到 PostgreSQL）。
+import { enqueueListingEnrichAsync, listingEnrichQueueFacade } from "./listingEnrichQueueAsync.js";
 import { fetchHbCoveringListings } from "./hbhousing.js";
 import { fetchSinyiCoveringListings } from "./sinyi.js";
 import { fetchHpCoveringListings } from "./houseprice.js";
@@ -146,6 +149,10 @@ export function listingEnrichHelpers() {
         created_at: nowIso(),
       });
     },
+    // 2.3b 第二段：補抓 worker 的 queue 管理（seed／claim／finish／metric／擁有權／prep）走
+    // driver-aware 分派（processListingEnrichBatch 會用這個 bundle）。PG 模式下 seed 回 0，
+    // 因為種子查詢還依賴 listings 的讀取島（細節見 PG-2.3-NOTES.md）。
+    enrichQueue: listingEnrichQueueFacade(db),
   };
 }
 
@@ -818,7 +825,7 @@ export async function runWatch(options = {}) {
       upserts += 1;
       if (!existing) freshIds.push(listing.post_id);
       if (String(listing.source || "") === "houseprice") {
-        enqueueListingEnrich(db, (await listingForWatchAsync(listing.post_id)) || listing, { via: "scheduler" });
+        await enqueueListingEnrichAsync(db, (await listingForWatchAsync(listing.post_id)) || listing, { via: "scheduler" });
       }
       if (upserts % 20 === 0) await yieldEventLoop();
 
