@@ -2063,11 +2063,15 @@ app.post("/api/admin/ops-delivery/compact-outbox", requireAdminApi, (req, res) =
   res.json({ ok: true, ...compactOpsOutbox({ olderThanMs: Number.isFinite(olderThanMs) && olderThanMs >= 0 ? olderThanMs : undefined }) });
 });
 
-app.get("/api/admin/crm", requireAdminApi, (req, res) => {
-  res.json({
-    ...getCrmOverview({ q: req.query?.q }),
-    sync: getCrmDeliveryControl(),
-  });
+app.get("/api/admin/crm", requireAdminApi, async (req, res) => {
+  try {
+      res.json({
+        ...(await getCrmOverview({ q: req.query?.q })),
+        sync: getCrmDeliveryControl(),
+      });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message });
+  }
 });
 
 app.put("/api/admin/crm/module", requireAdminApi, (req, res) => {
@@ -2080,11 +2084,15 @@ app.put("/api/admin/crm/sync", requireAdminApi, (req, res) => {
   res.json(setCrmDeliveryStop(stop));
 });
 
-app.get("/api/admin/crm/contacts/:id", requireAdminApi, (req, res) => {
+app.get("/api/admin/crm/contacts/:id", requireAdminApi, async (req, res) => {
   try {
-    res.json(getCrmContact(req.params.id));
+      try {
+        res.json(await getCrmContact(req.params.id));
+      } catch (error) {
+        res.status(error.status || 400).json({ error: error.message });
+      }
   } catch (error) {
-    res.status(error.status || 400).json({ error: error.message });
+    res.status(error.status || 500).json({ error: error.message });
   }
 });
 
