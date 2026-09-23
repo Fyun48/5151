@@ -120,6 +120,23 @@ Host = CF hostname、Port `22`、Auto-login username 同上。
 | PG 密碼 | `~/.config/5151-pg.env`（代理人）、CasaOS `/root/pgtest/pg.env`（**臨時檔，建議刪除**） |
 | GitHub Actions | `secrets.NAS_HOST/PORT/USER`、`secrets.OPS_SYNOLOGY_*`、SSH 私鑰 |
 
+
+### 5.1 跨專案共用憑證庫（cline-server，2026-09-23 起）
+
+Owner 指示：**所有專案的帳號密碼／token 一律集中在共享目錄**，新舊專案都直接調用，不要再各自散落。
+
+| 視角 | 路徑 |
+|---|---|
+| NAS（`tori@192.168.0.220`） | `~/code-server/workspace/cline-server/home/.secrets` |
+| code-server 容器 | `/home/cline/.secrets` |
+| cline-dev 容器（代理人） | `/home/cline/.secrets` |
+
+- 內容清單（只記檔名與鍵名，不含值）：`INDEX.md`；用法與鐵則：`README.md`；重抓：`sync.sh`。
+- 權限：目錄 700／檔案 600，且**不在任何 workspace root 內**（不會被誤 commit）。
+- 覆蓋範圍：兩台 NAS 的 compose `.env`、影子站 PG、Gitea、code-server、各專案（5151 / mbriapi / bnplloan / yourfavorestore）、GitHub token。
+- 尚未納入：NAS 登入密碼、CF API token、CF Access client secret（見 §5 表與 `INDEX.md` 的「還沒拿到」）。
+- 引用機密時只寫**檔名與鍵名**（例：`/home/cline/.secrets/postgres/shadow-primary.env` 的 `PG_SUPER_PASSWORD`），不要把值貼進 repo／PR／對話。
+
 ## 6. 公網 SSH 埠現況（2026-09-22 更新）
 
 | 公網埠 | 狀態 | 說明 |
