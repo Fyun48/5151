@@ -2273,21 +2273,27 @@ app.post("/api/admin/documents/:id/new-version", requireAdminApi, (req, res) => 
   }
 });
 
-app.get("/api/admin/providers", requireAdminApi, (_req, res) => {
-  res.json(getAdminProviderSettings());
+app.get("/api/admin/providers", requireAdminApi, async (_req, res) => {
+  try {
+    res.json(await getAdminProviderSettings());
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "無法讀取外掛設定" });
+  }
 });
 
-app.put("/api/admin/providers/site-budget", requireAdminApi, (req, res) => {
+app.put("/api/admin/providers/site-budget", requireAdminApi, async (req, res) => {
   try {
-    res.json({ ok: true, ...saveAdminSiteBudget(req.body || {}), overview: getAdminProviderSettings() });
+    const saved = await saveAdminSiteBudget(req.body || {});
+    res.json({ ok: true, ...saved, overview: await getAdminProviderSettings() });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.put("/api/admin/providers", requireAdminApi, (req, res) => {
+app.put("/api/admin/providers", requireAdminApi, async (req, res) => {
   try {
-    res.json({ ok: true, item: saveAdminProviderSettings(req.body || {}), overview: getAdminProviderSettings() });
+    const item = await saveAdminProviderSettings(req.body || {});
+    res.json({ ok: true, item, overview: await getAdminProviderSettings() });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -2301,8 +2307,12 @@ app.post("/api/admin/providers/test", requireAdminApi, async (req, res) => {
   }
 });
 
-app.get("/api/admin/providers/usage", requireAdminApi, (_req, res) => {
-  res.json(getAdminProviderSettings());
+app.get("/api/admin/providers/usage", requireAdminApi, async (_req, res) => {
+  try {
+    res.json(await getAdminProviderSettings());
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "無法讀取用量" });
+  }
 });
 
 app.get("/api/admin/similarity", requireAdminApi, async (_req, res) => {

@@ -300,6 +300,8 @@ import {
   getProviderConfig,
 } from "./budgetGuard.js";
 import { executeWithProvider } from "./providers/executeWithProvider.js";
+// 2.4：provider／budget 的讀寫都走同一個 driver-aware store。
+import { budgetStore } from "./budgetStore.js";
 import {
   ensureListingSimilaritySchema,
   enqueueListingSimilarity,
@@ -1046,16 +1048,19 @@ function mapsDistanceWarning(base) {
   return base;
 }
 
-export function getAdminProviderSettings() {
-  return listProviderAdmin(db);
+// 2.4：外掛與預算改走 driver-aware store（PG 模式讀寫 PostgreSQL）。
+// ⚠️ 讀與寫必須用同一個 store：只換一半會變成「管理介面寫本機 SQLite、判斷讀 PG」，
+// LLM／爬蟲洞察會被靜默判定成未啟用。
+export function getAdminProviderSettings(options = {}) {
+  return budgetStore({ sqliteDb: db, options }).listAdmin();
 }
 
-export function saveAdminProviderSettings(partial = {}) {
-  return saveProviderConfig(db, partial);
+export function saveAdminProviderSettings(partial = {}, options = {}) {
+  return budgetStore({ sqliteDb: db, options }).saveConfig(partial);
 }
 
-export function saveAdminSiteBudget(partial = {}) {
-  return saveSiteBudget(db, partial);
+export function saveAdminSiteBudget(partial = {}, options = {}) {
+  return budgetStore({ sqliteDb: db, options }).saveSiteBudget(partial);
 }
 
 // ④ 第一段：審核 UI／設定改走 driver-aware（PG 模式讀寫 PostgreSQL，不再讀本機 SQLite）。
@@ -1072,9 +1077,10 @@ export function reviewAdminSimilarity(id, partial = {}, userId = 0, options = {}
   return reviewSimilarityAsync(id, partial, userId, options);
 }
 
-export async function testAdminProvider(partial = {}) {
+export async function testAdminProvider(partial = {}, options = {}) {
   const category = String(partial.category || "").trim();
-  const cfg = getProviderConfig(db, category);
+  const budget = budgetStore({ sqliteDb: db, options });
+  const cfg = await budget.config(category);
   if (!cfg) {
     const err = new Error("unknown category");
     err.status = 400;
@@ -1082,6 +1088,7 @@ export async function testAdminProvider(partial = {}) {
   }
   const result = await executeWithProvider({
     db,
+    store: budget,
     category,
     actionWithProvider: async (row) => {
       if (row.provider_code === "stub_paid") {
