@@ -63,3 +63,15 @@ Cloud Agent 環境由 `.cursor/environment.json` 自動 `npm ci` 並啟動 v3 �
 3. 確認字串（`DEPLOY-PRODUCTION` / `PREDEPLOY-PRODUCTION`）由代理人代填。Cursor 雲端身分可以觸發這三條。
 4. Ops Phase 15「不 merge、不部署」只約束 Ops 機器人自己的任務，**不約束**使用者直接交代 Cursor Agent 的改碼＋合併部署。
 5. 不要另開 tunnel、不要改 v1/v2、不要發明第四條部署路徑。
+
+## 跨專案共用憑證庫（2026-09-23 起）
+
+所有系統容器、NAS、Cloudflare、API 的帳號密碼／token 一律集中在共享目錄：
+
+- NAS：`~/code-server/workspace/cline-server/home/.secrets`
+- code-server 與 cline-dev 容器：`/home/cline/.secrets`（目錄 700／檔案 600，不在任何 workspace root 內）
+
+清單看 `INDEX.md`、用法與鐵則看 `README.md`、要重抓跑 `sync.sh`。
+**不要把值寫進 repo／PR／對話**；要引用時只寫檔名與鍵名。
+詳見 `docs/runbooks/shared-infra-access.md` §5.1。
+
