@@ -57,6 +57,7 @@ import { resolveDbDriver } from "./dbDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { ensurePgSchema } from "./pgSchema.js";
+import { sqliteFallbackAllowed } from "./sqliteFallback.js";
 
 // 與 listingSimilarity.js 相同的對外說明（兩邊輸出必須一致）。
 export const SIMILARITY_LEGAL =
@@ -139,7 +140,8 @@ async function ensurePgSimilaritySchema(pgDriver) {
   await ensurePgSchema(pgDriver, sqliteHandle(), { tables: repo.SIMILARITY_TABLES });
 }
 
-// driver 分派：postgres → 注入的 exec（或 sharedPgDriver 的 pool）；其他錯誤 fail-open 回 SQLite，
+// driver 分派：postgres → 注入的 exec（或 sharedPgDriver 的 pool）；讀取錯誤 fail-open 回 SQLite、
+// 寫入錯誤 fail-closed 往丟（options.write === true，見 sqliteFallback.js），
 // 除非呼叫端要求 strict（測試／探針）。
 async function withFallback(options, runPostgres, runSqlite) {
   const driver = options.driver || resolveDbDriver();
@@ -152,7 +154,7 @@ async function withFallback(options, runPostgres, runSqlite) {
     const exec = (sql, params = []) => pgDriver.query(toPostgresSql(sql), params).then((res) => res.rows);
     return await runPostgres(exec);
   } catch (error) {
-    if (options.strict) throw error;
+    if (!sqliteFallbackAllowed(options, { write: options.write === true })) throw error;
     return runSqlite();
   }
 }
@@ -195,7 +197,7 @@ export function shouldEnqueueSimilarityAsync(options = {}) {
 // listingSimilarity.js savePhashSettings()
 export function savePhashSettingsAsync(input = {}, options = {}) {
   return withFallback(
-    options,
+    { ...options, write: true },
     async (exec) => {
       if (Object.prototype.hasOwnProperty.call(input, "enabled") || Object.prototype.hasOwnProperty.call(input, "phash_enabled")) {
         await repo.writeSetting(exec, PHASH_SETTING_KEY, Boolean(input.enabled ?? input.phash_enabled));
@@ -242,7 +244,7 @@ export function listRecentInsightsAsync(limit = 20, options = {}) {
 // listingSimilarity.js reviewSimilarity()
 export function reviewSimilarityAsync(id, input = {}, userId = 0, options = {}) {
   return withFallback(
-    options,
+    { ...options, write: true },
     async (exec) => {
       const sid = Number(id) || 0;
       const next = String(input.review_state || input.state || "").trim();
@@ -284,7 +286,7 @@ export function listingSimilarityAdminContext() {
 // listingSimilarity.js recordListingPhash()
 export function recordListingPhashAsync(listing, options = {}) {
   return withFallback(
-    options,
+    { ...options, write: true },
     async (exec) => {
       const postId = Number(listing?.post_id) || 0;
       const url = String(listing?.cover || listing?.image_url || "").trim();
@@ -305,7 +307,7 @@ export function recordListingPhashAsync(listing, options = {}) {
 // listingSimilarity.js suggestFromNewHash()：配對、veto／LLM evidence、upsert 建議。
 export function suggestFromNewHashAsync(listing, recorded, options = {}) {
   return withFallback(
-    options,
+    { ...options, write: true },
     async (exec) => {
       const postId = Number(listing?.post_id || recorded?.post_id) || 0;
       if (!postId || !recorded?.phash) return [];
@@ -382,7 +384,7 @@ const APPLY_STATES = new Set(["hint_only", "applied_empty", "skipped"]);
 // listingSimilarity.js enqueueListingSimilarity()：整個佇列的入口。
 export function enqueueListingSimilarityAsync(listing, options = {}) {
   return withFallback(
-    options,
+    { ...options, write: true },
     async (exec) => {
       const out = { phash: null, suggestions: [], insight: null, skipped: null };
       if (!listing?.post_id) {
@@ -409,7 +411,7 @@ export function enqueueListingSimilarityAsync(listing, options = {}) {
 // listingSimilarity.js recordCrawlInsight()
 export function recordCrawlInsightAsync(listing, options = {}) {
   return withFallback(
-    options,
+    { ...options, write: true },
     async (exec) => {
       const postId = Number(listing?.post_id) || 0;
       if (!postId) return null;

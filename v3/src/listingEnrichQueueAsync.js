@@ -40,6 +40,7 @@ import { ensurePgSchema, resyncIdentitySequences } from "./pgSchema.js";
 import { resolveDbDriver } from "./dbDriver.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
+import { sqliteFallbackAllowed } from "./sqliteFallback.js";
 import * as repo from "./repository/listingEnrich.js";
 
 async function withFallback(options, runPostgres, runSqlite) {
@@ -130,7 +131,8 @@ async function withFallbackCounted(options, runPostgres, runSqlite) {
     await ensureEnrichSchemaOnce(exec, pgDriver, options.sqliteHandle);
     return await runPostgres(exec);
   } catch (error) {
-    if (options.strict) throw error;
+    /* 寫入 fail-closed：不落回本機 SQLite（見 sqliteFallback.js）。 */
+    if (!sqliteFallbackAllowed(options, { write: true })) throw error;
     return runSqlite();
   }
 }

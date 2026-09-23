@@ -19,6 +19,7 @@ import { enqueueListingEvent as enqueueListingEventRepo } from "./repository/not
 import { resolveDbDriver } from "./dbDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
+import { sqliteFallbackAllowed } from "./sqliteFallback.js";
 
 async function postgresExec(options = {}) {
   if (options.exec) return options.exec;
@@ -34,7 +35,8 @@ async function withFallback(options, runPostgres, runSqlite) {
     const deps = options.deps || notifyEnqueueBuildContext();
     return await runPostgres(exec, deps);
   } catch (error) {
-    if (options.strict) throw error;
+    /* 寫入 fail-closed：不落回本機 SQLite（見 sqliteFallback.js）。 */
+    if (!sqliteFallbackAllowed(options, { write: true })) throw error;
     return runSqlite();
   }
 }

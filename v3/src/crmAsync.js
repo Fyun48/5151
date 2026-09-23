@@ -26,6 +26,7 @@ import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { ensurePgSchema } from "./pgSchema.js";
 import * as repo from "./repository/crm.js";
+import { sqliteFallbackAllowed } from "./sqliteFallback.js";
 
 // crm.js 的私有 httpError()（async 層要拋一樣的形狀：message + status）。
 function httpError(message, status = 400) {
@@ -43,7 +44,8 @@ async function ensurePgCrmSchema(pgDriver) {
   await ensurePgSchema(pgDriver, sqliteHandle(), { tables: repo.CRM_READ_TABLES });
 }
 
-// driver 分派：postgres → 注入的 exec（測試）或 sharedPgDriver 的 pool；出錯 fail-open 回 SQLite。
+// driver 分派：postgres → 注入的 exec（測試）或 sharedPgDriver 的 pool；讀取出錯 fail-open 回 SQLite，
+// 寫入（options.write）則 fail-closed 往丟（見 sqliteFallback.js）。
 async function withFallback(options, runPostgres, runSqlite) {
   const driver = options.driver || resolveDbDriver();
   if (driver !== "postgres") return runSqlite();
@@ -54,7 +56,7 @@ async function withFallback(options, runPostgres, runSqlite) {
     const exec = (sql, params = []) => pgDriver.query(toPostgresSql(sql), params).then((res) => res.rows);
     return await runPostgres(exec);
   } catch (error) {
-    if (options.strict) throw error;
+    if (!sqliteFallbackAllowed(options, { write: options.write === true })) throw error;
     return runSqlite();
   }
 }
@@ -286,7 +288,7 @@ async function withTransaction(exec, run) {
 export function createContactAsync(input = {}, opts = {}, options = {}) {
   const { actorUserId = 0, now = new Date() } = opts;
   return withFallback(
-    options,
+    { ...options, write: true },
     async (exec) => {
       await assertCrmOpenExec(exec);
       const name = clip(input.display_name || input.name, CRM_NAME_MAX);
@@ -317,7 +319,7 @@ export function createContactAsync(input = {}, opts = {}, options = {}) {
 export function updateContactAsync(contactId, input = {}, opts = {}, options = {}) {
   const { now = new Date() } = opts;
   return withFallback(
-    options,
+    { ...options, write: true },
     async (exec) => {
       await assertCrmOpenExec(exec);
       const row = await assertContactExec(exec, contactId);
@@ -348,7 +350,7 @@ export function updateContactAsync(contactId, input = {}, opts = {}, options = {
 export function createCaseAsync(contactId, input = {}, opts = {}, options = {}) {
   const { now = new Date() } = opts;
   return withFallback(
-    options,
+    { ...options, write: true },
     async (exec) => {
       await assertCrmOpenExec(exec);
       const contact = await assertContactExec(exec, contactId);
@@ -377,7 +379,7 @@ export function createCaseAsync(contactId, input = {}, opts = {}, options = {}) 
 export function updateCaseAsync(caseId, input = {}, opts = {}, options = {}) {
   const { now = new Date() } = opts;
   return withFallback(
-    options,
+    { ...options, write: true },
     async (exec) => {
       await assertCrmOpenExec(exec);
       const q0 = repo.caseRowQuery(caseId);
@@ -406,7 +408,7 @@ export function updateCaseAsync(caseId, input = {}, opts = {}, options = {}) {
 export function addNoteAsync(contactId, input = {}, opts = {}, options = {}) {
   const { actorUserId = 0, now = new Date() } = opts;
   return withFallback(
-    options,
+    { ...options, write: true },
     async (exec) => {
       await assertCrmOpenExec(exec);
       const contact = await assertContactExec(exec, contactId);
@@ -430,7 +432,7 @@ export function addNoteAsync(contactId, input = {}, opts = {}, options = {}) {
 export function addTodoAsync(contactId, input = {}, opts = {}, options = {}) {
   const { now = new Date() } = opts;
   return withFallback(
-    options,
+    { ...options, write: true },
     async (exec) => {
       await assertCrmOpenExec(exec);
       const contact = await assertContactExec(exec, contactId);
@@ -461,7 +463,7 @@ export function addTodoAsync(contactId, input = {}, opts = {}, options = {}) {
 export function setTodoDoneAsync(todoId, done, opts = {}, options = {}) {
   const { now = new Date() } = opts;
   return withFallback(
-    options,
+    { ...options, write: true },
     async (exec) => {
       await assertCrmOpenExec(exec);
       const q0 = repo.todoRowQuery(todoId);

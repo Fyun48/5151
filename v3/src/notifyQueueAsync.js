@@ -18,6 +18,7 @@ import { markEventNotified as markEventNotifiedRepo, selectPendingEvents, update
 import { resolveDbDriver } from "./dbDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
+import { sqliteFallbackAllowed } from "./sqliteFallback.js";
 
 async function postgresExec(options = {}) {
   if (options.exec) return options.exec;
@@ -33,7 +34,7 @@ async function withFallback(options, runPostgres, runSqlite) {
     const deps = options.deps || notifyBuildContext();
     return await runPostgres(exec, deps);
   } catch (error) {
-    if (options.strict) throw error;
+    if (!sqliteFallbackAllowed(options, { write: options.write === true })) throw error;
     return runSqlite();
   }
 }
@@ -50,7 +51,7 @@ export function pendingNotifyEventsAsync({ limit = 80, now } = {}, options = {})
 // db.js updateEventNotify(): the channel outcome of one event.
 export function updateEventNotifyAsync(id, patch = {}, options = {}) {
   return withFallback(
-    options,
+    { ...options, write: true },
     (exec, deps) => updateEventNotifyRepo(exec, { deps, id, patch }),
     () => updateEventNotifySync(id, patch),
   );
@@ -59,7 +60,7 @@ export function updateEventNotifyAsync(id, patch = {}, options = {}) {
 // db.js markEventNotified(): the "every needed channel is done" flag.
 export function markEventNotifiedAsync(id, options = {}) {
   return withFallback(
-    options,
+    { ...options, write: true },
     (exec, deps) => markEventNotifiedRepo(exec, { deps, id }),
     () => markEventNotifiedSync(id),
   );
