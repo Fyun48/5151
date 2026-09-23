@@ -80,7 +80,7 @@ jobs:
         run: |
           echo "OPS_SYNOLOGY_APP_ROOT=${APP_ROOT_IN:-/volume1/docker/5151-ops/app}" >> "$GITHUB_ENV"
           echo "OPS_SYNOLOGY_DATA_ROOT=${DATA_ROOT_IN:-/volume1/docker/5151-ops/data}" >> "$GITHUB_ENV"
-      - name: NAS SSH endpoint (Cloudflare Access bridge, falls back to public SSH)
+      - name: NAS SSH endpoint (Cloudflare Access bridge only; no public fallback)
         id: cf-bridge
         uses: ./.github/actions/cf-ssh-bridge
         with:
@@ -88,8 +88,6 @@ jobs:
           port: "2223"
           client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-          fallback-host: ${{ secrets.OPS_SYNOLOGY_HOST }}
-          fallback-port: ${{ secrets.OPS_SYNOLOGY_PORT }}
           ssh-user: ${{ secrets.OPS_SYNOLOGY_USER }}
           ssh-key: ${{ secrets.OPS_SYNOLOGY_SSH_KEY }}
       - name: Synology read-only checks (no mutation)

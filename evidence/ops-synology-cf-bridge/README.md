@@ -80,6 +80,7 @@ PREDEPLOY_RESULT=PASS
 - `58722` 的關閉前提（自動化可全程走 Cloudflare Access）**已由實測滿足** → 可由 Owner 關閉公網 SSH 埠。
   - 注意：workflow 內仍保留 `fallback-host/port` 設定；埠關掉後 fallback 自然失效，只會在有問題時
     讓 `cf-ssh-bridge` 明確失敗（比默默走公網更安全）。要更嚴格可把 fallback secrets 一併移除。
+  **（2026-09-22 已做：正式發版路徑 5 條 workflow 的 fallback 已在 PR #438 移除，bridge 掛掉時 fail-closed。）**
 - 尚未執行：`deploy-ops-synology.yml`（會**真的**在 Synology 上建立/切換 `5151-ops` 版本、
   symlink `current` 與容器重建）。目前 Synology 上是 `e01bfc5b…`；要更新成 `6e4617b2…` 需 Owner 明確指示：
 
@@ -100,3 +101,27 @@ docker buildx imagetools inspect ghcr.io/fyun48/5151:<sha>
 gh workflow run predeploy-ops-synology.yml -f sha=<sha> -f image_digest=<digest>
 gh run view <run-id> --log | grep -E 'cf-ssh-bridge|PREDEPLOY_RESULT'
 ```
+
+## 2026-09-23：公網 SSH 埠關閉後的複驗
+
+Owner 停用路由器上 `54722`／`58722` 的公網轉發後，複驗四件事：
+
+| 檢查 | 結果 |
+|---|---|
+| public `54722` / `58722` | 都 **closed**（TCP 連線測試）|
+| 區網 `192.168.0.220:58722`（NAS sshd 本體） | **仍 open** → Cloudflare tunnel ingress 與金鑰直連不受影響 |
+| `predeploy-ops-synology`（read-only） | run `35808828355` → **PASS**（38s）|
+| 再刪掉 `OPS_SYNOLOGY_HOST`／`OPS_SYNOLOGY_PORT`（fallback 專用 environment secret）後重跑 | run `35809448471` → **PASS**（27s）|
+
+兩次 job log 都是 `cf-ssh-bridge: SSH smoke test OK (***@127.0.0.1:2223)`，且**沒有**
+`falling back to public SSH` ⇒ 自動化已完全不需要公網 SSH。
+
+同時把**所有** GitHub workflow 的 `cf-ssh-bridge` fallback 參數移除（正式發版 5 條 ＋ legacy 6 條
+＋ 補漏的 `production-support-check`／`production-uat-stages-functional`）→ bridge 失敗即 fail-closed。
+action 本身仍保留 fallback 能力（輸入預設空值），要恢復只需把兩行加回對應的 `with:`。
+
+### 已知未處理：`.gitea/workflows/*` 仍指公網
+
+`.gitea/workflows/*` 以 `secrets.NAS_HOST`／`NAS_PORT`（公網）當 SSH 目標，不是走 `cf-ssh-bridge`。
+Gitea 目前已暫停（`AGENTS.md`：不再是權威來源、也不再當發版路徑），因此**刻意不動**；
+若日後要復活 Gitea CI，必須改成 CF bridge 或區網位址，否則會因公網埠關閉而失敗。

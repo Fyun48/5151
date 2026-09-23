@@ -70,8 +70,13 @@ test("deploy workflow has no double-quoted expression literal (parse regression)
 
 test("deploy workflow uses dedicated OPS_SYNOLOGY_* credentials + independent environment", () => {
   assert.match(workflow, /environment:\s*ops-synology-production/);
-  assert.match(workflow, /secrets\.OPS_SYNOLOGY_HOST/);
-  assert.match(workflow, /secrets\.OPS_SYNOLOGY_PORT/);
+  // 2026-09-22：公網 SSH fallback 已移除 → 不再以 OPS_SYNOLOGY_HOST/PORT 當 fallback，
+  // 「專屬憑證」的保證改由 USER/SSH_KEY（＋不得出現 NAS_*）構成；bridge 失敗時 fail-closed。
+  assert.match(workflow, /ssh-tori\.reversalplay\.me/);
+  assert.doesNotMatch(workflow, /fallback-host/);
+  assert.doesNotMatch(workflow, /fallback-port/);
+  assert.doesNotMatch(predeployWorkflow, /fallback-host/);
+  assert.doesNotMatch(predeployWorkflow, /fallback-port/);
   assert.match(workflow, /secrets\.OPS_SYNOLOGY_USER/);
   assert.match(workflow, /secrets\.OPS_SYNOLOGY_SSH_KEY/);
   assert.doesNotMatch(workflow, /secrets\.NAS_HOST/);
