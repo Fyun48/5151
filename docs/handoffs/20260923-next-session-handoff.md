@@ -9,8 +9,8 @@
   公開站 `jibbyrenth.reversalplay.me`、OPS `jibbyrentops.reversalplay.me`。
 - 移植進度：**① 掃描 ✅ ② 迴圈欄位 ✅ ③ 通知佇列 ✅（含 live）④ 相似度／洞察 ✅（含 live）
   2.2 CRM（2.2a／2.2b／2.2c）✅ 2.3 佇列四支 ✅（2.3a jobQueue／jobWorker、2.3b listingEnrichQueue
-  三段全部完成，含 live）**
-  → 單容器切換已無阻塞項。剩 **provider／budget 島（§3.4）→ HA（§3.5）**。
+  三段全部完成，含 live）2.4 provider／budget ✅（讀寫同一個 store，含 live）**
+  → **runbook §7 的 SQLite 孤島清單已經清完**。剩下的只有 §3.4 的「顯示層小尾巴」與 §3.5 的 HA 切換。
 
 ## 1. 環境（先看這節，省半小時）
 
@@ -43,6 +43,7 @@
 | 2.3b 第一段：listing enrich 讀取與後台統計 | **#460**（`v3/test/listing-enrich-parity.test.js`） |
 | 2.3b 第二段：listing enrich 寫入路徑 | 本 session：builder ＋ async 入口 ＋ `enrichQueue` façade，watcher／server／adminOverview 接線；離線 5 pass、live 7 pass 0 skip；PG 端另修掉 identity 序號未推進（見 §5.9） |
 | 2.3b 第三段：種子查詢改讀 PG | 本 session：`seedEnrichCandidatesQuery()` ＋ `seedHousepriceEnrichJobsAsync()`，`enrichQueue.seed` 不再回 0；離線 7 pass、live 10 pass 0 skip |
+| 2.4 provider／budget 島 | 本 session：`repository/budgetGuard.js` ＋ `budgetGuardAsync.js` ＋ `budgetStore.js`（讀寫同一個 store），providers／route.js／db.js／server.js／listingSimilarityAsync 接線；離線 2 pass、live 3 pass 0 skip；相關測試 37 pass 0 fail |
 
 ## 3. 待辦（照序做，一包一 PR）
 
@@ -79,6 +80,15 @@ enqueue／claim／reclaim／finish／recordEnrichMetric ＋ `helpers.enrichQueue
 「管理介面寫 SQLite、判斷讀 PG」，LLM 會被靜默判定成未啟用。詳細的檔案、行號區間、
 語句清單、交易改法與驗證重點見 `/home/cline/PG-2.3-NOTES.md` 的「2.4 provider／budget 島」。
 
+**2026-09-23 已完成**：整個 store（讀＋寫＋金鑰＋額度桶）一起換掉，入口是
+`v3/src/budgetStore.js`（`budgetStore({ sqliteDb, options })`，形狀同 `jobQueue.createJobQueue`）。
+驗證：`v3/test/budget-parity.test.js`（離線 2／live 3，0 skip）；相關 6 個測試檔 37 pass 0 fail。
+
+**唯一還沒收的尾巴（顯示層）**：`db.js` 的 `mapsDistanceWarning()` 仍同步讀本機 SQLite 的
+distance_matrix 設定來產生提示字串（呼叫端 `getAdminMapsSettings()` 是同步函式）。
+PG 模式下那句話可能與 PG 的實際設定不一致，但**不影響預算判斷與扣款**。
+要收掉需把 `getAdminMapsSettings()`（與 admin 的 maps 路由）一起 async 化。
+
 ### 3.5 HA 切換（最後）
 runbook `docs/runbooks/postgres-cutover-bootstrap.md` 步驟 7 的孤島清完 ＝ 可切 HA；
 切之前跑一次全 live 套件（目標 0 skip）＋ predeploy 檢查。
@@ -113,6 +123,11 @@ gh pr merge <n> --squash --delete-branch                  # Owner 說合併就�
    切換前也要確認 cutover 有跑到這一步。
 10. **寫入路徑的離線 exec 替身要回 `{ rows, rowCount }`**：只回陣列會被當成 rowCount 0，
     claim 就永遠搶不到工作（`v3/test/listing-enrich-parity.test.js` 的 `shimCounted()` 是正確形狀）。
+11. **SQLite 的 UNIQUE「表約束」不會被 `pgSchema` 鏡射**：它是隱式索引，不在 `sqlite_master` 裡，
+    所以 PG 端 `ON CONFLICT(那些欄位)` 會回 `42P10`（同 2.3a 的 `job_queue.idempotency_key` 那個坑）。
+    需要的地方要自己建唯一索引（2.4 的 `BUDGET_UNIQUE_INDEXES` 就是這樣處理）。
+12. **provider／budget 的讀與寫是同一個 store，要一起換 driver**；只換讀取會讓
+    `loadEnabledProvider()` 讀 PG、`saveProviderConfig()` 寫 SQLite → LLM 被靜默判定成未啟用。
 
 ## 6. 需要 Owner（代理人做不到）
 

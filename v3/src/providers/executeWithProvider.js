@@ -1,13 +1,7 @@
-import {
-  getBoundBudgetDb,
-  loadEnabledProvider,
-  hasCredentials,
-  reserveBudget,
-  settleBudget,
-  releaseBudget,
-  holdBudget,
-  writeUsageLog,
-} from "../budgetGuard.js";
+// 2.4：provider 呼叫的額度保留／結算全部走 budgetStore（driver-aware）。
+// 讀與寫必須同一個 store——只換一半會變成「管理介面寫 SQLite、判斷讀 PG」。
+import { getBoundBudgetDb } from "../budgetGuard.js";
+import { budgetStore } from "../budgetStore.js";
 
 function isUncertainCharge(error) {
   if (!error) return false;
@@ -26,17 +20,20 @@ export async function executeWithProvider({
   requestId,
   attemptId,
   now = new Date(),
+  store = null,
+  options = {},
 } = {}) {
   const database = db || getBoundBudgetDb();
+  const budget = store || budgetStore({ sqliteDb: database, options });
   const fallback = async () => fallbackAction();
   if (!database || typeof actionWithProvider !== "function") return fallback();
-  const cfg = loadEnabledProvider(database, category);
-  if (!cfg || !hasCredentials(database, cfg)) {
-    writeUsageLog(database, { now, category, provider_code: cfg?.provider_code, event_kind: "fallback", note: "disabled_or_no_credential" });
+  const cfg = await budget.loadEnabled(category);
+  if (!cfg || !(await budget.hasCredentials(cfg))) {
+    await budget.usageLog({ now, category, provider_code: cfg?.provider_code, event_kind: "fallback", note: "disabled_or_no_credential" });
     return fallback();
   }
   const ceiling = Math.max(0, Math.round(Number(costCeilingMinor ?? cfg.ceiling_minor) || 0));
-  const reserved = reserveBudget(database, {
+  const reserved = await budget.reserve({
     category,
     ceilingMinor: ceiling,
     requestId,
@@ -46,21 +43,21 @@ export async function executeWithProvider({
     now,
   });
   if (!reserved.ok) {
-    writeUsageLog(database, { now, category, provider_code: cfg.provider_code, event_kind: "fallback", note: reserved.reason });
+    await budget.usageLog({ now, category, provider_code: cfg.provider_code, event_kind: "fallback", note: reserved.reason });
     return fallback();
   }
   try {
-    const result = await actionWithProvider(cfg, reserved.reservation);
+    const result = await actionWithProvider(cfg, reserved.reservation, budget);
     const usage = Math.round(Number(result?.usage?.costMinor ?? ceiling) || 0);
-    settleBudget(database, reserved.reservation, usage, { category, now });
+    await budget.settle(reserved.reservation, usage, { category, now });
     return result?.value;
   } catch (error) {
     if (isUncertainCharge(error)) {
-      holdBudget(database, reserved.reservation, { category, now, note: error?.message || "timeout" });
+      await budget.hold(reserved.reservation, { category, now, note: error?.message || "timeout" });
     } else {
-      try { releaseBudget(database, reserved.reservation, { category, now }); } catch { /* keep unknown if already held */ }
+      try { await budget.release(reserved.reservation, { category, now }); } catch { /* keep unknown if already held */ }
     }
-    writeUsageLog(database, {
+    await budget.usageLog({
       now,
       category,
       provider_code: cfg.provider_code,

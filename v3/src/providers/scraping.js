@@ -1,5 +1,5 @@
 import { executeWithProvider, } from "./executeWithProvider.js";
-import { getBoundBudgetDb, readCredential } from "../budgetGuard.js";
+import { getBoundBudgetDb } from "../budgetGuard.js";
 
 const USER_AGENT = "591-tracker/1.0 (personal rental watcher)";
 
@@ -16,12 +16,13 @@ export async function fetchHtmlDirect(url, { headers = {}, timeoutMs = 8000 } = 
   return res.text();
 }
 
-async function fetchViaPaidProvider(cfg, url, db) {
+// 2.4：金鑰改由 budget store 讀（PG 模式才讀得到 PostgreSQL 裡的金鑰）。
+async function fetchViaPaidProvider(cfg, url, budget) {
   const code = String(cfg.provider_code || "");
   if (code === "stub_paid") {
     return { value: `<!-- stub_paid ${url} -->`, usage: { costMinor: Number(cfg.ceiling_minor) || 0 } };
   }
-  const key = readCredential(db, cfg);
+  const key = await budget.readCredential(cfg);
   if (!key) {
     const err = new Error("missing scraping credential");
     throw err;
@@ -44,14 +45,15 @@ async function fetchViaPaidProvider(cfg, url, db) {
   return { value: await res.text(), usage: { costMinor: Number(cfg.ceiling_minor) || 0 } };
 }
 
-export async function fetchListingPage(url, { headers, timeoutMs, db, fallback } = {}) {
+export async function fetchListingPage(url, { headers, timeoutMs, db, fallback, options } = {}) {
   const database = db || getBoundBudgetDb();
   const fallbackAction = fallback || (() => fetchHtmlDirect(url, { headers, timeoutMs }));
   return executeWithProvider({
     db: database,
+    options: options || {},
     category: "scraping_api",
     fallbackAction,
     costCeilingMinor: undefined,
-    actionWithProvider: (cfg) => fetchViaPaidProvider(cfg, url, database),
+    actionWithProvider: (cfg, _reservation, budget) => fetchViaPaidProvider(cfg, url, budget),
   });
 }

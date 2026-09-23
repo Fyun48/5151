@@ -3,7 +3,7 @@
 
 import { createHash } from "node:crypto";
 import { executeWithProvider } from "./executeWithProvider.js";
-import { getBoundBudgetDb, loadEnabledProvider, readCredential } from "../budgetGuard.js";
+import { getBoundBudgetDb, loadEnabledProvider } from "../budgetGuard.js";
 import { houseNumber, streetKey } from "../match.js";
 
 export const PACK7_LLM_BASELINE = "pack7-llm-same-house-v1";
@@ -104,8 +104,9 @@ export function sourceTextHash(listing) {
   return createHash("sha256").update(JSON.stringify(slice)).digest("hex").slice(0, 32);
 }
 
-async function callOpenAiCompat(cfg, db, body) {
-  const key = readCredential(db, cfg);
+// 2.4：金鑰改由 budget store 讀（PG 模式才讀得到 PostgreSQL 裡的金鑰）。
+async function callOpenAiCompat(cfg, budget, body) {
+  const key = await budget.readCredential(cfg);
   if (!key) throw new Error("missing llm credential");
   const endpoint = String(cfg.endpoint || "").trim()
     || (cfg.provider_code === "qwen"
@@ -145,16 +146,17 @@ export async function compareSameHouseWithLlm(db, a, b, opts = {}) {
   }
   return executeWithProvider({
     db: database,
+    options: opts,
     category: "llm",
     costCeilingMinor: opts.costCeilingMinor,
     now: opts.now,
     fallbackAction: fallback,
-    actionWithProvider: async (cfg) => {
+    actionWithProvider: async (cfg, _reservation, budget) => {
       if (cfg.provider_code === "stub_paid") {
         const forced = opts.stubVerdict || { verdict: "uncertain", confidence: 0 };
         return { value: normalizeSameHouseVerdict(forced), usage: { costMinor: Number(cfg.ceiling_minor) || 0 } };
       }
-      const parsed = await callOpenAiCompat(cfg, database, {
+      const parsed = await callOpenAiCompat(cfg, budget, {
         messages: [
           { role: "system", content: "判斷兩筆租屋廣告是否同一戶。只回 JSON：verdict=same|different|uncertain，confidence=0到1。門牌或樓層衝突時回 different。不要推論未提供的個資。" },
           { role: "user", content: JSON.stringify(payload) },
@@ -188,18 +190,19 @@ export async function extractCrawlInsight(db, listing, opts = {}) {
   }
   return executeWithProvider({
     db: database,
+    options: opts,
     category: "llm_crawl_insight",
     costCeilingMinor: opts.costCeilingMinor,
     now: opts.now,
     fallbackAction: async () => null,
-    actionWithProvider: async (cfg) => {
+    actionWithProvider: async (cfg, _reservation, budget) => {
       if (cfg.provider_code === "stub_paid") {
         return {
           value: normalizeInsightHints(opts.stubInsight || { confidence: 0 }),
           usage: { costMinor: Number(cfg.ceiling_minor) || 0 },
         };
       }
-      const parsed = await callOpenAiCompat(cfg, database, {
+      const parsed = await callOpenAiCompat(cfg, budget, {
         messages: [
           { role: "system", content: "從租屋廣告的標題、說明與標籤抽出樓層、車位、頂加、費用。只回 JSON：floor,parking,rooftop,fees,confidence。沒看到就留空。這是提示不是判決。" },
           { role: "user", content: JSON.stringify(payload) },

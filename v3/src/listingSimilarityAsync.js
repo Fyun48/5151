@@ -39,7 +39,7 @@ import {
 } from "./listingSimilarity.js";
 import * as repo from "./repository/listingSimilarity.js";
 import { matchVeto, scoreMatch } from "./match.js";
-import { loadEnabledProvider } from "./budgetGuard.js";
+import { budgetStore } from "./budgetStore.js";
 import {
   PHASH_ALGO,
   PHASH_SIMILAR_MAX,
@@ -334,8 +334,8 @@ export function suggestFromNewHashAsync(listing, recorded, options = {}) {
         };
         if (hard.length) {
           evidence.blocked_by_veto = hard;
-        } else if (shouldAskLlm({ hamming: pair.hamming, veto, matchHit }) && loadEnabledProvider(sqliteFor(options), "llm")) {
-          // provider／budget 堆疊仍是 SQLite 島（見第二段開頭）；建議列本身寫進 PG。
+        } else if (shouldAskLlm({ hamming: pair.hamming, veto, matchHit }) && await budgetStore({ sqliteDb: sqliteFor(options), options }).loadEnabled("llm")) {
+          // 2.4：provider／budget 已改走 driver-aware store（同一個 store 讀金鑰與額度）。
           try {
             const llm = await compareSameHouseWithLlm(sqliteFor(options), listing, peer, options);
             if (llm) evidence.llm = llm;
@@ -374,10 +374,9 @@ async function upsertSuggestionPair(exec, pair, evidence, now) {
 // 資料本體（listing_image_phash／listing_similarity_suggestion／listing_crawl_insight）寫進
 // **與 UI 同一個 store**（PG 模式就是 PostgreSQL）——這正是「後台讀得到、佇列卻填不進去」的修法。
 //
-// ⚠️ 刻意的階段切法：**呼叫外部 provider 的兩步仍用 SQLite handle**
-// （`loadEnabledProvider()`／`compareSameHouseWithLlm()`／`extractCrawlInsight()`），因為
-// provider／budget 堆疊（budgetGuard.js／providers/*）本身還是 SQLite 島，那是另一個島
-// （runbook §7）。決策與 evidence 逐字沿用 listingSimilarity.js。
+// ⚠️ 這一節的資料本體寫進與 UI 同一個 store；provider 呼叫（compareSameHouseWithLlm／
+// extractCrawlInsight）內部的預算保留與金鑰讀取，自 2.4 起也走同一個 driver-aware store
+// （budgetStore），所以 PG 模式下讀寫都落在 PostgreSQL。
 const APPLY_STATES = new Set(["hint_only", "applied_empty", "skipped"]);
 
 // listingSimilarity.js enqueueListingSimilarity()：整個佇列的入口。
@@ -395,7 +394,7 @@ export function enqueueListingSimilarityAsync(listing, options = {}) {
         out.phash = await recordListingPhashAsync(listing, { ...options, exec });
         if (out.phash) out.suggestions = await suggestFromNewHashAsync(listing, out.phash, { ...options, exec });
       }
-      if (loadEnabledProvider(sqliteFor(options), "llm_crawl_insight")) {
+      if (await budgetStore({ sqliteDb: sqliteFor(options), options }).loadEnabled("llm_crawl_insight")) {
         out.insight = await recordCrawlInsightAsync(listing, { ...options, exec });
       }
       if (!out.phash && !out.insight && !out.suggestions.length) {
