@@ -35,7 +35,7 @@ GET https://jibbyrenth.reversalplay.me/api/comms
 | --- | --- |
 | `v3/src/comms.js` | `supportPresentation()` 新增 `sponsor_links`（後台「贊助連結」的公開收款方式）；`publicCommsBundle()` 轉傳 `sponsorLinks`。 |
 | `v3/src/server.js` | `GET /api/comms` 以 `publicSponsorSettings({}).links` 提供公開的支持方式（訪客也拿得到）；**沒有**改 `#sponsorBar` 的會員限定推銷邏輯。 |
-| `v3/public/index.html` | `paintSupportAccount()` 把支持方式畫成 `a.sponsor-chip` 連結，並在「有連結」或「Support domain 真的開放」時才顯示卡片；新增 `paintSupportEntry()` 成為 header／頁尾／帳號區入口的唯一負責人：Support domain 關閉時入口指向站內帳號區（`#me`）而不是 `/support.html`；入口點擊行為擴及 header。 |
+| `v3/public/index.html` | `paintSupportAccount()` 把支持方式畫成 `a.sponsor-chip` 連結，並在「有連結」或「Support domain 真的開放」時才顯示卡片；新增 `paintSupportEntry()` 統一決定 header／頁尾／帳號區入口的顯示。入口**一律是連到 `/support.html` 的普通連結**（見第 7 節：一版曾用 JS 切到設定頁＋捲動，站長回報「點了完全沒反應」）。 |
 | `v3/public/support-cta.js` | 不再寫入口的 `href`／`hidden`（避免兩支程式互蓋），只發布 `body.dataset.supportDomain` 並觸發 `support-domain` 事件；CTA 卡片邏輯不變。 |
 | `v3/src/support.js` | 新增 `publicSponsorWays(db)`；Support domain 關閉時，`/api/support/public` 仍回傳 `sponsor_links`。 |
 | `v3/public/support.html`、`v3/public/support-page.js` | 新增「支持方式／其他支持方式」區塊（`#directWays`），domain 關閉時列出來（文案改成免費聲明，hero CTA 指向該區塊），方案卡維持隱藏。前端仍**不寫死**第三方網址（測試有斷言）。 |
@@ -76,7 +76,7 @@ not ok 905 - PR A src manifest matches git tree and fails closed when mounted db
 | --- | --- |
 | 會員 375/768/1280 | `#supportHeaderLink` 桌機可見、`href="#me"`；頁尾 `#me`；`#supportAccountLinks` 內含 `Buy Me a Coffee → …`；`horizontalOverflow=false` |
 | 訪客 375/1280 | 同上（入口可見、卡片有連結） |
-| 點入口後 | `appView="me"`，`#supportAccountCard` 可見 → 直接看到可點的支持方式 |
+| 點入口後 | 開 `/support.html` 並列出支持方式（第 7 節改版後的行為） |
 
 截圖：`shots/375-account-support-ways.png`、`shots/1280-account-support-ways.png`、`shots/1280-guest-account-support-ways.png`、
 `shots/375-support-page-ways.png`、`shots/1280-support-page-ways.png`（Support domain 關閉時 `/support.html` 會列出支持方式，不再只有「尚未開放」）。
@@ -120,7 +120,7 @@ deploy-v3          run 35815081496  → success
 | --- | --- |
 | `GET /api/comms` → `support.sponsor_links` | 1 筆：`吉比需要你的支持~來份飼料~! → https://buymeacoffee.com/acefengyund` |
 | `GET /api/support/public`（Support domain 仍關閉） | `enabled:false`，但 `sponsor_links` 有 1 筆 |
-| 桌機 1280 訪客首頁 header「支持本站」 | 可見（`display:flex`、`href="#me"`）；點擊後 `appView=me`、帳號區卡片可見並帶上述連結 |
+| 桌機 1280 訪客首頁 header「支持本站」 | 可見（`display:flex`）；點擊後切到設定頁並可見上述連結（第 7 節改版後改為直接開 `/support.html`） |
 | 手機 375「設定」分頁 | 卡片可見並帶上述連結 |
 | `/support.html`（桌機 1280／手機 375） | hero＝支持本站＋免費聲明、「支持方式」列出上述連結、方案卡隱藏、無 console error、無橫向溢出 |
 
@@ -130,3 +130,34 @@ deploy-v3          run 35815081496  → success
 > 註：`prod-verify.json` 內有一行 `TIMEOUT waiting for sponsor chip`。那是驗證腳本用
 > `waitForSelector`（預設等「可見」）去等一個位在**已隱藏**的「設定」檢視裡的元素造成的誤判，
 > 同一次輸出裡 `ways` 已列出該連結、點擊後 `cardVisible=true`，不是頁面問題。
+
+## 7. 追加修正：入口改成一般連結（站長回報「支持本站」點了完全沒反應）
+
+**回報**（部署 `0008fcb` 之後）：點「支持本站」完全沒反應。
+
+**正式站重現**（訪客身分，四種情境）：
+
+| 情境 | appView | scrollY | 判定 |
+| --- | --- | --- | --- |
+| 桌機 1280 header | listings → me | 0 | 有切換，但左側面板以外幾乎沒差 |
+| 桌機 1280 頁尾（**已在「設定」**） | me → me | 0 | **完全沒反應** ← 與回報一致 |
+| 手機 375 頁尾 | listings → me | 208 | 有反應 |
+| 手機 375 帳號區的「支持本站」連結 | 直接開 `/support.html` | — | 有反應 |
+
+**根因**：`paintSupportEntry()` 在 Support domain 關閉時把入口寫成 `href="#me"`，再用 JS
+`preventDefault()`＋`setAppView("me")`＋`scrollIntoView()` 假裝站內跳轉；**已經在「設定」檢視時這三步等於什麼都沒做**。
+
+**修法**：入口一律維持 `<a href="/support.html">`（頁尾靜態 HTML 也由 `#me` 改成 `/support.html`），
+`paintSupportEntry()` 只決定顯示與否、不再攔截點擊。`#441` 已讓 `/support.html` 在 Support domain
+關閉時列出後台「贊助連結」的支持方式，所以點了一定看得到東西，而且**不依賴 JS**。
+
+**驗證**（本機 dev server 重啟後、訪客身分；四種情境全部變成 `/support.html`）：
+
+| 情境 | 點擊後 |
+| --- | --- |
+| 桌機 1280 header | `/support.html`（hero＝支持本站） |
+| 桌機 1280 頁尾（已在「設定」） | `/support.html` |
+| 手機 375 頁尾 | `/support.html` |
+| 手機 375 帳號區連結 | `/support.html` |
+
+四種情境皆無 console error；`node --test`（6 個相關檔）**76/76 通過**。
