@@ -153,7 +153,7 @@ jobs:
           # 清空並重建這個 per-SHA staging 目錄（不 merge 舊 incoming tree）。
           ssh "${SSH_OPTS[@]}" "$OPS_SYNOLOGY_USER@$OPS_SYNOLOGY_HOST" "rm -rf '$INCOMING' && mkdir -p '$INCOMING'"
           scp "${SCP_OPTS[@]}" -r ops docker-compose.ops.synology.yml "$OPS_SYNOLOGY_USER@$OPS_SYNOLOGY_HOST:$INCOMING/"
-      - name: NAS SSH endpoint (Cloudflare Access bridge, falls back to public SSH)
+      - name: NAS SSH endpoint (Cloudflare Access bridge only; no public fallback)
         id: cf-bridge
         uses: ./.github/actions/cf-ssh-bridge
         with:
@@ -161,8 +161,6 @@ jobs:
           port: "2223"
           client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-          fallback-host: ${{ secrets.OPS_SYNOLOGY_HOST }}
-          fallback-port: ${{ secrets.OPS_SYNOLOGY_PORT }}
           ssh-user: ${{ secrets.OPS_SYNOLOGY_USER }}
           ssh-key: ${{ secrets.OPS_SYNOLOGY_SSH_KEY }}
       - name: Deploy 5151-ops on Synology via native ssh (preflight + backup + rollback)

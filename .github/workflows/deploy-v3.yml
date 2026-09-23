@@ -266,7 +266,7 @@ jobs:
           if grep -q '591-tracker-v2' docker-compose.override.yml || grep -qE '591-tracker:' docker-compose.override.yml; then
             echo "::error::override must pin only 591-tracker-v3"; exit 1
           fi
-      - name: NAS SSH endpoint (Cloudflare Access bridge, falls back to public SSH)
+      - name: NAS SSH endpoint (Cloudflare Access bridge only; no public fallback)
         id: cf-bridge
         uses: ./.github/actions/cf-ssh-bridge
         with:
@@ -274,8 +274,6 @@ jobs:
           port: "2222"
           client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-          fallback-host: ${{ secrets.NAS_HOST }}
-          fallback-port: ${{ secrets.NAS_PORT }}
           ssh-user: ${{ secrets.NAS_USER }}
           ssh-key: ${{ secrets.NAS_SSH_KEY }}
       - name: Copy v3 app, compose files, and digest override

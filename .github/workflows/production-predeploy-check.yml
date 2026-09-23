@@ -176,7 +176,7 @@ jobs:
             echo "::error::commit $CHECK_SHA is not reachable from origin/master; refusing"; exit 1
           fi
           echo "Evaluated source SHA $CHECK_SHA is on origin/master ancestry (not deployed by this job)."
-      - name: NAS SSH endpoint (Cloudflare Access bridge, falls back to public SSH)
+      - name: NAS SSH endpoint (Cloudflare Access bridge only; no public fallback)
         id: cf-bridge
         uses: ./.github/actions/cf-ssh-bridge
         with:
@@ -184,8 +184,6 @@ jobs:
           port: "2222"
           client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-          fallback-host: ${{ secrets.NAS_HOST }}
-          fallback-port: ${{ secrets.NAS_PORT }}
           ssh-user: ${{ secrets.NAS_USER }}
           ssh-key: ${{ secrets.NAS_SSH_KEY }}
       - name: Copy inspect/backup helpers to NAS (Storage1 pool)
