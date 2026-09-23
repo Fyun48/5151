@@ -14,7 +14,10 @@
 | **syn-nas** | Synology NAS | `192.168.0.220` | `58722` | `tori` | 舊資料/備份、OPS 相關 workflow 目標 |
 
 - 兩台的 sshd **直接聽在 54722 / 58722**（不是 22，也不是路由器轉 22）。
-- 公網 IP `114.34.73.76` 上，路由器目前仍把 `54722`／`58722` 轉到這兩台 —— **這是待退場的路徑**（見 §6）。
+- 公網 IP `114.34.73.76` 上，路由器**已於 2026-09-23 移除 `54722`／`58722` 的轉發**（先前是待退場的路徑）。
+  對外一律走 Cloudflare Access（見 §2.2）＋ service token；實測 `public 54722 / 58722 = closed`、
+  區網 sshd 與 tunnel ingress 不受影響，且關閉後 v3／ops 的 read-only predeploy 與 deploy 都照常成功
+  （證據：`evidence/ops-synology-cf-bridge/README.md`）。
 
 ## 2. 三種連線方式（依身份選一種）
 
@@ -154,22 +157,31 @@ sysctl／DSM 設定都動不了，例：inotify 上限，見 §9）、密碼與 
   → 可以操作 docker（`docker compose` v2.20.1；`docker` 不在 PATH，要用 `/usr/local/bin/docker`）；
   **沒有 sudo**（需要密碼）→ 主機 sysctl 與 DSM 設定只能在 GUI／root 下做。
 
-- **inotify 額度（2026-09-22 量測）**：主機只有 `fs.inotify.max_user_watches=8192`、
+- **inotify 額度（2026-09-22 量測、2026-09-23 已調高）**：主機原本只有 `fs.inotify.max_user_watches=8192`、
   `fs.inotify.max_user_instances=128`（VS Code 建議 524288 / 512）。這是
   「`Unable to watch for file changes`」的根因（專案有 `node_modules` 時必爆）。
   這兩個 sysctl **不是 namespaced** → 容器內寫不進去、`docker run --sysctl …` 也被拒
   （實測 `sysctl 'fs.inotify…' is not allowed`），只能在主機做：
 
   ```bash
-  # DSM 管理員帳號 ssh 進去後
+  # DSM 管理員帳號 ssh 進去後（或走 GUI：「觸發的任務 → 開機」，見下）
   sudo -i
-  sysctl -w fs.inotify.max_user_watches=524288
-  sysctl -w fs.inotify.max_user_instances=1024
+  /usr/sbin/sysctl -w fs.inotify.max_user_watches=524288
+  /usr/sbin/sysctl -w fs.inotify.max_user_instances=1024
   ```
 
-  永久生效：DSM → 控制台 → 任務排程器 → 新增 → 觸發的任務 → **開機**（使用者 `root`）→ 填上面兩行。
+  ✅ **2026-09-23 已完成**：DSM → 控制台 → 任務排程器 → 新增 → 觸發的任務 → **開機**（使用者 `root`、
+  任務名稱 **`inotify-limits`**、已啟用）→「執行命令」填上面兩行 → 按「執行」即刻生效
+  （**不必重開機、不必重啟容器**：上限是全域值，容器內立即可見）。實測三個視角一致：
+  host／`5151-code-server`／`cline-dev` 皆為 **`max_user_watches=524288`、`max_user_instances=1024`**。
   ⚠️ `5151-code-server` 與 `cline-dev` 自 2026-09-22 起**同 uid 1001 → 共用同一份 inotify 額度**，更需調高。
-  已先做容器側減壓：兩邊 VS Code 設定都加了 `files.watcherExclude` / `search.followSymlinks: false`。
+  容器側仍保有減壓設定：兩邊 VS Code 設定都加了 `files.watcherExclude` / `search.followSymlinks: false`。
+
+- **2026-09-23 清理**：所有 GitHub workflow 的 `cf-ssh-bridge` fallback 參數已移除（bridge 失敗即 fail-closed，
+  action 本身仍保留能力）；刪除未使用的 repo secrets `CURSOR_API_KEY`／`NOTIFICATION_WEBHOOK`、
+  environment secret `OPS_SYNOLOGY_HOST`／`OPS_SYNOLOGY_PORT`，以及舊 service token `nas-ssh-putty`（`9881d66a…`）。
+  ⚠️ `.gitea/workflows/*` 仍以公網 `NAS_HOST`／`NAS_PORT` 為 SSH 目標 —— **刻意保留**（Gitea 暫停中），
+  復活前必須改走 CF bridge 或區網，否則會因公網埠關閉而失敗。
 
 - **`5151-code-server` ↔ `cline-dev` 自 2026-09-22 起共用同一組路徑**（兩容器皆 **uid 1001**，
   所以能被同一顆 NAS 目錄接受；詳見 `deploy/code-server/README.md`）：
